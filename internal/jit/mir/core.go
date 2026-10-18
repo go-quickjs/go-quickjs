@@ -1785,6 +1785,10 @@ func goOpWord(site *ssa.CallSite) uint64 {
 			op |= abi.GoCallFill << abi.GoOpKindShift
 		case site.Step:
 			op |= abi.GoCallStep << abi.GoOpKindShift
+		case site.TypeOf:
+			op |= abi.GoCallTypeOf << abi.GoOpKindShift
+		case site.InstanceOf:
+			op |= abi.GoCallInstanceOf << abi.GoOpKindShift
 		case site.Accessor == ssa.AccessorGet:
 			op |= abi.GoCallGet<<abi.GoOpKindShift | uint64(site.Key)<<abi.GoOpIndexShift
 		case site.Accessor == ssa.AccessorSet:

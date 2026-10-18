@@ -1036,7 +1036,9 @@ func IsNumber(word uint64) bool { return word < NumberLimit }
 // operand, the iterable; or a property's read (GoCallGet), of its one
 // operand, or write (GoCallSet), of its two, the object and the value,
 // which Go makes as the instruction at the call's PC does, its key's atom
-// in the high half (GoOpIndexShift).
+// in the high half (GoOpIndexShift); or a typeof's (GoCallTypeOf), of its
+// one operand, the result its name; or an instanceof's
+// (GoCallInstanceOf), of its two, the object and the constructor.
 // GoOpMarking
 // marks a call native code makes through Go only because the collector
 // marks -- a native call's, whose setup would store pointers without a
@@ -1048,15 +1050,17 @@ func IsNumber(word uint64) bool { return word < NumberLimit }
 // closes, and a comparison's (ssa.GoCompare) its ir.Operator, in the high
 // half.
 const (
-	GoOpArgcShift  = 8
-	GoOpKindShift  = 16
-	GoOpIndexShift = 32
-	GoCallMethod   = 1
-	GoCallNew      = 2
-	GoCallStep     = 3
-	GoCallFill     = 4
-	GoCallForOf    = 5
-	GoCallGet      = 6
-	GoCallSet      = 7
-	GoOpMarking    = 1 << 24
+	GoOpArgcShift    = 8
+	GoOpKindShift    = 16
+	GoOpIndexShift   = 32
+	GoCallMethod     = 1
+	GoCallNew        = 2
+	GoCallStep       = 3
+	GoCallFill       = 4
+	GoCallForOf      = 5
+	GoCallGet        = 6
+	GoCallSet        = 7
+	GoCallTypeOf     = 8
+	GoCallInstanceOf = 9
+	GoOpMarking      = 1 << 24
 )

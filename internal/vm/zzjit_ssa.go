@@ -2350,6 +2350,16 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 			// destructuring makes one each time.
 			return []ssa.CallSite{{Go: ssa.GoCall, ForOf: true, ThisSlot: -1}}
 		}
+		switch call.Op {
+		case bytecode.OpTypeOf:
+			// A typeof not compared with a name (jitcompile's
+			// typeTests): its name, which Go makes from native code.
+			return []ssa.CallSite{{Go: ssa.GoCall, TypeOf: true, ThisSlot: -1}}
+		case bytecode.OpInstanceOf:
+			// An instanceof whose constructor native code does not know
+			// (ssa.InstanceOfSite): Go's, from native code.
+			return []ssa.CallSite{{Go: ssa.GoCall, InstanceOf: true, Argc: 1, ThisSlot: -1}}
+		}
 		n := int(call.A) + 1
 		if call.Op == bytecode.OpCallMethod {
 			n++
@@ -3025,7 +3035,7 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 	}
 	sp := top + n
 	r.stackTop, r.stackHigh = sp, max(r.stackHigh, sp)
-	step := in.Op == bytecode.OpIterNextOrJump || in.Op == bytecode.OpIterStep || in.Op == bytecode.OpForOfStart
+	step := in.Op == bytecode.OpIterNextOrJump || in.Op == bytecode.OpIterStep || in.Op == bytecode.OpForOfStart || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpInstanceOf
 	prop := in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 	marking := ctx.GoOp&abi.GoOpMarking != 0
 	if !marking {
@@ -3340,7 +3350,7 @@ framed:
 	}
 	s.goCalls++
 	prop := in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
-	if in.Op != bytecode.OpIterNextOrJump && in.Op != bytecode.OpIterStep && in.Op != bytecode.OpForOfStart && !prop && jitCallUnsettled(e, pc, in) {
+	if in.Op != bytecode.OpIterNextOrJump && in.Op != bytecode.OpIterStep && in.Op != bytecode.OpForOfStart && in.Op != bytecode.OpTypeOf && in.Op != bytecode.OpInstanceOf && !prop && jitCallUnsettled(e, pc, in) {
 		r.jitCallSeen(f, e, pc, sp, in)
 	}
 	if !marking {
@@ -3641,6 +3651,10 @@ func jitGoCallInstr(op uint64) (bytecode.Instr, int) {
 	case abi.GoCallSet:
 		// A property's write, of the object and the value.
 		return bytecode.Instr{Op: bytecode.OpSetProp, A: uint32(op >> abi.GoOpIndexShift)}, 2
+	case abi.GoCallTypeOf:
+		return bytecode.Instr{Op: bytecode.OpTypeOf}, 1
+	case abi.GoCallInstanceOf:
+		return bytecode.Instr{Op: bytecode.OpInstanceOf}, 2
 	}
 	return in, n
 }
@@ -3669,6 +3683,16 @@ func (r *Runtime) jitCallMade(in bytecode.Instr, sp int) (Value, error) {
 	if in.Op == bytecode.OpForOfStart {
 		// A for...of's or a destructuring's cursor (abi.GoCallForOf).
 		return r.startForOf(r.stack[sp-1])
+	}
+	if in.Op == bytecode.OpTypeOf {
+		// A typeof's name (abi.GoCallTypeOf), as executeAt's case makes it.
+		return Str(r.typeofString(r.stack[sp-1])), nil
+	}
+	if in.Op == bytecode.OpInstanceOf {
+		// An instanceof (abi.GoCallInstanceOf), as executeAt's case makes
+		// it, its Symbol.hasInstance read uncached.
+		yes, err := r.instanceOf(r.stack[sp-2], r.stack[sp-1])
+		return Bool(yes), err
 	}
 	if in.Op == bytecode.OpIterNextOrJump {
 		// A loop's step: its next value, or, the cursor done, the
@@ -8020,6 +8044,12 @@ func (r *Runtime) jitCallResult(f *frame, pc, depth int, v Value, err error) (in
 	}
 	sp := f.base + depth - int(in.A) - 1
 	switch in.Op {
+	case bytecode.OpTypeOf:
+		// Its operand (abi.GoCallTypeOf).
+		sp = f.base + depth - 1
+	case bytecode.OpInstanceOf:
+		// The object and the constructor (abi.GoCallInstanceOf).
+		sp = f.base + depth - 2
 	case bytecode.OpCallMethod:
 		sp--
 	case bytecode.OpApplyArguments:

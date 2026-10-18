@@ -356,6 +356,12 @@ type CallSite struct {
 	// interpreter would, whatever it finds.
 	Accessor AccessorKind
 	Key      uint32
+	// TypeOf and InstanceOf mark a call of Go (GoCall) that is a typeof of
+	// its one operand, or an instanceof of its two, the object and the
+	// constructor, as V8's code calls its Typeof and InstanceOf builtins:
+	// Go makes it, as the interpreter does -- an instanceof may run code,
+	// a Symbol.hasInstance method or a proxy's trap.
+	TypeOf, InstanceOf bool
 }
 
 // AccessorKind is the kind of a call an accessor's read or write makes

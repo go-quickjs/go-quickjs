@@ -312,3 +312,46 @@ func TestJITGoEqual(t *testing.T) {
 		t.Errorf("eqs left native code %d times for Go and failed %d guards", h, g)
 	}
 }
+
+// A typeof not compared with a name, and an instanceof whose constructor
+// native code does not know, are Go's from native code (ssa.CallSite's
+// TypeOf and InstanceOf), as V8's code calls its Typeof and InstanceOf
+// builtins, rather than left at an exit each: an instanceof's
+// Symbol.hasInstance runs there, and its throw is the operation's. Each
+// answer is the interpreter's.
+func TestJITGoTypeOfInstanceOf(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		class A {} class B extends A {}
+		var vals = [1, 'x', true, null, undefined, {}, [], () => 0, 1n, Symbol(), new A(), new B()]
+		var ctors = [A, B, Object, Array, Function]
+		// Native work around each, as code has, which the profit check
+		// weighs Go's calls against.
+		function kinds(a) { let h = 0; for (const x of a) { const t = typeof x; h = (h * 31 + t.length) | 0; for (let k = 0; k < 40; k++) h = (h * 7 + k) | 0 } return h }
+		function inst(a) { let n = 0; for (const x of a) for (const c of ctors) { if (x instanceof c) n++; for (let k = 0; k < 40; k++) n = (n * 7 + k) & 0xffff } return n }
+		var Even = { [Symbol.hasInstance](v) { return v % 2 === 0 } }
+		function odd(a) { let n = 0; for (const x of a) if (x instanceof Even) n++; return n }
+		function bad() { try { return 1 instanceof 2 } catch (e) { return e.constructor.name } }
+	`
+	rounds := []string{}
+	for range 6 {
+		rounds = append(rounds, `kinds(vals)`, `inst(vals)`)
+	}
+	rounds = append(rounds, `odd([1, 2, 3, 4])`, `odd([1, 2, 3, 4])`, `bad()`, `bad()`)
+	r := jitAgreesForTest(t, setup, rounds...)
+	for _, name := range []string{"kinds", "inst"} {
+		e := jitNativeForTest(t, r, name)
+		hosts, guards, entries := e.ssaStats.hosts, e.ssaStats.guards, e.ssaStats.entries
+		if _, err := r.Run(compileForTest(t, name+`(vals)`)); err != nil {
+			t.Fatal(err)
+		}
+		if e.ssaStats.entries == entries {
+			t.Fatalf("%s's code was not entered: slow %v", name, e.entrySlow)
+		}
+		if h, g := e.ssaStats.hosts-hosts, e.ssaStats.guards-guards; h != 0 || g != 0 {
+			t.Errorf("%s left native code %d times for Go and failed %d guards", name, h, g)
+		}
+	}
+}
