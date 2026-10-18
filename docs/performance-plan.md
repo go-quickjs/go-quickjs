@@ -640,6 +640,24 @@ faster: its loss is its steady state's.
   callees; generic `==`, `%`, `typeof` and `instanceof`. New: RayTrace's small methods
   (`add`, `multiplyScalar`, `initialize`) judged slow early in a short
   run; Box2D's steady state 14% slower with the JIT (above).
+- **Host exits counted by instruction** (2026-10-18, one run of each
+  suite with the JIT, after `d3ec102`): of the generic operations above,
+  `==` left native code 179 times in all three suites, `typeof` 28, `%`
+  and `instanceof` not at all -- not worth their calls of Go yet. The
+  most frequent were a for...of loop's step and its `iter_close`, 75,000
+  each, all AWFY's Bounce, twice at each loop: the step that finds the
+  cursor done compared its answer with the uninitialized value, which
+  native `eqtagged` left for Go, and `iter_close` was always Go's. Both
+  native since (`1c92b0b`): Bounce leaves native code 1,499 times a run,
+  not 146,695. Making `iter_close` native found a bug of the
+  interpreter's, fixed since (`3365aa0`): an array walked in place,
+  left before its end, closed nothing, where a return method a script
+  gave the array iterator's prototypes is to be called; native code
+  checks the chain's validity cell for it. Still the most frequent,
+  each by its sites' totals: element reads (`get_index`), Typescript's
+  29,000 and Gameboy's 12,000; method calls (`call_method`, `call`),
+  Typescript's 7,500, Havlak's 5,800, CD's 1,500; constructions
+  (`new`), Sieve's 2,100 and Bounce's 1,500.
 - **Compiling in the background, last.** V8 compiles on a thread of its
   own while the function runs on in its lower tier; ours compiles on the
   runtime's goroutine, so that each compile's whole cost is paid where it
