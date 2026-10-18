@@ -4,6 +4,8 @@ package vm
 
 import (
 	"fmt"
+	"runtime"
+	"runtime/debug"
 	"strings"
 	"testing"
 
@@ -215,6 +217,10 @@ func TestJITFramelessCallsSpendTheBudget(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
+	// No collection meanwhile: a call made while the collector marks Go
+	// makes in native code's place (abi.GoOpMarking).
+	runtime.GC()
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	r, run := jitTierRuntimeForTest(t, 4, `var m=(function(){
 			function V(x){this.x=x}
 			function plus(o){return new V(this.x+o.x)}
@@ -450,5 +456,32 @@ func TestJITWarmingCalleeCompiledOnDemand(t *testing.T) {
 	}
 	if e = r.jit.entryFor(cl.fn); e == nil || e.ssa == nil || e.warming || e.calleeRefused {
 		t.Fatalf("g not compiled at its native caller's call: %+v", e != nil && e.ssa != nil)
+	}
+}
+
+// Code Go does not enter at its start for its short stretches (entrySlow)
+// is still entered by on-stack replacement at a loop that has run a full
+// budget of back edges in the existing tiers, as V8's code is: the
+// judgement is of the calls Go enters it at, short ones, and a long
+// invocation, whose loop proves it long, goes on natively. sum, judged
+// slow, runs a call of a million iterations natively from its loop.
+// DeltaBlue's forEach, judged slow on its many short calls, had run its
+// plan's, thousands of constraints long, in the tree tier.
+func TestJITSlowCodeEnteredByOSR(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	r, run := jitTierRuntimeForTest(t, 1, `function sum(n){let s=0;for(let i=0;i<n;i++)s=(s+i)|0;return s}`)
+	run(`sum(10)`)
+	e := jitNativeForTest(t, r, "sum")
+	e.entrySlow = true
+	starts, osrs, entries := e.starts, r.jit.osrs, e.ssaStats.entries
+	run(`sum(3)`)
+	if e.starts != starts || r.jit.osrs != osrs {
+		t.Fatal("Go entered sum, judged slow, at a short call")
+	}
+	run(`sum(1000000)`)
+	if r.jit.osrs == osrs || e.ssaStats.entries == entries {
+		t.Fatalf("sum's long loop was not entered by on-stack replacement: %d tries at loops, %d native entries", r.jit.osrs-osrs, e.ssaStats.entries-entries)
 	}
 }

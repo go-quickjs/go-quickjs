@@ -1934,9 +1934,13 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, err
 				return Undefined, nil, false
 			}
 		}
-		if e.entrySlow {
+		if e.entrySlow && !(osr && spent) {
 			// Its native stretches cost more at their exits than they save
-			// (jitSSAProfit): the existing tiers run it.
+			// (jitSSAProfit): the existing tiers run it -- but a loop that
+			// has run a full budget of back edges in them, a long
+			// invocation's, which goes on natively by on-stack replacement,
+			// as V8's does: the judgement is of Go's entries at the start,
+			// whose stretches are the short calls.
 			return Undefined, nil, false
 		}
 		return r.runSSA(f, e, pc, depth)

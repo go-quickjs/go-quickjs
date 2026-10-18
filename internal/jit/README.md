@@ -427,7 +427,9 @@ held at once, its free slots reused.
   denies executable memory, the runtime marks the JIT unavailable for good.
 
 **Giving up.** Code whose native work per exit stays low is entered by Go no
-more (`entrySlow`, `jitSSAProfit`), and runs only for its native callers.
+more at its start (`entrySlow`, `jitSSAProfit`), and runs for its native
+callers, and by on-stack replacement at a loop that has run a full budget
+of back edges in the existing tiers: a long invocation, which pays.
 
 **Debugger.** Runtimes made `WithDebugger` never run native code.
 
