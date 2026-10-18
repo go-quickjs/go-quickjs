@@ -3038,6 +3038,7 @@ func (c *compiler) propStore(v *ssa.Value, guard func(amd64.Cond)) {
 	c.a.Bind(have)
 	c.a.MovQToX(xScratch1, scratchB)
 	added := c.a.NewLabel()
+	var miss amd64.Label
 	if v.Add() != nil || len(v.Adds()) != 0 {
 		// A property the cache adds, along the transition of the object's
 		// shape among those the site met, or else one the object has.
@@ -3087,6 +3088,11 @@ func (c *compiler) propStore(v *ssa.Value, guard func(amd64.Cond)) {
 		c.a.OpImm(amd64.And, scratchB, int32(c.enc.PropNotWritable), false)
 		c.a.OpImm(amd64.Cmp, scratchB, int32(c.enc.PropWritable), false)
 		guard(amd64.CondNE)
+	} else if v.Type == ssa.Bool {
+		// A megamorphic site's write whose misses Go makes, on the branch
+		// its result, true there, controls (ssa's OpPropWrite).
+		miss = c.a.NewLabel()
+		c.property(v, func(cond amd64.Cond) { c.a.Jcc(cond, miss) })
 	} else {
 		c.property(v, guard)
 	}
@@ -3123,6 +3129,19 @@ func (c *compiler) propStore(v *ssa.Value, guard func(amd64.Cond)) {
 	c.a.Store(scratchA, c.enc.RefOffset, scratchC)
 	c.a.Bind(done)
 	c.a.Bind(added)
+	if v.Type == ssa.Bool {
+		// Stored: false; a miss, true.
+		stored := c.a.NewLabel()
+		c.movImm(scratchA, 0)
+		c.setG(v, scratchA)
+		c.a.Bind(stored)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(miss)
+			c.movImm(scratchA, 1)
+			c.setG(v, scratchA)
+			c.a.Jmp(stored)
+		})
+	}
 	if c.enc.CallGo == 0 {
 		return
 	}

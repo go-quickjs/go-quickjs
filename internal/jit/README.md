@@ -238,7 +238,14 @@ prototype's along a chain the code checks object by object and shape by
 shape (`abi.MegaChain`), or that none of the prototypes has it, the read's
 value undefined (`abi.MegaAbsent`). Go fills an entry at a read's exit. A
 read whose receiver's prototypes are no longer its case's -- a method
-added to one -- looks there too.
+added to one -- looks there too. A megamorphic site's write that neither
+the receiver's own table nor the megamorphic cache has -- an addition, a
+shape it never met -- is a call of Go (`ssa.GoCall`, `jitPropertyMade`) on
+a branch the builder makes within the instruction (`splitOn`), the write
+true where it stored nothing, native code going on where the two ways
+meet, as V8's megamorphic stores call the runtime on a miss; the analyses
+see the call on its branch alone. In an inlined callee, whose frame Go
+cannot make, it leaves.
 
 **Private members.** A private member is a property under a key each
 evaluation of its class mints, a symbol, which a binding the class's

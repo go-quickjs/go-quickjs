@@ -1367,6 +1367,7 @@ func (c *a64Compiler) propStore(v *ssa.Value, guard func(arm64.Cond)) {
 	c.a.Bind(have)
 	c.a.FMovToF(a64F1, a64B)
 	added := c.a.NewLabel()
+	var miss arm64.Label
 	if v.Add() != nil || len(v.Adds()) != 0 {
 		// As amd64's: along each transition the site met.
 		adds := v.Adds()
@@ -1415,6 +1416,10 @@ func (c *a64Compiler) propStore(v *ssa.Value, guard func(arm64.Cond)) {
 		c.a.Op(arm64.And, a64B, a64B, a64C, false)
 		c.a.CmpImm(a64B, int64(c.enc.PropWritable), false)
 		guard(arm64.NE)
+	} else if v.Type == ssa.Bool {
+		// As amd64's: a megamorphic site's write whose misses Go makes.
+		miss = c.a.NewLabel()
+		c.property(v, func(cond arm64.Cond) { c.a.BCond(cond, miss) })
 	} else {
 		c.property(v, guard)
 	}
@@ -1447,6 +1452,19 @@ func (c *a64Compiler) propStore(v *ssa.Value, guard func(arm64.Cond)) {
 	c.a.Store(a64A, c.enc.RefOffset, a64C)
 	c.a.Bind(done)
 	c.a.Bind(added)
+	if v.Type == ssa.Bool {
+		// As amd64's: stored, false; a miss, true.
+		stored := c.a.NewLabel()
+		c.movImm(a64A, 0)
+		c.setG(v, a64A)
+		c.a.Bind(stored)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(miss)
+			c.movImm(a64A, 1)
+			c.setG(v, a64A)
+			c.a.B(stored)
+		})
+	}
 	if c.enc.CallGo == 0 {
 		return
 	}

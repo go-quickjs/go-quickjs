@@ -2933,7 +2933,7 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 	pc, depth := int(ctx.ExitPC), int(ctx.ExitDepth)
 	in, n := jitGoCallInstr(ctx.GoOp)
 	top := r.stackTop
-	if n > abi.MaxGoArgs || depth < n || top+n > len(r.stack) {
+	if n > abi.MaxGoArgs || depth < n || top+n > len(r.stack) || !jitGoPropertyAt(f.cl.fn, pc, in) {
 		return false
 	}
 	for i := range n {
@@ -2986,6 +2986,19 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 		return false
 	}
 	*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
+	return true
+}
+
+// jitGoPropertyAt reports whether a call of Go, in, may be made at pc of
+// fn: a property's read or write only where fn's instruction there is one
+// (jitPropertyMade), which reads it; any other call anywhere.
+func jitGoPropertyAt(fn *bytecode.Function, pc int, in bytecode.Instr) bool {
+	switch in.Op {
+	case bytecode.OpSetProp:
+		return pc < len(fn.Code) && fn.Code[pc].Op == bytecode.OpSetProp
+	case bytecode.OpGetProp:
+		return pc < len(fn.Code) && (fn.Code[pc].Op == bytecode.OpGetProp || fn.Code[pc].Op == bytecode.OpGetPropThis)
+	}
 	return true
 }
 
@@ -3117,6 +3130,9 @@ func (r *Runtime) jitGoCallNested(ctx *abi.Context, idx int) bool {
 	in, n := jitGoCallInstr(ctx.GoOp)
 	top := r.stackTop
 	if n > abi.MaxGoArgs || depth < n || top+n > len(r.stack) {
+		return false
+	}
+	if cl := (*closure)(ctx.Closure); cl == nil || !jitGoPropertyAt(cl.fn, pc, in) {
 		return false
 	}
 	// Where each level is: at the native call it makes, as its code

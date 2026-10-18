@@ -485,3 +485,101 @@ func TestJITSlowCodeEnteredByOSR(t *testing.T) {
 		t.Fatalf("sum's long loop was not entered by on-stack replacement: %d tries at loops, %d native entries", r.jit.osrs-osrs, e.ssaStats.entries-entries)
 	}
 }
+
+// test262's buildString, under V8's budgets: codePoints.length = 0, at a
+// megamorphic site, between the chunks it appends to result. A write
+// there that Go made on the store's miss path, which native code's
+// analyses took for no call, gave a wrong string, and crashed. Each answer
+// is the interpreter's.
+func TestJITMegamorphicWriteKeeps(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const src = `
+		function buildString(args) {
+			const loneCodePoints = args.loneCodePoints
+			const ranges = args.ranges
+			const CHUNK_SIZE = 10000
+			let result = String.fromCodePoint.apply(null, loneCodePoints)
+			for (let i = 0; i < ranges.length; i++) {
+				let range = ranges[i]
+				let start = range[0]
+				let end = range[1]
+				let codePoints = []
+				for (let length = 0, codePoint = start; codePoint <= end; codePoint++) {
+					codePoints[length++] = codePoint
+					if (length === CHUNK_SIZE) {
+						result += String.fromCodePoint.apply(null, codePoints)
+						codePoints.length = length = 0
+					}
+				}
+				result += String.fromCodePoint.apply(null, codePoints)
+			}
+			return result
+		}
+		const s = buildString({ loneCodePoints: [], ranges: [[0xDC00, 0xDFFF], [0x80, 0xDBFF], [0xE000, 0x10FFFF]] })
+		s.length + ':' + s.charCodeAt(s.length >> 1) + ':' + s.charCodeAt(s.length - 1)`
+	want := New(Config{})
+	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
+	wv, err := want.Run(compileForTest(t, src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := New(Config{JIT: true})
+	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	gv, err := r.Run(compileForTest(t, src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, w := gv.String().Go(), wv.String().Go(); got != w {
+		t.Fatalf("got %s, interpreter %s", got, w)
+	}
+}
+
+// A megamorphic site's write that neither the receiver's own table nor the
+// megamorphic cache has -- a property it adds, a shape it never met -- Go
+// makes, called from native code (ssa.GoCall) on a branch of its own, which
+// goes on after it, as V8's megamorphic stores call the runtime: mark, of objects of eight
+// shapes, adding hit to some and writing it in others, never leaves its
+// code, entered from Go and called natively alike; each answer, and each
+// object, is the interpreter's. Each such write had left native code, the
+// rest of the invocation in the interpreter: RayTrace's testIntersection,
+// of best.hitCount, at a call in eleven.
+func TestJITMegamorphicWritesByGo(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	r, run := jitTierRuntimeForTest(t, 1, `var shapes=[];
+		for(let k=0;k<8;k++){const o={};for(let j=0;j<=k;j++)o['p'+j]=j;if(k&1)o.hit=0;shapes.push(o)}
+		function mark(o,v){let s=0;for(let i=0;i<2;i++)s+=i;o.hit=v+s;return o}
+		function each(n){let t=0;for(let i=0;i<n;i++){const o=Object.assign({},shapes[i&7]);t+=mark(o,i).hit}return t}`)
+	for range 4 {
+		run(`each(64)`)
+	}
+	e := jitNativeForTest(t, r, "mark")
+	if p := r.global.getOwn(r.atoms.intern("mark")).value().Object().fn().closure; !r.jitSiteMegamorphic(p, e, jitSetPropPC(t, p.fn)) {
+		t.Fatal("mark's write is not megamorphic: no test of its misses")
+	}
+	ee := jitNativeForTest(t, r, "each")
+	hosts, ehosts, interpreted := e.ssaStats.hosts, ee.ssaStats.hosts, r.jit.interpreted
+	run(`each(400)`)
+	run(`JSON.stringify(shapes.map(o=>mark(Object.assign({},o),1)))`)
+	if n := e.ssaStats.hosts - hosts + ee.ssaStats.hosts - ehosts; n != 0 {
+		t.Errorf("mark, or each calling it, left native code %d times", n)
+	}
+	if n := r.jit.interpreted - interpreted; n != 0 {
+		t.Errorf("the interpreter finished %d invocations", n)
+	}
+}
+
+// jitSetPropPC is the PC of fn's one set_prop.
+func jitSetPropPC(t *testing.T, fn *bytecode.Function) int {
+	t.Helper()
+	for pc, in := range fn.Code {
+		if in.Op == bytecode.OpSetProp {
+			return pc
+		}
+	}
+	t.Fatal("no set_prop")
+	return -1
+}

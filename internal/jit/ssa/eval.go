@@ -805,6 +805,10 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 					// The heap model has no global object: Go assigns.
 					return exit(v.State, ir.ExitKind(v.Aux))
 				}
+				if v.Type == Bool {
+					// A write whose miss Go makes, on a branch of its own.
+					return ir.Exit{}, fmt.Errorf("%w: a write whose miss Go makes", ErrUnsupported)
+				}
 				if v.Add() != nil || len(v.Adds()) != 0 || len(v.Cases()) != 0 {
 					// The heap model's objects have no shapes to add along,
 					// nor to tell a write's cases by.

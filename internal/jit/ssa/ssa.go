@@ -110,7 +110,11 @@ const (
 	OpPropRead  // ptr -> f64: the property, if the shape's and a number
 	OpPropWrite // ptr, tagged, source... -> none: stores, if the shape's;
 	// or, for a write whose cache adds the property (Add), adds it to an
-	// object it may be added to, and stores it into one that has it.
+	// object it may be added to, and stores it into one that has it. A
+	// megamorphic site's write typed Bool is true, storing nothing, where
+	// it finds no property to store to, which a call of Go on the branch it
+	// controls then writes (the builder's splitOn); an exit it has only for
+	// a store's checks.
 	// A reference read from an object: the property's cell, found as a read
 	// finds it, and the value there, whatever it is. The value's Shadow is
 	// the cell, which an exit has Go copy from (origin.go).

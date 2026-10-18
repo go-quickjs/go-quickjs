@@ -881,6 +881,13 @@ type builder struct {
 	sealed     []bool
 	filled     []bool
 	incomplete [][]slotPhi
+	// nextBlock is the ID a block an instruction splits off is given
+	// (splitOn); next, the block the instructions after the one being
+	// built go on in, if it split its own; splits, the blocks the
+	// instructions of the block being filled split off.
+	nextBlock int
+	next      *Block
+	splits    []*Block
 }
 
 // property is the feedback for a property operation at pc, if any.
@@ -2230,6 +2237,7 @@ func (b *builder) edge(from, to *Block) {
 // Assignment Form").
 func (b *builder) translate() {
 	n := len(b.f.Blocks)
+	b.nextBlock = n
 	b.defs = b.f.refLists(n)
 	b.sealed, b.filled = b.f.bools(n), b.f.bools(n)
 	b.incomplete = make([][]slotPhi, n)
@@ -2279,6 +2287,13 @@ func (b *builder) translate() {
 		for _, s := range blk.Succs {
 			b.trySeal(s)
 		}
+		for _, s := range b.splits {
+			b.filled[s.ID] = true
+			for _, t := range s.Succs {
+				b.trySeal(t)
+			}
+		}
+		b.splits = b.splits[:0]
 	}
 	for _, blk := range order {
 		if !b.sealed[blk.ID] {
@@ -2584,9 +2599,90 @@ func (b *builder) fill(blk *Block) {
 		blk.Header = b.state(blk, blk.PC)
 		blk.Header.Site = -1
 	}
-	for pc := blk.PC; pc <= b.endOf[blk.ID]; pc++ {
+	end := b.endOf[blk.ID]
+	for pc := blk.PC; pc <= end; pc++ {
 		b.instruction(blk, pc)
+		if b.next != nil {
+			// The instruction branched: the rest of the block goes on where
+			// both ways meet (splitOn).
+			blk, b.next = b.next, nil
+		}
 	}
+}
+
+// splitOn ends blk, the root frame's block being filled, at the
+// instruction being built, with a branch on cond, a boolean: true, to
+// other, a block for the instruction to fill, which goes to cont; false,
+// to cont, which the rest of blk's instructions go on in, and which takes
+// blk's end and its successors. The false edge is the one native code
+// takes without a jump of its own (mir's branch). Both are sealed: their
+// predecessors are all there are. The instructions after go on in cont
+// (fill), and the blocks are filled with blk's (translate). So an
+// instruction makes a diamond of its own: a megamorphic site's write, its
+// native store and, where that finds no property to store to, a call of
+// Go, which only the branch that makes it has.
+func (b *builder) splitOn(blk *Block, cond *Value) (other, cont *Block) {
+	f := b.f
+	mk := func() *Block {
+		nb := f.newBlock(blk.PC)
+		nb.ID = b.nextBlock
+		b.nextBlock++
+		// The block's ID past every list's, which each grows to.
+		for len(b.defs) <= nb.ID {
+			b.defs = append(b.defs, nil)
+		}
+		for len(b.sealed) <= nb.ID {
+			b.sealed = append(b.sealed, false)
+		}
+		for len(b.filled) <= nb.ID {
+			b.filled = append(b.filled, false)
+		}
+		for len(b.incomplete) <= nb.ID {
+			b.incomplete = append(b.incomplete, nil)
+		}
+		for len(b.endOf) <= nb.ID {
+			b.endOf = append(b.endOf, 0)
+		}
+		for len(b.frameOf) <= nb.ID {
+			b.frameOf = append(b.frameOf, nil)
+		}
+		if blk.ID < len(b.frameOf) {
+			b.frameOf[nb.ID] = b.frameOf[blk.ID]
+		}
+		return nb
+	}
+	other, cont = mk(), mk()
+	// After blk, in the order the blocks are filled and kept in: a block
+	// after its dominator, cont after other.
+	f.Blocks = f.Blocks[:len(f.Blocks)-2]
+	at := 0
+	for i, x := range f.Blocks {
+		if x == blk {
+			at = i + 1
+			break
+		}
+	}
+	rest := append([]*Block{other, cont}, f.Blocks[at:]...)
+	f.Blocks = append(f.Blocks[:at], rest...)
+	cont.Kind, cont.Control, cont.Succs, cont.State, cont.ExitKind = blk.Kind, blk.Control, blk.Succs, blk.State, blk.ExitKind
+	for _, s := range cont.Succs {
+		for i, p := range s.Preds {
+			if p == blk {
+				s.Preds[i] = cont
+			}
+		}
+	}
+	b.endOf[cont.ID] = b.endOf[blk.ID]
+	blk.Kind, blk.Control, blk.State, blk.ExitKind = BlockIf, cond, nil, 0
+	blk.Succs = []*Block{other, cont}
+	cond.Uses++
+	other.Kind, other.Succs, other.Preds, other.Backedge = BlockPlain, []*Block{cont}, []*Block{blk}, []bool{false}
+	cont.Preds, cont.Backedge = []*Block{blk, other}, []bool{false, false}
+	b.seal(other)
+	b.seal(cont)
+	b.splits = append(b.splits, other, cont)
+	b.next = cont
+	return other, cont
 }
 
 func (f *Func) entryForBlock(blk *Block) (Entry, bool) {
@@ -3073,6 +3169,33 @@ func (b *builder) instruction(blk *Block, pc int) {
 		f.setProperty(v, nil, cases, site.Add, site.Adds)
 		if site.Megamorphic {
 			f.cache(v).Mega = true
+			if in.Op == ir.PropertyWrite && !in.Private && (site.Add == nil || !site.Add.Define) && b.cur == b.root && b.goCalls() && f.Keeps < f.keepLimit() {
+				// What neither the receiver's own table nor the megamorphic
+				// cache has -- a property the write adds, an object of a
+				// shape it never met -- Go writes, on a branch of its own
+				// (splitOn): the write says whether it left the store to Go,
+				// a boolean, and where it did, a call of Go (GoCall) writes
+				// it as the interpreter does, native code going on after it,
+				// as V8's megamorphic stores call the runtime on a miss
+				// rather than leave. The analyses see the call on the branch
+				// that makes it, and none where the store is native. Each
+				// miss had left native code: RayTrace's testIntersection, at
+				// best.hitCount, best one of the intersections' many shapes,
+				// at a call in eleven, the interpreter finishing it.
+				st, recv := v.State, operand(in.Left)
+				v.Type = Bool
+				miss, _ := b.splitOn(blk, v)
+				call := f.newValue(miss, OpCall, Tagged, recv, v.Args[1])
+				call.Aux, call.State = int(ir.HostExit), st
+				st.addUse()
+				f.cache(call).Calls, call.Index = []*CallSite{{Go: GoCall, Accessor: AccessorSet, Key: site.Key, Argc: 1, ThisSlot: -1}}, f.Keeps
+				f.Keeps++
+				// A setter Go calls may assign a captured binding, as a
+				// callee may (ir.Host's calls).
+				if b.hasCells() {
+					b.reloadAfterCall(miss)
+				}
+			}
 		}
 	case ir.BindingWrite:
 		// The binding's cell, as a read finds it, written as a property
