@@ -1054,7 +1054,7 @@ func (c *a64Compiler) eqTagged(v *ssa.Value, guard func(arm64.Cond)) {
 	c.movImm(a64C, abi.NumberLimit)
 	c.a.Cmp(wx, a64C, true)
 	c.a.BCond(arm64.LO, number)
-	for _, w := range []uint64{c.enc.Null, c.enc.Undefined, c.enc.True, c.enc.False} {
+	for _, w := range []uint64{c.enc.Null, c.enc.Undefined, c.enc.True, c.enc.False, c.enc.Uninitialized} {
 		c.movImm(a64C, w)
 		c.a.Cmp(wx, a64C, true)
 		c.a.BCond(arm64.EQ, yes)

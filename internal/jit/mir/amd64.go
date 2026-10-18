@@ -5496,7 +5496,9 @@ func (c *compiler) eqTagged(v *ssa.Value, guard func(amd64.Cond)) {
 	c.cold = append(c.cold, func() {
 		c.a.Bind(notString)
 		wx := c.gpr(x, scratchA)
-		for _, w := range []uint64{c.enc.True, c.enc.False} {
+		// A loop's step's answer compared with the uninitialized value, a
+		// cursor done (ssa's iterStep), is one word too.
+		for _, w := range []uint64{c.enc.True, c.enc.False, c.enc.Uninitialized} {
 			c.cmpWord(wx, w)
 			c.a.Jcc(amd64.CondE, yes)
 		}

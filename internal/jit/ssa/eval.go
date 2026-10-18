@@ -132,7 +132,9 @@ func eqTagged(x, y ir.Value, strict bool, strings map[uint64]String, objects []O
 	}
 	if x.Kind == y.Kind && (x.Kind == ir.Opaque || x.Kind == ir.String || x.Bits == y.Bits) {
 		switch x.Kind {
-		case ir.Undefined, ir.Null, ir.Boolean:
+		case ir.Undefined, ir.Null, ir.Boolean, ir.Uninitialized:
+			// One word each; the uninitialized value is a loop's step's
+			// answer for a cursor done (iterStep).
 			return true, true
 		case ir.Opaque:
 			return x.Bits == y.Bits, true

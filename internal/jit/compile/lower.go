@@ -1867,10 +1867,12 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this, charCode bool
 	case bytecode.OpIterRest:
 		// Go's (jitHost): the array of what is left.
 		return ir.Instruction{Op: ir.Host}
-	case bytecode.OpIterCloseNormal:
-		// Native where there is nothing to close, Go's otherwise.
+	case bytecode.OpIterCloseNormal, bytecode.OpIterClose:
+		// Native where there is nothing to close, Go's otherwise: a loop's
+		// cursor done, or an array's walked in place, as its loop ends --
+		// iter_close keeps the cursor, which the drop after it takes.
 		return ir.Instruction{Op: ir.IterClose, Left: top}
-	case bytecode.OpForOfStart, bytecode.OpForInStart, bytecode.OpIterClose,
+	case bytecode.OpForOfStart, bytecode.OpForInStart,
 		bytecode.OpIterResume, bytecode.OpIterUnpackDelegate, bytecode.OpYieldStar:
 		// A for...of or for...in loop's cursor, or yield*'s delegate, Go's
 		// (jitHost), which sets where native code goes on: past a step
