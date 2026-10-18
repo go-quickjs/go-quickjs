@@ -1764,6 +1764,9 @@ type jitFeedback struct {
 	// prog is the function lowered for inlining, its stack depths what
 	// Intrinsic reads, made on first use.
 	prog *ir.Program
+	// targetsBy are the calls e's code learned (jitTargets), by PC, once
+	// NativeCalls asks.
+	targetsBy map[int][]*jitInline
 }
 
 // CharCode is ssa.CharCodeFeedback's: whether the method call of one
@@ -2148,7 +2151,15 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 		return nil
 	}
 	var sites []ssa.CallSite
-	targets := jitTargets(fb.e)
+	// The calls its code learned, by PC, found once: each call had looked
+	// through them all, a call site's every target among every site's.
+	if fb.targetsBy == nil {
+		fb.targetsBy = map[int][]*jitInline{}
+		for _, x := range jitTargets(fb.e) {
+			fb.targetsBy[int(x.pc)] = append(fb.targetsBy[int(x.pc)], x)
+		}
+	}
+	targets := fb.targetsBy[pc]
 	for _, x := range targets {
 		// The calls it makes natively, and those it inlines, which a
 		// compile past its budget for inlining (ssa's maxInlines) calls
@@ -2278,7 +2289,19 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 			// object, which keeps them.
 			site.Upvalues = uintptr(unsafe.Pointer(unsafe.SliceData(in.cl.upvalues)))
 		}
-		site.StartOnly = jitcompile.StartOnly(in.cl.fn)
+		// Asked of its lowering, which keeps the answer (startOnly): each
+		// site had walked the callee's code for it again.
+		if l := fb.r.jit.lowered[weak.Make(in.cl.fn)]; l != nil {
+			if l.startOnly == 0 {
+				l.startOnly = 1
+				if jitcompile.StartOnly(in.cl.fn) {
+					l.startOnly = 2
+				}
+			}
+			site.StartOnly = l.startOnly == 2
+		} else {
+			site.StartOnly = jitcompile.StartOnly(in.cl.fn)
+		}
 		if in.via {
 			site.Via = uintptr(unsafe.Pointer(fb.r.callFn))
 			fb.holders = append(fb.holders, fb.r.callFn)
@@ -5403,6 +5426,9 @@ type jitLowering struct {
 	// (treeSeen) when they were last taken into hints.
 	hints    jitcompile.Hints
 	treeAdds int32
+	// startOnly is jitcompile.StartOnly's answer for the function, once
+	// asked by a call of it: 1 for no, 2 for yes.
+	startOnly uint8
 }
 
 // jitLowerKind is how a program is lowered: for a function's own code

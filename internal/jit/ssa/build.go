@@ -225,8 +225,13 @@ func (b *builder) stringProperty(pc int) (PropertySite, bool) {
 	if !ok || b.p.Code[pc].Op != ir.ReferenceRead {
 		return PropertySite{}, false
 	}
-	s, ok := f.StringProperty(pc)
-	return s, ok && s.Shape != 0
+	a := b.answer(pc)
+	if a.asked&askedString == 0 {
+		s, ok := f.StringProperty(pc)
+		a = b.answer(pc)
+		a.str, a.strOK, a.asked = s, ok && s.Shape != 0, a.asked|askedString
+	}
+	return a.str, a.strOK
 }
 
 // LiteralFeedback is Feedback that knows object literals' sites (Literal)
@@ -904,7 +909,13 @@ func (b *builder) property(pc int) (PropertySite, bool) {
 	if op := b.p.Code[pc].Op; b.fb == nil || op != ir.PropertyRead && op != ir.PropertyWrite && op != ir.ReferenceRead {
 		return PropertySite{}, false
 	}
-	return b.fb.Property(pc)
+	a := b.answer(pc)
+	if a.asked&askedSite == 0 {
+		site, ok := b.fb.Property(pc)
+		a = b.answer(pc)
+		a.site, a.ok, a.asked = site, ok, a.asked|askedSite
+	}
+	return a.site, a.ok
 }
 
 // host reports whether the instruction at pc is left to Go whole: it ends
@@ -1240,7 +1251,43 @@ type frame struct {
 	// one of accessors.
 	asked     []uint8
 	accessors map[int]*AccessorSite
+	// answers are property's and stringProperty's answers, once asked, and
+	// answerAt, by PC, 1 plus the index of each's: the plan asks of each
+	// property site whether it is left to Go (host) and whether it knows
+	// a shape (unfed), and the translation asks again, and each answer is
+	// a search of the VM's caches -- a fifth of a build had been the same
+	// answers found again.
+	answers  []siteAnswer
+	answerAt []int
 }
+
+// siteAnswer is a property site, if the feedback has one, and a string
+// property's (frame's answers).
+type siteAnswer struct {
+	site, str PropertySite
+	ok, strOK bool
+	asked     uint8
+}
+
+// answer is pc's entry in the frame's answers, made if need be.
+func (b *builder) answer(pc int) *siteAnswer {
+	fr := b.cur
+	if fr.answerAt == nil {
+		fr.answerAt = b.f.ints(len(b.p.Code))
+	}
+	if k := fr.answerAt[pc]; k != 0 {
+		return &fr.answers[k-1]
+	}
+	fr.answers = b.f.appendAnswer(fr.answers, siteAnswer{})
+	fr.answerAt[pc] = len(fr.answers)
+	return &fr.answers[len(fr.answers)-1]
+}
+
+// The answers a site's entry holds (siteAnswer's asked).
+const (
+	askedSite uint8 = 1 << iota
+	askedString
+)
 
 // inlinedAt is the callee inlined at pc in the frame being translated.
 func (b *builder) inlinedAt(pc int) *frame {

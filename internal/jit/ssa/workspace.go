@@ -26,6 +26,7 @@ type Workspace struct {
 	ints      arena.Arena[int]
 	caches    arena.Arena[InlineCache]
 	accessors arena.Arena[AccessorSite]
+	answers   arena.Arena[siteAnswer]
 	scratch   scratch
 	ready     bool
 }
@@ -47,6 +48,7 @@ func (w *Workspace) init() {
 	w.ints.KeepBig()
 	w.caches.KeepBig()
 	w.accessors.KeepBig()
+	w.answers.KeepBig()
 }
 
 // Bytes is the memory the workspace keeps between compiles: its arenas'
@@ -56,7 +58,8 @@ func (w *Workspace) Bytes() int { return w.arenaBytes() + w.scratchBytes() }
 // arenaBytes is what the workspace's arenas keep.
 func (w *Workspace) arenaBytes() int {
 	return w.values.Bytes() + w.refs.Bytes() + w.states.Bytes() + w.blocks.Bytes() + w.blockRefs.Bytes() +
-		w.refLists.Bytes() + w.bools.Bytes() + w.bytes.Bytes() + w.ints.Bytes() + w.caches.Bytes() + w.accessors.Bytes()
+		w.refLists.Bytes() + w.bools.Bytes() + w.bytes.Bytes() + w.ints.Bytes() + w.caches.Bytes() + w.accessors.Bytes() +
+		w.answers.Bytes()
 }
 
 // scratchBytes is what the passes' scratch tables keep.
@@ -91,6 +94,7 @@ func (w *Workspace) Rewind() {
 	w.ints.Rewind()
 	w.caches.Rewind()
 	w.accessors.Rewind()
+	w.answers.Rewind()
 	// The arenas keep what the recent compiles needed (arena's Rewind);
 	// the scratch tables, grown by value ID, the most any compile has. Once
 	// they hold more than the arenas, a compile bigger than the recent
@@ -105,6 +109,14 @@ func (w *Workspace) Rewind() {
 func BuildIn(w *Workspace, p *ir.Program, fb Feedback) (*Func, error) {
 	w.init()
 	return build(w, p, fb)
+}
+
+// appendAnswer is append(s, a), growing s in the workspace if there is one.
+func (f *Func) appendAnswer(s []siteAnswer, a siteAnswer) []siteAnswer {
+	if f.ws != nil {
+		return f.ws.answers.Append(s, a)
+	}
+	return append(s, a)
 }
 
 // bools is n false flags: from the workspace, if the Func has one.
