@@ -3767,10 +3767,8 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 	props := 0
 	var root *shape
 	if fd.closure != nil {
-		props = int(fd.closure.fn.ThisProps)
-		if root = r.shapes.ctorRoot(fd); root != nil {
-			props = max(props, int(root.slack))
-		}
+		root = r.shapes.ctorRoot(fd)
+		props = root.roomFor(int(fd.closure.fn.ThisProps))
 	}
 	obj := newLiteralObject(proto, ClassObject, props)
 	obj.shape = root
@@ -3817,6 +3815,11 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 	}
 	if err != nil {
 		return Undefined, err
+	}
+	if fd.ctorKind != ctorDerived {
+		// What the object came to have, for the room the constructor's
+		// next ones are made with.
+		root.noteBuilt(len(obj.vals))
 	}
 	// A constructor that returns an object overrides the newly created one;
 	// any other return value is ignored -- except in a derived constructor,

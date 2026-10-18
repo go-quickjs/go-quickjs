@@ -68,15 +68,19 @@ type shape struct {
 	// seen is replaced, rather than changed, when its object's layout
 	// changes. Each place that keeps a shape sets it, by remember.
 	seen bool
-	// slack is, on a constructor's root, how many properties its objects
-	// have come to need: the most an object of it has had when it outgrew
-	// the room it was made with, up to maxSlack. The constructor's next
-	// objects are made with that room, rather than outgrowing it in turn.
+	// slack is, on a root, how many properties its objects have come to
+	// need: the most an object of it has had when it outgrew the room it
+	// was made with, or, on a constructor's once its first objects are
+	// built (tracked), the most of them had, up to maxRoom. Its next
+	// objects are made with that room (roomFor), rather than outgrowing
+	// it in turn, as V8's slack tracking sizes a constructor's objects.
 	slack uint8
-	// outgrown says, on a root, that an object of it outgrew maxSlack: the
-	// room its objects need is more than they are given, so slack gives
-	// them none, rather than room they carry and outgrow as well.
-	outgrown bool
+	// used and built are, on a constructor's root, the most properties its
+	// objects built so far have had and how many were built, up to
+	// slackTracking of them (noteBuilt); tracked says the room is then
+	// what they used.
+	used, built uint8
+	tracked     bool
 	// borrowed says, on a unique shape, that its index is a shared layout's,
 	// which its object left by deleting a key or changing an attribute: the
 	// keys it still has are where that layout has them. The index is only
@@ -436,9 +440,17 @@ func (t *shapeTree) ctorRoot(fd *funcData) *shape {
 	return s
 }
 
-// maxSlack is the most room a constructor's objects are given for what they
-// came to need: the most an object carries in its own allocation.
+// maxSlack is the most room an object carries in its own allocation; room
+// for more is a table of its own, made at that size (newLiteralObject).
 const maxSlack = 8
+
+// maxRoom is the most room a layout's objects are made with, V8's most
+// in-object properties (JSObject::kMaxInObjectProperties).
+const maxRoom = 252
+
+// slackTracking is how many of a constructor's objects are built before
+// its objects' room is what they used, V8's kSlackTrackingCounterStart.
+const slackTracking = 7
 
 // root is the shape the layout grew from.
 func (s *shape) root() *shape {
@@ -454,15 +466,42 @@ func (s *shape) noteGrowth(n int) {
 	if s == nil || s.unique || s.loose {
 		return
 	}
-	switch root := s.root(); {
-	case root.outgrown:
-	case n > maxSlack:
-		// Room for maxSlack would be carried by every object and outgrown
-		// by them all, so they are made as they would be without slack.
-		root.outgrown = true
-		root.slack = 0
-	case n > int(root.slack):
-		root.slack = uint8(n)
+	if root := s.root(); n > int(root.slack) {
+		// Past maxSlack the room is a table of the object's own, made at
+		// that size: none is carried and outgrown.
+		root.slack = uint8(min(n, maxRoom))
+	}
+}
+
+// roomFor is the room an object of constructor root is made with, its body
+// counting thisProps properties of this (bytecode.Function's ThisProps):
+// as many as it counted, or that its objects came to need; once its first
+// objects are built, what they used (noteBuilt), as V8 sizes a
+// constructor's objects by the expected properties until slack tracking
+// has measured them.
+func (root *shape) roomFor(thisProps int) int {
+	if root == nil {
+		return thisProps
+	}
+	if root.tracked {
+		return int(root.slack)
+	}
+	return max(thisProps, int(root.slack))
+}
+
+// noteBuilt records, on a constructor's root, that one of its objects was
+// built with n properties; after slackTracking of them, its objects' room
+// is the most any had, which a body counting more than it assigns -- a
+// property in each branch of a switch -- would otherwise have given every
+// object.
+func (root *shape) noteBuilt(n int) {
+	if root == nil || root.tracked {
+		return
+	}
+	root.used = uint8(max(int(root.used), min(n, maxRoom)))
+	if root.built++; root.built >= slackTracking {
+		root.tracked = true
+		root.slack = root.used
 	}
 }
 

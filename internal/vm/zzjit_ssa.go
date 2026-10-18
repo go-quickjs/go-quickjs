@@ -4852,11 +4852,8 @@ func (r *Runtime) jitConstructLayout(o *Object) (proto *Object, root *shape, pro
 	if !p.ok() || p.flags()&propAccessor != 0 || !p.value().IsObject() || fd == nil || fd.closure == nil {
 		return nil, nil, 0, false
 	}
-	props = int(fd.closure.fn.ThisProps)
 	root = r.shapes.ctorRoot(fd)
-	if root != nil {
-		props = max(props, int(root.slack))
-	}
+	props = root.roomFor(int(fd.closure.fn.ThisProps))
 	return p.value().Object(), root, props, true
 }
 

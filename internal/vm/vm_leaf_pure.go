@@ -510,15 +510,12 @@ func (r *Runtime) pureConstruct(callee Value, args []Value) (Value, bool) {
 		return Undefined, false
 	}
 	root := r.shapes.ctorRoot(fd)
-	props := int(fd.closure.fn.ThisProps)
-	if root != nil {
-		props = max(props, int(root.slack))
-	}
-	obj := newLiteralObject(p.value().Object(), ClassObject, props)
+	obj := newLiteralObject(p.value().Object(), ClassObject, root.roomFor(int(fd.closure.fn.ThisProps)))
 	obj.shape = root
 	if !r.leafStores(fd.closure, obj, args) {
 		return Undefined, false
 	}
+	root.noteBuilt(len(obj.vals))
 	return Obj(obj), true
 }
 

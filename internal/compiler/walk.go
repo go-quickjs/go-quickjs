@@ -133,8 +133,12 @@ func (w *argumentsScanner) noteThisProp(n *ast.Assign) {
 	w.thisProps = append(w.thisProps, name)
 }
 
-// maxThisProps bounds the count, which is only a hint at how much room to make.
-const maxThisProps = 16
+// maxThisProps bounds the count, which is a hint at how much room to make:
+// V8's most in-object properties (JSObject::kMaxInObjectProperties), as its
+// parser's expected properties count is bounded. The objects a constructor
+// builds are made with that room until their first few have measured what
+// they use (the VM's slack tracking).
+const maxThisProps = 252
 
 // thisPropertyCount is how many distinct properties a function body assigns to
 // `this` by name.
