@@ -706,6 +706,12 @@ type PropertySite struct {
 	// as V8's map checks do: the interpreter makes the operation, its cache
 	// learning the shape, and the code is compiled again for it.
 	Megamorphic bool
+	// Scan, for a read whose cache is empty though it may have run -- the
+	// VM's interpreter reads a small table without filling it, which only
+	// its tree tier does -- has a receiver's own small table searched for
+	// the key, plain data, and deoptimizes where it does not have it,
+	// rather than at every receiver.
+	Scan bool
 }
 
 // unfed reports whether the property operation at pc has a site that
@@ -731,7 +737,7 @@ func (b *builder) unfed(pc int) bool {
 
 // unfedSite reports whether site knows nothing to make its operation with.
 func unfedSite(site PropertySite) bool {
-	return site.Shape == 0 && len(site.Cases) == 0 && site.Add == nil && len(site.Adds) == 0 && site.Holders[0].Object == 0 && !site.Megamorphic
+	return site.Shape == 0 && len(site.Cases) == 0 && site.Add == nil && len(site.Adds) == 0 && site.Holders[0].Object == 0 && !site.Megamorphic && !site.Scan
 }
 
 // PropertyAdd is a write that adds its property, as the VM's cache has it
@@ -1951,7 +1957,10 @@ func (b *builder) plan() error {
 		if !reachable(p, pc) {
 			continue
 		}
-		if fr, ok := b.inlineAt(pc, &total); ok {
+		if fr, ok := b.inlineAt(pc, &total); ok && b.host(pc) {
+			// Not a call native code makes itself (nativeHost) -- an
+			// intrinsic its feedback names, though another site's
+			// feedback has it inline the function the call met.
 			if b.inlined == nil {
 				b.inlined = map[int]*frame{}
 			}
@@ -3035,6 +3044,9 @@ func (b *builder) instruction(blk *Block, pc int) {
 			if site.Megamorphic {
 				f.cache(cell).Mega = true
 			}
+			if site.Scan && site.Shape == 0 && cases == nil && holders == nil {
+				f.cache(cell).Scan = true
+			}
 			v := f.newValue(blk, OpLoadCell, Tagged, cell)
 			v.Shadow = cell
 			b.assign(in.Dest, blk, v)
@@ -3046,6 +3058,9 @@ func (b *builder) instruction(blk *Block, pc int) {
 			f.setProperty(v, holders, cases, nil, nil)
 			if site.Megamorphic {
 				f.cache(v).Mega = true
+			}
+			if site.Scan && site.Shape == 0 && cases == nil && holders == nil {
+				f.cache(v).Scan = true
 			}
 			b.assign(in.Dest, blk, boxF(v))
 			break

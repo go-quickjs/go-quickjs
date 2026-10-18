@@ -259,38 +259,29 @@ type jitEntry struct {
 	failedEntries []uint32
 	reopt         bool
 	reopts        uint8
-	// shapeReopt marks code a property site deoptimized in, for a shape
-	// it was not compiled for, which its cache has learned
-	// (jitPropertyDeopt): compiled again at its next entry, as many times
-	// as its sites meet new shapes, which their caches bound -- each a
-	// fill, until one gives up and its site is megamorphic; shapeReopts
-	// counts the times.
-	shapeReopt  bool
-	shapeReopts uint32
 	// ssaInlinedAt are the calls the code inlines, by pc: a call decided
 	// for inlining since leaves from code compiled before, which is not
 	// the callee's leaving (jitCallSeen).
 	ssaInlinedAt []int32
-	// reoptBudget is how many native stretches the code runs before it is
-	// compiled again for feedback a site it ran lacked (feedReopt).
-	reoptBudget uint32
-	// instrs is its code's size, in its function's instructions
-	// (jitCompiledInstrs), which sets how long the code runs before it is
-	// compiled again for what it learned (reoptDueNow).
-	instrs uint32
-	// eager marks the entry of a runtime that compiles a function at its
-	// first call (jitCallThreshold), as tests and QJS_JIT_STRESS do to
-	// reach every path soon: what its code learns it is compiled again
-	// for as soon, rather than once Go has done its work (reoptDueNow).
-	eager bool
-	// feedReopt marks code compiled before a site it has run since had any
-	// feedback: compiled again at its next invocation (calls, by Go or
-	// native callers), or once the invocation it ran in has done
-	// feedWork's worth of work more (reoptDue). starts counts Go's entries
-	// at a function's start, not into a loop.
-	feedReopt            bool
-	starts               uint64
-	feedStarts, feedWork uint64
+	// invalid marks code an eager deoptimization invalidated, or that is to
+	// be compiled again for what it learned (reoptPending): Go enters it no
+	// more, nor do native callers call it (its link), and the existing
+	// tiers run the function until they have spent a fresh budget,
+	// tierBudget, when it is compiled again (jitTierUp) -- as V8's
+	// deoptimizer invalidates a function's current code and resets its
+	// interrupt budget, and the interpreter's spending it tiers the
+	// function up again. tierMark is the function's caches' feedback
+	// (jitFeedbackMark) when the budget began: a change since delays the
+	// compile by another budget, as V8's NotifyICChanged does. deopts
+	// counts the code's eager deoptimizations, compiles apart: past
+	// jitMaxDeopts the function is compiled no more, as V8 gives up
+	// optimizing one that keeps deoptimizing.
+	invalid    bool
+	tierBudget int64
+	tierMark   uint64
+	deopts     uint16
+	// starts counts Go's entries at a function's start, not into a loop.
+	starts uint64
 	// literals are the object literals the code makes natively, each with
 	// its pool, kept across compiles (jitFeedback.Literal); definesUnfed
 	// the literals' fields compiled before their transitions were made,
@@ -300,13 +291,10 @@ type jitEntry struct {
 	// ssaCells are the cells the code reads string constants from
 	// (jitFeedback.StringCell).
 	ssaCells []*Value
-	// poly are the reads that met objects of shapes the code was not
-	// compiled for, each with up to jitPropertyCases of them, which it is
-	// compiled again for (jitPolySeen); polyReopt marks that it is to be,
-	// polyPending that it is to be once polySettled exits in a row have
-	// found no other (jitPolySettle), or once it has been invoked again
-	// since one was met, its invocations then polyAt (polyMet), and
-	// polyReopts counts the times it was.
+	// poly are the property sites' cases and accessors the code met that
+	// their caches cannot hold, and whether each is megamorphic, which it
+	// is compiled again for (jitDeoptSeen, jitPolySeen); polyReopt marks
+	// that it is to be, and polyReopts counts the times it was.
 	poly []jitPolySite
 	// typedReads are the element reads, by PC, whose result no native
 	// operation takes as a number, whose receivers have been typed arrays
@@ -317,9 +305,6 @@ type jitEntry struct {
 	stringReads []int32
 	keyedReads  []int32
 	polyReopt   bool
-	polyPending bool
-	polySettled uint8
-	polyAt      uint64
 	polyReopts  uint8
 	// strSites are the method reads that met a string receiver, which the
 	// code reads off String.prototype once compiled again
@@ -395,12 +380,6 @@ type jitEntry struct {
 	// ssaCallee marks code compiled for native callers alone, from
 	// LowerSSAInline (jitNativeCallee).
 	ssaCallee bool
-	// slowTries counts the existing tiers' tries to enter code Go no
-	// longer enters (entrySlow) that has learned what to be compiled again
-	// for (reoptPending), a try at a loop jitTickExits: its budget
-	// (reoptDue), which nothing native spends any more, as V8's interpreter
-	// spends a function's.
-	slowTries uint32
 	// entrySlow marks code Go no longer enters (jitSSAProfit), and this
 	// code that reads its receiver.
 	entrySlow bool
@@ -603,6 +582,10 @@ type jitState struct {
 	// unwound counts the native calls whose callees left native code, which
 	// Go finished (jitUnwindNative).
 	unwound uint64
+	// invalidated counts the codes invalidated (jitInvalidate), and
+	// tieredUp those compiled again once the existing tiers had spent
+	// their budgets (jitTierUp).
+	invalidated, tieredUp uint64
 	// shapeDeopts counts the deoptimizations at property sites of code Go
 	// entered, for a shape the code was not compiled for or a site that
 	// knew none (jitPropertyDeopt), and shapeHosts such exits inside
@@ -632,10 +615,13 @@ type jitState struct {
 	interpreted uint64
 	// goOn is the frame the interpreter runs for jitGoOn, until a loop's
 	// header Go goes on natively at, goOnPC with goOnDepth operands;
-	// wentOn counts the times it did.
+	// wentOn counts the times it did. forcedCheck marks the back-edge
+	// check jitGoOn made due at once, which is no budget the existing
+	// tiers spent (tryJITAt).
 	goOn              *frame
 	goOnPC, goOnDepth int
 	wentOn            uint64
+	forcedCheck       bool
 	stressExits       uint64
 	// ssaCtxs are the contexts native code runs in, one for each runSSA
 	// running and each native call (abi.Context's Level), ctxTop the
@@ -1639,7 +1625,7 @@ func (r *Runtime) jitCompileFor(fn *bytecode.Function, cl *closure, kind jitLowe
 		return nil
 	}
 	s.serial++
-	e := &jitEntry{used: s.epoch(), serial: s.serial, eager: r.jitCallThreshold <= 1, hot: kind == jitLowerHot}
+	e := &jitEntry{used: s.epoch(), serial: s.serial, hot: kind == jitLowerHot}
 	if g, ok := s.ghosts[uintptr(unsafe.Pointer(fn))]; ok {
 		// What its code dropped before had learned (jitGhost).
 		e.failed, e.failedEntries, e.typedReads, e.stringReads, e.keyedReads = g.failed, g.failedEntries, g.typedReads, g.stringReads, g.keyedReads
@@ -1733,11 +1719,10 @@ func (r *Runtime) tryJITFrame(f *frame) (Value, error, bool) {
 	if f.cl.jitRefused {
 		return Undefined, nil, false
 	}
-	if e := r.jit.hint(f.cl); e != nil && e.entrySlow && !e.reoptPending() && !e.feedReopt {
-		// Not while it is to be compiled again at its next invocation for
-		// what its exits taught it (feedReopt): judged slow for those
-		// exits, it was never entered again, and never compiled for what
-		// they taught.
+	if e := r.jit.hint(f.cl); e != nil && e.entrySlow && !e.invalid && !e.reoptPending() {
+		// Not code invalidated, whose invocations spend the budget it is
+		// compiled again on (tryJITAt): judged slow, it would never be
+		// entered again, and never compiled for what it learned.
 		if e.hostOnly && e.ssaCallee && !f.cl.fn.TopLevel {
 			// Code for native callers alone, of a function Go calls as
 			// well: compiled for Go to enter too once hot (jitHotEntry).
@@ -1765,7 +1750,7 @@ func (r *Runtime) tryJITFrame(f *frame) (Value, error, bool) {
 		r.jitState()
 		return Undefined, nil, false
 	}
-	return r.tryJITAt(f, 0, 0, false)
+	return r.tryJITAt(f, 0, 0, false, false)
 }
 
 // jitBackEdge is executeAt's interrupted block in a build with the JIT: the
@@ -1815,6 +1800,12 @@ func (s *jitState) backEdgeBudget() int {
 // The existing back-edge interrupt budget supplies coarse work feedback.
 // Promotion starts at the completed branch's target, never at function entry.
 func (r *Runtime) tryJITLoop(f *frame, pc uint32, sp int, fullBudget bool) (Value, error, bool) {
+	forced := false
+	if s := r.jit; s != nil && s.forcedCheck {
+		// The check jitGoOn made due at once: whatever frame's back edge
+		// it is, no budget the existing tiers spent.
+		forced, s.forcedCheck = fullBudget, false
+	}
 	if !r.jitEnabled || !fullBudget || f.cl.jitRefused || r.jitDeoptBlocks(f) || f.cl.fn.TopLevel && f.callee != nil {
 		// A direct eval's code, which runs as its caller's arrow (evalIn),
 		// reads names in its caller's scopes -- a with's object, what an
@@ -1829,15 +1820,18 @@ func (r *Runtime) tryJITLoop(f *frame, pc uint32, sp int, fullBudget bool) (Valu
 	if s := r.jit; s != nil && s.goOn == f {
 		// The frame whose native code Go goes on in, at an entry it has:
 		// in that run, not a run of its own (jitGoOn).
-		if e := s.hint(f.cl); e != nil && e.ssa != nil && !e.entrySlow && e.ssa.HasEntry(int(pc)) {
+		if e := s.hint(f.cl); e != nil && e.ssa != nil && !e.entrySlow && !e.invalid && e.ssa.HasEntry(int(pc)) {
 			s.goOnPC, s.goOnDepth = int(pc), sp-f.base
 			return Undefined, errGoOnNatively, true
 		}
 	}
-	return r.tryJITAt(f, int(pc), sp-f.base, true)
+	return r.tryJITAt(f, int(pc), sp-f.base, true, !forced)
 }
 
-func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr bool) (Value, error, bool) {
+// tryJITAt enters f's code at pc, with depth operands, compiling it if it
+// has none: at the function's start, or, osr, at a loop's header, the
+// existing tiers having run a full budget of its back edges if spent.
+func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, error, bool) {
 	e := r.jit.hint(f.cl)
 	if e == nil || e.ssa != nil && e.ssa.Size() == 0 {
 		e = r.jitFor(f.cl)
@@ -1850,27 +1844,33 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr bool) (Value, error, boo
 		if e.inlinePending && e.inlineReopts < jitInlineReoptimizations {
 			e.inlinePending, e.inlineReopt = false, true
 		}
-		if e.entrySlow && e.reoptPending() {
-			// At a loop, the existing tiers have run a budget of its back
-			// edges: a tick of its own (reoptDueNow).
-			e.slowTries++
-			if osr {
-				e.slowTries += jitTickExits - 1
-			}
-		}
 		if !osr {
 			e.starts++
 		} else {
 			r.jit.osrs++
 		}
-		if e.reoptDue() {
-			r.jitReoptimize(f.cl, e)
+		// Code that learned what to be compiled again for is invalidated,
+		// and is, once the existing tiers have spent a budget: an
+		// invocation spends its function's length of it, a loop that ran
+		// a full budget of back edges all of it, as the first compile
+		// waits for either (jitCallThreshold) -- but a check jitGoOn made
+		// due at once, no full budget.
+		r.jitTierDown(f.cl, e)
+		if e.invalid {
+			work := int64(len(f.cl.fn.Code))
+			if osr {
+				work = 0
+				if spent {
+					work = max(e.tierBudget, 1)
+				}
+			}
+			if !r.jitTierUp(f.cl, e, work) {
+				return Undefined, nil, false
+			}
 		}
 		if e.entrySlow {
 			// Its native stretches cost more at their exits than they save
-			// (jitSSAProfit): the existing tiers run it -- until it is
-			// compiled again for what it learned, its budget spent by their
-			// tries to enter it (slowTries).
+			// (jitSSAProfit): the existing tiers run it.
 			return Undefined, nil, false
 		}
 		return r.runSSA(f, e, pc, depth)
@@ -2908,7 +2908,7 @@ func (r *Runtime) jitDeoptBlocks(f *frame) bool {
 		return false
 	}
 	e := r.jit.hint(f.cl)
-	return e == nil || e.ssa == nil || e.entrySlow || r.jitDeoptCode != nil && e.ssa == r.jitDeoptCode && !e.reoptDue()
+	return e == nil || e.ssa == nil || e.entrySlow || r.jitDeoptCode != nil && e.ssa == r.jitDeoptCode && !e.invalid
 }
 
 // jitGlobalRef is strict mode's check_global_ref, as the interpreter makes

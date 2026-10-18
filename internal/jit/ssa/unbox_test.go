@@ -229,6 +229,9 @@ func TestBuildPropertyMissesDeoptimize(t *testing.T) {
 		{PropertySite{Key: 1, Shape: 0x1000}, ir.GuardExit, true},
 		{PropertySite{Key: 1, Shape: 0x1000, Megamorphic: true}, ir.HostExit, true},
 		{PropertySite{Key: 1, Megamorphic: true}, ir.HostExit, true},
+		// An empty cache's read, which may have run where nothing filled
+		// it: made natively, by its receiver's own table (Scan).
+		{PropertySite{Key: 1, Scan: true}, ir.GuardExit, true},
 	} {
 		f, err := BuildWith(p, siteFeedback{c.site})
 		if err != nil {

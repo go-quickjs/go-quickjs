@@ -450,7 +450,7 @@ func (h *Heap) property(o *Object, v *Value) (*Object, int) {
 	if v.Const.Bits != 0 && o.Shape == uintptr(v.Const.Bits) {
 		return o, v.Index
 	}
-	if !v.Megamorphic() {
+	if !v.Megamorphic() && !v.Scans() {
 		// Another shape, or any at a site that knows none: a failure, as
 		// mir's map checks deoptimize.
 		return nil, -1
@@ -468,6 +468,11 @@ func (h *Heap) search(o *Object, v *Value) (*Object, int) {
 		return nil, -1
 	}
 	if len(o.Keys) > maxScan {
+		if !v.Megamorphic() {
+			// A site that scans an empty cache's receivers' small tables
+			// only (PropertySite's Scan).
+			return nil, -1
+		}
 		return h.mega(o, v)
 	}
 	if len(o.Keys) == 0 {

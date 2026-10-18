@@ -2179,7 +2179,10 @@ func isTestReference(v ir.Value) bool { return v.Kind == ir.Opaque || v.Kind == 
 // receiver's prototypes are not, or a stale shape in it, Go's, a host
 // exit. Anywhere else it deoptimizes (ir.GuardExit), as V8's map checks
 // do, even where its own table has the property: the interpreter makes
-// the read, and the site's cache learns the shape. Each as the SSA
+// the read, and the site's cache learns the shape -- but where the cache is
+// empty, which may only say the VM's interpreter, which fills none, ran
+// it (ssa.PropertySite's Scan): its own table is searched, and it
+// deoptimizes only where that has not the property. Each as the SSA
 // evaluator says.
 func TestSSANativeMegamorphic(t *testing.T) {
 	s0, s1 := testShapes[0], testShapes[1]
@@ -2207,15 +2210,20 @@ func TestSSANativeMegamorphic(t *testing.T) {
 		mega  bool
 		want  ir.Value // its value, or Undefined's Kind 0 for an exit
 		exits bool
+		// scan marks a site whose cache is empty (ssa.PropertySite's Scan):
+		// compiled for no shape, it searches the receiver's own table.
+		scan bool
 	}{
-		{12, 0, true, ir.Float(7), false},
-		{12, 0, false, ir.Value{}, true},
-		{14, 0, true, ir.Value{Kind: ir.Undefined}, false},
-		{14, 1, true, ir.Value{}, true},
-		{13, 0, true, ir.Value{}, true},
-		{12, -1, true, ir.Value{}, true},
-		{11, 0, true, ir.Float(4), false},
-		{11, 0, false, ir.Value{}, true},
+		{12, 0, true, ir.Float(7), false, false},
+		{12, 0, false, ir.Value{}, true, false},
+		{14, 0, true, ir.Value{Kind: ir.Undefined}, false, false},
+		{14, 1, true, ir.Value{}, true, false},
+		{13, 0, true, ir.Value{}, true, false},
+		{12, -1, true, ir.Value{}, true, false},
+		{11, 0, true, ir.Float(4), false, false},
+		{11, 0, false, ir.Value{}, true, false},
+		{11, 0, false, ir.Float(4), false, true},
+		{12, 0, false, ir.Value{}, true, true},
 	} {
 		p := &ir.Program{Locals: 4, Code: []ir.Instruction{{Op: ir.ReferenceRead, Dest: 3, Left: ir.Slot(0), Key: tc.key},
 			{Op: ir.Return, Left: ir.Slot(3)}}}
@@ -2224,6 +2232,9 @@ func TestSSANativeMegamorphic(t *testing.T) {
 			p.Maps[pc].PC = uint32(pc)
 		}
 		ps := ssa.PropertySite{Key: tc.key, Shape: s0.shape, Index: 0, Megamorphic: tc.mega}
+		if tc.scan {
+			ps = ssa.PropertySite{Key: tc.key, Scan: true}
+		}
 		c, err := compileNative(p, layout{4, -1, map[int]site{0: ps}, nil, nil, nil, nil})
 		if err != nil || c == nil {
 			t.Fatalf("%+v: compile: %v", tc, err)

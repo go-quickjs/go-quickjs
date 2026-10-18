@@ -92,9 +92,11 @@ func TestJITElementStoresNative(t *testing.T) {
 	r := jitAgreesForTest(t, setup, `build(50)`, `move(2000)`, `move(2000)`, `move(2000)`)
 	for _, name := range []string{"push", "pop"} {
 		cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
-		// Inlined in move, or called natively from it, and never judged
-		// slow.
-		if e := r.jitEntryOf(cl); e != nil && (e.entrySlow || e.notNative) {
+		// Inlined in move, or called natively from it: never left to Go by
+		// its native callers. (Go's own calls of it, made while move's code
+		// was invalidated and the tree tier ran it, may have judged it slow
+		// for Go to enter, which is Go's alone: entrySlow.)
+		if e := r.jitEntryOf(cl); e != nil && e.notNative {
 			t.Fatalf("%s does not run natively: %+v", name, e)
 		}
 	}

@@ -75,27 +75,29 @@ func jitReadSite(t *testing.T, r *Runtime, name, key string) (siteMega bool, c *
 
 // A property read meeting a receiver of a shape its code was not compiled
 // for deoptimizes, as V8's map checks do: Go writes the frame, and the
-// interpreter makes the read and goes on to the loop's next header. The
-// site's cache learns the shape there -- the interpreter reads an object's
-// small table without it, so the deoptimization fills it -- and the code is
-// compiled again with it, reading it natively from then on. So code
-// compiled at its first call, before the read ran, deoptimizes once; met
-// with a second shape, once more; and never leaves after, each answer the
-// interpreter's.
+// interpreter makes the read and the rest of the invocation. The site's
+// cache learns the shape there, and the code, invalidated, is compiled
+// again with it once the existing tiers have spent their budget -- at the
+// next call, a runtime that compiles at the first -- reading it natively
+// from then on. So code compiled at its first call, before the read ran,
+// deoptimizes once at a prototype's property, which a site that knew
+// nothing searches no receiver's own table for; met with a second shape,
+// once more; and never leaves after, its receivers of the two shapes mixed
+// too, each answer the interpreter's. (Mixed while the interpreter runs
+// the read, its cache, which holds one shape at a time and counts each
+// refill, would give up and be megamorphic: the receivers come one shape
+// at a time until the code is compiled for both.)
 func TestJITShapeMissesDeoptimize(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	setup := `function A(){this.x=1} function B(){this.y=0;this.x=2}
-		var as=[new A(),new A()], bs=[new A(),new B()];
+	setup := `function A(){} A.prototype.x=1; function B(){this.y=0} B.prototype.x=2;
+		var as=[new A(),new A()], bs=[new B(),new B()], mixed=[new A(),new B()];
 		function sum(os,n){let s=0;for(let i=0;i<n;i++)s=(s+os[i&1].x)|0;return s}`
-	r, rounds := jitShapeRunForTest(t, setup, "sum", `sum(as,100)`, `sum(as,100)`, `sum(bs,100)`, `sum(bs,100)`)
-	for i, want := range []uint64{1, 0, 1, 0} {
-		if got := rounds[i]; got.deopts != want || got.hosts != 0 {
-			t.Errorf("round %d: %d map checks deoptimized and %d exits left to Go, want %d and none", i, got.deopts, got.hosts, want)
-		}
-		if got := rounds[i]; want == 0 && got.compiles != 0 {
-			t.Errorf("round %d: compiled again %d times", i, got.compiles)
+	r, rounds := jitShapeRunForTest(t, setup, "sum", `sum(as,100)`, `sum(as,100)`, `sum(bs,100)`, `sum(bs,100)`, `sum(mixed,100)`, `sum(mixed,100)`)
+	for i, want := range []jitShapeRound{{1, 0, 0}, {0, 0, 1}, {1, 0, 0}, {0, 0, 1}, {0, 0, 0}, {0, 0, 0}} {
+		if got := rounds[i]; got != want {
+			t.Errorf("round %d: %d map checks deoptimized, %d exits left to Go and %d compiles, want %+v", i, got.deopts, got.hosts, got.compiles, want)
 		}
 	}
 	mega, c := jitReadSite(t, r, "sum", "x")
@@ -108,7 +110,8 @@ func TestJITShapeMissesDeoptimize(t *testing.T) {
 // deoptimize at every receiver: a primitive receiver; an object's own
 // getter, which the cache holds but the code does not call -- deoptimized
 // for a second time, a shape the code was compiled again for since; and
-// receivers of more shapes than a site's cases hold. A megamorphic read
+// receivers of more shapes than a site's cases hold, each of a table too
+// large for a site that knew nothing to search. A megamorphic read
 // looks in the receiver's own table and the megamorphic cache, and leaves
 // for Go what neither has (a host exit), never deoptimizing: so each
 // function is compiled again a bounded number of times, then never.
@@ -118,7 +121,7 @@ func TestJITShapeMissesSettleMegamorphic(t *testing.T) {
 	}
 	setup := `function A(){this.x=1}
 		var prims=[new A(),7], owns=[new A(),{get x(){return 5}}];
-		var many=[];for(let k=0;k<8;k++){const o={};o['f'+k]=k;o.x=k;many.push(o)}
+		var many=[];for(let k=0;k<8;k++){const o={};for(let j=0;j<10;j++)o['f'+j+'_'+k]=j;o.x=k;many.push(o)}
 		function sum(os,n){let s=0;for(let i=0;i<n;i++)s=(s+(os[i%os.length].x|0))|0;return s}`
 	for _, c := range []struct {
 		arg     string
@@ -126,7 +129,7 @@ func TestJITShapeMissesSettleMegamorphic(t *testing.T) {
 	}{{"prims", 2}, {"owns", 3}, {"many", 6}} {
 		t.Run(c.arg, func(t *testing.T) {
 			run := `sum(` + c.arg + `,64)`
-			r, rounds := jitShapeRunForTest(t, setup, "sum", run, run, run, run)
+			r, rounds := jitShapeRunForTest(t, setup, "sum", run, run, run, run, run, run, run, run)
 			var compiles uint64
 			for _, rd := range rounds {
 				compiles += rd.compiles

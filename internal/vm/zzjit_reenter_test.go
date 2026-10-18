@@ -43,11 +43,13 @@ func jitLongRunForTest(t *testing.T, setup, warm, src string) (string, JITStats)
 }
 
 // A long invocation whose loop fails a guard its code was compiled with
-// goes on in code compiled again for what failed, entered at the loop's
-// next back edge, as V8 enters code optimized again: the run that left is
-// no run of the code while the interpreter goes on with its frame. Counted
-// one, the code had been entered again as it was, failing again at every
-// back edge the interpreter offered it, each failure one run deeper.
+// goes on in code compiled again for what failed, its old code invalidated,
+// entered at a loop's back edge once the interpreter has spent the budget
+// (jitTierUp), as V8 enters code optimized again by on-stack replacement:
+// the run that left is no run of the code while the interpreter goes on
+// with its frame. Counted one, the code had been entered again as it was,
+// failing again at every back edge the interpreter offered it, each
+// failure one run deeper.
 func TestJITDeoptRecompilesWithinTheInvocation(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -61,9 +63,9 @@ func TestJITDeoptRecompilesWithinTheInvocation(t *testing.T) {
 	if got != "string:300001" {
 		t.Fatalf("= %s", got)
 	}
-	// Compiled again at most jitReoptimizations times for what failed;
-	// left at a failed guard about once a compile.
-	if st.Guards > 2*jitReoptimizations {
+	// Compiled again a few times for what failed, an addition's operands
+	// and its result, each failure once, as V8's feedback widens.
+	if st.Guards > 8 {
 		t.Errorf("200,000 iterations of one invocation deoptimized %d times", st.Guards)
 	}
 }
@@ -126,7 +128,7 @@ func TestJITUnaryGenericOnceFailed(t *testing.T) {
 			if got != c.want {
 				t.Fatalf("= %s, want %s", got, c.want)
 			}
-			if st.Guards > 2*jitReoptimizations {
+			if st.Guards > 8 {
 				t.Errorf("20 calls deoptimized %d times", st.Guards)
 			}
 		})

@@ -57,10 +57,26 @@ code is placed in the runtime's arena (`SSACode`).
 
 **Speculation and deoptimization.** A guard checks what the code was
 compiled for -- a number, a shape, a callee -- and exits to the interpreter
-at the guard's bytecode PC if it fails. The failure is noted, and the
-function is compiled again with that site generic, as V8 deoptimizes and
-reoptimizes. Code compiled before a site had feedback is compiled again
-once its cache knows the site, at the function's next invocation.
+at the guard's bytecode PC if it fails. The failure is noted, and the code,
+the function's current, is invalidated (`jitInvalidate`), as V8's
+deoptimizer invalidates a function's code: Go enters it no more, native
+callers no longer call it (its link is cleared), and the interpreter and
+the tree tier run the function. Code that learned what it is to be
+compiled again for -- a call to inline, a getter, a callee that inlines
+more -- is invalidated so too (`jitTierDown`).
+
+**Tier-up.** Invalidated code is compiled again once the existing tiers
+have spent a fresh budget (`jitTierUp`): as many invocations as it took to
+compile the function first (`jitCallThreshold`), each its bytecode's
+length (`jitTierBudget`), as V8's interrupt budget is invocations times
+bytecode length -- an invocation spends its length, a loop that ran a full
+budget of back edges all of it, the code then entered by on-stack
+replacement. A change of the function's caches' feedback meanwhile -- what
+they hold, not how often they were filled (`jitFeedbackMark`) -- delays
+the compile by another budget, as V8's `NotifyICChanged` does: feedback
+settles where it is gathered, and one compile takes it all. Past
+`jitMaxDeopts` eager deoptimizations a function is compiled no more, as
+V8 gives up optimizing one that keeps deoptimizing.
 
 **Calls.** A call the VM has seen call a compiled function is made
 natively: the callee's frame is made in the VM's stack, its context is the
@@ -185,6 +201,9 @@ as V8's map checks do and its code does for insufficient feedback: the
 interpreter makes the operation, the site's cache learning the shape --
 the deoptimization fills it where the interpreter's read of a small table
 would not -- and the code is compiled again for it (`jitPropertyDeopt`).
+A read whose cache is empty, though the interpreter, which fills none
+there, may have run it, searches its receiver's own small table, and
+deoptimizes only where that has not the property (`PropertySite.Scan`).
 What a cache cannot hold -- a primitive receiver, an object with no shape,
 an object's own accessor, more shapes than the cases hold -- makes the
 site megamorphic, once (`jitDeoptSeen`). Inside an inlined callee, whose
@@ -228,7 +247,9 @@ for a rest element, is Go's.
 
 **Profitability.** Each native stretch's work is estimated, exits and
 calls of Go counted against it; code whose stretches do too little between
-them is left to the tree tier (`jitSSAProfit`).
+them is left to the tree tier (`jitSSAProfit`): Go's entering native code
+and its leaving cost what V8's calls between its tiers do not. Code that
+deoptimizes is invalidated instead (Tier-up).
 
 ### Reading the heap in place
 
@@ -337,9 +358,10 @@ into the frame.
 
 **Exits.**
 - A guard (`ExitDeopt`) fails before its instruction commits anything. Go
-  writes the frame at that PC and the interpreter runs on from there. The
-  failure is noted, and the function is compiled again with the site
-  generic, at most four times (`jitReoptimizations`).
+  writes the frame at that PC and the interpreter runs the rest of the
+  invocation, entering code compiled again at a loop's back edge if its
+  budget is spent meanwhile. The failure is noted, and the code is
+  invalidated (see [Tier-up](#design)).
 - A host exit (`ExitHost`) leaves one instruction to Go, which runs it, and
   the code goes on at the next entry.
 - Code is entered only at a function's start, at its loops' headers, and

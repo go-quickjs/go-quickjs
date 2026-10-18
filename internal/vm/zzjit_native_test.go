@@ -2166,10 +2166,14 @@ func TestJITHaltAfterHostExit(t *testing.T) {
 		{"call", `var arr = [0,0,0,0,0,0,0,0,0,0];
 			function f(a) { for (let i = 0; i < a.length; i++) { a[i] = 1; stop(i) } return 0 }
 			f(arr)`},
-		{"accessor", `var arr = [0,0,0,0,0,0,0,0,0,0], n = 0;
-			var o = { get x() { stop(n++); return 1 } };
+		// Warmed until the getter's read, an object's own accessor, is
+		// megamorphic, Go making it at a host exit: deoptimized at it, the
+		// code is invalidated, and the interpreter would halt.
+		{"accessor", `var arr = [0,0,0,0,0,0,0,0,0,0], n = -6;
+			function mk() { return { get x() { stop(n++); return 1 } } }
 			function f(o, a) { let s = 0; for (let i = 0; i < a.length; i++) { a[i] = 1; s += o.x } return s }
-			f(o, arr)`},
+			for (let k = 0; k < 6; k++) f(mk(), [0]);
+			f(mk(), arr)`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			run := func(jit bool) (string, *Runtime) {
@@ -4515,15 +4519,16 @@ func BenchmarkJITHostRoundTrip(b *testing.B) {
 	}
 }
 
-// A guard that fails has the new pipeline compile the function again at
-// its next entry, with the site generic: an arithmetic operation or a
-// comparison of what are not numbers goes to Go, which resumes after it,
-// and an entry whose slots were not numbers loads them as they are. The
-// loop then stays native, and no guard fails again. A function whose
-// speculations keep failing somewhere new -- each call once, before its
-// loop, which a deoptimized invocation is taken back to natively -- is
-// compiled again jitReoptimizations times, and then keeps its code. Each
-// answer, and each valueOf call, is the interpreter's.
+// A guard that fails invalidates the code, which is compiled again, with
+// the site generic, once the existing tiers have spent their budget: an
+// arithmetic operation or a comparison of what are not numbers goes to Go,
+// which resumes after it, and an entry whose slots were not numbers loads
+// them as they are. The loop then stays native, and no guard fails again.
+// A function whose speculations keep failing somewhere new -- each call
+// once, before its loop -- has each failure noted, as V8's feedback widens,
+// and is compiled again for them all, within its deoptimizations' limit
+// (jitMaxDeopts). Each answer, and each valueOf call, is the
+// interpreter's.
 func TestJITSSAReoptimize(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -4569,13 +4574,15 @@ func TestJITSSAReoptimize(t *testing.T) {
 	// the tree tier run it (jitSSAProfit); scale's addition goes once a call.
 	for _, name := range []string{"scale", "cmp"} {
 		e := entry(name)
-		if e == nil || e.ssa == nil || e.reopts == 0 || e.reopts >= jitReoptimizations || name == "scale" && e.entrySlow ||
+		if e == nil || e.ssa == nil || e.reopts == 0 || e.deopts > jitMaxDeopts || e.invalid || name == "scale" && e.entrySlow ||
 			e.ssaStats.entries == 0 || e.ssaStats.guards != 0 {
 			t.Fatalf("%s was not compiled again to run without failing: %+v", name, e)
 		}
 	}
-	if e := entry("many"); e == nil || e.ssa == nil || e.reopts != jitReoptimizations {
-		t.Fatalf("many was not compiled again %d times: %+v", jitReoptimizations, e)
+	// Its six multiplications' failures, each noted: four had been, the
+	// compiles for failed speculations capped.
+	if e := entry("many"); e == nil || e.ssa == nil || len(e.failed) < 6 || e.deopts > jitMaxDeopts {
+		t.Fatalf("many's failures were not all noted: %+v", e)
 	}
 }
 
@@ -4587,8 +4594,8 @@ func TestJITSSAReoptimize(t *testing.T) {
 // between them fails a check and is read by Go. Each answer is the
 // interpreter's, and only the calls go to Go, called from native code
 // (ssa.GoCall): m stores, so it is not inlined (TestJITSSAInline inlines). Its store gives the receiver a
-// shape after run was compiled for the one it had, so run is compiled
-// again for the new one (jitFed).
+// shape after run was compiled for the one it had, so run deoptimizes and
+// is compiled again for the new one (jitPropertyDeopt).
 func TestJITSSAPrototypeMethods(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -4601,6 +4608,7 @@ func TestJITSSAPrototypeMethods(t *testing.T) {
 		function change(){A.prototype.m=function(){return 1000}}
 		var a=new A,b=new B,c=new A,d=new B;`
 	rounds := []string{
+		`''+run(a,40)`,
 		`''+run(a,40)`,
 		`''+run(a,40)`,
 		`[run(b,40),run(a,40)].join()`,
@@ -4631,9 +4639,12 @@ func TestJITSSAPrototypeMethods(t *testing.T) {
 		if got, want := gv.String().Go(), wv.String().Go(); got != want {
 			t.Fatalf("round %d: got %s, interpreter %s", i, got, want)
 		}
-		if i == 1 {
-			// The second call runs compiled: a call of Go for each of its
-			// calls, and no exit, for them or the reads.
+		if i == 2 {
+			// The third call runs compiled -- the first's read, compiled
+			// before it ran, deoptimized, and the code was compiled again
+			// once the second had run with its cache's feedback settled
+			// (jitTierUp): a call of Go for each of its calls, and no exit,
+			// for them or the reads.
 			if n := r.jit.goCalls - goCalls; n != 40 || r.jit.hosts-hosts > 1 {
 				t.Fatalf("run called Go %d times for 40 calls, and left native code %d times", n, r.jit.hosts-hosts)
 			}
@@ -5522,7 +5533,9 @@ func TestJITSSANativePush(t *testing.T) {
 	}
 	for _, c := range cases {
 		warm := `{const a=[];[` + c.fn + `(a,300),show(a)].join()}`
-		for range 4 {
+		// Until the push's read's cache has settled, which the code is
+		// compiled again on (jitTierUp).
+		for range 8 {
 			run(c.name, warm)
 		}
 		e := r.jit.hint(r.global.getOwn(r.atoms.intern(c.fn)).value().Object().fn().closure)
@@ -6116,9 +6129,11 @@ func TestJITSSANativeCallsGoOn(t *testing.T) {
 // in its caller's code after the call, where the callee would have
 // returned to (runSSA's resume), as V8's lazy deoptimization leaves the
 // caller's frame alone: s, t and p, live across the call in registers and
-// a keep cell, are as they were. A callee that throws (boom, through raise)
-// is finished as before, the throw going through its caller; as is one
-// while the collector marks. Each answer is the interpreter's.
+// a keep cell, are as they were: tick, whose loop keeps it from being
+// inlined, leaves at its read of L's own getter, megamorphic, once in fifty
+// calls. A callee that throws (boom, through raise) is finished as before,
+// the throw going through its caller; as is one while the collector marks.
+// Each answer is the interpreter's.
 func TestJITSSANativeCallResumes(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -6126,7 +6141,7 @@ func TestJITSSANativeCallResumes(t *testing.T) {
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	setup := `var A={v:3},B={v:5},o={p:A},c={n:0},L={get n(){return String(c.n).length}};
-		function tick(){c.n++;o.p=(c.n&1)?B:A;if(c.n%50===0)return L.n;return c.n&3}
+		function tick(){let k=0;for(let j=0;j<1;j++)k++;c.n++;o.p=(c.n&1)?B:A;if(c.n%50===0)return L.n+k;return (c.n&3)+k}
 		function f(n){let s=0.5,t=0,p=o.p;for(let i=0;i<n;i++){s=s*1.0001+tick();t=(t+p.v)|0;s+=i*0.5}return [s,t,p.v,c.n].join()}
 		function raise(s){throw new Error("e"+s)}
 		function boom(i){let s=i;for(let j=0;j<2;j++)s=s*2;if(c.n++%97===0)raise(s);return s}
@@ -6141,13 +6156,15 @@ func TestJITSSANativeCallResumes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Rounds enough for the code to settle: each deoptimization has it
+	// compiled again once a round has spent its budget (jitTierUp).
 	resumedLate := uint64(0)
-	for i := range 6 {
+	for i := range 9 {
 		wv, err := want.Run(compileForTest(t, src))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if i == 5 {
+		if i == 8 {
 			jitMarkingForTest(t)
 		}
 		resumed := r.jit.resumed
@@ -6158,7 +6175,7 @@ func TestJITSSANativeCallResumes(t *testing.T) {
 		if got, want := gv.String().Go(), wv.String().Go(); got != want {
 			t.Fatalf("round %d: got %s, interpreter %s", i, got, want)
 		}
-		if i == 3 || i == 4 {
+		if i >= 3 && i < 8 {
 			resumedLate += r.jit.resumed - resumed
 		}
 	}
@@ -6223,11 +6240,13 @@ func TestJITSSAElementsKeptAcrossCalls(t *testing.T) {
 	}
 }
 
-// A call first seen while its callee leaves native code too often for
-// native callers to call it (notNative) is made natively all the same: its
-// calls leave for Go until the callee is called natively again, then do
-// not. Here leaf leaves at every call from other, then outer's call is
-// seen, then leaf stops leaving.
+// A call first seen while its callee leaves native code -- at its getter's
+// read, an object's own accessor, made megamorphic, which Go makes; too
+// often for native callers to call it (notNative); deoptimized, its code
+// invalidated -- is made natively all the same: its calls leave for Go
+// until the callee is called natively again, then do not. Here leaf leaves
+// at every call from other, then outer's call is seen, then leaf stops
+// leaving; outer's last round runs natively, never leaving.
 func TestJITSSACallSeenWhileCalleeLeaves(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -6252,16 +6271,11 @@ func TestJITSSACallSeenWhileCalleeLeaves(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	leaf := r.global.getOwn(r.atoms.intern("leaf")).value().Object().fn().closure
 	outer := r.global.getOwn(r.atoms.intern("outer")).value().Object().fn().closure
 	for i, src := range rounds {
 		wv, err := want.Run(compileForTest(t, src))
 		if err != nil {
 			t.Fatal(err)
-		}
-		le := r.jit.hint(leaf)
-		if i == 2 && (le == nil || !le.notNative) {
-			t.Fatal("leaf is called natively before outer's call is seen")
 		}
 		var hosts uint64
 		oe := r.jit.hint(outer)
@@ -6290,13 +6304,12 @@ func TestJITSSACallSeenWhileCalleeLeaves(t *testing.T) {
 }
 
 // A function whose reads meet new shapes for as long as it runs, one read
-// after another, is compiled again for them less and less often, at the
-// thresholds a runtime has unless it compiles eagerly: each compile for
-// what it learned waits for twice the work Go did for it before the last
-// (reoptDueNow), so that it is compiled some log2 of Go's work times, not
-// at each read's new shapes, as Typescript's compiler's functions walking
-// its syntax trees had been, thirteen and more. Its answers are the
-// interpreter's.
+// after another, deoptimizes at each, its code invalidated, and is compiled
+// again only once the existing tiers have spent their budget, its caches'
+// feedback settled meanwhile (jitTierUp): at most once a phase, however
+// many of the phase's calls meet the new shape, and still native after
+// its 36 phases, within its deoptimizations' limit (jitMaxDeopts). Its
+// answers are the interpreter's.
 func TestJITSSAPolymorphicReadsBackOff(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -6346,17 +6359,19 @@ func TestJITSSAPolymorphicReadsBackOff(t *testing.T) {
 		}
 	}
 	e := jitNativeForTest(t, r, "sum")
-	// Compiled again for its shapes at each phase that met a new one, at
-	// most: a deoptimization each, its cache learning the shape.
-	if e.shapeReopts == 0 || e.shapeReopts > sites*(kinds-1) {
-		t.Errorf("compiled again %d times for %d phases of new shapes", e.shapeReopts, sites*(kinds-1))
+	// Compiled once at first, and again at most once a phase that met a
+	// new shape: a deoptimization each, its cache learning the shape.
+	if e.ssaSerial < 2 || int(e.ssaSerial) > 1+sites*(kinds-1) || e.deopts > sites*(kinds-1) {
+		t.Errorf("compiled %d times, deoptimized %d, for %d phases of new shapes", e.ssaSerial, e.deopts, sites*(kinds-1))
 	}
 }
 
 // A read whose receivers turn out to be of several shapes, met one after
-// another, deoptimizes at each new one, as V8's map checks do, its cache
-// learning it, and the code is compiled again for those met: no more often
-// than the new shapes; the code then reads each natively. So too where the
+// another, deoptimizes at a new one, as V8's map checks do, its code
+// invalidated, and is compiled again once the existing tiers have spent
+// their budget, its cache's feedback settled meanwhile (jitTierUp): once
+// for them all where an invocation meets them all, no more often than the
+// new shapes in any case; the code then reads each natively. So too where the
 // code runs called natively, its exits Go's to finish (jitFinishExit):
 // many calls at, which reads one.
 func TestJITSSAPolymorphicReadsSettle(t *testing.T) {
@@ -6418,16 +6433,15 @@ func TestJITSSAPolymorphicReadsSettle(t *testing.T) {
 					t.Fatalf("native code left %d times in its last round", r.jit.hosts-allHosts)
 				}
 			}
-			if compiles == 0 || compiles > 3 {
+			// Entered, sum's one invocation meets the three shapes in the
+			// interpreter before its back edges have spent the budget, and
+			// one compile takes them all. Called natively, at's budget, as
+			// many invocations as a runtime compiling at the first call
+			// waits for, one (jitTierBudget), is spent at its next call,
+			// before that meets the next shape: a compile for each, as V8's
+			// would be at such a threshold.
+			if max := map[string]uint64{"sum": 1, "at": 3}[c.fn]; compiles == 0 || compiles > max {
 				t.Fatalf("%s was compiled again %d times for its read's three new shapes", c.fn, compiles)
-			}
-			// Code compiled again for any reason is compiled for every shape
-			// met: none is left to wait for.
-			e := r.jit.cache[weak.Make(cl.fn)]
-			e.polyPending, e.polySettled, e.inlineReopt = true, 2, true
-			r.jitReoptimize(cl, e)
-			if e.polyPending || e.polySettled != 0 {
-				t.Fatal("code compiled again still waits to be compiled for its reads' shapes")
 			}
 		})
 	}
@@ -7582,7 +7596,9 @@ func TestJITSSANoExitsWhileMarking(t *testing.T) {
 		if _, err := r.Run(compileForTest(t, source)); err != nil {
 			t.Fatal(err)
 		}
-		for i := 0; i < 6; i++ {
+		// Rounds enough for f to settle, each deoptimization compiled again
+		// for once a round has spent its budget (jitTierUp).
+		for i := 0; i < 10; i++ {
 			var hosts, made uint64
 			if r.jit != nil {
 				hosts, made = r.jit.hosts, r.jit.goCalls
@@ -7591,7 +7607,7 @@ func TestJITSSANoExitsWhileMarking(t *testing.T) {
 			if err != nil || v.Number() != wv.Number() {
 				t.Fatalf("round %d: JIT %v, %v; interpreter %v; %s", i, v, err, wv, source)
 			}
-			if i == 5 && (r.jit.hosts != hosts || r.jit.goCalls-made < 300) {
+			if i == 9 && (r.jit.hosts != hosts || r.jit.goCalls-made < 300) {
 				t.Fatalf("while the collector marked, %d exits and %d calls of Go; %s", r.jit.hosts-hosts, r.jit.goCalls-made, source)
 			}
 		}
@@ -10564,7 +10580,10 @@ func TestJITSSAInlinedNestedForwardingConstructions(t *testing.T) {
 		}
 	}
 	cl := r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure
-	for i := range 6 {
+	// Rounds enough for f to settle: what its inlined callees' sites met
+	// it is compiled again for once a round has spent its budget
+	// (jitTierUp).
+	for i := range 9 {
 		wv, err := want.Run(compileForTest(t, `String(f(300))`))
 		if err != nil {
 			t.Fatal(err)
@@ -10580,7 +10599,7 @@ func TestJITSSAInlinedNestedForwardingConstructions(t *testing.T) {
 		if got, want := gv.String().Go(), wv.String().Go(); got != want {
 			t.Fatalf("round %d: got %s, interpreter %s", i, got, want)
 		}
-		if i >= 3 {
+		if i >= 6 {
 			e := r.jit.cache[weak.Make(cl.fn)]
 			// Both constructors and both initialize methods.
 			if e == nil || e.ssa == nil || e.entrySlow || len(e.notInline) != 0 || len(e.ssaInlined) < 4 {
@@ -10591,106 +10610,6 @@ func TestJITSSAInlinedNestedForwardingConstructions(t *testing.T) {
 				t.Fatalf("round %d: f left native code %d times for 600 constructions", i, n)
 			}
 		}
-	}
-}
-
-// What code learns to make natively -- calls, shapes, a callee that
-// inlines more -- it is compiled again for once Go has done work for it
-// (reoptDue), as V8 optimizes again once its lower tiers have spent a
-// function's budget: its exits, its calls of Go, its invocations finished
-// in the interpreter and the tries to enter it Go declined, jitTickExits
-// for each of jitLearnTicks ticks, one more tick for each jitTickInstrs
-// instructions of its function, and twice as many for each compile for
-// what it learned before. Its own work, entries and native calls do not
-// count. A speculation that failed, or code that leaves too often, is
-// compiled again at once.
-func TestJITReoptDue(t *testing.T) {
-	e := &jitEntry{instrs: 2 * jitTickInstrs, link: &jitLink{}}
-	need := uint64((jitLearnTicks + 2) * jitTickExits)
-	if e.reoptDue() {
-		t.Fatal("due with nothing to compile again for")
-	}
-	e.inlineReopt = true
-	e.ssaStats.entries, e.ssaStats.work, e.link.in = 1000, 1<<20, 1000
-	if e.reoptDue() {
-		t.Fatal("due for its own work")
-	}
-	e.ssaStats.hosts, e.ssaStats.goCalls, e.ssaStats.ended = 10, 10, 10
-	e.slowTries = uint32(need - 31)
-	if e.reoptDue() {
-		t.Fatalf("due after %d of %d", need-1, need)
-	}
-	e.slowTries++
-	if !e.reoptDue() {
-		t.Fatalf("not due after %d", need)
-	}
-	e.inlineReopts = 1
-	if e.reoptDue() {
-		t.Fatalf("due after %d of %d, compiled for what it learned once", need, 2*need)
-	}
-	e.ssaStats.hosts += need
-	if !e.reoptDue() {
-		t.Fatalf("not due after %d, compiled for what it learned once", 2*need)
-	}
-	for _, f := range []func(*jitEntry){func(e *jitEntry) { e.reopt = true }, func(e *jitEntry) { e.unwindReopt = true }} {
-		e := &jitEntry{instrs: 100, link: &jitLink{}}
-		f(e)
-		if !e.reoptDue() {
-			t.Fatalf("not due at once: %+v", e)
-		}
-	}
-	for _, f := range []func(*jitEntry){func(e *jitEntry) { e.polyReopt = true }, func(e *jitEntry) { e.upgradeReopt = true }} {
-		e := &jitEntry{instrs: 100, link: &jitLink{}}
-		f(e)
-		if e.reoptDue() {
-			t.Fatalf("due at once: %+v", e)
-		}
-	}
-}
-
-// The ticks before code is compiled again count its size as compiled
-// (jitCompiledInstrs): its function's instructions, or, for a compile
-// that made more values than a function inlining nothing would, as many
-// instructions as its values make -- a function whose callees are
-// inlined waits as long as its compile costs, theirs included.
-func TestJITCompiledInstrs(t *testing.T) {
-	fn := &bytecode.Function{Code: make([]bytecode.Instr, 100)}
-	for _, c := range []struct {
-		values int
-		want   uint32
-	}{{0, 100}, {200, 100}, {3 * 100, 100}, {3*100 + 3, 101}, {3 * 1600, 1600}} {
-		if got := jitCompiledInstrs(fn, &jitFeedback{values: c.values}); got != c.want {
-			t.Errorf("%d values: %d instructions, want %d", c.values, got, c.want)
-		}
-	}
-	if !jitSSABackend {
-		return
-	}
-	// A loop calling a callee it inlines: its code's size counts the
-	// callee's values.
-	r := New(Config{JIT: true})
-	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
-	var b strings.Builder
-	b.WriteString("function work(o, i) { return 0")
-	for k := 0; k < 4; k++ {
-		fmt.Fprintf(&b, " + o.a * %d + (i - %d) * o.b", k+1, k)
-	}
-	b.WriteString(" }\nfunction drive(n) { const o = {a: 3, b: 2}; let t = 0; for (let i = 0; i < n; i++) t += work(o, i); return t }")
-	if _, err := r.Run(compileForTest(t, b.String())); err != nil {
-		t.Fatal(err)
-	}
-	for range 4 {
-		if _, err := r.Run(compileForTest(t, `drive(2000)`)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	e := jitNativeForTest(t, r, "drive")
-	cl := r.global.getOwn(r.atoms.intern("drive")).value().Object().fn().closure
-	if len(e.ssaInlined) == 0 {
-		t.Fatalf("drive inlines nothing: inlines %d, nativeCalls %d, notInline %v, reopts %d/%d", len(e.inlines), len(e.nativeCalls), e.notInline, e.reopts, e.inlineReopts)
-	}
-	if int(e.instrs) <= len(cl.fn.Code) {
-		t.Errorf("drive's code counts %d instructions, its own %d, inlining work's %d", e.instrs, len(cl.fn.Code), len(e.ssaInlined))
 	}
 }
 
@@ -11349,10 +11268,10 @@ func TestJITSSAUnwoundCompilesAgainFirst(t *testing.T) {
 	// An entry of its own, with code, as a callee's.
 	e := &jitEntry{ssa: g.ssa, link: &jitLink{}}
 	leave := func() {
-		// One call in two leaves, its exits having learned a shape
-		// (jitLearning; TestJITSSAUnwoundCompiledAgainOnlyForWhatItLearned
+		// One call in two leaves, its exits having learned a call to
+		// inline (jitLearning; TestJITSSAUnwoundCompiledAgainOnlyForWhatItLearned
 		// has one that learns nothing).
-		e.polyPending = true
+		e.inlinePending = true
 		for range jitUnwindProbe {
 			e.link.in += 2
 			r.jitUnwound(e)
@@ -11524,7 +11443,7 @@ func TestJITSSAGoesOnNatively(t *testing.T) {
 		return r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 	}
 	checked := 0
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 6; i++ {
 		for _, src := range []string{`once(1000)`, `every(1000)`} {
 			wv, err := want.Run(compileForTest(t, src))
 			if err != nil {
@@ -11532,8 +11451,10 @@ func TestJITSSAGoesOnNatively(t *testing.T) {
 			}
 			cl := closure(src[:len(src)-6])
 			var before jitSSAStats
+			var serial uint32
+			valid := false
 			if e := r.jit.hint(cl); e != nil {
-				before = e.ssaStats
+				before, serial, valid = e.ssaStats, e.ssaSerial, e.ssa != nil && !e.invalid
 			}
 			interpreted, wentOn := r.jit.interpreted, r.jit.wentOn
 			gv, err := r.Run(compileForTest(t, src))
@@ -11544,7 +11465,10 @@ func TestJITSSAGoesOnNatively(t *testing.T) {
 				t.Fatalf("round %d, %s: got %v, interpreter %v", i, src, got, want)
 			}
 			e := r.jit.hint(cl)
-			if e == nil || e.ssa == nil || before.entries == 0 {
+			if e == nil || e.ssa == nil || before.entries == 0 || !valid || e.ssaSerial != serial || e.invalid {
+				// Compiled before the reads met a primitive, which
+				// deoptimized, made them megamorphic and invalidated the
+				// code; or compiled again for it during the round.
 				continue
 			}
 			checked++

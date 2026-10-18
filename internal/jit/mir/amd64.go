@@ -3487,7 +3487,7 @@ func (c *compiler) property(v *ssa.Value, guard func(amd64.Cond)) {
 		c.a.Bind(found)
 		return
 	}
-	if !v.Megamorphic() {
+	if !v.Megamorphic() && !v.Scans() {
 		// No shape the site knows, nor a megamorphic cache's: every
 		// receiver fails -- a write's past the additions it tried.
 		c.a.Op(amd64.Cmp, scratchB, scratchB, true)
@@ -3528,7 +3528,7 @@ func (c *compiler) scan(v *ssa.Value, guard func(amd64.Cond), found, mega amd64.
 	}
 	c.a.Load(scratchB, p, c.enc.ObjectProps+8)
 	c.a.OpImm(amd64.Cmp, scratchB, abi.MaxScan, true)
-	if c.enc.Mega && mega == 0 {
+	if c.enc.Mega && mega == 0 && v.Megamorphic() {
 		mega = c.a.NewLabel()
 		c.cold = append(c.cold, func() {
 			c.a.Bind(mega)

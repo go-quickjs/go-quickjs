@@ -463,13 +463,18 @@ type InlineCache struct {
 	Adds []*PropertyAdd
 	// Calls, for a call, are the functions it may call natively (OpCall).
 	Calls []*CallSite
-	// Mega, for a read, is its site's Megamorphic (PropertySite).
-	Mega bool
+	// Mega, for a read, is its site's Megamorphic (PropertySite); Scan its
+	// Scan.
+	Mega, Scan bool
 }
 
 // Megamorphic reports whether v, a read, looks in the megamorphic cache
 // for a property a receiver's own table does not have (InlineCache).
 func (v *Value) Megamorphic() bool { return v.IC != nil && v.IC.Mega }
+
+// Scans reports whether v, a read of a site whose cache is empty, searches
+// its receiver's own small table (PropertySite's Scan).
+func (v *Value) Scans() bool { return v.IC != nil && v.IC.Scan }
 
 // Holders are v's cache's prototypes (InlineCache), or nil.
 func (v *Value) Holders() *HolderChain {

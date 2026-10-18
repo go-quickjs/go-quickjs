@@ -141,12 +141,18 @@ func TestJITEntriesAtStartAndLoopsOnly(t *testing.T) {
 		}
 	}
 	cl := r.global.getOwn(r.atoms.intern("many")).value().Object().fn().closure
-	for round := 0; round < 6; round++ {
+	checked := 0
+	for round := 0; round < 8; round++ {
 		wv, err := want.Run(compileForTest(t, `many(500)`))
 		if err != nil {
 			t.Fatal(err)
 		}
 		wentOn := r.jit.wentOn
+		var serial uint32
+		valid := false
+		if e := r.jit.hint(cl); e != nil {
+			serial, valid = e.ssaSerial, e.ssa != nil && !e.invalid
+		}
 		gv, err := r.Run(compileForTest(t, `many(500)`))
 		if err != nil || gv.Number() != wv.Number() {
 			t.Fatalf("round %d: got %v, %v; interpreter %v", round, gv, err, wv)
@@ -158,17 +164,28 @@ func TestJITEntriesAtStartAndLoopsOnly(t *testing.T) {
 		if pcs, want := jitEntryPCs(e, cl.fn), jitLoopHeadersOf(cl.fn); !slices.Equal(pcs, want) {
 			t.Fatalf("round %d: entries at %v; want its start and loop header, %v", round, pcs, want)
 		}
-		if n := r.jit.wentOn - wentOn; round > 0 && n != 250 {
+		if !valid || e.ssaSerial != serial || e.invalid {
+			// The read's first primitive deoptimized, invalidating the
+			// code, and made it megamorphic; or the code was compiled
+			// again for it during the round.
+			continue
+		}
+		checked++
+		if n := r.jit.wentOn - wentOn; n != 250 {
 			t.Fatalf("round %d: went on natively at the header %d times, want 250", round, n)
 		}
 	}
+	if checked < 3 {
+		t.Fatalf("%d rounds ran settled code", checked)
+	}
 }
 
-// One miss in a loop's whole run, at a read of a primitive, has the
-// interpreter finish that iteration and Go go on natively at the header,
-// and leaves the code as it is, with no entry at the read: what the loop
-// had proved before it -- obj's shape -- it goes on using. The answers are
-// the interpreter's.
+// One miss in a loop's whole run, at a read of a primitive, deoptimizes:
+// the interpreter finishes the invocation, the code invalidated, and the
+// code compiled again -- the read megamorphic, a primitive met -- has no
+// entry at the read either, and leaves no more: what the loop proves
+// before it -- obj's shape -- it goes on using. The answers are the
+// interpreter's.
 func TestJITOneMissNoEntry(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -184,29 +201,24 @@ func TestJITOneMissNoEntry(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	var wentOn uint64
-	for round, src := range []string{`rare(500)`, `rare(500)`, `flip=250; rare(500)`, `flip=-1; rare(500)`, `rare(500)`} {
+	for round, src := range []string{`rare(500)`, `rare(500)`, `flip=250; rare(500)`, `flip=-1; rare(500)`, `rare(500)`, `rare(500)`} {
 		wv, err := want.Run(compileForTest(t, src))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if round == 2 {
-			// Past the first rounds, whose reads, compiled before they ran,
-			// deoptimized once each for their caches to learn their shapes.
-			wentOn = r.jit.wentOn
-		}
+		guards, hosts := r.jit.guards, r.jit.hosts
 		gv, err := r.Run(compileForTest(t, src))
 		if err != nil || gv.Number() != wv.Number() {
 			t.Fatalf("round %d: got %v, %v; interpreter %v", round, gv, err, wv)
+		}
+		if g, h := r.jit.guards-guards, r.jit.hosts-hosts; round >= 1 && (g != map[bool]uint64{true: 1}[round == 2] || h != 0) {
+			t.Fatalf("round %d: %d guards failed and %d exits left to Go", round, g, h)
 		}
 	}
 	cl := r.global.getOwn(r.atoms.intern("rare")).value().Object().fn().closure
 	e := r.jit.hint(cl)
 	if e == nil || e.ssa == nil || e.entrySlow {
 		t.Fatalf("rare did not stay native: %+v", e)
-	}
-	if n := r.jit.wentOn - wentOn; n != 1 {
-		t.Fatalf("went on natively at the header %d times, want once", n)
 	}
 	if pcs, want := jitEntryPCs(e, cl.fn), jitLoopHeadersOf(cl.fn); !slices.Equal(pcs, want) {
 		t.Fatalf("entries at %v; want its start and loop header, %v", pcs, want)
@@ -293,39 +305,4 @@ func jitOldStaysUncounted(r *Runtime, old []*jitEntry) *jitEntry {
 // may reclaim, which a look for room lets go of, reclaiming nothing.
 func jitHeldButScratch(r *Runtime) int64 {
 	return r.jitHeldBytes() - int64(jitCapBytes(r.jit.victims))
-}
-
-// Shapes a read met settle once the function is invoked again, from Go or
-// by a native caller, as well as after jitPolySettle exits that met
-// nothing new (jitEntry's polyMet): a read that met a shape leaves native
-// code once and reads through the megamorphic cache after, so the code may
-// make no other exit to settle on -- Gameboy's instruction dispatch ran so
-// for 87 invocations. Within the invocation that met it, nothing settles.
-func TestJITPolySettlesAtTheNextInvocation(t *testing.T) {
-	for _, next := range []string{"go", "native"} {
-		e := &jitEntry{link: &jitLink{}}
-		e.polyMet()
-		e.reoptDue()
-		if e.polyReopt || !e.polyPending {
-			t.Fatalf("%s: settled within the invocation that met the shape", next)
-		}
-		if next == "go" {
-			e.starts++
-		} else {
-			e.link.in++
-		}
-		e.reoptDue()
-		if !e.polyReopt || e.polyPending {
-			t.Fatalf("%s: not settled at the next invocation: reopt %v, pending %v", next, e.polyReopt, e.polyPending)
-		}
-	}
-	// Exits meeting nothing new settle it as before.
-	e := &jitEntry{link: &jitLink{}}
-	e.polyMet()
-	for i := 0; i < jitPolySettle; i++ {
-		jitPolySettled(e)
-	}
-	if !e.polyReopt || e.polyPending {
-		t.Fatal("not settled after exits that met nothing new")
-	}
 }

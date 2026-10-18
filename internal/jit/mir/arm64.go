@@ -2054,7 +2054,7 @@ func (c *a64Compiler) property(v *ssa.Value, guard func(arm64.Cond)) {
 		c.a.Bind(found)
 		return
 	}
-	if !v.Megamorphic() {
+	if !v.Megamorphic() && !v.Scans() {
 		// As amd64's: every receiver fails.
 		c.a.Cmp(a64B, a64B, true)
 		guard(arm64.EQ)
@@ -2083,7 +2083,7 @@ func (c *a64Compiler) scan(v *ssa.Value, guard func(arm64.Cond), found, mega arm
 	}
 	c.a.Load(a64B, p, c.enc.ObjectProps+8)
 	c.a.CmpImm(a64B, abi.MaxScan, true)
-	if c.enc.Mega && mega == 0 {
+	if c.enc.Mega && mega == 0 && v.Megamorphic() {
 		mega = c.a.NewLabel()
 		c.cold = append(c.cold, func() {
 			c.a.Bind(mega)
