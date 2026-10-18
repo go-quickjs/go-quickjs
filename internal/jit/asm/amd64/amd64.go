@@ -75,7 +75,6 @@ type Asm struct {
 	never   []bool
 	removed []int
 	past    []int32
-	out     []byte
 	// bound are the labels in the order they were bound, which is their
 	// positions' order; at, by label, the index of the first fixup at or
 	// past it (Finish's).
@@ -135,7 +134,7 @@ func (a *Asm) Reset() {
 // Bytes is the memory the assembler keeps for the next function.
 func (a *Asm) Bytes() int {
 	return cap(a.buf)*int(unsafe.Sizeof(a.buf[:1][0])) + cap(a.labels)*int(unsafe.Sizeof(0)) + cap(a.fixups)*int(unsafe.Sizeof(fixup{})) +
-		cap(a.short) + cap(a.never) + cap(a.removed)*int(unsafe.Sizeof(0)) + cap(a.past)*4 + cap(a.out) + cap(a.bound)*int(unsafe.Sizeof(Label(0))) + cap(a.at)*4 +
+		cap(a.short) + cap(a.never) + cap(a.removed)*int(unsafe.Sizeof(0)) + cap(a.past)*4 + cap(a.bound)*int(unsafe.Sizeof(Label(0))) + cap(a.at)*4 +
 		cap(a.open)*4
 }
 
@@ -237,31 +236,35 @@ func (a *Asm) Finish() ([]byte, error) {
 		open = kept
 	}
 	a.open = open[:0]
-	out := a.out[:0]
-	last := 0
+	// The code is the buffer, moved down over what the shortened jumps
+	// remove: what is written never passes what is still to be read, and
+	// a jump's own bytes are read before they are written over.
+	buf, w, last := a.buf, 0, 0
 	for i, f := range a.fixups {
 		start := f.at - opLen(f.kind)
-		out = append(out, a.buf[last:start]...)
+		w += copy(buf[w:], buf[last:start])
 		to := a.movedPast(a.labels[f.label], int(a.past[i]))
 		switch {
 		case a.short[i] && f.kind == fixJmp:
-			out = append(out, 0xEB, byte(int8(to-(len(out)+2))))
+			buf[w], buf[w+1] = 0xEB, byte(int8(to-(w+2)))
+			w += 2
 		case a.short[i]:
-			out = append(out, 0x70|a.buf[start+1]&0x0F, byte(int8(to-(len(out)+2))))
+			cc := buf[start+1] & 0x0F
+			buf[w], buf[w+1] = 0x70|cc, byte(int8(to-(w+2)))
+			w += 2
 		default:
-			out = append(out, a.buf[start:f.at]...)
-			out = binary.LittleEndian.AppendUint32(out, uint32(int32(to-(len(out)+4))))
+			w += copy(buf[w:], buf[start:f.at])
+			binary.LittleEndian.PutUint32(buf[w:], uint32(int32(to-(w+4))))
+			w += 4
 		}
 		last = f.at + 4
 	}
-	out = append(out, a.buf[last:]...)
+	w += copy(buf[w:], buf[last:])
 	for _, l := range a.bound {
 		a.labels[l] = a.movedPast(a.labels[l], int(a.at[l]))
 	}
-	// The code is the buffer kept for the next function's: the
-	// assembler's two buffers trade places.
-	a.out, a.buf = a.buf[:0], out
-	return out, nil
+	a.buf = buf[:w]
+	return a.buf, nil
 }
 
 // grow is s with n elements, cleared, from its memory where it has room.

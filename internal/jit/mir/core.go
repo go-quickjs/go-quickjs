@@ -59,10 +59,11 @@ type core struct {
 	// exitWords; exitDescs are the descriptions, carved from blocks, as
 	// the code keeps them all as long: each block twice the last, up to a
 	// limit, so a small function takes little. exitHead is, by slot, 1
-	// plus the index in the frame's Slots of its latest entry, or 0, and
-	// exitNext, by entry, 1 plus that of the one before it of its slot:
-	// a slot's entries, few, are compared one by one, where a map had
-	// hashed every one -- a twentieth of a compile's time in the backend.
+	// plus the index in the frame's Slots of the entry of it last found or
+	// added, or 0, and exitNext, by entry, 1 plus that of the next in its
+	// slot's chain, or 0: a slot's entries are compared one by one, the
+	// last found first, where a map had hashed every one -- a twentieth of
+	// a compile's time in the backend.
 	exitFrame *abi.ExitFrame
 	exitHead  []int32
 	exitNext  []int32
@@ -292,13 +293,18 @@ func (c *core) findLazy() {
 		}
 	}
 	for _, b := range c.f.Blocks {
+		// The guards of one instruction share its state, looked at once.
+		var last *ssa.FrameState
 		for _, v := range b.Values {
 			for _, a := range v.Args {
 				if a.Op == ssa.OpLoadSlot {
 					elsewhere[a.ID] = true
 				}
 			}
-			state(v.State)
+			if v.State != last {
+				state(v.State)
+				last = v.State
+			}
 		}
 		state(b.State)
 		state(b.Header)
@@ -1338,8 +1344,14 @@ func (c *core) exitDescriptor(s *ssa.FrameState, kind uint64, localsReg, stackRe
 	// described.
 	index, slots, words := len(f.Index), len(f.Slots), len(f.Words)
 	undo := func() *abi.ExitDescriptor {
+		// Each entry it added unchained from its slot's chain, wherever
+		// it has come to be in it.
 		for i := len(f.Slots) - 1; i >= slots; i-- {
-			c.exitHead[f.Slots[i].Slot] = c.exitNext[i]
+			at, k := &c.exitHead[f.Slots[i].Slot], int32(i+1)
+			for *at != k {
+				at = &c.exitNext[*at-1]
+			}
+			*at = c.exitNext[i]
 		}
 		c.exitNext = c.exitNext[:slots]
 		for _, w := range f.Words[words:] {
@@ -1381,9 +1393,16 @@ func (c *core) exitDescriptor(s *ssa.FrameState, kind uint64, localsReg, stackRe
 		for int(e.Slot) >= len(c.exitHead) {
 			c.exitHead = append(c.exitHead, 0)
 		}
-		k := c.exitHead[e.Slot]
+		// Most recently found first: the next exit's slot is most often
+		// where the last one's was.
+		k, prev := c.exitHead[e.Slot], int32(0)
 		for k != 0 && f.Slots[k-1] != e {
-			k = c.exitNext[k-1]
+			k, prev = c.exitNext[k-1], k
+		}
+		if k != 0 && prev != 0 {
+			c.exitNext[prev-1] = c.exitNext[k-1]
+			c.exitNext[k-1] = c.exitHead[e.Slot]
+			c.exitHead[e.Slot] = k
 		}
 		if k == 0 {
 			if len(f.Slots) > math.MaxUint16 {

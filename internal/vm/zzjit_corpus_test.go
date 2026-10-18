@@ -167,23 +167,21 @@ func TestJITCompileCorpus(t *testing.T) {
 	if len(items) == 0 {
 		t.Fatal("no function to compile")
 	}
-	// The hashes, and the times: each phase the fastest of the runs.
+	// The hashes, and the times.
 	runs := 5
 	if n, err := strconv.Atoi(os.Getenv("QUICKJS_JIT_CORPUS_RUNS")); err == nil && n > 3 {
 		runs = n
 	}
 	hashes := make([]string, len(items))
-	var best [3]time.Duration
-	for run := range runs {
-		var phases [3]time.Duration
+	// The first compile may decide what the next ones take as decided -- a
+	// callee's link made -- as a compile of it again would: the second is
+	// hashed, and the third checked.
+	for run := range 3 {
 		for i, it := range items {
-			h, d, err := r.jitCorpusCompile(it.cl, it.p, it.e, run == 1 || run == 2)
+			h, err := r.jitCorpusCompile(it.cl, it.p, it.e, run > 0)
 			if err != nil {
 				h = "refused: " + err.Error()
 			}
-			// The first compile may decide what the next ones take as
-			// decided -- a callee's link made -- as a compile of it again
-			// would: the second is hashed, and the third checked.
 			switch run {
 			case 1:
 				hashes[i] = h
@@ -192,16 +190,26 @@ func TestJITCompileCorpus(t *testing.T) {
 					t.Fatalf("%s compiled to other code the second time", it.name)
 				}
 			}
-			for k := range phases {
-				phases[k] += d[k]
-			}
 		}
-		for k := range best {
-			if run == 0 || phases[k] < best[k] {
-				best[k] = phases[k]
+	}
+	// The times: of every compile's first phase, its first two, all three,
+	// each the fastest of the runs -- a clock read around each compile's
+	// phases had read every few hundred microseconds on Windows -- and a
+	// phase's the difference.
+	var best [3]time.Duration
+	for run := range runs {
+		for k := range 3 {
+			t0 := time.Now()
+			for _, it := range items {
+				r.jitCorpusPhases(it.cl, it.p, it.e, k+1)
+			}
+			if d := time.Since(t0); run == 0 || d < best[k] {
+				best[k] = d
 			}
 		}
 	}
+	best[2] -= best[1]
+	best[1] -= best[0]
 	// What each phase allocates, from a run of the phases before it and one
 	// with it.
 	var allocs [3]uint64
@@ -276,31 +284,22 @@ func TestJITCompileCorpus(t *testing.T) {
 }
 
 // jitCorpusCompile compiles p, cl's function's program, as compileSSA
-// does, without placing its code, and returns the code's hash (when
-// hashing) and how long each phase took.
-func (r *Runtime) jitCorpusCompile(cl *closure, p *ir.Program, e *jitEntry, hashing bool) (string, [3]time.Duration, error) {
-	var d [3]time.Duration
+// does, without placing its code, and returns the code's hash, when
+// hashing.
+func (r *Runtime) jitCorpusCompile(cl *closure, p *ir.Program, e *jitEntry, hashing bool) (string, error) {
 	s := r.jit
 	defer s.ssaWork.Rewind()
 	defer s.mirWork.Rewind()
-	t0 := time.Now()
 	f, err := jitCorpusBuild(r, cl, p, e)
 	if err != nil {
-		return "", d, err
+		return "", err
 	}
-	t1 := time.Now()
 	ssa.Optimize(f)
-	t2 := time.Now()
 	mc, err := mir.CompileIn(&s.mirWork, f, jitEncoding)
-	t3 := time.Now()
-	d = [3]time.Duration{t1.Sub(t0), t2.Sub(t1), t3.Sub(t2)}
-	if err != nil {
-		return "", d, err
+	if err != nil || !hashing {
+		return "", err
 	}
-	if !hashing {
-		return "", d, nil
-	}
-	return jitCodeHash(mc), d, nil
+	return jitCodeHash(mc), nil
 }
 
 // jitCorpusPhases runs the first phases of jitCorpusCompile's.
