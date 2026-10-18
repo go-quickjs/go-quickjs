@@ -544,13 +544,13 @@ What V8 does instead, from its source (`src/objects`, `src/execution`):
 
 | ID | Item | Status |
 |---|---|---|
-| D1 | Transition chains past 64 properties, up to V8's 1,020, the shapes along a chain sharing one keys array and one index (`findOwn` already checks an index entry against the object's own table) | Done (`ca95576`), measurement pending |
-| D2 | Dictionary mode as V8's: keyed additions past a soft limit and deletes turn an object's table into its own, under a shape shared by the dictionary objects of its prototype, so caches stay monomorphic on them | Done (`23356b3`): the last key's delete rolls back, attribute changes are shared transitions, keyed adds past 12 make a dictionary, and dictionary objects share one cache identity (`dictShape`); measurement pending |
-| D3 | Prototype validity cells: a read found on a prototype checks one cell, not each holder's shape (today two, then the deep-read cases) | Done (`82dc853`) for reads past two prototypes and of absent properties; reads one or two up keep their holder checks, which native code is compiled for; measurement pending |
-| D4 | Slack from the constructor's `this.x =` count, as V8's expected properties, refined over its first objects | Done (`a88e64e`): counted up to 252, tracked over the first seven objects; measurement pending |
-| D5 | JIT entries at a function's start and its loops' headers only; a deopt leaves the rest of the invocation to the interpreter and the tree tier, which go on natively by OSR at a loop. Replaces `allEntries` and the learned entries | Open |
-| D6 | A shape native code was not compiled for deopts, as V8's map checks do; a read is megamorphic in native code only where its cache is | Open |
-| D7 | Compiled again on the lower tiers' budget, reset when a cache's feedback changes, as V8's tier-up; replaces the settling on exits, the ticks of Go's work and the profit check's stretches | Open |
+| D1 | Transition chains past 64 properties, up to V8's 1,020, the shapes along a chain sharing one keys array and one index (`findOwn` already checks an index entry against the object's own table) | Done (`ca95576`) |
+| D2 | Dictionary mode as V8's: keyed additions past a soft limit and deletes turn an object's table into its own, under a shape shared by the dictionary objects of its prototype, so caches stay monomorphic on them | Done (`23356b3`): the last key's delete rolls back, attribute changes are shared transitions, keyed adds past 12 make a dictionary, and dictionary objects share one cache identity (`dictShape`) |
+| D3 | Prototype validity cells: a read found on a prototype checks one cell, not each holder's shape (today two, then the deep-read cases) | Done (`82dc853`) for reads past two prototypes and of absent properties; reads one or two up keep their holder checks, which native code is compiled for |
+| D4 | Slack from the constructor's `this.x =` count, as V8's expected properties, refined over its first objects | Done (`a88e64e`): counted up to 252, tracked over the first seven objects |
+| D5 | JIT entries at a function's start and its loops' headers only; a deopt leaves the rest of the invocation to the interpreter and the tree tier, which go on natively by OSR at a loop. Replaces `allEntries` and the learned entries | Done (`2919ad8`); a frame Go finishes for a native call goes on at a loop's header too |
+| D6 | A shape native code was not compiled for deopts, as V8's map checks do; a read is megamorphic in native code only where its cache is | Done (`ac60a85`); a read whose cache is empty scans the receiver's own small table (`Scan`), and a read remembered by a chain's cell or as dictionaries is megamorphic (`0430bf0`) |
+| D7 | Compiled again on the lower tiers' budget, reset when a cache's feedback changes, as V8's tier-up; replaces the settling on exits, the ticks of Go's work and the profit check's stretches | Done (`09301d0`, `dd6bb7b`, `e2d731e`, `3979bad`): only an eager deopt invalidates; first compile and compile again on V8's budgets, 400 invocations times the bytecode's length, 500 after a cache changes; the profit check kept, code it judges slow still entered by OSR at a long loop (`dddc1d4`) |
 
 The order is D1 and D2 first: they remove the churn of feedback at its
 source and help the interpreter and the tree tier as much as the JIT. Then
@@ -560,6 +560,16 @@ as above, without and with the JIT, against the baseline: zk's
 at invocations that D5 and D7 replace. With them, against the commit
 before them, Octane with the JIT took 4.2% less time (Typescript -10.2%,
 Box2D -6.0%) and Gameboy alone 1.9% more.
+
+Measured, all seven with what followed them (`87da7ab`), against the
+baseline (`4aa3fa7`), `placements -parallel -k 8`: without the JIT,
+Octane -0.4% (Typescript -3.6%, Box2D +2.0%), AWFY -0.2%, V8 0.0%; with
+the JIT, Octane -2.2% (Gameboy -37.6%, PdfJS -35.0%, CodeLoad -22.5%,
+RegExp -17.7%, Splay -7.4%, Typescript -2.7%; Box2D +14.2%, RayTrace
++10.4%, Mandreel +2.5%), AWFY -1.8% (CD -5.5%, Havlak -3.7%; Json
++5.3%, Sieve +5.3%, Storage +2.2%), V8 +0.1% (DeltaBlue +21.7%, 1.8 ms
+to 2.1). Two runs a benchmark, warm-up included, had had Box2D 22%
+faster: its loss is its steady state's.
 
 ### Found while doing D5 to D7, left for later
 
@@ -601,6 +611,19 @@ Box2D -6.0%) and Gameboy alone 1.9% more.
   - hard: calls inside an inlined callee: a GoCall needs the root frame
     (`b.cur == b.root`), and an inlined level has no frame state to give
     Go.
+- **Done since, of the above** (on zk's `jit-layout-sq`): generic calls
+  of arrows (`ac6c73e`); code the profit check judges slow entered by OSR
+  at a long loop (`dddc1d4`); a megamorphic write's miss a call of Go on
+  a branch of its own in the SSA (`87da7ab`), RayTrace's exits at
+  `best.hitCount`.
+- **Still open, of the above:** megamorphic reads' misses; callees whose
+  lowering for native callers refuses a captured local, every call of
+  them made by Go (DeltaBlue's `inputsKnown` 64K, `satisfy` 35K,
+  `constraintsConsuming` 10K a run); calls, and writes, inside inlined
+  callees; generic `==`, `%`, `typeof` and `instanceof`; the
+  interpreter's caches holding one shape. New: RayTrace's small methods
+  (`add`, `multiplyScalar`, `initialize`) judged slow early in a short
+  run; Box2D's steady state 14% slower with the JIT (above).
 - **Compiling in the background, last.** V8 compiles on a thread of its
   own while the function runs on in its lower tier; ours compiles on the
   runtime's goroutine, so that each compile's whole cost is paid where it
