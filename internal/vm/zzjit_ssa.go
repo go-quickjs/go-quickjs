@@ -2803,7 +2803,11 @@ func jitHostCall(ctx *abi.Context) bool {
 			r.jit.calleeOpen[ctx.Level] = f.openUpvalues
 		}
 		ctx.Open = uint64(len(f.openUpvalues))
-		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
+		if ssa.GoOp(ctx.GoOp&0xff) == ssa.GoClosure {
+			// A close's writes none, so that one made with every cell
+			// taken (ssa's goFrame) shares one.
+			*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
+		}
 		return true
 	case ssa.GoElemCell:
 		o := *(**Object)(unsafe.Pointer(&ctx.GoArgs[0].Ref))

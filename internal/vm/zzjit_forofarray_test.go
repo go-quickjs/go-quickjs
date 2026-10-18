@@ -477,3 +477,51 @@ func TestJITKeyedReadAbsent(t *testing.T) {
 		t.Errorf("lookup left native code %d times for Go", e.ssaStats.hosts-lookupHosts)
 	}
 }
+
+// A function whose locals closures capture is compiled for native callers
+// (jitcompile's callee lowering): its frame is made in the VM's stack, and
+// Go makes its closures and closes what they captured there
+// (jitCalleeFrame), as on a frame Go entered. It is not inlined (ssa's
+// InlineCalls). AWFY DeltaBlue's inputsKnown(mark), which passes an arrow
+// reading mark, had been refused, each call of it Go's. Writes around the
+// capture, closures that outlive the call, an exit after a closure is
+// made, and a loop's let each closure gets its own, answer as the
+// interpreter's.
+func TestJITCapturedLocalCallees(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		class Con { constructor(vs) { this.vs = vs }
+			has(fn) { for (const v of this.vs) if (fn(v)) return true; return false }
+			inputsKnown(mark) { return !this.has((v) => !(v.mark === mark || v.stay)) } }
+		var cons = []; for (var i = 0; i < 8; i++) { const vs = []; for (var j = 0; j < 4; j++) vs.push({ mark: (i + j) % 3, stay: j === 3 }); cons.push(new Con(vs)) }
+		function known(n) { let s = 0; for (let k = 0; k < n; k++) for (const c of cons) if (c.inputsKnown(k % 3)) s++; return s }
+		function counter(k) { let c = k; const inc = () => { c++; return c }; c += 10; inc(); return c * 2 + inc() }
+		function counters(n) { let s = 0; for (let k = 0; k < n; k++) s = (s + counter(k)) | 0; return s }
+		function maker(i) { const x = i * 2; return () => x + 1 }
+		var made = []
+		function makes(n) { for (let k = 0; k < n; k++) made.push(maker(k)); let s = 0; for (const f of made) s = (s + f()) | 0; made.length = 0; return s }
+		var weird = { get g() { return { valueOf() { return 3 } } } }
+		function exits(i) { let x = i; const get = () => x; const y = weird.g + 1; x += y; return get() }
+		function exiting(n) { let s = 0; for (let k = 0; k < n; k++) s = (s + exits(k)) | 0; return s }
+		function lets(n) { const fs = []; for (let i = 0; i < n; i++) fs.push(() => i); let s = 0; for (const f of fs) s += f(); return s }
+		function letting(n) { let s = 0; for (let k = 0; k < n; k++) s = (s + lets(5)) | 0; return s }
+	`
+	rounds := []string{}
+	for range 6 {
+		rounds = append(rounds, `known(30)`, `counters(100)`, `makes(100)`, `exiting(100)`, `letting(50)`)
+	}
+	r := jitAgreesForTest(t, setup, rounds...)
+	for _, name := range []string{"inputsKnown", "counter", "maker", "exits"} {
+		var e *jitEntry
+		for k, x := range r.jit.cache {
+			if fn := k.Value(); fn != nil && fn.Name == name {
+				e = x
+			}
+		}
+		if e == nil || e.ssa == nil || e.calleeRefused {
+			t.Errorf("%s has no code for native callers: %+v", name, e)
+		}
+	}
+}

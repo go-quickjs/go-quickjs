@@ -638,7 +638,9 @@ func Inlinable(p *ir.Program) bool {
 // leaves to Go, which it returns by PC, are calls inlined in it too: it is
 // Inlinable but for those.
 func InlineCalls(p *ir.Program) ([]int, bool) {
-	if p == nil || p.Validate() != nil || len(p.Code) > maxInline || len(p.Globals) != 0 {
+	if p == nil || p.Validate() != nil || len(p.Code) > maxInline || len(p.Globals) != 0 || p.Captured != nil {
+		// A callee whose locals closures capture: an inlined frame's
+		// slots have no cells, and Go makes no closure on one.
 		return nil, false
 	}
 	var calls []int
@@ -647,7 +649,7 @@ func InlineCalls(p *ir.Program) ([]int, bool) {
 			continue
 		}
 		switch in.Op {
-		case ir.Call:
+		case ir.Call, ir.Closure, ir.CloseUpvalues:
 			return nil, false
 		case ir.Host:
 			calls = append(calls, pc)
@@ -1719,7 +1721,13 @@ func (b *builder) goFrame(blk *Block, in ir.Instruction, guard func(Op, Type, ir
 		site.Go = GoClose
 	}
 	b.f.cache(call).Calls, call.Index = []*CallSite{site}, b.f.Keeps
-	b.f.Keeps++
+	if in.Op == ir.CloseUpvalues && b.f.Keeps >= b.f.keepLimit() {
+		// A close writes no keep cell (the VM's GoClose): any one does,
+		// the first, when they are all taken.
+		call.Index = 0
+	} else {
+		b.f.Keeps++
+	}
 	cell := b.f.newValue(blk, OpCallCell, Source, call)
 	r := b.f.newValue(blk, OpKept, Tagged, cell, call)
 	r.Shadow = cell
@@ -3043,11 +3051,13 @@ func (b *builder) instruction(blk *Block, pc int) {
 			}
 			break
 		}
-		if b.p.Captured != nil && b.f.Keeps < b.f.keepLimit() {
+		if b.p.Captured != nil {
 			// What closures captured of its locals closed before it
 			// returns, as the interpreter's frame's are as it is popped:
 			// a native callee's frame is gone once it returns (GoClose,
-			// which native code makes only while any is open).
+			// which native code makes only while any is open). Always:
+			// with the keep cells all taken, a callee that had made a
+			// closure before returned with it open on its dead frame.
 			b.goFrame(blk, ir.Instruction{Op: ir.CloseUpvalues}, guard)
 		}
 		blk.Control = v

@@ -254,9 +254,13 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 	captured := false
 	for _, local := range fn.Locals {
 		if local.Captured {
-			if !m.ssa || m.callee {
-				// Its frame is the VM's, which a callee inlined, or the
-				// old pipeline's code, has none of.
+			if !m.ssa || m.forward {
+				// Its frame is the VM's, which the old pipeline's code,
+				// and a forwarding constructor's inlined frame, have none
+				// of. A native callee's frame is made in the VM's stack, and
+				// Go makes and closes its closures there (jitCalleeFrame);
+				// a callee of captured locals is not inlined (ssa's
+				// InlineCalls).
 				return nil, refuse(-1, "captured local")
 			}
 			captured = true
@@ -295,9 +299,11 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			// constructor (ssa.InstanceOfSite), Go otherwise.
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
-		if (in.Op == bytecode.OpClosure || in.Op == bytecode.OpCloseUpvalues) && (!m.ssa || m.callee) {
+		if (in.Op == bytecode.OpClosure || in.Op == bytecode.OpCloseUpvalues) && (!m.ssa || m.forward) {
 			// Go makes a closure, and closes what one captured, on the
-			// frame (jitHost): a function's own, in the new pipeline.
+			// frame (jitHost): a function's own, or a native callee's in
+			// the VM's stack (jitCalleeFrame), in the new pipeline; not an
+			// inlined callee's (ssa's InlineCalls).
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
 		if in.Op == bytecode.OpApplyArguments && !m.forward {
