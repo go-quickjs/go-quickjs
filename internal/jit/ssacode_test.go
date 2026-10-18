@@ -2171,13 +2171,16 @@ func TestSSAKeepsManyValues(t *testing.T) {
 // isTestReference reports a value with a pointer word.
 func isTestReference(v ir.Value) bool { return v.Kind == ir.Opaque || v.Kind == ir.String }
 
-// A read whose receiver's own table does not have the key looks in the
-// megamorphic cache only where it has met more than its cases hold
-// (ssa.PropertySite's Megamorphic): a prototype's property, found along
-// the entry's chain, each object and shape checked; one nothing has,
-// undefined; a chain the receiver's prototypes are not, or a stale shape
-// in it, Go's. A read that may yet learn a case leaves, to learn it. Each
-// as the SSA evaluator says.
+// A read whose receiver is of a shape its site was not compiled for looks
+// further only where its cache is megamorphic (ssa.PropertySite's
+// Megamorphic): in the receiver's own table, then in the megamorphic
+// cache -- a prototype's property, found along the entry's chain, each
+// object and shape checked; one nothing has, undefined; a chain the
+// receiver's prototypes are not, or a stale shape in it, Go's, a host
+// exit. Anywhere else it deoptimizes (ir.GuardExit), as V8's map checks
+// do, even where its own table has the property: the interpreter makes
+// the read, and the site's cache learns the shape. Each as the SSA
+// evaluator says.
 func TestSSANativeMegamorphic(t *testing.T) {
 	s0, s1 := testShapes[0], testShapes[1]
 	link := func(i int, shape unsafe.Pointer) abi.MegaLink {
@@ -2212,6 +2215,7 @@ func TestSSANativeMegamorphic(t *testing.T) {
 		{13, 0, true, ir.Value{}, true},
 		{12, -1, true, ir.Value{}, true},
 		{11, 0, true, ir.Float(4), false},
+		{11, 0, false, ir.Value{}, true},
 	} {
 		p := &ir.Program{Locals: 4, Code: []ir.Instruction{{Op: ir.ReferenceRead, Dest: 3, Left: ir.Slot(0), Key: tc.key},
 			{Op: ir.Return, Left: ir.Slot(3)}}}
@@ -2238,6 +2242,9 @@ func TestSSANativeMegamorphic(t *testing.T) {
 		}
 		if got := exit.Kind != ir.Returned; got != tc.exits || !tc.exits && exit.Value != tc.want {
 			t.Fatalf("%+v: %+v", tc, exit)
+		}
+		if want := map[bool]ir.ExitKind{true: ir.HostExit, false: ir.GuardExit}[tc.mega]; tc.exits && exit.Kind != want {
+			t.Fatalf("%+v: exit %v, want %v", tc, exit.Kind, want)
 		}
 		c.code.Close()
 	}

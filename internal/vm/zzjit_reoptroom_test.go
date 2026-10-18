@@ -184,11 +184,16 @@ func TestJITOneMissNoEntry(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	wentOn := r.jit.wentOn
+	var wentOn uint64
 	for round, src := range []string{`rare(500)`, `rare(500)`, `flip=250; rare(500)`, `flip=-1; rare(500)`, `rare(500)`} {
 		wv, err := want.Run(compileForTest(t, src))
 		if err != nil {
 			t.Fatal(err)
+		}
+		if round == 2 {
+			// Past the first rounds, whose reads, compiled before they ran,
+			// deoptimized once each for their caches to learn their shapes.
+			wentOn = r.jit.wentOn
 		}
 		gv, err := r.Run(compileForTest(t, src))
 		if err != nil || gv.Number() != wv.Number() {

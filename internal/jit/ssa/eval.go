@@ -381,12 +381,14 @@ type Object struct {
 
 // holder is the object a property read of o finds its property in, and its
 // index there, as Holders say, or -1: o itself, as property finds it, for a
-// site without them or a shape none of its cases has.
+// site without them, or, at a megamorphic site, a shape none of its cases
+// has; at any other site such a shape fails, as mir's map checks do.
 func (h *Heap) holder(o *Object, v *Value) (*Object, int) {
 	if v.Holders() == nil && v.Cases() == nil {
 		return h.property(o, v)
 	}
-	mega := h.Mega != nil && v.Op != OpPropWrite
+	wide := v.Megamorphic()
+	mega := wide && h.Mega != nil && v.Op != OpPropWrite
 	var first HolderChain
 	if v.Holders() != nil {
 		first = *v.Holders()
@@ -412,17 +414,22 @@ func (h *Heap) holder(o *Object, v *Value) (*Object, int) {
 		if found {
 			return o, int(c.Index)
 		}
-		// Prototypes no longer the case's: the megamorphic cache's chain,
-		// the receiver's own table having no key, as its shape says; or,
-		// with no cache, its table, as mir's scan searches it.
+		// Prototypes no longer the case's: at a megamorphic site the
+		// megamorphic cache's chain, the receiver's own table having no
+		// key, as its shape says; or, with no cache, its table, as mir's
+		// scan searches it. At any other, a failure.
 		if mega {
 			return h.mega(recv, v)
 		}
 		o = recv
 		break
 	}
-	// A shape none of the cases has: the receiver's own table, as for a
-	// site without them (mir's scan).
+	// A shape none of the cases has: at a megamorphic site the receiver's
+	// own table, as for a site without them (mir's scan); at any other, a
+	// failure.
+	if !wide {
+		return nil, -1
+	}
 	return h.search(o, v)
 }
 
@@ -443,6 +450,11 @@ func (h *Heap) property(o *Object, v *Value) (*Object, int) {
 	if v.Const.Bits != 0 && o.Shape == uintptr(v.Const.Bits) {
 		return o, v.Index
 	}
+	if !v.Megamorphic() {
+		// Another shape, or any at a site that knows none: a failure, as
+		// mir's map checks deoptimize.
+		return nil, -1
+	}
 	return h.search(o, v)
 }
 
@@ -459,7 +471,13 @@ func (h *Heap) search(o *Object, v *Value) (*Object, int) {
 		return h.mega(o, v)
 	}
 	if len(o.Keys) == 0 {
-		return nil, -1
+		// No properties, no shape -- but for a megamorphic read the
+		// megamorphic cache's, which may say none of its prototypes has
+		// the key.
+		if v.Op == OpPropWrite || !v.Megamorphic() {
+			return nil, -1
+		}
+		return h.mega(o, v)
 	}
 	for i, k := range o.Keys {
 		if k != v.Key {

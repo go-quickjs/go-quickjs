@@ -2,7 +2,10 @@
 
 package vm
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // jitAgreesForTest runs setup, then each round, an expression, in an
 // interpreter and in a runtime that compiles at the first call, the jobs it
@@ -149,19 +152,31 @@ func TestJITExceptionHandlers(t *testing.T) {
 	}
 	// A throw caught in the function goes on natively at its handler: a
 	// run in which every turn's property read throws, or every third's
-	// throw statement, never finishes in the interpreter.
-	// (The first run's reads, speculated for an object that has p, are
-	// compiled again for one that has not.)
+	// throw statement, goes on natively. (The first run's reads,
+	// speculated for an object that has p, are compiled again for one that
+	// has not: megamorphic, the read of q off undefined made by Go, which
+	// throws, and that of p off the empty object, which the VM gives no
+	// shape until a cache asks, by Go the first time -- the interpreter
+	// going on to the loop's header, once a run.)
 	if _, err := r.Run(compileForTest(t, `operation({}, 100)`)); err != nil {
 		t.Fatal(err)
 	}
-	for _, src := range []string{`operation({}, 100)`, `throwsOwn(100)`} {
+	for _, c := range []struct {
+		src         string
+		interpreted uint64
+	}{{`operation({}, 100)`, 1}, {`throwsOwn(100)`, 0}} {
 		interpreted := r.jit.interpreted
-		if _, err := r.Run(compileForTest(t, src)); err != nil {
+		cl := r.global.getOwn(r.atoms.intern(c.src[:strings.IndexByte(c.src, '(')])).value().Object().fn().closure
+		e := r.jit.hint(cl)
+		if e == nil || e.ssa == nil {
+			t.Fatalf("%s is not compiled", c.src)
+		}
+		entries := e.ssaStats.entries
+		if _, err := r.Run(compileForTest(t, c.src)); err != nil {
 			t.Fatal(err)
 		}
-		if r.jit.interpreted != interpreted {
-			t.Fatalf("%s finished in the interpreter %d times", src, r.jit.interpreted-interpreted)
+		if n := r.jit.interpreted - interpreted; n > c.interpreted || r.jit.hint(cl) != e || e.ssaStats.entries == entries {
+			t.Fatalf("%s finished in the interpreter %d times, entered %d times", c.src, n, e.ssaStats.entries-entries)
 		}
 	}
 }

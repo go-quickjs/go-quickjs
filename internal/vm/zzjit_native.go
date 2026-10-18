@@ -232,6 +232,9 @@ type jitEntry struct {
 	// by address and this keeps alive.
 	ssa       *jit.SSACode
 	ssaShapes []*shape
+	// ssaSerial counts the code's compiles: which code a site's
+	// deoptimization was in (jitPolySite's missed).
+	ssaSerial uint32
 	// ssaProg is the program the code was compiled from: the function's
 	// own lowering, or, for a callee with no loop of its own, its lowering
 	// for inlining (jitLower), which the runtime keeps anyway.
@@ -256,11 +259,14 @@ type jitEntry struct {
 	failedEntries []uint32
 	reopt         bool
 	reopts        uint8
-	// fed are the property sites, each with the shape the code was
-	// compiled for there, or none (jitFed); fedInlined those of the
-	// callees it inlines whose caches knew nothing (jitInlineFed).
-	fed        []jitFedSite
-	fedInlined []jitFedInlined
+	// shapeReopt marks code a property site deoptimized in, for a shape
+	// it was not compiled for, which its cache has learned
+	// (jitPropertyDeopt): compiled again at its next entry, as many times
+	// as its sites meet new shapes, which their caches bound -- each a
+	// fill, until one gives up and its site is megamorphic; shapeReopts
+	// counts the times.
+	shapeReopt  bool
+	shapeReopts uint32
 	// ssaInlinedAt are the calls the code inlines, by pc: a call decided
 	// for inlining since leaves from code compiled before, which is not
 	// the callee's leaving (jitCallSeen).
@@ -597,6 +603,12 @@ type jitState struct {
 	// unwound counts the native calls whose callees left native code, which
 	// Go finished (jitUnwindNative).
 	unwound uint64
+	// shapeDeopts counts the deoptimizations at property sites of code Go
+	// entered, for a shape the code was not compiled for or a site that
+	// knew none (jitPropertyDeopt), and shapeHosts such exits inside
+	// inlined callees, which leave the operation to Go (jitFinishExit):
+	// among guards and hosts, the exits that feed the sites' caches.
+	shapeDeopts, shapeHosts uint64
 	// budgetSeed varies the back-edge budget (backEdgeBudget), which is
 	// stressBudget under QJS_JIT_STRESS's budget.
 	budgetSeed   uint32
@@ -780,18 +792,18 @@ func (e *jitEntry) measure() int {
 // compiledBytes is what e holds that its code was compiled with: the
 // slices a compile gives it (setSSA), which jitCompiledBytes measures.
 func (e *jitEntry) compiledBytes() int {
-	return jitCompiledBytes(e.ssaShapes, e.ssaHolders, e.fed, e.fedInlined, e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaInlined, e.ssaPools, e.ssaLinks)
+	return jitCompiledBytes(e.ssaShapes, e.ssaHolders, e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaInlined, e.ssaPools, e.ssaLinks)
 }
 
 // compiledBytes is what fb's code would have its entry hold, in place of
 // what the entry's code was compiled with (jitEntry.compiledBytes).
 func (fb *jitFeedback) compiledBytes() int {
-	return jitCompiledBytes(fb.shapes, fb.holders, fb.fed, fb.fedInlined, fb.inlinedAt, fb.definesUnfed, fb.cells, fb.inlined, fb.pools, fb.links)
+	return jitCompiledBytes(fb.shapes, fb.holders, fb.inlinedAt, fb.definesUnfed, fb.cells, fb.inlined, fb.pools, fb.links)
 }
 
-func jitCompiledBytes(shapes []*shape, holders []*Object, fed []jitFedSite, fedInlined []jitFedInlined, inlinedAt, definesUnfed []int32,
+func jitCompiledBytes(shapes []*shape, holders []*Object, inlinedAt, definesUnfed []int32,
 	cells []*Value, inlined []*closure, pools []*abi.ObjectPool, links []*jitLink) int {
-	return jitCapBytes(shapes) + jitCapBytes(holders) + jitCapBytes(fed) + jitCapBytes(fedInlined) + jitCapBytes(inlinedAt) +
+	return jitCapBytes(shapes) + jitCapBytes(holders) + jitCapBytes(inlinedAt) +
 		jitCapBytes(definesUnfed) + jitCapBytes(cells) + len(cells)*int(valueSize) + jitCapBytes(inlined) + jitCapBytes(pools) + jitCapBytes(links)
 }
 
@@ -805,7 +817,7 @@ func (e *jitEntry) learnedBytes() int {
 		jitCapBytes(e.nativeCallers) + jitCapBytes(e.callSites)
 	for i := range e.poly {
 		p := &e.poly[i]
-		n += jitCapBytes(p.cases) + jitCapBytes(p.reads) + jitCapBytes(p.adds)
+		n += jitCapBytes(p.cases) + jitCapBytes(p.reads) + jitCapBytes(p.adds) + jitCapBytes(p.missed)
 	}
 	for i := range e.literals {
 		n += jitPoolBytes(e.literals[i].pool)

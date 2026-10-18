@@ -2025,7 +2025,8 @@ func (c *a64Compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss arm64.La
 }
 
 // property finds the property a property operation names and leaves the
-// address of its value in A, as amd64's does. It uses B, C and D.
+// address of its value in A, as amd64's does: any other shape searched at
+// a megamorphic site, failing at any other. It uses B, C and D.
 func (c *a64Compiler) property(v *ssa.Value, guard func(arm64.Cond)) {
 	if v.Holders() != nil || v.Cases() != nil {
 		c.holder(v, guard)
@@ -2039,13 +2040,24 @@ func (c *a64Compiler) property(v *ssa.Value, guard func(arm64.Cond)) {
 		c.a.Load(a64B, p, c.enc.ObjectShape)
 		c.movImm(a64C, v.Const.Bits)
 		c.a.Cmp(a64B, a64C, true)
-		c.a.BCond(arm64.NE, scan)
+		if !v.Megamorphic() {
+			guard(arm64.NE)
+		} else {
+			c.a.BCond(arm64.NE, scan)
+			c.cold = append(c.cold, func() {
+				c.a.Bind(scan)
+				c.scan(v, guard, found, 0)
+			})
+		}
 		c.a.Load(a64A, p, c.enc.ObjectProps)
 		c.a.AddImm(a64A, a64A, int64(int32(v.Index)*c.enc.ValueSize), true)
-		c.cold = append(c.cold, func() {
-			c.a.Bind(scan)
-			c.scan(v, guard, found, 0)
-		})
+		c.a.Bind(found)
+		return
+	}
+	if !v.Megamorphic() {
+		// As amd64's: every receiver fails.
+		c.a.Cmp(a64B, a64B, true)
+		guard(arm64.EQ)
 		c.a.Bind(found)
 		return
 	}
@@ -2084,9 +2096,14 @@ func (c *a64Compiler) scan(v *ssa.Value, guard func(arm64.Cond), found, mega arm
 	} else {
 		guard(arm64.HI)
 	}
-	// No properties, no shape.
+	// No properties, no shape -- but for a read the megamorphic cache's,
+	// as amd64's.
 	c.a.CmpImm(a64B, 0, true)
-	guard(arm64.EQ)
+	if mega != 0 && v.Op != ssa.OpPropWrite && v.Megamorphic() {
+		c.a.BCond(arm64.EQ, mega)
+	} else {
+		guard(arm64.EQ)
+	}
 	c.a.Load(a64A, p, c.enc.ObjectShape)
 	c.a.Load(a64A, a64A, c.enc.ShapeKeys)
 	mask, want := int64(c.enc.PropNotData), int64(0)
@@ -3598,12 +3615,13 @@ func (c *a64Compiler) holder(v *ssa.Value, guard func(arm64.Cond)) {
 		first = *v.Holders()
 	}
 	cases := append([]ssa.PropertyCase{{Shape: uintptr(v.Const.Bits), Index: int32(v.Index), Holders: first.Holders, More: first.More}}, v.Cases()...)
-	// As amd64's: a receiver of a shape not among the cases has its own
-	// table searched, and so does one whose prototypes are no longer the
-	// case's.
+	// As amd64's: at a megamorphic site, a receiver of a shape not among
+	// the cases has its own table searched, and so does one whose
+	// prototypes are no longer the case's; at any other, either fails.
+	wide := v.Megamorphic()
 	done, scan, mega := c.a.NewLabel(), c.a.NewLabel(), arm64.Label(0)
 	stale := scan
-	if c.enc.Mega && v.Op != ssa.OpPropWrite {
+	if wide && c.enc.Mega && v.Op != ssa.OpPropWrite {
 		// As amd64's: prototypes no longer the case's, the megamorphic
 		// cache's chain.
 		mega = c.a.NewLabel()
@@ -3613,10 +3631,19 @@ func (c *a64Compiler) holder(v *ssa.Value, guard func(arm64.Cond)) {
 			c.mega(v, guard, done)
 		})
 	}
-	c.cold = append(c.cold, func() {
-		c.a.Bind(scan)
-		c.scan(v, guard, done, mega)
-	})
+	if wide {
+		c.cold = append(c.cold, func() {
+			c.a.Bind(scan)
+			c.scan(v, guard, done, mega)
+		})
+	}
+	miss := func(to arm64.Label) {
+		if wide {
+			c.a.BCond(arm64.NE, to)
+		} else {
+			guard(arm64.NE)
+		}
+	}
 	for i, k := range cases {
 		next := c.a.NewLabel()
 		p := c.gpr(v.Args[0], a64A)
@@ -3624,7 +3651,7 @@ func (c *a64Compiler) holder(v *ssa.Value, guard func(arm64.Cond)) {
 		c.movImm(a64C, uint64(k.Shape))
 		c.a.Cmp(a64B, a64C, true)
 		if i == len(cases)-1 {
-			c.a.BCond(arm64.NE, scan)
+			miss(scan)
 		} else {
 			c.a.BCond(arm64.NE, next)
 		}
@@ -3644,11 +3671,11 @@ func (c *a64Compiler) holder(v *ssa.Value, guard func(arm64.Cond)) {
 			}
 			c.movImm(a64A, uint64(h.Object))
 			c.a.Cmp(a64B, a64A, true)
-			c.a.BCond(arm64.NE, stale)
+			miss(stale)
 			c.a.Load(a64B, a64A, c.enc.ObjectShape)
 			c.movImm(a64C, uint64(h.Shape))
 			c.a.Cmp(a64B, a64C, true)
-			c.a.BCond(arm64.NE, stale)
+			miss(stale)
 			c.a.Load(a64B, a64A, c.enc.ObjectProto)
 		}
 		c.a.Load(a64A, a64A, c.enc.ObjectProps)

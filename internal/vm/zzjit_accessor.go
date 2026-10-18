@@ -242,22 +242,31 @@ func (fb *jitFeedback) Accessor(pc int) (ssa.AccessorSite, bool) {
 	return a, true
 }
 
-// megamorphic reports whether the read at pc, compiled for site, has met
-// more than it is compiled for -- as many shapes as its cases hold, so
-// many its cache gave up, or what no case holds (jitPolySite's mega) --
-// and looks in the megamorphic cache for any other, rather than leave to
-// learn it (ssa.PropertySite's Megamorphic): a site that may yet learn a
-// shape leaves, and is compiled again with it as a case.
+// megamorphic reports whether the property site at pc, compiled for site,
+// is megamorphic: it has met more than its cases hold -- as many shapes as
+// they hold, read or written, or so many its cache gave up (maxCacheFills,
+// after which the VM reads and writes through the runtime's shared caches)
+// -- or what no case can hold (jitPolySite's mega), which the code's
+// deoptimizations there found (jitPropertyDeopt). Native code then looks
+// in the receiver's own table and the megamorphic cache for any other
+// receiver, and leaves for Go only what neither has (ssa.PropertySite's
+// Megamorphic); anywhere else such a receiver deoptimizes, as V8's map
+// checks do, and the code is compiled again for what the cache learned. An
+// inlined callee's site is as the callee's own code has found it.
 func (fb *jitFeedback) megamorphic(pc int, site ssa.PropertySite) bool {
-	if len(site.Cases) >= jitPropertyCases {
+	if len(site.Cases)+len(site.Adds) >= jitPropertyCases {
 		return true
 	}
 	if in := fb.fn.Code[pc]; int(in.B) < len(fb.cl.ic) && fb.cl.ic[in.B].fills >= maxCacheFills {
 		return true
 	}
-	if fb.e != nil && fb.root == nil {
-		for i := range fb.e.poly {
-			if p := &fb.e.poly[i]; int(p.pc) == pc && p.mega {
+	e := fb.e
+	if fb.root != nil {
+		e = fb.r.jit.entryFor(fb.fn)
+	}
+	if e != nil {
+		for i := range e.poly {
+			if p := &e.poly[i]; int(p.pc) == pc && p.mega {
 				return true
 			}
 		}

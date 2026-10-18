@@ -188,6 +188,83 @@ func TestEntriesAfterGuards(t *testing.T) {
 	}
 }
 
+// siteFeedback knows every property site as site.
+type siteFeedback struct{ site PropertySite }
+
+func (s siteFeedback) Property(int) (PropertySite, bool) { return s.site, true }
+func (siteFeedback) Global(int) (GlobalSite, bool)       { return GlobalSite{}, false }
+func (siteFeedback) Generic(int) bool                    { return false }
+func (siteFeedback) EntryGeneric(int) bool               { return false }
+func (siteFeedback) Inline(int) (InlineSite, bool)       { return InlineSite{}, false }
+func (siteFeedback) NativeCalls(int) []CallSite          { return nil }
+
+// A property read that meets a receiver its site was not compiled for
+// deoptimizes (ir.GuardExit), as V8's map checks do, the interpreter making
+// it and its cache learning the shape; but at a megamorphic site, which
+// leaves for Go (ir.HostExit) what it does not find further. A site that
+// knows no shape at all deoptimizes at every read, as V8's code does for
+// insufficient feedback: its block ends there, with no read made and no
+// entry after it. None has an entry after it.
+func TestBuildPropertyMissesDeoptimize(t *testing.T) {
+	fn := compiledFunctionForTest(t, `function f(o,n){let s=0;for(let i=0;i<n;i++){s=(s+o.x)|0}return s}`)
+	p, err := jitcompile.LowerSSA(fn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := -1
+	for pc, in := range p.Code {
+		if in.Op == ir.PropertyRead {
+			read = pc
+		}
+	}
+	if read < 0 {
+		t.Fatal("no read")
+	}
+	for _, c := range []struct {
+		site PropertySite
+		kind ir.ExitKind
+		made bool
+	}{
+		{PropertySite{Key: 1}, ir.GuardExit, false},
+		{PropertySite{Key: 1, Shape: 0x1000}, ir.GuardExit, true},
+		{PropertySite{Key: 1, Shape: 0x1000, Megamorphic: true}, ir.HostExit, true},
+		{PropertySite{Key: 1, Megamorphic: true}, ir.HostExit, true},
+	} {
+		f, err := BuildWith(p, siteFeedback{c.site})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := Check(f); err != nil {
+			t.Fatal(err)
+		}
+		made, ended := false, false
+		for _, b := range f.Blocks {
+			for _, v := range b.Values {
+				if v.Op == OpPropRead {
+					made = true
+					if ir.ExitKind(v.Aux) != c.kind {
+						t.Errorf("%+v: the read exits as %v, want %v", c.site, ir.ExitKind(v.Aux), c.kind)
+					}
+				}
+			}
+			if b.Kind == BlockExit && b.State != nil && int(b.State.PC) == read {
+				ended = true
+				if b.ExitKind != c.kind {
+					t.Errorf("%+v: the read's block exits as %v, want %v", c.site, b.ExitKind, c.kind)
+				}
+			}
+		}
+		if made != c.made || !c.made && !ended {
+			t.Errorf("%+v: read made natively %v, its block ended %v at %d:\n%s", c.site, made, ended, read, f)
+		}
+		for _, e := range f.Entries {
+			if e.PC == read+1 {
+				t.Errorf("%+v: an entry after the read", c.site)
+			}
+		}
+	}
+}
+
 // Build leaves the phis' shadows and the stores' checks to Optimize, which
 // would make them again for what it keeps; Finish makes them, once, for
 // whatever runs or compiles a Func Optimize has not.

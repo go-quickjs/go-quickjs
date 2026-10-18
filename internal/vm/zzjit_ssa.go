@@ -155,18 +155,6 @@ func jitDeoptimized(e *jitEntry, ctx *abi.Context, start int) {
 	}
 }
 
-// jitFedSite is a property site, by PC, and the shape its cache knew when
-// the code was compiled, by address, or 0 for none; and how often it has
-// left native code since its cache learned another.
-type jitFedSite struct {
-	pc     uint32
-	shape  uintptr
-	missed uint32
-	// seen is the shape its cache knew at the last of those exits: they are
-	// counted while it stays the one.
-	seen uintptr
-}
-
 // jitPolySite is a read that met objects of shapes the code was not
 // compiled for (jitEntry.poly): where each had the property, as a cache
 // filled for it has it (fillPropCache).
@@ -183,9 +171,24 @@ type jitPolySite struct {
 	// (jitAccessorCase), which it is compiled again for.
 	accessors []jitAccessorCase
 	// mega marks a read that met what no case holds, which the
-	// megamorphic cache has (ssa.PropertySite's Megamorphic).
-	mega bool
+	// megamorphic cache has (ssa.PropertySite's Megamorphic), or a site
+	// that met what the code cannot use (jitDeoptSeen); missed are the
+	// receivers' shapes the site deoptimized for, each with the compile of
+	// the code that did (jitEntry's ssaSerial).
+	mega   bool
+	missed []jitMissed
 }
+
+// jitMissed is a shape a property site deoptimized for, in the code of the
+// compile serial names (jitPolySite's missed).
+type jitMissed struct {
+	shape  *shape
+	serial uint32
+}
+
+// jitMissedShapes is how many shapes a site deoptimizes for before it is
+// megamorphic: one more than its cases hold.
+const jitMissedShapes = jitPropertyCases + 1
 
 // jitDeepAdd is an addition of a property along a shared transition, from
 // from to next, to an object whose prototype chain is up, each with the
@@ -357,6 +360,174 @@ func (r *Runtime) jitPolySeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 		return
 	}
 	e.polyMet()
+}
+
+// jitPropertyOp reports whether op is a named property's read or write,
+// whose site's cache the interpreter fills (propCache).
+func jitPropertyOp(op bytecode.Op) bool {
+	return op == bytecode.OpGetProp || op == bytecode.OpGetPropThis || op == bytecode.OpSetProp
+}
+
+// jitPropertyDeopt handles a deoptimization at site of the code owner's
+// entry holds, at pc of f's function, its operands up to sp: if the
+// instruction there is a named property's read or write, its receiver was
+// of a shape the site's cases do not have, or its site knew none
+// (ssa.PropertySite), as V8's map checks fail and its code deoptimizes for
+// insufficient feedback, and it reports true. The interpreter makes the
+// operation from the frame Go wrote, its cache learning the shape -- the
+// feedback the code is compiled again with (jitSeenFeedback), as V8's
+// inline caches gather it -- and the code is compiled again for it before
+// it is entered again (shapeReopt). What a cache cannot hold, e notes
+// (jitDeoptSeen). A site entry's speculation (site -1) is no property's.
+func (r *Runtime) jitPropertyDeopt(f *frame, e, owner *jitEntry, site int32, pc, sp int) bool {
+	if site < 0 || pc >= len(f.cl.fn.Code) || !jitPropertyOp(f.cl.fn.Code[pc].Op) {
+		return false
+	}
+	serial := uint32(0)
+	if owner != nil {
+		serial = owner.ssaSerial
+	}
+	r.jitDeoptSeen(f, e, pc, sp, f.cl.fn.Code[pc], serial)
+	if owner != nil {
+		owner.shapeReopt = true
+	}
+	return true
+}
+
+// jitSiteMegamorphic reports whether the property site at pc of cl's
+// function is megamorphic as its code was compiled (jitFeedback's
+// megamorphic): its cache gave up, or e, the function's entry, found what
+// no case holds.
+func (r *Runtime) jitSiteMegamorphic(cl *closure, e *jitEntry, pc int) bool {
+	if in := cl.fn.Code[pc]; int(in.B) < len(cl.ic) && cl.ic[in.B].fills >= maxCacheFills {
+		return true
+	}
+	if e != nil {
+		for i := range e.poly {
+			if p := &e.poly[i]; int(p.pc) == pc && p.mega {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// jitDeoptSeen notes in e what the property operation in at pc, which
+// deoptimized, meets that its site's cache cannot hold, its operands up to
+// sp, before the interpreter makes it: a string's method, read
+// off String.prototype by the code compiled again; a getter, or a setter,
+// on the receiver's prototypes (jitAccessorCase); a read the cache cannot
+// hold for its prototypes' depth (jitDeepRead); a read's value that is no
+// number, which the read then takes as a value (jitNumberMissed); and a
+// receiver the cache cannot hold at all -- a primitive, a property nothing
+// has, an object of no shape -- or one the site deoptimized for before, in
+// code compiled before the code that did now (serial), its cache holding
+// what the code cannot use (an object's own accessor, an addition Go
+// makes), or of more shapes than its cases hold,
+// which makes the site megamorphic (jitPolySite's mega), as V8's inline
+// caches go megamorphic for what they have no handler for: the megamorphic
+// cache, filled here, answers what it can natively, and the rest leaves
+// for Go rather than deoptimize again. So each deoptimization at a site
+// teaches its cache a shape, which its fills bound (maxCacheFills), or
+// makes it megamorphic, once. The shapes the site meets, the cache keeps
+// (propCache.seen); a write's cache learns them as the interpreter writes.
+func (r *Runtime) jitDeoptSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Instr, serial uint32) {
+	if int(in.A) >= len(f.cl.names) {
+		return
+	}
+	if e == nil {
+		// Nothing to note in: the cache learns what it can.
+		e = &jitEntry{}
+	}
+	key := f.cl.names[in.A]
+	write := in.Op == bytecode.OpSetProp
+	at := sp - 1
+	if write {
+		at = sp - 2
+	}
+	if at < f.base || at >= len(r.stack) {
+		return
+	}
+	recv := r.stack[at]
+	p := jitPolySiteAt(e, pc)
+	if recv.IsString() && in.Op == bytecode.OpGetPropThis && !slices.Contains(e.strSites, uint32(pc)) {
+		// A string's method: read off String.prototype by the code
+		// compiled again.
+		e.strSites = append(e.strSites, uint32(pc))
+		return
+	}
+	if !recv.IsObject() || int(in.B) >= len(f.cl.ic) {
+		p.mega = true
+		return
+	}
+	o := recv.Object()
+	i := slices.IndexFunc(p.missed, func(m jitMissed) bool { return m.shape == o.shape })
+	if o.shape == nil || i >= 0 && p.missed[i].serial != serial || i < 0 && len(p.missed) >= jitMissedShapes {
+		// An object with no shape, which the VM gives one only once a
+		// cache asks -- an empty one, made anew each time; one of a shape
+		// the site deoptimized for before, compiled again since: what its
+		// cache holds of it, the code cannot use; or more shapes than its
+		// cases hold.
+		p.mega = true
+		if !write {
+			r.jit.megaFill(o, key)
+			r.jitMegaFillProto(o, key)
+		}
+		return
+	}
+	if i >= 0 {
+		// Again in the code that deoptimized for it, not compiled again
+		// yet: the cache has it, and the code will.
+		return
+	}
+	p.missed = append(p.missed, jitMissed{remember(o.shape), serial})
+	if a, ok := r.jitAccessorCaseOf(o, o.shape, key, write); ok {
+		// A getter, or a setter, on its prototypes, which the code calls
+		// once compiled again for the receiver's shape too (Accessor).
+		jitAddAccessorCase(p, a)
+		return
+	}
+	c := &f.cl.ic[in.B]
+	if write || c.fills >= maxCacheFills {
+		// A write's cache learns as the interpreter writes -- an own
+		// property, an addition, or, for one it cannot hold, a fill all the
+		// same, toward giving up (setPropCached); a cache that has given
+		// up is megamorphic.
+		return
+	}
+	// The site's cache learns the receiver's shape here, as the tree
+	// tier's read would teach it (ownScan, cachedGet): the interpreter,
+	// which makes the read after, reads an object's small table without
+	// it (plainOwn).
+	if c.holder(o) == nil {
+		r.fillPropCache(c, o, key, in.Op == bytecode.OpGetProp)
+	}
+	if c.fills >= maxCacheFills {
+		return
+	}
+	if c.holder(o) == nil {
+		// One a cache cannot hold: past its two prototypes, or none of
+		// them has it, or not of a shape the cache may hold.
+		if d, ok := r.jitDeepReadOf(o, key); ok && jitAddDeepRead(p, d) {
+			return
+		}
+		r.jit.megaFill(o, key)
+		r.jitMegaFillProto(o, key)
+		p.mega = true
+		return
+	}
+	if c.getter || c.idx < 0 {
+		return
+	}
+	holder := o
+	if c.p2 != nil {
+		holder = c.p2
+	} else if c.p1 != nil {
+		holder = c.p1
+	}
+	if c.idx < int32(len(holder.vals)) && !holder.vals[c.idx].IsNumber() {
+		jitNumberMissed(e, pc)
+	}
 }
 
 // megaFill has the megamorphic cache (abi.MegaCache) name o's own data
@@ -851,55 +1022,6 @@ func (e *jitEntry) polyMet() {
 	e.polyPending, e.polySettled, e.polyAt = true, 0, e.starts+e.link.in
 }
 
-// jitWrongShapeExits is how often a site compiled for one shape leaves
-// native code in a row, its cache knowing one other, before the code is
-// compiled again: compiling is not free, and a site whose objects are of
-// more shapes than one would have it compiled for each in turn.
-const jitWrongShapeExits = 32
-
-// jitFed notes an exit to Go at pc. A property site whose cache has met
-// objects of a shape the code was not compiled for -- none, for code
-// compiled on its first call or a branch not taken until then; another,
-// when its receivers' shape changed after -- leaves for Go every time;
-// once its cache knows a shape, the code is compiled again for it, as V8
-// deoptimizes for insufficient feedback, or for a wrong map, after
-// jitWrongShapeExits in a row with one shape. Code compiled before a site
-// had run -- a function with a loop is compiled in its first call, before
-// its later branches have -- is compiled again at the function's next
-// invocation, not at once (feedReopt): its other sites without feedback
-// learn theirs meanwhile, at their exits, and one compile takes them all,
-// as V8's code deoptimized for insufficient feedback leaves the rest of
-// the invocation to the interpreter, which gathers it, and optimizes once
-// more. Compiled again at once, at each such site in turn, DeltaBlue's
-// Planner methods were compiled four times each in their first runs, and
-// then left native code at the sites the fourth compile had not seen.
-func jitFed(cl *closure, e *jitEntry, pc uint32) {
-	i := slices.IndexFunc(e.fed, func(s jitFedSite) bool { return s.pc == pc })
-	if i < 0 || e.reopts >= jitReoptimizations || int(pc) >= len(cl.fn.Code) {
-		return
-	}
-	in := cl.fn.Code[pc]
-	if int(in.B) >= len(cl.ic) {
-		return
-	}
-	c, site := &cl.ic[in.B], &e.fed[i]
-	if c.shape == noShape || uintptr(unsafe.Pointer(c.shape)) == site.shape {
-		return
-	}
-	if now := uintptr(unsafe.Pointer(c.shape)); now != site.seen {
-		site.seen, site.missed = now, 0
-	}
-	if site.missed++; site.shape == 0 {
-		e.fed = slices.Delete(e.fed, i, i+1)
-		if !e.feedReopt {
-			e.feedReopt, e.feedStarts, e.feedWork = true, e.starts+e.link.in, e.ssaStats.work
-		}
-	} else if site.missed >= jitWrongShapeExits {
-		e.fed = slices.Delete(e.fed, i, i+1)
-		e.reopt = true
-	}
-}
-
 // jitLiteral is an object literal's site, at pc, that native code makes
 // the objects of from pool, each of shape root, the literal's as the
 // closure compiled for had it (shapeTree.siteRoot): its fields are
@@ -1149,38 +1271,6 @@ func (fb *jitFeedback) Define(pc int) (*ssa.PropertyAdd, bool) {
 	return &ssa.PropertyAdd{From: uintptr(unsafe.Pointer(s)), Next: uintptr(unsafe.Pointer(next)), Flags: uint8(next.flags), Define: true, Key: uint32(key)}, true
 }
 
-// jitFedInlined is a property site of a callee e's code inlines, cl's
-// at pc, whose cache knew nothing when the code was compiled: the code
-// leaves there, as V8's leaves for feedback it lacked, and Go, running
-// the call, fills the cache (jitInlineFed).
-type jitFedInlined struct {
-	cl *closure
-	pc uint32
-}
-
-// jitInlineFed reports whether a site of a callee e's code inlines, whose
-// cache knew nothing when the code was compiled, has learned a shape
-// since, and has the code compiled again for it, as V8 optimizes again
-// once it has the feedback it lacked: an exit there is not the callee's
-// leaving native code, which would stop it being inlined (jitInlineLeft).
-func (r *Runtime) jitInlineFed(e *jitEntry) bool {
-	if e.inlineReopts >= 2*jitInlineReoptimizations {
-		return false
-	}
-	for i, s := range e.fedInlined {
-		in := s.cl.fn.Code[s.pc]
-		if int(in.B) >= len(s.cl.ic) {
-			continue
-		}
-		if c := &s.cl.ic[in.B]; c.shape != nil && c.shape != noShape {
-			e.fedInlined = slices.Delete(e.fedInlined, i, i+1)
-			e.inlineReopt = true
-			return true
-		}
-	}
-	return false
-}
-
 // jitReoptimize compiles cl's function again for e, its entry, with what
 // failed in its code generic, and replaces its code, which runs nowhere:
 // native code leaves for Go to do anything else. If the function no longer
@@ -1188,7 +1278,7 @@ func (r *Runtime) jitInlineFed(e *jitEntry) bool {
 // reoptPending reports whether e's code is to be compiled again, for any
 // of the reasons jitReoptimize takes.
 func (e *jitEntry) reoptPending() bool {
-	return e.reopt || e.inlineReopt || e.polyReopt || e.upgradeReopt || e.unwindReopt
+	return e.reopt || e.shapeReopt || e.inlineReopt || e.polyReopt || e.upgradeReopt || e.unwindReopt
 }
 
 // reoptDue reports whether e's code is to be compiled again now: for a
@@ -1203,7 +1293,7 @@ func (e *jitEntry) reoptPending() bool {
 func (e *jitEntry) reoptDue() bool {
 	// Nothing pending, the usual answer, asked in line: a call of Go asks
 	// at every call.
-	if e.reopt || e.inlineReopt || e.polyReopt || e.upgradeReopt || e.unwindReopt || e.feedReopt || e.polyPending {
+	if e.reopt || e.shapeReopt || e.inlineReopt || e.polyReopt || e.upgradeReopt || e.unwindReopt || e.feedReopt || e.polyPending {
 		return e.reoptDueNow()
 	}
 	return false
@@ -1211,7 +1301,7 @@ func (e *jitEntry) reoptDue() bool {
 
 // reoptDueNow is reoptDue's answer for code with something pending.
 func (e *jitEntry) reoptDueNow() bool {
-	if e.reopt || e.unwindReopt {
+	if e.reopt || e.shapeReopt || e.unwindReopt {
 		return true
 	}
 	if e.feedReopt && (e.starts+e.link.in > e.feedStarts || e.ssaStats.work-e.feedWork >= uint64(e.reoptBudget)*jitReoptPer*jitReoptWork) {
@@ -1319,7 +1409,10 @@ func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
 	if e.polyReopt {
 		e.polyReopts++
 	}
-	e.reopt, e.inlineReopt, e.polyReopt, e.upgradeReopt, e.unwindReopt, e.feedReopt = false, false, false, false, false, false
+	if e.shapeReopt {
+		e.shapeReopts++
+	}
+	e.reopt, e.shapeReopt, e.inlineReopt, e.polyReopt, e.upgradeReopt, e.unwindReopt, e.feedReopt = false, false, false, false, false, false, false
 	// What it compiles for, the reads' shapes met since included.
 	e.polyPending, e.polySettled = false, 0
 	if e.reoptRoom > 0 && !r.jit.roomFor(e, nil, e.bytes+e.reoptRoom) {
@@ -1363,7 +1456,8 @@ func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
 		// theirs, with it.
 		r.jitCallersReopt(e, jitInlineDepth)
 	}
-	e.ssa, e.ssaShapes, e.ssaHolders, e.fed, e.fedInlined, e.ssaStats = code, fb.shapes, fb.holders, fb.fed, fb.fedInlined, jitSSAStats{}
+	e.ssa, e.ssaShapes, e.ssaHolders, e.ssaStats = code, fb.shapes, fb.holders, jitSSAStats{}
+	e.ssaSerial++
 	e.ssaInlinedAt, e.definesUnfed, e.ssaCells = fb.inlinedAt, fb.definesUnfed, fb.cells
 	e.ssaStrings, e.ssaInlined, e.ssaPools = e.ssaStrings || fb.strings, fb.inlined, fb.pools
 	e.instrs = jitCompiledInstrs(fn, fb)
@@ -1523,11 +1617,6 @@ type jitFeedback struct {
 	// holders are the prototypes the code compares receivers' with
 	// (ssa.Holder), held by address, which the entry keeps alive.
 	holders []*Object
-	// fed are the property sites, each with the shape its cache knew, or
-	// none (jitFed); fedInlined, the root's, the inlined callees' sites
-	// whose caches knew nothing.
-	fed        []jitFedSite
-	fedInlined []jitFedInlined
 	// definesUnfed, the root's, are the literals' fields it compiled before
 	// their transitions were made; cells the string constants' it reads.
 	definesUnfed []int32
@@ -2250,9 +2339,6 @@ func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 				e.inlineReopt = true
 				return
 			}
-		}
-		if r.jitInlineFed(e) {
-			return
 		}
 		if !refilled && !e.reoptPending() && slices.Contains(e.ssaInlinedAt, int32(pc)) {
 			// Not the code compiled before it was decided, which leaves
@@ -4340,10 +4426,9 @@ func (r *Runtime) jitIndexSeen(e *jitEntry, pc int, o, k Value) {
 		return
 	}
 	if !e.feedReopt {
-		// At its next invocation, as for a property site's feedback
-		// (jitFed): its other reads learn theirs meanwhile, and one compile
-		// takes them all -- Mandreel's sorting reads its heap's views at a
-		// dozen sites.
+		// At its next invocation: its other reads learn theirs
+		// meanwhile, and one compile takes them all -- Mandreel's sorting
+		// reads its heap's views at a dozen sites.
 		e.feedReopt, e.feedStarts, e.feedWork = true, e.starts+e.link.in, e.ssaStats.work
 	}
 }
@@ -5100,7 +5185,8 @@ func (r *Runtime) jitWantedCallees(e *jitEntry, fb *jitFeedback) {
 // setSSA gives e the code the new pipeline compiled for fn from p, which
 // native callers call through its link.
 func (e *jitEntry) setSSA(s *jitState, fn *bytecode.Function, p *ir.Program, code *jit.SSACode, fb *jitFeedback) {
-	e.ssa, e.this, e.ssaShapes, e.ssaHolders, e.fed, e.fedInlined = code, p.This, fb.shapes, fb.holders, fb.fed, fb.fedInlined
+	e.ssa, e.this, e.ssaShapes, e.ssaHolders = code, p.This, fb.shapes, fb.holders
+	e.ssaSerial++
 	e.ssaProg = p
 	e.ssaInlinedAt, e.definesUnfed, e.ssaCells = fb.inlinedAt, fb.definesUnfed, fb.cells
 	e.reoptBudget = uint32(max(jitReoptBudget, len(fn.Code)/jitReoptPer))
@@ -5622,42 +5708,26 @@ func (fb *jitFeedback) Property(pc int) (ssa.PropertySite, bool) {
 			}
 		}
 	}
-	if ok && fb.root != nil && fb.fwd == nil && site.Shape == 0 && site.Add == nil && site.Holders[0].Object == 0 &&
-		int(fb.fn.Code[pc].B) < len(fb.cl.ic) && fb.cl.ic[fb.fn.Code[pc].B].fills < maxCacheFills &&
-		(fb.cl.ic[fb.fn.Code[pc].B].shape == nil || fb.cl.ic[fb.fn.Code[pc].B].shape == noShape || fb.cl.ic[fb.fn.Code[pc].B].cell != nil) {
-		// An inlined callee's site its cache knew nothing of (jitInlineFed):
-		// not one whose cache holds what native code does not read with --
-		// a getter's -- which, recorded, had the code compiled again at
-		// each of its exits, the cache having "learned" what it already
-		// knew.
-		k := fb.keep()
-		k.fedInlined = append(k.fedInlined, jitFedInlined{cl: fb.cl, pc: uint32(pc)})
-	}
 	if ok && fb.e != nil && fb.root == nil {
 		if fb.fn.Code[pc].Op == bytecode.OpSetProp {
 			site.Cases, site.Adds = fb.writeCases(pc, site)
 		} else if site.Shape != 0 && !deep {
 			site.Cases = fb.cases(pc, site.Shape)
 		}
+	} else if ok && fb.root != nil && fb.fwd == nil && site.Shape != 0 && !deep {
+		// An inlined callee's site, whose code noted no shapes of its own
+		// (jitSeenFeedback): those its cache met before the one it holds.
+		site.Cases = fb.seenCases(pc, site)
 	}
-	if ok && fb.fn.Code[pc].Op != bytecode.OpSetProp {
+	if ok {
+		// A receiver of a shape the site's cases do not have deoptimizes,
+		// its cache learning the shape as the interpreter makes the
+		// operation, and so does any at a site whose cache knows none
+		// (ssa.PropertySite): as V8's map checks deoptimize, and its code
+		// deoptimizes for insufficient feedback. But where the cache is
+		// megamorphic the code looks further, as V8's megamorphic loads and
+		// stores do, and leaves for Go only what it does not find.
 		site.Megamorphic = fb.megamorphic(pc, site)
-	}
-	if ok && fb.root == nil && int(fb.fn.Code[pc].B) < len(fb.cl.ic) && fb.cl.ic[fb.fn.Code[pc].B].fills < maxCacheFills &&
-		!slices.ContainsFunc(fb.fed, func(s jitFedSite) bool { return s.pc == uint32(pc) }) {
-		// A site whose cache may yet learn a shape (jitFed).
-		// The cache's shape, though the code may not use it (a getter's,
-		// a write that adds the property): what changing it says; or,
-		// for one it knew nothing of, the shape the code was compiled
-		// for (chainSite), which its filling with says nothing new.
-		known := uintptr(0)
-		if c := fb.cl.ic[fb.fn.Code[pc].B].shape; c != noShape {
-			known = uintptr(unsafe.Pointer(c))
-		}
-		if known == 0 && !deep {
-			known = site.Shape
-		}
-		fb.fed = append(fb.fed, jitFedSite{pc: uint32(pc), shape: known})
 	}
 	return site, ok
 }
@@ -5715,6 +5785,50 @@ func (fb *jitFeedback) writeCases(pc int, site ssa.PropertySite) ([]ssa.Property
 		}
 	}
 	return cases, adds
+}
+
+// seenCases are the cases of the property site at pc, as its cache met
+// them before the shape it holds now, compiled for site (propCache.seen):
+// a read's found on the receiver or on a prototype a cache holds, a
+// write's own properties; up to jitPropertyCases. An inlined callee's
+// site is compiled for them, as V8 compiles a site inlined for the maps
+// its inline cache met: at any other shape it deoptimizes.
+func (fb *jitFeedback) seenCases(pc int, site ssa.PropertySite) []ssa.PropertyCase {
+	in := fb.fn.Code[pc]
+	if int(in.B) >= len(fb.cl.ic) || fb.cl.ic[in.B].seen == nil || site.Holders[0].Object != 0 && in.Op == bytecode.OpSetProp {
+		return nil
+	}
+	c := &fb.cl.ic[in.B]
+	write := in.Op == bytecode.OpSetProp
+	var cases []ssa.PropertyCase
+	k := fb.keep()
+	for _, x := range c.seen.entries[:c.seen.n] {
+		if len(cases)+1 >= jitPropertyCases {
+			break
+		}
+		from := uintptr(unsafe.Pointer(x.shape))
+		if x.shape == nil || x.shape == noShape || x.getter || x.idx < 0 || x.next != nil || from == site.Shape ||
+			c.shape != nil && jitSuperseded(x.shape, c.shape) || write && x.p1 != nil {
+			continue
+		}
+		if slices.ContainsFunc(cases, func(p ssa.PropertyCase) bool { return p.Shape == from }) {
+			continue
+		}
+		pcase := ssa.PropertyCase{Shape: from, Index: x.idx}
+		k.shapes = append(k.shapes, remember(x.shape))
+		for i, h := range [2]struct {
+			p *Object
+			s *shape
+		}{{x.p1, x.s1}, {x.p2, x.s2}} {
+			if h.p == nil {
+				break
+			}
+			pcase.Holders[i] = ssa.Holder{Object: uintptr(unsafe.Pointer(h.p)), Shape: uintptr(unsafe.Pointer(h.s))}
+			k.shapes, k.holders = append(k.shapes, remember(h.s)), append(k.holders, h.p)
+		}
+		cases = append(cases, pcase)
+	}
+	return cases
 }
 
 // cases are the shapes other than first the read at pc met (jitPolySeen),
@@ -6573,6 +6687,27 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 				e.ssaStats.guardsAt = map[int32]uint64{}
 			}
 			e.ssaStats.guardsAt[int32(int64(ctx.ExitSite))]++
+			exitPC, sp := int(ctx.ExitPC), f.base+int(ctx.ExitDepth)
+			if r.jitPropertyDeopt(f, e, e, int32(int64(ctx.ExitSite)), exitPC, sp) {
+				// A shape the code was not compiled for: the interpreter
+				// makes the operation, its cache learning the shape, and
+				// the rest of the iteration, native code going on at the
+				// loop's next header (jitGoOn).
+				s.shapeDeopts++
+				v, err, done, again := r.jitGoOn(f, e, exitPC, sp, true)
+				if !again {
+					return v, err, done
+				}
+				pc, depth = s.goOnPC, s.goOnDepth
+				if e.reoptDue() {
+					r.jitReoptimize(f.cl, e)
+				}
+				if !e.ssa.HasEntry(pc) || e.entrySlow {
+					f.pc = uint32(pc)
+					return r.jitInterpret(f, f.base+depth, nil)
+				}
+				continue
+			}
 			// An addition speculated to add numbers that met a string is
 			// learned as at a host exit (jitStringAddSeen), whatever the
 			// compiles left for failed speculations: Go's from the next
@@ -6684,10 +6819,6 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 				continue
 			}
 			pc, depth = int(f.pc), sp-f.base
-			switch in.Op {
-			case bytecode.OpGetProp, bytecode.OpGetPropThis, bytecode.OpSetProp:
-				jitFed(f.cl, e, uint32(exitPC))
-			}
 			jitPolySettled(e)
 			if e.reoptDue() {
 				// The code is compiled again now, not at the next call: a
@@ -6912,6 +7043,9 @@ type jitNativeLevel struct {
 	// is resumed there once Go has finished this level (jitUnwindNative).
 	returnTo uintptr
 	code     *jit.SSACode
+	// owner, for an inlined callee's level, is the entry whose code
+	// inlined it, the code its exit left (jitFinishExit).
+	owner *jitEntry
 }
 
 // jitUnwindNative finishes the native calls the code running in context
@@ -6970,6 +7104,7 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, code *bytecode.Function)
 			if l.cl == nil {
 				panic("jit: an inlined callee's closure is not its caller's")
 			}
+			l.owner = parent
 			if outer {
 				// Counted once, for the call the outermost is inlined at,
 				// below.
@@ -6996,7 +7131,7 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, code *bytecode.Function)
 		c.Live, c.ReturnTo = 0, 0
 	}
 	n := len(s.unwinding) - start
-	if left != nil && (n == 0 || !r.jitPoolEmptied(&s.unwinding[len(s.unwinding)-1])) && !r.jitInlineFed(left) && !left.reoptPending() {
+	if left != nil && (n == 0 || !r.jitPoolEmptied(&s.unwinding[len(s.unwinding)-1]) && !r.jitShapeMiss(&s.unwinding[len(s.unwinding)-1])) && !left.reoptPending() {
 		// An exit inside an inlined callee -- but one at a construction
 		// inlined in it whose pool ran out, which Go fills again, as
 		// jitCallSeen does not count at the call itself.
@@ -7289,6 +7424,20 @@ func jitStartLocals(fn *bytecode.Function, locals []Value) {
 	}
 }
 
+// jitShapeMiss reports whether level l, an inlined callee's, left native
+// code at a property site for a shape the code was not compiled for, or at
+// a site that knew none, its cache not megamorphic: the code is compiled
+// again for what the cache learns there (jitFinishExit), and the exit is
+// not the callee's leaving native code, which would stop it being inlined
+// (jitInlineLeft) -- a callee inlined before its sites met their shapes
+// left once for each.
+func (r *Runtime) jitShapeMiss(l *jitNativeLevel) bool {
+	if !l.inline || int(l.pc) >= len(l.cl.fn.Code) || !jitPropertyOp(l.cl.fn.Code[l.pc].Op) {
+		return false
+	}
+	return l.kind == abi.ExitDeopt || l.kind == abi.ExitHost && !r.jitSiteMegamorphic(l.cl, r.jit.entryFor(l.cl.fn), int(l.pc))
+}
+
 // jitPoolEmptied reports whether level l left native code at a construction
 // its code makes from a pool, now empty: it left for the pool to be filled
 // again (jitRefillPools).
@@ -7450,6 +7599,18 @@ func (r *Runtime) jitFinishExit(f *frame, e *jitEntry, l *jitNativeLevel) (Value
 		// What it learns here it learns as runSSA's exits do: a function
 		// only native callers run is entered from Go nowhere else.
 		in := f.cl.fn.Code[pc]
+		if l.inline && l.owner != nil && jitPropertyOp(in.Op) && !r.jitSiteMegamorphic(f.cl, e, pc) {
+			// An inlined callee's read or write of a shape the code was not
+			// compiled for, or at a site that knew none: Go makes it, as
+			// every exit inside an inlined callee leaves its operation to
+			// Go, but it is a map check's failure all the same, as runSSA's
+			// deoptimizations at the code's own sites are
+			// (jitPropertyDeopt): the site's cache learns the shape, and
+			// the code that inlined the callee is compiled again for it.
+			r.jit.shapeHosts++
+			r.jitDeoptSeen(f, e, pc, f.base+depth, in, l.owner.ssaSerial)
+			l.owner.shapeReopt = true
+		}
 		if e != nil && e.ssa != nil {
 			e.ssaStats.hosts++
 			r.jitStringAddSeen(f, e, pc)
@@ -7480,10 +7641,6 @@ func (r *Runtime) jitFinishExit(f *frame, e *jitEntry, l *jitNativeLevel) (Value
 			return v, err
 		}
 		if e != nil && e.ssa != nil {
-			switch in.Op {
-			case bytecode.OpGetProp, bytecode.OpGetPropThis, bytecode.OpSetProp:
-				jitFed(f.cl, e, uint32(pc))
-			}
 			jitPolySettled(e)
 			if e.inlinePending && e.inlineReopts < 2*jitInlineReoptimizations {
 				e.inlinePending, e.inlineReopt = false, true
@@ -7501,6 +7658,35 @@ func (r *Runtime) jitFinishExit(f *frame, e *jitEntry, l *jitNativeLevel) (Value
 	default:
 		if e != nil {
 			e.ssaStats.guards++
+		}
+		owner := l.owner
+		if owner == nil {
+			owner = e
+		}
+		if l.kind == abi.ExitDeopt && r.jitPropertyDeopt(f, e, owner, int32(int64(l.site)), pc, f.base+depth) {
+			// A shape the code was not compiled for, as runSSA's: the
+			// interpreter makes the operation and goes on to the loop's
+			// next header, native code from there.
+			if e == nil || e.ssa == nil {
+				v, err, _ := r.jitInterpret(f, f.base+depth, nil)
+				return v, err
+			}
+			v, err, _, again := r.jitGoOn(f, e, pc, f.base+depth, false)
+			if owner == e && e.reoptDue() && !jit.Marking() {
+				// Its own code, which only native callers may run: compiled
+				// again here for what the interpreter's cache learned.
+				r.jitReoptimize(f.cl, e)
+			}
+			if !again {
+				return v, err
+			}
+			pc, depth = r.jit.goOnPC, r.jit.goOnDepth
+			if v, err, native := r.runSSA(f, e, pc, depth); native {
+				return v, err
+			}
+			f.pc = uint32(pc)
+			v, err, _ = r.jitInterpret(f, f.base+depth, nil)
+			return v, err
 		}
 		if e != nil && e.ssa != nil && l.kind == abi.ExitDeopt {
 			// A speculation that failed, learned as runSSA learns one: a

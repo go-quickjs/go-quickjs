@@ -3452,9 +3452,13 @@ func (c *compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss amd64.Label
 // property finds the property a property operation names and leaves the
 // address of its value in scratchA. An object of the shape the site's cache
 // knows has it at the cached index: the shape settles where it is and what
-// it is. Any other ordinary object with a small table is searched for the
-// key, unrolled, as the VM's own small objects are; the entry must be plain
-// data, and writable for a write. It uses scratchB and scratchC.
+// it is. At a megamorphic site (ssa.Value's Megamorphic) any other ordinary
+// object with a small table is searched for the key, as the VM's own small
+// objects are, the entry plain data, and writable for a write, and a
+// larger one looked for in the megamorphic cache (scan); at any other site
+// it fails, as V8's map checks deoptimize, the interpreter making the
+// operation and its cache learning the shape. It uses scratchB and
+// scratchC.
 func (c *compiler) property(v *ssa.Value, guard func(amd64.Cond)) {
 	if v.Holders() != nil || v.Cases() != nil {
 		c.holder(v, guard)
@@ -3468,14 +3472,26 @@ func (c *compiler) property(v *ssa.Value, guard func(amd64.Cond)) {
 		c.a.Load(scratchB, p, c.enc.ObjectShape)
 		c.movImm(scratchA, v.Const.Bits)
 		c.a.Op(amd64.Cmp, scratchB, scratchA, true)
-		c.a.Jcc(amd64.CondNE, scan)
+		if !v.Megamorphic() {
+			guard(amd64.CondNE)
+		} else {
+			c.a.Jcc(amd64.CondNE, scan)
+			c.cold = append(c.cold, func() {
+				c.a.Bind(scan)
+				c.scan(v, guard, found, 0)
+			})
+		}
 		p = c.gpr(v.Args[0], scratchA)
 		c.a.Load(scratchA, p, c.enc.ObjectProps)
 		c.a.OpImm(amd64.Add, scratchA, int32(v.Index)*c.enc.ValueSize, true)
-		c.cold = append(c.cold, func() {
-			c.a.Bind(scan)
-			c.scan(v, guard, found, 0)
-		})
+		c.a.Bind(found)
+		return
+	}
+	if !v.Megamorphic() {
+		// No shape the site knows, nor a megamorphic cache's: every
+		// receiver fails -- a write's past the additions it tried.
+		c.a.Op(amd64.Cmp, scratchB, scratchB, true)
+		guard(amd64.CondE)
 		c.a.Bind(found)
 		return
 	}
@@ -3525,9 +3541,15 @@ func (c *compiler) scan(v *ssa.Value, guard func(amd64.Cond), found, mega amd64.
 	} else {
 		guard(amd64.CondA)
 	}
-	// No properties, no shape.
+	// No properties, no shape -- but for a read the megamorphic cache's,
+	// which names a property its prototypes have or none has: a leaf's
+	// child, read of an empty object.
 	c.a.Op(amd64.Test, scratchB, scratchB, true)
-	guard(amd64.CondE)
+	if mega != 0 && v.Op != ssa.OpPropWrite && v.Megamorphic() {
+		c.a.Jcc(amd64.CondE, mega)
+	} else {
+		guard(amd64.CondE)
+	}
 	c.a.Load(scratchA, p, c.enc.ObjectShape)
 	c.a.Load(scratchA, scratchA, c.enc.ShapeKeys)
 	mask, want := int32(c.enc.PropNotData), int32(0)
@@ -3880,17 +3902,21 @@ func (c *compiler) holder(v *ssa.Value, guard func(amd64.Cond)) {
 		first = *v.Holders()
 	}
 	cases := append([]ssa.PropertyCase{{Shape: uintptr(v.Const.Bits), Index: int32(v.Index), Holders: first.Holders, More: first.More}}, v.Cases()...)
-	// A receiver of a shape not among the cases has its own table searched
-	// (scan), as V8's megamorphic loads look further rather than
-	// deoptimize, and leaves only if the property is not its own: RayTrace's
-	// IntersectionInfo, given its properties in more orders than the cases
-	// hold, some on its prototype, left its readers at every one.
-	// A receiver whose prototypes are no longer the case's -- a method
-	// added to one, or taken off -- is searched so too, rather than leave:
-	// the megamorphic cache has the chain as it is now (mega).
+	// At a megamorphic site (ssa.Value's Megamorphic), a receiver of a
+	// shape not among the cases has its own table searched (scan), as V8's
+	// megamorphic loads look further rather than deoptimize, and leaves
+	// only if the property is not its own: RayTrace's IntersectionInfo,
+	// given its properties in more orders than the cases hold, some on its
+	// prototype, left its readers at every one. A receiver whose
+	// prototypes are no longer the case's -- a method added to one, or
+	// taken off -- is searched so too, rather than leave: the megamorphic
+	// cache has the chain as it is now (mega). At any other site either
+	// fails, as V8's map checks deoptimize: the interpreter makes the
+	// operation, and its cache learns the shape.
+	wide := v.Megamorphic()
 	done, scan, mega := c.a.NewLabel(), c.a.NewLabel(), amd64.Label(0)
 	stale := scan
-	if c.enc.Mega && v.Op != ssa.OpPropWrite {
+	if wide && c.enc.Mega && v.Op != ssa.OpPropWrite {
 		// Prototypes no longer the case's, the megamorphic cache's chain;
 		// the receiver's own table, the case's shape says, has no key.
 		mega = c.a.NewLabel()
@@ -3900,17 +3926,26 @@ func (c *compiler) holder(v *ssa.Value, guard func(amd64.Cond)) {
 			c.mega(v, guard, done)
 		})
 	}
-	c.cold = append(c.cold, func() {
-		c.a.Bind(scan)
-		c.scan(v, guard, done, mega)
-	})
+	if wide {
+		c.cold = append(c.cold, func() {
+			c.a.Bind(scan)
+			c.scan(v, guard, done, mega)
+		})
+	}
+	miss := func(to amd64.Label) {
+		if wide {
+			c.a.Jcc(amd64.CondNE, to)
+		} else {
+			guard(amd64.CondNE)
+		}
+	}
 	for i, k := range cases {
 		next := c.a.NewLabel()
 		p := c.gpr(v.Args[0], scratchA)
 		c.a.Load(scratchB, p, c.enc.ObjectShape)
 		c.cmpWord(scratchB, uint64(k.Shape))
 		if i == len(cases)-1 {
-			c.a.Jcc(amd64.CondNE, scan)
+			miss(scan)
 		} else {
 			c.a.Jcc(amd64.CondNE, next)
 		}
@@ -3932,10 +3967,10 @@ func (c *compiler) holder(v *ssa.Value, guard func(amd64.Cond)) {
 			}
 			c.movImm(scratchA, uint64(h.Object))
 			c.a.Op(amd64.Cmp, scratchB, scratchA, true)
-			c.a.Jcc(amd64.CondNE, stale)
+			miss(stale)
 			c.a.Load(scratchB, scratchA, c.enc.ObjectShape)
 			c.cmpWord(scratchB, uint64(h.Shape))
-			c.a.Jcc(amd64.CondNE, stale)
+			miss(stale)
 			c.a.Load(scratchB, scratchA, c.enc.ObjectProto)
 		}
 		c.a.Load(scratchA, scratchA, c.enc.ObjectProps)

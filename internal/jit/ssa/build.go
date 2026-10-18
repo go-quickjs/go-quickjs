@@ -696,12 +696,42 @@ type PropertySite struct {
 	// Cases are the own properties others have.
 	Add  *PropertyAdd
 	Adds []*PropertyAdd
-	// Megamorphic, for a read, says it has met more than its cases hold:
-	// a receiver of another shape, whose own table does not have the
-	// property, is looked for in the megamorphic cache (abi.MegaCache)
-	// rather than leave for Go, as V8's megamorphic loads do. A read that
-	// may yet learn a case leaves, to learn it.
+	// Megamorphic says the site's cache is megamorphic: it has met more
+	// than its cases hold, or what no case can hold. A receiver of another
+	// shape has its own table searched and is looked for in the
+	// megamorphic cache (abi.MegaCache), and leaves for Go only if neither
+	// has the property, as V8's megamorphic loads and stores look further
+	// rather than deoptimize. At any other site such a receiver, and any
+	// receiver at a site that knows no shape, deoptimizes (ir.GuardExit),
+	// as V8's map checks do: the interpreter makes the operation, its cache
+	// learning the shape, and the code is compiled again for it.
 	Megamorphic bool
+}
+
+// unfed reports whether the property operation at pc has a site that
+// knows nothing to make it natively with -- no shape, no case, no
+// addition, its cache not megamorphic -- and so always deoptimizes, as
+// V8's code deoptimizes for insufficient feedback: its block ends there,
+// with no entry after it.
+func (b *builder) unfed(pc int) bool {
+	switch b.p.Code[pc].Op {
+	case ir.PropertyRead, ir.PropertyWrite, ir.ReferenceRead:
+	default:
+		return false
+	}
+	if b.p.Code[pc].Private || b.host(pc) {
+		return false
+	}
+	if _, ok := b.stringProperty(pc); ok {
+		return false
+	}
+	site, ok := b.property(pc)
+	return ok && unfedSite(site)
+}
+
+// unfedSite reports whether site knows nothing to make its operation with.
+func unfedSite(site PropertySite) bool {
+	return site.Shape == 0 && len(site.Cases) == 0 && site.Add == nil && len(site.Adds) == 0 && site.Holders[0].Object == 0 && !site.Megamorphic
 }
 
 // PropertyAdd is a write that adds its property, as the VM's cache has it
@@ -1345,7 +1375,7 @@ func (b *builder) planInline(fr *frame, call, cont *Block) {
 		switch {
 		case in.Op == ir.Jump || in.Op == ir.Branch:
 			leaders[in.Target], leaders[pc+1] = true, true
-		case in.Op == ir.Return || b.host(pc):
+		case in.Op == ir.Return || b.host(pc) || b.unfed(pc):
 			leaders[pc+1] = true
 		}
 	}
@@ -1373,7 +1403,7 @@ func (b *builder) planInline(fr *frame, call, cont *Block) {
 			end = starts[i+1] - 1
 		}
 		for q := pc; q <= end; q++ {
-			if op := p.Code[q].Op; op == ir.Jump || op == ir.Branch || op == ir.Return || b.host(q) {
+			if op := p.Code[q].Op; op == ir.Jump || op == ir.Branch || op == ir.Return || b.host(q) || b.unfed(q) {
 				end = q
 				break
 			}
@@ -1407,7 +1437,7 @@ func (b *builder) planInline(fr *frame, call, cont *Block) {
 			// block after it.
 			blk.Kind = BlockPlain
 			fr.inlined[end].callBlock = blk
-		case b.host(end):
+		case b.host(end) || b.unfed(end):
 			blk.Kind = BlockExit
 		default:
 			blk.Kind = BlockPlain
@@ -2055,7 +2085,7 @@ func (b *builder) plan() error {
 			return fmt.Errorf("%w: %d at pc %d", ErrUnsupported, in.Op, pc)
 		}
 		switch {
-		case in.Op == ir.Jump || in.Op == ir.Branch || in.Op == ir.Return || in.Op == ir.IterStep && !in.When || b.host(pc) && !b.goesOn(pc):
+		case in.Op == ir.Jump || in.Op == ir.Branch || in.Op == ir.Return || in.Op == ir.IterStep && !in.When || b.host(pc) && !b.goesOn(pc) || b.unfed(pc):
 			leaders[pc+1] = true
 		}
 	}
@@ -2083,7 +2113,7 @@ func (b *builder) plan() error {
 			end = starts[i+1] - 1
 		}
 		for q := pc; q <= end; q++ {
-			if in := p.Code[q]; in.Op == ir.Jump || in.Op == ir.Branch || in.Op == ir.Return || in.Op == ir.IterStep && !in.When || b.host(q) && !b.goesOn(q) {
+			if in := p.Code[q]; in.Op == ir.Jump || in.Op == ir.Branch || in.Op == ir.Return || in.Op == ir.IterStep && !in.When || b.host(q) && !b.goesOn(q) || b.unfed(q) {
 				end = q
 				break
 			}
@@ -2129,6 +2159,11 @@ func (b *builder) plan() error {
 				// Into the callee, whose returns go to the block after it.
 				blk.Kind = BlockPlain
 				fr.callBlock = blk
+				break
+			}
+			if b.unfed(end) {
+				// A property operation that deoptimizes at every receiver.
+				blk.Kind = BlockExit
 				break
 			}
 			if !b.host(end) {
@@ -2941,13 +2976,31 @@ func (b *builder) instruction(blk *Block, pc int) {
 			blk.State.addUse()
 			break
 		}
+		if !in.Private && unfedSite(site) {
+			// A site that knows no shape deoptimizes, as V8's code does for
+			// insufficient feedback: the interpreter makes the operation,
+			// its cache learning the shape (unfed).
+			blk.ExitKind = ir.GuardExit
+			blk.State = state()
+			blk.State.addUse()
+			break
+		}
+		// A receiver none of the site's cases has deoptimizes, as V8's map
+		// checks do, but at a megamorphic site, which leaves for Go only
+		// what neither its receiver's own table nor the megamorphic cache
+		// has (PropertySite's Megamorphic); and a private member's, whose
+		// shapes Go learns at its exits (the VM's jitPrivateSeen).
+		kind := ir.GuardExit
+		if site.Megamorphic || in.Private {
+			kind = ir.HostExit
+		}
 		if in.Private {
 			// The key this evaluation of the class minted, the one the
 			// site's shapes have.
 			k := guard(OpSameSymbol, None, ir.HostExit, operand(in.Third))
 			k.Const = ir.Value{Bits: uint64(site.Private)}
 		}
-		object := guard(OpObjectOf, Ptr, ir.HostExit, operand(in.Left))
+		object := guard(OpObjectOf, Ptr, kind, operand(in.Left))
 		// A read the receiver's prototypes answered checks them too; a
 		// write, which makes a property of the receiver's own, never meets
 		// one.
@@ -2964,7 +3017,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 		if in.Private && in.When {
 			// #x in o: true where the read finds the member -- an object of
 			// a shape the site has met -- and Go's answer elsewhere.
-			cell := guard(OpPropCell, Source, ir.HostExit, object)
+			cell := guard(OpPropCell, Source, kind, object)
 			cell.Const, cell.Index, cell.Key = ir.Value{Bits: uint64(site.Shape)}, int(site.Index), site.Key
 			f.setProperty(cell, holders, cases, nil, nil)
 			k := f.newValue(blk, OpConst, Tagged)
@@ -2976,7 +3029,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			// A reference's read; or a number's that met a value that was
 			// not one, read as a value now, whose uses that want a number
 			// unbox it (Feedback's Generic).
-			cell := guard(OpPropCell, Source, ir.HostExit, object)
+			cell := guard(OpPropCell, Source, kind, object)
 			cell.Const, cell.Index, cell.Key = ir.Value{Bits: uint64(site.Shape)}, int(site.Index), site.Key
 			f.setProperty(cell, holders, cases, nil, nil)
 			if site.Megamorphic {
@@ -2988,7 +3041,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			break
 		}
 		if in.Op == ir.PropertyRead {
-			v := guard(OpPropRead, Float64, ir.HostExit, object)
+			v := guard(OpPropRead, Float64, kind, object)
 			v.Const, v.Index, v.Key = ir.Value{Bits: uint64(site.Shape)}, int(site.Index), site.Key
 			f.setProperty(v, holders, cases, nil, nil)
 			if site.Megamorphic {
@@ -2997,12 +3050,15 @@ func (b *builder) instruction(blk *Block, pc int) {
 			b.assign(in.Dest, blk, boxF(v))
 			break
 		}
-		v := guard(OpPropWrite, None, ir.HostExit, object, operand(in.Right))
+		v := guard(OpPropWrite, None, kind, object, operand(in.Right))
 		v.Const, v.Index, v.Key = ir.Value{Bits: uint64(site.Shape)}, int(site.Index), site.Key
 		// A property the write adds, as V8's stores do along a map's
 		// transition; or, to an object that has it, stores: of any of the
 		// shapes the site met.
 		f.setProperty(v, nil, cases, site.Add, site.Adds)
+		if site.Megamorphic {
+			f.cache(v).Mega = true
+		}
 	case ir.BindingWrite:
 		// The binding's cell, as a read finds it, written as a property
 		// store writes one: the stores' checks and keeps take it for a

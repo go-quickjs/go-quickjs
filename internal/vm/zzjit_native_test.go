@@ -45,11 +45,20 @@ func TestJITPropertyABI(t *testing.T) {
 	}
 }
 
+// Numeric fields are read and written natively: compiled at its first
+// call, before its sites have run, f deoptimizes once at each (their map
+// checks, which feed the sites' caches) and is compiled again for them;
+// called again, it never leaves.
 func TestJITNumericProperties(t *testing.T) {
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	v, err := r.Run(compileForTest(t, `function f(o,n){let s=0;for(let i=0;i<n;i++){s=(s+o.x)|0;o.x=o.x+1}return s}let o={a:7,x:3};f(o,1000)===502500&&o.x===1003&&o.a===7`))
-	if err != nil || !v.IsBool() || !v.Truthy() || r.jit == nil || r.jit.entries == 0 || r.jit.hosts != 0 || r.jit.guards != 0 {
-		t.Fatalf("numeric fields did not stay native: %v, %v", v, err)
+	if err != nil || !v.IsBool() || !v.Truthy() || r.jit == nil || r.jit.entries == 0 || jitOtherHosts(r) != 0 || jitOtherGuards(r) != 0 || r.jit.shapeDeopts > 3 {
+		t.Fatalf("numeric fields did not stay native: %v, %v, %+v, %d map checks", v, err, r.JITStats(), r.jit.shapeDeopts)
+	}
+	entries, hosts, guards := r.jit.entries, r.jit.hosts, r.jit.guards
+	v, err = r.Run(compileForTest(t, `o.x=3;f(o,1000)===502500&&o.x===1003&&o.a===7`))
+	if err != nil || !v.IsBool() || !v.Truthy() || r.jit.entries == entries || r.jit.hosts != hosts || r.jit.guards != guards {
+		t.Fatalf("numeric fields did not stay native once fed: %v, %v, %+v", v, err, r.JITStats())
 	}
 }
 
@@ -93,7 +102,7 @@ func TestJITPropertyFallbacks(t *testing.T) {
 			for _, enabled := range []bool{false, true} {
 				r := jitRuntimeForTest(t, Config{JIT: enabled})
 				v, err := r.Run(compileForTest(t, tc.source))
-				if err != nil || !v.IsBool() || !v.Truthy() || enabled && (r.jit == nil || r.jit.entries == 0 || r.jit.guards != 0) {
+				if err != nil || !v.IsBool() || !v.Truthy() || enabled && (r.jit == nil || r.jit.entries == 0 || jitOtherGuards(r) != 0) {
 					t.Fatalf("property JIT %v: %v, %v", enabled, v, err)
 				}
 			}
@@ -121,7 +130,7 @@ func TestJITPropertyCallbackRelease(t *testing.T) {
 			return Undefined, nil
 		}), propDefault)
 	v, err := r.Run(compileForTest(t, `function f(o,a,cb){o.x=7;cb();a[0]+=1;return o.x+a[0]}let o={x:3};f(o,[0],()=>{host();delete o.x;o.y=9;o.x=11})===12&&o.y===9`))
-	if err != nil || !v.IsBool() || !v.Truthy() || r.jit == nil || r.jit.guards != 0 {
+	if err != nil || !v.IsBool() || !v.Truthy() || r.jit == nil || jitOtherGuards(r) != 0 {
 		t.Fatalf("property view release: %v, %v", v, err)
 	}
 }
@@ -273,7 +282,7 @@ func TestJITLexicalGlobals(t *testing.T) {
 		if gs.Go() != ws.Go() {
 			t.Fatalf("JIT %s, interpreter %s; %s", gs.Go(), ws.Go(), tc.source)
 		}
-		if r.jit == nil || r.jit.ssaEntries == 0 || tc.native && (r.jit.hosts > tc.learning || r.jit.guards != 0 || r.jit.interpreted > tc.learning) {
+		if r.jit == nil || r.jit.ssaEntries == 0 || tc.native && (jitOtherHosts(r) > tc.learning || jitOtherGuards(r) != 0 || r.jit.interpreted > tc.learning+r.jit.shapeDeopts+r.jit.shapeHosts) {
 			t.Fatalf("not native: %+v; %s", r.JITStats(), tc.source)
 		}
 		if tc.learning != 0 {
@@ -485,7 +494,7 @@ func TestJITArrayHolePermissionCallbacks(t *testing.T) {
 	} {
 		r := jitRuntimeForTest(t, Config{JIT: true})
 		v, err := r.Run(compileForTest(t, source))
-		if err != nil || !v.IsBool() || !v.Truthy() || r.jit == nil || r.jit.guards != 0 {
+		if err != nil || !v.IsBool() || !v.Truthy() || r.jit == nil || jitOtherGuards(r) != 0 {
 			t.Fatalf("hole permission after callback: %v, %v", v, err)
 		}
 	}
@@ -1189,7 +1198,7 @@ func TestJITBitwiseAndReceiver(t *testing.T) {
 			if err != nil || s.Go() != tc.want {
 				t.Fatalf("%s %s %s: %v, %v; want %s", tc.left, tc.op, tc.right, v, err, tc.want)
 			}
-			if r.jit == nil || r.jit.entries == 0 || r.jit.guards != 0 || r.jit.hosts != 0 {
+			if r.jit == nil || r.jit.entries == 0 || jitOtherGuards(r) != 0 || jitOtherHosts(r) != 0 {
 				t.Fatalf("did not exercise receiver/property and native bitwise execution: %+v", r.JITStats())
 			}
 		}
@@ -1215,7 +1224,7 @@ func TestJITReceiverCallbacks(t *testing.T) {
 		if err != nil || s.Go() != tc.want {
 			t.Fatalf("result %v error %v, want %s", v, err, tc.want)
 		}
-		if r.jit == nil || r.jit.entries == 0 || (r.jit.guards > 0) != tc.guard {
+		if r.jit == nil || r.jit.entries == 0 || (jitOtherGuards(r) > 0) != tc.guard {
 			t.Fatal("did not exercise native callbacks or expected guard")
 		}
 	}
@@ -1313,7 +1322,7 @@ func TestJITReferenceFields(t *testing.T) {
 			if err != nil || !v.IsBool() || !v.Truthy() {
 				t.Fatalf("JIT %v: %v, %v; %s", enabled, v, err, source)
 			}
-			if enabled && (r.jit == nil || r.jit.entries == 0 || r.jit.hosts != 0 || r.jit.guards != 0) {
+			if enabled && (r.jit == nil || r.jit.entries == 0 || jitOtherHosts(r) != 0 || jitOtherGuards(r) != 0) {
 				t.Fatalf("reference field left native execution: %s", source)
 			}
 		}
@@ -1553,6 +1562,16 @@ func jitRuntimeForTest(t *testing.T, cfg Config) *Runtime {
 	return r
 }
 
+// jitOtherGuards is how many guards failed in r's code but the map checks
+// of property sites, which deoptimize for a shape the code was not compiled
+// for, or at a site that knew none, and feed the sites' caches
+// (jitPropertyDeopt): code compiled at its first call, before its sites
+// have run, deoptimizes once at each, as V8's code does for insufficient
+// feedback. jitOtherHosts is so for host exits, where an inlined callee
+// leaves such an operation to Go.
+func jitOtherGuards(r *Runtime) uint64 { return r.jit.guards - r.jit.shapeDeopts }
+func jitOtherHosts(r *Runtime) uint64  { return r.jit.hosts - r.jit.shapeHosts }
+
 // The new pipeline compares with null and undefined natively, whatever the
 // other operand is: strictly by the word, loosely by either word or an
 // object's [[IsHTMLDDA]] (Annex B), as values and as branches. It used to
@@ -1600,7 +1619,7 @@ func TestJITSSANullish(t *testing.T) {
 			t.Fatalf("round %d: got %s, interpreter %s", i, got, want)
 		}
 	}
-	if st := r.JITStats(); st.SSAEntries == 0 || st.Guards != 0 {
+	if st := r.JITStats(); st.SSAEntries == 0 || jitOtherGuards(r) != 0 {
 		var sites []string
 		for key, e := range r.jit.cache {
 			if fn := key.Value(); fn != nil && e.ssaStats.guards != 0 {
@@ -1910,11 +1929,16 @@ func TestJITSSAElementReferences(t *testing.T) {
 	}
 	sum := r.global.getOwn(r.atoms.intern("sum")).value().Object().fn().closure
 	e := r.jit.hint(sum)
-	if e == nil || e.ssa == nil || e.ssaStats.entries == 0 || e.ssaStats.guards != 0 {
+	if e == nil || e.ssa == nil || e.ssaStats.entries == 0 {
 		t.Fatalf("sum: %+v", e)
 	}
-	if st := r.JITStats(); st.Guards != 0 {
-		t.Fatalf("element reads failed guards: %+v", st)
+	for site := range e.ssaStats.guardsAt {
+		if op := sum.fn.Code[site].Op; !jitPropertyOp(op) {
+			t.Fatalf("sum failed a guard at %d, %v: %v", site, op, e.ssaStats.guardsAt)
+		}
+	}
+	if st := r.JITStats(); jitOtherGuards(r) != 0 {
+		t.Fatalf("element reads failed guards: %+v, %d at property sites", st, r.jit.shapeDeopts)
 	}
 }
 
@@ -6322,19 +6346,19 @@ func TestJITSSAPolymorphicReadsBackOff(t *testing.T) {
 		}
 	}
 	e := jitNativeForTest(t, r, "sum")
-	// Compiled for its shapes at each phase, it would be 36 times; in
-	// proportion to the work Go did for it, some log2 of its exits.
-	if e.polyReopts == 0 || e.polyReopts > sites*(kinds-1)/3 {
-		t.Errorf("compiled again %d times for %d phases of new shapes", e.polyReopts, sites*(kinds-1))
+	// Compiled again for its shapes at each phase that met a new one, at
+	// most: a deoptimization each, its cache learning the shape.
+	if e.shapeReopts == 0 || e.shapeReopts > sites*(kinds-1) {
+		t.Errorf("compiled again %d times for %d phases of new shapes", e.shapeReopts, sites*(kinds-1))
 	}
 }
 
 // A read whose receivers turn out to be of several shapes, met one after
-// another, has the code compiled again once for them all, after its exits
-// have found no other for a while (jitPolySettle), not once for each; the
-// code then reads each natively. So too where the code runs called
-// natively, its exits Go's to finish (jitFinishExit): many calls at, which
-// reads one.
+// another, deoptimizes at each new one, as V8's map checks do, its cache
+// learning it, and the code is compiled again for those met: no more often
+// than the new shapes; the code then reads each natively. So too where the
+// code runs called natively, its exits Go's to finish (jitFinishExit):
+// many calls at, which reads one.
 func TestJITSSAPolymorphicReadsSettle(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -6384,15 +6408,17 @@ func TestJITSSAPolymorphicReadsSettle(t *testing.T) {
 				if i >= 2 {
 					compiles += r.jit.reoptimized - reoptimized
 				}
-				// The three new shapes' exits, then the settling ones.
-				if i == 2 && r.jit.hosts-allHosts > 3+jitPolySettle+1 {
+				// The three new shapes' deoptimizations, which are a native
+				// call's leaving native code for its caller, called
+				// natively, and nothing else.
+				if i == 2 && r.jit.hosts-allHosts > 3 {
 					t.Fatalf("%s left native code %d times before it was compiled for its shapes", c.fn, r.jit.hosts-allHosts)
 				}
 				if i == len(rounds)-1 && (r.jit.reoptimized != reoptimized || r.jit.hosts != allHosts) {
 					t.Fatalf("native code left %d times in its last round", r.jit.hosts-allHosts)
 				}
 			}
-			if compiles != 1 {
+			if compiles == 0 || compiles > 3 {
 				t.Fatalf("%s was compiled again %d times for its read's three new shapes", c.fn, compiles)
 			}
 			// Code compiled again for any reason is compiled for every shape
@@ -7054,12 +7080,12 @@ func TestJITSSAProfitReturns(t *testing.T) {
 	// would leave step unjudged.
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	// Go calls bump, which reads arguments, and step, through call: native
-	// code calls neither (jitNativeCallee).
+	// Go calls bump, which reads arguments, and step, through apply with
+	// an array: native code calls neither (jitNativeCallee).
 	setup := `function T(){this.n=0;this.v=1}T.prototype.bump=function(){this.n+=arguments.length+1};
 		T.prototype.step=function(k){let s=this.v;for(let i=0;i<2;i++)s=(s*3+i)|0;this.bump();return s+k};
 		function heavy(n){let s=0;for(let i=0;i<n;i++){s=(s*31+i)|0;s^=s>>>7}return s}
-		function drive(){let s=0;for(let i=0;i<300;i++)s=(s+t.step.call(t,i))|0;return [s,t.n,heavy(500)].join()}
+		function drive(){let s=0;for(let i=0;i<300;i++)s=(s+t.step.apply(t,[i]))|0;return [s,t.n,heavy(500)].join()}
 		var t=new T;`
 	want := New(Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
@@ -8900,9 +8926,10 @@ func TestJITSSACallSavesReuseSlots(t *testing.T) {
 // empty: native code reads globals without it, so a read only native code
 // ran, or none ran, never fills it. f is compiled before its branch has
 // run, and its construction there decided then: once the branch runs, f
-// is not compiled again for it -- the construction learned at its call,
-// a compile of its own (jitCalleeAt; every construction of DeltaBlue's had
-// cost one). Each answer is the interpreter's.
+// is compiled again only for the branch's property reads, which knew no
+// shape -- not for the construction, learned at its call, a compile of
+// its own (jitCalleeAt; every construction of DeltaBlue's had cost one).
+// Each answer is the interpreter's.
 func TestJITSSASeedsGlobalsNativeCodeRead(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -8923,7 +8950,7 @@ func TestJITSSASeedsGlobalsNativeCodeRead(t *testing.T) {
 		}
 	}
 	cl := r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure
-	var compiles uint64
+	var compiles, later uint64
 	for i, call := range []string{`f(300,1e9)`, `f(300,1e9)`, `f(300,1e9)`, `f(300,0)`, `f(300,0)`, `f(300,0)`, `f(300,0)`} {
 		wv, err := want.Run(compileForTest(t, call))
 		if err != nil {
@@ -8937,15 +8964,21 @@ func TestJITSSASeedsGlobalsNativeCodeRead(t *testing.T) {
 		if got, want := gv.Number(), wv.Number(); got != want {
 			t.Fatalf("round %d: got %v, interpreter %v", i, got, want)
 		}
-		if i >= 3 {
+		switch {
+		case i == 3:
 			compiles += r.jit.reoptimized - before
+		case i > 3:
+			later += r.jit.reoptimized - before
 		}
 	}
 	if e := r.jit.cache[weak.Make(cl.fn)]; e == nil || e.ssa == nil {
 		t.Fatalf("f did not run natively: %+v", e)
 	}
-	if compiles != 0 {
-		t.Fatalf("f was compiled again %d times once its branch ran", compiles)
+	// The branch's reads, of v and o, which knew nothing when f was
+	// compiled, deoptimize as their maps' checks do, and f is compiled
+	// again for them -- not for the construction, decided before.
+	if compiles > 3 || later != 0 {
+		t.Fatalf("f was compiled again %d times once its branch ran, %d after", compiles, later)
 	}
 }
 
@@ -11228,12 +11261,11 @@ func TestJITForwardPropertyEmptyPool(t *testing.T) {
 // A callee inlined before its property sites' caches knew anything --
 // RayTrace's Ray, a forwarding constructor read as NS.Ray, compiled into
 // its caller before initialize's stores had run in Go -- leaves at each
-// such site, and Go, making the construction, fills the cache. As V8
-// optimizes again once it has the feedback it lacked, the caller is
-// compiled again for it (jitInlineFed), and does not count those exits
-// against inlining the callee: before, sixteen of them stopped it, and
-// every construction then left native code. Each answer is the
-// interpreter's.
+// such site, and its cache learns the shape there. As V8 optimizes again
+// once it has the feedback it lacked, the caller is compiled again for it
+// (jitFinishExit), and does not count those exits against inlining the
+// callee (jitShapeMiss): before, sixteen of them stopped it, and every
+// construction then left native code. Each answer is the interpreter's.
 func TestJITSSAInlinedCalleeLearns(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -11285,10 +11317,10 @@ func TestJITSSAInlinedCalleeLearns(t *testing.T) {
 			}
 		}
 	}
-	// Compiled again once, for what it learned: not for a site the code
-	// before noted (jitEntry.fedInlined is the code's), which once made it
-	// six times.
-	if n := r.jit.reoptimized - start; n != 1 {
+	// Compiled again for what it learned in its first round, once for each
+	// of its and its callee's five property sites that knew nothing, at
+	// most, and never after.
+	if n := r.jit.reoptimized - start; n == 0 || n > 5 {
 		t.Fatalf("run compiled again %d times", n)
 	}
 }

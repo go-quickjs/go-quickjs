@@ -177,15 +177,32 @@ has no code, Go makes the read from native code (`abi.GoCallGet`,
 this; a setter's result is dropped. Frames Go makes for such a call show
 the accessor as the interpreter's do.
 
-**Megamorphic reads.** A read compiled for up to five shapes that meets
-another looks in the runtime's megamorphic cache (`abi.MegaCache`) before
-it leaves, as V8's megamorphic loads probe its stub cache: an entry, by
-the receiver's shape and the key, names the receiver's own data
-property, or a prototype's along a chain the code checks object by
-object and shape by shape (`abi.MegaChain`), or that none of the
-prototypes has it, the read's value undefined (`abi.MegaAbsent`). Go
-fills an entry at a read's exit. A read whose receiver's prototypes are
-no longer its case's -- a method added to one -- looks there too.
+**Map checks.** A property read or write is compiled for the shapes its
+site's inline cache has met -- the one it holds and those it held before
+(`propCache.seen`), up to five. A receiver of any other shape, and any
+receiver at a site whose cache knows none, deoptimizes (`ir.GuardExit`),
+as V8's map checks do and its code does for insufficient feedback: the
+interpreter makes the operation, the site's cache learning the shape --
+the deoptimization fills it where the interpreter's read of a small table
+would not -- and the code is compiled again for it (`jitPropertyDeopt`).
+What a cache cannot hold -- a primitive receiver, an object with no shape,
+an object's own accessor, more shapes than the cases hold -- makes the
+site megamorphic, once (`jitDeoptSeen`). Inside an inlined callee, whose
+exits all leave their operation to Go, such an exit has the code that
+inlined it compiled again so, and is not counted as the callee's leaving
+(`jitShapeMiss`).
+
+**Megamorphic reads.** Only at a site whose cache is megamorphic -- it gave
+up (`maxCacheFills`), its cases are full, or it met what no case holds --
+does a receiver of another shape have its own table searched and look in
+the runtime's megamorphic cache (`abi.MegaCache`) before it leaves for Go,
+as V8's megamorphic loads probe its stub cache: an entry, by the
+receiver's shape and the key, names the receiver's own data property, or a
+prototype's along a chain the code checks object by object and shape by
+shape (`abi.MegaChain`), or that none of the prototypes has it, the read's
+value undefined (`abi.MegaAbsent`). Go fills an entry at a read's exit. A
+read whose receiver's prototypes are no longer its case's -- a method
+added to one -- looks there too.
 
 **Private members.** A private member is a property under a key each
 evaluation of its class mints, a symbol, which a binding the class's
