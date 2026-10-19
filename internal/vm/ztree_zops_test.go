@@ -49,7 +49,7 @@ func TestTreeOps(t *testing.T) {
 		{name: "superTwice", src: `class A {} class D extends A { constructor() { super(); try { super() } catch (e) { this.e = e.name } } } function f() { return new D().e } f()`, want: "ReferenceError", trees: []string{"f", "D"}},
 		{name: "thisBeforeSuper", src: `class A {} class D extends A { constructor() { try { this.x = 1 } catch (e) { super(); this.e = e.name } } } function f() { return new D().e } f()`, want: "ReferenceError", trees: []string{"f", "D"}},
 		{name: "in", src: `function f(o) { var r = ('a' in o) + ',' + (0 in [1]) + ',' + ('b' in o); try { 'x' in 1 } catch (e) { r += ',' + e.name } return r } f({ a: 1 })`, want: "true,true,false,TypeError", trees: []string{"f"}},
-		{name: "delete", src: `function f(o) { return delete o.a + ',' + ('a' in o) + ',' + delete o[0] + ',' + delete 'x'.length } f({ a: 1 })`, want: "true,false,true,true", trees: []string{"f"}},
+		{name: "delete", src: `function f(o) { return delete o.a + ',' + ('a' in o) + ',' + delete o[0] + ',' + delete 'x'.length } f({ a: 1 })`, want: "true,false,true,false", trees: []string{"f"}},
 		{name: "deleteStrict", src: `'use strict'; function f() { try { delete Object.prototype } catch (e) { return e.name } } f()`, want: "TypeError", trees: []string{"f"}},
 		{name: "deleteNull", src: `function f(o) { try { delete o.x } catch (e) { return e.name } } f(undefined)`, want: "TypeError", trees: []string{"f"}},
 		{name: "deleteVar", src: `function f() { globalThis.gv = 1; var r = delete gv; return r + ',' + typeof gv } f()`, want: "true,undefined", trees: []string{"f"}},

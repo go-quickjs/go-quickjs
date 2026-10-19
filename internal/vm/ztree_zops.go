@@ -53,6 +53,12 @@ var (
 	// deleteIndexed is delete obj[key], and delete obj.name.
 	deleteIndexed func(r *Runtime, obj, key Value, strict bool) (Value, error)
 
+	// toObjectValue is ToObject as a value, the base a delete of a
+	// primitive's property deletes from (executeAt's delete_prop,
+	// deleteIndexed): a closure here, not a function, so that it moves no
+	// code of the interpreter's.
+	toObjectValue func(r *Runtime, v Value) (Value, error)
+
 	// deleteVar is delete name. Deleting a binding only succeeds for a
 	// configurable global property, which is why a var declaration cannot be
 	// deleted.
@@ -713,6 +719,14 @@ func init() {
 		return Bool(has), nil
 	}
 
+	toObjectValue = func(r *Runtime, v Value) (Value, error) {
+		o, err := r.toObject(v)
+		if err != nil {
+			return Undefined, err
+		}
+		return Obj(o), nil
+	}
+
 	deleteIndexed = func(r *Runtime, obj, key Value, strict bool) (Value, error) {
 		if obj.IsNullish() {
 			// There is nothing to delete from, which is a TypeError before the
@@ -724,7 +738,11 @@ func init() {
 			return Undefined, err
 		}
 		if !obj.IsObject() {
-			return True, nil
+			// A primitive's properties are its wrapper's, which ToObject
+			// makes, as executeAt's case does.
+			if obj, err = toObjectValue(r, obj); err != nil {
+				return Undefined, err
+			}
 		}
 		k, has := r.keyFor(obj.Object(), n)
 		if !has {

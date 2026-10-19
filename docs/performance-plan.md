@@ -867,10 +867,10 @@ faster: its loss is its steady state's.
   the parent shape stored, with the write barrier while the collector
   marks, as a transition's store makes them the other way. Worth it only
   where deletes are hot, to be counted first (calls of Go by operation, as
-  above). Found on the way, not the JIT's: the interpreter (and the tree
-  tier) answers true for any primitive base, where `delete 'ab'.length`
-  and `delete 'ab'[0]` are false in sloppy code and throw in strict
-  (ToObject's String exotic object), as Node answers.
+  above). Found on the way, not the JIT's, and fixed since: the
+  interpreter and the tree tier answered true for any primitive base,
+  where `delete 'ab'.length` and `delete 'ab'[0]` are false in sloppy code
+  and throw in strict (ToObject's String exotic object), as Node answers.
 - **Octane's PdfJS +2.4% since 5a2bc9d** (2026-10-19, eight placements
   with the JIT, all eight higher: 149..153 -> 153..157 ms a run), Octane
   +1.4% in all while AWFY took 23.8% less time and the V8 suite was level.

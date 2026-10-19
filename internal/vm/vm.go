@@ -976,8 +976,14 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				goto onError
 			}
 			if !obj.IsObject() {
-				sp = pushAt(stack, sp, True)
-				break
+				// A primitive's properties are its wrapper's, which ToObject
+				// makes: a string's length and indices are not to be deleted.
+				// Into the case's own variables, so that executeAt's frame
+				// keeps its size.
+				if obj, err = toObjectValue(r, obj); err != nil {
+					vmErr = err
+					goto onError
+				}
 			}
 			k, has := r.keyFor(obj.Object(), n)
 			if !has {
