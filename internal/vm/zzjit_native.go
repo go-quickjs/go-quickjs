@@ -1798,6 +1798,14 @@ func (r *Runtime) jitOn() bool { return r.jitEnabled }
 
 // tryJITFrame is the call path's hook, for a runtime that runs the JIT.
 func (r *Runtime) tryJITFrame(f *frame) (Value, error, bool) {
+	if r.jitMarkingCallee() {
+		// By its function, not only its closure's hint: code compiled for
+		// native callers alone, a function Go's own lowering refused, has
+		// none until something asks.
+		if e := r.jitEntryOf(f.cl); e != nil && e.ssa != nil && !e.invalid {
+			return r.runSSA(f, e, 0, 0)
+		}
+	}
 	if f.cl.jitRefused {
 		return Undefined, nil, false
 	}
@@ -1837,6 +1845,21 @@ func (r *Runtime) tryJITFrame(f *frame) (Value, error, bool) {
 		return Undefined, nil, false
 	}
 	return r.tryJITAt(f, 0, 0, false, false)
+}
+
+// jitMarkingCallee reports whether the frame Go is entering is the callee
+// of a native call Go makes only because the collector marks
+// (abi.GoOpMarking): native code would have called it natively, and Go
+// enters its code (tryJITFrame) -- judged slow at Go's entries or not
+// (entrySlow), compiled for native callers alone or not, as a native
+// callee's code is entered: its stretch says nothing of the code
+// (jitSSAProfit), and run in the existing tiers it ran its callees there
+// too. A long marking had sent AWFY DeltaBlue's constructions, made
+// natively but for it, into the tree tier, a constructor's super(),
+// Strength.of and its dictionary's lookup with it.
+func (r *Runtime) jitMarkingCallee() bool {
+	s := r.jit
+	return s != nil && s.goCallMarking && r.frameDepth == s.goCallDepth
 }
 
 // jitBackEdge is executeAt's interrupted block in a build with the JIT: the

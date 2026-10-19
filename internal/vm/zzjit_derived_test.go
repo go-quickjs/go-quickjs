@@ -289,7 +289,9 @@ func TestJITDerivedNativeUnwind(t *testing.T) {
 
 // TestJITDerivedNativeConstruct's constructions, the collector marking:
 // Go makes each, as it makes any native call that would store pointers
-// without a write barrier, and every answer is the interpreter's.
+// without a write barrier, entering the constructor's code -- compiled for
+// native callers, judged slow at Go's entries -- as native code would have
+// (jitMarkingCallee); every answer is the interpreter's.
 func TestJITDerivedNativeMarking(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -305,7 +307,12 @@ func TestJITDerivedNativeMarking(t *testing.T) {
 	for range 6 {
 		rounds = append(rounds, `make(300)`)
 	}
-	jitAgreesForTest(t, setup, rounds...)
+	r := jitAgreesForTest(t, setup, rounds...)
+	for _, name := range []string{"B", "C"} {
+		if e := jitDerivedForTest(t, r, name); e.ssa == nil || e.ssaStats.marked == 0 {
+			t.Errorf("%s's code was not entered for the constructions Go made while marking: code %v, slow %v, callee %v, %+v", name, e.ssa != nil, e.entrySlow, e.ssaCallee, e.ssaStats)
+		}
+	}
 }
 
 // A derived constructor's super() of a constructor of the script's is a
