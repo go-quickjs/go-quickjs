@@ -920,6 +920,10 @@ faster: its loss is its steady state's.
   Go 247,075 -> 29 a run; array_forEach (micro) 36.8 -> 26.1 ns an
   element, the callback's call most of what is left (array_for_of, 7.6).
   Typed arrays' forEach, %TypedArray%.prototype's, is Go's still.
+  reduce done in 5218aa7, the same loop with the accumulator in this's
+  slot, its callback's result the next one: array_reduce (micro) 42.5 ->
+  28.0 ns an element. map, filter, some, every, find and findIndex, and
+  the callback inlined, are still to do.
 - **Octane's PdfJS +2.4% since 5a2bc9d** (2026-10-19, eight placements
   with the JIT, all eight higher: 149..153 -> 153..157 ms a run), Octane
   +1.4% in all while AWFY took 23.8% less time and the V8 suite was level.
