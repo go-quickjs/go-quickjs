@@ -2491,6 +2491,63 @@ func (c *a64Compiler) poolTake(v *ssa.Value, site *ssa.CallSite) {
 	c.setG(v, a64A)
 }
 
+// poolTakeMarking is amd64's: poolTake, the pool's cell cleared with Go's
+// write barrier, which shades the object.
+func (c *a64Compiler) poolTakeMarking(v *ssa.Value, site *ssa.CallSite) {
+	at := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	c.movImm(a64A, uint64(site.Pool))
+	c.a.Load(a64B, a64A, abi.OffPoolCount)
+	c.a.AddImm(a64B, a64B, -1, true)
+	c.a.Store(a64A, abi.OffPoolCount, a64B)
+	c.a.ShiftImm(arm64.Lsl, a64B, a64B, 3, true)
+	c.a.Op(arm64.Add, a64B, a64B, a64A, true)
+	c.a.Load(a64C, a64B, abi.OffPoolObjects)
+	c.a.Store(a64Ctx, at+c.enc.RefOffset, a64C)
+	c.movImm(a64A, c.enc.Object)
+	c.a.Store(a64Ctx, at+c.enc.NumOffset, a64A)
+	c.a.AddImm(a64A, a64B, int64(abi.OffPoolObjects), true)
+	c.movImm(a64C, 0)
+	c.refStore()
+	c.movImm(a64A, c.enc.Object)
+	c.setG(v, a64A)
+}
+
+// poolShade is amd64's: while the collector marks, the next object of each
+// pool a call of sites takes its receiver from shaded, stored where it is
+// with Go's write barrier.
+func (c *a64Compiler) poolShade(sites []*ssa.CallSite) {
+	var pools []uintptr
+	for _, t := range sites {
+		if t.Pool != 0 && !slices.Contains(pools, t.Pool) {
+			pools = append(pools, t.Pool)
+		}
+	}
+	if len(pools) == 0 {
+		return
+	}
+	marked, back := c.a.NewLabel(), c.a.NewLabel()
+	c.movImm(a64B, c.enc.WriteBarrier)
+	c.a.LoadU8(a64B, a64B, 0)
+	c.a.Cbnz(a64B, marked, false)
+	c.a.Bind(back)
+	c.cold = append(c.cold, func() {
+		c.a.Bind(marked)
+		for _, pool := range pools {
+			empty := c.a.NewLabel()
+			c.movImm(a64A, uint64(pool))
+			c.a.Load(a64B, a64A, abi.OffPoolCount)
+			c.a.Cbz(a64B, empty, true)
+			c.a.ShiftImm(arm64.Lsl, a64B, a64B, 3, true)
+			c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+			c.a.AddImm(a64A, a64A, int64(abi.OffPoolObjects-8), true)
+			c.a.Load(a64C, a64A, 0)
+			c.refStore()
+			c.a.Bind(empty)
+		}
+		c.a.B(back)
+	})
+}
+
 func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	sites, s := v.Calls(), v.State
 	stub := c.stubLabel(s, exitKind(v.Aux))
@@ -2535,13 +2592,15 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	}
 	join, generic := arm64.Label(0), false
 	if !site.Alloc && !site.Receiver {
-		// As amd64's: while the collector marks, Go makes a call that moves
-		// a pointer with no barrier; any other is native, its result stored
-		// with Go's barrier then.
-		if c.enc.StoreRef == 0 || markingCalls(sites) {
+		// As amd64's: natively while the collector marks, its result stored
+		// with Go's barrier then, a receiver from a pool shaded first.
+		if c.enc.StoreRef == 0 {
 			join, generic = c.markingCall(v, site, stub)
-		} else if c.enc.CallGo != 0 && len(v.Args) <= abi.MaxGoArgs {
-			join, generic = c.a.NewLabel(), true
+		} else {
+			if c.enc.CallGo != 0 && len(v.Args) <= abi.MaxGoArgs {
+				join, generic = c.a.NewLabel(), true
+			}
+			c.poolShade(sites)
 		}
 		if generic {
 			defer c.a.Bind(join)
@@ -3195,6 +3254,26 @@ func (c *a64Compiler) pop(v *ssa.Value) {
 	c.a.Store(a64Ctx, at+c.enc.NumOffset, a64B)
 	c.movImm(a64C, c.enc.Undefined)
 	c.a.Store(a64A, c.enc.NumOffset, a64C)
+	if c.enc.StoreRef != 0 {
+		// As amd64's: while the collector marks, the element's pointer word
+		// cleared with Go's write barrier, which shades the value popped.
+		marked, done := c.a.NewLabel(), c.a.NewLabel()
+		c.movImm(a64C, c.enc.WriteBarrier)
+		c.a.LoadU8(a64C, a64C, 0)
+		c.a.Cbnz(a64C, marked, false)
+		c.a.Store(a64A, c.enc.RefOffset, arm64.ZR)
+		c.a.Bind(done)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(marked)
+			c.a.AddImm(a64A, a64A, int64(c.enc.RefOffset), true)
+			c.movImm(a64C, 0)
+			c.refStore()
+			c.a.Load(a64B, a64Ctx, at+c.enc.NumOffset)
+			c.a.B(done)
+		})
+		c.setG(v, a64B)
+		return
+	}
 	c.a.Store(a64A, c.enc.RefOffset, arm64.ZR)
 	c.setG(v, a64B)
 }
@@ -3238,11 +3317,30 @@ func (c *a64Compiler) push(v *ssa.Value) {
 	c.a.Store(a64A, c.enc.NumOffset, a64D)
 	c.a.FMovFromF(a64C, a64F1)
 	c.a.Store(a64A, c.enc.RefOffset, a64C)
-	c.a.Scvtf(a64F1, a64B, true)
-	c.a.FMovFromF(a64A, a64F1)
+	c.a.FMovToF(a64F2, a64A)
+	c.a.Scvtf(a64F0, a64B, true)
+	c.a.FMovFromF(a64A, a64F0)
 	at := abi.OffKeep + int32(v.Index)*vs
 	c.a.Store(a64Ctx, at+c.enc.NumOffset, a64A)
 	c.a.Store(a64Ctx, at+c.enc.RefOffset, arm64.ZR)
+	if c.enc.StoreRef != 0 {
+		// As amd64's: while the collector marks, the element's pointer word
+		// stored again with Go's write barrier.
+		marked, done := c.a.NewLabel(), c.a.NewLabel()
+		c.movImm(a64B, c.enc.WriteBarrier)
+		c.a.LoadU8(a64B, a64B, 0)
+		c.a.Cbnz(a64B, marked, false)
+		c.a.Bind(done)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(marked)
+			c.a.FMovFromF(a64A, a64F2)
+			c.a.AddImm(a64A, a64A, int64(c.enc.RefOffset), true)
+			c.a.FMovFromF(a64C, a64F1)
+			c.refStore()
+			c.a.Load(a64A, a64Ctx, at+c.enc.NumOffset)
+			c.a.B(done)
+		})
+	}
 	c.setG(v, a64A)
 }
 
@@ -3461,9 +3559,20 @@ func (c *a64Compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(arm64.
 // the collector does not mark and the context is a native call's. It uses
 // A, B and C.
 func (c *a64Compiler) cellsTake(site *ssa.CallSite, slow arm64.Label) {
+	marked, done := c.a.NewLabel(), c.a.NewLabel()
 	c.movImm(a64A, c.enc.WriteBarrier)
 	c.a.LoadU8(a64A, a64A, 0)
-	c.a.Cbnz(a64A, slow, false)
+	if c.enc.StoreRef == 0 {
+		c.a.Cbnz(a64A, slow, false)
+	} else {
+		c.a.Cbnz(a64A, marked, false)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(marked)
+			c.cellsTakeMarking(site, slow)
+			c.a.B(done)
+		})
+		defer c.a.Bind(done)
+	}
 	c.a.Load(a64A, a64Ctx, abi.OffLive)
 	c.a.CmpImm(a64A, abi.LiveCall, true)
 	c.a.BCond(arm64.NE, slow)
@@ -3494,10 +3603,97 @@ func (c *a64Compiler) cellsTake(site *ssa.CallSite, slow arm64.Label) {
 	}
 }
 
+// cellsTakeMarking is amd64's: the pool's cell cleared, each cell's
+// argument's pointer word written, with Go's barrier.
+func (c *a64Compiler) cellsTakeMarking(site *ssa.CallSite, slow arm64.Label) {
+	c.a.Load(a64A, a64Ctx, abi.OffLive)
+	c.a.CmpImm(a64A, abi.LiveCall, true)
+	c.a.BCond(arm64.NE, slow)
+	c.movImm(a64A, uint64(site.Pool))
+	c.a.Load(a64B, a64A, abi.OffPoolCount)
+	c.a.Cbz(a64B, slow, true)
+	c.a.AddImm(a64B, a64B, -1, true)
+	c.a.Store(a64A, abi.OffPoolCount, a64B)
+	c.a.ShiftImm(arm64.Lsl, a64B, a64B, 3, true)
+	c.a.Op(arm64.Add, a64B, a64B, a64A, true)
+	c.a.Load(a64C, a64B, abi.OffPoolObjects)
+	c.a.Store(a64Ctx, abi.OffCells, a64C)
+	c.a.AddImm(a64A, a64B, int64(abi.OffPoolObjects), true)
+	c.movImm(a64C, 0)
+	c.refStore()
+	vs, n := c.enc.ValueSize, int32(len(site.Captures))
+	for k, x := range site.Captures {
+		at := 8*n + int32(k)*c.enc.UpvalueSize + c.enc.UpvalueClosed
+		c.a.Load(a64B, a64Ctx, abi.OffCells)
+		if x&1 == 0 {
+			c.movImm(a64A, c.enc.Undefined)
+			c.a.Store(a64B, at+c.enc.NumOffset, a64A)
+			c.a.Store(a64B, at+c.enc.RefOffset, arm64.ZR)
+			continue
+		}
+		slot := x >> 1
+		c.a.Load(a64A, a64Locals, slot*vs+c.enc.NumOffset)
+		c.a.Store(a64B, at+c.enc.NumOffset, a64A)
+		c.a.AddImm(a64A, a64B, int64(at+c.enc.RefOffset), true)
+		c.a.Load(a64C, a64Locals, slot*vs+c.enc.RefOffset)
+		c.refStore()
+	}
+}
+
+// closureTakeMarking is amd64's: the pool's cell cleared, each cell and an
+// arrow's this written into what the closure keeps, with Go's barrier.
+func (c *a64Compiler) closureTakeMarking(v *ssa.Value, site *ssa.CallSite, slow arm64.Label) {
+	at := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	c.movImm(a64A, uint64(site.Pool))
+	c.a.Load(a64B, a64A, abi.OffPoolCount)
+	c.a.Cbz(a64B, slow, true)
+	c.poolTakeMarking(v, site)
+	data := func() {
+		c.a.Load(a64C, a64Ctx, at+c.enc.RefOffset)
+		c.a.Load(a64B, a64C, c.enc.ObjectExt)
+		c.a.Load(a64C, a64B, c.enc.ObjectData+8)
+	}
+	for k, x := range site.Captures {
+		base := abi.OffUpvalues
+		if x&1 != 0 {
+			base = abi.OffCells
+		}
+		data()
+		c.a.Load(a64B, a64C, c.enc.FuncClosure)
+		c.a.Load(a64B, a64B, c.enc.ClosureUpvalues)
+		c.a.AddImm(a64A, a64B, int64(k)*8, true)
+		c.a.Load(a64C, a64Ctx, base)
+		c.a.Load(a64C, a64C, (x>>1)*8)
+		c.refStore()
+	}
+	if site.LexThis {
+		data()
+		c.a.Load(a64B, a64C, c.enc.FuncExtra)
+		c.a.Load(a64A, a64Ctx, abi.OffThis+c.enc.NumOffset)
+		c.a.Store(a64B, c.enc.ExtraLexThis+c.enc.NumOffset, a64A)
+		c.a.AddImm(a64A, a64B, int64(c.enc.ExtraLexThis+c.enc.RefOffset), true)
+		c.a.Load(a64C, a64Ctx, abi.OffThis+c.enc.RefOffset)
+		c.refStore()
+	}
+	c.movImm(a64A, c.enc.Object)
+	c.setG(v, a64A)
+}
+
 func (c *a64Compiler) closureTake(v *ssa.Value, site *ssa.CallSite, slow arm64.Label) {
+	marked, done := c.a.NewLabel(), c.a.NewLabel()
 	c.movImm(a64A, c.enc.WriteBarrier)
 	c.a.LoadU8(a64A, a64A, 0)
-	c.a.Cbnz(a64A, slow, false)
+	if c.enc.StoreRef == 0 {
+		c.a.Cbnz(a64A, slow, false)
+	} else {
+		c.a.Cbnz(a64A, marked, false)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(marked)
+			c.closureTakeMarking(v, site, slow)
+			c.a.B(done)
+		})
+		defer c.a.Bind(done)
+	}
 	c.movImm(a64A, uint64(site.Pool))
 	c.a.Load(a64B, a64A, abi.OffPoolCount)
 	c.a.Cbz(a64B, slow, true)
@@ -3530,9 +3726,6 @@ func (c *a64Compiler) iterStep(v *ssa.Value, slow arm64.Label) {
 	x := v.Args[0]
 	c.pointerWord(x, c.gpr(x, a64A))
 	c.a.Cbz(a64B, slow, true)
-	c.movImm(a64C, c.enc.WriteBarrier)
-	c.a.LoadU8(a64C, a64C, 0)
-	c.a.Cbnz(a64C, slow, false)
 	c.objectData(a64D, a64B, a64C, c.enc.IterState, func(cond arm64.Cond) { c.a.BCond(cond, slow) })
 	c.a.LoadU8(a64C, a64D, c.enc.IterDone)
 	c.a.Cbnz(a64C, slow, false)
@@ -3875,6 +4068,20 @@ func (c *a64Compiler) markingCall(v *ssa.Value, site *ssa.CallSite, stub arm64.L
 func (c *a64Compiler) markingTake(v *ssa.Value, site *ssa.CallSite, stub arm64.Label) (arm64.Label, bool) {
 	c.movImm(a64B, c.enc.WriteBarrier)
 	c.a.LoadU8(a64B, a64B, 0)
+	if c.enc.StoreRef != 0 {
+		// As amd64's: natively, the pool's cell cleared with Go's barrier.
+		marked, join := c.a.NewLabel(), c.a.NewLabel()
+		c.a.Cbnz(a64B, marked, false)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(marked)
+			c.poolTakeMarking(v, site)
+			if site.Literal && site.Argc != 0 {
+				c.arrayElements(v, true)
+			}
+			c.a.B(join)
+		})
+		return join, true
+	}
 	if c.enc.CallGo == 0 {
 		c.markingExit(stub)
 		return 0, false

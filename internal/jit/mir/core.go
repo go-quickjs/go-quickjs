@@ -1776,20 +1776,6 @@ func derivedFunction(t *ssa.CallSite) uintptr {
 	return t.Callee
 }
 
-// markingCalls reports whether a call of sites moves a pointer into what
-// outlives it with no write barrier -- a receiver taken from a pool, an
-// element pushed onto an array or popped off it -- so that Go makes it
-// while the collector marks (markingCall). Any other native call is made
-// natively then too.
-func markingCalls(sites []*ssa.CallSite) bool {
-	for _, t := range sites {
-		if t.Pool != 0 || t.Push || t.Pop {
-			return true
-		}
-	}
-	return false
-}
-
 // goOpWord is the word a call of Go, site, passes Go (abi.Context's GoOp).
 func goOpWord(site *ssa.CallSite) uint64 {
 	op := uint64(site.Go)

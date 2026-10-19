@@ -776,15 +776,19 @@ faster: its loss is its steady state's.
      the result, which outlives the callee's frame it comes from, is
      stored through `storeRef` while marking (README, The write barrier).
      Go still makes, while marking, a construction whose receiver comes
-     from a pool, a `push` and a `pop` (mir's markingCalls), which
+     from a pool, a `push` and a `pop`, which
      move a pointer into what outlives the call; they join stage 4.
-  4. *Pools while marking*: an object, an array literal, a closure, an
-     entry's cells, a loop's step, a construction's receiver, a `push`
-     or a `pop` while the collector marks is Go's (markingTake and
-     ssa.GoTake; markingCall for the calls; closureTake, cellsTake and
-     iterStep test the flag). To do: take natively, storing what the
-     taker writes through `storeRef`, into its destination before the
-     pool's cell is cleared; then remove GoTake.
+  4. *Pools while marking* (2026-10-19): native code takes from its
+     pools while the collector marks too. A literal's or `new Array(n)`'s
+     object has its pool's cell cleared through `storeRef`
+     (poolTakeMarking), which shades it; a construction's receiver is
+     shaded in its pool before the call takes it (poolShade); a closure's
+     captured cells and an arrow's this, an entry's cells' arguments, a
+     pushed value and a popped one go through `storeRef` while marking;
+     a loop's step needs no barrier -- the element it copies stays in its
+     array. Left for stage 5: ssa.GoTake, markingCall, markingTake's
+     Go path and abi.GoOpMarking, which code with no `storeRef` (the
+     harness) still uses.
   5. *The rest, and cleanup*: the exits that fill records (recordsTail)
      and the tail calls' (tailSelf, tailJump) store through `storeRef`;
      remove ExitMarking, markingExit, ssa.GoStore and GoAddAlong, and

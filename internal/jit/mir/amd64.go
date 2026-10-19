@@ -714,20 +714,22 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	}
 	join, generic := amd64.Label(0), false
 	if !site.Alloc && !site.Receiver {
-		if c.enc.StoreRef == 0 || markingCalls(sites) {
-			// A receiver from a pool, an element pushed or popped: a
-			// pointer moved into what outlives the call with no write
-			// barrier. While the collector marks, Go makes the call
-			// (markingCall).
+		if c.enc.StoreRef == 0 {
+			// While the collector marks, Go makes the call (markingCall).
 			join, generic = c.markingCall(v, site, guard)
-		} else if c.enc.CallGo != 0 && len(v.Args) <= abi.MaxGoArgs {
+		} else {
 			// Natively, the collector marking or not: what the call writes
 			// -- the records, the callee's context and frame -- outlives
 			// none of what it is written from, and overwrites what nothing
 			// reads again; the result, which outlives the callee's frame
 			// it comes from, is stored with Go's barrier while the
-			// collector marks (below).
-			join, generic = c.a.NewLabel(), true
+			// collector marks (below), as is what a push or a pop moves
+			// (push, pop). A receiver taken from a pool is shaded first
+			// (poolShade).
+			if c.enc.CallGo != 0 && len(v.Args) <= abi.MaxGoArgs {
+				join, generic = c.a.NewLabel(), true
+			}
+			c.poolShade(sites)
 		}
 		if generic {
 			defer c.a.Bind(join)
@@ -1420,14 +1422,27 @@ func (c *compiler) superGuards(t *ssa.CallSite, x *ssa.Value, guard func(amd64.C
 // arrow's this into what it captured. Anything else goes to slow, where Go
 // makes it. It uses every scratch register.
 func (c *compiler) closureTake(v *ssa.Value, site *ssa.CallSite, slow amd64.Label) {
+	marked, done := c.a.NewLabel(), c.a.NewLabel()
 	c.movImm(scratchA, c.enc.WriteBarrier)
 	c.a.LoadU8(scratchA, scratchA, 0)
 	c.a.Op(amd64.Test, scratchA, scratchA, false)
-	c.a.Jcc(amd64.CondNE, slow)
+	if c.enc.StoreRef == 0 {
+		c.a.Jcc(amd64.CondNE, slow)
+	} else {
+		c.a.Jcc(amd64.CondNE, marked)
+	}
 	c.movImm(scratchA, uint64(site.Pool))
 	c.a.Load(scratchB, scratchA, abi.OffPoolCount)
 	c.a.Op(amd64.Test, scratchB, scratchB, true)
 	c.a.Jcc(amd64.CondE, slow)
+	if c.enc.StoreRef != 0 {
+		c.cold = append(c.cold, func() {
+			c.a.Bind(marked)
+			c.closureTakeMarking(v, site, slow)
+			c.a.Jmp(done)
+		})
+		defer c.a.Bind(done)
+	}
 	c.poolTake(v, site)
 	// The object in scratchC: its function data, then its closure's
 	// captured bindings' cells.
@@ -1464,10 +1479,21 @@ func (c *compiler) closureTake(v *ssa.Value, site *ssa.CallSite, slow amd64.Labe
 // Go: two million a run in AWFY's Havlak, 260,000 in DeltaBlue. It uses
 // every scratch register.
 func (c *compiler) cellsTake(site *ssa.CallSite, slow amd64.Label) {
+	marked, done := c.a.NewLabel(), c.a.NewLabel()
 	c.movImm(scratchA, c.enc.WriteBarrier)
 	c.a.LoadU8(scratchA, scratchA, 0)
 	c.a.Op(amd64.Test, scratchA, scratchA, false)
-	c.a.Jcc(amd64.CondNE, slow)
+	if c.enc.StoreRef == 0 {
+		c.a.Jcc(amd64.CondNE, slow)
+	} else {
+		c.a.Jcc(amd64.CondNE, marked)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(marked)
+			c.cellsTakeMarking(site, slow)
+			c.a.Jmp(done)
+		})
+		defer c.a.Bind(done)
+	}
 	c.a.Load(scratchA, regCtx, abi.OffLive)
 	c.a.OpImm(amd64.Cmp, scratchA, abi.LiveCall, true)
 	c.a.Jcc(amd64.CondNE, slow)
@@ -1499,6 +1525,90 @@ func (c *compiler) cellsTake(site *ssa.CallSite, slow amd64.Label) {
 	}
 }
 
+// cellsTakeMarking is cellsTake while the collector marks: the pool's cell
+// cleared, and each cell's argument's pointer word written, with Go's
+// write barrier (refStore) -- the cells outlive the frame the arguments
+// come from, in the closures that capture them. The block is read again
+// from the context's Cells after each.
+func (c *compiler) cellsTakeMarking(site *ssa.CallSite, slow amd64.Label) {
+	c.a.Load(scratchA, regCtx, abi.OffLive)
+	c.a.OpImm(amd64.Cmp, scratchA, abi.LiveCall, true)
+	c.a.Jcc(amd64.CondNE, slow)
+	c.movImm(scratchA, uint64(site.Pool))
+	c.a.Load(scratchB, scratchA, abi.OffPoolCount)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	c.a.Jcc(amd64.CondE, slow)
+	c.a.OpImm(amd64.Sub, scratchB, 1, true)
+	c.a.Store(scratchA, abi.OffPoolCount, scratchB)
+	c.a.ShiftImm(amd64.Shl, scratchB, 3, true)
+	c.a.Op(amd64.Add, scratchB, scratchA, true)
+	c.a.Load(scratchC, scratchB, abi.OffPoolObjects)
+	c.a.Store(regCtx, abi.OffCells, scratchC)
+	c.a.Lea(scratchA, scratchB, abi.OffPoolObjects)
+	c.movImm(scratchC, 0)
+	c.refStore()
+	vs, n := c.enc.ValueSize, int32(len(site.Captures))
+	for k, x := range site.Captures {
+		at := 8*n + int32(k)*c.enc.UpvalueSize + c.enc.UpvalueClosed
+		c.a.Load(scratchB, regCtx, abi.OffCells)
+		if x&1 == 0 {
+			c.storeImm(scratchB, at+c.enc.NumOffset, c.enc.Undefined, scratchA)
+			c.storeImm(scratchB, at+c.enc.RefOffset, 0, scratchA)
+			continue
+		}
+		slot := x >> 1
+		c.a.Load(scratchA, regLocals, slot*vs+c.enc.NumOffset)
+		c.a.Store(scratchB, at+c.enc.NumOffset, scratchA)
+		c.a.Lea(scratchA, scratchB, at+c.enc.RefOffset)
+		c.a.Load(scratchC, regLocals, slot*vs+c.enc.RefOffset)
+		c.refStore()
+	}
+}
+
+// closureTakeMarking is closureTake while the collector marks: the pool's
+// cell cleared, and each cell and an arrow's this written into what the
+// closure keeps, with Go's write barrier (refStore) -- the closure outlives
+// the context they come from. What refStore keeps in no register is read
+// again from where it was written: the closure from the call's keep cell.
+func (c *compiler) closureTakeMarking(v *ssa.Value, site *ssa.CallSite, slow amd64.Label) {
+	at := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	c.movImm(scratchA, uint64(site.Pool))
+	c.a.Load(scratchB, scratchA, abi.OffPoolCount)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	c.a.Jcc(amd64.CondE, slow)
+	c.poolTakeMarking(v, site)
+	// The function's data, from the object in the keep cell, into scratchC.
+	data := func() {
+		c.a.Load(scratchC, regCtx, at+c.enc.RefOffset)
+		c.a.Load(scratchB, scratchC, c.enc.ObjectExt)
+		c.a.Load(scratchC, scratchB, c.enc.ObjectData+8)
+	}
+	for k, x := range site.Captures {
+		base := abi.OffUpvalues
+		if x&1 != 0 {
+			base = abi.OffCells
+		}
+		data()
+		c.a.Load(scratchB, scratchC, c.enc.FuncClosure)
+		c.a.Load(scratchB, scratchB, c.enc.ClosureUpvalues)
+		c.a.Lea(scratchA, scratchB, int32(k)*8)
+		c.a.Load(scratchC, regCtx, base)
+		c.a.Load(scratchC, scratchC, (x>>1)*8)
+		c.refStore()
+	}
+	if site.LexThis {
+		data()
+		c.a.Load(scratchB, scratchC, c.enc.FuncExtra)
+		c.a.Load(scratchA, regCtx, abi.OffThis+c.enc.NumOffset)
+		c.a.Store(scratchB, c.enc.ExtraLexThis+c.enc.NumOffset, scratchA)
+		c.a.Lea(scratchA, scratchB, c.enc.ExtraLexThis+c.enc.RefOffset)
+		c.a.Load(scratchC, regCtx, abi.OffThis+c.enc.RefOffset)
+		c.refStore()
+	}
+	c.movImm(scratchA, c.enc.Object)
+	c.setG(v, scratchA)
+}
+
 // iterStep makes call v, a loop's step (ssa.CallSite's Step), where the
 // cursor's state, read in place (abi.Encoding's IterState), walks an array
 // whose next element is within its dense elements and no hole, and the
@@ -1511,10 +1621,6 @@ func (c *compiler) iterStep(v *ssa.Value, slow amd64.Label) {
 	c.pointerWord(x, c.gpr(x, scratchA))
 	c.a.Op(amd64.Test, scratchB, scratchB, true)
 	c.a.Jcc(amd64.CondE, slow)
-	c.movImm(scratchC, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchC, scratchC, 0)
-	c.a.Op(amd64.Test, scratchC, scratchC, false)
-	c.a.Jcc(amd64.CondNE, slow)
 	c.objectData(scratchB, scratchB, scratchC, c.enc.IterState, func(cond amd64.Cond) { c.a.Jcc(cond, slow) })
 	c.a.LoadU8(scratchC, scratchB, c.enc.IterDone)
 	c.a.Op(amd64.Test, scratchC, scratchC, false)
@@ -2060,6 +2166,22 @@ func (c *compiler) markingTake(v *ssa.Value, site *ssa.CallSite) (amd64.Label, b
 	c.movImm(scratchB, c.enc.WriteBarrier)
 	c.a.LoadU8(scratchB, scratchB, 0)
 	c.a.Op(amd64.Test, scratchB, scratchB, false)
+	if c.enc.StoreRef != 0 {
+		// Natively: the pool's cell cleared with Go's write barrier
+		// (poolTakeMarking), an array literal's elements stored with it
+		// (goStore).
+		marked, join := c.a.NewLabel(), c.a.NewLabel()
+		c.a.Jcc(amd64.CondNE, marked)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(marked)
+			c.poolTakeMarking(v, site)
+			if site.Literal && site.Argc != 0 {
+				c.arrayElements(v, true)
+			}
+			c.a.Jmp(join)
+		})
+		return join, true
+	}
 	if c.enc.CallGo == 0 {
 		c.markingExit(v)
 		return 0, false
@@ -2235,6 +2357,29 @@ func (c *compiler) pop(v *ssa.Value) {
 	c.a.Load(scratchB, scratchA, c.enc.NumOffset)
 	c.a.Store(regCtx, at+c.enc.NumOffset, scratchB)
 	c.storeImm(scratchA, c.enc.NumOffset, c.enc.Undefined, scratchC)
+	if c.enc.StoreRef != 0 {
+		// While the collector marks, the element's pointer word cleared
+		// with Go's write barrier (refStore), which shades the value
+		// popped: the keep cell it goes to may be what the collector has
+		// scanned, the array what it has not.
+		marked, done := c.a.NewLabel(), c.a.NewLabel()
+		c.movImm(scratchC, c.enc.WriteBarrier)
+		c.a.LoadU8(scratchC, scratchC, 0)
+		c.a.Op(amd64.Test, scratchC, scratchC, false)
+		c.a.Jcc(amd64.CondNE, marked)
+		c.storeImm(scratchA, c.enc.RefOffset, 0, scratchC)
+		c.a.Bind(done)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(marked)
+			c.a.OpImm(amd64.Add, scratchA, c.enc.RefOffset, true)
+			c.movImm(scratchC, 0)
+			c.refStore()
+			c.a.Load(scratchB, regCtx, at+c.enc.NumOffset)
+			c.a.Jmp(done)
+		})
+		c.setG(v, scratchB)
+		return
+	}
 	c.storeImm(scratchA, c.enc.RefOffset, 0, scratchC)
 	c.setG(v, scratchB)
 }
@@ -2284,12 +2429,33 @@ func (c *compiler) push(v *ssa.Value) {
 	c.a.Store(scratchA, c.enc.NumOffset, scratchC)
 	c.a.MovQFromX(scratchC, xScratch1)
 	c.a.Store(scratchA, c.enc.RefOffset, scratchC)
+	c.a.MovQToX(xScratch2, scratchA)
 	// The result: the length, a number.
 	c.a.Cvtsi2sd(xScratch0, scratchB, true)
 	c.a.MovQFromX(scratchA, xScratch0)
 	at := abi.OffKeep + int32(v.Index)*vs
 	c.a.Store(regCtx, at+c.enc.NumOffset, scratchA)
 	c.storeImm(regCtx, at+c.enc.RefOffset, 0, scratchB)
+	if c.enc.StoreRef != 0 {
+		// While the collector marks, the element's pointer word stored
+		// again with Go's write barrier (refStore), which shades it: the
+		// array outlives where the value came from.
+		marked, done := c.a.NewLabel(), c.a.NewLabel()
+		c.movImm(scratchB, c.enc.WriteBarrier)
+		c.a.LoadU8(scratchB, scratchB, 0)
+		c.a.Op(amd64.Test, scratchB, scratchB, false)
+		c.a.Jcc(amd64.CondNE, marked)
+		c.a.Bind(done)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(marked)
+			c.a.MovQFromX(scratchA, xScratch2)
+			c.a.OpImm(amd64.Add, scratchA, c.enc.RefOffset, true)
+			c.a.MovQFromX(scratchC, xScratch1)
+			c.refStore()
+			c.a.Load(scratchA, regCtx, at+c.enc.NumOffset)
+			c.a.Jmp(done)
+		})
+	}
 	c.setG(v, scratchA)
 }
 
@@ -2402,6 +2568,69 @@ func (c *compiler) poolTake(v *ssa.Value, site *ssa.CallSite) {
 	c.movImm(scratchA, c.enc.Object)
 	c.a.Store(regCtx, at+c.enc.NumOffset, scratchA)
 	c.setG(v, scratchA)
+}
+
+// poolTakeMarking is poolTake while the collector marks: the pool's cell
+// cleared with Go's write barrier (refStore), which shades the object it
+// overwrites -- the pool may be what the collector has not scanned yet,
+// the keep cell the object goes to what it has.
+func (c *compiler) poolTakeMarking(v *ssa.Value, site *ssa.CallSite) {
+	at := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	c.movImm(scratchA, uint64(site.Pool))
+	c.a.Load(scratchB, scratchA, abi.OffPoolCount)
+	c.a.OpImm(amd64.Sub, scratchB, 1, true)
+	c.a.Store(scratchA, abi.OffPoolCount, scratchB)
+	c.a.ShiftImm(amd64.Shl, scratchB, 3, true)
+	c.a.Op(amd64.Add, scratchB, scratchA, true)
+	c.a.Load(scratchC, scratchB, abi.OffPoolObjects)
+	c.a.Store(regCtx, at+c.enc.RefOffset, scratchC)
+	c.storeImm(regCtx, at+c.enc.NumOffset, c.enc.Object, scratchA)
+	c.a.Lea(scratchA, scratchB, abi.OffPoolObjects)
+	c.movImm(scratchC, 0)
+	c.refStore()
+	c.movImm(scratchA, c.enc.Object)
+	c.setG(v, scratchA)
+}
+
+// poolShade has, while the collector marks, the next object of each pool
+// a call of sites takes its receiver from (CallSite's Pool) shaded: stored
+// where it is with Go's write barrier (refStore), which shades what it
+// overwrites, the object itself -- the call's setup then takes it, its
+// cell cleared, with none. It is made before anything else of the call,
+// nothing in a scratch register.
+func (c *compiler) poolShade(sites []*ssa.CallSite) {
+	var pools []uintptr
+	for _, t := range sites {
+		if t.Pool != 0 && !slices.Contains(pools, t.Pool) {
+			pools = append(pools, t.Pool)
+		}
+	}
+	if len(pools) == 0 {
+		return
+	}
+	marked, back := c.a.NewLabel(), c.a.NewLabel()
+	c.movImm(scratchB, c.enc.WriteBarrier)
+	c.a.LoadU8(scratchB, scratchB, 0)
+	c.a.Op(amd64.Test, scratchB, scratchB, false)
+	c.a.Jcc(amd64.CondNE, marked)
+	c.a.Bind(back)
+	c.cold = append(c.cold, func() {
+		c.a.Bind(marked)
+		for _, pool := range pools {
+			empty := c.a.NewLabel()
+			c.movImm(scratchA, uint64(pool))
+			c.a.Load(scratchB, scratchA, abi.OffPoolCount)
+			c.a.Op(amd64.Test, scratchB, scratchB, true)
+			c.a.Jcc(amd64.CondE, empty)
+			c.a.ShiftImm(amd64.Shl, scratchB, 3, true)
+			c.a.Op(amd64.Add, scratchA, scratchB, true)
+			c.a.Lea(scratchA, scratchA, abi.OffPoolObjects-8)
+			c.a.Load(scratchC, scratchA, 0)
+			c.refStore()
+			c.a.Bind(empty)
+		}
+		c.a.Jmp(back)
+	})
 }
 
 // lengthGuards checks a `new Array(n)` can take its array from its pool:

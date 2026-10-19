@@ -322,10 +322,14 @@ callee's frame, which the next call overwrites: while the collector
 marks, its pointer word goes through `storeRef`, after a return or after
 Go finished a callee that left native code (`RetValue`). So Go resumes
 native callers, and they call on natively, whether the collector marks
-or not. What still moves a pointer into what outlives it with no barrier
-is made by a call of Go while the collector marks: a construction whose
-receiver native code takes from a pool, a `push` or a `pop` (mir's
-markingCalls), a pool's object or a literal (markingTake).
+or not. What moves a pointer into what outlives it does so through
+`storeRef` while the collector marks: an object taken from a pool has its
+pool's cell cleared through it, which shades the object, or, a
+construction's receiver, is shaded in its pool before the call takes it;
+what native code then writes into it -- an array literal's elements, a
+closure's captured cells, the arguments in an entry's cells -- and a
+value pushed or popped go through it too. A loop's step copies an
+array's element with no barrier: the element stays in the array.
 
 ## The execution boundary
 

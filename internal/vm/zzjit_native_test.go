@@ -4921,15 +4921,12 @@ func TestJITSSAKeepsWhileMarking(t *testing.T) {
 	}
 }
 
-// A native stretch the collector's marking may have ended -- here at a
-// construction with a receiver from a pool and more operands than a call
-// of Go passes (abi.MaxGoArgs), which native code leaves to Go while it
-// marks (markingCall) -- is not
-// judged by the profit check (jitSSAProfit): code that left at every
-// iteration of a long marking had Go stop entering it for good
-// (entrySlow), nothing learned from those exits to compile it again for.
-// CI met it at two CPUs, at a literal, which Go now takes from native code
-// instead.
+// A construction with a receiver from a pool and more operands than a
+// call of Go passes (abi.MaxGoArgs) is made natively while the collector
+// marks, as any is: it had left native code then (markingExit), every
+// iteration of a long marking, which the profit check (jitSSAProfit) was
+// not to judge -- code judged on such exits had Go stop entering it for
+// good (entrySlow), as CI met at two CPUs. None leaves now.
 func TestJITSSAMarkingExitsNotJudged(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -4951,8 +4948,8 @@ func TestJITSSAMarkingExitsNotJudged(t *testing.T) {
 		}
 	}
 	cl := r.global.getOwn(r.atoms.intern("lit")).value().Object().fn().closure
-	if e := r.jit.cache[weak.Make(cl.fn)]; e == nil || e.ssa == nil || e.entrySlow || e.ssaStats.hosts <= jitSSAProbe || len(e.nativeCalls) == 0 || r.jit.markingExits <= jitSSAProbe {
-		t.Fatalf("lit, leaving at its call while the collector marked (%d exits), was judged: %+v", r.jit.markingExits, e)
+	if e := r.jit.cache[weak.Make(cl.fn)]; e == nil || e.ssa == nil || e.entrySlow || len(e.nativeCalls) == 0 || r.jit.markingExits != 0 {
+		t.Fatalf("lit's constructions while the collector marked: %d exits for it: %+v", r.jit.markingExits, e)
 	}
 }
 
@@ -7548,14 +7545,11 @@ func TestJITSSAMarkingUnderGC(t *testing.T) {
 	}
 }
 
-// An exit the collector's marking made in a native callee -- a
-// construction with a receiver from a pool and more operands than a call
-// of Go passes, which leaves while it marks --
-// ends its caller's run for the marking, as one in the caller's own code
-// would (jitSSAProfit): it is not judged, and it is counted. Here marking
-// begins in mid, called natively from sum, at its call of parseInt; its
-// call of g leaves, at mid's level; Go finishes mid, whose code it enters,
-// and its next call of g leaves too: two exits.
+// No exit the collector's marking makes in a native callee: here marking
+// begins in mid, called natively from sum, at its call of parseInt, and
+// its constructions of G -- a receiver from a pool, more operands than a
+// call of Go passes -- which had each left native code then, at mid's
+// level (two exits, unjudged, counted), are made natively.
 func TestJITSSAMarkingExitInNativeCallee(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -7590,8 +7584,8 @@ func TestJITSSAMarkingExitInNativeCallee(t *testing.T) {
 	if err != nil || v.Number() != wv.Number() {
 		t.Fatalf("sum(300) = %v, %v; interpreter %v", v, err, wv)
 	}
-	if n := r.jit.markingExits - exits; n != 2 {
-		t.Fatalf("%d exits for the collector's marking counted, not 2", n)
+	if n := r.jit.markingExits - exits; n != 0 {
+		t.Fatalf("%d exits for the collector's marking counted, not 0", n)
 	}
 }
 
@@ -7625,7 +7619,7 @@ func TestJITSSANoExitsWhileMarking(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	jitMarkingForTest(t)
+	marking := jitMarkingForTest(t)
 	jitClobberStoresForTest(t)
 	for _, source := range jitMarkingSources {
 		want := New(Config{})
@@ -7640,18 +7634,31 @@ func TestJITSSANoExitsWhileMarking(t *testing.T) {
 			t.Fatal(err)
 		}
 		// Rounds enough for f to settle, each deoptimization compiled again
-		// for once a round has spent its budget (jitTierUp).
+		// for once a round has spent its budget (jitTierUp); the last but
+		// one with the collector idle, which the last, marking, leaves
+		// native code no more often than -- a pool run out leaves at its
+		// construction either way, for Go to fill it.
+		idle := uint64(0)
 		for i := 0; i < 10; i++ {
-			var hosts, made uint64
+			*marking = 1
+			if i == 8 {
+				*marking = 0
+			}
+			var hosts uint64
 			if r.jit != nil {
-				hosts, made = r.jit.hosts, r.jit.goCalls
+				hosts = r.jit.hosts
 			}
 			v, err := r.Run(compileForTest(t, `f(300)`))
 			if err != nil || v.Number() != wv.Number() {
 				t.Fatalf("round %d: JIT %v, %v; interpreter %v; %s", i, v, err, wv, source)
 			}
-			if i == 9 && (r.jit.hosts != hosts || r.jit.goCalls-made < 300) {
-				t.Fatalf("while the collector marked, %d exits and %d calls of Go; %s", r.jit.hosts-hosts, r.jit.goCalls-made, source)
+			switch i {
+			case 8:
+				idle = r.jit.hosts - hosts
+			case 9:
+				if r.jit.hosts-hosts > idle {
+					t.Fatalf("while the collector marked, %d exits, %d with it idle; %s", r.jit.hosts-hosts, idle, source)
+				}
 			}
 		}
 	}

@@ -293,15 +293,17 @@ func TestJITDerivedNativeUnwind(t *testing.T) {
 }
 
 // TestJITDerivedNativeConstruct's constructions, the collector marking:
-// Go makes each, as it makes any native call that would store pointers
-// without a write barrier, entering the constructor's code -- compiled for
-// native callers, judged slow at Go's entries -- as native code would have
-// (jitMarkingCallee); every answer is the interpreter's.
+// native, as when it does not mark, each receiver shaded in its pool
+// before the call takes it (mir's poolShade), every register native code
+// may keep given junk across the stores the barrier makes
+// (jit.StoreRefClobber); every answer is the interpreter's. Go had made
+// each, entering the constructor's code (jitMarkingCallee).
 func TestJITDerivedNativeMarking(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
 	jitMarkingForTest(t)
+	jitClobberStoresForTest(t)
 	setup := `
 		class A { constructor(x) { this.x = x } }
 		class B extends A { constructor(x, y) { super(x); this.y = y } }
@@ -314,8 +316,8 @@ func TestJITDerivedNativeMarking(t *testing.T) {
 	}
 	r := jitAgreesForTest(t, setup, rounds...)
 	for _, name := range []string{"B", "C"} {
-		if e := jitDerivedForTest(t, r, name); e.ssa == nil || e.ssaStats.marked == 0 {
-			t.Errorf("%s's code was not entered for the constructions Go made while marking: code %v, slow %v, callee %v, %+v", name, e.ssa != nil, e.entrySlow, e.ssaCallee, e.ssaStats)
+		if e := jitDerivedForTest(t, r, name); e.ssa == nil || jitDerivedCalls(e) == 0 || e.ssaStats.marked != 0 {
+			t.Errorf("%s was not constructed natively while the collector marked: code %v, slow %v, callee %v, %+v", name, e.ssa != nil, e.entrySlow, e.ssaCallee, e.ssaStats)
 		}
 	}
 }
