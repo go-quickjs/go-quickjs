@@ -5286,7 +5286,10 @@ func (c *compiler) elemStore(v *ssa.Value) {
 	}
 	fail := func(cond amd64.Cond) { c.a.Jcc(cond, slow) }
 	typed := c.a.NewLabel()
-	c.typedArray(v.Args[0], typed)
+	fresh := v.Index == ssa.StoreFresh && c.enc.ValueSize == 16
+	if !fresh {
+		c.typedArray(v.Args[0], typed)
+	}
 	// The value's pointer word, as propStore finds it, in xScratch2.
 	var w amd64.Reg
 	if remat(x) {
@@ -5309,7 +5312,11 @@ func (c *compiler) elemStore(v *ssa.Value) {
 	// The element's cell, in scratchA.
 	c.index(v.Args[1], fail)
 	found := c.a.NewLabel()
-	c.storeCell(v.Args[0], !checked, fail, found)
+	if fresh {
+		c.freshCell(v.Args[0], fail)
+	} else {
+		c.storeCell(v.Args[0], !checked, fail, found)
+	}
 	c.a.Bind(found)
 	for _, s := range v.Args[3:] {
 		// A live value read from this cell keeps its pointer word there:
@@ -5338,22 +5345,24 @@ func (c *compiler) elemStore(v *ssa.Value) {
 	c.a.Store(scratchA, c.enc.NumOffset, c.gpr(x, scratchB))
 	c.a.Store(scratchA, c.enc.RefOffset, scratchC)
 	c.a.Bind(done)
-	c.cold = append(c.cold, func() {
-		// A typed array's element: a number stored natively, converted to
-		// its type, as OpElemWrite stores one.
-		c.a.Bind(typed)
-		var tw amd64.Reg
-		if remat(x) {
-			c.materialize(x, scratchA)
-			tw = scratchA
-		} else {
-			tw = c.gpr(x, scratchA)
-		}
-		c.cmpWord(tw, abi.NumberLimit)
-		c.a.Jcc(amd64.CondAE, slow)
-		c.a.MovQToX(xScratch2, tw)
-		c.typedWrite(v, done, slow, func() amd64.XReg { return xScratch2 })
-	})
+	if !fresh {
+		c.cold = append(c.cold, func() {
+			// A typed array's element: a number stored natively, converted
+			// to its type, as OpElemWrite stores one.
+			c.a.Bind(typed)
+			var tw amd64.Reg
+			if remat(x) {
+				c.materialize(x, scratchA)
+				tw = scratchA
+			} else {
+				tw = c.gpr(x, scratchA)
+			}
+			c.cmpWord(tw, abi.NumberLimit)
+			c.a.Jcc(amd64.CondAE, slow)
+			c.a.MovQToX(xScratch2, tw)
+			c.typedWrite(v, done, slow, func() amd64.XReg { return xScratch2 })
+		})
+	}
 	c.cold = append(c.cold, func() {
 		c.a.Bind(viaGo)
 		c.valueStore()
@@ -5389,7 +5398,7 @@ func (c *compiler) elemStore(v *ssa.Value) {
 		c.movImm(scratchB, 0)
 		c.a.Bind(have)
 		c.a.Store(regCtx, abi.OffGoArgs+2*size+c.enc.RefOffset, scratchB)
-		c.goSaving(uint64(ssa.GoElemStore), &stub)
+		c.goSaving(uint64(ssa.GoElemStore)|uint64(v.Index&ssa.StoreFresh)<<abi.GoOpIndexShift, &stub)
 		c.a.Jmp(done)
 	})
 }
@@ -5585,6 +5594,28 @@ func (c *compiler) storeCell(array *ssa.Value, appends bool, fail func(amd64.Con
 		c.a.MovQFromX(scratchA, xScratch0)
 		c.a.Jmp(found)
 	})
+}
+
+// freshCell is storeCell for a store into an array a loop made
+// (ssa.StoreFresh), the index in scratchA: at the length, where the array
+// has room, the length one more and the cell the one past the old last
+// element, in scratchA; anything else fails. Nothing else is checked: the
+// array is an Array no code but the loop's has, and the element is defined
+// there whatever its prototypes hold.
+func (c *compiler) freshCell(array *ssa.Value, fail func(amd64.Cond)) {
+	p := c.gpr(array, scratchC)
+	c.a.Load(scratchB, p, c.enc.ObjectElems+8)
+	c.a.Op(amd64.Cmp, scratchA, scratchB, true)
+	fail(amd64.CondNE)
+	c.a.Load(scratchB, p, c.enc.ObjectElems+16)
+	c.a.Op(amd64.Cmp, scratchA, scratchB, true)
+	fail(amd64.CondAE)
+	c.a.MovRR(scratchB, scratchA)
+	c.a.OpImm(amd64.Add, scratchB, 1, true)
+	c.a.Store(p, c.enc.ObjectElems+8, scratchB)
+	c.a.Load(scratchB, p, c.enc.ObjectElems)
+	c.a.ShiftImm(amd64.Shl, scratchA, 4, true)
+	c.a.Op(amd64.Add, scratchA, scratchB, true)
 }
 
 // guardFor is a guard of v's for code that may keep it: a jump to the stub

@@ -3116,6 +3116,9 @@ func jitHostCall(ctx *abi.Context) bool {
 	case ssa.GoElemStore:
 		// Any value, by its words, which its source keeps alive.
 		o := *(**Object)(unsafe.Pointer(&ctx.GoArgs[0].Ref))
+		if ctx.GoOp>>abi.GoOpIndexShift&ssa.StoreFresh != 0 {
+			return o != nil && jitAppendFresh(o, math.Float64frombits(ctx.GoArgs[1].Num), jitGoArg(ctx, 2))
+		}
 		return o != nil && jitStoreElem(o, math.Float64frombits(ctx.GoArgs[1].Num), jitGoArg(ctx, 2))
 	case ssa.GoEqual:
 		// == or ===, what native code does not compare (OpEqTagged): no
@@ -4137,6 +4140,18 @@ func jitStoreElem(o *Object, n float64, v Value) bool {
 	// What setValueProp would do: setElem, unless the store is so far past
 	// the end that the element is to be a property of its own.
 	return o.setElem(i, v)
+}
+
+// jitAppendFresh appends v to o, an array a loop of map's or filter's made
+// (ssa.StoreFresh), at n, its length, as CreateDataProperty defines it --
+// as Go's arrayOut pushes it -- whatever its prototypes hold: the array is
+// an Array no code but the loop's has. It refuses any other store.
+func jitAppendFresh(o *Object, n float64, v Value) bool {
+	if o.class != ClassArray || o.flags&objHasSparseElements != 0 || n != float64(len(o.elemsOf())) {
+		return false
+	}
+	o.extOf().elems = append(o.elemsOf(), v)
+	return true
 }
 
 // jitTypedRead reads element n of the typed array o where native code did

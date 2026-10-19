@@ -396,7 +396,7 @@ func (b *builder) forEachCall(blk *Block, pc int, fp forEachPlan) {
 			// Appended at the index, which is the array's length: the
 			// elements before it all appended.
 			st := state(body, 0)
-			at(body, st, OpElemStore, None, at(body, st, OpArrayOf, Ptr, out), k, v)
+			at(body, st, OpElemStore, None, at(body, st, OpArrayOf, Ptr, out), k, v).Index = StoreFresh
 		default:
 			test := at(body, state(body, 0), OpTruth, Bool, v)
 			if kind == abi.LoopEvery {
@@ -409,7 +409,7 @@ func (b *builder) forEachCall(blk *Block, pc int, fp forEachPlan) {
 				// The element appended at the array's length.
 				st := state(yes, 0)
 				to := at(yes, st, OpLength, Float64, out)
-				at(yes, st, OpElemStore, None, at(yes, st, OpArrayOf, Ptr, out), to, b.read(base+loopElem, yes))
+				at(yes, st, OpElemStore, None, at(yes, st, OpArrayOf, Ptr, out), to, b.read(base+loopElem, yes)).Index = StoreFresh
 			case abi.LoopSome:
 				b.write(dest, yes, constant(yes, ir.Bool(true)))
 			case abi.LoopEvery:
@@ -828,7 +828,9 @@ type GoOp uint8
 // one; such a write exits instead.
 //
 // GoElemStore is GoElemWrite for any value (OpElemStore): its third
-// operand is the value, both its words.
+// operand is the value, both its words. One into an array a loop made
+// (StoreFresh, the operation's index 1) Go appends at the array's length
+// as CreateDataProperty defines it, whatever the prototypes hold.
 //
 // GoTypedRead is a typed array's element native code does not read
 // (OpElemRead): before Go has looked at the view, or of a type native code

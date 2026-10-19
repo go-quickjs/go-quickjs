@@ -147,3 +147,43 @@ func TestJITMapAppends(t *testing.T) {
 		t.Errorf("10 calls of mapBig called Go %d times", calls)
 	}
 }
+
+// map's and filter's stores into the array the loop made define their
+// elements, as CreateDataProperty does, whatever Array.prototype holds
+// (ssa.StoreFresh): a setter at an index there is not called, and the
+// loops go on natively past it. Each answer is the interpreter's.
+func TestJITMapDefinesPastSetters(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		var hits = 0, big = []
+		for (let i = 0; i < 40; i++) big.push(i)
+		function mapped() { const r = big.map((x) => ({ x })); return r.length + ':' + Object.hasOwn(r, 2) + ':' + r[2].x }
+		function kept() { const r = big.filter((x) => x % 2 === 0); return r.length + ':' + Object.hasOwn(r, 2) + ':' + r[2] }
+		function drive(n) { let r; for (let i = 0; i < n; i++) r = mapped() + ' ' + kept(); return r }`
+	r := jitAgreesForTest(t, setup, `drive(30)`, `drive(30)`, `drive(30)`,
+		`(Object.defineProperty(Array.prototype, 2, { set(v) { hits++ }, get() { return 'p' }, configurable: true }), 'set')`)
+	var entries []*jitEntry
+	for k, x := range r.jit.cache {
+		if fn := k.Value(); fn != nil && (fn.Name == "mapped" || fn.Name == "kept") && x.ssa != nil && x.loops {
+			entries = append(entries, x)
+		}
+	}
+	if len(entries) != 2 {
+		t.Fatalf("%d of mapped and kept make loops", len(entries))
+	}
+	before := r.jit.loopsFinished
+	v, err := r.Run(compileForTest(t, `drive(30) + ':' + hits`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := v.String().Go(), "40:true:2 20:true:4:0"; got != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
+	// The first calls' code compiled before the setter, whose prototypes'
+	// shapes it checks, compiled again.
+	if n := r.jit.loopsFinished - before; n > 4 {
+		t.Errorf("Go finished %d loops past a setter of Array.prototype's", n)
+	}
+}

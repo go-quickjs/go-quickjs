@@ -4800,7 +4800,10 @@ func (c *a64Compiler) elemStore(v *ssa.Value) {
 	}
 	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
 	typed := c.a.NewLabel()
-	c.typedArray(v.Args[0], typed)
+	fresh := v.Index == ssa.StoreFresh && c.enc.ValueSize == 16
+	if !fresh {
+		c.typedArray(v.Args[0], typed)
+	}
 	words := func() {
 		var w arm64.Reg
 		if remat(x) {
@@ -4825,7 +4828,11 @@ func (c *a64Compiler) elemStore(v *ssa.Value) {
 	c.a.MovRR(a64D, a64B)
 	c.index(v.Args[1], fail)
 	found := c.a.NewLabel()
-	c.storeCell(v.Args[0], !checked, fail, found)
+	if fresh {
+		c.freshCell(v.Args[0], fail)
+	} else {
+		c.storeCell(v.Args[0], !checked, fail, found)
+	}
 	c.a.Bind(found)
 	for _, s := range v.Args[3:] {
 		// As amd64's: only a pointer word there is lost.
@@ -4850,22 +4857,24 @@ func (c *a64Compiler) elemStore(v *ssa.Value) {
 	c.a.Store(a64A, c.enc.NumOffset, c.gpr(x, a64B))
 	c.a.Store(a64A, c.enc.RefOffset, a64C)
 	c.a.Bind(done)
-	c.cold = append(c.cold, func() {
-		// A typed array's element: a number stored natively, as amd64's.
-		c.a.Bind(typed)
-		var tw arm64.Reg
-		if remat(x) {
-			c.materialize(x, a64A)
-			tw = a64A
-		} else {
-			tw = c.gpr(x, a64A)
-		}
-		c.movImm(a64B, abi.NumberLimit)
-		c.a.Cmp(tw, a64B, true)
-		c.a.BCond(arm64.HS, slow)
-		c.a.FMovToF(a64F2, tw)
-		c.typedWrite(v, done, slow, func() arm64.FReg { return a64F2 })
-	})
+	if !fresh {
+		c.cold = append(c.cold, func() {
+			// A typed array's element: a number stored natively, as amd64's.
+			c.a.Bind(typed)
+			var tw arm64.Reg
+			if remat(x) {
+				c.materialize(x, a64A)
+				tw = a64A
+			} else {
+				tw = c.gpr(x, a64A)
+			}
+			c.movImm(a64B, abi.NumberLimit)
+			c.a.Cmp(tw, a64B, true)
+			c.a.BCond(arm64.HS, slow)
+			c.a.FMovToF(a64F2, tw)
+			c.typedWrite(v, done, slow, func() arm64.FReg { return a64F2 })
+		})
+	}
 	c.cold = append(c.cold, func() {
 		c.a.Bind(viaGo)
 		c.valueStore()
@@ -4884,7 +4893,7 @@ func (c *a64Compiler) elemStore(v *ssa.Value) {
 		words()
 		c.a.Store(a64Ctx, abi.OffGoArgs+2*size+c.enc.RefOffset, a64B)
 		c.a.Store(a64Ctx, abi.OffGoArgs+2*size+c.enc.NumOffset, c.gpr(x, a64A))
-		c.goSaving(uint64(ssa.GoElemStore), &stub)
+		c.goSaving(uint64(ssa.GoElemStore)|uint64(v.Index&ssa.StoreFresh)<<abi.GoOpIndexShift, &stub)
 		c.a.B(done)
 	})
 }
@@ -5062,6 +5071,24 @@ func (c *a64Compiler) storeCell(array *ssa.Value, appends bool, fail func(arm64.
 		c.a.FMovFromF(a64A, a64F1)
 		c.a.B(found)
 	})
+}
+
+// freshCell is amd64's: storeCell for a store into an array a loop made
+// (ssa.StoreFresh), at its length where it has room, the cell's address in
+// A. It keeps D.
+func (c *a64Compiler) freshCell(array *ssa.Value, fail func(arm64.Cond)) {
+	p := c.gpr(array, a64C)
+	c.a.Load(a64B, p, c.enc.ObjectElems+8)
+	c.a.Cmp(a64A, a64B, true)
+	fail(arm64.NE)
+	c.a.Load(a64B, p, c.enc.ObjectElems+16)
+	c.a.Cmp(a64A, a64B, true)
+	fail(arm64.HS)
+	c.a.AddImm(a64B, a64A, 1, true)
+	c.a.Store(p, c.enc.ObjectElems+8, a64B)
+	c.a.Load(a64B, p, c.enc.ObjectElems)
+	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
+	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
 }
 
 // numberCell checks the word at A's cell is a number, into B.

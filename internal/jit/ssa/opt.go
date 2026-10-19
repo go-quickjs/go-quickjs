@@ -199,7 +199,7 @@ func simplify(f *Func, v *Value) *Value {
 		// what it leaves to Go may write over a reference's cell.
 		if x := arg(2); x.Op == OpBoxF64 {
 			array, key := arg(0), arg(1)
-			v.Op, v.Args = OpElemWrite, f.refsOf(3)
+			v.Op, v.Args, v.Index = OpElemWrite, f.refsOf(3), 0
 			v.Args[0], v.Args[1], v.Args[2] = array, key, x.Args[0]
 		}
 		return nil

@@ -419,6 +419,14 @@ func (o Op) String() string {
 // forEach or a reduce, whose callback a hole skips.
 const ElemPresent = 1
 
+// StoreFresh is OpElemStore's Index for a store into an array a loop made
+// (forEachCall's map and filter), at its length: an Array of the realm's,
+// extensible, dense, its length writable, that no code but the loop's
+// has, so that the element is defined at its length as CreateDataProperty
+// defines it, whatever the prototypes hold -- natively where the array has
+// room, nothing else checked; by Go otherwise, which grows it (GoElemStore).
+const StoreFresh = 1
+
 // OpSubstringChar's Aux: SubstrLength for String.prototype.substr, whose
 // second argument is a length, and SubstrAt for String.prototype.charAt,
 // which has none; 0 for substring and slice, whose second is an end.
