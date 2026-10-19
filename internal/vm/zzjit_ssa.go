@@ -2623,9 +2623,9 @@ type jitInline struct {
 	// String.fromCharCode (jitFromCharCodes), substring one of
 	// String.prototype's substring, slice, substr or charAt (jitSubstrings).
 	push, pop, charCode, fromChar, substring bool
-	// forEach marks a call of Array.prototype.forEach on an array
-	// (jitForEaches), cb the closure of the callback it was given and cbObj
-	// its function object.
+	// forEach marks a call of Array.prototype.forEach, or reduce, on an
+	// array (jitForEaches), cb the closure of the callback it was given and
+	// cbObj its function object.
 	forEach bool
 	cb      *closure
 	cbObj   *Object
@@ -5792,17 +5792,17 @@ func (r *Runtime) jitCharCodes(sp int, in bytecode.Instr) *Object {
 	return callee.Object()
 }
 
-// jitForEaches is Array.prototype.forEach, the realm's own, if a method
-// call at the top of the stack calls it on an array with one argument, or
-// two, the first a closure of the realm's, and that closure and its
-// function object; or nil.
+// jitForEaches is Array.prototype.forEach, or reduce, the realm's own, if a
+// method call at the top of the stack calls it on an array with one
+// argument, or two, the first a closure of the realm's, and that closure
+// and its function object; or nil.
 func (r *Runtime) jitForEaches(sp int, in bytecode.Instr) (*Object, *closure, *Object) {
 	argc := int(in.A)
-	if in.Op != bytecode.OpCallMethod || argc != 1 && argc != 2 || !r.jitForEach.IsObject() {
+	if in.Op != bytecode.OpCallMethod || argc != 1 && argc != 2 {
 		return nil, nil, nil
 	}
 	callee, recv, cb := r.stack[sp-argc-1], r.stack[sp-argc-2], r.stack[sp-argc]
-	if !callee.IsObject() || callee.Object() != r.jitForEach.Object() || r.plainArray(recv) == nil || !cb.IsObject() {
+	if !callee.IsObject() || r.jitLoopKind(callee.Object()) == 0 || r.plainArray(recv) == nil || !cb.IsObject() {
 		return nil, nil, nil
 	}
 	fd := cb.Object().fn()
@@ -5855,28 +5855,33 @@ func (r *Runtime) jitForEachSeen(e *jitEntry, fn *bytecode.Function, pc int, o *
 	}
 }
 
-// ForEach is ssa.ForEachFeedback's: the forEach the method call at pc has
-// made on an array (jitForEachSeen), its callback called natively as a
-// method call of three arguments -- the element, its index, the array --
-// by its code where closures of it were made anew (ByCode), as a call's
-// target is (closureCallSite). One whose callback native callers may not
-// call yet is Go's.
+// ForEach is ssa.ForEachFeedback's: the forEach, or reduce, the method call
+// at pc has made on an array (jitForEachSeen), its callback called natively
+// as a method call of three arguments -- the element, its index, the array
+// -- or, reduce's, four, the accumulator first, by its code where closures
+// of it were made anew (ByCode), as a call's target is (closureCallSite).
+// One whose callback native callers may not call yet is Go's.
 func (fb *jitFeedback) ForEach(pc int) (ssa.ForEachSite, bool) {
 	e := fb.e
 	if e == nil || fb.root != nil || fb.fwd != nil || fb.cl == nil || pc >= len(fb.fn.Code) || jitCallOp(fb.fn.Code[pc].Op) != bytecode.OpCallMethod {
 		return ssa.ForEachSite{}, false
 	}
 	for _, x := range jitTargets(e) {
-		if int(x.pc) != pc || !x.forEach || x.cb == nil || !fb.r.jitForEach.IsObject() || x.obj != fb.r.jitForEach.Object() {
+		kind := fb.r.jitLoopKind(x.obj)
+		if int(x.pc) != pc || !x.forEach || x.cb == nil || kind == 0 {
 			continue
 		}
 		cb := jitInline{pc: x.pc, cl: x.cb, obj: x.cbObj, byCode: x.byCode}
-		site, ok := fb.closureCallSite(pc, cb, bytecode.Instr{Op: bytecode.OpCallMethod, A: 3}, nil)
+		argc := uint32(3)
+		if kind == abi.LoopReduce {
+			argc = 4
+		}
+		site, ok := fb.closureCallSite(pc, cb, bytecode.Instr{Op: bytecode.OpCallMethod, A: argc}, nil)
 		if !ok {
 			return ssa.ForEachSite{}, false
 		}
 		fb.loops = true
-		return ssa.ForEachSite{Fn: uintptr(unsafe.Pointer(x.obj)), Callback: site}, true
+		return ssa.ForEachSite{Fn: uintptr(unsafe.Pointer(x.obj)), Kind: kind, Callback: site}, true
 	}
 	return ssa.ForEachSite{}, false
 }
@@ -5926,7 +5931,7 @@ func jitLoopIn(e *jitEntry, ctx *abi.Context, fn *bytecode.Function, pc int) uin
 // by: a level whose call of Go Go makes keeps them in registers, and the
 // loop is only ever an array's.
 func (r *Runtime) jitPushLoopFrame(f *frame, loop uint64, written bool) {
-	fe := r.jitForEach.Object()
+	fe := r.jitLoopFn(int(loop >> 32))
 	this := Obj(r.proto.array)
 	if v := r.stack[f.base+int(loop&0xffffffff)-1]; written && v.IsObject() {
 		this = v
@@ -5959,8 +5964,13 @@ func (r *Runtime) jitLoopFinish(f *frame, loop uint64, after bool, v Value, err 
 		// A throw ends it, as Go's forEach ends at its callback's.
 		return v, err
 	}
-	if loop>>32 != abi.LoopForEach || !arr.IsObject() || !k.IsNumber() || !n.IsNumber() || !r.jitForEach.IsObject() {
-		panic("jit: a loop's slots are not a forEach's")
+	kind := int(loop >> 32)
+	if kind != abi.LoopForEach && kind != abi.LoopReduce || !arr.IsObject() || !k.IsNumber() || !n.IsNumber() || r.jitLoopFn(kind) == nil {
+		panic("jit: a loop's slots are not a forEach's or a reduce's")
+	}
+	if kind == abi.LoopReduce && after {
+		// The callback's result the next accumulator.
+		this = v
 	}
 	from := int64(k.Number())
 	if after {
@@ -5969,12 +5979,31 @@ func (r *Runtime) jitLoopFinish(f *frame, loop uint64, after bool, v Value, err 
 	r.jit.loopsFinished++
 	// forEach's frame, as Go's has one (nativeFrame), which a stack trace
 	// of what the callback throws shows.
-	fe := r.jitForEach.Object()
+	fe := r.jitLoopFn(kind)
 	if err := r.nativeFrame(fe, fe.fn(), arr, []Value{cb, this}, Undefined); err != nil {
 		return Undefined, err
 	}
 	defer func() { r.frameDepth-- }()
 	a := &arrayLike{o: arr.Object(), n: int64(n.Number())}
+	if kind == abi.LoopReduce {
+		// As Go's reduce (builtins.go), from the accumulator this holds.
+		acc := this
+		var argv [4]Value
+		for i := from; i < a.n; i++ {
+			el, present, err := a.at(r, i)
+			if err != nil {
+				return Undefined, err
+			}
+			if !present {
+				continue
+			}
+			argv[0], argv[1], argv[2], argv[3] = acc, el, Float(float64(i)), arr
+			if acc, err = r.callDirect(cb, Undefined, argv[:]); err != nil {
+				return Undefined, err
+			}
+		}
+		return acc, nil
+	}
 	// As Go's forEach (builtins.go): the arguments' list made once.
 	var argv [3]Value
 	for i := from; i < a.n; i++ {

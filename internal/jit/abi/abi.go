@@ -630,9 +630,13 @@ const (
 	ExitInCell
 )
 
-// LoopForEach is Context.Loop's kind for Array.prototype.forEach, whose
-// slots are the array, the callback, its this, the index and the length.
-const LoopForEach = 1
+// Context.Loop's kinds: LoopForEach for Array.prototype.forEach, whose
+// slots are the array, the callback, its this, the index and the length;
+// LoopReduce for Array.prototype.reduce, whose third is the accumulator.
+const (
+	LoopForEach = 1
+	LoopReduce  = 2
+)
 
 // ExitLoc is where an exit finds a word: in a register or a spill slot as
 // it is, or boxed from a float or a boolean there; a constant, the

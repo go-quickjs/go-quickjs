@@ -416,7 +416,7 @@ func (o Op) String() string {
 // ElemPresent is OpElemCell's Index for a read that leaves where the array
 // has no element there, a hole or one past its end, Go reading nothing in
 // its place (ssa.GoElemCell, which finds a hole undefined): a loop's of a
-// forEach, whose callback a hole skips.
+// forEach or a reduce, whose callback a hole skips.
 const ElemPresent = 1
 
 // OpSubstringChar's Aux: SubstrLength for String.prototype.substr, whose

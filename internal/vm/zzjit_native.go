@@ -161,9 +161,9 @@ type jitRealmFields struct {
 	// one-character results native code makes itself
 	// (ssa.OpSubstringChar).
 	jitSubstring, jitSlice, jitSubstr, jitCharAt Value
-	// jitForEach is Array.prototype.forEach, which native code makes a loop
-	// of (ssa.ForEachSite).
-	jitForEach Value
+	// jitForEach and jitReduce are Array.prototype.forEach and reduce,
+	// which native code makes loops of (ssa.ForEachSite).
+	jitForEach, jitReduce Value
 }
 
 // recordJITStringIntrinsic notes the realm's String.prototype.charCodeAt and
@@ -176,7 +176,7 @@ func (r *Runtime) recordJITStringIntrinsic(ctor *Object) {
 // recordJITSubstrings notes the realm's String.prototype substring, slice,
 // substr and charAt, once the realm has them all, before any script runs,
 // whose one-character results native code makes itself, and
-// Array.prototype.forEach, whose calls it makes loops of.
+// Array.prototype.forEach and reduce, whose calls it makes loops of.
 func (r *Runtime) recordJITSubstrings() {
 	own := func(name string) Value {
 		if m := r.proto.str.getOwn(r.atoms.intern(name)); m.ok() {
@@ -185,10 +185,35 @@ func (r *Runtime) recordJITSubstrings() {
 		return Undefined
 	}
 	r.jitSubstring, r.jitSlice, r.jitSubstr, r.jitCharAt = own("substring"), own("slice"), own("substr"), own("charAt")
-	r.jitForEach = Undefined
+	r.jitForEach, r.jitReduce = Undefined, Undefined
 	if m := r.proto.array.getOwn(r.atoms.intern("forEach")); m.ok() {
 		r.jitForEach = m.value()
 	}
+	if m := r.proto.array.getOwn(r.atoms.intern("reduce")); m.ok() {
+		r.jitReduce = m.value()
+	}
+}
+
+// jitLoopKind is the kind of loop native code makes of a call of o
+// (abi.LoopForEach, abi.LoopReduce): the realm's Array.prototype.forEach
+// or reduce; or 0.
+func (r *Runtime) jitLoopKind(o *Object) int {
+	switch {
+	case o == nil:
+	case r.jitForEach.IsObject() && o == r.jitForEach.Object():
+		return abi.LoopForEach
+	case r.jitReduce.IsObject() && o == r.jitReduce.Object():
+		return abi.LoopReduce
+	}
+	return 0
+}
+
+// jitLoopFn is the built-in whose call a loop of kind is (jitLoopKind).
+func (r *Runtime) jitLoopFn(kind int) *Object {
+	if kind == abi.LoopReduce {
+		return r.jitReduce.Object()
+	}
+	return r.jitForEach.Object()
 }
 
 // jitIsSubstring reports whether o is the realm's String.prototype

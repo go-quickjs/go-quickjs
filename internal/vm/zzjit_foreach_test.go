@@ -132,10 +132,11 @@ func TestJITForEachLoop(t *testing.T) {
 }
 
 // afterCallbackSetup's visit makes a forEach native code makes a loop of,
-// whose callback, at the index at, has visit's code invalidated
-// (invalidateVisit) and then leaves native code itself, at an object of
-// another shape: Go finishes the callback, and visit's code, invalid, does
-// not go on after the call.
+// and visitReduce a reduce, whose callback, at the index at, has its
+// caller's code invalidated (invalidateVisit) and then leaves native code
+// itself, at an object of another shape: Go finishes the callback, and the
+// caller's code, invalid, does not go on after the call -- reduce's
+// accumulator the callback's result Go finished.
 const afterCallbackSetup = `
 	var items = []
 	for (let i = 0; i < 8; i++) items.push({ v: i })
@@ -143,12 +144,18 @@ const afterCallbackSetup = `
 	function visit(at) {
 		let s = 0
 		items.forEach((o, i) => {
-			if (i === at) invalidateVisit()
+			if (i === at) invalidateVisit('visit')
 			s += (i === at ? odd : o).v
 		})
 		return s
 	}
-	function drive(n, at) { let r = 0; for (let i = 0; i < n; i++) r += visit(at); return r }
+	function visitReduce(at) {
+		return items.reduce((s, o, i) => {
+			if (i === at) invalidateVisit('visitReduce')
+			return s + (i === at ? odd : o).v
+		}, 0)
+	}
+	function drive(n, at) { let r = 0; for (let i = 0; i < n; i++) r += visit(at) + visitReduce(at); return r }
 `
 
 // A callback that leaves native code where the loop's code cannot go on
@@ -170,8 +177,8 @@ func TestJITForEachAfterCallback(t *testing.T) {
 					return Undefined, nil
 				}
 				for k, x := range rt.jit.cache {
-					if fn := k.Value(); fn != nil && fn.Name == "visit" && x.ssa != nil {
-						fd := rt.global.getOwn(rt.atoms.intern("visit")).value().Object().fn()
+					if fn := k.Value(); fn != nil && len(args) == 1 && fn.Name == args[0].String().Go() && x.ssa != nil {
+						fd := rt.global.getOwn(rt.atoms.intern(fn.Name)).value().Object().fn()
 						rt.jitInvalidate(fd.closure, x)
 					}
 				}
@@ -204,7 +211,8 @@ const stackSetup = `
 	var nums = [1, 2, 3]
 	function throws(n) { let s = 0; nums.forEach((x) => { if (x === n) throw new Error('at ' + x); s += x }); return s }
 	function undefinedCall(n) { let s = 0; nums.forEach((x) => { if (x === n) notDefined(); s += x }); return s }
-	function drive(m, n) { let r = 0; for (let i = 0; i < m; i++) r += throws(n) + undefinedCall(n); return r }
+	function reduces(n) { return nums.reduce((s, x) => { if (x === n) throw new Error('at ' + x); return s + x }, 0) }
+	function drive(m, n) { let r = 0; for (let i = 0; i < m; i++) r += throws(n) + undefinedCall(n) + reduces(n); return r }
 `
 
 // A stack trace taken in a callback of a forEach native code makes a loop
@@ -219,10 +227,11 @@ func TestJITForEachStackTrace(t *testing.T) {
 	for range 3 {
 		rounds = append(rounds,
 			`(() => { try { drive(2, 2) } catch (e) { return e.stack } })()`,
-			`(() => { try { for (let i = 0; i < 3; i++) undefinedCall(2) } catch (e) { return e.stack } })()`)
+			`(() => { try { for (let i = 0; i < 3; i++) undefinedCall(2) } catch (e) { return e.stack } })()`,
+			`(() => { try { for (let i = 0; i < 3; i++) reduces(2) } catch (e) { return e.stack } })()`)
 	}
 	r := jitAgreesForTest(t, stackSetup, rounds...)
-	for _, name := range []string{"throws", "undefinedCall"} {
+	for _, name := range []string{"throws", "undefinedCall", "reduces"} {
 		var e *jitEntry
 		for k, x := range r.jit.cache {
 			if fn := k.Value(); fn != nil && fn.Name == name {
@@ -232,5 +241,74 @@ func TestJITForEachStackTrace(t *testing.T) {
 		if e == nil || e.ssa == nil || !e.loops {
 			t.Errorf("%s makes no loop of its forEach", name)
 		}
+	}
+}
+
+// reduceSetup's functions each make a reduce native code makes a loop of,
+// its callback an arrow, with an initial value or the first element --
+// and then make it meet what the loop leaves for Go: holes, the first
+// element a hole, an empty array with no initial value, an array the
+// callback shortens, a callback that throws, an accumulator that becomes
+// a string, a sloppy callback's this, reduce replaced.
+const reduceSetup = `
+	var nums = [1, 2, 3, 4, 5, 6, 7, 8]
+	var objs = []
+	for (let i = 0; i < 6; i++) objs.push({ x: i })
+	function sumInit(k) { return nums.reduce((a, x) => a + x * k, 0) }
+	function sumFirst(k) { return nums.reduce((a, x, i, arr) => a + x * k + i + (arr === nums ? 1 : 0)) }
+	function objects(k) { let calls = 0; const r = objs.reduce((a, o) => { calls++; return a + o.x * k }, 10); return r + ':' + calls }
+	var holey = [, 2, , 4, 5, , 7]
+	function holes(k) { return holey.reduce((a, x, i) => a + x * k + i) + ':' + holey.reduce((a, x) => a + x, k) }
+	function holeCalls(k) { let calls = 0; holey.reduce((a, x) => { calls++; return a }, 0); return calls * k }
+	function shorten(n) { const a = [1, 2, 3, 4, 5, 6, 7, 8]; return a.reduce((s, x) => { if (x === n) a.length = 3; return s + x }, 0) + ':' + a.length }
+	function throws(n) { try { return nums.reduce((s, x) => { if (x === n) throw new RangeError('at ' + x); return s + x }, 0) } catch (e) { return e.message } }
+	function stringy(n) { return nums.reduce((s, x) => x === n ? s + 'x' : s + x, 0) }
+	function sloppyThis() { return nums.reduce(function (s, x) { return s + (this === globalThis ? 1 : 0) }, 0) }
+	function empty(withInit) {
+		try {
+			return withInit ? [].reduce((a, x) => a + x, 'init') : [].reduce((a, x) => a + x)
+		} catch (e) {
+			return e.constructor.name + ': ' + e.message
+		}
+	}
+	function arrowOver(a) { return a.reduce((s, x) => s + x, 0) }
+`
+
+// A reduce on an array is a loop of the caller's native code, as a
+// forEach is (ssa's forEachCall), its accumulator a slot of the loop's
+// that each callback's result replaces; what its checks find, Go goes on
+// with from the index, the accumulator as the loop had it (jitLoopFinish).
+// Each answer is the interpreter's, and sumInit's loop neither leaves its
+// code nor calls Go.
+func TestJITReduceLoop(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	drivers := ""
+	for _, name := range []string{"sumInit", "sumFirst", "objects", "holes", "holeCalls", "shorten", "throws", "stringy", "sloppyThis", "empty", "arrowOver"} {
+		drivers += "function drive_" + name + "(n, a) { let r; for (let i = 0; i < n; i++) r = " + name + "(a); return r };"
+	}
+	rounds := []string{}
+	for i := range 8 {
+		rounds = append(rounds, `drive_sumInit(30, 2)`, `drive_sumFirst(30, 3)`, `drive_objects(30, 2)`, `drive_holes(30, 2)`, `drive_holeCalls(30, 2)`,
+			`drive_shorten(30, 5)`, `drive_throws(30, 6)`, `drive_throws(30, 99)`, `drive_stringy(30, `+[]string{"99", "4"}[i/6]+`)`,
+			`drive_sloppyThis(30)`, `drive_empty(30, true)`, `drive_empty(30, false)`, `drive_arrowOver(30, [1, 2, 3])`)
+	}
+	rounds = append(rounds, `drive_arrowOver(30, [])`, `(Array.prototype.reduce = function (f, a) { return f(a, 100) }, drive_arrowOver(30, [1, 2]))`)
+	r := jitAgreesForTest(t, reduceSetup+drivers, rounds...)
+	var e *jitEntry
+	for k, x := range r.jit.cache {
+		if fn := k.Value(); fn != nil && fn.Name == "sumInit" {
+			e = x
+		}
+	}
+	if e == nil || e.ssa == nil || !e.loops {
+		t.Fatalf("sumInit makes no loop of its reduce: %+v", e)
+	}
+	if e.ssaStats.goCalls != 0 || e.ssaStats.hosts != 0 {
+		t.Errorf("sumInit called Go %d times, left its code %d times", e.ssaStats.goCalls, e.ssaStats.hosts)
+	}
+	if r.jit.loopsFinished == 0 {
+		t.Error("Go went on with no loop")
 	}
 }
