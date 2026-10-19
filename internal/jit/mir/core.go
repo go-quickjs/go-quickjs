@@ -1755,6 +1755,10 @@ func (c *core) exitSource(s *ssa.Value) (abi.ExitLoc, bool) {
 // GoOp): a call's with its arguments' count and kind, which Go would
 // otherwise read from the bytecode.
 func goCallWord(site *ssa.CallSite) uint64 {
+	if site.Super {
+		// A super()'s, of the this slot and the arguments (GoCallSuper).
+		return goOpWord(&ssa.CallSite{Go: ssa.GoCall, Argc: site.Argc, Super: true})
+	}
 	if site.Accessor != ssa.AccessorNone {
 		return goOpWord(&ssa.CallSite{Go: ssa.GoCall, Argc: site.Argc, Accessor: site.Accessor, Key: site.Key})
 	}

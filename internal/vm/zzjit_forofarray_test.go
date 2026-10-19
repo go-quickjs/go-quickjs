@@ -7,6 +7,7 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"testing"
 )
@@ -391,6 +392,12 @@ func TestJITDerivedConstructor(t *testing.T) {
 		class RetPrim extends A { constructor() { super(1); return 5 } }
 		function err(K) { try { const o = new K(); return JSON.stringify(o) } catch (e) { return e.constructor.name } }
 	`
+	// No collection meanwhile: which receiver shapes A's code met first
+	// depended on the collector, which had Go make native calls while it
+	// marked, and A, B's native callee by its super(), leaving at one it
+	// was not compiled for is counted as B's leaving.
+	runtime.GC()
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	rounds := []string{}
 	for range 10 {
 		rounds = append(rounds, `make(500)`)

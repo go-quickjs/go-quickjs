@@ -375,6 +375,16 @@ type CallSite struct {
 	// its super() binds it (abi.Context's Instance) -- and its result is
 	// always an object.
 	Derived bool
+	// Active, for a super() native code makes (Super, Go 0), is the
+	// function object the code was compiled for, whose prototype --
+	// Callee, Parent past a class with no constructor of its own -- the
+	// super() constructs with, its code at Closure: the call checks the
+	// running one (abi.Context's Function) is Active, and its prototype
+	// Callee. The parent's code is called as a construction's, its this
+	// the instance (abi.Context's Instance), or, a derived parent's,
+	// unbound with that instance; the result, an object or else the
+	// instance, the this it binds.
+	Active uintptr
 	// Captures, of a closure Go makes (GoClosure) that has a Pool, says
 	// natively: the closure is the pool's next object, made as the VM
 	// makes the function, its captured bindings' cells unwritten, and
@@ -3778,12 +3788,13 @@ func (b *builder) nativeCalls(pc int) []*CallSite {
 			operands = site.Argc
 		}
 		// A callee that reads its receiver gets the method call's, or a
-		// construction's, from its pool -- or, an arrow, the this it
+		// construction's, from its pool, or a super()'s, the instance --
+		// or, an arrow, the this it
 		// captured (ArrowThis), which the call reads from its function
 		// object: left out, an arrow reading its this, learned at a miss,
 		// missed at every call -- AWFY CD's Vector.forEach, 45,000 exits a
 		// run.
-		if site.Argc < 0 || depth < operands || after != depth-operands+1 || site.ThisSlot >= 0 && !site.Method && site.Pool == 0 && !site.ArrowThis {
+		if site.Argc < 0 || depth < operands || after != depth-operands+1 || site.ThisSlot >= 0 && !site.Method && site.Pool == 0 && !site.ArrowThis && !site.Super {
 			continue
 		}
 		if site.ThisSlot < 0 {

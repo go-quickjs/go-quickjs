@@ -2360,13 +2360,31 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 			Params: fn.ParamCount, LocalCount: fn.LocalCount, MaxStack: fn.MaxStack, ThisSlot: this, Coerce: fn.CoerceThis,
 		}
 		site.ArrowThis = arrowThis
+		if in.active != nil {
+			// A super()'s parent (jitSuperSeen), constructed with the
+			// instance: its operands the arguments, its this the instance's
+			// (ssa.CallSite's Super). One of a function the code was not
+			// compiled for, a class that makes arrows, or of spread or
+			// forwarded arguments, Go makes.
+			if call.Op != bytecode.OpSuperCall || call.B != bytecode.SuperArgs || fb.fn.Kind != bytecode.KindDerivedConstructor || jitMakesArrow(fb.fn) {
+				fb.links = fb.links[:len(fb.links)-1]
+				continue
+			}
+			site.Super, site.Active, site.Derived = true, uintptr(unsafe.Pointer(in.active)), fn.Kind == bytecode.KindDerivedConstructor
+			site.Method, site.Coerce = false, false
+			fb.holders = append(fb.holders, in.active)
+			if in.parent != nil {
+				site.Parent = uintptr(unsafe.Pointer(in.parent))
+				fb.holders = append(fb.holders, in.parent)
+			}
+		}
 		if fn.HasTailCall {
 			// Whether its calls in tail position may give its frame up, as
 			// the interpreter gives up a frame that is no construction's,
 			// nor an arrow's that shares a derived constructor's this.
 			fd := in.obj.fn()
 			site.Tail = true
-			site.TailFrame = call.Op != bytecode.OpNew && (fd == nil || !fd.arrow || fd.extra == nil || fd.extra.lexThisRef == nil)
+			site.TailFrame = call.Op != bytecode.OpNew && call.Op != bytecode.OpSuperCall && (fd == nil || !fd.arrow || fd.extra == nil || fd.extra.lexThisRef == nil)
 		}
 		if len(in.cl.upvalues) != 0 {
 			// Its captured bindings, which its code reads through its
@@ -2415,7 +2433,7 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 			}
 			byCode = int(y.pc) == pc && y.cl != nil && y.obj != in.obj && jitSameCode(y.cl, in.cl)
 		}
-		if site.Pool == 0 && !in.via && byCode {
+		if site.Pool == 0 && !in.via && !site.Super && byCode {
 			// A closure: checked by its function, its closure the callee's
 			// at run time (ByCode), as the one an enclosing function makes
 			// at each of its calls is a new object each time.
@@ -2496,6 +2514,11 @@ type jitInline struct {
 	// extends, whose constructor cl is: the call checks obj's prototype is
 	// still it (ssa.CallSite's Parent).
 	parent *Object
+	// active, for a super() native code makes, is the class whose
+	// constructor's super() it is, whose prototype obj is: the parent,
+	// which cl's code -- obj's, or, obj a class with no constructor of its
+	// own, parent's -- constructs with (jitSuperTarget).
+	active *Object
 }
 
 // jitCallsToInline is how often a call leaves native code before it is
@@ -3185,7 +3208,10 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 		// A derived constructor's super(...) (abi.GoCallSuper), on the
 		// code's frame, as executeAt's case makes it: the this it binds.
 		// Its first operand, the frame's this slot, is the binding's.
-		if err = r.superCall(f, slices.Clone(r.stack[sp-n+1:sp])); err == nil {
+		if !marking {
+			r.jitSuperSeen(f, e, pc)
+		}
+		if err = r.jitSuperCall(f, slices.Clone(r.stack[sp-n+1:sp])); err == nil {
 			v = f.this
 		}
 	default:
@@ -3721,7 +3747,10 @@ framed:
 			} else {
 				f.thisRef = &thisBinding{value: f.this}
 			}
-			if err = r.superCall(f, slices.Clone(r.stack[sp-n+1:sp])); err == nil {
+			if !marking {
+				r.jitSuperSeen(f, e, pc)
+			}
+			if err = r.jitSuperCall(f, slices.Clone(r.stack[sp-n+1:sp])); err == nil {
 				// The level's binding, its context's This, which an exit
 				// does not write (ir.Program's This, a snapshot): the frame
 				// Go makes for it is bound from it (jitDerivedFrame).
@@ -7158,7 +7187,7 @@ func (r *Runtime) jitRunDone(e *jitEntry, idx, top int) {
 	}
 	c := s.ssaCtxs[idx]
 	clear(c.Keep[:e.ssaKeeps])
-	c.This, c.Upvalues = abi.Slot{}, nil
+	c.This, c.Upvalues, c.Instance = abi.Slot{}, nil, abi.Slot{}
 	// Past RecordHigh, the pointer words native calls wrote themselves,
 	// which Go did not expand (abi.CallRecord's Ref).
 	if n := max(c.RecordHigh, s.callRefs); n != 0 {
@@ -7221,6 +7250,13 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			}
 			*(*Value)(unsafe.Pointer(&ctx.This)) = this
 		}
+		if f.thisRef != nil && f.cl.fn.Kind == bytecode.KindDerivedConstructor && f.callee != nil && f.newTarget.IsObject() {
+			// A derived construction's: what its super() natively needs,
+			// as a native construction's context has it (ssa.CallSite's
+			// Super) -- its instance, its new.target, its function.
+			*(*Value)(unsafe.Pointer(&ctx.Instance)) = f.thisRef.value
+			ctx.NewTarget, ctx.Function = uint64(uintptr(unsafe.Pointer(f.newTarget.Object()))), uint64(uintptr(unsafe.Pointer(f.callee)))
+		}
 		s.entries++
 		s.ssaEntries++
 		e.ssaStats.entries++
@@ -7234,6 +7270,13 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			err, resume = e.ssa.Resume(resume, s.ssaCtxs[idx+1]), 0
 		} else {
 			err = e.ssa.Run(pc, ctx)
+		}
+		if f.thisRef != nil && !f.thisRef.init {
+			if this := *(*Value)(unsafe.Pointer(&ctx.This)); this.IsObject() && f.cl.fn.Kind == bytecode.KindDerivedConstructor {
+				// A super() native code made bound the context's this,
+				// which no exit writes: the frame's binding is it.
+				f.this, f.thisRef.value, f.thisRef.init = this, this, true
+			}
 		}
 		if len(s.builders) != 0 {
 			// Whatever native code left, Go may now see its strings in a
@@ -7305,6 +7348,10 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			e.ssaStats.records += ctx.Records
 			r.jitApplyRecords(f, e, ctx)
 			jitHandlers(f, e.ssaProg, exitPC)
+			if err == nil && f.cl.fn.Code[exitPC].Op == bytecode.OpSuperCall {
+				// A super() native code made, its parent finished by Go.
+				v = jitSuperBound(f, v)
+			}
 			sp, ok := r.jitCallResult(f, exitPC, exitDepth, v, err)
 			if !ok || r.stopped != nil {
 				sp, err, native := r.jitCatch(f, e, sp, err)
@@ -7806,6 +7853,12 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure) (Value, e
 			// Its function object, where its call says (an accessor's).
 			l.callee = r.jitLevelCallee(caller, callerPC, l.this)
 			l.construct = callerPC < len(caller.Code) && caller.Code[callerPC].Op == bytecode.OpNew
+			if callerPC < len(caller.Code) && caller.Code[callerPC].Op == bytecode.OpSuperCall && c.Function != 0 {
+				// A super()'s parent, constructed: its function and its
+				// new.target the context's, its this the instance, a
+				// derived parent's unbound (ssa.CallSite's Super).
+				l.construct, l.callee = true, *(**Object)(unsafe.Pointer(&c.Function))
+			}
 			if l.construct && c.NewTarget != 0 {
 				l.newTarget = Obj(*(**Object)(unsafe.Pointer(&c.NewTarget)))
 			}
@@ -7988,6 +8041,10 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure) (Value, e
 		} else {
 			// A frame native code made goes on in native code where it can,
 			// whatever Go's entries to it cost (entrySlow).
+			if err == nil && f.cl.fn.Code[l.pc].Op == bytecode.OpSuperCall {
+				// A super() native code made, its parent finished by Go.
+				v = jitSuperBound(f, v)
+			}
 			sp, ok := r.jitCallResult(f, int(l.pc), int(l.depth), v, err)
 			switch {
 			case !ok || r.stopped != nil || e == nil || e.ssa == nil:
@@ -8160,6 +8217,127 @@ func jitDerivedFrame(f *frame, c *abi.Context) {
 	}
 	f.this = *(*Value)(unsafe.Pointer(&c.Instance))
 	f.thisRef = &thisBinding{value: f.this}
+}
+
+// jitSuperBound binds f's this to what a super() native code made gave
+// (ssa.CallSite's Super), its parent finished by Go: its result if an
+// object, else the instance, as superCall binds it -- a second super()
+// native code does not make (mir's superGuards), and the class has no
+// fields for it to give (jitSuperTarget). The binding is the result.
+func jitSuperBound(f *frame, v Value) Value {
+	if f.thisRef == nil {
+		return v
+	}
+	if !v.IsObject() {
+		v = f.thisRef.value
+	}
+	f.this, f.thisRef.value, f.thisRef.init = v, v, true
+	return v
+}
+
+// jitSuperTarget is the parent d's super() constructs with, natively
+// (ssa.CallSite's Super), and the code it runs: d a derived class of no
+// fields -- which super() would give the instance -- making no arrow --
+// whose this its binding is, which native code has none of -- its
+// prototype p a constructor of the realm's script, a base one of no
+// fields, or derived; p a class with no constructor of its own, the code
+// of the one it extends, skip, as V8 skips a default derived constructor
+// (FindNonDefaultConstructorOrConstruct). nil where there is none.
+func (r *Runtime) jitSuperTarget(d *Object) (p, skip *Object, cl *closure) {
+	dfd := d.fn()
+	if dfd == nil || dfd.closure == nil || dfd.ctorKind != ctorDerived || dfd.superCtor != d || dfd.fieldInit != nil || jitMakesArrow(dfd.closure.fn) {
+		return nil, nil, nil
+	}
+	code := func(o *Object) *closure {
+		fd := o.fn()
+		if fd == nil || fd.closure == nil || fd.native != nil || fd.bound || fd.closure.realm != r.Realm || o.class != ClassFunction ||
+			isGeneratorTemplate(fd.closure.fn) || fd.fieldInit != nil {
+			return nil
+		}
+		switch fd.ctorKind {
+		case ctorBase:
+			return fd.closure
+		case ctorDerived:
+			if fd.superCtor == o {
+				return fd.closure
+			}
+		}
+		return nil
+	}
+	if p = d.proto; p == nil {
+		return nil, nil, nil
+	}
+	if cl = code(p); cl == nil {
+		return nil, nil, nil
+	}
+	if cl.fn.Kind == bytecode.KindDerivedConstructor && jitForwardsSuper(cl.fn) {
+		if q := p.proto; q != nil {
+			if qc := code(q); qc != nil && !(qc.fn.Kind == bytecode.KindDerivedConstructor && jitForwardsSuper(qc.fn)) {
+				return p, q, qc
+			}
+		}
+		return nil, nil, nil
+	}
+	return p, nil, cl
+}
+
+// jitMakesArrow reports whether fn makes an arrow, which shares its this
+// binding.
+func jitMakesArrow(fn *bytecode.Function) bool {
+	for _, k := range fn.Constants {
+		if k.Kind == bytecode.ConstFunction && k.Fn != nil && k.Fn.Kind == bytecode.KindArrow {
+			return true
+		}
+	}
+	return false
+}
+
+// jitSuperCall is superCall for a super() Go makes for native code
+// (abi.GoCallSuper): a parent whose code is invalid spends its budget, as
+// a call Go makes does (jitCallAt, jitInvokedFrameless) -- one the
+// existing tiers ran with no frame, a constructor storing its parameters
+// (leafCall), had counted nothing, its code never compiled again, native
+// super()s of it each Go's from then on.
+func (r *Runtime) jitSuperCall(f *frame, args []Value) error {
+	var ce *jitEntry
+	var cl *closure
+	var spends uint32
+	if p := r.parentConstructorOf(f); p != nil {
+		if ce, cl = r.jitInvalidCallee(Obj(p)); ce != nil {
+			spends = ce.tierSpends
+		}
+	}
+	err := r.superCall(f, args)
+	r.jitInvokedFrameless(cl, ce, spends)
+	return err
+}
+
+// jitSuperSeen notes the super() at pc of f's code, e's, that Go made: the
+// parent it constructs with, which native code calls from the next compile
+// on (ssa.CallSite's Super), as a call Go makes is learned (jitCallSeen).
+func (r *Runtime) jitSuperSeen(f *frame, e *jitEntry, pc int) {
+	if e == nil || f.callee == nil || pc >= len(f.cl.fn.Code) {
+		return
+	}
+	if e.callSites == nil {
+		e.callSites = make([]uint8, len(f.cl.fn.Code))
+	}
+	if e.callSites[pc] != 0 {
+		return
+	}
+	p, skip, cl := r.jitSuperTarget(f.callee)
+	if p == nil || !r.jitNativeOrLinked(cl) {
+		e.callSites[pc] = jitCallDone
+		return
+	}
+	e.nativeCalls = append(e.nativeCalls, jitInline{pc: int32(pc), cl: cl, obj: p, parent: skip, active: f.callee})
+	e.callSites[pc] = jitCallNative
+	// Compiled again for it once it has spent a budget (jitLearnedDue), as
+	// for a native call's target learned (jitCallSeen).
+	e.inlinePending = true
+	if e.inlineReopts < 2*jitInlineReoptimizations {
+		e.inlinePending, e.inlineReopt = false, true
+	}
 }
 
 // jitStartLocals makes the locals of a frame a native call made for fn, its

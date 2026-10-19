@@ -1723,6 +1723,34 @@ func (c *a64Compiler) byCode(t *ssa.CallSite, next arm64.Label) {
 
 // arrowThis is amd64's: the address of the this arrow t captured, the
 // callee in C unless t checks its function, or next, the callee in C again.
+// superGuards is amd64's: the function running and its prototype as the
+// code was compiled for, the this unbound. It uses A and B.
+func (c *a64Compiler) superGuards(t *ssa.CallSite, x *ssa.Value, guard func(arm64.Cond)) {
+	c.a.Load(a64A, a64Ctx, abi.OffFunction)
+	c.movImm(a64B, uint64(t.Active))
+	c.a.Cmp(a64A, a64B, true)
+	guard(arm64.NE)
+	c.a.Load(a64A, a64A, c.enc.ObjectProto)
+	c.movImm(a64B, uint64(t.Callee))
+	c.a.Cmp(a64A, a64B, true)
+	guard(arm64.NE)
+	if t.Parent != 0 {
+		c.a.Load(a64A, a64A, c.enc.ObjectProto)
+		c.movImm(a64B, uint64(t.Parent))
+		c.a.Cmp(a64A, a64B, true)
+		guard(arm64.NE)
+	}
+	w := a64A
+	if remat(x) {
+		c.materialize(x, a64A)
+	} else {
+		w = c.gpr(x, a64A)
+	}
+	c.movImm(a64B, c.enc.Uninitialized)
+	c.a.Cmp(w, a64B, true)
+	guard(arm64.NE)
+}
+
 func (c *a64Compiler) arrowThis(t *ssa.CallSite, next arm64.Label) {
 	miss, done := c.a.NewLabel(), c.a.NewLabel()
 	if t.ByCode == 0 {
@@ -2382,8 +2410,9 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	sp := len(s.Slots)
 	calleeSlot := sp - site.Argc - 1
 	var callee *ssa.Value
-	if site.Accessor != ssa.AccessorNone {
-		// As amd64's: an accessor's, no function among the operands.
+	if site.Accessor != ssa.AccessorNone || site.Super {
+		// As amd64's: an accessor's or a super()'s, no function among the
+		// operands.
 		calleeSlot = sp - site.Argc
 	} else {
 		callee = v.Args[len(v.Args)-site.Argc-1]
@@ -2440,6 +2469,9 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 		}
 		if t.ArrowThis {
 			c.arrowThis(t, next)
+		}
+		if t.Super {
+			c.superGuards(t, v.Args[0], guard)
 		}
 		if t.Pop {
 			c.popGuards(t, v.Args[0], guard)
@@ -2530,7 +2562,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	}
 	// As amd64's: a call of one function writes its operands where the
 	// callee has them, unrecorded.
-	direct, ops := len(sites) == 1 && !gen && !site.ArrowThis && (site.ThisSlot < 0 || site.Method || site.Pool != 0), calleeSlot
+	direct, ops := len(sites) == 1 && !gen && !site.ArrowThis && (site.ThisSlot < 0 || site.Method || site.Pool != 0 || site.Super), calleeSlot
 	if site.Method {
 		ops--
 	}
@@ -2572,7 +2604,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	// or a method call's, which a callee that does not read it has too --
 	// a frame Go makes for it (jitGoCallNested, jitUnwindNative) shows it
 	// in a stack trace, as the interpreter's does.
-	receiver := direct && site.Pool == 0 && (site.ThisSlot >= 0 || site.Method && this < sp)
+	receiver := direct && site.Pool == 0 && !site.Super && (site.ThisSlot >= 0 || site.Method && this < sp)
 	if direct {
 		// The callee's frame's address, in D, which pointerWord does not
 		// use.
@@ -2656,7 +2688,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 			c.a.Store(locals, at+c.enc.NumOffset, top)
 			c.a.Store(locals, at+c.enc.RefOffset, arm64.ZR)
 		}
-		if t.Tail || t.Pool != 0 || t.ArrowThis || (t.ThisSlot >= 0 || site.Method && site.Via == 0) && !direct || !receiver {
+		if t.Tail || t.Pool != 0 || t.Super || t.ArrowThis || (t.ThisSlot >= 0 || site.Method && site.Via == 0) && !direct || !receiver {
 			c.a.Load(calleeCtx, a64Ctx, abi.OffNext)
 		}
 		if t.Tail {
@@ -2693,6 +2725,25 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 			// A construction's new.target, for Go to make its frame with.
 			c.movImm(top, uint64(t.Callee))
 			c.a.Store(calleeCtx, abi.OffNewTarget, top)
+		} else if t.Super {
+			// As amd64's: the instance, a derived parent's to bind, new.target
+			// handed on, the function whose code runs.
+			c.a.Load(top, a64Ctx, abi.OffInstance+c.enc.RefOffset)
+			c.movImm(tmp, c.enc.Object)
+			if t.Derived {
+				c.a.Store(calleeCtx, abi.OffInstance+c.enc.RefOffset, top)
+				c.a.Store(calleeCtx, abi.OffInstance+c.enc.NumOffset, tmp)
+				c.a.Store(calleeCtx, abi.OffThis+c.enc.RefOffset, arm64.ZR)
+				c.movImm(tmp, c.enc.Uninitialized)
+				c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, tmp)
+			} else {
+				c.a.Store(calleeCtx, abi.OffThis+c.enc.RefOffset, top)
+				c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, tmp)
+			}
+			c.a.Load(top, a64Ctx, abi.OffNewTarget)
+			c.a.Store(calleeCtx, abi.OffNewTarget, top)
+			c.movImm(top, uint64(derivedFunction(t)))
+			c.a.Store(calleeCtx, abi.OffFunction, top)
 		} else if t.ArrowThis {
 			// As amd64's: the this it captured.
 			c.a.Load(high2, a64Ctx, abi.OffCallThis)
@@ -2844,7 +2895,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	// a64RetRef.
 	c.a.Bind(back)
 	at := abi.OffKeep + int32(v.Index)*vs
-	if site.Pool != 0 {
+	if site.Pool != 0 || site.Super {
 		// As amd64's: a result that is not an object is the receiver.
 		object := c.a.NewLabel()
 		c.movImm(a64B, c.enc.Object)
@@ -2854,6 +2905,11 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 		c.a.Load(a64RetRef, a64Ctx, abi.OffNext)
 		c.a.Load(a64RetRef, a64RetRef, abi.OffThis+c.enc.RefOffset)
 		c.a.Bind(object)
+	}
+	if site.Super {
+		// As amd64's: the this it binds, the context's This.
+		c.a.Store(a64Ctx, abi.OffThis+c.enc.RefOffset, a64RetRef)
+		c.a.Store(a64Ctx, abi.OffThis+c.enc.NumOffset, a64RetNum)
 	}
 	c.a.Store(a64Ctx, at+c.enc.RefOffset, a64RetRef)
 	c.a.Store(a64Ctx, at+c.enc.NumOffset, a64RetNum)

@@ -167,9 +167,10 @@ func TestJITDerivedNativeConstruct(t *testing.T) {
 	if err != nil || v.String().Go() != "253000" {
 		t.Fatalf("make(500) = %v, %v; want 253000", v, err)
 	}
-	// B's code twice a pass, for new B and new S; C's and F's once.
-	if d := jitDerivedCalls(b) - bIn; d != 1000 {
-		t.Errorf("B's code was called natively %d times in a round, want 1000", d)
+	// B's code three times a pass, for new B, new S and C's super(); C's
+	// and F's once.
+	if d := jitDerivedCalls(b) - bIn; d != 1500 {
+		t.Errorf("B's code was called natively %d times in a round, want 1500", d)
 	}
 	if d := jitDerivedCalls(c) - cIn; d != 500 {
 		t.Errorf("C's code was called natively %d times in a round, want 500", d)
@@ -305,4 +306,137 @@ func TestJITDerivedNativeMarking(t *testing.T) {
 		rounds = append(rounds, `make(300)`)
 	}
 	jitAgreesForTest(t, setup, rounds...)
+}
+
+// A derived constructor's super() of a constructor of the script's is a
+// native construction of the parent, as V8's super() calls it: the
+// parent found by the running function's prototype, checked as the code
+// was compiled for; its this the instance, a derived parent's unbound;
+// the this bound its result, an object, or else the instance. A class of
+// no constructor of its own skips to the code of the one it extends, as
+// V8 skips a default derived constructor. DeltaBlue's constraints'
+// shape: a base of their strength, a binary and a unary class, each
+// subclass's super() natively the next one's, none a call of Go. A
+// parent changed meanwhile is constructed with as super() then reads it.
+func TestJITDerivedNativeSuper(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		class Abs { constructor(s) { this.strength = s; this.k = s.length } }
+		class Bin extends Abs { constructor(a, b, s) { super(s); this.v1 = a; this.v2 = b } }
+		class Eq extends Bin { constructor(a, b, s, list) { super(a, b, s); list.push(this) } }
+		class Un extends Abs { constructor(v, s) { super(s); this.out = v } }
+		class Stay extends Un {}
+		class Other { constructor(s) { this.other = s } }
+
+		function chain(n) {
+			const list = []
+			let s = 0
+			for (let i = 0; i < n; i++) {
+				const e = new Eq(i, i + 1, 's', list), u = new Stay(i, 'u')
+				s += e.v1 + e.v2 + u.out + (list[i] === e ? 1 : 0) + (u.constructor === Stay ? 1 : 0) + (e.strength === 's' ? 1 : 0)
+			}
+			return s + ':' + new Set(list).size + ':' + Object.keys(new Eq(1, 2, 'x', [])).join() + ':' + Object.keys(new Stay(1, 'y')).join()
+		}
+	`
+	rounds := []string{}
+	for range 10 {
+		rounds = append(rounds, `chain(300)`)
+	}
+	r := jitAgreesForTest(t, setup, rounds...)
+	abs := r.jit.hint(jitClassForTest(t, r, "Abs"))
+	bin, eq, un := jitDerivedForTest(t, r, "Bin"), jitDerivedForTest(t, r, "Eq"), jitDerivedForTest(t, r, "Un")
+	if abs == nil {
+		t.Fatal("Abs has no entry")
+	}
+	runtime.GC()
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	absIn, binIn, unIn := jitDerivedCalls(abs), jitDerivedCalls(bin), jitDerivedCalls(un)
+	goCalls := []uint64{eq.ssaStats.goCalls, bin.ssaStats.goCalls, un.ssaStats.goCalls}
+	v, err := r.Run(compileForTest(t, `chain(300)`))
+	// 3i + 4 a pass, summed over 300: 3 * 44850 + 1200.
+	if err != nil || v.String().Go() != "135750:300:strength,k,v1,v2:strength,k,out" {
+		t.Fatalf("chain(300) = %q, %v", v.String().Go(), err)
+	}
+	// Abs's code by Bin's super() and Un's, Bin's by Eq's, Un's by the
+	// construction of Stay, which runs its code -- each pass, and the two
+	// constructions after the loop.
+	for _, c := range []struct {
+		name  string
+		got   uint64
+		was   uint64
+		want  uint64
+		entry *jitEntry
+	}{{"Abs", jitDerivedCalls(abs), absIn, 602, abs}, {"Bin", jitDerivedCalls(bin), binIn, 301, bin}, {"Un", jitDerivedCalls(un), unIn, 301, un}} {
+		if c.got-c.was != c.want {
+			t.Errorf("%s's code was called natively %d times in a round, want %d", c.name, c.got-c.was, c.want)
+		}
+	}
+	for i, e := range []*jitEntry{eq, bin, un} {
+		if d := e.ssaStats.goCalls - goCalls[i]; d != 0 {
+			t.Errorf("%s made %d calls of Go in a round, want none", []string{"Eq", "Bin", "Un"}[i], d)
+		}
+	}
+	// Bin made to extend Other: its super() constructs Other, as it reads
+	// it then; and back again.
+	jitAgreesForTest(t, setup, append(rounds, `(Object.setPrototypeOf(Bin, Other), chain(50))`, `chain(50)`,
+		`(Object.setPrototypeOf(Bin, Abs), chain(50))`)...)
+	// A parent that leaves native code in a super() native code made, at a
+	// shape it had not met: Go finishes it, and binds the subclass's this
+	// to what it gave (jitSuperBound), whether the subclass's code goes on
+	// natively after the call or not.
+	leave := `
+		class Leave { constructor(o) { this.v = o.k; this.n = o.k * 2 } }
+		class Sub extends Leave { constructor(o) { super(o); this.w = this.v + this.n } }
+		class Sub2 extends Sub { constructor(o, x) { super(o); this.x = x + this.w } }
+		var o1 = { k: 1 }, o2 = { q: 0, k: 2 }, o3 = { r: 0, s: 0, k: 3 }
+		function make(n, o) { let s = 0; for (let i = 0; i < n; i++) { const a = new Sub(o), b = new Sub2(o, i); s += a.w + b.x + (b instanceof Sub2 ? 1 : 0) } return s + ':' + Object.keys(new Sub2(o, 1)).join() }
+	`
+	lr := []string{}
+	for range 6 {
+		lr = append(lr, `make(200, o1)`)
+	}
+	jitAgreesForTest(t, leave, append(lr, `make(200, o2)`, `make(200, o3)`, `make(200, o1)`, `make(200, o2)`)...)
+}
+
+// jitClassForTest is the closure of the class name's constructor: a
+// class is a lexical binding, not the global object's.
+func jitClassForTest(t *testing.T, r *Runtime, name string) *closure {
+	t.Helper()
+	v, err := r.Run(compileForTest(t, name))
+	if err != nil || !v.IsObject() || v.Object().fn() == nil || v.Object().fn().closure == nil {
+		t.Fatalf("%s: %v, %v", name, v, err)
+	}
+	return v.Object().fn().closure
+}
+
+// One super() made twice, natively, its second time this bound
+// (mir's superGuards): the parent runs again, then it throws, as the
+// interpreter's super() does, the constructor catching it.
+func TestJITDerivedNativeSuperTwice(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	// Counted with the collector off: while it marks, Go makes native
+	// calls (mir's markingCall).
+	runtime.GC()
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	setup := `
+		class Abs { constructor(s) { this.strength = s; this.k = s.length } }
+		class Twice extends Abs { constructor(n) { let err = ''; for (let i = 0; i < n; i++) { try { super('a' + i) } catch (e) { err = e.name + ': ' + e.message } } this.err = err } }
+		function twice(n) { let last = '', s = 0; for (let i = 0; i < n; i++) { const o = new Twice(i % 5 === 4 ? 2 : 1); s += o.k; last = JSON.stringify(o) } return s + ':' + last }
+	`
+	rounds := []string{}
+	for range 10 {
+		rounds = append(rounds, `twice(100)`)
+	}
+	r := jitAgreesForTest(t, setup, rounds...)
+	if v, err := r.Run(compileForTest(t, `''+twice(100)`)); err != nil || v.String().Go() != `200:{"strength":"a1","k":2,"err":"ReferenceError: super() has already been called"}` {
+		t.Errorf("twice(100) = %q, %v", v.String().Go(), err)
+	}
+	// Its super() native, the second time left to Go, which throws.
+	if e := jitDerivedForTest(t, r, "Twice"); jitDerivedCalls(e) < 500 || e.ssaStats.goCalls > 2 {
+		t.Errorf("Twice's super() was not made natively: %d native calls of it, %d calls of Go", jitDerivedCalls(e), e.ssaStats.goCalls)
+	}
 }

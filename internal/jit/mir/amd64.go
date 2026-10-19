@@ -688,10 +688,13 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	sp := len(s.Slots)
 	calleeSlot := sp - site.Argc - 1
 	var callee *ssa.Value
-	if site.Accessor != ssa.AccessorNone {
+	if site.Accessor != ssa.AccessorNone || site.Super {
 		// An accessor's getter or setter (ssa.AccessorSite): no function
 		// among the operands, which are the receiver and a setter's value
-		// -- the guards before the call found it is Callee's.
+		// -- the guards before the call found it is Callee's. A super()'s
+		// (ssa.CallSite's Super): its arguments the operands on the stack,
+		// its parent found by the running function's prototype
+		// (superGuards).
 		calleeSlot = sp - site.Argc
 	} else {
 		callee = v.Args[len(v.Args)-site.Argc-1]
@@ -753,6 +756,9 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		}
 		if t.ArrowThis {
 			c.arrowThis(t, next)
+		}
+		if t.Super {
+			c.superGuards(t, v.Args[0], guard)
 		}
 		if t.Pop {
 			// Array.prototype.pop, its fast path's.
@@ -864,7 +870,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	// them (directOperand), not recorded: Go never reads them, as a callee
 	// that leaves native code is finished from its own frame, and its
 	// result replaces them (the VM's jitCallResult).
-	direct, ops := len(sites) == 1 && !gen && !site.ArrowThis && (site.ThisSlot < 0 || site.Method || site.Pool != 0), calleeSlot
+	direct, ops := len(sites) == 1 && !gen && !site.ArrowThis && (site.ThisSlot < 0 || site.Method || site.Pool != 0 || site.Super), calleeSlot
 	if site.Method {
 		ops--
 	}
@@ -913,7 +919,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	// or a method call's, which a callee that does not read it has too --
 	// a frame Go makes for it (jitGoCallNested, jitUnwindNative) shows it
 	// in a stack trace, as the interpreter's does.
-	receiver := direct && site.Pool == 0 && (site.ThisSlot >= 0 || site.Method && this < sp)
+	receiver := direct && site.Pool == 0 && !site.Super && (site.ThisSlot >= 0 || site.Method && this < sp)
 	if direct {
 		// The callee's frame, past the VM's stack's top: xScratch2 holds
 		// its address, which pointerWord does not use.
@@ -1014,7 +1020,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 			c.storeImm(locals, at+c.enc.NumOffset, c.enc.Undefined, top)
 			c.storeImm(locals, at+c.enc.RefOffset, 0, top)
 		}
-		if t.Tail || t.Pool != 0 || t.ArrowThis || (t.ThisSlot >= 0 || site.Method && site.Via == 0) && !direct || !receiver {
+		if t.Tail || t.Pool != 0 || t.Super || t.ArrowThis || (t.ThisSlot >= 0 || site.Method && site.Via == 0) && !direct || !receiver {
 			c.a.Load(calleeCtx, regCtx, abi.OffNext)
 		}
 		if t.Tail {
@@ -1048,6 +1054,24 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 			}
 			// A construction's new.target, for Go to make its frame with.
 			c.storeImm(calleeCtx, abi.OffNewTarget, uint64(t.Callee), top)
+		} else if t.Super {
+			// A super()'s: the instance its construction made, the
+			// parent's receiver -- a derived parent's to bind, its this
+			// unbound -- new.target handed on, and the function whose
+			// code runs, the parent or the class it runs the code of.
+			c.a.Load(top, regCtx, abi.OffInstance+c.enc.RefOffset)
+			if t.Derived {
+				c.a.Store(calleeCtx, abi.OffInstance+c.enc.RefOffset, top)
+				c.storeImm(calleeCtx, abi.OffInstance+c.enc.NumOffset, c.enc.Object, tmp)
+				c.storeImm(calleeCtx, abi.OffThis+c.enc.RefOffset, 0, tmp)
+				c.storeImm(calleeCtx, abi.OffThis+c.enc.NumOffset, c.enc.Uninitialized, tmp)
+			} else {
+				c.a.Store(calleeCtx, abi.OffThis+c.enc.RefOffset, top)
+				c.storeImm(calleeCtx, abi.OffThis+c.enc.NumOffset, c.enc.Object, tmp)
+			}
+			c.a.Load(top, regCtx, abi.OffNewTarget)
+			c.a.Store(calleeCtx, abi.OffNewTarget, top)
+			c.storeImm(calleeCtx, abi.OffFunction, uint64(derivedFunction(t)), top)
 		} else if t.ArrowThis {
 			// The this it captured (arrowThis).
 			c.a.Load(high2, regCtx, abi.OffCallThis)
@@ -1206,8 +1230,9 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	// retRef: v, its pointer word kept (OpCallCell).
 	c.a.Bind(back)
 	at := abi.OffKeep + int32(v.Index)*vs
-	if site.Pool != 0 {
-		// A construction's result, if not an object, is its receiver.
+	if site.Pool != 0 || site.Super {
+		// A construction's result, if not an object, is its receiver: a
+		// super()'s, the instance, a base parent's receiver.
 		object := c.a.NewLabel()
 		c.movImm(scratchB, c.enc.Object)
 		c.a.Op(amd64.Cmp, retNum, scratchB, true)
@@ -1216,6 +1241,12 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		c.a.Load(retRef, regCtx, abi.OffNext)
 		c.a.Load(retRef, retRef, abi.OffThis+c.enc.RefOffset)
 		c.a.Bind(object)
+	}
+	if site.Super {
+		// The this it binds, the context's This, which an exit does not
+		// write (the VM's jitDerivedFrame, jitBindThis).
+		c.a.Store(regCtx, abi.OffThis+c.enc.RefOffset, retRef)
+		c.a.Store(regCtx, abi.OffThis+c.enc.NumOffset, retNum)
 	}
 	c.a.Store(regCtx, at+c.enc.RefOffset, retRef)
 	c.a.Store(regCtx, at+c.enc.NumOffset, retNum)
@@ -1279,6 +1310,35 @@ func (c *compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(amd64.Con
 		return
 	}
 	c.goCallOp(v, goOpWord(site), guard, false)
+}
+
+// superGuards checks a super() may call t's parent natively
+// (ssa.CallSite's Super): the function running is the one the code was
+// compiled for (abi.Context's Function), its prototype -- the parent, read
+// at every super(), as the VM's parentConstructorOf reads it -- still
+// t's Callee, and, a class with no constructor of its own skipped, its
+// prototype still Parent; and the this, x, unbound: a second super() Go
+// makes, which runs the parent and then throws. It uses scratchA and
+// scratchB.
+func (c *compiler) superGuards(t *ssa.CallSite, x *ssa.Value, guard func(amd64.Cond)) {
+	c.a.Load(scratchA, regCtx, abi.OffFunction)
+	c.cmpWord(scratchA, uint64(t.Active))
+	guard(amd64.CondNE)
+	c.a.Load(scratchB, scratchA, c.enc.ObjectProto)
+	c.cmpWord(scratchB, uint64(t.Callee))
+	guard(amd64.CondNE)
+	if t.Parent != 0 {
+		c.a.Load(scratchB, scratchB, c.enc.ObjectProto)
+		c.cmpWord(scratchB, uint64(t.Parent))
+		guard(amd64.CondNE)
+	}
+	if remat(x) {
+		c.materialize(x, scratchA)
+		c.cmpWord(scratchA, c.enc.Uninitialized)
+	} else {
+		c.cmpWord(c.gpr(x, scratchA), c.enc.Uninitialized)
+	}
+	guard(amd64.CondNE)
 }
 
 // closureTake makes call v, a closure Go makes from its pool natively
