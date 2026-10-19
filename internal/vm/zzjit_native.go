@@ -3138,8 +3138,13 @@ func (r *Runtime) jitInterpretAfter(f *frame, sp int, pending error, code *jit.S
 
 // jitDeoptBlocks reports whether f is an invocation the interpreter goes
 // on with after its code left it (jitInterpret) that its code is not to
-// take back at a loop: code that does not pay (entrySlow), or the code a
-// guard failed in, not compiled again since, nor to be. Any other -- one
+// take back at a loop: the code a guard failed in, not compiled again
+// since, nor to be. Code judged not to pay at Go's entries (entrySlow) is
+// taken back at a loop that has run a full budget, as any invocation's
+// long loop goes on natively (tryJITAt): kept out, AWFY DeltaBlue's
+// forEach, judged on short loops, had run each of its long ones' rest in
+// the existing tiers after one exit, a million calls of its callbacks a
+// run with them. Any other -- one
 // left where the code has no entry to go on at, a native callee's, or
 // after a throw native code did not catch -- the code takes back at the
 // loop's next budget, and code compiled again for what made it leave, its
@@ -3151,7 +3156,7 @@ func (r *Runtime) jitDeoptBlocks(f *frame) bool {
 		return false
 	}
 	e := r.jit.hint(f.cl)
-	return e == nil || e.ssa == nil || e.entrySlow || r.jitDeoptCode != nil && e.ssa == r.jitDeoptCode && !e.invalid
+	return e == nil || e.ssa == nil || r.jitDeoptCode != nil && e.ssa == r.jitDeoptCode && !e.invalid
 }
 
 // jitGlobalRef is strict mode's check_global_ref, as the interpreter makes
