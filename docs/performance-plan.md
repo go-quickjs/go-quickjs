@@ -752,6 +752,17 @@ faster: its loss is its steady state's.
   them, Strength.of declined 36,000 times a run (2026-10-19, after
   e0e21ca; the marking that had seemed the cause is not: the declines
   happen with the collector idle).
+- **Calls of Go that are not the collector's.** Counted by operation
+  over one AWFY run (2026-10-19, native stores while marking), the
+  largest are element stores native code leaves to Go (ssa.GoElemStore):
+  355,000 in DeltaBlue, 3.6 million in Havlak, 5.5 million in Storage,
+  which fills `new Array(n)`'s holes; then cells Go makes for captured
+  locals (ssa.GoCells), 260,000 in DeltaBlue and 2.0 million in Havlak,
+  and Havlak's closures (GoClosure 446,000, GoClose 559,000). V8 stores
+  into a holey array's hole and allocates its contexts in its code. The
+  calls Go makes only because the collector marks are a tenth of these
+  or less: DeltaBlue 12,000, CD 21,000, Havlak 65,000, Storage 50,000
+  (marking stages 3 and 4).
 - **Compiling in the background, last.** V8 compiles on a thread of its
   own while the function runs on in its lower tier; ours compiles on the
   runtime's goroutine, so that each compile's whole cost is paid where it

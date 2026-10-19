@@ -336,8 +336,10 @@ type Heap struct {
 	// Proto, Holder's Object).
 	Holders map[uintptr]*Object
 	// WriteBarrier is the collector's write-barrier flag, which leaves a
-	// store that changes a reference to Go while it is set.
-	WriteBarrier bool
+	// store that changes a reference to Go while it is set, unless StoreRef
+	// says the code stores it with Go's write barrier (abi.Encoding's
+	// StoreRef).
+	WriteBarrier, StoreRef bool
 	// Address is an object's address, which OpSameObject compares; nil if
 	// no object is any particular one.
 	Address func(object int) uintptr
@@ -828,7 +830,7 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 					return exit(v.State, ir.ExitKind(v.Aux))
 				}
 				x := b.t
-				if heap.WriteBarrier && (isReference(x) || isReference(o.Props[i])) {
+				if heap.WriteBarrier && !heap.StoreRef && (isReference(x) || isReference(o.Props[i])) {
 					return exit(v.State, ir.ExitKind(v.Aux))
 				}
 				for _, s := range v.Args[2:] {
@@ -895,8 +897,9 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 			case OpLoadCell:
 				vals[v.ID] = val{t: *a.cell}
 			case OpKeep:
-				// The value's source while the collector marks, else a copy.
-				if heap.WriteBarrier {
+				// The value's source while the collector marks, unless the
+				// code stores references then, else a copy.
+				if heap.WriteBarrier && !heap.StoreRef {
 					x := v.Args[0]
 					switch o := origin.At(x); {
 					case x.Shadow != nil:

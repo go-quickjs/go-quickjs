@@ -29,3 +29,32 @@ func callGoProgram(n int) ([]byte, error) {
 	a.Ret()
 	return a.Finish()
 }
+
+// storeRefProgram is amd64's.
+func storeRefProgram(raw bool) ([]byte, error) {
+	a := &arm64.Asm{}
+	ctx, slot, p, back, x := arm64.Reg(0), arm64.Reg(15), arm64.Reg(17), arm64.Reg(16), arm64.Reg(9)
+	store := func() {
+		if raw {
+			a.Store(slot, 0, p)
+			return
+		}
+		l := a.NewLabel()
+		a.Adr(back, l)
+		a.MovImm(x, StoreRef())
+		a.Br(x)
+		a.Bind(l)
+	}
+	for k := range int32(storeRefPairs) {
+		dst, src := abi.OffGoArgs+32*k, abi.OffGoArgs+32*k+16
+		a.Load(x, ctx, src)
+		a.Load(p, x, 0)
+		a.Load(slot, ctx, dst)
+		store()
+		a.Load(slot, ctx, src)
+		a.MovImm(p, 0)
+		store()
+	}
+	a.Ret()
+	return a.Finish()
+}

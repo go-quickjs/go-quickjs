@@ -436,9 +436,10 @@ type GoOp uint8
 // address the first operand's pointer word: a call that takes from one
 // makes it, and is made again from its start.
 //
-// GoStore stores a pointer while the collector marks, which native code,
-// with no write barrier, does not: the first operand is the value, the
-// second's pointer word the cell's address (mir's property stores).
+// GoStore stores a pointer while the collector marks, for code that may not
+// store it with Go's write barrier itself (abi.Encoding's StoreRef): the
+// first operand is the value, the second's pointer word the cell's address
+// (mir's property stores).
 //
 // GoCall is a call, a method call or a construction -- the call at the
 // state's PC -- that Go makes with the operands, from the function or the

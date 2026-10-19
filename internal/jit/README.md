@@ -295,14 +295,22 @@ JIT's tests run under `-d=checkptr=2` and `GODEBUG=gccheckmark=1`.
 ### The write barrier
 
 Native code tests the runtime's write-barrier flag before it writes a
-pointer, as compiled Go does. While the collector marks, the write is made
-by a call of Go -- a store, a pool's object taken, a property added along a
-transition, a native call's frame -- so Go's own barrier records it, and
-native code goes on after it. The flag cannot change between the test and
-the write: Go sets it only with the world stopped, which native code,
-never a preemption point, is not. Emulating the barrier's buffer in native
-code was rejected: its contents would have to reach the collector before
-any safepoint Go could stop the goroutine at.
+pointer, as compiled Go does. While the collector marks, it calls Go's
+barrier, as V8's code calls its own: a store of a pointer word -- a
+property's value, a property added along a transition and its shape, an
+element, a keep -- jumps to `storeRef` (`entry_*.s`), which, as `callGo`,
+is to the Go runtime a function the code's Go caller called, and calls
+`storeRefGo`, a nosplit Go function that stores the word, so that the
+compiler's barrier shades the pointer it overwrites and the one it writes.
+A routine each code shares saves the registers the code allocates and
+restores them after; `storeRef` keeps only the context's register. The
+rest -- a pool's object taken, a native call's frame -- is still made by a
+call of Go, so Go's own barrier records it, and native code goes on after
+it. The flag cannot change between the test and the write: Go sets it only
+with the world stopped, which native code, never a preemption point, is
+not. Emulating the barrier's buffer in native code was rejected: its
+contents would have to reach the collector before any safepoint Go could
+stop the goroutine at.
 
 One pointer store is made without the test: a native call's result, into
 the caller's keep cell (and a `super()`'s into its `This`), as its code
@@ -381,8 +389,8 @@ The code uses the VM's frame and objects in place (see
   and elements; a property table, by its shape; a script's global and
   lexical bindings (`Context.Global`, `Context.GlobalLex`).
 - A store of a pointer tests the runtime's write-barrier flag first, as
-  compiled Go does, and while the collector marks is made by a call of Go
-  (see [The write barrier](#the-write-barrier)).
+  compiled Go does, and while the collector marks is made with Go's
+  barrier (see [The write barrier](#the-write-barrier)).
 - References it must keep across calls of Go are kept in the context
   (`Context.Keep`), where the collector sees them.
 - It keeps no address between entries.

@@ -90,6 +90,9 @@ type a64Compiler struct {
 	// amd64's.
 	storing     arm64.Label
 	storingUsed bool
+	// refStoring is the routine of the stores storeRef makes (refStore).
+	refStoring     arm64.Label
+	refStoringUsed bool
 	// appending is the routine the element writes Go makes share where a
 	// number at an array's length may be appended natively
 	// (appendingCall), as amd64's.
@@ -216,6 +219,10 @@ func compileARM64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 	if c.storingUsed {
 		c.a.Bind(c.storing)
 		c.storingCall()
+	}
+	if c.refStoringUsed {
+		c.a.Bind(c.refStoring)
+		c.refStoringCall()
 	}
 	if c.liveUsed {
 		c.a.Bind(c.live)
@@ -1459,7 +1466,7 @@ func (c *a64Compiler) propStore(v *ssa.Value, guard func(arm64.Cond)) {
 	c.a.FMovToF(a64F0, c.gpr(x, a64B))
 	c.movImm(a64B, c.enc.WriteBarrier)
 	c.a.LoadU8(a64B, a64B, 0)
-	if c.enc.CallGo == 0 {
+	if !c.storesRefs() {
 		c.a.CmpImm(a64B, 0, false)
 		guard(arm64.NE)
 	} else {
@@ -1483,7 +1490,7 @@ func (c *a64Compiler) propStore(v *ssa.Value, guard func(arm64.Cond)) {
 			c.a.B(stored)
 		})
 	}
-	if c.enc.CallGo == 0 {
+	if !c.storesRefs() {
 		return
 	}
 	stub := c.stubLabel(v.State, exitKind(v.Aux))
@@ -1495,8 +1502,16 @@ func (c *a64Compiler) propStore(v *ssa.Value, guard func(arm64.Cond)) {
 }
 
 // goStore is amd64's: the cell's address in A, the value's words in F0
-// and C, which the routine the stores share writes (storingCall).
+// and C, the pointer word stored through storeRef (refStore), or by Go,
+// through the routine Go's stores share (storingCall).
 func (c *a64Compiler) goStore(stub *arm64.Label) {
+	if c.enc.StoreRef != 0 {
+		c.a.FMovFromF(a64B, a64F0)
+		c.a.Store(a64A, c.enc.NumOffset, a64B)
+		c.a.AddImm(a64A, a64A, int64(c.enc.RefOffset), true)
+		c.refStore()
+		return
+	}
 	if !c.storingUsed {
 		c.storing, c.storingUsed = c.a.NewLabel(), true
 	}
@@ -1509,6 +1524,52 @@ func (c *a64Compiler) goStore(stub *arm64.Label) {
 		c.a.Load(a64B, a64Ctx, abi.OffGoStatus)
 		c.a.Cbnz(a64B, *stub, true)
 	}
+}
+
+// storesRefs is amd64's.
+func (c *a64Compiler) storesRefs() bool { return c.enc.StoreRef != 0 || c.enc.CallGo != 0 }
+
+// refStore is amd64's: the word's address in A, the pointer in C, through
+// the routine the stores share (refStoringCall), which comes back to the
+// site, at GoSite.
+func (c *a64Compiler) refStore() {
+	if !c.refStoringUsed {
+		c.refStoring, c.refStoringUsed = c.a.NewLabel(), true
+	}
+	back := c.a.NewLabel()
+	c.a.Adr(a64B, back)
+	c.a.Store(a64Ctx, abi.OffGoSite, a64B)
+	c.a.B(c.refStoring)
+	c.a.Bind(back)
+}
+
+// refStoringCall is amd64's: every allocatable register saved, storeRef
+// called, which comes back where B says, with the link register; the
+// frame's registers read again, every allocatable one restored, and back
+// to the site.
+func (c *a64Compiler) refStoringCall() {
+	for _, r := range c.usedRegs(c.gprs, false) {
+		c.a.Store(a64Ctx, abi.OffRegs+int32(r)*8, arm64.Reg(r))
+	}
+	for _, r := range c.usedRegs(c.fprs, true) {
+		c.a.StoreF(a64Ctx, abi.OffXRegs+int32(r)*8, arm64.FReg(r))
+	}
+	back := c.a.NewLabel()
+	c.a.Adr(a64B, back)
+	// The frame's locals, read again below, are the jump's register.
+	c.movImm(a64Locals, c.enc.StoreRef)
+	c.a.Br(a64Locals)
+	c.a.Bind(back)
+	c.a.Load(a64Locals, a64Ctx, abi.OffLocals)
+	c.a.Load(a64Stack, a64Ctx, abi.OffStack)
+	for _, r := range c.usedRegs(c.gprs, false) {
+		c.a.Load(arm64.Reg(r), a64Ctx, abi.OffRegs+int32(r)*8)
+	}
+	for _, r := range c.usedRegs(c.fprs, true) {
+		c.a.LoadF(arm64.FReg(r), a64Ctx, abi.OffXRegs+int32(r)*8)
+	}
+	c.a.Load(a64A, a64Ctx, abi.OffGoSite)
+	c.a.Br(a64A)
 }
 
 // storingCall is the routine goStore's sites share, as amd64's.
@@ -2074,6 +2135,10 @@ func (c *a64Compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss arm64.La
 	c.a.Cbnz(a64A, marked, false)
 	c.cold = append(c.cold, func() {
 		c.a.Bind(marked)
+		if c.enc.StoreRef != 0 {
+			c.addAlongMarking(v, add, done)
+			return
+		}
 		if c.enc.CallGo == 0 {
 			c.movImm(a64B, 1)
 			c.a.Store(a64Ctx, abi.OffExitMarking, a64B)
@@ -2103,6 +2168,31 @@ func (c *a64Compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss arm64.La
 	c.a.Store(a64C, c.enc.RefOffset, a64B)
 	c.a.Store(a64C, c.enc.NumOffset, c.gpr(x, a64A))
 	c.a.Bind(done)
+}
+
+// addAlongMarking is amd64's: the table's length in B, the value's pointer
+// word in F1; the entry's address and the pointer word wait in GoArgs.
+func (c *a64Compiler) addAlongMarking(v *ssa.Value, add *ssa.PropertyAdd, done arm64.Label) {
+	x := v.Args[1]
+	o := c.gpr(v.Args[0], a64D)
+	c.a.AddImm(a64C, a64B, 1, true)
+	c.a.Store(o, c.enc.ObjectProps+8, a64C)
+	c.a.ShiftImm(arm64.Lsl, a64B, a64B, 4, true)
+	c.a.Load(a64C, o, c.enc.ObjectProps)
+	c.a.Op(arm64.Add, a64C, a64C, a64B, true)
+	c.a.Store(a64Ctx, abi.OffGoArgs+c.enc.NumOffset, a64C)
+	c.a.FMovFromF(a64B, a64F1)
+	c.a.Store(a64Ctx, abi.OffGoArgs+c.enc.RefOffset, a64B)
+	c.a.AddImm(a64A, o, int64(c.enc.ObjectShape), true)
+	c.movImm(a64C, uint64(add.Next))
+	c.refStore()
+	c.a.Load(a64C, a64Ctx, abi.OffGoArgs+c.enc.NumOffset)
+	c.a.Store(a64C, c.enc.NumOffset, c.gpr(x, a64A))
+	c.a.Load(a64A, a64Ctx, abi.OffGoArgs+c.enc.NumOffset)
+	c.a.AddImm(a64A, a64A, int64(c.enc.RefOffset), true)
+	c.a.Load(a64C, a64Ctx, abi.OffGoArgs+c.enc.RefOffset)
+	c.refStore()
+	c.a.B(done)
 }
 
 // property finds the property a property operation names and leaves the
@@ -3754,7 +3844,7 @@ func (c *a64Compiler) keep(v *ssa.Value) {
 	x := v.Args[0]
 	viaGo, done := c.a.NewLabel(), c.a.NewLabel()
 	at := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
-	if c.enc.CallGo == 0 {
+	if !c.storesRefs() {
 		// As amd64's: no calls of Go, the keep writes nothing then.
 		c.keepSource(x)
 		c.a.MovRR(a64A, a64C)
@@ -4415,7 +4505,7 @@ func (c *a64Compiler) elemStore(v *ssa.Value) {
 	c.a.FMovToF(a64F0, c.gpr(x, a64B))
 	c.movImm(a64B, c.enc.WriteBarrier)
 	c.a.LoadU8(a64B, a64B, 0)
-	if c.enc.CallGo == 0 {
+	if !c.storesRefs() {
 		c.a.Cbnz(a64B, stub, false)
 	} else {
 		c.a.Cbnz(a64B, viaGo, false)
@@ -4440,16 +4530,17 @@ func (c *a64Compiler) elemStore(v *ssa.Value) {
 		c.a.FMovToF(a64F2, tw)
 		c.typedWrite(v, done, slow, func() arm64.FReg { return a64F2 })
 	})
-	if c.enc.CallGo == 0 {
+	if c.storesRefs() {
+		c.cold = append(c.cold, func() {
+			c.a.Bind(viaGo)
+			c.goStore(&stub)
+			c.a.B(done)
+		})
+	}
+	if c.enc.CallGo == 0 || checked {
 		return
 	}
 	c.cold = append(c.cold, func() {
-		c.a.Bind(viaGo)
-		c.goStore(&stub)
-		c.a.B(done)
-		if checked {
-			return
-		}
 		// Any other store Go makes if it can (ssa.GoElemStore).
 		c.a.Bind(slow)
 		size := int32(unsafe.Sizeof(abi.GoArg{}))

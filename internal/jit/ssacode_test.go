@@ -344,6 +344,7 @@ var testEncoding = abi.Encoding{
 	ObjectShape: int32(unsafe.Offsetof(testObject{}.shape)), ObjectProps: int32(unsafe.Offsetof(testObject{}.vals)),
 	ObjectProto:  int32(unsafe.Offsetof(testObject{}.proto)),
 	WriteBarrier: uint64(uintptr(unsafe.Pointer(&testBarrier))),
+	StoreRef:     StoreRef(),
 	ShapeKeys:    int32(unsafe.Offsetof(testShape{}.keys)), KeySize: int32(unsafe.Sizeof(testKey{})),
 	PropertyKey: int32(unsafe.Offsetof(testKey{}.key)), PropertyFlags: int32(unsafe.Offsetof(testKey{}.flags)),
 	ClassObject: testClassObject, PropNotData: testAccessor | testDeleted | testPrivate,
@@ -646,7 +647,7 @@ func (h testHeap) native() *nativeHeap {
 // heap is what the SSA evaluator reads: views of the arrays' cells, and the
 // objects' shapes with its own copy of their property words.
 func (n *nativeHeap) heap() ssa.Heap {
-	h := ssa.Heap{Arrays: n.views(), Word: testWordValue, Holders: map[uintptr]*ssa.Object{}, WriteBarrier: testBarrier != 0, Mega: n.mega}
+	h := ssa.Heap{Arrays: n.views(), Word: testWordValue, Holders: map[uintptr]*ssa.Object{}, WriteBarrier: testBarrier != 0, StoreRef: testEncoding.StoreRef != 0, Mega: n.mega}
 	h.Accessors = map[*ir.Value]ssa.Accessor{}
 	for i := range testHolders {
 		o := &testHolders[i]
@@ -1970,7 +1971,8 @@ func BenchmarkSSARoundTrip(b *testing.B) {
 // TestSSANativeStores stores values of every kind in a property and reads
 // them back, with the collector's write-barrier flag clear and set: a store
 // that changes a pointer word -- a reference stored, or one replaced -- is
-// Go's while it is set. A reference loaded from the cell being stored to
+// made with Go's write barrier while it is set (storeRef), or, where the
+// code may not, is Go's. A reference loaded from the cell being stored to
 // and used after the store keeps the store from happening natively
 // (ssa's storeChecks); one loaded from another object's cell does not.
 // Random programs seldom read and then write one property of one object.
@@ -2025,10 +2027,11 @@ func TestSSANativeStores(t *testing.T) {
 						t.Fatalf("%s: %v", name, err)
 					}
 					// While the collector marks, a store of a pointer word, or
-					// over one, leaves; otherwise the value read before it was
-					// kept (OpKeep).
+					// over one, leaves unless the code stores it through
+					// storeRef; otherwise the value read before it was kept
+					// (OpKeep).
 					pointers := isTestReference(value) || isTestReference(old)
-					native := !(barrier && pointers)
+					native := !(barrier && pointers) || testEncoding.StoreRef != 0
 					if got := exit.Kind == ir.Returned; got != native {
 						t.Fatalf("%s: native %v, want %v", name, got, native)
 					}

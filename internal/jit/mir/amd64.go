@@ -101,6 +101,10 @@ type compiler struct {
 	savingUsed  bool
 	storing     amd64.Label
 	storingUsed bool
+	// refStoring is the routine of the stores of pointer words storeRef
+	// makes (refStore).
+	refStoring     amd64.Label
+	refStoringUsed bool
 	// appending is the routine the element writes Go makes share where a
 	// number at an array's length may be appended natively (appendingCall),
 	// which goes on to saving for the rest.
@@ -227,6 +231,10 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 	if c.storingUsed {
 		c.a.Bind(c.storing)
 		c.storingCall()
+	}
+	if c.refStoringUsed {
+		c.a.Bind(c.refStoring)
+		c.refStoringCall()
 	}
 	if c.liveUsed {
 		c.a.Bind(c.live)
@@ -3261,7 +3269,7 @@ func (c *compiler) propStore(v *ssa.Value, guard func(amd64.Cond)) {
 	c.movImm(scratchB, c.enc.WriteBarrier)
 	c.a.LoadU8(scratchB, scratchB, 0)
 	c.a.Op(amd64.Test, scratchB, scratchB, false)
-	if c.enc.CallGo == 0 {
+	if !c.storesRefs() {
 		// No calls of Go: the store leaves for Go.
 		guard(amd64.CondNE)
 	} else {
@@ -3285,7 +3293,7 @@ func (c *compiler) propStore(v *ssa.Value, guard func(amd64.Cond)) {
 			c.a.Jmp(stored)
 		})
 	}
-	if c.enc.CallGo == 0 {
+	if !c.storesRefs() {
 		return
 	}
 	stub := c.stubLabel(v.State, exitKind(v.Aux))
@@ -3296,18 +3304,27 @@ func (c *compiler) propStore(v *ssa.Value, guard func(amd64.Cond)) {
 	})
 }
 
-// goStore has Go store a value into a cell while the collector marks
-// (ssa.GoStore), as V8's code calls its write barrier: the cell's address
-// in scratchA, the value's words in xScratch0 and scratchC. Every
-// allocatable register is saved across it, in the context's register area,
-// which only an exit uses; if Go refuses, stub, the store's exit -- a keep
-// has none, nor does Go refuse it.
+// goStore stores a value into a cell while the collector marks, as V8's
+// code calls its write barrier: the cell's address in scratchA, the
+// value's words in xScratch0 and scratchC. Its number word is stored as any
+// is, its pointer word with Go's write barrier (refStore); where the code
+// may not call storeRef (abi.Encoding's StoreRef), Go stores the value
+// (ssa.GoStore). Every allocatable register is saved across it, in the
+// context's register area, which only an exit uses; if Go refuses, stub,
+// the store's exit -- a keep has none, nor does Go refuse it.
 //
-// The stores share a routine (storingCall), which writes the operands from
+// Go's stores share a routine (storingCall), which writes the operands from
 // where they are and calls Go as goSaving's sites do: a site is where Go
 // comes back to and the test of its answer -- a store of a pointer is, in
 // most code, the most frequent call of Go there is, each a site.
 func (c *compiler) goStore(stub *amd64.Label) {
+	if c.enc.StoreRef != 0 {
+		c.a.MovQFromX(scratchB, xScratch0)
+		c.a.Store(scratchA, c.enc.NumOffset, scratchB)
+		c.a.OpImm(amd64.Add, scratchA, c.enc.RefOffset, true)
+		c.refStore()
+		return
+	}
 	if !c.storingUsed {
 		c.storing, c.storingUsed = c.a.NewLabel(), true
 	}
@@ -3321,6 +3338,58 @@ func (c *compiler) goStore(stub *amd64.Label) {
 		c.a.Op(amd64.Test, scratchB, scratchB, true)
 		c.a.Jcc(amd64.CondNE, *stub)
 	}
+}
+
+// storesRefs reports whether the code stores a pointer word while the
+// collector marks, through storeRef or Go (goStore), rather than leaving
+// native code to.
+func (c *compiler) storesRefs() bool { return c.enc.StoreRef != 0 || c.enc.CallGo != 0 }
+
+// refStore stores a pointer word while the collector marks, with Go's
+// write barrier, which shades the pointer it overwrites and the one it
+// writes, as V8's code calls its write barrier: the word's address in
+// scratchA, the pointer in scratchC. Every allocatable register is saved
+// across it, and none of the scratch ones. The stores share a routine
+// (refStoring), which saves them and jumps to storeRef (abi.Encoding's
+// StoreRef); a site is where it comes back to, which Go never refuses.
+func (c *compiler) refStore() {
+	if !c.refStoringUsed {
+		c.refStoring, c.refStoringUsed = c.a.NewLabel(), true
+	}
+	back := c.a.NewLabel()
+	c.a.LeaLabel(scratchB, back)
+	c.a.Store(regCtx, abi.OffGoSite, scratchB)
+	c.a.Jmp(c.refStoring)
+	c.a.Bind(back)
+}
+
+// refStoringCall is the routine refStore's sites share: every allocatable
+// register saved in the context's register area, as savingCall saves
+// them; storeRef, which comes back to it, where scratchB says; the frame's
+// registers read again, and every allocatable one restored; then back to
+// the site, at GoSite.
+func (c *compiler) refStoringCall() {
+	for _, r := range c.usedRegs(c.gprs, false) {
+		c.a.Store(regCtx, abi.OffRegs+int32(r)*8, amd64.Reg(r))
+	}
+	for _, r := range c.usedRegs(c.fprs, true) {
+		c.a.StoreSD(regCtx, abi.OffXRegs+int32(r)*8, amd64.XReg(r))
+	}
+	back := c.a.NewLabel()
+	c.a.LeaLabel(scratchB, back)
+	// The frame's locals, read again below, are the jump's register.
+	c.movImm(regLocals, c.enc.StoreRef)
+	c.a.JmpReg(regLocals)
+	c.a.Bind(back)
+	c.a.Load(regLocals, regCtx, abi.OffLocals)
+	c.a.Load(regStack, regCtx, abi.OffStack)
+	for _, r := range c.usedRegs(c.gprs, false) {
+		c.a.Load(amd64.Reg(r), regCtx, abi.OffRegs+int32(r)*8)
+	}
+	for _, r := range c.usedRegs(c.fprs, true) {
+		c.a.LoadSD(amd64.XReg(r), regCtx, abi.OffXRegs+int32(r)*8)
+	}
+	c.a.JmpMem(regCtx, abi.OffGoSite)
 }
 
 // storingCall is the routine goStore's sites share: the cell's address,
@@ -3611,6 +3680,10 @@ func (c *compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss amd64.Label
 	c.a.Jcc(amd64.CondNE, marked)
 	c.cold = append(c.cold, func() {
 		c.a.Bind(marked)
+		if c.enc.StoreRef != 0 {
+			c.addAlongMarking(v, add, done)
+			return
+		}
 		if c.enc.CallGo == 0 {
 			// No calls of Go: the collector's marking's exit
 			// (abi.Context.ExitMarking), if it leaves.
@@ -3644,6 +3717,39 @@ func (c *compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss amd64.Label
 	c.a.Store(scratchC, c.enc.RefOffset, scratchB)
 	c.a.Store(scratchC, c.enc.NumOffset, c.gpr(x, scratchA))
 	c.a.Bind(done)
+}
+
+// addAlongMarking is addAlong's add while the collector marks, the table's
+// length in scratchB, the value's pointer word in xScratch1: the length,
+// then the shape and the value's pointer word with Go's write barrier
+// (refStore), which keeps neither a scratch register nor xScratch1 -- the
+// entry's address and the pointer word wait in the context's GoArgs,
+// integers the collector does not read, the value kept by its source --
+// then done.
+func (c *compiler) addAlongMarking(v *ssa.Value, add *ssa.PropertyAdd, done amd64.Label) {
+	x := v.Args[1]
+	o := c.gpr(v.Args[0], scratchA)
+	c.a.MovRR(scratchC, scratchB)
+	c.a.OpImm(amd64.Add, scratchB, 1, true)
+	c.a.Store(o, c.enc.ObjectProps+8, scratchB)
+	c.a.ShiftImm(amd64.Shl, scratchC, 4, true)
+	c.a.Load(scratchB, o, c.enc.ObjectProps)
+	c.a.Op(amd64.Add, scratchC, scratchB, true)
+	c.a.Store(regCtx, abi.OffGoArgs+c.enc.NumOffset, scratchC)
+	c.a.MovQFromX(scratchB, xScratch1)
+	c.a.Store(regCtx, abi.OffGoArgs+c.enc.RefOffset, scratchB)
+	c.a.Lea(scratchA, o, c.enc.ObjectShape)
+	c.movImm(scratchC, uint64(add.Next))
+	c.refStore()
+	// The number word, then the pointer word: making a lazy value's number
+	// word may use xScratch1.
+	c.a.Load(scratchC, regCtx, abi.OffGoArgs+c.enc.NumOffset)
+	c.a.Store(scratchC, c.enc.NumOffset, c.gpr(x, scratchA))
+	c.a.Load(scratchA, regCtx, abi.OffGoArgs+c.enc.NumOffset)
+	c.a.OpImm(amd64.Add, scratchA, c.enc.RefOffset, true)
+	c.a.Load(scratchC, regCtx, abi.OffGoArgs+c.enc.RefOffset)
+	c.refStore()
+	c.a.Jmp(done)
 }
 
 // property finds the property a property operation names and leaves the
@@ -4047,7 +4153,7 @@ func (c *compiler) keep(v *ssa.Value) {
 	x := v.Args[0]
 	viaGo, done := c.a.NewLabel(), c.a.NewLabel()
 	at := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
-	if c.enc.CallGo == 0 {
+	if !c.storesRefs() {
 		// No calls of Go, so no store while the collector marks: the
 		// keep writes nothing then, the value its own source.
 		c.keepSource(x)
@@ -4850,7 +4956,7 @@ func (c *compiler) elemStore(v *ssa.Value) {
 	c.movImm(scratchB, c.enc.WriteBarrier)
 	c.a.LoadU8(scratchB, scratchB, 0)
 	c.a.Op(amd64.Test, scratchB, scratchB, false)
-	if c.enc.CallGo == 0 {
+	if !c.storesRefs() {
 		c.a.Jcc(amd64.CondNE, stub)
 	} else {
 		c.a.Jcc(amd64.CondNE, viaGo)
@@ -4875,16 +4981,17 @@ func (c *compiler) elemStore(v *ssa.Value) {
 		c.a.MovQToX(xScratch2, tw)
 		c.typedWrite(v, done, slow, func() amd64.XReg { return xScratch2 })
 	})
-	if c.enc.CallGo == 0 {
+	if c.storesRefs() {
+		c.cold = append(c.cold, func() {
+			c.a.Bind(viaGo)
+			c.goStore(&stub)
+			c.a.Jmp(done)
+		})
+	}
+	if c.enc.CallGo == 0 || checked {
 		return
 	}
 	c.cold = append(c.cold, func() {
-		c.a.Bind(viaGo)
-		c.goStore(&stub)
-		c.a.Jmp(done)
-		if checked {
-			return
-		}
 		// Any other store Go makes if it can (ssa.GoElemStore): the array,
 		// the key and the value's words in the context's GoArgs.
 		c.a.Bind(slow)

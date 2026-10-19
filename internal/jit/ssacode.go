@@ -235,6 +235,40 @@ func callGoAddr() uintptr
 // CallGo is where native code jumps to call Go (abi.Encoding's CallGo).
 func CallGo() uint64 { return uint64(callGoAddr()) }
 
+// storeRef is where native code stores a pointer word while the collector
+// marks (entry_*.s), and storeRefAddr its address: V8's code's call of its
+// write barrier, a routine that saves nothing native code keeps, calling
+// storeRefGo.
+func storeRef()
+func storeRefAddr() uintptr
+
+// StoreRef is where native code jumps to store a pointer word with Go's
+// write barrier (abi.Encoding's StoreRef).
+func StoreRef() uint64 { return uint64(storeRefAddr()) }
+
+// storeRefClobber is storeRef, every register native code may keep given
+// junk first, and storeRefClobberAddr its address.
+func storeRefClobber()
+func storeRefClobberAddr() uintptr
+
+// StoreRefClobber is StoreRef for tests: what native code jumps to there
+// fills every register it may keep with junk before it stores, so that code
+// that did not save one it keeps across the store goes wrong.
+func StoreRefClobber() uint64 { return uint64(storeRefClobberAddr()) }
+
+// storeRefGo is what storeRef calls: the store, which compiled Go makes
+// with its write barrier while the collector marks -- the old pointer and
+// the new shaded, as the hybrid barrier does. It never grows the stack,
+// which storeRef's caller, native code, did not check, nor preempts: what
+// it does is the barrier's, which compiled Go makes in any function.
+// Neither the race detector nor checkptr is told of the store: slot is
+// any cell's pointer word, in an object, a frame's slots or the context.
+//
+//go:nosplit
+//go:norace
+//go:nocheckptr
+func storeRefGo(slot *unsafe.Pointer, p unsafe.Pointer) { *slot = p }
+
 // HostCall is Go's side of a call from native code (abi.Context's GoOp):
 // it does what ctx.GoOp says with ctx.GoArgs, its result to
 // ctx.Keep[ctx.GoKeep], and reports whether it did. It is set once, by the

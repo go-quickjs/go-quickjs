@@ -28,3 +28,34 @@ func callGoProgram(n int) ([]byte, error) {
 	a.Ret()
 	return a.Finish()
 }
+
+// storeRefProgram is native code that moves storeRefPairs pointers, each
+// from the word whose address is GoArgs[2k+1].Num to the one at
+// GoArgs[2k].Num, through storeRef, clearing the first, and returns; raw,
+// it stores them itself, as no code may while the collector marks.
+func storeRefProgram(raw bool) ([]byte, error) {
+	a := &amd64.Asm{}
+	store := func() {
+		if raw {
+			a.Store(amd64.RAX, 0, amd64.RCX)
+			return
+		}
+		back := a.NewLabel()
+		a.LeaLabel(amd64.R11, back)
+		a.MovImm(amd64.R10, StoreRef())
+		a.JmpReg(amd64.R10)
+		a.Bind(back)
+	}
+	for k := range int32(storeRefPairs) {
+		dst, src := abi.OffGoArgs+32*k, abi.OffGoArgs+32*k+16
+		a.Load(amd64.R8, amd64.RDI, src)
+		a.Load(amd64.RCX, amd64.R8, 0)
+		a.Load(amd64.RAX, amd64.RDI, dst)
+		store()
+		a.Load(amd64.RAX, amd64.RDI, src)
+		a.MovImm(amd64.RCX, 0)
+		store()
+	}
+	a.Ret()
+	return a.Finish()
+}

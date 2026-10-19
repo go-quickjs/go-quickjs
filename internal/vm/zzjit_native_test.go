@@ -24,6 +24,7 @@ import (
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/compiler"
+	"github.com/go-quickjs/go-quickjs/internal/jit"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 	jitcompile "github.com/go-quickjs/go-quickjs/internal/jit/compile"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
@@ -4824,37 +4825,40 @@ func TestJITSSAReferenceStoresUnderGC(t *testing.T) {
 	}
 }
 
-// While the collector marks, a store that changes a pointer word is Go's,
-// with its write barrier, called from native code (ssa.GoStore), which goes
-// on, as V8's code calls its write barrier: with the write-barrier flag
-// native code reads (jitEncoding.WriteBarrier) pointed at a byte that is
-// set, every reference store of relink's is a call of Go, none leaves
-// native code, and its numbers' stores are native. They had each left.
+// While the collector marks, native code stores a pointer word with Go's
+// write barrier (jit's storeRef), as V8's code calls its write barrier, and
+// goes on: with the write-barrier flag native code reads
+// (jitEncoding.WriteBarrier) pointed at a byte that is set, relink makes
+// every store natively, none a call of Go, nor leaves native code. The
+// stores fill every register native code may keep with junk first
+// (jit.StoreRefClobber), so that one the code kept across a store and did
+// not save gives another answer. Its reference stores had each been a call
+// of Go (ssa.GoStore), and before that had each left.
 func TestJITSSAReferenceStoresWhileMarking(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
 	jitMarkingForTest(t)
+	jitClobberStoresForTest(t)
 	calls := 0
-	jitGoCallWork = func() {
-		if calls++; churnRegisters(calls) == 0.25 {
-			t.Log("churned to a quarter")
-		}
-	}
+	jitGoCallWork = func() { calls++ }
 	defer func() { jitGoCallWork = nil }()
-	setup := `function relink(a,n){for(let i=0;i<n;i++){const o=a[i];o.next=a[i+1];o.v=i}return a[0]}
+	setup := `function relink(a,n){let s=0;for(let i=0;i<n;i++){const o=a[i];o.next=a[i+1];o.v=i;s+=i*o.v}return s}
 		function count(a,n){for(let i=0;i<n;i++)a[i].v=i*2;return a[n-1].v}
-		function total(){let s=0;for(let n=relink(arr,40);n;n=n.next)s+=n.v;return s+':'+count(arr,40)}
+		function total(){let s=0;for(let n=arr[0];n;n=n.next)s+=n.v;return s}
 		var arr=[];for(let i=0;i<40;i++)arr.push({v:0,next:null});arr.push(null);`
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	if _, err := r.Run(compileForTest(t, setup)); err != nil {
 		t.Fatal(err)
 	}
 	before := 0
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 6; i++ {
 		before = calls
-		v, err := r.Run(compileForTest(t, `total()`))
-		if err != nil || v.String().Go() != "780:78" {
+		v, err := r.Run(compileForTest(t, `relink(arr,40)+''`))
+		if err != nil || v.String().Go() != "20540" {
+			t.Fatalf("round %d: relink %v, %v", i, v, err)
+		}
+		if v, err := r.Run(compileForTest(t, `total()+':'+count(arr,40)`)); err != nil || v.String().Go() != "780:78" {
 			t.Fatalf("round %d: %v, %v", i, v, err)
 		}
 	}
@@ -4862,8 +4866,7 @@ func TestJITSSAReferenceStoresWhileMarking(t *testing.T) {
 		cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 		return r.jit.hint(cl)
 	}
-	// relink's reference stores are Go's, called; it never leaves.
-	if e := entry("relink"); e == nil || e.ssa == nil || e.ssaStats.entries == 0 || e.ssaStats.hosts != 0 || calls-before < 40 {
+	if e := entry("relink"); e == nil || e.ssa == nil || e.ssaStats.entries == 0 || e.ssaStats.hosts != 0 || calls != before {
 		t.Fatalf("relink's stores while the collector marked: %d calls of Go in the last round, %+v", calls-before, e)
 	}
 	if e := entry("count"); e == nil || e.ssa == nil || e.ssaStats.entries == 0 || e.ssaStats.hosts != 0 {
@@ -4957,6 +4960,15 @@ func TestJITSSAMarkingExitsNotJudged(t *testing.T) {
 // it marks: every store that changes a pointer word, and every exit's
 // records, are Go's. The flag is returned, for a test to clear and set
 // again while code runs.
+// jitClobberStoresForTest has the code the test compiles store pointer
+// words while the collector marks through jit.StoreRefClobber, which fills
+// every register native code may keep with junk first.
+func jitClobberStoresForTest(t *testing.T) {
+	old := jitEncoding.StoreRef
+	jitEncoding.StoreRef = jit.StoreRefClobber()
+	t.Cleanup(func() { jitEncoding.StoreRef = old })
+}
+
 func jitMarkingForTest(t *testing.T) *uint8 {
 	marking := new(uint8)
 	*marking = 1
@@ -7592,18 +7604,21 @@ var jitMarkingSources = []string{
 }
 
 // While the collector marks, native code leaves for Go nowhere it stores
-// a pointer: Go stores it, called from native code, which goes on after
-// -- a native call made by Go (markingCall), a pool's object taken by Go
-// and an array literal's elements stored by it (markingTake, ssa.GoTake),
-// a property added along a transition by Go (ssa.GoAddAlong) -- as V8's
-// code calls its write barrier and its runtime. Each answer is the
-// interpreter's, and once the code is compiled for its calls, a run leaves
-// native code nowhere.
+// a pointer: it stores it with Go's write barrier (jit's storeRef) -- a
+// property's value, a property added along a transition, its shape too --
+// or Go stores it, called from native code, which goes on after -- a
+// native call made by Go (markingCall), a pool's object taken by Go and an
+// array literal's elements stored by it (markingTake, ssa.GoTake) -- as
+// V8's code calls its write barrier and its runtime. The stores fill every
+// register native code may keep with junk first (jit.StoreRefClobber).
+// Each answer is the interpreter's, and once the code is compiled for its
+// calls, a run leaves native code nowhere.
 func TestJITSSANoExitsWhileMarking(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
 	jitMarkingForTest(t)
+	jitClobberStoresForTest(t)
 	for _, source := range jitMarkingSources {
 		want := New(Config{})
 		_, err := want.Run(compileForTest(t, source))

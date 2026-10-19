@@ -390,9 +390,9 @@ type Context struct {
 	Spill [SpillSlots]uint64
 	// Keep holds references copied out of cells a store then overwrites
 	// while slots still hold them (ssa's OpKeep), read from here since: the
-	// collector sees them, as it does the frame's; native code writes them
-	// while it does not mark, and has Go write them while it does (a call
-	// of Go). Go clears them when the code returns.
+	// collector sees them, as it does the frame's; native code writes them,
+	// with Go's write barrier while it marks (Encoding's StoreRef). Go
+	// clears them when the code returns.
 	Keep [MaxKeeps]Slot
 	// ExitDesc is an ExitTable exit's description, an *ExitDescriptor,
 	// which the code holds; Regs and XRegs are the registers the exit
@@ -999,6 +999,15 @@ type Encoding struct {
 	// address of jit's callGo, an assembly routine that, to the Go
 	// runtime, the Go function that entered the code called.
 	CallGo uint64
+	// StoreRef is where native code jumps to store a pointer word while
+	// the collector marks, as V8's code calls its write barrier: the
+	// address of jit's storeRef, which, as callGo, is to the Go runtime a
+	// function the code's Go caller called, and stores with Go's write
+	// barrier. Its inputs are amd64's RAX (the word's address), RCX (the
+	// pointer) and R11 (where to go on), arm64's R15, R17 and R16; it keeps
+	// only the context's register and arm64's link register. 0 when the
+	// code may not call it: a store then calls Go (CallGo).
+	StoreRef uint64
 	// Round says native code may round a double to an integer, as
 	// Math.floor, Math.ceil, Math.trunc and Math.round do: always on arm64,
 	// with SSE4.1's ROUNDSD on amd64. The VM asks for those only where it
