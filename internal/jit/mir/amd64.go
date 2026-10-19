@@ -5309,7 +5309,7 @@ func (c *compiler) elemStore(v *ssa.Value) {
 	// The element's cell, in scratchA.
 	c.index(v.Args[1], fail)
 	found := c.a.NewLabel()
-	c.storeCell(v.Args[0], fail, found)
+	c.storeCell(v.Args[0], !checked, fail, found)
 	c.a.Bind(found)
 	for _, s := range v.Args[3:] {
 		// A live value read from this cell keeps its pointer word there:
@@ -5531,8 +5531,14 @@ func (c *compiler) elementCell(array *ssa.Value, fail func(amd64.Cond)) {
 // address in scratchA at found. A hole has no pointer word: the store's
 // barrier is the value's alone. Holes had each been a call of Go
 // (ssa.GoElemStore): AWFY's Storage fills new Array(4) with its trees,
-// 5.5 million such stores a run, Havlak 3.6 million.
-func (c *compiler) storeCell(array *ssa.Value, fail func(amd64.Cond), found amd64.Label) {
+// 5.5 million such stores a run, Havlak 3.6 million. So, where appends, is
+// a store at the array's length where it has room, as appendingCall
+// appends a number: the length one more, the cell the one past the old
+// last element -- whatever an earlier element there left in it, which the
+// store's barrier overwrites as Go's append would. A store with checks
+// does not append: one of them exiting after it would leave the length
+// grown.
+func (c *compiler) storeCell(array *ssa.Value, appends bool, fail func(amd64.Cond), found amd64.Label) {
 	protos := c.f.ArrayProtos
 	if protos[0].Object == 0 || c.enc.ValueSize != 16 {
 		c.elementCell(array, fail)
@@ -5541,7 +5547,30 @@ func (c *compiler) storeCell(array *ssa.Value, fail func(amd64.Cond), found amd6
 	p := c.gpr(array, scratchC)
 	c.a.Load(scratchB, p, c.enc.ObjectElems+8)
 	c.a.Op(amd64.Cmp, scratchA, scratchB, true)
-	fail(amd64.CondAE)
+	if appends {
+		end := c.a.NewLabel()
+		c.a.Jcc(amd64.CondAE, end)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(end)
+			fail(amd64.CondNE)
+			c.a.Load(scratchB, c.gpr(array, scratchC), c.enc.ObjectElems+16)
+			c.a.Op(amd64.Cmp, scratchA, scratchB, true)
+			fail(amd64.CondAE)
+			c.a.MovQToX(xScratch0, scratchA)
+			c.arrayGuards(c.gpr(array, scratchC), protos, fail)
+			c.a.MovQFromX(scratchA, xScratch0)
+			p := c.gpr(array, scratchC)
+			c.a.MovRR(scratchB, scratchA)
+			c.a.OpImm(amd64.Add, scratchB, 1, true)
+			c.a.Store(p, c.enc.ObjectElems+8, scratchB)
+			c.a.Load(scratchB, p, c.enc.ObjectElems)
+			c.a.ShiftImm(amd64.Shl, scratchA, 4, true)
+			c.a.Op(amd64.Add, scratchA, scratchB, true)
+			c.a.Jmp(found)
+		})
+	} else {
+		fail(amd64.CondAE)
+	}
 	c.a.Load(scratchB, p, c.enc.ObjectElems)
 	c.a.ShiftImm(amd64.Shl, scratchA, 4, true)
 	c.a.Op(amd64.Add, scratchA, scratchB, true)

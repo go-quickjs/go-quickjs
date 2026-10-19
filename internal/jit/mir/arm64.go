@@ -4825,7 +4825,7 @@ func (c *a64Compiler) elemStore(v *ssa.Value) {
 	c.a.MovRR(a64D, a64B)
 	c.index(v.Args[1], fail)
 	found := c.a.NewLabel()
-	c.storeCell(v.Args[0], fail, found)
+	c.storeCell(v.Args[0], !checked, fail, found)
 	c.a.Bind(found)
 	for _, s := range v.Args[3:] {
 		// As amd64's: only a pointer word there is lost.
@@ -5012,9 +5012,10 @@ func (c *a64Compiler) elementCell(array *ssa.Value, guard func(arm64.Cond)) {
 }
 
 // storeCell is amd64's: elementCell for elemStore, a hole stored into
-// where the array may take it, the cell's address in A at found. It keeps
+// where the array may take it, or, where appends, a store at its length
+// where it has room appended, the cell's address in A at found. It keeps
 // D, the value's pointer word.
-func (c *a64Compiler) storeCell(array *ssa.Value, fail func(arm64.Cond), found arm64.Label) {
+func (c *a64Compiler) storeCell(array *ssa.Value, appends bool, fail func(arm64.Cond), found arm64.Label) {
 	protos := c.f.ArrayProtos
 	if protos[0].Object == 0 || c.enc.ValueSize != 16 {
 		c.elementCell(array, fail)
@@ -5023,7 +5024,29 @@ func (c *a64Compiler) storeCell(array *ssa.Value, fail func(arm64.Cond), found a
 	p := c.gpr(array, a64C)
 	c.a.Load(a64B, p, c.enc.ObjectElems+8)
 	c.a.Cmp(a64A, a64B, true)
-	fail(arm64.HS)
+	if appends {
+		end := c.a.NewLabel()
+		c.a.BCond(arm64.HS, end)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(end)
+			fail(arm64.NE)
+			c.a.Load(a64B, c.gpr(array, a64C), c.enc.ObjectElems+16)
+			c.a.Cmp(a64A, a64B, true)
+			fail(arm64.HS)
+			c.a.FMovToF(a64F1, a64A)
+			c.arrayGuards(c.gpr(array, a64C), protos, fail)
+			c.a.FMovFromF(a64A, a64F1)
+			p := c.gpr(array, a64C)
+			c.a.AddImm(a64B, a64A, 1, true)
+			c.a.Store(p, c.enc.ObjectElems+8, a64B)
+			c.a.Load(a64B, p, c.enc.ObjectElems)
+			c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
+			c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+			c.a.B(found)
+		})
+	} else {
+		fail(arm64.HS)
+	}
 	c.a.Load(a64B, p, c.enc.ObjectElems)
 	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
 	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
