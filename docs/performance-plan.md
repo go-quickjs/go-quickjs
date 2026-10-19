@@ -931,8 +931,26 @@ faster: its loss is its steady state's.
   element and the callback's result too, which Go goes on from after an
   exit past the call. array_map (micro) 39.5 -> 34.2 ns an element
   (-18% at each of four JIT code offsets), array_filter 60.6 -> 39.2,
-  array_some 48.6 -> 25.8. Still to do: the callback inlined, and typed
-  arrays' methods.
+  array_some 48.6 -> 25.8. map's and filter's stores into their own
+  array then appended with no guard but its room (e0abf9c,
+  ssa.StoreFresh), defined whatever Array.prototype holds: array_map
+  33.2 -> 28.2, array_filter 44.1 -> 38.7. A typed array's forEach,
+  reduce, some, every, find and findIndex loops too (9236a08), its type's
+  prototype checked, its elements read as numbers: typed_forEach 115 ->
+  30 ns an element; map and filter, whose result their species makes, are
+  Go's still.
+  - Found on the way: a typed array's method read, t.forEach, is a call of
+    Go at every call: typed arrays have no shapes (shapeClass), so no
+    cache remembers what a name finds on them, in the interpreter, the
+    tree tier or native code. Their names but the canonical numeric
+    strings are an ordinary object's; a shape of their own, whose cache
+    leaves those strings out, would read the method natively.
+  - Still to do: the callback inlined into the loop. An inlined callee's
+    captured bindings are Go's now (an exit); NBody's arrows read and
+    write their maker's locals, which the loop's code has, as V8
+    specializes an inlined closure to its known context. An exit inside
+    the inlined callback needs its closure, made anew at each call, in a
+    slot of its frame.
 - **Octane's PdfJS +2.4% since 5a2bc9d** (2026-10-19, eight placements
   with the JIT, all eight higher: 149..153 -> 153..157 ms a run), Octane
   +1.4% in all while AWFY took 23.8% less time and the V8 suite was level.
