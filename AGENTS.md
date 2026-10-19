@@ -235,8 +235,8 @@ go run -tags quickjs_jit ./internal/cmd/v8bench -jit -jitreport -bench awfy -dir
 (QuickJS's `tests/microbench.js`, kept as it is there), and ours beside it,
 `microbench_extra.js`, of what it has none of -- generators, async
 functions, try statements, iterators, using declarations, closures
-made and called anew, calls in tail position, private class members and
-Math.random --
+made and called anew, calls in tail position, private class members,
+Math.random, the in operator and a delete of an object's last property --
 written as
 its tests are: each test is given
 the same work every run -- what QuickJS takes about 150 ms for, the work

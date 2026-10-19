@@ -442,3 +442,58 @@ function random_shuffle(n)
     global_res = a[0];
     return r;
 }
+
+/* the in operator over an object, its keys constants: an own key, an
+   absent one, one inherited and one of Object.prototype */
+function prop_in(n)
+{
+    var proto = { inherited: 1 }, obj = Object.create(proto), j, s = 0;
+    obj.a = 1;
+    obj.b = 2;
+    obj.c = 3;
+    for (j = 0; j < n; j++) {
+        if ("a" in obj) s++;
+        if ("z" in obj) s++;
+        if ("inherited" in obj) s++;
+        if ("toString" in obj) s++;
+    }
+    global_res = s;
+    return n * 4;
+}
+
+/* the in operator over an object, its key a variable's */
+function prop_in_keyed(n)
+{
+    var obj = { a: 1, b: 2, c: 3 }, keys = ["a", "z", "c", "y"], j, s = 0;
+    for (j = 0; j < n; j++) {
+        if (keys[j & 3] in obj) s++;
+    }
+    global_res = s;
+    return n;
+}
+
+/* the in operator over an array's indices: in range, a hole, past its
+   length */
+function array_in(n)
+{
+    var a = [1, 2, 3, , 5, 6, 7, 8], j, s = 0;
+    for (j = 0; j < n; j++) {
+        if ((j & 7) in a) s++;
+        if (12 in a) s++;
+    }
+    global_res = s;
+    return n * 2;
+}
+
+/* a property added to an object and deleted again, its last: back and
+   forth along one transition */
+function prop_delete_last(n)
+{
+    var obj = { a: 1, b: 2 }, j;
+    for (j = 0; j < n; j++) {
+        obj.c = j;
+        delete obj.c;
+    }
+    global_res = obj.a;
+    return n;
+}
