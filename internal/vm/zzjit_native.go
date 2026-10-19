@@ -455,6 +455,9 @@ type jitEntry struct {
 	// code that reads its receiver.
 	entrySlow bool
 	this      bool
+	// lexThis says the code makes arrows from pools, which read the
+	// context's This (jitFeedback's lexThis): Go writes it at its entries.
+	lexThis bool
 	// deferred marks a refusal for want of room in the JIT's budget, made at
 	// the cache generation in generation: it is retried once that has moved
 	// on.

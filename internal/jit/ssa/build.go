@@ -1789,6 +1789,17 @@ func (b *builder) goHas(blk *Block, in ir.Instruction, operand func(ir.Operand) 
 	b.assign(in.Dest, blk, r)
 }
 
+// capturesLocals reports whether a closure's Captures name a captured local
+// of its maker's, a cell of the code's own (index<<1|1).
+func capturesLocals(caps []int32) bool {
+	for _, x := range caps {
+		if x&1 != 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // goDelete makes in, the delete operator, by a call of Go from native code
 // (GoDelete, or GoDeleteStrict in strict code), as goHas makes in: its
 // result, a boolean.
@@ -1873,10 +1884,13 @@ func (b *builder) goFrame(blk *Block, pc int, in ir.Instruction, guard func(Op, 
 	if in.Op == ir.CloseUpvalues {
 		site.Go = GoClose
 	}
-	if fb, ok := b.fb.(ClosureFeedback); ok && in.Op == ir.Closure && b.p.Cells {
-		// Natively, from its pool: what it captures is in cells of their
-		// own, none open on the frame.
-		if cs, ok := fb.Closure(pc); ok && cs.Pool != 0 {
+	if fb, ok := b.fb.(ClosureFeedback); ok && in.Op == ir.Closure {
+		// Natively, from its pool: what it captures of the code's locals
+		// is in cells of their own, none open on the frame -- or it
+		// captures none, only its maker's own captured bindings and an
+		// arrow's this, as AWFY Havlak's findSet's arrow does, which Go had
+		// made at every call, 414,000 a run.
+		if cs, ok := fb.Closure(pc); ok && cs.Pool != 0 && (b.p.Cells || !capturesLocals(cs.Captures)) {
 			site.Pool, site.Captures, site.LexThis = cs.Pool, cs.Captures, cs.LexThis
 		}
 	}

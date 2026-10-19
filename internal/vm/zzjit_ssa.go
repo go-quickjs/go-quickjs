@@ -1259,7 +1259,9 @@ func (fb *jitFeedback) Closure(pc int) (ssa.ClosureSite, bool) {
 		}
 	}
 	fb.keep().pools = append(fb.keep().pools, l.pool)
-	return ssa.ClosureSite{Pool: uintptr(unsafe.Pointer(l.pool)), Captures: caps, LexThis: t.fn.Kind == bytecode.KindArrow}, true
+	lexThis := t.fn.Kind == bytecode.KindArrow
+	fb.lexThis = fb.lexThis || lexThis
+	return ssa.ClosureSite{Pool: uintptr(unsafe.Pointer(l.pool)), Captures: caps, LexThis: lexThis}, true
 }
 
 // jitFillClosures fills pool with Size functions of the template tmpl as
@@ -1808,10 +1810,13 @@ var jitRefused = errors.New("jit: the program is refused")
 // of none -- the VM gives a small object a shape only when a cache asks --
 // are searched for the key.
 type jitFeedback struct {
-	r      *Runtime
-	fn     *bytecode.Function
-	cl     *closure
-	shapes []*shape
+	// lexThis says the code makes an arrow from a pool (Closure), whose
+	// this native code writes from the context's This.
+	lexThis bool
+	r       *Runtime
+	fn      *bytecode.Function
+	cl      *closure
+	shapes  []*shape
 	// holders are the prototypes the code compares receivers' with
 	// (ssa.Holder), held by address, which the entry keeps alive.
 	holders []*Object
@@ -5992,6 +5997,7 @@ func (r *Runtime) jitWantedCallees(e *jitEntry, fb *jitFeedback) {
 func (e *jitEntry) setSSA(s *jitState, fn *bytecode.Function, p *ir.Program, code *jit.SSACode, fb *jitFeedback) {
 	e.warming = false
 	e.ssa, e.this, e.ssaShapes, e.ssaHolders = code, p.This, fb.shapes, fb.holders
+	e.lexThis = fb.lexThis
 	e.ssaSerial++
 	e.ssaProg = p
 	e.ssaInlinedAt, e.definesUnfed, e.ssaCells = fb.inlinedAt, fb.definesUnfed, fb.cells
@@ -7321,9 +7327,8 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 				ctx.TailFrame = 1
 			}
 		}
-		if e.this || e.ssaProg != nil && e.ssaProg.Cells {
-			// Read by the code, or by the arrows code whose captured
-			// locals are in cells of their own makes from their pools
+		if e.this || e.lexThis || e.ssaProg != nil && e.ssaProg.Cells {
+			// Read by the code, or by the arrows it makes from their pools
 			// (mir's closureTake), as a native call's context has it.
 			this, bound := f.thisValue()
 			if !bound {
