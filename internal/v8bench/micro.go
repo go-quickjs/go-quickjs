@@ -76,6 +76,7 @@ var microWork = []struct {
 	{"private_field", 4194304}, {"private_method", 2097152}, {"math_random", 4194304},
 	{"random_shuffle", 2097152}, {"prop_in", 1048576}, {"prop_in_keyed", 4194304},
 	{"array_in", 2097152}, {"prop_delete_last", 1048576}, {"array_forEach", 32768}, {"array_reduce", 32768},
+	{"array_map", 16384}, {"array_filter", 16384}, {"array_some", 32768},
 }
 
 // microLoop is the driver's loop: each test of __work whose name begins with

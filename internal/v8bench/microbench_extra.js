@@ -526,3 +526,40 @@ function array_reduce(n)
         global_res = r.reduce((acc, x) => acc + x, 0);
     return n * len;
 }
+
+/* Array.prototype.map over a hundred numbers, into a new array of them */
+function array_map(n)
+{
+    var r, i, j, len = 100;
+    r = [];
+    for (i = 0; i < len; i++)
+        r[i] = i;
+    for (j = 0; j < n; j++)
+        global_res = r.map((x) => x * 2);
+    return n * len;
+}
+
+/* Array.prototype.filter over a hundred numbers, keeping half */
+function array_filter(n)
+{
+    var r, i, j, len = 100;
+    r = [];
+    for (i = 0; i < len; i++)
+        r[i] = i;
+    for (j = 0; j < n; j++)
+        global_res = r.filter((x) => (x & 1) === 0);
+    return n * len;
+}
+
+/* Array.prototype.some over a hundred numbers, the one it looks for the
+   last, as every, find and findIndex walk an array */
+function array_some(n)
+{
+    var r, i, j, len = 100;
+    r = [];
+    for (i = 0; i < len; i++)
+        r[i] = i;
+    for (j = 0; j < n; j++)
+        global_res = r.some((x) => x === len - 1);
+    return n * len;
+}
