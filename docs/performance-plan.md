@@ -823,7 +823,17 @@ faster: its loss is its steady state's.
   the length; native code makes them now (mir's storeCell, Storage -20%,
   Havlak -5%), and native callees take their cells from their function's
   pool (mir's cellsTake, Havlak -5%, NBody -4%, DeltaBlue -2.5%).
-  Havlak's closures are next.
+  Havlak's closures since: findSet's arrow, which captures only its
+  maker's this, is taken from its pool in code with no cells of its own
+  too (a095f71: GoClosure 439,404 -> 19,693 a run, Havlak -3.2% in a
+  fast check), and a scope's end gives its locals fresh cells natively,
+  on the frame Go entered too (mir's cellsClose, 88fe84d: findLoops'
+  GoClose 565,844 -> 4,356, level in time). Found on the way: a plain call
+  of a function that reads its this was never made natively, its code
+  compiled for native callers never run (763e2d4 makes it, with the
+  global object or undefined as its this). Of AWFY's calls of Go, the
+  largest left are Json's 2.7 million GoCalls, NBody's 250,000 and
+  Bounce's 150,000, to be broken down by what they call.
 - **The `in` operator** (found 2026-10-19 by a test): a function with
   `k in o` anywhere was refused whole. Now compiled, each `in` a call of
   Go (ssa.GoHas) that answers an object's own or inherited property, no
