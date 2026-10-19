@@ -742,6 +742,16 @@ faster: its loss is its steady state's.
   `this.pre` 240,000 times a run in two of three runs. V8 installs new
   code at once, old frames going on in the old code until they return;
   that needs the old code kept by its frames, not by the entry.
+  It costs most in code compiled for native callers alone: such a
+  function runs only as a native callee, so a compile again is always
+  asked for while a native call of it is live, and never made. AWFY
+  DeltaBlue's EqualityConstraint and ScaleConstraint learn their super()'s
+  parent (jitSuperSeen), are due long past their budget -- spent 190,000
+  of 4,000 -- and keep their first code for good, their super() a call of
+  Go, BinaryConstraint and AbstractConstraint run by the tree tier under
+  them, Strength.of declined 36,000 times a run (2026-10-19, after
+  e0e21ca; the marking that had seemed the cause is not: the declines
+  happen with the collector idle).
 - **Compiling in the background, last.** V8 compiles on a thread of its
   own while the function runs on in its lower tier; ours compiles on the
   runtime's goroutine, so that each compile's whole cost is paid where it
