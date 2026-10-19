@@ -555,9 +555,9 @@ What V8 does instead, from its source (`src/objects`, `src/execution`):
 The order is D1 and D2 first: they remove the churn of feedback at its
 source and help the interpreter and the tree tier as much as the JIT. Then
 D3, then D5 to D7 together, which depend on one another. Each is measured
-as above, without and with the JIT, against the baseline: zk's
-`jit-layout-sq` (`79c9eee`), which has the learned entries and the settling
-at invocations that D5 and D7 replace. With them, against the commit
+as above, without and with the JIT, against the baseline: `79c9eee`,
+which has the learned entries and the settling at invocations that D5
+and D7 replace. With them, against the commit
 before them, Octane with the JIT took 4.2% less time (Typescript -10.2%,
 Box2D -6.0%) and Gameboy alone 1.9% more.
 
@@ -628,7 +628,7 @@ faster: its loss is its steady state's.
   - hard: calls inside an inlined callee: a GoCall needs the root frame
     (`b.cur == b.root`), and an inlined level has no frame state to give
     Go.
-- **Done since, of the above** (on zk's `jit-layout-sq`): generic calls
+- **Done since, of the above**: generic calls
   of arrows (`ac6c73e`); code the profit check judges slow entered by OSR
   at a long loop (`dddc1d4`); a megamorphic write's miss a call of Go on
   a branch of its own in the SSA (`87da7ab`), RayTrace's exits at
