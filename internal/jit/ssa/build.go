@@ -117,34 +117,48 @@ type InstanceOfFeedback interface {
 }
 
 // ForEachSite is a call of Array.prototype.forEach, the realm's, at Fn,
-// that the VM has seen make on an array (ForEachFeedback) -- or of
-// Array.prototype.reduce, its Kind abi.LoopReduce -- and Callback the
-// native call of the callback it met: a method call of three arguments,
-// the element, its index and the array, its receiver forEach's second
-// argument or undefined; reduce's, of four, the accumulator first, its
-// receiver undefined.
+// that the VM has seen make on an array (ForEachFeedback) -- or of reduce,
+// map, filter, some, every, find or findIndex, its Kind (abi.LoopForEach
+// and those after it) -- and Callback the native call of the callback it
+// met: a method call of three arguments, the element, its index and the
+// array, its receiver the call's second argument or undefined; reduce's,
+// of four, the accumulator first, its receiver undefined.
 type ForEachSite struct {
 	Fn       uintptr
 	Kind     int
 	Callback CallSite
 }
 
-// ForEachFeedback is Feedback that knows the forEach, or reduce, a method
-// call at a PC makes (ForEachSite): native code makes it a loop of its
-// own.
+// ForEachFeedback is Feedback that knows the forEach, or another of the
+// methods ForEachSite names, a method call at a PC makes: native code makes
+// it a loop of its own.
 type ForEachFeedback interface {
 	ForEach(pc int) (ForEachSite, bool)
 }
 
 // loopLocals is how many of a loop's slots (forEachCall) are its own, which
-// Go goes on from at an exit: the array, the callback, this -- reduce's
-// accumulator -- the index and the length. The callback's call's operands
-// follow them: loopSlots in all.
-const loopLocals = 5
+// Go goes on from at an exit (abi.LoopForEach's): the array, the callback,
+// this -- reduce's accumulator -- the index, the length, the array map or
+// filter makes, the element filter or find gave the callback, and the
+// callback's result. The callback's call's operands follow them:
+// loopSlots in all.
+const loopLocals = 8
+
+// The loop's slots, past its first.
+const (
+	loopArray = iota
+	loopCallback
+	loopThis
+	loopIndex
+	loopLength
+	loopOut
+	loopElem
+	loopResult
+)
 
 // loopSlots is how many slots past the function's a loop of kind takes:
 // its locals and its callback's call's operands -- this, the callback and
-// its arguments, three, forEach's, or four, reduce's.
+// its arguments, three, or four, reduce's.
 func loopSlots(kind int) int {
 	if kind == abi.LoopReduce {
 		return loopLocals + 6
@@ -152,18 +166,32 @@ func loopSlots(kind int) int {
 	return loopLocals + 5
 }
 
-// forEachPlan is the forEach, or reduce, at a PC that planning made a loop
-// of: its site, its slots' first, and the keep cell its callback's result
-// is in.
+// loopKeeps is how many keep cells a loop of kind takes: its callback's
+// result's, and map's and filter's array's.
+func loopKeeps(kind int) int {
+	if makesArray(kind) {
+		return 2
+	}
+	return 1
+}
+
+// makesArray reports whether a loop of kind makes an array, its result:
+// map's and filter's.
+func makesArray(kind int) bool { return kind == abi.LoopMap || kind == abi.LoopFilter }
+
+// forEachPlan is the forEach, or another loop, at a PC that planning made a
+// loop of: its site, its slots' first, and the keep cell its callback's
+// result is in, the array it makes in the next.
 type forEachPlan struct {
 	site       ForEachSite
 	base, keep int
 }
 
-// forEachAt is the forEach, or reduce, the method call at pc of the root,
-// one Go makes (a GoCall site), makes on an array, if its feedback has one
-// (ForEachFeedback): one argument, the callback, or two -- forEach's this,
-// reduce's initial value -- too.
+// forEachAt is the forEach, or another loop, the method call at pc of the
+// root, one Go makes (a GoCall site), makes on an array, if its feedback
+// has one (ForEachFeedback): one argument, the callback, or two -- its
+// this, reduce's initial value -- too. One that makes an array needs Go
+// to make it (GoNewArray).
 func (b *builder) forEachAt(pc int) (ForEachSite, bool) {
 	calls := b.calls[pc]
 	if b.fb == nil || b.cur != b.root || b.p.Code[pc].Op != ir.Host || len(calls) != 1 || calls[0].Go != GoCall || !calls[0].Method ||
@@ -174,39 +202,56 @@ func (b *builder) forEachAt(pc int) (ForEachSite, bool) {
 	if !ok {
 		return ForEachSite{}, false
 	}
-	return f.ForEach(pc)
+	site, ok := f.ForEach(pc)
+	if !ok || site.Kind <= 0 || site.Kind >= abi.LoopKinds || makesArray(site.Kind) && !b.goCalls() {
+		return ForEachSite{}, false
+	}
+	return site, true
 }
 
-// forEachCall makes the forEach, or reduce, at pc a loop of the code's own,
-// as V8's JSCallReducer reduces it (forEachPlan): its function, its
-// callback being a function and its array checked and its length read
-// once -- anything else Go's call -- then, for each index below the
-// length, the element, where the array has it, given to the callback,
-// called natively (ForEachSite's Callback) with its index and the array:
-// forEach's with this its second argument; reduce's with the accumulator
-// first -- its second argument, or else the first element, the loop then
-// starting at the next -- its result the next accumulator, and the
-// reduce's the last. A hole or an index past the array's end now leaves,
-// and so does anything the loop's checks find: Go goes on from that index
-// (abi.Context's Loop, which the loop sets as it starts and clears as it
-// ends), as V8's builtin continuation frames go on in the builtin, then
-// the code after the call. Its slots (loopSlots) are the frame's past its
-// operands -- the array, the callback, this or the accumulator, the index
-// and the length, then the call's operands -- in every state inside the
-// loop, the call's below them.
+// forEachCall makes the forEach, or another loop, at pc a loop of the
+// code's own, as V8's JSCallReducer reduces each (forEachPlan): its
+// function, its callback being a function and its array checked and its
+// length read once -- anything else Go's call -- then, for each index
+// below the length, the element, where the array has it -- find's and
+// findIndex's wherever, a hole undefined -- given to the callback, called
+// natively (ForEachSite's Callback) with its index and the array, its
+// this the call's second argument; reduce's with the accumulator first --
+// its second argument, or else the first element, the loop then starting
+// at the next -- its result the next accumulator, and the reduce's the
+// last. map's result is an array Go makes (GoNewArray) where the array's
+// species is Array, room for the length in it, each callback's result
+// appended to it (OpElemStore); filter's one Go makes of no length, each
+// element whose callback's result is true appended. some, every, find and
+// findIndex leave the loop at the first callback's result that is true --
+// every's, false -- their result true, false, the element or its index,
+// or, the loop done, false, true, undefined or -1.
+//
+// A hole or an index past the array's end now leaves, and so does
+// anything the loop's checks find: Go goes on from that index (abi.Context's
+// Loop, which the loop sets as it starts and clears as it ends), as V8's
+// builtin continuation frames go on in the builtin, then the code after
+// the call -- after the callback's result, where the loop has it, from
+// what that result is to do. Its slots (loopSlots) are the frame's past
+// its operands -- its locals (loopLocals), then the call's operands -- in
+// every state inside the loop, the call's below them.
 func (b *builder) forEachCall(blk *Block, pc int, fp forEachPlan) {
 	f := b.f
-	reduce := fp.site.Kind == abi.LoopReduce
+	kind := fp.site.Kind
+	reduce := kind == abi.LoopReduce
 	argc := b.calls[pc][0].Argc
 	sp := b.p.Locals + b.p.Maps[pc].Depth
+	dest := b.p.Locals + b.p.Maps[pc+1].Depth - 1
 	recv, fn, cb := b.read(sp-argc-2, blk), b.read(sp-argc-1, blk), b.read(sp-argc, blk)
-	// Undefined, made where it is used: constIn puts its constant first in
-	// its block, before the phis an operand's read makes there.
-	undefined := func(blk *Block) *Value {
+	// Constants, made where they are used: constIn puts its constant first
+	// in its block, before the phis an operand's read makes there.
+	constant := func(blk *Block, c ir.Value) *Value {
 		v := f.newValue(blk, OpConst, Tagged)
-		v.Const = ir.Value{Kind: ir.Undefined}
+		v.Const = c
 		return v
 	}
+	undefined := func(blk *Block) *Value { return constant(blk, ir.Value{Kind: ir.Undefined}) }
+	none := func(blk *Block) *Value { return constant(blk, ir.Value{Kind: ir.Uninitialized}) }
 	call := b.rootState()
 	at := func(blk *Block, st *FrameState, op Op, t Type, args ...*Value) *Value {
 		v := f.newValue(blk, op, t, args...)
@@ -217,8 +262,8 @@ func (b *builder) forEachCall(blk *Block, pc int, fp forEachPlan) {
 	object := at(blk, call, OpObjectOf, Ptr, fn)
 	same := at(blk, call, OpSameObject, None, object)
 	same.Const = ir.Value{Bits: uint64(fp.site.Fn)}
-	// The callback a function, which forEach checks before it reads an
-	// element: Go's call throws its TypeError otherwise.
+	// The callback a function, which each method checks before it reads
+	// an element: Go's call throws its TypeError otherwise.
 	callable := at(blk, call, OpTypeIs, Bool, cb)
 	callable.Index = int(ir.TypeFunction)
 	at(blk, call, OpCheckTrue, None, f.newValue(blk, OpBoxBool, Tagged, callable))
@@ -227,13 +272,29 @@ func (b *builder) forEachCall(blk *Block, pc int, fp forEachPlan) {
 	// Room past the operands for the loop's slots, which an exit inside it
 	// writes there.
 	room := at(blk, call, OpFrameRoom, None)
-	room.Index = fp.base - b.root.p.Locals + loopSlots(fp.site.Kind)
+	room.Index = fp.base - b.root.p.Locals + loopSlots(kind)
 	boxF := func(blk *Block, x *Value) *Value { return f.newValue(blk, OpBoxF64, Tagged, x) }
+	// map's and filter's array, as their ArraySpeciesCreate makes it, of
+	// the length's room, map's: Go makes it where the array's species is
+	// Array's, its constructor as it was made, and refuses otherwise,
+	// leaving the call to Go.
+	out := undefined(blk)
+	if makesArray(kind) {
+		mk := at(blk, call, OpCall, Tagged, recv, boxF(blk, n))
+		site := &CallSite{Go: GoNewArray, ThisSlot: -1}
+		if kind == abi.LoopMap {
+			site.Argc = 1
+		}
+		f.cache(mk).Calls, mk.Index = []*CallSite{site}, fp.keep+1
+		cell := f.newValue(blk, OpCallCell, Source, mk)
+		out = f.newValue(blk, OpKept, Tagged, cell, mk)
+		out.Shadow = cell
+	}
 	from := f.newValue(blk, OpConstF64, Float64)
 	from.Const = ir.Float(0)
-	// forEach's this, or reduce's first accumulator: its initial value, or
-	// else the first element -- an empty array's, or a hole's there, Go's
-	// call, which throws or finds the first.
+	// this, or reduce's first accumulator: its initial value, or else the
+	// first element -- an empty array's, or a hole's there, Go's call,
+	// which throws or finds the first.
 	third := undefined(blk)
 	switch {
 	case argc == 2:
@@ -247,11 +308,29 @@ func (b *builder) forEachCall(blk *Block, pc int, fp forEachPlan) {
 		from.Const = ir.Float(1)
 	}
 	base := fp.base
-	for i, v := range []*Value{recv, cb, third, boxF(blk, from), boxF(blk, n)} {
+	for i, v := range []*Value{recv, cb, third, boxF(blk, from), boxF(blk, n), out, undefined(blk), none(blk)} {
 		b.write(base+i, blk, v)
 	}
+	// The result if the loop runs to its end, but reduce's, its last
+	// accumulator: the frame's after the call is its, Go's at an exit.
+	var whole *Value
+	switch kind {
+	case abi.LoopMap, abi.LoopFilter:
+		whole = out
+	case abi.LoopSome:
+		whole = constant(blk, ir.Bool(false))
+	case abi.LoopEvery:
+		whole = constant(blk, ir.Bool(true))
+	case abi.LoopFindIndex:
+		whole = constant(blk, ir.Float(-1))
+	case abi.LoopForEach, abi.LoopFind:
+		whole = undefined(blk)
+	}
+	if whole != nil {
+		b.write(dest, blk, whole)
+	}
 	mark := f.newValue(blk, OpLoopMark, None)
-	mark.Const = ir.Value{Bits: uint64(fp.site.Kind)<<32 | uint64(base-b.root.p.Locals+1)}
+	mark.Const = ir.Value{Bits: uint64(kind)<<32 | uint64(base-b.root.p.Locals+1)}
 	// The state inside the loop: the call's, and the loop's slots, depth of
 	// its operands.
 	state := func(blk *Block, depth int) *FrameState {
@@ -271,18 +350,26 @@ func (b *builder) forEachCall(blk *Block, pc int, fp forEachPlan) {
 	head, body, cont := b.loop(blk)
 	head.Header = state(head, 0)
 	head.Header.Site = -1
-	k := at(head, state(head, 0), OpUnboxF64, Float64, b.read(base+3, head))
+	k := at(head, state(head, 0), OpUnboxF64, Float64, b.read(base+loopIndex, head))
 	more := f.newValue(head, OpCmpF64, Bool, k, n)
 	more.Aux = int(ir.Lt)
 	head.Control = more
 	more.Uses++
 	cell := at(body, state(body, 0), OpElemCell, Source, array, k)
-	cell.Index = ElemPresent
+	finds := kind == abi.LoopFind || kind == abi.LoopFindIndex
+	if !finds {
+		cell.Index = ElemPresent
+	}
 	elem := f.newValue(body, OpLoadCell, Tagged, cell)
 	elem.Shadow = cell
-	ops := []*Value{b.read(base+2, body), cb, elem, boxF(body, k), recv}
+	// The element, for what the callback's result does with it.
+	keepsElem := kind == abi.LoopFilter || kind == abi.LoopFind
+	if keepsElem {
+		b.write(base+loopElem, body, elem)
+	}
+	ops := []*Value{b.read(base+loopThis, body), cb, elem, boxF(body, k), recv}
 	if reduce {
-		ops = []*Value{undefined(body), cb, b.read(base+2, body), elem, boxF(body, k), recv}
+		ops = []*Value{undefined(body), cb, b.read(base+loopThis, body), elem, boxF(body, k), recv}
 	}
 	for i, v := range ops {
 		b.write(base+loopLocals+i, body, v)
@@ -290,29 +377,66 @@ func (b *builder) forEachCall(blk *Block, pc int, fp forEachPlan) {
 	site := fp.site.Callback
 	c := at(body, state(body, len(ops)), OpCall, Tagged, ops...)
 	f.cache(c).Calls, c.Index = []*CallSite{&site}, fp.keep
-	if reduce {
-		// Its result the next accumulator, kept where the call left it.
-		kept := f.newValue(body, OpCallCell, Source, c)
-		acc := f.newValue(body, OpKept, Tagged, kept, c)
-		acc.Shadow = kept
-		b.write(base+2, body, acc)
-	}
 	// The callback may have assigned a captured binding, as a callee may.
 	if b.hasCells() {
 		b.reloadAfterCall(body)
 	}
-	one := f.newValue(body, OpConstF64, Float64)
+	step := body
+	if kind != abi.LoopForEach {
+		// Its result, kept where the call left it: the loop's, which an
+		// exit before the next index gives Go to finish the index with.
+		kept := f.newValue(body, OpCallCell, Source, c)
+		v := f.newValue(body, OpKept, Tagged, kept, c)
+		v.Shadow = kept
+		b.write(base+loopResult, body, v)
+		switch kind {
+		case abi.LoopReduce:
+			b.write(base+loopThis, body, v)
+		case abi.LoopMap:
+			// Appended at the index, which is the array's length: the
+			// elements before it all appended.
+			st := state(body, 0)
+			at(body, st, OpElemStore, None, at(body, st, OpArrayOf, Ptr, out), k, v)
+		default:
+			test := at(body, state(body, 0), OpTruth, Bool, v)
+			if kind == abi.LoopEvery {
+				test = f.newValue(body, OpNot, Bool, test)
+			}
+			var yes *Block
+			yes, step = b.loopTest(body, cont, test, kind != abi.LoopFilter)
+			switch kind {
+			case abi.LoopFilter:
+				// The element appended at the array's length.
+				st := state(yes, 0)
+				to := at(yes, st, OpLength, Float64, out)
+				at(yes, st, OpElemStore, None, at(yes, st, OpArrayOf, Ptr, out), to, b.read(base+loopElem, yes))
+			case abi.LoopSome:
+				b.write(dest, yes, constant(yes, ir.Bool(true)))
+			case abi.LoopEvery:
+				b.write(dest, yes, constant(yes, ir.Bool(false)))
+			case abi.LoopFind:
+				b.write(dest, yes, b.read(base+loopElem, yes))
+			case abi.LoopFindIndex:
+				b.write(dest, yes, boxF(yes, k))
+			}
+		}
+	}
+	one := f.newValue(step, OpConstF64, Float64)
 	one.Const = ir.Float(1)
-	next := f.newValue(body, OpAddF64, Float64, k, one)
-	b.write(base+3, body, boxF(body, next))
+	next := f.newValue(step, OpAddF64, Float64, k, one)
+	b.write(base+loopIndex, step, boxF(step, next))
+	if kind != abi.LoopForEach {
+		b.write(base+loopResult, step, none(step))
+	}
+	if keepsElem {
+		b.write(base+loopElem, step, undefined(step))
+	}
 	b.seal(head)
 	done := f.newValue(cont, OpLoopMark, None)
 	done.Const = ir.Value{}
-	result := undefined(cont)
 	if reduce {
-		result = b.read(base+2, cont)
+		b.write(dest, cont, b.read(base+loopThis, cont))
 	}
-	b.write(b.p.Locals+b.p.Maps[pc+1].Depth-1, cont, result)
 }
 
 // SubstringFeedback is Feedback that knows a method call at a PC calls
@@ -806,6 +930,15 @@ type GoOp uint8
 // closures captured of locals Argc on (ir.CloseUpvalues): both Go's, on
 // the frame Go entered the code with, and refused on any other -- a native
 // callee's -- which leaves for Go to make them after an exit.
+//
+// GoNewArray makes the array a loop of map or filter fills (forEachCall),
+// as their ArraySpeciesCreate makes it, the array they are called on the
+// first operand and its length the second: an Array of no length, with
+// room for that many elements if Argc is 1, map's, where the array's
+// species is Array's -- no constructor of its own, Array.prototype's and
+// Array[Symbol.species] as they were made -- as V8's code checks its
+// ArraySpeciesProtector. It refuses any other, which leaves the call for Go
+// to make after an exit.
 const (
 	GoAdd GoOp = 1 + iota
 	GoRefill
@@ -833,6 +966,7 @@ const (
 	GoHas
 	GoDelete
 	GoDeleteStrict
+	GoNewArray
 )
 
 // RefillsPools reports whether a call takes an object from a pool, which
@@ -2585,15 +2719,16 @@ func (b *builder) plan() error {
 				}
 				b.calls[pc], b.callKeeps[pc] = calls, b.f.Keeps
 				b.f.Keeps++
-				if site, ok := b.forEachAt(pc); ok && b.nslots+loopSlots(site.Kind) <= abi.MaxRecords && b.f.Keeps < b.f.keepLimit() {
+				if site, ok := b.forEachAt(pc); ok && b.nslots+loopSlots(site.Kind) <= abi.MaxRecords && b.f.Keeps+loopKeeps(site.Kind) <= b.f.keepLimit() {
 					// A forEach made a loop of: its slots past every
-					// other's, and its callback's result's keep cell.
+					// other's, and its callback's result's keep cell --
+					// and its array's, map's or filter's.
 					if b.forEaches == nil {
 						b.forEaches = map[int]forEachPlan{}
 					}
 					b.forEaches[pc] = forEachPlan{site: site, base: b.nslots, keep: b.f.Keeps}
 					b.nslots += loopSlots(site.Kind)
-					b.f.Keeps++
+					b.f.Keeps += loopKeeps(site.Kind)
 					b.f.Loops, b.f.LoopsEnd = true, b.nslots
 				}
 			}
@@ -3340,6 +3475,33 @@ func (b *builder) loop(blk *Block) (head, body, cont *Block) {
 	b.splits = append(b.splits, made...)
 	b.next = cont
 	return head, body, cont
+}
+
+// loopTest ends body, a loop's (loop), at test, a value in it: true goes
+// to yes, a block of its own, false to step, which ends as body did, going
+// back to the loop's head; yes goes to step too or, exits, to cont, the
+// loop's end -- a some's callback that found what it was asked to. step is
+// placed after body, then yes; the caller fills them.
+func (b *builder) loopTest(body, cont *Block, test *Value, exits bool) (yes, step *Block) {
+	step, yes = b.blockAfter(body), b.blockAfter(body)
+	made := []*Block{step, yes}
+	b.placeAfter(body, made, step)
+	body.Kind, body.Control, body.State, body.ExitKind = BlockIf, test, nil, 0
+	test.Uses++
+	body.Succs = []*Block{yes, step}
+	yes.Kind, yes.Preds, yes.Backedge = BlockPlain, []*Block{body}, []bool{false}
+	if exits {
+		yes.Succs = []*Block{cont}
+		cont.Preds, cont.Backedge = append(cont.Preds, yes), append(cont.Backedge, false)
+		step.Preds, step.Backedge = []*Block{body}, []bool{false}
+	} else {
+		yes.Succs = []*Block{step}
+		step.Preds, step.Backedge = []*Block{body, yes}, []bool{false, false}
+	}
+	b.seal(yes)
+	b.seal(step)
+	b.splits = append(b.splits, made...)
+	return yes, step
 }
 
 func (f *Func) entryForBlock(blk *Block) (Entry, bool) {

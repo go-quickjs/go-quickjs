@@ -2623,9 +2623,9 @@ type jitInline struct {
 	// String.fromCharCode (jitFromCharCodes), substring one of
 	// String.prototype's substring, slice, substr or charAt (jitSubstrings).
 	push, pop, charCode, fromChar, substring bool
-	// forEach marks a call of Array.prototype.forEach, or reduce, on an
-	// array (jitForEaches), cb the closure of the callback it was given and
-	// cbObj its function object.
+	// forEach marks a call of Array.prototype.forEach, or another of
+	// jitLoops, on an array (jitForEaches), cb the closure of the callback
+	// it was given and cbObj its function object.
 	forEach bool
 	cb      *closure
 	cbObj   *Object
@@ -3072,6 +3072,21 @@ func jitHostCall(ctx *abi.Context) bool {
 			// taken (ssa's goFrame) shares one.
 			*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
 		}
+		return true
+	case ssa.GoNewArray:
+		// map's or filter's array, of no length, room for the array's in
+		// map's: where the array's species is Array's (plainSpecies), as
+		// their ArraySpeciesCreate would make it.
+		o := r.plainArray(jitGoArg(ctx, 0))
+		n := jitGoArg(ctx, 1)
+		if o == nil || !n.IsNumber() || !r.plainSpecies(o) {
+			return false
+		}
+		room := int64(0)
+		if ctx.GoOp>>abi.GoOpIndexShift&1 != 0 {
+			room = int64(n.Number())
+		}
+		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = Obj(r.newArrayOfLength(room))
 		return true
 	case ssa.GoElemCell:
 		o := *(**Object)(unsafe.Pointer(&ctx.GoArgs[0].Ref))
@@ -5792,10 +5807,10 @@ func (r *Runtime) jitCharCodes(sp int, in bytecode.Instr) *Object {
 	return callee.Object()
 }
 
-// jitForEaches is Array.prototype.forEach, or reduce, the realm's own, if a
-// method call at the top of the stack calls it on an array with one
-// argument, or two, the first a closure of the realm's, and that closure
-// and its function object; or nil.
+// jitForEaches is Array.prototype.forEach, or another of jitLoops, the
+// realm's own, if a method call at the top of the stack calls it on an
+// array with one argument, or two, the first a closure of the realm's, and
+// that closure and its function object; or nil.
 func (r *Runtime) jitForEaches(sp int, in bytecode.Instr) (*Object, *closure, *Object) {
 	argc := int(in.A)
 	if in.Op != bytecode.OpCallMethod || argc != 1 && argc != 2 {
@@ -5855,12 +5870,13 @@ func (r *Runtime) jitForEachSeen(e *jitEntry, fn *bytecode.Function, pc int, o *
 	}
 }
 
-// ForEach is ssa.ForEachFeedback's: the forEach, or reduce, the method call
-// at pc has made on an array (jitForEachSeen), its callback called natively
-// as a method call of three arguments -- the element, its index, the array
-// -- or, reduce's, four, the accumulator first, by its code where closures
-// of it were made anew (ByCode), as a call's target is (closureCallSite).
-// One whose callback native callers may not call yet is Go's.
+// ForEach is ssa.ForEachFeedback's: the forEach, or another of jitLoops,
+// the method call at pc has made on an array (jitForEachSeen), its callback
+// called natively as a method call of three arguments -- the element, its
+// index, the array -- or, reduce's, four, the accumulator first, by its
+// code where closures of it were made anew (ByCode), as a call's target is
+// (closureCallSite). One whose callback native callers may not call yet is
+// Go's.
 func (fb *jitFeedback) ForEach(pc int) (ssa.ForEachSite, bool) {
 	e := fb.e
 	if e == nil || fb.root != nil || fb.fwd != nil || fb.cl == nil || pc >= len(fb.fn.Code) || jitCallOp(fb.fn.Code[pc].Op) != bytecode.OpCallMethod {
@@ -5946,78 +5962,149 @@ func (r *Runtime) jitPushLoopFrame(f *frame, loop uint64, written bool) {
 	}
 }
 
+// jitLoopLocals is how many of a loop's slots Go goes on from (ssa's
+// loopLocals): the array, the callback, this -- reduce's accumulator --
+// the index, the length, the array map or filter makes, the element filter
+// or find gave the callback, and its result, uninitialized if none yet.
+const jitLoopLocals = 8
+
 // jitLoopFinish finishes the loop native code was making of a built-in's
-// call in f, at an exit there, as V8's builtin continuation frames finish
-// the builtin: loop is the context's Loop word (abi.Context), which says
-// where its slots are past f's operands, and after whether the loop's
-// call of its callback for the index there was made -- its callee left
-// native code, and Go finished it, v and err what it returned or threw --
-// or not. A forEach goes on, as Go's own does, from that index, or the
-// next one, to the length read as it began; its result is undefined. The
-// slots keep nothing after.
-func (r *Runtime) jitLoopFinish(f *frame, loop uint64, after bool, v Value, err error) (Value, error) {
+// call in f, at pc, at an exit there, as V8's builtin continuation frames
+// finish the builtin: loop is the context's Loop word (abi.Context), which says
+// which built-in's and where its slots are past f's operands, and after
+// whether the loop's call of its callback for the index there was made --
+// its callee left native code, and Go finished it, v and err what it
+// returned or threw -- or not; or the loop has its result, an exit after
+// the call. Go goes on from that index, the callback's result first used
+// as the built-in uses it, or from the next one, to the length read as it
+// began, as Go's own does (builtins.go): map and filter into the array
+// the loop made, an Array whose elements up to the index it appended. f is
+// past its call meanwhile, as the interpreter's frame is during one, which
+// a stack trace the callback takes shows. The slots keep nothing after.
+func (r *Runtime) jitLoopFinish(f *frame, pc int, loop uint64, after bool, v Value, err error) (Value, error) {
 	at := f.base + int(loop&0xffffffff) - 1
-	slots := r.stack[at : at+5]
-	arr, cb, this, k, n := slots[0], slots[1], slots[2], slots[3], slots[4]
+	slots := r.stack[at : at+jitLoopLocals]
+	arr, cb, this, k, n, out, elem, res := slots[0], slots[1], slots[2], slots[3], slots[4], slots[5], slots[6], slots[7]
 	clear(slots)
 	if err != nil || r.stopped != nil {
 		// A throw ends it, as Go's forEach ends at its callback's.
 		return v, err
 	}
 	kind := int(loop >> 32)
-	if kind != abi.LoopForEach && kind != abi.LoopReduce || !arr.IsObject() || !k.IsNumber() || !n.IsNumber() || r.jitLoopFn(kind) == nil {
-		panic("jit: a loop's slots are not a forEach's or a reduce's")
+	makes := kind == abi.LoopMap || kind == abi.LoopFilter
+	fe := r.jitLoopFn(kind)
+	if fe == nil || !arr.IsObject() || !k.IsNumber() || !n.IsNumber() || makes && !out.IsObject() {
+		panic("jit: a loop's slots are not a built-in's")
 	}
-	if kind == abi.LoopReduce && after {
-		// The callback's result the next accumulator.
-		this = v
+	if !after && !res.IsUninitialized() {
+		// An exit after the callback's call: its result the loop's.
+		after, v = true, res
 	}
 	from := int64(k.Number())
-	if after {
-		from++
-	}
 	r.jit.loopsFinished++
-	// forEach's frame, as Go's has one (nativeFrame), which a stack trace
-	// of what the callback throws shows.
-	fe := r.jitLoopFn(kind)
+	f.pc = uint32(pc + 1)
+	// The built-in's frame, as Go's has one (nativeFrame), which a stack
+	// trace of what the callback throws shows.
 	if err := r.nativeFrame(fe, fe.fn(), arr, []Value{cb, this}, Undefined); err != nil {
 		return Undefined, err
 	}
 	defer func() { r.frameDepth-- }()
 	a := &arrayLike{o: arr.Object(), n: int64(n.Number())}
-	if kind == abi.LoopReduce {
-		// As Go's reduce (builtins.go), from the accumulator this holds.
-		acc := this
-		var argv [4]Value
-		for i := from; i < a.n; i++ {
-			el, present, err := a.at(r, i)
-			if err != nil {
+	var o *arrayOut
+	if makes {
+		// The loop's array, of the realm's species, as GoNewArray made it.
+		o = &arrayOut{o: out.Object(), plain: true, n: int64(len(out.Object().elemsOf()))}
+	}
+	// use is what the built-in does with the callback's result res at index
+	// i, of element el: whether it is done, and its result then.
+	use := func(i int64, el, res Value) (bool, Value, error) {
+		switch kind {
+		case abi.LoopReduce:
+			this = res
+		case abi.LoopMap:
+			if err := o.push(r, res); err != nil {
+				return true, Undefined, err
+			}
+		case abi.LoopFilter:
+			if res.Truthy() {
+				if err := o.push(r, el); err != nil {
+					return true, Undefined, err
+				}
+			}
+		case abi.LoopSome:
+			if res.Truthy() {
+				return true, True, nil
+			}
+		case abi.LoopEvery:
+			if !res.Truthy() {
+				return true, False, nil
+			}
+		case abi.LoopFind:
+			if res.Truthy() {
+				return true, el, nil
+			}
+		case abi.LoopFindIndex:
+			if res.Truthy() {
+				return true, Float(float64(i)), nil
+			}
+		}
+		return false, Undefined, nil
+	}
+	if after {
+		if done, x, err := use(from, elem, v); done {
+			return x, err
+		}
+		from++
+	}
+	// As Go's own: the arguments' list made once.
+	var argv [4]Value
+	for i := from; i < a.n; i++ {
+		var el Value
+		if kind == abi.LoopFind || kind == abi.LoopFindIndex {
+			// A hole too, undefined.
+			if el, err = a.get(r, i); err != nil {
+				return Undefined, err
+			}
+		} else {
+			var present bool
+			if el, present, err = a.at(r, i); err != nil {
 				return Undefined, err
 			}
 			if !present {
+				if kind == abi.LoopMap {
+					// A hole in the array stays a hole in map's.
+					if err := o.pushHole(); err != nil {
+						return Undefined, err
+					}
+				}
 				continue
 			}
-			argv[0], argv[1], argv[2], argv[3] = acc, el, Float(float64(i)), arr
-			if acc, err = r.callDirect(cb, Undefined, argv[:]); err != nil {
-				return Undefined, err
-			}
 		}
-		return acc, nil
-	}
-	// As Go's forEach (builtins.go): the arguments' list made once.
-	var argv [3]Value
-	for i := from; i < a.n; i++ {
-		el, present, err := a.at(r, i)
+		args, recv := argv[:3], this
+		argv[0], argv[1], argv[2] = el, Float(float64(i)), arr
+		if kind == abi.LoopReduce {
+			args, recv = argv[:4], Undefined
+			argv[0], argv[1], argv[2], argv[3] = this, el, Float(float64(i)), arr
+		}
+		res, err := r.callDirect(cb, recv, args)
 		if err != nil {
 			return Undefined, err
 		}
-		if !present {
-			continue
+		if done, x, err := use(i, el, res); done {
+			return x, err
 		}
-		argv[0], argv[1], argv[2] = el, Float(float64(i)), arr
-		if _, err := r.callDirect(cb, this, argv[:]); err != nil {
-			return Undefined, err
-		}
+	}
+	switch kind {
+	case abi.LoopReduce:
+		return this, nil
+	case abi.LoopMap, abi.LoopFilter:
+		return o.value(), nil
+	case abi.LoopSome:
+		return False, nil
+	case abi.LoopEvery:
+		return True, nil
+	case abi.LoopFindIndex:
+		return Float(-1), nil
 	}
 	return Undefined, nil
 }
@@ -7886,7 +7973,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			if loop := jitLoopAt(e, ctx, f, exitPC); loop != 0 {
 				// The callee was a loop's callback (ssa.ForEachSite): Go goes
 				// on with the loop after its index.
-				v, err = r.jitLoopFinish(f, loop, true, v, err)
+				v, err = r.jitLoopFinish(f, exitPC, loop, true, v, err)
 			}
 			sp, ok := r.jitCallResult(f, exitPC, exitDepth, v, err)
 			if !ok || r.stopped != nil {
@@ -7974,7 +8061,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 				r.backEdges = s.backEdgeBudget()
 				err = r.checkInterruptNow()
 			}
-			res, err := r.jitLoopFinish(f, loop, false, Undefined, err)
+			res, err := r.jitLoopFinish(f, exitPC, loop, false, Undefined, err)
 			sp, ok := r.jitCallResult(f, exitPC, exitDepth, res, err)
 			if !ok || r.stopped != nil {
 				sp, err, native := r.jitCatch(f, e, sp, err)
@@ -8651,7 +8738,7 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure) (Value, e
 			if loop := jitLoopAt(e, s.ssaCtxs[l.ctx], f, int(l.pc)); loop != 0 && loop == l.loop {
 				// Its callee was a loop's callback: Go goes on with the loop
 				// after its index.
-				v, err = r.jitLoopFinish(f, loop, true, v, err)
+				v, err = r.jitLoopFinish(f, int(l.pc), loop, true, v, err)
 			}
 			sp, ok := r.jitCallResult(f, int(l.pc), int(l.depth), v, err)
 			switch {
@@ -9118,7 +9205,7 @@ func (r *Runtime) jitFinishExit(f *frame, e *jitEntry, l *jitNativeLevel) (Value
 				r.backEdges = r.jit.backEdgeBudget()
 				err = r.checkInterruptNow()
 			}
-			v, lerr := r.jitLoopFinish(f, loop, false, Undefined, err)
+			v, lerr := r.jitLoopFinish(f, pc, loop, false, Undefined, err)
 			sp, ok := r.jitCallResult(f, pc, depth, v, lerr)
 			if !ok || r.stopped != nil {
 				v, err, _ := r.jitInterpret(f, sp, lerr)

@@ -161,9 +161,16 @@ type jitRealmFields struct {
 	// one-character results native code makes itself
 	// (ssa.OpSubstringChar).
 	jitSubstring, jitSlice, jitSubstr, jitCharAt Value
-	// jitForEach and jitReduce are Array.prototype.forEach and reduce,
-	// which native code makes loops of (ssa.ForEachSite).
-	jitForEach, jitReduce Value
+	// jitLoops are Array.prototype's methods native code makes loops of
+	// (ssa.ForEachSite), by their kind (abi.LoopForEach and those after
+	// it); nil for none.
+	jitLoops [abi.LoopKinds]*Object
+}
+
+// jitLoopNames are the methods of jitLoops, by kind.
+var jitLoopNames = [abi.LoopKinds]string{
+	abi.LoopForEach: "forEach", abi.LoopReduce: "reduce", abi.LoopMap: "map", abi.LoopFilter: "filter",
+	abi.LoopSome: "some", abi.LoopEvery: "every", abi.LoopFind: "find", abi.LoopFindIndex: "findIndex",
 }
 
 // recordJITStringIntrinsic notes the realm's String.prototype.charCodeAt and
@@ -176,7 +183,8 @@ func (r *Runtime) recordJITStringIntrinsic(ctor *Object) {
 // recordJITSubstrings notes the realm's String.prototype substring, slice,
 // substr and charAt, once the realm has them all, before any script runs,
 // whose one-character results native code makes itself, and
-// Array.prototype.forEach and reduce, whose calls it makes loops of.
+// Array.prototype's forEach, reduce and the others whose calls it makes
+// loops of (jitLoops).
 func (r *Runtime) recordJITSubstrings() {
 	own := func(name string) Value {
 		if m := r.proto.str.getOwn(r.atoms.intern(name)); m.ok() {
@@ -185,35 +193,35 @@ func (r *Runtime) recordJITSubstrings() {
 		return Undefined
 	}
 	r.jitSubstring, r.jitSlice, r.jitSubstr, r.jitCharAt = own("substring"), own("slice"), own("substr"), own("charAt")
-	r.jitForEach, r.jitReduce = Undefined, Undefined
-	if m := r.proto.array.getOwn(r.atoms.intern("forEach")); m.ok() {
-		r.jitForEach = m.value()
-	}
-	if m := r.proto.array.getOwn(r.atoms.intern("reduce")); m.ok() {
-		r.jitReduce = m.value()
+	for kind, name := range jitLoopNames {
+		r.jitLoops[kind] = nil
+		if m := r.proto.array.getOwn(r.atoms.intern(name)); name != "" && m.ok() && m.value().IsObject() {
+			r.jitLoops[kind] = m.value().Object()
+		}
 	}
 }
 
 // jitLoopKind is the kind of loop native code makes of a call of o
-// (abi.LoopForEach, abi.LoopReduce): the realm's Array.prototype.forEach
-// or reduce; or 0.
+// (abi.LoopForEach and those after it): the realm's Array.prototype.forEach,
+// or another of jitLoops; or 0.
 func (r *Runtime) jitLoopKind(o *Object) int {
-	switch {
-	case o == nil:
-	case r.jitForEach.IsObject() && o == r.jitForEach.Object():
-		return abi.LoopForEach
-	case r.jitReduce.IsObject() && o == r.jitReduce.Object():
-		return abi.LoopReduce
+	if o != nil {
+		for kind, fn := range r.jitLoops {
+			if fn == o {
+				return kind
+			}
+		}
 	}
 	return 0
 }
 
-// jitLoopFn is the built-in whose call a loop of kind is (jitLoopKind).
+// jitLoopFn is the built-in whose call a loop of kind is (jitLoopKind), or
+// nil.
 func (r *Runtime) jitLoopFn(kind int) *Object {
-	if kind == abi.LoopReduce {
-		return r.jitReduce.Object()
+	if kind <= 0 || kind >= abi.LoopKinds {
+		return nil
 	}
-	return r.jitForEach.Object()
+	return r.jitLoops[kind]
 }
 
 // jitIsSubstring reports whether o is the realm's String.prototype

@@ -372,7 +372,7 @@ type Context struct {
 	// callee.
 	Open uint64
 	// Loop says a loop native code makes of a built-in's call -- a forEach
-	// (ssa.ForEachSite) -- is under way in the frame: LoopForEach<<32 |
+	// (ssa.ForEachSite) -- is under way in the frame: its kind<<32 |
 	// 1 plus the offset of its slots past the frame's operands' first (the
 	// VM's f.base), where Go finds what it goes on from at an exit; or 0.
 	// Code with such loops clears it at its entries.
@@ -630,12 +630,24 @@ const (
 	ExitInCell
 )
 
-// Context.Loop's kinds: LoopForEach for Array.prototype.forEach, whose
-// slots are the array, the callback, its this, the index and the length;
-// LoopReduce for Array.prototype.reduce, whose third is the accumulator.
+// Context.Loop's kinds, one for each of Array.prototype's methods whose
+// calls native code makes loops of: forEach, reduce, map, filter, some,
+// every, find and findIndex. A loop's slots are the array, the callback,
+// its this -- reduce's accumulator -- the index, the length, the array
+// map or filter makes, the element filter or find gave the callback, and
+// the callback's result once it has one at the index, the uninitialized
+// value before.
 const (
-	LoopForEach = 1
-	LoopReduce  = 2
+	LoopForEach = 1 + iota
+	LoopReduce
+	LoopMap
+	LoopFilter
+	LoopSome
+	LoopEvery
+	LoopFind
+	LoopFindIndex
+	// LoopKinds is one past the last kind.
+	LoopKinds
 )
 
 // ExitLoc is where an exit finds a word: in a register or a spill slot as

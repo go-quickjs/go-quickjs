@@ -132,11 +132,13 @@ func TestJITForEachLoop(t *testing.T) {
 }
 
 // afterCallbackSetup's visit makes a forEach native code makes a loop of,
-// and visitReduce a reduce, whose callback, at the index at, has its
-// caller's code invalidated (invalidateVisit) and then leaves native code
-// itself, at an object of another shape: Go finishes the callback, and the
-// caller's code, invalid, does not go on after the call -- reduce's
-// accumulator the callback's result Go finished.
+// and visitReduce a reduce, visitMap a map and so on, whose callback, at
+// the index at, has its caller's code invalidated (invalidateVisit) and
+// then leaves native code itself, at an object of another shape: Go
+// finishes the callback, and the caller's code, invalid, does not go on
+// after the call -- the callback's result Go finished used as the built-in
+// uses it: reduce's accumulator, map's element, filter's test, some's,
+// every's, find's and findIndex's answer.
 const afterCallbackSetup = `
 	var items = []
 	for (let i = 0; i < 8; i++) items.push({ v: i })
@@ -155,7 +157,50 @@ const afterCallbackSetup = `
 			return s + (i === at ? odd : o).v
 		}, 0)
 	}
-	function drive(n, at) { let r = 0; for (let i = 0; i < n; i++) r += visit(at) + visitReduce(at); return r }
+	function visitMap(at) {
+		return items.map((o, i) => {
+			if (i === at) invalidateVisit('visitMap')
+			return (i === at ? odd : o).v
+		}).join()
+	}
+	function visitFilter(at) {
+		return items.filter((o, i) => {
+			if (i === at) invalidateVisit('visitFilter')
+			return (i === at ? odd : o).v % 2 === 0
+		}).length
+	}
+	function visitSome(at) {
+		return items.some((o, i) => {
+			if (i === at) invalidateVisit('visitSome')
+			return (i === at ? odd : o).v > 50
+		})
+	}
+	function visitEvery(at) {
+		return items.every((o, i) => {
+			if (i === at) invalidateVisit('visitEvery')
+			return (i === at ? odd : o).v < 50
+		})
+	}
+	function visitFind(at) {
+		const r = items.find((o, i) => {
+			if (i === at) invalidateVisit('visitFind')
+			return (i === at ? odd : o).v > 50
+		})
+		return r === undefined ? 'none' : r.v
+	}
+	function visitFindIndex(at) {
+		return items.findIndex((o, i) => {
+			if (i === at) invalidateVisit('visitFindIndex')
+			return (i === at ? odd : o).v > 50
+		})
+	}
+	function drive(n, at) {
+		let r = ''
+		for (let i = 0; i < n; i++) {
+			r = visit(at) + ' ' + visitReduce(at) + ' ' + visitMap(at) + ' ' + visitFilter(at) + ' ' + visitSome(at) + ' ' + visitEvery(at) + ' ' + visitFind(at) + ' ' + visitFindIndex(at)
+		}
+		return r
+	}
 `
 
 // A callback that leaves native code where the loop's code cannot go on
@@ -212,13 +257,21 @@ const stackSetup = `
 	function throws(n) { let s = 0; nums.forEach((x) => { if (x === n) throw new Error('at ' + x); s += x }); return s }
 	function undefinedCall(n) { let s = 0; nums.forEach((x) => { if (x === n) notDefined(); s += x }); return s }
 	function reduces(n) { return nums.reduce((s, x) => { if (x === n) throw new Error('at ' + x); return s + x }, 0) }
-	function drive(m, n) { let r = 0; for (let i = 0; i < m; i++) r += throws(n) + undefinedCall(n) + reduces(n); return r }
+	function maps(n) { return nums.map((x) => { if (x === n) throw new Error('at ' + x); return x * 2 }).length }
+	function finds(n) { return nums.findIndex((x) => { if (x === n) throw new Error('at ' + x); return x > 5 }) }
+	var holes = [1, , 3]
+	var last = ''
+	function stackAt(x) { if (x === 3) last = new Error('h').stack }
+	function holeStack() { holes.forEach(stackAt); return last }
+	function drive(m, n) { let r = 0; for (let i = 0; i < m; i++) r += throws(n) + undefinedCall(n) + reduces(n) + maps(n) + finds(n); return r }
 `
 
 // A stack trace taken in a callback of a forEach native code makes a loop
 // of shows the forEach's frame, "at Array.forEach", where Go's forEach
 // has it -- the frame Go makes between the loop's level and its callee's
-// (jitPushLoopFrame) -- as the interpreter's trace does.
+// (jitPushLoopFrame) -- as the interpreter's trace does; and, in a loop Go
+// goes on with after a hole (holeStack), its caller's frame at the call,
+// past it, as the interpreter's is during one.
 func TestJITForEachStackTrace(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -228,10 +281,13 @@ func TestJITForEachStackTrace(t *testing.T) {
 		rounds = append(rounds,
 			`(() => { try { drive(2, 2) } catch (e) { return e.stack } })()`,
 			`(() => { try { for (let i = 0; i < 3; i++) undefinedCall(2) } catch (e) { return e.stack } })()`,
-			`(() => { try { for (let i = 0; i < 3; i++) reduces(2) } catch (e) { return e.stack } })()`)
+			`(() => { try { for (let i = 0; i < 3; i++) reduces(2) } catch (e) { return e.stack } })()`,
+			`(() => { try { for (let i = 0; i < 3; i++) maps(2) } catch (e) { return e.stack } })()`,
+			`(() => { try { for (let i = 0; i < 3; i++) finds(2) } catch (e) { return e.stack } })()`,
+			`(() => { let s; for (let i = 0; i < 60; i++) s = holeStack(); return s })()`)
 	}
 	r := jitAgreesForTest(t, stackSetup, rounds...)
-	for _, name := range []string{"throws", "undefinedCall", "reduces"} {
+	for _, name := range []string{"throws", "undefinedCall", "reduces", "maps", "finds", "holeStack"} {
 		var e *jitEntry
 		for k, x := range r.jit.cache {
 			if fn := k.Value(); fn != nil && fn.Name == name {
