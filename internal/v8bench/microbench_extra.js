@@ -497,3 +497,32 @@ function prop_delete_last(n)
     global_res = obj.a;
     return n;
 }
+
+/* Array.prototype.forEach over a hundred numbers, its callback an arrow
+   made anew at each call that adds to a binding it captured, as AWFY
+   NBody's advance has it */
+function array_forEach(n)
+{
+    var r, i, j, sum, len = 100;
+    r = [];
+    for (i = 0; i < len; i++)
+        r[i] = i;
+    for (j = 0; j < n; j++) {
+        sum = 0;
+        r.forEach((x) => { sum += x; });
+        global_res = sum;
+    }
+    return n * len;
+}
+
+/* Array.prototype.reduce over a hundred numbers, with an initial value */
+function array_reduce(n)
+{
+    var r, i, j, len = 100;
+    r = [];
+    for (i = 0; i < len; i++)
+        r[i] = i;
+    for (j = 0; j < n; j++)
+        global_res = r.reduce((acc, x) => acc + x, 0);
+    return n * len;
+}
