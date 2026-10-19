@@ -911,6 +911,15 @@ faster: its loss is its steady state's.
   - Then the callback inlined into the loop, which needs inlining a
     closure that captures bindings, refused now; then map, filter, some,
     every, find, findIndex and reduce, each a loop of the same kind.
+  Done in 3192b5a, but for a frame of its own: the loop's slots are the
+  caller's frame's, past its operands, and a word of its context
+  (abi.Context's Loop) says one is under way, which Go reads wherever it
+  finishes that frame -- a frame kind of its own would have had every
+  native call inside it write its context and every walk of the levels
+  learn it. NBody 769 -> 406 ms in a fast check, its forEach's calls of
+  Go 247,075 -> 29 a run; array_forEach (micro) 36.8 -> 26.1 ns an
+  element, the callback's call most of what is left (array_for_of, 7.6).
+  Typed arrays' forEach, %TypedArray%.prototype's, is Go's still.
 - **Octane's PdfJS +2.4% since 5a2bc9d** (2026-10-19, eight placements
   with the JIT, all eight higher: 149..153 -> 153..157 ms a run), Octane
   +1.4% in all while AWFY took 23.8% less time and the V8 suite was level.
