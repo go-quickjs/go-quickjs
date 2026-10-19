@@ -551,6 +551,22 @@ function array_filter(n)
     return n * len;
 }
 
+/* %TypedArray%.prototype.forEach over an Int32Array of a hundred, its
+   callback an arrow that adds to a binding it captured */
+function typed_forEach(n)
+{
+    var r, i, j, sum, len = 100;
+    r = new Int32Array(len);
+    for (i = 0; i < len; i++)
+        r[i] = i;
+    for (j = 0; j < n; j++) {
+        sum = 0;
+        r.forEach((x) => { sum += x; });
+        global_res = sum;
+    }
+    return n * len;
+}
+
 /* Array.prototype.some over a hundred numbers, the one it looks for the
    last, as every, find and findIndex walk an array */
 function array_some(n)
