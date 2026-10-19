@@ -7,7 +7,7 @@ package vm
 const jitBuilt = false
 
 type jitFields struct{}
-type jitClosureFields struct{}
+type jitCodeFields struct{}
 type jitRealmFields struct{}
 
 // The memory meter names these types; builds without the JIT have none.

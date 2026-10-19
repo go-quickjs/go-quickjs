@@ -919,8 +919,9 @@ type Encoding struct {
 	// not the object (ssa.CallSite's ByCode), reads.
 	FuncData                                                          uint64
 	FuncClosure, ClosureFn, ClosureUpvalues, ClosureEnv, ClosureRealm int32
-	// A closure's hint is the uint32 at ClosureHint, which indexes the hint
-	// table (HintTable). A link is a function's, in its runtime: the
+	// A closure's hint is the uint32 at ClosureHint of what its template's
+	// closures share, at ClosureCode, which indexes the hint table
+	// (HintTable). A link is a function's, in its runtime: the
 	// address of the code native callers call at LinkEntry, its call entry
 	// (CallEntry), 0 for none; the address of its entry at its start,
 	// which a call in tail position goes on at in the frame it gives up, at
@@ -928,7 +929,7 @@ type Encoding struct {
 	// function's parameters, locals, and locals and stack together at
 	// LinkParams, LinkLocals and LinkFrame; and its flags (LinkCoerce...)
 	// at LinkFlags -- each a uint64.
-	ClosureHint, HintSlotSize, HintSlotFn, HintSlotLink int32
+	ClosureCode, ClosureHint, HintSlotSize, HintSlotFn, HintSlotLink int32
 	// An arrow's function data has, at FuncExtra, a pointer to what it
 	// captured where it was made: the this at ExtraLexThis, a value, and,
 	// at ExtraLexThisRef, the binding of a derived constructor's this it

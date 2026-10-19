@@ -98,7 +98,8 @@ var jitEncoding = abi.Encoding{
 	ClosureUpvalues:    int32(unsafe.Offsetof(closure{}.upvalues)),
 	ClosureEnv:         int32(unsafe.Offsetof(closure{}.env)),
 	ClosureRealm:       int32(unsafe.Offsetof(closure{}.realm)),
-	ClosureHint:        int32(unsafe.Offsetof(closure{}.jitHint)),
+	ClosureCode:        int32(unsafe.Offsetof(closure{}.closureCode)),
+	ClosureHint:        int32(unsafe.Offsetof(closureCode{}.jitHint)),
 	Mega:               true,
 	FuncExtra:          int32(unsafe.Offsetof(funcData{}.extra)),
 	ExtraLexThis:       int32(unsafe.Offsetof(funcExtra{}.lexThis)),
@@ -4096,9 +4097,20 @@ func (r *Runtime) jitCallMade(in bytecode.Instr, sp int) (Value, error) {
 				// A closure made since its function was compiled, which a
 				// generic call finds by its hint (ssa.CallSite's Generic):
 				// given its function's now, not after its warm-up, its next
-				// call is native.
+				// call is native. One whose function has no code is warmed
+				// by the calls Go makes of it for native code, as V8's
+				// budget counts a function's every invocation, and compiled
+				// for native callers once warm: a leaf, which the existing
+				// tiers run with no frame (leafCall), had its calls warm
+				// nothing, a generic call's of it Go's for good.
 				if e := r.jit.entryFor(fd.closure.fn); e != nil {
 					fd.closure.setHint(e.hint)
+				} else if cl := fd.closure; !cl.jitRefused && cl.realm == r.Realm {
+					if a := r.jitFeedbackCalls(); cl.jitCalls < a {
+						cl.jitCalls++
+					} else if ce := r.jitNativeCallee(cl); ce != nil {
+						cl.setHint(ce.hint)
+					}
 				}
 			}
 		}

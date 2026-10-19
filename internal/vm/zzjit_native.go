@@ -165,21 +165,41 @@ func (r *Runtime) recordJITStringIntrinsic(ctor *Object) {
 	r.jitFromCharCode = ctor.getOwn(r.atoms.intern("fromCharCode")).value()
 }
 
-// A closure belongs to one runtime. Hotness and permanent selection refusals
-// live here without registering a weak key on cold or refused calls. The
-// fields fit the closure's padding beside pureMiss, so it keeps its 128-byte
-// size class: jitHint is not a pointer but a slot in the runtime's hint
-// table (jitState.hint), and bytes, so that nothing is aligned past it.
-type jitClosureFields struct {
+// jitCodeFields is the JIT's in a template's closureCode, which every
+// closure made from the template shares, as V8's closures share their
+// function's feedback and code through its SharedFunctionInfo: how hot the
+// function is, its permanent refusal, and the hint of its code, a slot in
+// the runtime's hint table (jitState.hint), not a pointer -- none of which
+// registers a weak key on cold or refused calls. A closure made anew, as
+// each call of a function making an arrow makes one, is as warm as its
+// function, and knows its code from its first call: each closure's own,
+// the hint of every new one had been 0 until Go made a call of it, which
+// ran it in the existing tiers, and a generic call of one natively
+// (ssa.CallSite's Generic), which finds its code by its hint, had been
+// Go's; and a function whose closures are each called a few times, AWFY
+// DeltaBlue's forEach callbacks, was never compiled, its calls each warm-up
+// of a closure of its own.
+type jitCodeFields struct {
 	jitRefused   bool
 	jitCalls     uint8
 	jitLoopDelay uint8
 	jitHint      [4]byte
 }
 
-func (c *jitClosureFields) hint() uint32 { return binary.LittleEndian.Uint32(c.jitHint[:]) }
+// hint is the hint of the code of cl's function, its template's closures'
+// (jitCodeFields), 0 for a closure with nothing of a template's.
+func (cl *closure) hint() uint32 {
+	if cl.closureCode == nil {
+		return 0
+	}
+	return binary.LittleEndian.Uint32(cl.closureCode.jitHint[:])
+}
 
-func (c *jitClosureFields) setHint(h uint32) { binary.LittleEndian.PutUint32(c.jitHint[:], h) }
+func (cl *closure) setHint(h uint32) {
+	if cl.closureCode != nil {
+		binary.LittleEndian.PutUint32(cl.closureCode.jitHint[:], h)
+	}
+}
 
 // jitHintSlot is a slot of the hint table (jitState.hints): the entry it
 // holds, and its function's address, which is not a reference -- the
@@ -591,7 +611,7 @@ type jitState struct {
 	// program refused for want of budget may fit.
 	generation uint64
 	// hints holds each cached entry in a slot, from 1, that a closure
-	// remembers (jitClosureFields, hint); hintFree are the slots free. The
+	// remembers (jitCodeFields, hint); hintFree are the slots free. The
 	// table grows to as many entries as the cache has held at once, which
 	// the budget bounds: each entry holds at least jitEntryFixed bytes of it.
 	hints    []jitHintSlot
@@ -1781,7 +1801,8 @@ func (r *Runtime) tryJITFrame(f *frame) (Value, error, bool) {
 	if f.cl.jitRefused {
 		return Undefined, nil, false
 	}
-	if e := r.jit.hint(f.cl); e != nil && e.entrySlow && !e.invalid && !e.reoptPending() {
+	e := r.jit.hint(f.cl)
+	if e != nil && e.entrySlow && !e.invalid && !e.reoptPending() {
 		// Not code invalidated, whose invocations spend the budget it is
 		// compiled again on (tryJITAt): judged slow, it would never be
 		// entered again, and never compiled for what it learned.
@@ -1798,8 +1819,10 @@ func (r *Runtime) tryJITFrame(f *frame) (Value, error, bool) {
 	}
 	// Cold calls stay in the existing tiers without allocating native state
 	// (jitFeedbackCalls). Saturating the counter keeps hot selection
-	// independent of call overflow.
-	if a := r.jitFeedbackCalls(); f.cl.jitCalls < a {
+	// independent of call overflow. A closure whose function has code, which
+	// its template's closures know (jitCodeFields), is not cold: one made
+	// anew runs it from its first call.
+	if a := r.jitFeedbackCalls(); f.cl.jitCalls < a && (e == nil || e.ssa == nil) {
 		f.cl.jitCalls++
 		if f.cl.jitCalls < a {
 			return Undefined, nil, false

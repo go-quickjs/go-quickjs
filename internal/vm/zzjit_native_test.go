@@ -4260,7 +4260,7 @@ func TestJITTreeRecoveryNarrow(t *testing.T) {
 		t.Fatal("no program")
 	}
 	frameWith := func(set func(cl *closure)) *frame {
-		cl := &closure{fn: fn}
+		cl := &closure{fn: fn, closureCode: &closureCode{}}
 		set(cl)
 		return &frame{cl: cl}
 	}
@@ -4298,7 +4298,7 @@ func TestJITHintReuse(t *testing.T) {
 	source := `function f(n) { let s=0; for(let i=0;i<n;i++) s+=i; return s }`
 	first := jitFunctionForTest(t, source)
 	e := r.jitForFunction(first, nil)
-	cl := &closure{fn: first}
+	cl := &closure{fn: first, closureCode: &closureCode{}}
 	cl.setHint(hintFor(e))
 	if e == nil || r.jit.hint(cl) != e {
 		t.Fatal("fresh hint misses")
@@ -4329,7 +4329,7 @@ func TestJITHintReuse(t *testing.T) {
 		if r.jit.hint(cl) != nil {
 			t.Fatalf("reuse %d: a stale hint aliased the slot's new entry", i)
 		}
-		if r.jit.hint(&closure{fn: fn, jitClosureFields: jitClosureFields{jitHint: cl.jitHint}}) != other {
+		if r.jit.hint(&closure{fn: fn, closureCode: &closureCode{jitCodeFields: jitCodeFields{jitHint: cl.jitHint}}}) != other {
 			t.Fatalf("reuse %d: the slot's own function's hint misses", i)
 		}
 		drop(other)

@@ -1714,8 +1714,12 @@ func (c *compiler) genericCheck(v *ssa.Value, site *ssa.CallSite, target int, ch
 	c.a.Store(regCtx, abi.OffCallClosure, scratchB)
 	c.a.Load(scratchA, scratchB, c.enc.ClosureUpvalues)
 	c.a.Store(regCtx, abi.OffCallUpvalues, scratchA)
-	// Its hint's slot: its function's, holding its link.
-	c.a.LoadU32(scratchA, scratchB, c.enc.ClosureHint)
+	// Its hint's slot, its template's closures': its function's, holding
+	// its link.
+	c.a.Load(scratchA, scratchB, c.enc.ClosureCode)
+	c.a.Op(amd64.Test, scratchA, scratchA, true)
+	c.a.Jcc(amd64.CondE, miss)
+	c.a.LoadU32(scratchA, scratchA, c.enc.ClosureHint)
 	c.a.Load(scratchC, regCtx, abi.OffHints)
 	c.a.Load(scratchC, scratchC, abi.OffHintLen)
 	c.a.Op(amd64.Cmp, scratchA, scratchC, true)

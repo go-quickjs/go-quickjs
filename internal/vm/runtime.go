@@ -584,6 +584,9 @@ type wellKnownSymbols struct {
 
 // closureCode is the part of a closure its template's closures share.
 type closureCode struct {
+	// jitCodeFields is what the JIT keeps for the template's closures
+	// alike: the hint of the code their function has.
+	jitCodeFields
 	// names maps the template's name table to atoms, resolved once when the
 	// template is first used so that property access needs no interning.
 	names []Atom
@@ -611,7 +614,6 @@ type closure struct {
 	// environment for module code -- which inherits from the global object, so
 	// the prototype chain performs the scope lookup.
 	env *Object
-	jitClosureFields
 	// pureMiss counts the calls pureCall gave up on, for a body LeafPure
 	// marks: past pureMissLimit it is not tried.
 	pureMiss uint8
