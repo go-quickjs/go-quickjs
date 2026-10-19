@@ -573,6 +573,17 @@ type GoOp uint8
 // allocates a function's context: abi.Context's Cells. It writes no keep
 // cell.
 //
+// GoHas is in (ir.HasProperty), the key the first operand and the object
+// the second, as V8's code calls its HasProperty builtin: Go searches the
+// object and its chain, as the interpreter does, where that runs nothing
+// and throws nothing -- an object none of whose chain is a proxy or a
+// module namespace, by a key that is no object -- and writes the boolean
+// to the call's keep cell. It refuses the rest: a proxy's has trap, a
+// namespace's deferred evaluation, a key whose conversion calls its
+// toString or Symbol.toPrimitive, a right operand that is no object,
+// which throws; those leave for Go to make after an exit, native code
+// going on after it.
+//
 // GoClosure makes the function of constant Argc on the code's own frame
 // (ir.Closure), capturing its locals there, and GoClose closes what
 // closures captured of locals Argc on (ir.CloseUpvalues): both Go's, on
@@ -605,6 +616,7 @@ const (
 	GoNumber
 	GoEqual
 	GoCells
+	GoHas
 )
 
 // RefillsPools reports whether a call takes an object from a pool, which
@@ -1065,8 +1077,8 @@ func (b *builder) hostOf(pc int) bool {
 		// The function's own captured bindings, which its context has;
 		// an inlined callee's, Go's.
 		return b.cur != b.root
-	case ir.StringAdd, ir.StringConcat:
-		// A call of Go (GoAdd, GoConcat), where the VM answers it.
+	case ir.StringAdd, ir.StringConcat, ir.HasProperty:
+		// A call of Go (GoAdd, GoConcat, GoHas), where the VM answers it.
 		return !b.goCalls()
 	case ir.FieldDefine:
 		_, ok := b.define(pc)
@@ -1755,6 +1767,20 @@ func (b *builder) goCompare(blk *Block, in ir.Instruction, operand func(ir.Opera
 	return r
 }
 
+// goHas makes in, the in operator, by a call of Go from native code
+// (GoHas), as goIndex makes an element's read: its result, a boolean.
+func (b *builder) goHas(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+	call := guard(OpCall, Tagged, ir.HostExit, operand(in.Left), operand(in.Right))
+	if b.f.Keeps < b.f.keepLimit() {
+		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoHas, ThisSlot: -1}}, b.f.Keeps
+		b.f.Keeps++
+	}
+	cell := b.f.newValue(blk, OpCallCell, Source, call)
+	r := b.f.newValue(blk, OpKept, Tagged, cell, call)
+	r.Shadow = cell
+	b.assign(in.Dest, blk, r)
+}
+
 // relational reports whether op is <, <=, > or >=.
 func relational(op ir.Operator) bool {
 	return op == ir.Lt || op == ir.Le || op == ir.Gt || op == ir.Ge
@@ -2196,7 +2222,7 @@ func (b *builder) plan() error {
 	resumes := func(pc int) bool {
 		switch op := p.Code[pc].Op; {
 		case b.host(pc), b.keyedRead(pc), op == ir.ObjectLiteral, op == ir.ArrayLiteral, op == ir.StringAdd, op == ir.StringConcat, op == ir.ArrayWrite, op == ir.IterStep,
-			op == ir.IterClose,
+			op == ir.IterClose, op == ir.HasProperty,
 			op == ir.Closure, op == ir.CloseUpvalues:
 			return true
 		}
@@ -2268,7 +2294,7 @@ func (b *builder) plan() error {
 			// string was (compile's typeTests): no entry after it.
 		case ir.ArrayWrite, ir.PropertyRead, ir.PropertyWrite, ir.ReferenceRead, ir.BindingRead,
 			ir.StringMethod, ir.StringCode, ir.BindingWrite, ir.BindingCheck, ir.Resolved, ir.ObjectLiteral, ir.FieldDefine,
-			ir.ArrayLiteral, ir.StringConst, ir.UpvalueWrite, ir.StringAdd, ir.StringConcat, ir.Closure, ir.CloseUpvalues:
+			ir.ArrayLiteral, ir.StringConst, ir.UpvalueWrite, ir.StringAdd, ir.StringConcat, ir.Closure, ir.CloseUpvalues, ir.HasProperty:
 			// What native code does not do exits to Go, which resumes after
 			// it. A fixed global's check only deoptimizes: the binding can
 			// never move, so it never fails, and what follows sees its
@@ -2377,7 +2403,7 @@ func (b *builder) plan() error {
 			b.edge(blk, b.blockAt[end+1])
 		case ir.Host, ir.Call, ir.PropertyRead, ir.PropertyWrite, ir.ReferenceRead, ir.BindingRead, ir.BindingWrite, ir.BindingCheck,
 			ir.ObjectLiteral, ir.FieldDefine, ir.ArrayLiteral, ir.StringConst, ir.UpvalueRead, ir.UpvalueWrite, ir.StringAdd, ir.StringConcat, ir.Rethrow,
-			ir.Closure, ir.CloseUpvalues:
+			ir.Closure, ir.CloseUpvalues, ir.HasProperty:
 			if fr := b.inlined[end]; fr != nil {
 				// Into the callee, whose returns go to the block after it.
 				blk.Kind = BlockPlain
@@ -3614,6 +3640,14 @@ func (b *builder) instruction(blk *Block, pc int) {
 			break
 		}
 		b.goAdd(blk, in, operand, guard)
+	case ir.HasProperty:
+		if !b.goCalls() {
+			blk.ExitKind = ir.HostExit
+			blk.State = state()
+			blk.State.addUse()
+			break
+		}
+		b.goHas(blk, in, operand, guard)
 	case ir.StringConcat:
 		if !b.goCalls() || in.Extra > abi.MaxGoArgs {
 			blk.ExitKind = ir.HostExit

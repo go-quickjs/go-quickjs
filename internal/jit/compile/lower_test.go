@@ -322,6 +322,41 @@ func TestRefusals(t *testing.T) {
 	}
 }
 
+// The in operator is the new pipeline's HasProperty of the key, below, and
+// the object, on top, its boolean where the key was; the old pipeline, which
+// calls no Go, refuses it.
+func TestInLowering(t *testing.T) {
+	fn := compiledFunction(t, `function f(a){let s=0;for(let i=0;i<10;i++)s+=(i in a)?1:0;return s}`)
+	if _, err := Lower(fn); err == nil || !strings.Contains(err.Error(), "unsupported opcode in") {
+		t.Fatalf("Lower: %v, want the in refused", err)
+	}
+	p, err := LowerSSA(fn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for pc, in := range fn.Code {
+		if in.Op != bytecode.OpIn {
+			continue
+		}
+		found = true
+		sp := p.Locals + p.Maps[pc].Depth
+		want := ir.Instruction{Op: ir.HasProperty, Left: ir.Slot(sp - 2), Right: ir.Slot(sp - 1), Dest: sp - 2}
+		if got := p.Code[pc]; got != want {
+			t.Fatalf("pc %d: %+v, want %+v", pc, got, want)
+		}
+		if p.Maps[pc+1].Depth != p.Maps[pc].Depth-1 {
+			t.Fatalf("pc %d: depth %d after, %d before", pc, p.Maps[pc+1].Depth, p.Maps[pc].Depth)
+		}
+	}
+	if !found {
+		t.Fatal("missing in")
+	}
+}
+
 func TestRemainderHostBoundaries(t *testing.T) {
 	for _, code := range [][]bytecode.Instr{
 		{{Op: bytecode.OpGetLocalIndex, B: 1}, {Op: bytecode.OpPushInt, A: 3}, {Op: bytecode.OpMod}, {Op: bytecode.OpReturn}},

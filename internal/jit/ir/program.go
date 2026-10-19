@@ -214,6 +214,14 @@ const (
 	// where there is nothing to close -- the cursor done, or an array's
 	// walked in place -- and leaves to Go otherwise.
 	IterClose
+	// HasProperty is in, Left in Right, as a boolean at Dest: whether the
+	// object Right, or one up its chain, has the property Left names, as
+	// V8's code calls its HasProperty builtin. The new pipeline has Go
+	// answer it, called from native code (ssa.GoHas), where that runs
+	// nothing and throws nothing, and leaves it to Go otherwise: a
+	// proxy's has trap, a key whose conversion calls a method of its own,
+	// a right operand that is no object, which throws.
+	HasProperty
 )
 
 // RethrowNormal is the kind a normal completion's record has (Rethrow).

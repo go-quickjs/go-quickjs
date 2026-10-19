@@ -321,6 +321,11 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			// constructor (ssa.InstanceOfSite), Go otherwise.
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
+		if in.Op == bytecode.OpIn && !m.ssa {
+			// The new pipeline has Go answer it, called from native code
+			// (ir.HasProperty).
+			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
+		}
 		if (in.Op == bytecode.OpClosure || in.Op == bytecode.OpCloseUpvalues) && (!m.ssa || m.forward) {
 			// Go makes a closure, and closes what one captured, on the
 			// frame (jitHost): a function's own, or a native callee's in
@@ -377,7 +382,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
 		host = host || str || iters || isPrivate(in.Op) || isDefinition(in.Op) || in.Op == bytecode.OpClosure || in.Op == bytecode.OpCloseUpvalues || in.Op == bytecode.OpImport || in.Op == bytecode.OpImportMeta || in.Op == bytecode.OpYield || in.Op == bytecode.OpAwait || in.Op == bytecode.OpThrow ||
-			in.Op == bytecode.OpNewDisposeCapability || in.Op == bytecode.OpAddDisposable || in.Op == bytecode.OpDispose || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpApplyArguments || in.Op == bytecode.OpNew || in.Op == bytecode.OpSuperCall || in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict || in.Op == bytecode.OpCheckGlobalRef || in.Op == bytecode.OpNewObject || in.Op == bytecode.OpNewRegExp || in.Op == bytecode.OpDefineField || in.Op == bytecode.OpPushEmptyString || in.Op == bytecode.OpConcat || in.Op == bytecode.OpNewArray || in.Op == bytecode.OpCall || in.Op == bytecode.OpCallMethod || in.Op == bytecode.OpTailCall || in.Op == bytecode.OpTailCallMethod || in.Op == bytecode.OpGetGlobal || in.Op == bytecode.OpGetGlobalOpt || in.Op == bytecode.OpGetPropThis || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
+			in.Op == bytecode.OpNewDisposeCapability || in.Op == bytecode.OpAddDisposable || in.Op == bytecode.OpDispose || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpIn || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpApplyArguments || in.Op == bytecode.OpNew || in.Op == bytecode.OpSuperCall || in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict || in.Op == bytecode.OpCheckGlobalRef || in.Op == bytecode.OpNewObject || in.Op == bytecode.OpNewRegExp || in.Op == bytecode.OpDefineField || in.Op == bytecode.OpPushEmptyString || in.Op == bytecode.OpConcat || in.Op == bytecode.OpNewArray || in.Op == bytecode.OpCall || in.Op == bytecode.OpCallMethod || in.Op == bytecode.OpTailCall || in.Op == bytecode.OpTailCallMethod || in.Op == bytecode.OpGetGlobal || in.Op == bytecode.OpGetGlobalOpt || in.Op == bytecode.OpGetPropThis || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		property = property || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		// A derived constructor's this slot is what it returns, bound by
 		// its super() (ir.Program's DerivedConstructor).
@@ -822,6 +827,11 @@ func selectNumericProperties(p *ir.Program, cells bool) {
 			take(in.Dest)
 		case ir.FieldDefine:
 			read(in.Left, reference)
+		case ir.HasProperty:
+			// Go takes the key and the object as they are.
+			take(in.Dest)
+			read(in.Left, reference)
+			read(in.Right, reference)
 		case ir.CopyPair:
 			left, right := take(in.Dest), take(in.Extra)
 			read(in.Left, left)
@@ -1407,7 +1417,7 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 		return effect{terminal: true}, nil
 	case bytecode.OpThrow:
 		return effect{need: 1, delta: -1, terminal: true}, nil
-	case bytecode.OpInstanceOf:
+	case bytecode.OpInstanceOf, bytecode.OpIn:
 		return effect{need: 2, delta: -1}, nil
 	case bytecode.OpTypeOf:
 		return effect{need: 1}, nil
@@ -1782,6 +1792,10 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this, charCode bool
 		// Made natively where the VM knows the constructor
 		// (ssa.InstanceOfSite), by Go otherwise.
 		return ir.Instruction{Op: ir.Host}
+	case bytecode.OpIn:
+		// key in obj, the key below the object: Go's, called from native
+		// code where that runs nothing (ssa.GoHas).
+		return ir.Instruction{Op: ir.HasProperty, Left: ir.Slot(sp - 2), Right: top, Dest: sp - 2}
 	case bytecode.OpTypeOf:
 		// Go's, but compared with a string constant (typeTests).
 		return ir.Instruction{Op: ir.Host}

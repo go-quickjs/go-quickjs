@@ -74,7 +74,7 @@ func (p *Program) Validate() error {
 			left = true
 		case BindingCheck:
 			write = true
-		case Resolved:
+		case Resolved, HasProperty:
 			left, right, write = true, true, true
 		case ObjectLiteral, StringConst, Closure:
 			write = true

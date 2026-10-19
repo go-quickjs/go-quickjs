@@ -2952,6 +2952,12 @@ func jitHostCall(ctx *abi.Context) bool {
 			*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
 		}
 		return ok
+	case ssa.GoHas:
+		has, ok := r.jitHas(jitGoArg(ctx, 0), jitGoArg(ctx, 1))
+		if ok {
+			*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = Bool(has)
+		}
+		return ok
 	case ssa.GoElemWrite:
 		o := *(**Object)(unsafe.Pointer(&ctx.GoArgs[0].Ref))
 		k, v := math.Float64frombits(ctx.GoArgs[1].Num), Float(math.Float64frombits(ctx.GoArgs[2].Num))
@@ -5210,6 +5216,39 @@ func (r *Runtime) jitKeyedRead(o, k Value) (Value, bool) {
 		return Undefined, true
 	}
 	return Undefined, false
+}
+
+// jitHas is key in obj, as the interpreter answers it, where answering it
+// runs nothing and throws nothing (ssa.GoHas): an object none of whose
+// chain is a proxy, whose has trap would run, or a module namespace, which
+// a key may make evaluate a deferred module, by a key that is no object,
+// whose conversion would call its toString or Symbol.toPrimitive. Any
+// other -- a right operand that is no object, which throws, included -- it
+// refuses (ok false), and Go makes it after an exit (jitHost).
+func (r *Runtime) jitHas(key, obj Value) (has, ok bool) {
+	if !obj.IsObject() || key.IsObject() {
+		return false, false
+	}
+	o := obj.Object()
+	for p, depth := o, 0; p != nil; p, depth = p.proto, depth+1 {
+		if depth > maxChainDepth || p.class == ClassProxy || p.class == ClassModuleNamespace {
+			return false, false
+		}
+	}
+	// A primitive's name, converted with nothing called: a number's, a
+	// string's or a symbol's as it is, and a boolean's, null's,
+	// undefined's or a BigInt's string.
+	n, err := r.toPropertyName(key)
+	if err != nil {
+		return false, false
+	}
+	k, known := r.keyFor(o, n)
+	if !known {
+		// A name no atom has, which no property has.
+		return false, true
+	}
+	has, err = r.hasPropErr(o, k)
+	return has, err == nil
 }
 
 // jitAbsentKey reports whether o's property of a name -- a, or, named

@@ -263,6 +263,15 @@ the binding holds the key it was compiled for (`ssa.OpSameSymbol`). Go
 makes the rest -- a member's definition, an accessor, a key in a local,
 and a class's or an object literal's other members (`jitHost`).
 
+**The in operator.** `k in o` (`ir.HasProperty`) is a call of Go from
+native code (`ssa.GoHas`), as V8's code calls its HasProperty builtin: Go
+searches the object and its chain as the interpreter does, where that runs
+nothing and throws nothing. A proxy on the chain, whose has trap would run,
+a module namespace, a key that is an object, whose conversion calls its
+`toString` or `Symbol.toPrimitive`, and a right operand that is no object,
+which throws, Go refuses: the code leaves for Go to make it there
+(`jitHost`), and goes on after it.
+
 **Destructuring.** Destructuring from an iterator takes a cursor, as a
 for...of does: Go makes it, called from native code (`abi.GoCallForOf`).
 Each element is a step that goes on with undefined once the iterator is
