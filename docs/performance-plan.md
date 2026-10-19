@@ -881,6 +881,36 @@ faster: its loss is its steady state's.
   interpreter and the tree tier answered true for any primitive base,
   where `delete 'ab'.length` and `delete 'ab'[0]` are false in sloppy code
   and throw in strict (ToObject's String exotic object), as Node answers.
+- **Array.prototype.forEach as a loop in the caller's code** (2026-10-19,
+  the user's choice, as TurboFan's JSCallReducer reduces it). AWFY
+  NBody's 247,000 forEach calls a run are calls of Go, whose callbacks Go
+  runs in the tree tier: by a profile, Go's forEach is 35% of NBody's
+  time, the callbacks' property updates in the tree tier 10%. The plan:
+  - The VM learns a call of the realm's forEach on a plain array, and its
+    callback's closure, at the call of Go (as push's), and gives the
+    builder a ForEach site: the function's address and a native call of
+    the callback (by its code, a closure made anew at each call of its
+    maker, as NBody's arrows are).
+  - The builder makes the call a loop of its own blocks: the function and
+    the array checked, the length read once, then for each index below
+    it, the element read where the array has it -- a hole, or one past
+    the array's length now, skipped, the prototypes holding no index
+    (arrayGuards) -- and the callback called natively with it, its index
+    and the array, this the second argument or undefined.
+  - Its state is a frame of its own, as an inlined callee's is
+    (InlineState): no closure, the function object its callee, five
+    locals -- the array, the callback, this, the index, the length -- and
+    a PC saying where in it an exit is: before the callback of the index,
+    or in its call. An exit inside -- a check of the loop failing, or the
+    callback leaving native code where its caller cannot go on -- writes
+    it as it writes an inlined callee's, and Go finishes it as V8's
+    builtin continuation frames finish the builtin: its forEach run from
+    the index, or the one after, then the caller from after the call. A
+    stack trace shows forEach's native frame there, as Go's forEach
+    shows it.
+  - Then the callback inlined into the loop, which needs inlining a
+    closure that captures bindings, refused now; then map, filter, some,
+    every, find, findIndex and reduce, each a loop of the same kind.
 - **Octane's PdfJS +2.4% since 5a2bc9d** (2026-10-19, eight placements
   with the JIT, all eight higher: 149..153 -> 153..157 ms a run), Octane
   +1.4% in all while AWFY took 23.8% less time and the V8 suite was level.
