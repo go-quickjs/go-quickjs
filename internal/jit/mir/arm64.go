@@ -1291,7 +1291,11 @@ func (c *a64Compiler) objectOf(v *ssa.Value, guard func(arm64.Cond)) bool {
 // reference finds the reference a is, of the kind whose word is word, into
 // C, as amd64's does. It uses A and B.
 func (c *a64Compiler) reference(v, a *ssa.Value, word uint64, guard func(arm64.Cond)) bool {
-	fail := c.stubLabel(v.State, exitKind(v.Aux))
+	return c.referenceTo(v, a, word, guard, c.stubLabel(v.State, exitKind(v.Aux)))
+}
+
+// referenceTo is reference failing at fail, as guard does.
+func (c *a64Compiler) referenceTo(v, a *ssa.Value, word uint64, guard func(arm64.Cond), fail arm64.Label) bool {
 	o := c.origin.At(a)
 	if a.Shadow == nil && o < 0 {
 		c.a.B(fail)
@@ -4610,7 +4614,13 @@ func (c *a64Compiler) stringUnit(v, str, key *ssa.Value, guard func(arm64.Cond))
 	if !c.reference(v, str, c.enc.String, guard) {
 		return false
 	}
-	fail := c.stubLabel(v.State, exitKind(v.Aux))
+	c.stringUnitAt(key, guard, c.stubLabel(v.State, exitKind(v.Aux)))
+	return true
+}
+
+// stringUnitAt is stringUnit once the string is in C, failing at fail, as
+// guard does.
+func (c *a64Compiler) stringUnitAt(key *ssa.Value, guard func(arm64.Cond), fail arm64.Label) {
 	c.a.Load(a64B, a64C, c.enc.StringLeft)
 	c.a.Cbnz(a64B, fail, true)
 	c.index(key, guard)
@@ -4631,7 +4641,39 @@ func (c *a64Compiler) stringUnit(v, str, key *ssa.Value, guard func(arm64.Cond))
 	c.a.Op(arm64.Add, a64B, a64B, a64A, true)
 	c.a.LoadU16(a64A, a64B, 0)
 	c.a.Bind(done)
-	return true
+}
+
+// substringChar is s.substring(i, j), s.slice(i, j) or s.substr(i, j)
+// (ssa.OpSubstringChar), as amd64's. It uses A, B, C, D, F0, F1 and F2.
+func (c *a64Compiler) substringChar(v *ssa.Value) {
+	none, done := c.a.NewLabel(), c.a.NewLabel()
+	fail := func(cond arm64.Cond) { c.a.BCond(cond, none) }
+	c.movImm(a64D, math.Float64bits(1))
+	c.a.FMovToF(a64F2, a64D)
+	if v.Aux == ssa.SubstrLength {
+		c.a.FCmp(c.fpr(v.Args[2], a64F1), a64F2)
+	} else {
+		c.a.FArith(arm64.FAdd, a64F2, a64F2, c.fpr(v.Args[1], a64F0))
+		c.a.FCmp(a64F2, c.fpr(v.Args[2], a64F1))
+	}
+	fail(arm64.NE)
+	if s := v.Args[0]; s.Shadow == nil && c.origin.At(s) < 0 {
+		c.a.B(none)
+	} else {
+		c.referenceTo(v, s, c.enc.String, fail, none)
+		c.stringUnitAt(v.Args[1], fail, none)
+	}
+	c.a.CmpImm(a64A, 256, true)
+	fail(arm64.HS)
+	c.a.Load(a64B, a64Ctx, abi.OffCharStrings)
+	c.a.Cbz(a64B, none, true)
+	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
+	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	c.a.B(done)
+	c.a.Bind(none)
+	c.movImm(a64A, 0)
+	c.a.Bind(done)
+	c.setG(v, a64A)
 }
 
 // index converts an element's key to an index in A, failing unless it is an
@@ -5280,6 +5322,8 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.stringCode(v, c.guardFor(v))
 	case ssa.OpStringChar:
 		c.stringChar(v, c.guardFor(v))
+	case ssa.OpSubstringChar:
+		c.substringChar(v)
 	case ssa.OpCodeChar:
 		c.codeChar(v, c.guardFor(v))
 	case ssa.OpFreeze:

@@ -1920,6 +1920,31 @@ func (fb *jitFeedback) CharCode(pc int) bool {
 	return false
 }
 
+// Substring is ssa.SubstringFeedback's: the address of
+// String.prototype's substring, slice or substr, the realm's own, if the
+// method call of two arguments at pc calls it, known as charCodeAt's is --
+// the call seen to call it (jitCallSeen, jitSeedBuiltin), in fn's own code
+// -- and whether it is substr, whose second argument is a length. The code
+// checks it calls it, and makes a one-character result itself.
+func (fb *jitFeedback) Substring(pc int) (uintptr, bool, bool) {
+	fn, r := fb.fn, fb.r
+	if pc >= len(fn.Code) || jitCallOp(fn.Code[pc].Op) != bytecode.OpCallMethod || fn.Code[pc].A != 2 {
+		return 0, false, false
+	}
+	e := fb.e
+	if fb.root != nil || e == nil {
+		return 0, false, false
+	}
+	for _, x := range jitTargets(e) {
+		if int(x.pc) == pc && x.substring {
+			if ok, length := r.jitSubstringOf(x.obj); ok {
+				return uintptr(unsafe.Pointer(x.obj)), length, true
+			}
+		}
+	}
+	return 0, false, false
+}
+
 // FromCharCode is ssa.FromCharCodeFeedback's: the address of
 // String.fromCharCode, the realm's own, if the method call of one argument
 // at pc calls it, known as push's and pop's are -- the call seen to call it
@@ -2267,10 +2292,10 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 			// Another object of a function the call checks by its code.
 			continue
 		}
-		if in.cl == nil && (in.charCode || in.fromChar) {
-			// String.prototype.charCodeAt or String.fromCharCode, which the
-			// code makes itself (CharCode, FromCharCode) where it can, and Go
-			// otherwise.
+		if in.cl == nil && (in.charCode || in.fromChar || in.substring) {
+			// String.prototype.charCodeAt, String.fromCharCode or a
+			// substring, which the code makes itself (CharCode,
+			// FromCharCode, Substring) where it can, and Go otherwise.
 			continue
 		}
 		if in.cl == nil && in.pop {
@@ -2525,8 +2550,9 @@ type jitInline struct {
 	// push marks a call of Array.prototype.push (jitPushes), pop one of
 	// Array.prototype.pop (jitPops), charCode one of
 	// String.prototype.charCodeAt (jitCharCodes), fromChar one of
-	// String.fromCharCode (jitFromCharCodes).
-	push, pop, charCode, fromChar bool
+	// String.fromCharCode (jitFromCharCodes), substring one of
+	// String.prototype's substring, slice or substr (jitSubstrings).
+	push, pop, charCode, fromChar, substring bool
 	// byCode marks a function the call met two objects of, closures its
 	// maker makes anew at each call: called by its code (jitSameCode).
 	byCode bool
@@ -2679,6 +2705,14 @@ func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 		if o := r.jitFromCharCodes(sp, in); o != nil {
 			// String.fromCharCode(c), made natively (jitFeedback.FromCharCode).
 			e.nativeCalls = append(e.nativeCalls, jitInline{pc: int32(pc), obj: o, fromChar: true})
+			e.callSites[pc] = jitCallNative
+			e.inlinePending = true
+			return
+		}
+		if o := r.jitSubstrings(sp, in); o != nil {
+			// s.substring(i, j), s.slice(i, j) or s.substr(i, j), made
+			// natively where it is one character (jitFeedback.Substring).
+			e.nativeCalls = append(e.nativeCalls, jitInline{pc: int32(pc), obj: o, substring: true})
 			e.callSites[pc] = jitCallNative
 			e.inlinePending = true
 			return
@@ -4497,6 +4531,8 @@ func (r *Runtime) jitSeedBuiltin(cl *closure, e *jitEntry, p *ir.Program, pc int
 		x = jitInline{pc: int32(pc), obj: o, charCode: true}
 	case in.A == 1 && r.jitFromCharCode.IsObject() && o == r.jitFromCharCode.Object():
 		x = jitInline{pc: int32(pc), obj: o, fromChar: true}
+	case in.A == 2 && r.jitIsSubstring(o):
+		x = jitInline{pc: int32(pc), obj: o, substring: true}
 	case in.A >= 1 && o == r.callFn && read > 0 && (cl.fn.Code[read-1].Op == bytecode.OpGetProp || cl.fn.Code[read-1].Op == bytecode.OpGetGlobal):
 		v, ok := r.jitChainValue(cl, p, read-1, jitChainReads)
 		if !ok || !v.IsObject() {
@@ -5647,6 +5683,23 @@ func (r *Runtime) jitCharCodes(sp int, in bytecode.Instr) *Object {
 	}
 	callee, recv := r.stack[sp-2], r.stack[sp-3]
 	if !callee.IsObject() || callee.Object() != r.jitCharCodeAt.Object() || !recv.IsString() {
+		return nil
+	}
+	return callee.Object()
+}
+
+// jitSubstrings is String.prototype's substring, slice or substr, the
+// realm's own, if a method call at the top of the stack calls it with two
+// arguments, numbers, on a string, or nil.
+func (r *Runtime) jitSubstrings(sp int, in bytecode.Instr) *Object {
+	if in.Op != bytecode.OpCallMethod || in.A != 2 {
+		return nil
+	}
+	callee, recv := r.stack[sp-3], r.stack[sp-4]
+	if !callee.IsObject() || !recv.IsString() || !r.stack[sp-2].IsNumber() || !r.stack[sp-1].IsNumber() {
+		return nil
+	}
+	if ok, _ := r.jitSubstringOf(callee.Object()); !ok {
 		return nil
 	}
 	return callee.Object()

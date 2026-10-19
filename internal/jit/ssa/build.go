@@ -116,6 +116,14 @@ type InstanceOfFeedback interface {
 	InstanceOf(pc int) (InstanceOfSite, bool)
 }
 
+// SubstringFeedback is Feedback that knows a method call of two arguments
+// at a PC calls String.prototype.substring, slice or substr, the realm's,
+// at the address it gives, and whether it is substr, whose second argument
+// is a length: s.substring(i, j), by its target, whatever read it.
+type SubstringFeedback interface {
+	Substring(pc int) (fn uintptr, length, ok bool)
+}
+
 // CharCodeFeedback is Feedback that knows a method call of one argument at
 // a PC calls String.prototype.charCodeAt, the realm's (abi.Context's
 // CharCodeAt): s.charCodeAt(i), by its target, whatever read it.
@@ -1987,6 +1995,66 @@ func (b *builder) fromCharCodeCall(blk *Block, pc int, fn uintptr, guard func(Op
 	b.assign(sp-3, blk, v)
 }
 
+// substring is the address of String.prototype.substring, slice or
+// substr if the method call of two arguments at pc, in the function's own
+// code, calls it (SubstringFeedback) and Go makes it otherwise (a GoCall
+// site), which substringCall makes, and whether it is substr.
+func (b *builder) substring(pc int) (fn uintptr, length, ok bool) {
+	if b.fb == nil || b.cur != b.root || b.p.Code[pc].Op != ir.Host || pc+1 >= len(b.p.Code) || !reachable(b.p, pc+1) ||
+		b.p.Maps[pc].Depth < 4 || b.p.Maps[pc+1].Depth != b.p.Maps[pc].Depth-3 {
+		return 0, false, false
+	}
+	if calls := b.calls[pc]; len(calls) != 1 || calls[0].Go != GoCall || !calls[0].Method || calls[0].Argc != 2 {
+		return 0, false, false
+	}
+	f, ok := b.fb.(SubstringFeedback)
+	if !ok {
+		return 0, false, false
+	}
+	return f.Substring(pc)
+}
+
+// substringCall makes the call of String.prototype.substring, slice or
+// substr (length) at pc, at address fn, checked to call it, its arguments
+// numbers: one code unit of a flat string, below 256, is the runtime's
+// string of it (OpSubstringChar), with nothing made, as V8 makes a
+// one-character string from its table of them; any other, a call of Go
+// (the site's GoCall) makes, on a branch of its own (split), native code
+// going on after it.
+func (b *builder) substringCall(blk *Block, pc int, fn uintptr, length bool, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+	f := b.f
+	sp := b.p.Locals + b.p.Maps[pc].Depth
+	recv, callee, start, end := b.read(sp-4, blk), b.read(sp-3, blk), b.read(sp-2, blk), b.read(sp-1, blk)
+	object := guard(OpObjectOf, Ptr, ir.HostExit, callee)
+	same := guard(OpSameObject, None, ir.HostExit, object)
+	same.Const = ir.Value{Bits: uint64(fn)}
+	i := guard(OpUnboxF64, Float64, ir.HostExit, start)
+	j := guard(OpUnboxF64, Float64, ir.HostExit, end)
+	cell := f.newValue(blk, OpSubstringChar, Source, recv, i, j)
+	if length {
+		cell.Aux = SubstrLength
+	}
+	none := f.newValue(blk, OpCellNone, Bool, cell)
+	st := b.state(blk, pc)
+	miss, hit, _ := b.split(blk, none, true)
+	v := f.newValue(hit, OpLoadCell, Tagged, cell)
+	v.Shadow = cell
+	b.write(sp-4, hit, v)
+	call := f.newValue(miss, OpCall, Tagged, recv, callee, start, end)
+	call.Aux, call.State = int(ir.HostExit), st
+	st.addUse()
+	f.cache(call).Calls, call.Index = b.calls[pc], b.callKeeps[pc]
+	kept := f.newValue(miss, OpCallCell, Source, call)
+	r := f.newValue(miss, OpKept, Tagged, kept, call)
+	r.Shadow = kept
+	b.write(sp-4, miss, r)
+	// A receiver Go converts may run script, which may assign a captured
+	// binding, as a callee may.
+	if b.hasCells() {
+		b.reloadAfterCall(miss)
+	}
+}
+
 // charCode reports whether the method call of one argument at pc calls
 // String.prototype.charCodeAt (CharCodeFeedback), which charCodeCall
 // makes.
@@ -3822,6 +3890,10 @@ func (b *builder) instruction(blk *Block, pc int) {
 		}
 		if fn, ok := b.fromCharCode(pc); ok && in.Op == ir.Host {
 			b.fromCharCodeCall(blk, pc, fn, guard)
+			break
+		}
+		if fn, length, ok := b.substring(pc); ok && in.Op == ir.Host {
+			b.substringCall(blk, pc, fn, length, guard)
 			break
 		}
 		if k, ok := b.instanceOf(pc); ok && in.Op == ir.Host {

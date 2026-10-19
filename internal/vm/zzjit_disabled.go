@@ -26,6 +26,7 @@ func (*Runtime) jitNoteDeepRead(*propCache, *Object, Atom) {}
 func (*Runtime) jitNoteChainRead(*Object, Atom)            {}
 
 func (*Runtime) recordJITStringIntrinsic(*Object) {}
+func (*Runtime) recordJITSubstrings()             {}
 
 func (*Runtime) jitOn() bool { return false }
 

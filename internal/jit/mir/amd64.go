@@ -4962,6 +4962,44 @@ func (c *compiler) stringChar(v *ssa.Value, guard func(amd64.Cond)) {
 	c.charCell(v, guard)
 }
 
+// substringChar is s.substring(i, j) or s.slice(i, j), j being i + 1, or
+// s.substr(i, j), j being 1 (ssa.OpSubstringChar, its Aux SubstrLength):
+// the cell of the runtime's string of the code unit at i, below 256, of a
+// flat string s, into v's register; 0 for anything else, which Go makes --
+// a negative i too, which slice and substr count from the end. It uses
+// every scratch register, xScratch0 and xScratch1.
+func (c *compiler) substringChar(v *ssa.Value) {
+	none, done := c.a.NewLabel(), c.a.NewLabel()
+	fail := func(cond amd64.Cond) { c.a.Jcc(cond, none) }
+	c.movImm(scratchA, math.Float64bits(1))
+	c.a.MovQToX(xScratch1, scratchA)
+	if v.Aux != ssa.SubstrLength {
+		c.a.SSEOp(amd64.AddSD, xScratch1, c.xmm(v.Args[1], xScratch0))
+	}
+	c.a.SSEOp(amd64.UcomiSD, xScratch1, c.xmm(v.Args[2], xScratch0))
+	fail(amd64.CondNE)
+	fail(amd64.CondP)
+	if s := v.Args[0]; s.Shadow == nil && c.origin.At(s) < 0 {
+		// A primitive, never a string's reference (reference, which would
+		// leave where this has no state to leave with).
+		c.a.Jmp(none)
+	} else {
+		c.stringUnit(v, s, v.Args[1], fail)
+	}
+	c.a.OpImm(amd64.Cmp, scratchA, 256, true)
+	fail(amd64.CondAE)
+	c.a.Load(scratchB, regCtx, abi.OffCharStrings)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	fail(amd64.CondE)
+	c.a.ShiftImm(amd64.Shl, scratchA, 4, true)
+	c.a.Op(amd64.Add, scratchA, scratchB, true)
+	c.a.Jmp(done)
+	c.a.Bind(none)
+	c.movImm(scratchA, 0)
+	c.a.Bind(done)
+	c.setG(v, scratchA)
+}
+
 // codeChar is String.fromCharCode(c) (ssa.OpCodeChar): the cell of the
 // runtime's string of code unit c, an integer below 256, into v's
 // register.
@@ -5804,6 +5842,8 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.stringChar(v, c.guardFor(v))
 	case ssa.OpCodeChar:
 		c.codeChar(v, c.guardFor(v))
+	case ssa.OpSubstringChar:
+		c.substringChar(v)
 	case ssa.OpFreeze:
 		c.freeze(v)
 	case ssa.OpLoadCell:

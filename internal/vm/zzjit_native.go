@@ -156,6 +156,10 @@ func (r *Runtime) jitStressDeopt(s *jitState) bool {
 
 type jitRealmFields struct {
 	jitCharCodeAt, jitFromCharCode Value
+	// jitSubstring, jitSlice and jitSubstr are String.prototype's
+	// substring, slice and substr, whose one-character results native code
+	// makes itself (ssa.OpSubstringChar).
+	jitSubstring, jitSlice, jitSubstr Value
 }
 
 // recordJITStringIntrinsic notes the realm's String.prototype.charCodeAt and
@@ -163,6 +167,37 @@ type jitRealmFields struct {
 func (r *Runtime) recordJITStringIntrinsic(ctor *Object) {
 	r.jitCharCodeAt = r.proto.str.getOwn(r.atoms.intern("charCodeAt")).value()
 	r.jitFromCharCode = ctor.getOwn(r.atoms.intern("fromCharCode")).value()
+}
+
+// recordJITSubstrings notes the realm's String.prototype substring, slice
+// and substr, once the realm has them all, before any script runs, whose
+// one-character results native code makes itself.
+func (r *Runtime) recordJITSubstrings() {
+	own := func(name string) Value {
+		if m := r.proto.str.getOwn(r.atoms.intern(name)); m.ok() {
+			return m.value()
+		}
+		return Undefined
+	}
+	r.jitSubstring, r.jitSlice, r.jitSubstr = own("substring"), own("slice"), own("substr")
+}
+
+// jitIsSubstring reports whether o is the realm's String.prototype
+// substring, slice or substr.
+func (r *Runtime) jitIsSubstring(o *Object) bool {
+	ok, _ := r.jitSubstringOf(o)
+	return ok
+}
+
+// jitSubstringOf reports whether o is the realm's String.prototype
+// substring, slice or substr (jitRealmFields), and whether it is substr.
+func (r *Runtime) jitSubstringOf(o *Object) (ok, length bool) {
+	for _, m := range []Value{r.jitSubstring, r.jitSlice, r.jitSubstr} {
+		if m.IsObject() && m.Object() == o {
+			return true, m.Object() == r.jitSubstr.Object()
+		}
+	}
+	return false, false
 }
 
 // jitCodeFields is the JIT's in a template's closureCode, which every

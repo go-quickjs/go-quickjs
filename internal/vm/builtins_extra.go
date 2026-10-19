@@ -826,6 +826,7 @@ func (r *Runtime) initStringExtras() {
 		}
 		return Str(NewString(localeLower(s.Go(), language, n))), nil
 	})
+	r.recordJITSubstrings()
 }
 
 // ---------------------------------------------------------------------------
