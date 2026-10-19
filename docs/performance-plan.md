@@ -922,8 +922,17 @@ faster: its loss is its steady state's.
   Typed arrays' forEach, %TypedArray%.prototype's, is Go's still.
   reduce done in 5218aa7, the same loop with the accumulator in this's
   slot, its callback's result the next one: array_reduce (micro) 42.5 ->
-  28.0 ns an element. map, filter, some, every, find and findIndex, and
-  the callback inlined, are still to do.
+  28.0 ns an element. map, filter, some, every, find and findIndex done
+  in 7e02bd5, loops of the same kind: map's and filter's array made by Go
+  once where the array's species is Array's (GoNewArray), the results
+  appended natively -- any value's store at an array's length appended
+  where it has room, as a number's was (19dfd1b) -- and some's and the
+  others' loops left at the first answer; a loop's slots hold the
+  element and the callback's result too, which Go goes on from after an
+  exit past the call. array_map (micro) 39.5 -> 34.2 ns an element
+  (-18% at each of four JIT code offsets), array_filter 60.6 -> 39.2,
+  array_some 48.6 -> 25.8. Still to do: the callback inlined, and typed
+  arrays' methods.
 - **Octane's PdfJS +2.4% since 5a2bc9d** (2026-10-19, eight placements
   with the JIT, all eight higher: 149..153 -> 153..157 ms a run), Octane
   +1.4% in all while AWFY took 23.8% less time and the V8 suite was level.
