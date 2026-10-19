@@ -4643,20 +4643,23 @@ func (c *a64Compiler) stringUnitAt(key *ssa.Value, guard func(arm64.Cond), fail 
 	c.a.Bind(done)
 }
 
-// substringChar is s.substring(i, j), s.slice(i, j) or s.substr(i, j)
-// (ssa.OpSubstringChar), as amd64's. It uses A, B, C, D, F0, F1 and F2.
+// substringChar is s.substring(i, j), s.slice(i, j), s.substr(i, j) or
+// s.charAt(i) (ssa.OpSubstringChar), as amd64's. It uses A, B, C, D, F0,
+// F1 and F2.
 func (c *a64Compiler) substringChar(v *ssa.Value) {
 	none, done := c.a.NewLabel(), c.a.NewLabel()
 	fail := func(cond arm64.Cond) { c.a.BCond(cond, none) }
-	c.movImm(a64D, math.Float64bits(1))
-	c.a.FMovToF(a64F2, a64D)
-	if v.Aux == ssa.SubstrLength {
-		c.a.FCmp(c.fpr(v.Args[2], a64F1), a64F2)
-	} else {
-		c.a.FArith(arm64.FAdd, a64F2, a64F2, c.fpr(v.Args[1], a64F0))
-		c.a.FCmp(a64F2, c.fpr(v.Args[2], a64F1))
+	if v.Aux != ssa.SubstrAt {
+		c.movImm(a64D, math.Float64bits(1))
+		c.a.FMovToF(a64F2, a64D)
+		if v.Aux == ssa.SubstrLength {
+			c.a.FCmp(c.fpr(v.Args[2], a64F1), a64F2)
+		} else {
+			c.a.FArith(arm64.FAdd, a64F2, a64F2, c.fpr(v.Args[1], a64F0))
+			c.a.FCmp(a64F2, c.fpr(v.Args[2], a64F1))
+		}
+		fail(arm64.NE)
 	}
-	fail(arm64.NE)
 	if s := v.Args[0]; s.Shadow == nil && c.origin.At(s) < 0 {
 		c.a.B(none)
 	} else {

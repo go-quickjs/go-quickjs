@@ -1906,59 +1906,89 @@ func (fb *jitFeedback) CharCode(pc int) bool {
 			}
 		}
 	}
+	m := fb.stringMethodRead(pc, 1)
+	return m.IsObject() && m.StrictEquals(r.jitCharCodeAt)
+}
+
+// stringMethodRead is String.prototype's own data property, as it is now,
+// of the name the get_prop_this before the method call of argc arguments at
+// pc reads, the stack never below the function since -- as V8 folds a load
+// from a string to the prototype's constant -- or undefined. The
+// interpreter's cache keeps nothing of a string's reads: a call of
+// charCodeAt, or substring, is known so before it has left native code.
+func (fb *jitFeedback) stringMethodRead(pc, argc int) Value {
+	fn, r := fb.fn, fb.r
 	if fb.prog == nil {
 		p, err := r.jitLower(fn, jitLowerInline)
 		if err != nil {
-			return false
+			return Undefined
 		}
 		fb.prog = p
 	}
 	p := fb.prog
-	if len(p.Maps) != len(fn.Code) || p.Maps[pc].Depth < 3 {
-		return false
+	if len(p.Maps) != len(fn.Code) || p.Maps[pc].Depth < argc+2 {
+		return Undefined
 	}
 	// The function's slot: the read is the instruction at its depth, the
-	// argument's above it.
-	slot := p.Maps[pc].Depth - 2
+	// arguments' above it.
+	slot := p.Maps[pc].Depth - argc - 1
 	for k := pc - 1; k >= 0; k-- {
 		d := p.Maps[k].Depth
 		if d == slot && fn.Code[k].Op == bytecode.OpGetPropThis {
 			if fb.cl == nil || int(fn.Code[k].A) >= len(fb.cl.names) {
-				return false
+				return Undefined
 			}
 			m := r.proto.str.getOwn(fb.cl.names[fn.Code[k].A])
-			return m.ok() && m.flags()&^propDefault == 0 && m.value().StrictEquals(r.jitCharCodeAt)
+			if !m.ok() || m.flags()&^propDefault != 0 {
+				return Undefined
+			}
+			return m.value()
 		}
 		if d < slot+1 {
-			return false
+			return Undefined
 		}
 	}
-	return false
+	return Undefined
 }
 
 // Substring is ssa.SubstringFeedback's: the address of
-// String.prototype's substring, slice or substr, the realm's own, if the
-// method call of two arguments at pc calls it, known as charCodeAt's is --
-// the call seen to call it (jitCallSeen, jitSeedBuiltin), in fn's own code
-// -- and whether it is substr, whose second argument is a length. The code
-// checks it calls it, and makes a one-character result itself.
-func (fb *jitFeedback) Substring(pc int) (uintptr, bool, bool) {
+// String.prototype's substring, slice, substr or charAt, the realm's own,
+// if the method call at pc calls it, known as charCodeAt's is -- the call
+// seen to call it (jitCallSeen, jitSeedBuiltin), in fn's own code -- and
+// which it is (ssa.OpSubstringChar's Aux). The code checks it calls it,
+// and makes a one-character result itself.
+func (fb *jitFeedback) Substring(pc int) (uintptr, int, bool) {
 	fn, r := fb.fn, fb.r
-	if pc >= len(fn.Code) || jitCallOp(fn.Code[pc].Op) != bytecode.OpCallMethod || fn.Code[pc].A != 2 {
-		return 0, false, false
+	if pc >= len(fn.Code) || jitCallOp(fn.Code[pc].Op) != bytecode.OpCallMethod {
+		return 0, 0, false
 	}
 	e := fb.e
 	if fb.root != nil || e == nil {
-		return 0, false, false
+		return 0, 0, false
 	}
+	argc := int(fn.Code[pc].A)
 	for _, x := range jitTargets(e) {
-		if int(x.pc) == pc && x.substring {
-			if ok, length := r.jitSubstringOf(x.obj); ok {
-				return uintptr(unsafe.Pointer(x.obj)), length, true
-			}
+		if int(x.pc) == pc && x.substring && r.jitIsSubstring(x.obj, argc) {
+			kind, _ := r.jitSubstringOf(x.obj)
+			return uintptr(unsafe.Pointer(x.obj)), kind, true
 		}
 	}
-	return 0, false, false
+	// Or, where the read's cache knows nothing -- what a string's read
+	// leaves it -- the method read before it, as CharCode finds charCodeAt:
+	// a loop run once, Octane Gameboy's base64_decode, is compiled once,
+	// with no call seen since. Not slice, which an array has too, whose
+	// call would leave at the check of its function every time.
+	if fb.cl == nil || fb.prog == nil && fb.stringMethodRead(pc, argc).IsUndefined() {
+		return 0, 0, false
+	}
+	if o, _ := r.jitCalleeObjectAt(fb.cl, fb.prog, pc); o != nil {
+		return 0, 0, false
+	}
+	if m := fb.stringMethodRead(pc, argc); m.IsObject() && !m.StrictEquals(r.jitSlice) && r.jitIsSubstring(m.Object(), argc) {
+		kind, _ := r.jitSubstringOf(m.Object())
+		return uintptr(unsafe.Pointer(m.Object())), kind, true
+	}
+	return 0, 0, false
 }
 
 // FromCharCode is ssa.FromCharCodeFeedback's: the address of
@@ -2567,7 +2597,7 @@ type jitInline struct {
 	// Array.prototype.pop (jitPops), charCode one of
 	// String.prototype.charCodeAt (jitCharCodes), fromChar one of
 	// String.fromCharCode (jitFromCharCodes), substring one of
-	// String.prototype's substring, slice or substr (jitSubstrings).
+	// String.prototype's substring, slice, substr or charAt (jitSubstrings).
 	push, pop, charCode, fromChar, substring bool
 	// byCode marks a function the call met two objects of, closures its
 	// maker makes anew at each call: called by its code (jitSameCode).
@@ -2726,8 +2756,9 @@ func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 			return
 		}
 		if o := r.jitSubstrings(sp, in); o != nil {
-			// s.substring(i, j), s.slice(i, j) or s.substr(i, j), made
-			// natively where it is one character (jitFeedback.Substring).
+			// s.substring(i, j), s.slice(i, j), s.substr(i, j) or
+			// s.charAt(i), made natively where it is one character
+			// (jitFeedback.Substring).
 			e.nativeCalls = append(e.nativeCalls, jitInline{pc: int32(pc), obj: o, substring: true})
 			e.callSites[pc] = jitCallNative
 			e.inlinePending = true
@@ -4547,7 +4578,7 @@ func (r *Runtime) jitSeedBuiltin(cl *closure, e *jitEntry, p *ir.Program, pc int
 		x = jitInline{pc: int32(pc), obj: o, charCode: true}
 	case in.A == 1 && r.jitFromCharCode.IsObject() && o == r.jitFromCharCode.Object():
 		x = jitInline{pc: int32(pc), obj: o, fromChar: true}
-	case in.A == 2 && r.jitIsSubstring(o):
+	case r.jitIsSubstring(o, int(in.A)):
 		x = jitInline{pc: int32(pc), obj: o, substring: true}
 	case in.A >= 1 && o == r.callFn && read > 0 && (cl.fn.Code[read-1].Op == bytecode.OpGetProp || cl.fn.Code[read-1].Op == bytecode.OpGetGlobal):
 		v, ok := r.jitChainValue(cl, p, read-1, jitChainReads)
@@ -5706,17 +5737,20 @@ func (r *Runtime) jitCharCodes(sp int, in bytecode.Instr) *Object {
 
 // jitSubstrings is String.prototype's substring, slice or substr, the
 // realm's own, if a method call at the top of the stack calls it with two
-// arguments, numbers, on a string, or nil.
+// arguments, numbers, on a string -- or charAt with one -- or nil.
 func (r *Runtime) jitSubstrings(sp int, in bytecode.Instr) *Object {
-	if in.Op != bytecode.OpCallMethod || in.A != 2 {
+	argc := int(in.A)
+	if in.Op != bytecode.OpCallMethod || argc != 1 && argc != 2 {
 		return nil
 	}
-	callee, recv := r.stack[sp-3], r.stack[sp-4]
-	if !callee.IsObject() || !recv.IsString() || !r.stack[sp-2].IsNumber() || !r.stack[sp-1].IsNumber() {
+	callee, recv := r.stack[sp-argc-1], r.stack[sp-argc-2]
+	if !callee.IsObject() || !recv.IsString() || !r.jitIsSubstring(callee.Object(), argc) {
 		return nil
 	}
-	if ok, _ := r.jitSubstringOf(callee.Object()); !ok {
-		return nil
+	for _, a := range r.stack[sp-argc : sp] {
+		if !a.IsNumber() {
+			return nil
+		}
 	}
 	return callee.Object()
 }

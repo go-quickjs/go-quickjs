@@ -157,12 +157,12 @@ const (
 	// below 256 (abi.Context.CharStrings), which no store writes.
 	OpCodeChar // f64 code -> source
 	// OpSubstringChar is s.substring(i, j) or s.slice(i, j) once the
-	// function is checked -- or s.substr(i, j), its Aux SubstrLength: the
-	// cell of the runtime's string of the code unit at index i of a flat
-	// string s (abi.Context.CharStrings), if it is below 256 and j is
-	// i + 1 (1, a length, for substr); or none, where Go makes the call (a
-	// split).
-	OpSubstringChar // tagged string, f64 start, f64 end -> source
+	// function is checked -- or s.substr(i, j), its Aux SubstrLength, or
+	// s.charAt(i), its Aux SubstrAt and no j: the cell of the runtime's
+	// string of the code unit at index i of a flat string s
+	// (abi.Context.CharStrings), if it is below 256 and j is i + 1 (1, a
+	// length, for substr); or none, where Go makes the call (a split).
+	OpSubstringChar // tagged string, f64 start[, f64 end] -> source
 	// OpFreeze ends a string builder's appends (GoAppend) to its operand,
 	// any value: a string whose building flag is set has it cleared, so
 	// that nothing appends to it in place after this, where a loop's
@@ -409,9 +409,13 @@ func (o Op) String() string {
 	return fmt.Sprintf("op%d", o)
 }
 
-// SubstrLength is OpSubstringChar's Aux for String.prototype.substr, whose
-// second argument is a length.
-const SubstrLength = 1
+// OpSubstringChar's Aux: SubstrLength for String.prototype.substr, whose
+// second argument is a length, and SubstrAt for String.prototype.charAt,
+// which has none; 0 for substring and slice, whose second is an end.
+const (
+	SubstrLength = 1
+	SubstrAt     = 2
+)
 
 // isGuard reports whether an op exits when its operand is not what it needs.
 func (o Op) isGuard() bool {
