@@ -46,9 +46,10 @@ func (p *Program) EvaluateArrays(slots []Value, arrays []ArrayView, pc int, budg
 		next := pc + 1
 		switch in.Op {
 		case Nop:
-		case Host, Call, IterStep, IterClose, Closure, CloseUpvalues, TypeTest, BindingWrite, BindingCheck, Resolved, ObjectLiteral, FieldDefine, ArrayLiteral, StringConst, UpvalueRead, UpvalueWrite, StringAdd, StringConcat, HasProperty:
-			// TypeTest's objects are Go's to classify, and HasProperty's
-			// chains Go's to search.
+		case Host, Call, IterStep, IterClose, Closure, CloseUpvalues, TypeTest, BindingWrite, BindingCheck, Resolved, ObjectLiteral, FieldDefine, ArrayLiteral, StringConst, UpvalueRead, UpvalueWrite, StringAdd, StringConcat, HasProperty, DeleteProperty:
+			// TypeTest's objects are Go's to classify, HasProperty's
+			// chains Go's to search and DeleteProperty's objects Go's to
+			// change.
 			exit.Kind = HostExit
 			return exit, nil
 		case StringMethod, StringCode:

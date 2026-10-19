@@ -222,6 +222,16 @@ const (
 	// proxy's has trap, a key whose conversion calls a method of its own,
 	// a right operand that is no object, which throws.
 	HasProperty
+	// DeleteProperty is delete, delete Left[Right], as a boolean at Dest
+	// where Left was: whether the object Left no longer has the own
+	// property Right names, as V8's code calls its DeleteProperty builtin.
+	// Strict marks one in strict code, where a property that cannot be
+	// deleted throws. The new pipeline has Go make it, called from native
+	// code (ssa.GoDelete), where that runs nothing and throws nothing, and
+	// leaves it to Go otherwise: a proxy's deleteProperty trap, a key
+	// whose conversion calls a method of its own, a property strict code
+	// cannot delete, a base that is no object.
+	DeleteProperty
 )
 
 // RethrowNormal is the kind a normal completion's record has (Rethrow).
@@ -326,7 +336,7 @@ type Instruction struct {
 	Bools uint8
 	// Strict marks an Eq or Ne that is === or !==. On numbers the two
 	// agree; the new pipeline compares with null and undefined natively,
-	// where they do not.
+	// where they do not. It marks a DeleteProperty in strict code, too.
 	Strict bool
 	// Reference marks an ArrayRead whose result no native operation takes
 	// as a number: the new pipeline reads the element's cell, whatever the

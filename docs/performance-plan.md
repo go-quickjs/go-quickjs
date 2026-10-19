@@ -831,21 +831,46 @@ faster: its loss is its steady state's.
   key's conversion and a TypeError. Of the 46 functions it had refused in
   Octane, the V8 suite and AWFY (pdf.js 34, Mandreel 7, EarleyBoyer 5),
   28 compile now, 14 are left to native callers and inlining (no loop),
-  and 4 stop at `delete` (below). Next, natively, as V8's keyed has: an
+  and 4 stopped at `delete` (below, compiled since). Next, natively, as V8's keyed has: an
   array's dense
   element that is no hole, needing no feedback (a split, true on one side
   and the call of Go on the other, as megamorphic reads split); then an
   object's constant key by shapes learned at the call of Go itself, the
   interpreter keeping no cache for `in` (which would change executeAt).
-- **The `delete` operator** (`delete_prop`) is an opcode the JIT does not
-  compile either: a function with `delete o.k` or `delete o[k]` is refused
-  whole -- 4 of the functions `in` had refused stop at it now. As V8:
-  first a call of Go that deletes what deletes without running code -- an
-  ordinary object's own configurable property, a dense array's element --
-  and leaves the rest (a proxy's deleteProperty trap, a non-configurable
-  property in strict code, which throws) for an exit; then natively the
-  deletion of an object's last-added property, back along its shape's
-  transition, as V8's code deletes its map's last property.
+- **The `delete` operator** (`delete_prop`): a function with `delete o.k`
+  or `delete o[k]` was refused whole -- 4 of the functions `in` had
+  refused stopped at it. Now compiled, as V8 first does it, each `delete`
+  a call of Go (ssa.GoDelete, GoDeleteStrict) that deletes what deletes
+  without running code -- an ordinary object's own property, configurable
+  or not (false in sloppy code), its shape changed as the interpreter
+  changes it, a dense array's element, an absent property -- and leaves
+  for the interpreter, having changed nothing, a proxy's deleteProperty
+  trap, a module namespace, typed arrays, string wrappers, mapped
+  arguments objects, an object key's conversion, a base that is no object
+  and, in strict code, a property that cannot be deleted (the TypeError).
+  The call clears the deleted property's cell, so it is a store of any key
+  to the analyses (ssa's allocOnly): a value read from that property and
+  used after the delete is kept first, which a test that read the values
+  and deleted their properties caught, the references read back from the
+  cleared cells. Of the 25 functions it had refused in Octane, the V8
+  suite and AWFY (pdf.js 10, EarleyBoyer 6 in each suite, TypeScript 2,
+  Box2D 1), 16 compile now and 9 are left to native callers and inlining
+  (no loop); the whole corpus 3507 -> 3523 functions eligible. `delete x`
+  of a global (`delete_var`, only zlib's teardown) and `delete super.x`
+  are still refused. Next, natively, the deletion of an object's
+  last-added property back along its shape's transition, as V8's code
+  deletes its map's last property (the VM's deleteOwn does so for a shared
+  layout already): it needs feedback the opcode has no site for -- the
+  receivers' shapes and the key, learned at the call of Go itself, keyed
+  by pc as keyed reads are -- a constant key (`delete o.k`'s push_const),
+  and in mir for both architectures the shape guard, the cell cleared and
+  the parent shape stored, with the write barrier while the collector
+  marks, as a transition's store makes them the other way. Worth it only
+  where deletes are hot, to be counted first (calls of Go by operation, as
+  above). Found on the way, not the JIT's: the interpreter (and the tree
+  tier) answers true for any primitive base, where `delete 'ab'.length`
+  and `delete 'ab'[0]` are false in sloppy code and throw in strict
+  (ToObject's String exotic object), as Node answers.
 - **Octane's PdfJS +2.4% since 5a2bc9d** (2026-10-19, eight placements
   with the JIT, all eight higher: 149..153 -> 153..157 ms a run), Octane
   +1.4% in all while AWFY took 23.8% less time and the V8 suite was level.

@@ -17,10 +17,9 @@ import (
 // length, an array's length, typed arrays', string wrappers' and functions'
 // keys the classes answer themselves, string, number, symbol, boolean,
 // null, undefined and BigInt keys, a property deleted and added again
-// between iterations (by a callee: the JIT does not compile delete), and
-// #x in o beside it; and in an inlined callee, a proxy's, an object key's
-// and a primitive's leaving it for Go there, the TypeError caught by its
-// caller's handler.
+// between iterations (by a callee), and #x in o beside it; and in an
+// inlined callee, a proxy's, an object key's and a primitive's leaving it
+// for Go there, the TypeError caught by its caller's handler.
 func TestJITIn(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")

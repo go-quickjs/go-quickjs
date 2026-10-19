@@ -2480,7 +2480,7 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 		case bytecode.OpPushThis, bytecode.OpGetProp, bytecode.OpSetProp, bytecode.OpCall,
 			bytecode.OpCallMethod, bytecode.OpGetGlobal, bytecode.OpGetGlobalOpt, bytecode.OpSetGlobal, bytecode.OpSetGlobalStrict,
 			bytecode.OpGetPropThis, bytecode.OpSetIndex, bytecode.OpNewArray,
-			bytecode.OpGetIndex, bytecode.OpNew, bytecode.OpPushConst, bytecode.OpInstanceOf, bytecode.OpIn, bytecode.OpTypeOf,
+			bytecode.OpGetIndex, bytecode.OpNew, bytecode.OpPushConst, bytecode.OpInstanceOf, bytecode.OpIn, bytecode.OpDeleteProp, bytecode.OpTypeOf,
 			bytecode.OpCheckGlobalRef, bytecode.OpAssertResolved, bytecode.OpNewObject, bytecode.OpNewRegExp, bytecode.OpDefineField,
 			bytecode.OpPushEmptyString, bytecode.OpGetUpvalue, bytecode.OpGetUpvalueCheck, bytecode.OpSetUpvalue,
 			bytecode.OpInitUpvalue, bytecode.OpSetUpvalueCheck, bytecode.OpConcat, bytecode.OpNewDisposeCapability, bytecode.OpAddDisposable,
@@ -2685,6 +2685,12 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 			// the interpreter does each.
 			sp -= 2
 			v, err = inOperator(r, stack[sp], stack[sp+1])
+		case bytecode.OpDeleteProp:
+			// One Go did not make from native code (ssa.GoDelete): a
+			// proxy's trap called, a key converted, a TypeError thrown, as
+			// the interpreter does each, strict as the function is.
+			sp -= 2
+			v, err = deleteIndexed(r, stack[sp], stack[sp+1], f.cl.fn.Strict)
 		case bytecode.OpForOfStart, bytecode.OpForInStart:
 			// A loop's cursor, as executeAt's cases make it.
 			sp--

@@ -321,9 +321,9 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			// constructor (ssa.InstanceOfSite), Go otherwise.
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
-		if in.Op == bytecode.OpIn && !m.ssa {
-			// The new pipeline has Go answer it, called from native code
-			// (ir.HasProperty).
+		if (in.Op == bytecode.OpIn || in.Op == bytecode.OpDeleteProp) && !m.ssa {
+			// The new pipeline has Go answer in and make delete, called
+			// from native code (ir.HasProperty, ir.DeleteProperty).
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
 		if (in.Op == bytecode.OpClosure || in.Op == bytecode.OpCloseUpvalues) && (!m.ssa || m.forward) {
@@ -382,7 +382,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
 		host = host || str || iters || isPrivate(in.Op) || isDefinition(in.Op) || in.Op == bytecode.OpClosure || in.Op == bytecode.OpCloseUpvalues || in.Op == bytecode.OpImport || in.Op == bytecode.OpImportMeta || in.Op == bytecode.OpYield || in.Op == bytecode.OpAwait || in.Op == bytecode.OpThrow ||
-			in.Op == bytecode.OpNewDisposeCapability || in.Op == bytecode.OpAddDisposable || in.Op == bytecode.OpDispose || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpIn || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpApplyArguments || in.Op == bytecode.OpNew || in.Op == bytecode.OpSuperCall || in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict || in.Op == bytecode.OpCheckGlobalRef || in.Op == bytecode.OpNewObject || in.Op == bytecode.OpNewRegExp || in.Op == bytecode.OpDefineField || in.Op == bytecode.OpPushEmptyString || in.Op == bytecode.OpConcat || in.Op == bytecode.OpNewArray || in.Op == bytecode.OpCall || in.Op == bytecode.OpCallMethod || in.Op == bytecode.OpTailCall || in.Op == bytecode.OpTailCallMethod || in.Op == bytecode.OpGetGlobal || in.Op == bytecode.OpGetGlobalOpt || in.Op == bytecode.OpGetPropThis || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
+			in.Op == bytecode.OpNewDisposeCapability || in.Op == bytecode.OpAddDisposable || in.Op == bytecode.OpDispose || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpIn || in.Op == bytecode.OpDeleteProp || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpApplyArguments || in.Op == bytecode.OpNew || in.Op == bytecode.OpSuperCall || in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict || in.Op == bytecode.OpCheckGlobalRef || in.Op == bytecode.OpNewObject || in.Op == bytecode.OpNewRegExp || in.Op == bytecode.OpDefineField || in.Op == bytecode.OpPushEmptyString || in.Op == bytecode.OpConcat || in.Op == bytecode.OpNewArray || in.Op == bytecode.OpCall || in.Op == bytecode.OpCallMethod || in.Op == bytecode.OpTailCall || in.Op == bytecode.OpTailCallMethod || in.Op == bytecode.OpGetGlobal || in.Op == bytecode.OpGetGlobalOpt || in.Op == bytecode.OpGetPropThis || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		property = property || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		// A derived constructor's this slot is what it returns, bound by
 		// its super() (ir.Program's DerivedConstructor).
@@ -827,7 +827,7 @@ func selectNumericProperties(p *ir.Program, cells bool) {
 			take(in.Dest)
 		case ir.FieldDefine:
 			read(in.Left, reference)
-		case ir.HasProperty:
+		case ir.HasProperty, ir.DeleteProperty:
 			// Go takes the key and the object as they are.
 			take(in.Dest)
 			read(in.Left, reference)
@@ -1417,7 +1417,7 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 		return effect{terminal: true}, nil
 	case bytecode.OpThrow:
 		return effect{need: 1, delta: -1, terminal: true}, nil
-	case bytecode.OpInstanceOf, bytecode.OpIn:
+	case bytecode.OpInstanceOf, bytecode.OpIn, bytecode.OpDeleteProp:
 		return effect{need: 2, delta: -1}, nil
 	case bytecode.OpTypeOf:
 		return effect{need: 1}, nil
@@ -1796,6 +1796,12 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this, charCode bool
 		// key in obj, the key below the object: Go's, called from native
 		// code where that runs nothing (ssa.GoHas).
 		return ir.Instruction{Op: ir.HasProperty, Left: ir.Slot(sp - 2), Right: top, Dest: sp - 2}
+	case bytecode.OpDeleteProp:
+		// delete obj[key], the key above the object: Go's, called from
+		// native code where that runs nothing (ssa.GoDelete), and strict
+		// as the function is, whose deletion of what cannot be deleted
+		// throws.
+		return ir.Instruction{Op: ir.DeleteProperty, Left: ir.Slot(sp - 2), Right: top, Dest: sp - 2, Strict: fn.Strict}
 	case bytecode.OpTypeOf:
 		// Go's, but compared with a string constant (typeTests).
 		return ir.Instruction{Op: ir.Host}

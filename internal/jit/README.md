@@ -272,6 +272,23 @@ a module namespace, a key that is an object, whose conversion calls its
 which throws, Go refuses: the code leaves for Go to make it there
 (`jitHost`), and goes on after it.
 
+**The delete operator.** `delete o[k]` and `delete o.k`
+(`ir.DeleteProperty`) are a call of Go from native code (`ssa.GoDelete`,
+`GoDeleteStrict` in strict code), as V8's code calls its DeleteProperty
+builtin: Go deletes the object's own property as the interpreter does,
+where that runs nothing and throws nothing -- an ordinary object's, its
+shape changed as the interpreter's deletion changes it, an array's
+element, which becomes a hole, a property absent. A proxy, whose
+deleteProperty trap would run, a module namespace, a typed array, a
+string wrapper, a mapped arguments object, a key that is an object, a
+base that is no object, and in strict code a property that cannot be
+deleted, which throws, Go refuses, having changed nothing: the code
+leaves for Go to make it there, and goes on after it. The call clears the
+deleted property's cell, so the analyses take it for a store of any key
+(`ssa`'s allocOnly): a value read from that property and used after it is
+kept first (`keepAcrossStores`), as across a call of a function; and every
+property operation after it checks the object's shape again.
+
 **Destructuring.** Destructuring from an iterator takes a cursor, as a
 for...of does: Go makes it, called from native code (`abi.GoCallForOf`).
 Each element is a step that goes on with undefined once the iterator is

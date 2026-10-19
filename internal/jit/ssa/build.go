@@ -566,6 +566,24 @@ type GoOp uint8
 // which throws; those leave for Go to make after an exit, native code
 // going on after it.
 //
+// GoDelete is delete (ir.DeleteProperty), the object the first operand and
+// the key the second, as V8's code calls its DeleteProperty builtin, and
+// GoDeleteStrict is the same in strict code: Go deletes the object's own
+// property as the interpreter does, where that runs nothing and throws
+// nothing -- an ordinary object's or an array's, by a key that is no
+// object -- and writes whether it is gone to the call's keep cell. It
+// refuses the rest: a proxy's deleteProperty trap, a module namespace's
+// deferred evaluation, a typed array's, a string wrapper's or a mapped
+// arguments object's, a key whose conversion calls its toString or
+// Symbol.toPrimitive, a base that is no object, and, in strict code, a
+// property that cannot be deleted, which throws; those leave for Go to
+// make after an exit, native code going on after it. A refused deletion
+// has changed nothing. What it deletes changes the object's shape, as a
+// call of any function may, which every property operation after it
+// checks again, and clears the property's cell, which a value used after
+// it may have been read from: it is a store of any key to the analyses
+// (allocOnly, keepAcrossStores), which keep such a value first.
+//
 // GoClosure makes the function of constant Argc on the code's own frame
 // (ir.Closure), capturing its locals there, and GoClose closes what
 // closures captured of locals Argc on (ir.CloseUpvalues): both Go's, on
@@ -596,6 +614,8 @@ const (
 	GoEqual
 	GoCells
 	GoHas
+	GoDelete
+	GoDeleteStrict
 )
 
 // RefillsPools reports whether a call takes an object from a pool, which
@@ -626,8 +646,10 @@ func popsElement(v *Value) bool {
 func allocOnly(v *Value) bool {
 	for _, c := range v.Calls() {
 		// A call of Go makes what it returns, and writes nothing else --
-		// but a call it makes (GoCall), which runs anything.
-		if !c.Alloc && !c.Receiver && !c.Push && (c.Go == 0 || c.Go == GoCall) {
+		// but a call it makes (GoCall), which runs anything, and a
+		// deletion (GoDelete), which clears the cell of the property it
+		// deletes, one a value used after it may have been read from.
+		if !c.Alloc && !c.Receiver && !c.Push && (c.Go == 0 || c.Go == GoCall || c.Go == GoDelete || c.Go == GoDeleteStrict) {
 			return false
 		}
 	}
@@ -1056,8 +1078,9 @@ func (b *builder) hostOf(pc int) bool {
 		// The function's own captured bindings, which its context has;
 		// an inlined callee's, Go's.
 		return b.cur != b.root
-	case ir.StringAdd, ir.StringConcat, ir.HasProperty:
-		// A call of Go (GoAdd, GoConcat, GoHas), where the VM answers it.
+	case ir.StringAdd, ir.StringConcat, ir.HasProperty, ir.DeleteProperty:
+		// A call of Go (GoAdd, GoConcat, GoHas, GoDelete), where the VM
+		// answers it.
 		return !b.goCalls()
 	case ir.FieldDefine:
 		_, ok := b.define(pc)
@@ -1760,6 +1783,25 @@ func (b *builder) goHas(blk *Block, in ir.Instruction, operand func(ir.Operand) 
 	b.assign(in.Dest, blk, r)
 }
 
+// goDelete makes in, the delete operator, by a call of Go from native code
+// (GoDelete, or GoDeleteStrict in strict code), as goHas makes in: its
+// result, a boolean.
+func (b *builder) goDelete(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+	call := guard(OpCall, Tagged, ir.HostExit, operand(in.Left), operand(in.Right))
+	if b.f.Keeps < b.f.keepLimit() {
+		op := GoDelete
+		if in.Strict {
+			op = GoDeleteStrict
+		}
+		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: op, ThisSlot: -1}}, b.f.Keeps
+		b.f.Keeps++
+	}
+	cell := b.f.newValue(blk, OpCallCell, Source, call)
+	r := b.f.newValue(blk, OpKept, Tagged, cell, call)
+	r.Shadow = cell
+	b.assign(in.Dest, blk, r)
+}
+
 // relational reports whether op is <, <=, > or >=.
 func relational(op ir.Operator) bool {
 	return op == ir.Lt || op == ir.Le || op == ir.Gt || op == ir.Ge
@@ -2201,7 +2243,7 @@ func (b *builder) plan() error {
 	resumes := func(pc int) bool {
 		switch op := p.Code[pc].Op; {
 		case b.host(pc), b.keyedRead(pc), op == ir.ObjectLiteral, op == ir.ArrayLiteral, op == ir.StringAdd, op == ir.StringConcat, op == ir.ArrayWrite, op == ir.IterStep,
-			op == ir.IterClose, op == ir.HasProperty,
+			op == ir.IterClose, op == ir.HasProperty, op == ir.DeleteProperty,
 			op == ir.Closure, op == ir.CloseUpvalues:
 			return true
 		}
@@ -2273,7 +2315,8 @@ func (b *builder) plan() error {
 			// string was (compile's typeTests): no entry after it.
 		case ir.ArrayWrite, ir.PropertyRead, ir.PropertyWrite, ir.ReferenceRead, ir.BindingRead,
 			ir.StringMethod, ir.StringCode, ir.BindingWrite, ir.BindingCheck, ir.Resolved, ir.ObjectLiteral, ir.FieldDefine,
-			ir.ArrayLiteral, ir.StringConst, ir.UpvalueWrite, ir.StringAdd, ir.StringConcat, ir.Closure, ir.CloseUpvalues, ir.HasProperty:
+			ir.ArrayLiteral, ir.StringConst, ir.UpvalueWrite, ir.StringAdd, ir.StringConcat, ir.Closure, ir.CloseUpvalues, ir.HasProperty,
+			ir.DeleteProperty:
 			// What native code does not do exits to Go, which resumes after
 			// it. A fixed global's check only deoptimizes: the binding can
 			// never move, so it never fails, and what follows sees its
@@ -2382,7 +2425,7 @@ func (b *builder) plan() error {
 			b.edge(blk, b.blockAt[end+1])
 		case ir.Host, ir.Call, ir.PropertyRead, ir.PropertyWrite, ir.ReferenceRead, ir.BindingRead, ir.BindingWrite, ir.BindingCheck,
 			ir.ObjectLiteral, ir.FieldDefine, ir.ArrayLiteral, ir.StringConst, ir.UpvalueRead, ir.UpvalueWrite, ir.StringAdd, ir.StringConcat, ir.Rethrow,
-			ir.Closure, ir.CloseUpvalues, ir.HasProperty:
+			ir.Closure, ir.CloseUpvalues, ir.HasProperty, ir.DeleteProperty:
 			if fr := b.inlined[end]; fr != nil {
 				// Into the callee, whose returns go to the block after it.
 				blk.Kind = BlockPlain
@@ -3627,6 +3670,14 @@ func (b *builder) instruction(blk *Block, pc int) {
 			break
 		}
 		b.goHas(blk, in, operand, guard)
+	case ir.DeleteProperty:
+		if !b.goCalls() {
+			blk.ExitKind = ir.HostExit
+			blk.State = state()
+			blk.State.addUse()
+			break
+		}
+		b.goDelete(blk, in, operand, guard)
 	case ir.StringConcat:
 		if !b.goCalls() || in.Extra > abi.MaxGoArgs {
 			blk.ExitKind = ir.HostExit

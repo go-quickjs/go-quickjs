@@ -2950,6 +2950,12 @@ func jitHostCall(ctx *abi.Context) bool {
 			*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = Bool(has)
 		}
 		return ok
+	case ssa.GoDelete, ssa.GoDeleteStrict:
+		gone, ok := r.jitDelete(jitGoArg(ctx, 0), jitGoArg(ctx, 1), ssa.GoOp(ctx.GoOp&0xff) == ssa.GoDeleteStrict)
+		if ok {
+			*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = Bool(gone)
+		}
+		return ok
 	case ssa.GoElemWrite:
 		o := *(**Object)(unsafe.Pointer(&ctx.GoArgs[0].Ref))
 		k, v := math.Float64frombits(ctx.GoArgs[1].Num), Float(math.Float64frombits(ctx.GoArgs[2].Num))
@@ -5186,6 +5192,52 @@ func (r *Runtime) jitHas(key, obj Value) (has, ok bool) {
 	}
 	has, err = r.hasPropErr(o, k)
 	return has, err == nil
+}
+
+// jitDelete is delete obj[key], as the interpreter makes it (executeAt's
+// delete_prop: toPropertyName, keyFor, deleteProp), where making it runs
+// nothing and throws nothing (ssa.GoDelete): an object that is no proxy,
+// whose deleteProperty trap would run, no module namespace, which a key
+// may make evaluate a deferred module, and none whose own properties a
+// class synthesizes -- a typed array's elements, a string wrapper's
+// characters -- or ties to a binding -- a mapped arguments object's
+// parameters -- by a key that is no object, whose conversion would call
+// its toString or Symbol.toPrimitive. An ordinary object's own
+// configurable property is removed, its shape changed as the interpreter's
+// deletion changes it; an array's element becomes a hole, its length
+// unchanged; a property absent is gone already. Any other -- a base that
+// is no object, which throws or converts, included -- it refuses (ok
+// false), and Go makes it after an exit (jitHost). So does a property
+// strict code cannot delete, which throws: deleted as sloppy code deletes
+// it, a property that cannot be deleted stays, nothing changed, and the
+// interpreter's deletion throws after the exit.
+func (r *Runtime) jitDelete(obj, key Value, strict bool) (gone, ok bool) {
+	if !obj.IsObject() || key.IsObject() {
+		return false, false
+	}
+	o := obj.Object()
+	switch o.class {
+	case ClassProxy, ClassModuleNamespace, ClassTypedArray, ClassStringWrapper:
+		return false, false
+	}
+	if o.flags&objMappedArguments != 0 {
+		return false, false
+	}
+	// A primitive's name, converted with nothing called, as jitHas's.
+	n, err := r.toPropertyName(key)
+	if err != nil {
+		return false, false
+	}
+	k, known := r.keyFor(o, n)
+	if !known {
+		// A name no atom has, which no property has: deleting it succeeds.
+		return true, true
+	}
+	gone, err = r.deleteProp(o, k, false)
+	if err != nil || !gone && strict {
+		return false, false
+	}
+	return gone, true
 }
 
 // jitAbsentKey reports whether o's property of a name -- a, or, named
