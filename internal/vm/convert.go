@@ -355,8 +355,11 @@ func (r *Runtime) toPropertyKey(v Value) (Atom, error) {
 type propertyName struct {
 	atom    Atom
 	hasAtom bool
-	name    string
-	sym     *Symbol
+	// noAtom says name was looked up and is no atom's (toPropertyName), so
+	// that keyFor does not look again.
+	noAtom bool
+	name   string
+	sym    *Symbol
 }
 
 // toPropertyName converts a key as toPropertyKey does, with the same calls
@@ -371,10 +374,20 @@ func (r *Runtime) toPropertyName(v Value) (propertyName, error) {
 		return propertyName{name: jsnum.FormatFloat(f)}, nil
 	case KindString:
 		s := v.String()
-		if e := &r.keyAtoms[keySlot(s)]; e.s == s {
+		e := &r.keyAtoms[keySlot(s)]
+		if e.s == s {
 			return propertyName{atom: e.atom, hasAtom: true}, nil
 		}
-		return propertyName{name: s.Go()}, nil
+		// Its atom remembered with the string, for its next conversion: a
+		// constant key, as "a" in o converts at every evaluation, had been
+		// a lookup of the atom table's map each time, a third of the in
+		// operator's time.
+		name := s.Go()
+		if a, ok := r.atoms.lookup(name); ok {
+			*e = keyAtom{s: s, atom: a}
+			return propertyName{atom: a, hasAtom: true}, nil
+		}
+		return propertyName{name: name, noAtom: true}, nil
 	case KindSymbol:
 		return propertyName{sym: v.Symbol()}, nil
 	}
@@ -402,9 +415,10 @@ func (r *Runtime) keyFor(o *Object, n propertyName) (Atom, bool) {
 	}
 	var a Atom
 	var ok bool
-	if n.sym != nil {
+	switch {
+	case n.sym != nil:
 		a, ok = r.atoms.bySymbol[n.sym]
-	} else {
+	case !n.noAtom:
 		a, ok = r.atoms.lookup(n.name)
 	}
 	if ok {
