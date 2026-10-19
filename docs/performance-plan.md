@@ -846,6 +846,14 @@ faster: its loss is its steady state's.
   property in strict code, which throws) for an exit; then natively the
   deletion of an object's last-added property, back along its shape's
   transition, as V8's code deletes its map's last property.
+- **Octane's PdfJS +2.4% since 5a2bc9d** (2026-10-19, eight placements
+  with the JIT, all eight higher: 149..153 -> 153..157 ms a run), Octane
+  +1.4% in all while AWFY took 23.8% less time and the V8 suite was level.
+  Not the in operator (PdfJS alone over four JIT layouts: 573.6 ms with
+  it, 570.4 without). Bisected over four layouts, every commit from the
+  slow-judgment fixes on is about 1 to 2% over 5a2bc9d (567.6 ms; the tip
+  578.6), no one step its cause at that noise (+-3% a build): to be
+  profiled, its JIT report diffed between the two.
 - **Compiling in the background, last.** V8 compiles on a thread of its
   own while the function runs on in its lower tier; ours compiles on the
   runtime's goroutine, so that each compile's whole cost is paid where it
