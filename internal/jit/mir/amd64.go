@@ -614,7 +614,7 @@ func (c *compiler) callEntry() {
 	c.a.Load(at, regCtx, abi.OffStackTop)
 	c.a.Load(base, at, 0)
 	c.a.Store(regCtx, abi.OffBase, base)
-	c.a.Lea(top, base, int32(c.f.FrameLocals+c.f.StackSize))
+	c.a.Lea(top, base, int32(c.frameSize()))
 	c.a.Store(at, 0, top)
 	same := c.a.NewLabel()
 	c.a.Load(at, regCtx, abi.OffStackHigh)
@@ -634,6 +634,10 @@ func (c *compiler) callEntry() {
 	// without a write barrier, as the closure's is stored, an earlier
 	// call's, which nothing reads again (call).
 	c.a.StoreImm(regCtx, abi.OffCells, 0)
+	if c.f.Loops {
+		// No loop of a built-in's call under way (abi.Context's Loop).
+		c.storeImm(regCtx, abi.OffLoop, 0, scratchA)
+	}
 	c.a.StoreImm(regCtx, abi.OffLive, abi.LiveCall)
 	c.a.IncMem(callLink, c.enc.LinkIn)
 	if !c.f.StartOnly && c.f.Params < c.f.FrameLocals {
@@ -2016,6 +2020,10 @@ func (c *compiler) tailJump(t *ssa.CallSite, n int, this bool, guard func(amd64.
 	c.storeImm(regCtx, abi.OffOpen, 0, scratchA)
 	c.storeImm(regCtx, abi.OffTailReturn, 0, scratchA)
 	c.storeImm(regCtx, abi.OffCells, 0, scratchA)
+	if c.f.Loops {
+		// No loop of a built-in's call under way (abi.Context's Loop).
+		c.storeImm(regCtx, abi.OffLoop, 0, scratchA)
+	}
 	if t.Tail {
 		c.storeImm(regCtx, abi.OffTailFrame, b2u(t.TailFrame), scratchA)
 	}
@@ -5847,6 +5855,10 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.codeChar(v, c.guardFor(v))
 	case ssa.OpSubstringChar:
 		c.substringChar(v)
+	case ssa.OpLoopMark:
+		// A loop of a built-in's call under way, or done (abi.Context's
+		// Loop).
+		c.storeImm(regCtx, abi.OffLoop, v.Const.Bits, scratchA)
 	case ssa.OpFreeze:
 		c.freeze(v)
 	case ssa.OpLoadCell:
@@ -5874,9 +5886,10 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.setX(v, xScratch0)
 	case ssa.OpElemCell:
 		fail, done := c.guardFor(v), c.a.NewLabel()
-		if c.enc.CallGo != 0 && c.enc.UndefinedCell != 0 {
+		if c.enc.CallGo != 0 && c.enc.UndefinedCell != 0 && v.Index != ssa.ElemPresent {
 			// An element it does not find Go says is undefined, where it
-			// can (ssa.GoElemCell): the read is then of a cell that is.
+			// can (ssa.GoElemCell): the read is then of a cell that is --
+			// but for a loop's, which a hole leaves (ssa.ElemPresent).
 			slow, stub := c.a.NewLabel(), c.stubLabel(v.State, exitKind(v.Aux))
 			fail = func(cond amd64.Cond) { c.a.Jcc(cond, slow) }
 			c.cold = append(c.cold, func() {

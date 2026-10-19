@@ -163,6 +163,10 @@ const (
 	// (abi.Context.CharStrings), if it is below 256 and j is i + 1 (1, a
 	// length, for substr); or none, where Go makes the call (a split).
 	OpSubstringChar // tagged string, f64 start[, f64 end] -> source
+	// OpLoopMark writes Const's bits to the context's Loop word (abi.Context):
+	// a forEach made a loop of natively is under way from here, its slots
+	// those the bits say; 0 once it is done.
+	OpLoopMark // -> none
 	// OpFreeze ends a string builder's appends (GoAppend) to its operand,
 	// any value: a string whose building flag is set has it cleared, so
 	// that nothing appends to it in place after this, where a loop's
@@ -389,7 +393,7 @@ var opNames = [...]string{
 	OpUnboxF64: "unbox", OpTruth: "truth", OpCheckInit: "checkinit", OpBoxF64: "boxf", OpBoxBool: "boxb",
 	OpArrayOf: "arrayof", OpIndexedOf: "indexedof", OpElemKey: "elemkey", OpElemRead: "elemread", OpElemWrite: "elemwrite", OpElemCell: "elemcell", OpElemStore: "elemstore", OpLength: "length",
 	OpObjectOf: "objectof", OpPropRead: "propread", OpPropWrite: "propwrite", OpPropCell: "propcell", OpLoadCell: "loadcell", OpGlobalCell: "globalcell", OpLexCell: "lexcell", OpBindingCell: "bindingcell",
-	OpStringMethod: "stringmethod", OpStringProp: "stringprop", OpStringCode: "stringcode", OpStringChar: "stringchar", OpCodeChar: "codechar", OpSubstringChar: "substringchar", OpFreeze: "freeze", OpOddballF64: "oddball",
+	OpStringMethod: "stringmethod", OpStringProp: "stringprop", OpStringCode: "stringcode", OpStringChar: "stringchar", OpCodeChar: "codechar", OpSubstringChar: "substringchar", OpLoopMark: "loopmark", OpFreeze: "freeze", OpOddballF64: "oddball",
 	OpAddF64: "addf", OpSubF64: "subf", OpMulF64: "mulf", OpDivF64: "divf", OpModF64: "modf", OpNegF64: "negf", OpCmpF64: "cmpf",
 	OpNot: "not", OpStrictNullish: "strictnullish", OpLooseNullish: "loosenullish", OpEqTagged: "eqtagged", OpToInt32: "toi32", OpAndI32: "and", OpOrI32: "or", OpXorI32: "xor", OpShlI32: "shl",
 	OpSarI32: "sar", OpShrU32: "shr", OpNotI32: "noti", OpI32ToF64: "i2f", OpU32ToF64: "u2f",
@@ -408,6 +412,12 @@ func (o Op) String() string {
 	}
 	return fmt.Sprintf("op%d", o)
 }
+
+// ElemPresent is OpElemCell's Index for a read that leaves where the array
+// has no element there, a hole or one past its end, Go reading nothing in
+// its place (ssa.GoElemCell, which finds a hole undefined): a loop's of a
+// forEach, whose callback a hole skips.
+const ElemPresent = 1
 
 // OpSubstringChar's Aux: SubstrLength for String.prototype.substr, whose
 // second argument is a length, and SubstrAt for String.prototype.charAt,
@@ -687,6 +697,12 @@ type Func struct {
 	// makes the frame and the context of a call of the function, once for
 	// all its callers (mir's Code.CallEntry, abi.Context's ReturnTo).
 	CallEntry bool
+	// Loops says the code makes loops of built-ins' calls (OpLoopMark), whose
+	// word it clears at its entries; LoopsEnd is the slot past their slots,
+	// which the frame holds while they run: their callbacks' frames start
+	// past them.
+	Loops    bool
+	LoopsEnd int
 	// FrameLocals is how many of the Locals are the frame's own; the rest,
 	// up to Locals, are captured bindings, which native code reads through
 	// their cells (abi.Context.Upvalues) and never writes. Build sets it to

@@ -371,6 +371,12 @@ type Context struct {
 	// only where one is (ssa.GoClose). A native call clears it for its
 	// callee.
 	Open uint64
+	// Loop says a loop native code makes of a built-in's call -- a forEach
+	// (ssa.ForEachSite) -- is under way in the frame: LoopForEach<<32 |
+	// 1 plus the offset of its slots past the frame's operands' first (the
+	// VM's f.base), where Go finds what it goes on from at an exit; or 0.
+	// Code with such loops clears it at its entries.
+	Loop uint64
 	// Cells is, for code whose captured locals are in cells of their own
 	// (ir.Program's Cells), the first of them, in their locals' order: an
 	// array of pointers to cells as Upvalues is, which Go makes at the
@@ -624,6 +630,10 @@ const (
 	ExitInCell
 )
 
+// LoopForEach is Context.Loop's kind for Array.prototype.forEach, whose
+// slots are the array, the callback, its this, the index and the length.
+const LoopForEach = 1
+
 // ExitLoc is where an exit finds a word: in a register or a spill slot as
 // it is, or boxed from a float or a boolean there; a constant, the
 // description's word N (Words), or 0 for an N below 0; a slot's address;
@@ -737,6 +747,7 @@ var (
 	OffCallClosure   = int32(unsafe.Offsetof(Context{}.CallClosure))
 	OffCallUpvalues  = int32(unsafe.Offsetof(Context{}.CallUpvalues))
 	OffOpen          = int32(unsafe.Offsetof(Context{}.Open))
+	OffLoop          = int32(unsafe.Offsetof(Context{}.Loop))
 	OffCells         = int32(unsafe.Offsetof(Context{}.Cells))
 	OffCallTarget    = int32(unsafe.Offsetof(Context{}.CallTarget))
 	OffCallLink      = int32(unsafe.Offsetof(Context{}.CallLink))

@@ -116,6 +116,161 @@ type InstanceOfFeedback interface {
 	InstanceOf(pc int) (InstanceOfSite, bool)
 }
 
+// ForEachSite is a call of Array.prototype.forEach, the realm's, at Fn,
+// that the VM has seen make on an array (ForEachFeedback), and Callback the
+// native call of the callback it met -- a method call of three arguments,
+// the element, its index and the array, its receiver forEach's second
+// argument or undefined.
+type ForEachSite struct {
+	Fn       uintptr
+	Callback CallSite
+}
+
+// ForEachFeedback is Feedback that knows the forEach a method call at a PC
+// makes (ForEachSite): native code makes it a loop of its own.
+type ForEachFeedback interface {
+	ForEach(pc int) (ForEachSite, bool)
+}
+
+// forEachSlots is how many slots a forEach made natively takes past the
+// function's, a frame of its own at an exit inside it (InlineState, its
+// Closure 0): five locals -- the array, the callback, this, the index and
+// the length, which Go goes on from -- and the callback's call's
+// operands, this, the callback, the element, its index and the array.
+const forEachSlots = 10
+
+// forEachPlan is the forEach at a PC that planning made a loop of: its
+// site, its slots' first, and the keep cell its callback's result is in.
+type forEachPlan struct {
+	site       ForEachSite
+	base, keep int
+}
+
+// forEachAt is the forEach the method call at pc of the root, one Go
+// makes (a GoCall site), makes on an array, if its feedback has one
+// (ForEachFeedback): one argument, the callback, or two, its this too.
+func (b *builder) forEachAt(pc int) (ForEachSite, bool) {
+	calls := b.calls[pc]
+	if b.fb == nil || b.cur != b.root || b.p.Code[pc].Op != ir.Host || len(calls) != 1 || calls[0].Go != GoCall || !calls[0].Method ||
+		calls[0].Argc != 1 && calls[0].Argc != 2 || b.fb.Generic(pc) || pc+1 >= len(b.p.Code) || !reachable(b.p, pc+1) {
+		return ForEachSite{}, false
+	}
+	f, ok := b.fb.(ForEachFeedback)
+	if !ok {
+		return ForEachSite{}, false
+	}
+	return f.ForEach(pc)
+}
+
+// forEachCall makes the forEach at pc a loop of the code's own, as V8's
+// JSCallReducer reduces it (forEachPlan): its function and its array
+// checked and its length read once -- anything else Go's call -- then,
+// for each index below the length, the element, where the array has it,
+// given to the callback, called natively (ForEachSite's Callback) with
+// its index and the array, its this forEach's second argument. A hole or
+// an index past the array's end now leaves, and so does anything the
+// loop's checks find: Go goes on from that index (abi.Context's Loop,
+// which the loop sets as it starts and clears as it ends), as V8's
+// builtin continuation frames go on in the builtin, then the code after
+// the call. Its slots, forEachSlots of them, are the frame's past its
+// operands: the array, the callback, this, the index and the length, and
+// the call's operands, in every state inside the loop, the call's below
+// them.
+func (b *builder) forEachCall(blk *Block, pc int, fp forEachPlan) {
+	f := b.f
+	argc := b.calls[pc][0].Argc
+	sp := b.p.Locals + b.p.Maps[pc].Depth
+	recv, fn, cb := b.read(sp-argc-2, blk), b.read(sp-argc-1, blk), b.read(sp-argc, blk)
+	// Undefined, made where it is used: constIn puts its constant first in
+	// its block, before the phis an operand's read makes there.
+	undefined := func(blk *Block) *Value {
+		v := f.newValue(blk, OpConst, Tagged)
+		v.Const = ir.Value{Kind: ir.Undefined}
+		return v
+	}
+	this := undefined(blk)
+	if argc == 2 {
+		this = b.read(sp-1, blk)
+	}
+	call := b.rootState()
+	at := func(blk *Block, st *FrameState, op Op, t Type, args ...*Value) *Value {
+		v := f.newValue(blk, op, t, args...)
+		v.Aux, v.State = int(ir.HostExit), st
+		st.addUse()
+		return v
+	}
+	object := at(blk, call, OpObjectOf, Ptr, fn)
+	same := at(blk, call, OpSameObject, None, object)
+	same.Const = ir.Value{Bits: uint64(fp.site.Fn)}
+	// The callback a function, which forEach checks before it reads an
+	// element: Go's call throws its TypeError otherwise.
+	callable := at(blk, call, OpTypeIs, Bool, cb)
+	callable.Index = int(ir.TypeFunction)
+	at(blk, call, OpCheckTrue, None, f.newValue(blk, OpBoxBool, Tagged, callable))
+	array := at(blk, call, OpArrayOf, Ptr, recv)
+	n := at(blk, call, OpLength, Float64, recv)
+	// Room past the operands for the loop's slots, which an exit inside it
+	// writes there.
+	room := at(blk, call, OpFrameRoom, None)
+	room.Index = fp.base - b.root.p.Locals + forEachSlots
+	boxF := func(blk *Block, x *Value) *Value { return f.newValue(blk, OpBoxF64, Tagged, x) }
+	zero := f.newValue(blk, OpConstF64, Float64)
+	zero.Const = ir.Float(0)
+	base := fp.base
+	for i, v := range []*Value{recv, cb, this, boxF(blk, zero), boxF(blk, n)} {
+		b.write(base+i, blk, v)
+	}
+	mark := f.newValue(blk, OpLoopMark, None)
+	mark.Const = ir.Value{Bits: abi.LoopForEach<<32 | uint64(base-b.root.p.Locals+1)}
+	// The state inside the loop: the call's, and the loop's slots, depth of
+	// its operands.
+	state := func(blk *Block, depth int) *FrameState {
+		s := f.newState(FrameState{PC: call.PC, Depth: call.Depth, Site: call.Site, Slots: f.refsOf(base + 5 + depth)})
+		for i, v := range call.Slots {
+			if v != nil {
+				s.Slots[i] = v
+				v.Uses++
+			}
+		}
+		for i := base; i < base+5+depth; i++ {
+			s.Slots[i] = b.read(i, blk)
+			s.Slots[i].Uses++
+		}
+		return s
+	}
+	head, body, cont := b.loop(blk)
+	head.Header = state(head, 0)
+	head.Header.Site = -1
+	k := at(head, state(head, 0), OpUnboxF64, Float64, b.read(base+3, head))
+	more := f.newValue(head, OpCmpF64, Bool, k, n)
+	more.Aux = int(ir.Lt)
+	head.Control = more
+	more.Uses++
+	cell := at(body, state(body, 0), OpElemCell, Source, array, k)
+	cell.Index = ElemPresent
+	elem := f.newValue(body, OpLoadCell, Tagged, cell)
+	elem.Shadow = cell
+	ops := []*Value{this, cb, elem, boxF(body, k), recv}
+	for i, v := range ops {
+		b.write(base+5+i, body, v)
+	}
+	site := fp.site.Callback
+	c := at(body, state(body, 5), OpCall, Tagged, ops...)
+	f.cache(c).Calls, c.Index = []*CallSite{&site}, fp.keep
+	// The callback may have assigned a captured binding, as a callee may.
+	if b.hasCells() {
+		b.reloadAfterCall(body)
+	}
+	one := f.newValue(body, OpConstF64, Float64)
+	one.Const = ir.Float(1)
+	next := f.newValue(body, OpAddF64, Float64, k, one)
+	b.write(base+3, body, boxF(body, next))
+	b.seal(head)
+	done := f.newValue(cont, OpLoopMark, None)
+	done.Const = ir.Value{}
+	b.write(b.p.Locals+b.p.Maps[pc+1].Depth-1, cont, undefined(cont))
+}
+
 // SubstringFeedback is Feedback that knows a method call at a PC calls
 // String.prototype.substring, slice, substr or charAt, the realm's, at the
 // address it gives, and which (OpSubstringChar's Aux): s.substring(i, j),
@@ -985,6 +1140,9 @@ type builder struct {
 	calls map[int][]*CallSite
 	// callKeeps are, by PC, the keep cells of the calls' results (calls).
 	callKeeps map[int]int
+	// forEaches are the forEach calls the root makes a loop of, by PC
+	// (forEachAt), decided in planning.
+	forEaches map[int]forEachPlan
 	// typedArrays are the global reads whose bindings held typed arrays
 	// (GlobalSite's Typed), which element reads of them read as such.
 	typedArrays map[*Value]bool
@@ -2383,6 +2541,17 @@ func (b *builder) plan() error {
 				}
 				b.calls[pc], b.callKeeps[pc] = calls, b.f.Keeps
 				b.f.Keeps++
+				if site, ok := b.forEachAt(pc); ok && b.nslots+forEachSlots <= abi.MaxRecords && b.f.Keeps < b.f.keepLimit() {
+					// A forEach made a loop of: its slots past every
+					// other's, and its callback's result's keep cell.
+					if b.forEaches == nil {
+						b.forEaches = map[int]forEachPlan{}
+					}
+					b.forEaches[pc] = forEachPlan{site: site, base: b.nslots, keep: b.f.Keeps}
+					b.nslots += forEachSlots
+					b.f.Keeps++
+					b.f.Loops, b.f.LoopsEnd = true, b.nslots
+				}
 			}
 		}
 		switch in.Op {
@@ -3019,45 +3188,70 @@ func (b *builder) splitOn(blk *Block, cond *Value) (other, cont *Block) {
 // each make a value, which cont's phi takes -- a megamorphic site's read,
 // the value loaded from its cell where it finds one and Go's otherwise.
 func (b *builder) split(blk *Block, cond *Value, both bool) (yes, no, cont *Block) {
-	f := b.f
-	mk := func() *Block {
-		nb := f.newBlock(blk.PC)
-		nb.ID = b.nextBlock
-		b.nextBlock++
-		// The block's ID past every list's, which each grows to.
-		for len(b.defs) <= nb.ID {
-			b.defs = append(b.defs, nil)
-		}
-		for len(b.sealed) <= nb.ID {
-			b.sealed = append(b.sealed, false)
-		}
-		for len(b.filled) <= nb.ID {
-			b.filled = append(b.filled, false)
-		}
-		for len(b.incomplete) <= nb.ID {
-			b.incomplete = append(b.incomplete, nil)
-		}
-		for len(b.endOf) <= nb.ID {
-			b.endOf = append(b.endOf, 0)
-		}
-		for len(b.frameOf) <= nb.ID {
-			b.frameOf = append(b.frameOf, nil)
-		}
-		if blk.ID < len(b.frameOf) {
-			b.frameOf[nb.ID] = b.frameOf[blk.ID]
-		}
-		return nb
-	}
-	yes = mk()
+	yes = b.blockAfter(blk)
 	made := []*Block{yes}
 	if both {
-		no = mk()
+		no = b.blockAfter(blk)
 		made = append(made, no)
 	}
-	cont = mk()
+	cont = b.blockAfter(blk)
 	made = append(made, cont)
-	// After blk, in the order the blocks are filled and kept in: a block
-	// after its dominator, cont after the others.
+	b.placeAfter(blk, made, cont)
+	blk.Kind, blk.Control, blk.State, blk.ExitKind = BlockIf, cond, nil, 0
+	cond.Uses++
+	yes.Kind, yes.Succs, yes.Preds, yes.Backedge = BlockPlain, []*Block{cont}, []*Block{blk}, []bool{false}
+	if both {
+		no.Kind, no.Succs, no.Preds, no.Backedge = BlockPlain, []*Block{cont}, []*Block{blk}, []bool{false}
+		blk.Succs = []*Block{yes, no}
+		cont.Preds, cont.Backedge = []*Block{yes, no}, []bool{false, false}
+	} else {
+		blk.Succs = []*Block{yes, cont}
+		cont.Preds, cont.Backedge = []*Block{blk, yes}, []bool{false, false}
+	}
+	for _, x := range made {
+		b.seal(x)
+	}
+	b.splits = append(b.splits, made...)
+	b.next = cont
+	return yes, no, cont
+}
+
+// blockAfter is a new block of blk's PC and frame, for split and loop.
+func (b *builder) blockAfter(blk *Block) *Block {
+	nb := b.f.newBlock(blk.PC)
+	nb.ID = b.nextBlock
+	b.nextBlock++
+	// The block's ID past every list's, which each grows to.
+	for len(b.defs) <= nb.ID {
+		b.defs = append(b.defs, nil)
+	}
+	for len(b.sealed) <= nb.ID {
+		b.sealed = append(b.sealed, false)
+	}
+	for len(b.filled) <= nb.ID {
+		b.filled = append(b.filled, false)
+	}
+	for len(b.incomplete) <= nb.ID {
+		b.incomplete = append(b.incomplete, nil)
+	}
+	for len(b.endOf) <= nb.ID {
+		b.endOf = append(b.endOf, 0)
+	}
+	for len(b.frameOf) <= nb.ID {
+		b.frameOf = append(b.frameOf, nil)
+	}
+	if blk.ID < len(b.frameOf) {
+		b.frameOf[nb.ID] = b.frameOf[blk.ID]
+	}
+	return nb
+}
+
+// placeAfter puts made, blocks blockAfter made, right after blk, in the
+// order the blocks are filled and kept in -- a block after its dominator,
+// the last after the others -- and has cont, the last, end as blk did:
+// the rest of blk's instructions are cont's (b.next).
+func (b *builder) placeAfter(blk *Block, made []*Block, cont *Block) {
+	f := b.f
 	f.Blocks = f.Blocks[:len(f.Blocks)-len(made)]
 	at := 0
 	for i, x := range f.Blocks {
@@ -3077,23 +3271,31 @@ func (b *builder) split(blk *Block, cond *Value, both bool) (yes, no, cont *Bloc
 		}
 	}
 	b.endOf[cont.ID] = b.endOf[blk.ID]
-	blk.Kind, blk.Control, blk.State, blk.ExitKind = BlockIf, cond, nil, 0
-	cond.Uses++
-	yes.Kind, yes.Succs, yes.Preds, yes.Backedge = BlockPlain, []*Block{cont}, []*Block{blk}, []bool{false}
-	if both {
-		no.Kind, no.Succs, no.Preds, no.Backedge = BlockPlain, []*Block{cont}, []*Block{blk}, []bool{false}
-		blk.Succs = []*Block{yes, no}
-		cont.Preds, cont.Backedge = []*Block{yes, no}, []bool{false, false}
-	} else {
-		blk.Succs = []*Block{yes, cont}
-		cont.Preds, cont.Backedge = []*Block{blk, yes}, []bool{false, false}
-	}
-	for _, x := range made {
-		b.seal(x)
-	}
+}
+
+// loop ends blk, the root frame's block being filled, at a loop of blocks
+// of its own, as an instruction that loops -- a forEach made natively --
+// makes it: blk goes to head, which goes to body or, the loop done, to
+// cont; body goes back to head, its back edge, where native code polls.
+// cont ends as blk did, and the rest of blk's instructions are cont's.
+// The caller fills head, gives it its Control and Header, fills body, and
+// then seals head (body and cont are sealed: their one predecessor is
+// known).
+func (b *builder) loop(blk *Block) (head, body, cont *Block) {
+	head, body, cont = b.blockAfter(blk), b.blockAfter(blk), b.blockAfter(blk)
+	made := []*Block{head, body, cont}
+	b.placeAfter(blk, made, cont)
+	blk.Kind, blk.Control, blk.State, blk.ExitKind = BlockPlain, nil, nil, 0
+	blk.Succs = []*Block{head}
+	head.Kind, head.Succs = BlockIf, []*Block{body, cont}
+	head.Preds, head.Backedge, head.LoopHeader = []*Block{blk, body}, []bool{false, true}, true
+	body.Kind, body.Succs, body.Preds, body.Backedge = BlockPlain, []*Block{head}, []*Block{head}, []bool{false}
+	cont.Preds, cont.Backedge = []*Block{head}, []bool{false}
+	b.seal(body)
+	b.seal(cont)
 	b.splits = append(b.splits, made...)
 	b.next = cont
-	return yes, no, cont
+	return head, body, cont
 }
 
 func (f *Func) entryForBlock(blk *Block) (Entry, bool) {
@@ -3909,6 +4111,10 @@ func (b *builder) instruction(blk *Block, pc int) {
 		}
 		if fn, ok := b.fromCharCode(pc); ok && in.Op == ir.Host {
 			b.fromCharCodeCall(blk, pc, fn, guard)
+			break
+		}
+		if fp, ok := b.forEaches[pc]; ok && in.Op == ir.Host && b.cur == b.root {
+			b.forEachCall(blk, pc, fp)
 			break
 		}
 		if fn, kind, ok := b.substring(pc); ok && in.Op == ir.Host {

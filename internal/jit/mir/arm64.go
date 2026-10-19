@@ -826,7 +826,7 @@ func (c *a64Compiler) callEntry() {
 	c.a.Load(at, a64Ctx, abi.OffStackTop)
 	c.a.Load(base, at, 0)
 	c.a.Store(a64Ctx, abi.OffBase, base)
-	c.a.AddImm(top, base, int64(c.f.FrameLocals+c.f.StackSize), true)
+	c.a.AddImm(top, base, int64(c.frameSize()), true)
 	c.a.Store(at, 0, top)
 	same := c.a.NewLabel()
 	c.a.Load(at, a64Ctx, abi.OffStackHigh)
@@ -843,6 +843,9 @@ func (c *a64Compiler) callEntry() {
 	c.a.Store(a64Ctx, abi.OffStack, at)
 	c.a.Store(a64Ctx, abi.OffOpen, arm64.ZR)
 	c.a.Store(a64Ctx, abi.OffCells, arm64.ZR)
+	if c.f.Loops {
+		c.a.Store(a64Ctx, abi.OffLoop, arm64.ZR)
+	}
 	c.a.MovImm(at, abi.LiveCall)
 	c.a.Store(a64Ctx, abi.OffLive, at)
 	c.a.Load(at, a64CallLink, c.enc.LinkIn)
@@ -3997,6 +4000,9 @@ func (c *a64Compiler) tailJump(t *ssa.CallSite, n int, this bool, guard func(arm
 	c.a.Store(a64Ctx, abi.OffStack, a64A)
 	c.a.Store(a64Ctx, abi.OffOpen, arm64.ZR)
 	c.a.Store(a64Ctx, abi.OffCells, arm64.ZR)
+	if c.f.Loops {
+		c.a.Store(a64Ctx, abi.OffLoop, arm64.ZR)
+	}
 	c.a.Store(a64Ctx, abi.OffTailReturn, arm64.ZR)
 	if t.Tail {
 		c.movImm(a64A, b2u(t.TailFrame))
@@ -5329,6 +5335,10 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.substringChar(v)
 	case ssa.OpCodeChar:
 		c.codeChar(v, c.guardFor(v))
+	case ssa.OpLoopMark:
+		// As amd64's: abi.Context's Loop.
+		c.movImm(a64A, v.Const.Bits)
+		c.a.Store(a64Ctx, abi.OffLoop, a64A)
 	case ssa.OpFreeze:
 		c.freeze(v)
 	case ssa.OpLoadCell:
@@ -5355,9 +5365,9 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.setF(v, a64F0)
 	case ssa.OpElemCell:
 		fail, done := c.guardFor(v), c.a.NewLabel()
-		if c.enc.CallGo != 0 && c.enc.UndefinedCell != 0 {
+		if c.enc.CallGo != 0 && c.enc.UndefinedCell != 0 && v.Index != ssa.ElemPresent {
 			// An element it does not find Go says is undefined, where it
-			// can (ssa.GoElemCell).
+			// can (ssa.GoElemCell), but for a loop's (ssa.ElemPresent).
 			slow, stub := c.a.NewLabel(), c.stubLabel(v.State, exitKind(v.Aux))
 			fail = func(cond arm64.Cond) { c.a.BCond(cond, slow) }
 			c.cold = append(c.cold, func() {

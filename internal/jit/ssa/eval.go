@@ -640,6 +640,8 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 				b = vals[v.Args[1].ID]
 			}
 			switch v.Op {
+			case OpLoopMark:
+				// The context's word, which the heap model has none of.
 			case OpFreeze:
 				// The evaluator's strings are values, with no building flag.
 			case OpLoadSlot:

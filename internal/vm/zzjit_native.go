@@ -161,6 +161,9 @@ type jitRealmFields struct {
 	// one-character results native code makes itself
 	// (ssa.OpSubstringChar).
 	jitSubstring, jitSlice, jitSubstr, jitCharAt Value
+	// jitForEach is Array.prototype.forEach, which native code makes a loop
+	// of (ssa.ForEachSite).
+	jitForEach Value
 }
 
 // recordJITStringIntrinsic notes the realm's String.prototype.charCodeAt and
@@ -172,7 +175,8 @@ func (r *Runtime) recordJITStringIntrinsic(ctor *Object) {
 
 // recordJITSubstrings notes the realm's String.prototype substring, slice,
 // substr and charAt, once the realm has them all, before any script runs,
-// whose one-character results native code makes itself.
+// whose one-character results native code makes itself, and
+// Array.prototype.forEach, whose calls it makes loops of.
 func (r *Runtime) recordJITSubstrings() {
 	own := func(name string) Value {
 		if m := r.proto.str.getOwn(r.atoms.intern(name)); m.ok() {
@@ -181,6 +185,10 @@ func (r *Runtime) recordJITSubstrings() {
 		return Undefined
 	}
 	r.jitSubstring, r.jitSlice, r.jitSubstr, r.jitCharAt = own("substring"), own("slice"), own("substr"), own("charAt")
+	r.jitForEach = Undefined
+	if m := r.proto.array.getOwn(r.atoms.intern("forEach")); m.ok() {
+		r.jitForEach = m.value()
+	}
 }
 
 // jitIsSubstring reports whether o is the realm's String.prototype
@@ -496,6 +504,11 @@ type jitEntry struct {
 	// code that reads its receiver.
 	entrySlow bool
 	this      bool
+	// loops says the code makes loops of built-ins' calls (ssa.ForEachSite),
+	// whose abi.Context's Loop Go reads at its exits, and loopSlots how far
+	// past the frame's operands' first their slots go (setLoopSlots).
+	loops     bool
+	loopSlots int
 	// lexThis says the code makes arrows from pools, which read the
 	// context's This (jitFeedback's lexThis): Go writes it at its entries.
 	lexThis bool
@@ -611,6 +624,9 @@ type jitState struct {
 	// their callers' code went on natively (runSSA); resumedLevels those
 	// whose caller was itself a level Go was finishing (jitUnwindNative).
 	resumed, resumedLevels uint64
+	// loopsFinished counts the loops of built-ins' calls Go went on with
+	// at an exit (jitLoopFinish).
+	loopsFinished uint64
 	// ssaShared is what the contexts from ssaSharedFrom on hold of what
 	// they share (jitShareContexts); ssaSharedGen counts the times either,
 	// or bounds, changed, which a call of Go compares, not the struct.

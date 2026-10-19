@@ -1142,6 +1142,18 @@ func exitKind(aux int) uint64 {
 	return abi.ExitDeopt
 }
 
+// frameSize is how many slots the code's frame takes in the VM's stack, the
+// call entry's: its locals and operands, or more, to the end of its loops'
+// slots (ssa.Func's LoopsEnd), past which the frames of the callees its
+// loops call start.
+func (c *core) frameSize() int {
+	n := c.f.FrameLocals + c.f.StackSize
+	if c.f.Loops {
+		n = max(n, c.f.FrameLocals+c.f.LoopsEnd-c.f.Locals)
+	}
+	return n
+}
+
 // remat reports a value an exit recomputes from its operands rather than
 // reads from its location. A poll exits on a back-edge, after the phi moves
 // and before the header runs again, so a box the header computed of a phi
