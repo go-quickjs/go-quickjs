@@ -881,7 +881,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	// them (directOperand), not recorded: Go never reads them, as a callee
 	// that leaves native code is finished from its own frame, and its
 	// result replaces them (the VM's jitCallResult).
-	direct, ops := len(sites) == 1 && !gen && !site.ArrowThis && (site.ThisSlot < 0 || site.Method || site.Pool != 0 || site.Super), calleeSlot
+	direct, ops := len(sites) == 1 && !gen && !site.ArrowThis && (site.ThisSlot < 0 || site.Method || site.Pool != 0 || site.Super || site.PlainThis), calleeSlot
 	if site.Method {
 		ops--
 	}
@@ -930,7 +930,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	// or a method call's, which a callee that does not read it has too --
 	// a frame Go makes for it (jitGoCallNested, jitUnwindNative) shows it
 	// in a stack trace, as the interpreter's does.
-	receiver := direct && site.Pool == 0 && !site.Super && (site.ThisSlot >= 0 || site.Method && this < sp)
+	receiver := direct && site.Pool == 0 && !site.Super && !site.PlainThis && (site.ThisSlot >= 0 || site.Method && this < sp)
 	if direct {
 		// The callee's frame, past the VM's stack's top: xScratch2 holds
 		// its address, which pointerWord does not use.
@@ -1031,7 +1031,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 			c.storeImm(locals, at+c.enc.NumOffset, c.enc.Undefined, top)
 			c.storeImm(locals, at+c.enc.RefOffset, 0, top)
 		}
-		if t.Tail || t.Pool != 0 || t.Super || t.ArrowThis || (t.ThisSlot >= 0 || site.Method && site.Via == 0) && !direct || !receiver {
+		if t.Tail || t.Pool != 0 || t.Super || t.ArrowThis || t.PlainThis || (t.ThisSlot >= 0 || site.Method && site.Via == 0) && !direct || !receiver {
 			c.a.Load(calleeCtx, regCtx, abi.OffNext)
 		}
 		if t.Tail {
@@ -1090,6 +1090,14 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 			c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, top)
 			c.a.Load(top, high2, c.enc.RefOffset)
 			c.a.Store(calleeCtx, abi.OffThis+c.enc.RefOffset, top)
+		} else if t.PlainThis && t.Global != 0 {
+			// A sloppy callee's, called plainly: the global object.
+			c.storeImm(calleeCtx, abi.OffThis+c.enc.NumOffset, c.enc.Object, top)
+			c.storeImm(calleeCtx, abi.OffThis+c.enc.RefOffset, uint64(t.Global), top)
+		} else if t.PlainThis {
+			// A strict callee's, called plainly: undefined.
+			c.storeImm(calleeCtx, abi.OffThis+c.enc.NumOffset, c.enc.Undefined, top)
+			c.storeImm(calleeCtx, abi.OffThis+c.enc.RefOffset, 0, top)
 		} else if (t.ThisSlot >= 0 || site.Method && site.Via == 0) && !direct {
 			nb, nd, rb, rd := words(calleeSlot - 1)
 			c.a.Load(top, nb, nd)

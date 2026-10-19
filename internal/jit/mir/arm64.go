@@ -2666,7 +2666,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	}
 	// As amd64's: a call of one function writes its operands where the
 	// callee has them, unrecorded.
-	direct, ops := len(sites) == 1 && !gen && !site.ArrowThis && (site.ThisSlot < 0 || site.Method || site.Pool != 0 || site.Super), calleeSlot
+	direct, ops := len(sites) == 1 && !gen && !site.ArrowThis && (site.ThisSlot < 0 || site.Method || site.Pool != 0 || site.Super || site.PlainThis), calleeSlot
 	if site.Method {
 		ops--
 	}
@@ -2708,7 +2708,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	// or a method call's, which a callee that does not read it has too --
 	// a frame Go makes for it (jitGoCallNested, jitUnwindNative) shows it
 	// in a stack trace, as the interpreter's does.
-	receiver := direct && site.Pool == 0 && !site.Super && (site.ThisSlot >= 0 || site.Method && this < sp)
+	receiver := direct && site.Pool == 0 && !site.Super && !site.PlainThis && (site.ThisSlot >= 0 || site.Method && this < sp)
 	if direct {
 		// The callee's frame's address, in D, which pointerWord does not
 		// use.
@@ -2792,7 +2792,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 			c.a.Store(locals, at+c.enc.NumOffset, top)
 			c.a.Store(locals, at+c.enc.RefOffset, arm64.ZR)
 		}
-		if t.Tail || t.Pool != 0 || t.Super || t.ArrowThis || (t.ThisSlot >= 0 || site.Method && site.Via == 0) && !direct || !receiver {
+		if t.Tail || t.Pool != 0 || t.Super || t.ArrowThis || t.PlainThis || (t.ThisSlot >= 0 || site.Method && site.Via == 0) && !direct || !receiver {
 			c.a.Load(calleeCtx, a64Ctx, abi.OffNext)
 		}
 		if t.Tail {
@@ -2855,6 +2855,17 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 			c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, top)
 			c.a.Load(top, high2, c.enc.RefOffset)
 			c.a.Store(calleeCtx, abi.OffThis+c.enc.RefOffset, top)
+		} else if t.PlainThis && t.Global != 0 {
+			// As amd64's: a sloppy callee's, the global object.
+			c.movImm(top, c.enc.Object)
+			c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, top)
+			c.movImm(top, uint64(t.Global))
+			c.a.Store(calleeCtx, abi.OffThis+c.enc.RefOffset, top)
+		} else if t.PlainThis {
+			// A strict callee's: undefined.
+			c.movImm(top, c.enc.Undefined)
+			c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, top)
+			c.a.Store(calleeCtx, abi.OffThis+c.enc.RefOffset, arm64.ZR)
 		} else if (t.ThisSlot >= 0 || site.Method && site.Via == 0) && !direct {
 			nb, nd, rb, rd := words(calleeSlot - 1)
 			c.a.Load(top, nb, nd)

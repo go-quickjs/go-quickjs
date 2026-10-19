@@ -2363,6 +2363,23 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 			Params: fn.ParamCount, LocalCount: fn.LocalCount, MaxStack: fn.MaxStack, ThisSlot: this, Coerce: fn.CoerceThis,
 		}
 		site.ArrowThis = arrowThis
+		if this >= 0 && !arrowThis && call.Op == bytecode.OpCall && (fn.Kind == bytecode.KindNormal || fn.Kind == bytecode.KindMethod) {
+			// Called plainly, its receiver undefined -- or, sloppy, the
+			// global object it is coerced to, as callFunction coerces it, of
+			// the realm the code's calls run in: a function of another's Go
+			// calls. Go had made every such call, the callee's code compiled
+			// for native callers never run.
+			site.PlainThis, site.Coerce = true, false
+			if fn.CoerceThis {
+				if in.cl.realm != fb.r.Realm || !fb.r.globalThis.IsObject() {
+					fb.links = fb.links[:len(fb.links)-1]
+					continue
+				}
+				g := fb.r.globalThis.Object()
+				site.Global = uintptr(unsafe.Pointer(g))
+				fb.holders = append(fb.holders, g)
+			}
+		}
 		if in.active != nil {
 			// A super()'s parent (jitSuperSeen), constructed with the
 			// instance: its operands the arguments, its this the instance's

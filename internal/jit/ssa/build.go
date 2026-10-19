@@ -347,6 +347,12 @@ type CallSite struct {
 	// interpreter's call does; one that shares a derived constructor's
 	// binding the call leaves to Go.
 	ArrowThis bool
+	// PlainThis marks a plain call, no method's, of a callee that reads its
+	// receiver: the call gives it undefined, or, Global not 0, that object,
+	// the realm's global object a sloppy callee's this is coerced to, as
+	// the interpreter's call gives it (callFunction).
+	PlainThis bool
+	Global    uintptr
 	// Accessor marks a property's read (AccessorGet) or write (AccessorSet)
 	// whose site found an accessor (AccessorSite), at its PC: a call of the
 	// getter, or of the setter with the value, its result dropped. Its
@@ -3880,7 +3886,7 @@ func (b *builder) nativeCalls(pc int) []*CallSite {
 		// object: left out, an arrow reading its this, learned at a miss,
 		// missed at every call -- AWFY CD's Vector.forEach, 45,000 exits a
 		// run.
-		if site.Argc < 0 || depth < operands || after != depth-operands+1 || site.ThisSlot >= 0 && !site.Method && site.Pool == 0 && !site.ArrowThis && !site.Super {
+		if site.Argc < 0 || depth < operands || after != depth-operands+1 || site.ThisSlot >= 0 && !site.Method && site.Pool == 0 && !site.ArrowThis && !site.Super && !site.PlainThis {
 			continue
 		}
 		if site.ThisSlot < 0 {
