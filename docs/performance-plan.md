@@ -817,8 +817,28 @@ faster: its loss is its steady state's.
   Havlak -5%), and native callees take their cells from their function's
   pool (mir's cellsTake, Havlak -5%, NBody -4%, DeltaBlue -2.5%).
   Havlak's closures are next.
-- **The `in` operator** is an opcode the JIT does not compile: a function
-  with `k in o` anywhere is refused whole (found 2026-10-19 by a test).
+- **The `in` operator** (found 2026-10-19 by a test): a function with
+  `k in o` anywhere was refused whole. Now compiled, each `in` a call of
+  Go (ssa.GoHas) that answers an object's own or inherited property, no
+  getter called, and leaves for the interpreter a proxy's trap, an object
+  key's conversion and a TypeError. Of the 46 functions it had refused in
+  Octane, the V8 suite and AWFY (pdf.js 34, Mandreel 7, EarleyBoyer 5),
+  28 compile now, 14 are left to native callers and inlining (no loop),
+  and 4 stop at `delete` (below). Next, natively, as V8's keyed has: an
+  array's dense
+  element that is no hole, needing no feedback (a split, true on one side
+  and the call of Go on the other, as megamorphic reads split); then an
+  object's constant key by shapes learned at the call of Go itself, the
+  interpreter keeping no cache for `in` (which would change executeAt).
+- **The `delete` operator** (`delete_prop`) is an opcode the JIT does not
+  compile either: a function with `delete o.k` or `delete o[k]` is refused
+  whole -- 4 of the functions `in` had refused stop at it now. As V8:
+  first a call of Go that deletes what deletes without running code -- an
+  ordinary object's own configurable property, a dense array's element --
+  and leaves the rest (a proxy's deleteProperty trap, a non-configurable
+  property in strict code, which throws) for an exit; then natively the
+  deletion of an object's last-added property, back along its shape's
+  transition, as V8's code deletes its map's last property.
 - **Compiling in the background, last.** V8 compiles on a thread of its
   own while the function runs on in its lower tier; ours compiles on the
   runtime's goroutine, so that each compile's whole cost is paid where it
