@@ -321,6 +321,22 @@ func (r *Runtime) jitPolySeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 	if !recv.IsObject() || int(in.A) >= len(f.cl.names) {
 		return
 	}
+	if in.Op == bytecode.OpGetPropThis && int(in.B) < len(f.cl.ic) && !slices.Contains(e.strSites, uint32(pc)) {
+		if c := &f.cl.ic[in.B]; (c.shape == nil || c.shape == noShape) && c.fills == 0 && r.proto.str != nil && r.proto.str.findOwn(f.cl.names[in.A]) >= 0 {
+			// An object's method, at a read the code took for a string's
+			// (jitFeedback's StringProperty), its cache knowing nothing: a
+			// loop the tree tier ran before it was compiled, a function
+			// run once, leaves no read in the interpreter's cache. The
+			// cache takes the receiver, as the interpreter's read would
+			// have, and the code is compiled again for its shape; it had
+			// left there at every entry, and was judged slow for it.
+			r.fillPropCache(c, recv.Object(), f.cl.names[in.A], false)
+			if c.shape != nil && c.shape != noShape {
+				e.polyReopt = true
+				return
+			}
+		}
+	}
 	if in.Op == bytecode.OpGetProp {
 		// A getter on the receiver's prototypes, which the code calls once
 		// compiled again for the receiver's shape too (jitFeedback's
