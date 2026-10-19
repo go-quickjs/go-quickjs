@@ -2385,155 +2385,9 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 				Pool: uintptr(unsafe.Pointer(in.pool)), Alloc: true, Argc: argc})
 			continue
 		}
-		arrowThis := in.cl.fn.Kind == bytecode.KindArrow && in.cl.fn.UsesThis
-		if fd := in.obj.fn(); arrowThis && (fd == nil || fd.extra == nil || fd.extra.lexThisRef != nil || in.via) {
-			// An arrow's this is the one it captured, which the call gives
-			// it (ssa.CallSite's ArrowThis): one that shares a derived
-			// constructor's binding, or called through
-			// Function.prototype.call, whose object the call's checks find,
-			// Go makes.
+		site, ok := fb.closureCallSite(pc, in, jitCallInstr(fb.fn.Code[pc]), targets)
+		if !ok {
 			continue
-		}
-		// Only looked up: a compile here would share the workspaces of the
-		// one asking. jitCallSeen compiled it.
-		ce := fb.r.jit.entryFor(in.cl.fn)
-		var link *jitLink
-		switch {
-		case ce != nil && ce.ssa != nil:
-			link = ce.link
-		case ce != nil && (ce.calleeRefused || ce.ssaCallee):
-			// Refused for good: Go makes its calls.
-			if !slices.Contains(fb.wanted, in.cl) {
-				k := fb.keep()
-				k.wanted = append(k.wanted, in.cl)
-			}
-			continue
-		case !fb.r.jitLinkable(in.cl):
-			// Go makes its calls until it has code.
-			if !slices.Contains(fb.wanted, in.cl) {
-				k := fb.keep()
-				k.wanted = append(k.wanted, in.cl)
-			}
-			continue
-		default:
-			link = fb.r.jit.linkOf(in.cl.fn)
-			if k := fb.keep(); !slices.Contains(k.linked, in.cl) {
-				k.linked = append(k.linked, in.cl)
-			}
-		}
-		call, fn := jitCallInstr(fb.fn.Code[pc]), in.cl.fn
-		// The call is made through the function's link (jitLink), to
-		// whatever code it has then: what it writes for the callee is the
-		// function's -- its receiver if its body reads one -- not this
-		// code's, which a compile of it later may not be.
-		this := -1
-		if fn.UsesThis {
-			this = fn.LocalCount + len(fn.Upvalues)
-		}
-		fb.links = append(fb.links, link)
-		fb.holders = append(fb.holders, in.obj)
-		site := ssa.CallSite{
-			Callee: uintptr(unsafe.Pointer(in.obj)), Closure: uintptr(unsafe.Pointer(in.cl)),
-			Entry: uintptr(unsafe.Pointer(&link.entry)), Count: uintptr(unsafe.Pointer(&link.in)),
-			Argc: int(call.A), Method: call.Op == bytecode.OpCallMethod,
-			Params: fn.ParamCount, LocalCount: fn.LocalCount, MaxStack: fn.MaxStack, ThisSlot: this, Coerce: fn.CoerceThis,
-		}
-		site.ArrowThis = arrowThis
-		if this >= 0 && !arrowThis && call.Op == bytecode.OpCall && (fn.Kind == bytecode.KindNormal || fn.Kind == bytecode.KindMethod) {
-			// Called plainly, its receiver undefined -- or, sloppy, the
-			// global object it is coerced to, as callFunction coerces it, of
-			// the realm the code's calls run in: a function of another's Go
-			// calls. Go had made every such call, the callee's code compiled
-			// for native callers never run.
-			site.PlainThis, site.Coerce = true, false
-			if fn.CoerceThis {
-				if in.cl.realm != fb.r.Realm || !fb.r.globalThis.IsObject() {
-					fb.links = fb.links[:len(fb.links)-1]
-					continue
-				}
-				g := fb.r.globalThis.Object()
-				site.Global = uintptr(unsafe.Pointer(g))
-				fb.holders = append(fb.holders, g)
-			}
-		}
-		if in.active != nil {
-			// A super()'s parent (jitSuperSeen), constructed with the
-			// instance: its operands the arguments, its this the instance's
-			// (ssa.CallSite's Super). One of a function the code was not
-			// compiled for, a class that makes arrows, or of spread or
-			// forwarded arguments, Go makes.
-			if call.Op != bytecode.OpSuperCall || call.B != bytecode.SuperArgs || fb.fn.Kind != bytecode.KindDerivedConstructor || jitMakesArrow(fb.fn) {
-				fb.links = fb.links[:len(fb.links)-1]
-				continue
-			}
-			site.Super, site.Active, site.Derived = true, uintptr(unsafe.Pointer(in.active)), fn.Kind == bytecode.KindDerivedConstructor
-			site.Method, site.Coerce = false, false
-			fb.holders = append(fb.holders, in.active)
-			if in.parent != nil {
-				site.Parent = uintptr(unsafe.Pointer(in.parent))
-				fb.holders = append(fb.holders, in.parent)
-			}
-		}
-		if fn.HasTailCall {
-			// Whether its calls in tail position may give its frame up, as
-			// the interpreter gives up a frame that is no construction's,
-			// nor an arrow's that shares a derived constructor's this.
-			fd := in.obj.fn()
-			site.Tail = true
-			site.TailFrame = call.Op != bytecode.OpNew && call.Op != bytecode.OpSuperCall && (fd == nil || !fd.arrow || fd.extra == nil || fd.extra.lexThisRef == nil)
-		}
-		if len(in.cl.upvalues) != 0 {
-			// Its captured bindings, which its code reads through its
-			// context; the call checks it calls this closure's function
-			// object, which keeps them.
-			site.Upvalues = uintptr(unsafe.Pointer(unsafe.SliceData(in.cl.upvalues)))
-		}
-		// Asked of its lowering, which keeps the answer (startOnly): each
-		// site had walked the callee's code for it again.
-		if l := fb.r.jit.lowered[weak.Make(in.cl.fn)]; l != nil {
-			if l.startOnly == 0 {
-				l.startOnly = 1
-				if jitcompile.StartOnly(in.cl.fn) {
-					l.startOnly = 2
-				}
-			}
-			site.StartOnly = l.startOnly == 2
-		} else {
-			site.StartOnly = jitcompile.StartOnly(in.cl.fn)
-		}
-		if in.via {
-			site.Via = uintptr(unsafe.Pointer(fb.r.callFn))
-			fb.holders = append(fb.holders, fb.r.callFn)
-		}
-		if call.Op == bytecode.OpNew {
-			i := in.obj.findOwn(atomPrototype)
-			if in.pool == nil || i < 0 {
-				continue
-			}
-			site.Pool, site.ProtoIndex, site.ProtoKey = uintptr(unsafe.Pointer(in.pool)), int(i), uint32(atomPrototype)
-			site.Coerce = false
-			// Its callee's code a derived constructor's: the pool's object
-			// its instance.
-			site.Derived = in.cl.fn.Kind == bytecode.KindDerivedConstructor
-			fb.pools = append(fb.pools, in.pool)
-			if in.parent != nil {
-				// A derived class's, with its parent's code.
-				site.Parent = uintptr(unsafe.Pointer(in.parent))
-				fb.holders = append(fb.holders, in.parent)
-			}
-		}
-		byCode := len(in.cl.upvalues) != 0 || in.byCode
-		for _, y := range targets {
-			if byCode {
-				break
-			}
-			byCode = int(y.pc) == pc && y.cl != nil && y.obj != in.obj && jitSameCode(y.cl, in.cl)
-		}
-		if site.Pool == 0 && !in.via && !site.Super && byCode {
-			// A closure: checked by its function, its closure the callee's
-			// at run time (ByCode), as the one an enclosing function makes
-			// at each of its calls is a new object each time.
-			site.ByCode, site.Env, site.Realm = uintptr(unsafe.Pointer(in.cl.fn)), uintptr(unsafe.Pointer(in.cl.env)), uintptr(unsafe.Pointer(in.cl.realm))
 		}
 		sites = append(sites, site)
 	}
@@ -2578,6 +2432,165 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 		}
 	}
 	return sites
+}
+
+// closureCallSite is NativeCalls' native call of in, a closure the call at
+// pc has met, made as call says (jitCallInstr): through the function's link,
+// to whatever code it has then, its receiver written if its body reads one,
+// checked by its code where it is a closure made anew (ByCode) -- or false
+// for one Go makes. targets are the others the call has met.
+func (fb *jitFeedback) closureCallSite(pc int, in jitInline, call bytecode.Instr, targets []*jitInline) (ssa.CallSite, bool) {
+	arrowThis := in.cl.fn.Kind == bytecode.KindArrow && in.cl.fn.UsesThis
+	if fd := in.obj.fn(); arrowThis && (fd == nil || fd.extra == nil || fd.extra.lexThisRef != nil || in.via) {
+		// An arrow's this is the one it captured, which the call gives
+		// it (ssa.CallSite's ArrowThis): one that shares a derived
+		// constructor's binding, or called through
+		// Function.prototype.call, whose object the call's checks find,
+		// Go makes.
+		return ssa.CallSite{}, false
+	}
+	// Only looked up: a compile here would share the workspaces of the
+	// one asking. jitCallSeen compiled it.
+	ce := fb.r.jit.entryFor(in.cl.fn)
+	var link *jitLink
+	switch {
+	case ce != nil && ce.ssa != nil:
+		link = ce.link
+	case ce != nil && (ce.calleeRefused || ce.ssaCallee):
+		// Refused for good: Go makes its calls.
+		if !slices.Contains(fb.wanted, in.cl) {
+			k := fb.keep()
+			k.wanted = append(k.wanted, in.cl)
+		}
+		return ssa.CallSite{}, false
+	case !fb.r.jitLinkable(in.cl):
+		// Go makes its calls until it has code.
+		if !slices.Contains(fb.wanted, in.cl) {
+			k := fb.keep()
+			k.wanted = append(k.wanted, in.cl)
+		}
+		return ssa.CallSite{}, false
+	default:
+		link = fb.r.jit.linkOf(in.cl.fn)
+		if k := fb.keep(); !slices.Contains(k.linked, in.cl) {
+			k.linked = append(k.linked, in.cl)
+		}
+	}
+	fn := in.cl.fn
+	// The call is made through the function's link (jitLink), to
+	// whatever code it has then: what it writes for the callee is the
+	// function's -- its receiver if its body reads one -- not this
+	// code's, which a compile of it later may not be.
+	this := -1
+	if fn.UsesThis {
+		this = fn.LocalCount + len(fn.Upvalues)
+	}
+	fb.links = append(fb.links, link)
+	fb.holders = append(fb.holders, in.obj)
+	site := ssa.CallSite{
+		Callee: uintptr(unsafe.Pointer(in.obj)), Closure: uintptr(unsafe.Pointer(in.cl)),
+		Entry: uintptr(unsafe.Pointer(&link.entry)), Count: uintptr(unsafe.Pointer(&link.in)),
+		Argc: int(call.A), Method: call.Op == bytecode.OpCallMethod,
+		Params: fn.ParamCount, LocalCount: fn.LocalCount, MaxStack: fn.MaxStack, ThisSlot: this, Coerce: fn.CoerceThis,
+	}
+	site.ArrowThis = arrowThis
+	if this >= 0 && !arrowThis && call.Op == bytecode.OpCall && (fn.Kind == bytecode.KindNormal || fn.Kind == bytecode.KindMethod) {
+		// Called plainly, its receiver undefined -- or, sloppy, the
+		// global object it is coerced to, as callFunction coerces it, of
+		// the realm the code's calls run in: a function of another's Go
+		// calls. Go had made every such call, the callee's code compiled
+		// for native callers never run.
+		site.PlainThis, site.Coerce = true, false
+		if fn.CoerceThis {
+			if in.cl.realm != fb.r.Realm || !fb.r.globalThis.IsObject() {
+				fb.links = fb.links[:len(fb.links)-1]
+				return ssa.CallSite{}, false
+			}
+			g := fb.r.globalThis.Object()
+			site.Global = uintptr(unsafe.Pointer(g))
+			fb.holders = append(fb.holders, g)
+		}
+	}
+	if in.active != nil {
+		// A super()'s parent (jitSuperSeen), constructed with the
+		// instance: its operands the arguments, its this the instance's
+		// (ssa.CallSite's Super). One of a function the code was not
+		// compiled for, a class that makes arrows, or of spread or
+		// forwarded arguments, Go makes.
+		if call.Op != bytecode.OpSuperCall || call.B != bytecode.SuperArgs || fb.fn.Kind != bytecode.KindDerivedConstructor || jitMakesArrow(fb.fn) {
+			fb.links = fb.links[:len(fb.links)-1]
+			return ssa.CallSite{}, false
+		}
+		site.Super, site.Active, site.Derived = true, uintptr(unsafe.Pointer(in.active)), fn.Kind == bytecode.KindDerivedConstructor
+		site.Method, site.Coerce = false, false
+		fb.holders = append(fb.holders, in.active)
+		if in.parent != nil {
+			site.Parent = uintptr(unsafe.Pointer(in.parent))
+			fb.holders = append(fb.holders, in.parent)
+		}
+	}
+	if fn.HasTailCall {
+		// Whether its calls in tail position may give its frame up, as
+		// the interpreter gives up a frame that is no construction's,
+		// nor an arrow's that shares a derived constructor's this.
+		fd := in.obj.fn()
+		site.Tail = true
+		site.TailFrame = call.Op != bytecode.OpNew && call.Op != bytecode.OpSuperCall && (fd == nil || !fd.arrow || fd.extra == nil || fd.extra.lexThisRef == nil)
+	}
+	if len(in.cl.upvalues) != 0 {
+		// Its captured bindings, which its code reads through its
+		// context; the call checks it calls this closure's function
+		// object, which keeps them.
+		site.Upvalues = uintptr(unsafe.Pointer(unsafe.SliceData(in.cl.upvalues)))
+	}
+	// Asked of its lowering, which keeps the answer (startOnly): each
+	// site had walked the callee's code for it again.
+	if l := fb.r.jit.lowered[weak.Make(in.cl.fn)]; l != nil {
+		if l.startOnly == 0 {
+			l.startOnly = 1
+			if jitcompile.StartOnly(in.cl.fn) {
+				l.startOnly = 2
+			}
+		}
+		site.StartOnly = l.startOnly == 2
+	} else {
+		site.StartOnly = jitcompile.StartOnly(in.cl.fn)
+	}
+	if in.via {
+		site.Via = uintptr(unsafe.Pointer(fb.r.callFn))
+		fb.holders = append(fb.holders, fb.r.callFn)
+	}
+	if call.Op == bytecode.OpNew {
+		i := in.obj.findOwn(atomPrototype)
+		if in.pool == nil || i < 0 {
+			return ssa.CallSite{}, false
+		}
+		site.Pool, site.ProtoIndex, site.ProtoKey = uintptr(unsafe.Pointer(in.pool)), int(i), uint32(atomPrototype)
+		site.Coerce = false
+		// Its callee's code a derived constructor's: the pool's object
+		// its instance.
+		site.Derived = in.cl.fn.Kind == bytecode.KindDerivedConstructor
+		fb.pools = append(fb.pools, in.pool)
+		if in.parent != nil {
+			// A derived class's, with its parent's code.
+			site.Parent = uintptr(unsafe.Pointer(in.parent))
+			fb.holders = append(fb.holders, in.parent)
+		}
+	}
+	byCode := len(in.cl.upvalues) != 0 || in.byCode
+	for _, y := range targets {
+		if byCode {
+			break
+		}
+		byCode = int(y.pc) == pc && y.cl != nil && y.obj != in.obj && jitSameCode(y.cl, in.cl)
+	}
+	if site.Pool == 0 && !in.via && !site.Super && byCode {
+		// A closure: checked by its function, its closure the callee's
+		// at run time (ByCode), as the one an enclosing function makes
+		// at each of its calls is a new object each time.
+		site.ByCode, site.Env, site.Realm = uintptr(unsafe.Pointer(in.cl.fn)), uintptr(unsafe.Pointer(in.cl.env)), uintptr(unsafe.Pointer(in.cl.realm))
+	}
+	return site, true
 }
 
 // jitInline is a call jitCallSeen has seen call a function it may inline:
