@@ -451,11 +451,6 @@ type GoOp uint8
 // address the first operand's pointer word: a call that takes from one
 // makes it, and is made again from its start.
 //
-// GoStore stores a pointer while the collector marks, for code that may not
-// store it with Go's write barrier itself (abi.Encoding's StoreRef): the
-// first operand is the value, the second's pointer word the cell's address
-// (mir's property stores).
-//
 // GoCall is a call, a method call or a construction -- the call at the
 // state's PC -- that Go makes with the operands, from the function or the
 // receiver on, as V8's code calls a function it has no code of its own
@@ -506,19 +501,6 @@ type GoOp uint8
 // undefined with nothing to ask, the array's chain holding no element and
 // no index, the first operand its pointer word, the key its number word;
 // the read is then from Encoding's UndefinedCell.
-//
-// GoTake takes a pool's next object while the collector marks, as V8's
-// code calls its runtime to allocate: Go clears the pool's cell and keeps
-// the object in the call's keep cell, with its write barrier, where native
-// code, with none, does not. The pool's address is the first operand's
-// pointer word, and the call's checks found an object there.
-//
-// GoAddAlong adds a property along a transition while the collector marks
-// (mir's addAlong), as V8's code calls its write barrier: Go appends the
-// value to the object's table, which has room, and sets its next shape,
-// which has the key, with its write barrier. The first operand's pointer
-// word is the object; the second's pointer word the next shape; the third
-// the value.
 //
 // GoConcat is concat (ir.StringConcat): Go converts its Argc operands to
 // strings and joins them, as GoAdd adds; what could run code or throw it
@@ -592,7 +574,6 @@ type GoOp uint8
 const (
 	GoAdd GoOp = 1 + iota
 	GoRefill
-	GoStore
 	GoPow
 	GoMath
 	GoAtan2
@@ -602,8 +583,6 @@ const (
 	GoPoll
 	GoElemWrite
 	GoElemCell
-	GoTake
-	GoAddAlong
 	GoConcat
 	GoClosure
 	GoClose

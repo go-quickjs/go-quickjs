@@ -58,8 +58,7 @@ func TestJITClosuresShareCode(t *testing.T) {
 	if len(arrows) != 6 {
 		t.Fatalf("%d arrows have entries, want 6", len(arrows))
 	}
-	// Counted with the collector off: while it marks, Go makes native
-	// calls (mir's markingCall).
+	// Counted with the collector off, which the counts are not about.
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	each := jitNativeForTest(t, r, "each")

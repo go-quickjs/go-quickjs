@@ -219,8 +219,7 @@ func TestJITFramelessCallsSpendTheBudget(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	// No collection meanwhile: a call made while the collector marks Go
-	// makes in native code's place (abi.GoOpMarking).
+	// No collection meanwhile, which the budget is not about.
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	r, run := jitTierRuntimeForTest(t, 4, `var m=(function(){

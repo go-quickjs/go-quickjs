@@ -105,6 +105,11 @@ func prepare(w *Workspace, f *ssa.Func, enc abi.Encoding, gprs, fprs []int) (*co
 		// Slots and elements are found by shifting an index by four.
 		return nil, fmt.Errorf("%w: %d-byte values", ErrUnsupported, enc.ValueSize)
 	}
+	if enc.StoreRef == 0 {
+		// While the collector marks, every pointer the code stores goes
+		// through Go's write barrier there.
+		return nil, fmt.Errorf("%w: no StoreRef", ErrUnsupported)
+	}
 	if n := f.Locals + f.StackSize; n > abi.MaxRecords {
 		return nil, fmt.Errorf("%w: %d slots", ErrUnsupported, n)
 	}

@@ -158,8 +158,7 @@ func TestJITDerivedNativeConstruct(t *testing.T) {
 	r := jitAgreesForTest(t, setup, rounds...)
 	b, c, f := jitDerivedForTest(t, r, "B"), jitDerivedForTest(t, r, "C"), jitDerivedForTest(t, r, "F")
 	m := jitNativeForTest(t, r, "make")
-	// Counted with the collector off: while it marks, Go makes native
-	// calls (mir's markingCall).
+	// Counted with the collector off, which the counts are not about.
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	bIn, cIn, fIn, goCalls := jitDerivedCalls(b), jitDerivedCalls(c), jitDerivedCalls(f), m.ssaStats.goCalls
@@ -239,9 +238,9 @@ func TestJITDerivedNativeErrors(t *testing.T) {
 		}
 	}
 	rounds = append(rounds, `Count.n`)
-	// With the collector off: while it marks, Go makes the constructions,
-	// their receivers from pools (mir's markingCall), and under GOGC=5 it
-	// marked through every one of Early's.
+	// With the collector off, which the counts are not about: Go had made
+	// the constructions while it marked, and under GOGC=5 it marked
+	// through every one of Early's.
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	r := jitAgreesForTest(t, setup, rounds...)
@@ -316,7 +315,7 @@ func TestJITDerivedNativeMarking(t *testing.T) {
 	}
 	r := jitAgreesForTest(t, setup, rounds...)
 	for _, name := range []string{"B", "C"} {
-		if e := jitDerivedForTest(t, r, name); e.ssa == nil || jitDerivedCalls(e) == 0 || e.ssaStats.marked != 0 {
+		if e := jitDerivedForTest(t, r, name); e.ssa == nil || jitDerivedCalls(e) == 0 {
 			t.Errorf("%s was not constructed natively while the collector marked: code %v, slow %v, callee %v, %+v", name, e.ssa != nil, e.entrySlow, e.ssaCallee, e.ssaStats)
 		}
 	}
@@ -432,8 +431,7 @@ func TestJITDerivedNativeSuperTwice(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	// Counted with the collector off: while it marks, Go makes native
-	// calls (mir's markingCall).
+	// Counted with the collector off, which the counts are not about.
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	setup := `

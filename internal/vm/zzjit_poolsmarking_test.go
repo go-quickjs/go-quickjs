@@ -67,3 +67,34 @@ func TestJITPoolsWhileMarking(t *testing.T) {
 		}
 	}
 }
+
+// A call in tail position, deep enough in the stack that its frame is given
+// up (mir's tailSelf), while the collector marks: its operands, read into
+// the context's GoArgs before the frame they came from is written, are each
+// shaded first, stored through Go's write barrier (abi.Context's Shade) --
+// here objects swapped between parameters and a receiver -- every register
+// native code may keep given junk across those stores; each answer is the
+// interpreter's. It had left native code at each such call while the
+// collector marked.
+func TestJITTailCallsWhileMarking(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	jitMarkingForTest(t)
+	jitClobberStoresForTest(t)
+	setup := `
+		"use strict"
+		var objs = [{v:1}, {v:2}, {v:3}, {v:4}]
+		function swap(n, a, b, acc) { if (n === 0) return acc + a.v * 10 + b.v; return swap(n - 1, b, objs[n & 3], acc + a.v) }
+		class L { constructor(v, next) { this.v = v; this.next = next } sum(acc, o) { if (this.next === null) return acc + this.v + o.v; return this.next.sum(acc + this.v, this) } }
+		var list = null
+		for (let i = 1; i <= 3000; i++) list = new L(i & 7, list)
+		function run() { return swap(20000, objs[0], objs[1], 0) + ':' + list.sum(0, objs[2]) }
+	`
+	rounds := []string{}
+	for range 6 {
+		rounds = append(rounds, `run()`)
+	}
+	r := jitAgreesForTest(t, setup, rounds...)
+	jitNativeForTest(t, r, "swap")
+}

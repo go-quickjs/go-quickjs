@@ -789,19 +789,26 @@ faster: its loss is its steady state's.
      array. Left for stage 5: ssa.GoTake, markingCall, markingTake's
      Go path and abi.GoOpMarking, which code with no `storeRef` (the
      harness) still uses.
-  5. *The rest, and cleanup*: the exits that fill records (recordsTail)
-     and the tail calls' (tailSelf, tailJump) store through `storeRef`;
-     remove ExitMarking, markingExit, ssa.GoStore and GoAddAlong, and
-     the VM's `jitMarking()` exceptions in jitCalleeProfit, jitInlineLeft
-     and jitUnwound; rewrite the README's barrier section.
-  Stages 3 to 5 wait (2026-10-19): counted by operation over one AWFY
-  run, the calls of Go made only because the collector marks are 12,000
-  in DeltaBlue, 21,000 in CD, 50,000 in Storage and 65,000 in Havlak, a
-  tenth or less of the calls of Go that are not the collector's (below),
-  which were done first; stage 3 is most of the work, for perhaps 1 to
-  2% on those benchmarks. `jitMarkingForTest`, a set byte native code
-  reads as the flag, is enough to choose the paths in tests; real
-  marking needs a collection running (TestStoreRefShades's way).
+  5. *The rest, and cleanup* (2026-10-19): a call in tail position
+     shades its operands, read into GoArgs before the frame is written
+     over, through `storeRef` into the context's Shade while marking,
+     where it had left native code; `storeRef` is required (mir refuses
+     an encoding without it), and what code without it needed goes:
+     ssa.GoStore, GoTake and GoAddAlong, markingCall, markingExit,
+     abi.GoOpMarking and ExitMarking, the VM's jitMarkingCallee and
+     goCallMarking, and its jitMarking() exceptions in jitCalleeProfit,
+     jitInlineLeft and jitUnwound, which marking no longer gives cause
+     for. An exit's records are still Go's to apply while marking
+     (recordsTail): staged in GoArgs as tail calls are, at an exit, where
+     Go is called anyway.
+  Stages 3 to 5 had waited (counted 2026-10-19 over one AWFY run, the
+  calls of Go made only because the collector marked were 12,000 in
+  DeltaBlue, 21,000 in CD, 50,000 in Storage and 65,000 in Havlak, a
+  tenth or less of the calls of Go that were not the collector's, below,
+  which were done first); they were done the same day.
+  `jitMarkingForTest`, a set byte native code reads as the flag, is
+  enough to choose the paths in tests; real marking needs a collection
+  running (TestStoreRefShades's way).
 - **Calls of Go that are not the collector's.** Counted by operation
   over one AWFY run (2026-10-19, native stores while marking), the
   largest are element stores native code leaves to Go (ssa.GoElemStore):

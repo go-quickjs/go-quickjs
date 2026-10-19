@@ -365,10 +365,10 @@ func TestJITNativeCalleeGoesOnAtLoops(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	// Native calls are Go's while the collector marks (mir's markingCall):
-	// it does not, so that what the test counts is the calls'. A
-	// collection during a round had made one of its calls Go's, and the
-	// round not counted -- three of four on a CI runner.
+	// The collector off, so that what the test counts is the calls': when
+	// native calls were Go's while it marked, a collection during a round
+	// had made one of its calls Go's, and the round not counted -- three
+	// of four on a CI runner.
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	setup := `var obj={x:2};

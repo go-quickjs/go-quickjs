@@ -15,9 +15,8 @@ import (
 // the context's that the collector scans and no store writes
 // (abi.Context.Keep, OpKeep), and the code reads it as a copy whose shadow
 // is that cell (OpKept): every use the store reaches, rebuilt as SSA. While
-// the collector marks, native code may write no pointer: Go writes the keep
-// then, called from native code (mir's goStore), as it makes the stores
-// themselves.
+// the collector marks, native code writes the keep with Go's write barrier
+// (mir's valueStore), as it makes the stores themselves.
 
 // keepAcrossStores keeps, before each property store, the values read from
 // cells that are used after it (liveAcross), up to the build's limit

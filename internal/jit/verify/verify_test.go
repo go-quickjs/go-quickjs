@@ -212,7 +212,10 @@ func TestMirEmitted(t *testing.T) {
 	enc := abi.Encoding{ValueSize: 16, NumOffset: 0, RefOffset: 8,
 		Undefined: 0xFFF8000000000001, Null: 0xFFF8000000000002, True: 0xFFF8000000000103,
 		False: 0xFFF8000000000003, Uninitialized: 0xFFF8000000000008, CanonicalNaN: 0x7FF8000000000000,
-		Mega: true, UndefinedCell: 0x60000}
+		Mega: true, UndefinedCell: 0x60000,
+		// Never run: an address for the stores to jump to while the
+		// collector marks.
+		StoreRef: 0x70000}
 	cells := map[ssa.Op]int{}
 	compile := func(name string, p *ir.Program, fb ssa.Feedback) bool {
 		f, err := ssa.BuildWith(p, fb)

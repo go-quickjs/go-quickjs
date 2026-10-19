@@ -2882,14 +2882,6 @@ func jitHostCall(ctx *abi.Context) bool {
 	case ssa.GoRefill:
 		// The pool's address, a constant of the code's, which keeps it.
 		return r.jitRefillPool(*(**abi.ObjectPool)(unsafe.Pointer(&ctx.GoArgs[0].Ref)))
-	case ssa.GoStore:
-		// A cell holding a value -- a property's, a global binding's, a
-		// captured binding's -- which what native code read keeps alive,
-		// and the value, which its source keeps: stored as Go stores,
-		// with its write barrier.
-		cell := *(**Value)(unsafe.Pointer(&ctx.GoArgs[1].Ref))
-		*cell = jitGoArg(ctx, 0)
-		return true
 	case ssa.GoCall:
 		return r.jitGoCall(ctx)
 	case ssa.GoCells:
@@ -3010,33 +3002,6 @@ func jitHostCall(ctx *abi.Context) bool {
 			ctx.GoArgs[0].Num = math.Float64bits(v)
 		}
 		return ok
-	case ssa.GoTake:
-		// The pool's address, a constant of the code's, which keeps it;
-		// the call's checks found an object in it, made for the
-		// prototype they checked. Native code takes it so while the
-		// collector does not mark (mir's poolTake).
-		pool := *(**abi.ObjectPool)(unsafe.Pointer(&ctx.GoArgs[0].Ref))
-		if pool.Count == 0 {
-			return false
-		}
-		pool.Count--
-		o := (*Object)(pool.Objects[pool.Count])
-		pool.Objects[pool.Count] = nil
-		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = Obj(o)
-		return true
-	case ssa.GoAddAlong:
-		// The object, whose shape, extensibility, prototypes and room the
-		// code checked, and the shape its transition leads to, which the
-		// code keeps: the entry appended in the room, as native code
-		// appends it while the collector does not mark (mir's addAlong).
-		o := *(**Object)(unsafe.Pointer(&ctx.GoArgs[0].Ref))
-		next := *(**shape)(unsafe.Pointer(&ctx.GoArgs[1].Ref))
-		if len(o.vals) == cap(o.vals) {
-			return false
-		}
-		o.vals = append(o.vals, jitGoArg(ctx, 2))
-		o.shape = next
-		return true
 	case ssa.GoPoll:
 		// A debugger's interrupt may stop and show the frames, which the
 		// exit makes; stress (QJS_JIT_STRESS's budget) wants the exits.
@@ -3188,15 +3153,11 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 	r.stackTop, r.stackHigh = sp, max(r.stackHigh, sp)
 	step := in.Op == bytecode.OpIterNextOrJump || in.Op == bytecode.OpIterStep || in.Op == bytecode.OpForOfStart || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpSuperCall
 	prop := in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
-	marking := ctx.GoOp&abi.GoOpMarking != 0
-	if !marking {
-		// A call made through Go only because the collector marks costs
-		// the code nothing it chose (abi.GoOpMarking). A loop's step Go
-		// makes costs what any call of Go does: a loop of them, over a Map
-		// or a generator, whose body does little, the tree tier runs (one
-		// over an array native code steps itself, and calls nothing).
-		e.ssaStats.goCalls++
-	}
+	// A loop's step Go makes costs what any call of Go does: a loop of
+	// them, over a Map or a generator, whose body does little, the tree
+	// tier runs (one over an array native code steps itself, and calls
+	// nothing).
+	e.ssaStats.goCalls++
 	s.goCalls++
 	if !step && !prop && jitCallUnsettled(e, pc, in) {
 		r.jitCallSeen(f, e, pc, sp, in)
@@ -3208,8 +3169,8 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 	if !run.pinned {
 		r.jitGoPin(idx)
 	}
-	goCallDepth, goCallMarking := s.goCallDepth, s.goCallMarking
-	s.goCallDepth, s.goCallMarking = r.frameDepth+1, marking
+	goCallDepth := s.goCallDepth
+	s.goCallDepth = r.frameDepth + 1
 	var v Value
 	var err error
 	switch {
@@ -3226,16 +3187,14 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 		// A derived constructor's super(...) (abi.GoCallSuper), on the
 		// code's frame, as executeAt's case makes it: the this it binds.
 		// Its first operand, the frame's this slot, is the binding's.
-		if !marking {
-			r.jitSuperSeen(f, e, pc)
-		}
+		r.jitSuperSeen(f, e, pc)
 		if err = r.jitSuperCall(f, slices.Clone(r.stack[sp-n+1:sp])); err == nil {
 			v = f.this
 		}
 	default:
 		v, err = r.jitCallMade(in, sp)
 	}
-	s.goCallDepth, s.goCallMarking = goCallDepth, goCallMarking
+	s.goCallDepth = goCallDepth
 	jitClearArgs(r.stack, top, sp)
 	r.stackTop = top
 	s.ssaCtx = last
@@ -3769,27 +3728,20 @@ framed:
 	}
 	sp := top + n
 	r.stackTop, r.stackHigh = sp, max(r.stackHigh, sp)
-	marking := ctx.GoOp&abi.GoOpMarking != 0
-	if !marking {
-		e.ssaStats.goCalls++
-	}
+	e.ssaStats.goCalls++
 	s.goCalls++
 	prop := in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 	if in.Op != bytecode.OpIterNextOrJump && in.Op != bytecode.OpIterStep && in.Op != bytecode.OpForOfStart && in.Op != bytecode.OpTypeOf && in.Op != bytecode.OpInstanceOf && in.Op != bytecode.OpSuperCall && !prop && jitCallUnsettled(e, pc, in) {
 		r.jitCallSeen(f, e, pc, sp, in)
 	}
-	if !marking {
-		// As at a run's own level, a call made through Go only because the
-		// collector marks is not the code's.
-		r.jitCalleeProfit(e, serial, pc)
-	}
+	r.jitCalleeProfit(e, serial, pc)
 	last, shared := s.ssaCtx, s.ssaSharedGen
 	// What the call runs natively runs in contexts past the levels', which
 	// hold their state until they go on.
 	ctxTop := s.ctxTop
 	s.ctxTop = max(ctxTop, idx+1)
-	goCallDepth, goCallMarking := s.goCallDepth, s.goCallMarking
-	s.goCallDepth, s.goCallMarking = r.frameDepth+1, marking
+	goCallDepth := s.goCallDepth
+	s.goCallDepth = r.frameDepth + 1
 	var v Value
 	var err error
 	if prop {
@@ -3815,9 +3767,7 @@ framed:
 			} else {
 				f.thisRef = &thisBinding{value: f.this}
 			}
-			if !marking {
-				r.jitSuperSeen(f, e, pc)
-			}
+			r.jitSuperSeen(f, e, pc)
 			if err = r.jitSuperCall(f, slices.Clone(r.stack[sp-n+1:sp])); err == nil {
 				// The level's binding, its context's This, which an exit
 				// does not write (ir.Program's This, a snapshot): the frame
@@ -3829,15 +3779,13 @@ framed:
 	} else {
 		v, err = r.jitCallMade(in, sp)
 	}
-	s.goCallDepth, s.goCallMarking = goCallDepth, goCallMarking
+	s.goCallDepth = goCallDepth
 	s.ctxTop = ctxTop
 	jitClearArgs(r.stack, top, sp)
 	r.stackTop = top
 	r.frameDepth = depthBefore
 	s.ssaCtx = last
-	if !marking {
-		s.goMark = jitGoMark{serial: serial, edges: r.backEdges - s.pollCredit, hint: e.hint, pc: pc}
-	}
+	s.goMark = jitGoMark{serial: serial, edges: r.backEdges - s.pollCredit, hint: e.hint, pc: pc}
 	if s.ssaSharedGen != shared {
 		// What the call ran shared other values with the contexts past
 		// the run's, which its levels' calls run in.
@@ -3921,7 +3869,7 @@ func (r *Runtime) jitCalleeProfit(e *jitEntry, serial uint64, pc int) {
 		st.calleeWork += uint64(pc - m.pc)
 	}
 	st.calleeGoCalls++
-	if st.calleeGoCalls%jitSSAProbe != 0 || st.calleeGoCalls <= e.link.in || jitMarking() {
+	if st.calleeGoCalls%jitSSAProbe != 0 || st.calleeGoCalls <= e.link.in {
 		return
 	}
 	if st.calleeWork < (st.calleeGoCalls-e.link.in)*jitSSAMinWork {
@@ -4231,22 +4179,11 @@ func jitGoArg(ctx *abi.Context, i int) Value {
 	return *(*Value)(unsafe.Pointer(&ctx.GoArgs[i]))
 }
 
-// jitMarking reports whether the collector marks (jit.Marking): a
-// variable, which the tests set.
-var jitMarking = jit.Marking
-
 // jitInlineLeft counts an exit from the callee inlined at pc, or from its
 // call's checks: after jitInlineExits the call is not inlined but made
 // natively, if the callee's code allows it, and the code is compiled
-// again. An exit while the collector marks is not counted: native code had
-// left then wherever it would store a pointer without a write barrier --
-// a construction's receiver adding its properties, which Go now does for
-// it -- and sixteen such exits in one collection had EarleyBoyer's sc_Pair
-// constructions stop being inlined for good, some runs in three.
+// again.
 func (r *Runtime) jitInlineLeft(e *jitEntry, pc int) {
-	if jitMarking() {
-		return
-	}
 	for i := range e.inlines {
 		if x := &e.inlines[i]; int(x.pc) == pc && !slices.Contains(e.notInline, x.pc) {
 			if x.exits++; x.exits >= jitInlineExits {
@@ -7036,10 +6973,8 @@ type jitSSAStats struct {
 	// its calls in (jitLink's in) were last counted from 0.
 	calleeGoCalls, calleeWork uint64
 	// judged is how many stretches, calls of Go included, there had been
-	// when jitSSAProfit last judged the code, and marked the entries for
-	// native calls Go made while the collector marked, which it does not
-	// judge it by: runs of the code, counted among its entries all the same.
-	judged, marked uint64
+	// when jitSSAProfit last judged the code.
+	judged uint64
 	// workBase and stretchBase are work and the stretches when Go last
 	// began entering the code again (jitRetrySlow): it is judged by what
 	// it has done since.
@@ -7073,30 +7008,6 @@ const (
 // a loop's mean length for each back-edge taken natively.
 func (r *Runtime) jitSSAProfit(e *jitEntry, f *frame, ctx *abi.Context, start, edges int) {
 	st := &e.ssaStats
-	if s := r.jit; s.goCallMarking && r.frameDepth == s.goCallDepth && r.frameAt(r.frameDepth-1) == f {
-		// Entered for a native call Go made only because the collector
-		// marks (abi.GoOpMarking), which native code would have made
-		// itself: a stretch whose calls Go makes as well, for the same
-		// reason, says nothing of the code, as its exits do not (below).
-		// Each call of a recursion so made, the marking long, judged its
-		// callee slow on its leaves -- AWFY's Towers' moveDisks, Go
-		// entering it no more, its recursion in the tree tier from then on.
-		st.marked++
-		return
-	}
-	if ctx.ExitMarking != 0 {
-		// A stretch the collector's marking ended -- at a native call Go
-		// cannot make for it (mir's markingCall) -- says nothing
-		// of the code, as its exits do not elsewhere (jitInlineLeft,
-		// jitUnwound): through a long marking every iteration left, and
-		// Go stopped entering the code for good, nothing learned to
-		// compile it again for. Any other exit then counts: one that left
-		// for Go anyway, while the collector happened to mark, is the
-		// code's.
-		st.entries--
-		r.jit.markingExits++
-		return
-	}
 	work := uint64(0)
 	if back := edges - (r.backEdges - r.jit.pollCredit); back > 0 {
 		work = uint64(back) * uint64(e.ssaLoop)
@@ -7117,7 +7028,7 @@ func (r *Runtime) jitSSAProfit(e *jitEntry, f *frame, ctx *abi.Context, start, e
 	// them. Judged every jitSSAProbe entries, a function entered a few
 	// times, each a loop of a hundred thousand calls of built-ins --
 	// RegExp's run blocks -- was never judged.
-	stretches := st.entries - st.marked + st.goCalls
+	stretches := st.entries + st.goCalls
 	if stretches-st.judged < jitSSAProbe {
 		return
 	}
@@ -7145,7 +7056,7 @@ func jitRetrySlow(e *jitEntry) {
 	st := &e.ssaStats
 	e.entrySlow = false
 	e.slowSince, e.slowBackoff = e.slowCalls, min(e.slowBackoff+1, jitNativeBackoffs)
-	st.judged = st.entries - st.marked + st.goCalls
+	st.judged = st.entries + st.goCalls
 	st.workBase, st.stretchBase = st.work, st.judged
 }
 
@@ -7320,7 +7231,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 		// What Go has run since the last entry may have changed the frame, how
 		// deep calls are, or the scope.
 		s.ssaCtx = ctx
-		ctx.ReturnTo, ctx.Live, ctx.TailReturn, ctx.ExitMarking = 0, 0, 0, 0
+		ctx.ReturnTo, ctx.Live, ctx.TailReturn = 0, 0, 0
 		r.jitShareContexts(idx, f)
 		ctx.Locals = unsafe.Pointer(unsafe.SliceData(f.locals))
 		ctx.Stack = unsafe.Pointer(&r.stack[f.base])
@@ -7399,13 +7310,6 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			// reads.
 			jit.ExpandCall(s.ssaCtxs[k])
 			k++
-		}
-		if c := s.ssaCtxs[k]; k != idx && c.ExitMarking != 0 {
-			// A native callee's exit the collector's marking made ends
-			// this run's stretch for it, as this code's own would
-			// (jitSSAProfit); its context, which Go does not enter, is
-			// cleared of it here.
-			c.ExitMarking, ctx.ExitMarking = 0, 1
 		}
 		if c := s.ssaCtxs[k]; c.ExitKind == abi.ExitTable {
 			// Asked here, not in Apply: a return, the most common way
@@ -8529,12 +8433,8 @@ const (
 // for code compiled again would be the same: RayTrace's getReflectionRay,
 // constructing with a forwarding constructor its code leaves to Go, and
 // wrapUp, whose remainder of fractions Go computes, were compiled three
-// times more each for nothing. Nor is one counted while the collector
-// marks (jitInlineLeft).
+// times more each for nothing.
 func (r *Runtime) jitUnwound(e *jitEntry) {
-	if jitMarking() {
-		return
-	}
 	if e.nativeOut++; e.nativeOut%jitUnwindProbe != 0 || e.nativeOut*jitUnwindShare <= e.link.in {
 		return
 	}

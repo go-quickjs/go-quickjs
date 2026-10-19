@@ -596,10 +596,7 @@ type jitState struct {
 	// goCallDepth is the depth of the frame of the callee of a call Go
 	// makes for native code (jitGoCall, jitGoCallNested), while it makes
 	// it: native code's call, not the existing tiers' (jitHotWork).
-	// goCallMarking is whether Go makes it only because the collector
-	// marks (abi.GoOpMarking).
-	goCallDepth   int
-	goCallMarking bool
+	goCallDepth int
 	// arena holds the code of every entry: a few mappings, however many
 	// functions the runtime compiles.
 	arena *jit.Arena
@@ -743,9 +740,6 @@ type jitState struct {
 	// exitScratch is what exits that leave their frames to Go are read
 	// into (jit.ExitScratch).
 	exitScratch jit.ExitScratch
-	// markingExits counts the exits the collector's marking made
-	// (abi.Context.ExitMarking), a native callee's included.
-	markingExits uint64
 	// scans counts the cache's looks for what to reclaim (makeRoom), serial
 	// the entries made, evicted those dropped to make room, refusedRoom
 	// the times there was none to be made, and discarded the compiles
@@ -1806,14 +1800,6 @@ func (r *Runtime) jitOn() bool { return r.jitEnabled }
 
 // tryJITFrame is the call path's hook, for a runtime that runs the JIT.
 func (r *Runtime) tryJITFrame(f *frame) (Value, error, bool) {
-	if r.jitMarkingCallee() {
-		// By its function, not only its closure's hint: code compiled for
-		// native callers alone, a function Go's own lowering refused, has
-		// none until something asks.
-		if e := r.jitEntryOf(f.cl); e != nil && e.ssa != nil && !e.invalid {
-			return r.runSSA(f, e, 0, 0)
-		}
-	}
 	if f.cl.jitRefused {
 		return Undefined, nil, false
 	}
@@ -1853,21 +1839,6 @@ func (r *Runtime) tryJITFrame(f *frame) (Value, error, bool) {
 		return Undefined, nil, false
 	}
 	return r.tryJITAt(f, 0, 0, false, false)
-}
-
-// jitMarkingCallee reports whether the frame Go is entering is the callee
-// of a native call Go makes only because the collector marks
-// (abi.GoOpMarking): native code would have called it natively, and Go
-// enters its code (tryJITFrame) -- judged slow at Go's entries or not
-// (entrySlow), compiled for native callers alone or not, as a native
-// callee's code is entered: its stretch says nothing of the code
-// (jitSSAProfit), and run in the existing tiers it ran its callees there
-// too. A long marking had sent AWFY DeltaBlue's constructions, made
-// natively but for it, into the tree tier, a constructor's super(),
-// Strength.of and its dictionary's lookup with it.
-func (r *Runtime) jitMarkingCallee() bool {
-	s := r.jit
-	return s != nil && s.goCallMarking && r.frameDepth == s.goCallDepth
 }
 
 // jitBackEdge is executeAt's interrupted block in a build with the JIT: the

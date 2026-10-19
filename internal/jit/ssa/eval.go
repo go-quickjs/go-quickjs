@@ -335,11 +335,6 @@ type Heap struct {
 	// Holders are the prototypes objects may have, by address (Object's
 	// Proto, Holder's Object).
 	Holders map[uintptr]*Object
-	// WriteBarrier is the collector's write-barrier flag, which leaves a
-	// store that changes a reference to Go while it is set, unless StoreRef
-	// says the code stores it with Go's write barrier (abi.Encoding's
-	// StoreRef).
-	WriteBarrier, StoreRef bool
 	// Address is an object's address, which OpSameObject compares; nil if
 	// no object is any particular one.
 	Address func(object int) uintptr
@@ -822,17 +817,14 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 					// nor to tell a write's cases by.
 					return ir.Exit{}, fmt.Errorf("%w: a property added", ErrUnsupported)
 				}
-				// Any value, unless it changes a reference while the
-				// collector marks, or the cell is one a live reference was
-				// loaded from (storeChecks).
+				// Any value, unless the cell is one a live reference was
+				// loaded from (storeChecks): the collector marking or not,
+				// native code stores it, with Go's write barrier then.
 				o, i := heap.property(&heap.Objects[a.p], v)
 				if i < 0 || i >= len(o.Props) {
 					return exit(v.State, ir.ExitKind(v.Aux))
 				}
 				x := b.t
-				if heap.WriteBarrier && !heap.StoreRef && (isReference(x) || isReference(o.Props[i])) {
-					return exit(v.State, ir.ExitKind(v.Aux))
-				}
 				for _, s := range v.Args[2:] {
 					if vals[s.ID].cell == &o.Props[i] && isReference(o.Props[i]) {
 						return exit(v.State, ir.ExitKind(v.Aux))
@@ -897,20 +889,7 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 			case OpLoadCell:
 				vals[v.ID] = val{t: *a.cell}
 			case OpKeep:
-				// The value's source while the collector marks, unless the
-				// code stores references then, else a copy.
-				if heap.WriteBarrier && !heap.StoreRef {
-					x := v.Args[0]
-					switch o := origin.At(x); {
-					case x.Shadow != nil:
-						vals[v.ID] = vals[x.Shadow.ID]
-					case o >= 0:
-						vals[v.ID] = val{i: uint32(int32(o))}
-					default:
-						vals[v.ID] = val{i: uint32(0xFFFFFFFF)}
-					}
-					break
-				}
+				// A copy, the collector marking or not.
 				keep[v.Index] = a.t
 				vals[v.ID] = val{cell: &keep[v.Index]}
 			case OpKept:

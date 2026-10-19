@@ -426,12 +426,13 @@ type Context struct {
 	GoState uintptr
 	GoArgs  [MaxGoArgs]GoArg
 	Host    unsafe.Pointer
-	// ExitMarking is 1 when the exit was the collector's marking's: a
-	// native call or a pool's object, which take no pointer while it
-	// marks, in code that calls no Go, or a native call with more operands
-	// than GoArgs holds; Go makes the others while it marks (GoOpMarking).
-	// Go clears it before each entry.
-	ExitMarking uint64
+	// Shade is where native code stores a pointer through Go's write
+	// barrier (Encoding's StoreRef) only to shade it, while the collector
+	// marks: a pointer it holds where the collector does not look -- a
+	// call in tail position's operands, in GoArgs, as it rewrites the
+	// frame they came from -- is so seen whatever the collector has
+	// scanned. It holds the last such pointer, which it keeps alive.
+	Shade unsafe.Pointer
 	// TailFrame is 1 when the frame is one the interpreter gives up for a
 	// call in tail position -- no construction's, no arrow's sharing a
 	// derived constructor's this -- and 0 otherwise: Go sets it, with
@@ -760,9 +761,9 @@ var (
 	OffGoSite   = int32(unsafe.Offsetof(Context{}.GoSite))
 	OffGoArgs   = int32(unsafe.Offsetof(Context{}.GoArgs))
 
-	OffExitMarking = int32(unsafe.Offsetof(Context{}.ExitMarking))
-	OffCallState   = int32(unsafe.Offsetof(Context{}.CallState))
-	OffGoState     = int32(unsafe.Offsetof(Context{}.GoState))
+	OffShade     = int32(unsafe.Offsetof(Context{}.Shade))
+	OffCallState = int32(unsafe.Offsetof(Context{}.CallState))
+	OffGoState   = int32(unsafe.Offsetof(Context{}.GoState))
 )
 
 // ObjectPool is the objects a construction site native code makes, `new
@@ -1012,8 +1013,8 @@ type Encoding struct {
 	// function the code's Go caller called, and stores with Go's write
 	// barrier. Its inputs are amd64's RAX (the word's address), RCX (the
 	// pointer) and R11 (where to go on), arm64's R15, R17 and R16; it keeps
-	// only the context's register and arm64's link register. 0 when the
-	// code may not call it: a store then calls Go (CallGo).
+	// only the context's register and arm64's link register. Code is
+	// compiled only where it is set.
 	StoreRef uint64
 	// Round says native code may round a double to an integer, as
 	// Math.floor, Math.ceil, Math.trunc and Math.round do: always on arm64,
@@ -1078,12 +1079,6 @@ func IsNumber(word uint64) bool { return word < NumberLimit }
 // (GoCallInstanceOf), of its two, the object and the constructor; or a
 // derived constructor's super(...) (GoCallSuper), of the frame's this
 // slot, unbound or not, then its arguments, the result the this it binds.
-// GoOpMarking
-// marks a call native code makes through Go only because the collector
-// marks -- a native call's, whose setup would store pointers without a
-// write barrier: Go makes it, and does not count it against the code's
-// profit, as it does not count an exit the marking made (ExitMarking).
-//
 // GoClosurePool is the kind of a closure's (ssa.GoClosure) whose native
 // code takes it from a pool, the pool's address the first operand's
 // pointer word: Go makes it, as it makes any, and fills the pool again if
@@ -1109,5 +1104,4 @@ const (
 	GoCallInstanceOf = 9
 	GoCallSuper      = 10
 	GoClosurePool    = 1
-	GoOpMarking      = 1 << 24
 )

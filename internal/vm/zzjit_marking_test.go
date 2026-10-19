@@ -20,8 +20,6 @@ func TestJITResumesWhileMarking(t *testing.T) {
 	}
 	flag := jitMarkingForTest(t)
 	*flag = 0
-	defer func(was func() bool) { jitMarking = was }(jitMarking)
-	jitMarking = func() bool { return *flag != 0 }
 	setup := `
 		function c(x) { if (typeof x === 'string') mark(); return x * 2 }
 		function b(x) { let s = 0; for (let j = 0; j < 2; j++) s += c(x); return s }

@@ -340,6 +340,17 @@ closure's captured cells, the arguments in an entry's cells -- and a
 value pushed or popped go through it too. A loop's step copies an
 array's element with no barrier: the element stays in the array.
 
+What native code holds where the collector does not look while it
+rewrites what the value came from -- a call in tail position's operands,
+read into `GoArgs` before the frame is written over -- it shades first,
+storing each pointer through `storeRef` into the context's `Shade`, so
+that a collector scanning the frame midway misses none. An exit's records
+are the one thing native code leaves to Go while the collector marks
+(`recordsTail`): read into `GoArgs` in one pass and written in a second,
+they would need the same, at an exit, where Go is called anyway. Nothing
+else is Go's for the marking's sake, and nothing leaves native code for
+it: code is compiled only with `storeRef` (`abi.Encoding.StoreRef`).
+
 ## The execution boundary
 
 **Entry.** `enterSSA` is `NOSPLIT|NOFRAME`. It tail-jumps into the code with

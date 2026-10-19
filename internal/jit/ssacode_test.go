@@ -647,7 +647,7 @@ func (h testHeap) native() *nativeHeap {
 // heap is what the SSA evaluator reads: views of the arrays' cells, and the
 // objects' shapes with its own copy of their property words.
 func (n *nativeHeap) heap() ssa.Heap {
-	h := ssa.Heap{Arrays: n.views(), Word: testWordValue, Holders: map[uintptr]*ssa.Object{}, WriteBarrier: testBarrier != 0, StoreRef: testEncoding.StoreRef != 0, Mega: n.mega}
+	h := ssa.Heap{Arrays: n.views(), Word: testWordValue, Holders: map[uintptr]*ssa.Object{}, Mega: n.mega}
 	h.Accessors = map[*ir.Value]ssa.Accessor{}
 	for i := range testHolders {
 		o := &testHolders[i]
