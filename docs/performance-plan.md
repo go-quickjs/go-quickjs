@@ -764,7 +764,9 @@ faster: its loss is its steady state's.
   or less: DeltaBlue 12,000, CD 21,000, Havlak 65,000, Storage 50,000
   (marking stages 3 and 4). The element stores were all into holes inside
   the length; native code makes them now (mir's storeCell, Storage -20%,
-  Havlak -5%).
+  Havlak -5%), and native callees take their cells from their function's
+  pool (mir's cellsTake, Havlak -5%, NBody -4%, DeltaBlue -2.5%).
+  Havlak's closures are next.
 - **The `in` operator** is an opcode the JIT does not compile: a function
   with `k in o` anywhere is refused whole (found 2026-10-19 by a test).
 - **Compiling in the background, last.** V8 compiles on a thread of its

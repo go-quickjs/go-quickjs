@@ -3393,6 +3393,21 @@ func (c *a64Compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(arm64.
 		c.a.Bind(join)
 		return
 	}
+	if site.Go == ssa.GoCells && site.Pool != 0 {
+		// As amd64's: natively from the function's pool where it can be,
+		// by Go otherwise.
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		c.cellsTake(site, slow)
+		c.a.Load(a64A, a64Ctx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
+		c.setG(v, a64A)
+		c.a.B(join)
+		c.a.Bind(slow)
+		c.movImm(a64A, uint64(site.Pool))
+		c.a.Store(a64Ctx, abi.OffGoArgs+c.enc.RefOffset, a64A)
+		c.goCallOp(v, goOpWord(site), false)
+		c.a.Bind(join)
+		return
+	}
 	if site.Go == ssa.GoClose && !c.f.Cells {
 		// As amd64's: only while closures have captured the frame's locals,
 		// in code whose captured locals are in its frame.
@@ -3408,6 +3423,43 @@ func (c *a64Compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(arm64.
 
 // closureTake is amd64's: a closure taken from its pool, its captured
 // bindings' cells and an arrow's this written. It uses A, B and C.
+// cellsTake is amd64's: an entry's cells from the function's pool, where
+// the collector does not mark and the context is a native call's. It uses
+// A, B and C.
+func (c *a64Compiler) cellsTake(site *ssa.CallSite, slow arm64.Label) {
+	c.movImm(a64A, c.enc.WriteBarrier)
+	c.a.LoadU8(a64A, a64A, 0)
+	c.a.Cbnz(a64A, slow, false)
+	c.a.Load(a64A, a64Ctx, abi.OffLive)
+	c.a.CmpImm(a64A, abi.LiveCall, true)
+	c.a.BCond(arm64.NE, slow)
+	c.movImm(a64A, uint64(site.Pool))
+	c.a.Load(a64B, a64A, abi.OffPoolCount)
+	c.a.Cbz(a64B, slow, true)
+	c.a.AddImm(a64B, a64B, -1, true)
+	c.a.Store(a64A, abi.OffPoolCount, a64B)
+	c.a.ShiftImm(arm64.Lsl, a64B, a64B, 3, true)
+	c.a.Op(arm64.Add, a64B, a64B, a64A, true)
+	c.a.Load(a64C, a64B, abi.OffPoolObjects)
+	c.a.Store(a64B, abi.OffPoolObjects, arm64.ZR)
+	c.a.Store(a64Ctx, abi.OffCells, a64C)
+	vs, n := c.enc.ValueSize, int32(len(site.Captures))
+	for k, x := range site.Captures {
+		at := 8*n + int32(k)*c.enc.UpvalueSize + c.enc.UpvalueClosed
+		if x&1 == 0 {
+			c.movImm(a64A, c.enc.Undefined)
+			c.a.Store(a64C, at+c.enc.NumOffset, a64A)
+			c.a.Store(a64C, at+c.enc.RefOffset, arm64.ZR)
+			continue
+		}
+		slot := x >> 1
+		c.a.Load(a64A, a64Locals, slot*vs+c.enc.NumOffset)
+		c.a.Store(a64C, at+c.enc.NumOffset, a64A)
+		c.a.Load(a64A, a64Locals, slot*vs+c.enc.RefOffset)
+		c.a.Store(a64C, at+c.enc.RefOffset, a64A)
+	}
+}
+
 func (c *a64Compiler) closureTake(v *ssa.Value, site *ssa.CallSite, slow arm64.Label) {
 	c.movImm(a64A, c.enc.WriteBarrier)
 	c.a.LoadU8(a64A, a64A, 0)

@@ -791,6 +791,9 @@ type ObjectPool struct {
 	// code allocates a holey array of a length it checks; both are 0 in
 	// any other pool.
 	Room, Want uint64
+	// Cells, for a pool of a function's cells (ssa.GoCells), is how many
+	// each block has (Encoding's UpvalueSize); 0 in any other pool.
+	Cells uint64
 }
 
 // PoolSize is how many objects an ObjectPool is filled with at first, and
@@ -959,8 +962,12 @@ type Encoding struct {
 	Symbol uint64
 
 	// UpvalueSlot is the offset, in a captured binding's cell, of the
-	// pointer to its value (Context.Upvalues).
-	UpvalueSlot int32
+	// pointer to its value (Context.Upvalues); UpvalueClosed of the value
+	// a cell holds itself, where the pointer of a cell of its own points,
+	// and UpvalueSize a cell's size: a block of n cells native code takes
+	// from a pool (ssa.GoCells) is the n pointers to them, then the n
+	// cells, linked.
+	UpvalueSlot, UpvalueClosed, UpvalueSize int32
 
 	// Math.random's cache (ssa.OpRandomF64): RandomCount is the offset of
 	// how many numbers are left in it, an int64, and RandomNumbers of the
@@ -1080,7 +1087,8 @@ func IsNumber(word uint64) bool { return word < NumberLimit }
 // GoClosurePool is the kind of a closure's (ssa.GoClosure) whose native
 // code takes it from a pool, the pool's address the first operand's
 // pointer word: Go makes it, as it makes any, and fills the pool again if
-// it ran out.
+// it ran out. An entry's cells (ssa.GoCells) taken from a pool are of the
+// same kind.
 //
 // GoOpIndexShift is where a closure's (ssa.GoClosure) is the index of its
 // function's constant, a scope's end's (ssa.GoClose) the first local it

@@ -356,6 +356,9 @@ type jitEntry struct {
 	// which the code leaves at (jitDefineSeen).
 	literals     []jitLiteral
 	definesUnfed []int32
+	// cellsPool is the pool the code takes its captured locals' cells
+	// from at its entries, kept across compiles (jitFeedback.CellsPool).
+	cellsPool *abi.ObjectPool
 	// ssaCells are the cells the code reads string constants from
 	// (jitFeedback.StringCell).
 	ssaCells []*Value
@@ -879,6 +882,7 @@ func (e *jitEntry) learnedBytes() int {
 	for i := range e.literals {
 		n += jitPoolBytes(e.literals[i].pool)
 	}
+	n += jitPoolBytes(e.cellsPool)
 	for _, calls := range [2][]jitInline{e.inlines, e.nativeCalls} {
 		for i := range calls {
 			n += jitPoolBytes(calls[i].pool)
@@ -894,6 +898,10 @@ func jitPoolBytes(pool *abi.ObjectPool) int {
 		return 0
 	}
 	n := jitPoolFixed
+	if pool.Cells != 0 {
+		// A function's cells (jitFillCells): the pointers, then the cells.
+		return n + int(pool.Size)*int(pool.Cells)*(8+int(unsafe.Sizeof(upvalue{})))
+	}
 	if src := (*jitPoolSource)(pool.Source); src != nil && src.tmpl.template() != nil {
 		// A closure's functions (jitFillClosures): an arrow's object, its
 		// extra beside it, the most a function's is, and its cells.

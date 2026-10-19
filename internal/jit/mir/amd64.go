@@ -1308,6 +1308,20 @@ func (c *compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(amd64.Con
 		c.a.Bind(join)
 		return
 	}
+	if site.Go == ssa.GoCells && site.Pool != 0 {
+		// Natively from the function's pool where it can be (cellsTake),
+		// by Go otherwise, which fills the pool again.
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		c.cellsTake(site, slow)
+		c.a.Load(scratchA, regCtx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
+		c.setG(v, scratchA)
+		c.a.Jmp(join)
+		c.a.Bind(slow)
+		c.storeImm(regCtx, abi.OffGoArgs+c.enc.RefOffset, uint64(site.Pool), scratchA)
+		c.goCallOp(v, goOpWord(site), guard, false)
+		c.a.Bind(join)
+		return
+	}
 	if site.Go == ssa.GoClose && !c.f.Cells {
 		// Only while closures have captured the frame's locals
 		// (abi.Context's Open): its result nothing reads. Code whose
@@ -1392,6 +1406,52 @@ func (c *compiler) closureTake(v *ssa.Value, site *ssa.CallSite, slow amd64.Labe
 			c.a.Load(scratchA, regCtx, abi.OffThis+w)
 			c.a.Store(scratchB, c.enc.ExtraLexThis+w, scratchA)
 		}
+	}
+}
+
+// cellsTake makes an entry's cells (ssa.GoCells) natively, as V8's code
+// allocates a function's context: where the collector does not mark, the
+// context is a native call's (abi.Context's Live) -- the frame Go entered
+// the code with has its cells open on its slots, which Go makes -- and
+// the pool has a block, its next, linked when Go made it, is the context's
+// Cells, each cell holding its argument or undefined (CallSite's
+// Captures), as the VM's jitMakeCells makes them. Anything else goes to
+// slow, where Go makes them. Each entry of such code had been a call of
+// Go: two million a run in AWFY's Havlak, 260,000 in DeltaBlue. It uses
+// every scratch register.
+func (c *compiler) cellsTake(site *ssa.CallSite, slow amd64.Label) {
+	c.movImm(scratchA, c.enc.WriteBarrier)
+	c.a.LoadU8(scratchA, scratchA, 0)
+	c.a.Op(amd64.Test, scratchA, scratchA, false)
+	c.a.Jcc(amd64.CondNE, slow)
+	c.a.Load(scratchA, regCtx, abi.OffLive)
+	c.a.OpImm(amd64.Cmp, scratchA, abi.LiveCall, true)
+	c.a.Jcc(amd64.CondNE, slow)
+	c.movImm(scratchA, uint64(site.Pool))
+	c.a.Load(scratchB, scratchA, abi.OffPoolCount)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	c.a.Jcc(amd64.CondE, slow)
+	// The pool's last block, its cell cleared.
+	c.a.OpImm(amd64.Sub, scratchB, 1, true)
+	c.a.Store(scratchA, abi.OffPoolCount, scratchB)
+	c.a.ShiftImm(amd64.Shl, scratchB, 3, true)
+	c.a.Op(amd64.Add, scratchB, scratchA, true)
+	c.a.Load(scratchC, scratchB, abi.OffPoolObjects)
+	c.storeImm(scratchB, abi.OffPoolObjects, 0, scratchA)
+	c.a.Store(regCtx, abi.OffCells, scratchC)
+	vs, n := c.enc.ValueSize, int32(len(site.Captures))
+	for k, x := range site.Captures {
+		at := 8*n + int32(k)*c.enc.UpvalueSize + c.enc.UpvalueClosed
+		if x&1 == 0 {
+			c.storeImm(scratchC, at+c.enc.NumOffset, c.enc.Undefined, scratchA)
+			c.storeImm(scratchC, at+c.enc.RefOffset, 0, scratchA)
+			continue
+		}
+		slot := x >> 1
+		c.a.Load(scratchA, regLocals, slot*vs+c.enc.NumOffset)
+		c.a.Store(scratchC, at+c.enc.NumOffset, scratchA)
+		c.a.Load(scratchA, regLocals, slot*vs+c.enc.RefOffset)
+		c.a.Store(scratchC, at+c.enc.RefOffset, scratchA)
 	}
 }
 

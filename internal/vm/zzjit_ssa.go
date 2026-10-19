@@ -47,6 +47,8 @@ var jitEncoding = abi.Encoding{
 	UndefinedCell: uint64(uintptr(unsafe.Pointer(&jitUndefinedCell))),
 	Object:        objectBits,
 	UpvalueSlot:   int32(unsafe.Offsetof(upvalue{}.slot)),
+	UpvalueClosed: int32(unsafe.Offsetof(upvalue{}.closed)),
+	UpvalueSize:   int32(unsafe.Sizeof(upvalue{})),
 	RandomCount:   int32(unsafe.Offsetof(mathRandom{}.count)),
 	RandomNumbers: int32(unsafe.Offsetof(mathRandom{}.numbers)),
 	ObjectShape:   int32(unsafe.Offsetof(Object{}.shape)),
@@ -2891,6 +2893,15 @@ func jitHostCall(ctx *abi.Context) bool {
 	case ssa.GoCall:
 		return r.jitGoCall(ctx)
 	case ssa.GoCells:
+		if ctx.GoOp>>abi.GoOpKindShift&0xff == abi.GoClosurePool {
+			// Cells native code takes from their pool where it can: run
+			// out, filled again, with more.
+			pool := *(**abi.ObjectPool)(unsafe.Pointer(&ctx.GoArgs[0].Ref))
+			if pool.Count == 0 {
+				pool.Size = min(2*max(pool.Size, abi.PoolSize), abi.PoolCapacity)
+				jitFillCells(pool)
+			}
+		}
 		return r.jitMakeCells(ctx)
 	case ssa.GoClosure, ssa.GoClose:
 		// On the frame whose locals are where native code assigns
@@ -3414,6 +3425,56 @@ func jitNewCells(n int) ([]*upvalue, []upvalue) {
 		return x.p[:], x.u[:]
 	}
 	return make([]*upvalue, n), make([]upvalue, n)
+}
+
+// jitFillCells fills pool with Size blocks of its Cells cells, as
+// jitNewCells makes them, each cell's pointer to the value it holds itself
+// (upvalue's closed) and the block's pointers to its cells written, which
+// native code takes at its function's entries and writes the values of
+// (mir's cellsTake).
+func jitFillCells(pool *abi.ObjectPool) {
+	n := int(pool.Cells)
+	for i := range int(pool.Size) {
+		cells, room := jitNewCells(n)
+		for k := range room {
+			room[k].slot = &room[k].closed
+			cells[k] = &room[k]
+		}
+		pool.Objects[i] = unsafe.Pointer(unsafe.SliceData(cells))
+	}
+	pool.Count = pool.Size
+}
+
+// CellsPool is ssa.CellsFeedback's: the pool the function's code takes its
+// captured locals' cells from at its entries (mir's cellsTake), the
+// entry's, made at its first compile and filled, and the cells' locals,
+// |1 a parameter's -- up to four, which one allocation holds
+// (jitNewCells), the block's pointers first.
+func (fb *jitFeedback) CellsPool() (uintptr, []int32, bool) {
+	e, fn := fb.e, fb.fn
+	if e == nil || fb.root != nil || fb.fwd != nil || fb.cl == nil {
+		return 0, nil, false
+	}
+	n := jitCaptured(fn)
+	if n == 0 || n > 4 {
+		return 0, nil, false
+	}
+	cells := make([]int32, 0, n)
+	for slot, l := range fn.Locals {
+		if l.Captured {
+			x := int32(slot) << 1
+			if slot < fn.ParamCount {
+				x |= 1
+			}
+			cells = append(cells, x)
+		}
+	}
+	if e.cellsPool == nil {
+		e.cellsPool = &abi.ObjectPool{Size: abi.PoolSize, Cells: uint64(n)}
+		jitFillCells(e.cellsPool)
+	}
+	fb.keep().pools = append(fb.keep().pools, e.cellsPool)
+	return uintptr(unsafe.Pointer(e.cellsPool)), cells, true
 }
 
 // jitCellsClosure is GoClosure and GoClose for code whose captured locals

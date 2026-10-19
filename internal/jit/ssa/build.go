@@ -395,7 +395,12 @@ type CallSite struct {
 	// native code writes: the code's receiver, its context's (abi.Context's
 	// This), which a native call writes and Go's entry does for such code.
 	// Go makes it while the collector marks or the pool is empty -- and
-	// fills the pool again.
+	// fills the pool again. Of an entry's cells (GoCells) that have a
+	// Pool, it is the cells' locals (CellsFeedback): native code takes a
+	// block of them from the pool, its cells linked, and writes each
+	// cell's value -- the argument, |1, or undefined -- as V8's code
+	// allocates a function's context, where its context is a native
+	// call's; Go makes them otherwise, and fills the pool again.
 	Captures []int32
 	LexThis  bool
 }
@@ -414,6 +419,16 @@ type ClosureSite struct {
 // locals are in cells of their own (ir.Program's Cells).
 type ClosureFeedback interface {
 	Closure(pc int) (ClosureSite, bool)
+}
+
+// CellsFeedback is Feedback that knows where native code takes the cells
+// of code whose captured locals are in cells of their own (ir.Program's
+// Cells) from, at its entries' GoCells: the address of the abi.ObjectPool
+// of the function's cells, which the VM keeps alive, and the cells' locals
+// in order, each slot<<1, |1 a parameter's, whose cell starts with the
+// argument (CallSite's Captures).
+type CellsFeedback interface {
+	CellsPool() (pool uintptr, cells []int32, ok bool)
 }
 
 // AccessorKind is the kind of a call an accessor's read or write makes
@@ -2788,7 +2803,13 @@ func (b *builder) fill(blk *Block) {
 			// exits, refused, to the entry's state.
 			call := f.newValue(blk, OpCall, Tagged)
 			call.Aux, call.State = int(ir.HostExit), blk.Header
-			f.cache(call).Calls, call.Index = []*CallSite{{Go: GoCells, ThisSlot: -1}}, 0
+			site := &CallSite{Go: GoCells, ThisSlot: -1}
+			if fb, ok := b.fb.(CellsFeedback); ok {
+				if pool, cells, ok := fb.CellsPool(); ok {
+					site.Pool, site.Captures = pool, cells
+				}
+			}
+			f.cache(call).Calls, call.Index = []*CallSite{site}, 0
 		}
 		// A captured binding is what its cell holds, which native code
 		// assigns (ir.UpvalueWrite), with its pointer word there.
