@@ -3461,22 +3461,13 @@ func (c *compiler) appendingCall() {
 	c.a.Load(scratchC, regCtx, abi.OffGoArgs+c.enc.RefOffset)
 	c.a.Load(scratchB, scratchC, c.enc.ObjectElems+8)
 	c.a.Op(amd64.Cmp, scratchA, scratchB, true)
+	hole := c.a.NewLabel()
+	c.a.Jcc(amd64.CondB, hole)
 	fail(amd64.CondNE)
 	c.a.Load(scratchB, scratchC, c.enc.ObjectElems+16)
 	c.a.Op(amd64.Cmp, scratchA, scratchB, true)
 	fail(amd64.CondAE)
-	c.a.LoadU8(scratchB, scratchC, c.enc.ObjectClass)
-	c.a.OpImm(amd64.Cmp, scratchB, int32(c.enc.ClassArray), false)
-	fail(amd64.CondNE)
-	c.a.LoadU8(scratchB, scratchC, c.enc.ObjectFlags)
-	want := c.enc.FlagExtensible | c.enc.FlagLengthWritable
-	c.a.OpImm(amd64.And, scratchB, int32(want|c.enc.FlagSparse), false)
-	c.a.OpImm(amd64.Cmp, scratchB, int32(want), false)
-	fail(amd64.CondNE)
-	c.a.Load(scratchB, scratchC, c.enc.ObjectProto)
-	c.cmpWord(scratchB, uint64(protos[0].Object))
-	fail(amd64.CondNE)
-	c.protoGuards(protos, fail)
+	c.arrayGuards(scratchC, protos, fail)
 	// The length one more, then the element at the old one: the address
 	// past it, less a value.
 	c.a.Load(scratchC, regCtx, abi.OffGoArgs+c.enc.RefOffset)
@@ -3494,6 +3485,27 @@ func (c *compiler) appendingCall() {
 	c.storeImm(regCtx, abi.OffGoStatus, 0, scratchB)
 	c.a.Load(scratchA, regCtx, abi.OffGoSite)
 	c.a.JmpReg(scratchA)
+	// A key below the length: a hole, which the number fills as V8's code
+	// stores into a holey array's, where the array may take an append; any
+	// other element Go writes. A hole has no pointer word, nor does the
+	// number: no barrier.
+	c.a.Bind(hole)
+	c.a.Load(scratchB, scratchC, c.enc.ObjectElems)
+	c.a.ShiftImm(amd64.Shl, scratchA, 4, true)
+	c.a.Op(amd64.Add, scratchA, scratchB, true)
+	c.a.Load(scratchB, scratchA, c.enc.NumOffset)
+	c.cmpWord(scratchB, c.enc.Uninitialized)
+	fail(amd64.CondNE)
+	c.a.MovQToX(xScratch1, scratchA)
+	c.arrayGuards(scratchC, protos, fail)
+	c.a.MovQFromX(scratchA, xScratch1)
+	c.a.Load(scratchB, regCtx, abi.OffGoArgs+2*size+c.enc.NumOffset)
+	c.a.MovQToX(xScratch0, scratchB)
+	c.boxF64(xScratch0, scratchB)
+	c.a.Store(scratchA, c.enc.NumOffset, scratchB)
+	c.storeImm(regCtx, abi.OffGoStatus, 0, scratchB)
+	c.a.Load(scratchA, regCtx, abi.OffGoSite)
+	c.a.JmpReg(scratchA)
 	c.a.Bind(toGo)
 	c.storeImm(regCtx, abi.OffGoOp, uint64(ssa.GoElemWrite), scratchA)
 	c.storeImm(regCtx, abi.OffGoKeep, 0, scratchA)
@@ -3501,6 +3513,27 @@ func (c *compiler) appendingCall() {
 		c.saving, c.savingUsed = c.a.NewLabel(), true
 	}
 	c.a.Jmp(c.saving)
+}
+
+// arrayGuards checks that array p may take an element where it has none
+// -- appended at its length, or stored into a hole -- as Go's jitStoreElem
+// would store it: an Array, extensible, its length writable, its elements
+// dense, so that no index is a property of its own, and its prototypes the
+// function's (ssa.Func's ArrayProtos), as they were, holding no element nor
+// index that could intercept the store. It uses scratchA and scratchB.
+func (c *compiler) arrayGuards(p amd64.Reg, protos [2]ssa.Holder, fail func(amd64.Cond)) {
+	c.a.LoadU8(scratchB, p, c.enc.ObjectClass)
+	c.a.OpImm(amd64.Cmp, scratchB, int32(c.enc.ClassArray), false)
+	fail(amd64.CondNE)
+	c.a.LoadU8(scratchB, p, c.enc.ObjectFlags)
+	want := c.enc.FlagExtensible | c.enc.FlagLengthWritable
+	c.a.OpImm(amd64.And, scratchB, int32(want|c.enc.FlagSparse), false)
+	c.a.OpImm(amd64.Cmp, scratchB, int32(want), false)
+	fail(amd64.CondNE)
+	c.a.Load(scratchB, p, c.enc.ObjectProto)
+	c.cmpWord(scratchB, uint64(protos[0].Object))
+	fail(amd64.CondNE)
+	c.protoGuards(protos, fail)
 }
 
 // goSaving calls Go, op, its operands in the context's GoArgs, every
@@ -4933,7 +4966,9 @@ func (c *compiler) elemStore(v *ssa.Value) {
 	c.a.MovQToX(xScratch2, scratchB)
 	// The element's cell, in scratchA.
 	c.index(v.Args[1], fail)
-	c.elementCell(v.Args[0], fail)
+	found := c.a.NewLabel()
+	c.storeCell(v.Args[0], fail, found)
+	c.a.Bind(found)
 	for _, s := range v.Args[3:] {
 		// A live value read from this cell keeps its pointer word there:
 		// unless it is none, a primitive's (storeChecks).
@@ -5152,6 +5187,39 @@ func (c *compiler) elementCell(array *ssa.Value, fail func(amd64.Cond)) {
 	c.a.Load(scratchB, scratchA, c.enc.NumOffset)
 	c.cmpWord(scratchB, c.enc.Uninitialized)
 	fail(amd64.CondE)
+}
+
+// storeCell is elementCell for a store of any value (elemStore): a hole
+// is stored into as well, as V8's code stores into a holey array's, where
+// the array may take an element it has none of (arrayGuards), the cell's
+// address in scratchA at found. A hole has no pointer word: the store's
+// barrier is the value's alone. Holes had each been a call of Go
+// (ssa.GoElemStore): AWFY's Storage fills new Array(4) with its trees,
+// 5.5 million such stores a run, Havlak 3.6 million.
+func (c *compiler) storeCell(array *ssa.Value, fail func(amd64.Cond), found amd64.Label) {
+	protos := c.f.ArrayProtos
+	if protos[0].Object == 0 || c.enc.ValueSize != 16 {
+		c.elementCell(array, fail)
+		return
+	}
+	p := c.gpr(array, scratchC)
+	c.a.Load(scratchB, p, c.enc.ObjectElems+8)
+	c.a.Op(amd64.Cmp, scratchA, scratchB, true)
+	fail(amd64.CondAE)
+	c.a.Load(scratchB, p, c.enc.ObjectElems)
+	c.a.ShiftImm(amd64.Shl, scratchA, 4, true)
+	c.a.Op(amd64.Add, scratchA, scratchB, true)
+	c.a.Load(scratchB, scratchA, c.enc.NumOffset)
+	c.cmpWord(scratchB, c.enc.Uninitialized)
+	hole := c.a.NewLabel()
+	c.a.Jcc(amd64.CondE, hole)
+	c.cold = append(c.cold, func() {
+		c.a.Bind(hole)
+		c.a.MovQToX(xScratch0, scratchA)
+		c.arrayGuards(c.gpr(array, scratchC), protos, fail)
+		c.a.MovQFromX(scratchA, xScratch0)
+		c.a.Jmp(found)
+	})
 }
 
 // guardFor is a guard of v's for code that may keep it: a jump to the stub

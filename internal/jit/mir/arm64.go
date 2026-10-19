@@ -1626,24 +1626,13 @@ func (c *a64Compiler) appendingCall() {
 	c.a.Load(a64C, a64Ctx, abi.OffGoArgs+c.enc.RefOffset)
 	c.a.Load(a64B, a64C, c.enc.ObjectElems+8)
 	c.a.Cmp(a64A, a64B, true)
+	hole := c.a.NewLabel()
+	c.a.BCond(arm64.LO, hole)
 	fail(arm64.NE)
 	c.a.Load(a64B, a64C, c.enc.ObjectElems+16)
 	c.a.Cmp(a64A, a64B, true)
 	fail(arm64.HS)
-	c.a.LoadU8(a64B, a64C, c.enc.ObjectClass)
-	c.a.CmpImm(a64B, int64(c.enc.ClassArray), false)
-	fail(arm64.NE)
-	c.a.LoadU8(a64B, a64C, c.enc.ObjectFlags)
-	want := c.enc.FlagExtensible | c.enc.FlagLengthWritable
-	c.movImm(a64A, uint64(want|c.enc.FlagSparse))
-	c.a.Op(arm64.And, a64B, a64B, a64A, false)
-	c.a.CmpImm(a64B, int64(want), false)
-	fail(arm64.NE)
-	c.a.Load(a64B, a64C, c.enc.ObjectProto)
-	c.movImm(a64A, uint64(protos[0].Object))
-	c.a.Cmp(a64B, a64A, true)
-	fail(arm64.NE)
-	c.protoGuards(protos, fail)
+	c.arrayGuards(a64C, protos, fail)
 	// The element at the length, then the length one more.
 	c.a.Load(a64C, a64Ctx, abi.OffGoArgs+c.enc.RefOffset)
 	c.a.Load(a64B, a64C, c.enc.ObjectElems+8)
@@ -1660,6 +1649,24 @@ func (c *a64Compiler) appendingCall() {
 	c.a.Store(a64Ctx, abi.OffGoStatus, arm64.ZR)
 	c.a.Load(a64A, a64Ctx, abi.OffGoSite)
 	c.a.Br(a64A)
+	// As amd64's: a key below the length, a hole the number fills.
+	c.a.Bind(hole)
+	c.a.Load(a64B, a64C, c.enc.ObjectElems)
+	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
+	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	c.a.Load(a64B, a64A, c.enc.NumOffset)
+	c.movImm(a64D, c.enc.Uninitialized)
+	c.a.Cmp(a64B, a64D, true)
+	fail(arm64.NE)
+	c.a.MovRR(a64D, a64A)
+	c.arrayGuards(a64C, protos, fail)
+	c.a.Load(a64B, a64Ctx, abi.OffGoArgs+2*size+c.enc.NumOffset)
+	c.a.FMovToF(a64F0, a64B)
+	c.boxF64(a64F0, a64B)
+	c.a.Store(a64D, c.enc.NumOffset, a64B)
+	c.a.Store(a64Ctx, abi.OffGoStatus, arm64.ZR)
+	c.a.Load(a64A, a64Ctx, abi.OffGoSite)
+	c.a.Br(a64A)
 	c.a.Bind(toGo)
 	c.movImm(a64A, uint64(ssa.GoElemWrite))
 	c.a.Store(a64Ctx, abi.OffGoOp, a64A)
@@ -1668,6 +1675,25 @@ func (c *a64Compiler) appendingCall() {
 		c.saving, c.savingUsed = c.a.NewLabel(), true
 	}
 	c.a.B(c.saving)
+}
+
+// arrayGuards is amd64's: array p may take an element where it has none.
+// It uses A, B and C.
+func (c *a64Compiler) arrayGuards(p arm64.Reg, protos [2]ssa.Holder, fail func(arm64.Cond)) {
+	c.a.LoadU8(a64B, p, c.enc.ObjectClass)
+	c.a.CmpImm(a64B, int64(c.enc.ClassArray), false)
+	fail(arm64.NE)
+	c.a.LoadU8(a64B, p, c.enc.ObjectFlags)
+	want := c.enc.FlagExtensible | c.enc.FlagLengthWritable
+	c.movImm(a64A, uint64(want|c.enc.FlagSparse))
+	c.a.Op(arm64.And, a64B, a64B, a64A, false)
+	c.a.CmpImm(a64B, int64(want), false)
+	fail(arm64.NE)
+	c.a.Load(a64B, p, c.enc.ObjectProto)
+	c.movImm(a64A, uint64(protos[0].Object))
+	c.a.Cmp(a64B, a64A, true)
+	fail(arm64.NE)
+	c.protoGuards(protos, fail)
 }
 
 // goSaving calls Go, op, every allocatable register saved, as amd64's
@@ -4486,7 +4512,9 @@ func (c *a64Compiler) elemStore(v *ssa.Value) {
 	words()
 	c.a.MovRR(a64D, a64B)
 	c.index(v.Args[1], fail)
-	c.elementCell(v.Args[0], fail)
+	found := c.a.NewLabel()
+	c.storeCell(v.Args[0], fail, found)
+	c.a.Bind(found)
 	for _, s := range v.Args[3:] {
 		// As amd64's: only a pointer word there is lost.
 		other := c.a.NewLabel()
@@ -4675,6 +4703,36 @@ func (c *a64Compiler) elementCell(array *ssa.Value, guard func(arm64.Cond)) {
 	c.movImm(a64C, c.enc.Uninitialized)
 	c.a.Cmp(a64B, a64C, true)
 	guard(arm64.EQ)
+}
+
+// storeCell is amd64's: elementCell for elemStore, a hole stored into
+// where the array may take it, the cell's address in A at found. It keeps
+// D, the value's pointer word.
+func (c *a64Compiler) storeCell(array *ssa.Value, fail func(arm64.Cond), found arm64.Label) {
+	protos := c.f.ArrayProtos
+	if protos[0].Object == 0 || c.enc.ValueSize != 16 {
+		c.elementCell(array, fail)
+		return
+	}
+	p := c.gpr(array, a64C)
+	c.a.Load(a64B, p, c.enc.ObjectElems+8)
+	c.a.Cmp(a64A, a64B, true)
+	fail(arm64.HS)
+	c.a.Load(a64B, p, c.enc.ObjectElems)
+	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
+	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	c.a.Load(a64B, a64A, c.enc.NumOffset)
+	c.movImm(a64C, c.enc.Uninitialized)
+	c.a.Cmp(a64B, a64C, true)
+	hole := c.a.NewLabel()
+	c.a.BCond(arm64.EQ, hole)
+	c.cold = append(c.cold, func() {
+		c.a.Bind(hole)
+		c.a.FMovToF(a64F1, a64A)
+		c.arrayGuards(c.gpr(array, a64C), protos, fail)
+		c.a.FMovFromF(a64A, a64F1)
+		c.a.B(found)
+	})
 }
 
 // numberCell checks the word at A's cell is a number, into B.
