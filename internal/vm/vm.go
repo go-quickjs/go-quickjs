@@ -3250,7 +3250,13 @@ func pointsAtOrAbove(p *Value, locals []Value, slot int) bool {
 
 // newClosure builds a closure from a nested function template, capturing the
 // upvalues its descriptor names (makeClosure).
-func (r *Runtime) newClosure(f *frame, c Value) *Object {
+func (r *Runtime) newClosure(f *frame, c Value) *Object { return r.newClosureIn(f, c, nil) }
+
+// newClosureIn is newClosure capturing f's captured locals from cells,
+// where it is not nil: those of native code whose captured locals are in
+// cells of their own, in their locals' order (jitcompile's ir.Program
+// Cells, the JIT's GoCells), not open on f's slots.
+func (r *Runtime) newClosureIn(f *frame, c Value, cells []*upvalue) *Object {
 	tmpl := c.template()
 
 	// The object, its function data, its closure and the bindings that closure
@@ -3274,6 +3280,10 @@ func (r *Runtime) newClosure(f *frame, c Value) *Object {
 	for i, desc := range tmpl.fn.Upvalues {
 		if !desc.FromParent {
 			upvalues[i] = f.cl.upvalues[desc.Index]
+			continue
+		}
+		if cells != nil {
+			upvalues[i] = cells[cellOfLocal(f.cl.fn, int(desc.Index))]
 			continue
 		}
 		u := openUpvalue(f, int(desc.Index))
@@ -3503,6 +3513,19 @@ func openUpvalue(f *frame, slot int) *upvalue {
 		}
 	}
 	return nil
+}
+
+// cellOfLocal is captured local slot's index among fn's captured locals,
+// in their order: its cell's, where they are in cells of their own
+// (newClosureIn).
+func cellOfLocal(fn *bytecode.Function, slot int) int {
+	n := 0
+	for _, l := range fn.Locals[:slot] {
+		if l.Captured {
+			n++
+		}
+	}
+	return n
 }
 
 // uncaptured counts the bindings of a frame's that the upvalues descs name

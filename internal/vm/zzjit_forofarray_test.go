@@ -5,6 +5,7 @@ package vm
 import (
 	"fmt"
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -507,13 +508,17 @@ func TestJITCapturedLocalCallees(t *testing.T) {
 		function exiting(n) { let s = 0; for (let k = 0; k < n; k++) s = (s + exits(k)) | 0; return s }
 		function lets(n) { const fs = []; for (let i = 0; i < n; i++) fs.push(() => i); let s = 0; for (const f of fs) s += f(); return s }
 		function letting(n) { let s = 0; for (let k = 0; k < n; k++) s = (s + lets(5)) | 0; return s }
+		function blocks(k) { const o = {}; { let x = k; o.a = () => x; x += 5 } { let y = k * 2; o.b = () => y++; y += 1 } return o.a() + o.b() + o.b() }
+		function blocking(n) { let s = 0; for (let k = 0; k < n; k++) s = (s + blocks(k)) | 0; return s }
+		function addr(a, b) { return () => a * 3 + b }
+		function adding(n) { let s = 0; for (let k = 0; k < n; k++) s = (s + addr(k, 7)()) | 0; return s }
 	`
 	rounds := []string{}
 	for range 6 {
-		rounds = append(rounds, `known(30)`, `counters(100)`, `makes(100)`, `exiting(100)`, `letting(50)`)
+		rounds = append(rounds, `known(30)`, `counters(100)`, `makes(100)`, `exiting(100)`, `letting(50)`, `blocking(100)`, `adding(100)`)
 	}
 	r := jitAgreesForTest(t, setup, rounds...)
-	for _, name := range []string{"inputsKnown", "counter", "maker", "exits"} {
+	for _, name := range []string{"inputsKnown", "counter", "maker", "exits", "blocks", "addr"} {
 		var e *jitEntry
 		for k, x := range r.jit.cache {
 			if fn := k.Value(); fn != nil && fn.Name == name {
@@ -522,6 +527,78 @@ func TestJITCapturedLocalCallees(t *testing.T) {
 		}
 		if e == nil || e.ssa == nil || e.calleeRefused {
 			t.Errorf("%s has no code for native callers: %+v", name, e)
+			continue
+		}
+		// Compiled for native callers alone, its captured locals in cells
+		// of their own (ir.Program's Cells), as V8 allocates a context.
+		if !e.ssaCallee || e.ssaProg == nil || !e.ssaProg.Cells {
+			t.Errorf("%s's code has its captured locals in its frame: callee %v", name, e.ssaCallee)
 		}
 	}
+}
+
+// A native callee whose captured locals are in cells of its own, whose own
+// native callee leaves native code: Go finishes that, and the callee's code
+// goes on natively after its call (jitUnwindNative), with the cells now
+// open on the frame Go made for it.
+func TestJITCapturedLocalCellsResumed(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		var weird = { get g() { return { valueOf() { return 3 } } } }
+		function deep(i) { return weird.g + i }
+		function mid(i) { let x = i; const get = () => x; x += deep(i); x++; return get() * 2 + x }
+		function midding(n) { let s = 0; for (let k = 0; k < n; k++) s = (s + mid(k)) | 0; return s }
+	`
+	rounds := []string{}
+	for range 6 {
+		rounds = append(rounds, `midding(100)`)
+	}
+	r := jitAgreesForTest(t, setup, rounds...)
+	var e *jitEntry
+	for k, x := range r.jit.cache {
+		if fn := k.Value(); fn != nil && fn.Name == "mid" {
+			e = x
+		}
+	}
+	if e == nil || e.ssa == nil || !e.ssaCallee || e.ssaProg == nil || !e.ssaProg.Cells {
+		t.Fatalf("mid has no code for native callers with cells of its own: %+v", e)
+	}
+	if r.jit.resumedLevels == 0 {
+		t.Errorf("no native callee went on natively after its callee left native code")
+	}
+}
+
+// What TestJITCapturedLocalCallees's callees do, the collector marking
+// meanwhile: the cells Go makes, and what native code assigns them, live
+// as long as the closures that captured them.
+func TestJITCapturedLocalCellsMarking(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				runtime.GC()
+			}
+		}
+	}()
+	defer func() { close(stop); <-done }()
+	setup := `
+		function maker(i) { const x = { v: i * 2 }; let y = 'y' + i; const f = () => x.v + y.length; y += '!'; return f }
+		var made = []
+		function makes(n) { for (let k = 0; k < n; k++) made.push(maker(k)); let s = 0; for (const f of made) s = (s + f()) | 0; made.length = 0; return s }
+	`
+	rounds := []string{}
+	for range 20 {
+		rounds = append(rounds, `makes(300)`)
+	}
+	jitAgreesForTest(t, setup, rounds...)
 }

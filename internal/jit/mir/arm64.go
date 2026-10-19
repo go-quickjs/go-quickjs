@@ -579,6 +579,7 @@ func (c *a64Compiler) enterExit() {
 	c.a.Op(arm64.Add, at, at, base, true)
 	c.a.Store(a64Ctx, abi.OffStack, at)
 	c.a.Store(a64Ctx, abi.OffOpen, arm64.ZR)
+	c.a.Store(a64Ctx, abi.OffCells, arm64.ZR)
 	c.a.MovImm(at, abi.LiveCall)
 	c.a.Store(a64Ctx, abi.OffLive, at)
 	c.a.Load(at, a64CallLink, c.enc.LinkIn)
@@ -842,6 +843,7 @@ func (c *a64Compiler) callEntry() {
 	c.a.AddImm(at, base, int64(c.f.FrameLocals)*int64(vs), true)
 	c.a.Store(a64Ctx, abi.OffStack, at)
 	c.a.Store(a64Ctx, abi.OffOpen, arm64.ZR)
+	c.a.Store(a64Ctx, abi.OffCells, arm64.ZR)
 	c.a.MovImm(at, abi.LiveCall)
 	c.a.Store(a64Ctx, abi.OffLive, at)
 	c.a.Load(at, a64CallLink, c.enc.LinkIn)
@@ -3439,6 +3441,7 @@ func (c *a64Compiler) tailJump(t *ssa.CallSite, n int, this bool, guard func(arm
 	c.a.AddImm(a64A, a64Locals, int64(t.LocalCount)*int64(vs), true)
 	c.a.Store(a64Ctx, abi.OffStack, a64A)
 	c.a.Store(a64Ctx, abi.OffOpen, arm64.ZR)
+	c.a.Store(a64Ctx, abi.OffCells, arm64.ZR)
 	c.a.Store(a64Ctx, abi.OffTailReturn, arm64.ZR)
 	if t.Tail {
 		c.movImm(a64A, b2u(t.TailFrame))
@@ -4511,9 +4514,14 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.AddImm(d, a64Locals, int64(v.Index)*int64(c.enc.ValueSize), true)
 		c.setG(v, d)
 	case ssa.OpUpvalueCell:
-		// As amd64's: the binding's cell, then where its value is now.
+		// As amd64's: the binding's cell, then where its value is now, a
+		// captured local's of the code's own with Aux 1.
 		d := c.gdst(v)
-		c.a.Load(d, a64Ctx, abi.OffUpvalues)
+		base := abi.OffUpvalues
+		if v.Aux == 1 {
+			base = abi.OffCells
+		}
+		c.a.Load(d, a64Ctx, base)
 		c.a.Load(d, d, int32(v.Index)*8)
 		c.a.Load(d, d, c.enc.UpvalueSlot)
 		c.setG(v, d)

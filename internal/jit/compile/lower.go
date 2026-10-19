@@ -632,6 +632,8 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 				p.Captured[i] = local.Captured
 			}
 			p.Assigned = closureAssigned(fn)
+			// A callee's in cells of their own (ir.Program's Cells).
+			p.Cells = m.callee
 		}
 		return p, nil
 	}

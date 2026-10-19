@@ -623,6 +623,11 @@ func (c *compiler) callEntry() {
 	c.a.Lea(at, base, int32(c.f.FrameLocals)*vs)
 	c.a.Store(regCtx, abi.OffStack, at)
 	c.a.StoreImm(regCtx, abi.OffOpen, 0)
+	// No cells of its captured locals until its start makes them
+	// (ssa.GoCells), whatever ran in the context before: a pointer stored
+	// without a write barrier, as the closure's is, native calls being
+	// made only while the collector does not mark (markingCall).
+	c.a.StoreImm(regCtx, abi.OffCells, 0)
 	c.a.StoreImm(regCtx, abi.OffLive, abi.LiveCall)
 	c.a.IncMem(callLink, c.enc.LinkIn)
 	if !c.f.StartOnly && c.f.Params < c.f.FrameLocals {
@@ -1530,6 +1535,7 @@ func (c *compiler) tailJump(t *ssa.CallSite, n int, this bool, guard func(amd64.
 	c.a.Store(regCtx, abi.OffStack, scratchA)
 	c.storeImm(regCtx, abi.OffOpen, 0, scratchA)
 	c.storeImm(regCtx, abi.OffTailReturn, 0, scratchA)
+	c.storeImm(regCtx, abi.OffCells, 0, scratchA)
 	if t.Tail {
 		c.storeImm(regCtx, abi.OffTailFrame, b2u(t.TailFrame), scratchA)
 	}
@@ -2474,6 +2480,7 @@ func (c *compiler) enterExit() {
 	c.a.Op(amd64.Add, at, base, true)
 	c.a.Store(regCtx, abi.OffStack, at)
 	c.a.StoreImm(regCtx, abi.OffOpen, 0)
+	c.a.StoreImm(regCtx, abi.OffCells, 0)
 	c.a.StoreImm(regCtx, abi.OffLive, abi.LiveCall)
 	c.a.IncMem(callLink, c.enc.LinkIn)
 	c.movImm(scratchA, 0)
@@ -4941,9 +4948,14 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.Lea(d, regLocals, int32(v.Index)*c.enc.ValueSize)
 		c.setG(v, d)
 	case ssa.OpUpvalueCell:
-		// The binding's cell, then where its value is now.
+		// The binding's cell, then where its value is now: a captured
+		// binding's, or, Aux 1, a captured local's of the code's own.
 		d := c.gdst(v)
-		c.a.Load(d, regCtx, abi.OffUpvalues)
+		base := abi.OffUpvalues
+		if v.Aux == 1 {
+			base = abi.OffCells
+		}
+		c.a.Load(d, regCtx, base)
 		c.a.Load(d, d, int32(v.Index)*8)
 		c.a.Load(d, d, c.enc.UpvalueSlot)
 		c.setG(v, d)

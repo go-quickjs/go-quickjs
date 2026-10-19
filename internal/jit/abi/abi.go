@@ -360,6 +360,12 @@ type Context struct {
 	// only where one is (ssa.GoClose). A native call clears it for its
 	// callee.
 	Open uint64
+	// Cells is, for code whose captured locals are in cells of their own
+	// (ir.Program's Cells), the first of them, in their locals' order: an
+	// array of pointers to cells as Upvalues is, which Go makes at the
+	// code's entry (ssa.GoCells) and a native call clears for its callee.
+	// Native code only reads them.
+	Cells unsafe.Pointer
 	// Records counts the Record entries an exit filled. Every other slot of
 	// its state is in the frame already.
 	Records uint64
@@ -719,6 +725,7 @@ var (
 	OffCallClosure   = int32(unsafe.Offsetof(Context{}.CallClosure))
 	OffCallUpvalues  = int32(unsafe.Offsetof(Context{}.CallUpvalues))
 	OffOpen          = int32(unsafe.Offsetof(Context{}.Open))
+	OffCells         = int32(unsafe.Offsetof(Context{}.Cells))
 	OffCallTarget    = int32(unsafe.Offsetof(Context{}.CallTarget))
 	OffCallLink      = int32(unsafe.Offsetof(Context{}.CallLink))
 	OffCallThis      = int32(unsafe.Offsetof(Context{}.CallThis))

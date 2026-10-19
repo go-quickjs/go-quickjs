@@ -522,7 +522,9 @@ func rematerializeUpvalues(f *Func) bool {
 				var k int32
 				switch {
 				case a.Op == OpLoadCell && a.Args[0].Op == OpUpvalueCell:
-					k = int32(a.Args[0].Index) + 1
+					// A binding's cell, or a captured local's of the code's
+					// own (Aux 1), each its own.
+					k = int32(2*a.Args[0].Index+a.Args[0].Aux) + 1
 				case a.Op == OpPhi && a.ID < len(cand) && cand[a.ID] != none:
 					k = cand[a.ID]
 				default:
@@ -549,7 +551,8 @@ func rematerializeUpvalues(f *Func) bool {
 			if v.Op != OpPhi || cand[v.ID] <= 0 {
 				continue
 			}
-			cell := f.alloc(Value{Op: OpUpvalueCell, Type: Source, Index: int(cand[v.ID] - 1), Block: b})
+			k := int(cand[v.ID] - 1)
+			cell := f.alloc(Value{Op: OpUpvalueCell, Type: Source, Index: k / 2, Aux: k % 2, Block: b})
 			r := f.alloc(Value{Op: OpLoadCell, Type: Tagged, Args: f.refsOf(1), Block: b})
 			r.Args[0], r.Shadow = cell, cell
 			reads = append(reads, cell, r)

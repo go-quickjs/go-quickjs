@@ -316,7 +316,9 @@ const (
 	// string's, at Const.Bits: what OpLoadCell reads it from, its pointer
 	// word there (ir.StringConst).
 	OpConstCell // -> source
-	// OpUpvalueCell is the cell captured binding Index's value is in now:
+	// OpUpvalueCell is the cell captured binding Index's value is in now
+	// -- with Aux 1, captured local Index's of the code's own cells, in
+	// their locals' order (ir.Program's Cells, abi.Context's Cells):
 	// its frame's slot while the frame runs, its own once closed -- found
 	// again each time, as closing moves it (ir.UpvalueRead).
 	OpUpvalueCell // -> source
@@ -662,6 +664,10 @@ type Func struct {
 	// to it.
 	Params    int
 	StartOnly bool
+	// Cells marks code whose captured locals are in cells of their own
+	// (ir.Program's Cells): its native callers' call clears the context's
+	// (abi.Context's Cells), which its entries' call of Go makes (GoCells).
+	Cells bool
 	// CallEntry asks for a call entry, where native callers jump, which
 	// makes the frame and the context of a call of the function, once for
 	// all its callers (mir's Code.CallEntry, abi.Context's ReturnTo).

@@ -1656,6 +1656,7 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 	}
 	f.FrameLocals = fn.LocalCount
 	f.Params, f.StartOnly = fn.ParamCount, jitcompile.StartOnly(fn)
+	f.Cells = p.Cells
 	// Native callers call a function's code at its call entry, which makes
 	// its frame (mir's callEntry): code a call makes no frame of its own
 	// for -- top-level code's, a generator's, an async function's -- has
@@ -2790,6 +2791,8 @@ func jitHostCall(ctx *abi.Context) bool {
 		return true
 	case ssa.GoCall:
 		return r.jitGoCall(ctx)
+	case ssa.GoCells:
+		return r.jitMakeCells(ctx)
 	case ssa.GoClosure, ssa.GoClose:
 		// On the frame whose locals are where native code assigns
 		// captured ones: the one Go entered the code with, or a native
@@ -2802,6 +2805,10 @@ func jitHostCall(ctx *abi.Context) bool {
 			}
 		}
 		i := int(ctx.GoOp >> abi.GoOpIndexShift)
+		if ctx.Cells != nil {
+			// Code whose captured locals are in cells of their own.
+			return r.jitCellsClosure(ctx, f, i)
+		}
 		v := Undefined
 		if ssa.GoOp(ctx.GoOp&0xff) == ssa.GoClosure {
 			if i >= len(f.cl.consts) || callee && jitNeedsMaker(f.cl.consts[i]) {
@@ -3173,6 +3180,161 @@ func (r *Runtime) jitCalleeFrame(ctx *abi.Context) *frame {
 	f.openUpvalues = s.calleeOpen[idx]
 	f.this, f.newTarget = *(*Value)(unsafe.Pointer(&ctx.This)), Undefined
 	return f
+}
+
+// jitCaptured counts fn's captured locals: the cells of native code whose
+// captured locals are in cells of their own (ssa.GoCells).
+func jitCaptured(fn *bytecode.Function) int {
+	n := 0
+	for _, l := range fn.Locals {
+		if l.Captured {
+			n++
+		}
+	}
+	return n
+}
+
+// jitCellsOf is the context's cells (abi.Context's Cells), fn's code's.
+func jitCellsOf(ctx *abi.Context, fn *bytecode.Function) []*upvalue {
+	return unsafe.Slice((**upvalue)(ctx.Cells), jitCaptured(fn))
+}
+
+// jitMakeCells makes, at an entry of code whose captured locals are in
+// cells of their own (ir.Program's Cells, ssa.GoCells), those cells, the
+// context's, as V8's code allocates a function's context. On the frame Go
+// entered the code with, they are open on its slots -- those closures it
+// made before took among them -- which it closes as it is popped. For a
+// native callee, whose frame Go does not keep, each is a cell of its own,
+// closed, holding its parameter's argument or undefined, as the frame's
+// slot is at the call: what a closure captures, and native code reads and
+// assigns, from then on, and what Go puts in the frame it makes if the
+// callee leaves native code (jitReopenCells).
+func (r *Runtime) jitMakeCells(ctx *abi.Context) bool {
+	if f := r.jitRunFrame(ctx); f != nil {
+		fn := f.cl.fn
+		cells := make([]*upvalue, 0, jitCaptured(fn))
+		for slot, l := range fn.Locals {
+			if !l.Captured {
+				continue
+			}
+			u := openUpvalue(f, slot)
+			if u == nil {
+				u = &upvalue{slot: &f.locals[slot]}
+				f.openUpvalues = append(f.openUpvalues, u)
+			}
+			cells = append(cells, u)
+		}
+		if len(cells) == 0 {
+			return false
+		}
+		ctx.Cells = unsafe.Pointer(unsafe.SliceData(cells))
+		ctx.Open = uint64(len(f.openUpvalues))
+		return true
+	}
+	cl := (*closure)(ctx.Closure)
+	if ctx.Live != abi.LiveCall || cl == nil || ctx.Locals == nil {
+		return false
+	}
+	fn := cl.fn
+	n := jitCaptured(fn)
+	if n == 0 {
+		return false
+	}
+	locals := unsafe.Slice((*Value)(ctx.Locals), fn.LocalCount)
+	cells, room := make([]*upvalue, n), make([]upvalue, n)
+	k := 0
+	for slot, l := range fn.Locals {
+		if !l.Captured {
+			continue
+		}
+		u := &room[k]
+		u.closed = Undefined
+		if slot < fn.ParamCount {
+			u.closed = locals[slot]
+		}
+		u.slot = &u.closed
+		cells[k] = u
+		k++
+	}
+	ctx.Cells = unsafe.Pointer(unsafe.SliceData(cells))
+	return true
+}
+
+// jitCellsClosure is GoClosure and GoClose for code whose captured locals
+// are in cells of their own (abi.Context's Cells), on f, the frame Go
+// entered it with or a native callee's stand-in (jitCalleeFrame): a
+// closure, its constant i, capturing the cells; or a scope's end, from
+// local i on, whose captured locals take fresh cells holding what they
+// hold -- the closures that captured the old ones keep them, as closing
+// an upvalue leaves them, and a loop's next iteration's capture new ones.
+// On the frame Go entered, the old ones are closed and the new ones open
+// on its slots, as the interpreter's are.
+func (r *Runtime) jitCellsClosure(ctx *abi.Context, f *frame, i int) bool {
+	fn := f.cl.fn
+	cells := jitCellsOf(ctx, fn)
+	run := r.jitRunFrame(ctx) == f
+	v := Undefined
+	if ssa.GoOp(ctx.GoOp&0xff) == ssa.GoClosure {
+		if i >= len(f.cl.consts) || !run && jitNeedsMaker(f.cl.consts[i]) {
+			return false
+		}
+		o := r.newClosureIn(f, f.cl.consts[i], cells)
+		if fd := o.fn(); fd != nil && atomic.LoadPointer(&fd.closure.fn.VMCode) != nil {
+			planTreeCall(fd)
+		}
+		v = Obj(o)
+	} else {
+		if run && len(f.openUpvalues) != 0 {
+			r.closeUpvaluesFrom(f, i)
+		}
+		k := 0
+		for slot, l := range fn.Locals {
+			if !l.Captured {
+				continue
+			}
+			if slot >= i {
+				if run {
+					u := &upvalue{slot: &f.locals[slot]}
+					f.openUpvalues = append(f.openUpvalues, u)
+					cells[k] = u
+				} else {
+					u := &upvalue{closed: *cells[k].slot}
+					u.slot = &u.closed
+					cells[k] = u
+				}
+			}
+			k++
+		}
+	}
+	if run {
+		ctx.Open = uint64(len(f.openUpvalues))
+	}
+	if ssa.GoOp(ctx.GoOp&0xff) == ssa.GoClosure {
+		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
+	}
+	return true
+}
+
+// jitReopenCells gives f, the frame Go made for native code that left it,
+// whose captured locals are in cells of their own (abi.Context's Cells),
+// those cells: each local's value in the frame's slot, the cell open on it,
+// the frame's to close as it is popped -- the closures that captured it
+// see what the interpreter assigns from then on. The context keeps them:
+// resumed after its call (jitUnwindNative), the code goes on with them.
+func jitReopenCells(f *frame, ctx *abi.Context) {
+	cells := jitCellsOf(ctx, f.cl.fn)
+	k := 0
+	for slot, l := range f.cl.fn.Locals {
+		if !l.Captured {
+			continue
+		}
+		if u := cells[k]; u.slot != &f.locals[slot] {
+			f.locals[slot] = *u.slot
+			u.slot = &f.locals[slot]
+			f.openUpvalues = append(f.openUpvalues, u)
+		}
+		k++
+	}
 }
 
 // jitNeedsMaker reports whether the function template c makes is an arrow
@@ -6825,7 +6987,7 @@ func (r *Runtime) jitRunDone(e *jitEntry, idx, top int) {
 			c.RecordHigh = 0
 		}
 		clear(c.Keep[:s.ssaKeeps])
-		c.Closure, c.Upvalues = nil, nil
+		c.Closure, c.Upvalues, c.Cells = nil, nil, nil
 		c.This, c.RetValue = abi.Slot{}, abi.Slot{}
 	}
 }
@@ -6845,6 +7007,12 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 		ctx.Locals = unsafe.Pointer(unsafe.SliceData(f.locals))
 		ctx.Stack = unsafe.Pointer(&r.stack[f.base])
 		ctx.Upvalues = unsafe.Pointer(unsafe.SliceData(f.cl.upvalues))
+		if resume == 0 {
+			// Code whose captured locals are in cells of their own makes
+			// them at its entry (ssa.GoCells); resumed after a native call,
+			// it goes on with those it made.
+			ctx.Cells = nil
+		}
 		ctx.Open = uint64(len(f.openUpvalues))
 		if f.cl.fn.HasTailCall {
 			// Its calls of itself in tail position, deep in the stack, give
@@ -7569,6 +7737,12 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure) (Value, e
 			f.openUpvalues = append(f.openUpvalues, s.calleeOpen[l.ctx]...)
 			clear(s.calleeOpen[l.ctx])
 			s.calleeOpen[l.ctx], c.Open = s.calleeOpen[l.ctx][:0], 0
+		}
+		if c := s.ssaCtxs[l.ctx]; !l.inline && c.Cells != nil {
+			// Its captured locals' cells, which its closures share: the
+			// frame's, open on its slots now, which closes them as it is
+			// popped.
+			jitReopenCells(f, c)
 		}
 		f.thisRef, f.withScopes, f.evalVars, f.native, f.savedSP = nil, nil, nil, "", 0
 		if !l.inline {

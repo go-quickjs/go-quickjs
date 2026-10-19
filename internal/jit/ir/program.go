@@ -414,6 +414,13 @@ type Program struct {
 	// none: a call may change those, which run no closure that assigns the
 	// others (IsAssigned).
 	Assigned []bool
+	// Cells marks a program whose captured locals are in cells of their
+	// own from its start, as V8 allocates a function's context, rather than
+	// in its frame's slots: a callee's, for native callers, whose frame Go
+	// does not keep (the VM's GoCells). A closure it makes captures those
+	// cells, nothing it captured is open on its frame, and no return
+	// closes anything.
+	Cells bool
 }
 
 // IsCaptured reports whether local i is one an inner closure captures

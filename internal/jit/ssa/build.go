@@ -506,6 +506,11 @@ type GoOp uint8
 // number word, and refuses an object compared loosely with a primitive
 // that is not null or undefined, whose conversion may run code.
 //
+// GoCells makes the cells of code whose captured locals are in cells of
+// their own (ir.Program's Cells), at each of its entries, as V8's code
+// allocates a function's context: abi.Context's Cells. It writes no keep
+// cell.
+//
 // GoClosure makes the function of constant Argc on the code's own frame
 // (ir.Closure), capturing its locals there, and GoClose closes what
 // closures captured of locals Argc on (ir.CloseUpvalues): both Go's, on
@@ -537,6 +542,7 @@ const (
 	GoRandom
 	GoNumber
 	GoEqual
+	GoCells
 )
 
 // RefillsPools reports whether a call takes an object from a pool, which
@@ -1099,6 +1105,12 @@ func (b *builder) hasCells() bool { return b.root.p.Upvalues > 0 || b.root.p.Cap
 // in blk: where its value is now.
 func (b *builder) cellOf(blk *Block, slot int) *Value {
 	p := b.root.p
+	if p.Cells && slot < p.UpvalueBase {
+		// A captured local in a cell of its own (ir.Program's Cells).
+		cell := b.f.newValue(blk, OpUpvalueCell, Source)
+		cell.Index, cell.Aux = cellIndex(p, slot), 1
+		return cell
+	}
 	if slot >= p.UpvalueBase {
 		cell := b.f.newValue(blk, OpUpvalueCell, Source)
 		cell.Index = slot - p.UpvalueBase
@@ -1144,6 +1156,23 @@ func (b *builder) storeCaptured(blk *Block, slot int, v *Value) {
 	w.Aux, w.State = int(ir.HostExit), st
 	st.addUse()
 	w.Key, w.Upvalue = localKey(slot), true
+	if b.root.p.Cells {
+		// A cell of its own, as a captured binding's is.
+		w.Key = upvalueKey
+	}
+}
+
+// cellIndex is captured local slot's index among the cells of a program
+// whose captured locals are in cells of their own (ir.Program's Cells):
+// how many captured locals come before it, as the VM's GoCells makes them.
+func cellIndex(p *ir.Program, slot int) int {
+	n := 0
+	for i := range slot {
+		if p.IsCaptured(i) {
+			n++
+		}
+	}
+	return n
 }
 
 // stringCell is the cell of the string constant at pc (ConstantFeedback).
@@ -2687,6 +2716,14 @@ func (b *builder) fill(blk *Block) {
 			b.write(i, blk, v)
 			blk.Header.Slots[i] = v
 		}
+		if b.p.Cells && b.cur == b.root {
+			// Its captured locals' cells, made at each entry (GoCells), as
+			// V8's code allocates a function's context: a call of Go that
+			// exits, refused, to the entry's state.
+			call := f.newValue(blk, OpCall, Tagged)
+			call.Aux, call.State = int(ir.HostExit), blk.Header
+			f.cache(call).Calls, call.Index = []*CallSite{{Go: GoCells, ThisSlot: -1}}, 0
+		}
 		// A captured binding is what its cell holds, which native code
 		// assigns (ir.UpvalueWrite), with its pointer word there.
 		b.reloadUpvalues(blk)
@@ -3051,7 +3088,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			}
 			break
 		}
-		if b.p.Captured != nil {
+		if b.p.Captured != nil && !b.p.Cells {
 			// What closures captured of its locals closed before it
 			// returns, as the interpreter's frame's are as it is popped:
 			// a native callee's frame is gone once it returns (GoClose,
