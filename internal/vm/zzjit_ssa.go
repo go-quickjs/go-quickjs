@@ -7325,10 +7325,13 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			// (jitUnwindNative), then this code goes on natively where the
 			// callee would have returned to, its state where it left it --
 			// as V8's lazy deoptimization leaves a caller's optimized frame
-			// alone. Not while the collector marks, as native code takes
-			// pointers there; nor into code compiled again or dropped
-			// meanwhile (Size 0, closed), nor after a throw: then as below,
-			// from the frame the call wrote.
+			// alone, the collector marking or not: the call's result, which
+			// Go writes with its barrier (RetValue), is the only pointer
+			// native code stores before it tests the collector's flag
+			// again, into a cell whose old value nothing native reads (mir's
+			// resumeCall). Not into code compiled again or dropped meanwhile
+			// (Size 0, closed), nor after a throw: then as below, from the
+			// frame the call wrote.
 			s.hosts++
 			e.ssaStats.hosts++
 			back, base, code := uintptr(c.ReturnTo), c.Base, e.ssa
@@ -7337,7 +7340,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			// one, which a stack trace shows (stackFrame).
 			f.pc = uint32(exitPC) + 1
 			v, err := r.jitUnwindNative(idx, e, f.cl)
-			if err == nil && r.stopped == nil && back != 0 && e.ssa == code && !e.invalid && code.Contains(back) && !jit.Marking() {
+			if err == nil && r.stopped == nil && back != 0 && e.ssa == code && !e.invalid && code.Contains(back) {
 				// Native code run meanwhile may have used the context.
 				c.Base, c.Live, c.ReturnTo = base, 0, 0
 				*(*Value)(unsafe.Pointer(&c.RetValue)) = v
@@ -8022,13 +8025,14 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure) (Value, e
 		if k == n-1 {
 			v, err = r.jitFinishExit(f, e, &l)
 		} else if !l.inline && !next.inline && next.returnTo != 0 && err == nil && r.stopped == nil &&
-			e != nil && e.ssa != nil && e.ssa == next.code && !e.invalid && e.ssa.Contains(next.returnTo) && !jit.Marking() {
+			e != nil && e.ssa != nil && e.ssa == next.code && !e.invalid && e.ssa.Contains(next.returnTo) {
 			// Its native code goes on where the call returns to, as runSSA's
 			// does after a callee leaves: its context, spills and keeps are
-			// as it left them, and its callee's, frame base included. The
-			// code must be the one the call was made from: compiled again
-			// meanwhile, the function's code may be where the old was, the
-			// old's return address in the middle of other instructions.
+			// as it left them, and its callee's, frame base included -- the
+			// collector marking or not, as there. The code must be the one
+			// the call was made from: compiled again meanwhile, the
+			// function's code may be where the old was, the old's return
+			// address in the middle of other instructions.
 			c := s.ssaCtxs[next.ctx]
 			c.Live, c.ReturnTo = 0, 0
 			*(*Value)(unsafe.Pointer(&c.RetValue)) = v

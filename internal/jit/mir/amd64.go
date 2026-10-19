@@ -562,8 +562,13 @@ func (c *compiler) returnNative() {
 // retNum and retRef, as its caller's code goes on: the VM's stack's top
 // back where the callee's frame began, the context no call's, the caller's
 // context and frame's registers; then to where the call returns, in
-// callLink. A native call was made with the collector not marking, and no
-// Go has run since, so the caller may store the result's pointer.
+// callLink. The caller stores the result's pointer -- in its keep cell,
+// and, a super()'s, its This -- with no write barrier, the collector
+// marking or not, for the callee may have called Go and the collector
+// begun marking meanwhile, or Go have finished the callee (resumeCall):
+// the result is a source's, or Go's, written with its barrier (RetValue),
+// and the cell's old value one nothing native reads again -- a value live
+// across the call is copied out of its cell first (ssa's keep.go).
 func (c *compiler) returnTail() {
 	c.a.Load(regStack, regCtx, abi.OffStackTop)
 	c.a.Load(regLocals, regCtx, abi.OffBase)

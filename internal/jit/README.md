@@ -304,6 +304,15 @@ never a preemption point, is not. Emulating the barrier's buffer in native
 code was rejected: its contents would have to reach the collector before
 any safepoint Go could stop the goroutine at.
 
+One pointer store is made without the test: a native call's result, into
+the caller's keep cell (and a `super()`'s into its `This`), as its code
+goes on after the call -- after a return, or after Go finished a callee
+that left native code, the collector marking or not. The result is a
+source's, or Go's, written with Go's barrier (`RetValue`), and the cell's
+old value is one nothing native reads again: a value live across the call
+is copied out of its cell first. So Go resumes native callers whether the
+collector marks or not.
+
 ## The execution boundary
 
 **Entry.** `enterSSA` is `NOSPLIT|NOFRAME`. It tail-jumps into the code with

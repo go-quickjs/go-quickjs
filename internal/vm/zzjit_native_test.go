@@ -7289,8 +7289,10 @@ func TestJITSSANativeCalls(t *testing.T) {
 
 // Native calls pass and return references, and make frames in the VM's
 // stack, while the collector runs continuously: natively while it does not
-// mark, through Go while it does (abi.Encoding's WriteBarrier). Nothing is
-// lost or freed early; run with GODEBUG=gccheckmark=1 too.
+// mark, through Go while it does (abi.Encoding's WriteBarrier); a callee
+// leaving native code, dbl given a string, has its callers resumed
+// natively, marking or not. Nothing is lost or freed early; run with
+// GODEBUG=gccheckmark=1 too.
 func TestJITSSANativeCallsUnderGC(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -7314,7 +7316,8 @@ func TestJITSSANativeCallsUnderGC(t *testing.T) {
 	src := `function link(a,b){let n=a;for(let i=0;i<1;i++)n.next=b;return a}
 		function pick(o,k){let x=o;for(let i=0;i<k;i++)x=x.next;return x}
 		function build(n){let h={v:-1,next:null};for(let i=0;i<n;i++){h=link({v:i,pad:[i,i]},h)}return h}
-		function walk(h,n){let s=0;for(let i=0;i<n;i++){s=(s+pick(h,i%5).v)|0}return s}
+		function dbl(x){return x*2}
+		function walk(h,n){let s=0;for(let i=0;i<n;i++){s=(s+pick(h,i%5).v+dbl(i%37===36?''+i:i))|0}return s}
 		let ok=true;
 		for(let round=0;round<200;round++){
 			const h=build(40);
