@@ -752,6 +752,57 @@ faster: its loss is its steady state's.
   them, Strength.of declined 36,000 times a run (2026-10-19, after
   e0e21ca; the marking that had seemed the cause is not: the declines
   happen with the collector idle).
+- **Native code while the collector marks**, as V8's code calls its
+  write barrier and goes on. Native code tests Go's write-barrier flag
+  before it stores a pointer; while it is set, what stores one is made by
+  Go, called from native code (a call of Go), or leaves for Go (an exit).
+  The plan, in five stages, each a commit of its own with a regression
+  test and a sabotage that fails it:
+  1. *Go resumes native callers while marking* (`e0e21ca`): the only
+     pointer they store before testing the flag again is the call's
+     result, which Go wrote with its barrier.
+  2. *Stores through Go's barrier* (`a511e30`): a property's value, an
+     element, a keep, an array literal's elements and a property added
+     along a transition, its shape too, jump to `storeRef`
+     (`entry_*.s`), which calls a nosplit Go function doing `*slot = p`;
+     a routine each code shares saves its registers (refStoringCall).
+     `TestStoreRefShades` moves objects during a real collection, again
+     under `GODEBUG=gccheckmark=1`; `jit.StoreRefClobber` gives every
+     register junk across a store.
+  3. *Native calls while marking.* Go makes every native call while the
+     collector marks (mir's markingCall, abi.GoOpMarking), because the
+     call's setup stores pointers with no barrier: the records' pointer
+     words (RecordRef), the operands written into the callee's frame
+     (directOperand), the receiver, a construction's instance and this,
+     the callee context's fields, and the call entry's clearing of the
+     callee's locals and Cells. To do: keep one flag test per call, its
+     marking side a cold copy of the setup whose pointer stores go
+     through `storeRef`, with a routine of its own that clears a range of
+     pointer words (the call entry's locals); then remove markingCall,
+     GoOpMarking and the VM's jitMarkingCallee and goCallMarking. Tests:
+     DeltaBlue's shapes -- derived constructors with super(), forEach
+     given arrows (a generic call), pooled `new` -- under
+     `jitMarkingForTest`, making native calls and no call of Go, and the
+     same under a real collection with `gccheckmark`.
+  4. *Pools while marking*: an object, an array literal, a closure, an
+     entry's cells or a loop's step taken while the collector marks is
+     Go's (markingTake and ssa.GoTake; closureTake, cellsTake and
+     iterStep test the flag). To do: take natively, storing what the
+     taker writes through `storeRef`, into its destination before the
+     pool's cell is cleared; then remove GoTake.
+  5. *The rest, and cleanup*: the exits that fill records (recordsTail)
+     and the tail calls' (tailSelf, tailJump) store through `storeRef`;
+     remove ExitMarking, markingExit, ssa.GoStore and GoAddAlong, and
+     the VM's `jitMarking()` exceptions in jitCalleeProfit, jitInlineLeft
+     and jitUnwound; rewrite the README's barrier section.
+  Stages 3 to 5 wait (2026-10-19): counted by operation over one AWFY
+  run, the calls of Go made only because the collector marks are 12,000
+  in DeltaBlue, 21,000 in CD, 50,000 in Storage and 65,000 in Havlak, a
+  tenth or less of the calls of Go that are not the collector's (below),
+  which were done first; stage 3 is most of the work, for perhaps 1 to
+  2% on those benchmarks. `jitMarkingForTest`, a set byte native code
+  reads as the flag, is enough to choose the paths in tests; real
+  marking needs a collection running (TestStoreRefShades's way).
 - **Calls of Go that are not the collector's.** Counted by operation
   over one AWFY run (2026-10-19, native stores while marking), the
   largest are element stores native code leaves to Go (ssa.GoElemStore):
@@ -762,7 +813,7 @@ faster: its loss is its steady state's.
   into a holey array's hole and allocates its contexts in its code. The
   calls Go makes only because the collector marks are a tenth of these
   or less: DeltaBlue 12,000, CD 21,000, Havlak 65,000, Storage 50,000
-  (marking stages 3 and 4). The element stores were all into holes inside
+  (native code while the collector marks, stages 3 and 4, above). The element stores were all into holes inside
   the length; native code makes them now (mir's storeCell, Storage -20%,
   Havlak -5%), and native callees take their cells from their function's
   pool (mir's cellsTake, Havlak -5%, NBody -4%, DeltaBlue -2.5%).
