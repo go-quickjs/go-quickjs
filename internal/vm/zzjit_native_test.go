@@ -4922,8 +4922,9 @@ func TestJITSSAKeepsWhileMarking(t *testing.T) {
 }
 
 // A native stretch the collector's marking may have ended -- here at a
-// native call with more operands than a call of Go passes (abi.MaxGoArgs),
-// which native code leaves to Go while it marks (markingCall) -- is not
+// construction with a receiver from a pool and more operands than a call
+// of Go passes (abi.MaxGoArgs), which native code leaves to Go while it
+// marks (markingCall) -- is not
 // judged by the profit check (jitSSAProfit): code that left at every
 // iteration of a long marking had Go stop entering it for good
 // (entrySlow), nothing learned from those exits to compile it again for.
@@ -4937,8 +4938,8 @@ func TestJITSSAMarkingExitsNotJudged(t *testing.T) {
 	old := jitMarking
 	jitMarking = func() bool { return true }
 	defer func() { jitMarking = old }()
-	setup := `function g(a,b,c,d,e,f,h,k,l,m,o,p,q,u,w,x){let t=a;for(let j=0;j<2;j++)t=(t+b+c+d+e+f+h+k+l+m+o+p+q+u+w+x)|0;return t}
-		function lit(n){let s=0;for(let i=0;i<n;i++){s=(s+g(i,1,2,3,4,5,6,7,0,0,0,0,0,0,0,0))|0}return s}`
+	setup := `function G(a,b,c,d,e,f,h,k,l,m,o,p,q,u,w,x){let t=a;for(let j=0;j<2;j++)t=(t+b+c+d+e+f+h+k+l+m+o+p+q+u+w+x)|0;this.t=t}
+		function lit(n){let s=0;for(let i=0;i<n;i++){s=(s+new G(i,1,2,3,4,5,6,7,0,0,0,0,0,0,0,0).t)|0}return s}`
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	if _, err := r.Run(compileForTest(t, setup)); err != nil {
 		t.Fatal(err)
@@ -7346,19 +7347,24 @@ func TestJITSSANativeCallsUnderGC(t *testing.T) {
 	}
 }
 
-// While the collector marks, a native call's setup would store pointers
-// -- the frames, the callee's context -- with no write barrier: Go makes
-// the call (ssa.GoCall, abi.GoOpMarking), as V8's code calls through its
-// runtime, and native code goes on after it. None leaves native code, and
-// none counts as a call of Go of the code's (jitSSAProfit), which would
-// have Go stop entering code that only met a long marking.
+// While the collector marks, native code makes its native calls, as V8's
+// code does: what a call's setup writes -- the records, the callee's
+// context and frame -- outlives none of what it is written from, and
+// overwrites only what nothing reads again; the result, which outlives the
+// callee's frame it comes from, is stored with Go's write barrier (mir's
+// refStore), every register native code may keep given junk across it
+// (jit.StoreRefClobber). None leaves native code, nor is a call of Go.
+// Go had made each (abi.GoOpMarking).
 func TestJITSSANativeCallsWhileMarking(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
 	jitMarkingForTest(t)
-	setup := `function add(a,b){let s=a;for(let i=0;i<3;i++)s=(s*3+b)|0;return s}
-		function sum(n){let t=0;for(let i=0;i<n;i++){t=(t+add(i,t&7))|0;t^=t>>>3;t=(t*5+i)|0;t^=t>>>7}return t}`
+	jitClobberStoresForTest(t)
+	setup := `var objs=[{v:1},{v:2},{v:3},{v:4}];
+		function pick(i){let o=objs[i&3];for(let j=0;j<2;j++)o=objs[(i+j)&3];return o}
+		function add(a,b){let s=a;for(let i=0;i<3;i++)s=(s*3+b)|0;return s}
+		function sum(n){let t=0;for(let i=0;i<n;i++){t=(t+add(i,t&7))|0;t^=t>>>3;t=(t*5+i+pick(i).v)|0;t^=t>>>7}return t}`
 	want := New(Config{})
 	defer want.Close()
 	r := jitRuntimeForTest(t, Config{JIT: true})
@@ -7386,7 +7392,7 @@ func TestJITSSANativeCallsWhileMarking(t *testing.T) {
 	if err != nil || v.Number() != wv.Number() {
 		t.Fatalf("sum(300) = %v, %v; interpreter %v", v, err, wv)
 	}
-	if e.ssaStats.hosts != hosts || r.jit.goCalls-made < 300 || e.ssaStats.goCalls != goCalls || e.entrySlow {
+	if e.ssaStats.hosts != hosts || r.jit.goCalls != made || e.ssaStats.goCalls != goCalls || e.entrySlow || len(e.nativeCalls) < 2 {
 		t.Fatalf("sum's native calls while the collector marked: %d exits, %d calls of Go, %d counted, entrySlow %v",
 			e.ssaStats.hosts-hosts, r.jit.goCalls-made, e.ssaStats.goCalls-goCalls, e.entrySlow)
 	}
@@ -7437,12 +7443,12 @@ func TestJITSSAMarkingCallThrows(t *testing.T) {
 }
 
 // The collector may begin marking while a native callee runs, at a call
-// of Go it makes: its native calls after it are Go's (markingCall), made
-// from its level (jitGoCallNested), and are not the callee's to be judged
-// by (jitCalleeProfit) -- its other calls of Go are. Here mid, called
-// natively, calls parseInt, a call of Go at which marking begins, then
-// add, natively until then: twice in mid's first run, the only one called
-// natively, so mid counts its two calls of parseInt alone. The answer is
+// of Go it makes: its constructions with a receiver from a pool after it
+// are Go's (markingCall), made from its level (jitGoCallNested), and are
+// not the callee's to be judged by (jitCalleeProfit) -- its other calls of
+// Go are. Here mid, called natively, calls parseInt, a call of Go at which
+// marking begins, then constructs a P, natively until then: mid counts its
+// 600 calls of parseInt alone, not the constructions too. The answer is
 // the interpreter's.
 func TestJITSSAMarkingBeginsInNativeCallee(t *testing.T) {
 	if !jitSSABackend {
@@ -7451,7 +7457,8 @@ func TestJITSSAMarkingBeginsInNativeCallee(t *testing.T) {
 	marking := jitMarkingForTest(t)
 	*marking = 0
 	setup := `function add(a,b){let s=a;for(let i=0;i<3;i++)s=(s*3+b)|0;return s}
-		function mid(i,t){let s=0;for(let j=0;j<2;j++)s=(s+parseInt('7')+add(i+j,t&7))|0;return s}
+		function P(x){this.x=x;for(let i=0;i<2;i++)this.x=(this.x+i)|0}
+		function mid(i,t){let s=0;for(let j=0;j<2;j++)s=(s+parseInt('7')+new P(i+j).x)|0;return s}
 		function sum(n){let t=0;for(let i=0;i<n;i++){t=(t+add(i,t&7))|0;t^=t>>>3;t=(t*5+mid(i,t))|0;t^=t>>>7}return t}`
 	want := New(Config{})
 	defer want.Close()
@@ -7486,8 +7493,8 @@ func TestJITSSAMarkingBeginsInNativeCallee(t *testing.T) {
 	if err != nil || v.Number() != wv.Number() {
 		t.Fatalf("sum(300) = %v, %v; interpreter %v", v, err, wv)
 	}
-	if e.ssaStats.hosts != hosts || mid.ssaStats.calleeGoCalls-midCalls != 2 {
-		t.Fatalf("marking begun in mid: %d exits, mid counted %d calls of Go, not 2", e.ssaStats.hosts-hosts, mid.ssaStats.calleeGoCalls-midCalls)
+	if e.ssaStats.hosts != hosts || mid.ssaStats.calleeGoCalls-midCalls != 600 {
+		t.Fatalf("marking begun in mid: %d exits, mid counted %d calls of Go, not 600", e.ssaStats.hosts-hosts, mid.ssaStats.calleeGoCalls-midCalls)
 	}
 }
 
@@ -7541,8 +7548,9 @@ func TestJITSSAMarkingUnderGC(t *testing.T) {
 	}
 }
 
-// An exit the collector's marking made in a native callee -- a call with
-// more operands than a call of Go passes, which leaves while it marks --
+// An exit the collector's marking made in a native callee -- a
+// construction with a receiver from a pool and more operands than a call
+// of Go passes, which leaves while it marks --
 // ends its caller's run for the marking, as one in the caller's own code
 // would (jitSSAProfit): it is not judged, and it is counted. Here marking
 // begins in mid, called natively from sum, at its call of parseInt; its
@@ -7555,8 +7563,8 @@ func TestJITSSAMarkingExitInNativeCallee(t *testing.T) {
 	marking := jitMarkingForTest(t)
 	*marking = 0
 	setup := `function add(a,b){let s=a;for(let i=0;i<3;i++)s=(s*3+b)|0;return s}
-		function g(a,b,c,d,e,f,h,k,l,m,o,p,q,u,w,x){let t=a;for(let j=0;j<2;j++)t=(t+b+c+d+e+f+h+k+l+m+o+p+q+u+w+x)|0;return t}
-		function mid(i,t,big){let s=0;for(let j=0;j<2;j++){s=(s+parseInt('7')+add(i+j,t&7))|0;if(big)s=(s+g(i,1,2,3,4,5,6,7,0,0,0,0,0,0,0,0))|0}return s}
+		function G(a,b,c,d,e,f,h,k,l,m,o,p,q,u,w,x){let t=a;for(let j=0;j<2;j++)t=(t+b+c+d+e+f+h+k+l+m+o+p+q+u+w+x)|0;this.t=t}
+		function mid(i,t,big){let s=0;for(let j=0;j<2;j++){s=(s+parseInt('7')+add(i+j,t&7))|0;if(big)s=(s+new G(i,1,2,3,4,5,6,7,0,0,0,0,0,0,0,0).t)|0}return s}
 		function sum(n){let t=0;for(let i=0;i<n;i++){t=(t+add(i,t&7))|0;t^=t>>>3;t=(t*5+mid(i,t,i<1))|0;t^=t>>>7}return t}`
 	want := New(Config{})
 	defer want.Close()

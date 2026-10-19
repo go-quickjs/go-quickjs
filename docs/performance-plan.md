@@ -769,24 +769,19 @@ faster: its loss is its steady state's.
      `TestStoreRefShades` moves objects during a real collection, again
      under `GODEBUG=gccheckmark=1`; `jit.StoreRefClobber` gives every
      register junk across a store.
-  3. *Native calls while marking.* Go makes every native call while the
-     collector marks (mir's markingCall, abi.GoOpMarking), because the
-     call's setup stores pointers with no barrier: the records' pointer
-     words (RecordRef), the operands written into the callee's frame
-     (directOperand), the receiver, a construction's instance and this,
-     the callee context's fields, and the call entry's clearing of the
-     callee's locals and Cells. To do: keep one flag test per call, its
-     marking side a cold copy of the setup whose pointer stores go
-     through `storeRef`, with a routine of its own that clears a range of
-     pointer words (the call entry's locals); then remove markingCall,
-     GoOpMarking and the VM's jitMarkingCallee and goCallMarking. Tests:
-     DeltaBlue's shapes -- derived constructors with super(), forEach
-     given arrows (a generic call), pooled `new` -- under
-     `jitMarkingForTest`, making native calls and no call of Go, and the
-     same under a real collection with `gccheckmark`.
+  3. *Native calls while marking* (2026-10-19): native calls are made
+     natively whether the collector marks or not. A call's setup needs
+     no barrier -- the records, the callee's context and frame outlive
+     none of their sources and overwrite only an earlier call's -- and
+     the result, which outlives the callee's frame it comes from, is
+     stored through `storeRef` while marking (README, The write barrier).
+     Go still makes, while marking, a construction whose receiver comes
+     from a pool, a `push` and a `pop` (mir's markingCalls), which
+     move a pointer into what outlives the call; they join stage 4.
   4. *Pools while marking*: an object, an array literal, a closure, an
-     entry's cells or a loop's step taken while the collector marks is
-     Go's (markingTake and ssa.GoTake; closureTake, cellsTake and
+     entry's cells, a loop's step, a construction's receiver, a `push`
+     or a `pop` while the collector marks is Go's (markingTake and
+     ssa.GoTake; markingCall for the calls; closureTake, cellsTake and
      iterStep test the flag). To do: take natively, storing what the
      taker writes through `storeRef`, into its destination before the
      pool's cell is cleared; then remove GoTake.

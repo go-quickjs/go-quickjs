@@ -87,12 +87,12 @@ func TestJITHotCallsAnyOrder(t *testing.T) {
 	}
 }
 
-// While the collector marks, Go makes native code's calls (abi.GoOpMarking)
-// and enters each callee's code, whose own calls it makes too: a stretch
-// the marking cut short, which jitSSAProfit does not judge the callee by,
-// as it does not a stretch the marking ended. A recursion's had been
-// judged slow on its leaves -- under a collector that marked often, in
-// TestJITHotCallsAnyOrder on Windows -- and the tree tier ran it.
+// While the collector marks, native code makes its native calls, as it
+// does when it does not: a recursion runs on natively, no call of Go, and
+// is not judged slow. When Go made the calls then (abi.GoOpMarking), a
+// recursion's had been judged slow on its leaves -- under a collector that
+// marked often, in TestJITHotCallsAnyOrder on Windows -- and the tree tier
+// ran it.
 func TestJITHotCallsWhileMarking(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -131,7 +131,7 @@ func TestJITHotCallsWhileMarking(t *testing.T) {
 			t.Fatalf("run() = %v, %v", v, err)
 		}
 	}
-	if r.jit.goCalls-made < 4*4*1000 || e.entrySlow || r.jit.hint(cl) != e {
+	if r.jit.goCalls != made || e.entrySlow || r.jit.hint(cl) != e {
 		t.Errorf("moves, its calls made by Go while the collector marked (%d), judged slow %v (current %v): %+v",
 			r.jit.goCalls-made, e.entrySlow, r.jit.hint(cl) == e, e.ssaStats)
 	}

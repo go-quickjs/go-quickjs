@@ -563,6 +563,10 @@ func TestJITCapturedLocalCellsResumed(t *testing.T) {
 	for range 6 {
 		rounds = append(rounds, `midding(100)`)
 	}
+	// With the collector off, which the count is not about: CI's checkptr
+	// run, under a collector marking often, once resumed no level.
+	runtime.GC()
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	r := jitAgreesForTest(t, setup, rounds...)
 	var e *jitEntry
 	for k, x := range r.jit.cache {

@@ -2535,8 +2535,15 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	}
 	join, generic := arm64.Label(0), false
 	if !site.Alloc && !site.Receiver {
-		// As amd64's: while the collector marks, Go makes the call.
-		if join, generic = c.markingCall(v, site, stub); generic {
+		// As amd64's: while the collector marks, Go makes a call that moves
+		// a pointer with no barrier; any other is native, its result stored
+		// with Go's barrier then.
+		if c.enc.StoreRef == 0 || markingCalls(sites) {
+			join, generic = c.markingCall(v, site, stub)
+		} else if c.enc.CallGo != 0 && len(v.Args) <= abi.MaxGoArgs {
+			join, generic = c.a.NewLabel(), true
+		}
+		if generic {
 			defer c.a.Bind(join)
 		}
 	}
@@ -3022,6 +3029,14 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 		c.a.Load(a64RetRef, a64RetRef, abi.OffThis+c.enc.RefOffset)
 		c.a.Bind(object)
 	}
+	// As amd64's: while the collector marks, the result's pointer word with
+	// Go's write barrier.
+	marked, stored := c.a.NewLabel(), c.a.NewLabel()
+	if c.enc.StoreRef != 0 {
+		c.movImm(a64B, c.enc.WriteBarrier)
+		c.a.LoadU8(a64B, a64B, 0)
+		c.a.Cbnz(a64B, marked, false)
+	}
 	if site.Super {
 		// As amd64's: the this it binds, the context's This.
 		c.a.Store(a64Ctx, abi.OffThis+c.enc.RefOffset, a64RetRef)
@@ -3029,6 +3044,25 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	}
 	c.a.Store(a64Ctx, at+c.enc.RefOffset, a64RetRef)
 	c.a.Store(a64Ctx, at+c.enc.NumOffset, a64RetNum)
+	c.a.Bind(stored)
+	c.cold = append(c.cold, func() {
+		if c.enc.StoreRef == 0 {
+			return
+		}
+		c.a.Bind(marked)
+		c.a.Store(a64Ctx, at+c.enc.NumOffset, a64RetNum)
+		c.a.AddImm(a64A, a64Ctx, int64(at+c.enc.RefOffset), true)
+		c.refStore()
+		if site.Super {
+			c.a.Load(a64A, a64Ctx, at+c.enc.NumOffset)
+			c.a.Store(a64Ctx, abi.OffThis+c.enc.NumOffset, a64A)
+			c.a.Load(a64C, a64Ctx, at+c.enc.RefOffset)
+			c.a.AddImm(a64A, a64Ctx, int64(abi.OffThis+c.enc.RefOffset), true)
+			c.refStore()
+		}
+		c.a.Load(a64RetNum, a64Ctx, at+c.enc.NumOffset)
+		c.a.B(stored)
+	})
 	for _, sv := range c.savesOf(v) {
 		if sv.float {
 			c.a.LoadF(arm64.FReg(sv.reg), a64Ctx, c.spillDisp(sv.slot))

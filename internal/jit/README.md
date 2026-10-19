@@ -304,22 +304,28 @@ is to the Go runtime a function the code's Go caller called, and calls
 compiler's barrier shades the pointer it overwrites and the one it writes.
 A routine each code shares saves the registers the code allocates and
 restores them after; `storeRef` keeps only the context's register. The
-rest -- a pool's object taken, a native call's frame -- is still made by a
-call of Go, so Go's own barrier records it, and native code goes on after
-it. The flag cannot change between the test and the write: Go sets it only
-with the world stopped, which native code, never a preemption point, is
-not. Emulating the barrier's buffer in native code was rejected: its
-contents would have to reach the collector before any safepoint Go could
-stop the goroutine at.
+flag cannot change between the test and the write: Go sets it only with
+the world stopped, which native code, never a preemption point, is not.
+Emulating the barrier's buffer in native code was rejected: its contents
+would have to reach the collector before any safepoint Go could stop the
+goroutine at.
 
-One pointer store is made without the test: a native call's result, into
-the caller's keep cell (and a `super()`'s into its `This`), as its code
-goes on after the call -- after a return, or after Go finished a callee
-that left native code, the collector marking or not. The result is a
-source's, or Go's, written with Go's barrier (`RetValue`), and the cell's
-old value is one nothing native reads again: a value live across the call
-is copied out of its cell first. So Go resumes native callers whether the
-collector marks or not.
+A native call is made natively whether the collector marks or not, with
+no barrier in its setup: what it writes -- the caller's records, the
+callee's context and its frame past the VM's stack's top, the callee's
+locals made undefined -- each outlives none of what it is written from
+(the caller's frame, keeps and records, which last until the call
+returns), and overwrites only what nothing reads again, an earlier
+call's. The one store that outlives its source is the result's, into the
+caller's keep cell (and a `super()`'s into its `This`), from the
+callee's frame, which the next call overwrites: while the collector
+marks, its pointer word goes through `storeRef`, after a return or after
+Go finished a callee that left native code (`RetValue`). So Go resumes
+native callers, and they call on natively, whether the collector marks
+or not. What still moves a pointer into what outlives it with no barrier
+is made by a call of Go while the collector marks: a construction whose
+receiver native code takes from a pool, a `push` or a `pop` (mir's
+markingCalls), a pool's object or a literal (markingTake).
 
 ## The execution boundary
 

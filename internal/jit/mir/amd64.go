@@ -714,10 +714,22 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	}
 	join, generic := amd64.Label(0), false
 	if !site.Alloc && !site.Receiver {
-		// The collector is not marking: the records, the callee's context
-		// and its frame take pointers. While it marks, Go makes the call
-		// (markingCall).
-		if join, generic = c.markingCall(v, site, guard); generic {
+		if c.enc.StoreRef == 0 || markingCalls(sites) {
+			// A receiver from a pool, an element pushed or popped: a
+			// pointer moved into what outlives the call with no write
+			// barrier. While the collector marks, Go makes the call
+			// (markingCall).
+			join, generic = c.markingCall(v, site, guard)
+		} else if c.enc.CallGo != 0 && len(v.Args) <= abi.MaxGoArgs {
+			// Natively, the collector marking or not: what the call writes
+			// -- the records, the callee's context and frame -- outlives
+			// none of what it is written from, and overwrites what nothing
+			// reads again; the result, which outlives the callee's frame
+			// it comes from, is stored with Go's barrier while the
+			// collector marks (below).
+			join, generic = c.a.NewLabel(), true
+		}
+		if generic {
 			defer c.a.Bind(join)
 		}
 	}
@@ -1255,6 +1267,17 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		c.a.Load(retRef, retRef, abi.OffThis+c.enc.RefOffset)
 		c.a.Bind(object)
 	}
+	// While the collector marks, the result's pointer word is stored with
+	// Go's write barrier (refStore): the keep cell, and a super()'s This,
+	// outlive the callee's frame the result comes from, which the next
+	// native call overwrites with none.
+	marked, stored := c.a.NewLabel(), c.a.NewLabel()
+	if c.enc.StoreRef != 0 {
+		c.movImm(scratchB, c.enc.WriteBarrier)
+		c.a.LoadU8(scratchB, scratchB, 0)
+		c.a.Op(amd64.Test, scratchB, scratchB, false)
+		c.a.Jcc(amd64.CondNE, marked)
+	}
 	if site.Super {
 		// The this it binds, the context's This, which an exit does not
 		// write (the VM's jitDerivedFrame, jitBindThis).
@@ -1263,6 +1286,27 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	}
 	c.a.Store(regCtx, at+c.enc.RefOffset, retRef)
 	c.a.Store(regCtx, at+c.enc.NumOffset, retNum)
+	c.a.Bind(stored)
+	c.cold = append(c.cold, func() {
+		if c.enc.StoreRef == 0 {
+			return
+		}
+		// The number word first, read back after: refStore keeps no
+		// scratch register.
+		c.a.Bind(marked)
+		c.a.Store(regCtx, at+c.enc.NumOffset, retNum)
+		c.a.Lea(scratchA, regCtx, at+c.enc.RefOffset)
+		c.refStore()
+		if site.Super {
+			c.a.Load(scratchA, regCtx, at+c.enc.NumOffset)
+			c.a.Store(regCtx, abi.OffThis+c.enc.NumOffset, scratchA)
+			c.a.Load(scratchC, regCtx, at+c.enc.RefOffset)
+			c.a.Lea(scratchA, regCtx, abi.OffThis+c.enc.RefOffset)
+			c.refStore()
+		}
+		c.a.Load(retNum, regCtx, at+c.enc.NumOffset)
+		c.a.Jmp(stored)
+	})
 	for _, sv := range c.savesOf(v) {
 		if sv.float {
 			c.a.LoadSD(amd64.XReg(sv.reg), regCtx, c.spillDisp(sv.slot))

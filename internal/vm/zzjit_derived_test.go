@@ -239,6 +239,11 @@ func TestJITDerivedNativeErrors(t *testing.T) {
 		}
 	}
 	rounds = append(rounds, `Count.n`)
+	// With the collector off: while it marks, Go makes the constructions,
+	// their receivers from pools (mir's markingCall), and under GOGC=5 it
+	// marked through every one of Early's.
+	runtime.GC()
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	r := jitAgreesForTest(t, setup, rounds...)
 	for _, k := range names {
 		v, err := r.Run(compileForTest(t, `''+errs`+k+`(50)`))
