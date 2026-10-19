@@ -2910,11 +2910,7 @@ func jitHostCall(ctx *abi.Context) bool {
 		if ctx.GoOp>>abi.GoOpKindShift&0xff == abi.GoClosurePool {
 			// Cells native code takes from their pool where it can: run
 			// out, filled again, with more.
-			pool := *(**abi.ObjectPool)(unsafe.Pointer(&ctx.GoArgs[0].Ref))
-			if pool.Count == 0 {
-				pool.Size = min(2*max(pool.Size, abi.PoolSize), abi.PoolCapacity)
-				jitFillCells(pool)
-			}
+			jitRefillCells(*(**abi.ObjectPool)(unsafe.Pointer(&ctx.GoArgs[0].Ref)))
 		}
 		return r.jitMakeCells(ctx)
 	case ssa.GoClosure, ssa.GoClose:
@@ -2930,9 +2926,14 @@ func jitHostCall(ctx *abi.Context) bool {
 		}
 		i := int(ctx.GoOp >> abi.GoOpIndexShift)
 		if ctx.GoOp>>abi.GoOpKindShift&0xff == abi.GoClosurePool {
-			// One native code takes from its pool where it can: run out,
-			// filled again, with more.
-			r.jitRefillPool(*(**abi.ObjectPool)(unsafe.Pointer(&ctx.GoArgs[0].Ref)))
+			// One native code takes from its pool where it can, or the
+			// cells a scope's end takes (mir's cellsClose): run out, filled
+			// again, with more.
+			if pool := *(**abi.ObjectPool)(unsafe.Pointer(&ctx.GoArgs[0].Ref)); pool.Cells != 0 {
+				jitRefillCells(pool)
+			} else {
+				r.jitRefillPool(pool)
+			}
 		}
 		if ctx.Cells != nil {
 			// Code whose captured locals are in cells of their own.
@@ -3420,6 +3421,15 @@ func jitNewCells(n int) ([]*upvalue, []upvalue) {
 	return make([]*upvalue, n), make([]upvalue, n)
 }
 
+// jitRefillCells fills pool, a pool of cells (abi.ObjectPool's Cells),
+// again, with more, if native code ran it out.
+func jitRefillCells(pool *abi.ObjectPool) {
+	if pool.Count == 0 {
+		pool.Size = min(2*max(pool.Size, abi.PoolSize), abi.PoolCapacity)
+		jitFillCells(pool)
+	}
+}
+
 // jitFillCells fills pool with Size blocks of its Cells cells, as
 // jitNewCells makes them, each cell's pointer to the value it holds itself
 // (upvalue's closed) and the block's pointers to its cells written, which
@@ -3504,6 +3514,9 @@ func (r *Runtime) jitCellsClosure(ctx *abi.Context, f *frame, i int) bool {
 			}
 			if slot >= i {
 				if run {
+					// What the cell holds, which may be one native code
+					// gave it (mir's cellsClose), not open on the slot.
+					f.locals[slot] = *cells[k].slot
 					u := &upvalue{slot: &f.locals[slot]}
 					f.openUpvalues = append(f.openUpvalues, u)
 					cells[k] = u
@@ -3545,6 +3558,28 @@ func jitReopenCells(f *frame, ctx *abi.Context) {
 		}
 		k++
 	}
+}
+
+// jitReopenRunCells gives f, the frame Go entered code with whose captured
+// locals are in cells of their own, the cells native code left in ctx, as
+// the interpreter's frame has them: a cell native code gave a local at a
+// scope's end (mir's cellsClose), closed, is open on its slot again,
+// holding what it held, and those it closed, no longer on the slots, are
+// the frame's no more.
+func jitReopenRunCells(f *frame, ctx *abi.Context) {
+	if len(f.locals) != 0 {
+		lo, hi := uintptr(unsafe.Pointer(&f.locals[0])), uintptr(unsafe.Pointer(&f.locals[len(f.locals)-1]))
+		kept := f.openUpvalues[:0]
+		for _, u := range f.openUpvalues {
+			if p := uintptr(unsafe.Pointer(u.slot)); p >= lo && p <= hi {
+				kept = append(kept, u)
+			}
+		}
+		clear(f.openUpvalues[len(kept):])
+		f.openUpvalues = kept
+	}
+	jitReopenCells(f, ctx)
+	ctx.Open = uint64(len(f.openUpvalues))
 }
 
 // jitNeedsMaker reports whether the function template c makes is an arrow
@@ -7356,6 +7391,10 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			err, resume = e.ssa.Resume(resume, s.ssaCtxs[idx+1]), 0
 		} else {
 			err = e.ssa.Run(pc, ctx)
+		}
+		if ctx.Cells != nil {
+			// Its cells, as the frame has them, for whatever runs it now.
+			jitReopenRunCells(f, ctx)
 		}
 		if f.thisRef != nil && !f.thisRef.init {
 			if this := *(*Value)(unsafe.Pointer(&ctx.This)); this.IsObject() && f.cl.fn.Kind == bytecode.KindDerivedConstructor {

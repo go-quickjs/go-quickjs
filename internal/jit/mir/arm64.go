@@ -3461,6 +3461,19 @@ func (c *a64Compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(arm64.
 		c.a.Bind(join)
 		return
 	}
+	if site.Go == ssa.GoClose && site.Pool != 0 {
+		// As amd64's: natively from the function's pool of cells where it
+		// can be, by Go otherwise.
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		c.cellsClose(site, slow)
+		c.a.B(join)
+		c.a.Bind(slow)
+		c.movImm(a64A, uint64(site.Pool))
+		c.a.Store(a64Ctx, abi.OffGoArgs+c.enc.RefOffset, a64A)
+		c.goCallOp(v, goOpWord(site), false)
+		c.a.Bind(join)
+		return
+	}
 	if site.Go == ssa.GoClose && !c.f.Cells {
 		// As amd64's: only while closures have captured the frame's locals,
 		// in code whose captured locals are in its frame.
@@ -3518,6 +3531,104 @@ func (c *a64Compiler) cellsTake(site *ssa.CallSite, slow arm64.Label) {
 		c.a.Load(a64A, a64Locals, slot*vs+c.enc.RefOffset)
 		c.a.Store(a64C, at+c.enc.RefOffset, a64A)
 	}
+}
+
+// cellsClose is amd64's: a scope's end, each local from Argc on given its
+// block's cell, holding what the old one holds, which is closed. It uses
+// A, B, C and D.
+func (c *a64Compiler) cellsClose(site *ssa.CallSite, slow arm64.Label) {
+	marked, done := c.a.NewLabel(), c.a.NewLabel()
+	c.movImm(a64A, c.enc.WriteBarrier)
+	c.a.LoadU8(a64A, a64A, 0)
+	c.a.Cbnz(a64A, marked, false)
+	c.cold = append(c.cold, func() {
+		c.a.Bind(marked)
+		c.cellsCloseMarking(site, slow)
+		c.a.B(done)
+	})
+	defer c.a.Bind(done)
+	c.movImm(a64A, uint64(site.Pool))
+	c.a.Load(a64B, a64A, abi.OffPoolCount)
+	c.a.Cbz(a64B, slow, true)
+	c.a.AddImm(a64B, a64B, -1, true)
+	c.a.Store(a64A, abi.OffPoolCount, a64B)
+	c.a.ShiftImm(arm64.Lsl, a64B, a64B, 3, true)
+	c.a.Op(arm64.Add, a64B, a64B, a64A, true)
+	c.a.Load(a64C, a64B, abi.OffPoolObjects)
+	c.a.Store(a64B, abi.OffPoolObjects, arm64.ZR)
+	n := int32(len(site.Captures))
+	for k, x := range site.Captures {
+		if int(x>>1) < site.Argc {
+			continue
+		}
+		at := 8*n + int32(k)*c.enc.UpvalueSize
+		c.a.Load(a64A, a64Ctx, abi.OffCells)
+		c.a.Load(a64A, a64A, int32(k)*8)
+		c.a.Load(a64B, a64A, c.enc.UpvalueSlot)
+		for _, w := range []int32{c.enc.NumOffset, c.enc.RefOffset} {
+			c.a.Load(a64D, a64B, w)
+			c.a.Store(a64A, c.enc.UpvalueClosed+w, a64D)
+			c.a.Store(a64C, at+c.enc.UpvalueClosed+w, a64D)
+		}
+		c.a.AddImm(a64B, a64A, int64(c.enc.UpvalueClosed), true)
+		c.a.Store(a64A, c.enc.UpvalueSlot, a64B)
+		c.a.AddImm(a64B, a64C, int64(at), true)
+		c.a.Load(a64A, a64Ctx, abi.OffCells)
+		c.a.Store(a64A, int32(k)*8, a64B)
+	}
+}
+
+// cellsCloseMarking is amd64's: each pointer word written with Go's
+// barrier, the block kept in the context's second GoArgs meanwhile.
+func (c *a64Compiler) cellsCloseMarking(site *ssa.CallSite, slow arm64.Label) {
+	block := abi.OffGoArgs + c.enc.ValueSize + c.enc.RefOffset
+	c.movImm(a64A, uint64(site.Pool))
+	c.a.Load(a64B, a64A, abi.OffPoolCount)
+	c.a.Cbz(a64B, slow, true)
+	c.a.AddImm(a64B, a64B, -1, true)
+	c.a.Store(a64A, abi.OffPoolCount, a64B)
+	c.a.ShiftImm(arm64.Lsl, a64B, a64B, 3, true)
+	c.a.Op(arm64.Add, a64B, a64B, a64A, true)
+	c.a.Load(a64C, a64B, abi.OffPoolObjects)
+	c.a.Store(a64Ctx, block, a64C)
+	c.a.AddImm(a64A, a64B, int64(abi.OffPoolObjects), true)
+	c.movImm(a64C, 0)
+	c.refStore()
+	old := func(k int) {
+		c.a.Load(a64A, a64Ctx, abi.OffCells)
+		c.a.Load(a64A, a64A, int32(k)*8)
+	}
+	n := int32(len(site.Captures))
+	for k, x := range site.Captures {
+		if int(x>>1) < site.Argc {
+			continue
+		}
+		at := 8*n + int32(k)*c.enc.UpvalueSize
+		old(k)
+		c.a.Load(a64B, a64A, c.enc.UpvalueSlot)
+		c.a.Load(a64C, a64B, c.enc.NumOffset)
+		c.a.Store(a64A, c.enc.UpvalueClosed+c.enc.NumOffset, a64C)
+		c.a.Load(a64C, a64B, c.enc.RefOffset)
+		c.a.AddImm(a64A, a64A, int64(c.enc.UpvalueClosed+c.enc.RefOffset), true)
+		c.refStore()
+		old(k)
+		c.a.AddImm(a64C, a64A, int64(c.enc.UpvalueClosed), true)
+		c.a.AddImm(a64A, a64A, int64(c.enc.UpvalueSlot), true)
+		c.refStore()
+		old(k)
+		c.a.Load(a64B, a64Ctx, block)
+		c.a.Load(a64C, a64A, c.enc.UpvalueClosed+c.enc.NumOffset)
+		c.a.Store(a64B, at+c.enc.UpvalueClosed+c.enc.NumOffset, a64C)
+		c.a.Load(a64C, a64A, c.enc.UpvalueClosed+c.enc.RefOffset)
+		c.a.AddImm(a64A, a64B, int64(at+c.enc.UpvalueClosed+c.enc.RefOffset), true)
+		c.refStore()
+		c.a.Load(a64B, a64Ctx, block)
+		c.a.AddImm(a64C, a64B, int64(at), true)
+		c.a.Load(a64A, a64Ctx, abi.OffCells)
+		c.a.AddImm(a64A, a64A, int64(k)*8, true)
+		c.refStore()
+	}
+	c.a.Store(a64Ctx, block, arm64.ZR)
 }
 
 // cellsTakeMarking is amd64's: the pool's cell cleared, each cell's

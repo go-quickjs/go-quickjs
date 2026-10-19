@@ -1355,6 +1355,18 @@ func (c *compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(amd64.Con
 		c.a.Bind(join)
 		return
 	}
+	if site.Go == ssa.GoClose && site.Pool != 0 {
+		// Natively from the function's pool of cells where it can be
+		// (cellsClose), by Go otherwise, which fills the pool again.
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		c.cellsClose(site, slow)
+		c.a.Jmp(join)
+		c.a.Bind(slow)
+		c.storeImm(regCtx, abi.OffGoArgs+c.enc.RefOffset, uint64(site.Pool), scratchA)
+		c.goCallOp(v, goOpWord(site), guard, false)
+		c.a.Bind(join)
+		return
+	}
 	if site.Go == ssa.GoClose && !c.f.Cells {
 		// Only while closures have captured the frame's locals
 		// (abi.Context's Open): its result nothing reads. Code whose
@@ -1500,6 +1512,129 @@ func (c *compiler) cellsTake(site *ssa.CallSite, slow amd64.Label) {
 		c.a.Load(scratchA, regLocals, slot*vs+c.enc.RefOffset)
 		c.a.Store(scratchC, at+c.enc.RefOffset, scratchA)
 	}
+}
+
+// cellsClose ends a scope natively (ssa.GoClose) in code whose captured
+// locals are in cells of their own, as V8's code allocates a block's
+// context at each iteration: where the pool has a block, its next, each
+// local from the call's Argc on gets the block's cell of it, holding what
+// the old cell holds, in the context's Cells, and the old one is closed
+// -- what it held copied into it, its slot pointing there -- as the VM's
+// closeUpvaluesFrom closes it. The closures that captured it keep it; the
+// next iteration's capture the new one. The frame Go entered the code
+// with has its cells open on its slots: one closed so is no longer, and
+// Go opens its new one there once native code has left it
+// (jitReopenRunCells). Anything else goes to slow, where Go makes them.
+// It uses every scratch register, and xScratch0 and xScratch1.
+func (c *compiler) cellsClose(site *ssa.CallSite, slow amd64.Label) {
+	marked, done := c.a.NewLabel(), c.a.NewLabel()
+	c.movImm(scratchA, c.enc.WriteBarrier)
+	c.a.LoadU8(scratchA, scratchA, 0)
+	c.a.Op(amd64.Test, scratchA, scratchA, false)
+	c.a.Jcc(amd64.CondNE, marked)
+	c.cold = append(c.cold, func() {
+		c.a.Bind(marked)
+		c.cellsCloseMarking(site, slow)
+		c.a.Jmp(done)
+	})
+	defer c.a.Bind(done)
+	c.movImm(scratchA, uint64(site.Pool))
+	c.a.Load(scratchB, scratchA, abi.OffPoolCount)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	c.a.Jcc(amd64.CondE, slow)
+	// The pool's last block, its cell cleared, in scratchC.
+	c.a.OpImm(amd64.Sub, scratchB, 1, true)
+	c.a.Store(scratchA, abi.OffPoolCount, scratchB)
+	c.a.ShiftImm(amd64.Shl, scratchB, 3, true)
+	c.a.Op(amd64.Add, scratchB, scratchA, true)
+	c.a.Load(scratchC, scratchB, abi.OffPoolObjects)
+	c.storeImm(scratchB, abi.OffPoolObjects, 0, scratchA)
+	n := int32(len(site.Captures))
+	for k, x := range site.Captures {
+		if int(x>>1) < site.Argc {
+			continue
+		}
+		at := 8*n + int32(k)*c.enc.UpvalueSize
+		// The old cell, and what it holds.
+		c.a.Load(scratchA, regCtx, abi.OffCells)
+		c.a.Load(scratchA, scratchA, int32(k)*8)
+		c.a.Load(scratchB, scratchA, c.enc.UpvalueSlot)
+		c.a.LoadSD(xScratch0, scratchB, c.enc.NumOffset)
+		c.a.LoadSD(xScratch1, scratchB, c.enc.RefOffset)
+		// Closed.
+		c.a.StoreSD(scratchA, c.enc.UpvalueClosed+c.enc.NumOffset, xScratch0)
+		c.a.StoreSD(scratchA, c.enc.UpvalueClosed+c.enc.RefOffset, xScratch1)
+		c.a.Lea(scratchB, scratchA, c.enc.UpvalueClosed)
+		c.a.Store(scratchA, c.enc.UpvalueSlot, scratchB)
+		// The new one, which points at what it holds already
+		// (jitFillCells), the context's.
+		c.a.StoreSD(scratchC, at+c.enc.UpvalueClosed+c.enc.NumOffset, xScratch0)
+		c.a.StoreSD(scratchC, at+c.enc.UpvalueClosed+c.enc.RefOffset, xScratch1)
+		c.a.Lea(scratchB, scratchC, at)
+		c.a.Load(scratchA, regCtx, abi.OffCells)
+		c.a.Store(scratchA, int32(k)*8, scratchB)
+	}
+}
+
+// cellsCloseMarking is cellsClose while the collector marks: the pool's
+// cell cleared, and each pointer word written -- what a cell holds, the
+// old one's slot, the context's cell -- with Go's write barrier
+// (refStore). The block is kept in the context's second GoArgs while it
+// runs; the old cell is read again from the context's Cells after each.
+func (c *compiler) cellsCloseMarking(site *ssa.CallSite, slow amd64.Label) {
+	block := abi.OffGoArgs + c.enc.ValueSize + c.enc.RefOffset
+	c.movImm(scratchA, uint64(site.Pool))
+	c.a.Load(scratchB, scratchA, abi.OffPoolCount)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	c.a.Jcc(amd64.CondE, slow)
+	c.a.OpImm(amd64.Sub, scratchB, 1, true)
+	c.a.Store(scratchA, abi.OffPoolCount, scratchB)
+	c.a.ShiftImm(amd64.Shl, scratchB, 3, true)
+	c.a.Op(amd64.Add, scratchB, scratchA, true)
+	c.a.Load(scratchC, scratchB, abi.OffPoolObjects)
+	c.a.Store(regCtx, block, scratchC)
+	c.a.Lea(scratchA, scratchB, abi.OffPoolObjects)
+	c.movImm(scratchC, 0)
+	c.refStore()
+	old := func(k int) {
+		c.a.Load(scratchA, regCtx, abi.OffCells)
+		c.a.Load(scratchA, scratchA, int32(k)*8)
+	}
+	n := int32(len(site.Captures))
+	for k, x := range site.Captures {
+		if int(x>>1) < site.Argc {
+			continue
+		}
+		at := 8*n + int32(k)*c.enc.UpvalueSize
+		// The old cell closed: what it holds, then its slot.
+		old(k)
+		c.a.Load(scratchB, scratchA, c.enc.UpvalueSlot)
+		c.a.Load(scratchC, scratchB, c.enc.NumOffset)
+		c.a.Store(scratchA, c.enc.UpvalueClosed+c.enc.NumOffset, scratchC)
+		c.a.Load(scratchC, scratchB, c.enc.RefOffset)
+		c.a.Lea(scratchA, scratchA, c.enc.UpvalueClosed+c.enc.RefOffset)
+		c.refStore()
+		old(k)
+		c.a.Lea(scratchC, scratchA, c.enc.UpvalueClosed)
+		c.a.Lea(scratchA, scratchA, c.enc.UpvalueSlot)
+		c.refStore()
+		// The new one holding it.
+		old(k)
+		c.a.Load(scratchB, regCtx, block)
+		c.a.Load(scratchC, scratchA, c.enc.UpvalueClosed+c.enc.NumOffset)
+		c.a.Store(scratchB, at+c.enc.UpvalueClosed+c.enc.NumOffset, scratchC)
+		c.a.Load(scratchC, scratchA, c.enc.UpvalueClosed+c.enc.RefOffset)
+		c.a.Lea(scratchA, scratchB, at+c.enc.UpvalueClosed+c.enc.RefOffset)
+		c.refStore()
+		// The context's.
+		c.a.Load(scratchB, regCtx, block)
+		c.a.Lea(scratchC, scratchB, at)
+		c.a.Load(scratchA, regCtx, abi.OffCells)
+		c.a.Lea(scratchA, scratchA, int32(k)*8)
+		c.refStore()
+	}
+	// The block is the context's now; the GoArgs keep nothing.
+	c.storeImm(regCtx, block, 0, scratchA)
 }
 
 // cellsTakeMarking is cellsTake while the collector marks: the pool's cell

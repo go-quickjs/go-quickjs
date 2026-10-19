@@ -140,22 +140,27 @@ however the loop is left, as the interpreter closes it. `yield*`, an
 `await using` scope's disposal steps, `import()` and `import.meta` leave
 for Go and go on past it.
 
-**Closures.** A local an inner closure captures stays in the frame's slot,
-which the closure's upvalue points at until the frame returns, as in the
-interpreter. Native code treats that slot as the local's cell
-(`ssa.OpLocalCell`), as it does a captured binding's: it assigns the local
-there as it assigns it, and reads it there again after anything that may
-have run a closure -- a native call, a call of Go that runs script, an
-entry -- and frame states leave it out, the frame holding it already. A
-closure is made, and a scope's end closes what closures captured, by a
-call of Go on the frame Go entered the code with (`ssa.GoClosure`,
-`GoClose`); a native callee, which has no frame of the VM's, leaves for Go
-to make it. A call of a closure that captures bindings checks the
-function the callee runs, in its environment and realm, not the object
-(`ssa.CallSite`'s `ByCode`), and gives the callee the closure it finds, as
-V8 checks a call's code: a callback made anew at each call of its maker is
-a new object, the same function. Such a closure is not inlined: an inlined
-callee's captured bindings are Go's.
+**Closures.** Code whose locals an inner closure captures keeps them in
+cells of its own (`ir.Program`'s `Cells`), as V8 allocates a function's
+context: the context's `Cells`, each an upvalue holding its value, which
+native code reads and assigns through it, and frame states leave out. A
+native callee takes them from its function's pool at its entry
+(`ssa.GoCells`, mir's `cellsTake`); the frame Go entered the code with has
+them open on its slots, as the interpreter's are. A closure is taken from
+its template's pool (`closureTake`) -- in code with no cells too, where it
+captures none of the code's locals -- and a scope's end gives its locals
+fresh cells from the function's pool, holding what the old ones held,
+which it closes (`ssa.GoClose`, `cellsClose`), as V8 allocates a block's
+context at each iteration. Go makes them where a pool has run out,
+refilling it, or a function has more than four cells. A cell native code
+made on the frame Go entered is open on its slot again once native code
+leaves the frame (the VM's `jitReopenRunCells`), as the cells of a native
+callee's frame Go makes are (`jitReopenCells`). A call of a closure that
+captures bindings checks the function the callee runs, in its environment
+and realm, not the object (`ssa.CallSite`'s `ByCode`), and gives the
+callee the closure it finds, as V8 checks a call's code: a callback made
+anew at each call of its maker is a new object, the same function. Such a
+closure is not inlined: an inlined callee's captured bindings are Go's.
 
 **Generators and async functions.** `yield` and `await` are exits at which
 Go suspends the frame as the interpreter does, and each resumption enters

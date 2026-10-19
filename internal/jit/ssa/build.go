@@ -406,7 +406,11 @@ type CallSite struct {
 	// block of them from the pool, its cells linked, and writes each
 	// cell's value -- the argument, |1, or undefined -- as V8's code
 	// allocates a function's context, where its context is a native
-	// call's; Go makes them otherwise, and fills the pool again.
+	// call's; Go makes them otherwise, and fills the pool again. Of a
+	// scope's end (GoClose) in such code, they are the same, the function's
+	// pool and its cells' locals: native code gives each local from Argc
+	// on a fresh cell, its block's, holding what the old one held, which it
+	// closes, as V8's code allocates a block's context at each iteration.
 	Captures []int32
 	LexThis  bool
 }
@@ -1892,6 +1896,14 @@ func (b *builder) goFrame(blk *Block, pc int, in ir.Instruction, guard func(Op, 
 		// made at every call, 414,000 a run.
 		if cs, ok := fb.Closure(pc); ok && cs.Pool != 0 && (b.p.Cells || !capturesLocals(cs.Captures)) {
 			site.Pool, site.Captures, site.LexThis = cs.Pool, cs.Captures, cs.LexThis
+		}
+	}
+	if fb, ok := b.fb.(CellsFeedback); ok && in.Op == ir.CloseUpvalues && b.p.Cells {
+		// Natively, from the function's pool of cells, as Go made each
+		// one: AWFY Havlak's findLoops, whose loop's body makes an arrow
+		// capturing a const of its iteration, 565,000 a run.
+		if pool, cells, ok := fb.CellsPool(); ok {
+			site.Pool, site.Captures = pool, cells
 		}
 	}
 	b.f.cache(call).Calls, call.Index = []*CallSite{site}, b.f.Keeps
