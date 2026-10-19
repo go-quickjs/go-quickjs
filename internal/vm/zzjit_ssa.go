@@ -3078,10 +3078,16 @@ func jitHostCall(ctx *abi.Context) bool {
 // jitGoRun is what a run of native code in a context runs: its frame,
 // entry and code (jitState's goRuns).
 type jitGoRun struct {
-	f      *frame
-	e      *jitEntry
-	code   *jit.SSACode
-	pinned bool
+	f    *frame
+	e    *jitEntry
+	code *jit.SSACode
+	// inlined are the closures code inlines (jitEntry's ssaInlined), whose
+	// frames Go makes at an exit inside one (jitUnwindNative): e's lists
+	// are another code's once e is compiled again while the run goes on
+	// (otherwiseInUse), and code's, closed once its native code has left,
+	// keep nothing.
+	inlined []*closure
+	pinned  bool
 	// pinnedAt is where its pins start in goPinned: its own code, then
 	// that of the native callees whose calls of Go it is suspended in
 	// (jitGoCallNested), all released when its native code leaves. serial
@@ -3110,7 +3116,7 @@ func (r *Runtime) jitGoRunAt(idx int, f *frame, e *jitEntry) {
 	if idx >= len(s.goRuns) {
 		s.goRuns = append(s.goRuns, make([]jitGoRun, idx+1-len(s.goRuns))...)
 	}
-	s.goRuns[idx] = jitGoRun{f: f, e: e, code: e.ssa}
+	s.goRuns[idx] = jitGoRun{f: f, e: e, code: e.ssa, inlined: e.ssaInlined}
 }
 
 // jitGoPending is a call Go made from native code and left native code
@@ -7946,16 +7952,21 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure) (Value, e
 			}
 			// Its code is that of the nearest level below it not inlined,
 			// or e's, which inlined it, and the callees it is inlined in.
+			// The closures it inlined: those of the code that ran, the
+			// run's, which e may have replaced meanwhile, or a native
+			// callee's, which is not compiled again while it is called.
 			parent, parentCl, parentPC := e, root, s.ssaCtxs[idx].ExitPC
+			inlined := s.goRuns[idx].inlined
 			outer := true
 			for k := len(s.unwinding) - 1; k >= start; k-- {
 				if caller := &s.unwinding[k]; !caller.inline {
 					parent, parentCl, parentPC = r.jitEntryOf(caller.cl), caller.cl, caller.pc
+					inlined = parent.ssaInlined
 					break
 				}
 				outer = false
 			}
-			for _, cl := range parent.ssaInlined {
+			for _, cl := range inlined {
 				if uintptr(unsafe.Pointer(cl)) == uintptr(c.InlineClosure) {
 					l.cl = cl
 				}
