@@ -1605,6 +1605,19 @@ func (s *jitState) hintGrowth() int {
 	return (s.hintsCap() - cap(s.hints)) * int(unsafe.Sizeof(jitHintSlot{}))
 }
 
+// hintRoom is the room e's compile takes in the hint table, nil a new
+// entry's: what the table grows by if e has no slot yet (hintGrowth), the
+// size of the table again when it doubles -- asked for with the room a
+// compile asks for first, as it is known then, not learned per
+// instruction: averaged in, a compile that met the table's doubling at a
+// full budget asked for 6,146 bytes, was made with 7,208 and thrown away.
+func (s *jitState) hintRoom(e *jitEntry) int {
+	if e == nil || e.hint == 0 {
+		return s.hintGrowth()
+	}
+	return 0
+}
+
 func (r *Runtime) releaseJIT() {
 	if r.jit == nil {
 		return
@@ -1705,7 +1718,7 @@ func (r *Runtime) jitCompileFor(fn *bytecode.Function, cl *closure, kind jitLowe
 	// Room for as much as its entry is likely to hold (perInstr), made from
 	// what is old -- or none, and it runs in the existing tiers for now.
 	s.age(s.epoch())
-	if !s.makeRoom(len(fn.Code) * s.perInstr) {
+	if !s.makeRoom(len(fn.Code)*s.perInstr + s.hintRoom(nil)) {
 		return nil
 	}
 	s.serial++

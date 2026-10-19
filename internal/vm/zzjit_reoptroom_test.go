@@ -306,3 +306,51 @@ func jitOldStaysUncounted(r *Runtime, old []*jitEntry) *jitEntry {
 func jitHeldButScratch(r *Runtime) int64 {
 	return r.jitHeldBytes() - int64(jitCapBytes(r.jit.victims))
 }
+
+// The room a first compile asks for has in it what the hint table grows by
+// if the compile is the one that has it double (jitState's hintRoom): known
+// before the compile, it is no average. Averaged into perInstr instead, a
+// compile meeting the doubling at a budget with room for an entry like
+// the last but not for the table's growth was made and thrown away -- at
+// one of TestJITFillDiscardsNothing's budgets once the code had grown by
+// a few bytes.
+func TestJITRoomForHintGrowth(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	epoch := uint64(0)
+	defer func(was func() uint64) { jitEpochNow = was }(jitEpochNow)
+	jitEpochNow = func() uint64 { return epoch }
+	var keep []*bytecode.Function
+	defer runtime.KeepAlive(&keep)
+	fn := jitFunctionForTest(t, `function f(n) { var s=0; for(var i=0;i<n;i++) s+=i; return s }`)
+	copyOf := jitCopiesForTest(fn, &keep)
+	// A runtime filled until its next compile is the one that grows the
+	// table, its budget (jitBudget) room more than it holds.
+	filled := func(room int) *Runtime {
+		r := New(Config{JIT: true})
+		r.jitCallThreshold, r.jitICThreshold = 1, 1
+		for n := 0; r.jit == nil || r.jit.hintGrowth() == 0; n++ {
+			if n > 1<<10 || r.jitForFunction(copyOf(), nil) == nil {
+				t.Fatalf("the hint table never filled: %d compiles", n)
+			}
+		}
+		r.jitMemoryLimit = int64(r.jit.held() + room)
+		return r
+	}
+	r := filled(0)
+	est, growth := len(fn.Code)*r.jit.perInstr, r.jit.hintGrowth()
+	r.Close()
+	r.ReleaseClosed()
+	// Every room from what the estimate alone asks for to past what the
+	// estimate and the growth do.
+	for room := est - growth; room <= est+2*growth; room += 16 {
+		r := filled(room)
+		r.jitForFunction(copyOf(), nil)
+		if r.jit.discarded != 0 {
+			t.Fatalf("room %d (estimate %d, the table's growth %d): compiled for nothing, %d discarded", room, est, growth, r.jit.discarded)
+		}
+		r.Close()
+		r.ReleaseClosed()
+	}
+}

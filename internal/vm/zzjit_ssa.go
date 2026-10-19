@@ -1760,10 +1760,10 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 	if e != nil {
 		need += e.learnedBytes()
 	}
-	if e == nil || e.hint == 0 {
-		// The hint table's slot, which remember takes once it is placed.
-		need += s.hintGrowth()
-	}
+	// The hint table's slot, which remember takes once it is placed: a
+	// step when the table grows, not a function's bytes (learn).
+	hint := s.hintRoom(e)
+	need += hint
 	// The lists of native callers its callees keep, which it joins once
 	// placed (setLinks).
 	need += s.callersGrowth(e, fb.links)
@@ -1789,7 +1789,7 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 	// for first, which had come short of all three at a full budget, and
 	// then of the lowering's own bytes -- a compile that met a budget
 	// within them was made and thrown away.
-	s.learn(len(fn.Code), need+p.Footprint()+jitLoweringFixed+jitLinkFixed)
+	s.learn(len(fn.Code), need-hint+p.Footprint()+jitLoweringFixed+jitLinkFixed)
 	return code, fb, nil
 }
 
@@ -5863,7 +5863,7 @@ func (r *Runtime) jitNativeCallee(cl *closure) *jitEntry {
 	// collector released it, and native callers called where it had been.
 	e.busy++
 	defer func() { e.busy-- }()
-	if !s.makeRoom(len(fn.Code) * s.perInstr) {
+	if !s.makeRoom(len(fn.Code)*s.perInstr + s.hintRoom(e)) {
 		return nil
 	}
 	r.jitSeedCalls(cl, e, p)
