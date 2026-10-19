@@ -650,6 +650,17 @@ const (
 	LoopKinds
 )
 
+// A loop's kind, in Context.Loop's high half, is one of those in its low
+// byte (LoopKindMask), and LoopTyped with it for %TypedArray%.prototype's
+// method of that name, the typed array's element type (the VM's) at
+// LoopTypedShift: no element is a hole, each one read where the view has
+// it, and undefined where it no longer does.
+const (
+	LoopKindMask   = 0xff
+	LoopTyped      = 1 << 8
+	LoopTypedShift = 16
+)
+
 // ExitLoc is where an exit finds a word: in a register or a spill slot as
 // it is, or boxed from a float or a boolean there; a constant, the
 // description's word N (Words), or 0 for an N below 0; a slot's address;

@@ -163,8 +163,11 @@ type jitRealmFields struct {
 	jitSubstring, jitSlice, jitSubstr, jitCharAt Value
 	// jitLoops are Array.prototype's methods native code makes loops of
 	// (ssa.ForEachSite), by their kind (abi.LoopForEach and those after
-	// it); nil for none.
-	jitLoops [abi.LoopKinds]*Object
+	// it); nil for none. jitTypedLoops are %TypedArray%.prototype's of the
+	// same names, those whose loops native code makes of a typed array's
+	// calls (abi.LoopTyped): all but map and filter, whose result is a
+	// typed array its species makes.
+	jitLoops, jitTypedLoops [abi.LoopKinds]*Object
 }
 
 // jitLoopNames are the methods of jitLoops, by kind.
@@ -194,21 +197,33 @@ func (r *Runtime) recordJITSubstrings() {
 	}
 	r.jitSubstring, r.jitSlice, r.jitSubstr, r.jitCharAt = own("substring"), own("slice"), own("substr"), own("charAt")
 	for kind, name := range jitLoopNames {
-		r.jitLoops[kind] = nil
+		r.jitLoops[kind], r.jitTypedLoops[kind] = nil, nil
 		if m := r.proto.array.getOwn(r.atoms.intern(name)); name != "" && m.ok() && m.value().IsObject() {
 			r.jitLoops[kind] = m.value().Object()
+		}
+		if kind == abi.LoopMap || kind == abi.LoopFilter || r.typedArrayProto == nil {
+			continue
+		}
+		if m := r.typedArrayProto.getOwn(r.atoms.intern(name)); name != "" && m.ok() && m.value().IsObject() {
+			r.jitTypedLoops[kind] = m.value().Object()
 		}
 	}
 }
 
 // jitLoopKind is the kind of loop native code makes of a call of o
 // (abi.LoopForEach and those after it): the realm's Array.prototype.forEach,
-// or another of jitLoops; or 0.
+// or another of jitLoops; abi.LoopTyped with it for one of jitTypedLoops;
+// or 0.
 func (r *Runtime) jitLoopKind(o *Object) int {
 	if o != nil {
 		for kind, fn := range r.jitLoops {
 			if fn == o {
 				return kind
+			}
+		}
+		for kind, fn := range r.jitTypedLoops {
+			if fn == o {
+				return kind | abi.LoopTyped
 			}
 		}
 	}
@@ -218,10 +233,34 @@ func (r *Runtime) jitLoopKind(o *Object) int {
 // jitLoopFn is the built-in whose call a loop of kind is (jitLoopKind), or
 // nil.
 func (r *Runtime) jitLoopFn(kind int) *Object {
-	if kind <= 0 || kind >= abi.LoopKinds {
+	base := kind & abi.LoopKindMask
+	if base <= 0 || base >= abi.LoopKinds {
 		return nil
 	}
-	return r.jitLoops[kind]
+	if kind&abi.LoopTyped != 0 {
+		return r.jitTypedLoops[base]
+	}
+	return r.jitLoops[base]
+}
+
+// jitLoopTyped is the typed array a loop of a %TypedArray%.prototype
+// method's is made over, as Go reads it (jitTypedLoops): a view of a
+// number type and a fixed length, its prototype its type's, the realm's --
+// an instance of a subclass, a view that tracks a resizable buffer's
+// length, are Go's -- its storage looked at, which native code reads its
+// length and elements by (fixedStorage); or nil.
+func (r *Runtime) jitLoopTyped(v Value) *typedArrayData {
+	if !v.IsObject() || v.Object().class != ClassTypedArray {
+		return nil
+	}
+	t, ok := v.Object().dataOf().(*typedArrayData)
+	if !ok || t.info().big || t.tracking || int(t.kind) >= len(r.typedArrayProtos) || v.Object().proto != r.typedArrayProtos[t.kind] {
+		return nil
+	}
+	if t.st == nil && t.fixedStorage() == nil {
+		return nil
+	}
+	return t
 }
 
 // jitIsSubstring reports whether o is the realm's String.prototype

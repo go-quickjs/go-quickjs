@@ -5704,6 +5704,17 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 	case ssa.OpTypeIs:
 		c.typeIs(v, c.guardFor(v))
 	case ssa.OpSameObject:
+		if v.Index == 1 {
+			// A typed array of the prototype at Const.Bits.
+			p := c.gpr(arg(0), scratchA)
+			c.a.LoadU8(scratchB, p, c.enc.ObjectClass)
+			c.a.OpImm(amd64.Cmp, scratchB, int32(c.enc.ClassTypedArray), false)
+			guard(amd64.CondNE)
+			c.a.Load(scratchB, p, c.enc.ObjectProto)
+			c.cmpWord(scratchB, v.Const.Bits)
+			guard(amd64.CondNE)
+			break
+		}
 		c.cmpWord(c.gpr(arg(0), scratchA), v.Const.Bits)
 		guard(amd64.CondNE)
 	case ssa.OpAccessorIs:

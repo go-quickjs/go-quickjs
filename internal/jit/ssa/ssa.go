@@ -243,7 +243,9 @@ const (
 	OpBoolToI32 // bool -> i32
 
 	// OpSameObject guards that an object is the one at Const.Bits, an
-	// address the VM keeps alive: an inlined call's function (inline).
+	// address the VM keeps alive: an inlined call's function (inline). With
+	// Index 1, that it is a typed array whose prototype is the one at
+	// Const.Bits: a typed array's loop's (forEachCall).
 	OpSameObject // ptr -> none
 	// OpFrameRoom guards that the VM's stack has Index slots past the
 	// operands' first and that Const.Bits contexts follow this one: room

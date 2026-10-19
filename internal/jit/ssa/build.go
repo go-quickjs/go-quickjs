@@ -122,10 +122,14 @@ type InstanceOfFeedback interface {
 // and those after it) -- and Callback the native call of the callback it
 // met: a method call of three arguments, the element, its index and the
 // array, its receiver the call's second argument or undefined; reduce's,
-// of four, the accumulator first, its receiver undefined.
+// of four, the accumulator first, its receiver undefined. One of
+// %TypedArray%.prototype's methods of those names has abi.LoopTyped in
+// Kind, with its element type, and Proto the prototype of the typed arrays
+// it was seen on, which the loop checks.
 type ForEachSite struct {
 	Fn       uintptr
 	Kind     int
+	Proto    uintptr
 	Callback CallSite
 }
 
@@ -160,7 +164,7 @@ const (
 // its locals and its callback's call's operands -- this, the callback and
 // its arguments, three, or four, reduce's.
 func loopSlots(kind int) int {
-	if kind == abi.LoopReduce {
+	if kind&abi.LoopKindMask == abi.LoopReduce {
 		return loopLocals + 6
 	}
 	return loopLocals + 5
@@ -177,7 +181,10 @@ func loopKeeps(kind int) int {
 
 // makesArray reports whether a loop of kind makes an array, its result:
 // map's and filter's.
-func makesArray(kind int) bool { return kind == abi.LoopMap || kind == abi.LoopFilter }
+func makesArray(kind int) bool {
+	kind &= abi.LoopKindMask
+	return kind == abi.LoopMap || kind == abi.LoopFilter
+}
 
 // forEachPlan is the forEach, or another loop, at a PC that planning made a
 // loop of: its site, its slots' first, and the keep cell its callback's
@@ -203,7 +210,8 @@ func (b *builder) forEachAt(pc int) (ForEachSite, bool) {
 		return ForEachSite{}, false
 	}
 	site, ok := f.ForEach(pc)
-	if !ok || site.Kind <= 0 || site.Kind >= abi.LoopKinds || makesArray(site.Kind) && !b.goCalls() {
+	typed := site.Kind&abi.LoopTyped != 0
+	if base := site.Kind & abi.LoopKindMask; !ok || base <= 0 || base >= abi.LoopKinds || makesArray(base) && (typed || !b.goCalls()) || typed && site.Proto == 0 {
 		return ForEachSite{}, false
 	}
 	return site, true
@@ -237,7 +245,8 @@ func (b *builder) forEachAt(pc int) (ForEachSite, bool) {
 // every state inside the loop, the call's below them.
 func (b *builder) forEachCall(blk *Block, pc int, fp forEachPlan) {
 	f := b.f
-	kind := fp.site.Kind
+	mark, kind := fp.site.Kind, fp.site.Kind&abi.LoopKindMask
+	typed := mark&abi.LoopTyped != 0
 	reduce := kind == abi.LoopReduce
 	argc := b.calls[pc][0].Argc
 	sp := b.p.Locals + b.p.Maps[pc].Depth
@@ -267,13 +276,38 @@ func (b *builder) forEachCall(blk *Block, pc int, fp forEachPlan) {
 	callable := at(blk, call, OpTypeIs, Bool, cb)
 	callable.Index = int(ir.TypeFunction)
 	at(blk, call, OpCheckTrue, None, f.newValue(blk, OpBoxBool, Tagged, callable))
-	array := at(blk, call, OpArrayOf, Ptr, recv)
+	var array *Value
+	if typed {
+		// A typed array of the prototype the loop was seen with, its
+		// elements read as numbers (OpElemRead): one whose view is out of
+		// its buffer, Go's call, which throws.
+		is := at(blk, call, OpSameObject, None, at(blk, call, OpObjectOf, Ptr, recv))
+		is.Const, is.Index = ir.Value{Bits: uint64(fp.site.Proto)}, 1
+		array = at(blk, call, OpIndexedOf, Ptr, recv)
+	} else {
+		array = at(blk, call, OpArrayOf, Ptr, recv)
+	}
 	n := at(blk, call, OpLength, Float64, recv)
 	// Room past the operands for the loop's slots, which an exit inside it
 	// writes there.
 	room := at(blk, call, OpFrameRoom, None)
 	room.Index = fp.base - b.root.p.Locals + loopSlots(kind)
 	boxF := func(blk *Block, x *Value) *Value { return f.newValue(blk, OpBoxF64, Tagged, x) }
+	// The element at k: a typed array's a number, an array's from its cell
+	// -- where it has one, but find's and findIndex's -- whatever it is.
+	finds := kind == abi.LoopFind || kind == abi.LoopFindIndex
+	element := func(blk *Block, st *FrameState, k *Value, present bool) *Value {
+		if typed {
+			return boxF(blk, at(blk, st, OpElemRead, Float64, array, k))
+		}
+		cell := at(blk, st, OpElemCell, Source, array, k)
+		if present {
+			cell.Index = ElemPresent
+		}
+		elem := f.newValue(blk, OpLoadCell, Tagged, cell)
+		elem.Shadow = cell
+		return elem
+	}
 	// map's and filter's array, as their ArraySpeciesCreate makes it, of
 	// the length's room, map's: Go makes it where the array's species is
 	// Array's, its constructor as it was made, and refuses otherwise,
@@ -300,10 +334,7 @@ func (b *builder) forEachCall(blk *Block, pc int, fp forEachPlan) {
 	case argc == 2:
 		third = b.read(sp-1, blk)
 	case reduce:
-		first := at(blk, call, OpElemCell, Source, array, from)
-		first.Index = ElemPresent
-		third = f.newValue(blk, OpLoadCell, Tagged, first)
-		third.Shadow = first
+		third = element(blk, call, from, true)
 		from = f.newValue(blk, OpConstF64, Float64)
 		from.Const = ir.Float(1)
 	}
@@ -329,8 +360,8 @@ func (b *builder) forEachCall(blk *Block, pc int, fp forEachPlan) {
 	if whole != nil {
 		b.write(dest, blk, whole)
 	}
-	mark := f.newValue(blk, OpLoopMark, None)
-	mark.Const = ir.Value{Bits: uint64(kind)<<32 | uint64(base-b.root.p.Locals+1)}
+	loop := f.newValue(blk, OpLoopMark, None)
+	loop.Const = ir.Value{Bits: uint64(mark)<<32 | uint64(base-b.root.p.Locals+1)}
 	// The state inside the loop: the call's, and the loop's slots, depth of
 	// its operands.
 	state := func(blk *Block, depth int) *FrameState {
@@ -355,13 +386,7 @@ func (b *builder) forEachCall(blk *Block, pc int, fp forEachPlan) {
 	more.Aux = int(ir.Lt)
 	head.Control = more
 	more.Uses++
-	cell := at(body, state(body, 0), OpElemCell, Source, array, k)
-	finds := kind == abi.LoopFind || kind == abi.LoopFindIndex
-	if !finds {
-		cell.Index = ElemPresent
-	}
-	elem := f.newValue(body, OpLoadCell, Tagged, cell)
-	elem.Shadow = cell
+	elem := element(body, state(body, 0), k, !finds)
 	// The element, for what the callback's result does with it.
 	keepsElem := kind == abi.LoopFilter || kind == abi.LoopFind
 	if keepsElem {

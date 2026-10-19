@@ -2629,6 +2629,9 @@ type jitInline struct {
 	forEach bool
 	cb      *closure
 	cbObj   *Object
+	// proto is a typed array's loop's typed arrays' prototype
+	// (jitLoopTyped), nil for an array's.
+	proto *Object
 	// byCode marks a function the call met two objects of, closures its
 	// maker makes anew at each call: called by its code (jitSameCode).
 	byCode bool
@@ -2689,8 +2692,8 @@ const jitInlineExits = 16
 // been seen too -- or at its next entry. A call seen before costs a look
 // at the lists.
 func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Instr) {
-	if o, cb, cbObj := r.jitForEaches(sp, in); o != nil {
-		r.jitForEachSeen(e, f.cl.fn, pc, o, cb, cbObj)
+	if o, cb, cbObj, proto := r.jitForEaches(sp, in); o != nil {
+		r.jitForEachSeen(e, f.cl.fn, pc, o, cb, cbObj, proto)
 		return
 	}
 	// A construction that left for its pool to be filled again: an inlined
@@ -5825,21 +5828,34 @@ func (r *Runtime) jitCharCodes(sp int, in bytecode.Instr) *Object {
 // jitForEaches is Array.prototype.forEach, or another of jitLoops, the
 // realm's own, if a method call at the top of the stack calls it on an
 // array with one argument, or two, the first a closure of the realm's, and
-// that closure and its function object; or nil.
-func (r *Runtime) jitForEaches(sp int, in bytecode.Instr) (*Object, *closure, *Object) {
+// that closure and its function object; or nil. One of jitTypedLoops on a
+// typed array (jitLoopTyped) is one too, and its prototype the fourth.
+func (r *Runtime) jitForEaches(sp int, in bytecode.Instr) (*Object, *closure, *Object, *Object) {
 	argc := int(in.A)
 	if in.Op != bytecode.OpCallMethod || argc != 1 && argc != 2 {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	callee, recv, cb := r.stack[sp-argc-1], r.stack[sp-argc-2], r.stack[sp-argc]
-	if !callee.IsObject() || r.jitLoopKind(callee.Object()) == 0 || r.plainArray(recv) == nil || !cb.IsObject() {
-		return nil, nil, nil
+	if !callee.IsObject() || !cb.IsObject() {
+		return nil, nil, nil, nil
+	}
+	var proto *Object
+	switch kind := r.jitLoopKind(callee.Object()); {
+	case kind == 0:
+		return nil, nil, nil, nil
+	case kind&abi.LoopTyped != 0:
+		if r.jitLoopTyped(recv) == nil {
+			return nil, nil, nil, nil
+		}
+		proto = recv.Object().proto
+	case r.plainArray(recv) == nil:
+		return nil, nil, nil, nil
 	}
 	fd := cb.Object().fn()
 	if fd == nil || fd.native != nil || fd.bound || fd.closure == nil || fd.closure.realm != r.Realm {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
-	return callee.Object(), fd.closure, cb.Object()
+	return callee.Object(), fd.closure, cb.Object(), proto
 }
 
 // jitForEachSeen notes the forEach at pc Go made, of callback cb, cbObj
@@ -5847,14 +5863,15 @@ func (r *Runtime) jitForEaches(sp int, in bytecode.Instr) (*Object, *closure, *O
 // ForEach) from the next compile, its callback called natively -- a
 // closure with no code compiled for native callers first, as a call's
 // callee is (jitCallTarget). One whose callback is another function's, the
-// call is Go's, as a call of too many targets is.
-func (r *Runtime) jitForEachSeen(e *jitEntry, fn *bytecode.Function, pc int, o *Object, cb *closure, cbObj *Object) {
+// call is Go's, as a call of too many targets is -- and so is a typed
+// array's of another type, proto its typed arrays' prototype.
+func (r *Runtime) jitForEachSeen(e *jitEntry, fn *bytecode.Function, pc int, o *Object, cb *closure, cbObj *Object, proto *Object) {
 	for i := range e.nativeCalls {
 		x := &e.nativeCalls[i]
 		if int(x.pc) != pc || !x.forEach {
 			continue
 		}
-		if x.cb.fn != cb.fn {
+		if x.cb.fn != cb.fn || x.obj != o || x.proto != proto {
 			return
 		}
 		if x.cbObj != cbObj {
@@ -5877,7 +5894,7 @@ func (r *Runtime) jitForEachSeen(e *jitEntry, fn *bytecode.Function, pc int, o *
 	if e.callSites == nil {
 		e.callSites = make([]uint8, len(fn.Code))
 	}
-	e.nativeCalls = append(e.nativeCalls, jitInline{pc: int32(pc), obj: o, forEach: true, cb: cb, cbObj: cbObj})
+	e.nativeCalls = append(e.nativeCalls, jitInline{pc: int32(pc), obj: o, forEach: true, cb: cb, cbObj: cbObj, proto: proto})
 	e.callSites[pc] = jitCallNative
 	e.inlinePending = true
 	if ce := r.jit.entryFor(cb.fn); ce == nil || ce.ssa == nil {
@@ -5902,9 +5919,21 @@ func (fb *jitFeedback) ForEach(pc int) (ssa.ForEachSite, bool) {
 		if int(x.pc) != pc || !x.forEach || x.cb == nil || kind == 0 {
 			continue
 		}
+		var proto uintptr
+		if kind&abi.LoopTyped != 0 {
+			// A typed array's, of the type its prototype is.
+			t := slices.Index(fb.r.typedArrayProtos[:], x.proto)
+			if x.proto == nil || t < 0 {
+				return ssa.ForEachSite{}, false
+			}
+			kind |= t << abi.LoopTypedShift
+			proto = uintptr(unsafe.Pointer(x.proto))
+			k := fb.keep()
+			k.holders = append(k.holders, x.proto)
+		}
 		cb := jitInline{pc: x.pc, cl: x.cb, obj: x.cbObj, byCode: x.byCode}
 		argc := uint32(3)
-		if kind == abi.LoopReduce {
+		if kind&abi.LoopKindMask == abi.LoopReduce {
 			argc = 4
 		}
 		site, ok := fb.closureCallSite(pc, cb, bytecode.Instr{Op: bytecode.OpCallMethod, A: argc}, nil)
@@ -5912,7 +5941,7 @@ func (fb *jitFeedback) ForEach(pc int) (ssa.ForEachSite, bool) {
 			return ssa.ForEachSite{}, false
 		}
 		fb.loops = true
-		return ssa.ForEachSite{Fn: uintptr(unsafe.Pointer(x.obj)), Kind: kind, Callback: site}, true
+		return ssa.ForEachSite{Fn: uintptr(unsafe.Pointer(x.obj)), Kind: kind, Proto: proto, Callback: site}, true
 	}
 	return ssa.ForEachSite{}, false
 }
@@ -5962,8 +5991,12 @@ func jitLoopIn(e *jitEntry, ctx *abi.Context, fn *bytecode.Function, pc int) uin
 // by: a level whose call of Go Go makes keeps them in registers, and the
 // loop is only ever an array's.
 func (r *Runtime) jitPushLoopFrame(f *frame, loop uint64, written bool) {
-	fe := r.jitLoopFn(int(loop >> 32))
+	kind := int(loop >> 32)
+	fe := r.jitLoopFn(kind)
 	this := Obj(r.proto.array)
+	if t := kind >> abi.LoopTypedShift; kind&abi.LoopTyped != 0 && t < len(r.typedArrayProtos) && r.typedArrayProtos[t] != nil {
+		this = Obj(r.typedArrayProtos[t])
+	}
 	if v := r.stack[f.base+int(loop&0xffffffff)-1]; written && v.IsObject() {
 		this = v
 	}
@@ -6005,10 +6038,15 @@ func (r *Runtime) jitLoopFinish(f *frame, pc int, loop uint64, after bool, v Val
 		// A throw ends it, as Go's forEach ends at its callback's.
 		return v, err
 	}
-	kind := int(loop >> 32)
+	fe := r.jitLoopFn(int(loop >> 32))
+	typed := int(loop>>32)&abi.LoopTyped != 0
+	kind := int(loop>>32) & abi.LoopKindMask
 	makes := kind == abi.LoopMap || kind == abi.LoopFilter
-	fe := r.jitLoopFn(kind)
-	if fe == nil || !arr.IsObject() || !k.IsNumber() || !n.IsNumber() || makes && !out.IsObject() {
+	var t *typedArrayData
+	if typed {
+		t, _ = arr.Object().dataOf().(*typedArrayData)
+	}
+	if fe == nil || !arr.IsObject() || !k.IsNumber() || !n.IsNumber() || makes && (typed || !out.IsObject()) || typed && t == nil {
 		panic("jit: a loop's slots are not a built-in's")
 	}
 	if !after && !res.IsUninitialized() {
@@ -6075,7 +6113,11 @@ func (r *Runtime) jitLoopFinish(f *frame, pc int, loop uint64, after bool, v Val
 	var argv [4]Value
 	for i := from; i < a.n; i++ {
 		var el Value
-		if kind == abi.LoopFind || kind == abi.LoopFindIndex {
+		if typed {
+			// As %TypedArray%.prototype's (builtins_typedarray.go): every
+			// index, undefined where the view no longer has it.
+			el = t.getElem(int(i))
+		} else if kind == abi.LoopFind || kind == abi.LoopFindIndex {
 			// A hole too, undefined.
 			if el, err = a.get(r, i); err != nil {
 				return Undefined, err

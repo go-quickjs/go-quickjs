@@ -5253,6 +5253,18 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.Cmp(a64A, a64B, true)
 		guard(arm64.HS)
 	case ssa.OpSameObject:
+		if v.Index == 1 {
+			// A typed array of the prototype at Const.Bits, as amd64's.
+			p := c.gpr(arg(0), a64A)
+			c.a.LoadU8(a64B, p, c.enc.ObjectClass)
+			c.a.CmpImm(a64B, int64(c.enc.ClassTypedArray), false)
+			guard(arm64.NE)
+			c.a.Load(a64B, p, c.enc.ObjectProto)
+			c.movImm(a64C, v.Const.Bits)
+			c.a.Cmp(a64B, a64C, true)
+			guard(arm64.NE)
+			break
+		}
 		c.movImm(a64B, v.Const.Bits)
 		c.a.Cmp(c.gpr(arg(0), a64A), a64B, true)
 		guard(arm64.NE)

@@ -837,7 +837,8 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 				}
 				o.Props[i] = x
 			case OpSameObject:
-				if heap.Address == nil || heap.Address(a.p) != uintptr(v.Const.Bits) {
+				// A typed array's prototype the evaluator does not know.
+				if v.Index != 0 || heap.Address == nil || heap.Address(a.p) != uintptr(v.Const.Bits) {
 					return exit(v.State, ir.ExitKind(v.Aux))
 				}
 			case OpAccessorIs:
