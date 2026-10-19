@@ -1769,6 +1769,9 @@ func goOpWord(site *ssa.CallSite) uint64 {
 		// compared with (abi.GoOpIndexShift).
 		op |= uint64(uint32(site.Argc)) << abi.GoOpIndexShift
 	}
+	if site.Go == ssa.GoClosure && site.Pool != 0 {
+		op |= abi.GoClosurePool << abi.GoOpKindShift
+	}
 	if site.Go == ssa.GoConcat {
 		op |= uint64(site.Argc) << abi.GoOpArgcShift
 	}

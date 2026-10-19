@@ -415,11 +415,12 @@ type Program struct {
 	// others (IsAssigned).
 	Assigned []bool
 	// Cells marks a program whose captured locals are in cells of their
-	// own from its start, as V8 allocates a function's context, rather than
-	// in its frame's slots: a callee's, for native callers, whose frame Go
-	// does not keep (the VM's GoCells). A closure it makes captures those
-	// cells, nothing it captured is open on its frame, and no return
-	// closes anything.
+	// own from each entry, as V8 allocates a function's context, rather
+	// than read in its frame's slots (the VM's GoCells): open on the frame
+	// Go entered the code with, which closes them as it is popped; closed
+	// for a native callee, whose frame Go does not keep. A closure it makes
+	// captures those cells, which native code may write into one it takes
+	// from a pool, and no return closes anything.
 	Cells bool
 }
 

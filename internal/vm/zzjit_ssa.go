@@ -1043,6 +1043,12 @@ type jitLiteral struct {
 	// fn is the function the literal is of: e's, or a callee's e's code
 	// inlines.
 	fn *bytecode.Function
+	// tmpl is a closure's function template (closure), whose objects are
+	// its functions, made as the VM makes them in fn's frames, their
+	// captured bindings' cells unwritten (jitFillClosures); env is fn's
+	// closures' environment.
+	tmpl Value
+	env  *Object
 }
 
 // jitLiteralAt is e's literal at pc of cl's function -- e's, or a callee's
@@ -1077,6 +1083,17 @@ func (r *Runtime) jitLiteralAt(e *jitEntry, cl *closure, pc int) *jitLiteral {
 		r.jitFillLiteral(l)
 		return l
 	}
+	if in.Op == bytecode.OpClosure {
+		if int(in.A) >= len(cl.consts) || cl.consts[in.A].template() == nil {
+			return nil
+		}
+		tmpl := cl.consts[in.A]
+		e.literals = append(e.literals, jitLiteral{pc: int32(pc), pool: new(abi.ObjectPool), fn: cl.fn, tmpl: tmpl, env: cl.env})
+		l := &e.literals[len(e.literals)-1]
+		l.pool.Source = unsafe.Pointer(&jitPoolSource{tmpl: tmpl, fn: cl.fn, env: cl.env})
+		r.jitFillLiteral(l)
+		return l
+	}
 	if in.Op != bytecode.OpNewObject || int(in.B) >= len(cl.ic) {
 		return nil
 	}
@@ -1102,6 +1119,10 @@ func (r *Runtime) jitFillLiteral(l *jitLiteral) {
 		pool.Size = abi.PoolSize
 	}
 	clear(pool.Objects[:])
+	if l.tmpl.template() != nil {
+		r.jitFillClosures(pool, l.tmpl, l.fn, l.env)
+		return
+	}
 	if l.lit != nil {
 		for i := range int(pool.Size) {
 			v, err := r.newRegExpLiteral(l.lit)
@@ -1200,6 +1221,56 @@ func (fb *jitFeedback) Literal(pc int) (ssa.LiteralSite, bool) {
 		k.shapes = append(k.shapes, remember(l.root))
 	}
 	return ssa.LiteralSite{Pool: uintptr(unsafe.Pointer(l.pool))}, true
+}
+
+// Closure is ssa.ClosureFeedback's: the closure made at pc, natively from
+// its pool, in the function's own code, whose captured locals are in cells
+// of their own -- not an arrow that reads its maker's new.target or super,
+// which the pool's are made without (jitNeedsMaker), nor one made in a
+// derived constructor, whose this is not a value until super() runs.
+func (fb *jitFeedback) Closure(pc int) (ssa.ClosureSite, bool) {
+	e := fb.e
+	if e == nil || fb.root != nil || fb.fwd != nil || fb.cl == nil || pc >= len(fb.fn.Code) ||
+		fb.fn.Code[pc].Op != bytecode.OpClosure || fb.fn.Kind == bytecode.KindDerivedConstructor {
+		return ssa.ClosureSite{}, false
+	}
+	in := fb.fn.Code[pc]
+	if int(in.A) >= len(fb.cl.consts) || jitNeedsMaker(fb.cl.consts[in.A]) {
+		return ssa.ClosureSite{}, false
+	}
+	t := fb.cl.consts[in.A].template()
+	if t == nil {
+		return ssa.ClosureSite{}, false
+	}
+	l := fb.r.jitLiteralAt(e, fb.cl, pc)
+	if l == nil {
+		return ssa.ClosureSite{}, false
+	}
+	caps := make([]int32, len(t.fn.Upvalues))
+	for i, desc := range t.fn.Upvalues {
+		if desc.FromParent {
+			caps[i] = int32(cellOfLocal(fb.fn, int(desc.Index)))<<1 | 1
+		} else {
+			caps[i] = int32(desc.Index) << 1
+		}
+	}
+	fb.keep().pools = append(fb.keep().pools, l.pool)
+	return ssa.ClosureSite{Pool: uintptr(unsafe.Pointer(l.pool)), Captures: caps, LexThis: t.fn.Kind == bytecode.KindArrow}, true
+}
+
+// jitFillClosures fills pool with Size functions of the template tmpl as
+// the VM makes them in a frame of fn's, its closures' environment env:
+// their captured bindings' cells nil, and an arrow's this, new.target and
+// home object those of no frame, which native code writes as it takes one
+// (mir's closureTake) -- the cells and the this; an arrow that reads the
+// others its pool is not made for (jitFeedback's Closure).
+func (r *Runtime) jitFillClosures(pool *abi.ObjectPool, tmpl Value, fn *bytecode.Function, env *Object) {
+	f := &frame{cl: &closure{fn: fn, env: env, upvalues: make([]*upvalue, len(fn.Upvalues))}, this: Undefined, newTarget: Undefined}
+	cells := make([]*upvalue, jitCaptured(fn))
+	for i := range int(pool.Size) {
+		pool.Objects[i] = unsafe.Pointer(r.newClosureIn(f, tmpl, cells))
+	}
+	pool.Count, pool.Proto = pool.Size, nil
 }
 
 // Define is ssa.LiteralFeedback's: what the literal's field at pc adds, as
@@ -2805,6 +2876,11 @@ func jitHostCall(ctx *abi.Context) bool {
 			}
 		}
 		i := int(ctx.GoOp >> abi.GoOpIndexShift)
+		if ctx.GoOp>>abi.GoOpKindShift&0xff == abi.GoClosurePool {
+			// One native code takes from its pool where it can: run out,
+			// filled again, with more.
+			r.jitRefillPool(*(**abi.ObjectPool)(unsafe.Pointer(&ctx.GoArgs[0].Ref)))
+		}
 		if ctx.Cells != nil {
 			// Code whose captured locals are in cells of their own.
 			return r.jitCellsClosure(ctx, f, i)
@@ -3212,20 +3288,24 @@ func jitCellsOf(ctx *abi.Context, fn *bytecode.Function) []*upvalue {
 func (r *Runtime) jitMakeCells(ctx *abi.Context) bool {
 	if f := r.jitRunFrame(ctx); f != nil {
 		fn := f.cl.fn
-		cells := make([]*upvalue, 0, jitCaptured(fn))
+		n := jitCaptured(fn)
+		if n == 0 {
+			return false
+		}
+		cells, room := jitNewCells(n)
+		k := 0
 		for slot, l := range fn.Locals {
 			if !l.Captured {
 				continue
 			}
 			u := openUpvalue(f, slot)
 			if u == nil {
-				u = &upvalue{slot: &f.locals[slot]}
+				u = &room[k]
+				u.slot = &f.locals[slot]
 				f.openUpvalues = append(f.openUpvalues, u)
 			}
-			cells = append(cells, u)
-		}
-		if len(cells) == 0 {
-			return false
+			cells[k] = u
+			k++
 		}
 		ctx.Cells = unsafe.Pointer(unsafe.SliceData(cells))
 		ctx.Open = uint64(len(f.openUpvalues))
@@ -3241,7 +3321,7 @@ func (r *Runtime) jitMakeCells(ctx *abi.Context) bool {
 		return false
 	}
 	locals := unsafe.Slice((*Value)(ctx.Locals), fn.LocalCount)
-	cells, room := make([]*upvalue, n), make([]upvalue, n)
+	cells, room := jitNewCells(n)
 	k := 0
 	for slot, l := range fn.Locals {
 		if !l.Captured {
@@ -3258,6 +3338,41 @@ func (r *Runtime) jitMakeCells(ctx *abi.Context) bool {
 	}
 	ctx.Cells = unsafe.Pointer(unsafe.SliceData(cells))
 	return true
+}
+
+// jitNewCells is n cells and the array of pointers to them that code whose
+// captured locals are in cells of their own reads them through
+// (abi.Context's Cells): for up to four, one allocation, as a closure's
+// object holds its captured bindings' (newScriptFuncObject) -- the cells
+// had been two in five of AWFY DeltaBlue's allocations with the JIT.
+func jitNewCells(n int) ([]*upvalue, []upvalue) {
+	switch n {
+	case 1:
+		x := &struct {
+			p [1]*upvalue
+			u [1]upvalue
+		}{}
+		return x.p[:], x.u[:]
+	case 2:
+		x := &struct {
+			p [2]*upvalue
+			u [2]upvalue
+		}{}
+		return x.p[:], x.u[:]
+	case 3:
+		x := &struct {
+			p [3]*upvalue
+			u [3]upvalue
+		}{}
+		return x.p[:], x.u[:]
+	case 4:
+		x := &struct {
+			p [4]*upvalue
+			u [4]upvalue
+		}{}
+		return x.p[:], x.u[:]
+	}
+	return make([]*upvalue, n), make([]upvalue, n)
 }
 
 // jitCellsClosure is GoClosure and GoClose for code whose captured locals
@@ -5492,6 +5607,11 @@ type jitPoolSource struct {
 	n     int
 	array bool
 	lit   *bytecode.Constant
+	// A closure's (jitFillClosures): its template, the function it is made
+	// in and that function's closures' environment.
+	tmpl Value
+	fn   *bytecode.Function
+	env  *Object
 }
 
 // jitRefillPool fills pool again, run out, with more objects (ssa's
@@ -5519,7 +5639,7 @@ func (r *Runtime) jitRefillPool(pool *abi.ObjectPool) bool {
 	if src.ctor != nil {
 		r.jitFillPool(pool, src.ctor)
 	} else {
-		r.jitFillLiteral(&jitLiteral{root: src.root, pool: pool, n: src.n, array: src.array, lit: src.lit})
+		r.jitFillLiteral(&jitLiteral{root: src.root, pool: pool, n: src.n, array: src.array, lit: src.lit, tmpl: src.tmpl, fn: src.fn, env: src.env})
 	}
 	return pool.Count != 0
 }
@@ -7023,7 +7143,10 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 				ctx.TailFrame = 1
 			}
 		}
-		if e.this {
+		if e.this || e.ssaProg != nil && e.ssaProg.Cells {
+			// Read by the code, or by the arrows code whose captured
+			// locals are in cells of their own makes from their pools
+			// (mir's closureTake), as a native call's context has it.
 			this, bound := f.thisValue()
 			if !bound {
 				this = uninitialized

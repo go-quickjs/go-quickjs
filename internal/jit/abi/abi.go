@@ -1054,6 +1054,11 @@ func IsNumber(word uint64) bool { return word < NumberLimit }
 // write barrier: Go makes it, and does not count it against the code's
 // profit, as it does not count an exit the marking made (ExitMarking).
 //
+// GoClosurePool is the kind of a closure's (ssa.GoClosure) whose native
+// code takes it from a pool, the pool's address the first operand's
+// pointer word: Go makes it, as it makes any, and fills the pool again if
+// it ran out.
+//
 // GoOpIndexShift is where a closure's (ssa.GoClosure) is the index of its
 // function's constant, a scope's end's (ssa.GoClose) the first local it
 // closes, and a comparison's (ssa.GoCompare) its ir.Operator, in the high
@@ -1072,5 +1077,6 @@ const (
 	GoCallTypeOf     = 8
 	GoCallInstanceOf = 9
 	GoCallSuper      = 10
+	GoClosurePool    = 1
 	GoOpMarking      = 1 << 24
 )

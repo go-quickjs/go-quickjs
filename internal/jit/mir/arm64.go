@@ -3193,8 +3193,22 @@ func (c *a64Compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(arm64.
 		c.setG(v, a64A)
 		return
 	}
-	if site.Go == ssa.GoClose {
-		// As amd64's: only while closures have captured the frame's locals.
+	if site.Go == ssa.GoClosure && site.Pool != 0 {
+		// As amd64's: natively from its pool where it can be, by Go
+		// otherwise.
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		c.closureTake(v, site, slow)
+		c.a.B(join)
+		c.a.Bind(slow)
+		c.movImm(a64A, uint64(site.Pool))
+		c.a.Store(a64Ctx, abi.OffGoArgs+c.enc.RefOffset, a64A)
+		c.goCallOp(v, goOpWord(site), false)
+		c.a.Bind(join)
+		return
+	}
+	if site.Go == ssa.GoClose && !c.f.Cells {
+		// As amd64's: only while closures have captured the frame's locals,
+		// in code whose captured locals are in its frame.
 		skip := c.a.NewLabel()
 		c.a.Load(a64A, a64Ctx, abi.OffOpen)
 		c.a.Cbz(a64A, skip, true)
@@ -3203,6 +3217,38 @@ func (c *a64Compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(arm64.
 		return
 	}
 	c.goCallOp(v, goOpWord(site), false)
+}
+
+// closureTake is amd64's: a closure taken from its pool, its captured
+// bindings' cells and an arrow's this written. It uses A, B and C.
+func (c *a64Compiler) closureTake(v *ssa.Value, site *ssa.CallSite, slow arm64.Label) {
+	c.movImm(a64A, c.enc.WriteBarrier)
+	c.a.LoadU8(a64A, a64A, 0)
+	c.a.Cbnz(a64A, slow, false)
+	c.movImm(a64A, uint64(site.Pool))
+	c.a.Load(a64B, a64A, abi.OffPoolCount)
+	c.a.Cbz(a64B, slow, true)
+	c.poolTake(v, site)
+	c.a.Load(a64B, a64C, c.enc.ObjectExt)
+	c.a.Load(a64C, a64B, c.enc.ObjectData+8)
+	c.a.Load(a64B, a64C, c.enc.FuncClosure)
+	c.a.Load(a64B, a64B, c.enc.ClosureUpvalues)
+	for k, x := range site.Captures {
+		base := abi.OffUpvalues
+		if x&1 != 0 {
+			base = abi.OffCells
+		}
+		c.a.Load(a64A, a64Ctx, base)
+		c.a.Load(a64A, a64A, (x>>1)*8)
+		c.a.Store(a64B, int32(k)*8, a64A)
+	}
+	if site.LexThis {
+		c.a.Load(a64B, a64C, c.enc.FuncExtra)
+		for w := int32(0); w < c.enc.ValueSize; w += 8 {
+			c.a.Load(a64A, a64Ctx, abi.OffThis+w)
+			c.a.Store(a64B, c.enc.ExtraLexThis+w, a64A)
+		}
+	}
 }
 
 // iterStep is amd64's: a loop's step over an array, made in place. It

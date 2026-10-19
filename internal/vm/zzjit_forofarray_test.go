@@ -5,6 +5,7 @@ package vm
 import (
 	"fmt"
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 	"runtime"
 	"strings"
 	"testing"
@@ -567,6 +568,70 @@ func TestJITCapturedLocalCellsResumed(t *testing.T) {
 	}
 	if r.jit.resumedLevels == 0 {
 		t.Errorf("no native callee went on natively after its callee left native code")
+	}
+}
+
+// Closures native callees make from their pools (mir's closureTake), as
+// V8's code allocates them: each capturing the cells of its maker's own
+// (a local, a parameter, a block's let made again), a binding its maker
+// captured, and an arrow's this -- the pool run out and filled again, with
+// more, which only native code's taking makes; a loop's per-iteration let
+// in a native callee; every answer the interpreter's.
+func TestJITClosuresFromPools(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		function maker(i) { const x = i * 2; return () => x + 1 }
+		var made = []
+		function makes(n) { for (let k = 0; k < n; k++) made.push(maker(k)); let s = 0; for (const f of made) s = (s + f()) | 0; made.length = 0; return s }
+		function addr(a, b) { return function () { return a * 3 + b } }
+		function adding(n) { let s = 0; for (let k = 0; k < n; k++) s = (s + addr(k, 7)()) | 0; return s }
+		function outer() {
+			let z = 5
+			function mk(k) { let a = k; const f = () => a + z; a += 2; z++; return f }
+			return function (n) { let s = 0; for (let k = 0; k < n; k++) s = (s + mk(k)()) | 0; return s + z }
+		}
+		var outers = outer()
+		class P { constructor(v) { this.v = v } arrow(k) { const a = k; return () => this.v * 10 + a } }
+		var ps = [new P(1), new P(2), new P(3)]
+		function thises(n) { let s = 0; for (let k = 0; k < n; k++) s = (s + ps[k % 3].arrow(k)()) | 0; return s }
+		function blocks(k) { const o = {}; { let x = k; o.a = () => x; x += 5 } { let y = k * 2; o.b = () => y++; y += 1 } return o.a() + o.b() + o.b() }
+		function blocking(n) { let s = 0; for (let k = 0; k < n; k++) s = (s + blocks(k)) | 0; return s }
+		function lets(n) { const fs = []; for (let i = 0; i < n; i++) fs.push(() => i); let s = 0; for (const f of fs) s = s * 10 + f(); return s }
+		function letting(n) { let s = 0; for (let k = 0; k < n; k++) s = (s + lets(5)) | 0; return s }
+	`
+	rounds := []string{}
+	for range 6 {
+		rounds = append(rounds, `makes(100)`, `adding(100)`, `outers(100)`, `thises(100)`, `blocking(100)`, `letting(50)`)
+	}
+	r := jitAgreesForTest(t, setup, rounds...)
+	// lets, a native callee, gives each iteration's i a cell of its own
+	// at the iteration's end (GoClose), which no frame has open.
+	for _, name := range []string{"maker", "addr", "mk", "arrow", "blocks", "lets"} {
+		var e *jitEntry
+		for k, x := range r.jit.cache {
+			if fn := k.Value(); fn != nil && fn.Name == name {
+				e = x
+			}
+		}
+		if e == nil || e.ssa == nil || e.ssaProg == nil || !e.ssaProg.Cells {
+			t.Errorf("%s has no code with cells of its own: %+v", name, e)
+			continue
+		}
+		pools := 0
+		for _, l := range e.literals {
+			if l.tmpl.template() == nil {
+				continue
+			}
+			pools++
+			if l.pool.Size <= abi.PoolSize {
+				t.Errorf("%s's closures at %d were not taken from their pool: its size is %d", name, l.pc, l.pool.Size)
+			}
+		}
+		if pools == 0 {
+			t.Errorf("%s makes no closure from a pool", name)
+		}
 	}
 }
 

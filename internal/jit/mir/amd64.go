@@ -1241,9 +1241,24 @@ func (c *compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(amd64.Con
 		c.setG(v, scratchA)
 		return
 	}
-	if site.Go == ssa.GoClose {
+	if site.Go == ssa.GoClosure && site.Pool != 0 {
+		// Natively from its pool where it can be (closureTake), by Go
+		// otherwise, which fills the pool again.
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		c.closureTake(v, site, slow)
+		c.a.Jmp(join)
+		c.a.Bind(slow)
+		c.storeImm(regCtx, abi.OffGoArgs+c.enc.RefOffset, uint64(site.Pool), scratchA)
+		c.goCallOp(v, goOpWord(site), guard, false)
+		c.a.Bind(join)
+		return
+	}
+	if site.Go == ssa.GoClose && !c.f.Cells {
 		// Only while closures have captured the frame's locals
-		// (abi.Context's Open): its result nothing reads.
+		// (abi.Context's Open): its result nothing reads. Code whose
+		// captured locals are in cells of their own gives them fresh
+		// ones at every scope's end, Open or not: a native callee's
+		// closures capture cells no frame has open.
 		skip := c.a.NewLabel()
 		c.a.Load(scratchA, regCtx, abi.OffOpen)
 		c.a.Op(amd64.Test, scratchA, scratchA, true)
@@ -1253,6 +1268,47 @@ func (c *compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(amd64.Con
 		return
 	}
 	c.goCallOp(v, goOpWord(site), guard, false)
+}
+
+// closureTake makes call v, a closure Go makes from its pool natively
+// (ssa.CallSite's Captures), as V8's code allocates one: where the
+// collector does not mark and the pool has one, its next object, kept in the
+// call's keep cell as a literal's is, its captured bindings' cells written
+// into its closure's, from the context's Cells and Upvalues, and an
+// arrow's this into what it captured. Anything else goes to slow, where Go
+// makes it. It uses every scratch register.
+func (c *compiler) closureTake(v *ssa.Value, site *ssa.CallSite, slow amd64.Label) {
+	c.movImm(scratchA, c.enc.WriteBarrier)
+	c.a.LoadU8(scratchA, scratchA, 0)
+	c.a.Op(amd64.Test, scratchA, scratchA, false)
+	c.a.Jcc(amd64.CondNE, slow)
+	c.movImm(scratchA, uint64(site.Pool))
+	c.a.Load(scratchB, scratchA, abi.OffPoolCount)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	c.a.Jcc(amd64.CondE, slow)
+	c.poolTake(v, site)
+	// The object in scratchC: its function data, then its closure's
+	// captured bindings' cells.
+	c.a.Load(scratchB, scratchC, c.enc.ObjectExt)
+	c.a.Load(scratchC, scratchB, c.enc.ObjectData+8)
+	c.a.Load(scratchB, scratchC, c.enc.FuncClosure)
+	c.a.Load(scratchB, scratchB, c.enc.ClosureUpvalues)
+	for k, x := range site.Captures {
+		base := abi.OffUpvalues
+		if x&1 != 0 {
+			base = abi.OffCells
+		}
+		c.a.Load(scratchA, regCtx, base)
+		c.a.Load(scratchA, scratchA, (x>>1)*8)
+		c.a.Store(scratchB, int32(k)*8, scratchA)
+	}
+	if site.LexThis {
+		c.a.Load(scratchB, scratchC, c.enc.FuncExtra)
+		for w := int32(0); w < c.enc.ValueSize; w += 8 {
+			c.a.Load(scratchA, regCtx, abi.OffThis+w)
+			c.a.Store(scratchB, c.enc.ExtraLexThis+w, scratchA)
+		}
+	}
 }
 
 // iterStep makes call v, a loop's step (ssa.CallSite's Step), where the

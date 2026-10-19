@@ -874,6 +874,11 @@ func jitPoolBytes(pool *abi.ObjectPool) int {
 		return 0
 	}
 	n := jitPoolFixed
+	if src := (*jitPoolSource)(pool.Source); src != nil && src.tmpl.template() != nil {
+		// A closure's functions (jitFillClosures): an arrow's object, its
+		// extra beside it, the most a function's is, and its cells.
+		return n + int(pool.Size)*(int(unsafe.Sizeof(arrowFuncObject{}))+8*len(src.tmpl.template().fn.Upvalues))
+	}
 	if c := pool.Count; c > 0 && c <= abi.PoolCapacity {
 		o := (*Object)(pool.Objects[c-1])
 		n += int(pool.Size) * (int(objectSize) + jitCapBytes(o.vals) + jitCapBytes(o.elemsOf()))

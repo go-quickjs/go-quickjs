@@ -368,6 +368,35 @@ type CallSite struct {
 	// the code's own frame, binding its this, which is the result and
 	// which the this slot takes.
 	Super bool
+	// Captures, of a closure Go makes (GoClosure) that has a Pool, says
+	// natively: the closure is the pool's next object, made as the VM
+	// makes the function, its captured bindings' cells unwritten, and
+	// native code writes each in order -- index<<1|1 the code's own cell
+	// of a captured local's (abi.Context's Cells), index<<1 a captured
+	// binding's of its own (Upvalues) -- as V8's code allocates a closure
+	// in its context (FastNewClosure). LexThis marks an arrow, whose this
+	// native code writes: the code's receiver, its context's (abi.Context's
+	// This), which a native call writes and Go's entry does for such code.
+	// Go makes it while the collector marks or the pool is empty -- and
+	// fills the pool again.
+	Captures []int32
+	LexThis  bool
+}
+
+// ClosureSite is a closure's site that native code makes the closure at
+// (ClosureFeedback): the address of the abi.ObjectPool its closures come
+// from, which the VM keeps alive, and CallSite's Captures and LexThis.
+type ClosureSite struct {
+	Pool     uintptr
+	Captures []int32
+	LexThis  bool
+}
+
+// ClosureFeedback is Feedback that knows the closures native code may make
+// from a pool (CallSite's Captures): the one at pc, of code whose captured
+// locals are in cells of their own (ir.Program's Cells).
+type ClosureFeedback interface {
+	Closure(pc int) (ClosureSite, bool)
 }
 
 // AccessorKind is the kind of a call an accessor's read or write makes
@@ -1743,11 +1772,18 @@ func (b *builder) iterStep(blk *Block, in ir.Instruction, operand func(ir.Operan
 // captured locals are where the frame has them, as native code assigns
 // them there (storeCaptured). What Go refuses -- a frame it has none of,
 // as a native callee's -- leaves for Go to make after an exit.
-func (b *builder) goFrame(blk *Block, in ir.Instruction, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+func (b *builder) goFrame(blk *Block, pc int, in ir.Instruction, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
 	call := guard(OpCall, Tagged, ir.HostExit)
 	site := &CallSite{Go: GoClosure, Argc: int(in.Key), ThisSlot: -1}
 	if in.Op == ir.CloseUpvalues {
 		site.Go = GoClose
+	}
+	if fb, ok := b.fb.(ClosureFeedback); ok && in.Op == ir.Closure && b.p.Cells {
+		// Natively, from its pool: what it captures is in cells of their
+		// own, none open on the frame.
+		if cs, ok := fb.Closure(pc); ok && cs.Pool != 0 {
+			site.Pool, site.Captures, site.LexThis = cs.Pool, cs.Captures, cs.LexThis
+		}
 	}
 	b.f.cache(call).Calls, call.Index = []*CallSite{site}, b.f.Keeps
 	if in.Op == ir.CloseUpvalues && b.f.Keeps >= b.f.keepLimit() {
@@ -3095,7 +3131,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			// which native code makes only while any is open). Always:
 			// with the keep cells all taken, a callee that had made a
 			// closure before returned with it open on its dead frame.
-			b.goFrame(blk, ir.Instruction{Op: ir.CloseUpvalues}, guard)
+			b.goFrame(blk, pc, ir.Instruction{Op: ir.CloseUpvalues}, guard)
 		}
 		blk.Control = v
 		v.Uses++
@@ -3456,7 +3492,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			blk.State.addUse()
 			break
 		}
-		b.goFrame(blk, in, guard)
+		b.goFrame(blk, pc, in, guard)
 	case ir.Rethrow:
 		if b.host(pc) {
 			blk.ExitKind = ir.HostExit
