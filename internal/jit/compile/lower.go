@@ -142,6 +142,17 @@ func LowerSSAForward(fn *bytecode.Function) (*ir.Program, error) {
 	return lowerRecovered(fn, lowering{ssa: true, callee: true, forward: true})
 }
 
+// makesArrow reports whether fn makes an arrow, which shares its this
+// binding: one an ordinary function it makes makes shares that function's.
+func makesArrow(fn *bytecode.Function) bool {
+	for _, k := range fn.Constants {
+		if k.Kind == bytecode.ConstFunction && k.Fn != nil && k.Fn.Kind == bytecode.KindArrow {
+			return true
+		}
+	}
+	return false
+}
+
 // closureAssigned is, by local, whether a closure fn makes, or one a
 // closure of it makes in turn, assigns the local it captured; or nil if
 // none does. A nested function with a direct eval may assign any.
@@ -226,17 +237,21 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		// its body would run it as a call does.
 		return nil, refuse(-1, "async or generator function")
 	case fn.Kind != bytecode.KindNormal && fn.Kind != bytecode.KindArrow && fn.Kind != bytecode.KindMethod && fn.Kind != bytecode.KindConstructor &&
-		fn.Kind != bytecode.KindGetter && fn.Kind != bytecode.KindSetter && (fn.Kind != bytecode.KindDerivedConstructor || !m.ssa || m.callee):
+		fn.Kind != bytecode.KindGetter && fn.Kind != bytecode.KindSetter && (fn.Kind != bytecode.KindDerivedConstructor || !m.ssa || m.forward):
 		// A base class's constructor is a function's body, constructed as
 		// one is (the VM's jitConstructs), and called by no native call:
 		// a call without new throws. A getter's and a setter's are a
 		// method's, called with the receiver as their this by a read or a
 		// write (ssa.AccessorSite). A derived class's is the new
 		// pipeline's, in its own code, entered from Go as its construction
-		// runs it: its super() binds its this, which Go makes (OpSuperCall),
-		// and no native call constructs it. A class's field initializers
-		// are not.
+		// runs it or constructed natively (ir.Program's
+		// DerivedConstructor): its super() binds its this, which Go makes
+		// (OpSuperCall). A class's field initializers are not.
 		return nil, refuse(-1, "special function kind")
+	case fn.Kind == bytecode.KindDerivedConstructor && m.callee && makesArrow(fn):
+		// An arrow shares the constructor's this binding, which a frame
+		// native code constructs has none of until Go makes its frame.
+		return nil, refuse(-1, "derived constructor making an arrow, for native callers")
 	case fn.HasDirectEval || len(fn.EvalScopes) != 0:
 		return nil, refuse(-1, "direct eval")
 	case (fn.UsesArguments || fn.MappedArguments) && !m.forward:
@@ -273,6 +288,13 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		e, err := describe(fn, pc, in)
 		if err != nil {
 			return nil, err
+		}
+		if in.Op == bytecode.OpSuperCall && in.B == bytecode.SuperForward && m.callee {
+			// super(...arguments) hands on the call's arguments, which a
+			// frame native code constructs has none of (the VM's f.args):
+			// the constructor a class without one has, which a
+			// construction skips (the VM's jitDerivedBase).
+			return nil, refuse(pc, "super of the call's arguments, for native callers")
 		}
 		effects[pc] = e
 		if in.Op == bytecode.OpNew && !m.ssa || (in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict ||
@@ -357,7 +379,9 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		host = host || str || iters || isPrivate(in.Op) || isDefinition(in.Op) || in.Op == bytecode.OpClosure || in.Op == bytecode.OpCloseUpvalues || in.Op == bytecode.OpImport || in.Op == bytecode.OpImportMeta || in.Op == bytecode.OpYield || in.Op == bytecode.OpAwait || in.Op == bytecode.OpThrow ||
 			in.Op == bytecode.OpNewDisposeCapability || in.Op == bytecode.OpAddDisposable || in.Op == bytecode.OpDispose || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpApplyArguments || in.Op == bytecode.OpNew || in.Op == bytecode.OpSuperCall || in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict || in.Op == bytecode.OpCheckGlobalRef || in.Op == bytecode.OpNewObject || in.Op == bytecode.OpNewRegExp || in.Op == bytecode.OpDefineField || in.Op == bytecode.OpPushEmptyString || in.Op == bytecode.OpConcat || in.Op == bytecode.OpNewArray || in.Op == bytecode.OpCall || in.Op == bytecode.OpCallMethod || in.Op == bytecode.OpTailCall || in.Op == bytecode.OpTailCallMethod || in.Op == bytecode.OpGetGlobal || in.Op == bytecode.OpGetGlobalOpt || in.Op == bytecode.OpGetPropThis || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		property = property || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
-		this = this || in.Op == bytecode.OpPushThis
+		// A derived constructor's this slot is what it returns, bound by
+		// its super() (ir.Program's DerivedConstructor).
+		this = this || in.Op == bytecode.OpPushThis || fn.Kind == bytecode.KindDerivedConstructor
 		raw := uint32(in.Op)
 		switch in.Op {
 		case bytecode.OpBinLocal, bytecode.OpBinImm:
@@ -476,9 +500,10 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		}
 	}
 	p := &ir.Program{Locals: fn.LocalCount + len(fn.Upvalues), StackSize: fn.MaxStack, This: this, Maps: maps, Code: make([]ir.Instruction, len(fn.Code)),
-		ArrowThis:        fn.Kind == bytecode.KindArrow && fn.UsesThis,
-		ClassConstructor: fn.Kind == bytecode.KindConstructor,
-		Handlers:         table, HandlerAt: chains}
+		ArrowThis:          fn.Kind == bytecode.KindArrow && fn.UsesThis,
+		ClassConstructor:   fn.Kind == bytecode.KindConstructor,
+		DerivedConstructor: fn.Kind == bytecode.KindDerivedConstructor,
+		Handlers:           table, HandlerAt: chains}
 	for pc, in := range fn.Code {
 		if to, ok := goBranch(in); ok && maps[pc].Depth >= 0 && !slices.Contains(p.Entries, to) {
 			p.Entries = append(p.Entries, to)
@@ -502,6 +527,9 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 	}
 	if this {
 		if p.Locals+p.StackSize == MaxSlots {
+			if p.DerivedConstructor {
+				return nil, refuse(-1, "no slot for a derived constructor's this")
+			}
 			p.This = false
 		} else {
 			p.Locals++
@@ -731,7 +759,7 @@ func selectPropertyLoops(fn *bytecode.Function, p *ir.Program, calls, callee boo
 		}
 	}
 	fields = fields && (loop || callee) && (!mixed || calls)
-	if p.This && !fields && hosts[len(p.Code)]+fieldCount != 0 {
+	if p.This && !p.DerivedConstructor && !fields && hosts[len(p.Code)]+fieldCount != 0 {
 		p.This = false
 		p.Locals--
 		for pc, in := range fn.Code {

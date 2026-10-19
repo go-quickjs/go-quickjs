@@ -1761,6 +1761,17 @@ func goCallWord(site *ssa.CallSite) uint64 {
 	return goOpWord(&ssa.CallSite{Go: ssa.GoCall, Argc: site.Argc, Method: site.Method, New: site.Pool != 0})
 }
 
+// derivedFunction is the function object whose code a derived
+// construction runs (abi.Context's Function): the class constructed, or,
+// for one with no constructor of its own, the class whose code it runs
+// (ssa.CallSite's Parent).
+func derivedFunction(t *ssa.CallSite) uintptr {
+	if t.Parent != 0 {
+		return t.Parent
+	}
+	return t.Callee
+}
+
 // goOpWord is the word a call of Go, site, passes Go (abi.Context's GoOp).
 func goOpWord(site *ssa.CallSite) uint64 {
 	op := uint64(site.Go)

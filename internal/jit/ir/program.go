@@ -372,6 +372,12 @@ type Program struct {
 	// new throws on: a call of itself in tail position is made as a call,
 	// for Go to throw, not a jump to its start (ssa's OpTailSelf).
 	ClassConstructor bool
+	// DerivedConstructor marks a derived class's constructor, whose this
+	// slot (This) holds the uninitialized value until its super() binds
+	// it, and which returns that this: native code makes a return of
+	// undefined its this, Go any other, and Go a return before super()
+	// with this unbound, which throws.
+	DerivedConstructor bool
 	// Globals contains source-name indices for reserved binding-view slots,
 	// following captured bindings and the optional receiver snapshot.
 	Globals []uint32

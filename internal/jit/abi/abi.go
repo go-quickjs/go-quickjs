@@ -319,6 +319,17 @@ type Context struct {
 	// callee's new.target, which the caller's code keeps alive: written for
 	// a construction only.
 	NewTarget uint64
+	// Instance is, in a derived constructor's context, the object its
+	// construction made, which its super() gives the parent as its
+	// receiver and binds as its this (This holds the uninitialized value
+	// until then), as the VM makes a derived construction's instance before
+	// its body runs: its only reference once taken from its pool, so a
+	// slot the collector scans. Function is the function object whose
+	// code runs, whose [[Prototype]] its super() constructs with, which the
+	// caller's code keeps alive: the class constructed, or the class whose
+	// code a class with no constructor of its own runs.
+	Instance Slot
+	Function uint64
 	// EnterCallee is the function object a native call called that had no
 	// native code for native callers to call (ExitEnter), which its
 	// caller's code keeps alive.
@@ -739,6 +750,8 @@ var (
 	OffInlineThis    = int32(unsafe.Offsetof(Context{}.InlineThis))
 	OffInlineCallee  = int32(unsafe.Offsetof(Context{}.InlineCallee))
 	OffNewTarget     = int32(unsafe.Offsetof(Context{}.NewTarget))
+	OffInstance      = int32(unsafe.Offsetof(Context{}.Instance))
+	OffFunction      = int32(unsafe.Offsetof(Context{}.Function))
 
 	OffGoOp     = int32(unsafe.Offsetof(Context{}.GoOp))
 	OffGoKeep   = int32(unsafe.Offsetof(Context{}.GoKeep))
@@ -1046,8 +1059,8 @@ func IsNumber(word uint64) bool { return word < NumberLimit }
 // in the high half (GoOpIndexShift); or a typeof's (GoCallTypeOf), of its
 // one operand, the result its name; or an instanceof's
 // (GoCallInstanceOf), of its two, the object and the constructor; or a
-// derived constructor's super(...) (GoCallSuper), of its arguments, the
-// result the this it binds.
+// derived constructor's super(...) (GoCallSuper), of the frame's this
+// slot, unbound or not, then its arguments, the result the this it binds.
 // GoOpMarking
 // marks a call native code makes through Go only because the collector
 // marks -- a native call's, whose setup would store pointers without a

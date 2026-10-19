@@ -366,8 +366,15 @@ type CallSite struct {
 	// super(...) of its Argc operands, the arguments -- no function among
 	// them -- as V8's code calls the parent constructor: Go makes it on
 	// the code's own frame, binding its this, which is the result and
-	// which the this slot takes.
+	// which the this slot takes. Its first operand is the this slot, the
+	// uninitialized value unless an earlier super() bound it.
 	Super bool
+	// Derived marks a construction (Pool) whose callee's code is a derived
+	// constructor's (ir.Program's DerivedConstructor): the pool's object is
+	// the callee's instance, not its receiver -- its this is unbound until
+	// its super() binds it (abi.Context's Instance) -- and its result is
+	// always an object.
+	Derived bool
 	// Captures, of a closure Go makes (GoClosure) that has a Pool, says
 	// natively: the closure is the pool's next object, made as the VM
 	// makes the function, its captured bindings' cells unwritten, and
@@ -673,9 +680,10 @@ func Inlinable(p *ir.Program) bool {
 // leaves to Go, which it returns by PC, are calls inlined in it too: it is
 // Inlinable but for those.
 func InlineCalls(p *ir.Program) ([]int, bool) {
-	if p == nil || p.Validate() != nil || len(p.Code) > maxInline || len(p.Globals) != 0 || p.Captured != nil {
+	if p == nil || p.Validate() != nil || len(p.Code) > maxInline || len(p.Globals) != 0 || p.Captured != nil || p.DerivedConstructor {
 		// A callee whose locals closures capture: an inlined frame's
-		// slots have no cells, and Go makes no closure on one.
+		// slots have no cells, and Go makes no closure on one. A derived
+		// constructor's super() is Go's, on a frame of its own.
 		return nil, false
 	}
 	var calls []int
@@ -1047,6 +1055,14 @@ func (b *builder) hostOf(pc int) bool {
 		return b.cur != b.root || !b.goCalls()
 	}
 	return false
+}
+
+// derivedReturnExits reports whether in, a return of the root's, is a
+// derived constructor's of anything but undefined (ir.Program's
+// DerivedConstructor), which Go makes: an object is the construction's
+// result, anything else a TypeError.
+func (b *builder) derivedReturnExits(in ir.Instruction) bool {
+	return in.Op == ir.Return && b.p.DerivedConstructor && (in.Left.Slot >= 0 || in.Left.Literal.Kind != ir.Undefined)
 }
 
 // literalKeep is a literal's site and the keep cell its object is kept in,
@@ -2315,6 +2331,9 @@ func (b *builder) plan() error {
 			}
 		case ir.Return:
 			blk.Kind = BlockReturn
+			if b.derivedReturnExits(last) {
+				blk.Kind = BlockExit
+			}
 		case ir.IterStep:
 			if b.host(end) {
 				blk.Kind = BlockExit
@@ -3111,6 +3130,23 @@ func (b *builder) instruction(blk *Block, pc int) {
 		blk.Control = c
 		c.Uses++
 	case ir.Return:
+		if b.cur == b.root && b.derivedReturnExits(in) {
+			// Go's, which throws for anything but an object.
+			blk.ExitKind = ir.HostExit
+			blk.State = state()
+			blk.State.addUse()
+			break
+		}
+		if b.cur == b.root && b.p.DerivedConstructor {
+			// undefined: a derived constructor's this, as its construction
+			// returns it, if super() bound it; Go returns, and throws, if
+			// not.
+			this := b.read(b.p.Locals-1, blk)
+			guard(OpCheckInit, None, ir.HostExit, this)
+			blk.Control = this
+			this.Uses++
+			break
+		}
 		v := operand(in.Left)
 		guard(OpCheckInit, None, ir.GuardExit, v)
 		if b.cur != b.root {
@@ -3676,12 +3712,18 @@ func (b *builder) instruction(blk *Block, pc int) {
 				n++
 			}
 			if calls[0].Super {
-				n = calls[0].Argc
+				// The this slot, then the arguments.
+				n = calls[0].Argc + 1
 			}
 			sp := b.p.Locals + b.p.Maps[pc].Depth
 			args := make([]*Value, n)
 			for i := range args {
-				args[i] = b.read(sp-n+i, blk)
+				if i > 0 || !calls[0].Super {
+					args[i] = b.read(sp-n+i, blk)
+				}
+			}
+			if calls[0].Super {
+				args[0] = b.read(b.p.Locals-1, blk)
 			}
 			call := guard(OpCall, Tagged, ir.HostExit, args...)
 			b.f.cache(call).Calls, call.Index = calls, b.callKeeps[pc]

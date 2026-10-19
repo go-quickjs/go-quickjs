@@ -2672,9 +2672,22 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 			c.a.Op(arm64.Add, top, top, tmp, true)
 			c.a.Load(high2, top, abi.OffPoolObjects)
 			c.a.Store(top, abi.OffPoolObjects, arm64.ZR)
-			c.a.Store(calleeCtx, abi.OffThis+c.enc.RefOffset, high2)
-			c.movImm(tmp, c.enc.Object)
-			c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, tmp)
+			if t.Derived {
+				// As amd64's: a derived constructor's instance, its this
+				// unbound, the function whose code it is.
+				c.a.Store(calleeCtx, abi.OffInstance+c.enc.RefOffset, high2)
+				c.movImm(tmp, c.enc.Object)
+				c.a.Store(calleeCtx, abi.OffInstance+c.enc.NumOffset, tmp)
+				c.a.Store(calleeCtx, abi.OffThis+c.enc.RefOffset, arm64.ZR)
+				c.movImm(tmp, c.enc.Uninitialized)
+				c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, tmp)
+				c.movImm(tmp, uint64(derivedFunction(t)))
+				c.a.Store(calleeCtx, abi.OffFunction, tmp)
+			} else {
+				c.a.Store(calleeCtx, abi.OffThis+c.enc.RefOffset, high2)
+				c.movImm(tmp, c.enc.Object)
+				c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, tmp)
+			}
 			// A construction's new.target, for Go to make its frame with.
 			c.movImm(top, uint64(t.Callee))
 			c.a.Store(calleeCtx, abi.OffNewTarget, top)

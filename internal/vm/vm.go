@@ -3853,11 +3853,14 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 		return res, nil
 	}
 	if fd.ctorKind == ctorDerived {
-		return Undefined, r.throwTypeError(
-			"a derived constructor may return only an object or undefined")
+		return Undefined, r.throwTypeError(errDerivedReturn)
 	}
 	return this, nil
 }
+
+// errDerivedReturn is the TypeError a derived constructor's construction
+// throws for a result neither an object nor undefined.
+const errDerivedReturn = "a derived constructor may return only an object or undefined"
 
 // constructNative runs a built-in constructor, which makes its own object
 // because an Error needs a stack and an Array needs array storage.

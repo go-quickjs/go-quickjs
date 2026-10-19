@@ -1033,8 +1033,19 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 			c.a.Op(amd64.Add, top, tmp, true)
 			c.a.Load(high2, top, abi.OffPoolObjects)
 			c.storeImm(top, abi.OffPoolObjects, 0, tmp)
-			c.a.Store(calleeCtx, abi.OffThis+c.enc.RefOffset, high2)
-			c.storeImm(calleeCtx, abi.OffThis+c.enc.NumOffset, c.enc.Object, tmp)
+			if t.Derived {
+				// A derived constructor's: its instance, its this unbound
+				// until its super() binds it, and the function whose code
+				// it is, whose parent its super() constructs with.
+				c.a.Store(calleeCtx, abi.OffInstance+c.enc.RefOffset, high2)
+				c.storeImm(calleeCtx, abi.OffInstance+c.enc.NumOffset, c.enc.Object, tmp)
+				c.storeImm(calleeCtx, abi.OffThis+c.enc.RefOffset, 0, tmp)
+				c.storeImm(calleeCtx, abi.OffThis+c.enc.NumOffset, c.enc.Uninitialized, tmp)
+				c.storeImm(calleeCtx, abi.OffFunction, uint64(derivedFunction(t)), tmp)
+			} else {
+				c.a.Store(calleeCtx, abi.OffThis+c.enc.RefOffset, high2)
+				c.storeImm(calleeCtx, abi.OffThis+c.enc.NumOffset, c.enc.Object, tmp)
+			}
 			// A construction's new.target, for Go to make its frame with.
 			c.storeImm(calleeCtx, abi.OffNewTarget, uint64(t.Callee), top)
 		} else if t.ArrowThis {

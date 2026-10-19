@@ -2397,6 +2397,9 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 			}
 			site.Pool, site.ProtoIndex, site.ProtoKey = uintptr(unsafe.Pointer(in.pool)), int(i), uint32(atomPrototype)
 			site.Coerce = false
+			// Its callee's code a derived constructor's: the pool's object
+			// its instance.
+			site.Derived = in.cl.fn.Kind == bytecode.KindDerivedConstructor
 			fb.pools = append(fb.pools, in.pool)
 			if in.parent != nil {
 				// A derived class's, with its parent's code.
@@ -2446,7 +2449,7 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 		case bytecode.OpSuperCall:
 			// A derived constructor's super(...) of its arguments on the
 			// stack: Go's, on the code's own frame (jitGoCall).
-			if call.B == bytecode.SuperArgs && int(call.A) <= abi.MaxGoArgs {
+			if call.B == bytecode.SuperArgs && int(call.A)+1 <= abi.MaxGoArgs {
 				return []ssa.CallSite{{Go: ssa.GoCall, Super: true, Argc: int(call.A), ThisSlot: -1}}
 			}
 			return nil
@@ -2653,7 +2656,7 @@ func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 	// One that is not inlined is called natively, if its code allows it
 	// (NativeCalls), the call itself for a recursive one; a derived class
 	// with no constructor of its own is constructed with its parent's code.
-	if in.Op == bytecode.OpNew && !r.jitConstructs(o) {
+	if in.Op == bytecode.OpNew && !r.jitConstructs(o) && !r.jitConstructsDerived(o) {
 		p := r.jitDerivedBase(o)
 		if p == nil {
 			return
@@ -3133,7 +3136,7 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 	pc, depth := int(ctx.ExitPC), int(ctx.ExitDepth)
 	in, n := jitGoCallInstr(ctx.GoOp)
 	top := r.stackTop
-	if n > abi.MaxGoArgs || depth < n || top+n > len(r.stack) || !jitGoPropertyAt(f.cl.fn, pc, in) {
+	if n > abi.MaxGoArgs || depth < jitGoStacked(in, n) || top+n > len(r.stack) || !jitGoPropertyAt(f.cl.fn, pc, in) {
 		return false
 	}
 	for i := range n {
@@ -3180,7 +3183,8 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 	case in.Op == bytecode.OpSuperCall:
 		// A derived constructor's super(...) (abi.GoCallSuper), on the
 		// code's frame, as executeAt's case makes it: the this it binds.
-		if err = r.superCall(f, slices.Clone(r.stack[sp-n:sp])); err == nil {
+		// Its first operand, the frame's this slot, is the binding's.
+		if err = r.superCall(f, slices.Clone(r.stack[sp-n+1:sp])); err == nil {
 			v = f.this
 		}
 	default:
@@ -3201,6 +3205,15 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 	}
 	*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
 	return true
+}
+
+// jitGoStacked is how many of a call of Go's n operands, for in, are the
+// frame's operands: a super()'s first is its this slot, a local.
+func jitGoStacked(in bytecode.Instr, n int) int {
+	if in.Op == bytecode.OpSuperCall {
+		return n - 1
+	}
+	return n
 }
 
 // jitGoPropertyAt reports whether a call of Go, in, may be made at pc of
@@ -3537,7 +3550,7 @@ func (r *Runtime) jitGoCallNested(ctx *abi.Context, idx int) bool {
 	pc, depth := int(ctx.ExitPC), int(ctx.ExitDepth)
 	in, n := jitGoCallInstr(ctx.GoOp)
 	top := r.stackTop
-	if n > abi.MaxGoArgs || depth < n || top+n > len(r.stack) {
+	if n > abi.MaxGoArgs || depth < jitGoStacked(in, n) || top+n > len(r.stack) {
 		return false
 	}
 	if cl := (*closure)(ctx.Closure); cl == nil || !jitGoPropertyAt(cl.fn, pc, in) {
@@ -3574,7 +3587,7 @@ func (r *Runtime) jitGoCallNested(ctx *abi.Context, idx int) bool {
 	if lv.serial == serial && lv.root == root && lv.depth == depthBefore {
 		for k < min(lv.n, idx-root) {
 			c, at := ctxs[root+1+k], &lv.at[k]
-			if c.Closure != at.cl || c.Base != at.base || c.This != at.this {
+			if c.Closure != at.cl || c.Base != at.base || c.This != at.this || c.Instance != at.instance {
 				break
 			}
 			at.f.pc = uint32(levelPC(root+1+k)) + 1
@@ -3638,7 +3651,10 @@ func (r *Runtime) jitGoCallNested(ctx *abi.Context, idx int) bool {
 		prevPC = callPC
 		f.openUpvalues, f.handlers = f.openUpvalues[:0], f.handlers[:0]
 		f.thisRef, f.withScopes, f.evalVars, f.native, f.savedSP = nil, nil, nil, "", 0
-		at := jitLevelFrame{f: f, e: e, cl: c.Closure, base: c.Base, this: c.This}
+		if lcl.fn.Kind == bytecode.KindDerivedConstructor {
+			jitDerivedFrame(f, c)
+		}
+		at := jitLevelFrame{f: f, e: e, cl: c.Closure, base: c.Base, this: c.This, instance: c.Instance}
 		if k := i - root - 1; k < len(lv.at) {
 			lv.at[k] = at
 		} else {
@@ -3664,7 +3680,7 @@ framed:
 	}
 	s.goCalls++
 	prop := in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
-	if in.Op != bytecode.OpIterNextOrJump && in.Op != bytecode.OpIterStep && in.Op != bytecode.OpForOfStart && in.Op != bytecode.OpTypeOf && in.Op != bytecode.OpInstanceOf && !prop && jitCallUnsettled(e, pc, in) {
+	if in.Op != bytecode.OpIterNextOrJump && in.Op != bytecode.OpIterStep && in.Op != bytecode.OpForOfStart && in.Op != bytecode.OpTypeOf && in.Op != bytecode.OpInstanceOf && in.Op != bytecode.OpSuperCall && !prop && jitCallUnsettled(e, pc, in) {
 		r.jitCallSeen(f, e, pc, sp, in)
 	}
 	if !marking {
@@ -3690,6 +3706,28 @@ framed:
 			r.jitPolySeen(f, e, pc, sp, f.cl.fn.Code[pc])
 		}
 		v, err = r.jitPropertyMade(f.cl, pc, sp)
+	} else if in.Op == bytecode.OpSuperCall {
+		// A native callee's super(...), a derived constructor's
+		// (abi.GoCallSuper): on its level's frame, made as a derived
+		// construction's is (jitDerivedFrame), its binding as the this
+		// slot, the first operand, has it -- bound, a second super(),
+		// which throws once the parent has run.
+		if f.thisRef == nil || f.callee == nil {
+			err = r.throwTypeError("\"super\" is only valid in a derived constructor")
+		} else {
+			if this := r.stack[sp-n]; !this.IsUninitialized() {
+				f.this, f.thisRef = this, &thisBinding{value: this, init: true}
+			} else {
+				f.thisRef = &thisBinding{value: f.this}
+			}
+			if err = r.superCall(f, slices.Clone(r.stack[sp-n+1:sp])); err == nil {
+				// The level's binding, its context's This, which an exit
+				// does not write (ir.Program's This, a snapshot): the frame
+				// Go makes for it is bound from it (jitDerivedFrame).
+				v = f.this
+				*(*Value)(unsafe.Pointer(&ctx.This)) = v
+			}
+		}
 	} else {
 		v, err = r.jitCallMade(in, sp)
 	}
@@ -3739,6 +3777,10 @@ type jitLevelFrame struct {
 	cl   unsafe.Pointer
 	base uint64
 	this abi.Slot
+	// instance is a derived construction's (abi.Context's Instance),
+	// which its frame's this is until its super() binds it: each
+	// construction's its own, its This the same unbound value.
+	instance abi.Slot
 }
 
 // jitGoMark is where the last call of Go a native callee made returned
@@ -3977,7 +4019,8 @@ func jitGoCallInstr(op uint64) (bytecode.Instr, int) {
 	case abi.GoCallInstanceOf:
 		return bytecode.Instr{Op: bytecode.OpInstanceOf}, 2
 	case abi.GoCallSuper:
-		return bytecode.Instr{Op: bytecode.OpSuperCall, A: argc}, int(argc)
+		// The frame's this slot, then the arguments.
+		return bytecode.Instr{Op: bytecode.OpSuperCall, A: argc}, int(argc) + 1
 	}
 	return in, n
 }
@@ -4756,7 +4799,7 @@ func (r *Runtime) jitInlinedCalls(e *jitEntry, pc int, o *Object, cl *closure, i
 			e.nativeCalls = append(e.nativeCalls, jitInline{pc: x.pc, cl: x.cl, obj: x.obj, pool: x.pool, byCode: byCode})
 		}
 	}
-	if !same && (in.Op != bytecode.OpNew || r.jitConstructs(o)) && r.jitNativeOrLinked(cl) {
+	if !same && (in.Op != bytecode.OpNew || r.jitConstructs(o) || r.jitConstructsDerived(o)) && r.jitNativeOrLinked(cl) {
 		e.nativeCalls = append(e.nativeCalls, r.jitNativeTarget(int32(pc), cl, o, in))
 	}
 }
@@ -4821,7 +4864,7 @@ func (r *Runtime) jitCallTarget(f *frame, e *jitEntry, pc, sp int, in bytecode.I
 			n++
 		}
 	}
-	if n >= jitCallTargets || in.Op == bytecode.OpNew && !r.jitConstructs(o) {
+	if n >= jitCallTargets || in.Op == bytecode.OpNew && !r.jitConstructs(o) && !r.jitConstructsDerived(o) {
 		return
 	}
 	if r.jitNativeOrLinked(cl) {
@@ -5315,10 +5358,23 @@ func (r *Runtime) jitDerivedBase(o *Object) *Object {
 		fd.closure.realm != r.Realm || o.class != ClassFunction || o.findOwn(atomPrototype) < 0 || !jitForwardsSuper(fd.closure.fn) {
 		return nil
 	}
-	if p := o.proto; p != nil && r.jitConstructs(p) {
+	if p := o.proto; p != nil && (r.jitConstructs(p) || r.jitConstructsDerived(p)) {
 		return p
 	}
 	return nil
+}
+
+// jitConstructsDerived reports whether native code may construct with o, a
+// derived class whose constructor is its own -- not a class without one,
+// whose construction runs the code of the class it extends (jitDerivedBase)
+// -- called natively as a construction (ssa.CallSite's Derived): its
+// instance from a pool made for o, as constructWithTarget makes it before
+// the body runs, its super() Go's, which runs the parent and the class's
+// field initializers.
+func (r *Runtime) jitConstructsDerived(o *Object) bool {
+	fd := o.fn()
+	return fd != nil && fd.closure != nil && fd.native == nil && !fd.bound && fd.ctorKind == ctorDerived && fd.superCtor == o &&
+		fd.closure.realm == r.Realm && o.class == ClassFunction && o.findOwn(atomPrototype) >= 0 && !jitForwardsSuper(fd.closure.fn)
 }
 
 // jitForwardsSuper reports whether fn is the constructor a derived class
@@ -7108,7 +7164,7 @@ func (r *Runtime) jitRunDone(e *jitEntry, idx, top int) {
 		}
 		clear(c.Keep[:s.ssaKeeps])
 		c.Closure, c.Upvalues, c.Cells = nil, nil, nil
-		c.This, c.RetValue = abi.Slot{}, abi.Slot{}
+		c.This, c.RetValue, c.Instance = abi.Slot{}, abi.Slot{}, abi.Slot{}
 	}
 }
 
@@ -7868,6 +7924,11 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure) (Value, e
 			jitReopenCells(f, c)
 		}
 		f.thisRef, f.withScopes, f.evalVars, f.native, f.savedSP = nil, nil, nil, "", 0
+		if !l.inline && l.construct && fn.Kind == bytecode.KindDerivedConstructor {
+			// A derived construction's, its this bound if its super()
+			// bound it.
+			jitDerivedFrame(f, s.ssaCtxs[l.ctx])
+		}
 		if !l.inline {
 			// Those in force at its exit, or at its call: an exception
 			// from the call unwinds the frame from there.
@@ -7937,7 +7998,10 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure) (Value, e
 				}
 			}
 		}
-		if l.construct && err == nil && !v.IsObject() {
+		switch {
+		case l.construct && !l.inline && l.cl.fn.Kind == bytecode.KindDerivedConstructor:
+			v, err = r.jitDerivedResult(v, err)
+		case l.construct && err == nil && !v.IsObject():
 			v = l.this
 		}
 		r.popFrameOf(f, l.top)
@@ -8035,12 +8099,55 @@ func (r *Runtime) jitEnterOne(c *abi.Context, i int, code *bytecode.Function, ca
 	f.this, f.newTarget, f.callee, f.args = this, newTarget, nil, nil
 	f.openUpvalues, f.handlers = f.openUpvalues[:0], f.handlers[:0]
 	f.thisRef, f.withScopes, f.evalVars, f.native, f.savedSP = nil, nil, nil, "", 0
+	derived := construct && fn.Kind == bytecode.KindDerivedConstructor
+	if derived {
+		jitDerivedFrame(f, c)
+	}
 	v, err := r.jitEnterCallee(f, s.hint(cl), i)
-	if construct && err == nil && !v.IsObject() {
+	switch {
+	case derived:
+		v, err = r.jitDerivedResult(v, err)
+	case construct && err == nil && !v.IsObject():
 		v = this
 	}
 	r.popFrameOf(f, base)
 	return v, err
+}
+
+// jitDerivedResult is a derived construction's result, from what its
+// frame's run gave, as constructWithTarget makes it: an object; undefined
+// returned before super(), a ReferenceError; anything else, a TypeError,
+// thrown at the construction, which the constructor's own try does not
+// catch.
+func (r *Runtime) jitDerivedResult(v Value, err error) (Value, error) {
+	switch {
+	case err == errNoSuper:
+		return Undefined, r.throwError(errReference, "%s", errNoSuper.Error())
+	case err != nil:
+		return Undefined, err
+	case !v.IsObject():
+		return Undefined, r.throwTypeError(errDerivedReturn)
+	}
+	return v, nil
+}
+
+// jitDerivedFrame gives f, a frame Go makes for a derived constructor's
+// level, which a native construction called (ssa.CallSite's Derived), what
+// runFD gives a derived construction's frame, from its context: its
+// function (abi.Context's Function), new.target, instance, and a binding
+// of its this, bound if its super() bound it (This).
+func jitDerivedFrame(f *frame, c *abi.Context) {
+	if c.Function == 0 || c.NewTarget == 0 {
+		return
+	}
+	f.callee = *(**Object)(unsafe.Pointer(&c.Function))
+	f.newTarget = Obj(*(**Object)(unsafe.Pointer(&c.NewTarget)))
+	if this := *(*Value)(unsafe.Pointer(&c.This)); !this.IsUninitialized() {
+		f.this, f.thisRef = this, &thisBinding{value: this, init: true}
+		return
+	}
+	f.this = *(*Value)(unsafe.Pointer(&c.Instance))
+	f.thisRef = &thisBinding{value: f.this}
 }
 
 // jitStartLocals makes the locals of a frame a native call made for fn, its
@@ -8215,6 +8322,12 @@ func (r *Runtime) jitFinishExit(f *frame, e *jitEntry, l *jitNativeLevel) (Value
 			// result or its throw here.
 			r.jit.goPending = jitGoPending{}
 			if p.pc == pc && p.ctx == l.ctx {
+				if p.err == nil && f.thisRef != nil && f.cl.fn.Code[pc].Op == bytecode.OpSuperCall {
+					// A super() Go made on a frame of the level's of its
+					// own (jitGoCallNested): this one's binding is the
+					// this it bound.
+					f.this, f.thisRef.value, f.thisRef.init = p.v, p.v, true
+				}
 				sp, ok := r.jitCallResult(f, pc, depth, p.v, p.err)
 				if !ok || r.stopped != nil {
 					v, err, _ := r.jitInterpret(f, sp, p.err)
