@@ -516,3 +516,127 @@ func (b *builder) bigOfCall(blk *Block, pc int, k Intrinsic, guard func(Op, Type
 	r := guard(OpBigOfF64, Int64, ir.HostExit, x)
 	b.assign(b.cur.base+b.p.Locals+b.p.Maps[pc+1].Depth-1, blk, b.bigBoxed(blk, r))
 }
+
+// BigInt blocks a call of Go that makes a BigInt's operator may give back
+// once it has made its result (CallSite's Release), as the tree tier gives
+// back those of its fresh operands and of a local holding its values alone
+// (the VM's bigRelease): the left operand, the right one -- each an
+// operator's result that only the call takes -- and the value of the local
+// the result is stored to next, which holds its values alone, the call's
+// third operand, the result marked as the local's alone.
+const (
+	ReleaseLeft = 1 << iota
+	ReleaseRight
+	ReleaseOld
+)
+
+// BigIntRecycleFeedback is Feedback that says which of a function's first
+// 64 locals hold their values alone, read only as operands of operators
+// whose results are values of their own (the VM's soleLocals), and whether
+// its code may give BigInts' blocks back at all: not a generator's or an
+// async function's, whose frames suspend.
+type BigIntRecycleFeedback interface {
+	BigIntSole() (sole uint64, ok bool)
+}
+
+// bigRelease is what the call of Go that makes in, a BigInt's operator at
+// pc of the root, may give back (CallSite's Release), and the local's value
+// it passes for it, or nil: of a site that met BigInts (BigIntFeedback),
+// as the tree tier marks its operators (its freshPC and ownedPC).
+func (b *builder) bigRelease(blk *Block, pc int, in ir.Instruction) (uint8, *Value) {
+	rf, ok := b.fb.(BigIntRecycleFeedback)
+	fb := b.bigFeedback()
+	if !ok || fb == nil || b.cur != b.root || !fb.BigInt(pc) || in.Left.Slot < 0 || in.Right.Slot < 0 {
+		return 0, nil
+	}
+	if !b.soleAsked {
+		b.sole, b.soleOK = rf.BigIntSole()
+		b.soleAsked = true
+	}
+	if !b.soleOK {
+		return 0, nil
+	}
+	var r uint8
+	if b.bigFresh(pc, in.Left.Slot) {
+		r |= ReleaseLeft
+	}
+	if in.Right.Slot != in.Left.Slot && b.bigFresh(pc, in.Right.Slot) {
+		r |= ReleaseRight
+	}
+	if k, ok := b.bigOwner(pc, in); ok && k < 64 && b.sole&(1<<uint(k)) != 0 {
+		return r | ReleaseOld, b.read(k, blk)
+	}
+	return r, nil
+}
+
+// bigArith reports whether op is an operator whose result is a value of
+// its own: arithmetic, bitwise, a shift.
+func bigArith(op ir.Operator) bool {
+	switch op {
+	case ir.Add, ir.Sub, ir.Mul, ir.Div, ir.Mod, ir.BitAnd, ir.BitOr, ir.BitXor, ir.Shl, ir.Shr:
+		return true
+	}
+	return false
+}
+
+// bigFresh reports whether slot, an operand of the instruction at pc,
+// holds the result of an operator (bigArith) that nothing but that
+// instruction takes: an operand slot an operator wrote earlier in the
+// block, which no instruction since has read or moved -- each since kept
+// to the slots past it, by the stack's depths.
+func (b *builder) bigFresh(pc, slot int) bool {
+	p := b.p
+	d := slot - p.Locals
+	if d < 0 {
+		return false
+	}
+	for k := pc - 1; k >= 0; k-- {
+		if b.blockAt[k+1] != nil || !reachable(p, k) {
+			return false
+		}
+		c := p.Code[k]
+		before, after := p.Maps[k].Depth, p.Maps[k+1].Depth
+		if c.Op == ir.Binary && c.Dest == slot && after == d+1 && before >= d && before <= d+2 {
+			// The operator that made it: of two operands on the stack, of
+			// one and a local or a constant, or of a local and a constant.
+			return bigArith(c.Operator)
+		}
+		if c.Left.Slot == slot || c.Right.Slot == slot || c.Third.Slot == slot {
+			return false
+		}
+		switch {
+		case c.Op == ir.Swap || c.Op == ir.Insert2 || c.Op == ir.Insert3:
+			return false
+		case before >= d+1 && after >= d+2:
+			// What it pops and pushes is past the slot.
+		case before >= d+1 && after == d+1 && (c.Op == ir.Nop || c.Op == ir.Copy && c.Dest < p.Locals):
+			// A drop, or a store to a local, of what is past it.
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+// bigOwner is the local the instruction right after pc stores in's result
+// to, taking it off the stack, as the tree tier's ownedStore takes it: one
+// that checks nothing, whose guard's state would still have the value the
+// local held, given back.
+func (b *builder) bigOwner(pc int, in ir.Instruction) (int, bool) {
+	p := b.p
+	k := pc + 1
+	if k+1 >= len(p.Maps) || b.blockAt[k] != nil || !reachable(p, k) {
+		return 0, false
+	}
+	c := p.Code[k]
+	switch {
+	case c.Op == ir.Copy && c.Left.Slot == in.Dest && c.Dest >= 0 && c.Dest < p.Locals && !c.Check && p.Maps[k+1].Depth == p.Maps[k].Depth-1:
+	case c.Op == ir.StoreLoad && c.Left.Slot == in.Dest && c.Dest >= 0 && c.Dest < p.Locals && !c.Check:
+	default:
+		return 0, false
+	}
+	if p.IsCaptured(c.Dest) || c.Dest >= p.UpvalueBase && c.Dest < p.UpvalueBase+p.Upvalues {
+		return 0, false
+	}
+	return c.Dest, true
+}

@@ -850,6 +850,10 @@ type CallSite struct {
 	// runtime function: what Go does with the call's operands, which
 	// native code passes as their words (abi.Context's GoOp).
 	Go GoOp
+	// Release, for a BigInt's operator Go makes (GoArith, GoAdd), is what
+	// of its operands' blocks Go may give back once it has made its result
+	// (ReleaseLeft, bigRelease in bigint.go).
+	Release uint8
 	// Generic, on a call's first site, has a function none of its sites
 	// is called natively all the same, through its link, found from its
 	// closure's hint (abi.HintTable), where its closure's environment and
@@ -1602,6 +1606,11 @@ type builder struct {
 	wrapped []uint8
 	words   map[*Value]*Value
 	region  *FrameState
+	// sole is the locals that hold their values alone, and soleOK whether
+	// the code may give BigInts' blocks back (BigIntRecycleFeedback), once
+	// asked (soleAsked).
+	sole              uint64
+	soleOK, soleAsked bool
 }
 
 // property is the feedback for a property operation at pc, if any.
@@ -2381,9 +2390,14 @@ func (b *builder) goCalls() bool {
 // as V8's code calls its StringAdd builtin: what Go refuses leaves for Go to
 // make after an exit.
 func (b *builder) goAdd(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
-	call := guard(OpCall, Tagged, ir.HostExit, operand(in.Left), operand(in.Right))
+	release, old := b.bigRelease(blk, b.herePC, in)
+	args := []*Value{operand(in.Left), operand(in.Right)}
+	if old != nil {
+		args = append(args, old)
+	}
+	call := guard(OpCall, Tagged, ir.HostExit, args...)
 	if b.f.Keeps < b.f.keepLimit() {
-		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoAdd, ThisSlot: -1}}, b.f.Keeps
+		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoAdd, ThisSlot: -1, Release: release}}, b.f.Keeps
 		b.f.Keeps++
 	}
 	cell := b.f.newValue(blk, OpCallCell, Source, call)
@@ -2427,9 +2441,14 @@ func (b *builder) goArithAt(pc int, op ir.Operator) bool {
 // goArith makes in, at a site goArithAt names, by a call of Go from native
 // code (GoArith), as goCompare makes a comparison.
 func (b *builder) goArith(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) *Value {
-	call := guard(OpCall, Tagged, ir.HostExit, operand(in.Left), operand(in.Right))
+	release, old := b.bigRelease(blk, b.herePC, in)
+	args := []*Value{operand(in.Left), operand(in.Right)}
+	if old != nil {
+		args = append(args, old)
+	}
+	call := guard(OpCall, Tagged, ir.HostExit, args...)
 	if b.f.Keeps < b.f.keepLimit() {
-		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoArith, Argc: int(in.Operator), ThisSlot: -1}}, b.f.Keeps
+		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoArith, Argc: int(in.Operator), ThisSlot: -1, Release: release}}, b.f.Keeps
 		b.f.Keeps++
 	}
 	cell := b.f.newValue(blk, OpCallCell, Source, call)

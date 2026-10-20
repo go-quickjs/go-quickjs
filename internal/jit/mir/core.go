@@ -1886,6 +1886,10 @@ func lengthWrites(site *ssa.CallSite, argc int, enc abi.Encoding) bool {
 // goOpWord is the word a call of Go, site, passes Go (abi.Context's GoOp).
 func goOpWord(site *ssa.CallSite) uint64 {
 	op := uint64(site.Go)
+	if site.Go == ssa.GoArith || site.Go == ssa.GoAdd || site.Go == ssa.GoAppend {
+		// What of its operands' BigInts it may give back.
+		op |= uint64(site.Release) << abi.GoOpKindShift
+	}
 	if site.Go == ssa.GoClosure || site.Go == ssa.GoClose || site.Go == ssa.GoCompare || site.Go == ssa.GoNewArray || site.Go == ssa.GoIndexOf || site.Go == ssa.GoArith {
 		// The template's constant, the first local closed, the operator
 		// compared with or applied, whether an array has room, or an

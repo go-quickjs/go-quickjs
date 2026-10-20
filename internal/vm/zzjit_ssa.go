@@ -3113,6 +3113,7 @@ func jitHostCall(ctx *abi.Context) bool {
 		if err != nil {
 			return false
 		}
+		r.jitBigRelease(ctx, v, a, b)
 		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
 		return true
 	case ssa.GoCompare:
@@ -4548,6 +4549,7 @@ func (r *Runtime) jitGoBigAdd(ctx *abi.Context, a, b Value) bool {
 	if err != nil {
 		return false
 	}
+	r.jitBigRelease(ctx, v, a, b)
 	*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
 	return true
 }
@@ -7672,6 +7674,42 @@ func (r *Runtime) jitBigIntSeen(f *frame, e *jitEntry, site int) bool {
 		}
 	}
 	return true
+}
+
+// BigIntSole is ssa.BigIntRecycleFeedback's: the locals of fn that hold
+// their values alone (soleLocals), and whether its code may give BigInts'
+// blocks back at all -- not a generator's or an async function's, whose
+// frames suspend, as the tree tier's freshPC has it -- on a 64-bit
+// machine, whose BigInts have room in their headers for their room.
+func (fb *jitFeedback) BigIntSole() (uint64, bool) {
+	fn := fb.fn
+	if bits.UintSize != 64 || fn.Generator || fn.Async {
+		return 0, false
+	}
+	return soleLocals(fn), true
+}
+
+// jitBigRelease gives back what of a, b and the third operand, old, the
+// call of Go that made v of them may give back (ssa.CallSite's Release),
+// as the tree tier's bigRelease does for its operators.
+func (r *Runtime) jitBigRelease(ctx *abi.Context, v, a, b Value) {
+	rel := uint8(ctx.GoOp >> abi.GoOpKindShift)
+	if rel == 0 {
+		return
+	}
+	flags := 0
+	if rel&ssa.ReleaseLeft != 0 {
+		flags |= treeFreshA
+	}
+	if rel&ssa.ReleaseRight != 0 {
+		flags |= treeFreshB
+	}
+	old := Undefined
+	if rel&ssa.ReleaseOld != 0 {
+		flags |= treeOwnRes
+		old = jitGoArg(ctx, 2)
+	}
+	r.bigRelease(v, a, b, old, flags)
 }
 
 // jitBigUnsigned reports whether v is a BigInt from 0 to 2^64-1, which is
