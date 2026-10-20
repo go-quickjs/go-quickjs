@@ -33,7 +33,7 @@ type engine struct{}
 
 var (
 	jitFlag       = flag.Bool("jit", false, "enable the optional native numeric tier")
-	jitReportFlag = flag.Bool("jitreport", false, "after each benchmark, print what the JIT compiled, refused and skipped (fixed mode, with -jit)")
+	jitReportFlag = flag.Bool("jitreport", false, "after each benchmark, print what the JIT compiled, refused and skipped (fixed and micro modes, with -jit)")
 	jitMemFlag    = flag.Int("jitmem", 32, "the JIT's memory budget in MiB, with -jit; 0 for the runtime's default (8 MiB)")
 )
 

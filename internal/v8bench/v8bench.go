@@ -166,6 +166,11 @@ func Main(name string, e Engine) {
 		}
 	case "micro":
 		rt = runMicro(e, *n, *only)
+		// What the JIT did over every test run, one report for them all:
+		// -suite picks the test it is of.
+		if r, ok := rt.(Reporter); ok {
+			r.Report("micro")
+		}
 	default:
 		fail(fmt.Errorf("unknown mode %q", *mode))
 	}
