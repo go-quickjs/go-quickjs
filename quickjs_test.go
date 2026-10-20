@@ -538,6 +538,9 @@ func TestBigInt(t *testing.T) {
 	checkEval(t, "2n ** 64n", "18446744073709551616")
 	checkEval(t, "10n / 3n", "3") // truncates toward zero
 	checkEval(t, "String(9007199254740993n)", "9007199254740993")
+	// A negated literal, folded into one constant (the compiler's).
+	checkEval(t, "String([-1n, -0n, -0x10n, -0o17n, -0b101n, -1_000n, -(2n)])", "-1,0,-16,-15,-5,-1000,-2")
+	checkEval(t, "-0x7fffffffffffffffn - 1n === -(2n ** 63n)", "true")
 }
 
 func TestOptionalChaining(t *testing.T) {

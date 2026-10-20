@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"math/big"
 	"slices"
 
 	"github.com/go-quickjs/go-quickjs/internal/ast"
@@ -948,6 +949,17 @@ func (c *compiler) compileUnary(n *ast.Unary) {
 		if lit, ok := n.Operand.(*ast.NumberLit); ok {
 			c.emit(bytecode.OpPushConst, c.numberConst(-lit.Value), 0)
 			return
+		}
+		// So is a BigInt literal, written in decimal: a constant, which a
+		// sign before a hexadecimal, octal or binary one's digits could not
+		// be (StringToBigInt takes none).
+		if lit, ok := n.Operand.(*ast.BigIntLit); ok {
+			if v, ok := new(big.Int).SetString(lit.Raw, 0); ok {
+				c.emit(bytecode.OpPushConst, c.addConst(bytecode.Constant{
+					Kind: bytecode.ConstBigInt, Str: v.Neg(v).String(),
+				}), 0)
+				return
+			}
 		}
 		c.compileExpr(n.Operand)
 		c.emitAt(n.Start, bytecode.OpNeg, 0, 0)
