@@ -104,7 +104,7 @@ func LowerSSAInlineWith(fn *bytecode.Function, h Hints) (*ir.Program, error) {
 
 // LowerSSAForwardWith is LowerSSAForward with hints.
 func LowerSSAForwardWith(fn *bytecode.Function, h Hints) (*ir.Program, error) {
-	if fn == nil || fn.Leaf != bytecode.LeafForward {
+	if fn == nil || fn.Leaf != bytecode.LeafForward && !fn.ForwardsArguments {
 		return nil, refuse(-1, "not a forwarding constructor")
 	}
 	return lowerRecovered(fn, lowering{ssa: true, callee: true, forward: true, hints: h})
@@ -129,14 +129,16 @@ func LowerSSAInline(fn *bytecode.Function) (*ir.Program, error) {
 
 // LowerSSAForward is LowerSSAInline for a constructor that forwards its
 // arguments to a method of its object, `this.k.apply(this, arguments)`
-// (bytecode.LeafForward), inlined where its caller knows what it forwards
-// to: apply_arguments is left to Go in its program, and the inliner makes
-// it the call of the method with the construction's own arguments, as V8
-// eliminates the arguments object. Its frame, made by Go at an exit, has
-// no arguments to forward: only an inliner that restarts the construction
-// at an exit before the call may take it.
+// (bytecode.LeafForward), or one that uses its arguments for nothing but
+// such calls (bytecode's ForwardsArguments), inlined where its caller
+// knows what it forwards to: apply_arguments is left to Go in its program,
+// and the inliner makes it the call of the method with the construction's
+// own arguments, as V8 eliminates the arguments object. Its frame, made by
+// Go at an exit, has the construction's arguments only where the inliner
+// keeps them for it (ssa.InlineSite's Arguments); else only an inliner
+// that restarts the construction at an exit before the call may take it.
 func LowerSSAForward(fn *bytecode.Function) (*ir.Program, error) {
-	if fn == nil || fn.Leaf != bytecode.LeafForward {
+	if fn == nil || fn.Leaf != bytecode.LeafForward && !fn.ForwardsArguments {
 		return nil, refuse(-1, "not a forwarding constructor")
 	}
 	return lowerRecovered(fn, lowering{ssa: true, callee: true, forward: true})

@@ -258,7 +258,14 @@ func (fb *jitFeedback) megamorphic(pc int, site ssa.PropertySite) bool {
 		return true
 	}
 	if in := fb.fn.Code[pc]; int(in.B) < len(fb.cl.ic) && fb.cl.ic[in.B].fills >= maxCacheFills {
-		return true
+		// But an inlined callee's write whose cache gave up for additions
+		// along chains deeper than it holds, which it noted and the site
+		// is compiled for (seenAdds) -- an initializer a class and its
+		// subclasses share -- as V8's code is compiled for the maps it met:
+		// another receiver deoptimizes.
+		if c := &fb.cl.ic[in.B]; fb.root == nil || in.Op != bytecode.OpSetProp || c.seen == nil || len(c.seen.deep) == 0 || len(site.Adds) == 0 {
+			return true
+		}
 	}
 	if in := fb.fn.Code[pc]; int(in.B) < len(fb.cl.ic) {
 		if c := &fb.cl.ic[in.B]; c.shape == dictShape || c.cell != nil {

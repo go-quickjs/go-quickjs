@@ -2946,7 +2946,7 @@ func (c *compiler) exitThen(s *ssa.FrameState, kind uint64, then *amd64.Label) {
 				off int32
 				v   uint64
 			}{{abi.OffInlineClosure, uint64(in.Closure)}, {abi.OffInlineLocals, uint64(in.Locals)}, {abi.OffInlineThis, uint64(in.ThisSlot + 1)},
-				{abi.OffInlineCallee, uint64(in.Callee)},
+				{abi.OffInlineCallee, uint64(in.Callee)}, {abi.OffInlineArgs, in.Args},
 				{abi.OffExitKind, k}, {abi.OffExitPC, uint64(in.PC)}, {abi.OffExitDepth, uint64(in.Depth)}, {abi.OffExitSite, uint64(int64(in.Site))},
 				{abi.OffLive, abi.LiveInline}} {
 				c.storeImm(next, f.off, f.v, scratchA)
@@ -5656,13 +5656,19 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.setG(v, d)
 	case ssa.OpUpvalueCell:
 		// The binding's cell, then where its value is now: a captured
-		// binding's, or, Aux 1, a captured local's of the code's own.
+		// binding's, or, Aux 1, a captured local's of the code's own, or,
+		// Aux 2, a captured binding of the closure whose cells are at
+		// Const.Bits.
 		d := c.gdst(v)
 		base := abi.OffUpvalues
 		if v.Aux == 1 {
 			base = abi.OffCells
 		}
-		c.a.Load(d, regCtx, base)
+		if v.Aux == 2 {
+			c.movImm(d, v.Const.Bits)
+		} else {
+			c.a.Load(d, regCtx, base)
+		}
 		c.a.Load(d, d, int32(v.Index)*8)
 		c.a.Load(d, d, c.enc.UpvalueSlot)
 		c.setG(v, d)

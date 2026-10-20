@@ -1878,8 +1878,11 @@ type jitFeedback struct {
 	e *jitEntry
 	// fwd, for a forwarding constructor's inlined frame, is the
 	// construction it is inlined at, whose receiver the frame's sites are
-	// known from (jitForwardFrame).
-	fwd *jitForwardFrame
+	// known from (jitForwardFrame). fwdArgs, for a frame of a function that
+	// only forwards its arguments (bytecode's ForwardsArguments), whose
+	// code ran and filled its caches, is the construction whose receiver
+	// its apply_arguments calls are made with (jitForwardSiteTarget).
+	fwd, fwdArgs *jitForwardFrame
 	// prog is the function lowered for inlining, its stack depths what
 	// Intrinsic reads, made on first use.
 	prog *ir.Program
@@ -2258,7 +2261,10 @@ func (fb *jitFeedback) Inline(pc int) (ssa.InlineSite, bool) {
 		targets = fb.e.inlines
 	}
 	if fb.fwd != nil {
-		return fb.forwardInline(pc)
+		return fb.forwardInline(pc, fb.fwd)
+	}
+	if fb.fwdArgs != nil && fb.fn.Code[pc].Op == bytecode.OpApplyArguments {
+		return fb.forwardInline(pc, fb.fwdArgs)
 	}
 	k := fb.keep()
 	for _, in := range targets {
@@ -2266,7 +2272,7 @@ func (fb *jitFeedback) Inline(pc int) (ssa.InlineSite, bool) {
 			continue
 		}
 		kind := jitLowerInline
-		if in.cl.fn.Leaf == bytecode.LeafForward && fb.fn.Code[pc].Op == bytecode.OpNew {
+		if (in.cl.fn.Leaf == bytecode.LeafForward || in.cl.fn.ForwardsArguments) && fb.fn.Code[pc].Op == bytecode.OpNew {
 			kind = jitLowerForward
 		}
 		p, err := fb.r.jitLower(in.cl.fn, kind)
@@ -2304,6 +2310,13 @@ func (fb *jitFeedback) Inline(pc int) (ssa.InlineSite, bool) {
 				// construction over again.
 				site.Restart = true
 				callee.fwd = &jitForwardFrame{ctor: in.obj, pool: in.pool, argc: int(call.A)}
+			} else if in.cl.fn.ForwardsArguments {
+				// Its frame Go makes with the construction's arguments, its
+				// forwards inlined, its captured bindings read from its
+				// cells.
+				site.Arguments = true
+				site.Upvalues = jitUpvalueCells(in.cl)
+				callee.fwdArgs = &jitForwardFrame{ctor: in.obj, pool: in.pool, argc: int(call.A)}
 			}
 		}
 		k.holders = append(k.holders, in.obj)
@@ -4569,6 +4582,13 @@ func (r *Runtime) jitInlineSite(fn *bytecode.Function, pc, depth int) (jitInline
 		}
 		return in, true
 	}
+	if in.pool != nil && in.cl.fn.ForwardsArguments {
+		// One that forwards its arguments, with what it forwards them to.
+		if !r.jitForwardsInline(in.cl, in.obj, depth) {
+			return jitInline{}, false
+		}
+		return in, true
+	}
 	if !r.jitInlinable(in.cl.fn) && !r.jitInlinesCalls(in.cl, depth-1) {
 		return jitInline{}, false
 	}
@@ -5092,7 +5112,7 @@ func (r *Runtime) jitChainReceiver(cl *closure, p *ir.Program, q, n int) (*Objec
 		return nil, false
 	}
 	switch prev := fn.Code[q-1].Op; {
-	case prev == bytecode.OpGetGlobal && p.Maps[q-1].Depth == p.Maps[q].Depth-1,
+	case (prev == bytecode.OpGetGlobal || prev == bytecode.OpGetUpvalue || prev == bytecode.OpGetUpvalueCheck) && p.Maps[q-1].Depth == p.Maps[q].Depth-1,
 		prev == bytecode.OpGetProp && p.Maps[q-1].Depth == p.Maps[q].Depth:
 	default:
 		return nil, false
@@ -5561,6 +5581,11 @@ func (r *Runtime) jitInlinesAt(cl *closure, o *Object, in bytecode.Instr) bool {
 		// this.k.apply(this, arguments): k, inlined in it.
 		return r.jitConstructs(o) && r.jitForwardTarget(cl, o, jitInlineDepth) != nil
 	}
+	if in.Op == bytecode.OpNew && cl.fn.ForwardsArguments {
+		// A.init.apply(this, arguments), and more: each method it forwards
+		// to, inlined in it.
+		return r.jitConstructs(o) && r.jitForwardsInline(cl, o, jitInlineDepth)
+	}
 	if !r.jitInlinable(cl.fn) && !r.jitInlinesCalls(cl, jitInlineDepth-1) {
 		return false
 	}
@@ -5666,18 +5691,32 @@ func (fb *jitFeedback) forwardProperty(pc int) (ssa.PropertySite, bool) {
 
 // forwardInline is a forwarding constructor's inlined frame's call,
 // apply_arguments, made the call of the method it forwards to, inlined
-// with the construction's arguments (ssa.InlineSite's Forward).
-func (fb *jitFeedback) forwardInline(pc int) (ssa.InlineSite, bool) {
+// with the construction's arguments (ssa.InlineSite's Forward): of fwd, a
+// LeafForward's construction, the method this.k is (jitForwardMethod); of
+// another's, one that forwards its arguments (bytecode's
+// ForwardsArguments), the function the call's f.apply reads f as
+// (jitForwardSiteTarget) -- one that forwards them in turn inlined so too,
+// its frame keeping them (ssa.InlineSite's Arguments).
+func (fb *jitFeedback) forwardInline(pc int, fwd *jitForwardFrame) (ssa.InlineSite, bool) {
 	r := fb.r
 	if pc >= len(fb.fn.Code) || fb.fn.Code[pc].Op != bytecode.OpApplyArguments || r.applyFn == nil {
 		return ssa.InlineSite{}, false
 	}
-	t := r.jitForwardMethod(fb.cl, fb.fwd.ctor)
+	var t *Object
+	if fwd == fb.fwd {
+		t = r.jitForwardMethod(fb.cl, fwd.ctor)
+	} else {
+		t = r.jitForwardSiteTarget(fb.cl, fwd.ctor, pc)
+	}
 	if t == nil {
 		return ssa.InlineSite{}, false
 	}
 	tc := t.fn().closure
-	p, err := fb.r.jitLower(tc.fn, jitLowerInline)
+	kind, forwards := jitLowerInline, tc.fn.ForwardsArguments && tc.fn.Leaf != bytecode.LeafForward
+	if forwards {
+		kind = jitLowerForward
+	}
+	p, err := fb.r.jitLower(tc.fn, kind)
 	if err != nil {
 		return ssa.InlineSite{}, false
 	}
@@ -5691,12 +5730,128 @@ func (fb *jitFeedback) forwardInline(pc int) (ssa.InlineSite, bool) {
 	}
 	k.holders = append(k.holders, t, r.applyFn)
 	k.inlined = append(k.inlined, tc)
+	callee := &jitFeedback{r: r, fn: tc.fn, cl: tc, root: k}
+	if forwards {
+		callee.fwdArgs = &jitForwardFrame{ctor: fwd.ctor, pool: fwd.pool, argc: fwd.argc}
+	}
 	return ssa.InlineSite{
-		Program: p, Feedback: &jitFeedback{r: r, fn: tc.fn, cl: tc, root: k},
+		Program: p, Feedback: callee,
 		Callee: uintptr(unsafe.Pointer(t)), Closure: uintptr(unsafe.Pointer(tc)),
-		Argc: fb.fwd.argc, Method: true, Params: tc.fn.ParamCount, ThisSlot: this,
-		Forward: true, Apply: uintptr(unsafe.Pointer(r.applyFn)),
+		Argc: fwd.argc, Method: true, Params: tc.fn.ParamCount, ThisSlot: this,
+		Forward: true, Apply: uintptr(unsafe.Pointer(r.applyFn)), Arguments: forwards, Upvalues: jitUpvalueCells(tc),
 	}, true
+}
+
+// jitUpvalueCells is the address of cl's captured bindings' cells, which
+// an inlined frame of its reads them from (ssa.InlineSite's Upvalues), or
+// 0 for none.
+func jitUpvalueCells(cl *closure) uintptr {
+	if len(cl.upvalues) == 0 {
+		return 0
+	}
+	return uintptr(unsafe.Pointer(unsafe.SliceData(cl.upvalues)))
+}
+
+// jitWritesUpvalues reports whether cl's code assigns a binding it
+// captured, which an inlined frame of its leaves to Go.
+func jitWritesUpvalues(cl *closure) bool {
+	return len(cl.upvalues) != 0 && slices.ContainsFunc(cl.fn.Code, func(x bytecode.Instr) bool {
+		switch x.Op {
+		case bytecode.OpSetUpvalue, bytecode.OpSetUpvalueCheck, bytecode.OpInitUpvalue:
+			return true
+		}
+		return false
+	})
+}
+
+// jitForwardSiteTarget is the function the apply_arguments at pc of cl's
+// code, a function that only forwards its arguments (bytecode's
+// ForwardsArguments) constructed as o, forwards them to: f of
+// f.apply(this, arguments), as the read of f finds it now -- a property of
+// this, the construction's receiver, on o's prototype; of anything else, as
+// the reads before it find it (jitChainValue), Box2D's A.init -- a
+// function the script made, of cl's realm and scope; or nil.
+func (r *Runtime) jitForwardSiteTarget(cl *closure, o *Object, pc int) *Object {
+	code := cl.fn.Code
+	if pc < 4 || pc >= len(code) || code[pc].Op != bytecode.OpApplyArguments || code[pc-1].Op != bytecode.OpPushThis ||
+		code[pc-2].Op != bytecode.OpGetPropThis || int(code[pc-2].A) >= len(cl.names) || r.atoms.name(cl.names[code[pc-2].A]) != "apply" ||
+		code[pc-3].Op != bytecode.OpGetProp || int(code[pc-3].A) >= len(cl.names) {
+		return nil
+	}
+	var v Value
+	if code[pc-4].Op == bytecode.OpPushThis {
+		p := o.getOwnVisible(atomPrototype)
+		if !p.ok() || p.flags()&propAccessor != 0 || !p.value().IsObject() {
+			return nil
+		}
+		m := p.value().Object().getOwnVisible(cl.names[code[pc-3].A])
+		if !m.ok() || m.flags()&propAccessor != 0 {
+			return nil
+		}
+		v = m.value()
+	} else {
+		prog, err := r.jitLower(cl.fn, jitLowerForward)
+		if err != nil {
+			return nil
+		}
+		var ok bool
+		if v, ok = r.jitChainValue(cl, prog, pc-3, jitChainReads); !ok {
+			return nil
+		}
+	}
+	if !v.IsObject() || !r.jitNativeTargetOf(v.Object().fn(), cl, false) {
+		return nil
+	}
+	return v.Object()
+}
+
+// jitHasRun reports whether cl's code has run, as a cache of its filled
+// says: a function that forwards its arguments is inlined for what its
+// caches learned -- its reads of what it forwards to -- which an inlining
+// decided before it ran would leave native code at, every construction,
+// until its exits gave the inlining up.
+func jitHasRun(cl *closure) bool {
+	for i := range cl.ic {
+		if cl.ic[i].fills != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// jitForwardsInline reports whether a construction of o, cl's function, one
+// that only forwards its arguments (bytecode's ForwardsArguments), may be
+// inlined: it has run (jitHasRun), assigns no binding it captured, and each
+// function it forwards them to (jitForwardSiteTarget) may be inlined in it
+// -- with its calls, depth levels on, or, one that forwards them in turn,
+// so.
+func (r *Runtime) jitForwardsInline(cl *closure, o *Object, depth int) bool {
+	if depth <= 0 || jitWritesUpvalues(cl) || !jitHasRun(cl) {
+		return false
+	}
+	forwards := false
+	for pc, in := range cl.fn.Code {
+		if in.Op != bytecode.OpApplyArguments {
+			continue
+		}
+		forwards = true
+		t := r.jitForwardSiteTarget(cl, o, pc)
+		if t == nil {
+			return false
+		}
+		tc := t.fn().closure
+		switch {
+		case tc.fn == cl.fn || jitWritesUpvalues(tc):
+			return false
+		case tc.fn.ForwardsArguments:
+			if tc.fn.Leaf == bytecode.LeafForward || !r.jitForwardsInline(tc, o, depth-1) {
+				return false
+			}
+		case !r.jitInlinable(tc.fn) && !r.jitInlinesCalls(tc, depth-1):
+			return false
+		}
+	}
+	return forwards
 }
 
 // jitInlineTarget is the call by in at pc of o, cl's function, to inline:
@@ -7252,6 +7407,10 @@ func (fb *jitFeedback) Property(pc int) (ssa.PropertySite, bool) {
 		// (jitSeenFeedback): those its cache met before the one it holds.
 		site.Cases = fb.seenCases(pc, site)
 	}
+	if ok && fb.root != nil && fb.fwd == nil && fb.fn.Code[pc].Op == bytecode.OpSetProp {
+		// And its additions so.
+		site.Adds = fb.seenAdds(pc, site)
+	}
 	if ok {
 		// A receiver of a shape the site's cases do not have deoptimizes,
 		// its cache learning the shape as the interpreter makes the
@@ -7307,27 +7466,35 @@ func (fb *jitFeedback) writeCases(pc int, site ssa.PropertySite) ([]ssa.Property
 			if from := uintptr(unsafe.Pointer(d.from)); from == site.Shape || site.Add != nil && from == site.Add.From {
 				continue
 			}
-			if d.next.index == nil && int(d.next.n) > linearScanLimit {
-				// Its next shape wants its table's index built, as fb.add
-				// leaves to Go.
-				continue
+			if a := fb.deepAdd(d); a != nil {
+				adds = append(adds, a)
 			}
-			k := fb.keep()
-			k.shapes = append(k.shapes, remember(d.from), remember(d.next))
-			a := &ssa.PropertyAdd{From: uintptr(unsafe.Pointer(d.from)), Next: uintptr(unsafe.Pointer(d.next)), Flags: uint8(d.next.flags)}
-			for j, up := range d.up {
-				h := ssa.Holder{Object: uintptr(unsafe.Pointer(up)), Shape: uintptr(unsafe.Pointer(d.shapes[j]))}
-				k.shapes, k.holders = append(k.shapes, remember(d.shapes[j])), append(k.holders, up)
-				if j < len(a.Protos) {
-					a.Protos[j] = h
-				} else {
-					a.More = append(a.More, h)
-				}
-			}
-			adds = append(adds, a)
 		}
 	}
 	return cases, adds
+}
+
+// deepAdd is d, an addition along a prototype chain deeper than a cache
+// holds, as ssa.PropertyAdd has it, the code keeping its shapes and
+// prototypes; or nil where its next shape wants its table's index built,
+// as fb.add leaves to Go.
+func (fb *jitFeedback) deepAdd(d jitDeepAdd) *ssa.PropertyAdd {
+	if d.next.index == nil && int(d.next.n) > linearScanLimit {
+		return nil
+	}
+	k := fb.keep()
+	k.shapes = append(k.shapes, remember(d.from), remember(d.next))
+	a := &ssa.PropertyAdd{From: uintptr(unsafe.Pointer(d.from)), Next: uintptr(unsafe.Pointer(d.next)), Flags: uint8(d.next.flags)}
+	for j, up := range d.up {
+		h := ssa.Holder{Object: uintptr(unsafe.Pointer(up)), Shape: uintptr(unsafe.Pointer(d.shapes[j]))}
+		k.shapes, k.holders = append(k.shapes, remember(d.shapes[j])), append(k.holders, up)
+		if j < len(a.Protos) {
+			a.Protos[j] = h
+		} else {
+			a.More = append(a.More, h)
+		}
+	}
+	return a
 }
 
 // seenCases are the cases of the property site at pc, as its cache met
@@ -7372,6 +7539,62 @@ func (fb *jitFeedback) seenCases(pc int, site ssa.PropertySite) []ssa.PropertyCa
 		cases = append(cases, pcase)
 	}
 	return cases
+}
+
+// seenAdds are the additions the property write at pc, an inlined
+// callee's, made as its cache met them besides the one site is compiled for
+// (propCache.seen, poly) -- and those along prototype chains deeper than it
+// holds (propSeen's deep) -- up to jitPropertyCases: an initializer's that a
+// class's subclasses share, as Box2D's static ones are, each class's
+// objects of a shape of their own, whose additions had each been an exit.
+func (fb *jitFeedback) seenAdds(pc int, site ssa.PropertySite) []*ssa.PropertyAdd {
+	in := fb.fn.Code[pc]
+	if int(in.B) >= len(fb.cl.ic) {
+		return nil
+	}
+	c := &fb.cl.ic[in.B]
+	var adds []*ssa.PropertyAdd
+	note := func(x *propCache) {
+		if len(adds)+1 >= jitPropertyCases || x.next == nil || x.shape == nil || x.shape == noShape || x.getter {
+			return
+		}
+		from := uintptr(unsafe.Pointer(x.shape))
+		if from == site.Shape || site.Add != nil && from == site.Add.From ||
+			slices.ContainsFunc(adds, func(a *ssa.PropertyAdd) bool { return a.From == from }) {
+			return
+		}
+		if a := fb.add(x); a != nil {
+			adds = append(adds, a)
+		}
+	}
+	if c.seen != nil {
+		for i := range c.seen.n {
+			note(&c.seen.entries[i])
+		}
+	}
+	if c.poly != nil {
+		for i := range c.poly.n {
+			note(&c.poly.entries[i])
+		}
+	}
+	if c.seen != nil && int(in.A) < len(fb.cl.names) {
+		// The additions along chains deeper than a cache holds -- a
+		// subclass's object's, two prototypes below the class whose
+		// initializer adds the property -- as the chain is now.
+		for _, d := range c.seen.deep {
+			from := uintptr(unsafe.Pointer(d.from))
+			if len(adds)+1 >= jitPropertyCases || from == site.Shape || site.Add != nil && from == site.Add.From ||
+				slices.ContainsFunc(adds, func(a *ssa.PropertyAdd) bool { return a.From == from }) {
+				continue
+			}
+			if da, ok := fb.r.jitDeepAddFrom(d.from, d.next, d.proto, fb.cl.names[in.A]); ok {
+				if a := fb.deepAdd(da); a != nil {
+					adds = append(adds, a)
+				}
+			}
+		}
+	}
+	return adds
 }
 
 // cases are the shapes other than first the read at pc met (jitPolySeen),
@@ -8623,6 +8846,9 @@ type jitNativeLevel struct {
 	kind, pc, depth, site uint64
 	inline                bool
 	locals, thisSlot, top int
+	// args, for an inlined callee's that keeps its call's arguments
+	// (abi.Context's InlineArgs), says where they are; 0 for none.
+	args uint64
 	// construct marks a callee a construction called, whose result, if not
 	// an object, is its receiver, and newTarget is then the function the
 	// construction called, the frame's new.target.
@@ -8680,7 +8906,7 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure) (Value, e
 		if c.Live == abi.LiveInline {
 			// The callee its caller -- e's code or a native call's callee's
 			// -- inlined at the call it left at.
-			l.inline, l.locals, l.thisSlot = true, int(c.InlineLocals), int(c.InlineThis)
+			l.inline, l.locals, l.thisSlot, l.args = true, int(c.InlineLocals), int(c.InlineThis), c.InlineArgs
 			if c.InlineCallee != 0 {
 				// The object, which the caller's code keeps alive.
 				l.callee = *(**Object)(unsafe.Pointer(&c.InlineCallee))
@@ -8852,6 +9078,14 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure) (Value, e
 			f.pc++
 		}
 		f.this, f.newTarget, f.callee, f.args = l.this, Undefined, l.callee, nil
+		if l.inline && l.args != 0 {
+			// Its call's arguments, in its caller's operands, which its
+			// apply_arguments hands on (ssa.InlineState's Args).
+			n, from := int(l.args>>32)-1, l.base-int(uint32(l.args))
+			if n >= 0 && from >= 0 && from+n <= len(r.stack) {
+				f.args = slices.Clone(r.stack[from : from+n])
+			}
+		}
 		if l.construct && l.newTarget.IsObject() {
 			f.newTarget = l.newTarget
 		}

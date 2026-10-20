@@ -312,9 +312,11 @@ type Context struct {
 	// inlined; InlineLocals its program's locals, past which its operands
 	// are; InlineThis 1 plus its receiver's slot, or 0; InlineCallee the
 	// function object called, which a construction's frame has as its
-	// new.target. Base is where the frame is; the exit fields say where it
-	// left.
-	InlineClosure, InlineLocals, InlineThis, InlineCallee uint64
+	// new.target; InlineArgs, for a frame that keeps its call's arguments
+	// (ssa's InlineState Args), 1 plus their count, shifted 32 bits, and
+	// how far below Base the first is, or 0. Base is where the frame is;
+	// the exit fields say where it left.
+	InlineClosure, InlineLocals, InlineThis, InlineCallee, InlineArgs uint64
 	// NewTarget is the function object a native construction called, its
 	// callee's new.target, which the caller's code keeps alive: written for
 	// a construction only.
@@ -686,9 +688,9 @@ const (
 // ExitInline is an inlined callee's frame an exit describes in a context
 // (LiveInline): what an exit's code writes there.
 type ExitInline struct {
-	Closure, Locals, ThisSlot, Callee uint64
-	Kind, PC, Depth                   uint64
-	Site, Base                        int64
+	Closure, Locals, ThisSlot, Callee, Args uint64
+	Kind, PC, Depth                         uint64
+	Site, Base                              int64
 }
 
 // NumConsts is how many words a context holds as constants
@@ -788,6 +790,7 @@ var (
 	OffInlineLocals  = int32(unsafe.Offsetof(Context{}.InlineLocals))
 	OffInlineThis    = int32(unsafe.Offsetof(Context{}.InlineThis))
 	OffInlineCallee  = int32(unsafe.Offsetof(Context{}.InlineCallee))
+	OffInlineArgs    = int32(unsafe.Offsetof(Context{}.InlineArgs))
 	OffNewTarget     = int32(unsafe.Offsetof(Context{}.NewTarget))
 	OffInstance      = int32(unsafe.Offsetof(Context{}.Instance))
 	OffFunction      = int32(unsafe.Offsetof(Context{}.Function))

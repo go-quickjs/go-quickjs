@@ -486,7 +486,7 @@ func rematerializeUpvalues(f *Func) bool {
 			if v.Op == OpPhi && v.Type == Tagged {
 				phis = append(phis, v)
 			}
-			loads = loads || v.Op == OpLoadCell && v.Args[0].Op == OpUpvalueCell
+			loads = loads || v.Op == OpLoadCell && v.Args[0].Op == OpUpvalueCell && v.Args[0].Aux < 2
 		}
 	}
 	f.scr().phis = phis[:0]
@@ -521,9 +521,10 @@ func rematerializeUpvalues(f *Func) bool {
 			for _, a := range v.Args {
 				var k int32
 				switch {
-				case a.Op == OpLoadCell && a.Args[0].Op == OpUpvalueCell:
+				case a.Op == OpLoadCell && a.Args[0].Op == OpUpvalueCell && a.Args[0].Aux < 2:
 					// A binding's cell, or a captured local's of the code's
-					// own (Aux 1), each its own.
+					// own (Aux 1), each its own; not an inlined callee's
+					// (Aux 2), which the code reads anew each time.
 					k = int32(2*a.Args[0].Index+a.Args[0].Aux) + 1
 				case a.Op == OpPhi && a.ID < len(cand) && cand[a.ID] != none:
 					k = cand[a.ID]

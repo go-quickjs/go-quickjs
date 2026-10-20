@@ -305,6 +305,12 @@ type Function struct {
 	// MappedArguments marks a function whose arguments object aliases its
 	// parameters, which sloppy mode with a plain parameter list asks for.
 	MappedArguments bool
+	// ForwardsArguments marks a function whose arguments object is never
+	// made: it is used only as f.apply(x, arguments), each such call an
+	// apply_arguments, which hands the call's arguments on, however many of
+	// them there are and whatever else the function does -- a
+	// constructor of Box2DWeb's, A.init.apply(this, arguments).
+	ForwardsArguments bool
 	// ParamsAreLexical marks a parameter list whose bindings are initialized
 	// one at a time, in order, so that a default may not read a parameter that
 	// comes after it. A missing argument leaves its slot in the dead zone for

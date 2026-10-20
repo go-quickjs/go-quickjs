@@ -177,6 +177,9 @@ func (p *printer) header(fn *bytecode.Function, indent string) {
 	if fn.UsesArguments {
 		traits = append(traits, "arguments")
 	}
+	if fn.ForwardsArguments {
+		traits = append(traits, "forwards arguments")
+	}
 	if l := leaves[fn.Leaf]; l != "" {
 		traits = append(traits, "leaf "+l)
 	}

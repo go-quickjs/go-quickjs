@@ -1443,7 +1443,7 @@ func (c *core) exitDescriptor(s *ssa.FrameState, kind uint64, localsReg, stackRe
 			if in == s.Inline {
 				k = kind
 			}
-			d.Inline = append(d.Inline, abi.ExitInline{Closure: uint64(in.Closure), Callee: uint64(in.Callee), Locals: uint64(in.Locals),
+			d.Inline = append(d.Inline, abi.ExitInline{Closure: uint64(in.Closure), Callee: uint64(in.Callee), Locals: uint64(in.Locals), Args: in.Args,
 				ThisSlot: uint64(in.ThisSlot + 1), Kind: k, PC: uint64(in.PC), Depth: uint64(in.Depth),
 				Site: int64(in.Site), Base: int64(in.Base)})
 		}

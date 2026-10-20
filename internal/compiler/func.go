@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/go-quickjs/go-quickjs/internal/ast"
@@ -191,6 +192,10 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 	c.emit(bytecode.OpReturnUndef, 0, 0)
 	c.finish()
 	c.fn.Leaf = leafKind(c.fn)
+	c.fn.ForwardsArguments = c.lazyArguments && !c.opts.Debug && !slices.ContainsFunc(c.fn.Code, func(in bytecode.Instr) bool {
+		// The object made for anything but apply.
+		return in.Op == bytecode.OpLazyArguments || in.Op == bytecode.OpArgumentsLength
+	})
 	if c.opts.Debug {
 		// A leaf is answered without a frame, so a debugger could not stop
 		// in it.

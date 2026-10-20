@@ -1193,7 +1193,13 @@ func allocOnly(v *Value) bool {
 // callee, apply_arguments: f, the function at Callee, is called with the
 // callee's receiver, after the check that apply is the realm's own, at
 // Apply, with the arguments the callee was given, as V8 eliminates the
-// arguments object.
+// arguments object. Arguments marks a callee that keeps the arguments its
+// call gave it for its frame at an exit (InlineState's Args), a forwarding
+// constructor whose code does more than forward them once
+// (bytecode's ForwardsArguments): Go makes its frame, not the construction
+// over again. Upvalues is the address of the callee closure's captured
+// bindings' cells, which its reads of them read, the closure the call's
+// check of its function fixes; or 0, Go's.
 type InlineSite struct {
 	Program         *ir.Program
 	Feedback        Feedback
@@ -1210,6 +1216,8 @@ type InlineSite struct {
 	Restart         bool
 	Forward         bool
 	Apply           uintptr
+	Arguments       bool
+	Upvalues        uintptr
 }
 
 // Inlining's bounds: a callee's instructions, all callees' in a function,
@@ -1597,8 +1605,9 @@ func (b *builder) hostOf(pc int) bool {
 		return !ok
 	case ir.UpvalueRead, ir.UpvalueWrite:
 		// The function's own captured bindings, which its context has;
-		// an inlined callee's, Go's.
-		return b.cur != b.root
+		// an inlined callee's read where its closure's cells are known
+		// (InlineSite's Upvalues); the rest Go's.
+		return b.cur != b.root && (b.p.Code[pc].Op != ir.UpvalueRead || b.cur.site.Upvalues == 0)
 	case ir.StringAdd, ir.StringConcat, ir.HasProperty, ir.DeleteProperty:
 		// A call of Go (GoAdd, GoConcat, GoHas, GoDelete), where the VM
 		// answers it.
@@ -1894,8 +1903,11 @@ type frame struct {
 	receiver *Value
 	keep     int
 	// args are the arguments the call gave it, which a call it forwards
-	// them to is given (InlineSite's Forward).
-	args []*Value
+	// them to is given (InlineSite's Forward), and argSlot the first of
+	// them among the caller's slots at the call, where an exit's frame
+	// finds them (InlineSite's Arguments).
+	args    []*Value
+	argSlot int
 	// nest is how deep it is inlined, as maxInlineDepth counts: depth, but
 	// for forwarding constructors (InlineSite's Restart).
 	nest int
@@ -2009,7 +2021,7 @@ func (b *builder) inlineAt(pc int, total *int) (*frame, bool) {
 	if site.Forward {
 		// f, apply and the receiver; the arguments are the frame's own.
 		callee = 3
-		if b.cur == b.root || !b.cur.site.Restart || site.Argc != b.cur.site.Argc {
+		if b.cur == b.root || !b.cur.site.Restart && !b.cur.site.Arguments || site.Argc != b.cur.site.Argc {
 			return nil, false
 		}
 	}
@@ -2051,13 +2063,17 @@ func (b *builder) inlineAt(pc int, total *int) (*frame, bool) {
 		fr.keep = b.f.Keeps
 		b.f.Keeps++
 	}
-	if site.Restart {
+	if site.Restart || site.Arguments {
 		// A forwarding constructor is its call of the method it forwards
 		// to: it does not count toward how deep calls are inlined.
 		fr.nest = b.cur.nest
 	}
 	b.nslots += q.Locals + q.StackSize
-	b.inlines++
+	if !site.Restart && !site.Arguments {
+		// A forwarding constructor is its calls of the methods it forwards
+		// to, which count: not a callee more toward maxInlines.
+		b.inlines++
+	}
 	if len(calls) != 0 {
 		cur := b.cur
 		b.enter(fr)
@@ -2223,7 +2239,7 @@ func (b *builder) inlineCall(blk *Block, pc int, fr *frame, guard func(Op, Type,
 	for s := range fr.init {
 		fr.init[s] = undefined
 	}
-	fr.args = make([]*Value, site.Argc)
+	fr.args, fr.argSlot = make([]*Value, site.Argc), sp-site.Argc
 	for i := range fr.args {
 		fr.args[i] = b.read(sp-site.Argc+i, blk)
 	}
@@ -2754,7 +2770,7 @@ func (b *builder) forwardCall(blk *Block, pc, sp int, fr *frame, guard func(Op, 
 	for s := range fr.init {
 		fr.init[s] = undefined
 	}
-	fr.args = b.cur.args
+	fr.args, fr.argSlot = b.cur.args, b.cur.argSlot
 	for i := 0; i < site.Params && i < len(fr.args); i++ {
 		fr.init[i] = fr.args[i]
 	}
@@ -3430,6 +3446,9 @@ func (b *builder) frameState(blk *Block, pc int) *FrameState {
 		}
 		s.Inline = &InlineState{Parent: call.Inline, Closure: fr.site.Closure, Callee: fr.site.Callee, Base: fr.base, Locals: b.p.Locals, ThisSlot: fr.site.ThisSlot,
 			PC: b.p.Maps[pc].PC, Depth: depth, Site: pc}
+		if fr.site.Arguments {
+			s.Inline.Args = uint64(len(fr.args)+1)<<32 | uint64(fr.base-fr.argSlot)
+		}
 		return s
 	}
 	depth := b.p.Maps[pc].Depth
@@ -4381,6 +4400,19 @@ func (b *builder) instruction(blk *Block, pc int) {
 		}
 		b.goConcat(blk, in, operand, guard)
 	case ir.UpvalueRead, ir.UpvalueWrite:
+		if b.cur != b.root && in.Op == ir.UpvalueRead && b.cur.site.Upvalues != 0 {
+			// An inlined callee's captured binding, read from its cell
+			// anew each time (OpUpvalueCell's Aux 2): a call may assign it.
+			cell := f.newValue(blk, OpUpvalueCell, Source)
+			cell.Index, cell.Aux, cell.Const = int(in.Key), 2, ir.Value{Bits: uint64(b.cur.site.Upvalues)}
+			v := f.newValue(blk, OpLoadCell, Tagged, cell)
+			v.Shadow = cell
+			if in.Check {
+				guard(OpCheckInit, None, ir.GuardExit, v)
+			}
+			b.assign(in.Dest, blk, v)
+			break
+		}
 		if b.cur != b.root {
 			blk.ExitKind = ir.HostExit
 			blk.State = state()

@@ -528,7 +528,7 @@ func (c *a64Compiler) exitThen(s *ssa.FrameState, kind uint64, then *arm64.Label
 				off int32
 				v   uint64
 			}{{abi.OffInlineClosure, uint64(in.Closure)}, {abi.OffInlineLocals, uint64(in.Locals)}, {abi.OffInlineThis, uint64(in.ThisSlot + 1)},
-				{abi.OffInlineCallee, uint64(in.Callee)},
+				{abi.OffInlineCallee, uint64(in.Callee)}, {abi.OffInlineArgs, in.Args},
 				{abi.OffExitKind, k}, {abi.OffExitPC, uint64(in.PC)}, {abi.OffExitDepth, uint64(in.Depth)}, {abi.OffExitSite, uint64(int64(in.Site))},
 				{abi.OffLive, abi.LiveInline}} {
 				c.movImm(a64A, f.v)
@@ -5143,7 +5143,11 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		if v.Aux == 1 {
 			base = abi.OffCells
 		}
-		c.a.Load(d, a64Ctx, base)
+		if v.Aux == 2 {
+			c.movImm(d, v.Const.Bits)
+		} else {
+			c.a.Load(d, a64Ctx, base)
+		}
 		c.a.Load(d, d, int32(v.Index)*8)
 		c.a.Load(d, d, c.enc.UpvalueSlot)
 		c.setG(v, d)

@@ -76,7 +76,7 @@ func (s *ExitScratch) Apply(ctx *abi.Context) (refs int) {
 		next := ctx
 		for _, in := range d.Inline {
 			next = (*abi.Context)(next.Next)
-			next.InlineClosure, next.InlineLocals, next.InlineThis, next.InlineCallee = in.Closure, in.Locals, in.ThisSlot, in.Callee
+			next.InlineClosure, next.InlineLocals, next.InlineThis, next.InlineCallee, next.InlineArgs = in.Closure, in.Locals, in.ThisSlot, in.Callee, in.Args
 			next.ExitKind, next.ExitPC, next.ExitDepth, next.ExitSite = in.Kind, in.PC, in.Depth, uint64(in.Site)
 			next.Live, next.Base = abi.LiveInline, uint64(first+in.Base)
 		}

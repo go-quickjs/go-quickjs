@@ -331,8 +331,10 @@ const (
 	OpConstCell // -> source
 	// OpUpvalueCell is the cell captured binding Index's value is in now
 	// -- with Aux 1, captured local Index's of the code's own cells, in
-	// their locals' order (ir.Program's Cells, abi.Context's Cells):
-	// its frame's slot while the frame runs, its own once closed -- found
+	// their locals' order (ir.Program's Cells, abi.Context's Cells), or,
+	// with Aux 2, captured binding Index's of the closure whose cells are
+	// at Const.Bits, an inlined callee's (InlineSite's Upvalues): its
+	// frame's slot while the frame runs, its own once closed -- found
 	// again each time, as closing moves it (ir.UpvalueRead).
 	OpUpvalueCell // -> source
 	// OpUpvalueStale marks, while the builder runs, a captured binding's
@@ -628,6 +630,12 @@ type FrameState struct {
 // at ThisSlot, or -1; PC, Depth and Site where in it the exit is. Parent is
 // its caller's, at the call, when that is inlined too, and the exit makes
 // both frames, each in a context of its own, the outermost first.
+//
+// Args, for a frame that keeps its call's arguments (InlineSite's
+// Arguments), is 1 plus their count, shifted 32 bits, and how far below
+// Base the first of them is, among the caller's slots at the call; or 0.
+// Go gives the frame them (the VM's f.args), which its apply_arguments
+// hands on.
 type InlineState struct {
 	Parent   *InlineState
 	Closure  uintptr
@@ -638,6 +646,7 @@ type InlineState struct {
 	PC       uint32
 	Depth    int
 	Site     int
+	Args     uint64
 }
 
 // Kind is how a block ends.
