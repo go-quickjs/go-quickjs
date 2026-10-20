@@ -2,6 +2,7 @@ package vm
 
 import (
 	"math"
+	"math/bits"
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
@@ -1820,11 +1821,15 @@ func (c *tctx) arithSlow(op bytecode.Op, a, b Value, pc int) Value {
 				return shortBig(s)
 			}
 		case bytecode.OpMul:
-			if p, ok := mulInt64(x, y); ok {
+			// The unsigned product's high word less what the operands'
+			// signs take from it is the signed product's, which is in the
+			// range when it is the low word's sign.
+			hi, lo := bits.Mul64(uint64(x), uint64(y))
+			if hi-(uint64(x>>63)&uint64(y)+uint64(y>>63)&uint64(x)) == uint64(int64(lo)>>63) {
 				if jitBuilt {
 					treeBigInt(c, pc&treePCMask, false)
 				}
-				return shortBig(p)
+				return shortBig(int64(lo))
 			}
 		case bytecode.OpDiv:
 			// Go's division truncates toward zero, as a BigInt's does; only
