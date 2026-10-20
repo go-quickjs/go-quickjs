@@ -551,6 +551,35 @@ function array_filter(n)
     return n * len;
 }
 
+/* String.prototype.indexOf of each character of a text in an alphabet,
+   as a base64 decoder looks its characters up */
+function string_indexOf(n)
+{
+    var alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    var text = "SGVsbG8sIHdvcmxkISBUaGlzIGlzIGEgdGVzdCBvZiBpbmRleE9mLg";
+    var i, j, s, len = text.length;
+    for (j = 0; j < n; j++) {
+        s = 0;
+        for (i = 0; i < len; i++)
+            s += alphabet.indexOf(text.charAt(i));
+        global_res = s;
+    }
+    return n * len;
+}
+
+/* Array.prototype.indexOf of a number in an array of a hundred, found
+   half way along */
+function array_indexOf(n)
+{
+    var r, i, j, len = 100;
+    r = [];
+    for (i = 0; i < len; i++)
+        r[i] = i;
+    for (j = 0; j < n; j++)
+        global_res = r.indexOf(j & 1 ? 50 : 49);
+    return n;
+}
+
 /* %TypedArray%.prototype.forEach over an Int32Array of a hundred, its
    callback an arrow that adds to a binding it captured */
 function typed_forEach(n)

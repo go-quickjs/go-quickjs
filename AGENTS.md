@@ -237,7 +237,8 @@ go run -tags quickjs_jit ./internal/cmd/v8bench -jit -jitreport -bench awfy -dir
 functions, try statements, iterators, using declarations, closures
 made and called anew, calls in tail position, private class members,
 Math.random, the in operator, a delete of an object's last property,
-Array.prototype.forEach, reduce, map, filter and some, a typed array's forEach --
+Array.prototype.forEach, reduce, map, filter and some, a typed array's forEach,
+String.prototype.indexOf and Array.prototype.indexOf --
 written as
 its tests are: each test is given
 the same work every run -- what QuickJS takes about 150 ms for, the work
