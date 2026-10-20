@@ -46,11 +46,20 @@ const (
 	// Int64 is a BigInt in the int64 range, its two's complement: one held
 	// in a value (abi.Encoding's ShortBigTag), unboxed (OpBigUnbox).
 	Int64
+	// Uint64 is a BigInt from 0 to 2^64-1, its bits: a 64-bit hash's or
+	// generator's, held in a value (abi.Encoding's ShortBigTag, or
+	// ShortBigWideTag past the int64 range), unboxed (OpBigUnboxU64). It is
+	// also the word an operator makes of BigInts' low 64 bits where only
+	// those are asked for (OpBigLow), BigInt.asUintN(64, ...)'s operand.
+	Uint64
 )
 
 func (t Type) String() string {
-	return [...]string{"tagged", "f64", "i32", "bool", "none", "ptr", "source", "i64"}[t]
+	return [...]string{"tagged", "f64", "i32", "bool", "none", "ptr", "source", "i64", "u64"}[t]
 }
+
+// IsBig reports whether t is an unboxed BigInt: Int64 or Uint64.
+func (t Type) IsBig() bool { return t == Int64 || t == Uint64 }
 
 // Op is a value's operation.
 type Op uint8
@@ -421,8 +430,63 @@ const (
 	OpCmpI64 // i64, i64 -> bool
 	// OpConstI64 is a BigInt constant in the int64 range, Const.Bits: the
 	// unboxing of a constant's load from its cell (ir.BigIntConst), whose
-	// Aux 1 says it is one, its value in Const.
-	OpConstI64 // -> i64
+	// Aux 1 says it is one, its value in Const -- Aux 2 one from 2^63 to
+	// 2^64-1, a Uint64. Its Type is Int64 or Uint64.
+	OpConstI64 // -> i64 | u64
+
+	// BigInts from 0 to 2^64-1 (Uint64), and the words of BigInts' low 64
+	// bits, as V8's code makes BigInt.asUintN(64, ...) of its operators on
+	// machine words.
+	//
+	// OpBigUnboxU64 is the BigInt a tagged value is, as OpBigUnbox's, of
+	// those from 0 to 2^64-1: it exits for any other.
+	OpBigUnboxU64 // tagged -> u64
+	// OpBigLow is the low 64 bits of the two's complement of a BigInt held
+	// in a value, any of them (abi.Encoding's ShortBigTag or
+	// ShortBigWideTag): it exits for any other value.
+	OpBigLow // tagged -> u64
+	// OpBigSign is Args[0], an Int64 or a Uint64, as the other type, its
+	// Type: it exits where its top bit is set, a negative Int64 or a Uint64
+	// past the int64 range, which the other has not.
+	OpBigSign // i64 | u64 -> u64 | i64
+	// The words' operators, which exit nowhere, their Type the builder's
+	// (Int64 or Uint64): the sum, difference and product modulo 2^64; the
+	// bitwise operators, exact for two Int64s or two Uint64s; a shift left,
+	// or right, logical or arithmetic, by Index, 0 to 63.
+	OpAddW // w, w -> w
+	OpSubW // w, w -> w
+	OpMulW // w, w -> w
+	OpAndW // w, w -> w
+	OpOrW  // w, w -> w
+	OpXorW // w, w -> w
+	OpShlW // w -> w
+	OpShrW // w -> w
+	OpSarW // w -> w
+	// OpZextW and OpSextW are a word's low Index bits, 1 to 64, the bits
+	// above them zero or the sign's: BigInt.asUintN's and asIntN's of
+	// Index bits. Of 64 bits, the word as it is, as the other type.
+	OpZextW // w -> u64
+	OpSextW // w -> i64
+	// OpAddU64, OpSubU64 and OpMulU64 exit where the result is outside 0 to
+	// 2^64-1.
+	OpAddU64 // u64, u64 -> u64
+	OpSubU64 // u64, u64 -> u64
+	OpMulU64 // u64, u64 -> u64
+	// OpShlI64 and OpShlU64 are Args[0] shifted left by Index, 0 to 63:
+	// they exit where the result is outside their type's range.
+	OpShlI64 // i64 -> i64
+	OpShlU64 // u64 -> u64
+	// OpDivI64 and OpModI64, OpDivU64 and OpModU64, are a BigInt division,
+	// toward zero, and its remainder, which takes the dividend's sign: they
+	// exit for a zero divisor, which throws, and OpDivI64 for the most
+	// negative int64 over -1, whose quotient is outside the range.
+	OpDivI64 // i64, i64 -> i64
+	OpModI64 // i64, i64 -> i64
+	OpDivU64 // u64, u64 -> u64
+	OpModU64 // u64, u64 -> u64
+	// OpBigOfF64 is BigInt(x) of a number (Intrinsic): it exits unless x
+	// is an integer in the int64 range, for Go to make the call.
+	OpBigOfF64 // f64 -> i64
 )
 
 var opNames = [...]string{
@@ -442,6 +506,10 @@ var opNames = [...]string{
 	OpSignF64: "signf", OpFroundF64: "froundf", OpMathCall: "mathcall", OpRandomF64: "randomf", OpAccessorIs: "accessoris",
 	OpCellNone: "cellnone",
 	OpBigUnbox: "bigunbox", OpBigBox: "bigbox", OpBigCell: "bigcell", OpAddI64: "addi64", OpSubI64: "subi64", OpMulI64: "muli64", OpCmpI64: "cmpi64", OpConstI64: "consti64",
+	OpBigUnboxU64: "bigunboxu", OpBigLow: "biglow", OpBigSign: "bigsign", OpAddW: "addw", OpSubW: "subw", OpMulW: "mulw",
+	OpAndW: "andw", OpOrW: "orw", OpXorW: "xorw", OpShlW: "shlw", OpShrW: "shrw", OpSarW: "sarw", OpZextW: "zextw", OpSextW: "sextw",
+	OpAddU64: "addu64", OpSubU64: "subu64", OpMulU64: "mulu64", OpShlI64: "shli64", OpShlU64: "shlu64",
+	OpDivI64: "divi64", OpModI64: "modi64", OpDivU64: "divu64", OpModU64: "modu64", OpBigOfF64: "bigoff",
 }
 
 func (o Op) String() string {
@@ -479,7 +547,8 @@ func (o Op) isGuard() bool {
 	case OpUnboxF64, OpOddballF64, OpTruth, OpCheckInit, OpModF64, OpArrayOf, OpIndexedOf, OpElemKey, OpElemRead, OpElemWrite, OpElemCell, OpElemStore, OpLength,
 		OpObjectOf, OpPropRead, OpPropWrite, OpPropCell, OpGlobalCell, OpLexCell, OpBindingCell, OpStringMethod, OpStringProp, OpStringCode, OpStringChar, OpCodeChar, OpLooseNullish, OpEqTagged,
 		OpSameObject, OpSameSymbol, OpIterClosed, OpFrameRoom, OpTailRoom, OpTailSelf, OpCall, OpInstanceOf, OpTypeIs, OpCheckTrue, OpPowF64, OpAccessorIs,
-		OpBigUnbox, OpAddI64, OpSubI64, OpMulI64:
+		OpBigUnbox, OpAddI64, OpSubI64, OpMulI64,
+		OpBigUnboxU64, OpBigLow, OpBigSign, OpAddU64, OpSubU64, OpMulU64, OpShlI64, OpShlU64, OpDivI64, OpModI64, OpDivU64, OpModU64, OpBigOfF64:
 		return true
 	}
 	return false

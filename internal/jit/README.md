@@ -147,6 +147,25 @@ pool. Strings' and arrays' `indexOf`, `lastIndexOf` and `includes` are a
 call of Go of their own (`ssa.GoIndexOf`), which answers where the
 built-in runs nothing. Anything else such a call meets is Go's.
 
+**BigInts.** As V8's code makes its BigInt64 values, an operator of
+BigInts the existing tiers saw held in their values (`abi.Encoding`'s
+`ShortBigTag`) is made on them unboxed (`ssa/bigint.go`): as Int64s, or,
+where the site met BigInts past the int64 range from 0 to 2^64-1 -- a
+64-bit hash's or generator's -- as Uint64s. The arithmetic exits where a
+result leaves its type's range, for a division by zero and for the most
+negative int64 over -1; the bitwise operators exit nowhere; a shift is by a
+constant. `BigInt(x)` of a number is made natively, and
+`BigInt.asUintN(n, e)` and `asIntN`'s, of a width the call pushes as a
+constant up to 64, check the function they call and cut `e`'s low bits;
+where `e` is an operator that only such operators and the call take, it
+is made on its operands' low 64 bits alone, as V8 truncates them to
+machine words, its guards and the call's exiting to the state before the
+first of them, which nothing since has changed. A loop's BigInts stay in
+unboxed phis, and a box only frame states name is made nowhere but at an
+exit, which makes the value of the unboxed BigInt (`abi.ExitLoc`'s
+`IsBig`), as V8's deoptimizer materializes one. The rest -- BigInts on the
+heap -- Go makes from native code (`ssa.GoArith`).
+
 **Array loops.** A call of `Array.prototype`'s `forEach`, `reduce`,
 `map`, `filter`, `some`, `every`, `find` or `findIndex`, or a typed array's
 method of those names, is made a loop of the code's own, as V8's

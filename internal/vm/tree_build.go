@@ -1044,6 +1044,13 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			if err != nil {
 				c.throw(err)
 			}
+			if jitBuilt && a.IsBigInt() {
+				if a.isShortBig() && v.isShortBig() {
+					treeBigOf(c, pc, a, a, v)
+				} else {
+					treeBigInt(c, pc, true)
+				}
+			}
 			return v
 		})
 	case bytecode.OpInc, bytecode.OpDec:
@@ -1346,7 +1353,15 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 					c.throw(err)
 				}
 				if n.IsBigInt() {
-					return bigNot(n)
+					r := bigNot(n)
+					if jitBuilt {
+						if n.isShortBig() && r.isShortBig() {
+							treeBigOf(c, pc, n, n, r)
+						} else {
+							treeBigInt(c, pc, true)
+						}
+					}
+					return r
 				}
 				v = n
 			}
@@ -1633,6 +1648,10 @@ func toInt32(f float64) int32 {
 // function that calls nothing on the way, and the rest bitwiseOther's.
 func (c *tctx) bitwiseSlow(op bytecode.Op, a, b Value, pc int) Value {
 	if a.isInt64Big() && b.isInt64Big() {
+		if jitBuilt {
+			// A shift's result past the range marks the site again below.
+			treeBigInt(c, pc&treePCMask, false)
+		}
 		switch x, y := a.int64Big(), b.int64Big(); op {
 		case bytecode.OpBitAnd:
 			return shortBig(x & y)
@@ -1657,6 +1676,9 @@ func (c *tctx) bitwiseSlow(op bytecode.Op, a, b Value, pc int) Value {
 			// One on the heap: bigBits's, without bitwiseOther's call or
 			// bitwise's on the way.
 			c.at(pc & treePCMask)
+			if jitBuilt {
+				treeBigInt(c, pc&treePCMask, true)
+			}
 			v, err := c.r.bigBits(op, a, b)
 			if err != nil {
 				c.throw(err)
@@ -1677,6 +1699,9 @@ func (c *tctx) bitwiseOther(op bytecode.Op, a, b Value, pc int) Value {
 		// Two BigInts held in their Values: the operator on their words
 		// here, without bitwise's and bigBits's questions on the way.
 		if v, ok := shortBitsOf(op, a, b); ok {
+			if jitBuilt {
+				treeBigOf(c, pc, a, b, v)
+			}
 			return v
 		}
 	}
@@ -1889,7 +1914,7 @@ func (c *tctx) arithOther(op bytecode.Op, a, b Value, pc int) Value {
 			// One past the int64 range, or a result: what bigOp would
 			// answer first.
 			if jitBuilt {
-				treeBigInt(c, pc, true)
+				treeBigOf(c, pc, a, b, v)
 			}
 			return v
 		}
@@ -1992,6 +2017,9 @@ func (c *tctx) compareSlow(op bytecode.Op, a, b Value, pc int) bool {
 	if a.isInt64Big() && b.isInt64Big() {
 		// Two BigInts in the int64 range, as int64s are, without compare's
 		// questions or its call.
+		if jitBuilt {
+			treeBigInt(c, pc&treePCMask, false)
+		}
 		switch x, y := a.int64Big(), b.int64Big(); op {
 		case bytecode.OpLt:
 			return x < y
@@ -2009,6 +2037,13 @@ func (c *tctx) compareSlow(op bytecode.Op, a, b Value, pc int) bool {
 // compareOther is compareSlow for what is not two BigInts in the int64
 // range.
 func (c *tctx) compareOther(op bytecode.Op, a, b Value, pc int) bool {
+	if jitBuilt && a.IsBigInt() && b.IsBigInt() {
+		if a.isShortBig() && b.isShortBig() {
+			treeBigOf(c, pc&treePCMask, a, b, a)
+		} else {
+			treeBigInt(c, pc&treePCMask, true)
+		}
+	}
 	c.at(pc)
 	res, err := c.r.compare(a, b)
 	if err != nil {

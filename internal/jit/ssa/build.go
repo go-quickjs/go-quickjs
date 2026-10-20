@@ -66,6 +66,11 @@ type Intrinsic struct {
 	// the code takes its numbers from (Encoding's RandomCount and
 	// RandomNumbers).
 	Random uintptr
+	// Plain marks a call that is no method's, of no receiver: BigInt(x)'s
+	// (OpBigOfF64). BigInt.asUintN(n, x) and asIntN's are OpZextW's and
+	// OpSextW's, of the width n, Fn, from 0 to 64, a constant the call
+	// is made with, and x (bigint.go).
+	Plain bool
 }
 
 // maxIntrinsicArgs is the most arguments an intrinsic call is made with.
@@ -626,10 +631,11 @@ type ConstantFeedback interface {
 
 // BigIntConstFeedback is Feedback that keeps BigInt constants in cells, as
 // ConstantFeedback keeps strings: the address of the cell the constant
-// pushed at pc is in, and, for one in the int64 range, its value, which
+// pushed at pc is in, and, for one held in its value (kind
+// BigConstInt64 or BigConstUint64, not BigConstHeap), its bits, which
 // the code's arithmetic takes as a constant (OpConstI64).
 type BigIntConstFeedback interface {
-	BigIntCell(pc int) (cell uintptr, value int64, short, ok bool)
+	BigIntCell(pc int) (cell uintptr, bits uint64, kind int, ok bool)
 }
 
 // LiteralSite is an object literal's site: the address of the
@@ -1587,6 +1593,15 @@ type builder struct {
 	nextBlock int
 	next      *Block
 	splits    []*Block
+
+	// BigInts' low bits (wraps): wrapped holds, by PC, whether the
+	// operator there is made on its operands' low 64 bits, 1 if so and 2
+	// if not, once asked; words, the words such operators made, by the
+	// placeholder each one's slot holds until its operator or call takes
+	// it; region, the state their guards exit to, the first one's.
+	wrapped []uint8
+	words   map[*Value]*Value
+	region  *FrameState
 }
 
 // property is the feedback for a property operation at pc, if any.
@@ -2391,36 +2406,9 @@ func (b *builder) goCompare(blk *Block, in ir.Instruction, operand func(ir.Opera
 	return r
 }
 
-// BigIntFeedback is Feedback that knows an arithmetic or relational
-// operator at a PC met BigInts in the int64 range, as V8's feedback names
-// BigInt64 operands: the code makes it on them unboxed (OpBigUnbox),
-// natively, until a speculation fails -- an operand of another type, or a
-// result outside the range -- and the site is generic.
-type BigIntFeedback interface {
-	BigInt(pc int) bool
-}
-
-// bigIntAt reports whether the root's operator op at pc is made on BigInts
-// in the int64 range (BigIntFeedback): addition, subtraction,
-// multiplication, or a relational comparison. An arithmetic result needs a
-// keep cell for its pointer word (OpBigBox).
-func (b *builder) bigIntAt(pc int, op ir.Operator) bool {
-	switch op {
-	case ir.Add, ir.Sub, ir.Mul:
-		if b.f.Keeps >= b.f.keepLimit() {
-			return false
-		}
-	case ir.Lt, ir.Le, ir.Gt, ir.Ge:
-	default:
-		return false
-	}
-	fb, ok := b.fb.(BigIntFeedback)
-	return ok && b.cur == b.root && !b.generic(pc) && fb.BigInt(pc)
-}
-
 // goArithAt reports whether the root's operator op at pc met BigInts
-// (BigIntFeedback) and is generic, or has no native form for BigInts in
-// the int64 range (bigBinary): Go makes it from native code (GoArith). A
+// (BigIntFeedback) and is generic, or has no native form for BigInts held
+// in their values (bigNative): Go makes it from native code (GoArith). A
 // generic addition is GoAdd's, a comparison GoCompare's.
 func (b *builder) goArithAt(pc int, op ir.Operator) bool {
 	switch op {
@@ -2448,34 +2436,6 @@ func (b *builder) goArith(blk *Block, in ir.Instruction, operand func(ir.Operand
 	r := b.f.newValue(blk, OpKept, Tagged, cell, call)
 	r.Shadow = cell
 	return r
-}
-
-// bigBinary is op, at a site bigIntAt names, of x and y, each guarded to be
-// a BigInt in the int64 range: an arithmetic result boxed, which exits
-// outside that range, or a comparison's boolean.
-func (b *builder) bigBinary(blk *Block, op ir.Operator, x, y *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) *Value {
-	f := b.f
-	xi, yi := guard(OpBigUnbox, Int64, ir.GuardExit, x), guard(OpBigUnbox, Int64, ir.GuardExit, y)
-	var r *Value
-	switch op {
-	case ir.Add:
-		r = guard(OpAddI64, Int64, ir.GuardExit, xi, yi)
-	case ir.Sub:
-		r = guard(OpSubI64, Int64, ir.GuardExit, xi, yi)
-	case ir.Mul:
-		r = guard(OpMulI64, Int64, ir.GuardExit, xi, yi)
-	default:
-		c := f.newValue(blk, OpCmpI64, Bool, xi, yi)
-		c.Aux = int(op)
-		return c
-	}
-	box := f.newValue(blk, OpBigBox, Tagged, r)
-	box.Index = f.Keeps
-	f.Keeps++
-	cell := f.newValue(blk, OpBigCell, Source, box)
-	v := f.newValue(blk, OpKept, Tagged, cell, box)
-	v.Shadow = cell
-	return v
 }
 
 // goHas makes in, the in operator, by a call of Go from native code
@@ -2891,10 +2851,19 @@ func (b *builder) intrinsic(pc int) (Intrinsic, bool) {
 		if k.Random == 0 || !b.goCalls() {
 			return Intrinsic{}, false
 		}
+	case OpZextW, OpSextW, OpBigOfF64:
+		// A BigInt's, boxed in a keep cell, in the root (bigint.go).
+		if b.cur != b.root || k.Fn < 0 || k.Fn > 64 || k.Plain != (k.Op == OpBigOfF64) || b.f.Keeps >= b.f.keepLimit() {
+			return Intrinsic{}, false
+		}
 	default:
 		return Intrinsic{}, false
 	}
-	if n := k.args(); n < 0 || n == 0 && k.Op != OpRandomF64 || n > maxIntrinsicArgs || b.p.Maps[pc+1].Depth != b.p.Maps[pc].Depth-n-1 || b.p.Maps[pc].Depth < n+2 {
+	recv := 1
+	if k.Plain {
+		recv = 0
+	}
+	if n := k.args(); n < 0 || n == 0 && k.Op != OpRandomF64 || n > maxIntrinsicArgs || b.p.Maps[pc+1].Depth != b.p.Maps[pc].Depth-n-recv || b.p.Maps[pc].Depth < n+1+recv {
 		return Intrinsic{}, false
 	}
 	return k, true
@@ -2907,7 +2876,7 @@ func (k Intrinsic) args() int {
 		return 0
 	case k.Args != 0:
 		return k.Args
-	case k.Op == OpPowF64 || k.Op == OpMaxF64 || k.Op == OpMinF64 || k.Op == OpMathCall && k.Go != GoMath:
+	case k.Op == OpPowF64 || k.Op == OpMaxF64 || k.Op == OpMinF64 || k.Op == OpMathCall && k.Go != GoMath, k.Op == OpZextW || k.Op == OpSextW:
 		return 2
 	}
 	return 1
@@ -2917,6 +2886,14 @@ func (k Intrinsic) args() int {
 // the function, its argument a number -- either not, Go makes the call --
 // its result is computed, in the call's result slot.
 func (b *builder) intrinsicCall(blk *Block, pc int, k Intrinsic, guard func(Op, Type, ir.ExitKind, ...*Value) *Value, boxF func(*Value) *Value) {
+	switch k.Op {
+	case OpZextW, OpSextW:
+		b.asNCall(blk, pc, k, guard)
+		return
+	case OpBigOfF64:
+		b.bigOfCall(blk, pc, k, guard)
+		return
+	}
 	sp := b.cur.base + b.p.Locals + b.p.Maps[pc].Depth
 	n := k.args()
 	object := guard(OpObjectOf, Ptr, ir.HostExit, b.read(sp-n-1, blk))
@@ -3665,6 +3642,11 @@ func (b *builder) frameState(blk *Block, pc int) *FrameState {
 		}
 		s.Slots[i] = b.read(i, blk)
 		s.Slots[i].Uses++
+		if b.words != nil && b.words[s.Slots[i]] != nil {
+			// An operator made on low bits alone (wraps) has no value an
+			// exit could write: its guards exit to the state before it.
+			panic("ssa: a BigInt's low bits in a frame state")
+		}
 	}
 	return s
 }
@@ -3724,6 +3706,8 @@ func (b *builder) fill(blk *Block) {
 		blk.Header.Site = -1
 	}
 	end := b.endOf[blk.ID]
+	// BigInt operators made on their low bits end in their block (wraps).
+	b.region, b.words = nil, nil
 	for pc := blk.PC; pc <= end; pc++ {
 		b.instruction(blk, pc)
 		if b.next != nil {
@@ -3732,6 +3716,7 @@ func (b *builder) fill(blk *Block) {
 			blk, b.next = b.next, nil
 		}
 	}
+	b.region, b.words = nil, nil
 }
 
 // splitOn ends blk, the root frame's block being filled, at the
@@ -3915,6 +3900,12 @@ func (b *builder) instruction(blk *Block, pc int) {
 	}
 	var st *FrameState
 	state := func() *FrameState {
+		if root && b.region != nil {
+			// Inside BigInt operators made on their low bits (wraps): the
+			// state before the first of them, which nothing since has
+			// changed but those operators, which Go makes over again.
+			return b.region
+		}
 		if root {
 			return b.rootState()
 		}
@@ -4027,8 +4018,11 @@ func (b *builder) instruction(blk *Block, pc int) {
 			b.assign(in.Dest, blk, boxB(c))
 			break
 		}
-		if b.bigIntAt(pc, in.Operator) {
-			v := b.bigBinary(blk, in.Operator, operand(in.Left), operand(in.Right), guard)
+		if b.wraps(pc) {
+			b.wrapOp(blk, pc, in, guard)
+			break
+		}
+		if v := b.bigNative(blk, pc, in, operand, guard); v != nil {
 			if v.Type == Bool {
 				v = boxB(v)
 			}
@@ -4071,6 +4065,10 @@ func (b *builder) instruction(blk *Block, pc int) {
 		if in.Operator == ir.Not {
 			t := guard(OpTruth, Bool, ir.GuardExit, operand(in.Left))
 			b.assign(in.Dest, blk, boxB(f.newValue(blk, OpNot, Bool, t)))
+			break
+		}
+		if v := b.bigUnary(blk, pc, in, operand, guard); v != nil {
+			b.assign(in.Dest, blk, v)
 			break
 		}
 		// An operand not a number, once its guard has failed, is converted
@@ -4117,8 +4115,8 @@ func (b *builder) instruction(blk *Block, pc int) {
 			c.Aux = 2
 		} else if n := b.equality(blk, in, operand, guard); n != nil {
 			c = n
-		} else if relational(in.Operator) && b.bigIntAt(pc, in.Operator) {
-			c = b.bigBinary(blk, in.Operator, operand(in.Left), operand(in.Right), guard)
+		} else if v := b.relationalBig(blk, pc, in, operand, guard); v != nil {
+			c = v
 		} else if relational(in.Operator) && b.generic(pc) && b.goCalls() {
 			// Go's comparison's boolean, which native code branches on.
 			c = guard(OpTruth, Bool, ir.GuardExit, b.goCompare(blk, in, operand, guard))
@@ -4694,10 +4692,10 @@ func (b *builder) instruction(blk *Block, pc int) {
 		b.assign(in.Dest, blk, v)
 	case ir.BigIntConst:
 		var cell uintptr
-		var value int64
-		short, ok := false, false
+		var bits uint64
+		kind, ok := BigConstHeap, false
 		if fb, is := b.fb.(BigIntConstFeedback); is {
-			cell, value, short, ok = fb.BigIntCell(pc)
+			cell, bits, kind, ok = fb.BigIntCell(pc)
 		}
 		if !ok || cell == 0 {
 			blk.ExitKind = ir.HostExit
@@ -4709,9 +4707,9 @@ func (b *builder) instruction(blk *Block, pc int) {
 		c.Const = ir.Value{Bits: uint64(cell)}
 		v := f.newValue(blk, OpLoadCell, Tagged, c)
 		v.Shadow = c
-		if short {
-			// Its value, which an unboxing takes (OpConstI64).
-			v.Aux, v.Const = 1, ir.Value{Bits: uint64(value)}
+		if kind == BigConstInt64 || kind == BigConstUint64 {
+			// Its bits, which an unboxing takes (OpConstI64).
+			v.Aux, v.Const = kind, ir.Value{Bits: bits}
 		}
 		b.assign(in.Dest, blk, v)
 	case ir.FieldDefine:

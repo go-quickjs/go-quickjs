@@ -334,6 +334,13 @@ func (c *core) findLazy() {
 				if !elsewhere[v.ID] {
 					c.lazy[v.ID] = true
 				}
+			case ssa.OpKept:
+				// A BigInt's box only frame states name, which exits make
+				// of the BigInt (exitBig), as V8's deoptimizer
+				// materializes it: neither it nor its cell is made.
+				if box, cell := v.Args[1], v.Args[0]; box.Op == ssa.OpBigBox && !used[v.ID] && box.Uses == 2 && cell.Uses == 1 {
+					c.lazy[v.ID], c.lazy[box.ID], c.lazy[cell.ID] = true, true, true
+				}
 			}
 		}
 	}
@@ -385,6 +392,13 @@ func (c *core) allocate() error {
 		for _, v := range s.Slots {
 			if v == nil {
 				continue
+			}
+			if x := bigKept(v); x != nil {
+				// Its exits make it of the BigInt it boxes (exitBig).
+				uses = append(uses, use{x, at})
+				if c.isLazy(v) {
+					continue
+				}
 			}
 			if c.isLazy(v) || remat(v) {
 				for _, a := range v.Args {
@@ -997,6 +1011,28 @@ func (c *core) colorKeeps(iv []interval, pos []int) error {
 		cellsOf(it.v, span)
 		cellsOf(it.v.Shadow, span)
 	}
+	// A BigInt's box made only at its exits (findLazy) is written to its
+	// cell there, by an exit's code (bigRebox), wherever a state names its
+	// value: where the BigInt it boxes is live.
+	var ivOf []int
+	for _, b := range c.order {
+		for _, v := range b.Values {
+			if v.Op != ssa.OpBigBox || !c.isLazy(v) {
+				continue
+			}
+			if ivOf == nil {
+				ivOf = c.ints(f.NumValues())
+				for i := range iv {
+					if iv[i].v != nil {
+						ivOf[iv[i].v.ID] = i + 1
+					}
+				}
+			}
+			if j := ivOf[v.Args[0].ID]; j != 0 {
+				extend(v.Index, iv[j-1].start, iv[j-1].end)
+			}
+		}
+	}
 	// In the order they begin, then by number.
 	order := c.ints(nk)[:0]
 	for k := range nk {
@@ -1388,13 +1424,21 @@ func (c *core) exitDescriptor(s *ssa.FrameState, kind uint64, localsReg, stackRe
 		}
 		e := abi.ExitSlot{Slot: int32(i), Origin: -1}
 		var ok bool
-		if e.Value, ok = c.exitValue(v); !ok {
+		if x := bigKept(v); x != nil {
+			// A BigInt's box, made of the BigInt unboxed, which a state
+			// at a loop's header names before the box is made there.
+			if e.Value, ok = c.exitBig(x); !ok {
+				return undo()
+			}
+		} else if e.Value, ok = c.exitValue(v); !ok {
 			return undo()
 		}
 		if e.Value.Kind == abi.ExitConst {
 			e.Value.N = c.exitWord(c.constWord(v.Const))
 		}
-		if v.Shadow != nil {
+		if big, _ := e.Value.IsBig(); big {
+			// Its pointer word is made of it too.
+		} else if v.Shadow != nil {
 			if e.Shadow, ok = c.exitSource(v.Shadow); !ok {
 				return undo()
 			}
@@ -1502,6 +1546,9 @@ type callRecord struct {
 	slot     int
 	x        *ssa.Value
 	num, ref bool
+	// big marks a BigInt's box, whose words the call makes of the BigInt
+	// (bigKept), the box made or not.
+	big bool
 }
 
 // callState describes native call v's state s, every slot the frame does
@@ -1528,6 +1575,11 @@ func (c *core) callState(v *ssa.Value, s *ssa.FrameState, skip func(int) bool, o
 		}
 		rec, r := abi.CallRecord{Slot: int32(i), Origin: -1}, callRecord{slot: i, x: x}
 		full := operands >= 0 && i >= operands
+		if bigKept(x) != nil {
+			r.num, r.ref, r.big, rec.Ref = true, true, true, true
+			refs, refRecs = append(refs, r), append(refRecs, rec)
+			continue
+		}
 		if l, ok := c.callWord(x, saves); ok && !full {
 			rec.Num = l
 		} else {
@@ -1750,6 +1802,32 @@ func (c *core) exitValue(v *ssa.Value) (abi.ExitLoc, bool) {
 		return abi.ExitLoc{}, false
 	}
 	return at(v, abi.ExitReg, abi.ExitSpill)
+}
+
+// bigKept is the unboxed BigInt v, a tagged value, is the box of (ssa's
+// OpBigBox, kept in its cell), or nil.
+func bigKept(v *ssa.Value) *ssa.Value {
+	if v.Op == ssa.OpKept && v.Args[1].Op == ssa.OpBigBox {
+		return v.Args[1].Args[0]
+	}
+	return nil
+}
+
+// exitBig is where an exit finds x, an unboxed BigInt, its value's words
+// made of it (abi.ExitLoc's IsBig).
+func (c *core) exitBig(x *ssa.Value) (abi.ExitLoc, bool) {
+	l, ok := c.loc(x)
+	if !ok || c.isLazy(x) {
+		return abi.ExitLoc{}, false
+	}
+	reg, spill := abi.ExitI64Reg, abi.ExitI64Spill
+	if x.Type == ssa.Uint64 {
+		reg, spill = abi.ExitU64Reg, abi.ExitU64Spill
+	}
+	if l.reg >= 0 {
+		return abi.ExitLoc{Kind: reg, N: int32(l.reg)}, true
+	}
+	return abi.ExitLoc{Kind: spill, N: int32(l.spill)}, true
 }
 
 // exitSource is where an exit finds a source's address: its register or

@@ -415,6 +415,14 @@ func (a *Asm) Cset(dst Reg, c Cond) {
 // -2**63 and m is -1; it never faults.
 func (a *Asm) Sdiv(dst, n, m Reg) { a.emit(0x9AC00C00 | uint32(m)<<16 | uint32(n)<<5 | uint32(dst)) }
 
+// Udiv is dst = n / m, unsigned, 64 bits: 0 when m is 0; it never faults.
+func (a *Asm) Udiv(dst, n, m Reg) { a.emit(0x9AC00800 | uint32(m)<<16 | uint32(n)<<5 | uint32(dst)) }
+
+// Umulh is dst = the high 64 bits of n*m, unsigned.
+func (a *Asm) Umulh(dst, n, m Reg) {
+	a.emit(0x9BC07C00 | uint32(m)<<16 | uint32(n)<<5 | uint32(dst))
+}
+
 // Mul is dst = n*m, the product's low 64 bits.
 func (a *Asm) Mul(dst, n, m Reg) {
 	a.emit(0x9B007C00 | uint32(m)<<16 | uint32(n)<<5 | uint32(dst))

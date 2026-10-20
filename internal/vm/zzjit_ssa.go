@@ -50,22 +50,28 @@ var jitEncoding = abi.Encoding{
 	ShortBigTag:     shortIntBase,
 	ShortBigLowBits: shortBigLowBits,
 	ShortBigHigh:    uint64(uintptr(unsafe.Pointer(&shortBigHigh))),
-	UpvalueSlot:     int32(unsafe.Offsetof(upvalue{}.slot)),
-	UpvalueClosed:   int32(unsafe.Offsetof(upvalue{}.closed)),
-	UpvalueSize:     int32(unsafe.Sizeof(upvalue{})),
-	RandomCount:     int32(unsafe.Offsetof(mathRandom{}.count)),
-	RandomNumbers:   int32(unsafe.Offsetof(mathRandom{}.numbers)),
-	ObjectShape:     int32(unsafe.Offsetof(Object{}.shape)),
-	ObjectProps:     int32(unsafe.Offsetof(Object{}.vals)),
-	ObjectProto:     int32(unsafe.Offsetof(Object{}.proto)),
-	WriteBarrier:    jit.WriteBarrier(),
-	CallGo:          jit.CallGo(),
-	StoreRef:        jit.StoreRef(),
-	Round:           runtime.GOARCH == "arm64" || cpu.X86.HasSSE41,
-	ShapeKeys:       int32(unsafe.Offsetof(shape{}.keys)),
-	KeySize:         int32(unsafe.Sizeof(propKey{})),
-	PropertyKey:     int32(unsafe.Offsetof(propKey{}.key)),
-	PropertyFlags:   int32(unsafe.Offsetof(propKey{}.flags)),
+	// One past the int64 range (shortBigMag), and one on the heap.
+	ShortBigWideTag:  shortBigBase,
+	ShortBigWideHigh: uint64(uintptr(unsafe.Pointer(&shortBigHighX))),
+	HeapBigTag:       heapBigBits,
+	BigLenMask:       bigLenMask,
+	BigDigits:        int32(bigWordSize),
+	UpvalueSlot:      int32(unsafe.Offsetof(upvalue{}.slot)),
+	UpvalueClosed:    int32(unsafe.Offsetof(upvalue{}.closed)),
+	UpvalueSize:      int32(unsafe.Sizeof(upvalue{})),
+	RandomCount:      int32(unsafe.Offsetof(mathRandom{}.count)),
+	RandomNumbers:    int32(unsafe.Offsetof(mathRandom{}.numbers)),
+	ObjectShape:      int32(unsafe.Offsetof(Object{}.shape)),
+	ObjectProps:      int32(unsafe.Offsetof(Object{}.vals)),
+	ObjectProto:      int32(unsafe.Offsetof(Object{}.proto)),
+	WriteBarrier:     jit.WriteBarrier(),
+	CallGo:           jit.CallGo(),
+	StoreRef:         jit.StoreRef(),
+	Round:            runtime.GOARCH == "arm64" || cpu.X86.HasSSE41,
+	ShapeKeys:        int32(unsafe.Offsetof(shape{}.keys)),
+	KeySize:          int32(unsafe.Sizeof(propKey{})),
+	PropertyKey:      int32(unsafe.Offsetof(propKey{}.key)),
+	PropertyFlags:    int32(unsafe.Offsetof(propKey{}.flags)),
 
 	Accessor:       accessorBits,
 	AccessorGetter: int32(unsafe.Offsetof(accessor{}.getter)),
@@ -1240,24 +1246,29 @@ func (fb *jitFeedback) StringCell(pc int) (uintptr, bool) {
 }
 
 // BigIntCell is ssa.BigIntConstFeedback's: the cell a copy of the BigInt
-// constant pushed at pc is in, as StringCell's, and its value if it is in
-// the int64 range.
-func (fb *jitFeedback) BigIntCell(pc int) (uintptr, int64, bool, bool) {
+// constant pushed at pc is in, as StringCell's, and its bits if it is held
+// in its value: of one in the int64 range, or of one from 2^63 to 2^64-1.
+func (fb *jitFeedback) BigIntCell(pc int) (uintptr, uint64, int, bool) {
 	if fb.cl == nil || pc >= len(fb.fn.Code) {
-		return 0, 0, false, false
+		return 0, 0, ssa.BigConstHeap, false
 	}
 	in := fb.fn.Code[pc]
 	if in.Op != bytecode.OpPushConst || int(in.A) >= len(fb.cl.consts) || !fb.cl.consts[in.A].IsBigInt() {
-		return 0, 0, false, false
+		return 0, 0, ssa.BigConstHeap, false
 	}
 	cell := new(Value)
 	*cell = fb.cl.consts[in.A]
 	k := fb.keep()
 	k.cells = append(k.cells, cell)
 	if cell.isInt64Big() {
-		return uintptr(unsafe.Pointer(cell)), cell.int64Big(), true, true
+		return uintptr(unsafe.Pointer(cell)), uint64(cell.int64Big()), ssa.BigConstInt64, true
 	}
-	return uintptr(unsafe.Pointer(cell)), 0, false, true
+	if cell.isShortBig() {
+		if neg, mag := cell.shortBigParts(); !neg {
+			return uintptr(unsafe.Pointer(cell)), mag, ssa.BigConstUint64, true
+		}
+	}
+	return uintptr(unsafe.Pointer(cell)), 0, ssa.BigConstHeap, true
 }
 
 // Literal is ssa.LiteralFeedback's: the object literal at pc, made natively
@@ -1510,7 +1521,7 @@ func jitLearnedSpent(fn *bytecode.Function, e *jitEntry) int64 {
 // learned at its exits counted in: a change of either delays the compile
 // for it (jitLearnedDue), as V8's NotifyICChanged does.
 func jitLearnedMark(cl *closure, e *jitEntry) uint64 {
-	n := len(e.failed) + len(e.failedEntries) + len(e.bigints) + len(e.poly) + len(e.typedReads) + len(e.stringReads) +
+	n := len(e.failed) + len(e.failedEntries) + len(e.bigints) + len(e.bigwide) + len(e.poly) + len(e.typedReads) + len(e.stringReads) +
 		len(e.keyedReads) + len(e.keyedWrites) + len(e.strSites) + len(e.nativeCalls) + len(e.inlines) + len(e.notInline) +
 		len(e.literals) + len(e.definesUnfed)
 	return jitFeedbackMark(cl) + uint64(n)*0x9e3779b97f4a7c15
@@ -1817,6 +1828,9 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 		f.ThisSlot = fn.LocalCount + len(fn.Upvalues)
 	}
 	ssa.Optimize(f)
+	if jitSSAOptimized != nil {
+		jitSSAOptimized(fn, f)
+	}
 	mc, err := mir.CompileIn(&s.mirWork, f, jitEncoding)
 	if err != nil && strings.Contains(err.Error(), "runtime error") {
 		// A refusal the backend's own panic made: a bug, which the tests
@@ -2105,7 +2119,16 @@ func (fb *jitFeedback) FromCharCode(pc int) (uintptr, bool) {
 // it calls it.
 func (fb *jitFeedback) Intrinsic(pc int) (ssa.Intrinsic, bool) {
 	fn := fb.fn
-	if fb.cl == nil || pc < 2 || pc >= len(fn.Code) || jitCallOp(fn.Code[pc].Op) != bytecode.OpCallMethod || fn.Code[pc].A > jitMathArgs {
+	if fb.cl == nil || pc < 2 || pc >= len(fn.Code) || fn.Code[pc].A > jitMathArgs {
+		return ssa.Intrinsic{}, false
+	}
+	plain := false
+	switch jitCallOp(fn.Code[pc].Op) {
+	case bytecode.OpCallMethod:
+	case bytecode.OpCall:
+		// BigInt(x) alone, a global's (jitBigIntIntrinsic).
+		plain = true
+	default:
 		return ssa.Intrinsic{}, false
 	}
 	if fb.prog == nil {
@@ -2122,9 +2145,13 @@ func (fb *jitFeedback) Intrinsic(pc int) (ssa.Intrinsic, bool) {
 	// The function, read by the get_prop_this at its slot's depth, with
 	// nothing after it but the arguments' instructions, above it.
 	slot, q := p.Maps[pc].Depth-int(fn.Code[pc].A)-1, -1
+	read := bytecode.OpGetPropThis
+	if plain {
+		read = bytecode.OpGetGlobal
+	}
 	for k := pc - 1; k >= 0; k-- {
 		d := p.Maps[k].Depth
-		if d == slot && fn.Code[k].Op == bytecode.OpGetPropThis {
+		if d == slot && fn.Code[k].Op == read {
 			q = k
 			break
 		}
@@ -2141,6 +2168,17 @@ func (fb *jitFeedback) Intrinsic(pc int) (ssa.Intrinsic, bool) {
 	}
 	o := v.Object()
 	k := ssa.Intrinsic{Callee: uintptr(unsafe.Pointer(o))}
+	if fd := o.fn(); fd != nil && fd.native != nil && (plain || fd.mathOp == mathAsIntN || fd.mathOp == mathAsUintN) {
+		if !fb.jitBigIntIntrinsic(&k, fd, plain, pc, q) {
+			return ssa.Intrinsic{}, false
+		}
+		keep := fb.keep()
+		keep.holders = append(keep.holders, o)
+		return k, true
+	}
+	if plain {
+		return ssa.Intrinsic{}, false
+	}
 	// The realm's Math functions of numbers, each made natively, as V8's
 	// code makes them: Math.pow where exact, and by Go called from there
 	// otherwise; Math.max and Math.min of any number of them; a rounding,
@@ -2178,6 +2216,42 @@ func (fb *jitFeedback) Intrinsic(pc int) (ssa.Intrinsic, bool) {
 	keep := fb.keep()
 	keep.holders = append(keep.holders, o)
 	return k, true
+}
+
+// jitBigIntIntrinsic makes k the intrinsic of the call at pc of fd, read at
+// q, if it is BigInt's that native code makes (bigint.go in ssa): BigInt(x)
+// of one argument, plain, BigInt.asUintN(n, x) or asIntN's of a width n
+// pushed right after the read, an integer from 0 to 64, as V8 reduces
+// those whose width is a constant; and reports whether it is.
+func (fb *jitFeedback) jitBigIntIntrinsic(k *ssa.Intrinsic, fd *funcData, plain bool, pc, q int) bool {
+	fn := fb.fn
+	switch {
+	case plain:
+		if fd.mathOp != mathBigInt || fn.Code[pc].A != 1 {
+			return false
+		}
+		k.Op, k.Plain = ssa.OpBigOfF64, true
+		return true
+	case fn.Code[pc].A != 2 || q+1 >= pc:
+		return false
+	}
+	w := fn.Code[q+1]
+	if w.Op != bytecode.OpPushInt || int32(w.A) < 0 || int32(w.A) > 64 {
+		return false
+	}
+	// The width stays where it was pushed, the stack above it until the
+	// call: no instruction before it takes it.
+	p, slot := fb.prog, fb.prog.Maps[q+1].Depth
+	for k := q + 2; k <= pc; k++ {
+		if p.Maps[k].Depth < slot+1 {
+			return false
+		}
+	}
+	k.Op, k.Fn = ssa.OpZextW, int(int32(w.A))
+	if fd.mathOp == mathAsIntN {
+		k.Op = ssa.OpSextW
+	}
+	return true
 }
 
 // jitMathArgs is the most arguments a call of Math.max or Math.min is made
@@ -4597,6 +4671,10 @@ func jitBigWords(v Value) int {
 // jitGoCallWork, which tests set, runs at each call of Go before it is
 // answered: what Go may do there, the collector included.
 var jitGoCallWork func()
+
+// jitSSAOptimized, which tests set, is given each function's SSA once it
+// is optimized, before the backend compiles it.
+var jitSSAOptimized func(fn *bytecode.Function, f *ssa.Func)
 
 // KeepLimit is ssa.KeepFeedback's: the build's keep cells' limit, 0 for
 // the default (ssa.VirtualKeeps).
@@ -7428,10 +7506,10 @@ func (r *Runtime) jitInlinable(fn *bytecode.Function) bool {
 
 // Generic and EntryGeneric are ssa.Feedback's: the sites and entries whose
 // guards failed in code compiled before (jitDeoptimized).
-// BigInt reports an arithmetic or relational operator at pc of the root
-// that met BigInts: at a guard that failed (jitBigIntSeen), or in the tree
-// tier (treeBigSeen), as V8's lower tier collects BigInt feedback for its
-// optimizing compiler.
+// BigInt reports an arithmetic, bitwise or relational operator at pc of
+// the root that met BigInts: at a guard that failed (jitBigIntSeen), or in
+// the tree tier (treeBigSeen), as V8's lower tier collects BigInt feedback
+// for its optimizing compiler.
 func (fb *jitFeedback) BigInt(pc int) bool {
 	if fb.e != nil && slices.Contains(fb.e.bigints, int32(pc)) {
 		return true
@@ -7440,39 +7518,69 @@ func (fb *jitFeedback) BigInt(pc int) bool {
 	return big
 }
 
-// jitTreeBig reports whether the tree tier's arithmetic at pc of fn met
+// BigIntWide is ssa.BigIntFeedback's: whether the operator at pc met
+// BigInts from 0 to 2^64-1, some past the int64 range, which native code
+// makes as Uint64s -- at a guard that failed, or in the tree tier.
+func (fb *jitFeedback) BigIntWide(pc int) bool {
+	if fb.e != nil && slices.Contains(fb.e.bigwide, int32(pc)) {
+		return true
+	}
+	return jitTreeWide(fb.fn, pc)
+}
+
+// BigIntFailed is ssa.BigIntFeedback's: whether a guard at pc failed in
+// code compiled before (jitDeoptimized).
+func (fb *jitFeedback) BigIntFailed(pc int) bool {
+	return fb.e != nil && slices.Contains(fb.e.failed, int32(pc))
+}
+
+// jitTreeBig reports whether the tree tier's operator at pc of fn met
 // BigInts, and whether one on the heap (treeBigSeen).
 func jitTreeBig(fn *bytecode.Function, pc int) (big, heap bool) {
-	t := (*tree)(atomic.LoadPointer(&fn.VMCode))
-	if t == nil || t == noTree || pc < 0 {
-		return false, false
-	}
-	s := t.bigSeen.Load()
-	if s == nil || pc>>5 >= len(s.bigs) {
+	s := jitTreeBigs(fn, pc)
+	if s == nil {
 		return false, false
 	}
 	bit := uint32(1) << (pc & 31)
 	heap = s.heap[pc>>5].Load()&bit != 0
-	return heap || s.bigs[pc>>5].Load()&bit != 0, heap
+	return heap || (s.bigs[pc>>5].Load()|s.wide[pc>>5].Load())&bit != 0, heap
+}
+
+// jitTreeWide reports whether the tree tier's operator at pc of fn met
+// BigInts from 0 to 2^64-1, some past the int64 range (treeBigSeen).
+func jitTreeWide(fn *bytecode.Function, pc int) bool {
+	s := jitTreeBigs(fn, pc)
+	return s != nil && s.wide[pc>>5].Load()&(uint32(1)<<(pc&31)) != 0
+}
+
+// jitTreeBigs is the tree tier's marks of fn's BigInt operators, if it
+// has any there are for pc.
+func jitTreeBigs(fn *bytecode.Function, pc int) *treeBigSeen {
+	t := (*tree)(atomic.LoadPointer(&fn.VMCode))
+	if t == nil || t == noTree || pc < 0 {
+		return nil
+	}
+	s := t.bigSeen.Load()
+	if s == nil || pc>>5 >= len(s.bigs) {
+		return nil
+	}
+	return s
 }
 
 // jitBigIntSeen notes that the operator at site, of e's program, whose
 // guard failed or which is generic, met BigInts, as V8's feedback learns
 // BigInt operands, and reports whether the site speculates on them: an
-// arithmetic or relational operator of BigInts in the int64 range, its
-// result one too, which the code compiled again makes natively
-// (ssa.BigIntFeedback), not as Go's. One whose speculation fails then --
-// an operand of another type, a result outside the range, a BigInt on the
-// heap -- is learned no more, and is generic (jitDeoptimized); so is one
-// that met other BigInts, or another operator, whose operation Go makes
+// operator of BigInts in the int64 range, its result one too, or of
+// BigInts from 0 to 2^64-1 (jitEntry's bigwide), which the code compiled
+// again makes natively (ssa.BigIntFeedback), not as Go's. One whose
+// speculation fails then -- an operand of another type, a result outside
+// the range, a BigInt on the heap -- is generic (jitDeoptimized), but for
+// one made as an int64's that met BigInts from 0 to 2^64-1, learned once
+// as those; so is one that met other BigInts, whose operation Go makes
 // from native code (ssa.GoArith), as V8's code calls its BigInt builtins.
 func (r *Runtime) jitBigIntSeen(f *frame, e *jitEntry, site int) bool {
 	p := e.ssaProg
-	if site < 0 || p == nil || site >= len(p.Code) || slices.Contains(e.bigints, int32(site)) {
-		return false
-	}
-	if big, _ := jitTreeBig(f.cl.fn, site); big {
-		// Its speculation the tree tier's feedback, which failed.
+	if site < 0 || p == nil || site >= len(p.Code) {
 		return false
 	}
 	in := p.Code[site]
@@ -7488,24 +7596,51 @@ func (r *Runtime) jitBigIntSeen(f *frame, e *jitEntry, site int) bool {
 			return false
 		}
 	case in.Op == ir.Binary && (in.Operator == ir.Div || in.Operator == ir.Mod || in.Operator == ir.BitAnd || in.Operator == ir.BitOr ||
-		in.Operator == ir.BitXor || in.Operator == ir.Shl || in.Operator == ir.Shr):
+		in.Operator == ir.BitXor || in.Operator == ir.Shl || in.Operator == ir.Shr),
+		in.Op == ir.Unary && (in.Operator == ir.Neg || in.Operator == ir.BitNot):
+		native = !generic
 	default:
 		return false
 	}
-	if in.Left.Slot < 0 || in.Right.Slot < 0 {
+	right := in.Right
+	if in.Op == ir.Unary {
+		// -x and ~x: of x alone.
+		right = in.Left
+	}
+	if in.Left.Slot < 0 || right.Slot < 0 {
 		return false
 	}
-	a, b := r.jitOperand(f, p, in.Left), r.jitOperand(f, p, in.Right)
+	a, b := r.jitOperand(f, p, in.Left), r.jitOperand(f, p, right)
 	if !a.IsBigInt() || !b.IsBigInt() {
 		return false
 	}
+	learned := slices.Contains(e.bigints, int32(site))
+	if big, _ := jitTreeBig(f.cl.fn, site); learned || big {
+		// Its speculation, learned or the tree tier's, failed: made as one
+		// of BigInts from 0 to 2^64-1 where they are, once.
+		if !native || slices.Contains(e.bigwide, int32(site)) || jitTreeWide(f.cl.fn, site) || !jitBigUnsigned(a) || !jitBigUnsigned(b) {
+			return false
+		}
+		e.bigwide = append(e.bigwide, int32(site))
+		e.reopt = true
+		return true
+	}
 	e.bigints = append(e.bigints, int32(site))
 	e.reopt = true
-	if !native || !a.isInt64Big() || !b.isInt64Big() {
+	if !native {
+		return false
+	}
+	if !a.isInt64Big() || !b.isInt64Big() {
+		if jitBigUnsigned(a) && jitBigUnsigned(b) {
+			e.bigwide = append(e.bigwide, int32(site))
+			return true
+		}
 		return false
 	}
 	x, y := a.int64Big(), b.int64Big()
 	switch in.Operator {
+	case ir.Neg:
+		return x != math.MinInt64
 	case ir.Add:
 		if s := x + y; (x^s)&(y^s) < 0 {
 			return false
@@ -7527,8 +7662,26 @@ func (r *Runtime) jitBigIntSeen(f *frame, e *jitEntry, site int) bool {
 		if hi != uint64(int64(lo)>>63) {
 			return false
 		}
+	case ir.Div:
+		if y == 0 || x == math.MinInt64 && y == -1 {
+			return false
+		}
+	case ir.Mod:
+		if y == 0 {
+			return false
+		}
 	}
 	return true
+}
+
+// jitBigUnsigned reports whether v is a BigInt from 0 to 2^64-1, which is
+// held in its value.
+func jitBigUnsigned(v Value) bool {
+	if !v.isShortBig() {
+		return false
+	}
+	neg, _ := v.shortBigParts()
+	return !neg
 }
 
 // jitBigIntExit is jitBigIntSeen at a host exit of e's code at site, for
@@ -7540,15 +7693,21 @@ func (r *Runtime) jitBigIntExit(f *frame, e *jitEntry, site int) {
 		return
 	}
 	in := p.Code[site]
-	if in.Op != ir.Binary || in.Left.Slot < 0 || in.Right.Slot < 0 {
-		return
-	}
-	switch in.Operator {
-	case ir.Sub, ir.Mul, ir.Div, ir.Mod, ir.BitAnd, ir.BitOr, ir.BitXor, ir.Shl, ir.Shr:
+	right := in.Right
+	switch {
+	case in.Op == ir.Binary:
+		switch in.Operator {
+		case ir.Sub, ir.Mul, ir.Div, ir.Mod, ir.BitAnd, ir.BitOr, ir.BitXor, ir.Shl, ir.Shr:
+		default:
+			return
+		}
+	case in.Op == ir.Unary && (in.Operator == ir.Neg || in.Operator == ir.BitNot):
+		right = in.Left
 	default:
 		return
 	}
-	if !r.jitOperand(f, p, in.Left).IsBigInt() || !r.jitOperand(f, p, in.Right).IsBigInt() || !slices.Contains(e.failed, int32(site)) {
+	if in.Left.Slot < 0 || right.Slot < 0 || !r.jitOperand(f, p, in.Left).IsBigInt() || !r.jitOperand(f, p, right).IsBigInt() ||
+		!slices.Contains(e.failed, int32(site)) {
 		return
 	}
 	r.jitBigIntSeen(f, e, site)

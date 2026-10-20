@@ -48,7 +48,7 @@ func Optimize(f *Func) {
 	repeated := func(op Op, a *Value, b *Block, v *Value) *Value {
 		for i := first[a.ID]; i != 0; i = guards[i-1].next {
 			if g := &guards[i-1]; g.op == op && subst[g.v.ID] == nil && dom.dominates(g.v.Block, b) &&
-				(op == OpCheckInit || g.v.Const == v.Const && g.v.Index == v.Index) {
+				(op == OpCheckInit || g.v.Const == v.Const && g.v.Index == v.Index && g.v.Type == v.Type) {
 				return g.v
 			}
 		}
@@ -69,6 +69,9 @@ func Optimize(f *Func) {
 		// cancel in this round's walk, not the next's: most functions are
 		// then done in two rounds, the second finding nothing.
 		unboxed := unboxPhis(f)
+		if unboxBigPhis(f) {
+			unboxed = true
+		}
 		first, last, guards = idTable(sc.first, f.nextID), idTable(sc.last, f.nextID), guards[:0]
 		sc.first, sc.last = first, last
 		subst = idTable(subst, f.nextID)
@@ -214,14 +217,37 @@ func simplify(f *Func, v *Value) *Value {
 		if a := arg(0); a.Op == OpBoxBool {
 			return a.Args[0]
 		}
-	case OpBigUnbox:
-		// A BigInt boxed (OpBigBox): its value, kept in its cell.
-		if a := arg(0); a.Op == OpKept && a.Args[1].Op == OpBigBox {
-			return a.Args[1].Args[0]
+	case OpBigUnbox, OpBigUnboxU64, OpBigLow:
+		a := arg(0)
+		if a.Op == OpKept && a.Args[1].Op == OpBigBox {
+			// A BigInt boxed (OpBigBox): its value, kept in its cell --
+			// checked to be in the other type's range where it is not of
+			// v's (OpBigSign), the low bits of either as they are.
+			x := a.Args[1].Args[0]
+			switch {
+			case x.Type == v.Type:
+				return x
+			case v.Op == OpBigLow:
+				v.Op, v.Index, v.Args, v.State, v.Aux = OpZextW, 64, v.Args[:1], nil, 0
+				v.Args[0] = x
+			default:
+				v.Op = OpBigSign
+				v.Args[0] = x
+			}
+			return nil
 		}
-		// A constant in the int64 range (ir.BigIntConst): its value.
-		if a := arg(0); a.Op == OpLoadCell && a.Aux == 1 && a.Args[0].Op == OpConstCell {
-			v.Op, v.Const, v.Args, v.State = OpConstI64, a.Const, nil, nil
+		// A constant held in its value (ir.BigIntConst): its bits, where
+		// they are of v's type, which they are past the int64 range only
+		// as a Uint64, and below 0 only as an Int64.
+		if bits, kind, ok := bigConst(a); ok {
+			neg := kind == BigConstInt64 && int64(bits) < 0
+			if v.Op == OpBigLow || v.Op == OpBigUnbox && kind == BigConstInt64 || v.Op == OpBigUnboxU64 && !neg {
+				v.Op, v.Const, v.Args, v.State, v.Aux = OpConstI64, a.Const, nil, nil, 0
+			}
+		}
+	case OpBigSign:
+		if a := arg(0); a.Op == OpConstI64 && int64(a.Const.Bits) >= 0 {
+			v.Op, v.Const, v.Args, v.State, v.Aux = OpConstI64, a.Const, nil, nil, 0
 		}
 	case OpCheckInit:
 		a := arg(0)

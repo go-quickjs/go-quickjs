@@ -1,0 +1,238 @@
+//go:build quickjs_jit && !android && !ios && ((linux && amd64) || (windows && amd64) || (darwin && arm64))
+
+package vm
+
+import (
+	"runtime"
+	"sync/atomic"
+	"testing"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/jit/mir"
+	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
+)
+
+// BigInts of 64 bits made natively (ssa's bigint.go): Uint64s from 2^63
+// to 2^64-1 as well as Int64s, the bitwise operators, shifts by a
+// constant, divisions and remainders, comparisons of either, BigInt() of a
+// number, BigInt.asUintN and asIntN of operators made on their operands'
+// low 64 bits, loops' BigInts in unboxed phis, and boxes only exits name,
+// which they make of the BigInt; each leaving where a speculation fails --
+// a division by zero, the most negative int64 over -1, a shift past the
+// range, BigInt() of no integer, a number partway.
+const bigWordSetup = `
+	var M = 1000003n
+	function xorshift(n, x) {
+		for (let i = 0; i < n; i++) {
+			x ^= BigInt.asUintN(64, x << 13n)
+			x ^= x >> 7n
+			x ^= BigInt.asUintN(64, x << 17n)
+		}
+		return x
+	}
+	function fnv(n, s) {
+		let h = 0xcbf29ce484222325n
+		for (let i = 0; i < n; i++)
+			h = BigInt.asUintN(64, (h ^ BigInt(s.charCodeAt(i % s.length))) * 0x100000001b3n)
+		return h
+	}
+	function lcg(n, x) {
+		let y = 0n, z = 0n
+		for (let i = 0; i < n; i++) {
+			x = BigInt.asIntN(64, x * 6364136223846793005n + 1442695040888963407n)
+			y = BigInt.asIntN(32, y + (x >> 11n))
+			z = BigInt.asUintN(17, z * 3n + x) + BigInt.asIntN(1, x) + BigInt.asUintN(0, x)
+		}
+		return [x, y, z].join()
+	}
+	function digits(n, x) {
+		let s = 0n, c = 0
+		for (let i = 0; i < n; i++) {
+			let v = x + BigInt(i)
+			while (v != 0n) {
+				s += v % 10n
+				v /= 10n
+				c++
+			}
+		}
+		return s + ":" + c
+	}
+	function unsigned(n, a, b) {
+		let c = 0, s = 0n
+		for (let i = 0; i < n; i++) {
+			if (a < b) c++
+			if (a >= b) c += 2
+			if (a <= b) c += 4
+			s = BigInt.asUintN(64, s + (a & b) + (a | b) + (a ^ b))
+			a += 1n
+			b -= 1n
+		}
+		return c + ":" + s
+	}
+	function shifts(n, a) {
+		let s = 0n
+		for (let i = 0; i < n; i++) {
+			s += (a >> 3n) + (a << 2n) - (-a >> 5n)
+			a += 1n
+		}
+		return s
+	}
+	function ofs(n, f) {
+		let s = 0n
+		for (let i = 0; i < n; i++)
+			s += BigInt(i * f) + BigInt(-i) + BigInt(i % 3 - 1)
+		return s
+	}
+	function captured(n, a) {
+		// A loop's BigInt, unboxed, in a state at its loop's header, whose
+		// box is made after the poll on its back edge exits to it.
+		const fs = []
+		for (let i = 0; i < n; i++) {
+			const b = a * 2n
+			if (i % 100 == 0) fs.push(() => b)
+			a += 1n
+		}
+		let s = 0n
+		for (const f of fs) s = s * 31n + f()
+		return s % M
+	}
+	function all(n) {
+		return [xorshift(n, 88172645463325252n), xorshift(n, 1n), fnv(n, "The quick brown fox"), lcg(n, -5n), lcg(n, 9223372036854775807n),
+			digits(n >> 3, 9007199254740993000n), digits(n >> 3, -9223372036854775807n), unsigned(n, 0x8000000000000000n - 500n, 0x8000000000000000n + 500n),
+			unsigned(n, 3n, 0xffffffffffffff00n), shifts(n, 1n << 40n), shifts(n, -(1n << 40n)), ofs(n, 3), ofs(n, -0.5 * 2), captured(n, 1n << 20n)].join(" ")
+	}
+	function edges(n, k, d, f) {
+		let s = 0n, r = ""
+		try {
+			for (let i = 0; i < n; i++) {
+				let x = BigInt(i) - 5n
+				s += x / (i == k ? d : 7n) + x % (i == k ? d : -1n)
+				s += (i == k ? -0x8000000000000000n : x) / -1n
+				s += BigInt(i == k + 1 ? f : i)
+				// A count one of two a join merges: not the constant before.
+				s = BigInt.asIntN(64, s << (i == k + 2 ? 70n : 1n))
+			}
+		} catch (e) {
+			r = e.name
+		}
+		return r + s
+	}
+	function change(n, k) {
+		let x = 7n, s = 0n
+		try {
+			for (let i = 0; i < n; i++) {
+				if (i == k) x = 3
+				s = BigInt.asUintN(64, s * 31n + x)
+				x = x * 3n % 1000000007n
+			}
+		} catch (e) {
+			return e.name + s
+		}
+		return s
+	}
+	function all2(n) {
+		return [edges(n, n - 10, 0n, 1), edges(n, n - 10, 3n, 2.5), edges(n, n - 10, 3n, NaN), edges(n, n - 10, 3n, 2 ** 63), edges(n, n - 10, 3n, -(2 ** 63)),
+			edges(n, n + 10, 3n, 0), change(n, n - 3), change(n, -1)].join(" ")
+	}
+`
+
+// bigWordWant are Node's answers.
+var bigWordWant = map[string]string{
+	"all(300)": "16336317884979378143 3581399720129331960 1350894015274530760 -1366062363211519481,-1482653928,69668 2414285108102791371,-954211466,72356 " +
+		"3093:703 -3364:703 1500:18446744073709548760 1500:18446744073709370896 1370953561069626 -1370953560696774 89700 -89700 472290",
+	"all2(300)": "RangeError4647998506761461734 RangeError-9150747060186627624 RangeError-9150747060186627624 11686 11686 290499906672591270 " +
+		"TypeError17114752522922616119 16032958090094368353",
+	"all(2000)": "14004281193724023956 16819223635877332779 15421495601258989310 -8328610087454472501,-899206120,89456 3866292002786089935,-899750956,115568 " +
+		"21825:4750 -22159:4750 5504:18446744073709530400 10000:18446744073707104256 9139690414196441 -9139690397579559 3997999 -3998001 210484",
+	"all2(2000)": "RangeError2323999253380730336 RangeError4647998506761464275 RangeError4647998506761464275 73406 73406 145249953336295102 " +
+		"TypeError5012433408292294437 17457134204551552627",
+}
+
+func TestJITBigWords(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	// The collector marks now and then, so that boxes, and the words exits
+	// make of BigInts, are written through Go's write barrier too.
+	var stop atomic.Bool
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for !stop.Load() {
+			runtime.GC()
+		}
+	}()
+	defer func() { stop.Store(true); <-done }()
+	defer func(table bool) { mir.TableExits = table }(mir.TableExits)
+	// Each function's last compile, whether it called Go for a BigInt's
+	// operator (ssa.GoArith), as it had where it was not made natively.
+	goArith := map[string]bool{}
+	jitSSAOptimized = func(fn *bytecode.Function, f *ssa.Func) {
+		goArith[fn.Name] = false
+		for _, b := range f.Blocks {
+			for _, v := range b.Values {
+				for _, c := range v.Calls() {
+					if c.Go == ssa.GoArith {
+						goArith[fn.Name] = true
+					}
+				}
+			}
+		}
+	}
+	defer func() { jitSSAOptimized = nil }()
+	// Exits described for Go to write the frame from, and exits whose code
+	// writes it.
+	for _, table := range []bool{true, false} {
+		mir.TableExits = table
+		r := New(Config{JIT: true})
+		want := New(Config{})
+		for _, rt := range []*Runtime{want, r} {
+			if _, err := rt.Run(compileForTest(t, bigWordSetup)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var srcs []string
+		for range 30 {
+			srcs = append(srcs, "all(300)", "all2(300)")
+		}
+		srcs = append(srcs, "all(2000)", "all2(2000)")
+		for i, src := range srcs {
+			got, err := r.Run(compileForTest(t, src))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if g, w := got.String().Go(), bigWordWant[src]; g != w {
+				t.Fatalf("table exits %v, round %d: %s = %s, want %s", table, i, src, g, w)
+			}
+			interp, err := want.Run(compileForTest(t, src))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if g, w := interp.String().Go(), bigWordWant[src]; g != w {
+				t.Fatalf("interpreter: %s = %s, want %s", src, g, w)
+			}
+		}
+		// Warm, each runs natively: no exit, no guard failing.
+		for _, name := range []string{"xorshift", "fnv", "lcg", "digits", "unsigned", "shifts", "ofs"} {
+			e := r.jit.entryFor(r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure.fn)
+			if e == nil || e.ssa == nil || e.invalid {
+				t.Fatalf("%s has no code", name)
+			}
+			hosts, guards := e.ssaStats.hosts, e.ssaStats.guards
+			if _, err := r.Run(compileForTest(t, "all(300)")); err != nil {
+				t.Fatal(err)
+			}
+			if goArith[name] {
+				t.Errorf("%s calls Go for BigInt operators", name)
+			}
+			if e.ssaStats.hosts != hosts || e.ssaStats.guards != guards {
+				t.Errorf("%s left native code: %d host exits, %d guard failures (learned %v, wide %v, generic %v)",
+					name, e.ssaStats.hosts-hosts, e.ssaStats.guards-guards, e.bigints, e.bigwide, e.failed)
+			}
+		}
+		r.Close()
+		r.ReleaseClosed()
+		want.Close()
+		want.ReleaseClosed()
+	}
+}

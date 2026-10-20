@@ -666,10 +666,35 @@ const (
 // ExitLoc is where an exit finds a word: in a register or a spill slot as
 // it is, or boxed from a float or a boolean there; a constant, the
 // description's word N (Words), or 0 for an N below 0; a slot's address;
-// or none (ExitNone).
+// or none (ExitNone). A BigInt unboxed in a register or a spill slot, an
+// int64 or a uint64, is a value's both words, which Go makes of it as
+// Encoding says a BigInt is held in its value: as V8's deoptimizer
+// materializes an unboxed BigInt64.
 type ExitLoc struct {
 	N    int32
 	Kind uint8
+}
+
+// IsBig reports whether l is an unboxed BigInt's (ExitI64Reg to
+// ExitU64Spill), and whether a uint64's.
+func (l ExitLoc) IsBig() (big, unsigned bool) {
+	switch l.Kind {
+	case ExitI64Reg, ExitI64Spill:
+		return true, false
+	case ExitU64Reg, ExitU64Spill:
+		return true, true
+	}
+	return false, false
+}
+
+// BigWords are the words of the BigInt bits are, an int64's, or a
+// uint64's if unsigned, held in its value as enc says.
+func (enc *Encoding) BigWords(bits uint64, unsigned bool) (num, ref uint64) {
+	low := bits & (1<<enc.ShortBigLowBits - 1)
+	if unsigned && bits>>63 != 0 {
+		return enc.ShortBigWideTag | low, enc.ShortBigWideHigh + bits>>enc.ShortBigLowBits
+	}
+	return enc.ShortBigTag | low, enc.ShortBigHigh + bits>>enc.ShortBigLowBits
 }
 
 // ExitLoc's kinds.
@@ -683,6 +708,10 @@ const (
 	ExitBoolReg
 	ExitBoolSpill
 	ExitSlotAddr
+	ExitI64Reg
+	ExitI64Spill
+	ExitU64Reg
+	ExitU64Spill
 )
 
 // ExitInline is an inlined callee's frame an exit describes in a context
@@ -919,6 +948,19 @@ type Encoding struct {
 	ShortBigTag     uint64
 	ShortBigLowBits uint8
 	ShortBigHigh    uint64
+	// A BigInt above -2^64 and below 2^64 outside the int64 range is held
+	// so too, its number word's tag ShortBigWideTag, ShortBigTag less
+	// 1<<ShortBigLowBits, and the high bits of its 65 of two's
+	// complement the pointer word's distance from ShortBigWideHigh. Below
+	// ShortBigWideTag, the number word HeapBigTag is one's on the heap, whose
+	// pointer word is its block: a header word, the sign its top bit and its
+	// length the low bits BigLenMask has, and the digits' words after it,
+	// least significant first, from BigDigits on.
+	ShortBigWideTag  uint64
+	ShortBigWideHigh uint64
+	HeapBigTag       uint64
+	BigLenMask       uint64
+	BigDigits        int32
 
 	// What native code reads of an object, at these offsets from the
 	// pointer a slot holds (internal/jit/README.md, "Reading the heap in

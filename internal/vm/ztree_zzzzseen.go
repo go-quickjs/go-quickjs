@@ -33,13 +33,16 @@ type treeSeen struct {
 	n    atomic.Int32
 }
 
-// treeBigSeen is the sites of a function's tree whose arithmetic met two
-// BigInts, a bit a bytecode PC: bigs those of BigInts in the int64 range,
-// whose result was one too, which native code makes unboxed
-// (ssa.BigIntFeedback), and heap the others, a BigInt on the heap met or
-// made, which Go makes from native code (ssa.GoArith).
+// treeBigSeen is the sites of a function's tree whose arithmetic,
+// bitwise operators or comparisons met two BigInts, a bit a bytecode PC:
+// bigs those of BigInts in the int64 range, whose result was one too,
+// which native code makes unboxed (ssa.BigIntFeedback); wide those of
+// BigInts from 0 to 2^64-1, some past the int64 range, and a result in
+// that range too, which it makes unboxed as Uint64s (ssa's BigIntWide);
+// and heap the others, a BigInt on the heap met or made, or one below
+// -2^63, which Go makes from native code (ssa.GoArith).
 type treeBigSeen struct {
-	bigs, heap []atomic.Uint32
+	bigs, wide, heap []atomic.Uint32
 }
 
 var (
@@ -51,4 +54,10 @@ var (
 	// met two BigInts, one on the heap or made there if heap (treeBigSeen),
 	// where the JIT may compile it; nil without the JIT.
 	treeBigInt func(c *tctx, pc int, heap bool)
+
+	// treeBigOf marks the operator at pc in c's function, of a and b, two
+	// BigInts held in their values, whose result was v, as treeBigInt does:
+	// as one in the int64 range, one from 0 to 2^64-1, or one on the heap,
+	// as the three were (treeBigSeen); nil without the JIT.
+	treeBigOf func(c *tctx, pc int, a, b, v Value)
 )

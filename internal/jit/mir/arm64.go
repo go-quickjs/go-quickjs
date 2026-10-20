@@ -471,6 +471,17 @@ func (c *a64Compiler) exitThen(s *ssa.FrameState, kind uint64, then *arm64.Label
 		if v == nil || v.Op == ssa.OpLoadSlot && v.Aux == i || c.captured(i) {
 			continue
 		}
+		if bigKept(v) != nil {
+			// A BigInt's box, made of the BigInt in its cell (bigRebox),
+			// which the record copies, as amd64's.
+			w := c.bigRebox(v)
+			at := abi.OffKeep + int32(v.Args[1].Index)*int32(c.enc.ValueSize)
+			c.appendRecord(uint64(i)|abi.RecordMaybe, func() arm64.Reg {
+				c.a.AddImm(a64B, a64Ctx, int64(at), true)
+				return a64B
+			}, 0, false, &w)
+			continue
+		}
 		var w arm64.Reg
 		if remat(v) {
 			c.materialize(v, a64A)
@@ -2689,6 +2700,13 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	for k, r := range recs {
 		at := abi.OffRecord + int32(k)*32
 		record[r.slot] = int32(k)
+		if r.big {
+			// A BigInt's box's words, made of the BigInt.
+			c.bigBoxWords(r.x.Args[1])
+			c.a.Store(a64Ctx, at+16, a64A)
+			c.a.Store(a64Ctx, abi.OffRecordRef+int32(k)*8, a64C)
+			continue
+		}
 		w := a64A
 		switch {
 		case !r.num && (!r.ref || r.x.Shadow != nil):
@@ -4434,14 +4452,7 @@ func (c *a64Compiler) bigUnbox(v *ssa.Value, guard func(arm64.Cond)) {
 func (c *a64Compiler) bigBox(v *ssa.Value) {
 	viaGo, done := c.a.NewLabel(), c.a.NewLabel()
 	at := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
-	low := 64 - c.enc.ShortBigLowBits
-	c.a.ShiftImm(arm64.Lsr, a64C, c.gpr(v.Args[0], a64B), c.enc.ShortBigLowBits, true)
-	c.movImm(a64A, c.enc.ShortBigHigh)
-	c.a.Op(arm64.Add, a64C, a64C, a64A, true)
-	c.a.ShiftImm(arm64.Lsl, a64A, c.gpr(v.Args[0], a64B), low, true)
-	c.a.ShiftImm(arm64.Lsr, a64A, a64A, low, true)
-	c.movImm(a64B, c.enc.ShortBigTag)
-	c.a.Op(arm64.Orr, a64A, a64A, a64B, true)
+	c.bigBoxWords(v)
 	c.a.FMovToF(a64F0, a64A)
 	c.movImm(a64B, c.enc.WriteBarrier)
 	c.a.LoadU8(a64B, a64B, 0)
@@ -5484,6 +5495,10 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.keep(v)
 	case ssa.OpBigUnbox:
 		c.bigUnbox(v, guard)
+	case ssa.OpBigUnboxU64, ssa.OpBigLow, ssa.OpBigSign, ssa.OpAddW, ssa.OpSubW, ssa.OpMulW, ssa.OpAndW, ssa.OpOrW, ssa.OpXorW,
+		ssa.OpShlW, ssa.OpShrW, ssa.OpSarW, ssa.OpZextW, ssa.OpSextW, ssa.OpAddU64, ssa.OpSubU64, ssa.OpMulU64, ssa.OpShlI64, ssa.OpShlU64,
+		ssa.OpDivI64, ssa.OpModI64, ssa.OpDivU64, ssa.OpModU64, ssa.OpBigOfF64:
+		c.bigWord(v, c.guardFor(v))
 	case ssa.OpBigBox:
 		c.bigBox(v)
 	case ssa.OpConstI64:
@@ -5514,16 +5529,7 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.setG(v, a64C)
 	case ssa.OpCmpI64:
 		c.a.Cmp(c.gpr(arg(0), a64A), c.gpr(arg(1), a64B), true)
-		cond := arm64.LT
-		switch ir.Operator(v.Aux) {
-		case ir.Le:
-			cond = arm64.LE
-		case ir.Gt:
-			cond = arm64.GT
-		case ir.Ge:
-			cond = arm64.GE
-		}
-		c.a.Cset(a64A, cond)
+		c.a.Cset(a64A, a64CmpCond(ir.Operator(v.Aux), arg(0).Type == ssa.Uint64))
 		c.setG(v, a64A)
 	case ssa.OpKept:
 		c.setG(v, c.gpr(arg(1), a64A))

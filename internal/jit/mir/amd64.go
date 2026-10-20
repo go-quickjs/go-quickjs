@@ -905,6 +905,13 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	for k, r := range recs {
 		at := abi.OffRecord + int32(k)*32
 		record[r.slot] = int32(k)
+		if r.big {
+			// A BigInt's box's words, made of the BigInt.
+			c.bigBoxWords(r.x.Args[1])
+			c.a.Store(regCtx, at+16, scratchA)
+			c.a.Store(regCtx, abi.OffRecordRef+int32(k)*8, scratchC)
+			continue
+		}
 		w := scratchA
 		switch {
 		case !r.num && (!r.ref || r.x.Shadow != nil):
@@ -3162,6 +3169,20 @@ func (c *compiler) exitThen(s *ssa.FrameState, kind uint64, then *amd64.Label) {
 			// or between a caller's slots and an inlined callee's.
 			continue
 		}
+		if bigKept(v) != nil {
+			// A BigInt's box, made of the BigInt in its cell (bigRebox) --
+			// a loop header's state names it before it is made there, and
+			// one only states name is made nowhere else -- which the
+			// record copies.
+			w := c.bigRebox(v)
+			at := abi.OffKeep + int32(v.Args[1].Index)*int32(c.enc.ValueSize)
+			c.appendRecord(uint64(i)|abi.RecordMaybe, func() amd64.Reg {
+				c.a.MovRR(scratchB, regCtx)
+				c.a.OpImm(amd64.Add, scratchB, at, true)
+				return scratchB
+			}, 0, false, &w)
+			continue
+		}
 		var w amd64.Reg
 		if remat(v) {
 			c.materialize(v, scratchA)
@@ -4830,27 +4851,16 @@ func (c *compiler) bigUnbox(v *ssa.Value, guard func(amd64.Cond)) {
 	c.setG(v, scratchA)
 }
 
-// bigBox is a BigInt in the int64 range as a value (ssa's OpBigBox): its
-// low bits and the tag its number word, which is v, and ShortBigHigh past
-// its high bits its pointer word, both written to the context's keep cell
+// bigBox is an unboxed BigInt as a value (ssa's OpBigBox): its low bits and
+// the tag its number word, which is v, and ShortBigHigh past its high bits
+// its pointer word -- a Uint64's past the int64 range in the wide encoding
+// (bigBoxWords) -- both written to the context's keep cell
 // v.Index; while the collector marks, with Go's write barrier
 // (valueStore), as keep writes one.
 func (c *compiler) bigBox(v *ssa.Value) {
 	viaGo, done := c.a.NewLabel(), c.a.NewLabel()
 	at := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
-	low := 64 - c.enc.ShortBigLowBits
-	x := c.gpr(v.Args[0], scratchB)
-	c.a.MovRR(scratchC, x)
-	c.a.ShiftImm(amd64.Shr, scratchC, c.enc.ShortBigLowBits, true)
-	c.movImm(scratchA, c.enc.ShortBigHigh)
-	c.a.Op(amd64.Add, scratchC, scratchA, true)
-	if x = c.gpr(v.Args[0], scratchB); x != scratchA {
-		c.a.MovRR(scratchA, x)
-	}
-	c.a.ShiftImm(amd64.Shl, scratchA, low, true)
-	c.a.ShiftImm(amd64.Shr, scratchA, low, true)
-	c.movImm(scratchB, c.enc.ShortBigTag)
-	c.a.Op(amd64.Or, scratchA, scratchB, true)
+	c.bigBoxWords(v)
 	c.a.MovQToX(xScratch0, scratchA)
 	c.movImm(scratchB, c.enc.WriteBarrier)
 	c.a.LoadU8(scratchB, scratchB, 0)
@@ -6096,6 +6106,10 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.setG(v, c.gpr(arg(1), scratchA))
 	case ssa.OpBigUnbox:
 		c.bigUnbox(v, c.guardFor(v))
+	case ssa.OpBigUnboxU64, ssa.OpBigLow, ssa.OpBigSign, ssa.OpAddW, ssa.OpSubW, ssa.OpMulW, ssa.OpAndW, ssa.OpOrW, ssa.OpXorW,
+		ssa.OpShlW, ssa.OpShrW, ssa.OpSarW, ssa.OpZextW, ssa.OpSextW, ssa.OpAddU64, ssa.OpSubU64, ssa.OpMulU64, ssa.OpShlI64, ssa.OpShlU64,
+		ssa.OpDivI64, ssa.OpModI64, ssa.OpDivU64, ssa.OpModU64, ssa.OpBigOfF64:
+		c.bigWord(v, c.guardFor(v))
 	case ssa.OpBigBox:
 		c.bigBox(v)
 	case ssa.OpConstI64:
@@ -6124,15 +6138,7 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.setG(v, scratchA)
 	case ssa.OpCmpI64:
 		c.a.Op(amd64.Cmp, c.gpr(arg(0), scratchA), c.gpr(arg(1), scratchB), true)
-		cond := amd64.CondL
-		switch ir.Operator(v.Aux) {
-		case ir.Le:
-			cond = amd64.CondLE
-		case ir.Gt:
-			cond = amd64.CondG
-		case ir.Ge:
-			cond = amd64.CondGE
-		}
+		cond := bigCmpCond(ir.Operator(v.Aux), arg(0).Type == ssa.Uint64)
 		c.a.Setcc(cond, scratchA)
 		c.a.MovZX8(scratchA, scratchA)
 		c.setG(v, scratchA)

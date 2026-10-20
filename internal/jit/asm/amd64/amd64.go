@@ -521,6 +521,23 @@ func (a *Asm) Idiv(src Reg) {
 	a.modrmRR(7, byte(src))
 }
 
+// Div divides RDX:RAX by src, unsigned, 64 bits: RAX is the quotient and
+// RDX the remainder. It faults on a zero divisor, or a quotient past 64
+// bits.
+func (a *Asm) Div(src Reg) {
+	a.rex(true, 0, byte(src), false)
+	a.emit(0xF7)
+	a.modrmRR(6, byte(src))
+}
+
+// Mul is RDX:RAX = RAX * src, unsigned, 64 bits each: RDX the product's
+// high word, RAX its low.
+func (a *Asm) Mul(src Reg) {
+	a.rex(true, 0, byte(src), false)
+	a.emit(0xF7)
+	a.modrmRR(4, byte(src))
+}
+
 // LoadU16 is dst = [base + disp], 16 bits, zero-extended.
 func (a *Asm) LoadU16(dst, base Reg, disp int32) {
 	a.rex(false, byte(dst), byte(base), false)

@@ -168,10 +168,27 @@ func (f *exitFrame) word(l abi.ExitLoc) uint64 {
 	return 0
 }
 
+// big is the words of the unboxed BigInt l says where to find (ExitLoc's
+// IsBig).
+func (f *exitFrame) big(l abi.ExitLoc) (uint64, uint64) {
+	bits := f.ctx.Regs[l.N&31]
+	if l.Kind == abi.ExitI64Spill || l.Kind == abi.ExitU64Spill {
+		bits = f.ctx.Spill[l.N]
+	}
+	_, unsigned := l.IsBig()
+	return f.enc.BigWords(bits, unsigned)
+}
+
 // value is where slot s is and what is written there -- its number and
 // pointer words -- or false where nothing is: it holds its value already.
 func (f *exitFrame) value(s *abi.ExitSlot) (at unsafe.Pointer, n uint64, r unsafe.Pointer, ok bool) {
 	at = f.slot(s.Slot)
+	if big, _ := s.Value.IsBig(); big {
+		// Both its words, made of the unboxed BigInt: its pointer word an
+		// address outside Go's heap (abi.Encoding's ShortBigHigh).
+		num, ref := f.big(s.Value)
+		return at, num, *(*unsafe.Pointer)(unsafe.Pointer(&ref)), true
+	}
 	w := f.word(s.Value)
 	n = w
 	switch {

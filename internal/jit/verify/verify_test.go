@@ -206,6 +206,50 @@ func (globals) StringProperty(pc int) (ssa.PropertySite, bool) {
 	return ssa.PropertySite{Key: 9, Shape: 0x10000 + uintptr(pc), Index: int32(pc % 7)}, true
 }
 
+// bigCorpus is BigInt arithmetic of 64 bits, which bigs has made natively
+// (ssa's bigint.go).
+var bigCorpus = []string{
+	`function f(n,x){for(let i=0;i<n;i++){x^=BigInt.asUintN(64,x<<13n);x^=x>>7n;x^=BigInt.asIntN(64,x<<17n)}return x}`,
+	`function f(n,s){let h=0xcbf29ce484222325n;for(let i=0;i<n;i++)h=BigInt.asUintN(64,(h^BigInt(s.charCodeAt(i)))*0x100000001b3n);return h}`,
+	`function f(n,x){let s=0n;while(x>0n){s+=x%10n;x/=10n;x=-x;x=~x}return s}`,
+	`function f(a,b){let c=0;for(let i=0;i<9;i++){if(a<b)c++;a=(a&b)|(a^b);b=b<<3n;a=a>>2n;a=a-b*a+0xffffffffffffffffn}return c}`,
+}
+
+// bigs is globals with every operator's site one that met BigInts held in
+// their values, as Uint64s at odd PCs, every BigInt constant one of 64 bits
+// or fewer, and every call of two arguments BigInt.asUintN's or asIntN's,
+// of one BigInt's.
+type bigs struct {
+	globals
+	p *ir.Program
+}
+
+func (bigs) BigInt(int) bool        { return true }
+func (bigs) BigIntWide(pc int) bool { return pc%2 == 1 }
+func (bigs) BigIntFailed(int) bool  { return false }
+func (bigs) GoCalls() bool          { return true }
+func (bigs) BigIntCell(pc int) (uintptr, uint64, int, bool) {
+	if pc%3 == 0 {
+		return 0x61000 + uintptr(pc)*16, 1<<63 + uint64(pc), ssa.BigConstUint64, true
+	}
+	return 0x61000 + uintptr(pc)*16, uint64(pc % 40), ssa.BigConstInt64, true
+}
+func (b bigs) Intrinsic(pc int) (ssa.Intrinsic, bool) {
+	k := ssa.Intrinsic{Callee: 0x62000, Op: ssa.OpZextW, Fn: 64}
+	if pc+1 < len(b.p.Maps) && b.p.Maps[pc+1].Depth == b.p.Maps[pc].Depth-1 {
+		// A call of one argument and no receiver.
+		k.Op, k.Fn, k.Plain = ssa.OpBigOfF64, 0, true
+		return k, true
+	}
+	switch pc % 3 {
+	case 1:
+		k.Op, k.Fn = ssa.OpSextW, 13
+	case 2:
+		k.Fn = 0
+	}
+	return k, true
+}
+
 // The backend's code (internal/jit/mir) keeps the rules, for every function
 // its random and JavaScript corpora compile.
 func TestMirEmitted(t *testing.T) {
@@ -257,6 +301,13 @@ func TestMirEmitted(t *testing.T) {
 			}
 		}
 	}
+	for _, src := range bigCorpus {
+		for i, p := range lowered(t, src) {
+			if compile(fmt.Sprintf("%s (%d, bigs)", src, i), p, bigs{p: p}) {
+				n++
+			}
+		}
+	}
 	r := rand.New(rand.NewPCG(5, 6))
 	for attempt := 0; attempt < 50000 && n < 2000; attempt++ {
 		p := randomProgram(r)
@@ -268,6 +319,16 @@ func TestMirEmitted(t *testing.T) {
 		t.Fatalf("only %d functions compiled", n)
 	}
 	t.Logf("%d functions; checked %v bytes, %v instructions", n, checkedBytes, checkedInsts)
+	for _, ops := range [][]ssa.Op{{ssa.OpBigUnboxU64}, {ssa.OpBigLow}, {ssa.OpXorW}, {ssa.OpShlW}, {ssa.OpShrW, ssa.OpSarW}, {ssa.OpZextW},
+		{ssa.OpSextW}, {ssa.OpDivI64, ssa.OpDivU64}, {ssa.OpModI64, ssa.OpModU64}, {ssa.OpBigOfF64}, {ssa.OpBigBox}} {
+		n := 0
+		for _, op := range ops {
+			n += cells[op]
+		}
+		if n == 0 {
+			t.Errorf("none of %v compiled", ops)
+		}
+	}
 	if cells[ssa.OpGlobalCell] == 0 || cells[ssa.OpLexCell] == 0 || cells[ssa.OpStringProp] == 0 || cells[ssa.OpAccessorIs] == 0 {
 		t.Fatalf("global cells %d, lexical cells %d, string methods %d, accessors %d", cells[ssa.OpGlobalCell], cells[ssa.OpLexCell],
 			cells[ssa.OpStringProp], cells[ssa.OpAccessorIs])
