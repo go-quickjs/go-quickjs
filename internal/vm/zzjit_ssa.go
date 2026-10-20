@@ -1601,8 +1601,9 @@ func jitFeedbackMark(cl *closure) uint64 {
 
 // jitReoptimize compiles cl's function again for e, its entry, for what it
 // learned -- what failed in its code generic, the shapes and calls its
-// caches met -- and replaces its code, which runs nowhere: native code
-// leaves for Go to do anything else. Its code, invalidated, is valid
+// caches met -- and replaces its code, as V8 installs new code while older
+// frames are in the old: runs of the old Go is inside go on from their
+// frames, never in it (otherwiseInUse). Its code, invalidated, is valid
 // again. If the function no longer compiles, the code it has is kept, and
 // stays invalid.
 func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
@@ -1616,8 +1617,8 @@ func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
 		return
 	}
 	if r.jit.otherwiseInUse(e) {
-		// Another run of its code, or a native call of it, goes on in it
-		// later: compiled again once they have left it.
+		// A native call of its code goes on in it later: compiled again
+		// once it has returned.
 		return
 	}
 	switch {
@@ -3268,7 +3269,7 @@ type jitGoRun struct {
 	// inlined are the closures code inlines (jitEntry's ssaInlined), whose
 	// frames Go makes at an exit inside one (jitUnwindNative): e's lists
 	// are another code's once e is compiled again while the run goes on
-	// (otherwiseInUse), and code's, closed once its native code has left,
+	// (jitReoptimize), and code's, closed once its native code has left,
 	// keep nothing.
 	inlined []*closure
 	pinned  bool
@@ -3894,10 +3895,10 @@ func (r *Runtime) jitGoCallNested(ctx *abi.Context, idx int) bool {
 	// A loop of a built-in's call under way at a level, or the run's: its
 	// built-in's frame between the level and its callee, and no frames
 	// shared with the last call, whose levels may have had none.
-	loops := jitLoopIn(run.e, ctxs[root], runF.cl.fn, int(levelPC(root))) != 0
+	loops := jitLoopIn(run.e.loops, ctxs[root], runF.cl.fn, int(levelPC(root))) != 0
 	for i := root + 1; i < idx && !loops; i++ {
 		if lcl := (*closure)(ctxs[i].Closure); lcl != nil && ctxs[i].Loop != 0 {
-			loops = jitLoopIn(r.jitEntryOf(lcl), ctxs[i], lcl.fn, int(levelPC(i))) != 0
+			loops = jitLoopIn(r.jitEntryOf(lcl).makesLoops(), ctxs[i], lcl.fn, int(levelPC(i))) != 0
 		}
 	}
 	if !loops && lv.serial == serial && lv.root == root && lv.depth == depthBefore {
@@ -3927,7 +3928,7 @@ func (r *Runtime) jitGoCallNested(ctx *abi.Context, idx int) bool {
 		prevPC = levelPC(first - 1)
 	}
 	if loops {
-		if loop := jitLoopIn(run.e, ctxs[root], runF.cl.fn, int(levelPC(root))); loop != 0 {
+		if loop := jitLoopIn(run.e.loops, ctxs[root], runF.cl.fn, int(levelPC(root))); loop != 0 {
 			r.jitPushLoopFrame(runF, loop, false)
 		}
 	}
@@ -3982,7 +3983,7 @@ func (r *Runtime) jitGoCallNested(ctx *abi.Context, idx int) bool {
 			lv.at = append(lv.at, at)
 		}
 		if loops && i < idx {
-			if loop := jitLoopIn(e, c, lcl.fn, int(callPC)); loop != 0 {
+			if loop := jitLoopIn(e.makesLoops(), c, lcl.fn, int(callPC)); loop != 0 {
 				r.jitPushLoopFrame(f, loop, false)
 			}
 		}
@@ -4011,6 +4012,10 @@ framed:
 		r.jitCallSeen(f, e, pc, sp, in)
 	}
 	r.jitCalleeProfit(e, serial, pc)
+	// The run's code, which what the call runs may compile again (the run
+	// itself does not hold it, as V8's frames do not): its native code
+	// then leaves when its callee returns to it.
+	runE, runCode := run.e, run.code
 	last, shared := s.ssaCtx, s.ssaSharedGen
 	// What the call runs natively runs in contexts past the levels', which
 	// hold their state until they go on.
@@ -4067,7 +4072,7 @@ framed:
 		// the run's, which its levels' calls run in.
 		r.jitShareContexts(root, runF)
 	}
-	if err != nil || r.stopped != nil || e.invalid || r.jitLearnedDue(f.cl, e) || e.ssa != code {
+	if err != nil || r.stopped != nil || e.invalid || r.jitLearnedDue(f.cl, e) || e.ssa != code || runE.ssa != runCode {
 		s.goPending = jitGoPending{set: true, pc: pc, ctx: idx, v: v, err: err}
 		return false
 	}
@@ -6151,21 +6156,21 @@ func (e *jitEntry) setLoopSlots(fn *bytecode.Function, n int) {
 // left (jitFinishExit): the frame goes on after the call.
 const jitLoopDone = ^uint64(0)
 
-// jitLoopAt is the loop of a built-in's call native code of e's was making
-// in ctx, f's context, at its exit at pc, if any (abi.Context's Loop), and
-// clears it there: only code that makes such loops (jitEntry's loops) has
-// one, at a method call, which its entries clear.
-func jitLoopAt(e *jitEntry, ctx *abi.Context, f *frame, pc int) uint64 {
-	loop := jitLoopIn(e, ctx, f.cl.fn, pc)
+// jitLoopAt is the loop of a built-in's call native code was making in
+// ctx, f's context, at its exit at pc, if any (abi.Context's Loop), and
+// clears it there: only code that makes such loops (loops, its jitEntry's
+// loops) has one, at a method call, which its entries clear.
+func jitLoopAt(loops bool, ctx *abi.Context, f *frame, pc int) uint64 {
+	loop := jitLoopIn(loops, ctx, f.cl.fn, pc)
 	ctx.Loop = 0
 	return loop
 }
 
 // jitLoopIn is jitLoopAt, the word left as it is: the loop is under way
 // still, a level's whose callee is a frame Go makes.
-func jitLoopIn(e *jitEntry, ctx *abi.Context, fn *bytecode.Function, pc int) uint64 {
+func jitLoopIn(loops bool, ctx *abi.Context, fn *bytecode.Function, pc int) uint64 {
 	loop := ctx.Loop
-	if loop == 0 || e == nil || !e.loops || pc >= len(fn.Code) || jitCallOp(fn.Code[pc].Op) != bytecode.OpCallMethod {
+	if loop == 0 || !loops || pc >= len(fn.Code) || jitCallOp(fn.Code[pc].Op) != bytecode.OpCallMethod {
 		return 0
 	}
 	return loop
@@ -7880,19 +7885,19 @@ func (fb *jitFeedback) add(c *propCache) *ssa.PropertyAdd {
 }
 
 // jitSlot is a frame's slot as the JIT numbers them: its locals, its
-// captured bindings, the receiver if the code reads it (from the context,
-// where Go put it), then its operands.
-func (r *Runtime) jitSlot(f *frame, e *jitEntry, i int) *Value {
+// captured bindings, the receiver if the code reads it (this, its
+// program's This: from the context, where Go put it), then its operands.
+func (r *Runtime) jitSlot(f *frame, this bool, i int) *Value {
 	n, u := f.cl.fn.LocalCount, len(f.cl.upvalues)
 	switch {
 	case i < n:
 		return &f.locals[i]
 	case i < n+u:
 		return f.cl.upvalues[i-n].slot
-	case e.this && i == n+u:
+	case this && i == n+u:
 		return (*Value)(unsafe.Pointer(&r.jit.ssaCtx.This))
 	}
-	if e.this {
+	if this {
 		u++
 	}
 	return &r.stack[f.base+i-n-u]
@@ -7933,11 +7938,12 @@ func jitSource(word *uint64) *Value {
 }
 
 // jitApplyRecords writes the slots an exit left to Go (abi.Record): the
-// references it moved, and the primitives it put where a reference was.
-// The slots records read hold their values from entry until the first
-// write, so every one is read first; one record, the usual case, reads its
-// value and writes it.
-func (r *Runtime) jitApplyRecords(f *frame, e *jitEntry, ctx *abi.Context) {
+// references it moved, and the primitives it put where a reference was,
+// numbered as the code that left has them (this, jitSlot's). The slots
+// records read hold their values from entry until the first write, so
+// every one is read first; one record, the usual case, reads its value and
+// writes it.
+func (r *Runtime) jitApplyRecords(f *frame, this bool, ctx *abi.Context) {
 	n := int(ctx.Records)
 	if n == 0 {
 		return
@@ -7946,22 +7952,22 @@ func (r *Runtime) jitApplyRecords(f *frame, e *jitEntry, ctx *abi.Context) {
 	const flags = abi.RecordScalar | abi.RecordMaybe | abi.RecordDirect
 	if n == 1 {
 		rec := &ctx.Record[0]
-		*r.jitSlot(f, e, int(rec.Slot&^flags)) = r.jitRecordValue(f, e, ctx, 0)
+		*r.jitSlot(f, this, int(rec.Slot&^flags)) = r.jitRecordValue(f, this, ctx, 0)
 		return
 	}
 	var buf [8]Value
 	src := buf[:0]
 	for i := range ctx.Record[:n] {
-		src = append(src, r.jitRecordValue(f, e, ctx, i))
+		src = append(src, r.jitRecordValue(f, this, ctx, i))
 	}
 	for i, rec := range ctx.Record[:n] {
-		*r.jitSlot(f, e, int(rec.Slot&^flags)) = src[i]
+		*r.jitSlot(f, this, int(rec.Slot&^flags)) = src[i]
 	}
 }
 
 // jitRecordValue is the value a record writes, read from the frame as the
 // exit left it.
-func (r *Runtime) jitRecordValue(f *frame, e *jitEntry, ctx *abi.Context, i int) Value {
+func (r *Runtime) jitRecordValue(f *frame, this bool, ctx *abi.Context, i int) Value {
 	switch rec := &ctx.Record[i]; {
 	case rec.Slot&abi.RecordDirect != 0:
 		slot := abi.Slot{Num: rec.Word, Ref: ctx.RecordRef[i]}
@@ -7974,7 +7980,7 @@ func (r *Runtime) jitRecordValue(f *frame, e *jitEntry, ctx *abi.Context, i int)
 		}
 		return Value{num: math.Float64frombits(rec.Word)}
 	default:
-		return *r.jitSlot(f, e, int(rec.Arg))
+		return *r.jitSlot(f, this, int(rec.Arg))
 	}
 }
 
@@ -8371,11 +8377,17 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			// native code stores before it tests the collector's flag
 			// again, into a cell whose old value nothing native reads (mir's
 			// resumeCall). Not into code compiled again or dropped meanwhile
-			// (Size 0, closed), nor after a throw: then as below, from the
-			// frame the call wrote.
+			// (Size 0, closed) -- what Go ran may have run the function
+			// again, a recursive one, and compiled it again there, as V8
+			// installs new code while older frames are in the old
+			// (jitReoptimize) -- nor after a throw: then as below, from the
+			// frame the call wrote, as the code that left describes it
+			// (this and loops, taken before Go ran anything), and in the
+			// code the function has now, at its next entry.
 			s.hosts++
 			e.ssaStats.hosts++
 			back, base, code := uintptr(c.ReturnTo), c.Base, e.ssa
+			this, loops := e.this, e.loops
 			exitPC, exitDepth := int(ctx.ExitPC), int(ctx.ExitDepth)
 			// Past its call meanwhile, as the interpreter's frame is during
 			// one, which a stack trace shows (stackFrame).
@@ -8390,13 +8402,16 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 				continue
 			}
 			e.ssaStats.records += ctx.Records
-			r.jitApplyRecords(f, e, ctx)
+			// The receiver its records may name is this run's, not that of
+			// one Go ran meanwhile.
+			s.ssaCtx = ctx
+			r.jitApplyRecords(f, this, ctx)
 			jitHandlers(f, e.ssaProg, exitPC)
 			if err == nil && f.cl.fn.Code[exitPC].Op == bytecode.OpSuperCall {
 				// A super() native code made, its parent finished by Go.
 				v = jitSuperBound(f, v)
 			}
-			if loop := jitLoopAt(e, ctx, f, exitPC); loop != 0 {
+			if loop := jitLoopAt(loops, ctx, f, exitPC); loop != 0 {
 				// The callee was a loop's callback (ssa.ForEachSite): Go goes
 				// on with the loop after its index.
 				v, err = r.jitLoopFinish(f, exitPC, loop, true, v, err)
@@ -8430,7 +8445,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			// An inlined callee's exit while the collector marks leaves its
 			// records, its frame's included, to Go.
 			e.ssaStats.records += ctx.Records
-			r.jitApplyRecords(f, e, ctx)
+			r.jitApplyRecords(f, e.this, ctx)
 			exitPC, exitDepth := int(ctx.ExitPC), int(ctx.ExitDepth)
 			jitHandlers(f, e.ssaProg, exitPC)
 			// Past its call meanwhile, as a stack trace shows it.
@@ -8471,9 +8486,9 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			return v, nil, true
 		}
 		e.ssaStats.records += ctx.Records
-		r.jitApplyRecords(f, e, ctx)
+		r.jitApplyRecords(f, e.this, ctx)
 		jitHandlers(f, e.ssaProg, int(ctx.ExitPC))
-		if loop := jitLoopAt(e, ctx, f, int(ctx.ExitPC)); loop != 0 {
+		if loop := jitLoopAt(e.loops, ctx, f, int(ctx.ExitPC)); loop != 0 {
 			// A loop of a built-in's call that left -- a check of its, or
 			// its back edge's poll: Go goes on with it from its index, as
 			// V8's builtin continuation frames go on in the builtin, then
@@ -9024,7 +9039,7 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure) (Value, e
 		defer func() { s.ctxTop = top }()
 	}
 	if n != 0 && !s.unwinding[start].inline && idx < len(s.goRuns) && s.goRuns[idx].f != nil {
-		if rf := s.goRuns[idx].f; jitLoopIn(e, s.ssaCtxs[idx], code, int(s.ssaCtxs[idx].ExitPC)) != 0 {
+		if rf := s.goRuns[idx].f; jitLoopIn(e.makesLoops(), s.ssaCtxs[idx], code, int(s.ssaCtxs[idx].ExitPC)) != 0 {
 			// The run's own loop's callee: the built-in's frame between
 			// them, until the callee is finished.
 			r.jitPushLoopFrame(rf, s.ssaCtxs[idx].Loop, false)
@@ -9060,7 +9075,7 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure) (Value, e
 				f.cl, f.locals, f.base = l.cl, r.stack[l.base:l.base+fn.LocalCount:l.base+fn.LocalCount], l.base+fn.LocalCount
 				saved := s.ssaCtx
 				s.ssaCtx = c
-				r.jitApplyRecords(f, e, c)
+				r.jitApplyRecords(f, e.this, c)
 				s.ssaCtx = saved
 				l.this = *(*Value)(unsafe.Pointer(&c.This))
 			}
@@ -9118,7 +9133,7 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure) (Value, e
 		}
 		s.unwindingFrames = append(s.unwindingFrames, f)
 		if k < n-1 && !l.inline && !s.unwinding[start+k+1].inline && l.loop != 0 &&
-			jitLoopIn(r.jitEntryOf(l.cl), s.ssaCtxs[l.ctx], fn, int(l.pc)) != 0 {
+			jitLoopIn(r.jitEntryOf(l.cl).makesLoops(), s.ssaCtxs[l.ctx], fn, int(l.pc)) != 0 {
 			// Its loop's callee, the next level: the built-in's frame
 			// between them.
 			r.jitPushLoopFrame(f, l.loop, true)
@@ -9172,7 +9187,7 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure) (Value, e
 				// A super() native code made, its parent finished by Go.
 				v = jitSuperBound(f, v)
 			}
-			if loop := jitLoopAt(e, s.ssaCtxs[l.ctx], f, int(l.pc)); loop != 0 && loop == l.loop {
+			if loop := jitLoopAt(e.makesLoops(), s.ssaCtxs[l.ctx], f, int(l.pc)); loop != 0 && loop == l.loop {
 				// Its callee was a loop's callback: Go goes on with the loop
 				// after its index.
 				v, err = r.jitLoopFinish(f, int(l.pc), loop, true, v, err)
@@ -9237,6 +9252,15 @@ func (r *Runtime) jitEnterCallee(f *frame, e *jitEntry, ctx int) (Value, error) 
 	// have (jitCallTarget); tryJITAt counts it for a callee Go enters.
 	if e != nil && e.ssa != nil && e.notNative && e.entrySlow {
 		jitRetryNative(e)
+	}
+	if e != nil && e.invalid && f.cl.jitRefused {
+		// Its code invalidated, of a function Go does not enter, which only
+		// native callers call natively: the invocation spends the code's
+		// budget (jitTierUp), as tryJITAt has one Go enters spend it, and
+		// as jitInvokedFrameless a frameless call. Uncounted, a visitor
+		// called through its link (ssa.CallSite's Generic) that deoptimized
+		// once was never compiled again, each call of it Go's from then on.
+		r.jitTierUp(f.cl, e, int64(len(f.cl.fn.Code)))
 	}
 	// One with no code at all -- the cache dropped it, which native
 	// callers' code was compiled to call (jitLink) -- is compiled for them
@@ -9633,7 +9657,7 @@ func (r *Runtime) jitFinishExit(f *frame, e *jitEntry, l *jitNativeLevel) (Value
 	f.pc = uint32(pc)
 	kind := l.kind
 	if l.loop != 0 && !l.inline && kind != abi.ExitEnter {
-		if loop := jitLoopAt(e, r.jit.ssaCtxs[l.ctx], f, pc); loop != 0 {
+		if loop := jitLoopAt(e.makesLoops(), r.jit.ssaCtxs[l.ctx], f, pc); loop != 0 {
 			// Its loop of a built-in's call left, as at runSSA's (above):
 			// Go goes on with it from its index, then the frame after the
 			// call.

@@ -731,18 +731,20 @@ faster: its loss is its steady state's.
   function is warming, too, it has no entry to note in: `r.jit` is made
   at the first compile. Do it with the nodes' layout measured, or give
   `elemAt` the site.
-- **Code is not compiled again while another run of it goes on**
-  (`jitReoptimize`'s `otherwiseInUse`): a recursive function, due to be
-  compiled again for what it learned, is refused at every call of Go its
-  inner runs make, each left for Go to finish at an exit for a compile
-  that does not happen -- Typescript's `AstWalker.walk`, 6,215 times a
-  run. Not leaving there (tried 2026-10-18, not kept) was worse: those
-  exits are what let its runs unwind to where it is compiled again, and
-  without them it ran on in its old code, missing at its call of
-  `this.pre` 240,000 times a run in two of three runs. V8 installs new
-  code at once, old frames going on in the old code until they return;
-  that needs the old code kept by its frames, not by the entry.
-  It costs most in code compiled for native callers alone: such a
+- **Code is not compiled again while a native call of it goes on**
+  (`jitReoptimize`'s `otherwiseInUse`). Runs Go entered no longer wait
+  (2026-10-19): a recursive function due to be compiled again is, where
+  its innermost run learned it, as V8 installs new code while older
+  frames are in the old -- a run suspended at a native call whose callee
+  Go finishes goes on from its frame, as the code that left describes it
+  (`jitGoRun`), and in the new code at its next entry; one suspended in a
+  call of Go leaves when the call returns, its code kept till then.
+  Waiting for them, Typescript's `AstWalker.walk`, its outer runs in its
+  code all the way down, had kept code calling one of its visitors
+  natively and left at its call of each other, 145,000 times a run. A
+  native call of the code, from another function's, still waits: it
+  returns into the code, whose frames Go reads by the entry's code. It
+  costs most in code compiled for native callers alone: such a
   function runs only as a native callee, so a compile again is always
   asked for while a native call of it is live, and never made. AWFY
   DeltaBlue's EqualityConstraint and ScaleConstraint learn their super()'s
@@ -751,7 +753,8 @@ faster: its loss is its steady state's.
   Go, BinaryConstraint and AbstractConstraint run by the tree tier under
   them, Strength.of declined 36,000 times a run (2026-10-19, after
   e0e21ca; the marking that had seemed the cause is not: the declines
-  happen with the collector idle).
+  happen with the collector idle). Making it means each level's frame
+  read by the code it is in, which the level would record.
 - **Native code while the collector marks**, as V8's code calls its
   write barrier and goes on. Native code tests Go's write-barrier flag
   before it stores a pointer; while it is set, what stores one is made by

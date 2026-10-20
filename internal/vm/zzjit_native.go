@@ -1171,20 +1171,26 @@ func (s *jitState) called(e *jitEntry) bool {
 	return false
 }
 
-// otherwiseInUse reports whether e's code runs, or may go on, below Go
-// other than in the innermost run Go is inside, if that is e's: that run's
-// code does not run while Go does, and goes on in the code compiled again,
-// where it is entered next; any other run's, or a native call's, would
-// return into the code it left, which compiling it again would release --
-// and what Go reads of a frame as it leaves, it reads by the code's entry,
-// which would then be the new code's.
+// otherwiseInUse reports whether e's code may go on below Go in a way
+// compiling it again would break: a native call of it, from another
+// function's code, which returns into it, and whose frame Go reads by the
+// entry's code (jitUnwindNative). A run of it Go entered does not: the
+// innermost, which Go is inside, goes on in the code compiled again, where
+// it is entered next; one suspended at a native call whose callee Go
+// finishes goes on from its frame, as the code that left describes it, not
+// in that code (runSSALoop); one suspended in a call of Go leaves the code
+// when the call returns (jitGoCall, jitGoCallNested), the code kept until
+// then (closeSSA). Waiting for those runs, a recursive function due to be
+// compiled again had been refused while its outer runs were in it --
+// Typescript's AstWalker.walk, whose code calling one of its visitors
+// natively left at its call of each other one 145,000 times a run.
 func (s *jitState) otherwiseInUse(e *jitEntry) bool {
-	runs := e.ssaRuns
-	if n := len(s.runEntries); n != 0 && s.runEntries[n-1] == e {
-		runs--
-	}
-	return runs != 0 || s.called(e)
+	return s.called(e)
 }
+
+// makesLoops reports whether e's code makes loops of built-ins' calls
+// (loops), false for no entry.
+func (e *jitEntry) makesLoops() bool { return e != nil && e.loops }
 
 // jitVictim is what the cache may reclaim to make room (makeRoom): a
 // lowering or an entry, by its class.
