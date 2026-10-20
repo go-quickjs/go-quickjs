@@ -97,8 +97,18 @@ const bigWordSetup = `
 		for (const f of fs) s = s * 31n + f()
 		return s % M
 	}
+	function squares(n, a) {
+		// A sum of squares in the int64 range that grows past 2^63, below
+		// 2^64: made as Uint64s.
+		let s = 0n
+		for (let i = 0; i < n; i++) {
+			s += a * a
+			a += 1n
+		}
+		return s
+	}
 	function all(n) {
-		return [xorshift(n, 88172645463325252n), xorshift(n, 1n), fnv(n, "The quick brown fox"), lcg(n, -5n), lcg(n, 9223372036854775807n),
+		return [squares(n, BigInt(Math.floor(Math.sqrt(1.5 * 2 ** 63 / n)))), xorshift(n, 88172645463325252n), xorshift(n, 1n), fnv(n, "The quick brown fox"), lcg(n, -5n), lcg(n, 9223372036854775807n),
 			digits(n >> 3, 9007199254740993000n), digits(n >> 3, -9223372036854775807n), unsigned(n, 0x8000000000000000n - 500n, 0x8000000000000000n + 500n),
 			unsigned(n, 3n, 0xffffffffffffff00n), shifts(n, 1n << 40n), shifts(n, -(1n << 40n)), ofs(n, 3), ofs(n, -0.5 * 2), captured(n, 1n << 20n)].join(" ")
 	}
@@ -139,11 +149,11 @@ const bigWordSetup = `
 
 // bigWordWant are Node's answers.
 var bigWordWant = map[string]string{
-	"all(300)": "16336317884979378143 3581399720129331960 1350894015274530760 -1366062363211519481,-1482653928,69668 2414285108102791371,-954211466,72356 " +
+	"all(300)": "13835077215140154650 16336317884979378143 3581399720129331960 1350894015274530760 -1366062363211519481,-1482653928,69668 2414285108102791371,-954211466,72356 " +
 		"3093:703 -3364:703 1500:18446744073709548760 1500:18446744073709370896 1370953561069626 -1370953560696774 89700 -89700 472290",
 	"all2(300)": "RangeError4647998506761461734 RangeError-9150747060186627624 RangeError-9150747060186627624 11686 11686 290499906672591270 " +
 		"TypeError17114752522922616119 16032958090094368353",
-	"all(2000)": "14004281193724023956 16819223635877332779 15421495601258989310 -8328610087454472501,-899206120,89456 3866292002786089935,-899750956,115568 " +
+	"all(2000)": "13835390561849011000 14004281193724023956 16819223635877332779 15421495601258989310 -8328610087454472501,-899206120,89456 3866292002786089935,-899750956,115568 " +
 		"21825:4750 -22159:4750 5504:18446744073709530400 10000:18446744073707104256 9139690414196441 -9139690397579559 3997999 -3998001 210484",
 	"all2(2000)": "RangeError2323999253380730336 RangeError4647998506761464275 RangeError4647998506761464275 73406 73406 145249953336295102 " +
 		"TypeError5012433408292294437 17457134204551552627",
@@ -214,7 +224,7 @@ func TestJITBigWords(t *testing.T) {
 			}
 		}
 		// Warm, each runs natively: no exit, no guard failing.
-		for _, name := range []string{"xorshift", "fnv", "lcg", "digits", "unsigned", "shifts", "ofs"} {
+		for _, name := range []string{"squares", "xorshift", "fnv", "lcg", "digits", "unsigned", "shifts", "ofs"} {
 			e := r.jit.entryFor(r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure.fn)
 			if e == nil || e.ssa == nil || e.invalid {
 				t.Fatalf("%s has no code", name)
@@ -225,6 +235,10 @@ func TestJITBigWords(t *testing.T) {
 			}
 			if goArith[name] {
 				t.Errorf("%s calls Go for BigInt operators", name)
+			}
+			if name == "squares" && len(e.failed) != 0 {
+				// Its sum, whose addition is GoAdd's where it is generic.
+				t.Errorf("%s: generic at %v (wide %v)", name, e.failed, e.bigwide)
 			}
 			if e.ssaStats.hosts != hosts || e.ssaStats.guards != guards {
 				t.Errorf("%s left native code: %d host exits, %d guard failures (learned %v, wide %v, generic %v)",

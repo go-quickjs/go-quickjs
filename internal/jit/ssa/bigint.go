@@ -72,10 +72,11 @@ func bigOperator(op ir.Operator) (native, arith bool) {
 // bigType is the type an operator of x and y, BigInts, is made in
 // (bigNative): Int64, Uint64, or None where neither holds both -- a
 // negative constant with one past the int64 range. An operand already
-// unboxed (a box's) or a constant says what it is, and the site's
-// feedback the rest: Uint64 where it met BigInts past the int64 range
-// (BigIntWide), Int64 otherwise. An unboxed operand of the other type is
-// checked to be in both ranges (OpBigSign).
+// unboxed (a box's) or a constant says what it is, but for the site's
+// feedback: Uint64 where it met BigInts past the int64 range, operands or
+// result (BigIntWide) -- a sum of Int64s that grows past 2^63 -- unless a
+// constant is negative, and Int64 otherwise. An unboxed operand of the
+// other type is checked to be in both ranges (OpBigSign).
 func bigType(wide bool, xs ...*Value) Type {
 	unsigned, signed, negative, past := false, false, false, false
 	for _, x := range xs {
@@ -99,11 +100,7 @@ func bigType(wide bool, xs ...*Value) Type {
 		return Uint64
 	case negative:
 		return Int64
-	case unsigned && !signed:
-		return Uint64
-	case signed && !unsigned:
-		return Int64
-	case wide:
+	case wide, unsigned && !signed:
 		return Uint64
 	}
 	return Int64
@@ -173,7 +170,9 @@ func (b *builder) bigNative(blk *Block, pc int, in ir.Instruction, operand func(
 	if op == ir.Shl || op == ir.Shr {
 		t = bigType(fb.BigIntWide(pc), x)
 	} else {
-		t = bigType(fb.BigIntWide(pc), x, y)
+		// A power has no Uint64 form: its operands are Int64s, or it
+		// exits.
+		t = bigType(fb.BigIntWide(pc) && op != ir.Pow, x, y)
 	}
 	if t == None || op == ir.Pow && t != Int64 {
 		return nil
