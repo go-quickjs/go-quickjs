@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"math"
 	"math/bits"
 	"strconv"
 	"unsafe"
@@ -384,14 +385,7 @@ func shortBits(op bytecode.Op, a, b Value) (Value, bool) {
 		default:
 			h, l = xh^yh, xl^yl
 		}
-		if h == 0 {
-			return shortBigMag(false, l), true
-		}
-		// Below zero: its magnitude, which is 2^64 for -2^64 alone.
-		if l == 0 {
-			return bigTwoWords(true, 0, 1), true
-		}
-		return shortBigMag(true, -l), true
+		return shortOfTwos(h, l), true
 	case bytecode.OpShl, bytecode.OpShr:
 		if !b.isInt64Big() {
 			return Undefined, false
@@ -433,13 +427,49 @@ func shortBits(op bytecode.Op, a, b Value) (Value, bool) {
 }
 
 // shortTwos is a BigInt held in its Value as 128 bits of two's complement,
-// high word and low.
+// high word and low: the low its 65 bits' low 64, the high their sign's.
 func shortTwos(v Value) (uint64, uint64) {
-	neg, mag := v.shortBigParts()
-	if !neg {
-		return 0, mag
+	if v.isInt64Big() {
+		x := v.int64Big()
+		return uint64(x >> 63), uint64(x)
 	}
-	return ^uint64(0), -mag
+	off := uint64(uintptr(v.ref) - uintptr(unsafe.Pointer(&shortBigHighX)))
+	lo := off<<shortBigLowBits | math.Float64bits(v.num)&shortBigLowMask
+	return -(off >> (64 - shortBigLowBits)), lo
+}
+
+// shortOfTwos is the BigInt of 128 bits of two's complement whose high word
+// is its sign's, 0 or all ones: held in its Value, but for -2^64.
+func shortOfTwos(h, l uint64) Value {
+	if uint64(int64(l)>>63) == h {
+		return shortBig(int64(l))
+	}
+	if h != 0 && l == 0 {
+		return bigTwoWords(true, 0, 1)
+	}
+	// One past the int64 range: the low 64 bits and the 65th, the sign's.
+	return Value{
+		num: math.Float64frombits(shortBigBase | l&shortBigLowMask),
+		ref: unsafe.Pointer(&shortBigHighX[l>>shortBigLowBits|(h&1)<<(64-shortBigLowBits)]),
+	}
+}
+
+// shortOpOf is shortOp where a machine has it, a 64-bit one's: on another
+// it reports false, for bigOp.
+func shortOpOf(op bytecode.Op, a, b Value) (Value, bool) {
+	if bits.UintSize != 64 {
+		return Undefined, false
+	}
+	return shortOp(op, a, b)
+}
+
+// shortBitsOf is shortBits where a machine has it, a 64-bit one's, and
+// shortBitwise's int64s on another.
+func shortBitsOf(op bytecode.Op, a, b Value) (Value, bool) {
+	if bits.UintSize != 64 {
+		return shortBitwise(op, a, b)
+	}
+	return shortBits(op, a, b)
 }
 
 // bigTwoWords is the BigInt of sign neg and magnitude hi*2^64+lo, hi not

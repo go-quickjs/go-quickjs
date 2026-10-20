@@ -5106,3 +5106,37 @@ func TestAwaitOrdering(t *testing.T) {
 		`log.join("|")`,
 		`a1 start|a2 start|g start|then 1|a1 after 1|a2 caught boom|thenable|microtask|then 2|a1 after 2|done a2|a3 after thenable|g next {"value":1,"done":false}|then 3|done a1|a3 rejected TypeError|g next {"value":2,"done":false}|g await 3|g caught yrej|g next {"value":"after","done":false}|g finally|g next {"done":true}|g start|g finally|g return {"value":"ret","done":true}|g start|g caught rret|for await 6`)
 }
+
+// TestBigIntShortOperators pins the operators of two BigInts held in their
+// Values, which the tree tier makes itself where both are in the int64
+// range (arithSlow, bitwiseSlow, compareSlow): +, -, *, /, %, &, |, ^, the
+// comparisons and the shifts, about zero, the int64 range's edges, 2^64's
+// and past them, shifts by -65 to 65. The answers' count, length and hash
+// are Node's.
+func TestBigIntShortOperators(t *testing.T) {
+	checkEval(t, `(function () {
+  var M = 1n << 63n, N = 1n << 64n;
+  var xs = [0n, 1n, -1n, 2n, -2n, 7n, -7n, 1n << 31n, (1n << 53n) + 1n, 1n << 62n, -(1n << 62n), M - 1n, -M + 1n, -M,
+    3037000499n, 3037000500n, -3037000500n, M, N - 1n, -N + 1n, N, -N - 3n, 1n << 70n];
+  var ss = [-65n, -64n, -63n, -62n, -1n, 0n, 1n, 2n, 31n, 32n, 62n, 63n, 64n, 65n];
+  function ops(xs) {
+    var out = [];
+    for (var i = 0; i < xs.length; i++)
+      for (var j = 0; j < xs.length; j++) {
+        var x = xs[i], y = xs[j];
+        out.push(x + y, x - y, x * y, x & y, x | y, x ^ y, x < y, x <= y, x > y, x >= y);
+        if (y !== 0n) out.push(x / y, x % y);
+      }
+    for (var i = 0; i < xs.length; i++)
+      for (var j = 0; j < ss.length; j++) {
+        var x = xs[i], s = ss[j];
+        out.push(x << s, x >> s);
+      }
+    return out;
+  }
+  var a = ops(xs).join(","), b = ops(xs).join(",");
+  var h = 0;
+  for (var i = 0; i < a.length; i++) h = (h * 31 + a.charCodeAt(i)) | 0;
+  return (a === b) + " " + a.split(",").length + " " + a.length + " " + h;
+})()`, "true 6946 80737 -1328165526")
+}

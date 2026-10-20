@@ -1599,8 +1599,55 @@ func toInt32(f float64) int32 {
 	return jsnum.ToInt32(f)
 }
 
-// bitwiseSlow is a bitwise operator on what is not two numbers.
+// bitwiseSlow is a bitwise operator on what is not two numbers: as
+// arithSlow, the operator of two BigInts in the int64 range here, in a
+// function that calls nothing on the way, and the rest bitwiseOther's.
 func (c *tctx) bitwiseSlow(op bytecode.Op, a, b Value, pc int) Value {
+	if a.isInt64Big() && b.isInt64Big() {
+		switch x, y := a.int64Big(), b.int64Big(); op {
+		case bytecode.OpBitAnd:
+			return shortBig(x & y)
+		case bytecode.OpBitOr:
+			return shortBig(x | y)
+		case bytecode.OpBitXor:
+			return shortBig(x ^ y)
+		case bytecode.OpShl:
+			if uint64(y) < 63 {
+				if s := x << y; s>>y == x {
+					return shortBig(s)
+				}
+			}
+		case bytecode.OpShr:
+			if uint64(y) < 64 {
+				return shortBig(x >> y)
+			}
+		}
+	}
+	if a.isHeapBig() || b.isHeapBig() {
+		if a.IsBigInt() && b.IsBigInt() && op != bytecode.OpUShr {
+			// One on the heap: bigBits's, without bitwiseOther's call or
+			// bitwise's on the way.
+			c.at(pc)
+			v, err := c.r.bigBits(op, a, b)
+			if err != nil {
+				c.throw(err)
+			}
+			return v
+		}
+	}
+	return c.bitwiseOther(op, a, b, pc)
+}
+
+// bitwiseOther is bitwiseSlow for what is not an operator of two BigInts
+// in the int64 range it makes.
+func (c *tctx) bitwiseOther(op bytecode.Op, a, b Value, pc int) Value {
+	if a.isShortBig() && b.isShortBig() {
+		// Two BigInts held in their Values: the operator on their words
+		// here, without bitwise's and bigBits's questions on the way.
+		if v, ok := shortBitsOf(op, a, b); ok {
+			return v
+		}
+	}
 	c.at(pc)
 	v, err := c.r.bitwise(op, a, b)
 	if err != nil {
@@ -1719,14 +1766,90 @@ func bitwiseImmNode(op bytecode.Op, x tval, k int32, pc int) tval {
 	}
 }
 
-// arithSlow is an arithmetic operator on what is not two numbers.
+// arithSlow is an arithmetic operator on what is not two numbers. A sum,
+// a difference, a product, a quotient or a remainder of two BigInts in the
+// int64 range is made here, by a function that calls nothing on the way, so that it keeps its
+// operands in registers; the rest is arithOther's.
 func (c *tctx) arithSlow(op bytecode.Op, a, b Value, pc int) Value {
+	if a.isInt64Big() && b.isInt64Big() {
+		switch x, y := a.int64Big(), b.int64Big(); op {
+		case bytecode.OpAdd:
+			if s := x + y; (s^x)&(s^y) >= 0 {
+				if jitBuilt {
+					treeBigInt(c, pc, false)
+				}
+				return shortBig(s)
+			}
+		case bytecode.OpSub:
+			if s := x - y; (x^y)&(s^x) >= 0 {
+				if jitBuilt {
+					treeBigInt(c, pc, false)
+				}
+				return shortBig(s)
+			}
+		case bytecode.OpMul:
+			if p, ok := mulInt64(x, y); ok {
+				if jitBuilt {
+					treeBigInt(c, pc, false)
+				}
+				return shortBig(p)
+			}
+		case bytecode.OpDiv:
+			// Go's division truncates toward zero, as a BigInt's does; only
+			// the most negative value over -1 leaves the range.
+			if y != 0 && (x != math.MinInt64 || y != -1) {
+				if jitBuilt {
+					treeBigInt(c, pc, false)
+				}
+				return shortBig(x / y)
+			}
+		case bytecode.OpMod:
+			// The remainder takes the dividend's sign in both, and Go gives 0
+			// for the most negative value over -1.
+			if y != 0 {
+				if jitBuilt {
+					treeBigInt(c, pc, false)
+				}
+				return shortBig(x % y)
+			}
+		}
+	}
+	if a.isHeapBig() || b.isHeapBig() {
+		if a.IsBigInt() && b.IsBigInt() {
+			// One on the heap: bigOp's, without arithOther's call on the
+			// way.
+			c.at(pc)
+			if jitBuilt {
+				treeBigInt(c, pc, true)
+			}
+			v, err := c.r.bigOp(op, a, b)
+			if err != nil {
+				c.throw(err)
+			}
+			return v
+		}
+	}
+	return c.arithOther(op, a, b, pc)
+}
+
+// arithOther is arithSlow for what it does not make itself.
+func (c *tctx) arithOther(op bytecode.Op, a, b Value, pc int) Value {
 	if a.isShortBig() && b.isShortBig() {
 		// What add and arith would answer first, without them: a loop over
 		// BigInts then runs two functions fewer.
-		if v, ok := shortArith(op, a, b); ok {
+		if a.isInt64Big() && b.isInt64Big() {
+			if v, ok := shortArith(op, a, b); ok {
+				if jitBuilt {
+					treeBigInt(c, pc, false)
+				}
+				return v
+			}
+		}
+		if v, ok := shortOpOf(op, a, b); ok {
+			// One past the int64 range, or a result: what bigOp would
+			// answer first.
 			if jitBuilt {
-				treeBigInt(c, pc, false)
+				treeBigInt(c, pc, true)
 			}
 			return v
 		}
@@ -1826,6 +1949,26 @@ func compareNode(op bytecode.Op, x, y tval, pc int) func(c *tctx) bool {
 }
 
 func (c *tctx) compareSlow(op bytecode.Op, a, b Value, pc int) bool {
+	if a.isInt64Big() && b.isInt64Big() {
+		// Two BigInts in the int64 range, as int64s are, without compare's
+		// questions or its call.
+		switch x, y := a.int64Big(), b.int64Big(); op {
+		case bytecode.OpLt:
+			return x < y
+		case bytecode.OpLe:
+			return x <= y
+		case bytecode.OpGt:
+			return x > y
+		case bytecode.OpGe:
+			return x >= y
+		}
+	}
+	return c.compareOther(op, a, b, pc)
+}
+
+// compareOther is compareSlow for what is not two BigInts in the int64
+// range.
+func (c *tctx) compareOther(op bytecode.Op, a, b Value, pc int) bool {
 	c.at(pc)
 	res, err := c.r.compare(a, b)
 	if err != nil {
