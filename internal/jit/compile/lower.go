@@ -308,7 +308,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			// otherwise; the old one does neither.
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
-		str := in.Op == bytecode.OpPushConst && fn.Constants[in.A].Kind == bytecode.ConstString
+		str := in.Op == bytecode.OpPushConst && (fn.Constants[in.A].Kind == bytecode.ConstString || fn.Constants[in.A].Kind == bytecode.ConstBigInt)
 		if str && !m.ssa {
 			// The new pipeline has Go push a string constant (a host
 			// exit), which a function's cold paths -- a message it throws
@@ -630,6 +630,10 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 				// the VM keeps it in, where the VM gives one.
 				p.Code[pc] = ir.Instruction{Op: ir.StringConst, Dest: p.Locals + p.Maps[pc].Depth, Key: b.A}
 			}
+			if b := fn.Code[pc]; in.Op == ir.Host && b.Op == bytecode.OpPushConst && fn.Constants[b.A].Kind == bytecode.ConstBigInt && p.Maps[pc].Depth >= 0 {
+				// A BigInt constant, read as a string's is.
+				p.Code[pc] = ir.Instruction{Op: ir.BigIntConst, Dest: p.Locals + p.Maps[pc].Depth, Key: b.A}
+			}
 			if b := fn.Code[pc]; p.Maps[pc].Depth >= 0 {
 				// Captured bindings read and written in their cells: not
 				// slots read once at an entry, which a native callee's
@@ -839,7 +843,7 @@ func selectNumericProperties(p *ir.Program, cells bool) {
 			read(in.Left, take(in.Dest))
 		case ir.Resolved:
 			read(in.Right, take(in.Dest))
-		case ir.BindingCheck, ir.ObjectLiteral, ir.StringConst, ir.UpvalueRead, ir.Closure:
+		case ir.BindingCheck, ir.ObjectLiteral, ir.StringConst, ir.BigIntConst, ir.UpvalueRead, ir.Closure:
 			take(in.Dest)
 		case ir.FieldDefine:
 			read(in.Left, reference)
@@ -1346,7 +1350,10 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 	case bytecode.OpNop, bytecode.OpEndParams, bytecode.OpClearLocal:
 		return effect{}, nil
 	case bytecode.OpPushConst:
-		if uint64(in.A) >= uint64(len(fn.Constants)) || fn.Constants[in.A].Kind != bytecode.ConstNumber && fn.Constants[in.A].Kind != bytecode.ConstString {
+		if uint64(in.A) >= uint64(len(fn.Constants)) {
+			return bad("non-number or invalid constant")
+		}
+		if k := fn.Constants[in.A].Kind; k != bytecode.ConstNumber && k != bytecode.ConstString && k != bytecode.ConstBigInt {
 			return bad("non-number or invalid constant")
 		}
 		return effect{delta: 1}, nil
@@ -1843,7 +1850,7 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this, charCode bool
 		return ir.Instruction{Op: ir.ArgumentRead, Left: top, Dest: sp - 1}
 	case bytecode.OpPushConst:
 		if fn.Constants[in.A].Kind != bytecode.ConstNumber {
-			// A string, which Go pushes.
+			// A string or a BigInt, which Go pushes.
 			return ir.Instruction{Op: ir.Host}
 		}
 		return copyTo(sp, ir.Literal(ir.Float(fn.Constants[in.A].Num)))

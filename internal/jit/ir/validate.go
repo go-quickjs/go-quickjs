@@ -78,7 +78,7 @@ func (p *Program) Validate() error {
 			left, right, write = true, true, true
 		case ArgumentRead:
 			left, write = true, true
-		case ObjectLiteral, StringConst, Closure:
+		case ObjectLiteral, StringConst, BigIntConst, Closure:
 			write = true
 		case IterClose:
 			left = true

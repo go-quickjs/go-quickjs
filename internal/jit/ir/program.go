@@ -240,6 +240,10 @@ const (
 	// no aliased parameter, as V8 eliminates the arguments object, and
 	// leaves any other to Go, which makes the object.
 	ArgumentRead
+	// BigIntConst is push_const of a BigInt, constant Key, at Dest: read
+	// natively from a cell the VM keeps it in (ssa.BigIntConstFeedback),
+	// as StringConst reads a string, Go's otherwise.
+	BigIntConst
 )
 
 // RethrowNormal is the kind a normal completion's record has (Rethrow).

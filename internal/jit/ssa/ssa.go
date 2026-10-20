@@ -419,6 +419,10 @@ const (
 	// OpCmpI64 compares two BigInts as Aux, an ir comparison operator,
 	// says.
 	OpCmpI64 // i64, i64 -> bool
+	// OpConstI64 is a BigInt constant in the int64 range, Const.Bits: the
+	// unboxing of a constant's load from its cell (ir.BigIntConst), whose
+	// Aux 1 says it is one, its value in Const.
+	OpConstI64 // -> i64
 )
 
 var opNames = [...]string{
@@ -437,7 +441,7 @@ var opNames = [...]string{
 	OpMaxF64: "maxf", OpMinF64: "minf", OpFloorF64: "floorf", OpCeilF64: "ceilf", OpTruncF64: "truncf", OpRoundF64: "roundf",
 	OpSignF64: "signf", OpFroundF64: "froundf", OpMathCall: "mathcall", OpRandomF64: "randomf", OpAccessorIs: "accessoris",
 	OpCellNone: "cellnone",
-	OpBigUnbox: "bigunbox", OpBigBox: "bigbox", OpBigCell: "bigcell", OpAddI64: "addi64", OpSubI64: "subi64", OpMulI64: "muli64", OpCmpI64: "cmpi64",
+	OpBigUnbox: "bigunbox", OpBigBox: "bigbox", OpBigCell: "bigcell", OpAddI64: "addi64", OpSubI64: "subi64", OpMulI64: "muli64", OpCmpI64: "cmpi64", OpConstI64: "consti64",
 }
 
 func (o Op) String() string {

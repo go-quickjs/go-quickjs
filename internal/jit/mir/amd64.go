@@ -5823,6 +5823,10 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.bigUnbox(v, c.guardFor(v))
 	case ssa.OpBigBox:
 		c.bigBox(v)
+	case ssa.OpConstI64:
+		d := c.gdst(v)
+		c.movImm(d, v.Const.Bits)
+		c.setG(v, d)
 	case ssa.OpBigCell:
 		c.a.MovRR(scratchA, regCtx)
 		c.a.OpImm(amd64.Add, scratchA, abi.OffKeep+int32(v.Args[0].Index)*int32(c.enc.ValueSize), true)

@@ -1221,6 +1221,27 @@ func (fb *jitFeedback) StringCell(pc int) (uintptr, bool) {
 	return uintptr(unsafe.Pointer(cell)), true
 }
 
+// BigIntCell is ssa.BigIntConstFeedback's: the cell a copy of the BigInt
+// constant pushed at pc is in, as StringCell's, and its value if it is in
+// the int64 range.
+func (fb *jitFeedback) BigIntCell(pc int) (uintptr, int64, bool, bool) {
+	if fb.cl == nil || pc >= len(fb.fn.Code) {
+		return 0, 0, false, false
+	}
+	in := fb.fn.Code[pc]
+	if in.Op != bytecode.OpPushConst || int(in.A) >= len(fb.cl.consts) || !fb.cl.consts[in.A].IsBigInt() {
+		return 0, 0, false, false
+	}
+	cell := new(Value)
+	*cell = fb.cl.consts[in.A]
+	k := fb.keep()
+	k.cells = append(k.cells, cell)
+	if cell.isShortBig() {
+		return uintptr(unsafe.Pointer(cell)), cell.shortBigInt(), true, true
+	}
+	return uintptr(unsafe.Pointer(cell)), 0, false, true
+}
+
 // Literal is ssa.LiteralFeedback's: the object literal at pc, made natively
 // from its pool, in the function's own code.
 func (fb *jitFeedback) Literal(pc int) (ssa.LiteralSite, bool) {
@@ -2964,16 +2985,22 @@ func jitHostCall(ctx *abi.Context) bool {
 	switch ssa.GoOp(ctx.GoOp & 0xff) {
 	case ssa.GoAdd:
 		a, b := jitGoArg(ctx, 0), jitGoArg(ctx, 1)
-		if a.IsBigInt() && b.IsBigInt() {
-			return r.jitGoBigAdd(ctx, a, b)
-		}
 		// Primitives, and nothing that throws: an object's conversion may
 		// call anything, and making an error may too (a getter of
 		// Error.stackTraceLimit) -- a symbol's, a BigInt's with a number,
 		// a string too long, a memory limit reached. Go makes those after
 		// the code leaves.
-		if !jitPlainOperand(a) || !jitPlainOperand(b) || r.meter != nil ||
-			a.IsString() && b.IsString() && a.String().length+b.String().length > maxStringLength-64 {
+		if a.IsBigInt() || b.IsBigInt() {
+			if a.IsBigInt() && b.IsBigInt() {
+				return r.jitGoBigAdd(ctx, a, b)
+			}
+			if !jitAddOperand(a, b) || !jitAddOperand(b, a) {
+				return false
+			}
+		} else if !jitPlainOperand(a) || !jitPlainOperand(b) {
+			return false
+		}
+		if r.meter != nil || a.IsString() && b.IsString() && a.String().length+b.String().length > maxStringLength-64 {
 			return false
 		}
 		v, err := r.add(a, b)
@@ -3026,7 +3053,14 @@ func jitHostCall(ctx *abi.Context) bool {
 			// A loop's sum of BigInts, which it takes for a string's.
 			return r.jitGoBigAdd(ctx, a, b)
 		}
-		if !jitPlainOperand(a) || !jitPlainOperand(b) || r.meter != nil {
+		if a.IsBigInt() || b.IsBigInt() {
+			if !jitAddOperand(a, b) || !jitAddOperand(b, a) {
+				return false
+			}
+		} else if !jitPlainOperand(a) || !jitPlainOperand(b) {
+			return false
+		}
+		if r.meter != nil {
 			return false
 		}
 		var v Value
@@ -3063,7 +3097,13 @@ func jitHostCall(ctx *abi.Context) bool {
 		total := 0
 		for i := range n {
 			p := jitGoArg(ctx, i)
-			if !jitPlainOperand(p) {
+			if p.IsBigInt() {
+				// Every part is joined to a string (the lowering's
+				// stringConcats), a BigInt too.
+				if !jitConcatOperand(p) {
+					return false
+				}
+			} else if !jitPlainOperand(p) {
 				return false
 			}
 			if !p.IsString() && !p.IsNumber() {
@@ -4359,6 +4399,28 @@ func (r *Runtime) jitBigOp(op bytecode.Op, a, b Value) (Value, error) {
 		return v, err
 	}
 	return r.bigArith(op, r.bigArg(a, 0), r.bigArg(b, 1))
+}
+
+// jitConcatOperand reports whether v, joined to a string, is converted
+// without running anything or throwing: a primitive jitPlainOperand takes,
+// or a BigInt whose digits are far fewer than a string may have.
+func jitConcatOperand(v Value) bool {
+	return jitPlainOperand(v) || v.IsBigInt() && jitBigWords(v) <= jitConcatBigWords
+}
+
+// jitConcatBigWords bounds the words of a BigInt joined to a string from
+// native code: some 300,000 digits.
+const jitConcatBigWords = 1 << 14
+
+// jitAddOperand reports whether v, added to other, is converted without
+// running anything or throwing (jitPlainOperand): a BigInt too, added to a
+// string -- with a number it throws -- its digits and the string's well
+// within a string's length.
+func jitAddOperand(v, other Value) bool {
+	if jitPlainOperand(v) {
+		return true
+	}
+	return other.IsString() && jitConcatOperand(v) && other.String().length < maxStringLength-64-jitConcatBigWords*20
 }
 
 // jitComparable reports whether a relational comparison converts v
@@ -7376,6 +7438,29 @@ func (r *Runtime) jitBigIntSeen(f *frame, e *jitEntry, site int) bool {
 	return true
 }
 
+// jitBigIntExit is jitBigIntSeen at a host exit of e's code at site, for
+// the operator there with no native form for BigInts, generic, that met
+// two: what it asks first, at any exit, is the instruction's.
+func (r *Runtime) jitBigIntExit(f *frame, e *jitEntry, site int) {
+	p := e.ssaProg
+	if p == nil || site >= len(p.Code) {
+		return
+	}
+	in := p.Code[site]
+	if in.Op != ir.Binary || in.Left.Slot < 0 || in.Right.Slot < 0 {
+		return
+	}
+	switch in.Operator {
+	case ir.Sub, ir.Mul, ir.Div, ir.Mod, ir.BitAnd, ir.BitOr, ir.BitXor, ir.Shl, ir.Shr:
+	default:
+		return
+	}
+	if !r.jitOperand(f, p, in.Left).IsBigInt() || !r.jitOperand(f, p, in.Right).IsBigInt() || !slices.Contains(e.failed, int32(site)) {
+		return
+	}
+	r.jitBigIntSeen(f, e, site)
+}
+
 func (fb *jitFeedback) Generic(pc int) bool {
 	if fb.e != nil && slices.Contains(fb.e.failed, int32(pc)) {
 		return true
@@ -8875,10 +8960,10 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			exitPC := int(ctx.ExitPC)
 			in := f.cl.fn.Code[exitPC]
 			f.pc = uint32(exitPC)
-			if site := int32(int64(ctx.ExitSite)); site >= 0 && slices.Contains(e.failed, site) {
+			if site := int(int64(ctx.ExitSite)); site >= 0 {
 				// A generic operator that met BigInts, which Go makes from
 				// native code once compiled again (ssa.GoArith).
-				r.jitBigIntSeen(f, e, int(site))
+				r.jitBigIntExit(f, e, site)
 			}
 			if p := s.goPending; p.set {
 				// A call Go made from native code (jitGoCall), its result or

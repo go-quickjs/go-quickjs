@@ -219,6 +219,10 @@ func simplify(f *Func, v *Value) *Value {
 		if a := arg(0); a.Op == OpKept && a.Args[1].Op == OpBigBox {
 			return a.Args[1].Args[0]
 		}
+		// A constant in the int64 range (ir.BigIntConst): its value.
+		if a := arg(0); a.Op == OpLoadCell && a.Aux == 1 && a.Args[0].Op == OpConstCell {
+			v.Op, v.Const, v.Args, v.State = OpConstI64, a.Const, nil, nil
+		}
 	case OpCheckInit:
 		a := arg(0)
 		if a.Op == OpBoxF64 || a.Op == OpBoxBool || a.Op == OpConst && a.Const.Kind != ir.Uninitialized {

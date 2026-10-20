@@ -624,6 +624,14 @@ type ConstantFeedback interface {
 	StringCell(pc int) (uintptr, bool)
 }
 
+// BigIntConstFeedback is Feedback that keeps BigInt constants in cells, as
+// ConstantFeedback keeps strings: the address of the cell the constant
+// pushed at pc is in, and, for one in the int64 range, its value, which
+// the code's arithmetic takes as a constant (OpConstI64).
+type BigIntConstFeedback interface {
+	BigIntCell(pc int) (cell uintptr, value int64, short, ok bool)
+}
+
 // LiteralSite is an object literal's site: the address of the
 // abi.ObjectPool its objects come from, made as the VM makes the literal's,
 // which the VM keeps alive.
@@ -1617,6 +1625,13 @@ func (b *builder) hostOf(pc int) bool {
 	case ir.StringConst:
 		_, ok := b.stringCell(pc)
 		return !ok
+	case ir.BigIntConst:
+		f, ok := b.fb.(BigIntConstFeedback)
+		if !ok {
+			return true
+		}
+		_, _, _, ok = f.BigIntCell(pc)
+		return !ok
 	case ir.UpvalueRead, ir.UpvalueWrite:
 		// The function's own captured bindings, which its context has;
 		// an inlined callee's read where its closure's cells are known
@@ -2371,17 +2386,22 @@ func (b *builder) bigIntAt(pc int, op ir.Operator) bool {
 	return ok && b.cur == b.root && !b.generic(pc) && fb.BigInt(pc)
 }
 
-// goArithAt reports whether the root's operator op at pc, generic, met
-// BigInts (BigIntFeedback): Go makes it from native code (GoArith). An
-// addition is GoAdd's, a comparison GoCompare's, at any generic site.
+// goArithAt reports whether the root's operator op at pc met BigInts
+// (BigIntFeedback) and is generic, or has no native form for BigInts in
+// the int64 range (bigBinary): Go makes it from native code (GoArith). A
+// generic addition is GoAdd's, a comparison GoCompare's.
 func (b *builder) goArithAt(pc int, op ir.Operator) bool {
 	switch op {
-	case ir.Sub, ir.Mul, ir.Div, ir.Mod, ir.BitAnd, ir.BitOr, ir.BitXor, ir.Shl, ir.Shr:
+	case ir.Sub, ir.Mul:
+		if !b.generic(pc) {
+			return false
+		}
+	case ir.Div, ir.Mod, ir.BitAnd, ir.BitOr, ir.BitXor, ir.Shl, ir.Shr:
 	default:
 		return false
 	}
 	fb, ok := b.fb.(BigIntFeedback)
-	return ok && b.cur == b.root && b.generic(pc) && fb.BigInt(pc) && b.goCalls()
+	return ok && b.cur == b.root && fb.BigInt(pc) && b.goCalls()
 }
 
 // goArith makes in, at a site goArithAt names, by a call of Go from native
@@ -3085,7 +3105,7 @@ func (b *builder) plan() error {
 			// string was (compile's typeTests): no entry after it.
 		case ir.ArrayWrite, ir.PropertyRead, ir.PropertyWrite, ir.ReferenceRead, ir.BindingRead,
 			ir.StringMethod, ir.StringCode, ir.BindingWrite, ir.BindingCheck, ir.Resolved, ir.ObjectLiteral, ir.FieldDefine,
-			ir.ArrayLiteral, ir.StringConst, ir.UpvalueWrite, ir.StringAdd, ir.StringConcat, ir.Closure, ir.CloseUpvalues, ir.HasProperty,
+			ir.ArrayLiteral, ir.StringConst, ir.BigIntConst, ir.UpvalueWrite, ir.StringAdd, ir.StringConcat, ir.Closure, ir.CloseUpvalues, ir.HasProperty,
 			ir.DeleteProperty, ir.ArgumentRead:
 			// What native code does not do exits to Go, which resumes after
 			// it. A fixed global's check only deoptimizes: the binding can
@@ -3194,7 +3214,7 @@ func (b *builder) plan() error {
 			b.edge(blk, b.blockAt[last.Target])
 			b.edge(blk, b.blockAt[end+1])
 		case ir.Host, ir.Call, ir.PropertyRead, ir.PropertyWrite, ir.ReferenceRead, ir.BindingRead, ir.BindingWrite, ir.BindingCheck,
-			ir.ObjectLiteral, ir.FieldDefine, ir.ArrayLiteral, ir.StringConst, ir.UpvalueRead, ir.UpvalueWrite, ir.StringAdd, ir.StringConcat, ir.Rethrow,
+			ir.ObjectLiteral, ir.FieldDefine, ir.ArrayLiteral, ir.StringConst, ir.BigIntConst, ir.UpvalueRead, ir.UpvalueWrite, ir.StringAdd, ir.StringConcat, ir.Rethrow,
 			ir.Closure, ir.CloseUpvalues, ir.HasProperty, ir.DeleteProperty:
 			if fr := b.inlined[end]; fr != nil {
 				// Into the callee, whose returns go to the block after it.
@@ -4603,6 +4623,28 @@ func (b *builder) instruction(blk *Block, pc int) {
 		c.Const = ir.Value{Bits: uint64(cell)}
 		v := f.newValue(blk, OpLoadCell, Tagged, c)
 		v.Shadow = c
+		b.assign(in.Dest, blk, v)
+	case ir.BigIntConst:
+		var cell uintptr
+		var value int64
+		short, ok := false, false
+		if fb, is := b.fb.(BigIntConstFeedback); is {
+			cell, value, short, ok = fb.BigIntCell(pc)
+		}
+		if !ok || cell == 0 {
+			blk.ExitKind = ir.HostExit
+			blk.State = state()
+			blk.State.addUse()
+			break
+		}
+		c := f.newValue(blk, OpConstCell, Source)
+		c.Const = ir.Value{Bits: uint64(cell)}
+		v := f.newValue(blk, OpLoadCell, Tagged, c)
+		v.Shadow = c
+		if short {
+			// Its value, which an unboxing takes (OpConstI64).
+			v.Aux, v.Const = 1, ir.Value{Bits: uint64(value)}
+		}
 		b.assign(in.Dest, blk, v)
 	case ir.FieldDefine:
 		add, ok := b.define(pc)
