@@ -530,6 +530,60 @@ func (b *builder) indexOfCall(blk *Block, pc int, fn uintptr, kind int, guard fu
 	b.write(base, blk, r)
 }
 
+// BigStringFeedback is Feedback that knows a method call at a PC, of no
+// argument or one, calls the realm's BigInt.prototype.toString, at the
+// address it gives, on a BigInt: native code makes it a call of Go of its
+// own (bigStringCall), as V8's code calls its BigInt-to-string builtin.
+type BigStringFeedback interface {
+	BigString(pc int) (fn uintptr, ok bool)
+}
+
+// bigStringAt is BigInt.prototype.toString if the method call at pc of the
+// root, one Go makes (a GoCall site) of no argument or one, calls it
+// (BigStringFeedback).
+func (b *builder) bigStringAt(pc int) (uintptr, bool) {
+	if b.fb == nil || b.cur != b.root || b.p.Code[pc].Op != ir.Host || pc+1 >= len(b.p.Code) || !reachable(b.p, pc+1) || b.fb.Generic(pc) || !b.goCalls() {
+		return 0, false
+	}
+	calls := b.calls[pc]
+	if len(calls) != 1 || calls[0].Go != GoCall || !calls[0].Method || calls[0].Argc > 1 {
+		return 0, false
+	}
+	argc := calls[0].Argc
+	if b.p.Maps[pc].Depth < argc+2 || b.p.Maps[pc+1].Depth != b.p.Maps[pc].Depth-argc-1 {
+		return 0, false
+	}
+	f, ok := b.fb.(BigStringFeedback)
+	if !ok {
+		return 0, false
+	}
+	return f.BigString(pc)
+}
+
+// bigStringCall makes x.toString() or x.toString(radix), the call at pc of
+// the function at fn: checked to call it, a call of Go (GoBigString) whose
+// result is the call's, kept where the call's would be.
+func (b *builder) bigStringCall(blk *Block, pc int, fn uintptr, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+	f := b.f
+	argc := b.calls[pc][0].Argc
+	sp := b.p.Locals + b.p.Maps[pc].Depth
+	base := sp - argc - 2
+	recv, callee := b.read(base, blk), b.read(base+1, blk)
+	object := guard(OpObjectOf, Ptr, ir.HostExit, callee)
+	same := guard(OpSameObject, None, ir.HostExit, object)
+	same.Const = ir.Value{Bits: uint64(fn)}
+	args := []*Value{recv}
+	for k := range argc {
+		args = append(args, b.read(base+2+k, blk))
+	}
+	call := guard(OpCall, Tagged, ir.HostExit, args...)
+	f.cache(call).Calls, call.Index = []*CallSite{{Go: GoBigString, Argc: argc, ThisSlot: -1}}, b.callKeeps[pc]
+	kept := f.newValue(blk, OpCallCell, Source, call)
+	r := f.newValue(blk, OpKept, Tagged, kept, call)
+	r.Shadow = kept
+	b.write(base, blk, r)
+}
+
 // ParseIntFeedback is Feedback that knows a plain call at a PC of one
 // argument calls the realm's parseInt, at the address it gives, with a
 // number: native code makes it parseInt of a number, as V8's JSCallReducer
@@ -1158,6 +1212,12 @@ type GoOp uint8
 // one where nothing up its chain intercepts it, by an index or a name; an
 // array's element as GoElemStore stores one -- and refuses the rest, which
 // leaves for Go to store after an exit, native code going on after it.
+//
+// GoBigString is x.toString() or x.toString(radix) of a BigInt, the realm's
+// BigInt.prototype.toString called (BigStringFeedback): Go writes the
+// string to the call's keep cell -- of a radix undefined, or an integer
+// from 2 to 36 -- and refuses any other receiver or radix, which leave the
+// call for Go to make after an exit. Argc is the call's arguments.
 const (
 	GoAdd GoOp = 1 + iota
 	GoRefill
@@ -1189,6 +1249,7 @@ const (
 	GoIndexOf
 	GoArith
 	GoKeyedWrite
+	GoBigString
 )
 
 // IndexOfFrom is GoIndexOf's Argc's low bit, where the call gives a
@@ -4818,6 +4879,10 @@ func (b *builder) instruction(blk *Block, pc int) {
 		}
 		if fn, kind, ok := b.indexOfAt(pc); ok && in.Op == ir.Host {
 			b.indexOfCall(blk, pc, fn, kind, guard)
+			break
+		}
+		if fn, ok := b.bigStringAt(pc); ok && in.Op == ir.Host {
+			b.bigStringCall(blk, pc, fn, guard)
 			break
 		}
 		if fn, kind, ok := b.substring(pc); ok && in.Op == ir.Host {

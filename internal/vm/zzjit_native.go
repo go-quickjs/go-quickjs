@@ -171,6 +171,9 @@ type jitRealmFields struct {
 	// jitParseInt is the global parseInt, Number.parseInt too, whose call
 	// of a number native code makes itself (ssa.ParseIntFeedback).
 	jitParseInt *Object
+	// jitBigToString is BigInt.prototype.toString, whose call on a BigInt
+	// native code makes by a call of Go of its own (ssa.GoBigString).
+	jitBigToString *Object
 	// jitSearches are String.prototype's and Array.prototype's indexOf,
 	// lastIndexOf and includes, by their kind (jitSearchNames), whose calls
 	// on strings and arrays native code makes by a call of Go of their own
@@ -243,6 +246,10 @@ func (r *Runtime) recordJITSubstrings() {
 		if m := r.proto.array.getOwn(r.atoms.intern(name)); m.ok() && m.value().IsObject() {
 			r.jitSearches[jitSearchArrays+k] = m.value().Object()
 		}
+	}
+	r.jitBigToString = nil
+	if m := r.proto.bigint.getOwn(r.atoms.intern("toString")); m.ok() && m.value().IsObject() {
+		r.jitBigToString = m.value().Object()
 	}
 	r.jitParseInt = nil
 	if m := r.global.getOwn(r.atoms.intern("parseInt")); m.ok() && m.value().IsObject() {

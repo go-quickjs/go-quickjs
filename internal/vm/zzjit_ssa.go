@@ -2500,7 +2500,7 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 			// Another object of a function the call checks by its code.
 			continue
 		}
-		if in.cl == nil && (in.charCode || in.fromChar || in.substring || in.forEach || in.parseInt || in.indexOf) {
+		if in.cl == nil && (in.charCode || in.fromChar || in.substring || in.forEach || in.parseInt || in.indexOf || in.bigString) {
 			// String.prototype.charCodeAt, String.fromCharCode, a substring,
 			// a forEach or parseInt, which the code makes itself (CharCode,
 			// FromCharCode, Substring, ForEach, ParseInt) where it can, and
@@ -2786,8 +2786,9 @@ type jitInline struct {
 	proto *Object
 	// parseInt marks a plain call of the realm's parseInt with a number
 	// (jitParseInts), indexOf a string's or an array's call of one of
-	// jitSearches (jitIndexOfs).
-	parseInt, indexOf bool
+	// jitSearches (jitIndexOfs), bigString a BigInt's call of
+	// BigInt.prototype.toString (jitBigStrings).
+	parseInt, indexOf, bigString bool
 	// byCode marks a function the call met two objects of, closures its
 	// maker makes anew at each call: called by its code (jitSameCode).
 	byCode bool
@@ -2952,6 +2953,14 @@ func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 			// s.indexOf(t), a.includes(x) or another search, made by a call
 			// of Go of its own (jitFeedback.IndexOf).
 			e.nativeCalls = append(e.nativeCalls, jitInline{pc: int32(pc), obj: o, indexOf: true})
+			e.callSites[pc] = jitCallNative
+			e.inlinePending = true
+			return
+		}
+		if o := r.jitBigStrings(sp, in); o != nil {
+			// x.toString() of a BigInt, made by a call of Go of its own
+			// (jitFeedback.BigString).
+			e.nativeCalls = append(e.nativeCalls, jitInline{pc: int32(pc), obj: o, bigString: true})
 			e.callSites[pc] = jitCallNative
 			e.inlinePending = true
 			return
@@ -3322,6 +3331,18 @@ func jitHostCall(ctx *abi.Context) bool {
 		}
 		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = Undefined
 		return true
+	case ssa.GoBigString:
+		// x.toString() of a BigInt, its radix if the call gives one.
+		var argv [1]Value
+		args := argv[:0]
+		if ctx.GoOp>>abi.GoOpIndexShift != 0 {
+			args, argv[0] = argv[:1], jitGoArg(ctx, 1)
+		}
+		v, ok := jitBigString(jitGoArg(ctx, 0), args)
+		if ok {
+			*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
+		}
+		return ok
 	case ssa.GoIndex:
 		v, ok := r.jitKeyedRead(jitGoArg(ctx, 0), jitGoArg(ctx, 1))
 		if ok {
@@ -6901,6 +6922,58 @@ func (r *Runtime) jitParseInts(sp int, in bytecode.Instr) *Object {
 		return nil
 	}
 	return r.jitParseInt
+}
+
+// jitBigStrings is BigInt.prototype.toString, the realm's own, if a method
+// call at the top of the stack, of no argument or one, calls it on a
+// BigInt; or nil.
+func (r *Runtime) jitBigStrings(sp int, in bytecode.Instr) *Object {
+	argc := int(in.A)
+	if jitCallOp(in.Op) != bytecode.OpCallMethod || argc > 1 || r.jitBigToString == nil {
+		return nil
+	}
+	if callee := r.stack[sp-argc-1]; !callee.IsObject() || callee.Object() != r.jitBigToString || !r.stack[sp-argc-2].IsBigInt() {
+		return nil
+	}
+	return r.jitBigToString
+}
+
+// BigString is ssa.BigStringFeedback's: BigInt.prototype.toString, the
+// realm's own, which the method call at pc has made on a BigInt
+// (jitBigStrings).
+func (fb *jitFeedback) BigString(pc int) (uintptr, bool) {
+	e := fb.e
+	if e == nil || fb.root != nil || pc >= len(fb.fn.Code) || jitCallOp(fb.fn.Code[pc].Op) != bytecode.OpCallMethod {
+		return 0, false
+	}
+	for _, x := range jitTargets(e) {
+		if int(x.pc) == pc && x.bigString && x.obj != nil && x.obj == fb.r.jitBigToString {
+			return uintptr(unsafe.Pointer(x.obj)), true
+		}
+	}
+	return 0, false
+}
+
+// jitBigString is GoBigString's string of recv, a BigInt, in the radix the
+// call gives, if it gives one: BigInt.prototype.toString's, where it
+// converts with nothing run and nothing thrown -- no radix, undefined, or
+// a number that is an integer from 2 to 36. It refuses the rest.
+func jitBigString(recv Value, args []Value) (Value, bool) {
+	if !recv.IsBigInt() {
+		return Undefined, false
+	}
+	radix := 10
+	if len(args) > 0 && !args[0].IsUndefined() {
+		if !args[0].IsNumber() {
+			return Undefined, false
+		}
+		n := args[0].Number()
+		if n != math.Trunc(n) || n < 2 || n > 36 {
+			return Undefined, false
+		}
+		radix = int(n)
+	}
+	return Str(bigString(recv, radix)), true
 }
 
 // ParseInt is ssa.ParseIntFeedback's: the realm's parseInt, which the call

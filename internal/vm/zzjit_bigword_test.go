@@ -527,3 +527,120 @@ func TestJITBigIntTruth(t *testing.T) {
 		}
 	}
 }
+
+// x.toString() of a BigInt made by a call of Go of its own (ssa.GoBigString),
+// BigInt.prototype.toString checked to be the method called: of every
+// encoding and sign, in radix 10 and those given, undefined among them; a
+// site that meets a number too, whose call checks the function; a radix
+// the method refuses, which Go's call throws for.
+const bigStringSetup = `
+	var x = (1n << 255n) + 12345678901234567890n, out = ""
+	function strings(n, base) {
+		// BigInts' strings, of every encoding and sign, in radix 10 and
+		// those given -- a radix the method refuses, 1, throws.
+		let h = 0
+		for (let i = 0; i < n; i++) {
+			const v = i % 3 == 0 ? x + BigInt(i) : i % 3 == 1 ? -BigInt(i) * 7n : (1n << 64n) - BigInt(i)
+			const s = v.toString()
+			const t = v.toString(base)
+			const u = v.toString(undefined)
+			h = (h * 31 + s.length * 7 + t.charCodeAt(t.length - 1) + u.length) | 0
+			if (i == n - 1) out = s + "," + t + "," + u
+		}
+		return h + ":" + out
+	}
+	function mixed(n) {
+		// A site that meets a number too: its call checks the function.
+		let h = 0
+		for (let i = 0; i < n; i++) {
+			const v = i == n - 2 ? 255 : BigInt(i) * 1000003n
+			h = (h + v.toString(16).length) | 0
+		}
+		return h
+	}
+	function bad(n) {
+		let r = ""
+		try {
+			for (let i = 0; i < n; i++) r = BigInt(i).toString(i == n - 1 ? 1 : 10)
+		} catch (e) {
+			return e.name + r
+		}
+		return r
+	}
+	function all(n) {
+		return [strings(n, 16), strings(n, 2), strings(n, 36), mixed(n), bad(n)].join(" ")
+	}
+`
+
+func TestJITBigIntToString(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	// Each function's last compile, whether it makes a toString by its own
+	// call of Go.
+	own := map[string]bool{}
+	jitSSAOptimized = func(fn *bytecode.Function, f *ssa.Func) {
+		own[fn.Name] = false
+		for _, b := range f.Blocks {
+			for _, v := range b.Values {
+				for _, c := range v.Calls() {
+					own[fn.Name] = own[fn.Name] || c.Go == ssa.GoBigString
+				}
+			}
+		}
+	}
+	defer func() { jitSSAOptimized = nil }()
+	r := New(Config{JIT: true})
+	want := New(Config{})
+	for _, rt := range []*Runtime{want, r} {
+		if _, err := rt.Run(compileForTest(t, bigStringSetup)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Node's answers.
+	answers := map[string]string{
+		"all(300)":  `-410897354:18446744073709551317,fffffffffffffed5,18446744073709551317 81196230:18446744073709551317,1111111111111111111111111111111111111111111111111111111011010101,18446744073709551317 1486612935:18446744073709551317,3w5e11264sgk5,18446744073709551317 2102 RangeError298`,
+		"all(2000)": `1159715328:-13993,-36a9,-13993 76777632:-13993,-11011010101001,-13993 1639384927:-13993,-asp,-13993 15702 RangeError1998`,
+	}
+	srcs := []string{}
+	for range 30 {
+		srcs = append(srcs, "all(300)")
+	}
+	srcs = append(srcs, "all(2000)")
+	for i, src := range srcs {
+		for _, rt := range []*Runtime{r, want} {
+			got, err := rt.Run(compileForTest(t, src))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if g, w := got.String().Go(), answers[src]; g != w {
+				t.Fatalf("JIT %v, round %d: %s = %s, want %s", rt == r, i, src, g, w)
+			}
+		}
+	}
+	if !own["strings"] {
+		t.Errorf("strings' toString is Go's general call")
+	}
+	e := r.jit.entryFor(r.global.getOwn(r.atoms.intern("strings")).value().Object().fn().closure.fn)
+	if e == nil || e.ssa == nil || e.invalid {
+		t.Fatal("strings has no code")
+	}
+	hosts, guards := e.ssaStats.hosts, e.ssaStats.guards
+	if _, err := r.Run(compileForTest(t, "strings(300, 16)")); err != nil {
+		t.Fatal(err)
+	}
+	if e.ssaStats.hosts != hosts || e.ssaStats.guards != guards {
+		t.Errorf("strings left native code: %d host exits, %d guard failures", e.ssaStats.hosts-hosts, e.ssaStats.guards-guards)
+	}
+	// BigInt.prototype.toString replaced: the call checks its function.
+	src := `(BigInt.prototype.toString = function (r) { return "x" + (r | 0) }, strings(50, 16))`
+	for _, rt := range []*Runtime{r, want} {
+		got, err := rt.Run(compileForTest(t, src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if g, w := got.String().Go(), "1212455616:x0,x16,x0"; g != w {
+			t.Errorf("JIT %v: %s = %s, want %s", rt == r, src, g, w)
+		}
+	}
+}
