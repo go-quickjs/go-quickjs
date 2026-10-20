@@ -3,6 +3,7 @@ package ssa
 import (
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
@@ -1199,7 +1200,10 @@ func allocOnly(v *Value) bool {
 // (bytecode's ForwardsArguments): Go makes its frame, not the construction
 // over again. Upvalues is the address of the callee closure's captured
 // bindings' cells, which its reads of them read, the closure the call's
-// check of its function fixes; or 0, Go's.
+// check of its function fixes; or 0, Go's. ReadsArguments marks a callee
+// that reads its arguments by index (ir.ArgumentRead) -- none of them a
+// parameter its arguments object aliases: the reads are the call's
+// arguments, and its frame keeps them at an exit, as Arguments' does.
 type InlineSite struct {
 	Program         *ir.Program
 	Feedback        Feedback
@@ -1218,6 +1222,7 @@ type InlineSite struct {
 	Apply           uintptr
 	Arguments       bool
 	Upvalues        uintptr
+	ReadsArguments  bool
 }
 
 // Inlining's bounds: a callee's instructions, all callees' in a function,
@@ -1617,6 +1622,10 @@ func (b *builder) hostOf(pc int) bool {
 		return !ok
 	case ir.Rethrow:
 		return b.generic(pc)
+	case ir.ArgumentRead:
+		// The call's arguments, an inlined callee's (InlineSite's
+		// ReadsArguments), but where a read of them failed before.
+		return b.cur == b.root || !b.cur.site.ReadsArguments || b.generic(pc)
 	case ir.IterStep:
 		// A call of Go (GoCall, Step), where the VM answers it.
 		return !b.goCalls()
@@ -1863,7 +1872,7 @@ type KeepFeedback interface {
 // which resumes after it, as they do for == and %.
 func (b *builder) generic(pc int) bool {
 	switch in := b.p.Code[pc]; {
-	case in.Op == ir.Binary, in.Op == ir.Branch && in.Operator != ir.Truth, in.Op == ir.Rethrow,
+	case in.Op == ir.Binary, in.Op == ir.Branch && in.Operator != ir.Truth, in.Op == ir.Rethrow, in.Op == ir.ArgumentRead,
 		in.Op == ir.Unary && in.Operator != ir.Not, in.Op == ir.Update:
 		return b.fb != nil && b.fb.Generic(pc)
 	}
@@ -2251,6 +2260,26 @@ func (b *builder) inlineCall(blk *Block, pc int, fr *frame, guard func(Op, Type,
 	} else if site.ThisSlot >= 0 {
 		fr.init[site.ThisSlot] = b.read(sp-site.Argc-2, blk)
 	}
+}
+
+// constIndex is v as an array index, if it is a constant one: a number that
+// is a non-negative integer, as a key that names an element.
+func constIndex(v *Value) (int, bool) {
+	var x float64
+	switch {
+	case v.Op == OpConstF64:
+		x = math.Float64frombits(v.Const.Bits)
+	case v.Op == OpConst && v.Const.Kind == ir.Number:
+		x = math.Float64frombits(v.Const.Bits)
+	case v.Op == OpBoxF64 && len(v.Args) == 1 && v.Args[0].Op == OpConstF64:
+		x = math.Float64frombits(v.Args[0].Const.Bits)
+	default:
+		return 0, false
+	}
+	if x < 0 || x >= 1<<31 || x != math.Trunc(x) {
+		return 0, false
+	}
+	return int(x), true
 }
 
 // GoFeedback is Feedback whose VM answers calls of Go from native code
@@ -2966,7 +2995,7 @@ func (b *builder) plan() error {
 		case ir.ArrayWrite, ir.PropertyRead, ir.PropertyWrite, ir.ReferenceRead, ir.BindingRead,
 			ir.StringMethod, ir.StringCode, ir.BindingWrite, ir.BindingCheck, ir.Resolved, ir.ObjectLiteral, ir.FieldDefine,
 			ir.ArrayLiteral, ir.StringConst, ir.UpvalueWrite, ir.StringAdd, ir.StringConcat, ir.Closure, ir.CloseUpvalues, ir.HasProperty,
-			ir.DeleteProperty:
+			ir.DeleteProperty, ir.ArgumentRead:
 			// What native code does not do exits to Go, which resumes after
 			// it. A fixed global's check only deoptimizes: the binding can
 			// never move, so it never fails, and what follows sees its
@@ -3446,7 +3475,7 @@ func (b *builder) frameState(blk *Block, pc int) *FrameState {
 		}
 		s.Inline = &InlineState{Parent: call.Inline, Closure: fr.site.Closure, Callee: fr.site.Callee, Base: fr.base, Locals: b.p.Locals, ThisSlot: fr.site.ThisSlot,
 			PC: b.p.Maps[pc].PC, Depth: depth, Site: pc}
-		if fr.site.Arguments {
+		if fr.site.Arguments || fr.site.ReadsArguments {
 			s.Inline.Args = uint64(len(fr.args)+1)<<32 | uint64(fr.base-fr.argSlot)
 		}
 		return s
@@ -4383,6 +4412,26 @@ func (b *builder) instruction(blk *Block, pc int) {
 			break
 		}
 		b.goHas(blk, in, operand, guard)
+	case ir.ArgumentRead:
+		if b.host(pc) {
+			blk.ExitKind = ir.HostExit
+			blk.State = state()
+			blk.State.addUse()
+			break
+		}
+		// arguments[k] of an inlined call (InlineSite's ReadsArguments), a
+		// constant k below the arguments' count, is its argument k, as V8
+		// eliminates the arguments object; any other key deoptimizes, and
+		// the interpreter, Go's from the next compile on (generic), makes
+		// it, its frame given the call's arguments.
+		if k, ok := constIndex(operand(in.Left)); ok && k < len(b.cur.args) {
+			b.assign(in.Dest, blk, b.cur.args[k])
+			break
+		}
+		no := f.newValue(blk, OpConst, Tagged)
+		no.Const = ir.Bool(false)
+		guard(OpCheckTrue, None, ir.GuardExit, no)
+		b.assign(in.Dest, blk, operand(in.Left))
 	case ir.DeleteProperty:
 		if !b.goCalls() {
 			blk.ExitKind = ir.HostExit

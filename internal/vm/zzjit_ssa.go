@@ -2273,7 +2273,8 @@ func (fb *jitFeedback) Inline(pc int) (ssa.InlineSite, bool) {
 			continue
 		}
 		kind := jitLowerInline
-		if (in.cl.fn.Leaf == bytecode.LeafForward || in.cl.fn.ForwardsArguments) && fb.fn.Code[pc].Op == bytecode.OpNew {
+		reads := fb.fn.Code[pc].Op != bytecode.OpNew && jitReadsArguments(in.cl.fn)
+		if (in.cl.fn.Leaf == bytecode.LeafForward || in.cl.fn.ForwardsArguments) && fb.fn.Code[pc].Op == bytecode.OpNew || reads {
 			kind = jitLowerForward
 		}
 		p, err := fb.r.jitLower(in.cl.fn, kind)
@@ -2296,6 +2297,7 @@ func (fb *jitFeedback) Inline(pc int) (ssa.InlineSite, bool) {
 			Callee: uintptr(unsafe.Pointer(in.obj)), Closure: uintptr(unsafe.Pointer(in.cl)),
 			Argc: int(call.A), Method: call.Op == bytecode.OpCallMethod,
 			Params: in.cl.fn.ParamCount, ThisSlot: this, Coerce: in.cl.fn.CoerceThis,
+			ReadsArguments: reads,
 		}
 		if call.Op == bytecode.OpNew {
 			// Its receiver from its pool, as a native construction's.
@@ -5589,6 +5591,22 @@ func jitSameCode(a, b *closure) bool {
 	return a.fn == b.fn && a.env == b.env && a.realm == b.realm
 }
 
+// jitReadsArguments reports whether fn uses its arguments object only to
+// read it by index, arguments[k] (arguments_index): an object made only on
+// demand, never pushed, forwarded to no call (bytecode's
+// ForwardsArguments, no apply_arguments), and aliasing no parameter -- a
+// sloppy function's with parameters would. Inlined, its reads are the
+// call's arguments (ssa.InlineSite's ReadsArguments), as V8 eliminates
+// the arguments object; a function that reads arguments had been called
+// by Go from native code at each call, its code the tree tier's --
+// microbench.js's arguments_test.
+func jitReadsArguments(fn *bytecode.Function) bool {
+	if !fn.UsesArguments || !fn.ForwardsArguments || fn.MappedArguments && fn.ParamCount > 0 || fn.Leaf == bytecode.LeafForward {
+		return false
+	}
+	return !slices.ContainsFunc(fn.Code, func(in bytecode.Instr) bool { return in.Op == bytecode.OpApplyArguments })
+}
+
 // jitNativeTarget is a function a call at pc calls natively: for a
 // construction, with the pool its objects come from, filled.
 // jitInlinesAt reports whether a call of o, cl's function, by in may be
@@ -7098,6 +7116,11 @@ func (r *Runtime) jitInlinable(fn *bytecode.Function) bool {
 		ok := false
 		if len(fn.Upvalues) == 0 && !fn.TopLevel && !fn.IsModule && !fn.UsesArguments && !fn.HasDirectEval {
 			p, err := r.jitLower(fn, jitLowerInline)
+			ok = err == nil && ssa.Inlinable(p)
+		} else if len(fn.Upvalues) == 0 && jitReadsArguments(fn) {
+			// arguments[k] read from the call's arguments
+			// (ssa.InlineSite's ReadsArguments).
+			p, err := r.jitLower(fn, jitLowerForward)
 			ok = err == nil && ssa.Inlinable(p)
 		}
 		l.inlinable = 2

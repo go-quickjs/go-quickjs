@@ -232,6 +232,14 @@ const (
 	// whose conversion calls a method of its own, a property strict code
 	// cannot delete, a base that is no object.
 	DeleteProperty
+	// ArgumentRead is arguments_index, arguments[Left] at Dest, in a
+	// function whose arguments object is made only on demand and never
+	// pushed (bytecode's ForwardsArguments), lowered for inlining
+	// (LowerSSAForward): an inlined call has the new pipeline read the
+	// call's own argument for a constant index below their count that names
+	// no aliased parameter, as V8 eliminates the arguments object, and
+	// leaves any other to Go, which makes the object.
+	ArgumentRead
 )
 
 // RethrowNormal is the kind a normal completion's record has (Rethrow).

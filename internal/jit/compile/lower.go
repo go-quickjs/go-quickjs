@@ -335,7 +335,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			// inlined callee's (ssa's InlineCalls).
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
-		if in.Op == bytecode.OpApplyArguments && !m.forward {
+		if (in.Op == bytecode.OpApplyArguments || in.Op == bytecode.OpArgumentsIndex) && !m.forward {
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
 		if (isPrivate(in.Op) || isDefinition(in.Op)) && !m.ssa {
@@ -842,6 +842,10 @@ func selectNumericProperties(p *ir.Program, cells bool) {
 		case ir.BindingCheck, ir.ObjectLiteral, ir.StringConst, ir.UpvalueRead, ir.Closure:
 			take(in.Dest)
 		case ir.FieldDefine:
+			read(in.Left, reference)
+		case ir.ArgumentRead:
+			// Go takes the key as it is.
+			take(in.Dest)
 			read(in.Left, reference)
 		case ir.HasProperty, ir.DeleteProperty:
 			// Go takes the key and the object as they are.
@@ -1589,6 +1593,12 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 			return bad("invalid arguments slot")
 		}
 		return effect{need: 3, delta: -2}, nil
+	case bytecode.OpArgumentsIndex:
+		// The key, for the element.
+		if !local(in.A) {
+			return bad("invalid arguments slot")
+		}
+		return effect{need: 1}, nil
 	case bytecode.OpCheckGlobalVar, bytecode.OpCheckGlobalLex, bytecode.OpDefineGlobalVar, bytecode.OpDeclareGlobalLex, bytecode.OpDeclareModuleLex:
 		// A top-level declaration's: its check, or its binding made.
 		if !fn.TopLevel {
@@ -1828,6 +1838,9 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this, charCode bool
 	case bytecode.OpApplyArguments:
 		// The inliner makes it a call (LowerSSAForward).
 		return ir.Instruction{Op: ir.Host}
+	case bytecode.OpArgumentsIndex:
+		// The inliner reads the call's argument where it can (LowerSSAForward).
+		return ir.Instruction{Op: ir.ArgumentRead, Left: top, Dest: sp - 1}
 	case bytecode.OpPushConst:
 		if fn.Constants[in.A].Kind != bytecode.ConstNumber {
 			// A string, which Go pushes.
