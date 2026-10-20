@@ -1059,9 +1059,18 @@ The rounds that followed, each measured as above. The commit says more.
     an exit costs. More room for code (`WithJITMemoryLimit`) must never be
     slower, and was: with 16 MB Typescript took 18% longer than with 8.
     The default stays 8 MB until compiles cost less.
-  - Box2D's exits left: comparisons of two objects, which need `valueOf`;
-    `instanceof` against a constructor passed as a parameter; additions of
-    properties across many shapes.
+  - Box2D's exits, once comparisons of two objects, `instanceof` of a
+    parameter and additions across many shapes, are 13 a run now (a
+    count of exits and calls of Go by site, 2026-10-19). Its cost was
+    calls of Go: parseInt of numbers, 120,000 of its 150,000 calls of
+    functions from native code in three runs, made natively in 3ca9eb9
+    (Box2D -11%, every run below every base run). What is left of them is
+    GoMath, Math.sin and Math.cos, 115,000 calls of Go in three runs.
+    Gameboy's alphabet.indexOf(data.charAt(i)), 85,000 calls of the
+    built-in, and every string's and array's indexOf, lastIndexOf and
+    includes, are calls of Go of their own (0e7ed76, GoIndexOf), the
+    built-in's Go function called with no frame: string_indexOf (micro)
+    110.8 -> 72.1 ns, array_indexOf 429.1 -> 354.9.
   - A native call site still spends about 300 bytes on its guards and on
     writing its arguments, which a callee checking its own frame's room
     and the context's level could shed.
