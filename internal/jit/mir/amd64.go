@@ -6299,12 +6299,19 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.setG(v, scratchA)
 	case ssa.OpStringProp:
 		// A string's method where String.prototype has it, its shape the
-		// one the code was compiled for, which says where.
-		c.cmpWord(c.gpr(arg(0), scratchA), c.enc.String)
-		guard(amd64.CondNE)
-		c.a.Load(scratchA, regCtx, abi.OffStringMethods)
-		c.a.Op(amd64.Test, scratchA, scratchA, true)
-		guard(amd64.CondE)
+		// one the code was compiled for, which says where; or a BigInt's,
+		// its number word from HeapBigTag up, where BigInt.prototype has it.
+		if h := v.Holders(); h != nil {
+			c.cmpWord(c.gpr(arg(0), scratchA), c.enc.HeapBigTag)
+			guard(amd64.CondB)
+			c.movImm(scratchA, uint64(h.Holders[0].Object))
+		} else {
+			c.cmpWord(c.gpr(arg(0), scratchA), c.enc.String)
+			guard(amd64.CondNE)
+			c.a.Load(scratchA, regCtx, abi.OffStringMethods)
+			c.a.Op(amd64.Test, scratchA, scratchA, true)
+			guard(amd64.CondE)
+		}
 		c.a.Load(scratchB, scratchA, c.enc.ObjectShape)
 		c.cmpWord(scratchB, v.Const.Bits)
 		guard(amd64.CondNE)

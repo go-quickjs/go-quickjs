@@ -238,6 +238,73 @@ func TestJITBigWords(t *testing.T) {
 	}
 }
 
+// A BigInt's method read natively off BigInt.prototype, as a string's off
+// String.prototype (ssa.OpStringProp of a holder), its call Go's: and
+// leaving where BigInt.prototype changed.
+func TestJITBigIntMethods(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	r := New(Config{JIT: true})
+	defer func() { r.Close(); r.ReleaseClosed() }()
+	if _, err := r.Run(compileForTest(t, `
+		var x = (1n << 255n) + 12345678901234567890n
+		function str(n, x) {
+			let h = 0, s
+			for (let j = 0; j < n; j++) {
+				s = (x + BigInt(j)).toString() + (BigInt(j) - 7n).toString(16) + (x >> BigInt(j % 200)).toString(36)
+				h = (h * 31 + s.length) | 0
+			}
+			return h + ":" + s.length
+		}
+		function patched(n) {
+			let r = ""
+			for (let j = 0; j < n; j++) {
+				if (j == n - 3) BigInt.prototype.toString = function () { return "patched" }
+				r = (BigInt(j) * 3n).toString()
+			}
+			return r
+		}`)); err != nil {
+		t.Fatal(err)
+	}
+	// Node's.
+	for i, c := range []struct{ src, want string }{
+		{"str(300, x)", "-1466831389:111"}, {"str(300, x)", "-1466831389:111"}, {"str(300, x)", "-1466831389:111"},
+		{"str(3000, x)", "1922571733:91"}, {"str(3000, x)", "1922571733:91"},
+	} {
+		got, err := r.Run(compileForTest(t, c.src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if g := got.String().Go(); g != c.want {
+			t.Fatalf("round %d: %s = %s, want %s", i, c.src, g, c.want)
+		}
+	}
+	e := r.jit.entryFor(r.global.getOwn(r.atoms.intern("str")).value().Object().fn().closure.fn)
+	if e == nil || e.ssa == nil || e.invalid {
+		t.Fatal("str has no code")
+	}
+	hosts, guards := e.ssaStats.hosts, e.ssaStats.guards
+	if _, err := r.Run(compileForTest(t, "str(3000, x)")); err != nil {
+		t.Fatal(err)
+	}
+	if e.ssaStats.hosts != hosts || e.ssaStats.guards != guards {
+		t.Fatalf("str left native code: %d host exits, %d guard failures (BigInt sites %v)", e.ssaStats.hosts-hosts, e.ssaStats.guards-guards, e.bigSites)
+	}
+	for range 20 {
+		if _, err := r.Run(compileForTest(t, "patched(50)")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := r.Run(compileForTest(t, `delete BigInt.prototype.toString; BigInt.prototype.toString = function (b) { return "b" + b }; patched(500) + str(3, x)`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g := got.String().Go(); g != "patched20853:21" {
+		t.Fatalf("patched: %s, want patched20853:21", g)
+	}
+}
+
 // ** compiled (ir.Pow): of numbers as Math.pow's, natively where exact and
 // by Go otherwise; of BigInts in the int64 range natively (ssa.OpPowI64),
 // leaving where the power is past the range and for a negative exponent;

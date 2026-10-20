@@ -2297,6 +2297,9 @@ func getPropThisNode(d int, in bytecode.Instr, pc int) tval {
 			}
 		}
 		c.at(pc)
+		if jitBuilt && recv.IsBigInt() {
+			treeBigRecv(c, pc)
+		}
 		v, err := c.r.getValueProp(recv, c.names[name])
 		if err != nil {
 			c.throw(err)

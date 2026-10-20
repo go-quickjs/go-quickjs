@@ -621,6 +621,9 @@ type jitEntry struct {
 	// code reads off String.prototype once compiled again
 	// (jitFeedback.StringProperty).
 	strSites []uint32
+	// bigSites are those that met a BigInt receiver, which the code reads
+	// off BigInt.prototype (jitFeedback's StringProperty).
+	bigSites []uint32
 	// link is where native callers call the function's code (jitLink):
 	// its entry, and the count of their calls since the code was last
 	// compiled (in). nativeOut counts those that left native code
@@ -1149,7 +1152,7 @@ func jitCompiledBytes(shapes []*shape, holders []*Object, inlinedAt, definesUnfe
 // with the objects made for them.
 func (e *jitEntry) learnedBytes() int {
 	n := jitCapBytes(e.failed) + jitCapBytes(e.failedEntries) + jitCapBytes(e.bigints) + jitCapBytes(e.bigwide) + jitCapBytes(e.literals) + jitCapBytes(e.poly) + jitCapBytes(e.typedReads) +
-		jitCapBytes(e.stringReads) + jitCapBytes(e.keyedReads) + jitCapBytes(e.keyedWrites) + jitCapBytes(e.strSites) + jitCapBytes(e.nativeCalls) + jitCapBytes(e.inlines) + jitCapBytes(e.notInline) +
+		jitCapBytes(e.stringReads) + jitCapBytes(e.keyedReads) + jitCapBytes(e.keyedWrites) + jitCapBytes(e.strSites) + jitCapBytes(e.bigSites) + jitCapBytes(e.nativeCalls) + jitCapBytes(e.inlines) + jitCapBytes(e.notInline) +
 		jitCapBytes(e.nativeCallers) + jitCapBytes(e.callSites)
 	for i := range e.poly {
 		p := &e.poly[i]

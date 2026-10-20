@@ -157,7 +157,8 @@ const (
 	// A string's property, a method, where String.prototype has it
 	// (abi.Context.StringMethods): its cell at Index, if the operand is a
 	// string, String.prototype's shape is Const's, the one the code was
-	// compiled for, and the entry at Index is Key's.
+	// compiled for, and the entry at Index is Key's. With Holders (the
+	// IC's), a BigInt's, where BigInt.prototype, the first holder, has it.
 	OpStringProp // tagged -> source
 	OpStringCode // tagged callee, tagged string, f64 index -> f64
 	// OpStringChar is s[i], an element read of a string: the cell of the

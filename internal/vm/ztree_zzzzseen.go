@@ -40,9 +40,11 @@ type treeSeen struct {
 // BigInts from 0 to 2^64-1, some past the int64 range, and a result in
 // that range too, which it makes unboxed as Uint64s (ssa's BigIntWide);
 // and heap the others, a BigInt on the heap met or made, or one below
-// -2^63, which Go makes from native code (ssa.GoArith).
+// -2^63, which Go makes from native code (ssa.GoArith); and recvs the
+// method reads whose receivers were BigInts, which native code reads off
+// BigInt.prototype (jitFeedback's StringProperty).
 type treeBigSeen struct {
-	bigs, wide, heap []atomic.Uint32
+	bigs, wide, heap, recvs []atomic.Uint32
 }
 
 var (
@@ -60,4 +62,8 @@ var (
 	// as one in the int64 range, one from 0 to 2^64-1, or one on the heap,
 	// as the three were (treeBigSeen); nil without the JIT.
 	treeBigOf func(c *tctx, pc int, a, b, v Value)
+
+	// treeBigRecv marks the method read at pc in c's function as one of a
+	// BigInt's (treeBigSeen's recvs); nil without the JIT.
+	treeBigRecv func(c *tctx, pc int)
 )

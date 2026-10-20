@@ -346,6 +346,12 @@ func (r *Runtime) jitPolySeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 		e.polyReopt = true
 		return
 	}
+	if recv.IsBigInt() && in.Op == bytecode.OpGetPropThis && !slices.Contains(e.bigSites, uint32(pc)) {
+		// A BigInt's: off BigInt.prototype, as a string's.
+		e.bigSites = append(e.bigSites, uint32(pc))
+		e.polyReopt = true
+		return
+	}
 	if !recv.IsObject() || int(in.A) >= len(f.cl.names) {
 		return
 	}
@@ -499,6 +505,12 @@ func (r *Runtime) jitDeoptSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.In
 		return
 	}
 	recv := r.stack[at]
+	if recv.IsBigInt() && in.Op == bytecode.OpGetPropThis && !slices.Contains(e.bigSites, uint32(pc)) {
+		// A BigInt's method: read off BigInt.prototype by the code compiled
+		// again, the site no polymorphic one (jitFeedback's StringProperty).
+		e.bigSites = append(e.bigSites, uint32(pc))
+		return
+	}
 	p := jitPolySiteAt(e, pc)
 	if recv.IsString() && in.Op == bytecode.OpGetPropThis && !slices.Contains(e.strSites, uint32(pc)) {
 		// A string's method: read off String.prototype by the code
@@ -7565,6 +7577,13 @@ func jitTreeWide(fn *bytecode.Function, pc int) bool {
 	return s != nil && s.wide[pc>>5].Load()&(uint32(1)<<(pc&31)) != 0
 }
 
+// jitTreeRecv reports whether the tree tier's method read at pc of fn met
+// a BigInt receiver (treeBigSeen).
+func jitTreeRecv(fn *bytecode.Function, pc int) bool {
+	s := jitTreeBigs(fn, pc)
+	return s != nil && s.recvs[pc>>5].Load()&(uint32(1)<<(pc&31)) != 0
+}
+
 // jitTreeBigs is the tree tier's marks of fn's BigInt operators, if it
 // has any there are for pc.
 func jitTreeBigs(fn *bytecode.Function, pc int) *treeBigSeen {
@@ -8039,10 +8058,16 @@ func (fb *jitFeedback) StringProperty(pc int) (ssa.PropertySite, bool) {
 		return ssa.PropertySite{}, false
 	}
 	key, proto := fb.cl.names[in.A], fb.r.proto.str
+	big := (slices.Contains(e.bigSites, uint32(pc)) || jitTreeRecv(fb.fn, pc)) && !slices.Contains(e.strSites, uint32(pc))
+	if big {
+		// A read that met BigInt receivers and no string: off
+		// BigInt.prototype, which the site names (Holders).
+		proto = fb.r.proto.bigint
+	}
 	if key.IsIndex() || key == atomLength || proto == nil {
 		return ssa.PropertySite{}, false
 	}
-	if !slices.Contains(e.strSites, uint32(pc)) &&
+	if !big && !slices.Contains(e.strSites, uint32(pc)) &&
 		(c.fills != 0 || fb.r.proto.object == nil || fb.r.proto.object.findOwn(key) >= 0) {
 		return ssa.PropertySite{}, false
 	}
@@ -8053,7 +8078,12 @@ func (fb *jitFeedback) StringProperty(pc int) (ssa.PropertySite, bool) {
 	}
 	k := fb.keep()
 	k.shapes = append(k.shapes, remember(sh))
-	return ssa.PropertySite{Key: uint32(key), Shape: uintptr(unsafe.Pointer(sh)), Index: i}, true
+	site := ssa.PropertySite{Key: uint32(key), Shape: uintptr(unsafe.Pointer(sh)), Index: i}
+	if big {
+		k.holders = append(k.holders, proto)
+		site.Holders[0] = ssa.Holder{Object: uintptr(unsafe.Pointer(proto)), Shape: site.Shape}
+	}
+	return site, true
 }
 
 func (fb *jitFeedback) Property(pc int) (ssa.PropertySite, bool) {

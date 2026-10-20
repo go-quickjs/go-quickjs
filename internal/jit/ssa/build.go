@@ -4343,9 +4343,13 @@ func (b *builder) instruction(blk *Block, pc int) {
 		}
 		if s, ok := b.stringProperty(pc); ok {
 			// A string's method, read where String.prototype has it, as
-			// V8 reads one off the String map's prototype.
+			// V8 reads one off the String map's prototype; or a BigInt's,
+			// where BigInt.prototype, the site's holder, has it.
 			cell := guard(OpStringProp, Source, ir.HostExit, operand(in.Left))
 			cell.Const, cell.Index, cell.Key = ir.Value{Bits: uint64(s.Shape)}, int(s.Index), s.Key
+			if s.Holders[0].Object != 0 {
+				f.cache(cell).Holders = &HolderChain{Holders: s.Holders}
+			}
 			v := f.newValue(blk, OpLoadCell, Tagged, cell)
 			v.Shadow = cell
 			b.assign(in.Dest, blk, v)

@@ -214,6 +214,7 @@ var bigCorpus = []string{
 	`function f(n,x){let s=0n;while(x>0n){s+=x%10n;x/=10n;x=-x;x=~x}return s}`,
 	`function f(a,b){let c=0;for(let i=0;i<9;i++){if(a<b)c++;a=(a&b)|(a^b);b=b<<3n;a=a>>2n;a=a-b*a+0xffffffffffffffffn}return c}`,
 	`function f(n,x){let s=0n;for(let i=0;i<n;i++)s+=x**3n+BigInt(i)**BigInt(n);return s}`,
+	`function f(n,x){let s="";for(let i=0;i<n;i++)s=(x+BigInt(i)).toString();return s}`,
 }
 
 // bigs is globals with every operator's site one that met BigInts held in
@@ -229,6 +230,14 @@ func (bigs) BigInt(int) bool        { return true }
 func (bigs) BigIntWide(pc int) bool { return pc%2 == 1 }
 func (bigs) BigIntFailed(int) bool  { return false }
 func (bigs) GoCalls() bool          { return true }
+
+// Accessor has no read call an accessor: each is a method's read.
+func (bigs) Accessor(int) (ssa.AccessorSite, bool) { return ssa.AccessorSite{}, false }
+
+// StringProperty has every method read a BigInt's, off a prototype.
+func (bigs) StringProperty(pc int) (ssa.PropertySite, bool) {
+	return ssa.PropertySite{Key: 9, Shape: 0x10000 + uintptr(pc), Index: int32(pc % 7), Holders: [2]ssa.Holder{{Object: 0x63000, Shape: 0x10000 + uintptr(pc)}}}, true
+}
 func (bigs) BigIntCell(pc int) (uintptr, uint64, int, bool) {
 	if pc%3 == 0 {
 		return 0x61000 + uintptr(pc)*16, 1<<63 + uint64(pc), ssa.BigConstUint64, true
@@ -262,6 +271,7 @@ func TestMirEmitted(t *testing.T) {
 		// collector marks.
 		StoreRef: 0x70000}
 	cells := map[ssa.Op]int{}
+	bigProps := 0
 	compile := func(name string, p *ir.Program, fb ssa.Feedback) bool {
 		f, err := ssa.BuildWith(p, fb)
 		if err != nil {
@@ -273,6 +283,9 @@ func TestMirEmitted(t *testing.T) {
 		for _, b := range f.Blocks {
 			for _, v := range b.Values {
 				cells[v.Op]++
+				if v.Op == ssa.OpStringProp && v.Holders() != nil {
+					bigProps++
+				}
 			}
 		}
 		for _, arch := range arches {
@@ -329,6 +342,9 @@ func TestMirEmitted(t *testing.T) {
 		if n == 0 {
 			t.Errorf("none of %v compiled", ops)
 		}
+	}
+	if bigProps == 0 {
+		t.Errorf("no BigInt's method read compiled")
 	}
 	if cells[ssa.OpGlobalCell] == 0 || cells[ssa.OpLexCell] == 0 || cells[ssa.OpStringProp] == 0 || cells[ssa.OpAccessorIs] == 0 {
 		t.Fatalf("global cells %d, lexical cells %d, string methods %d, accessors %d", cells[ssa.OpGlobalCell], cells[ssa.OpLexCell],

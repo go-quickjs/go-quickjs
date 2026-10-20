@@ -28,7 +28,7 @@ func init() {
 		s := t.bigSeen.Load()
 		if s == nil {
 			n := (len(fn.Code) + 31) / 32
-			s = &treeBigSeen{bigs: make([]atomic.Uint32, n), wide: make([]atomic.Uint32, n), heap: make([]atomic.Uint32, n)}
+			s = &treeBigSeen{bigs: make([]atomic.Uint32, n), wide: make([]atomic.Uint32, n), heap: make([]atomic.Uint32, n), recvs: make([]atomic.Uint32, n)}
 			if !t.bigSeen.CompareAndSwap(nil, s) {
 				s = t.bigSeen.Load()
 			}
@@ -43,6 +43,9 @@ func init() {
 		} else {
 			treeBigMark(c, pc, func(s *treeBigSeen) []atomic.Uint32 { return s.bigs })
 		}
+	}
+	treeBigRecv = func(c *tctx, pc int) {
+		treeBigMark(c, pc, func(s *treeBigSeen) []atomic.Uint32 { return s.recvs })
 	}
 	treeBigOf = func(c *tctx, pc int, a, b, v Value) {
 		// From 0 to 2^64-1: held in its value, of no sign but zero's.
