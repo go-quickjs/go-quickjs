@@ -162,16 +162,8 @@ func DivMod(q, r, x, y []uint) ([]uint, []uint) {
 		}
 		// u[j:j+n+1] -= q̂·v, added back once if that went below zero.
 		qv[n] = mulRow(qv[:n], v, qhat)
-		var b uint
-		for i := 0; i <= n; i++ {
-			u[j+i], b = bits.Sub(u[j+i], qv[i], b)
-		}
-		if b != 0 {
-			var c uint
-			for i := 0; i < n; i++ {
-				u[j+i], c = bits.Add(u[j+i], v[i], c)
-			}
-			u[j+n] += c
+		if subVV(u[j:j+n+1], u[j:j+n+1], qv) != 0 {
+			u[j+n] += addVV(u[j:j+n], u[j:j+n], v)
 			qhat--
 		}
 		if q != nil {
@@ -187,18 +179,6 @@ func DivMod(q, r, x, y []uint) ([]uint, []uint) {
 		r = Norm(r)
 	}
 	return q, r
-}
-
-// mulRow writes x*d to z, of len(x) words, and returns the carry word.
-func mulRow(z, x []uint, d uint) uint {
-	var c uint
-	for i, xi := range x {
-		hi, lo := bits.Mul(xi, d)
-		var k uint
-		z[i], k = bits.Add(lo, c, 0)
-		c = hi + k
-	}
-	return c
 }
 
 // shlInto writes x<<s, for s under a word, to z, of len(x) words, and

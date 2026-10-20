@@ -54,12 +54,21 @@ func Add(z, x, y []uint) []uint {
 		x, y = y, x
 	}
 	var c uint
-	i := 0
-	for ; i < len(y); i++ {
-		z[i], c = bits.Add(x[i], y[i], c)
+	if len(y) < 4 {
+		// Fewer words than a call of the kernel costs.
+		for i := range y {
+			z[i], c = bits.Add(x[i], y[i], c)
+		}
+	} else {
+		c = addVV(z[:len(y)], x[:len(y)], y)
 	}
-	for ; i < len(x); i++ {
+	i := len(y)
+	for ; i < len(x) && c != 0; i++ {
 		z[i], c = bits.Add(x[i], 0, c)
+	}
+	if i < len(x) {
+		copy(z[i:len(x)], x[i:])
+		return z[:len(x)]
 	}
 	if c != 0 {
 		z[i] = c
@@ -84,14 +93,12 @@ func AddWord(z, x []uint, w uint) []uint {
 // Sub writes x-y to z, for x at least y: z has room for len(x) words and may
 // be x or y.
 func Sub(z, x, y []uint) []uint {
-	var b uint
-	i := 0
-	for ; i < len(y); i++ {
-		z[i], b = bits.Sub(x[i], y[i], b)
-	}
-	for ; i < len(x); i++ {
+	b := subVV(z[:len(y)], x[:len(y)], y)
+	i := len(y)
+	for ; i < len(x) && b != 0; i++ {
 		z[i], b = bits.Sub(x[i], 0, b)
 	}
+	copy(z[i:len(x)], x[i:])
 	return Norm(z[:len(x)])
 }
 
@@ -135,21 +142,6 @@ func basicMul(z, x, y []uint) {
 	}
 }
 
-// mulAddRow adds x*d to z, of len(x) words, and returns the carry word.
-func mulAddRow(z, x []uint, d uint) uint {
-	var c uint
-	for i, xi := range x {
-		hi, lo := bits.Mul(xi, d)
-		var k uint
-		lo, k = bits.Add(lo, z[i], 0)
-		hi += k
-		lo, k = bits.Add(lo, c, 0)
-		hi += k
-		z[i], c = lo, hi
-	}
-	return c
-}
-
 // Sqr writes x*x to z, which has room for 2*len(x) words and overlaps x not:
 // each product of two different words once, doubled, and the squares.
 func Sqr(z, x []uint) []uint {
@@ -159,6 +151,12 @@ func Sqr(z, x []uint) []uint {
 	}
 	if n >= karatsubaThreshold {
 		return Norm(karatsubaMul(z[:2*n], x, x))
+	}
+	if n < sqrThreshold {
+		// A product of the rows takes less than the products of different
+		// words once, doubled, and the squares, below math/big's threshold.
+		basicMul(z, x, x)
+		return Norm(z[:2*n])
 	}
 	clear(z[:2*n])
 	// The products of different words, x[i]*x[j] for i < j.
@@ -216,50 +214,95 @@ func MulAddWord(z, x []uint, w, a uint) []uint {
 // products it saves.
 const karatsubaThreshold = 40
 
+// sqrThreshold is the words from which Sqr squares, not multiplies.
+const sqrThreshold = 20
+
 // karatsubaMul writes x*y to z, len(x)+len(y) words, for len(x) >= len(y):
 // the longer operand in pieces of the shorter's length, each piece's
-// product by Karatsuba's method, added in.
+// product by Karatsuba's method, added in, with scratch of its own.
 func karatsubaMul(z, x, y []uint) []uint {
 	clear(z)
 	m := len(y)
-	t := make([]uint, 2*m)
+	t := make([]uint, 2*m+karatsubaScratch(m))
+	p2, rest := t[:2*m], t[2*m:]
 	for i := 0; i < len(x); i += m {
 		p := x[i:min(i+m, len(x))]
 		var pr []uint
 		if len(p) == m {
-			pr = karatsuba(t, p, y)
+			pr = karatsuba(p2, p, y, rest)
 		} else {
-			pr = Mul(t[:len(p)+m], y, p)
+			pr = Mul(p2[:len(p)+m], y, p)
 		}
 		addAt(z, pr, i)
 	}
 	return z
 }
 
-// karatsuba writes x*y, both of n words, to z, 2*n words: with x = x1*B+x0
-// and y = y1*B+y0, x*y = x1*y1*B^2 + ((x1+x0)*(y1+y0) - x1*y1 - x0*y0)*B
-// + x0*y0, three products of half the length.
-func karatsuba(z, x, y []uint) []uint {
+// karatsubaScratch is the scratch karatsuba asks of n words.
+func karatsubaScratch(n int) int {
+	if n < karatsubaThreshold {
+		return 0
+	}
+	k := n - n/2 + 1
+	return 6*k + karatsubaScratch(k)
+}
+
+// karatsuba writes x*y, both of n words, zeros on top allowed, to z, 2*n
+// words: with x = x1*B+x0 and y = y1*B+y0, B the half's words' base,
+// x*y = x1*y1*B^2 + ((x1+x0)*(y1+y0) - x1*y1 - x0*y0)*B + x0*y0, three
+// products of halves, in t, of karatsubaScratch(n) words.
+func karatsuba(z, x, y, t []uint) []uint {
 	n := len(x)
 	if n < karatsubaThreshold {
 		basicMul(z, x, y)
 		return z[:2*n]
 	}
 	h := n / 2
-	x0, x1 := Norm(x[:h]), x[h:]
-	y0, y1 := Norm(y[:h]), y[h:]
-	clear(z[:2*n])
-	lo := Mul(make([]uint, MulRoom(len(x0), len(y0))), x0, y0)
-	hi := Mul(make([]uint, MulRoom(len(x1), len(y1))), Norm(x1), Norm(y1))
-	sx := Add(make([]uint, len(x1)+1), Norm(x1), x0)
-	sy := Add(make([]uint, len(y1)+1), Norm(y1), y0)
-	mid := Mul(make([]uint, MulRoom(len(sx), len(sy))), sx, sy)
-	mid = Sub(mid, mid, lo)
-	mid = Sub(mid, mid, hi)
-	addAt(z, lo, 0)
-	addAt(z, mid, h)
-	addAt(z, hi, 2*h)
+	k := n - h + 1
+	x0, x1, y0, y1 := x[:h], x[h:], y[:h], y[h:]
+	// The sums, each of k words, its top the carry.
+	sx, sy, mid := t[:k], t[k:2*k], t[2*k:4*k]
+	rest := t[6*k:]
+	copy(sx, x1)
+	sx[k-1] = 0
+	sx[k-1] = addVV(sx[:h], sx[:h], x0)
+	if h < k-1 {
+		// x1 is a word longer than x0: the carry into it.
+		var c uint
+		sx[h], c = bits.Add(sx[h], sx[k-1], 0)
+		sx[k-1] = c
+	}
+	copy(sy, y1)
+	sy[k-1] = 0
+	sy[k-1] = addVV(sy[:h], sy[:h], y0)
+	if h < k-1 {
+		var c uint
+		sy[h], c = bits.Add(sy[h], sy[k-1], 0)
+		sy[k-1] = c
+	}
+	karatsuba(mid, sx, sy, rest)
+	// The outer products in z: x0*y0 in the low 2h words, x1*y1 above.
+	karatsuba(z[:2*h], x0, y0, rest)
+	karatsuba(z[2*h:2*n], x1, y1, rest)
+	// mid -= x0*y0, x1*y1: both under it, which is 2k words.
+	if subVV(mid[:2*h], mid[:2*h], z[:2*h]) != 0 {
+		subOne(mid[2*h:])
+	}
+	if subVV(mid[:2*(n-h)], mid[:2*(n-h)], z[2*h:2*n]) != 0 {
+		subOne(mid[2*(n-h):])
+	}
+	addAt(z, Norm(mid), h)
 	return z[:2*n]
+}
+
+// subOne subtracts one from z, which is not zero.
+func subOne(z []uint) {
+	for i := range z {
+		z[i]--
+		if z[i] != ^uint(0) {
+			return
+		}
+	}
 }
 
 // addAt adds x to z from word i on, z having room for the carry.
