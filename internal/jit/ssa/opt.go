@@ -249,6 +249,15 @@ func simplify(f *Func, v *Value) *Value {
 		if a := arg(0); a.Op == OpConstI64 && int64(a.Const.Bits) >= 0 {
 			v.Op, v.Const, v.Args, v.State, v.Aux = OpConstI64, a.Const, nil, nil, 0
 		}
+	case OpBigOfF64:
+		// BigInt(c) of a constant integer in the int64 range: its bits --
+		// a loop's sum = BigInt(0), which a phi then takes as a Uint64 as
+		// well as an Int64 (unboxBigPhis).
+		if a := arg(0); a.Op == OpConstF64 {
+			if c := math.Float64frombits(a.Const.Bits); c == math.Trunc(c) && c >= -(1<<63) && c < 1<<63 {
+				v.Op, v.Const, v.Args, v.State, v.Aux = OpConstI64, ir.Value{Bits: uint64(int64(c))}, nil, nil, 0
+			}
+		}
 	case OpCheckInit:
 		a := arg(0)
 		if a.Op == OpBoxF64 || a.Op == OpBoxBool || a.Op == OpConst && a.Const.Kind != ir.Uninitialized {

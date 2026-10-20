@@ -12,7 +12,7 @@ import "github.com/go-quickjs/go-quickjs/internal/jit/ir"
 // an argument is an Int64 or a constant below 0, or a use unboxes them as
 // one (OpBigUnbox); Uint64 where one is a Uint64 or a constant past the
 // int64 range, or a use unboxes them so (OpBigUnboxU64); a group that needs
-// both stays as it is. A group needs a reason, a use that unboxes one of
+// both stays as it is. A constant from 0 to 2^63-1, boxed, is either. A group needs a reason, a use that unboxes one of
 // its phis. Each old phi becomes the box of the new one, in a keep cell of
 // its own, which other passes then cancel where they unbox it.
 func unboxBigPhis(f *Func) bool {
@@ -110,7 +110,10 @@ func unboxBigPhis(f *Func) bool {
 		}
 		for _, a := range v.Args {
 			if x := boxedBig(a); x != nil {
-				n |= map[Type]uint8{Int64: 1, Uint64: 2}[x.Type]
+				if x.Op != OpConstI64 || int64(x.Const.Bits) < 0 {
+					// A constant from 0 to 2^63-1 is either.
+					n |= map[Type]uint8{Int64: 1, Uint64: 2}[x.Type]
+				}
 			} else if bits, kind, ok := bigConst(a); ok {
 				switch {
 				case kind == BigConstUint64:
@@ -159,7 +162,12 @@ func unboxBigPhis(f *Func) bool {
 			var x *Value
 			switch {
 			case boxedBig(a) != nil:
-				x = boxedBig(a)
+				if x = boxedBig(a); x.Type != t {
+					// A constant from 0 to 2^63-1 of the other type.
+					c := f.alloc(Value{Op: OpConstI64, Type: t, Const: x.Const, Block: x.Block})
+					insertAfter(f, x, c)
+					x = c
+				}
 			case newPhi[a] != nil:
 				x = newPhi[a]
 			default:

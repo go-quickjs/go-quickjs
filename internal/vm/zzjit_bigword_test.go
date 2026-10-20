@@ -99,8 +99,8 @@ const bigWordSetup = `
 	}
 	function squares(n, a) {
 		// A sum of squares in the int64 range that grows past 2^63, below
-		// 2^64: made as Uint64s.
-		let s = 0n
+		// 2^64: made as Uint64s, in a Uint64 phi that BigInt(0) starts.
+		let s = BigInt(0)
 		for (let i = 0; i < n; i++) {
 			s += a * a
 			a += 1n
@@ -177,11 +177,15 @@ func TestJITBigWords(t *testing.T) {
 	defer func(table bool) { mir.TableExits = table }(mir.TableExits)
 	// Each function's last compile, whether it called Go for a BigInt's
 	// operator (ssa.GoArith), as it had where it was not made natively.
-	goArith := map[string]bool{}
+	// And whether it has a phi of Uint64s.
+	goArith, u64Phi := map[string]bool{}, map[string]bool{}
 	jitSSAOptimized = func(fn *bytecode.Function, f *ssa.Func) {
-		goArith[fn.Name] = false
+		goArith[fn.Name], u64Phi[fn.Name] = false, false
 		for _, b := range f.Blocks {
 			for _, v := range b.Values {
+				if v.Op == ssa.OpPhi && v.Type == ssa.Uint64 {
+					u64Phi[fn.Name] = true
+				}
 				for _, c := range v.Calls() {
 					if c.Go == ssa.GoArith {
 						goArith[fn.Name] = true
@@ -239,6 +243,9 @@ func TestJITBigWords(t *testing.T) {
 			if name == "squares" && len(e.failed) != 0 {
 				// Its sum, whose addition is GoAdd's where it is generic.
 				t.Errorf("%s: generic at %v (wide %v)", name, e.failed, e.bigwide)
+			}
+			if name == "squares" && !u64Phi[name] {
+				t.Errorf("%s: its sum is boxed on every iteration, in no phi of Uint64s", name)
 			}
 			if e.ssaStats.hosts != hosts || e.ssaStats.guards != guards {
 				t.Errorf("%s left native code: %d host exits, %d guard failures (learned %v, wide %v, generic %v)",
