@@ -415,6 +415,17 @@ func (a *Asm) Cset(dst Reg, c Cond) {
 // -2**63 and m is -1; it never faults.
 func (a *Asm) Sdiv(dst, n, m Reg) { a.emit(0x9AC00C00 | uint32(m)<<16 | uint32(n)<<5 | uint32(dst)) }
 
+// Mul is dst = n*m, the product's low 64 bits.
+func (a *Asm) Mul(dst, n, m Reg) {
+	a.emit(0x9B007C00 | uint32(m)<<16 | uint32(n)<<5 | uint32(dst))
+}
+
+// Smulh is dst = the high 64 bits of n*m, signed: the product fits 64 bits
+// where it is the low half's sign, repeated.
+func (a *Asm) Smulh(dst, n, m Reg) {
+	a.emit(0x9B407C00 | uint32(m)<<16 | uint32(n)<<5 | uint32(dst))
+}
+
 // Msub is dst = acc - n*m, 64 bits.
 func (a *Asm) Msub(dst, n, m, acc Reg) {
 	a.emit(0x9B008000 | uint32(m)<<16 | uint32(acc)<<10 | uint32(n)<<5 | uint32(dst))

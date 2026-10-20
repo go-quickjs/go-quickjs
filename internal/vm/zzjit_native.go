@@ -467,6 +467,11 @@ type jitEntry struct {
 	failedEntries []uint32
 	reopt         bool
 	reopts        uint8
+	// bigints are the sites, by slot IR PC, of arithmetic and comparisons
+	// whose guard failed at BigInts in the int64 range: the code compiled
+	// again makes them on those natively (jitBigIntSeen), until that
+	// speculation fails, and the site is generic (failed).
+	bigints []int32
 	// ssaInlinedAt are the calls the code inlines, by pc: a call decided
 	// for inlining since leaves from code compiled before, which is not
 	// the callee's leaving (jitCallSeen).
@@ -1042,7 +1047,7 @@ func jitCompiledBytes(shapes []*shape, holders []*Object, inlinedAt, definesUnfe
 // more shapes, and the object pools of its literals and constructions,
 // with the objects made for them.
 func (e *jitEntry) learnedBytes() int {
-	n := jitCapBytes(e.failed) + jitCapBytes(e.failedEntries) + jitCapBytes(e.literals) + jitCapBytes(e.poly) + jitCapBytes(e.typedReads) +
+	n := jitCapBytes(e.failed) + jitCapBytes(e.failedEntries) + jitCapBytes(e.bigints) + jitCapBytes(e.literals) + jitCapBytes(e.poly) + jitCapBytes(e.typedReads) +
 		jitCapBytes(e.stringReads) + jitCapBytes(e.keyedReads) + jitCapBytes(e.strSites) + jitCapBytes(e.nativeCalls) + jitCapBytes(e.inlines) + jitCapBytes(e.notInline) +
 		jitCapBytes(e.nativeCallers) + jitCapBytes(e.callSites)
 	for i := range e.poly {
@@ -1394,6 +1399,7 @@ type jitGhost struct {
 	// again, Mandreel's heap reads left native code millions of times.
 	failed        []int32
 	failedEntries []uint32
+	bigints       []int32
 	typedReads    []int32
 	stringReads   []int32
 	keyedReads    []int32
@@ -1410,6 +1416,7 @@ func (s *jitState) ghost(addr uintptr, e *jitEntry) {
 	g := s.ghosts[addr]
 	g.evictions, g.asks = min(g.evictions+1, 16), 0
 	g.failed, g.failedEntries, g.typedReads, g.stringReads, g.keyedReads = e.failed, e.failedEntries, e.typedReads, e.stringReads, e.keyedReads
+	g.bigints = e.bigints
 	s.ghosts[addr] = g
 }
 
@@ -1908,6 +1915,7 @@ func (r *Runtime) jitCompileFor(fn *bytecode.Function, cl *closure, kind jitLowe
 	if g, ok := s.ghosts[uintptr(unsafe.Pointer(fn))]; ok {
 		// What its code dropped before had learned (jitGhost).
 		e.failed, e.failedEntries, e.typedReads, e.stringReads, e.keyedReads = g.failed, g.failedEntries, g.typedReads, g.stringReads, g.keyedReads
+		e.bigints = g.bigints
 	}
 	s.linkFor(fn, e)
 	p, err := r.jitLower(fn, kind)

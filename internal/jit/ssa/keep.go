@@ -58,14 +58,15 @@ func keepAcrossStores(f *Func) (bool, []*Value, [][]*Value) {
 			key, read = s.Key, s.Args[1:2]
 		case OpElemStore:
 			read = s.Args[2:3]
-		case OpElemWrite:
-			// A number's: no pointer word to read.
+		case OpElemWrite, OpBigBox:
+			// A number's, a BigInt's: no pointer word to read.
 			read = nil
 		}
 		alias := false
 		for _, c := range live[i] {
-			if allocOnly(s) {
-				// A pool's object made: it writes its result's cell alone.
+			if s.Op == OpBigBox || allocOnly(s) {
+				// A pool's object made, a BigInt boxed: it writes its result's
+				// cell alone.
 				alias = alias || c.Op != OpKept && a.mayOwnCell(s, c.Shadow)
 				continue
 			}
@@ -104,6 +105,11 @@ func keepAcrossStores(f *Func) (bool, []*Value, [][]*Value) {
 			}
 		}
 		if f.Keeps+fresh > f.keepLimit() {
+			if s.Op == OpBigBox {
+				// Its cell written over a value read from it before, which
+				// no cell is left to keep.
+				f.Unsafe = "keep cells run out at a BigInt's box"
+			}
 			if s.Op == OpCall {
 				// Not kept, the references could be lost: Go makes the call.
 				if s.IC != nil {

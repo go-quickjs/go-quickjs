@@ -649,6 +649,14 @@ func (op ALU) subcode() byte {
 
 // Op is dst op= src, 64 bits if wide, else 32 (clearing dst's upper half,
 // except for Cmp and Test, which only set flags).
+// Imul is dst *= src, a signed 64-bit multiply, which sets OF where the
+// product does not fit.
+func (a *Asm) Imul(dst, src Reg) {
+	a.rex(true, byte(dst), byte(src), false)
+	a.emit2(0x0F, 0xAF)
+	a.modrmRR(byte(dst), byte(src))
+}
+
 func (a *Asm) Op(op ALU, dst, src Reg, wide bool) {
 	a.rex(wide, byte(src), byte(dst), false)
 	a.emit(byte(op))

@@ -535,7 +535,8 @@ func (a *aliases) leaf(sum *aliasSum, x *Value) {
 	case OpElemCell:
 		sum.any, sum.elem = true, true
 	case OpStringMethod, OpStringChar, OpCodeChar, OpSubstringChar, OpConstSource, OpConstCell:
-	case OpCallCell:
+	case OpCallCell, OpBigCell:
+		// A call's result's cell, or a BigInt's box's: what writes it.
 		sum.anyCall = true
 		sum.calls = append(sum.calls, int32(x.Args[0].ID))
 	case OpUpvalueCell:
@@ -618,6 +619,9 @@ func (a *aliases) may(key uint32, s *Value) bool {
 		// A call's result's keep cell, which no store writes: a call may
 		// (mayCall).
 		return key == anyKey
+	case OpBigCell:
+		// A BigInt's box's keep cell, which only it writes (mayOwnCell).
+		return false
 	case OpUpvalueCell:
 		// A call may assign it, or an assignment to a captured binding,
 		// any: two closures may capture one binding.
@@ -659,7 +663,7 @@ func (a *aliases) mayCall(call, s *Value) bool {
 // a call writes, each time it is made, over the last result.
 func (a *aliases) mayOwnCell(call, s *Value) bool {
 	switch s.Op {
-	case OpCallCell:
+	case OpCallCell, OpBigCell:
 		return s.Args[0] == call
 	case OpKeep, OpPhi:
 		return a.sum(s).hasCall(call)
@@ -675,7 +679,7 @@ func (a *aliases) mayElem(s *Value) bool {
 	case OpElemCell:
 		return true
 	case OpPropCell, OpGlobalCell, OpLexCell, OpBindingCell, OpStringProp, OpStringMethod, OpStringChar, OpCodeChar, OpSubstringChar, OpConstSource, OpConstCell,
-		OpCallCell, OpUpvalueCell, OpLocalCell:
+		OpCallCell, OpBigCell, OpUpvalueCell, OpLocalCell:
 		return false
 	case OpKeep, OpPhi:
 		sum := a.sum(s)
@@ -730,7 +734,7 @@ func liveAcrossSets(f *Func) ([]*Value, [][]*Value) {
 	for _, b := range f.Blocks {
 		for _, v := range b.Values {
 			switch {
-			case v.Op == OpPropWrite, v.Op == OpElemStore, v.Op == OpElemWrite, v.Op == OpCall && v.Calls() != nil:
+			case v.Op == OpPropWrite, v.Op == OpElemStore, v.Op == OpElemWrite, v.Op == OpCall && v.Calls() != nil, v.Op == OpBigBox:
 				stores = append(stores, v)
 			case v.Type == Tagged && v.Shadow != nil:
 				// A kept value's too: while the collector marks, it is still

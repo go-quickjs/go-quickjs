@@ -46,22 +46,26 @@ var jitEncoding = abi.Encoding{
 	CanonicalNaN:  canonicalNaN,
 	UndefinedCell: uint64(uintptr(unsafe.Pointer(&jitUndefinedCell))),
 	Object:        objectBits,
-	UpvalueSlot:   int32(unsafe.Offsetof(upvalue{}.slot)),
-	UpvalueClosed: int32(unsafe.Offsetof(upvalue{}.closed)),
-	UpvalueSize:   int32(unsafe.Sizeof(upvalue{})),
-	RandomCount:   int32(unsafe.Offsetof(mathRandom{}.count)),
-	RandomNumbers: int32(unsafe.Offsetof(mathRandom{}.numbers)),
-	ObjectShape:   int32(unsafe.Offsetof(Object{}.shape)),
-	ObjectProps:   int32(unsafe.Offsetof(Object{}.vals)),
-	ObjectProto:   int32(unsafe.Offsetof(Object{}.proto)),
-	WriteBarrier:  jit.WriteBarrier(),
-	CallGo:        jit.CallGo(),
-	StoreRef:      jit.StoreRef(),
-	Round:         runtime.GOARCH == "arm64" || cpu.X86.HasSSE41,
-	ShapeKeys:     int32(unsafe.Offsetof(shape{}.keys)),
-	KeySize:       int32(unsafe.Sizeof(propKey{})),
-	PropertyKey:   int32(unsafe.Offsetof(propKey{}.key)),
-	PropertyFlags: int32(unsafe.Offsetof(propKey{}.flags)),
+	// A short BigInt (shortBig).
+	ShortBigTag:     shortBigBase,
+	ShortBigLowBits: shortBigLowBits,
+	ShortBigHigh:    uint64(uintptr(unsafe.Pointer(&shortBigHigh))),
+	UpvalueSlot:     int32(unsafe.Offsetof(upvalue{}.slot)),
+	UpvalueClosed:   int32(unsafe.Offsetof(upvalue{}.closed)),
+	UpvalueSize:     int32(unsafe.Sizeof(upvalue{})),
+	RandomCount:     int32(unsafe.Offsetof(mathRandom{}.count)),
+	RandomNumbers:   int32(unsafe.Offsetof(mathRandom{}.numbers)),
+	ObjectShape:     int32(unsafe.Offsetof(Object{}.shape)),
+	ObjectProps:     int32(unsafe.Offsetof(Object{}.vals)),
+	ObjectProto:     int32(unsafe.Offsetof(Object{}.proto)),
+	WriteBarrier:    jit.WriteBarrier(),
+	CallGo:          jit.CallGo(),
+	StoreRef:        jit.StoreRef(),
+	Round:           runtime.GOARCH == "arm64" || cpu.X86.HasSSE41,
+	ShapeKeys:       int32(unsafe.Offsetof(shape{}.keys)),
+	KeySize:         int32(unsafe.Sizeof(propKey{})),
+	PropertyKey:     int32(unsafe.Offsetof(propKey{}.key)),
+	PropertyFlags:   int32(unsafe.Offsetof(propKey{}.flags)),
 
 	Accessor:       accessorBits,
 	AccessorGetter: int32(unsafe.Offsetof(accessor{}.getter)),
@@ -1467,7 +1471,7 @@ func jitLearnedSpent(fn *bytecode.Function, e *jitEntry) int64 {
 // learned at its exits counted in: a change of either delays the compile
 // for it (jitLearnedDue), as V8's NotifyICChanged does.
 func jitLearnedMark(cl *closure, e *jitEntry) uint64 {
-	n := len(e.failed) + len(e.failedEntries) + len(e.poly) + len(e.typedReads) + len(e.stringReads) +
+	n := len(e.failed) + len(e.failedEntries) + len(e.bigints) + len(e.poly) + len(e.typedReads) + len(e.stringReads) +
 		len(e.keyedReads) + len(e.strSites) + len(e.nativeCalls) + len(e.inlines) + len(e.notInline) +
 		len(e.literals) + len(e.definesUnfed)
 	return jitFeedbackMark(cl) + uint64(n)*0x9e3779b97f4a7c15
@@ -7140,6 +7144,67 @@ func (r *Runtime) jitInlinable(fn *bytecode.Function) bool {
 
 // Generic and EntryGeneric are ssa.Feedback's: the sites and entries whose
 // guards failed in code compiled before (jitDeoptimized).
+// BigInt reports an arithmetic or relational operator at pc of the root
+// that met BigInts in the int64 range (jitBigIntSeen).
+func (fb *jitFeedback) BigInt(pc int) bool {
+	return fb.e != nil && slices.Contains(fb.e.bigints, int32(pc))
+}
+
+// jitBigIntSeen notes that the arithmetic or the comparison at site, of e's
+// program, whose guard failed, met BigInts in the int64 range, its result
+// one too, as V8's feedback learns BigInt64 operands: compiled again, the
+// site makes them natively (ssa.BigIntFeedback), not as Go's. One whose
+// speculation fails then -- an operand of another type, a result outside
+// the range, a BigInt on the heap -- is learned no more, and is generic
+// (jitDeoptimized).
+func (r *Runtime) jitBigIntSeen(f *frame, e *jitEntry, site int) bool {
+	p := e.ssaProg
+	if site < 0 || p == nil || site >= len(p.Code) || slices.Contains(e.bigints, int32(site)) || slices.Contains(e.failed, int32(site)) {
+		return false
+	}
+	in := p.Code[site]
+	switch {
+	case in.Op == ir.Binary && (in.Operator == ir.Add || in.Operator == ir.Sub || in.Operator == ir.Mul):
+	case (in.Op == ir.Binary || in.Op == ir.Branch) && (in.Operator == ir.Lt || in.Operator == ir.Le || in.Operator == ir.Gt || in.Operator == ir.Ge):
+	default:
+		return false
+	}
+	if in.Left.Slot < 0 || in.Right.Slot < 0 {
+		return false
+	}
+	a, b := r.jitOperand(f, p, in.Left), r.jitOperand(f, p, in.Right)
+	if !a.isShortBig() || !b.isShortBig() {
+		return false
+	}
+	x, y := a.shortBigInt(), b.shortBigInt()
+	switch in.Operator {
+	case ir.Add:
+		if s := x + y; (x^s)&(y^s) < 0 {
+			return false
+		}
+	case ir.Sub:
+		if d := x - y; (x^y)&(x^d) < 0 {
+			return false
+		}
+	case ir.Mul:
+		hi, lo := bits.Mul64(uint64(x), uint64(y))
+		// The signed product's high word: the unsigned one's, less each
+		// operand where the other is negative.
+		if x < 0 {
+			hi -= uint64(y)
+		}
+		if y < 0 {
+			hi -= uint64(x)
+		}
+		if hi != uint64(int64(lo)>>63) {
+			return false
+		}
+	}
+	e.bigints = append(e.bigints, int32(site))
+	e.reopt = true
+	return true
+}
+
 func (fb *jitFeedback) Generic(pc int) bool {
 	return fb.e != nil && slices.Contains(fb.e.failed, int32(pc))
 }
@@ -8615,7 +8680,9 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 					r.jitIndexSeen(e, int(ctx.ExitPC), o, k)
 				}
 			}
-			jitDeoptimized(e, ctx, start)
+			if !r.jitBigIntSeen(f, e, int(int64(ctx.ExitSite))) {
+				jitDeoptimized(e, ctx, start)
+			}
 			if e.ssa == ran {
 				r.jitInvalidate(f.cl, e)
 			}

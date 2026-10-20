@@ -43,10 +43,13 @@ const (
 	// a slot's value or of the heap cell it was loaded from, or 0 for a
 	// primitive (origin.go).
 	Source
+	// Int64 is a BigInt in the int64 range, its two's complement: one held
+	// in a value (abi.Encoding's ShortBigTag), unboxed (OpBigUnbox).
+	Int64
 )
 
 func (t Type) String() string {
-	return [...]string{"tagged", "f64", "i32", "bool", "none", "ptr", "source"}[t]
+	return [...]string{"tagged", "f64", "i32", "bool", "none", "ptr", "source", "i64"}[t]
 }
 
 // Op is a value's operation.
@@ -390,6 +393,32 @@ const (
 	// OpCellNone is whether a cell, a megamorphic read's that may find no
 	// property (InlineCache's Try), is none.
 	OpCellNone // source -> bool
+
+	// BigInts in the int64 range, as V8's code makes its BigInt64 values:
+	// unboxed, their arithmetic native.
+	//
+	// OpBigUnbox is the BigInt a tagged value (Args[0]) is: it exits unless
+	// the value is one held in a value (abi.Encoding's ShortBigTag), its low
+	// bits in the number word and its high ones the pointer word's distance
+	// from ShortBigHigh, which is read where OpKeepRef reads it.
+	OpBigUnbox // tagged -> i64
+	// OpBigBox is the BigInt Args[0] as a value: its number word, the
+	// value's both words written to the context's keep cell Index, as a
+	// call's result is (OpBigCell's), with Go's write barrier while the
+	// collector marks. It writes that cell alone, which a value read from
+	// it before is kept from (keepAcrossStores), as a pool's object's
+	// construction writes its result's.
+	OpBigBox // i64 -> tagged
+	// OpBigCell is the keep cell OpBigBox (Args[0]) wrote its value to.
+	OpBigCell // tagged -> source
+	// OpAddI64, OpSubI64 and OpMulI64 exit where the result is outside the
+	// int64 range: a BigInt on the heap, which Go makes.
+	OpAddI64 // i64, i64 -> i64
+	OpSubI64 // i64, i64 -> i64
+	OpMulI64 // i64, i64 -> i64
+	// OpCmpI64 compares two BigInts as Aux, an ir comparison operator,
+	// says.
+	OpCmpI64 // i64, i64 -> bool
 )
 
 var opNames = [...]string{
@@ -408,6 +437,7 @@ var opNames = [...]string{
 	OpMaxF64: "maxf", OpMinF64: "minf", OpFloorF64: "floorf", OpCeilF64: "ceilf", OpTruncF64: "truncf", OpRoundF64: "roundf",
 	OpSignF64: "signf", OpFroundF64: "froundf", OpMathCall: "mathcall", OpRandomF64: "randomf", OpAccessorIs: "accessoris",
 	OpCellNone: "cellnone",
+	OpBigUnbox: "bigunbox", OpBigBox: "bigbox", OpBigCell: "bigcell", OpAddI64: "addi64", OpSubI64: "subi64", OpMulI64: "muli64", OpCmpI64: "cmpi64",
 }
 
 func (o Op) String() string {
@@ -444,7 +474,8 @@ func (o Op) isGuard() bool {
 	switch o {
 	case OpUnboxF64, OpOddballF64, OpTruth, OpCheckInit, OpModF64, OpArrayOf, OpIndexedOf, OpElemKey, OpElemRead, OpElemWrite, OpElemCell, OpElemStore, OpLength,
 		OpObjectOf, OpPropRead, OpPropWrite, OpPropCell, OpGlobalCell, OpLexCell, OpBindingCell, OpStringMethod, OpStringProp, OpStringCode, OpStringChar, OpCodeChar, OpLooseNullish, OpEqTagged,
-		OpSameObject, OpSameSymbol, OpIterClosed, OpFrameRoom, OpTailRoom, OpTailSelf, OpCall, OpInstanceOf, OpTypeIs, OpCheckTrue, OpPowF64, OpAccessorIs:
+		OpSameObject, OpSameSymbol, OpIterClosed, OpFrameRoom, OpTailRoom, OpTailSelf, OpCall, OpInstanceOf, OpTypeIs, OpCheckTrue, OpPowF64, OpAccessorIs,
+		OpBigUnbox, OpAddI64, OpSubI64, OpMulI64:
 		return true
 	}
 	return false
@@ -739,6 +770,10 @@ type Func struct {
 	Keeps int
 	// KeepLimit bounds Keeps before the backend: VirtualKeeps if 0.
 	KeepLimit int
+	// Unsafe, where not empty, says why the code may not be compiled: a
+	// BigInt's box a value read from its cell was not kept from, the keep
+	// cells run out (keepAcrossStores).
+	Unsafe string
 	// ArrayProtos are the realm's Array.prototype and Object.prototype,
 	// each with its shape, where a number written at an array's length
 	// (OpElemWrite) may be appended natively, as a push is (CallSite's

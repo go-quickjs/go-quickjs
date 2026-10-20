@@ -123,6 +123,8 @@ func TestARM64Integer(t *testing.T) {
 	expectA64(t, "cset w3, mi", func(a *arm64.Asm) { a.Cset(3, arm64.MI) })
 	expectA64(t, "sdiv x3, x4, x5", func(a *arm64.Asm) { a.Sdiv(3, 4, 5) })
 	expectA64(t, "msub x3, x4, x5, x6", func(a *arm64.Asm) { a.Msub(3, 4, 5, 6) })
+	expectA64(t, "mul x3, x4, x5", func(a *arm64.Asm) { a.Mul(3, 4, 5) })
+	expectA64(t, "smulh x3, x4, x5", func(a *arm64.Asm) { a.Smulh(3, 4, 5) })
 }
 
 func TestARM64Float(t *testing.T) {

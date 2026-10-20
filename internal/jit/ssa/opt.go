@@ -214,6 +214,11 @@ func simplify(f *Func, v *Value) *Value {
 		if a := arg(0); a.Op == OpBoxBool {
 			return a.Args[0]
 		}
+	case OpBigUnbox:
+		// A BigInt boxed (OpBigBox): its value, kept in its cell.
+		if a := arg(0); a.Op == OpKept && a.Args[1].Op == OpBigBox {
+			return a.Args[1].Args[0]
+		}
 	case OpCheckInit:
 		a := arg(0)
 		if a.Op == OpBoxF64 || a.Op == OpBoxBool || a.Op == OpConst && a.Const.Kind != ir.Uninitialized {

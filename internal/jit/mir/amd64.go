@@ -4527,6 +4527,75 @@ func (c *compiler) keep(v *ssa.Value) {
 	})
 }
 
+// bigUnbox is the BigInt a tagged value is (ssa's OpBigUnbox), one held in
+// the value, which it guards: its number word's high bits the tag, and a
+// source its pointer word is read from (keepSource), whose distance from
+// ShortBigHigh is the BigInt's high bits.
+func (c *compiler) bigUnbox(v *ssa.Value, guard func(amd64.Cond)) {
+	x := v.Args[0]
+	low := 64 - c.enc.ShortBigLowBits
+	r := c.gpr(x, scratchB)
+	c.a.MovRR(scratchA, r)
+	c.a.ShiftImm(amd64.Shr, scratchA, c.enc.ShortBigLowBits, true)
+	c.a.OpImm(amd64.Cmp, scratchA, int32(c.enc.ShortBigTag>>c.enc.ShortBigLowBits), true)
+	guard(amd64.CondNE)
+	c.keepSource(x)
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	guard(amd64.CondE)
+	c.a.Load(scratchA, scratchC, c.enc.RefOffset)
+	c.movImm(scratchB, c.enc.ShortBigHigh)
+	c.a.Op(amd64.Sub, scratchA, scratchB, true)
+	c.a.ShiftImm(amd64.Shl, scratchA, c.enc.ShortBigLowBits, true)
+	if r = c.gpr(x, scratchC); r != scratchC {
+		c.a.MovRR(scratchC, r)
+	}
+	c.a.ShiftImm(amd64.Shl, scratchC, low, true)
+	c.a.ShiftImm(amd64.Shr, scratchC, low, true)
+	c.a.Op(amd64.Or, scratchA, scratchC, true)
+	c.setG(v, scratchA)
+}
+
+// bigBox is a BigInt in the int64 range as a value (ssa's OpBigBox): its
+// low bits and the tag its number word, which is v, and ShortBigHigh past
+// its high bits its pointer word, both written to the context's keep cell
+// v.Index; while the collector marks, with Go's write barrier
+// (valueStore), as keep writes one.
+func (c *compiler) bigBox(v *ssa.Value) {
+	viaGo, done := c.a.NewLabel(), c.a.NewLabel()
+	at := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	low := 64 - c.enc.ShortBigLowBits
+	x := c.gpr(v.Args[0], scratchB)
+	c.a.MovRR(scratchC, x)
+	c.a.ShiftImm(amd64.Shr, scratchC, c.enc.ShortBigLowBits, true)
+	c.movImm(scratchA, c.enc.ShortBigHigh)
+	c.a.Op(amd64.Add, scratchC, scratchA, true)
+	if x = c.gpr(v.Args[0], scratchB); x != scratchA {
+		c.a.MovRR(scratchA, x)
+	}
+	c.a.ShiftImm(amd64.Shl, scratchA, low, true)
+	c.a.ShiftImm(amd64.Shr, scratchA, low, true)
+	c.movImm(scratchB, c.enc.ShortBigTag)
+	c.a.Op(amd64.Or, scratchA, scratchB, true)
+	c.a.MovQToX(xScratch0, scratchA)
+	c.movImm(scratchB, c.enc.WriteBarrier)
+	c.a.LoadU8(scratchB, scratchB, 0)
+	c.a.Op(amd64.Test, scratchB, scratchB, false)
+	c.a.Jcc(amd64.CondNE, viaGo)
+	c.a.Store(regCtx, at+c.enc.RefOffset, scratchC)
+	c.a.Store(regCtx, at+c.enc.NumOffset, scratchA)
+	c.a.Bind(done)
+	c.setG(v, scratchA)
+	c.cold = append(c.cold, func() {
+		c.a.Bind(viaGo)
+		c.a.MovRR(scratchA, regCtx)
+		c.a.OpImm(amd64.Add, scratchA, at, true)
+		c.valueStore()
+		// The scratch registers are Go's across its write barrier.
+		c.a.Load(scratchA, regCtx, at+c.enc.NumOffset)
+		c.a.Jmp(done)
+	})
+}
+
 // holder finds the property a read whose receiver's shape it knows names
 // -- on a prototype, which it checks, or the receiver's own -- into
 // scratchA, the address of its value; and, for a read that met objects of
@@ -5750,6 +5819,44 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.keep(v)
 	case ssa.OpKept:
 		c.setG(v, c.gpr(arg(1), scratchA))
+	case ssa.OpBigUnbox:
+		c.bigUnbox(v, c.guardFor(v))
+	case ssa.OpBigBox:
+		c.bigBox(v)
+	case ssa.OpBigCell:
+		c.a.MovRR(scratchA, regCtx)
+		c.a.OpImm(amd64.Add, scratchA, abi.OffKeep+int32(v.Args[0].Index)*int32(c.enc.ValueSize), true)
+		c.setG(v, scratchA)
+	case ssa.OpAddI64, ssa.OpSubI64, ssa.OpMulI64:
+		x, y := c.gpr(arg(0), scratchA), c.gpr(arg(1), scratchB)
+		if x != scratchA {
+			c.a.MovRR(scratchA, x)
+		}
+		switch v.Op {
+		case ssa.OpAddI64:
+			c.a.Op(amd64.Add, scratchA, y, true)
+		case ssa.OpSubI64:
+			c.a.Op(amd64.Sub, scratchA, y, true)
+		default:
+			c.a.Imul(scratchA, y)
+		}
+		// Outside the int64 range: a BigInt on the heap, Go's.
+		c.guardFor(v)(amd64.CondO)
+		c.setG(v, scratchA)
+	case ssa.OpCmpI64:
+		c.a.Op(amd64.Cmp, c.gpr(arg(0), scratchA), c.gpr(arg(1), scratchB), true)
+		cond := amd64.CondL
+		switch ir.Operator(v.Aux) {
+		case ir.Le:
+			cond = amd64.CondLE
+		case ir.Gt:
+			cond = amd64.CondG
+		case ir.Ge:
+			cond = amd64.CondGE
+		}
+		c.a.Setcc(cond, scratchA)
+		c.a.MovZX8(scratchA, scratchA)
+		c.setG(v, scratchA)
 	case ssa.OpFrameRoom:
 		c.a.MovRR(scratchA, regStack)
 		c.a.Load(scratchB, regCtx, abi.OffStackBase)

@@ -2335,6 +2335,61 @@ func (b *builder) goCompare(blk *Block, in ir.Instruction, operand func(ir.Opera
 	return r
 }
 
+// BigIntFeedback is Feedback that knows an arithmetic or relational
+// operator at a PC met BigInts in the int64 range, as V8's feedback names
+// BigInt64 operands: the code makes it on them unboxed (OpBigUnbox),
+// natively, until a speculation fails -- an operand of another type, or a
+// result outside the range -- and the site is generic.
+type BigIntFeedback interface {
+	BigInt(pc int) bool
+}
+
+// bigIntAt reports whether the root's operator op at pc is made on BigInts
+// in the int64 range (BigIntFeedback): addition, subtraction,
+// multiplication, or a relational comparison. An arithmetic result needs a
+// keep cell for its pointer word (OpBigBox).
+func (b *builder) bigIntAt(pc int, op ir.Operator) bool {
+	switch op {
+	case ir.Add, ir.Sub, ir.Mul:
+		if b.f.Keeps >= b.f.keepLimit() {
+			return false
+		}
+	case ir.Lt, ir.Le, ir.Gt, ir.Ge:
+	default:
+		return false
+	}
+	fb, ok := b.fb.(BigIntFeedback)
+	return ok && b.cur == b.root && !b.generic(pc) && fb.BigInt(pc)
+}
+
+// bigBinary is op, at a site bigIntAt names, of x and y, each guarded to be
+// a BigInt in the int64 range: an arithmetic result boxed, which exits
+// outside that range, or a comparison's boolean.
+func (b *builder) bigBinary(blk *Block, op ir.Operator, x, y *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) *Value {
+	f := b.f
+	xi, yi := guard(OpBigUnbox, Int64, ir.GuardExit, x), guard(OpBigUnbox, Int64, ir.GuardExit, y)
+	var r *Value
+	switch op {
+	case ir.Add:
+		r = guard(OpAddI64, Int64, ir.GuardExit, xi, yi)
+	case ir.Sub:
+		r = guard(OpSubI64, Int64, ir.GuardExit, xi, yi)
+	case ir.Mul:
+		r = guard(OpMulI64, Int64, ir.GuardExit, xi, yi)
+	default:
+		c := f.newValue(blk, OpCmpI64, Bool, xi, yi)
+		c.Aux = int(op)
+		return c
+	}
+	box := f.newValue(blk, OpBigBox, Tagged, r)
+	box.Index = f.Keeps
+	f.Keeps++
+	cell := f.newValue(blk, OpBigCell, Source, box)
+	v := f.newValue(blk, OpKept, Tagged, cell, box)
+	v.Shadow = cell
+	return v
+}
+
 // goHas makes in, the in operator, by a call of Go from native code
 // (GoHas), as goIndex makes an element's read: its result, a boolean.
 func (b *builder) goHas(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
@@ -3854,6 +3909,14 @@ func (b *builder) instruction(blk *Block, pc int) {
 			b.assign(in.Dest, blk, boxB(c))
 			break
 		}
+		if b.bigIntAt(pc, in.Operator) {
+			v := b.bigBinary(blk, in.Operator, operand(in.Left), operand(in.Right), guard)
+			if v.Type == Bool {
+				v = boxB(v)
+			}
+			b.assign(in.Dest, blk, v)
+			break
+		}
 		if in.Operator == ir.Add && b.generic(pc) && b.goCalls() {
 			// An addition whose operands were not numbers: Go makes it, as
 			// a string's (ir.StringAdd).
@@ -3932,6 +3995,8 @@ func (b *builder) instruction(blk *Block, pc int) {
 			c.Aux = 2
 		} else if n := b.equality(blk, in, operand, guard); n != nil {
 			c = n
+		} else if relational(in.Operator) && b.bigIntAt(pc, in.Operator) {
+			c = b.bigBinary(blk, in.Operator, operand(in.Left), operand(in.Right), guard)
 		} else if relational(in.Operator) && b.generic(pc) && b.goCalls() {
 			// Go's comparison's boolean, which native code branches on.
 			c = guard(OpTruth, Bool, ir.GuardExit, b.goCompare(blk, in, operand, guard))

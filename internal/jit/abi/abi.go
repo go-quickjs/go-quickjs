@@ -911,6 +911,14 @@ type Encoding struct {
 	// Object is every object's number word: its pointer word tells objects
 	// apart.
 	Object uint64
+	// A BigInt in the int64 range is held in the value itself: the low
+	// ShortBigLowBits bits of its two's complement in the number word, the
+	// rest of which is ShortBigTag, and the high bits as the pointer word's
+	// distance from ShortBigHigh, an address outside Go's heap, which the
+	// collector passes over. Every such BigInt is held so, and no other.
+	ShortBigTag     uint64
+	ShortBigLowBits uint8
+	ShortBigHigh    uint64
 
 	// What native code reads of an object, at these offsets from the
 	// pointer a slot holds (internal/jit/README.md, "Reading the heap in

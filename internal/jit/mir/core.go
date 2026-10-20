@@ -122,6 +122,9 @@ func prepare(w *Workspace, f *ssa.Func, enc abi.Encoding, gprs, fprs []int) (*co
 	if err := capturedUnchanged(f); err != nil {
 		return nil, err
 	}
+	if f.Unsafe != "" {
+		return nil, fmt.Errorf("%w: %s", ErrUnsupported, f.Unsafe)
+	}
 	c.origin = ssa.Origins(f)
 	for _, b := range f.Blocks {
 		for _, v := range b.Values {
@@ -912,7 +915,7 @@ func (c *core) colorKeeps(iv []interval, pos []int) error {
 		}
 	}
 	writes := func(v *ssa.Value) bool {
-		return v.Op == ssa.OpCall && len(v.Calls()) != 0 || v.Op == ssa.OpKeep
+		return v.Op == ssa.OpCall && len(v.Calls()) != 0 || v.Op == ssa.OpKeep || v.Op == ssa.OpBigBox
 	}
 	// cell is, by value ID, 1 plus the cell an address is of.
 	cell := c.ints(f.NumValues())
@@ -928,7 +931,7 @@ func (c *core) colorKeeps(iv []interval, pos []int) error {
 				if v.Op == ssa.OpKeep {
 					cell[v.ID] = v.Index + 1
 				}
-			case v.Op == ssa.OpCallCell:
+			case v.Op == ssa.OpCallCell, v.Op == ssa.OpBigCell:
 				if w := v.Args[0]; writes(w) {
 					cell[v.ID] = w.Index + 1
 				}
@@ -1102,7 +1105,7 @@ func (c *core) entryAt(pc int) *ssa.Block {
 // read there with no decoding (sourceAddr).
 func cellSource(s *ssa.Value) bool {
 	switch s.Op {
-	case ssa.OpPropCell, ssa.OpElemCell, ssa.OpGlobalCell, ssa.OpLexCell, ssa.OpBindingCell, ssa.OpStringMethod, ssa.OpStringChar, ssa.OpCodeChar, ssa.OpSubstringChar, ssa.OpStringProp, ssa.OpCallCell, ssa.OpConstCell, ssa.OpUpvalueCell, ssa.OpLocalCell:
+	case ssa.OpPropCell, ssa.OpElemCell, ssa.OpGlobalCell, ssa.OpLexCell, ssa.OpBindingCell, ssa.OpStringMethod, ssa.OpStringChar, ssa.OpCodeChar, ssa.OpSubstringChar, ssa.OpStringProp, ssa.OpCallCell, ssa.OpBigCell, ssa.OpConstCell, ssa.OpUpvalueCell, ssa.OpLocalCell:
 		return true
 	}
 	return false

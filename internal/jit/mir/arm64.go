@@ -4176,6 +4176,58 @@ func (c *a64Compiler) keep(v *ssa.Value) {
 	})
 }
 
+// bigUnbox is the BigInt a tagged value is, as amd64's.
+func (c *a64Compiler) bigUnbox(v *ssa.Value, guard func(arm64.Cond)) {
+	x := v.Args[0]
+	low := 64 - c.enc.ShortBigLowBits
+	c.a.ShiftImm(arm64.Lsr, a64A, c.gpr(x, a64B), c.enc.ShortBigLowBits, true)
+	c.movImm(a64B, c.enc.ShortBigTag>>c.enc.ShortBigLowBits)
+	c.a.Cmp(a64A, a64B, true)
+	guard(arm64.NE)
+	c.keepSource(x)
+	c.a.CmpImm(a64C, 0, true)
+	guard(arm64.EQ)
+	c.a.Load(a64A, a64C, c.enc.RefOffset)
+	c.movImm(a64B, c.enc.ShortBigHigh)
+	c.a.Op(arm64.Sub, a64A, a64A, a64B, true)
+	c.a.ShiftImm(arm64.Lsl, a64A, a64A, c.enc.ShortBigLowBits, true)
+	c.a.ShiftImm(arm64.Lsl, a64C, c.gpr(x, a64C), low, true)
+	c.a.ShiftImm(arm64.Lsr, a64C, a64C, low, true)
+	c.a.Op(arm64.Orr, a64A, a64A, a64C, true)
+	c.setG(v, a64A)
+}
+
+// bigBox is a BigInt in the int64 range as a value, written to its keep
+// cell, as amd64's.
+func (c *a64Compiler) bigBox(v *ssa.Value) {
+	viaGo, done := c.a.NewLabel(), c.a.NewLabel()
+	at := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	low := 64 - c.enc.ShortBigLowBits
+	c.a.ShiftImm(arm64.Lsr, a64C, c.gpr(v.Args[0], a64B), c.enc.ShortBigLowBits, true)
+	c.movImm(a64A, c.enc.ShortBigHigh)
+	c.a.Op(arm64.Add, a64C, a64C, a64A, true)
+	c.a.ShiftImm(arm64.Lsl, a64A, c.gpr(v.Args[0], a64B), low, true)
+	c.a.ShiftImm(arm64.Lsr, a64A, a64A, low, true)
+	c.movImm(a64B, c.enc.ShortBigTag)
+	c.a.Op(arm64.Orr, a64A, a64A, a64B, true)
+	c.a.FMovToF(a64F0, a64A)
+	c.movImm(a64B, c.enc.WriteBarrier)
+	c.a.LoadU8(a64B, a64B, 0)
+	c.a.Cbnz(a64B, viaGo, false)
+	c.a.Store(a64Ctx, at+c.enc.RefOffset, a64C)
+	c.a.Store(a64Ctx, at+c.enc.NumOffset, a64A)
+	c.a.Bind(done)
+	c.setG(v, a64A)
+	c.cold = append(c.cold, func() {
+		c.a.Bind(viaGo)
+		c.a.AddImm(a64A, a64Ctx, int64(at), true)
+		c.valueStore()
+		// The scratch registers are Go's across its write barrier.
+		c.a.Load(a64A, a64Ctx, at+c.enc.NumOffset)
+		c.a.B(done)
+	})
+}
+
 // holder finds the property a read whose receiver's shape it knows names,
 // for whichever of the shapes it met the receiver's is, into A, as amd64's
 // does.
@@ -5198,6 +5250,45 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.keepRef(v)
 	case ssa.OpKeep:
 		c.keep(v)
+	case ssa.OpBigUnbox:
+		c.bigUnbox(v, guard)
+	case ssa.OpBigBox:
+		c.bigBox(v)
+	case ssa.OpBigCell:
+		c.a.AddImm(a64A, a64Ctx, int64(abi.OffKeep+int32(v.Args[0].Index)*int32(c.enc.ValueSize)), true)
+		c.setG(v, a64A)
+	case ssa.OpAddI64, ssa.OpSubI64:
+		op := arm64.Adds
+		if v.Op == ssa.OpSubI64 {
+			op = arm64.Subs
+		}
+		c.a.Op(op, a64A, c.gpr(arg(0), a64A), c.gpr(arg(1), a64B), true)
+		// Outside the int64 range: a BigInt on the heap, Go's.
+		guard(arm64.VS)
+		c.setG(v, a64A)
+	case ssa.OpMulI64:
+		// The product's high word is its low word's sign unless it is
+		// outside the int64 range.
+		x, y := c.gpr(arg(0), a64A), c.gpr(arg(1), a64B)
+		c.a.Mul(a64C, x, y)
+		c.a.Smulh(a64B, x, y)
+		c.a.ShiftImm(arm64.Asr, a64A, a64C, 63, true)
+		c.a.Cmp(a64B, a64A, true)
+		guard(arm64.NE)
+		c.setG(v, a64C)
+	case ssa.OpCmpI64:
+		c.a.Cmp(c.gpr(arg(0), a64A), c.gpr(arg(1), a64B), true)
+		cond := arm64.LT
+		switch ir.Operator(v.Aux) {
+		case ir.Le:
+			cond = arm64.LE
+		case ir.Gt:
+			cond = arm64.GT
+		case ir.Ge:
+			cond = arm64.GE
+		}
+		c.a.Cset(a64A, cond)
+		c.setG(v, a64A)
 	case ssa.OpKept:
 		c.setG(v, c.gpr(arg(1), a64A))
 	case ssa.OpFrameRoom:

@@ -120,6 +120,11 @@ func TestAMD64Divide(t *testing.T) {
 	for _, r := range regs {
 		expect(t, fmt.Sprintf("Idiv r%d", r), encode(func(a *amd64.Asm) { a.Idiv(r) }), x86asm.IDIV, r64(r))
 	}
+	for _, d := range regs {
+		for _, s := range regs {
+			expect(t, fmt.Sprintf("Imul r%d,r%d", d, s), encode(func(a *amd64.Asm) { a.Imul(d, s) }), x86asm.IMUL, r64(d), r64(s))
+		}
+	}
 }
 
 func TestAMD64Moves(t *testing.T) {
