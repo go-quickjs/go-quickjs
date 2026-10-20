@@ -173,3 +173,41 @@ func TestJITHandlerTreeGoesOn(t *testing.T) {
 		t.Fatal("viaUsing's invocation did not go on in its tree")
 	}
 }
+
+// A generator whose code is judged slow -- each resumption a stretch of a
+// few instructions to the next yield -- is resumed in its tree, and the
+// resumptions look at the code once for each jitSSAProbe more (jitResume's
+// jitResumeSkip), counting them all toward Go's retrying it
+// (jitRetrySlow): looked at at each, a loop over the generator's values
+// had spent a twentieth of its time there. Each answer is Node's.
+func TestJITSlowResumptionsLookSeldom(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	runtime.GC()
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	r, want := jitAnswersForTest(t, `
+		function* count(n) { for (let i = 0; i < n; i++) yield i }
+		function total(n) { let s = 0; for (const v of count(n)) s = (s + v * 3) | 0; return s }`)
+	for range 50 {
+		want(`total(1000)`, "1498500")
+	}
+	e := jitNativeForTest(t, r, "count")
+	if !e.entrySlow {
+		t.Fatalf("count's code, a few instructions a resumption, judged to pay: %+v", e.ssaStats)
+	}
+	looks, calls, backoff := r.jit.slowResumes, e.slowCalls, e.slowBackoff
+	// Each answer is found twice: the call runs once to check it, and once
+	// more as the interpreter's is compared (jitTierRuntimeForTest).
+	const n = 2 * 100001
+	want(`total(100000)`, "2114948112")
+	if l := r.jit.slowResumes - looks; l == 0 || l > n/jitSSAProbe+4 {
+		t.Fatalf("%d resumptions looked at count's code %d times", n, l)
+	}
+	if e.slowBackoff != backoff {
+		return // retried meanwhile: the count began again
+	}
+	if c := e.slowCalls - calls; c < n-2*jitSSAProbe || c > n+2*jitSSAProbe {
+		t.Fatalf("%d resumptions counted %d toward a retry", n, c)
+	}
+}

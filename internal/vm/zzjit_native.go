@@ -401,12 +401,15 @@ func (r *Runtime) jitSubstringOf(o *Object) (kind int, ok bool) {
 // (ssa.CallSite's Generic), which finds its code by its hint, had been
 // Go's; and a function whose closures are each called a few times, AWFY
 // DeltaBlue's forEach callbacks, was never compiled, its calls each warm-up
-// of a closure of its own.
+// of a closure of its own. jitResumeSkip is how many resumptions of a
+// generator's or an async function's code judged slow Go makes in the tree
+// without looking at the code again (jitResume).
 type jitCodeFields struct {
-	jitRefused   bool
-	jitCalls     uint8
-	jitLoopDelay uint8
-	jitHint      [4]byte
+	jitRefused    bool
+	jitCalls      uint8
+	jitLoopDelay  uint8
+	jitResumeSkip uint8
+	jitHint       [4]byte
 }
 
 // hint is the hint of the code of cl's function, its template's closures'
@@ -961,6 +964,9 @@ type jitState struct {
 	// backToTree counts the times it did.
 	treeOSR    jitTreeOSR
 	backToTree uint64
+	// slowResumes counts the looks at code judged slow that resumptions
+	// made, each for the next jitSSAProbe too (jitResume).
+	slowResumes uint64
 	// treeGoneOn counts the invocations a tree went on with so.
 	treeGoneOn  uint64
 	wentOn      uint64

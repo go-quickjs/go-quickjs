@@ -10504,9 +10504,21 @@ func (r *Runtime) jitResume(f *frame) (Value, error, bool) {
 	if f.cl.jitRefused {
 		return Undefined, nil, false
 	}
+	if f.cl.jitResumeSkip != 0 {
+		// One of the resumptions counted at the last look (below).
+		f.cl.jitResumeSkip--
+		return Undefined, nil, false
+	}
 	e := r.jit.hint(f.cl)
 	if e != nil && e.entrySlow && !e.invalid && !e.reoptPending() {
-		e.slowCalls++
+		// Code judged slow, which Go does not enter until it retries it
+		// (jitRetrySlow): the next jitSSAProbe resumptions, counted now,
+		// run in the tree without a look at the code. Looked at each time,
+		// a generator's every step, of a loop over its values, had cost
+		// it a twentieth of what it took.
+		e.slowCalls += 1 + jitSSAProbe
+		f.cl.jitResumeSkip = jitSSAProbe
+		r.jit.slowResumes++
 		jitRetrySlow(e)
 		return Undefined, nil, false
 	}
