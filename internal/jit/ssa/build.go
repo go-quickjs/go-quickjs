@@ -464,6 +464,66 @@ func (b *builder) forEachCall(blk *Block, pc int, fp forEachPlan) {
 	}
 }
 
+// IndexOfFeedback is Feedback that knows a method call at a PC calls one
+// of the realm's searches, String.prototype's or Array.prototype's indexOf,
+// lastIndexOf or includes, at the address it gives -- which, its kind --
+// on a string or an array: native code makes it a call of Go of its own
+// (indexOfCall).
+type IndexOfFeedback interface {
+	IndexOf(pc int) (fn uintptr, kind int, ok bool)
+}
+
+// indexOfAt is the search the method call at pc of the root, one Go makes
+// (a GoCall site) of one argument or two, calls (IndexOfFeedback).
+func (b *builder) indexOfAt(pc int) (fn uintptr, kind int, ok bool) {
+	if b.fb == nil || b.cur != b.root || b.p.Code[pc].Op != ir.Host || pc+1 >= len(b.p.Code) || !reachable(b.p, pc+1) || b.fb.Generic(pc) || !b.goCalls() {
+		return 0, 0, false
+	}
+	calls := b.calls[pc]
+	if len(calls) != 1 || calls[0].Go != GoCall || !calls[0].Method || calls[0].Argc != 1 && calls[0].Argc != 2 {
+		return 0, 0, false
+	}
+	argc := calls[0].Argc
+	if b.p.Maps[pc].Depth < argc+2 || b.p.Maps[pc+1].Depth != b.p.Maps[pc].Depth-argc-1 {
+		return 0, 0, false
+	}
+	f, ok := b.fb.(IndexOfFeedback)
+	if !ok {
+		return 0, 0, false
+	}
+	return f.IndexOf(pc)
+}
+
+// indexOfCall makes x.indexOf(t), or x.indexOf(t, i), or another search,
+// the call at pc of the function at fn, of the VM's kind: checked to call
+// it, a call of Go (GoIndexOf) whose result is the call's, kept where the
+// call's would be. Go refuses a receiver or an argument the built-in would
+// run anything for; those leave for Go to make the call after an exit.
+func (b *builder) indexOfCall(blk *Block, pc int, fn uintptr, kind int, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+	f := b.f
+	argc := b.calls[pc][0].Argc
+	sp := b.p.Locals + b.p.Maps[pc].Depth
+	base := sp - argc - 2
+	recv, callee := b.read(base, blk), b.read(base+1, blk)
+	object := guard(OpObjectOf, Ptr, ir.HostExit, callee)
+	same := guard(OpSameObject, None, ir.HostExit, object)
+	same.Const = ir.Value{Bits: uint64(fn)}
+	args := []*Value{recv}
+	for k := range argc {
+		args = append(args, b.read(base+2+k, blk))
+	}
+	site := &CallSite{Go: GoIndexOf, Argc: kind << 1, ThisSlot: -1}
+	if argc == 2 {
+		site.Argc |= IndexOfFrom
+	}
+	call := guard(OpCall, Tagged, ir.HostExit, args...)
+	f.cache(call).Calls, call.Index = []*CallSite{site}, b.callKeeps[pc]
+	kept := f.newValue(blk, OpCallCell, Source, call)
+	r := f.newValue(blk, OpKept, Tagged, kept, call)
+	r.Shadow = kept
+	b.write(base, blk, r)
+}
+
 // ParseIntFeedback is Feedback that knows a plain call at a PC of one
 // argument calls the realm's parseInt, at the address it gives, with a
 // number: native code makes it parseInt of a number, as V8's JSCallReducer
@@ -1021,6 +1081,17 @@ type GoOp uint8
 // the frame Go entered the code with, and refused on any other -- a native
 // callee's -- which leaves for Go to make them after an exit.
 //
+// GoIndexOf is a search, String.prototype's or Array.prototype's indexOf,
+// lastIndexOf or includes -- which, the VM's kind of it in Argc's bits past
+// IndexOfFrom -- of the first operand, for the second, from the third's
+// position if the call gives one (IndexOfFrom), as V8's code calls its
+// StringIndexOf and ArrayIndexOf builtins: Go answers it as the built-in
+// does where that runs nothing -- a string searched for a primitive that
+// is no symbol, an array of the realm's, dense, whose prototypes hold no
+// index, a position such a primitive -- and writes the index, or the
+// boolean, to the call's keep cell. It refuses the rest, which leaves for
+// Go to make the call after an exit.
+//
 // GoNewArray makes the array a loop of map or filter fills (forEachCall),
 // as their ArraySpeciesCreate makes it, the array they are called on the
 // first operand and its length the second: an Array of no length, with
@@ -1057,7 +1128,13 @@ const (
 	GoDelete
 	GoDeleteStrict
 	GoNewArray
+	GoIndexOf
 )
+
+// IndexOfFrom is GoIndexOf's Argc's low bit, where the call gives a
+// position, its second argument; the bits above it are the VM's kind of
+// search (IndexOfFeedback's).
+const IndexOfFrom = 1
 
 // RefillsPools reports whether a call takes an object from a pool, which
 // a call of Go fills again when it runs out (GoRefill).
@@ -4415,6 +4492,10 @@ func (b *builder) instruction(blk *Block, pc int) {
 		}
 		if fn, ok := b.parseIntAt(pc); ok && in.Op == ir.Host {
 			b.parseIntCall(blk, pc, fn, guard, boxF)
+			break
+		}
+		if fn, kind, ok := b.indexOfAt(pc); ok && in.Op == ir.Host {
+			b.indexOfCall(blk, pc, fn, kind, guard)
 			break
 		}
 		if fn, kind, ok := b.substring(pc); ok && in.Op == ir.Host {

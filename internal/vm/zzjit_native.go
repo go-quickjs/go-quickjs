@@ -171,7 +171,22 @@ type jitRealmFields struct {
 	// jitParseInt is the global parseInt, Number.parseInt too, whose call
 	// of a number native code makes itself (ssa.ParseIntFeedback).
 	jitParseInt *Object
+	// jitSearches are String.prototype's and Array.prototype's indexOf,
+	// lastIndexOf and includes, by their kind (jitSearchNames), whose calls
+	// on strings and arrays native code makes by a call of Go of their own
+	// (ssa.GoIndexOf).
+	jitSearches [jitSearchKinds]*Object
 }
+
+// The kinds of jitSearches: String.prototype's first, then Array's.
+const (
+	jitSearchStrings = 0
+	jitSearchArrays  = 3
+	jitSearchKinds   = 6
+)
+
+// jitSearchNames are jitSearches' names, by kind, within each prototype.
+var jitSearchNames = [3]string{"indexOf", "lastIndexOf", "includes"}
 
 // jitLoopNames are the methods of jitLoops, by kind.
 var jitLoopNames = [abi.LoopKinds]string{
@@ -199,6 +214,15 @@ func (r *Runtime) recordJITSubstrings() {
 		return Undefined
 	}
 	r.jitSubstring, r.jitSlice, r.jitSubstr, r.jitCharAt = own("substring"), own("slice"), own("substr"), own("charAt")
+	for k, name := range jitSearchNames {
+		r.jitSearches[jitSearchStrings+k], r.jitSearches[jitSearchArrays+k] = nil, nil
+		if m := own(name); m.IsObject() {
+			r.jitSearches[jitSearchStrings+k] = m.Object()
+		}
+		if m := r.proto.array.getOwn(r.atoms.intern(name)); m.ok() && m.value().IsObject() {
+			r.jitSearches[jitSearchArrays+k] = m.value().Object()
+		}
+	}
 	r.jitParseInt = nil
 	if m := r.global.getOwn(r.atoms.intern("parseInt")); m.ok() && m.value().IsObject() {
 		r.jitParseInt = m.value().Object()
@@ -706,6 +730,9 @@ type jitState struct {
 	// loopsFinished counts the loops of built-ins' calls Go went on with
 	// at an exit (jitLoopFinish).
 	loopsFinished uint64
+	// searchArgs are a search's arguments (jitSearch), given to its Go
+	// function, which keeps nothing of them, and cleared after.
+	searchArgs [2]Value
 	// ssaShared is what the contexts from ssaSharedFrom on hold of what
 	// they share (jitShareContexts); ssaSharedGen counts the times either,
 	// or bounds, changed, which a call of Go compares, not the struct.

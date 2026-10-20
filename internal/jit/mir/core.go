@@ -1796,9 +1796,10 @@ func derivedFunction(t *ssa.CallSite) uintptr {
 // goOpWord is the word a call of Go, site, passes Go (abi.Context's GoOp).
 func goOpWord(site *ssa.CallSite) uint64 {
 	op := uint64(site.Go)
-	if site.Go == ssa.GoClosure || site.Go == ssa.GoClose || site.Go == ssa.GoCompare || site.Go == ssa.GoNewArray {
+	if site.Go == ssa.GoClosure || site.Go == ssa.GoClose || site.Go == ssa.GoCompare || site.Go == ssa.GoNewArray || site.Go == ssa.GoIndexOf {
 		// The template's constant, the first local closed, the operator
-		// compared with, or whether an array has room (abi.GoOpIndexShift).
+		// compared with, whether an array has room, or an indexOf's form
+		// (abi.GoOpIndexShift).
 		op |= uint64(uint32(site.Argc)) << abi.GoOpIndexShift
 	}
 	if (site.Go == ssa.GoClosure || site.Go == ssa.GoCells || site.Go == ssa.GoClose) && site.Pool != 0 {

@@ -2348,7 +2348,7 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 			// Another object of a function the call checks by its code.
 			continue
 		}
-		if in.cl == nil && (in.charCode || in.fromChar || in.substring || in.forEach || in.parseInt) {
+		if in.cl == nil && (in.charCode || in.fromChar || in.substring || in.forEach || in.parseInt || in.indexOf) {
 			// String.prototype.charCodeAt, String.fromCharCode, a substring,
 			// a forEach or parseInt, which the code makes itself (CharCode,
 			// FromCharCode, Substring, ForEach, ParseInt) where it can, and
@@ -2633,8 +2633,9 @@ type jitInline struct {
 	// (jitLoopTyped), nil for an array's.
 	proto *Object
 	// parseInt marks a plain call of the realm's parseInt with a number
-	// (jitParseInts).
-	parseInt bool
+	// (jitParseInts), indexOf a string's or an array's call of one of
+	// jitSearches (jitIndexOfs).
+	parseInt, indexOf bool
 	// byCode marks a function the call met two objects of, closures its
 	// maker makes anew at each call: called by its code (jitSameCode).
 	byCode bool
@@ -2791,6 +2792,14 @@ func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 		if o := r.jitFromCharCodes(sp, in); o != nil {
 			// String.fromCharCode(c), made natively (jitFeedback.FromCharCode).
 			e.nativeCalls = append(e.nativeCalls, jitInline{pc: int32(pc), obj: o, fromChar: true})
+			e.callSites[pc] = jitCallNative
+			e.inlinePending = true
+			return
+		}
+		if o := r.jitIndexOfs(sp, in); o != nil {
+			// s.indexOf(t), a.includes(x) or another search, made by a call
+			// of Go of its own (jitFeedback.IndexOf).
+			e.nativeCalls = append(e.nativeCalls, jitInline{pc: int32(pc), obj: o, indexOf: true})
 			e.callSites[pc] = jitCallNative
 			e.inlinePending = true
 			return
@@ -3104,6 +3113,22 @@ func jitHostCall(ctx *abi.Context) bool {
 	case ssa.GoElemCell:
 		o := *(**Object)(unsafe.Pointer(&ctx.GoArgs[0].Ref))
 		return o != nil && jitElemAbsent(o, math.Float64frombits(ctx.GoArgs[1].Num))
+	case ssa.GoIndexOf:
+		// A search of a string or an array (jitSearch), what it searches
+		// for, and its position if the call gives one.
+		form := int(ctx.GoOp >> abi.GoOpIndexShift)
+		argv := &r.jit.searchArgs
+		args := argv[:1]
+		argv[0] = jitGoArg(ctx, 1)
+		if form&ssa.IndexOfFrom != 0 {
+			args, argv[1] = argv[:2], jitGoArg(ctx, 2)
+		}
+		v, ok := r.jitSearch(form>>1, jitGoArg(ctx, 0), args)
+		*argv = [2]Value{}
+		if ok {
+			*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
+		}
+		return ok
 	case ssa.GoIndex:
 		v, ok := r.jitKeyedRead(jitGoArg(ctx, 0), jitGoArg(ctx, 1))
 		if ok {
@@ -6174,6 +6199,90 @@ func (r *Runtime) jitLoopFinish(f *frame, pc int, loop uint64, after bool, v Val
 		return Float(-1), nil
 	}
 	return Undefined, nil
+}
+
+// jitSearchKind is the kind of o among jitSearches, or -1.
+func (r *Runtime) jitSearchKind(o *Object) int {
+	if o == nil {
+		return -1
+	}
+	return slices.Index(r.jitSearches[:], o)
+}
+
+// jitIndexOfs is one of jitSearches, the realm's own, if a method call at
+// the top of the stack calls it with one argument or two on a string --
+// String.prototype's -- or an array of the realm's, Array.prototype's; or
+// nil.
+func (r *Runtime) jitIndexOfs(sp int, in bytecode.Instr) *Object {
+	argc := int(in.A)
+	if jitCallOp(in.Op) != bytecode.OpCallMethod || argc != 1 && argc != 2 {
+		return nil
+	}
+	callee, recv := r.stack[sp-argc-1], r.stack[sp-argc-2]
+	if !callee.IsObject() {
+		return nil
+	}
+	switch k := r.jitSearchKind(callee.Object()); {
+	case k < 0:
+		return nil
+	case k < jitSearchArrays && !recv.IsString(), k >= jitSearchArrays && r.plainArray(recv) == nil:
+		return nil
+	}
+	return callee.Object()
+}
+
+// IndexOf is ssa.IndexOfFeedback's: the search, of jitSearches, the method
+// call at pc has made on a string or an array (jitIndexOfs), and its kind.
+func (fb *jitFeedback) IndexOf(pc int) (uintptr, int, bool) {
+	e := fb.e
+	if e == nil || fb.root != nil || pc >= len(fb.fn.Code) || jitCallOp(fb.fn.Code[pc].Op) != bytecode.OpCallMethod {
+		return 0, 0, false
+	}
+	for _, x := range jitTargets(e) {
+		if int(x.pc) != pc || !x.indexOf {
+			continue
+		}
+		if k := fb.r.jitSearchKind(x.obj); k >= 0 {
+			return uintptr(unsafe.Pointer(x.obj)), k, true
+		}
+	}
+	return 0, 0, false
+}
+
+// jitSearch is the answer of the search of kind, one of jitSearches, on
+// recv with args (Go's GoIndexOf): the built-in's own, by its Go function,
+// where nothing it does can run script or throw -- a string searched for
+// primitives that are no symbol, which convert with nothing called, and
+// includes's search no regular expression; an array of the realm's, dense,
+// whose prototypes hold no index, which it reads with nothing asked, and
+// its position such a primitive. It refuses the rest.
+func (r *Runtime) jitSearch(kind int, recv Value, args []Value) (Value, bool) {
+	if kind < 0 || kind >= jitSearchKinds || r.jitSearches[kind] == nil {
+		return Undefined, false
+	}
+	if kind < jitSearchArrays {
+		if !recv.IsString() {
+			return Undefined, false
+		}
+		for _, a := range args {
+			if !jitPlainOperand(a) {
+				return Undefined, false
+			}
+		}
+	} else {
+		if o := r.plainArray(recv); o == nil || !r.noInheritedIndices(o) || len(args) > 1 && !jitPlainOperand(args[1]) {
+			return Undefined, false
+		}
+	}
+	fd := r.jitSearches[kind].fn()
+	if fd == nil || fd.native == nil {
+		return Undefined, false
+	}
+	v, err := fd.native(r, recv, args)
+	if err != nil {
+		return Undefined, false
+	}
+	return v, true
 }
 
 // jitParseInts is the realm's parseInt, if a plain call at the top of the

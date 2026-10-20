@@ -1745,7 +1745,7 @@ func TestJITSSAProfitability(t *testing.T) {
 
 // Calls of Go count toward judging code as stretches do (jitSSAProfit):
 // builtins, entered three times, each a loop of 40,000 calls of
-// String.prototype.indexOf and little else, was judged every jitSSAProbe
+// String.prototype.codePointAt and little else, was judged every jitSSAProbe
 // entries, so never, and ran natively, slower than the tree tier, as
 // RegExp's run blocks did; now it is judged after its first calls and
 // the tree tier runs it. mixed, as many calls with real work around each,
@@ -1763,11 +1763,11 @@ func TestJITSSAProfitabilityOfCallsOfGo(t *testing.T) {
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	setup := `var str='abcdefgh';
-		function builtins(n){let s=0;for(let i=0;i<n;i++)s=(s+str.indexOf('q')+str.indexOf('c'))|0;return s}
-		function mixed(n){let s=0;for(let i=0;i<n;i++){s=(s*31+i)|0;s^=s>>>7;s=(s+i*i)|0;s^=s<<3;s=(s*7+(i>>1))|0;s^=s>>>5;s=(s+str.indexOf('c'))|0}return s}
-		function heavy(k){return str.indexOf('q')+str.indexOf('c')+str.indexOf('d')+str.indexOf('e')+str.indexOf('f')+
-			str.indexOf('g')+str.indexOf('h')+str.indexOf('a')+str.indexOf('b')+str.indexOf('x')+k}
-		function light(k){let x=k;for(let j=0;j<20;j++){x=(x*31+j)|0;x^=x>>>7;x=(x+j*j)|0;x^=x<<3}return (x+str.indexOf('c'))|0}
+		function builtins(n){let s=0;for(let i=0;i<n;i++)s=(s+str.codePointAt('q')+str.codePointAt('c'))|0;return s}
+		function mixed(n){let s=0;for(let i=0;i<n;i++){s=(s*31+i)|0;s^=s>>>7;s=(s+i*i)|0;s^=s<<3;s=(s*7+(i>>1))|0;s^=s>>>5;s=(s+str.codePointAt('c'))|0}return s}
+		function heavy(k){return str.codePointAt('q')+str.codePointAt('c')+str.codePointAt('d')+str.codePointAt('e')+str.codePointAt('f')+
+			str.codePointAt('g')+str.codePointAt('h')+str.codePointAt('a')+str.codePointAt('b')+str.codePointAt('x')+k}
+		function light(k){let x=k;for(let j=0;j<20;j++){x=(x*31+j)|0;x^=x>>>7;x=(x+j*j)|0;x^=x<<3}return (x+str.codePointAt('c'))|0}
 		function outer(n){let s=0;for(let i=0;i<n;i++)s=(s+heavy(i)+light(i))|0;return s}`
 	want := New(Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
@@ -8789,7 +8789,7 @@ func TestJITSSAGoCalls(t *testing.T) {
 		function thrower(i){made++;if(i===777)throw new TypeError('boom '+arguments.length);return i&7}
 		function mk(){let c=0;const inc=function(){c+=2;return arguments.length};
 			return function loop(n){let s=0;const o={length:3};
-				for(let i=0;i<n;i++){let w=i;for(let k=0;k<30;k++)w=(w*31+k)^(w>>>3);s=(s+w+h(o)+new P(i).c.y+bound(i&3)+[i,1].indexOf(1)+inc()+c+thrower(i))|0}return s+':'+o.n}}
+				for(let i=0;i<n;i++){let w=i;for(let k=0;k<30;k++)w=(w*31+k)^(w>>>3);s=(s+w+h(o)+new P(i).c.y+bound(i&3)+[i,1].at(1)+inc()+c+thrower(i))|0}return s+':'+o.n}}
 		var loop=mk();
 		function run(n){try{return loop(n)}catch(e){return e.message+'|'+e.stack+'|'+made}}
 		function rec(o,d){let s=0;for(let i=0;i<30;i++){s=(s+o.v)|0;if(d>0&&i==15)s=(s+deeper(d))|0}return s}
@@ -9959,9 +9959,9 @@ func TestJITSSAKeepCellsReused(t *testing.T) {
 	live.WriteString("function live(n){let t=0;for(let i=0;i<n;i++){")
 	for k := range 300 {
 		if k%25 == 0 {
-			fmt.Fprintf(&many, "t=(t+str.indexOf('%c'))|0;", 'a'+k%8)
+			fmt.Fprintf(&many, "t=(t+str.codePointAt('%c'))|0;", 'a'+k%8)
 		} else {
-			fmt.Fprintf(&many, "str.indexOf('%c');", 'a'+k%8)
+			fmt.Fprintf(&many, "str.codePointAt('%c');", 'a'+k%8)
 		}
 	}
 	for k := range 60 {
@@ -10029,7 +10029,7 @@ func TestJITSSAGoCallLeavesWithoutEntry(t *testing.T) {
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	setup := `var k={mode:0};
-		function loop(n){let s=0;for(let i=0;i<n;i++){let w=i;for(let j=0;j<30;j++)w=(w*31+j)^(w>>>3);s=(s+w+'abc'.indexOf('c')+again(i,k.mode))|0;s=(s*3+i)|0}return s}
+		function loop(n){let s=0;for(let i=0;i<n;i++){let w=i;for(let j=0;j<30;j++)w=(w*31+j)^(w>>>3);s=(s+w+'abc'.codePointAt('c')+again(i,k.mode))|0;s=(s*3+i)|0}return s}
 		function run(n){try{return loop(n)}catch(e){return e.message}}`
 	recompiled := 0
 	install := func(rt *Runtime) {
