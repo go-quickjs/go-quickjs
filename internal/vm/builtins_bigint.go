@@ -275,17 +275,7 @@ func bitAt(x []uint, n int64) bool {
 // low bits of the value's two's complement, as a fixed-width integer's, no
 // division, nor a BigInt made to learn them.
 func bigAsN64(v Value, bits uint, signed bool) Value {
-	u := bigLow64(v)
-	if bits < 64 {
-		u &= 1<<bits - 1
-	}
-	if signed {
-		return shortBig(int64(u<<(64-bits)) >> (64 - bits))
-	}
-	if u <= math.MaxInt64 {
-		return shortBig(int64(u))
-	}
-	return bigFromUint64(u)
+	return asN64(bigLow64(v), bits, signed)
 }
 
 // bigAsNCall is asIntN or asUintN, signed for the first, applied without a

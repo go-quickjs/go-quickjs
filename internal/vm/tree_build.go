@@ -36,7 +36,8 @@ type tentry struct {
 	method *methodOf
 	// arith is, for a tree that is an arithmetic or bitwise node over
 	// operands, what it is of: a store of it to a local can then be one
-	// statement (see storeArith).
+	// statement (see storeArith), and BigInt.asUintN of it made of its
+	// operands (see ztree_awrap.go).
 	arith *arithOf
 }
 
@@ -998,7 +999,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		b.pushArith(arithEntries(in.Op, x, y, pc), arithOf{op: in.Op, x: x, y: y, pc: pc})
 	case bytecode.OpBitAnd, bytecode.OpBitOr, bytecode.OpBitXor, bytecode.OpShl, bytecode.OpShr, bytecode.OpUShr:
 		y, x := b.pop(), b.pop()
-		b.push(bitwiseNode(in.Op, x.tree(), y.tree(), pc))
+		b.pushArith(bitwiseNode(in.Op, x.tree(), y.tree(), pc), arithOf{op: in.Op, x: x, y: y, pc: pc})
 	case bytecode.OpLt, bytecode.OpLe, bytecode.OpGt, bytecode.OpGe,
 		bytecode.OpEq, bytecode.OpNe, bytecode.OpStrictEq, bytecode.OpStrictNe:
 		y, x := b.pop(), b.pop()

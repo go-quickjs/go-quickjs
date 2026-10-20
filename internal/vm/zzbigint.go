@@ -570,3 +570,121 @@ func bigFloat(v Value) float64 {
 	}
 	return f
 }
+
+// wrapsOperator reports whether a is an operator wrapCall makes
+// BigInt.asUintN's and asIntN's of from its operands, over two that may be
+// BigInts: not a number constant.
+func wrapsOperator(a *arithOf) bool {
+	if a.imm || a.x.number || a.y.number {
+		return false
+	}
+	switch a.op {
+	case bytecode.OpAdd, bytecode.OpSub, bytecode.OpMul,
+		bytecode.OpBitAnd, bytecode.OpBitOr, bytecode.OpBitXor, bytecode.OpShl, bytecode.OpShr:
+		return true
+	}
+	return false
+}
+
+// wrapShort is asIntN, signed, or asUintN of the width w and a op b, two
+// BigInts held in their Values, made of the low 64 bits of their two's
+// complement (wrapLow), as bigAsNCall would make it of a op b. It reports
+// false where the call must be made: a width that is not an integral
+// number of 0 to 64, an operator wrapLow does not make.
+func wrapShort(signed bool, w Value, op bytecode.Op, a, b Value) (Value, bool) {
+	n := w.num
+	if !w.IsNumber() || !(n >= 0 && n <= 64) || n != float64(int(n)) {
+		return Undefined, false
+	}
+	u, ok := wrapLow(op, a, b)
+	if !ok {
+		return Undefined, false
+	}
+	if n == 0 {
+		return shortBig(0), true
+	}
+	return asN64(u, uint(n), signed), true
+}
+
+// wrapLow is the low 64 bits of a op b's two's complement, of two BigInts
+// held in their Values: the operator on their own low 64 bits, but for a
+// right shift, whose bits come from above as well, the sign's. It reports
+// false for a shift of 64 bits or more, either way, which may throw.
+func wrapLow(op bytecode.Op, a, b Value) (uint64, bool) {
+	x, y := a.shortBigLow(), b.shortBigLow()
+	switch op {
+	case bytecode.OpAdd:
+		return x + y, true
+	case bytecode.OpSub:
+		return x - y, true
+	case bytecode.OpMul:
+		return x * y, true
+	case bytecode.OpBitAnd:
+		return x & y, true
+	case bytecode.OpBitOr:
+		return x | y, true
+	case bytecode.OpBitXor:
+		return x ^ y, true
+	case bytecode.OpShl, bytecode.OpShr:
+		if !b.isInt64Big() {
+			return 0, false
+		}
+		left, s := op == bytecode.OpShl, b.int64Big()
+		if s < 0 {
+			// A negative count shifts the other way.
+			left, s = !left, -s
+		}
+		if s < 0 || s >= 64 {
+			return 0, false
+		}
+		if left {
+			return x << s, true
+		}
+		if s == 0 {
+			return x, true
+		}
+		h, _ := shortTwos(a)
+		return x>>s | h<<(64-s), true
+	}
+	return 0, false
+}
+
+// asN64 is asIntN, signed, or asUintN to a width of 1 to 64 bits of a
+// BigInt whose two's complement's low 64 bits are u.
+func asN64(u uint64, bits uint, signed bool) Value {
+	if bits < 64 {
+		u &= 1<<bits - 1
+	}
+	if signed {
+		return shortBig(int64(u<<(64-bits)) >> (64 - bits))
+	}
+	return shortBigMag(false, u)
+}
+
+// wrapOperator is a op b for wrapCall where it is not made of the low bits:
+// the operator's node's, its fast path for two numbers too.
+func (c *tctx) wrapOperator(op bytecode.Op, a, b Value, pc int) Value {
+	bitwise := isBitwise(op)
+	if a.IsNumber() && b.IsNumber() {
+		if bitwise {
+			return int32Op(op, a.num, b.num)
+		}
+		return Float(numericOp(op, a.num, b.num))
+	}
+	if bitwise {
+		return c.bitwiseSlow(op, a, b, pc)
+	}
+	return c.arithSlow(op, a, b, pc)
+}
+
+// wrapSeen is the mark arithSlow would have made for the JIT of the
+// arithmetic a op b, two BigInts held in their Values, that wrapCall made
+// of their low bits instead: one on the heap, or made there, unless both
+// and the result are in the int64 range.
+func wrapSeen(c *tctx, op bytecode.Op, a, b Value, pc int) {
+	if isBitwise(op) {
+		return
+	}
+	_, ok := shortArith(op, a, b)
+	treeBigInt(c, pc, !ok)
+}

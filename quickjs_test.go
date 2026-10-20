@@ -5168,3 +5168,84 @@ func TestBigIntCall(t *testing.T) {
   return (a === b) + " " + a;
 })()`, "true 0,0,1,-1,2147483648,9007199254740992,-9007199254740992,4611686018427387904,9223372036854775808,-9223372036854775808,18446744073709551616,-1180591620717411303424,1000000000000000000000,RangeError,RangeError,RangeError,RangeError,RangeError,12,31,0,SyntaxError,1,0,TypeError,TypeError,5,-18446744073709551616,18446744073709551616,7,8,TypeError,TypeError,TypeError,332833500")
 }
+
+// TestBigIntWrapCall pins BigInt.asUintN and asIntN of an operator, which
+// the tree tier makes of the operands' low 64 bits where both are BigInts
+// held in their Values (wrapCall): each operator it makes so, of both
+// signs, about the int64 range's edges and 2^64's and past them, at widths
+// of 0 to 100 and ones that need converting; another method of the same
+// name, numbers and mixed operands, which the operator and the call make;
+// the order the width and the operands are read in; a xorshift generator's
+// and the FNV-1a hash's values. The answers' lengths and hashes are Node's.
+func TestBigIntWrapCall(t *testing.T) {
+	checkEval(t, `(function () {
+var vals = [0n, 1n, -1n, 2n, 7n, 13n, 63n, 64n, 65n, -64n, -63n, 100n,
+  (1n << 31n) - 1n, 1n << 31n, -(1n << 31n), 1n << 53n, (1n << 63n) - 1n, 1n << 63n, -(1n << 63n),
+  -(1n << 63n) - 1n, (1n << 64n) - 1n, -(1n << 64n) + 1n, 0xcbf29ce484222325n, 0x100000001b3n,
+  88172645463325252n, 1n << 64n, -(1n << 64n), (1n << 100n) + 12345n, -(1n << 100n) - 3n];
+var widths = [0, 1, 7, 31, 32, 53, 63, 64, 65, 100, -0, 64.5, "64", NaN];
+function run(f) {
+  var h = 0, out = [];
+  for (var i = 0; i < vals.length; i++)
+    for (var j = 0; j < vals.length; j++)
+      for (var k = 0; k < widths.length; k++) {
+        var s;
+        try { s = String(f(widths[k], vals[i], vals[j])); } catch (e) { s = e.constructor.name; }
+        out.push(s);
+      }
+  return out;
+}
+function add(w, x, y) { return BigInt.asUintN(w, x + y); }
+function sub(w, x, y) { return BigInt.asIntN(w, x - y); }
+function mul(w, x, y) { return BigInt.asUintN(w, x * y); }
+function muls(w, x, y) { return BigInt.asIntN(w, x * y); }
+function and(w, x, y) { return BigInt.asUintN(w, x & y); }
+function or(w, x, y) { return BigInt.asIntN(w, x | y); }
+function xor(w, x, y) { return BigInt.asUintN(w, x ^ y); }
+function shl(w, x, y) { return BigInt.asUintN(w, x << y); }
+function shls(w, x, y) { return BigInt.asIntN(w, x << y); }
+function shr(w, x, y) { return BigInt.asUintN(w, x >> y); }
+function shrs(w, x, y) { return BigInt.asIntN(w, x >> y); }
+function div(w, x, y) { return BigInt.asUintN(w, x / y); }
+var all = [];
+[add, sub, mul, muls, and, or, xor, shl, shls, shr, shrs, div].forEach(function (f) {
+  // twice: the second run on a tree built
+  var a = run(f).join(","), b = run(f).join(",");
+  if (a !== b) throw new Error("unstable " + f.name);
+  all.push(f.name + ":" + a.length + ":" + hash(a));
+});
+function hash(s) {
+  var h = 0;
+  for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return h;
+}
+// other callees, numbers and mixed operands
+var o = { asUintN: function (w, v) { return [w, v]; } };
+function other(x, y) { return String(o.asUintN(64, x * y)); }
+all.push(other(3n, 4n), other(3, 4), other("a", 2));
+var B = BigInt;
+function mixed(x, y) { try { return String(B.asUintN(64, x + y)); } catch (e) { return e.constructor.name; } }
+all.push(mixed(1n, 2), mixed(1, 2), mixed("x", 2n), mixed(1n << 70n, 1n));
+var order = [];
+var w = { valueOf() { order.push("w"); return 64; } };
+function ord(x, y) { return BigInt.asUintN(w, (order.push("x"), x) << (order.push("y"), y)); }
+all.push(String(ord(1n, 3n)), order.join(""));
+function xorshift(n) {
+  var x = 88172645463325252n;
+  for (var i = 0; i < n; i++) {
+    x ^= BigInt.asUintN(64, x << 13n);
+    x ^= x >> 7n;
+    x ^= BigInt.asUintN(64, x << 17n);
+  }
+  return x;
+}
+function fnv(text) {
+  var h = 0xcbf29ce484222325n;
+  for (var i = 0; i < text.length; i++)
+    h = BigInt.asUintN(64, (h ^ BigInt(text.charCodeAt(i))) * 0x100000001b3n);
+  return h;
+}
+all.push(String(xorshift(1000)), String(fnv("The quick brown fox jumps over the lazy dog")));
+return all.join("|");
+})()`, "add:103695:24271061|sub:85450:-1579539025|mul:96870:2099516221|muls:77625:-425678477|and:51849:1872110749|or:73961:-965443836|xor:112117:37501782|shl:90832:-2099144689|shls:74840:-466410159|shr:83129:-182323294|shrs:58314:-1512613231|div:68171:1904182134|64,12|64,12|64,NaN|TypeError|TypeError|SyntaxError|1|8|xyw|1363160026601443621|17580284887202820368")
+}

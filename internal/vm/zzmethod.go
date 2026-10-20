@@ -288,6 +288,15 @@ func (b *tbuilder) callAll(op bytecode.Op, n, pc int) bool {
 	if op == bytecode.OpCallMethod && (p < 1 || b.stack[p-1].slot != p-1) {
 		return false
 	}
+	if a := b.stack[len(b.stack)-1].arith; op == bytecode.OpCallMethod && n == 2 && a != nil && wrapsOperator(a) {
+		// m(w, x op y), which BigInt.asUintN(64, x op y) is made of.
+		b.pop()
+		w := b.pop().tree()
+		f := b.pop().tree()
+		b.pop()
+		b.push(wrapCall(f, w, a.x.tree(), a.y.tree(), a.op, a.pc, p, pc))
+		return true
+	}
 	args := make([]tval, n)
 	for i := n - 1; i >= 0; i-- {
 		args[i] = b.pop().tree()
