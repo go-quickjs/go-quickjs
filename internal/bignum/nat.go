@@ -132,12 +132,19 @@ func Mul(z, x, y []uint) []uint {
 	return Norm(z[:len(x)+len(y)])
 }
 
-// basicMul writes x*y to z[:len(x)+len(y)], schoolbook, a row a word of y.
+// basicMul writes x*y to z[:len(x)+len(y)], schoolbook, a row a word of y:
+// the first row written, not added to zeros.
 func basicMul(z, x, y []uint) {
-	clear(z[:len(x)+len(y)])
-	for j, d := range y {
-		if d != 0 {
-			z[len(x)+j] = mulAddRow(z[j:j+len(x)], x, d)
+	n := len(x)
+	if len(y) == 0 {
+		clear(z[:n])
+		return
+	}
+	z[n] = mulRow(z[:n], x, y[0])
+	clear(z[n+1 : n+len(y)])
+	for j := 1; j < len(y); j++ {
+		if d := y[j]; d != 0 {
+			z[n+j] = mulAddRow(z[j:j+n], x, d)
 		}
 	}
 }
