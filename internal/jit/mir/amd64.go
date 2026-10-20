@@ -1333,6 +1333,19 @@ func (c *compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(amd64.Con
 		c.setG(v, scratchA)
 		return
 	}
+	if lengthWrites(site, len(v.Args), c.enc) {
+		// An array's length, natively where it shortens a dense array or
+		// leaves it as it is (lengthWrite), by Go otherwise.
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		c.lengthWrite(v, slow)
+		c.a.Jmp(join)
+		c.a.Bind(slow)
+		c.goCallOp(v, goOpWord(site), guard, false)
+		c.a.Bind(join)
+		c.a.Load(scratchA, regCtx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
+		c.setG(v, scratchA)
+		return
+	}
 	if site.Go == ssa.GoClosure && site.Pool != 0 {
 		// Natively from its pool where it can be (closureTake), by Go
 		// otherwise, which fills the pool again.
@@ -1864,6 +1877,81 @@ func (c *compiler) mapStep(v *ssa.Value, nexts [2]uintptr, slow amd64.Label) {
 	c.a.Store(scratchC, c.enc.MapIterAt, scratchB)
 	c.a.Load(scratchB, scratchA, c.enc.MapEntrySeq)
 	c.a.Store(scratchC, c.enc.MapIterLast, scratchB)
+}
+
+// lengthWrite makes call v, an array's length written by a call of Go
+// (lengthWrites): its receiver an array, dense, no property of its own,
+// whose length may be written, and the value a number that is an integer
+// from 0 to its length -- the length set, the elements past it cleared, as
+// the VM's setArrayLength shortens it -- while the collector does not
+// mark, which wants the pointers cleared shaded. Its result, undefined, is
+// in the call's keep cell. Anything else goes to slow, where Go makes it.
+// It uses every scratch register and xScratch2, and no other.
+func (c *compiler) lengthWrite(v *ssa.Value, slow amd64.Label) {
+	fail := func(cond amd64.Cond) { c.a.Jcc(cond, slow) }
+	recv, x := v.Args[0], v.Args[1]
+	// The value: a number whose truncation is itself, kept in xScratch2.
+	if w := c.gpr(x, scratchA); w != scratchA {
+		c.a.MovRR(scratchA, w)
+	}
+	c.cmpWord(scratchA, abi.NumberLimit)
+	fail(amd64.CondAE)
+	c.a.MovQToX(xScratch2, scratchA)
+	c.a.Cvttsd2si(scratchB, xScratch2)
+	c.a.Cvtsi2sd(xScratch2, scratchB, true)
+	c.a.MovQFromX(scratchC, xScratch2)
+	c.a.Op(amd64.Cmp, scratchC, scratchA, true)
+	fail(amd64.CondNE)
+	c.a.MovQToX(xScratch2, scratchB)
+	// The receiver: a dense array of no property of its own, whose length
+	// may be written.
+	w := c.gpr(recv, scratchA)
+	c.cmpWord(w, c.enc.Object)
+	fail(amd64.CondNE)
+	c.pointerWord(recv, w)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	fail(amd64.CondE)
+	c.a.LoadU8(scratchC, scratchB, c.enc.ObjectClass)
+	c.a.OpImm(amd64.Cmp, scratchC, int32(c.enc.ClassArray), false)
+	fail(amd64.CondNE)
+	c.a.LoadU8(scratchC, scratchB, c.enc.ObjectFlags)
+	c.a.OpImm(amd64.And, scratchC, int32(c.enc.FlagLengthWritable|c.enc.FlagSparse), false)
+	c.a.OpImm(amd64.Cmp, scratchC, int32(c.enc.FlagLengthWritable), false)
+	fail(amd64.CondNE)
+	c.a.Load(scratchC, scratchB, c.enc.ObjectProps+8)
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	fail(amd64.CondNE)
+	// The collector not marking.
+	c.movImm(scratchC, c.enc.WriteBarrier)
+	c.a.LoadU8(scratchC, scratchC, 0)
+	c.a.Op(amd64.Test, scratchC, scratchC, false)
+	fail(amd64.CondNE)
+	// The length, no more than the array's, which becomes it; the
+	// elements from it to the old one cleared.
+	c.a.MovQFromX(scratchA, xScratch2)
+	c.a.Load(scratchC, scratchB, c.enc.ObjectElems+8)
+	c.a.Op(amd64.Cmp, scratchA, scratchC, true)
+	fail(amd64.CondA)
+	c.a.Store(scratchB, c.enc.ObjectElems+8, scratchA)
+	c.a.Load(scratchB, scratchB, c.enc.ObjectElems)
+	// A value is 16 bytes (lengthWrites).
+	c.a.ShiftImm(amd64.Shl, scratchA, 4, true)
+	c.a.ShiftImm(amd64.Shl, scratchC, 4, true)
+	c.a.Op(amd64.Add, scratchA, scratchB, true)
+	c.a.Op(amd64.Add, scratchC, scratchB, true)
+	loop, cleared := c.a.NewLabel(), c.a.NewLabel()
+	c.a.Bind(loop)
+	c.a.Op(amd64.Cmp, scratchA, scratchC, true)
+	c.a.Jcc(amd64.CondAE, cleared)
+	for at := int32(0); at < c.enc.ValueSize; at += 8 {
+		c.a.StoreImm(scratchA, at, 0)
+	}
+	c.a.OpImm(amd64.Add, scratchA, c.enc.ValueSize, true)
+	c.a.Jmp(loop)
+	c.a.Bind(cleared)
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	c.storeImm(regCtx, keep+c.enc.NumOffset, c.enc.Undefined, scratchA)
+	c.storeImm(regCtx, keep+c.enc.RefOffset, 0, scratchA)
 }
 
 // stepNexts are the Map's and Set's iterators' next functions a loop's

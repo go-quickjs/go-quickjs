@@ -3429,6 +3429,17 @@ func (c *a64Compiler) pointerWord(x *ssa.Value, w arm64.Reg) {
 
 // goCall calls Go, as amd64's does.
 func (c *a64Compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(arm64.Cond)) {
+	if lengthWrites(site, len(v.Args), c.enc) {
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		c.lengthWrite(v, slow)
+		c.a.B(join)
+		c.a.Bind(slow)
+		c.goCallOp(v, goOpWord(site), false)
+		c.a.Bind(join)
+		c.a.Load(a64A, a64Ctx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
+		c.setG(v, a64A)
+		return
+	}
 	if site.Step && c.enc.IterState != 0 {
 		slow, join := c.a.NewLabel(), c.a.NewLabel()
 		c.iterStep(v, slow)
@@ -3793,6 +3804,71 @@ func (c *a64Compiler) iterStep(v *ssa.Value, slow arm64.Label) {
 	c.a.Load(a64C, a64D, c.enc.IterIdx)
 	c.a.AddImm(a64C, a64C, 1, true)
 	c.a.Store(a64D, c.enc.IterIdx, a64C)
+}
+
+// lengthWrite is amd64's: an array's length written natively where it
+// shortens a dense array or leaves it as it is. It uses A, B, C, D, F1 and
+// F2, and no other.
+func (c *a64Compiler) lengthWrite(v *ssa.Value, slow arm64.Label) {
+	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+	recv, x := v.Args[0], v.Args[1]
+	if w := c.gpr(x, a64A); w != a64A {
+		c.a.MovRR(a64A, w)
+	}
+	c.movImm(a64B, abi.NumberLimit)
+	c.a.Cmp(a64A, a64B, true)
+	fail(arm64.HS)
+	c.a.FMovToF(a64F1, a64A)
+	c.a.Fcvtzs(a64B, a64F1)
+	c.a.Scvtf(a64F1, a64B, true)
+	c.a.FMovFromF(a64C, a64F1)
+	c.a.Cmp(a64C, a64A, true)
+	fail(arm64.NE)
+	c.a.FMovToF(a64F2, a64B)
+	w := c.gpr(recv, a64A)
+	c.movImm(a64C, c.enc.Object)
+	c.a.Cmp(w, a64C, true)
+	fail(arm64.NE)
+	c.pointerWord(recv, w)
+	c.a.Cbz(a64B, slow, true)
+	c.a.LoadU8(a64C, a64B, c.enc.ObjectClass)
+	c.a.CmpImm(a64C, int64(c.enc.ClassArray), false)
+	fail(arm64.NE)
+	c.a.LoadU8(a64C, a64B, c.enc.ObjectFlags)
+	c.movImm(a64D, uint64(c.enc.FlagLengthWritable|c.enc.FlagSparse))
+	c.a.Op(arm64.And, a64C, a64C, a64D, false)
+	c.a.CmpImm(a64C, int64(c.enc.FlagLengthWritable), false)
+	fail(arm64.NE)
+	c.a.Load(a64C, a64B, c.enc.ObjectProps+8)
+	c.a.Cbnz(a64C, slow, true)
+	c.movImm(a64C, c.enc.WriteBarrier)
+	c.a.LoadU8(a64C, a64C, 0)
+	c.a.Cbnz(a64C, slow, false)
+	c.a.FMovFromF(a64A, a64F2)
+	c.a.Load(a64C, a64B, c.enc.ObjectElems+8)
+	c.a.Cmp(a64A, a64C, true)
+	fail(arm64.HI)
+	c.a.Store(a64B, c.enc.ObjectElems+8, a64A)
+	c.a.Load(a64B, a64B, c.enc.ObjectElems)
+	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
+	c.a.ShiftImm(arm64.Lsl, a64C, a64C, 4, true)
+	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	c.a.Op(arm64.Add, a64C, a64C, a64B, true)
+	c.movImm(a64D, 0)
+	loop, cleared := c.a.NewLabel(), c.a.NewLabel()
+	c.a.Bind(loop)
+	c.a.Cmp(a64A, a64C, true)
+	c.a.BCond(arm64.HS, cleared)
+	for at := int32(0); at < c.enc.ValueSize; at += 8 {
+		c.a.Store(a64A, at, a64D)
+	}
+	c.a.AddImm(a64A, a64A, int64(c.enc.ValueSize), true)
+	c.a.B(loop)
+	c.a.Bind(cleared)
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	c.movImm(a64C, c.enc.Undefined)
+	c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64C)
+	c.a.Store(a64Ctx, keep+c.enc.RefOffset, a64D)
 }
 
 // mapStep is amd64's: a for...of's step of a Map's or a Set's iterator,

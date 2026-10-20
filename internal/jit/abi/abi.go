@@ -1018,6 +1018,10 @@ type Encoding struct {
 	// FlagExtensible is its bit for an object properties may be added to,
 	// FlagLengthWritable an array's whose length may change.
 	FlagExtensible, FlagLengthWritable uint8
+	// LengthKey is length's atom, whose write to an array native code
+	// makes itself where it shortens the array or leaves it as it is, and
+	// a call of Go does the rest; 0 for none.
+	LengthKey uint32
 
 	// String is every string's number word. A string's UTF-8 form's data
 	// pointer is at StringData, valid only when the pointer at StringLeft is

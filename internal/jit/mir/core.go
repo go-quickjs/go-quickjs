@@ -1796,6 +1796,15 @@ func derivedFunction(t *ssa.CallSite) uintptr {
 	return t.Callee
 }
 
+// lengthWrites reports whether a call of Go, site, of argc operands, is a
+// property's write of length (abi.Encoding's LengthKey), which native code
+// makes itself where it shortens an array (lengthWrite), the call Go's
+// otherwise: the receiver and the value, the values 16 bytes.
+func lengthWrites(site *ssa.CallSite, argc int, enc abi.Encoding) bool {
+	return site.Go == ssa.GoCall && site.Accessor == ssa.AccessorSet && enc.LengthKey != 0 && site.Key == enc.LengthKey &&
+		argc == 2 && enc.ValueSize == 16 && enc.WriteBarrier != 0
+}
+
 // goOpWord is the word a call of Go, site, passes Go (abi.Context's GoOp).
 func goOpWord(site *ssa.CallSite) uint64 {
 	op := uint64(site.Go)

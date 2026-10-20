@@ -2,7 +2,11 @@
 
 package vm
 
-import "testing"
+import (
+	"runtime"
+	"runtime/debug"
+	"testing"
+)
 
 // keyedWriteSetup's functions write objects' properties by computed keys,
 // as microbench's prop_create does, obj[i] = i: indices and names, new and
@@ -88,4 +92,23 @@ func TestJITKeyedWrites(t *testing.T) {
 	if e.ssaStats.hosts > 2 || len(e.keyedWrites) == 0 {
 		t.Errorf("fill left its code %d times, its keyed writes %v", e.ssaStats.hosts, e.keyedWrites)
 	}
+}
+
+// jitCountGoCalls runs src in r and counts the calls of Go it makes
+// (jitGoCallWork), the collector held off meanwhile: while it marks,
+// native code's stores of pointers are Go's (jitMarkingForTest), which a
+// count of a few calls meets at random -- CI's runners, of two CPUs, at
+// one run in twenty.
+func jitCountGoCalls(t *testing.T, r *Runtime, src string) (Value, int) {
+	t.Helper()
+	runtime.GC()
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	calls := 0
+	jitGoCallWork = func() { calls++ }
+	defer func() { jitGoCallWork = nil }()
+	v, err := r.Run(compileForTest(t, src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v, calls
 }

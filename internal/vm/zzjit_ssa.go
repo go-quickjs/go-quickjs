@@ -151,6 +151,7 @@ var jitEncoding = abi.Encoding{
 	FlagSparse:         uint8(objHasSparseElements),
 	FlagHTMLDDA:        uint8(objHTMLDDA),
 	FlagExtensible:     uint8(objExtensible),
+	LengthKey:          uint32(atomLength),
 	FlagLengthWritable: uint8(objArrayLengthWritable),
 }
 
