@@ -225,7 +225,9 @@ language implementations alike; the goja and external runners below take
 `-bench` too. They reach far more of the JIT than the V8 suite does. With
 `-jit`, `-jitreport` prints after each benchmark what the
 JIT did: what it compiled, by how much each function ran natively, and what
-it refused or never tried, with why.
+it refused or never tried, with why. The runner gives the JIT a 32 MiB
+budget (`-jitmem`), not the runtime's default 8 MiB, which Typescript's code
+does not fit; `-jitmem 0` runs with the default.
 
 ```sh
 go run -tags quickjs_jit ./internal/cmd/v8bench -jit -jitreport -bench awfy -dir /tmp/awfy -fetch -mode fixed -n 1
