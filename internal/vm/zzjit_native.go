@@ -176,7 +176,23 @@ type jitRealmFields struct {
 	// on strings and arrays native code makes by a call of Go of their own
 	// (ssa.GoIndexOf).
 	jitSearches [jitSearchKinds]*Object
+	// jitStringCtor is String, whose call of a primitive, and
+	// jitMapDelete and jitSetDelete are Map.prototype.delete and
+	// Set.prototype.delete, whose calls on a Map and a Set, a call of Go
+	// from native code makes without a frame (jitGoCallPlain).
+	jitStringCtor, jitMapDelete, jitSetDelete *Object
+	// jitPlainFns are the functions whose calls jitGoCallPlain makes:
+	// String, the collections' methods among them, which a call of Go is
+	// asked to be of before anything else of it is looked at, by their
+	// addresses in jitPlainSet, an open-addressed table (jitPlainSlot) of
+	// a probe or two: Date.now's calls, which are none, had spent 7% of
+	// their time on a walk of the eight.
+	jitPlainFns [8]*Object
+	jitPlainSet [32]uintptr
 }
+
+// jitPlainSlot is where an address's search in jitPlainSet starts.
+func jitPlainSlot(p uintptr) int { return int((uint64(p) >> 4) * 0x9e3779b97f4a7c15 >> 59) }
 
 // The kinds of jitSearches: String.prototype's first, then Array's.
 const (
@@ -199,6 +215,7 @@ var jitLoopNames = [abi.LoopKinds]string{
 func (r *Runtime) recordJITStringIntrinsic(ctor *Object) {
 	r.jitCharCodeAt = r.proto.str.getOwn(r.atoms.intern("charCodeAt")).value()
 	r.jitFromCharCode = ctor.getOwn(r.atoms.intern("fromCharCode")).value()
+	r.jitStringCtor = ctor
 }
 
 // recordJITSubstrings notes the realm's String.prototype substring, slice,
@@ -226,6 +243,45 @@ func (r *Runtime) recordJITSubstrings() {
 	r.jitParseInt = nil
 	if m := r.global.getOwn(r.atoms.intern("parseInt")); m.ok() && m.value().IsObject() {
 		r.jitParseInt = m.value().Object()
+	}
+	r.jitMapDelete, r.jitSetDelete = nil, nil
+	if p := r.proto.mapProto; p != nil {
+		if m := p.getOwn(r.atoms.intern("delete")); m.ok() && m.value().IsObject() {
+			r.jitMapDelete = m.value().Object()
+		}
+	}
+	if p := r.proto.setProto; p != nil {
+		if m := p.getOwn(r.atoms.intern("delete")); m.ok() && m.value().IsObject() {
+			r.jitSetDelete = m.value().Object()
+		}
+	}
+	r.jitPlainFns = [8]*Object{r.jitStringCtor, r.jitMapDelete, r.jitSetDelete}
+	k := 3
+	for _, p := range [2]*Object{r.proto.mapProto, r.proto.setProto} {
+		if p == nil {
+			continue
+		}
+		// Map.prototype's get, has and set, Set.prototype's has and add.
+		for _, name := range [4]string{"get", "has", "set", "add"} {
+			if m := p.getOwn(r.atoms.intern(name)); m.ok() && m.value().IsObject() && k < len(r.jitPlainFns) {
+				if fd := m.value().Object().fn(); fd != nil && fd.elemOp >= elemMapGet && fd.elemOp <= elemSetAdd {
+					r.jitPlainFns[k] = m.value().Object()
+					k++
+				}
+			}
+		}
+	}
+	r.jitPlainSet = [32]uintptr{}
+	for _, o := range r.jitPlainFns {
+		if o == nil {
+			continue
+		}
+		p := uintptr(unsafe.Pointer(o))
+		i := jitPlainSlot(p)
+		for r.jitPlainSet[i] != 0 {
+			i = (i + 1) % len(r.jitPlainSet)
+		}
+		r.jitPlainSet[i] = p
 	}
 	for kind, name := range jitLoopNames {
 		r.jitLoops[kind], r.jitTypedLoops[kind] = nil, nil

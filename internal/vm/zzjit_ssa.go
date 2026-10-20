@@ -2976,8 +2976,9 @@ func jitHostCall(ctx *abi.Context) bool {
 		return false
 	}
 	if ssa.GoOp(ctx.GoOp&0xff) == ssa.GoCall && jitGoCallWork == nil {
-		// The most frequent, asked first.
-		return r.jitGoCall(ctx)
+		// The most frequent, asked first; one that runs nothing made
+		// without a frame.
+		return r.jitMaybePlain(ctx) && r.jitGoCallPlain(ctx) || r.jitGoCall(ctx)
 	}
 	if jitGoCallWork != nil {
 		jitGoCallWork()
@@ -3130,7 +3131,7 @@ func jitHostCall(ctx *abi.Context) bool {
 		// The pool's address, a constant of the code's, which keeps it.
 		return r.jitRefillPool(*(**abi.ObjectPool)(unsafe.Pointer(&ctx.GoArgs[0].Ref)))
 	case ssa.GoCall:
-		return r.jitGoCall(ctx)
+		return r.jitMaybePlain(ctx) && r.jitGoCallPlain(ctx) || r.jitGoCall(ctx)
 	case ssa.GoCells:
 		if ctx.GoOp>>abi.GoOpKindShift&0xff == abi.GoClosurePool {
 			// Cells native code takes from their pool where it can: run

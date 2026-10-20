@@ -9543,7 +9543,7 @@ func TestJITSSAGoCallsFromNativeCallees(t *testing.T) {
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	setup := `var c={n:0,mode:0};
-		function inner(x){let s=x;for(let j=0;j<1;j++)s=s*2+1;if(c.n++%50===0)s+=probe(x);return s+String(x).length}
+		function inner(x){let s=x;for(let j=0;j<1;j++)s=s*2+1;if(c.n++%50===0)s+=probe(x);return s+escape(x).length}
 		function mid(x){let s=0;for(let j=0;j<1;j++)s=inner(x)+1;return s}
 		function top(x){let s=0;for(let j=0;j<40;j++)s=(s*3+j)|0;return (s+mid(x)*2)|0}
 		function outer(n){let t=0;for(let i=0;i<n;i++){try{t=(t+top(i))|0}catch(e){t=(t+e.message.length)|0}t^=t>>>3}return t}
