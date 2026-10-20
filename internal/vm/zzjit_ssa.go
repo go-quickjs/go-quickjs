@@ -47,7 +47,7 @@ var jitEncoding = abi.Encoding{
 	UndefinedCell: uint64(uintptr(unsafe.Pointer(&jitUndefinedCell))),
 	Object:        objectBits,
 	// A short BigInt (shortBig).
-	ShortBigTag:     shortBigBase,
+	ShortBigTag:     shortIntBase,
 	ShortBigLowBits: shortBigLowBits,
 	ShortBigHigh:    uint64(uintptr(unsafe.Pointer(&shortBigHigh))),
 	UpvalueSlot:     int32(unsafe.Offsetof(upvalue{}.slot)),
@@ -1236,8 +1236,8 @@ func (fb *jitFeedback) BigIntCell(pc int) (uintptr, int64, bool, bool) {
 	*cell = fb.cl.consts[in.A]
 	k := fb.keep()
 	k.cells = append(k.cells, cell)
-	if cell.isShortBig() {
-		return uintptr(unsafe.Pointer(cell)), cell.shortBigInt(), true, true
+	if cell.isInt64Big() {
+		return uintptr(unsafe.Pointer(cell)), cell.int64Big(), true, true
 	}
 	return uintptr(unsafe.Pointer(cell)), 0, false, true
 }
@@ -4475,16 +4475,16 @@ func (r *Runtime) jitBigArithSafe(op bytecode.Op, a, b Value) bool {
 		return jitBigWords(a)+jitBigWords(b) <= limit
 	case bytecode.OpDiv, bytecode.OpMod:
 		// A BigInt on the heap is never zero.
-		return !b.isShortBig() || b.shortBigInt() != 0
+		return !b.isInt64Big() || b.int64Big() != 0
 	case bytecode.OpBitAnd, bytecode.OpBitOr, bytecode.OpBitXor:
 		return true
 	case bytecode.OpShl, bytecode.OpShr:
 		// Either way a shift by at most what keeps a left shift's result
 		// within the limit.
-		if !b.isShortBig() {
+		if !b.isInt64Big() {
 			return false
 		}
-		y := b.shortBigInt()
+		y := b.int64Big()
 		return y > -maxBigIntBits && y < maxBigIntBits && jitBigWords(a)*bits.UintSize+int(max(y, -y)) <= maxBigIntBits
 	}
 	return false
@@ -7408,10 +7408,10 @@ func (r *Runtime) jitBigIntSeen(f *frame, e *jitEntry, site int) bool {
 	}
 	e.bigints = append(e.bigints, int32(site))
 	e.reopt = true
-	if !native || !a.isShortBig() || !b.isShortBig() {
+	if !native || !a.isInt64Big() || !b.isInt64Big() {
 		return false
 	}
-	x, y := a.shortBigInt(), b.shortBigInt()
+	x, y := a.int64Big(), b.int64Big()
 	switch in.Operator {
 	case ir.Add:
 		if s := x + y; (x^s)&(y^s) < 0 {

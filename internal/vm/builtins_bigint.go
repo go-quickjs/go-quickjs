@@ -209,7 +209,8 @@ func (r *Runtime) bigIntAsN(args []Value, signed bool) (Value, error) {
 	// need not be made to learn that. One that does not fit is a result as
 	// wide as bits, which past the limit no BigInt can be.
 	if v.isShortBig() {
-		if x := v.shortBigInt(); signed || x >= 0 {
+		// Of less than 64 bits of magnitude, past which the width is.
+		if neg, _ := v.shortBigParts(); signed || !neg {
 			return v, nil
 		}
 	}
@@ -308,7 +309,7 @@ func bigAsNCall(signed bool, args []Value) (Value, bool) {
 // bigLow64 is the low 64 bits of a BigInt's two's complement.
 func bigLow64(v Value) uint64 {
 	if v.isShortBig() {
-		return uint64(v.shortBigInt())
+		return v.shortBigLow()
 	}
 	b := (*BigInt)(v.ref)
 	words := b.words()
@@ -338,10 +339,14 @@ func bigIntToFloat(b *BigInt) float64 {
 }
 
 // shortArith applies an arithmetic operator to two BigInts held in their
-// Values, as int64s. It reports false where bigArith must answer: a result
-// outside the int64 range, a division by zero, a negative power.
+// Values, as int64s. It reports false where bigOp must answer: an operand
+// or a result outside the int64 range, a division by zero, a negative
+// power.
 func shortArith(op bytecode.Op, a, b Value) (Value, bool) {
-	x, y := a.shortBigInt(), b.shortBigInt()
+	if !a.isInt64Big() || !b.isInt64Big() {
+		return Undefined, false
+	}
+	x, y := a.int64Big(), b.int64Big()
 	switch op {
 	case bytecode.OpAdd:
 		if s := x + y; (s^x)&(s^y) >= 0 {
@@ -414,10 +419,13 @@ func mulInt64(x, y int64) (int64, bool) {
 
 // shortBitwise applies a bitwise or shift operator other than >>> to two
 // BigInts held in their Values, which as int64s are in the two's complement
-// a BigInt's bitwise operators are defined in. It reports false for a left
-// shift whose result leaves the int64 range.
+// a BigInt's bitwise operators are defined in. It reports false for an
+// operand outside the int64 range, and a left shift whose result leaves it.
 func shortBitwise(op bytecode.Op, a, b Value) (Value, bool) {
-	x, y := a.shortBigInt(), b.shortBigInt()
+	if !a.isInt64Big() || !b.isInt64Big() {
+		return Undefined, false
+	}
+	x, y := a.int64Big(), b.int64Big()
 	switch op {
 	case bytecode.OpBitAnd:
 		return shortBig(x & y), true
@@ -453,8 +461,8 @@ func shortBitwise(op bytecode.Op, a, b Value) (Value, bool) {
 // bigNot is ~ on a BigInt. A BigInt has no width, so the complement is
 // -(x+1), which is what both an int64's and big.Int's Not compute.
 func bigNot(n Value) Value {
-	if n.isShortBig() {
-		return shortBig(^n.shortBigInt())
+	if n.isInt64Big() {
+		return shortBig(^n.int64Big())
 	}
 	var buf bigScratch
 	neg, x := bigParts(n, &buf)

@@ -731,8 +731,8 @@ func (r *Runtime) compareBigInt(a, b Value) (cmpResult, error) {
 		return cmpEqual, nil
 	}
 	switch {
-	case a.isShortBig() && b.isShortBig():
-		x, y := a.shortBigInt(), b.shortBigInt()
+	case a.isInt64Big() && b.isInt64Big():
+		x, y := a.int64Big(), b.int64Big()
 		if x < y {
 			return cmpLess, nil
 		} else if x > y {

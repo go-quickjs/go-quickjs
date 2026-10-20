@@ -68,10 +68,34 @@ const bigInt64Setup = `
 	function mixed(n, k) {
 		try { return changes(n, k, 1) } catch (e) { return e instanceof TypeError ? -1 : -2 }
 	}
+	function over(n, a) {
+		// Across 2^63: native code meets BigInts past int64 held in their
+		// Values, which its unboxing exits at.
+		let s = a, c = 0
+		for (let i = 0; i < n; i++) {
+			s = s + one
+			if (s > a) c++
+			if (s < max) c += 2
+			c += Number((s - a) % m)
+		}
+		return c
+	}
+	function past(n, a, b) {
+		// Compiled for BigInts in the int64 range, then given one past it,
+		// held in its Value: its unboxing exits.
+		let c = 0
+		for (let i = 0; i < n; i++) {
+			if (a < b) c++
+			if (a >= b) c += 2
+			c += Number((a - b) % m)
+		}
+		return c
+	}
 	function all(n, k) {
 		return squares(n, start) + squares(n, near) * 3 + down(n, max, start) * 5 + down(n, min + one, -start) * 7 +
 			edges(n, max, one) + edges(n, min, -one) * 11 + edges(n, near, near) * 13 + stores(n, start) * 17 +
-			changes(n, k, huge) * 19 + mixed(n, k) * 23
+			changes(n, k, huge) * 19 + mixed(n, k) * 23 + over(n, max - 1000n) * 29 +
+			past(n, k == 1000 ? max + 5n : max - 5n, max - 7n) * 31
 	}
 `
 

@@ -141,32 +141,89 @@ const (
 	// canonicalNaN is the positive quiet NaN that every NaN is normalized to,
 	// chosen because it lies outside the tag range.
 	canonicalNaN = 0x7FF8000000000000
-	// shortBigBase begins the NaNs that hold a BigInt in the int64 range: the
-	// low 50 bits of its value are the low 50 of num, and the high 14 are
-	// which byte of shortBigHigh ref points at. Every BigInt in that range is
-	// held so, and no other, so two are the same value exactly when their
-	// bits are the same.
+	// shortBigBase begins the NaNs that hold a BigInt above -2^64 and below
+	// 2^64 in its Value, of two kinds. From shortIntBase on, one in the
+	// int64 range: the low 49 bits of the int64 are the low 49 of num, and
+	// the high 15 which byte of shortBigHigh ref points at. Below it, one
+	// past the int64 range: the low 49 bits of its 65 of two's complement
+	// in num, and the high 16 which byte of shortBigHighX. Every BigInt in
+	// that range is held so, and no other, so two are the same value
+	// exactly when their bits are the same; and which kind a value is is
+	// num's tag alone, so that the int64 range's is a comparison
+	// (isInt64Big).
 	shortBigBase    = 0xFFFC000000000000
-	shortBigLowBits = 50
+	shortIntBase    = 0xFFFE000000000000
+	shortBigLowBits = 49
 	shortBigLowMask = 1<<shortBigLowBits - 1
-	// heapBigBits is the NaN of a BigInt outside the int64 range, whose ref
-	// is its *BigInt: the one below shortBigBase, so that every BigInt is
-	// from heapBigBits up, which one comparison asks.
+	// heapBigBits is the NaN of a BigInt not held in its Value, whose ref is
+	// its *BigInt: the one below shortBigBase, so that every BigInt is from
+	// heapBigBits up, which one comparison asks.
 	heapBigBits = shortBigBase - 1
 )
 
-// shortBigHigh is what a short BigInt's ref points into, at the byte its high
-// 14 bits number: a pointer outside Go's heap, which its collector passes
-// over, for 14 bits a NaN has no room for.
-var shortBigHigh [1 << (64 - shortBigLowBits)]byte
+// shortBigHigh and shortBigHighX are what a short BigInt's ref points into,
+// at the byte its high bits number, an int64's 15 and another's 16: pointers
+// outside Go's heap, which its collector passes over, for bits a NaN has no
+// room for.
+var (
+	shortBigHigh  [1 << (64 - shortBigLowBits)]byte
+	shortBigHighX [1 << (65 - shortBigLowBits)]byte
+)
 
 // shortBig is the BigInt i, held in the Value.
 func shortBig(i int64) Value {
 	u := uint64(i)
 	return Value{
-		num: math.Float64frombits(shortBigBase | u&shortBigLowMask),
+		num: math.Float64frombits(shortIntBase | u&shortBigLowMask),
 		ref: unsafe.Pointer(&shortBigHigh[u>>shortBigLowBits]),
 	}
+}
+
+// shortBigMag is the BigInt of sign neg and magnitude mag, below 2^64, held
+// in the Value: as shortBig in the int64 range.
+func shortBigMag(neg bool, mag uint64) Value {
+	if mag < 1<<63 || neg && mag == 1<<63 {
+		x := int64(mag)
+		if neg {
+			x = -x
+		}
+		return shortBig(x)
+	}
+	lo, hi := mag, uint64(0)
+	if neg {
+		// 2^65 - mag: its low 64 bits, and the 65th set.
+		lo, hi = -mag, 1
+	}
+	return Value{
+		num: math.Float64frombits(shortBigBase | lo&shortBigLowMask),
+		ref: unsafe.Pointer(&shortBigHighX[lo>>shortBigLowBits|hi<<(64-shortBigLowBits)]),
+	}
+}
+
+// shortBigLow is a short BigInt's two's complement's low 64 bits.
+func (v Value) shortBigLow() uint64 {
+	if v.isInt64Big() {
+		return uint64(v.int64Big())
+	}
+	off := uint64(uintptr(v.ref) - uintptr(unsafe.Pointer(&shortBigHighX)))
+	return off<<shortBigLowBits | math.Float64bits(v.num)&shortBigLowMask
+}
+
+// shortBigParts is a short BigInt's sign and magnitude, below 2^64.
+func (v Value) shortBigParts() (bool, uint64) {
+	if v.isInt64Big() {
+		if x := v.int64Big(); x < 0 {
+			return true, -uint64(x)
+		} else {
+			return false, uint64(x)
+		}
+	}
+	off := uint64(uintptr(v.ref) - uintptr(unsafe.Pointer(&shortBigHighX)))
+	lo := off<<shortBigLowBits | math.Float64bits(v.num)&shortBigLowMask
+	if off>>(64-shortBigLowBits) != 0 {
+		return true, -lo
+	}
+	return false, lo
 }
 
 // heapBig is the BigInt b, which is outside the int64 range.
@@ -177,14 +234,17 @@ func heapBig(b *BigInt) Value {
 // isHeapBig reports whether the value is a BigInt outside the int64 range.
 func (v Value) isHeapBig() bool { return math.Float64bits(v.num) == heapBigBits }
 
-// isShortBig reports whether the value is a BigInt held in the Value.
-func (v Value) isShortBig() bool {
-	return math.Float64bits(v.num)>>shortBigLowBits == shortBigBase>>shortBigLowBits
-}
+// isShortBig reports whether the value is a BigInt held in the Value: one
+// above -2^64 and below 2^64.
+func (v Value) isShortBig() bool { return math.Float64bits(v.num) >= shortBigBase }
 
-// shortBigInt is the value of a BigInt isShortBig has said is held in the
-// Value.
-func (v Value) shortBigInt() int64 {
+// isInt64Big reports whether the value is a BigInt in the int64 range, which
+// int64Big is.
+func (v Value) isInt64Big() bool { return math.Float64bits(v.num) >= shortIntBase }
+
+// int64Big is the value of a BigInt isInt64Big has said is in the int64
+// range.
+func (v Value) int64Big() int64 {
 	high := uint64(uintptr(v.ref) - uintptr(unsafe.Pointer(&shortBigHigh)))
 	return int64(high<<shortBigLowBits | math.Float64bits(v.num)&shortBigLowMask)
 }
@@ -369,7 +429,12 @@ func (v Value) Symbol() *Symbol {
 // of its own, which the caller may keep.
 func (v Value) BigInt() *BigInt {
 	if v.isShortBig() {
-		return NewBigInt(v.shortBigInt())
+		neg, mag := v.shortBigParts()
+		var buf bigScratch
+		w := wordsOfUint64(mag, &buf)
+		b := newBigWords(len(w), neg)
+		copy(b.words(), w)
+		return b
 	}
 	if v.isHeapBig() {
 		return (*BigInt)(v.ref)
@@ -494,7 +559,8 @@ func (v Value) Truthy() bool {
 		return v.String().Len() != 0
 	case KindBigInt:
 		if v.isShortBig() {
-			return v.shortBigInt() != 0
+			// Zero is in the int64 range.
+			return !v.isInt64Big() || v.int64Big() != 0
 		}
 		return !v.BigInt().IsZero()
 	case KindObject:

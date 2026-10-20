@@ -4147,6 +4147,38 @@ func TestBigIntAsN(t *testing.T) {
 		out.join(",")`, "1,1,-1,18446744073709551615,RangeError,0,RangeError,TypeError,15,0,0,36893488147419103231")
 }
 
+// TestBigInt65 pins the BigInts held in their Values, every one above -2^64
+// and below 2^64, at the int64 range's edges and theirs: each value one
+// encoding, however it was made -- by arithmetic, parsed, from a number, a
+// DataView, a BigUint64Array, asUintN -- so the same Map key, === and ==;
+// the operators across the edges, comparisons, sorts, strings, ~, -,
+// Number and Boolean. The answers' count, length, hash and start are
+// Node's.
+func TestBigInt65(t *testing.T) {
+	checkEval(t, `(function () {
+  var M = 1n << 63n, N = 1n << 64n, out = [];
+  var vals = [M - 1n, M, M + 1n, -M, -M - 1n, -M + 1n, N - 1n, N, N + 1n, -N + 1n, -N, -N - 1n, 0n, 1n, -1n];
+  // The same values made other ways.
+  var other = [BigInt("9223372036854775807"), M * 1n, BigInt(2 ** 63) + 1n, -(M), BigInt("-9223372036854775809"), 1n - M,
+    BigInt.asUintN(64, -1n), (N - 1n) + 1n, N | 1n, 1n - N, -(N), -N - 1n, M - M, N / N, (N - 1n) - N];
+  var dv = new DataView(new ArrayBuffer(8)); dv.setBigUint64(0, N - 1n);
+  var ta = new BigUint64Array([M, N - 1n, 5n]);
+  var m = new Map();
+  for (var i = 0; i < vals.length; i++) m.set(vals[i], i);
+  for (var i = 0; i < other.length; i++) out.push(m.get(other[i]), vals[i] === other[i], vals[i] == other[i]);
+  out.push(m.get(dv.getBigUint64(0)), m.get(ta[0]), m.get(ta[1]), ta[0] === M, dv.getBigInt64(0));
+  for (var a of vals) for (var b of [M - 1n, M, N - 1n, -M, -N + 1n, 3n]) {
+    out.push((a + b) % 1000003n, (a - b) % 999983n, (a * b) % 1000033n, a < b, a == b, (a ^ b) % 997n, (a & b) % 991n, (a | b) % 983n, (a >> 3n) % 977n, (a << 5n) % 971n);
+    if (b !== 0n) out.push((a / b) % 1009n, (a % b) % 1013n);
+  }
+  var sorted = vals.slice().sort((x, y) => (x < y ? -1 : x > y ? 1 : 0)).join(" ");
+  var tsort = new BigInt64Array([5n, -M, M - 1n, 0n, -1n]).sort().join(" ");
+  out.push(sorted, tsort, String(N - 1n), (N - 1n).toString(16), (-(N - 1n)).toString(36), -(M), ~(N - 1n), ~M, -(-M), Number(N - 1n), Boolean(N - N), Boolean(N - 1n));
+  var h = 0; var s = out.join(","); for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return out.length + " " + s.length + " " + h + " " + s.slice(0, 120);
+})()`, "1142 5588 1292418309 0,true,true,1,true,true,2,true,true,3,true,true,4,true,true,5,true,true,6,true,true,7,true,true,8,true,true,9,true,true,")
+}
+
 // TestBigIntBitwise covers the bitwise operators on BigInts, which have no
 // width: the result is whatever the arithmetic says, not a wrapped 32 bits.
 func TestBigIntBitwise(t *testing.T) {

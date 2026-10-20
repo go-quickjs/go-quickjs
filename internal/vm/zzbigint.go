@@ -1,7 +1,6 @@
 package vm
 
 import (
-	"math"
 	"math/bits"
 	"strconv"
 	"unsafe"
@@ -42,36 +41,30 @@ func heapParts(v Value) (bool, []uint) {
 
 // shortParts is bigParts of a BigInt held in its Value.
 func shortParts(v Value, buf *bigScratch) (bool, []uint) {
-	x := v.shortBigInt()
-	u := uint64(x)
-	if x < 0 {
-		u = -u
-	}
+	neg, u := v.shortBigParts()
+	return neg, wordsOfUint64(u, buf)
+}
+
+// wordsOfUint64 is a magnitude below 2^64 in the words of buf.
+func wordsOfUint64(u uint64, buf *bigScratch) []uint {
 	if bits.UintSize == 64 {
 		buf[0] = uint(u)
 	} else {
 		buf[0], buf[len(buf)-1] = uint(u), uint(u>>32)
 	}
-	return x < 0, bignum.Norm(buf[:])
+	return bignum.Norm(buf[:])
 }
 
 // bigOf is a result's value: held in its Value in the int64 range, a BigInt
 // of a copy of its words outside it.
 func bigOf(neg bool, mag []uint) Value {
 	if len(mag) <= 64/bits.UintSize {
+		// Below 2^64: held in its Value.
 		var u uint64
 		for i, w := range mag {
 			u |= uint64(w) << (i * bits.UintSize)
 		}
-		if u <= math.MaxInt64 {
-			if neg {
-				return shortBig(-int64(u))
-			}
-			return shortBig(int64(u))
-		}
-		if neg && u == 1<<63 {
-			return shortBig(math.MinInt64)
-		}
+		return shortBigMag(neg, u)
 	}
 	b := newBigWords(len(mag), neg)
 	copy(b.words(), mag)
@@ -132,6 +125,11 @@ const bigWordsNear = maxBigIntBits/bits.UintSize - 1
 // makes it: RangeErrors for a result past maxBigIntBits, a division by
 // zero, a negative power; the memory a meter allows reserved first.
 func (r *Runtime) bigOp(op bytecode.Op, a, b Value) (Value, error) {
+	if bits.UintSize == 64 && a.isShortBig() && b.isShortBig() {
+		if v, ok := shortOp(op, a, b); ok {
+			return v, nil
+		}
+	}
 	var ba, bb bigScratch
 	var an, bn bool
 	var x, y []uint
@@ -227,10 +225,10 @@ func (r *Runtime) bigPow(xn bool, x []uint, b Value, yn bool, y []uint) (Value, 
 		// 1 or -1: the power's parity is all that matters.
 		return bigOf(xn && y[0]&1 != 0, x), nil
 	}
-	if !b.isShortBig() || b.shortBigInt() > maxBigIntBits || int64(bignum.BitLen(x)-1)*b.shortBigInt() > maxBigIntBits {
+	if !b.isInt64Big() || b.int64Big() > maxBigIntBits || int64(bignum.BitLen(x)-1)*b.int64Big() > maxBigIntBits {
 		return Undefined, r.throwBigIntSize()
 	}
-	e := uint64(b.shortBigInt())
+	e := uint64(b.int64Big())
 	if err := r.reserveBigInt(int64(bignum.BitLen(x)) * int64(e)); err != nil {
 		return Undefined, err
 	}
@@ -250,13 +248,18 @@ func (r *Runtime) bigPow(xn bool, x []uint, b Value, yn bool, y []uint) (Value, 
 		p := bignum.Sqr(t[:2*len(sq)], sq)
 		sq = append(sq[:0], p...)
 	}
-	return bigOf(xn && b.shortBigInt()&1 != 0, acc), nil
+	return bigOf(xn && b.int64Big()&1 != 0, acc), nil
 }
 
 // bigBits is the bitwise operator or shift op of two BigInts: a shift's
 // count taken whole, a negative one shifting the other way; a RangeError
 // for a left shift past maxBigIntBits.
 func (r *Runtime) bigBits(op bytecode.Op, a, b Value) (Value, error) {
+	if bits.UintSize == 64 && a.isShortBig() && b.isShortBig() {
+		if v, ok := shortBits(op, a, b); ok {
+			return v, nil
+		}
+	}
 	var ba, bb bigScratch
 	var an, bn bool
 	var x, y []uint
@@ -282,7 +285,7 @@ func (r *Runtime) bigBits(op bytecode.Op, a, b Value) (Value, error) {
 		if bn {
 			left = !left
 		}
-		if !b.isShortBig() || b.shortBigInt() > maxBigIntBits || b.shortBigInt() < -maxBigIntBits {
+		if !b.isInt64Big() || b.int64Big() > maxBigIntBits || b.int64Big() < -maxBigIntBits {
 			// Past every bit: a left shift of anything but zero is too
 			// large, a right one leaves the sign.
 			if left {
@@ -296,9 +299,9 @@ func (r *Runtime) bigBits(op bytecode.Op, a, b Value) (Value, error) {
 			}
 			return shortBig(0), nil
 		}
-		s := uint(b.shortBigInt())
+		s := uint(b.int64Big())
 		if bn {
-			s = uint(-b.shortBigInt())
+			s = uint(-b.int64Big())
 		}
 		if left {
 			if len(x) == 0 {
@@ -315,6 +318,137 @@ func (r *Runtime) bigBits(op bytecode.Op, a, b Value) (Value, error) {
 		return bigOf(bignum.Sar(r.bigRoom(bignum.SarRoom(len(x))), an, x, s)), nil
 	}
 	return Undefined, r.throwTypeError("unsupported BigInt operation")
+}
+
+// shortOp is the arithmetic operator op of two BigInts held in their
+// Values, on a 64-bit machine: a sign and a magnitude below 2^64 each, the
+// result one too, or two words on the heap -- without bignum's slices of
+// words, for what most BigInts past the int64 range are, a 64-bit hash's
+// or generator's. It reports false where bigOp must answer: a division by
+// zero, a power.
+func shortOp(op bytecode.Op, a, b Value) (Value, bool) {
+	an, x := a.shortBigParts()
+	bn, y := b.shortBigParts()
+	switch op {
+	case bytecode.OpSub:
+		bn = !bn
+		fallthrough
+	case bytecode.OpAdd:
+		if an == bn {
+			s, c := bits.Add64(x, y, 0)
+			if c != 0 {
+				return bigTwoWords(an, s, 1), true
+			}
+			return shortBigMag(an, s), true
+		}
+		if x >= y {
+			return shortBigMag(an, x-y), true
+		}
+		return shortBigMag(bn, y-x), true
+	case bytecode.OpMul:
+		hi, lo := bits.Mul64(x, y)
+		if hi != 0 {
+			return bigTwoWords(an != bn, lo, hi), true
+		}
+		return shortBigMag(an != bn, lo), true
+	case bytecode.OpDiv:
+		if y == 0 {
+			return Undefined, false
+		}
+		return shortBigMag(an != bn, x/y), true
+	case bytecode.OpMod:
+		if y == 0 {
+			return Undefined, false
+		}
+		// The remainder takes the dividend's sign.
+		return shortBigMag(an, x%y), true
+	}
+	return Undefined, false
+}
+
+// shortBits is the bitwise operator or shift op of two BigInts held in their
+// Values, on a 64-bit machine, as shortOp: the bitwise ones on 128 bits of
+// two's complement, a shift by fewer than 64 on the magnitude. It reports
+// false where bigBits must answer: a longer shift left.
+func shortBits(op bytecode.Op, a, b Value) (Value, bool) {
+	switch op {
+	case bytecode.OpBitAnd, bytecode.OpBitOr, bytecode.OpBitXor:
+		xh, xl := shortTwos(a)
+		yh, yl := shortTwos(b)
+		var h, l uint64
+		switch op {
+		case bytecode.OpBitAnd:
+			h, l = xh&yh, xl&yl
+		case bytecode.OpBitOr:
+			h, l = xh|yh, xl|yl
+		default:
+			h, l = xh^yh, xl^yl
+		}
+		if h == 0 {
+			return shortBigMag(false, l), true
+		}
+		// Below zero: its magnitude, which is 2^64 for -2^64 alone.
+		if l == 0 {
+			return bigTwoWords(true, 0, 1), true
+		}
+		return shortBigMag(true, -l), true
+	case bytecode.OpShl, bytecode.OpShr:
+		if !b.isInt64Big() {
+			return Undefined, false
+		}
+		// The count's magnitude as a uint64: the most negative int64's too.
+		left, n := op == bytecode.OpShl, b.int64Big()
+		s := uint64(n)
+		if n < 0 {
+			left, s = !left, -s
+		}
+		neg, x := a.shortBigParts()
+		if left {
+			if s >= 64 {
+				return Undefined, false
+			}
+			hi, lo := x>>(64-s), x<<s
+			if s == 0 {
+				hi = 0
+			}
+			if hi != 0 {
+				return bigTwoWords(neg, lo, hi), true
+			}
+			return shortBigMag(neg, lo), true
+		}
+		// Toward minus infinity: a magnitude below zero less one, shifted,
+		// and one more.
+		if !neg {
+			if s >= 64 {
+				return shortBig(0), true
+			}
+			return shortBigMag(false, x>>s), true
+		}
+		if s >= 64 {
+			return shortBig(-1), true
+		}
+		return shortBigMag(true, (x-1)>>s+1), true
+	}
+	return Undefined, false
+}
+
+// shortTwos is a BigInt held in its Value as 128 bits of two's complement,
+// high word and low.
+func shortTwos(v Value) (uint64, uint64) {
+	neg, mag := v.shortBigParts()
+	if !neg {
+		return 0, mag
+	}
+	return ^uint64(0), -mag
+}
+
+// bigTwoWords is the BigInt of sign neg and magnitude hi*2^64+lo, hi not
+// zero, on a 64-bit machine: two words on the heap.
+func bigTwoWords(neg bool, lo, hi uint64) Value {
+	b := newBigWords(2, neg)
+	w := b.words()
+	w[0], w[1] = uint(lo), uint(hi)
+	return heapBig(b)
 }
 
 // bigNeg is -v of a BigInt.
@@ -335,8 +469,8 @@ func (r *Runtime) bigNotOf(v Value) Value {
 
 // bigCmp compares two BigInts.
 func bigCmp(a, b Value) int {
-	if a.isShortBig() && b.isShortBig() {
-		x, y := a.shortBigInt(), b.shortBigInt()
+	if a.isInt64Big() && b.isInt64Big() {
+		x, y := a.int64Big(), b.int64Big()
 		switch {
 		case x < y:
 			return -1
@@ -373,8 +507,16 @@ func bigCmp(a, b Value) int {
 // case: written into the String's own room, which they are ASCII for.
 func bigString(v Value, base int) *String {
 	var b [128]byte
+	if v.isInt64Big() {
+		return asciiString(strconv.AppendInt(b[:0], v.int64Big(), base))
+	}
 	if v.isShortBig() {
-		return asciiString(strconv.AppendInt(b[:0], v.shortBigInt(), base))
+		neg, mag := v.shortBigParts()
+		d := b[:0]
+		if neg {
+			d = append(d, '-')
+		}
+		return asciiString(strconv.AppendUint(d, mag, base))
 	}
 	var buf bigScratch
 	n, x := bigParts(v, &buf)

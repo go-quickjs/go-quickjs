@@ -2047,8 +2047,8 @@ func (r *Runtime) typedArrayResultFor(ctor Value, n int64) (Value, *typedArrayDa
 // A BigInt array's elements are BigInts, which have no finite float64 form, so
 // they are compared as integers rather than converted.
 func compareNumeric(x, y Value) int {
-	if x.isShortBig() && y.isShortBig() {
-		return cmp.Compare(x.shortBigInt(), y.shortBigInt())
+	if x.isInt64Big() && y.isInt64Big() {
+		return cmp.Compare(x.int64Big(), y.int64Big())
 	}
 	if x.IsBigInt() && y.IsBigInt() {
 		return x.BigInt().Cmp(y.BigInt())

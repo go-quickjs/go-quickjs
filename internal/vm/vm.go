@@ -4332,8 +4332,8 @@ func (r *Runtime) negate(a Value) (Value, error) {
 		return Undefined, err
 	}
 	if n.IsBigInt() {
-		if n.isShortBig() && n.shortBigInt() != math.MinInt64 {
-			return shortBig(-n.shortBigInt()), nil
+		if n.isInt64Big() && n.int64Big() != math.MinInt64 {
+			return shortBig(-n.int64Big()), nil
 		}
 		// The most negative int64's, or one on the heap.
 		return bigNeg(n), nil

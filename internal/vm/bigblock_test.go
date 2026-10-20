@@ -49,7 +49,8 @@ func TestBigIntBlocks(t *testing.T) {
 					t.Fatalf("%v read back as %v", want, bigIntOf(b))
 				}
 				v := valueOf(want)
-				if got := bigIntOf(v.BigInt()); got.Cmp(want) != 0 || v.isShortBig() != want.IsInt64() {
+				// Held in its Value below 2^64, in either sign.
+				if got := bigIntOf(v.BigInt()); got.Cmp(want) != 0 || v.isShortBig() != (want.BitLen() <= 64) || v.isInt64Big() != want.IsInt64() {
 					t.Fatalf("%v as a Value: %v, short %v", want, got, v.isShortBig())
 				}
 				if round%10 == 0 {
