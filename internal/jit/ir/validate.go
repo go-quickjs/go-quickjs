@@ -146,7 +146,7 @@ func (p *Program) Validate() error {
 			}
 		case Binary, StringAdd:
 			left, right, write = true, true, true
-			if in.Operator > Ne && (in.Operator < BitAnd || in.Operator > UShr) && in.Operator != Mod {
+			if in.Operator > Ne && (in.Operator < BitAnd || in.Operator > UShr) && in.Operator != Mod && in.Operator != Pow {
 				return bad("invalid binary operator")
 			}
 		case Unary:

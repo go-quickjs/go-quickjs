@@ -397,7 +397,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			raw = in.A >> 24
 		}
 		op, _ := operator(raw)
-		host = host || raw == uint32(bytecode.OpMod)
+		host = host || raw == uint32(bytecode.OpMod) || raw == uint32(bytecode.OpPow)
 		bitwise = bitwise || op >= ir.BitAnd && op <= ir.UShr || in.Op == bytecode.OpBitNot
 		// A call in tail position may be the function's own, which native
 		// code makes a jump to its start deep in the stack: a loop.
@@ -623,6 +623,11 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 				// it to Go.
 				if mod, ok := lowerMod(fn.Code[pc], p.Locals+p.Maps[pc].Depth); ok {
 					p.Code[pc] = mod
+				}
+				if fn.Code[pc].Op == bytecode.OpPow {
+					// So is a power, ** (ir.Pow).
+					sp := p.Locals + p.Maps[pc].Depth
+					p.Code[pc] = ir.Instruction{Op: ir.Binary, Operator: ir.Pow, Dest: sp - 2, Left: ir.Slot(sp - 2), Right: ir.Slot(sp - 1)}
 				}
 			}
 			if b := fn.Code[pc]; in.Op == ir.Host && (b.Op == bytecode.OpPushConst && fn.Constants[b.A].Kind == bytecode.ConstString || b.Op == bytecode.OpPushEmptyString) && p.Maps[pc].Depth >= 0 {
@@ -1383,7 +1388,7 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 	case bytecode.OpDrop:
 		return effect{need: 1, delta: -1}, nil
 	case bytecode.OpBitAnd, bytecode.OpBitOr, bytecode.OpBitXor, bytecode.OpShl, bytecode.OpShr, bytecode.OpUShr,
-		bytecode.OpAdd, bytecode.OpSub, bytecode.OpMul, bytecode.OpDiv, bytecode.OpMod,
+		bytecode.OpAdd, bytecode.OpSub, bytecode.OpMul, bytecode.OpDiv, bytecode.OpMod, bytecode.OpPow,
 		bytecode.OpLt, bytecode.OpLe, bytecode.OpGt, bytecode.OpGe,
 		bytecode.OpEq, bytecode.OpNe, bytecode.OpStrictEq, bytecode.OpStrictNe:
 		return effect{need: 2, delta: -1}, nil
@@ -1762,7 +1767,7 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this, charCode bool
 			return ir.Instruction{Op: ir.StringMethod, Left: top, Dest: sp}
 		}
 		return ir.Instruction{Op: ir.Host}
-	case bytecode.OpNewArray, bytecode.OpCall, bytecode.OpMod, bytecode.OpNew:
+	case bytecode.OpNewArray, bytecode.OpCall, bytecode.OpMod, bytecode.OpPow, bytecode.OpNew:
 		return ir.Instruction{Op: ir.Host}
 	case bytecode.OpGetPrivate:
 		// A property read, of the key the binding holds (Private).

@@ -4613,6 +4613,8 @@ func jitArithOp(op ir.Operator) (bytecode.Op, bool) {
 		return bytecode.OpDiv, true
 	case ir.Mod:
 		return bytecode.OpMod, true
+	case ir.Pow:
+		return bytecode.OpPow, true
 	case ir.BitAnd:
 		return bytecode.OpBitAnd, true
 	case ir.BitOr:
@@ -4645,6 +4647,14 @@ func (r *Runtime) jitBigArithSafe(op bytecode.Op, a, b Value) bool {
 	case bytecode.OpDiv, bytecode.OpMod:
 		// A BigInt on the heap is never zero.
 		return !b.isInt64Big() || b.int64Big() != 0
+	case bytecode.OpPow:
+		// Of an exponent that is no negative, and a power as many bits as
+		// its base's times it at most, within the limit.
+		if !b.isInt64Big() {
+			return false
+		}
+		y := b.int64Big()
+		return y >= 0 && y < maxBigIntBits && int64(jitBigWords(a)*bits.UintSize)*y <= maxBigIntBits
 	case bytecode.OpBitAnd, bytecode.OpBitOr, bytecode.OpBitXor:
 		return true
 	case bytecode.OpShl, bytecode.OpShr:
@@ -7597,7 +7607,7 @@ func (r *Runtime) jitBigIntSeen(f *frame, e *jitEntry, site int) bool {
 		if generic && in.Operator != ir.Sub && in.Operator != ir.Mul {
 			return false
 		}
-	case in.Op == ir.Binary && (in.Operator == ir.Div || in.Operator == ir.Mod || in.Operator == ir.BitAnd || in.Operator == ir.BitOr ||
+	case in.Op == ir.Binary && (in.Operator == ir.Div || in.Operator == ir.Mod || in.Operator == ir.Pow || in.Operator == ir.BitAnd || in.Operator == ir.BitOr ||
 		in.Operator == ir.BitXor || in.Operator == ir.Shl || in.Operator == ir.Shr),
 		in.Op == ir.Unary && (in.Operator == ir.Neg || in.Operator == ir.BitNot):
 		native = !generic
@@ -7672,6 +7682,9 @@ func (r *Runtime) jitBigIntSeen(f *frame, e *jitEntry, site int) bool {
 		if y == 0 {
 			return false
 		}
+	case ir.Pow:
+		_, ok := shortArith(bytecode.OpPow, a, b)
+		return ok
 	}
 	return true
 }
@@ -7735,7 +7748,7 @@ func (r *Runtime) jitBigIntExit(f *frame, e *jitEntry, site int) {
 	switch {
 	case in.Op == ir.Binary:
 		switch in.Operator {
-		case ir.Sub, ir.Mul, ir.Div, ir.Mod, ir.BitAnd, ir.BitOr, ir.BitXor, ir.Shl, ir.Shr:
+		case ir.Sub, ir.Mul, ir.Div, ir.Mod, ir.Pow, ir.BitAnd, ir.BitOr, ir.BitXor, ir.Shl, ir.Shr:
 		default:
 			return
 		}

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/mir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
@@ -234,5 +235,128 @@ func TestJITBigWords(t *testing.T) {
 		r.ReleaseClosed()
 		want.Close()
 		want.ReleaseClosed()
+	}
+}
+
+// ** compiled (ir.Pow): of numbers as Math.pow's, natively where exact and
+// by Go otherwise; of BigInts in the int64 range natively (ssa.OpPowI64),
+// leaving where the power is past the range and for a negative exponent;
+// of BigInts on the heap by Go from native code.
+const bigPowSetup = `
+	function nums(n) {
+		let s = 0, t = ""
+		for (let i = 0; i < n; i++) {
+			s += (i % 7) ** 2 + 2 ** (i % 5) + (i % 3) ** 0.5 + 1.5 ** (i % 4)
+			if (i == 5) t = [1 ** NaN, (-1) ** Infinity, 0 ** -1, (-0) ** -3, 10 ** 23, 0.3 ** 3].join()
+		}
+		return s + ":" + t
+	}
+	function bigs(n, k) {
+		let s = 0n, r = ""
+		try {
+			for (let i = 0; i < n; i++) {
+				s += BigInt(i & 1023) ** 5n
+				s += (-2n) ** 63n + 2n ** BigInt(i % 62) + (-3n) ** BigInt(i % 40)
+				s += (i == k ? 2n : 1n) ** 63n
+				s = BigInt.asIntN(64, s)
+			}
+		} catch (e) {
+			r = e.name
+		}
+		return r + s
+	}
+	function heap(n, k) {
+		let s = 0n, r = ""
+		try {
+			for (let i = 0; i < n; i++) {
+				s += ((1n << 70n) + BigInt(i)) ** 3n % 1000003n
+				s += BigInt(i) ** (i == k ? -1n : 2n)
+			}
+		} catch (e) {
+			r = e.name
+		}
+		return r + s
+	}
+	function all(n) { return [nums(n), bigs(n, n - 10), bigs(n, -1), heap(n, n - 10), heap(n, -1)].join(" ") }
+`
+
+func TestJITPow(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	// Node's.
+	want := map[string]string{
+		"all(200)": "4368.588095116618:NaN,NaN,Infinity,-Infinity,1.0000000000000001e+23,0.026999999999999996 7861358775649125099 -1362013261205650708 " +
+			"RangeError96954741 101066878",
+		"all(3000)": "66069.96356237149:NaN,NaN,Infinity,-Infinity,1.0000000000000001e+23,0.026999999999999996 3134936155625690494 -6088435881229085313 " +
+			"RangeError10383401760 10475730688",
+	}
+	// The powers each function's compiles made: natively, of numbers or of
+	// Int64s, or by Go.
+	made := map[string]map[string]bool{}
+	jitSSAOptimized = func(fn *bytecode.Function, f *ssa.Func) {
+		if made[fn.Name] == nil {
+			made[fn.Name] = map[string]bool{}
+		}
+		for _, b := range f.Blocks {
+			for _, v := range b.Values {
+				switch {
+				case v.Op == ssa.OpPowF64, v.Op == ssa.OpPowI64:
+					made[fn.Name][v.Op.String()] = true
+				case v.Op == ssa.OpCall && len(v.Calls()) != 0 && v.Calls()[0].Go == ssa.GoArith && v.Calls()[0].Argc == int(ir.Pow):
+					made[fn.Name]["go"] = true
+				}
+			}
+		}
+	}
+	defer func() { jitSSAOptimized = nil }()
+	r := New(Config{JIT: true})
+	defer func() { r.Close(); r.ReleaseClosed() }()
+	if _, err := r.Run(compileForTest(t, bigPowSetup)); err != nil {
+		t.Fatal(err)
+	}
+	var srcs []string
+	for range 20 {
+		srcs = append(srcs, "all(200)")
+	}
+	srcs = append(srcs, "all(3000)", "all(200)")
+	for i, src := range srcs {
+		got, err := r.Run(compileForTest(t, src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if g := got.String().Go(); g != want[src] {
+			t.Fatalf("round %d: %s = %s, want %s", i, src, g, want[src])
+		}
+	}
+	// Compiled, which a function of ** had not been at all, and warm, where
+	// nothing is past what native code makes, never leaving it.
+	w := New(Config{JIT: true})
+	defer func() { w.Close(); w.ReleaseClosed() }()
+	if _, err := w.Run(compileForTest(t, bigPowSetup)); err != nil {
+		t.Fatal(err)
+	}
+	warm := compileForTest(t, "nums(200) + bigs(200, -1) + heap(200, -1)")
+	for range 30 {
+		if _, err := w.Run(warm); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, op := range map[string]string{"nums": "powf", "bigs": "powi64", "heap": "go"} {
+		if !made[name][op] {
+			t.Errorf("%s's compiles made %v, no %s", name, made[name], op)
+		}
+		e := w.jit.entryFor(w.global.getOwn(w.atoms.intern(name)).value().Object().fn().closure.fn)
+		if e == nil || e.ssa == nil || e.invalid {
+			t.Errorf("%s has no code: %+v", name, e)
+			continue
+		}
+		hosts, guards := e.ssaStats.hosts, e.ssaStats.guards
+		if _, err := w.Run(warm); err != nil {
+			t.Fatal(err)
+		}
+		if e.ssaStats.hosts != hosts || e.ssaStats.guards != guards {
+			t.Errorf("%s left native code: %d host exits, %d guard failures", name, e.ssaStats.hosts-hosts, e.ssaStats.guards-guards)
+		}
 	}
 }

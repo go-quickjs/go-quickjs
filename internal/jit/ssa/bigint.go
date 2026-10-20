@@ -61,7 +61,7 @@ func boxedBig(v *Value) *Value {
 // cell for its box.
 func bigOperator(op ir.Operator) (native, arith bool) {
 	switch op {
-	case ir.Add, ir.Sub, ir.Mul, ir.Div, ir.Mod, ir.BitAnd, ir.BitOr, ir.BitXor, ir.Shl, ir.Shr:
+	case ir.Add, ir.Sub, ir.Mul, ir.Div, ir.Mod, ir.Pow, ir.BitAnd, ir.BitOr, ir.BitXor, ir.Shl, ir.Shr:
 		return true, true
 	case ir.Lt, ir.Le, ir.Gt, ir.Ge:
 		return true, false
@@ -175,7 +175,7 @@ func (b *builder) bigNative(blk *Block, pc int, in ir.Instruction, operand func(
 	} else {
 		t = bigType(fb.BigIntWide(pc), x, y)
 	}
-	if t == None {
+	if t == None || op == ir.Pow && t != Int64 {
 		return nil
 	}
 	xi := b.bigAs(blk, x, t, guard)
@@ -208,6 +208,8 @@ func (b *builder) bigNative(blk *Block, pc int, in ir.Instruction, operand func(
 		r = guard(pick(signed, OpDivI64, OpDivU64), t, ir.GuardExit, xi, yi)
 	case ir.Mod:
 		r = guard(pick(signed, OpModI64, OpModU64), t, ir.GuardExit, xi, yi)
+	case ir.Pow:
+		r = guard(OpPowI64, t, ir.GuardExit, xi, yi)
 	case ir.BitAnd:
 		r = f.newValue(blk, OpAndW, t, xi, yi)
 	case ir.BitOr:
@@ -573,7 +575,7 @@ func (b *builder) bigRelease(blk *Block, pc int, in ir.Instruction) (uint8, *Val
 // its own: arithmetic, bitwise, a shift.
 func bigArith(op ir.Operator) bool {
 	switch op {
-	case ir.Add, ir.Sub, ir.Mul, ir.Div, ir.Mod, ir.BitAnd, ir.BitOr, ir.BitXor, ir.Shl, ir.Shr:
+	case ir.Add, ir.Sub, ir.Mul, ir.Div, ir.Mod, ir.Pow, ir.BitAnd, ir.BitOr, ir.BitXor, ir.Shl, ir.Shr:
 		return true
 	}
 	return false

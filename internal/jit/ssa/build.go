@@ -2430,7 +2430,7 @@ func (b *builder) goArithAt(pc int, op ir.Operator) bool {
 		if !b.generic(pc) {
 			return false
 		}
-	case ir.Div, ir.Mod, ir.BitAnd, ir.BitOr, ir.BitXor, ir.Shl, ir.Shr:
+	case ir.Div, ir.Mod, ir.Pow, ir.BitAnd, ir.BitOr, ir.BitXor, ir.Shl, ir.Shr:
 	default:
 		return false
 	}
@@ -4077,6 +4077,11 @@ func (b *builder) instruction(blk *Block, pc int) {
 		}
 		if in.Operator == ir.Mod {
 			b.assign(in.Dest, blk, boxF(guard(OpModF64, Float64, ir.HostExit, x, y)))
+			break
+		}
+		if in.Operator == ir.Pow {
+			// As Math.pow's, where exact, and Go's at an exit otherwise.
+			b.assign(in.Dest, blk, boxF(guard(OpPowF64, Float64, ir.HostExit, x, y)))
 			break
 		}
 		b.assign(in.Dest, blk, b.binary(blk, in.Operator, x, y, boxF, boxB))

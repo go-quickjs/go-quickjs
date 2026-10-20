@@ -213,6 +213,7 @@ var bigCorpus = []string{
 	`function f(n,s){let h=0xcbf29ce484222325n;for(let i=0;i<n;i++)h=BigInt.asUintN(64,(h^BigInt(s.charCodeAt(i)))*0x100000001b3n);return h}`,
 	`function f(n,x){let s=0n;while(x>0n){s+=x%10n;x/=10n;x=-x;x=~x}return s}`,
 	`function f(a,b){let c=0;for(let i=0;i<9;i++){if(a<b)c++;a=(a&b)|(a^b);b=b<<3n;a=a>>2n;a=a-b*a+0xffffffffffffffffn}return c}`,
+	`function f(n,x){let s=0n;for(let i=0;i<n;i++)s+=x**3n+BigInt(i)**BigInt(n);return s}`,
 }
 
 // bigs is globals with every operator's site one that met BigInts held in
@@ -320,7 +321,7 @@ func TestMirEmitted(t *testing.T) {
 	}
 	t.Logf("%d functions; checked %v bytes, %v instructions", n, checkedBytes, checkedInsts)
 	for _, ops := range [][]ssa.Op{{ssa.OpBigUnboxU64}, {ssa.OpBigLow}, {ssa.OpXorW}, {ssa.OpShlW}, {ssa.OpShrW, ssa.OpSarW}, {ssa.OpZextW},
-		{ssa.OpSextW}, {ssa.OpDivI64, ssa.OpDivU64}, {ssa.OpModI64, ssa.OpModU64}, {ssa.OpBigOfF64}, {ssa.OpBigBox}} {
+		{ssa.OpSextW}, {ssa.OpDivI64, ssa.OpDivU64}, {ssa.OpModI64, ssa.OpModU64}, {ssa.OpBigOfF64}, {ssa.OpBigBox}, {ssa.OpPowI64}} {
 		n := 0
 		for _, op := range ops {
 			n += cells[op]

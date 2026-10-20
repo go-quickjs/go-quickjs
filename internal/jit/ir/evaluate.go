@@ -247,7 +247,7 @@ func (p *Program) EvaluateArrays(slots []Value, arrays []ArrayView, pc int, budg
 			}
 			v, ok := binary(in.Operator, a, b)
 			if !ok {
-				if in.Operator == Eq || in.Operator == Ne || in.Operator == Mod {
+				if in.Operator == Eq || in.Operator == Ne || in.Operator == Mod || in.Operator == Pow {
 					exit.Kind = HostExit
 				}
 				return exit, nil

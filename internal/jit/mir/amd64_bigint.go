@@ -228,6 +228,8 @@ func (c *compiler) bigWord(v *ssa.Value, guard func(amd64.Cond)) bool {
 		c.setG(v, scratchA)
 	case ssa.OpDivI64, ssa.OpModI64, ssa.OpDivU64, ssa.OpModU64:
 		c.bigDivide(v, guard)
+	case ssa.OpPowI64:
+		c.bigPower(v, guard)
 	case ssa.OpBigOfF64:
 		x := c.xmm(arg(0), xScratch0)
 		c.a.Cvttsd2si(scratchA, x)
@@ -286,6 +288,43 @@ func (c *compiler) bigDivide(v *ssa.Value, guard func(amd64.Cond)) {
 		}
 		c.a.Bind(done)
 	}
+	c.setG(v, scratchA)
+}
+
+// bigPower is x ** y of two Int64s (ssa's OpPowI64), by squaring and
+// multiplying, which exits for a negative exponent and for any product
+// past the int64 range: a square past it is one only an exponent with a
+// bit above makes, whose power is past it too, but for a base of -1, 0 or
+// 1, whose squares are 1 and 0. The power in scratchA, the base in
+// scratchB, the exponent in scratchC.
+func (c *compiler) bigPower(v *ssa.Value, guard func(amd64.Cond)) {
+	if y := c.gpr(v.Args[1], scratchC); y != scratchC {
+		c.a.MovRR(scratchC, y)
+	}
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	guard(amd64.CondS)
+	if x := c.gpr(v.Args[0], scratchB); x != scratchB {
+		c.a.MovRR(scratchB, x)
+	}
+	c.movImm(scratchA, 1)
+	loop, skip, square, done := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	// The exponent's low bit shifted out into the carry, the zero flag
+	// whether bits are left.
+	c.a.Bind(loop)
+	c.a.ShiftImm(amd64.Shr, scratchC, 1, true)
+	c.a.Jcc(amd64.CondAE, skip)
+	c.a.Imul(scratchA, scratchB)
+	guard(amd64.CondO)
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	c.a.Jcc(amd64.CondE, done)
+	c.a.Jmp(square)
+	c.a.Bind(skip)
+	c.a.Jcc(amd64.CondE, done)
+	c.a.Bind(square)
+	c.a.Imul(scratchB, scratchB)
+	guard(amd64.CondO)
+	c.a.Jmp(loop)
+	c.a.Bind(done)
 	c.setG(v, scratchA)
 }
 

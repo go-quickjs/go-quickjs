@@ -11,6 +11,10 @@ import (
 
 // BigInts of 64 bits, as amd64's (amd64_bigint.go).
 
+// tmpBig is the encoder's temporary, X27, which a product's check holds
+// a word in between instructions that make no use of it.
+const tmpBig = arm64.X27
+
 func (c *a64Compiler) bigHighBits() uint8 { return 64 - c.enc.ShortBigLowBits }
 
 // bigSourceWord puts the pointer word of x, a tagged value, in B, read
@@ -202,6 +206,8 @@ func (c *a64Compiler) bigWord(v *ssa.Value, guard func(arm64.Cond)) bool {
 		c.setG(v, x)
 	case ssa.OpDivI64, ssa.OpModI64, ssa.OpDivU64, ssa.OpModU64:
 		c.bigDivide(v, guard)
+	case ssa.OpPowI64:
+		c.bigPower(v, guard)
 	case ssa.OpBigOfF64:
 		x := c.fpr(arg(0), a64F0)
 		c.a.Fcvtzs(a64A, x)
@@ -252,6 +258,41 @@ func (c *a64Compiler) bigDivide(v *ssa.Value, guard func(arm64.Cond)) {
 		}
 		c.a.Bind(done)
 	}
+	c.setG(v, a64A)
+}
+
+// bigPower is amd64's, a product's range checked as OpMulI64's is: the
+// power in A, the base in B, the exponent in C, D the scratch.
+func (c *a64Compiler) bigPower(v *ssa.Value, guard func(arm64.Cond)) {
+	if y := c.gpr(v.Args[1], a64C); y != a64C {
+		c.a.MovRR(a64C, y)
+	}
+	c.a.CmpImm(a64C, 0, true)
+	guard(arm64.LT)
+	if x := c.gpr(v.Args[0], a64B); x != a64B {
+		c.a.MovRR(a64B, x)
+	}
+	c.movImm(a64A, 1)
+	loop, skip, done := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	// The product of n and m into n, guarded to be in the range.
+	mul := func(n, m arm64.Reg) {
+		c.a.Smulh(a64D, n, m)
+		c.a.Mul(n, n, m)
+		c.a.ShiftImm(arm64.Asr, tmpBig, n, 63, true)
+		c.a.Cmp(a64D, tmpBig, true)
+		guard(arm64.NE)
+	}
+	c.a.Bind(loop)
+	c.movImm(a64D, 1)
+	c.a.Tst(a64C, a64D, true)
+	c.a.BCond(arm64.EQ, skip)
+	mul(a64A, a64B)
+	c.a.Bind(skip)
+	c.a.ShiftImm(arm64.Lsr, a64C, a64C, 1, true)
+	c.a.Cbz(a64C, done, true)
+	mul(a64B, a64B)
+	c.a.B(loop)
+	c.a.Bind(done)
 	c.setG(v, a64A)
 }
 

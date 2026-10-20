@@ -908,7 +908,7 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 				vals[v.ID] = val{}
 			case OpBigUnbox, OpBigBox, OpBigCell, OpAddI64, OpSubI64, OpMulI64, OpCmpI64, OpConstI64,
 				OpBigUnboxU64, OpBigLow, OpBigSign, OpAddW, OpSubW, OpMulW, OpAndW, OpOrW, OpXorW, OpShlW, OpShrW, OpSarW, OpZextW, OpSextW,
-				OpAddU64, OpSubU64, OpMulU64, OpShlI64, OpShlU64, OpDivI64, OpModI64, OpDivU64, OpModU64, OpBigOfF64:
+				OpAddU64, OpSubU64, OpMulU64, OpShlI64, OpShlU64, OpDivI64, OpModI64, OpDivU64, OpModU64, OpBigOfF64, OpPowI64:
 				return ir.Exit{}, fmt.Errorf("%w: a BigInt", ErrUnsupported)
 			case OpCheckInit:
 				if a.t.Kind == ir.Uninitialized {

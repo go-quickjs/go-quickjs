@@ -300,6 +300,10 @@ const (
 	// [[IsHTMLDDA]], which == null alone takes for null. Only the new
 	// pipeline's lowering makes it.
 	Nullish
+	// Pow is **, as Math.pow computes it of numbers, and a BigInt's power:
+	// only the new pipeline's lowering makes it, and what it does not make
+	// natively exits to Go.
+	Pow
 )
 
 // Instruction reads Left and Right and writes Dest (and Extra for paired

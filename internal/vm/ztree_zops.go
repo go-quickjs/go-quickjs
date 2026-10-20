@@ -522,6 +522,14 @@ func init() {
 				if err != nil {
 					c.throw(err)
 				}
+				if jitBuilt && op == bytecode.OpPow && l.IsBigInt() && r.IsBigInt() {
+					// A power of BigInts, for the JIT (treeBigSeen).
+					if l.isShortBig() && r.isShortBig() && v.isShortBig() {
+						treeBigOf(c, pc, l, r, v)
+					} else {
+						treeBigInt(c, pc, true)
+					}
+				}
 				return v
 			})
 		case bytecode.OpDeleteVar, bytecode.OpGetGlobalOpt:

@@ -6108,7 +6108,7 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.bigUnbox(v, c.guardFor(v))
 	case ssa.OpBigUnboxU64, ssa.OpBigLow, ssa.OpBigSign, ssa.OpAddW, ssa.OpSubW, ssa.OpMulW, ssa.OpAndW, ssa.OpOrW, ssa.OpXorW,
 		ssa.OpShlW, ssa.OpShrW, ssa.OpSarW, ssa.OpZextW, ssa.OpSextW, ssa.OpAddU64, ssa.OpSubU64, ssa.OpMulU64, ssa.OpShlI64, ssa.OpShlU64,
-		ssa.OpDivI64, ssa.OpModI64, ssa.OpDivU64, ssa.OpModU64, ssa.OpBigOfF64:
+		ssa.OpDivI64, ssa.OpModI64, ssa.OpDivU64, ssa.OpModU64, ssa.OpBigOfF64, ssa.OpPowI64:
 		c.bigWord(v, c.guardFor(v))
 	case ssa.OpBigBox:
 		c.bigBox(v)

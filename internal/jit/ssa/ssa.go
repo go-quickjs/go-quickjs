@@ -487,6 +487,9 @@ const (
 	// OpBigOfF64 is BigInt(x) of a number (Intrinsic): it exits unless x
 	// is an integer in the int64 range, for Go to make the call.
 	OpBigOfF64 // f64 -> i64
+	// OpPowI64 is x ** y of two Int64s: it exits for a negative exponent,
+	// which throws, and where the power is outside the int64 range.
+	OpPowI64 // i64, i64 -> i64
 )
 
 var opNames = [...]string{
@@ -509,7 +512,7 @@ var opNames = [...]string{
 	OpBigUnboxU64: "bigunboxu", OpBigLow: "biglow", OpBigSign: "bigsign", OpAddW: "addw", OpSubW: "subw", OpMulW: "mulw",
 	OpAndW: "andw", OpOrW: "orw", OpXorW: "xorw", OpShlW: "shlw", OpShrW: "shrw", OpSarW: "sarw", OpZextW: "zextw", OpSextW: "sextw",
 	OpAddU64: "addu64", OpSubU64: "subu64", OpMulU64: "mulu64", OpShlI64: "shli64", OpShlU64: "shlu64",
-	OpDivI64: "divi64", OpModI64: "modi64", OpDivU64: "divu64", OpModU64: "modu64", OpBigOfF64: "bigoff",
+	OpDivI64: "divi64", OpModI64: "modi64", OpDivU64: "divu64", OpModU64: "modu64", OpBigOfF64: "bigoff", OpPowI64: "powi64",
 }
 
 func (o Op) String() string {
@@ -548,7 +551,7 @@ func (o Op) isGuard() bool {
 		OpObjectOf, OpPropRead, OpPropWrite, OpPropCell, OpGlobalCell, OpLexCell, OpBindingCell, OpStringMethod, OpStringProp, OpStringCode, OpStringChar, OpCodeChar, OpLooseNullish, OpEqTagged,
 		OpSameObject, OpSameSymbol, OpIterClosed, OpFrameRoom, OpTailRoom, OpTailSelf, OpCall, OpInstanceOf, OpTypeIs, OpCheckTrue, OpPowF64, OpAccessorIs,
 		OpBigUnbox, OpAddI64, OpSubI64, OpMulI64,
-		OpBigUnboxU64, OpBigLow, OpBigSign, OpAddU64, OpSubU64, OpMulU64, OpShlI64, OpShlU64, OpDivI64, OpModI64, OpDivU64, OpModU64, OpBigOfF64:
+		OpBigUnboxU64, OpBigLow, OpBigSign, OpAddU64, OpSubU64, OpMulU64, OpShlI64, OpShlU64, OpDivI64, OpModI64, OpDivU64, OpModU64, OpBigOfF64, OpPowI64:
 		return true
 	}
 	return false

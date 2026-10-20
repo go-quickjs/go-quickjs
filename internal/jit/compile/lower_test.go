@@ -310,7 +310,7 @@ func TestRefusals(t *testing.T) {
 		{`function* f() { yield 1 }`, "async or generator"},
 		{`async function f() { return 1 }`, "async or generator"},
 		{`function f() { with ({}) { return 1 } }`, "unsupported opcode"},
-		{`function f(a) { return a ** 2 }`, "unsupported opcode pow"},
+		{`function f(a) { return a ** 2 }`, "host operations without native loop or array work"},
 		{`function f() { const a=1; a=2; return a }`, "unsupported opcode"},
 	} {
 		t.Run(tc.reason+tc.source, func(t *testing.T) {
@@ -354,6 +354,42 @@ func TestInLowering(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("missing in")
+	}
+}
+
+// ** is the new pipeline's Binary Pow of the two operands on top, the
+// result where the base was; the old pipeline leaves it to Go, as a
+// remainder.
+func TestPowLowering(t *testing.T) {
+	fn := compiledFunction(t, `function f(a,n){let s=0;for(let i=0;i<n;i++)s+=a**i;return s}`)
+	old, err := Lower(fn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := LowerSSA(fn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for pc, in := range fn.Code {
+		if in.Op != bytecode.OpPow {
+			continue
+		}
+		found = true
+		if old.Code[pc].Op != ir.Host {
+			t.Fatalf("pc %d: the old pipeline's %+v, want a host operation", pc, old.Code[pc])
+		}
+		sp := p.Locals + p.Maps[pc].Depth
+		want := ir.Instruction{Op: ir.Binary, Operator: ir.Pow, Left: ir.Slot(sp - 2), Right: ir.Slot(sp - 1), Dest: sp - 2}
+		if got := p.Code[pc]; got != want {
+			t.Fatalf("pc %d: %+v, want %+v", pc, got, want)
+		}
+	}
+	if !found {
+		t.Fatal("missing **")
 	}
 }
 
