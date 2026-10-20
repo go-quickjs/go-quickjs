@@ -1448,12 +1448,19 @@ func (r *Runtime) jitLearnedDue(cl *closure, e *jitEntry) bool {
 // jitLearnedSpent is the work e's code has done since it was compiled, as
 // the existing tiers' budget counts it (jitTierBudget): its invocations,
 // each fn's length -- Go's entries, native callers' calls, calls of it the
-// existing tiers ran for code Go does not enter -- and the work its native
-// stretches did, their loops' included (jitSSAProfit, jitCalleeProfit).
+// existing tiers ran for code Go does not enter -- the work its native
+// stretches did, their loops' included (jitSSAProfit, jitCalleeProfit),
+// and the existing tiers' in its loops before Go entered it at one
+// (osrWork). A function entered only by on-stack replacement, each
+// invocation leaving its code at once for the interpreter to finish --
+// microbench_extra's PrivateCounter's add, at a private read of a shape
+// learned at that exit -- had spent nothing, and was never compiled
+// again for it, as V8's lower tiers spend the budget however a function
+// runs.
 func jitLearnedSpent(fn *bytecode.Function, e *jitEntry) int64 {
 	st := &e.ssaStats
 	calls := e.starts + e.link.in + e.slowCalls
-	return int64(calls)*int64(max(len(fn.Code), 1)) + int64(st.work+st.calleeWork)
+	return int64(calls)*int64(max(len(fn.Code), 1)) + int64(st.work+st.calleeWork) + e.osrWork
 }
 
 // jitLearnedMark is jitFeedbackMark of cl's caches with what e's code has

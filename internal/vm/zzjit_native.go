@@ -502,6 +502,10 @@ type jitEntry struct {
 	tierBase int64
 	// starts counts Go's entries at a function's start, not into a loop.
 	starts uint64
+	// osrWork is the work the existing tiers did in the function's loops
+	// before Go entered its code at one of them (jitTierWork), which its
+	// budget for what it learned counts as an invocation's (jitLearnedSpent).
+	osrWork int64
 	// literals are the object literals the code makes natively, each with
 	// its pool, kept across compiles (jitFeedback.Literal); definesUnfed
 	// the literals' fields compiled before their transitions were made,
@@ -2136,6 +2140,7 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, err
 			e.starts++
 		} else {
 			r.jit.osrs++
+			e.osrWork += r.jitTierWork(f.cl.fn, e, osr, spent)
 		}
 		// Code that learned what to be compiled again for is, once it has
 		// spent a budget (jitLearnedDue); invalidated code, once the
