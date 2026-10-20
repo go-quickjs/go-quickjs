@@ -1745,7 +1745,21 @@ func (c *compiler) iterStep(v *ssa.Value, slow amd64.Label) {
 	c.a.Load(scratchA, scratchB, c.enc.IterIdx)
 	c.a.Load(scratchC, scratchB, c.enc.IterArr)
 	c.a.Op(amd64.Test, scratchC, scratchC, true)
-	c.a.Jcc(amd64.CondE, slow)
+	// No array: a Map's or a Set's iterator, which mapStep steps, out of
+	// the array's way, with the code's cold paths.
+	nexts := stepNexts(v, c.enc)
+	maps := slow
+	if nexts != ([2]uintptr{}) {
+		maps = c.a.NewLabel()
+		done := c.a.NewLabel()
+		defer c.a.Bind(done)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(maps)
+			c.mapStep(v, nexts, slow)
+			c.a.Jmp(done)
+		})
+	}
+	c.a.Jcc(amd64.CondE, maps)
 	c.a.Load(scratchB, scratchC, c.enc.ObjectElems+8)
 	c.a.Op(amd64.Cmp, scratchA, scratchB, true)
 	c.a.Jcc(amd64.CondAE, slow)
@@ -1763,6 +1777,103 @@ func (c *compiler) iterStep(v *ssa.Value, slow amd64.Label) {
 	c.a.Load(scratchC, scratchB, c.enc.IterIdx)
 	c.a.OpImm(amd64.Add, scratchC, 1, true)
 	c.a.Store(scratchB, c.enc.IterIdx, scratchC)
+}
+
+// mapStep is iterStep's step of a for...of over a Map's or a Set's
+// iterator whose next is one of nexts (ssa.CallSite's MapNexts), the
+// cursor's state in scratchB: the entry at the iterator's place, where it
+// is live and the iterator has not lost its place -- its key, or its value,
+// to the call's keep cell, and its place moved past it, as jsMap's next
+// moves it -- as V8 inlines a Map iterator's next. Anything else goes to
+// slow, where Go steps it: a deleted entry, the end, a collection
+// compacted since, an iterator of entries, whose step makes an array. It
+// uses every scratch register and xScratch2, and no other.
+func (c *compiler) mapStep(v *ssa.Value, nexts [2]uintptr, slow amd64.Label) {
+	fail := func(cond amd64.Cond) { c.a.Jcc(cond, slow) }
+	// The iterator's next, one of the realm's.
+	have := c.a.NewLabel()
+	c.a.Load(scratchA, scratchB, c.enc.IterNext+c.enc.RefOffset)
+	for _, n := range nexts {
+		if n != 0 {
+			c.cmpWord(scratchA, uint64(n))
+			c.a.Jcc(amd64.CondE, have)
+		}
+	}
+	c.a.Jmp(slow)
+	c.a.Bind(have)
+	// The iterator, an object whose data is a Map's or a Set's iterator's,
+	// not done, of keys or of values.
+	c.a.Load(scratchC, scratchB, c.enc.IterIter+c.enc.NumOffset)
+	c.cmpWord(scratchC, c.enc.Object)
+	fail(amd64.CondNE)
+	c.a.Load(scratchA, scratchB, c.enc.IterIter+c.enc.RefOffset)
+	c.objectData(scratchB, scratchA, scratchC, c.enc.MapIterData, fail)
+	c.a.LoadU8(scratchC, scratchB, c.enc.MapIterDone)
+	c.a.Op(amd64.Test, scratchC, scratchC, false)
+	fail(amd64.CondNE)
+	kind := c.a.NewLabel()
+	c.a.LoadU8(scratchC, scratchB, c.enc.MapIterKind)
+	c.a.OpImm(amd64.Cmp, scratchC, int32(c.enc.MapKeys), false)
+	c.a.Jcc(amd64.CondE, kind)
+	c.a.OpImm(amd64.Cmp, scratchC, int32(c.enc.MapValues), false)
+	fail(amd64.CondNE)
+	c.a.Bind(kind)
+	c.a.MovQToX(xScratch2, scratchB)
+	// Its collection, not compacted since it found its place, and its
+	// place within the entries.
+	c.a.Load(scratchA, scratchB, c.enc.MapIterMap)
+	c.a.Op(amd64.Test, scratchA, scratchA, true)
+	fail(amd64.CondE)
+	c.a.LoadU32(scratchC, scratchB, c.enc.MapIterGen)
+	c.a.CmpMem(scratchC, scratchA, c.enc.MapGen, false)
+	fail(amd64.CondNE)
+	c.a.Load(scratchB, scratchB, c.enc.MapIterAt)
+	c.a.CmpMem(scratchB, scratchA, c.enc.MapEntries+8, true)
+	fail(amd64.CondAE)
+	// The entry, live, and its key or value no hole.
+	c.a.Load(scratchA, scratchA, c.enc.MapEntries)
+	c.movImm(scratchC, uint64(c.enc.MapEntrySize))
+	c.a.Imul(scratchC, scratchB)
+	c.a.Op(amd64.Add, scratchA, scratchC, true)
+	c.a.Load(scratchC, scratchA, c.enc.NumOffset)
+	c.cmpWord(scratchC, c.enc.MapDeleted)
+	fail(amd64.CondE)
+	// The key, or the value, to the keep cell.
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	values, stored := c.a.NewLabel(), c.a.NewLabel()
+	c.a.MovQFromX(scratchC, xScratch2)
+	c.a.LoadU8(scratchC, scratchC, c.enc.MapIterKind)
+	c.a.OpImm(amd64.Cmp, scratchC, int32(c.enc.MapKeys), false)
+	c.a.Jcc(amd64.CondNE, values)
+	for i, at := range [2]int32{0, c.enc.MapEntryValue} {
+		if i == 1 {
+			c.a.Jmp(stored)
+			c.a.Bind(values)
+		}
+		c.a.Load(scratchC, scratchA, at+c.enc.NumOffset)
+		c.cmpWord(scratchC, c.enc.Uninitialized)
+		fail(amd64.CondE)
+		c.a.Store(regCtx, keep+c.enc.NumOffset, scratchC)
+		c.a.Load(scratchC, scratchA, at+c.enc.RefOffset)
+		c.a.Store(regCtx, keep+c.enc.RefOffset, scratchC)
+	}
+	c.a.Bind(stored)
+	// Its place past the entry, which is its last.
+	c.a.OpImm(amd64.Add, scratchB, 1, true)
+	c.a.MovQFromX(scratchC, xScratch2)
+	c.a.Store(scratchC, c.enc.MapIterAt, scratchB)
+	c.a.Load(scratchB, scratchA, c.enc.MapEntrySeq)
+	c.a.Store(scratchC, c.enc.MapIterLast, scratchB)
+}
+
+// stepNexts are the Map's and Set's iterators' next functions a loop's
+// step v natively steps the iterators of (ssa.CallSite's MapNexts), none
+// where the encoding has no Map iterators' layout.
+func stepNexts(v *ssa.Value, enc abi.Encoding) [2]uintptr {
+	if enc.MapIterData == 0 || len(v.Calls()) != 1 {
+		return [2]uintptr{}
+	}
+	return v.Calls()[0].MapNexts
 }
 
 // goCallOp is goCall's, of the call of Go op (ssa.CallSite's Go, and what

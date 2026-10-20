@@ -3762,7 +3762,20 @@ func (c *a64Compiler) iterStep(v *ssa.Value, slow arm64.Label) {
 	c.a.Cbnz(a64C, slow, false)
 	c.a.Load(a64A, a64D, c.enc.IterIdx)
 	c.a.Load(a64C, a64D, c.enc.IterArr)
-	c.a.Cbz(a64C, slow, true)
+	// No array: a Map's or a Set's iterator, which mapStep steps.
+	nexts := stepNexts(v, c.enc)
+	maps := slow
+	if nexts != ([2]uintptr{}) {
+		maps = c.a.NewLabel()
+		done := c.a.NewLabel()
+		defer c.a.Bind(done)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(maps)
+			c.mapStep(v, nexts, slow)
+			c.a.B(done)
+		})
+	}
+	c.a.Cbz(a64C, maps, true)
 	c.a.Load(a64B, a64C, c.enc.ObjectElems+8)
 	c.a.Cmp(a64A, a64B, true)
 	c.a.BCond(arm64.HS, slow)
@@ -3780,6 +3793,81 @@ func (c *a64Compiler) iterStep(v *ssa.Value, slow arm64.Label) {
 	c.a.Load(a64C, a64D, c.enc.IterIdx)
 	c.a.AddImm(a64C, a64C, 1, true)
 	c.a.Store(a64D, c.enc.IterIdx, a64C)
+}
+
+// mapStep is amd64's: a for...of's step of a Map's or a Set's iterator,
+// the cursor's state in D. It uses A, B, C, D and F1, and no other.
+func (c *a64Compiler) mapStep(v *ssa.Value, nexts [2]uintptr, slow arm64.Label) {
+	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+	have := c.a.NewLabel()
+	c.a.Load(a64B, a64D, c.enc.IterNext+c.enc.RefOffset)
+	for _, n := range nexts {
+		if n != 0 {
+			c.movImm(a64C, uint64(n))
+			c.a.Cmp(a64B, a64C, true)
+			c.a.BCond(arm64.EQ, have)
+		}
+	}
+	c.a.B(slow)
+	c.a.Bind(have)
+	c.a.Load(a64C, a64D, c.enc.IterIter+c.enc.NumOffset)
+	c.movImm(a64B, c.enc.Object)
+	c.a.Cmp(a64C, a64B, true)
+	fail(arm64.NE)
+	c.a.Load(a64B, a64D, c.enc.IterIter+c.enc.RefOffset)
+	c.objectData(a64D, a64B, a64C, c.enc.MapIterData, fail)
+	c.a.LoadU8(a64C, a64D, c.enc.MapIterDone)
+	c.a.Cbnz(a64C, slow, false)
+	kind := c.a.NewLabel()
+	c.a.LoadU8(a64C, a64D, c.enc.MapIterKind)
+	c.a.CmpImm(a64C, int64(c.enc.MapKeys), false)
+	c.a.BCond(arm64.EQ, kind)
+	c.a.CmpImm(a64C, int64(c.enc.MapValues), false)
+	fail(arm64.NE)
+	c.a.Bind(kind)
+	c.a.Load(a64A, a64D, c.enc.MapIterMap)
+	c.a.Cbz(a64A, slow, true)
+	c.a.LoadU32(a64B, a64D, c.enc.MapIterGen)
+	c.a.LoadU32(a64C, a64A, c.enc.MapGen)
+	c.a.Cmp(a64B, a64C, false)
+	fail(arm64.NE)
+	c.a.Load(a64B, a64D, c.enc.MapIterAt)
+	c.a.Load(a64C, a64A, c.enc.MapEntries+8)
+	c.a.Cmp(a64B, a64C, true)
+	fail(arm64.HS)
+	c.a.Load(a64A, a64A, c.enc.MapEntries)
+	c.movImm(a64C, uint64(c.enc.MapEntrySize))
+	c.a.Mul(a64C, a64C, a64B)
+	c.a.Op(arm64.Add, a64A, a64A, a64C, true)
+	c.a.FMovToF(a64F1, a64B)
+	c.a.Load(a64C, a64A, c.enc.NumOffset)
+	c.movImm(a64B, c.enc.MapDeleted)
+	c.a.Cmp(a64C, a64B, true)
+	fail(arm64.EQ)
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	values, stored := c.a.NewLabel(), c.a.NewLabel()
+	c.a.LoadU8(a64C, a64D, c.enc.MapIterKind)
+	c.a.CmpImm(a64C, int64(c.enc.MapKeys), false)
+	c.a.BCond(arm64.NE, values)
+	for i, at := range [2]int32{0, c.enc.MapEntryValue} {
+		if i == 1 {
+			c.a.B(stored)
+			c.a.Bind(values)
+		}
+		c.a.Load(a64C, a64A, at+c.enc.NumOffset)
+		c.movImm(a64B, c.enc.Uninitialized)
+		c.a.Cmp(a64C, a64B, true)
+		fail(arm64.EQ)
+		c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64C)
+		c.a.Load(a64C, a64A, at+c.enc.RefOffset)
+		c.a.Store(a64Ctx, keep+c.enc.RefOffset, a64C)
+	}
+	c.a.Bind(stored)
+	c.a.FMovFromF(a64B, a64F1)
+	c.a.AddImm(a64B, a64B, 1, true)
+	c.a.Store(a64D, c.enc.MapIterAt, a64B)
+	c.a.Load(a64B, a64A, c.enc.MapEntrySeq)
+	c.a.Store(a64D, c.enc.MapIterLast, a64B)
 }
 
 // goCallOp is goCall's, of the call of Go op, as amd64's, every

@@ -198,6 +198,15 @@ func (r *Runtime) jitPlainFn(ref uintptr) bool {
 	return false
 }
 
+// MapNexts is ssa.MapStepFeedback's: the realm's Map and Set iterators'
+// next functions (jitMapNexts), objects as long-lived as the realm, whose
+// iterators native code steps itself where it can (mir's mapStep), and
+// leaves the rest to Go's call (jitGoCall).
+func (fb *jitFeedback) MapNexts() [2]uintptr {
+	r := fb.r
+	return [2]uintptr{uintptr(unsafe.Pointer(r.jitMapNexts[0])), uintptr(unsafe.Pointer(r.jitMapNexts[1]))}
+}
+
 // jitPlainWrite makes in, a property's write of val to obj, where it runs
 // nothing and throws nothing: an array's own length, written with a number
 // that is a length on a dense array whose length may be written, as

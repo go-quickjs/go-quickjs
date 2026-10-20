@@ -949,6 +949,27 @@ type Encoding struct {
 	ObjectData                 int32
 	IterState                  uint64
 	IterDone, IterArr, IterIdx int32
+	// A for...of over a Map's or a Set's iterator has the iterator at
+	// IterIter and its next at IterNext, values both; the iterator's data's
+	// type word is then MapIterData (0 where native code does not step
+	// one): its collection's pointer at MapIterMap, the byte at MapIterKind
+	// its kind, MapKeys or MapValues for what native code steps, the byte
+	// at MapIterDone whether it is done, and its place in the collection's
+	// entries, the int at MapIterAt, the uint32 at MapIterGen the
+	// collection's compactions it was found in, the uint64 at MapIterLast
+	// the last entry's number. A collection's entries are a slice at
+	// MapEntries of MapEntrySize bytes each, the key first, the value at
+	// MapEntryValue, the entry's number at MapEntrySeq; a key whose number
+	// word is MapDeleted is a deleted entry's. The uint32 at MapGen counts
+	// the collection's compactions. Native code writes the place alone.
+	IterIter, IterNext                              int32
+	MapIterData                                     uint64
+	MapIterMap, MapIterKind, MapIterDone            int32
+	MapIterAt, MapIterGen, MapIterLast              int32
+	MapEntries, MapGen, MapEntrySize, MapEntryValue int32
+	MapEntrySeq                                     int32
+	MapKeys, MapValues                              uint8
+	MapDeleted                                      uint64
 	// A typed array is an object of class ClassTypedArray whose data's
 	// type word is TypedData: a view, whose element type's byte is at
 	// TypedKind (the Elem constants), its first byte's offset in its

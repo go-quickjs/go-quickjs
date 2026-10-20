@@ -827,6 +827,11 @@ type CallSite struct {
 	// whose result is undefined once the iterator is done, not the
 	// uninitialized value a loop's step branches on.
 	Fill bool
+	// MapNexts, with Step, are the realm's Map and Set iterators' next
+	// functions (MapStepFeedback): a cursor over an iterator whose next is
+	// one of them native code steps itself, as V8 inlines a Map
+	// iterator's next. Zero for none.
+	MapNexts [2]uintptr
 	// ForOf marks a for...of's or a destructuring's cursor made of the
 	// iterable, its one operand.
 	ForOf bool
@@ -2536,6 +2541,22 @@ func (b *builder) goIndex(blk *Block, in ir.Instruction, operand func(ir.Operand
 	b.assign(in.Dest, blk, r)
 }
 
+// MapStepFeedback is Feedback that knows the realm's Map and Set
+// iterators' next functions, whose cursors a loop's step walks natively
+// (CallSite's MapNexts).
+type MapStepFeedback interface {
+	MapNexts() [2]uintptr
+}
+
+// mapNexts are the realm's Map and Set iterators' next functions
+// (MapStepFeedback), or none.
+func (b *builder) mapNexts() [2]uintptr {
+	if f, ok := b.fb.(MapStepFeedback); ok {
+		return f.MapNexts()
+	}
+	return [2]uintptr{}
+}
+
 // goKeyedWrite makes in, an element's write, by a call of Go from native
 // code (GoKeyedWrite), as V8's code calls its generic keyed store: Go
 // stores what storing runs nothing for, and refuses the rest, which leaves
@@ -2559,7 +2580,7 @@ func (b *builder) goKeyedWrite(blk *Block, in ir.Instruction, operand func(ir.Op
 func (b *builder) iterStep(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
 	call := guard(OpCall, Tagged, ir.HostExit, operand(in.Left))
 	if b.f.Keeps < b.f.keepLimit() {
-		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoCall, Step: true, Fill: in.When, ThisSlot: -1}}, b.f.Keeps
+		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoCall, Step: true, Fill: in.When, ThisSlot: -1, MapNexts: b.mapNexts()}}, b.f.Keeps
 		b.f.Keeps++
 	}
 	cell := b.f.newValue(blk, OpCallCell, Source, call)

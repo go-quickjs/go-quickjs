@@ -189,6 +189,10 @@ type jitRealmFields struct {
 	// their time on a walk of the eight.
 	jitPlainFns [8]*Object
 	jitPlainSet [32]uintptr
+	// jitMapNexts are %MapIteratorPrototype%.next and
+	// %SetIteratorPrototype%.next, whose iterators a for...of's step
+	// native code makes walks itself (ssa.MapStepFeedback).
+	jitMapNexts [2]*Object
 }
 
 // jitPlainSlot is where an address's search in jitPlainSet starts.
@@ -282,6 +286,17 @@ func (r *Runtime) recordJITSubstrings() {
 			i = (i + 1) % len(r.jitPlainSet)
 		}
 		r.jitPlainSet[i] = p
+	}
+	for k, p := range [2]*Object{r.proto.mapIter, r.proto.setIter} {
+		r.jitMapNexts[k] = nil
+		if p == nil {
+			continue
+		}
+		if m := p.getOwn(atomNext); m.ok() && m.value().IsObject() {
+			if fd := m.value().Object().fn(); fd != nil && fd.iterNext == iterNextMap {
+				r.jitMapNexts[k] = m.value().Object()
+			}
+		}
 	}
 	for kind, name := range jitLoopNames {
 		r.jitLoops[kind], r.jitTypedLoops[kind] = nil, nil
