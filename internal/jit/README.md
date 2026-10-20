@@ -164,7 +164,15 @@ first of them, which nothing since has changed. A loop's BigInts stay in
 unboxed phis, and a box only frame states name is made nowhere but at an
 exit, which makes the value of the unboxed BigInt (`abi.ExitLoc`'s
 `IsBig`), as V8's deoptimizer materializes one. The rest -- BigInts on the
-heap -- Go makes from native code (`ssa.GoArith`).
+heap -- Go makes from native code (`ssa.GoArith`), giving back what the
+tree tier would of its operands' blocks (`ssa.CallSite`'s `Release`). A
+sum, a difference, a product, a quotient or a remainder is made first by
+the VM's leaf (`abi.Encoding`'s `BigFast`, `jitBigLeaf`), in fewer steps
+than Go's call: native code reaches it as it reaches `callGo`, through a
+routine the Go runtime sees as `callGo`, a function its caller called; it
+decodes the call itself, makes the result in a block given back, the
+value before's, or a new one -- as V8's code allocates a BigInt inline --
+gives back as the call would, and leaves what would throw to the call.
 
 **Array loops.** A call of `Array.prototype`'s `forEach`, `reduce`,
 `map`, `filter`, `some`, `every`, `find` or `findIndex`, or a typed array's

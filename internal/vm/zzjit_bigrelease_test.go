@@ -220,6 +220,7 @@ func TestJITBigIntGivenBackAllocs(t *testing.T) {
 		t.Fatal("arith has no code")
 	}
 	var before, after runtime.MemStats
+	made, fresh := r.jit.bigLeafs, r.jit.bigLeafNew
 	runtime.ReadMemStats(&before)
 	got, err := r.Run(run)
 	runtime.ReadMemStats(&after)
@@ -230,8 +231,18 @@ func TestJITBigIntGivenBackAllocs(t *testing.T) {
 	if g := got.Number(); g != 273446 {
 		t.Fatalf("arith(1000) = %v, want 273446", g)
 	}
-	// 2000 BigInts of 4 and 5 words made: a few blocks, not thousands.
-	if n := after.Mallocs - before.Mallocs; n > 200 {
-		t.Fatalf("arith(1000) allocated %d times", n)
+	// 3000 operators made, by the leaf (jitBigLeaf), of 2000 BigInts of 4
+	// and 5 words: in a few new blocks, not thousands.
+	if n, m := r.jit.bigLeafs-made, r.jit.bigLeafNew-fresh; n < 3000 || m > 20 {
+		t.Fatalf("arith(1000): the leaf made %d operators, in %d new blocks", n, m)
+	}
+	// Nor anything else allocated, where nothing does that checkptr's
+	// instrumentation does not make allocate (-d=checkptr: a Value's
+	// methods escape it).
+	probe := heapBig(newBigWords(2, false))
+	if testing.AllocsPerRun(10, func() { _ = probe.isHeapBig() }) == 0 {
+		if n := after.Mallocs - before.Mallocs; n > 200 {
+			t.Fatalf("arith(1000) allocated %d times", n)
+		}
 	}
 }

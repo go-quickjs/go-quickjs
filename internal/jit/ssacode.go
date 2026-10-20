@@ -73,6 +73,12 @@ func NewSSACode(a *Arena, c *mir.Code) (*SSACode, error) {
 	return s, nil
 }
 
+// GoCallStates is the descriptions of the code's calls of Go
+// (abi.Context's GoState), which the code holds: what the VM's leaf keeps
+// its account of a call in (abi.GoCallState's BigScore), which a test
+// reads.
+func (s *SSACode) GoCallStates() []*abi.GoCallState { return s.goCalls }
+
 // HasEntry reports whether the code can be entered at a slot IR PC.
 func (s *SSACode) HasEntry(pc int) bool {
 	return pc >= 0 && pc < len(s.entries) && s.entries[pc] >= 0

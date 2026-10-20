@@ -488,6 +488,13 @@ type GoCallState struct {
 	NumOffset, RefOffset, UpvalueSlot int32
 	True, False, NaN                  uint64
 	Args                              []GoCallArg
+	// BigScore is, for a BigInt's operator (Encoding's BigFast), the VM's
+	// leaf's account of what it made and what it left to Go's call, which
+	// costs more for having been tried; BigOff, set once the leaf has
+	// left most, sends the call to CallGo from then on, as V8's feedback
+	// gives up a speculation that does not pay.
+	BigScore int32
+	BigOff   bool
 }
 
 // GoCallArg is a GoCallState's operand, the i'th, laid out for Go to read
@@ -834,6 +841,9 @@ var (
 	OffShade     = int32(unsafe.Offsetof(Context{}.Shade))
 	OffCallState = int32(unsafe.Offsetof(Context{}.CallState))
 	OffGoState   = int32(unsafe.Offsetof(Context{}.GoState))
+
+	// OffGoCallBigOff is GoCallState's BigOff.
+	OffGoCallBigOff = int32(unsafe.Offsetof(GoCallState{}.BigOff))
 )
 
 // ObjectPool is the objects a construction site native code makes, `new
@@ -1123,6 +1133,13 @@ type Encoding struct {
 	// address of jit's callGo, an assembly routine that, to the Go
 	// runtime, the Go function that entered the code called.
 	CallGo uint64
+	// BigFast is where native code jumps, as to CallGo, for a BigInt's
+	// addition, subtraction or product Go makes (ssa.CallSite's Big): the
+	// VM's routine that makes it there -- of BigInts of a few words, its
+	// result in a block the VM had been given back, as V8's code allocates
+	// inline -- and goes on to CallGo for any other. 0 sends every such
+	// call to CallGo.
+	BigFast uint64
 	// StoreRef is where native code jumps to store a pointer word while
 	// the collector marks, as V8's code calls its write barrier: the
 	// address of jit's storeRef, which, as callGo, is to the Go runtime a

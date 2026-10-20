@@ -66,6 +66,7 @@ var jitEncoding = abi.Encoding{
 	ObjectProto:      int32(unsafe.Offsetof(Object{}.proto)),
 	WriteBarrier:     jit.WriteBarrier(),
 	CallGo:           jit.CallGo(),
+	BigFast:          uint64(jitBigFastAddr()),
 	StoreRef:         jit.StoreRef(),
 	Round:            runtime.GOARCH == "arm64" || cpu.X86.HasSSE41,
 	ShapeKeys:        int32(unsafe.Offsetof(shape{}.keys)),

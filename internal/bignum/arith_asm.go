@@ -31,3 +31,11 @@ func mulRow(z, x []uint, d uint) (c uint)
 //
 //go:noescape
 func mulSubRow(z, x []uint, d uint) (c uint)
+
+// MulRow writes x*d to z, of len(x) words, and returns the carry word: the
+// kernel, for callers that make their own rows (the VM's BigInt leaf).
+func MulRow(z, x []uint, d uint) uint { return mulRow(z, x, d) }
+
+// MulAddRow adds x*d to z, of len(x) words, and returns the carry word: the
+// kernel, for callers that make their own rows.
+func MulAddRow(z, x []uint, d uint) uint { return mulAddRow(z, x, d) }

@@ -1024,6 +1024,10 @@ type jitState struct {
 	// entered counts the native calls Go ran the callee of from its
 	// start, the callee having no native code (abi.ExitEnter).
 	entered uint64
+	// bigLeafs counts the BigInts' operators native code had made
+	// without a call of Go (jitBigLeaf), bigLeafNew the new blocks it
+	// made them in, none having been given back.
+	bigLeafs, bigLeafNew uint64
 	// ssaKeeps is the most keep cells (abi.Context.Keep) any code compiled
 	// uses: what Go clears in a native callee's context.
 	ssaKeeps int

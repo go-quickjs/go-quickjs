@@ -570,6 +570,32 @@ func (b *builder) bigRelease(blk *Block, pc int, in ir.Instruction) (uint8, *Val
 	return r, nil
 }
 
+// bigLeafSites clears CallSite's Big in code that gives no BigInt's block
+// back -- no site's Release of an operand that may be on the heap, a box
+// of native code's never is -- whose calls the VM's leaf would only try:
+// it makes a result in a block given back, which such code has none of.
+// A sum's of powers, s += BigInt(i) ** 5n, gives back only its right
+// operand, a power native code made.
+func bigLeafSites(f *Func) {
+	var big []*CallSite
+	for _, b := range f.Blocks {
+		for _, v := range b.Values {
+			for _, c := range v.Calls() {
+				if c.Release&ReleaseOld != 0 || c.Release&ReleaseLeft != 0 && boxedBig(v.Args[0]) == nil ||
+					c.Release&ReleaseRight != 0 && boxedBig(v.Args[1]) == nil {
+					return
+				}
+				if c.Big {
+					big = append(big, c)
+				}
+			}
+		}
+	}
+	for _, c := range big {
+		c.Big = false
+	}
+}
+
 // bigArith reports whether op is an operator whose result is a value of
 // its own: arithmetic, bitwise, a shift.
 func bigArith(op ir.Operator) bool {

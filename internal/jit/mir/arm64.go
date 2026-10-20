@@ -82,6 +82,9 @@ type a64Compiler struct {
 	goFails     []a64GoFail
 	live        arm64.Label
 	liveUsed    bool
+	// bigLive, bigLiveUsed and goCallBig are amd64's.
+	bigLive                arm64.Label
+	bigLiveUsed, goCallBig bool
 	// saving is the routine every call of Go that saves every register
 	// shares (goSaving), if any makes one.
 	saving     arm64.Label
@@ -218,7 +221,15 @@ func compileARM64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 	}
 	if c.liveUsed {
 		c.a.Bind(c.live)
-		c.liveCall()
+		c.liveCall(c.enc.CallGo)
+	}
+	if c.bigLiveUsed {
+		// As amd64's: a call the leaf has given up goes the way any other
+		// does.
+		c.a.Bind(c.bigLive)
+		c.a.LoadU8(a64B, a64C, abi.OffGoCallBigOff)
+		c.a.Cbnz(a64B, c.live, false)
+		c.liveCall(c.enc.BigFast)
 	}
 	if c.callingUsed {
 		// As amd64's: laid out just before saving.
@@ -1687,10 +1698,17 @@ func (c *a64Compiler) goCallingLive(v *ssa.Value, st *abi.GoCallState, stub arm6
 	if !c.liveUsed {
 		c.live, c.liveUsed = c.a.NewLabel(), true
 	}
+	routine := &c.live
+	if c.goCallBig {
+		if !c.bigLiveUsed {
+			c.bigLive, c.bigLiveUsed = c.a.NewLabel(), true
+		}
+		routine = &c.bigLive
+	}
 	back, fail := c.a.NewLabel(), c.a.NewLabel()
 	c.movImm(a64C, uint64(uintptr(unsafe.Pointer(st))))
 	c.a.Adr(a64A, back)
-	c.a.B(c.live)
+	c.a.B(*routine)
 	c.a.Bind(back)
 	restore := func() {
 		for _, sv := range saves {
@@ -1711,13 +1729,13 @@ func (c *a64Compiler) goCallingLive(v *ssa.Value, st *abi.GoCallState, stub arm6
 }
 
 // liveCall is amd64's.
-func (c *a64Compiler) liveCall() {
+func (c *a64Compiler) liveCall(target uint64) {
 	resume := c.a.NewLabel()
 	c.a.Store(a64Ctx, abi.OffGoState, a64C)
 	c.a.Store(a64Ctx, abi.OffGoSite, a64A)
 	c.a.Adr(a64A, resume)
 	c.a.Store(a64Ctx, abi.OffGoResume, a64A)
-	c.movImm(a64A, c.enc.CallGo)
+	c.movImm(a64A, target)
 	c.a.Br(a64A)
 	c.a.Bind(resume)
 	c.a.Load(a64Locals, a64Ctx, abi.OffLocals)
@@ -3530,6 +3548,11 @@ func (c *a64Compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(arm64.
 		c.goCallOp(v, goOpWord(site), false)
 		c.a.Bind(skip)
 		return
+	}
+	if site.Big && c.enc.BigFast != 0 {
+		// As amd64's: through the VM's routine for BigInts.
+		c.goCallBig = true
+		defer func() { c.goCallBig = false }()
 	}
 	c.goCallOp(v, goOpWord(site), false)
 }

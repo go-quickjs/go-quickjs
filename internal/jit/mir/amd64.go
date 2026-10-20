@@ -94,6 +94,11 @@ type compiler struct {
 	// themselves (goCallingLive).
 	live     amd64.Label
 	liveUsed bool
+	// bigLive is the routine of goCallingLive's calls of BigInts' operators
+	// (ssa.CallSite's Big), liveCall's to abi.Encoding's BigFast, and
+	// goCallBig says the call being made is one.
+	bigLive                amd64.Label
+	bigLiveUsed, goCallBig bool
 	// saving is the routine every call of Go that saves every register
 	// shares (goSaving), if any makes one.
 	saving     amd64.Label
@@ -231,7 +236,16 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 	}
 	if c.liveUsed {
 		c.a.Bind(c.live)
-		c.liveCall()
+		c.liveCall(c.enc.CallGo)
+	}
+	if c.bigLiveUsed {
+		// A call the leaf has given up (abi.GoCallState's BigOff) goes the
+		// way any other does.
+		c.a.Bind(c.bigLive)
+		c.a.LoadU8(scratchB, scratchC, abi.OffGoCallBigOff)
+		c.a.Op(amd64.Test, scratchB, scratchB, false)
+		c.a.Jcc(amd64.CondNE, c.live)
+		c.liveCall(c.enc.BigFast)
 	}
 	if c.callingUsed {
 		// Laid out just before saving, which it goes on to.
@@ -1417,6 +1431,11 @@ func (c *compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(amd64.Con
 		c.goCallOp(v, goOpWord(site), guard, false)
 		c.a.Bind(skip)
 		return
+	}
+	if site.Big && c.enc.BigFast != 0 {
+		// Through the VM's routine for BigInts (abi.Encoding's BigFast).
+		c.goCallBig = true
+		defer func() { c.goCallBig = false }()
 	}
 	c.goCallOp(v, goOpWord(site), guard, false)
 }
@@ -4226,10 +4245,17 @@ func (c *compiler) goCallingLive(v *ssa.Value, st *abi.GoCallState, stub amd64.L
 	if !c.liveUsed {
 		c.live, c.liveUsed = c.a.NewLabel(), true
 	}
+	routine := &c.live
+	if c.goCallBig {
+		if !c.bigLiveUsed {
+			c.bigLive, c.bigLiveUsed = c.a.NewLabel(), true
+		}
+		routine = &c.bigLive
+	}
 	back, fail := c.a.NewLabel(), c.a.NewLabel()
 	c.movImm(scratchC, uint64(uintptr(unsafe.Pointer(st))))
 	c.a.LeaLabel(scratchA, back)
-	c.a.Jmp(c.live)
+	c.a.Jmp(*routine)
 	c.a.Bind(back)
 	restore := func() {
 		for _, sv := range saves {
@@ -4250,16 +4276,16 @@ func (c *compiler) goCallingLive(v *ssa.Value, st *abi.GoCallState, stub amd64.L
 }
 
 // liveCall is the routine of goCallingLive's calls: the description and
-// where the call goes on (GoSite) in the context, Go called, its return
-// to the code's resumeLive -- the frame's registers read again -- and on to
-// GoSite.
-func (c *compiler) liveCall() {
+// where the call goes on (GoSite) in the context, Go called -- through
+// target, CallGo or BigFast -- its return to the code's resumeLive -- the
+// frame's registers read again -- and on to GoSite.
+func (c *compiler) liveCall(target uint64) {
 	resume := c.a.NewLabel()
 	c.a.Store(regCtx, abi.OffGoState, scratchC)
 	c.a.Store(regCtx, abi.OffGoSite, scratchA)
 	c.a.LeaLabel(scratchA, resume)
 	c.a.Store(regCtx, abi.OffGoResume, scratchA)
-	c.movImm(scratchA, c.enc.CallGo)
+	c.movImm(scratchA, target)
 	c.a.JmpReg(scratchA)
 	c.a.Bind(resume)
 	c.a.Load(regLocals, regCtx, abi.OffLocals)

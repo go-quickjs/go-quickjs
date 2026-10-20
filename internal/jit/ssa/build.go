@@ -908,6 +908,11 @@ type CallSite struct {
 	// of its operands' blocks Go may give back once it has made its result
 	// (ReleaseLeft, bigRelease in bigint.go).
 	Release uint8
+	// Big marks a BigInt's addition, subtraction, product, division or
+	// remainder Go makes (GoArith; GoAdd at a site that met BigInts), which
+	// the VM's leaf makes without Go's call where it can (abi.Encoding's
+	// BigFast).
+	Big bool
 	// Generic, on a call's first site, has a function none of its sites
 	// is called natively all the same, through its link, found from its
 	// closure's hint (abi.HintTable), where its closure's environment and
@@ -1593,6 +1598,7 @@ func build(w *Workspace, p *ir.Program, fb Feedback) (*Func, error) {
 		return nil, err
 	}
 	b.translate()
+	bigLeafSites(f)
 	// The shadows and the stores' checks are Optimize's to make, which
 	// would remake them, or the first to run or compile f's (Finish).
 	return b.f, nil
@@ -2458,7 +2464,9 @@ func (b *builder) goAdd(blk *Block, in ir.Instruction, operand func(ir.Operand) 
 	}
 	call := guard(OpCall, Tagged, ir.HostExit, args...)
 	if b.f.Keeps < b.f.keepLimit() {
-		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoAdd, ThisSlot: -1, Release: release}}, b.f.Keeps
+		fb := b.bigFeedback()
+		big := fb != nil && b.cur == b.root && fb.BigInt(b.herePC)
+		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoAdd, ThisSlot: -1, Release: release, Big: big}}, b.f.Keeps
 		b.f.Keeps++
 	}
 	cell := b.f.newValue(blk, OpCallCell, Source, call)
@@ -2509,7 +2517,8 @@ func (b *builder) goArith(blk *Block, in ir.Instruction, operand func(ir.Operand
 	}
 	call := guard(OpCall, Tagged, ir.HostExit, args...)
 	if b.f.Keeps < b.f.keepLimit() {
-		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoArith, Argc: int(in.Operator), ThisSlot: -1, Release: release}}, b.f.Keeps
+		big := in.Operator == ir.Add || in.Operator == ir.Sub || in.Operator == ir.Mul || in.Operator == ir.Div || in.Operator == ir.Mod
+		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoArith, Argc: int(in.Operator), ThisSlot: -1, Release: release, Big: big}}, b.f.Keeps
 		b.f.Keeps++
 	}
 	cell := b.f.newValue(blk, OpCallCell, Source, call)
