@@ -1191,7 +1191,25 @@ func (b *BigInt) words() []uint {
 // newBigWords is a BigInt of n words of digits, all zero, and the sign neg:
 // one allocation of no pointer, the header and the digits.
 func newBigWords(n int, neg bool) *BigInt {
-	ws := make([]uint, 1+n)
+	// The sizes most results are of as arrays, which new allocates without
+	// make's checks of a slice's length.
+	var ws []uint
+	switch n {
+	case 1:
+		ws = new([2]uint)[:]
+	case 2:
+		ws = new([3]uint)[:]
+	case 3:
+		ws = new([4]uint)[:]
+	case 4:
+		ws = new([5]uint)[:]
+	case 5:
+		ws = new([6]uint)[:]
+	case 6, 7:
+		ws = new([8]uint)[:n+1]
+	default:
+		ws = make([]uint, 1+n)
+	}
 	b := (*BigInt)(unsafe.Pointer(&ws[0]))
 	b.hdr = uint(n)
 	if neg && n > 0 {

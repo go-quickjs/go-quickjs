@@ -1735,8 +1735,17 @@ func (c *tctx) arithSlow(op bytecode.Op, a, b Value, pc int) Value {
 	if jitBuilt && op == bytecode.OpAdd && (a.IsString() || b.IsString()) {
 		treeStringAdd(c, pc)
 	}
-	if jitBuilt && a.IsBigInt() && b.IsBigInt() {
-		treeBigInt(c, pc, true)
+	if a.IsBigInt() && b.IsBigInt() {
+		// Two BigInts, which convert to themselves: bigOp's, not add's or
+		// arith's after their conversions.
+		if jitBuilt {
+			treeBigInt(c, pc, true)
+		}
+		v, err := c.r.bigOp(op, a, b)
+		if err != nil {
+			c.throw(err)
+		}
+		return v
 	}
 	var v Value
 	var err error

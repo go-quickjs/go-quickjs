@@ -4,6 +4,7 @@ import (
 	"math"
 	"math/bits"
 	"strconv"
+	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/bignum"
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
@@ -27,9 +28,20 @@ type bigScratch [64 / bits.UintSize]uint
 // in buf.
 func bigParts(v Value, buf *bigScratch) (bool, []uint) {
 	if !v.isShortBig() {
-		b := (*BigInt)(v.ref)
-		return b.negative(), b.words()
+		return heapParts(v)
 	}
+	return shortParts(v, buf)
+}
+
+// heapParts is bigParts of a BigInt on the heap, which is never zero:
+// what inlines, where bigParts does not, for the arithmetic's operands.
+func heapParts(v Value) (bool, []uint) {
+	b := (*BigInt)(v.ref)
+	return b.hdr&bigNegBit != 0, unsafe.Slice((*uint)(unsafe.Add(unsafe.Pointer(b), bigWordSize)), b.hdr&^bigNegBit)
+}
+
+// shortParts is bigParts of a BigInt held in its Value.
+func shortParts(v Value, buf *bigScratch) (bool, []uint) {
 	x := v.shortBigInt()
 	u := uint64(x)
 	if x < 0 {
@@ -121,8 +133,18 @@ const bigWordsNear = maxBigIntBits/bits.UintSize - 1
 // zero, a negative power; the memory a meter allows reserved first.
 func (r *Runtime) bigOp(op bytecode.Op, a, b Value) (Value, error) {
 	var ba, bb bigScratch
-	an, x := bigParts(a, &ba)
-	bn, y := bigParts(b, &bb)
+	var an, bn bool
+	var x, y []uint
+	if a.isShortBig() {
+		an, x = shortParts(a, &ba)
+	} else {
+		an, x = heapParts(a)
+	}
+	if b.isShortBig() {
+		bn, y = shortParts(b, &bb)
+	} else {
+		bn, y = heapParts(b)
+	}
 	switch op {
 	case bytecode.OpAdd, bytecode.OpSub:
 		if op == bytecode.OpSub {
@@ -236,8 +258,18 @@ func (r *Runtime) bigPow(xn bool, x []uint, b Value, yn bool, y []uint) (Value, 
 // for a left shift past maxBigIntBits.
 func (r *Runtime) bigBits(op bytecode.Op, a, b Value) (Value, error) {
 	var ba, bb bigScratch
-	an, x := bigParts(a, &ba)
-	bn, y := bigParts(b, &bb)
+	var an, bn bool
+	var x, y []uint
+	if a.isShortBig() {
+		an, x = shortParts(a, &ba)
+	} else {
+		an, x = heapParts(a)
+	}
+	if b.isShortBig() {
+		bn, y = shortParts(b, &bb)
+	} else {
+		bn, y = heapParts(b)
+	}
 	switch op {
 	case bytecode.OpBitAnd:
 		return bigOf(bignum.And(r.bigRoom(max(len(x), len(y))+1), an, x, bn, y)), nil
@@ -314,8 +346,18 @@ func bigCmp(a, b Value) int {
 		return 0
 	}
 	var ba, bb bigScratch
-	an, x := bigParts(a, &ba)
-	bn, y := bigParts(b, &bb)
+	var an, bn bool
+	var x, y []uint
+	if a.isShortBig() {
+		an, x = shortParts(a, &ba)
+	} else {
+		an, x = heapParts(a)
+	}
+	if b.isShortBig() {
+		bn, y = shortParts(b, &bb)
+	} else {
+		bn, y = heapParts(b)
+	}
 	switch {
 	case an && !bn:
 		return -1
