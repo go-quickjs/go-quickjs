@@ -26,9 +26,10 @@ This file states the design and the contracts the code keeps.
 | `abi` | The contract between the code and the VM: the context block (`Context`), the exits, and the value encoding (`Encoding`), given as data. |
 | `asm` | The two assemblers. |
 | `ssacode.go`, `arena.go`, `exit.go` | Placing code (`SSACode`, `Arena`), entering it, and reading its exits. |
+| `barrier.go` | The runtime's write-barrier flag, which native code tests, and the Go side of its stores through the barrier (`storeRef`). |
 | `verify` | A module of its own that checks the code `mir` makes for both targets against `golang.org/x/arch`'s disassemblers. |
 | `entry_*.s` | Entry from Go (`enterSSA`), and the calls of Go native code makes (`callGo`). |
-| `memory_*.go`, `policy_darwin.go` | Executable memory. |
+| `memory_*.go`, `cache_*.go`, `policy_darwin.go`, `jit_disabled.go` | Executable memory, the instruction cache, and the stubs for targets without the tier. |
 | `internal/vm/zzjit_native.go` | The VM's side: selection, the code cache, budgets, host exits. |
 | `internal/vm/zzjit_ssa.go` | Feedback for the builder, entering and resuming code, the calls of Go, native calls and their frames. |
 | `internal/vm/zzjit_disabled.go` | The stubs for builds without the tier. |
@@ -67,7 +68,12 @@ getter, an element's kind, a callee that inlines more -- is not
 invalidated, as V8 never invalidates code for feedback: only it learns
 those, which the existing tiers' caches do not note. It runs on, and is
 compiled again in place once it has spent a budget as invalidated code
-does, nothing more learned meanwhile (`jitLearnedDue`).
+does, nothing more learned meanwhile (`jitLearnedDue`) -- a recursive
+function's while its outer runs are still in its code, as V8 installs new
+code while older frames are in the old: each such run, once what it
+called returns, goes on from its frame, as the code it left describes it,
+and in the new code at its next entry (only a native call of the code,
+which returns into it, waits).
 
 **Tier-up.** The budgets are V8's, named after its flags. A function is
 given its entry, which holds its budget and its caches' mark as V8's
@@ -84,8 +90,10 @@ number of back-edge budgets. Invalidated code waits for a fresh budget
 the same way (`jitTierUp`), and code that learned at its exits too
 (`jitLearnedDue`). Every invocation the existing tiers run spends it,
 those the call path answers without a frame (a pure body's, a leaf's)
-included when Go makes them for native code (`jitInvokedFrameless`): a
-function only native callers call is compiled again by their calls. A
+included when Go makes them for native code (`jitInvokedFrameless`), and
+those Go runs for a native call of a function it does not enter itself
+(`jitEnterCallee`): a function only native callers call is compiled again
+by their calls. A
 change of the function's caches' feedback -- what they hold, not how
 often they were filled (`jitFeedbackMark`) -- raises what is left of the
 budget to `minimum_invocations_after_ic_update` (500) invocations' worth
@@ -106,9 +114,22 @@ what it knows -- the arguments, the receiver -- and jumps there with where
 it returns to, the callee's closure and its link in registers, and the
 callee's return hands the result back in registers (`abi.Context`'s
 `ReturnTo`). Small callees are inlined, with
-their own frames made at an exit. A call of a built-in, or of anything the
-code does not call natively, is a call of Go (`ssa.GoCall`): native code
-calls into Go and goes on after it, without leaving. As V8's deoptimization
+their own frames made at an exit. A call is compiled for the functions it
+was seen to call natively, up to `jitCallTargets` (4), each checked by its
+object or, for a closure made anew, by its code (see Closures); one that
+meets any other leaves native code, Go learning there what to call next.
+A call that has met that many calls any other function through its link,
+as V8 makes a megamorphic call through the code the function points to
+(`ssa.CallSite`'s `Generic`): a closure of the caller's environment and
+realm whose hint names its function's link (`abi.HintTable`), whose frame
+is its arguments in its parameters (no rest, defaults, destructuring or
+`arguments`), and not a generator's or an async function's. A callee
+reached so, or by any native call, that has no code yet has its frame made
+and leaves for Go to run it (`abi.ExitEnter`), which compiles it for
+native callers. A call none of that covers -- a call of a built-in, of a
+function the code does not call natively, a generic call's miss -- is a
+call of Go (`ssa.GoCall`): native code calls into Go and goes on after it,
+without leaving. As V8's deoptimization
 data describes a call's frame, a call's state and a call of Go's operands
 are static descriptions (`abi.CallState`, `abi.GoCallState`) of where the
 code keeps each value -- a register its shared routine saved, a spill
@@ -116,10 +137,31 @@ slot, a constant, the frame -- which Go reads only when it needs them
 (`jit.ExpandCall`, `jit.ExpandGoCall`): a site writes little more than the
 description's address.
 
-**Allocation.** Object, array and regular expression literals, and the
-receivers of constructions, are taken from pools of objects the VM makes
-ahead (`abi.ObjectPool`), as V8's code allocates inline; Go refills a pool
-that runs out.
+**Built-ins.** As V8 reduces calls of built-ins it knows, some are made
+by the code itself, each call checking it calls the realm's function:
+`Math`'s functions of numbers and `Math.random` (`ssa.Intrinsic`), a
+string's `charCodeAt`, `String.fromCharCode`, a one-character `substring`,
+`slice`, `substr` or `charAt`, `parseInt` of a number, an array's `push`
+and `pop` on their fast paths, and `new Array()` or `new Array(n)` from a
+pool. Strings' and arrays' `indexOf`, `lastIndexOf` and `includes` are a
+call of Go of their own (`ssa.GoIndexOf`), which answers where the
+built-in runs nothing. Anything else such a call meets is Go's.
+
+**Array loops.** A call of `Array.prototype`'s `forEach`, `reduce`,
+`map`, `filter`, `some`, `every`, `find` or `findIndex`, or a typed array's
+method of those names, is made a loop of the code's own, as V8's
+JSCallReducer reduces it (`ssa.ForEachSite`): the array checked and its
+length read once, then each element given to the callback, called
+natively. `map`'s and `filter`'s arrays Go makes (`ssa.GoNewArray`, where
+the array's species is `Array`), and the code appends to them. A hole, or
+anything the loop's checks find, leaves, and Go goes on with the loop from
+that index (`abi.Context`'s `Loop`), then native code after the call.
+
+**Allocation.** Object, array and regular expression literals, closures
+and their captured cells (see Closures), and the receivers of
+constructions, are taken from pools of objects the VM makes ahead
+(`abi.ObjectPool`), as V8's code allocates inline; Go refills a pool that
+runs out.
 
 **Exceptions.** The compiler emits structured code, so the handlers in
 force at each instruction are known when lowering (`ir.Program`'s
@@ -217,7 +259,8 @@ the accessor as the interpreter's do.
 
 **Map checks.** A property read or write is compiled for the shapes its
 site's inline cache has met -- the one it holds and those it held before
-(`propCache.seen`), up to five. A receiver of any other shape, and any
+(`propCache.seen`), up to four (`jitPropertyCases`). A receiver of any
+other shape, and any
 receiver at a site whose cache knows none, deoptimizes (`ir.GuardExit`),
 as V8's map checks do and its code does for insufficient feedback: the
 interpreter makes the operation, the site's cache learning the shape --
@@ -468,16 +511,21 @@ into the frame.
   guard's exit, or a frame native code called natively that Go finishes --
   the interpreter runs only to the next loop header, and native code from
   there (`jitGoOn`).
-- A native callee that cannot go on leaves its frame to Go (`ExitTable`),
-  which finishes the call in the interpreter, and its caller's code goes on
-  after the call.
+- A native callee that cannot go on leaves its frame to Go, which
+  finishes the call in the interpreter, and its caller's code goes on
+  after the call. One that has no code (`ExitEnter`) has only its frame
+  made, and Go runs it from its start.
+- An exit may leave its frame for Go to write from the exit's description
+  and the registers it saved (`ExitTable`), Go then reading the exit's own
+  kind.
 - Work already committed, earlier loop iterations included, is never
   replayed.
 
 ## Selection and the code cache
 
-**Function entry.** A closure counts framed calls. The eighth may compile its
-function (`jitHotCalls`).
+**Function entry.** A closure counts framed calls. The eighth gives its
+function an entry (`jitInvocationsForFeedback`), which compiles it once the
+existing tiers have spent its budget (see [Tier-up](#design)).
 
 **Loops.** A loop may also promote at a back-edge check: on-stack
 replacement at the loop's header, from the interpreter or the tree tier.
@@ -495,7 +543,8 @@ no count of entries bounds it.
 cache's hint table (not a pointer), which holds the entry and its
 function's address. The hint finds the entry only for a closure of that
 function, so a stale hint misses however often its slot was reused. The
-closure stays 128 bytes; the table grows to the most entries the cache has
+hint lives in what a template's closures share (`closureCode`), so the
+closure stays 64 bytes; the table grows to the most entries the cache has
 held at once, its free slots reused.
 
 **Refusals.**
@@ -586,7 +635,7 @@ Runtime construction allocates nothing for the JIT.
   instruction by instruction.
 
 **With the tag, JIT off.**
-- The JIT's fields fit existing padding: `closure` stays 128 bytes.
+- The JIT's fields fit existing padding: `closure` stays 64 bytes.
 - `Runtime`'s and `Realm`'s JIT fields sit at the end of their structs, so no
   offset the interpreter reads moves. `TestJITFieldLayout` checks both builds.
 - Measure the remaining flag tests with `placements`.
