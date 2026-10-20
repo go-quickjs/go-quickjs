@@ -98,6 +98,10 @@ type tbuilder struct {
 	// badLogic is the jump of an && or || or ternary that the block being
 	// built found its y, a or b add a statement to, or -1.
 	badLogic int
+	// sole is the locals that hold their values alone (soleLocals), once
+	// soleDone says it has been asked.
+	sole     uint64
+	soleDone bool
 }
 
 // target records a way from the block being built to the one at pc, whose
@@ -941,6 +945,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		b.pushEntry(localEntry(in.B))
 	case bytecode.OpSetLocal, bytecode.OpInitLocal:
 		k, e := in.A, b.pop()
+		e = b.ownedStore(k, e, pc)
 		if s := storeArith(k, e); s != nil {
 			return 0, b.stmt(s)
 		}
@@ -948,6 +953,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		return 0, b.stmt(func(c *tctx) { c.locals[k] = v(c) })
 	case bytecode.OpSetLocalGet:
 		k, j, e := in.A, in.B, b.pop()
+		e = b.ownedStore(k, e, pc)
 		s := storeArith(k, e)
 		if s == nil {
 			v := e.tree()
@@ -1655,7 +1661,7 @@ func (c *tctx) bitwiseSlow(op bytecode.Op, a, b Value, pc int) Value {
 				c.throw(err)
 			}
 			if pc > treePCMask {
-				c.r.bigRelease(v, a, b, pc)
+				c.r.bigRelease(v, a, b, c.treeOwned(pc), pc)
 			}
 			return v
 		}
@@ -1853,7 +1859,7 @@ func (c *tctx) arithSlow(op bytecode.Op, a, b Value, pc int) Value {
 				c.throw(err)
 			}
 			if pc > treePCMask {
-				c.r.bigRelease(v, a, b, pc)
+				c.r.bigRelease(v, a, b, c.treeOwned(pc), pc)
 			}
 			return v
 		}

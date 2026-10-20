@@ -84,18 +84,45 @@ func (r *Runtime) bigInPlace(n int) (*BigInt, []uint) {
 	if n < bigBlockFrom {
 		return nil, r.bigRoom(n)
 	}
-	if f := r.bigFree; f != nil && n <= bigFreeTop {
-		if k := &f.n[n-bigBlockFrom]; *k != 0 {
-			*k--
-			i := n - bigBlockFrom
-			b := f.b[i][*k]
-			f.b[i][*k] = nil
-			b.hdr = uint(n) | uint(n)<<bigCapShift
-			return b, b.words()
-		}
+	if b := r.bigTake(n); b != nil {
+		return b, b.words()
 	}
 	b := newBigWords(n, false)
 	return b, b.words()
+}
+
+// bigTake is a block given back of room for n words, of n words of
+// digits, or nil where there is none.
+func (r *Runtime) bigTake(n int) *BigInt {
+	f := r.bigFree
+	if f == nil || n < bigBlockFrom || n > bigFreeTop {
+		return nil
+	}
+	i := n - bigBlockFrom
+	k := &f.n[i]
+	if *k == 0 {
+		return nil
+	}
+	*k--
+	b := f.b[i][*k]
+	f.b[i][*k] = nil
+	b.hdr = uint(n) | uint(n)<<bigCapShift
+	return b
+}
+
+// bigOfKept is bigOf, the BigInt made in a block given back of its room
+// where there is one.
+func (r *Runtime) bigOfKept(neg bool, mag []uint) Value {
+	if len(mag) >= bigBlockFrom {
+		if b := r.bigTake(len(mag)); b != nil {
+			copy(b.words(), mag)
+			if neg {
+				b.hdr |= bigNegBit
+			}
+			return heapBig(b)
+		}
+	}
+	return bigOf(neg, mag)
 }
 
 // bigFreeList is the BigInts given back to a runtime, by their room in
@@ -119,10 +146,14 @@ const (
 // bigRelease gives back a's and b's blocks, those of a and b that flags
 // marks as fresh (treeFreshA, treeFreshB) -- each a result of the tree
 // tier's arithmetic that an operator of two BigInts has just taken, and
-// nothing else has seen -- for bigInPlace to make another result in, but
-// for one that is v, the operator's result. A 32-bit machine's BigInts
-// have no room in their header for their room, and are not given back.
-func (r *Runtime) bigRelease(v, a, b Value, flags int) {
+// nothing else has seen -- and old's, the value of the local v is about
+// to be stored to, where flags says the local holds its values alone
+// (treeOwnRes) and old is one such a store kept (bigSoleBit), for
+// bigInPlace to make another result in, but for one that is v, the
+// operator's result; and marks v as its local's alone. A 32-bit machine's
+// BigInts have no room in their header for their room, and are not given
+// back.
+func (r *Runtime) bigRelease(v, a, b, old Value, flags int) {
 	if bits.UintSize != 64 {
 		return
 	}
@@ -132,11 +163,20 @@ func (r *Runtime) bigRelease(v, a, b Value, flags int) {
 	if flags&treeFreshB != 0 && b.isHeapBig() && b.ref != v.ref && b.ref != a.ref {
 		r.bigGive((*BigInt)(b.ref))
 	}
+	if flags&treeOwnRes != 0 {
+		if old.isHeapBig() && old.ref != v.ref && (*BigInt)(old.ref).hdr&bigSoleBit != 0 &&
+			(flags&treeFreshA == 0 || old.ref != a.ref) && (flags&treeFreshB == 0 || old.ref != b.ref) {
+			r.bigGive((*BigInt)(old.ref))
+		}
+		if v.isHeapBig() {
+			(*BigInt)(v.ref).hdr |= bigSoleBit
+		}
+	}
 }
 
 // bigGive keeps the block b for bigInPlace, if it has room for a list's.
 func (r *Runtime) bigGive(b *BigInt) {
-	c := int(uint32(b.hdr >> bigCapShift))
+	c := int(uint32(b.hdr>>bigCapShift) & bigLenMask)
 	if c < bigBlockFrom || c > bigFreeTop {
 		return
 	}
@@ -155,13 +195,26 @@ func (r *Runtime) bigGive(b *BigInt) {
 // node passes arithSlow or bitwiseSlow, its left and right operands as
 // fresh: trees of arithmetic of their own, whose results nothing else
 // takes, which a BigInt operator of the two may give back (bigRelease).
-// treePCMask is the pc itself. A function whose pc reaches treeFreshA has
-// no marks.
+// treeOwnRes marks the node as one whose result is stored to a local that
+// holds its values alone, the local treeOwnShift's bits number
+// (zzbigown.go). treePCMask is the pc itself. A function whose pc is past
+// it has no marks.
 const (
-	treeFreshA = 1 << 29
-	treeFreshB = 1 << 30
-	treePCMask = treeFreshA - 1
+	treePCMask   = 1<<20 - 1
+	treeOwnShift = 20
+	treeFreshA   = 1 << 26
+	treeFreshB   = 1 << 27
+	treeOwnRes   = 1 << 28
 )
+
+// treeOwned is the value of the local a pc that treeOwnRes marks names,
+// which the result is about to be stored over.
+func (c *tctx) treeOwned(pc int) Value {
+	if pc&treeOwnRes == 0 {
+		return Undefined
+	}
+	return c.locals[pc>>treeOwnShift&63]
+}
 
 // bigDone is a result made in bigInPlace's room as a value: held in its
 // Value in the int64 range, the BigInt, its length the result's, if one was
@@ -259,11 +312,11 @@ func (r *Runtime) bigOp(op bytecode.Op, a, b Value) (Value, error) {
 		}
 		if op == bytecode.OpDiv {
 			q, _ := bignum.DivMod(r.bigRoom(bignum.QuoRoom(len(x), len(y))), nil, x, y)
-			return bigOf(an != bn, q), nil
+			return r.bigOfKept(an != bn, q), nil
 		}
 		// The remainder takes the dividend's sign.
 		_, rem := bignum.DivMod(nil, r.bigRoom(len(y)), x, y)
-		return bigOf(an, rem), nil
+		return r.bigOfKept(an, rem), nil
 	case bytecode.OpPow:
 		return r.bigPow(an, x, b, bn, y)
 	}
@@ -351,11 +404,11 @@ func (r *Runtime) bigBits(op bytecode.Op, a, b Value) (Value, error) {
 	}
 	switch op {
 	case bytecode.OpBitAnd:
-		return bigOf(bignum.And(r.bigRoom(max(len(x), len(y))+1), an, x, bn, y)), nil
+		return r.bigOfKept(bignum.And(r.bigRoom(max(len(x), len(y))+1), an, x, bn, y)), nil
 	case bytecode.OpBitOr:
-		return bigOf(bignum.Or(r.bigRoom(max(len(x), len(y))+1), an, x, bn, y)), nil
+		return r.bigOfKept(bignum.Or(r.bigRoom(max(len(x), len(y))+1), an, x, bn, y)), nil
 	case bytecode.OpBitXor:
-		return bigOf(bignum.Xor(r.bigRoom(max(len(x), len(y))+1), an, x, bn, y)), nil
+		return r.bigOfKept(bignum.Xor(r.bigRoom(max(len(x), len(y))+1), an, x, bn, y)), nil
 	case bytecode.OpShl, bytecode.OpShr:
 		left := op == bytecode.OpShl
 		if bn {
@@ -389,9 +442,9 @@ func (r *Runtime) bigBits(op bytecode.Op, a, b Value) (Value, error) {
 			if err := r.reserveBigInt(int64(bignum.BitLen(x)) + int64(s)); err != nil {
 				return Undefined, err
 			}
-			return bigOf(an, bignum.Shl(r.bigRoom(bignum.ShlRoom(len(x), s)), x, s)), nil
+			return r.bigOfKept(an, bignum.Shl(r.bigRoom(bignum.ShlRoom(len(x), s)), x, s)), nil
 		}
-		return bigOf(bignum.Sar(r.bigRoom(bignum.SarRoom(len(x))), an, x, s)), nil
+		return r.bigOfKept(bignum.Sar(r.bigRoom(bignum.SarRoom(len(x))), an, x, s)), nil
 	}
 	return Undefined, r.throwTypeError("unsupported BigInt operation")
 }

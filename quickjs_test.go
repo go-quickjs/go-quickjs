@@ -5289,3 +5289,138 @@ func TestBigIntGivenBack(t *testing.T) {
   return out.length + " " + r.length + " " + h;
 })()`, "30 54386 -538156609")
 }
+
+// TestBigIntSoleLocals pins the BigInts a local holds alone, which the
+// tree tier gives back when the local is assigned the next (zzbigown.go):
+// sums, products, remainders and shifts of numbers of hundreds of bits
+// assigned to the locals they are made of, run twice; and locals whose
+// values something else keeps -- copied to another local, pushed, stored
+// to a global, a method's receiver that keeps it, past a conditional,
+// captured, beside an arguments object, returned -- whose values are
+// never given back, nor one a local holding its values alone was given by
+// another. The answers' count, length and hash are Node's.
+// TestBigIntSoleLocalPending pins a local whose value an operand still to
+// be taken holds when the local is assigned -- s = s * (s = ..., 5n) --
+// which is not one that holds its values alone: given back at the inner
+// store, its block was made the next remainder in before the product read
+// it. The hash is Node's.
+func TestBigIntSoleLocalPending(t *testing.T) {
+	checkEval(t, `var h = 0n;
+function f(n) {
+  var s = (1n << 300n) + 12345n, m = (1n << 400n) + 7n, q = (1n << 450n) + 99n, t = 0n;
+  for (var i = 0; i < n; i++) {
+    s = s * (s = s * 3n % m, t = q * 3n % m, 5n) % m;
+    q = q + t;
+    h = (h * 31n + (s & 0xffffffffffffn)) % 1000000007n;
+  }
+  return n;
+}
+for (var k = 0; k < 20; k++) f(100);
+String(h);`, "190683611")
+}
+
+func TestBigIntSoleLocals(t *testing.T) {
+	checkEval(t, `var out = [], keep = [], saved = [], gk;
+var B = 1n << 200n;
+  BigInt.prototype.save = function () { "use strict"; saved.push(this); return 0n; };
+  // Locals that hold their values alone: given back as they are assigned.
+  function alone(n) {
+    var sum = 0n, a = B + 5n, q = 1n, r = 7n, t = B;
+    for (var i = 0; i < n; i++) {
+      sum = sum + a * a;
+      a = a + 3n;
+      q = 10n * q * (a % 97n + 1n);
+      r = (r * a + q) % (B + 1n);
+      t = t * 3n >> 1n;
+    }
+    return [sum, a, q, r, t].join(",");
+  }
+  // A local's value copied to another local, pushed, stored to a global,
+  // read a property of, crossing a jump, captured, or read by arguments:
+  // each kept by something else, never given back.
+  function copied(n) {
+    var k = B, x;
+    for (var i = 0; i < n; i++) {
+      k = k * 3n + 1n;
+      x = k;
+      keep.push(x);
+    }
+    return n;
+  }
+  function pushed(n) {
+    var k = B;
+    for (var i = 0; i < n; i++) {
+      k = k * 5n + 2n;
+      keep.push(k);
+    }
+    return n;
+  }
+  function global(n) {
+    var k = B;
+    for (var i = 0; i < n; i++) {
+      k = k * 7n + 1n;
+      gk = k;
+      keep.push(gk);
+    }
+    return n;
+  }
+  function method(n) {
+    var k = B;
+    for (var i = 0; i < n; i++) {
+      k = k * 11n + 1n;
+      k.save();
+    }
+    return n;
+  }
+  function jump(n, c) {
+    var k = B, j = 1n;
+    for (var i = 0; i < n; i++) {
+      k = k * 13n + 1n;
+      keep.push(c ? k : j);
+    }
+    return n;
+  }
+  function captured(n) {
+    var k = B, get = function () { return k; };
+    for (var i = 0; i < n; i++) {
+      k = k * 17n + 1n;
+      keep.push(get());
+    }
+    return n;
+  }
+  function args(n) {
+    var k = B;
+    for (var i = 0; i < n; i++) {
+      k = k * 19n + 1n;
+      keep.push(arguments.length === 1 ? k : 0n);
+    }
+    return n;
+  }
+  function shared(n) {
+  var a0 = B * 3n, k;
+  for (var i = 0; i < n; i++) {
+    k = a0;
+    for (var j = 0; j < 3; j++) k = k * 5n + 1n;
+    keep.push(a0);
+  }
+  return n;
+}
+function returned(k) {
+    for (var i = 0; i < 3; i++) k = k * 23n + 1n;
+    return k;
+  }
+  function viaReturn(n) {
+    var k = B;
+    for (var i = 0; i < n; i++) {
+      k = returned(k) + 0n;
+      keep.push(returned(k));
+    }
+    return n;
+  }
+  out.push(alone(200), alone(200), copied(30), pushed(30), global(30), method(30), jump(30, true),
+    captured(30), args(30), viaReturn(30), shared(30), keep.join(","), saved.join(","));
+var s = out.join("|");
+var h = 0;
+for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+out.length + " " + s.length + " " + h;`, "13 23551 110140091")
+}
