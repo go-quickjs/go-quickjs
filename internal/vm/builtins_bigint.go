@@ -179,41 +179,80 @@ func (r *Runtime) bigIntAsN(args []Value, signed bool) (Value, error) {
 	}
 	// This is ToBigInt rather than the BigInt constructor's conversion: a
 	// number is refused here rather than truncated, however integral it is.
-	bv, err := r.toBigIntOperand(arg(args, 1))
-	if err != nil {
-		return Undefined, err
+	v := arg(args, 1)
+	if !v.IsBigInt() {
+		bv, err := r.toBigIntOperand(v)
+		if err != nil {
+			return Undefined, err
+		}
+		v = Big(bv)
 	}
 	if bits == 0 {
 		return shortBig(0), nil
 	}
+	if bits <= 64 {
+		// The low bits of the value's two's complement, as a fixed-width
+		// integer's: no division, nor a BigInt made to learn them.
+		u := bigLow64(v)
+		if bits < 64 {
+			u &= 1<<bits - 1
+		}
+		if signed {
+			return shortBig(int64(u<<(64-bits)) >> (64 - bits)), nil
+		}
+		if u <= math.MaxInt64 {
+			return shortBig(int64(u)), nil
+		}
+		b := newBigResult()
+		b.V.SetUint64(u)
+		return heapBig(b), nil
+	}
 	// A value that already fits is itself, however wide the width: 2^bits
 	// need not be made to learn that. One that does not fit is a result as
 	// wide as bits, which past the limit no BigInt can be.
+	if v.isShortBig() {
+		if x := v.shortBigInt(); signed || x >= 0 {
+			return v, nil
+		}
+	}
+	bv := r.bigArg(v, 0)
 	if signed && int64(bv.V.BitLen()) < bits || !signed && bv.V.Sign() >= 0 && int64(bv.V.BitLen()) <= bits {
-		b := &BigInt{}
-		b.V.Set(&bv.V)
-		return Big(b), nil
+		return v, nil
 	}
 	if bits > maxBigIntBits {
 		return Undefined, r.throwBigIntSize()
 	}
-
+	// The low bits by a mask: big.Int's And takes a negative operand's
+	// two's complement, as BigInt's asUintN does.
 	mod := new(big.Int).Lsh(big.NewInt(1), uint(bits))
-	out := new(big.Int).Mod(&bv.V, mod)
-	if out.Sign() < 0 {
-		out.Add(out, mod)
-	}
-	if signed {
+	out := &BigInt{}
+	out.V.And(&bv.V, new(big.Int).Sub(mod, big.NewInt(1)))
+	if signed && out.V.Bit(int(bits-1)) != 0 {
 		// The top bit of the truncated value is the sign, so anything at or
 		// above half the range wraps to the negative side.
-		half := new(big.Int).Lsh(big.NewInt(1), uint(bits-1))
-		if out.Cmp(half) >= 0 {
-			out.Sub(out, mod)
-		}
+		out.V.Sub(&out.V, mod)
 	}
-	b := &BigInt{}
-	b.V.Set(out)
-	return Big(b), nil
+	return Big(out), nil
+}
+
+// bigLow64 is the low 64 bits of a BigInt's two's complement.
+func bigLow64(v Value) uint64 {
+	if v.isShortBig() {
+		return uint64(v.shortBigInt())
+	}
+	b := v.BigInt()
+	words := b.V.Bits()
+	var u uint64
+	if len(words) > 0 {
+		u = uint64(words[0])
+	}
+	if bits.UintSize == 32 && len(words) > 1 {
+		u |= uint64(words[1]) << 32
+	}
+	if b.V.Sign() < 0 {
+		u = -u
+	}
+	return u
 }
 
 // bigIntToFloat converts a BigInt to the nearest Number.

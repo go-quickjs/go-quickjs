@@ -4117,6 +4117,25 @@ func TestFunctionExpressionName(t *testing.T) {
 	}
 }
 
+// TestBigIntAsN pins BigInt.asIntN and asUintN at widths about 32, 64 and
+// 128 bits, of values about each, negative and on the heap, and their
+// conversions: the answers' count, length and hash are Node's.
+func TestBigIntAsN(t *testing.T) {
+	checkEval(t, `
+		var vals = [0n, 1n, -1n, 2n, -2n, 255n, -256n, 2n**31n, -(2n**31n), 2n**53n+1n, 2n**63n-1n, -(2n**63n), 2n**63n,
+			-(2n**63n)-1n, 2n**64n-1n, 2n**64n, -(2n**64n), 2n**64n+5n, -(2n**64n)-5n, 2n**100n+12345n, -(2n**100n)-12345n,
+			0xdeadbeefcafebaben, -0xdeadbeefcafebabe1234n];
+		var widths = [0, 1, 2, 7, 8, 31, 32, 33, 53, 63, 64, 65, 100, 127, 128, 129];
+		var out = [];
+		for (var v of vals) for (var w of widths) out.push(BigInt.asIntN(w, v) + "/" + BigInt.asUintN(w, v));
+		out.push(String(BigInt.asUintN(64, "123")), String(BigInt.asIntN(8, true)));
+		try { BigInt.asIntN(8, 1) } catch (e) { out.push(e.constructor.name) }
+		out.push(String(BigInt.asUintN(3, { valueOf() { return 13n } })));
+		var s = out.join(",");
+		var h = 0; for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+		out.length + " " + s.length + " " + h`, "372 6951 -1183738882")
+}
+
 // TestBigIntBitwise covers the bitwise operators on BigInts, which have no
 // width: the result is whatever the arithmetic says, not a wrapped 32 bits.
 func TestBigIntBitwise(t *testing.T) {
