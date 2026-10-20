@@ -1083,6 +1083,43 @@ The rounds that followed, each measured as above. The commit says more.
     includes, are calls of Go of their own (0e7ed76, GoIndexOf), the
     built-in's Go function called with no frame: string_indexOf (micro)
     110.8 -> 72.1 ns, array_indexOf 429.1 -> 354.9.
+  - **Leaf calls of built-ins, one mechanism for all** (2026-10-20, not
+    begun). A built-in that runs no script is called from native code by
+    one of three paths, each with a list of its own: `Intrinsic` for
+    Math's functions (an instruction of their own, or `GoMath`), the
+    frameless calls of Go for Map's and Set's operations and `String(x)`
+    (`jitGoCallPlain`), and for the rest, `Date.now` among them,
+    `jitGoCall`, which gives each call a frame, pins the code, copies and
+    clears the operands and asks what the JIT may learn -- more than the
+    tree tier spends on the whole call: `date_now` takes 67 to 79 ns with
+    the JIT, 51 without. V8 calls such functions from optimized code as
+    fast API calls, with no frame of JavaScript's. The plan:
+    1. A built-in declares itself where it is made: a leaf entry in its
+       `funcData`, the Go function that makes the call -- a result, or
+       "not mine", for anything it cannot answer without running a
+       script or throwing, which the ordinary call then makes -- and its
+       effects: none (`Math.sin`, `Math.max`), reads of state (`Date.now`,
+       `Math.random`, `Map.prototype.get`), or writes (`Map.prototype.set`,
+       an array's `push`). No tier keeps a list of functions.
+    2. In the SSA, a call whose feedback names such a built-in is a leaf
+       call, guarded on the callee as `Intrinsic`'s calls are: one without
+       effects may be shared and hoisted out of a loop, and its number
+       result kept unboxed.
+    3. Native code calls it through a trampoline of its own, which calls
+       the entry's function with the operands' words, past `goCall`'s
+       expansion and `jitHostCall`'s switch: about 25 ns a call of Go
+       today, perhaps 5 to 10.
+    4. A native form, where there is one, stays first: `Math.sqrt`,
+       `Math.random`'s cache, a Map iterator's step.
+    5. The tree tier answers from the same entries, where `mathCall` and
+       `elemOp` each keep cases of their own.
+    First `Date.now`, Math's functions and what `jitGoCallPlain` lists,
+    measured by `date_now`, the `math_` and `map_` micro-benchmarks and
+    the suites' placements; then Date's getters, `String.fromCharCode`,
+    `charCodeAt`, `Number.isInteger`, `Object.is`, `Array.isArray`, a
+    typed array's `subarray`. It complements judging native code that
+    does not pay (its loops sent back to the tree tier): that decides
+    when not to run native code; this makes a loop of such calls pay.
   - A native call site still spends about 300 bytes on its guards and on
     writing its arguments, which a callee checking its own frame's room
     and the context's level could shed.
