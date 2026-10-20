@@ -3223,6 +3223,21 @@ func jitHostCall(ctx *abi.Context) bool {
 		if r.debug != nil || r.jitStress.budget != 0 {
 			return false
 		}
+		if idx := int(ctx.Level); ctx.Live == 0 && idx < len(s.goRuns) && s.goRuns[idx].f != nil && s.ssaCtxs[idx] == ctx {
+			if e := s.goRuns[idx].e; e != nil && e.reoptPending() && !e.invalid {
+				// The run's code learned what to be compiled again for, at a
+				// call of Go, say, which an exit would have counted: its
+				// loop leaves at the header (abi.ExitPoll), where the
+				// stretch's work is counted toward the code's budget
+				// (jitLearnedDue) and the code compiled again once it is
+				// spent, as V8's back edges spend its interrupt budget.
+				// Never leaving, a loop that ran a whole invocation natively
+				// -- each of microbench's tests -- counted none of its work,
+				// and its code, its calls of a function made anew by Go, was
+				// never compiled again.
+				return false
+			}
+		}
 		old := r.backEdges
 		r.backEdges = s.backEdgeBudget()
 		s.pollCredit += r.backEdges - old
@@ -8683,6 +8698,17 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 				// Under stress, the interpreter finishes the invocation
 				// from where native code got to.
 				return r.jitInterpret(f, f.base+depth, nil)
+			}
+			// Compiled again, its budget spent, for what it learned (the
+			// poll left for it, ssa.GoPoll): entered again at the loop's
+			// header, in the new code.
+			r.jitRecompileLearned(f.cl, e)
+			if !e.ssa.HasEntry(pc) || !e.native() {
+				v, err, done, again := r.jitGoOn(f, e, pc, f.base+depth, true)
+				if !again {
+					return v, err, done
+				}
+				pc, depth = s.goOnPC, s.goOnDepth
 			}
 		}
 	}
