@@ -1136,8 +1136,8 @@ func IsNumber(word uint64) bool { return word < NumberLimit }
 //
 // GoOpIndexShift is where a closure's (ssa.GoClosure) is the index of its
 // function's constant, a scope's end's (ssa.GoClose) the first local it
-// closes, and a comparison's (ssa.GoCompare) its ir.Operator, in the high
-// half.
+// closes, and a comparison's (ssa.GoCompare) or a BigInt operator's
+// (ssa.GoArith) its ir.Operator, in the high half.
 const (
 	GoOpArgcShift    = 8
 	GoOpKindShift    = 16

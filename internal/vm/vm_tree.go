@@ -93,6 +93,9 @@ type tree struct {
 	// function one structure, the rest absorbed in it but kept.
 	starts  []int32
 	entries []tblock
+	// bigSeen is the arithmetic its slow paths made on BigInts, for the
+	// JIT (see ztree_zzzzseen.go), or nil for none yet.
+	bigSeen atomic.Pointer[treeBigSeen]
 }
 
 // treeThrow carries an exception out of a tree, to runTree.

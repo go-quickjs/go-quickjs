@@ -33,8 +33,22 @@ type treeSeen struct {
 	n    atomic.Int32
 }
 
+// treeBigSeen is the sites of a function's tree whose arithmetic met two
+// BigInts, a bit a bytecode PC: bigs those of BigInts in the int64 range,
+// whose result was one too, which native code makes unboxed
+// (ssa.BigIntFeedback), and heap the others, a BigInt on the heap met or
+// made, which Go makes from native code (ssa.GoArith).
+type treeBigSeen struct {
+	bigs, heap []atomic.Uint32
+}
+
 var (
 	// treeStringAdd marks the addition at pc in c's function as one that
 	// met a string, where the JIT may compile it; nil without the JIT.
 	treeStringAdd func(c *tctx, pc int)
+
+	// treeBigInt marks the arithmetic at pc in c's function as one that
+	// met two BigInts, one on the heap or made there if heap (treeBigSeen),
+	// where the JIT may compile it; nil without the JIT.
+	treeBigInt func(c *tctx, pc int, heap bool)
 )

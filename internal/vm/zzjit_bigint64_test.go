@@ -4,7 +4,6 @@ package vm
 
 import (
 	"runtime"
-	"slices"
 	"sync/atomic"
 	"testing"
 )
@@ -102,13 +101,16 @@ func TestJITBigInt64(t *testing.T) {
 	// Native BigInt sites that held: some of each function's are learned
 	// and none failed since.
 	for _, name := range []string{"squares", "down", "stores"} {
-		e := r.jit.entryFor(r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure.fn)
+		fn := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure.fn
+		e := r.jit.entryFor(fn)
 		if e == nil || e.ssa == nil {
 			t.Fatalf("%s has no code", name)
 		}
+		// Learned at a guard that failed, or from the tree tier.
+		fb := &jitFeedback{r: r, fn: fn, e: e}
 		held := 0
-		for _, site := range e.bigints {
-			if !slices.Contains(e.failed, site) {
+		for pc := range e.ssaProg.Code {
+			if fb.BigInt(pc) && !fb.Generic(pc) {
 				held++
 			}
 		}

@@ -2964,6 +2964,9 @@ func jitHostCall(ctx *abi.Context) bool {
 	switch ssa.GoOp(ctx.GoOp & 0xff) {
 	case ssa.GoAdd:
 		a, b := jitGoArg(ctx, 0), jitGoArg(ctx, 1)
+		if a.IsBigInt() && b.IsBigInt() {
+			return r.jitGoBigAdd(ctx, a, b)
+		}
 		// Primitives, and nothing that throws: an object's conversion may
 		// call anything, and making an error may too (a getter of
 		// Error.stackTraceLimit) -- a symbol's, a BigInt's with a number,
@@ -2979,11 +2982,25 @@ func jitHostCall(ctx *abi.Context) bool {
 		}
 		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
 		return true
+	case ssa.GoArith:
+		// An operator of two BigInts that throws nothing.
+		a, b := jitGoArg(ctx, 0), jitGoArg(ctx, 1)
+		op, ok := jitArithOp(ir.Operator(ctx.GoOp >> abi.GoOpIndexShift))
+		if !ok || !r.jitBigArithSafe(op, a, b) {
+			return false
+		}
+		v, err := r.jitBigOp(op, a, b)
+		if err != nil {
+			return false
+		}
+		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
+		return true
 	case ssa.GoCompare:
 		// A relational comparison of primitives, which converts them
-		// without calling anything (jitPlainOperand): its boolean.
+		// without calling anything (jitPlainOperand) -- a BigInt too, which
+		// compares with anything that is no symbol: its boolean.
 		a, b := jitGoArg(ctx, 0), jitGoArg(ctx, 1)
-		if !jitPlainOperand(a) || !jitPlainOperand(b) {
+		if !jitComparable(a) || !jitComparable(b) {
 			return false
 		}
 		c, err := r.compare(a, b)
@@ -3005,6 +3022,10 @@ func jitHostCall(ctx *abi.Context) bool {
 		// A loop's string builder's s += x (jitAppend): what GoAdd takes,
 		// a string's grown in place or made a builder of.
 		a, b := jitGoArg(ctx, 0), jitGoArg(ctx, 1)
+		if a.IsBigInt() && b.IsBigInt() {
+			// A loop's sum of BigInts, which it takes for a string's.
+			return r.jitGoBigAdd(ctx, a, b)
+		}
 		if !jitPlainOperand(a) || !jitPlainOperand(b) || r.meter != nil {
 			return false
 		}
@@ -4308,6 +4329,114 @@ func (r *Runtime) jitCloseRetired() {
 // maxStringLength's margin unless the string is near it.
 func jitPlainOperand(v Value) bool {
 	return !v.IsObject() && !v.IsSymbol() && !v.IsBigInt() && (!v.IsString() || v.String().length <= maxStringLength-64)
+}
+
+// jitGoBigAdd is GoAdd's sum of two BigInts, a and b, to the call's keep
+// cell, where it throws nothing (jitBigArithSafe).
+func (r *Runtime) jitGoBigAdd(ctx *abi.Context, a, b Value) bool {
+	if !r.jitBigArithSafe(bytecode.OpAdd, a, b) {
+		return false
+	}
+	v, err := r.jitBigOp(bytecode.OpAdd, a, b)
+	if err != nil {
+		return false
+	}
+	*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
+	return true
+}
+
+// jitBigOp is op of a and b, two BigInts, as the interpreter makes it,
+// without its conversions, which a BigInt needs none of.
+func (r *Runtime) jitBigOp(op bytecode.Op, a, b Value) (Value, error) {
+	if a.isShortBig() && b.isShortBig() {
+		if v, ok := shortArith(op, a, b); ok {
+			return v, nil
+		}
+	}
+	switch op {
+	case bytecode.OpBitAnd, bytecode.OpBitOr, bytecode.OpBitXor, bytecode.OpShl, bytecode.OpShr:
+		v, _, err := r.bigBitwise(op, a, b)
+		return v, err
+	}
+	return r.bigArith(op, r.bigArg(a, 0), r.bigArg(b, 1))
+}
+
+// jitComparable reports whether a relational comparison converts v
+// without a conversion that may throw or call anything: a primitive, a
+// BigInt too, that is no symbol.
+func jitComparable(v Value) bool {
+	return jitPlainOperand(v) || v.IsBigInt()
+}
+
+// jitArithOp is the bytecode operator of ir's arithmetic, bitwise or shift
+// operator op.
+func jitArithOp(op ir.Operator) (bytecode.Op, bool) {
+	switch op {
+	case ir.Add:
+		return bytecode.OpAdd, true
+	case ir.Sub:
+		return bytecode.OpSub, true
+	case ir.Mul:
+		return bytecode.OpMul, true
+	case ir.Div:
+		return bytecode.OpDiv, true
+	case ir.Mod:
+		return bytecode.OpMod, true
+	case ir.BitAnd:
+		return bytecode.OpBitAnd, true
+	case ir.BitOr:
+		return bytecode.OpBitOr, true
+	case ir.BitXor:
+		return bytecode.OpBitXor, true
+	case ir.Shl:
+		return bytecode.OpShl, true
+	case ir.Shr:
+		return bytecode.OpShr, true
+	}
+	return 0, false
+}
+
+// jitBigArithSafe reports whether op of a and b, both BigInts, throws
+// nothing, so that Go makes it from native code (ssa.GoAdd, GoArith):
+// making an error may call anything (a getter of Error.stackTraceLimit).
+// No result past maxBigIntBits, no division by zero, no memory limit (a
+// meter) -- the checks bigArith and bigBitwise make, made before.
+func (r *Runtime) jitBigArithSafe(op bytecode.Op, a, b Value) bool {
+	if !a.IsBigInt() || !b.IsBigInt() || r.meter != nil {
+		return false
+	}
+	const limit = maxBigIntBits / bits.UintSize
+	switch op {
+	case bytecode.OpAdd, bytecode.OpSub:
+		return max(jitBigWords(a), jitBigWords(b)) < limit
+	case bytecode.OpMul:
+		return jitBigWords(a)+jitBigWords(b) <= limit
+	case bytecode.OpDiv, bytecode.OpMod:
+		// A BigInt on the heap is never zero.
+		return !b.isShortBig() || b.shortBigInt() != 0
+	case bytecode.OpBitAnd, bytecode.OpBitOr, bytecode.OpBitXor:
+		return true
+	case bytecode.OpShl, bytecode.OpShr:
+		// Either way a shift by at most what keeps a left shift's result
+		// within the limit.
+		if !b.isShortBig() {
+			return false
+		}
+		y := b.shortBigInt()
+		return y > -maxBigIntBits && y < maxBigIntBits && jitBigWords(a)*bits.UintSize+int(max(y, -y)) <= maxBigIntBits
+	}
+	return false
+}
+
+// jitBigWords bounds how many words a BigInt's magnitude has: two for one
+// held in its value, of at most 64 bits, which are two words on a 32-bit
+// machine. The limit is far enough, maxBigIntBits, that bounding it
+// refuses little.
+func jitBigWords(v Value) int {
+	if v.isShortBig() {
+		return 2
+	}
+	return len((*BigInt)(v.ref).V.Bits())
 }
 
 // jitGoCallWork, which tests set, runs at each call of Go before it is
@@ -7145,27 +7274,66 @@ func (r *Runtime) jitInlinable(fn *bytecode.Function) bool {
 // Generic and EntryGeneric are ssa.Feedback's: the sites and entries whose
 // guards failed in code compiled before (jitDeoptimized).
 // BigInt reports an arithmetic or relational operator at pc of the root
-// that met BigInts in the int64 range (jitBigIntSeen).
+// that met BigInts: at a guard that failed (jitBigIntSeen), or in the tree
+// tier (treeBigSeen), as V8's lower tier collects BigInt feedback for its
+// optimizing compiler.
 func (fb *jitFeedback) BigInt(pc int) bool {
-	return fb.e != nil && slices.Contains(fb.e.bigints, int32(pc))
+	if fb.e != nil && slices.Contains(fb.e.bigints, int32(pc)) {
+		return true
+	}
+	big, _ := jitTreeBig(fb.fn, pc)
+	return big
 }
 
-// jitBigIntSeen notes that the arithmetic or the comparison at site, of e's
-// program, whose guard failed, met BigInts in the int64 range, its result
-// one too, as V8's feedback learns BigInt64 operands: compiled again, the
-// site makes them natively (ssa.BigIntFeedback), not as Go's. One whose
-// speculation fails then -- an operand of another type, a result outside
-// the range, a BigInt on the heap -- is learned no more, and is generic
-// (jitDeoptimized).
+// jitTreeBig reports whether the tree tier's arithmetic at pc of fn met
+// BigInts, and whether one on the heap (treeBigSeen).
+func jitTreeBig(fn *bytecode.Function, pc int) (big, heap bool) {
+	t := (*tree)(atomic.LoadPointer(&fn.VMCode))
+	if t == nil || t == noTree || pc < 0 {
+		return false, false
+	}
+	s := t.bigSeen.Load()
+	if s == nil || pc>>5 >= len(s.bigs) {
+		return false, false
+	}
+	bit := uint32(1) << (pc & 31)
+	heap = s.heap[pc>>5].Load()&bit != 0
+	return heap || s.bigs[pc>>5].Load()&bit != 0, heap
+}
+
+// jitBigIntSeen notes that the operator at site, of e's program, whose
+// guard failed or which is generic, met BigInts, as V8's feedback learns
+// BigInt operands, and reports whether the site speculates on them: an
+// arithmetic or relational operator of BigInts in the int64 range, its
+// result one too, which the code compiled again makes natively
+// (ssa.BigIntFeedback), not as Go's. One whose speculation fails then --
+// an operand of another type, a result outside the range, a BigInt on the
+// heap -- is learned no more, and is generic (jitDeoptimized); so is one
+// that met other BigInts, or another operator, whose operation Go makes
+// from native code (ssa.GoArith), as V8's code calls its BigInt builtins.
 func (r *Runtime) jitBigIntSeen(f *frame, e *jitEntry, site int) bool {
 	p := e.ssaProg
-	if site < 0 || p == nil || site >= len(p.Code) || slices.Contains(e.bigints, int32(site)) || slices.Contains(e.failed, int32(site)) {
+	if site < 0 || p == nil || site >= len(p.Code) || slices.Contains(e.bigints, int32(site)) {
+		return false
+	}
+	if big, _ := jitTreeBig(f.cl.fn, site); big {
+		// Its speculation the tree tier's feedback, which failed.
 		return false
 	}
 	in := p.Code[site]
+	generic := slices.Contains(e.failed, int32(site))
+	native := false
 	switch {
-	case in.Op == ir.Binary && (in.Operator == ir.Add || in.Operator == ir.Sub || in.Operator == ir.Mul):
-	case (in.Op == ir.Binary || in.Op == ir.Branch) && (in.Operator == ir.Lt || in.Operator == ir.Le || in.Operator == ir.Gt || in.Operator == ir.Ge):
+	case in.Op == ir.Binary && (in.Operator == ir.Add || in.Operator == ir.Sub || in.Operator == ir.Mul),
+		(in.Op == ir.Binary || in.Op == ir.Branch) && (in.Operator == ir.Lt || in.Operator == ir.Le || in.Operator == ir.Gt || in.Operator == ir.Ge):
+		// Generic, an addition is GoAdd's and a comparison GoCompare's,
+		// whatever the site learns.
+		native = !generic
+		if generic && in.Operator != ir.Sub && in.Operator != ir.Mul {
+			return false
+		}
+	case in.Op == ir.Binary && (in.Operator == ir.Div || in.Operator == ir.Mod || in.Operator == ir.BitAnd || in.Operator == ir.BitOr ||
+		in.Operator == ir.BitXor || in.Operator == ir.Shl || in.Operator == ir.Shr):
 	default:
 		return false
 	}
@@ -7173,7 +7341,12 @@ func (r *Runtime) jitBigIntSeen(f *frame, e *jitEntry, site int) bool {
 		return false
 	}
 	a, b := r.jitOperand(f, p, in.Left), r.jitOperand(f, p, in.Right)
-	if !a.isShortBig() || !b.isShortBig() {
+	if !a.IsBigInt() || !b.IsBigInt() {
+		return false
+	}
+	e.bigints = append(e.bigints, int32(site))
+	e.reopt = true
+	if !native || !a.isShortBig() || !b.isShortBig() {
 		return false
 	}
 	x, y := a.shortBigInt(), b.shortBigInt()
@@ -7200,13 +7373,17 @@ func (r *Runtime) jitBigIntSeen(f *frame, e *jitEntry, site int) bool {
 			return false
 		}
 	}
-	e.bigints = append(e.bigints, int32(site))
-	e.reopt = true
 	return true
 }
 
 func (fb *jitFeedback) Generic(pc int) bool {
-	return fb.e != nil && slices.Contains(fb.e.failed, int32(pc))
+	if fb.e != nil && slices.Contains(fb.e.failed, int32(pc)) {
+		return true
+	}
+	// Arithmetic the tree tier saw meet or make a BigInt on the heap, which
+	// Go makes from native code (ssa.GoArith).
+	_, heap := jitTreeBig(fb.fn, pc)
+	return heap
 }
 
 func (fb *jitFeedback) EntryGeneric(pc int) bool {
@@ -8698,6 +8875,11 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			exitPC := int(ctx.ExitPC)
 			in := f.cl.fn.Code[exitPC]
 			f.pc = uint32(exitPC)
+			if site := int32(int64(ctx.ExitSite)); site >= 0 && slices.Contains(e.failed, site) {
+				// A generic operator that met BigInts, which Go makes from
+				// native code once compiled again (ssa.GoArith).
+				r.jitBigIntSeen(f, e, int(site))
+			}
 			if p := s.goPending; p.set {
 				// A call Go made from native code (jitGoCall), its result or
 				// its throw here.

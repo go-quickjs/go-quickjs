@@ -1725,12 +1725,18 @@ func (c *tctx) arithSlow(op bytecode.Op, a, b Value, pc int) Value {
 		// What add and arith would answer first, without them: a loop over
 		// BigInts then runs two functions fewer.
 		if v, ok := shortArith(op, a, b); ok {
+			if jitBuilt {
+				treeBigInt(c, pc, false)
+			}
 			return v
 		}
 	}
 	c.at(pc)
 	if jitBuilt && op == bytecode.OpAdd && (a.IsString() || b.IsString()) {
 		treeStringAdd(c, pc)
+	}
+	if jitBuilt && a.IsBigInt() && b.IsBigInt() {
+		treeBigInt(c, pc, true)
 	}
 	var v Value
 	var err error

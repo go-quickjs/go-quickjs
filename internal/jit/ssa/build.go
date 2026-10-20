@@ -1101,6 +1101,14 @@ type GoOp uint8
 // Array[Symbol.species] as they were made -- as V8's code checks its
 // ArraySpeciesProtector. It refuses any other, which leaves the call for Go
 // to make after an exit.
+//
+// GoArith is an arithmetic, bitwise or shift operator -- ir's Operator in
+// Argc -- of two BigInts, at a site that met BigInts and whose speculation
+// failed (BigIntFeedback), as V8's code calls its BigInt builtins: Go writes
+// the result to the call's keep cell where the operation throws nothing --
+// no result past BigInt's size limit, no division by zero -- and refuses
+// the rest, an operand no BigInt among them, which leave for Go to make the
+// operation after an exit.
 const (
 	GoAdd GoOp = 1 + iota
 	GoRefill
@@ -1130,6 +1138,7 @@ const (
 	GoDeleteStrict
 	GoNewArray
 	GoIndexOf
+	GoArith
 )
 
 // IndexOfFrom is GoIndexOf's Argc's low bit, where the call gives a
@@ -2360,6 +2369,33 @@ func (b *builder) bigIntAt(pc int, op ir.Operator) bool {
 	}
 	fb, ok := b.fb.(BigIntFeedback)
 	return ok && b.cur == b.root && !b.generic(pc) && fb.BigInt(pc)
+}
+
+// goArithAt reports whether the root's operator op at pc, generic, met
+// BigInts (BigIntFeedback): Go makes it from native code (GoArith). An
+// addition is GoAdd's, a comparison GoCompare's, at any generic site.
+func (b *builder) goArithAt(pc int, op ir.Operator) bool {
+	switch op {
+	case ir.Sub, ir.Mul, ir.Div, ir.Mod, ir.BitAnd, ir.BitOr, ir.BitXor, ir.Shl, ir.Shr:
+	default:
+		return false
+	}
+	fb, ok := b.fb.(BigIntFeedback)
+	return ok && b.cur == b.root && b.generic(pc) && fb.BigInt(pc) && b.goCalls()
+}
+
+// goArith makes in, at a site goArithAt names, by a call of Go from native
+// code (GoArith), as goCompare makes a comparison.
+func (b *builder) goArith(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) *Value {
+	call := guard(OpCall, Tagged, ir.HostExit, operand(in.Left), operand(in.Right))
+	if b.f.Keeps < b.f.keepLimit() {
+		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoArith, Argc: int(in.Operator), ThisSlot: -1}}, b.f.Keeps
+		b.f.Keeps++
+	}
+	cell := b.f.newValue(blk, OpCallCell, Source, call)
+	r := b.f.newValue(blk, OpKept, Tagged, cell, call)
+	r.Shadow = cell
+	return r
 }
 
 // bigBinary is op, at a site bigIntAt names, of x and y, each guarded to be
@@ -3915,6 +3951,10 @@ func (b *builder) instruction(blk *Block, pc int) {
 				v = boxB(v)
 			}
 			b.assign(in.Dest, blk, v)
+			break
+		}
+		if b.goArithAt(pc, in.Operator) {
+			b.assign(in.Dest, blk, b.goArith(blk, in, operand, guard))
 			break
 		}
 		if in.Operator == ir.Add && b.generic(pc) && b.goCalls() {
