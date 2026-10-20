@@ -5993,6 +5993,26 @@ func (c *a64Compiler) truth(v *ssa.Value, guard func(arm64.Cond)) {
 		c.a.B(yes)
 	}
 	c.a.Bind(notObject)
+	if c.enc.HeapBigTag != 0 {
+		// A BigInt, true unless it is zero, as amd64's is.
+		notBig := c.a.NewLabel()
+		c.movImm(a64A, c.enc.HeapBigTag)
+		c.a.Cmp(r, a64A, true)
+		c.a.BCond(arm64.EQ, yes)
+		c.movImm(a64A, c.enc.ShortBigWideTag)
+		c.a.Cmp(r, a64A, true)
+		c.a.BCond(arm64.LO, notBig)
+		c.movImm(a64A, c.enc.ShortBigTag)
+		c.a.Cmp(r, a64A, true)
+		c.a.BCond(arm64.NE, yes)
+		if c.reference(v, v.Args[0], c.enc.ShortBigTag, guard) {
+			c.movImm(a64A, c.enc.ShortBigHigh)
+			c.a.Cmp(a64C, a64A, true)
+			c.a.BCond(arm64.EQ, no)
+			c.a.B(yes)
+		}
+		c.a.Bind(notBig)
+	}
 	c.movImm(a64A, c.enc.String)
 	c.a.Cmp(r, a64A, true)
 	guard(arm64.NE)

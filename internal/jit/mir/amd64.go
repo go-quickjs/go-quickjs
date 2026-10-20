@@ -6827,13 +6827,32 @@ func (c *compiler) truth(v *ssa.Value, guard func(amd64.Cond)) {
 	c.cmpWord(r, c.enc.Null)
 	c.a.Jcc(amd64.CondE, no)
 	c.a.Jmp(other)
-	// Undefined, and a string, true unless it is empty; anything else --
-	// the uninitialized marker, a symbol, a BigInt -- is not decided here.
+	// Undefined; a BigInt, true unless it is zero, which is held in its
+	// value, in the int64 range's encoding, its high bits' word
+	// ShortBigHigh, as a loop's bit test, if (e & 1n), meets it; and a
+	// string, true unless it is empty. Anything else -- the uninitialized
+	// marker, a symbol -- is not decided here.
 	c.cold = append(c.cold, func() {
 		c.a.Bind(other)
 		r := c.gpr(v.Args[0], scratchB)
 		c.cmpWord(r, c.enc.Undefined)
 		c.a.Jcc(amd64.CondE, no)
+		if c.enc.HeapBigTag != 0 {
+			notBig := c.a.NewLabel()
+			c.cmpWord(r, c.enc.HeapBigTag)
+			c.a.Jcc(amd64.CondE, yes)
+			c.movImm(scratchA, c.enc.ShortBigWideTag)
+			c.a.Op(amd64.Cmp, r, scratchA, true)
+			c.a.Jcc(amd64.CondB, notBig)
+			c.cmpWord(r, c.enc.ShortBigTag)
+			c.a.Jcc(amd64.CondNE, yes)
+			if c.reference(v, v.Args[0], c.enc.ShortBigTag, guard) {
+				c.cmpWord(scratchC, c.enc.ShortBigHigh)
+				c.a.Jcc(amd64.CondE, no)
+				c.a.Jmp(yes)
+			}
+			c.a.Bind(notBig)
+		}
 		c.cmpWord(r, c.enc.String)
 		guard(amd64.CondNE)
 		if c.reference(v, v.Args[0], c.enc.String, guard) {

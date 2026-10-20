@@ -448,3 +448,82 @@ func TestJITPow(t *testing.T) {
 		}
 	}
 }
+
+// BigInts tested natively (ssa's OpTruth), of every encoding -- zero, held
+// in its value in the int64 range's encoding, its pointer word that of its
+// high bits; in the int64 range, past it, on the heap -- and a loop's bit
+// test, if (x & 1n), as a modular power makes it, which had left native
+// code at every invocation, its guard failing again each time.
+const bigTruthSetup = `
+	var xs = [0n, 1n, -1n, 2n ** 63n, -(2n ** 63n), 2n ** 64n - 1n, -(2n ** 64n) + 1n, 2n ** 100n, -(2n ** 100n), 0n, -0n, 5n]
+	function truths(n) {
+		// BigInts tested, of every encoding: in the int64 range, past it,
+		// on the heap.
+		let c = 0
+		for (let i = 0; i < n; i++) {
+			const x = xs[i % xs.length]
+			if (x) c += 1
+			c += x ? 2 : 0
+			if (!x) c += 4
+			c += x && 8 ? 16 : 0
+		}
+		return c
+	}
+	function popcount(n, e) {
+		// A bit test of a loop's BigInt, if (e & 1n), as a modular power
+		// makes it.
+		let c = 0
+		for (let i = 0; i < n; i++)
+			for (let x = e + BigInt(i); x > 0n; x >>= 1n)
+				if (x & 1n) c++
+		return c
+	}
+	function all(n) {
+		return [truths(n), popcount(n, 0xc0ffee1234567891n), popcount(n, 7n)].join()
+	}
+`
+
+func TestJITBigIntTruth(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	r := New(Config{JIT: true})
+	want := New(Config{})
+	for _, rt := range []*Runtime{want, r} {
+		if _, err := rt.Run(compileForTest(t, bigTruthSetup)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Node's answers.
+	answers := map[string]string{"all(300)": "4575,10100,1202", "all(2000)": "30515,68781,10906"}
+	srcs := []string{}
+	for range 30 {
+		srcs = append(srcs, "all(300)")
+	}
+	srcs = append(srcs, "all(2000)")
+	for i, src := range srcs {
+		for _, rt := range []*Runtime{r, want} {
+			got, err := rt.Run(compileForTest(t, src))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if g, w := got.String().Go(), answers[src]; g != w {
+				t.Fatalf("JIT %v, round %d: %s = %s, want %s", rt == r, i, src, g, w)
+			}
+		}
+	}
+	for _, name := range []string{"truths", "popcount"} {
+		e := r.jit.entryFor(r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure.fn)
+		if e == nil || e.ssa == nil || e.invalid {
+			t.Fatalf("%s has no code", name)
+		}
+		hosts, guards := e.ssaStats.hosts, e.ssaStats.guards
+		if _, err := r.Run(compileForTest(t, "all(300)")); err != nil {
+			t.Fatal(err)
+		}
+		if e.ssaStats.hosts != hosts || e.ssaStats.guards != guards || e.deopts != 0 {
+			t.Errorf("%s left native code: %d host exits, %d guard failures, %d deoptimizations (generic %v)",
+				name, e.ssaStats.hosts-hosts, e.ssaStats.guards-guards, e.deopts, e.failed)
+		}
+	}
+}
