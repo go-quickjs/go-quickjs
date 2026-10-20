@@ -499,7 +499,7 @@ func (m *memoryMeter) generic(v reflect.Value) {
 			return
 		case bigIntPtrType:
 			b := (*BigInt)(v.UnsafePointer())
-			m.total += int64(unsafe.Sizeof(BigInt{})) + int64(cap(b.V.Bits()))*8
+			m.total += int64(unsafe.Sizeof(BigInt{})) + int64(b.digits())*int64(bigWordSize)
 			return
 		case sharedMemoryPtrType:
 			// Other agents change it as it is read, so only its size is

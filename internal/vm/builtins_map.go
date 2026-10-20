@@ -106,9 +106,12 @@ func keyHash(k Value) uint32 {
 	if bits == heapBigBits {
 		// One held in its Value is hashed by its bits, below, which are its
 		// value's alone.
-		b := &k.BigInt().V
-		h := uint64(b.Sign())
-		for _, w := range b.Bits() {
+		b := (*BigInt)(k.ref)
+		h := uint64(1)
+		if b.negative() {
+			h = ^h
+		}
+		for _, w := range b.words() {
 			h = (h ^ uint64(w)) * 0x100000001b3
 		}
 		return mixHash(h)
@@ -128,7 +131,7 @@ func sameKey(a, k Value) bool {
 		return a.IsString() && a.String().Equals(k.String())
 	case KindBigInt:
 		// One held in its Value is the same key only as the same bits.
-		return a.isHeapBig() && k.isHeapBig() && a.BigInt().V.Cmp(&k.BigInt().V) == 0
+		return a.isHeapBig() && k.isHeapBig() && (*BigInt)(a.ref).Cmp((*BigInt)(k.ref)) == 0
 	}
 	return false
 }

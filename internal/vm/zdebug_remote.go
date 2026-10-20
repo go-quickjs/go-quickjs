@@ -333,7 +333,7 @@ func (r *Runtime) DebugDescribe(v Value) DebugValue {
 	case v.IsSymbol():
 		return DebugValue{Type: "symbol", Description: v.Symbol().String()}
 	case v.IsBigInt():
-		s := v.BigInt().V.String() + "n"
+		s := v.BigInt().String() + "n"
 		return DebugValue{Type: "bigint", Description: s, Unserializable: s}
 	}
 	o := v.Object()

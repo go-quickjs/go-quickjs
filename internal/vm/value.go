@@ -20,6 +20,7 @@ package vm
 
 import (
 	"math"
+	"math/bits"
 	"unsafe"
 )
 
@@ -259,8 +260,9 @@ func Sym(s *Symbol) Value {
 // Big returns a BigInt value: held in the Value when it is in the int64
 // range, which keeps none of b.
 func Big(b *BigInt) Value {
-	if b.V.IsInt64() {
-		return shortBig(b.V.Int64())
+	if b.digits() <= 64/bits.UintSize {
+		// One in the int64 range is held in its Value (bigOf).
+		return bigOf(b.negative(), b.words())
 	}
 	return heapBig(b)
 }

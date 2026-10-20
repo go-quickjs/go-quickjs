@@ -4,9 +4,9 @@ import (
 	intl "github.com/go-quickjs/go-intl"
 
 	"math"
-	"math/big"
 	"math/bits"
 
+	"github.com/go-quickjs/go-quickjs/internal/bignum"
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
@@ -36,7 +36,7 @@ func (r *Runtime) initBigIntBuiltins() {
 	})
 
 	r.defMethod(p, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		b, err := rt.thisBigInt(this, "BigInt.prototype.toString")
+		v, err := rt.thisBigIntValue(this, "BigInt.prototype.toString")
 		if err != nil {
 			return Undefined, err
 		}
@@ -51,7 +51,7 @@ func (r *Runtime) initBigIntBuiltins() {
 			}
 			radix = int(n)
 		}
-		return Str(NewString(b.V.Text(radix))), nil
+		return Str(bigString(v, radix)), nil
 	})
 
 	r.defMethod(p, "toLocaleString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -65,7 +65,7 @@ func (r *Runtime) initBigIntBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(o.nf.FormatDecimal(intl.ParseExactDecimal(b.V.String())))), nil
+		return Str(NewString(o.nf.FormatDecimal(intl.ParseExactDecimal(b.String())))), nil
 	})
 
 	r.defMethod(p, "valueOf", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -77,6 +77,19 @@ func (r *Runtime) initBigIntBuiltins() {
 	})
 
 	r.defToStringTag(p, "BigInt")
+}
+
+// thisBigIntValue is thisBigInt's BigInt as a value: one held in a Value is
+// not made a BigInt of its own.
+func (r *Runtime) thisBigIntValue(this Value, name string) (Value, error) {
+	if this.IsBigInt() {
+		return this, nil
+	}
+	b, err := r.thisBigInt(this, name)
+	if err != nil {
+		return Undefined, err
+	}
+	return Big(b), nil
 }
 
 // thisBigInt unwraps a receiver, accepting both a BigInt and a wrapper around
@@ -114,9 +127,8 @@ func (r *Runtime) toBigIntValue(v Value) (Value, error) {
 			// What an int64 holds converts exactly, and is held so.
 			return shortBig(int64(n)), nil
 		}
-		b := &BigInt{}
-		big.NewFloat(n).Int(&b.V)
-		return Big(b), nil
+		mag, neg, _ := bignum.FromFloat64(n)
+		return bigOf(neg, mag), nil
 	case prim.IsString():
 		// A string of nothing but whitespace is zero, the way it is for
 		// Number: it is an empty numeric literal, not a malformed one.
@@ -203,9 +215,7 @@ func (r *Runtime) bigIntAsN(args []Value, signed bool) (Value, error) {
 		if u <= math.MaxInt64 {
 			return shortBig(int64(u)), nil
 		}
-		b := newBigResult()
-		b.V.SetUint64(u)
-		return heapBig(b), nil
+		return bigFromUint64(u), nil
 	}
 	// A value that already fits is itself, however wide the width: 2^bits
 	// need not be made to learn that. One that does not fit is a result as
@@ -215,24 +225,60 @@ func (r *Runtime) bigIntAsN(args []Value, signed bool) (Value, error) {
 			return v, nil
 		}
 	}
-	bv := r.bigArg(v, 0)
-	if signed && int64(bv.V.BitLen()) < bits || !signed && bv.V.Sign() >= 0 && int64(bv.V.BitLen()) <= bits {
+	var buf bigScratch
+	neg, x := bigParts(v, &buf)
+	if signed && int64(bignum.BitLen(x)) < bits || !signed && !neg && int64(bignum.BitLen(x)) <= bits {
 		return v, nil
 	}
 	if bits > maxBigIntBits {
 		return Undefined, r.throwBigIntSize()
 	}
-	// The low bits by a mask: big.Int's And takes a negative operand's
-	// two's complement, as BigInt's asUintN does.
-	mod := new(big.Int).Lsh(big.NewInt(1), uint(bits))
-	out := &BigInt{}
-	out.V.And(&bv.V, new(big.Int).Sub(mod, big.NewInt(1)))
-	if signed && out.V.Bit(int(bits-1)) != 0 {
+	// The low bits of the two's complement: |x|'s, and for x below zero
+	// 2^bits less them, unless they are zero.
+	m := make([]uint, (bits+bitsPerWord-1)/bitsPerWord)
+	copy(m, x)
+	u := lowBits(m, bits)
+	if neg && len(u) != 0 {
+		u = complementBits(m, u, bits)
+	}
+	if signed && bitAt(u, bits-1) {
 		// The top bit of the truncated value is the sign, so anything at or
 		// above half the range wraps to the negative side.
-		out.V.Sub(&out.V, mod)
+		return bigOf(true, complementBits(make([]uint, len(m)), u, bits)), nil
 	}
-	return Big(out), nil
+	return bigOf(false, u), nil
+}
+
+// bitsPerWord is a word's bits, as an int64 of a width.
+const bitsPerWord = int64(bits.UintSize)
+
+// lowBits is m, of the words of n bits, its bits from n on cleared,
+// normalized.
+func lowBits(m []uint, n int64) []uint {
+	if r := n % bitsPerWord; r != 0 {
+		m[len(m)-1] &= 1<<uint(r) - 1
+	}
+	return bignum.Norm(m)
+}
+
+// complementBits writes 2^n - u to z, of the words of n bits, for u under
+// 2^n and not zero: the complement of u-1, in n bits.
+func complementBits(z, u []uint, n int64) []uint {
+	d := bignum.SubWord(make([]uint, len(u)), u, 1)
+	for i := range z {
+		var w uint
+		if i < len(d) {
+			w = d[i]
+		}
+		z[i] = ^w
+	}
+	return lowBits(z, n)
+}
+
+// bitAt reports whether bit n of a magnitude is set.
+func bitAt(x []uint, n int64) bool {
+	i := n / bitsPerWord
+	return i < int64(len(x)) && x[i]>>uint(n%bitsPerWord)&1 != 0
 }
 
 // bigLow64 is the low 64 bits of a BigInt's two's complement.
@@ -240,8 +286,8 @@ func bigLow64(v Value) uint64 {
 	if v.isShortBig() {
 		return uint64(v.shortBigInt())
 	}
-	b := v.BigInt()
-	words := b.V.Bits()
+	b := (*BigInt)(v.ref)
+	words := b.words()
 	var u uint64
 	if len(words) > 0 {
 		u = uint64(words[0])
@@ -249,7 +295,7 @@ func bigLow64(v Value) uint64 {
 	if bits.UintSize == 32 && len(words) > 1 {
 		u |= uint64(words[1]) << 32
 	}
-	if b.V.Sign() < 0 {
+	if b.negative() {
 		u = -u
 	}
 	return u
@@ -264,8 +310,7 @@ func bigIntToFloat(b *BigInt) float64 {
 	if b == nil {
 		return 0
 	}
-	f, _ := new(big.Float).SetInt(&b.V).Float64()
-	return f
+	return b.Float()
 }
 
 // shortArith applies an arithmetic operator to two BigInts held in their
@@ -387,22 +432,11 @@ func bigNot(n Value) Value {
 	if n.isShortBig() {
 		return shortBig(^n.shortBigInt())
 	}
-	out := &BigInt{}
-	out.V.Not(&n.BigInt().V)
-	return Big(out)
-}
-
-// bigArg is a BigInt operand as a *BigInt for an operation that keeps
-// neither operand: one held in its Value is written into the runtime's
-// bigArgs[i], whose own words hold any int64, rather than made anew.
-func (r *Runtime) bigArg(v Value, i int) *BigInt {
-	if !v.isShortBig() {
-		return v.BigInt()
-	}
-	s := &r.bigArgs[i]
-	s.b.V.SetBits(s.words[:0])
-	s.b.V.SetInt64(v.shortBigInt())
-	return &s.b
+	var buf bigScratch
+	neg, x := bigParts(n, &buf)
+	z := make([]uint, len(x)+1)
+	copy(z, x)
+	return bigOf(bignum.Not(z, neg, z[:len(x)]))
 }
 
 // shortBinImm is OpBinImm's operator on two BigInts held in their Values,
@@ -423,7 +457,11 @@ func bigFromUint64(u uint64) Value {
 	if u <= math.MaxInt64 {
 		return shortBig(int64(u))
 	}
-	b := &BigInt{}
-	b.V.SetUint64(u)
-	return heapBig(b)
+	var w bigScratch
+	if bits.UintSize == 64 {
+		w[0] = uint(u)
+	} else {
+		w[0], w[len(w)-1] = uint(u), uint(u>>32)
+	}
+	return bigOf(false, w[:])
 }

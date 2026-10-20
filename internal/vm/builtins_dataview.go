@@ -3,7 +3,6 @@ package vm
 import (
 	"encoding/binary"
 	"math"
-	"math/big"
 )
 
 // DataView.
@@ -445,10 +444,5 @@ func writeUint(b []byte, u uint64, little bool) {
 // -1n would store as 1 instead of all ones. The specification's ToBigInt64 and
 // ToBigUint64 are both a modulo by 2**64, which is what this does.
 func bigLowUint64(b *BigInt) uint64 {
-	var m big.Int
-	m.And(&b.V, mask64)
-	return m.Uint64()
+	return bigLow64(heapBig(b))
 }
-
-// mask64 is 2**64 - 1, held once rather than rebuilt per write.
-var mask64 = new(big.Int).SetUint64(^uint64(0))

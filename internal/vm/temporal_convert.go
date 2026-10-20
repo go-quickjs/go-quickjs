@@ -2,9 +2,10 @@ package vm
 
 import (
 	"math"
-	"math/big"
+	"math/bits"
 
 	"github.com/go-quickjs/go-intl/temporal"
+	"github.com/go-quickjs/go-quickjs/internal/bignum"
 )
 
 // The ToTemporalX operations, as V8 has them: a Temporal object is taken
@@ -535,11 +536,10 @@ func (r *Runtime) temporalRelativeTo(o *Object) (temporal.RelativeTo, error) {
 // temporalBigIntNanoseconds is GetI128FromBigInt, and its range check, as
 // an Instant.
 func (r *Runtime) temporalBigIntNanoseconds(b *BigInt) (temporal.Instant, error) {
-	v := &b.V
-	if v.BitLen() > 127 {
+	if bignum.BitLen(b.words()) > 127 {
 		return temporal.Instant{}, r.temporalRange("Nanoseconds out of range.")
 	}
-	hi, lo := temporalWords(v)
+	hi, lo := temporalWords(b)
 	i, err := temporal.NewInstant(hi, lo)
 	if err != nil {
 		return temporal.Instant{}, r.temporalRange("Nanoseconds out of range.")
@@ -563,18 +563,44 @@ func (r *Runtime) temporalEpochMilliseconds(v Value) (temporal.Instant, error) {
 
 // temporalWords are a value's two's complement words, the high one
 // signed, for a value within 127 bits.
-func temporalWords(v *big.Int) (int64, uint64) {
-	m := new(big.Int).And(v, new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 128), big.NewInt(1)))
-	lo := new(big.Int).And(m, new(big.Int).SetUint64(math.MaxUint64)).Uint64()
-	hi := new(big.Int).Rsh(m, 64).Uint64()
+func temporalWords(b *BigInt) (int64, uint64) {
+	var hi, lo uint64
+	for i, w := range b.words() {
+		if at := i * bits.UintSize; at < 64 {
+			lo |= uint64(w) << at
+		} else {
+			hi |= uint64(w) << (at - 64)
+		}
+	}
+	if b.negative() {
+		// Negated in 128 bits.
+		lo, hi = -lo, ^hi
+		if lo == 0 {
+			hi++
+		}
+	}
 	return int64(hi), lo
 }
 
 // temporalNanosecondsBigInt is an Instant's nanoseconds as a BigInt.
 func temporalNanosecondsBigInt(i temporal.Instant) Value {
 	hi, lo := i.EpochNanoseconds()
-	b := &BigInt{}
-	b.V.Lsh(big.NewInt(hi), 64)
-	b.V.Add(&b.V, new(big.Int).SetUint64(lo))
-	return Big(b)
+	// The magnitude of the 128-bit two's complement, in words.
+	neg := hi < 0
+	uhi, ulo := uint64(hi), lo
+	if neg {
+		ulo, uhi = -ulo, ^uhi
+		if ulo == 0 {
+			uhi++
+		}
+	}
+	var w [128 / bits.UintSize]uint
+	for i := range w {
+		if at := i * bits.UintSize; at < 64 {
+			w[i] = uint(ulo >> at)
+		} else {
+			w[i] = uint(uhi >> (at - 64))
+		}
+	}
+	return bigOf(neg, bignum.Norm(w[:]))
 }

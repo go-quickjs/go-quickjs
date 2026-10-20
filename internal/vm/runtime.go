@@ -263,9 +263,9 @@ type Runtime struct {
 	// keyAtoms remembers the atoms of key strings the runtime handed out;
 	// see keyString.
 	keyAtoms [256]keyAtom
-	// bigArgs are where a BigInt held in its Value is spelled as a big.Int
-	// for bigArith, which keeps neither operand; see bigArg.
-	bigArgs [2]smallBigInt
+	// bigTmp is where BigInt arithmetic makes a result before it is held
+	// in its Value or a BigInt of its own (zzbigint.go's bigRoom).
+	bigTmp []uint
 	// modfetch is the asynchronous module loader and its calls, made when a
 	// loader is installed; see modulefetch.go.
 	modfetch *moduleFetch

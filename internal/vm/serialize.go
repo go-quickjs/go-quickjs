@@ -1,8 +1,6 @@
 package vm
 
 import (
-	"math/big"
-
 	"github.com/go-quickjs/go-intl/date"
 )
 
@@ -36,9 +34,6 @@ func (s *Serialized) Copy() *Serialized {
 	for i, n := range s.nodes {
 		if n.bytes != nil {
 			n.bytes = append([]byte(nil), n.bytes...)
-		}
-		if n.big != nil {
-			n.big = new(big.Int).Set(n.big)
 		}
 		out.nodes[i] = n
 	}
@@ -128,7 +123,9 @@ type snode struct {
 	num  float64
 	str  string
 	flag string
-	big  *big.Int
+	// big is a BigInt's, which is never changed, and holds no pointer:
+	// what every runtime it is sent to may share.
+	big *BigInt
 	// props are an object's or an array's enumerable string-keyed
 	// properties, and length an array's length.
 	props  []sprop
@@ -239,7 +236,7 @@ func (s *serializer) value(v Value) (int, error) {
 	case KindString:
 		return s.add(snode{prim: KindString, str: v.String().Go()}), nil
 	case KindBigInt:
-		return s.add(snode{prim: KindBigInt, big: new(big.Int).Set(&v.BigInt().V)}), nil
+		return s.add(snode{prim: KindBigInt, big: v.BigInt()}), nil
 	case KindSymbol:
 		return 0, &DataCloneError{v.Symbol().String() + " could not be cloned."}
 	}
@@ -321,7 +318,7 @@ func (s *serializer) value(v Value) (int, error) {
 		case KindString:
 			n.str = prim.String().Go()
 		case KindBigInt:
-			n.big = new(big.Int).Set(&prim.BigInt().V)
+			n.big = prim.BigInt()
 		}
 	case ClassSymbolWrapper:
 		return 0, &DataCloneError{"[object Symbol] could not be cloned."}
@@ -752,9 +749,7 @@ func primitiveValue(n *snode) Value {
 	case KindString:
 		return Str(NewString(n.str))
 	case KindBigInt:
-		b := &BigInt{}
-		b.V.Set(n.big)
-		return Big(b)
+		return Big(n.big)
 	}
 	return Undefined
 }

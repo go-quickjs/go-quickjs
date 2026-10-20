@@ -3,8 +3,6 @@ package vm
 import (
 	"errors"
 	"math"
-	"math/big"
-	"math/bits"
 	"strconv"
 	"unsafe"
 
@@ -4069,6 +4067,10 @@ func (r *Runtime) add(a, b Value) (Value, error) {
 			return v, nil
 		}
 	}
+	if a.IsBigInt() && b.IsBigInt() {
+		// Two BigInts, which convert to themselves.
+		return r.bigOp(bytecode.OpAdd, a, b)
+	}
 	if a.IsString() && b.IsString() {
 		// Two strings, as most string building is: what toPrimitive and
 		// toString would hand back as they are.
@@ -4113,7 +4115,7 @@ func (r *Runtime) add(a, b Value) (Value, error) {
 	}
 	if pa.IsBigInt() && pb.IsBigInt() {
 		// What toNumeric would leave as they are.
-		return r.bigArith(bytecode.OpAdd, r.bigArg(pa, 0), r.bigArg(pb, 1))
+		return r.bigOp(bytecode.OpAdd, pa, pb)
 	}
 	na, err := r.toNumeric(pa)
 	if err != nil {
@@ -4127,7 +4129,7 @@ func (r *Runtime) add(a, b Value) (Value, error) {
 		return Undefined, r.throwTypeError("cannot mix BigInt and other types")
 	}
 	if na.IsBigInt() {
-		return r.bigArith(bytecode.OpAdd, r.bigArg(na, 0), r.bigArg(nb, 1))
+		return r.bigOp(bytecode.OpAdd, na, nb)
 	}
 	return Float(na.Number() + nb.Number()), nil
 }
@@ -4176,6 +4178,10 @@ func (r *Runtime) arith(op bytecode.Op, a, b Value) (Value, error) {
 			return v, nil
 		}
 	}
+	if a.IsBigInt() && b.IsBigInt() {
+		// Two BigInts, which convert to themselves.
+		return r.bigOp(op, a, b)
+	}
 	na, err := r.toNumeric(a)
 	if err != nil {
 		return Undefined, err
@@ -4188,7 +4194,7 @@ func (r *Runtime) arith(op bytecode.Op, a, b Value) (Value, error) {
 		return Undefined, r.throwTypeError("cannot mix BigInt and other types")
 	}
 	if na.IsBigInt() {
-		return r.bigArith(op, r.bigArg(na, 0), r.bigArg(nb, 1))
+		return r.bigOp(op, na, nb)
 	}
 	return Float(numericOp(op, na.Number(), nb.Number())), nil
 }
@@ -4220,6 +4226,10 @@ func (r *Runtime) bitwise(op bytecode.Op, a, b Value) (Value, error) {
 		if v, ok := shortBitwise(op, a, b); ok {
 			return v, nil
 		}
+	}
+	if a.IsBigInt() && b.IsBigInt() && op != bytecode.OpUShr {
+		// Two BigInts, which convert to themselves.
+		return r.bigBits(op, a, b)
 	}
 	na, err := r.toNumeric(a)
 	if err != nil {
@@ -4311,71 +4321,8 @@ func (r *Runtime) bigBitwise(op bytecode.Op, a, b Value) (Value, bool, error) {
 		}
 	}
 
-	// The operands as they are, one held in its value in scratch (bigArg),
-	// and the result with room for its digits, as bigArith makes one:
-	// a BigInt each made for the other had cost an allocation an operation.
-	x, y := &r.bigArg(na, 0).V, &r.bigArg(nb, 1).V
-	var out *BigInt
-	switch words := max(len(x.Bits()), len(y.Bits())) + 1; op {
-	case bytecode.OpBitAnd, bytecode.OpBitOr, bytecode.OpBitXor:
-		out = newBigResultFor(words)
-	case bytecode.OpShl:
-		if y.IsInt64() && y.Int64() >= 0 && y.Int64() < 16*bits.UintSize {
-			out = newBigResultFor(len(x.Bits()) + int(y.Int64())/bits.UintSize + 1)
-			break
-		}
-		out = &BigInt{}
-	default:
-		out = newBigResultFor(len(x.Bits()) + 1)
-	}
-	switch op {
-	case bytecode.OpBitAnd:
-		out.V.And(x, y)
-	case bytecode.OpBitOr:
-		out.V.Or(x, y)
-	case bytecode.OpBitXor:
-		out.V.Xor(x, y)
-	case bytecode.OpShl, bytecode.OpShr:
-		// A BigInt shift has no width to wrap around, so the count is taken
-		// whole -- and a negative one shifts the other way.
-		n := y
-		left := op == bytecode.OpShl
-		if n.Sign() < 0 {
-			neg := new(big.Int).Neg(n)
-			n, left = neg, !left
-		}
-		if !n.IsInt64() || n.Int64() > maxBigIntBits {
-			if left {
-				if x.Sign() == 0 {
-					break
-				}
-				return Undefined, false, r.throwBigIntSize()
-			}
-			// Shifting right past every bit leaves the sign: zero, or minus
-			// one for a negative value.
-			if x.Sign() < 0 {
-				out.V.SetInt64(-1)
-			}
-			break
-		}
-		if left {
-			if x.Sign() != 0 && int64(x.BitLen())+n.Int64() > maxBigIntBits {
-				return Undefined, false, r.throwBigIntSize()
-			}
-			if x.Sign() != 0 {
-				if err := r.reserveBigInt(int64(x.BitLen()) + n.Int64()); err != nil {
-					return Undefined, false, err
-				}
-			}
-			out.V.Lsh(x, uint(n.Int64()))
-		} else {
-			// An arithmetic shift, which big.Int's Rsh already is.
-			out.V.Rsh(x, uint(n.Int64()))
-		}
-	default:
-		return Undefined, false, r.throwTypeError("unsupported BigInt operation")
-	}
-	return Big(out), true, nil
+	v, err := r.bigBits(op, na, nb)
+	return v, true, err
 }
 
 // negate implements unary minus.
@@ -4388,9 +4335,8 @@ func (r *Runtime) negate(a Value) (Value, error) {
 		if n.isShortBig() && n.shortBigInt() != math.MinInt64 {
 			return shortBig(-n.shortBigInt()), nil
 		}
-		out := &BigInt{}
-		out.V.Neg(&n.BigInt().V)
-		return Big(out), nil
+		// The most negative int64's, or one on the heap.
+		return bigNeg(n), nil
 	}
 	return Float(-n.Number()), nil
 }
@@ -4480,101 +4426,6 @@ func relationalResult(op bytecode.Op, c cmpResult) bool {
 	default:
 		return c == cmpGreater || c == cmpEqual
 	}
-}
-
-// bigArith applies an arithmetic operator to two BigInts.
-func (r *Runtime) bigArith(op bytecode.Op, a, b *BigInt) (Value, error) {
-	// A sum or a product is kept in words of the BigInt's own allocation,
-	// sized for the most big.Int will ask for: a word more than the longer
-	// operand for a sum, both operands' words for a product.
-	la, lb := len(a.V.Bits()), len(b.V.Bits())
-	var out *BigInt
-	switch op {
-	case bytecode.OpMul:
-		out = newBigResultFor(la + lb)
-	case bytecode.OpAdd, bytecode.OpSub:
-		out = newBigResultFor(max(la, lb) + 1)
-	default:
-		out = &BigInt{}
-	}
-	// Whether a result could pass maxBigIntBits is asked of the bits only
-	// for operands with words enough for it to.
-	const wordsNear = maxBigIntBits/bits.UintSize - 1
-	switch op {
-	case bytecode.OpAdd, bytecode.OpSub:
-		if max(la, lb) >= wordsNear && max(a.V.BitLen(), b.V.BitLen())+1 > maxBigIntBits {
-			// The one case where a sum could exceed the limit.
-			if op == bytecode.OpAdd {
-				out.V.Add(&a.V, &b.V)
-			} else {
-				out.V.Sub(&a.V, &b.V)
-			}
-			if out.V.BitLen() > maxBigIntBits {
-				return Undefined, r.throwBigIntSize()
-			}
-			return Big(out), nil
-		}
-		if op == bytecode.OpAdd {
-			out.V.Add(&a.V, &b.V)
-		} else {
-			out.V.Sub(&a.V, &b.V)
-		}
-	case bytecode.OpMul:
-		// A product has at least as many bits as its factors' less one.
-		if la+lb >= wordsNear && a.V.Sign() != 0 && b.V.Sign() != 0 && a.V.BitLen()+b.V.BitLen()-1 > maxBigIntBits {
-			return Undefined, r.throwBigIntSize()
-		}
-		if err := r.reserveBigInt(int64(la+lb) * bits.UintSize); err != nil {
-			return Undefined, err
-		}
-		out.V.Mul(&a.V, &b.V)
-	case bytecode.OpDiv:
-		if b.IsZero() {
-			return Undefined, r.throwRangeError("division by zero")
-		}
-		// BigInt division truncates toward zero, which is Quo rather than Div.
-		out.V.Quo(&a.V, &b.V)
-	case bytecode.OpMod:
-		if b.IsZero() {
-			return Undefined, r.throwRangeError("division by zero")
-		}
-		out.V.Rem(&a.V, &b.V)
-	case bytecode.OpPow:
-		if b.V.Sign() < 0 {
-			return Undefined, r.throwRangeError("a BigInt cannot be raised to a negative power")
-		}
-		// Zero, one and minus one stay small whatever the power; anything
-		// else has at least as many bits as the power, times its own less
-		// one, which is checked before the work -- and exactly after it.
-		if a.V.CmpAbs(big.NewInt(1)) > 0 && b.V.Sign() > 0 {
-			if !b.V.IsInt64() || b.V.Int64() > maxBigIntBits ||
-				int64(a.V.BitLen()-1)*b.V.Int64() > maxBigIntBits {
-				return Undefined, r.throwBigIntSize()
-			}
-		}
-		if a.V.CmpAbs(big.NewInt(1)) > 0 && b.V.Sign() > 0 {
-			if err := r.reserveBigInt(int64(a.V.BitLen()) * b.V.Int64()); err != nil {
-				return Undefined, err
-			}
-		}
-		if !b.V.IsInt64() {
-			// The base is 0, 1 or -1, and the power's parity is all that
-			// matters.
-			if b.V.Bit(0) == 0 {
-				out.V.Exp(&a.V, big.NewInt(2), nil)
-			} else {
-				out.V.Set(&a.V)
-			}
-			return Big(out), nil
-		}
-		out.V.Exp(&a.V, &b.V, nil)
-		if out.V.BitLen() > maxBigIntBits {
-			return Undefined, r.throwBigIntSize()
-		}
-	default:
-		return Undefined, r.throwTypeError("unsupported BigInt operation")
-	}
-	return Big(out), nil
 }
 
 // linkClass wires a derived class to its parent.

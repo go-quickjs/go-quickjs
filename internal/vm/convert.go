@@ -308,7 +308,7 @@ func (r *Runtime) toString(v Value) (*String, error) {
 		// implicitly, so that a typo in a template literal is caught.
 		return nil, r.throwTypeError("cannot convert a symbol to a string")
 	case KindBigInt:
-		return NewString(v.BigInt().String()), nil
+		return bigString(v, 10), nil
 	}
 	p, err := r.toPrimitive(v, hintString)
 	if err != nil {

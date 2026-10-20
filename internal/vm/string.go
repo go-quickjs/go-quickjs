@@ -2,12 +2,13 @@ package vm
 
 import (
 	"math"
-	"math/big"
+	"math/bits"
 	"strings"
 	"unicode/utf16"
 	"unicode/utf8"
 	"unsafe"
 
+	"github.com/go-quickjs/go-quickjs/internal/bignum"
 	"github.com/go-quickjs/go-quickjs/internal/jsnum"
 	"github.com/go-quickjs/go-quickjs/internal/wtf8"
 )
@@ -1152,67 +1153,61 @@ func (s *Symbol) String() string {
 // BigInt
 // ---------------------------------------------------------------------------
 
-// BigInt is an arbitrary-precision integer.
+// BigInt is an arbitrary-precision integer, on the heap in one allocation
+// that holds no pointer, which the collector never scans: a header word --
+// how many words of digits follow, and the sign -- then the digits, least
+// significant first, normalized. One in the int64 range is held in its
+// Value instead (shortBig), but for what Value.BigInt and NewBigInt make.
 //
-// A BigInt is never copied: one newBigResult made keeps its digits in the
-// allocation that holds it, which a copy's V would go on pointing into.
+// A BigInt is never changed once made: an operation writes its result
+// elsewhere, or in a BigInt it has just made (zzbigint.go's bigInPlace).
 type BigInt struct {
-	V big.Int
+	hdr uint
 }
 
-// NewBigInt returns a BigInt with the given value.
-func NewBigInt(v int64) *BigInt {
-	b := newBigResult()
-	b.V.SetInt64(v)
+// bigNegBit is a BigInt's header's sign.
+const bigNegBit = uint(1) << (bits.UintSize - 1)
+
+// bigWordSize is a digit word's size in bytes.
+const bigWordSize = unsafe.Sizeof(uint(0))
+
+// digits is how many words of digits b has.
+func (b *BigInt) digits() int { return int(b.hdr &^ bigNegBit) }
+
+// negative reports whether b is below zero.
+func (b *BigInt) negative() bool { return b.hdr&bigNegBit != 0 }
+
+// words is b's digits, its magnitude's, least significant first: what
+// nothing may write to.
+func (b *BigInt) words() []uint {
+	n := b.digits()
+	if n == 0 {
+		// Zero's: a pointer past its header would be past its allocation.
+		return nil
+	}
+	return unsafe.Slice((*uint)(unsafe.Add(unsafe.Pointer(b), bigWordSize)), n)
+}
+
+// newBigWords is a BigInt of n words of digits, all zero, and the sign neg:
+// one allocation of no pointer, the header and the digits.
+func newBigWords(n int, neg bool) *BigInt {
+	ws := make([]uint, 1+n)
+	b := (*BigInt)(unsafe.Pointer(&ws[0]))
+	b.hdr = uint(n)
+	if neg && n > 0 {
+		b.hdr |= bigNegBit
+	}
 	return b
 }
 
-// smallBigInt is a BigInt and room for four words of digits: one allocation
-// where a BigInt and its digits are two. A BigInt in the int64 range is held
-// in its Value, so one on the heap has two words or more, and big.Int asks
-// for a word more than a sum's longer operand has before it knows whether
-// the sum needs it. Three words would take the same 64-byte size class.
-type smallBigInt struct {
-	b     BigInt
-	words [4]big.Word
-}
-
-// smallBigWords is how many words of digits a smallBigInt has room for.
-const smallBigWords = len(smallBigInt{}.words)
-
-// newBigResult is a BigInt of zero that keeps its digits in its own
-// allocation while they fit in smallBigWords, for a result that will.
-func newBigResult() *BigInt {
-	s := &smallBigInt{}
-	s.b.V.SetBits(s.words[:0])
-	return &s.b
-}
-
-// newBigResultFor is newBigResult for a result of up to words words of
-// digits: a BigInt with room for them in its own allocation, in the smallest
-// of a few sizes that holds them -- 4, 8 or 16 words, each filling one of
-// Go's size classes -- or a BigInt whose digits will be an allocation of
-// their own past that.
-func newBigResultFor(words int) *BigInt {
-	switch {
-	case words <= smallBigWords:
-		return newBigResult()
-	case words <= 8:
-		s := &struct {
-			b     BigInt
-			words [8]big.Word
-		}{}
-		s.b.V.SetBits(s.words[:0])
-		return &s.b
-	case words <= 16:
-		s := &struct {
-			b     BigInt
-			words [16]big.Word
-		}{}
-		s.b.V.SetBits(s.words[:0])
-		return &s.b
-	}
-	return &BigInt{}
+// NewBigInt returns a BigInt with the given value, a BigInt of its own
+// whatever its value.
+func NewBigInt(v int64) *BigInt {
+	var buf bigScratch
+	neg, mag := bigParts(shortBig(v), &buf)
+	b := newBigWords(len(mag), neg)
+	copy(b.words(), mag)
+	return b
 }
 
 // ParseBigInt parses a BigInt literal, which may carry a 0x, 0o or 0b prefix.
@@ -1243,13 +1238,12 @@ func ParseBigInt(s string) (*BigInt, bool) {
 			return nil, false
 		}
 	}
-	b := &BigInt{}
-	if _, ok := b.V.SetString(digits, base); !ok {
+	mag, ok := bignum.Parse(digits, base)
+	if !ok {
 		return nil, false
 	}
-	if neg {
-		b.V.Neg(&b.V)
-	}
+	b := newBigWords(len(mag), neg)
+	copy(b.words(), mag)
 	return b, true
 }
 
@@ -1279,17 +1273,35 @@ func StringToBigInt(s string) (*BigInt, bool) {
 }
 
 // IsZero reports whether the value is zero.
-func (b *BigInt) IsZero() bool { return b.V.Sign() == 0 }
+func (b *BigInt) IsZero() bool { return b.digits() == 0 }
 
 // Cmp compares two BigInts.
-func (b *BigInt) Cmp(o *BigInt) int { return b.V.Cmp(&o.V) }
+func (b *BigInt) Cmp(o *BigInt) int {
+	switch an, bn := b.negative(), o.negative(); {
+	case an && !bn:
+		return -1
+	case !an && bn:
+		return 1
+	case an:
+		return bignum.Cmp(o.words(), b.words())
+	}
+	return bignum.Cmp(b.words(), o.words())
+}
 
 // String renders the value in base 10.
-func (b *BigInt) String() string { return b.V.String() }
+func (b *BigInt) String() string { return b.Text(10) }
+
+// Text renders the value in base, 2 to 36.
+func (b *BigInt) Text(base int) string {
+	return string(bignum.Append(nil, b.negative(), b.words(), base))
+}
 
 // Float returns the value as a float64, which may lose precision.
 func (b *BigInt) Float() float64 {
-	f, _ := new(big.Float).SetInt(&b.V).Float64()
+	f := bignum.Float64(b.words())
+	if b.negative() {
+		return -f
+	}
 	return f
 }
 
@@ -1307,11 +1319,11 @@ func bigIntFromFloat(f float64) (*BigInt, bool) {
 		// What an int64 holds converts exactly, and most are this small.
 		return NewBigInt(int64(f)), true
 	}
-	b := &BigInt{}
-	if _, acc := new(big.Float).SetFloat64(f).Int(&b.V); acc != big.Exact {
-		// SetFloat64 on an integral value is always exact, so this only
-		// triggers on a value the guard above should already have rejected.
+	mag, neg, ok := bignum.FromFloat64(f)
+	if !ok {
 		return nil, false
 	}
+	b := newBigWords(len(mag), neg)
+	copy(b.words(), mag)
 	return b, true
 }

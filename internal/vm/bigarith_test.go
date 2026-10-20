@@ -8,9 +8,11 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
-// A result of one-word operands keeps its digits beside it. Each must be its
-// own -- not the operands', nor a previous result's -- and grow out of the
-// room when it has to.
+// A result is made in the runtime's scratch (bigTmp), then a BigInt of its
+// own: each must be its own -- not the operands', nor a previous result's,
+// nor the next one's -- and the operands unchanged, held in their Values or
+// as BigInts of their own (heapOf), which no result of a value in the int64
+// range is.
 func TestBigArithKeepsSmallResultsApart(t *testing.T) {
 	r := New(Config{})
 	vals := []int64{0, 1, -1, 7, -7, 1 << 31, -(1 << 31), math.MaxInt64, math.MinInt64}
@@ -37,29 +39,32 @@ func TestBigArithKeepsSmallResultsApart(t *testing.T) {
 						want.Rem(big.NewInt(x), big.NewInt(y))
 					}
 				}
-				v, err := r.bigArith(op, a, b)
+				v, err := r.bigOp(op, heapOf(a), heapOf(b))
 				if err != nil {
 					t.Fatal(err)
 				}
 				// A second result from the same operands must not disturb the
 				// first.
-				if _, err := r.bigArith(bytecode.OpMul, a, a); err != nil {
+				if _, err := r.bigOp(bytecode.OpMul, heapOf(a), heapOf(a)); err != nil {
 					t.Fatal(err)
 				}
-				if got := &v.BigInt().V; got.Cmp(&want) != 0 || a.V.Int64() != x || b.V.Int64() != y {
-					t.Fatalf("%v %v %v = %v, want %v (operands now %v, %v)", x, op, y, got, &want, &a.V, &b.V)
+				if got := bigIntOf(v.BigInt()); got.Cmp(&want) != 0 || bigIntOf(a).Int64() != x || bigIntOf(b).Int64() != y {
+					t.Fatalf("%v %v %v = %v, want %v (operands now %v, %v)", x, op, y, got, &want, a, b)
 				}
 			}
 		}
 	}
 	// A product that outgrows its two words.
 	x := NewBigInt(math.MaxInt64)
-	v, _ := r.bigArith(bytecode.OpMul, x, x)
+	v, _ := r.bigOp(bytecode.OpMul, heapOf(x), heapOf(x))
 	for i := 0; i < 3; i++ {
-		v, _ = r.bigArith(bytecode.OpMul, v.BigInt(), v.BigInt())
+		v, _ = r.bigOp(bytecode.OpMul, v, v)
 	}
 	want := new(big.Int).Exp(big.NewInt(math.MaxInt64), big.NewInt(16), nil)
-	if v.BigInt().V.Cmp(want) != 0 {
-		t.Fatalf("(2**63-1)**16 = %v, want %v", &v.BigInt().V, want)
+	if bigIntOf(v.BigInt()).Cmp(want) != 0 {
+		t.Fatalf("(2**63-1)**16 = %v, want %v", v.BigInt(), want)
 	}
 }
+
+// heapOf is b as a Value as it is: a BigInt of its own, whatever its value.
+func heapOf(b *BigInt) Value { return heapBig(b) }

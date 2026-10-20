@@ -4398,7 +4398,7 @@ func (r *Runtime) jitBigOp(op bytecode.Op, a, b Value) (Value, error) {
 		v, _, err := r.bigBitwise(op, a, b)
 		return v, err
 	}
-	return r.bigArith(op, r.bigArg(a, 0), r.bigArg(b, 1))
+	return r.bigOp(op, a, b)
 }
 
 // jitConcatOperand reports whether v, joined to a string, is converted
@@ -4498,7 +4498,7 @@ func jitBigWords(v Value) int {
 	if v.isShortBig() {
 		return 2
 	}
-	return len((*BigInt)(v.ref).V.Bits())
+	return (*BigInt)(v.ref).digits()
 }
 
 // jitGoCallWork, which tests set, runs at each call of Go before it is
