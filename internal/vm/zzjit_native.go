@@ -588,10 +588,13 @@ type jitEntry struct {
 	// operation takes as a number, whose receivers have been typed arrays
 	// (ssa.ElementFeedback), stringReads those whose receivers have been
 	// strings (ssa.StringElementFeedback), and keyedReads those Go makes,
-	// whose receivers have been objects read by a name (ssa.KeyedFeedback).
+	// whose receivers have been objects read by a name (ssa.KeyedFeedback);
+	// keyedWrites are the element writes Go makes, whose receivers have
+	// been objects native code does not store to (ssa.KeyedWriteFeedback).
 	typedReads  []int32
 	stringReads []int32
 	keyedReads  []int32
+	keyedWrites []int32
 	polyReopt   bool
 	polyReopts  uint8
 	// strSites are the method reads that met a string receiver, which the
@@ -1109,7 +1112,7 @@ func jitCompiledBytes(shapes []*shape, holders []*Object, inlinedAt, definesUnfe
 // with the objects made for them.
 func (e *jitEntry) learnedBytes() int {
 	n := jitCapBytes(e.failed) + jitCapBytes(e.failedEntries) + jitCapBytes(e.bigints) + jitCapBytes(e.literals) + jitCapBytes(e.poly) + jitCapBytes(e.typedReads) +
-		jitCapBytes(e.stringReads) + jitCapBytes(e.keyedReads) + jitCapBytes(e.strSites) + jitCapBytes(e.nativeCalls) + jitCapBytes(e.inlines) + jitCapBytes(e.notInline) +
+		jitCapBytes(e.stringReads) + jitCapBytes(e.keyedReads) + jitCapBytes(e.keyedWrites) + jitCapBytes(e.strSites) + jitCapBytes(e.nativeCalls) + jitCapBytes(e.inlines) + jitCapBytes(e.notInline) +
 		jitCapBytes(e.nativeCallers) + jitCapBytes(e.callSites)
 	for i := range e.poly {
 		p := &e.poly[i]
@@ -1471,6 +1474,7 @@ type jitGhost struct {
 	typedReads    []int32
 	stringReads   []int32
 	keyedReads    []int32
+	keyedWrites   []int32
 }
 
 // jitGhosts bounds the ghosts kept; past it they are forgotten.
@@ -1483,7 +1487,7 @@ func (s *jitState) ghost(addr uintptr, e *jitEntry) {
 	}
 	g := s.ghosts[addr]
 	g.evictions, g.asks = min(g.evictions+1, 16), 0
-	g.failed, g.failedEntries, g.typedReads, g.stringReads, g.keyedReads = e.failed, e.failedEntries, e.typedReads, e.stringReads, e.keyedReads
+	g.failed, g.failedEntries, g.typedReads, g.stringReads, g.keyedReads, g.keyedWrites = e.failed, e.failedEntries, e.typedReads, e.stringReads, e.keyedReads, e.keyedWrites
 	g.bigints = e.bigints
 	s.ghosts[addr] = g
 }
@@ -1497,7 +1501,7 @@ func (s *jitState) rememberFlushed(addr uintptr, e *jitEntry) {
 		s.ghosts = map[uintptr]jitGhost{}
 	}
 	g := s.ghosts[addr]
-	g.failed, g.failedEntries, g.typedReads, g.stringReads, g.keyedReads = e.failed, e.failedEntries, e.typedReads, e.stringReads, e.keyedReads
+	g.failed, g.failedEntries, g.typedReads, g.stringReads, g.keyedReads, g.keyedWrites = e.failed, e.failedEntries, e.typedReads, e.stringReads, e.keyedReads, e.keyedWrites
 	g.bigints = e.bigints
 	s.ghosts[addr] = g
 }
@@ -2089,7 +2093,7 @@ func (r *Runtime) jitCompileFor(fn *bytecode.Function, cl *closure, kind jitLowe
 	e := &jitEntry{used: s.epoch(), serial: s.serial, hot: kind == jitLowerHot}
 	if g, ok := s.ghosts[uintptr(unsafe.Pointer(fn))]; ok {
 		// What its code dropped before had learned (jitGhost).
-		e.failed, e.failedEntries, e.typedReads, e.stringReads, e.keyedReads = g.failed, g.failedEntries, g.typedReads, g.stringReads, g.keyedReads
+		e.failed, e.failedEntries, e.typedReads, e.stringReads, e.keyedReads, e.keyedWrites = g.failed, g.failedEntries, g.typedReads, g.stringReads, g.keyedReads, g.keyedWrites
 		e.bigints = g.bigints
 	}
 	s.linkFor(fn, e)

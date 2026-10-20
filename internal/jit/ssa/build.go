@@ -665,6 +665,24 @@ type KeyedFeedback interface {
 	KeyedRead(pc int) bool
 }
 
+// KeyedWriteFeedback is Feedback that knows the element writes whose
+// receivers have been objects native code does not store to -- an
+// ordinary object's property by an index or a name, obj[i] = v -- which
+// Go makes from native code (GoKeyedWrite).
+type KeyedWriteFeedback interface {
+	KeyedWrite(pc int) bool
+}
+
+// keyedWrite reports whether the element write at pc is made by Go from
+// native code (KeyedWriteFeedback, GoKeyedWrite).
+func (b *builder) keyedWrite(pc int) bool {
+	if b.p.Code[pc].Op != ir.ArrayWrite || !b.goCalls() {
+		return false
+	}
+	f, ok := b.fb.(KeyedWriteFeedback)
+	return ok && f.KeyedWrite(pc)
+}
+
 // StringElementFeedback is Feedback that knows the element reads whose
 // receivers have been strings (OpStringChar): such a read is compiled for
 // a string, which native code makes the element of, and any other
@@ -1117,6 +1135,14 @@ type GoOp uint8
 // no result past BigInt's size limit, no division by zero -- and refuses
 // the rest, an operand no BigInt among them, which leave for Go to make the
 // operation after an exit.
+//
+// GoKeyedWrite is an element's write (ir.ArrayWrite) of the third operand
+// to any receiver, the first, by any key, the second, as V8's code calls
+// its generic keyed store: Go stores where that runs nothing and throws
+// nothing -- an ordinary object's own writable data property, or a new
+// one where nothing up its chain intercepts it, by an index or a name; an
+// array's element as GoElemStore stores one -- and refuses the rest, which
+// leaves for Go to store after an exit, native code going on after it.
 const (
 	GoAdd GoOp = 1 + iota
 	GoRefill
@@ -1147,6 +1173,7 @@ const (
 	GoNewArray
 	GoIndexOf
 	GoArith
+	GoKeyedWrite
 )
 
 // IndexOfFrom is GoIndexOf's Argc's low bit, where the call gives a
@@ -2507,6 +2534,20 @@ func (b *builder) goIndex(blk *Block, in ir.Instruction, operand func(ir.Operand
 	r := b.f.newValue(blk, OpKept, Tagged, cell, call)
 	r.Shadow = cell
 	b.assign(in.Dest, blk, r)
+}
+
+// goKeyedWrite makes in, an element's write, by a call of Go from native
+// code (GoKeyedWrite), as V8's code calls its generic keyed store: Go
+// stores what storing runs nothing for, and refuses the rest, which leaves
+// for Go to store after an exit, native code going on after it. Each such
+// write had left native code: microbench's prop_create, obj[i] = i of an
+// object's own index properties, at every store.
+func (b *builder) goKeyedWrite(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+	call := guard(OpCall, Tagged, ir.HostExit, operand(in.Left), operand(in.Right), operand(in.Third))
+	if b.f.Keeps < b.f.keepLimit() {
+		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoKeyedWrite, ThisSlot: -1}}, b.f.Keeps
+		b.f.Keeps++
+	}
 }
 
 // iterStep makes in, a loop's step, by a call of Go from native code
@@ -4201,6 +4242,12 @@ func (b *builder) instruction(blk *Block, pc int) {
 		guard(OpArrayOf, Ptr, ir.GuardExit, operand(in.Left))
 		guard(OpElemKey, None, ir.GuardExit, number(in.Right, ir.GuardExit))
 	case ir.ArrayWrite:
+		if b.keyedWrite(pc) {
+			// Any receiver's, by Go from native code; what Go does not
+			// store leaves, and native code goes on after it.
+			b.goKeyedWrite(blk, in, operand, guard)
+			break
+		}
 		// Any value, by its words; a number's, once it is known to be one,
 		// as a number (simplify). Go stores what native code does not.
 		array := guard(OpIndexedOf, Ptr, ir.HostExit, operand(in.Left))

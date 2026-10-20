@@ -1493,7 +1493,7 @@ func jitLearnedSpent(fn *bytecode.Function, e *jitEntry) int64 {
 // for it (jitLearnedDue), as V8's NotifyICChanged does.
 func jitLearnedMark(cl *closure, e *jitEntry) uint64 {
 	n := len(e.failed) + len(e.failedEntries) + len(e.bigints) + len(e.poly) + len(e.typedReads) + len(e.stringReads) +
-		len(e.keyedReads) + len(e.strSites) + len(e.nativeCalls) + len(e.inlines) + len(e.notInline) +
+		len(e.keyedReads) + len(e.keyedWrites) + len(e.strSites) + len(e.nativeCalls) + len(e.inlines) + len(e.notInline) +
 		len(e.literals) + len(e.definesUnfed)
 	return jitFeedbackMark(cl) + uint64(n)*0x9e3779b97f4a7c15
 }
@@ -3218,6 +3218,9 @@ func jitHostCall(ctx *abi.Context) bool {
 			*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
 		}
 		return ok
+	case ssa.GoKeyedWrite:
+		// An element's write, of any receiver, by any key (jitKeyedWrite).
+		return r.jitKeyedWrite(jitGoArg(ctx, 0), jitGoArg(ctx, 1), jitGoArg(ctx, 2), true)
 	case ssa.GoIndex:
 		v, ok := r.jitKeyedRead(jitGoArg(ctx, 0), jitGoArg(ctx, 1))
 		if ok {
@@ -9017,6 +9020,8 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 				r.jitRefillLiteral(f, e, exitPC)
 			case bytecode.OpDefineField:
 				jitDefineSeen(e, exitPC)
+			case bytecode.OpSetIndex:
+				r.jitKeyedWriteSeen(e, exitPC, f.base+int(ctx.ExitDepth))
 			}
 			if r.jitTailGivesUp(f, exitPC) {
 				// Deep in the stack, a call in tail position gives up the
