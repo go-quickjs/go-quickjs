@@ -37,7 +37,7 @@ func bigParts(v Value, buf *bigScratch) (bool, []uint) {
 // what inlines, where bigParts does not, for the arithmetic's operands.
 func heapParts(v Value) (bool, []uint) {
 	b := (*BigInt)(v.ref)
-	return b.hdr&bigNegBit != 0, unsafe.Slice((*uint)(unsafe.Add(unsafe.Pointer(b), bigWordSize)), b.hdr&^bigNegBit)
+	return b.hdr&bigNegBit != 0, unsafe.Slice((*uint)(unsafe.Add(unsafe.Pointer(b), bigWordSize)), b.hdr&bigLenMask)
 }
 
 // shortParts is bigParts of a BigInt held in its Value.
@@ -78,15 +78,90 @@ func bigOf(neg bool, mag []uint) Value {
 const bigBlockFrom = 64/bits.UintSize + 2
 
 // bigInPlace is room for a result of n words: a BigInt of its own's digits
-// past bigBlockFrom words, which bigDone gives its length, or the runtime's
-// scratch.
+// past bigBlockFrom words, which bigDone gives its length -- one given
+// back of room for n, where there is one -- or the runtime's scratch.
 func (r *Runtime) bigInPlace(n int) (*BigInt, []uint) {
 	if n < bigBlockFrom {
 		return nil, r.bigRoom(n)
 	}
+	if f := r.bigFree; f != nil && n <= bigFreeTop {
+		if k := &f.n[n-bigBlockFrom]; *k != 0 {
+			*k--
+			i := n - bigBlockFrom
+			b := f.b[i][*k]
+			f.b[i][*k] = nil
+			b.hdr = uint(n) | uint(n)<<bigCapShift
+			return b, b.words()
+		}
+	}
 	b := newBigWords(n, false)
 	return b, b.words()
 }
+
+// bigFreeList is the BigInts given back to a runtime, by their room in
+// words, from bigBlockFrom to bigFreeTop, up to bigFreeDepth of each:
+// the results of arithmetic in the tree tier that an operator of its
+// parent node took and nothing else saw, whose blocks C QuickJS would
+// free as it goes. A loop of arithmetic on numbers of hundreds of bits
+// makes results the size of the ones before, and in their blocks the
+// collector has a fraction of the bytes to collect -- and scans the
+// runtime's live heap that much less often.
+type bigFreeList struct {
+	n [bigFreeTop - bigBlockFrom + 1]uint8
+	b [bigFreeTop - bigBlockFrom + 1][bigFreeDepth]*BigInt
+}
+
+const (
+	bigFreeTop   = 64
+	bigFreeDepth = 4
+)
+
+// bigRelease gives back a's and b's blocks, those of a and b that flags
+// marks as fresh (treeFreshA, treeFreshB) -- each a result of the tree
+// tier's arithmetic that an operator of two BigInts has just taken, and
+// nothing else has seen -- for bigInPlace to make another result in, but
+// for one that is v, the operator's result. A 32-bit machine's BigInts
+// have no room in their header for their room, and are not given back.
+func (r *Runtime) bigRelease(v, a, b Value, flags int) {
+	if bits.UintSize != 64 {
+		return
+	}
+	if flags&treeFreshA != 0 && a.isHeapBig() && a.ref != v.ref {
+		r.bigGive((*BigInt)(a.ref))
+	}
+	if flags&treeFreshB != 0 && b.isHeapBig() && b.ref != v.ref && b.ref != a.ref {
+		r.bigGive((*BigInt)(b.ref))
+	}
+}
+
+// bigGive keeps the block b for bigInPlace, if it has room for a list's.
+func (r *Runtime) bigGive(b *BigInt) {
+	c := int(uint32(b.hdr >> bigCapShift))
+	if c < bigBlockFrom || c > bigFreeTop {
+		return
+	}
+	f := r.bigFree
+	if f == nil {
+		f = new(bigFreeList)
+		r.bigFree = f
+	}
+	if k := &f.n[c-bigBlockFrom]; *k < bigFreeDepth {
+		f.b[c-bigBlockFrom][*k] = b
+		*k++
+	}
+}
+
+// treeFreshA and treeFreshB mark, in the pc a tree's arithmetic or bitwise
+// node passes arithSlow or bitwiseSlow, its left and right operands as
+// fresh: trees of arithmetic of their own, whose results nothing else
+// takes, which a BigInt operator of the two may give back (bigRelease).
+// treePCMask is the pc itself. A function whose pc reaches treeFreshA has
+// no marks.
+const (
+	treeFreshA = 1 << 29
+	treeFreshB = 1 << 30
+	treePCMask = treeFreshA - 1
+)
 
 // bigDone is a result made in bigInPlace's room as a value: held in its
 // Value in the int64 range, the BigInt, its length the result's, if one was
@@ -95,7 +170,7 @@ func bigDone(b *BigInt, neg bool, mag []uint) Value {
 	if b == nil || len(mag) <= 64/bits.UintSize {
 		return bigOf(neg, mag)
 	}
-	b.hdr = uint(len(mag))
+	b.hdr = uint(len(mag)) | b.hdr&^(bigNegBit|bigLenMask)
 	if neg {
 		b.hdr |= bigNegBit
 	}
@@ -686,5 +761,5 @@ func wrapSeen(c *tctx, op bytecode.Op, a, b Value, pc int) {
 		return
 	}
 	_, ok := shortArith(op, a, b)
-	treeBigInt(c, pc, !ok)
+	treeBigInt(c, pc&treePCMask, !ok)
 }

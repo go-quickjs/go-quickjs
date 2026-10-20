@@ -5249,3 +5249,43 @@ all.push(String(xorshift(1000)), String(fnv("The quick brown fox jumps over the 
 return all.join("|");
 })()`, "add:103695:24271061|sub:85450:-1579539025|mul:96870:2099516221|muls:77625:-425678477|and:51849:1872110749|or:73961:-965443836|xor:112117:37501782|shl:90832:-2099144689|shls:74840:-466410159|shr:83129:-182323294|shrs:58314:-1512613231|div:68171:1904182134|64,12|64,12|64,NaN|TypeError|TypeError|SyntaxError|1|8|xyw|1363160026601443621|17580284887202820368")
 }
+
+// TestBigIntGivenBack pins the BigInts the tree tier gives back for its
+// arithmetic to make results in (bigRelease): an operand that is a tree
+// of arithmetic of its own, which the operator alone takes, and nothing
+// else -- not a local's value, nor a sum pushed to an array, passed to a
+// function, joined to a string, nor one an operator throws on -- among
+// products, sums, remainders, shifts and bitwise operators of numbers of
+// hundreds of bits that change size as they go. The answers' count,
+// length and hash are Node's.
+func TestBigIntGivenBack(t *testing.T) {
+	checkEval(t, `(function () {
+  var out = [];
+  function g(v) { out.push(String(v)); return v; }
+  function run(n) {
+    var a = (1n << 200n) + 12345n, b = (1n << 300n) - 1n, c = 7n ** 90n, t, u, keep = [];
+    for (var i = 0; i < n; i++) {
+      t = a * b;                       // stored: never given back
+      u = t + c;                       // t is a local's, not fresh
+      keep.push(a * b + c, u - t, t);  // fresh sums go to an array
+      keep.push((a * b) * (a * b) % c);
+      keep.push(((a * b) + g(a * c)) - (b * c));
+      keep.push((a * b) + (i & 1 ? b * b : c * c));
+      try { keep.push((a * b) / (c - c)); } catch (e) { keep.push(e.constructor.name); }
+      keep.push(((a << 100n) ^ (b >> 3n)) & (c | (a * 3n)));
+      keep.push(String((a * b) + c) + ":" + ((a * b) - c));
+      var p = 1n;
+      for (var k = 0; k < 20; k++) p = p * (a + BigInt(k)) % b;
+      keep.push(p, t, u);
+      a = a + b * 3n;
+      b = ((b * b) >> 300n) + 977n;
+      c = c * 5n + (a % 1000n);
+    }
+    return keep;
+  }
+  var r = run(30).join(",");
+  var h = 0;
+  for (var i = 0; i < r.length; i++) h = (h * 31 + r.charCodeAt(i)) | 0;
+  return out.length + " " + r.length + " " + h;
+})()`, "30 54386 -538156609")
+}

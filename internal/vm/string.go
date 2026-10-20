@@ -1155,24 +1155,34 @@ func (s *Symbol) String() string {
 
 // BigInt is an arbitrary-precision integer, on the heap in one allocation
 // that holds no pointer, which the collector never scans: a header word --
-// how many words of digits follow, and the sign -- then the digits, least
-// significant first, normalized. One in the int64 range is held in its
-// Value instead (shortBig), but for what Value.BigInt and NewBigInt make.
+// how many words of digits follow, how many there is room for on a 64-bit
+// machine, and the sign -- then the digits, least significant first,
+// normalized. One in the int64 range is held in its Value instead
+// (shortBig), but for what Value.BigInt and NewBigInt make.
 //
 // A BigInt is never changed once made: an operation writes its result
-// elsewhere, or in a BigInt it has just made (zzbigint.go's bigInPlace).
+// elsewhere, or in a BigInt it has just made (zzbigint.go's bigInPlace),
+// or one that nothing else has seen, an operand's the tree tier had just
+// made for the operation, which it has given back (bigRelease).
 type BigInt struct {
 	hdr uint
 }
 
-// bigNegBit is a BigInt's header's sign.
-const bigNegBit = uint(1) << (bits.UintSize - 1)
+const (
+	// bigNegBit is a BigInt's header's sign.
+	bigNegBit = uint(1) << (bits.UintSize - 1)
+	// bigLenMask is its length's bits, and on a 64-bit machine the bits
+	// from bigCapShift up to the sign its room's, in words, which a 32-bit
+	// one has no bits for.
+	bigLenMask  = 1<<31 - 1
+	bigCapShift = 31
+)
 
 // bigWordSize is a digit word's size in bytes.
 const bigWordSize = unsafe.Sizeof(uint(0))
 
 // digits is how many words of digits b has.
-func (b *BigInt) digits() int { return int(b.hdr &^ bigNegBit) }
+func (b *BigInt) digits() int { return int(b.hdr & bigLenMask) }
 
 // negative reports whether b is below zero.
 func (b *BigInt) negative() bool { return b.hdr&bigNegBit != 0 }
@@ -1212,6 +1222,9 @@ func newBigWords(n int, neg bool) *BigInt {
 	}
 	b := (*BigInt)(unsafe.Pointer(&ws[0]))
 	b.hdr = uint(n)
+	if bits.UintSize == 64 {
+		b.hdr |= uint(n) << bigCapShift
+	}
 	if neg && n > 0 {
 		b.hdr |= bigNegBit
 	}

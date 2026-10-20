@@ -684,6 +684,24 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 
 func (b *tbuilder) push(v tval) { b.stack = append(b.stack, tentry{v: v, slot: -1}) }
 
+// freshPC is pc marked with which of the operands x and y of an
+// arithmetic or bitwise node are fresh: trees of arithmetic of their own,
+// whose results the node alone takes, which a BigInt operator gives back
+// (bigRelease) -- but in a generator or an async function, whose trees
+// suspend and resume.
+func (b *tbuilder) freshPC(pc int, x, y tentry) int {
+	if b.fn.Generator || b.fn.Async || pc > treePCMask {
+		return pc
+	}
+	if x.arith != nil && x.v != nil && x.slot < 0 {
+		pc |= treeFreshA
+	}
+	if y.arith != nil && y.v != nil && y.slot < 0 {
+		pc |= treeFreshB
+	}
+	return pc
+}
+
 // pushArith pushes an arithmetic or bitwise node and what it is of.
 func (b *tbuilder) pushArith(v tval, a arithOf) {
 	b.stack = append(b.stack, tentry{v: v, slot: -1, arith: &a})
@@ -996,10 +1014,12 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		return 0, b.stmt(func(c *tctx) { c.cl.upvalues[k].set(v(c)) })
 	case bytecode.OpAdd, bytecode.OpSub, bytecode.OpMul, bytecode.OpDiv, bytecode.OpMod:
 		y, x := b.pop(), b.pop()
-		b.pushArith(arithEntries(in.Op, x, y, pc), arithOf{op: in.Op, x: x, y: y, pc: pc})
+		fpc := b.freshPC(pc, x, y)
+		b.pushArith(arithEntries(in.Op, x, y, fpc), arithOf{op: in.Op, x: x, y: y, pc: fpc})
 	case bytecode.OpBitAnd, bytecode.OpBitOr, bytecode.OpBitXor, bytecode.OpShl, bytecode.OpShr, bytecode.OpUShr:
 		y, x := b.pop(), b.pop()
-		b.pushArith(bitwiseNode(in.Op, x.tree(), y.tree(), pc), arithOf{op: in.Op, x: x, y: y, pc: pc})
+		fpc := b.freshPC(pc, x, y)
+		b.pushArith(bitwiseNode(in.Op, x.tree(), y.tree(), fpc), arithOf{op: in.Op, x: x, y: y, pc: fpc})
 	case bytecode.OpLt, bytecode.OpLe, bytecode.OpGt, bytecode.OpGe,
 		bytecode.OpEq, bytecode.OpNe, bytecode.OpStrictEq, bytecode.OpStrictNe:
 		y, x := b.pop(), b.pop()
@@ -1072,7 +1092,8 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		b.pushArith(arithEntries(bytecode.Op(in.B), x, y, pc), arithOf{op: bytecode.Op(in.B), x: x, y: y, pc: pc})
 	case bytecode.OpBinLocal:
 		x, y := b.pop(), localEntry(in.A)
-		b.pushArith(arithEntries(bytecode.Op(in.B), x, y, pc), arithOf{op: bytecode.Op(in.B), x: x, y: y, pc: pc})
+		fpc := b.freshPC(pc, x, y)
+		b.pushArith(arithEntries(bytecode.Op(in.B), x, y, fpc), arithOf{op: bytecode.Op(in.B), x: x, y: y, pc: fpc})
 	case bytecode.OpLocalBinImm:
 		x := localEntry(in.A & (1<<24 - 1))
 		if op := bytecode.Op(in.A >> 24); isBitwise(op) {
@@ -1601,7 +1622,7 @@ func toInt32(f float64) int32 {
 }
 
 // bitwiseSlow is a bitwise operator on what is not two numbers: as
-// arithSlow, the operator of two BigInts in the int64 range here, in a
+// arithSlow, at a pc that may mark its operands as fresh, the operator of two BigInts in the int64 range here, in a
 // function that calls nothing on the way, and the rest bitwiseOther's.
 func (c *tctx) bitwiseSlow(op bytecode.Op, a, b Value, pc int) Value {
 	if a.isInt64Big() && b.isInt64Big() {
@@ -1628,15 +1649,18 @@ func (c *tctx) bitwiseSlow(op bytecode.Op, a, b Value, pc int) Value {
 		if a.IsBigInt() && b.IsBigInt() && op != bytecode.OpUShr {
 			// One on the heap: bigBits's, without bitwiseOther's call or
 			// bitwise's on the way.
-			c.at(pc)
+			c.at(pc & treePCMask)
 			v, err := c.r.bigBits(op, a, b)
 			if err != nil {
 				c.throw(err)
 			}
+			if pc > treePCMask {
+				c.r.bigRelease(v, a, b, pc)
+			}
 			return v
 		}
 	}
-	return c.bitwiseOther(op, a, b, pc)
+	return c.bitwiseOther(op, a, b, pc&treePCMask)
 }
 
 // bitwiseOther is bitwiseSlow for what is not an operator of two BigInts
@@ -1767,7 +1791,8 @@ func bitwiseImmNode(op bytecode.Op, x tval, k int32, pc int) tval {
 	}
 }
 
-// arithSlow is an arithmetic operator on what is not two numbers. A sum,
+// arithSlow is an arithmetic operator on what is not two numbers, at pc,
+// which may mark its operands as fresh (treeFreshA, treeFreshB). A sum,
 // a difference, a product, a quotient or a remainder of two BigInts in the
 // int64 range is made here, by a function that calls nothing on the way, so that it keeps its
 // operands in registers; the rest is arithOther's.
@@ -1777,21 +1802,21 @@ func (c *tctx) arithSlow(op bytecode.Op, a, b Value, pc int) Value {
 		case bytecode.OpAdd:
 			if s := x + y; (s^x)&(s^y) >= 0 {
 				if jitBuilt {
-					treeBigInt(c, pc, false)
+					treeBigInt(c, pc&treePCMask, false)
 				}
 				return shortBig(s)
 			}
 		case bytecode.OpSub:
 			if s := x - y; (x^y)&(s^x) >= 0 {
 				if jitBuilt {
-					treeBigInt(c, pc, false)
+					treeBigInt(c, pc&treePCMask, false)
 				}
 				return shortBig(s)
 			}
 		case bytecode.OpMul:
 			if p, ok := mulInt64(x, y); ok {
 				if jitBuilt {
-					treeBigInt(c, pc, false)
+					treeBigInt(c, pc&treePCMask, false)
 				}
 				return shortBig(p)
 			}
@@ -1800,7 +1825,7 @@ func (c *tctx) arithSlow(op bytecode.Op, a, b Value, pc int) Value {
 			// the most negative value over -1 leaves the range.
 			if y != 0 && (x != math.MinInt64 || y != -1) {
 				if jitBuilt {
-					treeBigInt(c, pc, false)
+					treeBigInt(c, pc&treePCMask, false)
 				}
 				return shortBig(x / y)
 			}
@@ -1809,7 +1834,7 @@ func (c *tctx) arithSlow(op bytecode.Op, a, b Value, pc int) Value {
 			// for the most negative value over -1.
 			if y != 0 {
 				if jitBuilt {
-					treeBigInt(c, pc, false)
+					treeBigInt(c, pc&treePCMask, false)
 				}
 				return shortBig(x % y)
 			}
@@ -1819,18 +1844,21 @@ func (c *tctx) arithSlow(op bytecode.Op, a, b Value, pc int) Value {
 		if a.IsBigInt() && b.IsBigInt() {
 			// One on the heap: bigOp's, without arithOther's call on the
 			// way.
-			c.at(pc)
+			c.at(pc & treePCMask)
 			if jitBuilt {
-				treeBigInt(c, pc, true)
+				treeBigInt(c, pc&treePCMask, true)
 			}
 			v, err := c.r.bigOp(op, a, b)
 			if err != nil {
 				c.throw(err)
 			}
+			if pc > treePCMask {
+				c.r.bigRelease(v, a, b, pc)
+			}
 			return v
 		}
 	}
-	return c.arithOther(op, a, b, pc)
+	return c.arithOther(op, a, b, pc&treePCMask)
 }
 
 // arithOther is arithSlow for what it does not make itself.

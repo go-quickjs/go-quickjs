@@ -301,6 +301,9 @@ type Runtime struct {
 	// tier's intrinsic): at the end, so that no field the interpreter reads
 	// moves.
 	randomFn *Object
+	// bigFree is the BigInts the tree tier has given back, for bigInPlace
+	// to make results in (bigRelease); nil until one is.
+	bigFree *bigFreeList
 	// jitFields is the optional native tier's state, empty in builds
 	// without it. It comes after everything the interpreter reads, so that
 	// a build with the tier moves none of their offsets, and before the last
