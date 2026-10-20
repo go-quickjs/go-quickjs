@@ -94,6 +94,61 @@ func TestJITKeyedWrites(t *testing.T) {
 	}
 }
 
+// A site whose stores Go makes, having met an ordinary object's, stores an
+// array's dense elements natively still (mir's keyedStore): over numbers,
+// strings, objects and holes, which Go fills, past the end, which Go
+// appends, and while the collector marks, when Go stores them all. Each
+// answer is Node's and the interpreter's, and the array's stores in its
+// dense elements call no Go.
+func TestJITKeyedWritesToArrays(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const setup = `
+		function put(o, n, v) { for (let i = 0; i < n; i++) o[i] = v === undefined ? i : v; return o }
+		function show(o) { return JSON.stringify(o) + ':' + Object.keys(o).length }
+		function mixed(n) { let a, o; for (let j = 0; j < n; j++) { o = put({}, 3, 'o'); a = put([1, , 3, 4], 6, j % 2 ? { j } : 's' + j) } return show(o) + '|' + show(a) }
+		var arr = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+		function dense() { put(arr, 10, undefined); return arr.join() }
+	`
+	for _, marking := range []bool{false, true} {
+		var flag *uint8
+		if marking {
+			flag = jitMarkingForTest(t)
+		}
+		rounds := []string{}
+		for range 6 {
+			rounds = append(rounds, `mixed(30)`, `dense()`)
+		}
+		r := jitAgreesForTest(t, setup, rounds...)
+		for _, round := range [][2]string{
+			// Node's (v26.10.0) answers.
+			{`mixed(30)`, `{"0":"o","1":"o","2":"o"}:3|[{"j":29},{"j":29},{"j":29},{"j":29},{"j":29},{"j":29}]:6`},
+			{`dense()`, `0,1,2,3,4,5,6,7,8,9`},
+		} {
+			v, err := r.Run(compileForTest(t, "''+("+round[0]+")"))
+			if err != nil {
+				t.Fatalf("%s: %v", round[0], err)
+			}
+			if got := v.String().Go(); got != round[1] {
+				t.Errorf("marking %v: %s = %s, want %s", marking, round[0], got, round[1])
+			}
+		}
+		if e := jitNativeForTest(t, r, "put"); len(e.keyedWrites) == 0 {
+			t.Fatalf("marking %v: put's stores are not Go's", marking)
+		}
+		_, calls := jitCountGoCalls(t, r, `put(arr, 10, 7)`)
+		if marking {
+			*flag = 0
+			if calls < 10 {
+				t.Errorf("while marking, put called Go %d times for 10 stores", calls)
+			}
+		} else if calls != 0 {
+			t.Errorf("put called Go %d times for an array's dense elements", calls)
+		}
+	}
+}
+
 // jitCountGoCalls runs src in r and counts the calls of Go it makes
 // (jitGoCallWork), the collector held off meanwhile: while it marks,
 // native code's stores of pointers are Go's (jitMarkingForTest), which a

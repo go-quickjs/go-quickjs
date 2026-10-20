@@ -3429,6 +3429,17 @@ func (c *a64Compiler) pointerWord(x *ssa.Value, w arm64.Reg) {
 
 // goCall calls Go, as amd64's does.
 func (c *a64Compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(arm64.Cond)) {
+	if site.Go == ssa.GoKeyedWrite && len(v.Args) == 3 && c.enc.ValueSize == 16 && c.enc.WriteBarrier != 0 {
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		c.keyedStore(v, slow)
+		c.a.B(join)
+		c.a.Bind(slow)
+		c.goCallOp(v, goOpWord(site), false)
+		c.a.Bind(join)
+		c.a.Load(a64A, a64Ctx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
+		c.setG(v, a64A)
+		return
+	}
 	if lengthWrites(site, len(v.Args), c.enc) {
 		slow, join := c.a.NewLabel(), c.a.NewLabel()
 		c.lengthWrite(v, slow)
@@ -3804,6 +3815,63 @@ func (c *a64Compiler) iterStep(v *ssa.Value, slow arm64.Label) {
 	c.a.Load(a64C, a64D, c.enc.IterIdx)
 	c.a.AddImm(a64C, a64C, 1, true)
 	c.a.Store(a64D, c.enc.IterIdx, a64C)
+}
+
+// keyedStore is amd64's: an array's dense element stored natively at a
+// site whose stores Go makes for other receivers. It uses A, B, C, D, F0,
+// F1 and F2, and no other.
+func (c *a64Compiler) keyedStore(v *ssa.Value, slow arm64.Label) {
+	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+	recv, key, x := v.Args[0], v.Args[1], v.Args[2]
+	w := c.gpr(x, a64A)
+	c.a.FMovToF(a64F0, w)
+	c.pointerWord(x, w)
+	c.a.FMovToF(a64F1, a64B)
+	if w := c.gpr(key, a64A); w != a64A {
+		c.a.MovRR(a64A, w)
+	}
+	c.movImm(a64B, abi.NumberLimit)
+	c.a.Cmp(a64A, a64B, true)
+	fail(arm64.HS)
+	c.a.FMovToF(a64F2, a64A)
+	c.a.Fcvtzs(a64B, a64F2)
+	c.a.Scvtf(a64F2, a64B, true)
+	c.a.FMovFromF(a64C, a64F2)
+	c.a.Cmp(a64C, a64A, true)
+	fail(arm64.NE)
+	c.a.FMovToF(a64F2, a64B)
+	w = c.gpr(recv, a64A)
+	c.movImm(a64C, c.enc.Object)
+	c.a.Cmp(w, a64C, true)
+	fail(arm64.NE)
+	c.pointerWord(recv, w)
+	c.a.Cbz(a64B, slow, true)
+	c.a.LoadU8(a64C, a64B, c.enc.ObjectClass)
+	c.a.CmpImm(a64C, int64(c.enc.ClassArray), false)
+	fail(arm64.NE)
+	c.movImm(a64C, c.enc.WriteBarrier)
+	c.a.LoadU8(a64C, a64C, 0)
+	c.a.Cbnz(a64C, slow, false)
+	c.a.FMovFromF(a64A, a64F2)
+	c.a.Load(a64C, a64B, c.enc.ObjectElems+8)
+	c.a.Cmp(a64A, a64C, true)
+	fail(arm64.HS)
+	c.a.Load(a64B, a64B, c.enc.ObjectElems)
+	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
+	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	c.a.Load(a64C, a64A, c.enc.NumOffset)
+	c.movImm(a64D, c.enc.Uninitialized)
+	c.a.Cmp(a64C, a64D, true)
+	fail(arm64.EQ)
+	c.a.FMovFromF(a64C, a64F0)
+	c.a.Store(a64A, c.enc.NumOffset, a64C)
+	c.a.FMovFromF(a64C, a64F1)
+	c.a.Store(a64A, c.enc.RefOffset, a64C)
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	c.movImm(a64C, c.enc.Undefined)
+	c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64C)
+	c.movImm(a64C, 0)
+	c.a.Store(a64Ctx, keep+c.enc.RefOffset, a64C)
 }
 
 // lengthWrite is amd64's: an array's length written natively where it

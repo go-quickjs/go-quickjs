@@ -3237,8 +3237,14 @@ func jitHostCall(ctx *abi.Context) bool {
 		}
 		return ok
 	case ssa.GoKeyedWrite:
-		// An element's write, of any receiver, by any key (jitKeyedWrite).
-		return r.jitKeyedWrite(jitGoArg(ctx, 0), jitGoArg(ctx, 1), jitGoArg(ctx, 2), true)
+		// An element's write, of any receiver, by any key (jitKeyedWrite):
+		// undefined, the call's result, which nothing reads, as native
+		// code's store writes it (mir's keyedStore).
+		if !r.jitKeyedWrite(jitGoArg(ctx, 0), jitGoArg(ctx, 1), jitGoArg(ctx, 2), true) {
+			return false
+		}
+		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = Undefined
+		return true
 	case ssa.GoIndex:
 		v, ok := r.jitKeyedRead(jitGoArg(ctx, 0), jitGoArg(ctx, 1))
 		if ok {

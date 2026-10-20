@@ -1333,6 +1333,19 @@ func (c *compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(amd64.Con
 		c.setG(v, scratchA)
 		return
 	}
+	if site.Go == ssa.GoKeyedWrite && len(v.Args) == 3 && c.enc.ValueSize == 16 && c.enc.WriteBarrier != 0 {
+		// An array's element in its dense elements natively (keyedStore),
+		// any other store Go's.
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		c.keyedStore(v, slow)
+		c.a.Jmp(join)
+		c.a.Bind(slow)
+		c.goCallOp(v, goOpWord(site), guard, false)
+		c.a.Bind(join)
+		c.a.Load(scratchA, regCtx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
+		c.setG(v, scratchA)
+		return
+	}
 	if lengthWrites(site, len(v.Args), c.enc) {
 		// An array's length, natively where it shortens a dense array or
 		// leaves it as it is (lengthWrite), by Go otherwise.
@@ -1949,6 +1962,69 @@ func (c *compiler) lengthWrite(v *ssa.Value, slow amd64.Label) {
 	c.a.OpImm(amd64.Add, scratchA, c.enc.ValueSize, true)
 	c.a.Jmp(loop)
 	c.a.Bind(cleared)
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	c.storeImm(regCtx, keep+c.enc.NumOffset, c.enc.Undefined, scratchA)
+	c.storeImm(regCtx, keep+c.enc.RefOffset, 0, scratchA)
+}
+
+// keyedStore makes call v, an element's write Go makes from native code
+// (ssa.GoKeyedWrite), where the receiver is an array and the key one of
+// its dense elements', no hole, while the collector does not mark: the
+// value's words stored over the element's, as native code stores an
+// array's element, so that a site whose stores Go makes for the objects it
+// meets still stores to arrays as it had. Its result, undefined, is in the
+// call's keep cell. Anything else goes to slow, where Go stores it. It
+// uses every scratch register and every scratch XMM register, and no other.
+func (c *compiler) keyedStore(v *ssa.Value, slow amd64.Label) {
+	fail := func(cond amd64.Cond) { c.a.Jcc(cond, slow) }
+	recv, key, x := v.Args[0], v.Args[1], v.Args[2]
+	// The value's words, in xScratch0 and xScratch1.
+	w := c.gpr(x, scratchA)
+	c.a.MovQToX(xScratch0, w)
+	c.pointerWord(x, w)
+	c.a.MovQToX(xScratch1, scratchB)
+	// The key, a number whose truncation is itself, in xScratch2.
+	if w := c.gpr(key, scratchA); w != scratchA {
+		c.a.MovRR(scratchA, w)
+	}
+	c.cmpWord(scratchA, abi.NumberLimit)
+	fail(amd64.CondAE)
+	c.a.MovQToX(xScratch2, scratchA)
+	c.a.Cvttsd2si(scratchB, xScratch2)
+	c.a.Cvtsi2sd(xScratch2, scratchB, true)
+	c.a.MovQFromX(scratchC, xScratch2)
+	c.a.Op(amd64.Cmp, scratchC, scratchA, true)
+	fail(amd64.CondNE)
+	c.a.MovQToX(xScratch2, scratchB)
+	// The receiver, an array, the collector not marking.
+	w = c.gpr(recv, scratchA)
+	c.cmpWord(w, c.enc.Object)
+	fail(amd64.CondNE)
+	c.pointerWord(recv, w)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	fail(amd64.CondE)
+	c.a.LoadU8(scratchC, scratchB, c.enc.ObjectClass)
+	c.a.OpImm(amd64.Cmp, scratchC, int32(c.enc.ClassArray), false)
+	fail(amd64.CondNE)
+	c.movImm(scratchC, c.enc.WriteBarrier)
+	c.a.LoadU8(scratchC, scratchC, 0)
+	c.a.Op(amd64.Test, scratchC, scratchC, false)
+	fail(amd64.CondNE)
+	// The element, within the dense ones and no hole: a writable data
+	// property's.
+	c.a.MovQFromX(scratchA, xScratch2)
+	c.a.CmpMem(scratchA, scratchB, c.enc.ObjectElems+8, true)
+	fail(amd64.CondAE)
+	c.a.Load(scratchB, scratchB, c.enc.ObjectElems)
+	c.a.ShiftImm(amd64.Shl, scratchA, 4, true)
+	c.a.Op(amd64.Add, scratchA, scratchB, true)
+	c.a.Load(scratchC, scratchA, c.enc.NumOffset)
+	c.cmpWord(scratchC, c.enc.Uninitialized)
+	fail(amd64.CondE)
+	c.a.MovQFromX(scratchC, xScratch0)
+	c.a.Store(scratchA, c.enc.NumOffset, scratchC)
+	c.a.MovQFromX(scratchC, xScratch1)
+	c.a.Store(scratchA, c.enc.RefOffset, scratchC)
 	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
 	c.storeImm(regCtx, keep+c.enc.NumOffset, c.enc.Undefined, scratchA)
 	c.storeImm(regCtx, keep+c.enc.RefOffset, 0, scratchA)
