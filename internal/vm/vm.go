@@ -4311,8 +4311,23 @@ func (r *Runtime) bigBitwise(op bytecode.Op, a, b Value) (Value, bool, error) {
 		}
 	}
 
-	x, y := &na.BigInt().V, &nb.BigInt().V
-	out := &BigInt{}
+	// The operands as they are, one held in its value in scratch (bigArg),
+	// and the result with room for its digits, as bigArith makes one:
+	// a BigInt each made for the other had cost an allocation an operation.
+	x, y := &r.bigArg(na, 0).V, &r.bigArg(nb, 1).V
+	var out *BigInt
+	switch words := max(len(x.Bits()), len(y.Bits())) + 1; op {
+	case bytecode.OpBitAnd, bytecode.OpBitOr, bytecode.OpBitXor:
+		out = newBigResultFor(words)
+	case bytecode.OpShl:
+		if y.IsInt64() && y.Int64() >= 0 && y.Int64() < 16*bits.UintSize {
+			out = newBigResultFor(len(x.Bits()) + int(y.Int64())/bits.UintSize + 1)
+			break
+		}
+		out = &BigInt{}
+	default:
+		out = newBigResultFor(len(x.Bits()) + 1)
+	}
 	switch op {
 	case bytecode.OpBitAnd:
 		out.V.And(x, y)
