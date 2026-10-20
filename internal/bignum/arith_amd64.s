@@ -222,3 +222,66 @@ mrloop:
 mrdone:
 	MOVQ BX, c+56(FP)
 	RET
+
+// func mulSubRow(z, x []uint, d uint) (c uint)
+TEXT ·mulSubRow(SB), NOSPLIT, $0-64
+	MOVQ z_base+0(FP), DI
+	MOVQ x_base+24(FP), SI
+	MOVQ x_len+32(FP), CX
+	MOVQ d+48(FP), R8
+	XORQ BX, BX
+	XORQ R9, R9
+	MOVQ CX, R10
+	SHRQ $2, R10
+	ANDQ $3, CX
+	TESTQ R10, R10
+	JZ   msone
+msfour:
+	MOVQ 0(SI)(R9*8), AX
+	MULQ R8
+	ADDQ BX, AX
+	ADCQ $0, DX
+	SUBQ AX, 0(DI)(R9*8)
+	ADCQ $0, DX
+	MOVQ DX, BX
+	MOVQ 8(SI)(R9*8), AX
+	MULQ R8
+	ADDQ BX, AX
+	ADCQ $0, DX
+	SUBQ AX, 8(DI)(R9*8)
+	ADCQ $0, DX
+	MOVQ DX, BX
+	MOVQ 16(SI)(R9*8), AX
+	MULQ R8
+	ADDQ BX, AX
+	ADCQ $0, DX
+	SUBQ AX, 16(DI)(R9*8)
+	ADCQ $0, DX
+	MOVQ DX, BX
+	MOVQ 24(SI)(R9*8), AX
+	MULQ R8
+	ADDQ BX, AX
+	ADCQ $0, DX
+	SUBQ AX, 24(DI)(R9*8)
+	ADCQ $0, DX
+	MOVQ DX, BX
+	ADDQ $4, R9
+	DECQ R10
+	JNZ  msfour
+msone:
+	TESTQ CX, CX
+	JZ   msdone
+msloop:
+	MOVQ 0(SI)(R9*8), AX
+	MULQ R8
+	ADDQ BX, AX
+	ADCQ $0, DX
+	SUBQ AX, 0(DI)(R9*8)
+	ADCQ $0, DX
+	MOVQ DX, BX
+	INCQ R9
+	DECQ CX
+	JNZ  msloop
+msdone:
+	MOVQ BX, c+56(FP)
+	RET

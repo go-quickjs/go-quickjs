@@ -48,3 +48,18 @@ func mulRow(z, x []uint, d uint) uint {
 	}
 	return c
 }
+
+// mulSubRow subtracts x*d from z, of len(x) words, and returns the word to
+// subtract from the one above: the product's top and the borrow.
+func mulSubRow(z, x []uint, d uint) uint {
+	var c uint
+	for i, xi := range x {
+		hi, lo := bits.Mul(xi, d)
+		var k uint
+		lo, k = bits.Add(lo, c, 0)
+		hi += k
+		z[i], k = bits.Sub(z[i], lo, 0)
+		c = hi + k
+	}
+	return c
+}

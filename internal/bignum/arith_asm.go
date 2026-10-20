@@ -25,3 +25,9 @@ func mulAddRow(z, x []uint, d uint) (c uint)
 //
 //go:noescape
 func mulRow(z, x []uint, d uint) (c uint)
+
+// mulSubRow subtracts x*d from z, of len(x) words, and returns the word to
+// subtract from the one above: the product's top and the borrow.
+//
+//go:noescape
+func mulSubRow(z, x []uint, d uint) (c uint)

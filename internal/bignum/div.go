@@ -121,17 +121,16 @@ func DivMod(q, r, x, y []uint) ([]uint, []uint) {
 		return qq, r
 	}
 	n, m := len(y), len(x)-len(y)
-	// Scratch for the shifted operands and a product: on the stack while
-	// they are small.
+	// Scratch for the shifted operands: on the stack while they are small.
 	var buf [96]uint
-	need := (m + n + 1) + n + (n + 1)
+	need := (m + n + 1) + n
 	var s []uint
 	if need <= len(buf) {
 		s = buf[:need]
 	} else {
 		s = make([]uint, need)
 	}
-	u, v, qv := s[:m+n+1], s[m+n+1:m+2*n+1], s[m+2*n+1:]
+	u, v := s[:m+n+1], s[m+n+1:m+2*n+1]
 	// Normalized: the divisor's top bit set, the dividend shifted alike, a
 	// word more for its top.
 	shift := uint(bits.LeadingZeros(y[n-1]))
@@ -161,8 +160,10 @@ func DivMod(q, r, x, y []uint) ([]uint, []uint) {
 			}
 		}
 		// u[j:j+n+1] -= q̂·v, added back once if that went below zero.
-		qv[n] = mulRow(qv[:n], v, qhat)
-		if subVV(u[j:j+n+1], u[j:j+n+1], qv) != 0 {
+		c := mulSubRow(u[j:j+n], v, qhat)
+		top := u[j+n]
+		u[j+n] = top - c
+		if top < c {
 			u[j+n] += addVV(u[j:j+n], u[j:j+n], v)
 			qhat--
 		}
@@ -188,17 +189,16 @@ func shlInto(z, x []uint, s uint) uint {
 		copy(z, x)
 		return 0
 	}
-	var out uint
-	for i := len(x) - 1; i >= 0; i-- {
-		w := x[i]
-		if i == len(x)-1 {
-			out = w >> (W - s)
-		}
-		z[i] = w << s
-		if i > 0 {
-			z[i] |= x[i-1] >> (W - s)
-		}
+	n := len(x)
+	if n == 0 {
+		return 0
 	}
+	z = z[:n]
+	out := x[n-1] >> (W - s)
+	for i := n - 1; i > 0; i-- {
+		z[i] = x[i]<<s | x[i-1]>>(W-s)
+	}
+	z[0] = x[0] << s
 	return out
 }
 
@@ -208,10 +208,13 @@ func shrInto(z, x []uint, s uint) {
 		copy(z, x)
 		return
 	}
-	for i := range x {
-		z[i] = x[i] >> s
-		if i+1 < len(x) {
-			z[i] |= x[i+1] << (W - s)
-		}
+	n := len(x)
+	if n == 0 {
+		return
 	}
+	z = z[:n]
+	for i := 0; i < n-1; i++ {
+		z[i] = x[i]>>s | x[i+1]<<(W-s)
+	}
+	z[n-1] = x[n-1] >> s
 }

@@ -259,3 +259,24 @@ func FuzzDivMod(f *testing.F) {
 		check(t, "mul", Mul(make([]uint, MulRoom(len(x), len(y))), x, y), new(big.Int).Mul(bx, by))
 	})
 }
+
+// TestMulSubRow pins the division's kernel: z - x*d, its low len(x) words
+// written to z and the word to subtract from the one above returned, of
+// words that carry and borrow through, against math/big.
+func TestMulSubRow(t *testing.T) {
+	r := rand.New(rand.NewPCG(7, 9))
+	for _, n := range sizes {
+		for it := 0; it < 200; it++ {
+			x, z := randNat(r, n), randNat(r, n)
+			d := []uint{^uint(0), 1, 1 << (W - 1), uint(r.Uint64())}[it%4]
+			z0 := toBig(z)
+			c := mulSubRow(z, x, d)
+			// z0 - x*d == z - c*2^(W*n)
+			lhs := new(big.Int).Sub(z0, new(big.Int).Mul(toBig(x), toBig([]uint{d})))
+			rhs := new(big.Int).Sub(toBig(z), new(big.Int).Lsh(toBig([]uint{c}), uint(W*n)))
+			if lhs.Cmp(rhs) != 0 {
+				t.Fatalf("n=%d: z - x*d = %v, got z %v and %v over", n, lhs, toBig(z), c)
+			}
+		}
+	}
+}

@@ -90,3 +90,28 @@ mrloop:
 mrdone:
 	MOVD R4, c+56(FP)
 	RET
+
+// func mulSubRow(z, x []uint, d uint) (c uint)
+TEXT ·mulSubRow(SB), NOSPLIT, $0-64
+	MOVD z_base+0(FP), R1
+	MOVD x_base+24(FP), R2
+	MOVD x_len+32(FP), R0
+	MOVD d+48(FP), R3
+	MOVD ZR, R4
+msloop:
+	CBZ    R0, msdone
+	MOVD.P 8(R2), R5
+	MUL    R3, R5, R6
+	UMULH  R3, R5, R7
+	ADDS   R4, R6, R6
+	ADC    ZR, R7, R7
+	MOVD   (R1), R8
+	SUBS   R6, R8, R8
+	CSET   LO, R9
+	ADD    R9, R7, R4
+	MOVD.P R8, 8(R1)
+	SUB    $1, R0
+	B      msloop
+msdone:
+	MOVD R4, c+56(FP)
+	RET
