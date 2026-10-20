@@ -2522,11 +2522,14 @@ func (r *Runtime) jitCallAt(in bytecode.Instr, sp int) (Value, int, error) {
 	}
 	v, err := r.callDirect(callee, this, args)
 	r.jitInvokedFrameless(cl, ce, spends)
+	r.jitLearnedCall(cl, ce)
 	return v, sp, err
 }
 
 // jitInvalidCallee is the entry of the function callee calls, and its
-// closure, if its code is invalid (jitInvalidate); or nil.
+// closure, if its code is invalid (jitInvalidate), or due to be compiled
+// again for what it learned, of a function Go does not enter
+// (jitLearnedCall); or nil.
 func (r *Runtime) jitInvalidCallee(callee Value) (*jitEntry, *closure) {
 	if !callee.IsObject() {
 		return nil, nil
@@ -2535,10 +2538,29 @@ func (r *Runtime) jitInvalidCallee(callee Value) (*jitEntry, *closure) {
 	if fd == nil || fd.native != nil || fd.closure == nil {
 		return nil, nil
 	}
-	if e := r.jitEntryOf(fd.closure); e != nil && e.invalid {
+	if e := r.jitEntryOf(fd.closure); e != nil && (e.invalid || fd.closure.jitRefused && e.ssa != nil && e.reoptPending()) {
 		return e, fd.closure
 	}
 	return nil, nil
+}
+
+// jitLearnedCall counts a call Go made of cl's function, e's -- for native
+// code (jitCallAt), or for a native call that left for Go to run its
+// callee (jitEnterCallee) -- whose code learned what to be compiled again
+// for, the function one Go does not enter (jitRefused), whose only
+// invocations the existing tiers run are such calls: an invocation of its
+// budget (slowCalls, jitLearnedSpent), and the code compiled again once
+// it is spent. Uncounted, a callee native callers had stopped calling --
+// its code, compiled before it ran, leaving at each call -- learned at
+// those exits what to compile for, and was never compiled for it, every
+// call of it Go's from then on: PrivateCounter's #get, each of
+// microbench_extra's private_method's calls.
+func (r *Runtime) jitLearnedCall(cl *closure, e *jitEntry) {
+	if e == nil || e.invalid || e.ssa == nil || !cl.jitRefused || !e.reoptPending() {
+		return
+	}
+	e.slowCalls++
+	r.jitRecompileLearned(cl, e)
 }
 
 // jitInvokedFrameless spends an invocation of the budget of e's invalid

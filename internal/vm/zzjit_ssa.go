@@ -9318,6 +9318,8 @@ func (r *Runtime) jitEnterCallee(f *frame, e *jitEntry, ctx int) (Value, error) 
 		// once was never compiled again, each call of it Go's from then on.
 		r.jitTierUp(f.cl, e, int64(len(f.cl.fn.Code)))
 	}
+	// So too code that learned what to be compiled again for.
+	r.jitLearnedCall(f.cl, e)
 	// One with no code at all -- the cache dropped it, which native
 	// callers' code was compiled to call (jitLink) -- is compiled for them
 	// again, as it was when their code was compiled (NativeCalls), and
