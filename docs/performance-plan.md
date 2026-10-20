@@ -1064,8 +1064,17 @@ The rounds that followed, each measured as above. The commit says more.
     count of exits and calls of Go by site, 2026-10-19). Its cost was
     calls of Go: parseInt of numbers, 120,000 of its 150,000 calls of
     functions from native code in three runs, made natively in 3ca9eb9
-    (Box2D -11%, every run below every base run). What is left of them is
-    GoMath, Math.sin and Math.cos, 115,000 calls of Go in three runs.
+    (Box2D -11%, every run below every base run). Then its constructors,
+    function V() { V.b2Vec2.apply(this, arguments); this.constructor ===
+    V && this.b2Vec2.apply(this, arguments) }, each construction made by
+    Go and the tree tier: inlined in 9b840fc (bytecode's
+    ForwardsArguments), each forward the call of its target, the frame
+    keeping the construction's arguments for an exit (InlineState's
+    Args), a known closure's captured bindings read natively, a shared
+    initializer's deep additions compiled for: Box2D alone -9.5% and
+    -6.5% at two code offsets, Octane -1.8%. What is left of its calls of
+    Go is GoMath, Math.sin and Math.cos, 115,000 in three runs, about 1%
+    of a run at 18 ns a call.
     Gameboy's alphabet.indexOf(data.charAt(i)), 85,000 calls of the
     built-in, and every string's and array's indexOf, lastIndexOf and
     includes, are calls of Go of their own (0e7ed76, GoIndexOf), the
