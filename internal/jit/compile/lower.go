@@ -558,6 +558,20 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			// cursors of the loops it leaves: Go's, as the interpreter
 			// closes them (closeIteratorsReturning).
 			p.Code[pc] = ir.Instruction{Op: ir.Host}
+		case m.ssa && in.Op == bytecode.OpThrow && chains != nil && chains[pc] != 0 &&
+			!table[chains[pc]-1].Finally && int32(maps[pc].Depth-1) == table[chains[pc]-1].Depth:
+			// A throw a catch clause of the function catches, its value the
+			// one operand above the handler's depth: the frame is already as
+			// the interpreter's unwinding leaves it -- the stack at the
+			// handler's depth, the value pushed, the handler dropped (its
+			// chain at the handler, the outer one) -- so it is a jump there,
+			// as the tree tier's throwToHandler makes it, no exception made.
+			// Each had left native code for Go to throw, which snapshot the
+			// frames for an uncaught one's stack, five times the
+			// interpreter's time. A finally clause, which takes a completion
+			// record, and a throw with operands beneath its value, which may
+			// be loops' cursors to close, Go still throws.
+			p.Code[pc] = ir.Instruction{Op: ir.Jump, Target: int(table[chains[pc]-1].PC)}
 		default:
 			p.Code[pc] = lower(fn, in, p.Locals+maps[pc].Depth, p.This, codes[pc])
 		}
