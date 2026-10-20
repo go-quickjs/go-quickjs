@@ -464,6 +464,69 @@ func (b *builder) forEachCall(blk *Block, pc int, fp forEachPlan) {
 	}
 }
 
+// ParseIntFeedback is Feedback that knows a plain call at a PC of one
+// argument calls the realm's parseInt, at the address it gives, with a
+// number: native code makes it parseInt of a number, as V8's JSCallReducer
+// reduces it (parseIntCall).
+type ParseIntFeedback interface {
+	ParseInt(pc int) (fn uintptr, ok bool)
+}
+
+// parseIntAt is the realm's parseInt the call at pc of the root, one Go
+// makes (a GoCall site) of one argument, calls (ParseIntFeedback).
+func (b *builder) parseIntAt(pc int) (uintptr, bool) {
+	if b.fb == nil || b.cur != b.root || b.p.Code[pc].Op != ir.Host || pc+1 >= len(b.p.Code) || !reachable(b.p, pc+1) || b.fb.Generic(pc) {
+		return 0, false
+	}
+	calls := b.calls[pc]
+	if len(calls) != 1 || calls[0].Go != GoCall || calls[0].Method || calls[0].New || calls[0].Argc != 1 ||
+		b.p.Maps[pc].Depth < 2 || b.p.Maps[pc+1].Depth != b.p.Maps[pc].Depth-1 {
+		return 0, false
+	}
+	f, ok := b.fb.(ParseIntFeedback)
+	if !ok {
+		return 0, false
+	}
+	return f.ParseInt(pc)
+}
+
+// parseIntCall makes parseInt(x), the call at pc of the realm's parseInt at
+// fn, of a number, as V8's JSCallReducer reduces it: its integer part,
+// where ToString writes the number in decimal with no exponent -- its
+// magnitude below 1e21, and 1 or more, or 0, or at least 1e-6 where it is
+// positive -- the integer part of a zero or of a fraction +0, as the
+// string "0.5" or "0" parses. Any other number -- NaN, an infinity, one
+// of an exponent, one in (-1, 0), which parses as -0 -- and any other
+// argument or function, are Go's call.
+func (b *builder) parseIntCall(blk *Block, pc int, fn uintptr, guard func(Op, Type, ir.ExitKind, ...*Value) *Value, boxF func(*Value) *Value) {
+	f := b.f
+	sp := b.cur.base + b.p.Locals + b.p.Maps[pc].Depth
+	object := guard(OpObjectOf, Ptr, ir.HostExit, b.read(sp-2, blk))
+	same := guard(OpSameObject, None, ir.HostExit, object)
+	same.Const = ir.Value{Bits: uint64(fn)}
+	x := guard(OpUnboxF64, Float64, ir.HostExit, b.read(sp-1, blk))
+	constant := func(c float64) *Value {
+		v := f.newValue(blk, OpConstF64, Float64)
+		v.Const = ir.Float(c)
+		return v
+	}
+	cmp := func(op ir.Operator, l, r *Value) *Value {
+		v := f.newValue(blk, OpCmpF64, Bool, l, r)
+		v.Aux = int(op)
+		return v
+	}
+	number := func(test *Value) *Value { return f.newValue(blk, OpBoolToF64, Float64, test) }
+	a := f.newValue(blk, OpAbsF64, Float64, x)
+	guard(OpCheckTrue, None, ir.HostExit, f.newValue(blk, OpBoxBool, Tagged, cmp(ir.Lt, a, constant(1e21))))
+	some := f.newValue(blk, OpMaxF64, Float64, number(cmp(ir.Ge, a, constant(1))),
+		f.newValue(blk, OpMaxF64, Float64, number(cmp(ir.Eq, x, constant(0))), number(cmp(ir.Ge, x, constant(1e-6)))))
+	guard(OpCheckTrue, None, ir.HostExit, f.newValue(blk, OpBoxBool, Tagged, cmp(ir.Gt, some, constant(0))))
+	// The integer part, a zero's +0: the only number left whose integer
+	// part is -0 is -0 itself.
+	r := f.newValue(blk, OpAddF64, Float64, f.newValue(blk, OpTruncF64, Float64, x), constant(0))
+	b.assign(b.cur.base+b.p.Locals+b.p.Maps[pc+1].Depth-1, blk, boxF(r))
+}
+
 // SubstringFeedback is Feedback that knows a method call at a PC calls
 // String.prototype.substring, slice, substr or charAt, the realm's, at the
 // address it gives, and which (OpSubstringChar's Aux): s.substring(i, j),
@@ -4348,6 +4411,10 @@ func (b *builder) instruction(blk *Block, pc int) {
 		}
 		if fp, ok := b.forEaches[pc]; ok && in.Op == ir.Host && b.cur == b.root {
 			b.forEachCall(blk, pc, fp)
+			break
+		}
+		if fn, ok := b.parseIntAt(pc); ok && in.Op == ir.Host {
+			b.parseIntCall(blk, pc, fn, guard, boxF)
 			break
 		}
 		if fn, kind, ok := b.substring(pc); ok && in.Op == ir.Host {

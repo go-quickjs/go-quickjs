@@ -168,6 +168,9 @@ type jitRealmFields struct {
 	// calls (abi.LoopTyped): all but map and filter, whose result is a
 	// typed array its species makes.
 	jitLoops, jitTypedLoops [abi.LoopKinds]*Object
+	// jitParseInt is the global parseInt, Number.parseInt too, whose call
+	// of a number native code makes itself (ssa.ParseIntFeedback).
+	jitParseInt *Object
 }
 
 // jitLoopNames are the methods of jitLoops, by kind.
@@ -196,6 +199,10 @@ func (r *Runtime) recordJITSubstrings() {
 		return Undefined
 	}
 	r.jitSubstring, r.jitSlice, r.jitSubstr, r.jitCharAt = own("substring"), own("slice"), own("substr"), own("charAt")
+	r.jitParseInt = nil
+	if m := r.global.getOwn(r.atoms.intern("parseInt")); m.ok() && m.value().IsObject() {
+		r.jitParseInt = m.value().Object()
+	}
 	for kind, name := range jitLoopNames {
 		r.jitLoops[kind], r.jitTypedLoops[kind] = nil, nil
 		if m := r.proto.array.getOwn(r.atoms.intern(name)); name != "" && m.ok() && m.value().IsObject() {

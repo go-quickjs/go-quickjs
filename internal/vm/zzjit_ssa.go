@@ -2348,11 +2348,11 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 			// Another object of a function the call checks by its code.
 			continue
 		}
-		if in.cl == nil && (in.charCode || in.fromChar || in.substring || in.forEach) {
-			// String.prototype.charCodeAt, String.fromCharCode, a substring
-			// or a forEach, which the code makes itself (CharCode,
-			// FromCharCode, Substring, ForEach) where it can, and Go
-			// otherwise.
+		if in.cl == nil && (in.charCode || in.fromChar || in.substring || in.forEach || in.parseInt) {
+			// String.prototype.charCodeAt, String.fromCharCode, a substring,
+			// a forEach or parseInt, which the code makes itself (CharCode,
+			// FromCharCode, Substring, ForEach, ParseInt) where it can, and
+			// Go otherwise.
 			continue
 		}
 		if in.cl == nil && in.pop {
@@ -2632,6 +2632,9 @@ type jitInline struct {
 	// proto is a typed array's loop's typed arrays' prototype
 	// (jitLoopTyped), nil for an array's.
 	proto *Object
+	// parseInt marks a plain call of the realm's parseInt with a number
+	// (jitParseInts).
+	parseInt bool
 	// byCode marks a function the call met two objects of, closures its
 	// maker makes anew at each call: called by its code (jitSameCode).
 	byCode bool
@@ -2788,6 +2791,13 @@ func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 		if o := r.jitFromCharCodes(sp, in); o != nil {
 			// String.fromCharCode(c), made natively (jitFeedback.FromCharCode).
 			e.nativeCalls = append(e.nativeCalls, jitInline{pc: int32(pc), obj: o, fromChar: true})
+			e.callSites[pc] = jitCallNative
+			e.inlinePending = true
+			return
+		}
+		if o := r.jitParseInts(sp, in); o != nil {
+			// parseInt(x) of a number, made natively (jitFeedback.ParseInt).
+			e.nativeCalls = append(e.nativeCalls, jitInline{pc: int32(pc), obj: o, parseInt: true})
 			e.callSites[pc] = jitCallNative
 			e.inlinePending = true
 			return
@@ -6164,6 +6174,33 @@ func (r *Runtime) jitLoopFinish(f *frame, pc int, loop uint64, after bool, v Val
 		return Float(-1), nil
 	}
 	return Undefined, nil
+}
+
+// jitParseInts is the realm's parseInt, if a plain call at the top of the
+// stack calls it with one argument, a number; or nil.
+func (r *Runtime) jitParseInts(sp int, in bytecode.Instr) *Object {
+	if jitCallOp(in.Op) != bytecode.OpCall || in.A != 1 || r.jitParseInt == nil || !jitEncoding.Round {
+		return nil
+	}
+	if callee := r.stack[sp-2]; !callee.IsObject() || callee.Object() != r.jitParseInt || !r.stack[sp-1].IsNumber() {
+		return nil
+	}
+	return r.jitParseInt
+}
+
+// ParseInt is ssa.ParseIntFeedback's: the realm's parseInt, which the call
+// at pc has made of a number (jitParseInts).
+func (fb *jitFeedback) ParseInt(pc int) (uintptr, bool) {
+	e := fb.e
+	if e == nil || fb.root != nil || pc >= len(fb.fn.Code) || jitCallOp(fb.fn.Code[pc].Op) != bytecode.OpCall {
+		return 0, false
+	}
+	for _, x := range jitTargets(e) {
+		if int(x.pc) == pc && x.parseInt && x.obj != nil && x.obj == fb.r.jitParseInt {
+			return uintptr(unsafe.Pointer(x.obj)), true
+		}
+	}
+	return 0, false
 }
 
 // jitSubstrings is String.prototype's substring, slice or substr, the
