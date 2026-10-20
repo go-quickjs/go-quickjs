@@ -27,6 +27,7 @@ func (r *Runtime) initBigIntBuiltins() {
 		}
 		return rt.toBigIntValue(arg(args, 0))
 	})
+	ctor.fn().mathOp = mathBigInt
 
 	r.defMethod(ctor, "asIntN", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		return rt.bigIntAsN(args, true)
@@ -304,6 +305,24 @@ func bigAsNCall(signed bool, args []Value) (Value, bool) {
 		return shortBig(0), true
 	}
 	return bigAsN64(args[1], uint(n), signed), true
+}
+
+// bigIntCall is BigInt(v) applied without a frame (mathCall) where v needs
+// no conversion that could call anything or throw: an integral number in
+// the int64 range, held in its Value, or a BigInt, itself -- how a program
+// makes a BigInt of a character's code or a counter at every step.
+func bigIntCall(args []Value) (Value, bool) {
+	if len(args) == 0 {
+		return Undefined, false
+	}
+	v := args[0]
+	if v.IsBigInt() {
+		return v, true
+	}
+	if n := v.num; v.IsNumber() && n > -(1<<63) && n < 1<<63 && n == math.Trunc(n) {
+		return shortBig(int64(n)), true
+	}
+	return Undefined, false
 }
 
 // bigLow64 is the low 64 bits of a BigInt's two's complement.

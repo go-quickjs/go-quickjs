@@ -5140,3 +5140,31 @@ func TestBigIntShortOperators(t *testing.T) {
   return (a === b) + " " + a.split(",").length + " " + a.length + " " + h;
 })()`, "true 6946 80737 -1328165526")
 }
+
+// TestBigIntCall pins BigInt called as a function, which a call applies
+// without a frame (mathCall) to an integral number of the int64 range or a
+// BigInt, and leaves the rest to the function: the int64 range's edges,
+// past them, fractions, NaN, the infinities, strings, booleans, null,
+// undefined, BigInts, objects, a symbol, no argument and new. Node's
+// answers.
+func TestBigIntCall(t *testing.T) {
+	checkEval(t, `(function () {
+  var args = [0, -0, 1, -1, 2 ** 31, 2 ** 53, -(2 ** 53), 2 ** 62, 2 ** 63, -(2 ** 63), 2 ** 64, -(2 ** 70), 1e21, 0.5, -1.5,
+    NaN, Infinity, -Infinity, "12", " 0x1f ", "", "1.5", true, false, null, undefined, 5n, -(2n ** 64n), 2n ** 64n,
+    { valueOf() { return 7; } }, { valueOf() { return 8n; } }, Symbol.iterator];
+  function conv(list) {
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      try { out.push(String(BigInt(list[i]))); } catch (e) { out.push(e.constructor.name); }
+    }
+    try { out.push(String(BigInt())); } catch (e) { out.push(e.constructor.name); }
+    try { out.push(String(new BigInt(1))); } catch (e) { out.push(e.constructor.name); }
+    var s = 0n;
+    for (var i = 0; i < 1000; i++) s += BigInt(i * i);
+    out.push(String(s));
+    return out.join(",");
+  }
+  var a = conv(args), b = conv(args);
+  return (a === b) + " " + a;
+})()`, "true 0,0,1,-1,2147483648,9007199254740992,-9007199254740992,4611686018427387904,9223372036854775808,-9223372036854775808,18446744073709551616,-1180591620717411303424,1000000000000000000000,RangeError,RangeError,RangeError,RangeError,RangeError,12,31,0,SyntaxError,1,0,TypeError,TypeError,5,-18446744073709551616,18446744073709551616,7,8,TypeError,TypeError,TypeError,332833500")
+}

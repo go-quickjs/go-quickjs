@@ -2577,12 +2577,20 @@ const (
 	mathAsUintN = 253
 )
 
+// mathBigInt is funcData.mathOp for BigInt called as a function, which
+// mathCall applies to an integral number of the int64 range, or a BigInt
+// (bigIntCall).
+const mathBigInt = 251
+
 // mathCall applies the Math function op marks to args, where they are what
 // it takes without a conversion that could call anything: a number for a
 // function of one, two numbers for max and min. It reports false otherwise,
 // for the function to be called.
 func mathCall(op uint8, args []Value) (Value, bool) {
-	if op == mathAsIntN || op == mathAsUintN {
+	if op >= mathBigInt && op < mathMax {
+		if op == mathBigInt {
+			return bigIntCall(args)
+		}
 		return bigAsNCall(op == mathAsIntN, args)
 	}
 	if op < mathMax {
