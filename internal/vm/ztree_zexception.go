@@ -231,12 +231,13 @@ func rethrowTreeNode(pc, depth, fall int, index []int) tnext {
 }
 
 // handlerTree wraps t, a tree with handlers or with for...of loops (iters),
-// in a tree of one block that runs it through runTreeHandlers.
+// in a tree of one block that runs it through runTreeHandlers, which keeps
+// t's blocks' first instructions for going on in it (handledTree).
 func handlerTree(t *tree, index []int, iters bool) *tree {
-	return &tree{blocks: []tblock{{
+	return handledTree(&tree{blocks: []tblock{{
 		body: []tstmt{func(c *tctx) { c.runTreeHandlers(t, index, iters) }},
 		next: func(*tctx) int { return -1 },
-	}}}
+	}}}, plainTree(t, index, iters), index, iters)
 }
 
 // runTreeHandlers runs t from its first block, and from each handler an

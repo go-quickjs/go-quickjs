@@ -350,7 +350,18 @@ for a rest element, is Go's.
 **Profitability.** Each native stretch's work is estimated, exits and
 calls of Go counted against it; code whose stretches do too little between
 them is left to the tree tier (`jitSSAProfit`): Go's entering native code
-and its leaving cost what V8's calls between its tiers do not. Code that
+and its leaving cost what V8's calls between its tiers do not, and a call
+of Go costs more than the tree tier's own call of the built-in. A run
+on-stack replacement began judges its calls of Go as it makes them
+(`jitRunGoProfit`), not only when its stretch ends -- the end of the loop
+-- and leaves after the call that finds them not to pay; and its
+stretches are judged apart from those of entries at the start. Code
+judged so (`loopSlow`) is entered neither at its start nor at a loop. The
+frame it left goes back to the tree that entered it at a loop, once the
+interpreter has run it back to that loop's header, the tree going on with
+the loop as though it had not been entered (`errBackToTree`); any other
+frame goes on in its tree from the next loop header (`runTreeFrom`), a
+tree of handlers or for...of loops too. Code that
 deoptimizes is invalidated instead (Tier-up).
 
 ### Reading the heap in place
@@ -558,7 +569,9 @@ held at once, its free slots reused.
 **Giving up.** Code whose native work per exit stays low is entered by Go no
 more at its start (`entrySlow`, `jitSSAProfit`), and runs for its native
 callers, and by on-stack replacement at a loop that has run a full budget
-of back edges in the existing tiers: a long invocation, which pays.
+of back edges in the existing tiers: a long invocation, which pays -- but
+not where the stretches such entries begin, or its calls of Go, do not pay
+either (`loopSlow`), until Go retries it (`jitRetrySlow`).
 
 **Debugger.** Runtimes made `WithDebugger` never run native code.
 

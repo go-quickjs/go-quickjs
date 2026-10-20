@@ -3397,6 +3397,13 @@ type jitGoRun struct {
 	// released, have it (jitState's pinSerial).
 	pinnedAt int
 	serial   uint64
+	// edges and pc are where its last call of Go returned, or its
+	// stretch began: the back-edge counter then, net of the polls'
+	// budgets, and the PC -- the start of the work its next call of Go
+	// is judged against (jitGoCall), in a run on-stack replacement began
+	// (osr).
+	edges, pc int
+	osr       bool
 }
 
 // jitGoUnpin ends what calls of Go the run in context idx made: its code,
@@ -3412,13 +3419,15 @@ func (r *Runtime) jitGoUnpin(idx int) {
 	}
 }
 
-// jitGoRunAt notes that context idx runs e's code for f.
-func (r *Runtime) jitGoRunAt(idx int, f *frame, e *jitEntry) {
+// jitGoRunAt notes that context idx runs e's code for f, in a stretch
+// from pc, with the back-edge counter, net of the polls' budgets, at
+// edges, of a run on-stack replacement began if osr.
+func (r *Runtime) jitGoRunAt(idx int, f *frame, e *jitEntry, pc, edges int, osr bool) {
 	s := r.jit
 	if idx >= len(s.goRuns) {
 		s.goRuns = append(s.goRuns, make([]jitGoRun, idx+1-len(s.goRuns))...)
 	}
-	s.goRuns[idx] = jitGoRun{f: f, e: e, code: e.ssa, inlined: e.ssaInlined}
+	s.goRuns[idx] = jitGoRun{f: f, e: e, code: e.ssa, inlined: e.ssaInlined, edges: edges, pc: pc, osr: osr}
 }
 
 // jitGoPending is a call Go made from native code and left native code
@@ -3496,6 +3505,12 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 	// nothing).
 	e.ssaStats.goCalls++
 	s.goCalls++
+	// Judged, in a run begun at a loop, where the call is one Go makes for
+	// good: a step, a property, a built-in's call (jitCallDone). One Go
+	// makes until it is decided -- a call native code will make natively,
+	// once the callee is compiled -- is not.
+	judged := run.osr && (step || prop || !jitCallUnsettled(e, pc, in))
+	slow := judged && r.jitRunGoProfit(e, run, pc)
 	if !step && !prop && jitCallUnsettled(e, pc, in) {
 		r.jitCallSeen(f, e, pc, sp, in)
 	}
@@ -3540,12 +3555,62 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 		// this one, which this code's calls run in.
 		r.jitShareContexts(idx, f)
 	}
-	if err != nil || r.stopped != nil || e.invalid || r.jitLearnedDue(f.cl, e) || e.ssa != code {
+	if judged {
+		// The work the next call is judged against starts here: what
+		// this one ran, which the existing tiers would run alike, is none
+		// of it.
+		s.goRuns[idx].edges, s.goRuns[idx].pc = r.backEdges-s.pollCredit, pc
+	}
+	// Its calls of Go judged not to pay, the code leaves after this one,
+	// and the existing tiers run the rest of the invocation (jitGoOn).
+	if slow || err != nil || r.stopped != nil || e.invalid || r.jitLearnedDue(f.cl, e) || e.ssa != code {
 		s.goPending = jitGoPending{set: true, pc: pc, ctx: idx, v: v, err: err}
 		return false
 	}
 	*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
 	return true
+}
+
+// jitRunGoProfit accounts for a call of Go that e's code makes at pc in
+// run, a run Go entered at a loop by on-stack replacement, and every
+// jitSSAProbe such calls judges whether they pay, as jitCalleeProfit
+// judges a native callee's: each costs native code what an exit and an
+// entry would (jitSSAMinWork) more than the tree tier's own call of the
+// built-in, against the work the code did natively since the call before
+// -- the back edges taken, at its loops' mean length, or, with none, the
+// distance from that call. Judged at the end of its stretches alone
+// (jitSSAProfit), such a run, whose one stretch is the loop, was judged
+// when the loop was over: a loop of calls of Date.now, of a generator's
+// steps, of Date's methods, ran natively to its end, and so again at each
+// invocation, the tree tier making none of its calls. Code whose calls do
+// not pay is not entered again, at its start nor by on-stack replacement
+// (loopSlow), until it is retried (jitRetrySlow); and it reports so, for
+// the code to leave. A run entered at the function's start is judged at
+// its end, as before: judged at its calls, AWFY's DeltaBlue's callback of
+// Plan.execute, whose call of c.execute() Go made until it was decided,
+// was no longer entered by Go, and DeltaBlue took 31% longer.
+func (r *Runtime) jitRunGoProfit(e *jitEntry, run *jitGoRun, pc int) bool {
+	st := &e.ssaStats
+	if back := run.edges - (r.backEdges - r.jit.pollCredit); back > 0 {
+		st.runWork += uint64(back) * uint64(e.ssaLoop)
+	} else if pc > run.pc {
+		st.runWork += uint64(pc - run.pc)
+	}
+	st.runGoCalls++
+	if st.runGoCalls%jitSSAProbe == 0 && st.runWork < st.runGoCalls*jitSSAMinWork && !jitCallsNatively(e) {
+		e.entrySlow, e.loopSlow = true, true
+	}
+	return e.loopSlow
+}
+
+// jitCallsNatively reports whether e's code calls functions natively: in
+// the existing tiers, its callees would run there too, and their work,
+// which the back edges count only in part, is native while it runs. Its
+// calls of Go are left unjudged: Octane's RegExp's runBlock0, whose calls
+// of string methods Go makes, and whose calls of Exec are native, had run
+// in the tree, Exec with it, and RegExp took 11% longer.
+func jitCallsNatively(e *jitEntry) bool {
+	return len(e.nativeCalls) != 0 || slices.Contains(e.callSites, jitCallNative)
 }
 
 // jitGoStacked is how many of a call of Go's n operands, for in, are the
@@ -8398,6 +8463,14 @@ type jitSSAStats struct {
 	// each, as jitSSAProfit estimates a stretch's (jitCalleeProfit), since
 	// its calls in (jitLink's in) were last counted from 0.
 	calleeGoCalls, calleeWork uint64
+	// runGoCalls counts those it made in runs begun at a loop that Go
+	// makes for good, and runWork the work it did natively before each
+	// (jitRunGoProfit); osrStretches the
+	// stretches begun at a loop by on-stack replacement, and osrWork the
+	// work they did (jitSSAProfit) -- each since Go last began entering the
+	// code again (jitRetrySlow).
+	runGoCalls, runWork   uint64
+	osrStretches, osrWork uint64
 	// judged is how many stretches, calls of Go included, there had been
 	// when jitSSAProfit last judged the code.
 	judged uint64
@@ -8432,7 +8505,17 @@ const (
 // runs it from then on. The work is estimated: the distance from the entry
 // to the exit or return (the return's block), in slot IR instructions, and
 // a loop's mean length for each back-edge taken natively.
-func (r *Runtime) jitSSAProfit(e *jitEntry, f *frame, ctx *abi.Context, start, edges int) {
+//
+// The stretches of a run begun at a loop by on-stack replacement (osr)
+// are judged apart besides. Code judged slow is entered so at a loop that
+// has run a full budget in the existing tiers (tryJITAt), the judgement
+// being of Go's entries at the start, whose stretches are a short call's.
+// But where the run's stretches do too little too -- the loop leaves at
+// each turn, for a using declaration's resources, say -- each entry ran a
+// turn natively and left the frame for the interpreter until the next
+// budget, a loop run in the bytecode interpreter: Go does not enter such
+// code at a loop either (loopSlow), and the tree runs the loop.
+func (r *Runtime) jitSSAProfit(e *jitEntry, f *frame, ctx *abi.Context, start, edges int, osr bool) {
 	st := &e.ssaStats
 	work := uint64(0)
 	if back := edges - (r.backEdges - r.jit.pollCredit); back > 0 {
@@ -8447,6 +8530,13 @@ func (r *Runtime) jitSSAProfit(e *jitEntry, f *frame, ctx *abi.Context, start, e
 		}
 	}
 	st.work += work
+	if osr {
+		st.osrStretches++
+		st.osrWork += work
+		if st.osrStretches%jitSSAProbe == 0 && st.osrWork < st.osrStretches*jitSSAMinWork {
+			e.entrySlow, e.loopSlow = true, true
+		}
+	}
 	// A call of Go a stretch makes costs it what an exit and an entry
 	// would, which it saves (ssa.GoCall): each counts as a stretch, so a
 	// method whose call Go now makes is judged as it was when it left --
@@ -8480,10 +8570,11 @@ func jitRetrySlow(e *jitEntry) {
 		return
 	}
 	st := &e.ssaStats
-	e.entrySlow = false
+	e.entrySlow, e.loopSlow = false, false
 	e.slowSince, e.slowBackoff = e.slowCalls, min(e.slowBackoff+1, jitNativeBackoffs)
 	st.judged = st.entries + st.goCalls
 	st.workBase, st.stretchBase = st.work, st.judged
+	st.runGoCalls, st.runWork, st.osrStretches, st.osrWork = 0, 0, 0, 0
 }
 
 // jitLoopLength is the mean length of fn's loops, in instructions: the
@@ -8658,6 +8749,11 @@ func (r *Runtime) jitRunDone(e *jitEntry, idx, top int) {
 func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume uintptr) (Value, error, bool) {
 	s := r.jit
 	ctx := s.ssaCtxs[idx]
+	// Begun at a loop by on-stack replacement, its stretches are judged
+	// as such (jitSSAProfit), and its calls of Go as they are made
+	// (jitRunGoProfit).
+	osr := s.osrRun
+	s.osrRun = false
 	// resume, when not 0, is where native code goes on after a native
 	// call whose callee Go finished, in place of an entry.
 	for {
@@ -8706,7 +8802,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 		s.ssaEntries++
 		e.ssaStats.entries++
 		start, edges := pc, r.backEdges-s.pollCredit
-		r.jitGoRunAt(idx, f, e)
+		r.jitGoRunAt(idx, f, e, pc, edges, osr)
 		// The code the stretch runs: an eager deoptimization invalidates
 		// it if it is still the function's.
 		ran := e.ssa
@@ -8772,7 +8868,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			// the code, as the collector's marking's exits do not.
 			e.ssaStats.entries--
 		} else {
-			r.jitSSAProfit(e, f, ctx, start, edges)
+			r.jitSSAProfit(e, f, ctx, start, edges, osr)
 		}
 		if c := s.ssaCtxs[idx+1]; c.Live == abi.LiveCall {
 			// A native call's callee left native code: Go finishes it

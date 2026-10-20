@@ -686,9 +686,13 @@ type jitEntry struct {
 	// ssaCallee marks code compiled for native callers alone, from
 	// LowerSSAInline (jitNativeCallee).
 	ssaCallee bool
-	// entrySlow marks code Go no longer enters (jitSSAProfit), and this
-	// code that reads its receiver.
+	// entrySlow marks code Go no longer enters (jitSSAProfit); loopSlow
+	// code whose native stretches within an invocation do not pay -- its
+	// exits (jitSSAProfit), its calls of Go (jitRunGoProfit) -- which Go
+	// does not enter by on-stack replacement either; this code that reads
+	// its receiver.
 	entrySlow bool
+	loopSlow  bool
 	this      bool
 	// loops says the code makes loops of built-ins' calls (ssa.ForEachSite),
 	// whose abi.Context's Loop Go reads at its exits, and loopSlots how far
@@ -944,9 +948,19 @@ type jitState struct {
 	goOn              *frame
 	goOnPC, goOnDepth int
 	// goOnTree is the frame the interpreter runs only to its next loop
-	// header, where its tree goes on with it, at goOnPC
-	// (jitInterpretAfter).
+	// header, where its tree goes on with it, at goOnPC with goOnDepth
+	// operands (jitInterpretAfter).
 	goOnTree *frame
+	// osrRun marks the run tryJITAt begins at a loop by on-stack
+	// replacement, which the run takes for its stretches (runSSALoop).
+	osrRun bool
+	// treeOSR is the frame a tree is entering native code for at a loop,
+	// that loop's header and the frame's operands there
+	// (tryJITTreeLoopEnabled), where the frame goes back to the tree
+	// should native code leave it to the interpreter (jitBackEdge); and
+	// backToTree counts the times it did.
+	treeOSR    jitTreeOSR
+	backToTree uint64
 	// treeGoneOn counts the invocations a tree went on with so.
 	treeGoneOn  uint64
 	wentOn      uint64
@@ -2255,8 +2269,15 @@ func (r *Runtime) jitBackEdge(f *frame, pc uint32, sp int) (Value, error, bool) 
 		// code does not take here: at its loop's header, which begins a
 		// block of its tree, the tree takes it -- the check made as any
 		// other, its budget spent, at its own back edge's turn.
+		if o := s.treeOSR; o.f == f && o.pc == int(pc) && o.depth == sp-f.base {
+			// Back at the loop a tree entered native code at: the tree,
+			// whose run of the frame waits on that entry, goes on with
+			// it there (tryJITTreeLoopEnabled), in its own form, not
+			// its blocks one by one.
+			return Undefined, errBackToTree, true
+		}
 		if t := (*tree)(atomic.LoadPointer(&f.cl.fn.VMCode)); t != nil && treeBlockAt(t, int(pc)) >= 0 {
-			s.goOnPC = int(pc)
+			s.goOnPC, s.goOnDepth = int(pc), sp-f.base
 			return Undefined, errGoOnTree, true
 		}
 	}
@@ -2373,6 +2394,16 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, err
 				return Undefined, nil, false
 			}
 		}
+		if e.loopSlow && osr {
+			// Its exits, or its calls of Go, cost more than its work
+			// between them saves, within an invocation (jitSSAProfit,
+			// jitRunGoProfit), however long the loop: the existing tiers
+			// run it, the calls their own, and Go enters it again once
+			// retried, as at its start.
+			e.slowCalls++
+			jitRetrySlow(e)
+			return Undefined, nil, false
+		}
 		if e.entrySlow && !(osr && spent) {
 			// Its native stretches cost more at their exits than they save
 			// (jitSSAProfit): the existing tiers run it -- but a loop that
@@ -2382,7 +2413,12 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, err
 			// whose stretches are the short calls.
 			return Undefined, nil, false
 		}
-		return r.runSSA(f, e, pc, depth)
+		// A run begun at a loop is judged as such (jitSSAProfit's osr,
+		// jitRunGoProfit).
+		r.jit.osrRun = osr
+		v, err, native := r.runSSA(f, e, pc, depth)
+		r.jit.osrRun = false
+		return v, err, native
 	}
 	if e == nil {
 		// Resource and OS refusals may change. Retry after another warmup,
@@ -2671,8 +2707,26 @@ func (r *Runtime) tryJITTreeLoop(c *tctx, pc, depth int, fullBudget bool) {
 
 func (r *Runtime) tryJITTreeLoopEnabled(c *tctx, pc, depth int, fullBudget bool) {
 	// The tree's check set the interval: the budget varies about it.
-	r.backEdges = r.jit.backEdgeBudget()
-	if v, err, done := r.tryJITLoop(c.f, c.cl.fn.Code[pc].A, c.f.base+depth, fullBudget); done {
+	s := r.jit
+	r.backEdges = s.backEdgeBudget()
+	header := c.cl.fn.Code[pc].A
+	var origin jitTreeOSR
+	if s != nil {
+		origin = s.treeOSR
+		s.treeOSR = jitTreeOSR{f: c.f, pc: int(header), depth: depth}
+	}
+	v, err, done := r.tryJITLoop(c.f, header, c.f.base+depth, fullBudget)
+	if s != nil {
+		s.treeOSR = origin
+	}
+	if done && err == errBackToTree {
+		// The native code left the frame, which the interpreter ran back
+		// to this loop's header (jitBackEdge): the tree goes on with the
+		// loop, as if it had not been entered.
+		r.jit.backToTree++
+		return
+	}
+	if done {
 		if isGeneratorTemplate(c.cl.fn) {
 			// A generator's tree runs under runGeneratorTree's recover,
 			// not runTree's: the run's end is told it as the tree tells
@@ -3574,19 +3628,22 @@ func (r *Runtime) jitBackInCode(e *jitEntry, n int) {
 // jitInterpretAfter has the interpreter go on with f from sp, the code
 // that a failed guard left it, if any, kept from taking it back.
 //
-// A function with a plain tree (ztree_goon.go) -- what runs it without the
-// JIT -- has the interpreter run the frame only to its next back-edge
-// check, at a loop's header, and its tree the rest from that block
-// (runTreeFrom), where native code does not take it there: a loop of what native code does not
-// make, a BigInt's arithmetic, left the code at its first turn, and the
-// rest of each invocation had run in the interpreter, a few times as long
-// as in the tree -- microbench.js's bigint32_arith 2.4 times the time
-// without the JIT.
+// A function with a tree of its blocks (ztree_goon.go) -- what runs it
+// without the JIT -- has the interpreter run the frame only to its next
+// back-edge check, at a loop's header, and its tree the rest from that
+// block (runTreeFrom), where native code does not take it there: a loop of
+// what native code does not make, a BigInt's arithmetic, left the code at
+// its first turn, and the rest of each invocation had run in the
+// interpreter, a few times as long as in the tree -- microbench.js's
+// bigint32_arith 2.4 times the time without the JIT. So too a tree with
+// handlers or for...of loops: a loop with a using declaration, or over a
+// generator, whose code did not pay, had run the rest of each invocation
+// in the interpreter.
 func (r *Runtime) jitInterpretAfter(f *frame, sp int, pending error, code *jit.SSACode) (Value, error, bool) {
 	previous, previousCode := r.jitDeoptDepth, r.jitDeoptCode
 	r.jitDeoptDepth, r.jitDeoptCode = uint32(r.frameDepth), code
 	defer func() { r.jitDeoptDepth, r.jitDeoptCode = previous, previousCode }()
-	if t := (*tree)(atomic.LoadPointer(&f.cl.fn.VMCode)); pending == nil && r.jit != nil && r.debug == nil && t != nil && t.starts != nil {
+	if t := (*tree)(atomic.LoadPointer(&f.cl.fn.VMCode)); pending == nil && r.jit != nil && r.debug == nil && t != nil && (t.starts != nil || r.jit.treeOSR.f == f) {
 		s := r.jit
 		defer func(f *frame) { s.goOnTree = f }(s.goOnTree)
 		s.goOnTree = f
@@ -3598,7 +3655,7 @@ func (r *Runtime) jitInterpretAfter(f *frame, sp int, pending error, code *jit.S
 		if err == errGoOnTree {
 			s.goOnTree = nil
 			s.treeGoneOn++
-			v, err = runTreeFrom(r, f, t, treeBlockAt(t, s.goOnPC))
+			v, err = runTreeFrom(r, f, t, treeBlockAt(t, s.goOnPC), s.goOnDepth)
 		}
 		return v, err, true
 	}
@@ -3609,6 +3666,18 @@ func (r *Runtime) jitInterpretAfter(f *frame, sp int, pending error, code *jit.S
 // errGoOnTree ends the interpreter's run of a frame its tree goes on with,
 // at a loop's header (jitInterpretAfter).
 var errGoOnTree = errors.New("jit: go on in the tree")
+
+// errBackToTree ends the interpreter's run, and native code's, of a frame
+// a tree entered native code for at a loop, back at that loop's header,
+// where the tree goes on with it (jitBackEdge, tryJITTreeLoopEnabled).
+var errBackToTree = errors.New("jit: back to the tree")
+
+// jitTreeOSR is a frame a tree enters native code for at a loop: the
+// loop's header, and the frame's operands there.
+type jitTreeOSR struct {
+	f         *frame
+	pc, depth int
+}
 
 // jitDeoptBlocks reports whether f is an invocation the interpreter goes
 // on with after its code left it (jitInterpret) that its code is not to

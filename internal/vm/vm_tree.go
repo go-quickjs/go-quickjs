@@ -96,6 +96,11 @@ type tree struct {
 	// bigSeen is the arithmetic its slow paths made on BigInts, for the
 	// JIT (see ztree_zzzzseen.go), or nil for none yet.
 	bigSeen atomic.Pointer[treeBigSeen]
+	// handled is, for the one block handlerTree wraps a tree of handlers
+	// or for...of loops in, that tree and how runTreeHandlers runs it, for
+	// going on in it from one of its blocks (see ztree_goon.go); starts
+	// and entries are then its.
+	handled *treeHandled
 }
 
 // treeThrow carries an exception out of a tree, to runTree.
