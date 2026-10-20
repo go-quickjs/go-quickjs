@@ -2569,11 +2569,22 @@ const (
 	mathMin = 255
 )
 
+// mathAsIntN and mathAsUintN are funcData.mathOp for BigInt.asIntN and
+// BigInt.asUintN, which mathCall applies to a BigInt and a width of at
+// most 64 bits (bigAsNCall).
+const (
+	mathAsIntN  = 252
+	mathAsUintN = 253
+)
+
 // mathCall applies the Math function op marks to args, where they are what
 // it takes without a conversion that could call anything: a number for a
 // function of one, two numbers for max and min. It reports false otherwise,
 // for the function to be called.
 func mathCall(op uint8, args []Value) (Value, bool) {
+	if op == mathAsIntN || op == mathAsUintN {
+		return bigAsNCall(op == mathAsIntN, args)
+	}
 	if op < mathMax {
 		if len(args) != 0 && args[0].IsNumber() {
 			return Float(unaryMath[op](args[0].num)), true

@@ -30,10 +30,10 @@ func (r *Runtime) initBigIntBuiltins() {
 
 	r.defMethod(ctor, "asIntN", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		return rt.bigIntAsN(args, true)
-	})
+	}).fn().mathOp = mathAsIntN
 	r.defMethod(ctor, "asUintN", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		return rt.bigIntAsN(args, false)
-	})
+	}).fn().mathOp = mathAsUintN
 
 	r.defMethod(p, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		v, err := rt.thisBigIntValue(this, "BigInt.prototype.toString")
@@ -203,19 +203,7 @@ func (r *Runtime) bigIntAsN(args []Value, signed bool) (Value, error) {
 		return shortBig(0), nil
 	}
 	if bits <= 64 {
-		// The low bits of the value's two's complement, as a fixed-width
-		// integer's: no division, nor a BigInt made to learn them.
-		u := bigLow64(v)
-		if bits < 64 {
-			u &= 1<<bits - 1
-		}
-		if signed {
-			return shortBig(int64(u<<(64-bits)) >> (64 - bits)), nil
-		}
-		if u <= math.MaxInt64 {
-			return shortBig(int64(u)), nil
-		}
-		return bigFromUint64(u), nil
+		return bigAsN64(v, uint(bits), signed), nil
 	}
 	// A value that already fits is itself, however wide the width: 2^bits
 	// need not be made to learn that. One that does not fit is a result as
@@ -279,6 +267,42 @@ func complementBits(z, u []uint, n int64) []uint {
 func bitAt(x []uint, n int64) bool {
 	i := n / bitsPerWord
 	return i < int64(len(x)) && x[i]>>uint(n%bitsPerWord)&1 != 0
+}
+
+// bigAsN64 is asIntN or asUintN of a BigInt to a width of 1 to 64 bits: the
+// low bits of the value's two's complement, as a fixed-width integer's, no
+// division, nor a BigInt made to learn them.
+func bigAsN64(v Value, bits uint, signed bool) Value {
+	u := bigLow64(v)
+	if bits < 64 {
+		u &= 1<<bits - 1
+	}
+	if signed {
+		return shortBig(int64(u<<(64-bits)) >> (64 - bits))
+	}
+	if u <= math.MaxInt64 {
+		return shortBig(int64(u))
+	}
+	return bigFromUint64(u)
+}
+
+// bigAsNCall is asIntN or asUintN, signed for the first, applied without a
+// frame (mathCall) where its arguments need no conversion that could call
+// anything or throw: an integral width of at most 64 bits, and a BigInt --
+// how a program wraps its arithmetic to a fixed width, a hash's or a
+// generator's at every step.
+func bigAsNCall(signed bool, args []Value) (Value, bool) {
+	if len(args) < 2 || !args[0].IsNumber() || !args[1].IsBigInt() {
+		return Undefined, false
+	}
+	n := args[0].num
+	if !(n >= 0 && n <= 64) || n != math.Trunc(n) {
+		return Undefined, false
+	}
+	if n == 0 {
+		return shortBig(0), true
+	}
+	return bigAsN64(args[1], uint(n), signed), true
 }
 
 // bigLow64 is the low 64 bits of a BigInt's two's complement.

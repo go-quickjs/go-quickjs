@@ -4134,6 +4134,17 @@ func TestBigIntAsN(t *testing.T) {
 		var s = out.join(",");
 		var h = 0; for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
 		out.length + " " + s.length + " " + h`, "372 6951 -1183738882")
+	// The width's conversion, which a call without a frame (mathCall) of an
+	// integral width of at most 64 bits leaves to the function: Node's.
+	checkEval(t, `
+		var out = [];
+		for (const f of [()=>BigInt.asUintN("8", 257n), ()=>BigInt.asUintN(8.5, 257n), ()=>BigInt.asIntN(64, -1n),
+			()=>BigInt.asUintN(64, -1n), ()=>BigInt.asUintN(2**53, 5n), ()=>BigInt.asIntN(0, 5n), ()=>BigInt.asUintN(-1, 1n),
+			()=>BigInt.asUintN(64, 1), ()=>BigInt.asUintN({valueOf(){return 4}}, 31n), ()=>BigInt.asIntN(NaN, 7n),
+			()=>BigInt.asIntN(-0, 7n), ()=>BigInt.asUintN(65, -1n)]) {
+			try { out.push(String(f())) } catch (e) { out.push(e.constructor.name) }
+		}
+		out.join(",")`, "1,1,-1,18446744073709551615,RangeError,0,RangeError,TypeError,15,0,0,36893488147419103231")
 }
 
 // TestBigIntBitwise covers the bitwise operators on BigInts, which have no
