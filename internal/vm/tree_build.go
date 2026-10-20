@@ -329,7 +329,7 @@ func buildTreeSkipping(fn *bytecode.Function, skipLogical map[int]bool) *tree {
 	if handlers || iters {
 		return handlerTree(t, index, iters)
 	}
-	return t
+	return plainTree(t, index, iters)
 }
 
 // treeBuilds reports whether the tier builds an instruction.

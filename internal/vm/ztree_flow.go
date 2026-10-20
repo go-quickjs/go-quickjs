@@ -401,8 +401,9 @@ func (f *flow) structure(t *tree, done []bool) {
 	}
 	if live == 1 && kept == 0 && len(nodes[0].succ) == 0 && len(f.entries) == 0 {
 		// The whole function is one structure, which runTree runs as
-		// straight-line code.
-		t.blocks = t.blocks[:1:1]
+		// straight-line code. The blocks past it stay, for going on from
+		// one (ztree_goon.go).
+		t.blocks = t.blocks[:1]
 	}
 }
 

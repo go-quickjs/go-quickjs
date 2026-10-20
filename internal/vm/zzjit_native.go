@@ -861,9 +861,15 @@ type jitState struct {
 	// tiers spent (tryJITAt).
 	goOn              *frame
 	goOnPC, goOnDepth int
-	wentOn            uint64
-	forcedCheck       bool
-	stressExits       uint64
+	// goOnTree is the frame the interpreter runs only to its next loop
+	// header, where its tree goes on with it, at goOnPC
+	// (jitInterpretAfter).
+	goOnTree *frame
+	// treeGoneOn counts the invocations a tree went on with so.
+	treeGoneOn  uint64
+	wentOn      uint64
+	forcedCheck bool
+	stressExits uint64
 	// ssaCtxs are the contexts native code runs in, one for each runSSA
 	// running and each native call (abi.Context's Level), ctxTop the
 	// first free; ssaCtx is the one Go entered last, whose exit it reads.
@@ -2041,7 +2047,18 @@ func (r *Runtime) jitBackEdge(f *frame, pc uint32, sp int) (Value, error, bool) 
 		return Undefined, err, true
 	}
 	r.sweepStaleSlots(sp)
-	return r.tryJITLoop(f, pc, sp, fullBudget)
+	v, err, done := r.tryJITLoop(f, pc, sp, fullBudget)
+	if s := r.jit; !done && s != nil && s.goOnTree == f {
+		// The frame its tree goes on with (jitInterpretAfter), which native
+		// code does not take here: at its loop's header, which begins a
+		// block of its tree, the tree takes it -- the check made as any
+		// other, its budget spent, at its own back edge's turn.
+		if t := (*tree)(atomic.LoadPointer(&f.cl.fn.VMCode)); t != nil && treeBlockAt(t, int(pc)) >= 0 {
+			s.goOnPC = int(pc)
+			return Undefined, errGoOnTree, true
+		}
+	}
+	return v, err, done
 }
 
 // backEdgeBudget is the back-edge budget after a check: about
@@ -3354,13 +3371,42 @@ func (r *Runtime) jitBackInCode(e *jitEntry, n int) {
 
 // jitInterpretAfter has the interpreter go on with f from sp, the code
 // that a failed guard left it, if any, kept from taking it back.
+//
+// A function with a plain tree (ztree_goon.go) -- what runs it without the
+// JIT -- has the interpreter run the frame only to its next back-edge
+// check, at a loop's header, and its tree the rest from that block
+// (runTreeFrom), where native code does not take it there: a loop of what native code does not
+// make, a BigInt's arithmetic, left the code at its first turn, and the
+// rest of each invocation had run in the interpreter, a few times as long
+// as in the tree -- microbench.js's bigint32_arith 2.4 times the time
+// without the JIT.
 func (r *Runtime) jitInterpretAfter(f *frame, sp int, pending error, code *jit.SSACode) (Value, error, bool) {
 	previous, previousCode := r.jitDeoptDepth, r.jitDeoptCode
 	r.jitDeoptDepth, r.jitDeoptCode = uint32(r.frameDepth), code
 	defer func() { r.jitDeoptDepth, r.jitDeoptCode = previous, previousCode }()
+	if t := (*tree)(atomic.LoadPointer(&f.cl.fn.VMCode)); pending == nil && r.jit != nil && r.debug == nil && t != nil && t.starts != nil {
+		s := r.jit
+		defer func(f *frame) { s.goOnTree = f }(s.goOnTree)
+		s.goOnTree = f
+		// The tree takes it at its next back-edge check, within a budget
+		// (jitBackEdge): made due at once, the check would be any frame's,
+		// a callee's, and native code's polls give the budget out again
+		// besides, moving every function's tier-up.
+		v, err := r.executeAt(f, sp, nil)
+		if err == errGoOnTree {
+			s.goOnTree = nil
+			s.treeGoneOn++
+			v, err = runTreeFrom(r, f, t, treeBlockAt(t, s.goOnPC))
+		}
+		return v, err, true
+	}
 	v, err := r.executeAt(f, sp, pending)
 	return v, err, true
 }
+
+// errGoOnTree ends the interpreter's run of a frame its tree goes on with,
+// at a loop's header (jitInterpretAfter).
+var errGoOnTree = errors.New("jit: go on in the tree")
 
 // jitDeoptBlocks reports whether f is an invocation the interpreter goes
 // on with after its code left it (jitInterpret) that its code is not to

@@ -87,6 +87,12 @@ type tree struct {
 	// seen is what its slow paths took that native code would not, for
 	// the JIT (see ztree_zzzzseen.go), or nil for nothing yet.
 	seen atomic.Pointer[treeSeen]
+	// starts is, for a plain tree of more than one block, each block's
+	// first instruction, and entries the blocks, for going on in it from
+	// one (see ztree_goon.go): blocks may be only the first, the whole
+	// function one structure, the rest absorbed in it but kept.
+	starts  []int32
+	entries []tblock
 }
 
 // treeThrow carries an exception out of a tree, to runTree.
