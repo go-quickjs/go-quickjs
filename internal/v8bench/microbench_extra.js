@@ -608,3 +608,139 @@ function array_some(n)
         global_res = r.some((x) => x === len - 1);
     return n * len;
 }
+
+/* digit sums of numbers of nineteen digits: a remainder and a division in
+   the int64 range a digit */
+function bigint64_divmod(n)
+{
+    var j, x, s;
+    for (j = 0; j < n; j++) {
+        x = 9007199254740993000n + BigInt(j);
+        s = 0n;
+        while (x > 0n) {
+            s += x % 10n;
+            x /= 10n;
+        }
+        global_res = s;
+    }
+    return n * 19;
+}
+
+/* a xorshift generator of 64 bits: shifts, exclusive ors and
+   BigInt.asUintN */
+function bigint64_xorshift(n)
+{
+    var i, x = 88172645463325252n;
+    for (i = 0; i < n; i++) {
+        x ^= BigInt.asUintN(64, x << 13n);
+        x ^= x >> 7n;
+        x ^= BigInt.asUintN(64, x << 17n);
+    }
+    global_res = x;
+    return n;
+}
+
+/* the 64-bit FNV-1a hash of a string, a character at a time */
+function bigint64_fnv1a(n)
+{
+    var text = "The quick brown fox jumps over the lazy dog, again and again.";
+    var i, j, h, len = text.length;
+    for (j = 0; j < n; j++) {
+        h = 0xcbf29ce484222325n;
+        for (i = 0; i < len; i++)
+            h = BigInt.asUintN(64, (h ^ BigInt(text.charCodeAt(i))) * 0x100000001b3n);
+        global_res = h;
+    }
+    return n * len;
+}
+
+/* a binary search of a sorted array of BigInts: their comparisons */
+function bigint64_search(n)
+{
+    var a = [], i, j, lo, hi, mid, k, c = 0, len = 1024;
+    for (i = 0; i < len; i++)
+        a[i] = BigInt(i) * 7919n;
+    for (j = 0; j < n; j++) {
+        k = BigInt(j & (len - 1)) * 7919n;
+        lo = 0;
+        hi = len;
+        while (lo < hi) {
+            mid = (lo + hi) >> 1;
+            if (a[mid] < k)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        c += lo;
+    }
+    global_res = c;
+    return n * 10;
+}
+
+/* powers in the int64 range */
+function bigint64_pow(n)
+{
+    var i, s = 0n;
+    for (i = 0; i < n; i++)
+        s += BigInt(i & 1023) ** 5n;
+    global_res = s;
+    return n;
+}
+
+/* microbench.js's BigInt arithmetic, of numbers of 1024 bits */
+function bigint1024_arith(n)
+{
+    return bigint_arith(n, 1024);
+}
+
+/* modular exponentiation, as RSA makes it, by a 64-bit exponent modulo the
+   Mersenne prime of 521 bits: a product and a remainder of numbers of
+   that size each step */
+function bigint_modpow(n)
+{
+    var m = (1n << 521n) - 1n, j, b, e, r, ops = 0;
+    for (j = 0; j < n; j++) {
+        r = 1n;
+        b = (m >> 3n) + BigInt(j);
+        for (e = 0xc0ffee1234567891n; e > 0n; e >>= 1n) {
+            if (e & 1n) {
+                r = r * b % m;
+                ops++;
+            }
+            b = b * b % m;
+            ops++;
+        }
+        global_res = r;
+    }
+    return ops;
+}
+
+/* the first hundred digits of pi by a spigot (Gibbons), its numbers
+   growing as it goes */
+function bigint_pidigits(n)
+{
+    var j, k, q, r, t, i, u, y, s;
+    for (j = 0; j < n; j++) {
+        q = 1n; r = 180n; t = 60n; i = 2n; s = "";
+        for (k = 0; k < 100; k++) {
+            u = 3n * (3n * i + 1n) * (3n * i + 2n);
+            y = (q * (27n * i - 12n) + 5n * r) / (5n * t);
+            s += y;
+            r = 10n * u * (q * (5n * i - 2n) + r - y * t);
+            q = 10n * q * i * (2n * i - 1n);
+            t = t * u;
+            i += 1n;
+        }
+        global_res = s;
+    }
+    return n * 100;
+}
+
+/* decimal strings of numbers of 256 bits */
+function bigint_toString(n)
+{
+    var x = (1n << 255n) + 12345678901234567890n, j;
+    for (j = 0; j < n; j++)
+        global_res = (x + BigInt(j)).toString();
+    return n;
+}

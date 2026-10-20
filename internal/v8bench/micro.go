@@ -23,8 +23,9 @@ import (
 //
 // microbench_extra.js is ours: tests of what microbench.js has none of --
 // generators, async functions, try statements, iterators, using
-// declarations, Math.random, the in operator and a delete of an object's
-// last property -- written as its tests are. A test of
+// declarations, Math.random, the in operator, a delete of an object's
+// last property, BigInts beyond microbench.js's sums and products --
+// written as its tests are. A test of
 // async functions returns a promise of its count, which the loop awaits, so
 // its time takes in the jobs it queued; every runner runs a script's jobs
 // before it is done with it.
@@ -78,6 +79,9 @@ var microWork = []struct {
 	{"array_in", 2097152}, {"prop_delete_last", 1048576}, {"array_forEach", 32768}, {"array_reduce", 32768},
 	{"array_map", 16384}, {"array_filter", 16384}, {"array_some", 32768},
 	{"typed_forEach", 32768}, {"string_indexOf", 16384}, {"array_indexOf", 524288},
+	{"bigint64_divmod", 131072}, {"bigint64_xorshift", 1048576}, {"bigint64_fnv1a", 16384},
+	{"bigint64_search", 262144}, {"bigint64_pow", 1048576}, {"bigint1024_arith", 1024},
+	{"bigint_modpow", 4096}, {"bigint_pidigits", 1024}, {"bigint_toString", 524288},
 }
 
 // microLoop is the driver's loop: each test of __work whose name begins with
