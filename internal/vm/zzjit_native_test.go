@@ -2393,6 +2393,7 @@ func TestJITCacheBounds(t *testing.T) {
 	epoch := uint64(0)
 	defer func(was func() uint64) { jitEpochNow = was }(jitEpochNow)
 	jitEpochNow = func() uint64 { return epoch }
+	jitNoFlushForTest(t)
 	var keep []*bytecode.Function
 	defer runtime.KeepAlive(&keep)
 	copyOf := jitCopiesForTest(jitFunctionForTest(t, `function f(n) { var s=0; for(var i=0;i<n;i++) s+=i; return s }`), &keep)
@@ -9756,9 +9757,15 @@ func TestJITSSAGoCallsReuseLevelFrames(t *testing.T) {
 		function outer(n){let t=0;for(let i=0;i<n;i++){t=(t+fa(i))|0;t=(t+fb(i))|0;t=(t+p.m(i))|0;t=(t+q.m(i))|0;
 			t=(t+fa(i))|0;t=(t+probe(-i))|0;t=(t+fa(i))|0}return t}`
 	var stacks [2][]string
+	// The levels' frames, as the calls of Go see them: the run that made
+	// them lets them go once it ends.
+	levels := 0
 	install := func(rt *Runtime, k int) {
 		rt.global.setOwnRaw(rt.atoms.intern("probe"), rt.NewFunction("probe", 1,
 			func(rt *Runtime, _ Value, args []Value) (Value, error) {
+				if rt.jit != nil {
+					levels = max(levels, rt.jit.levels.n)
+				}
 				var names []string
 				for _, e := range rt.captureStack() {
 					names = append(names, fmt.Sprintf("%s:%d:%d", e.Function, e.Line, e.Column))
@@ -9799,7 +9806,7 @@ func TestJITSSAGoCallsReuseLevelFrames(t *testing.T) {
 			}
 		}
 	}
-	if r.jit.levels.n == 0 {
+	if levels == 0 {
 		t.Fatal("no call of Go from a native callee made frames for its levels")
 	}
 }
@@ -9829,9 +9836,15 @@ func TestJITSSAGoCallsReuseDeepLevelFrames(t *testing.T) {
 		function d1(i){let s=work(i);for(let j=0;j<1;j++)s=(s+d2(i)+probe(-i))|0;return s}
 		function outer(n){let t=0;for(let i=0;i<n;i++)t=(t+d1(i))|0;return t}`
 	var stacks [2][]string
+	// The levels' frames, as the calls of Go see them: the run that made
+	// them lets them go once it ends.
+	deepest := 0
 	install := func(rt *Runtime, k int) {
 		rt.global.setOwnRaw(rt.atoms.intern("probe"), rt.NewFunction("probe", 1,
 			func(rt *Runtime, _ Value, args []Value) (Value, error) {
+				if rt.jit != nil {
+					deepest = max(deepest, len(rt.jit.levels.at))
+				}
 				var names []string
 				for _, e := range rt.captureStack() {
 					names = append(names, fmt.Sprintf("%s:%d:%d", e.Function, e.Line, e.Column))
@@ -9852,7 +9865,6 @@ func TestJITSSAGoCallsReuseDeepLevelFrames(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	deepest := 0
 	for i := range 4 {
 		stacks = [2][]string{}
 		src := `log=[];String(outer(200))+log.join('|')`
@@ -9875,7 +9887,6 @@ func TestJITSSAGoCallsReuseDeepLevelFrames(t *testing.T) {
 				t.Fatalf("round %d, probe %d: stack %q, interpreter's %q", i, j, stacks[1][j], stacks[0][j])
 			}
 		}
-		deepest = max(deepest, len(r.jit.levels.at))
 	}
 	if deepest <= 4 {
 		t.Fatalf("calls of Go made frames for at most %d levels", deepest)

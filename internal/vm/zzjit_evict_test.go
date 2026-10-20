@@ -287,6 +287,7 @@ func TestJITEvictionKeepsRunningCode(t *testing.T) {
 	var tick uint64
 	jitEpochNow = func() uint64 { tick++; return tick }
 	t.Cleanup(func() { jitEpochNow = now })
+	jitNoFlushForTest(t)
 	r := jitRuntimeForTest(t, Config{JIT: true, JITMemoryLimit: 1 << 20})
 	// Between rounds, every link holds, and the collector runs, releasing
 	// the code nothing holds -- which native code then must not run.

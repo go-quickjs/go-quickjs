@@ -640,9 +640,12 @@ type jitEntry struct {
 	// last found used -- its uses (uses) other than at the look before,
 	// seen -- or made; serial orders entries by when they were made. The
 	// cache drops the least recently used to make room (makeRoom).
-	// slowCalls counts the calls the existing tiers made, that did not
-	// enter its code (entrySlow): it is used all the same.
+	// flushSeen is its uses at the cache's last look for code to flush, and
+	// flushAt 1 plus the flush's tick then (flush). slowCalls counts the calls
+	// the existing tiers made, that did not enter its code (entrySlow): it
+	// is used all the same.
 	used, seen, serial uint64
+	flushSeen, flushAt uint64
 	slowCalls          uint64
 	// slowSince is slowCalls when Go last stopped entering the code, and
 	// slowBackoff how many times it has: Go enters it again after
@@ -922,18 +925,20 @@ type jitState struct {
 	// into (jit.ExitScratch).
 	exitScratch jit.ExitScratch
 	// scans counts the cache's looks for what to reclaim (makeRoom), serial
-	// the entries made, evicted those dropped to make room, refusedRoom
-	// the times there was none to be made, and discarded the compiles
+	// the entries made, evicted those dropped to make room, flushed those
+	// dropped for going unused (flush), refusedRoom the times there was
+	// none to be made, and discarded the compiles
 	// made and then refused it (compileSSAKeeping). floor is what the
 	// JIT held at the last look that it could not reclaim -- young code,
 	// code that runs, what the runtime's JIT needs -- and floorAt 1 plus the
 	// epoch of that look, or 0 once something it held has gone since: until
 	// then, the floor only rises, and a need past the budget above it is
 	// refused without another look. agedAt is 1 plus the epoch the cache
-	// last found its entries' uses in (age).
-	scans, serial, evicted, refusedRoom, discarded uint64
-	floor                                          int
-	floorAt, agedAt                                uint64
+	// last found its entries' uses in (age), and flushedAt the flush's tick
+	// at its last look for code to flush (flush).
+	scans, serial, evicted, flushed, refusedRoom, discarded uint64
+	floor                                                   int
+	floorAt, agedAt, flushedAt                              uint64
 }
 
 // Only selected own reference fields are prepared. The receiver bound keeps
@@ -1147,6 +1152,13 @@ func (s *jitState) dropEntry(key weak.Pointer[bytecode.Function], e *jitEntry) b
 	e.link.entry, e.link.body = 0, 0
 	if s.closeSSA(e.ssa, e) != nil {
 		return false
+	}
+	// No callee's native callers any more: one kept there, its entry
+	// gone, kept what it had learned and compiled for alive with it.
+	for _, l := range e.ssaLinks {
+		if ce := l.owner; ce != nil {
+			ce.nativeCallers = slices.DeleteFunc(ce.nativeCallers, func(c *jitEntry) bool { return c == e })
+		}
 	}
 	s.setLinks(e, nil)
 	s.forget(key, e)
@@ -1420,6 +1432,110 @@ func (s *jitState) ghost(addr uintptr, e *jitEntry) {
 	s.ghosts[addr] = g
 }
 
+// rememberFlushed keeps what the code of the function at addr had
+// learned, which the cache flushed for going unused (flush): as ghost
+// does, but the function is compiled again as soon as it is hot again --
+// no eviction counts against it, as it made room for no other.
+func (s *jitState) rememberFlushed(addr uintptr, e *jitEntry) {
+	if s.ghosts == nil || len(s.ghosts) >= jitGhosts {
+		s.ghosts = map[uintptr]jitGhost{}
+	}
+	g := s.ghosts[addr]
+	g.failed, g.failedEntries, g.typedReads, g.stringReads, g.keyedReads = e.failed, e.failedEntries, e.typedReads, e.stringReads, e.keyedReads
+	g.bigints = e.bigints
+	s.ghosts[addr] = g
+}
+
+// jitFlushAge is how many of the flush's ticks (jitFlushNow) apart the
+// cache looks for code to flush (flush): code unused between two looks
+// is, a second apart. V8's code ages so before it is flushed. A variable,
+// which tests of the cache's room set past any tick they reach.
+var jitFlushAge uint64 = 20
+
+// jitFlushNow is the flush's clock: jitEpochTime's ticks, time alone. The
+// cache's epochs count the collector's cycles too, which a program that
+// collects all the while -- a test's collector, run in a loop -- has go by
+// within a call: code a function runs once a call was flushed within it.
+// A variable, which the tests set.
+var jitFlushNow = func() uint64 { return uint64(time.Since(jitEpochBase) / jitEpochTime) }
+
+// flush drops, once every jitFlushAge ticks, the entries unused since its
+// last look, whatever room the budget has, as V8 flushes code that has
+// gone unused for long: what an entry learned and compiled holds the
+// objects it was compiled for -- the callees its calls were seen to call,
+// the closures it inlined, the holders its checks compare -- and its
+// function's bytecode, which keys it, outlives them all, kept by the
+// function that made the closures. Octane's zlib, once run, had kept its
+// 128 MB heap so, through the closures its own code had called. An
+// entry whose code runs (inUse), or that is being compiled (busy), or
+// young (jitCodeAge), stays, and so does one with no code, whose uses
+// are not counted. What its code learned of its sites is kept
+// (rememberFlushed), and the function is compiled again once it is hot
+// again. It looks at a back-edge check (idle) and before a compile (age).
+func (s *jitState) flush() {
+	tick := jitFlushNow()
+	if tick < s.flushedAt+jitFlushAge {
+		return
+	}
+	s.flushedAt = tick
+	// Used since the last look: code that ran, by its uses, and the
+	// callees of code used -- inlined there, or called natively -- whose
+	// own uses do not count what runs of them there, and whose entries
+	// what the caller compiles again learns from.
+	used := map[*jitEntry]bool{}
+	var work []*jitEntry
+	for _, e := range s.cache {
+		if u := e.uses(); u != e.flushSeen || e.flushAt == 0 {
+			e.flushSeen, e.flushAt = u, tick+1
+			used[e] = true
+			work = append(work, e)
+		}
+	}
+	mark := func(c *jitEntry) {
+		if c != nil && !used[c] {
+			used[c] = true
+			work = append(work, c)
+		}
+	}
+	for len(work) != 0 {
+		e := work[len(work)-1]
+		work = work[:len(work)-1]
+		for _, calls := range [2][]jitInline{e.inlines, e.nativeCalls} {
+			for _, x := range calls {
+				if x.cl != nil {
+					mark(s.entryFor(x.cl.fn))
+				}
+			}
+		}
+		for _, cl := range e.ssaInlined {
+			mark(s.entryFor(cl.fn))
+		}
+		for _, l := range e.ssaLinks {
+			mark(l.owner)
+		}
+	}
+	for key, e := range s.cache {
+		if used[e] || !e.holdsCode() {
+			// Used, or no code, whose uses are not counted: a function
+			// warming up, or one the JIT refuses, which runs all the same.
+			continue
+		}
+		if e.used+jitCodeAge > s.epoch() || s.inUse(e) || e.busy != 0 {
+			continue
+		}
+		if !s.dropEntry(key, e) {
+			continue
+		}
+		s.rememberFlushed(e.fnAddr, e)
+		if l := s.lowered[key]; l != nil {
+			if k := s.links[key]; k == nil || k.owner == nil {
+				s.dropLowering(key, l)
+			}
+		}
+		s.flushed++
+	}
+}
+
 // admit reports whether fn, which the cache holds no entry of, is to be
 // compiled now (jitGhost).
 func (s *jitState) admit(fn *bytecode.Function) bool {
@@ -1488,12 +1604,14 @@ func (s *jitState) learn(instructions, bytes int) {
 // since it last looked, by their uses, and measure each again, as what an
 // entry learns grows its slices and pools; and drop the entries, lowerings
 // and links of the functions collected since, whose weak keys are empty,
-// and the links neither an entry nor code has (unlink).
+// and the links neither an entry nor code has (unlink); and flush code
+// gone unused (flush).
 func (s *jitState) age(now uint64) {
 	if s.agedAt == now+1 {
 		return
 	}
 	s.agedAt = now + 1
+	s.flush()
 	for key, e := range s.cache {
 		if key.Value() == nil {
 			s.dropEntry(key, e)
@@ -1538,13 +1656,14 @@ const jitWorkAge = 2
 // epoch is the cache's clock (jitEpochNow).
 func (s *jitState) epoch() uint64 { return jitEpochNow() }
 
-// idle lets the compiles' workspaces go once the runtime has compiled
-// nothing for jitWorkAge epochs, at a back-edge check (backEdgeBudget), as
-// V8 gives a compile's zone back once it is done: the budget does not
-// count them (sharedBytes), and kept, a program that compiles no more had
-// the collector mark them at every cycle, megabytes of tables with
-// pointers -- AWFY's Sieve took 5% longer.
+// idle flushes code gone unused (flush), and lets the compiles' workspaces
+// go once the runtime has compiled nothing for jitWorkAge epochs, at a
+// back-edge check (backEdgeBudget), as V8 gives a compile's zone back once
+// it is done: the budget does not count them (sharedBytes), and kept, a
+// program that compiles no more had the collector mark them at every
+// cycle, megabytes of tables with pointers -- AWFY's Sieve took 5% longer.
 func (s *jitState) idle() {
+	s.flush()
 	if s.workAt != 0 && s.epoch() >= s.workAt-1+jitWorkAge {
 		s.ssaWork, s.mirWork, s.workAt = ssa.Workspace{}, mir.Workspace{}, 0
 	}

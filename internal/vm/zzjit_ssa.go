@@ -8598,6 +8598,13 @@ func (r *Runtime) jitRunDone(e *jitEntry, idx, top int) {
 	c := s.ssaCtxs[idx]
 	clear(c.Keep[:e.ssaKeeps])
 	c.This, c.Upvalues, c.Instance = abi.Slot{}, nil, abi.Slot{}
+	// The frames made for the native levels of this run's calls of Go
+	// (jitLevels), which only its calls share: their closures and
+	// receivers had kept a benchmark's graph alive once it ended.
+	if lv := &s.levels; len(lv.at) != 0 && idx <= lv.root {
+		clear(lv.at)
+		lv.at, lv.serial, lv.n = lv.at[:0], 0, 0
+	}
 	// Past RecordHigh, the pointer words native calls wrote themselves,
 	// which Go did not expand (abi.CallRecord's Ref).
 	if n := max(c.RecordHigh, s.callRefs); n != 0 {
