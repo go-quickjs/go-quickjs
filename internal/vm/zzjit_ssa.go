@@ -3116,18 +3116,8 @@ func jitHostCall(ctx *abi.Context) bool {
 		return true
 	case ssa.GoArith:
 		// An operator of two BigInts that throws nothing.
-		a, b := jitGoArg(ctx, 0), jitGoArg(ctx, 1)
 		op, ok := jitArithOp(ir.Operator(ctx.GoOp >> abi.GoOpIndexShift))
-		if !ok || !r.jitBigArithSafe(op, a, b) {
-			return false
-		}
-		v, err := r.jitBigOp(op, a, b)
-		if err != nil {
-			return false
-		}
-		r.jitBigRelease(ctx, v, a, b)
-		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
-		return true
+		return ok && r.jitGoBig(ctx, op, jitGoArg(ctx, 0), jitGoArg(ctx, 1))
 	case ssa.GoCompare:
 		// A relational comparison of primitives, which converts them
 		// without calling anything (jitPlainOperand) -- a BigInt too, which
@@ -4554,14 +4544,40 @@ func jitPlainOperand(v Value) bool {
 // jitGoBigAdd is GoAdd's sum of two BigInts, a and b, to the call's keep
 // cell, where it throws nothing (jitBigArithSafe).
 func (r *Runtime) jitGoBigAdd(ctx *abi.Context, a, b Value) bool {
-	if !r.jitBigArithSafe(bytecode.OpAdd, a, b) {
+	return r.jitGoBig(ctx, bytecode.OpAdd, a, b)
+}
+
+// jitGoBig is op of a and b, BigInts, to the call's keep cell, where it
+// throws nothing (jitBigArithSafe), and what of its operands the call
+// gives back (jitBigRelease): Go's side of a BigInt's operator from
+// native code, ssa.GoArith's, and GoAdd's and GoAppend's of two. A sum, a
+// difference or a product -- the operators of BigInts on the heap that
+// loops make most -- is checked here and made by bigOp: the checks
+// jitBigArithSafe makes, the shortcut jitBigOp tries for two held in their
+// values, and the release had each been a call of their own.
+func (r *Runtime) jitGoBig(ctx *abi.Context, op bytecode.Op, a, b Value) bool {
+	const limit = maxBigIntBits / bits.UintSize
+	var v Value
+	var err error
+	switch {
+	case !a.IsBigInt() || !b.IsBigInt() || r.meter != nil:
+		return false
+	case a.isShortBig() && b.isShortBig() || op != bytecode.OpAdd && op != bytecode.OpSub && op != bytecode.OpMul:
+		if !r.jitBigArithSafe(op, a, b) {
+			return false
+		}
+		v, err = r.jitBigOp(op, a, b)
+	case op == bytecode.OpMul && jitBigWords(a)+jitBigWords(b) <= limit, op != bytecode.OpMul && max(jitBigWords(a), jitBigWords(b)) < limit:
+		v, err = r.bigOp(op, a, b)
+	default:
 		return false
 	}
-	v, err := r.jitBigOp(bytecode.OpAdd, a, b)
 	if err != nil {
 		return false
 	}
-	r.jitBigRelease(ctx, v, a, b)
+	if rel := uint8(ctx.GoOp >> abi.GoOpKindShift); rel != 0 {
+		r.jitBigRelease(ctx, v, a, b)
+	}
 	*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
 	return true
 }
