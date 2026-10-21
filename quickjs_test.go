@@ -5424,3 +5424,22 @@ var h = 0;
 for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
 out.length + " " + s.length + " " + h;`, "13 23551 110140091")
 }
+
+// TestStringPadOrder pins StringPad's order: the filler converted before a
+// length past a string's throws, and an empty filler returning the string
+// whatever the length -- where the length's check had come first, neither
+// the filler's toString ran nor the empty filler's string came back. Node's
+// answers.
+func TestStringPadOrder(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	src := `var c = 0, o = { toString() { c++; return "z" } }, out = [];
+		try { out.push("abc".padStart(1e9, "")) } catch (e) { out.push(e.constructor.name) }
+		try { out.push("abc".padEnd(Infinity, "")) } catch (e) { out.push(e.constructor.name) }
+		try { "abc".padStart(1e9, o) } catch (e) { out.push(e.constructor.name + c) }
+		try { "abc".padEnd(2 ** 31, o) } catch (e) { out.push(e.constructor.name + c) }
+		out.join(",")`
+	if got := evalString(t, rt, src); got != "abc,abc,RangeError1,RangeError2" {
+		t.Errorf("StringPad's order: %s, want abc,abc,RangeError1,RangeError2", got)
+	}
+}

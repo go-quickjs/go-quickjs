@@ -671,9 +671,6 @@ func (r *Runtime) padString(thisStr thisStrFunc, this Value, args []Value, atSta
 	if target <= float64(s.Len()) {
 		return Str(s), nil
 	}
-	if target > maxStringLength {
-		return Undefined, r.throwStringLength()
-	}
 	pad := NewString(" ")
 	if pv := arg(args, 1); !pv.IsUndefined() {
 		ps, err := r.toString(pv)
@@ -684,6 +681,11 @@ func (r *Runtime) padString(thisStr thisStrFunc, this Value, args []Value, atSta
 	}
 	if pad.Len() == 0 {
 		return Str(s), nil
+	}
+	// Past a string's length only now, as StringPad has it: the filler
+	// converted first, and none of it the string itself.
+	if target > maxStringLength {
+		return Undefined, r.throwStringLength()
 	}
 	need := int(target) - s.Len()
 	if err := r.reserveMemory(need * 3); err != nil {
