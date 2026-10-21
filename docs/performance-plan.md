@@ -1057,9 +1057,174 @@ The rounds that followed, each measured as above. The commit says more.
   about 10 ns more than a `var`) and element reads (1.40x) are the common
   ones. BigInts past 64 bits, 2.19x then (`bigint256_arith`), are below
   QuickJS's time since 2026-10-20, with the JIT or without.
-- **RegExp:** a run of literal characters inside a pattern as one
-  instruction (B6) is still left; `regexp_ascii` and `regexp_utf16` take
-  1.4 times QuickJS's time.
+- **RegExp** (after `2bce839`..`348a3d5` and `cbcd058`..`76a80a2`,
+  2026-10-22: the literal runs of B6, the BMP tables of large classes,
+  `spanRoom`, the legacy statics, the 144-byte RegExp, two first units
+  and code units four at a time, a literal's RegExp given back):
+  - `regexp_exec_g` and `regexp_sticky` are still 1.5 times QuickJS's
+    time: each exec makes a 256-byte result and a 48-byte String for the
+    group, and the matcher is about 30% of it; `regexp_replace_dollar`,
+    1.35 times, is not profiled.
+  - `regexp_replace_fn` is 3.4 to 3.9% slower interpreted at four
+    placements after `cbcd058`..`76a80a2` (4,799 to 4,984 ns; 5.5% faster
+    with the JIT), with no new work in replace's path in a profile.
+  - A literal's RegExp is not given back after a replace by a function
+    (1,496 bytes and 33 allocations an op), matchAll, search, a strict
+    `return /x/.test(s)` (a tail call), or in a generator's or an async
+    function's tree; the JIT's reuse stops for a realm whose
+    RegExp.prototype changes its layout, and a pool loses its object at
+    each deoptimization.
+  - Lazy repetitions and counted loops still push the choice points the
+    quick check could pass; a named group's groups object is a 112-byte
+    allocation of its own.
+  - The legacy statics update the current realm's, where the standard has
+    them updated only when the RegExp's realm is it (test262 passes).
+  - Go's memory profiler at its default rate unwinds the interpreter's
+    deep stack at each sample, 3.6% of `regexp_ascii`'s samples; v8bench
+    leaves `runtime.MemProfileRate` as it is.
+- **Found by the round of 2026-10-21** (`04e358b`..`e1f5608`), not done:
+  - `in`: a top-level `in` runs the interpreter's own case, which only a
+    change to `executeAt` would give the tree's answer; symbol keys and
+    canonical index strings ("0") are not cached; a new empty object, of
+    no shape yet, costs native code one call of Go before it is.
+  - Typed arrays' `indexOf` and `includes` poll for no interrupt at all.
+  - Generators: the loop cursor is 160 bytes (`9d029f1`); a step in the
+    tree tier is still about 100 ns against QuickJS's 57 -- `resumeTree`
+    28% of `generator_for_of`'s samples, setting the frame up and writing
+    the generator's state back, and the recover each resumption sets, 14
+    ns, which an exception must still complete the generator through --
+    and a generator made and run to its end 552 ns against 407: two
+    allocations of 448 bytes, a 160-byte generator holding three slices
+    that are mostly empty, two of which native code reads, and the
+    collector 45% of it. With the JIT `generator_create` takes longer than
+    without it (589 ns), a call of Go making the generator.
+  - A stack trace names a built-in's frame "Object.next" where Node says
+    "Iterator.next" or "g.next".
+  - `WeakMap`: `weak_map_delete` is mostly Go's `weak.Make` -- a span's
+    list of specials searched twice for each new key, and the heap's lock
+    the sweeper takes too; a record for each key could go only with
+    ephemerons from Go's collector.
+  - Native code's `Array.prototype.push` leaves native code where the
+    array must grow (8 times in 1,000 pushes), where `a[i] = v` grows it
+    by a call of Go and goes on.
+  - `array_prop_create` in the interpreter: tree dispatch, the prototype
+    check at each append and Go's slice growth are what is left.
+  - A number's method's sites are learned at a deoptimization each, where
+    the tree tier could mark them as it marks BigInts' in
+    `getPropThisNode` (zzmethod.go's `methodRead` and `methodCall` do
+    not); code compiled before Number.prototype or String.prototype
+    changed leaves native code at the read until it is compiled again; a
+    sloppy method of the script's on a primitive exits at each call, Go
+    alone wrapping the receiver.
+- **Native code's generators** (after `fc452f0`, `9eeaa8b`: a for-of's
+  or a destructuring's step resumes a generator by a native call of its
+  code), not done, by what each would gain:
+  - A call of `next()` -- a site calling the realm's next on a
+    generator -- through the same entry, its `{value, done}` from a pool
+    of objects of the result's shape, as object literals are; `return()`
+    and `throw()` Go's (`generator_next`).
+  - A generator and its cursor made natively, from pools, the generator's
+    values inline, and its parameters' prologue run natively: each is a
+    call of Go still, which judges the caller's loop slow
+    (`generator_create`).
+  - `yield*`: resume points after it, the delegating generator's code
+    stepping the inner one by the same call; an iterator's raw result
+    still Go's.
+  - Spread and `Array.from` of a generator, host operations, as a native
+    loop of steps.
+  - Generators with captured locals, which want their cells kept in the
+    generator.
+  - A yield with pointers to save while the collector marks exits, where
+    it could store them through the barrier's routine; a generator's level
+    takes one context and two frames, so the frames' depth may reach twice
+    the limit before Go throws its RangeError; the frames made for calls
+    of Go from a generator's level are not shared between calls.
+- **QJS_JIT_STRESS and the VM's Go tests:** `go test -tags quickjs_jit
+  ./internal/vm` under `QJS_JIT_STRESS` fails at `e1f5608` already
+  (`TestJITInlinedByCodeReplaced` among others), which no CI job runs;
+  test262 under it passes.
+- **Calls, private members and tail calls in the tree tier** (after
+  `d4b1ed5`..`d99aa74`), not done:
+  - A recursive call of the tree tier's with a frame costs about 80 ns,
+    QuickJS's 40: the cost is in `callTree` and `runTreeNested`, which
+    must stay as they are; most of what is left of `tail_mutual`'s gap is
+    the loop that gives the frame up (`tailFromTree`, `takeTailCall`,
+    `tailTarget`), whose editing moves the hot code.
+  - A call in tail position of another function past the depth is made
+    in the frame it gives up (`e5feded`..`9d029f1`): `tail_mutual` 82 ->
+    53 ns, QuickJS's 37; each call still goes through the pending tail
+    call and its checks, an interrupt's poll included, and `tail_self`'s
+    44 ns (QuickJS's 36) is the callee's global read (5 ns) and the hand
+    through the pending call (8 ns). A finally clause's inline copy on the
+    normal path made `try_finally` 34 -> 21 ns, under QuickJS's 23;
+    `try_catch` is 16.8 against 13.4, `try_throw` 33.8 against 29.8.
+  - A breakpoint resolves to one statement, so the copies of a finally
+    clause the compiler makes at each break or continue are each a
+    breakpoint's only in one of them (code for a debugger keeps one copy
+    on the normal path).
+  - An optional chain's call and a spread call in tail position are not
+    tail calls yet, as the standard has them.
+  - The interpreter's own case for private members (`executeAt`'s) and
+    `#x in o` are not cached.
+  - A private field added to an object that is not extensible is refused,
+    as the stage-3 proposal has it; Node v26 adds it.
+- **String's methods** (after `9f801a2`..`3141a88`: every one the
+  micro-benchmarks have at most 1.2 times QuickJS's time, several under
+  it):
+  - What is left in the interpreter is the call: in
+    `string_code_point_at` the method is 20% of the time, the tree tier's
+    call node and `callRest` 35%; `string_starts_with` is 92.9 ns against
+    69 for that. Each method takes its receiver through a closure
+    (`thisStr`), an indirect call a plain function would save, 2 to 4 ns.
+  - `toString` cannot take `toInteger`'s inlined path: `executeAt` calls
+    it.
+  - padStart and padEnd of a filler past ASCII, and a repeat of a string
+    that ends in a high surrogate and begins with a low one, take the old
+    builder; the annex B HTML methods build Go strings and scan them
+    again.
+  - Still behind QuickJS: fromCharCode of two arguments (113 to 119 ns,
+    83), startsWith and endsWith past ASCII (110 to 127, 79 to 84), substr
+    (124, 105).
+- **The JIT's coverage of modern code** (after `8a0ecca`..`e8ab528`: a
+  longer substring a leaf's call, + of strings concatenated at once,
+  shapes an earlier operation checked not checked again, destructuring
+  and parameter lists with defaults and patterns native). Of the 13,986
+  functions of npm's own code the JIT's lowering takes 5,618 (5,101
+  before), most of the rest doing no loop's or array's work (51%);
+  refused:
+  - Object spread, `copy_data_props` (337 functions): made by a call of Go
+    with a frame, it takes longer than the tree tier's spread (a loop of
+    `{ ...o, k: i }` 80 to 85 ms against 77 to 78; with a getter's source
+    among them 123 to 128 against 112 to 116), and without a frame a
+    source with a getter exits at each spread, its site never marked
+    generic (173 to 185 ms). Wanted: a call of Go that tries without a
+    frame and falls back to one in the same call, and a literal's fields
+    after a spread defined by a call of Go rather than an exit (the
+    layout Define plans statically gives up at a spread).
+  - Rest parameters (148), `get_super_prop` (117), array spread (122),
+    spread calls (59) and, in a function of its own, the arguments object
+    (104): an inlined callee's `arguments[k]` is native, a function that
+    reads `arguments` is refused, EarleyBoyer's `sc_list` and `sc_append`
+    among them. A context's pointer to the frame's arguments, which Go
+    sets at each entry, would serve rest parameters and `arguments`
+    alike.
+  - A parameter list's prologue is native only where Go enters the code:
+    its code has no call entry, and native callers' calls are Go's.
+  - Shapes known: a loop header starts knowing nothing -- its entry for
+    on-stack replacement knows nothing -- so a loop's first read of an
+    object checks its shape at each turn; moving the check before the
+    loop, its exit the loop's entry, would check it once.
+  - `async_await` takes 5 to 10% longer with the JIT than without it: 2
+    million resumptions not entered, each cheap, but `enqueueAwait`'s
+    append costs more with the JIT on (130 against 70 ms of samples), not
+    yet explained.
+  - Octane's Typescript compiles about four times a function (2,400
+    compiles of 607 functions in three runs), a third of them a function
+    whose code was dropped for room or flushed, compiled again into code
+    of the same size; its code averages 52 KB a function. Of all the code
+    made, exit stubs (a 10-byte pointer and a jump each) are about 5% of
+    the bytes and displacements 22%: the context's fields past its first
+    128 bytes take four bytes each.
 - **The JIT** (`-tags quickjs_jit`):
   - Compiling costs too much for what it saves in large programs. Octane's
     Typescript, which with the JIT had taken twice the interpreter's time,
@@ -1104,8 +1269,49 @@ The rounds that followed, each measured as above. The commit says more.
     includes, are calls of Go of their own (0e7ed76, GoIndexOf), the
     built-in's Go function called with no frame: string_indexOf (micro)
     110.8 -> 72.1 ns, array_indexOf 429.1 -> 354.9.
-  - **Leaf calls of built-ins, one mechanism for all** (2026-10-20, not
-    begun). A built-in that runs no script is called from native code by
+  - **Leaf calls of built-ins, one mechanism for all** (2026-10-20; step 1
+    begun 2026-10-21). Done so far: a built-in declares its frameless
+    application where it is made (`setElemOp`), which every tier applies
+    before it would make a frame -- the collections' deletions, the weak
+    collections' operations, `Date.now` and `String(x)` (`a02e9d1`,
+    `date_now` -14.7% interpreted, -10.3% with the JIT), and String's 27
+    methods that run no script as native leaves: the built-in's own
+    function behind an exact check of its receiver and arguments
+    (`leafChecks`, `8d33d24`; with the JIT `string_at` -25.5%,
+    `string_repeat` -17.9%, interpreted -1 to -9%); and Math's imul,
+    clz32, pow, atan2 and hypot, applied by `mathCall` in every tier but
+    the JIT, imul an instruction of native code's (`OpMulI32`, `fd75674`;
+    `math_imul` 63.2 -> 4.6 ns with the JIT, 66.3 -> 50.2 interpreted),
+    clz32 too (`OpClz32`, BSR of 2x+1 on amd64, CLZ on arm64, `0d88274`;
+    `math_clz32` 22.0 -> 5.3 ns); Number's functions and methods, Number(x)
+    and Boolean(x) (`c2c717b`). Step 2, a leaf's call native code has seen
+    is a call of Go of its own (`ssa.GoLeaf`, `febf9d0`), checked to call
+    that function, which Go applies with nothing to find out: a leaf's call
+    38 -> 27 ns, `date_now` -18%, `map_set_string` -16%. A method read off
+    a number or a boolean is native, off its prototype, as a string's is
+    (`8dad26c`; `float_toFixed` -16%). Templates and concats of any number
+    of parts are native, a part's conversion a check that it is a
+    primitive, which the concat's one call converts (`ir.StringPart`,
+    `46f1552`; `string_chain` 1069 -> 540 ns, faster than the tree tier's
+    598; Are We Fast Yet's Json -19%).
+    Next:
+    - A call of Go's own cost, 27 ns for a leaf that does nothing (a loop
+      of `Number.isNaN`, 1.5 ns empty): native code writes each operand's
+      two words with a check of each, saves the live registers and reads
+      the result back from its keep cell (about 9 ns); `callGo`, `goCall`,
+      `ExpandGoCall` and `HostCall`'s indirect call (about 10). A routine
+      for leaves' calls of their own, as `jitBigFast` is BigInts', takes
+      only the last; the native side wants the operands passed where they
+      are and fewer registers saved -- step 3.
+    - The objects' and arrays', Date's getters and the collections' `size`
+      (an accessor's read, not a call).
+    - A sloppy method of the script's on a primitive exits at each call
+      (only Go wraps the receiver); a number's method's sites are learned
+      at a deoptimization each, where the tree tier could mark them, as it
+      marks BigInts' in `getPropThisNode` (zzmethod.go's `methodRead`,
+      `methodCall` do not).
+
+    Before: a built-in that runs no script is called from native code by
     one of three paths, each with a list of its own: `Intrinsic` for
     Math's functions (an instruction of their own, or `GoMath`), the
     frameless calls of Go for Map's and Set's operations and `String(x)`
