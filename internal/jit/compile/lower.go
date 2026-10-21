@@ -39,6 +39,30 @@ func refuse(pc int, why string) error { return &Refusal{PC: pc, Reason: why} }
 // native code saves time on (HostOnly).
 const hostOnly = "host operations without native loop or array work"
 
+// GeneratorResumable reports whether a loop's step may resume a generator
+// of fn by a native call of its code (the VM's jitGenCallable, ssa.Func's
+// GenEntry): a synchronous generator whose body has no yield*, whose locals
+// no closure captures -- its frame's locals are then the generator's
+// alone, which no cell holds -- and no call in tail position, which a
+// generator's frame does not give up.
+func GeneratorResumable(fn *bytecode.Function) bool {
+	if fn == nil || !fn.Generator || fn.Async || fn.HasTailCall || fn.HasDirectEval {
+		return false
+	}
+	for _, l := range fn.Locals {
+		if l.Captured {
+			return false
+		}
+	}
+	for _, in := range fn.Code {
+		switch in.Op {
+		case bytecode.OpYieldStar, bytecode.OpAwait:
+			return false
+		}
+	}
+	return true
+}
+
 // HostOnly reports whether err is LowerSSA's refusal of a function for
 // having no loop and no array work, which LowerSSAHot may lower.
 func HostOnly(err error) bool {
@@ -406,8 +430,10 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		indexed = indexed || in.Op == bytecode.OpGetIndex || in.Op == bytecode.OpGetIndexThis || in.Op == bytecode.OpSetIndex || in.Op == bytecode.OpGetLocalIndex || in.Op == bytecode.OpGetLocalIndexUpdate
 	}
 	// Tiny host-only wrappers pay the bridge overhead without enough native
-	// work -- but for one shown to be hot that makes calls (LowerSSAHot).
-	if host && !loop && !indexed && !m.callee && !(m.hot && calls) {
+	// work -- but for one shown to be hot that makes calls (LowerSSAHot),
+	// and a generator a loop's step resumes by a native call of its code
+	// (GeneratorResumable), which pays no bridge.
+	if host && !loop && !indexed && !m.callee && !(m.hot && calls) && !(m.ssa && GeneratorResumable(fn)) {
 		return nil, refuse(-1, hostOnly)
 	}
 	if property && !indexed && !bitwise && !m.callee && !m.ssa {

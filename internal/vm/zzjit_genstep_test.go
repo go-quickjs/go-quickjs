@@ -37,11 +37,10 @@ func jitGenInForTest(r *Runtime, name string) uint64 {
 // delegating with yield*, which no step resumes natively; a generator
 // resumed while it runs; a destructuring's steps, done and not, of a
 // generator that finishes natively and of one whose return Go makes; a
-// generator method's this;
-// a step over generators of three functions, and of a closure made anew;
-// a generator stepping another; a speculation that fails in the middle of
-// a resumption; many yields and a return; and next() mixed with a loop's
-// steps.
+// generator method's this; a step over generators of three functions,
+// and of a closure made anew; a generator stepping another; a speculation
+// that fails in the middle of a resumption; a generator with no loop; many
+// yields and a return; and next() mixed with a loop's steps.
 var jitGenCases = []struct {
 	name, setup string
 	exprs, want []string
@@ -117,6 +116,9 @@ var jitGenCases = []struct {
 		function f(a) { const out = []; for (const v of g(a)) out.push(v); return out.join() }`,
 		[]string{"f([1,2,3])", "f([4,5,6])", "f([1,'x',3])", "f([1.5,{valueOf(){return 7}},3])", "f([1,2,3])"},
 		[]string{"2,4,6", "8,10,12", "2,NaN,6", "3,14,6", "2,4,6"}, "g"},
+	{"pair", `function* pair(a, b) { yield a; yield b }
+		function f(n) { let s = 0; for (let j = 0; j < n; j++) for (const v of pair(j, 1)) s += v; return s }`,
+		[]string{"f(10)", "f(100)"}, []string{"55", "5050"}, "pair"},
 	{"manyYields", `function* g(n) { yield n; yield n + 1; for (let i = 0; i < 3; i++) yield i; yield 'end' }
 		function f(n) { const out = []; for (const v of g(n)) out.push(v); return out.join() }`,
 		[]string{"f(5)", "f(6)"}, []string{"5,6,0,1,2,end", "6,7,0,1,2,end"}, "g"},

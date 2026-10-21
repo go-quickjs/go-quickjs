@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
+	jitcompile "github.com/go-quickjs/go-quickjs/internal/jit/compile"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
@@ -56,27 +57,12 @@ const jitGenTargets = 2
 const jitGenResumesMax = 16
 
 // jitGenCallable reports whether a loop's step may resume a generator of
-// fn natively (ssa.Func's GenEntry): a synchronous generator whose body has
-// no yield*, whose locals no closure captures -- its frame's locals are
-// then the generator's alone, which no cell holds -- and no call in tail
-// position, which a generator's frame does not give up.
-func jitGenCallable(fn *bytecode.Function) bool {
-	if fn == nil || !fn.Generator || fn.Async || fn.HasTailCall || fn.HasDirectEval {
-		return false
-	}
-	for _, l := range fn.Locals {
-		if l.Captured {
-			return false
-		}
-	}
-	for _, in := range fn.Code {
-		switch in.Op {
-		case bytecode.OpYieldStar, bytecode.OpAwait:
-			return false
-		}
-	}
-	return true
-}
+// fn natively (ssa.Func's GenEntry, jitcompile.GeneratorResumable): a
+// synchronous generator whose body has no yield*, whose locals no closure
+// captures -- its frame's locals are then the generator's alone, which no
+// cell holds -- and no call in tail position, which a generator's frame
+// does not give up.
+func jitGenCallable(fn *bytecode.Function) bool { return jitcompile.GeneratorResumable(fn) }
 
 // jitGenResumes are the places a step resumes a generator of fn natively at
 // (ssa.Func's GenResumes): past its parameters, where it starts, and after
