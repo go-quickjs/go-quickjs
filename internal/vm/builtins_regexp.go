@@ -507,11 +507,11 @@ func (r *Runtime) execIsBuiltin(rx Value) bool {
 		o.shape.keys[0].key == atomLastIndex && propsIntact(o.proto, r.regexpExecProps)
 }
 
-// builtinExec reports whether exec, called on rx, would be the built-in
-// running on an unnamed-group pattern: rx's flags are the built-in's to read
-// (see builtinFlags), and so is exec, which the realm's prototype still holds.
-// Its caller can then match without the result array, which nothing but it
-// would see. Groups with names are left to the array, which has them.
+// builtinExec reports whether exec, called on rx, would be the built-in:
+// rx's flags are the built-in's to read (see builtinFlags), and so is exec,
+// which the realm's prototype still holds. Its caller can then match without
+// the result array, which nothing but it would see, and make what it needs
+// of it -- a groups object -- as exec would.
 func (r *Runtime) builtinExec(rx Value) bool {
 	if _, ok := r.builtinFlagBits(rx); !ok {
 		return false
@@ -554,8 +554,8 @@ func (r *Runtime) builtinExecOf(rx Value) bool {
 	if !propsIntact(r.proto.regexp, r.regexpExecProps) {
 		return false
 	}
-	d, ok := rx.Object().dataOf().(*regexpData)
-	return ok && len(d.re.GroupNames()) == 0
+	_, ok := rx.Object().dataOf().(*regexpData)
+	return ok
 }
 
 // execMatchAll is what calling the built-in exec on a global rx, over and

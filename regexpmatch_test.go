@@ -202,3 +202,25 @@ func TestRegExpSearchAgreesWithNode(t *testing.T) {
 	r.push(log.join())
 	r.join("|")`, `1|3|-1|2|0|2|-1|0|3|2|1|0|1|object|1|TypeError|1|1|1|x|2|sub abc`)
 }
+
+// TestRegExpNamedReplaceAgreesWithNode covers the methods that match with
+// the built-in exec but make no array, on patterns with named groups:
+// replace by a template of $<name> -- a name there is not, one with no >, a
+// name two alternatives share, one that took no part, a name not ASCII --
+// and by a function, given the groups object as its last argument;
+// split, whose pieces take in the groups; match with the g flag; a sticky
+// and a single replace. The answers are Node v26's.
+func TestRegExpNamedReplaceAgreesWithNode(t *testing.T) {
+	checkEval(t, `var r = [], d = /(?<y>\d{4})-(?<m>\d\d)(?:-(?<d>\d\d))?/g, s = "2024-01-15 and 1999-12"
+	r.push(s.replace(d, "$<d>.$<m>.$<y>"), s.replace(d, "[$<nope>|$<y|$<>|$<m>$1$&]"), s.replace(d, "$<"))
+	r.push("ab".replace(/(?<n>a)|(?<n>b)/g, "<$<n>>"), "a-b".replace(/(?<x>a)(?<z>z)?/, "$<z>|$<x>|$2|$1"))
+	r.push("café".replace(/(?<名>é)/u, "[$<名>]"), "x".replace(/(?<a>x)/, "$<a>$<a"))
+	r.push(s.replace(d, function () {
+	  var g = arguments[arguments.length - 1]
+	  return Object.getPrototypeOf(g) + ":" + Object.keys(g).join("") + ":" + g.y + g.d + ":" + (arguments.length - 2) }))
+	r.push("k1=v1;k2=v2".replace(/(?<k>\w+)=(?<v>\w+)/g, (m, k, v, at, str, g) => g.v + "=" + g.k + "@" + at + typeof str))
+	r.push("a1b2c".split(/(?<d>\d)/).join(), "a1b2c".split(/(?<d>\d)/, 2).join(), s.match(d).join(), "a1b2".match(/(?<l>[a-z])/g).join())
+	var y = /(?<w>\w)/y; y.lastIndex = 1
+	r.push("abc".replace(y, "<$<w>>"), y.lastIndex, "abc".replace(/(?<w>\w)/gy, "$<w>$<w>"))
+	r.join("|")`, `15.01.2024 and .12.1999|[||0120242024-01-15] and [||1219991999-12]|$< and $<|<a><b>||a||a-b|caf[é]|x$<a|null:ymd:202415:5 and null:ymd:1999undefined:5|v1=k1@0string;v2=k2@6string|a,1,b,2,c|a,1|2024-01-15,1999-12|a,b|a<b>c|2|aabbcc`)
+}

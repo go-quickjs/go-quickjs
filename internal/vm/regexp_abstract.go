@@ -616,12 +616,17 @@ func (r *Runtime) regExpReplace(rx Value, args []Value, fl regexp.Flags, direct 
 	// refilled for each match rather than allocated per match. A callee may
 	// not keep what it was called with, any more than it may keep the
 	// interpreter's own stack.
-	var captures, callArgs []Value
+	var captures, callArgs, groupVals []Value
 	count := len(results)
 	width := 0
+	// The built-in exec's matches of a pattern with named groups each have
+	// a groups object, made as exec makes it.
+	var gl *groupsLayout
 	if fast {
-		width = 2 * (rx.Object().dataOf().(*regexpData).re.GroupCount() + 1)
+		re := rx.Object().dataOf().(*regexpData).re
+		width = 2 * (re.GroupCount() + 1)
 		count = len(spans) / width
+		gl = r.groupsLayoutOf(re)
 	}
 	// Nothing matched: the result is the subject, whole, which is the string
 	// itself rather than a copy of it.
@@ -644,7 +649,7 @@ func (r *Runtime) regExpReplace(rx Value, args []Value, fl regexp.Flags, direct 
 	var pieces []templatePiece
 	var pieceRoom [16]templatePiece
 	if fast && !functional && !plain {
-		pieces = templatePieces(pieceRoom[:0], template, width/2-1)
+		pieces = r.templatePieces(pieceRoom[:0], template, width/2-1, gl)
 	}
 	if plain || pieces != nil {
 		if err := sb.Grow(len(s.Go())); err != nil {
@@ -658,7 +663,7 @@ func (r *Runtime) regExpReplace(rx Value, args []Value, fl regexp.Flags, direct 
 		if pieces != nil {
 			caps := spans[k*width : (k+1)*width]
 			sb.WriteString(j.slice(next, caps[0]))
-			writeTemplate(&sb, &j, caps, pieces, template)
+			writeTemplate(&sb, &j, caps, pieces, template, gl)
 			next = caps[1]
 			continue
 		}
@@ -678,6 +683,10 @@ func (r *Runtime) regExpReplace(rx Value, args []Value, fl regexp.Flags, direct 
 					c = Str(s.Substring(caps[i], caps[i+1]))
 				}
 				captures = append(captures, c)
+			}
+			if gl != nil {
+				groupVals = append(append(groupVals[:0], Str(matched)), captures...)
+				named = r.groupsObject(gl, groupVals)
 			}
 		} else {
 			result := results[k]
@@ -834,13 +843,15 @@ const (
 	pieceGroup                      // $&, $n and $nn: group lo
 	pieceBefore                     // $`, what the subject has before the match
 	pieceAfter                      // $', what it has after
+	pieceNamed                      // $<name>: the groups gl.groups[lo] name
 )
 
 // templatePieces appends to pieces those of a template with a $, for a
-// pattern of groups groups whose matches have no groups object -- so that
-// $< is text -- as getSubstitution reads it: what each piece is does not
-// depend on the match, only on how many groups there are.
-func templatePieces(pieces []templatePiece, template string, groups int) []templatePiece {
+// pattern of groups groups whose matches have the groups objects gl makes --
+// or none where gl is nil, so that $< is text -- as getSubstitution reads it:
+// what each piece is does not depend on the match, only on the pattern's
+// groups and their names.
+func (r *Runtime) templatePieces(pieces []templatePiece, template string, groups int, gl *groupsLayout) []templatePiece {
 	for i := 0; i < len(template); i++ {
 		if template[i] != '$' || i+1 >= len(template) {
 			pieces = appendText(pieces, i, i+1)
@@ -875,8 +886,24 @@ func templatePieces(pieces []templatePiece, template string, groups int) []templ
 			}
 			pieces = append(pieces, templatePiece{kind: pieceGroup, lo: idx})
 			i += consumed
+		case c == '<' && gl != nil:
+			// A name, read from the groups object: one it does not have is
+			// undefined there, which is nothing. Without a > it is text.
+			end := strings.IndexByte(template[i+2:], '>')
+			if end < 0 {
+				pieces = appendText(pieces, i, i+1)
+				continue
+			}
+			name := r.atoms.intern(template[i+2 : i+2+end])
+			for k, a := range gl.names {
+				if a == name {
+					pieces = append(pieces, templatePiece{kind: pieceNamed, lo: k})
+					break
+				}
+			}
+			i += 2 + end
 		default:
-			// $< among them: without a groups object it names nothing.
+			// $< among them, without a groups object: it names nothing.
 			pieces = appendText(pieces, i, i+1)
 		}
 	}
@@ -894,8 +921,9 @@ func appendText(pieces []templatePiece, lo, hi int) []templatePiece {
 }
 
 // writeTemplate writes the replacement of the match caps of j by the
-// template pieces were read from.
-func writeTemplate(sb *partsBuilder, j *subject, caps []int, pieces []templatePiece, template string) {
+// template pieces were read from, for a pattern whose groups objects gl
+// makes.
+func writeTemplate(sb *partsBuilder, j *subject, caps []int, pieces []templatePiece, template string, gl *groupsLayout) {
 	for _, p := range pieces {
 		switch p.kind {
 		case pieceText:
@@ -909,6 +937,14 @@ func writeTemplate(sb *partsBuilder, j *subject, caps []int, pieces []templatePi
 			sb.WriteString(j.slice(0, caps[0]))
 		case pieceAfter:
 			sb.WriteString(j.slice(min(caps[1], j.len()), j.len()))
+		case pieceNamed:
+			// The first of the groups the name is that took part.
+			for _, g := range gl.groups[p.lo] {
+				if lo, hi := caps[2*g], caps[2*g+1]; lo >= 0 && hi >= 0 {
+					sb.WriteString(j.slice(lo, hi))
+					break
+				}
+			}
 		}
 	}
 }
