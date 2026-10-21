@@ -1589,17 +1589,30 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 	//
 	// The length is read once, as everywhere else: an element the callback
 	// writes is seen, but the view cannot grow underneath the loop.
-	type callbackMethod struct {
-		name   string
-		length int
-	}
-	for _, m := range []callbackMethod{
-		{"forEach", 1}, {"map", 1}, {"filter", 1}, {"find", 1}, {"findIndex", 1},
-		{"findLast", 1}, {"findLastIndex", 1}, {"some", 1}, {"every", 1},
+	//
+	// The callback is called as Array.prototype's forEach and the others call
+	// theirs, by callDirect, its arguments in one list made once rather than
+	// per element: a callee may not keep it, any more than it may keep the
+	// interpreter's own stack. Each element had been called through call,
+	// with a list of its own, and a callback planTreeCall had given its
+	// tree's call was run through callObject and runFD every time.
+	const (
+		tcForEach = iota
+		tcMap
+		tcFilter
+		tcFind
+		tcFindIndex
+		tcFindLast
+		tcFindLastIndex
+		tcSome
+		tcEvery
+	)
+	for kind, method := range []string{
+		tcForEach: "forEach", tcMap: "map", tcFilter: "filter", tcFind: "find", tcFindIndex: "findIndex",
+		tcFindLast: "findLast", tcFindLastIndex: "findLastIndex", tcSome: "some", tcEvery: "every",
 	} {
-		method := m.name
 		full := "TypedArray.prototype." + method
-		r.defMethod(p, method, m.length, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		r.defMethod(p, method, 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 			t, err := rt.typedArrayOf(this, full)
 			if err != nil {
 				return Undefined, err
@@ -1618,63 +1631,65 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 			// round -- it cannot know how long its result is until it has run.
 			var mapped Value
 			var mappedArr *typedArrayData
-			if method == "map" {
+			if kind == tcMap {
 				var err error
 				mapped, mappedArr, err = rt.newTypedArrayLike(this, t, n)
 				if err != nil {
 					return Undefined, err
 				}
 			}
-			backwards := method == "findLast" || method == "findLastIndex"
+			backwards := kind == tcFindLast || kind == tcFindLastIndex
+			var argv [3]Value
 			for k := 0; k < n; k++ {
 				i := k
 				if backwards {
 					i = n - 1 - k
 				}
 				el := t.getElem(i)
-				res, err := rt.call(cb, thisArg, []Value{el, Int(i), this})
+				argv[0], argv[1], argv[2] = el, Int(i), this
+				res, err := rt.callDirect(cb, thisArg, argv[:])
 				if err != nil {
 					return Undefined, err
 				}
-				switch method {
-				case "map":
+				switch kind {
+				case tcMap:
 					// A write past the end of a result that has since shrunk
 					// is dropped, as any such write is.
 					if err := rt.setElem(mappedArr, i, res); err != nil {
 						return Undefined, err
 					}
-				case "filter":
+				case tcFilter:
 					if res.Truthy() {
 						kept = append(kept, el)
 					}
-				case "find", "findLast":
+				case tcFind, tcFindLast:
 					if res.Truthy() {
 						return el, nil
 					}
-				case "findIndex", "findLastIndex":
+				case tcFindIndex, tcFindLastIndex:
 					if res.Truthy() {
 						return Int(i), nil
 					}
-				case "some":
+				case tcSome:
 					if res.Truthy() {
 						return True, nil
 					}
-				case "every":
+				case tcEvery:
 					if !res.Truthy() {
 						return False, nil
 					}
 				}
 			}
-			switch method {
-			case "map":
+			switch kind {
+			case tcMap:
 				return mapped, nil
-			case "filter":
+			case tcFilter:
 				return rt.fillTypedArrayLike(this, t, kept)
-			case "some":
+			case tcSome:
 				return False, nil
-			case "every":
+			case tcEvery:
 				return True, nil
-			case "findIndex", "findLastIndex":
+			case tcFindIndex, tcFindLastIndex:
 				return Int(-1), nil
 			}
 			return Undefined, nil
@@ -1714,12 +1729,14 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 				}
 				acc, k = t.getElem(i), 1
 			}
+			var argv [4]Value
 			for ; k < n; k++ {
 				i := k
 				if reversed {
 					i = n - 1 - k
 				}
-				acc, err = rt.call(cb, Undefined, []Value{acc, t.getElem(i), Int(i), this})
+				argv[0], argv[1], argv[2], argv[3] = acc, t.getElem(i), Int(i), this
+				acc, err = rt.callDirect(cb, Undefined, argv[:])
 				if err != nil {
 					return Undefined, err
 				}
