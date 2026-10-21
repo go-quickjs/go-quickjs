@@ -49,7 +49,7 @@ skipped because they require an unsupported feature or host facility, on
 test262 commit [`2e0a5676`](https://github.com/tc39/test262/commit/2e0a56762801e275a9fdf96dc49d90ba0cddcf63). See [Conformance](docs/status.md#conformance) for the
 measurement and [Not implemented](docs/status.md#not-implemented) for what is missing.
 
-With the native JIT disabled, its V8 version 7 composite score is 5.90 times
+With the native JIT disabled, its V8 version 7 composite score is 5.74 times
 goja's on an Apple M5 Max with Go 1.27.0. This older workload suite does not
 represent every application; see the [goja comparison](docs/benchmarks.md#v8-version-7-benchmark-suite)
 for the individual scores and measurement details.
