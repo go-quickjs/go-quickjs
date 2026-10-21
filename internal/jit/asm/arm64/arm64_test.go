@@ -43,3 +43,22 @@ func TestMulW(t *testing.T) {
 		}
 	}
 }
+
+// ClzW is CLZ of W registers, sf 0: clz w0, w1, clz w15, w28 and clz w9,
+// w17.
+func TestClzW(t *testing.T) {
+	for _, tc := range []struct {
+		d, n Reg
+		want uint32
+	}{
+		{0, 1, 0x5AC01020},
+		{15, 28, 0x5AC0138F},
+		{9, 17, 0x5AC01229},
+	} {
+		var a Asm
+		a.ClzW(tc.d, tc.n)
+		if len(a.buf) != 1 || a.buf[0] != tc.want {
+			t.Errorf("ClzW(%d, %d) = %#08x, want %#08x", tc.d, tc.n, a.buf, tc.want)
+		}
+	}
+}

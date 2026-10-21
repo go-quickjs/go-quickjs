@@ -682,6 +682,17 @@ func (a *Asm) Imul32(dst, src Reg) {
 	a.modrmRR(byte(dst), byte(src))
 }
 
+// Bsr is dst = the index of src's highest set bit, 64 bits if wide, else
+// 32: BSR, which every x86-64 has. Of a src of 0 it sets ZF and leaves dst
+// undefined, so a caller gives it a src that cannot be 0. It is not LZCNT,
+// which counts the leading zeros instead: LZCNT's bytes are BSR's with an
+// F3 prefix, which a CPU without LZCNT ignores, running them as BSR.
+func (a *Asm) Bsr(dst, src Reg, wide bool) {
+	a.rex(wide, byte(dst), byte(src), false)
+	a.emit2(0x0F, 0xBD)
+	a.modrmRR(byte(dst), byte(src))
+}
+
 func (a *Asm) Op(op ALU, dst, src Reg, wide bool) {
 	a.rex(wide, byte(src), byte(dst), false)
 	a.emit(byte(op))

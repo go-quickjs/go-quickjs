@@ -147,3 +147,25 @@ func TestImul32(t *testing.T) {
 		}
 	}
 }
+
+// Bsr is BSR, 0F BD, the destination in ModRM's reg field: REX.W for 64
+// bits, REX.R for a destination past R7, REX.B for a source past it.
+func TestBsr(t *testing.T) {
+	for _, tc := range []struct {
+		dst, src Reg
+		wide     bool
+		want     []byte
+	}{
+		{RAX, RCX, false, []byte{0x0F, 0xBD, 0xC1}},
+		{RAX, RAX, true, []byte{0x48, 0x0F, 0xBD, 0xC0}},
+		{R11, RAX, true, []byte{0x4C, 0x0F, 0xBD, 0xD8}},
+		{RDX, R11, false, []byte{0x41, 0x0F, 0xBD, 0xD3}},
+		{R9, R11, true, []byte{0x4D, 0x0F, 0xBD, 0xCB}},
+	} {
+		var a Asm
+		a.Bsr(tc.dst, tc.src, tc.wide)
+		if !bytes.Equal(a.buf, tc.want) {
+			t.Errorf("Bsr(%d, %d, %v) = % x, want % x", tc.dst, tc.src, tc.wide, a.buf, tc.want)
+		}
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/bits"
 	"slices"
 	"unsafe"
 
@@ -265,6 +266,8 @@ func apply(op Op, aux int, a, b val) val {
 		return val{i: ^a.i}
 	case OpMulI32:
 		return val{i: a.i * b.i}
+	case OpClz32:
+		return val{i: uint32(bits.LeadingZeros32(a.i))}
 	case OpI32ToF64:
 		return val{f: float64(int32(a.i))}
 	case OpU32ToF64:

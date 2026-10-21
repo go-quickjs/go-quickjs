@@ -252,8 +252,11 @@ const (
 	// null or undefined, whose conversion to a string calls nothing
 	// (ir.StringPart): an object, a symbol or a BigInt exits.
 	OpPrimitive // tagged -> none
-	OpI32ToF64  // signed
-	OpU32ToF64  // unsigned
+	// OpClz32 is the count of the leading zero bits of a number's ToUint32,
+	// from 0 to 32, Math.clz32's (Intrinsic).
+	OpClz32    // i32 -> i32
+	OpI32ToF64 // signed
+	OpU32ToF64 // unsigned
 	// OpBoolToF64 and OpBoolToI32 are a boolean as a number, 1 or 0, as
 	// ToNumber has it: a comparison an arithmetic or bitwise operator
 	// takes, (a < b) | (c < d) -- what Emscripten's code does -- which
@@ -507,7 +510,7 @@ var opNames = [...]string{
 	OpStringMethod: "stringmethod", OpStringProp: "stringprop", OpStringCode: "stringcode", OpStringChar: "stringchar", OpCodeChar: "codechar", OpSubstringChar: "substringchar", OpLoopMark: "loopmark", OpFreeze: "freeze", OpOddballF64: "oddball",
 	OpAddF64: "addf", OpSubF64: "subf", OpMulF64: "mulf", OpDivF64: "divf", OpModF64: "modf", OpNegF64: "negf", OpCmpF64: "cmpf",
 	OpNot: "not", OpStrictNullish: "strictnullish", OpLooseNullish: "loosenullish", OpEqTagged: "eqtagged", OpToInt32: "toi32", OpAndI32: "and", OpOrI32: "or", OpXorI32: "xor", OpShlI32: "shl",
-	OpSarI32: "sar", OpShrU32: "shr", OpNotI32: "noti", OpMulI32: "muli", OpPrimitive: "primitive", OpI32ToF64: "i2f", OpU32ToF64: "u2f",
+	OpSarI32: "sar", OpShrU32: "shr", OpNotI32: "noti", OpMulI32: "muli", OpPrimitive: "primitive", OpClz32: "clz32", OpI32ToF64: "i2f", OpU32ToF64: "u2f",
 	OpBoolToF64: "b2f", OpBoolToI32: "b2i",
 	OpSameObject: "sameobject", OpFrameRoom: "frameroom", OpTailRoom: "tailroom", OpTailSelf: "tailself", OpSameSymbol: "samesymbol", OpIterClosed: "iterclosed", OpKeepRef: "keepref", OpKeep: "keep", OpKept: "kept",
 	OpCall: "call", OpCallCell: "callcell", OpSqrtF64: "sqrtf", OpAbsF64: "absf", OpInstanceOf: "instanceof", OpTypeIs: "typeis",

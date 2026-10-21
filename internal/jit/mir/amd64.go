@@ -6591,6 +6591,23 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.setG(v, scratchA)
 	case ssa.OpPrimitive:
 		c.primitive(v, c.guardFor(v))
+	case ssa.OpClz32:
+		// Math.clz32 of x, 32 bits: 32 less the index of the highest set
+		// bit of 2x+1, of 64, which BSR finds, as Go's compiler counts
+		// them below GOAMD64=v3. 2x+1 is never 0, which leaves BSR's
+		// result undefined, and its bit 0 makes x of 0 answer 32. LZCNT
+		// would count them itself, but where the CPU has no LZCNT its
+		// bytes run as BSR's, a different answer, and nothing the VM
+		// asks the CPU says it has it (cpu.X86 has no such flag, as it
+		// has SSE4.1's for jitEncoding's Round); BSR, which every x86-64
+		// has, gives every CPU the same code, the code the tests run.
+		c.a.MovRR32(scratchA, c.gpr(arg(0), scratchA))
+		c.a.ShiftImm(amd64.Shl, scratchA, 1, true)
+		c.a.OpImm(amd64.Or, scratchA, 1, true)
+		c.a.Bsr(scratchB, scratchA, true)
+		c.a.MovImm(scratchA, 32)
+		c.a.Op(amd64.Sub, scratchA, scratchB, false)
+		c.setG(v, scratchA)
 	case ssa.OpI32ToF64:
 		c.a.Cvtsi2sd(xScratch0, c.gpr(arg(0), scratchA), false)
 		c.setX(v, xScratch0)

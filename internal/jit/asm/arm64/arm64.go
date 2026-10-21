@@ -434,6 +434,12 @@ func (a *Asm) MulW(dst, n, m Reg) {
 	a.emit(0x1B007C00 | uint32(m)<<16 | uint32(n)<<5 | uint32(dst))
 }
 
+// ClzW is dst = the count of n's leading zero bits, 32 bits: from 0 to 32,
+// Math.clz32's of n's ToUint32, dst's upper half cleared.
+func (a *Asm) ClzW(dst, n Reg) {
+	a.emit(0x5AC01000 | uint32(n)<<5 | uint32(dst))
+}
+
 // Smulh is dst = the high 64 bits of n*m, signed: the product fits 64 bits
 // where it is the low half's sign, repeated.
 func (a *Asm) Smulh(dst, n, m Reg) {

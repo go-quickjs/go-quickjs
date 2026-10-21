@@ -5989,6 +5989,10 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.setG(v, d)
 	case ssa.OpPrimitive:
 		c.primitive(v, c.guardFor(v))
+	case ssa.OpClz32:
+		d := c.gdst(v)
+		c.a.ClzW(d, c.gpr(arg(0), a64A))
+		c.setG(v, d)
 	case ssa.OpI32ToF64:
 		c.a.Scvtf(a64F0, c.gpr(arg(0), a64A), false)
 		c.setF(v, a64F0)

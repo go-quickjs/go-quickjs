@@ -6,12 +6,16 @@ import (
 	"runtime"
 	"runtime/debug"
 	"testing"
+
+	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
 // mathFamilySetup's loops call Math.imul of every kind of number -- past
 // an int32's range, fractions, -0, NaN, the infinities -- Math.clz32, and
 // Math.pow, Math.atan2 and Math.hypot of two numbers; oddLoop gives them a
-// string too, and constLoop constants, which the code folds.
+// string too, and constLoop constants, which the code folds. clzEach keeps
+// Math.clz32 of each of clzVals -- about 0, 2**31 and 2**32, past them,
+// negative, fractions, the zeros, NaN and the infinities -- in clzOut.
 const mathFamilySetup = `
 var ints = [0, -0, 1, -1, 3, 7.9, -7.9, 0x7fffffff, -0x80000000, 0xffffffff, 2 ** 32 + 5, 2 ** 53 + 2, -(2 ** 60), 1e300, NaN, Infinity, -Infinity, 0.5, -1e-300];
 function imulLoop(n) { let s = 0x811c9dc5 | 0; for (let i = 0; i < n; i++) s = Math.imul(s ^ i, 16777619) + Math.imul(ints[i % ints.length], ints[(i * 7 + 3) % ints.length]) | 0; return s }
@@ -20,15 +24,19 @@ function twoLoop(n) { let t = 0; for (let i = 0; i < n; i++) { const a = (i * 37
 var odd = [3, "5", 2];
 function constLoop(n) { let s = 0; for (let i = 0; i < n; i++) s = s + Math.imul(0x7fffffff, 3) + Math.imul(-5, 2 ** 32 + 7) + Math.clz32(1) + (i & 1) | 0; return s }
 function oddLoop(n) { let s = 0; for (let i = 0; i < n; i++) s = s + Math.imul(odd[i % 3], 3) + Math.clz32(odd[(i + 1) % 3]) + Math.pow(odd[(i + 2) % 3], 2) | 0; return s }
+var clzVals = [0, -0, 1, -1, 0.5, -0.5, 1.9, -1.9, 2, 3, 0xffff, 0x10000, 2 ** 31 - 1, 2 ** 31, -(2 ** 31), -(2 ** 31) - 1, 2 ** 32 - 1, 2 ** 32, 2 ** 32 + 1, 2 ** 32 + 0x8000, 4294967295.5, -4294967295.5, 2 ** 53 + 2, -(2 ** 53), 2 ** 64, 1e300, -1e300, 5e-324, NaN, Infinity, -Infinity];
+var clzOut = clzVals.map(() => -1);
+function clzEach(n) { let t = 0; for (let i = 0; i < n; i++) { const k = i % clzVals.length; clzOut[k] = Math.clz32(clzVals[k]); t += 31 - Math.clz32(i + 1) } return t }
 `
 
 // Math.imul is an instruction of native code's (ssa.OpMulI32), each
-// argument's ToInt32 and their product's low half; Math.clz32 is a call of
-// Go of one number's (GoMath), as Math's others are; Math.pow, Math.atan2
+// argument's ToInt32 and their product's low half; Math.clz32 is one too
+// (ssa.OpClz32), the leading zeros of its argument's ToUint32, no call of
+// Go of one number (GoMath) left in its loops' code; Math.pow, Math.atan2
 // and Math.hypot of two numbers as before. Each loop's answer is Node's
 // (v26.10.0) and the interpreter's, and, warm, it makes no call of Go with
-// a frame and never leaves its code, which it runs. A string argument has Go make the call,
-// and Math.imul replaced is called.
+// a frame and never leaves its code, which it runs. A string argument has
+// Go make the call, and Math.imul and Math.clz32 replaced are called.
 func TestJITMathFamily(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -38,7 +46,7 @@ func TestJITMathFamily(t *testing.T) {
 	rounds := [][2]string{
 		{"imulLoop(300)", "-783171719"}, {"clzLoop(300)", "17731"},
 		{"twoLoop(300)", "1919301.6775609707"}, {"oddLoop(300)", "15700"},
-		{"constLoop(300)", "-1950"},
+		{"constLoop(300)", "-1950"}, {"clzEach(300)", "1898"},
 	}
 	var srcs []string
 	for range 6 {
@@ -56,8 +64,21 @@ func TestJITMathFamily(t *testing.T) {
 			t.Errorf("%s = %s, want Node's %s", rd[0], got, rd[1])
 		}
 	}
-	for _, name := range []string{"imulLoop", "clzLoop", "twoLoop", "constLoop"} {
+	const clzOut = "32,32,31,0,32,32,31,0,30,30,16,15,1,0,0,1,0,32,31,16,0,31,30,32,32,32,32,32,32,32,32"
+	if v, err := r.Run(compileForTest(t, "clzOut.join()")); err != nil || v.String().Go() != clzOut {
+		t.Errorf("clzEach's Math.clz32 of clzVals = %v (%v), want Node's %s", v, err, clzOut)
+	}
+	for _, name := range []string{"imulLoop", "clzLoop", "twoLoop", "constLoop", "clzEach"} {
 		e := jitNativeForTest(t, r, name)
+		if name == "clzLoop" || name == "constLoop" || name == "clzEach" {
+			// Their only Math function of one number is clz32.
+			for _, st := range e.ssa.GoCallStates() {
+				if ssa.GoOp(st.Op&0xff) == ssa.GoMath {
+					t.Errorf("%s's code calls Go for Math.clz32 (GoMath)", name)
+					break
+				}
+			}
+		}
 		calls, hosts, entries := e.ssaStats.goCalls, e.ssaStats.hosts, e.ssaStats.entries
 		if _, err := r.Run(compileForTest(t, name+"(300)")); err != nil {
 			t.Fatal(err)
@@ -73,5 +94,12 @@ func TestJITMathFamily(t *testing.T) {
 	}
 	if got := v.String().Go(); got != "-719671039" {
 		t.Errorf("imulLoop(300) with Math.imul replaced = %s, want Node's -719671039", got)
+	}
+	v, err = r.Run(compileForTest(t, "Math.clz32 = x => 7; '' + clzLoop(300)"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String().Go(); got != "5250" {
+		t.Errorf("clzLoop(300) with Math.clz32 replaced = %s, want Node's 5250", got)
 	}
 }

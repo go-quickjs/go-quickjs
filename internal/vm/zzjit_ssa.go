@@ -2195,9 +2195,8 @@ func (fb *jitFeedback) Intrinsic(pc int) (ssa.Intrinsic, bool) {
 	// The realm's Math functions of numbers, each made natively, as V8's
 	// code makes them: Math.pow where exact, and by Go called from there
 	// otherwise; Math.max and Math.min of any number of them; a rounding,
-	// the sign, fround, sqrt, abs and imul by instructions of their own;
-	// every other by Go called from there, the VM's very function -- clz32's
-	// among them.
+	// the sign, fround, sqrt, abs, imul and clz32 by instructions of their
+	// own; every other by Go called from there, the VM's very function.
 	fd, n := o.fn(), int(fn.Code[pc].A)
 	switch {
 	case n == 0:
@@ -2221,6 +2220,8 @@ func (fb *jitFeedback) Intrinsic(pc int) (ssa.Intrinsic, bool) {
 		k.Op, k.Args = ssa.OpMinF64, n
 	case fd.mathOp == mathImul && n == 2:
 		k.Op = ssa.OpMulI32
+	case fd.mathOp == mathClz32 && n == 1:
+		k.Op = ssa.OpClz32
 	case fd.mathOp != 0 && int(fd.mathOp) < len(unaryMath) && n == 1:
 		k.Op = jitUnaryMath(unaryMathName(fd.mathOp))
 		if k.Op == ssa.OpMathCall {

@@ -426,3 +426,24 @@ func TestApplyMulI32(t *testing.T) {
 		}
 	}
 }
+
+// The evaluator's OpClz32 is Math.clz32's of a number's ToUint32, held as
+// bits: its leading zero bits, 32 of 0 and none where the top bit is set.
+func TestApplyClz32(t *testing.T) {
+	for _, c := range [][2]uint32{
+		{0, 32},
+		{1, 31},
+		{2, 30},
+		{3, 30},
+		{0xffff, 16},
+		{0x10000, 15},
+		{0x7fffffff, 1},
+		{0x80000000, 0},
+		{0xffffffff, 0},
+		{0xfffffffb, 0},
+	} {
+		if got := apply(OpClz32, 0, val{i: c[0]}, val{}).i; got != c[1] {
+			t.Errorf("clz32 %#x = %d, want %d", c[0], got, c[1])
+		}
+	}
+}

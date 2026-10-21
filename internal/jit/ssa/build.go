@@ -50,9 +50,9 @@ type Feedback interface {
 // function object, which the call checks it calls (the VM keeps it
 // alive), and what it computes of its argument, a number, or of its two
 // for Math.pow (OpPowF64), Math.imul (OpMulI32) and Math.atan2 and
-// Math.hypot, or of any number
-// from one for Math.max and Math.min -- another leaves the call to Go,
-// which makes it.
+// Math.hypot, or of any number from one for Math.max and Math.min --
+// another leaves the call to Go, which makes it. Math.clz32 is an
+// instruction of its own (OpClz32), as Math.imul is.
 type Intrinsic struct {
 	Callee uintptr
 	Op     Op
@@ -3028,7 +3028,7 @@ func (b *builder) intrinsic(pc int) (Intrinsic, bool) {
 		return Intrinsic{}, false
 	}
 	switch k.Op {
-	case OpSqrtF64, OpAbsF64, OpPowF64, OpMaxF64, OpMinF64, OpFloorF64, OpCeilF64, OpTruncF64, OpRoundF64, OpSignF64, OpFroundF64, OpMulI32:
+	case OpSqrtF64, OpAbsF64, OpPowF64, OpMaxF64, OpMinF64, OpFloorF64, OpCeilF64, OpTruncF64, OpRoundF64, OpSignF64, OpFroundF64, OpMulI32, OpClz32:
 	case OpMathCall:
 		if k.Go != GoMath && k.Go != GoAtan2 && k.Go != GoHypot || !b.goCalls() {
 			return Intrinsic{}, false
@@ -3098,6 +3098,11 @@ func (b *builder) intrinsicCall(blk *Block, pc int, k Intrinsic, guard func(Op, 
 		// signed.
 		x, y := b.f.newValue(blk, OpToInt32, Int32, xs[0]), b.f.newValue(blk, OpToInt32, Int32, xs[1])
 		r = b.f.newValue(blk, OpI32ToF64, Float64, b.f.newValue(blk, OpMulI32, Int32, x, y))
+	case OpClz32:
+		// Math.clz32: the number's ToUint32, whose bits OpToInt32 gives,
+		// and its leading zeros, a number from 0 to 32.
+		x := b.f.newValue(blk, OpToInt32, Int32, xs[0])
+		r = b.f.newValue(blk, OpI32ToF64, Float64, b.f.newValue(blk, OpClz32, Int32, x))
 	case OpMaxF64, OpMinF64:
 		// Of each in turn, which NaN and the zeros' order allow.
 		r = xs[0]
