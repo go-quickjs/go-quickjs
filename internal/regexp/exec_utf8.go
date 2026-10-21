@@ -378,21 +378,22 @@ func (m *matcherUTF8) run(code []instr, pos int) (bool, error) {
 		continue
 	backtrack:
 		for {
-			if len(m.stack) == 0 {
+			top := len(m.stack) - 1
+			if top < 0 {
 				return false, nil
 			}
-			f := m.stack[len(m.stack)-1]
-			m.stack = m.stack[:len(m.stack)-1]
+			f := &m.stack[top]
 			if len(m.trail) > int(f.capsLen) {
 				m.undoCaps(int(f.capsLen))
 			}
 			if f.counterIdx == greedyFrame {
 				p := f.pos - 1
+				pc, pos = int(f.pc), int(p)
 				if p > f.counterVal {
 					f.pos = p
-					m.stack = append(m.stack, f)
+				} else {
+					m.stack = m.stack[:top]
 				}
-				pc, pos = int(f.pc), int(p)
 				break
 			}
 			if f.counterIdx == greedyRuneFrame {
@@ -400,13 +401,14 @@ func (m *matcherUTF8) run(code []instr, pos int) (bool, error) {
 				p := f.pos - int32(w)
 				if p > f.counterVal {
 					f.pos = p
-					m.stack = append(m.stack, f)
 				} else {
 					p = f.counterVal
+					m.stack = m.stack[:top]
 				}
 				pc, pos = int(f.pc), int(p)
 				break
 			}
+			m.stack = m.stack[:top]
 			if f.counterIdx >= 0 && f.pc == -1 {
 				m.counters[f.counterIdx] = int(f.counterVal)
 				continue

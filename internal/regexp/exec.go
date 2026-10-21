@@ -717,11 +717,14 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 
 	backtrack:
 		for {
-			if len(m.stack) == 0 {
+			top := len(m.stack) - 1
+			if top < 0 {
 				return false, nil
 			}
-			f := m.stack[len(m.stack)-1]
-			m.stack = m.stack[:len(m.stack)-1]
+			// The choice point is read where it is: a greedy run's stays
+			// there while it has more to give, changed in place rather than
+			// popped and pushed again for each unit it gives back.
+			f := &m.stack[top]
 			if len(m.trail) > int(f.capsLen) {
 				m.undoCaps(int(f.capsLen))
 			}
@@ -729,11 +732,12 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 				// A greedy run gives back one unit, and stays a choice
 				// point while it has more to give.
 				p := f.pos - 1
+				pc, pos = int(f.pc), int(p)
 				if p > f.counterVal {
 					f.pos = p
-					m.stack = append(m.stack, f)
+				} else {
+					m.stack = m.stack[:top]
 				}
-				pc, pos = int(f.pc), int(p)
 				break
 			}
 			if f.counterIdx == greedyRuneFrame {
@@ -746,13 +750,16 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 				p := f.pos - int32(w)
 				if p > f.counterVal {
 					f.pos = p
-					m.stack = append(m.stack, f)
 				} else {
 					p = f.counterVal
+					m.stack = m.stack[:top]
 				}
 				pc, pos = int(f.pc), int(p)
 				break
 			}
+			// Any other is popped. What it holds is read after: nothing is
+			// pushed before it is.
+			m.stack = m.stack[:top]
 			if f.counterIdx >= 0 && f.pc == -1 {
 				m.counters[f.counterIdx] = int(f.counterVal)
 				continue
