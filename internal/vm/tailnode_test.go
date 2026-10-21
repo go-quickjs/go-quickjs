@@ -5,15 +5,17 @@ import "testing"
 // tailCallScript makes calls in tail position in each of the forms a
 // return has them -- return f(x), a conditional's, an &&'s, an ||'s, a
 // ??'s, a comma's, nested conditionals', (0, f)(x), a method's of this,
-// of a local and by a computed key, a static method's, a private
-// method's, an arrow's -- of what a call may be made of -- a bound
-// function, a built-in, a proxy, a getter's function, a class, something
-// not callable, a method whose lookup throws -- with arguments a sloppy
-// callee's arguments object, a strict one's, a rest parameter and
-// defaults keep, fewer and more than the parameters, to a callee rebound
-// along the way, and to an error at the bottom, with the frames of its
-// stack. Three rounds, the last 40 deep, past tailCallDepth, so that its
-// frames are given up; Node, which gives up none, runs them all.
+// of a local, by a computed key and of another object, a static
+// method's, a private method's, a super method's, an arrow's -- of what
+// a call may be made of -- a bound function, a built-in, a proxy, a
+// getter's function, a class, something not callable, a method whose
+// lookup throws -- with arguments a sloppy callee's arguments object, a
+// strict one's, a rest parameter and defaults keep, fewer and more than
+// the parameters, an arguments object made after the callee's own calls
+// made calls in tail position, to a callee rebound along the way, and to
+// an error at the bottom, with the frames of its stack. Three rounds, the
+// last 40 deep, past tailCallDepth, so that its frames are given up;
+// Node, which gives up none, runs them all.
 const tailCallScript = `// A sloppy function, which keeps an arguments object of its own.
 var sloppyMaker = function (kept) {
 	return function s(n, a) { kept.push(arguments); return arguments.length + ":" + Array.prototype.join.call(arguments, ","); };
@@ -59,10 +61,12 @@ var sloppyMaker = function (kept) {
 			#priv(n) { return n === 0 ? "private" : this.#priv(n - 1); }
 			callPriv(n) { return this.#priv(n); }
 		}
+		class Sup { down(n) { return n === 0 ? "sup" : this.down(n - 1); } }
+		class Sub extends Sup { down(n) { return super.down(n); } }
 		var arrowThis = { tag: "arrow", run(n) { var f = (k) => k === 0 ? this.tag : f(k - 1); return f(n); } };
 		line("forms " + round, [plain(depth, 0), tern(depth, 0), even(depth), odd(depth), and(depth), and2(depth), nul(depth),
 			comma(depth), nested(depth, 0), paren(depth, ""), obj.m(depth), obj.viaLocal(depth), obj.viaIndex(depth),
-			obj.viaOther(depth, obj), new Counter(7).down(depth), Counter.make(depth).v, new Counter(0).callPriv(depth),
+			obj.viaOther(depth, obj), new Counter(7).down(depth), Counter.make(depth).v, new Counter(0).callPriv(depth), new Sub().down(depth),
 			arrowThis.run(depth)].join(" "));
 		// What is called in tail position: a bound function, a built-in, a
 		// proxy, a getter's function, a class, something not callable, a
@@ -123,7 +127,7 @@ var sloppyMaker = function (kept) {
 
 // tailCallWant is Node v26.10.0's answer, the script run by
 // vm.runInThisContext.
-const tailCallWant = `forms 0: 6 3 false true false true nul 0 4 ppp obj obj! obj? obj 7 static private arrow
+const tailCallWant = `forms 0: 6 3 false true false true nul 0 4 ppp obj obj! obj? obj 7 static private sup arrow
 callees 0: bound undefined 3 3 proxy getter
 class 0: threw TypeError
 not callable 0: threw TypeError
@@ -133,7 +137,7 @@ arguments 0: 3:0,3,x | 3 | 3/2/1 | 0,7 | aundefined | 3:4 | 3/0,2/1,1/2,0/3 | 3:
 rebound 0: second 1
 throw 0: TypeError bottom 0 thrower2>thrower2>thrower2
 stack 0: stackOf>stackOf>stackOf
-forms 1: 6 3 false true false true nul 0 4 ppp obj obj! obj? obj 7 static private arrow
+forms 1: 6 3 false true false true nul 0 4 ppp obj obj! obj? obj 7 static private sup arrow
 callees 1: bound undefined 3 3 proxy getter
 class 1: threw TypeError
 not callable 1: threw TypeError
@@ -143,7 +147,7 @@ arguments 1: 3:0,3,x | 3 | 3/2/1 | 0,7 | aundefined | 3:4 | 3/0,2/1,1/2,0/3 | 3:
 rebound 1: second 1
 throw 1: TypeError bottom 0 thrower2>thrower2>thrower2
 stack 1: stackOf>stackOf>stackOf
-forms 2: 820 40 true false true false nul 0 60 pppppppppppppppppppppppppppppppppppppppp obj obj! obj? obj 7 static private arrow
+forms 2: 820 40 true false true false nul 0 60 pppppppppppppppppppppppppppppppppppppppp obj obj! obj? obj 7 static private sup arrow
 callees 2: bound undefined 3 40 proxy getter
 class 2: threw TypeError
 not callable 2: threw TypeError
@@ -172,7 +176,8 @@ func TestTailCallsAgreeWithNode(t *testing.T) {
 }
 
 // deepTailScript recurses 100,000 deep through calls in tail position, in
-// the forms tailCallScript makes them, which a stack of 400 frames holds
+// the forms tailCallScript makes them -- a private method's and a super
+// method's among them -- which a stack of 400 frames holds
 // only where each gives its frame up; strict arguments objects kept along
 // the way keep what their calls were given, and an error at the bottom is
 // caught at the top, its stack naming the function.
@@ -188,13 +193,15 @@ const deepTailScript = `(function () {
 	function nested(n, k) { return n === 0 ? k : k % 3 === 0 ? nested(n - 1, k + 1) : k % 3 === 1 ? nested(n - 1, k + 2) : nested(n - 1, k + 3); }
 	var obj = { tag: "obj", m(n) { return n === 0 ? this.tag : this.m(n - 1); }, viaIndex(n) { var k = "viaIndex"; return n === 0 ? this.tag + "?" : this[k](n - 1); } };
 	class C { constructor(v) { this.v = v; } down(n) { return n === 0 ? this.v : this.down(n - 1); } #p(n) { return n === 0 ? "p" : this.#p(n - 1); } callP(n) { return this.#p(n); } }
+	class B { down(n) { return n === 0 ? "super" : this.down(n - 1); } }
+	class D extends B { down(n) { return super.down(n); } }
 	var bound = function (n) { return n === 0 ? "bound" : toBound(n - 1); }.bind(null);
 	function toBound(n) { return bound(n); }
 	function strictArgs(n, keep) { if (n % 25000 === 0) keep.push(arguments); return n === 0 ? keep : strictArgs(n - 1, keep, n); }
 	function rest(n, ...a) { return n === 0 ? a.length : rest(n - 1, n, n); }
 	var arrow = (n) => n === 0 ? "arrow" : arrow(n - 1);
 	function thrower(n) { if (n === 0) throw new RangeError("deep"); return thrower(n - 1); }
-	r.push(plain(N, 0), tern(N, 0), even(N + 1), odd(N), and(N), and2(N + 1), nested(N, 0), obj.m(N), obj.viaIndex(N), new C("c").down(N), toBound(N), rest(N), arrow(N));
+	r.push(plain(N, 0), tern(N, 0), even(N + 1), odd(N), and(N), and2(N + 1), nested(N, 0), obj.m(N), obj.viaIndex(N), new C("c").down(N), new C(0).callP(N), new D().down(N), toBound(N), rest(N), arrow(N));
 	r.push(strictArgs(N, []).map(function (a) { return a.length + ":" + a[0] + ":" + a[2]; }).join(","));
 	try { thrower(N); } catch (e) { r.push(e.constructor.name + " " + e.message + " " + (e.stack.split("\n")[1].indexOf("thrower") >= 0)); }
 	return r.join(" ");
@@ -204,7 +211,7 @@ const deepTailScript = `(function () {
 // stack run in constant space, as strict code's tail calls must, on the
 // tree tier and in the interpreter alike.
 func TestDeepTailCalls(t *testing.T) {
-	const want = "705082704 100000 false false true true 150000 obj obj? c bound 2 arrow 2:100000:undefined,3:75000:75001,3:50000:50001,3:25000:25001,3:0:1 RangeError deep true"
+	const want = "705082704 100000 false false true true 150000 obj obj? c p super bound 2 arrow 2:100000:undefined,3:75000:75001,3:50000:50001,3:25000:25001,3:0:1 RangeError deep true"
 	defer SetTreeTier(true)
 	for _, tree := range []bool{true, false} {
 		SetTreeTier(tree)

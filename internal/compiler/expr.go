@@ -1443,14 +1443,15 @@ func (c *compiler) compileCall(n *ast.Call) {
 			c.emit(bytecode.OpDup, 0, 0)
 			c.emit(bytecode.OpGetPrivate, name, ref)
 			argc := c.compileArguments(n.Args)
-			c.emitAt(callPos(n), bytecode.OpCallMethod, uint32(argc), 0)
+			// A call in tail position, as any method's is.
+			c.emitAt(callPos(n), c.callOp(n, bytecode.OpCallMethod), uint32(argc), 0)
 			return
 		}
 		if _, isSuper := m.Object.(*ast.Super); isSuper {
 			c.emit(bytecode.OpPushThis, 0, 0)
 			c.compileSuperMemberGet(m)
 			argc := c.compileArguments(n.Args)
-			c.emitAt(callPos(n), bytecode.OpCallMethod, uint32(argc), 0)
+			c.emitAt(callPos(n), c.callOp(n, bytecode.OpCallMethod), uint32(argc), 0)
 			return
 		}
 	}

@@ -9,8 +9,9 @@ import (
 
 // TestHasTailCall pins which functions are marked as having a call in tail
 // position: a strict function's call that its return gives back, as a
-// plain call, a method call or a direct eval, and in either arm of a
-// conditional -- and not a sloppy function's, a call whose result is used,
+// plain call, a method call -- a private method's and a super method's
+// among them -- or a direct eval, and in either arm of a conditional --
+// and not a sloppy function's, a call whose result is used,
 // or a call in a nested function only.
 func TestHasTailCall(t *testing.T) {
 	cases := []struct {
@@ -25,6 +26,12 @@ func TestHasTailCall(t *testing.T) {
 		{`function f(n) { "use strict"; return 1 + g(n) }`, false},
 		{`function f(n) { "use strict"; g(n) }`, false},
 		{`function f(n) { "use strict"; return function () { return g(n) } }`, false},
+		// A private method's call and a super method's are calls too.
+		{`class C { #m(n) {} f(n) { return this.#m(n) } }`, true},
+		{`class C { #m(n) {} f(n) { return n ? this.#m(n) : 0 } }`, true},
+		{`class B { m() {} } class C extends B { f(n) { return super.m(n) } }`, true},
+		{`class C { #m(n) {} f(n) { return 1 + this.#m(n) } }`, false},
+		{`class B { m() {} } class C extends B { f(a) { return super.m(...a) } }`, false},
 	}
 	for _, tc := range cases {
 		prog, err := parser.Parse("var g; "+tc.src, parser.Options{})
