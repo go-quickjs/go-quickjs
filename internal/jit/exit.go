@@ -295,12 +295,13 @@ func CallPC(ctx *abi.Context) (pc, depth uint64) {
 // the frame, and no more: every call of Go from native code makes it.
 func ExpandGoCall(ctx *abi.Context) int32 {
 	if ctx.GoState == 0 {
+		ctx.GoLast = 0
 		return 0
 	}
 	// The description, which the code keeps alive (Code.GoCalls), by its
 	// address.
 	st := (*abi.GoCallState)(asPointer((*uint64)(unsafe.Pointer(&ctx.GoState))))
-	ctx.GoState = 0
+	ctx.GoLast, ctx.GoState = ctx.GoState, 0
 	ctx.GoOp, ctx.GoKeep = st.Op, st.Keep
 	if st.SetsPC {
 		ctx.ExitPC, ctx.ExitDepth = uint64(st.PC), uint64(st.Depth)

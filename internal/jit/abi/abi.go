@@ -453,6 +453,11 @@ type Context struct {
 	// entered the code with; 0 for a native callee's, whose frame Go makes
 	// from This.
 	FrameThis unsafe.Pointer
+	// GoLast is the description of the call of Go being made, GoState's,
+	// which jit.ExpandGoCall leaves here as it clears that: what Go keeps
+	// of the call (GoCallState's LeafSeen). At the end, so that no offset
+	// native code uses moves.
+	GoLast uintptr
 }
 
 // GoArg is an operand of a call of Go: a slot's two words, its pointer word
@@ -495,6 +500,10 @@ type GoCallState struct {
 	// gives up a speculation that does not pay.
 	BigScore int32
 	BigOff   bool
+	// LeafSeen marks a call the VM has made without a frame, a leaf's,
+	// and noted for the code's next compile (ssa.LeafFeedback), which
+	// makes it a call of its own (ssa.GoLeaf): once a call.
+	LeafSeen bool
 }
 
 // GoCallArg is a GoCallState's operand, the i'th, laid out for Go to read

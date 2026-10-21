@@ -531,6 +531,75 @@ func (b *builder) indexOfCall(blk *Block, pc int, fn uintptr, kind int, guard fu
 	b.write(base, blk, r)
 }
 
+// LeafFeedback is Feedback that knows the call at a PC, a method call or a
+// plain one, calls a leaf, a built-in the VM calls without a frame where
+// it runs no script, at the address it gives: native code makes it a call
+// of Go of its own (leafCall).
+type LeafFeedback interface {
+	Leaf(pc int) (fn uintptr, ok bool)
+}
+
+// leafAt is the leaf the call at pc of the root, one Go makes (a GoCall
+// site) of at most abi.MaxGoArgs-2 arguments, calls (LeafFeedback).
+func (b *builder) leafAt(pc int) (uintptr, bool) {
+	if b.fb == nil || b.cur != b.root || b.p.Code[pc].Op != ir.Host || pc+1 >= len(b.p.Code) || !reachable(b.p, pc+1) || b.fb.Generic(pc) || !b.goCalls() {
+		return 0, false
+	}
+	calls := b.calls[pc]
+	if len(calls) != 1 || calls[0].Go != GoCall || calls[0].New || calls[0].Argc > abi.MaxGoArgs-2 {
+		return 0, false
+	}
+	n := calls[0].Argc + 1
+	if calls[0].Method {
+		n++
+	}
+	if b.p.Maps[pc].Depth < n || b.p.Maps[pc+1].Depth != b.p.Maps[pc].Depth-n+1 {
+		return 0, false
+	}
+	f, ok := b.fb.(LeafFeedback)
+	if !ok {
+		return 0, false
+	}
+	return f.Leaf(pc)
+}
+
+// leafCall makes the call at pc of the leaf at fn: checked to call it, a
+// call of Go (GoLeaf) of the function, the receiver of a method call and
+// the arguments, whose result is the call's, kept where the call's would
+// be.
+func (b *builder) leafCall(blk *Block, pc int, fn uintptr, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+	f := b.f
+	c := b.calls[pc][0]
+	sp := b.p.Locals + b.p.Maps[pc].Depth
+	base := sp - c.Argc - 1
+	if c.Method {
+		base--
+	}
+	at := base
+	var recv *Value
+	if c.Method {
+		recv, at = b.read(base, blk), base+1
+	}
+	callee := b.read(at, blk)
+	object := guard(OpObjectOf, Ptr, ir.HostExit, callee)
+	same := guard(OpSameObject, None, ir.HostExit, object)
+	same.Const = ir.Value{Bits: uint64(fn)}
+	args := []*Value{callee}
+	if c.Method {
+		args = append(args, recv)
+	}
+	for k := range c.Argc {
+		args = append(args, b.read(at+1+k, blk))
+	}
+	site := &CallSite{Go: GoLeaf, Argc: c.Argc, Method: c.Method, ThisSlot: -1}
+	call := guard(OpCall, Tagged, ir.HostExit, args...)
+	f.cache(call).Calls, call.Index = []*CallSite{site}, b.callKeeps[pc]
+	kept := f.newValue(blk, OpCallCell, Source, call)
+	r := f.newValue(blk, OpKept, Tagged, kept, call)
+	r.Shadow = kept
+	b.write(base, blk, r)
+}
+
 // BigStringFeedback is Feedback that knows a method call at a PC, of no
 // argument or one, calls the realm's BigInt.prototype.toString, at the
 // address it gives, on a BigInt: native code makes it a call of Go of its
@@ -1224,6 +1293,16 @@ type GoOp uint8
 // string to the call's keep cell -- of a radix undefined, or an integer
 // from 2 to 36 -- and refuses any other receiver or radix, which leave the
 // call for Go to make after an exit. Argc is the call's arguments.
+//
+// GoLeaf is a call of a leaf, a built-in that runs no script where its
+// check passes (LeafFeedback): the function the first operand, which the
+// call has checked it calls, the receiver the second of a method call
+// (Method), the Argc arguments past them. Go applies it as every tier does
+// without a frame -- the built-in's own function where its check passes,
+// or the leaf's own -- with nothing to find out of the call first, as V8's
+// code calls a fast API function with no frame of JavaScript's, and
+// writes its result to the call's keep cell; what it refuses leaves for Go
+// to make the call after an exit.
 const (
 	GoAdd GoOp = 1 + iota
 	GoRefill
@@ -1256,6 +1335,7 @@ const (
 	GoArith
 	GoKeyedWrite
 	GoBigString
+	GoLeaf
 )
 
 // IndexOfFrom is GoIndexOf's Argc's low bit, where the call gives a
@@ -4894,6 +4974,10 @@ func (b *builder) instruction(blk *Block, pc int) {
 		}
 		if fn, kind, ok := b.indexOfAt(pc); ok && in.Op == ir.Host {
 			b.indexOfCall(blk, pc, fn, kind, guard)
+			break
+		}
+		if fn, ok := b.leafAt(pc); ok && in.Op == ir.Host {
+			b.leafCall(blk, pc, fn, guard)
 			break
 		}
 		if fn, ok := b.bigStringAt(pc); ok && in.Op == ir.Host {

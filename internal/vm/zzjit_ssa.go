@@ -2504,11 +2504,11 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 			// Another object of a function the call checks by its code.
 			continue
 		}
-		if in.cl == nil && (in.charCode || in.fromChar || in.substring || in.forEach || in.parseInt || in.indexOf || in.bigString) {
+		if in.cl == nil && (in.charCode || in.fromChar || in.substring || in.forEach || in.parseInt || in.indexOf || in.bigString || in.leaf) {
 			// String.prototype.charCodeAt, String.fromCharCode, a substring,
-			// a forEach or parseInt, which the code makes itself (CharCode,
-			// FromCharCode, Substring, ForEach, ParseInt) where it can, and
-			// Go otherwise.
+			// a forEach, parseInt or a leaf, which the code makes itself
+			// (CharCode, FromCharCode, Substring, ForEach, ParseInt, Leaf)
+			// where it can, and Go otherwise.
 			continue
 		}
 		if in.cl == nil && in.pop {
@@ -2791,8 +2791,9 @@ type jitInline struct {
 	// parseInt marks a plain call of the realm's parseInt with a number
 	// (jitParseInts), indexOf a string's or an array's call of one of
 	// jitSearches (jitIndexOfs), bigString a BigInt's call of
-	// BigInt.prototype.toString (jitBigStrings).
-	parseInt, indexOf, bigString bool
+	// BigInt.prototype.toString (jitBigStrings), leaf a call of a leaf
+	// native code made without a frame (jitLeafSeen).
+	parseInt, indexOf, bigString, leaf bool
 	// byCode marks a function the call met two objects of, closures its
 	// maker makes anew at each call: called by its code (jitSameCode).
 	byCode bool
@@ -3092,6 +3093,10 @@ func jitHostCall(ctx *abi.Context) bool {
 	if r == nil || ctx.GoKeep >= abi.MaxKeeps {
 		return false
 	}
+	if ssa.GoOp(ctx.GoOp&0xff) == ssa.GoLeaf && jitGoCallWork == nil {
+		// A leaf's call, its function checked by the code (jitLeafCall).
+		return r.jitLeafCall(ctx)
+	}
 	if ssa.GoOp(ctx.GoOp&0xff) == ssa.GoCall && jitGoCallWork == nil {
 		// The most frequent, asked first; one that runs nothing made
 		// without a frame.
@@ -3101,6 +3106,8 @@ func jitHostCall(ctx *abi.Context) bool {
 		jitGoCallWork()
 	}
 	switch ssa.GoOp(ctx.GoOp & 0xff) {
+	case ssa.GoLeaf:
+		return r.jitLeafCall(ctx)
 	case ssa.GoAdd:
 		a, b := jitGoArg(ctx, 0), jitGoArg(ctx, 1)
 		// Primitives, and nothing that throws: an object's conversion may
@@ -6878,6 +6885,28 @@ func (fb *jitFeedback) IndexOf(pc int) (uintptr, int, bool) {
 		}
 	}
 	return 0, 0, false
+}
+
+// Leaf is ssa.LeafFeedback's: the leaf a call at pc of the function was
+// seen to call without a frame (jitLeafSeen), the realm's, at its address:
+// one of jitLeafOp's, the only ones jitGoCallPlain makes.
+func (fb *jitFeedback) Leaf(pc int) (uintptr, bool) {
+	e := fb.e
+	if e == nil || fb.root != nil || pc >= len(fb.fn.Code) {
+		return 0, false
+	}
+	if op := jitCallOp(fb.fn.Code[pc].Op); op != bytecode.OpCall && op != bytecode.OpCallMethod || fb.fn.Code[pc].Op != op {
+		return 0, false
+	}
+	for _, x := range jitTargets(e) {
+		if int(x.pc) != pc || !x.leaf || x.obj == nil {
+			continue
+		}
+		if fd := x.obj.fn(); fd != nil && fd.native != nil && (fd.realm == nil || fd.realm == fb.r.Realm) {
+			return uintptr(unsafe.Pointer(x.obj)), true
+		}
+	}
+	return 0, false
 }
 
 // jitSearch is the answer of the search of kind, one of jitSearches, on

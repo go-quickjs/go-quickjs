@@ -81,6 +81,7 @@ func (r *Runtime) jitGoCallPlain(ctx *abi.Context) bool {
 		if v, ok = r.jitPlainCall(ctx, in, n); !ok {
 			return false
 		}
+		r.jitLeafSeen(ctx, in)
 	default:
 		return false
 	}
@@ -237,4 +238,97 @@ func (r *Runtime) jitPlainWrite(cl *closure, in bytecode.Instr, obj, val Value) 
 	}
 	done, err := r.storeCached(c, o, key, val)
 	return done && err == nil
+}
+
+// jitLeafCall makes a leaf's call native code makes as one (ssa.GoLeaf),
+// whose function, its first operand, the code has checked it calls: as
+// jitPlainCall applies it, with nothing of the call to find out first --
+// its function's, its receiver's and its arguments' places are the call's
+// own. It writes the result to the call's keep cell and reports whether
+// it made the call.
+func (r *Runtime) jitLeafCall(ctx *abi.Context) bool {
+	argc := int(ctx.GoOp>>abi.GoOpArgcShift) & 0xff
+	first, this := 1, Undefined
+	if ctx.GoOp>>abi.GoOpKindShift&0xff == abi.GoCallMethod {
+		first, this = 2, jitGoArg(ctx, 1)
+	}
+	if first+argc > abi.MaxGoArgs {
+		return false
+	}
+	fd := jitGoArg(ctx, 0).Object().fn()
+	args := unsafe.Slice((*Value)(unsafe.Pointer(&ctx.GoArgs[first])), argc)
+	var v Value
+	switch op := fd.elemOp; {
+	case op >= elemNativeFirst:
+		if r.meter != nil || !leafChecks[op](r, this, args) {
+			return false
+		}
+		var err error
+		if v, err = fd.native(r, this, args); err != nil {
+			return false
+		}
+	case op > elemRandom:
+		var ok bool
+		if v, ok = leafOps[op](r, this, args, true); !ok {
+			return false
+		}
+	default:
+		var ok bool
+		if v, ok = r.collectionOp(op, this, args, true); !ok {
+			return false
+		}
+	}
+	*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
+	return true
+}
+
+// jitLeafSeen notes, once a call (abi.GoCallState's LeafSeen), the call of
+// a leaf jitGoCallPlain has just made, at its function's PC, for its code's
+// next compile (jitFeedback.Leaf), which makes it a call of Go of its own
+// (ssa.GoLeaf): a call of the function the code runs, the run's frame's or
+// a native callee's, not one inlined in it.
+func (r *Runtime) jitLeafSeen(ctx *abi.Context, in bytecode.Instr) {
+	if ctx.GoLast == 0 {
+		return
+	}
+	st := (*abi.GoCallState)(*(*unsafe.Pointer)(unsafe.Pointer(&ctx.GoLast)))
+	if st.LeafSeen {
+		return
+	}
+	st.LeafSeen = true
+	s, idx := r.jit, int(ctx.Level)
+	if idx >= len(s.ssaCtxs) || s.ssaCtxs[idx] != ctx {
+		return
+	}
+	var cl *closure
+	switch ctx.Live {
+	case 0:
+		if idx >= len(s.goRuns) || s.goRuns[idx].f == nil {
+			return
+		}
+		cl = s.goRuns[idx].f.cl
+	case abi.LiveCall:
+		cl = (*closure)(ctx.Closure)
+	}
+	pc := int(ctx.ExitPC)
+	if cl == nil || pc >= len(cl.fn.Code) || cl.fn.Code[pc].Op != in.Op || cl.fn.Code[pc].A != in.A {
+		return
+	}
+	e := r.jit.entryFor(cl.fn)
+	first := 1
+	if in.Op == bytecode.OpCallMethod {
+		first = 2
+	}
+	callee := jitGoArg(ctx, first-1)
+	if e == nil || !callee.IsObject() {
+		return
+	}
+	o := callee.Object()
+	for _, x := range jitTargets(e) {
+		if int(x.pc) == pc && x.leaf {
+			return
+		}
+	}
+	e.nativeCalls = append(e.nativeCalls, jitInline{pc: int32(pc), obj: o, leaf: true})
+	e.inlinePending = true
 }

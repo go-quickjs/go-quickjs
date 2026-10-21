@@ -1903,6 +1903,13 @@ func goOpWord(site *ssa.CallSite) uint64 {
 	if site.Go == ssa.GoConcat {
 		op |= uint64(site.Argc) << abi.GoOpArgcShift
 	}
+	if site.Go == ssa.GoLeaf {
+		// Its arguments, and whether a receiver comes before them.
+		op |= uint64(site.Argc) << abi.GoOpArgcShift
+		if site.Method {
+			op |= abi.GoCallMethod << abi.GoOpKindShift
+		}
+	}
 	if site.Go == ssa.GoCall {
 		op |= uint64(site.Argc) << abi.GoOpArgcShift
 		switch {
