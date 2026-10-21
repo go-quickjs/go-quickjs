@@ -59,21 +59,35 @@ func init() {
 		}
 		var kept []Value
 		if fv.IsObject() {
-			if fd := fv.object().fn(); fd != nil && fd.closure != nil && !fd.bound {
+			o := fv.object()
+			if fd := o.fn(); fd != nil && fd.closure != nil && !fd.bound {
 				if fn := fd.closure.fn; fn.Strict && !fn.UsesArguments && fn.HasSimpleParams {
-					kept = r.tailArgs[:0]
-					for _, a := range args {
-						kept = append(kept, a)
+					if o == f.callee {
+						// The frame's own function, which its return starts
+						// again in the frame (restartReturn), copying them from
+						// where they are; or which, where it may not, the
+						// callee's frame takes them from as it starts, before
+						// it writes over the window.
+						kept = args
+					} else {
+						kept = r.tailArgs[:0]
+						for _, a := range args {
+							kept = append(kept, a)
+						}
+						r.tailArgs = kept
+						kept = kept[:len(args):len(args)]
 					}
-					r.tailArgs = kept
-					kept = kept[:len(args):len(args)]
 				}
 			}
 		}
 		if kept == nil {
 			kept = append([]Value(nil), args...)
 		}
-		r.pendingTail = tailCall{callee: fv, this: rv, args: kept}
+		// Field by field: a tailCall made whole is made on the stack word by
+		// word and copied in halves, each a load its two words' stores
+		// cannot forward to, which waits for them.
+		t := &r.pendingTail
+		t.callee, t.this, t.args = fv, rv, kept
 		r.treeTail = true
 		return true
 	}

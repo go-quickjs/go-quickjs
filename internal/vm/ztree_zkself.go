@@ -56,8 +56,13 @@ func init() {
 		if err := r.tick(); err != nil {
 			c.throw(err)
 		}
+		// One by one, each word loaded as it was stored: the arguments were
+		// just written, which copy's loads of two words at a time would
+		// wait for.
 		m := min(fn.ParamCount, len(args))
-		copy(c.locals[:m], args[:m])
+		for i := 0; i < m; i++ {
+			c.locals[i] = args[i]
+		}
 		for i := m; i < len(c.locals); i++ {
 			c.locals[i] = Undefined
 		}

@@ -179,8 +179,10 @@ func TestTailCallsAgreeWithNode(t *testing.T) {
 // the forms tailCallScript makes them -- a private method's and a super
 // method's among them -- which a stack of 400 frames holds
 // only where each gives its frame up; strict arguments objects kept along
-// the way keep what their calls were given, and an error at the bottom is
-// caught at the top, its stack naming the function.
+// the way keep what their calls were given; bindings closures keep open,
+// made at some of the calls, which are then given frames of their own;
+// and an error at the bottom is caught at the top, its stack naming the
+// function.
 const deepTailScript = `(function () {
 	"use strict";
 	var N = 100000, r = [];
@@ -200,8 +202,12 @@ const deepTailScript = `(function () {
 	function strictArgs(n, keep) { if (n % 25000 === 0) keep.push(arguments); return n === 0 ? keep : strictArgs(n - 1, keep, n); }
 	function rest(n, ...a) { return n === 0 ? a.length : rest(n - 1, n, n); }
 	var arrow = (n) => n === 0 ? "arrow" : arrow(n - 1);
+	// A binding a closure keeps open, made at some of the calls, which may
+	// not be started again in the frame (selfRestart) and are given frames.
+	function cap(n, fs, acc) { if (n === 0) return fs.length + ":" + fs[0]() + ":" + fs[fs.length - 1]() + ":" + acc; if (n % 1000 === 0) fs.push(() => n + acc); return cap(n - 1, fs, acc + 1); }
+	var capper = { k: 0, m(n, x) { if (n === 0) return this.k + ":" + x; if (n % 7 === 0) { var self = this; this.k = (() => self.k + 1)(); } return this.m(n - 1, x + 2); } };
 	function thrower(n) { if (n === 0) throw new RangeError("deep"); return thrower(n - 1); }
-	r.push(plain(N, 0), tern(N, 0), even(N + 1), odd(N), and(N), and2(N + 1), nested(N, 0), obj.m(N), obj.viaIndex(N), new C("c").down(N), new C(0).callP(N), new D().down(N), toBound(N), rest(N), arrow(N));
+	r.push(plain(N, 0), tern(N, 0), even(N + 1), odd(N), and(N), and2(N + 1), nested(N, 0), obj.m(N), obj.viaIndex(N), new C("c").down(N), new C(0).callP(N), new D().down(N), toBound(N), rest(N), arrow(N), cap(N, [], 0), capper.m(N, 0));
 	r.push(strictArgs(N, []).map(function (a) { return a.length + ":" + a[0] + ":" + a[2]; }).join(","));
 	try { thrower(N); } catch (e) { r.push(e.constructor.name + " " + e.message + " " + (e.stack.split("\n")[1].indexOf("thrower") >= 0)); }
 	return r.join(" ");
@@ -211,7 +217,7 @@ const deepTailScript = `(function () {
 // stack run in constant space, as strict code's tail calls must, on the
 // tree tier and in the interpreter alike.
 func TestDeepTailCalls(t *testing.T) {
-	const want = "705082704 100000 false false true true 150000 obj obj? c p super bound 2 arrow 2:100000:undefined,3:75000:75001,3:50000:50001,3:25000:25001,3:0:1 RangeError deep true"
+	const want = "705082704 100000 false false true true 150000 obj obj? c p super bound 2 arrow 100:100000:100000:100000 14285:200000 2:100000:undefined,3:75000:75001,3:50000:50001,3:25000:25001,3:0:1 RangeError deep true"
 	defer SetTreeTier(true)
 	for _, tree := range []bool{true, false} {
 		SetTreeTier(tree)
