@@ -2077,24 +2077,31 @@ func (c *compiler) keyedStore(v *ssa.Value, slow amd64.Label) {
 // the function's (ssa.Func's ArrayProtos), as they were, with no element
 // nor index of theirs (protoGuards) -- the index below 2**31, which is
 // what an atom of an index carries, and what the VM's look at their tables
-// tells of. The answer is in the call's keep cell, as Go's is. Anything
-// else goes to slow, where Go answers it: a key of another kind, an object
-// of another class, a sparse array, prototypes that have changed. It uses
-// every scratch register, xScratch1 and xScratch2, and no other.
+// tells of. A key string is looked up in the VM's cache of the operator's
+// answers (ssa.Func's HasCache, abi.HasCacheBits), which Go fills: the
+// entry of the string, the object's shape and its prototype, its chain's
+// validity cell valid, answers. The answer is in the call's keep cell, as
+// Go's is. Anything else goes to slow, where Go answers it: a key of
+// another kind, an object of another class, a sparse array, prototypes
+// that have changed, a string the cache does not answer for the object.
+// It uses every scratch register, xScratch1 and xScratch2, and no other.
 func (c *compiler) keyedHas(v *ssa.Value, slow amd64.Label) {
 	fail := func(cond amd64.Cond) { c.a.Jcc(cond, slow) }
 	key, recv := v.Args[0], v.Args[1]
 	protos := c.f.ArrayProtos
-	absent := slow
+	absent, named := slow, slow
 	if protos[0].Object != 0 {
 		absent = c.a.NewLabel()
+	}
+	if c.f.HasCache != 0 {
+		named = c.a.NewLabel()
 	}
 	// The key, a number whose truncation is itself, in xScratch2.
 	if w := c.gpr(key, scratchA); w != scratchA {
 		c.a.MovRR(scratchA, w)
 	}
 	c.cmpWord(scratchA, abi.NumberLimit)
-	fail(amd64.CondAE)
+	c.a.Jcc(amd64.CondAE, named)
 	c.a.MovQToX(xScratch2, scratchA)
 	c.a.Cvttsd2si(scratchB, xScratch2)
 	c.a.Cvtsi2sd(xScratch2, scratchB, true)
@@ -2134,28 +2141,102 @@ func (c *compiler) keyedHas(v *ssa.Value, slow amd64.Label) {
 		c.storeImm(regCtx, keep+c.enc.RefOffset, 0, scratchA)
 	}
 	answer(true)
-	if protos[0].Object == 0 {
-		return
-	}
 	done := c.a.NewLabel()
-	c.a.Jmp(done)
-	// No such element: an index an atom carries, of a dense array whose
-	// prototypes are as they were.
-	c.a.Bind(absent)
-	c.a.MovQFromX(scratchA, xScratch2)
-	c.a.ShiftImm(amd64.Shr, scratchA, 31, true)
-	fail(amd64.CondNE)
-	c.a.MovQFromX(scratchC, xScratch1)
-	c.a.LoadU8(scratchB, scratchC, c.enc.ObjectFlags)
-	c.a.OpImm(amd64.And, scratchB, int32(c.enc.FlagSparse), false)
-	fail(amd64.CondNE)
-	c.a.Load(scratchB, scratchC, c.enc.ObjectProto)
-	c.cmpWord(scratchB, uint64(protos[0].Object))
-	fail(amd64.CondNE)
-	c.protoGuards(protos, fail)
-	answer(false)
+	if protos[0].Object != 0 {
+		c.a.Jmp(done)
+		// No such element: an index an atom carries, of a dense array
+		// whose prototypes are as they were.
+		c.a.Bind(absent)
+		c.a.MovQFromX(scratchA, xScratch2)
+		c.a.ShiftImm(amd64.Shr, scratchA, 31, true)
+		fail(amd64.CondNE)
+		c.a.MovQFromX(scratchC, xScratch1)
+		c.a.LoadU8(scratchB, scratchC, c.enc.ObjectFlags)
+		c.a.OpImm(amd64.And, scratchB, int32(c.enc.FlagSparse), false)
+		fail(amd64.CondNE)
+		c.a.Load(scratchB, scratchC, c.enc.ObjectProto)
+		c.cmpWord(scratchB, uint64(protos[0].Object))
+		fail(amd64.CondNE)
+		c.protoGuards(protos, fail)
+		answer(false)
+	}
+	if c.f.HasCache != 0 {
+		c.a.Jmp(done)
+		// A string, its pointer in xScratch2, of an object, its pointer
+		// in xScratch1 and its shape in scratchC, which the cache's entry
+		// at its slot, in scratchA, answers.
+		c.a.Bind(named)
+		c.cmpWord(scratchA, c.enc.String)
+		fail(amd64.CondNE)
+		c.pointerWord(key, scratchA)
+		c.a.Op(amd64.Test, scratchB, scratchB, true)
+		fail(amd64.CondE)
+		c.a.MovQToX(xScratch2, scratchB)
+		w := c.gpr(recv, scratchA)
+		c.cmpWord(w, c.enc.Object)
+		fail(amd64.CondNE)
+		c.pointerWord(recv, w)
+		c.a.Op(amd64.Test, scratchB, scratchB, true)
+		fail(amd64.CondE)
+		c.a.MovQToX(xScratch1, scratchB)
+		c.a.Load(scratchC, scratchB, c.enc.ObjectShape)
+		c.a.Op(amd64.Test, scratchC, scratchC, true)
+		fail(amd64.CondE)
+		c.a.MovQFromX(scratchA, xScratch2)
+		c.a.ShiftImm(amd64.Shr, scratchA, 4, true)
+		c.a.MovRR(scratchB, scratchC)
+		c.a.ShiftImm(amd64.Shr, scratchB, 4, true)
+		c.a.Op(amd64.Xor, scratchA, scratchB, true)
+		c.movImm(scratchB, abi.HasCacheMul)
+		c.a.Imul(scratchA, scratchB)
+		c.a.ShiftImm(amd64.Shr, scratchA, 64-abi.HasCacheBits+1, true)
+		c.a.ShiftImm(amd64.Shl, scratchA, hasEntryShift+1, true)
+		c.movImm(scratchB, uint64(c.f.HasCache))
+		c.a.Op(amd64.Add, scratchA, scratchB, true)
+		// The set's first entry, then its second.
+		hit := c.a.NewLabel()
+		for way := range 2 {
+			next := slow
+			if way == 0 {
+				next = c.a.NewLabel()
+			}
+			c.a.MovQFromX(scratchB, xScratch2)
+			c.a.CmpMem(scratchB, scratchA, abi.HasEntryKey, true)
+			c.a.Jcc(amd64.CondNE, next)
+			c.a.CmpMem(scratchC, scratchA, abi.HasEntryShape, true)
+			c.a.Jcc(amd64.CondNE, next)
+			c.a.MovQFromX(scratchB, xScratch1)
+			c.a.Load(scratchB, scratchB, c.enc.ObjectProto)
+			c.a.CmpMem(scratchB, scratchA, abi.HasEntryProto, true)
+			c.a.Jcc(amd64.CondNE, next)
+			if way == 0 {
+				c.a.Jmp(hit)
+				c.a.Bind(next)
+				c.a.OpImm(amd64.Add, scratchA, abi.HasEntrySize, true)
+			}
+		}
+		c.a.Bind(hit)
+		c.a.Load(scratchB, scratchA, abi.HasEntryCell)
+		c.a.LoadU8(scratchB, scratchB, 0)
+		c.a.Op(amd64.Test, scratchB, scratchB, false)
+		fail(amd64.CondE)
+		c.a.LoadU8(scratchB, scratchA, abi.HasEntryHas)
+		c.a.Op(amd64.Test, scratchB, scratchB, false)
+		no := c.a.NewLabel()
+		c.a.Jcc(amd64.CondE, no)
+		answer(true)
+		c.a.Jmp(done)
+		c.a.Bind(no)
+		answer(false)
+	}
 	c.a.Bind(done)
 }
+
+// hasEntryShift is log2 of abi.HasEntrySize, which an entry's slot is
+// shifted by.
+const hasEntryShift = 6
+
+var _ [0]struct{} = [abi.HasEntrySize - 1<<hasEntryShift]struct{}{}
 
 // stepNexts are the Map's and Set's iterators' next functions a loop's
 // step v natively steps the iterators of (ssa.CallSite's MapNexts), none

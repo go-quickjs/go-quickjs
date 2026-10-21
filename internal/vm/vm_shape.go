@@ -245,6 +245,9 @@ type shapeTree struct {
 	// them beyond its layout's room, the object is a dictionary
 	// (shapeAdded).
 	keyed *Object
+	// has is the cache of the in operator's answers (see ztree_ain.go),
+	// made when one is first remembered.
+	has *hasCache
 }
 
 const (

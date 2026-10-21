@@ -3947,21 +3947,25 @@ func (c *a64Compiler) keyedStore(v *ssa.Value, slow arm64.Label) {
 // keyedHas is amd64's: key in obj natively where obj is an array and key
 // an index, true where it names one of its dense elements that is no hole,
 // false where it names none of a dense array whose prototypes are as they
-// were. It uses A, B, C, D, F1 and F2, and no other.
+// were; and where key is a string the VM's cache answers for obj. It uses
+// A, B, C, D, F1 and F2, and no other.
 func (c *a64Compiler) keyedHas(v *ssa.Value, slow arm64.Label) {
 	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
 	key, recv := v.Args[0], v.Args[1]
 	protos := c.f.ArrayProtos
-	absent := slow
+	absent, named := slow, slow
 	if protos[0].Object != 0 {
 		absent = c.a.NewLabel()
+	}
+	if c.f.HasCache != 0 {
+		named = c.a.NewLabel()
 	}
 	if w := c.gpr(key, a64A); w != a64A {
 		c.a.MovRR(a64A, w)
 	}
 	c.movImm(a64B, abi.NumberLimit)
 	c.a.Cmp(a64A, a64B, true)
-	fail(arm64.HS)
+	c.a.BCond(arm64.HS, named)
 	c.a.FMovToF(a64F2, a64A)
 	c.a.Fcvtzs(a64B, a64F2)
 	c.a.Scvtf(a64F2, a64B, true)
@@ -4002,26 +4006,92 @@ func (c *a64Compiler) keyedHas(v *ssa.Value, slow arm64.Label) {
 		c.a.Store(a64Ctx, keep+c.enc.RefOffset, a64C)
 	}
 	answer(true)
-	if protos[0].Object == 0 {
-		return
-	}
 	done := c.a.NewLabel()
-	c.a.B(done)
-	c.a.Bind(absent)
-	c.a.FMovFromF(a64A, a64F2)
-	c.a.ShiftImm(arm64.Lsr, a64A, a64A, 31, true)
-	c.a.Cbnz(a64A, slow, true)
-	c.a.FMovFromF(a64D, a64F1)
-	c.a.LoadU8(a64B, a64D, c.enc.ObjectFlags)
-	c.movImm(a64C, uint64(c.enc.FlagSparse))
-	c.a.Tst(a64B, a64C, false)
-	fail(arm64.NE)
-	c.a.Load(a64B, a64D, c.enc.ObjectProto)
-	c.movImm(a64C, uint64(protos[0].Object))
-	c.a.Cmp(a64B, a64C, true)
-	fail(arm64.NE)
-	c.protoGuards(protos, fail)
-	answer(false)
+	if protos[0].Object != 0 {
+		c.a.B(done)
+		c.a.Bind(absent)
+		c.a.FMovFromF(a64A, a64F2)
+		c.a.ShiftImm(arm64.Lsr, a64A, a64A, 31, true)
+		c.a.Cbnz(a64A, slow, true)
+		c.a.FMovFromF(a64D, a64F1)
+		c.a.LoadU8(a64B, a64D, c.enc.ObjectFlags)
+		c.movImm(a64C, uint64(c.enc.FlagSparse))
+		c.a.Tst(a64B, a64C, false)
+		fail(arm64.NE)
+		c.a.Load(a64B, a64D, c.enc.ObjectProto)
+		c.movImm(a64C, uint64(protos[0].Object))
+		c.a.Cmp(a64B, a64C, true)
+		fail(arm64.NE)
+		c.protoGuards(protos, fail)
+		answer(false)
+	}
+	if c.f.HasCache != 0 {
+		c.a.B(done)
+		// A string, its pointer in F2, of an object, its pointer in F1
+		// and its shape in C, which the cache's entry at its slot, in A,
+		// answers.
+		c.a.Bind(named)
+		c.movImm(a64B, c.enc.String)
+		c.a.Cmp(a64A, a64B, true)
+		fail(arm64.NE)
+		c.pointerWord(key, a64A)
+		c.a.Cbz(a64B, slow, true)
+		c.a.FMovToF(a64F2, a64B)
+		w := c.gpr(recv, a64A)
+		c.movImm(a64C, c.enc.Object)
+		c.a.Cmp(w, a64C, true)
+		fail(arm64.NE)
+		c.pointerWord(recv, w)
+		c.a.Cbz(a64B, slow, true)
+		c.a.FMovToF(a64F1, a64B)
+		c.a.Load(a64C, a64B, c.enc.ObjectShape)
+		c.a.Cbz(a64C, slow, true)
+		c.a.FMovFromF(a64A, a64F2)
+		c.a.ShiftImm(arm64.Lsr, a64A, a64A, 4, true)
+		c.a.ShiftImm(arm64.Lsr, a64D, a64C, 4, true)
+		c.a.Op(arm64.Eor, a64A, a64A, a64D, true)
+		c.movImm(a64D, abi.HasCacheMul)
+		c.a.Mul(a64A, a64A, a64D)
+		c.a.ShiftImm(arm64.Lsr, a64A, a64A, 64-abi.HasCacheBits+1, true)
+		c.a.ShiftImm(arm64.Lsl, a64A, a64A, hasEntryShift+1, true)
+		c.movImm(a64D, uint64(c.f.HasCache))
+		c.a.Op(arm64.Add, a64A, a64A, a64D, true)
+		hit := c.a.NewLabel()
+		for way := range 2 {
+			next := slow
+			if way == 0 {
+				next = c.a.NewLabel()
+			}
+			c.a.Load(a64D, a64A, abi.HasEntryKey)
+			c.a.FMovFromF(a64B, a64F2)
+			c.a.Cmp(a64D, a64B, true)
+			c.a.BCond(arm64.NE, next)
+			c.a.Load(a64D, a64A, abi.HasEntryShape)
+			c.a.Cmp(a64D, a64C, true)
+			c.a.BCond(arm64.NE, next)
+			c.a.FMovFromF(a64B, a64F1)
+			c.a.Load(a64B, a64B, c.enc.ObjectProto)
+			c.a.Load(a64D, a64A, abi.HasEntryProto)
+			c.a.Cmp(a64B, a64D, true)
+			c.a.BCond(arm64.NE, next)
+			if way == 0 {
+				c.a.B(hit)
+				c.a.Bind(next)
+				c.a.AddImm(a64A, a64A, abi.HasEntrySize, true)
+			}
+		}
+		c.a.Bind(hit)
+		c.a.Load(a64B, a64A, abi.HasEntryCell)
+		c.a.LoadU8(a64B, a64B, 0)
+		c.a.Cbz(a64B, slow, false)
+		c.a.LoadU8(a64B, a64A, abi.HasEntryHas)
+		no := c.a.NewLabel()
+		c.a.Cbz(a64B, no, false)
+		answer(true)
+		c.a.B(done)
+		c.a.Bind(no)
+		answer(false)
+	}
 	c.a.Bind(done)
 }
 

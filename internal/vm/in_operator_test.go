@@ -16,10 +16,17 @@ import (
 // a typed array, a function, arguments objects mapped and not, a proxy
 // whose trap logs, a dictionary, the global object. Then a key's
 // conversion and a primitive operand; a key that names no atom and then
-// one; the same sites while what an array's prototypes hold changes -- an
-// index by a value and by a getter, on Array.prototype and on
-// Object.prototype, the array made sparse, given a prototype of its own --
-// and a loop of an array's indices; keys of many kinds at one site.
+// one; keys no atom names asked of an object and at once of a proxy; the
+// same sites while what an array's prototypes hold changes -- an index by
+// a value and by a getter, on Array.prototype and on Object.prototype, the
+// array made sparse, given a prototype of its own -- and a loop of an
+// array's indices; indices past 2**31; a sparse array's; names at one site
+// while the objects change -- properties deleted and added, prototypes
+// replaced, gaining names and losing them, strings of one text made apart,
+// a dictionary, a frozen object, a class's instances; more names of more
+// objects than the cache of the answers holds (hasCache); objects of one
+// constructor's layout of two prototypes; two names of one object; keys of
+// many kinds at one site.
 const inOperatorSetup = `var log = [];
 var sym = Symbol("s"), unseen = Symbol("u");
 var arr = [1, , 3, undefined, , 6];
@@ -87,7 +94,7 @@ function atoms() {
 	}
 	return s;
 }
-/// A key no atom names, asked of an object, which finds it names none,
+// A key no atom names, asked of an object, which finds it names none,
 // and at once of a proxy, whose trap is called with it, and of an object
 // whose prototype is the proxy; then of the object again.
 function fresh() {
@@ -132,7 +139,7 @@ function holes(n) {
 	}
 	return s;
 }
-/// Indices past what an atom of an index carries, and the last it does, of
+// Indices past what an atom of an index carries, and the last it does, of
 // an array that has none of them.
 function far(n) {
 	var a = [1, 2], s = 0;
@@ -144,7 +151,7 @@ function far(n) {
 	}
 	return s;
 }
-/// A sparse array's indices, which its table has, and one it has not.
+// A sparse array's indices, which its table has, and one it has not.
 function sparseLoop(n) {
 	var a = [1, 2], s = 0;
 	a[100000] = 3; a[5000] = 4;
@@ -152,6 +159,92 @@ function sparseLoop(n) {
 		if (100000 in a) s++;
 		if (5000 in a) s += 10;
 		if (7 in a) s += 100;
+	}
+	return s;
+}
+// Names at one site while the objects asked change: a property deleted and
+// added again, a prototype changed, a prototype gaining a property and
+// losing it, Object.prototype too, an accessor on a prototype, the same
+// text in strings made apart, a key no atom names until a property is
+// added by it, objects of one layout of two prototypes, an array's
+// length and an array method its prototype gains, an object made a
+// dictionary, one frozen, a class's instances.
+class Pt { constructor() { this.x = 1; } norm() { return 0; } }
+function named(n) {
+	var p1 = { q: 1 }, p2 = { r: 1 }, o = Object.create(p1), a = [1, 2], out = "";
+	o.a = 1;
+	var same1 = Object.create(p1), same2 = Object.create(p2);
+	same1.s = 1; same2.s = 1;
+	var dict = { d: 1 }, frozen = { f: 1 }, pt = new Pt();
+	var k1 = "a" + "b", k2 = "ab", fresh = "nn" + "ew";
+	var objs = [o, same1, same2, a, dict, frozen, pt];
+	var keys = ["a", "q", "r", "s", "y", "zz", k1, k2, fresh, "length", "mine", "d", "f", "x", "norm", "constructor", "acc"];
+	for (var i = 0; i < n; i++) {
+		if (i == 2) delete o.a;
+		if (i == 3) o.a = 2;
+		if (i == 4) Object.setPrototypeOf(o, p2);
+		if (i == 5) p2.y = 1;
+		if (i == 6) delete p2.y;
+		if (i == 7) Object.prototype.zz = 1;
+		if (i == 8) delete Object.prototype.zz;
+		if (i == 9) o.ab = 1;
+		if (i == 10) o[fresh] = 1;
+		if (i == 11) Array.prototype.mine = 1;
+		if (i == 12) delete Array.prototype.mine;
+		if (i == 13) for (var j = 0; j < 200; j++) dict["k" + j] = j;
+		if (i == 14) { Object.freeze(frozen); Object.defineProperty(p1, "acc", { get() { log.push("acc"); return 1; }, configurable: true }); }
+		if (i == 15) { delete p1.acc; Pt.prototype.mine = 1; }
+		if (i == 16) delete dict.d;
+		var row = "";
+		for (var x = 0; x < objs.length; x++)
+			for (var y = 0; y < keys.length; y++) row += keys[y] in objs[x] ? "1" : "0";
+		out += row + ";";
+	}
+	delete Pt.prototype.mine;
+	return out + log.join();
+}
+// Many keys of many objects at one site, more than the cache holds, and
+// the same again.
+function many(n) {
+	var objs = [], keys = [], s = 0;
+	for (var i = 0; i < 40; i++) { var o = {}; o["p" + i] = i; if (i % 3 == 0) o.common = 1; objs.push(o); }
+	for (var i = 0; i < 60; i++) keys.push("p" + i);
+	keys.push("common", "toString", "absent");
+	for (var r = 0; r < n; r++)
+		for (var i = 0; i < objs.length; i++)
+			for (var k = 0; k < keys.length; k++)
+				if (keys[k] in objs[i]) s += i * 100 + k;
+	return s;
+}
+// Objects of one constructor, and so of one layout, of two prototypes,
+// F's prototype replaced between them; then their prototypes gaining a
+// name and losing it, and Object.prototype, while a loop asks.
+function F() { this.s = 1; }
+F.prototype = { q: 1 };
+var fa = new F();
+F.prototype = { r: 1 };
+var fb = new F();
+function ctorProtos(n) {
+	var objs = [fa, fb], s = 0;
+	for (var i = 0; i < n; i++) {
+		if (i == 20) Object.getPrototypeOf(fa).t = 1;
+		if (i == 30) delete Object.getPrototypeOf(fa).t;
+		if (i == 40) Object.prototype.t = 1;
+		if (i == 50) delete Object.prototype.t;
+		for (var x = 0; x < 2; x++) {
+			if ("q" in objs[x]) s += 1 + x;
+			if ("r" in objs[x]) s += 10 + 10 * x;
+			if ("t" in objs[x]) s += 100 + 100 * x;
+		}
+	}
+	return s;
+}
+// Two names asked of one object, one it has and one it has not.
+function twoNames(n) {
+	var o = { a: 1, b: 2 }, s = 0;
+	for (var i = 0; i < n; i++) {
+		if ("a" in o) s++;
+		if ("zz" in o) s += 10;
 	}
 	return s;
 }
@@ -175,6 +268,10 @@ var inOperatorCases = []struct{ src, want string }{
 	{"holes(80)", "70"},
 	{"far(10)", "10000"},
 	{"sparseLoop(10)", "110"},
+	{"named(18)", "11000000000000010010100000000000100011000000000001000000000010000010000000000001000100000000000001001000000000000001110;11000000000000010010100000000000100011000000000001000000000010000010000000000001000100000000000001001000000000000001110;01000000000000010010100000000000100011000000000001000000000010000010000000000001000100000000000001001000000000000001110;11000000000000010010100000000000100011000000000001000000000010000010000000000001000100000000000001001000000000000001110;10100000000000010010100000000000100011000000000001000000000010000010000000000001000100000000000001001000000000000001110;10101000000000010010100000000000100011100000000001000000000010000010000000000001000100000000000001001000000000000001110;10100000000000010010100000000000100011000000000001000000000010000010000000000001000100000000000001001000000000000001110;10100100000000010010101000000000100011010000000001000000100010000010000001000001000100000010000001001000000100000001110;10100000000000010010100000000000100011000000000001000000000010000010000000000001000100000000000001001000000000000001110;10100011000000010010100000000000100011000000000001000000000010000010000000000001000100000000000001001000000000000001110;10100011100000010010100000000000100011000000000001000000000010000010000000000001000100000000000001001000000000000001110;10100011100000010010100000000000100011000000000001000000000011000010000000000001000100000000000001001000000000000001110;10100011100000010010100000000000100011000000000001000000000010000010000000000001000100000000000001001000000000000001110;10100011100000010010100000000000100011000000000001000000000010000010000000000001000100000000000001001000000000000001110;10100011100000010010100000000000110011000000000001000000000010000010000000000001000100000000000001001000000000000001110;10100011100000010010100000000000100011000000000001000000000010000010000000000001000100000000000001001000000000001001110;10100011100000010010100000000000100011000000000001000000000010000010000000000000000100000000000001001000000000001001110;10100011100000010010100000000000100011000000000001000000000010000010000000000000000100000000000001001000000000001001110;"},
+	{"many(3)", "562080"},
+	{"ctorProtos(60)", "5260"},
+	{"twoNames(10)", "10"},
 	{"mixed(40)", "1101100010111011000101110110001011101100"},
 }
 

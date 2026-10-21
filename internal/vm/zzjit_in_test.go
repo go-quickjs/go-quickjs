@@ -98,8 +98,9 @@ func TestJITIn(t *testing.T) {
 }
 
 // Go answers each in from native code, one call of Go apiece, the code never
-// leaving it, for ordinary objects and arrays -- but an array's index, which
-// native code answers itself (mir's keyedHas); it leaves for Go at a proxy's,
+// leaving it, for ordinary objects and arrays -- but an array's index, and a
+// name the VM's cache of the answers has, which native code answers itself
+// (mir's keyedHas); it leaves for Go at a proxy's,
 // whose trap Go calls after the exit, and at an object key's, which Go
 // converts there.
 func TestJITInGoCalls(t *testing.T) {
@@ -135,9 +136,11 @@ func TestJITInGoCalls(t *testing.T) {
 		t.Errorf("count left native code %d times", left)
 	}
 	// arr's four number keys, 3, 0, 1 and 2, answered natively: two of
-	// its elements, its hole and one past them.
-	if want := 3*8 - 4; calls != want {
-		t.Errorf("%d calls of Go, want %d, one for each in but arr's indices", calls, want)
+	// its elements, its hole and one past them; and 'a' and 'b' of each,
+	// from the cache (hasCache), as its sets keep them: six entries, where
+	// three that fall in one set of two would put one out at each round.
+	if most, least := 3*8-4, 3*8-4-3*2; calls > most || calls < least {
+		t.Errorf("%d calls of Go, want from %d to %d, one for each in but arr's indices and the cached names", calls, least, most)
 	}
 	// A proxy's trap, and an object key's toString, are Go's after an exit
 	// at each, called as often as the interpreter calls them.

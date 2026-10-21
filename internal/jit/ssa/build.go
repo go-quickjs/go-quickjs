@@ -1692,6 +1692,9 @@ func build(w *Workspace, p *ir.Program, fb Feedback) (*Func, error) {
 	if af, ok := fb.(AppendFeedback); ok {
 		f.ArrayProtos, _ = af.ArrayProtos()
 	}
+	if hf, ok := fb.(HasCacheFeedback); ok {
+		f.HasCache = hf.HasCache()
+	}
 	f.written = f.bools(p.Locals + p.StackSize)
 	f.assigned = p.Assigned
 	b := &builder{p: p, fb: fb, f: f, nslots: p.Locals + p.StackSize}
@@ -2112,6 +2115,13 @@ func (b *builder) goesOn(pc int) bool {
 // a prototype with an index in its table, which a shape does not tell of.
 type AppendFeedback interface {
 	ArrayProtos() ([2]Holder, bool)
+}
+
+// HasCacheFeedback is Feedback that has native code look the in
+// operator's answers up in the VM's cache of them (Func.HasCache): its
+// address, made if there is none yet, or 0 for none.
+type HasCacheFeedback interface {
+	HasCache() uintptr
 }
 
 // KeepFeedback is Feedback that bounds the keep cells a build takes

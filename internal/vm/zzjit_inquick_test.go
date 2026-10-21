@@ -7,12 +7,16 @@ import "testing"
 // TestJITInOperator makes inOperatorSetup's cases, each a few times, in a
 // runtime that compiles at the first call: native code's in, which Go
 // answers (ssa.GoHas, jitHas, hasQuick) but where the object is an array
-// and the key an index, which native code answers itself (mir's keyedHas)
-// -- true for a dense element, false for none where the array's prototypes
-// are as they were -- answers as the interpreter does and as Node does,
-// while the prototypes gain and lose indices (changing). Warm, holes'
-// loop, which asks of an array's elements, a hole, an index past them and
-// a negative one, runs natively and calls no Go.
+// and the key an index, or the key a string the VM's cache of the answers
+// has (hasCache), which native code answers itself (mir's keyedHas) --
+// true for a dense element, false for none where the array's prototypes
+// are as they were; the cache's answer where the entry is the string's,
+// the object's layout's and its prototype's, and its chain's cell is valid
+// -- answers as the interpreter does and as Node does, while the
+// prototypes gain and lose indices (changing) and names (named,
+// ctorProtos). Warm, holes' loop, which asks of an array's elements, a
+// hole and indices past them, and twoNames', which asks two names of an
+// object, run natively and call no Go.
 func TestJITInOperator(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -24,7 +28,7 @@ func TestJITInOperator(t *testing.T) {
 		}
 	}
 	r := jitAgreesForTest(t, inOperatorSetup, rounds...)
-	for _, name := range []string{"table", "holes", "changing", "mixed", "atoms", "fresh", "far", "sparseLoop"} {
+	for _, name := range []string{"table", "holes", "changing", "mixed", "atoms", "fresh", "far", "sparseLoop", "named", "many", "ctorProtos", "twoNames"} {
 		jitNativeForTest(t, r, name)
 	}
 	for _, c := range inOperatorCases {
@@ -44,6 +48,15 @@ func TestJITInOperator(t *testing.T) {
 		t.Fatal(err)
 	}
 	jitNativeForTest(t, r, "holes")
+	// Two names of one object, from the cache, which keeps both in their
+	// set however their addresses fall: no call of Go, but the poll's.
+	if _, err := r.Run(compileForTest(t, "twoNames(200); twoNames(200)")); err != nil {
+		t.Fatal(err)
+	}
+	jitNativeForTest(t, r, "twoNames")
+	if v, calls := jitCountGoCalls(t, r, `''+twoNames(1000)`); v.String().Go() != "1000" || calls > 1 {
+		t.Errorf("twoNames(1000) = %s with %d calls of Go, want 1000 with the poll's at most", v.String().Go(), calls)
+	}
 	// A sparse array, whose table has indices: Go answers them.
 	jitNativeForTest(t, r, "sparseLoop")
 	if v, err := r.Run(compileForTest(t, `''+sparseLoop(10)`)); err != nil || v.String().Go() != "110" {

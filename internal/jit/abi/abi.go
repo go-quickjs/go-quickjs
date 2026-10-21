@@ -1247,3 +1247,24 @@ const (
 	GoCallSuper      = 10
 	GoClosurePool    = 1
 )
+
+// The VM's cache of the in operator's answers (its hasCache), which native
+// code reads, never writes, before it calls Go for one (ssa.GoHas): at
+// ssa.Func's HasCache, 1<<HasCacheBits entries of HasEntrySize bytes, in
+// sets of two. A key string's, of pointer word k, in an object whose shape
+// -- the pointer at ObjectShape -- is s is one of set ((k>>4 ^ s>>4) *
+// HasCacheMul) >> (64 - HasCacheBits + 1), the entries 2*set and 2*set+1.
+// An entry answers where the pointer at HasEntryKey is k, the one at
+// HasEntryShape s and the one at HasEntryProto the object's prototype, and
+// the byte the pointer at HasEntryCell points to, its chain's validity
+// cell's flag, is set: the answer is the byte at HasEntryHas, 1 for true.
+const (
+	HasCacheBits  = 8
+	HasCacheMul   = 0x9E3779B97F4A7C15
+	HasEntrySize  = 64
+	HasEntryKey   = 0
+	HasEntryShape = 8
+	HasEntryProto = 16
+	HasEntryCell  = 24
+	HasEntryHas   = 32
+)

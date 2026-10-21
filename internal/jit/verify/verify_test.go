@@ -274,7 +274,9 @@ var inCorpus = []string{
 
 // hases is globals whose in operators Go answers from native code, and,
 // with protos, whose arrays' prototypes are known (ssa.Func's ArrayProtos),
-// so that keyedHas answers an absent index too.
+// so that keyedHas answers an absent index too, and whose VM has a cache of
+// the operator's answers (ssa.Func's HasCache), which it looks a key
+// string up in.
 type hases struct {
 	globals
 	protos bool
@@ -286,6 +288,12 @@ func (h hases) ArrayProtos() ([2]ssa.Holder, bool) {
 		return [2]ssa.Holder{}, false
 	}
 	return [2]ssa.Holder{{Object: 0x64000, Shape: 0x65000}, {Object: 0x66000, Shape: 0x67000}}, true
+}
+func (h hases) HasCache() uintptr {
+	if !h.protos {
+		return 0
+	}
+	return 0x68000
 }
 
 // The backend's code (internal/jit/mir) keeps the rules, for every function
@@ -301,7 +309,7 @@ func TestMirEmitted(t *testing.T) {
 	cells := map[ssa.Op]int{}
 	primProps := map[ssa.Primitive]int{}
 	// hasCalls counts the in operators Go answers from native code, with
-	// and without the arrays' prototypes known.
+	// and without the arrays' prototypes and the cache known.
 	hasCalls := map[bool]int{}
 	compile := func(name string, p *ir.Program, fb ssa.Feedback) bool {
 		f, err := ssa.BuildWith(p, fb)
@@ -315,7 +323,7 @@ func TestMirEmitted(t *testing.T) {
 			for _, v := range b.Values {
 				cells[v.Op]++
 				if calls := v.Calls(); len(calls) == 1 && calls[0].Go == ssa.GoHas {
-					hasCalls[f.ArrayProtos[0].Object != 0]++
+					hasCalls[f.ArrayProtos[0].Object != 0 && f.HasCache != 0]++
 				}
 				if v.Op == ssa.OpStringProp {
 					primProps[v.Primitive()]++

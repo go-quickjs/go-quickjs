@@ -881,6 +881,10 @@ type Func struct {
 	// writable, with room, the prototypes with those shapes and no
 	// elements. Zero where Go appends (AppendFeedback).
 	ArrayProtos [2]Holder
+	// HasCache is the address of the VM's cache of the in operator's
+	// answers (abi.HasCacheBits), which native code looks a key string in
+	// before it calls Go for one (GoHas); 0 for none (HasCacheFeedback).
+	HasCache uintptr
 	// written marks the slots some instruction writes (Written).
 	written []bool
 	// assigned marks the captured locals a closure assigns (ir.Program's

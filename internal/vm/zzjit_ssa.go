@@ -4834,6 +4834,29 @@ func (fb *jitFeedback) ArrayProtos() ([2]ssa.Holder, bool) {
 		{Object: uintptr(unsafe.Pointer(op)), Shape: uintptr(unsafe.Pointer(op.shape))}}, true
 }
 
+// HasCache is ssa.HasCacheFeedback's: the runtime's hasCache, made if it has
+// none, which it keeps for as long as it lives, and so for as long as any
+// code of its does.
+func (fb *jitFeedback) HasCache() uintptr {
+	if fb.r.shapes.has == nil {
+		fb.r.shapes.has = new(hasCache)
+	}
+	return uintptr(unsafe.Pointer(fb.r.shapes.has))
+}
+
+// hasCache's layout is what native code reads (abi.HasEntrySize).
+var _ [0]struct{} = [unsafe.Sizeof(hasEntry{}) - abi.HasEntrySize]struct{}{}
+var _ [0]struct{} = [abi.HasEntrySize - unsafe.Sizeof(hasEntry{})]struct{}{}
+var _ [0]struct{} = [unsafe.Offsetof(hasEntry{}.key) - abi.HasEntryKey]struct{}{}
+var _ [0]struct{} = [unsafe.Offsetof(hasEntry{}.shape) - abi.HasEntryShape]struct{}{}
+var _ [0]struct{} = [unsafe.Offsetof(hasEntry{}.proto) - abi.HasEntryProto]struct{}{}
+var _ [0]struct{} = [unsafe.Offsetof(hasEntry{}.cell) - abi.HasEntryCell]struct{}{}
+var _ [0]struct{} = [unsafe.Offsetof(hasEntry{}.has) - abi.HasEntryHas]struct{}{}
+var _ [0]struct{} = [hasCacheBits - abi.HasCacheBits]struct{}{}
+var _ [0]struct{} = [abi.HasCacheBits - hasCacheBits]struct{}{}
+var _ [0]struct{} = [hasCacheMul - abi.HasCacheMul]struct{}{}
+var _ [0]struct{} = [abi.HasCacheMul - hasCacheMul]struct{}{}
+
 // GoCalls is ssa.GoFeedback's: the VM answers calls of Go (jitHostCall).
 func (fb *jitFeedback) GoCalls() bool { return true }
 
