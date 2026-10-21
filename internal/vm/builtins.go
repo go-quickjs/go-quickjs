@@ -1911,6 +1911,15 @@ func (r *Runtime) relativeIndex(v Value, length, def int) (int, error) {
 
 // iterate drives the iteration protocol, calling fn for each value.
 func (r *Runtime) iterate(v Value, fn func(Value) error) error {
+	if v.IsObject() && v.Object().class == ClassGenerator {
+		// As startForOf: a generator whose iterator method and next are
+		// this realm's intrinsics, found as data properties of ordinary
+		// objects, is its own iterator, and that next is what is called:
+		// nothing could see them looked up, or the iterator method called.
+		if next := r.generatorIteration(v.Object()); next != nil {
+			return r.iterateSteps(v, Obj(next), fn)
+		}
+	}
 	method, err := r.getValueProp(v, r.atoms.internSymbol(r.wellKnown.iterator))
 	if err != nil {
 		return err
@@ -1925,6 +1934,13 @@ func (r *Runtime) iterate(v Value, fn func(Value) error) error {
 // read, which a caller that decides by it -- an iterable or an array-like
 // -- reads once.
 func (r *Runtime) iterateWith(v, method Value, fn func(Value) error) error {
+	if n := r.genIterFn; n != nil && method.IsObject() && method.Object() == n && v.IsObject() && v.Object().class == ClassGenerator {
+		// The intrinsic method, which hands back the generator, on one
+		// whose next is the intrinsic one, which is what is called.
+		if next := r.generatorIteration(v.Object()); next != nil {
+			return r.iterateSteps(v, Obj(next), fn)
+		}
+	}
 	iter, err := r.call(method, v, nil)
 	if err != nil {
 		return err
@@ -1933,6 +1949,12 @@ func (r *Runtime) iterateWith(v, method Value, fn func(Value) error) error {
 	if err != nil {
 		return err
 	}
+	return r.iterateSteps(iter, next, fn)
+}
+
+// iterateSteps steps iter with next, its next method, to its end, calling
+// fn for each value.
+func (r *Runtime) iterateSteps(iter, next Value, fn func(Value) error) error {
 	for {
 		val, ok, err := r.stepIter(iter, next)
 		if err != nil {

@@ -155,6 +155,8 @@ var generatorCases = []struct{ name, want, src string }{
 		`var n = 0; var o = { get [Symbol.iterator]() { n++; return function* () { yield 1; yield 2 } } }; var out = []; for (var f of [() => Array.from(o).join(), () => Array.from(o, x => x * 3).join(), () => new Uint8Array(o).join(), () => Uint8Array.from(o).join(), () => [...o].join(), () => new Set(o).size, () => Math.max(...o)]) { n = 0; var r = f(); out.push(r + ':' + n) } out.join(' ')`},
 	{"arrayFromNotCallable", `TypeError,TypeError,TypeError,a,a,TypeError`,
 		`var out = []; for (var m of [5, 'x', {}, null, undefined]) { try { out.push(Array.from({ [Symbol.iterator]: m, length: 1, 0: 'a' }).join()) } catch (e) { out.push(e.constructor.name) } } try { Array.from(null) } catch (e) { out.push(e.constructor.name) } out.join()`},
+	{"spreadPatched", `0;1;7;7;c,c,c,c;2;1,3;[]`,
+		`function* g() { yield 1; yield 2 } var reads = 0; var a = g(); Object.defineProperty(a, 'next', { get() { reads++; return function () { return { done: true } } } }); var b = g(); b[Symbol.iterator] = function () { return [7][Symbol.iterator]() }; var c = g(); Object.setPrototypeOf(c, { next() { return { value: 'c', done: reads++ > 4 } }, [Symbol.iterator]() { return this } }); var d = g(); [[...a].length, reads, [...b].join(), Math.max(...b), [...c].join(), new Set(g()).size, Array.from(d, (x, i) => x + i).join(), JSON.stringify([...d])].join(';')`},
 	{"withScope", `1,5,5`,
 		`function* g(o) { with (o) { yield x; x = 5; yield x } } var o = { x: 1 }; var it = g(o); [it.next().value, it.next().value, o.x].join()`},
 	{"withDefined", `3,4,4`,
