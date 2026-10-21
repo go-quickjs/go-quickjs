@@ -517,6 +517,46 @@ function math_random(n)
     return n;
 }
 
+/* Math.imul in a hash's loop, FNV-1a's of the counter */
+function math_imul(n)
+{
+    var j, h = 0x811c9dc5 | 0;
+    for (j = 0; j < n; j++)
+        h = Math.imul(h ^ j, 16777619);
+    global_res = h;
+    return n;
+}
+
+/* Math.clz32 of the counter, summed */
+function math_clz32(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++)
+        s += Math.clz32(j);
+    global_res = s;
+    return n;
+}
+
+/* Math.pow of a fraction to a fraction, which no multiplication makes */
+function math_pow(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++)
+        s += Math.pow(1.0001 + (j & 7) * 0.001, 2.5);
+    global_res = s;
+    return n;
+}
+
+/* Math.atan2 and Math.hypot of a point, an angle and a distance */
+function math_atan2_hypot(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++)
+        s += Math.atan2(j & 15, 7) + Math.hypot(j & 15, 7);
+    global_res = s;
+    return n;
+}
+
 /* an array of 1000 shuffled again and again, as Fisher and Yates do: a
    Math.random and a swap for each element */
 function random_shuffle(n)

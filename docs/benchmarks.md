@@ -278,7 +278,8 @@ statements, iterators, using declarations, closures made and called anew,
 calls in tail position, method calls with a frame and without, loops of a
 few simple instructions, private class members, `Math.random`, the `in`
 operator, `delete`, the array methods that take a callback, `indexOf`,
-String's methods that run no script, and BigInts' division, shifts,
+String's methods that run no script, Math's imul, clz32, pow, atan2 and
+hypot, and BigInts' division, shifts,
 hashing, powers and decimal strings. Over the
 52 QuickJS can run (it has no using declarations) go-quickjs takes 0.99
 times its time, and 0.41 times with the JIT. An await costs much less,
