@@ -2,7 +2,10 @@
 
 package vm
 
-import "testing"
+import (
+	"testing"
+	"unsafe"
+)
 
 // plainSetup's functions make the calls of Go a call from native code makes
 // without a frame where they run nothing (jitGoCallPlain): a Map's and a
@@ -62,6 +65,8 @@ const plainSetup = `
 		return out.join(',') + ':' + new WeakMap().get(1) + ':' + new WeakMap().has(1) + ':' + new WeakMap().delete(1) + ':' + new WeakSet().has(1)
 	}
 	function dateLoop(n) { let t = 0, ok = true; for (let i = 0; i < n; i++) { const d = Date.now(); if (d < t) ok = false; t = d } return ok && typeof t === 'number' && Number.isInteger(t) }
+	function strLeafLoop(s, n) { let h = 0, out = ''; for (let i = 0; i < n; i++) { const k = i % 4; out = s.at(k) + s.codePointAt(k) + s.startsWith('a', k) + s.endsWith('d', k + 1) + s.toUpperCase() + s.toLowerCase() + s.trim() + s.trimStart() + s.trimEnd() + s.isWellFormed() + s.toWellFormed() + s.concat(k, 'z') + s.repeat(k) + s.padStart(k + 8, '-') + s.padEnd(k + 8) + s.normalize() + s.localeCompare('b') + String.fromCodePoint(65 + k); h = (h * 31 + out.length) | 0 } return h + '|' + out }
+	function strLeaves(n) { return strLeafLoop(' aBcd ', n) }
 `
 
 // plainRounds are plainSetup's calls and their answers, Node's
@@ -85,6 +90,7 @@ var plainRounds = [][2]string{
 	{`weakSets(30)`, `820:true:false:false`},
 	{`weakErrors()`, `TypeError,TypeError,TypeError,TypeError,TypeError,TypeError:undefined:false:false:false`},
 	{`dateLoop(30)`, `true`},
+	{`strLeaves(30)`, `-11054032|a97truefalse ABCD  abcd aBcdaBcd  aBcdtrue aBcd  aBcd 1z aBcd --- aBcd  aBcd     aBcd -1B`},
 }
 
 // A call of Go from native code that runs nothing -- a collection's
@@ -124,7 +130,7 @@ func TestJITPlainGoCalls(t *testing.T) {
 	for _, c := range [][2]string{
 		{"mapLoop", "maps(30)"}, {"setLoop", "sets(30)"}, {"stringLoop", "strings(30)"},
 		{"lengthLoop", "lengths(30)"}, {"writeLoop", "writes(30)"}, {"weakLoop", "weaks(30)"},
-		{"weakSetLoop", "weakSets(30)"}, {"dateLoop", "dateLoop(30)"},
+		{"weakSetLoop", "weakSets(30)"}, {"dateLoop", "dateLoop(30)"}, {"strLeafLoop", "strLeaves(30)"},
 	} {
 		e := jitNativeForTest(t, r, c[0])
 		calls, entries, hosts := e.ssaStats.goCalls, e.ssaStats.entries, e.ssaStats.hosts
@@ -164,5 +170,28 @@ func TestJITPlainGoCallsReplaced(t *testing.T) {
 		if got := v.String().Go(); got != round[1] {
 			t.Errorf("%s = %s, want %s", round[0], got, round[1])
 		}
+	}
+}
+
+// Every leaf native code may call without a frame (jitLeafOp, of the
+// runtime's leafFns) passes jitPlainSet's filter, however many there are: a
+// table of them had taken 32, and left String's last two, by a map's order,
+// to calls with frames.
+func TestJITPlainSetHoldsEveryLeaf(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	n := 0
+	for _, o := range r.leafFns {
+		if fd := o.fn(); fd != nil && jitLeafOp(fd.elemOp) {
+			n++
+			if !r.jitPlainFn(uintptr(unsafe.Pointer(o))) {
+				t.Errorf("leaf %d (op %d) is not in jitPlainSet", n, fd.elemOp)
+			}
+		}
+	}
+	if n <= 32 {
+		t.Fatalf("%d leaves, want more than a table of 32 took", n)
 	}
 }

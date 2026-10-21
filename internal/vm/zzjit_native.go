@@ -179,21 +179,24 @@ type jitRealmFields struct {
 	// on strings and arrays native code makes by a call of Go of their own
 	// (ssa.GoIndexOf).
 	jitSearches [jitSearchKinds]*Object
-	// jitPlainSet holds the addresses of the leaves whose calls
+	// jitPlainSet is a filter of the addresses of the leaves whose calls
 	// jitGoCallPlain makes without a frame (jitLeafOp, of the runtime's
 	// leafFns), which a call of Go is asked to be of before anything else
-	// of it is looked at: an open-addressed table (jitPlainSlot) of a probe
-	// or two, where Date.now's calls had spent 7% of their time on a walk
-	// of eight.
-	jitPlainSet [64]uintptr
+	// of it is looked at: a bit for each address's hash (jitPlainSlot),
+	// set for every leaf's -- where Date.now's calls had spent 7% of their
+	// time on a walk of eight -- and of a few others', which jitPlainCall
+	// then refuses. A table of the addresses, of 64, took 32 of them: the
+	// String methods' made 34, and two, by the order a map gave them, were
+	// called with frames.
+	jitPlainSet [4]uint64
 	// jitMapNexts are %MapIteratorPrototype%.next and
 	// %SetIteratorPrototype%.next, whose iterators a for...of's step
 	// native code makes walks itself (ssa.MapStepFeedback).
 	jitMapNexts [2]*Object
 }
 
-// jitPlainSlot is where an address's search in jitPlainSet starts.
-func jitPlainSlot(p uintptr) int { return int((uint64(p) >> 4) * 0x9e3779b97f4a7c15 >> 58) }
+// jitPlainSlot is an address's bit in jitPlainSet.
+func jitPlainSlot(p uintptr) uint64 { return (uint64(p) >> 4) * 0x9e3779b97f4a7c15 >> 56 }
 
 // The kinds of jitSearches: String.prototype's first, then Array's.
 const (
@@ -248,20 +251,11 @@ func (r *Runtime) recordJITSubstrings() {
 	if m := r.global.getOwn(r.atoms.intern("parseInt")); m.ok() && m.value().IsObject() {
 		r.jitParseInt = m.value().Object()
 	}
-	r.jitPlainSet = [64]uintptr{}
-	n := 0
+	r.jitPlainSet = [4]uint64{}
 	for _, o := range r.leafFns {
-		if fd := o.fn(); fd == nil || !jitLeafOp(fd.elemOp) || n == len(r.jitPlainSet)/2 {
-			continue
-		}
-		p := uintptr(unsafe.Pointer(o))
-		i := jitPlainSlot(p)
-		for r.jitPlainSet[i] != 0 && r.jitPlainSet[i] != p {
-			i = (i + 1) % len(r.jitPlainSet)
-		}
-		if r.jitPlainSet[i] == 0 {
-			r.jitPlainSet[i] = p
-			n++
+		if fd := o.fn(); fd != nil && jitLeafOp(fd.elemOp) {
+			s := jitPlainSlot(uintptr(unsafe.Pointer(o)))
+			r.jitPlainSet[s>>6] |= 1 << (s & 63)
 		}
 	}
 	for k, p := range [2]*Object{r.proto.mapIter, r.proto.setIter} {

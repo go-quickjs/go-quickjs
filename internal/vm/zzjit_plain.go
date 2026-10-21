@@ -157,9 +157,8 @@ func jitLeafOp(op uint8) bool {
 // jitMaybePlain reports, of a call of Go native code makes (ssa.GoCall),
 // in a few instructions, which inline where jitHostCall asks it, whether
 // jitGoCallPlain might make it: a property's write; or a call, or a method
-// call, whose function's address starts its search in jitPlainSet at a
-// slot that holds one -- a quarter of the others, which jitGoCallPlain
-// then refuses.
+// call, whose function's address has its bit in jitPlainSet -- every leaf's,
+// and a few others', which jitGoCallPlain then refuses.
 func (r *Runtime) jitMaybePlain(ctx *abi.Context) bool {
 	switch kind := ctx.GoOp >> abi.GoOpKindShift & 0xff; kind {
 	case abi.GoCallSet:
@@ -167,21 +166,17 @@ func (r *Runtime) jitMaybePlain(ctx *abi.Context) bool {
 	case 0, abi.GoCallMethod:
 		// The function, the call's first operand, or a method call's
 		// second, past its receiver.
-		return r.jitPlainSet[jitPlainSlot(ctx.GoArgs[kind].Ref)] != 0
+		return r.jitPlainFn(ctx.GoArgs[kind].Ref)
 	}
 	return false
 }
 
-// jitPlainFn reports whether ref, a call's function's pointer word, is one
-// of the leaves jitPlainCall calls (jitPlainSet).
+// jitPlainFn reports whether ref, a call's function's pointer word, may be
+// one of the leaves jitPlainCall calls (jitPlainSet): true for each of
+// them, and for a few others, which jitPlainCall refuses.
 func (r *Runtime) jitPlainFn(ref uintptr) bool {
-	set := &r.jitPlainSet
-	for i := jitPlainSlot(ref); set[i] != 0; i = (i + 1) % len(set) {
-		if set[i] == ref {
-			return true
-		}
-	}
-	return false
+	s := jitPlainSlot(ref)
+	return r.jitPlainSet[s>>6]&(1<<(s&63)) != 0
 }
 
 // MapNexts is ssa.MapStepFeedback's: the realm's Map and Set iterators'
