@@ -991,7 +991,7 @@ func (r *Runtime) constructTypedArray(kind elemType, proto *Object, args []Value
 			return Undefined, r.throwTypeError("the source's Symbol.iterator is not a function")
 		}
 		if isCallable(method) {
-			if err := r.iterate(first, func(v Value) error {
+			if err := r.iterateWith(first, method, func(v Value) error {
 				// The iterable is not asked how long it is, so the refusal has
 				// to come from the count: collecting more than could ever be
 				// allocated is how a four-billion-element source takes the

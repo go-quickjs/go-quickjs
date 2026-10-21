@@ -1016,11 +1016,21 @@ func (r *Runtime) initArrayBuiltins() {
 			return rt.newArrayOfLength(n), nil
 		}
 
-		iterable, err := rt.isIterable(src)
-		if err != nil {
-			return Undefined, err
+		// The iterator method is read once, and one that is neither absent
+		// nor callable is refused, as GetMethod refuses it, rather than
+		// taken for an array-like's absence of one.
+		method := Undefined
+		if !src.IsNullish() {
+			m, err := rt.getValueProp(src, rt.atoms.internSymbol(rt.wellKnown.iterator))
+			if err != nil {
+				return Undefined, err
+			}
+			if !m.IsNullish() && !isCallable(m) {
+				return Undefined, rt.throwTypeError("%s is not iterable", rt.describe(src))
+			}
+			method = m
 		}
-		if iterable {
+		if !method.IsNullish() {
 			o, err := build(-1)
 			if err != nil {
 				return Undefined, err
@@ -1028,7 +1038,7 @@ func (r *Runtime) initArrayBuiltins() {
 			a := arrayLike{o: o}
 			k := int64(0)
 			var argv [2]Value
-			err = rt.iterate(src, func(v Value) error {
+			err = rt.iterateWith(src, method, func(v Value) error {
 				if mapping {
 					argv[0], argv[1] = v, Float(float64(k))
 					mapped, err := rt.call(mapFn, thisArg, argv[:])
@@ -1899,18 +1909,6 @@ func (r *Runtime) relativeIndex(v Value, length, def int) (int, error) {
 // Iteration protocol
 // ---------------------------------------------------------------------------
 
-// isIterable reports whether a value has a Symbol.iterator method.
-func (r *Runtime) isIterable(v Value) (bool, error) {
-	if v.IsNullish() {
-		return false, nil
-	}
-	m, err := r.getValueProp(v, r.atoms.internSymbol(r.wellKnown.iterator))
-	if err != nil {
-		return false, err
-	}
-	return isCallable(m), nil
-}
-
 // iterate drives the iteration protocol, calling fn for each value.
 func (r *Runtime) iterate(v Value, fn func(Value) error) error {
 	method, err := r.getValueProp(v, r.atoms.internSymbol(r.wellKnown.iterator))
@@ -1920,6 +1918,13 @@ func (r *Runtime) iterate(v Value, fn func(Value) error) error {
 	if !isCallable(method) {
 		return r.throwTypeError("%s is not iterable", r.describe(v))
 	}
+	return r.iterateWith(v, method, fn)
+}
+
+// iterateWith is iterate with v's Symbol.iterator method, method, already
+// read, which a caller that decides by it -- an iterable or an array-like
+// -- reads once.
+func (r *Runtime) iterateWith(v, method Value, fn func(Value) error) error {
 	iter, err := r.call(method, v, nil)
 	if err != nil {
 		return err
