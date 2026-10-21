@@ -288,8 +288,18 @@ func (r *Runtime) regExpSymbolSearch(rx Value, args []Value) (Value, error) {
 			return Undefined, err
 		}
 	}
-	result, err := r.regExpExec(rx, s)
-	if err != nil {
+	// Where exec is the built-in, its match is where it is found, without the
+	// array, which only this would read its index of.
+	result, index := Null, -1
+	if r.execIsBuiltin(rx) {
+		caps, err := r.execMatch(rx, s)
+		if err != nil {
+			return Undefined, err
+		}
+		if caps != nil {
+			index = caps[0]
+		}
+	} else if result, err = r.regExpExec(rx, s); err != nil {
 		// Nothing is put back: the search never finished, and what it left
 		// behind is the zero it set on the way in.
 		return Undefined, err
@@ -306,7 +316,7 @@ func (r *Runtime) regExpSymbolSearch(rx Value, args []Value) (Value, error) {
 		}
 	}
 	if result.IsNull() {
-		return Int(-1), nil
+		return Int(index), nil
 	}
 	return r.getValueProp(result, atomIndex)
 }

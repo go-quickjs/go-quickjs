@@ -176,3 +176,29 @@ func TestRegExpASCIISubjectsAgreeWithNode(t *testing.T) {
 	r.push(JSON.stringify("12-34".match(/(?<a>\d+)-(?<b>\d+)/).groups), "ab".replace(/(?<x>a)/, "$<x>$<x>"))
 	r.join("|")`, `["alpha beta","alpha","beta"]|false|alpha,beta,gamma|11|0:1,4:22|x|1|y|22|333|x|1|y|4|abc.,.de.,..,.f|abc-de--f|[ba][c],[ed],,[f]|aa9,|ba9,|ca9,||5|6|true|7|false|0|12|4||0|-a-b-c-|a,b,c|4|3|true|__|kK|1|true|true|2|HeHeHelo|Helollo|....|5|4|true|{"a":"12","b":"34"}|aab`)
 }
+
+// TestRegExpSearchAgreesWithNode covers Symbol.search, which where exec is
+// the built-in finds where the match is without its array: global and
+// sticky patterns, whose lastIndex it starts from 0 and puts back, one
+// whose valueOf runs, one that cannot be written, no match, an empty one,
+// the u and i flags, strings as patterns, and the legacy statics a search
+// leaves. The answers are Node v26's.
+func TestRegExpSearchAgreesWithNode(t *testing.T) {
+	checkEval(t, `var r = [], log = []
+	var g = /o/g; g.lastIndex = 3
+	r.push("foo".search(g), g.lastIndex)
+	var y = /o/y; y.lastIndex = 2
+	r.push("foo".search(y), y.lastIndex, "oo".search(y), y.lastIndex)
+	r.push("abc".search(/x/), "abc".search(/(?:)/), "a😀b".search(/b/u), "ABC".search(/c/i), "abc".search("b"), "a.c".search("."))
+	var li = /b/; li.lastIndex = { valueOf() { log.push("valueOf"); return 7 } }
+	r.push("abc".search(li), typeof li.lastIndex)
+	var nw = /b/; Object.defineProperty(nw, "lastIndex", { writable: false, value: 0 })
+	r.push("abc".search(nw))
+	var nw2 = /b/; Object.defineProperty(nw2, "lastIndex", { writable: false, value: 1 })
+	try { "abc".search(nw2) } catch (e) { r.push(e.name) }
+	r.push("x1y".search(/(\d)/), RegExp.$1, RegExp.lastMatch, RegExp.leftContext)
+	var sub = new (class extends RegExp { exec(s) { log.push("sub " + s); return super.exec(s) } })("c")
+	r.push("abc".search(sub))
+	r.push(log.join())
+	r.join("|")`, `1|3|-1|2|0|2|-1|0|3|2|1|0|1|object|1|TypeError|1|1|1|x|2|sub abc`)
+}
