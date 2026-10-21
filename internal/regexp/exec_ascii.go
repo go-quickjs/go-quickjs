@@ -55,6 +55,7 @@ type matcherASCII struct {
 	check      func() error
 	checkAt    int
 	busy       bool
+	bytes      *matcherASCII
 }
 
 func (m *matcherASCII) search(re *Regexp, dst []int, start int, sticky bool) ([]int, error) {

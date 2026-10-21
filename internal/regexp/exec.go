@@ -147,6 +147,11 @@ type matcher struct {
 	// busy marks the matcher a pattern lends out, so that a pattern used again
 	// while a match is running does not have its state overwritten.
 	busy bool
+	// bytes is the matcher over an ASCII subject's bytes that matches with
+	// this one's storage, its backtracking stack and capture trail, when the
+	// subject is one (see execASCIILent); made when first needed. The
+	// matchers generated from this one have the field, and leave it unused.
+	bytes *matcherASCII
 }
 
 //go:generate go run ./internal/asciigen/cmd
@@ -203,8 +208,24 @@ func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error,
 		}
 		return nil, nil
 	}
-	// A Regexp with no matcher of its own borrows the one its core lends.
-	m, lent := re.scratch, false
+	m, lent := re.borrow()
+	// The input is the matcher's own, rather than made for each match.
+	m.input = input{units: units, unicode: re.flags&FlagUnicode != 0}
+	m.prog, m.in, m.check = re.prog, &m.input, check
+	// The budget is what this attempt may spend, so it starts again here: a
+	// matcher is lent out over and over, and a pattern that had spent its
+	// budget once would have been refused for the rest of the program.
+	m.steps, m.checkAt = 0, checkInterval
+	defer re.giveBack(m, lent)
+	return m.search(re, dst, start, sticky)
+}
+
+// borrow is the matcher a match of the pattern is made with, marked busy, and
+// whether it is the one the core lends.
+//
+// A Regexp with no matcher of its own borrows the one its core lends.
+func (re *Regexp) borrow() (m *matcher, lent bool) {
+	m, lent = re.scratch, false
 	if m == nil {
 		m, lent = re.lent, true
 	}
@@ -224,30 +245,25 @@ func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error,
 			}
 		}
 	}
-	// The input is the matcher's own, rather than made for each match.
-	m.input = input{units: units, unicode: re.flags&FlagUnicode != 0}
-	m.prog, m.in, m.check = re.prog, &m.input, check
-	// The budget is what this attempt may spend, so it starts again here: a
-	// matcher is lent out over and over, and a pattern that had spent its
-	// budget once would have been refused for the rest of the program.
-	m.steps, m.checkAt = 0, checkInterval
 	m.busy = true
-	defer func() {
-		m.busy = false
-		// The input is not held on to: it would keep the subject string alive
-		// for as long as the pattern.
-		m.input, m.in, m.check = input{}, nil, nil
-		// A core lends only a small matcher, since it lives as long as the
-		// runtime's cache of patterns: one a match has made large is the
-		// borrower's from now on, and goes when the borrower does.
-		if lent && re.lent == m && (cap(m.stack) > maxLentFrames || cap(m.trail) > maxLentFrames) {
-			re.lent, re.scratch = nil, m
-		}
-		if re.concurrent {
-			matcherPool.Put(m)
-		}
-	}()
-	return m.search(re, dst, start, sticky)
+	return m, lent
+}
+
+// giveBack is done with a matcher borrow gave.
+func (re *Regexp) giveBack(m *matcher, lent bool) {
+	m.busy = false
+	// The input is not held on to: it would keep the subject string alive
+	// for as long as the pattern.
+	m.input, m.in, m.check = input{}, nil, nil
+	// A core lends only a small matcher, since it lives as long as the
+	// runtime's cache of patterns: one a match has made large is the
+	// borrower's from now on, and goes when the borrower does.
+	if lent && re.lent == m && (cap(m.stack) > maxLentFrames || cap(m.trail) > maxLentFrames) {
+		re.lent, re.scratch = nil, m
+	}
+	if re.concurrent {
+		matcherPool.Put(m)
+	}
 }
 
 // search is the leftmost match at or after start, into dst, made with the

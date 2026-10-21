@@ -379,7 +379,11 @@ func TestBackreferencesChargeTheirLength(t *testing.T) {
 	for name, match := range map[string]func(check func() error) error{
 		"utf16": func(check func() error) error { _, err := re.MatchChecked(units, 0, check); return err },
 		"ascii": func(check func() error) error { _, err := re.MatchASCIIInto(nil, s, 0, check); return err },
-		"utf8":  func(check func() error) error { _, err := re8.MatchUTF8Into(nil, s, 0, check); return err },
+		"ascii lent": func(check func() error) error {
+			_, err := re.MatchASCIICheckedInto(nil, s, 0, check)
+			return err
+		},
+		"utf8": func(check func() error) error { _, err := re8.MatchUTF8Into(nil, s, 0, check); return err },
 	} {
 		start := time.Now()
 		if err := match(nil); !errors.Is(err, ErrComplexity) {

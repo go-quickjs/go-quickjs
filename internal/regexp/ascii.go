@@ -30,6 +30,65 @@ func (re *Regexp) MatchASCIIInto(dst []int, s string, start int, check func() er
 	return re.execASCII(dst, unsafe.Slice(unsafe.StringData(s), len(s)), start, check, re.flags&FlagSticky != 0)
 }
 
+// MatchASCIICheckedInto is MatchCheckedInto for a subject every byte of which
+// is ASCII, matched where it is, as MatchASCIIInto matches one -- but with the
+// state MatchCheckedInto borrows from the pattern, which, as for it, is for
+// one match at a time, rather than with a pooled matcher.
+func (re *Regexp) MatchASCIICheckedInto(dst []int, s string, start int, check func() error) ([]int, error) {
+	if start < 0 {
+		start = 0
+	}
+	if start > len(s) {
+		return nil, nil
+	}
+	return re.execASCIILent(dst, unsafe.Slice(unsafe.StringData(s), len(s)), start, check, re.flags&FlagSticky != 0)
+}
+
+// SearchASCIICheckedInto is SearchCheckedInto for an ASCII subject, as
+// MatchASCIICheckedInto is MatchCheckedInto for one.
+func (re *Regexp) SearchASCIICheckedInto(dst []int, s string, start int, check func() error) ([]int, error) {
+	if start < 0 {
+		start = 0
+	}
+	if start > len(s) {
+		return nil, nil
+	}
+	return re.execASCIILent(dst, unsafe.Slice(unsafe.StringData(s), len(s)), start, check, false)
+}
+
+// execASCIILent is execASCII with the matcher exec would borrow: its
+// matcher over bytes, which matches with its backtracking stack and capture
+// trail, and gives them back grown.
+func (re *Regexp) execASCIILent(dst []int, b []byte, start int, check func() error, sticky bool) ([]int, error) {
+	if lit := re.prog.litOnly; lit != nil && !sticky {
+		if at := indexUnitsASCII(b, lit, start); at >= 0 {
+			return append(dst[:0], at, at+len(lit)), nil
+		}
+		return nil, nil
+	}
+	m, lent := re.borrow()
+	a := m.bytes
+	if a == nil {
+		a = &matcherASCII{}
+		m.bytes = a
+	}
+	a.caps, a.trail, a.stack, a.counters, a.emptyMarks = m.caps, m.trail, m.stack, m.counters, m.emptyMarks
+	a.input = inputASCII{units: b, unicode: re.flags&FlagUnicode != 0}
+	a.prog, a.in, a.check = re.prog, &a.input, check
+	a.steps, a.checkAt = 0, checkInterval
+	defer re.giveBackASCII(m, a, lent)
+	return a.search(re, dst, start, sticky)
+}
+
+// giveBackASCII is giveBack for a match made with m's matcher over bytes.
+func (re *Regexp) giveBackASCII(m *matcher, a *matcherASCII, lent bool) {
+	// What the match grew is the matcher's again; the subject and the
+	// storage are not held on to by the matcher over bytes.
+	m.trail, m.stack = a.trail, a.stack
+	*a = matcherASCII{}
+	re.giveBack(m, lent)
+}
+
 // execASCII is exec over the bytes of an ASCII string, with a pooled matcher.
 func (re *Regexp) execASCII(dst []int, b []byte, start int, check func() error, sticky bool) ([]int, error) {
 	if lit := re.prog.litOnly; lit != nil && !sticky {

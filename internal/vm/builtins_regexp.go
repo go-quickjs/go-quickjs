@@ -428,8 +428,8 @@ func (r *Runtime) regexpMatch(this Value, s *String) ([]int, *regexp.Regexp, err
 		start = int(min(li, maxStringLength+1))
 	}
 
-	units := s.codeUnits()
-	if start < 0 || start > len(units) {
+	j := subjectOf(s)
+	if start < 0 || start > j.len() {
 		if stateful {
 			if err := r.setLastIndex(o, Int(0)); err != nil {
 				return nil, nil, err
@@ -439,8 +439,7 @@ func (r *Runtime) regexpMatch(this Value, s *String) ([]int, *regexp.Regexp, err
 	}
 	// A pattern that reads code points reads the one lastIndex falls in,
 	// which for an index between the halves of a pair begins at the first.
-	if re.Flags()&(regexp.FlagUnicode|regexp.FlagUnicodeSets) != 0 && start > 0 && start < len(units) &&
-		units[start]&0xFC00 == 0xDC00 && units[start-1]&0xFC00 == 0xD800 {
+	if re.Flags()&(regexp.FlagUnicode|regexp.FlagUnicodeSets) != 0 && j.inPair(start) {
 		start--
 	}
 
@@ -455,7 +454,7 @@ func (r *Runtime) regexpMatch(this Value, s *String) ([]int, *regexp.Regexp, err
 	// The indices are read into a buffer the runtime keeps: they are done
 	// with -- copied into the result and the legacy statics -- before
 	// anything else can run, and so before the next match.
-	caps, err := re.MatchCheckedInto(r.capsBuf, units, start, check)
+	caps, err := j.match(re, r.capsBuf, start, check)
 	if caps != nil {
 		r.capsBuf = caps
 	}
@@ -570,7 +569,7 @@ func (r *Runtime) execMatchAll(rx Value, s *String, fullUnicode bool, spans []in
 	o := rx.Object()
 	d := o.dataOf().(*regexpData)
 	re := d.re
-	units := s.codeUnits()
+	j := subjectOf(s)
 	i := len(r.argStack)
 	r.argStack = append(r.argStack, Str(s))
 	defer func() {
@@ -597,7 +596,7 @@ func (r *Runtime) execMatchAll(rx Value, s *String, fullUnicode bool, spans []in
 		}
 		return spans, err
 	}
-	for pos <= len(units) {
+	for pos <= j.len() {
 		if len(spans) > first {
 			// Each call after the first is a turn of the caller's loop, which
 			// counts it.
@@ -606,11 +605,10 @@ func (r *Runtime) execMatchAll(rx Value, s *String, fullUnicode bool, spans []in
 			}
 		}
 		start := pos
-		if unicode && start > 0 && start < len(units) &&
-			units[start]&0xFC00 == 0xDC00 && units[start-1]&0xFC00 == 0xD800 {
+		if unicode && j.inPair(start) {
 			start--
 		}
-		caps, err := re.MatchCheckedInto(r.capsBuf, units, start, check)
+		caps, err := j.match(re, r.capsBuf, start, check)
 		if caps != nil {
 			r.capsBuf = caps
 		}
@@ -626,7 +624,7 @@ func (r *Runtime) execMatchAll(rx Value, s *String, fullUnicode bool, spans []in
 		spans = append(spans, caps...)
 		pos = caps[1]
 		if caps[0] == caps[1] {
-			pos = advanceStringIndex(units, pos, fullUnicode)
+			pos = j.advance(pos, fullUnicode)
 		}
 	}
 	// The call that found nothing left lastIndex at 0.
@@ -646,9 +644,10 @@ func (r *Runtime) execMatchAll(rx Value, s *String, fullUnicode bool, spans []in
 // its match, so each piece is one search rather than a call of exec per
 // position. It runs in exec's frame, and the legacy statics are those of the
 // last match, as they would have been.
-func (r *Runtime) splitBuiltin(splitter Value, d *regexpData, s *String, units []uint16, limit int64, fullUnicode bool) (Value, error) {
+func (r *Runtime) splitBuiltin(splitter Value, d *regexpData, j *subject, limit int64, fullUnicode bool) (Value, error) {
 	re := d.re
-	size := len(units)
+	s := j.s
+	size := j.len()
 	i := len(r.argStack)
 	r.argStack = append(r.argStack, Str(s))
 	defer func() {
@@ -679,7 +678,7 @@ func (r *Runtime) splitBuiltin(splitter Value, d *regexpData, s *String, units [
 		if err := r.tick(); err != nil {
 			return done(err)
 		}
-		caps, err := re.SearchCheckedInto(r.capsBuf, units, q, check)
+		caps, err := j.search(re, r.capsBuf, q, check)
 		if caps != nil {
 			r.capsBuf = caps
 		}
@@ -699,7 +698,7 @@ func (r *Runtime) splitBuiltin(splitter Value, d *regexpData, s *String, units [
 		if e == p {
 			// A separator that matched emptily where the last one ended
 			// would not make progress.
-			q = advanceStringIndex(units, at, fullUnicode)
+			q = j.advance(at, fullUnicode)
 			continue
 		}
 		out = append(out, Str(s.Substring(p, at)))

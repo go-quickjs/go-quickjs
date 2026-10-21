@@ -148,3 +148,31 @@ func TestRegExpProtocolAgreesWithNode(t *testing.T) {
 	r.push(log.join(";"))
 	r.join("|")`, `false|b|true|xcc|a,b|2|1|true|ee|2|0|ff|2|true|ee|true|yy|x,x|x<1>|hh|[g][g]|true|2|TypeError|TypeError|true|[q]|ts|s<s>|false|0|own exec b;own exec b;proto exec c;proto exec c;proto exec c;proto exec -;proto exec -;proto exec -;proto exec a;proto exec a;proto exec a;proto exec b;global;global;flags;flags;flags;sub exec;sub exec;sub exec;sub exec;sub exec;sub exec;sub exec;sub exec;sym replace;sym replace;valueOf`)
 }
+
+// TestRegExpASCIISubjectsAgreeWithNode covers subjects all ASCII, which are
+// matched by their bytes rather than by code units made of them, through
+// every method: exec, test, match, matchAll, search, split with and
+// without a limit, replace by a string, a template and a function -- one
+// that matches the same pattern again, its matcher in use -- global and
+// sticky patterns and lastIndex, empty matches stepping on, the u and i
+// flags, lookbehind, backreferences, a subject joined of parts and one cut
+// from another, and the same patterns on text that is not ASCII. The
+// answers are Node v26's.
+func TestRegExpASCIISubjectsAgreeWithNode(t *testing.T) {
+	checkEval(t, `var r = [], words = "alpha beta  gamma", joined = "x=1;" + "y=22;" + String(333), cut = "[[abc,de,,f]]".slice(2, -2)
+	r.push(JSON.stringify(/(\w+) +(\w+)/.exec(words)), /^\w+$/.test(words), words.match(/\w+/g).join(), words.search(/ g/))
+	r.push([...joined.matchAll(/(\w)=(\d+)/g)].map(m => m.index + ":" + m[2]).join(), joined.split(/[=;]/).join("|"), joined.split(/[=;]/, 3).join("|"))
+	r.push(cut.split(/,/).length, cut.split(/(,)/).join("."), cut.replace(/,/g, "-"), cut.replace(/(\w)(\w)?/g, "[$2$1]"))
+	var re = /(\w)(\d)?/g
+	r.push("a1b2c".replace(re, (m, x, d) => x + "a9".replace(re, (n, y, e) => y + e + ",") + "|"))
+	var g = /o/g; g.lastIndex = 5
+	r.push(g.exec("foo boo").index, g.lastIndex, g.test("foo boo"), g.lastIndex, g.test("foo boo"), g.lastIndex)
+	var y = /\d+/y, toks = []; y.lastIndex = 2
+	r.push(y.exec("x=12,34")?.[0], y.lastIndex, y.exec("x=12,34"), y.lastIndex)
+	r.push("abc".replace(/(?:)/g, "-"), "abc".split(/(?:)/u).join(), "abc".match(/x*/g).length, [..."ab".matchAll(/(?:)/gu)].length)
+	r.push(/K/iu.test("k"), "kK".replace(/[\u212A]/giu, "_"), "kK".replace(/[\u212A]/gi, "_"), /(?<=a)b/.exec("ab").index, /(a)\1/.test("xaa"))
+	r.push(/(\w+)\s\1/i.test("Hello HELLO"), "aaa".lastIndexOf("a"), "Hello".replace(/l/g, "$" + String.fromCharCode(96)), "Hello".replace(/l/, "$'$&"))
+	r.push("ab😀c".replace(/./gu, "."), "ab😀c".match(/./g).length, "ab😀c".split(/(?:)/u).length, /^.$/u.test("😀"))
+	r.push(JSON.stringify("12-34".match(/(?<a>\d+)-(?<b>\d+)/).groups), "ab".replace(/(?<x>a)/, "$<x>$<x>"))
+	r.join("|")`, `["alpha beta","alpha","beta"]|false|alpha,beta,gamma|11|0:1,4:22|x|1|y|22|333|x|1|y|4|abc.,.de.,..,.f|abc-de--f|[ba][c],[ed],,[f]|aa9,|ba9,|ca9,||5|6|true|7|false|0|12|4||0|-a-b-c-|a,b,c|4|3|true|__|kK|1|true|true|2|HeHeHelo|Helollo|....|5|4|true|{"a":"12","b":"34"}|aab`)
+}

@@ -65,6 +65,72 @@ func (r *Runtime) regExpFlagsOf(rx Value) (string, error) {
 	return s.Go(), nil
 }
 
+// subject is a string as a match reads it: an ASCII one by its bytes, which
+// are its code units, matched where they are; any other by its code units,
+// which the string keeps once they are made. An ASCII string matched against
+// a pattern is not given its code units, which would be twice its bytes for
+// as long as it lives, made in a pass over all of it before a match that
+// may read only its start.
+type subject struct {
+	s     *String
+	ascii bool
+	// bytes is an ASCII subject's text, and units any other's code units.
+	bytes string
+	units []uint16
+}
+
+// subjectOf is s as a match reads it.
+func subjectOf(s *String) subject {
+	if s.ascii {
+		return subject{s: s, ascii: true, bytes: s.Go()}
+	}
+	return subject{s: s, units: s.codeUnits()}
+}
+
+// len is the subject's length in code units.
+func (j *subject) len() int {
+	if j.ascii {
+		return len(j.bytes)
+	}
+	return len(j.units)
+}
+
+// inPair reports whether index i falls between the halves of a pair of
+// surrogates, which a pattern that reads code points begins a match at the
+// first of.
+func (j *subject) inPair(i int) bool {
+	return !j.ascii && i > 0 && i < len(j.units) &&
+		j.units[i]&0xFC00 == 0xDC00 && j.units[i-1]&0xFC00 == 0xD800
+}
+
+// match is re's match at start, into dst, as MatchCheckedInto has it.
+func (j *subject) match(re *regexp.Regexp, dst []int, start int, check func() error) ([]int, error) {
+	if j.ascii {
+		return re.MatchASCIICheckedInto(dst, j.bytes, start, check)
+	}
+	return re.MatchCheckedInto(dst, j.units, start, check)
+}
+
+// search is re's first match at start or after it, as SearchCheckedInto has
+// it.
+func (j *subject) search(re *regexp.Regexp, dst []int, start int, check func() error) ([]int, error) {
+	if j.ascii {
+		return re.SearchASCIICheckedInto(dst, j.bytes, start, check)
+	}
+	return re.SearchCheckedInto(dst, j.units, start, check)
+}
+
+// advance is advanceStringIndex in the subject.
+func (j *subject) advance(index int, fullUnicode bool) int {
+	if j.ascii {
+		return index + 1
+	}
+	return advanceStringIndex(j.units, index, fullUnicode)
+}
+
+// slice is the subject's code units i to k, as a Go string.
+func (j *subject) slice(i, k int) string { return j.s.unitSlice(j.units, i, k) }
+
 // advanceStringIndex steps past one position.
 //
 // Under u or v a surrogate pair is one character, so an empty match must step
@@ -82,7 +148,7 @@ func advanceStringIndex(units []uint16, index int, fullUnicode bool) int {
 
 // matchLastIndex reads lastIndex and writes back the position after an empty
 // match, which is what stops a global pattern looping on one.
-func (r *Runtime) advanceAfterEmptyMatch(rx Value, units []uint16, fullUnicode bool) error {
+func (r *Runtime) advanceAfterEmptyMatch(rx Value, j *subject, fullUnicode bool) error {
 	li, err := r.getValueProp(rx, atomLastIndex)
 	if err != nil {
 		return err
@@ -91,12 +157,11 @@ func (r *Runtime) advanceAfterEmptyMatch(rx Value, units []uint16, fullUnicode b
 	if err != nil {
 		return err
 	}
-	if n >= int64(len(units)) {
+	if n >= int64(j.len()) {
 		// Past the end it only counts on, from where an int may not reach.
 		return r.setValueProp(rx, atomLastIndex, Float(float64(n+1)), true)
 	}
-	return r.setValueProp(rx, atomLastIndex,
-		Int(advanceStringIndex(units, int(n), fullUnicode)), true)
+	return r.setValueProp(rx, atomLastIndex, Int(j.advance(int(n), fullUnicode)), true)
 }
 
 // resultMatchString reads a result's element 0, which every method needs as a
@@ -173,7 +238,7 @@ func (r *Runtime) regExpSymbolMatch(rx Value, args []Value) (Value, error) {
 		}
 		return Obj(r.newArrayFrom(out)), nil
 	}
-	units := s.codeUnits()
+	j := subjectOf(s)
 	for {
 		if err := r.tick(); err != nil {
 			return Undefined, err
@@ -194,7 +259,7 @@ func (r *Runtime) regExpSymbolMatch(rx Value, args []Value) (Value, error) {
 		}
 		out = append(out, Str(matched))
 		if matched.Len() == 0 {
-			if err := r.advanceAfterEmptyMatch(rx, units, fullUnicode); err != nil {
+			if err := r.advanceAfterEmptyMatch(rx, &j, fullUnicode); err != nil {
 				return Undefined, err
 			}
 		}
@@ -272,8 +337,8 @@ func (r *Runtime) regExpSymbolSplit(rx Value, args []Value) (Value, error) {
 			// The copy would have been the realm's RegExp's, whose matches
 			// are the legacy statics' whatever rx's are.
 			d := regexpData{re: rx.Object().dataOf().(*regexpData).re, legacy: true, realm: r.Realm}
-			return r.splitBuiltin(rx, &d, s, s.codeUnits(), limit,
-				fl&(regexp.FlagUnicode|regexp.FlagUnicodeSets) != 0)
+			j := subjectOf(s)
+			return r.splitBuiltin(rx, &d, &j, limit, fl&(regexp.FlagUnicode|regexp.FlagUnicodeSets) != 0)
 		}
 	}
 	ctor, err := r.speciesConstructor(rx.Object(), r.proto.regexpCtor)
@@ -303,8 +368,8 @@ func (r *Runtime) regExpSymbolSplit(rx Value, args []Value) (Value, error) {
 		return Obj(r.newArrayFrom(out)), nil
 	}
 
-	units := s.codeUnits()
-	size := len(units)
+	j := subjectOf(s)
+	size := j.len()
 	if size == 0 {
 		// Splitting an empty string yields one empty piece unless the pattern
 		// matches it, in which case it yields none.
@@ -322,7 +387,7 @@ func (r *Runtime) regExpSymbolSplit(rx Value, args []Value) (Value, error) {
 	// units, which for text that is all ASCII shares the bytes.
 	piece := func(lo, hi int) Value { return Str(s.Substring(lo, hi)) }
 	if r.builtinExec(splitter) {
-		return r.splitBuiltin(splitter, splitter.Object().dataOf().(*regexpData), s, units, limit, fullUnicode)
+		return r.splitBuiltin(splitter, splitter.Object().dataOf().(*regexpData), &j, limit, fullUnicode)
 	}
 	p, q := 0, 0
 	for q < size {
@@ -337,7 +402,7 @@ func (r *Runtime) regExpSymbolSplit(rx Value, args []Value) (Value, error) {
 			return Undefined, err
 		}
 		if z.IsNull() {
-			q = advanceStringIndex(units, q, fullUnicode)
+			q = j.advance(q, fullUnicode)
 			continue
 		}
 		li, err := r.getValueProp(splitter, atomLastIndex)
@@ -352,7 +417,7 @@ func (r *Runtime) regExpSymbolSplit(rx Value, args []Value) (Value, error) {
 		if e == p {
 			// A separator that matched emptily where the last one ended would
 			// not make progress.
-			q = advanceStringIndex(units, q, fullUnicode)
+			q = j.advance(q, fullUnicode)
 			continue
 		}
 		out = append(out, piece(p, q))
@@ -423,8 +488,8 @@ func (r *Runtime) regExpReplace(rx Value, args []Value, fl regexp.Flags, direct 
 	if err != nil {
 		return Undefined, err
 	}
-	units := s.codeUnits()
-	size := len(units)
+	j := subjectOf(s)
+	size := j.len()
 
 	replValue := arg(args, 1)
 	functional := isCallable(replValue)
@@ -501,7 +566,7 @@ func (r *Runtime) regExpReplace(rx Value, args []Value, fl regexp.Flags, direct 
 			break
 		}
 		if caps[0] == caps[1] {
-			if err := r.advanceAfterEmptyMatch(rx, units, fullUnicode); err != nil {
+			if err := r.advanceAfterEmptyMatch(rx, &j, fullUnicode); err != nil {
 				return Undefined, err
 			}
 		}
@@ -526,7 +591,7 @@ func (r *Runtime) regExpReplace(rx Value, args []Value, fl regexp.Flags, direct 
 			return Undefined, err
 		}
 		if matched.Len() == 0 {
-			if err := r.advanceAfterEmptyMatch(rx, units, fullUnicode); err != nil {
+			if err := r.advanceAfterEmptyMatch(rx, &j, fullUnicode); err != nil {
 				return Undefined, err
 			}
 		}
@@ -582,8 +647,8 @@ func (r *Runtime) regExpReplace(rx Value, args []Value, fl regexp.Flags, direct 
 		}
 		if pieces != nil {
 			caps := spans[k*width : (k+1)*width]
-			sb.WriteString(s.unitSlice(units, next, caps[0]))
-			writeTemplate(&sb, s, units, caps, pieces, template)
+			sb.WriteString(j.slice(next, caps[0]))
+			writeTemplate(&sb, &j, caps, pieces, template)
 			next = caps[1]
 			continue
 		}
@@ -674,7 +739,7 @@ func (r *Runtime) regExpReplace(rx Value, args []Value, fl regexp.Flags, direct 
 				}
 				named = Obj(o)
 			}
-			replacement, err = r.getSubstitution(matched, units, position,
+			replacement, err = r.getSubstitution(matched, &j, position,
 				captures, named, template)
 			if err != nil {
 				return Undefined, err
@@ -688,11 +753,11 @@ func (r *Runtime) regExpReplace(rx Value, args []Value, fl regexp.Flags, direct 
 				// An ASCII subject's pieces have no surrogate halves at
 				// their ends, and the template is the String it was.
 				if position > next {
-					sb.write(s.unitSlice(units, next, position), false, false)
+					sb.write(j.slice(next, position), false, false)
 				}
 				sb.WriteStr(tv)
 			} else {
-				sb.WriteString(s.unitSlice(units, next, position))
+				sb.WriteString(j.slice(next, position))
 				sb.WriteString(replacement)
 			}
 			next = position + matchLen
@@ -702,7 +767,7 @@ func (r *Runtime) regExpReplace(rx Value, args []Value, fl regexp.Flags, direct 
 		}
 	}
 	if next < size {
-		sb.WriteString(s.unitSlice(units, next, size))
+		sb.WriteString(j.slice(next, size))
 	}
 	if (plain || pieces != nil) && s.ascii && tv.ascii {
 		// Made of ASCII alone, as long as its bytes, which overlong has
@@ -818,9 +883,9 @@ func appendText(pieces []templatePiece, lo, hi int) []templatePiece {
 	return append(pieces, templatePiece{kind: pieceText, lo: lo, hi: hi})
 }
 
-// writeTemplate writes the replacement of the match caps of s, whose code
-// units are units, by the template pieces were read from.
-func writeTemplate(sb *partsBuilder, s *String, units []uint16, caps []int, pieces []templatePiece, template string) {
+// writeTemplate writes the replacement of the match caps of j by the
+// template pieces were read from.
+func writeTemplate(sb *partsBuilder, j *subject, caps []int, pieces []templatePiece, template string) {
 	for _, p := range pieces {
 		switch p.kind {
 		case pieceText:
@@ -828,25 +893,25 @@ func writeTemplate(sb *partsBuilder, s *String, units []uint16, caps []int, piec
 		case pieceGroup:
 			// A group that took no part is undefined, which is nothing.
 			if lo, hi := caps[2*p.lo], caps[2*p.lo+1]; lo >= 0 && hi >= 0 {
-				sb.WriteString(s.unitSlice(units, lo, hi))
+				sb.WriteString(j.slice(lo, hi))
 			}
 		case pieceBefore:
-			sb.WriteString(s.unitSlice(units, 0, caps[0]))
+			sb.WriteString(j.slice(0, caps[0]))
 		case pieceAfter:
-			sb.WriteString(s.unitSlice(units, min(caps[1], len(units)), len(units)))
+			sb.WriteString(j.slice(min(caps[1], j.len()), j.len()))
 		}
 	}
 }
 
 // getSubstitution expands the $ forms in a replacement template.
-func (r *Runtime) getSubstitution(matched *String, units []uint16, position int,
+func (r *Runtime) getSubstitution(matched *String, j *subject, position int,
 	captures []Value, named Value, template string) (string, error) {
 	if !strings.ContainsRune(template, '$') {
 		return template, nil
 	}
 	tail := position + matched.Len()
-	if tail > len(units) {
-		tail = len(units)
+	if tail > j.len() {
+		tail = j.len()
 	}
 
 	// The pieces go into a buffer rather than a builder, because a piece may
@@ -866,10 +931,10 @@ func (r *Runtime) getSubstitution(matched *String, units []uint16, position int,
 			buf = wtf8.AppendJoin(buf, matched.Go())
 			i++
 		case c == '`':
-			buf = wtf8.AppendJoin(buf, wtf8.FromUTF16(units[:position]))
+			buf = wtf8.AppendJoin(buf, j.slice(0, position))
 			i++
 		case c == '\'':
-			buf = wtf8.AppendJoin(buf, wtf8.FromUTF16(units[tail:]))
+			buf = wtf8.AppendJoin(buf, j.slice(tail, j.len()))
 			i++
 		case c == '<':
 			// A named group reference, which is only a reference at all when
@@ -968,7 +1033,7 @@ func (r *Runtime) regExpSymbolMatchAll(rx Value, args []Value) (Value, error) {
 func (r *Runtime) newRegExpStringIterator(matcher Value, s *String, global, fullUnicode bool) Value {
 	iter := newObject(r.proto.regexpStringIter, ClassIterator)
 	iter.extOf().data = &regExpStringIterData{
-		matcher: matcher, s: s, units: s.codeUnits(),
+		matcher: matcher, s: s, j: subjectOf(s),
 		global: global, fullUnicode: fullUnicode,
 	}
 	return Obj(iter)
@@ -978,7 +1043,7 @@ func (r *Runtime) newRegExpStringIterator(matcher Value, s *String, global, full
 type regExpStringIterData struct {
 	matcher     Value
 	s           *String
-	units       []uint16
+	j           subject
 	global      bool
 	fullUnicode bool
 	done        bool
@@ -1019,7 +1084,7 @@ func (r *Runtime) initRegExpStringIteratorProto() {
 			return Undefined, err
 		}
 		if matched.Len() == 0 {
-			if err := rt.advanceAfterEmptyMatch(d.matcher, d.units, d.fullUnicode); err != nil {
+			if err := rt.advanceAfterEmptyMatch(d.matcher, &d.j, d.fullUnicode); err != nil {
 				d.done = true
 				return Undefined, err
 			}

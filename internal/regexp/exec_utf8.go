@@ -20,6 +20,7 @@ type matcherUTF8 struct {
 	check      func() error
 	checkAt    int
 	busy       bool
+	bytes      *matcherASCII
 }
 
 func (m *matcherUTF8) search(re *Regexp, dst []int, start int, sticky bool) ([]int, error) {

@@ -3,6 +3,7 @@ package regexp
 import (
 	"math/rand"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -50,7 +51,49 @@ func TestASCIIInputAgrees(t *testing.T) {
 					t.Fatalf("/%s/%s on %q from %d: bytes %v, %v; code units %v, %v",
 						p.src, p.flags, s, start, got, err1, want, err2)
 				}
+				// With the matcher the pattern lends, as a match of code
+				// units has it, and searching whatever the sticky flag says.
+				got, err1 = re.MatchASCIICheckedInto(nil, s, start, nil)
+				if err1 != nil || !slices.Equal(got, want) {
+					t.Fatalf("/%s/%s on %q from %d: bytes with the lent matcher %v, %v; code units %v",
+						p.src, p.flags, s, start, got, err1, want)
+				}
+				got, err1 = re.SearchASCIICheckedInto(nil, s, start, nil)
+				want, err2 = re.SearchCheckedInto(nil, units, start, nil)
+				if err1 != nil || err2 != nil || !slices.Equal(got, want) {
+					t.Fatalf("/%s/%s on %q from %d: a search of bytes %v, %v; of code units %v, %v",
+						p.src, p.flags, s, start, got, err1, want, err2)
+				}
 			}
 		}
+	}
+}
+
+// TestASCIILentMatcher pins what a match of an ASCII subject with the lent
+// matcher leaves: the subject not held on to, and the backtracking state it
+// grew given back to the matcher it borrowed it from -- moved off the core
+// once large, as a match of code units moves it -- for the next match.
+func TestASCIILentMatcher(t *testing.T) {
+	re, err := Compile("(a|b)*c", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clone := re.Clone()
+	long := strings.Repeat("ab", 2000) + "c"
+	if got, _ := clone.MatchASCIICheckedInto(nil, long, 0, nil); !slices.Equal(got, []int{0, len(long), len(long) - 2, len(long) - 1}) {
+		t.Fatalf("match = %v", got)
+	}
+	m := clone.scratch
+	if m == nil || clone.lent != nil || cap(m.stack) <= maxLentFrames && cap(m.trail) <= maxLentFrames {
+		t.Fatalf("a large matcher was not moved to the clone: scratch %v, lent %v", m != nil, clone.lent != nil)
+	}
+	if a := m.bytes; a == nil || a.input.units != nil || a.in != nil || a.stack != nil || a.trail != nil || a.caps != nil {
+		t.Fatal("the matcher over bytes holds on to the subject or its storage")
+	}
+	if got, _ := clone.MatchASCIICheckedInto(nil, "abc", 0, nil); !slices.Equal(got, []int{0, 3, 1, 2}) {
+		t.Fatalf("match after = %v", got)
+	}
+	if clone.scratch != m {
+		t.Fatal("the next match did not use the matcher kept")
 	}
 }

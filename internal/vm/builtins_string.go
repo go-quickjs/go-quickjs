@@ -880,8 +880,8 @@ func (r *Runtime) replacementFor(replVal Value, replText string, matched *String
 	}
 	// The replacement may name the match and the text around it, the same way
 	// it may for a regular expression -- there are simply no capture groups.
-	return r.getSubstitution(matched, whole.codeUnits(), offset,
-		nil, Undefined, replText)
+	j := subjectOf(whole)
+	return r.getSubstitution(matched, &j, offset, nil, Undefined, replText)
 }
 
 // newStringIterator iterates a string by code point.
