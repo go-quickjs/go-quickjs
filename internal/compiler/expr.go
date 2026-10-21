@@ -693,14 +693,15 @@ func (c *compiler) templateIdx(q *ast.TemplateLit) uint32 {
 }
 
 func (c *compiler) compileArrayLit(n *ast.ArrayLit) {
-	// Without spread or holes the whole literal is built in one instruction
-	// from values already on the stack.
+	// Without spread the whole literal is built in one instruction from
+	// values already on the stack. A hole is the uninitialized value, which
+	// is what an array's storage holds for one: it advances the length
+	// without making a property, which is what makes `1 in [1,,3]` false
+	// and what the iteration methods skip. As one instruction a literal
+	// with holes is the JIT's to make too (ir.ArrayLiteral), where a push
+	// of each element was not.
 	simple := true
 	for _, el := range n.Elements {
-		if el == nil {
-			simple = false
-			break
-		}
 		if _, isSpread := el.(*ast.Spread); isSpread {
 			simple = false
 			break
@@ -708,6 +709,10 @@ func (c *compiler) compileArrayLit(n *ast.ArrayLit) {
 	}
 	if simple {
 		for _, el := range n.Elements {
+			if el == nil {
+				c.emit(bytecode.OpPushUninitialized, 0, 0)
+				continue
+			}
 			c.compileExpr(el)
 		}
 		c.emit(bytecode.OpNewArray, uint32(len(n.Elements)), 0)
