@@ -237,7 +237,7 @@ type objectExt struct {
 	// data carries the internal slots of an exotic object: *funcData for a
 	// function, *dateData for a Date, and so on. It is nil for an ordinary
 	// object. An array has none, and keeps its weakMapRefs here instead
-	// (setWeakMapRefs).
+	// (newWeakMapRefs).
 	data any
 }
 
@@ -245,7 +245,7 @@ type objectExt struct {
 // WeakMaps the object is a key of. Being a key is rare enough that an
 // embedded ext has no such room: an object with one that becomes a key
 // moves to a keyedExt, its fields copied, unless it is an array
-// (setWeakMapRefs).
+// (newWeakMapRefs).
 type keyedExt struct {
 	objectExt
 
@@ -310,22 +310,39 @@ func (o *Object) weakMapRefsOf() *weakMapRefs {
 	return (*keyedExt)(unsafe.Pointer(o.ext)).weakMapRefs
 }
 
-// setWeakMapRefs gives o its values in the WeakMaps it is a key of. An
-// array keeps them as its data; any other object in a keyedExt, to which
-// the fields of an embedded ext move -- which is why nothing may keep the
-// ext of an object that is not an array across what can make it a key.
-func (o *Object) setWeakMapRefs(refs *weakMapRefs) {
+// keyedRefs is a keyedExt made with the weakMapRefs it holds, in one
+// allocation: what an object with no ext, or one in its own allocation,
+// is given when it becomes a key, which had been two of them.
+type keyedRefs struct {
+	keyedExt
+	refs weakMapRefs
+}
+
+// newWeakMapRefs gives o, which has none, its values in the WeakMaps it is
+// a key of, empty. An array keeps them as its data; any other object in a
+// keyedExt, to which the fields of an embedded ext move -- which is why
+// nothing may keep the ext of an object that is not an array across what
+// can make it a key.
+func (o *Object) newWeakMapRefs() *weakMapRefs {
 	switch {
-	case o.ext == nil:
-		o.extOf()
 	case o.class == ClassArray:
-		o.ext.data = refs
-		return
-	case o.extEmbedded():
-		k := &keyedExt{objectExt: *o.ext}
+		refs := &weakMapRefs{}
+		o.extOf().data = refs
+		return refs
+	case o.ext == nil:
+		k := &keyedRefs{}
+		k.weakMapRefs = &k.refs
 		o.ext = &k.objectExt
+		return &k.refs
+	case o.extEmbedded():
+		k := &keyedRefs{keyedExt: keyedExt{objectExt: *o.ext}}
+		k.weakMapRefs = &k.refs
+		o.ext = &k.objectExt
+		return &k.refs
 	}
+	refs := &weakMapRefs{}
 	(*keyedExt)(unsafe.Pointer(o.ext)).weakMapRefs = refs
+	return refs
 }
 
 // maxHoleRun is the longest run of holes an array writes into its dense

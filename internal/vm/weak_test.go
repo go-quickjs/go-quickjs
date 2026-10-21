@@ -28,7 +28,7 @@ func collected[T any](r *Runtime, p weak.Pointer[T]) bool {
 
 // tracked is how many keys a map holds a weak reference to, live or
 // collected.
-func tracked(s *weakMapState) int { return len(s.keys) }
+func tracked(s *weakMapState) int { return len(s.keys) + len(s.syms) }
 
 // A key nothing else holds goes, and a key that is held keeps its value.
 func TestWeakMapReleasesCollectedKeys(t *testing.T) {

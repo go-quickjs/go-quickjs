@@ -5,6 +5,8 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"unsafe"
+	"weak"
 )
 
 // WeakMap.
@@ -81,15 +83,19 @@ type weakMapState struct {
 	// each key a Go map of a hundred and eighty entries, and a set of a new
 	// key three times as long as QuickJS's.
 	id uint64
-	// keys holds a weak reference to every key that has, or has had, an
-	// entry in the map: those whose values the map's death has to release.
-	// A key is added when it is first given an entry, and a deleted entry
-	// stays on its key, marked (weakMapDeleted), so a key given one again is
-	// not added twice; so keys is a list, not a set to look each key up in.
-	keys []weakTarget
-	// pruneAt is the length of keys at which it is next pruned of the keys
-	// that have been collected, twice what was left the last time, so that
-	// pruning costs a constant per key added.
+	// keys holds a weak reference to every object that is, or has been, a
+	// key of the map, and syms to every symbol: those whose values the
+	// map's death has to release. A key is added when it is first given an
+	// entry, and a deleted entry stays on its key, marked (weakMapDeleted),
+	// so a key given one again is not added twice; so each is a list, not a
+	// set to look each key up in. They are apart so that each reference is
+	// a word, the list saying what it refers to: a weakTarget, which says
+	// so itself, is three, and a map's list of a thousand keys had grown
+	// to 24 KB, made again at each doubling.
+	keys, syms []weakKey
+	// pruneAt is the length of the lists together at which they are next
+	// pruned of the keys that have been collected, twice what was left the
+	// last time, so that pruning costs a constant per key added.
 	pruneAt int
 	// pruned is the collector's cycle (gcEpoch) the keys were last pruned
 	// in, or the map made in. Only a collection takes keys, so keys are not
@@ -97,6 +103,17 @@ type weakMapState struct {
 	// two collections had looked at each of them twice, to find none gone.
 	pruned uint32
 }
+
+// weakKey is a weak reference to an object or a symbol, as the address
+// of the allocation, which whoever keeps it knows the kind of. It names
+// nothing once the target has been collected, and nothing that is ever
+// another's: the collector keeps one record for each object a weak
+// reference is made to, which goes with the object.
+type weakKey = weak.Pointer[byte]
+
+// makeWeakKey is a weak reference to the object or symbol whose
+// allocation p is.
+func makeWeakKey(p unsafe.Pointer) weakKey { return weak.Make((*byte)(p)) }
 
 // weakMapRefs is a key's values, one for each WeakMap it is a key of. It is
 // made the first time the object or symbol becomes a key, and lives as long
@@ -106,11 +123,11 @@ type weakMapRefs struct {
 	// one, without more. Its m is nil while it is empty.
 	first weakMapFirst
 	// more holds the entries of other maps, nil while there are none. It is
-	// a pointer, so that a key of one map is given 56 bytes rather than 80.
+	// a pointer, so that a key of one map is given 40 bytes rather than 64.
 	more *weakMapMore
 	// key is the weak reference to the key, made once, which the maps of its
 	// entries keep.
-	key weakTarget
+	key weakKey
 }
 
 // weakMapFirst is a key's value in its first map, the map named by its
@@ -195,17 +212,19 @@ func (refs *weakMapRefs) get(p *weakMapState) (Value, bool) {
 }
 
 // set sets the key's value in the map p, and reports whether the entry is
-// new: not there before, not even deleted.
-func (refs *weakMapRefs) set(p *weakMapState, v Value) bool {
+// new: not there before, not even deleted. q is the registry whose spare
+// entries (weakMapRegistry.spare) a key that needs room for more takes, or
+// nil.
+func (refs *weakMapRefs) set(p *weakMapState, v Value, q *weakMapRegistry) bool {
 	if refs.first.m == p {
 		refs.first.value = v
 		return false
 	}
-	return refs.setMore(p, v)
+	return refs.setMore(p, v, q)
 }
 
 // setMore is set for a key whose entry in p, if any, is not its first.
-func (refs *weakMapRefs) setMore(p *weakMapState, v Value) bool {
+func (refs *weakMapRefs) setMore(p *weakMapState, v Value, q *weakMapRegistry) bool {
 	more := refs.more
 	if refs.first.m == nil && more == nil {
 		refs.first = weakMapFirst{p, v}
@@ -226,7 +245,7 @@ func (refs *weakMapRefs) setMore(p *weakMapState, v Value) bool {
 		return true
 	}
 	if more == nil {
-		more = &weakMapMore{}
+		more = q.takeSpare()
 		refs.more = more
 	}
 	if more.gone > 0 && 2*more.gone >= len(more.entries) {
@@ -237,10 +256,17 @@ func (refs *weakMapRefs) setMore(p *weakMapState, v Value) bool {
 	return true
 }
 
-// compact takes the entries of the maps that have gone out of more.
+// compact takes the entries of the maps that have gone out of more. It
+// keeps their room unless they used little of it: the maps a key is given
+// entries in between two collections are gone together, and the next
+// ones' entries need the room again -- given back each time, a key of a
+// WeakMap after another had grown its entries from nothing again after
+// every collection. Their room is given back once a collection's entries
+// were fewer than a quarter of it.
 func (more *weakMapMore) compact() {
+	n := len(more.entries)
 	e := slices.DeleteFunc(more.entries, func(e weakMapEntry) bool { return e.value.sameBits(weakMapGone) })
-	if cap(e) > 4*len(e) {
+	if cap(e) > 4*n {
 		e = slices.Clone(e)
 	}
 	more.entries, more.gone = e, 0
@@ -269,8 +295,8 @@ func (refs *weakMapRefs) delete(p *weakMapState) bool {
 // remove removes the key's entry in the map p, deleted or not, once the map
 // has gone, and reports whether there was one. An entry in more is left
 // marked, as gone counts it, and more is dropped once every entry in it
-// has gone.
-func (refs *weakMapRefs) remove(p *weakMapState) bool {
+// has gone, to be q's spare if q is not nil.
+func (refs *weakMapRefs) remove(p *weakMapState, q *weakMapRegistry) bool {
 	if refs.first.m == p {
 		refs.first = weakMapFirst{}
 		return true
@@ -283,6 +309,7 @@ func (refs *weakMapRefs) remove(p *weakMapState) bool {
 	more.entries[i].value = weakMapGone
 	if more.gone++; more.gone == len(more.entries) {
 		refs.more = nil
+		q.keepSpare(more)
 	}
 	return true
 }
@@ -291,25 +318,23 @@ func (refs *weakMapRefs) remove(p *weakMapState) bool {
 // none yet, or nil: for a value that is not an object or a symbol, and for
 // one that has never been a key, when create is not set.
 func weakRefsOf(k Value, create bool) *weakMapRefs {
-	var slot **weakMapRefs
 	switch {
 	case k.IsObject():
 		o := k.object()
 		refs := o.weakMapRefsOf()
 		if refs == nil && create {
-			refs = &weakMapRefs{key: makeWeak(k)}
-			o.setWeakMapRefs(refs)
+			refs = o.newWeakMapRefs()
+			refs.key = makeWeakKey(k.ref)
 		}
 		return refs
 	case k.IsSymbol():
-		slot = &k.Symbol().weakMapRefs
-	default:
-		return nil
+		s := k.Symbol()
+		if s.weakMapRefs == nil && create {
+			s.weakMapRefs = &weakMapRefs{key: makeWeakKey(k.ref)}
+		}
+		return s.weakMapRefs
 	}
-	if *slot == nil && create {
-		*slot = &weakMapRefs{key: makeWeak(k)}
-	}
-	return *slot
+	return nil
 }
 
 // get is the value of the key k, which may be anything. It takes the runtime
@@ -340,8 +365,8 @@ func (m *weakMap) set(r *Runtime, k, v Value) {
 		runtime.AddCleanup(m, reportWeakMapDeath, weakMapDeath{reg, s})
 	}
 	refs := weakRefsOf(k, true)
-	if refs.set(s, v) {
-		s.track(refs.key)
+	if refs.set(s, v, r.weakMaps) {
+		s.track(refs.key, k.IsSymbol())
 	}
 }
 
@@ -355,39 +380,62 @@ func (m *weakMap) delete(k Value) bool {
 	return refs != nil && refs.delete(s)
 }
 
-// track records that the key k refers to has been given its first entry.
-func (s *weakMapState) track(k weakTarget) {
-	if len(s.keys) >= s.pruneAt && gcEpoch.Load() != s.pruned {
+// track records that the key k refers to, a symbol if sym is set and an
+// object if not, has been given its first entry.
+func (s *weakMapState) track(k weakKey, sym bool) {
+	if len(s.keys)+len(s.syms) >= s.pruneAt && gcEpoch.Load() != s.pruned {
 		s.pruned = gcEpoch.Load()
-		kept := s.keys[:0]
-		for _, q := range s.keys {
-			if q.pointer() != nil {
-				kept = append(kept, q)
-			}
-		}
-		clear(s.keys[len(kept):])
-		s.keys = kept
-		s.pruneAt = max(2*len(kept), 8)
+		s.keys, s.syms = pruneWeakKeys(s.keys), pruneWeakKeys(s.syms)
+		s.pruneAt = max(2*(len(s.keys)+len(s.syms)), 8)
 	}
-	s.keys = append(s.keys, k)
+	if sym {
+		s.syms = append(s.syms, k)
+	} else {
+		s.keys = append(s.keys, k)
+	}
+}
+
+// pruneWeakKeys is l without the keys that have been collected, in its
+// array.
+func pruneWeakKeys(l []weakKey) []weakKey {
+	kept := l[:0]
+	for _, q := range l {
+		if q.Value() != nil {
+			kept = append(kept, q)
+		}
+	}
+	clear(l[len(kept):])
+	return kept
 }
 
 // release takes the map's entries off the keys that are left, once the map
-// has gone.
-func (s *weakMapState) release() {
+// has gone, keeping in q, if it is not nil, what a key's other maps'
+// entries were in for the next maps to take.
+func (s *weakMapState) release(q *weakMapRegistry) {
 	for _, k := range s.keys {
-		s.releaseKey(k)
+		s.releaseKey(k, false, q)
 	}
-	s.keys = nil
+	for _, k := range s.syms {
+		s.releaseKey(k, true, q)
+	}
+	s.keys, s.syms = nil, nil
 }
 
-// releaseKey takes the map's entry off the key k refers to, if it is still
-// there.
-func (s *weakMapState) releaseKey(k weakTarget) {
-	if v, ok := k.get(); ok {
-		if refs := weakRefsOf(v, false); refs != nil {
-			refs.remove(s)
-		}
+// releaseKey takes the map's entry off the key k refers to, a symbol if sym
+// is set and an object if not, if it is still there.
+func (s *weakMapState) releaseKey(k weakKey, sym bool, q *weakMapRegistry) {
+	p := k.Value()
+	if p == nil {
+		return
+	}
+	var refs *weakMapRefs
+	if sym {
+		refs = (*Symbol)(unsafe.Pointer(p)).weakMapRefs
+	} else {
+		refs = (*Object)(unsafe.Pointer(p)).weakMapRefsOf()
+	}
+	if refs != nil {
+		refs.remove(s, q)
 	}
 }
 
@@ -405,6 +453,50 @@ type weakMapRegistry struct {
 	// mu guards dead, which the cleanup goroutine appends to.
 	mu   sync.Mutex
 	dead []*weakMapState
+
+	// spare holds the weakMapMore of the keys whose entries in maps other
+	// than their first have all been released, emptied, with their room,
+	// for a key that needs one to take (setMore) -- until a collection
+	// has run since they were kept (spareEpoch), when no key has needed
+	// them for a cycle and they go. A script that makes a WeakMap after
+	// another over the same keys empties a key's entries at each
+	// collection and fills them again before the next: made anew each
+	// time, they had been more than half of what the script allocated.
+	spare      []*weakMapMore
+	spareEpoch uint32
+}
+
+// keepSpare keeps more, emptied, as a spare, if q is not nil.
+func (q *weakMapRegistry) keepSpare(more *weakMapMore) {
+	if q == nil {
+		return
+	}
+	q.dropSpares()
+	more.entries, more.gone = more.entries[:0], 0
+	q.spare = append(q.spare, more)
+}
+
+// takeSpare is a spare weakMapMore, or a new one.
+func (q *weakMapRegistry) takeSpare() *weakMapMore {
+	if q != nil {
+		if n := len(q.spare); n > 0 {
+			more := q.spare[n-1]
+			q.spare[n-1] = nil
+			q.spare = q.spare[:n-1]
+			return more
+		}
+	}
+	return &weakMapMore{}
+}
+
+// dropSpares lets the spares go if a collection has run since they were
+// kept.
+func (q *weakMapRegistry) dropSpares() {
+	if e := gcEpoch.Load(); e != q.spareEpoch {
+		clear(q.spare)
+		q.spare = q.spare[:0]
+		q.spareEpoch = e
+	}
 }
 
 // weakMapDeath is a map's cleanup argument: its state, and the registry to
@@ -451,8 +543,9 @@ func (r *Runtime) releaseDeadWeakMaps() {
 	q.dead = nil
 	q.pending.Store(false)
 	q.mu.Unlock()
+	q.dropSpares()
 	for _, s := range dead {
-		s.release()
+		s.release(q)
 		delete(q.live, s)
 	}
 }
@@ -467,7 +560,9 @@ func (r *Runtime) releaseAllWeakMaps() {
 	}
 	r.releaseDeadWeakMaps()
 	for s := range q.live {
-		s.release()
+		s.release(nil)
 	}
 	clear(q.live)
+	clear(q.spare)
+	q.spare = nil
 }

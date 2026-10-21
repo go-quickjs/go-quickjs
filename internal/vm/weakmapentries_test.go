@@ -76,7 +76,7 @@ func TestWeakMapKeyEntriesInOrder(t *testing.T) {
 	// compacts the entries.
 	for i := 0; i < len(maps); i++ {
 		if i%4 != 1 {
-			maps[i].state.releaseKey(refs().key)
+			maps[i].state.releaseKey(refs().key, false, nil)
 			delete(want, i)
 		}
 	}
@@ -109,7 +109,7 @@ func TestWeakMapKeyEntriesInOrder(t *testing.T) {
 		t.Errorf("%d of %d entries are marked: the set did not compact them", g, len(more().entries))
 	}
 	for i := range maps {
-		maps[i].state.releaseKey(refs().key)
+		maps[i].state.releaseKey(refs().key, false, nil)
 	}
 	if refs().more != nil || refs().first.m != nil {
 		t.Errorf("released from every map, the key holds %d entries", len(more().entries))

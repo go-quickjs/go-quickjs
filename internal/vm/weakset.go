@@ -25,9 +25,11 @@ type weakSetSlot struct {
 // weakSet is a WeakSet's internal slot.
 type weakSet struct {
 	// keys holds a weak reference to each member, in the order they were
-	// added. A deleted member's is zero, and a collected one's names
-	// nothing; either keeps its place, and its index slot, until a rebuild.
-	keys []weakTarget
+	// added: a word, the set never asking which kind a member is, only
+	// whether one is the value it is asked about. A deleted member's is
+	// zero, and a collected one's names nothing; either keeps its place,
+	// and its index slot, until a rebuild.
+	keys []weakKey
 	// index is open addressing with linear probing over a power-of-two table
 	// at most half full, as a Map's is.
 	index []weakSetSlot
@@ -61,7 +63,7 @@ func (s *weakSet) find(v Value, h uint32) int {
 		}
 		if slot.hash == h {
 			j := int(slot.at - 1)
-			if s.keys[j].pointer() == v.ref {
+			if unsafe.Pointer(s.keys[j].Value()) == v.ref {
 				return j
 			}
 		}
@@ -84,7 +86,7 @@ func (s *weakSet) place(h uint32, j int) {
 func (s *weakSet) rebuild() {
 	kept := 0
 	for _, k := range s.keys {
-		if k.pointer() != nil {
+		if k.Value() != nil {
 			s.keys[kept] = k
 			kept++
 		}
@@ -93,7 +95,7 @@ func (s *weakSet) rebuild() {
 	s.keys = s.keys[:kept]
 	// A list that has emptied gives its room back.
 	if c := cap(s.keys); c > 64 && c > 4*kept {
-		s.keys = append([]weakTarget(nil), s.keys...)
+		s.keys = append([]weakKey(nil), s.keys...)
 	}
 	s.size = kept
 	n := 8
@@ -108,8 +110,8 @@ func (s *weakSet) rebuild() {
 	for j, k := range s.keys {
 		// One collected since it was kept above gets no slot: it is found
 		// by nothing, and the next rebuild drops it.
-		if p := k.pointer(); p != nil {
-			s.place(weakHash(p), j)
+		if p := k.Value(); p != nil {
+			s.place(weakHash(unsafe.Pointer(p)), j)
 		}
 	}
 }
@@ -122,7 +124,7 @@ func (s *weakSet) add(v Value) {
 			s.rebuild()
 		}
 		j := len(s.keys)
-		s.keys = append(s.keys, makeWeak(v))
+		s.keys = append(s.keys, makeWeakKey(v.ref))
 		s.place(h, j)
 		s.size++
 	}
@@ -146,7 +148,7 @@ func (s *weakSet) delete(v Value) bool {
 	if j < 0 {
 		return false
 	}
-	s.keys[j] = weakTarget{}
+	s.keys[j] = weakKey{}
 	s.size--
 	if dead := len(s.keys) - s.size; dead >= 16 && dead > s.size {
 		s.rebuild()
