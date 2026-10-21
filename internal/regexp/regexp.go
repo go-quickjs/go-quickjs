@@ -36,6 +36,8 @@ type core struct {
 	concurrent bool
 	// utf8 marks a pattern compiled for MatchUTF8Into.
 	utf8 bool
+	// annex is what the embedder keeps with the pattern; see Annex.
+	annex any
 }
 
 // Compile parses and compiles a pattern.
@@ -120,6 +122,16 @@ func (re *Regexp) RequiredLiteral() (text string, minOff, maxOff int, ok bool) {
 	}
 	return string(utf16.Decode(lit.units)), lit.minOff, lit.maxOff, true
 }
+
+// Annex returns what SetAnnex last kept with the pattern, which its clones
+// share, or nil: what an embedder works out from a pattern once rather than
+// at every match -- how it builds a match's result, say. The package never
+// reads it. Like the matcher a pattern lends, it is for one goroutine at a
+// time: a pattern marked Concurrent is not given one.
+func (re *Regexp) Annex() any { return re.annex }
+
+// SetAnnex keeps v with the pattern, for Annex to return.
+func (re *Regexp) SetAnnex(v any) { re.annex = v }
 
 // Source returns the pattern text.
 func (re *Regexp) Source() string { return re.source }

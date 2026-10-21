@@ -3,6 +3,7 @@ package vm
 import (
 	"errors"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"unsafe"
@@ -757,10 +758,8 @@ func (r *Runtime) buildMatchResult(re *regexp.Regexp, caps []int, input *String)
 	// as well, go in the room the array was made with. Without the d flag,
 	// every result has the first's three properties, which are copied from
 	// it with values of its own.
-	names := orderedGroupNames(re)
-	groups := r.groupObject(names, re.GroupNames(), func(i int) Value {
-		return elems[i]
-	})
+	gl := r.groupsLayoutOf(re)
+	groups := r.groupsObject(gl, elems)
 	if t := r.matchLayout; t != nil && !hasIndices {
 		arr.vals = append(arr.vals, t.vals[:]...)
 		arr.shape = t.shape
@@ -784,9 +783,7 @@ func (r *Runtime) buildMatchResult(re *regexp.Regexp, caps []int, input *String)
 			pairs[i] = r.indexPair(caps[2*i], caps[2*i+1])
 		}
 		indices := r.newArrayFrom(pairs)
-		indices.setOwnRaw(atomGroups, r.groupObject(names, re.GroupNames(), func(i int) Value {
-			return pairs[i]
-		}), propDefault)
+		indices.setOwnRaw(atomGroups, r.groupsObject(gl, pairs), propDefault)
 		arr.setOwnRaw(r.atoms.intern("indices"), Obj(indices), propDefault)
 	}
 	return arr
@@ -801,13 +798,37 @@ func (r *Runtime) indexPair(lo, hi int) Value {
 	return Obj(r.newArrayFrom([]Value{Int(lo), Int(hi)}))
 }
 
-// orderedGroupNames lists a pattern's named groups in the order they were
-// written, which is what Object.getOwnPropertyNames of the groups object
-// reports; a map's iteration order would be a different answer each time.
-func orderedGroupNames(re *regexp.Regexp) []string {
+// groupsLayout is how a pattern's matches' groups objects are made, worked
+// out from the pattern once and kept with it (regexp.Regexp.Annex): its
+// group names in the order they were written, which is the order
+// Object.getOwnPropertyNames of the object reports -- a map's iteration
+// order would be a different answer each time -- as the runtime's atoms,
+// the groups each name may be, and the layout every such object has, which
+// the first one made shows. A name several groups share reads as whichever
+// of them took part.
+type groupsLayout struct {
+	// r is the runtime whose atoms and layouts these are.
+	r      *Runtime
+	names  []Atom
+	groups [][]int
+	// shape is the objects' layout, a template each of them shares until it
+	// changes its own, as a match result's (matchLayout) is; nil until the
+	// first is made, and for one whose table has a lookup index of its own.
+	shape *shape
+	// made says the first object has been made, whose shape was kept if it
+	// could be.
+	made bool
+}
+
+// groupsLayoutOf is the groupsLayout of a pattern, or nil for one without
+// named groups.
+func (r *Runtime) groupsLayoutOf(re *regexp.Regexp) *groupsLayout {
 	names := re.GroupNames()
 	if len(names) == 0 {
 		return nil
+	}
+	if g, ok := re.Annex().(*groupsLayout); ok && g.r == r {
+		return g
 	}
 	ordered := make([]string, 0, len(names))
 	for name := range names {
@@ -817,27 +838,51 @@ func orderedGroupNames(re *regexp.Regexp) []string {
 	sort.Slice(ordered, func(i, j int) bool {
 		return names[ordered[i]][0] < names[ordered[j]][0]
 	})
-	return ordered
+	g := &groupsLayout{r: r, names: make([]Atom, len(ordered)), groups: make([][]int, len(ordered))}
+	for i, name := range ordered {
+		g.names[i] = r.atoms.intern(name)
+		g.groups[i] = names[name]
+	}
+	re.SetAnnex(g)
+	return g
 }
 
-// groupObject builds the object the named groups are read from, or undefined
-// when the pattern has none. A name several groups share reads as whichever of
-// them took part, and as undefined when none did.
-func (r *Runtime) groupObject(ordered []string, names map[string][]int, at func(int) Value) Value {
-	if len(ordered) == 0 {
+// groupsObject builds the object the named groups are read from, each group
+// k's value vals[k], or undefined when the pattern has none.
+func (r *Runtime) groupsObject(g *groupsLayout, vals []Value) Value {
+	if g == nil {
 		return Undefined
 	}
-	groups := newObject(nil, ClassObject)
-	for _, name := range ordered {
-		v := Undefined
-		for _, i := range names[name] {
-			if v = at(i); !v.IsUndefined() {
-				break
-			}
+	o := newLiteralObject(nil, ClassObject, len(g.names))
+	if g.shape != nil {
+		for _, gs := range g.groups {
+			o.vals = append(o.vals, groupValue(gs, vals))
 		}
-		groups.setOwnRaw(r.atoms.intern(name), v, propDefault)
+		o.shape = g.shape
+		return Obj(o)
 	}
-	return Obj(groups)
+	for i, name := range g.names {
+		o.setOwnRaw(name, groupValue(g.groups[i], vals), propDefault)
+	}
+	if !g.made {
+		g.made = true
+		if s := o.shape; s != nil && s.loose && s.index == nil && int(s.n) == len(g.names) {
+			g.shape = &shape{loose: true, n: s.n, keys: slices.Clone(s.keys[:s.n])}
+		}
+	}
+	return Obj(o)
+}
+
+// groupValue is the value of a name the groups gs share: the first of them
+// that took part, or undefined where none did.
+func groupValue(gs []int, vals []Value) Value {
+	v := Undefined
+	for _, i := range gs {
+		if v = vals[i]; !v.IsUndefined() {
+			break
+		}
+	}
+	return v
 }
 
 // ---------------------------------------------------------------------------
