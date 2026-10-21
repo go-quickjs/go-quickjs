@@ -1367,6 +1367,19 @@ func (c *compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(amd64.Con
 		c.setG(v, scratchA)
 		return
 	}
+	if site.Go == ssa.GoHas && len(v.Args) == 2 && c.enc.ValueSize == 16 {
+		// An index of an array's dense elements, no hole, natively
+		// (keyedHas), any other key Go's.
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		c.keyedHas(v, slow)
+		c.a.Jmp(join)
+		c.a.Bind(slow)
+		c.goCallOp(v, goOpWord(site), guard, false)
+		c.a.Bind(join)
+		c.a.Load(scratchA, regCtx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
+		c.setG(v, scratchA)
+		return
+	}
 	if lengthWrites(site, len(v.Args), c.enc) {
 		// An array's length, natively where it shortens a dense array or
 		// leaves it as it is (lengthWrite), by Go otherwise.
@@ -2054,6 +2067,94 @@ func (c *compiler) keyedStore(v *ssa.Value, slow amd64.Label) {
 	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
 	c.storeImm(regCtx, keep+c.enc.NumOffset, c.enc.Undefined, scratchA)
 	c.storeImm(regCtx, keep+c.enc.RefOffset, 0, scratchA)
+}
+
+// keyedHas makes call v, key in obj, which Go answers from native code
+// (ssa.GoHas), where obj is an array and key an integer index: true where
+// it names one of the array's dense elements that is no hole -- the
+// array's own data property; false where it names none, the array is
+// dense, so that no index is a property of its own, and its prototypes are
+// the function's (ssa.Func's ArrayProtos), as they were, with no element
+// nor index of theirs (protoGuards) -- the index below 2**31, which is
+// what an atom of an index carries, and what the VM's look at their tables
+// tells of. The answer is in the call's keep cell, as Go's is. Anything
+// else goes to slow, where Go answers it: a key of another kind, an object
+// of another class, a sparse array, prototypes that have changed. It uses
+// every scratch register, xScratch1 and xScratch2, and no other.
+func (c *compiler) keyedHas(v *ssa.Value, slow amd64.Label) {
+	fail := func(cond amd64.Cond) { c.a.Jcc(cond, slow) }
+	key, recv := v.Args[0], v.Args[1]
+	protos := c.f.ArrayProtos
+	absent := slow
+	if protos[0].Object != 0 {
+		absent = c.a.NewLabel()
+	}
+	// The key, a number whose truncation is itself, in xScratch2.
+	if w := c.gpr(key, scratchA); w != scratchA {
+		c.a.MovRR(scratchA, w)
+	}
+	c.cmpWord(scratchA, abi.NumberLimit)
+	fail(amd64.CondAE)
+	c.a.MovQToX(xScratch2, scratchA)
+	c.a.Cvttsd2si(scratchB, xScratch2)
+	c.a.Cvtsi2sd(xScratch2, scratchB, true)
+	c.a.MovQFromX(scratchC, xScratch2)
+	c.a.Op(amd64.Cmp, scratchC, scratchA, true)
+	fail(amd64.CondNE)
+	c.a.MovQToX(xScratch2, scratchB)
+	// The object, an array, in xScratch1.
+	w := c.gpr(recv, scratchA)
+	c.cmpWord(w, c.enc.Object)
+	fail(amd64.CondNE)
+	c.pointerWord(recv, w)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	fail(amd64.CondE)
+	c.a.LoadU8(scratchC, scratchB, c.enc.ObjectClass)
+	c.a.OpImm(amd64.Cmp, scratchC, int32(c.enc.ClassArray), false)
+	fail(amd64.CondNE)
+	c.a.MovQToX(xScratch1, scratchB)
+	// The element, within the dense ones -- a negative key is, unsigned,
+	// a count past them -- and no hole.
+	c.a.MovQFromX(scratchA, xScratch2)
+	c.a.CmpMem(scratchA, scratchB, c.enc.ObjectElems+8, true)
+	c.a.Jcc(amd64.CondAE, absent)
+	c.a.Load(scratchB, scratchB, c.enc.ObjectElems)
+	c.a.ShiftImm(amd64.Shl, scratchA, 4, true)
+	c.a.Op(amd64.Add, scratchA, scratchB, true)
+	c.a.Load(scratchC, scratchA, c.enc.NumOffset)
+	c.cmpWord(scratchC, c.enc.Uninitialized)
+	c.a.Jcc(amd64.CondE, absent)
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	answer := func(yes bool) {
+		word := c.enc.False
+		if yes {
+			word = c.enc.True
+		}
+		c.storeImm(regCtx, keep+c.enc.NumOffset, word, scratchA)
+		c.storeImm(regCtx, keep+c.enc.RefOffset, 0, scratchA)
+	}
+	answer(true)
+	if protos[0].Object == 0 {
+		return
+	}
+	done := c.a.NewLabel()
+	c.a.Jmp(done)
+	// No such element: an index an atom carries, of a dense array whose
+	// prototypes are as they were.
+	c.a.Bind(absent)
+	c.a.MovQFromX(scratchA, xScratch2)
+	c.a.ShiftImm(amd64.Shr, scratchA, 31, true)
+	fail(amd64.CondNE)
+	c.a.MovQFromX(scratchC, xScratch1)
+	c.a.LoadU8(scratchB, scratchC, c.enc.ObjectFlags)
+	c.a.OpImm(amd64.And, scratchB, int32(c.enc.FlagSparse), false)
+	fail(amd64.CondNE)
+	c.a.Load(scratchB, scratchC, c.enc.ObjectProto)
+	c.cmpWord(scratchB, uint64(protos[0].Object))
+	fail(amd64.CondNE)
+	c.protoGuards(protos, fail)
+	answer(false)
+	c.a.Bind(done)
 }
 
 // stepNexts are the Map's and Set's iterators' next functions a loop's

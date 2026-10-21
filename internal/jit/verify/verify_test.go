@@ -264,6 +264,30 @@ func (b bigs) Intrinsic(pc int) (ssa.Intrinsic, bool) {
 	return k, true
 }
 
+// inCorpus is the in operator, whose answers Go makes from native code
+// (ssa.GoHas) and native code itself where the object is an array and the
+// key an index (mir's keyedHas).
+var inCorpus = []string{
+	`function f(a,n){let s=0;for(let i=0;i<n;i++){if(i in a)s++;if((i&7) in a)s+=2;if("x" in a)s--}return s}`,
+	`function f(o,k,n){let s=0;for(let i=0;i<n;i++){if(k in o)s+=i;if(o.x in o)s--}return s}`,
+}
+
+// hases is globals whose in operators Go answers from native code, and,
+// with protos, whose arrays' prototypes are known (ssa.Func's ArrayProtos),
+// so that keyedHas answers an absent index too.
+type hases struct {
+	globals
+	protos bool
+}
+
+func (hases) GoCalls() bool { return true }
+func (h hases) ArrayProtos() ([2]ssa.Holder, bool) {
+	if !h.protos {
+		return [2]ssa.Holder{}, false
+	}
+	return [2]ssa.Holder{{Object: 0x64000, Shape: 0x65000}, {Object: 0x66000, Shape: 0x67000}}, true
+}
+
 // The backend's code (internal/jit/mir) keeps the rules, for every function
 // its random and JavaScript corpora compile.
 func TestMirEmitted(t *testing.T) {
@@ -276,6 +300,9 @@ func TestMirEmitted(t *testing.T) {
 		StoreRef: 0x70000}
 	cells := map[ssa.Op]int{}
 	primProps := map[ssa.Primitive]int{}
+	// hasCalls counts the in operators Go answers from native code, with
+	// and without the arrays' prototypes known.
+	hasCalls := map[bool]int{}
 	compile := func(name string, p *ir.Program, fb ssa.Feedback) bool {
 		f, err := ssa.BuildWith(p, fb)
 		if err != nil {
@@ -287,6 +314,9 @@ func TestMirEmitted(t *testing.T) {
 		for _, b := range f.Blocks {
 			for _, v := range b.Values {
 				cells[v.Op]++
+				if calls := v.Calls(); len(calls) == 1 && calls[0].Go == ssa.GoHas {
+					hasCalls[f.ArrayProtos[0].Object != 0]++
+				}
 				if v.Op == ssa.OpStringProp {
 					primProps[v.Primitive()]++
 				}
@@ -326,6 +356,15 @@ func TestMirEmitted(t *testing.T) {
 			}
 		}
 	}
+	for _, src := range inCorpus {
+		for i, p := range lowered(t, src) {
+			for _, protos := range []bool{false, true} {
+				if compile(fmt.Sprintf("%s (%d, hases %v)", src, i, protos), p, hases{protos: protos}) {
+					n++
+				}
+			}
+		}
+	}
 	r := rand.New(rand.NewPCG(5, 6))
 	for attempt := 0; attempt < 50000 && n < 2000; attempt++ {
 		p := randomProgram(r)
@@ -346,6 +385,9 @@ func TestMirEmitted(t *testing.T) {
 		if n == 0 {
 			t.Errorf("none of %v compiled", ops)
 		}
+	}
+	if hasCalls[false] == 0 || hasCalls[true] == 0 {
+		t.Errorf("in operators compiled, without and with the arrays' prototypes: %d, %d", hasCalls[false], hasCalls[true])
 	}
 	for _, k := range []ssa.Primitive{ssa.PrimitiveBigInt, ssa.PrimitiveNumber, ssa.PrimitiveBoolean} {
 		if primProps[k] == 0 {

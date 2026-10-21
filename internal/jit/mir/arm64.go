@@ -3494,6 +3494,17 @@ func (c *a64Compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(arm64.
 		c.setG(v, a64A)
 		return
 	}
+	if site.Go == ssa.GoHas && len(v.Args) == 2 && c.enc.ValueSize == 16 {
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		c.keyedHas(v, slow)
+		c.a.B(join)
+		c.a.Bind(slow)
+		c.goCallOp(v, goOpWord(site), false)
+		c.a.Bind(join)
+		c.a.Load(a64A, a64Ctx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
+		c.setG(v, a64A)
+		return
+	}
 	if lengthWrites(site, len(v.Args), c.enc) {
 		slow, join := c.a.NewLabel(), c.a.NewLabel()
 		c.lengthWrite(v, slow)
@@ -3931,6 +3942,87 @@ func (c *a64Compiler) keyedStore(v *ssa.Value, slow arm64.Label) {
 	c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64C)
 	c.movImm(a64C, 0)
 	c.a.Store(a64Ctx, keep+c.enc.RefOffset, a64C)
+}
+
+// keyedHas is amd64's: key in obj natively where obj is an array and key
+// an index, true where it names one of its dense elements that is no hole,
+// false where it names none of a dense array whose prototypes are as they
+// were. It uses A, B, C, D, F1 and F2, and no other.
+func (c *a64Compiler) keyedHas(v *ssa.Value, slow arm64.Label) {
+	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+	key, recv := v.Args[0], v.Args[1]
+	protos := c.f.ArrayProtos
+	absent := slow
+	if protos[0].Object != 0 {
+		absent = c.a.NewLabel()
+	}
+	if w := c.gpr(key, a64A); w != a64A {
+		c.a.MovRR(a64A, w)
+	}
+	c.movImm(a64B, abi.NumberLimit)
+	c.a.Cmp(a64A, a64B, true)
+	fail(arm64.HS)
+	c.a.FMovToF(a64F2, a64A)
+	c.a.Fcvtzs(a64B, a64F2)
+	c.a.Scvtf(a64F2, a64B, true)
+	c.a.FMovFromF(a64C, a64F2)
+	c.a.Cmp(a64C, a64A, true)
+	fail(arm64.NE)
+	c.a.FMovToF(a64F2, a64B)
+	w := c.gpr(recv, a64A)
+	c.movImm(a64C, c.enc.Object)
+	c.a.Cmp(w, a64C, true)
+	fail(arm64.NE)
+	c.pointerWord(recv, w)
+	c.a.Cbz(a64B, slow, true)
+	c.a.LoadU8(a64C, a64B, c.enc.ObjectClass)
+	c.a.CmpImm(a64C, int64(c.enc.ClassArray), false)
+	fail(arm64.NE)
+	c.a.FMovToF(a64F1, a64B)
+	c.a.FMovFromF(a64A, a64F2)
+	c.a.Load(a64C, a64B, c.enc.ObjectElems+8)
+	c.a.Cmp(a64A, a64C, true)
+	c.a.BCond(arm64.HS, absent)
+	c.a.Load(a64B, a64B, c.enc.ObjectElems)
+	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
+	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	c.a.Load(a64C, a64A, c.enc.NumOffset)
+	c.movImm(a64D, c.enc.Uninitialized)
+	c.a.Cmp(a64C, a64D, true)
+	c.a.BCond(arm64.EQ, absent)
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	answer := func(yes bool) {
+		word := c.enc.False
+		if yes {
+			word = c.enc.True
+		}
+		c.movImm(a64C, word)
+		c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64C)
+		c.movImm(a64C, 0)
+		c.a.Store(a64Ctx, keep+c.enc.RefOffset, a64C)
+	}
+	answer(true)
+	if protos[0].Object == 0 {
+		return
+	}
+	done := c.a.NewLabel()
+	c.a.B(done)
+	c.a.Bind(absent)
+	c.a.FMovFromF(a64A, a64F2)
+	c.a.ShiftImm(arm64.Lsr, a64A, a64A, 31, true)
+	c.a.Cbnz(a64A, slow, true)
+	c.a.FMovFromF(a64D, a64F1)
+	c.a.LoadU8(a64B, a64D, c.enc.ObjectFlags)
+	c.movImm(a64C, uint64(c.enc.FlagSparse))
+	c.a.Tst(a64B, a64C, false)
+	fail(arm64.NE)
+	c.a.Load(a64B, a64D, c.enc.ObjectProto)
+	c.movImm(a64C, uint64(protos[0].Object))
+	c.a.Cmp(a64B, a64C, true)
+	fail(arm64.NE)
+	c.protoGuards(protos, fail)
+	answer(false)
+	c.a.Bind(done)
 }
 
 // lengthWrite is amd64's: an array's length written natively where it
