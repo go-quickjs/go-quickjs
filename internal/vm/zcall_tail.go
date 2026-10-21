@@ -96,15 +96,17 @@ func (r *Runtime) tailCallShallow(callee, this Value, args []Value) (Value, erro
 // tailArgsOf is args, a call's in tail position, copied out of the frame's
 // window, which the callee's frame is about to reuse. For a callee that
 // takes its arguments as it starts and never again -- strict, with no
-// arguments object and no rest parameter -- they are copied into tailArgs,
-// which the next such call copies its own into: the frame they start
-// has its parameters by then, and its args nobody reads. Anything else
-// has a copy of its own. Each call of a recursion through tail calls past
-// tailCallDepth had allocated one.
+// arguments object and simple parameters, no default, pattern or rest
+// parameter among them -- they are copied into tailArgs, which the next
+// such call copies its own into: the frame they start has its parameters
+// by then, and its args nobody reads. Anything else has a copy of its
+// own: a parameter after a default is read from args once the default is
+// evaluated, which may itself have made calls in tail position. Each call
+// of a recursion through tail calls past tailCallDepth had allocated one.
 func (r *Runtime) tailArgsOf(callee Value, args []Value) []Value {
 	if callee.IsObject() {
 		if fd := callee.object().fn(); fd != nil && fd.closure != nil && !fd.bound {
-			if fn := fd.closure.fn; fn.Strict && !fn.UsesArguments && !fn.HasRest {
+			if fn := fd.closure.fn; fn.Strict && !fn.UsesArguments && fn.HasSimpleParams {
 				r.tailArgs = append(r.tailArgs[:0], args...)
 				return r.tailArgs[:len(args):len(args)]
 			}

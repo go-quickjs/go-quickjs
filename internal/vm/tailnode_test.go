@@ -262,3 +262,45 @@ func TestTailCallsBuiltAsNodes(t *testing.T) {
 		}
 	}
 }
+
+// A parameter after a default, or after a pattern, is read from the
+// call's arguments once what comes before it is evaluated -- which may
+// make calls in tail position of its own. A call in tail position past
+// tailCallDepth to such a function gives it arguments of their own, not
+// tailArgs, which those calls copy theirs into: f's z had been "s3",
+// spin's. By a plain call (tailAll) and by a private method's
+// (tailCallNode), tree tier on and off: Node v26.10.0's answers.
+func TestTailCallArgumentsAfterDefaults(t *testing.T) {
+	const src = `(function () {
+	"use strict";
+	function spin(n, a, b, c) { return n === 0 ? 0 : spin(n - 1, "s1", "s2", "s3"); }
+	function f(n, x, y = spin(60, 1, 2, 3), z) { return n === 0 ? x + ":" + z : f(n - 1, x, undefined, "z" + n); }
+	function pattern(n, { a = spin(60, 1, 2, 3) } = {}, z) { return n === 0 ? a + ":" + z : pattern(n - 1, {}, "p" + n); }
+	class P {
+		#f(n, x, y = spin(60, 1, 2, 3), z) { return n === 0 ? x + ":" + z : this.#f(n - 1, x, undefined, "w" + n); }
+		run(k) { return k === 0 ? this.#f(5, "x", undefined, "w") : this.run(k - 1); }
+	}
+	function deep(k, g) { return k === 0 ? g() : deep(k - 1, g); }
+	var r = [];
+	for (var i = 0; i < 3; i++) {
+		r.push(deep(50, function () { return f(5, "x", undefined, "z"); }));
+		r.push(deep(50, function () { return pattern(5, {}, "p"); }));
+		r.push(new P().run(50));
+	}
+	return r.join(" ");
+})()`
+	const want = "x:z1 0:p1 x:w1 x:z1 0:p1 x:w1 x:z1 0:p1 x:w1"
+	defer SetTreeTier(true)
+	for _, tree := range []bool{true, false} {
+		SetTreeTier(tree)
+		r := New(Config{})
+		v, err := r.Run(compileForTest(t, src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := v.String().Go(); got != want {
+			t.Errorf("tree tier %v: got %s, want %s", tree, got, want)
+		}
+		r.Close()
+	}
+}

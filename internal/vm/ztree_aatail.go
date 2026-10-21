@@ -44,9 +44,10 @@ var (
 	// to, as tailCallNode does, and reports whether it did. The arguments
 	// are in the frame's window, which the callee's frame reuses: for a
 	// callee that takes them as it starts and never again -- strict, with
-	// no arguments object and no rest parameter -- they are copied into
-	// tailArgs, as tailArgsOf copies them, one by one; anything else has a
-	// copy of its own.
+	// no arguments object and simple parameters, no default, pattern or
+	// rest parameter among them -- they are copied into tailArgs, as
+	// tailArgsOf copies them, one by one; anything else has a copy of its
+	// own.
 	tailGiveUp func(c *tctx, fv, rv Value, args []Value) bool
 )
 
@@ -59,7 +60,7 @@ func init() {
 		var kept []Value
 		if fv.IsObject() {
 			if fd := fv.object().fn(); fd != nil && fd.closure != nil && !fd.bound {
-				if fn := fd.closure.fn; fn.Strict && !fn.UsesArguments && !fn.HasRest {
+				if fn := fd.closure.fn; fn.Strict && !fn.UsesArguments && fn.HasSimpleParams {
 					kept = r.tailArgs[:0]
 					for _, a := range args {
 						kept = append(kept, a)
