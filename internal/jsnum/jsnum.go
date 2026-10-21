@@ -121,7 +121,14 @@ func shortest(v float64) (digits string, exp int) {
 }
 
 // FormatRadix renders v in the given radix (2..36), as Number.prototype.toString
-// does for a non-10 radix.
+// does for a non-10 radix: V8's DoubleToRadixCString, as Node writes it. The
+// fraction's digits stop where they no longer tell v from its neighbours --
+// half the distance to the next double, scaled by the radix with each digit
+// -- the last rounded half to even and carried back; the integer's digits
+// past a double's 53 bits are zeros. Every digit of the binary fraction, as
+// this had written, made 0.1 in base 3 a thousand digits long, where every
+// engine writes 34; and an integer past 2**53 came out exact, where V8
+// writes 1e21 in base 36 as 5v1j4f4ds7c000.
 func FormatRadix(v float64, radix int) string {
 	if radix == 10 {
 		return FormatFloat(v)
@@ -138,48 +145,79 @@ func FormatRadix(v float64, radix int) string {
 	}
 	neg := v < 0
 	v = math.Abs(v)
+	r := float64(radix)
 
-	intPart := math.Floor(v)
-	frac := v - intPart
+	integer := math.Floor(v)
+	fraction := v - integer
+	// Digits only to v's own precision: half the step to the next double.
+	delta := max(0.5*(math.Nextafter(v, math.Inf(1))-v), math.SmallestNonzeroFloat64)
+	var frac []byte
+	if fraction >= delta {
+		for {
+			// Each product rounded before what follows it, which an arm64
+			// build would otherwise fuse.
+			fraction = float64(fraction * r)
+			delta = float64(delta * r)
+			digit := int(fraction)
+			frac = append(frac, digitChar(digit))
+			fraction -= float64(digit)
+			// Rounded half to even, where the rest is past the precision.
+			if (fraction > 0.5 || fraction == 0.5 && digit&1 != 0) && fraction+delta > 1 {
+				// The carry, back through the digits written.
+				for {
+					if len(frac) == 0 {
+						integer++
+						break
+					}
+					last := frac[len(frac)-1]
+					frac = frac[:len(frac)-1]
+					if d := digitValue(last); d+1 < radix {
+						frac = append(frac, digitChar(d+1))
+						break
+					}
+				}
+				break
+			}
+			if fraction < delta {
+				break
+			}
+		}
+	}
 
+	// The integer's digits from the least, zeros for those past 53 bits.
+	var digits []byte
+	for integer/r >= 1<<53 {
+		integer /= r
+		digits = append(digits, '0')
+	}
+	for {
+		rem := math.Mod(integer, r)
+		digits = append(digits, digitChar(int(rem)))
+		if integer = (integer - rem) / r; integer <= 0 {
+			break
+		}
+	}
 	var sb strings.Builder
-	if intPart == 0 {
-		sb.WriteByte('0')
-	} else if intPart <= float64(math.MaxUint64) {
-		sb.WriteString(strconv.FormatUint(uint64(intPart), radix))
-	} else {
-		// Beyond uint64 the integral part is not exactly representable in a
-		// single conversion; emit digits from the most significant end by
-		// repeatedly dividing, which stays exact because each step operates on
-		// an exactly-representable float.
-		var digits []byte
-		for intPart >= 1 {
-			rem := math.Mod(intPart, float64(radix))
-			digits = append(digits, digitChar(int(rem)))
-			intPart = math.Floor(intPart / float64(radix))
-		}
-		for i := len(digits) - 1; i >= 0; i-- {
-			sb.WriteByte(digits[i])
-		}
-	}
-
-	if frac > 0 {
-		sb.WriteByte('.')
-		// 1100 bits is enough to exhaust any float64 fraction in any radix;
-		// in practice the loop exits far earlier when frac reaches zero.
-		for i := 0; i < 1100 && frac > 0; i++ {
-			// The conversion rounds the product before the difference,
-			// which an arm64 build would otherwise fuse.
-			frac = float64(frac * float64(radix))
-			d := int(math.Floor(frac))
-			sb.WriteByte(digitChar(d))
-			frac -= float64(d)
-		}
-	}
+	sb.Grow(len(digits) + len(frac) + 2)
 	if neg {
-		return "-" + sb.String()
+		sb.WriteByte('-')
+	}
+	for i := len(digits) - 1; i >= 0; i-- {
+		sb.WriteByte(digits[i])
+	}
+	if len(frac) != 0 {
+		sb.WriteByte('.')
+		sb.Write(frac)
 	}
 	return sb.String()
+}
+
+// digitValue is the value of a digit digitChar writes.
+func digitValue(c byte) int {
+	if c <= '9' {
+		return int(c - '0')
+	}
+	return int(c-'a') + 10
 }
 
 func digitChar(d int) byte {
