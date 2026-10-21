@@ -277,8 +277,9 @@ none of, written as its tests are: generators and async functions, try
 statements, iterators, using declarations, closures made and called anew,
 calls in tail position, method calls with a frame and without, loops of a
 few simple instructions, private class members, `Math.random`, the `in`
-operator, `delete`, the array methods that take a callback, `indexOf`, and
-BigInts' division, shifts, hashing, powers and decimal strings. Over the
+operator, `delete`, the array methods that take a callback, `indexOf`,
+String's methods that run no script, and BigInts' division, shifts,
+hashing, powers and decimal strings. Over the
 52 QuickJS can run (it has no using declarations) go-quickjs takes 0.99
 times its time, and 0.41 times with the JIT. An await costs much less,
 resumed without allocating (`3af4f32`), as does an async generator. A

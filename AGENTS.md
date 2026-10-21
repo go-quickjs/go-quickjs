@@ -241,7 +241,9 @@ made and called anew, calls in tail position, method calls with a frame
 and without, loops of a few simple instructions, which with `QJS_NOTREE=1`
 time the interpreter's dispatch, private class members, Math.random, the in operator, a delete of an object's last property,
 Array.prototype.forEach, reduce, map, filter and some, a typed array's forEach,
-String.prototype.indexOf and Array.prototype.indexOf, BigInts' division,
+String.prototype.indexOf and Array.prototype.indexOf, String's methods that
+run no script -- at, codePointAt, toUpperCase, trim, startsWith, padStart,
+repeat, slice, concat, String.fromCodePoint -- BigInts' division,
 shifts, hashing, comparisons, powers, modular exponentiation, digits of
 pi and decimal strings --
 written as

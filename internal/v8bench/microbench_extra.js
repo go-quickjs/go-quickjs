@@ -673,6 +673,104 @@ function array_indexOf(n)
     return n;
 }
 
+/* String.prototype's methods that run no script on a string, each called
+   with primitives in a loop: at, codePointAt, toUpperCase, trim,
+   startsWith, padStart, repeat, slice and concat of several characters,
+   String.fromCodePoint */
+var extra_str = "Hello, World of strings";
+
+function string_at(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++)
+        s += extra_str.at(j & 15).length;
+    global_res = s;
+    return n;
+}
+
+function string_code_point_at(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++)
+        s += extra_str.codePointAt(j & 15);
+    global_res = s;
+    return n;
+}
+
+function string_upper(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++)
+        s += extra_str.toUpperCase().length;
+    global_res = s;
+    return n;
+}
+
+function string_trim(n)
+{
+    var j, s = 0, t = "  padded  ";
+    for (j = 0; j < n; j++)
+        s += t.trim().length;
+    global_res = s;
+    return n;
+}
+
+function string_starts_with(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++) {
+        if (extra_str.startsWith("Hello", j & 1))
+            s++;
+    }
+    global_res = s;
+    return n;
+}
+
+function string_pad_start(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++)
+        s += String(j & 7).padStart(4, "0").length;
+    global_res = s;
+    return n;
+}
+
+function string_repeat(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++)
+        s += "ab".repeat((j & 3) + 1).length;
+    global_res = s;
+    return n;
+}
+
+function string_slice(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++)
+        s += extra_str.slice(2, 9 + (j & 3)).length;
+    global_res = s;
+    return n;
+}
+
+function string_concat(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++)
+        s += extra_str.concat("!", j & 7).length;
+    global_res = s;
+    return n;
+}
+
+function string_from_code_point(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++)
+        s += String.fromCodePoint(65 + (j & 7), 0x1F600).length;
+    global_res = s;
+    return n;
+}
+
 /* %TypedArray%.prototype.forEach over an Int32Array of a hundred, its
    callback an arrow that adds to a binding it captured */
 function typed_forEach(n)
