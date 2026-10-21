@@ -128,3 +128,22 @@ func TestRelaxedJumps(t *testing.T) {
 		t.Fatalf("a position taken before moved to %d, its label to %d", a.Moved(entry), a.Offset(chained))
 	}
 }
+
+// Imul32 is the 32-bit IMUL, without REX.W: a register past R7 sets REX.R
+// for the destination, REX.B for the source.
+func TestImul32(t *testing.T) {
+	for _, tc := range []struct {
+		dst, src Reg
+		want     []byte
+	}{
+		{RAX, RCX, []byte{0x0F, 0xAF, 0xC1}},
+		{R9, RAX, []byte{0x44, 0x0F, 0xAF, 0xC8}},
+		{RDX, R11, []byte{0x41, 0x0F, 0xAF, 0xD3}},
+	} {
+		var a Asm
+		a.Imul32(tc.dst, tc.src)
+		if !bytes.Equal(a.buf, tc.want) {
+			t.Errorf("Imul32(%d, %d) = % x, want % x", tc.dst, tc.src, a.buf, tc.want)
+		}
+	}
+}

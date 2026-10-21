@@ -1265,7 +1265,7 @@ func (r *Runtime) initMathExtras() {
 			return Undefined, err
 		}
 		return Int(bits.LeadingZeros32(n)), nil
-	})
+	}).fn().mathOp = mathClz32
 
 	r.defMethod(m, "imul", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		a, err := rt.toInt32(arg(args, 0))
@@ -1278,7 +1278,7 @@ func (r *Runtime) initMathExtras() {
 		}
 		// The product wraps to 32 bits, which is the whole point of imul.
 		return Int32(a * b), nil
-	})
+	}).fn().mathOp = mathImul
 }
 
 // ---------------------------------------------------------------------------

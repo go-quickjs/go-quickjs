@@ -238,14 +238,16 @@ const (
 	OpEqTagged // tagged, tagged -> bool
 
 	// Integer conversions and bitwise operations, as JavaScript defines them.
-	OpToInt32  // f64 -> i32: ToUint32's bits
-	OpAndI32   // i32, i32 -> i32
-	OpOrI32    //
-	OpXorI32   //
-	OpShlI32   // shift counts are masked to five bits
-	OpSarI32   //
-	OpShrU32   // i32, i32 -> i32 holding the unsigned result's bits
-	OpNotI32   //
+	OpToInt32 // f64 -> i32: ToUint32's bits
+	OpAndI32  // i32, i32 -> i32
+	OpOrI32   //
+	OpXorI32  //
+	OpShlI32  // shift counts are masked to five bits
+	OpSarI32  //
+	OpShrU32  // i32, i32 -> i32 holding the unsigned result's bits
+	OpNotI32  //
+	// OpMulI32 is the product's low 32 bits, Math.imul's (Intrinsic).
+	OpMulI32   // i32, i32 -> i32
 	OpI32ToF64 // signed
 	OpU32ToF64 // unsigned
 	// OpBoolToF64 and OpBoolToI32 are a boolean as a number, 1 or 0, as
@@ -501,7 +503,7 @@ var opNames = [...]string{
 	OpStringMethod: "stringmethod", OpStringProp: "stringprop", OpStringCode: "stringcode", OpStringChar: "stringchar", OpCodeChar: "codechar", OpSubstringChar: "substringchar", OpLoopMark: "loopmark", OpFreeze: "freeze", OpOddballF64: "oddball",
 	OpAddF64: "addf", OpSubF64: "subf", OpMulF64: "mulf", OpDivF64: "divf", OpModF64: "modf", OpNegF64: "negf", OpCmpF64: "cmpf",
 	OpNot: "not", OpStrictNullish: "strictnullish", OpLooseNullish: "loosenullish", OpEqTagged: "eqtagged", OpToInt32: "toi32", OpAndI32: "and", OpOrI32: "or", OpXorI32: "xor", OpShlI32: "shl",
-	OpSarI32: "sar", OpShrU32: "shr", OpNotI32: "noti", OpI32ToF64: "i2f", OpU32ToF64: "u2f",
+	OpSarI32: "sar", OpShrU32: "shr", OpNotI32: "noti", OpMulI32: "muli", OpI32ToF64: "i2f", OpU32ToF64: "u2f",
 	OpBoolToF64: "b2f", OpBoolToI32: "b2i",
 	OpSameObject: "sameobject", OpFrameRoom: "frameroom", OpTailRoom: "tailroom", OpTailSelf: "tailself", OpSameSymbol: "samesymbol", OpIterClosed: "iterclosed", OpKeepRef: "keepref", OpKeep: "keep", OpKept: "kept",
 	OpCall: "call", OpCallCell: "callcell", OpSqrtF64: "sqrtf", OpAbsF64: "absf", OpInstanceOf: "instanceof", OpTypeIs: "typeis",

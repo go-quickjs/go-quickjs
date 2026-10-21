@@ -263,6 +263,8 @@ func apply(op Op, aux int, a, b val) val {
 		return val{i: a.i >> (b.i & 31)}
 	case OpNotI32:
 		return val{i: ^a.i}
+	case OpMulI32:
+		return val{i: a.i * b.i}
 	case OpI32ToF64:
 		return val{f: float64(int32(a.i))}
 	case OpU32ToF64:

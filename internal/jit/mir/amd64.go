@@ -6568,6 +6568,10 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.MovRR32(scratchA, c.gpr(arg(0), scratchA))
 		c.a.Not32(scratchA)
 		c.setG(v, scratchA)
+	case ssa.OpMulI32:
+		c.a.MovRR32(scratchA, c.gpr(arg(0), scratchA))
+		c.a.Imul32(scratchA, c.gpr(arg(1), scratchB))
+		c.setG(v, scratchA)
 	case ssa.OpI32ToF64:
 		c.a.Cvtsi2sd(xScratch0, c.gpr(arg(0), scratchA), false)
 		c.setX(v, xScratch0)

@@ -5965,6 +5965,10 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 	case ssa.OpNotI32:
 		c.a.Mvn(a64A, c.gpr(arg(0), a64A), false)
 		c.setG(v, a64A)
+	case ssa.OpMulI32:
+		d := c.gdst(v)
+		c.a.MulW(d, c.gpr(arg(0), a64A), c.gpr(arg(1), a64B))
+		c.setG(v, d)
 	case ssa.OpI32ToF64:
 		c.a.Scvtf(a64F0, c.gpr(arg(0), a64A), false)
 		c.setF(v, a64F0)

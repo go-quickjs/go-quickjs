@@ -25,3 +25,21 @@ func TestMovAddrFixedLength(t *testing.T) {
 		}
 	}
 }
+
+// MulW is MUL of W registers, MADD with WZR: mul w0, w1, w2 and mul w9,
+// w28, w17.
+func TestMulW(t *testing.T) {
+	for _, tc := range []struct {
+		d, n, m Reg
+		want    uint32
+	}{
+		{0, 1, 2, 0x1B027C20},
+		{9, 28, 17, 0x1B117F89},
+	} {
+		var a Asm
+		a.MulW(tc.d, tc.n, tc.m)
+		if len(a.buf) != 1 || a.buf[0] != tc.want {
+			t.Errorf("MulW(%d, %d, %d) = %#08x, want %#08x", tc.d, tc.n, tc.m, a.buf, tc.want)
+		}
+	}
+}

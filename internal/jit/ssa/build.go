@@ -49,7 +49,8 @@ type Feedback interface {
 // itself, as V8 reduces Math.sqrt(x) to a square root in its code: the
 // function object, which the call checks it calls (the VM keeps it
 // alive), and what it computes of its argument, a number, or of its two
-// for Math.pow (OpPowF64) and Math.atan2 and Math.hypot, or of any number
+// for Math.pow (OpPowF64), Math.imul (OpMulI32) and Math.atan2 and
+// Math.hypot, or of any number
 // from one for Math.max and Math.min -- another leaves the call to Go,
 // which makes it.
 type Intrinsic struct {
@@ -2931,7 +2932,7 @@ func (b *builder) intrinsic(pc int) (Intrinsic, bool) {
 		return Intrinsic{}, false
 	}
 	switch k.Op {
-	case OpSqrtF64, OpAbsF64, OpPowF64, OpMaxF64, OpMinF64, OpFloorF64, OpCeilF64, OpTruncF64, OpRoundF64, OpSignF64, OpFroundF64:
+	case OpSqrtF64, OpAbsF64, OpPowF64, OpMaxF64, OpMinF64, OpFloorF64, OpCeilF64, OpTruncF64, OpRoundF64, OpSignF64, OpFroundF64, OpMulI32:
 	case OpMathCall:
 		if k.Go != GoMath && k.Go != GoAtan2 && k.Go != GoHypot || !b.goCalls() {
 			return Intrinsic{}, false
@@ -2965,7 +2966,7 @@ func (k Intrinsic) args() int {
 		return 0
 	case k.Args != 0:
 		return k.Args
-	case k.Op == OpPowF64 || k.Op == OpMaxF64 || k.Op == OpMinF64 || k.Op == OpMathCall && k.Go != GoMath, k.Op == OpZextW || k.Op == OpSextW:
+	case k.Op == OpPowF64 || k.Op == OpMaxF64 || k.Op == OpMinF64 || k.Op == OpMathCall && k.Go != GoMath, k.Op == OpZextW || k.Op == OpSextW, k.Op == OpMulI32:
 		return 2
 	}
 	return 1
@@ -2996,6 +2997,11 @@ func (b *builder) intrinsicCall(blk *Block, pc int, k Intrinsic, guard func(Op, 
 	switch k.Op {
 	case OpPowF64:
 		r = guard(OpPowF64, Float64, ir.HostExit, xs[0], xs[1])
+	case OpMulI32:
+		// Math.imul: each number's ToInt32, and their product's low half,
+		// signed.
+		x, y := b.f.newValue(blk, OpToInt32, Int32, xs[0]), b.f.newValue(blk, OpToInt32, Int32, xs[1])
+		r = b.f.newValue(blk, OpI32ToF64, Float64, b.f.newValue(blk, OpMulI32, Int32, x, y))
 	case OpMaxF64, OpMinF64:
 		// Of each in turn, which NaN and the zeros' order allow.
 		r = xs[0]

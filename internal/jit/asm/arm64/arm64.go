@@ -428,6 +428,12 @@ func (a *Asm) Mul(dst, n, m Reg) {
 	a.emit(0x9B007C00 | uint32(m)<<16 | uint32(n)<<5 | uint32(dst))
 }
 
+// MulW is dst = n*m, 32 bits: the product's low half, as Math.imul has it,
+// dst's upper half cleared.
+func (a *Asm) MulW(dst, n, m Reg) {
+	a.emit(0x1B007C00 | uint32(m)<<16 | uint32(n)<<5 | uint32(dst))
+}
+
 // Smulh is dst = the high 64 bits of n*m, signed: the product fits 64 bits
 // where it is the low half's sign, repeated.
 func (a *Asm) Smulh(dst, n, m Reg) {

@@ -3,6 +3,7 @@ package vm
 import (
 	"github.com/go-quickjs/go-quickjs/internal/fdlibm"
 	"math"
+	"math/bits"
 	"math/rand/v2"
 	"slices"
 	"strconv"
@@ -2534,6 +2535,8 @@ func (r *Runtime) initMathBuiltins() {
 		return Float(jsHypot(nums)), nil
 	})
 
+	r.powFn.fn().mathOp, r.atan2Fn.fn().mathOp, r.hypotFn.fn().mathOp = mathPow, mathAtan2, mathHypot
+
 	r.randomFn = r.defMethod(m, "random", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		return Float(rt.random()), nil
 	})
@@ -2582,16 +2585,41 @@ const (
 // (bigIntCall).
 const mathBigInt = 251
 
+// mathHypot, mathAtan2, mathPow and mathImul are funcData.mathOp for
+// Math.hypot, Math.atan2, Math.pow and Math.imul, which mathCall applies to
+// two numbers.
+const (
+	mathHypot = 247
+	mathAtan2 = 248
+	mathPow   = 249
+	mathImul  = 250
+)
+
 // mathCall applies the Math function op marks to args, where they are what
 // it takes without a conversion that could call anything: a number for a
 // function of one, two numbers for max and min. It reports false otherwise,
 // for the function to be called.
 func mathCall(op uint8, args []Value) (Value, bool) {
-	if op >= mathBigInt && op < mathMax {
-		if op == mathBigInt {
+	if op >= mathHypot && op < mathMax {
+		switch op {
+		case mathBigInt:
 			return bigIntCall(args)
+		case mathAsIntN, mathAsUintN:
+			return bigAsNCall(op == mathAsIntN, args)
 		}
-		return bigAsNCall(op == mathAsIntN, args)
+		if len(args) != 2 || !args[0].IsNumber() || !args[1].IsNumber() {
+			return Undefined, false
+		}
+		x, y := args[0].num, args[1].num
+		switch op {
+		case mathImul:
+			return Int32(toInt32(x) * toInt32(y)), true
+		case mathPow:
+			return Float(jsPow(x, y)), true
+		case mathAtan2:
+			return Float(fdlibm.Atan2(x, y)), true
+		}
+		return Float(jsHypot([]float64{x, y})), true
 	}
 	if op < mathMax {
 		if len(args) != 0 && args[0].IsNumber() {
@@ -3259,5 +3287,18 @@ var unaryMath = func() []func(float64) float64 {
 	for _, name := range unaryMathNames {
 		fns = append(fns, unaryMathFuncs[name])
 	}
-	return fns
+	return append(fns, func(f float64) float64 { return float64(bits.LeadingZeros32(jsnum.ToUint32(f))) })
 }()
+
+// mathClz32 is funcData.mathOp for Math.clz32, a function of one number the
+// table holds past unaryMathNames' (unaryMath's last), as it is defined
+// after them (initMathExtras), in its place among Math's properties.
+var mathClz32 = uint8(len(unaryMathNames) + 1)
+
+// unaryMathName is the name of the function of one number of mathOp op.
+func unaryMathName(op uint8) string {
+	if op == mathClz32 {
+		return "clz32"
+	}
+	return unaryMathNames[op-1]
+}

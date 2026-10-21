@@ -674,6 +674,14 @@ func (a *Asm) Imul(dst, src Reg) {
 	a.modrmRR(byte(dst), byte(src))
 }
 
+// Imul32 is dst = dst*src, 32 bits: the product's low half, as Math.imul
+// has it, dst's upper half cleared.
+func (a *Asm) Imul32(dst, src Reg) {
+	a.rex(false, byte(dst), byte(src), false)
+	a.emit2(0x0F, 0xAF)
+	a.modrmRR(byte(dst), byte(src))
+}
+
 func (a *Asm) Op(op ALU, dst, src Reg, wide bool) {
 	a.rex(wide, byte(src), byte(dst), false)
 	a.emit(byte(op))

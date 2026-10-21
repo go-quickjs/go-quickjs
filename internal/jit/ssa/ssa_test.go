@@ -409,3 +409,20 @@ func TestLimitsMatchABI(t *testing.T) {
 		t.Fatalf("maxScan %d, maxEqualUnits %d; abi's %d, %d", maxScan, maxEqualUnits, abi.MaxScan, abi.MaxEqualUnits)
 	}
 }
+
+// The evaluator's OpMulI32 is Math.imul's: the product's low 32 bits, of
+// int32s held as bits, signed or not.
+func TestApplyMulI32(t *testing.T) {
+	for _, c := range [][3]uint32{
+		{3, 5, 15},
+		{0x7fffffff, 3, 0x7ffffffd},
+		{0xfffffffb, 7, 0xffffffdd},
+		{0x80000000, 0xffffffff, 0x80000000},
+		{0xffffffff, 0xffffffff, 1},
+		{0x9e3779b1, 0x01000193, 0xc25491a3},
+	} {
+		if got := apply(OpMulI32, 0, val{i: c[0]}, val{i: c[1]}).i; got != c[2] {
+			t.Errorf("muli %#x, %#x = %#x, want %#x", c[0], c[1], got, c[2])
+		}
+	}
+}
