@@ -198,6 +198,19 @@ func init() {
 	leafChecks[elemNumToExponential] = numberCount(0, 100)
 	leafChecks[elemNumToPrecision] = numberCount(1, 100)
 	leafChecks[elemNumValueOf] = func(_ *Runtime, this Value, _ []Value) bool { return this.IsNumber() }
+	// Array.prototype's searches, on an array in dense storage whose
+	// prototypes have no index (plainArray, noInheritedIndices), which
+	// searchElems answers comparing with === or SameValueZero, which call
+	// nothing, of a start that is a number or none, which converts without
+	// a call: anything else, a hole a prototype may fill, a start's
+	// valueOf, is the built-in's to make with a frame.
+	search := func(r *Runtime, this Value, args []Value) bool {
+		if o := r.plainArray(this); o == nil || !r.noInheritedIndices(o) {
+			return false
+		}
+		return len(args) < 2 || args[1].IsNumber() || args[1].IsUndefined()
+	}
+	leafChecks[elemArrIndexOf], leafChecks[elemArrLastIndexOf], leafChecks[elemArrIncludes] = search, search, search
 	leafOps[elemNumberOf] = func(r *Runtime, _ Value, args []Value, _ bool) (Value, bool) {
 		// As Number called converts it, of a primitive: a BigInt to the
 		// nearest number, which only this conversion accepts; a symbol

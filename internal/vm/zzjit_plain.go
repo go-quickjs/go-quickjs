@@ -144,12 +144,13 @@ func (r *Runtime) jitPlainCall(ctx *abi.Context, in bytecode.Instr, n int) (Valu
 // but those whose native forms the JIT learns at the calls of Go jitGoCall
 // makes (jitCallSeen) -- push and pop, Math.random, a string's charCodeAt,
 // its one character's substring, slice, substr and charAt, its searches,
-// String.fromCharCode, and parseInt of a number -- which, made without a
-// frame, it would never learn.
+// String.fromCharCode, parseInt of a number, and an array's searches --
+// which, made without a frame, it would never learn.
 func jitLeafOp(op uint8) bool {
 	switch op {
 	case 0, elemPush, elemPop, elemRandom, elemStrCharCodeAt, elemStrCharAt, elemStrSlice, elemStrSubstring,
-		elemStrSubstr, elemStrIndexOf, elemStrLastIndexOf, elemStrIncludes, elemStrFromCharCode, elemParseInt:
+		elemStrSubstr, elemStrIndexOf, elemStrLastIndexOf, elemStrIncludes, elemStrFromCharCode, elemParseInt,
+		elemArrIndexOf, elemArrLastIndexOf, elemArrIncludes:
 		return false
 	}
 	return true

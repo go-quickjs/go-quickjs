@@ -553,7 +553,7 @@ const (
 	// Native leaves: the built-in's own function, called without a frame
 	// where its op's check says it runs no script, throws nothing and keeps
 	// nothing (leafChecks). String.prototype's methods on a string, and
-	// String's of numbers; Number's.
+	// String's of numbers; Number's; Array.prototype's searches.
 	elemStrAt
 	elemStrCharAt
 	elemStrCharCodeAt
@@ -598,6 +598,11 @@ const (
 	elemNumToFixed
 	elemNumToExponential
 	elemNumToPrecision
+	// Array.prototype's indexOf, lastIndexOf and includes, on an array
+	// whose elements are all there is to its indices (searchElems).
+	elemArrIndexOf
+	elemArrLastIndexOf
+	elemArrIncludes
 	elemLeafEnd
 )
 

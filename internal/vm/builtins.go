@@ -1284,6 +1284,11 @@ func (r *Runtime) initArrayBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
+		if o := rt.plainArray(this); o != nil && rt.noInheritedIndices(o) {
+			// Its elements, compared where they are.
+			i, err := rt.searchElems(o, a.n, from, target, false, false)
+			return Float(float64(i)), err
+		}
 		for i := from; i < a.n; i++ {
 			el, present, err := a.at(rt, i)
 			if err != nil {
@@ -1326,6 +1331,10 @@ func (r *Runtime) initArrayBuiltins() {
 				from = int64(n)
 			}
 		}
+		if o := rt.plainArray(this); o != nil && rt.noInheritedIndices(o) {
+			i, err := rt.searchElems(o, a.n, from, target, true, false)
+			return Float(float64(i)), err
+		}
 		for i := from; i >= 0; i-- {
 			el, present, err := a.at(rt, i)
 			if err != nil {
@@ -1353,6 +1362,15 @@ func (r *Runtime) initArrayBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
+		if o := rt.plainArray(this); o != nil && rt.noInheritedIndices(o) {
+			i, err := rt.searchElems(o, a.n, from, target, false, true)
+			if err != nil {
+				return Undefined, err
+			}
+			// An index below the length read past the elements, which the
+			// start's conversion removed, reads as undefined.
+			return Bool(i >= 0 || target.IsUndefined() && max(from, int64(len(o.elemsOf()))) < a.n), nil
+		}
 		for i := from; i < a.n; i++ {
 			// includes compares with SameValueZero, so NaN is found, and it
 			// reads holes as undefined rather than skipping them.
@@ -1366,6 +1384,13 @@ func (r *Runtime) initArrayBuiltins() {
 		}
 		return False, nil
 	})
+
+	// Every tier calls the searches without a frame where their check
+	// passes: on an array whose elements are all there is to its indices,
+	// from a start that converts without calling anything.
+	for name, op := range map[string]uint8{"indexOf": elemArrIndexOf, "lastIndexOf": elemArrLastIndexOf, "includes": elemArrIncludes} {
+		setElemOp(r, p.getOwn(r.atoms.intern(name)).value().Object(), op)
+	}
 
 	r.defMethod(p, "join", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		a, err := rt.viewArrayLike(this)
@@ -3092,6 +3117,135 @@ func (r *Runtime) noInheritedIndices(o *Object) bool {
 		}
 	}
 	return true
+}
+
+// searchElems is indexOf, lastIndexOf or includes of target in o, an array
+// of the realm's in dense storage whose prototypes have no index of their
+// own (plainArray, noInheritedIndices), from from on, or, back, from from
+// down, within n, the length the search read at its start: the index found,
+// or -1. Its elements are then all there is to o's indices, and reading one
+// runs nothing, so the search compares them where they are, one loop of
+// the target's kind, rather than asking HasProperty and Get of each through
+// arrayLike's at. A hole, which no prototype fills, is absent: indexOf and
+// lastIndexOf skip it, and includes (zero, SameValueZero's comparison) reads
+// it as undefined -- as it does an index below n past the elements, which a
+// conversion of the start removed: the caller's to answer. Each element
+// looked at counts towards the next check for an interrupt, as at's do.
+func (r *Runtime) searchElems(o *Object, n, from int64, target Value, back, zero bool) (int64, error) {
+	e := o.elemsOf()
+	lo, hi := from, min(n, int64(len(e)))
+	if back {
+		lo, hi = 0, min(from+1, hi)
+	}
+	for lo < hi {
+		k := min(hi-lo, int64(max(r.interruptCounter, 1)))
+		var i int64
+		if back {
+			i = lastElem(e[hi-k:hi], target)
+		} else {
+			i = firstElem(e[lo:lo+k], target, zero)
+		}
+		if i >= 0 {
+			if back {
+				r.interruptCounter -= int(k - i)
+				return hi - k + i, nil
+			}
+			r.interruptCounter -= int(i + 1)
+			return lo + i, nil
+		}
+		if r.interruptCounter -= int(k); r.interruptCounter <= 0 {
+			if err := r.checkInterruptNow(); err != nil {
+				return -1, err
+			}
+		}
+		if back {
+			hi -= k
+		} else {
+			lo += k
+		}
+	}
+	return -1, nil
+}
+
+// firstElem is the index of the first of e that is target, as === compares
+// or, zero, SameValueZero, a hole read as undefined; or -1. A number's
+// comparison is of the floats alone: anything else is a NaN of a tag, which
+// equals nothing, and so is a hole.
+func firstElem(e []Value, target Value, zero bool) int64 {
+	switch {
+	case target.IsNumber():
+		x := target.num
+		if x != x {
+			if zero {
+				for i := range e {
+					if v := e[i]; v.num != v.num && v.IsNumber() {
+						return int64(i)
+					}
+				}
+			}
+			return -1
+		}
+		for i := range e {
+			if e[i].num == x {
+				return int64(i)
+			}
+		}
+	case target.IsString():
+		s := target.String()
+		for i := range e {
+			if v := e[i]; v.IsString() && (v.ref == target.ref || v.String().Equals(s)) {
+				return int64(i)
+			}
+		}
+	case target.IsBigInt() && !target.isShortBig():
+		for i := range e {
+			if e[i].StrictEquals(target) {
+				return int64(i)
+			}
+		}
+	case zero && target.IsUndefined():
+		for i := range e {
+			if v := e[i]; v.sameBits(target) || isHole(v) {
+				return int64(i)
+			}
+		}
+	default:
+		// undefined, null, a boolean, a symbol, a BigInt held in the value
+		// or an object: the same value is the same bits.
+		for i := range e {
+			if e[i].sameBits(target) {
+				return int64(i)
+			}
+		}
+	}
+	return -1
+}
+
+// lastElem is the index of the last of e that is target, as === compares,
+// or -1: lastIndexOf's firstElem.
+func lastElem(e []Value, target Value) int64 {
+	switch {
+	case target.IsNumber():
+		x := target.num
+		for i := len(e) - 1; i >= 0; i-- {
+			if e[i].num == x {
+				return int64(i)
+			}
+		}
+	case target.IsString(), target.IsBigInt() && !target.isShortBig():
+		for i := len(e) - 1; i >= 0; i-- {
+			if e[i].StrictEquals(target) {
+				return int64(i)
+			}
+		}
+	default:
+		for i := len(e) - 1; i >= 0; i-- {
+			if e[i].sameBits(target) {
+				return int64(i)
+			}
+		}
+	}
+	return -1
 }
 
 // fillArray writes v to o's elements from start up to end in place, where
