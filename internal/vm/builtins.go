@@ -2696,14 +2696,20 @@ func jsHypot(nums []float64) float64 {
 		return 0
 	}
 	// The squares are scaled by the largest term, so that a vector of large
-	// or small components neither overflows nor underflows on the way.
-	sum := 0.0
+	// or small components neither overflows nor underflows on the way, and
+	// summed with Kahan's compensation, as V8's MathHypot sums them: the
+	// plain sum made Math.hypot(7, 1, 2) 7.348469228349535, the last bit
+	// past √54's and V8's.
+	sum, compensation := 0.0, 0.0
 	for _, n := range nums {
 		q := n / largest
-		// Rounded before the sum, which arm64 would fuse.
-		sum += float64(q * q)
+		// Each step rounded, which arm64 would fuse.
+		summand := float64(q*q) - compensation
+		preliminary := sum + summand
+		compensation = float64(preliminary-sum) - summand
+		sum = preliminary
 	}
-	return largest * math.Sqrt(sum)
+	return math.Sqrt(sum) * largest
 }
 
 func jsSign(f float64) float64 {

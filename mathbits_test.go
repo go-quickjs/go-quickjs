@@ -33,4 +33,25 @@ func TestMathMatchesV8(t *testing.T) {
 			for (let i = 0; i < 3000; i++) { const x = gens[i % gens.length](), y = gens[(i + 3) % gens.length](); out.push(Math[f](x, f === "pow" ? y / 10 : y)); }
 		let h = 0; const all = out.join(","); for (let i = 0; i < all.length; i++) h = (h * 31 + all.charCodeAt(i)) | 0;
 		out.length + " " + h`, "66000 -684820804")
+	// Math.hypot sums its scaled squares with Kahan's compensation, as V8's
+	// MathHypot does: √54 to the last bit, and 20000 vectors of one to five
+	// numbers of every magnitude, node 26's bits.
+	checkEval(t, `[Math.hypot(7, 1, 2), Math.hypot(1, 2, 3, 4, 5)].join()`, "7.348469228349534,7.416198487095663")
+	checkEval(t, `let seed = 12345;
+		const rnd = () => { seed = (Math.imul(seed, 1103515245) + 12345) | 0; return (seed >>> 8) / 16777216; };
+		const pick = () => { const k = rnd();
+			if (k < 0.2) return Math.floor(rnd() * 20) - 10;
+			if (k < 0.4) return (rnd() - 0.5) * 100;
+			if (k < 0.55) return (rnd() - 0.5) * 1e300;
+			if (k < 0.7) return (rnd() - 0.5) * 1e-300;
+			if (k < 0.8) return rnd() * 2 ** (Math.floor(rnd() * 200) - 100);
+			return Math.floor(rnd() * 1000); };
+		const f64 = new Float64Array(1), u32 = new Uint32Array(f64.buffer);
+		const out = [];
+		for (let i = 0; i < 20000; i++) {
+			const xs = []; for (let j = 0; j <= i % 5; j++) xs.push(pick());
+			f64[0] = Math.hypot(...xs); out.push(u32[1].toString(16) + '.' + u32[0].toString(16));
+		}
+		let h = 0x811c9dc5; const s = out.join(','); for (let k = 0; k < s.length; k++) h = Math.imul(h ^ s.charCodeAt(k), 16777619);
+		out.length + " " + (h >>> 0)`, "20000 1701707555")
 }
