@@ -59,6 +59,12 @@ const (
 	// of characters, at least arg of them, and it gives them back a
 	// character at a time.
 	opGreedyRune
+	// opLazy is a lazy *? or +? of the one-character matcher that follows
+	// it, rightwards: it takes the arg characters it must, at most one, and
+	// then one more each time the rest fails, from one choice point rather
+	// than one per character. A character is a code unit, or with a
+	// non-zero arg2 a code point, as the unicode flag reads one.
+	opLazy
 )
 
 // instr is one instruction of the program.
@@ -387,6 +393,19 @@ func (c *compiler) compileRepeat(t nodeRepeat) {
 		c.emit(instr{op: opGreedyRune, arg: t.min})
 		c.compile(t.item)
 		return
+	}
+	if greedyLoops && !t.greedy && t.max < 0 && t.min <= 1 && !c.reverse {
+		unicode := c.flags&(FlagUnicode|FlagUnicodeSets) != 0
+		if !unicode && oneUnit(t.item) && (!c.noGreedy || asciiOnly(t.item)) {
+			c.emit(instr{op: opLazy, arg: t.min})
+			c.compile(t.item)
+			return
+		}
+		if unicode && !c.noGreedy && oneCharacter(t.item) {
+			c.emit(instr{op: opLazy, arg: t.min, arg2: 1})
+			c.compile(t.item)
+			return
+		}
 	}
 
 	if unrollRepeats && t.min > 0 && t.min <= maxUnrolled && oneCharacter(t.item) && (t.min > 1 || t.max >= 0) {

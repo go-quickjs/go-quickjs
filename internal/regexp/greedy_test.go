@@ -8,12 +8,15 @@ import (
 
 // TestGreedyLoopsAgree pins that a greedy run of one unit taken whole, and
 // given back from one choice point, matches what the loop it stands for
-// matches: the same span and the same captures, from every start.
+// matches: the same span and the same captures, from every start -- and so
+// does a lazy run, taking one more from one choice point.
 func TestGreedyLoopsAgree(t *testing.T) {
 	patterns := []string{
 		`a*`, `a+`, `a*b`, `a+b`, `a*a`, `a+a+`, `[a-c]*c`, `.*x`, `.+?x`, `\s*(\w+)\s*`,
 		`x(.*)y(.*)z`, `(a*)(a*)`, `[^,]*,`, `.*$`, `^.*\n`, `b*?b`, `(?:ab)*`, `\d+\.\d*`,
 		`[A-Z]*a`, `(\S+)\s+(\S+)`, `.*.*=.*`, `(a+)+b`,
+		`a*?b`, `a+?b`, `(.*?),`, `<(.+?)>`, `x.*?y.*?z`, `\w+?\b`, `a+?$`, `\d*?\.\d+?`, `(a+?)(a*?)`,
+		`[^,]*?,`, `^.*?$`, `.+?`, `(?:a.*?)+b`,
 	}
 	subjects := []string{
 		"", "a", "aaa", "aaab", "abcabc", "xaybz", "xyz", "xxyyzz", "a,b,,c", " foo  bar ",
@@ -26,6 +29,7 @@ func TestGreedyLoopsAgree(t *testing.T) {
 		`\p{L}+`, `\p{L}*x`, `.*`, `.+.`, `.*\u{1F600}`, `[^a]*a`, `[\u{1F600}-\u{1F64F}]+\u{1F64F}`,
 		`\u{1F600}*\u{1F600}`, `(\S+)\s+(\S+)`, `[a-z]+`, `\w*k`, `\W+`, `\uD83D*`, `[\uD800-\uDFFF]+`,
 		`.*\uDE00`, `[^x]+[\uDC00-\uDFFF]`, `\S*\uDE00`,
+		`.*?\u{1F600}`, `\p{L}+?$`, `.+?\uDE00`, `(.+?)\u{1F64F}`, `[^a]*?a`, `\S+?\s`,
 	}
 	usubjects := []string{
 		"", "a\U0001F600b", "\U0001F600\U0001F64F\U0001F600", "xy\U0001F600z\U0001F64Fa", "kK\u212Aſs",

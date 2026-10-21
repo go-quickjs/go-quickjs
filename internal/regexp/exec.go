@@ -94,6 +94,10 @@ const greedyFrame = -2
 // greedyFrame's but for giving back a character rather than a unit.
 const greedyRuneFrame = -3
 
+// lazyFrame marks the choice point of an opLazy run: pos is where the run
+// now ends, and counterVal the pc of the opLazy whose item takes one more.
+const lazyFrame = -4
+
 // frame is a choice point: where to resume, and what to put back first.
 //
 // Its fields are 32 bits, which every position, count and index fits in --
@@ -708,6 +712,19 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 			pos = end
 			pc += 2
 
+		case opLazy:
+			// What must be taken is, and the rest is tried from there; one
+			// more character is taken only once it fails (see lazyFrame).
+			if in.arg > 0 {
+				w := m.lazyStep(in, &code[pc+1], pos)
+				if w == 0 {
+					goto backtrack
+				}
+				pos += w
+			}
+			m.push(frame{pc: int32(pc + 2), pos: int32(pos), capsLen: int32(len(m.trail)), counterIdx: lazyFrame, counterVal: int32(pc)})
+			pc += 2
+
 		case opEmptyCheck:
 			if in.arg2 == 0 {
 				// Entering an iteration: remember where it started.
@@ -773,6 +790,18 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 				pc, pos = int(f.pc), int(p)
 				break
 			}
+			if f.counterIdx == lazyFrame {
+				// A lazy run takes one more character, and stays a choice
+				// point while it can, where it is; once it cannot, it is
+				// popped and backtracking goes on.
+				if w := m.lazyStep(&code[f.counterVal], &code[f.counterVal+1], int(f.pos)); w > 0 {
+					f.pos += int32(w)
+					pc, pos = int(f.pc), int(f.pos)
+					break
+				}
+				m.stack = m.stack[:top]
+				continue
+			}
 			// Any other is popped. What it holds is read after: nothing is
 			// pushed before it is.
 			m.stack = m.stack[:top]
@@ -837,6 +866,24 @@ func (m *matcher) unitMatches(in instr, u uint16) bool {
 	default:
 		return !isLineTerminator(r)
 	}
+}
+
+// lazyStep is how many units an opLazy run's next character, the one at pos,
+// takes, which item matches, or 0 where there is none it matches. The step
+// it is counts against the budget.
+func (m *matcher) lazyStep(lz, item *instr, pos int) int {
+	m.steps++
+	if lz.arg2 == 0 {
+		if pos < len(m.in.units) && m.unitMatches(*item, uint16(m.in.units[pos])) {
+			return 1
+		}
+		return 0
+	}
+	r, w := m.in.at(pos)
+	if w == 0 || !m.runeMatches(*item, r) {
+		return 0
+	}
+	return w
 }
 
 // runeMatches reports whether a character is what a one-character matcher --

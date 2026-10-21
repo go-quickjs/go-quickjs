@@ -224,3 +224,21 @@ func TestRegExpNamedReplaceAgreesWithNode(t *testing.T) {
 	r.push("abc".replace(y, "<$<w>>"), y.lastIndex, "abc".replace(/(?<w>\w)/gy, "$<w>$<w>"))
 	r.join("|")`, `15.01.2024 and .12.1999|[||0120242024-01-15] and [||1219991999-12]|$< and $<|<a><b>||a||a-b|caf[é]|x$<a|null:ymd:202415:5 and null:ymd:1999undefined:5|v1=k1@0string;v2=k2@6string|a,1,b,2,c|a,1|2024-01-15,1999-12|a,b|a<b>c|2|aabbcc`)
 }
+
+// TestRegExpLazyRunsAgreeWithNode covers a lazy *? or +? of one character,
+// which takes one more character from one choice point each time what
+// follows fails: tags, quoted strings, the shortest and the longest of
+// matches, groups, empty runs, global and sticky searches, and the u flag,
+// where a character may be a pair of surrogates. The answers are Node
+// v26's.
+func TestRegExpLazyRunsAgreeWithNode(t *testing.T) {
+	checkEval(t, `var r = [], html = "<p>one</p><b>two</b> <i></i>"
+	r.push(html.match(/<(.+?)>/g).join(), html.replace(/<[^>]*?>/g, ""), JSON.stringify(/<(\w+?)>(.*?)<\/\1>/.exec(html)))
+	r.push('say "hi" and "bye"'.match(/"(.*?)"/g).join("|"), "aaa".match(/a+?/)[0], "aaa".match(/a*?/)[0].length, "aaab".match(/a*?b/)[0])
+	r.push("x1y2z".replace(/.*?(\d)/g, "[$1]"), "abc".split(/.*?/).join(), [..."a,b,,c".matchAll(/(.*?),/g)].map(m => m[1]).join("."))
+	var y = /.+?;/y; y.lastIndex = 2
+	r.push(y.exec("a;bc;d;")?.[0], y.lastIndex, /^(.+?)(\d*)$/.exec("abc123").slice(1).join())
+	r.push("😀a😀b".match(/.+?b/u)[0], "😀😀x".match(/(.*?)x/u)[1].length, "a😀😀".match(/a.+?$/u)[0].length, "😀😀".match(/.+?/gu).length)
+	r.push("日本語テキスト".match(/\p{L}+?ト/u)[0], "x😀y".replace(/.*?(?=y)/u, "_"), "ab😀".match(/[^😀]+?😀/u)[0])
+	r.join("|")`, `<p>,</p>,<b>,</b>,<i>,</i>|onetwo |["<p>one</p>","p","one"]|"hi"|"bye"|a|0|aaab|[1][2]z|a,b,c|a.b.|bc;|5|abc,123|😀a😀b|4|5|2|日本語テキスト|_y|ab😀`)
+}
