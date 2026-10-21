@@ -378,6 +378,99 @@ function tail_mutual(n)
     return n;
 }
 
+/* a method whose body has a loop, which it does not enter, so that it is
+   called with a frame of its own, and a method that only returns its
+   argument */
+function ExtraPoint(x)
+{
+    this.x = x;
+}
+
+ExtraPoint.prototype.sum = function (k)
+{
+    var j, s = 0;
+    for (j = 0; j < k; j++)
+        s += this.x;
+    return s;
+};
+
+ExtraPoint.prototype.same = function (k)
+{
+    return k;
+};
+
+function method_call(n)
+{
+    var j, o = new ExtraPoint(1), s = 0;
+    for (j = 0; j < n; j++)
+        s += o.sum(0);
+    global_res = s;
+    return n;
+}
+
+function method_call_leaf(n)
+{
+    var j, o = new ExtraPoint(1), s = 0;
+    for (j = 0; j < n; j++)
+        s += o.same(j);
+    global_res = s;
+    return n;
+}
+
+/* loops of a few simple instructions each: with QJS_NOTREE=1, what the
+   interpreter's dispatch costs */
+function loop_sum(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++)
+        s += j;
+    global_res = s;
+    return n;
+}
+
+function loop_arith(n)
+{
+    var j, a = 1, b = 2, c = 0;
+    for (j = 0; j < n; j++) {
+        c = (a + b) * 3 - c;
+        a = b - c;
+        b = c & 1023;
+    }
+    global_res = c;
+    return n;
+}
+
+function loop_locals(n)
+{
+    var j, a = 1, b = 2, c = 3, d = 4;
+    for (j = 0; j < n; j++) {
+        a = b;
+        b = c;
+        c = d;
+        d = a;
+    }
+    global_res = a + b + c + d;
+    return n;
+}
+
+function loop_elements(n)
+{
+    var j, t = [1, 2, 3, 4, 5, 6, 7, 8], s = 0;
+    for (j = 0; j < n; j++)
+        s += t[j & 7];
+    global_res = s;
+    return n;
+}
+
+function loop_props(n)
+{
+    var j, o = { x: 1, y: 2 }, s = 0;
+    for (j = 0; j < n; j++)
+        s += o.x + o.y;
+    global_res = s;
+    return n;
+}
+
 /* a class's private field, read and written, and its private method,
    called */
 class PrivateCounter

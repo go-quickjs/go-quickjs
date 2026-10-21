@@ -237,8 +237,9 @@ go run -tags quickjs_jit ./internal/cmd/v8bench -jit -jitreport -bench awfy -dir
 (QuickJS's `tests/microbench.js`, kept as it is there), and ours beside it,
 `microbench_extra.js`, of what it has none of -- generators, async
 functions, try statements, iterators, using declarations, closures
-made and called anew, calls in tail position, private class members,
-Math.random, the in operator, a delete of an object's last property,
+made and called anew, calls in tail position, method calls with a frame
+and without, loops of a few simple instructions, which with `QJS_NOTREE=1`
+time the interpreter's dispatch, private class members, Math.random, the in operator, a delete of an object's last property,
 Array.prototype.forEach, reduce, map, filter and some, a typed array's forEach,
 String.prototype.indexOf and Array.prototype.indexOf, BigInts' division,
 shifts, hashing, comparisons, powers, modular exponentiation, digits of
