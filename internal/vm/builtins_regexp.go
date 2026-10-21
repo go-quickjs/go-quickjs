@@ -356,10 +356,10 @@ func (r *Runtime) initRegExpBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		// An unmodified RegExp is matched directly, with lastIndex and the
-		// legacy statics as exec has them, but without the array exec
-		// would make for nobody to read.
-		if _, ok := rt.builtinFlagBits(this); ok && propsIntact(rt.proto.regexp, rt.regexpExecProps) {
+		// A RegExp whose exec is the built-in is matched directly, with
+		// lastIndex and the legacy statics as exec has them, but without
+		// the array exec would make for nobody to read.
+		if rt.execIsBuiltin(this) {
 			caps, _, err := rt.regexpMatch(this, s)
 			if err != nil {
 				return Undefined, err
@@ -494,6 +494,18 @@ func (r *Runtime) setLastIndex(o *Object, v Value) error {
 	}
 	_, err := r.setProp(o, atomLastIndex, v, Obj(o), true)
 	return err
+}
+
+// execIsBuiltin reports whether RegExpExec on rx, an object, would call the
+// built-in exec: rx is a RegExp of this realm with no property of its own but
+// lastIndex, to shadow the prototype's exec, which is still the realm's.
+// The built-in reads a pattern's flags from the pattern, not through the
+// getters, so whether they are the built-ins does not matter to it, as it
+// does to what builtinExec answers for.
+func (r *Runtime) execIsBuiltin(rx Value) bool {
+	o := rx.Object()
+	return o.class == ClassRegExp && o.proto == r.proto.regexp && len(o.vals) == 1 &&
+		o.shape.keys[0].key == atomLastIndex && propsIntact(o.proto, r.regexpExecProps)
 }
 
 // builtinExec reports whether exec, called on rx, would be the built-in

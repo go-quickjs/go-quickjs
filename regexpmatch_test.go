@@ -106,3 +106,45 @@ func TestRegExpReplaceTemplateAgreesWithNode(t *testing.T) {
 	r.push("foo".replace(g, "[$1]"), g.lastIndex, "x".replace(/x/, "$$$"), "x".replace(/x/g, "$"))
 	r.join("|")`, `15/01/2024, 31/12/2025|[2024-01-15||, 2025-12-31|$|$], 2025-12-31|$0;$00;2024;01;$03;20240;011;$9$-15, $0;$00;2025;12;$03;20250;121;$9$-31|101;12;1ax|a[]c|a$<n>$<c|abc|<>a<>a<>a<>|--a--b--c--|[a😀b]a[😀b]😀[b]b[]|9|true|true|true|é+ü-ö|日語本本-語|a<b>c|2|aabbcc|aa,b|f[o][o]|0|$$|$`)
 }
+
+// TestRegExpProtocolAgreesWithNode covers what the fast paths of RegExp's
+// and String's methods must still see: an exec of a RegExp's own, the
+// prototype's exec replaced, the flag getters and flags replaced -- which
+// test does not read and replace, match and split do -- a subclass's exec,
+// Symbol.replace replaced, lastIndex an object whose valueOf runs, a
+// lastIndex that cannot be written, and a flag a RegExp has of its own. The
+// answers are Node v26's.
+func TestRegExpProtocolAgreesWithNode(t *testing.T) {
+	checkEval(t, `var log = [], r = []
+	var o = /b/; o.exec = function (s) { log.push("own exec " + s); return null }
+	r.push(o.test("b"), "b".replace(o, "c"))
+	var saved = RegExp.prototype.exec
+	RegExp.prototype.exec = function (s) { log.push("proto exec " + this.source); return saved.call(this, s) }
+	r.push(/c/.test("xc"), "xc".replace(/c/g, "$&$&"), "a-b".split(/-/).join(), "aa".match(/a/g).length, "ab".search(/b/))
+	RegExp.prototype.exec = saved
+	var gdesc = Object.getOwnPropertyDescriptor(RegExp.prototype, "global")
+	Object.defineProperty(RegExp.prototype, "global", { get() { log.push("global"); return gdesc.get.call(this) }, configurable: true })
+	r.push(/d/g.test("d"), "dd".replace(/d/g, "e"), "dd".match(/d/g).length, /d/g.exec("dd").index)
+	Object.defineProperty(RegExp.prototype, "global", gdesc)
+	var fdesc = Object.getOwnPropertyDescriptor(RegExp.prototype, "flags")
+	Object.defineProperty(RegExp.prototype, "flags", { get() { log.push("flags"); return fdesc.get.call(this) }, configurable: true })
+	r.push("ee".replace(/e/g, "f"), "e,e".split(/,/).length, /e/.test("e"), "e".replace(/(e)/, "$1$1"))
+	Object.defineProperty(RegExp.prototype, "flags", fdesc)
+	class R extends RegExp { exec(s) { log.push("sub exec"); return super.exec(s) } }
+	r.push(new R("x").test("x"), "xx".replace(new R("x", "g"), "y"), "x-x".split(new R("-")).join(), "x1".replace(new R("(1)"), "<$1>"))
+	var sr = RegExp.prototype[Symbol.replace]
+	RegExp.prototype[Symbol.replace] = function (s, t) { log.push("sym replace"); return sr.call(this, s, t) }
+	r.push("gg".replace(/g/g, "h"), "gg".replace(/(g)/g, "[$1]"))
+	RegExp.prototype[Symbol.replace] = sr
+	var li = /z/g; li.lastIndex = { valueOf() { log.push("valueOf"); return 1 } }
+	r.push(li.test("zz"), li.lastIndex)
+	var nw = /q/g; Object.defineProperty(nw, "lastIndex", { writable: false, value: 0 })
+	try { nw.test("q") } catch (e) { r.push(e.constructor.name) }
+	try { "qq".replace(nw, "$&") } catch (e) { r.push(e.constructor.name) }
+	var nw2 = /q/; Object.defineProperty(nw2, "lastIndex", { writable: false, value: 0 })
+	r.push(nw2.test("q"), "q".replace(nw2, "[$&]"))
+	var sh = /s/g; Object.defineProperty(sh, "global", { value: false })
+	r.push("ss".replace(sh, "t"), "ss".replace(sh, "<$&>"), sh.test("ss"), sh.lastIndex)
+	r.push(log.join(";"))
+	r.join("|")`, `false|b|true|xcc|a,b|2|1|true|ee|2|0|ff|2|true|ee|true|yy|x,x|x<1>|hh|[g][g]|true|2|TypeError|TypeError|true|[q]|ts|s<s>|false|0|own exec b;own exec b;proto exec c;proto exec c;proto exec c;proto exec -;proto exec -;proto exec -;proto exec a;proto exec a;proto exec a;proto exec b;global;global;flags;flags;flags;sub exec;sub exec;sub exec;sub exec;sub exec;sub exec;sub exec;sub exec;sym replace;sym replace;valueOf`)
+}
