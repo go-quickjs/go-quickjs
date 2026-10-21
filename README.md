@@ -1,8 +1,12 @@
 # go-quickjs
 
-A JavaScript engine for Go, reimplementing [QuickJS-NG] in pure Go.
+A JavaScript engine for Go, reimplementing [QuickJS-NG] in pure Go, with an
+optional, experimental JIT that compiles hot functions to native code, as
+V8's optimizing compilers do.
 
-No cgo, no WebAssembly, no C toolchain. It cross-compiles anywhere Go does.
+No cgo, no WebAssembly, no C toolchain, the JIT included. It cross-compiles
+anywhere Go does; the JIT runs on `linux/amd64`, `windows/amd64` and
+`darwin/arm64`, and elsewhere the engine runs without it.
 
 ```go
 rt := quickjs.New()
@@ -49,10 +53,36 @@ skipped because they require an unsupported feature or host facility, on
 test262 commit [`2e0a5676`](https://github.com/tc39/test262/commit/2e0a56762801e275a9fdf96dc49d90ba0cddcf63). See [Conformance](docs/status.md#conformance) for the
 measurement and [Not implemented](docs/status.md#not-implemented) for what is missing.
 
-With the native JIT disabled, its V8 version 7 composite score is 5.74 times
-goja's on an Apple M5 Max with Go 1.27.0. This older workload suite does not
-represent every application; see the [goja comparison](docs/benchmarks.md#v8-version-7-benchmark-suite)
-for the individual scores and measurement details.
+## Performance
+
+Functions run in a bytecode interpreter, most of them as trees of Go
+closures built from their bytecode. The JIT, which is optional and
+experimental, compiles hot functions to native code on `linux/amd64`,
+`windows/amd64` and `darwin/arm64`. It follows V8's optimizing compilers:
+it speculates on what the inline caches have seen, inlines calls, and falls
+back to the interpreter when a speculation fails. It needs both a build
+with `-tags quickjs_jit` and a runtime made with `quickjs.WithJIT()` (or
+`qjs --jit`); anything else runs exactly as before:
+
+```go
+// go build -tags quickjs_jit
+rt := quickjs.New(quickjs.WithJIT())
+```
+
+What the JIT holds is bounded by `WithJITMemoryLimit` -- by default 8 MB,
+or an eighth of `WithMemoryLimit` when that is set -- and never counts
+against `WithMemoryLimit`. A function it cannot compile, a runtime made
+`WithDebugger`, or a process denied executable memory runs in the
+interpreter as before. Neither native execution nor a speedup is
+guaranteed: a few operations that are mostly a built-in's work run slower
+with it, so measure a workload with it on and off. See
+[its design notes](internal/jit/README.md).
+
+Its V8 version 7 composite score is 5.74 times goja's with the JIT off, and
+16.9 times with it on, on an Apple M5 Max with Go 1.27.0. This older
+workload suite does not represent every application; see the
+[goja comparison](docs/benchmarks.md#v8-version-7-benchmark-suite) for the
+individual scores and measurement details.
 
 On the V8 benchmark suite as a whole it is ahead of C QuickJS: it takes 0.60
 times QuickJS's time over the suite and has a 24% higher composite score,
@@ -63,12 +93,6 @@ the JIT, though a few take about twice as long, the weak collections and an
 array grown by assigning past its end among them. See [Compared with C QuickJS](docs/benchmarks.md#compared-with-c-quickjs).
 
 ## Documentation
-
-An experimental optimizing JIT compiles hot functions to native code on
-`linux/amd64`, `windows/amd64` and `darwin/arm64`. It needs both a build with
-`-tags quickjs_jit` and a runtime made with `quickjs.WithJIT()` (or
-`qjs --jit`); anything else runs exactly as before. See
-[its design notes](internal/jit/README.md).
 
 | | |
 |---|---|
@@ -81,7 +105,8 @@ An experimental optimizing JIT compiles hot functions to native code on
 | [Sandboxing](docs/sandboxing.md) | what a script can reach, and how its time and memory are bounded |
 | [Debugging](docs/debugging.md) | Chrome's DevTools and VS Code attached to a runtime, from qjs --inspect or a host |
 | [Design notes](docs/design.md) | how the engine is built, for reading the source |
-| [Benchmarks](docs/benchmarks.md) | Go benchmarks, and the V8 suite against goja, C QuickJS and Node |
+| [Benchmarks](docs/benchmarks.md) | Go benchmarks, and the V8 suite and micro-benchmarks against goja and C QuickJS, with the JIT and without |
+| [The JIT](internal/jit/README.md) | the experimental native tier: how it compiles, speculates and deoptimizes, and the contracts its code keeps |
 | [Performance plan](docs/performance-plan.md) | the optimizations still to make, how each is measured, and what was tried and rejected |
 | [jsregexp](jsregexp/README.md) | the engine's regular expressions as a Go package, against Go's `regexp` |
 
