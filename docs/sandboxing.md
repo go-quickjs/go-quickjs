@@ -61,7 +61,17 @@ function newly hot runs in the interpreter. A lower limit makes the JIT
 slower for programs with many hot functions: 600 of them, which hold 4.5 MB,
 took 2 times as long under 2 MB and 2.5 times under 1 MB, against 2.9 times
 without the JIT. Lower it to run many runtimes in one process, or where
-memory is tight; otherwise leave the default.
+memory is tight.
+
+The default may not be enough for a real-world application. It suits a
+program with a few hundred hot functions; a large one -- a compiler, a
+framework, a bundle of thousands of functions -- can need several times
+more, and with too little the JIT spends its time dropping code and
+compiling it again, which can leave the program slower than without the
+JIT. Octane's Typescript, the TypeScript compiler compiling itself, does not
+fit 8 MB: it took 3,750 ms with the JIT under the default, 2,850 under
+32 MB, and 2,830 without the JIT. Time such a program under a larger limit
+-- 32 or 64 MB -- and keep the one past which it runs no faster.
 
 Measured against Go's live heap after a full collection, the estimate is
 within 15% for every kind of value a script can hold -- objects, arrays,

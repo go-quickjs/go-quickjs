@@ -166,7 +166,17 @@ func WithJIT() Option { return func(c *config) { c.jit = true } }
 // to 4.5 MB, took 1.1 times as long under a 4 MB limit as under the
 // default, 2 times under 2 MB, 2.5 times under 1 MB, and 2.8 times under
 // 512 KB, against 2.9 times without the JIT. Lower it to run many runtimes
-// in one process, or where memory is tight; otherwise leave the default.
+// in one process, or where memory is tight.
+//
+// The default may not be enough for a real-world application. It suits a
+// program with a few hundred hot functions; a large one -- a compiler, a
+// framework, a bundle of thousands of functions -- can need several times
+// more, and with too little the JIT spends its time dropping code and
+// compiling it again, which can make the program slower than without the
+// JIT. Octane's Typescript, the TypeScript compiler compiling itself, does
+// not fit 8 MB: it took 3,750 ms with the JIT under the default, 2,850 under
+// 32 MB, and 2,830 without the JIT. Time such a program under a larger limit
+// -- 32 or 64 MB -- and keep the one past which it runs no faster.
 func WithJITMemoryLimit(bytes int64) Option {
 	return func(c *config) { c.jitMemoryLimit = bytes }
 }
