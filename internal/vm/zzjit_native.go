@@ -223,9 +223,10 @@ func (r *Runtime) recordJITStringIntrinsic(ctor *Object) {
 
 // recordJITSubstrings notes the realm's String.prototype substring, slice,
 // substr and charAt, once the realm has them all, before any script runs,
-// whose one-character results native code makes itself, and
+// whose one-character results native code makes itself,
 // Array.prototype's forEach, reduce and the others whose calls it makes
-// loops of (jitLoops).
+// loops of (jitLoops), and the leaves it calls without a frame
+// (jitPlainSet): once every built-in is made (initGlobals' last step).
 func (r *Runtime) recordJITSubstrings() {
 	own := func(name string) Value {
 		if m := r.proto.str.getOwn(r.atoms.intern(name)); m.ok() {

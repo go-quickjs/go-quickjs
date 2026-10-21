@@ -446,4 +446,8 @@ func (r *Runtime) initGlobals() {
 	r.initAnnexB()
 	r.initModuleSource()
 	r.initShadowRealm()
+	// Last, once every built-in the JIT knows by its object is made: the
+	// leaves among them, Number's extras' too, which String's had come
+	// before.
+	r.recordJITSubstrings()
 }

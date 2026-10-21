@@ -523,7 +523,8 @@ func (r *Runtime) pureConstruct(callee Value, args []Value) (Value, bool) {
 // cannot throw where they are applied (elemOp): the array methods a pure
 // body may call, the collections' lookups and additions (collectionOp), and
 // the leaves past elemRandom (leafOps) -- the collections' deletions, the
-// weak ones' operations, Date.now, String of a primitive. Each declares its
+// weak ones' operations, Date.now, String and Number of a primitive,
+// Boolean of any value. Each declares its
 // own where it is made (setElemOp).
 const (
 	elemPush = iota + 1
@@ -545,11 +546,14 @@ const (
 	elemWeakSetAdd
 	elemWeakSetDelete
 	elemStringOf
+	// Number(x) and Boolean(x) called, of a primitive and of any value.
+	elemNumberOf
+	elemBooleanOf
 
 	// Native leaves: the built-in's own function, called without a frame
 	// where its op's check says it runs no script, throws nothing and keeps
 	// nothing (leafChecks). String.prototype's methods on a string, and
-	// String's of numbers.
+	// String's of numbers; Number's.
 	elemStrAt
 	elemStrCharAt
 	elemStrCharCodeAt
@@ -577,6 +581,23 @@ const (
 	elemStrLocaleCompare
 	elemStrFromCharCode
 	elemStrFromCodePoint
+	// Number's: Number.isInteger, isSafeInteger, isFinite and isNaN, of any
+	// value; the global isNaN, isFinite, parseInt and parseFloat, of
+	// primitives; Number.prototype's toString, valueOf, toFixed,
+	// toExponential and toPrecision, on a number.
+	elemNumIsInteger
+	elemNumIsSafeInteger
+	elemNumIsFinite
+	elemNumIsNaN
+	elemIsNaN
+	elemIsFinite
+	elemParseInt
+	elemParseFloat
+	elemNumToString
+	elemNumValueOf
+	elemNumToFixed
+	elemNumToExponential
+	elemNumToPrecision
 	elemLeafEnd
 )
 

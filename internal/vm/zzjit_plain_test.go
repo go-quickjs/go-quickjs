@@ -67,6 +67,8 @@ const plainSetup = `
 	function dateLoop(n) { let t = 0, ok = true; for (let i = 0; i < n; i++) { const d = Date.now(); if (d < t) ok = false; t = d } return ok && typeof t === 'number' && Number.isInteger(t) }
 	function strLeafLoop(s, n) { let h = 0, out = ''; for (let i = 0; i < n; i++) { const k = i % 4; out = s.at(k) + s.codePointAt(k) + s.startsWith('a', k) + s.endsWith('d', k + 1) + s.toUpperCase() + s.toLowerCase() + s.trim() + s.trimStart() + s.trimEnd() + s.isWellFormed() + s.toWellFormed() + s.concat(k, 'z') + s.repeat(k) + s.padStart(k + 8, '-') + s.padEnd(k + 8) + s.normalize() + s.localeCompare('b') + String.fromCodePoint(65 + k); h = (h * 31 + out.length) | 0 } return h + '|' + out }
 	function strLeaves(n) { return strLeafLoop(' aBcd ', n) }
+	function numLeafLoop(xs, n) { let h = 0, out = ''; for (let i = 0; i < n; i++) { const x = xs[i % xs.length]; out = Number(x) + ':' + Boolean(x) + ':' + Number.isInteger(x) + ':' + Number.isSafeInteger(x); out += ':' + Number.isFinite(x) + ':' + Number.isNaN(x) + ':' + isNaN(x) + ':' + isFinite(x); out += ':' + parseFloat(x); h = (h * 31 + out.length) | 0 } return h + '|' + out }
+	function numLeaves(n) { return numLeafLoop([1.5, '42', true, null, undefined, NaN, -0, '0x10', 1e21, ' 7px'], n) }
 `
 
 // plainRounds are plainSetup's calls and their answers, Node's
@@ -91,6 +93,7 @@ var plainRounds = [][2]string{
 	{`weakErrors()`, `TypeError,TypeError,TypeError,TypeError,TypeError,TypeError:undefined:false:false:false`},
 	{`dateLoop(30)`, `true`},
 	{`strLeaves(30)`, `-11054032|a97truefalse ABCD  abcd aBcdaBcd  aBcdtrue aBcd  aBcd 1z aBcd --- aBcd  aBcd     aBcd -1B`},
+	{`numLeaves(30)`, `789818714|NaN:true:false:false:false:false:true:false:7`},
 }
 
 // A call of Go from native code that runs nothing -- a collection's
@@ -131,6 +134,7 @@ func TestJITPlainGoCalls(t *testing.T) {
 		{"mapLoop", "maps(30)"}, {"setLoop", "sets(30)"}, {"stringLoop", "strings(30)"},
 		{"lengthLoop", "lengths(30)"}, {"writeLoop", "writes(30)"}, {"weakLoop", "weaks(30)"},
 		{"weakSetLoop", "weakSets(30)"}, {"dateLoop", "dateLoop(30)"}, {"strLeafLoop", "strLeaves(30)"},
+		{"numLeafLoop", "numLeaves(30)"},
 	} {
 		e := jitNativeForTest(t, r, c[0])
 		calls, entries, hosts := e.ssaStats.goCalls, e.ssaStats.entries, e.ssaStats.hosts

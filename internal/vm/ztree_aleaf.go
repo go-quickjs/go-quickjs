@@ -165,6 +165,64 @@ func init() {
 		return true
 	}
 	initStringLeafChecks()
+	// Number's: Number.is* of any value, converting nothing; the global
+	// functions of primitives; the prototype's methods on a number, of a
+	// count each takes -- a radix from 2 to 36, digits from 0 to 100, a
+	// precision from 1 to 100, a number's or none -- where anything else
+	// may throw or convert by a call.
+	for _, op := range []uint8{elemNumIsInteger, elemNumIsSafeInteger, elemNumIsFinite, elemNumIsNaN} {
+		leafChecks[op] = func(*Runtime, Value, []Value) bool { return true }
+	}
+	for _, op := range []uint8{elemIsNaN, elemIsFinite, elemParseInt, elemParseFloat} {
+		leafChecks[op] = func(_ *Runtime, _ Value, args []Value) bool { return leafPrimitives(args) }
+	}
+	numberCount := func(lo, hi float64) func(*Runtime, Value, []Value) bool {
+		return func(_ *Runtime, this Value, args []Value) bool {
+			if !this.IsNumber() {
+				return false
+			}
+			if len(args) == 0 || args[0].IsUndefined() {
+				return true
+			}
+			// Truncated, as ToIntegerOrInfinity has it: NaN, whose 0 may be
+			// out of range, is refused.
+			if n := args[0]; n.IsNumber() {
+				t := math.Trunc(n.num)
+				return t >= lo && t <= hi
+			}
+			return false
+		}
+	}
+	leafChecks[elemNumToString] = numberCount(2, 36)
+	leafChecks[elemNumToFixed] = numberCount(0, 100)
+	leafChecks[elemNumToExponential] = numberCount(0, 100)
+	leafChecks[elemNumToPrecision] = numberCount(1, 100)
+	leafChecks[elemNumValueOf] = func(_ *Runtime, this Value, _ []Value) bool { return this.IsNumber() }
+	leafOps[elemNumberOf] = func(r *Runtime, _ Value, args []Value, _ bool) (Value, bool) {
+		// As Number called converts it, of a primitive: a BigInt to the
+		// nearest number, which only this conversion accepts; a symbol
+		// throws. Called with new, it is not a call's.
+		if len(args) == 0 {
+			return Float(0), true
+		}
+		x := args[0]
+		switch {
+		case x.IsNumber():
+			return x, true
+		case x.IsBigInt():
+			return Float(bigIntToFloat(x.BigInt())), true
+		case x.IsObject() || x.IsSymbol():
+			return Undefined, false
+		}
+		n, err := r.toNumber(x)
+		if err != nil {
+			return Undefined, false
+		}
+		return Float(n), true
+	}
+	leafOps[elemBooleanOf] = func(_ *Runtime, _ Value, args []Value, _ bool) (Value, bool) {
+		return Bool(arg(args, 0).Truthy()), true
+	}
 	leafOps[elemDateNow] = func(r *Runtime, _ Value, _ []Value, _ bool) (Value, bool) {
 		return Float(r.now()), true
 	}

@@ -2095,6 +2095,8 @@ func (r *Runtime) initNumberBuiltins() {
 		return Obj(o), nil
 	})
 
+	setElemOp(r, ctor, elemNumberOf)
+
 	r.defConst(ctor, "MAX_SAFE_INTEGER", Float(maxSafeInteger))
 	r.defConst(ctor, "MIN_SAFE_INTEGER", Float(-maxSafeInteger))
 	r.defConst(ctor, "MAX_VALUE", Float(math.MaxFloat64))
@@ -2122,6 +2124,10 @@ func (r *Runtime) initNumberBuiltins() {
 		v := arg(args, 0)
 		return Bool(v.IsNumber() && math.IsNaN(v.Number())), nil
 	})
+	for name, op := range map[string]uint8{"isInteger": elemNumIsInteger, "isSafeInteger": elemNumIsSafeInteger,
+		"isFinite": elemNumIsFinite, "isNaN": elemNumIsNaN} {
+		setElemOp(r, ctor.getOwn(r.atoms.intern(name)).value().Object(), op)
+	}
 
 	r.defMethod(p, "toString", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		n, err := rt.thisNumber(this)
@@ -2173,6 +2179,9 @@ func (r *Runtime) initNumberBuiltins() {
 		var buf [128]byte
 		return Str(asciiString(appendFixed(buf[:0], n, int(digits)))), nil
 	})
+	for name, op := range map[string]uint8{"toString": elemNumToString, "valueOf": elemNumValueOf, "toFixed": elemNumToFixed} {
+		setElemOp(r, p.getOwn(r.atoms.intern(name)).value().Object(), op)
+	}
 }
 
 // thisNumber unwraps the receiver of a Number method.
@@ -2194,7 +2203,7 @@ func isFiniteInteger(f float64) bool {
 
 func (r *Runtime) initBooleanBuiltins() {
 	p := r.proto.boolean
-	r.newCtor("Boolean", 1, p, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	boolCtor := r.newCtor("Boolean", 1, p, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		b := arg(args, 0).Truthy()
 		if !rt.Constructing() {
 			return Bool(b), nil
@@ -2205,6 +2214,7 @@ func (r *Runtime) initBooleanBuiltins() {
 		o.extOf().data = b
 		return Obj(o), nil
 	})
+	setElemOp(r, boolCtor, elemBooleanOf)
 	r.defMethod(p, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		b, err := rt.thisBool(this)
 		if err != nil {
@@ -2794,6 +2804,9 @@ func (r *Runtime) initGlobalFunctions() {
 		}
 		return Bool(!math.IsNaN(n) && !math.IsInf(n, 0)), nil
 	})
+	for name, op := range map[string]uint8{"parseInt": elemParseInt, "parseFloat": elemParseFloat, "isNaN": elemIsNaN, "isFinite": elemIsFinite} {
+		setElemOp(r, r.global.getOwn(r.atoms.intern(name)).value().Object(), op)
+	}
 }
 
 func (r *Runtime) globalParseInt(args []Value) (Value, error) {

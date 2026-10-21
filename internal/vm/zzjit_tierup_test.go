@@ -36,11 +36,21 @@ func jitFewCallsForTest(r *Runtime) {
 // both run src, failing on an answer that differs.
 func jitTierRuntimeForTest(t *testing.T, threshold uint16, setup string) (*Runtime, func(src string)) {
 	t.Helper()
+	return jitTierRuntimeWithForTest(t, threshold, setup, nil)
+}
+
+// jitTierRuntimeWithForTest is jitTierRuntimeForTest, each runtime given
+// install's globals, where it is not nil, before setup runs.
+func jitTierRuntimeWithForTest(t *testing.T, threshold uint16, setup string, install func(*Runtime)) (*Runtime, func(src string)) {
+	t.Helper()
 	want := New(Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	r.jitCallThreshold, r.jitICThreshold = threshold, threshold
 	for _, rt := range []*Runtime{want, r} {
+		if install != nil {
+			install(rt)
+		}
 		if _, err := rt.Run(compileForTest(t, setup)); err != nil {
 			t.Fatal(err)
 		}

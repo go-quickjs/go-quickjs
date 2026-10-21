@@ -12,7 +12,14 @@ import (
 // check of src's answer, as a string, against want and the interpreter's.
 func jitAnswersForTest(t *testing.T, setup string) (*Runtime, func(src, want string)) {
 	t.Helper()
-	r, run := jitTierRuntimeForTest(t, jitInvocationsForMaglev, setup)
+	return jitAnswersWithForTest(t, setup, nil)
+}
+
+// jitAnswersWithForTest is jitAnswersForTest, each runtime given install's
+// globals first (jitTierRuntimeWithForTest).
+func jitAnswersWithForTest(t *testing.T, setup string, install func(*Runtime)) (*Runtime, func(src, want string)) {
+	t.Helper()
+	r, run := jitTierRuntimeWithForTest(t, jitInvocationsForMaglev, setup, install)
 	r.jitState()
 	return r, func(src, want string) {
 		t.Helper()
@@ -24,10 +31,12 @@ func jitAnswersForTest(t *testing.T, setup string) (*Runtime, func(src, want str
 	}
 }
 
-// A loop whose native turns are little more than a call of Go -- here
-// Number.isInteger, at microbench.js's date_now and date_parse Date.now
-// and Date's methods -- costs more natively than in the tree tier, whose
-// own calls of built-ins are cheaper than calls of Go from native code.
+// A loop whose native turns are little more than a call of Go with a frame
+// -- here a host function's (framedCall), at microbench.js's date_parse
+// Date's methods; Number.isInteger and Date.now, which this had called, are
+// leaves now, called without one -- costs more natively than in the tree
+// tier, whose own calls of built-ins are cheaper than calls of Go from
+// native code.
 // Its calls of Go are judged as they are made (jitRunGoProfit), not only
 // at the end of the stretch, which for a loop entered at its header, by
 // on-stack replacement, was the end of the loop: the code leaves after the
@@ -42,7 +51,7 @@ func TestJITCallsOfGoAtLoops(t *testing.T) {
 	}
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	r, want := jitAnswersForTest(t, `function integers(n) { let s = 0; for (let i = 0; i < n; i++) s += Number.isInteger(i / 2) ? 1 : 2; return s }`)
+	r, want := jitAnswersWithForTest(t, `function integers(n) { let s = 0; for (let i = 0; i < n; i++) s += framedCall('xy', i & 1) === 120 ? 1 : 2; return s }`, jitFramedCallForTest)
 	back := r.jit.backToTree
 	want(`integers(200000)`, "300000")
 	e := jitNativeForTest(t, r, "integers")

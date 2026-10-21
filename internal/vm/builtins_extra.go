@@ -831,7 +831,6 @@ func (r *Runtime) initStringExtras() {
 		}
 		return Str(NewString(localeLower(s.Go(), language, n))), nil
 	})
-	r.recordJITSubstrings()
 }
 
 // ---------------------------------------------------------------------------
@@ -902,6 +901,9 @@ func (r *Runtime) initNumberExtras() {
 		var buf [128]byte
 		return Str(asciiString(appendPrecision(buf[:0], n, int(v)))), nil
 	})
+	for name, op := range map[string]uint8{"toExponential": elemNumToExponential, "toPrecision": elemNumToPrecision} {
+		setElemOp(r, p.getOwn(r.atoms.intern(name)).value().Object(), op)
+	}
 
 	// toLocaleString is Intl.NumberFormat under another name, which is what
 	// ECMA-402 says it is.
