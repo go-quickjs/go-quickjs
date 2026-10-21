@@ -402,20 +402,14 @@ func (r *Runtime) asyncGeneratorOf(this Value, name string) (*generator, error) 
 // value is Undefined rather than the zero Value wherever nothing was produced:
 // a zero Value is not undefined, and a completed generator has to keep
 // answering { value: undefined, done: true } however many times it is asked.
+//
+// It has three fields, the kinds of suspension one set of bits, so that the
+// compiler keeps one in registers: a struct of more than four fields lives
+// in memory, and each resumption had stored this one field by field and
+// read it back whole, a load the stores could not be forwarded to.
 type resumeResult struct {
 	value Value
-	// done marks the generator finishing rather than suspending.
-	done bool
-	// raw marks a value that is already the result object to hand back, which
-	// a synchronous `yield*` produces: what the delegate said is what the
-	// caller sees, down to the identity of the object.
-	raw bool
-	// await marks a suspension caused by `await`, which an async generator
-	// must service before producing anything.
-	await bool
-	// delegate marks a suspension inside a `yield*`, whose value has already
-	// been through whatever awaiting it needed.
-	delegate bool
+	how   resumeHow
 	// realm is the realm a result object for the value is made in, where it
 	// is not the running one's: a synchronous `yield*` that stepped a
 	// generator itself yields what it gave as a value (see delegateNext),
@@ -424,26 +418,64 @@ type resumeResult struct {
 	realm *Realm
 }
 
+// resumeHow is how a resumption ended, as bits.
+type resumeHow uint8
+
+const (
+	// resumeDone marks the generator finishing rather than suspending.
+	resumeDone resumeHow = 1 << iota
+	// resumeRaw marks a value that is already the result object to hand
+	// back, which a synchronous `yield*` produces: what the delegate said is
+	// what the caller sees, down to the identity of the object.
+	resumeRaw
+	// resumeAwait marks a suspension caused by `await`, which an async
+	// generator must service before producing anything.
+	resumeAwait
+	// resumeDelegate marks a suspension inside a `yield*`, whose value has
+	// already been through whatever awaiting it needed.
+	resumeDelegate
+)
+
+func (res resumeResult) done() bool     { return res.how&resumeDone != 0 }
+func (res resumeResult) raw() bool      { return res.how&resumeRaw != 0 }
+func (res resumeResult) await() bool    { return res.how&resumeAwait != 0 }
+func (res resumeResult) delegate() bool { return res.how&resumeDelegate != 0 }
+
+// suspendHow is how a suspension s ended a resumption.
+func suspendHow(s *suspendSignal) resumeHow {
+	var how resumeHow
+	if s.raw {
+		how |= resumeRaw
+	}
+	if s.await {
+		how |= resumeAwait
+	}
+	if s.delegate {
+		how |= resumeDelegate
+	}
+	return how
+}
+
 // result renders a resumption as the object a generator's next, return or
 // throw hands back.
 func (r *Runtime) result(res resumeResult) Value {
-	if res.raw && res.value.IsObject() {
+	if res.raw() && res.value.IsObject() {
 		return res.value
 	}
 	if re := res.realm; re != nil && re != r.Realm {
 		prev := r.Realm
 		r.Realm = re
-		o := r.iterResult(res.value, res.done)
+		o := r.iterResult(res.value, res.done())
 		r.Realm = prev
 		return Obj(o)
 	}
-	return Obj(r.iterResult(res.value, res.done))
+	return Obj(r.iterResult(res.value, res.done()))
 }
 
 // resume runs a generator until its next suspension or completion.
 func (r *Runtime) resume(g *generator, sent Value, mode resumeMode) (Value, bool, error) {
 	res, err := r.resumeFull(g, sent, mode)
-	return res.value, res.done, err
+	return res.value, res.done(), err
 }
 
 // nextTree is g's tree, where next() on g can be made by resumeTree: g has
@@ -471,16 +503,16 @@ func (r *Runtime) resumeFull(g *generator, sent Value, mode resumeMode) (resumeR
 	}
 	switch g.state {
 	case genExecuting:
-		return resumeResult{value: Undefined, done: true}, r.throwTypeError("the generator is already running")
+		return resumeResult{value: Undefined, how: resumeDone}, r.throwTypeError("the generator is already running")
 	case genCompleted:
 		// A completed generator answers every request the same way.
 		switch mode {
 		case resumeThrow:
-			return resumeResult{value: Undefined, done: true}, r.throw(sent)
+			return resumeResult{value: Undefined, how: resumeDone}, r.throw(sent)
 		case resumeReturn:
-			return resumeResult{value: sent, done: true}, nil
+			return resumeResult{value: sent, how: resumeDone}, nil
 		}
-		return resumeResult{value: Undefined, done: true}, nil
+		return resumeResult{value: Undefined, how: resumeDone}, nil
 	}
 
 	// The body runs in the realm it was written in, as a call of it does,
@@ -505,22 +537,22 @@ func (r *Runtime) resumeFrame(g *generator, sent Value, mode resumeMode) (resume
 		switch mode {
 		case resumeReturn:
 			g.state = genCompleted
-			return resumeResult{value: sent, done: true}, nil
+			return resumeResult{value: sent, how: resumeDone}, nil
 		case resumeThrow:
 			g.state = genCompleted
-			return resumeResult{value: Undefined, done: true}, r.throw(sent)
+			return resumeResult{value: Undefined, how: resumeDone}, r.throw(sent)
 		}
 	}
 
 	if r.frameDepth >= r.maxFrames {
-		return resumeResult{value: Undefined, done: true}, r.throwRangeError("maximum call stack size exceeded")
+		return resumeResult{value: Undefined, how: resumeDone}, r.throwRangeError("maximum call stack size exceeded")
 	}
 
 	fn := g.cl.fn
 	// Only the operand stack needs a window; the locals live on the heap.
 	base := r.stackTop
 	if base+fn.MaxStack > len(r.stack) {
-		return resumeResult{value: Undefined, done: true}, r.throwRangeError("maximum call stack size exceeded")
+		return resumeResult{value: Undefined, how: resumeDone}, r.throwRangeError("maximum call stack size exceeded")
 	}
 	r.stackTop = base + fn.MaxStack
 	// What endTurn clears back to, as for any other frame.
@@ -630,9 +662,7 @@ func (r *Runtime) finishResume(g *generator, f *frame, base int,
 		g.state = genSuspendedYield
 		g.started = true
 		r.releaseGeneratorFrame(g, base)
-		res := resumeResult{
-			value: sig.value, await: sig.await, raw: sig.raw, delegate: sig.delegate,
-		}
+		res := resumeResult{value: sig.value, how: suspendHow(sig)}
 		if sig.delegate && !sig.raw && !g.async {
 			res.realm = g.cl.realm
 		}
@@ -646,9 +676,9 @@ func (r *Runtime) finishResume(g *generator, f *frame, base int,
 	g.stack = g.stack[:0]
 	r.releaseGeneratorFrame(g, base)
 	if err != nil {
-		return resumeResult{value: Undefined, done: true}, err
+		return resumeResult{value: Undefined, how: resumeDone}, err
 	}
-	return resumeResult{value: v, done: true}, nil
+	return resumeResult{value: v, how: resumeDone}, nil
 }
 
 // releaseGeneratorFrame pops a generator's frame without closing its upvalues,
@@ -906,7 +936,7 @@ func (r *Runtime) stepAsyncGenerator(g *generator, sent Value, mode resumeMode) 
 		return
 	}
 
-	if res.await {
+	if res.await() {
 		// An await is the generator's own business: settle the awaited value
 		// and resume, without the caller seeing anything.
 		r.awaitValue(res.value, g, awaitGenerator)
@@ -916,11 +946,11 @@ func (r *Runtime) stepAsyncGenerator(g *generator, sent Value, mode resumeMode) 
 	// A yield or a return settles the caller's promise with an iterator result.
 	// The yielded value is awaited first, so that `yield somePromise` produces
 	// the value rather than the promise.
-	if res.done {
+	if res.done() {
 		r.finishAsyncRequest(g, false, Obj(r.iterResult(res.value, true)))
 		return
 	}
-	if res.delegate {
+	if res.delegate() {
 		// `yield*` passes on what the delegate produced. Its result has
 		// already been awaited as a whole, and awaiting the value inside it
 		// again would unwrap a promise the delegate meant to hand over.

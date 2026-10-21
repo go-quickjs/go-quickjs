@@ -76,13 +76,13 @@ func init() {
 		if err != nil {
 			c.throw(err)
 		}
-		if got.raw && got.value.IsObject() {
+		if got.raw() && got.value.IsObject() {
 			c.stack[d] = got.value
 			return true
 		}
 		c.stack[d] = cur
 		c.stack[d+1] = got.value
-		if got.done {
+		if got.done() {
 			st.done = true
 		}
 		return true

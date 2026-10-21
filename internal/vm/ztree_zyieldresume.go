@@ -115,7 +115,7 @@ func init() {
 		f.detachSuspended()
 		r.frameDepth--
 		r.stackTop = base
-		res := resumeResult{value: s.value, await: s.await, raw: s.raw, delegate: s.delegate}
+		res := resumeResult{value: s.value, how: suspendHow(s)}
 		if s.delegate && !s.raw && !g.async {
 			// A value a yield* stepped a generator to (see delegateNext).
 			res.realm = cl.realm

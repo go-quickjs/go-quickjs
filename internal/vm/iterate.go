@@ -433,8 +433,8 @@ func (r *Runtime) stepIter(iter, next Value) (Value, bool, error) {
 					if err != nil {
 						return Undefined, false, err
 					}
-					if !got.raw || !got.value.IsObject() {
-						return got.value, !got.done, nil
+					if !got.raw() || !got.value.IsObject() {
+						return got.value, !got.done(), nil
 					}
 					res, have = got.value, true
 				}
