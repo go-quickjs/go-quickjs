@@ -567,6 +567,20 @@ func (r *Runtime) resumeFrame(g *generator, sent Value, mode resumeMode) (resume
 	if r.frameDepth >= r.maxFrames {
 		return resumeResult{value: Undefined, how: resumeDone}, r.throwRangeError("maximum call stack size exceeded")
 	}
+	if mode == resumeReturn && g.state == genSuspendedYield && returnsAtOnce(r, g) {
+		// A return at a yield that nothing between it and the top of the
+		// body sees -- no finally, no loop's iterator to close -- finishes
+		// the generator as its frame would, without one: what runGenerator
+		// does for it is to find neither, and finishResume to close the
+		// captures.
+		for _, u := range g.openUpvalues {
+			u.close()
+		}
+		g.openUpvalues = nil
+		g.state = genCompleted
+		g.stack = g.stack[:0]
+		return resumeResult{value: sent, how: resumeDone}, nil
+	}
 
 	fn := g.cl.fn
 	// Only the operand stack needs a window; the locals live on the heap.
@@ -639,6 +653,23 @@ func (r *Runtime) resumeFrame(g *generator, sent Value, mode resumeMode) (resume
 	}
 	g.state = genExecuting
 	return r.runGeneratorFrom(g, f, base, sp, sent, nil)
+}
+
+// returnsAtOnce reports whether a return injected at g's yield finishes g
+// with nothing run: g is not inside a yield*, which forwards it, has no
+// handler in force, of which a finally would run, and has no loop's cursor
+// on its stack, whose iterator would be closed; and nothing could see a
+// frame -- the runtime is not stopped, nor watched by a debugger.
+func returnsAtOnce(r *Runtime, g *generator) bool {
+	if g.delegating || len(g.handlers) != 0 || r.stopped != nil || r.debug != nil {
+		return false
+	}
+	for _, v := range g.stack {
+		if iterStateOf(v) != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // runDelegating resumes a generator suspended inside a `yield*`, where the
@@ -790,7 +821,7 @@ func (r *Runtime) initGeneratorBuiltins() {
 	next.fn().iterNext = iterNextGenerator
 	r.genNextFn = next
 
-	r.defMethod(p, "return", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	r.genReturnFn = r.defMethod(p, "return", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		g, err := rt.generatorOf(this, "Generator.prototype.return")
 		if err != nil {
 			return Undefined, err

@@ -1269,14 +1269,36 @@ func (r *Runtime) iterCloseNormal(cursor Value) error {
 	if !isCallable(ret) {
 		return r.throwTypeError("the iterator's return method is not callable")
 	}
-	res, err := r.call(ret, st.iter, nil)
+	obj, err := r.iterReturn(ret, st.iter)
 	if err != nil {
 		return err
 	}
-	if !res.IsObject() {
+	if !obj {
 		return r.throwTypeError("the iterator's return method must return an object")
 	}
 	return nil
+}
+
+// iterReturn calls ret, iter's return method, as a close calls it, and
+// reports whether it handed back an object. %GeneratorPrototype%.return of
+// this realm, on a generator, is applied directly, in its frame, without
+// the result object it would make, which a close does not read: it is an
+// object.
+func (r *Runtime) iterReturn(ret, iter Value) (bool, error) {
+	if n := r.genReturnFn; n != nil && ret.ref == unsafe.Pointer(n) && iter.IsObject() {
+		if it := iter.Object(); it.class == ClassGenerator {
+			if g, ok := it.dataOf().(*generator); ok {
+				if err := r.pushNativeFrame(n, iter, nil, Undefined); err != nil {
+					return false, err
+				}
+				_, err := r.resumeFull(g, Undefined, resumeReturn)
+				r.frameDepth--
+				return err == nil, err
+			}
+		}
+	}
+	res, err := r.call(ret, iter, nil)
+	return res.IsObject(), err
 }
 
 // unwalk makes st, an array walked in place (iterState's arr), the

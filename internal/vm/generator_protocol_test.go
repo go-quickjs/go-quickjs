@@ -41,6 +41,26 @@ var generatorCases = []struct{ name, want, src string }{
 		`function* g() { try { yield 1 } finally { return 'f' } } var it = g(); it.next(); JSON.stringify([it.return(5), it.next()])`},
 	{"returnNotStarted", `[{"value":3,"done":true},{"done":true}]0`,
 		`var log = []; function* g() { log.push('ran'); yield 1 } var it = g(); JSON.stringify([it.return(3), it.next()]) + log.length`},
+	{"returnNoFinally", `[{"value":7,"done":true},{"done":true},{"value":8,"done":true},false]false`,
+		`function* g() { yield 1; yield 2 } var it = g(); it.next(); var a = it.return(7); JSON.stringify([a, it.next(), it.return(8), it.throw === undefined]) + (a === it.return())`},
+	{"returnClosesCaptures", `1,2,{"done":true}`,
+		`function* g() { var x = 1; var f = () => x++; yield f; x = 10; yield 2 } var it = g(); var f = it.next().value; it.return(); [f(), f(), JSON.stringify(it.next())].join()`},
+	{"breakClosesCaptures", `0,1,2|{"value":3,"done":true}`,
+		`var fs = []; function* g() { for (let i = 0; i < 5; i++) { fs.push(() => i); yield i } } for (var v of g()) { if (v == 2) break } fs.map(f => f()).join() + '|' + JSON.stringify(g().return(3))`},
+	{"destructureCloses", `[1,1,2,{"done":true}]`,
+		`function* g() { yield 1; yield 2; yield 3 } var it = g(); var [a] = it; var [b, c] = g(); JSON.stringify([a, b, c, it.next()])`},
+	{"patchedReturn", `patched true 0,patched true 0|TypeError`,
+		`var log = []; function* g() { yield 1; yield 2 } var GP = Object.getPrototypeOf(g).prototype; var orig = GP.return; GP.return = function (v) { log.push('patched ' + (this instanceof g) + ' ' + arguments.length); return orig.call(this, v) }; for (var x of g()) break; var [y] = g(); GP.return = function () { return 5 }; var e; try { for (var x of g()) break } catch (err) { e = err.constructor.name } GP.return = orig; log.join() + '|' + e`},
+	{"returnGetter", `get,call`,
+		`var log = []; function* g() { yield 1 } var it = g(); Object.defineProperty(it, 'return', { get() { log.push('get'); return function () { log.push('call'); return {} } } }); for (var x of it) break; log.join()`},
+	{"returnTakeHelper", `0,1{"done":true}`,
+		`var log = []; function* g() { var i = 0; while (true) yield i++ } var it = g(); var r = it.take(2).toArray(); r.join() + JSON.stringify(it.next())`},
+	{"returnInsideCatch", `{"value":4,"done":true}0`,
+		`var log = []; function* g() { try { yield 1 } catch (e) { log.push('caught') } yield 2 } var it = g(); it.next(); JSON.stringify(it.return(4)) + log.length`},
+	{"returnArgumentsLeft", `[{"value":9,"done":true},{"done":true}]`,
+		`function* g(a) { var args = arguments; yield 1; yield args[0] } var it = g(5); it.next(); JSON.stringify([it.return(9), it.next()])`},
+	{"returnRunning", `TypeError{"done":true}`,
+		`var it; function* g() { yield it.return(1) } it = g(); var r; try { it.next() } catch (e) { r = e.constructor.name } r + JSON.stringify(it.next())`},
 	{"throwNotStarted", `t{"done":true}`,
 		`function* g() { try { yield 1 } catch (e) { yield 'caught' } } var it = g(); var r; try { it.throw(new Error('t')) } catch (e) { r = e.message } r + JSON.stringify(it.next())`},
 	{"throwCaught", `[{"value":"c7","done":false},{"value":1,"done":false},{"value":"c8","done":false},{"value":3,"done":true},{"done":true}]`,
@@ -63,6 +83,8 @@ var generatorCases = []struct{ name, want, src string }{
 		`function* i() { yield 1; yield 2; return 'r' } function* o() { var r = yield* i(); yield r } [...o()].join()`},
 	{"yieldStarBreak", `a,b,inner fin,outer fin`,
 		`var log = []; function* inner() { try { yield 'a'; yield 'b' } finally { log.push('inner fin') } } function* outer() { try { yield* inner(); yield 'c' } finally { log.push('outer fin') } } for (var v of outer()) { log.push(v); if (v == 'b') break } log.join()`},
+	{"yieldStarBreakNoFinally", `1,inner fin,plain return 1,{"done":true}`,
+		`var log = []; function* inner() { try { yield 1; yield 2 } finally { log.push('inner fin') } } function* outer() { yield* inner() } for (var v of outer()) { log.push(v); break } var plain = { [Symbol.iterator]() { return this }, next() { return { value: 'p', done: false } }, return(v) { log.push('plain return ' + arguments.length); return { done: true } } }; function* outer2() { yield* plain } var it = outer2(); it.next(); log.push(JSON.stringify(it.return(6))); log.join()`},
 	{"yieldStarThrow", `[{"value":"inner caught x","done":false},{"done":true}]`,
 		`function* inner() { try { yield 1 } catch (e) { yield 'inner caught ' + e } } function* outer() { yield* inner() } var it = outer(); it.next(); JSON.stringify([it.throw('x'), it.next()])`},
 	{"yieldStarNoThrow", `closed,TypeError`,
@@ -265,5 +287,64 @@ func TestHelperStepsAllocate(t *testing.T) {
 		if n > c.max {
 			t.Errorf("%s: %.0f allocations a call, past %.0f", c.name, n, c.max)
 		}
+	}
+}
+
+// TestGeneratorCloseAllocates pins that closing a generator a loop or a
+// destructuring leaves before its end makes nothing: its return is applied
+// without the result object it would make (iterReturn), and a return at a
+// yield nothing between it and the top of the body sees finishes the
+// generator without a frame or the signal a frame is given
+// (returnsAtOnce). A loop or a destructuring allocates its generator and
+// its cursor; each had made a result object and a return signal as well.
+func TestGeneratorCloseAllocates(t *testing.T) {
+	r := New(Config{})
+	defer r.Close()
+	if _, err := r.Run(compileForTest(t, `function* count(n) { for (var i = 0; i < n; i++) yield i }
+		function* pair(a, b) { yield a; yield b }
+		function destructure() { var [a] = pair(1, 2); return a }
+		function brk() { var s = 0; for (var v of count(10)) { if (v == 3) break; s += v } return s }`)); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name string
+		want Value
+	}{
+		{"destructure", Int(1)},
+		{"brk", Int(3)},
+	} {
+		fn, err := r.Run(compileForTest(t, c.name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := testing.AllocsPerRun(20, func() {
+			v, err := r.call(fn, Undefined, nil)
+			if err != nil || !v.SameValue(c.want) {
+				t.Fatalf("%s: %v, %v", c.name, v, err)
+			}
+		})
+		if n > 2 {
+			t.Errorf("%s: %.0f allocations a call, past 2", c.name, n)
+		}
+	}
+}
+
+// TestGeneratorReturnClosesCaptures pins that a generator a return
+// finishes at a yield, without a frame, detaches the captures of its
+// locals as its frame's end would: a closure that outlives it holds the
+// binding, not the generator's values.
+func TestGeneratorReturnClosesCaptures(t *testing.T) {
+	r := New(Config{})
+	defer r.Close()
+	v, err := r.Run(compileForTest(t, `function* g() { var x = 1; yield () => x++ } var it = g(); var f = it.next().value; it.return(); f`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ups := v.Object().fn().closure.upvalues
+	if len(ups) != 1 || ups[0].slot != &ups[0].closed {
+		t.Fatalf("the capture is not closed: %+v", ups)
+	}
+	if got, err := r.call(v, Undefined, nil); err != nil || !got.SameValue(Int(1)) {
+		t.Errorf("got %v, %v; want 1", got, err)
 	}
 }

@@ -513,6 +513,9 @@ type Realm struct {
 	// the function is, shared by every such object, since a
 	// non-configurable pair is never changed in place.
 	throwTypeErrorPair Value
+	// genReturnFn is %GeneratorPrototype%.return, which closing a loop
+	// over a generator need not call as a script calls it; see iterReturn.
+	genReturnFn *Object
 	jitRealmFields
 	genNextFn *Object
 }

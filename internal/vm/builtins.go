@@ -1967,7 +1967,7 @@ func (r *Runtime) closeIteratorErr(iter Value) error {
 	if !isCallable(ret) {
 		return nil
 	}
-	_, err = r.call(ret, iter, nil)
+	_, err = r.iterReturn(ret, iter)
 	return err
 }
 
