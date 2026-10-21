@@ -244,7 +244,7 @@ Array.prototype.forEach, reduce, map, filter and some, a typed array's forEach,
 String.prototype.indexOf and Array.prototype.indexOf, String's methods that
 run no script -- at, codePointAt, toUpperCase, trim, startsWith, padStart,
 repeat, slice, concat, String.fromCodePoint -- Math.imul, clz32, pow, atan2
-and hypot, BigInts' division,
+and hypot, a template and a chain of calls joined, BigInts' division,
 shifts, hashing, comparisons, powers, modular exponentiation, digits of
 pi and decimal strings --
 written as

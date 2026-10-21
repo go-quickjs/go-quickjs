@@ -527,6 +527,27 @@ function math_imul(n)
     return n;
 }
 
+/* a template of three parts and the strings between them */
+function string_template(n)
+{
+    var j, s = "id", r;
+    for (j = 0; j < n; j++)
+        r = `${s}:${j}-${j & 7}`;
+    global_res = r;
+    return n;
+}
+
+/* a chain of ten parts, calls among them, which the compiler joins in one
+   concat */
+function string_chain(n)
+{
+    var j, r;
+    for (j = 0; j < n; j++)
+        r = "<" + String(j) + ":" + String(j & 7) + ":" + String(j & 3) + ":" + String(j & 1) + ":" + String(j & 15) + ">";
+    global_res = r;
+    return n;
+}
+
 /* Math.clz32 of the counter, summed */
 function math_clz32(n)
 {
