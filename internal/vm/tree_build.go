@@ -103,6 +103,10 @@ type tbuilder struct {
 	// soleDone says it has been asked.
 	sole     uint64
 	soleDone bool
+	// privN is how many reads and writes of private members privateOp has
+	// counted in the code before privPC: the number of the next one's cache,
+	// past the function's PropSites (bytecode.Function.PrivateSites).
+	privPC, privN int
 }
 
 // target records a way from the block being built to the one at pc, whose

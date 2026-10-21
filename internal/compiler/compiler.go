@@ -568,6 +568,13 @@ func (c *compiler) finish() {
 		c.recordLocal(l)
 	}
 	copy(c.fn.Locals, c.pendingLocals)
+	// Each read and write of a private member has a cache of its own, as a
+	// property's has, counted here, in the finished code.
+	for _, in := range c.fn.Code {
+		if in.Op == bytecode.OpGetPrivate || in.Op == bytecode.OpSetPrivate {
+			c.fn.PrivateSites++
+		}
+	}
 }
 
 // release copies the function's tables out of the scratch they were built

@@ -82,6 +82,20 @@ var (
 	// suspendOp the rest. A member's key is the private name the class made,
 	// which a local or an upvalue of the function holds (see privateKey).
 	privateOp func(b *tbuilder, pc int, in bytecode.Instr, a, k uint32) (int, bool)
+
+	// privateRead is o.#name, the private member key k names, read where
+	// its site's cache's first entry had no answer: by one of its others,
+	// or as a plain data member -- a field, or a method, which is
+	// read-only -- which is then remembered for the objects of o's shape,
+	// as a plain property is (noteOwn). Anything else is read by
+	// getPrivate, which throws for an object without the member and calls
+	// an accessor's getter. Site 0 is none: the read is getPrivate's.
+	privateRead func(c *tctx, o Value, a, k, site uint32, pc int) Value
+
+	// privateWrite is o.#name = v where its site's cache had no answer, as
+	// privateRead is the read: a writable field is remembered and written,
+	// and anything else is written by setPrivate.
+	privateWrite func(c *tctx, o, v Value, a, k, site uint32, pc int)
 )
 
 func init() {
@@ -837,36 +851,177 @@ func init() {
 		return Str(out), nil
 	}
 
+	privateRead = func(c *tctx, o Value, a, k, site uint32, pc int) Value {
+		c.at(pc)
+		if !o.IsObject() {
+			c.throw(c.r.throwTypeError("cannot read a private member of %s", c.r.describe(o)))
+		}
+		ob, key := o.Object(), privateKey(c.f, c.cl, k)
+		if site != 0 {
+			// The entries the site remembers for objects of other shapes
+			// (poly) answer as its first does: a base class's members read
+			// from its subclasses' objects.
+			if e, h := c.ic[site].polyEntry(ob); h == ob && ob.shape.keys[e.idx].key == key {
+				return ob.vals[e.idx]
+			}
+			if i := ob.findOwn(key); i >= 0 && ob.shape.keys[i].flags&(propAccessor|propDeleted|propUninit) == 0 {
+				c.ic[site].noteOwn(ob, i)
+				return ob.vals[i]
+			}
+		}
+		v, err := c.r.getPrivate(ob, key, c.names[a])
+		if err != nil {
+			c.throw(err)
+		}
+		return v
+	}
+
+	privateWrite = func(c *tctx, o, v Value, a, k, site uint32, pc int) {
+		c.at(pc)
+		if !o.IsObject() {
+			c.throw(c.r.throwTypeError("cannot write a private member of %s", c.r.describe(o)))
+		}
+		ob, key := o.Object(), privateKey(c.f, c.cl, k)
+		if site != 0 {
+			if e, h := c.ic[site].polyEntry(ob); h == ob && ob.shape.keys[e.idx].key == key {
+				ob.vals[e.idx] = v
+				return
+			}
+			if i := ob.findOwn(key); i >= 0 &&
+				ob.shape.keys[i].flags&(propAccessor|propDeleted|propUninit|propWritable) == propWritable {
+				c.ic[site].noteOwn(ob, i)
+				ob.vals[i] = v
+				return
+			}
+		}
+		if err := c.r.setPrivate(ob, key, c.names[a], v); err != nil {
+			c.throw(err)
+		}
+	}
+
 	privateOp = func(b *tbuilder, pc int, in bytecode.Instr, a, k uint32) (int, bool) {
+		// A read or a write of a member has a cache of its own, as a
+		// property's has: the function's caches past its PropSites, one
+		// for each in the order of the code (bytecode.Function's
+		// PrivateSites), or none, site 0, where the function has none for
+		// it.
+		var site uint32
+		if in.Op == bytecode.OpGetPrivate || in.Op == bytecode.OpSetPrivate {
+			if pc < b.privPC {
+				b.privPC, b.privN = 0, 0
+			}
+			for ; b.privPC < pc; b.privPC++ {
+				if op := b.fn.Code[b.privPC].Op; op == bytecode.OpGetPrivate || op == bytecode.OpSetPrivate {
+					b.privN++
+				}
+			}
+			if n := uint32(b.privN); n < b.fn.PrivateSites {
+				site = b.fn.PropSites + 1 + n
+			}
+		}
 		switch in.Op {
 		case bytecode.OpPrivateName:
 			b.push(func(c *tctx) Value { return c.r.newPrivateName(c.names[a]) })
 		case bytecode.OpGetPrivate:
-			obj := b.pop().tree()
+			// An object of the shape the cache remembers has the member it
+			// remembers where it remembers it, if the key there is this
+			// one: a function's caches are its closures', which every
+			// evaluation of the class shares, each with names of its own.
+			obj := b.pop()
+			if site == 0 {
+				x := obj.tree()
+				b.push(func(c *tctx) Value { return privateRead(c, x(c), a, k, 0, pc) })
+				break
+			}
+			if obj.this {
+				b.push(func(c *tctx) Value {
+					if o := c.f.this; o.IsObject() {
+						ob := o.object()
+						if e := &c.ic[site]; ob.shape == e.ownShape {
+							var key Value
+							if k&1 == 0 {
+								key = c.locals[k>>1]
+							} else {
+								key = c.cl.upvalues[k>>1].get()
+							}
+							if s := key.Symbol(); s != nil && s.atoms == c.r.atoms && ob.shape.keys[e.idx].key == s.atom {
+								return ob.vals[e.idx]
+							}
+						}
+					}
+					return privateRead(c, c.f.this, a, k, site, pc)
+				})
+				break
+			}
+			x := obj.tree()
 			b.push(func(c *tctx) Value {
-				o := obj(c)
-				c.at(pc)
-				if !o.IsObject() {
-					c.throw(c.r.throwTypeError("cannot read a private member of %s", c.r.describe(o)))
+				o := x(c)
+				if o.IsObject() {
+					ob := o.object()
+					if e := &c.ic[site]; ob.shape == e.ownShape {
+						var key Value
+						if k&1 == 0 {
+							key = c.locals[k>>1]
+						} else {
+							key = c.cl.upvalues[k>>1].get()
+						}
+						if s := key.Symbol(); s != nil && s.atoms == c.r.atoms && ob.shape.keys[e.idx].key == s.atom {
+							return ob.vals[e.idx]
+						}
+					}
 				}
-				v, err := c.r.getPrivate(o.Object(), privateKey(c.f, c.cl, k), c.names[a])
-				if err != nil {
-					c.throw(err)
-				}
-				return v
+				return privateRead(c, o, a, k, site, pc)
 			})
 		case bytecode.OpSetPrivate:
-			val, obj := b.pop().tree(), b.pop().tree()
+			val, obj := b.pop().tree(), b.pop()
+			if site == 0 {
+				x := obj.tree()
+				return 0, b.stmt(func(c *tctx) {
+					o := x(c)
+					privateWrite(c, o, val(c), a, k, 0, pc)
+				})
+			}
+			if obj.this {
+				return 0, b.stmt(func(c *tctx) {
+					v := val(c)
+					if o := c.f.this; o.IsObject() {
+						ob := o.object()
+						if e := &c.ic[site]; ob.shape == e.ownShape {
+							var key Value
+							if k&1 == 0 {
+								key = c.locals[k>>1]
+							} else {
+								key = c.cl.upvalues[k>>1].get()
+							}
+							if s := key.Symbol(); s != nil && s.atoms == c.r.atoms && ob.shape.keys[e.idx].key == s.atom {
+								ob.vals[e.idx] = v
+								return
+							}
+						}
+					}
+					privateWrite(c, c.f.this, v, a, k, site, pc)
+				})
+			}
+			x := obj.tree()
 			return 0, b.stmt(func(c *tctx) {
-				o := obj(c)
+				o := x(c)
 				v := val(c)
-				c.at(pc)
-				if !o.IsObject() {
-					c.throw(c.r.throwTypeError("cannot write a private member of %s", c.r.describe(o)))
+				if o.IsObject() {
+					ob := o.object()
+					if e := &c.ic[site]; ob.shape == e.ownShape {
+						var key Value
+						if k&1 == 0 {
+							key = c.locals[k>>1]
+						} else {
+							key = c.cl.upvalues[k>>1].get()
+						}
+						if s := key.Symbol(); s != nil && s.atoms == c.r.atoms && ob.shape.keys[e.idx].key == s.atom {
+							ob.vals[e.idx] = v
+							return
+						}
+					}
 				}
-				if err := c.r.setPrivate(o.Object(), privateKey(c.f, c.cl, k), c.names[a], v); err != nil {
-					c.throw(err)
-				}
+				privateWrite(c, o, v, a, k, site, pc)
 			})
 		case bytecode.OpDefinePrivate, bytecode.OpDefinePrivateMethod,
 			bytecode.OpDefinePrivateGetter, bytecode.OpDefinePrivateSetter:

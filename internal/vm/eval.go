@@ -26,7 +26,7 @@ func (r *Runtime) prepare(fn *bytecode.Function) *closure {
 		cl.names[i] = r.atoms.intern(n)
 	}
 
-	cl.ic = newPropCaches(int(fn.PropSites))
+	cl.ic = newPropCaches(int(fn.PropSites) + int(fn.PrivateSites))
 	cl.consts = make([]Value, len(fn.Constants))
 	for i, c := range fn.Constants {
 		cl.consts[i] = r.materialize(c)
