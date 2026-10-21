@@ -58,7 +58,18 @@ func init() {
 			sp++
 		}
 
-		f := r.pushFrame()
+		// pushFrame, written out, as callTree writes it: called, it costs
+		// the call and the registers saved around it.
+		off := r.frameDepth - r.frameBase
+		if uint(off) >= uint(len(r.cur)) {
+			r.seekFrameBlock()
+			off = r.frameDepth - r.frameBase
+		}
+		r.frameDepth++
+		if r.frameDepth > r.frameHigh {
+			r.frameHigh = r.frameDepth
+		}
+		f := &r.cur[off]
 		locals := g.vals[g.nargs:]
 		f.cl = cl
 		f.locals = locals

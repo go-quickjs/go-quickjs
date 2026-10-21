@@ -387,7 +387,63 @@ const (
 func (r *Runtime) stepIter(iter, next Value) (Value, bool, error) {
 	var res Value
 	have := false
-	if next.IsObject() && iter.IsObject() {
+	if gn := r.genNextFn; gn != nil && next.ref == unsafe.Pointer(gn) && iter.IsObject() {
+		// A generator's next of this realm, which is the one next whose
+		// identity says so, found first: a loop over a generator steps
+		// it at every value.
+		if it := iter.Object(); it.class == ClassGenerator {
+			if g, ok := it.dataOf().(*generator); ok {
+				if err := r.tick(); err != nil {
+					return Undefined, false, err
+				}
+				// next's frame, as nativeFrame makes it, written out, its
+				// pushFrame too: called, each cost the call and the registers
+				// saved around it.
+				if r.frameDepth >= r.maxFrames {
+					return Undefined, false, r.throwRangeError("maximum call stack size exceeded")
+				}
+				off := r.frameDepth - r.frameBase
+				if uint(off) >= uint(len(r.cur)) {
+					r.seekFrameBlock()
+					off = r.frameDepth - r.frameBase
+				}
+				r.frameDepth++
+				if r.frameDepth > r.frameHigh {
+					r.frameHigh = r.frameDepth
+				}
+				f := &r.cur[off]
+				f.cl = nil
+				f.native = gn.fn().name
+				f.this = iter
+				f.newTarget = Undefined
+				f.callee = gn
+				f.args = nil
+				if len(f.handlers) != 0 {
+					f.handlers = f.handlers[:0]
+				}
+				if len(f.openUpvalues) != 0 {
+					f.openUpvalues = f.openUpvalues[:0]
+				}
+				var got resumeResult
+				var err error
+				ran := false
+				if t := g.nextTree(); t != nil {
+					got, ran, err = resumeTree(r, g, t, Undefined)
+				}
+				if !ran {
+					got, err = r.resumeFull(g, Undefined, resumeNext)
+				}
+				r.frameDepth--
+				if err != nil {
+					return Undefined, false, err
+				}
+				if !got.raw() || !got.value.IsObject() {
+					return got.value, !got.done(), nil
+				}
+				res, have = got.value, true
+			}
+		}
+	} else if next.IsObject() && iter.IsObject() {
 		n, it := next.Object(), iter.Object()
 		if fd := n.fn(); fd != nil && fd.iterNext != 0 && (fd.realm == nil || fd.realm == r.Realm) {
 			switch fd.iterNext {
@@ -411,33 +467,6 @@ func (r *Runtime) stepIter(iter, next Value) (Value, bool, error) {
 					v, ok, err := r.arrayIterStep(d)
 					r.frameDepth--
 					return v, ok, err
-				}
-			case iterNextGenerator:
-				if g, ok := it.dataOf().(*generator); ok && it.class == ClassGenerator {
-					// As pushNativeFrame, with the function already found.
-					if err := r.tick(); err != nil {
-						return Undefined, false, err
-					}
-					if err := r.nativeFrame(n, fd, iter, nil, Undefined); err != nil {
-						return Undefined, false, err
-					}
-					var got resumeResult
-					var err error
-					ran := false
-					if t := g.nextTree(); t != nil {
-						got, ran, err = resumeTree(r, g, t, Undefined)
-					}
-					if !ran {
-						got, err = r.resumeFull(g, Undefined, resumeNext)
-					}
-					r.frameDepth--
-					if err != nil {
-						return Undefined, false, err
-					}
-					if !got.raw() || !got.value.IsObject() {
-						return got.value, !got.done(), nil
-					}
-					res, have = got.value, true
 				}
 			case iterNextHelper:
 				// An iterator helper's next, whose value is its pipeline's
