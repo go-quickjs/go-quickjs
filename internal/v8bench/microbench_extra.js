@@ -996,3 +996,120 @@ function bigint_toString(n)
         global_res = (x + BigInt(j)).toString();
     return n;
 }
+
+/* validation: an e-mail pattern, anchored, tested against addresses good
+   and bad */
+function regexp_test(n)
+{
+    var j, c = 0, a = ["ada@example.com", "grace.hopper@navy.mil", "not an address",
+        "x@y", "linus+kernel@kernel.org", "@missing.user", "ken@bell-labs.com", "a.b@c.d.e"];
+    for (j = 0; j < n; j++)
+        if (/^[\w.+-]+@[\w-]+\.[\w.-]+$/.test(a[j & 7]))
+            c++;
+    global_res = c;
+    return n;
+}
+
+/* a tokenizer: a global pattern of alternatives with groups, exec in a
+   loop until it finds nothing; an operation is a call of exec */
+function regexp_exec_g(n)
+{
+    var j, m, c = 0, s = "for (var i = 0; i < 100; i += 2) total = total + f(i, 3.5);";
+    var re = /(\d+(?:\.\d+)?)|([A-Za-z_]\w*)|(\S)/g;
+    for (j = 0; j < n; j++) {
+        while ((m = re.exec(s)) !== null)
+            if (m[2] !== undefined)
+                c++;
+    }
+    global_res = c;
+    return n * 28;
+}
+
+/* a lexer: a sticky pattern, lastIndex carried from token to token; an
+   operation is a call of exec */
+function regexp_sticky(n)
+{
+    var j, m, c = 0, s = "let x = 10 * (y + 42) - z / 7;";
+    var re = /\s*(?:(\d+)|(\w+)|([^\s\w]))/y;
+    for (j = 0; j < n; j++) {
+        re.lastIndex = 0;
+        while ((m = re.exec(s)) !== null)
+            c += m[0].length;
+    }
+    global_res = c;
+    return n * 16;
+}
+
+/* a global replace by a template of groups */
+function regexp_replace_dollar(n)
+{
+    var j, r, s = "2024-01-15, 2025-12-31 and 1999-07-04";
+    for (j = 0; j < n; j++)
+        r = s.replace(/(\d+)-(\d+)-(\d+)/g, "$3/$2/$1");
+    global_res = r;
+    return n;
+}
+
+/* a global replace by a function: each word capitalized */
+function regexp_replace_fn(n)
+{
+    var j, r, s = "hello world, this is some text to capitalize";
+    for (j = 0; j < n; j++)
+        r = s.replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+    global_res = r;
+    return n;
+}
+
+/* a split on a pattern */
+function regexp_split(n)
+{
+    var j, r, s = "alpha, beta ,gamma,delta  ,  epsilon,zeta";
+    for (j = 0; j < n; j++)
+        r = s.split(/\s*,\s*/);
+    global_res = r;
+    return n;
+}
+
+/* match with a global pattern: every number in a string */
+function regexp_match_g(n)
+{
+    var j, r, s = "x=12 y=345 z=6 w=7890 v=1";
+    for (j = 0; j < n; j++)
+        r = s.match(/\d+/g);
+    global_res = r;
+    return n;
+}
+
+/* exec of a pattern of named groups, one of them read */
+function regexp_named(n)
+{
+    var j, m, c = 0, a = ["2024-01-15", "1999-12-31", "2000-02-29", "1970-01-01"];
+    for (j = 0; j < n; j++) {
+        m = /(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})/.exec(a[j & 3]);
+        c += m.groups.month.length;
+    }
+    global_res = c;
+    return n;
+}
+
+/* a case-insensitive pattern with the u flag, over text not all ASCII */
+function regexp_unicode(n)
+{
+    var j, c = 0, a = ["Ärger über Öl", "naïve café", "ΣΊΣΥΦΟΣ", "plain ascii"];
+    for (j = 0; j < n; j++)
+        if (/über|café|σίσυφος/iu.test(a[j & 3]))
+            c++;
+    global_res = c;
+    return n;
+}
+
+/* a pattern tested against a string made just before */
+function regexp_fresh(n)
+{
+    var j, c = 0;
+    for (j = 0; j < n; j++)
+        if (/^item-\d+[05]$/.test("item-" + j))
+            c++;
+    global_res = c;
+    return n;
+}

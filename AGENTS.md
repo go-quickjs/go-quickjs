@@ -246,7 +246,10 @@ run no script -- at, codePointAt, toUpperCase, trim, startsWith, padStart,
 repeat, slice, concat, String.fromCodePoint -- Math.imul, clz32, pow, atan2
 and hypot, a template and a chain of calls joined, BigInts' division,
 shifts, hashing, comparisons, powers, modular exponentiation, digits of
-pi and decimal strings --
+pi and decimal strings, regular expressions as programs use them --
+validating, tokenizing with a global and a sticky pattern, replacing by a
+template and by a function, splitting, matching every number, named
+groups, the u and i flags, a subject made just before --
 written as
 its tests are: each test is given
 the same work every run -- what QuickJS takes about 150 ms for, the work
