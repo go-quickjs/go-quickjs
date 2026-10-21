@@ -153,7 +153,14 @@ func init() {
 			s := key.String()
 			e := &r.keyAtoms[keySlot(s)]
 			if e.s != s {
-				return false, false
+				// Looked up, and its atom, or that it names none,
+				// remembered there (toPropertyName): two keys whose
+				// strings share a slot had each found the other's there
+				// at every evaluation, and left every one to inOperator,
+				// never remembered in hasCache.
+				if _, err := r.toPropertyName(key); err != nil || e.s != s {
+					return false, false
+				}
 			}
 			if e.none {
 				// A key no property has, while it names no atom, on a
