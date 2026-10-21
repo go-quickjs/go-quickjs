@@ -55,10 +55,12 @@ represent every application; see the [goja comparison](docs/benchmarks.md#v8-ver
 for the individual scores and measurement details.
 
 On the V8 benchmark suite as a whole it is ahead of C QuickJS: it takes 0.60
-times QuickJS's time over the suite and has a 24% higher composite score.
-Single operations cost a little less: QuickJS's own micro-benchmarks take
-0.93 times as long on average, though a few take about twice as long, the
-weak collections and BigInt arithmetic among them. See [Compared with C QuickJS](docs/benchmarks.md#compared-with-c-quickjs).
+times QuickJS's time over the suite and has a 24% higher composite score,
+and with the experimental JIT 0.35 times its time and a composite score 3.5
+times as high. Single operations cost a little less: QuickJS's own
+micro-benchmarks take 0.94 times as long on average, and 0.44 times with
+the JIT, though a few take about twice as long, the weak collections and an
+array grown by assigning past its end among them. See [Compared with C QuickJS](docs/benchmarks.md#compared-with-c-quickjs).
 
 ## Documentation
 
