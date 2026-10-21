@@ -34,6 +34,9 @@ func (r *Runtime) initStringBuiltins() {
 		o.extOf().data = s
 		return Obj(o), nil
 	})
+	// Called, of a primitive, applied without a frame, by every tier; a
+	// construction is never.
+	setElemOp(r, ctor, elemStringOf)
 
 	r.defMethod(ctor, "fromCharCode", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		// Each argument becomes one UTF-16 code unit, so this is the usual way

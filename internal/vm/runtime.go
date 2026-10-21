@@ -304,6 +304,11 @@ type Runtime struct {
 	// bigFree is the BigInts the tree tier has given back, for bigInPlace
 	// to make results in (bigRelease); nil until one is.
 	bigFree *bigFreeList
+	// leafFns are the built-ins with a frameless application past
+	// elemRandom (setElemOp), of every realm the runtime has made, for the
+	// JIT to know them by (jitPlainSet). At the end, so that no field the
+	// interpreter reads moves.
+	leafFns []*Object
 	// jitFields is the optional native tier's state, empty in builds
 	// without it. It comes after everything the interpreter reads, so that
 	// a build with the tier moves none of their offsets, and before the last

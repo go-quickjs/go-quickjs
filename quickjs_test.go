@@ -1590,6 +1590,23 @@ func TestDateUsesTheHostClock(t *testing.T) {
 	}
 }
 
+// TestDateNowLeafUsesTheHostClock pins that Date.now, which every tier
+// calls without a frame (a leaf), reads the clock the host installed: in a
+// loop the tree tier runs, and with the JIT, natively, in builds that have
+// it.
+func TestDateNowLeafUsesTheHostClock(t *testing.T) {
+	for _, opts := range [][]quickjs.Option{nil, {quickjs.WithJIT()}} {
+		rt := quickjs.New(opts...)
+		rt.SetClock(func() time.Time { return time.Unix(1700000000, 0) })
+		src := `function f(n) { let bad = 0, t = 0; for (let i = 0; i < n; i++) { t = Date.now(); if (t !== 1700000000000) bad++ } return bad + ':' + t }
+			let r; for (let k = 0; k < 50; k++) r = f(2000); r`
+		if got := evalString(t, rt, src); got != "0:1700000000000" {
+			t.Errorf("Date.now() in a loop = %s, want the injected time at every call", got)
+		}
+		rt.Close()
+	}
+}
+
 func TestRegExp(t *testing.T) {
 	tests := []struct{ src, want string }{
 		{`/ab/.test("xaby")`, "true"},

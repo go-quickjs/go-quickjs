@@ -1155,7 +1155,7 @@ func (r *Runtime) initArrayBuiltins() {
 
 	// A pure body may call push and pop without a frame.
 	for name, op := range map[string]uint8{"push": elemPush, "pop": elemPop} {
-		p.getOwn(r.atoms.intern(name)).value().Object().fn().elemOp = op
+		setElemOp(r, p.getOwn(r.atoms.intern(name)).value().Object(), op)
 	}
 
 	r.defMethod(p, "shift", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -2539,7 +2539,7 @@ func (r *Runtime) initMathBuiltins() {
 	})
 	// It calls nothing and cannot throw: a call applies it without a frame
 	// (collectionOp).
-	r.randomFn.fn().elemOp = elemRandom
+	setElemOp(r, r.randomFn, elemRandom)
 }
 
 // coerceAll converts every argument to a number, in the order they were

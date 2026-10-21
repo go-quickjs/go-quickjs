@@ -554,9 +554,9 @@ func (r *Runtime) initMapBuiltins() {
 		return Undefined, nil
 	})
 
-	// get, has and set are applied without a frame where they can be.
-	for name, op := range map[string]uint8{"get": elemMapGet, "has": elemMapHas, "set": elemMapSet} {
-		p.getOwn(r.atoms.intern(name)).value().Object().fn().elemOp = op
+	// get, has, set and delete are applied without a frame where they can be.
+	for name, op := range map[string]uint8{"get": elemMapGet, "has": elemMapHas, "set": elemMapSet, "delete": elemMapDelete} {
+		setElemOp(r, p.getOwn(r.atoms.intern(name)).value().Object(), op)
 	}
 
 	r.defMapIterator(p, ClassMap, "entries", mapIterEntries)
@@ -608,9 +608,10 @@ func (r *Runtime) initSetBuiltins() {
 		_, ok := m.get(rt, arg(args, 0))
 		return Bool(ok), nil
 	})
-	// add and has are applied without a frame where they can be.
+	// add and has are applied without a frame where they can be, and delete
+	// once it is made.
 	for name, op := range map[string]uint8{"add": elemSetAdd, "has": elemSetHas} {
-		p.getOwn(r.atoms.intern(name)).value().Object().fn().elemOp = op
+		setElemOp(r, p.getOwn(r.atoms.intern(name)).value().Object(), op)
 	}
 	r.defMethod(p, "delete", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		m, err := rt.mapOf(this, ClassSet, "Set.prototype.delete")
@@ -619,6 +620,7 @@ func (r *Runtime) initSetBuiltins() {
 		}
 		return Bool(m.delete(arg(args, 0))), nil
 	})
+	setElemOp(r, p.getOwn(r.atoms.intern("delete")).value().Object(), elemSetDelete)
 	r.defMethod(p, "clear", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		m, err := rt.mapOf(this, ClassSet, "Set.prototype.clear")
 		if err != nil {
@@ -754,6 +756,10 @@ func (r *Runtime) initWeakCollections() {
 		}
 		return Bool(m.delete(arg(args, 0))), nil
 	})
+	// A WeakMap's methods are applied without a frame where they can be.
+	for name, op := range map[string]uint8{"get": elemWeakMapGet, "has": elemWeakMapHas, "set": elemWeakMapSet, "delete": elemWeakMapDelete} {
+		setElemOp(r, wmProto.getOwn(r.atoms.intern(name)).value().Object(), op)
+	}
 	r.defToStringTag(wmProto, "WeakMap")
 
 	wsProto := newObject(r.proto.object, ClassObject)
@@ -801,6 +807,10 @@ func (r *Runtime) initWeakCollections() {
 		}
 		return Bool(s.delete(arg(args, 0))), nil
 	})
+	// A WeakSet's methods are applied without a frame where they can be.
+	for name, op := range map[string]uint8{"has": elemWeakSetHas, "add": elemWeakSetAdd, "delete": elemWeakSetDelete} {
+		setElemOp(r, wsProto.getOwn(r.atoms.intern(name)).value().Object(), op)
+	}
 	r.defToStringTag(wsProto, "WeakSet")
 }
 

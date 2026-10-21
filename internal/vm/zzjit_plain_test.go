@@ -6,11 +6,13 @@ import "testing"
 
 // plainSetup's functions make the calls of Go a call from native code makes
 // without a frame where they run nothing (jitGoCallPlain): a Map's and a
-// Set's get, has, set, add and delete, String(x) of every kind of
+// Set's get, has, set, add and delete, a WeakMap's and a WeakSet's, of
+// objects and an unregistered symbol, Date.now, String(x) of every kind of
 // primitive, an array's length written, a write a site's cache answers --
 // and, beside each, what still needs the frame: a receiver of the wrong
-// kind, an object whose toString runs, a length that is no length or not
-// writable, a setter, a read-only property.
+// kind, a key a weak collection takes none of, an object whose toString
+// runs, a length that is no length or not writable, a setter, a read-only
+// property.
 const plainSetup = `
 	function mapLoop(m, n) { let s = 0; for (let i = 0; i < n; i++) { if (m.set(i % 7, i) !== m) s -= 1000; if (m.has(i % 9)) s += m.get(i % 9); if (m.delete(i % 11)) s += 100 } return s }
 	function maps(n) {
@@ -44,6 +46,22 @@ const plainSetup = `
 	class WithSetter { set v(x) { this._v = x * 2 } }
 	function setter(n) { const o = new WithSetter(); for (let i = 0; i < n; i++) o.v = i; return o._v }
 	function readOnly(n) { const o = Object.defineProperty({}, 'x', { value: 1, writable: false }); for (let i = 0; i < n; i++) o.x = i; return o.x }
+	function weakLoop(m, keys, n) { let s = 0; for (let i = 0; i < n; i++) { const k = keys[i % keys.length]; if (m.set(k, i) !== m) s -= 1000; if (m.has(keys[(i + 1) % keys.length])) s += m.get(k); if (i % 5 === 0 && m.delete(k)) s += 100 } return s }
+	function weaks(n) {
+		const keys = []; for (let i = 0; i < 7; i++) keys.push({ i });
+		const m = new WeakMap(); const r = weakLoop(m, keys, n);
+		const sym = Symbol('u'); m.set(sym, 'S');
+		return r + ':' + m.has(keys[0]) + ':' + m.get(keys[1]) + ':' + m.get({}) + ':' + m.has(sym) + ':' + m.get(sym) + ':' + m.delete({}) + ':' + m.delete(sym) + ':' + m.has(sym)
+	}
+	function weakSetLoop(st, keys, n) { let c = 0; for (let i = 0; i < n; i++) { const k = keys[i % keys.length]; if (st.add(k) !== st) c -= 1000; if (st.has(keys[(i + 2) % keys.length])) c++; if (i % 4 === 0 && st.delete(k)) c += 100 } return c }
+	function weakSets(n) { const keys = []; for (let i = 0; i < 5; i++) keys.push([i]); const st = new WeakSet(); const r = weakSetLoop(st, keys, n); return r + ':' + st.has(keys[0]) + ':' + st.has({}) + ':' + st.delete({}) }
+	function weakErrors() {
+		const out = [];
+		for (const f of [() => new WeakMap().set(1, 1), () => new WeakMap().set(Symbol.for('r'), 1), () => new WeakSet().add('s'), () => WeakMap.prototype.get.call(new Map(), {}), () => WeakSet.prototype.has.call(new WeakMap(), {}), () => WeakMap.prototype.set.call({}, {}, 1)])
+			try { f(); out.push('no') } catch (e) { out.push(e.constructor.name) }
+		return out.join(',') + ':' + new WeakMap().get(1) + ':' + new WeakMap().has(1) + ':' + new WeakMap().delete(1) + ':' + new WeakSet().has(1)
+	}
+	function dateLoop(n) { let t = 0, ok = true; for (let i = 0; i < n; i++) { const d = Date.now(); if (d < t) ok = false; t = d } return ok && typeof t === 'number' && Number.isInteger(t) }
 `
 
 // plainRounds are plainSetup's calls and their answers, Node's
@@ -63,6 +81,10 @@ var plainRounds = [][2]string{
 	{`writes(30)`, `{"a":12,"b":2,"c":3,"d":4,"e":5,"f":6,"g":7,"h":8,"i":9,"j":10,"k":11}`},
 	{`setter(30)`, `58`},
 	{`readOnly(30)`, `1`},
+	{`weaks(30)`, `940:true:29:undefined:true:S:false:true:false`},
+	{`weakSets(30)`, `820:true:false:false`},
+	{`weakErrors()`, `TypeError,TypeError,TypeError,TypeError,TypeError,TypeError:undefined:false:false:false`},
+	{`dateLoop(30)`, `true`},
 }
 
 // A call of Go from native code that runs nothing -- a collection's
@@ -93,13 +115,25 @@ func TestJITPlainGoCalls(t *testing.T) {
 			t.Errorf("%s = %s, want %s", round[0], got, round[1])
 		}
 	}
-	// A Map's and a Set's methods are read once in each invocation, by Go:
-	// a call of Go with its frame at an entry at most, against the thirty
-	// turns of each loop's.
-	for _, name := range []string{"mapLoop", "setLoop", "stringLoop", "lengthLoop", "writeLoop"} {
-		e := jitNativeForTest(t, r, name)
-		if e.ssaStats.goCalls > e.ssaStats.entries || e.ssaStats.hosts != 0 {
-			t.Errorf("%s made %d calls of Go with frames in %d entries and left its code %d times", name, e.ssaStats.goCalls, e.ssaStats.entries, e.ssaStats.hosts)
+	// A collection's methods are read once in each invocation, by Go: a
+	// call of Go with its frame at most in a round, which invokes its loop
+	// once, against the thirty turns of each loop's -- counted over one
+	// more round each, warm, as a loop compiled late counts those of its
+	// warm-up too, and a caller compiled since calls it natively, no entry
+	// of its own.
+	for _, c := range [][2]string{
+		{"mapLoop", "maps(30)"}, {"setLoop", "sets(30)"}, {"stringLoop", "strings(30)"},
+		{"lengthLoop", "lengths(30)"}, {"writeLoop", "writes(30)"}, {"weakLoop", "weaks(30)"},
+		{"weakSetLoop", "weakSets(30)"}, {"dateLoop", "dateLoop(30)"},
+	} {
+		e := jitNativeForTest(t, r, c[0])
+		calls, entries, hosts := e.ssaStats.goCalls, e.ssaStats.entries, e.ssaStats.hosts
+		if _, err := r.Run(compileForTest(t, c[1])); err != nil {
+			t.Fatalf("%s: %v", c[1], err)
+		}
+		calls, entries, hosts = e.ssaStats.goCalls-calls, e.ssaStats.entries-entries, e.ssaStats.hosts-hosts
+		if calls > 1 || hosts != 0 {
+			t.Errorf("%s made %d calls of Go with frames in a round (%d entries) and left its code %d times", c[0], calls, entries, hosts)
 		}
 	}
 }

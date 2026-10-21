@@ -15,9 +15,10 @@ import (
 // jitGoCall and jitGoCallNested give a call that may -- as the tree
 // tier makes these without a frame (callRest's pureElemOp, setProp's fast
 // paths), and as V8's code calls a builtin that cannot call back without a
-// frame of JavaScript's: a Map's or a Set's get, has, set, add or delete
-// on a Map or a Set (jitCollectionCall); String(x) of a primitive; a write
-// a site's cache answers with a data property or an addition along its
+// frame of JavaScript's: a leaf's call (jitPlainCall) -- a Map's or a
+// Set's get, has, set, add or delete, a WeakMap's or a WeakSet's
+// operations, Date.now, String(x) of a primitive; a write a site's cache
+// answers with a data property or an addition along its
 // transition, or of an array's length (jitPlainWrite). Each had cost a
 // call of Go its frame, its operands copied and cleared, its code pinned
 // and its learning asked, more than what the existing tiers spend on the
@@ -90,12 +91,12 @@ func (r *Runtime) jitGoCallPlain(ctx *abi.Context) bool {
 // jitPlainCall is the result of the call of a built-in among its operands
 // (abi.GoCallMethod's receiver, the function, the arguments; a plain
 // call's the function and the arguments) where it runs nothing and throws
-// nothing: a collection's lookup, addition or deletion on its own kind of
-// collection (jitCollectionCall), or String(x) of a primitive -- a
-// symbol's description included, which only String's call converts. The
-// function is one of jitPlainFns (jitGoCallPlain has asked jitPlainFn),
-// the realm's own built-ins, of none of which anything is to be asked. It
-// reports false for any other call.
+// nothing: a leaf's (jitLeafOp), applied as every tier applies it without
+// a frame (pureElemOp) -- a collection's lookup, addition or deletion on
+// its own kind of collection, a weak one's, Date.now, String(x) of a
+// primitive. The function is one of jitPlainSet's (jitGoCallPlain has
+// asked jitPlainFn), a built-in of this realm. It reports false for any
+// other call, which the built-in, called with its frame, is left to make.
 func (r *Runtime) jitPlainCall(ctx *abi.Context, in bytecode.Instr, n int) (Value, bool) {
 	argc := int(in.A)
 	first := 1
@@ -110,62 +111,32 @@ func (r *Runtime) jitPlainCall(ctx *abi.Context, in bytecode.Instr, n int) (Valu
 	if !callee.IsObject() {
 		return Undefined, false
 	}
-	o := callee.Object()
-	if o == r.jitStringCtor {
-		// As the constructor's call converts it, of a primitive: nothing
-		// runs, nothing throws.
-		if r.meter != nil {
-			return Undefined, false
-		}
-		if argc == 0 {
-			return Str(emptyString), true
-		}
-		x := jitGoArg(ctx, first)
-		switch {
-		case x.IsObject():
-			return Undefined, false
-		case x.IsSymbol():
-			return Str(NewString(x.Symbol().String())), true
-		}
-		s, err := r.toString(x)
-		if err != nil {
-			return Undefined, false
-		}
-		return Str(s), true
-	}
-	if in.Op != bytecode.OpCallMethod || argc > 2 {
+	fd := callee.Object().fn()
+	if fd == nil || !jitLeafOp(fd.elemOp) || fd.realm != nil && fd.realm != r.Realm {
 		return Undefined, false
 	}
-	var args [2]Value
-	for i := range argc {
-		args[i] = jitGoArg(ctx, first+i)
+	// The arguments where native code put them, each a Value's words
+	// (jitGoArg), read in place: no leaf keeps them, and each operand's
+	// source holds it meanwhile. Copied into an array of this frame's, they
+	// had escaped to the heap at every call -- a leaf is called through a
+	// function's value (leafOps) -- which made Date.now's calls 2.5 times
+	// slower; into the runtime's, a Map's calls paid the collector's write
+	// barrier to clear them.
+	args := unsafe.Slice((*Value)(unsafe.Pointer(&ctx.GoArgs[first])), argc)
+	// Straight to what applies it, past pureElemOp's and collectionOp's
+	// questions, which ask what this has asked (jitLeafOp).
+	if op := fd.elemOp; op > elemRandom {
+		return leafOps[op](r, this, args, true)
 	}
-	return r.jitCollectionCall(o, this, args[:argc])
+	return r.collectionOp(fd.elemOp, this, args, true)
 }
 
-// jitCollectionCall is Map.prototype's get, has, set and delete, or
-// Set.prototype's has, add and delete, the realm's, o, called on this with
-// args, applied as the tree tier applies them without a frame
-// (collectionOp), on a Map or a Set as each asks its receiver to be: a
-// lookup, an addition or a deletion calls nothing a script wrote and
-// cannot throw. It reports false for any other function or receiver,
-// which the built-in is left to refuse.
-func (r *Runtime) jitCollectionCall(o *Object, this Value, args []Value) (Value, bool) {
-	if o != r.jitMapDelete && o != r.jitSetDelete {
-		if fd := o.fn(); fd != nil && fd.elemOp >= elemMapGet && fd.elemOp <= elemSetAdd {
-			return r.collectionOp(fd.elemOp, this, args, true)
-		}
-		return Undefined, false
-	}
-	if !this.IsObject() {
-		return Undefined, false
-	}
-	c := this.Object()
-	m, ok := c.dataOf().(*jsMap)
-	if !ok || o == r.jitMapDelete && c.class != ClassMap || o == r.jitSetDelete && c.class != ClassSet {
-		return Undefined, false
-	}
-	return Bool(m.delete(arg(args, 0))), true
+// jitLeafOp reports whether native code's call of a built-in of frameless
+// application op (elemOp) is made without a frame (jitGoCallPlain): any
+// but push, pop and Math.random, whose native forms the JIT learns at the
+// calls of Go jitGoCall makes (jitCallSeen).
+func jitLeafOp(op uint8) bool {
+	return op != 0 && op != elemPush && op != elemPop && op != elemRandom
 }
 
 // jitMaybePlain reports, of a call of Go native code makes (ssa.GoCall),
@@ -187,7 +158,7 @@ func (r *Runtime) jitMaybePlain(ctx *abi.Context) bool {
 }
 
 // jitPlainFn reports whether ref, a call's function's pointer word, is one
-// of jitPlainFns, the functions jitPlainCall calls (jitPlainSet).
+// of the leaves jitPlainCall calls (jitPlainSet).
 func (r *Runtime) jitPlainFn(ref uintptr) bool {
 	set := &r.jitPlainSet
 	for i := jitPlainSlot(ref); set[i] != 0; i = (i + 1) % len(set) {

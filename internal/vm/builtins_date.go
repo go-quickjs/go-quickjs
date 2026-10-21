@@ -169,6 +169,8 @@ func (r *Runtime) initDateBuiltins() {
 	r.defMethod(ctor, "now", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		return Float(rt.now()), nil
 	})
+	// Applied without a frame, by every tier.
+	setElemOp(r, ctor.getOwn(r.atoms.intern("now")).value().Object(), elemDateNow)
 	r.defMethod(ctor, "parse", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		s, err := rt.toString(arg(args, 0))
 		if err != nil {

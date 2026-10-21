@@ -20,6 +20,9 @@ func (r *Runtime) collectionOp(op uint8, this Value, args []Value, mayStore bool
 		}
 		return Float(r.random()), true
 	}
+	if op > elemRandom {
+		return leafOps[op](r, this, args, mayStore)
+	}
 	if !this.IsObject() {
 		return Undefined, false
 	}

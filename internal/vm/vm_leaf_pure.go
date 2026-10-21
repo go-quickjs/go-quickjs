@@ -519,9 +519,12 @@ func (r *Runtime) pureConstruct(callee Value, args []Value) (Value, bool) {
 	return Obj(obj), true
 }
 
-// The built-in array methods a pure body may call without a frame, and the
-// collections' lookups and additions, which a call applies as it does
-// them (collectionOp).
+// The built-ins every tier calls without a frame, as they call nothing and
+// cannot throw where they are applied (elemOp): the array methods a pure
+// body may call, the collections' lookups and additions (collectionOp), and
+// the leaves past elemRandom (leafOps) -- the collections' deletions, the
+// weak ones' operations, Date.now, String of a primitive. Each declares its
+// own where it is made (setElemOp).
 const (
 	elemPush = iota + 1
 	elemPop
@@ -531,6 +534,17 @@ const (
 	elemSetHas
 	elemSetAdd
 	elemRandom
+	elemMapDelete
+	elemSetDelete
+	elemDateNow
+	elemWeakMapGet
+	elemWeakMapHas
+	elemWeakMapSet
+	elemWeakMapDelete
+	elemWeakSetHas
+	elemWeakSetAdd
+	elemWeakSetDelete
+	elemStringOf
 )
 
 // pureElemOp is the built-in push or pop called from a pure body, where it
