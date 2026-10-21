@@ -1061,11 +1061,51 @@ func (o *Object) insertProp(at int, p Property) {
 }
 
 func (o *Object) appendProp(p Property) {
-	if o.flags&objInlineProps != 0 && len(o.vals) == cap(o.vals) {
-		o.leaveInlineProps(1)
+	if len(o.vals) == cap(o.vals) {
+		o.outgrowProps()
 	}
 	o.vals = append(o.vals, p.value)
 	o.shapeAdded(propKey{p.key, p.flags})
+}
+
+// outgrowProps is called as the object's table, full, is given one more
+// property. Properties in the room its allocation carries leave it
+// (leaveInlineProps); a table of its own is grown by the append, and the
+// root of its layout, if it is an object literal's or a constructor's,
+// notes the room its objects come to need, so that the next are made
+// with it (tbuilder's OpNewObject, roomFor), as V8's slack tracking sizes
+// a constructor's objects by what its first ones came to have: this
+// object's properties and the one it is given, or, if more, what the
+// objects before it came to along the transitions it is following, the
+// first out of each layout (shape.next). An object literal's objects
+// given twenty properties had each been made with room for nine, then
+// grown to eighteen and to thirty-six.
+//
+// Not a class's root, which sizes no object, and not for a keyed store's
+// object, which, past the soft limit, is a dictionary (shapeAdded), and
+// whose root's room says how many keys the store adds before then:
+// taught by each object of a site used as a table of names, it would
+// have let each go further than the last.
+func (o *Object) outgrowProps() {
+	if o.flags&objInlineProps != 0 {
+		o.leaveInlineProps(1)
+		return
+	}
+	s := o.shape
+	if s == nil || s.unique || s.loose || s.tree.keyed == o {
+		return
+	}
+	root := s.root()
+	if root == s.tree.roots[o.class] {
+		return
+	}
+	n := len(o.vals) + 1
+	for c := s.next; c != nil && n < maxRoom; c = c.next {
+		n = int(c.n)
+	}
+	if n > int(root.slack) {
+		root.slack = uint8(min(n, maxRoom))
+	}
 }
 
 // deleteOwn removes an own property, reporting whether it existed and was

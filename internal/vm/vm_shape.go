@@ -725,8 +725,8 @@ func (o *Object) transition(key Atom, flags propFlags) *shape {
 // appendTransition appends the value of a property the object is known not
 // to have, giving it the shape transition found for it, which has its key.
 func (o *Object) appendTransition(v Value, next *shape) {
-	if o.flags&objInlineProps != 0 && len(o.vals) == cap(o.vals) {
-		o.leaveInlineProps(1)
+	if len(o.vals) == cap(o.vals) {
+		o.outgrowProps()
 	}
 	o.vals = append(o.vals, v)
 	o.shape = next
