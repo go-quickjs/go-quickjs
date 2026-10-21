@@ -302,7 +302,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		if in.Op == bytecode.OpNew && !m.ssa || (in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict ||
 			in.Op == bytecode.OpCheckGlobalRef || in.Op == bytecode.OpAssertResolved ||
 			in.Op == bytecode.OpNewObject || in.Op == bytecode.OpNewRegExp || in.Op == bytecode.OpDefineField || in.Op == bytecode.OpPushEmptyString ||
-			in.Op == bytecode.OpConcat || in.Op == bytecode.OpSetUpvalue || in.Op == bytecode.OpSetUpvalueCheck || in.Op == bytecode.OpInitUpvalue) && !m.ssa {
+			in.Op == bytecode.OpConcat || in.Op == bytecode.OpToString || in.Op == bytecode.OpSetUpvalue || in.Op == bytecode.OpSetUpvalueCheck || in.Op == bytecode.OpInitUpvalue) && !m.ssa {
 			// The new pipeline constructs natively (mir's native calls),
 			// and assigns to a global natively where the VM knows it, Go
 			// otherwise; the old one does neither.
@@ -384,7 +384,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
 		host = host || str || iters || isPrivate(in.Op) || isDefinition(in.Op) || in.Op == bytecode.OpClosure || in.Op == bytecode.OpCloseUpvalues || in.Op == bytecode.OpImport || in.Op == bytecode.OpImportMeta || in.Op == bytecode.OpYield || in.Op == bytecode.OpAwait || in.Op == bytecode.OpThrow ||
-			in.Op == bytecode.OpNewDisposeCapability || in.Op == bytecode.OpAddDisposable || in.Op == bytecode.OpDispose || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpIn || in.Op == bytecode.OpDeleteProp || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpApplyArguments || in.Op == bytecode.OpNew || in.Op == bytecode.OpSuperCall || in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict || in.Op == bytecode.OpCheckGlobalRef || in.Op == bytecode.OpNewObject || in.Op == bytecode.OpNewRegExp || in.Op == bytecode.OpDefineField || in.Op == bytecode.OpPushEmptyString || in.Op == bytecode.OpConcat || in.Op == bytecode.OpNewArray || in.Op == bytecode.OpCall || in.Op == bytecode.OpCallMethod || in.Op == bytecode.OpTailCall || in.Op == bytecode.OpTailCallMethod || in.Op == bytecode.OpGetGlobal || in.Op == bytecode.OpGetGlobalOpt || in.Op == bytecode.OpGetPropThis || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
+			in.Op == bytecode.OpNewDisposeCapability || in.Op == bytecode.OpAddDisposable || in.Op == bytecode.OpDispose || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpIn || in.Op == bytecode.OpDeleteProp || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpApplyArguments || in.Op == bytecode.OpNew || in.Op == bytecode.OpSuperCall || in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict || in.Op == bytecode.OpCheckGlobalRef || in.Op == bytecode.OpNewObject || in.Op == bytecode.OpNewRegExp || in.Op == bytecode.OpDefineField || in.Op == bytecode.OpPushEmptyString || in.Op == bytecode.OpConcat || in.Op == bytecode.OpToString || in.Op == bytecode.OpNewArray || in.Op == bytecode.OpCall || in.Op == bytecode.OpCallMethod || in.Op == bytecode.OpTailCall || in.Op == bytecode.OpTailCallMethod || in.Op == bytecode.OpGetGlobal || in.Op == bytecode.OpGetGlobalOpt || in.Op == bytecode.OpGetPropThis || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		property = property || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		// A derived constructor's this slot is what it returns, bound by
 		// its super() (ir.Program's DerivedConstructor).
@@ -661,11 +661,18 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 				n := int(b.A)
 				p.Code[pc] = ir.Instruction{Op: ir.ArrayLiteral, Dest: p.Locals + p.Maps[pc].Depth - n, Extra: n}
 			}
-			if b := fn.Code[pc]; in.Op == ir.Host && b.Op == bytecode.OpConcat && b.A <= ir.MaxStringConcat && p.Maps[pc].Depth >= 0 {
+			if b := fn.Code[pc]; in.Op == ir.Host && b.Op == bytecode.OpConcat && p.Maps[pc].Depth >= 0 {
 				// A template's or a string chain's parts joined: the new
 				// pipeline has Go join them, called from native code.
 				n := int(b.A)
 				p.Code[pc] = ir.Instruction{Op: ir.StringConcat, Dest: p.Locals + p.Maps[pc].Depth - n, Extra: n}
+			}
+			if b := fn.Code[pc]; in.Op == ir.Host && b.Op == bytecode.OpToString && p.Maps[pc].Depth >= 1 {
+				// A template's part converted where it is, as a concat of
+				// one part converts it -- an object's or a symbol's left to
+				// Go -- before the next part is computed; nothing, where
+				// the part is a string already (stringConcats).
+				p.Code[pc] = ir.Instruction{Op: ir.StringConcat, Dest: p.Locals + p.Maps[pc].Depth - 1, Extra: 1}
 			}
 			if in.Op == ir.BindingRead {
 				// No operand: native code reads the binding where the
@@ -682,6 +689,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			}
 		}
 		stringConcats(p, m.hints.StringReads)
+		stringParts(p, fn)
 		markBools(p)
 		p.UpvalueBase, p.Upvalues, p.Params = fn.LocalCount, len(fn.Upvalues), fn.ParamCount
 		if captured {
@@ -946,6 +954,86 @@ func hintedStringAdds(p *ir.Program, pcs []int32) {
 	}
 }
 
+// stringParts makes each conversion of a concat's part -- a template's
+// to_string (a StringConcat of one part), a chain's ” + part (a StringAdd
+// of the empty string) -- a StringPart where the concat alone reads its
+// string: the concat converts a primitive that calls nothing the same, so
+// the part needs only checking to be one, not a call of Go of its own --
+// which, a template's part's and a chain's each, had made a loop building
+// strings slower natively than in the tree tier. Where anything could
+// read the string first, or change the part's slot, or the code could go
+// elsewhere -- a jump to between them, the stack gone below the slot, an
+// operand or a result there -- it stays as it is.
+func stringParts(p *ir.Program, fn *bytecode.Function) {
+	targets := make([]bool, len(p.Code)+1)
+	for _, in := range p.Code {
+		if in.Op == ir.Jump || in.Op == ir.Branch {
+			targets[in.Target] = true
+		}
+	}
+	empty := make([]bool, p.Locals+p.StackSize)
+	set := func(i int, v bool) {
+		if i >= 0 && i < len(empty) {
+			empty[i] = v
+		}
+	}
+	for pc, in := range p.Code {
+		if targets[pc] {
+			clear(empty)
+		}
+		if p.Maps[pc].Depth < 0 {
+			continue
+		}
+		src, dest := -1, -1
+		switch {
+		case in.Op == ir.StringConst && pc < len(fn.Code) && fn.Code[pc].Op == bytecode.OpPushEmptyString:
+			set(in.Dest, true)
+			continue
+		case in.Op == ir.StringConcat && in.Extra == 1:
+			src, dest = in.Dest, in.Dest
+		case in.Op == ir.StringAdd && in.Left.Slot >= 0 && in.Left.Slot < len(empty) && empty[in.Left.Slot] && in.Right.Slot >= 0 && in.Dest == in.Left.Slot:
+			src, dest = in.Right.Slot, in.Dest
+		}
+		set(in.Dest, false)
+		if src >= 0 && concatReads(p, targets, pc, dest) {
+			p.Code[pc] = ir.Instruction{Op: ir.StringPart, Left: ir.Slot(src), Dest: dest}
+		}
+	}
+}
+
+// concatReads reports whether the string at slot d, made at pc, is read by
+// a concat of more parts than one, and by nothing before it: no jump lands
+// between them, no instruction between reads or writes d, the stack never
+// goes below d, and nothing but a drop leaves its top at d.
+func concatReads(p *ir.Program, targets []bool, pc, d int) bool {
+	for k := pc + 1; k < len(p.Code); k++ {
+		in := p.Code[k]
+		if targets[k] || p.Maps[k].Depth < 0 {
+			return false
+		}
+		if in.Op == ir.StringConcat && in.Extra > 1 && in.Dest <= d && d < in.Dest+in.Extra {
+			return true
+		}
+		switch in.Op {
+		case ir.Jump, ir.Branch, ir.Return, ir.Rethrow:
+			return false
+		}
+		if in.Left.Slot == d || in.Right.Slot == d || in.Third.Slot == d || in.Dest == d || in.Extra == d && in.Op != ir.StringConcat && in.Op != ir.ArrayLiteral {
+			return false
+		}
+		if k+1 >= len(p.Maps) || p.Maps[k+1].Depth < 0 || p.Locals+p.Maps[k+1].Depth <= d {
+			return false
+		}
+		// What leaves its result at the top -- a call's, whose function a
+		// slot below may have been -- leaves it above d; a drop (Nop) only
+		// pops what is above.
+		if in.Op != ir.Nop && p.Locals+p.Maps[k+1].Depth-1 <= d {
+			return false
+		}
+	}
+	return false
+}
+
 // stringConcats has Go make an addition an operand of which is a string
 // constant, such an addition's result -- 'key ' + tag + ' in leaf' -- or
 // the result of an element read at one of reads, which have read strings
@@ -988,7 +1076,14 @@ func stringConcats(p *ir.Program, reads []int32) {
 				continue
 			}
 			set(in.Dest, false)
-		case ir.StringAdd, ir.StringConcat:
+		case ir.StringConcat:
+			if in.Extra == 1 && slot(ir.Slot(in.Dest)) {
+				// A string's conversion, which leaves it as it is.
+				p.Code[pc] = ir.Instruction{Op: ir.Nop}
+				continue
+			}
+			set(in.Dest, true)
+		case ir.StringAdd:
 			set(in.Dest, true)
 		case ir.ArrayRead:
 			set(in.Dest, in.Reference && slices.Contains(reads, int32(pc)))
@@ -1233,6 +1328,9 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 			return bad("concat part count")
 		}
 		return effect{need: int(in.A), delta: 1 - int(in.A)}, nil
+	case bytecode.OpToString:
+		// A template's part converted, in its place.
+		return effect{need: 1}, nil
 	case bytecode.OpGetUpvalue, bytecode.OpGetUpvalueCheck, bytecode.OpGetLocalIndex, bytecode.OpGetLocalIndexUpdate:
 		return effect{delta: 1}, nil
 	case bytecode.OpSetUpvalue, bytecode.OpSetUpvalueCheck, bytecode.OpInitUpvalue:
@@ -1792,7 +1890,7 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this, charCode bool
 		// A call, made as an ordinary one where the stack is shallow, as
 		// the interpreter makes it (tailCallDepth).
 		return ir.Instruction{Op: ir.Host, Tail: true, Extra: int(in.A), When: in.Op == bytecode.OpTailCallMethod}
-	case bytecode.OpConcat:
+	case bytecode.OpConcat, bytecode.OpToString:
 		// Go converts the parts and joins them, as the interpreter does.
 		return ir.Instruction{Op: ir.Host}
 	case bytecode.OpSetGlobal, bytecode.OpSetGlobalStrict:

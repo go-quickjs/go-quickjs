@@ -186,9 +186,18 @@ const (
 	StringAdd
 	// StringConcat is concat: the Extra operands from Dest on, each
 	// converted to a string and joined, at Dest, which the new pipeline
-	// has Go make, called from native code (ssa.GoConcat), and leaves to
-	// Go otherwise. At most MaxStringConcat parts.
+	// has Go make, called from native code (ssa.GoConcat) a call's
+	// operands at a time, and leaves to Go otherwise. Any number of parts:
+	// a template's, or a chain's of up to the compiler's 32.
 	StringConcat
+	// StringPart is a concat's part converted -- a template's to_string,
+	// a chain's '' + part -- whose string that concat alone reads
+	// (compile's stringParts): Left at Dest as it is, where it is a
+	// number, a string, a boolean, null or undefined, whose conversion
+	// calls nothing and which the concat converts the same; anything else
+	// leaves for Go, which converts it there, before the parts after it
+	// are computed.
+	StringPart
 	// Rethrow is rethrow, the end of a finally clause, with Left the kind
 	// of its completion record, the operand on top: a normal completion's
 	// record (the number 0) is dropped and the code goes on; any other --
@@ -252,10 +261,6 @@ const RethrowNormal = 0
 // MaxArrayLiteral is the most elements an ArrayLiteral has: new_array
 // with more is Go's.
 const MaxArrayLiteral = 16
-
-// MaxStringConcat is the most parts a StringConcat has, as many as a call
-// of Go takes (abi.MaxGoArgs): concat with more is Go's.
-const MaxStringConcat = 8
 
 // The types a TypeTest asks about.
 const (

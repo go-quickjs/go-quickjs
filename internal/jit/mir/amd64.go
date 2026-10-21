@@ -3780,6 +3780,23 @@ func (c *compiler) typeIs(v *ssa.Value, guard func(amd64.Cond)) {
 	c.setG(v, scratchA)
 }
 
+// primitive guards that its operand is a number, a string, a boolean, null
+// or undefined (OpPrimitive): its number word below NumberLimit or one of
+// theirs; anything else exits. It uses scratchA and scratchB.
+func (c *compiler) primitive(v *ssa.Value, guard func(amd64.Cond)) {
+	ok := c.a.NewLabel()
+	w := c.gpr(v.Args[0], scratchB)
+	c.cmpWord(w, abi.NumberLimit)
+	c.a.Jcc(amd64.CondB, ok)
+	for _, word := range []uint64{c.enc.String, c.enc.True, c.enc.False, c.enc.Null} {
+		c.cmpWord(w, word)
+		c.a.Jcc(amd64.CondE, ok)
+	}
+	c.cmpWord(w, c.enc.Undefined)
+	guard(amd64.CondNE)
+	c.a.Bind(ok)
+}
+
 // objectOf finds the object a value is, into scratchC: the pointer word of
 // the slot it came from, which still holds it (origin.go). A value with an
 // object's word is its origin's object, since native code makes no such
@@ -6572,6 +6589,8 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.MovRR32(scratchA, c.gpr(arg(0), scratchA))
 		c.a.Imul32(scratchA, c.gpr(arg(1), scratchB))
 		c.setG(v, scratchA)
+	case ssa.OpPrimitive:
+		c.primitive(v, c.guardFor(v))
 	case ssa.OpI32ToF64:
 		c.a.Cvtsi2sd(xScratch0, c.gpr(arg(0), scratchA), false)
 		c.setX(v, xScratch0)

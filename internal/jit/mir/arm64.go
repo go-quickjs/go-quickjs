@@ -1254,6 +1254,24 @@ func (c *a64Compiler) instanceOf(v *ssa.Value, guard func(arm64.Cond)) {
 	c.setG(v, a64B)
 }
 
+// primitive is amd64's (OpPrimitive). It uses A and B.
+func (c *a64Compiler) primitive(v *ssa.Value, guard func(arm64.Cond)) {
+	ok := c.a.NewLabel()
+	w := c.gpr(v.Args[0], a64B)
+	c.movImm(a64A, abi.NumberLimit)
+	c.a.Cmp(w, a64A, true)
+	c.a.BCond(arm64.LO, ok)
+	for _, word := range []uint64{c.enc.String, c.enc.True, c.enc.False, c.enc.Null} {
+		c.movImm(a64A, word)
+		c.a.Cmp(w, a64A, true)
+		c.a.BCond(arm64.EQ, ok)
+	}
+	c.movImm(a64A, c.enc.Undefined)
+	c.a.Cmp(w, a64A, true)
+	guard(arm64.NE)
+	c.a.Bind(ok)
+}
+
 // typeIs is amd64's (OpTypeIs). It uses A, B and C.
 func (c *a64Compiler) typeIs(v *ssa.Value, guard func(arm64.Cond)) {
 	a := v.Args[0]
@@ -5969,6 +5987,8 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		d := c.gdst(v)
 		c.a.MulW(d, c.gpr(arg(0), a64A), c.gpr(arg(1), a64B))
 		c.setG(v, d)
+	case ssa.OpPrimitive:
+		c.primitive(v, c.guardFor(v))
 	case ssa.OpI32ToF64:
 		c.a.Scvtf(a64F0, c.gpr(arg(0), a64A), false)
 		c.setF(v, a64F0)

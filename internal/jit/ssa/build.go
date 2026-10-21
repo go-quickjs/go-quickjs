@@ -1845,6 +1845,10 @@ func (b *builder) hostOf(pc int) bool {
 		// A call of Go (GoAdd, GoConcat, GoHas, GoDelete), where the VM
 		// answers it.
 		return !b.goCalls()
+	case ir.StringPart:
+		// Checked natively; where the check failed before, Go's as a concat
+		// of one part.
+		return b.fb != nil && b.fb.Generic(pc) && !b.goCalls()
 	case ir.FieldDefine:
 		_, ok := b.define(pc)
 		return !ok
@@ -2785,18 +2789,30 @@ func (b *builder) goFrame(blk *Block, pc int, in ir.Instruction, guard func(Op, 
 // its parts the call's operands: what Go refuses leaves for Go to make
 // after an exit.
 func (b *builder) goConcat(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
-	parts := make([]*Value, in.Extra)
-	for i := range parts {
-		parts[i] = operand(ir.Slot(in.Dest + i))
+	// A call's operands at a time (abi.MaxGoArgs), each call's string the
+	// next one's first part, as the compiler joins a chain past its 32: a
+	// concat of more had left native code at every turn -- a template's,
+	// or a chain of a few calls and the strings between them. A part Go
+	// refuses leaves for Go, which joins them all again from the operands,
+	// none of them changed, the parts joined so far having run nothing.
+	var r *Value
+	for at := 0; at < in.Extra; {
+		var parts []*Value
+		if r != nil {
+			parts = append(parts, r)
+		}
+		for ; at < in.Extra && len(parts) < abi.MaxGoArgs; at++ {
+			parts = append(parts, operand(ir.Slot(in.Dest+at)))
+		}
+		call := guard(OpCall, Tagged, ir.HostExit, parts...)
+		if b.f.Keeps < b.f.keepLimit() {
+			b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoConcat, Argc: len(parts), ThisSlot: -1}}, b.f.Keeps
+			b.f.Keeps++
+		}
+		cell := b.f.newValue(blk, OpCallCell, Source, call)
+		r = b.f.newValue(blk, OpKept, Tagged, cell, call)
+		r.Shadow = cell
 	}
-	call := guard(OpCall, Tagged, ir.HostExit, parts...)
-	if b.f.Keeps < b.f.keepLimit() {
-		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoConcat, Argc: len(parts), ThisSlot: -1}}, b.f.Keeps
-		b.f.Keeps++
-	}
-	cell := b.f.newValue(blk, OpCallCell, Source, call)
-	r := b.f.newValue(blk, OpKept, Tagged, cell, call)
-	r.Shadow = cell
 	b.assign(in.Dest, blk, r)
 }
 
@@ -3234,7 +3250,7 @@ func (b *builder) plan() error {
 	// had Gameboy's instruction dispatch run natively 40% longer with 46.
 	resumes := func(pc int) bool {
 		switch op := p.Code[pc].Op; {
-		case b.host(pc), b.keyedRead(pc), op == ir.ObjectLiteral, op == ir.ArrayLiteral, op == ir.StringAdd, op == ir.StringConcat, op == ir.ArrayWrite, op == ir.IterStep,
+		case b.host(pc), b.keyedRead(pc), op == ir.ObjectLiteral, op == ir.ArrayLiteral, op == ir.StringAdd, op == ir.StringConcat, op == ir.StringPart, op == ir.ArrayWrite, op == ir.IterStep,
 			op == ir.IterClose, op == ir.HasProperty, op == ir.DeleteProperty,
 			op == ir.Closure, op == ir.CloseUpvalues:
 			return true
@@ -3311,6 +3327,13 @@ func (b *builder) plan() error {
 			// once one has (Generic), Go runs each, and native code goes on
 			// after a normal one.
 			if b.host(pc) && resumes(pc) {
+				entries[pc+1] = true
+			}
+		case ir.StringPart:
+			// Checked natively, a failure deoptimizing; where one failed
+			// before (Generic), Go converts the part, as a concat of one
+			// part, and native code resumes after it.
+			if b.fb != nil && b.fb.Generic(pc) && resumes(pc) {
 				entries[pc+1] = true
 			}
 		case ir.TypeTest:
@@ -4815,8 +4838,26 @@ func (b *builder) instruction(blk *Block, pc int) {
 			break
 		}
 		b.goDelete(blk, in, operand, guard)
+	case ir.StringPart:
+		// A part's conversion the concat that reads it makes (compile's
+		// stringParts): checked to be a primitive that converts calling
+		// nothing, as it is; where the check failed before, converted by
+		// Go there, as to_string is.
+		if b.fb != nil && b.fb.Generic(pc) {
+			if !b.goCalls() {
+				blk.ExitKind = ir.HostExit
+				blk.State = state()
+				blk.State.addUse()
+				break
+			}
+			b.goConcat(blk, ir.Instruction{Op: ir.StringConcat, Dest: in.Dest, Extra: 1}, func(ir.Operand) *Value { return operand(in.Left) }, guard)
+			break
+		}
+		v := operand(in.Left)
+		guard(OpPrimitive, None, ir.GuardExit, v)
+		b.assign(in.Dest, blk, v)
 	case ir.StringConcat:
-		if !b.goCalls() || in.Extra > abi.MaxGoArgs {
+		if !b.goCalls() {
 			blk.ExitKind = ir.HostExit
 			blk.State = state()
 			blk.State.addUse()

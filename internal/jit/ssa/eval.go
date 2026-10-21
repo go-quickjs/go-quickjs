@@ -654,6 +654,10 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 				vals[v.ID] = val{f: math.Float64frombits(v.Const.Bits)}
 			case OpConstSource:
 				vals[v.ID] = val{i: uint32(int32(v.Aux))}
+			case OpPrimitive:
+				if a.t.Kind == ir.Opaque || a.t.Kind == ir.Uninitialized {
+					return exit(v.State, ir.ExitKind(v.Aux))
+				}
 			case OpUnboxF64:
 				if a.t.Kind != ir.Number {
 					return exit(v.State, ir.ExitKind(v.Aux))

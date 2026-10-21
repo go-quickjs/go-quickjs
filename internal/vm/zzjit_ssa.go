@@ -3236,6 +3236,16 @@ func jitHostCall(ctx *abi.Context) bool {
 			}
 			parts[i] = p
 		}
+		if n == 1 {
+			// A template's part converted (to_string), as the interpreter
+			// converts it: a string is itself, which a join had copied.
+			p := parts[0]
+			if p.IsNumber() {
+				p = Str(r.numberString(p.num))
+			}
+			*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = p
+			return true
+		}
 		s, err := r.joinParts(parts[:n])
 		if err != nil || s.length > maxStringLength-64 {
 			return false

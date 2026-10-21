@@ -52,6 +52,13 @@ func (p *Program) EvaluateArrays(slots []Value, arrays []ArrayView, pc int, budg
 			// change.
 			exit.Kind = HostExit
 			return exit, nil
+		case StringPart:
+			v := read(in.Left)
+			if v.Kind == Opaque || v.Kind == Uninitialized {
+				exit.Kind = HostExit
+				return exit, nil
+			}
+			slots[in.Dest] = v
 		case StringMethod, StringCode:
 			exit.Kind = HostExit
 			receiver := read(in.Left)
