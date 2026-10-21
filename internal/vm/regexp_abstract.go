@@ -562,7 +562,16 @@ func (r *Runtime) regExpReplace(rx Value, args []Value, fl regexp.Flags, direct 
 			return Str(out), nil
 		}
 	}
-	if plain {
+	// A template with a $ is expanded from where the built-in exec's
+	// matches are, read once into its pieces: the text of each match and
+	// group is written where it is in the subject, rather than made a string
+	// to make the replacement of.
+	var pieces []templatePiece
+	var pieceRoom [16]templatePiece
+	if fast && !functional && !plain {
+		pieces = templatePieces(pieceRoom[:0], template, width/2-1)
+	}
+	if plain || pieces != nil {
 		if err := sb.Grow(len(s.Go())); err != nil {
 			return Undefined, err
 		}
@@ -570,6 +579,13 @@ func (r *Runtime) regExpReplace(rx Value, args []Value, fl regexp.Flags, direct 
 	for k := 0; k < count; k++ {
 		if err := sb.check(); err != nil {
 			return Undefined, err
+		}
+		if pieces != nil {
+			caps := spans[k*width : (k+1)*width]
+			sb.WriteString(s.unitSlice(units, next, caps[0]))
+			writeTemplate(&sb, s, units, caps, pieces, template)
+			next = caps[1]
+			continue
 		}
 		var matched *String
 		var position, matchLen int
@@ -688,7 +704,7 @@ func (r *Runtime) regExpReplace(rx Value, args []Value, fl regexp.Flags, direct 
 	if next < size {
 		sb.WriteString(s.unitSlice(units, next, size))
 	}
-	if plain && s.ascii && tv.ascii {
+	if (plain || pieces != nil) && s.ascii && tv.ascii {
 		// Made of ASCII alone, as long as its bytes, which overlong has
 		// kept within a string's length.
 		t := sb.String()
@@ -725,6 +741,101 @@ func replacedShort(s, tv *String, spans []int, width, count int) *String {
 	out.s = unsafe.String(unsafe.SliceData(b), n)
 	out.length, out.ascii = n, true
 	return out
+}
+
+// templatePiece is a piece of a replacement template, as templatePieces
+// reads it: text of the template, or what a $ form names of the subject.
+type templatePiece struct {
+	kind templateKind
+	// lo and hi are the bytes of the template text is, and lo the group a
+	// group's piece is, 0 for the whole match.
+	lo, hi int
+}
+
+type templateKind uint8
+
+const (
+	pieceText   templateKind = iota // template[lo:hi]
+	pieceGroup                      // $&, $n and $nn: group lo
+	pieceBefore                     // $`, what the subject has before the match
+	pieceAfter                      // $', what it has after
+)
+
+// templatePieces appends to pieces those of a template with a $, for a
+// pattern of groups groups whose matches have no groups object -- so that
+// $< is text -- as getSubstitution reads it: what each piece is does not
+// depend on the match, only on how many groups there are.
+func templatePieces(pieces []templatePiece, template string, groups int) []templatePiece {
+	for i := 0; i < len(template); i++ {
+		if template[i] != '$' || i+1 >= len(template) {
+			pieces = appendText(pieces, i, i+1)
+			continue
+		}
+		switch c := template[i+1]; {
+		case c == '$':
+			pieces = appendText(pieces, i, i+1)
+			i++
+		case c == '&':
+			pieces = append(pieces, templatePiece{kind: pieceGroup})
+			i++
+		case c == '`':
+			pieces = append(pieces, templatePiece{kind: pieceBefore})
+			i++
+		case c == '\'':
+			pieces = append(pieces, templatePiece{kind: pieceAfter})
+			i++
+		case c >= '0' && c <= '9':
+			// Two digits are preferred when they name a real group, so $12
+			// means group 12 if it exists and group 1 followed by "2" if not.
+			idx := int(c - '0')
+			consumed := 1
+			if i+2 < len(template) && template[i+2] >= '0' && template[i+2] <= '9' {
+				if two := idx*10 + int(template[i+2]-'0'); two >= 1 && two <= groups {
+					idx, consumed = two, 2
+				}
+			}
+			if idx < 1 || idx > groups {
+				pieces = appendText(pieces, i, i+1)
+				continue
+			}
+			pieces = append(pieces, templatePiece{kind: pieceGroup, lo: idx})
+			i += consumed
+		default:
+			// $< among them: without a groups object it names nothing.
+			pieces = appendText(pieces, i, i+1)
+		}
+	}
+	return pieces
+}
+
+// appendText appends the template's bytes lo to hi to pieces, as part of the
+// text piece before them where they follow it.
+func appendText(pieces []templatePiece, lo, hi int) []templatePiece {
+	if n := len(pieces); n > 0 && pieces[n-1].kind == pieceText && pieces[n-1].hi == lo {
+		pieces[n-1].hi = hi
+		return pieces
+	}
+	return append(pieces, templatePiece{kind: pieceText, lo: lo, hi: hi})
+}
+
+// writeTemplate writes the replacement of the match caps of s, whose code
+// units are units, by the template pieces were read from.
+func writeTemplate(sb *partsBuilder, s *String, units []uint16, caps []int, pieces []templatePiece, template string) {
+	for _, p := range pieces {
+		switch p.kind {
+		case pieceText:
+			sb.WriteString(template[p.lo:p.hi])
+		case pieceGroup:
+			// A group that took no part is undefined, which is nothing.
+			if lo, hi := caps[2*p.lo], caps[2*p.lo+1]; lo >= 0 && hi >= 0 {
+				sb.WriteString(s.unitSlice(units, lo, hi))
+			}
+		case pieceBefore:
+			sb.WriteString(s.unitSlice(units, 0, caps[0]))
+		case pieceAfter:
+			sb.WriteString(s.unitSlice(units, min(caps[1], len(units)), len(units)))
+		}
+	}
 }
 
 // getSubstitution expands the $ forms in a replacement template.

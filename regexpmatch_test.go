@@ -83,3 +83,26 @@ func TestRegExpNamedGroupsAgreeWithNode(t *testing.T) {
 	r.push([..."a1b2".matchAll(/(?<l>[a-z])(?<d>\d)/g)].map(m => m.groups.l + m.groups.d).join())
 	r.join("|")`, `{"year":"2024","month":"01","day":"15"}|{"year":"1999","month":"12"}|year,month,day|true|||{"day":"15","extra":1}|month,day,extra|{"year":"2000","month":"02","day":"29"}|2000|{"year":"1970","month":"01","day":"01"}|false|{"value":"01","writable":true,"enumerable":true,"configurable":true}|{"a":"a","m":"m"}|{"z":"z"}|z,a,m|y|x|n|abCdefghij|0123456789!|9||{"w":[0,2]}|{"w":"ab"}||15.01.2024| and 31.12.1999||v:k:2; b:a:2|a1,b2`)
 }
+
+// TestRegExpReplaceTemplateAgreesWithNode covers a replacement template with
+// $ forms on the built-in exec's matches, which is expanded from where the
+// matches are in the subject: every form, two digits and one, groups there
+// are not and groups that took no part, $< without named groups, a $ at the
+// end, matches empty and not, global, sticky and neither, and subjects past
+// ASCII whose groups split a pair of surrogates and join one again. The
+// answers are Node v26's.
+func TestRegExpReplaceTemplateAgreesWithNode(t *testing.T) {
+	checkEval(t, `var r = [], s = "2024-01-15, 2025-12-31", bt = String.fromCharCode(96)
+	r.push(s.replace(/(\d+)-(\d+)-(\d+)/g, "$3/$2/$1"), s.replace(/(\d+)-(\d+)-(\d+)/, "[$&|$" + bt + "|$'|$$|$]"))
+	r.push(s.replace(/(\d+)-(\d+)/g, "$0;$00;$01;$02;$03;$10;$21;$9$"), "12345678901x".replace(/(\d)(\d)(\d)(\d)(\d)(\d)(\d)(\d)(\d)(\d)(\d)/g, "$11$10$1;$12;$1a"))
+	r.push("abc".replace(/(x)?b/, "[$1]"), "abc".replace(/b/, "$<n>$<"), "abc".replace(/(?<n>b)/, "$<n>$<m>"))
+	r.push("aaa".replace(/a*?/g, "<$&>"), "abc".replace(/x*/g, "-$&-"), "a😀b".replace(/(?:)/gu, "[$']"))
+	r.push("a😀b".replace(/(?:)/g, ".").length, "😀😀".replace(/(\uD83D)(\uDE00)/g, "$2$1") === "\uDE00\uD83D\uDE00\uD83D")
+	r.push("😀".replace(/(\uD83D)(\uDE00)/, "$1$2") === "😀", "x😀y".replace(/\uDE00/, "$" + bt) === "x\uD83Dx\uD83Dy")
+	r.push("ü-é-ö".replace(/(\W)-(\W)/g, "$2+$1"), "日本-語".replace(/(.)-(.)/u, "$2$1$&"))
+	var y = /(\w)/y; y.lastIndex = 1
+	r.push("abc".replace(y, "<$1>"), y.lastIndex, "abc".replace(/(\w)/gy, "$1$1"), "a,b".replace(/(\w)/gy, "$1$1"))
+	var g = /(o)/g; g.lastIndex = 5
+	r.push("foo".replace(g, "[$1]"), g.lastIndex, "x".replace(/x/, "$$$"), "x".replace(/x/g, "$"))
+	r.join("|")`, `15/01/2024, 31/12/2025|[2024-01-15||, 2025-12-31|$|$], 2025-12-31|$0;$00;2024;01;$03;20240;011;$9$-15, $0;$00;2025;12;$03;20250;121;$9$-31|101;12;1ax|a[]c|a$<n>$<c|abc|<>a<>a<>a<>|--a--b--c--|[a😀b]a[😀b]😀[b]b[]|9|true|true|true|é+ü-ö|日語本本-語|a<b>c|2|aabbcc|aa,b|f[o][o]|0|$$|$`)
+}
