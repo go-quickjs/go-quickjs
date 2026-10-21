@@ -499,7 +499,9 @@ func init() {
 				}
 				return v
 			})
-		case bytecode.OpIn, bytecode.OpDeleteProp, bytecode.OpPow:
+		case bytecode.OpIn:
+			inNode(b, pc)
+		case bytecode.OpDeleteProp, bytecode.OpPow:
 			y, x := b.pop().tree(), b.pop().tree()
 			op := in.Op
 			b.push(func(c *tctx) Value {
@@ -512,8 +514,6 @@ func init() {
 				var v Value
 				var err error
 				switch op {
-				case bytecode.OpIn:
-					v, err = inOperator(c.r, l, r)
 				case bytecode.OpDeleteProp:
 					v, err = deleteIndexed(c.r, l, r, strict)
 				default:

@@ -202,9 +202,14 @@ func (r *Runtime) keyString(k Atom) *String {
 // keyAtom is a string a runtime handed out as a key, and the atom it names.
 // The entry holds the string, so its address names it for as long as the
 // entry is there.
+//
+// With none, the string is a key that named no atom when the table had
+// atom of them (atomTable.next): it names none while the table has no
+// more -- atoms are only ever added -- and so is the key of no property.
 type keyAtom struct {
 	s    *String
 	atom Atom
+	none bool
 }
 
 // keySlot is where a key string goes in a runtime's keyAtoms, by its
@@ -376,17 +381,24 @@ func (r *Runtime) toPropertyName(v Value) (propertyName, error) {
 		s := v.String()
 		e := &r.keyAtoms[keySlot(s)]
 		if e.s == s {
-			return propertyName{atom: e.atom, hasAtom: true}, nil
+			if !e.none {
+				return propertyName{atom: e.atom, hasAtom: true}, nil
+			}
+			if e.atom == r.atoms.next() {
+				return propertyName{name: s.Go(), noAtom: true}, nil
+			}
 		}
 		// Its atom remembered with the string, for its next conversion: a
 		// constant key, as "a" in o converts at every evaluation, had been
 		// a lookup of the atom table's map each time, a third of the in
-		// operator's time.
+		// operator's time. So is a key that has none, while the table gains
+		// no atom: k in o, o[k], of keys no object has.
 		name := s.Go()
 		if a, ok := r.atoms.lookup(name); ok {
 			*e = keyAtom{s: s, atom: a}
 			return propertyName{atom: a, hasAtom: true}, nil
 		}
+		*e = keyAtom{s: s, atom: r.atoms.next(), none: true}
 		return propertyName{name: name, noAtom: true}, nil
 	case KindSymbol:
 		return propertyName{sym: v.Symbol()}, nil

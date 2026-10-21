@@ -5996,6 +5996,10 @@ func (r *Runtime) jitHas(key, obj Value) (has, ok bool) {
 		return false, false
 	}
 	o := obj.Object()
+	if has, ok := hasQuick(r, key, o); ok {
+		// Plain objects and arrays, which hold what they have.
+		return has, true
+	}
 	for p, depth := o, 0; p != nil; p, depth = p.proto, depth+1 {
 		if depth > maxChainDepth || p.class == ClassProxy || p.class == ClassModuleNamespace {
 			return false, false
