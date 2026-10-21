@@ -140,7 +140,7 @@ func Main(name string, e Engine) {
 	var rt Runtime
 	var before runtime.MemStats
 	runtime.ReadMemStats(&before)
-	start, cpu0 := time.Now(), processCPU()
+	start, cpu0 := clock(), processCPU()
 	switch *mode {
 	case "compile":
 		for i := 0; i < *n; i++ {
@@ -176,7 +176,7 @@ func Main(name string, e Engine) {
 	}
 	var after runtime.MemStats
 	runtime.ReadMemStats(&after)
-	report("TOTAL", time.Since(start), processCPU()-cpu0, &before, &after)
+	report("TOTAL", clock()-start, processCPU()-cpu0, &before, &after)
 	// What is live once a collection has run: after a suite's teardown,
 	// anything a run left behind that grows with the runs is a leak. The
 	// allocation profile's in-use figures are as of this collection too.
@@ -218,7 +218,7 @@ func runFixed(e Engine, s *suite, src map[string]string, n int, only string) Run
 		}
 		var m0, m1 runtime.MemStats
 		runtime.ReadMemStats(&m0)
-		t0, c0 := time.Now(), processCPU()
+		t0, c0 := clock(), processCPU()
 		_, err := rt.EvalString(fmt.Sprintf(`(() => {
 			const s = BenchmarkSuite.suites.find(s => s.name === %q);
 			// Octane's Math.random, seeded again for each suite as its
@@ -231,7 +231,7 @@ func runFixed(e Engine, s *suite, src map[string]string, n int, only string) Run
 			}
 			return "";
 		})()`, name, n))
-		d, c := time.Since(t0), processCPU()-c0
+		d, c := clock()-t0, processCPU()-c0
 		runtime.ReadMemStats(&m1)
 		if err != nil {
 			fail(fmt.Errorf("%s: %w", name, err))
@@ -257,9 +257,9 @@ func runAWFY(e Engine, s *suite, src map[string]string, n int, only string) Runt
 		}
 		var m0, m1 runtime.MemStats
 		runtime.ReadMemStats(&m0)
-		t0, c0 := time.Now(), processCPU()
+		t0, c0 := clock(), processCPU()
 		_, err := rt.EvalString(awfyRun(w.module, w.inner, n))
-		d, c := time.Since(t0), processCPU()-c0
+		d, c := clock()-t0, processCPU()-c0
 		runtime.ReadMemStats(&m1)
 		if err != nil {
 			fail(fmt.Errorf("%s: %w", w.name, err))
@@ -281,9 +281,6 @@ func report(name string, d, cpu time.Duration, m0, m1 *runtime.MemStats) {
 		float64(m1.TotalAlloc-m0.TotalAlloc)/(1<<20), m1.Mallocs-m0.Mallocs)
 }
 
-// clockStart is the point the host's clock counts from.
-var clockStart = time.Now()
-
 // newRuntime is a runtime with the print, load and now the suite expects.
 func newRuntime(e Engine, src map[string]string) Runtime {
 	rt, err := e.NewRuntime(Host{
@@ -295,7 +292,7 @@ func newRuntime(e Engine, src map[string]string) Runtime {
 			}
 			return s, nil
 		},
-		Now: func() float64 { return float64(time.Since(clockStart).Nanoseconds()) / 1e6 },
+		Now: func() float64 { return float64(clock().Nanoseconds()) / 1e6 },
 	})
 	if err != nil {
 		fail(err)

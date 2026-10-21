@@ -8,24 +8,25 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // An engine that is a program of its own -- QuickJS's qjs, node -- runs the
 // suite from a driver script, which loads the suite and does in JavaScript
 // what the fixed and score modes do in Go, and prints what they print. What
 // it cannot report is what Go counts: the allocations. The time is the
-// script's own, measured with Node's monotonic clock or Date.now for QuickJS;
+// script's own, measured with Node's monotonic clock or QuickJS's os.now;
 // the total is the process's, from start to exit.
 
 // preludes define, for each kind of program, the load and print the suite
 // calls, from a directory the driver is given.
 var preludes = map[string]string{
-	// QuickJS's qjs, run with --std, which makes std a global.
+	// QuickJS's qjs, run with --std, which makes std and os globals: os.now
+	// is a monotonic clock, to a microsecond, where Date.now counts whole
+	// milliseconds.
 	"qjs": `var __dir = %q;
 globalThis.load = function (f) { std.loadScript(__dir + "/" + f); };
 globalThis.read = function (f) { return std.loadFile(__dir + "/" + f); };
-globalThis.__v8benchNow = function () { return Date.now(); };
+globalThis.__v8benchNow = function () { return os.now(); };
 `,
 	// node, where a file is a module of its own: a script loaded into the
 	// global context declares its names there, as load does elsewhere.
@@ -154,14 +155,14 @@ func MainExternal() {
 	cmd := exec.Command(program, argv...)
 	cmd.Dir = tmp
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	start := time.Now()
+	start := clock()
 	if err := cmd.Run(); err != nil {
 		fail(err)
 	}
 	// The engine's CPU time is its process's, whole: what its collector or
 	// its threads spent beside the work, as report gives go-quickjs's.
 	cpu := cmd.ProcessState.UserTime() + cmd.ProcessState.SystemTime()
-	fmt.Printf("%-13s %9.1f ms %9.1f cpu\n", "TOTAL", float64(time.Since(start).Microseconds())/1000,
+	fmt.Printf("%-13s %9.1f ms %9.1f cpu\n", "TOTAL", float64((clock()-start).Microseconds())/1000,
 		float64(cpu.Microseconds())/1000)
 }
 
