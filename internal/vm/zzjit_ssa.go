@@ -353,6 +353,12 @@ func (r *Runtime) jitPolySeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 		e.polyReopt = true
 		return
 	}
+	if r.jitPrimitiveSeen(f, e, pc, in, recv) {
+		// A number's or a boolean's: off Number.prototype or
+		// Boolean.prototype, as a string's.
+		e.polyReopt = true
+		return
+	}
 	if !recv.IsObject() || int(in.A) >= len(f.cl.names) {
 		return
 	}
@@ -415,6 +421,42 @@ func (r *Runtime) jitPolySeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 	}
 	// A shape it was not compiled for: at a megamorphic site, the
 	// megamorphic cache, filled above, has it natively from now on.
+}
+
+// jitPrimitiveSeen notes in e the method read in at pc, of f's function,
+// as one that met recv, a number or a boolean, and reports whether it did:
+// one whose key the prototype the realm fixed for recv's kind,
+// Number.prototype or Boolean.prototype, has as a plain data property,
+// which the code compiled again reads off that prototype, as a string's
+// off String.prototype (jitFeedback's StringProperty). A site that has met
+// another primitive already is read as StringProperty takes it, the other
+// kinds' receivers left to Go; a method the prototype does not have, Go
+// reads.
+func (r *Runtime) jitPrimitiveSeen(f *frame, e *jitEntry, pc int, in bytecode.Instr, recv Value) bool {
+	var sites *[]uint32
+	var proto *Object
+	switch {
+	case recv.IsNumber():
+		sites, proto = &e.numSites, r.proto.number
+	case recv.IsBool():
+		sites, proto = &e.boolSites, r.proto.boolean
+	default:
+		return false
+	}
+	if in.Op != bytecode.OpGetPropThis || int(in.A) >= len(f.cl.names) || proto == nil {
+		return false
+	}
+	at := uint32(pc)
+	if slices.Contains(e.strSites, at) || slices.Contains(e.bigSites, at) || slices.Contains(e.numSites, at) || slices.Contains(e.boolSites, at) {
+		return false
+	}
+	key := f.cl.names[in.A]
+	i := proto.findOwn(key)
+	if key.IsIndex() || i < 0 || proto.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted|propUninit) != 0 {
+		return false
+	}
+	*sites = append(*sites, at)
+	return true
 }
 
 // jitPropertyOp reports whether op is a named property's read or write,
@@ -510,6 +552,11 @@ func (r *Runtime) jitDeoptSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.In
 		// A BigInt's method: read off BigInt.prototype by the code compiled
 		// again, the site no polymorphic one (jitFeedback's StringProperty).
 		e.bigSites = append(e.bigSites, uint32(pc))
+		return
+	}
+	if r.jitPrimitiveSeen(f, e, pc, in, recv) {
+		// A number's or a boolean's: off Number.prototype or
+		// Boolean.prototype, so.
 		return
 	}
 	p := jitPolySiteAt(e, pc)
@@ -1535,7 +1582,7 @@ func jitLearnedSpent(fn *bytecode.Function, e *jitEntry) int64 {
 // for it (jitLearnedDue), as V8's NotifyICChanged does.
 func jitLearnedMark(cl *closure, e *jitEntry) uint64 {
 	n := len(e.failed) + len(e.failedEntries) + len(e.bigints) + len(e.bigwide) + len(e.poly) + len(e.typedReads) + len(e.stringReads) +
-		len(e.keyedReads) + len(e.keyedWrites) + len(e.strSites) + len(e.nativeCalls) + len(e.inlines) + len(e.notInline) +
+		len(e.keyedReads) + len(e.keyedWrites) + len(e.strSites) + len(e.numSites) + len(e.boolSites) + len(e.nativeCalls) + len(e.inlines) + len(e.notInline) +
 		len(e.literals) + len(e.definesUnfed)
 	return jitFeedbackMark(cl) + uint64(n)*0x9e3779b97f4a7c15
 }
@@ -1698,6 +1745,13 @@ func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
 	switch {
 	case e.reopt:
 		e.reopts++
+	case e.invalid:
+		// A deoptimization's compile, which deopts counts: the calls found
+		// meanwhile, which it compiles in (inlineReopt), spend none of the
+		// budget of compiles for them. A loop's method reads off numbers,
+		// learned at a deoptimization each, in turn, each finding a leaf's
+		// call (jitLeafSeen) before the next, had spent it all, its last
+		// leaf's call never compiled.
 	case e.inlineReopt:
 		e.inlineReopts++
 	case e.upgradeReopt:
@@ -8176,7 +8230,15 @@ func (fb *jitFeedback) lexGlobal(name Atom, env *Object, write bool) (ssa.Global
 // that meets it leaves native code once, and the read is compiled again
 // for its shape (jitPolySeen), as for a cache that knew nothing. The code
 // checks the receiver is a string, and String.prototype's shape and the
-// key at the index.
+// key at the index. A read whose receivers have been BigInts, numbers or
+// booleans and no string (bigSites, numSites, boolSites, in that order) is
+// so off BigInt.prototype, Number.prototype or Boolean.prototype, the
+// site's holder: the code checks the receiver is of that kind. The
+// prototype's shape, which the code holds (remember), is replaced at any
+// change of its table -- a property added or deleted, an attribute
+// changed -- and says the property is its own, which nothing above it
+// shadows: a property Object.prototype gains changes nothing the read
+// finds. A method replaced is the cell's new value, which the read loads.
 func (fb *jitFeedback) StringProperty(pc int) (ssa.PropertySite, bool) {
 	e := fb.e
 	if e == nil || fb.cl == nil || pc >= len(fb.fn.Code) {
@@ -8190,17 +8252,24 @@ func (fb *jitFeedback) StringProperty(pc int) (ssa.PropertySite, bool) {
 	if c.shape != nil && c.shape != noShape || slices.ContainsFunc(e.poly, func(p jitPolySite) bool { return int(p.pc) == pc }) {
 		return ssa.PropertySite{}, false
 	}
-	key, proto := fb.cl.names[in.A], fb.r.proto.str
-	big := (slices.Contains(e.bigSites, uint32(pc)) || jitTreeRecv(fb.fn, pc)) && !slices.Contains(e.strSites, uint32(pc))
-	if big {
+	key, proto, kind := fb.cl.names[in.A], fb.r.proto.str, ssa.PrimitiveString
+	str := slices.Contains(e.strSites, uint32(pc))
+	switch {
+	case str:
+	case slices.Contains(e.bigSites, uint32(pc)) || jitTreeRecv(fb.fn, pc):
 		// A read that met BigInt receivers and no string: off
 		// BigInt.prototype, which the site names (Holders).
-		proto = fb.r.proto.bigint
+		proto, kind = fb.r.proto.bigint, ssa.PrimitiveBigInt
+	case slices.Contains(e.numSites, uint32(pc)):
+		// Numbers: off Number.prototype so.
+		proto, kind = fb.r.proto.number, ssa.PrimitiveNumber
+	case slices.Contains(e.boolSites, uint32(pc)):
+		proto, kind = fb.r.proto.boolean, ssa.PrimitiveBoolean
 	}
 	if key.IsIndex() || key == atomLength || proto == nil {
 		return ssa.PropertySite{}, false
 	}
-	if !big && !slices.Contains(e.strSites, uint32(pc)) &&
+	if kind == ssa.PrimitiveString && !str &&
 		(c.fills != 0 || fb.r.proto.object == nil || fb.r.proto.object.findOwn(key) >= 0) {
 		return ssa.PropertySite{}, false
 	}
@@ -8211,8 +8280,8 @@ func (fb *jitFeedback) StringProperty(pc int) (ssa.PropertySite, bool) {
 	}
 	k := fb.keep()
 	k.shapes = append(k.shapes, remember(sh))
-	site := ssa.PropertySite{Key: uint32(key), Shape: uintptr(unsafe.Pointer(sh)), Index: i}
-	if big {
+	site := ssa.PropertySite{Key: uint32(key), Shape: uintptr(unsafe.Pointer(sh)), Index: i, Primitive: kind}
+	if kind != ssa.PrimitiveString {
 		k.holders = append(k.holders, proto)
 		site.Holders[0] = ssa.Holder{Object: uintptr(unsafe.Pointer(proto)), Shape: site.Shape}
 	}

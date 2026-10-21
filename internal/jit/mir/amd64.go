@@ -6342,18 +6342,33 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.setG(v, scratchA)
 	case ssa.OpStringProp:
 		// A string's method where String.prototype has it, its shape the
-		// one the code was compiled for, which says where; or a BigInt's,
-		// its number word from HeapBigTag up, where BigInt.prototype has it.
-		if h := v.Holders(); h != nil {
-			c.cmpWord(c.gpr(arg(0), scratchA), c.enc.HeapBigTag)
+		// one the code was compiled for, which says where; or another
+		// primitive's where the prototype the realm fixed for it has it: a
+		// BigInt's, its number word from HeapBigTag up; a number's, below
+		// NumberLimit; a boolean's, true's or false's.
+		switch w := c.gpr(arg(0), scratchA); v.Primitive() {
+		case ssa.PrimitiveBigInt:
+			c.cmpWord(w, c.enc.HeapBigTag)
 			guard(amd64.CondB)
-			c.movImm(scratchA, uint64(h.Holders[0].Object))
-		} else {
-			c.cmpWord(c.gpr(arg(0), scratchA), c.enc.String)
+		case ssa.PrimitiveNumber:
+			c.cmpWord(w, abi.NumberLimit)
+			guard(amd64.CondAE)
+		case ssa.PrimitiveBoolean:
+			yes := c.a.NewLabel()
+			c.cmpWord(w, c.enc.True)
+			c.a.Jcc(amd64.CondE, yes)
+			c.cmpWord(w, c.enc.False)
+			guard(amd64.CondNE)
+			c.a.Bind(yes)
+		default:
+			c.cmpWord(w, c.enc.String)
 			guard(amd64.CondNE)
 			c.a.Load(scratchA, regCtx, abi.OffStringMethods)
 			c.a.Op(amd64.Test, scratchA, scratchA, true)
 			guard(amd64.CondE)
+		}
+		if h := v.Holders(); v.Primitive() != ssa.PrimitiveString {
+			c.movImm(scratchA, uint64(h.Holders[0].Object))
 		}
 		c.a.Load(scratchB, scratchA, c.enc.ObjectShape)
 		c.cmpWord(scratchB, v.Const.Bits)

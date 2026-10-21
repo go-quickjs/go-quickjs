@@ -772,10 +772,27 @@ type LiteralSite struct {
 // StringFeedback is Feedback that knows the property reads whose receivers
 // have been strings (StringProperty): a method's, which String.prototype
 // has as its own data property, by the shape it has (PropertySite's Shape)
-// and the property's index in its table.
+// and the property's index in its table. A read whose receivers have been
+// another primitive (PropertySite's Primitive) -- BigInts, numbers,
+// booleans -- is known so where the prototype the realm fixed for that
+// kind, the site's first holder, has the method.
 type StringFeedback interface {
 	StringProperty(pc int) (PropertySite, bool)
 }
+
+// Primitive is a kind of primitive a property read's receivers have been
+// (StringFeedback), whose properties are the prototype's the realm fixed
+// for the kind: String.prototype, BigInt.prototype, Number.prototype,
+// Boolean.prototype.
+type Primitive uint8
+
+// The kinds of Primitive.
+const (
+	PrimitiveString Primitive = iota
+	PrimitiveBigInt
+	PrimitiveNumber
+	PrimitiveBoolean
+)
 
 // ElementFeedback is Feedback that knows the element reads whose receivers
 // have been typed arrays (TypedRead): a read whose result no native
@@ -855,7 +872,8 @@ func (b *builder) keyedRead(pc int) bool {
 }
 
 // stringProperty is the feedback for a method read at pc whose receivers
-// have been strings, if any.
+// have been strings, or another primitive (PropertySite's Primitive), if
+// any.
 func (b *builder) stringProperty(pc int) (PropertySite, bool) {
 	f, ok := b.fb.(StringFeedback)
 	if !ok || b.p.Code[pc].Op != ir.ReferenceRead {
@@ -1568,6 +1586,10 @@ type PropertySite struct {
 	// the key, plain data, and deoptimizes where it does not have it,
 	// rather than at every receiver.
 	Scan bool
+	// Primitive, for a read StringFeedback knows, is the kind of its
+	// receivers: a string's, whose method String.prototype has, or
+	// another's, whose method the prototype at Holders[0] has.
+	Primitive Primitive
 }
 
 // unfed reports whether the property operation at pc has a site that
@@ -4527,12 +4549,15 @@ func (b *builder) instruction(blk *Block, pc int) {
 		}
 		if s, ok := b.stringProperty(pc); ok {
 			// A string's method, read where String.prototype has it, as
-			// V8 reads one off the String map's prototype; or a BigInt's,
-			// where BigInt.prototype, the site's holder, has it.
+			// V8 reads one off the String map's prototype; or another
+			// primitive's -- a BigInt's, a number's, a boolean's -- where
+			// the prototype the realm fixed for it, the site's holder, has
+			// it, as V8 reads a number's off the HeapNumber map's.
 			cell := guard(OpStringProp, Source, ir.HostExit, operand(in.Left))
 			cell.Const, cell.Index, cell.Key = ir.Value{Bits: uint64(s.Shape)}, int(s.Index), s.Key
-			if s.Holders[0].Object != 0 {
-				f.cache(cell).Holders = &HolderChain{Holders: s.Holders}
+			if s.Primitive != PrimitiveString {
+				c := f.cache(cell)
+				c.Holders, c.Primitive = &HolderChain{Holders: s.Holders}, s.Primitive
 			}
 			v := f.newValue(blk, OpLoadCell, Tagged, cell)
 			v.Shadow = cell

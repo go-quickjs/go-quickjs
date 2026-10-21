@@ -215,6 +215,7 @@ var bigCorpus = []string{
 	`function f(a,b){let c=0;for(let i=0;i<9;i++){if(a<b)c++;a=(a&b)|(a^b);b=b<<3n;a=a>>2n;a=a-b*a+0xffffffffffffffffn}return c}`,
 	`function f(n,x){let s=0n;for(let i=0;i<n;i++)s+=x**3n+BigInt(i)**BigInt(n);return s}`,
 	`function f(n,x){let s="";for(let i=0;i<n;i++)s=(x+BigInt(i)).toString();return s}`,
+	`function f(n,x){let s="";for(let i=0;i<n;i++)s=x.toFixed(2)+x.toString(16)+x.valueOf()+x.toPrecision(3);return s}`,
 }
 
 // bigs is globals with every operator's site one that met BigInts held in
@@ -234,9 +235,12 @@ func (bigs) GoCalls() bool          { return true }
 // Accessor has no read call an accessor: each is a method's read.
 func (bigs) Accessor(int) (ssa.AccessorSite, bool) { return ssa.AccessorSite{}, false }
 
-// StringProperty has every method read a BigInt's, off a prototype.
+// StringProperty has every method read another primitive's than a
+// string's, off a prototype: a BigInt's, a number's or a boolean's, by its
+// PC.
 func (bigs) StringProperty(pc int) (ssa.PropertySite, bool) {
-	return ssa.PropertySite{Key: 9, Shape: 0x10000 + uintptr(pc), Index: int32(pc % 7), Holders: [2]ssa.Holder{{Object: 0x63000, Shape: 0x10000 + uintptr(pc)}}}, true
+	kind := [3]ssa.Primitive{ssa.PrimitiveBigInt, ssa.PrimitiveNumber, ssa.PrimitiveBoolean}[pc%3]
+	return ssa.PropertySite{Key: 9, Shape: 0x10000 + uintptr(pc), Index: int32(pc % 7), Holders: [2]ssa.Holder{{Object: 0x63000, Shape: 0x10000 + uintptr(pc)}}, Primitive: kind}, true
 }
 func (bigs) BigIntCell(pc int) (uintptr, uint64, int, bool) {
 	if pc%3 == 0 {
@@ -271,7 +275,7 @@ func TestMirEmitted(t *testing.T) {
 		// collector marks.
 		StoreRef: 0x70000}
 	cells := map[ssa.Op]int{}
-	bigProps := 0
+	primProps := map[ssa.Primitive]int{}
 	compile := func(name string, p *ir.Program, fb ssa.Feedback) bool {
 		f, err := ssa.BuildWith(p, fb)
 		if err != nil {
@@ -283,8 +287,8 @@ func TestMirEmitted(t *testing.T) {
 		for _, b := range f.Blocks {
 			for _, v := range b.Values {
 				cells[v.Op]++
-				if v.Op == ssa.OpStringProp && v.Holders() != nil {
-					bigProps++
+				if v.Op == ssa.OpStringProp {
+					primProps[v.Primitive()]++
 				}
 			}
 		}
@@ -343,8 +347,10 @@ func TestMirEmitted(t *testing.T) {
 			t.Errorf("none of %v compiled", ops)
 		}
 	}
-	if bigProps == 0 {
-		t.Errorf("no BigInt's method read compiled")
+	for _, k := range []ssa.Primitive{ssa.PrimitiveBigInt, ssa.PrimitiveNumber, ssa.PrimitiveBoolean} {
+		if primProps[k] == 0 {
+			t.Errorf("no method read of a primitive of kind %d compiled", k)
+		}
 	}
 	if cells[ssa.OpGlobalCell] == 0 || cells[ssa.OpLexCell] == 0 || cells[ssa.OpStringProp] == 0 || cells[ssa.OpAccessorIs] == 0 {
 		t.Fatalf("global cells %d, lexical cells %d, string methods %d, accessors %d", cells[ssa.OpGlobalCell], cells[ssa.OpLexCell],

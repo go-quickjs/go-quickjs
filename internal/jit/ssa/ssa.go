@@ -157,8 +157,10 @@ const (
 	// A string's property, a method, where String.prototype has it
 	// (abi.Context.StringMethods): its cell at Index, if the operand is a
 	// string, String.prototype's shape is Const's, the one the code was
-	// compiled for, and the entry at Index is Key's. With Holders (the
-	// IC's), a BigInt's, where BigInt.prototype, the first holder, has it.
+	// compiled for, and the entry at Index is Key's. Another primitive's
+	// (the IC's Primitive) -- a BigInt's, a number's, a boolean's -- is
+	// so where the prototype the realm fixed for it, the first of the IC's
+	// Holders, has it, if the operand is one.
 	OpStringProp // tagged -> source
 	OpStringCode // tagged callee, tagged string, f64 index -> f64
 	// OpStringChar is s[i], an element read of a string: the cell of the
@@ -638,6 +640,9 @@ type InlineCache struct {
 	// megamorphic cache have none -- for a call of Go on a branch of its
 	// own to read (OpCellNone), where that had left native code.
 	Mega, Scan, Try bool
+	// Primitive, for a primitive's property (OpStringProp), is the kind of
+	// receiver it reads (PropertySite's Primitive).
+	Primitive Primitive
 }
 
 // Tries reports whether v, a property's cell, is none where it finds no
@@ -651,6 +656,15 @@ func (v *Value) Megamorphic() bool { return v.IC != nil && v.IC.Mega }
 // Scans reports whether v, a read of a site whose cache is empty, searches
 // its receiver's own small table (PropertySite's Scan).
 func (v *Value) Scans() bool { return v.IC != nil && v.IC.Scan }
+
+// Primitive is the kind of receiver v, a primitive's property
+// (OpStringProp), reads (InlineCache): a string's but where its cache says.
+func (v *Value) Primitive() Primitive {
+	if v.IC == nil {
+		return PrimitiveString
+	}
+	return v.IC.Primitive
+}
 
 // Holders are v's cache's prototypes (InlineCache), or nil.
 func (v *Value) Holders() *HolderChain {

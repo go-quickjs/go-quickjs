@@ -5749,18 +5749,35 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.setG(v, a64A)
 	case ssa.OpStringProp:
 		// As amd64's: a string's method where String.prototype has it, its
-		// shape the one the code was compiled for; or a BigInt's.
-		if h := v.Holders(); h != nil {
+		// shape the one the code was compiled for; or a BigInt's, a
+		// number's or a boolean's.
+		switch w := c.gpr(arg(0), a64A); v.Primitive() {
+		case ssa.PrimitiveBigInt:
 			c.movImm(a64B, c.enc.HeapBigTag)
-			c.a.Cmp(c.gpr(arg(0), a64A), a64B, true)
+			c.a.Cmp(w, a64B, true)
 			guard(arm64.LO)
-			c.movImm(a64A, uint64(h.Holders[0].Object))
-		} else {
+		case ssa.PrimitiveNumber:
+			c.movImm(a64B, abi.NumberLimit)
+			c.a.Cmp(w, a64B, true)
+			guard(arm64.HS)
+		case ssa.PrimitiveBoolean:
+			yes := c.a.NewLabel()
+			c.movImm(a64B, c.enc.True)
+			c.a.Cmp(w, a64B, true)
+			c.a.BCond(arm64.EQ, yes)
+			c.movImm(a64B, c.enc.False)
+			c.a.Cmp(w, a64B, true)
+			guard(arm64.NE)
+			c.a.Bind(yes)
+		default:
 			c.movImm(a64B, c.enc.String)
-			c.a.Cmp(c.gpr(arg(0), a64A), a64B, true)
+			c.a.Cmp(w, a64B, true)
 			guard(arm64.NE)
 			c.a.Load(a64A, a64Ctx, abi.OffStringMethods)
 			c.a.Cbz(a64A, c.stubLabel(v.State, exitKind(v.Aux)), true)
+		}
+		if h := v.Holders(); v.Primitive() != ssa.PrimitiveString {
+			c.movImm(a64A, uint64(h.Holders[0].Object))
 		}
 		c.a.Load(a64B, a64A, c.enc.ObjectShape)
 		c.movImm(a64C, v.Const.Bits)
