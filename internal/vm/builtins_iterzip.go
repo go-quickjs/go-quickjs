@@ -273,9 +273,7 @@ func undefinedList(n int) []Value {
 }
 
 func (r *Runtime) newZipHelper(z *zipState) Value {
-	o := newObject(r.helperProto, ClassIteratorHelper)
-	o.extOf().data = &iterHelperData{kind: helperZip, zip: z}
-	return Obj(o)
+	return Obj(r.newHelper(iterHelperData{kind: helperZip, zip: z}))
 }
 
 // closeZip closes every iterator still open, most recent first, and returns

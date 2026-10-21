@@ -370,6 +370,7 @@ const (
 	iterNextMap = 1 + iota
 	iterNextGenerator
 	iterNextArray
+	iterNextHelper
 )
 
 // stepIter calls an iterator's next method and reads its result: the value,
@@ -437,6 +438,24 @@ func (r *Runtime) stepIter(iter, next Value) (Value, bool, error) {
 						return got.value, !got.done(), nil
 					}
 					res, have = got.value, true
+				}
+			case iterNextHelper:
+				// An iterator helper's next, whose value is its pipeline's
+				// next, made here as next makes it: in next's frame, which
+				// the callbacks it runs see in a stack trace, and refused for
+				// a helper already running, as next refuses it.
+				if it.class == ClassIteratorHelper {
+					if err := r.pushNativeFrame(n, iter, nil, Undefined); err != nil {
+						return Undefined, false, err
+					}
+					h, err := r.helperOf(iter, "Iterator Helper.prototype.next")
+					if err != nil {
+						r.frameDepth--
+						return Undefined, false, err
+					}
+					v, ok, err := r.advanceHelper(h)
+					r.frameDepth--
+					return v, ok, err
 				}
 			}
 		}

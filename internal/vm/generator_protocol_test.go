@@ -121,6 +121,14 @@ var generatorCases = []struct{ name, want, src string }{
 		`var it = { next() { return 5 } }; var r; try { Iterator.prototype.map.call(it, x => x).next() } catch (e) { r = e.constructor.name } r`},
 	{"helperStackDepth", `6`,
 		`function* g() { yield 1 } var h = g(); for (var i = 0; i < 5; i++) h = h.map(x => x + 1); h.toArray().join()`},
+	{"helperFrames", `3,1,1,1,1`,
+		`function* g() { yield new Error('x').stack } function* h() { yield 1 } function count(s, re) { return s.split('\n').filter(l => re.test(l)).length } var a = g().map(x => x).filter(x => true).toArray()[0]; var b = h().map(x => new Error('y').stack).reduce((p, c) => c, 0); var c; for (var v of h().map(x => new Error('z').stack)) c = v; [count(a, /\.next \(/), count(a, /\.toArray \(/), count(b, /\.next \(/), count(b, /\.reduce \(/), count(c, /\.next \(/)].join()`},
+	{"helperBigPipeline", `810|1,1,1|11,21,31|3|0,1,5`,
+		`function* nat() { var i = 0; while (true) yield i++ } var s = 0; for (var v of nat().filter(x => x % 3 == 0).map(x => x * x).drop(2).take(5)) s += v; var arr = Iterator.from({ next() { return { value: 1, done: false } } }).take(3).toArray(); var it = [10, 20, 30].values().map(x => x + 1); var m = new Map([[1, 2]]).entries().map(([k, v]) => k + v).toArray(); s + '|' + arr.join() + '|' + [...it].join() + '|' + m.join() + '|' + Iterator.concat(nat().take(2), [5]).toArray().join()`},
+	{"helperReentrantForOf", `TypeError,TypeError`,
+		`var h; function* g() { yield 1; yield 2 } h = g().map(x => { try { for (var y of h) { } return 'no' } catch (e) { return e.constructor.name } }); var r = []; for (var v of h) r.push(v); r.join()`},
+	{"helperReentrantStep", `1TypeError`,
+		`var h; function* g() { yield 1 } h = g().filter(x => { try { [...h]; return true } catch (e) { r = e.constructor.name; return true } }); var r; [...h].length + r`},
 	{"withScope", `1,5,5`,
 		`function* g(o) { with (o) { yield x; x = 5; yield x } } var o = { x: 1 }; var it = g(o); [it.next().value, it.next().value, o.x].join()`},
 	{"withDefined", `3,4,4`,
@@ -219,5 +227,43 @@ func TestResumeResultInRegisters(t *testing.T) {
 	typ := reflect.TypeOf(resumeResult{})
 	if n, size := typ.NumField(), typ.Size(); n > 4 || size > 4*unsafe.Sizeof(uintptr(0)) {
 		t.Errorf("resumeResult has %d fields, %d bytes", n, size)
+	}
+}
+
+// TestHelperStepsAllocate pins that a pipeline of iterator helpers over a
+// generator makes no result object at a step, at any level: a helper's
+// step and a generator's are applied directly, by each helper and by the
+// loop that drains the last (stepIter), so a pipeline allocates what it
+// makes once -- its generator, its helpers, its cursor -- whatever its
+// length. Each step had made two result objects a level.
+func TestHelperStepsAllocate(t *testing.T) {
+	r := New(Config{})
+	defer r.Close()
+	if _, err := r.Run(compileForTest(t, `function* count(n) { for (var i = 0; i < n; i++) yield i }
+		function pipe() { return count(100).map(x => x * 2).filter(x => x & 2).reduce((a, b) => a + b, 0) }
+		function take() { var s = 0; for (var v of count(1000).take(100)) s += v; return s }`)); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name string
+		want Value
+		max  float64
+	}{
+		{"pipe", Int(5000), 8},
+		{"take", Int(4950), 6},
+	} {
+		fn, err := r.Run(compileForTest(t, c.name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := testing.AllocsPerRun(20, func() {
+			v, err := r.call(fn, Undefined, nil)
+			if err != nil || !v.SameValue(c.want) {
+				t.Fatalf("%s: %v, %v", c.name, v, err)
+			}
+		})
+		if n > c.max {
+			t.Errorf("%s: %.0f allocations a call, past %.0f", c.name, n, c.max)
+		}
 	}
 }

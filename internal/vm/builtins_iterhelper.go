@@ -105,27 +105,29 @@ func (r *Runtime) getIteratorDirect(v Value) (Value, Value, error) {
 	return v, next, nil
 }
 
-// stepIterator pulls one value, reporting exhaustion separately from an error.
+// stepIterator pulls one value, reporting exhaustion separately from an
+// error. It is a loop's step (stepIter): a built-in next of this realm --
+// a generator's, a Map's or an array's iterator's, a helper's -- is applied
+// without the result object it would make, which only the step reads.
 func (r *Runtime) stepIterator(iter, next Value) (Value, bool, error) {
-	res, err := r.call(next, iter, nil)
-	if err != nil {
-		return Undefined, false, err
-	}
-	if !res.IsObject() {
-		return Undefined, false, r.throwTypeError("an iterator result must be an object")
-	}
-	done, err := r.getValueProp(res, atomDone)
-	if err != nil {
-		return Undefined, false, err
-	}
-	if done.Truthy() {
-		return Undefined, false, nil
-	}
-	v, err := r.getValueProp(res, atomValue)
-	if err != nil {
-		return Undefined, false, err
-	}
-	return v, true, nil
+	return r.stepIter(iter, next)
+}
+
+// newHelper makes a helper's object, the object and its state in one
+// allocation, with h as the state.
+func (r *Runtime) newHelper(h iterHelperData) *Object {
+	ho := &helperObject{h: h}
+	ho.Object = Object{proto: r.helperProto, class: ClassIteratorHelper, flags: objExtensible}
+	ho.embedExt(&ho.side)
+	ho.side.data = &ho.h
+	return &ho.Object
+}
+
+// helperObject is a helper's object and its state, made together.
+type helperObject struct {
+	Object
+	side objectExt
+	h    iterHelperData
 }
 
 func (r *Runtime) initIteratorHelpers() {
@@ -176,9 +178,7 @@ func (r *Runtime) initIteratorHelpers() {
 			}
 			items = append(items, concatItem{method: method, iterable: item})
 		}
-		o := newObject(rt.helperProto, ClassIteratorHelper)
-		o.extOf().data = &iterHelperData{kind: helperConcat, concat: items}
-		return Obj(o), nil
+		return Obj(rt.newHelper(iterHelperData{kind: helperConcat, concat: items})), nil
 	})
 
 	lazy := func(name string, length int, kind helperKind) {
@@ -186,7 +186,7 @@ func (r *Runtime) initIteratorHelpers() {
 			if !this.IsObject() {
 				return Undefined, rt.throwTypeError("Iterator.prototype.%s requires an object", name)
 			}
-			h := &iterHelperData{kind: kind, limit: math.Inf(1)}
+			h := iterHelperData{kind: kind, limit: math.Inf(1)}
 
 			// The argument is validated before the iterator is touched, so a
 			// bad argument does not consume anything.
@@ -227,10 +227,7 @@ func (r *Runtime) initIteratorHelpers() {
 				return Undefined, err
 			}
 			h.iter, h.next = iter, next
-
-			o := newObject(rt.helperProto, ClassIteratorHelper)
-			o.extOf().data = h
-			return Obj(o), nil
+			return Obj(rt.newHelper(h)), nil
 		})
 	}
 	lazy("map", 1, helperMap)
@@ -301,7 +298,7 @@ func (r *Runtime) defProtoAccessor(proto *Object, key Atom, val Value) {
 func (r *Runtime) initHelperPrototype() {
 	p := r.helperProto
 
-	r.defMethod(p, "next", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	next := r.defMethod(p, "next", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		h, err := rt.helperOf(this, "Iterator Helper.prototype.next")
 		if err != nil {
 			return Undefined, err
@@ -312,6 +309,7 @@ func (r *Runtime) initHelperPrototype() {
 		}
 		return Obj(rt.iterResult(v, !ok)), nil
 	})
+	next.fn().iterNext = iterNextHelper
 
 	r.defMethod(p, "return", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		h, err := rt.helperOf(this, "Iterator Helper.prototype.return")
@@ -382,14 +380,24 @@ func (r *Runtime) helperOf(this Value, name string) (*iterHelperData, error) {
 }
 
 // advanceHelper produces the helper's next value, or reports exhaustion.
+//
+// The helper is running while it does, which is put back as a call puts
+// it back, without a defer: a panic that passes here closes the runtime.
+// With a defer, one of its many returns' records, not open-coded, cost a
+// step of a pipeline a twelfth of what it took.
 func (r *Runtime) advanceHelper(h *iterHelperData) (Value, bool, error) {
 	if h.done {
 		return Undefined, false, nil
 	}
 	h.running = true
 	h.started = true
-	defer func() { h.running = false }()
+	v, ok, err := r.helperStep(h)
+	h.running = false
+	return v, ok, err
+}
 
+// helperStep is advanceHelper's step, of a helper that is not done.
+func (r *Runtime) helperStep(h *iterHelperData) (Value, bool, error) {
 	switch h.kind {
 	case helperMap:
 		v, ok, err := r.pull(h)
@@ -399,7 +407,7 @@ func (r *Runtime) advanceHelper(h *iterHelperData) (Value, bool, error) {
 		i := h.counter
 		h.counter++
 		h.argv[0], h.argv[1] = v, Float(i)
-		out, err := r.call(h.fn, Undefined, h.argv[:])
+		out, err := r.callDirect(h.fn, Undefined, h.argv[:])
 		if err != nil {
 			return Undefined, false, r.abandon(h, err)
 		}
@@ -414,7 +422,7 @@ func (r *Runtime) advanceHelper(h *iterHelperData) (Value, bool, error) {
 			i := h.counter
 			h.counter++
 			h.argv[0], h.argv[1] = v, Float(i)
-			keep, err := r.call(h.fn, Undefined, h.argv[:])
+			keep, err := r.callDirect(h.fn, Undefined, h.argv[:])
 			if err != nil {
 				return Undefined, false, r.abandon(h, err)
 			}
@@ -465,7 +473,7 @@ func (r *Runtime) advanceHelper(h *iterHelperData) (Value, bool, error) {
 			i := h.counter
 			h.counter++
 			h.argv[0], h.argv[1] = v, Float(i)
-			mapped, err := r.call(h.fn, Undefined, h.argv[:])
+			mapped, err := r.callDirect(h.fn, Undefined, h.argv[:])
 			if err != nil {
 				return Undefined, false, r.abandon(h, err)
 			}
@@ -599,9 +607,7 @@ func (r *Runtime) sizedHelper(this, size Value, name string, kind helperKind,
 	if err != nil {
 		return Undefined, err
 	}
-	o := newObject(r.helperProto, ClassIteratorHelper)
-	o.extOf().data = &iterHelperData{kind: kind, iter: iter, next: next, size: int64(n), partial: partial}
-	return Obj(o), nil
+	return Obj(r.newHelper(iterHelperData{kind: kind, iter: iter, next: next, size: int64(n), partial: partial})), nil
 }
 
 // pull takes one value from the underlying iterator, marking the helper done
@@ -738,7 +744,7 @@ func (r *Runtime) initIteratorTerminals(p *Object) {
 		var argv [2]Value
 		err := each(rt, this, func(v Value, i float64) (bool, error) {
 			argv[0], argv[1] = v, Float(i)
-			_, err := rt.call(fn, Undefined, argv[:])
+			_, err := rt.callDirect(fn, Undefined, argv[:])
 			return true, err
 		})
 		return Undefined, err
@@ -765,7 +771,7 @@ func (r *Runtime) initIteratorTerminals(p *Object) {
 				return true, nil
 			}
 			argv[0], argv[1], argv[2] = acc, v, Float(i)
-			out, err := rt.call(fn, Undefined, argv[:])
+			out, err := rt.callDirect(fn, Undefined, argv[:])
 			if err != nil {
 				return false, err
 			}
@@ -797,7 +803,7 @@ func (r *Runtime) initIteratorTerminals(p *Object) {
 			var argv [2]Value
 			err := each(rt, this, func(v Value, i float64) (bool, error) {
 				argv[0], argv[1] = v, Float(i)
-				out, err := rt.call(fn, Undefined, argv[:])
+				out, err := rt.callDirect(fn, Undefined, argv[:])
 				if err != nil {
 					return false, err
 				}
