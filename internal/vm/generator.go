@@ -814,11 +814,10 @@ func (r *Runtime) initGeneratorBuiltins() {
 		return rt.result(res), nil
 	})
 
-	// A generator is its own iterator.
-	r.genIterFn = r.defSymbolMethod(p, r.wellKnown.iterator, "[Symbol.iterator]", 0,
-		func(rt *Runtime, this Value, args []Value) (Value, error) {
-			return this, nil
-		})
+	// A generator is its own iterator through %IteratorPrototype%'s
+	// Symbol.iterator, which it inherits: %GeneratorPrototype% has none of
+	// its own, so that one a script gives %IteratorPrototype% is a
+	// generator's too.
 	r.defToStringTag(p, "Generator")
 }
 

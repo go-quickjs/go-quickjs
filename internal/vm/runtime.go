@@ -503,9 +503,10 @@ type Realm struct {
 	// the same template site must hand the same strings array to its tag on
 	// every evaluation.
 	templateCache map[*bytecode.Function][]*Object
-	// genIterFn and genNextFn are %GeneratorPrototype%[Symbol.iterator] and
-	// next, which a for-of loop over a generator need not look up while they
-	// are what the generator inherits; see generatorIteration.
+	// genIterFn and genNextFn are %IteratorPrototype%[Symbol.iterator] and
+	// %GeneratorPrototype%.next, which a for-of loop over a generator need
+	// not look up while they are what the generator inherits; see
+	// generatorIteration.
 	genIterFn *Object
 	// throwTypeErrorPair is the accessor pair of an unmapped arguments
 	// object's callee, %ThrowTypeError% for both halves: one per realm, as

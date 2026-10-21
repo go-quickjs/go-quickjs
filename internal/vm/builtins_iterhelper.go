@@ -269,7 +269,7 @@ func (r *Runtime) initIteratorHelpers() {
 	r.defProtoAccessor(p, r.atoms.intern("constructor"), Obj(ctor))
 	r.defProtoAccessor(p, r.atoms.internSymbol(r.wellKnown.toStringTag), Str(NewString("Iterator")))
 
-	r.defSymbolMethod(p, r.wellKnown.iterator, "[Symbol.iterator]", 0,
+	r.genIterFn = r.defSymbolMethod(p, r.wellKnown.iterator, "[Symbol.iterator]", 0,
 		func(rt *Runtime, this Value, args []Value) (Value, error) { return this, nil })
 }
 
