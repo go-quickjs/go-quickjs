@@ -1034,6 +1034,13 @@ The rounds that followed, each measured as above. The commit says more.
 | 2026-10-16 | `6193edc`..`cb7f7b8` | JIT: the callee makes its own frame; a native call's state and calls of Go described statically, as V8's deopt data; constants compared in one instruction; smaller equality and truthiness | with the JIT AWFY -3.2%, Octane -1.3%, V8 -1.0%; hot code -16% |
 | 2026-10-17 | `7668123`..`d27ce77` | `Math.random()` from a per-runtime cache of 64 xorshift128+ numbers, as V8's: a load in native code, a frameless call in the interpreter | with the JIT 49 to 3.7 ns (Node 6.3), without -13.6% |
 | 2026-10-17 | `897895c`..`d4e1855` | JIT: getters and setters called natively, prototype reads at megamorphic sites, loose `==` of booleans, recompiles that wait for room | Octane with the JIT -2.0% (Box2D -33%, PdfJS -7%, Typescript -5%) |
+| 2026-10-18 | `e2a4f0c`..`310d0e9` | JIT: callees' contexts and closures from pools, as V8 allocates contexts; native code that goes on while the collector marks | with the JIT AWFY -2% (pooled closures), -14% (code judged slow less often), -23.8% (the marking stages) |
+| 2026-10-19 | `310d0e9`..`4dc3a3d` | JIT: forEach, reduce, map, filter, some, every, find and findIndex as loops of the caller's code, a typed array's too; one-character substrings, parseInt and indexOf natively; constructors that only forward their arguments inlined | Box2D -11% and -9.5%; `string_indexOf` 110.8 to 72.1 ns |
+| 2026-10-20 | `18e6850`..`713fcc4` | BigInts: those in the int64 range natively in the JIT; arithmetic of our own (`internal/bignum`, its inner loops in assembly) in place of math/big; values below 2^64 held in their Values; results made in the blocks of operands no one else holds | the interpreter at or below C QuickJS on every BigInt micro-benchmark: `bigint256_arith` 290 to 136 ns (QuickJS 144), `bigint64_xorshift` 1789 to 154 (189) |
+| 2026-10-20 | `ddc9831`..`50be20c` | JIT: BigInts as 64-bit words and as Uint64s, `asUintN` and `asIntN` of words, `**`, truth and `toString`; heap BigInts' arithmetic by a leaf of the VM, in blocks given back | with the JIT faster than the interpreter on every BigInt micro-benchmark: `bigint64_xorshift` 624 to 9.5 ns, `bigint256_arith` 247 to 117 (136) |
+| 2026-10-20 | `bc35a9f` | JIT: code unused for a second flushed, with what it was compiled for | live heap after the suites with the JIT: Octane 355 to 230 MB, AWFY 54 to 10 MB; AWFY's CPU time -19% |
+| 2026-10-20 | `262fb78`..`b5ee46c` | JIT: calls of Go that run nothing made without a frame; keyed writes, a Map's or a Set's iterator's step and an array's length natively | `prop_create` 201 to 65 ns, `map_for_of` 66 to 14, `array_length_decr` 85 to 18, `map_set_bigint` 405 to 171 (the interpreter's 224) |
+| 2026-10-20 | `e49c1d9`, `26eb754` | JIT: loops whose calls of Go or exits do not pay go back to the tree tier, at the loop that entered native code | `date_now` 69 to 50 ns (the interpreter's 49), `generator_create` 979 to 690 (687) |
 
 ### What is open
 
@@ -1043,25 +1050,39 @@ The rounds that followed, each measured as above. The commit says more.
   furthest behind, spends about a quarter of its other time in property
   access through the caches.
 - **Micro-benchmarks still about twice QuickJS's time** (v0.27.0): an
-  array's growth by index (`array_prop_create` 2.39x), BigInts past 64
-  bits (`bigint256_arith` 2.19x), `WeakMap` set and delete (2.1x, which
-  `weak.Make` sets a floor under), two functions in mutual tail calls
-  (`tail_mutual` 2.74x), and generators made and run by for-of (1.7 to
-  1.9x). Global reads (1.70x, a top-level `let` or `const` about 10 ns more
-  than a `var`) and element reads (1.40x) are the common ones.
+  array's growth by index (`array_prop_create` 2.39x), `WeakMap` set and
+  delete (2.1x, which `weak.Make` sets a floor under), two functions in
+  mutual tail calls (`tail_mutual` 2.74x), and generators made and run by
+  for-of (1.7 to 1.9x). Global reads (1.70x, a top-level `let` or `const`
+  about 10 ns more than a `var`) and element reads (1.40x) are the common
+  ones. BigInts past 64 bits, 2.19x then (`bigint256_arith`), are below
+  QuickJS's time since 2026-10-20, with the JIT or without.
 - **RegExp:** a run of literal characters inside a pattern as one
   instruction (B6) is still left; `regexp_ascii` and `regexp_utf16` take
   1.4 times QuickJS's time.
 - **The JIT** (`-tags quickjs_jit`):
-  - Compiling costs too much for what it saves in large programs. With the
-    JIT, Octane's Typescript takes twice the interpreter's time, a third of
-    it compiling, most of that compiles again for what a function learned,
-    1.5 to 4.6 ms each as they inline more. Compiled code whose exits cost
-    more than it saves is not always given up: a stretch is judged by 20
-    instructions of work against an exit (`jitSSAMinWork`), far less than
-    an exit costs. More room for code (`WithJITMemoryLimit`) must never be
-    slower, and was: with 16 MB Typescript took 18% longer than with 8.
-    The default stays 8 MB until compiles cost less.
+  - Compiling costs too much for what it saves in large programs. Octane's
+    Typescript, which with the JIT had taken twice the interpreter's time,
+    takes 0.86 times it (7.2 s against 8.4 over three runs, 2026-10-20, at
+    v8bench's budget of 32 MiB), among the least the JIT gains of the
+    suite's programs; with code unused flushed since (`bc35a9f`) it evicts
+    no code for room, where it evicted 1,075 entries a run, and leaves
+    native code 34,399 times a run where 74,847. Most of its compiling is compiling again for what a function
+    learned, 1.5 to 4.6 ms each as they inline more. Compiled code whose
+    exits cost more than it saves is not always given up: a stretch is
+    judged by 20 instructions of work against an exit (`jitSSAMinWork`),
+    far less than an exit costs. More room for code (`WithJITMemoryLimit`)
+    must never be slower, and was, before the flush: with 16 MB Typescript
+    took 18% longer than with 8. The runtime's default stays 8 MB until
+    that is measured again.
+  - **What code in use was compiled for stays alive.** Code unused is
+    flushed (`bc35a9f`), and what it was compiled for with it; code still
+    in use holds its call targets' closures (`nativeCalls`), its holders
+    and the closures it inlined, strongly, where V8 holds them weakly and
+    deoptimizes code whose objects die. Go gives no hook to invalidate
+    code before a dead object's address is reused, so a weak target needs
+    code that checks it is still alive before it is entered. Octane's
+    Typescript keeps about 110 MB more than the interpreter while it runs.
   - Box2D's exits, once comparisons of two objects, `instanceof` of a
     parameter and additions across many shapes, are 13 a run now (a
     count of exits and calls of Go by site, 2026-10-19). Its cost was
@@ -1091,9 +1112,13 @@ The rounds that followed, each measured as above. The commit says more.
     (`jitGoCallPlain`), and for the rest, `Date.now` among them,
     `jitGoCall`, which gives each call a frame, pins the code, copies and
     clears the operands and asks what the JIT may learn -- more than the
-    tree tier spends on the whole call: `date_now` takes 67 to 79 ns with
-    the JIT, 51 without. V8 calls such functions from optimized code as
-    fast API calls, with no frame of JavaScript's. The plan:
+    tree tier spends on the whole call: `date_now` took 67 to 79 ns with
+    the JIT, 51 without. Its loop now goes back to the tree tier, whose
+    calls pay (`e49c1d9`): level, 50 ns, but a loop of such calls can only
+    match the tree tier while each call of Go costs native code more than
+    the tree's call of the built-in. V8 calls such functions from
+    optimized code as fast API calls, with no frame of JavaScript's. The
+    plan:
     1. A built-in declares itself where it is made: a leaf entry in its
        `funcData`, the Go function that makes the call -- a result, or
        "not mine", for anything it cannot answer without running a
