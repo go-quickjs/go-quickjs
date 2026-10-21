@@ -830,10 +830,21 @@ func (fb *jitFeedback) privateProperty(pc int, in bytecode.Instr) (ssa.PropertyS
 			cases = e.poly[i].cases
 		}
 	}
+	// A case is the shape an object had and where in it the member was,
+	// met under whatever key the binding held then: every evaluation of a
+	// class mints its own, and its closures share the site. One whose
+	// shape holds another key at its index is no case of this key's -- an
+	// object of the other evaluation's, its member read by this one's code
+	// -- and is left out, so that such an object is Go's, whose brand
+	// check throws.
+	atom := fb.r.atoms.internSymbol(key.Symbol())
+	cases = slices.DeleteFunc(slices.Clone(cases), func(c propCache) bool {
+		return c.shape == nil || c.idx < 0 || c.idx >= c.shape.n || c.shape.keys[c.idx].key != atom
+	})
 	if len(cases) == 0 {
 		return ssa.PropertySite{}, false
 	}
-	site := ssa.PropertySite{Key: uint32(fb.r.atoms.internSymbol(key.Symbol())), Private: uintptr(unsafe.Pointer(key.Symbol()))}
+	site := ssa.PropertySite{Key: uint32(atom), Private: uintptr(unsafe.Pointer(key.Symbol()))}
 	k := fb.keep()
 	for i, c := range cases {
 		k.shapes = append(k.shapes, remember(c.shape))
