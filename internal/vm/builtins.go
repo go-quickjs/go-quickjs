@@ -3364,6 +3364,15 @@ func (r *Runtime) compareForSort(x, y, cmp Value, argv *[2]Value) (bool, error) 
 // createIndexed defines one element of a result the caller promised to produce,
 // so a define the object refuses is an error rather than something to ignore.
 func (r *Runtime) createIndexed(o *Object, i int64, v Value) error {
+	if o.class == ClassArray && i == int64(len(o.elemsOf())) && i < math.MaxUint32-1 && r.meter == nil &&
+		o.flags&(objExtensible|objArrayLengthWritable|objHasSparseElements) == objExtensible|objArrayLengthWritable {
+		// An element defined at the end of an extensible array's dense
+		// storage, whose length is writable, is appended, as the definition
+		// would append it: Array.from's result, built from an iterable, is
+		// made so, element after element.
+		o.extOf().elems = append(o.elemsOf(), v)
+		return nil
+	}
 	ok, err := r.defineProperty(o, r.indexKey(i), &propDesc{
 		value: v, hasValue: true,
 		writable: true, hasWritable: true,
