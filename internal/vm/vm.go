@@ -3608,7 +3608,8 @@ func (r *Runtime) setIndexed(obj, key, val Value, strict bool) error {
 				return r.setElem(t, i, val)
 			}
 		}
-		if appendElem(obj.Object(), key.num, val) || fillHole(obj.Object(), key.num, val) {
+		if appendElem(obj.Object(), key.num, val) || fillHole(obj.Object(), key.num, val) ||
+			setOrdinaryIndex(obj.Object(), key.num, val) {
 			return nil
 		}
 	}
@@ -3694,6 +3695,36 @@ func fillHole(o *Object, n float64, v Value) bool {
 		}
 	}
 	o.elemsOf()[i] = v
+	return true
+}
+
+// setOrdinaryIndex stores v at index n of o, an ordinary object, as an
+// assignment would, where that runs nothing and throws nothing, and
+// reports whether it did: o's own writable data property is written, or a
+// new one added to o -- extensible, with no element, nothing up its chain
+// having an element or an index (noneIndexed) -- along its layout's
+// transition, as setProp's walk would have ended by adding it. An object
+// filled in as a table of indices had each of its stores walk there,
+// asking its table twice whether it had the key.
+func setOrdinaryIndex(o *Object, n float64, v Value) bool {
+	i := uint32(n)
+	if o.class != ClassObject || float64(i) != n || i >= atomIndexTag || len(o.elemsOf()) != 0 {
+		return false
+	}
+	// The atom of an index short enough for one to carry, as
+	// numberToAtom makes it; -0 is 0's.
+	key := Atom(atomIndexTag | i)
+	if j := o.findOwn(key); j >= 0 {
+		if o.shape.keys[j].flags&(propPrivate|propAccessor|propUninit|propWritable) != propWritable {
+			return false
+		}
+		o.vals[j] = v
+		return true
+	}
+	if o.flags&objExtensible == 0 || !noneIndexed(o.proto) {
+		return false
+	}
+	o.appendProp(Property{key: key, flags: propDefault, value: v})
 	return true
 }
 

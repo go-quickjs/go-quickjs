@@ -107,17 +107,18 @@ func (r *Runtime) jitKeyedWrite(o, k, v Value, store bool) bool {
 	}
 	// What createOwnProp adds to an ordinary object: an element of the
 	// dense storage it has, or a property, its keyed store past the soft
-	// limit making it a dictionary (shapeAdded), as setIndexed's does.
+	// limit making it a dictionary (shapeAdded), as setIndexed's does --
+	// appended, the object having been found not to have it.
 	if key.IsIndex() && len(obj.elemsOf()) > 0 && uint(key.Index()) <= uint(len(obj.elemsOf())) && obj.setElem(key.Index(), v) {
 		return true
 	}
 	if t := r.shapes; t != nil && !key.IsIndex() {
 		was := t.keyed
 		t.keyed = obj
-		obj.setOwnRaw(key, v, propDefault)
+		obj.appendProp(Property{key: key, flags: propDefault, value: v})
 		t.keyed = was
 		return true
 	}
-	obj.setOwnRaw(key, v, propDefault)
+	obj.appendProp(Property{key: key, flags: propDefault, value: v})
 	return true
 }

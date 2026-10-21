@@ -352,31 +352,24 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 	// what most assignments are, and the walk below establishes for each step
 	// what this settles once: no proxy, no exotic own property, no receiver in
 	// between, and a plain writable data property to write to.
-	if rcv == obj && obj.class == ClassObject && obj.shapeIndex() == nil {
-		own := false
-		for i, p := range obj.keys() {
-			if p.key != key {
-				continue
+	if rcv == obj && obj.class == ClassObject {
+		if i := obj.findOwn(key); i >= 0 {
+			// Read-only, an accessor or a binding not yet initialized is
+			// not written here: the walk says what to do, with the message
+			// it has for it.
+			if obj.shape.keys[i].flags&(propPrivate|propAccessor|propUninit|propWritable) == propWritable {
+				obj.vals[i] = val
+				return true, nil
 			}
-			own = true
-			if p.flags&(propDeleted|propPrivate|propAccessor) != 0 {
-				continue
-			}
-			if p.flags&propWritable == 0 {
-				// Read-only, which is refused rather than written: the walk
-				// says so with the message it has for it.
-				break
-			}
-			obj.vals[i] = val
-			return true, nil
-		}
-		// Creating one is the other thing most assignments are -- a
-		// constructor filling in its object -- and where nothing up the chain
-		// has the name, the walk has nothing to find: an ordinary object
-		// neither holds a setter for it nor synthesizes it, and a name that is
-		// no index cannot be an element. The property is added as the walk
-		// would have ended by adding it.
-		if !own && !key.IsIndex() && obj.flags&objExtensible != 0 && noneHas(obj.proto, key) {
+		} else if obj.flags&objExtensible != 0 && (key.IsIndex() && len(obj.elemsOf()) == 0 && noneIndexed(obj.proto) ||
+			!key.IsIndex() && noneHas(obj.proto, key)) {
+			// Creating one is the other thing most assignments are -- a
+			// constructor filling in its object, an object filled in as a
+			// table of indices -- and where nothing up the chain has the
+			// name, the walk has nothing to find: an ordinary object neither
+			// holds a setter for it nor synthesizes it, and an index is an
+			// element of none of them. The property is added as the walk
+			// would have ended by adding it.
 			obj.appendProp(Property{key: key, flags: propDefault, value: val})
 			return true, nil
 		}
@@ -513,6 +506,19 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 func noneHas(o *Object, key Atom) bool {
 	for ; o != nil; o = o.proto {
 		if o.class != ClassObject || o.findOwn(key) >= 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// noneIndexed reports whether no object of a chain has an element or an
+// index in its table, all of them ordinary objects or arrays, which have
+// no element they do not store: none has a setter for an index, nor one
+// not to be written.
+func noneIndexed(o *Object) bool {
+	for ; o != nil; o = o.proto {
+		if o.class != ClassObject && o.class != ClassArray || len(o.elemsOf()) != 0 || !o.noIndexKeys() {
 			return false
 		}
 	}
