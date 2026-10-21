@@ -380,6 +380,34 @@ func (m *matcherASCII) run(code []instr, pos int) (bool, error) {
 			}
 			pos = end
 			pc += 2
+		case opGreedyRune:
+			item := code[pc+1]
+			end := pos
+			if item.op == opAny {
+				end = m.in.length()
+			} else {
+				for {
+					r, w := m.in.at(end)
+					if w == 0 || !m.runeMatches(item, r) {
+						break
+					}
+					end += w
+				}
+			}
+			m.steps += end - pos
+			lo := pos
+			if in.arg > 0 {
+				if end == pos {
+					goto backtrack
+				}
+				_, w := m.in.at(pos)
+				lo = pos + w
+			}
+			if end > lo {
+				m.push(frame{pc: int32(pc + 2), pos: int32(end), capsLen: int32(len(m.trail)), counterIdx: greedyRuneFrame, counterVal: int32(lo)})
+			}
+			pos = end
+			pc += 2
 		case opEmptyCheck:
 			if in.arg2 == 0 {
 				m.push(frame{pc: -1, emptyIdx: int32(in.arg), emptyVal: int32(m.emptyMarks[in.arg]), pos: int32(pos), capsLen: int32(len(m.trail)), counterIdx: -1})
@@ -410,6 +438,18 @@ func (m *matcherASCII) run(code []instr, pos int) (bool, error) {
 				if p > f.counterVal {
 					f.pos = p
 					m.stack = append(m.stack, f)
+				}
+				pc, pos = int(f.pc), int(p)
+				break
+			}
+			if f.counterIdx == greedyRuneFrame {
+				_, w := m.in.before(int(f.pos))
+				p := f.pos - int32(w)
+				if p > f.counterVal {
+					f.pos = p
+					m.stack = append(m.stack, f)
+				} else {
+					p = f.counterVal
 				}
 				pc, pos = int(f.pc), int(p)
 				break
@@ -448,6 +488,27 @@ func (m *matcherASCII) push(f frame) {
 
 func (m *matcherASCII) unitMatches(in instr, u uint16) bool {
 	r := rune(u)
+	switch in.op {
+	case opChar:
+		return r == in.r
+	case opCharFold:
+		if in.arg >= 0 {
+			return m.prog.folds[in.arg].has(r)
+		}
+		return canonical(r, m.prog.unicodeFold) == in.r
+	case opClass:
+		if r < 128 {
+			return m.prog.asciiClasses[in.arg][r>>6]&(1<<(r&63)) != 0
+		}
+		return m.prog.classes[in.arg].contains(r, m.prog.unicodeFold)
+	case opAny:
+		return true
+	default:
+		return !isLineTerminator(r)
+	}
+}
+
+func (m *matcherASCII) runeMatches(in instr, r rune) bool {
 	switch in.op {
 	case opChar:
 		return r == in.r

@@ -54,6 +54,11 @@ const (
 	// gives them back one at a time as the rest fails, from one choice point
 	// rather than one per unit.
 	opGreedy
+	// opGreedyRune is opGreedy under the unicode flag, of a character, a
+	// class or a dot, which may each match a pair of surrogates: its run is
+	// of characters, at least arg of them, and it gives them back a
+	// character at a time.
+	opGreedyRune
 )
 
 // instr is one instruction of the program.
@@ -374,6 +379,12 @@ func (c *compiler) compileRepeat(t nodeRepeat) {
 	if greedyLoops && t.greedy && t.max < 0 && t.min <= 1 && !c.reverse &&
 		c.flags&(FlagUnicode|FlagUnicodeSets) == 0 && oneUnit(t.item) && (!c.noGreedy || asciiOnly(t.item)) {
 		c.emit(instr{op: opGreedy, arg: t.min})
+		c.compile(t.item)
+		return
+	}
+	if greedyLoops && t.greedy && t.max < 0 && t.min <= 1 && !c.reverse && !c.noGreedy &&
+		c.flags&(FlagUnicode|FlagUnicodeSets) != 0 && oneCharacter(t.item) {
+		c.emit(instr{op: opGreedyRune, arg: t.min})
 		c.compile(t.item)
 		return
 	}
