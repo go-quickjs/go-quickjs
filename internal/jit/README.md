@@ -236,7 +236,21 @@ Go suspends the frame as the interpreter does, and each resumption enters
 native code at the frame's pc -- the entry after the yield or await, or,
 the first time, past the parameters -- as the tree tier resumes a tree at
 the block there (`jitResume`, `runGeneratorTree`). A call of one makes its
-object, so none is called natively or inlined.
+object, so none is called natively or inlined. But a for...of's or a
+destructuring's step over a generator (`ssa.CallSite`'s `Gens`) resumes it
+by a native call, as V8's code calls a generator's resumption: the step
+checks the cursor's generator -- of a function it has met, suspended, not
+in a `yield*`, stepped by the realm's `next` -- and jumps to the generator
+code's generator entry (mir's `genEntry`), which makes the frame from the
+generator, its locals the generator's own, and goes on at the entry for
+its place (`ssa.Func`'s `GenResumes`). A yield there writes the frame,
+saves the generator's place, operands and handlers as Go's suspension
+would and returns the value to the step (`ssa.Block`'s `Yield`); a return
+finishes it and returns the step's done. Anything else leaves as a native
+callee does, and Go finishes the resumption from the generator
+(`jitGenFrame`, `jitGenDone`). Only a synchronous generator without
+`yield*` whose locals no closure captures is resumed so
+(`jitGenCallable`).
 
 **Top-level code.** A script's, a module's or an indirect eval's code runs
 once, so it is entered only at its loops, as V8 enters top-level code by

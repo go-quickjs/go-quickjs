@@ -458,6 +458,17 @@ type Context struct {
 	// of the call (GoCallState's LeafSeen). At the end, so that no offset
 	// native code uses moves.
 	GoLast uintptr
+	// A generator a loop's step resumes natively (ssa.CallSite's Gens)
+	// runs in a native call's context, as a callee does, its frame the
+	// generator's: GenObject is the VM's generator, GenCursor the loop's
+	// cursor that steps it -- the addresses, which the caller's frame keeps
+	// alive, its cursor holding both -- written by the step before it
+	// jumps to the generator's code (mir's genEntry), which reads them
+	// there and keeps them in its own. GenEntry, in the step's context, is
+	// the address the step jumps to, kept between its checks and its call.
+	// At the end, as GoLast.
+	GenObject, GenCursor uint64
+	GenEntry             uintptr
 }
 
 // GoArg is an operand of a call of Go: a slot's two words, its pointer word
@@ -851,6 +862,10 @@ var (
 	OffCallState = int32(unsafe.Offsetof(Context{}.CallState))
 	OffGoState   = int32(unsafe.Offsetof(Context{}.GoState))
 
+	OffGenObject = int32(unsafe.Offsetof(Context{}.GenObject))
+	OffGenCursor = int32(unsafe.Offsetof(Context{}.GenCursor))
+	OffGenEntry  = int32(unsafe.Offsetof(Context{}.GenEntry))
+
 	// OffGoCallBigOff is GoCallState's BigOff.
 	OffGoCallBigOff = int32(unsafe.Offsetof(GoCallState{}.BigOff))
 )
@@ -1031,6 +1046,31 @@ type Encoding struct {
 	MapEntrySeq                                     int32
 	MapKeys, MapValues                              uint8
 	MapDeleted                                      uint64
+	// A for...of over a generator has the generator object at IterIter,
+	// whose data's type word is GenData (0 where native code resumes
+	// none): the VM's generator, which native code resumes where it is
+	// (ssa.CallSite's Gens). Its closure is the pointer at GenClosure, its
+	// receiver the value at GenThis; its locals follow its GenArgs
+	// arguments (a uint32) in the slice at GenVals; the operands saved at
+	// its suspension are the slice at GenStack; the uint32 at GenPC is
+	// where it goes on, the slice at GenHandlers the handlers then in
+	// force, and the pointer at GenRare what few generators need. Its
+	// state is the byte at GenState -- GenSuspendedStart, GenSuspendedYield,
+	// GenExecuting or GenCompleted -- the byte at GenStarted is set once
+	// its body has begun, and the one at GenDelegating while it is
+	// suspended in a yield*. Native code writes its state, its place and
+	// the operands it saves, and the lengths of the operands and the
+	// handlers.
+	GenData                               uint64
+	GenClosure, GenThis, GenVals, GenArgs int32
+	GenStack, GenPC, GenHandlers, GenRare int32
+	GenState, GenStarted, GenDelegating   int32
+	GenSuspendedStart, GenSuspendedYield  uint8
+	GenExecuting, GenCompleted            uint8
+	// A handler the generator saves is HandlerSize bytes: the uint32 at
+	// HandlerPC where it goes on, the int at HandlerDepth the operands
+	// beneath it, and the byte at HandlerFinally set for a finally clause's.
+	HandlerSize, HandlerPC, HandlerDepth, HandlerFinally int32
 	// A typed array is an object of class ClassTypedArray whose data's
 	// type word is TypedData: a view, whose element type's byte is at
 	// TypedKind (the Elem constants), its first byte's offset in its
@@ -1071,6 +1111,10 @@ type Encoding struct {
 	// shares, nil for none.
 	FuncExtra, ExtraLexThis, ExtraLexThisRef                                  int32
 	LinkEntry, LinkBody, LinkIn, LinkParams, LinkLocals, LinkFrame, LinkFlags int32
+	// LinkGen is, in a generator's link, the address of its code's entry
+	// for a loop's step that resumes it natively (mir's Code.GenEntry), a
+	// uint64, 0 for none.
+	LinkGen int32
 	// Mega says contexts point to a megamorphic cache (Context.Mega).
 	Mega bool
 	// FlagHTMLDDA is the flags byte's bit for Annex B's [[IsHTMLDDA]],

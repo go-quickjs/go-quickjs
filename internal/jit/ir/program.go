@@ -379,6 +379,10 @@ type Instruction struct {
 	// is the one the code was compiled for. A read with When is #x in o:
 	// true where the read would find the member.
 	Private bool
+	// Suspend marks a Host that is a generator's yield, which code a loop's
+	// step resumed natively makes itself, returning the value to the step
+	// (ssa.Block's Yield), and Go makes otherwise.
+	Suspend bool
 }
 
 // StateMap describes state immediately before a bytecode instruction. PC is

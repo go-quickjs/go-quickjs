@@ -980,6 +980,15 @@ type CallSite struct {
 	// one of them native code steps itself, as V8 inlines a Map
 	// iterator's next. Zero for none.
 	MapNexts [2]uintptr
+	// Gens, with Step, are the generators' functions the step has met
+	// (GenStepFeedback), and GenNext the realm's %GeneratorPrototype%.next:
+	// a cursor over a generator of one of them, whose next is GenNext,
+	// suspended and not in a yield*, native code resumes by a native call
+	// of the generator's code (Func's GenEntry), as V8's code calls a
+	// generator's resumption -- the generator's value, or, once it
+	// finishes, the step's done.
+	Gens    []GenStep
+	GenNext uintptr
 	// ForOf marks a for...of's or a destructuring's cursor made of the
 	// iterable, its one operand.
 	ForOf bool
@@ -2714,6 +2723,39 @@ type MapStepFeedback interface {
 	MapNexts() [2]uintptr
 }
 
+// GenStep is a generator's function a loop's step has met (CallSite's
+// Gens): the address of its bytecode, which the step checks the
+// generator's closure runs, and of the environment and realm the closure
+// must have, the caller's; and the addresses of the cell its code's
+// generator entry is in, 0 while it has none, and of the count of its
+// native calls, its link's, which the VM keeps alive.
+type GenStep struct {
+	Fn, Env, Realm uintptr
+	Entry, Count   uintptr
+}
+
+// GenStepFeedback is Feedback that knows the generators a loop's step at
+// pc has met (CallSite's Gens), and the realm's %GeneratorPrototype%.next,
+// whose cursors native code resumes by a native call.
+type GenStepFeedback interface {
+	GenSteps(pc int) []GenStep
+	GenNext() uintptr
+}
+
+// genSteps are the generators the step at pc resumes natively
+// (GenStepFeedback), and the realm's generators' next; none for none.
+func (b *builder) genSteps(pc int) ([]GenStep, uintptr) {
+	f, ok := b.fb.(GenStepFeedback)
+	if !ok || b.cur != b.root {
+		return nil, 0
+	}
+	gens := f.GenSteps(pc)
+	if len(gens) == 0 {
+		return nil, 0
+	}
+	return gens, f.GenNext()
+}
+
 // mapNexts are the realm's Map and Set iterators' next functions
 // (MapStepFeedback), or none.
 func (b *builder) mapNexts() [2]uintptr {
@@ -2743,10 +2785,12 @@ func (b *builder) goKeyedWrite(blk *Block, in ir.Instruction, operand func(ir.Op
 // -- and ends blk with the branch on its answer: the uninitialized value,
 // which no step yields, for a cursor done, any other its next value. What
 // Go refuses leaves for Go to make after an exit.
-func (b *builder) iterStep(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+func (b *builder) iterStep(blk *Block, pc int, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
 	call := guard(OpCall, Tagged, ir.HostExit, operand(in.Left))
 	if b.f.Keeps < b.f.keepLimit() {
-		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoCall, Step: true, Fill: in.When, ThisSlot: -1, MapNexts: b.mapNexts()}}, b.f.Keeps
+		gens, next := b.genSteps(pc)
+		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoCall, Step: true, Fill: in.When, ThisSlot: -1, MapNexts: b.mapNexts(),
+			Gens: gens, GenNext: next}}, b.f.Keeps
 		b.f.Keeps++
 	}
 	cell := b.f.newValue(blk, OpCallCell, Source, call)
@@ -4050,6 +4094,7 @@ func (b *builder) placeAfter(blk *Block, made []*Block, cont *Block) {
 	rest := append(made, f.Blocks[at:]...)
 	f.Blocks = append(f.Blocks[:at], rest...)
 	cont.Kind, cont.Control, cont.Succs, cont.State, cont.ExitKind = blk.Kind, blk.Control, blk.Succs, blk.State, blk.ExitKind
+	cont.Yield, cont.YieldHandlers, blk.Yield, blk.YieldHandlers = blk.Yield, blk.YieldHandlers, false, nil
 	for _, s := range cont.Succs {
 		for i, p := range s.Preds {
 			if p == blk {
@@ -4771,7 +4816,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			blk.State.addUse()
 			break
 		}
-		b.iterStep(blk, in, operand, guard)
+		b.iterStep(blk, pc, in, operand, guard)
 	case ir.IterClose:
 		// A cursor closed as a destructuring or a loop ends: nothing to do
 		// for one done, or for an array walked in place while nothing up
@@ -5121,7 +5166,35 @@ func (b *builder) instruction(blk *Block, pc int) {
 		blk.ExitKind = ir.HostExit
 		blk.State = state()
 		blk.State.addUse()
+		// A generator's yield, which code a loop's step resumed natively
+		// makes itself (Block's Yield), saving the handlers in force.
+		if in.Suspend && b.cur == b.root {
+			blk.YieldHandlers, blk.Yield = b.handlersAt(pc)
+		}
 	}
+}
+
+// maxYieldHandlers bounds the handlers a yield native code makes saves
+// (Block's YieldHandlers): one under more is Go's.
+const maxYieldHandlers = 8
+
+// handlersAt are the handlers in force at pc, as a generator suspended
+// there saves them, the outermost first, and whether there are no more
+// than maxYieldHandlers of them.
+func (b *builder) handlersAt(pc int) ([]ir.Handler, bool) {
+	p := b.p
+	if p.HandlerAt == nil || pc >= len(p.HandlerAt) {
+		return nil, true
+	}
+	var out []ir.Handler
+	for k := p.HandlerAt[pc]; k != 0; k = p.Handlers[k-1].Outer {
+		if len(out) == maxYieldHandlers {
+			return nil, false
+		}
+		out = append(out, p.Handlers[k-1])
+	}
+	slices.Reverse(out)
+	return out, true
 }
 
 // nativeCalls are the functions the call at pc may call natively, if any

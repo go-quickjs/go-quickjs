@@ -587,8 +587,15 @@ type jitEntry struct {
 	stringReads []int32
 	keyedReads  []int32
 	keyedWrites []int32
-	polyReopt   bool
-	polyReopts  uint8
+	// genSteps are the loops' steps that have met generators the code may
+	// resume natively (ssa.GenStepFeedback), with the generators' closures,
+	// which keep alive what the code compares their closures with; and
+	// genLearned marks one learned since the code was compiled
+	// (jitGenStepSeen).
+	genSteps   []jitGenStep
+	genLearned bool
+	polyReopt  bool
+	polyReopts uint8
 	// strSites are the method reads that met a string receiver, which the
 	// code reads off String.prototype once compiled again
 	// (jitFeedback.StringProperty).
@@ -766,17 +773,29 @@ type jitLink struct {
 	// The function's frame and flags (abi.LinkCoerce...), for a generic
 	// call (abi.Encoding's Link fields).
 	params, locals, frame, flags uint64
+	// gen is, for a generator's function, its code's generator entry,
+	// where a loop's step that resumes one natively jumps (ssa.CallSite's
+	// Gens), or 0 while there is none it may: 0 whenever entry is, for
+	// the same reasons, and for a generator's code entry always is.
+	gen uintptr
 }
 
 // setCode has native callers call code through l: its call entry, which
 // makes the callee's frame (abi.Context's ReturnTo), and its start, where
-// a call in tail position goes on. Code with no call entry has Go run the
-// function at each native call (abi.ExitEnter).
+// a call in tail position goes on; and a generator's steps its generator
+// entry. Code with no call entry has Go run the function at each native
+// call (abi.ExitEnter).
 func (l *jitLink) setCode(code *jit.SSACode) {
-	l.entry, l.body = code.CallEntry(), code.EntryAddress(0)
+	l.entry, l.body, l.gen = code.CallEntry(), code.EntryAddress(0), code.GenEntry()
 	if l.entry == 0 {
 		l.body = 0
 	}
+}
+
+// clearCode has native callers call l's function's code no more: they
+// leave its calls, and its generators' steps, to Go.
+func (l *jitLink) clearCode() {
+	l.entry, l.body, l.gen = 0, 0, 0
 }
 
 // Weak keys prevent a refusal or cached program from retaining a source graph.
@@ -1228,7 +1247,7 @@ func (e *jitEntry) owned() bool {
 // the OS would not release the code, which leaves e owned for a retry.
 func (s *jitState) dropEntry(key weak.Pointer[bytecode.Function], e *jitEntry) bool {
 	held := e.ssa.Size() != 0
-	e.link.entry, e.link.body = 0, 0
+	e.link.clearCode()
 	if s.closeSSA(e.ssa, e) != nil {
 		return false
 	}
@@ -1806,7 +1825,8 @@ func (s *jitState) forget(key weak.Pointer[bytecode.Function], e *jitEntry) {
 // disown has e's link no longer e's: an entry the cache does not hold.
 func (s *jitState) disown(e *jitEntry) {
 	if l := e.link; l != nil && l.owner == e {
-		l.owner, l.entry, l.body = nil, 0, 0
+		l.owner = nil
+		l.clearCode()
 		s.unlink(l)
 		// Its function's lowering is now one makeRoom may reclaim: the
 		// floor noted before counted it as held for good.
@@ -1828,7 +1848,8 @@ func (s *jitState) linkFor(fn *bytecode.Function, e *jitEntry) {
 			frame: uint64(fn.LocalCount + fn.MaxStack), flags: jitLinkFlags(fn)}
 		s.links[key] = l
 	}
-	l.owner, l.entry, l.body, l.in = e, 0, 0, 0
+	l.owner, l.in = e, 0
+	l.clearCode()
 	e.link = l
 }
 

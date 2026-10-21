@@ -123,6 +123,26 @@ var jitEncoding = abi.Encoding{
 	MapKeys:            uint8(mapIterKeys),
 	MapValues:          uint8(mapIterValues),
 	MapDeleted:         math.Float64bits(deletedKey.num),
+	GenData:            jitTypeWord((*generator)(nil)),
+	GenClosure:         int32(unsafe.Offsetof(generator{}.cl)),
+	GenThis:            int32(unsafe.Offsetof(generator{}.this)),
+	GenVals:            int32(unsafe.Offsetof(generator{}.vals)),
+	GenArgs:            int32(unsafe.Offsetof(generator{}.nargs)),
+	GenStack:           int32(unsafe.Offsetof(generator{}.stack)),
+	GenPC:              int32(unsafe.Offsetof(generator{}.pc)),
+	GenHandlers:        int32(unsafe.Offsetof(generator{}.handlers)),
+	GenRare:            int32(unsafe.Offsetof(generator{}.rare)),
+	GenState:           int32(unsafe.Offsetof(generator{}.state)),
+	GenStarted:         int32(unsafe.Offsetof(generator{}.started)),
+	GenDelegating:      int32(unsafe.Offsetof(generator{}.delegating)),
+	GenSuspendedStart:  uint8(genSuspendedStart),
+	GenSuspendedYield:  uint8(genSuspendedYield),
+	GenExecuting:       uint8(genExecuting),
+	GenCompleted:       uint8(genCompleted),
+	HandlerSize:        int32(unsafe.Sizeof(handler{})),
+	HandlerPC:          int32(unsafe.Offsetof(handler{}.pc)),
+	HandlerDepth:       int32(unsafe.Offsetof(handler{}.stackDepth)),
+	HandlerFinally:     int32(unsafe.Offsetof(handler{}.isFinally)),
 	FuncData:           jitTypeWord((*funcData)(nil)),
 	FuncClosure:        int32(unsafe.Offsetof(funcData{}.closure)),
 	ClosureFn:          int32(unsafe.Offsetof(closure{}.fn)),
@@ -145,6 +165,7 @@ var jitEncoding = abi.Encoding{
 	LinkLocals:         int32(unsafe.Offsetof(jitLink{}.locals)),
 	LinkFrame:          int32(unsafe.Offsetof(jitLink{}.frame)),
 	LinkFlags:          int32(unsafe.Offsetof(jitLink{}.flags)),
+	LinkGen:            int32(unsafe.Offsetof(jitLink{}.gen)),
 	ClassArray:         uint8(ClassArray),
 	ClassTypedArray:    uint8(ClassTypedArray),
 	TypedData:          jitTypeWord((*typedArrayData)(nil)),
@@ -1609,7 +1630,7 @@ func (r *Runtime) jitInvalidate(cl *closure, e *jitEntry) {
 	}
 	e.invalid = true
 	if e.owned() {
-		e.link.entry, e.link.body = 0, 0
+		e.link.clearCode()
 	}
 	e.tierBudget, e.tierMark = r.jitTierBudget(cl.fn, e), jitFeedbackMark(cl)
 	r.jit.invalidated++
@@ -1803,6 +1824,12 @@ func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
 		r.jitCallersReopt(e, jitInlineDepth)
 	}
 	e.ssa, e.ssaShapes, e.ssaHolders, e.ssaStats = code, fb.shapes, fb.holders, jitSSAStats{}
+	if e.genLearned {
+		// Its loops' steps over generators resume them natively now, which
+		// each had been a call of Go: the loops it was judged slow for are
+		// judged afresh, as code compiled again is.
+		e.genLearned, e.loopSlow = false, false
+	}
 	// Its Go entries write This for the arrows it takes from pools, and
 	// clear the loops' word, as the new code has them.
 	e.lexThis, e.loops = fb.lexThis, fb.loops
@@ -1891,6 +1918,12 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 	// for -- top-level code's, a generator's, an async function's -- has
 	// none.
 	f.CallEntry = !fn.TopLevel && !fn.IsModule && !fn.Async && !fn.Generator && !isGeneratorTemplate(fn)
+	if jitGenCallable(fn) && !p.Cells {
+		// A generator a loop's step may resume natively: where it resumes
+		// it (mir's genEntry).
+		f.GenResumes = jitGenResumes(fn, p, f)
+		f.GenEntry = len(f.GenResumes) != 0
+	}
 	if p.This {
 		f.ThisSlot = fn.LocalCount + len(fn.Upvalues)
 	}
@@ -3673,6 +3706,10 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 	r.stackTop, r.stackHigh = sp, max(r.stackHigh, sp)
 	step := in.Op == bytecode.OpIterNextOrJump || in.Op == bytecode.OpIterStep || in.Op == bytecode.OpForOfStart || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpSuperCall
 	prop := in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
+	if in.Op == bytecode.OpIterNextOrJump || in.Op == bytecode.OpIterStep {
+		// A step over a generator the code may resume natively.
+		r.jitGenStepSeen(e, f.cl, pc, r.stack[sp-1])
+	}
 	// A loop's step Go makes costs what any call of Go does: a loop of
 	// them, over a Map or a generator, whose body does little, the tree
 	// tier runs (one over an array native code steps itself, and calls
@@ -4257,7 +4294,14 @@ func (r *Runtime) jitGoCallNested(ctx *abi.Context, idx int) bool {
 			loops = jitLoopIn(r.jitEntryOf(lcl).makesLoops(), ctxs[i], lcl.fn, int(levelPC(i))) != 0
 		}
 	}
-	if !loops && lv.serial == serial && lv.root == root && lv.depth == depthBefore {
+	// A generator a loop's step resumed natively, at any level: two frames
+	// of its own, its next's and its own (jitGenFrame), which no other
+	// call shares either.
+	gens := false
+	for i := root + 1; i <= idx && !gens; i++ {
+		gens = jitGenLevel(ctxs[i], (*closure)(ctxs[i].Closure), abi.ExitHost) != nil
+	}
+	if !loops && !gens && lv.serial == serial && lv.root == root && lv.depth == depthBefore {
 		for k < min(lv.n, idx-root) {
 			c, at := ctxs[root+1+k], &lv.at[k]
 			if c.Closure != at.cl || c.Base != at.base || c.This != at.this || c.Instance != at.instance {
@@ -4307,12 +4351,23 @@ func (r *Runtime) jitGoCallNested(ctx *abi.Context, idx int) bool {
 			e.pinSerial, e.pinCode = serial, e.ssa
 		}
 		base := int(c.Base)
+		g := jitGenLevel(c, lcl, abi.ExitHost)
+		if g != nil {
+			r.jitPushGenNext(jitGenCursor(c))
+		}
 		f = r.pushFrame()
 		f.cl = lcl
-		f.locals = r.stack[base : base+lcl.fn.LocalCount : base+lcl.fn.LocalCount]
-		f.base = base + lcl.fn.LocalCount
 		f.pc = uint32(callPC) + 1
-		f.this, f.newTarget, f.callee, f.args = *(*Value)(unsafe.Pointer(&c.This)), Undefined, nil, nil
+		if g != nil {
+			// A generator's, its locals its own, its operands at the
+			// level's base (jitGenFrame).
+			f.locals, f.base = g.vals[g.nargs:], base
+			f.this, f.newTarget, f.callee, f.args = g.this, Undefined, g.callee, g.vals[:g.nargs:g.nargs]
+		} else {
+			f.locals = r.stack[base : base+lcl.fn.LocalCount : base+lcl.fn.LocalCount]
+			f.base = base + lcl.fn.LocalCount
+			f.this, f.newTarget, f.callee, f.args = *(*Value)(unsafe.Pointer(&c.This)), Undefined, nil, nil
+		}
 		// Its function object, where the call it runs for says (an
 		// accessor's): the level's caller's, at its call. Asked only of a
 		// property's read or write: this runs for every call of Go a native
@@ -4345,7 +4400,7 @@ func (r *Runtime) jitGoCallNested(ctx *abi.Context, idx int) bool {
 		}
 	}
 	lv.serial, lv.root, lv.depth = serial, root, depthBefore
-	if loops {
+	if loops || gens {
 		// Frames no other call shares.
 		lv.serial = 0
 	}
@@ -4364,6 +4419,10 @@ framed:
 	e.ssaStats.goCalls++
 	s.goCalls++
 	prop := in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
+	if in.Op == bytecode.OpIterNextOrJump || in.Op == bytecode.OpIterStep {
+		// A step over a generator the code may resume natively.
+		r.jitGenStepSeen(e, f.cl, pc, r.stack[sp-1])
+	}
 	if in.Op != bytecode.OpIterNextOrJump && in.Op != bytecode.OpIterStep && in.Op != bytecode.OpForOfStart && in.Op != bytecode.OpTypeOf && in.Op != bytecode.OpInstanceOf && in.Op != bytecode.OpSuperCall && !prop && jitCallUnsettled(e, pc, in) {
 		r.jitCallSeen(f, e, pc, sp, in)
 	}
@@ -4511,7 +4570,8 @@ func (r *Runtime) jitCalleeProfit(e *jitEntry, serial uint64, pc int) {
 	}
 	if st.calleeWork < (st.calleeGoCalls-e.link.in)*jitSSAMinWork {
 		e.entrySlow = true
-		e.notNative, e.link.entry, e.link.body, e.nativeRetry = true, 0, 0, 0
+		e.notNative, e.nativeRetry = true, 0
+		e.link.clearCode()
 		e.nativeBackoff = min(e.nativeBackoff+1, jitNativeBackoffs)
 	}
 }
@@ -9883,6 +9943,12 @@ type jitNativeLevel struct {
 	// (jitPushLoopFrame), its callee's caller.
 	loop      uint64
 	loopFrame bool
+	// gen, for a generator a loop's step resumed natively (jitGenLevel),
+	// is the generator, and cursor the step's cursor; fill marks a
+	// destructuring's step, whose done is undefined (jitGenDone).
+	gen    *generator
+	cursor *iterState
+	fill   bool
 }
 
 // jitUnwindNative finishes the native calls the code running in context
@@ -9969,6 +10035,13 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure) (Value, e
 				l.newTarget = Obj(*(**Object)(unsafe.Pointer(&c.NewTarget)))
 			}
 			l.returnTo = c.ReturnTo
+			if g := jitGenLevel(c, l.cl, l.kind); g != nil {
+				// A generator a loop's step resumed natively (jitGenFrame):
+				// its receiver and function the generator's.
+				l.gen, l.cursor = g, jitGenCursor(c)
+				l.this, l.callee, l.construct = g.this, g.callee, false
+				l.fill = callerPC < len(caller.Code) && caller.Code[callerPC].Op == bytecode.OpIterStep
+			}
 			if k := len(s.unwinding) - 1; k >= start && !s.unwinding[k].inline {
 				// The caller, a level of its own: its code now.
 				if ce := r.jitEntryOf(s.unwinding[k].cl); ce != nil {
@@ -10041,86 +10114,93 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure) (Value, e
 	for k := range n {
 		l := &s.unwinding[start+k]
 		fn := l.cl.fn
-		if l.inline {
-			// The exit wrote its slots as its program has them -- locals,
-			// receiver, operands -- past its caller's operands: the
-			// receiver goes to the frame, the operands down to the locals.
-			l.top = r.stackTop
-			l.this = Undefined
-			if l.thisSlot > 0 {
-				l.this = r.stack[l.base+l.thisSlot-1]
-			}
-			from, to := l.base+l.locals, l.base+fn.LocalCount
-			copy(r.stack[to:to+int(l.depth)], r.stack[from:from+int(l.depth)])
-			clear(r.stack[to+int(l.depth) : from+int(l.depth)])
-			r.stackTop = max(r.stackTop, l.base+fn.LocalCount+fn.MaxStack)
-			r.stackHigh = max(r.stackHigh, r.stackTop)
+		var f *frame
+		if l.gen != nil {
+			// A generator a loop's step resumed natively: its frame as the
+			// step's resumption makes it, its next's below it.
+			f = r.jitGenFrame(l, s.ssaCtxs[l.ctx], k < n-1)
 		} else {
-			l.top = l.base
-		}
-		f := r.pushFrame()
-		if c := s.ssaCtxs[l.ctx]; !l.inline && c.Records != 0 {
-			// Records its exit left to Go, the collector marking: before
-			// anything else reads its frame, an inlined callee's past it
-			// included.
-			if e := r.jitEntryOf(l.cl); e != nil {
-				f.cl, f.locals, f.base = l.cl, r.stack[l.base:l.base+fn.LocalCount:l.base+fn.LocalCount], l.base+fn.LocalCount
-				saved := s.ssaCtx
-				s.ssaCtx = c
-				r.jitApplyRecords(f, e.this, c)
-				s.ssaCtx = saved
-				l.this = *(*Value)(unsafe.Pointer(&c.This))
+			if l.inline {
+				// The exit wrote its slots as its program has them -- locals,
+				// receiver, operands -- past its caller's operands: the
+				// receiver goes to the frame, the operands down to the locals.
+				l.top = r.stackTop
+				l.this = Undefined
+				if l.thisSlot > 0 {
+					l.this = r.stack[l.base+l.thisSlot-1]
+				}
+				from, to := l.base+l.locals, l.base+fn.LocalCount
+				copy(r.stack[to:to+int(l.depth)], r.stack[from:from+int(l.depth)])
+				clear(r.stack[to+int(l.depth) : from+int(l.depth)])
+				r.stackTop = max(r.stackTop, l.base+fn.LocalCount+fn.MaxStack)
+				r.stackHigh = max(r.stackHigh, r.stackTop)
+			} else {
+				l.top = l.base
 			}
-		}
-		f.cl = l.cl
-		f.locals = r.stack[l.base : l.base+fn.LocalCount : l.base+fn.LocalCount]
-		if l.kind == abi.ExitEnter && !l.inline {
-			jitStartLocals(fn, f.locals)
-		}
-		f.base = l.base + fn.LocalCount
-		f.pc = uint32(l.pc)
-		if k < n-1 {
-			// Past the call it makes, as the interpreter's frame is during
-			// one, which a stack trace shows.
-			f.pc++
-		}
-		f.this, f.newTarget, f.callee, f.args = l.this, Undefined, l.callee, nil
-		if l.inline && l.args != 0 {
-			// Its call's arguments, in its caller's operands, which its
-			// apply_arguments hands on (ssa.InlineState's Args).
-			n, from := int(l.args>>32)-1, l.base-int(uint32(l.args))
-			if n >= 0 && from >= 0 && from+n <= len(r.stack) {
-				f.args = slices.Clone(r.stack[from : from+n])
+			f = r.pushFrame()
+			if c := s.ssaCtxs[l.ctx]; !l.inline && c.Records != 0 {
+				// Records its exit left to Go, the collector marking: before
+				// anything else reads its frame, an inlined callee's past it
+				// included.
+				if e := r.jitEntryOf(l.cl); e != nil {
+					f.cl, f.locals, f.base = l.cl, r.stack[l.base:l.base+fn.LocalCount:l.base+fn.LocalCount], l.base+fn.LocalCount
+					saved := s.ssaCtx
+					s.ssaCtx = c
+					r.jitApplyRecords(f, e.this, c)
+					s.ssaCtx = saved
+					l.this = *(*Value)(unsafe.Pointer(&c.This))
+				}
 			}
-		}
-		if l.construct && l.newTarget.IsObject() {
-			f.newTarget = l.newTarget
-		}
-		f.openUpvalues, f.handlers = f.openUpvalues[:0], f.handlers[:0]
-		if c := s.ssaCtxs[l.ctx]; !l.inline && c.Open != 0 && l.ctx < len(s.calleeOpen) {
-			// What its closures captured, which its context kept, the
-			// frame's now, which closes it as it is popped.
-			f.openUpvalues = append(f.openUpvalues, s.calleeOpen[l.ctx]...)
-			clear(s.calleeOpen[l.ctx])
-			s.calleeOpen[l.ctx], c.Open = s.calleeOpen[l.ctx][:0], 0
-		}
-		if c := s.ssaCtxs[l.ctx]; !l.inline && c.Cells != nil {
-			// Its captured locals' cells, which its closures share: the
-			// frame's, open on its slots now, which closes them as it is
-			// popped.
-			jitReopenCells(f, c)
-		}
-		f.thisRef, f.withScopes, f.evalVars, f.native, f.savedSP = nil, nil, nil, "", 0
-		if !l.inline && l.construct && fn.Kind == bytecode.KindDerivedConstructor {
-			// A derived construction's, its this bound if its super()
-			// bound it.
-			jitDerivedFrame(f, s.ssaCtxs[l.ctx])
-		}
-		if !l.inline {
-			// Those in force at its exit, or at its call: an exception
-			// from the call unwinds the frame from there.
-			if e := r.jitEntryOf(l.cl); e != nil {
-				jitHandlers(f, e.ssaProg, int(l.pc))
+			f.cl = l.cl
+			f.locals = r.stack[l.base : l.base+fn.LocalCount : l.base+fn.LocalCount]
+			if l.kind == abi.ExitEnter && !l.inline {
+				jitStartLocals(fn, f.locals)
+			}
+			f.base = l.base + fn.LocalCount
+			f.pc = uint32(l.pc)
+			if k < n-1 {
+				// Past the call it makes, as the interpreter's frame is during
+				// one, which a stack trace shows.
+				f.pc++
+			}
+			f.this, f.newTarget, f.callee, f.args = l.this, Undefined, l.callee, nil
+			if l.inline && l.args != 0 {
+				// Its call's arguments, in its caller's operands, which its
+				// apply_arguments hands on (ssa.InlineState's Args).
+				n, from := int(l.args>>32)-1, l.base-int(uint32(l.args))
+				if n >= 0 && from >= 0 && from+n <= len(r.stack) {
+					f.args = slices.Clone(r.stack[from : from+n])
+				}
+			}
+			if l.construct && l.newTarget.IsObject() {
+				f.newTarget = l.newTarget
+			}
+			f.openUpvalues, f.handlers = f.openUpvalues[:0], f.handlers[:0]
+			if c := s.ssaCtxs[l.ctx]; !l.inline && c.Open != 0 && l.ctx < len(s.calleeOpen) {
+				// What its closures captured, which its context kept, the
+				// frame's now, which closes it as it is popped.
+				f.openUpvalues = append(f.openUpvalues, s.calleeOpen[l.ctx]...)
+				clear(s.calleeOpen[l.ctx])
+				s.calleeOpen[l.ctx], c.Open = s.calleeOpen[l.ctx][:0], 0
+			}
+			if c := s.ssaCtxs[l.ctx]; !l.inline && c.Cells != nil {
+				// Its captured locals' cells, which its closures share: the
+				// frame's, open on its slots now, which closes them as it is
+				// popped.
+				jitReopenCells(f, c)
+			}
+			f.thisRef, f.withScopes, f.evalVars, f.native, f.savedSP = nil, nil, nil, "", 0
+			if !l.inline && l.construct && fn.Kind == bytecode.KindDerivedConstructor {
+				// A derived construction's, its this bound if its super()
+				// bound it.
+				jitDerivedFrame(f, s.ssaCtxs[l.ctx])
+			}
+			if !l.inline {
+				// Those in force at its exit, or at its call: an exception
+				// from the call unwinds the frame from there.
+				if e := r.jitEntryOf(l.cl); e != nil {
+					jitHandlers(f, e.ssaProg, int(l.pc))
+				}
 			}
 		}
 		s.unwindingFrames = append(s.unwindingFrames, f)
@@ -10205,6 +10285,12 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure) (Value, e
 					v, err, _ = r.jitInterpret(f, f.base+depth, nil)
 				}
 			}
+		}
+		if l.gen != nil {
+			// The step's result, the generator's suspension or its end saved
+			// as finishResume saves them, its frames popped.
+			v, err = r.jitGenDone(f, &l, v, err)
+			continue
 		}
 		switch {
 		case l.construct && !l.inline && l.cl.fn.Kind == bytecode.KindDerivedConstructor:
@@ -10586,7 +10672,8 @@ func (r *Runtime) jitUnwound(e *jitEntry) {
 		e.ssaStats.calleeGoCalls, e.ssaStats.calleeWork = 0, 0
 		return
 	}
-	e.notNative, e.link.entry, e.link.body, e.nativeRetry = true, 0, 0, 0
+	e.notNative, e.nativeRetry = true, 0
+	e.link.clearCode()
 	e.nativeBackoff = min(e.nativeBackoff+1, jitNativeBackoffs)
 }
 
@@ -10699,6 +10786,14 @@ func (r *Runtime) jitFinishExit(f *frame, e *jitEntry, l *jitNativeLevel) (Value
 		// What it learns here it learns as runSSA's exits do: a function
 		// only native callers run is entered from Go nowhere else.
 		in := f.cl.fn.Code[pc]
+		switch in.Op {
+		case bytecode.OpYield, bytecode.OpAwait, bytecode.OpYieldStar:
+			// A generator's suspension, a loop's step having resumed it
+			// natively (jitGenFrame), which Go makes as at runSSA's exit:
+			// the step's resumption saves it (jitGenDone).
+			v, err, _ := r.jitSuspend(f, in, f.base+depth)
+			return v, err
+		}
 		if l.inline && l.owner != nil && jitPropertyOp(in.Op) && !r.jitSiteMegamorphic(f.cl, e, pc) {
 			// An inlined callee's read or write of a shape the code was not
 			// compiled for, or at a site that knew none: Go makes it, as

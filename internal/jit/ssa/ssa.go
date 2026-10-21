@@ -813,6 +813,14 @@ type Block struct {
 	// Generic marks an entry block whose speculation failed before: the
 	// slots it loads are not unboxed there (Feedback's EntryGeneric).
 	Generic bool
+	// Yield marks a BlockExit that is a generator's yield (ir.Instruction's
+	// Suspend): in code a loop's step resumed natively (Func's GenEntry),
+	// the yield writes the frame, saves the generator's state -- its
+	// handlers YieldHandlers, those in force at the yield, the outermost
+	// first -- and returns the value to the step, as Go's suspension would
+	// (mir's yieldExit); the exit otherwise.
+	Yield         bool
+	YieldHandlers []ir.Handler
 }
 
 // Entry is a place native code can be entered: an entry block, which loads
@@ -821,6 +829,15 @@ type Entry struct {
 	PC    int
 	Depth int
 	Block *Block
+}
+
+// GenResume is where a generator's resumption goes on (Func's GenEntry):
+// at the entry for PC, its first after its parameters (Started false) or
+// one after a yield, its operands the Saved its suspension kept and, after
+// a yield, the value sent in above them.
+type GenResume struct {
+	PC, Saved int
+	Started   bool
 }
 
 // Func is a function in SSA form.
@@ -847,6 +864,15 @@ type Func struct {
 	// makes the frame and the context of a call of the function, once for
 	// all its callers (mir's Code.CallEntry, abi.Context's ReturnTo).
 	CallEntry bool
+	// GenEntry asks, of a synchronous generator's code, for the entry a
+	// loop's step that resumes the generator natively jumps to (CallSite's
+	// Gens, mir's Code.GenEntry): it makes the generator's frame and
+	// context, and goes on at the entry GenResumes has for the generator's
+	// place, as V8's code for a generator goes on where it was suspended.
+	// The code's yields with no handler in force (Block's Yield) suspend it
+	// there natively, and its returns finish it.
+	GenEntry   bool
+	GenResumes []GenResume
 	// Loops says the code makes loops of built-ins' calls (OpLoopMark), whose
 	// word it clears at its entries; LoopsEnd is the slot past their slots,
 	// which the frame holds while they run: their callbacks' frames start

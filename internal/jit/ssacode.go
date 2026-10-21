@@ -22,9 +22,9 @@ type SSACode struct {
 	// entries is each slot IR PC's code offset, or -1: a slice, since every
 	// exit to Go looks one up.
 	entries []int32
-	// callEntry and resume are the offsets of the code's call entry and
-	// resume routine, or -1 (mir's Code).
-	callEntry, resume int32
+	// callEntry, resume and genEntry are the offsets of the code's call
+	// entry, resume routine and generator entry, or -1 (mir's Code).
+	callEntry, resume, genEntry int32
 	// exits are the descriptions the code's exits name by address, calls
 	// those its native calls do (abi.Context's CallState); callRefs bounds
 	// the pointer words its calls write themselves (mir's Code).
@@ -66,7 +66,7 @@ func NewSSACode(a *Arena, c *mir.Code) (*SSACode, error) {
 	for pc, off := range c.Entries {
 		entries[pc] = int32(off)
 	}
-	s := &SSACode{code: code, arena: a, entries: entries, callEntry: int32(c.CallEntry), resume: int32(c.Resume), exits: c.Exits,
+	s := &SSACode{code: code, arena: a, entries: entries, callEntry: int32(c.CallEntry), resume: int32(c.Resume), genEntry: int32(c.GenEntry), exits: c.Exits,
 		calls: c.Calls, goCalls: c.GoCalls, callRefs: c.CallRefs}
 	s.footprint = footprint(len(code), cap(entries), c)
 	runtime.SetFinalizer(s, func(s *SSACode) { _ = s.Close() })
@@ -110,6 +110,16 @@ func (s *SSACode) CallEntry() uintptr {
 		return 0
 	}
 	return uintptr(unsafe.Pointer(&s.code[s.callEntry]))
+}
+
+// GenEntry is the address of the code's generator entry, where a loop's
+// step that resumes a generator of the function natively jumps (mir's
+// Code.GenEntry), or 0 for none.
+func (s *SSACode) GenEntry() uintptr {
+	if s == nil || len(s.code) == 0 || s.genEntry < 0 {
+		return 0
+	}
+	return uintptr(unsafe.Pointer(&s.code[s.genEntry]))
 }
 
 // Run enters at a slot IR PC with ctx, which must hold the frame's addresses

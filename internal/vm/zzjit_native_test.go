@@ -1077,6 +1077,22 @@ func TestJITObjectLayout(t *testing.T) {
 	if jitTypeWord(x) != jitEncoding.IterState || (*[2]unsafe.Pointer)(unsafe.Pointer(&x))[1] != unsafe.Pointer(&st) {
 		t.Fatal("an interface's words are not the type's and the pointer, as native code reads them")
 	}
+	// A generator a loop's step resumes natively (mir's genEntry,
+	// yieldExit): its state, begun and delegating bytes, its place and its
+	// arguments' count uint32s, its values, saved operands and handlers
+	// slices, and a handler's place a uint32, its depth an int and its kind
+	// a byte, which native code writes.
+	var g generator
+	var h handler
+	if unsafe.Sizeof(g.state) != 1 || unsafe.Sizeof(g.started) != 1 || unsafe.Sizeof(g.delegating) != 1 ||
+		unsafe.Sizeof(g.pc) != 4 || unsafe.Sizeof(g.nargs) != 4 || unsafe.Sizeof(g.vals) != 3*unsafe.Sizeof(uintptr(0)) ||
+		unsafe.Sizeof(g.stack) != 3*unsafe.Sizeof(uintptr(0)) || unsafe.Sizeof(g.handlers) != 3*unsafe.Sizeof(uintptr(0)) ||
+		unsafe.Sizeof(h.pc) != 4 || unsafe.Sizeof(h.stackDepth) != 8 || unsafe.Sizeof(h.isFinally) != 1 {
+		t.Fatal("a generator field native code reads or writes changed its width; update jitEncoding and mir")
+	}
+	if x = &g; jitTypeWord(x) != jitEncoding.GenData {
+		t.Fatal("a generator's data type word is not jitEncoding's")
+	}
 }
 
 func TestJITEqualityBoundaries(t *testing.T) {

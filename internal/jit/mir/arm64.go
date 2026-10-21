@@ -57,6 +57,10 @@ type a64Compiler struct {
 	// callV and callTop are amd64's.
 	callV   *ssa.Value
 	callTop arm64.Label
+	// genDone is amd64's: where a generator a loop's step resumed natively
+	// goes once it finishes (genFinish).
+	genDone     arm64.Label
+	genDoneUsed bool
 	// tail is where exits that filled records go (recordsTail), if any
 	// does; recorded marks the exit being emitted as one.
 	tail               arm64.Label
@@ -211,6 +215,15 @@ func compileARM64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 		resumeAt = c.a.Len()
 		c.resumeCall()
 	}
+	genAt := -1
+	if c.f.GenEntry {
+		genAt = c.a.Len()
+		c.genEntry()
+	}
+	if c.genDoneUsed {
+		c.a.Bind(c.genDone)
+		c.genFinish()
+	}
 	if c.appendingUsed {
 		c.a.Bind(c.appending)
 		c.appendingCall()
@@ -249,7 +262,7 @@ func compileARM64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 		return nil, err
 	}
 	c.finishExits()
-	return &Code{Bytes: bytes, Entries: entries, CallEntry: callAt, Resume: resumeAt, Text: len(bytes), Exits: c.exits,
+	return &Code{Bytes: bytes, Entries: entries, CallEntry: callAt, Resume: resumeAt, GenEntry: genAt, Text: len(bytes), Exits: c.exits,
 		Calls: c.calls, CallRefs: c.callRefs(), GoCalls: c.goCalls, core: c.core}, nil
 }
 
@@ -926,8 +939,17 @@ func (c *a64Compiler) block(b *ssa.Block, next *ssa.Block) {
 		c.a.Store(a64Ctx, abi.OffExitKind, a64A)
 		c.movImm(a64A, uint64(b.PC))
 		c.a.Store(a64Ctx, abi.OffExitSite, a64A)
+		if c.f.GenEntry {
+			// As amd64's: a generator a loop's step resumed natively
+			// finishes there.
+			c.genReturn()
+		}
 		c.returnNative()
 	case ssa.BlockExit:
+		if b.Yield && c.f.GenEntry {
+			c.yieldExit(b)
+			break
+		}
 		c.exitTo(b.State, exitKind(int(b.ExitKind)))
 	}
 }
@@ -2532,6 +2554,244 @@ func (c *a64Compiler) poolShade(sites []*ssa.CallSite) {
 	})
 }
 
+// callRecords is amd64's: a native call's records written, each slot's
+// record's index returned.
+func (c *a64Compiler) callRecords(recs []callRecord) map[int]int32 {
+	record := map[int]int32{}
+	for k, r := range recs {
+		at := abi.OffRecord + int32(k)*32
+		record[r.slot] = int32(k)
+		if r.big {
+			// A BigInt's box's words, made of the BigInt.
+			c.bigBoxWords(r.x.Args[1])
+			c.a.Store(a64Ctx, at+16, a64A)
+			c.a.Store(a64Ctx, abi.OffRecordRef+int32(k)*8, a64C)
+			continue
+		}
+		w := a64A
+		switch {
+		case !r.num && (!r.ref || r.x.Shadow != nil):
+		case remat(r.x):
+			c.materialize(r.x, a64A)
+		default:
+			w = c.gpr(r.x, a64A)
+		}
+		if r.num {
+			c.a.Store(a64Ctx, at+16, w)
+		}
+		if r.ref {
+			c.pointerWord(r.x, w)
+			c.a.Store(a64Ctx, abi.OffRecordRef+int32(k)*8, a64B)
+		}
+	}
+	return record
+}
+
+// genEntry is the code's generator entry, as amd64's: the step's context
+// in the context register, the call entry's registers, where the step goes
+// on if the code cannot resume the generator in X10, the generator and the
+// step's cursor in the next context. It uses every register.
+func (c *a64Compiler) genEntry() {
+	const next, g, t, u = arm64.Reg(12), arm64.Reg(13), arm64.Reg(11), arm64.Reg(8)
+	miss := c.a.NewLabel()
+	c.a.Load(next, a64Ctx, abi.OffNext)
+	c.a.Load(g, next, abi.OffGenObject)
+	// Room for the frame's operands.
+	c.a.Load(t, a64Ctx, abi.OffStackTop)
+	c.a.Load(t, t, 0)
+	c.a.AddImm(t, t, int64(c.frameSize()-c.f.FrameLocals), true)
+	c.a.Load(u, a64Ctx, abi.OffStackEnd)
+	c.a.Cmp(t, u, true)
+	c.a.BCond(arm64.HI, miss)
+	c.a.LoadU32(t, g, c.enc.GenPC)
+	for _, gr := range c.f.GenResumes {
+		blk := c.entryAt(gr.PC)
+		if blk == nil {
+			continue
+		}
+		skip := c.a.NewLabel()
+		c.a.CmpImm(t, int64(gr.PC), false)
+		c.a.BCond(arm64.NE, skip)
+		c.a.Load(u, g, c.enc.GenStack+8)
+		c.a.CmpImm(u, int64(gr.Saved), true)
+		c.a.BCond(arm64.NE, miss)
+		c.a.LoadU8(u, g, c.enc.GenStarted)
+		c.a.CmpImm(u, int64(b2i(gr.Started)), false)
+		c.a.BCond(arm64.NE, miss)
+		c.genFrame(gr, blk)
+		c.a.Bind(skip)
+	}
+	c.a.Bind(miss)
+	c.a.Br(arm64.Reg(10))
+}
+
+// genFrame is amd64's: the generator's frame and context made, the
+// generator running, and on at blk.
+func (c *a64Compiler) genFrame(gr ssa.GenResume, blk *ssa.Block) {
+	vs := int32(c.enc.ValueSize)
+	const next, g, t, u = arm64.Reg(12), arm64.Reg(13), arm64.Reg(11), arm64.Reg(8)
+	c.a.Store(next, abi.OffReturnTo, a64CallRet)
+	c.a.Store(next, abi.OffClosure, a64CallClosure)
+	c.a.Load(t, a64CallClosure, c.enc.ClosureUpvalues)
+	c.a.Store(next, abi.OffUpvalues, t)
+	// Its operands past the VM's stack's top, which moves past them, its
+	// high water with it.
+	c.a.Load(u, a64Ctx, abi.OffStackTop)
+	c.a.Load(t, u, 0)
+	c.a.Store(next, abi.OffBase, t)
+	c.a.AddImm(a64A, t, int64(c.frameSize()-c.f.FrameLocals), true)
+	c.a.Store(u, 0, a64A)
+	same := c.a.NewLabel()
+	c.a.Load(u, a64Ctx, abi.OffStackHigh)
+	c.a.Load(a64C, u, 0)
+	c.a.Cmp(a64A, a64C, true)
+	c.a.BCond(arm64.LS, same)
+	c.a.Store(u, 0, a64A)
+	c.a.Bind(same)
+	c.a.ShiftImm(arm64.Lsl, t, t, 4, true)
+	c.a.Load(u, a64Ctx, abi.OffStackBase)
+	c.a.Op(arm64.Add, t, t, u, true)
+	c.a.Store(next, abi.OffStack, t)
+	// Its locals, the generator's, past its arguments.
+	c.a.LoadU32(u, g, c.enc.GenArgs)
+	c.a.ShiftImm(arm64.Lsl, u, u, 4, true)
+	c.a.Load(a64A, g, c.enc.GenVals)
+	c.a.Op(arm64.Add, u, u, a64A, true)
+	c.a.Store(next, abi.OffLocals, u)
+	c.a.Store(next, abi.OffOpen, arm64.ZR)
+	c.a.Store(next, abi.OffCells, arm64.ZR)
+	if c.f.Loops {
+		c.a.Store(next, abi.OffLoop, arm64.ZR)
+	}
+	c.a.MovImm(a64A, abi.LiveCall)
+	c.a.Store(next, abi.OffLive, a64A)
+	c.a.Load(a64A, a64CallLink, c.enc.LinkIn)
+	c.a.AddImm(a64A, a64A, 1, true)
+	c.a.Store(a64CallLink, c.enc.LinkIn, a64A)
+	if c.f.ThisSlot >= 0 {
+		// Its receiver, which its code reads.
+		c.a.Load(a64A, g, c.enc.GenThis+c.enc.NumOffset)
+		c.a.Store(next, abi.OffThis+c.enc.NumOffset, a64A)
+		c.a.Load(a64A, g, c.enc.GenThis+c.enc.RefOffset)
+		c.a.Store(next, abi.OffThis+c.enc.RefOffset, a64A)
+	}
+	// The operands its suspension saved, and on them the value sent in.
+	if gr.Saved > 0 {
+		c.a.Load(u, g, c.enc.GenStack)
+		for i := range int32(gr.Saved) {
+			for _, w := range [2]int32{c.enc.NumOffset, c.enc.RefOffset} {
+				c.a.Load(a64A, u, i*vs+w)
+				c.a.Store(t, i*vs+w, a64A)
+			}
+		}
+	}
+	if gr.Started {
+		c.movImm(a64A, c.enc.Undefined)
+		c.a.Store(t, int32(gr.Saved)*vs+c.enc.NumOffset, a64A)
+		c.a.Store(t, int32(gr.Saved)*vs+c.enc.RefOffset, arm64.ZR)
+	}
+	c.a.MovImm(a64A, uint64(c.enc.GenExecuting))
+	c.a.Store8(g, c.enc.GenState, a64A)
+	c.a.MovRR(a64Ctx, next)
+	c.a.B(c.labels[blk.ID])
+}
+
+// yieldExit is amd64's: a generator's yield, suspended natively in code a
+// loop's step resumed natively, its handlers saved and its value returned
+// to the step; the exit otherwise.
+func (c *a64Compiler) yieldExit(b *ssa.Block) {
+	s, hs := b.State, b.YieldHandlers
+	vs := int32(c.enc.ValueSize)
+	c.a.Load(a64A, a64Ctx, abi.OffReturnTo)
+	c.a.Cbz(a64A, c.stubLabel(s, abi.ExitHost), true)
+	then, toGo := c.a.NewLabel(), c.a.NewLabel()
+	c.exitThen(s, abi.ExitHost, &then)
+	c.a.Bind(then)
+	// As amd64's: records the collector's marking left, Go's.
+	c.a.Load(a64A, a64Ctx, abi.OffRecords)
+	c.a.Cbnz(a64A, toGo, true)
+	saved, n := int32(s.Depth-1), int32(len(hs))
+	c.a.Load(a64B, a64Ctx, abi.OffGenObject)
+	if n > 0 {
+		// Room where the generator keeps its handlers.
+		c.a.Load(a64C, a64B, c.enc.GenHandlers+16)
+		c.a.CmpImm(a64C, int64(n), true)
+		c.a.BCond(arm64.LO, toGo)
+	}
+	if saved > 0 {
+		// The operands beneath the value, pointers stored where the
+		// generator keeps them, Go's while the collector marks.
+		c.movImm(a64C, c.enc.WriteBarrier)
+		c.a.LoadU8(a64C, a64C, 0)
+		c.a.Cbnz(a64C, toGo, false)
+		c.a.Load(a64C, a64B, c.enc.GenStack+16)
+		c.a.CmpImm(a64C, int64(saved), true)
+		c.a.BCond(arm64.LO, toGo)
+		c.a.Load(a64C, a64B, c.enc.GenStack)
+		for i := range saved {
+			for _, w := range [2]int32{c.enc.NumOffset, c.enc.RefOffset} {
+				c.a.Load(a64A, a64Stack, i*vs+w)
+				c.a.Store(a64C, i*vs+w, a64A)
+			}
+		}
+	}
+	c.movImm(a64A, uint64(saved))
+	c.a.Store(a64B, c.enc.GenStack+8, a64A)
+	if n > 0 {
+		// The handlers in force, no pointers among their words.
+		c.a.Load(a64C, a64B, c.enc.GenHandlers)
+		for i, h := range hs {
+			at := int32(i) * c.enc.HandlerSize
+			c.a.MovImm(a64A, uint64(h.PC))
+			c.a.Store32(a64C, at+c.enc.HandlerPC, a64A)
+			c.movImm(a64A, uint64(int64(h.Depth)))
+			c.a.Store(a64C, at+c.enc.HandlerDepth, a64A)
+			c.a.MovImm(a64A, uint64(b2i(h.Finally)))
+			c.a.Store8(a64C, at+c.enc.HandlerFinally, a64A)
+		}
+	}
+	c.movImm(a64A, uint64(n))
+	c.a.Store(a64B, c.enc.GenHandlers+8, a64A)
+	c.a.MovImm(a64A, uint64(s.PC)+1)
+	c.a.Store32(a64B, c.enc.GenPC, a64A)
+	c.a.MovImm(a64A, uint64(c.enc.GenSuspendedYield))
+	c.a.Store8(a64B, c.enc.GenState, a64A)
+	c.a.MovImm(a64A, 1)
+	c.a.Store8(a64B, c.enc.GenStarted, a64A)
+	c.a.Load(a64RetNum, a64Stack, saved*vs+c.enc.NumOffset)
+	c.a.Load(a64RetRef, a64Stack, saved*vs+c.enc.RefOffset)
+	c.a.Load(a64CallLink, a64Ctx, abi.OffReturnTo)
+	c.returnTail()
+	c.a.Bind(toGo)
+	c.a.Ret()
+}
+
+// genReturn is amd64's: a return of a generator a loop's step resumed
+// natively to genFinish.
+func (c *a64Compiler) genReturn() {
+	if !c.genDoneUsed {
+		c.genDone, c.genDoneUsed = c.a.NewLabel(), true
+	}
+	c.a.Load(a64A, a64Ctx, abi.OffReturnTo)
+	c.a.Cbnz(a64A, c.genDone, true)
+}
+
+// genFinish is amd64's: the generator done, its step's cursor too, the
+// step's result its done.
+func (c *a64Compiler) genFinish() {
+	c.a.Load(a64B, a64Ctx, abi.OffGenObject)
+	c.a.MovImm(a64A, uint64(c.enc.GenCompleted))
+	c.a.Store8(a64B, c.enc.GenState, a64A)
+	c.a.Store(a64B, c.enc.GenStack+8, arm64.ZR)
+	c.a.Load(a64C, a64Ctx, abi.OffGenCursor)
+	c.a.MovImm(a64A, 1)
+	c.a.Store8(a64C, c.enc.IterDone, a64A)
+	c.movImm(a64RetNum, c.enc.Uninitialized)
+	c.a.MovRR(a64RetRef, arm64.ZR)
+	c.a.Load(a64CallLink, a64Ctx, abi.OffReturnTo)
+	c.returnTail()
+}
+
 func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	sites, s := v.Calls(), v.State
 	stub := c.stubLabel(s, exitKind(v.Aux))
@@ -2732,33 +2992,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 		operands = calleeSlot - 1
 	}
 	st, recs := c.callState(v, s, func(i int) bool { return direct && i >= ops }, operands)
-	record := map[int]int32{}
-	for k, r := range recs {
-		at := abi.OffRecord + int32(k)*32
-		record[r.slot] = int32(k)
-		if r.big {
-			// A BigInt's box's words, made of the BigInt.
-			c.bigBoxWords(r.x.Args[1])
-			c.a.Store(a64Ctx, at+16, a64A)
-			c.a.Store(a64Ctx, abi.OffRecordRef+int32(k)*8, a64C)
-			continue
-		}
-		w := a64A
-		switch {
-		case !r.num && (!r.ref || r.x.Shadow != nil):
-		case remat(r.x):
-			c.materialize(r.x, a64A)
-		default:
-			w = c.gpr(r.x, a64A)
-		}
-		if r.num {
-			c.a.Store(a64Ctx, at+16, w)
-		}
-		if r.ref {
-			c.pointerWord(r.x, w)
-			c.a.Store(a64Ctx, abi.OffRecordRef+int32(k)*8, a64B)
-		}
-	}
+	record := c.callRecords(recs)
 	c.movImm(a64A, uint64(uintptr(unsafe.Pointer(st))))
 	c.a.Store(a64Ctx, abi.OffCallState, a64A)
 	args, this := sp-site.Argc, calleeSlot-1
@@ -3843,6 +4077,154 @@ func (c *a64Compiler) closureTake(v *ssa.Value, site *ssa.CallSite, slow arm64.L
 	}
 }
 
+// genStep is amd64's, the cursor's state in D: a cursor over a generator
+// of one of the functions the step has met, resumed by a native call of
+// its code (genCall), or on to notGen, D as it was, where its next is not
+// the realm's generators'. It uses A, B, C and D, and no other, until the
+// call.
+func (c *a64Compiler) genStep(v *ssa.Value, notGen, slow, done arm64.Label) {
+	site := v.Calls()[0]
+	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+	c.a.Load(a64B, a64D, c.enc.IterNext+c.enc.RefOffset)
+	c.movImm(a64C, uint64(site.GenNext))
+	c.a.Cmp(a64B, a64C, true)
+	c.a.BCond(arm64.NE, notGen)
+	c.a.Load(a64C, a64D, c.enc.IterIter+c.enc.NumOffset)
+	c.movImm(a64B, c.enc.Object)
+	c.a.Cmp(a64C, a64B, true)
+	fail(arm64.NE)
+	c.a.Load(a64C, a64D, c.enc.IterIter+c.enc.RefOffset)
+	c.objectData(a64B, a64C, a64C, c.enc.GenData, fail)
+	c.a.LoadU8(a64C, a64B, c.enc.GenState)
+	c.a.CmpImm(a64C, int64(c.enc.GenSuspendedYield), false)
+	fail(arm64.HI)
+	c.a.LoadU8(a64C, a64B, c.enc.GenDelegating)
+	c.a.Cbnz(a64C, slow, false)
+	c.a.Load(a64C, a64B, c.enc.GenRare)
+	c.a.Cbnz(a64C, slow, true)
+	// A context for the generator's frame.
+	c.a.Load(a64C, a64Ctx, abi.OffLevel)
+	c.a.AddImm(a64C, a64C, 1, true)
+	c.a.Load(a64A, a64Ctx, abi.OffBounds)
+	c.a.Load(a64A, a64A, abi.OffBoundsLevelLimit)
+	c.a.Cmp(a64C, a64A, true)
+	fail(arm64.HS)
+	// The generator and the cursor, where the generator's code reads them
+	// (genEntry): the next context's, which no call runs in yet. There is
+	// one only below the level limit, so they are stored after its check,
+	// as amd64's genCall stores them.
+	c.a.Load(a64C, a64Ctx, abi.OffNext)
+	c.a.Store(a64C, abi.OffGenObject, a64B)
+	c.a.Store(a64C, abi.OffGenCursor, a64D)
+	c.a.Load(a64D, a64B, c.enc.GenClosure)
+	for _, t := range site.Gens {
+		next := c.a.NewLabel()
+		c.a.Load(a64C, a64D, c.enc.ClosureFn)
+		c.movImm(a64A, uint64(t.Fn))
+		c.a.Cmp(a64C, a64A, true)
+		c.a.BCond(arm64.NE, next)
+		for _, f := range [...]struct {
+			off  int32
+			want uintptr
+		}{{c.enc.ClosureEnv, t.Env}, {c.enc.ClosureRealm, t.Realm}} {
+			c.a.Load(a64C, a64D, f.off)
+			c.movImm(a64A, uint64(f.want))
+			c.a.Cmp(a64C, a64A, true)
+			fail(arm64.NE)
+		}
+		c.genCall(v, t, slow, done)
+		c.a.Bind(next)
+	}
+	c.a.B(slow)
+}
+
+// genCall is amd64's, the generator's closure in D: the call of the
+// generator's code at its generator entry, its state described, what is
+// live saved; its result to the step's keep cell, or, at its miss, Go's
+// step.
+func (c *a64Compiler) genCall(v *ssa.Value, t ssa.GenStep, slow, done arm64.Label) {
+	site := v.Calls()[0]
+	vs := int32(c.enc.ValueSize)
+	c.movImm(a64C, uint64(t.Entry))
+	c.a.Load(a64C, a64C, 0)
+	c.a.Cbz(a64C, slow, true)
+	c.a.Store(a64Ctx, abi.OffGenEntry, a64C)
+	c.a.Store(a64Ctx, abi.OffCallClosure, a64D)
+	st, recs := c.callState(v, v.State, func(int) bool { return false }, -1)
+	c.callRecords(recs)
+	c.movImm(a64A, uint64(uintptr(unsafe.Pointer(st))))
+	c.a.Store(a64Ctx, abi.OffCallState, a64A)
+	saves := c.savesOf(v)
+	for _, sv := range saves {
+		if sv.float {
+			c.a.StoreF(a64Ctx, c.spillDisp(sv.slot), arm64.FReg(sv.reg))
+		} else {
+			c.a.Store(a64Ctx, c.spillDisp(sv.slot), arm64.Reg(sv.reg))
+		}
+	}
+	// As amd64's: the cursor's word, where a register holds it, for the
+	// miss.
+	x, kept := v.Args[0], -1
+	if l := c.locAt(x); !c.isLazy(x) && l.reg >= 0 {
+		kept = l.reg
+		c.a.Store(a64Ctx, abi.OffGoArgs+c.enc.NumOffset, arm64.Reg(kept))
+	}
+	restore := func() {
+		for _, sv := range saves {
+			if sv.float {
+				c.a.LoadF(arm64.FReg(sv.reg), a64Ctx, c.spillDisp(sv.slot))
+			} else {
+				c.a.Load(arm64.Reg(sv.reg), a64Ctx, c.spillDisp(sv.slot))
+			}
+		}
+	}
+	back, miss := c.a.NewLabel(), c.a.NewLabel()
+	c.resumeUsed = true
+	c.a.Adr(a64CallRet, back)
+	c.a.Load(a64CallClosure, a64Ctx, abi.OffCallClosure)
+	c.movImm(a64CallLink, uint64(t.Entry)-uint64(c.enc.LinkGen))
+	c.a.Adr(arm64.Reg(10), miss)
+	c.a.Load(a64D, a64Ctx, abi.OffGenEntry)
+	c.a.Br(a64D)
+	// The generator returned, or Go finished it: its result's words in
+	// a64RetNum and a64RetRef.
+	c.a.Bind(back)
+	if site.Fill {
+		value := c.a.NewLabel()
+		c.movImm(a64B, c.enc.Uninitialized)
+		c.a.Cmp(a64RetNum, a64B, true)
+		c.a.BCond(arm64.NE, value)
+		c.movImm(a64RetNum, c.enc.Undefined)
+		c.a.MovImm(a64RetRef, 0)
+		c.a.Bind(value)
+	}
+	at := abi.OffKeep + int32(v.Index)*vs
+	marked, stored := c.a.NewLabel(), c.a.NewLabel()
+	c.movImm(a64B, c.enc.WriteBarrier)
+	c.a.LoadU8(a64B, a64B, 0)
+	c.a.Cbnz(a64B, marked, false)
+	c.a.Store(a64Ctx, at+c.enc.RefOffset, a64RetRef)
+	c.a.Store(a64Ctx, at+c.enc.NumOffset, a64RetNum)
+	c.a.Bind(stored)
+	restore()
+	c.a.B(done)
+	c.cold = append(c.cold, func() {
+		c.a.Bind(marked)
+		c.a.Store(a64Ctx, at+c.enc.NumOffset, a64RetNum)
+		c.a.AddImm(a64A, a64Ctx, int64(at+c.enc.RefOffset), true)
+		c.refStore()
+		c.a.B(stored)
+	})
+	// Its code could not resume it: Go steps it, from the registers as
+	// they were.
+	c.a.Bind(miss)
+	restore()
+	if kept >= 0 {
+		c.a.Load(arm64.Reg(kept), a64Ctx, abi.OffGoArgs+c.enc.NumOffset)
+	}
+	c.a.B(slow)
+}
+
 // iterStep is amd64's: a loop's step over an array, made in place. It
 // uses A, B, C and D, and no other.
 func (c *a64Compiler) iterStep(v *ssa.Value, slow arm64.Label) {
@@ -3854,20 +4236,33 @@ func (c *a64Compiler) iterStep(v *ssa.Value, slow arm64.Label) {
 	c.a.Cbnz(a64C, slow, false)
 	c.a.Load(a64A, a64D, c.enc.IterIdx)
 	c.a.Load(a64C, a64D, c.enc.IterArr)
-	// No array: a Map's or a Set's iterator, which mapStep steps.
-	nexts := stepNexts(v, c.enc)
-	maps := slow
-	if nexts != ([2]uintptr{}) {
-		maps = c.a.NewLabel()
+	// No array: a generator, which genStep resumes natively, or a Map's
+	// or a Set's iterator, which mapStep steps.
+	nexts, gens := stepNexts(v, c.enc), stepGens(v, c.enc)
+	others := slow
+	if nexts != ([2]uintptr{}) || gens {
+		others = c.a.NewLabel()
 		done := c.a.NewLabel()
 		defer c.a.Bind(done)
 		c.cold = append(c.cold, func() {
-			c.a.Bind(maps)
-			c.mapStep(v, nexts, slow)
-			c.a.B(done)
+			c.a.Bind(others)
+			if gens {
+				notGen := slow
+				if nexts != ([2]uintptr{}) {
+					notGen = c.a.NewLabel()
+				}
+				c.genStep(v, notGen, slow, done)
+				if nexts != ([2]uintptr{}) {
+					c.a.Bind(notGen)
+				}
+			}
+			if nexts != ([2]uintptr{}) {
+				c.mapStep(v, nexts, slow)
+				c.a.B(done)
+			}
 		})
 	}
-	c.a.Cbz(a64C, maps, true)
+	c.a.Cbz(a64C, others, true)
 	c.a.Load(a64B, a64C, c.enc.ObjectElems+8)
 	c.a.Cmp(a64A, a64B, true)
 	c.a.BCond(arm64.HS, slow)
@@ -5769,7 +6164,9 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.CmpImm(a64C, 0, true)
 		guard(arm64.EQ)
 		if v.Const.Bits == 0 {
+			// No cell: a done cursor's alone, which jumps to ok.
 			c.a.B(c.stubLabel(v.State, exitKind(v.Aux)))
+			c.a.Bind(ok)
 			break
 		}
 		c.movImm(a64C, v.Const.Bits)

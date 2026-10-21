@@ -112,6 +112,11 @@ type compiler struct {
 	// which goes on to saving for the rest.
 	appending     amd64.Label
 	appendingUsed bool
+	// genDone is where a generator's code a loop's step resumed natively
+	// goes once the generator finishes (genDone), if its code has a
+	// generator entry (ssa.Func's GenEntry).
+	genDone     amd64.Label
+	genDoneUsed bool
 }
 
 // goFail is a call of Go's description, where it goes on (back), and
@@ -226,6 +231,15 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 		resumeAt = c.a.Len()
 		c.resumeCall()
 	}
+	genAt := -1
+	if c.f.GenEntry {
+		genAt = c.a.Len()
+		c.genEntry()
+	}
+	if c.genDoneUsed {
+		c.a.Bind(c.genDone)
+		c.genFinish()
+	}
 	if c.appendingUsed {
 		c.a.Bind(c.appending)
 		c.appendingCall()
@@ -281,8 +295,11 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 	if resumeAt >= 0 {
 		resumeAt = c.a.Moved(resumeAt)
 	}
+	if genAt >= 0 {
+		genAt = c.a.Moved(genAt)
+	}
 	c.finishExits()
-	return &Code{Bytes: bytes, Entries: entries, CallEntry: callAt, Resume: resumeAt, Text: c.a.Moved(text), Exits: c.exits,
+	return &Code{Bytes: bytes, Entries: entries, CallEntry: callAt, Resume: resumeAt, GenEntry: genAt, Text: c.a.Moved(text), Exits: c.exits,
 		Calls: c.calls, CallRefs: c.callRefs(), GoCalls: c.goCalls, core: c.core}, nil
 }
 
@@ -664,6 +681,267 @@ func (c *compiler) callEntry() {
 	}
 }
 
+// genEntry is the code's generator entry (ssa.Func's GenEntry), where a
+// loop's step that resumes a generator of the function natively jumps
+// (genCall), as V8's code for a generator is called to resume it: with the
+// step's context in the context register, where the call returns to, the
+// generator's closure and its function's link in the call entry's
+// registers (callEntry), where the step goes on if the code cannot resume
+// the generator in R10, and the generator and the step's cursor in the next
+// context's GenObject and GenCursor. Where the code has an entry for the
+// generator's place (ssa.Func's GenResumes) whose operands are those its
+// suspension saved, and the VM's stack has room for its frame, it makes the
+// frame -- its locals the generator's, its operands past the stack's top,
+// what its suspension saved and the value sent in, undefined, on them --
+// and the context, as callEntry does, its receiver the generator's; marks
+// the generator running; and goes on at the entry. Otherwise it changes
+// nothing and goes back to the step at R10, which Go makes. It uses every
+// register.
+func (c *compiler) genEntry() {
+	const next, g, t = amd64.R12, amd64.R13, amd64.RBX
+	miss := c.a.NewLabel()
+	c.a.Load(next, regCtx, abi.OffNext)
+	c.a.Load(g, next, abi.OffGenObject)
+	// Room for the frame's operands.
+	c.a.Load(t, regCtx, abi.OffStackTop)
+	c.a.Load(t, t, 0)
+	c.a.OpImm(amd64.Add, t, int32(c.frameSize()-c.f.FrameLocals), true)
+	c.a.CmpMem(t, regCtx, abi.OffStackEnd, true)
+	c.a.Jcc(amd64.CondA, miss)
+	c.a.LoadU32(t, g, c.enc.GenPC)
+	for _, gr := range c.f.GenResumes {
+		blk := c.entryAt(gr.PC)
+		if blk == nil {
+			continue
+		}
+		skip := c.a.NewLabel()
+		c.a.OpImm(amd64.Cmp, t, int32(gr.PC), false)
+		c.a.Jcc(amd64.CondNE, skip)
+		c.a.Load(t, g, c.enc.GenStack+8)
+		c.a.OpImm(amd64.Cmp, t, int32(gr.Saved), true)
+		c.a.Jcc(amd64.CondNE, miss)
+		c.a.LoadU8(t, g, c.enc.GenStarted)
+		c.a.OpImm(amd64.Cmp, t, int32(b2i(gr.Started)), false)
+		c.a.Jcc(amd64.CondNE, miss)
+		c.genFrame(gr, blk)
+		c.a.Bind(skip)
+	}
+	c.a.Bind(miss)
+	c.a.JmpReg(amd64.R10)
+}
+
+// genFrame is genEntry's for the resumption gr, at blk, the entry for its
+// place: the generator's frame and context made, the generator running,
+// and on at blk, whose entry loads the frame's registers. The next
+// context, the generator and the call's registers are genEntry's.
+func (c *compiler) genFrame(gr ssa.GenResume, blk *ssa.Block) {
+	vs := int32(c.enc.ValueSize)
+	const next, g, t, u = amd64.R12, amd64.R13, amd64.RBX, amd64.R8
+	c.a.Store(next, abi.OffReturnTo, callRet)
+	c.a.Store(next, abi.OffClosure, callClosure)
+	c.a.Load(t, callClosure, c.enc.ClosureUpvalues)
+	c.a.Store(next, abi.OffUpvalues, t)
+	// Its operands past the VM's stack's top, which moves past them, its
+	// high water with it.
+	c.a.Load(u, regCtx, abi.OffStackTop)
+	c.a.Load(t, u, 0)
+	c.a.Store(next, abi.OffBase, t)
+	c.a.Lea(scratchA, t, int32(c.frameSize()-c.f.FrameLocals))
+	c.a.Store(u, 0, scratchA)
+	same := c.a.NewLabel()
+	c.a.Load(u, regCtx, abi.OffStackHigh)
+	c.a.CmpMem(scratchA, u, 0, true)
+	c.a.Jcc(amd64.CondBE, same)
+	c.a.Store(u, 0, scratchA)
+	c.a.Bind(same)
+	c.a.ShiftImm(amd64.Shl, t, 4, true)
+	c.a.Load(u, regCtx, abi.OffStackBase)
+	c.a.Op(amd64.Add, t, u, true)
+	c.a.Store(next, abi.OffStack, t)
+	// Its locals, the generator's, past its arguments.
+	c.a.LoadU32(u, g, c.enc.GenArgs)
+	c.a.ShiftImm(amd64.Shl, u, 4, true)
+	c.a.Load(scratchA, g, c.enc.GenVals)
+	c.a.Op(amd64.Add, u, scratchA, true)
+	c.a.Store(next, abi.OffLocals, u)
+	c.a.StoreImm(next, abi.OffOpen, 0)
+	c.a.StoreImm(next, abi.OffCells, 0)
+	if c.f.Loops {
+		c.storeImm(next, abi.OffLoop, 0, scratchA)
+	}
+	c.a.StoreImm(next, abi.OffLive, abi.LiveCall)
+	c.a.IncMem(callLink, c.enc.LinkIn)
+	if c.f.ThisSlot >= 0 {
+		// Its receiver, which its code reads.
+		c.a.Load(scratchA, g, c.enc.GenThis+c.enc.NumOffset)
+		c.a.Store(next, abi.OffThis+c.enc.NumOffset, scratchA)
+		c.a.Load(scratchA, g, c.enc.GenThis+c.enc.RefOffset)
+		c.a.Store(next, abi.OffThis+c.enc.RefOffset, scratchA)
+	}
+	// The operands its suspension saved, and on them the value sent in.
+	if gr.Saved > 0 {
+		c.a.Load(u, g, c.enc.GenStack)
+		for i := range int32(gr.Saved) {
+			for _, w := range [2]int32{c.enc.NumOffset, c.enc.RefOffset} {
+				c.a.Load(scratchA, u, i*vs+w)
+				c.a.Store(t, i*vs+w, scratchA)
+			}
+		}
+	}
+	if gr.Started {
+		c.storeImm(t, int32(gr.Saved)*vs+c.enc.NumOffset, c.enc.Undefined, scratchA)
+		c.storeImm(t, int32(gr.Saved)*vs+c.enc.RefOffset, 0, scratchA)
+	}
+	c.a.MovImm(scratchA, uint64(c.enc.GenExecuting))
+	c.a.Store8(g, c.enc.GenState, scratchA)
+	c.a.MovRR(regCtx, next)
+	c.a.Jmp(c.labels[blk.ID])
+}
+
+// yieldExit is the exit of b, a generator's yield (ssa.Block's Yield), in
+// its state, where the yield's value is on top: in code a loop's step
+// resumed natively (genEntry), the frame is written, as an exit writes it
+// -- its records applied natively, as recordsTail applies them while the
+// collector does not mark -- and the generator suspended there, as Go's
+// suspension would: the operands beneath the value saved, its place past
+// the yield, the handlers in force, suspended and begun; and the value
+// returned to the step. Where Go entered the code, the collector marks and
+// there are records to apply or operands to save, or the generator has no
+// room for the operands or the handlers, it is the exit, Go suspending the
+// generator.
+func (c *compiler) yieldExit(b *ssa.Block) {
+	s, hs := b.State, b.YieldHandlers
+	vs := int32(c.enc.ValueSize)
+	c.a.Load(scratchA, regCtx, abi.OffReturnTo)
+	c.a.Op(amd64.Test, scratchA, scratchA, true)
+	c.a.Jcc(amd64.CondE, c.stubLabel(s, abi.ExitHost))
+	then, toGo := c.a.NewLabel(), c.a.NewLabel()
+	c.exitThen(s, abi.ExitHost, &then)
+	c.a.Bind(then)
+	// Records the collector's marking left, which Go applies, as it does
+	// any store of a pointer while it marks: Go suspends the generator.
+	c.a.Load(scratchA, regCtx, abi.OffRecords)
+	c.a.Op(amd64.Test, scratchA, scratchA, true)
+	c.a.Jcc(amd64.CondNE, toGo)
+	saved, n := int32(s.Depth-1), int32(len(hs))
+	c.a.Load(scratchB, regCtx, abi.OffGenObject)
+	if n > 0 {
+		// Room where the generator keeps its handlers.
+		c.a.Load(scratchC, scratchB, c.enc.GenHandlers+16)
+		c.a.OpImm(amd64.Cmp, scratchC, n, true)
+		c.a.Jcc(amd64.CondB, toGo)
+	}
+	if saved > 0 {
+		// The operands beneath the value, pointers stored where the
+		// generator keeps them, Go's while the collector marks.
+		c.movImm(scratchC, c.enc.WriteBarrier)
+		c.a.LoadU8(scratchC, scratchC, 0)
+		c.a.Op(amd64.Test, scratchC, scratchC, false)
+		c.a.Jcc(amd64.CondNE, toGo)
+		c.a.Load(scratchC, scratchB, c.enc.GenStack+16)
+		c.a.OpImm(amd64.Cmp, scratchC, saved, true)
+		c.a.Jcc(amd64.CondB, toGo)
+		c.a.Load(scratchC, scratchB, c.enc.GenStack)
+		for i := range saved {
+			for _, w := range [2]int32{c.enc.NumOffset, c.enc.RefOffset} {
+				c.a.Load(scratchA, regStack, i*vs+w)
+				c.a.Store(scratchC, i*vs+w, scratchA)
+			}
+		}
+	}
+	c.storeImm(scratchB, c.enc.GenStack+8, uint64(saved), scratchA)
+	if n > 0 {
+		// The handlers in force, no pointers among their words.
+		c.a.Load(scratchC, scratchB, c.enc.GenHandlers)
+		for i, h := range hs {
+			at := int32(i) * c.enc.HandlerSize
+			c.a.MovImm(scratchA, uint64(h.PC))
+			c.a.Store32(scratchC, at+c.enc.HandlerPC, scratchA)
+			c.storeImm(scratchC, at+c.enc.HandlerDepth, uint64(int64(h.Depth)), scratchA)
+			c.a.MovImm(scratchA, uint64(b2i(h.Finally)))
+			c.a.Store8(scratchC, at+c.enc.HandlerFinally, scratchA)
+		}
+	}
+	c.storeImm(scratchB, c.enc.GenHandlers+8, uint64(n), scratchA)
+	c.a.MovImm(scratchA, uint64(s.PC)+1)
+	c.a.Store32(scratchB, c.enc.GenPC, scratchA)
+	c.a.MovImm(scratchA, uint64(c.enc.GenSuspendedYield))
+	c.a.Store8(scratchB, c.enc.GenState, scratchA)
+	c.a.MovImm(scratchA, 1)
+	c.a.Store8(scratchB, c.enc.GenStarted, scratchA)
+	c.a.Load(retNum, regStack, saved*vs+c.enc.NumOffset)
+	c.a.Load(retRef, regStack, saved*vs+c.enc.RefOffset)
+	c.a.Load(callLink, regCtx, abi.OffReturnTo)
+	c.returnTail()
+	c.a.Bind(toGo)
+	c.a.Ret()
+}
+
+// genReturn sends a return of a generator a loop's step resumed natively
+// (genEntry) to genFinish; one Go resumed falls through, to return to Go.
+func (c *compiler) genReturn() {
+	if !c.genDoneUsed {
+		c.genDone, c.genDoneUsed = c.a.NewLabel(), true
+	}
+	c.a.Load(scratchA, regCtx, abi.OffReturnTo)
+	c.a.Op(amd64.Test, scratchA, scratchA, true)
+	c.a.Jcc(amd64.CondNE, c.genDone)
+}
+
+// genFinish finishes a generator a loop's step resumed natively, which
+// returned, as Go finishes one: the generator done, its saved operands
+// none, the step's cursor done -- whose iterator, finished, a loop's end
+// does not close -- and the step's result the uninitialized value, done
+// (ssa.CallSite's Step), its value dropped, as a loop drops it.
+func (c *compiler) genFinish() {
+	c.a.Load(scratchB, regCtx, abi.OffGenObject)
+	c.a.MovImm(scratchA, uint64(c.enc.GenCompleted))
+	c.a.Store8(scratchB, c.enc.GenState, scratchA)
+	c.storeImm(scratchB, c.enc.GenStack+8, 0, scratchA)
+	c.a.Load(scratchC, regCtx, abi.OffGenCursor)
+	c.a.MovImm(scratchA, 1)
+	c.a.Store8(scratchC, c.enc.IterDone, scratchA)
+	c.movImm(retNum, c.enc.Uninitialized)
+	c.movImm(retRef, 0)
+	c.a.Load(callLink, regCtx, abi.OffReturnTo)
+	c.returnTail()
+}
+
+// callRecords writes a native call's records, recs, as callState
+// described them -- the words of each slot's value the code keeps nowhere
+// else -- and returns each slot's record's index.
+func (c *compiler) callRecords(recs []callRecord) map[int]int32 {
+	record := map[int]int32{}
+	for k, r := range recs {
+		at := abi.OffRecord + int32(k)*32
+		record[r.slot] = int32(k)
+		if r.big {
+			// A BigInt's box's words, made of the BigInt.
+			c.bigBoxWords(r.x.Args[1])
+			c.a.Store(regCtx, at+16, scratchA)
+			c.a.Store(regCtx, abi.OffRecordRef+int32(k)*8, scratchC)
+			continue
+		}
+		w := scratchA
+		switch {
+		case !r.num && (!r.ref || r.x.Shadow != nil):
+			// Its pointer word from its source, which needs no number word.
+		case remat(r.x):
+			c.materialize(r.x, scratchA)
+		default:
+			w = c.gpr(r.x, scratchA)
+		}
+		if r.num {
+			c.a.Store(regCtx, at+16, w)
+		}
+		if r.ref {
+			c.pointerWord(r.x, w)
+			c.a.Store(regCtx, abi.OffRecordRef+int32(k)*8, scratchB)
+		}
+	}
+	return record
+}
+
 // call calls natively the function a call calls, if it is one of those it
 // was seen to call (ssa's OpCall), as V8's code calls another's, and goes
 // on after it with the result: the callee's frame is made in the VM's
@@ -915,34 +1193,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		operands = calleeSlot - 1
 	}
 	st, recs := c.callState(v, s, func(i int) bool { return direct && i >= ops }, operands)
-	record := map[int]int32{}
-	for k, r := range recs {
-		at := abi.OffRecord + int32(k)*32
-		record[r.slot] = int32(k)
-		if r.big {
-			// A BigInt's box's words, made of the BigInt.
-			c.bigBoxWords(r.x.Args[1])
-			c.a.Store(regCtx, at+16, scratchA)
-			c.a.Store(regCtx, abi.OffRecordRef+int32(k)*8, scratchC)
-			continue
-		}
-		w := scratchA
-		switch {
-		case !r.num && (!r.ref || r.x.Shadow != nil):
-			// Its pointer word from its source, which needs no number word.
-		case remat(r.x):
-			c.materialize(r.x, scratchA)
-		default:
-			w = c.gpr(r.x, scratchA)
-		}
-		if r.num {
-			c.a.Store(regCtx, at+16, w)
-		}
-		if r.ref {
-			c.pointerWord(r.x, w)
-			c.a.Store(regCtx, abi.OffRecordRef+int32(k)*8, scratchB)
-		}
-	}
+	record := c.callRecords(recs)
 	c.movImm(scratchA, uint64(uintptr(unsafe.Pointer(st))))
 	c.a.Store(regCtx, abi.OffCallState, scratchA)
 	args, this := sp-site.Argc, calleeSlot-1
@@ -1810,21 +2061,34 @@ func (c *compiler) iterStep(v *ssa.Value, slow amd64.Label) {
 	c.a.Load(scratchA, scratchB, c.enc.IterIdx)
 	c.a.Load(scratchC, scratchB, c.enc.IterArr)
 	c.a.Op(amd64.Test, scratchC, scratchC, true)
-	// No array: a Map's or a Set's iterator, which mapStep steps, out of
-	// the array's way, with the code's cold paths.
-	nexts := stepNexts(v, c.enc)
-	maps := slow
-	if nexts != ([2]uintptr{}) {
-		maps = c.a.NewLabel()
+	// No array: a generator, which genStep resumes natively, or a Map's
+	// or a Set's iterator, which mapStep steps, out of the array's way,
+	// with the code's cold paths.
+	nexts, gens := stepNexts(v, c.enc), stepGens(v, c.enc)
+	others := slow
+	if nexts != ([2]uintptr{}) || gens {
+		others = c.a.NewLabel()
 		done := c.a.NewLabel()
 		defer c.a.Bind(done)
 		c.cold = append(c.cold, func() {
-			c.a.Bind(maps)
-			c.mapStep(v, nexts, slow)
-			c.a.Jmp(done)
+			c.a.Bind(others)
+			if gens {
+				notGen := slow
+				if nexts != ([2]uintptr{}) {
+					notGen = c.a.NewLabel()
+				}
+				c.genStep(v, notGen, slow, done)
+				if nexts != ([2]uintptr{}) {
+					c.a.Bind(notGen)
+				}
+			}
+			if nexts != ([2]uintptr{}) {
+				c.mapStep(v, nexts, slow)
+				c.a.Jmp(done)
+			}
 		})
 	}
-	c.a.Jcc(amd64.CondE, maps)
+	c.a.Jcc(amd64.CondE, others)
 	c.a.Load(scratchB, scratchC, c.enc.ObjectElems+8)
 	c.a.Op(amd64.Cmp, scratchA, scratchB, true)
 	c.a.Jcc(amd64.CondAE, slow)
@@ -1842,6 +2106,161 @@ func (c *compiler) iterStep(v *ssa.Value, slow amd64.Label) {
 	c.a.Load(scratchC, scratchB, c.enc.IterIdx)
 	c.a.OpImm(amd64.Add, scratchC, 1, true)
 	c.a.Store(scratchB, c.enc.IterIdx, scratchC)
+}
+
+// genStep is iterStep's step of a cursor over a generator of one of the
+// functions the step has met (ssa.CallSite's Gens), the cursor's state in
+// scratchB and xScratch2: the iterator's next the realm's generators'
+// (GenNext), or on to notGen; the iterator a generator, suspended at its
+// start or at a yield, not in a yield*, of no rare part, its closure one of
+// the functions', of the caller's environment and realm, whose code has a
+// generator entry (genCall). Anything else goes to slow, where Go steps
+// it. It goes on at done with the step's result in its keep cell.
+func (c *compiler) genStep(v *ssa.Value, notGen, slow, done amd64.Label) {
+	site := v.Calls()[0]
+	fail := func(cond amd64.Cond) { c.a.Jcc(cond, slow) }
+	c.a.Load(scratchA, scratchB, c.enc.IterNext+c.enc.RefOffset)
+	c.cmpWord(scratchA, uint64(site.GenNext))
+	c.a.Jcc(amd64.CondNE, notGen)
+	c.a.Load(scratchC, scratchB, c.enc.IterIter+c.enc.NumOffset)
+	c.cmpWord(scratchC, c.enc.Object)
+	fail(amd64.CondNE)
+	c.a.Load(scratchA, scratchB, c.enc.IterIter+c.enc.RefOffset)
+	c.objectData(scratchB, scratchA, scratchC, c.enc.GenData, fail)
+	c.a.LoadU8(scratchC, scratchB, c.enc.GenState)
+	c.a.OpImm(amd64.Cmp, scratchC, int32(c.enc.GenSuspendedYield), false)
+	fail(amd64.CondA)
+	c.a.LoadU8(scratchC, scratchB, c.enc.GenDelegating)
+	c.a.Op(amd64.Test, scratchC, scratchC, false)
+	fail(amd64.CondNE)
+	c.a.Load(scratchC, scratchB, c.enc.GenRare)
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	fail(amd64.CondNE)
+	// A context for the generator's frame.
+	c.a.Load(scratchC, regCtx, abi.OffLevel)
+	c.a.OpImm(amd64.Add, scratchC, 1, true)
+	c.a.Load(scratchA, regCtx, abi.OffBounds)
+	c.a.CmpMem(scratchC, scratchA, abi.OffBoundsLevelLimit, true)
+	fail(amd64.CondAE)
+	c.a.Load(scratchA, scratchB, c.enc.GenClosure)
+	for _, t := range site.Gens {
+		next := c.a.NewLabel()
+		c.a.Load(scratchC, scratchA, c.enc.ClosureFn)
+		c.cmpWord(scratchC, uint64(t.Fn))
+		c.a.Jcc(amd64.CondNE, next)
+		for _, f := range [...]struct {
+			off  int32
+			want uintptr
+		}{{c.enc.ClosureEnv, t.Env}, {c.enc.ClosureRealm, t.Realm}} {
+			c.a.Load(scratchC, scratchA, f.off)
+			c.cmpWord(scratchC, uint64(f.want))
+			fail(amd64.CondNE)
+		}
+		c.genCall(v, t, slow, done)
+		c.a.Bind(next)
+	}
+	c.a.Jmp(slow)
+}
+
+// genCall is genStep's call of the generator's code at its generator entry
+// (genEntry), through its function's link, t's: the generator's closure in
+// scratchA, the generator in scratchB, the cursor's state in xScratch2. The
+// state is described as a native call's (call), for Go to make the frame
+// from if the generator leaves native code, and what is live saved; the
+// generator, its cursor and the entry are written where genEntry reads
+// them. The generator returns its value, or, finished, the uninitialized
+// value -- for a destructuring's step (ssa.CallSite's Fill), undefined --
+// which goes to the step's keep cell, as a call's result; or its code goes
+// back to the step's miss, where Go makes it. A link with no entry -- code
+// not compiled yet, or that native callers do not call -- Go makes too.
+func (c *compiler) genCall(v *ssa.Value, t ssa.GenStep, slow, done amd64.Label) {
+	site := v.Calls()[0]
+	vs := int32(c.enc.ValueSize)
+	c.movImm(scratchC, uint64(t.Entry))
+	c.a.Load(scratchC, scratchC, 0)
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	c.a.Jcc(amd64.CondE, slow)
+	c.a.Store(regCtx, abi.OffGenEntry, scratchC)
+	c.a.Store(regCtx, abi.OffCallClosure, scratchA)
+	c.a.Load(scratchC, regCtx, abi.OffNext)
+	c.a.Store(scratchC, abi.OffGenObject, scratchB)
+	c.a.MovQFromX(scratchB, xScratch2)
+	c.a.Store(scratchC, abi.OffGenCursor, scratchB)
+	st, recs := c.callState(v, v.State, func(int) bool { return false }, -1)
+	c.callRecords(recs)
+	c.movImm(scratchA, uint64(uintptr(unsafe.Pointer(st))))
+	c.a.Store(regCtx, abi.OffCallState, scratchA)
+	saves := c.savesOf(v)
+	for _, sv := range saves {
+		if sv.float {
+			c.a.StoreSD(regCtx, c.spillDisp(sv.slot), amd64.XReg(sv.reg))
+		} else {
+			c.a.Store(regCtx, c.spillDisp(sv.slot), amd64.Reg(sv.reg))
+		}
+	}
+	// The cursor's word, where a register holds it, for the miss, which
+	// Go makes from it: genEntry may write any register.
+	x, kept := v.Args[0], -1
+	if l := c.locAt(x); !c.isLazy(x) && l.reg >= 0 {
+		kept = l.reg
+		c.a.Store(regCtx, abi.OffGoArgs+c.enc.NumOffset, amd64.Reg(kept))
+	}
+	restore := func() {
+		for _, sv := range saves {
+			if sv.float {
+				c.a.LoadSD(amd64.XReg(sv.reg), regCtx, c.spillDisp(sv.slot))
+			} else {
+				c.a.Load(amd64.Reg(sv.reg), regCtx, c.spillDisp(sv.slot))
+			}
+		}
+	}
+	back, miss := c.a.NewLabel(), c.a.NewLabel()
+	c.resumeUsed = true
+	c.a.LeaLabel(callRet, back)
+	c.a.Load(callClosure, regCtx, abi.OffCallClosure)
+	c.movImm(callLink, uint64(t.Entry)-uint64(c.enc.LinkGen))
+	c.a.LeaLabel(amd64.R10, miss)
+	c.a.JmpMem(regCtx, abi.OffGenEntry)
+	// The generator returned (yieldExit, genFinish), or Go finished it
+	// (resumeCall): its result's words in retNum and retRef.
+	c.a.Bind(back)
+	if site.Fill {
+		value := c.a.NewLabel()
+		c.cmpWord(retNum, c.enc.Uninitialized)
+		c.a.Jcc(amd64.CondNE, value)
+		c.movImm(retNum, c.enc.Undefined)
+		c.movImm(retRef, 0)
+		c.a.Bind(value)
+	}
+	// Its pointer word stored with Go's write barrier while the collector
+	// marks, as a call's result is: the keep cell outlives the frame it
+	// came from.
+	at := abi.OffKeep + int32(v.Index)*vs
+	marked, stored := c.a.NewLabel(), c.a.NewLabel()
+	c.movImm(scratchB, c.enc.WriteBarrier)
+	c.a.LoadU8(scratchB, scratchB, 0)
+	c.a.Op(amd64.Test, scratchB, scratchB, false)
+	c.a.Jcc(amd64.CondNE, marked)
+	c.a.Store(regCtx, at+c.enc.RefOffset, retRef)
+	c.a.Store(regCtx, at+c.enc.NumOffset, retNum)
+	c.a.Bind(stored)
+	restore()
+	c.a.Jmp(done)
+	c.cold = append(c.cold, func() {
+		c.a.Bind(marked)
+		c.a.Store(regCtx, at+c.enc.NumOffset, retNum)
+		c.a.Lea(scratchA, regCtx, at+c.enc.RefOffset)
+		c.refStore()
+		c.a.Jmp(stored)
+	})
+	// Its code could not resume it: Go steps it, from the registers as
+	// they were.
+	c.a.Bind(miss)
+	restore()
+	if kept >= 0 {
+		c.a.Load(amd64.Reg(kept), regCtx, abi.OffGoArgs+c.enc.NumOffset)
+	}
+	c.a.Jmp(slow)
 }
 
 // mapStep is iterStep's step of a for...of over a Map's or a Set's
@@ -3736,8 +4155,17 @@ func (c *compiler) block(b *ssa.Block, next *ssa.Block) {
 		// Where it returned from, roughly -- its block's PC -- for the work
 		// the stretch did (the VM's jitSSAProfit).
 		c.storeImm(regCtx, abi.OffExitSite, uint64(b.PC), scratchA)
+		if c.f.GenEntry {
+			// A generator a loop's step resumed natively finishes there
+			// (genFinish); one Go resumed returns to Go.
+			c.genReturn()
+		}
 		c.returnNative()
 	case ssa.BlockExit:
+		if b.Yield && c.f.GenEntry {
+			c.yieldExit(b)
+			break
+		}
 		c.exitTo(b.State, exitKind(int(b.ExitKind)))
 	}
 }
@@ -6405,7 +6833,9 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		// method: the chain's validity cell, found at Const's address, is
 		// there and valid (ssa.WalkedCloseFeedback).
 		if v.Const.Bits == 0 {
+			// No cell: a done cursor's alone, which jumps to ok.
 			c.a.Jmp(c.stubLabel(v.State, exitKind(v.Aux)))
+			c.a.Bind(ok)
 			break
 		}
 		c.movImm(scratchC, v.Const.Bits)

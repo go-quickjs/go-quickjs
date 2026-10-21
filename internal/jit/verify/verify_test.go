@@ -264,6 +264,48 @@ func (b bigs) Intrinsic(pc int) (ssa.Intrinsic, bool) {
 	return k, true
 }
 
+// genCorpus is generators a loop's step resumes natively (ssa.Func's
+// GenEntry, Block's Yield) and the steps that resume them (ssa.CallSite's
+// Gens): for...of loops and destructurings, with operands beneath a yield
+// and none, handlers in force at a yield and not, a receiver read.
+var genCorpus = []string{
+	`function* f(n){for(let i=0;i<n;i++)yield i*2}`,
+	`function* f(a){for(const x of a)yield x+1;return 3}`,
+	`function* f(n){let s=0;while(n-->0){s+=(yield s)|0}return s}`,
+	`function* f(n){try{for(let i=0;i<n;i++)yield i}finally{n=0}}`,
+	`var o={*f(n){for(let i=0;i<n;i++)yield this.k+i}}`,
+	`function f(g,n){let s=0;for(let j=0;j<n;j++)for(const v of g)s=(s+v)|0;return s}`,
+	`function f(g){let s=0;for(const v of g){const [a,b]=v;s+=a*b}return s}`,
+}
+
+// gens is globals whose loops' steps have met generators of one function
+// (ssa.GenStepFeedback), which they resume by a native call.
+type gens struct{ globals }
+
+func (gens) GoCalls() bool { return true }
+func (gens) GenSteps(int) []ssa.GenStep {
+	return []ssa.GenStep{{Fn: 0x80000, Env: 0x81000, Realm: 0x82000, Entry: 0x83000, Count: 0x83010}}
+}
+func (gens) GenNext() uintptr { return 0x84000 }
+
+// genResumes is where code built as f, of p, a generator's, resumes it
+// natively (ssa.Func's GenResumes), as the VM finds them: each entry after a
+// yield, and the first other as its start.
+func genResumes(p *ir.Program, f *ssa.Func) []ssa.GenResume {
+	var out []ssa.GenResume
+	start := false
+	for _, e := range f.Entries {
+		switch {
+		case e.PC > 0 && p.Code[e.PC-1].Suspend && e.Depth >= 1:
+			out = append(out, ssa.GenResume{PC: e.PC, Saved: e.Depth - 1, Started: true})
+		case !start:
+			start = true
+			out = append(out, ssa.GenResume{PC: e.PC, Saved: e.Depth})
+		}
+	}
+	return out
+}
+
 // inCorpus is the in operator, whose answers Go makes from native code
 // (ssa.GoHas) and native code itself where the object is an array and the
 // key an index (mir's keyedHas).
@@ -372,6 +414,66 @@ func TestMirEmitted(t *testing.T) {
 				}
 			}
 		}
+	}
+	// A generator's layout, and a cursor's, for the generators' code and
+	// the steps that resume them.
+	genEnc := enc
+	genEnc.IterState, genEnc.IterDone, genEnc.IterArr, genEnc.IterIdx, genEnc.IterIter, genEnc.IterNext = 0x1111, 8, 16, 24, 32, 48
+	genEnc.ObjectExt, genEnc.ObjectData, genEnc.ObjectElems = 40, 8, 64
+	genEnc.GenData, genEnc.GenClosure, genEnc.GenThis, genEnc.GenVals, genEnc.GenArgs = 0x2222, 0, 8, 24, 48
+	genEnc.GenStack, genEnc.GenPC, genEnc.GenHandlers, genEnc.GenRare = 56, 80, 88, 112
+	genEnc.GenState, genEnc.GenStarted, genEnc.GenDelegating = 120, 121, 122
+	genEnc.GenSuspendedYield, genEnc.GenExecuting, genEnc.GenCompleted = 1, 2, 3
+	genEnc.ClosureFn, genEnc.ClosureEnv, genEnc.ClosureRealm, genEnc.ClosureUpvalues = 0, 8, 16, 24
+	genEnc.LinkIn, genEnc.LinkGen, genEnc.WriteBarrier, genEnc.CallGo = 16, 72, 0x71000, 0x72000
+	genEnc.HandlerSize, genEnc.HandlerPC, genEnc.HandlerDepth, genEnc.HandlerFinally = 24, 0, 8, 16
+	genEntries, genYields, genSteps := 0, 0, 0
+	for _, src := range genCorpus {
+		for i, p := range lowered(t, src) {
+			f, err := ssa.BuildWith(p, gens{})
+			if err != nil {
+				continue
+			}
+			for _, in := range p.Code {
+				if in.Suspend {
+					f.GenEntry = true
+				}
+			}
+			if f.GenEntry {
+				f.GenResumes = genResumes(p, f)
+			}
+			ssa.Optimize(f)
+			for _, b := range f.Blocks {
+				if b.Yield && f.GenEntry {
+					genYields++
+				}
+				for _, v := range b.Values {
+					if calls := v.Calls(); len(calls) == 1 && len(calls[0].Gens) != 0 {
+						genSteps++
+					}
+				}
+			}
+			for _, arch := range arches {
+				compile := mir.CompileAMD64
+				if arch == "arm64" {
+					compile = mir.CompileARM64
+				}
+				mc, err := compile(f, genEnc)
+				if err != nil {
+					t.Fatalf("%s (%d, gens), %s: %v", src, i, arch, err)
+				}
+				if err := check(arch, mc.Bytes[:mc.Text]); err != nil {
+					t.Fatalf("%s (%d, gens), %s: %v", src, i, arch, err)
+				}
+				if mc.GenEntry >= 0 {
+					genEntries++
+				}
+			}
+			n++
+		}
+	}
+	if genEntries == 0 || genYields == 0 || genSteps == 0 {
+		t.Errorf("generators' entries %d, native yields %d, steps resuming generators %d compiled", genEntries, genYields, genSteps)
 	}
 	r := rand.New(rand.NewPCG(5, 6))
 	for attempt := 0; attempt < 50000 && n < 2000; attempt++ {

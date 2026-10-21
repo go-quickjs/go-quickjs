@@ -156,6 +156,10 @@ type Code struct {
 	// native call through (jit's SSACode.Resume), or -1 for code that makes
 	// none.
 	CallEntry, Resume int
+	// GenEntry is the offset of the entry a loop's step that resumes a
+	// generator of the function natively jumps to (ssa.Func's GenEntry),
+	// or -1 for none.
+	GenEntry int
 	// Text is how many of Bytes are instructions: past them are the code's
 	// own constants (amd64's movImm), data.
 	Text int
@@ -1944,4 +1948,15 @@ func b2i(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// stepGens reports whether v, a loop's step (ssa.CallSite's Step), resumes
+// generators natively (CallSite's Gens): of 16-byte values, the encoding
+// knowing a generator's layout and the collector's flag.
+func stepGens(v *ssa.Value, enc abi.Encoding) bool {
+	if enc.GenData == 0 || enc.ValueSize != 16 || enc.WriteBarrier == 0 || len(v.Calls()) != 1 {
+		return false
+	}
+	site := v.Calls()[0]
+	return len(site.Gens) != 0 && site.GenNext != 0
 }

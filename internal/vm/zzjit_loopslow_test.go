@@ -77,7 +77,9 @@ func TestJITCallsOfGoAtLoops(t *testing.T) {
 // (jitSSAProfit's osr): Go no longer enters the code at the loop
 // (loopSlow), and each frame left goes back to its tree at the loop; so
 // too a loop over a generator's values, whose cursor makes its tree one of
-// handlers too. Each answer is Node's.
+// handlers too, where its steps are calls of Go -- a generator whose locals
+// a closure captures, which no step resumes natively (jitGenCallable).
+// Each answer is Node's.
 func TestJITLoopExitsAtEachTurn(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -91,7 +93,7 @@ func TestJITLoopExitsAtEachTurn(t *testing.T) {
 			for (let i = 0; i < n; i++) { using u = res; s = (s + i) | 0 }
 			return s + res.n * 3
 		}
-		function* count(n) { for (let i = 0; i < n; i++) yield i }
+		function* count(n) { for (let i = 0; i < n; i++) yield i; return () => n }
 		function viaGen(n) { let s = 0; for (let j = 0; j < n; j++) for (const v of count(10)) s = (s + v * j) | 0; return s }`)
 	back, interpreted := r.jit.backToTree, r.jit.interpreted
 	want(`viaUsing(200000)`, "-1474336480")
@@ -188,7 +190,9 @@ func TestJITHandlerTreeGoesOn(t *testing.T) {
 // resumptions look at the code once for each jitSSAProbe more (jitResume's
 // jitResumeSkip), counting them all toward Go's retrying it
 // (jitRetrySlow): looked at at each, a loop over the generator's values
-// had spent a twentieth of its time there. Each answer is Node's.
+// had spent a twentieth of its time there. The generator's locals a
+// closure captures, so that no step resumes it natively (jitGenCallable):
+// Go resumes it at each. Each answer is Node's.
 func TestJITSlowResumptionsLookSeldom(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -196,7 +200,7 @@ func TestJITSlowResumptionsLookSeldom(t *testing.T) {
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	r, want := jitAnswersForTest(t, `
-		function* count(n) { for (let i = 0; i < n; i++) yield i }
+		function* count(n) { for (let i = 0; i < n; i++) yield i; return () => n }
 		function total(n) { let s = 0; for (const v of count(n)) s = (s + v * 3) | 0; return s }`)
 	for range 50 {
 		want(`total(1000)`, "1498500")

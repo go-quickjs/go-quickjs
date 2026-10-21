@@ -2070,8 +2070,10 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this, charCode bool
 		return ir.Instruction{Op: ir.Rethrow, Left: top}
 	case bytecode.OpYield, bytecode.OpAwait:
 		// Go suspends the frame where native code leaves it, and a
-		// resumption enters native code again after it.
-		return ir.Instruction{Op: ir.Host}
+		// resumption enters native code again after it -- but a
+		// synchronous generator's yield, which code a loop's step resumed
+		// natively makes itself (ir.Instruction's Suspend).
+		return ir.Instruction{Op: ir.Host, Suspend: in.Op == bytecode.OpYield && fn.Generator && !fn.Async}
 	case bytecode.OpNewDisposeCapability, bytecode.OpAddDisposable, bytecode.OpDispose:
 		// A using declaration's resources, Go's (jitHost).
 		return ir.Instruction{Op: ir.Host}
