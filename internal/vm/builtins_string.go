@@ -81,6 +81,9 @@ func (r *Runtime) initStringBuiltins() {
 		return Str(fromUnits(units)), nil
 	})
 
+	setElemOp(r, ctor.getOwn(r.atoms.intern("fromCharCode")).value().Object(), elemStrFromCharCode)
+	setElemOp(r, ctor.getOwn(r.atoms.intern("fromCodePoint")).value().Object(), elemStrFromCodePoint)
+
 	r.defMethod(ctor, "raw", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		strsVal := arg(args, 0)
 		rawVal, err := rt.getValueProp(strsVal, atomRaw)
@@ -586,6 +589,20 @@ func (r *Runtime) initStringBuiltins() {
 		}
 		return Str(NewString(wtf8.ToWellFormed(s.Go()))), nil
 	})
+
+	// Every tier calls these without a frame where their checks pass: on a
+	// string, of arguments that convert without calling anything.
+	for name, op := range map[string]uint8{
+		"at": elemStrAt, "charAt": elemStrCharAt, "charCodeAt": elemStrCharCodeAt, "codePointAt": elemStrCodePointAt,
+		"indexOf": elemStrIndexOf, "lastIndexOf": elemStrLastIndexOf, "includes": elemStrIncludes,
+		"startsWith": elemStrStartsWith, "endsWith": elemStrEndsWith, "slice": elemStrSlice, "substring": elemStrSubstring,
+		"toUpperCase": elemStrToUpperCase, "toLowerCase": elemStrToLowerCase, "trim": elemStrTrim,
+		"trimStart": elemStrTrimStart, "trimEnd": elemStrTrimEnd, "concat": elemStrConcat, "repeat": elemStrRepeat,
+		"padStart": elemStrPadStart, "padEnd": elemStrPadEnd, "isWellFormed": elemStrIsWellFormed,
+		"toWellFormed": elemStrToWellFormed,
+	} {
+		setElemOp(r, p.getOwn(r.atoms.intern(name)).value().Object(), op)
+	}
 
 	// Strings are iterable by code point, not by code unit, so a surrogate
 	// pair yields one element.

@@ -125,7 +125,14 @@ func (r *Runtime) jitPlainCall(ctx *abi.Context, in bytecode.Instr, n int) (Valu
 	args := unsafe.Slice((*Value)(unsafe.Pointer(&ctx.GoArgs[first])), argc)
 	// Straight to what applies it, past pureElemOp's and collectionOp's
 	// questions, which ask what this has asked (jitLeafOp).
-	if op := fd.elemOp; op > elemRandom {
+	switch op := fd.elemOp; {
+	case op >= elemNativeFirst:
+		if r.meter != nil || !leafChecks[op](r, this, args) {
+			return Undefined, false
+		}
+		v, err := fd.native(r, this, args)
+		return v, err == nil
+	case op > elemRandom:
 		return leafOps[op](r, this, args, true)
 	}
 	return r.collectionOp(fd.elemOp, this, args, true)
@@ -133,10 +140,18 @@ func (r *Runtime) jitPlainCall(ctx *abi.Context, in bytecode.Instr, n int) (Valu
 
 // jitLeafOp reports whether native code's call of a built-in of frameless
 // application op (elemOp) is made without a frame (jitGoCallPlain): any
-// but push, pop and Math.random, whose native forms the JIT learns at the
-// calls of Go jitGoCall makes (jitCallSeen).
+// but those whose native forms the JIT learns at the calls of Go jitGoCall
+// makes (jitCallSeen) -- push and pop, Math.random, a string's charCodeAt,
+// its one character's substring, slice, substr and charAt, its searches,
+// and String.fromCharCode -- which, made without a frame, it would never
+// learn.
 func jitLeafOp(op uint8) bool {
-	return op != 0 && op != elemPush && op != elemPop && op != elemRandom
+	switch op {
+	case 0, elemPush, elemPop, elemRandom, elemStrCharCodeAt, elemStrCharAt, elemStrSlice, elemStrSubstring,
+		elemStrSubstr, elemStrIndexOf, elemStrLastIndexOf, elemStrIncludes, elemStrFromCharCode:
+		return false
+	}
+	return true
 }
 
 // jitMaybePlain reports, of a call of Go native code makes (ssa.GoCall),

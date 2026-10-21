@@ -1763,16 +1763,17 @@ func TestJITSSAProfitabilityOfCallsOfGo(t *testing.T) {
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	setup := `var str='abcdefgh';
-		function builtins(n){let s=0;for(let i=0;i<n;i++)s=(s+str.codePointAt('q')+str.codePointAt('c'))|0;return s}
-		function mixed(n){let s=0;for(let i=0;i<n;i++){s=(s*31+i)|0;s^=s>>>7;s=(s+i*i)|0;s^=s<<3;s=(s*7+(i>>1))|0;s^=s>>>5;s=(s+str.codePointAt('c'))|0}return s}
-		function heavy(k){return str.codePointAt('q')+str.codePointAt('c')+str.codePointAt('d')+str.codePointAt('e')+str.codePointAt('f')+
-			str.codePointAt('g')+str.codePointAt('h')+str.codePointAt('a')+str.codePointAt('b')+str.codePointAt('x')+k}
-		function light(k){let x=k;for(let j=0;j<20;j++){x=(x*31+j)|0;x^=x>>>7;x=(x+j*j)|0;x^=x<<3}return (x+str.codePointAt('c'))|0}
+		function builtins(n){let s=0;for(let i=0;i<n;i++)s=(s+framedCall(str,'q')+framedCall(str,'c'))|0;return s}
+		function mixed(n){let s=0;for(let i=0;i<n;i++){s=(s*31+i)|0;s^=s>>>7;s=(s+i*i)|0;s^=s<<3;s=(s*7+(i>>1))|0;s^=s>>>5;s=(s+framedCall(str,'c'))|0}return s}
+		function heavy(k){return framedCall(str,'q')+framedCall(str,'c')+framedCall(str,'d')+framedCall(str,'e')+framedCall(str,'f')+
+			framedCall(str,'g')+framedCall(str,'h')+framedCall(str,'a')+framedCall(str,'b')+framedCall(str,'x')+k}
+		function light(k){let x=k;for(let j=0;j<20;j++){x=(x*31+j)|0;x^=x>>>7;x=(x+j*j)|0;x^=x<<3}return (x+framedCall(str,'c'))|0}
 		function outer(n){let s=0;for(let i=0;i<n;i++)s=(s+heavy(i)+light(i))|0;return s}`
 	want := New(Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
+		jitFramedCallForTest(rt)
 		if _, err := rt.Run(compileForTest(t, setup)); err != nil {
 			t.Fatal(err)
 		}
@@ -9970,13 +9971,13 @@ func TestJITSSAKeepCellsReused(t *testing.T) {
 	live.WriteString("function live(n){let t=0;for(let i=0;i<n;i++){")
 	for k := range 300 {
 		if k%25 == 0 {
-			fmt.Fprintf(&many, "t=(t+str.codePointAt('%c'))|0;", 'a'+k%8)
+			fmt.Fprintf(&many, "t=(t+framedCall(str,'%c'))|0;", 'a'+k%8)
 		} else {
-			fmt.Fprintf(&many, "str.codePointAt('%c');", 'a'+k%8)
+			fmt.Fprintf(&many, "framedCall(str,'%c');", 'a'+k%8)
 		}
 	}
 	for k := range 60 {
-		fmt.Fprintf(&live, "let a%d='x'.repeat(%d+i);", k, k)
+		fmt.Fprintf(&live, "let a%d=framedRepeat('x',%d+i);", k, k)
 	}
 	many.WriteString("}return t}")
 	live.WriteString("t=(t")
@@ -9989,6 +9990,7 @@ func TestJITSSAKeepCellsReused(t *testing.T) {
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for _, rt := range []*Runtime{want, r} {
+		jitFramedCallForTest(rt)
 		if _, err := rt.Run(compileForTest(t, setup)); err != nil {
 			t.Fatal(err)
 		}
@@ -10040,7 +10042,7 @@ func TestJITSSAGoCallLeavesWithoutEntry(t *testing.T) {
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	setup := `var k={mode:0};
-		function loop(n){let s=0;for(let i=0;i<n;i++){let w=i;for(let j=0;j<30;j++)w=(w*31+j)^(w>>>3);s=(s+w+'abc'.codePointAt('c')+again(i,k.mode))|0;s=(s*3+i)|0}return s}
+		function loop(n){let s=0;for(let i=0;i<n;i++){let w=i;for(let j=0;j<30;j++)w=(w*31+j)^(w>>>3);s=(s+w+framedCall('abc','c')+again(i,k.mode))|0;s=(s*3+i)|0}return s}
 		function run(n){try{return loop(n)}catch(e){return e.message}}`
 	recompiled := 0
 	install := func(rt *Runtime) {
@@ -10071,6 +10073,7 @@ func TestJITSSAGoCallLeavesWithoutEntry(t *testing.T) {
 	install(want)
 	install(r)
 	for _, rt := range []*Runtime{want, r} {
+		jitFramedCallForTest(rt)
 		if _, err := rt.Run(compileForTest(t, setup)); err != nil {
 			t.Fatal(err)
 		}
@@ -11630,4 +11633,39 @@ func TestJITCallResultStepDone(t *testing.T) {
 	if sp, ok := r.jitCallResult(f, pc, 1, Float(7), nil); !ok || sp != 2 || f.pc != uint32(pc+1) || r.stack[1].Number() != 7 {
 		t.Fatalf("a value: sp %d, ok %v, pc %d, value %v", sp, ok, f.pc, r.stack[1])
 	}
+}
+
+// jitFramedCallForTest gives rt framedCall(s, x), s's code unit at x as
+// codePointAt has it, and framedRepeat(s, n), s repeated n times, host
+// functions: calls of Go that native code makes with their frames, as no
+// built-in is sure to stay -- a built-in that runs no script is a leaf,
+// called without one (ztree_aleaf.go).
+func jitFramedCallForTest(rt *Runtime) {
+	rt.global.setOwnRaw(rt.atoms.intern("framedRepeat"), rt.NewFunction("framedRepeat", 2,
+		func(rt *Runtime, _ Value, args []Value) (Value, error) {
+			s, err := rt.toString(arg(args, 0))
+			if err != nil {
+				return Undefined, err
+			}
+			n, err := rt.toInteger(arg(args, 1))
+			if err != nil {
+				return Undefined, err
+			}
+			return Str(NewString(strings.Repeat(s.Go(), int(n)))), nil
+		}), propDefault)
+	rt.global.setOwnRaw(rt.atoms.intern("framedCall"), rt.NewFunction("framedCall", 2,
+		func(rt *Runtime, _ Value, args []Value) (Value, error) {
+			s, err := rt.toString(arg(args, 0))
+			if err != nil {
+				return Undefined, err
+			}
+			n, err := rt.toInteger(arg(args, 1))
+			if err != nil {
+				return Undefined, err
+			}
+			if n < 0 || n >= float64(s.Len()) {
+				return Undefined, nil
+			}
+			return Int(s.CharCodeAt(int(n))), nil
+		}), propDefault)
 }

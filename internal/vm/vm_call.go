@@ -234,11 +234,19 @@ func (r *Runtime) callDirect(callee, this Value, args []Value) (Value, error) {
 		if fd != nil && fd.native != nil && !fd.bound && (fd.realm == nil || fd.realm == r.Realm) {
 			// A built-in of this realm is called as callObject calls one,
 			// without going through call and callObject to find out.
-			if fd.elemOp != 0 {
+			if op := fd.elemOp; op >= elemNativeFirst {
+				// A native leaf, its own function called without a frame
+				// where its check passes (leafChecks).
+				if r.meter == nil && leafChecks[op](r, this, args) {
+					if v, err := fd.native(r, this, args); err == nil {
+						return v, nil
+					}
+				}
+			} else if op != 0 {
 				// Array.prototype.push or pop on a dense array of its own,
 				// which calls nothing and cannot throw: as Math's functions,
 				// it is applied without a frame to show in a stack trace.
-				if v, ok := r.pureElemOp(fd.elemOp, this, args, true); ok {
+				if v, ok := r.pureElemOp(op, this, args, true); ok {
 					return v, nil
 				}
 			}

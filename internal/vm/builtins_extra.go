@@ -746,6 +746,8 @@ func (r *Runtime) initStringExtras() {
 		}
 	}
 
+	setElemOp(r, p.getOwn(r.atoms.intern("substr")).value().Object(), elemStrSubstr)
+
 	r.defMethod(p, "normalize", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		s, err := thisStr(rt, this)
 		if err != nil {
@@ -793,6 +795,9 @@ func (r *Runtime) initStringExtras() {
 		}
 		return Int(c.compare(s.Go(), o.Go())), nil
 	})
+	for name, op := range map[string]uint8{"normalize": elemStrNormalize, "localeCompare": elemStrLocaleCompare} {
+		setElemOp(r, p.getOwn(r.atoms.intern(name)).value().Object(), op)
+	}
 
 	// The locale-sensitive pair, which differ from the others in the handful
 	// of languages that have rules of their own about it.

@@ -274,8 +274,14 @@ func (r *Runtime) callRest(o *Object, fd *funcData, this Value, args []Value) (V
 		return r.callThrough(o, this, args)
 	}
 	if fd != nil && fd.native != nil && !fd.bound && (fd.realm == nil || fd.realm == r.Realm) {
-		if fd.elemOp != 0 {
-			if v, ok := r.pureElemOp(fd.elemOp, this, args, true); ok {
+		if op := fd.elemOp; op >= elemNativeFirst {
+			if r.meter == nil && leafChecks[op](r, this, args) {
+				if v, err := fd.native(r, this, args); err == nil {
+					return v, nil
+				}
+			}
+		} else if op != 0 {
+			if v, ok := r.pureElemOp(op, this, args, true); ok {
 				return v, nil
 			}
 		}

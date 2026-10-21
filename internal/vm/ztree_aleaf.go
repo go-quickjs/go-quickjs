@@ -1,12 +1,15 @@
 package vm
 
+import "math"
+
 // Leaves: built-ins every tier calls without a frame, where they call
 // nothing and cannot throw (elemOp past elemRandom), as V8's optimized code
 // calls fast API functions with no frame of JavaScript's. A built-in
 // declares its own where it is made (setElemOp); the interpreter, the tree
 // tier and pure bodies apply it before they would make a frame (callDirect,
-// callRest, pureInvoke, by pureElemOp and collectionOp), and native code's
-// calls of Go do too (jitGoCallPlain), none of them keeping a list of
+// callRest, pureInvoke, by pureElemOp and collectionOp, or a native leaf by
+// its check), and native code's calls of Go do too (jitGoCallPlain), none
+// of them keeping a list of
 // functions. Each is applied as the built-in applies it, and reports false
 // wherever the built-in would throw or do anything else -- a receiver of
 // another kind, a key a weak collection takes none of, an object String
@@ -22,10 +25,27 @@ package vm
 // body that may not store refusing it (pureRefused).
 type leafFunc func(r *Runtime, this Value, args []Value, mayStore bool) (Value, bool)
 
-// leafOps are the leaves' functions, by their elemOp: an index and a call,
-// where one function asking which op it was had cost a Map's deletion of a
-// String's key, with the JIT, 7% more than the two calls' own lists.
-var leafOps [elemStringOf + 1]leafFunc
+// leafOps are the hand-made leaves' functions, by their elemOp: an index
+// and a call, where one function asking which op it was had cost a Map's
+// deletion of a String's key, with the JIT, 7% more than the two calls' own
+// lists.
+var leafOps [elemNativeFirst]leafFunc
+
+// leafChecks are the native leaves' checks, by their elemOp: whether the
+// built-in's own function, called with this and args, runs no script,
+// throws nothing and keeps nothing -- a string receiver and arguments that
+// convert without calling anything, results within a string's length --
+// so that it is called without a frame. A check must be exact: a function
+// called on what it passes, that made an error after all, had run what
+// making one may run (Error.stackTraceLimit's getter) with no frame to show
+// for it.
+//
+// Each call that applies leaves asks the check itself and calls the
+// function it holds (funcData.native) -- callDirect, callRest, pureInvoke,
+// jitPlainCall -- as the memory meter allows: a function of leafOps' that
+// did, with the runtime's list of the functions, had cost a string's at()
+// in the interpreter 10% more than its frame, in the four calls between.
+var leafChecks [elemLeafEnd]func(r *Runtime, this Value, args []Value) bool
 
 // setElemOp gives the built-in function o the frameless application op
 // (elemOp), and notes it among the runtime's leaves (leafFns), which native
@@ -38,6 +58,113 @@ func init() {
 		o.fn().elemOp = op
 		r.leafFns = append(r.leafFns, o)
 	}
+	initStringLeafChecks = func() {
+		str := func(_ *Runtime, this Value, args []Value) bool {
+			if !this.IsString() {
+				return false
+			}
+			for _, a := range args {
+				if !a.IsNumber() && !a.IsString() && !a.IsBool() && !a.IsUndefined() && !a.IsNull() {
+					return false
+				}
+			}
+			return true
+		}
+		for _, op := range []uint8{elemStrAt, elemStrCharAt, elemStrCharCodeAt, elemStrCodePointAt, elemStrIndexOf,
+			elemStrLastIndexOf, elemStrIncludes, elemStrStartsWith, elemStrEndsWith, elemStrSlice, elemStrSubstring,
+			elemStrSubstr, elemStrToUpperCase, elemStrToLowerCase, elemStrTrim, elemStrTrimStart, elemStrTrimEnd,
+			elemStrIsWellFormed, elemStrToWellFormed} {
+			leafChecks[op] = str
+		}
+		leafChecks[elemStrConcat] = func(r *Runtime, this Value, args []Value) bool {
+			if !str(r, this, args) {
+				return false
+			}
+			// What the arguments' strings may come to: a string's length, or
+			// at most a number's, true's or null's.
+			n := int64(this.String().length)
+			for _, a := range args {
+				if a.IsString() {
+					n += int64(a.String().length)
+				} else {
+					n += 32
+				}
+			}
+			return n <= maxStringLength
+		}
+		// repeat and the pads of a string by a number count first, asked
+		// with no call, where str's and toInteger's, beside the conversion
+		// the built-in makes again, had cost repeat in the interpreter more
+		// than the frame they save; anything else as any other leaf.
+		leafChecks[elemStrRepeat] = func(r *Runtime, this Value, args []Value) bool {
+			if len(args) == 1 && this.IsString() && args[0].IsNumber() {
+				n := args[0].num
+				return n >= 0 && n <= maxStringLength && float64(this.String().length)*math.Trunc(n) <= maxStringLength
+			}
+			if !str(r, this, args) {
+				return false
+			}
+			n, err := r.toInteger(arg(args, 0))
+			return err == nil && n >= 0 && !math.IsInf(n, 0) && float64(this.String().length)*n <= maxStringLength
+		}
+		pad := func(r *Runtime, this Value, args []Value) bool {
+			if len(args) >= 1 && len(args) <= 2 && this.IsString() && args[0].IsNumber() {
+				if len(args) == 2 {
+					if f := args[1]; !f.IsString() && !f.IsUndefined() {
+						return str(r, this, args) && args[0].num <= maxStringLength
+					}
+				}
+				return args[0].num <= maxStringLength
+			}
+			if !str(r, this, args) {
+				return false
+			}
+			n, err := r.toInteger(arg(args, 0))
+			return err == nil && n <= maxStringLength
+		}
+		leafChecks[elemStrPadStart], leafChecks[elemStrPadEnd] = pad, pad
+		leafChecks[elemStrNormalize] = func(r *Runtime, this Value, args []Value) bool {
+			if !str(r, this, args) {
+				return false
+			}
+			if f := arg(args, 0); !f.IsUndefined() {
+				if !f.IsString() {
+					return false
+				}
+				if _, ok := normalizationForms[f.String().Go()]; !ok {
+					return false
+				}
+			}
+			// A form's expansion of a code unit is at most 18 of them.
+			return int64(this.String().length)*18 <= maxStringLength
+		}
+		leafChecks[elemStrLocaleCompare] = func(r *Runtime, this Value, args []Value) bool {
+			// Without locales and options, which the collator's choice may
+			// refuse.
+			return len(args) <= 1 && str(r, this, args)
+		}
+		leafChecks[elemStrFromCharCode] = func(_ *Runtime, _ Value, args []Value) bool {
+			return leafPrimitives(args)
+		}
+		leafChecks[elemStrFromCodePoint] = func(_ *Runtime, _ Value, args []Value) bool {
+			for _, a := range args {
+				if !a.IsNumber() || a.num != math.Trunc(a.num) || a.num < 0 || a.num > 0x10FFFF {
+					return false
+				}
+			}
+			return true
+		}
+	}
+
+	leafPrimitives = func(args []Value) bool {
+		for _, a := range args {
+			if !a.IsNumber() && !a.IsString() && !a.IsBool() && !a.IsUndefined() && !a.IsNull() {
+				return false
+			}
+		}
+		return true
+	}
+	initStringLeafChecks()
 	leafOps[elemDateNow] = func(r *Runtime, _ Value, _ []Value, _ bool) (Value, bool) {
 		return Float(r.now()), true
 	}
@@ -189,3 +316,17 @@ var (
 	leafWeakMap   func(this Value) *weakMap
 	leafWeakSet   func(this Value) *weakSet
 )
+
+// initStringLeafChecks gives String's native leaves their checks: a string
+// receiver, and arguments that are primitives converting without calling
+// anything (as leafPrimitives), each method's results within a string's
+// length. Like leafPrimitives, a closure assigned in init, not a package
+// variable's function literal, which the compiler lays out among the
+// package's other closures, ahead of the tree tier's: 3.5 KB of them moved.
+var initStringLeafChecks func()
+
+// leafPrimitives reports whether each of args is a primitive that converts
+// to a number and to a string without calling anything or throwing: a
+// number, a string, a boolean, undefined or null -- not an object, a
+// symbol or a BigInt.
+var leafPrimitives func(args []Value) bool

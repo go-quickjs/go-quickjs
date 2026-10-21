@@ -545,7 +545,44 @@ const (
 	elemWeakSetAdd
 	elemWeakSetDelete
 	elemStringOf
+
+	// Native leaves: the built-in's own function, called without a frame
+	// where its op's check says it runs no script, throws nothing and keeps
+	// nothing (leafChecks). String.prototype's methods on a string, and
+	// String's of numbers.
+	elemStrAt
+	elemStrCharAt
+	elemStrCharCodeAt
+	elemStrCodePointAt
+	elemStrIndexOf
+	elemStrLastIndexOf
+	elemStrIncludes
+	elemStrStartsWith
+	elemStrEndsWith
+	elemStrSlice
+	elemStrSubstring
+	elemStrSubstr
+	elemStrToUpperCase
+	elemStrToLowerCase
+	elemStrTrim
+	elemStrTrimStart
+	elemStrTrimEnd
+	elemStrIsWellFormed
+	elemStrToWellFormed
+	elemStrConcat
+	elemStrRepeat
+	elemStrPadStart
+	elemStrPadEnd
+	elemStrNormalize
+	elemStrLocaleCompare
+	elemStrFromCharCode
+	elemStrFromCodePoint
+	elemLeafEnd
 )
+
+// elemNativeFirst is the first native leaf's op. A call applies a native
+// leaf itself (leafChecks), never by pureElemOp.
+const elemNativeFirst = elemStrAt
 
 // pureElemOp is the built-in push or pop called from a pure body, where it
 // may store and the array is one the built-in's own fast path takes: a dense
@@ -718,8 +755,15 @@ func (r *Runtime) pureInvoke(callee, this Value, args []Value, depth int, maySto
 			return v, true
 		}
 	}
-	if fd.elemOp != 0 {
-		return r.pureElemOp(fd.elemOp, this, args, mayStore)
+	if op := fd.elemOp; op >= elemNativeFirst {
+		// Its own function, where its check passes (leafChecks).
+		if r.meter != nil || !leafChecks[op](r, this, args) {
+			return Undefined, false
+		}
+		v, err := fd.native(r, this, args)
+		return v, err == nil
+	} else if op != 0 {
+		return r.pureElemOp(op, this, args, mayStore)
 	}
 	if fd.native != nil || fd.bound || fd.closure == nil || fd.closure.realm != r.Realm ||
 		!fd.closure.fn.DirectCall {
