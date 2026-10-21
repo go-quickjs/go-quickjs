@@ -679,6 +679,9 @@ func (r *Runtime) generatorIteration(o *Object) *Object {
 	if r.genNextFn == nil {
 		return nil
 	}
+	if c := &r.genIteration; c.from != nil && o.shape == nil && emptyPrototype(o.proto) && o.proto.proto == c.from && c.holds(r) {
+		return r.genNextFn
+	}
 	iterKey := r.atoms.internSymbol(r.wellKnown.iterator)
 	iter, next := ownProp{i: -1}, ownProp{i: -1}
 	for cur := o; cur != nil && (!iter.ok() || !next.ok()); cur = cur.proto {
@@ -698,7 +701,47 @@ func (r *Runtime) generatorIteration(o *Object) *Object {
 		!next.value().IsObject() || next.value().Object() != r.genNextFn {
 		return nil
 	}
+	if o.shape == nil && emptyPrototype(o.proto) && o.proto.proto != nil {
+		// A generator with no property of its own, whose prototype -- its
+		// function's prototype property, one for every function -- has none
+		// either, finds what any such generator whose prototype's is the
+		// same object finds, while the chain from that object keeps its
+		// layout (chainCell) and the two properties their values. The cell
+		// is that object's, %GeneratorPrototype%'s, made once, not one for
+		// each function's prototype, which would register each with it.
+		if cell := r.chainCell(o.proto.proto); cell != nil {
+			r.genIteration = genIterationCache{from: o.proto.proto, cell: cell, next: next, iter: iter}
+		}
+	}
 	return r.genNextFn
+}
+
+// emptyPrototype reports whether p is an ordinary object with no property
+// of its own, which a walk up a chain for one passes through.
+func emptyPrototype(p *Object) bool {
+	return p != nil && p.class == ClassObject && len(p.vals) == 0
+}
+
+// genIterationCache is what generatorIteration found the intrinsic next
+// and Symbol.iterator on, up from from, for a generator with no property
+// of its own, whose prototype has none: the chain's validity cell, and
+// where on it each was found. A change of any object's layout on the chain
+// -- a property added, deleted or made an accessor, a prototype replaced
+// -- ends it, and a value replaced is seen where it is.
+type genIterationCache struct {
+	from       *Object
+	cell       *protoCell
+	next, iter ownProp
+}
+
+// holds reports whether what c found is still so.
+func (c *genIterationCache) holds(r *Runtime) bool {
+	if !c.cell.valid {
+		return false
+	}
+	n, i := c.next, c.iter
+	return int(n.i) < len(n.o.vals) && int(i.i) < len(i.o.vals) &&
+		n.o.vals[n.i].ref == unsafe.Pointer(r.genNextFn) && i.o.vals[i.i].ref == unsafe.Pointer(r.genIterFn)
 }
 
 // spreadToStack collects an iterable's elements for a call's argument list.

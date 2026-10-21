@@ -516,6 +516,9 @@ type Realm struct {
 	// genReturnFn is %GeneratorPrototype%.return, which closing a loop
 	// over a generator need not call as a script calls it; see iterReturn.
 	genReturnFn *Object
+	// genIteration is what generatorIteration found last, kept while it
+	// holds.
+	genIteration genIterationCache
 	jitRealmFields
 	genNextFn *Object
 }
