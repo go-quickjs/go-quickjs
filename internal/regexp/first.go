@@ -34,10 +34,11 @@ func (f *firstUnits) union(g firstUnits) {
 }
 
 // firstOf is the first units of a pattern whose case is folded when fold is
-// set, or nil when it can match the empty string, which it can do anywhere,
-// or when it is beyond what is worked out here.
-func firstOf(n node, fold bool) *firstUnits {
-	f, empty, ok := first(n, fold)
+// set -- as unicode mode folds it where unicodeFold is -- or nil when it can
+// match the empty string, which it can do anywhere, or when it is beyond
+// what is worked out here.
+func firstOf(n node, fold, unicodeFold bool) *firstUnits {
+	f, empty, ok := first(n, fold, unicodeFold)
 	if !ok || empty {
 		return nil
 	}
@@ -46,7 +47,7 @@ func firstOf(n node, fold bool) *firstUnits {
 
 // first is what n can begin with, whether it can match nothing at all --
 // when what follows it decides -- and whether it is understood at all.
-func first(n node, fold bool) (f firstUnits, empty, ok bool) {
+func first(n node, fold, unicodeFold bool) (f firstUnits, empty, ok bool) {
 	switch n := n.(type) {
 	case nodeEmpty, nodeAssert, nodeLook:
 		// They consume nothing, and what follows them begins the match at
@@ -54,23 +55,27 @@ func first(n node, fold bool) (f firstUnits, empty, ok bool) {
 		// never widens it.
 		return f, true, true
 	case nodeChar:
-		switch {
-		case n.r < 128:
-			f.add(n.r)
-			if fold {
-				// A folded letter is either case, and a character past ASCII
-				// may fold to it: K is the Kelvin sign's fold.
-				if lower := n.r | 0x20; lower >= 'a' && lower <= 'z' {
-					f.add(lower)
-					f.add(lower &^ 0x20)
-				}
+		if !fold {
+			if n.r < 128 {
+				f.add(n.r)
+			} else {
 				f.nonASCII = true
 			}
-		case fold:
-			// Past ASCII, a fold may be an ASCII letter: the long s is s's.
+			return f, false, true
+		}
+		// A folded character is any of those it is taken for: k is K and,
+		// in unicode mode, the Kelvin sign.
+		set, ok := foldSetOf(n.r, unicodeFold)
+		if !ok {
 			return f, false, false
-		default:
-			f.nonASCII = true
+		}
+		for _, r := range set {
+			if r < 128 {
+				f.add(r)
+			} else {
+				// Its first unit is past ASCII, a surrogate's included.
+				f.nonASCII = true
+			}
 		}
 		return f, false, true
 	case nodeClass:
@@ -89,7 +94,7 @@ func first(n node, fold bool) (f firstUnits, empty, ok bool) {
 		return f, false, true
 	case nodeSeq:
 		for _, item := range n.items {
-			g, e, ok := first(item, fold)
+			g, e, ok := first(item, fold, unicodeFold)
 			if !ok {
 				return f, false, false
 			}
@@ -101,7 +106,7 @@ func first(n node, fold bool) (f firstUnits, empty, ok bool) {
 		return f, true, true
 	case nodeAlt:
 		for _, alt := range n.alts {
-			g, e, ok := first(alt, fold)
+			g, e, ok := first(alt, fold, unicodeFold)
 			if !ok {
 				return f, false, false
 			}
@@ -113,12 +118,12 @@ func first(n node, fold bool) (f firstUnits, empty, ok bool) {
 		if n.max == 0 {
 			return f, true, true
 		}
-		f, empty, ok = first(n.item, fold)
+		f, empty, ok = first(n.item, fold, unicodeFold)
 		return f, empty || n.min == 0, ok
 	case nodeGroup:
-		return first(n.item, fold)
+		return first(n.item, fold, unicodeFold)
 	case nodeModifier:
-		return first(n.item, n.flags&FlagIgnoreCase != 0)
+		return first(n.item, n.flags&FlagIgnoreCase != 0, unicodeFold)
 	}
 	// Anything else -- `.`, a backreference -- can begin with nearly
 	// anything, or with what only the match knows.

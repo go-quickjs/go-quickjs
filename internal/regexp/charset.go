@@ -98,7 +98,8 @@ func (s *charSet) contains(r rune, unicodeFold bool) bool {
 	if !in && s.foldCase {
 		// Case folding is applied to the candidate rather than expanded into
 		// the set, so that a large class does not multiply in size.
-		for _, f := range caseFolds(r) {
+		folds, n := caseFolds(r)
+		for _, f := range folds[:n] {
 			if !unicodeFold && upperCanonical(f) != upperCanonical(r) {
 				// Outside unicode mode these two are different characters
 				// however they fold: /[\u017F]/i does not match an "s".
@@ -184,18 +185,54 @@ func complementRanges(in []charRange) []charRange {
 // unicode.SimpleFold walks the equivalence class in a cycle, so following it
 // until it returns to the start yields every member. This is what makes /k/i
 // match the Kelvin sign, which surprises people but is what the specification
-// requires.
-func caseFolds(r rune) []rune {
-	var out []rune
+// requires. They are returned in an array rather than a slice, which a
+// class asked about every character of a subject would allocate for each.
+func caseFolds(r rune) (folds [4]rune, n int) {
 	for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
-		out = append(out, f)
-		if len(out) > 4 {
+		folds[n] = f
+		if n++; n == len(folds) {
 			// No equivalence class in Unicode is larger than this; the guard
 			// only protects against a malformed table.
 			break
 		}
 	}
-	return out
+	return folds, n
+}
+
+// foldSet is the characters the i flag takes for one another: every code
+// point canonical takes to the same one, the first repeated where there are
+// fewer than four. A character is one of them when it is any of the four,
+// which is what opCharFold asks of each character it reads, rather than
+// canonicalizing it -- following its fold orbit -- to compare.
+type foldSet [4]rune
+
+// has reports whether r is one of the set's characters.
+func (f *foldSet) has(r rune) bool {
+	return r == f[0] || r == f[1] || r == f[2] || r == f[3]
+}
+
+// foldSetOf is the characters canonical takes to what it takes r to, and
+// whether they are few enough for a foldSet. They are r's fold orbit, those
+// of it canonical takes elsewhere left out: outside unicode mode, the long s
+// is in s's orbit but is not s. That no other character is one of them --
+// that canonical never takes a character outside r's orbit to r's -- is
+// TestFoldSets', over every code point.
+func foldSetOf(r rune, unicodeFold bool) (foldSet, bool) {
+	c := canonical(r, unicodeFold)
+	set := foldSet{r, r, r, r}
+	n := 1
+	folds, k := caseFolds(r)
+	for _, f := range folds[:k] {
+		if canonical(f, unicodeFold) != c {
+			continue
+		}
+		if n == len(set) {
+			return set, false
+		}
+		set[n] = f
+		n++
+	}
+	return set, true
 }
 
 // canonical returns the form two characters must share to count as the same
@@ -207,6 +244,14 @@ func caseFolds(r rune) []rune {
 // sign uppercase to "S" and "K" but do not match them, which is what stops a
 // pattern written in ASCII from matching text it was never meant to.
 func canonical(r rune, unicodeFold bool) rune {
+	if r < 0x80 {
+		// Both forms of an ASCII character are its uppercase: the long s
+		// and the Kelvin sign fold to S and K, the least of their orbits.
+		if 'a' <= r && r <= 'z' {
+			return r - ('a' - 'A')
+		}
+		return r
+	}
 	if unicodeFold {
 		return foldCase(r)
 	}

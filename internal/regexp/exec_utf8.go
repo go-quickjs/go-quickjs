@@ -145,7 +145,11 @@ func (m *matcherUTF8) run(code []instr, pos int) (bool, error) {
 			pc++
 		case opCharFold:
 			r, w := m.read(in.rev, pos)
-			if r < 0 || canonical(r, m.prog.unicodeFold) != in.r {
+			if in.arg >= 0 {
+				if !m.prog.folds[in.arg].has(r) {
+					goto backtrack
+				}
+			} else if r < 0 || canonical(r, m.prog.unicodeFold) != in.r {
 				goto backtrack
 			}
 			pos = m.advance(in.rev, pos, w)
@@ -401,6 +405,9 @@ func (m *matcherUTF8) unitMatches(in instr, u uint16) bool {
 	case opChar:
 		return r == in.r
 	case opCharFold:
+		if in.arg >= 0 {
+			return m.prog.folds[in.arg].has(r)
+		}
 		return canonical(r, m.prog.unicodeFold) == in.r
 	case opClass:
 		if r < 128 {

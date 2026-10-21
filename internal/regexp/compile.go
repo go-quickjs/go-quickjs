@@ -12,7 +12,8 @@ type opcode uint8
 const (
 	// opChar matches one specific code point.
 	opChar opcode = iota
-	// opCharFold matches a code point up to case folding.
+	// opCharFold matches a code point up to case folding: one of folds[arg],
+	// or where arg is -1 one that canonicalizes to r.
 	opCharFold
 	// opClass matches against the set at index arg.
 	opClass
@@ -83,6 +84,8 @@ type program struct {
 	// is where they are found, which a search answers without the matcher.
 	litOnly []uint16
 	classes []*charSet
+	// folds holds the characters each opCharFold matches.
+	folds []foldSet
 	// asciiClasses is, for each class, which ASCII characters it matches --
 	// folding and negation applied -- which are most of what a class is asked
 	// about, answered with a bit rather than a search.
@@ -139,7 +142,7 @@ func compileNodeFor(n node, flags Flags, utf8 bool) *program {
 	c.compile(n)
 	c.emit(instr{op: opSave, arg: 1})
 	c.emit(instr{op: opMatch})
-	c.prog.first = firstOf(n, flags&FlagIgnoreCase != 0)
+	c.prog.first = firstOf(n, flags&FlagIgnoreCase != 0, c.prog.unicodeFold)
 	c.prog.anchored = anchorStarts && anchoredStart(n)
 	if flags&(FlagUnicode|FlagUnicodeSets) == 0 {
 		c.prog.lit = requiredOf(n, flags&FlagIgnoreCase != 0)
@@ -173,9 +176,17 @@ func (c *compiler) compile(n node) {
 
 	case nodeChar:
 		if c.flags&FlagIgnoreCase != 0 {
+			// The characters it matches are listed where they are few, as
+			// they are for every character there is.
+			arg := -1
+			if set, ok := foldSetOf(t.r, c.prog.unicodeFold); ok {
+				arg = len(c.prog.folds)
+				c.prog.folds = append(c.prog.folds, set)
+			}
 			c.emit(instr{
 				op:  opCharFold,
 				r:   canonical(t.r, c.prog.unicodeFold),
+				arg: arg,
 				rev: c.reverse,
 			})
 			return
