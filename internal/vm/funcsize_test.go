@@ -36,3 +36,29 @@ func TestClosureSizes(t *testing.T) {
 		}
 	}
 }
+
+// TestGeneratorSizes pins the sizes of a generator's one allocation -- its
+// object, its state, and, for a function of up to two, four or eight
+// arguments and locals, those -- at Go's 288-, 320- and 384-byte size
+// classes: a generator or an async function is made at every call. They
+// were 312, 344 and 408 bytes, the 320-, 352- and 416-byte classes,
+// before the with scopes went into genRare.
+func TestGeneratorSizes(t *testing.T) {
+	if unsafe.Sizeof(uintptr(0)) != 8 {
+		t.Skip("the sizes are a 64-bit platform's")
+	}
+	for _, c := range []struct {
+		name      string
+		size, max uintptr
+	}{
+		{"generator", unsafe.Sizeof(generator{}), 160},
+		{"generatorObject", unsafe.Sizeof(generatorObject{}), 256},
+		{"generatorVals2", unsafe.Sizeof(generatorVals[[2]Value]{}), 288},
+		{"generatorVals4", unsafe.Sizeof(generatorVals[[4]Value]{}), 320},
+		{"generatorVals8", unsafe.Sizeof(generatorVals[[8]Value]{}), 384},
+	} {
+		if c.size > c.max {
+			t.Errorf("%s is %d bytes, past %d", c.name, c.size, c.max)
+		}
+	}
+}

@@ -60,10 +60,6 @@ type generator struct {
 	// openUpvalues carries the captures across a suspension, so that two
 	// closures made in different resumptions still share a binding.
 	openUpvalues []*upvalue
-	// withScopes carries the enclosing `with` objects across a suspension: a
-	// generator may yield from inside a with body, and the body still has to
-	// resolve names against the object when it resumes.
-	withScopes []*Object
 	// rare is what only some generators need, or nil.
 	rare *genRare
 
@@ -85,8 +81,9 @@ type generator struct {
 }
 
 // genRare is what a generator needs only where it is an async generator,
-// an async arrow or has a direct eval: any other has an undefined
-// new.target and neither a this binding nor eval vars.
+// an async arrow, has a direct eval or is written in or suspends in a
+// `with` body: any other has an undefined new.target and neither a this
+// binding, eval vars nor with scopes.
 type genRare struct {
 	newTarget Value
 	// thisRef and evalVars are what run gives a frame: an async arrow's
@@ -94,6 +91,10 @@ type genRare struct {
 	// vars go.
 	thisRef  *thisBinding
 	evalVars *Object
+	// withScopes carries the enclosing `with` objects across a suspension:
+	// a generator may yield from inside a with body, and the body still has
+	// to resolve names against the object when it resumes.
+	withScopes []*Object
 
 	// queue holds the async generator requests still to be serviced.
 	//
@@ -125,12 +126,31 @@ func (g *generator) rareOf() *genRare {
 	return g.rare
 }
 
-// frameRare gives f the new.target, this binding and eval vars of g.
+// frameRare gives f the new.target, this binding, eval vars and with
+// scopes of g.
 func (g *generator) frameRare(f *frame) {
 	if x := g.rare; x != nil {
-		f.newTarget, f.thisRef, f.evalVars = x.newTarget, x.thisRef, x.evalVars
+		f.newTarget, f.thisRef, f.evalVars, f.withScopes = x.newTarget, x.thisRef, x.evalVars, x.withScopes
 	} else {
-		f.newTarget, f.thisRef, f.evalVars = Undefined, nil, nil
+		f.newTarget, f.thisRef, f.evalVars, f.withScopes = Undefined, nil, nil, nil
+	}
+}
+
+// withScopes is the `with` objects g's body is inside.
+func (g *generator) withScopes() []*Object {
+	if x := g.rare; x != nil {
+		return x.withScopes
+	}
+	return nil
+}
+
+// saveWith keeps w, the `with` objects a frame of g's was inside when it
+// suspended, for its next resumption.
+func (g *generator) saveWith(w []*Object) {
+	if x := g.rare; x != nil {
+		x.withScopes = w
+	} else if len(w) != 0 {
+		g.rareOf().withScopes = w
 	}
 }
 
@@ -253,7 +273,7 @@ func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Ob
 	if callee != nil {
 		if fd := callee.fn(); fd != nil {
 			if w := fd.extra.with(); len(w) > 0 {
-				g.withScopes = w[:len(w):len(w)]
+				g.rareOf().withScopes = w[:len(w):len(w)]
 			}
 			if fd.arrow && fd.extra.lexThisRef != nil {
 				g.rareOf().thisRef = fd.extra.lexThisRef
@@ -267,7 +287,8 @@ func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Ob
 		ev := newObject(nil, ClassObject)
 		ev.flags |= objEvalVars
 		g.rareOf().evalVars = ev
-		g.withScopes = append(g.withScopes[:len(g.withScopes):len(g.withScopes)], ev)
+		w := g.withScopes()
+		g.rareOf().withScopes = append(w[:len(w):len(w)], ev)
 	}
 
 	if err := r.bindGeneratorParams(g); err != nil {
@@ -355,7 +376,6 @@ func (r *Runtime) bindGeneratorParams(g *generator) error {
 		this:       g.this,
 		callee:     g.callee,
 		args:       g.args(),
-		withScopes: g.withScopes,
 		paramsOnly: true,
 	}
 	g.frameRare(f)
@@ -363,7 +383,7 @@ func (r *Runtime) bindGeneratorParams(g *generator) error {
 	// The body resumes where the prologue stopped.
 	g.pc = f.pc
 	g.openUpvalues = f.openUpvalues
-	g.withScopes = f.withScopes
+	g.saveWith(f.withScopes)
 	f.detachSuspended()
 
 	r.frameDepth--
@@ -578,7 +598,6 @@ func (r *Runtime) resumeFrame(g *generator, sent Value, mode resumeMode) (resume
 	f.args = g.args()
 	f.handlers = g.handlers
 	f.openUpvalues = g.openUpvalues
-	f.withScopes = g.withScopes
 	g.frameRare(f)
 	if f.native != "" {
 		f.native = ""
@@ -657,7 +676,7 @@ func (r *Runtime) finishResume(g *generator, f *frame, base int,
 		}
 		g.handlers = f.handlers
 		g.openUpvalues = f.openUpvalues
-		g.withScopes = f.withScopes
+		g.saveWith(f.withScopes)
 		g.delegating = sig.delegate
 		g.state = genSuspendedYield
 		g.started = true

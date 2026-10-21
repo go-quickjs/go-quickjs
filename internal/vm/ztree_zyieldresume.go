@@ -69,11 +69,10 @@ func init() {
 		f.args = g.vals[:g.nargs:g.nargs]
 		f.handlers = g.handlers
 		f.openUpvalues = g.openUpvalues
-		f.withScopes = g.withScopes
 		if x := g.rare; x != nil {
-			f.newTarget, f.thisRef, f.evalVars = x.newTarget, x.thisRef, x.evalVars
+			f.newTarget, f.thisRef, f.evalVars, f.withScopes = x.newTarget, x.thisRef, x.evalVars, x.withScopes
 		} else {
-			f.newTarget, f.thisRef, f.evalVars = Undefined, nil, nil
+			f.newTarget, f.thisRef, f.evalVars, f.withScopes = Undefined, nil, nil, nil
 		}
 		if f.native != "" {
 			f.native = ""
@@ -108,7 +107,8 @@ func init() {
 		}
 		g.handlers = f.handlers
 		g.openUpvalues = f.openUpvalues
-		g.withScopes = f.withScopes
+		// The with scopes are what the frame was given: the tier builds no
+		// with statement, which is all that changes them.
 		g.delegating = s.delegate
 		g.state = genSuspendedYield
 		g.started = true
