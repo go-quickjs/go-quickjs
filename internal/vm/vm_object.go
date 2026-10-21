@@ -901,13 +901,17 @@ func (o *Object) findOwn(key Atom) int32 {
 		keys := o.keys()
 		c := &x.recent[key&15]
 		if c.key == key {
-			if c.idx < 0 {
+			// What the index says, or said before the key was deleted: a
+			// position past the table is one of the layout's that the
+			// object has not reached -- an index along a transition chain
+			// is the chain's -- so the key is not the object's. Each object
+			// built along a chain asked for its next key had found it
+			// there, and so asked the map.
+			if c.idx < 0 || int(c.idx) >= len(keys) {
 				return -1
 			}
-			if int(c.idx) < len(keys) {
-				if k := keys[c.idx]; k.key == key && k.flags&propDeleted == 0 {
-					return c.idx
-				}
+			if k := keys[c.idx]; k.key == key && k.flags&propDeleted == 0 {
+				return c.idx
 			}
 		}
 		i, ok := x.slots[key]
