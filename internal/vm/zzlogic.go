@@ -221,8 +221,10 @@ func logicalOp(op bytecode.Op) bool {
 		bytecode.OpNot, bytecode.OpTypeOf, bytecode.OpIn, bytecode.OpInstanceOf,
 		bytecode.OpGetGlobal, bytecode.OpGetLocalCheck,
 		// A call is mostly built without a statement: one that is not
-		// is found as it is built.
-		bytecode.OpGetPropThis, bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew:
+		// is found as it is built. One in tail position too (tailAll),
+		// which is a return's value, or a conditional's in one.
+		bytecode.OpGetPropThis, bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew,
+		bytecode.OpTailCall, bytecode.OpTailCallMethod:
 		return true
 	}
 	return false
