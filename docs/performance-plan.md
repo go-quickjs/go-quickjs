@@ -1093,9 +1093,19 @@ Open from it:
   callers' code 60% larger and Crypto 25% slower. A rule that inlines a
   loop only where the call's cost is not spread over the loop's turns is
   wanted first.
-- A call is still an indirect jump each way, native code using no CALL,
-  so a return is never predicted: most of a call's remaining samples are
-  just after one; 7 registers spill `moveDisks`' parameters at entry.
+- A call is still an indirect jump each way: native code runs on the
+  goroutine's stack and never moves SP, so that Go's unwinder, stack scan
+  and growth meet no return address of its, and a return is not
+  predicted by the return stack. Most of a call's remaining samples are
+  just after one of the jumps, but that is the sequence's latency landing
+  there: measured apart (four call sites of one leaf, Go assembly, a
+  `CALL` to a stub that pops the return address into a register and
+  jumps, the leaf returning by `JMP R11`, against `CALL` and `RET`), an
+  unpredicted return costs 0.9 ns a call where the sites follow one
+  another and 1.5 ns where they are picked at random -- at most a tenth
+  of a native method call's 13 ns. A stack of native code's own, which
+  `CALL` and `RET` need, is not worth its risk for that. 7 registers
+  spill `moveDisks`' parameters at entry.
 
 The plan, in order -- the compiler first, since micro-optimizations do not
 close a gap of three to seven times:
