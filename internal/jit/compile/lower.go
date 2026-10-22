@@ -282,8 +282,12 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		return nil, refuse(-1, "direct eval")
 	case (fn.UsesArguments || fn.MappedArguments) && !m.forward:
 		return nil, refuse(-1, "arguments object")
-	case !fn.HasSimpleParams && !fn.TopLevel || fn.HasRest || fn.ParamsAreLexical:
-		// Top-level code has no parameter list, simple or not.
+	case fn.HasRest || (!fn.HasSimpleParams && !fn.TopLevel || fn.ParamsAreLexical) && (!m.ssa || m.callee || fn.Generator || fn.Async):
+		// Top-level code has no parameter list, simple or not. A list with
+		// a default or a pattern is bound by its prologue from the call's
+		// arguments (ir's ParamsDead), which only a frame of the VM's has,
+		// where the interpreter goes on after an exit in it: not a native
+		// callee's.
 		return nil, refuse(-1, "non-simple parameters")
 	case len(fn.Code) == 0 || len(fn.Code) > MaxInstructions:
 		return nil, refuse(-1, "instruction budget")
@@ -1111,6 +1115,12 @@ func stringConcats(p *ir.Program, reads []int32) {
 			set(in.Dest, true)
 		case ir.StringAdd:
 			set(in.Dest, true)
+		case ir.ParamInit, ir.ParamDefault:
+			set(in.Dest, false)
+		case ir.ParamsDead:
+			for i := 0; i < int(in.Key); i++ {
+				set(i, false)
+			}
 		case ir.ArrayRead:
 			set(in.Dest, in.Reference && slices.Contains(reads, int32(pc)))
 		case ir.Host, ir.Call:
@@ -1464,6 +1474,16 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 	case bytecode.OpCheckCoercible:
 		// A destructuring's value, checked where it is.
 		return effect{need: 1}, nil
+	case bytecode.OpParamsToDeadZone, bytecode.OpInitParam:
+		if int(in.A) > fn.ParamCount || in.Op == bytecode.OpInitParam && int(in.A) >= fn.ParamCount {
+			return bad("invalid parameter")
+		}
+		return effect{}, nil
+	case bytecode.OpParamNeedsDefault:
+		if int(in.A) >= fn.ParamCount {
+			return bad("invalid parameter")
+		}
+		return effect{delta: 1}, nil
 	case bytecode.OpGetPropUnder:
 		// An object pattern's read of its source, B beneath the top.
 		if uint64(in.A) >= uint64(len(fn.Names)) || in.B > MaxSlots {
@@ -1943,6 +1963,12 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this, charCode bool
 		return ir.Instruction{Op: ir.Resolved, Left: ir.Slot(sp - 2), Right: top, Dest: sp - 2, Key: in.A}
 	case bytecode.OpCheckCoercible:
 		return ir.Instruction{Op: ir.Coercible, Left: top}
+	case bytecode.OpParamsToDeadZone:
+		return ir.Instruction{Op: ir.ParamsDead, Key: in.A}
+	case bytecode.OpInitParam:
+		return ir.Instruction{Op: ir.ParamInit, Dest: int(in.A), Key: in.A}
+	case bytecode.OpParamNeedsDefault:
+		return ir.Instruction{Op: ir.ParamDefault, Dest: sp, Key: in.A}
 	case bytecode.OpGetPropUnder:
 		return ir.Instruction{Op: ir.PropertyRead, Left: ir.Slot(sp - 1 - int(in.B)), Dest: sp, Key: in.A}
 	case bytecode.OpGetIndexUnder:

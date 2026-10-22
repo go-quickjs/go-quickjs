@@ -1765,7 +1765,11 @@ type builder struct {
 	rootPC  int
 
 	entryPCs []int
-	blockAt  []*Block // by the PC a block starts at
+	// paramArgs are a parameter list's arguments, the values its slots had
+	// at the function's start, which its prologue binds them from (ir's
+	// ParamsDead).
+	paramArgs []*Value
+	blockAt   []*Block // by the PC a block starts at
 	// endOf is the last PC of each block, by block ID.
 	endOf []int
 
@@ -3415,6 +3419,8 @@ func (b *builder) plan() error {
 			entries[pc+1] = true
 		case ir.Coercible:
 			// Go only throws at it.
+		case ir.ParamsDead, ir.ParamInit, ir.ParamDefault:
+			// A prologue's, entered only at the function's start.
 		case ir.IterStep:
 			// Go goes on after a step it made, past it or at the loop's
 			// end (ir.Program's Entries), where native code did not; a
@@ -3486,6 +3492,33 @@ func (b *builder) plan() error {
 		case in.Op == ir.Jump || in.Op == ir.Branch || in.Op == ir.Return || in.Op == ir.IterStep && !in.When || b.host(pc) && !b.goesOn(pc) || b.unfed(pc):
 			leaders[pc+1] = true
 		}
+	}
+	// A parameter list's prologue binds its parameters from what their
+	// slots had at the function's start (ParamsDead): native code is never
+	// entered inside it, where the slots are in the dead zone. Where it
+	// leaves, the interpreter goes on with the call's arguments, and native
+	// code is entered again at a loop after the prologue.
+	dead, prologue := -1, 0
+	for pc, in := range p.Code {
+		switch {
+		case !reachable(p, pc):
+		case in.Op == ir.ParamsDead:
+			if dead >= 0 || b.cur != b.root {
+				return fmt.Errorf("%w: a second parameter prologue at pc %d", ErrUnsupported, pc)
+			}
+			dead, prologue = int(in.Key), pc+1
+		case in.Op == ir.ParamInit || in.Op == ir.ParamDefault:
+			if int(in.Key) >= dead {
+				return fmt.Errorf("%w: a parameter bound outside its prologue at pc %d", ErrUnsupported, pc)
+			}
+			prologue = pc + 1
+		}
+	}
+	for pc := 1; pc < prologue; pc++ {
+		if slices.Contains(p.Entries, pc) {
+			return fmt.Errorf("%w: a loop in a parameter list's prologue at pc %d", ErrUnsupported, pc)
+		}
+		entries[pc] = false
 	}
 	for pc, entry := range entries {
 		if entry && reachable(p, pc) {
@@ -4871,6 +4904,26 @@ func (b *builder) instruction(blk *Block, pc int) {
 		is := f.newValue(blk, OpCmpF64, Bool, number(in.Left, ir.GuardExit), normal)
 		is.Aux = int(ir.Eq)
 		guard(OpCheckTrue, None, ir.GuardExit, boxB(is))
+	case ir.ParamsDead:
+		// The arguments, what the slots have at the function's start --
+		// undefined where one is missing, as the VM's call fills them --
+		// and the slots in the dead zone.
+		b.paramArgs = make([]*Value, in.Key)
+		for i := range b.paramArgs {
+			b.paramArgs[i] = operand(ir.Slot(i))
+		}
+		for i := range b.paramArgs {
+			u := f.newValue(blk, OpConst, Tagged)
+			u.Const = ir.Value{Kind: ir.Uninitialized}
+			b.assign(i, blk, u)
+		}
+	case ir.ParamInit:
+		b.assign(in.Dest, blk, b.paramArgs[in.Key])
+	case ir.ParamDefault:
+		// Undefined, passed or missing, is what makes a default run.
+		undef := f.newValue(blk, OpStrictNullish, Bool, b.paramArgs[in.Key])
+		undef.Aux = 1
+		b.assign(in.Dest, blk, boxB(undef))
 	case ir.Coercible:
 		// Neither null nor undefined, as ?? asks; else Go throws, from an
 		// exit at the check.

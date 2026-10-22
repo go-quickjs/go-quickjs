@@ -82,6 +82,15 @@ func (p *Program) Validate() error {
 			write = true
 		case IterClose, Coercible:
 			left = true
+		case ParamsDead:
+			if int(in.Key) > p.Locals {
+				return bad("invalid parameter count")
+			}
+		case ParamInit, ParamDefault:
+			write = true
+			if int(in.Key) >= p.Locals {
+				return bad("invalid parameter")
+			}
 		case CloseUpvalues:
 			if int(in.Key) > p.Locals {
 				return bad("invalid local")

@@ -1927,8 +1927,10 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 	// Native callers call a function's code at its call entry, which makes
 	// its frame (mir's callEntry): code a call makes no frame of its own
 	// for -- top-level code's, a generator's, an async function's -- has
-	// none.
-	f.CallEntry = !fn.TopLevel && !fn.IsModule && !fn.Async && !fn.Generator && !isGeneratorTemplate(fn)
+	// none, nor code whose parameter list has a prologue (ir's ParamsDead),
+	// which the interpreter goes on with from the call's arguments, which
+	// only a frame of the VM's has: Go makes its calls.
+	f.CallEntry = !fn.TopLevel && !fn.IsModule && !fn.Async && !fn.Generator && !isGeneratorTemplate(fn) && !fn.ParamsAreLexical
 	if jitGenCallable(fn) && !p.Cells {
 		// A generator a loop's step may resume natively: where it resumes
 		// it (mir's genEntry).

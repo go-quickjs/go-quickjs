@@ -52,6 +52,10 @@ func (p *Program) EvaluateArrays(slots []Value, arrays []ArrayView, pc int, budg
 			// change.
 			exit.Kind = HostExit
 			return exit, nil
+		case ParamsDead, ParamInit, ParamDefault:
+			// The arguments are Go's.
+			exit.Kind = HostExit
+			return exit, nil
 		case Coercible:
 			if k := read(in.Left).Kind; k == Null || k == Undefined {
 				exit.Kind = HostExit

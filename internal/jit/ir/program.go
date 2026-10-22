@@ -257,6 +257,19 @@ const (
 	// nothing where Left is neither null nor undefined; else Go throws the
 	// TypeError, from an exit at it.
 	Coercible
+	// ParamsDead, ParamInit and ParamDefault are a parameter list's
+	// prologue, of a list with a default or a pattern (bytecode's
+	// ParamsAreLexical): params_to_dead_zone, the first Key parameters'
+	// slots uninitialized, their arguments -- the values the slots had at
+	// the function's start, where a missing one is undefined -- kept;
+	// init_param, the slot at Dest the argument Key; param_needs_default,
+	// whether the argument Key is undefined, as a boolean at Dest. Native
+	// code runs a prologue from the function's start only, never entered
+	// inside it: where it leaves, the interpreter goes on, with the call's
+	// arguments.
+	ParamsDead
+	ParamInit
+	ParamDefault
 )
 
 // RethrowNormal is the kind a normal completion's record has (Rethrow).
