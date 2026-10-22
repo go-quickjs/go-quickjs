@@ -76,11 +76,17 @@ func (re *Regexp) execASCIILent(dst []int, b []byte, start int, check func() err
 		m.bytes = a
 	}
 	// A pooled matcher may have matched another pattern last.
-	a.caps = fitInts(a.caps, len(m.caps))
-	a.counters = fitInts(a.counters, len(m.counters))
-	a.emptyMarks = fitInts(a.emptyMarks, len(m.emptyMarks))
+	if len(a.caps) != len(m.caps) {
+		a.caps = fitInts(a.caps, len(m.caps))
+	}
+	if len(a.counters) != len(m.counters) {
+		a.counters = fitInts(a.counters, len(m.counters))
+	}
+	if len(a.emptyMarks) != len(m.emptyMarks) {
+		a.emptyMarks = fitInts(a.emptyMarks, len(m.emptyMarks))
+	}
 	a.input = inputASCII{units: b, unicode: re.flags&FlagUnicode != 0}
-	a.prog, a.in, a.check = re.prog, &a.input, check
+	a.ready(re.prog, check)
 	a.steps, a.checkAt = 0, checkInterval
 	defer re.giveBackASCII(m, a, lent)
 	return a.search(re, dst, start, sticky)
@@ -89,7 +95,10 @@ func (re *Regexp) execASCIILent(dst []int, b []byte, start int, check func() err
 // giveBackASCII is giveBack for a match made with m's matcher over bytes,
 // which does not hold on to the subject either.
 func (re *Regexp) giveBackASCII(m *matcher, a *matcherASCII, lent bool) {
-	a.input, a.in, a.check = inputASCII{}, nil, nil
+	a.input = inputASCII{}
+	if a.check != nil {
+		a.check = nil
+	}
 	re.giveBack(m, lent)
 }
 

@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf16"
 )
 
 // TestASCIIInputAgrees pins that matching an ASCII string's bytes in place
@@ -88,7 +89,9 @@ func TestASCIILentMatcher(t *testing.T) {
 		t.Fatalf("a large matcher was not moved to the clone: scratch %v, lent %v", m != nil, clone.lent != nil)
 	}
 	a := m.bytes
-	if a == nil || a.input.units != nil || a.in != nil || a.check != nil {
+	// What it reads its input through is its own input, which holds
+	// nothing.
+	if a == nil || a.input.units != nil || a.in != nil && a.in != &a.input || a.check != nil {
 		t.Fatal("the matcher over bytes holds on to the subject")
 	}
 	if cap(a.stack) <= maxLentFrames && cap(a.trail) <= maxLentFrames {
@@ -99,5 +102,58 @@ func TestASCIILentMatcher(t *testing.T) {
 	}
 	if clone.scratch != m || m.bytes != a {
 		t.Fatal("the next match did not use the matchers kept")
+	}
+}
+
+// TestMatcherReadyStoresOnlyChanges pins what a lent matcher keeps from one
+// match to the next where only what changed is stored: the check of a match
+// that had one is asked during it and is gone after, so that a later match
+// without one runs on the step budget; the program is the pattern's; and
+// the subject is not held, over code units or over bytes.
+func TestMatcherReadyStoresOnlyChanges(t *testing.T) {
+	re, err := Compile("(a|b)*c", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	long := strings.Repeat("ab", 5000) + "c"
+	units := utf16.Encode([]rune(long))
+	asked := 0
+	check := func() error { asked++; return nil }
+	for _, bytes := range []bool{false, true} {
+		asked = 0
+		var got []int
+		if bytes {
+			got, _ = re.MatchASCIICheckedInto(nil, long, 0, check)
+		} else {
+			got, _ = re.MatchCheckedInto(nil, units, 0, check)
+		}
+		if len(got) != 4 || got[1] != len(long) || asked == 0 {
+			t.Fatalf("bytes %v: match %v, check asked %d times", bytes, got, asked)
+		}
+		for _, m := range []*matcher{re.lent, re.scratch} {
+			if m != nil && (m.check != nil || m.bytes != nil && m.bytes.check != nil) {
+				t.Fatalf("bytes %v: the matcher holds on to the check", bytes)
+			}
+		}
+		before := asked
+		if bytes {
+			got, _ = re.MatchASCIICheckedInto(nil, long, 0, nil)
+		} else {
+			got, _ = re.MatchCheckedInto(nil, units, 0, nil)
+		}
+		if len(got) != 4 || asked != before {
+			t.Fatalf("bytes %v: a match without a check asked the last one's: %v, %d", bytes, got, asked)
+		}
+		for _, m := range []*matcher{re.lent, re.scratch} {
+			if m == nil {
+				continue
+			}
+			if m.check != nil || m.input.units != nil || m.prog != re.prog {
+				t.Fatalf("bytes %v: the matcher kept %v %v, program %v", bytes, m.check != nil, m.input.units != nil, m.prog == re.prog)
+			}
+			if a := m.bytes; a != nil && (a.check != nil || a.input.units != nil) {
+				t.Fatalf("bytes %v: the matcher over bytes kept its check or subject", bytes)
+			}
+		}
 	}
 }

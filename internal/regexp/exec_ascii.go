@@ -59,6 +59,18 @@ type matcherASCII struct {
 	bytes      *matcherASCII
 }
 
+func (m *matcherASCII) ready(prog *program, check func() error) {
+	if m.prog != prog {
+		m.prog = prog
+	}
+	if m.in != &m.input {
+		m.in = &m.input
+	}
+	if m.check != nil || check != nil {
+		m.check = check
+	}
+}
+
 func (m *matcherASCII) search(re *Regexp, dst []int, start int, sticky bool) ([]int, error) {
 	in := m.in
 	first := re.prog.first
@@ -139,8 +151,12 @@ func (m *matcherASCII) reset() {
 	for i := range m.emptyMarks {
 		m.emptyMarks[i] = -1
 	}
-	m.trail = m.trail[:0]
-	m.stack = m.stack[:0]
+	if len(m.trail) != 0 {
+		m.trail = m.trail[:0]
+	}
+	if len(m.stack) != 0 {
+		m.stack = m.stack[:0]
+	}
 }
 
 func (m *matcherASCII) run(code []instr, pos int) (bool, error) {

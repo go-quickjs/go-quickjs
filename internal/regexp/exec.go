@@ -218,7 +218,7 @@ func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error,
 	m, lent := re.borrow()
 	// The input is the matcher's own, rather than made for each match.
 	m.input = input{units: units, unicode: re.flags&FlagUnicode != 0}
-	m.prog, m.in, m.check = re.prog, &m.input, check
+	m.ready(re.prog, check)
 	// The budget is what this attempt may spend, so it starts again here: a
 	// matcher is lent out over and over, and a pattern that had spent its
 	// budget once would have been refused for the rest of the program.
@@ -256,12 +256,34 @@ func (re *Regexp) borrow() (m *matcher, lent bool) {
 	return m, lent
 }
 
+// ready gives m the program to run and the check to ask, and its input,
+// storing only what changes: a matcher is lent to match after match of
+// one pattern, mostly without a check, and each store of a pointer is a
+// write barrier's while the collector runs, as it mostly is where
+// matches are made in a loop.
+func (m *matcher) ready(prog *program, check func() error) {
+	if m.prog != prog {
+		m.prog = prog
+	}
+	if m.in != &m.input {
+		m.in = &m.input
+	}
+	if m.check != nil || check != nil {
+		m.check = check
+	}
+}
+
 // giveBack is done with a matcher borrow gave.
 func (re *Regexp) giveBack(m *matcher, lent bool) {
 	m.busy = false
 	// The input is not held on to: it would keep the subject string alive
-	// for as long as the pattern.
-	m.input, m.in, m.check = input{}, nil, nil
+	// for as long as the pattern. A match over bytes gave it none.
+	if m.input.units != nil {
+		m.input = input{}
+	}
+	if m.check != nil {
+		m.check = nil
+	}
 	// A core lends only a small matcher, since it lives as long as the
 	// runtime's cache of patterns: one a match has made large is the
 	// borrower's from now on, and goes when the borrower does.
@@ -393,8 +415,12 @@ func (m *matcher) reset() {
 	for i := range m.emptyMarks {
 		m.emptyMarks[i] = -1
 	}
-	m.trail = m.trail[:0]
-	m.stack = m.stack[:0]
+	if len(m.trail) != 0 {
+		m.trail = m.trail[:0]
+	}
+	if len(m.stack) != 0 {
+		m.stack = m.stack[:0]
+	}
 }
 
 // run executes a program from pos, reporting whether it matched.
