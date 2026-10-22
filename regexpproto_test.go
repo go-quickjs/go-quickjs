@@ -591,6 +591,31 @@ func TestRegExpLegacyStatics(t *testing.T) {
 			"a||c||ac|ac|c|x|z|xacz|xacz"},
 		{`"hello world".replace(/o (w)/, "_"); [RegExp.$1, RegExp.leftContext].join()`, "w,hell"},
 		{`RegExp.input = 5; [RegExp.input, typeof RegExp.$_].join()`, "5,string"},
+		// The statics take the indices a match read rather than copy them:
+		// matches of more groups and of fewer in turn, one that fails, which
+		// leaves them, and one whose lastIndex cannot be written, which
+		// throws before they are updated (as the legacy features have it,
+		// where Node updates them), each as Node has them otherwise. The
+		// arrays made meanwhile keep their own.
+		{`var r = []
+		  function st() { return [RegExp.$1, RegExp.$2, RegExp.$3, RegExp.lastMatch, RegExp.lastParen,
+		    RegExp.leftContext, RegExp.rightContext, RegExp.input].join("/") }
+		  var m1 = /(a)(b)(c)/.exec("xabcy"); r.push(st())
+		  var m2 = /(d)/.exec("1d2"); r.push(st(), m1.join(), m2.join());
+		  /zz/.exec("abc"); r.push(st())
+		  var g = /(e)(f)?/g; g.exec("efe"); r.push(st()); g.exec("efe"); r.push(st()); g.exec("efe"); r.push(st())
+		  var f = /(h)/g; Object.defineProperty(f, "lastIndex", { writable: false, value: 0 })
+		  try { f.exec("h") } catch (e) { r.push(e.constructor.name) } r.push(st());
+		  /(i)(j)/.test("ij"); r.push(st());
+		  "k1k2".replace(/k(\d)/g, "$1"); r.push(st());
+		  "l1l2".match(/l(\d)/g); r.push(st());
+		  "m,n".split(/(,)/); r.push(st());
+		  "o p".search(/(p)/); r.push(st())
+		  var x = /(q)(r)/.exec("qr"), y = /(s)/.exec("s"), z = /(t)(u)(v)/.exec("tuv"); r.push(x.join(), y.join(), z.join(), st())
+		  r.join(";")`,
+			"a/b/c/abc/c/x/y/xabcy;d///d/d/1/2/1d2;abc,a,b,c;d,d;d///d/d/1/2/1d2;e/f//ef/f//e/efe;" +
+				"e///e//ef//efe;e///e//ef//efe;TypeError;e///e//ef//efe;i/j//ij/j///ij;2///k2/2/k1//k1k2;" +
+				"2///l2/2/l1//l1l2;,///,/,/m/n/m,n;p///p/p/o //o p;qr,q,r;s,s;tuv,t,u,v;t/u/v/tuv/v///tuv"},
 		// Only RegExp itself answers, and a subclass's match leaves nothing
 		// to answer with.
 		{`var errs = []; class R extends RegExp {}

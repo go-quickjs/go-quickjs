@@ -88,7 +88,9 @@ type Runtime struct {
 	regexpCache map[regexpKey]*regexp.Regexp
 	// argStack holds the arguments of the calls callIntrinsic1 and call2 make.
 	argStack []Value
-	// capsBuf holds the indices of the match regexpExec is reading.
+	// capsBuf holds the indices of each match a global replace or match, or
+	// a split, is reading; exec reads its into the legacy statics' room
+	// (legacyRegExpStatics.spare).
 	capsBuf []int
 	// sweptEpoch is the collector's cycle sweepStaleSlots last cleared in.
 	sweptEpoch uint32

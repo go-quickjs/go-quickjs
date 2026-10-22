@@ -1,5 +1,7 @@
 package vm
 
+import "unsafe"
+
 // RegExp's legacy static properties -- RegExp.$1 to $9, input, lastMatch,
 // lastParen, leftContext and rightContext -- and RegExp.prototype.compile.
 //
@@ -18,21 +20,56 @@ type legacyRegExpStatics struct {
 	// invalid marks the state a subclass's match leaves.
 	invalid bool
 	input   *String
-	// caps is the last match's capture positions, reused from one match to
-	// the next.
-	caps []int
+	// bufs[which] holds the last match's capture positions, n of them, and
+	// the other is where exec reads the next match's (spare): taking that
+	// match is turning which over, not a copy. Neither is written in place
+	// but by a match, so that one that is taken costs no store of a pointer
+	// -- each of which, with the collector running, as it mostly is where
+	// matches are made in a loop, is a write barrier's.
+	bufs  [2][]int
+	which uint8
+	n     int
+}
+
+// spare is the buffer the next match is read into, which takeLegacyMatch
+// then takes.
+func (st *legacyRegExpStatics) spare() []int { return st.bufs[st.which^1] }
+
+// setInput makes s the last match's subject, storing it only where it
+// changes: a loop's matches are mostly of one string.
+func (st *legacyRegExpStatics) setInput(s *String) {
+	if st.input != s {
+		st.input = s
+	}
 }
 
 // recordLegacyMatch updates the statics after a successful match, or
 // invalidates them when the RegExp's legacy features are off.
 func (r *Runtime) recordLegacyMatch(legacy bool, input *String, caps []int) {
 	st := &r.legacyRegExp
+	r.takeLegacyMatch(legacy, input, append(st.spare()[:0], caps...))
+}
+
+// takeLegacyMatch is recordLegacyMatch for a match just read into the
+// statics' spare buffer, caps, which they take: from now until the match
+// after the next, which is read where they had been, the indices are
+// theirs.
+func (r *Runtime) takeLegacyMatch(legacy bool, input *String, caps []int) {
+	st := &r.legacyRegExp
+	w := st.which ^ 1
+	if unsafe.SliceData(caps) != unsafe.SliceData(st.bufs[w]) {
+		// It has grown.
+		st.bufs[w] = caps
+	}
 	if !legacy {
-		st.invalid, st.input, st.caps = true, nil, st.caps[:0]
+		st.invalid, st.n = true, 0
+		if st.input != nil {
+			st.input = nil
+		}
 		return
 	}
-	st.invalid, st.input = false, input
-	st.caps = append(st.caps[:0], caps...)
+	st.invalid, st.which, st.n = false, w, len(caps)
+	st.setInput(input)
 }
 
 // piece cuts one of the statics from the last match.
@@ -40,10 +77,10 @@ func (st *legacyRegExpStatics) piece(which string) *String {
 	if which == "input" && st.input != nil {
 		return st.input
 	}
-	if st.input == nil || len(st.caps) < 2 {
+	if st.input == nil || st.n < 2 {
 		return emptyString
 	}
-	s, caps := st.input, st.caps
+	s, caps := st.input, st.bufs[st.which][:st.n]
 	group := func(i int) *String {
 		if 2*i+1 >= len(caps) || caps[2*i] < 0 || caps[2*i+1] < 0 {
 			return emptyString
@@ -97,7 +134,7 @@ func (r *Runtime) initRegExpLegacyStatics(ctor *Object) {
 				// describe the last match.
 				st := &rt.legacyRegExp
 				if st.invalid || st.input == nil {
-					st.invalid, st.caps = false, st.caps[:0]
+					st.invalid, st.n = false, 0
 				}
 				st.input = s
 				return Undefined, nil

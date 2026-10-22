@@ -36,6 +36,15 @@ func (d *regexpData) legacy() bool { return d.realm != nil }
 
 // regexpOf recovers the compiled pattern from a receiver.
 func (r *Runtime) regexpOf(this Value, name string) (*regexp.Regexp, error) {
+	d, err := r.regexpDataOf(this, name)
+	if err != nil {
+		return nil, err
+	}
+	return d.re, nil
+}
+
+// regexpDataOf recovers a receiver's RegExp data.
+func (r *Runtime) regexpDataOf(this Value, name string) (*regexpData, error) {
 	if !this.IsObject() || this.Object().class != ClassRegExp {
 		return nil, r.throwTypeError("%s called on an incompatible receiver", name)
 	}
@@ -43,7 +52,7 @@ func (r *Runtime) regexpOf(this Value, name string) (*regexp.Regexp, error) {
 	if !ok {
 		return nil, r.throwTypeError("%s called on an uninitialized RegExp", name)
 	}
-	return d.re, nil
+	return d, nil
 }
 
 // newRegExp builds a RegExp object from a pattern and flags.
@@ -407,14 +416,14 @@ func (r *Runtime) regexpExec(this Value, s *String) (Value, error) {
 
 // regexpMatch is exec but for the array it returns: it reads and writes
 // lastIndex and records the legacy statics as exec does, and returns the
-// match's indices, or nil for none. They are the runtime's buffer, good until
-// the next match.
+// match's indices, or nil for none. They are the runtime's, good until the
+// next match.
 func (r *Runtime) regexpMatch(this Value, s *String) ([]int, *regexp.Regexp, error) {
-	re, err := r.regexpOf(this, "RegExp.prototype.exec")
+	d, err := r.regexpDataOf(this, "RegExp.prototype.exec")
 	if err != nil {
 		return nil, nil, err
 	}
-	o := this.Object()
+	re, o := d.re, this.Object()
 
 	// lastIndex is read whatever the flags say -- its valueOf runs either
 	// way -- but it only decides where the search starts, and is only written
@@ -454,13 +463,10 @@ func (r *Runtime) regexpMatch(this Value, s *String) ([]int, *regexp.Regexp, err
 	if r.abort != nil || r.ctx != nil && r.ctx.Done() != nil {
 		check = r.checkInterruptNow
 	}
-	// The indices are read into a buffer the runtime keeps: they are done
-	// with -- copied into the result and the legacy statics -- before
-	// anything else can run, and so before the next match.
-	caps, err := j.match(re, r.capsBuf, start, check)
-	if caps != nil {
-		r.capsBuf = caps
-	}
+	// The indices are read into the legacy statics' spare buffer, which
+	// they take: the caller is done with them -- copies them into the
+	// result -- before anything else can run, and so before the next match.
+	caps, err := j.match(re, r.legacyRegExp.spare(), start, check)
 	if errors.Is(err, regexp.ErrComplexity) {
 		return nil, nil, r.throwError(errSyntax, "%s", err.Error())
 	}
@@ -480,7 +486,7 @@ func (r *Runtime) regexpMatch(this Value, s *String) ([]int, *regexp.Regexp, err
 			return nil, nil, err
 		}
 	}
-	r.recordLegacyMatch(o.dataOf().(*regexpData).legacy(), s, caps)
+	r.takeLegacyMatch(d.legacy(), s, caps)
 	return caps, re, nil
 }
 
