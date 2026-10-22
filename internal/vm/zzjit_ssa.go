@@ -1602,10 +1602,15 @@ func (r *Runtime) jitLearnedDue(cl *closure, e *jitEntry) bool {
 // microbench_extra's PrivateCounter's add, at a private read of a shape
 // learned at that exit -- had spent nothing, and was never compiled
 // again for it, as V8's lower tiers spend the budget however a function
-// runs.
+// runs. So too an invocation the interpreter went on with after the code
+// left it (goOns), native code entered again at a loop's header by a check
+// it forced, which spends nothing of the loop's (jitTierWork): Octane
+// Typescript's Symbol.prototype.visible, inlining a method a subclass
+// overrides, left at its call in each such run, and in thousands of them
+// was never compiled again for the call it had learned.
 func jitLearnedSpent(fn *bytecode.Function, e *jitEntry) int64 {
 	st := &e.ssaStats
-	calls := e.starts + e.link.in + e.slowCalls
+	calls := e.starts + e.goOns + e.link.in + e.slowCalls
 	return int64(calls)*int64(max(len(fn.Code), 1)) + int64(st.work+st.calleeWork) + e.osrWork
 }
 
@@ -9257,6 +9262,7 @@ func jitLoopLength(fn *bytecode.Function) uint32 {
 // 40% longer, each a join where what the loop had proved held no longer.
 func (r *Runtime) jitGoOn(f *frame, e *jitEntry, pc, sp int, run bool) (v Value, err error, done, again bool) {
 	f.pc = uint32(pc)
+	e.goOns++
 	n := -1
 	if run {
 		// Out of its code, the run goes on natively at an entry of the

@@ -557,8 +557,10 @@ type jitEntry struct {
 	// tierBase, with tierMark unchanged (jitLearnedDue).
 	learning bool
 	tierBase int64
-	// starts counts Go's entries at a function's start, not into a loop.
-	starts uint64
+	// starts counts Go's entries at a function's start, not into a loop;
+	// goOns the runs of it the interpreter went on with where its code
+	// left them (jitGoOn).
+	starts, goOns uint64
 	// osrWork is the work the existing tiers did in the function's loops
 	// before Go entered its code at one of them (jitTierWork), which its
 	// budget for what it learned counts as an invocation's (jitLearnedSpent).
