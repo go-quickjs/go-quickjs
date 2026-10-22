@@ -66,7 +66,7 @@ func (s *charSet) footprint() int {
 	if len(s.ranges) == 0 || unsafe.SliceData(s.ranges) != s.table {
 		n += cap(s.ranges) * int(unsafe.Sizeof(charRange{}))
 	}
-	return n
+	return n + s.bmpFootprint()
 }
 
 // footprint is what a matcher holds.

@@ -3,6 +3,7 @@ package regexp
 import (
 	"sort"
 	"sync"
+	"sync/atomic"
 	"unicode"
 	"unsafe"
 )
@@ -30,11 +31,22 @@ type charSet struct {
 	// they were: ranges still in it are the package's, not the pattern's,
 	// which Footprint does not count.
 	table *charRange
+	// bmp answers for the Basic Multilingual Plane, for a set of many
+	// ranges, once it has been asked about it; see bmp.go.
+	bmp atomic.Pointer[bmpTable]
 }
 
 type charRange struct{ lo, hi rune }
 
 func newCharSet() *charSet { return &charSet{} }
+
+// folded is a copy of the set with the i flag's folding applied.
+func (s *charSet) folded() *charSet {
+	cp := &charSet{ranges: s.ranges, wordComplement: s.wordComplement, negated: s.negated, foldCase: true, table: s.table}
+	// Its table is the same set's: the table holds the ranges alone.
+	cp.bmp.Store(s.bmp.Load())
+	return cp
+}
 
 // addRange adds an inclusive range.
 func (s *charSet) addRange(lo, hi rune) {
@@ -143,6 +155,12 @@ func (s *charSet) asciiMembers(unicodeFold bool) [2]uint64 {
 
 // rawContains tests membership without negation or folding.
 func (s *charSet) rawContains(r rune) bool {
+	// ASCII is mostly answered before a set is asked (program.asciiClasses),
+	// and is not what a table is made for: a set is asked about it while
+	// the program is compiled.
+	if uint32(r)-0x80 < 0x10000-0x80 && len(s.ranges) >= bmpMinRanges {
+		return s.bmpOf().has(r)
+	}
 	lo, hi := 0, len(s.ranges)-1
 	for lo <= hi {
 		mid := (lo + hi) / 2

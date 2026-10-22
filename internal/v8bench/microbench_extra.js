@@ -1103,6 +1103,21 @@ function regexp_unicode(n)
     return n;
 }
 
+/* a class of a Unicode property: whether a text of several scripts is
+   letters, spaces and punctuation alone */
+function regexp_property(n)
+{
+    var j, c = 0, a = ["Ärger über Öl und Äpfel, naïve Grüße aus Köln",
+        "Ἀθῆναι καὶ Σπάρτη, Ὅμηρος καὶ Ἡσίοδος",
+        "Москва и Санкт-Петербург, Достоевский и Толстой",
+        "東京と大阪、京都と奈良、富士山と琵琶湖"];
+    for (j = 0; j < n; j++)
+        if (/^[\p{L}\s,.、-]+$/u.test(a[j & 3]))
+            c++;
+    global_res = c;
+    return n;
+}
+
 /* a pattern tested against a string made just before */
 function regexp_fresh(n)
 {

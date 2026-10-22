@@ -222,9 +222,7 @@ func (c *compiler) compile(n node) {
 			set = classNotFoldWord
 		}
 		if c.flags&FlagIgnoreCase != 0 && !set.foldCase {
-			cp := *set
-			cp.foldCase = true
-			set = &cp
+			set = set.folded()
 		}
 		c.emit(instr{op: opClass, arg: c.addClass(set), rev: c.reverse})
 

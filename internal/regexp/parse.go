@@ -818,9 +818,7 @@ func (p *parser) shorthandClass(r rune) *charSet {
 	// s, because those fold to k and s. Copying the set keeps the shared one
 	// free of the flag.
 	if p.flags&FlagIgnoreCase != 0 && (r == 'w' || r == 'W') {
-		cp := *base
-		cp.foldCase = true
-		return &cp
+		return base.folded()
 	}
 	return base
 }
