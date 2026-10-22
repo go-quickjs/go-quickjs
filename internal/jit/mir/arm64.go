@@ -5980,7 +5980,7 @@ func (c *a64Compiler) elemStore(v *ssa.Value) {
 	stub := c.stubLabel(v.State, exitKind(v.Aux))
 	slow, done := c.a.NewLabel(), c.a.NewLabel()
 	checked := len(v.Args) > 3
-	if c.enc.CallGo == 0 || checked {
+	if c.enc.CallGo == 0 || checked && c.enc.ValueSize != 16 {
 		slow = stub
 	}
 	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
@@ -6016,18 +6016,10 @@ func (c *a64Compiler) elemStore(v *ssa.Value) {
 	if fresh {
 		c.freshCell(v.Args[0], fail)
 	} else {
-		c.storeCell(v.Args[0], !checked, fail, found)
+		c.storeCell(v.Args[0], v.Args[3:], stub, fail, found)
 	}
 	c.a.Bind(found)
-	for _, s := range v.Args[3:] {
-		// As amd64's: only a pointer word there is lost.
-		other := c.a.NewLabel()
-		c.a.Cmp(c.gpr(s, a64B), a64A, true)
-		c.a.BCond(arm64.NE, other)
-		c.a.Load(a64B, a64A, c.enc.RefOffset)
-		c.a.Cbnz(a64B, stub, true)
-		c.a.Bind(other)
-	}
+	c.cellChecks(v.Args[3:], stub)
 	scalar, viaGo := c.a.NewLabel(), c.a.NewLabel()
 	c.a.MovRR(a64C, a64D)
 	c.a.Load(a64B, a64A, c.enc.RefOffset)
@@ -6065,12 +6057,13 @@ func (c *a64Compiler) elemStore(v *ssa.Value) {
 		c.valueStore()
 		c.a.B(done)
 	})
-	if c.enc.CallGo == 0 || checked {
+	if slow == stub {
 		return
 	}
 	c.cold = append(c.cold, func() {
-		// Any other store Go makes if it can (ssa.GoElemStore).
+		// Any other store Go makes if it can (ssa.GoElemStore), as amd64's.
 		c.a.Bind(slow)
+		c.storageFree(v.Args[0], v.Args[3:], stub)
 		size := int32(unsafe.Sizeof(abi.GoArg{}))
 		c.a.Store(a64Ctx, abi.OffGoArgs+c.enc.RefOffset, c.gpr(v.Args[0], a64C))
 		c.a.FMovFromF(a64A, c.fpr(v.Args[1], a64F0))
@@ -6205,11 +6198,53 @@ func (c *a64Compiler) elementCell(array *ssa.Value, guard func(arm64.Cond)) {
 	guard(arm64.EQ)
 }
 
+// cellChecks is amd64's, of the cell in A: only a pointer word there is
+// lost. It keeps A, and uses B.
+func (c *a64Compiler) cellChecks(checks []*ssa.Value, stub arm64.Label) {
+	for _, s := range checks {
+		other := c.a.NewLabel()
+		c.a.Cmp(c.gpr(s, a64B), a64A, true)
+		c.a.BCond(arm64.NE, other)
+		c.a.Load(a64B, a64A, c.enc.RefOffset)
+		c.a.Cbnz(a64B, stub, true)
+		c.a.Bind(other)
+	}
+}
+
+// storageFree is amd64's: a store with checks Go is to make goes to stub
+// where one of them points into the array's storage, up to its capacity.
+// It uses A, B and C.
+func (c *a64Compiler) storageFree(array *ssa.Value, checks []*ssa.Value, stub arm64.Label) {
+	if len(checks) == 0 {
+		return
+	}
+	free := c.a.NewLabel()
+	p := c.gpr(array, a64C)
+	c.a.LoadU8(a64A, p, c.enc.ObjectClass)
+	c.a.CmpImm(a64A, int64(c.enc.ClassArray), false)
+	c.a.BCond(arm64.NE, free)
+	c.a.Load(a64A, p, c.enc.ObjectElems)
+	c.a.Load(a64B, p, c.enc.ObjectElems+16)
+	c.a.ShiftImm(arm64.Lsl, a64B, a64B, 4, true)
+	c.a.Op(arm64.Add, a64B, a64B, a64A, true)
+	for _, s := range checks {
+		next := c.a.NewLabel()
+		r := c.gpr(s, a64C)
+		c.a.Cmp(r, a64A, true)
+		c.a.BCond(arm64.LO, next)
+		c.a.Cmp(r, a64B, true)
+		c.a.BCond(arm64.LO, stub)
+		c.a.Bind(next)
+	}
+	c.a.Bind(free)
+}
+
 // storeCell is amd64's: elementCell for elemStore, a hole stored into
-// where the array may take it, or, where appends, a store at its length
-// where it has room appended, the cell's address in A at found. It keeps
-// D, the value's pointer word.
-func (c *a64Compiler) storeCell(array *ssa.Value, appends bool, fail func(arm64.Cond), found arm64.Label) {
+// where the array may take it, or a store at its length where it has room
+// appended -- the checks made on the cell before the length grows
+// (cellChecks) -- the cell's address in A at found. It keeps D, the
+// value's pointer word.
+func (c *a64Compiler) storeCell(array *ssa.Value, checks []*ssa.Value, stub arm64.Label, fail func(arm64.Cond), found arm64.Label) {
 	protos := c.f.ArrayProtos
 	if protos[0].Object == 0 || c.enc.ValueSize != 16 {
 		c.elementCell(array, fail)
@@ -6218,29 +6253,38 @@ func (c *a64Compiler) storeCell(array *ssa.Value, appends bool, fail func(arm64.
 	p := c.gpr(array, a64C)
 	c.a.Load(a64B, p, c.enc.ObjectElems+8)
 	c.a.Cmp(a64A, a64B, true)
-	if appends {
-		end := c.a.NewLabel()
-		c.a.BCond(arm64.HS, end)
-		c.cold = append(c.cold, func() {
-			c.a.Bind(end)
-			fail(arm64.NE)
-			c.a.Load(a64B, c.gpr(array, a64C), c.enc.ObjectElems+16)
-			c.a.Cmp(a64A, a64B, true)
-			fail(arm64.HS)
-			c.a.FMovToF(a64F1, a64A)
-			c.arrayGuards(c.gpr(array, a64C), protos, fail)
-			c.a.FMovFromF(a64A, a64F1)
-			p := c.gpr(array, a64C)
-			c.a.AddImm(a64B, a64A, 1, true)
-			c.a.Store(p, c.enc.ObjectElems+8, a64B)
+	end := c.a.NewLabel()
+	c.a.BCond(arm64.HS, end)
+	c.cold = append(c.cold, func() {
+		c.a.Bind(end)
+		fail(arm64.NE)
+		c.a.Load(a64B, c.gpr(array, a64C), c.enc.ObjectElems+16)
+		c.a.Cmp(a64A, a64B, true)
+		fail(arm64.HS)
+		c.a.FMovToF(a64F1, a64A)
+		c.arrayGuards(c.gpr(array, a64C), protos, fail)
+		c.a.FMovFromF(a64A, a64F1)
+		p := c.gpr(array, a64C)
+		if len(checks) != 0 {
+			// The cell first, which the checks compare, the index kept in
+			// F1.
 			c.a.Load(a64B, p, c.enc.ObjectElems)
 			c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
 			c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+			c.cellChecks(checks, stub)
+			c.a.FMovFromF(a64B, a64F1)
+			c.a.AddImm(a64B, a64B, 1, true)
+			c.a.Store(c.gpr(array, a64C), c.enc.ObjectElems+8, a64B)
 			c.a.B(found)
-		})
-	} else {
-		fail(arm64.HS)
-	}
+			return
+		}
+		c.a.AddImm(a64B, a64A, 1, true)
+		c.a.Store(p, c.enc.ObjectElems+8, a64B)
+		c.a.Load(a64B, p, c.enc.ObjectElems)
+		c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
+		c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+		c.a.B(found)
+	})
 	c.a.Load(a64B, p, c.enc.ObjectElems)
 	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
 	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
@@ -6703,13 +6747,15 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 	case ssa.OpElemWrite:
 		done, typed := c.a.NewLabel(), c.a.NewLabel()
 		slow := c.stubLabel(v.State, exitKind(v.Aux))
-		if c.enc.CallGo != 0 && len(v.Args) == 3 {
-			// Any other store Go makes if it can (ssa.GoElemWrite), but
-			// for one with checks, as amd64's.
+		if c.enc.CallGo != 0 && (len(v.Args) == 3 || c.enc.ValueSize == 16) {
+			// Any other store Go makes if it can (ssa.GoElemWrite), one with
+			// checks only where none points into the array's storage
+			// (storageFree), as amd64's.
 			stub := slow
 			slow = c.a.NewLabel()
 			c.cold = append(c.cold, func() {
 				c.a.Bind(slow)
+				c.storageFree(v.Args[0], v.Args[3:], stub)
 				size := int32(unsafe.Sizeof(abi.GoArg{}))
 				c.a.Store(a64Ctx, abi.OffGoArgs+c.enc.RefOffset, c.gpr(v.Args[0], a64C))
 				c.a.FMovFromF(a64A, c.fpr(v.Args[1], a64F0))

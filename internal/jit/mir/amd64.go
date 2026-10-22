@@ -6652,21 +6652,24 @@ func (c *compiler) typedCases(other amd64.Label, each func(kind int32)) {
 }
 
 // elemStore stores any value in an Array's element (OpElemStore), as
-// propStore stores one in a property: the element there, or a hole the
-// array may take an element at (storeCell), the cells the store's checks
-// name compared with its cell first, a pointer word written or overwritten
-// with Go's write barrier while the collector marks (valueStore). What it
-// does not store -- a typed array's element, past the dense elements -- Go
-// stores (ssa.GoElemStore), or, where
-// the store has checks, a reference live after it read from an element,
-// which Go's store could move as it grows the array, the store exits. It
-// uses every scratch register and xScratch0 to xScratch2.
+// propStore stores one in a property: the element there, a hole the array
+// may take an element at, or one at its length where it has room
+// (storeCell), the cells the store's checks name compared with its cell
+// first -- before an append grows the length, which a check that exits
+// would leave grown -- a pointer word written or overwritten with Go's
+// write barrier while the collector marks (valueStore). What it does not
+// store -- a typed array's element, past the dense elements -- Go stores
+// (ssa.GoElemStore); where the store has checks, references live after it
+// read from elements, only if none was read from the array's storage
+// (storageFree), which Go's store could write over, or move as it grows
+// the array: the store exits otherwise. It uses every scratch register and
+// xScratch0 to xScratch2.
 func (c *compiler) elemStore(v *ssa.Value) {
 	x := v.Args[2]
 	stub := c.stubLabel(v.State, exitKind(v.Aux))
 	slow, done := c.a.NewLabel(), c.a.NewLabel()
 	checked := len(v.Args) > 3
-	if c.enc.CallGo == 0 || checked {
+	if c.enc.CallGo == 0 || checked && c.enc.ValueSize != 16 {
 		slow = stub
 	}
 	fail := func(cond amd64.Cond) { c.a.Jcc(cond, slow) }
@@ -6700,20 +6703,10 @@ func (c *compiler) elemStore(v *ssa.Value) {
 	if fresh {
 		c.freshCell(v.Args[0], fail)
 	} else {
-		c.storeCell(v.Args[0], !checked, fail, found)
+		c.storeCell(v.Args[0], v.Args[3:], stub, fail, found)
 	}
 	c.a.Bind(found)
-	for _, s := range v.Args[3:] {
-		// A live value read from this cell keeps its pointer word there:
-		// unless it is none, a primitive's (storeChecks).
-		other := c.a.NewLabel()
-		c.a.Op(amd64.Cmp, c.gpr(s, scratchB), scratchA, true)
-		c.a.Jcc(amd64.CondNE, other)
-		c.a.Load(scratchB, scratchA, c.enc.RefOffset)
-		c.a.Op(amd64.Test, scratchB, scratchB, true)
-		c.a.Jcc(amd64.CondNE, stub)
-		c.a.Bind(other)
-	}
+	c.cellChecks(v.Args[3:], stub)
 	scalar, viaGo := c.a.NewLabel(), c.a.NewLabel()
 	c.a.MovQFromX(scratchC, xScratch2)
 	c.a.Load(scratchB, scratchA, c.enc.RefOffset)
@@ -6753,13 +6746,14 @@ func (c *compiler) elemStore(v *ssa.Value) {
 		c.valueStore()
 		c.a.Jmp(done)
 	})
-	if c.enc.CallGo == 0 || checked {
+	if slow == stub {
 		return
 	}
 	c.cold = append(c.cold, func() {
 		// Any other store Go makes if it can (ssa.GoElemStore): the array,
 		// the key and the value's words in the context's GoArgs.
 		c.a.Bind(slow)
+		c.storageFree(v.Args[0], v.Args[3:], stub)
 		size := int32(unsafe.Sizeof(abi.GoArg{}))
 		c.a.Store(regCtx, abi.OffGoArgs+c.enc.RefOffset, c.gpr(v.Args[0], scratchC))
 		c.a.MovQFromX(scratchA, c.xmm(v.Args[1], xScratch0))
@@ -6919,6 +6913,54 @@ func (c *compiler) elementCell(array *ssa.Value, fail func(amd64.Cond)) {
 	fail(amd64.CondE)
 }
 
+// cellChecks has a store of the cell in scratchA go to stub where one of
+// checks, the references live after it (ssa's storeChecks), was read from
+// that cell, which holds its pointer word -- unless it holds none, a
+// primitive's. It keeps scratchA, and uses scratchB.
+func (c *compiler) cellChecks(checks []*ssa.Value, stub amd64.Label) {
+	for _, s := range checks {
+		other := c.a.NewLabel()
+		c.a.Op(amd64.Cmp, c.gpr(s, scratchB), scratchA, true)
+		c.a.Jcc(amd64.CondNE, other)
+		c.a.Load(scratchB, scratchA, c.enc.RefOffset)
+		c.a.Op(amd64.Test, scratchB, scratchB, true)
+		c.a.Jcc(amd64.CondNE, stub)
+		c.a.Bind(other)
+	}
+}
+
+// storageFree has a store with checks (ssa's storeChecks), which Go is
+// to make, go to stub unless no reference live after it, its checks,
+// points into array's storage -- its elements' cells, up to its capacity --
+// which Go's store may write over, or move as it grows the array; any
+// other cell, another array's, an object's property's, Go's store leaves
+// as it is. A typed array has no cells. It uses scratchA, scratchB and
+// scratchC.
+func (c *compiler) storageFree(array *ssa.Value, checks []*ssa.Value, stub amd64.Label) {
+	if len(checks) == 0 {
+		return
+	}
+	free := c.a.NewLabel()
+	p := c.gpr(array, scratchC)
+	c.a.LoadU8(scratchA, p, c.enc.ObjectClass)
+	c.a.OpImm(amd64.Cmp, scratchA, int32(c.enc.ClassArray), false)
+	c.a.Jcc(amd64.CondNE, free)
+	c.a.Load(scratchA, p, c.enc.ObjectElems)
+	c.a.Load(scratchB, p, c.enc.ObjectElems+16)
+	c.a.ShiftImm(amd64.Shl, scratchB, 4, true)
+	c.a.Op(amd64.Add, scratchB, scratchA, true)
+	for _, s := range checks {
+		next := c.a.NewLabel()
+		r := c.gpr(s, scratchC)
+		c.a.Op(amd64.Cmp, r, scratchA, true)
+		c.a.Jcc(amd64.CondB, next)
+		c.a.Op(amd64.Cmp, r, scratchB, true)
+		c.a.Jcc(amd64.CondB, stub)
+		c.a.Bind(next)
+	}
+	c.a.Bind(free)
+}
+
 // storeCell is elementCell for a store of any value (elemStore): a hole
 // is stored into as well, as V8's code stores into a holey array's, where
 // the array may take an element it has none of (arrayGuards), the cell's
@@ -6930,9 +6972,13 @@ func (c *compiler) elementCell(array *ssa.Value, fail func(amd64.Cond)) {
 // appends a number: the length one more, the cell the one past the old
 // last element -- whatever an earlier element there left in it, which the
 // store's barrier overwrites as Go's append would. A store with checks
-// does not append: one of them exiting after it would leave the length
-// grown.
-func (c *compiler) storeCell(array *ssa.Value, appends bool, fail func(amd64.Cond), found amd64.Label) {
+// makes them on the cell before the length grows (cellChecks), going to
+// stub at one that fails: one exiting after had left it grown, and such a
+// store had not appended, its every append leaving native code --
+// Typescript's getParameterList filling result, [] at first, with
+// result[result.length] = parameterSymbol, a parameter it read from
+// args.members live past the store, at each parameter.
+func (c *compiler) storeCell(array *ssa.Value, checks []*ssa.Value, stub amd64.Label, fail func(amd64.Cond), found amd64.Label) {
 	protos := c.f.ArrayProtos
 	if protos[0].Object == 0 || c.enc.ValueSize != 16 {
 		c.elementCell(array, fail)
@@ -6941,30 +6987,39 @@ func (c *compiler) storeCell(array *ssa.Value, appends bool, fail func(amd64.Con
 	p := c.gpr(array, scratchC)
 	c.a.Load(scratchB, p, c.enc.ObjectElems+8)
 	c.a.Op(amd64.Cmp, scratchA, scratchB, true)
-	if appends {
-		end := c.a.NewLabel()
-		c.a.Jcc(amd64.CondAE, end)
-		c.cold = append(c.cold, func() {
-			c.a.Bind(end)
-			fail(amd64.CondNE)
-			c.a.Load(scratchB, c.gpr(array, scratchC), c.enc.ObjectElems+16)
-			c.a.Op(amd64.Cmp, scratchA, scratchB, true)
-			fail(amd64.CondAE)
-			c.a.MovQToX(xScratch0, scratchA)
-			c.arrayGuards(c.gpr(array, scratchC), protos, fail)
-			c.a.MovQFromX(scratchA, xScratch0)
-			p := c.gpr(array, scratchC)
-			c.a.MovRR(scratchB, scratchA)
-			c.a.OpImm(amd64.Add, scratchB, 1, true)
-			c.a.Store(p, c.enc.ObjectElems+8, scratchB)
+	end := c.a.NewLabel()
+	c.a.Jcc(amd64.CondAE, end)
+	c.cold = append(c.cold, func() {
+		c.a.Bind(end)
+		fail(amd64.CondNE)
+		c.a.Load(scratchB, c.gpr(array, scratchC), c.enc.ObjectElems+16)
+		c.a.Op(amd64.Cmp, scratchA, scratchB, true)
+		fail(amd64.CondAE)
+		c.a.MovQToX(xScratch0, scratchA)
+		c.arrayGuards(c.gpr(array, scratchC), protos, fail)
+		c.a.MovQFromX(scratchA, xScratch0)
+		p := c.gpr(array, scratchC)
+		if len(checks) != 0 {
+			// The cell first, which the checks compare, the index kept in
+			// xScratch0.
 			c.a.Load(scratchB, p, c.enc.ObjectElems)
 			c.a.ShiftImm(amd64.Shl, scratchA, 4, true)
 			c.a.Op(amd64.Add, scratchA, scratchB, true)
+			c.cellChecks(checks, stub)
+			c.a.MovQFromX(scratchB, xScratch0)
+			c.a.OpImm(amd64.Add, scratchB, 1, true)
+			c.a.Store(c.gpr(array, scratchC), c.enc.ObjectElems+8, scratchB)
 			c.a.Jmp(found)
-		})
-	} else {
-		fail(amd64.CondAE)
-	}
+			return
+		}
+		c.a.MovRR(scratchB, scratchA)
+		c.a.OpImm(amd64.Add, scratchB, 1, true)
+		c.a.Store(p, c.enc.ObjectElems+8, scratchB)
+		c.a.Load(scratchB, p, c.enc.ObjectElems)
+		c.a.ShiftImm(amd64.Shl, scratchA, 4, true)
+		c.a.Op(amd64.Add, scratchA, scratchB, true)
+		c.a.Jmp(found)
+	})
 	c.a.Load(scratchB, p, c.enc.ObjectElems)
 	c.a.ShiftImm(amd64.Shl, scratchA, 4, true)
 	c.a.Op(amd64.Add, scratchA, scratchB, true)
@@ -7432,17 +7487,19 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 	case ssa.OpElemWrite:
 		done, typed := c.a.NewLabel(), c.a.NewLabel()
 		slow := c.stubLabel(v.State, exitKind(v.Aux))
-		if c.enc.CallGo != 0 && len(v.Args) == 3 {
+		if c.enc.CallGo != 0 && (len(v.Args) == 3 || c.enc.ValueSize == 16) {
 			// Any other store Go makes if it can (ssa.GoElemWrite): the
-			// array, the key and the value in the context's GoArgs. Not
-			// one with checks (ssa's storeChecks): a reference live after
-			// it read from an element, which Go's store could write over,
-			// or move as it grows the array -- the store exits, as
+			// array, the key and the value in the context's GoArgs. One
+			// with checks (ssa's storeChecks), references live after it
+			// read from elements, only where none was read from the
+			// array's storage, which Go's store could write over, or move
+			// as it grows the array (storageFree): it exits otherwise, as
 			// elemStore's does.
 			stub := slow
 			slow = c.a.NewLabel()
 			c.cold = append(c.cold, func() {
 				c.a.Bind(slow)
+				c.storageFree(v.Args[0], v.Args[3:], stub)
 				size := int32(unsafe.Sizeof(abi.GoArg{}))
 				c.a.Store(regCtx, abi.OffGoArgs+c.enc.RefOffset, c.gpr(v.Args[0], scratchC))
 				c.a.MovQFromX(scratchA, c.xmm(v.Args[1], xScratch0))

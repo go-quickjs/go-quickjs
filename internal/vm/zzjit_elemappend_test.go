@@ -79,3 +79,58 @@ func TestJITElemStoreAppends(t *testing.T) {
 	}
 	jitAgreesForTest(t, elemAppendSetup+drivers, rounds...)
 }
+
+// A store with checks -- an element read from an array, a reference, live
+// past it (ssa's storeChecks) -- appends natively where the array has room,
+// its checks made on the cell before the length grows, and is Go's from
+// native code where it grows the array or meets anything else
+// (GoElemStore, GoElemWrite), unless a live reference was read from that
+// array's storage, which Go's store could write over or move: it exits
+// then. Typescript's getParameterList, filling result from [] with
+// result[result.length] = parameterSymbol, a parameter read from
+// args.members live past the store, had left native code at each. The
+// references read from the array itself -- one the append's cell holds
+// after the array was cut short, one into storage the append grows -- keep
+// their values: each answer is the interpreter's. In the warm round
+// params leaves native code at no store.
+func TestJITCheckedStoresAppend(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		function P(n) { this.n = n; this.opt = n & 1 }
+		P.prototype.isOpt = function () { return this.opt == 1 }
+		function params(args) {
+			var result = [], nums = [], non = 0
+			for (var i = 0; i < args.members.length; i++) {
+				var parameter = args.members[i]
+				result[result.length] = { p: parameter, k: i }
+				nums[nums.length] = i * 2
+				if (!parameter.isOpt()) non++
+			}
+			return result.length * 10 + nums.length + non
+		}
+		var lists = []
+		for (let i = 0; i < 8; i++) { const m = []; for (let j = 0; j <= i % 4; j++) m.push(new P(j)); lists.push({ members: m }) }
+		function all(n) { let t = 0; for (let k = 0; k < n; k++) for (const l of lists) t = (t + params(l)) | 0; return t }
+		function cut(a, v) { var x = a[3]; a.length = 3; a[a.length] = v; return x.n + ':' + a[3].n + ':' + a.length }
+		function grow(a, v) { var x = a[0]; a[a.length] = v; a[a.length] = v; return x.n + ':' + a.length + ':' + a[a.length - 1].n }
+		function own(a) { var x = a[0]; for (var i = 0; i < 40; i++) { a[a.length] = x } return x.n + ':' + a.length }
+		function cuts(n) { let s = ''; for (let i = 0; i < n; i++) s = cut([new P(1), new P(2), new P(3), new P(4)], new P(i)); return s }
+		function grows(n) { let s = ''; for (let i = 0; i < n; i++) s = grow([new P(7)], new P(i)); return s }
+		function owns(n) { let s = ''; for (let i = 0; i < n; i++) s = own([new P(i)]); return s }
+	`
+	rounds := []string{}
+	for range 6 {
+		rounds = append(rounds, `all(100)`, `cuts(50)`, `grows(50)`, `owns(20)`)
+	}
+	r := jitAgreesForTest(t, setup, rounds...)
+	e := jitNativeOrCalleeForTest(t, r, "params")
+	hosts := e.ssaStats.hosts
+	if _, err := r.Run(compileForTest(t, `all(100)`)); err != nil {
+		t.Fatal(err)
+	}
+	if n := e.ssaStats.hosts - hosts; n != 0 {
+		t.Errorf("params left native code %d times", n)
+	}
+}
