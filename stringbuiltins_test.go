@@ -227,6 +227,18 @@ var stringBuiltinCases = []struct{ src, want string }{
 	{`[[1, 2, 3].at(-1), [1, 2, 3].slice(-(2 ** 63)).length, [1, 2, 3].indexOf(2, -0), [1, 2, 3].includes(1, -0.9), [1, 2, 3].lastIndexOf(3, 2 ** 63)].join()`, `"3,3,1,true,2"`},
 	{`[(1.5).toFixed(-0), (255).toString(16.9), (0.5).toPrecision(2 ** 0)].join()`, `"2,ff,0.5"`},
 	{`Object.is(new Int8Array([1, 2]).subarray(-0)[0], 1)`, `boolean true`},
+	// isWellFormed and toWellFormed: lone surrogates anywhere, and the
+	// characters whose text begins as theirs does.
+	{`["abc".isWellFormed(), "".isWellFormed(), "\u00e9\ud83d\ude00".isWellFormed(), "\ud7ff\ue000".isWellFormed()].join()`, `"true,true,true,true"`},
+	{`["\ud800".isWellFormed(), "a\udfff".isWellFormed(), "\ud83d\ud83d\ude00".isWellFormed(), "x\ud7ff\udc00".isWellFormed()].join()`, `"false,false,false,false"`},
+	{`("a".repeat(100) + "\ud83d").isWellFormed()`, `boolean false`},
+	{`"abc".toWellFormed()`, `"abc"`},
+	{`"\u00e9\ud83d\ude00".toWellFormed()`, `"\u00e9\ud83d\ude00"`},
+	{`"\ud7ff\ud800x\udc00".toWellFormed()`, `"\ud7ff\ufffdx\ufffd"`},
+	{`"\ude00\ud83d".toWellFormed()`, `"\ufffd\ufffd"`},
+	{`"\ud83d".toWellFormed() + "\ude00"`, `"\ufffd\ude00"`},
+	{`String.prototype.isWellFormed.call(12)`, `boolean true`},
+	{`String.prototype.toWellFormed.call(null)`, `TypeError`},
 }
 
 // TestStringBuiltinsMatchNode pins String's methods to Node's answers,

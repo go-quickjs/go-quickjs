@@ -21,6 +21,7 @@
 package wtf8
 
 import (
+	"strings"
 	"unicode/utf16"
 	"unicode/utf8"
 	"unsafe"
@@ -250,19 +251,21 @@ func IsASCII(s string) bool {
 
 // WellFormed reports whether s contains no lone surrogate, which is what
 // String.prototype.isWellFormed tests.
+//
+// A surrogate's three bytes begin with 0xED, which no sequence has after its
+// first byte, so the bytes are searched for it (strings.IndexByte) rather
+// than decoded a character at a time.
 func WellFormed(s string) bool {
-	for i := 0; i < len(s); {
-		if s[i] < utf8.RuneSelf {
-			i++
-			continue
+	for i := 0; ; i++ {
+		j := strings.IndexByte(s[i:], 0xED)
+		if j < 0 {
+			return true
 		}
+		i += j
 		if _, ok := decodeSurrogateAt(s, i); ok {
 			return false
 		}
-		_, size := utf8.DecodeRuneInString(s[i:])
-		i += size
 	}
-	return true
 }
 
 // ToWellFormed replaces every lone surrogate with U+FFFD, which is what

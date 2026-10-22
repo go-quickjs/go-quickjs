@@ -646,12 +646,18 @@ func (r *Runtime) initStringBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		return Bool(wtf8.WellFormed(s.Go())), nil
+		// An ASCII string has no surrogate, and is not flattened to say so.
+		return Bool(s.ascii || wtf8.WellFormed(s.Go())), nil
 	})
 	r.defMethod(p, "toWellFormed", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		s, err := thisStr(rt, this)
 		if err != nil {
 			return Undefined, err
+		}
+		// A string that has no lone surrogate is its own answer, not one
+		// made of the same text and scanned again.
+		if s.ascii || wtf8.WellFormed(s.Go()) {
+			return Str(s), nil
 		}
 		return Str(NewString(wtf8.ToWellFormed(s.Go()))), nil
 	})

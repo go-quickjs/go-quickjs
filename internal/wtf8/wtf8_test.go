@@ -277,3 +277,44 @@ func TestFromUTF16MatchesUnitByUnit(t *testing.T) {
 		}
 	}
 }
+
+// wellFormedByRunes is WellFormed as it was written, a character at a time,
+// which TestWellFormedMatchesDecoding holds the search for 0xED to.
+func wellFormedByRunes(s string) bool {
+	for i := 0; i < len(s); {
+		if s[i] < utf8.RuneSelf {
+			i++
+			continue
+		}
+		if _, ok := decodeSurrogateAt(s, i); ok {
+			return false
+		}
+		_, size := utf8.DecodeRuneInString(s[i:])
+		i += size
+	}
+	return true
+}
+
+// TestWellFormedMatchesDecoding pins WellFormed to the decoding it replaced,
+// over text of lone surrogates, pairs, the characters that share 0xED with
+// them (U+D000 to U+D7FF) and malformed bytes, a 0xED cut short at the end.
+func TestWellFormedMatchesDecoding(t *testing.T) {
+	pieces := []string{"a", "\xc3\xa9", "\xed\x9f\xbf", "\xed\x80\x80", "\xed\xa0\x80", "\xed\xbf\xbf",
+		"\xed", "\xed\xa0", "\xf0\x9f\x98\x80", "\xe2\xed\xa0\x80", "\xff", "\x80"}
+	rng := rand.New(rand.NewSource(1))
+	for n := 0; n < 20000; n++ {
+		var b strings.Builder
+		for k := rng.Intn(6); k >= 0; k-- {
+			b.WriteString(pieces[rng.Intn(len(pieces))])
+		}
+		s := b.String()
+		if got, want := WellFormed(s), wellFormedByRunes(s); got != want {
+			t.Fatalf("WellFormed(%q) = %v, want %v", s, got, want)
+		}
+	}
+	for _, s := range []string{"", "abc", "\xed\xa0\x80", "x\xed\xb0\x80", "\xed\x9f\xbf\xed\xa0\x80"} {
+		if got, want := WellFormed(s), wellFormedByRunes(s); got != want {
+			t.Errorf("WellFormed(%q) = %v, want %v", s, got, want)
+		}
+	}
+}
