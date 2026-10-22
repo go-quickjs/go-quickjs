@@ -405,21 +405,21 @@ func (r *Runtime) initStringBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(strings.Trim(s.Go(), jsWhitespace))), nil
+		return Str(trimString(s, true, true)), nil
 	})
 	r.defMethod(p, "trimStart", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		s, err := thisStr(rt, this)
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(strings.TrimLeft(s.Go(), jsWhitespace))), nil
+		return Str(trimString(s, true, false)), nil
 	})
 	r.defMethod(p, "trimEnd", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		s, err := thisStr(rt, this)
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(strings.TrimRight(s.Go(), jsWhitespace))), nil
+		return Str(trimString(s, false, true)), nil
 	})
 
 	r.defMethod(p, "concat", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -926,10 +926,28 @@ func (r *Runtime) initStringIteratorProto() {
 		Str(NewString("String Iterator")), propConfigurable)
 }
 
-// jsWhitespace is the set of code points the trim methods remove.
-const jsWhitespace = " \t\n\v\f\r" +
-	"\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007" +
-	"\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+// trimString is s without the whitespace at its start, where left, and at
+// its end, where right: s itself where there is none, and otherwise the
+// bytes between, which are s's, in one allocation.
+func trimString(s *String, left, right bool) *String {
+	g := s.Go()
+	t := g
+	if left {
+		t = jsnum.TrimLeftSpace(t)
+	}
+	if right {
+		t = jsnum.TrimRightSpace(t)
+	}
+	switch {
+	case len(t) == len(g):
+		return s
+	case t == "":
+		return emptyString
+	case s.ascii:
+		return &String{s: t, length: len(t), ascii: true}
+	}
+	return NewString(t)
+}
 
 // formatFixed implements Number.prototype.toFixed.
 //

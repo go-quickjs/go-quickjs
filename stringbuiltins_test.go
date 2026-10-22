@@ -1,0 +1,84 @@
+package quickjs_test
+
+import (
+	"testing"
+
+	"github.com/go-quickjs/go-quickjs"
+)
+
+// showJS writes a value as the cases below expect it: a string quoted, its
+// code units outside printable ASCII as \u escapes, lone surrogates
+// included, and anything else as its type and String's text.
+const showJS = `
+function show(v) {
+	if (typeof v !== "string")
+		return typeof v + " " + String(v);
+	var o = '"';
+	for (var i = 0; i < v.length; i++) {
+		var c = v.charCodeAt(i);
+		o += c >= 0x20 && c < 0x7f ? v[i] : "\\u" + ("000" + c.toString(16)).slice(-4);
+	}
+	return o + '"';
+}
+function run(f) {
+	var out = [];
+	for (var i = 0; i < 3; i++) {
+		try { out.push(show(f())) } catch (e) { out.push(e.constructor.name) }
+	}
+	return out[0] === out[1] && out[1] === out[2] ? out[0] : out.join(" | ");
+}
+`
+
+// stringBuiltinCases are expressions over String's methods and what Node
+// (v26.10.0) answers for each, as show writes it: the edges of what the
+// methods' own code decides -- whitespace at either end, a lone surrogate
+// where one is cut or joined, a rope's receiver, the conversions' order.
+var stringBuiltinCases = []struct{ src, want string }{
+	// trim, trimStart and trimEnd take off WhiteSpace and LineTerminator,
+	// all of it and nothing else: not U+0085, U+180E or U+200B.
+	{`" \t\n\v\f\r ab \u00a0\u1680\u2000\u2005\u200a\u2028\u2029\u202f\u205f\u3000\ufeff".trim()`, `"ab"`},
+	{`"\u00a0\u1680\u2000\u2005\u200a\u2028\u2029\u202f\u205f\u3000\ufeff ab ".trimStart()`, `"ab "`},
+	{`" ab \u00a0\u1680\u2000\u2005\u200a\u2028\u2029\u202f\u205f\u3000\ufeff".trimEnd()`, `" ab"`},
+	{`"\u0085x\u0085".trim()`, `"\u0085x\u0085"`},
+	{`"\u180ex\u180e".trim()`, `"\u180ex\u180e"`},
+	{`"\u200bx\u200b".trim()`, `"\u200bx\u200b"`},
+	{`"\u2000\u2001".trim()`, `""`},
+	{`" \t ".trimEnd()`, `""`},
+	{`"".trimStart()`, `""`},
+	{`"abc".trim()`, `"abc"`},
+	{`" \ud800 ".trim()`, `"\ud800"`},
+	{`" \udc00x".trimStart()`, `"\udc00x"`},
+	{`"x\ud83d\ude00\u3000".trimEnd()`, `"x\ud83d\ude00"`},
+	{`"\u3000\ude00".trim() + "\ud83d"`, `"\ude00\ud83d"`},
+	{`"\ud83d" + " \ude00 ".trim()`, `"\ud83d\ude00"`},
+	{`("\ud83d" + " \ude00 ".trim()).length`, `number 2`},
+	{`" \u00e9t\u00e9 ".trim()`, `"\u00e9t\u00e9"`},
+	{`" \u00e9t\u00e9 ".trim().length`, `number 3`},
+	{`"\u00a0abc\u00a0".trim() === "abc"`, `boolean true`},
+	{`"\u00a0abc\u00a0".trim().charCodeAt(2)`, `number 99`},
+	{`(" " + "x".repeat(70) + "\u3000").trim().length`, `number 70`},
+	{`String.prototype.trim.call(12)`, `"12"`},
+	{`String.prototype.trimEnd.call({ toString() { return " o " } })`, `" o"`},
+	// What ToNumber, parseFloat, parseInt and BigInt take off is the same.
+	{`Number(" \u00a012.5\ufeff\u2029")`, `number 12.5`},
+	{`Number("\u180e1")`, `number NaN`},
+	{`Number("\u0085 1")`, `number NaN`},
+	{`Number("\u3000\u2028")`, `number 0`},
+	{`parseFloat("\u3000\t3.5x")`, `number 3.5`},
+	{`parseInt("\u2028\u202f42")`, `number 42`},
+	{`String(BigInt(" 12 \u00a0"))`, `"12"`},
+	{`String(BigInt("\ufeff"))`, `"0"`},
+}
+
+// TestStringBuiltinsMatchNode pins String's methods to Node's answers,
+// each called three times, which the tree tier takes over by.
+func TestStringBuiltinsMatchNode(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	evalString(t, rt, showJS)
+	for _, c := range stringBuiltinCases {
+		if got := evalString(t, rt, "run(() => "+c.src+")"); got != c.want {
+			t.Errorf("%s\n got: %s\nwant: %s", c.src, got, c.want)
+		}
+	}
+}

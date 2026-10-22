@@ -8,6 +8,8 @@ import (
 
 	intl "github.com/go-quickjs/go-intl"
 	"github.com/go-quickjs/go-intl/temporal"
+
+	"github.com/go-quickjs/go-quickjs/internal/jsnum"
 )
 
 // Intl: ECMA-402's objects over go-intl's services, which carry CLDR's data
@@ -282,7 +284,7 @@ func (r *Runtime) numberArgument(v Value) (intl.Decimal, error) {
 		// included, exactly.
 		text := prim.String().Go()
 		// JavaScript's whitespace, which is not Go's: U+0085 is not trimmed.
-		trimmed := strings.Trim(text, jsWhitespace)
+		trimmed := jsnum.TrimSpace(text)
 		if r.nodeQuirks {
 			if d, ok := parseDecimal(trimmed); ok && d.digits != "" && d.exp-1 < -999999999 {
 				// ICU holds a number whose first digit is no further below the

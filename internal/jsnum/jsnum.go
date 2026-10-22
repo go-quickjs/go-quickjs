@@ -230,7 +230,7 @@ func digitChar(d int) byte {
 // ParseFloatPrefix parses the longest prefix of s that forms a StrDecimalLiteral,
 // as parseFloat does. It returns NaN if no prefix is numeric.
 func ParseFloatPrefix(s string) float64 {
-	s = strings.TrimLeft(s, whitespace)
+	s = TrimLeftSpace(s)
 	end := decimalPrefixEnd(s)
 	if end == 0 {
 		// Infinity is accepted by parseFloat but not by strconv.
@@ -290,7 +290,7 @@ func decimalPrefixEnd(s string) int {
 
 // ParseIntPrefix implements parseInt(s, radix).
 func ParseIntPrefix(s string, radix int) float64 {
-	s = strings.TrimLeft(s, whitespace)
+	s = TrimLeftSpace(s)
 	neg := false
 	if len(s) > 0 && (s[0] == '+' || s[0] == '-') {
 		neg = s[0] == '-'
@@ -415,7 +415,7 @@ func ToNumber(s string) float64 {
 	if f, ok := plainInteger(s); ok {
 		return f
 	}
-	t := strings.Trim(s, whitespace)
+	t := TrimSpace(s)
 	if t == "" {
 		return 0
 	}
@@ -513,10 +513,89 @@ func digitVal(c byte) int {
 func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 
 // whitespace is the set of code points ToNumber trims. It covers the ASCII
-// space characters plus the Unicode space separators and the BOM.
+// space characters plus the Unicode space separators and the BOM. TrimSpace
+// reads them from the bytes, and TestTrimSpace checks it against this.
 const whitespace = " \t\n\v\f\r" +
 	"\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007" +
 	"\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+
+// TrimSpace is s, WTF-8, without the WhiteSpace and LineTerminator code
+// points at either end: whitespace's, what String.prototype.trim and
+// ToNumber take off.
+//
+// It reads the bytes rather than asking strings.Trim, which for a set of
+// characters past ASCII decodes each of s's and looks it up in the set's
+// text: of " 12.5 ", 80% of what ToNumber took.
+func TrimSpace(s string) string { return TrimRightSpace(TrimLeftSpace(s)) }
+
+// TrimLeftSpace is TrimSpace at the start of s only.
+func TrimLeftSpace(s string) string {
+	i := 0
+	for i < len(s) {
+		if c := s[i]; c < 0x80 {
+			if c != ' ' && c-'\t' > '\r'-'\t' {
+				break
+			}
+			i++
+			continue
+		}
+		n := spaceAt(s, i)
+		if n == 0 {
+			break
+		}
+		i += n
+	}
+	return s[i:]
+}
+
+// TrimRightSpace is TrimSpace at the end of s only.
+func TrimRightSpace(s string) string {
+	j := len(s)
+	for j > 0 {
+		if c := s[j-1]; c < 0x80 {
+			if c != ' ' && c-'\t' > '\r'-'\t' {
+				break
+			}
+			j--
+			continue
+		}
+		// Every space past ASCII is two bytes, U+00A0, or three; the lead
+		// byte of either is no continuation byte, so it begins the
+		// character the end is in.
+		switch {
+		case j >= 2 && s[j-2] == 0xC2 && s[j-1] == 0xA0:
+			j -= 2
+			continue
+		case j >= 3 && s[j-3]&0xF0 == 0xE0 && spaceAt(s, j-3) == 3:
+			j -= 3
+			continue
+		}
+		break
+	}
+	return s[:j]
+}
+
+// spaceAt is the length in bytes of the space past ASCII that s[i:] begins
+// with, or 0 if it begins with none.
+func spaceAt(s string, i int) int {
+	switch c := s[i]; {
+	case c == 0xC2:
+		if i+1 < len(s) && s[i+1] == 0xA0 {
+			return 2
+		}
+	case c&0xF0 == 0xE0:
+		if i+2 >= len(s) || s[i+1]&0xC0 != 0x80 || s[i+2]&0xC0 != 0x80 {
+			return 0
+		}
+		r := rune(c&0x0F)<<12 | rune(s[i+1]&0x3F)<<6 | rune(s[i+2]&0x3F)
+		switch {
+		case r == 0x1680, r >= 0x2000 && r <= 0x200A, r == 0x2028, r == 0x2029,
+			r == 0x202F, r == 0x205F, r == 0x3000, r == 0xFEFF:
+			return 3
+		}
+	}
+	return 0
+}
 
 // ToInt32 implements the ToInt32 abstract operation.
 func ToInt32(v float64) int32 {

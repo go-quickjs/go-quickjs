@@ -1296,7 +1296,7 @@ func bigDigitValue(c byte) int {
 // the surrounding whitespace is ignored, and a string of nothing but whitespace
 // is zero rather than a failure.
 func StringToBigInt(s string) (*BigInt, bool) {
-	text := strings.Trim(s, jsWhitespace)
+	text := jsnum.TrimSpace(s)
 	if text == "" {
 		return NewBigInt(0), true
 	}
