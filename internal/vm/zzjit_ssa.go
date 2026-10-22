@@ -1891,7 +1891,7 @@ func (r *Runtime) compileSSA(fn *bytecode.Function, cl *closure, p *ir.Program, 
 	if e != nil && cl != nil {
 		r.jitSeenFeedback(cl, e)
 	}
-	code, fb, err := r.compileSSAKeeping(fn, cl, p, e, 0)
+	code, fb, err := r.compileSSAKeeping(fn, cl, p, e, jitKeepLimit)
 	if errors.Is(err, mir.ErrKeeps) {
 		// More keep cells live at once than the context has, which the
 		// build could not know: built again with no more than that, the
@@ -1900,6 +1900,12 @@ func (r *Runtime) compileSSA(fn *bytecode.Function, cl *closure, p *ir.Program, 
 	}
 	return code, fb, err
 }
+
+// jitKeepLimit, where a test sets it, limits the keep cells of every
+// compile's build (ssa.KeepFeedback), as a compile again past the
+// context's (abi.MaxKeeps) limits them: what is made natively past them
+// is left to Go.
+var jitKeepLimit int
 
 // compileSSAKeeping is compileSSA's build and compile, the build's keep
 // cells limited to keepLimit (ssa.KeepFeedback), or not, if 0. The code is

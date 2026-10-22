@@ -343,3 +343,55 @@ func TestJITInlinesCapturedBindings(t *testing.T) {
 	both.agree(t, `mod.count`, `(n2.v = 500, walks(10))`, `(n2.v = 7, mod.reset(), walks(20))`, `made(100)`, `made(100)`,
 		`(function () { try { return mod.tdz(3) } catch (e) { return e.name + ':' + e.message } })()`)
 }
+
+// A closure the code makes natively has a keep cell taken when the build
+// is planned (ssa's closureKeep), as a literal's is: taken only when the
+// closure was built, after the calls planned before it had taken theirs,
+// it could be one too many in a build whose cells are limited -- a
+// function whose cells live at once are more than the context has, built
+// again within them (abi.MaxKeeps) -- the closure then left to an exit
+// planning had made no block for, and made by no one: its local stayed
+// undefined, and a call of it threw. Octane's Typescript, whose
+// parseStatement inlines enough to need more cells than that, threw so in
+// one run of three. Each answer is the interpreter's, every build limited
+// to one cell, two, four: closures made at the start, a loop's closures
+// of its iteration's binding, which a scope's end closes.
+func TestJITClosuresWithKeepsLimited(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const setup = `
+		function P() { this.n = 1 }
+		P.prototype.parse = function (k, parent) {
+			var modifiers = 0
+			function isA() { return (modifiers & 2) != 0 || (parent & 2) != 0 }
+			function mark() { modifiers |= 1 }
+			var acc = 0
+			for (var i = 0; i < 4; i++) {
+				if (isA()) acc++
+				if ((k + i) % 3 == 0) mark()
+				modifiers |= i
+				acc += this.n + modifiers
+			}
+			return acc
+		}
+		function lets(n) { const fs = []; for (let i = 0; i < n; i++) { const j = i * 2; fs.push(() => i + j) } let s = 0; for (const f of fs) s += f(); return s }
+		function drive(n) { const p = new P(); let s = 0; for (let i = 0; i < n; i++) s += p.parse(i, i & 2) + lets(i % 5); return s }`
+	for _, limit := range []int{1, 2, 4} {
+		jitKeepLimit = limit
+		both := jitBothForTest(t, setup)
+		r := both.jit
+		r.jitCallThreshold, r.jitICThreshold = jitInvocationsForMaglev, jitInvocationsAfterICUpdate
+		for range 6 {
+			both.agree(t, `drive(200)`)
+		}
+		jitKeepLimit = 0
+		v, err := r.Run(compileForTest(t, `P.prototype.parse`))
+		if err != nil || !v.IsObject() || v.Object().fn() == nil {
+			t.Fatalf("P.prototype.parse: %v %v", v, err)
+		}
+		if e := r.jit.hint(v.Object().fn().closure); e == nil || e.ssa == nil || e.ssaStats.entries == 0 {
+			t.Fatalf("keep cells %d: parse never ran natively: %+v", limit, e)
+		}
+	}
+}

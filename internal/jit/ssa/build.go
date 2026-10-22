@@ -1764,6 +1764,9 @@ type builder struct {
 	calls map[int][]*CallSite
 	// callKeeps are, by PC, the keep cells of the calls' results (calls).
 	callKeeps map[int]int
+	// closureKeeps are, by PC, the keep cells of the closures the root's
+	// code makes, or -1 for one Go makes (closureKeep).
+	closureKeeps map[int]int
 	// forEaches are the forEach calls the root makes a loop of, by PC
 	// (forEachAt), decided in planning.
 	forEaches map[int]forEachPlan
@@ -1925,10 +1928,40 @@ func (b *builder) hostOf(pc int) bool {
 		// A call of Go (GoCall, Step), where the VM answers it.
 		return !b.goCalls()
 	case ir.Closure, ir.CloseUpvalues:
-		// A call of Go (GoClosure, GoClose), on the function's own frame.
-		return b.cur != b.root || !b.goCalls()
+		// A call of Go (GoClosure, GoClose), on the function's own frame --
+		// a closure's with a keep cell for it (closureKeep).
+		if b.cur != b.root || !b.goCalls() {
+			return true
+		}
+		if b.p.Code[pc].Op == ir.Closure {
+			_, ok := b.closureKeep(pc)
+			return !ok
+		}
 	}
 	return false
+}
+
+// closureKeep is the keep cell the closure the root's code makes at pc is
+// kept in, or false for one Go makes at an exit. The cell is taken the
+// first time planning asks (host), as a literal's is (literal): taken only
+// when the closure was built -- after the calls planned before it had
+// taken theirs -- it could be one too many, the closure then left to an
+// exit where planning had made none, and made by no one, its local left
+// as it was: undefined, which a call of it then called.
+func (b *builder) closureKeep(pc int) (int, bool) {
+	if k, ok := b.closureKeeps[pc]; ok {
+		return k, k >= 0
+	}
+	k := -1
+	if b.f.Keeps < b.f.keepLimit() {
+		k = b.f.Keeps
+		b.f.Keeps++
+	}
+	if b.closureKeeps == nil {
+		b.closureKeeps = map[int]int{}
+	}
+	b.closureKeeps[pc] = k
+	return k, k >= 0
 }
 
 // derivedReturnExits reports whether in, a return of the root's, is a
@@ -2884,11 +2917,15 @@ func (b *builder) goFrame(blk *Block, pc int, in ir.Instruction, guard func(Op, 
 		}
 	}
 	b.f.cache(call).Calls, call.Index = []*CallSite{site}, b.f.Keeps
-	if in.Op == ir.CloseUpvalues && b.f.Keeps >= b.f.keepLimit() {
+	switch {
+	case in.Op == ir.Closure:
+		// The cell planning took for it (closureKeep).
+		call.Index, _ = b.closureKeep(pc)
+	case b.f.Keeps >= b.f.keepLimit():
 		// A close writes no keep cell (the VM's GoClose): any one does,
 		// the first, when they are all taken.
 		call.Index = 0
-	} else {
+	default:
 		b.f.Keeps++
 	}
 	cell := b.f.newValue(blk, OpCallCell, Source, call)
@@ -4913,7 +4950,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			c.Const.Bits = uint64(w.WalkedCloseCell())
 		}
 	case ir.Closure, ir.CloseUpvalues:
-		if b.host(pc) || b.f.Keeps >= b.f.keepLimit() {
+		if b.host(pc) {
 			blk.ExitKind = ir.HostExit
 			blk.State = state()
 			blk.State.addUse()
