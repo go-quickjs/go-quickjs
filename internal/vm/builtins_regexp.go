@@ -771,19 +771,38 @@ func (r *Runtime) splitBuiltin(splitter Value, d *regexpData, j *subject, limit 
 	if r.abort != nil || r.ctx != nil && r.ctx.Done() != nil {
 		check = r.checkInterruptNow
 	}
-	// The pieces are gathered where a few of them cost nothing to keep,
-	// and copied into the array, which is made once.
-	var outRoom [16]Value
+	// Where the pieces are is gathered first, in the runtime's room for
+	// spans, a pair of indices for each -- -1 for a group that did not take
+	// part -- and the array made of them once they are all found: then its
+	// Strings, where two or more need one, are one allocation, and the array
+	// another (newPieces).
 	var lastRoom [8]int
-	out, last := outRoom[:0], lastRoom[:0]
+	spans, last := r.takeSpans(), lastRoom[:0]
 	done := func(err error) (Value, error) {
 		if len(last) > 0 {
 			r.recordLegacyMatch(d.legacy(), s, last)
 		}
 		if err != nil {
+			r.giveSpans(spans)
 			return Undefined, err
 		}
-		return Obj(r.newArrayFrom(out)), nil
+		arr := newArrayObject(r.proto.array, len(spans)/2)
+		elems := arr.elemsOf()
+		strs := newPieces(s, spans, 2)
+		for k := range elems {
+			lo, hi := spans[2*k], spans[2*k+1]
+			switch {
+			case lo < 0:
+				elems[k] = Undefined
+			case strs != nil && ownPiece(s, lo, hi):
+				elems[k] = Str(s.substringInto(&strs[0], lo, hi))
+				strs = strs[1:]
+			default:
+				elems[k] = Str(s.Substring(lo, hi))
+			}
+		}
+		r.giveSpans(spans)
+		return Obj(arr), nil
 	}
 	p, q := 0, 0
 	for q < size {
@@ -813,25 +832,25 @@ func (r *Runtime) splitBuiltin(splitter Value, d *regexpData, j *subject, limit 
 			q = j.advance(at, fullUnicode)
 			continue
 		}
-		out = append(out, Str(s.Substring(p, at)))
-		if int64(len(out)) == limit {
+		spans = append(spans, p, at)
+		if int64(len(spans)/2) == limit {
 			return done(nil)
 		}
 		p = e
 		// A capturing separator contributes its groups to the result.
 		for g := 2; g < len(caps); g += 2 {
-			c := Undefined
-			if caps[g] >= 0 && caps[g+1] >= 0 {
-				c = Str(s.Substring(caps[g], caps[g+1]))
+			lo, hi := caps[g], caps[g+1]
+			if lo < 0 || hi < 0 {
+				lo, hi = -1, -1
 			}
-			out = append(out, c)
-			if int64(len(out)) == limit {
+			spans = append(spans, lo, hi)
+			if int64(len(spans)/2) == limit {
 				return done(nil)
 			}
 		}
 		q = p
 	}
-	out = append(out, Str(s.Substring(p, size)))
+	spans = append(spans, p, size)
 	return done(nil)
 }
 

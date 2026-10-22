@@ -53,3 +53,17 @@ func TestRegExpMatchesRoom(t *testing.T) {
 		"k1,k22,k333,k4444,k5,k6,k7,k8,k9,k10,k11,k12,k13,k14,k15,k16,k17,k18,k19,k20;true;"+
 		"p|,|q|,|r|,|s|,|t|,|u|,|v|,|w|,|x|,|y|,|z|,|aa|,|bb|,|cc|,|dd|,|ee|,|ff|,|gg|,|hh|,|ii|,|jj;p|,;1;a|b|c")
 }
+
+// TestRegExpSplitPieces covers split's pieces, found before the array is
+// made of them, their Strings cut into one allocation: empty pieces and
+// whole ones, groups that did not take part, limits that cut a separator's
+// groups off, text past ASCII, an array grown after, and the legacy
+// statics of the last separator. Each answer is Node's.
+func TestRegExpSplitPieces(t *testing.T) {
+	checkEval(t, `var r = [];
+function show(a) { return JSON.stringify(a) + ":" + a.map(function (x) { return x === undefined ? "u" : x.length }).join(",") }
+r.push(show("a,b,,c".split(/,/)), show("a1b22c".split(/(\d)(\d)?/)), show("a1b22c".split(/(\d)(\d)?/, 3)), show("abc".split(/(?:)/)));
+r.push(show("é,ü,😀,x".split(/,/)), show("whole".split(/,/)), show(",a,".split(/,/)), show("a, b ,c".split(/\s*(,)\s*/, 4)));
+var keep = "p-q-r".split(/-/); keep.push("s"); r.push(show(keep), RegExp.lastMatch, RegExp.leftContext, RegExp.rightContext);
+r.join(";")`, `["a","b","","c"]:1,1,0,1;["a","1",null,"b","2","2","c"]:1,1,u,1,1,1,1;["a","1",null]:1,1,u;["a","b","c"]:1,1,1;["é","ü","😀","x"]:1,1,2,1;["whole"]:5;["","a",""]:0,1,0;["a",",","b",","]:1,1,1,1;["p","q","r","s"]:1,1,1,1;-;p-q;r`)
+}
