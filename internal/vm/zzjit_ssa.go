@@ -3742,6 +3742,12 @@ func (s *jitState) closeSSA(code *jit.SSACode, keep any) error {
 func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 	s := r.jit
 	idx := int(ctx.Level)
+	if jitGoInline(ctx) {
+		// Inside an inlined callee, which has no frame for what Go would
+		// run, nor its PC for what it would learn: the exit makes its
+		// frame, and the interpreter the call.
+		return false
+	}
 	if ctx.Live == abi.LiveCall {
 		return r.jitGoCallNested(ctx, idx)
 	}

@@ -19,7 +19,8 @@ import (
 // Set's get, has, set, add or delete, a WeakMap's or a WeakSet's
 // operations, Date.now, String(x) of a primitive; a write a site's cache
 // answers with a data property or an addition along its
-// transition, or of an array's length (jitPlainWrite). Each had cost a
+// transition, or an ordinary object's store it does not answer, or of an
+// array's length (jitPlainWrite). Each had cost a
 // call of Go its frame, its operands copied and cleared, its code pinned
 // and its learning asked, more than what the existing tiers spend on the
 // whole operation: microbench's map_set_int, map_set_string and
@@ -56,7 +57,7 @@ func (r *Runtime) jitGoCallPlain(ctx *abi.Context) bool {
 	switch in.Op {
 	case bytecode.OpSetProp:
 		// The instruction's names and caches are its code's closure's: the
-		// run's frame's, or a native callee's own.
+		// run's frame's, a native callee's own, or an inlined callee's.
 		s, idx := r.jit, int(ctx.Level)
 		if idx >= len(s.ssaCtxs) || s.ssaCtxs[idx] != ctx {
 			return false
@@ -72,6 +73,9 @@ func (r *Runtime) jitGoCallPlain(ctx *abi.Context) bool {
 			cl = (*closure)(ctx.Closure)
 		}
 		pc := int(ctx.ExitPC)
+		if st := jitGoCallState(ctx); st != nil && st.Inline != 0 {
+			cl, pc = r.jitGoInlined(ctx, cl, st.Inline), int(st.InlinePC)
+		}
 		if cl == nil || !jitGoPropertyAt(cl.fn, pc, in) || !r.jitPlainWrite(cl, cl.fn.Code[pc], jitGoArg(ctx, 0), jitGoArg(ctx, 1)) {
 			return false
 		}
@@ -81,12 +85,52 @@ func (r *Runtime) jitGoCallPlain(ctx *abi.Context) bool {
 		if v, ok = r.jitPlainCall(ctx, in, n); !ok {
 			return false
 		}
-		r.jitLeafSeen(ctx, in)
+		if st := jitGoCallState(ctx); st == nil || st.Inline == 0 {
+			r.jitLeafSeen(ctx, in)
+		}
 	default:
 		return false
 	}
 	*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
 	return true
+}
+
+// jitGoCallState is the description of the call of Go ctx makes
+// (abi.Context's GoLast), or nil for one that wrote what it passes itself.
+func jitGoCallState(ctx *abi.Context) *abi.GoCallState {
+	if ctx.GoLast == 0 {
+		return nil
+	}
+	return (*abi.GoCallState)(*(*unsafe.Pointer)(unsafe.Pointer(&ctx.GoLast)))
+}
+
+// jitGoInline reports whether the call of Go ctx makes is inside an
+// inlined callee (abi.GoCallState's Inline), which has no frame of the
+// VM's: Go makes it only without one (jitGoCallPlain).
+func jitGoInline(ctx *abi.Context) bool {
+	st := jitGoCallState(ctx)
+	return st != nil && st.Inline != 0
+}
+
+// jitGoInlined is the closure at addr, an inlined callee's, among those
+// the code making the call of Go in ctx inlines: the run's code's, or, for
+// level's closure cl, a native callee's -- or nil.
+func (r *Runtime) jitGoInlined(ctx *abi.Context, cl *closure, addr uintptr) *closure {
+	var inlined []*closure
+	switch s, idx := r.jit, int(ctx.Level); {
+	case ctx.Live == 0 && idx < len(s.goRuns):
+		inlined = s.goRuns[idx].inlined
+	case ctx.Live == abi.LiveCall && cl != nil:
+		if e := r.jitEntryOf(cl); e != nil {
+			inlined = e.ssaInlined
+		}
+	}
+	for _, x := range inlined {
+		if uintptr(unsafe.Pointer(x)) == addr {
+			return x
+		}
+	}
+	return nil
 }
 
 // jitPlainCall is the result of the call of a built-in among its operands
@@ -196,8 +240,10 @@ func (fb *jitFeedback) MapNexts() [2]uintptr {
 // setProp's fast path writes it; or what the site's cache answers for the
 // object's shape with a plain data property it has or an addition along
 // the cache's transition, as setPropCached makes it (storeCached) -- not a
-// setter's, which runs one. It reports false for any other, which it
-// leaves as it was.
+// setter's, which runs one; or, for a shape the cache does not hold, an
+// ordinary object's store where nothing up its chain says anything of the
+// key (jitStoreProp). It reports false for any other, which it leaves as
+// it was.
 func (r *Runtime) jitPlainWrite(cl *closure, in bytecode.Instr, obj, val Value) bool {
 	if !obj.IsObject() || int(in.A) >= len(cl.names) {
 		return false
@@ -219,19 +265,22 @@ func (r *Runtime) jitPlainWrite(cl *closure, in bytecode.Instr, obj, val Value) 
 	}
 	c := &cl.ic[in.B]
 	if o.shape != c.shape {
-		p := c.poly
-		if p == nil {
-			return false
-		}
-		c = nil
-		for i := range p.n {
-			if e := &p.entries[i]; e.shape == o.shape {
-				c = e
-				break
+		var p *propPoly
+		if p = c.poly; p != nil {
+			c = nil
+			for i := range p.n {
+				if e := &p.entries[i]; e.shape == o.shape {
+					c = e
+					break
+				}
 			}
 		}
-		if c == nil {
-			return false
+		if p == nil || c == nil {
+			// A shape the cache does not hold, a megamorphic site's: an
+			// ordinary object's property stored, or added, where nothing
+			// up its chain says anything of it (jitStoreProp), as the
+			// interpreter's write would after its cache's miss.
+			return o.class == ClassObject && o != r.global && r.jitStoreProp(o, key, val, true, false)
 		}
 	}
 	if c.next == setterNext {

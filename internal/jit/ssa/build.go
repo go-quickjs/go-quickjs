@@ -5265,7 +5265,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 		f.setProperty(v, nil, cases, site.Add, site.Adds)
 		if site.Megamorphic {
 			f.cache(v).Mega = true
-			if in.Op == ir.PropertyWrite && !in.Private && (site.Add == nil || !site.Add.Define) && b.cur == b.root && b.goCalls() && f.Keeps < f.keepLimit() {
+			if in.Op == ir.PropertyWrite && !in.Private && (site.Add == nil || !site.Add.Define) && b.goCalls() && f.Keeps < f.keepLimit() {
 				// What neither the receiver's own table nor the megamorphic
 				// cache has -- a property the write adds, an object of a
 				// shape it never met -- Go writes, on a branch of its own
@@ -5277,7 +5277,16 @@ func (b *builder) instruction(blk *Block, pc int) {
 				// that makes it, and none where the store is native. Each
 				// miss had left native code: RayTrace's testIntersection, at
 				// best.hitCount, best one of the intersections' many shapes,
-				// at a call in eleven, the interpreter finishing it.
+				// at a call in eleven, the interpreter finishing it. Inside
+				// an inlined callee too, where Go makes it only as it needs
+				// no frame (abi.GoCallState's Inline) -- an addition to an
+				// ordinary object, a data property's store, an array's
+				// length -- and leaves otherwise, as the write had at each:
+				// Typescript's AST nodes, of a class each, constructed
+				// through ASTSpan's constructor, inlined in theirs, whose
+				// this.minChar = -1 met a new shape at nearly every one; a
+				// length's write, rd.actuals.length = 0, which no site's
+				// cache holds.
 				st, recv := v.State, operand(in.Left)
 				v.Type = Bool
 				miss, _ := b.splitOn(blk, v)

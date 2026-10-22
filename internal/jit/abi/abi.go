@@ -515,6 +515,16 @@ type GoCallState struct {
 	// and noted for the code's next compile (ssa.LeafFeedback), which
 	// makes it a call of its own (ssa.GoLeaf): once a call.
 	LeafSeen bool
+	// Inline, for a call (GoCall) inside an inlined callee (ssa's
+	// InlineState), is the callee's closure's address, and InlinePC the PC
+	// in it of the instruction the call makes, whose names and caches are
+	// its closure's: PC and Depth are its caller's at the call. Go makes
+	// such a call only where it needs no frame of the VM's -- none of the
+	// inlined frames has one -- and refuses any other, which leaves, the
+	// exit making the frames (ssa.InlineState). 0 for a call of the code's
+	// own.
+	Inline   uintptr
+	InlinePC uint32
 }
 
 // GoCallArg is a GoCallState's operand, the i'th, laid out for Go to read

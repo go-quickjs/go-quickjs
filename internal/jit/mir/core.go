@@ -1914,6 +1914,11 @@ func (c *core) goState(op uint64, keep int, v *ssa.Value, args []*ssa.Value) (*a
 		UpvalueSlot: enc.UpvalueSlot, True: enc.True, False: enc.False, NaN: enc.CanonicalNaN}
 	if v != nil && ssa.GoOp(op&0xff) == ssa.GoCall {
 		st.SetsPC, st.PC, st.Depth = true, uint32(v.State.PC), uint32(v.State.Depth)
+		if in := v.State.Inline; in != nil {
+			// Inside an inlined callee: its instruction, which Go makes
+			// without a frame or not at all.
+			st.Inline, st.InlinePC = in.Closure, in.PC
+		}
 	}
 	c.goCalls = append(c.goCalls, st)
 	if len(args) == 0 {

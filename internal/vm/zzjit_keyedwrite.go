@@ -59,7 +59,6 @@ func (r *Runtime) jitKeyedWrite(o, k, v Value, store bool) bool {
 	if err != nil {
 		return false
 	}
-	const plain = propAccessor | propPrivate | propDeleted | propUninit | propWritable
 	if key.IsIndex() {
 		if i := key.Index(); uint(i) < uint(len(obj.elemsOf())) && !isHole(obj.elemsOf()[i]) {
 			if store {
@@ -68,6 +67,20 @@ func (r *Runtime) jitKeyedWrite(o, k, v Value, store bool) bool {
 			return true
 		}
 	}
+	return r.jitStoreProp(obj, key, v, store, true)
+}
+
+// jitStoreProp is obj.key = v, obj an ordinary object (ClassObject) whose
+// elements jitKeyedWrite has asked for an index key, where storing it runs
+// nothing and throws nothing, made if store is set, or only asked, as
+// jitKeyedWrite says: its own writable data property, or a new property of
+// an object that may be extended, nothing up its chain saying anything of
+// the key but a writable data property it shadows. A keyed store's addition
+// makes the object a dictionary past the soft limit (shapeAdded), as
+// setIndexed's does; a named one's, set_prop's, takes the shared
+// transition. It reports false for any other, which it leaves as it was.
+func (r *Runtime) jitStoreProp(obj *Object, key Atom, v Value, store, keyed bool) bool {
+	const plain = propAccessor | propPrivate | propDeleted | propUninit | propWritable
 	if i := obj.findOwn(key); i >= 0 {
 		if obj.shape.keys[i].flags&plain != propWritable {
 			return false
@@ -112,7 +125,7 @@ func (r *Runtime) jitKeyedWrite(o, k, v Value, store bool) bool {
 	if key.IsIndex() && len(obj.elemsOf()) > 0 && uint(key.Index()) <= uint(len(obj.elemsOf())) && obj.setElem(key.Index(), v) {
 		return true
 	}
-	if t := r.shapes; t != nil && !key.IsIndex() {
+	if t := r.shapes; t != nil && !key.IsIndex() && keyed {
 		was := t.keyed
 		t.keyed = obj
 		obj.appendProp(Property{key: key, flags: propDefault, value: v})

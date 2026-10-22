@@ -532,3 +532,60 @@ func TestJITInlinesConstructionsFirst(t *testing.T) {
 		t.Errorf("paint made %d calls of Go in 1,000 constructions", n)
 	}
 }
+
+// A megamorphic site's write inside an inlined callee -- an addition the
+// megamorphic cache does not hold, an array's length -- is Go's from
+// native code where Go needs no frame for it (abi.GoCallState's Inline,
+// jitGoCallPlain), as the root's own is: Typescript's new ASTSpan(),
+// whose this.minChar = -1 its subclasses' constructions, through
+// _super.call(this), made megamorphic, and rd.actuals.length = 0, had left
+// native code at each, the interpreter finishing the inlined frames, until
+// the calls were inlined no more. A write Go does need a frame for -- a
+// setter's, a length that may not be written -- leaves as before, the
+// interpreter making it in the inlined frame: each answer, a stack trace
+// through the inlined constructor included, is the interpreter's.
+func TestJITInlinedMegamorphicWrites(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	inlined := jitInlinedForTest(t)
+	setup := `
+		'use strict'
+		function Span() { this.min = -1; this.lim = -1 }
+		var names = []
+		for (let i = 0; i < 24; i++) names.push('p' + i)
+		function viaCall(n) { let s = 0; for (let i = 0; i < n; i++) { const o = {}; o[names[i % 24]] = i; Span.call(o); s += o.min } return s }
+		function RD() { this.a = []; this.b = [] }
+		function reset(rd) { rd.a.length = 0; rd.b.length = 0 }
+		function spans(n, rd) { let s = 0; for (let i = 0; i < n; i++) { const sp = new Span(); sp.lim = i; s += sp.min + sp.lim; rd.a.push(i); reset(rd); s += rd.a.length + rd.b.length } return s }
+		var rd = new RD()
+		function guarded(n, rd) { try { return spans(n, rd) } catch (e) { return e.name + ': ' + e.message + ' | ' + e.stack.split('\n').slice(0, 4).join(' | ') } }
+	`
+	both := jitBothForTest(t, setup)
+	r := both.jit
+	for range 4 {
+		both.agree(t, `viaCall(400)`)
+	}
+	for range 6 {
+		both.agree(t, `spans(400, rd)`)
+	}
+	span, reset := jitClosureForTest(t, r, `Span`), jitClosureForTest(t, r, `reset`)
+	if !slices.Contains(inlined["spans"], span) || !slices.Contains(inlined["spans"], reset) {
+		t.Fatalf("spans inlines %x, not Span %x and reset %x", inlined["spans"], span, reset)
+	}
+	sp := jitNativeForTest(t, r, "spans")
+	hosts, entries := sp.ssaStats.hosts, sp.ssaStats.entries
+	both.agree(t, `spans(400, rd)`)
+	if sp.ssaStats.entries == entries {
+		t.Fatalf("spans's code was not entered: slow %v", sp.entrySlow)
+	}
+	if n := sp.ssaStats.hosts - hosts; n != 0 {
+		t.Errorf("spans left native code %d times", n)
+	}
+	// Writes Go needs a frame for: a setter up the chain, which throws at
+	// the hundredth, and a length that may not be written.
+	both.script(t, `var seen = 0; Object.defineProperty(Span.prototype, 'lim', { set(v) { if (++seen === 100) throw new RangeError('lim ' + v); this._lim = v }, get() { return this._lim | 0 }, configurable: true })`)
+	both.agree(t, `guarded(400, rd)`, `seen`, `guarded(50, rd)`)
+	both.script(t, `delete Span.prototype.lim; Object.defineProperty(rd.b, 'length', { writable: false })`)
+	both.agree(t, `guarded(400, rd)`, `rd.a.length + ':' + rd.b.length`, `guarded(400, new RD())`)
+}

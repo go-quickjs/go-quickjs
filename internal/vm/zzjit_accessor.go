@@ -261,14 +261,17 @@ func (fb *jitFeedback) megamorphic(pc int, site ssa.PropertySite) bool {
 		return true
 	}
 	if in := fb.fn.Code[pc]; int(in.B) < len(fb.cl.ic) && fb.cl.ic[in.B].fills >= maxCacheFills {
-		// But an inlined callee's write whose cache gave up for additions
-		// along chains deeper than it holds, which it noted and the site
-		// is compiled for (seenAdds) -- an initializer a class and its
-		// subclasses share -- as V8's code is compiled for the maps it met:
-		// another receiver deoptimizes.
-		if c := &fb.cl.ic[in.B]; fb.root == nil || in.Op != bytecode.OpSetProp || c.seen == nil || len(c.seen.deep) == 0 || len(site.Adds) == 0 {
-			return true
-		}
+		// An inlined callee's write whose cache gave up for additions
+		// along chains deeper than it holds, which it noted, is compiled
+		// for them (seenAdds) -- an initializer a class and its subclasses
+		// share -- and is megamorphic all the same, as the callee's own
+		// code is: another receiver is Go's from native code, as the
+		// root's write's miss is (ssa's OpPropWrite). Typescript's ASTSpan,
+		// whose subclasses' constructors call it through _super.call(this),
+		// is constructed itself too, new ASTSpan(), inlined: its own
+		// objects, of none of the subclasses' shapes, had left native code
+		// at each.
+		return true
 	}
 	if in := fb.fn.Code[pc]; int(in.B) < len(fb.cl.ic) {
 		if c := &fb.cl.ic[in.B]; c.shape == dictShape || c.cell != nil {
