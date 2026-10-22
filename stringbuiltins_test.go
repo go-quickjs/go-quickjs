@@ -196,6 +196,27 @@ var stringBuiltinCases = []struct{ src, want string }{
 	{`String.fromCharCode.apply(null, Array(100).fill(0xE9)).charCodeAt(99)`, `number 233`},
 	{`String.fromCharCode.apply(null, Array.from({ length: 200 }, (_, i) => i % 2 ? 0xDE00 : 0xD83D)) === "\ud83d\ude00".repeat(100)`, `boolean true`},
 	{`String.fromCharCode.apply(null, Array.from({ length: 300 }, (_, i) => 32 + i % 90)).slice(-3)`, `";<="`},
+	// concat: every argument converted in turn and joined, the halves of a
+	// pair where two meet.
+	{`"a".concat()`, `"a"`},
+	{`"a".concat("b", 1, true, null, undefined)`, `"ab1truenullundefined"`},
+	{`"a".concat(1.5, -0, NaN, 1e21, 2 ** 40)`, `"a1.50NaN1e+211099511627776"`},
+	{`"\ud83d".concat("\ude00") === "\ud83d\ude00"`, `boolean true`},
+	{`"\ud83d".concat("\ude00").length`, `number 2`},
+	{`"x\ud83d".concat("\ude00", "\ud83d", "\ude00y") === "x\ud83d\ude00\ud83d\ude00y"`, `boolean true`},
+	{`"x\ud83d".concat("\ude00", "\ud83d", "\ude00y").codePointAt(3)`, `number 128512`},
+	{`"\u00e9".concat("\u00e9", 1)`, `"\u00e9\u00e91"`},
+	{`"x".concat("\ud83d", "") + "\ude00" === "x\ud83d\ude00"`, `boolean true`},
+	{`"\ud83d" + "".concat("", "\ude00", "y") === "\ud83d\ude00y"`, `boolean true`},
+	{`"".concat("", "")`, `""`},
+	{`"x".repeat(300).concat("y").length`, `number 301`},
+	{`"x".repeat(100).concat("y", "z").slice(-3)`, `"xyz"`},
+	{`"x".repeat(30).concat("y".repeat(30), "\u00e9".repeat(30)).slice(28, 33)`, `"xxyyy"`},
+	{`"a".concat(...Array(20).fill("bc")).length`, `number 41`},
+	{`(function () { var o = []; var r = "a".concat({ toString() { o.push(1); return "b" } }, { toString() { o.push(2); return "c" } }); return r + o })()`, `"abc1,2"`},
+	{`"a".concat(Symbol())`, `TypeError`},
+	{`String.prototype.concat.call(1, 2)`, `"12"`},
+	{`(function () { var s = "a".repeat(1 << 20); for (var i = 0; i < 8; i++) s += s; var o = []; try { s.concat(s, { toString() { o.push(1); return "" } }) } catch (e) { o.push(e.name) } return o.join() })()`, `"RangeError"`},
 }
 
 // TestStringBuiltinsMatchNode pins String's methods to Node's answers,

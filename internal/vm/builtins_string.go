@@ -433,16 +433,64 @@ func (r *Runtime) initStringBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
+		if len(args) == 0 {
+			return Str(s), nil
+		}
+		// The arguments are converted in order, a length past a string's
+		// refused where it is reached. A short result is written once,
+		// into its own allocation, as Concat writes one of two parts:
+		// joined a pair at a time, each join had made a String. A long one,
+		// or one that joins the halves of a pair, is joined a pair at a
+		// time as + joins them.
+		var buf [8]*String
+		parts := buf[:0]
+		if len(args) >= len(buf) {
+			parts = make([]*String, 0, len(args)+1)
+		}
+		parts = append(parts, s)
+		n, size, pairs := s.length, s.byteLenShallow(), false
 		for _, a := range args {
 			o, err := rt.toString(a)
 			if err != nil {
 				return Undefined, err
 			}
-			if s, err = rt.concat(s, o); err != nil {
-				return Undefined, err
+			if n += o.length; n > maxStringLength {
+				return Undefined, rt.throwStringLength()
 			}
+			if size < ropeThreshold {
+				size += o.byteLenShallow()
+			}
+			pairs = pairs || parts[len(parts)-1].endsHigh && o.startsLow
+			parts = append(parts, o)
 		}
-		return Str(s), nil
+		if n == 0 {
+			return Str(emptyString), nil
+		}
+		if size >= ropeThreshold || pairs {
+			out := s
+			for _, o := range parts[1:] {
+				if out, err = rt.concat(out, o); err != nil {
+					return Undefined, err
+				}
+			}
+			return Str(out), nil
+		}
+		out, b := newFlatBytes(size)
+		w, ascii := 0, true
+		for _, o := range parts {
+			if o.length == 0 {
+				continue
+			}
+			if w == 0 {
+				out.startsLow = o.startsLow
+			}
+			w += copy(b[w:], o.s)
+			out.endsHigh = o.endsHigh
+			ascii = ascii && o.ascii
+		}
+		out.setBytes(b)
+		out.length, out.ascii = n, ascii
+		return Str(out), nil
 	})
 
 	r.defMethod(p, "repeat", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
