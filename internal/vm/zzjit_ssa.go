@@ -3209,6 +3209,12 @@ func jitHostCall(ctx *abi.Context) bool {
 		return r.jitLeafCall(ctx)
 	case ssa.GoAdd:
 		a, b := jitGoArg(ctx, 0), jitGoArg(ctx, 1)
+		if r.meter == nil {
+			if v, ok := r.jitConcatAdd(a, b); ok {
+				*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
+				return true
+			}
+		}
 		// Primitives, and nothing that throws: an object's conversion may
 		// call anything, and making an error may too (a getter of
 		// Error.stackTraceLimit) -- a symbol's, a BigInt's with a number,
@@ -4699,6 +4705,32 @@ func (r *Runtime) jitCloseRetired() {
 	}
 	clear(s.retired[len(kept):])
 	s.retired = kept
+}
+
+// jitConcatAdd is native code's + (ssa.GoAdd) of two strings, or of a
+// string and a number of an integer's string, as add makes it -- the
+// concatenation, without the conversions and checks add makes first for
+// anything else -- and false for any other, or a string too long, which
+// add's path then has.
+func (r *Runtime) jitConcatAdd(a, b Value) (Value, bool) {
+	switch {
+	case a.IsString() && b.IsString():
+		sa, sb := a.String(), b.String()
+		if sa.length+sb.length > maxStringLength-64 {
+			return Undefined, false
+		}
+		// What concat does where no meter counts.
+		return Str(sa.Concat(sb)), true
+	case a.IsString() && b.IsNumber():
+		if s, ok := r.concatInt(a.String(), b.num, false); ok {
+			return Str(s), true
+		}
+	case b.IsString() && a.IsNumber():
+		if s, ok := r.concatInt(b.String(), a.num, true); ok {
+			return Str(s), true
+		}
+	}
+	return Undefined, false
 }
 
 // jitPlainOperand reports whether v is a primitive + takes without a

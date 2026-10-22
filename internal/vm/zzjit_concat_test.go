@@ -5,6 +5,7 @@ package vm
 import (
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
@@ -135,6 +136,52 @@ func TestJITLongConcats(t *testing.T) {
 			if got := v.String().Go(); got != rd[1] {
 				t.Errorf("%s = %s, want Node's %s", rd[0], got, rd[1])
 			}
+		}
+	}
+}
+
+// addSetup's loop makes +'s of strings and numbers one at a time, each a
+// call of Go from native code (ssa.GoAdd): a string and a number either
+// way round, a number and the empty string, two strings -- numbers of
+// every kind of string (-0, past 1023, past 2^53, 1e21, a fraction, NaN,
+// the infinities) and strings of one byte, of two-byte units and long.
+const addSetup = `
+var nums = [0, -0, 7, -7, 1023, 1024, 2 ** 53 - 1, 2 ** 53, 1e21, 0.5, -1.5, NaN, Infinity, -Infinity, 123456789012]
+var strs = ['', 'ab', 'é', '日本', 'x'.repeat(30)]
+function addLoop(n) { let h = 0, a = '', b = '', c = '', d = '', e = ''; for (let i = 0; i < n; i++) { const x = nums[i % nums.length], s = strs[i % strs.length]; a = s + x; b = x + s; c = x + ''; d = '' + x; e = s + s; h = (h * 31 + a.length + b.length * 3 + c.length * 5 + d.length * 7 + e.length * 11 + a.charCodeAt(0) + b.charCodeAt(b.length - 1)) | 0 } return h + ':' + a + ',' + b + ',' + c + ',' + d + ',' + e }
+`
+
+// Native code's + of two strings, or of a string and a number, is the
+// concatenation Go makes without add's conversions (jitConcatAdd): each
+// answer is Node's (v26.10.0) and the interpreter's, and the loop's code
+// makes its +'s by calls of Go.
+func TestJITConcatAdd(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	var rounds []string
+	for range 6 {
+		rounds = append(rounds, "addLoop(300)", "addLoop(301)", "addLoop(17)")
+	}
+	r := jitAgreesForTest(t, addSetup, rounds...)
+	e := jitNativeForTest(t, r, "addLoop")
+	adds := 0
+	for _, st := range e.ssa.GoCallStates() {
+		if ssa.GoOp(st.Op&0xff) == ssa.GoAdd {
+			adds++
+		}
+	}
+	if adds == 0 {
+		t.Error("addLoop's code makes no + by a call of Go")
+	}
+	for src, want := range map[string]string{
+		"addLoop(300)": "129195200:" + strings.Repeat("x", 30) + "123456789012,123456789012" + strings.Repeat("x", 30) + ",123456789012,123456789012," + strings.Repeat("x", 60),
+		"addLoop(301)": "-289915984:0,0,0,0,",
+		"addLoop(17)":  "-1295841136:ab0,0ab,0,0,abab",
+	} {
+		v, err := r.Run(compileForTest(t, src))
+		if err != nil || v.String().Go() != want {
+			t.Errorf("%s = %v, %v; want Node's %s", src, v, err, want)
 		}
 	}
 }
