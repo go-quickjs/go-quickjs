@@ -140,7 +140,13 @@ func (w *Workspace) arenaBytes() int {
 func CompileIn(w *Workspace, f *ssa.Func, enc abi.Encoding) (*Code, error) {
 	w.init()
 	if runtime.GOARCH == "arm64" {
-		return compileARM64(w, f, enc)
+		c, err := compileARM64(w, f, enc)
+		if c != nil && Annotate {
+			// The SSA compiled, as amd64's code has it; arm64's code has
+			// no marks.
+			c.Listing = f.String()
+		}
+		return c, err
 	}
 	return compileAMD64(w, f, enc)
 }

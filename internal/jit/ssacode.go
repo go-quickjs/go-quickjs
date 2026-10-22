@@ -73,6 +73,11 @@ func NewSSACode(a *Arena, c *mir.Code) (*SSACode, error) {
 	return s, nil
 }
 
+// Text is the code where it runs, its constants past its instructions
+// (mir.Code's Text): for a profiler of native code, which maps an address
+// to an offset in it. It must not be written.
+func (s *SSACode) Text() []byte { return s.code }
+
 // GoCallStates is the descriptions of the code's calls of Go
 // (abi.Context's GoState), which the code holds: what the VM's leaf keeps
 // its account of a call in (abi.GoCallState's BigScore), which a test

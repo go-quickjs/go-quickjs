@@ -233,6 +233,22 @@ does not fit; `-jitmem 0` runs with the default.
 go run -tags quickjs_jit ./internal/cmd/v8bench -jit -jitreport -bench awfy -dir /tmp/awfy -fetch -mode fixed -n 1
 ```
 
+What native code spends its time on, pprof cannot say: its samples there
+have no symbol. `-jitcode FILE` writes every function's code as it is
+compiled, with what the backend emitted each stretch of it for (a value
+and its operation, a block's end, an edge, a cold path, an exit), and
+`jitprof`, in the encoder verifier's module, joins it with a CPU
+profile: the native samples by operation, by function, and the hottest
+functions' instructions, disassembled (`-full` for all of them,
+`-listing` for their SSA). amd64 only. Profile runs of ten seconds or
+more: the profiler takes a hundred samples a second.
+
+```sh
+go run -tags quickjs_jit ./internal/cmd/v8bench -jit -bench awfy -dir /tmp/awfy -suite List -mode fixed -n 40 \
+  -jitcode /tmp/list.jsonl -cpuprofile /tmp/list.cpu
+(cd internal/jit/verify && go run ./cmd/jitprof -code /tmp/list.jsonl /tmp/list.cpu)
+```
+
 `-mode micro` runs QuickJS's micro-benchmarks, `internal/v8bench/microbench.js`
 (QuickJS's `tests/microbench.js`, kept as it is there), and ours beside it,
 `microbench_extra.js`, of what it has none of -- generators, async

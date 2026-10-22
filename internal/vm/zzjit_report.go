@@ -9,6 +9,7 @@ import (
 	"weak"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/jit/mir"
 )
 
 // JITFunction is what the JIT did with one function, as JITReport lists
@@ -35,6 +36,14 @@ type JITFunction struct {
 	Native, Declined, Hosts, Guards, Ended, GoCalls, Work uint64
 	Reopts                                                int
 }
+
+// JITCodeHook, if set, is called with each function's native code as it
+// is placed: the function, the code's instructions where they run, and
+// what the backend made them from (mir.Code's Marks and Listing, while
+// mir.Annotate is set) -- for a profiler of native code, which maps a
+// sample's address to an instruction. Set it before any runtime compiles;
+// it is called on the runtime's goroutine.
+var JITCodeHook func(f JITFunction, text []byte, code *mir.Code)
 
 // SetJITReport has the JIT note, for JITReport, the functions it does not
 // try to compile: too long, or too large for its memory. What it compiles

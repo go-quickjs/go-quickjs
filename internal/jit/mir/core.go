@@ -175,6 +175,11 @@ type Code struct {
 	// Exits are the descriptions the code's exits name by address
 	// (abi.ExitDescriptor), which whoever holds the code keeps alive.
 	Exits []*abi.ExitDescriptor
+	// Marks say what each stretch of Bytes was emitted for, in the order
+	// of their offsets, and Listing is the SSA compiled: both only while
+	// Annotate is set, for a profiler of native code.
+	Marks   []Mark
+	Listing string
 	// core is the compiler's state, for Locations.
 	core *core
 }

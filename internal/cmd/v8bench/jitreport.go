@@ -3,14 +3,18 @@
 package main
 
 import (
+	"bufio"
 	"cmp"
+	"encoding/json"
 	"fmt"
 	"os"
 	"slices"
 	"strconv"
+	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/hostaccess"
 	"github.com/go-quickjs/go-quickjs/internal/jit"
+	"github.com/go-quickjs/go-quickjs/internal/jit/mir"
 	"github.com/go-quickjs/go-quickjs/internal/vm"
 )
 
@@ -29,10 +33,58 @@ var jitReport struct {
 	funcs map[string]vm.JITFunction
 }
 
-// reportStart has the runtime's JIT note what it skips, for the report.
+// reportStart has the runtime's JIT note what it skips, for the report,
+// and write its code, for -jitcode.
 func reportStart(r runtimeOf) {
 	if *jitReportFlag {
 		hostaccess.VM(r.rt).SetJITReport(true)
+	}
+	if *jitCodeFlag != "" && vm.JITCodeHook == nil {
+		startCodeDump(*jitCodeFlag)
+	}
+}
+
+// jitCode is a line of -jitcode's file: a function's native code as it was
+// placed -- where it runs (Addr), its bytes, how many of them are
+// instructions (Text) -- and what the backend made each stretch of it for
+// (mir.Mark), with the SSA it compiled. Seq orders the compiles: code
+// flushed leaves its addresses to code placed after it.
+type jitCode struct {
+	Seq          int
+	Name, Script string
+	Line         int
+	Addr         uint64
+	Text         int
+	Bytes        []byte
+	Marks        []mir.Mark
+	Listing      string
+}
+
+// startCodeDump has the JIT write every function's code to path as it is
+// compiled, a JSON line each, until the process exits.
+func startCodeDump(path string) {
+	f, err := os.Create(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "v8bench:", err)
+		os.Exit(1)
+	}
+	w := bufio.NewWriter(f)
+	enc := json.NewEncoder(w)
+	mir.Annotate = true
+	seq := 0
+	vm.JITCodeHook = func(fn vm.JITFunction, text []byte, c *mir.Code) {
+		seq++
+		rec := jitCode{Seq: seq, Name: fn.Name, Script: fn.Script, Line: fn.Line, Text: c.Text, Bytes: text, Marks: c.Marks, Listing: c.Listing}
+		if len(text) > 0 {
+			rec.Addr = uint64(uintptr(unsafe.Pointer(&text[0])))
+		}
+		if err := enc.Encode(rec); err != nil {
+			fmt.Fprintln(os.Stderr, "v8bench: -jitcode:", err)
+			os.Exit(1)
+		}
+		// Flushed at each, so that what a run that ends by os.Exit wrote
+		// is all there.
+		w.Flush()
 	}
 }
 

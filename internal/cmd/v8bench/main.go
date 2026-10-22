@@ -35,6 +35,7 @@ var (
 	jitFlag       = flag.Bool("jit", false, "enable the optional native numeric tier")
 	jitReportFlag = flag.Bool("jitreport", false, "after each benchmark, print what the JIT compiled, refused and skipped (fixed and micro modes, with -jit)")
 	jitMemFlag    = flag.Int("jitmem", 32, "the JIT's memory budget in MiB, with -jit; 0 for the runtime's default (8 MiB)")
+	jitCodeFlag   = flag.String("jitcode", "", "write each function's native code to this file as it is compiled, as JSON lines, for internal/jit/verify's jitprof (with -jit)")
 )
 
 func (engine) Compile(name, src string) error {

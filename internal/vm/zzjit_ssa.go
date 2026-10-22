@@ -1986,6 +1986,9 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 	if err != nil {
 		return nil, nil, err
 	}
+	if JITCodeHook != nil {
+		JITCodeHook(jitFunctionOf(fn), code.Text(), mc)
+	}
 	// What the entry holds, its function's program and the lowering that
 	// holds it (jitLowering, its own bytes too), and its link, which the
 	// entry makes before it is compiled (linkFor): the room a compile asks

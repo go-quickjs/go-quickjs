@@ -117,6 +117,8 @@ type compiler struct {
 	// generator entry (ssa.Func's GenEntry).
 	genDone     amd64.Label
 	genDoneUsed bool
+	// ann is what each stretch of the code is for, while Annotate is set.
+	ann *annotation
 }
 
 // goFail is a call of Go's description, where it goes on (back), and
@@ -158,6 +160,9 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 		return nil, err
 	}
 	c := &compiler{core: k, consts: enc.ConstWords()}
+	if Annotate {
+		c.ann = &annotation{}
+	}
 	c.stubAt = k.ints(2 * f.NumStates())
 	if w != nil {
 		g := &w.amd64
@@ -183,9 +188,13 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 			// Native callers' entry, which makes the frame and goes on at
 			// the start.
 			callAt = c.a.Len()
+			c.mark("call entry")
 			c.callEntry()
 		}
 		c.a.Bind(c.labels[b.ID])
+		if c.ann != nil {
+			c.mark(fmt.Sprintf("b%d", b.ID))
+		}
 		if b.PC < 0 {
 			for _, e := range f.Entries {
 				if e.Block == b {
@@ -202,60 +211,74 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 	for i := 0; i < len(c.stubFor); i++ {
 		s := c.stubFor[i]
 		c.a.Bind(s.label)
+		c.mark("exit")
 		c.exitTo(s.key.state, s.key.kind)
 	}
 	stubs := len(c.stubFor)
 	for i := 0; i < len(c.cold); i++ {
+		c.markCold(i)
 		c.cold[i]()
 	}
+	c.tagCold()
 	// Cold code's guards' exits.
 	for i := stubs; i < len(c.stubFor); i++ {
 		s := c.stubFor[i]
 		c.a.Bind(s.label)
+		c.mark("exit")
 		c.exitTo(s.key.state, s.key.kind)
 	}
 	// Last: cold code's exits may come here too.
 	if c.tailUsed {
 		c.a.Bind(c.tail)
+		c.mark("routine tail")
 		c.recordsTail()
 	}
 	if c.tableUsed {
 		c.a.Bind(c.table)
+		c.mark("routine table")
 		c.tableExit()
 	}
 	if c.enterUsed {
 		c.a.Bind(c.enter)
+		c.mark("routine enter")
 		c.enterExit()
 	}
 	if c.resumeUsed {
 		resumeAt = c.a.Len()
+		c.mark("routine resume")
 		c.resumeCall()
 	}
 	genAt := -1
 	if c.f.GenEntry {
 		genAt = c.a.Len()
+		c.mark("routine genEntry")
 		c.genEntry()
 	}
 	if c.genDoneUsed {
 		c.a.Bind(c.genDone)
+		c.mark("routine genDone")
 		c.genFinish()
 	}
 	if c.appendingUsed {
 		c.a.Bind(c.appending)
+		c.mark("routine appending")
 		c.appendingCall()
 	}
 	if c.refStoringUsed {
 		c.a.Bind(c.refStoring)
+		c.mark("routine refStoring")
 		c.refStoringCall()
 	}
 	if c.liveUsed {
 		c.a.Bind(c.live)
+		c.mark("routine live")
 		c.liveCall(c.enc.CallGo)
 	}
 	if c.bigLiveUsed {
 		// A call the leaf has given up (abi.GoCallState's BigOff) goes the
 		// way any other does.
 		c.a.Bind(c.bigLive)
+		c.mark("routine bigLive")
 		c.a.LoadU8(scratchB, scratchC, abi.OffGoCallBigOff)
 		c.a.Op(amd64.Test, scratchB, scratchB, false)
 		c.a.Jcc(amd64.CondNE, c.live)
@@ -264,15 +287,18 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 	if c.callingUsed {
 		// Laid out just before saving, which it goes on to.
 		c.a.Bind(c.calling)
+		c.mark("routine calling")
 		c.a.Store(regCtx, abi.OffGoState, scratchC)
 		c.a.Store(regCtx, abi.OffGoSite, scratchA)
 	}
 	if c.savingUsed {
 		c.a.Bind(c.saving)
+		c.mark("routine saving")
 		c.savingCall()
 	}
 	// Last: the code's own constants (movImm), past every instruction.
 	text := c.a.Len()
+	c.mark("constants")
 	for _, k := range c.pool {
 		c.a.Bind(k.label)
 		c.a.Quad(k.v)
@@ -299,8 +325,9 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 		genAt = c.a.Moved(genAt)
 	}
 	c.finishExits()
+	marks, listing := c.finishMarks()
 	return &Code{Bytes: bytes, Entries: entries, CallEntry: callAt, Resume: resumeAt, GenEntry: genAt, Text: c.a.Moved(text), Exits: c.exits,
-		Calls: c.calls, CallRefs: c.callRefs(), GoCalls: c.goCalls, core: c.core}, nil
+		Calls: c.calls, CallRefs: c.callRefs(), GoCalls: c.goCalls, Marks: marks, Listing: listing, core: c.core}, nil
 }
 
 // movImm sets dst to the word v: a load of the context's copy where v is
@@ -4128,8 +4155,14 @@ func (c *compiler) block(b *ssa.Block, next *ssa.Block) {
 		if v.Op == ssa.OpPhi || c.isLazy(v) {
 			continue
 		}
+		c.markValue(v)
 		c.value(v, b)
+		c.tagCold()
 	}
+	if c.ann != nil {
+		c.mark(fmt.Sprintf("b%d end %v", b.ID, b.Kind))
+	}
+	defer c.tagCold()
 	switch b.Kind {
 	case ssa.BlockPlain:
 		c.edge(b, b.Succs[0], next)
@@ -4173,6 +4206,10 @@ func (c *compiler) block(b *ssa.Block, next *ssa.Block) {
 // edge emits the moves for an edge's phis, a poll on a back-edge, and a jump
 // unless the target is laid out next.
 func (c *compiler) edge(from, to, next *ssa.Block) {
+	if c.ann != nil {
+		c.mark(fmt.Sprintf("edge b%d->b%d", from.ID, to.ID))
+		defer c.tagCold()
+	}
 	idx := -1
 	for i, p := range to.Preds {
 		if p == from {

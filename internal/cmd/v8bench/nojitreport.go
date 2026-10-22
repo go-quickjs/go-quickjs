@@ -7,11 +7,11 @@ import (
 	"os"
 )
 
-// reportStart refuses -jitreport: a build without the JIT has nothing to
-// report.
+// reportStart refuses -jitreport and -jitcode: a build without the JIT
+// has nothing to report.
 func reportStart(runtimeOf) {
-	if *jitReportFlag {
-		fmt.Fprintln(os.Stderr, "v8bench: -jitreport requires a supported build with -tags quickjs_jit")
+	if *jitReportFlag || *jitCodeFlag != "" {
+		fmt.Fprintln(os.Stderr, "v8bench: -jitreport and -jitcode require a supported build with -tags quickjs_jit")
 		os.Exit(1)
 	}
 }
