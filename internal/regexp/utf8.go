@@ -234,6 +234,13 @@ func (m *matcherUTF8) backref(start, end, pos int, rev, fold bool) (int, bool) {
 	return p, true
 }
 
+// hasUnitsUTF8 stands for hasUnits in the generated matcher, where it is
+// never asked: a pattern compiled for UTF-8 has no runs of characters
+// (compiler.runAt).
+func hasUnitsUTF8(s []byte, lit *literal, pos int) bool {
+	panic("regexp: a run of characters in a pattern compiled for UTF-8")
+}
+
 // indexUnitsUTF8 stands for indexUnits in the generated matcher, where it is
 // never asked: the required literal is looked for only without the unicode
 // flag, and a UTF-8 input always has it. Were it asked, from -- the first

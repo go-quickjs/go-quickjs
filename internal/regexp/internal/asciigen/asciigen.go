@@ -26,8 +26,8 @@ import (
 // Variant says which matcher to make.
 type Variant struct {
 	// Suffix is added to the names of the input and matcher types and of
-	// indexUnits and skipUnits, which the variant writes by hand: ASCII or
-	// UTF8.
+	// indexUnits, hasUnits and skipUnits, which the variant writes by hand:
+	// ASCII or UTF8.
 	Suffix string
 	// OwnReaders leaves out the input's methods, which the variant has
 	// written by hand.
@@ -129,6 +129,7 @@ func Generate(path string, v Variant) ([]byte, error) {
 		"input":      "input" + v.Suffix,
 		"matcher":    "matcher" + v.Suffix,
 		"indexUnits": "indexUnits" + v.Suffix,
+		"hasUnits":   "hasUnits" + v.Suffix,
 		"skipUnits":  "skipUnits" + v.Suffix,
 	}
 	recvIs := func(fd *ast.FuncDecl, names ...string) bool {

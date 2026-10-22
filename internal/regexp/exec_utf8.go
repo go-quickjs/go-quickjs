@@ -140,6 +140,14 @@ func (m *matcherUTF8) run(code []instr, pos int) (bool, error) {
 			}
 			pos = m.advance(in.rev, pos, w)
 			pc++
+		case opString:
+			lit := m.prog.runs[in.arg]
+			if !hasUnitsUTF8(units, lit, pos) {
+				goto backtrack
+			}
+			pos += len(lit.units)
+			m.steps += len(lit.units) - 1
+			pc++
 		case opCharFold:
 			r, w := m.read(in.rev, pos)
 			if in.arg >= 0 {

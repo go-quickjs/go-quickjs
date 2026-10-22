@@ -119,6 +119,16 @@ func (re *Regexp) execASCII(dst []int, b []byte, start int, check func() error, 
 	return m.search(re, dst, start, sticky)
 }
 
+// hasUnitsASCII is hasUnits over bytes: a run with a unit past ASCII is in
+// no ASCII subject.
+func hasUnitsASCII(s []byte, lit *literal, pos int) bool {
+	n := len(lit.ascii)
+	if !lit.isASCII || uint(pos) > uint(len(s)) || n > len(s)-pos {
+		return false
+	}
+	return unsafe.String(unsafe.SliceData(s[pos:]), n) == lit.ascii
+}
+
 // indexUnitsASCII is indexUnits over bytes: the literal's bytes are looked
 // for with strings.Index, which passes many bytes over at once. A literal
 // with a unit past ASCII is in no ASCII subject.

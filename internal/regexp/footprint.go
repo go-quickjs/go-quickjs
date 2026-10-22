@@ -43,6 +43,10 @@ func (p *program) footprint() int {
 	if p.litOnly != nil {
 		n += int(unsafe.Sizeof(*p.litOnly)) + cap(p.litOnly.units)*2 + len(p.litOnly.ascii)
 	}
+	n += cap(p.runs) * word
+	for _, l := range p.runs {
+		n += int(unsafe.Sizeof(*l)) + cap(l.units)*2 + len(l.ascii)
+	}
 	n += cap(p.classes) * word
 	for _, c := range p.classes {
 		n += c.footprint()

@@ -434,6 +434,17 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 			pos = m.advance(in.rev, pos, w)
 			pc++
 
+		case opString:
+			// A run of characters is compared as code units, and is the
+			// steps its characters one by one would have been.
+			lit := m.prog.runs[in.arg]
+			if !hasUnits(units, lit, pos) {
+				goto backtrack
+			}
+			pos += len(lit.units)
+			m.steps += len(lit.units) - 1
+			pc++
+
 		case opCharFold:
 			r, w := m.read(in.rev, pos)
 			if in.arg >= 0 {

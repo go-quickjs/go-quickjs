@@ -209,6 +209,20 @@ func hasCase(r rune) bool {
 
 func isSurrogateRune(r rune) bool { return r >= 0xD800 && r <= 0xDFFF }
 
+// hasUnits reports whether lit's units are s's at pos: an opString's match.
+func hasUnits(s []uint16, l *literal, pos int) bool {
+	n := len(l.units)
+	if uint(pos) > uint(len(s)) || n > len(s)-pos {
+		return false
+	}
+	for i, u := range s[pos : pos+n] {
+		if u != l.units[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // indexUnits is the first position at or after from where lit occurs in s, or
 // -1.
 func indexUnits(s []uint16, l *literal, from int) int {

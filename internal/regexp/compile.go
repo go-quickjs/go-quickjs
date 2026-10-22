@@ -7,6 +7,8 @@ package regexp
 // counted quantifiers use an explicit counter rather than being unrolled, so
 // that a{1,10000} costs ten instructions rather than ten thousand.
 
+import "unicode/utf16"
+
 type opcode uint8
 
 const (
@@ -65,6 +67,9 @@ const (
 	// than one per character. A character is a code unit, or with a
 	// non-zero arg2 a code point, as the unicode flag reads one.
 	opLazy
+	// opString matches the run of characters runs[arg], rightwards: what a
+	// sequence of opChar would, as one comparison of code units.
+	opString
 )
 
 // instr is one instruction of the program.
@@ -97,6 +102,8 @@ type program struct {
 	classes []*charSet
 	// folds holds the characters each opCharFold matches.
 	folds []foldSet
+	// runs holds the code units each opString matches.
+	runs []*literal
 	// asciiClasses is, for each class, which ASCII characters it matches --
 	// folding and negation applied -- which are most of what a class is asked
 	// about, answered with a bit rather than a search.
@@ -136,6 +143,8 @@ type compiler struct {
 	// takes a code unit to be a character, and the program is for the
 	// matcher over UTF-8, where only a byte of ASCII is one.
 	noGreedy bool
+	// runLen is how many items runAt's last run took.
+	runLen int
 }
 
 func compileNode(n node, flags Flags) *program {
@@ -235,8 +244,15 @@ func (c *compiler) compile(n node) {
 			}
 			return
 		}
-		for _, item := range t.items {
-			c.compile(item)
+		for i := 0; i < len(t.items); {
+			if units := c.runAt(t.items[i:]); units != nil {
+				c.emit(instr{op: opString, arg: len(c.prog.runs)})
+				c.prog.runs = append(c.prog.runs, newLiteral(units))
+				i += c.runLen
+				continue
+			}
+			c.compile(t.items[i])
+			i++
 		}
 
 	case nodeAlt:
@@ -296,6 +312,45 @@ func (c *compiler) compile(n node) {
 		c.emit(in)
 	}
 }
+
+// runAt is the code units of the run of characters items begins with, where
+// two or more can be matched as one opString, or nil; runLen is then how
+// many items it takes. A run is matched rightwards, without folding, and
+// not by the matcher over UTF-8, whose units are bytes. Under the unicode
+// flag a character past the Basic Multilingual Plane is its pair of units,
+// which a comparison of units matches as the character, but a surrogate of
+// the pattern's own ends the run: it is a character only where the subject
+// does not pair it.
+func (c *compiler) runAt(items []node) []uint16 {
+	if c.reverse || c.noGreedy || c.flags&FlagIgnoreCase != 0 || !compileRuns {
+		return nil
+	}
+	unicode := c.flags&(FlagUnicode|FlagUnicodeSets) != 0
+	var units []uint16
+	n := 0
+	for _, item := range items {
+		ch, ok := item.(nodeChar)
+		if !ok || unicode && isSurrogateRune(ch.r) {
+			break
+		}
+		if ch.r >= 0x10000 {
+			hi, lo := utf16.EncodeRune(ch.r)
+			units = append(units, uint16(hi), uint16(lo))
+		} else {
+			units = append(units, uint16(ch.r))
+		}
+		n++
+	}
+	if n < 2 {
+		return nil
+	}
+	c.runLen = n
+	return units
+}
+
+// compileRuns says whether runAt makes runs, which a test turns off to have
+// what the run's characters one by one would match to compare with.
+var compileRuns = true
 
 // compileAlt lays out alternatives as a chain of choice points.
 func (c *compiler) compileAlt(t nodeAlt) {
