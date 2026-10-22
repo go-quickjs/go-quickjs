@@ -74,7 +74,18 @@ type core struct {
 	// (goState).
 	calls   []*abi.CallState
 	goCalls []*abi.GoCallState
+	// keepRuns marks, by value ID, the first (keepFirst) and the last
+	// (keepLast) of each run of keeps (ssa's OpKeep) one after another in
+	// a block: the keeps a store or a call makes (ssa's keepAcrossStores),
+	// between which nothing runs that could change the collector's phase,
+	// so that the run tests the write-barrier flag once.
+	keepRuns []int
 }
+
+const (
+	keepFirst = 1 << iota
+	keepLast
+)
 
 // saved is a register a call saves, and the spill slot it saves it in.
 type saved struct {
@@ -138,7 +149,38 @@ func prepare(w *Workspace, f *ssa.Func, enc abi.Encoding, gprs, fprs []int) (*co
 	if err := c.allocate(); err != nil {
 		return nil, err
 	}
+	c.findKeepRuns()
 	return c, nil
+}
+
+// findKeepRuns marks the runs of keeps (keepRuns): each keep made, of a
+// block's values one after another.
+func (c *core) findKeepRuns() {
+	isKeep := func(v *ssa.Value) bool { return v.Op == ssa.OpKeep && !c.isLazy(v) }
+	for _, b := range c.f.Blocks {
+		for i, v := range b.Values {
+			if !isKeep(v) {
+				continue
+			}
+			if c.keepRuns == nil {
+				c.keepRuns = c.ints(c.f.NumValues())
+			}
+			if i == 0 || !isKeep(b.Values[i-1]) {
+				c.keepRuns[v.ID] |= keepFirst
+			}
+			if i+1 == len(b.Values) || !isKeep(b.Values[i+1]) {
+				c.keepRuns[v.ID] |= keepLast
+			}
+		}
+	}
+}
+
+// keepRun is what of a run of keeps v is (keepFirst, keepLast).
+func (c *core) keepRun(v *ssa.Value) int {
+	if v.ID < len(c.keepRuns) {
+		return c.keepRuns[v.ID]
+	}
+	return 0
 }
 
 // ErrUnsupported reports a function the backend does not compile yet.
@@ -1161,11 +1203,12 @@ func (c *core) entryAt(pc int) *ssa.Block {
 
 // cellSource reports whether a shadow is a cell's address whatever happens
 // at run time -- a property's, an element's, a global binding's, the
-// context's -- and never a slot or -1, so that the value's pointer word is
-// read there with no decoding (sourceAddr).
+// context's: a call's result's or a kept value's keep cell -- and never a
+// slot or -1, so that the value's pointer word is read there with no
+// decoding (sourceAddr) and no test.
 func cellSource(s *ssa.Value) bool {
 	switch s.Op {
-	case ssa.OpPropCell, ssa.OpElemCell, ssa.OpGlobalCell, ssa.OpLexCell, ssa.OpBindingCell, ssa.OpStringMethod, ssa.OpStringChar, ssa.OpCodeChar, ssa.OpSubstringChar, ssa.OpStringProp, ssa.OpCallCell, ssa.OpBigCell, ssa.OpConstCell, ssa.OpUpvalueCell, ssa.OpLocalCell:
+	case ssa.OpPropCell, ssa.OpElemCell, ssa.OpGlobalCell, ssa.OpLexCell, ssa.OpBindingCell, ssa.OpStringMethod, ssa.OpStringChar, ssa.OpCodeChar, ssa.OpSubstringChar, ssa.OpStringProp, ssa.OpCallCell, ssa.OpBigCell, ssa.OpConstCell, ssa.OpUpvalueCell, ssa.OpLocalCell, ssa.OpKeep:
 		return true
 	}
 	return false

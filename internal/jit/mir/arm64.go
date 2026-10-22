@@ -101,6 +101,9 @@ type a64Compiler struct {
 	// (appendingCall), as amd64's.
 	appending     arm64.Label
 	appendingUsed bool
+	// keepCold and keeping are amd64's (keep).
+	keepCold arm64.Label
+	keeping  []*ssa.Value
 }
 
 // a64GoFail is amd64's goFail.
@@ -3704,21 +3707,31 @@ func (c *a64Compiler) directOperand(x *ssa.Value, base arm64.Reg, disp int32) {
 // pointerWord leaves in B the pointer word of a value whose number word is
 // in w, as amd64's does. It uses C.
 func (c *a64Compiler) pointerWord(x *ssa.Value, w arm64.Reg) {
-	done := c.a.NewLabel()
-	c.movImm(a64B, 0)
 	switch o, static := c.origin.Of(x); {
 	case x.Shadow != nil && cellSource(x.Shadow):
 		c.a.Load(a64B, c.gpr(x.Shadow, a64C), c.enc.RefOffset)
 	case x.Shadow != nil:
+		done := c.a.NewLabel()
+		c.movImm(a64B, 0)
 		r := c.gpr(x.Shadow, a64C)
 		c.a.Cbz(r, done, true)
 		c.a.Load(a64B, r, c.enc.RefOffset)
+		c.a.Bind(done)
+	case static && o >= 0 && x.Op == ssa.OpLoadSlot:
+		// As amd64's: what the slot held at entry, its pointer word read
+		// once.
+		base, disp := c.slotAddr(o, true, a64C)
+		c.a.Load(a64B, base, disp)
 	case static && o >= 0:
+		done := c.a.NewLabel()
+		c.movImm(a64B, 0)
 		c.isReference(x, w, o, done)
 		base, disp := c.slotAddr(o, true, a64C)
 		c.a.Load(a64B, base, disp)
+		c.a.Bind(done)
+	default:
+		c.movImm(a64B, 0)
 	}
-	c.a.Bind(done)
 }
 
 // goCall calls Go, as amd64's does.
@@ -4995,39 +5008,57 @@ func (c *a64Compiler) keepSource(x *ssa.Value) {
 // keepRef is a tagged value's pointer word, as amd64's.
 func (c *a64Compiler) keepRef(v *ssa.Value) {
 	x := v.Args[0]
-	scalar := c.a.NewLabel()
-	c.keepSource(x)
-	c.movImm(a64A, 0)
-	c.a.Cbz(a64C, scalar, true)
-	c.a.Load(a64A, a64C, c.enc.RefOffset)
-	c.a.Bind(scalar)
-	c.setG(v, a64A)
+	c.pointerWord(x, c.gpr(x, a64A))
+	c.setG(v, a64B)
 }
 
-// keep copies a value into a keep cell, as amd64's.
+// keep copies a value into a keep cell, as amd64's: a run of keeps tests
+// the write-barrier flag once.
 func (c *a64Compiler) keep(v *ssa.Value) {
-	x := v.Args[0]
-	viaGo, done := c.a.NewLabel(), c.a.NewLabel()
-	at := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
-	c.a.FMovToF(a64F0, c.gpr(x, a64B))
-	if r := c.gpr(v.Args[1], a64C); r != a64C {
-		c.a.MovRR(a64C, r)
+	run := c.keepRun(v)
+	if run&keepFirst != 0 {
+		c.keepCold, c.keeping = c.a.NewLabel(), c.keeping[:0]
+		c.movImm(a64B, c.enc.WriteBarrier)
+		c.a.LoadU8(a64B, a64B, 0)
+		c.a.Cbnz(a64B, c.keepCold, false)
 	}
-	c.movImm(a64B, c.enc.WriteBarrier)
-	c.a.LoadU8(a64B, a64B, 0)
-	c.a.Cbnz(a64B, viaGo, false)
-	c.a.Store(a64Ctx, at+c.enc.RefOffset, a64C)
-	c.a.FMovFromF(a64B, a64F0)
-	c.a.Store(a64Ctx, at+c.enc.NumOffset, a64B)
-	c.a.Bind(done)
-	c.a.AddImm(a64A, a64Ctx, int64(at), true)
-	c.setG(v, a64A)
-	c.cold = append(c.cold, func() {
-		c.a.Bind(viaGo)
-		c.a.AddImm(a64A, a64Ctx, int64(at), true)
-		c.valueStore()
-		c.a.B(done)
-	})
+	c.keeping = append(c.keeping, v)
+	c.keepStore(v, false)
+	if run&keepLast != 0 {
+		cold, done, keeps := c.keepCold, c.a.NewLabel(), slices.Clone(c.keeping)
+		c.a.Bind(done)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(cold)
+			for _, k := range keeps {
+				c.keepStore(k, true)
+			}
+			c.a.B(done)
+		})
+	}
+}
+
+// keepStore is amd64's.
+func (c *a64Compiler) keepStore(v *ssa.Value, marking bool) {
+	at := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	c.a.Store(a64Ctx, at+c.enc.NumOffset, c.gpr(v.Args[0], a64B))
+	if marking {
+		c.gprInto(v.Args[1], a64C)
+		c.a.AddImm(a64A, a64Ctx, int64(at+c.enc.RefOffset), true)
+		c.refStore()
+	} else {
+		c.a.Store(a64Ctx, at+c.enc.RefOffset, c.gpr(v.Args[1], a64C))
+	}
+	c.cellAddr(v, at)
+}
+
+// cellAddr is amd64's.
+func (c *a64Compiler) cellAddr(v *ssa.Value, at int32) {
+	if _, ok := c.loc(v); !ok {
+		return
+	}
+	d := c.gdst(v)
+	c.a.AddImm(d, a64Ctx, int64(at), true)
+	c.setG(v, d)
 }
 
 // bigUnbox is the BigInt a tagged value is, as amd64's.
@@ -6091,8 +6122,7 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 	case ssa.OpCall:
 		c.call(v, c.guardFor(v))
 	case ssa.OpCallCell:
-		c.a.AddImm(a64A, a64Ctx, int64(abi.OffKeep+int32(v.Args[0].Index)*int32(c.enc.ValueSize)), true)
-		c.setG(v, a64A)
+		c.cellAddr(v, abi.OffKeep+int32(v.Args[0].Index)*int32(c.enc.ValueSize))
 	case ssa.OpKeepRef:
 		c.keepRef(v)
 	case ssa.OpKeep:
@@ -6110,8 +6140,7 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.movImm(d, v.Const.Bits)
 		c.setG(v, d)
 	case ssa.OpBigCell:
-		c.a.AddImm(a64A, a64Ctx, int64(abi.OffKeep+int32(v.Args[0].Index)*int32(c.enc.ValueSize)), true)
-		c.setG(v, a64A)
+		c.cellAddr(v, abi.OffKeep+int32(v.Args[0].Index)*int32(c.enc.ValueSize))
 	case ssa.OpAddI64, ssa.OpSubI64:
 		op := arm64.Adds
 		if v.Op == ssa.OpSubI64 {

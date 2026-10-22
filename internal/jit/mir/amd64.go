@@ -119,6 +119,10 @@ type compiler struct {
 	genDoneUsed bool
 	// ann is what each stretch of the code is for, while Annotate is set.
 	ann *annotation
+	// keepCold is where the run of keeps being emitted goes while the
+	// collector marks (keep), and keeping its keeps so far.
+	keepCold amd64.Label
+	keeping  []*ssa.Value
 }
 
 // goFail is a call of Go's description, where it goes on (back), and
@@ -3758,22 +3762,33 @@ func (c *compiler) directOperand(x *ssa.Value, local bool, disp int32) {
 // word is in w, read where it came from -- its shadow, or the slot its
 // origin is -- or 0 for a primitive's. It uses scratchC.
 func (c *compiler) pointerWord(x *ssa.Value, w amd64.Reg) {
-	done := c.a.NewLabel()
-	c.movImm(scratchB, 0)
 	switch o, static := c.origin.Of(x); {
 	case x.Shadow != nil && cellSource(x.Shadow):
 		c.a.Load(scratchB, c.gpr(x.Shadow, scratchC), c.enc.RefOffset)
 	case x.Shadow != nil:
+		done := c.a.NewLabel()
+		c.movImm(scratchB, 0)
 		r := c.gpr(x.Shadow, scratchC)
 		c.a.Op(amd64.Test, r, r, true)
 		c.a.Jcc(amd64.CondE, done)
 		c.a.Load(scratchB, r, c.enc.RefOffset)
+		c.a.Bind(done)
+	case static && o >= 0 && x.Op == ssa.OpLoadSlot:
+		// What the slot held at entry, which it holds still: its pointer
+		// word is the value's, 0 for a primitive's -- where its test
+		// (isReference) had read it twice.
+		base, disp := c.slotAddr(o, true, scratchC)
+		c.a.Load(scratchB, base, disp)
 	case static && o >= 0:
+		done := c.a.NewLabel()
+		c.movImm(scratchB, 0)
 		c.isReference(x, w, o, done)
 		base, disp := c.slotAddr(o, true, scratchC)
 		c.a.Load(scratchB, base, disp)
+		c.a.Bind(done)
+	default:
+		c.movImm(scratchB, 0)
 	}
-	c.a.Bind(done)
 }
 
 // exitTo writes a frame state into the frame and returns with an exit
@@ -5472,50 +5487,73 @@ func (c *compiler) keepSource(x *ssa.Value) {
 }
 
 // keepRef is a tagged value's pointer word, read where it came from
-// (keepSource), or 0 for a primitive's (ssa's OpKeepRef); read while the
+// (pointerWord), or 0 for a primitive's (ssa's OpKeepRef); read while the
 // collector marks too, which only writes would need a barrier for.
 func (c *compiler) keepRef(v *ssa.Value) {
 	x := v.Args[0]
-	scalar := c.a.NewLabel()
-	c.keepSource(x)
-	c.movImm(scratchA, 0)
-	c.a.Op(amd64.Test, scratchC, scratchC, true)
-	c.a.Jcc(amd64.CondE, scalar)
-	c.a.Load(scratchA, scratchC, c.enc.RefOffset)
-	c.a.Bind(scalar)
-	c.setG(v, scratchA)
+	c.pointerWord(x, c.gpr(x, scratchA))
+	c.setG(v, scratchB)
 }
 
 // keep copies a value, its pointer word read before (keepRef), into the
 // context's keep cell v.Index, and leaves the cell's address as v (ssa's
-// OpKeep); while the collector marks, with Go's write barrier
-// (valueStore).
+// OpKeep). The keeps a store makes are a run of values one after another
+// (core's keepRuns), between which nothing could change the collector's
+// phase: the run tests the write-barrier flag once, at its first keep, and
+// while the collector marks goes to a copy of itself that stores each
+// pointer word with Go's write barrier (refStore). A keep had moved its
+// number word through an SSE register around its own test, and made its
+// cell's address in three instructions: thirteen of them, where a store
+// and a call keep four values or more.
 func (c *compiler) keep(v *ssa.Value) {
-	x := v.Args[0]
-	viaGo, done := c.a.NewLabel(), c.a.NewLabel()
-	at := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
-	c.a.MovQToX(xScratch0, c.gpr(x, scratchB))
-	if r := c.gpr(v.Args[1], scratchC); r != scratchC {
-		c.a.MovRR(scratchC, r)
+	run := c.keepRun(v)
+	if run&keepFirst != 0 {
+		c.keepCold, c.keeping = c.a.NewLabel(), c.keeping[:0]
+		c.movImm(scratchB, c.enc.WriteBarrier)
+		c.a.LoadU8(scratchB, scratchB, 0)
+		c.a.Op(amd64.Test, scratchB, scratchB, false)
+		c.a.Jcc(amd64.CondNE, c.keepCold)
 	}
-	c.movImm(scratchB, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchB, scratchB, 0)
-	c.a.Op(amd64.Test, scratchB, scratchB, false)
-	c.a.Jcc(amd64.CondNE, viaGo)
-	c.a.Store(regCtx, at+c.enc.RefOffset, scratchC)
-	c.a.MovQFromX(scratchB, xScratch0)
-	c.a.Store(regCtx, at+c.enc.NumOffset, scratchB)
-	c.a.Bind(done)
-	c.a.MovRR(scratchA, regCtx)
-	c.a.OpImm(amd64.Add, scratchA, at, true)
-	c.setG(v, scratchA)
-	c.cold = append(c.cold, func() {
-		c.a.Bind(viaGo)
-		c.a.MovRR(scratchA, regCtx)
-		c.a.OpImm(amd64.Add, scratchA, at, true)
-		c.valueStore()
-		c.a.Jmp(done)
-	})
+	c.keeping = append(c.keeping, v)
+	c.keepStore(v, false)
+	if run&keepLast != 0 {
+		cold, done, keeps := c.keepCold, c.a.NewLabel(), slices.Clone(c.keeping)
+		c.a.Bind(done)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(cold)
+			for _, k := range keeps {
+				c.keepStore(k, true)
+			}
+			c.a.Jmp(done)
+		})
+	}
+}
+
+// keepStore is keep's for v: its value's number word, then its pointer
+// word -- with Go's write barrier, if marking -- into its cell, and the
+// cell's address as v.
+func (c *compiler) keepStore(v *ssa.Value, marking bool) {
+	at := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	c.a.Store(regCtx, at+c.enc.NumOffset, c.gpr(v.Args[0], scratchB))
+	if marking {
+		c.gprInto(v.Args[1], scratchC)
+		c.a.Lea(scratchA, regCtx, at+c.enc.RefOffset)
+		c.refStore()
+	} else {
+		c.a.Store(regCtx, at+c.enc.RefOffset, c.gpr(v.Args[1], scratchC))
+	}
+	c.cellAddr(v, at)
+}
+
+// cellAddr leaves the address of the context's word at, a keep cell, as
+// v: in one instruction, where it is in a register.
+func (c *compiler) cellAddr(v *ssa.Value, at int32) {
+	if _, ok := c.loc(v); !ok {
+		return
+	}
+	d := c.gdst(v)
+	c.a.Lea(d, regCtx, at)
+	c.setG(v, d)
 }
 
 // bigUnbox is the BigInt a tagged value is (ssa's OpBigUnbox), one held in
@@ -6790,9 +6828,7 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 	case ssa.OpCall:
 		c.call(v, c.guardFor(v))
 	case ssa.OpCallCell:
-		c.a.MovRR(scratchA, regCtx)
-		c.a.OpImm(amd64.Add, scratchA, abi.OffKeep+int32(v.Args[0].Index)*int32(c.enc.ValueSize), true)
-		c.setG(v, scratchA)
+		c.cellAddr(v, abi.OffKeep+int32(v.Args[0].Index)*int32(c.enc.ValueSize))
 	case ssa.OpKeepRef:
 		c.keepRef(v)
 	case ssa.OpKeep:
@@ -6812,9 +6848,7 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.movImm(d, v.Const.Bits)
 		c.setG(v, d)
 	case ssa.OpBigCell:
-		c.a.MovRR(scratchA, regCtx)
-		c.a.OpImm(amd64.Add, scratchA, abi.OffKeep+int32(v.Args[0].Index)*int32(c.enc.ValueSize), true)
-		c.setG(v, scratchA)
+		c.cellAddr(v, abi.OffKeep+int32(v.Args[0].Index)*int32(c.enc.ValueSize))
 	case ssa.OpAddI64, ssa.OpSubI64, ssa.OpMulI64:
 		x, y := c.gpr(arg(0), scratchA), c.gpr(arg(1), scratchB)
 		if x != scratchA {
