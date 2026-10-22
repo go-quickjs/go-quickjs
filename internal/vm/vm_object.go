@@ -551,7 +551,9 @@ func newArrayStorage(n int) (*Object, []Value) {
 // room in the same allocation for its index, input, groups and indices, for
 // its first few elements, and for the string of what matched: a program that
 // matches in a loop makes one each time round, and the matched text is the
-// one element every match has.
+// one element every match has. It is the array of a match the d flag asked
+// for; the others' are sized to their elements (matchResult1Object and the
+// rest).
 type matchResultObject struct {
 	Object
 	side   objectExt
@@ -571,6 +573,43 @@ type matchResult1Object struct {
 	str    String
 }
 
+// matchResult2Object, matchResult3Object and matchResult4Object are
+// matchResult1Object for a pattern of one, two and three groups: room for
+// each element and nothing else, which makes each the size class it fills,
+// 224, 240 and 256 bytes -- a matchResultObject is 272, and so 288.
+type matchResult2Object struct {
+	Object
+	side   objectExt
+	fields [3]Value
+	inline [2]Value
+	str    String
+}
+
+type matchResult3Object struct {
+	Object
+	side   objectExt
+	fields [3]Value
+	inline [3]Value
+	str    String
+}
+
+type matchResult4Object struct {
+	Object
+	side   objectExt
+	fields [3]Value
+	inline [4]Value
+	str    String
+}
+
+// matchResultNObject is the array of a match of more groups, without the
+// d flag, whose elements are a slice of their own.
+type matchResultNObject struct {
+	Object
+	side   objectExt
+	fields [3]Value
+	str    String
+}
+
 // newMatchResult returns a match's array, about to be given n elements, and
 // room for the string of its first. indices says whether it will have the
 // d flag's indices too.
@@ -579,11 +618,37 @@ func newMatchResult(proto *Object, n int, indices bool) (*Object, *String) {
 		proto: proto, class: ClassArray,
 		flags: objExtensible | objArrayLengthWritable | objInlineProps,
 	}
-	if n == 1 && !indices {
-		mo := &matchResult1Object{Object: o}
+	if !indices {
+		switch n {
+		case 1:
+			mo := &matchResult1Object{Object: o}
+			mo.vals = mo.fields[:0]
+			mo.embedExt(&mo.side)
+			mo.side.elems = mo.inline[:]
+			return &mo.Object, &mo.str
+		case 2:
+			mo := &matchResult2Object{Object: o}
+			mo.vals = mo.fields[:0]
+			mo.embedExt(&mo.side)
+			mo.side.elems = mo.inline[:]
+			return &mo.Object, &mo.str
+		case 3:
+			mo := &matchResult3Object{Object: o}
+			mo.vals = mo.fields[:0]
+			mo.embedExt(&mo.side)
+			mo.side.elems = mo.inline[:]
+			return &mo.Object, &mo.str
+		case 4:
+			mo := &matchResult4Object{Object: o}
+			mo.vals = mo.fields[:0]
+			mo.embedExt(&mo.side)
+			mo.side.elems = mo.inline[:]
+			return &mo.Object, &mo.str
+		}
+		mo := &matchResultNObject{Object: o}
 		mo.vals = mo.fields[:0]
 		mo.embedExt(&mo.side)
-		mo.side.elems = mo.inline[:]
+		mo.side.elems = make([]Value, n)
 		return &mo.Object, &mo.str
 	}
 	mo := &matchResultObject{Object: o}

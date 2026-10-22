@@ -52,3 +52,29 @@ func TestRegExpSharedMatcher(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestRegExpResultRoom covers exec's arrays, made with room for their
+// elements and properties sized to the pattern's groups: none to five
+// groups, named ones, the d flag's, each grown past its room by elements
+// and properties, a property deleted and the length cut, as Node has them.
+func TestRegExpResultRoom(t *testing.T) {
+	src := `var out = []
+	  var pats = [/b/, /(b)/, /(b)(c)?/, /(b)(c)?(d)/, /(b)(x)?(d)(e)/, /(b)(c)?(d)(e)(f)/, /(?<p>b)(c)?/, /(b)(c)?/d]
+	  for (var p of pats) {
+	    var m = p.exec("abdef")
+	    var r = [m.length, JSON.stringify(m), Object.keys(m).join(), m.index, m.input, m.groups === undefined ? "u" : JSON.stringify(m.groups)]
+	    m.push("z"); m[m.length + 1] = "y"; m.extra = 1; m.more = 2; delete m.index
+	    r.push(m.length, JSON.stringify(m), Object.keys(m).join(), Object.getOwnPropertyNames(m).join())
+	    m.length = 1; r.push(JSON.stringify(m), m.length)
+	    out.push(r.join("|"))
+	  }
+	  out.join(";")`
+	checkEval(t, src, `1|["b"]|0,index,input,groups|1|abdef|u|4|["b","z",null,"y"]|0,1,3,input,groups,extra,more|0,1,3,length,input,groups,extra,more|["b"]|1`+";"+
+		`2|["b","b"]|0,1,index,input,groups|1|abdef|u|5|["b","b","z",null,"y"]|0,1,2,4,input,groups,extra,more|0,1,2,4,length,input,groups,extra,more|["b"]|1`+";"+
+		`3|["b","b",null]|0,1,2,index,input,groups|1|abdef|u|6|["b","b",null,"z",null,"y"]|0,1,2,3,5,input,groups,extra,more|0,1,2,3,5,length,input,groups,extra,more|["b"]|1`+";"+
+		`4|["bd","b",null,"d"]|0,1,2,3,index,input,groups|1|abdef|u|7|["bd","b",null,"d","z",null,"y"]|0,1,2,3,4,6,input,groups,extra,more|0,1,2,3,4,6,length,input,groups,extra,more|["bd"]|1`+";"+
+		`5|["bde","b",null,"d","e"]|0,1,2,3,4,index,input,groups|1|abdef|u|8|["bde","b",null,"d","e","z",null,"y"]|0,1,2,3,4,5,7,input,groups,extra,more|0,1,2,3,4,5,7,length,input,groups,extra,more|["bde"]|1`+";"+
+		`6|["bdef","b",null,"d","e","f"]|0,1,2,3,4,5,index,input,groups|1|abdef|u|9|["bdef","b",null,"d","e","f","z",null,"y"]|0,1,2,3,4,5,6,8,input,groups,extra,more|0,1,2,3,4,5,6,8,length,input,groups,extra,more|["bdef"]|1`+";"+
+		`3|["b","b",null]|0,1,2,index,input,groups|1|abdef|{"p":"b"}|6|["b","b",null,"z",null,"y"]|0,1,2,3,5,input,groups,extra,more|0,1,2,3,5,length,input,groups,extra,more|["b"]|1`+";"+
+		`3|["b","b",null]|0,1,2,index,input,groups,indices|1|abdef|u|6|["b","b",null,"z",null,"y"]|0,1,2,3,5,input,groups,indices,extra,more|0,1,2,3,5,length,input,groups,indices,extra,more|["b"]|1`)
+}
