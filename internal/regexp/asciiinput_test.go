@@ -71,8 +71,8 @@ func TestASCIIInputAgrees(t *testing.T) {
 
 // TestASCIILentMatcher pins what a match of an ASCII subject with the lent
 // matcher leaves: the subject not held on to, and the backtracking state it
-// grew given back to the matcher it borrowed it from -- moved off the core
-// once large, as a match of code units moves it -- for the next match.
+// grew kept by the lent matcher's matcher over bytes -- moved off the core
+// with it once large, as a match of code units moves it -- for the next match.
 func TestASCIILentMatcher(t *testing.T) {
 	re, err := Compile("(a|b)*c", "")
 	if err != nil {
@@ -84,16 +84,20 @@ func TestASCIILentMatcher(t *testing.T) {
 		t.Fatalf("match = %v", got)
 	}
 	m := clone.scratch
-	if m == nil || clone.lent != nil || cap(m.stack) <= maxLentFrames && cap(m.trail) <= maxLentFrames {
+	if m == nil || clone.lent != nil || !largeMatcher(m) {
 		t.Fatalf("a large matcher was not moved to the clone: scratch %v, lent %v", m != nil, clone.lent != nil)
 	}
-	if a := m.bytes; a == nil || a.input.units != nil || a.in != nil || a.stack != nil || a.trail != nil || a.caps != nil {
-		t.Fatal("the matcher over bytes holds on to the subject or its storage")
+	a := m.bytes
+	if a == nil || a.input.units != nil || a.in != nil || a.check != nil {
+		t.Fatal("the matcher over bytes holds on to the subject")
+	}
+	if cap(a.stack) <= maxLentFrames && cap(a.trail) <= maxLentFrames {
+		t.Fatal("the matcher over bytes did not keep the storage the match grew")
 	}
 	if got, _ := clone.MatchASCIICheckedInto(nil, "abc", 0, nil); !slices.Equal(got, []int{0, 3, 1, 2}) {
 		t.Fatalf("match after = %v", got)
 	}
-	if clone.scratch != m {
-		t.Fatal("the next match did not use the matcher kept")
+	if clone.scratch != m || m.bytes != a {
+		t.Fatal("the next match did not use the matchers kept")
 	}
 }

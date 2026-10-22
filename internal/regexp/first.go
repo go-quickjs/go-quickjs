@@ -1,5 +1,7 @@
 package regexp
 
+import "math/bits"
+
 // The first unit of a match.
 //
 // A search tries each position of the subject in turn, and trying one costs a
@@ -15,6 +17,33 @@ package regexp
 type firstUnits struct {
 	ascii    [2]uint64
 	nonASCII bool
+	// single is the one ASCII unit a match can begin with when sole is
+	// set, as it is when there is just one: a search over bytes looks for it
+	// with bytes.IndexByte (see seal).
+	single byte
+	sole   bool
+}
+
+// seal sets single and sole once the units are all added.
+func (f *firstUnits) seal() {
+	f.single, f.sole = 0, false
+	if bits.OnesCount64(f.ascii[0])+bits.OnesCount64(f.ascii[1]) == 1 {
+		f.sole = true
+		if f.ascii[0] != 0 {
+			f.single = byte(bits.TrailingZeros64(f.ascii[0]))
+		} else {
+			f.single = byte(64 + bits.TrailingZeros64(f.ascii[1]))
+		}
+	}
+}
+
+// skipUnits is the first position from pos on that a match can begin at by
+// first, or len(units) when there is none.
+func skipUnits(units []uint16, pos int, first *firstUnits) int {
+	for pos < len(units) && !first.admits(units[pos]) {
+		pos++
+	}
+	return pos
 }
 
 // admits reports whether a match can begin with the unit u.
@@ -42,6 +71,7 @@ func firstOf(n node, fold, unicodeFold bool) *firstUnits {
 	if !ok || empty {
 		return nil
 	}
+	f.seal()
 	return &f
 }
 

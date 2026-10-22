@@ -1,6 +1,8 @@
 package regexp
 
 import (
+	"bytes"
+	"strings"
 	"sync"
 	"unsafe"
 )
@@ -57,12 +59,13 @@ func (re *Regexp) SearchASCIICheckedInto(dst []int, s string, start int, check f
 }
 
 // execASCIILent is execASCII with the matcher exec would borrow: its
-// matcher over bytes, which matches with its backtracking stack and capture
-// trail, and gives them back grown.
+// matcher over bytes, which keeps a backtracking stack and capture trail of
+// its own beside the matcher's, so that a match over bytes neither copies the
+// matcher's storage in nor gives it back.
 func (re *Regexp) execASCIILent(dst []int, b []byte, start int, check func() error, sticky bool) ([]int, error) {
 	if lit := re.prog.litOnly; lit != nil && !sticky {
 		if at := indexUnitsASCII(b, lit, start); at >= 0 {
-			return append(dst[:0], at, at+len(lit)), nil
+			return append(dst[:0], at, at+len(lit.units)), nil
 		}
 		return nil, nil
 	}
@@ -72,7 +75,10 @@ func (re *Regexp) execASCIILent(dst []int, b []byte, start int, check func() err
 		a = &matcherASCII{}
 		m.bytes = a
 	}
-	a.caps, a.trail, a.stack, a.counters, a.emptyMarks = m.caps, m.trail, m.stack, m.counters, m.emptyMarks
+	// A pooled matcher may have matched another pattern last.
+	a.caps = fitInts(a.caps, len(m.caps))
+	a.counters = fitInts(a.counters, len(m.counters))
+	a.emptyMarks = fitInts(a.emptyMarks, len(m.emptyMarks))
 	a.input = inputASCII{units: b, unicode: re.flags&FlagUnicode != 0}
 	a.prog, a.in, a.check = re.prog, &a.input, check
 	a.steps, a.checkAt = 0, checkInterval
@@ -80,12 +86,10 @@ func (re *Regexp) execASCIILent(dst []int, b []byte, start int, check func() err
 	return a.search(re, dst, start, sticky)
 }
 
-// giveBackASCII is giveBack for a match made with m's matcher over bytes.
+// giveBackASCII is giveBack for a match made with m's matcher over bytes,
+// which does not hold on to the subject either.
 func (re *Regexp) giveBackASCII(m *matcher, a *matcherASCII, lent bool) {
-	// What the match grew is the matcher's again; the subject and the
-	// storage are not held on to by the matcher over bytes.
-	m.trail, m.stack = a.trail, a.stack
-	*a = matcherASCII{}
+	a.input, a.in, a.check = inputASCII{}, nil, nil
 	re.giveBack(m, lent)
 }
 
@@ -93,7 +97,7 @@ func (re *Regexp) giveBackASCII(m *matcher, a *matcherASCII, lent bool) {
 func (re *Regexp) execASCII(dst []int, b []byte, start int, check func() error, sticky bool) ([]int, error) {
 	if lit := re.prog.litOnly; lit != nil && !sticky {
 		if at := indexUnitsASCII(b, lit, start); at >= 0 {
-			return append(dst[:0], at, at+len(lit)), nil
+			return append(dst[:0], at, at+len(lit.units)), nil
 		}
 		return nil, nil
 	}
@@ -115,20 +119,47 @@ func (re *Regexp) execASCII(dst []int, b []byte, start int, check func() error, 
 	return m.search(re, dst, start, sticky)
 }
 
-// indexUnitsASCII is indexUnits over bytes.
-func indexUnitsASCII(s []byte, lit []uint16, from int) int {
-	first, rest := lit[0], lit[1:]
-	for i := from; i <= len(s)-len(lit); i++ {
-		if uint16(s[i]) != first {
-			continue
-		}
-		j := 0
-		for j < len(rest) && uint16(s[i+1+j]) == rest[j] {
-			j++
-		}
-		if j == len(rest) {
-			return i
-		}
+// indexUnitsASCII is indexUnits over bytes: the literal's bytes are looked
+// for with strings.Index, which passes many bytes over at once. A literal
+// with a unit past ASCII is in no ASCII subject.
+func indexUnitsASCII(s []byte, lit *literal, from int) int {
+	n := len(lit.ascii)
+	if !lit.isASCII || from > len(s)-n {
+		return -1
+	}
+	str := unsafe.String(unsafe.SliceData(s), len(s))
+	// Where the search begins is often where the literal is: it is looked
+	// at before strings.Index is called.
+	if str[from:from+n] == lit.ascii {
+		return from
+	}
+	if k := strings.Index(str[from+1:], lit.ascii); k >= 0 {
+		return from + 1 + k
 	}
 	return -1
+}
+
+// skipUnitsASCII is skipUnits over bytes. A pattern that can begin with one
+// unit alone has it looked for with bytes.IndexByte; an ASCII subject has no
+// byte past ASCII for first's nonASCII to admit.
+func skipUnitsASCII(units []byte, pos int, first *firstUnits) int {
+	if first.sole {
+		return indexByteFrom(units, pos, first.single)
+	}
+	for pos < len(units) && !first.admits(uint16(units[pos])) {
+		pos++
+	}
+	return pos
+}
+
+// indexByteFrom is the first position of c in s from pos on, or len(s). A
+// position that is c is taken without a call of bytes.IndexByte.
+func indexByteFrom(s []byte, pos int, c byte) int {
+	if pos < len(s) && s[pos] == c {
+		return pos
+	}
+	if k := bytes.IndexByte(s[pos:], c); k >= 0 {
+		return pos + k
+	}
+	return len(s)
 }

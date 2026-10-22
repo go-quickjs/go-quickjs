@@ -38,9 +38,11 @@ func (p *program) footprint() int {
 		n += int(unsafe.Sizeof(*p.first))
 	}
 	if p.lit != nil {
-		n += int(unsafe.Sizeof(*p.lit)) + cap(p.lit.units)*2
+		n += int(unsafe.Sizeof(*p.lit)) + cap(p.lit.units)*2 + len(p.lit.ascii)
 	}
-	n += cap(p.litOnly) * 2
+	if p.litOnly != nil {
+		n += int(unsafe.Sizeof(*p.litOnly)) + cap(p.litOnly.units)*2 + len(p.litOnly.ascii)
+	}
 	n += cap(p.classes) * word
 	for _, c := range p.classes {
 		n += c.footprint()

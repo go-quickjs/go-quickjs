@@ -75,18 +75,14 @@ func (m *matcherASCII) search(re *Regexp, dst []int, start int, sticky bool) ([]
 	for pos := start; pos <= in.length(); {
 		if lit != nil {
 			if litAt < pos+lit.minOff {
-				if litAt = indexUnitsASCII(in.units, lit.units, pos+lit.minOff); litAt < 0 {
+				if litAt = indexUnitsASCII(in.units, &lit.literal, pos+lit.minOff); litAt < 0 {
 					return nil, nil
 				}
 			}
 			pos = max(pos, litAt-lit.maxOff)
 		}
 		if first != nil && !in.unicode && !sticky {
-			units := in.units
-			for pos < len(units) && !first.admits(uint16(units[pos])) {
-				pos++
-			}
-			if pos >= len(units) {
+			if pos = skipUnitsASCII(in.units, pos, first); pos >= len(in.units) {
 				return nil, nil
 			}
 			if lit != nil && litAt < pos+lit.minOff {

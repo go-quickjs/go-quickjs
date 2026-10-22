@@ -93,7 +93,7 @@ type program struct {
 	// litOnly is the pattern's code units where it is nothing but them --
 	// no group, no class, no case folding, no unicode flag -- so that a match
 	// is where they are found, which a search answers without the matcher.
-	litOnly []uint16
+	litOnly *literal
 	classes []*charSet
 	// folds holds the characters each opCharFold matches.
 	folds []foldSet
@@ -158,7 +158,9 @@ func compileNodeFor(n node, flags Flags, utf8 bool) *program {
 	if flags&(FlagUnicode|FlagUnicodeSets) == 0 {
 		c.prog.lit = requiredOf(n, flags&FlagIgnoreCase != 0)
 		if !utf8 && flags&FlagIgnoreCase == 0 {
-			c.prog.litOnly = literalOnly(n)
+			if units := literalOnly(n); units != nil {
+				c.prog.litOnly = newLiteral(units)
+			}
 		}
 	}
 	c.prog.asciiClasses = make([][2]uint64, len(c.prog.classes))

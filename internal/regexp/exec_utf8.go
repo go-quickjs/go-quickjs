@@ -40,18 +40,14 @@ func (m *matcherUTF8) search(re *Regexp, dst []int, start int, sticky bool) ([]i
 	for pos := start; pos <= in.length(); {
 		if lit != nil {
 			if litAt < pos+lit.minOff {
-				if litAt = indexUnitsUTF8(in.units, lit.units, pos+lit.minOff); litAt < 0 {
+				if litAt = indexUnitsUTF8(in.units, &lit.literal, pos+lit.minOff); litAt < 0 {
 					return nil, nil
 				}
 			}
 			pos = max(pos, litAt-lit.maxOff)
 		}
 		if first != nil && !sticky {
-			units := in.units
-			for pos < len(units) && !first.admits(uint16(units[pos])) {
-				pos++
-			}
-			if pos >= len(units) {
+			if pos = skipUnitsUTF8(in.units, pos, first); pos >= len(in.units) {
 				return nil, nil
 			}
 			if lit != nil && litAt < pos+lit.minOff {

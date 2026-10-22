@@ -42,10 +42,39 @@ func literalOnly(n node) []uint16 {
 	return units
 }
 
+// literal is code units a search looks for, and, where every one is ASCII,
+// the same as bytes, which a search over bytes looks for with strings.Index.
+type literal struct {
+	units []uint16
+	// ascii is the units as bytes when isASCII is set.
+	ascii   string
+	isASCII bool
+}
+
+// newLiteral is the literal of units.
+func newLiteral(units []uint16) *literal {
+	l := &literal{units: units}
+	l.setASCII()
+	return l
+}
+
+// setASCII sets ascii and isASCII from the units.
+func (l *literal) setASCII() {
+	b := make([]byte, len(l.units))
+	for i, u := range l.units {
+		if u >= 0x80 {
+			l.ascii, l.isASCII = "", false
+			return
+		}
+		b[i] = byte(u)
+	}
+	l.ascii, l.isASCII = string(b), true
+}
+
 // requiredLit is a pattern's required literal: its code units, and the least
 // and the most units between the start of a match and the literal.
 type requiredLit struct {
-	units          []uint16
+	literal
 	minOff, maxOff int
 }
 
@@ -104,6 +133,7 @@ func requiredOf(n node, fold bool) *requiredLit {
 	if len(best.units) < 2 || best.maxOff > maxLitOffset {
 		return nil
 	}
+	best.setASCII()
 	return &best
 }
 
@@ -181,7 +211,8 @@ func isSurrogateRune(r rune) bool { return r >= 0xD800 && r <= 0xDFFF }
 
 // indexUnits is the first position at or after from where lit occurs in s, or
 // -1.
-func indexUnits(s []uint16, lit []uint16, from int) int {
+func indexUnits(s []uint16, l *literal, from int) int {
+	lit := l.units
 	first, rest := lit[0], lit[1:]
 	for i := from; i <= len(s)-len(lit); i++ {
 		if s[i] != first {

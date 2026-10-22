@@ -151,10 +151,10 @@ type matcher struct {
 	// busy marks the matcher a pattern lends out, so that a pattern used again
 	// while a match is running does not have its state overwritten.
 	busy bool
-	// bytes is the matcher over an ASCII subject's bytes that matches with
-	// this one's storage, its backtracking stack and capture trail, when the
-	// subject is one (see execASCIILent); made when first needed. The
-	// matchers generated from this one have the field, and leave it unused.
+	// bytes is the matcher over an ASCII subject's bytes, lent with this one
+	// when the subject is one (see execASCIILent), with storage of its own;
+	// made when first needed. The matchers generated from this one have the
+	// field, and leave it unused.
 	bytes *matcherASCII
 }
 
@@ -208,7 +208,7 @@ func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error,
 	// which is found without a matcher.
 	if lit := re.prog.litOnly; lit != nil && !sticky {
 		if at := indexUnits(units, lit, start); at >= 0 {
-			return append(dst[:0], at, at+len(lit)), nil
+			return append(dst[:0], at, at+len(lit.units)), nil
 		}
 		return nil, nil
 	}
@@ -262,12 +262,22 @@ func (re *Regexp) giveBack(m *matcher, lent bool) {
 	// A core lends only a small matcher, since it lives as long as the
 	// runtime's cache of patterns: one a match has made large is the
 	// borrower's from now on, and goes when the borrower does.
-	if lent && re.lent == m && (cap(m.stack) > maxLentFrames || cap(m.trail) > maxLentFrames) {
+	if lent && re.lent == m && largeMatcher(m) {
 		re.lent, re.scratch = nil, m
 	}
 	if re.concurrent {
 		matcherPool.Put(m)
 	}
+}
+
+// largeMatcher reports whether m, or its matcher over bytes, has room for
+// more choice points or capture writes than a lent matcher keeps.
+func largeMatcher(m *matcher) bool {
+	if cap(m.stack) > maxLentFrames || cap(m.trail) > maxLentFrames {
+		return true
+	}
+	a := m.bytes
+	return a != nil && (cap(a.stack) > maxLentFrames || cap(a.trail) > maxLentFrames)
 }
 
 // search is the leftmost match at or after start, into dst, made with the
@@ -300,7 +310,7 @@ func (m *matcher) search(re *Regexp, dst []int, start int, sticky bool) ([]int, 
 	for pos := start; pos <= in.length(); {
 		if lit != nil {
 			if litAt < pos+lit.minOff {
-				if litAt = indexUnits(in.units, lit.units, pos+lit.minOff); litAt < 0 {
+				if litAt = indexUnits(in.units, &lit.literal, pos+lit.minOff); litAt < 0 {
 					return nil, nil
 				}
 			}
@@ -310,11 +320,7 @@ func (m *matcher) search(re *Regexp, dst []int, start int, sticky bool) ([]int, 
 			// Where no match can begin, none is tried. Without the unicode
 			// flag a character is a code unit, so the units no match can
 			// begin with are passed over in a loop of their own.
-			units := in.units
-			for pos < len(units) && !first.admits(uint16(units[pos])) {
-				pos++
-			}
-			if pos >= len(units) {
+			if pos = skipUnits(in.units, pos, first); pos >= len(in.units) {
 				return nil, nil
 			}
 			if lit != nil && litAt < pos+lit.minOff {

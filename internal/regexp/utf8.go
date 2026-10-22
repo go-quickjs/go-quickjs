@@ -238,9 +238,23 @@ func (m *matcherUTF8) backref(start, end, pos int, rev, fold bool) (int, bool) {
 // never asked: the required literal is looked for only without the unicode
 // flag, and a UTF-8 input always has it. Were it asked, from -- the first
 // place the literal could be -- claims nothing and passes nothing over.
-func indexUnitsUTF8(s []byte, lit []uint16, from int) int {
-	if from+len(lit) > len(s) {
+func indexUnitsUTF8(s []byte, lit *literal, from int) int {
+	if from+len(lit.units) > len(s) {
 		return -1
 	}
 	return from
+}
+
+// skipUnitsUTF8 is skipUnits over UTF-8: a byte past ASCII begins a match
+// when first admits a unit past ASCII, as the matcher's patch says. A
+// pattern that can begin with one ASCII unit alone has it looked for with
+// bytes.IndexByte, which never stops inside a character.
+func skipUnitsUTF8(units []byte, pos int, first *firstUnits) int {
+	if first.sole && !first.nonASCII {
+		return indexByteFrom(units, pos, first.single)
+	}
+	for pos < len(units) && !first.admits(uint16(units[pos])) {
+		pos++
+	}
+	return pos
 }
