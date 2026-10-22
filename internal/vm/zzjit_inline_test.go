@@ -482,3 +482,53 @@ func TestJITInlinedExitsOnlyWhereCodeRan(t *testing.T) {
 		t.Errorf("drive left native code %d times in two rounds of 3000", n)
 	}
 }
+
+// Inlining's bounds (ssa's maxInlines, maxInlineTotal) go to a function's
+// constructions first: one not inlined is made by a call of Go wherever
+// its constructor has no code native callers may call -- one forwarding
+// its arguments, Prototype's Class.create's -- where any other call not
+// inlined is a native call. Inlined in the order of their PCs, the method
+// calls before paint's construction took every bound, and each
+// construction was a call of Go, as Octane's and the V8 suite's RayTrace's
+// colors and intersections were once their callers' callees reading
+// globals could be inlined. Each answer is the interpreter's.
+func TestJITInlinesConstructionsFirst(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	runtime.GC()
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	inlined := jitInlinedForTest(t)
+	both := jitBothForTest(t, `
+		var Class = {create: function () { return function () { this.initialize.apply(this, arguments) } }}
+		var C = Class.create()
+		C.prototype = {initialize: function (r) { this.r = r * K }}
+		var K = 3
+		var M = {
+			a: function (p) { return p.x + K }, b: function (p) { return p.y * K }, c: function (p) { return p.x - K },
+			d: function (p) { return p.y + p.x * K }, e: function (p) { return (p.x & K) + 1 }, f: function (p) { return p.y - K },
+			g: function (p) { return p.x * p.y + K }, h: function (p) { return (p.y | K) - 1 }, i: function (p) { return p.x + p.y + K },
+		}
+		function paint(n) {
+			let s = 0
+			for (let i = 0; i < n; i++) {
+				const p = {x: i & 15, y: 2}
+				s = (s + M.a(p) + M.b(p) + M.c(p) + M.d(p) + M.e(p) + M.f(p) + M.g(p) + M.h(p) + M.i(p)) | 0
+				const c = new C(s & 7)
+				s = (s + c.r) | 0
+			}
+			return s
+		}`)
+	for range 4 {
+		both.agree(t, `paint(300)`)
+	}
+	r := both.jit
+	if c := jitClosureForTest(t, r, `C`); !slices.Contains(inlined["paint"], c) {
+		t.Errorf("paint inlines %x, not C's constructor %x", inlined["paint"], c)
+	}
+	goCalls := r.jit.goCalls
+	both.agree(t, `paint(1000)`)
+	if n := r.jit.goCalls - goCalls; n > 10 {
+		t.Errorf("paint made %d calls of Go in 1,000 constructions", n)
+	}
+}

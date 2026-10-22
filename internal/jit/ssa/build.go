@@ -2329,19 +2329,29 @@ func (b *builder) frameAt(blk *Block) *frame {
 // failures have not made it generic, within inlining's bounds; with the
 // calls it makes inlined in it, every one, or it is not.
 func (b *builder) inlineAt(pc int, total *int) (*frame, bool) {
+	return b.inlineSiteAt(pc, total, nil)
+}
+
+// inlineSiteAt is inlineAt with the site the feedback gives at pc, if
+// known already (site), which planning asks for first to order the root's
+// calls by what inlining them saves (plan).
+func (b *builder) inlineSiteAt(pc int, total *int, known *inlineAsked) (*frame, bool) {
 	accessor, isAccessor := b.accessor(pc)
 	if b.fb == nil || b.p.Code[pc].Op != ir.Host && !isAccessor || b.inlines >= maxInlines || b.cur.nest >= maxInlineDepth || !isAccessor && b.fb.Generic(pc) {
 		return nil, false
 	}
 	var site InlineSite
 	ok := false
-	if isAccessor {
+	switch {
+	case isAccessor:
 		// A getter or a setter, called with the receiver and, for a setter,
 		// the value (AccessorSite).
 		if accessor.Inline != nil {
 			site, ok = *accessor.Inline, true
 		}
-	} else {
+	case known != nil:
+		site, ok = known.site, known.ok
+	default:
 		site, ok = b.fb.Inline(pc)
 	}
 	var calls []int
@@ -2445,6 +2455,14 @@ func (b *builder) inlineAt(pc int, total *int) (*frame, bool) {
 	b.f.Inlined = append(b.f.Inlined, site.Closure)
 	b.inlineAccessors(fr, total)
 	return fr, true
+}
+
+// inlineAsked is what the feedback gave for a call of the root's to
+// inline (Feedback's Inline), asked once while planning orders the calls
+// (plan): whether it gave a site, and whether planning took the call.
+type inlineAsked struct {
+	site            InlineSite
+	ok, asked, done bool
 }
 
 // planInline makes an inlined callee's blocks, between the block that ends
@@ -3387,23 +3405,47 @@ func (b *builder) plan() error {
 		entries[pc], leaders[pc] = true, true
 	}
 	total := 0
-	for pc := range p.Code {
-		if !reachable(p, pc) {
-			continue
-		}
-		inlined := len(b.f.Inlined)
-		fr, ok := b.inlineAt(pc, &total)
-		if ok && !b.host(pc) {
-			b.f.Inlined = b.f.Inlined[:inlined]
-		}
-		if ok && b.host(pc) {
-			// Not a call native code makes itself (nativeHost) -- an
-			// intrinsic its feedback names, though another site's
-			// feedback has it inline the function the call met.
-			if b.inlined == nil {
-				b.inlined = map[int]*frame{}
+	// The calls to inline, a construction first: what inlining's bounds
+	// allow (maxInlines, maxInlineTotal) goes to what saves the most first,
+	// as V8's budget goes to the hottest sites. A construction not inlined
+	// is made by a call of Go wherever its constructor has no code native
+	// callers may call -- one forwarding its arguments, Prototype's
+	// Class.create's -- where any other call is a native call: inlined in
+	// the order of their PCs, the calls before a function's constructions
+	// had taken the bounds once callees reading globals and making
+	// constructions of their own could be inlined, and RayTrace's
+	// constructions of its colors and intersections were made by Go.
+	asked := make([]inlineAsked, len(p.Code))
+	for _, pass := range []bool{true, false} {
+		for pc := range p.Code {
+			if !reachable(p, pc) || b.inlined[pc] != nil {
+				continue
 			}
-			b.inlined[pc] = fr
+			k := &asked[pc]
+			if !k.asked {
+				k.asked = true
+				if _, isAccessor := b.accessor(pc); b.fb != nil && p.Code[pc].Op == ir.Host && !isAccessor && !b.fb.Generic(pc) {
+					k.site, k.ok = b.fb.Inline(pc)
+				}
+			}
+			if k.done || pass != (k.ok && k.site.Construct) {
+				continue
+			}
+			k.done = true
+			inlined := len(b.f.Inlined)
+			fr, ok := b.inlineSiteAt(pc, &total, k)
+			if ok && !b.host(pc) {
+				b.f.Inlined = b.f.Inlined[:inlined]
+			}
+			if ok && b.host(pc) {
+				// Not a call native code makes itself (nativeHost) -- an
+				// intrinsic its feedback names, though another site's
+				// feedback has it inline the function the call met.
+				if b.inlined == nil {
+					b.inlined = map[int]*frame{}
+				}
+				b.inlined[pc] = fr
+			}
 		}
 	}
 	// Go goes on natively after what it ran where it is sure to run it:
