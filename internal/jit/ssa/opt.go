@@ -20,7 +20,9 @@ import (
 //   - within a block, a guard repeating an earlier one on the same value is
 //     the earlier one;
 //   - values nothing uses are deleted. A guard that can fail is never
-//     deleted: it is an effect.
+//     deleted: it is an effect;
+//   - a property operation whose object's shape an earlier one checked,
+//     nothing between them changing shapes, checks nothing (knownShapes).
 func Optimize(f *Func) {
 	// Shadows, and the stores' checks of them, are made at the end, for
 	// the phis that are left, and again if they were made already.
@@ -166,6 +168,7 @@ func Optimize(f *Func) {
 	sc.subst = subst[:0]
 	f.shadowed, f.originsKept = true, true
 	recount(f)
+	knownShapes(f)
 }
 
 // idTable returns t cleared and n long, reusing its storage.

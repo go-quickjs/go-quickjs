@@ -2237,23 +2237,29 @@ func (c *a64Compiler) property(v *ssa.Value, guard func(arm64.Cond)) {
 	}
 	found := c.a.NewLabel()
 	if v.Const.Bits != 0 {
-		// As amd64's: the shape the site knows inline, any other out of line.
-		scan := c.a.NewLabel()
+		// As amd64's: the shape the site knows inline, unless an earlier
+		// operation checked it (ssa.Value's ShapeKnown); any other out of
+		// line.
 		p := c.gpr(v.Args[0], a64A)
-		c.a.Load(a64B, p, c.enc.ObjectShape)
-		c.movImm(a64C, v.Const.Bits)
-		c.a.Cmp(a64B, a64C, true)
-		if !v.Megamorphic() {
-			guard(arm64.NE)
-		} else {
-			c.a.BCond(arm64.NE, scan)
-			c.cold = append(c.cold, func() {
-				c.a.Bind(scan)
-				c.scan(v, guard, found, 0)
-			})
+		if !v.ShapeKnown {
+			scan := c.a.NewLabel()
+			c.a.Load(a64B, p, c.enc.ObjectShape)
+			c.movImm(a64C, v.Const.Bits)
+			c.a.Cmp(a64B, a64C, true)
+			if !v.Megamorphic() {
+				guard(arm64.NE)
+			} else {
+				c.a.BCond(arm64.NE, scan)
+				c.cold = append(c.cold, func() {
+					c.a.Bind(scan)
+					c.scan(v, guard, found, 0)
+				})
+			}
 		}
 		c.a.Load(a64A, p, c.enc.ObjectProps)
-		c.a.AddImm(a64A, a64A, int64(int32(v.Index)*c.enc.ValueSize), true)
+		if v.Index != 0 {
+			c.a.AddImm(a64A, a64A, int64(int32(v.Index)*c.enc.ValueSize), true)
+		}
 		c.a.Bind(found)
 		return
 	}

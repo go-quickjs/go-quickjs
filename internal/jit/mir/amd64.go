@@ -5071,24 +5071,29 @@ func (c *compiler) property(v *ssa.Value, guard func(amd64.Cond)) {
 	}
 	found := c.a.NewLabel()
 	if v.Const.Bits != 0 {
-		// The shape the site knows, inline; any other, out of line.
-		scan := c.a.NewLabel()
-		p := c.gpr(v.Args[0], scratchA)
-		c.a.Load(scratchB, p, c.enc.ObjectShape)
-		c.movImm(scratchA, v.Const.Bits)
-		c.a.Op(amd64.Cmp, scratchB, scratchA, true)
-		if !v.Megamorphic() {
-			guard(amd64.CondNE)
-		} else {
-			c.a.Jcc(amd64.CondNE, scan)
-			c.cold = append(c.cold, func() {
-				c.a.Bind(scan)
-				c.scan(v, guard, found, 0)
-			})
+		// The shape the site knows, inline, unless an earlier operation
+		// checked it (ssa.Value's ShapeKnown); any other, out of line.
+		if !v.ShapeKnown {
+			scan := c.a.NewLabel()
+			p := c.gpr(v.Args[0], scratchA)
+			c.a.Load(scratchB, p, c.enc.ObjectShape)
+			c.movImm(scratchA, v.Const.Bits)
+			c.a.Op(amd64.Cmp, scratchB, scratchA, true)
+			if !v.Megamorphic() {
+				guard(amd64.CondNE)
+			} else {
+				c.a.Jcc(amd64.CondNE, scan)
+				c.cold = append(c.cold, func() {
+					c.a.Bind(scan)
+					c.scan(v, guard, found, 0)
+				})
+			}
 		}
-		p = c.gpr(v.Args[0], scratchA)
+		p := c.gpr(v.Args[0], scratchA)
 		c.a.Load(scratchA, p, c.enc.ObjectProps)
-		c.a.OpImm(amd64.Add, scratchA, int32(v.Index)*c.enc.ValueSize, true)
+		if v.Index != 0 {
+			c.a.OpImm(amd64.Add, scratchA, int32(v.Index)*c.enc.ValueSize, true)
+		}
 		c.a.Bind(found)
 		return
 	}

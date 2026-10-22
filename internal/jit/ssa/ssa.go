@@ -605,6 +605,11 @@ type Value struct {
 	// its first operand is the binding's cell (OpGlobalCell, OpLexCell),
 	// not an object.
 	Global bool
+	// ShapeKnown marks a property operation whose object is known to be of
+	// the shape it names (Const.Bits), checked by an earlier operation on
+	// it since which nothing may have changed a shape (knownShapes): it
+	// checks nothing.
+	ShapeKnown bool
 	// State is the frame to exit to, for guards.
 	State *FrameState
 	// Shadow is a tagged value's origin at run time, where no compiler can
@@ -969,6 +974,14 @@ type scratch struct {
 	// reaching is reconstruct's: the definition of each kept value that
 	// reaches a block's start, by value and block, for those it has met.
 	reaching map[int]*Value
+	// shapes, shapeHeld, shapeEnds, shapeStarts and blockPos are
+	// knownShapes': the shape known of each value, the values known, what
+	// each block ends knowing, where in it, and each block's place.
+	shapes      []uint64
+	shapeHeld   []int
+	shapeEnds   []shapeFact
+	shapeStarts []int
+	blockPos    []int
 }
 
 // guardSeen is a guard Optimize has met, keyed by its op, and the index
