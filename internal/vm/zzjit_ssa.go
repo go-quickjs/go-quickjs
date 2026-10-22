@@ -6053,7 +6053,7 @@ func (r *Runtime) jitIndexSeen(e *jitEntry, pc int, o, k Value) {
 		// A string read so, a string's character or an array's element,
 		// is a hint of its own (StringReads): the additions of it are Go's
 		// from the same lowering on, not learned an exit each.
-		keyed := o.IsObject() && k.IsString()
+		keyed := o.IsObject() && (k.IsString() || k.IsNumber() && o.Object().class == ClassObject)
 		chars := o.IsString() && k.IsNumber()
 		l := r.jit.lowering(e.link.key.Value())
 		switch {
@@ -6095,11 +6095,13 @@ func (r *Runtime) jitIndexSeen(e *jitEntry, pc int, o, k Value) {
 		e.stringReads = append(e.stringReads, int32(pc))
 	case o.IsObject() && o.Object().class == ClassTypedArray:
 		e.typedReads = append(e.typedReads, int32(pc))
-	case o.IsObject() && k.IsString():
+	case o.IsObject() && (k.IsString() || k.IsNumber() && o.Object().class == ClassObject):
 		// An object's property by its name, obj[name], which Go reads from
 		// native code from then on (ssa.GoIndex), if it would have read
 		// this one: PDF.js's Type1 fonts look their commands up so, map[command],
-		// every invocation left there for the interpreter.
+		// every invocation left there for the interpreter. So is an
+		// ordinary object's by a number, which native code reads as an
+		// array's: Typescript's caches by type IDs, cache[id].
 		if _, ok := r.jitKeyedRead(o, k); !ok {
 			return
 		}
@@ -6149,14 +6151,17 @@ func (fb *jitFeedback) ownEntry() *jitEntry {
 // object's data property by a string key, which the runtime's shared
 // property cache finds -- no getter, no proxy, no class that answers keys
 // itself -- or a dense array's element, or a typed array's, by an
-// integer; and false for any other, which Go reads after an exit.
+// integer, or an index an ordinary object's table holds or nothing up its
+// chain does (jitTableRead); and false for any other, which Go reads
+// after an exit.
 func (r *Runtime) jitKeyedRead(o, k Value) (Value, bool) {
 	if !o.IsObject() {
 		return Undefined, false
 	}
 	obj := o.Object()
 	if k.IsNumber() {
-		if i := uint32(k.Number()); float64(i) == k.Number() && uint(i) < uint(len(obj.elemsOf())) && obj.flags&objMappedArguments == 0 {
+		i := uint32(k.Number())
+		if float64(i) == k.Number() && uint(i) < uint(len(obj.elemsOf())) && obj.flags&objMappedArguments == 0 {
 			if v := obj.elemsOf()[i]; !isHole(v) {
 				return v, true
 			}
@@ -6164,7 +6169,16 @@ func (r *Runtime) jitKeyedRead(o, k Value) (Value, bool) {
 		if t, i, ok := typedElemIndex(obj, k.num); ok {
 			return t.getElem(i), true
 		}
-		return Undefined, false
+		if float64(i) != k.Number() || i >= atomIndexTag || obj.class == ClassTypedArray {
+			return Undefined, false
+		}
+		// An index the elements do not hold: a property of an ordinary
+		// object's table, as an object used as a map by numbers keeps its
+		// keys -- Typescript's caches of type comparisons, by
+		// (a.typeID << 16) | b.typeID, dictionaries, which had left native
+		// code at every read, the interpreter finishing the invocation --
+		// or of none, undefined.
+		return r.jitTableRead(obj, Atom(atomIndexTag|i))
 	}
 	if !k.IsString() {
 		return Undefined, false
@@ -6200,7 +6214,41 @@ func (r *Runtime) jitKeyedRead(o, k Value) (Value, bool) {
 	if jitAbsentKey(obj, a, true) {
 		return Undefined, true
 	}
-	return Undefined, false
+	// One the shared cache does not keep: a dictionary's own.
+	return r.jitTableRead(obj, a)
+}
+
+// jitTableRead is o's property of key a where its chain's tables say what
+// it is with nothing run: the plain data property of the nearest object
+// whose table, or, for an index, whose elements, have it, or undefined
+// where none does -- each object ordinary, its properties its table's and
+// none answering the key itself (shapeClass, synthesized), and for an
+// index an ordinary object or an array, which have no element they do not
+// store (noneIndexed). The global object, whose bindings Go keeps beside
+// its table, is not read so. It reports false for any other.
+func (r *Runtime) jitTableRead(o *Object, a Atom) (Value, bool) {
+	for h, depth := o, 0; h != nil; h, depth = h.proto, depth+1 {
+		if depth > maxChainDepth || !shapeClass(h.class) || h == r.global || r.ensureShape(h) == nil {
+			return Undefined, false
+		}
+		if a.IsIndex() {
+			if h.class != ClassObject && h.class != ClassArray {
+				return Undefined, false
+			}
+			if i := a.Index(); uint(i) < uint(len(h.elemsOf())) && !isHole(h.elemsOf()[i]) {
+				return h.elemsOf()[i], true
+			}
+		} else if synthesized(h.class, a) {
+			return Undefined, false
+		}
+		if j := h.findOwn(a); j >= 0 {
+			if h.shape.keys[j].flags&(propAccessor|propPrivate|propDeleted|propUninit) != 0 {
+				return Undefined, false
+			}
+			return h.vals[j], true
+		}
+	}
+	return Undefined, true
 }
 
 // jitHas is key in obj, as the interpreter answers it, where answering it

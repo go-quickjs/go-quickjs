@@ -487,6 +487,77 @@ func TestJITKeyedReadAbsent(t *testing.T) {
 	}
 }
 
+// A keyed read of an ordinary object by a number its elements do not hold
+// -- an index its table holds, or none up its chain does -- is Go's from
+// native code (jitTableRead, ssa.GoIndex), as a read by a name is:
+// Typescript's caches of type comparisons, objects used as maps by
+// (a.typeID << 16) | b.typeID, had left native code at every read, the
+// interpreter finishing the invocation. An index a getter answers up the
+// chain, a proxy there, a negative or fractional key, are read as before,
+// and each answer is the interpreter's.
+func TestJITKeyedReadTableIndex(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		var nextID = 1
+		function T() { this.id = nextID++ }
+		function TC() { this.same = {}; this.rel = {} }
+		TC.prototype.identical = function (a, b) {
+			if (a == b) { return true }
+			var id = (b.id << 16) | a.id
+			if (this.same[id]) { return true }
+			this.same[id] = false
+			var r = a.id % 3 == b.id % 3
+			this.same[id] = r
+			return r
+		}
+		TC.prototype.related = function (a, b, cache) {
+			var id = (a.id << 16) | b.id
+			if (cache[id] != undefined) { return true }
+			cache[id] = false
+			return a.id < b.id
+		}
+		var ts = []
+		for (var i = 0; i < 64; i++) ts.push(new T())
+		function run(tc, n) { let s = 0; for (let i = 0; i < n; i++) { const a = ts[i % 64], b = ts[(i * 7) % 64]; if (tc.identical(a, b)) s++; if (tc.related(a, b, tc.rel)) s += 2 } return s }
+		var trap = 0
+		var getterProto = Object.create(Object.defineProperty({}, '65537', { get() { trap++; return 'g' } }))
+		var viaProxy = Object.create(new Proxy({}, { get(o, k) { trap++; return 'p' + String(k) } }))
+		var protoIndexed = Object.create({ 65538: 'inherited' })
+		function odd(c) { let s = ''; for (const k of [65537, 65538, -1, 1.5, 3]) s += c[k] + ','; return s + trap }
+	`
+	rounds := []string{}
+	for range 8 {
+		rounds = append(rounds, `run(new TC(), 3000)`)
+	}
+	for range 3 {
+		rounds = append(rounds, `odd(getterProto)`, `odd(viaProxy)`, `odd(protoIndexed)`, `odd({ 3: 'own', '-1': 'neg', 1.5: 'frac' })`)
+	}
+	r := jitAgreesForTest(t, setup, rounds...)
+	run := jitNativeForTest(t, r, "run")
+	hosts, entries := run.ssaStats.hosts, run.ssaStats.entries
+	if _, err := r.Run(compileForTest(t, `run(new TC(), 3000)`)); err != nil {
+		t.Fatal(err)
+	}
+	if run.ssaStats.entries == entries {
+		t.Fatalf("run's code was not entered: slow %v", run.entrySlow)
+	}
+	if n := run.ssaStats.hosts - hosts; n != 0 {
+		t.Errorf("run left native code %d times for Go", n)
+	}
+	for _, name := range []string{"identical", "related"} {
+		v, err := r.Run(compileForTest(t, `TC.prototype.`+name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		e := r.jit.entryFor(v.Object().fn().closure.fn)
+		if e == nil || len(e.keyedReads) == 0 {
+			t.Errorf("%s's read of its cache is not Go's from native code", name)
+		}
+	}
+}
+
 // A function whose locals closures capture is compiled for native callers
 // (jitcompile's callee lowering): its frame is made in the VM's stack, and
 // Go makes its closures and closes what they captured there
