@@ -1132,6 +1132,20 @@ function regexp_search_i(n)
     return n;
 }
 
+/* a search for a word through a text of some kilobytes not all ASCII */
+function regexp_search_utf16(n)
+{
+    var j, c = 0, s = "";
+    for (j = 0; j < 40; j++)
+        s += "Die Größe der Straße überrascht. ";
+    s += "needle";
+    for (j = 0; j < n; j++)
+        if (/needle/.test(s))
+            c++;
+    global_res = c;
+    return n;
+}
+
 /* a pattern tested against a string made just before */
 function regexp_fresh(n)
 {

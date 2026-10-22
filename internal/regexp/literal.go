@@ -229,8 +229,9 @@ func indexUnits(s []uint16, l *literal, from int) int {
 	lit := l.units
 	first, rest := lit[0], lit[1:]
 	for i := from; i <= len(s)-len(lit); i++ {
-		if s[i] != first {
-			continue
+		// The first unit is looked for four at a time.
+		if i = indexUnit(s, i, first); i > len(s)-len(lit) {
+			return -1
 		}
 		j := 0
 		for j < len(rest) && s[i+1+j] == rest[j] {

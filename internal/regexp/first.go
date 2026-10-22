@@ -50,6 +50,21 @@ func (f *firstUnits) seal() {
 // skipNext), which the search over bytes keeps where it found each of a
 // pair of units last.
 func skipUnits(units []uint16, pos int, first *firstUnits, next *[2]int) int {
+	if !first.nonASCII {
+		// One unit, or either of two, is looked for four at a time.
+		if first.sole {
+			return indexUnit(units, pos, uint16(first.single))
+		}
+		if first.pair {
+			if next[0] < pos {
+				next[0] = indexUnit(units, pos, uint16(first.single))
+			}
+			if next[1] < pos {
+				next[1] = indexUnit(units, pos, uint16(first.second))
+			}
+			return min(next[0], next[1])
+		}
+	}
 	for pos < len(units) && !first.admits(units[pos]) {
 		pos++
 	}
