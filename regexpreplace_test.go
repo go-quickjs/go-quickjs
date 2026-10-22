@@ -31,3 +31,25 @@ func TestRegExpReplaceDirect(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestRegExpMatchesRoom covers the room a global replace or match keeps its
+// matches' indices in, which the runtime lends to one at a time: more
+// matches of more groups than it starts with, a replacement function that
+// replaces and matches globally itself while its caller's room is lent, a
+// replace of thousands of matches, which grows the room past what the
+// runtime keeps, and those after it; and split's pieces, gathered in room of
+// their own, past it. Each answer is Node's.
+func TestRegExpMatchesRoom(t *testing.T) {
+	checkEval(t, `var r = []
+	  r.push("2024-01-15, 2025-12-31 and 1999-07-04 or 1970-01-01, 2000-02-29".replace(/(\d+)-(\d+)-(\d+)/g, "$3/$2/$1"))
+	  r.push("a1b2c3".replace(/(\w)(\d)/g, function (m, x, d) { return "[" + "..x9..y8z7w6".replace(/(\w)(\d)/g, "$2$1") + "".concat("q1q2".match(/q\d/g)) + x + d + "]" }))
+	  var big = "ab".repeat(3000).replace(/(a)(b)/g, "$2$1"); r.push(big.length, big.slice(0, 6), big.slice(-6))
+	  r.push("x1y2".replace(/(\w)(\d)/g, "$2$1"))
+	  var m = "k1 k22 k333 k4444 k5 k6 k7 k8 k9 k10 k11 k12 k13 k14 k15 k16 k17 k18 k19 k20".match(/k(\d)(\d*)/g); r.push(m.length, m.join(), m.length === m.slice().length)
+	  r.push("p,q ,r, s ,t,u,v,w,x,y,z,aa,bb,cc,dd,ee,ff,gg,hh,ii,jj".split(/\s*(,)\s*/).join("|"))
+	  r.push("p,q".split(/(,)/, 2).join("|"), "".split(/,/).length, "abc".split(/(?:)/).join("|"))
+	  r.join(";")`, "15/01/2024, 31/12/2025 and 04/07/1999 or 01/01/1970, 29/02/2000;"+
+		"[..9x..8y7z6wq1,q2a1][..9x..8y7z6wq1,q2b2][..9x..8y7z6wq1,q2c3];6000;bababa;bababa;1x2y;20;"+
+		"k1,k22,k333,k4444,k5,k6,k7,k8,k9,k10,k11,k12,k13,k14,k15,k16,k17,k18,k19,k20;true;"+
+		"p|,|q|,|r|,|s|,|t|,|u|,|v|,|w|,|x|,|y|,|z|,|aa|,|bb|,|cc|,|dd|,|ee|,|ff|,|gg|,|hh|,|ii|,|jj;p|,;1;a|b|c")
+}

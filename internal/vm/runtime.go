@@ -525,6 +525,9 @@ type Realm struct {
 	// genIteration is what generatorIteration found last, kept while it
 	// holds.
 	genIteration genIterationCache
+	// spanBuf is the room a global replace or match keeps its matches'
+	// indices in, lent to one at a time (takeSpans).
+	spanBuf []int
 	jitRealmFields
 	genNextFn *Object
 }

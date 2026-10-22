@@ -671,10 +671,13 @@ func (r *Runtime) splitBuiltin(splitter Value, d *regexpData, j *subject, limit 
 	if r.abort != nil || r.ctx != nil && r.ctx.Done() != nil {
 		check = r.checkInterruptNow
 	}
-	var out []Value
-	var last []int
+	// The pieces are gathered where a few of them cost nothing to keep,
+	// and copied into the array, which is made once.
+	var outRoom [16]Value
+	var lastRoom [8]int
+	out, last := outRoom[:0], lastRoom[:0]
 	done := func(err error) (Value, error) {
-		if last != nil {
+		if len(last) > 0 {
 			r.recordLegacyMatch(d.legacy(), s, last)
 		}
 		if err != nil {

@@ -223,20 +223,24 @@ func (r *Runtime) regExpSymbolMatch(rx Value, args []Value) (Value, error) {
 	// them, without the arrays exec would make of them for this to read
 	// element 0 of.
 	if builtin && r.builtinExecOf(rx) {
-		var spanRoom [16]int
-		spans, err := r.execMatchAll(rx, s, fullUnicode, spanRoom[:0])
+		spans, err := r.execMatchAll(rx, s, fullUnicode, r.takeSpans())
+		// Nothing below runs a script, which could match: the room is
+		// given back at once, and read until the array is made.
+		r.giveSpans(spans)
 		if err != nil {
 			return Undefined, err
 		}
 		if len(spans) == 0 {
 			return Null, nil
 		}
+		// The matched substrings are the array's elements, written there.
 		width := 2 * (rx.Object().dataOf().(*regexpData).re.GroupCount() + 1)
-		out = make([]Value, 0, len(spans)/width)
-		for i := 0; i < len(spans); i += width {
-			out = append(out, Str(s.Substring(spans[i], spans[i+1])))
+		arr := newArrayObject(r.proto.array, len(spans)/width)
+		elems := arr.elemsOf()
+		for i := range elems {
+			elems[i] = Str(s.Substring(spans[i*width], spans[i*width+1]))
 		}
-		return Obj(r.newArrayFrom(out)), nil
+		return Obj(arr), nil
 	}
 	j := subjectOf(s)
 	for {
@@ -491,6 +495,17 @@ func (r *Runtime) regExpSymbolReplace(rx Value, args []Value) (Value, error) {
 // replaceDirect has found rx to be a RegExp that it may be: its flags are
 // then fl, and its exec the built-in.
 func (r *Runtime) regExpReplace(rx Value, args []Value, fl regexp.Flags, direct bool) (Value, error) {
+	// The matches' indices are kept in the runtime's room for them, which
+	// the replace has the use of until it returns.
+	room := r.takeSpans()
+	v, err := r.regExpReplaceIn(rx, args, fl, direct, &room)
+	r.giveSpans(room)
+	return v, err
+}
+
+// regExpReplaceIn is regExpReplace keeping its matches' indices in *room,
+// which it leaves as it has grown it.
+func (r *Runtime) regExpReplaceIn(rx Value, args []Value, fl regexp.Flags, direct bool, room *[]int) (Value, error) {
 	if !rx.IsObject() {
 		return Undefined, r.throwTypeError("RegExp.prototype[Symbol.replace] called on a non-object")
 	}
@@ -549,14 +564,13 @@ func (r *Runtime) regExpReplace(rx Value, args []Value, fl regexp.Flags, direct 
 	// the matching is done, the matches are kept as their indices rather than
 	// as the arrays exec would have made of them, which only this reads.
 	var results []Value
-	// The matches of a pattern used to replace a few of them are kept where
-	// they cost nothing to make.
-	var spanRoom [16]int
-	spans := spanRoom[:0]
+	spans := *room
 	fast := direct || builtin && r.builtinExecOf(rx)
 	if fast && global {
 		var err error
-		if spans, err = r.execMatchAll(rx, s, fullUnicode, spans); err != nil {
+		spans, err = r.execMatchAll(rx, s, fullUnicode, spans)
+		*room = spans
+		if err != nil {
 			return Undefined, err
 		}
 	}
@@ -572,6 +586,7 @@ func (r *Runtime) regExpReplace(rx Value, args []Value, fl regexp.Flags, direct 
 			break
 		}
 		spans = append(spans, caps...)
+		*room = spans
 		if !global {
 			break
 		}
@@ -795,6 +810,29 @@ func (r *Runtime) regExpReplace(rx Value, args []Value, fl regexp.Flags, direct 
 		return Str(&String{s: t, length: len(t), ascii: true}), nil
 	}
 	return r.builtString(sb.String())
+}
+
+// maxKeptSpans is the most indices the room a runtime keeps for a global
+// replace's or match's matches holds on to after one: 8 KiB.
+const maxKeptSpans = 1024
+
+// takeSpans is the runtime's room for a global replace's or match's matches'
+// indices, empty, which is the caller's until it gives it back (giveSpans):
+// a replacement function's replace, which finds it taken, makes its own.
+func (r *Runtime) takeSpans() []int {
+	spans := r.spanBuf[:0]
+	r.spanBuf = nil
+	return spans
+}
+
+// giveSpans gives back the room takeSpans gave, as the caller's use of it has
+// grown it, unless it has grown large: a replace over a long string with
+// many matches would otherwise keep the room for them as long as the
+// runtime lives.
+func (r *Runtime) giveSpans(spans []int) {
+	if cap(spans) <= maxKeptSpans {
+		r.spanBuf = spans[:0]
+	}
 }
 
 // replacedShort is the result of replacing the built-in exec's matches of an
