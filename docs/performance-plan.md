@@ -1039,21 +1039,23 @@ What a loop's turn is spent on (step 1 below, 2026-10-22, with
   carried as the address of the cell it came from, its reference read
   from it (`[cell+8]`), then the object's values (`[obj+8]`) and the
   value: three dependent loads where V8 loads an in-object field once.
-- **Keep cells on the critical path**: List's `isShorterThan` spends 45%
-  of its samples on one property read's cell address stored to a keep
-  cell and loaded straight back, every turn; its turn is about 70
-  instructions where V8's is about 12 (unrolled four times).
+- **A spill on the critical path**: List's `isShorterThan` spends 45% of
+  its samples on one property read's cell address stored to a spill slot
+  and loaded straight back, every turn -- the allocator holding the
+  loop's phis live to its back edge's poll, not anything the collector
+  needs (fixed, `3d997a4`); its turn is about 70 instructions where V8's
+  is about 12 (unrolled four times).
 - **Conditions as booleans**: `x !== null` in a loop's test is `cmp`,
   `setz`, `movzx`, two moves, `xor 1`, a move, `test` and the jump, where
   V8 has `cmp` and the jump: 12% of `isShorterThan`.
 - Constants such as the object tag re-read from the context at each
   check, off the critical path.
 
-Done since (2026-10-22, `c458010`..`7ab13db`, JIT on, against the build
+Done since (2026-10-22, `3d997a4`..`92d71f7`, JIT on, against the build
 before; three alternated runs of each, then four JIT code placements,
 `V8BENCH_JITSEED` 1 to 4):
 
-- The backend (`c458010`..`eda9ef8`): a back edge's poll no longer keeps
+- The backend (`3d997a4`..`7db8ed6`): a back edge's poll no longer keeps
   its header's phis alive, which spilled List's loop; keeps test the
   barrier flag once a run; a native call writes, saves and reads back
   only what it must (Towers' self-call 85 to 49 instructions, a native
@@ -1061,7 +1063,7 @@ before; three alternated runs of each, then four JIT code placements,
   of a compare (21,365 of the suites' 21,819 such branches; List's two
   tests 19 instructions to 4). V8 suite -2.9%, Are We Fast Yet -1.9%
   (List -23%), Octane -3.9%.
-- The inliner (`7d155d6`..`7ab13db`): callees with throws and calls
+- The inliner (`86da85e`..`92d71f7`): callees with throws and calls
   their code was never seen to make, those made exits from the inlined
   frame; callees that read globals and what they captured; a function's
   constructions given the inlining's bounds first, since a forwarding
@@ -1073,9 +1075,39 @@ before; three alternated runs of each, then four JIT code placements,
   Yet -1.9% (Towers -28.7%), Octane +1.1% (geometric mean -0.3%; Box2D
   -6.9%, Typescript +4.0%).
 
+- Array methods' callbacks (`2cee3f7`, `ca4e24e`): the one closure a
+  loop of forEach, map, filter, reduce, some, every, find or findIndex is
+  given, inlined in the loop, and a closure literal made at the call and
+  inlined there not made at all, made by Go at an exit that needs it:
+  `array_reduce` 27.4 to 8.4 ns, `array_forEach` 28.0 to 10.0,
+  `array_some` 28.2 to 12.2, `array_map` 36.8 to 22.5, Are We Fast Yet's
+  NBody -28% at every placement.
+- Typescript's sites (`73af3a0`..`eceffb6`): an ordinary object's index
+  read by Go from native code; a megamorphic write inside an inlined
+  callee Go's from native code, not an exit; a polymorphic method call
+  learning every method its read has met at once; a store with checks
+  appending natively; a generic call compiling the callee it meets with
+  no code; `_super.call(this)` of a captured parent native. Typescript's
+  runs finished in the interpreter 17,617 to 3,327, exits 72,927 to
+  36,923; Typescript -3.9% at every placement, RayTrace (Octane) -9.4%.
+- Two bugs on arm64 found by CI's macOS jobs, their fixes folded into the
+  commits they were in: the listing `jitprof` reads, which arm64's code
+  had not (`9f88c77`), and a call's state finding a saved box by its register,
+  which another value saved across the call had after the box's end, so
+  that an exit rebuilt a loop's counter from an address (`55db91f`;
+  amd64's code had the same flaw, not met).
+
+The round as a whole (`3d997a4`..`eceffb6` against `0c96ef6`, four
+placements): V8 suite -3.2%, Are We Fast Yet -10.0% (geometric mean
+-13.5%: Towers -45%, NBody -30%, List -23%, Richards -12.5%), Octane -2.9%;
+56 micro-benchmarks -10.5% by their geometric mean, `generator_next`
+(+19%) and `string_build_large2` (+19%) slower at the one placement
+measured.
+
 Open from it:
 
-- Typescript, +4.0% at every placement: about 10% more runs finished in
+- Typescript, +4.0% at every placement, before its sites were fixed
+  (above): about 10% more runs finished in
   the interpreter, at sites that inlining reaches more often -- a
   polymorphic call (`visible`'s `isMember`) learned one target per
   recompile, an inlined constructor's writes that add properties
