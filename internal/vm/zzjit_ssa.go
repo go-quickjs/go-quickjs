@@ -5217,6 +5217,11 @@ func (r *Runtime) jitInlinesCalls(cl *closure, depth int) bool {
 		if _, ok := fb.FromCharCode(pc); ok {
 			continue
 		}
+		if r.jitInlineExit(fn, pc) {
+			// Left to an exit inside the inlined frame, seldom taken
+			// (ssa.InlineExitFeedback).
+			continue
+		}
 		if depth <= 0 {
 			return false
 		}
@@ -8136,7 +8141,11 @@ func (r *Runtime) jitBigIntExit(f *frame, e *jitEntry, site int) {
 }
 
 func (fb *jitFeedback) Generic(pc int) bool {
-	if fb.e != nil && slices.Contains(fb.e.failed, int32(pc)) {
+	// An inlined callee's are what its own code met (ownEntry): inlined
+	// knowing none, AWFY Towers' popDiskFrom read top.next for a number,
+	// which its own code had learned it was not, and left native code at
+	// every call, which then stopped inlining it.
+	if e := fb.ownEntry(); e != nil && slices.Contains(e.failed, int32(pc)) {
 		return true
 	}
 	// Arithmetic the tree tier saw meet or make a BigInt on the heap, which

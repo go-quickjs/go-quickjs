@@ -114,7 +114,13 @@ what it knows -- the arguments, the receiver -- and jumps there with where
 it returns to, the callee's closure and its link in registers, and the
 callee's return hands the result back in registers (`abi.Context`'s
 `ReturnTo`). Small callees are inlined, with
-their own frames made at an exit. A call is compiled for the functions it
+their own frames made at an exit, and with the globals they read, read
+from their own sites, and the speculations their own code learned failed
+built generic. A callee's throw, or a call its own code has never been
+seen to make, does not keep it from being inlined: native code leaves the
+inlined frame there, as V8's code deoptimizes at a call with no feedback
+(`ssa.InlineExitFeedback`), and such exits, if they are taken after all,
+count toward the call's not being inlined any more (`jitInlineLeft`). A call is compiled for the functions it
 was seen to call natively, up to `jitCallTargets` (4), each checked by its
 object or, for a closure made anew, by its code (see Closures); one that
 meets any other leaves native code, Go learning there what to call next.

@@ -8894,12 +8894,14 @@ func TestJITSSAGoCalls(t *testing.T) {
 // threshold stress, Infinity's read leaves -- reads t, a value it never
 // loaded, from the slot it was entered with, which an exit's way of making
 // the call writes the call's operands over (the fuzzer's eb178ef9ec054b76
-// and 0ea58c8f6fea0c66). Each answer is the interpreter's.
+// and 0ea58c8f6fea0c66). Each answer is the interpreter's. h's try,
+// which an inlined callee may not have, keeps it a call: its throw alone,
+// on a path seldom taken, would have it inlined (ssa.InlineExitFeedback).
 func TestJITSSAGoCallsLeaveFrameSlots(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	src := `function h(s,i){if(i===6)throw new RangeError('h'+s);return (s+i)|0}
+	src := `function h(s,i){try{if(i===6)throw new RangeError('h'+s)}finally{}return (s+i)|0}
 		function f(n){let s=1,t='3';for(let i=0;i<n;i++){t=(i % Infinity);s=h(s,i);}return s+':'+t}
 		function g(n){try{return f(n)}catch(e){return e.message}}
 		[g(1),g(3),g(7)].join()`
@@ -10918,7 +10920,10 @@ func TestJITSSACapturedBindings(t *testing.T) {
 // for numbers, at its entry too, once its constants were read natively,
 // and leave at every call. And a function only native callers call learns
 // a speculation that failed in it, as one Go enters does: it was never
-// compiled again. Each answer is the interpreter's.
+// compiled again. Each answer is the interpreter's. run calls sub through
+// Function.prototype.call, which calls it natively and never inlines it:
+// its throw, on a path seldom taken, would have it inlined
+// (ssa.InlineExitFeedback), and its own code never run.
 func TestJITSSAStringConcatsAndCalleeDeopts(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -10926,7 +10931,7 @@ func TestJITSSAStringConcatsAndCalleeDeopts(t *testing.T) {
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	setup := `function sub(v,w){if(!w||!v)throw 'Vectors ['+v+','+w+']';return v.x-w.x}
-		function run(n){let s=0;const a={x:5},b={x:2};for(let i=0;i<n;i++)s=(s+sub(a,b)+i)|0;return s}
+		function run(n){let s=0;const a={x:5},b={x:2};for(let i=0;i<n;i++)s=(s+sub.call(undefined,a,b)+i)|0;return s}
 		function bad(){try{return sub({x:1},undefined)}catch(e){return e}}
 		function dbl(x){let r=0;for(let k=0;k<2;k++)r=r+x*1;return r}
 		function mix(xs,n){let s=0;for(let i=0;i<n;i++){const r=dbl(xs[i%xs.length]);s=(s+(typeof r==='number'?r:1))|0}return s}`

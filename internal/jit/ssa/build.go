@@ -1512,6 +1512,27 @@ func InlineCalls(p *ir.Program) ([]int, bool) {
 	return calls, true
 }
 
+// InlineExitFeedback is Feedback that keeps a callee inlined with an
+// operation it leaves to Go that native code neither makes itself nor
+// inlines (InlineCalls): InlineExit reports, of an inlined callee's
+// feedback, whether its operation at pc is one seldom run -- a throw, or
+// a call the callee has never been seen to make -- at which native code
+// may leave the inlined frame, Go making its frame (InlineState) and the
+// interpreter the operation, as V8's code inlines a function whose cold
+// paths deoptimize or call the runtime to throw. AWFY Towers' pushDisk
+// and popDiskFrom, each guarding with throw new Error(...), had been
+// called natively at every move, and their caller with them.
+type InlineExitFeedback interface {
+	InlineExit(pc int) bool
+}
+
+// inlineExit reports whether the frame being translated, an inlined
+// callee, may leave its operation at pc to an exit (InlineExitFeedback).
+func (b *builder) inlineExit(pc int) bool {
+	f, ok := b.fb.(InlineExitFeedback)
+	return ok && b.cur != b.root && f.InlineExit(pc)
+}
+
 // GlobalSite is a global read's site: its name, the VM's atom, and the
 // index in the global object's table where the binding was found -- or,
 // Lexical, in the table of the script-level lexical bindings', a let's,
@@ -2364,17 +2385,21 @@ func (b *builder) inlineAt(pc int, total *int) (*frame, bool) {
 		// to, which count: not a callee more toward maxInlines.
 		b.inlines++
 	}
+	inlined := len(b.f.Inlined)
 	if len(calls) != 0 {
 		cur := b.cur
 		b.enter(fr)
 		for _, at := range calls {
-			if b.nativeHost(at) {
+			if b.nativeHost(at) || b.inlineExit(at) {
+				// Made natively, or left to an exit in the callee's frame,
+				// seldom taken (InlineExitFeedback).
 				continue
 			}
 			child, ok := b.inlineAt(at, total)
 			if !ok {
 				b.enter(cur)
 				b.nslots, *total, b.inlines, b.f.Keeps = nslots, before, inlines, keeps
+				b.f.Inlined = b.f.Inlined[:inlined]
 				return nil, false
 			}
 			if fr.inlined == nil {
@@ -2384,6 +2409,7 @@ func (b *builder) inlineAt(pc int, total *int) (*frame, bool) {
 		}
 		b.enter(cur)
 	}
+	b.f.Inlined = append(b.f.Inlined, site.Closure)
 	b.inlineAccessors(fr, total)
 	return fr, true
 }
@@ -3328,7 +3354,12 @@ func (b *builder) plan() error {
 		if !reachable(p, pc) {
 			continue
 		}
-		if fr, ok := b.inlineAt(pc, &total); ok && b.host(pc) {
+		inlined := len(b.f.Inlined)
+		fr, ok := b.inlineAt(pc, &total)
+		if ok && !b.host(pc) {
+			b.f.Inlined = b.f.Inlined[:inlined]
+		}
+		if ok && b.host(pc) {
 			// Not a call native code makes itself (nativeHost) -- an
 			// intrinsic its feedback names, though another site's
 			// feedback has it inline the function the call met.

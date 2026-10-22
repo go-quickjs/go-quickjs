@@ -901,6 +901,10 @@ type Func struct {
 	Keeps int
 	// KeepLimit bounds Keeps before the backend: VirtualKeeps if 0.
 	KeepLimit int
+	// Inlined are the closures of the callees the code inlines
+	// (InlineSite's Closure), at every depth, in the order they were
+	// decided.
+	Inlined []uintptr
 	// Unsafe, where not empty, says why the code may not be compiled: a
 	// BigInt's box a value read from its cell was not kept from, the keep
 	// cells run out (keepAcrossStores).
