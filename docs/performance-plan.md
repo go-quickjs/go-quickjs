@@ -1022,6 +1022,33 @@ Where the JIT is ahead of Node: BigInts of 64 bits (`bigint64_arith` 4.9
 ns against 19.4), a throw caught in the same function (`try_throw` 4.5
 against 97), `loop_sum`, `prop_delete_last`, `string_from_code_point`.
 
+What a loop's turn is spent on (step 1 below, 2026-10-22, with
+`v8bench -jitcode` and `jitprof`, about 1,000 samples a benchmark):
+
+- **Calls** are 22 to 34% of native time in Towers, Richards, Bounce and
+  List (`call` and `call entry`). A native call is 60 to 70 instructions
+  before its jump: the context's depth, the callee checked through its
+  cell, the frame's room, each argument's two words with a test of each
+  source, every live value spilled to keep cells and loaded back, and the
+  collector's marking flag at the return. V8 inlines Towers' callees,
+  where ours are not inlined at all: `ssa.InlineCalls` refuses a callee
+  that reads a global, makes a call that is not inlined itself, or has a
+  loop, and `pushDisk` and `popDiskFrom` each read `Error` on a path
+  that throws, which keeps them and `moveTopDisk` out of `moveDisks`.
+- **A property read's chain of loads**: a value with a reference is
+  carried as the address of the cell it came from, its reference read
+  from it (`[cell+8]`), then the object's values (`[obj+8]`) and the
+  value: three dependent loads where V8 loads an in-object field once.
+- **Keep cells on the critical path**: List's `isShorterThan` spends 45%
+  of its samples on one property read's cell address stored to a keep
+  cell and loaded straight back, every turn; its turn is about 70
+  instructions where V8's is about 12 (unrolled four times).
+- **Conditions as booleans**: `x !== null` in a loop's test is `cmp`,
+  `setz`, `movzx`, two moves, `xor 1`, a move, `test` and the jump, where
+  V8 has `cmp` and the jump: 12% of `isShorterThan`.
+- Constants such as the object tag re-read from the context at each
+  check, off the critical path.
+
 The plan, in order -- the compiler first, since micro-optimizations do not
 close a gap of three to seven times:
 
