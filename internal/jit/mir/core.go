@@ -28,7 +28,11 @@ type core struct {
 	// lazy values have no location: constants used only by frame states,
 	// and boxes used only by frame states and returns, which are
 	// rematerialized where needed. lazy, locs and hasLoc are by value ID.
-	lazy   []bool
+	lazy []bool
+	// fused values are computed by the branch that ends their block, as a
+	// compare and a conditional jump, rather than where they are, as a
+	// boolean (findFused). Each is lazy too.
+	fused  []bool
 	locs   []loc
 	hasLoc []bool
 	// origin is each tagged value's (ssa.Origins): the slot an exit looks
@@ -294,6 +298,9 @@ type loc struct {
 // isLazy reports whether v has no location of its own (core.lazy).
 func (c *core) isLazy(v *ssa.Value) bool { return v.ID < len(c.lazy) && c.lazy[v.ID] }
 
+// isFused reports whether v is computed by its block's branch (core.fused).
+func (c *core) isFused(v *ssa.Value) bool { return v.ID < len(c.fused) && c.fused[v.ID] }
+
 // loc is v's location, and whether it has one.
 func (c *core) loc(v *ssa.Value) (loc, bool) {
 	if v.ID >= len(c.locs) || !c.hasLoc[v.ID] {
@@ -450,6 +457,123 @@ func (c *core) findLazy() {
 			}
 		}
 	}
+	c.findFused()
+}
+
+// fusable reports whether a boolean operation can be computed by a branch
+// as its test, as a compare and a conditional jump (each backend's test),
+// and whether it is pure: it reads nothing but its operands, in their
+// locations, nor exits, so that what is emitted between it and the branch
+// changes nothing it reads, its operands kept live to the branch.
+func fusable(op ssa.Op) (ok, pure bool) {
+	switch op {
+	case ssa.OpNot, ssa.OpCmpF64, ssa.OpCmpI64, ssa.OpStrictNullish, ssa.OpCellNone:
+		return true, true
+	case ssa.OpLooseNullish, ssa.OpEqTagged, ssa.OpTypeIs, ssa.OpInstanceOf, ssa.OpTruth:
+		// They read the objects and strings their operands are, through
+		// where they came from (origin.go), and exit to their states: they
+		// are fused only where nothing is emitted after them in the block.
+		return true, false
+	}
+	return false, false
+}
+
+// findFused marks the values an If block's branch computes itself (fused):
+// its control, if it is a comparison or a test (fusable) that nothing but
+// the branch uses -- no other value, no frame state, no other block -- and,
+// through an OpNot so fused, which only swaps the branch's targets, its
+// operand, as far as the chain goes. Such a value needs no location: the
+// branch jumps on the flags it sets, where a boolean had been set from
+// them, and tested again.
+func (c *core) findFused() {
+	n := c.f.NumValues()
+	c.fused = c.bools(n)
+	// Uses, counted here rather than taken from ssa.Value's Uses: a fused
+	// value has no location, which any other use would need.
+	uses := c.ints(n)
+	state := func(s *ssa.FrameState) {
+		if s != nil {
+			for _, v := range s.Slots {
+				if v != nil {
+					uses[v.ID]++
+				}
+			}
+		}
+	}
+	for _, b := range c.f.Blocks {
+		for _, v := range b.Values {
+			for _, a := range v.Args {
+				uses[a.ID]++
+			}
+			if v.Shadow != nil {
+				uses[v.Shadow.ID]++
+			}
+			state(v.State)
+		}
+		if b.Control != nil {
+			uses[b.Control.ID]++
+		}
+		state(b.State)
+		state(b.Header)
+	}
+	for _, b := range c.f.Blocks {
+		if b.Kind != ssa.BlockIf {
+			continue
+		}
+		for v := b.Control; v != nil && v.Block == b && uses[v.ID] == 1 && !c.lazy[v.ID] && v.Shadow == nil; {
+			ok, pure := fusable(v.Op)
+			if !ok || !pure && !c.lastEmitted(b, v) {
+				break
+			}
+			c.fused[v.ID], c.lazy[v.ID] = true, true
+			if v.Op != ssa.OpNot {
+				break
+			}
+			v = v.Args[0]
+		}
+	}
+}
+
+// lastEmitted reports whether v is the last value of b emitted: what
+// follows it is lazy, fused values included.
+func (c *core) lastEmitted(b *ssa.Block, v *ssa.Value) bool {
+	for i := len(b.Values) - 1; i >= 0; i-- {
+		w := b.Values[i]
+		if w == v {
+			return true
+		}
+		if !c.lazy[w.ID] || w.Op == ssa.OpPhi {
+			return false
+		}
+	}
+	return false
+}
+
+// emptyEdge reports whether the edge from from to to does nothing -- no
+// phi moves, as phiSchedule finds them, and no poll -- so that a branch
+// can jump to to itself.
+func (c *core) emptyEdge(from, to *ssa.Block) bool {
+	idx := -1
+	for i, p := range to.Preds {
+		if p == from {
+			idx = i
+		}
+	}
+	if idx < 0 || to.LoopHeader && to.Backedge[idx] {
+		return false
+	}
+	for _, phi := range to.Values {
+		if phi.Op != ssa.OpPhi {
+			break
+		}
+		if _, ok := c.loc(phi); !ok {
+			continue // dead
+		}
+		if src := phi.Args[idx]; c.isLazy(src) || c.locAt(src) != c.locAt(phi) {
+			return false
+		}
+	}
+	return true
 }
 
 // numBlocks bounds f's block IDs.
@@ -537,8 +661,14 @@ func (c *core) allocate() error {
 			if v.Op == ssa.OpPhi {
 				continue // phi arguments are used at their predecessors' ends
 			}
+			// A fused value is computed at its block's branch (findFused):
+			// what it reads is used there.
+			p, fused := pos[v.ID], c.isFused(v)
+			if fused {
+				p = end[b.ID]
+			}
 			for _, a := range v.Args {
-				uses = append(uses, use{a, pos[v.ID]})
+				uses = append(uses, use{a, p})
 				if a.Shadow != nil {
 					// It may read where its operand came from: a keep
 					// (mir's keep), or an operation that finds an object's
@@ -546,10 +676,10 @@ func (c *core) allocate() error {
 					// state names keeps its shadow alive there too, but a
 					// captured local's is in no state (its slot is its
 					// cell), and the slot IR reads a local as an operand.
-					uses = append(uses, use{a.Shadow, pos[v.ID]})
+					uses = append(uses, use{a.Shadow, p})
 				}
 			}
-			at := pos[v.ID]
+			at := p
 			if v.Op == ssa.OpCall && len(v.Calls()) != 0 && (v.Calls()[0].Go != 0 || ssa.RefillsPools(v)) {
 				// A call of Go that Go refuses exits after it, Go having
 				// taken the registers: what its state reads lives across
@@ -558,7 +688,7 @@ func (c *core) allocate() error {
 				// are in its state.
 				at++
 			}
-			if i+1 < len(b.Values) && b.Values[i+1].State == v.State {
+			if !fused && i+1 < len(b.Values) && b.Values[i+1].State == v.State {
 				// The guards of one instruction share its state: what it
 				// reads is used at the last of them, which subsumes the
 				// others, as they are in one block.

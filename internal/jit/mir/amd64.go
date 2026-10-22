@@ -4412,44 +4412,212 @@ func (c *compiler) moveValue(dst, src *ssa.Value, parked bool) {
 	c.setG(dst, r)
 }
 
-// branch emits an If block's end, fusing a float comparison into the jump.
+// target is where a branch's test goes (test): to yes where its value is
+// true, to no where it is false. fall is the label bound right after the
+// test's code, to which it need not jump, or noLabel.
+type target struct{ yes, no, fall amd64.Label }
+
+// noLabel is a target's fall where no label follows the test.
+const noLabel = amd64.Label(-1)
+
+// not is t for the negation of its value.
+func (t target) not() target { return target{t.no, t.yes, t.fall} }
+
+// jumpIf goes to t.yes where cond holds, and to t.no where it does not:
+// one jump where either follows.
+func (c *compiler) jumpIf(t target, cond amd64.Cond) {
+	switch {
+	case t.fall == t.no:
+		c.a.Jcc(cond, t.yes)
+	case t.fall == t.yes:
+		c.a.Jcc(cond.Invert(), t.no)
+	default:
+		c.a.Jcc(cond, t.yes)
+		c.a.Jmp(t.no)
+	}
+}
+
+// jumpTo goes to l, one of t's, unless it follows.
+func (c *compiler) jumpTo(t target, l amd64.Label) {
+	if l != t.fall {
+		c.a.Jmp(l)
+	}
+}
+
+// jumpIfEqual goes to t.yes where UCOMISD found its operands equal, and to
+// t.no where they differ or are unordered, which sets ZF too.
+func (c *compiler) jumpIfEqual(t target) {
+	c.a.Jcc(amd64.CondNE, t.no)
+	if t.fall == t.yes {
+		c.a.Jcc(amd64.CondP, t.no)
+		return
+	}
+	c.a.Jcc(amd64.CondNP, t.yes)
+	c.jumpTo(t, t.no)
+}
+
+// branch emits an If block's end: the test of its control (test), which
+// jumps to each successor's edge, or to the successor itself where the
+// edge moves nothing (emptyEdge); then the edges' code, the one laid out
+// last falling through to next where it can.
 func (c *compiler) branch(b *ssa.Block, next *ssa.Block) {
-	yes, no := c.a.NewLabel(), c.a.NewLabel()
-	ctl := b.Control
-	if ctl.Op == ssa.OpCmpF64 && ctl.Uses == 1 && ctl.Block == b {
-		x, y := c.xmm(ctl.Args[0], xScratch0), c.xmm(ctl.Args[1], xScratch1)
-		switch ir.Operator(ctl.Aux) {
+	type way struct {
+		to     *ssa.Block
+		label  amd64.Label
+		direct bool
+	}
+	at := func(to *ssa.Block) way {
+		if c.emptyEdge(b, to) {
+			return way{to, c.labels[to.ID], true}
+		}
+		return way{to, c.a.NewLabel(), false}
+	}
+	yes, no := at(b.Succs[0]), at(b.Succs[1])
+	ways := [2]way{no, yes}
+	if no.to == next && yes.to != next {
+		ways[0], ways[1] = yes, no
+	}
+	// What follows the test: the first edge's code, or next.
+	fall := noLabel
+	switch {
+	case !ways[0].direct:
+		fall = ways[0].label
+	case !ways[1].direct:
+		fall = ways[1].label
+	case next != nil:
+		fall = c.labels[next.ID]
+	}
+	c.test(b.Control, target{yes.label, no.label, fall})
+	for i, w := range ways {
+		if w.direct {
+			continue
+		}
+		c.a.Bind(w.label)
+		to := next
+		if i == 0 && !ways[1].direct {
+			to = nil // the other edge's code follows
+		}
+		c.edge(b, w.to, to)
+	}
+}
+
+// test emits a branch's test of v, a boolean: to t.yes where it is true,
+// to t.no where it is false. A value the branch computes (core.fused) is
+// compared here, jumping on the flags; any other is in its location.
+func (c *compiler) test(v *ssa.Value, t target) {
+	if !c.isFused(v) {
+		r := c.gpr(v, scratchA)
+		c.a.Op(amd64.Test, r, r, false)
+		c.jumpIf(t, amd64.CondNE)
+		return
+	}
+	if v.Op != ssa.OpNot {
+		c.markValue(v)
+	}
+	arg := func(i int) *ssa.Value { return v.Args[i] }
+	switch v.Op {
+	case ssa.OpNot:
+		c.test(arg(0), t.not())
+	case ssa.OpCmpF64:
+		x, y := c.xmm(arg(0), xScratch0), c.xmm(arg(1), xScratch1)
+		switch ir.Operator(v.Aux) {
 		case ir.Lt:
 			c.a.SSEOp(amd64.UcomiSD, y, x)
-			c.a.Jcc(amd64.CondA, yes)
+			c.jumpIf(t, amd64.CondA)
 		case ir.Le:
 			c.a.SSEOp(amd64.UcomiSD, y, x)
-			c.a.Jcc(amd64.CondAE, yes)
+			c.jumpIf(t, amd64.CondAE)
 		case ir.Gt:
 			c.a.SSEOp(amd64.UcomiSD, x, y)
-			c.a.Jcc(amd64.CondA, yes)
+			c.jumpIf(t, amd64.CondA)
 		case ir.Ge:
 			c.a.SSEOp(amd64.UcomiSD, x, y)
-			c.a.Jcc(amd64.CondAE, yes)
+			c.jumpIf(t, amd64.CondAE)
 		case ir.Eq:
 			c.a.SSEOp(amd64.UcomiSD, x, y)
-			c.a.Jcc(amd64.CondNE, no)
-			c.a.Jcc(amd64.CondNP, yes)
+			c.jumpIfEqual(t)
 		case ir.Ne:
 			c.a.SSEOp(amd64.UcomiSD, x, y)
-			c.a.Jcc(amd64.CondNE, yes)
-			c.a.Jcc(amd64.CondP, yes)
+			c.jumpIfEqual(t.not())
+		default:
+			panic(fmt.Sprintf("cmpf %v", ir.Operator(v.Aux)))
 		}
-	} else {
-		r := c.gpr(ctl, scratchA)
-		c.a.Op(amd64.Test, r, r, false)
-		c.a.Jcc(amd64.CondNE, yes)
+	case ssa.OpCmpI64:
+		c.a.Op(amd64.Cmp, c.gpr(arg(0), scratchA), c.gpr(arg(1), scratchB), true)
+		c.jumpIf(t, bigCmpCond(ir.Operator(v.Aux), arg(0).Type == ssa.Uint64))
+	case ssa.OpStrictNullish:
+		w := c.gpr(arg(0), scratchB)
+		switch v.Aux {
+		case 0:
+			c.cmpWord(w, c.enc.Null)
+		case 1:
+			c.cmpWord(w, c.enc.Undefined)
+		default:
+			c.cmpWord(w, c.enc.Null)
+			c.a.Jcc(amd64.CondE, t.yes)
+			c.cmpWord(w, c.enc.Undefined)
+		}
+		c.jumpIf(t, amd64.CondE)
+	case ssa.OpCellNone:
+		r := c.gpr(arg(0), scratchB)
+		c.a.Op(amd64.Test, r, r, true)
+		c.jumpIf(t, amd64.CondE)
+	case ssa.OpLooseNullish:
+		c.looseNullish(v, c.guardFor(v), &t)
+	case ssa.OpEqTagged:
+		c.eqTagged(v, c.guardFor(v), &t)
+	case ssa.OpTypeIs:
+		c.typeIs(v, c.guardFor(v), &t)
+	case ssa.OpInstanceOf:
+		c.instanceOf(v, c.guardFor(v), &t)
+	case ssa.OpTruth:
+		c.truth(v, c.guardFor(v), &t)
+	default:
+		panic("test " + v.Op.String())
 	}
-	// The false edge follows.
-	c.a.Bind(no)
-	c.edge(b, b.Succs[1], nil)
-	c.a.Bind(yes)
-	c.edge(b, b.Succs[0], next)
+}
+
+// tests is the target a test's code goes to: to's, where a branch tests
+// it, or labels of its own, where it makes a boolean (setBool), the false
+// case following the code, or the true one if yesFirst.
+func (c *compiler) tests(to *target, yesFirst bool) target {
+	if to != nil {
+		return *to
+	}
+	t := target{c.a.NewLabel(), c.a.NewLabel(), noLabel}
+	t.fall = t.no
+	if yesFirst {
+		t.fall = t.yes
+	}
+	return t
+}
+
+// setBool ends a test's code that makes a boolean, where no branch tests
+// it (to nil): yes at t.yes, its negation at t.no -- 1 and 0, but for a
+// test whose value is negated -- into v's location, the label t falls to
+// first.
+func (c *compiler) setBool(v *ssa.Value, to *target, t target, yes uint64) {
+	if to != nil {
+		return
+	}
+	done := c.a.NewLabel()
+	first, second := t.no, t.yes
+	if t.fall == t.yes {
+		first, second = t.yes, t.no
+	}
+	word := func(l amd64.Label) uint64 {
+		if l == t.yes {
+			return yes
+		}
+		return yes ^ 1
+	}
+	c.a.Bind(first)
+	c.movImm(scratchA, word(first))
+	c.a.Jmp(done)
+	c.a.Bind(second)
+	c.movImm(scratchA, word(second))
+	c.a.Bind(done)
+	c.setG(v, scratchA)
 }
 
 // arrayOf finds the array a value is, as objectOf finds an object, and
@@ -4467,16 +4635,24 @@ func (c *compiler) arrayOf(v *ssa.Value, guard func(amd64.Cond)) {
 // instanceOf answers whether its value has the object its second argument
 // is among its prototypes (OpInstanceOf): false for a value not an object;
 // otherwise along the chain from the object's own prototype, leaving to Go
-// at a proxy. It uses every scratch register.
-func (c *compiler) instanceOf(v *ssa.Value, guard func(amd64.Cond)) {
+// at a proxy. It uses every scratch register. Where a branch tests it (to,
+// test), it jumps to to's labels.
+func (c *compiler) instanceOf(v *ssa.Value, guard func(amd64.Cond), to *target) {
 	a := v.Args[0]
 	if a.Shadow == nil && c.origin.At(a) < 0 {
 		// A primitive, never an instance.
+		if to != nil {
+			c.jumpTo(*to, to.no)
+			return
+		}
 		c.movImm(scratchB, 0)
 		c.setG(v, scratchB)
 		return
 	}
-	no, loop, done := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	no, loop := c.a.NewLabel(), c.a.NewLabel()
+	if to != nil {
+		no = to.no
+	}
 	w := c.gpr(a, scratchA)
 	c.cmpWord(w, c.enc.Object)
 	c.a.Jcc(amd64.CondNE, no)
@@ -4493,6 +4669,11 @@ func (c *compiler) instanceOf(v *ssa.Value, guard func(amd64.Cond)) {
 	c.a.Jcc(amd64.CondE, no)
 	c.a.Op(amd64.Cmp, scratchC, p, true)
 	c.a.Jcc(amd64.CondNE, loop)
+	if to != nil {
+		c.jumpTo(*to, to.yes)
+		return
+	}
+	done := c.a.NewLabel()
 	c.movImm(scratchB, 1)
 	c.a.Jmp(done)
 	c.a.Bind(no)
@@ -4506,9 +4687,16 @@ func (c *compiler) instanceOf(v *ssa.Value, guard func(amd64.Cond)) {
 // boolean's and undefined's are theirs; an object with [[IsHTMLDDA]] is
 // undefined, one of ClassFunction a function and one of ClassObject or
 // ClassArray neither; another exits. It uses every scratch register.
-func (c *compiler) typeIs(v *ssa.Value, guard func(amd64.Cond)) {
+func (c *compiler) typeIs(v *ssa.Value, guard func(amd64.Cond), to *target) {
 	a := v.Args[0]
-	yes, no, done := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	t := c.tests(to, false)
+	// it is the type's: yes where the operand is of it. A branch on
+	// typeof x !== t (Const's bit) swaps its targets.
+	it := t
+	if to != nil && v.Const.Bits == 1 {
+		it = t.not()
+	}
+	yes, no := it.yes, it.no
 	w := c.gpr(a, scratchB)
 	is := func(word uint64) {
 		c.cmpWord(w, word)
@@ -4517,12 +4705,14 @@ func (c *compiler) typeIs(v *ssa.Value, guard func(amd64.Cond)) {
 	switch v.Index {
 	case ir.TypeNumber:
 		c.cmpWord(w, abi.NumberLimit)
-		c.a.Jcc(amd64.CondB, yes)
+		c.jumpIf(it, amd64.CondB)
 	case ir.TypeString:
-		is(c.enc.String)
+		c.cmpWord(w, c.enc.String)
+		c.jumpIf(it, amd64.CondE)
 	case ir.TypeBoolean:
 		is(c.enc.True)
-		is(c.enc.False)
+		c.cmpWord(w, c.enc.False)
+		c.jumpIf(it, amd64.CondE)
 	case ir.TypeUndefined, ir.TypeFunction:
 		if v.Index == ir.TypeUndefined {
 			is(c.enc.Undefined)
@@ -4533,8 +4723,7 @@ func (c *compiler) typeIs(v *ssa.Value, guard func(amd64.Cond)) {
 			c.a.LoadU8(scratchA, scratchC, c.enc.ObjectFlags)
 			c.a.OpImm(amd64.And, scratchA, int32(c.enc.FlagHTMLDDA), false)
 			if v.Index == ir.TypeUndefined {
-				c.a.Jcc(amd64.CondNE, yes)
-				c.a.Jmp(no)
+				c.jumpIf(it, amd64.CondNE)
 			} else {
 				c.a.Jcc(amd64.CondNE, no)
 				c.a.LoadU8(scratchA, scratchC, c.enc.ObjectClass)
@@ -4544,16 +4733,11 @@ func (c *compiler) typeIs(v *ssa.Value, guard func(amd64.Cond)) {
 				c.a.Jcc(amd64.CondE, no)
 				c.a.OpImm(amd64.Cmp, scratchA, int32(c.enc.ClassArray), false)
 				guard(amd64.CondNE)
+				c.jumpTo(it, no)
 			}
 		}
 	}
-	c.a.Bind(no)
-	c.movImm(scratchA, v.Const.Bits)
-	c.a.Jmp(done)
-	c.a.Bind(yes)
-	c.movImm(scratchA, v.Const.Bits^1)
-	c.a.Bind(done)
-	c.setG(v, scratchA)
+	c.setBool(v, to, t, v.Const.Bits^1)
 }
 
 // primitive guards that its operand is a number, a string, a boolean, null
@@ -6897,7 +7081,7 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.Op(amd64.Cmp, r, scratchA, true)
 		guard(amd64.CondNE)
 	case ssa.OpTruth:
-		c.truth(v, c.guardFor(v))
+		c.truth(v, c.guardFor(v), nil)
 	case ssa.OpArrayOf:
 		c.arrayOf(v, c.guardFor(v))
 	case ssa.OpIndexedOf:
@@ -6907,9 +7091,9 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 			c.setG(v, scratchC)
 		}
 	case ssa.OpInstanceOf:
-		c.instanceOf(v, c.guardFor(v))
+		c.instanceOf(v, c.guardFor(v), nil)
 	case ssa.OpTypeIs:
-		c.typeIs(v, c.guardFor(v))
+		c.typeIs(v, c.guardFor(v), nil)
 	case ssa.OpSameObject:
 		if v.Index == 1 {
 			// A typed array of the prototype at Const.Bits.
@@ -7355,9 +7539,6 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.SSEOp(amd64.AndPD, xScratch0, xScratch1)
 		c.setX(v, xScratch0)
 	case ssa.OpCmpF64:
-		if v.Uses == 1 && b.Control == v && b.Kind == ssa.BlockIf {
-			return // fused into the branch
-		}
 		c.compare(v)
 	case ssa.OpStrictNullish:
 		word := c.enc.Null
@@ -7378,9 +7559,9 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.MovZX8(scratchA, scratchA)
 		c.setG(v, scratchA)
 	case ssa.OpLooseNullish:
-		c.looseNullish(v, c.guardFor(v))
+		c.looseNullish(v, c.guardFor(v), nil)
 	case ssa.OpEqTagged:
-		c.eqTagged(v, c.guardFor(v))
+		c.eqTagged(v, c.guardFor(v), nil)
 	case ssa.OpNot:
 		c.a.MovRR32(scratchA, c.gpr(arg(0), scratchA))
 		c.a.OpImm(amd64.Xor, scratchA, 1, false)
@@ -7482,28 +7663,22 @@ func (c *compiler) compare(v *ssa.Value) {
 
 // looseNullish is x == null: x's word is null's or undefined's, or x is an
 // object with [[IsHTMLDDA]], found through its origin as objectOf finds it.
-func (c *compiler) looseNullish(v *ssa.Value, guard func(amd64.Cond)) {
+func (c *compiler) looseNullish(v *ssa.Value, guard func(amd64.Cond), to *target) {
 	a := v.Args[0]
-	yes, no, done := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	t := c.tests(to, false)
 	w := c.gpr(a, scratchB)
 	for _, word := range []uint64{c.enc.Null, c.enc.Undefined} {
 		c.cmpWord(w, word)
-		c.a.Jcc(amd64.CondE, yes)
+		c.a.Jcc(amd64.CondE, t.yes)
 	}
 	c.cmpWord(w, c.enc.Object)
-	c.a.Jcc(amd64.CondNE, no)
+	c.a.Jcc(amd64.CondNE, t.no)
 	if c.reference(v, a, c.enc.Object, guard) {
 		c.a.LoadU8(scratchA, scratchC, c.enc.ObjectFlags)
 		c.a.OpImm(amd64.And, scratchA, int32(c.enc.FlagHTMLDDA), false)
-		c.a.Jcc(amd64.CondNE, yes)
+		c.jumpIf(t, amd64.CondNE)
 	}
-	c.a.Bind(no)
-	c.movImm(scratchA, 0)
-	c.a.Jmp(done)
-	c.a.Bind(yes)
-	c.movImm(scratchA, 1)
-	c.a.Bind(done)
-	c.setG(v, scratchA)
+	c.setBool(v, to, t, 1)
 }
 
 // eqTagged is OpEqTagged: x == y or x === y by the two words, and for two
@@ -7513,9 +7688,11 @@ func (c *compiler) looseNullish(v *ssa.Value, guard func(amd64.Cond)) {
 // constants a word may be, loose equality's null and undefined. All of it
 // inline had made the comparison 500 bytes a site, of the code's hottest,
 // whose size decides how much of it the op cache holds.
-func (c *compiler) eqTagged(v *ssa.Value, guard func(amd64.Cond)) {
+func (c *compiler) eqTagged(v *ssa.Value, guard func(amd64.Cond), to *target) {
 	x, y := v.Args[0], v.Args[1]
-	yes, no, done, differ, number := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	t := c.tests(to, true)
+	yes, no := t.yes, t.no
+	differ, number := c.a.NewLabel(), c.a.NewLabel()
 	exit := c.stubLabel(v.State, exitKind(v.Aux))
 	if c.enc.CallGo != 0 && exitKind(v.Aux) == abi.ExitHost {
 		// What native code does not compare Go does (ssa.GoEqual), out
@@ -7665,23 +7842,17 @@ func (c *compiler) eqTagged(v *ssa.Value, guard func(amd64.Cond)) {
 	c.a.MovQToX(xScratch0, wx)
 	c.a.MovQToX(xScratch1, wy)
 	c.a.SSEOp(amd64.UcomiSD, xScratch0, xScratch1)
-	c.a.Jcc(amd64.CondNE, no)
-	c.a.Jcc(amd64.CondP, no)
-	c.a.Bind(yes)
-	c.movImm(scratchA, 1)
-	c.a.Jmp(done)
-	c.a.Bind(no)
-	c.movImm(scratchA, 0)
-	c.a.Bind(done)
-	c.setG(v, scratchA)
+	c.jumpIfEqual(t)
+	c.setBool(v, to, t, 1)
 }
 
 // truth computes JavaScript truthiness for the kinds the slot IR decides it
 // for, exiting for the rest: a number, an object, a boolean and null inline,
 // as most tests meet them, the rest out of line.
-func (c *compiler) truth(v *ssa.Value, guard func(amd64.Cond)) {
+func (c *compiler) truth(v *ssa.Value, guard func(amd64.Cond), to *target) {
 	r := c.gpr(v.Args[0], scratchB)
-	number, yes, no, done := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	t := c.tests(to, false)
+	number, yes, no := c.a.NewLabel(), t.yes, t.no
 	c.a.MovRR(scratchA, r)
 	c.a.ShiftImm(amd64.Shr, scratchA, 51, true)
 	c.a.OpImm(amd64.Cmp, scratchA, 0x1FFF, false)
@@ -7751,6 +7922,12 @@ func (c *compiler) truth(v *ssa.Value, guard func(amd64.Cond)) {
 	c.a.MovQToX(xScratch0, r)
 	c.a.SSEOp(amd64.XorPD, xScratch1, xScratch1)
 	c.a.SSEOp(amd64.UcomiSD, xScratch0, xScratch1)
+	if to != nil {
+		// ZF alone says: NaN sets it too.
+		c.jumpIf(t, amd64.CondNE)
+		return
+	}
+	done := c.a.NewLabel()
 	c.a.Setcc(amd64.CondNE, scratchA)
 	c.a.Setcc(amd64.CondNP, scratchC)
 	c.a.Op(amd64.And, scratchA, scratchC, false)
