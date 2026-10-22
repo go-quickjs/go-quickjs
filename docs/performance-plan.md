@@ -972,6 +972,85 @@ faster: its loss is its steady state's.
   feedback a compile reads (V8's JSHeapBroker), a `Runtime` being unsafe
   for concurrent use, and a safe point to install the code at.
 
+## E. The JIT against Node
+
+Measured 2026-10-22 at `3141a88` (`internal/cmd/v8bench/matrix`, Node
+v26.10.0, the fixed work's median of three fresh processes; profiles of
+each benchmark with `-cpuprofile`, their flat time sorted into native
+code, the JIT's Go side, the VM, allocation, the collector and the rest).
+The JIT is ahead of V8's interpreter and 3 to 7.5 times its optimizing
+tiers' time:
+
+| | go-quickjs JIT | Node | Node `--jitless` | JIT / Node |
+|---|---:|---:|---:|---:|
+| V8 suite | 881 ms | 263 ms | 1,286 ms | 3.3x |
+| Octane | 10,151 ms | 1,576 ms | 16,050 ms | 6.4x |
+| Are We Fast Yet | 7,887 ms | 1,045 ms | 17,470 ms | 7.5x |
+| micro-benchmarks (153, geometric mean) | | | | 4.5x |
+
+What the gap is made of:
+
+- **Native code itself.** Richards, Towers, List and Bounce spend 78 to
+  99% of their CPU time in native code and still take 5 to 8.5 times
+  Node's time; the benchmarks native code dominates are about 40% of Are
+  We Fast Yet's gap. The micro-benchmarks say where V8's code is ahead:
+  inlining (`method_call` 13.2 ns against 0.62, `func_call` 1.79 against
+  0.19, `func_closure_call` 15x), checks taken out of loops
+  (`global_write` 2.79 against 0.14), the array methods that take a
+  callback (`some`, `reduce`, `map`, `filter`, 9 to 28 times: V8 inlines
+  the built-in's loop and the callback into it).
+- **Allocation and the collector.** The collector is 22 to 43% of the CPU
+  time of Storage, Havlak, DeltaBlue, CD, EarleyBoyer and Splay, about 60%
+  of Are We Fast Yet's gap; Storage's arrays are made by `jitFillPool`
+  (31%), Havlak makes the closures it passes to forEach (`newClosureIn`,
+  9%). Go's collector is neither generational nor moving, so what is left
+  is to allocate less: objects V8's escape analysis never makes take 11
+  to 40 times its time here (`prop_clone`, `closure_make`,
+  `iterator_for_of`, `local_destruct`, `generator_next`).
+- **Coverage and tiering in large programs.** zlib's two largest
+  functions, 13,660 and 5,039 instructions, are past the 4,096 the JIT
+  compiles, and leave a fifth of its time in the interpreter;
+  Typescript leaves native code 125,000 times a run, compiles about four
+  times a function and drops 107 functions for room; Box2D and PdfJS
+  spend 12 to 20% of their CPU parsing and compiling source, much of it
+  never run (V8 compiles a function when it is first called).
+- **Calls of Go for built-ins.** String's methods take 10 to 19 times
+  Node's time with the JIT (`string_code_point_at` 52 ns against 2.7):
+  the call of Go's own cost, about 27 ns for a leaf that does nothing.
+
+Where the JIT is ahead of Node: BigInts of 64 bits (`bigint64_arith` 4.9
+ns against 19.4), a throw caught in the same function (`try_throw` 4.5
+against 97), `loop_sum`, `prop_delete_last`, `string_from_code_point`.
+
+The plan, in order -- the compiler first, since micro-optimizations do not
+close a gap of three to seven times:
+
+1. **What native code spends a loop's turn on.** Count the instructions
+   of a turn of Towers', Richards' and List's hot loops against V8's
+   optimized code for them (`--print-opt-code`), and sort ours by what
+   they do: tag checks, shape checks, loads of the context, spills and
+   reloads, write barriers, polls, calls. Then fix what is largest, in the
+   general mechanism: shape checks taken out of loops (a loop header knows
+   no shapes today), int32 and float64 values unboxed across a loop, the
+   native call's cost, inlining deeper and of polymorphic sites.
+2. **The array methods that take a callback, with the callback inlined**
+   into their loop, which also stops the callback's closure being made
+   (Havlak).
+3. **Escape analysis**: an object, a closure, an iterator's result, a
+   destructuring's array or a small value object that does not outlive
+   the code that makes it held in registers and slots, not allocated.
+4. **Large programs**: functions past 4,096 instructions compiled, or at
+   least their loops; fewer recompiles and smaller code (52 KB a
+   function in Typescript); function bodies compiled when first called.
+5. **Calls of Go for built-ins** through a trampoline of their own (step
+   3 of the leaf calls, under the JIT's items below).
+
+The interpreter, which every build without the JIT runs, is behind C
+QuickJS on Octane (1.10 times its time) and Are We Fast Yet (1.08): Are
+We Fast Yet's DeltaBlue (1.29) and Havlak (1.23), Mandreel (1.24),
+Typescript and CodeLoad (1.20) -- calls, allocation and the compiler's
+own speed. It is a track of its own beside the JIT's.
+
 ## Rejected
 
 Measured and dropped earlier; each needs a new angle before it is tried
@@ -1041,6 +1120,7 @@ The rounds that followed, each measured as above. The commit says more.
 | 2026-10-20 | `bc35a9f` | JIT: code unused for a second flushed, with what it was compiled for | live heap after the suites with the JIT: Octane 355 to 230 MB, AWFY 54 to 10 MB; AWFY's CPU time -19% |
 | 2026-10-20 | `262fb78`..`b5ee46c` | JIT: calls of Go that run nothing made without a frame; keyed writes, a Map's or a Set's iterator's step and an array's length natively | `prop_create` 201 to 65 ns, `map_for_of` 66 to 14, `array_length_decr` 85 to 18, `map_set_bigint` 405 to 171 (the interpreter's 224) |
 | 2026-10-20 | `e49c1d9`, `26eb754` | JIT: loops whose calls of Go or exits do not pay go back to the tree tier, at the loop that entered native code | `date_now` 69 to 50 ns (the interpreter's 49), `generator_create` 979 to 690 (687) |
+| 2026-10-21 | `a02e9d1`..`3141a88` | Built-ins that run no script called as leaves by every tier; RegExp's literal runs, byte searches and a literal's RegExp given back; String's methods written in place; generators, tail calls and finally clauses in the tree tier; in the JIT a longer substring, concatenation, shapes known, destructuring and parameter prologues | without the JIT V8 -1.6% (RegExp -6.1%), AWFY -1.8%; with it V8 -2.0% |
 
 ### What is open
 
