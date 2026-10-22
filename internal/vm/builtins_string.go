@@ -5,6 +5,8 @@ import (
 	"math/bits"
 	"strconv"
 	"strings"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/go-quickjs/go-quickjs/internal/jsnum"
 	"github.com/go-quickjs/go-quickjs/internal/wtf8"
@@ -40,28 +42,29 @@ func (r *Runtime) initStringBuiltins() {
 
 	r.defMethod(ctor, "fromCharCode", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		// Each argument becomes one UTF-16 code unit, so this is the usual way
-		// a script produces a lone surrogate.
-		units := make([]uint16, len(args))
+		// a script produces a lone surrogate. The text is written as the
+		// units come, on the stack while it is short.
+		var buf [64]byte
+		b := buf[:0]
+		if len(args) > len(buf) {
+			b = make([]byte, 0, len(args))
+		}
 		ascii := true
-		for i, a := range args {
+		for _, a := range args {
 			n, err := rt.toUint32(a)
 			if err != nil {
 				return Undefined, err
 			}
-			units[i] = uint16(n)
-			ascii = ascii && uint16(n) < 128
+			b = appendUnit(b, uint16(n))
+			ascii = ascii && uint16(n) < 0x80
 		}
-		if len(units) == 1 && units[0] < 256 {
-			if ascii {
-				return Str(rt.asciiCharString(byte(units[0]))), nil
-			}
-			return Str(rt.latin1CharString(byte(units[0]))), nil
-		}
-		return Str(fromUnits(units)), nil
+		return Str(rt.unitsText(b, len(args), ascii)), nil
 	})
 
 	r.defMethod(ctor, "fromCodePoint", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		var units []uint16
+		var buf [64]byte
+		b := buf[:0]
+		units, ascii := 0, true
 		for _, a := range args {
 			n, err := rt.toNumber(a)
 			if err != nil {
@@ -70,15 +73,18 @@ func (r *Runtime) initStringBuiltins() {
 			if n != math.Trunc(n) || n < 0 || n > 0x10FFFF {
 				return Undefined, rt.throwRangeError("invalid code point %v", n)
 			}
-			cp := rune(n)
-			if cp > 0xFFFF {
-				cp -= 0x10000
-				units = append(units, uint16(0xD800+(cp>>10)), uint16(0xDC00+(cp&0x3FF)))
-				continue
+			switch cp := rune(n); {
+			case cp > 0xFFFF:
+				b = utf8.AppendRune(b, cp)
+				units += 2
+				ascii = false
+			default:
+				b = appendUnit(b, uint16(cp))
+				units++
+				ascii = ascii && cp < 0x80
 			}
-			units = append(units, uint16(cp))
 		}
-		return Str(fromUnits(units)), nil
+		return Str(rt.unitsText(b, units, ascii)), nil
 	})
 
 	setElemOp(r, ctor.getOwn(r.atoms.intern("fromCharCode")).value().Object(), elemStrFromCharCode)
@@ -626,6 +632,50 @@ func (r *Runtime) initStringBuiltins() {
 			}
 			return rt.newStringIterator(s)
 		})
+}
+
+// appendUnit appends the WTF-8 text of code unit c to b, the text of the
+// code units before it: a low surrogate after a high one makes the pair's
+// code point, which WTF-8 spells as one, and any other surrogate is three
+// bytes of its own.
+func appendUnit(b []byte, c uint16) []byte {
+	switch {
+	case c < 0x80:
+		return append(b, byte(c))
+	case c < 0x800:
+		return append(b, byte(0xC0|c>>6), byte(0x80|c&0x3F))
+	case c >= 0xDC00 && c <= 0xDFFF:
+		// A high surrogate's text is 0xED and a byte from 0xA0 to 0xAF;
+		// 0xED begins a sequence, so the three bytes are one.
+		if n := len(b); n >= 3 && b[n-3] == 0xED && b[n-2] >= 0xA0 && b[n-2] <= 0xAF {
+			hi := 0xD000 | rune(b[n-2]&0x3F)<<6 | rune(b[n-1]&0x3F)
+			return utf8.AppendRune(b[:n-3], utf16.DecodeRune(hi, rune(c)))
+		}
+	}
+	return append(b, byte(0xE0|c>>12), byte(0x80|(c>>6)&0x3F), byte(0x80|c&0x3F))
+}
+
+// unitsText is the string of WTF-8 text b, units code units long, every one
+// ASCII where ascii says so, as appendUnit writes it: the runtime's own
+// string of a character below 256, and otherwise a copy of b in the
+// String's own allocation where it is short.
+func (r *Runtime) unitsText(b []byte, units int, ascii bool) *String {
+	switch {
+	case units == 0:
+		return emptyString
+	case units == 1 && ascii:
+		return r.asciiCharString(b[0])
+	case units == 1 && len(b) == 2 && b[0] < 0xC4:
+		return r.latin1CharString(b[0]<<6 | b[1]&0x3F)
+	}
+	out, room := newFlatBytes(len(b))
+	copy(room, b)
+	out.setBytes(room)
+	out.length, out.ascii = units, ascii
+	if !ascii {
+		out.endsHigh, out.startsLow = wtf8.UnpairedEnds(out.s)
+	}
+	return out
 }
 
 // thisStrFunc is the receiver-unwrapping helper shared by the String methods.
