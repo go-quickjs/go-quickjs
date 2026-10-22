@@ -3,9 +3,12 @@
 package vm
 
 import (
+	"context"
+	"fmt"
 	"runtime"
 	"sync/atomic"
 	"testing"
+	"time"
 	"weak"
 )
 
@@ -132,5 +135,120 @@ func TestJITCallsUnderCollector(t *testing.T) {
 			}
 			jitCallsCheck(t, r, 30)
 		})
+	}
+}
+
+// A value a call reads back from the frame after it, rather than saving
+// (mir's frameResident), is one its slot holds throughout: where the call's
+// state has the slot hold something else -- b is a's value at entry, and a
+// is assigned before the call -- Go writes that there should the callee
+// leave native code, which, every back edge an exit, g does at each call,
+// and the caller goes on natively after it: b is saved instead.
+func TestJITCallsReadBackFromFrame(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const setup = `
+		function g(n) { let s = 0; for (let i = 0; i < n; i++) s += i; return s }
+		class C {
+			constructor(k) { this.k = k }
+			h(a, n) { let b = a; a = n; const r = g(a); return b * 1000 + r + a + this.k }
+			m(a, n) { const r = g(n); return a * 1000 + r + this.k }
+		}
+		function run() { const c = new C(7); let t = 0; for (let i = 0; i < 40; i++) t += c.h(i * 0.5, 3) + c.m(i, 4); return t }`
+	for _, budget := range []uint16{0, 1} {
+		t.Run(fmt.Sprintf("budget %d", budget), func(t *testing.T) {
+			want := New(Config{})
+			t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
+			r := jitRuntimeForTest(t, Config{JIT: true})
+			r.jitStress = jitStressConfig{threshold: true, budget: budget}
+			for _, rt := range []*Runtime{want, r} {
+				if _, err := rt.Run(compileForTest(t, setup)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for i := range 20 {
+				wv, err := want.Run(compileForTest(t, `""+run()`))
+				if err != nil {
+					t.Fatal(err)
+				}
+				gv, err := r.Run(compileForTest(t, `""+run()`))
+				if err != nil {
+					t.Fatalf("round %d: %v", i, err)
+				}
+				if got, want := gv.String().Go(), wv.String().Go(); got != want {
+					t.Fatalf("round %d: got %s, interpreter %s", i, got, want)
+				}
+			}
+			class, err := r.Run(compileForTest(t, `C.prototype.h`))
+			if err != nil || !class.IsObject() {
+				t.Fatal(class, err)
+			}
+			if e := r.jit.cache[weak.Make(class.Object().fn().closure.fn)]; e == nil || e.ssa == nil {
+				t.Fatalf("C.prototype.h has no native code: %+v", e)
+			}
+		})
+	}
+}
+
+// A call's state describes each value where Go finds it should the callee
+// leave native code (mir's callState): a box live past the call, by the
+// slot the call saves it in -- the box's own save, found by the value
+// (callWord). A box the call does not read, which the state names but
+// uses only through its operand, may have ended before the call, its
+// register another value's that the call saves: found by that register,
+// the loops' counters here, boxed in their headers, had Go make the frame
+// with a keep cell's address for the counter, which ran on, allocating,
+// until the OS ended it (darwin/arm64). Each callee throws at the last
+// iteration, which Go unwinds through the caller's frame it makes.
+func TestJITCallStateFindsBoxesSaved(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const setup = `
+		class A { constructor(x) { this.x = x } }
+		class NoSuper extends A { constructor(n) { if (!n) super(1) } }
+		class RetPrim extends A { constructor(p) { super(1); if (p) return 5 } }
+		class Twice extends A { constructor(t) { super(1); if (t) super(2) } }
+		function boom(k) { if (k) throw new Error("boom"); return 1 }
+		const o = { f: boom }
+		function errs(C, n) {
+			let last = ''
+			for (let i = 0; i < n; i++) {
+				try { last = JSON.stringify(new C(i === n - 1)) } catch (e) { last = e.name + ': ' + i }
+			}
+			return last
+		}
+		function calls(n) {
+			let last = ''
+			for (let i = 0; i < n; i++) {
+				try { last = '' + o.f(i === n - 1) + i } catch (e) { last = e.message + ': ' + i }
+			}
+			return last
+		}
+		function run() { return [errs(NoSuper, 50), errs(RetPrim, 50), errs(Twice, 50), calls(50)].join() }`
+	want := New(Config{})
+	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	r.SetContext(ctx)
+	for _, rt := range []*Runtime{want, r} {
+		if _, err := rt.Run(compileForTest(t, setup)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range 6 {
+		wv, err := want.Run(compileForTest(t, `run()`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		gv, err := r.Run(compileForTest(t, `run()`))
+		if err != nil {
+			t.Fatalf("round %d: %v", i, err)
+		}
+		if got, want := gv.String().Go(), wv.String().Go(); got != want {
+			t.Fatalf("round %d: got %s, interpreter %s", i, got, want)
+		}
 	}
 }

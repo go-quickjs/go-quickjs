@@ -80,6 +80,9 @@ type a64Compiler struct {
 	// ret and resume are amd64's.
 	ret                 arm64.Label
 	retUsed, resumeUsed bool
+	// retTail is amd64's (returnFast).
+	retTail     arm64.Label
+	retTailUsed bool
 	// calling and goFails are amd64's.
 	calling     arm64.Label
 	callingUsed bool
@@ -101,6 +104,8 @@ type a64Compiler struct {
 	// (appendingCall), as amd64's.
 	appending     arm64.Label
 	appendingUsed bool
+	// entered is amd64's.
+	entered *ssa.Block
 	// keepCold and keeping are amd64's (keep).
 	keepCold arm64.Label
 	keeping  []*ssa.Value
@@ -167,16 +172,36 @@ func compileARM64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 	}
 	callAt, resumeAt := -1, -1
 	for i, b := range c.order {
-		if f.CallEntry && b == c.entryAt(0) {
-			// As amd64's: native callers' entry.
-			callAt = c.a.Len()
-			c.callEntry()
-		}
-		c.a.Bind(c.labels[b.ID])
-		if b.PC < 0 {
+		c.entered = nil
+		if f.CallEntry && b == c.entryAt(0) && b.PC < 0 {
+			// As amd64's: Go's entry reads the frame's registers and jumps
+			// past native callers' entry, which makes them.
+			c.a.Bind(c.labels[b.ID])
 			for _, e := range f.Entries {
 				if e.Block == b {
 					entries[e.PC] = c.a.Len()
+				}
+			}
+			start := c.a.NewLabel()
+			c.a.Load(a64Locals, a64Ctx, abi.OffLocals)
+			c.a.Load(a64Stack, a64Ctx, abi.OffStack)
+			c.a.B(start)
+			callAt = c.a.Len()
+			c.callEntry()
+			c.a.Bind(start)
+			c.entered = b
+		} else {
+			if f.CallEntry && b == c.entryAt(0) {
+				// As amd64's: native callers' entry.
+				callAt = c.a.Len()
+				c.callEntry()
+			}
+			c.a.Bind(c.labels[b.ID])
+			if b.PC < 0 {
+				for _, e := range f.Entries {
+					if e.Block == b {
+						entries[e.PC] = c.a.Len()
+					}
 				}
 			}
 		}
@@ -829,6 +854,28 @@ func (c *a64Compiler) returnNative() {
 	c.a.Ret()
 }
 
+// returnFast returns to a native caller, if one called, as amd64's.
+func (c *a64Compiler) returnFast(x *ssa.Value) {
+	toGo := c.a.NewLabel()
+	c.gprInto(x, a64RetNum)
+	if c.scalar(x) {
+		c.a.MovRR(a64RetRef, arm64.ZR)
+	} else {
+		c.pointerWord(x, a64RetNum)
+		c.a.MovRR(a64RetRef, a64B)
+	}
+	c.a.Load(a64CallLink, a64Ctx, abi.OffReturnTo)
+	c.a.Cbz(a64CallLink, toGo, true)
+	if !c.retTailUsed {
+		c.retTail, c.retTailUsed = c.a.NewLabel(), true
+		c.a.Bind(c.retTail)
+		c.returnTail()
+	} else {
+		c.a.B(c.retTail)
+	}
+	c.a.Bind(toGo)
+}
+
 // returnTail ends a native call, from the callee's context, as amd64's.
 func (c *a64Compiler) returnTail() {
 	c.a.Load(a64Stack, a64Ctx, abi.OffStackTop)
@@ -855,7 +902,9 @@ func (c *a64Compiler) resumeCall() {
 // register.
 func (c *a64Compiler) callEntry() {
 	vs := int32(c.enc.ValueSize)
-	const base, at, top = arm64.Reg(4), arm64.Reg(5), arm64.Reg(6)
+	// As amd64's: the frame's registers made here, the locals' address in
+	// base.
+	const base, at, top = a64Locals, arm64.Reg(5), arm64.Reg(6)
 	c.a.Load(a64Ctx, a64Ctx, abi.OffNext)
 	c.a.Store(a64Ctx, abi.OffReturnTo, a64CallRet)
 	c.a.Store(a64Ctx, abi.OffClosure, a64CallClosure)
@@ -877,8 +926,8 @@ func (c *a64Compiler) callEntry() {
 	c.a.Load(at, a64Ctx, abi.OffStackBase)
 	c.a.Op(arm64.Add, base, base, at, true)
 	c.a.Store(a64Ctx, abi.OffLocals, base)
-	c.a.AddImm(at, base, int64(c.f.FrameLocals)*int64(vs), true)
-	c.a.Store(a64Ctx, abi.OffStack, at)
+	c.a.AddImm(a64Stack, base, int64(c.f.FrameLocals)*int64(vs), true)
+	c.a.Store(a64Ctx, abi.OffStack, a64Stack)
 	c.a.Store(a64Ctx, abi.OffOpen, arm64.ZR)
 	c.a.Store(a64Ctx, abi.OffCells, arm64.ZR)
 	if c.f.Loops {
@@ -901,8 +950,10 @@ func (c *a64Compiler) callEntry() {
 // block emits one block. next is the block laid out after it.
 func (c *a64Compiler) block(b *ssa.Block, next *ssa.Block) {
 	if b.PC < 0 {
-		c.a.Load(a64Locals, a64Ctx, abi.OffLocals)
-		c.a.Load(a64Stack, a64Ctx, abi.OffStack)
+		if b != c.entered {
+			c.a.Load(a64Locals, a64Ctx, abi.OffLocals)
+			c.a.Load(a64Stack, a64Ctx, abi.OffStack)
+		}
 		if c.f.StartOnly && c.f.Params < c.f.FrameLocals && b == c.entryAt(0) {
 			// As amd64's: the frame's locals past its parameters, undefined.
 			vs := int32(c.enc.ValueSize)
@@ -925,6 +976,9 @@ func (c *a64Compiler) block(b *ssa.Block, next *ssa.Block) {
 	case ssa.BlockIf:
 		c.branch(b, next)
 	case ssa.BlockReturn:
+		if !c.f.GenEntry {
+			c.returnFast(b.Control)
+		}
 		r := c.gpr(b.Control, a64A)
 		c.a.Store(a64Ctx, abi.OffRet, r)
 		c.a.Store(a64Ctx, abi.OffRetFrom, arm64.ZR)
@@ -946,8 +1000,11 @@ func (c *a64Compiler) block(b *ssa.Block, next *ssa.Block) {
 			// As amd64's: a generator a loop's step resumed natively
 			// finishes there.
 			c.genReturn()
+			c.returnNative()
+			break
 		}
-		c.returnNative()
+		// As amd64's: to Go.
+		c.a.Ret()
 	case ssa.BlockExit:
 		if b.Yield && c.f.GenEntry {
 			c.yieldExit(b)
@@ -2565,7 +2622,7 @@ func (c *a64Compiler) poolShade(sites []*ssa.CallSite) {
 
 // callRecords is amd64's: a native call's records written, each slot's
 // record's index returned.
-func (c *a64Compiler) callRecords(recs []callRecord) map[int]int32 {
+func (c *a64Compiler) callRecords(v *ssa.Value, recs []callRecord) map[int]int32 {
 	record := map[int]int32{}
 	for k, r := range recs {
 		at := abi.OffRecord + int32(k)*32
@@ -2580,7 +2637,7 @@ func (c *a64Compiler) callRecords(recs []callRecord) map[int]int32 {
 		w := a64A
 		switch {
 		case !r.num && (!r.ref || r.x.Shadow != nil):
-		case remat(r.x):
+		case remat(r.x) && !c.held(r.x, v):
 			c.materialize(r.x, a64A)
 		default:
 			w = c.gpr(r.x, a64A)
@@ -2876,7 +2933,18 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	gen := generic && site.Generic && site.Via == 0 && site.Pool == 0 && !site.Push && !site.Pop && !site.Alloc && !site.Receiver &&
 		!site.Literal && vs == 16 && c.enc.HintSlotSize == 32
 	for k, t := range sites {
-		next := c.a.NewLabel()
+		// As amd64's: the last function's checks fail straight to the stub.
+		last := k == len(sites)-1 && !gen
+		next := stub
+		if !last {
+			next = c.a.NewLabel()
+		}
+		done := func() {
+			if !last {
+				c.a.B(checked)
+				c.a.Bind(next)
+			}
+		}
 		want := t.Callee
 		if t.Via != 0 {
 			want = t.Via
@@ -2904,14 +2972,12 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 		}
 		if t.Pop {
 			c.popGuards(t, v.Args[0], guard)
-			c.a.B(checked)
-			c.a.Bind(next)
+			done()
 			continue
 		}
 		if t.Push {
 			c.pushGuards(t, v.Args[0], guard)
-			c.a.B(checked)
-			c.a.Bind(next)
+			done()
 			continue
 		}
 		if t.Alloc || t.Receiver {
@@ -2919,8 +2985,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 			if t.Alloc && t.Argc == 1 {
 				c.lengthGuards(t, v.Args[len(v.Args)-1], guard)
 			}
-			c.a.B(checked)
-			c.a.Bind(next)
+			done()
 			continue
 		}
 		// No code native callers may call is no reason to leave: Go runs
@@ -2950,8 +3015,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 		if t.Pool != 0 {
 			c.constructGuards(t, guard)
 		}
-		c.a.B(checked)
-		c.a.Bind(next)
+		done()
 	}
 	if gen {
 		// As amd64's: a function none of them is, called through its link,
@@ -2966,8 +3030,6 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 			c.goCallOp(v, op, true)
 			c.a.B(join)
 		})
-	} else {
-		c.a.B(stub)
 	}
 	c.a.Bind(checked)
 	if site.Push {
@@ -3001,7 +3063,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 		operands = calleeSlot - 1
 	}
 	st, recs := c.callState(v, s, func(i int) bool { return direct && i >= ops }, operands)
-	record := c.callRecords(recs)
+	record := c.callRecords(v, recs)
 	c.movImm(a64A, uint64(uintptr(unsafe.Pointer(st))))
 	c.a.Store(a64Ctx, abi.OffCallState, a64A)
 	args, this := sp-site.Argc, calleeSlot-1
@@ -3022,12 +3084,12 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 		c.a.Load(a64B, a64Ctx, abi.OffStackBase)
 		c.a.Op(arm64.Add, a64D, a64D, a64B, true)
 		for i := 0; i < site.Params && args+i < sp && i < site.LocalCount; i++ {
-			c.directOperand(s.Slots[args+i], a64D, int32(i)*vs)
+			c.directOperand(v, s.Slots[args+i], a64D, int32(i)*vs)
 		}
 		if receiver {
 			// The callee's context's, the next.
 			c.a.Load(a64D, a64Ctx, abi.OffNext)
-			c.directOperand(s.Slots[this], a64D, abi.OffThis)
+			c.directOperand(v, s.Slots[this], a64D, abi.OffThis)
 		}
 	}
 	words := func(slot int) (nb arm64.Reg, nd int32, rb arm64.Reg, rd int32) {
@@ -3039,9 +3101,12 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 		return nb, nd, rb, rd
 	}
 	for _, sv := range c.savesOf(v) {
-		if sv.float {
+		switch {
+		case sv.frame != 0:
+			// As amd64's: what the frame holds throughout, not saved.
+		case sv.float:
 			c.a.StoreF(a64Ctx, c.spillDisp(sv.slot), arm64.FReg(sv.reg))
-		} else {
+		default:
 			c.a.Store(a64Ctx, c.spillDisp(sv.slot), arm64.Reg(sv.reg))
 		}
 	}
@@ -3314,6 +3379,11 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	// a64RetRef.
 	c.a.Bind(back)
 	at := abi.OffKeep + int32(v.Index)*vs
+	if c.resultDropped(v) && !site.Super {
+		// As amd64's: a result nothing uses, stored nowhere.
+		c.restoreSaves(v)
+		return
+	}
 	if site.Pool != 0 || site.Super {
 		// As amd64's: a result that is not an object is the receiver.
 		object := c.a.NewLabel()
@@ -3354,14 +3424,28 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 		c.a.Load(a64RetNum, a64Ctx, at+c.enc.NumOffset)
 		c.a.B(stored)
 	})
+	c.restoreSaves(v)
+	c.setG(v, a64RetNum)
+}
+
+// restoreSaves is amd64's.
+func (c *a64Compiler) restoreSaves(v *ssa.Value) {
 	for _, sv := range c.savesOf(v) {
+		if sv.frame != 0 {
+			base, disp := c.slotAddr(sv.frame-1, false, a64A)
+			if sv.float {
+				c.a.LoadF(arm64.FReg(sv.reg), base, disp)
+			} else {
+				c.a.Load(arm64.Reg(sv.reg), base, disp)
+			}
+			continue
+		}
 		if sv.float {
 			c.a.LoadF(arm64.FReg(sv.reg), a64Ctx, c.spillDisp(sv.slot))
 		} else {
 			c.a.Load(arm64.Reg(sv.reg), a64Ctx, c.spillDisp(sv.slot))
 		}
 	}
-	c.setG(v, a64RetNum)
 }
 
 // pushGuards checks a call of Array.prototype.push may append, as amd64's
@@ -3691,15 +3775,20 @@ func (c *a64Compiler) constructGuards(t *ssa.CallSite, guard func(arm64.Cond)) {
 // directOperand writes a call's operand x, both words, at disp from base
 // -- the callee's frame or this context -- as amd64's does. It uses A, B
 // and C.
-func (c *a64Compiler) directOperand(x *ssa.Value, base arm64.Reg, disp int32) {
+func (c *a64Compiler) directOperand(v, x *ssa.Value, base arm64.Reg, disp int32) {
 	var w arm64.Reg
-	if remat(x) {
+	if remat(x) && !c.held(x, v) {
 		c.materialize(x, a64A)
 		w = a64A
 	} else {
 		w = c.gpr(x, a64A)
 	}
 	c.a.Store(base, disp+c.enc.NumOffset, w)
+	if c.scalar(x) {
+		// As amd64's: no pointer word to read.
+		c.a.Store(base, disp+c.enc.RefOffset, arm64.ZR)
+		return
+	}
 	c.pointerWord(x, w)
 	c.a.Store(base, disp+c.enc.RefOffset, a64B)
 }
@@ -4170,7 +4259,7 @@ func (c *a64Compiler) genCall(v *ssa.Value, t ssa.GenStep, slow, done arm64.Labe
 	c.a.Store(a64Ctx, abi.OffGenEntry, a64C)
 	c.a.Store(a64Ctx, abi.OffCallClosure, a64D)
 	st, recs := c.callState(v, v.State, func(int) bool { return false }, -1)
-	c.callRecords(recs)
+	c.callRecords(v, recs)
 	c.movImm(a64A, uint64(uintptr(unsafe.Pointer(st))))
 	c.a.Store(a64Ctx, abi.OffCallState, a64A)
 	saves := c.savesOf(v)

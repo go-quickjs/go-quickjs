@@ -80,6 +80,10 @@ type compiler struct {
 	// native call it finished (resumeCall), if the code makes any.
 	ret                 amd64.Label
 	retUsed, resumeUsed bool
+	// retTail is where the code's returns to native callers go on
+	// (returnFast), once the first has made it.
+	retTail     amd64.Label
+	retTailUsed bool
 	// calling is where every call of Go goes (goCalling), which goes on
 	// to saving; goFails are the calls whose refusals Go sends to a label
 	// of their own (abi.GoCallState's Fail), set once the code is laid out.
@@ -112,6 +116,10 @@ type compiler struct {
 	// which goes on to saving for the rest.
 	appending     amd64.Label
 	appendingUsed bool
+	// entered is the block whose entries read the frame's registers
+	// before native callers' entry (compile's layout), while it is laid
+	// out: its own code does not read them again.
+	entered *ssa.Block
 	// genDone is where a generator's code a loop's step resumed natively
 	// goes once the generator finishes (genDone), if its code has a
 	// generator entry (ssa.Func's GenEntry).
@@ -188,21 +196,48 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 	}
 	callAt, resumeAt := -1, -1
 	for i, b := range c.order {
-		if f.CallEntry && b == c.entryAt(0) {
-			// Native callers' entry, which makes the frame and goes on at
-			// the start.
-			callAt = c.a.Len()
-			c.mark("call entry")
-			c.callEntry()
-		}
-		c.a.Bind(c.labels[b.ID])
-		if c.ann != nil {
-			c.mark(fmt.Sprintf("b%d", b.ID))
-		}
-		if b.PC < 0 {
+		c.entered = nil
+		if f.CallEntry && b == c.entryAt(0) && b.PC < 0 {
+			// Go's entry at the start reads the frame's registers and
+			// jumps past native callers' entry, which makes the frame,
+			// those registers with it, and goes on at the start: a native
+			// call reads them from the context no more, and Go's entry
+			// takes a jump.
+			c.a.Bind(c.labels[b.ID])
+			if c.ann != nil {
+				c.mark(fmt.Sprintf("b%d", b.ID))
+			}
 			for _, e := range f.Entries {
 				if e.Block == b {
 					entries[e.PC] = c.a.Len()
+				}
+			}
+			start := c.a.NewLabel()
+			c.a.Load(regLocals, regCtx, abi.OffLocals)
+			c.a.Load(regStack, regCtx, abi.OffStack)
+			c.a.Jmp(start)
+			callAt = c.a.Len()
+			c.mark("call entry")
+			c.callEntry()
+			c.a.Bind(start)
+			c.entered = b
+		} else {
+			if f.CallEntry && b == c.entryAt(0) {
+				// Native callers' entry, which makes the frame and goes on
+				// at the start.
+				callAt = c.a.Len()
+				c.mark("call entry")
+				c.callEntry()
+			}
+			c.a.Bind(c.labels[b.ID])
+			if c.ann != nil {
+				c.mark(fmt.Sprintf("b%d", b.ID))
+			}
+			if b.PC < 0 {
+				for _, e := range f.Entries {
+					if e.Block == b {
+						entries[e.PC] = c.a.Len()
+					}
 				}
 			}
 		}
@@ -621,6 +656,36 @@ func (c *compiler) returnNative() {
 	c.a.Ret()
 }
 
+// returnFast returns x to a native caller, if one called, as returnNative
+// does, from where x is: its words straight into retNum and retRef, on to
+// returnTail, which the code's returns share. Only a return to Go writes
+// the context's Ret, RetFrom and exit fields, which Go reads: a native
+// return had written them all and read Ret and RetFrom back, in fifteen
+// instructions where this takes six or so. Otherwise it goes on, to the
+// return to Go, which makes the words again.
+func (c *compiler) returnFast(x *ssa.Value) {
+	toGo := c.a.NewLabel()
+	// The words first: making them may use callLink, scratchB.
+	c.gprInto(x, retNum)
+	if c.scalar(x) {
+		c.movImm(retRef, 0)
+	} else {
+		c.pointerWord(x, retNum)
+		c.a.MovRR(retRef, scratchB)
+	}
+	c.a.Load(callLink, regCtx, abi.OffReturnTo)
+	c.a.Op(amd64.Test, callLink, callLink, true)
+	c.a.Jcc(amd64.CondE, toGo)
+	if !c.retTailUsed {
+		c.retTail, c.retTailUsed = c.a.NewLabel(), true
+		c.a.Bind(c.retTail)
+		c.returnTail()
+	} else {
+		c.a.Jmp(c.retTail)
+	}
+	c.a.Bind(toGo)
+}
+
 // returnTail ends a native call, from the callee's context, the result in
 // retNum and retRef, as its caller's code goes on: the VM's stack's top
 // back where the callee's frame began, the context no call's, the caller's
@@ -667,7 +732,8 @@ func (c *compiler) resumeCall() {
 // next. It uses every register.
 func (c *compiler) callEntry() {
 	vs := int32(c.enc.ValueSize)
-	const base, at, top = amd64.R8, amd64.R9, amd64.R10
+	// The frame's registers are made here: the locals' address in base.
+	const base, at, top = regLocals, amd64.R9, amd64.R10
 	c.a.Load(regCtx, regCtx, abi.OffNext)
 	c.a.Store(regCtx, abi.OffReturnTo, callRet)
 	c.a.Store(regCtx, abi.OffClosure, callClosure)
@@ -688,8 +754,8 @@ func (c *compiler) callEntry() {
 	c.a.Load(at, regCtx, abi.OffStackBase)
 	c.a.Op(amd64.Add, base, at, true)
 	c.a.Store(regCtx, abi.OffLocals, base)
-	c.a.Lea(at, base, int32(c.f.FrameLocals)*vs)
-	c.a.Store(regCtx, abi.OffStack, at)
+	c.a.Lea(regStack, base, int32(c.f.FrameLocals)*vs)
+	c.a.Store(regCtx, abi.OffStack, regStack)
 	c.a.StoreImm(regCtx, abi.OffOpen, 0)
 	// No cells of its captured locals until its start makes them
 	// (ssa.GoCells), whatever ran in the context before: a pointer cleared
@@ -941,7 +1007,7 @@ func (c *compiler) genFinish() {
 // callRecords writes a native call's records, recs, as callState
 // described them -- the words of each slot's value the code keeps nowhere
 // else -- and returns each slot's record's index.
-func (c *compiler) callRecords(recs []callRecord) map[int]int32 {
+func (c *compiler) callRecords(v *ssa.Value, recs []callRecord) map[int]int32 {
 	record := map[int]int32{}
 	for k, r := range recs {
 		at := abi.OffRecord + int32(k)*32
@@ -957,7 +1023,7 @@ func (c *compiler) callRecords(recs []callRecord) map[int]int32 {
 		switch {
 		case !r.num && (!r.ref || r.x.Shadow != nil):
 			// Its pointer word from its source, which needs no number word.
-		case remat(r.x):
+		case remat(r.x) && !c.held(r.x, v):
 			c.materialize(r.x, scratchA)
 		default:
 			w = c.gpr(r.x, scratchA)
@@ -1052,8 +1118,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	c.a.Load(scratchB, regCtx, abi.OffLevel)
 	c.a.OpImm(amd64.Add, scratchB, 1, true)
 	c.a.Load(scratchC, regCtx, abi.OffBounds)
-	c.a.Load(scratchC, scratchC, abi.OffBoundsLevelLimit)
-	c.a.Op(amd64.Cmp, scratchB, scratchC, true)
+	c.a.CmpMem(scratchB, scratchC, abi.OffBoundsLevelLimit, true)
 	guard(amd64.CondAE)
 	// The callee is one of the functions, which has native code. A call
 	// through Function.prototype.call is made of its one function, its
@@ -1074,8 +1139,24 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	// (genericCheck).
 	gen := generic && site.Generic && site.Via == 0 && site.Pool == 0 && !site.Push && !site.Pop && !site.Alloc && !site.Receiver &&
 		!site.Literal && vs == 16 && c.enc.HintSlotSize == 32
+	var stub amd64.Label
+	if !gen {
+		stub = c.stubLabel(s, exitKind(v.Aux))
+	}
 	for k, t := range sites {
-		next := c.a.NewLabel()
+		// The last function's checks fail straight to the stub, which a
+		// jump past a jump had reached; it goes on to the call.
+		last := k == len(sites)-1 && !gen
+		next := stub
+		if !last {
+			next = c.a.NewLabel()
+		}
+		done := func() {
+			if !last {
+				c.a.Jmp(checked)
+				c.a.Bind(next)
+			}
+		}
 		want := t.Callee
 		if t.Via != 0 {
 			want = t.Via
@@ -1103,15 +1184,13 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		if t.Pop {
 			// Array.prototype.pop, its fast path's.
 			c.popGuards(t, v.Args[0], guard)
-			c.a.Jmp(checked)
-			c.a.Bind(next)
+			done()
 			continue
 		}
 		if t.Push {
 			// Array.prototype.push, its fast path's.
 			c.pushGuards(t, v.Args[0], guard)
-			c.a.Jmp(checked)
-			c.a.Bind(next)
+			done()
 			continue
 		}
 		if t.Alloc || t.Receiver {
@@ -1121,8 +1200,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 			if t.Alloc && t.Argc == 1 {
 				c.lengthGuards(t, v.Args[len(v.Args)-1], guard)
 			}
-			c.a.Jmp(checked)
-			c.a.Bind(next)
+			done()
 			continue
 		}
 		// No code native callers may call (abi.Context's nativeEntry 0) is
@@ -1143,8 +1221,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		c.a.Load(scratchB, regCtx, abi.OffStackTop)
 		c.a.Load(scratchB, scratchB, 0)
 		c.a.OpImm(amd64.Add, scratchB, int32(t.LocalCount+t.MaxStack), true)
-		c.a.Load(scratchA, regCtx, abi.OffStackEnd)
-		c.a.Op(amd64.Cmp, scratchB, scratchA, true)
+		c.a.CmpMem(scratchB, regCtx, abi.OffStackEnd, true)
 		guard(amd64.CondA)
 		if t.Parent != 0 {
 			// A derived class's, made with its parent's code: the parent
@@ -1156,8 +1233,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		if t.Pool != 0 {
 			c.constructGuards(t, guard)
 		}
-		c.a.Jmp(checked)
-		c.a.Bind(next)
+		done()
 	}
 	if gen {
 		// A function none of them is, at a call that has met as many as it
@@ -1180,8 +1256,6 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 			c.goCallOp(v, op, guard, true)
 			c.a.Jmp(join)
 		})
-	} else {
-		c.a.Jmp(c.stubLabel(s, exitKind(v.Aux)))
 	}
 	c.a.Bind(checked)
 	if site.Push {
@@ -1224,7 +1298,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		operands = calleeSlot - 1
 	}
 	st, recs := c.callState(v, s, func(i int) bool { return direct && i >= ops }, operands)
-	record := c.callRecords(recs)
+	record := c.callRecords(v, recs)
 	c.movImm(scratchA, uint64(uintptr(unsafe.Pointer(st))))
 	c.a.Store(regCtx, abi.OffCallState, scratchA)
 	args, this := sp-site.Argc, calleeSlot-1
@@ -1248,10 +1322,10 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		c.a.Op(amd64.Add, scratchA, scratchB, true)
 		c.a.MovQToX(xScratch2, scratchA)
 		for i := 0; i < site.Params && args+i < sp && i < site.LocalCount; i++ {
-			c.directOperand(s.Slots[args+i], true, int32(i)*vs)
+			c.directOperand(v, s.Slots[args+i], true, int32(i)*vs)
 		}
 		if receiver {
-			c.directOperand(s.Slots[this], false, abi.OffThis)
+			c.directOperand(v, s.Slots[this], false, abi.OffThis)
 		}
 	}
 	// A slot's words: its record's, or the frame's, which holds it still.
@@ -1263,12 +1337,15 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		rb, rd = c.slotAddr(slot, true, scratchC)
 		return nb, nd, rb, rd
 	}
-	// What is live across the call, in registers, is saved; nothing else
-	// is in a register from here on but what the call makes.
+	// What is live across the call, in registers, is saved -- but what the
+	// frame holds throughout (frameResident); nothing else is in a register
+	// from here on but what the call makes.
 	for _, sv := range c.savesOf(v) {
-		if sv.float {
+		switch {
+		case sv.frame != 0:
+		case sv.float:
 			c.a.StoreSD(regCtx, c.spillDisp(sv.slot), amd64.XReg(sv.reg))
-		} else {
+		default:
 			c.a.Store(regCtx, c.spillDisp(sv.slot), amd64.Reg(sv.reg))
 		}
 	}
@@ -1556,6 +1633,13 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	// retRef: v, its pointer word kept (OpCallCell).
 	c.a.Bind(back)
 	at := abi.OffKeep + int32(v.Index)*vs
+	if c.resultDropped(v) && !site.Super {
+		// A result nothing uses, its keep cell's or the code's: stored
+		// nowhere, nor tested for the collector's marking. The receiver a
+		// construction would give for it is its frame's.
+		c.restoreSaves(v)
+		return
+	}
 	if site.Pool != 0 || site.Super {
 		// A construction's result, if not an object, is its receiver: a
 		// super()'s, the instance, a base parent's receiver.
@@ -1603,14 +1687,29 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		c.a.Load(retNum, regCtx, at+c.enc.NumOffset)
 		c.a.Jmp(stored)
 	})
+	c.restoreSaves(v)
+	c.setG(v, retNum)
+}
+
+// restoreSaves reads back what native call v saved (savesOf), or the frame
+// holds.
+func (c *compiler) restoreSaves(v *ssa.Value) {
 	for _, sv := range c.savesOf(v) {
+		if sv.frame != 0 {
+			base, disp := c.slotAddr(sv.frame-1, false, scratchA)
+			if sv.float {
+				c.a.LoadSD(amd64.XReg(sv.reg), base, disp)
+			} else {
+				c.a.Load(amd64.Reg(sv.reg), base, disp)
+			}
+			continue
+		}
 		if sv.float {
 			c.a.LoadSD(amd64.XReg(sv.reg), regCtx, c.spillDisp(sv.slot))
 		} else {
 			c.a.Load(amd64.Reg(sv.reg), regCtx, c.spillDisp(sv.slot))
 		}
 	}
-	c.setG(v, retNum)
 }
 
 // goCall calls Go (ssa.CallSite's Go), as V8's code calls a runtime
@@ -2218,7 +2317,7 @@ func (c *compiler) genCall(v *ssa.Value, t ssa.GenStep, slow, done amd64.Label) 
 	c.a.MovQFromX(scratchB, xScratch2)
 	c.a.Store(scratchC, abi.OffGenCursor, scratchB)
 	st, recs := c.callState(v, v.State, func(int) bool { return false }, -1)
-	c.callRecords(recs)
+	c.callRecords(v, recs)
 	c.movImm(scratchA, uint64(uintptr(unsafe.Pointer(st))))
 	c.a.Store(regCtx, abi.OffCallState, scratchA)
 	saves := c.savesOf(v)
@@ -3731,11 +3830,11 @@ func (c *compiler) constructGuards(t *ssa.CallSite, guard func(amd64.Cond)) {
 	guard(amd64.CondNE)
 }
 
-// directOperand writes a call's operand x, both words, where its callee
+// directOperand writes call v's operand x, both words, where its callee
 // has it: at disp in the callee's frame, whose address is in xScratch2, if
 // local, and otherwise at disp from the context. It uses every scratch
 // register.
-func (c *compiler) directOperand(x *ssa.Value, local bool, disp int32) {
+func (c *compiler) directOperand(v, x *ssa.Value, local bool, disp int32) {
 	const base = scratchC
 	at := func() {
 		if local {
@@ -3745,11 +3844,18 @@ func (c *compiler) directOperand(x *ssa.Value, local bool, disp int32) {
 		}
 	}
 	var w amd64.Reg
-	if remat(x) {
+	if remat(x) && !c.held(x, v) {
 		c.materialize(x, scratchA)
 		w = scratchA
 	} else {
 		w = c.gpr(x, scratchA)
+	}
+	if c.scalar(x) {
+		// No pointer word to read: a number's, a boolean's.
+		at()
+		c.a.Store(base, disp+c.enc.NumOffset, w)
+		c.a.StoreImm(base, disp+c.enc.RefOffset, 0)
+		return
 	}
 	// The pointer word first, which uses scratchC: the address once.
 	c.pointerWord(x, w)
@@ -4152,8 +4258,10 @@ func (c *compiler) recordsTail() {
 // block emits one block. next is the block laid out after it.
 func (c *compiler) block(b *ssa.Block, next *ssa.Block) {
 	if b.PC < 0 {
-		c.a.Load(regLocals, regCtx, abi.OffLocals)
-		c.a.Load(regStack, regCtx, abi.OffStack)
+		if b != c.entered {
+			c.a.Load(regLocals, regCtx, abi.OffLocals)
+			c.a.Load(regStack, regCtx, abi.OffStack)
+		}
 		if c.f.StartOnly && c.f.Params < c.f.FrameLocals && b == c.entryAt(0) {
 			// The frame's locals past its parameters, undefined, which
 			// native callers leave to the code (ssa.Func's StartOnly).
@@ -4184,6 +4292,9 @@ func (c *compiler) block(b *ssa.Block, next *ssa.Block) {
 	case ssa.BlockIf:
 		c.branch(b, next)
 	case ssa.BlockReturn:
+		if !c.f.GenEntry {
+			c.returnFast(b.Control)
+		}
 		r := c.gpr(b.Control, scratchA)
 		c.a.Store(regCtx, abi.OffRet, r)
 		c.movImm(scratchC, 0)
@@ -4207,8 +4318,11 @@ func (c *compiler) block(b *ssa.Block, next *ssa.Block) {
 			// A generator a loop's step resumed natively finishes there
 			// (genFinish); one Go resumed returns to Go.
 			c.genReturn()
+			c.returnNative()
+			break
 		}
-		c.returnNative()
+		// To Go: a native caller was returned to (returnFast).
+		c.a.Ret()
 	case ssa.BlockExit:
 		if b.Yield && c.f.GenEntry {
 			c.yieldExit(b)

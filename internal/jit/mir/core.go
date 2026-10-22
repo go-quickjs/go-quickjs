@@ -80,17 +80,72 @@ type core struct {
 	// between which nothing runs that could change the collector's phase,
 	// so that the run tests the write-barrier flag once.
 	keepRuns []int
+	// dropped marks, by value ID, the native calls whose results nothing
+	// uses (resultDropped).
+	dropped []bool
 }
+
+// resultDropped reports a call whose result nothing uses: its return
+// stores it nowhere, neither in its keep cell nor in a register, and so
+// tests no write-barrier flag.
+func (c *core) resultDropped(v *ssa.Value) bool { return v.ID < len(c.dropped) && c.dropped[v.ID] }
 
 const (
 	keepFirst = 1 << iota
 	keepLast
 )
 
-// saved is a register a call saves, and the spill slot it saves it in.
+// saved is a register a call saves, and the spill slot it saves it in; or,
+// if frame is not 0, the frame's slot frame-1 it reads it back from, which
+// holds its word throughout the call (frameResident), with nothing saved.
+//
+// id is the value saved, by ID: a register the call saves holds that
+// value, and no other the code may also have kept there before or after
+// it (callWord).
 type saved struct {
 	reg, slot int
 	float     bool
+	frame     int
+	id        int
+}
+
+// frameResident reports whether x, live across native call v, is the word
+// of a frame's slot that holds it throughout the call, and which: a local's
+// or the receiver's value loaded at an entry (or a number it is unboxed
+// to), in a slot no closure assigns -- native code writes the frame only at
+// its exits, the callee its own frame -- and that v's state names it in
+// (or leaves out), so that Go, making this frame should the callee leave
+// native code (jit.ExpandCall), writes nothing else there. The call then
+// reads it back from there, as V8's code reloads a parameter from the slot
+// its caller pushed, and saves nothing: AWFY Towers' moveDisks had saved
+// its receiver and its unboxed count at each call.
+func (c *core) frameResident(x, v *ssa.Value) (int, bool) {
+	sites := v.Calls()
+	if v.Op != ssa.OpCall || len(sites) == 0 || sites[0].Go != 0 || len(sites[0].Gens) != 0 {
+		return 0, false
+	}
+	for _, t := range sites {
+		if t.Super {
+			// It binds the receiver, in the context's This, before what
+			// it saved is read back.
+			return 0, false
+		}
+	}
+	y := x
+	if x.Op == ssa.OpUnboxF64 {
+		y = x.Args[0]
+	}
+	if y.Op != ssa.OpLoadSlot {
+		return 0, false
+	}
+	o := y.Aux
+	if !(o >= 0 && o < c.f.FrameLocals && !c.f.Assigned(o) || o >= 0 && o == c.f.ThisSlot) {
+		return 0, false
+	}
+	if s := v.State; s == nil || o >= len(s.Slots) || s.Slots[o] != nil && s.Slots[o] != y {
+		return 0, false
+	}
+	return o, true
 }
 
 // schedule is phiSchedule's lists.
@@ -683,6 +738,19 @@ func (c *core) allocate() error {
 			first[it.start]++
 		}
 	}
+	// A native call's result nothing uses -- no value, state or control,
+	// nor its keep cell's address (OpCallCell) -- is stored nowhere
+	// (dropped).
+	for _, b := range c.order {
+		for _, v := range b.Values {
+			if v.Op == ssa.OpCall && v.Calls() != nil && iv[v.ID].v != nil && iv[v.ID].end == pos[v.ID] {
+				if c.dropped == nil {
+					c.dropped = c.bools(nv)
+				}
+				c.dropped[v.ID] = true
+			}
+		}
+	}
 	c.locs, c.hasLoc = c.locList(nv), c.bools(nv)
 	// A phi and its arguments are given one register where they can be, as
 	// a linear scan's hints have it: the phi the register of an argument
@@ -953,7 +1021,11 @@ func (c *core) allocate() error {
 					}
 					home[it.v.ID] = s + 1
 				}
-				c.saves = c.appendSaved(c.saves, saved{reg: l.reg, slot: s, float: isFloat(it.v)})
+				sv := saved{reg: l.reg, slot: s, float: isFloat(it.v), id: it.v.ID}
+				if o, ok := c.frameResident(it.v, v); ok {
+					sv.frame = o + 1
+				}
+				c.saves = c.appendSaved(c.saves, sv)
 			}
 			c.saveAt[2*v.ID+1] = len(c.saves)
 		}
@@ -1267,6 +1339,33 @@ func (c *core) frameSize() int {
 // this one's.
 func remat(v *ssa.Value) bool {
 	return v.Op == ssa.OpBoxF64 || v.Op == ssa.OpBoxBool || v.Op == ssa.OpConst
+}
+
+// held reports whether x, a box an exit makes again of its operand (remat),
+// is in its own location at v, a call it is an operand of: live there, so
+// that the call reads its word where it is, rather than boxing it again --
+// four instructions for a number, each time a call writes it as an
+// argument and again as a record.
+//
+// Not at a call a pool's refill may make again from its start
+// (ssa.RefillsPools): Go fills the pool first, keeping the registers only
+// of what lives past the call, which its state's values do, a box's
+// operand among them, but not a box only the call reads.
+func (c *core) held(x, v *ssa.Value) bool {
+	if x.Op != ssa.OpBoxF64 && x.Op != ssa.OpBoxBool || c.isLazy(x) || ssa.RefillsPools(v) {
+		return false
+	}
+	if _, ok := c.loc(x); !ok {
+		return false
+	}
+	return slices.Contains(v.Args, x)
+}
+
+// scalar reports a value with no pointer word to read (pointerWord's 0):
+// no shadow, and no slot its origin is.
+func (c *core) scalar(x *ssa.Value) bool {
+	o, static := c.origin.Of(x)
+	return x.Shadow == nil && !(static && o >= 0)
 }
 
 // describe lists each value's location, in block order.
@@ -1788,6 +1887,22 @@ func (c *core) callRefs() int {
 // value of its state, after the call (callState): a constant, or a spill
 // slot, if it is in one.
 func (c *core) callWord(x *ssa.Value, saves []saved) (abi.ExitLoc, bool) {
+	if x.Op == ssa.OpBoxF64 || x.Op == ssa.OpBoxBool {
+		// A box live past the call, which the call saves: its word is in
+		// its save slot, which the call need not write as a record. The
+		// save is found by the value, not by its register: a state uses
+		// a box's operand, not the box (allocate's useState), so a box the
+		// call does not read may have ended before it, and its register
+		// be another's that the call saves: a loop's counter, boxed in its
+		// header, whose register a keep cell's address took before a
+		// construction, had Go make the frame with that address for the
+		// counter when the constructor threw, and the loop ran on.
+		for _, sv := range saves {
+			if sv.id == x.ID && !sv.float && sv.frame == 0 {
+				return abi.ExitLoc{Kind: abi.ExitSpill, N: int32(sv.slot)}, true
+			}
+		}
+	}
 	l, ok := c.exitValue(x)
 	if !ok {
 		return l, false
@@ -1806,8 +1921,14 @@ func (c *core) callWord(x *ssa.Value, saves []saved) (abi.ExitLoc, bool) {
 	case abi.ExitBoolReg:
 		kind = abi.ExitBoolSpill
 	}
+	// The value whose register exitValue found: x, or the operand a box is
+	// made of.
+	in := x
+	if remat(x) {
+		in = x.Args[0]
+	}
 	for _, sv := range saves {
-		if sv.reg == int(l.N) && sv.float == float {
+		if sv.id == in.ID && sv.reg == int(l.N) && sv.float == float && sv.frame == 0 {
 			return abi.ExitLoc{Kind: kind, N: int32(sv.slot)}, true
 		}
 	}
