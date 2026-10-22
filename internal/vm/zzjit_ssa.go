@@ -3175,14 +3175,19 @@ func (r *Runtime) jitInlineNativeCalls(e *jitEntry) {
 // jitNativeCallsInline reports whether e's code calls natively, at a call
 // that calls it alone, a function that may be inlined with its calls
 // now, calling inline with the index of each in e.nativeCalls, which it
-// may delete, if it is not nil.
+// may delete, if it is not nil. A super()'s parent (jitInline's active)
+// and a construction with the code of the class a class extends (its
+// parent) are not: their frames are not the callee's own -- the running
+// function's prototype constructed, a function other than the one called
+// -- which an inlined frame does not make, and a super() inlined had been
+// made by Go at an exit each time.
 func (r *Runtime) jitNativeCallsInline(e *jitEntry, inline func(int)) bool {
 	found := false
 	for i := 0; i < len(e.nativeCalls); i++ {
 		x := e.nativeCalls[i]
 		pc := int(x.pc)
 		one := !slices.ContainsFunc(e.nativeCalls, func(y jitInline) bool { return y.pc == x.pc && y.cl != x.cl })
-		if !one || x.cl == nil || r.jit.entryFor(x.cl.fn) == e || e.callSites == nil || pc >= len(e.callSites) ||
+		if !one || x.cl == nil || x.active != nil || x.parent != nil || r.jit.entryFor(x.cl.fn) == e || e.callSites == nil || pc >= len(e.callSites) ||
 			e.callSites[pc] != jitCallNative || slices.Contains(e.notInline, x.pc) || !r.jitInlinesCalls(x.cl, jitInlineDepth-1) ||
 			x.pool != nil && !r.jitInlinesAt(x.cl, x.obj, bytecode.Instr{Op: bytecode.OpNew}) {
 			continue

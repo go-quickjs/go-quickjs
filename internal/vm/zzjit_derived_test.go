@@ -522,3 +522,59 @@ func TestJITDerivedParentCodeEntered(t *testing.T) {
 		})
 	}
 }
+
+// A super() native code makes calls its parent natively (ssa.CallSite's
+// Super) -- never inlined in it: the frame a super() constructs with is
+// the parent's own, its this the instance's binding, its function the
+// running one's prototype. A parent its code may inline with the calls it
+// makes (jitInlinesCalls) was taken for one of the native calls a compile
+// again inlines (jitInlineNativeCalls), its super() then made by Go at an
+// exit each time, its target no native call of the code's: in AWFY's
+// DeltaBlue, a UnaryConstraint's super() of AbstractConstraint, which
+// calls Strength.of, at every construction; here Abs calls norm. Each round agrees with the
+// interpreter; in the warm rounds the subclass's code leaves native code
+// at no super().
+func TestJITDerivedSuperNotInlined(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		function norm(s) { return s.length * 7 + s.charCodeAt(0) }
+		class Abs { constructor(s) { this.strength = norm(s); this.s = s } }
+		class Un extends Abs { constructor(v, s) { super(s); this.out = v } }
+		class Stay extends Un {}
+		function make(n) {
+			let t = 0
+			for (let i = 0; i < n; i++) { const u = new Un(i, 'ab'), w = new Stay(i, 'c'); t += u.out + u.strength + w.strength }
+			return t
+		}`
+	rounds := []string{}
+	for range 8 {
+		rounds = append(rounds, `make(300)`)
+	}
+	r := jitAgreesForTest(t, setup, rounds...)
+	un := jitDerivedForTest(t, r, "Un")
+	var fn *bytecode.Function
+	for k, x := range r.jit.cache {
+		if x == un {
+			fn = k.Value()
+		}
+	}
+	for _, x := range un.inlines {
+		if fn != nil && int(x.pc) < len(fn.Code) && fn.Code[x.pc].Op == bytecode.OpSuperCall {
+			t.Errorf("Un's code inlines its super() at %d", x.pc)
+		}
+	}
+	hosts, in := un.ssaStats.hosts, un.link.in
+	if _, err := r.Run(compileForTest(t, `make(300)`)); err != nil {
+		t.Fatal(err)
+	}
+	// Called natively at each construction, Un's and Stay's, which runs
+	// Un's code, and leaving at none.
+	if d := un.link.in - in; d < 600 {
+		t.Errorf("Un's code was called natively %d times in a round of 600 constructions", d)
+	}
+	if d := un.ssaStats.hosts - hosts; d != 0 {
+		t.Errorf("Un's code left native code %d times in a round", d)
+	}
+}
