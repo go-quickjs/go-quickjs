@@ -20,6 +20,7 @@ type matcherUTF8 struct {
 	check      func() error
 	checkAt    int
 	busy       bool
+	skipNext   [2]int
 	bytes      *matcherASCII
 }
 
@@ -37,6 +38,7 @@ func (m *matcherUTF8) search(re *Regexp, dst []int, start int, sticky bool) ([]i
 		lit = nil
 	}
 	m.reset()
+	m.skipNext = [2]int{-1, -1}
 	for pos := start; pos <= in.length(); {
 		if lit != nil {
 			if litAt < pos+lit.minOff {
@@ -47,7 +49,7 @@ func (m *matcherUTF8) search(re *Regexp, dst []int, start int, sticky bool) ([]i
 			pos = max(pos, litAt-lit.maxOff)
 		}
 		if first != nil && !sticky {
-			if pos = skipUnitsUTF8(in.units, pos, first); pos >= len(in.units) {
+			if pos = skipUnitsUTF8(in.units, pos, first, &m.skipNext); pos >= len(in.units) {
 				return nil, nil
 			}
 			if lit != nil && litAt < pos+lit.minOff {

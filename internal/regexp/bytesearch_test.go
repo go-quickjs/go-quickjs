@@ -11,13 +11,15 @@ import (
 // byteSearchPatterns are patterns whose searches over bytes look for a
 // literal or a sole first unit with bytes.IndexByte: one that can begin with
 // one unit alone, one that is nothing but units, one that requires a literal,
-// one whose literal or first unit is past ASCII, and some that can begin with
-// more than one unit, which are passed over a byte at a time.
+// one whose literal or first unit is past ASCII; some that can begin with
+// either of two units, each looked for so; and some that can begin with
+// more, which are passed over a byte at a time.
 var byteSearchPatterns = []struct{ src, flags string }{
 	{"x", ""}, {"x\\d+", ""}, {"[x]y", ""}, {"(?:x|x)y", ""}, {"k+y", ""}, {"needle", ""},
 	{"ab", ""}, {"\\w+@ex", ""}, {"(a|b)needle", ""}, {"é", ""}, {"éx", ""}, {"xé", ""}, {"[xé]", ""}, {"[xé]y", ""},
 	{"x", "i"}, {"needle", "i"}, {"x\\d", "m"}, {"x", "u"}, {"x.", "u"}, {"x", "y"},
 	{"[^a]", ""}, {"\\d", ""}, {"x|y", ""}, {"(?<=a)x", ""}, {"\\bx", ""},
+	{"[ky]1", ""}, {"(?:x|1)y", ""}, {"k", "i"}, {"[xb]", ""}, {"[x@]e", ""}, {"[xé]", "i"},
 }
 
 // longSubjects is subjects of up to some hundreds of bytes, mostly of a
@@ -103,7 +105,7 @@ func TestUTF8SoleFirstAgrees(t *testing.T) {
 			t.Fatalf("/%s/%s: %v %v", p.src, p.flags, err, err2)
 		}
 		if slow.prog.first != nil {
-			slow.prog.first.sole = false
+			slow.prog.first.sole, slow.prog.first.pair = false, false
 		}
 		for _, s := range subjects {
 			for _, start := range byteSearchStarts(len(s)) {
@@ -117,25 +119,28 @@ func TestUTF8SoleFirstAgrees(t *testing.T) {
 	}
 }
 
-// TestFirstUnitsSole pins which patterns can begin with one unit alone, which
-// a search over bytes looks for with bytes.IndexByte.
+// TestFirstUnitsSole pins which patterns can begin with one unit alone, or
+// with either of two, which a search over bytes looks for with
+// bytes.IndexByte.
 func TestFirstUnitsSole(t *testing.T) {
 	for _, c := range []struct {
-		src, flags string
-		sole       bool
-		single     byte
+		src, flags     string
+		sole, pair     bool
+		single, second byte
 	}{
-		{"x\\d", "", true, 'x'}, {"[x]y", "", true, 'x'}, {"(?:x|x)", "", true, 'x'}, {"\\x7f", "", true, 0x7f},
-		{"\\0", "", true, 0}, {"@", "", true, '@'}, {"x", "i", false, 0}, {"x|y", "", false, 0},
-		{"é", "", false, 0}, {"[xé]", "", true, 'x'}, {"\\d", "", false, 0},
+		{"x\\d", "", true, false, 'x', 0}, {"[x]y", "", true, false, 'x', 0}, {"(?:x|x)", "", true, false, 'x', 0},
+		{"\\x7f", "", true, false, 0x7f, 0}, {"\\0", "", true, false, 0, 0}, {"@", "", true, false, '@', 0},
+		{"x", "i", false, true, 'X', 'x'}, {"x|y", "", false, true, 'x', 'y'}, {"é", "", false, false, 0, 0},
+		{"[xé]", "", true, false, 'x', 0}, {"\\d", "", false, false, 0, 0}, {"[\\x00\\x7f]", "", false, true, 0, 0x7f},
+		{"x|y|z", "", false, false, 0, 0},
 	} {
 		re, err := Compile(c.src, c.flags)
 		if err != nil {
 			t.Fatal(err)
 		}
 		f := re.prog.first
-		if f == nil || f.sole != c.sole || f.single != c.single {
-			t.Errorf("/%s/%s: first %+v, want sole %v single %q", c.src, c.flags, f, c.sole, c.single)
+		if f == nil || f.sole != c.sole || f.pair != c.pair || f.single != c.single || f.second != c.second {
+			t.Errorf("/%s/%s: first %+v, want sole %v pair %v single %q second %q", c.src, c.flags, f, c.sole, c.pair, c.single, c.second)
 		}
 	}
 	// A unit past ASCII is never a sole one to look for in bytes.

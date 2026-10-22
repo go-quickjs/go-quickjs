@@ -256,9 +256,12 @@ func indexUnitsUTF8(s []byte, lit *literal, from int) int {
 // when first admits a unit past ASCII, as the matcher's patch says. A
 // pattern that can begin with one ASCII unit alone has it looked for with
 // bytes.IndexByte, which never stops inside a character.
-func skipUnitsUTF8(units []byte, pos int, first *firstUnits) int {
+func skipUnitsUTF8(units []byte, pos int, first *firstUnits, next *[2]int) int {
 	if first.sole && !first.nonASCII {
 		return indexByteFrom(units, pos, first.single)
+	}
+	if first.pair && !first.nonASCII {
+		return indexPairFrom(units, pos, first, next)
 	}
 	for pos < len(units) && !first.admits(uint16(units[pos])) {
 		pos++

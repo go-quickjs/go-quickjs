@@ -1118,6 +1118,20 @@ function regexp_property(n)
     return n;
 }
 
+/* a case-insensitive search through a text of some kilobytes */
+function regexp_search_i(n)
+{
+    var j, c = 0, s = "";
+    for (j = 0; j < 40; j++)
+        s += "The quick brown fox jumps over the lazy dog. ";
+    s += "Needle";
+    for (j = 0; j < n; j++)
+        if (/needle/i.test(s))
+            c++;
+    global_res = c;
+    return n;
+}
+
 /* a pattern tested against a string made just before */
 function regexp_fresh(n)
 {

@@ -19,27 +19,37 @@ type firstUnits struct {
 	nonASCII bool
 	// single is the one ASCII unit a match can begin with when sole is
 	// set, as it is when there is just one: a search over bytes looks for it
-	// with bytes.IndexByte (see seal).
-	single byte
-	sole   bool
+	// with bytes.IndexByte (see seal). Where there are two, pair is set and
+	// they are single and second -- a letter under the i flag, [ab] -- each
+	// of which a search over bytes looks for so.
+	single, second byte
+	sole, pair     bool
 }
 
 // seal sets single and sole once the units are all added.
 func (f *firstUnits) seal() {
-	f.single, f.sole = 0, false
-	if bits.OnesCount64(f.ascii[0])+bits.OnesCount64(f.ascii[1]) == 1 {
-		f.sole = true
-		if f.ascii[0] != 0 {
-			f.single = byte(bits.TrailingZeros64(f.ascii[0]))
-		} else {
-			f.single = byte(64 + bits.TrailingZeros64(f.ascii[1]))
+	f.single, f.second, f.sole, f.pair = 0, 0, false, false
+	var units [2]byte
+	n := 0
+	for w := range f.ascii {
+		for m := f.ascii[w]; m != 0 && n < 2; m &= m - 1 {
+			units[n] = byte(64*w + bits.TrailingZeros64(m))
+			n++
 		}
+	}
+	switch bits.OnesCount64(f.ascii[0]) + bits.OnesCount64(f.ascii[1]) {
+	case 1:
+		f.single, f.sole = units[0], true
+	case 2:
+		f.single, f.second, f.pair = units[0], units[1], true
 	}
 }
 
 // skipUnits is the first position from pos on that a match can begin at by
-// first, or len(units) when there is none.
-func skipUnits(units []uint16, pos int, first *firstUnits) int {
+// first, or len(units) when there is none. next is the search's (matcher's
+// skipNext), which the search over bytes keeps where it found each of a
+// pair of units last.
+func skipUnits(units []uint16, pos int, first *firstUnits, next *[2]int) int {
 	for pos < len(units) && !first.admits(units[pos]) {
 		pos++
 	}

@@ -151,6 +151,9 @@ type matcher struct {
 	// busy marks the matcher a pattern lends out, so that a pattern used again
 	// while a match is running does not have its state overwritten.
 	busy bool
+	// skipNext is where the search found each of a pair of first units
+	// last (skipUnits), -1 at its start.
+	skipNext [2]int
 	// bytes is the matcher over an ASCII subject's bytes, lent with this one
 	// when the subject is one (see execASCIILent), with storage of its own;
 	// made when first needed. The matchers generated from this one have the
@@ -307,6 +310,7 @@ func (m *matcher) search(re *Regexp, dst []int, start int, sticky bool) ([]int, 
 		lit = nil
 	}
 	m.reset()
+	m.skipNext = [2]int{-1, -1}
 	for pos := start; pos <= in.length(); {
 		if lit != nil {
 			if litAt < pos+lit.minOff {
@@ -320,7 +324,7 @@ func (m *matcher) search(re *Regexp, dst []int, start int, sticky bool) ([]int, 
 			// Where no match can begin, none is tried. Without the unicode
 			// flag a character is a code unit, so the units no match can
 			// begin with are passed over in a loop of their own.
-			if pos = skipUnits(in.units, pos, first); pos >= len(in.units) {
+			if pos = skipUnits(in.units, pos, first, &m.skipNext); pos >= len(in.units) {
 				return nil, nil
 			}
 			if lit != nil && litAt < pos+lit.minOff {

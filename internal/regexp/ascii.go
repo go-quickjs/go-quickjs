@@ -152,14 +152,33 @@ func indexUnitsASCII(s []byte, lit *literal, from int) int {
 // skipUnitsASCII is skipUnits over bytes. A pattern that can begin with one
 // unit alone has it looked for with bytes.IndexByte; an ASCII subject has no
 // byte past ASCII for first's nonASCII to admit.
-func skipUnitsASCII(units []byte, pos int, first *firstUnits) int {
+func skipUnitsASCII(units []byte, pos int, first *firstUnits, next *[2]int) int {
 	if first.sole {
 		return indexByteFrom(units, pos, first.single)
+	}
+	if first.pair {
+		return indexPairFrom(units, pos, first, next)
 	}
 	for pos < len(units) && !first.admits(uint16(units[pos])) {
 		pos++
 	}
 	return pos
+}
+
+// indexPairFrom is the first position from pos on of either of first's
+// pair of units in s, or len(s): each looked for with bytes.IndexByte, where
+// it is found kept in next for the search's later positions, which are
+// further on, so that a search reads past each no more than once however
+// often the other is found -- the many E a search for /e.../i passes, where
+// there is no e.
+func indexPairFrom(s []byte, pos int, first *firstUnits, next *[2]int) int {
+	if next[0] < pos {
+		next[0] = indexByteFrom(s, pos, first.single)
+	}
+	if next[1] < pos {
+		next[1] = indexByteFrom(s, pos, first.second)
+	}
+	return min(next[0], next[1])
 }
 
 // indexByteFrom is the first position of c in s from pos on, or len(s). A
