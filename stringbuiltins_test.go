@@ -217,6 +217,16 @@ var stringBuiltinCases = []struct{ src, want string }{
 	{`"a".concat(Symbol())`, `TypeError`},
 	{`String.prototype.concat.call(1, 2)`, `"12"`},
 	{`(function () { var s = "a".repeat(1 << 20); for (var i = 0; i < 8; i++) s += s; var o = []; try { s.concat(s, { toString() { o.push(1); return "" } }) } catch (e) { o.push(e.name) } return o.join() })()`, `"RangeError"`},
+	// The positions and counts of numbers at ToIntegerOrInfinity's edges.
+	{`["abc".at(-0), "abc".at(-0.5), "abc".at(-(2 ** 63)), "abc".at(2 ** 63), "abc".at(2 ** 53)].join()`, `"a,a,,,"`},
+	{`["abc".slice(-0), "abc".slice(2 ** 64), "abc".slice(-(2 ** 63), -1), "abc".slice(1, 1e300), "abc".slice(-Infinity, NaN)].join()`, `"abc,,ab,bc,"`},
+	{`["abc".substring(-(2 ** 63), 2), "abc".substr(-1, 2 ** 63), "abc".charAt(2 ** 63), "abc".charCodeAt(-0)].join()`, `"ab,c,,97"`},
+	{`"abc".padStart(2 ** 63)`, `RangeError`},
+	{`"abc".repeat(2 ** 63)`, `RangeError`},
+	{`"abc".repeat(-0)`, `""`},
+	{`[[1, 2, 3].at(-1), [1, 2, 3].slice(-(2 ** 63)).length, [1, 2, 3].indexOf(2, -0), [1, 2, 3].includes(1, -0.9), [1, 2, 3].lastIndexOf(3, 2 ** 63)].join()`, `"3,3,1,true,2"`},
+	{`[(1.5).toFixed(-0), (255).toString(16.9), (0.5).toPrecision(2 ** 0)].join()`, `"2,ff,0.5"`},
+	{`Object.is(new Int8Array([1, 2]).subarray(-0)[0], 1)`, `boolean true`},
 }
 
 // TestStringBuiltinsMatchNode pins String's methods to Node's answers,

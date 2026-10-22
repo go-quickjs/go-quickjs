@@ -519,7 +519,25 @@ func (r *Runtime) toUint32(v Value) (uint32, error) {
 	return jsnum.ToUint32(n), nil
 }
 
-func (r *Runtime) toInteger(v Value) (float64, error) {
+// toInteger is ToIntegerOrInfinity. An integral number within an int64,
+// which a built-in's index or count mostly is, is its own, found where
+// toInteger is called, rather than by a call to toInteger and from there to
+// toNumber's switch of every kind. Any other value's number is
+// a NaN, or not integral, or past an int64, whose conversion to one comes
+// back as another number.
+//
+// It is written to be inlined: with two returns it costs more than the
+// compiler inlines.
+func (r *Runtime) toInteger(v Value) (f float64, err error) {
+	if f = v.num; float64(int64(f)) != f {
+		f, err = r.toIntegerOf(v)
+	}
+	return
+}
+
+// toIntegerOf is toInteger of anything but an integral number within an
+// int64.
+func (r *Runtime) toIntegerOf(v Value) (float64, error) {
 	n, err := r.toNumber(v)
 	if err != nil {
 		return 0, err
