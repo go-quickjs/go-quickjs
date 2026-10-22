@@ -375,13 +375,16 @@ func (r *Runtime) jitSubstringOf(o *Object) (kind int, ok bool) {
 // DeltaBlue's forEach callbacks, was never compiled, its calls each warm-up
 // of a closure of its own. jitResumeSkip is how many resumptions of a
 // generator's or an async function's code judged slow Go makes in the tree
-// without looking at the code again (jitResume).
+// without looking at the code again (jitResume). jitGenericCalls counts,
+// up to jitCallsHot, the calls generic calls (ssa.CallSite's Generic) left
+// to Go for want of the function's code (jitCallTarget).
 type jitCodeFields struct {
-	jitRefused    bool
-	jitCalls      uint8
-	jitLoopDelay  uint8
-	jitResumeSkip uint8
-	jitHint       [4]byte
+	jitRefused      bool
+	jitCalls        uint8
+	jitLoopDelay    uint8
+	jitResumeSkip   uint8
+	jitGenericCalls uint8
+	jitHint         [4]byte
 }
 
 // hint is the hint of the code of cl's function, its template's closures'

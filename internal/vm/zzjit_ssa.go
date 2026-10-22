@@ -6006,7 +6006,26 @@ func (r *Runtime) jitCallTarget(f *frame, e *jitEntry, pc, sp int, in bytecode.I
 			n++
 		}
 	}
-	if n >= jitCallTargets || in.Op == bytecode.OpNew && !r.jitConstructs(o) && !r.jitConstructsDerived(o) {
+	if in.Op == bytecode.OpNew && !r.jitConstructs(o) && !r.jitConstructsDerived(o) {
+		return
+	}
+	if n >= jitCallTargets {
+		// Past the functions it calls natively, any other it calls through
+		// its link (ssa.CallSite's Generic), where the link has code: one
+		// with none -- never compiled, a function the existing tiers run
+		// without a frame and spend no budget for, or dropped to make room
+		// -- is compiled for native callers once such calls have met it
+		// jitCallsHot times (jitGenericCalls), as a target a call learns
+		// is: then it has run enough to have met what its code is to make.
+		// Typescript's walker called ChildrenWalkers.walkNone, an empty
+		// function, through Go at each of a hundred thousand calls a run.
+		if ce := r.jit.entryFor(cl.fn); ce == nil || ce.ssa == nil && !ce.invalid {
+			if cl.closureCode != nil && cl.jitGenericCalls < jitCallsHot {
+				cl.jitGenericCalls++
+				return
+			}
+			r.jitNativeCallee(cl)
+		}
 		return
 	}
 	if r.jitNativeOrLinked(cl) {

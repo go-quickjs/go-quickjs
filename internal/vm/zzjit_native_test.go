@@ -6666,6 +6666,57 @@ func TestJITSSALearnsSeenCallTargets(t *testing.T) {
 	}
 }
 
+// A call that calls as many functions natively as it may (jitCallTargets)
+// calls any other through its link (ssa.CallSite's Generic), which only a
+// callee with code answers: one with none, met at such a call, is compiled
+// for native callers then, as a target the call learns is. none, an empty
+// function -- one the existing tiers run without a frame, which no budget
+// of theirs compiles -- had its code dropped to make room, as Typescript's
+// ChildrenWalkers.walkNone had, and was called through Go at each call
+// from then on: a hundred thousand a run.
+func TestJITGenericCallsCompileTheirCallees(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		function none(a, p, w) { }
+		function w1(a, p, w) { a.n++ }
+		function w2(a, p, w) { a.n += 2 }
+		function w3(a, p, w) { a.n += 3 }
+		function w4(a, p, w) { a.n += 4 }
+		function Walker() { this.children = [w1, w2, w3, w4, w1, w2, w3, w4] }
+		Walker.prototype.walk = function (a, k) { this.children[k](a, null, this); return a.n }
+		var walker = new Walker()
+		function all(n) { const a = { n: 0 }; let t = 0; for (let i = 0; i < n; i++) t = (t + walker.walk(a, i & 7)) | 0; return t }
+	`
+	r := jitAgreesForTest(t, setup, `all(2000)`, `all(2000)`, `all(2000)`, `(walker.children[4] = none, walker.children[6] = none, all(2000))`, `all(2000)`)
+	s := r.jit
+	fn := jitGlobalClosureForTest(r, "none").fn
+	e := s.entryFor(fn)
+	if e == nil || e.ssa == nil {
+		t.Fatalf("none has no code: %+v", e)
+	}
+	// Dropped, as the cache drops code to make room.
+	if !s.dropEntry(weak.Make(fn), e) {
+		t.Fatal("none's code was not dropped")
+	}
+	for range 2 {
+		if _, err := r.Run(compileForTest(t, `all(2000)`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	goCalls := s.goCalls
+	if _, err := r.Run(compileForTest(t, `all(2000)`)); err != nil {
+		t.Fatal(err)
+	}
+	if n := s.goCalls - goCalls; n != 0 {
+		t.Errorf("walk's calls of none were Go's %d times", n)
+	}
+	if e := s.entryFor(fn); e == nil || e.ssa == nil {
+		t.Errorf("none was not compiled again: %+v", e)
+	}
+}
+
 // A construction the existing tiers have made is decided when a function's
 // code is first compiled, as a call is (jitSeedCalls), once its
 // constructor has code: mk1 learns new V from its exits, which compiles V
