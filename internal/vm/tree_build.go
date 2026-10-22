@@ -40,7 +40,8 @@ type tentry struct {
 	// statement (see storeArith), and BigInt.asUintN of it made of its
 	// operands (see ztree_awrap.go).
 	arith *arithOf
-	// regexp is set for a RegExp literal's tree, of constant k, and
+	// regexp is set for a RegExp literal's tree, of constant k, which a
+	// method call given it first builds into regexpArgCall's node, and
 	// regexpCall for the get_prop_this of exec or test on one, which the
 	// call of it builds into regexpLitCall's node.
 	regexp     bool
@@ -1207,7 +1208,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 				b.push(b.methodCall(int(in.A), m, pc))
 				return 0, true
 			}
-			if regexpLitCall(b, int(in.A), pc) {
+			if regexpLitCall(b, int(in.A), pc) || regexpArgCall(b, int(in.A), pc) {
 				return 0, true
 			}
 		}

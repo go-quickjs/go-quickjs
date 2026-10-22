@@ -473,7 +473,7 @@ func (r *Runtime) initStringBuiltins() {
 		return Str(NewString(strings.Repeat(s.Go(), int(n)))), nil
 	})
 
-	r.defMethod(p, "split", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	r.strSplitFn = r.defMethod(p, "split", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if this.IsNullish() {
 			return Undefined, rt.throwTypeError(
 				"String.prototype.split called on %s", this.Kind())
@@ -568,7 +568,7 @@ func (r *Runtime) initStringBuiltins() {
 		return rt.padString(thisStr, this, args, false)
 	})
 
-	r.defMethod(p, "replace", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	r.strReplaceFn = r.defMethod(p, "replace", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		return rt.stringReplace(thisStr, this, args, false)
 	})
 	r.defMethod(p, "replaceAll", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {

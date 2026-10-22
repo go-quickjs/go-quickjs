@@ -542,6 +542,13 @@ type Realm struct {
 	// regexpProtoShape is RegExp.prototype's layout as the realm was built
 	// with it, which a script's change to it leaves for good.
 	regexpProtoShape *shape
+	// strReplaceFn, strSplitFn and strMatchFn are String.prototype.replace,
+	// split and match as the realm made them, and regexpSymSplitProps and
+	// regexpSymMatchProps RegExp.prototype[Symbol.split] and [Symbol.match]:
+	// what a call given a RegExp literal may give the literal its RegExp
+	// back after (regexpArgCall).
+	strReplaceFn, strSplitFn, strMatchFn     *Object
+	regexpSymSplitProps, regexpSymMatchProps []builtinProp
 	jitRealmFields
 	genNextFn *Object
 }

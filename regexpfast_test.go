@@ -173,3 +173,56 @@ out.push(f9());
 var once = out.join(";"); out = []; for (var k = 0; k < 3; k++) { out.push(f1("aaa"), f2(), f3(), f4(), f5(), f6(), f7(), f8("abc"), f9()); if (out.join(";") !== once) throw new Error("run " + k + ": " + out.join(";")); out = [] }
 once`, "0/true,0/true,0/true,0/true;true,true,0;6,6,true;truetruetrue,3,3,false,111;3,3;00a0,11a1,22a2,7,7,TypeError,false,true,1,0;3,3;250;0,0,0")
 }
+
+// TestRegExpLiteralArgReuse covers a RegExp literal's RegExp given back to
+// it after a string's replace by a string, split or match, which keep
+// nothing of it: each evaluation still a RegExp of its own where a script
+// could tell -- its Symbol.replace, exec, species, Symbol.split,
+// Symbol.match or flags getter a script's -- and the one given back as new
+// where it cannot, under g and y; a replace by a function, a String
+// object, a limit that converts, the legacy statics; a RegExp stored as it
+// is passed, or called. Each function runs
+// four times, in a tree after the first. Each answer is Node's.
+func TestRegExpLiteralArgReuse(t *testing.T) {
+	checkEval(t, `function g1(s) { var r = []; for (var i = 0; i < 4; i++) r.push(s.replace(/a(b)?/g, "[$1]"), s.split(/b/).length, s.match(/a/g).length, s.match(/(a)(b)/).index, s.replace(/a/y, "Y")); return r.join() }
+function g2() { var leaked = [], orig = RegExp.prototype[Symbol.replace];
+  RegExp.prototype[Symbol.replace] = function (s, t) { leaked.push(this); return orig.call(this, s, t) };
+  for (var i = 0; i < 3; i++) "abc".replace(/b/g, "x");
+  RegExp.prototype[Symbol.replace] = orig;
+  return [leaked.length, new Set(leaked).size, leaked.every(function (r) { return r.lastIndex === 0 })].join() }
+function g3() { var leaked = [], orig = RegExp.prototype.exec;
+  RegExp.prototype.exec = function (s) { leaked.push(this); return orig.call(this, s) };
+  for (var i = 0; i < 3; i++) { "abc".match(/b/); "abc".match(/b/g); "abc".replace(/b/, "x"); "a,b".split(/,/) }
+  RegExp.prototype.exec = orig;
+  return [leaked.length, new Set(leaked).size].join() }
+function g4() { var leaked = [], desc = Object.getOwnPropertyDescriptor(RegExp, Symbol.species);
+  Object.defineProperty(RegExp, Symbol.species, { get() { var C = function (re, f) { leaked.push(re); return new RegExp(re, f) }; return C }, configurable: true });
+  for (var i = 0; i < 3; i++) "a,b".split(/,/);
+  Object.defineProperty(RegExp, Symbol.species, desc);
+  return [leaked.length, new Set(leaked).size].join() }
+function g5() { var leaked = [], orig = RegExp.prototype[Symbol.split];
+  RegExp.prototype[Symbol.split] = function (s, l) { leaked.push(this); return orig.call(this, s, l) };
+  for (var i = 0; i < 3; i++) "a,b".split(/,/);
+  RegExp.prototype[Symbol.split] = orig;
+  var origM = RegExp.prototype[Symbol.match];
+  RegExp.prototype[Symbol.match] = function (s) { leaked.push(this); return origM.call(this, s) };
+  for (var i = 0; i < 3; i++) "ab".match(/b/);
+  RegExp.prototype[Symbol.match] = origM;
+  return [leaked.length, new Set(leaked).size].join() }
+function g6() { var r = [], seen = [];
+  for (var i = 0; i < 3; i++) r.push("aXbXc".replace(/x/gi, function (m, off, s) { seen.push(typeof m); return "" + off }));
+  var so = new String("a-b"); for (var i = 0; i < 2; i++) r.push(so.split(/-/).join("+"), so.replace(/-/, "="), so.match(/-/).index);
+  var lim = { valueOf() { return 1 } }; for (var i = 0; i < 2; i++) r.push("a-b-c".split(/-/, lim).join(), "a-b-c".split(/-/, 2).join(), "".split(/-/).length);
+  for (var i = 0; i < 2; i++) { "q1q2".replace(/q(\d)/g, "$1"); r.push(RegExp.$1, RegExp.lastMatch) }
+  var t = { toString() { return "T" } }; for (var i = 0; i < 2; i++) r.push("aTb".replace(/T/, t), "aTb".replace(/t/i, "$&$&"));
+  return r.join() + "|" + seen.length }
+function g7() { var leaked = [], orig = Object.getOwnPropertyDescriptor(RegExp.prototype, "flags");
+  Object.defineProperty(RegExp.prototype, "flags", { get() { leaked.push(this); return orig.get.call(this) }, configurable: true });
+  for (var i = 0; i < 3; i++) { "a-b".replace(/-/g, "+"); "a-b".split(/-/); "a-b".match(/-/g) }
+  Object.defineProperty(RegExp.prototype, "flags", orig);
+  return [leaked.length, new Set(leaked).size].join() }
+function h1() { var keep = [], keep2 = [], keep3 = [], o; for (var i = 0; i < 4; i++) { "ab".replace((keep[i] = /b/g), "x"); (keep2[i] = /c/y).test("c"); "a,b".split(o = /,/); keep3.push(o); (o = /d/).test("d"); keep3.push(o) } return [new Set(keep).size, new Set(keep2).size, new Set(keep3).size, keep2.map(function (r) { return r.lastIndex }).join("")].join() }
+var once = [g1("abab"), g2(), g3(), g4(), g5(), g6(), g7(), h1()].join(";");
+for (var k = 0; k < 3; k++) { var again = [g1("abab"), g2(), g3(), g4(), g5(), g6(), g7(), h1()].join(";"); if (again !== once) throw new Error("run " + k + ": " + again) }
+once`, "[b][b],3,2,0,Ybab,[b][b],3,2,0,Ybab,[b][b],3,2,0,Ybab,[b][b],3,2,0,Ybab;3,3,true;21,12;3,3;6,6;a1b3c,a1b3c,a1b3c,a+b,a=b,1,a+b,a=b,1,a,a,b,1,a,a,b,1,2,q2,2,q2,aTb,aTTb,aTb,aTTb|6;9,9;4,4,8,1111")
+}

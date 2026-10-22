@@ -269,12 +269,20 @@ type methodOf struct {
 // slot for the arguments to overwrite, as a spill would have evaluated the
 // node itself.
 func (b *tbuilder) methodCall(n int, m *methodOf, pc int) tval {
+	// A RegExp literal given to a string's method is regexpArgMethodCall's.
+	lit := tentry{}
+	if n > 0 && !b.fn.Generator && !b.fn.Async {
+		lit = b.stack[len(b.stack)-n]
+	}
 	args := make([]tval, n)
 	for i := n - 1; i >= 0; i-- {
 		args[i] = b.pop().tree()
 	}
 	b.pop()
 	recv := b.pop()
+	if lit.regexp && lit.slot < 0 {
+		return regexpArgMethodCall(recv, m.in, m.pc, args, b.depth()+1, pc, lit.k)
+	}
 	return methodCall(recv, m.in, m.pc, args, b.depth()+1, pc)
 }
 

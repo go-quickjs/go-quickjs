@@ -128,6 +128,45 @@ func (r *Runtime) regexpLitMethod(test bool) *Object {
 	return nil
 }
 
+// regexpArgCall reports whether f called on recv with args, the first of
+// them a RegExp a literal has just made, runs nothing of the script's and
+// keeps nothing of the RegExp, which the literal may then have back once the
+// call returns (regexpLiteralDone): f is the realm's String.prototype.replace
+// of a string by a string, its split with no limit or a number for one, or
+// its match, recv a string, and the RegExp and RegExp.prototype as replace
+// (replaceDirect), split (splitDirect) or match (builtinFlagBits) has them
+// searched with the RegExp's pattern without a call of anything a script
+// wrote -- which is the RegExp's Symbol method and exec, found on the
+// prototype as the realm made them, and its flags read from it.
+func (r *Runtime) regexpArgCall(f *Object, recv Value, args []Value) bool {
+	if !recv.IsString() || len(args) == 0 {
+		return false
+	}
+	rx := args[0]
+	switch f {
+	case r.strReplaceFn:
+		if len(args) < 2 || !args[1].IsString() {
+			return false
+		}
+		_, ok := r.replaceDirect(rx)
+		return ok
+	case r.strSplitFn:
+		if len(args) >= 2 && !args[1].IsUndefined() && !args[1].IsNumber() || recv.String().Len() == 0 ||
+			!propsIntact(r.proto.regexp, r.regexpSymSplitProps) {
+			return false
+		}
+		_, ok := r.splitDirect(rx)
+		return ok
+	case r.strMatchFn:
+		if !propsIntact(r.proto.regexp, r.regexpSymMatchProps) {
+			return false
+		}
+		_, ok := r.builtinFlagBits(rx)
+		return ok && r.builtinExecOf(rx) && rx.Object().shape.keys[0].flags&propWritable != 0
+	}
+	return false
+}
+
 // regexpLiteralDone gives the literal c back o, the RegExp it made for a
 // call of the built-in exec or test (regexpLitMethod) given a primitive,
 // which that call is done with: such a call runs nothing of the script's,
@@ -1054,7 +1093,7 @@ func (r *Runtime) initStringRegExpMethods() {
 	// is what lets a RegExp subclass -- or any object at all -- define how it
 	// matches. The regexp behaviour lives on RegExp.prototype under the symbol;
 	// only the fallback for a non-regexp argument is here.
-	r.defMethod(p, "match", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	r.strMatchFn = r.defMethod(p, "match", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		return rt.dispatchStringRegExp(this, args, rt.wellKnown.match, "", nil)
 	})
 
@@ -1167,6 +1206,10 @@ func (r *Runtime) initRegExpSymbolMethods(p *Object) {
 		})
 	i := p.findOwn(r.atoms.internSymbol(r.wellKnown.replace))
 	r.regexpReplaceProps = []builtinProp{{i: int(i), p: p.propAt(i)}}
+	i = p.findOwn(r.atoms.internSymbol(r.wellKnown.split))
+	r.regexpSymSplitProps = []builtinProp{{i: int(i), p: p.propAt(i)}}
+	i = p.findOwn(r.atoms.internSymbol(r.wellKnown.match))
+	r.regexpSymMatchProps = []builtinProp{{i: int(i), p: p.propAt(i)}}
 
 	// The iterator matchAll returns has its own prototype, so that adding a
 	// method to it does not add one to every array iterator.

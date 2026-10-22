@@ -3774,10 +3774,14 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 			v = f.this
 		}
 	default:
-		lit := r.jitRegExpLitPool(e, f, pc, in, sp)
+		var lit *jitLiteral
+		var rx Value
+		if r.jitRegExpLitCallee(in, sp) {
+			lit, rx = r.jitRegExpLitPool(e, f, pc, in, sp)
+		}
 		v, err = r.jitCallMade(in, sp)
 		if lit != nil && err == nil {
-			r.jitRegExpLitDone(lit, r.stack[sp-int(in.A)-2])
+			r.jitRegExpLitDone(lit, rx)
 		}
 	}
 	s.goCallDepth = goCallDepth
@@ -4496,10 +4500,14 @@ framed:
 			}
 		}
 	} else {
-		lit := r.jitRegExpLitPool(e, f, pc, in, sp)
+		var lit *jitLiteral
+		var rx Value
+		if r.jitRegExpLitCallee(in, sp) {
+			lit, rx = r.jitRegExpLitPool(e, f, pc, in, sp)
+		}
 		v, err = r.jitCallMade(in, sp)
 		if lit != nil && err == nil {
-			r.jitRegExpLitDone(lit, r.stack[sp-int(in.A)-2])
+			r.jitRegExpLitDone(lit, rx)
 		}
 	}
 	s.goCallDepth = goCallDepth
