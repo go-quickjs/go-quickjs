@@ -40,6 +40,18 @@ type tentry struct {
 	// statement (see storeArith), and BigInt.asUintN of it made of its
 	// operands (see ztree_awrap.go).
 	arith *arithOf
+	// regexp is set for a RegExp literal's tree, of constant k, and
+	// regexpCall for the get_prop_this of exec or test on one, which the
+	// call of it builds into regexpLitCall's node.
+	regexp     bool
+	regexpCall *regexpCallOf
+}
+
+// regexpCallOf is the RegExp literal, of constant k, whose exec, or test
+// where test is set, a get_prop_this entry reads.
+type regexpCallOf struct {
+	k    uint32
+	test bool
 }
 
 // arithOf is an arithmetic node's operator and operands, or a bitwise
@@ -1175,11 +1187,17 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		}
 		// The receiver stays beneath the method: it is read from its slot
 		// twice rather than evaluated twice.
+		lit := b.stack[len(b.stack)-1]
 		if !b.spill() {
 			return 0, false
 		}
 		d := b.depth() - 1
 		b.push(getPropThisNode(d, in, pc))
+		if name := fn.Names[in.A]; lit.regexp && lit.slot < 0 && (name == "exec" || name == "test") && !fn.Generator && !fn.Async {
+			// A RegExp literal's exec or test, which its call may give
+			// the RegExp back after (see ztree_zzzzzzregexp.go).
+			b.stack[len(b.stack)-1].regexpCall = &regexpCallOf{k: lit.k, test: name == "test"}
+		}
 	case bytecode.OpSetProp:
 		val, obj := b.pop(), b.pop()
 		return 0, b.stmt(setPropStmt(obj, val.tree(), in, pc, fn.Strict))
@@ -1187,6 +1205,9 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		if k := len(b.stack) - int(in.A) - 1; in.Op == bytecode.OpCallMethod && k > 0 {
 			if m := b.stack[k].method; m != nil {
 				b.push(b.methodCall(int(in.A), m, pc))
+				return 0, true
+			}
+			if regexpLitCall(b, int(in.A), pc) {
 				return 0, true
 			}
 		}
@@ -1458,14 +1479,14 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		}
 	case bytecode.OpNewRegExp:
 		k := in.A
-		b.push(func(c *tctx) Value {
+		b.pushEntry(tentry{v: func(c *tctx) Value {
 			v, err := c.r.newRegExpLiteral(&c.cl.fn.Constants[k])
 			if err != nil {
 				c.at(pc)
 				c.throw(err)
 			}
 			return v
-		})
+		}, slot: -1, regexp: true, k: k})
 	case bytecode.OpTypeOf:
 		x := b.pop().tree()
 		b.push(func(c *tctx) Value { return Str(c.r.typeofString(x(c))) })

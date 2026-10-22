@@ -82,7 +82,7 @@ type Runtime struct {
 	nodeQuirks bool
 	// regexpLits is the patterns of the RegExp literals the runtime has
 	// evaluated, by their constants; see newRegExpLiteral.
-	regexpLits [64]regexpLiteral
+	regexpLits [regexpLitCount]regexpLiteral
 	// regexpCache is the patterns the runtime has compiled; see
 	// compileRegExp.
 	regexpCache map[regexpKey]*regexp.Regexp
@@ -528,6 +528,20 @@ type Realm struct {
 	// spanBuf is the room a global replace or match keeps its matches'
 	// indices in, lent to one at a time (takeSpans).
 	spanBuf []int
+	// regexpSpares holds, for each of the runtime's RegExp literals
+	// (Runtime.regexpLits), a RegExp of the realm's it made that a call of
+	// the built-in exec or test was done with, and that nothing else can
+	// reach, for its next evaluation to be: see regexpLiteralDone.
+	regexpSpares [regexpLitCount]regexpSpare
+	// regexpTestFn is RegExp.prototype.test as the realm made it, and
+	// regexpTestProps the property that holds it: with regexpExecFn, the
+	// methods a call of a RegExp literal's may give the literal its RegExp
+	// back after (regexpLiteralDone).
+	regexpTestFn    *Object
+	regexpTestProps []builtinProp
+	// regexpProtoShape is RegExp.prototype's layout as the realm was built
+	// with it, which a script's change to it leaves for good.
+	regexpProtoShape *shape
 	jitRealmFields
 	genNextFn *Object
 }

@@ -3774,7 +3774,11 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 			v = f.this
 		}
 	default:
+		lit := r.jitRegExpLitPool(e, f, pc, in, sp)
 		v, err = r.jitCallMade(in, sp)
+		if lit != nil && err == nil {
+			r.jitRegExpLitDone(lit, r.stack[sp-int(in.A)-2])
+		}
 	}
 	s.goCallDepth = goCallDepth
 	jitClearArgs(r.stack, top, sp)
@@ -4492,7 +4496,11 @@ framed:
 			}
 		}
 	} else {
+		lit := r.jitRegExpLitPool(e, f, pc, in, sp)
 		v, err = r.jitCallMade(in, sp)
+		if lit != nil && err == nil {
+			r.jitRegExpLitDone(lit, r.stack[sp-int(in.A)-2])
+		}
 	}
 	s.goCallDepth = goCallDepth
 	s.ctxTop = ctxTop

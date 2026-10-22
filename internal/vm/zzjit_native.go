@@ -563,8 +563,12 @@ type jitEntry struct {
 	// its pool, kept across compiles (jitFeedback.Literal); definesUnfed
 	// the literals' fields compiled before their transitions were made,
 	// which the code leaves at (jitDefineSeen).
-	literals     []jitLiteral
-	definesUnfed []int32
+	literals []jitLiteral
+	// regexpLitCalls says, of each call of Go the code has made that
+	// jitRegExpLitPool has asked about, the pc of the RegExp literal it
+	// calls exec or test of, or -1.
+	regexpLitCalls map[int32]int32
+	definesUnfed   []int32
 	// cellsPool is the pool the code takes its captured locals' cells
 	// from at its entries, kept across compiles (jitFeedback.CellsPool).
 	cellsPool *abi.ObjectPool

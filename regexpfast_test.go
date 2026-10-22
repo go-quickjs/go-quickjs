@@ -118,3 +118,58 @@ func TestRegExpPiecesTogether(t *testing.T) {
 		`["é😀xb","é","😀","x","b"]:5,1,2,1,1;["😀","\ud83d","\ude00"]:2,1,1;["2024-05","2024","05"]:7,4,2;`+
 		`["1","22","333"]:1,2,3;["","","",""]:0,0,0,0;["whole"]:5;["é","😀","é"]:1,2,1;["\ud83d","\ud83d"]:1,1;world;5`)
 }
+
+// TestRegExpLiteralReuse covers a RegExp literal's RegExp given back to it
+// after a call of the built-in exec or test, as its next evaluation: each
+// evaluation still a RegExp of its own where a script could tell, and the
+// one given back as new -- lastIndex 0, under g and y -- where it cannot:
+// literals not called, an exec of the script's, an exec swapped in while
+// the argument is evaluated, a getter for test, an argument whose
+// conversion swaps exec, the legacy statics, primitives of each kind as the
+// argument, a generator's literal. Each function runs four times, in a
+// tree after the first. Each answer is Node's.
+func TestRegExpLiteralReuse(t *testing.T) {
+	checkEval(t, `var out = [];
+function f1(s) { var r = []; for (var i = 0; i < 4; i++) r.push(/a/g.exec(s).index + "/" + /a/y.test(s)); return r.join() }
+out.push(f1("aaa"));
+function f2() { var a = []; for (var i = 0; i < 3; i++) a.push(/x/); return [a[0] !== a[1], a[1] !== a[2], a[0].lastIndex].join() }
+out.push(f2());
+function f3() { var seen = [], orig = RegExp.prototype.exec;
+  RegExp.prototype.exec = function (s) { seen.push(this); return orig.call(this, s) };
+  for (var i = 0; i < 3; i++) { /q/.test("q"); /q/.exec("q") }
+  RegExp.prototype.exec = orig;
+  return [seen.length, new Set(seen).size, seen.every(function (r) { return r.lastIndex === 0 && r.source === "q" })].join() }
+out.push(f3());
+function f4() { var leaked = [], orig = RegExp.prototype.exec;
+  var leaker = function (s) { leaked.push(this); RegExp.prototype.exec = orig; return orig.call(this, s) };
+  var r = [];
+  for (var i = 0; i < 3; i++) r.push(/z/g.test((RegExp.prototype.exec = leaker, "zz")));
+  var after = []; for (var i = 0; i < 3; i++) { var m = /z/g; after.push(m); m.test("z") }
+  return [r.join(""), leaked.length, new Set(leaked).size, leaked.some(function (x) { return after.indexOf(x) >= 0 }), leaked.map(function (x) { return x.lastIndex }).join("")].join() }
+out.push(f4());
+function f5() { var leaked = [], orig = Object.getOwnPropertyDescriptor(RegExp.prototype, "test");
+  Object.defineProperty(RegExp.prototype, "test", { get() { leaked.push(this); return orig.value }, configurable: true });
+  for (var i = 0; i < 3; i++) /w/.test("w");
+  Object.defineProperty(RegExp.prototype, "test", orig);
+  return [leaked.length, new Set(leaked).size].join() }
+out.push(f5());
+function f6() { var r = [];
+  for (var i = 0; i < 3; i++) { /(\d)(\d)?/.test("a" + i); r.push(RegExp.$1 + RegExp.lastMatch + RegExp.input) }
+  var o = { toString() { return "k7" } };
+  for (var i = 0; i < 2; i++) r.push(/k(\d)/.exec(o)[1]);
+  try { /x/.exec(Symbol()) } catch (e) { r.push(e.constructor.name) }
+  r.push(/x/.test(), /undefined/.test(), /^1$/.exec(1)[0], /null/.exec(null).index);
+  return r.join() }
+out.push(f6());
+function f7() { var seen = [], orig = RegExp.prototype.exec;
+  var o = { toString() { RegExp.prototype.exec = function (s) { seen.push(this); RegExp.prototype.exec = orig; return orig.call(this, s) }; return "t" } };
+  for (var i = 0; i < 3; i++) /t/.test(o);
+  return [seen.length, new Set(seen).size].join() }
+out.push(f7());
+function f8(s) { var c = 0; for (var i = 0; i < 50; i++) { var m = /(b)(c)?/g.exec(s); c += m.index + m.length + m[1].length } return c }
+out.push(f8("abc"));
+function f9() { function* g() { for (var i = 0; i < 3; i++) yield /y/g.exec("yy").index } return [...g()].join() }
+out.push(f9());
+var once = out.join(";"); out = []; for (var k = 0; k < 3; k++) { out.push(f1("aaa"), f2(), f3(), f4(), f5(), f6(), f7(), f8("abc"), f9()); if (out.join(";") !== once) throw new Error("run " + k + ": " + out.join(";")); out = [] }
+once`, "0/true,0/true,0/true,0/true;true,true,0;6,6,true;truetruetrue,3,3,false,111;3,3;00a0,11a1,22a2,7,7,TypeError,false,true,1,0;3,3;250;0,0,0")
+}

@@ -71,13 +71,24 @@ type regexpLiteral struct {
 	re *regexp.Regexp
 }
 
+// regexpLitCount is how many RegExp literals a runtime keeps the patterns
+// of by their constants (Runtime.regexpLits).
+const regexpLitCount = 64
+
+// regexpLitSlot is the entry of regexpLits a literal's constant has.
+func regexpLitSlot(c *bytecode.Constant) int {
+	return int(uintptr(unsafe.Pointer(c)) >> 5 % regexpLitCount)
+}
+
 // newRegExpLiteral is the RegExp a literal evaluates to, its pattern found by
 // the constant that holds it: in the runtime's small table, by its address,
 // rather than in the cache by its text, which a literal in a loop would hash
 // each time round. An entry holds its constant, whose address is then not
-// another's.
+// another's. It is the RegExp the literal last made where that has been
+// given back, as new (regexpLiteralDone).
 func (r *Runtime) newRegExpLiteral(c *bytecode.Constant) (Value, error) {
-	e := &r.regexpLits[uintptr(unsafe.Pointer(c))>>5%uintptr(len(r.regexpLits))]
+	i := regexpLitSlot(c)
+	e := &r.regexpLits[i]
 	if e.c != c {
 		re, err := r.compileRegExp(c.Str, c.Flags)
 		if err != nil {
@@ -85,7 +96,56 @@ func (r *Runtime) newRegExpLiteral(c *bytecode.Constant) (Value, error) {
 		}
 		*e = regexpLiteral{c: c, re: re}
 	}
+	if sp := &r.regexpSpares[i]; sp.c == c {
+		ro := sp.ro
+		*sp = regexpSpare{}
+		return Obj(&ro.Object), nil
+	}
 	return r.newRegExpObject(e.re), nil
+}
+
+// regexpSpare is a RegExp the literal c made that it may evaluate to next,
+// as new (regexpLiteralDone).
+type regexpSpare struct {
+	c  *bytecode.Constant
+	ro *regexpObject
+}
+
+// regexpLitMethod is RegExp.prototype.test, where test is set, or exec, as
+// the realm made it, when reading it from a RegExp a literal has just made
+// would find it, running nothing to find it: the realm's prototype holds it
+// as it was made. It is nil where it does not.
+func (r *Runtime) regexpLitMethod(test bool) *Object {
+	if test {
+		if r.regexpTestFn != nil && propsIntact(r.proto.regexp, r.regexpTestProps) {
+			return r.regexpTestFn
+		}
+		return nil
+	}
+	if propsIntact(r.proto.regexp, r.regexpExecProps) {
+		return r.regexpExecFn
+	}
+	return nil
+}
+
+// regexpLiteralDone gives the literal c back o, the RegExp it made for a
+// call of the built-in exec or test (regexpLitMethod) given a primitive,
+// which that call is done with: such a call runs nothing of the script's,
+// and o was only ever its receiver, so nothing can reach it, and it may be
+// what the literal next evaluates to, its lastIndex 0 again, as a new one
+// would be (newRegExpLiteral). A literal in a loop, /x/.test(s), then makes
+// one RegExp rather than one each time round.
+func (r *Runtime) regexpLiteralDone(c *bytecode.Constant, o *Object) {
+	i := regexpLitSlot(c)
+	if r.regexpLits[i].c != c || r.regexpSpares[i].c != nil || o.class != ClassRegExp || !o.extEmbedded() || len(o.vals) != 1 {
+		return
+	}
+	ro := (*regexpObject)(unsafe.Pointer(o))
+	if ro.rd.re != &ro.re || ro.rd.realm != r.Realm || ro.side.data != any(&ro.rd) {
+		return
+	}
+	o.vals[0] = Int(0)
+	r.regexpSpares[i] = regexpSpare{c: c, ro: ro}
 }
 
 // newRegExpObject is a RegExp object of a compiled pattern.
@@ -360,7 +420,7 @@ func (r *Runtime) initRegExpBuiltins() {
 		return rt.regexpExec(this, s)
 	})
 
-	r.defMethod(p, "test", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	r.regexpTestFn = r.defMethod(p, "test", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if !this.IsObject() {
 			return Undefined, rt.throwTypeError("RegExp.prototype.test called on a non-object")
 		}
@@ -394,6 +454,7 @@ func (r *Runtime) initRegExpBuiltins() {
 	}
 	r.regexpFlagProps = r.snapshotProps(p, names...)
 	r.regexpExecProps = r.snapshotProps(p, "exec")
+	r.regexpTestProps = r.snapshotProps(p, "test")
 	match := p.findOwn(r.atoms.internSymbol(r.wellKnown.match))
 	r.regexpSplitProps = append(r.snapshotProps(p, "constructor"),
 		builtinProp{i: int(match), p: p.propAt(match)})
