@@ -1085,6 +1085,7 @@ func trimString(s *String, left, right bool) *String {
 	if left {
 		t = jsnum.TrimLeftSpace(t)
 	}
+	from := len(g) - len(t)
 	if right {
 		t = jsnum.TrimRightSpace(t)
 	}
@@ -1096,7 +1097,16 @@ func trimString(s *String, left, right bool) *String {
 	case s.ascii:
 		return &String{s: t, length: len(t), ascii: true}
 	}
-	return NewString(t)
+	// What was taken off is spaces, a code unit each however many bytes it
+	// is, so the length is s's less theirs, counted over the few bytes
+	// they are; and whether what is left is all ASCII is a look at its
+	// bytes rather than NewString's decoding of its characters.
+	out := &String{s: t, ascii: wtf8.IsASCII(t)}
+	out.length = s.length - wtf8.Count(g[:from]) - wtf8.Count(g[from+len(t):])
+	if !out.ascii {
+		out.endsHigh, out.startsLow = wtf8.UnpairedEnds(t)
+	}
+	return out
 }
 
 // formatFixed implements Number.prototype.toFixed.
