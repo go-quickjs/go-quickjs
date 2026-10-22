@@ -452,3 +452,73 @@ func TestJITDerivedNativeSuperTwice(t *testing.T) {
 		t.Errorf("Twice's super() was not made natively: %d native calls of it, %d calls of Go", jitDerivedCalls(e), e.ssaStats.goCalls)
 	}
 }
+
+// A construction with the code of the class a class of no constructor of
+// its own extends (ssa.CallSite's Parent), whose code native callers may
+// not call (abi.ExitEnter), is run by Go from its start, in a frame whose
+// function is the one whose code it is (abi.Context's Function), which its
+// super() reads its parent from: not the class constructed, its callee,
+// whose parent is that function, which super() would construct again with
+// its own arguments -- in AWFY's DeltaBlue, a UnaryConstraint's
+// constructor, run for an EditConstraint, ran itself again with its
+// strength for its variable, and its variable's methods were undefined.
+// Go enters a callee so where a call of Go cannot make the call: one of
+// more operands than a call of Go takes (abi.MaxGoArgs).
+func TestJITDerivedParentCodeEntered(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const setup = `
+		class Base { constructor(s) { this.s = s } }
+		class Mid extends Base { constructor(v, s, a, b, c, d, e, f, g, h, i, j, k, l, m, n) { super(s); this.v = v + (n | 0) } }
+		class Leaf extends Mid { tag() { return 1 } }
+		function sum(o) { return o.v + o.s.length + (o instanceof Base ? 1 : 0) + o.tag() }
+		function wide(n) {
+			let t = 0
+			for (let i = 0; i < n; i++) t += sum(new Leaf(i, 's' + i, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1))
+			return t
+		}
+`
+	for _, run := range []string{"wide"} {
+		t.Run(run, func(t *testing.T) {
+			want := New(Config{})
+			t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
+			r := jitRuntimeForTest(t, Config{JIT: true})
+			for _, rt := range []*Runtime{want, r} {
+				if _, err := rt.Run(compileForTest(t, setup)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			src := "String(" + run + "(200))"
+			agree := func() {
+				t.Helper()
+				wv, err := want.Run(compileForTest(t, src))
+				if err != nil {
+					t.Fatal(err)
+				}
+				gv, err := r.Run(compileForTest(t, src))
+				if err != nil {
+					t.Fatalf("%s: %v", src, err)
+				}
+				if got, w := gv.String().Go(), wv.String().Go(); got != w {
+					t.Fatalf("%s: got %s, interpreter %s", src, got, w)
+				}
+			}
+			for range 4 {
+				agree()
+			}
+			mid := jitDerivedForTest(t, r, "Mid")
+			if mid.ssa == nil || mid.link == nil || mid.link.in == 0 {
+				t.Fatalf("Mid's code is not called natively: %+v", mid)
+			}
+			// Mid's code no native caller may call: Go runs it from its
+			// start.
+			mid.notNative, mid.link.entry, mid.link.body, mid.nativeRetry = true, 0, 0, 0
+			entered := r.jit.entered
+			agree()
+			if r.jit.entered == entered {
+				t.Errorf("Go never ran Mid's code from its start")
+			}
+		})
+	}
+}

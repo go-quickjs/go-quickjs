@@ -10411,8 +10411,14 @@ func (r *Runtime) jitEnterCallee(f *frame, e *jitEntry, ctx int) (Value, error) 
 	r.jit.entered++
 	if c := r.jit.ssaCtxs[ctx]; c.EnterCallee != 0 {
 		// A word native code wrote, the object's address, which the
-		// caller's code keeps alive.
-		f.callee = *(**Object)(unsafe.Pointer(&c.EnterCallee))
+		// caller's code keeps alive -- but for a frame that has its
+		// function already: a derived construction's, the function whose
+		// code it runs (jitDerivedFrame), which its super() reads its
+		// parent from, and which a construction with the code of the class
+		// the callee extends (ssa.CallSite's Parent) is not the callee.
+		if f.callee == nil {
+			f.callee = *(**Object)(unsafe.Pointer(&c.EnterCallee))
+		}
 		c.EnterCallee = 0
 	}
 	// A call Go makes to code native callers no longer call counts toward
