@@ -216,6 +216,12 @@ func (m *matcherUTF8) run(code []instr, pos int) (bool, error) {
 			pos = m.advance(in.rev, pos, w)
 			pc++
 		case opSplit:
+			if q := in.quick; q != 0 {
+				if uint(pos) >= uint(len(units)) || !m.prog.firsts[q-1].admits(uint16(units[pos])) {
+					pc = in.arg2
+					break
+				}
+			}
 			m.stack = append(m.stack, frame{pc: int32(in.arg2), pos: int32(pos), capsLen: int32(len(m.trail)), counterIdx: -1})
 			pc = in.arg
 		case opJmp:

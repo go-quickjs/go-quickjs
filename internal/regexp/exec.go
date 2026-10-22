@@ -529,6 +529,14 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 			pc++
 
 		case opSplit:
+			// A first branch that cannot begin with the unit here is passed
+			// over, as trying it and failing would, with no choice point.
+			if q := in.quick; q != 0 {
+				if uint(pos) >= uint(len(units)) || !m.prog.firsts[q-1].admits(uint16(units[pos])) {
+					pc = in.arg2
+					break
+				}
+			}
 			// The second branch becomes a choice point to return to, pushed
 			// here as push would push it.
 			m.stack = append(m.stack, frame{pc: int32(in.arg2), pos: int32(pos), capsLen: int32(len(m.trail)), counterIdx: -1})

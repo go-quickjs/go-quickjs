@@ -81,6 +81,11 @@ type instr struct {
 	r         rune
 	// rev marks an instruction that consumes leftwards, inside a lookbehind.
 	rev bool
+	// quick, for an alternation's opSplit, is 1 more than the index in
+	// firsts of the units its first branch can begin with, or 0: where the
+	// unit at the position is not one of them, the branch cannot match there
+	// and is passed over without a choice point.
+	quick uint16
 }
 
 // program is a compiled pattern.
@@ -104,6 +109,9 @@ type program struct {
 	folds []foldSet
 	// runs holds the code units each opString matches.
 	runs []*literal
+	// firsts holds the units each quick opSplit's first branch can begin
+	// with.
+	firsts []firstUnits
 	// asciiClasses is, for each class, which ASCII characters it matches --
 	// folding and negation applied -- which are most of what a class is asked
 	// about, answered with a bit rather than a search.
@@ -352,6 +360,35 @@ func (c *compiler) runAt(items []node) []uint16 {
 // what the run's characters one by one would match to compare with.
 var compileRuns = true
 
+// quickSplits says whether quickFirst works out a branch's first units,
+// which a test turns off to compare.
+var quickSplits = true
+
+// quickFirst is an opSplit's quick for its first branch n: what n can begin
+// with, kept in firsts, where every way through it begins by consuming a
+// unit, rightwards, and fewer than 2**16 are kept; or 0.
+func (c *compiler) quickFirst(n node) uint16 {
+	if !quickSplits || c.reverse || len(c.prog.firsts) >= 1<<16-1 {
+		return 0
+	}
+	f := firstOf(n, c.flags&FlagIgnoreCase != 0, c.prog.unicodeFold)
+	if f == nil {
+		return 0
+	}
+	c.prog.firsts = append(c.prog.firsts, *f)
+	return uint16(len(c.prog.firsts))
+}
+
+// quickRepeat gives the opSplit at pc of a greedy repetition t, whose
+// first branch is another iteration, the quick of t's body: where the body
+// cannot begin with the unit at hand, the loop ends without a choice point
+// to come back to and fail.
+func (c *compiler) quickRepeat(pc int, t nodeRepeat) {
+	if t.greedy {
+		c.prog.code[pc].quick = c.quickFirst(t.item)
+	}
+}
+
 // compileAlt lays out alternatives as a chain of choice points.
 func (c *compiler) compileAlt(t nodeAlt) {
 	var exits []int
@@ -364,6 +401,7 @@ func (c *compiler) compileAlt(t nodeAlt) {
 		}
 		split := c.emit(instr{op: opSplit})
 		c.prog.code[split].arg = c.here()
+		c.prog.code[split].quick = c.quickFirst(alt)
 		c.compile(alt)
 		exits = append(exits, c.emit(instr{op: opJmp}))
 		c.prog.code[split].arg2 = c.here()
@@ -501,6 +539,7 @@ func (c *compiler) compileRepeat(t nodeRepeat) {
 		// undone -- which is what makes `(?=(a))?` leave its group unset.
 		split := c.emit(instr{op: opSplit})
 		c.setSplit(split, t.greedy, c.here(), 0)
+		c.quickRepeat(split, t)
 		guard := -1
 		if canMatchEmpty(t.item) {
 			guard = c.prog.emptyChecks
@@ -520,6 +559,7 @@ func (c *compiler) compileRepeat(t nodeRepeat) {
 		start := c.here()
 		split := c.emit(instr{op: opSplit})
 		c.setSplit(split, t.greedy, c.here(), 0)
+		c.quickRepeat(split, t)
 		guard := -1
 		if needsGuard {
 			guard = c.prog.emptyChecks
@@ -553,6 +593,7 @@ func (c *compiler) compileRepeat(t nodeRepeat) {
 		c.compile(t.item)
 		split := c.emit(instr{op: opSplit})
 		c.setSplit(split, t.greedy, start, c.here())
+		c.quickRepeat(split, t)
 		return
 	}
 
@@ -597,6 +638,7 @@ func (c *compiler) compileRepeat(t nodeRepeat) {
 
 	split := c.emit(instr{op: opSplit})
 	c.setSplit(split, t.greedy, c.here(), 0)
+	c.quickRepeat(split, t)
 	if guard >= 0 {
 		c.emit(instr{op: opEmptyCheck, arg: guard, arg2: 0})
 	}
