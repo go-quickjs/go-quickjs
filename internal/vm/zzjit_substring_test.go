@@ -2,7 +2,11 @@
 
 package vm
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
+)
 
 // substringSetup's counts reads one character at a time with substring,
 // slice, substr and charAt, as AWFY Json's read and Octane Gameboy's
@@ -143,5 +147,60 @@ func TestJITSubstringOnce(t *testing.T) {
 		if name == "mimic" && e.ssaStats.hosts > 20 {
 			t.Errorf("mimic left its code %d times", e.ssaStats.hosts)
 		}
+	}
+}
+
+// longerSetup's loops take substrings longer than a character: lengths
+// with slice, substring (its arguments swapped) and substr, words with a
+// negative start too, and onNumbers with String.prototype.slice on
+// numbers, at the same site as on strings.
+const longerSetup = `
+	var text = 'hello, world: the quick brown fox jumps over the lazy dog'
+	function lengths(s, n) {
+		let c = 0
+		for (let i = 0; i < n; i++) {
+			const k = i % 20
+			c += s.slice(k, k + 5 + (i & 3)).length + s.substring(k + 9, k).length + s.substr(k, 7).length
+		}
+		return c
+	}
+	function words(s, n) { let out = ''; for (let i = 0; i < n; i++) out += s.slice(i % 9, (i % 9) + 4) + '|' + s.slice(-6 - (i & 1)) + ';'; return out }
+	Number.prototype.slice = String.prototype.slice
+	function onNumbers(xs, n) { let out = ''; for (let i = 0; i < n; i++) out += xs[i % xs.length].slice(0, 2) + ','; return out }
+`
+
+// A substring, slice or substr longer than one character, which
+// OpSubstringChar leaves, is a call of the leaf without a frame (ssa.GoLeaf)
+// on its branch, the function checked: warm, lengths makes no call of Go
+// with a frame and never leaves its code -- each had been a call Go made
+// with one, slower than the tree tier's call of the leaf. A receiver the
+// leaf refuses, a number, leaves for Go. Each answer is the interpreter's.
+func TestJITSubstringLonger(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	var rounds []string
+	for range 6 {
+		rounds = append(rounds, `lengths(text, 300)`, `words(text, 40)`, `onNumbers(['ab', 12345, 'cde', 6.5], 40)`)
+	}
+	r := jitAgreesForTest(t, longerSetup, rounds...)
+	e := jitNativeForTest(t, r, "lengths")
+	leaves := 0
+	for _, st := range e.ssa.GoCallStates() {
+		if ssa.GoOp(st.Op&0xff) == ssa.GoLeaf {
+			leaves++
+		}
+	}
+	if leaves < 3 {
+		t.Errorf("lengths' code has %d leaves' calls, want slice's, substring's and substr's", leaves)
+	}
+	calls, hosts, entries := e.ssaStats.goCalls, e.ssaStats.hosts, e.ssaStats.entries
+	for range 2 {
+		if _, err := r.Run(compileForTest(t, `lengths(text, 300)`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls, hosts, entries = e.ssaStats.goCalls-calls, e.ssaStats.hosts-hosts, e.ssaStats.entries-entries; entries == 0 || calls != 0 || hosts != 0 {
+		t.Errorf("lengths ran natively %d times, made %d calls of Go with frames in 1,800 longer substrings and left its code %d times", entries, calls, hosts)
 	}
 }

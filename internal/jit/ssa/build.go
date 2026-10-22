@@ -3002,10 +3002,22 @@ func (b *builder) substringCall(blk *Block, pc int, fn uintptr, kind int, guard 
 	v := f.newValue(hit, OpLoadCell, Tagged, cell)
 	v.Shadow = cell
 	b.write(base, hit, v)
-	call := f.newValue(miss, OpCall, Tagged, operands...)
-	call.Aux, call.State = int(ir.HostExit), st
+	var call *Value
+	if b.goCalls() {
+		// The function checked is the realm's, a leaf: the call is one of
+		// Go of the leaf (GoLeaf), as leafCall's is, its operands the
+		// function, the receiver and the arguments, made without a frame
+		// -- what its check refuses leaves for Go to make after an exit --
+		// rather than the call Go would make with one.
+		args := append([]*Value{callee, recv}, operands[2:]...)
+		call = f.newValue(miss, OpCall, Tagged, args...)
+		f.cache(call).Calls = []*CallSite{{Go: GoLeaf, Argc: argc, Method: true, ThisSlot: -1}}
+	} else {
+		call = f.newValue(miss, OpCall, Tagged, operands...)
+		f.cache(call).Calls = b.calls[pc]
+	}
+	call.Aux, call.State, call.Index = int(ir.HostExit), st, b.callKeeps[pc]
 	st.addUse()
-	f.cache(call).Calls, call.Index = b.calls[pc], b.callKeeps[pc]
 	kept := f.newValue(miss, OpCallCell, Source, call)
 	r := f.newValue(miss, OpKept, Tagged, kept, call)
 	r.Shadow = kept
