@@ -3056,8 +3056,11 @@ func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 	o, cl := r.jitCalled(f, sp, in)
 	if cl == nil {
 		if o, cl := r.jitCalledVia(f, sp, in); cl != nil {
-			// G.call(this, ...): G called natively, never inlined.
-			if ce := r.jitNativeCallee(cl); ce != nil {
+			// G.call(this, ...): G called natively, never inlined -- through
+			// its link where it has no code yet, as any call is
+			// (jitNativeOrLinked): decided so once, a call of a G with
+			// none then had been Go's for good.
+			if r.jitNativeOrLinked(cl) {
 				e.nativeCalls = append(e.nativeCalls, jitInline{pc: int32(pc), cl: cl, obj: o, via: true})
 				e.callSites[pc] = jitCallNative
 				e.inlinePending = true
@@ -5476,7 +5479,7 @@ func (r *Runtime) jitSeedBuiltin(cl *closure, e *jitEntry, p *ir.Program, pc int
 		x = jitInline{pc: int32(pc), obj: o, fromChar: true}
 	case r.jitIsSubstring(o, int(in.A)):
 		x = jitInline{pc: int32(pc), obj: o, substring: true}
-	case in.A >= 1 && o == r.callFn && read > 0 && (cl.fn.Code[read-1].Op == bytecode.OpGetProp || cl.fn.Code[read-1].Op == bytecode.OpGetGlobal):
+	case in.A >= 1 && o == r.callFn && read > 0 && jitViaRead(cl.fn.Code[read-1].Op):
 		v, ok := r.jitChainValue(cl, p, read-1, jitChainReads)
 		if !ok || !v.IsObject() {
 			return
@@ -5497,6 +5500,22 @@ func (r *Runtime) jitSeedBuiltin(cl *closure, e *jitEntry, p *ir.Program, pc int
 	}
 	e.nativeCalls = append(e.nativeCalls, x)
 	e.callSites[pc] = jitCallNative
+}
+
+// jitViaRead reports whether op, the read of G before G.call(this, ...),
+// is one whose value now jitChainValue finds: a global's, a property's of
+// what such reads give, or a captured binding's -- the _super a class
+// compiled to ES5 calls its parent's constructor through,
+// _super.call(this, ...), which had been decided, once, from the call's
+// first exit, and left to Go for good where its parent had no code then:
+// Typescript's AST constructor called ASTSpan so through Go at each of
+// some 40,000 constructions a run, its subclasses theirs.
+func jitViaRead(op bytecode.Op) bool {
+	switch op {
+	case bytecode.OpGetProp, bytecode.OpGetGlobal, bytecode.OpGetUpvalue, bytecode.OpGetUpvalueCheck:
+		return true
+	}
+	return false
 }
 
 // jitSeedDepth is how many compiles deep seeding a call's target may
@@ -5968,6 +5987,17 @@ func (r *Runtime) jitCalled(f *frame, sp int, in bytecode.Instr) (*Object, *clos
 func (r *Runtime) jitCallTarget(f *frame, e *jitEntry, pc, sp int, in bytecode.Instr) {
 	o, cl := r.jitCalled(f, sp, in)
 	if cl == nil {
+		if o, cl := r.jitCalledVia(f, sp, in); cl != nil && slices.ContainsFunc(e.nativeCalls, func(x jitInline) bool { return int(x.pc) == pc && x.via && x.obj == o }) {
+			// G.call(this, ...), which the call makes natively, of a G with
+			// no code for it to call -- never compiled, or dropped to make
+			// room -- compiled for native callers, as a call's target with
+			// none is (below): Go had made each such call. Typescript's AST
+			// constructor's _super.call(this), of ASTSpan, which no tier
+			// compiles for Go to enter, at each of 100,000 constructions.
+			if ce := r.jit.entryFor(cl.fn); ce == nil || ce.ssa == nil && !ce.invalid {
+				r.jitNativeCallee(cl)
+			}
+		}
 		return
 	}
 	n := 0

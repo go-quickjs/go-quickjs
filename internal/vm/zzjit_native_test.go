@@ -6717,6 +6717,118 @@ func TestJITGenericCallsCompileTheirCallees(t *testing.T) {
 	}
 }
 
+// A class compiled to ES5 calls its parent's constructor through the
+// parent its function captured, _super.call(this, ...): the call is
+// decided when the constructor's code is first compiled, the parent read
+// from the captured binding now (jitViaRead, jitChainValue), and made
+// natively from then on -- and, where the parent has no code to call, its
+// code dropped to make room, the parent compiled again for native callers
+// at the call (jitCallTarget), where Go had made the call at each
+// construction from then on. Typescript's AST called ASTSpan so, and its
+// subclasses theirs, through Go, 160,000 times a run.
+func TestJITCallsThroughCapturedParents(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		var __extends = function (d, b) { function __() { this.constructor = d } __.prototype = b.prototype; d.prototype = new __() }
+		var Span = (function () { function Span() { this.min = -1; this.lim = -1 } return Span })()
+		var AST = (function (_super) {
+			__extends(AST, _super)
+			function AST(k) { _super.call(this); this.k = k; this.t = null }
+			return AST
+		})(Span)
+		function make(n) { let s = 0; for (let i = 0; i < n; i++) { const a = new AST(i); s = (s + a.k + a.min) | 0 } return s }
+	`
+	r := jitAgreesForTest(t, setup, `make(500)`, `make(500)`, `make(500)`, `make(500)`)
+	s := r.jit
+	ast := jitGlobalClosureForTest(r, "AST")
+	e := s.entryFor(ast.fn)
+	if e == nil || e.ssa == nil {
+		t.Fatalf("AST has no code: %+v", e)
+	}
+	if !slices.ContainsFunc(e.nativeCalls, func(x jitInline) bool { return x.via }) {
+		t.Fatalf("AST does not call its parent natively")
+	}
+	if n := int(e.reopts) + int(e.inlineReopts) + int(e.upgradeReopts); n != 0 {
+		t.Errorf("AST was compiled again %d times", n)
+	}
+	// Span's code dropped, as the cache drops code to make room.
+	fn := jitGlobalClosureForTest(r, "Span").fn
+	if se := s.entryFor(fn); se == nil || se.ssa == nil || !s.dropEntry(weak.Make(fn), se) {
+		t.Fatalf("Span's code was not dropped: %+v", se)
+	}
+	for range 2 {
+		if _, err := r.Run(compileForTest(t, `make(500)`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	goCalls := s.goCalls
+	if _, err := r.Run(compileForTest(t, `make(500)`)); err != nil {
+		t.Fatal(err)
+	}
+	if n := s.goCalls - goCalls; n != 0 {
+		t.Errorf("AST's calls of Span were Go's %d times", n)
+	}
+	if se := s.entryFor(fn); se == nil || se.ssa == nil {
+		t.Errorf("Span was not compiled again: %+v", se)
+	}
+}
+
+// A call through Function.prototype.call of a parent with no code when the
+// call is decided -- its compile put off for want of room (jitEntry's
+// deferred) -- is made natively all the same, through the parent's link
+// (jitNativeOrLinked), as any call is, and the parent compiled at the
+// call once it may be: decided so, it had been Go's for good, the
+// caller's code never compiled again for it -- Typescript's
+// BinaryExpression's, ASTList's and IdentifierToken's constructors' calls
+// of their parents, 30,000 a run each. AST's call is decided as its code
+// is first compiled (jitSeedBuiltin), Leaf's, of a parent its read does
+// not say, at the call's exits (jitCallSeen).
+func TestJITCallsThroughParentsWithoutCode(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		var __extends = function (d, b) { function __() { this.constructor = d } __.prototype = b.prototype; d.prototype = new __() }
+		var Span = (function () { function Span() { this.min = -1; this.lim = -1 } return Span })()
+		var AST = (function (_super) {
+			__extends(AST, _super)
+			function AST(k) { _super.call(this); this.k = k; this.t = null }
+			return AST
+		})(Span)
+		function Leaf(k) { var p = Span; p.call(this); this.k = k + 1 }
+		Leaf.prototype = Object.create(Span.prototype)
+		function make(n) { let s = 0; for (let i = 0; i < n; i++) { const a = new AST(i), b = new Leaf(i); s = (s + a.k + a.min + b.k + b.lim) | 0 } return s }
+	`
+	both := jitBothForTest(t, setup)
+	r := both.jit
+	s := r.jit
+	span := jitGlobalClosureForTest(r, "Span")
+	se := r.jitFor(span)
+	if se == nil {
+		t.Fatal("no entry for Span")
+	}
+	// Its compile put off until the cache releases code.
+	se.deferred, se.generation = true, s.generation
+	both.agree(t, `make(500)`, `make(500)`, `make(500)`, `make(500)`)
+	e := s.entryFor(jitGlobalClosureForTest(r, "AST").fn)
+	if e == nil || e.ssa == nil {
+		t.Fatalf("AST has no code: %+v", e)
+	}
+	if se.ssa != nil {
+		t.Fatalf("Span was compiled while deferred")
+	}
+	// The cache releases code.
+	s.generation++
+	both.agree(t, `make(500)`, `make(500)`)
+	goCalls := s.goCalls
+	both.agree(t, `make(500)`)
+	if n := s.goCalls - goCalls; n != 0 {
+		t.Errorf("AST's and Leaf's calls of Span were Go's %d times", n)
+	}
+}
+
 // A construction the existing tiers have made is decided when a function's
 // code is first compiled, as a call is (jitSeedCalls), once its
 // constructor has code: mk1 learns new V from its exits, which compiles V
