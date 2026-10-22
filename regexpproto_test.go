@@ -591,6 +591,12 @@ func TestRegExpLegacyStatics(t *testing.T) {
 			"a||c||ac|ac|c|x|z|xacz|xacz"},
 		{`"hello world".replace(/o (w)/, "_"); [RegExp.$1, RegExp.leftContext].join()`, "w,hell"},
 		{`RegExp.input = 5; [RegExp.input, typeof RegExp.$_].join()`, "5,string"},
+		// Setting the input changes only the input: the rest still describe
+		// the last match, cut from its subject.
+		{`/b(c)/.exec("abcd"); RegExp.input = "wxyz"; RegExp.$_ = "set";
+		  [RegExp.input, RegExp.$1, RegExp.lastMatch, RegExp.lastParen, RegExp.leftContext,
+		   RegExp.rightContext, RegExp["$&"], RegExp["$+"], RegExp["$` + "`" + `"], RegExp["$'"]].join("/")`,
+			"set/c/bc/c/a/d/bc/c/a/d"},
 		// The statics take the indices a match read rather than copy them:
 		// matches of more groups and of fewer in turn, one that fails, which
 		// leaves them, and one whose lastIndex cannot be written, which

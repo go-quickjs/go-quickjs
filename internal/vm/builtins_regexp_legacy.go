@@ -19,7 +19,12 @@ import "unsafe"
 type legacyRegExpStatics struct {
 	// invalid marks the state a subclass's match leaves.
 	invalid bool
-	input   *String
+	// input is what RegExp.input answers: the last match's subject, or what
+	// a script has set it to since.
+	input *String
+	// subject is the last match's subject, which the rest are cut from:
+	// setting RegExp.input leaves them as they were.
+	subject *String
 	// bufs[which] holds the last match's capture positions, n of them, and
 	// the other is where exec reads the next match's (spare): taking that
 	// match is turning which over, not a copy. Neither is written in place
@@ -35,11 +40,14 @@ type legacyRegExpStatics struct {
 // then takes.
 func (st *legacyRegExpStatics) spare() []int { return st.bufs[st.which^1] }
 
-// setInput makes s the last match's subject, storing it only where it
-// changes: a loop's matches are mostly of one string.
-func (st *legacyRegExpStatics) setInput(s *String) {
+// setSubject makes s the last match's subject and the input, storing only
+// what changes: a loop's matches are mostly of one string.
+func (st *legacyRegExpStatics) setSubject(s *String) {
 	if st.input != s {
 		st.input = s
+	}
+	if st.subject != s {
+		st.subject = s
 	}
 }
 
@@ -63,13 +71,13 @@ func (r *Runtime) takeLegacyMatch(legacy bool, input *String, caps []int) {
 	}
 	if !legacy {
 		st.invalid, st.n = true, 0
-		if st.input != nil {
-			st.input = nil
+		if st.input != nil || st.subject != nil {
+			st.input, st.subject = nil, nil
 		}
 		return
 	}
 	st.invalid, st.which, st.n = false, w, len(caps)
-	st.setInput(input)
+	st.setSubject(input)
 }
 
 // piece cuts one of the statics from the last match.
@@ -77,10 +85,10 @@ func (st *legacyRegExpStatics) piece(which string) *String {
 	if which == "input" && st.input != nil {
 		return st.input
 	}
-	if st.input == nil || st.n < 2 {
+	if st.subject == nil || st.n < 2 {
 		return emptyString
 	}
-	s, caps := st.input, st.bufs[st.which][:st.n]
+	s, caps := st.subject, st.bufs[st.which][:st.n]
 	group := func(i int) *String {
 		if 2*i+1 >= len(caps) || caps[2*i] < 0 || caps[2*i+1] < 0 {
 			return emptyString
