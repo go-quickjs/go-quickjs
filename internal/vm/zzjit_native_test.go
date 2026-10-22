@@ -2477,7 +2477,7 @@ func TestJITEpochFollowsCollector(t *testing.T) {
 // jitChurnSource is a program with more functions run hot enough to be
 // compiled than the JIT's cache holds: a hot core of chains native calls
 // make -- top_c's loop calls mid_c, which calls leaf_c twice, each kept
-// from being inlined by a captured binding -- and a stream of cold
+// from being inlined (jitNoInlineForTest) -- and a stream of cold
 // functions, each run a few times, then left. round(phases, window) runs
 // every chain in each phase, then the next window of cold functions.
 func jitChurnSource(chains, cold int) string {
@@ -2521,6 +2521,7 @@ func TestJITCacheKeepsHotCode(t *testing.T) {
 	defer func(was func() uint64) { jitEpochNow = was }(jitEpochNow)
 	jitEpochNow = func() uint64 { return epoch }
 	const chains = 30
+	jitNoInlineForTest(t, "")
 	// A budget of 1 MB, which the cold functions fill.
 	r := jitRuntimeForTest(t, Config{JIT: true, MemoryLimit: 8 << 20})
 	if _, err := r.Run(compileForTest(t, jitChurnSource(chains, 400))); err != nil {
@@ -7894,7 +7895,7 @@ func TestJITSSALooplessCalleeRecompiledAfterEviction(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	// leaf's captured binding keeps it from being inlined (jitInlinable).
+	jitNoInlineForTest(t, "leaf")
 	setup := `var leaf=(function(){let k=3;return function leaf(x){x.c=(x.c+k)|0;return x.c}})();
 		function useLeaf(o,n){let t=0;for(let i=0;i<n;i++)t=(t+leaf(o))|0;return t}
 		var lo={c:0};`
@@ -10837,12 +10838,15 @@ func TestJITSSAStringConstants(t *testing.T) {
 // set_upvalue. A read after a native call that assigned the binding sees
 // the assignment; a binding read before its initialization, or a constant
 // assigned, is the interpreter's error. Each answer is the interpreter's.
+// Nothing is inlined: the calls are the test's (TestJITInlinesCapturedBindings
+// inlines such closures).
 func TestJITSSACapturedBindings(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	jitNoInlineForTest(t, "")
 	setup := `var rnd=(function(){var seed=49734321;return function(){
 			seed=((seed+0x7ed55d16)+(seed<<12))&0xffffffff;seed=((seed^0xc761c23c)^(seed>>>19))&0xffffffff;
 			return (seed&0xfffffff)/0x10000000}})();

@@ -237,6 +237,9 @@ func (fb *jitFeedback) Accessor(pc int) (ssa.AccessorSite, bool) {
 		Program: p, Feedback: &jitFeedback{r: fb.r, fn: cl.fn, cl: cl, root: k},
 		Callee: uintptr(unsafe.Pointer(callee)), Closure: uintptr(unsafe.Pointer(cl)),
 		Argc: jitB2i(write), Method: true, Params: cl.fn.ParamCount, ThisSlot: this, Coerce: cl.fn.CoerceThis,
+		// Its captured bindings in their cells, the closure's: the
+		// accessor's check fixes it.
+		Upvalues: jitUpvalueCells(cl),
 	}
 	k.inlined = append(k.inlined, cl)
 	return a, true

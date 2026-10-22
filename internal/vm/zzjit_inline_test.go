@@ -25,6 +25,13 @@ func jitInlinedForTest(t *testing.T) map[string][]uintptr {
 	return got
 }
 
+// jitNoInlineForTest has the functions named name -- every function
+// for "" -- not inlined while the test runs (jitNoInline).
+func jitNoInlineForTest(t *testing.T, name string) {
+	jitNoInline = func(fn *bytecode.Function) bool { return name == "" || fn.Name == name }
+	t.Cleanup(func() { jitNoInline = nil })
+}
+
 // jitClosureForTest is the closure of the function the script's global
 // expression src gives.
 func jitClosureForTest(t *testing.T, r *Runtime, src string) uintptr {
@@ -251,4 +258,88 @@ func TestJITInlinesGlobalReads(t *testing.T) {
 	both.agree(t, `K = 7, f(10)`, `L = 'x', f(3)`, `L = 1, f(10)`, `f(100)`)
 	both.script(t, `let M = 9`)
 	both.agree(t, `f(10)`, `f(100)`, `M = 10, f(100)`)
+}
+
+const inlineUpvaluesSetup = `
+	var mod = (function () {
+		const NONE = null, LIMIT = 3
+		let count = 0, last = 'start'
+		class Node {
+			constructor(v) { this.v = v; this.next = NONE }
+			// Reads what the module's closure captured, assigns count.
+			isEnd() { return this.next === NONE }
+			bump() { count = count + 1; last = this.v; return count }
+			check() { if (this.v > LIMIT * 100) throw new RangeError('past ' + LIMIT + ' at ' + count); return this.v }
+		}
+		function walk(n, k) {
+			let s = 0
+			for (let i = 0; i < k; i++) {
+				// count assigned and read here, assigned by the inlined bump
+				// between, and read again.
+				count = count + 2
+				const before = count
+				s += n.isEnd() ? 1 : 2
+				s += n.bump() - before
+				s += n.check() + count
+			}
+			return s + ':' + count + ':' + last
+		}
+		function tdz(k) {
+			let s = 0
+			for (let i = 0; i < k; i++) s += late()
+			return s
+		}
+		function late() { return later }
+		function reset() { count = 0 }
+		return { Node, walk, tdz, late, reset, get count() { return count } }
+	})()
+	var n1 = new mod.Node(5), n2 = new mod.Node(7)
+	n1.next = n2
+	function made(k) {
+		let s = 0
+		for (let i = 0; i < k; i++) {
+			const j = i
+			// A closure made anew at each turn: the inlined call's check of
+			// its object fails, and it is called by its code from then on.
+			const f = () => j * 2
+			s += f()
+		}
+		return s
+	}
+	function walks(k) { try { return mod.walk(n1, k) + '|' + mod.walk(n2, k) } catch (e) { return e.name + ':' + e.message + '|' + e.stack } }
+`
+
+// A callee that reads and assigns bindings it captured -- a module's
+// constants, a let it counts in -- is inlined, its reads and assignments
+// made in the cells of its closure, which the call's check of its function
+// object fixes (ssa.InlineSite's Upvalues): it had been called natively,
+// every class method of a module's code with it. An assignment has the
+// caller read its own captured bindings again, which may be the same
+// cells. Each answer is the interpreter's: the count read across the
+// inlined assignment, a throw from an inlined method with its stack, a
+// global that is not there, a closure made anew at each call.
+func TestJITInlinesCapturedBindings(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	runtime.GC()
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	inlined := jitInlinedForTest(t)
+	both := jitBothForTest(t, inlineUpvaluesSetup)
+	for range 3 {
+		both.agree(t, `walks(50)`, `made(50)`)
+	}
+	r := both.jit
+	for _, m := range []string{"isEnd", "bump", "check"} {
+		if c := jitClosureForTest(t, r, `mod.Node.prototype.`+m); !slices.Contains(inlined["walk"], c) {
+			t.Errorf("walk inlines %x, not %s %x", inlined["walk"], m, c)
+		}
+	}
+	hosts := r.jit.hosts
+	both.agree(t, `walks(1000)`)
+	if n := r.jit.hosts - hosts; n != 0 {
+		t.Errorf("walk left native code %d times", n)
+	}
+	both.agree(t, `mod.count`, `(n2.v = 500, walks(10))`, `(n2.v = 7, mod.reset(), walks(20))`, `made(100)`, `made(100)`,
+		`(function () { try { return mod.tdz(3) } catch (e) { return e.name + ':' + e.message } })()`)
 }

@@ -234,8 +234,14 @@ callee's frame Go makes are (`jitReopenCells`). A call of a closure that
 captures bindings checks the function the callee runs, in its environment
 and realm, not the object (`ssa.CallSite`'s `ByCode`), and gives the
 callee the closure it finds, as V8 checks a call's code: a callback made
-anew at each call of its maker is a new object, the same function. Such a
-closure is not inlined: an inlined callee's captured bindings are Go's.
+anew at each call of its maker is a new object, the same function. A
+closure is inlined where its call checks its object, which fixes its
+closure and so the cells of its captured bindings: an inlined frame reads
+and assigns them there (`ssa.InlineSite`'s `Upvalues`), as V8's inlined
+code reads a context it knows, and an assignment has the caller read its
+own captured bindings again, which may be the same cells. One made anew
+at each call of its maker fails the check and is called by its code from
+then on (`jitInlinedCalls`).
 
 **Generators and async functions.** `yield` and `await` are exits at which
 Go suspends the frame as the interpreter does, and each resumption enters

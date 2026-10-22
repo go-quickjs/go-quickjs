@@ -135,9 +135,10 @@ func TestJITElementStoresTypedFromAnyValue(t *testing.T) {
 	}
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	// Not inlined: its x is a parameter's.
+	jitNoInlineForTest(t, "put")
 	r := jitAgreesForTest(t, `
 		const h = new Int32Array(64), u = new Uint8Array(64), d = new Float64Array(64)
-		// Capturing stores, it is not inlined: its x is a parameter's.
 		var put = (() => { let stores = 0; return function put(a, i, x) { stores++; a[i] = x } })()
 		function fill(n) { for (let i = 0; i < n; i++) { put(h, i & 63, i * 3); put(u, i & 63, i); put(d, i & 63, i / 4) } return h[5] + u[7] + d[9] }`,
 		`fill(1000)`, `fill(1000)`, `fill(1000)`, `[h[1], u[2], d[3], h.length].join()`)

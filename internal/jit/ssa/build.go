@@ -1901,9 +1901,9 @@ func (b *builder) hostOf(pc int) bool {
 		return !ok
 	case ir.UpvalueRead, ir.UpvalueWrite:
 		// The function's own captured bindings, which its context has;
-		// an inlined callee's read where its closure's cells are known
+		// an inlined callee's where its closure's cells are known
 		// (InlineSite's Upvalues); the rest Go's.
-		return b.cur != b.root && (b.p.Code[pc].Op != ir.UpvalueRead || b.cur.site.Upvalues == 0)
+		return b.cur != b.root && b.cur.site.Upvalues == 0
 	case ir.StringAdd, ir.StringConcat, ir.HasProperty, ir.DeleteProperty:
 		// A call of Go (GoAdd, GoConcat, GoHas, GoDelete), where the VM
 		// answers it.
@@ -5062,17 +5062,29 @@ func (b *builder) instruction(blk *Block, pc int) {
 		}
 		b.goConcat(blk, in, operand, guard)
 	case ir.UpvalueRead, ir.UpvalueWrite:
-		if b.cur != b.root && in.Op == ir.UpvalueRead && b.cur.site.Upvalues != 0 {
+		if b.cur != b.root && b.cur.site.Upvalues != 0 {
 			// An inlined callee's captured binding, read from its cell
 			// anew each time (OpUpvalueCell's Aux 2): a call may assign it.
 			cell := f.newValue(blk, OpUpvalueCell, Source)
 			cell.Index, cell.Aux, cell.Const = int(in.Key), 2, ir.Value{Bits: uint64(b.cur.site.Upvalues)}
-			v := f.newValue(blk, OpLoadCell, Tagged, cell)
-			v.Shadow = cell
-			if in.Check {
-				guard(OpCheckInit, None, ir.GuardExit, v)
+			if in.Op == ir.UpvalueRead || in.Check {
+				v := f.newValue(blk, OpLoadCell, Tagged, cell)
+				v.Shadow = cell
+				if in.Check {
+					guard(OpCheckInit, None, ir.GuardExit, v)
+				}
+				if in.Op == ir.UpvalueRead {
+					b.assign(in.Dest, blk, v)
+					break
+				}
 			}
-			b.assign(in.Dest, blk, v)
+			// Assigned in its cell, as the function's own are: the cell may
+			// be one the function's code reads -- a binding both captured, a
+			// local of its own the callee captured -- whose value it has
+			// read before, which it reads again (reloadUpvalues).
+			w := guard(OpPropWrite, None, ir.HostExit, cell, operand(in.Left))
+			w.Key, w.Upvalue = upvalueKey, true
+			b.reloadUpvalues(blk)
 			break
 		}
 		if b.cur != b.root {

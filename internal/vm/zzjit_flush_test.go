@@ -47,6 +47,8 @@ func TestJITFlushesUnusedCode(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	setEpoch := jitFlushForTest(t)
+	// g called natively, not inlined.
+	jitNoInlineForTest(t, "g")
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	if _, err := r.Run(compileForTest(t, `
 		var probe;

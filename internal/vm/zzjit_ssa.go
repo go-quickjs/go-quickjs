@@ -2542,6 +2542,12 @@ func (fb *jitFeedback) Inline(pc int) (ssa.InlineSite, bool) {
 			Argc: int(call.A), Method: call.Op == bytecode.OpCallMethod,
 			Params: in.cl.fn.ParamCount, ThisSlot: this, Coerce: in.cl.fn.CoerceThis,
 			ReadsArguments: reads,
+			// Its captured bindings, read and assigned in their cells, the
+			// closure's, which the call's check of its function object fixes,
+			// as V8's inlined code reads a context it knows: one made anew at
+			// each call of its maker fails it, and is called by its code
+			// from then on (jitInlinedCalls).
+			Upvalues: jitUpvalueCells(in.cl),
 		}
 		if call.Op == bytecode.OpNew {
 			// Its receiver from its pool, as a native construction's.
@@ -5177,6 +5183,11 @@ func (r *Runtime) jitInlineLeft(e *jitEntry, pc int) {
 	}
 }
 
+// jitNoInline, where a test sets it, says which functions are not to be
+// inlined: those whose native calls, or their code's place in the cache,
+// the test is about.
+var jitNoInline func(fn *bytecode.Function) bool
+
 // jitInlineDepth is how many levels of calls are inlined: a callee, the
 // calls it makes, theirs (ssa's maxInlineDepth).
 const jitInlineDepth = 3
@@ -5190,7 +5201,7 @@ const jitInlineDepth = 3
 // of its closures.
 func (r *Runtime) jitInlinesCalls(cl *closure, depth int) bool {
 	fn := cl.fn
-	if len(fn.Upvalues) != 0 || fn.TopLevel || fn.IsModule || fn.UsesArguments || fn.HasDirectEval || isGeneratorTemplate(fn) {
+	if fn.TopLevel || fn.IsModule || fn.UsesArguments || fn.HasDirectEval || isGeneratorTemplate(fn) {
 		return false
 	}
 	p, err := r.jitLower(fn, jitLowerInline)
@@ -5260,7 +5271,7 @@ func (r *Runtime) jitInlineSite(fn *bytecode.Function, pc, depth int) (jitInline
 			in, n = x, n+1
 		}
 	}
-	if n != 1 || in.cl == nil || in.cl.fn == fn || in.via {
+	if n != 1 || in.cl == nil || in.cl.fn == fn || in.via || jitNoInline != nil && jitNoInline(in.cl.fn) {
 		// Not one call of a function inlined there: a call through
 		// Function.prototype.call, which an inlined frame's call does not
 		// make natively, would leave native code there at every call.
@@ -6251,18 +6262,6 @@ func jitAbsentKey(o *Object, a Atom, named bool) bool {
 	return true
 }
 
-// jitReadsUpvalues reports whether cl's code reads or assigns a binding it
-// captured.
-func jitReadsUpvalues(cl *closure) bool {
-	return len(cl.upvalues) != 0 && slices.ContainsFunc(cl.fn.Code, func(x bytecode.Instr) bool {
-		switch x.Op {
-		case bytecode.OpGetUpvalue, bytecode.OpGetUpvalueCheck, bytecode.OpSetUpvalue, bytecode.OpSetUpvalueCheck, bytecode.OpInitUpvalue:
-			return true
-		}
-		return false
-	})
-}
-
 // jitSameCode reports whether a and b are closures of one function, in one
 // environment and realm: a call native code makes of either may check the
 // function, and run the closure it finds (ssa.CallSite's ByCode), as each
@@ -6295,6 +6294,9 @@ func jitReadsArguments(fn *bytecode.Function) bool {
 // returns nothing, so that its receiver is the result, as V8 inlines a
 // constructor.
 func (r *Runtime) jitInlinesAt(cl *closure, o *Object, in bytecode.Instr) bool {
+	if jitNoInline != nil && jitNoInline(cl.fn) {
+		return false
+	}
 	if in.Op == bytecode.OpNew && cl.fn.Leaf == bytecode.LeafForward {
 		// this.k.apply(this, arguments): k, inlined in it.
 		return r.jitConstructs(o) && r.jitForwardTarget(cl, o, jitInlineDepth) != nil
@@ -6305,12 +6307,6 @@ func (r *Runtime) jitInlinesAt(cl *closure, o *Object, in bytecode.Instr) bool {
 		return r.jitConstructs(o) && r.jitForwardsInline(cl, o, jitInlineDepth)
 	}
 	if !r.jitInlinable(cl.fn) && !r.jitInlinesCalls(cl, jitInlineDepth-1) {
-		return false
-	}
-	if jitReadsUpvalues(cl) {
-		// A closure that reads what it captured, which an inlined callee
-		// leaves to Go: called natively, by its code (jitSameCode), as a
-		// closure made anew at each call of its maker is a new object.
 		return false
 	}
 	// A constructor whose returns all return its receiver, as a base
@@ -7861,17 +7857,18 @@ func (r *Runtime) jitOperand(f *frame, p *ir.Program, o ir.Operand) Value {
 	return Undefined
 }
 
-// jitInlinable reports whether fn may be inlined into a caller: it
-// captures nothing, and ssa.Inlinable takes its program. Each function is
-// asked once, while the runtime keeps its lowering.
+// jitInlinable reports whether fn may be inlined into a caller:
+// ssa.Inlinable takes its program, whose captured bindings an inlined
+// frame reads and assigns in their cells (ssa.InlineSite's Upvalues).
+// Each function is asked once, while the runtime keeps its lowering.
 func (r *Runtime) jitInlinable(fn *bytecode.Function) bool {
 	l := r.jit.lowering(fn)
 	if l.inlinable == 0 {
 		ok := false
-		if len(fn.Upvalues) == 0 && !fn.TopLevel && !fn.IsModule && !fn.UsesArguments && !fn.HasDirectEval {
+		if !fn.TopLevel && !fn.IsModule && !fn.UsesArguments && !fn.HasDirectEval {
 			p, err := r.jitLower(fn, jitLowerInline)
 			ok = err == nil && ssa.Inlinable(p)
-		} else if len(fn.Upvalues) == 0 && jitReadsArguments(fn) {
+		} else if jitReadsArguments(fn) {
 			// arguments[k] read from the call's arguments
 			// (ssa.InlineSite's ReadsArguments).
 			p, err := r.jitLower(fn, jitLowerForward)
