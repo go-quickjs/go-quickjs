@@ -1846,7 +1846,7 @@ func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
 	e.lexThis, e.loops = fb.lexThis, fb.loops
 	e.setLoopSlots(fn, fb.loopSlots)
 	e.ssaSerial++
-	e.ssaInlinedAt, e.definesUnfed, e.ssaCells = fb.inlinedAt, fb.definesUnfed, fb.cells
+	e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaHostsLeft = fb.inlinedAt, fb.definesUnfed, fb.cells, fb.hostsLeft
 	e.ssaStrings, e.ssaInlined, e.ssaPools = e.ssaStrings || fb.strings, fb.inlined, fb.pools
 	r.jit.setLinks(e, fb.links)
 	e.ssaKeeps = max(e.ssaKeeps, fb.keeps)
@@ -1964,6 +1964,10 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 	}
 	// The cells the backend gave the kept values (mir's keep cells).
 	fb.keeps = f.Keeps
+	fb.hostsLeft = nil
+	for _, pc := range f.HostsLeft {
+		fb.hostsLeft = append(fb.hostsLeft, int32(pc))
+	}
 	s.ssaKeeps = max(s.ssaKeeps, f.Keeps)
 	need := jitEntryFixed + jit.CodeFootprint(mc) + fb.compiledBytes()
 	if e != nil {
@@ -2037,8 +2041,9 @@ type jitFeedback struct {
 	// their transitions were made; cells the string constants' it reads.
 	definesUnfed []int32
 	cells        []*Value
-	// inlinedAt, the root's, are the calls of its own it inlines.
-	inlinedAt []int32
+	// inlinedAt, the root's, are the calls of its own it inlines, and
+	// hostsLeft its host operations it leaves to Go (ssa.Func's HostsLeft).
+	inlinedAt, hostsLeft []int32
 	// root is the function's feedback for an inlined callee's, which keeps
 	// what the callee's sites hold for the code; nil for the function's
 	// own. strings marks an inlined callee that calls charCodeAt. links
@@ -5212,7 +5217,7 @@ const jitInlineDepth = 3
 // of its closures.
 func (r *Runtime) jitInlinesCalls(cl *closure, depth int) bool {
 	fn := cl.fn
-	if fn.TopLevel || fn.IsModule || fn.UsesArguments || fn.HasDirectEval || isGeneratorTemplate(fn) {
+	if jitNoInline != nil && jitNoInline(fn) || fn.TopLevel || fn.IsModule || fn.UsesArguments || fn.HasDirectEval || isGeneratorTemplate(fn) {
 		return false
 	}
 	p, err := r.jitLower(fn, jitLowerInline)
@@ -7676,7 +7681,7 @@ func (e *jitEntry) setSSA(s *jitState, fn *bytecode.Function, p *ir.Program, cod
 	e.setLoopSlots(fn, fb.loopSlots)
 	e.ssaSerial++
 	e.ssaProg = p
-	e.ssaInlinedAt, e.definesUnfed, e.ssaCells = fb.inlinedAt, fb.definesUnfed, fb.cells
+	e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaHostsLeft = fb.inlinedAt, fb.definesUnfed, fb.cells, fb.hostsLeft
 	e.ssaStrings, e.ssaInlined, e.ssaPools = fb.strings, fb.inlined, fb.pools
 	s.setLinks(e, fb.links)
 	e.ssaKeeps = max(e.ssaKeeps, fb.keeps)

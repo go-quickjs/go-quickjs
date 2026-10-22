@@ -218,8 +218,8 @@ func TestJITDeoptTiersUpByOSR(t *testing.T) {
 
 // Every invocation the existing tiers run of a function whose code is
 // invalid spends its budget, a frameless one too: plus, a pure body the
-// call path answers without a frame (pureCall), which reads what it
-// captured and so is called natively, not inlined, compiled for its
+// call path answers without a frame (pureCall), called natively, not
+// inlined (jitNoInlineForTest), compiled for its
 // native caller, loop, and invalidated, is called by Go at each of loop's
 // calls, and compiled again once four of those have spent its budget, as
 // a frame of it would have been; loop then calls it natively. Uncounted,
@@ -232,6 +232,7 @@ func TestJITFramelessCallsSpendTheBudget(t *testing.T) {
 	// No collection meanwhile, which the budget is not about.
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	jitNoInlineForTest(t, "plus")
 	r, run := jitTierRuntimeForTest(t, 4, `var m=(function(){
 			function V(x){this.x=x}
 			function plus(o){return new V(this.x+o.x)}

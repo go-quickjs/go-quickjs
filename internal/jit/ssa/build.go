@@ -5306,6 +5306,10 @@ func (b *builder) instruction(blk *Block, pc int) {
 			}
 			call := guard(OpCall, Tagged, ir.HostExit, args...)
 			b.f.cache(call).Calls, call.Index = calls, b.callKeeps[pc]
+			if calls[0].Go == GoCall {
+				// Go makes it, which counts it as an exit's would.
+				b.f.HostsLeft = append(b.f.HostsLeft, pc)
+			}
 			cell := f.newValue(blk, OpCallCell, Source, call)
 			r := f.newValue(blk, OpKept, Tagged, cell, call)
 			r.Shadow = cell
@@ -5323,6 +5327,9 @@ func (b *builder) instruction(blk *Block, pc int) {
 				b.reloadAfterCall(blk)
 			}
 			break
+		}
+		if b.cur == b.root {
+			b.f.HostsLeft = append(b.f.HostsLeft, pc)
 		}
 		blk.ExitKind = ir.HostExit
 		blk.State = state()

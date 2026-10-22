@@ -175,6 +175,12 @@ func TestJITGenStepAgreesWithNode(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
+	// throwCaughtInside's bad called, the throw out of a call the case is
+	// about (jitNoInlineForTest). Inlined in g, its throw an exit taken at
+	// a third of its calls, it is inlined no more after jitInlineExits of
+	// them, and g, compiled again, counts its native resumptions afresh
+	// (link.in), which the case's check reads, from none.
+	jitNoInlineForTest(t, "bad")
 	defer SetTreeTier(true)
 	for _, on := range []bool{false, true} {
 		SetTreeTier(on)

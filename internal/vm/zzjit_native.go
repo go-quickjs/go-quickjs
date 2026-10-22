@@ -524,6 +524,10 @@ type jitEntry struct {
 	// for inlining since leaves from code compiled before, which is not
 	// the callee's leaving (jitCallSeen).
 	ssaInlinedAt []int32
+	// ssaHostsLeft are the PCs of the host operations of its own the code
+	// leaves to Go (ssa.Func's HostsLeft): a call there its code has never
+	// been seen to make is one seldom made (jitInlineExit).
+	ssaHostsLeft []int32
 	// invalid marks code an eager deoptimization invalidated: Go enters it no
 	// more, nor do native callers call it (its link), and the existing
 	// tiers run the function until they have spent a fresh budget,
@@ -1134,13 +1138,13 @@ func (e *jitEntry) measure() int {
 // compiledBytes is what e holds that its code was compiled with: the
 // slices a compile gives it (setSSA), which jitCompiledBytes measures.
 func (e *jitEntry) compiledBytes() int {
-	return jitCompiledBytes(e.ssaShapes, e.ssaHolders, e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaInlined, e.ssaPools, e.ssaLinks)
+	return jitCompiledBytes(e.ssaShapes, e.ssaHolders, e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaInlined, e.ssaPools, e.ssaLinks) + jitCapBytes(e.ssaHostsLeft)
 }
 
 // compiledBytes is what fb's code would have its entry hold, in place of
 // what the entry's code was compiled with (jitEntry.compiledBytes).
 func (fb *jitFeedback) compiledBytes() int {
-	return jitCompiledBytes(fb.shapes, fb.holders, fb.inlinedAt, fb.definesUnfed, fb.cells, fb.inlined, fb.pools, fb.links)
+	return jitCompiledBytes(fb.shapes, fb.holders, fb.inlinedAt, fb.definesUnfed, fb.cells, fb.inlined, fb.pools, fb.links) + jitCapBytes(fb.hostsLeft)
 }
 
 func jitCompiledBytes(shapes []*shape, holders []*Object, inlinedAt, definesUnfed []int32,

@@ -395,3 +395,90 @@ func TestJITClosuresWithKeepsLimited(t *testing.T) {
 		}
 	}
 }
+
+// A call is left to an exit in an inlined callee only where the callee's
+// own code leaves it to Go -- at an exit, or by a call of Go -- and has
+// never left there (ssa.Func's HostsLeft, jitInlineExit): one its own code
+// makes natively, without leaving, which counts nothing -- a substring of
+// one character, an array's push -- is no seldom one, and the callee is
+// not inlined for it. Taken for one, AWFY Json's read, inlined with an exit
+// at its substring, left native code at every call until it was no longer
+// inlined, and taught its own code a polymorphic read it never met. Their
+// own code runs first here, called natively, enough to tell (jitCodeRan).
+func TestJITInlinedExitsOnlyWhereSeldom(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	runtime.GC()
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	inlined := jitInlinedForTest(t)
+	both := jitBothForTest(t, `
+		class S {
+			constructor(s) { this.s = s; this.i = 0; this.c = '' }
+			next() { this.i = (this.i + 1) % this.s.length; this.c = this.s.substring(this.i, this.i + 1) }
+			keep(a) { a.push(this.i) }
+		}
+		function scan(o, m) { let n = 0; for (let k = 0; k < m; k++) { o.next(); if (o.c === 'b') n++ } return n }
+		function keeps(o, m) { const a = []; for (let k = 0; k < m; k++) o.keep(a); return a.length }
+		function warm(o, m) { const a = []; for (let k = 0; k < m; k++) { o.next(); o.keep(a) } return a.length }
+		var o = new S('abcabc')`)
+	// Their own code run first, called natively by warm, which does not
+	// inline them: run enough to tell (jitCodeRan) that it has never left
+	// at its substring or its push.
+	jitNoInline = func(fn *bytecode.Function) bool { return fn.Name == "next" || fn.Name == "keep" }
+	for range 4 {
+		both.agree(t, `warm(o, 100)`)
+	}
+	jitNoInline = nil
+	for range 4 {
+		both.agree(t, `scan(o, 100)`, `keeps(o, 100)`)
+	}
+	r := both.jit
+	// Never inlined with an exit at the call, which would have left at
+	// every call until the call was no longer inlined (notInline).
+	for _, fn := range []string{"scan", "keeps"} {
+		if e := jitNativeForTest(t, r, fn); len(e.notInline) != 0 {
+			t.Errorf("%s's calls at %v left native code until they were not inlined", fn, e.notInline)
+		}
+	}
+	for _, c := range []struct{ fn, m string }{{"scan", "next"}, {"keeps", "keep"}} {
+		if m := jitClosureForTest(t, r, `S.prototype.`+c.m); slices.Contains(inlined[c.fn], m) {
+			t.Errorf("%s inlines %s, whose call its own code makes natively, with an exit there", c.fn, c.m)
+		}
+	}
+}
+
+// A call a callee's own code leaves to Go and has not made is seldom only
+// where that code has run enough to tell (jitCodeRan): a callee inlined
+// wherever it is called -- a static factory, Item.make here, as AWFY
+// DeltaBlue's Variable.value -- has code compiled for native callers that
+// never runs, and its construction had been taken for a seldom one, the
+// callee inlined with an exit there, which its callers' loops took at
+// every turn until they were compiled again. Each answer is the
+// interpreter's; in the warm rounds native code leaves at no call.
+func TestJITInlinedExitsOnlyWhereCodeRan(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	runtime.GC()
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	both := jitBothForTest(t, `
+		// A module's class, which its methods read as a captured binding.
+		var Item = (function () {
+			class Item {
+				constructor(x) { this.x = x; this.y = x * 2; this.s = '' }
+				static make(x) { const v = new Item(x); v.s = 'k'; return v }
+			}
+			return Item
+		})()
+		function drive(n) { let s = 0; for (let i = 0; i < n; i++) { const a = Item.make(i), b = Item.make(i + 1); s += a.x + b.y + a.s.length } return s }`)
+	r := both.jit
+	// The default budgets, which code waits to be compiled again for what
+	// it learned (jitLearnedDue).
+	r.jitCallThreshold, r.jitICThreshold = jitInvocationsForMaglev, jitInvocationsAfterICUpdate
+	hosts := r.jit.hosts
+	both.agree(t, `drive(3000)`, `drive(3000)`)
+	if n := r.jit.hosts - hosts; n > 10 {
+		t.Errorf("drive left native code %d times in two rounds of 3000", n)
+	}
+}
