@@ -313,6 +313,9 @@ type compiler struct {
 	// proper, with its completion record beneath it, rather than inlined at a
 	// break or continue.
 	finallyRecord bool
+	// finallyBodies is how many finally clauses are being compiled around
+	// the code being compiled, which compileTryFinally inlines no more.
+	finallyBodies int
 	// disposeScopes are the enclosing scopes with using declarations,
 	// innermost last.
 	disposeScopes []disposeScope

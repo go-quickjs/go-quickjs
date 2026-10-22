@@ -1085,33 +1085,61 @@ func (c *compiler) compileTry(n *ast.TryStmt) {
 }
 
 // compileTryFinally compiles body protected by a finally clause.
+//
+// The clause is compiled twice where it can be: inline, for the body's
+// normal completion, which goes on past the try after it; and as the
+// handler's, which a throw and the returns routed through the clause enter
+// with their completion record beneath it, and its rethrow carries on. A
+// loop whose body is a try statement then runs no record and no rethrow at
+// each turn, as it does none for a try with only a catch, and the tree
+// tier runs it as such a loop. Code compiled for a debugger has the clause
+// once, so that a breakpoint in it is one statement; and a clause inside a
+// clause has it once, so that nested ones are not copied again for each
+// copy of the one outside.
 func (c *compiler) compileTryFinally(pos int, body func(), finally []ast.Stmt) {
 	finallyHandler := c.emitJump(bytecode.OpPushFinally)
 	c.handlerDepth++
 	c.finallys = append(c.finallys, finallyCtx{body: finally, handlers: c.handlerDepth, exits: len(c.exits)})
 
-	// finallyStart is filled in once the clause's first instruction is known.
-	finallyStart := 0
-
 	body()
 
-	// Normal completion: drop the finally handler and fall into the clause
-	// with a record saying nothing unusual happened.
+	// Normal completion: drop the finally handler and run the clause, inline
+	// or with a record saying nothing unusual happened.
 	c.emit(bytecode.OpPopCatch, 0, 0)
 	c.handlerDepth--
-	c.emit(bytecode.OpPushUndef, 0, 0)
-	c.emit(bytecode.OpPushInt, uint32(completionNormal), 0)
-	finallyStart = c.here()
-
-	// The handler jumps here too, having pushed its own record, and so do any
-	// returns that were routed through the clause.
-	c.patchJump(finallyHandler)
 	ctx := c.finallys[len(c.finallys)-1]
 	c.finallys = c.finallys[:len(c.finallys)-1]
+	end := -1
+	if !c.opts.Debug && c.finallyBodies == 0 {
+		c.compileFinallyClause(pos, finally, false)
+		end = c.emitJump(bytecode.OpJump)
+		// The handler enters with the record its throw or its return made.
+		c.stackDepth += 2
+	} else {
+		c.emit(bytecode.OpPushUndef, 0, 0)
+		c.emit(bytecode.OpPushInt, uint32(completionNormal), 0)
+	}
+	finallyStart := c.here()
+
+	// The handler jumps here, having pushed its own record, and so do any
+	// returns that were routed through the clause.
+	c.patchJump(finallyHandler)
 	for _, pc := range ctx.returns {
 		c.patchJumpTo(pc, finallyStart)
 	}
+	c.compileFinallyClause(pos, finally, true)
 
+	// Reproduce the original completion: rethrow, return, or carry on.
+	c.emit(bytecode.OpRethrow, 0, 0)
+	if end >= 0 {
+		c.patchJump(end)
+	}
+}
+
+// compileFinallyClause compiles a finally clause's statements, with the
+// completion record of the try beneath them where record says so, or with
+// none, inlined after the try's normal completion.
+func (c *compiler) compileFinallyClause(pos int, finally []ast.Stmt, record bool) {
 	// What the finally clause produces is not the statement's value: the try
 	// block's is, so `try { 1 } finally { 2 }` is 1.
 	save := int32(-1)
@@ -1131,21 +1159,24 @@ func (c *compiler) compileTryFinally(pos int, body func(), finally []ast.Stmt) {
 	// The completion record sits beneath the clause's own operands, so a break
 	// or continue leaving the clause has to drop it: what it jumps to is not
 	// expecting two values it never pushed.
-	c.pushExit(exitCompletion)
+	if record {
+		c.pushExit(exitCompletion)
+	}
 	c.beginScope()
 	savedRecord := c.finallyRecord
-	c.finallyRecord = true
+	c.finallyRecord = record
+	c.finallyBodies++
 	c.compileStatements(finally)
+	c.finallyBodies--
 	c.finallyRecord = savedRecord
 	c.endScope()
-	c.popExit()
+	if record {
+		c.popExit()
+	}
 	if save >= 0 {
 		c.emit(bytecode.OpGetLocal, uint32(save), 0)
 		c.emit(bytecode.OpSetLocal, uint32(c.completionSlot), 0)
 	}
-
-	// Reproduce the original completion: rethrow, return, or carry on.
-	c.emit(bytecode.OpRethrow, 0, 0)
 }
 
 // compileTryCatch compiles a try statement that has no finally clause.
