@@ -346,7 +346,7 @@ func (r *Runtime) regExpSymbolSplit(rx Value, args []Value) (Value, error) {
 			}
 			// The copy would have been the realm's RegExp's, whose matches
 			// are the legacy statics' whatever rx's are.
-			d := regexpData{re: rx.Object().dataOf().(*regexpData).re, legacy: true, realm: r.Realm}
+			d := regexpData{re: rx.Object().dataOf().(*regexpData).re, realm: r.Realm}
 			j := subjectOf(s)
 			return r.splitBuiltin(rx, &d, &j, limit, fl&(regexp.FlagUnicode|regexp.FlagUnicodeSets) != 0)
 		}

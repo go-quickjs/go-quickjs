@@ -22,16 +22,17 @@ import (
 // regexpData is a RegExp's internal state.
 type regexpData struct {
 	re *regexp.Regexp
-	// legacy marks a RegExp made by the intrinsic constructor, whose matches
-	// update RegExp.$1 and the rest, and which compile may be used on. A
-	// subclass's instance is not one.
-	legacy bool
-	// realm is the realm the RegExp was made in, which compile has to be
-	// called from.
+	// realm is the realm a RegExp made by the intrinsic constructor was made
+	// in, which compile has to be called from, and nil for a subclass's
+	// instance: one of the intrinsic constructor's has the legacy features,
+	// its matches updating RegExp.$1 and the rest and compile usable on it,
+	// and a subclass's has not (legacy).
 	realm *Realm
-	// source is what the source getter answers, made when it is first read.
-	source *String
 }
+
+// legacy reports whether the RegExp has the legacy features: it was made by
+// the intrinsic constructor, not a subclass's.
+func (d *regexpData) legacy() bool { return d.realm != nil }
 
 // regexpOf recovers the compiled pattern from a receiver.
 func (r *Runtime) regexpOf(this Value, name string) (*regexp.Regexp, error) {
@@ -85,7 +86,7 @@ func (r *Runtime) newRegExpObject(re *regexp.Regexp) Value {
 	ro := &regexpObject{Object: Object{proto: r.proto.regexp, class: ClassRegExp, flags: objExtensible | objInlineProps}}
 	ro.vals = ro.inline[:0]
 	re.CloneInto(&ro.re)
-	ro.rd = regexpData{re: &ro.re, legacy: true, realm: r.Realm}
+	ro.rd = regexpData{re: &ro.re, realm: r.Realm}
 	ro.embedExt(&ro.side)
 	ro.side.data = &ro.rd
 	// lastIndex is writable but neither enumerable nor configurable.
@@ -94,7 +95,8 @@ func (r *Runtime) newRegExpObject(re *regexp.Regexp) Value {
 }
 
 // regexpObject is a RegExp with its data, its clone of the compiled pattern
-// and room for lastIndex, its one own property, in the same allocation.
+// and room for lastIndex, its one own property, in the same allocation:
+// 144 bytes, a size class of its own.
 type regexpObject struct {
 	Object
 	side   objectExt
@@ -236,7 +238,7 @@ func (r *Runtime) initRegExpBuiltins() {
 			return Undefined, err
 		}
 		if nt := rt.newTarget(); !nt.IsUndefined() && (!nt.IsObject() || nt.Object() != rt.proto.regexpCtor) {
-			v.Object().dataOf().(*regexpData).legacy = false
+			v.Object().dataOf().(*regexpData).realm = nil
 		}
 		return v, nil
 	})
@@ -258,17 +260,18 @@ func (r *Runtime) initRegExpBuiltins() {
 			}
 			return Undefined, err
 		}
-		d := this.Object().dataOf().(*regexpData)
-		if d.source == nil {
+		// It is the pattern's, which its RegExps share.
+		a := rt.annexOf(re)
+		if a.source == nil {
 			// An empty pattern reports "(?:)" so that the result can be fed
 			// back to the constructor.
 			text := "(?:)"
 			if re.Source() != "" {
 				text = escapeRegExpSource(re.Source())
 			}
-			d.source = NewString(text)
+			a.source = NewString(text)
 		}
-		return Str(d.source), nil
+		return Str(a.source), nil
 	})
 
 	// flags is assembled from the individual getters rather than from the
@@ -477,7 +480,7 @@ func (r *Runtime) regexpMatch(this Value, s *String) ([]int, *regexp.Regexp, err
 			return nil, nil, err
 		}
 	}
-	r.recordLegacyMatch(o.dataOf().(*regexpData), s, caps)
+	r.recordLegacyMatch(o.dataOf().(*regexpData).legacy(), s, caps)
 	return caps, re, nil
 }
 
@@ -592,7 +595,7 @@ func (r *Runtime) execMatchAll(rx Value, s *String, fullUnicode bool, spans []in
 			return spans, serr
 		}
 		if len(spans) > first {
-			r.recordLegacyMatch(d, s, spans[len(spans)-len(r.capsBuf):])
+			r.recordLegacyMatch(d.legacy(), s, spans[len(spans)-len(r.capsBuf):])
 		}
 		return spans, err
 	}
@@ -632,7 +635,7 @@ func (r *Runtime) execMatchAll(rx Value, s *String, fullUnicode bool, spans []in
 		return spans, err
 	}
 	if len(spans) > first {
-		r.recordLegacyMatch(d, s, spans[len(spans)-len(r.capsBuf):])
+		r.recordLegacyMatch(d.legacy(), s, spans[len(spans)-len(r.capsBuf):])
 	}
 	return spans, nil
 }
@@ -666,7 +669,7 @@ func (r *Runtime) splitBuiltin(splitter Value, d *regexpData, j *subject, limit 
 	var last []int
 	done := func(err error) (Value, error) {
 		if last != nil {
-			r.recordLegacyMatch(d, s, last)
+			r.recordLegacyMatch(d.legacy(), s, last)
 		}
 		if err != nil {
 			return Undefined, err
@@ -809,8 +812,30 @@ func (r *Runtime) indexPair(lo, hi int) Value {
 	return Obj(r.newArrayFrom([]Value{Int(lo), Int(hi)}))
 }
 
+// regexpAnnex is what a runtime works out from a pattern once and keeps
+// with it (regexp.Regexp.Annex), which the RegExps of the pattern share:
+// how its matches' groups objects are made, and what the source getter
+// answers, each made when first asked for.
+type regexpAnnex struct {
+	// r is the runtime whose these are.
+	r *Runtime
+	// groups is the groups' layout, once groupsLayoutOf has made it.
+	groups *groupsLayout
+	source *String
+}
+
+// annexOf is a pattern's regexpAnnex, made if it has none of this runtime's.
+func (r *Runtime) annexOf(re *regexp.Regexp) *regexpAnnex {
+	if a, ok := re.Annex().(*regexpAnnex); ok && a.r == r {
+		return a
+	}
+	a := &regexpAnnex{r: r}
+	re.SetAnnex(a)
+	return a
+}
+
 // groupsLayout is how a pattern's matches' groups objects are made, worked
-// out from the pattern once and kept with it (regexp.Regexp.Annex): its
+// out from the pattern once and kept with it (regexpAnnex): its
 // group names in the order they were written, which is the order
 // Object.getOwnPropertyNames of the object reports -- a map's iteration
 // order would be a different answer each time -- as the runtime's atoms,
@@ -818,8 +843,6 @@ func (r *Runtime) indexPair(lo, hi int) Value {
 // the first one made shows. A name several groups share reads as whichever
 // of them took part.
 type groupsLayout struct {
-	// r is the runtime whose atoms and layouts these are.
-	r      *Runtime
 	names  []Atom
 	groups [][]int
 	// shape is the objects' layout, a template each of them shares until it
@@ -838,8 +861,9 @@ func (r *Runtime) groupsLayoutOf(re *regexp.Regexp) *groupsLayout {
 	if len(names) == 0 {
 		return nil
 	}
-	if g, ok := re.Annex().(*groupsLayout); ok && g.r == r {
-		return g
+	a := r.annexOf(re)
+	if a.groups != nil {
+		return a.groups
 	}
 	ordered := make([]string, 0, len(names))
 	for name := range names {
@@ -849,12 +873,12 @@ func (r *Runtime) groupsLayoutOf(re *regexp.Regexp) *groupsLayout {
 	sort.Slice(ordered, func(i, j int) bool {
 		return names[ordered[i]][0] < names[ordered[j]][0]
 	})
-	g := &groupsLayout{r: r, names: make([]Atom, len(ordered)), groups: make([][]int, len(ordered))}
+	g := &groupsLayout{names: make([]Atom, len(ordered)), groups: make([][]int, len(ordered))}
 	for i, name := range ordered {
 		g.names[i] = r.atoms.intern(name)
 		g.groups[i] = names[name]
 	}
-	re.SetAnnex(g)
+	a.groups = g
 	return g
 }
 

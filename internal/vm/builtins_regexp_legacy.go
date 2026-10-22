@@ -25,9 +25,9 @@ type legacyRegExpStatics struct {
 
 // recordLegacyMatch updates the statics after a successful match, or
 // invalidates them when the RegExp's legacy features are off.
-func (r *Runtime) recordLegacyMatch(d *regexpData, input *String, caps []int) {
+func (r *Runtime) recordLegacyMatch(legacy bool, input *String, caps []int) {
 	st := &r.legacyRegExp
-	if !d.legacy {
+	if !legacy {
 		st.invalid, st.input, st.caps = true, nil, st.caps[:0]
 		return
 	}
@@ -130,7 +130,7 @@ func (r *Runtime) initRegExpLegacyStatics(ctor *Object) {
 		if !ok {
 			return Undefined, rt.throwTypeError("RegExp.prototype.compile called on an uninitialized RegExp")
 		}
-		if !d.legacy {
+		if !d.legacy() {
 			return Undefined, rt.throwTypeError("RegExp.prototype.compile cannot be used on a subclass's instance")
 		}
 		if d.realm != rt.Realm {
@@ -165,7 +165,6 @@ func (r *Runtime) initRegExpLegacyStatics(ctor *Object) {
 			return Undefined, err
 		}
 		d.re = fresh.Object().dataOf().(*regexpData).re
-		d.source = nil
 		if _, err := rt.setProp(this.Object(), atomLastIndex, Int(0), this, true); err != nil {
 			return Undefined, err
 		}
