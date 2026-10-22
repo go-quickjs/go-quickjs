@@ -766,12 +766,19 @@ func (r *Runtime) buildMatchResult(re *regexp.Regexp, caps []int, input *String)
 	// What matched is always there, and is written in the room the array
 	// has for it.
 	elems[0] = Str(input.substringInto(room, caps[0], caps[1]))
+	// The groups' Strings, where two or more need one, are one allocation.
+	strs := newPieces(input, caps[2:], 2)
 	for i := 1; i < n; i++ {
 		lo, hi := caps[2*i], caps[2*i+1]
 		if lo < 0 || hi < 0 {
 			// A group that did not participate reads as undefined, which is
 			// distinct from having matched the empty string.
 			elems[i] = Undefined
+			continue
+		}
+		if strs != nil && ownPiece(input, lo, hi) {
+			elems[i] = Str(input.substringInto(&strs[0], lo, hi))
+			strs = strs[1:]
 			continue
 		}
 		elems[i] = Str(input.Substring(lo, hi))
@@ -810,6 +817,31 @@ func (r *Runtime) buildMatchResult(re *regexp.Regexp, caps []int, input *String)
 		arr.setOwnRaw(r.atoms.intern("indices"), Obj(indices), propDefault)
 	}
 	return arr
+}
+
+// newPieces is room for the Strings of the pieces of s that spans, of width
+// indices each, begin with, where two or more need one of their own: what a
+// match's groups or a global match's matches are cut into, which is then one
+// allocation rather than one each, as they are most often made and dropped
+// together. It is nil where fewer than two do.
+func newPieces(s *String, spans []int, width int) []String {
+	k := 0
+	for i := 0; i+1 < len(spans); i += width {
+		if ownPiece(s, spans[i], spans[i+1]) {
+			k++
+		}
+	}
+	if k < 2 {
+		return nil
+	}
+	return make([]String, k)
+}
+
+// ownPiece reports whether s's code units lo to hi are a String of their own
+// when cut: neither empty nor the whole of s, nor a group that did not take
+// part.
+func ownPiece(s *String, lo, hi int) bool {
+	return lo >= 0 && hi > lo && (lo > 0 || hi < s.length)
 }
 
 // indexPair renders where a group matched, or undefined where it did not --

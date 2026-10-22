@@ -100,3 +100,21 @@ func TestRegExpSourceAndLegacy(t *testing.T) {
 	  c.compile(/(k)/); r.push(c.source, c.exec("k")[1], RegExp.$1)
 	  r.join()`, `a\/b,true,x\/y,a\/b,a\/b,i,(?:),\n,TypeError,TypeError,w,(q),(q),x\/y,i,(k),k,k`)
 }
+
+// TestRegExpPiecesTogether covers the Strings of a match's groups and of a
+// global match's matches, cut into one allocation where two or more need
+// one of their own: among groups that matched nothing, did not take part or
+// are the whole subject, which need none, over ASCII and over text past it,
+// pairs of surrogates and halves of them; and a piece kept after its array
+// is dropped. Each answer is Node's.
+func TestRegExpPiecesTogether(t *testing.T) {
+	checkEval(t, `var r = []
+	  function show(m) { return m === null ? "null" : JSON.stringify(m) + ":" + m.map(function (x) { return x === undefined ? "u" : x.length }).join(",") }
+	  r.push(show(/(a)(b)(c)/.exec("abc")), show(/((a)(b))(x)?()(c)/.exec("zabcz")), show(/(.*)(.*)/.exec("whole")))
+	  r.push(show(/(é)(\u{1F600})(.)(b)/u.exec("aé\u{1F600}xb")), show(/(\uD83D)(\uDE00)/.exec("\u{1F600}")), show(/(?<y>\d+)-(?<m>\d+)/.exec("on 2024-05!")))
+	  r.push(show("a1b22c333".match(/\d+/g)), show("abc".match(/x*/g)), show("whole".match(/whole/g)), show("é\u{1F600}é".match(/./gu)), show("\u{1F600}\u{1F600}".match(/\uD83D/g)))
+	  var m = /(\w+) (\w+)/.exec("hello world"); var keep = m[2]; m = null; r.push(keep, keep.length)
+	  r.join(";")`, `["abc","a","b","c"]:3,1,1,1;["abc","ab","a","b",null,"","c"]:3,2,1,1,u,0,1;["whole","whole",""]:5,5,0;`+
+		`["é😀xb","é","😀","x","b"]:5,1,2,1,1;["😀","\ud83d","\ude00"]:2,1,1;["2024-05","2024","05"]:7,4,2;`+
+		`["1","22","333"]:1,2,3;["","","",""]:0,0,0,0;["whole"]:5;["é","😀","é"]:1,2,1;["\ud83d","\ud83d"]:1,1;world;5`)
+}

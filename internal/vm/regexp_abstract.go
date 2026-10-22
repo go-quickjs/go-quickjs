@@ -237,8 +237,15 @@ func (r *Runtime) regExpSymbolMatch(rx Value, args []Value) (Value, error) {
 		width := 2 * (rx.Object().dataOf().(*regexpData).re.GroupCount() + 1)
 		arr := newArrayObject(r.proto.array, len(spans)/width)
 		elems := arr.elemsOf()
+		strs := newPieces(s, spans, width)
 		for i := range elems {
-			elems[i] = Str(s.Substring(spans[i*width], spans[i*width+1]))
+			lo, hi := spans[i*width], spans[i*width+1]
+			if strs != nil && ownPiece(s, lo, hi) {
+				elems[i] = Str(s.substringInto(&strs[0], lo, hi))
+				strs = strs[1:]
+				continue
+			}
+			elems[i] = Str(s.Substring(lo, hi))
 		}
 		return Obj(arr), nil
 	}
