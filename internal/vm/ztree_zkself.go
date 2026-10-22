@@ -38,7 +38,8 @@ var selfRestart func(r *Runtime, c *tctx, this Value, args []Value) bool
 // restartReturn is buildBlock's return of v at pc, from a stack d deep, in
 // a function with a call in tail position: where the value is that of a
 // call of the frame's own function left in pendingTail, and selfRestart
-// starts it again, it goes back to the first block rather than return.
+// starts it again, it goes back to the first block rather than return;
+// where it is another function's, tailSwap may make it in the frame.
 var restartReturn func(v tval, d, pc int) func(*tctx) int
 
 func init() {
@@ -78,6 +79,12 @@ func init() {
 					r.treeTail = false
 					*t = tailCall{}
 					return 0
+				}
+				if d == 0 {
+					// Made in the frame, its result in c.ret; or left for
+					// the caller.
+					tailSwap(c)
+					return -1
 				}
 			}
 			if d > 0 {

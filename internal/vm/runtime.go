@@ -238,6 +238,10 @@ type Runtime struct {
 	// treeTail says a tree ended in such a call, which runTree then leaves
 	// with errTailCall: see tailCallNode.
 	treeTail bool
+	// tailSwapDepth is the depth of the frame whose calls in tail position
+	// tailSwap is making in it, or 0 (see ztree_aaswap.go). It is in the
+	// room after treeTail, so that no other field moves.
+	tailSwapDepth int32
 
 	// locale is the language a program means when it does not say which: the
 	// one the machine is set to, unless the host chose another.
