@@ -992,6 +992,10 @@ type CallSite struct {
 	// ForOf marks a for...of's or a destructuring's cursor made of the
 	// iterable, its one operand.
 	ForOf bool
+	// Rest marks a destructuring's rest element made of its cursor, the
+	// one operand: the array of what the cursor has left (ir's IterStep,
+	// Rest).
+	Rest bool
 	// Tail marks a callee whose function makes calls in tail position
 	// (OpTailSelf), for which the call sets the callee's context's
 	// TailFrame to TailFrame: false for a construction, or an arrow that
@@ -2787,7 +2791,11 @@ func (b *builder) goKeyedWrite(blk *Block, in ir.Instruction, operand func(ir.Op
 // Go refuses leaves for Go to make after an exit.
 func (b *builder) iterStep(blk *Block, pc int, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
 	call := guard(OpCall, Tagged, ir.HostExit, operand(in.Left))
-	if b.f.Keeps < b.f.keepLimit() {
+	if b.f.Keeps < b.f.keepLimit() && in.Rest {
+		// A rest element's: no step natively, which takes one value.
+		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoCall, Rest: true, ThisSlot: -1}}, b.f.Keeps
+		b.f.Keeps++
+	} else if b.f.Keeps < b.f.keepLimit() {
 		gens, next := b.genSteps(pc)
 		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoCall, Step: true, Fill: in.When, ThisSlot: -1, MapNexts: b.mapNexts(),
 			Gens: gens, GenNext: next}}, b.f.Keeps
@@ -3405,6 +3413,8 @@ func (b *builder) plan() error {
 		case ir.IterClose:
 			// Go goes on after a closing it made.
 			entries[pc+1] = true
+		case ir.Coercible:
+			// Go only throws at it.
 		case ir.IterStep:
 			// Go goes on after a step it made, past it or at the loop's
 			// end (ir.Program's Entries), where native code did not; a
@@ -4861,6 +4871,12 @@ func (b *builder) instruction(blk *Block, pc int) {
 		is := f.newValue(blk, OpCmpF64, Bool, number(in.Left, ir.GuardExit), normal)
 		is.Aux = int(ir.Eq)
 		guard(OpCheckTrue, None, ir.GuardExit, boxB(is))
+	case ir.Coercible:
+		// Neither null nor undefined, as ?? asks; else Go throws, from an
+		// exit at the check.
+		nullish := f.newValue(blk, OpStrictNullish, Bool, operand(in.Left))
+		nullish.Aux = 2
+		guard(OpCheckTrue, None, ir.HostExit, boxB(f.newValue(blk, OpNot, Bool, nullish)))
 	case ir.Resolved:
 		// True where native code checked; Go's answer, after an exit,
 		// checked here, and Go throws for an unresolved name.

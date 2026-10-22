@@ -884,7 +884,7 @@ func selectNumericProperties(p *ir.Program, cells bool) {
 			read(in.Right, take(in.Dest))
 		case ir.BindingCheck, ir.ObjectLiteral, ir.StringConst, ir.BigIntConst, ir.UpvalueRead, ir.Closure:
 			take(in.Dest)
-		case ir.FieldDefine:
+		case ir.FieldDefine, ir.Coercible:
 			read(in.Left, reference)
 		case ir.ArgumentRead:
 			// Go takes the key as it is.
@@ -1461,6 +1461,21 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 			return bad("invalid name")
 		}
 		return effect{delta: 1}, nil
+	case bytecode.OpCheckCoercible:
+		// A destructuring's value, checked where it is.
+		return effect{need: 1}, nil
+	case bytecode.OpGetPropUnder:
+		// An object pattern's read of its source, B beneath the top.
+		if uint64(in.A) >= uint64(len(fn.Names)) || in.B > MaxSlots {
+			return bad("invalid property read")
+		}
+		return effect{need: int(in.B) + 1, delta: 1}, nil
+	case bytecode.OpGetIndexUnder:
+		// Its computed key's, A beneath the top, the source below it.
+		if in.A > MaxSlots {
+			return bad("invalid element read")
+		}
+		return effect{need: int(in.A) + 2, delta: 1}, nil
 	case bytecode.OpAssertResolved, bytecode.OpDefineField:
 		if uint64(in.A) >= uint64(len(fn.Names)) {
 			return bad("invalid name")
@@ -1926,6 +1941,12 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this, charCode bool
 		return ir.Instruction{Op: ir.BindingCheck, Dest: sp, Key: in.A}
 	case bytecode.OpAssertResolved:
 		return ir.Instruction{Op: ir.Resolved, Left: ir.Slot(sp - 2), Right: top, Dest: sp - 2, Key: in.A}
+	case bytecode.OpCheckCoercible:
+		return ir.Instruction{Op: ir.Coercible, Left: top}
+	case bytecode.OpGetPropUnder:
+		return ir.Instruction{Op: ir.PropertyRead, Left: ir.Slot(sp - 1 - int(in.B)), Dest: sp, Key: in.A}
+	case bytecode.OpGetIndexUnder:
+		return ir.Instruction{Op: ir.ArrayRead, Dest: sp, Left: ir.Slot(sp - 2 - int(in.A)), Right: ir.Slot(sp - 1 - int(in.A))}
 	case bytecode.OpNewObject, bytecode.OpNewRegExp:
 		// A regular expression literal's object is made as an object
 		// literal's is, from a pool the VM fills with its pattern's.
@@ -2112,8 +2133,9 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this, charCode bool
 		// once done (When).
 		return ir.Instruction{Op: ir.IterStep, Left: ir.Slot(sp - 1 - int(in.A)), Dest: sp, When: true}
 	case bytecode.OpIterRest:
-		// Go's (jitHost): the array of what is left.
-		return ir.Instruction{Op: ir.Host}
+		// A destructuring's rest element, as its step, but an array of
+		// what is left (Rest).
+		return ir.Instruction{Op: ir.IterStep, Left: ir.Slot(sp - 1 - int(in.A)), Dest: sp, When: true, Rest: true}
 	case bytecode.OpIterCloseNormal, bytecode.OpIterClose:
 		// Native where there is nothing to close, Go's otherwise: a loop's
 		// cursor done, or an array's walked in place, as its loop ends --

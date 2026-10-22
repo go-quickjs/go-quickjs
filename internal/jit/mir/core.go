@@ -1923,6 +1923,8 @@ func goOpWord(site *ssa.CallSite) uint64 {
 			op |= abi.GoCallNew << abi.GoOpKindShift
 		case site.ForOf:
 			op |= abi.GoCallForOf << abi.GoOpKindShift
+		case site.Rest:
+			op |= abi.GoCallRest << abi.GoOpKindShift
 		case site.Fill:
 			op |= abi.GoCallFill << abi.GoOpKindShift
 		case site.Step:

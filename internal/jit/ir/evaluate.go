@@ -52,6 +52,11 @@ func (p *Program) EvaluateArrays(slots []Value, arrays []ArrayView, pc int, budg
 			// change.
 			exit.Kind = HostExit
 			return exit, nil
+		case Coercible:
+			if k := read(in.Left).Kind; k == Null || k == Undefined {
+				exit.Kind = HostExit
+				return exit, nil
+			}
 		case StringPart:
 			v := read(in.Left)
 			if v.Kind == Opaque || v.Kind == Uninitialized {

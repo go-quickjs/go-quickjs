@@ -80,7 +80,7 @@ func (p *Program) Validate() error {
 			left, write = true, true
 		case ObjectLiteral, StringConst, BigIntConst, Closure:
 			write = true
-		case IterClose:
+		case IterClose, Coercible:
 			left = true
 		case CloseUpvalues:
 			if int(in.Key) > p.Locals {

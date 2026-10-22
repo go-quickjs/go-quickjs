@@ -253,6 +253,10 @@ const (
 	// natively from a cell the VM keeps it in (ssa.BigIntConstFeedback),
 	// as StringConst reads a string, Go's otherwise.
 	BigIntConst
+	// Coercible is check_coercible, a destructuring's check of its value:
+	// nothing where Left is neither null nor undefined; else Go throws the
+	// TypeError, from an exit at it.
+	Coercible
 )
 
 // RethrowNormal is the kind a normal completion's record has (Rethrow).
@@ -383,6 +387,9 @@ type Instruction struct {
 	// step resumed natively makes itself, returning the value to the step
 	// (ssa.Block's Yield), and Go makes otherwise.
 	Suspend bool
+	// Rest marks a destructuring's step (IterStep, When) that is its rest
+	// element, iter_rest: an array of what the cursor has left.
+	Rest bool
 }
 
 // StateMap describes state immediately before a bytecode instruction. PC is

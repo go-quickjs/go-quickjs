@@ -1264,7 +1264,9 @@ func IsNumber(word uint64) bool { return word < NumberLimit }
 // one operand, the result its name; or an instanceof's
 // (GoCallInstanceOf), of its two, the object and the constructor; or a
 // derived constructor's super(...) (GoCallSuper), of the frame's this
-// slot, unbound or not, then its arguments, the result the this it binds.
+// slot, unbound or not, then its arguments, the result the this it binds;
+// or a destructuring's rest element (GoCallRest), of its one operand, the
+// cursor, the result the array of what it has left.
 // GoClosurePool is the kind of a closure's (ssa.GoClosure) whose native
 // code takes it from a pool, the pool's address the first operand's
 // pointer word: Go makes it, as it makes any, and fills the pool again if
@@ -1289,6 +1291,7 @@ const (
 	GoCallTypeOf     = 8
 	GoCallInstanceOf = 9
 	GoCallSuper      = 10
+	GoCallRest       = 11
 	GoClosurePool    = 1
 )
 

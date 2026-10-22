@@ -3721,7 +3721,7 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 	}
 	sp := top + n
 	r.stackTop, r.stackHigh = sp, max(r.stackHigh, sp)
-	step := in.Op == bytecode.OpIterNextOrJump || in.Op == bytecode.OpIterStep || in.Op == bytecode.OpForOfStart || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpSuperCall
+	step := in.Op == bytecode.OpIterNextOrJump || in.Op == bytecode.OpIterStep || in.Op == bytecode.OpIterRest || in.Op == bytecode.OpForOfStart || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpSuperCall
 	prop := in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 	if in.Op == bytecode.OpIterNextOrJump || in.Op == bytecode.OpIterStep {
 		// A step over a generator the code may resume natively.
@@ -4440,7 +4440,7 @@ framed:
 		// A step over a generator the code may resume natively.
 		r.jitGenStepSeen(e, f.cl, pc, r.stack[sp-1])
 	}
-	if in.Op != bytecode.OpIterNextOrJump && in.Op != bytecode.OpIterStep && in.Op != bytecode.OpForOfStart && in.Op != bytecode.OpTypeOf && in.Op != bytecode.OpInstanceOf && in.Op != bytecode.OpSuperCall && !prop && jitCallUnsettled(e, pc, in) {
+	if in.Op != bytecode.OpIterNextOrJump && in.Op != bytecode.OpIterStep && in.Op != bytecode.OpIterRest && in.Op != bytecode.OpForOfStart && in.Op != bytecode.OpTypeOf && in.Op != bytecode.OpInstanceOf && in.Op != bytecode.OpSuperCall && !prop && jitCallUnsettled(e, pc, in) {
 		r.jitCallSeen(f, e, pc, sp, in)
 	}
 	r.jitCalleeProfit(e, serial, pc)
@@ -4999,6 +4999,9 @@ func jitGoCallInstr(op uint64) (bytecode.Instr, int) {
 	case abi.GoCallForOf:
 		// A cursor made, of the iterable, the one operand.
 		return bytecode.Instr{Op: bytecode.OpForOfStart}, 1
+	case abi.GoCallRest:
+		// A destructuring's rest element, of the cursor, the one operand.
+		return bytecode.Instr{Op: bytecode.OpIterRest}, 1
 	case abi.GoCallGet:
 		// A property's read, of the object, which the instruction at the
 		// call's PC says (jitPropertyMade).
@@ -5041,6 +5044,11 @@ func (r *Runtime) jitCallMade(in bytecode.Instr, sp int) (Value, error) {
 	if in.Op == bytecode.OpForOfStart {
 		// A for...of's or a destructuring's cursor (abi.GoCallForOf).
 		return r.startForOf(r.stack[sp-1])
+	}
+	if in.Op == bytecode.OpIterRest {
+		// A destructuring's rest element (abi.GoCallRest): the array of
+		// what the cursor has left.
+		return r.iterRest(r.stack[sp-1])
 	}
 	if in.Op == bytecode.OpTypeOf {
 		// A typeof's name (abi.GoCallTypeOf), as executeAt's case makes it.
@@ -5923,6 +5931,12 @@ func (r *Runtime) jitIndexOperands(f *frame, in bytecode.Instr, sp int) (o, k Va
 			return Value{}, Value{}, false
 		}
 		return r.stack[sp-2], r.stack[sp-1], true
+	case bytecode.OpGetIndexUnder:
+		// An object pattern's computed key's read, A beneath the top.
+		if d := int(in.A); sp < d+2 || sp > len(r.stack) {
+			return Value{}, Value{}, false
+		}
+		return r.stack[sp-2-int(in.A)], r.stack[sp-1-int(in.A)], true
 	case bytecode.OpGetLocalIndex:
 		if int(in.A) >= len(f.locals) || int(in.B) >= len(f.locals) {
 			return Value{}, Value{}, false
@@ -8422,6 +8436,12 @@ func (fb *jitFeedback) Property(pc int) (ssa.PropertySite, bool) {
 	if fb.cl != nil && pc < len(fb.fn.Code) {
 		if in := fb.fn.Code[pc]; in.Op == bytecode.OpGetPrivate || in.Op == bytecode.OpSetPrivate || in.Op == bytecode.OpPrivateIn {
 			return fb.privateProperty(pc, in)
+		} else if in.Op == bytecode.OpGetPropUnder && fb.fwd == nil && int(in.A) < len(fb.cl.names) {
+			// An object pattern's read, which has no cache of its own (its
+			// B is how far down its source is): it searches the source's
+			// own small table, and leaves for Go where that has no such
+			// data property, as a read whose cache is empty does.
+			return ssa.PropertySite{Key: uint32(fb.cl.names[in.A]), Scan: true}, true
 		}
 	}
 	site, ok := fb.property(pc)
@@ -9640,7 +9660,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			// leaving the rest of its invocation to the interpreter: PDF.js's
 			// font decryption's tokenizer, compiled before it ran, at each
 			// font.
-			if in := f.cl.fn.Code[ctx.ExitPC]; in.Op == bytecode.OpGetIndex || in.Op == bytecode.OpGetIndexThis || in.Op == bytecode.OpGetLocalIndex {
+			if in := f.cl.fn.Code[ctx.ExitPC]; in.Op == bytecode.OpGetIndex || in.Op == bytecode.OpGetIndexThis || in.Op == bytecode.OpGetLocalIndex || in.Op == bytecode.OpGetIndexUnder {
 				if o, k, ok := r.jitIndexOperands(f, in, f.base+int(ctx.ExitDepth)); ok {
 					r.jitIndexSeen(e, int(ctx.ExitPC), o, k)
 				}
@@ -9702,7 +9722,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 				r.jitCallSeen(f, e, exitPC, f.base+int(ctx.ExitDepth), jitCallInstr(in))
 			case bytecode.OpGetProp, bytecode.OpGetPropThis:
 				r.jitPolySeen(f, e, exitPC, f.base+int(ctx.ExitDepth), in)
-			case bytecode.OpGetIndex, bytecode.OpGetIndexThis, bytecode.OpGetLocalIndex:
+			case bytecode.OpGetIndex, bytecode.OpGetIndexThis, bytecode.OpGetLocalIndex, bytecode.OpGetIndexUnder:
 				if o, k, ok := r.jitIndexOperands(f, in, f.base+int(ctx.ExitDepth)); ok {
 					r.jitIndexSeen(e, exitPC, o, k)
 				}
@@ -10861,7 +10881,7 @@ func (r *Runtime) jitFinishExit(f *frame, e *jitEntry, l *jitNativeLevel) (Value
 				r.jitCallSeen(f, e, pc, f.base+depth, jitCallInstr(in))
 			case bytecode.OpGetProp, bytecode.OpGetPropThis:
 				r.jitPolySeen(f, e, pc, f.base+depth, in)
-			case bytecode.OpGetIndex, bytecode.OpGetIndexThis, bytecode.OpGetLocalIndex:
+			case bytecode.OpGetIndex, bytecode.OpGetIndexThis, bytecode.OpGetLocalIndex, bytecode.OpGetIndexUnder:
 				if o, k, ok := r.jitIndexOperands(f, in, f.base+depth); ok {
 					r.jitIndexSeen(e, pc, o, k)
 				}
