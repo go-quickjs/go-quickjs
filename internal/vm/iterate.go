@@ -17,25 +17,11 @@ import (
 // permits an implementation to ignore properties added during the loop.
 
 // iterState is the loop cursor that OpForInStart and OpForOfStart push.
+//
+// What only for-in reads is kept apart, in a forInState of its own, so that
+// a for-of's cursor -- every for-of's, spread's and array destructuring's
+// -- with its object, fits 160 bytes rather than 240.
 type iterState struct {
-	// forIn selects between the snapshot and the protocol.
-	forIn bool
-
-	// keys is the snapshot for-in walks, with the atoms it was built from:
-	// a key is looked up again before it is visited, since the loop body may
-	// have deleted it in the meantime.
-	keys     []Value
-	keyAtoms []Atom
-	obj      *Object
-	idx      int
-	// shape is obj's shape when the keys are its own and came from its
-	// shape's cache: while obj keeps it, nothing has been deleted from it.
-	shape *shape
-	// indexKeys is, for an array whose keys were its elements 0 to
-	// indexKeys-1 and nothing else, how many there were: they are walked
-	// by index rather than snapshot (see startForIn).
-	indexKeys int
-
 	// iter and next drive the for-of protocol.
 	iter Value
 	next Value
@@ -44,6 +30,13 @@ type iterState struct {
 	// iterator, where walking the elements directly is indistinguishable from
 	// the protocol and costs no result object per step.
 	arr *Object
+	// idx is how far arr's walk, or for-in's, has gone.
+	idx int
+	// in is for-in's snapshot, and nil for anything else.
+	in *forInState
+
+	// forIn selects between the snapshot and the protocol.
+	forIn bool
 
 	// asyncIter marks an iterator reached through Symbol.asyncIterator, whose
 	// results are awaited whole. A synchronous iterator driven asynchronously
@@ -62,9 +55,26 @@ type iterState struct {
 	done bool
 }
 
+// forInState is what a for-in's cursor walks.
+type forInState struct {
+	// keys is the snapshot for-in walks, with the atoms it was built from:
+	// a key is looked up again before it is visited, since the loop body may
+	// have deleted it in the meantime.
+	keys     []Value
+	keyAtoms []Atom
+	obj      *Object
+	// shape is obj's shape when the keys are its own and came from its
+	// shape's cache: while obj keeps it, nothing has been deleted from it.
+	shape *shape
+	// indexKeys is, for an array whose keys were its elements 0 to
+	// indexKeys-1 and nothing else, how many there were: they are walked
+	// by index rather than snapshot (see startForIn).
+	indexKeys int
+}
+
 // newIterObject wraps a cursor so that it can live on the operand stack. The
-// object and the cursor are one allocation: every for-of, for-in, spread
-// and array destructuring makes one.
+// object and the cursor are one allocation: every for-of, spread and array
+// destructuring makes one.
 func (r *Runtime) newIterObject(st iterState) Value {
 	io := &iterObject{Object: Object{class: ClassIterator, flags: objExtensible}, st: st}
 	io.embedExt(&io.side)
@@ -77,6 +87,26 @@ type iterObject struct {
 	Object
 	side objectExt
 	st   iterState
+}
+
+// newForInObject is newIterObject for a for-in's cursor over in, done
+// where there is nothing to walk: the object, the cursor and the snapshot
+// are one allocation.
+func (r *Runtime) newForInObject(in *forInState, done bool) Value {
+	fo := &forInObject{Object: Object{class: ClassIterator, flags: objExtensible}, in: *in}
+	fo.st = iterState{forIn: true, done: done, in: &fo.in}
+	fo.embedExt(&fo.side)
+	fo.side.data = &fo.st
+	return Obj(&fo.Object)
+}
+
+// forInObject is a for-in's cursor's object, the cursor and its snapshot,
+// made together.
+type forInObject struct {
+	Object
+	side objectExt
+	st   iterState
+	in   forInState
 }
 
 // iterStateOf recovers the cursor from a stack slot.
@@ -93,12 +123,11 @@ func iterStateOf(v Value) *iterState {
 // The prototype chain is included, and a key shadowed by a nearer object is
 // reported once, at the position where it is first found.
 func (r *Runtime) startForIn(v Value) (Value, error) {
-	st := &iterState{forIn: true}
+	st := &forInState{}
 	// null and undefined are not an error here: the loop simply runs zero
 	// times, which is one of the few places JavaScript is forgiving.
 	if v.IsNullish() {
-		st.done = true
-		return r.newIterObject(*st), nil
+		return r.newForInObject(st, true), nil
 	}
 	o, err := r.toObject(v)
 	if err != nil {
@@ -123,7 +152,7 @@ func (r *Runtime) startForIn(v Value) (Value, error) {
 	if last == o {
 		if c := r.shapeKeys(o); c != nil {
 			st.keys, st.keyAtoms, st.shape = c.keys, c.atoms, o.shape
-			return r.newIterObject(*st), nil
+			return r.newForInObject(st, false), nil
 		}
 		// An array whose keys are its elements and nothing else -- dense,
 		// with no holes and no enumerable property of its own besides --
@@ -132,7 +161,7 @@ func (r *Runtime) startForIn(v Value) (Value, error) {
 		// there, as a snapshot's would be.
 		if n, ok := elemKeysOnly(o); ok {
 			st.indexKeys = n
-			return r.newIterObject(*st), nil
+			return r.newForInObject(st, false), nil
 		}
 	}
 	var seen map[Atom]bool
@@ -168,7 +197,7 @@ func (r *Runtime) startForIn(v Value) (Value, error) {
 			break
 		}
 	}
-	return r.newIterObject(*st), nil
+	return r.newForInObject(st, false), nil
 }
 
 // shapeKeys is the enumerable own string keys of a plain object of a layout
@@ -316,16 +345,17 @@ func (r *Runtime) iterNext(cursor Value) (Value, bool, error) {
 	}
 
 	if st.forIn {
+		in := st.in
 		// An array's elements, walked by index: one still in its dense
 		// storage is still there, and one that is not is looked for.
-		for st.idx < st.indexKeys {
+		for st.idx < in.indexKeys {
 			i := st.idx
 			st.idx++
-			if o := st.obj; i < len(o.elemsOf()) && !holeAt(&o.extOf().elems[i]) {
+			if o := in.obj; i < len(o.elemsOf()) && !holeAt(&o.extOf().elems[i]) {
 				return Str(r.keyString(r.atoms.indexAtom(uint32(i)))), true, nil
 			}
 			key := r.atoms.indexAtom(uint32(i))
-			has, err := r.hasPropErr(st.obj, key)
+			has, err := r.hasPropErr(in.obj, key)
 			if err != nil {
 				st.done = true
 				return Undefined, false, err
@@ -336,11 +366,11 @@ func (r *Runtime) iterNext(cursor Value) (Value, bool, error) {
 		}
 		// A key deleted since the snapshot was taken is skipped: the loop body
 		// may have removed it, and what is gone is not visited.
-		for st.idx < len(st.keys) {
-			k, key := st.keys[st.idx], st.keyAtoms[st.idx]
+		for st.idx < len(in.keys) {
+			k, key := in.keys[st.idx], in.keyAtoms[st.idx]
 			st.idx++
-			if st.obj != nil && (st.shape == nil || st.obj.shape != st.shape) {
-				has, err := r.hasPropErr(st.obj, key)
+			if in.obj != nil && (in.shape == nil || in.obj.shape != in.shape) {
+				has, err := r.hasPropErr(in.obj, key)
 				if err != nil {
 					st.done = true
 					return Undefined, false, err
