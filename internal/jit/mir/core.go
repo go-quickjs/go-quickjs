@@ -394,9 +394,23 @@ func (c *core) allocate() error {
 	// Uses: each value's uses, by the position of the use.
 	uses := c.useList(4 * count)[:0]
 	need := func(v *ssa.Value) bool { return hasResult(v) && !c.isLazy(v) }
-	useState := func(s *ssa.FrameState, at int) {
+	// useState uses what state s reads at position at. moved, if not nil,
+	// is the loop header whose state a back edge's poll reads after the
+	// edge's phi moves (edge): the header's phis it names are then in their
+	// locations, written by the moves, not read at the edge's end, so they
+	// are not used there. Used there, each phi had lived to the end of the
+	// loop's last block, beside the argument the edge moves into it: in
+	// AWFY List's isShorterThan, four phis and the three values the body
+	// made took the seven registers, and the eighth, a property's cell
+	// address, went to a spill slot, stored and loaded back each time round.
+	useState := func(s *ssa.FrameState, at int, moved *ssa.Block) {
 		if s == nil {
 			return
+		}
+		add := func(x *ssa.Value) {
+			if moved == nil || x.Op != ssa.OpPhi || x.Block != moved {
+				uses = append(uses, use{x, at})
+			}
 		}
 		for _, v := range s.Slots {
 			if v == nil {
@@ -404,20 +418,20 @@ func (c *core) allocate() error {
 			}
 			if x := bigKept(v); x != nil {
 				// Its exits make it of the BigInt it boxes (exitBig).
-				uses = append(uses, use{x, at})
+				add(x)
 				if c.isLazy(v) {
 					continue
 				}
 			}
 			if c.isLazy(v) || remat(v) {
 				for _, a := range v.Args {
-					uses = append(uses, use{a, at})
+					add(a)
 				}
 				continue
 			}
-			uses = append(uses, use{v, at})
+			add(v)
 			if v.Shadow != nil {
-				uses = append(uses, use{v.Shadow, at})
+				add(v.Shadow)
 			}
 		}
 	}
@@ -453,7 +467,7 @@ func (c *core) allocate() error {
 				// others, as they are in one block.
 				continue
 			}
-			useState(v.State, at)
+			useState(v.State, at, nil)
 		}
 		if b.Control != nil {
 			if c.isLazy(b.Control) {
@@ -467,9 +481,9 @@ func (c *core) allocate() error {
 				}
 			}
 		}
-		useState(b.State, end[b.ID])
+		useState(b.State, end[b.ID], nil)
 		if b.LoopHeader {
-			useState(b.Header, start[b.ID])
+			useState(b.Header, start[b.ID], nil)
 		}
 		for _, s := range b.Succs {
 			for i, p := range s.Preds {
@@ -483,8 +497,9 @@ func (c *core) allocate() error {
 					uses = append(uses, use{phi.Args[i], end[b.ID]})
 				}
 				if s.LoopHeader && s.Backedge[i] {
-					// A poll on this edge exits to the header's state.
-					useState(s.Header, end[b.ID])
+					// A poll on this edge exits to the header's state,
+					// after the moves.
+					useState(s.Header, end[b.ID], s)
 				}
 			}
 		}
