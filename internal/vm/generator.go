@@ -207,8 +207,19 @@ const (
 func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Object, async bool, newTarget Value) (*Object, error) {
 	// The object, its generator, and the arguments and the locals are one
 	// allocation where the function has few of them: a generator or an
-	// async function is made at every call.
-	n := len(args) + cl.fn.LocalCount
+	// async function is made at every call. The arguments are kept only
+	// where something reads them once the parameters are bound: an
+	// arguments object, a direct eval, a prologue run in the interpreter
+	// -- a default, a pattern, a rest parameter -- or a debugger, which
+	// sees even a prologue of end_params run. The parameters are bound
+	// below, from the call's arguments.
+	fn := cl.fn
+	kept := args
+	if !fn.UsesArguments && !fn.HasDirectEval && r.debug == nil &&
+		(fn.ParamEnd == 0 || fn.ParamEnd == 1 && fn.Code[0].Op == bytecode.OpEndParams) {
+		kept = nil
+	}
+	n := len(kept) + fn.LocalCount
 	var gobj *generatorObject
 	var vals []Value
 	switch {
@@ -224,7 +235,7 @@ func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Ob
 	default:
 		gobj, vals = &generatorObject{}, make([]Value, n)
 	}
-	copy(vals, args)
+	copy(vals, kept)
 	gobj.Object = Object{class: ClassGenerator, flags: objExtensible}
 	g := &gobj.g
 	*g = generator{
@@ -232,7 +243,7 @@ func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Ob
 		this:   this,
 		callee: callee,
 		vals:   vals,
-		nargs:  uint32(len(args)),
+		nargs:  uint32(len(kept)),
 		async:  async,
 	}
 	// Nothing constructs a generator or an async function, so new.target

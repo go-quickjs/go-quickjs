@@ -84,3 +84,58 @@ func TestGeneratorOneAllocation(t *testing.T) {
 		}
 	}
 }
+
+// A generator or an async function whose parameters are bound at its call
+// and whose body reads no arguments after -- no arguments object, no
+// direct eval, a prologue of end_params alone -- keeps only its locals:
+// no copy of the call's arguments beside them, so that two parameters and
+// a local or two fit the smallest allocation. The parameters still have
+// the call's values, fewer arguments leave the rest undefined, a closure
+// keeps a parameter across a suspension; and where something reads them
+// after -- arguments, a rest parameter, a default, a pattern, an eval --
+// they are kept.
+func TestGeneratorArgsKept(t *testing.T) {
+	defer SetTreeTier(true)
+	for _, tt := range []struct {
+		decl, call, want string
+		nargs            uint32
+		vals             int
+	}{
+		{`function* f(a, b) { yield a + b }`, `f(1, 2)`, "3", 0, 2},
+		{`function* f(a, b) { yield String(b) }`, `f(1)`, "undefined", 0, 2},
+		{`function* f(a) { var x = a * 2; yield () => a + x }`, `f(3)`, "9", 0, 2},
+		{`async function f(a, b) { return a - b }`, `f(5, 2)`, "3", 0, 2},
+		{`function* f(a, b) { yield arguments.length }`, `f(1, 2, 3)`, "3", 3, 6},
+		{`function* f(a, ...r) { yield r.length }`, `f(1, 2, 3)`, "2", 3, 5},
+		{`function* f(a, b = a) { yield a + b }`, `f(2)`, "4", 1, 3},
+		{`function* f([a, b]) { yield a + b }`, `f([1, 2])`, "3", 1, 4},
+	} {
+		for _, on := range []bool{false, true} {
+			SetTreeTier(on)
+			r := New(Config{})
+			v, err := r.Run(compileForTest(t, tt.decl+"; "+tt.call))
+			if err != nil {
+				t.Fatalf("%s: %v", tt.decl, err)
+			}
+			var res Value
+			if p, ok := v.Object().dataOf().(*promiseData); ok {
+				// An async function's generator is not seen: its result is.
+				res = p.value
+			} else {
+				g := v.Object().dataOf().(*generator)
+				if g.nargs != tt.nargs || len(g.vals) != tt.vals {
+					t.Errorf("%s: %d arguments of %d values kept, want %d of %d", tt.decl, g.nargs, len(g.vals), tt.nargs, tt.vals)
+				}
+				res, err = r.Run(compileForTest(t, "var x = ("+tt.call+").next().value; typeof x === 'function' ? x() : x"))
+				if err != nil {
+					t.Fatalf("%s: %v", tt.decl, err)
+				}
+			}
+			got, err := r.ToString(res)
+			if err != nil || got.Go() != tt.want {
+				t.Errorf("tree %v, %s: got %v, %v; want %s", on, tt.decl, got, err, tt.want)
+			}
+			r.Close()
+		}
+	}
+}
