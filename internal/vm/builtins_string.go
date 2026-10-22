@@ -305,7 +305,7 @@ func (r *Runtime) initStringBuiltins() {
 		if from+needle.Len() > s.Len() {
 			return False, nil
 		}
-		return Bool(s.Substring(from, from+needle.Len()).Equals(needle)), nil
+		return Bool(s.hasAt(needle, from)), nil
 	})
 
 	r.defMethod(p, "endsWith", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -326,7 +326,7 @@ func (r *Runtime) initStringBuiltins() {
 		if start < 0 {
 			return False, nil
 		}
-		return Bool(s.Substring(start, end).Equals(needle)), nil
+		return Bool(s.hasAt(needle, start)), nil
 	})
 
 	r.defMethod(p, "slice", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {

@@ -915,6 +915,42 @@ func fromUnits(u []uint16) *String {
 	return out
 }
 
+// hasAt reports whether code units [i, i+t.Len()) of s are t's, where
+// 0 <= i and i+t.Len() <= s.Len(): Substring(i, i+t.Len()).Equals(t),
+// as startsWith and endsWith ask it, without making the substring. A
+// piece of s whose ends fall between characters is its bytes, which are
+// t's if their code units are: WTF-8 spells code units one way.
+func (s *String) hasAt(t *String, i int) bool {
+	n := t.length
+	switch {
+	case n == 0:
+		return true
+	case s.ascii:
+		return t.ascii && s.Go()[i:i+n] == t.Go()
+	case i == 0 && n == s.length:
+		return s.Equals(t)
+	}
+	if from, to, _, ok := s.sharedSubstring(i, i+n); ok {
+		return s.s[from:to] == t.Go()
+	}
+	u := s.units()[i : i+n]
+	if t.ascii {
+		g := t.Go()
+		for k, c := range u {
+			if c != uint16(g[k]) {
+				return false
+			}
+		}
+		return true
+	}
+	for k, c := range t.units() {
+		if c != u[k] {
+			return false
+		}
+	}
+	return true
+}
+
 // Equals reports whether two strings have the same code units.
 func (s *String) Equals(t *String) bool {
 	if s == t {
