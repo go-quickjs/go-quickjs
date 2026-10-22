@@ -1049,6 +1049,54 @@ What a loop's turn is spent on (step 1 below, 2026-10-22, with
 - Constants such as the object tag re-read from the context at each
   check, off the critical path.
 
+Done since (2026-10-22, `c458010`..`7ab13db`, JIT on, against the build
+before; three alternated runs of each, then four JIT code placements,
+`V8BENCH_JITSEED` 1 to 4):
+
+- The backend (`c458010`..`eda9ef8`): a back edge's poll no longer keeps
+  its header's phis alive, which spilled List's loop; keeps test the
+  barrier flag once a run; a native call writes, saves and reads back
+  only what it must (Towers' self-call 85 to 49 instructions, a native
+  return 23 to 14); a branch compares rather than testing a boolean made
+  of a compare (21,365 of the suites' 21,819 such branches; List's two
+  tests 19 instructions to 4). V8 suite -2.9%, Are We Fast Yet -1.9%
+  (List -23%), Octane -3.9%.
+- The inliner (`7d155d6`..`7ab13db`): callees with throws and calls
+  their code was never seen to make, those made exits from the inlined
+  frame; callees that read globals and what they captured; a function's
+  constructions given the inlining's bounds first, since a forwarding
+  constructor not inlined is a call of Go (RayTrace); and three bugs
+  found on the way, a construction Go enters given the wrong function,
+  a closure lost to a build limited to 256 keep cells (Typescript, now
+  and then, "undefined is not a function"), a super()'s parent inlined by
+  a compile again. Over the four placements: V8 suite -1.7%, Are We Fast
+  Yet -1.9% (Towers -28.7%), Octane +1.1% (geometric mean -0.3%; Box2D
+  -6.9%, Typescript +4.0%).
+
+Open from it:
+
+- Typescript, +4.0% at every placement: about 10% more runs finished in
+  the interpreter, at sites that inlining reaches more often -- a
+  polymorphic call (`visible`'s `isMember`) learned one target per
+  recompile, an inlined constructor's writes that add properties
+  exiting at each new receiver's shape (`ASTSpan`), a keyed read
+  (`comparisonCache[comboId]`) and a length write in inlined code.
+  Learning all of a call's targets at once, and inlined writes checking
+  several shapes, would serve every program.
+- Calls an inlined callee does not inline are refused, not made from
+  its frame: making them (native calls, calls of Go, tail calls) took
+  Towers' and Richards' calls further down but made DeltaBlue, Havlak,
+  Typescript and the V8 suite's short runs slower, an inlined copy
+  having no feedback of its own and a call from it that leaves native
+  code sending its caller to the interpreter.
+- Callees with loops are not inlined: inlining Crypto's `am3` made its
+  callers' code 60% larger and Crypto 25% slower. A rule that inlines a
+  loop only where the call's cost is not spread over the loop's turns is
+  wanted first.
+- A call is still an indirect jump each way, native code using no CALL,
+  so a return is never predicted: most of a call's remaining samples are
+  just after one; 7 registers spill `moveDisks`' parameters at entry.
+
 The plan, in order -- the compiler first, since micro-optimizations do not
 close a gap of three to seven times:
 
