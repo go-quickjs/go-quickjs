@@ -3001,7 +3001,7 @@ func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 	refilled := in.Op == bytecode.OpNew && r.jitRefillPools(f, e, pc, sp, in)
 	if e.callSites != nil && e.callSites[pc] == jitCallInlined {
 		if o, cl := r.jitCalled(f, sp, in); cl != nil && !slices.ContainsFunc(e.inlines, func(x jitInline) bool { return int(x.pc) == pc && x.obj == o }) {
-			r.jitInlinedCalls(e, pc, o, cl, in)
+			r.jitInlinedCalls(f, e, pc, o, cl, in)
 			return
 		}
 	}
@@ -5602,9 +5602,14 @@ func jitCountAt(calls []jitInline, pc int) int {
 }
 
 // jitSeenCallees are the other functions a method call at pc has called,
-// besides o, as its method read's cache saw them (propCache.seen): of each
-// shape it met, the method a prototype held, as it holds it now -- the
-// call checks its callee -- each a function jitCalled would take. Or none.
+// besides o, as its method read's cache saw them -- its entry, those it
+// keeps for other shapes (propCache.poly), and those it had before
+// (propCache.seen): of each shape it met, the method a prototype held, as
+// it holds it now -- the call checks its callee -- each a function
+// jitCalled would take. Or none. The poly entries had been left out: a
+// polymorphic method of a few classes, Typescript's Symbol's isType and
+// isMember, which a subclass overrides, was compiled to call one, and
+// learned the other at an exit, one compile later.
 func (r *Runtime) jitSeenCallees(cl *closure, p *ir.Program, pc int, o *Object) []jitCallee {
 	fn := cl.fn
 	if jitCallOp(fn.Code[pc].Op) != bytecode.OpCallMethod {
@@ -5630,28 +5635,39 @@ func (r *Runtime) jitSeenCallees(cl *closure, p *ir.Program, pc int, o *Object) 
 		return nil
 	}
 	in := fn.Code[read]
-	if int(in.B) >= len(cl.ic) || int(in.A) >= len(cl.names) || cl.ic[in.B].seen == nil {
+	if int(in.B) >= len(cl.ic) || int(in.A) >= len(cl.names) {
 		return nil
 	}
 	var out []jitCallee
-	seen := cl.ic[in.B].seen
-	for _, c := range seen.entries[:seen.n] {
+	take := func(c *propCache) {
 		h := c.p1
 		if c.p2 != nil {
 			h = c.p2
 		}
-		if c.shape == nil || c.shape == noShape || c.getter || h == nil || c.idx < 0 || int(c.idx) >= len(h.vals) {
-			continue
+		if c.shape == nil || c.shape == noShape || c.shape == dictShape || c.getter || h == nil || c.idx < 0 || int(c.idx) >= len(h.vals) {
+			return
 		}
 		prop := h.propAt(c.idx)
 		if prop.key != cl.names[in.A] || prop.flags&(propAccessor|propPrivate|propDeleted|propUninit) != 0 || !prop.value.IsObject() {
-			continue
+			return
 		}
 		mo, mc := r.jitCallableClosure(cl, prop.value.Object())
 		if mc == nil || mo == o || slices.ContainsFunc(out, func(x jitCallee) bool { return x.o == mo }) {
-			continue
+			return
 		}
 		out = append(out, jitCallee{mo, mc})
+	}
+	c := &cl.ic[in.B]
+	take(c)
+	if p := c.poly; p != nil {
+		for i := range p.entries[:p.n] {
+			take(&p.entries[i])
+		}
+	}
+	if seen := c.seen; seen != nil {
+		for i := range seen.entries[:seen.n] {
+			take(&seen.entries[i])
+		}
 	}
 	return out
 }
@@ -5876,9 +5892,10 @@ func (r *Runtime) jitChainReceiver(cl *closure, p *ir.Program, q, n int) (*Objec
 }
 
 // jitInlinedCalls has a call inlined for one function that calls another,
-// o, cl's, call them natively instead, and others, up to jitCallTargets
-// (jitCallTarget): the code is compiled again for it at once.
-func (r *Runtime) jitInlinedCalls(e *jitEntry, pc int, o *Object, cl *closure, in bytecode.Instr) {
+// o, cl's, call them natively instead, and the others its method read has
+// met (jitSeenTargets), and others, up to jitCallTargets (jitCallTarget):
+// the code is compiled again for it at once.
+func (r *Runtime) jitInlinedCalls(f *frame, e *jitEntry, pc int, o *Object, cl *closure, in bytecode.Instr) {
 	e.notInline = append(e.notInline, int32(pc))
 	e.callSites[pc] = jitCallNative
 	e.inlineReopt = true
@@ -5895,6 +5912,37 @@ func (r *Runtime) jitInlinedCalls(e *jitEntry, pc int, o *Object, cl *closure, i
 	}
 	if !same && (in.Op != bytecode.OpNew || r.jitConstructs(o) || r.jitConstructsDerived(o)) && r.jitNativeOrLinked(cl) {
 		e.nativeCalls = append(e.nativeCalls, r.jitNativeTarget(int32(pc), cl, o, in))
+	}
+	r.jitSeenTargets(f, e, pc, o, in)
+}
+
+// jitSeenTargets has the method call at pc of f's function, which e's
+// code makes natively and which has just met o, call natively the other
+// functions its method read has met too (jitSeenCallees), up to
+// jitCallTargets: as V8's call feedback holds a polymorphic call's
+// targets, so that one compile takes them all, rather than one exit, and
+// one compile, each -- Typescript's Symbol.prototype.visible, whose
+// this.isType() and this.isMember() a subclass overrides, had left at
+// each call of the other until the compile for it, after a budget.
+func (r *Runtime) jitSeenTargets(f *frame, e *jitEntry, pc int, o *Object, in bytecode.Instr) {
+	p := e.ssaProg
+	if in.Op != bytecode.OpCallMethod || p == nil || len(p.Maps) != len(f.cl.fn.Code) {
+		return
+	}
+	for _, t := range r.jitSeenCallees(f.cl, p, pc, o) {
+		if jitCountAt(e.nativeCalls, pc) >= jitCallTargets {
+			return
+		}
+		cf := t.cl.fn
+		if cf == f.cl.fn || cf.TopLevel || cf.IsModule || cf.UsesArguments || cf.HasDirectEval || isGeneratorTemplate(cf) ||
+			slices.ContainsFunc(e.nativeCalls, func(x jitInline) bool {
+				return int(x.pc) == pc && (x.obj == t.o || x.byCode && x.cl != nil && jitSameCode(x.cl, t.cl))
+			}) {
+			continue
+		}
+		if r.jitNativeOrLinked(t.cl) {
+			e.nativeCalls = append(e.nativeCalls, r.jitNativeTarget(int32(pc), t.cl, t.o, in))
+		}
 	}
 }
 
@@ -5964,6 +6012,7 @@ func (r *Runtime) jitCallTarget(f *frame, e *jitEntry, pc, sp int, in bytecode.I
 	if r.jitNativeOrLinked(cl) {
 		e.nativeCalls = append(e.nativeCalls, r.jitNativeTarget(int32(pc), cl, o, in))
 		e.inlineReopt = true
+		r.jitSeenTargets(f, e, pc, o, in)
 	}
 }
 

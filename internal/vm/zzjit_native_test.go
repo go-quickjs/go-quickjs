@@ -6568,6 +6568,104 @@ func TestJITSSASeedsMethodCalls(t *testing.T) {
 	}
 }
 
+// A method call whose read has met objects of several classes, its cache
+// polymorphic, is decided when its function's code is first compiled to
+// call natively each method the cache found (jitSeenCallees): its entry's,
+// those it keeps for other shapes, and those it had before. Typescript's
+// Symbol.prototype.visible, whose this.isType() and this.isMember() a
+// subclass each overrides, had inlined one -- the entries for other shapes
+// were left out -- and left native code at each call of the other, the
+// interpreter finishing the invocation, until it was compiled again for
+// it. In the warm round no call leaves native code.
+func TestJITSSASeedsPolymorphicMethodCalls(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	runtime.GC()
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	setup := `
+		class Sym { constructor(n) { this.n = n; this.flags = n & 3 } isType() { return false } isMember() { return false } }
+		class Inf extends Sym { constructor(n) { super(n); this.i = 0 } }
+		class TypeSym extends Inf { constructor(n) { super(n); this.t = 1 } isType() { return true } }
+		class FieldSym extends Inf { constructor(n) { super(n); this.f = 2; this.g = 3 } isMember() { return this.flags != 1 } }
+		class VarSym extends Inf { constructor(n) { super(n); this.v = 4 } }
+		class ParamSym extends VarSym { constructor(n) { super(n); this.p = 5 } }
+		var syms = []
+		for (let i = 0; i < 40; i++) syms.push(i % 4 == 0 ? new TypeSym(i) : i % 4 == 1 ? new FieldSym(i) : i % 4 == 2 ? new ParamSym(i) : new VarSym(i))
+		function visible(s) { const alias = s.isType() && s.flags == 2; if (s.isMember() || alias) { return s.n + 1 } return s.n }
+		function all(n) { let t = 0; for (let k = 0; k < n; k++) for (const s of syms) t = (t + visible(s)) | 0; return t }
+	`
+	r := jitAgreesForTest(t, setup, `all(1)`, `all(50)`, `all(50)`, `all(50)`)
+	cl := jitGlobalClosureForTest(r, "visible")
+	e := r.jit.entryFor(cl.fn)
+	if e == nil || e.ssa == nil {
+		t.Fatalf("visible has no code")
+	}
+	for pc, in := range cl.fn.Code {
+		if in.Op != bytecode.OpCallMethod {
+			continue
+		}
+		if n := jitCountAt(e.nativeCalls, pc); n != 2 || e.callSites[pc] != jitCallNative {
+			t.Errorf("visible's call at %d calls %d functions natively (%d)", pc, n, e.callSites[pc])
+		}
+	}
+	if n := int(e.reopts) + int(e.inlineReopts) + int(e.upgradeReopts); n != 0 {
+		t.Errorf("visible was compiled again %d times", n)
+	}
+	hosts := r.jit.hosts
+	if _, err := r.Run(compileForTest(t, `all(50)`)); err != nil {
+		t.Fatal(err)
+	}
+	if n := r.jit.hosts - hosts; n != 0 {
+		t.Errorf("all left native code %d times", n)
+	}
+}
+
+// A method call compiled for one class's method that meets another's
+// calls natively, from its next compile, every method its read has met by
+// then (jitSeenTargets), as V8's call feedback holds a polymorphic call's
+// targets: one compile for them all, rather than an exit, and a compile,
+// for each. sumKinds is compiled while only Sym's objects reach it, then
+// meets three subclasses' overrides at once.
+func TestJITSSALearnsSeenCallTargets(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	runtime.GC()
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	setup := `
+		class Sym { constructor(n) { this.n = n } kind() { return 1 } }
+		class A extends Sym { kind() { return 2 } }
+		class B extends Sym { kind() { return 3 } }
+		class C extends Sym { kind() { return 4 } }
+		var mono = [], mixed = []
+		for (let i = 0; i < 40; i++) { mono.push(new Sym(i)); mixed.push(i % 4 == 0 ? new A(i) : i % 4 == 1 ? new B(i) : i % 4 == 2 ? new C(i) : new Sym(i)) }
+		function sumKinds(s) { let t = 0; for (let k = 0; k < 3; k++) t += s.kind() * k + s.n; return t }
+		function all(xs, n) { let t = 0; for (let k = 0; k < n; k++) for (const s of xs) t = (t + sumKinds(s)) | 0; return t }
+	`
+	r := jitAgreesForTest(t, setup, `all(mono, 200)`, `all(mono, 200)`)
+	cl := jitGlobalClosureForTest(r, "sumKinds")
+	e := r.jit.entryFor(cl.fn)
+	if e == nil || e.ssa == nil {
+		t.Fatalf("sumKinds has no code")
+	}
+	serial, hosts := e.ssaSerial, r.jit.hosts
+	both := jitBothForTest(t, setup)
+	both.jit = r
+	both.agree(t, `all(mixed, 50)`)
+	if n := r.jit.hosts - hosts; n > 6 {
+		t.Errorf("sumKinds's calls left native code %d times to learn three methods", n)
+	}
+	if n := e.ssaSerial - serial; n > 4 {
+		t.Errorf("sumKinds was compiled %d times more to learn three methods", n)
+	}
+	hosts = r.jit.hosts
+	both.agree(t, `all(mixed, 50)`)
+	if n := r.jit.hosts - hosts; n != 0 {
+		t.Errorf("all left native code %d times", n)
+	}
+}
+
 // A construction the existing tiers have made is decided when a function's
 // code is first compiled, as a call is (jitSeedCalls), once its
 // constructor has code: mk1 learns new V from its exits, which compiles V
