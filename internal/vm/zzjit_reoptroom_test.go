@@ -354,3 +354,25 @@ func TestJITRoomForHintGrowth(t *testing.T) {
 		r.ReleaseClosed()
 	}
 }
+
+// perInstr rises to what entries come to hold, however little more than it
+// that is, and falls toward what they hold less: a step of an eighth,
+// truncated, had left it short by up to 7 bytes an instruction for good, a
+// first compile asking for less room than its entry then took -- the budget
+// filled by such compiles took the last one, and threw it away.
+func TestJITPerInstrReachesWhatEntriesHold(t *testing.T) {
+	s := &jitState{}
+	s.learn(10, 1000)
+	for range 16 {
+		s.learn(10, 1050)
+	}
+	if s.perInstr != 105 {
+		t.Errorf("perInstr %d after entries of 105 bytes an instruction", s.perInstr)
+	}
+	for range 64 {
+		s.learn(10, 900)
+	}
+	if s.perInstr < 90 || s.perInstr > 97 {
+		t.Errorf("perInstr %d after entries of 90 bytes an instruction", s.perInstr)
+	}
+}

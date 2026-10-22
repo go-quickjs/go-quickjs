@@ -133,11 +133,17 @@ type InstanceOfFeedback interface {
 // %TypedArray%.prototype's methods of those names has abi.LoopTyped in
 // Kind, with its element type, and Proto the prototype of the typed arrays
 // it was seen on, which the loop checks.
+//
+// Inline, if the VM gives one, is the callback to inline in the loop, as
+// V8's JSCallReducer inlines a forEach's callback into the loop it makes:
+// the closure the site's callback has been (InlineSite's Callee, which the
+// loop checks it is given).
 type ForEachSite struct {
 	Fn       uintptr
 	Kind     int
 	Proto    uintptr
 	Callback CallSite
+	Inline   *InlineSite
 }
 
 // ForEachFeedback is Feedback that knows the forEach, or another of the
@@ -199,6 +205,9 @@ func makesArray(kind int) bool {
 type forEachPlan struct {
 	site       ForEachSite
 	base, keep int
+	// inline is the callback inlined in the loop (ForEachSite's Inline),
+	// if planning inlined it.
+	inline *frame
 }
 
 // forEachAt is the forEach, or another loop, the method call at pc of the
@@ -222,6 +231,45 @@ func (b *builder) forEachAt(pc int) (ForEachSite, bool) {
 		return ForEachSite{}, false
 	}
 	return site, true
+}
+
+// planCallback plans the callback of fp, the loop at pc, inlined in the
+// loop's body, if its feedback has one to (ForEachSite's Inline) and
+// inlining's rules and bounds allow it, as any callee's: a method call of
+// three arguments, or reduce's four, whose this, if it reads one, is the
+// call's as it is -- not a sloppy function's, which would coerce it --
+// and one that returns natively, the loop going on after it. It reports
+// whether it planned it so.
+func (b *builder) planCallback(pc int, fp *forEachPlan, total *int) bool {
+	if fp.site.Inline == nil || fp.site.Inline.Program == nil || b.inlines >= maxInlines || b.cur.nest >= maxInlineDepth {
+		return false
+	}
+	s := *fp.site.Inline
+	argc := 3
+	if fp.site.Kind&abi.LoopKindMask == abi.LoopReduce {
+		argc = 4
+	}
+	if s.Callee == 0 || s.Construct || s.Restart || s.Forward || s.Arguments || !s.Method || s.Argc != argc || s.Params < 0 ||
+		s.Coerce && s.ThisSlot >= 0 {
+		return false
+	}
+	calls, ok := InlineCalls(s.Program)
+	if !ok || *total+len(s.Program.Code) > maxInlineTotal {
+		return false
+	}
+	nslots, before, inlines, keeps, inlined := b.nslots, *total, b.inlines, b.f.Keeps, len(b.f.Inlined)
+	fr, ok := b.inlineFrame(s, calls, total, fp.base+loopLocals)
+	if ok && !b.returnsNatively(fr) {
+		b.nslots, *total, b.inlines, b.f.Keeps = nslots, before, inlines, keeps
+		b.f.Inlined = b.f.Inlined[:inlined]
+		ok = false
+	}
+	if !ok {
+		return false
+	}
+	fp.inline = fr
+	b.f.Callbacks++
+	return true
 }
 
 // forEachCall makes the forEach, or another loop, at pc a loop of the
@@ -278,11 +326,18 @@ func (b *builder) forEachCall(blk *Block, pc int, fp forEachPlan) {
 	object := at(blk, call, OpObjectOf, Ptr, fn)
 	same := at(blk, call, OpSameObject, None, object)
 	same.Const = ir.Value{Bits: uint64(fp.site.Fn)}
-	// The callback a function, which each method checks before it reads
-	// an element: Go's call throws its TypeError otherwise.
-	callable := at(blk, call, OpTypeIs, Bool, cb)
-	callable.Index = int(ir.TypeFunction)
-	at(blk, call, OpCheckTrue, None, f.newValue(blk, OpBoxBool, Tagged, callable))
+	switch fr := fp.inline; {
+	case fr != nil:
+		// The closure inlined, which a function is: any other, Go's call.
+		is := at(blk, call, OpSameObject, None, at(blk, call, OpObjectOf, Ptr, cb))
+		is.Const = ir.Value{Bits: uint64(fr.site.Callee)}
+	default:
+		// The callback a function, which each method checks before it
+		// reads an element: Go's call throws its TypeError otherwise.
+		callable := at(blk, call, OpTypeIs, Bool, cb)
+		callable.Index = int(ir.TypeFunction)
+		at(blk, call, OpCheckTrue, None, f.newValue(blk, OpBoxBool, Tagged, callable))
+	}
 	var array *Value
 	if typed {
 		// A typed array of the prototype the loop was seen with, its
@@ -299,6 +354,13 @@ func (b *builder) forEachCall(blk *Block, pc int, fp forEachPlan) {
 	// writes there.
 	room := at(blk, call, OpFrameRoom, None)
 	room.Index = fp.base - b.root.p.Locals + loopSlots(kind)
+	if fr := fp.inline; fr != nil {
+		// And past them for the callback's frame, which an exit inside it
+		// writes there, and a context for Go to make it from.
+		room := at(blk, call, OpFrameRoom, None)
+		room.Index = fr.base - b.root.p.Locals + fr.p.Locals + fr.p.StackSize
+		room.Const = ir.Value{Bits: uint64(fr.depth)}
+	}
 	boxF := func(blk *Block, x *Value) *Value { return f.newValue(blk, OpBoxF64, Tagged, x) }
 	// The element at k: a typed array's a number, an array's from its cell
 	// -- where it has one, but find's and findIndex's -- whatever it is.
@@ -406,20 +468,31 @@ func (b *builder) forEachCall(blk *Block, pc int, fp forEachPlan) {
 	for i, v := range ops {
 		b.write(base+loopLocals+i, body, v)
 	}
-	site := fp.site.Callback
-	c := at(body, state(body, len(ops)), OpCall, Tagged, ops...)
-	f.cache(c).Calls, c.Index = []*CallSite{&site}, fp.keep
-	// The callback may have assigned a captured binding, as a callee may.
-	if b.hasCells() {
-		b.reloadAfterCall(body)
+	var v *Value
+	if fr := fp.inline; fr != nil {
+		// The callback inlined: its result the value its returns give, and
+		// the body goes on after it. Its assignments of captured bindings
+		// are its own.
+		v, body = b.inlineCallback(body, fr, ops, base+loopLocals+2, state(body, len(ops)))
+	} else {
+		site := fp.site.Callback
+		c := at(body, state(body, len(ops)), OpCall, Tagged, ops...)
+		f.cache(c).Calls, c.Index = []*CallSite{&site}, fp.keep
+		// The callback may have assigned a captured binding, as a callee may.
+		if b.hasCells() {
+			b.reloadAfterCall(body)
+		}
+		if kind != abi.LoopForEach {
+			// Its result, kept where the call left it.
+			kept := f.newValue(body, OpCallCell, Source, c)
+			v = f.newValue(body, OpKept, Tagged, kept, c)
+			v.Shadow = kept
+		}
 	}
 	step := body
 	if kind != abi.LoopForEach {
-		// Its result, kept where the call left it: the loop's, which an
-		// exit before the next index gives Go to finish the index with.
-		kept := f.newValue(body, OpCallCell, Source, c)
-		v := f.newValue(body, OpKept, Tagged, kept, c)
-		v.Shadow = kept
+		// Its result: the loop's, which an exit before the next index gives
+		// Go to finish the index with.
 		b.write(base+loopResult, body, v)
 		switch kind {
 		case abi.LoopReduce:
@@ -2394,6 +2467,22 @@ func (b *builder) inlineSiteAt(pc int, total *int, known *inlineAsked) (*frame, 
 			}
 		}
 	}
+	result := b.cur.base + b.p.Locals + after - 1
+	if isAccessor {
+		// A getter's result is the read's; a setter's is dropped.
+		result = b.cur.base + b.p.Code[pc].Dest
+		if accessor.Setter {
+			result = -1
+		}
+	}
+	return b.inlineFrame(site, calls, total, result)
+}
+
+// inlineFrame is the frame of site inlined in the frame being translated,
+// its result to slot result, if inlining's bounds allow it, with calls,
+// those of its operations it leaves to Go (InlineCalls), inlined in it,
+// every one, or it is not.
+func (b *builder) inlineFrame(site InlineSite, calls []int, total *int, result int) (*frame, bool) {
 	q := referenceReads(site.Program, site.Feedback)
 	// Its slots follow the function's and earlier callees': every slot's
 	// number stays below abi.MaxRecords, as records name slots by number.
@@ -2402,15 +2491,8 @@ func (b *builder) inlineSiteAt(pc int, total *int, known *inlineAsked) (*frame, 
 	}
 	nslots, before, inlines, keeps := b.nslots, *total, b.inlines, b.f.Keeps
 	*total += len(site.Program.Code)
-	fr := &frame{p: q, fb: site.Feedback, site: site, result: b.cur.base + b.p.Locals + after - 1, base: b.nslots,
+	fr := &frame{p: q, fb: site.Feedback, site: site, result: result, base: b.nslots,
 		parent: b.cur, depth: b.cur.depth + 1, nest: b.cur.nest + 1, keep: -1}
-	if isAccessor {
-		// A getter's result is the read's; a setter's is dropped.
-		fr.result = b.cur.base + b.p.Code[pc].Dest
-		if accessor.Setter {
-			fr.result = -1
-		}
-	}
 	if site.Construct {
 		// Its receiver's keep cell, taken now, as a literal's is
 		// (literal): the inlining is decided now.
@@ -2490,7 +2572,15 @@ func (b *builder) planInline(fr *frame, call, cont *Block) {
 		}
 	}
 	newBlock := func(pc, end int) *Block {
-		blk := b.f.newBlock(pc)
+		var blk *Block
+		if b.defs != nil {
+			// Made while the blocks are filled: a loop's callback
+			// (inlineCallback), its IDs past every list's.
+			blk = b.blockAfter(call)
+			blk.PC = pc
+		} else {
+			blk = b.f.newBlock(pc)
+		}
 		for len(b.frameOf) <= blk.ID {
 			b.frameOf = append(b.frameOf, nil)
 			b.endOf = append(b.endOf, 0)
@@ -2557,6 +2647,150 @@ func (b *builder) planInline(fr *frame, call, cont *Block) {
 	for _, pc := range sortedKeys(fr.inlined) {
 		b.planInline(fr.inlined[pc], fr.inlined[pc].callBlock, fr.blockAt[pc+1])
 	}
+}
+
+// returnsNatively reports whether fr's code, inlined, returns on a path
+// native code takes: from its start to a return through no exit, nor a
+// callee inlined in it that does not return so itself. A loop's callback
+// inlined in it (inlineCallback) must: the loop's turn goes on after it.
+func (b *builder) returnsNatively(fr *frame) bool {
+	cur := b.cur
+	b.enter(fr)
+	defer b.enter(cur)
+	p := fr.p
+	seen := b.f.bools(len(p.Code))
+	var walk func(pc int) bool
+	walk = func(pc int) bool {
+		for pc < len(p.Code) && !seen[pc] {
+			seen[pc] = true
+			switch in := p.Code[pc]; {
+			case in.Op == ir.Return:
+				return true
+			case fr.inlined[pc] != nil:
+				if !b.returnsNatively(fr.inlined[pc]) {
+					return false
+				}
+			case in.Op == ir.Jump:
+				pc = in.Target
+				continue
+			case in.Op == ir.Branch:
+				if walk(in.Target) {
+					return true
+				}
+			case b.host(pc) || b.unfed(pc):
+				return false
+			}
+			pc++
+		}
+		return false
+	}
+	return walk(0)
+}
+
+// inlineCallback makes the call of a loop's callback (forEachCall), of its
+// operands ops -- this, the callback, its arguments -- in the loop's body,
+// the callee fr inlined there, as V8's JSCallReducer inlines a forEach's
+// callback into the loop it makes: the callee's frame given its arguments
+// and its receiver, every exit inside it going to st, the loop's state at
+// the call, past which the exit makes the callee's frame (InlineState) --
+// Go finishes the callback, then the loop from its index
+// (abi.Context's Loop). It returns the callback's result and the block the
+// loop's body goes on in after it.
+func (b *builder) inlineCallback(body *Block, fr *frame, ops []*Value, argSlot int, st *FrameState) (*Value, *Block) {
+	f, site := b.f, fr.site
+	fr.call = st
+	undefined := f.newValue(body, OpConst, Tagged)
+	undefined.Const = ir.Value{Kind: ir.Undefined}
+	fr.init = f.refsOf(fr.p.Locals + fr.p.StackSize)
+	for s := range fr.init {
+		fr.init[s] = undefined
+	}
+	fr.args, fr.argSlot = ops[2:], argSlot
+	for i := 0; i < site.Params && i < len(fr.args); i++ {
+		fr.init[i] = fr.args[i]
+	}
+	if site.ThisSlot >= 0 {
+		fr.init[site.ThisSlot] = ops[0]
+	}
+	// The body ends at the call; the rest of it goes on in after, which
+	// the callee's returns go to.
+	after := b.blockAfter(body)
+	b.placeAfter(body, []*Block{after}, after)
+	body.Kind, body.Succs, body.Control = BlockPlain, nil, nil
+	b.inlineBlocks(fr, body, after)
+	return b.read(fr.result, after), after
+}
+
+// inlineBlocks makes and fills the blocks of fr, a callee inlined at a
+// call made while the blocks are being filled -- a loop's callback
+// (inlineCallback) -- between from, the block that ends at the call, which
+// is filled, and to, the block after it, which the callee's returns go
+// to: planned as any inlined callee's (planInline), then put after from in
+// reverse post-order from the callee's start, which is the order blocks
+// are filled and kept in, those it does not reach -- an exit's -- dropped
+// as translate drops them, and filled so.
+func (b *builder) inlineBlocks(fr *frame, from, to *Block) {
+	f := b.f
+	first := len(f.Blocks)
+	b.planInline(fr, from, to)
+	made := slices.Clone(f.Blocks[first:])
+	f.Blocks = f.Blocks[:first]
+	in := make(map[*Block]bool, len(made))
+	for _, blk := range made {
+		in[blk] = true
+	}
+	seen := make(map[*Block]bool, len(made))
+	var order []*Block
+	var visit func(*Block)
+	visit = func(blk *Block) {
+		if !in[blk] || seen[blk] {
+			return
+		}
+		seen[blk] = true
+		for i := len(blk.Succs) - 1; i >= 0; i-- {
+			visit(blk.Succs[i])
+		}
+		order = append(order, blk)
+	}
+	visit(fr.start)
+	slices.Reverse(order)
+	for _, blk := range append(made, to) {
+		preds := blk.Preds[:0]
+		for _, p := range blk.Preds {
+			if !in[p] || seen[p] {
+				preds = append(preds, p)
+			}
+		}
+		blk.Preds, blk.Backedge = preds, f.bools(len(preds))
+	}
+	at := slices.Index(f.Blocks, from) + 1
+	f.Blocks = slices.Insert(f.Blocks, at, order...)
+	// What the root's block being filled had under way, which filling the
+	// callee's would take for its own.
+	next, here, herePC, region, words := b.next, b.here, b.herePC, b.region, b.words
+	b.next = nil
+	b.filled[from.ID] = true
+	for _, blk := range order {
+		b.trySeal(blk)
+		mark := len(b.splits)
+		b.enter(b.frameAt(blk))
+		b.fill(blk)
+		b.enter(b.root)
+		b.filled[blk.ID] = true
+		for _, s := range blk.Succs {
+			b.trySeal(s)
+		}
+		for _, s := range b.splits[mark:] {
+			b.filled[s.ID] = true
+			for _, t := range s.Succs {
+				b.trySeal(t)
+			}
+		}
+	}
+	if !b.sealed[to.ID] {
+		b.seal(to)
+	}
+	b.next, b.here, b.herePC, b.region, b.words = next, here, herePC, region, words
 }
 
 // inlineCall checks the call at pc calls the function inlined there, and
@@ -3494,10 +3728,12 @@ func (b *builder) plan() error {
 					if b.forEaches == nil {
 						b.forEaches = map[int]forEachPlan{}
 					}
-					b.forEaches[pc] = forEachPlan{site: site, base: b.nslots, keep: b.f.Keeps}
+					fp := forEachPlan{site: site, base: b.nslots, keep: b.f.Keeps}
 					b.nslots += loopSlots(site.Kind)
 					b.f.Keeps += loopKeeps(site.Kind)
 					b.f.Loops, b.f.LoopsEnd = true, b.nslots
+					b.planCallback(pc, &fp, &total)
+					b.forEaches[pc] = fp
 				}
 			}
 		}

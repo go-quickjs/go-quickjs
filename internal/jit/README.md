@@ -189,6 +189,12 @@ natively. `map`'s and `filter`'s arrays Go makes (`ssa.GoNewArray`, where
 the array's species is `Array`), and the code appends to them. A hole, or
 anything the loop's checks find, leaves, and Go goes on with the loop from
 that index (`abi.Context`'s `Loop`), then native code after the call.
+The callback is inlined in the loop where any callee may be, under the
+inliner's rules and bounds (`ssa.ForEachSite`'s `Inline`), as V8 inlines
+it: the one closure the loop has been given, which the loop checks it is
+given. An exit inside the callback has Go make its frame past the loop's,
+finish it and go on with the loop after its index; one that leaves too
+often (`jitInlineExits`) has the callback called natively again.
 
 **Allocation.** Object, array and regular expression literals, closures
 and their captured cells (see Closures), and the receivers of

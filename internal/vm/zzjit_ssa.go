@@ -1853,6 +1853,7 @@ func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
 	e.ssaSerial++
 	e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaHostsLeft = fb.inlinedAt, fb.definesUnfed, fb.cells, fb.hostsLeft
 	e.ssaStrings, e.ssaInlined, e.ssaPools = e.ssaStrings || fb.strings, fb.inlined, fb.pools
+	e.ssaCallbacks = fb.callbacks
 	r.jit.setLinks(e, fb.links)
 	e.ssaKeeps = max(e.ssaKeeps, fb.keeps)
 	// What it leaves on is counted afresh: it may have left on what it was
@@ -1932,6 +1933,7 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 	if f.Loops {
 		fb.loopSlots = f.LoopsEnd - p.Locals
 	}
+	fb.callbacks = f.Callbacks
 	f.FrameLocals = fn.LocalCount
 	f.Params, f.StartOnly = fn.ParamCount, jitcompile.StartOnly(fn)
 	f.Cells = p.Cells
@@ -2060,6 +2062,9 @@ type jitFeedback struct {
 	// object pools its constructions take from.
 	inlined []*closure
 	pools   []*abi.ObjectPool
+	// callbacks is how many loops' callbacks the code inlines (ssa.Func's
+	// Callbacks).
+	callbacks int
 	// wanted are callees of calls to inline that the compile made calls
 	// instead -- past its budget (ssa's maxInlines) -- which had no code
 	// for native callers: compiled after it (jitWantedCallees). linked
@@ -2911,6 +2916,9 @@ type jitInline struct {
 	forEach bool
 	cb      *closure
 	cbObj   *Object
+	// cbLeft marks a loop whose callback, inlined in it, left native code
+	// too often (jitInlineLeft): called natively since.
+	cbLeft bool
 	// proto is a typed array's loop's typed arrays' prototype
 	// (jitLoopTyped), nil for an array's.
 	proto *Object
@@ -5186,6 +5194,15 @@ func jitGoArg(ctx *abi.Context, i int) Value {
 // natively, if the callee's code allows it, and the code is compiled
 // again.
 func (r *Runtime) jitInlineLeft(e *jitEntry, pc int) {
+	for i := range e.nativeCalls {
+		// A loop's callback inlined in it (jitFeedback's callbackInline),
+		// called natively once it has left too often.
+		if x := &e.nativeCalls[i]; int(x.pc) == pc && x.forEach && !x.cbLeft {
+			if x.exits++; x.exits >= jitInlineExits {
+				x.cbLeft, e.inlineReopt = true, true
+			}
+		}
+	}
 	for i := range e.inlines {
 		if x := &e.inlines[i]; int(x.pc) == pc && !slices.Contains(e.notInline, x.pc) {
 			if x.exits++; x.exits >= jitInlineExits {
@@ -6799,10 +6816,14 @@ func (r *Runtime) jitForEachSeen(e *jitEntry, fn *bytecode.Function, pc int, o *
 		if x.cb.fn != cb.fn || x.obj != o || x.proto != proto {
 			return
 		}
-		if x.cbObj != cbObj {
+		if x.cbObj != cbObj && !x.byCode {
 			// A closure made anew at each call of its maker: called by its
-			// code (ByCode).
+			// code (ByCode), not inlined, which the code is compiled again
+			// for, the check of the one it inlined failing.
 			x.byCode = true
+			if slices.Contains(e.ssaInlined, x.cb) {
+				e.inlineReopt = true
+			}
 		}
 		if ce := r.jit.entryFor(cb.fn); ce == nil || ce.ssa == nil {
 			if r.jitNativeCallee(cb) != nil {
@@ -6866,9 +6887,57 @@ func (fb *jitFeedback) ForEach(pc int) (ssa.ForEachSite, bool) {
 			return ssa.ForEachSite{}, false
 		}
 		fb.loops = true
-		return ssa.ForEachSite{Fn: uintptr(unsafe.Pointer(x.obj)), Kind: kind, Proto: proto, Callback: site}, true
+		fe := ssa.ForEachSite{Fn: uintptr(unsafe.Pointer(x.obj)), Kind: kind, Proto: proto, Callback: site}
+		if in, ok := fb.callbackInline(x, int(argc)); ok {
+			fe.Inline = &in
+		}
+		return fe, true
 	}
 	return ssa.ForEachSite{}, false
+}
+
+// callbackInline is the InlineSite of x's callback, a loop's (ForEach),
+// for native code to inline in the loop, as V8 inlines a forEach's
+// callback, under the rules any callee's inlining follows (jitInlinable,
+// jitInlinesCalls): the closure the loop has always been given, checked,
+// its captured bindings in its cells, called as a method of argc
+// arguments -- not one made anew at each call (byCode). Not one whose
+// inlining has left native code too often (jitInlineLeft).
+func (fb *jitFeedback) callbackInline(x *jitInline, argc int) (ssa.InlineSite, bool) {
+	r, cl := fb.r, x.cb
+	if x.cbLeft || x.byCode || x.cbObj == nil || cl == nil || cl.fn == fb.fn || jitNoInline != nil && jitNoInline(cl.fn) ||
+		!r.jitInlinable(cl.fn) && !r.jitInlinesCalls(cl, jitInlineDepth-1) {
+		return ssa.InlineSite{}, false
+	}
+	reads := jitReadsArguments(cl.fn)
+	kind := jitLowerInline
+	if reads {
+		kind = jitLowerForward
+	}
+	p, err := r.jitLower(cl.fn, kind)
+	if err != nil || cl.fn.Kind == bytecode.KindArrow && p.This {
+		// An arrow's this is the one it captured, not the loop's.
+		return ssa.InlineSite{}, false
+	}
+	this := -1
+	if p.This {
+		this = cl.fn.LocalCount + len(cl.fn.Upvalues)
+	}
+	k := fb.keep()
+	for _, in := range p.Code {
+		k.strings = k.strings || in.Op == ir.StringMethod || in.Op == ir.StringCode
+	}
+	// The one closure: its captured bindings in its cells, as an inlined
+	// call's (jitFeedback's Inline).
+	site := ssa.InlineSite{
+		Program: p, Feedback: &jitFeedback{r: r, fn: cl.fn, cl: cl, root: k},
+		Callee: uintptr(unsafe.Pointer(x.cbObj)), Closure: uintptr(unsafe.Pointer(cl)), Argc: argc, Method: true,
+		Params: cl.fn.ParamCount, ThisSlot: this, Coerce: cl.fn.CoerceThis, ReadsArguments: reads,
+		Upvalues: jitUpvalueCells(cl),
+	}
+	k.holders = append(k.holders, x.cbObj)
+	k.inlined = append(k.inlined, cl)
+	return site, true
 }
 
 // setLoopSlots notes that e's code for fn holds slots of its loops (ssa's
@@ -7688,6 +7757,7 @@ func (e *jitEntry) setSSA(s *jitState, fn *bytecode.Function, p *ir.Program, cod
 	e.ssaProg = p
 	e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaHostsLeft = fb.inlinedAt, fb.definesUnfed, fb.cells, fb.hostsLeft
 	e.ssaStrings, e.ssaInlined, e.ssaPools = fb.strings, fb.inlined, fb.pools
+	e.ssaCallbacks = fb.callbacks
 	s.setLinks(e, fb.links)
 	e.ssaKeeps = max(e.ssaKeeps, fb.keeps)
 	e.link.setCode(code)
@@ -9594,7 +9664,16 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			jitHandlers(f, e.ssaProg, exitPC)
 			// Past its call meanwhile, as a stack trace shows it.
 			f.pc = uint32(exitPC) + 1
+			// A loop's, taken before Go runs anything.
+			loop := jitLoopIn(e.loops, ctx, f.cl.fn, exitPC)
 			v, err := r.jitUnwindNative(idx, e, f.cl)
+			if loop != 0 {
+				// The callee was a loop's callback, inlined in it
+				// (ssa.ForEachSite's Inline): Go goes on with the loop after
+				// its index.
+				ctx.Loop = 0
+				v, err = r.jitLoopFinish(f, exitPC, loop, true, v, err)
+			}
 			sp, ok := r.jitCallResult(f, exitPC, exitDepth, v, err)
 			if !ok || r.stopped != nil {
 				sp, err, native := r.jitCatch(f, e, sp, err)
@@ -10215,10 +10294,11 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure) (Value, e
 		s.ctxTop = max(top, s.unwinding[start+n-1].ctx+1)
 		defer func() { s.ctxTop = top }()
 	}
-	if n != 0 && !s.unwinding[start].inline && idx < len(s.goRuns) && s.goRuns[idx].f != nil {
+	if n != 0 && idx < len(s.goRuns) && s.goRuns[idx].f != nil {
 		if rf := s.goRuns[idx].f; jitLoopIn(e.makesLoops(), s.ssaCtxs[idx], code, int(s.ssaCtxs[idx].ExitPC)) != 0 {
-			// The run's own loop's callee: the built-in's frame between
-			// them, until the callee is finished.
+			// The run's own loop's callee -- called natively, or inlined in
+			// the loop: the built-in's frame between them, until the callee
+			// is finished.
 			r.jitPushLoopFrame(rf, s.ssaCtxs[idx].Loop, false)
 			defer func() { r.frameDepth-- }()
 		}
@@ -10316,10 +10396,10 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure) (Value, e
 			}
 		}
 		s.unwindingFrames = append(s.unwindingFrames, f)
-		if k < n-1 && !l.inline && !s.unwinding[start+k+1].inline && l.loop != 0 &&
+		if k < n-1 && !l.inline && l.loop != 0 &&
 			jitLoopIn(r.jitEntryOf(l.cl).makesLoops(), s.ssaCtxs[l.ctx], fn, int(l.pc)) != 0 {
-			// Its loop's callee, the next level: the built-in's frame
-			// between them.
+			// Its loop's callee, the next level -- called natively, or
+			// inlined in the loop: the built-in's frame between them.
 			r.jitPushLoopFrame(f, l.loop, true)
 			l.loopFrame = true
 		}

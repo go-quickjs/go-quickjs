@@ -635,6 +635,9 @@ type jitEntry struct {
 	// (jitUnwindNative).
 	ssaLinks   []*jitLink
 	ssaInlined []*closure
+	// ssaCallbacks counts the loops' callbacks the code inlines
+	// (ssa.Func's Callbacks).
+	ssaCallbacks int
 	// ssaPools are the object pools the code's constructions take from,
 	// whose addresses it holds.
 	ssaPools []*abi.ObjectPool
@@ -1699,15 +1702,24 @@ func (s *jitState) roomFor(e *jitEntry, links []*jitLink, need int) bool {
 
 // learn has perInstr follow what an entry of a function of instructions
 // instructions came to hold, bytes: rounded up, so that a compile asks for
-// no less room than an entry like it took.
+// no less room than an entry like it took -- an eighth of the way to it, at
+// least a byte where it is more: truncated, a step of less than one had
+// left perInstr short of what entries took, by up to 7 bytes an instruction,
+// and a budget filled by such compiles took the last one and threw it away.
 func (s *jitState) learn(instructions, bytes int) {
 	n := max(instructions, 1)
 	x := (bytes + n - 1) / n
 	if s.perInstr == 0 {
 		s.perInstr = x
-	} else {
-		s.perInstr += (x - s.perInstr) / 8
+		return
 	}
+	d := x - s.perInstr
+	if d > 0 {
+		d = (d + 7) / 8
+	} else {
+		d /= 8
+	}
+	s.perInstr += d
 }
 
 // age has the cache find, once an epoch, which of its entries were used
