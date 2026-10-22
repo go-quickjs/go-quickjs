@@ -2687,8 +2687,12 @@ func isEquality(op bytecode.Op) bool {
 // tested for without a call: === against undefined or null asks the other's
 // kind, and == against either asks whether it is one of them, which nothing
 // else equals loosely but document.all (Annex B's [[IsHTMLDDA]]); === against
-// a boolean is that boolean, whose value has one spelling.
+// a boolean is that boolean, whose value has one spelling. A number
+// constant on one side, or a local on both, is eqNumJump's.
 func eqJump(op bytecode.Op, x, y tentry, pc, taken, fall int) tnext {
+	if next := eqNumJump(op, x, y, pc, taken, fall); next != nil {
+		return next
+	}
 	if x.literal && !y.literal {
 		x, y = y, x
 	}
