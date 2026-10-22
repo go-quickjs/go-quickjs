@@ -470,7 +470,19 @@ func (r *Runtime) initStringBuiltins() {
 			}
 			return rt.builtString(sb.String())
 		}
-		return Str(NewString(strings.Repeat(s.Go(), int(n)))), nil
+		if n == 1 {
+			return Str(s), nil
+		}
+		// The copies are written once, into the String's own allocation
+		// where they are short, with what the String knows of itself from
+		// s's: a copy's ends are s's, and no two that meet make a pair.
+		g := s.Go()
+		out, b := newFlatBytes(len(g) * int(n))
+		fillRepeat(b, g)
+		out.setBytes(b)
+		out.length, out.ascii = s.length*int(n), s.ascii
+		out.endsHigh, out.startsLow = s.endsHigh, s.startsLow
+		return Str(out), nil
 	})
 
 	r.strSplitFn = r.defMethod(p, "split", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -691,7 +703,7 @@ func (r *Runtime) padString(thisStr thisStrFunc, this Value, args []Value, atSta
 	if target <= float64(s.Len()) {
 		return Str(s), nil
 	}
-	pad := NewString(" ")
+	pad := r.asciiCharString(' ')
 	if pv := arg(args, 1); !pv.IsUndefined() {
 		ps, err := r.toString(pv)
 		if err != nil {
@@ -711,6 +723,9 @@ func (r *Runtime) padString(thisStr thisStrFunc, this Value, args []Value, atSta
 	if err := r.reserveMemory(need * 3); err != nil {
 		return Undefined, err
 	}
+	if pad.ascii {
+		return Str(padASCII(s, pad.Go(), need, atStart)), nil
+	}
 	// The filler is counted in code units, as the result is: in runes a lone
 	// surrogate is three, and the result came out short. It is built with
 	// the halves of a pair joined where one copy meets the next.
@@ -723,6 +738,37 @@ func (r *Runtime) padString(thisStr thisStrFunc, this Value, args []Value, atSta
 		return Str(filler.Concat(s)), nil
 	}
 	return Str(s.Concat(filler)), nil
+}
+
+// padASCII is s with need code units of the ASCII filler f before it, where
+// atStart, or after it: f repeated, the last copy cut short, which is its
+// bytes. A short result is written once, into its own allocation; a long
+// one joins the filler to s as Concat joins them, a rope over s.
+func padASCII(s *String, f string, need int, atStart bool) *String {
+	if n := s.byteLenShallow() + need; n < ropeThreshold {
+		g := s.Go()
+		out, b := newFlatBytes(n)
+		if atStart {
+			fillRepeat(b[:need], f)
+			copy(b[need:], g)
+			out.endsHigh = s.endsHigh
+		} else {
+			copy(b, g)
+			fillRepeat(b[len(g):], f)
+			out.startsLow = s.startsLow
+		}
+		out.setBytes(b)
+		out.length, out.ascii = s.length+need, s.ascii
+		return out
+	}
+	_, b := newFlatBytes(need)
+	fillRepeat(b, f)
+	filler := &String{length: need, ascii: true}
+	filler.setBytes(b)
+	if atStart {
+		return filler.Concat(s)
+	}
+	return s.Concat(filler)
 }
 
 // stringReplace implements replace and replaceAll for a string pattern.

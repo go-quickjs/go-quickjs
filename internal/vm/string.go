@@ -321,6 +321,36 @@ func newStringBytes(n int) (*String, []byte) {
 	return &x.String, x.b[:n]
 }
 
+// newFlatBytes makes a flat String of n bytes, n > 0, and returns them to be
+// filled before the String is given them (setBytes): in one allocation where
+// n is at most 80 (newStringBytes), and otherwise the String and the bytes.
+// The caller sets the String's length and flags.
+func newFlatBytes(n int) (*String, []byte) {
+	if n <= 80 {
+		return newStringBytes(n)
+	}
+	return new(String), make([]byte, n)
+}
+
+// setBytes gives s the bytes newFlatBytes made it, which are not written
+// again.
+func (s *String) setBytes(b []byte) { s.s = unsafe.String(unsafe.SliceData(b), len(b)) }
+
+// fillRepeat fills b with copies of t, the last cut where b ends: doubling
+// what it has written, as strings.Repeat does, a copy at a time.
+func fillRepeat(b []byte, t string) {
+	if len(t) == 1 {
+		for i := range b {
+			b[i] = t[0]
+		}
+		return
+	}
+	n := copy(b, t)
+	for n < len(b) {
+		n += copy(b[n:], b[:n])
+	}
+}
+
 // A lone surrogate is three bytes of WTF-8, and the four functions below find
 // and take off the one at either end of a string without flattening it.
 

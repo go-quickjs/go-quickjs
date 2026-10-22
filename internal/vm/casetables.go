@@ -143,17 +143,19 @@ func asciiCase(s *String, upper bool) *String {
 	if i == len(g) {
 		return s
 	}
-	var b strings.Builder
-	b.Grow(len(g))
-	b.WriteString(g[:i])
+	// Written into the String's own allocation where it is short.
+	out, b := newFlatBytes(len(g))
+	copy(b, g[:i])
 	for ; i < len(g); i++ {
 		c := g[i]
 		if c >= lo && c <= hi {
 			c ^= 0x20
 		}
-		b.WriteByte(c)
+		b[i] = c
 	}
-	return &String{s: b.String(), length: s.length, ascii: true}
+	out.setBytes(b)
+	out.length, out.ascii = s.length, true
+	return out
 }
 
 // caseConvert maps a string to upper or lower case, character by character.
