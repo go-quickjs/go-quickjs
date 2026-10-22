@@ -192,9 +192,17 @@ that index (`abi.Context`'s `Loop`), then native code after the call.
 The callback is inlined in the loop where any callee may be, under the
 inliner's rules and bounds (`ssa.ForEachSite`'s `Inline`), as V8 inlines
 it: the one closure the loop has been given, which the loop checks it is
-given. An exit inside the callback has Go make its frame past the loop's,
-finish it and go on with the loop after its index; one that leaves too
-often (`jitInlineExits`) has the callback called natively again.
+given, or a closure the caller makes just before the call
+(`ssa.MadeCallback`), which, given to nothing else, the code never makes,
+as V8's escape analysis removes it: what it captures the inlined code
+reads and assigns as the caller's own slots, in place, and a frame state
+names its template where the closure would be, which Go makes the closure
+from at an exit (the VM's `jitMaterialize`), as V8's deoptimizer
+materializes an object. An exit inside the callback has Go make its frame
+past the loop's, finish it and go on with the loop after its index; one
+that leaves too often (`jitInlineExits`) has the callback called natively
+again. The captured locals' cells the caller's code takes at its entry
+(`ssa.GoCells`) are made still.
 
 **Allocation.** Object, array and regular expression literals, closures
 and their captured cells (see Closures), and the receivers of

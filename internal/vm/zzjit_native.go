@@ -635,9 +635,14 @@ type jitEntry struct {
 	// (jitUnwindNative).
 	ssaLinks   []*jitLink
 	ssaInlined []*closure
-	// ssaCallbacks counts the loops' callbacks the code inlines
-	// (ssa.Func's Callbacks).
-	ssaCallbacks int
+	// ssaMade are the templates of the closures the code does not make
+	// (jitFeedback's made), which Go makes where an exit's frame names them
+	// (jitMaterialize).
+	ssaMade []*closure
+	// ssaCallbacks counts the loops' callbacks the code inlines, and
+	// ssaUnmade those of them it does not make (ssa.Func's Callbacks and
+	// Unmade).
+	ssaCallbacks, ssaUnmade int
 	// ssaPools are the object pools the code's constructions take from,
 	// whose addresses it holds.
 	ssaPools []*abi.ObjectPool
@@ -836,6 +841,9 @@ type jitState struct {
 	// loopsFinished counts the loops of built-ins' calls Go went on with
 	// at an exit (jitLoopFinish).
 	loopsFinished uint64
+	// materialized counts the closures Go made at exits that native code
+	// had not made (jitMaterialize).
+	materialized uint64
 	// searchArgs are a search's arguments (jitSearch), given to its Go
 	// function, which keeps nothing of them, and cleared after.
 	searchArgs [2]Value

@@ -1852,8 +1852,8 @@ func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
 	e.setLoopSlots(fn, fb.loopSlots)
 	e.ssaSerial++
 	e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaHostsLeft = fb.inlinedAt, fb.definesUnfed, fb.cells, fb.hostsLeft
-	e.ssaStrings, e.ssaInlined, e.ssaPools = e.ssaStrings || fb.strings, fb.inlined, fb.pools
-	e.ssaCallbacks = fb.callbacks
+	e.ssaStrings, e.ssaInlined, e.ssaPools, e.ssaMade = e.ssaStrings || fb.strings, fb.inlined, fb.pools, fb.made
+	e.ssaCallbacks, e.ssaUnmade = fb.callbacks, fb.unmade
 	r.jit.setLinks(e, fb.links)
 	e.ssaKeeps = max(e.ssaKeeps, fb.keeps)
 	// What it leaves on is counted afresh: it may have left on what it was
@@ -1933,7 +1933,7 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 	if f.Loops {
 		fb.loopSlots = f.LoopsEnd - p.Locals
 	}
-	fb.callbacks = f.Callbacks
+	fb.callbacks, fb.unmade = f.Callbacks, f.Unmade
 	f.FrameLocals = fn.LocalCount
 	f.Params, f.StartOnly = fn.ParamCount, jitcompile.StartOnly(fn)
 	f.Cells = p.Cells
@@ -2062,9 +2062,13 @@ type jitFeedback struct {
 	// object pools its constructions take from.
 	inlined []*closure
 	pools   []*abi.ObjectPool
-	// callbacks is how many loops' callbacks the code inlines (ssa.Func's
-	// Callbacks).
-	callbacks int
+	// made are the templates of the closures the code may not make, the
+	// loops' callbacks inlined where their callers make them (ForEachSite's
+	// Made), which an exit's frame names in their places (jitMaterialize);
+	// callbacks and unmade how many the code inlines, and does not make
+	// (ssa.Func's Callbacks and Unmade).
+	made              []*closure
+	callbacks, unmade int
 	// wanted are callees of calls to inline that the compile made calls
 	// instead -- past its budget (ssa's maxInlines) -- which had no code
 	// for native callers: compiled after it (jitWantedCallees). linked
@@ -6818,8 +6822,9 @@ func (r *Runtime) jitForEachSeen(e *jitEntry, fn *bytecode.Function, pc int, o *
 		}
 		if x.cbObj != cbObj && !x.byCode {
 			// A closure made anew at each call of its maker: called by its
-			// code (ByCode), not inlined, which the code is compiled again
-			// for, the check of the one it inlined failing.
+			// code (ByCode) -- and inlined only where its maker's code makes
+			// it (jitFeedback's madeCallback), which the code is compiled
+			// again for, the check of the one it inlined failing.
 			x.byCode = true
 			if slices.Contains(e.ssaInlined, x.cb) {
 				e.inlineReopt = true
@@ -6890,6 +6895,7 @@ func (fb *jitFeedback) ForEach(pc int) (ssa.ForEachSite, bool) {
 		fe := ssa.ForEachSite{Fn: uintptr(unsafe.Pointer(x.obj)), Kind: kind, Proto: proto, Callback: site}
 		if in, ok := fb.callbackInline(x, int(argc)); ok {
 			fe.Inline = &in
+			fe.Made = fb.madeCallback(pc, x.cb)
 		}
 		return fe, true
 	}
@@ -6900,12 +6906,13 @@ func (fb *jitFeedback) ForEach(pc int) (ssa.ForEachSite, bool) {
 // for native code to inline in the loop, as V8 inlines a forEach's
 // callback, under the rules any callee's inlining follows (jitInlinable,
 // jitInlinesCalls): the closure the loop has always been given, checked,
-// its captured bindings in its cells, called as a method of argc
-// arguments -- not one made anew at each call (byCode). Not one whose
+// its captured bindings in its cells -- or, one made anew at each call
+// (byCode), no object, for the builder to inline where the caller makes it
+// (madeCallback) -- called as a method of argc arguments. Not one whose
 // inlining has left native code too often (jitInlineLeft).
 func (fb *jitFeedback) callbackInline(x *jitInline, argc int) (ssa.InlineSite, bool) {
 	r, cl := fb.r, x.cb
-	if x.cbLeft || x.byCode || x.cbObj == nil || cl == nil || cl.fn == fb.fn || jitNoInline != nil && jitNoInline(cl.fn) ||
+	if x.cbLeft || cl == nil || cl.fn == fb.fn || jitNoInline != nil && jitNoInline(cl.fn) ||
 		!r.jitInlinable(cl.fn) && !r.jitInlinesCalls(cl, jitInlineDepth-1) {
 		return ssa.InlineSite{}, false
 	}
@@ -6927,17 +6934,52 @@ func (fb *jitFeedback) callbackInline(x *jitInline, argc int) (ssa.InlineSite, b
 	for _, in := range p.Code {
 		k.strings = k.strings || in.Op == ir.StringMethod || in.Op == ir.StringCode
 	}
-	// The one closure: its captured bindings in its cells, as an inlined
-	// call's (jitFeedback's Inline).
 	site := ssa.InlineSite{
 		Program: p, Feedback: &jitFeedback{r: r, fn: cl.fn, cl: cl, root: k},
-		Callee: uintptr(unsafe.Pointer(x.cbObj)), Closure: uintptr(unsafe.Pointer(cl)), Argc: argc, Method: true,
+		Closure: uintptr(unsafe.Pointer(cl)), Argc: argc, Method: true,
 		Params: cl.fn.ParamCount, ThisSlot: this, Coerce: cl.fn.CoerceThis, ReadsArguments: reads,
-		Upvalues: jitUpvalueCells(cl),
 	}
-	k.holders = append(k.holders, x.cbObj)
-	k.inlined = append(k.inlined, cl)
+	if !x.byCode && x.cbObj != nil {
+		// The one closure: its captured bindings in its cells, as an
+		// inlined call's (jitFeedback's Inline).
+		site.Callee, site.Upvalues = uintptr(unsafe.Pointer(x.cbObj)), jitUpvalueCells(cl)
+		k.holders = append(k.holders, x.cbObj)
+		k.inlined = append(k.inlined, cl)
+	}
 	return site, true
+}
+
+// madeCallback is the closure the method call at pc of fb's function is
+// given, if its code makes it just before the call -- a closure of cl's
+// function, made at the instruction before the call, or before the one
+// that pushes the loop's this -- which native code inlining the call need
+// not make (ssa.MadeCallback): its template, which the code keeps, as the
+// inlined frame's closure an exit names, and what it captures. Not an
+// arrow that reads its maker's new.target or super (jitNeedsMaker).
+func (fb *jitFeedback) madeCallback(pc int, cl *closure) *ssa.MadeCallback {
+	for q := pc - 1; q >= 0 && q >= pc-2; q-- {
+		in := fb.fn.Code[q]
+		if in.Op != bytecode.OpClosure || int(in.A) >= len(fb.cl.consts) {
+			continue
+		}
+		c := &fb.cl.consts[in.A]
+		t := c.template()
+		if t == nil || t.fn != cl.fn || jitNeedsMaker(*c) {
+			return nil
+		}
+		caps := make([]int32, len(t.fn.Upvalues))
+		for i, desc := range t.fn.Upvalues {
+			caps[i] = int32(desc.Index) << 1
+			if desc.FromParent {
+				caps[i] |= 1
+			}
+		}
+		k := fb.keep()
+		k.inlined = append(k.inlined, t)
+		k.made = append(k.made, t)
+		return &ssa.MadeCallback{PC: q, Template: uintptr(unsafe.Pointer(c)), Closure: uintptr(unsafe.Pointer(t)), Captures: caps}
+	}
+	return nil
 }
 
 // setLoopSlots notes that e's code for fn holds slots of its loops (ssa's
@@ -7002,6 +7044,71 @@ func (r *Runtime) jitPushLoopFrame(f *frame, loop uint64, written bool) {
 	if len(nf.openUpvalues) != 0 {
 		nf.openUpvalues = nf.openUpvalues[:0]
 	}
+}
+
+// jitMaterialize makes, in f, the frame of e's code that an exit left, the
+// closures the code did not make (jitEntry's ssaMade, ssa.MadeCallback):
+// a slot that holds the template of one, where the closure would be, gets
+// the closure, made as the interpreter's closure instruction makes it on
+// the frame -- what it captures the frame's, its cells open on the frame's
+// slots once native code has left it -- one for each template, which
+// every slot naming it shares, as the code would have made one: as V8's
+// deoptimizer materializes the objects escape analysis removed. Go runs
+// nothing of the frame before: the exit has written it, its records and
+// cells.
+func (r *Runtime) jitMaterialize(f *frame, e *jitEntry) {
+	if e == nil || len(e.ssaMade) == 0 || f.cl == nil {
+		return
+	}
+	var made [4]struct {
+		t *closure
+		o *Object
+	}
+	n := 0
+	fix := func(v *Value) {
+		t := v.template()
+		if t == nil || !slices.Contains(e.ssaMade, t) {
+			return
+		}
+		for i := range n {
+			if made[i].t == t {
+				*v = Obj(made[i].o)
+				return
+			}
+		}
+		o := r.makeClosure(f, templateValue(t))
+		if n < len(made) {
+			made[n].t, made[n].o = t, o
+			n++
+		}
+		*v = Obj(o)
+	}
+	for i := range f.locals {
+		fix(&f.locals[i])
+	}
+	end := min(len(r.stack), f.base+max(f.cl.fn.MaxStack, e.loopSlots))
+	for i := f.base; i < end; i++ {
+		fix(&r.stack[i])
+	}
+	r.jit.materialized += uint64(n)
+}
+
+// jitLoopCallback is the callback of the loop of a built-in's call native
+// code was making in f (abi.Context's Loop, loop), as its slots hold it --
+// the closure of a callback inlined in it, which Go makes the frame of at
+// an exit inside it: the template's, for one the code did not make
+// (ssa.MadeCallback), which the frame's slot holds made (jitMaterialize).
+func (r *Runtime) jitLoopCallback(f *frame, loop uint64, tmpl *closure) (*closure, *Object) {
+	at := f.base + int(loop&0xffffffff) - 1 + 1
+	if loop == 0 || at >= len(r.stack) || !r.stack[at].IsObject() {
+		panic("jit: an inlined callback's loop has no callback")
+	}
+	o := r.stack[at].Object()
+	fd := o.fn()
+	if fd == nil || fd.closure == nil || fd.closure.fn != tmpl.fn {
+		panic("jit: an inlined callback's loop has another callback")
+	}
+	return fd.closure, o
 }
 
 // jitLoopLocals is how many of a loop's slots Go goes on from (ssa's
@@ -7756,8 +7863,8 @@ func (e *jitEntry) setSSA(s *jitState, fn *bytecode.Function, p *ir.Program, cod
 	e.ssaSerial++
 	e.ssaProg = p
 	e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaHostsLeft = fb.inlinedAt, fb.definesUnfed, fb.cells, fb.hostsLeft
-	e.ssaStrings, e.ssaInlined, e.ssaPools = fb.strings, fb.inlined, fb.pools
-	e.ssaCallbacks = fb.callbacks
+	e.ssaStrings, e.ssaInlined, e.ssaPools, e.ssaMade = fb.strings, fb.inlined, fb.pools, fb.made
+	e.ssaCallbacks, e.ssaUnmade = fb.callbacks, fb.unmade
 	s.setLinks(e, fb.links)
 	e.ssaKeeps = max(e.ssaKeeps, fb.keeps)
 	e.link.setCode(code)
@@ -9620,6 +9727,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			// one Go ran meanwhile.
 			s.ssaCtx = ctx
 			r.jitApplyRecords(f, this, ctx)
+			r.jitMaterialize(f, e)
 			jitHandlers(f, e.ssaProg, exitPC)
 			if err == nil && f.cl.fn.Code[exitPC].Op == bytecode.OpSuperCall {
 				// A super() native code made, its parent finished by Go.
@@ -9660,6 +9768,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			// records, its frame's included, to Go.
 			e.ssaStats.records += ctx.Records
 			r.jitApplyRecords(f, e.this, ctx)
+			r.jitMaterialize(f, e)
 			exitPC, exitDepth := int(ctx.ExitPC), int(ctx.ExitDepth)
 			jitHandlers(f, e.ssaProg, exitPC)
 			// Past its call meanwhile, as a stack trace shows it.
@@ -9710,6 +9819,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 		}
 		e.ssaStats.records += ctx.Records
 		r.jitApplyRecords(f, e.this, ctx)
+		r.jitMaterialize(f, e)
 		jitHandlers(f, e.ssaProg, int(ctx.ExitPC))
 		if loop := jitLoopAt(e.loops, ctx, f, int(ctx.ExitPC)); loop != 0 {
 			// A loop of a built-in's call that left -- a check of its, or
@@ -10305,6 +10415,16 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure) (Value, e
 	}
 	for k := range n {
 		l := &s.unwinding[start+k]
+		if l.inline && l.owner != nil && slices.Contains(l.owner.ssaMade, l.cl) {
+			// A loop's callback its caller's code did not make
+			// (ssa.MadeCallback): the closure Go made in its place, which
+			// the caller's loop's slots hold (jitMaterialize).
+			pf, loop := s.goRuns[idx].f, s.ssaCtxs[idx].Loop
+			if k > 0 {
+				pf, loop = s.unwindingFrames[start+k-1], s.unwinding[start+k-1].loop
+			}
+			l.cl, l.callee = r.jitLoopCallback(pf, loop, l.cl)
+		}
 		fn := l.cl.fn
 		var f *frame
 		if l.gen != nil {
@@ -10380,6 +10500,11 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure) (Value, e
 				// frame's, open on its slots now, which closes them as it is
 				// popped.
 				jitReopenCells(f, c)
+			}
+			if !l.inline {
+				// The closures its code did not make, where its frame names
+				// them.
+				r.jitMaterialize(f, r.jitEntryOf(l.cl))
 			}
 			f.thisRef, f.withScopes, f.evalVars, f.native, f.savedSP = nil, nil, nil, "", 0
 			if !l.inline && l.construct && fn.Kind == bytecode.KindDerivedConstructor {

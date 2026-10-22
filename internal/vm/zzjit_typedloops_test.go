@@ -98,9 +98,9 @@ func TestJITTypedArrayLoops(t *testing.T) {
 	if r.jit.loopsFinished == 0 {
 		t.Error("Go went on with no loop")
 	}
-	// Each one's loop native, its callback called by it natively: the
-	// call costs Go only its method's read, t.forEach, which native code
-	// does not read from a typed array.
+	// Each one's loop native, its callback inlined in it, called by it
+	// natively not at all: the call costs Go only its method's read,
+	// t.forEach, which native code does not read from a typed array.
 	for _, c := range []struct{ fn, cb, run string }{
 		{"eachSum", "eachCb", "drive_eachSum(10, i32)"}, {"reduceInit", "reduceCb", "drive_reduceInit(10, i32)"},
 		{"someAt", "someCb", "drive_someAt(10, i32, 99)"}, {"findIndexOf", "findCb", "drive_findIndexOf(10, i32, 99)"},
@@ -114,8 +114,8 @@ func TestJITTypedArrayLoops(t *testing.T) {
 		if _, err := r.Run(compileForTest(t, c.run)); err != nil {
 			t.Fatal(err)
 		}
-		if n := cb.link.in - in; n < 80 {
-			t.Errorf("%s's callback called natively %d times of 80", c.fn, n)
+		if n := cb.link.in - in; n != 0 || len(e.ssaInlined) == 0 {
+			t.Errorf("%s's callback called natively %d times of 80, not inlined", c.fn, n)
 		}
 		if n := e.ssaStats.hosts - hosts; n != 0 {
 			t.Errorf("%s left its code %d times", c.fn, n)

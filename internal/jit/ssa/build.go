@@ -137,13 +137,34 @@ type InstanceOfFeedback interface {
 // Inline, if the VM gives one, is the callback to inline in the loop, as
 // V8's JSCallReducer inlines a forEach's callback into the loop it makes:
 // the closure the site's callback has been (InlineSite's Callee, which the
-// loop checks it is given).
+// loop checks it is given), or, where Made says the caller makes the
+// callback just before the call, a closure of its function -- Callee 0,
+// since each call is given a new one -- which, its call inlined, is never
+// made: Made says where, and what it would capture.
 type ForEachSite struct {
 	Fn       uintptr
 	Kind     int
 	Proto    uintptr
 	Callback CallSite
 	Inline   *InlineSite
+	Made     *MadeCallback
+}
+
+// MadeCallback is a callback a forEach, or another loop ForEachSite names,
+// is given that the caller's own code makes just before the call (an
+// ir.Closure at PC), a closure of the function ForEachSite's Inline is:
+// Template is the address of the function's template, a VM value, which a
+// frame state holds in the closure's place, as a cell (OpConstCell), for
+// Go to make the closure from at an exit, as V8's deoptimizer materializes
+// an object escape analysis removed; Closure is the template's own address,
+// the inlined frame's closure an exit names (InlineState's Closure); and
+// Captures are what the closure would capture, in order: index<<1|1 the
+// maker's local, index<<1 the maker's own captured binding.
+type MadeCallback struct {
+	PC       int
+	Template uintptr
+	Closure  uintptr
+	Captures []int32
 }
 
 // ForEachFeedback is Feedback that knows the forEach, or another of the
@@ -206,8 +227,10 @@ type forEachPlan struct {
 	site       ForEachSite
 	base, keep int
 	// inline is the callback inlined in the loop (ForEachSite's Inline),
-	// if planning inlined it.
+	// if planning inlined it, and made says the caller's code never makes
+	// it (ForEachSite's Made).
 	inline *frame
+	made   bool
 }
 
 // forEachAt is the forEach, or another loop, the method call at pc of the
@@ -238,20 +261,46 @@ func (b *builder) forEachAt(pc int) (ForEachSite, bool) {
 // inlining's rules and bounds allow it, as any callee's: a method call of
 // three arguments, or reduce's four, whose this, if it reads one, is the
 // call's as it is -- not a sloppy function's, which would coerce it --
-// and one that returns natively, the loop going on after it. It reports
-// whether it planned it so.
+// and one that returns natively, the loop going on after it. Where the
+// root's code makes the callback just before the call (ForEachSite's
+// Made, madeAt), the closure is not made: the inlined code reads and
+// assigns what it captured as the root's own slots (InlineSite's
+// Captured), and an exit's frame names its template where it would be,
+// for Go to make it there. It reports whether it planned it so.
 func (b *builder) planCallback(pc int, fp *forEachPlan, total *int) bool {
 	if fp.site.Inline == nil || fp.site.Inline.Program == nil || b.inlines >= maxInlines || b.cur.nest >= maxInlineDepth {
 		return false
 	}
 	s := *fp.site.Inline
+	made := fp.site.Made
+	if made != nil && !b.madeAt(pc, made) {
+		made = nil
+	}
 	argc := 3
 	if fp.site.Kind&abi.LoopKindMask == abi.LoopReduce {
 		argc = 4
 	}
-	if s.Callee == 0 || s.Construct || s.Restart || s.Forward || s.Arguments || !s.Method || s.Argc != argc || s.Params < 0 ||
+	if made == nil && s.Callee == 0 || s.Construct || s.Restart || s.Forward || s.Arguments || !s.Method || s.Argc != argc || s.Params < 0 ||
 		s.Coerce && s.ThisSlot >= 0 {
 		return false
+	}
+	if made != nil {
+		// Its captured bindings, the root's slots: a local of its own,
+		// which a closure captures, or a binding it captured itself.
+		p := b.root.p
+		s.Callee, s.Closure, s.Upvalues = 0, made.Closure, 0
+		s.Captured = make([]int, len(made.Captures))
+		for i, c := range made.Captures {
+			k := int(c >> 1)
+			switch {
+			case c&1 != 0 && k < p.UpvalueBase && p.IsCaptured(k):
+				s.Captured[i] = k
+			case c&1 == 0 && k < p.Upvalues:
+				s.Captured[i] = p.UpvalueBase + k
+			default:
+				return false
+			}
+		}
 	}
 	calls, ok := InlineCalls(s.Program)
 	if !ok || *total+len(s.Program.Code) > maxInlineTotal {
@@ -267,9 +316,53 @@ func (b *builder) planCallback(pc int, fp *forEachPlan, total *int) bool {
 	if !ok {
 		return false
 	}
-	fp.inline = fr
+	fp.inline, fp.made = fr, made != nil
 	b.f.Callbacks++
+	if made != nil {
+		b.f.Unmade++
+		if b.made == nil {
+			b.made = map[int]uintptr{}
+		}
+		b.made[made.PC] = made.Template
+	}
 	return true
+}
+
+// madeAt reports whether made, the callback of the loop at pc, is a closure
+// the root's code makes just before the call and gives only to it: its
+// instruction at made.PC, made natively (host), writes the callback's
+// operand, and the instructions between -- the loop's this, if it has
+// one -- are copies that neither read nor write that slot, which nothing
+// jumps into, nor a handler catches at, nor an entry enters: what the
+// slot holds there is the closure, never read but by the call, and dead
+// after it. Only an exit's frame state names it then.
+func (b *builder) madeAt(pc int, made *MadeCallback) bool {
+	p := b.p
+	pc0 := made.PC
+	if b.cur != b.root || pc0 < 0 || pc0 >= pc || !reachable(p, pc0) || p.Code[pc0].Op != ir.Closure || b.host(pc0) || made.Template == 0 || made.Closure == 0 {
+		return false
+	}
+	slot := p.Locals + p.Maps[pc].Depth - b.calls[pc][0].Argc
+	if p.Code[pc0].Dest != slot {
+		return false
+	}
+	for q := pc0 + 1; q < pc; q++ {
+		if in := p.Code[q]; in.Op != ir.Copy || in.Dest == slot || in.Left.Slot == slot {
+			return false
+		}
+	}
+	into := func(target int) bool { return target > pc0 && target <= pc }
+	for q, in := range p.Code {
+		if (in.Op == ir.Jump || in.Op == ir.Branch || in.Op == ir.IterStep && !in.When) && into(in.Target) && reachable(p, q) {
+			return false
+		}
+	}
+	for _, h := range p.Handlers {
+		if into(int(h.PC)) {
+			return false
+		}
+	}
+	return !slices.ContainsFunc(p.Entries, into)
 }
 
 // forEachCall makes the forEach, or another loop, at pc a loop of the
@@ -327,6 +420,9 @@ func (b *builder) forEachCall(blk *Block, pc int, fp forEachPlan) {
 	same := at(blk, call, OpSameObject, None, object)
 	same.Const = ir.Value{Bits: uint64(fp.site.Fn)}
 	switch fr := fp.inline; {
+	case fr != nil && fp.made:
+		// A closure the code would have made just before (ForEachSite's
+		// Made): a function, and the one inlined.
 	case fr != nil:
 		// The closure inlined, which a function is: any other, Go's call.
 		is := at(blk, call, OpSameObject, None, at(blk, call, OpObjectOf, Ptr, cb))
@@ -1514,6 +1610,10 @@ func allocOnly(v *Value) bool {
 // that reads its arguments by index (ir.ArgumentRead) -- none of them a
 // parameter its arguments object aliases: the reads are the call's
 // arguments, and its frame keeps them at an exit, as Arguments' does.
+// Captured, for a callback its caller makes and never does (ForEachSite's
+// Made), are the caller's slots its captured bindings are, by index: its
+// reads and assignments of them are the caller's own, in place, as V8's
+// inlined code reads a context escape analysis removed.
 type InlineSite struct {
 	Program         *ir.Program
 	Feedback        Feedback
@@ -1533,6 +1633,7 @@ type InlineSite struct {
 	Arguments       bool
 	Upvalues        uintptr
 	ReadsArguments  bool
+	Captured        []int
 }
 
 // Inlining's bounds: a callee's instructions, all callees' in a function,
@@ -1843,6 +1944,10 @@ type builder struct {
 	// forEaches are the forEach calls the root makes a loop of, by PC
 	// (forEachAt), decided in planning.
 	forEaches map[int]forEachPlan
+	// made are the closures the root's code does not make, by PC: the
+	// callbacks of loops their calls are inlined in (forEachPlan's made),
+	// each its template's address (MadeCallback's Template).
+	made map[int]uintptr
 	// typedArrays are the global reads whose bindings held typed arrays
 	// (GlobalSite's Typed), which element reads of them read as such.
 	typedArrays map[*Value]bool
@@ -1978,8 +2083,9 @@ func (b *builder) hostOf(pc int) bool {
 	case ir.UpvalueRead, ir.UpvalueWrite:
 		// The function's own captured bindings, which its context has;
 		// an inlined callee's where its closure's cells are known
-		// (InlineSite's Upvalues); the rest Go's.
-		return b.cur != b.root && b.cur.site.Upvalues == 0
+		// (InlineSite's Upvalues), or are the root's own (Captured); the
+		// rest Go's.
+		return b.cur != b.root && b.cur.site.Upvalues == 0 && b.cur.site.Captured == nil
 	case ir.StringAdd, ir.StringConcat, ir.HasProperty, ir.DeleteProperty:
 		// A call of Go (GoAdd, GoConcat, GoHas, GoDelete), where the VM
 		// answers it.
@@ -3732,7 +3838,11 @@ func (b *builder) plan() error {
 					b.nslots += loopSlots(site.Kind)
 					b.f.Keeps += loopKeeps(site.Kind)
 					b.f.Loops, b.f.LoopsEnd = true, b.nslots
-					b.planCallback(pc, &fp, &total)
+					if b.planCallback(pc, &fp, &total) && fp.made {
+						// The closure is not made: nothing exits there,
+						// for Go to go on after.
+						entries[fp.site.Made.PC+1] = false
+					}
 					b.forEaches[pc] = fp
 				}
 			}
@@ -5228,6 +5338,19 @@ func (b *builder) instruction(blk *Block, pc int) {
 			c.Const.Bits = uint64(w.WalkedCloseCell())
 		}
 	case ir.Closure, ir.CloseUpvalues:
+		if tmpl := b.made[pc]; tmpl != 0 && in.Op == ir.Closure && b.cur == b.root {
+			// A loop's callback inlined in it, which nothing else sees
+			// (madeAt): not made. Its slot holds its template, a cell's,
+			// which only frame states name -- Go makes the closure from it
+			// where an exit's frame has it, as V8's deoptimizer
+			// materializes an object escape analysis removed.
+			cell := f.newValue(blk, OpConstCell, Source)
+			cell.Const = ir.Value{Bits: uint64(tmpl)}
+			v := f.newValue(blk, OpLoadCell, Tagged, cell)
+			v.Shadow = cell
+			b.assign(in.Dest, blk, v)
+			break
+		}
 		if b.host(pc) {
 			blk.ExitKind = ir.HostExit
 			blk.State = state()
@@ -5377,6 +5500,32 @@ func (b *builder) instruction(blk *Block, pc int) {
 		}
 		b.goConcat(blk, in, operand, guard)
 	case ir.UpvalueRead, ir.UpvalueWrite:
+		if b.cur != b.root && b.cur.site.Captured != nil && int(in.Key) < len(b.cur.site.Captured) {
+			// A callback the root never made (InlineSite's Captured): its
+			// captured binding the root's own slot, read where the root
+			// has it and assigned as the root assigns it -- in its cell,
+			// where an exit's frame and what Go runs find it -- exiting
+			// to the callee's state.
+			slot := b.cur.site.Captured[in.Key]
+			if in.Op == ir.UpvalueRead || in.Check {
+				v := b.read(slot, blk)
+				if in.Check {
+					guard(OpCheckInit, None, ir.GuardExit, v)
+				}
+				if in.Op == ir.UpvalueRead {
+					b.assign(in.Dest, blk, v)
+					break
+				}
+			}
+			x := operand(in.Left)
+			w := guard(OpPropWrite, None, ir.HostExit, b.cellOf(blk, slot), x)
+			w.Key, w.Upvalue = localKey(slot), true
+			if b.root.p.Cells || slot >= b.root.p.UpvalueBase {
+				w.Key = upvalueKey
+			}
+			b.write(slot, blk, x)
+			break
+		}
 		if b.cur != b.root && b.cur.site.Upvalues != 0 {
 			// An inlined callee's captured binding, read from its cell
 			// anew each time (OpUpvalueCell's Aux 2): a call may assign it.

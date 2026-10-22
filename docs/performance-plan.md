@@ -1107,6 +1107,46 @@ Open from it:
   `CALL` and `RET` need, is not worth its risk for that. 7 registers
   spill `moveDisks`' parameters at entry.
 
+Step 2 below, done since (2026-10-22): the array methods' callbacks
+inlined in the loops native code makes of their calls. A callback that
+is the one closure the loop has been given is inlined, the loop checking
+it once; one the caller makes just before the call -- `a.forEach((x) =>
+...)`, the usual form -- is inlined and never made: it reads and assigns
+what it captures as the caller's own slots, and an exit's frame state
+holds its template where the closure would be, which Go makes the closure
+from (the VM's `jitMaterialize`), as V8's deoptimizer materializes what
+escape analysis removed. Counted with `-jitreport` and the runner's
+allocations, a run of each micro-benchmark (`-n 1`): the callbacks of
+`array_some`, `reduce`, `map`, `filter`, `forEach` and `typed_forEach`,
+called natively 1.27 to 2.91 million times, are called no more; the runs'
+allocations fall from 54,000 to 24,500 (`some`, `forEach`), 50,200 to
+20,600 (`reduce`), 70,100 to 57,100 (`map`), 119,300 to 106,300
+(`filter`) and 52,400 to 25,000 (typed); `jitprof` over the six (`-n
+10`), 390 native samples to 111, the calls' and call entries' 121 to
+none. Are We Fast Yet's NBody: `advance`'s callback, called natively
+1,249,505 times a run, is inlined, the run's allocations 504,000 to
+252,000 (85 MB to 8.6 MB). Havlak, Json, CD and Octane's Box2D, PdfJS
+and Typescript compile, enter and leave as before: Havlak's and
+DeltaBlue's forEach are SOM's `Vector.forEach`, a script method with a
+loop, whose callbacks' closures (`newClosureIn`, 9% of Havlak) are made
+still.
+
+Open from it:
+
+- The context: a function whose locals the callback captures takes their
+  cells at each entry still (`ssa.GoCells`), one allocation a call where
+  the closure had been a second. Not taking them needs them made at an
+  exit too, where a closure made there that escapes would not share them
+  with the native code that goes on: step 3.
+- The loop's index and the callback's result are boxed at each turn
+  (`boxf`, a fifth of the six's native samples): the loop's phis are not
+  unboxed.
+- `closure_callback` and Havlak give closures to script functions with
+  loops, which callees with loops not being inlined keeps out.
+- A callback made at the call whose this argument, or reduce's initial
+  value, is more than a local's copy (`a.forEach(f, this.x)`) is made,
+  called natively by its code, not inlined.
+
 The plan, in order -- the compiler first, since micro-optimizations do not
 close a gap of three to seven times:
 

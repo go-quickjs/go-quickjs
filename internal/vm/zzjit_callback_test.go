@@ -2,14 +2,21 @@
 
 package vm
 
-import "testing"
+import (
+	"runtime"
+	"testing"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+)
 
 // callbackSetup's functions each make a loop of a built-in's call whose
-// callback native code inlines in the loop (ssa's inlineCallback), where
-// it is a function made once, which the loop checks it is given -- and
-// arrows and functions made at the call, which it calls natively, reading
-// and assigning what they capture. Then each meets what leaves native
-// code inside the callback, where Go makes the callback's frame and goes
+// callback native code inlines in the loop (ssa's inlineCallback): arrows
+// and functions made at the call, which native code does not make
+// (ssa.MadeCallback) -- reading and assigning what they capture, the
+// caller's locals and what the caller captured itself -- and functions
+// made once, which the loop checks it is given. Then each meets what
+// leaves native code inside the callback, where Go makes the callback's
+// frame, and the closure the code did not make (jitMaterialize), and goes
 // on with the loop (jitLoopFinish): a hole, a property of a shape the code
 // was not compiled for, a throw, a call never seen made, an array the
 // callback shortens or lengthens, a this given, a callee inlined in the
@@ -113,7 +120,8 @@ func callbackDrivers() string {
 // as V8's JSCallReducer inlines it, where the callee may be inlined: each
 // answer is the interpreter's, whatever leaves native code inside it --
 // at every point, the loop's turns before it done natively and those
-// after it by Go, the callback's frame made by Go.
+// after it by Go, the callback's frame made by Go, and the closure the
+// caller's code did not make made in its place.
 func TestJITCallbackInlined(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -142,19 +150,40 @@ func TestJITCallbackInlined(t *testing.T) {
 	if r.jit.loopsFinished == 0 {
 		t.Error("Go went on with no loop")
 	}
-	// The callbacks inlined: the functions made once.
-	for _, name := range []string{"eachKnown", "eachWith", "knownShapes"} {
-		if e := jitCallbackEntry(r, name); e == nil || e.ssa == nil || e.ssaCallbacks != 1 {
-			t.Errorf("%s inlines no callback: %+v", name, e)
+	if r.jit.materialized == 0 {
+		t.Error("Go made no closure the code did not make")
+	}
+	// The callbacks inlined, and those of them made at the call not made:
+	// how many of each each function's code has.
+	for _, c := range []struct {
+		name            string
+		inlined, unmade int
+	}{
+		{"eachMade", 1, 1}, {"reduceMade", 2, 2}, {"mapMade", 1, 1}, {"filterMade", 1, 1}, {"someMade", 1, 1},
+		{"everyMade", 1, 1}, {"findMade", 1, 1}, {"findIndexMade", 1, 1}, {"typedMade", 1, 1}, {"inner", 1, 1},
+		{"perIteration", 1, 1}, {"eachKnown", 1, 0}, {"eachWith", 1, 0}, {"knownShapes", 1, 0}, {"eachThis", 1, 1}, {"holes", 1, 1},
+		{"mapHoles", 1, 1}, {"shapes", 1, 1}, {"reduceShapes", 1, 1}, {"throwsIn", 1, 1}, {"nested", 1, 1}, {"genEach", 2, 2},
+		// The this a sloppy callback coerces, and a this read from a global
+		// between the closure and the call: not inlined.
+		{"sloppyThis", 0, 0}, {"globalThisArg", 0, 0},
+	} {
+		e := jitCallbackEntry(r, c.name)
+		if e == nil || e.ssa == nil || e.ssaCallbacks != c.inlined || e.ssaUnmade != c.unmade {
+			if e == nil {
+				t.Errorf("%s: no entry", c.name)
+				continue
+			}
+			t.Errorf("%s inlines %d callbacks, %d of them not made; want %d, %d", c.name, e.ssaCallbacks, e.ssaUnmade, c.inlined, c.unmade)
 		}
 	}
 }
 
 // The functions of callbackSetup entered by Go, from code the interpreter
 // runs, never called natively: an exit inside the callback inlined in a
-// loop goes back to the run Go entered, which makes the callback's frame,
-// finishes it, and goes on with the loop after the callback's index
-// (runSSA). Each answer is the interpreter's.
+// loop goes back to the run Go entered, which makes the callback's frame
+// and the closure the code did not make, finishes them, and goes on with
+// the loop after the callback's index (runSSA). Each answer is the
+// interpreter's.
 func TestJITCallbackEnteredByGo(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -187,13 +216,13 @@ func TestJITCallbackEnteredByGo(t *testing.T) {
 	rounds = append(rounds, `(() => { try { throwsIn(3) } catch (e) { return e.stack } })()`,
 		`(() => { try { atShape = 3; goStack() } catch (e) { return e.stack } })()`)
 	r := jitAgreesForTest(t, setup, rounds...)
-	for _, name := range []string{"goWith", "goKnown"} {
+	for _, name := range []string{"goShapes", "goReduce", "goNested", "goMap", "goSome", "goHoles", "goWith", "goKnown"} {
 		if e := jitCallbackEntry(r, name); e == nil || e.ssa == nil || e.ssaCallbacks == 0 || e.ssaStats.entries == 0 {
 			t.Errorf("%s inlines no callback, or Go entered it not: %+v", name, e)
 		}
 	}
-	if r.jit.loopsFinished == 0 {
-		t.Error("Go went on with no loop")
+	if r.jit.materialized == 0 || r.jit.loopsFinished == 0 {
+		t.Errorf("Go made %d closures, finished %d loops", r.jit.materialized, r.jit.loopsFinished)
 	}
 }
 
@@ -205,6 +234,88 @@ func jitCallbackEntry(r *Runtime, name string) *jitEntry {
 		}
 	}
 	return nil
+}
+
+// jitCallbackMallocs is how many allocations src makes in r, a run of it.
+func jitCallbackMallocs(t *testing.T, r *Runtime, src string) uint64 {
+	t.Helper()
+	prog := compileForTest(t, src)
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	if _, err := r.Run(prog); err != nil {
+		t.Fatal(err)
+	}
+	runtime.ReadMemStats(&after)
+	return after.Mallocs - before.Mallocs
+}
+
+// A loop's callback made at the call is inlined in the loop and never
+// made: the loop neither calls it natively nor leaves native code, and a
+// call of its maker allocates one object fewer than where the callback is
+// not inlined -- its closure, made at each call from its pool or Go's. What
+// it allocates still is the context of the locals the closure would have
+// captured (ssa.GoCells). A callback made once and given to the loop each
+// time is inlined too, the loop checking it.
+func TestJITCallbackNotMade(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := callbackSetup + callbackDrivers() + `
+		function eachArrow(k) { let s = 0; nums.forEach((x) => { s += x * k }); return s }
+		function someArrow(n) { return nums.some((x) => x === n) }
+		function reduceArrow(k) { return nums.reduce((a, x) => a + x * k, 0) }
+		function eachFunction(k) { let s = 0; nums.forEach(function (x, i) { s += x * k + i }); return s }
+		function drive(n) { let r = 0; for (let i = 0; i < n; i++) r += eachArrow(i) + someArrow(i) + reduceArrow(i) + eachFunction(i); return r }`
+	rounds := []string{`drive(60)`, `drive(60)`, `drive_eachKnown(60)`, `drive_eachKnown(60)`}
+	// What a call allocates, 4,000 calls of the callbacks' makers more.
+	perCall := func(r *Runtime) float64 {
+		few := jitCallbackMallocs(t, r, `drive(100)`)
+		many := jitCallbackMallocs(t, r, `drive(1100)`)
+		return (float64(many) - float64(few)) / 4000
+	}
+	// The callbacks not inlined: called natively, each closure made.
+	jitNoInline = func(fn *bytecode.Function) bool { return fn.Name == "" || fn.Name == "addTotal" }
+	called := jitAgreesForTest(t, setup, rounds...)
+	jitNoInline = nil
+	made := perCall(called)
+	r := jitAgreesForTest(t, setup, rounds...)
+	for _, name := range []string{"eachArrow", "someArrow", "reduceArrow", "eachFunction", "eachKnown"} {
+		if e := jitCallbackEntry(r, name); e == nil || e.ssa == nil || !e.loops || len(e.ssaInlined) == 0 {
+			t.Fatalf("%s inlines no loop's callback: %+v", name, e)
+		}
+		if e := jitCallbackEntry(called, name); e == nil || e.ssa == nil || !e.loops || len(e.ssaInlined) != 0 {
+			t.Fatalf("%s inlines its loop's callback where it may not: %+v", name, e)
+		}
+	}
+	callees := func() uint64 {
+		n := uint64(0)
+		for k, x := range r.jit.cache {
+			if fn := k.Value(); fn != nil && (fn.Name == "" || fn.Name == "addTotal") && x.link != nil {
+				n += x.link.in
+			}
+		}
+		return n
+	}
+	natives := callees()
+	hosts, goCalls, materialized := r.jit.hosts, r.jit.goCalls, r.jit.materialized
+	inlined := perCall(r)
+	if n := callees() - natives; n != 0 {
+		t.Errorf("the callbacks were called natively %d times", n)
+	}
+	if r.jit.hosts != hosts || r.jit.goCalls != goCalls || r.jit.materialized != materialized {
+		t.Errorf("the loops left native code %d times, called Go %d times, made %d closures", r.jit.hosts-hosts, r.jit.goCalls-goCalls, r.jit.materialized-materialized)
+	}
+	if made-inlined < 0.9 {
+		t.Errorf("a call of a callback's maker allocates %.2f times, %.2f where the callback is not inlined", inlined, made)
+	}
+	natives = callees()
+	if _, err := r.Run(compileForTest(t, `drive_eachKnown(100)`)); err != nil {
+		t.Fatal(err)
+	}
+	if n := callees() - natives; n != 0 {
+		t.Errorf("addTotal was called natively %d times", n)
+	}
 }
 
 // An inlined callback that leaves native code at every call is called
@@ -224,13 +335,18 @@ func TestJITCallbackLeavesOften(t *testing.T) {
 			try { nums.forEach(thrower) } catch (e) { return e + ':' + total }
 			return total
 		}
-		function drive(n) { let r = ''; for (let i = 0; i < n; i++) r += leavesKnown(i); return r }`
+		function leaves(k) {
+			let s = nums[0] - 1
+			try { nums.forEach((x, i) => { s += x * k; if (i === 6) throw s }) } catch (e) { return e + ':' + s }
+			return s
+		}
+		function drive(n) { let r = ''; for (let i = 0; i < n; i++) r += leavesKnown(i) + leaves(i); return r }`
 	rounds := []string{}
 	for range 6 {
 		rounds = append(rounds, `drive(40)`)
 	}
 	r := jitAgreesForTest(t, setup, rounds...)
-	for _, name := range []string{"leavesKnown"} {
+	for _, name := range []string{"leavesKnown", "leaves"} {
 		e := jitCallbackEntry(r, name)
 		if e == nil || e.ssa == nil || !e.loops {
 			t.Fatalf("%s makes no loop: %+v", name, e)

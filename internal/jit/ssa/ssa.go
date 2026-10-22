@@ -885,8 +885,9 @@ type Func struct {
 	Loops    bool
 	LoopsEnd int
 	// Callbacks counts the loops whose callbacks the code inlines in them
-	// (ForEachSite's Inline).
-	Callbacks int
+	// (ForEachSite's Inline), and Unmade those of them whose closures it
+	// does not make (ForEachSite's Made).
+	Callbacks, Unmade int
 	// FrameLocals is how many of the Locals are the frame's own; the rest,
 	// up to Locals, are captured bindings, which native code reads through
 	// their cells (abi.Context.Upvalues) and never writes. Build sets it to

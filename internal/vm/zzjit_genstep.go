@@ -235,6 +235,7 @@ func (r *Runtime) jitGenFrame(l *jitNativeLevel, c *abi.Context, past bool) *fra
 		r.jitApplyRecords(f, e.this, c)
 		s.ssaCtx = saved
 	}
+	r.jitMaterialize(f, e)
 	if e != nil {
 		jitHandlers(f, e.ssaProg, int(l.pc))
 	}
