@@ -424,8 +424,14 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		switch in.Op {
 		case bytecode.OpForOfStart, bytecode.OpForInStart, bytecode.OpIterNextOrJump, bytecode.OpIterClose, bytecode.OpIterCloseNormal,
 			bytecode.OpIterResume, bytecode.OpIterUnpackDelegate, bytecode.OpYieldStar, bytecode.OpIterStep, bytecode.OpIterRest:
-			if !m.ssa || m.callee {
-				// A loop's cursor is Go's, in the function's own frame.
+			if !m.ssa || m.forward || m.callee && (in.Op == bytecode.OpYieldStar || in.Op == bytecode.OpIterResume || in.Op == bytecode.OpIterUnpackDelegate) {
+				// A loop's cursor is Go's, an operand of the frame's: a
+				// function's own, or a native callee's, whose steps Go makes
+				// on the frame of its level (the VM's jitGoCallNested) and
+				// whose frame Go makes where it leaves, which a throw's
+				// unwinding closes the cursor of. An inlined callee's steps
+				// would each leave it, so the inliner takes no cursor
+				// (ssa's InlineCalls).
 				return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 			}
 			iters = true

@@ -1728,7 +1728,9 @@ func InlineCalls(p *ir.Program) ([]int, bool) {
 			continue
 		}
 		switch in.Op {
-		case ir.Call, ir.Closure, ir.CloseUpvalues:
+		case ir.Call, ir.Closure, ir.CloseUpvalues, ir.IterStep, ir.IterClose:
+			// A loop's cursor's step or its closing is Go's, which would
+			// leave the inlined frame at each.
 			return nil, false
 		case ir.Host:
 			calls = append(calls, pc)
