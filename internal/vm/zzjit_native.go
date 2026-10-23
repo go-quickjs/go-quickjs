@@ -854,12 +854,6 @@ type jitState struct {
 	// searchArgs are a search's arguments (jitSearch), given to its Go
 	// function, which keeps nothing of them, and cleared after.
 	searchArgs [2]Value
-	// copies are the object spreads Go learned to make by their layouts
-	// (jitCopyFast), made the first time one is learned.
-	copies *[jitCopyEntries]jitCopyEntry
-	// arrayIter is where arrays find their iteration's methods, to spread
-	// them by their elements (jitArrayIterates).
-	arrayIter jitArrayIter
 	// ssaShared is what the contexts from ssaSharedFrom on hold of what
 	// they share (jitShareContexts); ssaSharedGen counts the times either,
 	// or bounds, changed, which a call of Go compares, not the struct.
@@ -1071,6 +1065,16 @@ type jitState struct {
 	scans, serial, evicted, flushed, refusedRoom, discarded uint64
 	floor                                                   int
 	floorAt, agedAt, flushedAt                              uint64
+
+	// What follows is last so that it moves no field before it, which
+	// the interpreter's and the native code's calls of Go read.
+	//
+	// copies are the object spreads Go learned to make by their layouts
+	// (jitCopyFast), made the first time one is learned.
+	copies *[jitCopyEntries]jitCopyEntry
+	// arrayIter is where arrays find their iteration's methods, to spread
+	// them by their elements (jitArrayIterates).
+	arrayIter jitArrayIter
 }
 
 // Only selected own reference fields are prepared. The receiver bound keeps
