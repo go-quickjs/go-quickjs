@@ -1711,6 +1711,7 @@ func (c *core) allocate() error {
 		}
 	}
 	lap(PhaseScan)
+	scanSpills := spills
 
 	// What each native call saves: the values live across it in registers,
 	// each in a slot of its own past the spill slots while it lives, which
@@ -1773,6 +1774,9 @@ func (c *core) allocate() error {
 			}
 			c.saveAt[2*v.ID+1] = len(c.saves)
 		}
+	}
+	if CheckAllocations {
+		c.checkAllocation(iv, scanSpills)
 	}
 	return c.colorKeeps(iv, pos)
 }

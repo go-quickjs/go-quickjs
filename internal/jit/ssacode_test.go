@@ -27,6 +27,9 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/parser"
 )
 
+// Every compile checks its register allocation (mir.CheckAllocations).
+func init() { mir.CheckAllocations = true }
+
 // testValue is a VM value's layout: a number word and a pointer word.
 type testValue struct {
 	num uint64
@@ -1399,6 +1402,9 @@ func TestWorkspaceCompileAllocations(t *testing.T) {
 	if len(jobs) < 200 {
 		t.Fatalf("only %d programs compiled", len(jobs))
 	}
+	// The allocation check allocates, as the compiles do not.
+	defer func(on bool) { mir.CheckAllocations = on }(mir.CheckAllocations)
+	mir.CheckAllocations = false
 	allocs := testing.AllocsPerRun(3, func() {
 		for _, j := range jobs {
 			compile(j)

@@ -5,6 +5,8 @@ package vm
 import (
 	"os"
 	"testing"
+
+	"github.com/go-quickjs/go-quickjs/internal/jit/mir"
 )
 
 // TestMain stops the JIT cache's flush clock (jitFlushNow) for this
@@ -14,7 +16,11 @@ import (
 // enough: TestJITBigLeaf did, under checkptr on Windows. The flush's own
 // tests set its clock themselves (jitFlushForTest); the conformance and
 // stress runs keep the real one.
+//
+// Every compile checks its register allocation (mir.CheckAllocations),
+// but where a test or a benchmark times the compiles.
 func TestMain(m *testing.M) {
 	jitFlushNow = func() uint64 { return 0 }
+	mir.CheckAllocations = true
 	os.Exit(m.Run())
 }

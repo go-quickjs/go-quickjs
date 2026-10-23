@@ -148,6 +148,9 @@ var arm64GPRs, arm64FPRs = func() (gprs, fprs []int) {
 func compileARM64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err error) {
 	defer func() {
 		if v := recover(); v != nil {
+			if e, ok := v.(*AllocationError); ok {
+				panic(e)
+			}
 			code, err = nil, fmt.Errorf("%w: %v", ErrUnsupported, v)
 		}
 	}()

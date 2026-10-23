@@ -102,6 +102,8 @@ type jitFields struct {
 //	           re-entry is taken
 //	deopt=N    finish the invocation in the interpreter at every Nth such
 //	           exit, from wherever native code had got to
+//	check      have every compile check its register allocation, and panic
+//	           where it is wrong (mir.CheckAllocations)
 //
 // It is read once, as QJS_NOTREE is, and each runtime takes a copy.
 type jitStressConfig struct {
@@ -124,6 +126,8 @@ func parseJITStress(spec string) jitStressConfig {
 			c.budget = uint16(n)
 		case "deopt":
 			c.deopt = uint16(n)
+		case "check":
+			mir.CheckAllocations = true
 		}
 	}
 	return c

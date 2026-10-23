@@ -196,6 +196,8 @@ func TestJITCompileCorpus(t *testing.T) {
 	// each the fastest of the runs -- a clock read around each compile's
 	// phases had read every few hundred microseconds on Windows -- and a
 	// phase's the difference.
+	defer func(on bool) { mir.CheckAllocations = on }(mir.CheckAllocations)
+	mir.CheckAllocations = false
 	var best [3]time.Duration
 	for run := range runs {
 		for k := range 3 {

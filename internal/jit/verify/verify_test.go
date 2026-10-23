@@ -36,6 +36,9 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/parser"
 )
 
+// Every compile checks its register allocation (mir.CheckAllocations).
+func init() { mir.CheckAllocations = true }
+
 var (
 	x86Reserved  = regexp.MustCompile(`\b(RSP|ESP|SP|SPL|RBP|EBP|BP|BPL|R14|R14L|R14W|R14B|R14D)\b`)
 	x86Forbidden = map[string]bool{"CALL": true, "PUSH": true, "POP": true, "PUSHF": true, "POPF": true, "SYSCALL": true, "INT": true, "ENTER": true, "LEAVE": true, "HLT": true, "UD2": true}

@@ -4459,6 +4459,8 @@ func TestJITStressDifferential(t *testing.T) {
 // 200 instructions, the size the compile budget names (below 50 us and
 // 64 KB of transient memory).
 func BenchmarkJITCompile(b *testing.B) {
+	defer func(on bool) { mir.CheckAllocations = on }(mir.CheckAllocations)
+	mir.CheckAllocations = false
 	var region strings.Builder
 	region.WriteString("function f(n){let a=1,b=2,c=3,d=4;for(let i=0;i<n;i++){")
 	for range 8 {
