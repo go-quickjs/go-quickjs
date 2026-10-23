@@ -445,10 +445,12 @@ func prepare(w *Workspace, f *ssa.Func, enc abi.Encoding, gprs, fprs []int) (*co
 	c.layout()
 	c.findLazy()
 	c.findBudgets()
+	lap(PhasePrepare)
 	if err := c.allocate(); err != nil {
 		return nil, err
 	}
 	c.findKeepRuns()
+	lap(PhaseSaves)
 	return c, nil
 }
 
@@ -1014,6 +1016,7 @@ func (c *core) allocate() error {
 			}
 		}
 	}
+	lap(PhaseUses)
 	// Block-level liveness, so that values live around a loop stay live for
 	// all of it. Only a value used outside the block that defines it can be
 	// live into a block: those are numbered, and the sets are over them, a
@@ -1070,6 +1073,7 @@ func (c *core) allocate() error {
 			}
 		}
 	}
+	lap(PhaseLiveness)
 	// Intervals: from definition to last use, stretched over every block
 	// where the value is live in or out.
 	iv := c.intervalList(nv) // by value ID; v is nil until made
@@ -1175,6 +1179,7 @@ func (c *core) allocate() error {
 			}
 		}
 	}
+	lap(PhaseIntervals)
 	// A phi and its arguments are given one register where they can be, as
 	// a linear scan's hints have it: the phi the register of an argument
 	// that is free when the phi begins, an argument the phi's if free when
@@ -1494,6 +1499,7 @@ func (c *core) allocate() error {
 		k := b2i(isFloat(it.v))
 		classes[k], rootIn[k] = append(classes[k], it), append(rootIn[k], r)
 	}
+	lap(PhaseHints)
 	c.used, c.usedList = [2]uint64{}, [2][]int{}
 	c.locs, c.hasLoc = c.locList(nv), c.bools(nv)
 	// Spill slots are reused as registers are: a spilled interval's slot is
@@ -1689,6 +1695,7 @@ func (c *core) allocate() error {
 			}
 		}
 	}
+	lap(PhaseScan)
 
 	// What each native call saves: the values live across it in registers,
 	// each in a slot of its own past the spill slots while it lives, which

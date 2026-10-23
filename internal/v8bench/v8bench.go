@@ -79,6 +79,11 @@ type Runtime interface {
 	EvalString(src string) (string, error)
 }
 
+// Clock is the time from some moment of the process's, as the runners time
+// a run: on Windows from the performance counter, whose resolution Go's
+// own clock there lacks. Commands time their own measurements by it.
+func Clock() time.Duration { return clock() }
+
 // A Reporter is a Runtime with something to say of each benchmark the fixed
 // mode runs, after its line: go-quickjs's what its JIT did (-jitreport).
 type Reporter interface {

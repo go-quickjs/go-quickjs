@@ -1897,12 +1897,19 @@ func (r *Runtime) compileSSA(fn *bytecode.Function, cl *closure, p *ir.Program, 
 	if e != nil && cl != nil {
 		r.jitSeenFeedback(cl, e)
 	}
-	code, fb, err := r.compileSSAKeeping(fn, cl, p, e, jitKeepLimit)
+	keepLimit := jitKeepLimit
+	code, fb, err := r.compileSSAKeeping(fn, cl, p, e, keepLimit)
 	if errors.Is(err, mir.ErrKeeps) {
 		// More keep cells live at once than the context has, which the
 		// build could not know: built again with no more than that, the
 		// calls past them left to Go.
-		code, fb, err = r.compileSSAKeeping(fn, cl, p, e, abi.MaxKeeps)
+		keepLimit = abi.MaxKeeps
+		code, fb, err = r.compileSSAKeeping(fn, cl, p, e, keepLimit)
+	}
+	if err == nil {
+		for range JITCompileRepeat {
+			r.jitCompileAgain(fn, cl, p, e, keepLimit)
+		}
 	}
 	return code, fb, err
 }
@@ -1926,34 +1933,17 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 	s.workAt = s.epoch() + 1
 	defer s.ssaWork.Rewind()
 	defer s.mirWork.Rewind()
-	f, err := ssa.BuildIn(&s.ssaWork, p, fb)
+	if t := mir.Timing; t != nil {
+		t.Start()
+	}
+	f, err := r.jitBuildSSA(fn, p, fb)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %v", jitRefused, err)
 	}
-	if f.Loops {
-		fb.loopSlots = f.LoopsEnd - p.Locals
-	}
-	fb.callbacks, fb.unmade = f.Callbacks, f.Unmade
-	f.FrameLocals = fn.LocalCount
-	f.Params, f.StartOnly = fn.ParamCount, jitcompile.StartOnly(fn)
-	f.Cells = p.Cells
-	// Native callers call a function's code at its call entry, which makes
-	// its frame (mir's callEntry): code a call makes no frame of its own
-	// for -- top-level code's, a generator's, an async function's -- has
-	// none, nor code whose parameter list has a prologue (ir's ParamsDead),
-	// which the interpreter goes on with from the call's arguments, which
-	// only a frame of the VM's has: Go makes its calls.
-	f.CallEntry = !fn.TopLevel && !fn.IsModule && !fn.Async && !fn.Generator && !isGeneratorTemplate(fn) && !fn.ParamsAreLexical
-	if jitGenCallable(fn) && !p.Cells {
-		// A generator a loop's step may resume natively: where it resumes
-		// it (mir's genEntry).
-		f.GenResumes = jitGenResumes(fn, p, f)
-		f.GenEntry = len(f.GenResumes) != 0
-	}
-	if p.This {
-		f.ThisSlot = fn.LocalCount + len(fn.Upvalues)
-	}
 	ssa.Optimize(f)
+	if t := mir.Timing; t != nil {
+		t.Lap(mir.PhaseOptimize)
+	}
 	if jitSSAOptimized != nil {
 		jitSSAOptimized(fn, f)
 	}
@@ -2014,6 +2004,73 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 	// within them was made and thrown away.
 	s.learn(len(fn.Code), need-hint+p.Footprint()+jitLoweringFixed+jitLinkFixed)
 	return code, fb, nil
+}
+
+// jitBuildSSA is compileSSAKeeping's build of p, with fb, in the runtime's
+// workspace: the function as ssa builds it, told what of fn the backend
+// needs.
+func (r *Runtime) jitBuildSSA(fn *bytecode.Function, p *ir.Program, fb *jitFeedback) (*ssa.Func, error) {
+	f, err := ssa.BuildIn(&r.jit.ssaWork, p, fb)
+	if err != nil {
+		return nil, err
+	}
+	if f.Loops {
+		fb.loopSlots = f.LoopsEnd - p.Locals
+	}
+	fb.callbacks, fb.unmade = f.Callbacks, f.Unmade
+	f.FrameLocals = fn.LocalCount
+	f.Params, f.StartOnly = fn.ParamCount, jitcompile.StartOnly(fn)
+	f.Cells = p.Cells
+	// Native callers call a function's code at its call entry, which makes
+	// its frame (mir's callEntry): code a call makes no frame of its own
+	// for -- top-level code's, a generator's, an async function's -- has
+	// none, nor code whose parameter list has a prologue (ir's ParamsDead),
+	// which the interpreter goes on with from the call's arguments, which
+	// only a frame of the VM's has: Go makes its calls.
+	f.CallEntry = !fn.TopLevel && !fn.IsModule && !fn.Async && !fn.Generator && !isGeneratorTemplate(fn) && !fn.ParamsAreLexical
+	if jitGenCallable(fn) && !p.Cells {
+		// A generator a loop's step may resume natively: where it resumes
+		// it (mir's genEntry).
+		f.GenResumes = jitGenResumes(fn, p, f)
+		f.GenEntry = len(f.GenResumes) != 0
+	}
+	if p.This {
+		f.ThisSlot = fn.LocalCount + len(fn.Upvalues)
+	}
+	if t := mir.Timing; t != nil {
+		t.Lap(mir.PhaseBuild)
+	}
+	return f, nil
+}
+
+// JITCompileRepeat, if not 0, has every compile of the SSA backend that
+// succeeds run that many times more, its build, optimization and backend,
+// what each makes thrown away: for timing the compiler (mir.Timing) over
+// the compiles a program makes, each as the program makes it, with
+// clocks that read too coarsely for one compile. Set it before any
+// runtime compiles.
+var JITCompileRepeat int
+
+// jitCompileAgain is a compile of JITCompileRepeat's: p built with fresh
+// feedback, as compileSSAKeeping builds it with keepLimit, optimized and
+// compiled, and all it made taken back.
+func (r *Runtime) jitCompileAgain(fn *bytecode.Function, cl *closure, p *ir.Program, e *jitEntry, keepLimit int) {
+	s := r.jit
+	defer s.ssaWork.Rewind()
+	defer s.mirWork.Rewind()
+	if t := mir.Timing; t != nil {
+		t.Start()
+	}
+	fb := &jitFeedback{r: r, fn: fn, cl: cl, e: e, keepLimit: keepLimit, prog: p}
+	f, err := r.jitBuildSSA(fn, p, fb)
+	if err != nil {
+		return
+	}
+	ssa.Optimize(f)
+	if t := mir.Timing; t != nil {
+		t.Lap(mir.PhaseOptimize)
+	}
+	mir.CompileIn(&s.mirWork, f, jitEncoding)
 }
 
 // jitRefused is compileSSA's refusal of a program it does not compile:

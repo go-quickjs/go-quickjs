@@ -249,6 +249,19 @@ go run -tags quickjs_jit ./internal/cmd/v8bench -jit -bench awfy -dir /tmp/awfy 
 (cd internal/jit/verify && go run ./cmd/jitprof -code /tmp/list.jsonl /tmp/list.cpu)
 ```
 
+What the JIT's compiles cost, `-jitcompile N` says: every compile a run
+makes is run N times, each as the program made it, the ones after the
+first thrown away, and after each benchmark the runner prints each
+phase's time per run of them all -- the SSA's build and optimization,
+the backend's analyses, its allocation's uses, liveness, intervals,
+hints and scan, the calls' saves, the instruction selection and the
+encoding (`mir.Times`). That is the compiler's own CPU, apart from the
+program's; with `-cpuprofile` the profile is mostly the compiler's.
+
+```sh
+go run -tags quickjs_jit ./internal/cmd/v8bench -jit -bench octane -dir /tmp/octane -suite Typescript -mode fixed -n 1 -jitcompile 10
+```
+
 `-mode micro` runs QuickJS's micro-benchmarks, `internal/v8bench/microbench.js`
 (QuickJS's `tests/microbench.js`, kept as it is there), and ours beside it,
 `microbench_extra.js`, of what it has none of -- generators, async

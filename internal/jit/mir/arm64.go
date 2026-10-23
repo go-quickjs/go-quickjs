@@ -290,11 +290,16 @@ func compileARM64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 	for _, g := range c.goFails {
 		g.st.Fail = int32(c.a.Offset(g.to) - c.a.Offset(g.back))
 	}
+	lap(PhaseEmit)
 	bytes, err := c.a.Finish()
 	if err != nil {
 		return nil, err
 	}
 	c.finishExits()
+	lap(PhaseEncode)
+	if Timing != nil {
+		Timing.Compiles++
+	}
 	return &Code{Bytes: bytes, Entries: entries, CallEntry: callAt, Resume: resumeAt, GenEntry: genAt, Text: len(bytes), Exits: c.exits,
 		Calls: c.calls, CallRefs: c.callRefs(), GoCalls: c.goCalls, core: c.core}, nil
 }

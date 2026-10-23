@@ -15,6 +15,7 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/hostaccess"
 	"github.com/go-quickjs/go-quickjs/internal/jit"
 	"github.com/go-quickjs/go-quickjs/internal/jit/mir"
+	"github.com/go-quickjs/go-quickjs/internal/v8bench"
 	"github.com/go-quickjs/go-quickjs/internal/vm"
 )
 
@@ -42,6 +43,28 @@ func reportStart(r runtimeOf) {
 	if *jitCodeFlag != "" && vm.JITCodeHook == nil {
 		startCodeDump(*jitCodeFlag)
 	}
+	if *jitTimeFlag > 0 && mir.Timing == nil {
+		mir.Timing = &mir.Times{Clock: func() int64 { return int64(v8bench.Clock()) }}
+		vm.JITCompileRepeat = *jitTimeFlag - 1
+	}
+}
+
+// reportTimes prints, for -jitcompile, how long the compiles since the last
+// benchmark took, phase by phase, in milliseconds per run of them all.
+func reportTimes() {
+	t := mir.Timing
+	if t == nil {
+		return
+	}
+	runs := float64(*jitTimeFlag)
+	var total int64
+	fmt.Printf("  jit compile, ms per run (%d runs, %d compiles each):", *jitTimeFlag, t.Compiles / *jitTimeFlag)
+	for p := range mir.NumPhases {
+		fmt.Printf(" %s %.2f", p, float64(t.Ticks[p])/runs/1e6)
+		total += t.Ticks[p]
+	}
+	fmt.Printf(" total %.2f\n", float64(total)/runs/1e6)
+	*t = mir.Times{Clock: t.Clock}
 }
 
 // jitCode is a line of -jitcode's file: a function's native code as it was
@@ -93,6 +116,7 @@ func startCodeDump(path string) {
 // those it refused or did not try, with why -- what a benchmark's coverage
 // is made of. A function is named by its script and line.
 func (r runtimeOf) Report(name string) {
+	reportTimes()
 	if !*jitReportFlag {
 		return
 	}

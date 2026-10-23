@@ -362,6 +362,7 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 		c.a.Bind(k.label)
 		c.a.Quad(k.v)
 	}
+	lap(PhaseEmit)
 	bytes, err := c.a.Finish()
 	if err != nil {
 		return nil, err
@@ -385,6 +386,10 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 	}
 	c.finishExits()
 	marks, listing := c.finishMarks()
+	lap(PhaseEncode)
+	if Timing != nil {
+		Timing.Compiles++
+	}
 	return &Code{Bytes: bytes, Entries: entries, CallEntry: callAt, Resume: resumeAt, GenEntry: genAt, Text: c.a.Moved(text), Exits: c.exits,
 		Calls: c.calls, CallRefs: c.callRefs(), GoCalls: c.goCalls, Marks: marks, Listing: listing, core: c.core}, nil
 }
