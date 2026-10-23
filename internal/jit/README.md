@@ -355,8 +355,8 @@ their count to its callee's context (`ssa.CallSite`'s `FrameArgs`,
 and an unmapped object of them without a frame (the VM's `jitGoHostPlain`),
 reads `arguments[k]` there, and gives every frame it makes of the callee's
 level a copy (`jitCallArgs`); the caller's records keep them alive
-meanwhile. A mapped object names its function, which a native callee's
-frame has none of: such code has no call entry. A call in tail position
+meanwhile. A mapped object names its function, which the call writes to
+the context too (see The frame's own). A call in tail position
 that gives its frame up does not take a callee whose arguments its context
 would hold alone -- Go makes it -- and one of the function itself is Go's
 (`ir.Program`'s `FrameArgs`), never a jump to the code's start, which would
@@ -369,8 +369,15 @@ entered a function's own code with -- a super reference's read or write
 rest parameter's array, the arguments object (see Parameter lists for a
 native callee's) -- Go makes from native code on that frame (`ir.Instruction`'s `Frame`, `ssa.GoHost`, the VM's
 `jitGoHost`), as V8's code calls the runtime, native code going on after
-it. Code with super references has no call entry (`ir.Program`'s
-`FrameCallee`): a native callee's frame has no function object. A class's
+it. Code that reads its function object -- a super reference's home
+object, `push_callee`'s, a mapped arguments object's callee
+(`ir.Program`'s `FrameCallee`) -- has a call entry all the same: a native
+call of it writes the object to its callee's context (`ssa.CallSite`'s
+`Function`, `abi.Context`'s `Function`), as a derived construction's
+does, and Go gives it to the frames it makes of the callee's level, on
+which it makes the reference (the VM's `jitLevelHost`). Neither generic
+calls nor calls in tail position that give their frames up, which write
+no function object, take such a callee, nor does inlining. A class's
 or an object literal's member's definition that reads no local -- a home
 object set, a method or an accessor defined, a class linked to its
 parent, a private name, member or methods' install whose key a captured

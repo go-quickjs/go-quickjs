@@ -2112,13 +2112,12 @@ func (r *Runtime) jitBuildSSA(fn *bytecode.Function, p *ir.Program, fb *jitFeedb
 	// there, which only a frame of the VM's has then -- where they have, a
 	// frame Go makes of a native callee's is given them (jitPrologueArgs) --
 	// nor code that pushes its own function object (push_callee), which a
-	// native callee's context does not hold, nor a mapped arguments
-	// object's, which names it. Go makes their calls. Code that reads its
-	// arguments past its parameters -- a rest parameter's, an unmapped
-	// arguments object's, a super() of them -- has one: a native call of
-	// it writes them all to its context (ssa.CallSite's FrameArgs).
-	f.CallEntry = !fn.TopLevel && !fn.IsModule && !fn.Async && !fn.Generator && !isGeneratorTemplate(fn) && !p.PrologueFrameOnly &&
-		!jitPushesCallee(fn) && !p.FrameCallee && !fn.MappedArguments
+	// native callee's context does not hold. Go makes their calls. Code
+	// that reads its arguments past its parameters -- a rest parameter's,
+	// an arguments object's, a super() of them -- or its function object
+	// -- a super reference's, push_callee's -- has one: a native call of
+	// it writes them to its context (ssa.CallSite's FrameArgs, Function).
+	f.CallEntry = !fn.TopLevel && !fn.IsModule && !fn.Async && !fn.Generator && !isGeneratorTemplate(fn) && !p.PrologueFrameOnly
 	if jitGenCallable(fn) && !p.Cells {
 		// A generator a loop's step may resume natively: where it resumes
 		// it (mir's genEntry).
@@ -3004,6 +3003,7 @@ func (fb *jitFeedback) closureCallSite(pc int, in jitInline, call bytecode.Instr
 		Argc: int(call.A), Method: call.Op == bytecode.OpCallMethod,
 		Params: fn.ParamCount, LocalCount: fn.LocalCount, MaxStack: fn.MaxStack, ThisSlot: this, Coerce: fn.CoerceThis,
 	}
+	site.Function = jitFrameCallee(fn)
 	if site.FrameArgs = jitFrameArgs(fn); site.FrameArgs && site.Argc > abi.MaxGoArgs {
 		// More arguments than its context has room for: Go makes its calls.
 		fb.links = fb.links[:len(fb.links)-1]
@@ -4788,6 +4788,11 @@ func (r *Runtime) jitGoCallNested(ctx *abi.Context, idx int) bool {
 				f.callee = r.jitLevelCallee(callerFn, pc, f.this)
 			}
 		}
+		if c.Function != 0 && lcl.fn.Kind != bytecode.KindDerivedConstructor && e.ssaProg != nil && e.ssaProg.FrameCallee {
+			// The function object its code reads, which the call wrote
+			// (jitFrameCallee); a derived construction's is jitDerivedFrame's.
+			f.callee = *(**Object)(unsafe.Pointer(&c.Function))
+		}
 		prevPC = callPC
 		f.openUpvalues, f.handlers = f.openUpvalues[:0], f.handlers[:0]
 		f.thisRef, f.withScopes, f.evalVars, f.native, f.savedSP = nil, nil, nil, "", 0
@@ -4852,10 +4857,15 @@ framed:
 		v, err = r.jitOpMade(f, in, r.stack[sp-n:sp])
 	} else if host {
 		// As jitHost makes it at an exit, on the level's frame, at pc,
-		// room for what it pushes past its operands.
+		// room for what it pushes past its operands -- an arguments
+		// object of the call's arguments, which the call wrote to the
+		// level's context (jitFrameArgs).
 		r.stackTop, r.stackHigh = sp+1, max(r.stackHigh, sp+1)
 		at := f.pc
 		f.pc = uint32(pc)
+		if args := jitCallArgs(f.cl.fn, ctx); args != nil {
+			f.args = args
+		}
 		end, steps, herr := r.jitHost(f, sp, 1)
 		f.pc = at
 		switch {
@@ -5607,7 +5617,7 @@ const jitInlineDepth = 3
 // of its closures.
 func (r *Runtime) jitInlinesCalls(cl *closure, depth int) bool {
 	fn := cl.fn
-	if jitNoInline != nil && jitNoInline(fn) || fn.TopLevel || fn.IsModule || jitFrameArgs(fn) || fn.HasDirectEval || isGeneratorTemplate(fn) {
+	if jitNoInline != nil && jitNoInline(fn) || fn.TopLevel || fn.IsModule || jitFrameArgs(fn) || jitFrameCallee(fn) || fn.HasDirectEval || isGeneratorTemplate(fn) {
 		return false
 	}
 	p, err := r.jitLower(fn, jitLowerInline)
@@ -5774,7 +5784,7 @@ func (r *Runtime) jitSeedCalls(cl *closure, e *jitEntry, p *ir.Program) {
 			continue
 		}
 		cf := callee.fn
-		if cf == fn || cf.TopLevel || cf.IsModule || cf.MappedArguments || cf.HasDirectEval || isGeneratorTemplate(cf) {
+		if cf == fn || cf.TopLevel || cf.IsModule || cf.HasDirectEval || isGeneratorTemplate(cf) {
 			continue
 		}
 		ce := r.jit.entryFor(cf)
@@ -5953,7 +5963,7 @@ func (r *Runtime) jitSeedNativeCalls(e *jitEntry, fn *bytecode.Function, pc int,
 	for _, t := range targets {
 		cf := t.cl.fn
 		if len(e.nativeCalls) != 0 && slices.ContainsFunc(e.nativeCalls, func(x jitInline) bool { return int(x.pc) == pc && x.obj == t.o }) ||
-			cf == fn || cf.TopLevel || cf.IsModule || cf.MappedArguments || cf.HasDirectEval || isGeneratorTemplate(cf) ||
+			cf == fn || cf.TopLevel || cf.IsModule || cf.HasDirectEval || isGeneratorTemplate(cf) ||
 			jitCountAt(e.nativeCalls, pc) >= jitCallTargets {
 			continue
 		}
@@ -6312,7 +6322,7 @@ func (r *Runtime) jitSeenTargets(f *frame, e *jitEntry, pc int, o *Object, in by
 			return
 		}
 		cf := t.cl.fn
-		if cf == f.cl.fn || cf.TopLevel || cf.IsModule || cf.MappedArguments || cf.HasDirectEval || isGeneratorTemplate(cf) ||
+		if cf == f.cl.fn || cf.TopLevel || cf.IsModule || cf.HasDirectEval || isGeneratorTemplate(cf) ||
 			slices.ContainsFunc(e.nativeCalls, func(x jitInline) bool {
 				return int(x.pc) == pc && (x.obj == t.o || x.byCode && x.cl != nil && jitSameCode(x.cl, t.cl))
 			}) {
@@ -8356,13 +8366,12 @@ func (r *Runtime) jitCalledOftenBy(cl *closure, caller *jitEntry) bool {
 // want of code budget, which may change.
 func (r *Runtime) jitNativeCallee(cl *closure) *jitEntry {
 	fn := cl.fn
-	if fn.TopLevel || fn.IsModule || fn.MappedArguments || fn.HasDirectEval || isGeneratorTemplate(fn) {
+	if fn.TopLevel || fn.IsModule || fn.HasDirectEval || isGeneratorTemplate(fn) {
 		// A call of a generator or an async function makes its object: its
-		// body is not what a call runs. A mapped arguments object names its
-		// function, which a native callee's frame has none of. A function
-		// that reads its call's arguments past its parameters otherwise
-		// is compiled for native callers, who write them to its context
-		// (jitFrameArgs).
+		// body is not what a call runs. A function that reads its call's
+		// arguments past its parameters, or its function object, is
+		// compiled for native callers, who write them to its context
+		// (jitFrameArgs, jitFrameCallee).
 		return nil
 	}
 	if len(fn.Code) > ssa.MaxInline && r.jitLongWarming(cl) && !r.jitCalledOften(cl) {
@@ -8656,9 +8665,9 @@ func (r *Runtime) jitInlinable(fn *bytecode.Function) bool {
 	l := r.jit.lowering(fn)
 	if l.inlinable == 0 {
 		ok := false
-		if !fn.TopLevel && !fn.IsModule && !jitFrameArgs(fn) && !fn.HasDirectEval {
+		if !fn.TopLevel && !fn.IsModule && !jitFrameArgs(fn) && !jitFrameCallee(fn) && !fn.HasDirectEval {
 			// Not one that reads its call's arguments past its parameters,
-			// which an inlined frame has none of.
+			// or its function object, which an inlined frame has none of.
 			p, err := r.jitLower(fn, jitLowerInline)
 			ok = err == nil && ssa.Inlinable(p)
 		} else if jitReadsArguments(fn) {
@@ -10933,8 +10942,13 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure) (Value, e
 		} else {
 			l.cl, l.this = (*closure)(c.Closure), *(*Value)(unsafe.Pointer(&c.This))
 			l.loop = c.Loop
-			// Its function object, where its call says (an accessor's).
+			// Its function object, where its call says (an accessor's), or
+			// where the call wrote it, for code that reads it
+			// (jitFrameCallee).
 			l.callee = r.jitLevelCallee(caller, callerPC, l.this)
+			if c.Function != 0 && l.cl != nil && jitFrameCallee(l.cl.fn) {
+				l.callee = *(**Object)(unsafe.Pointer(&c.Function))
+			}
 			l.construct = callerPC < len(caller.Code) && caller.Code[callerPC].Op == bytecode.OpNew
 			if callerPC < len(caller.Code) && caller.Code[callerPC].Op == bytecode.OpSuperCall && c.Function != 0 {
 				// A super()'s parent, constructed: its function and its
@@ -12183,11 +12197,17 @@ func (r *Runtime) jitGoHostPlain(ctx *abi.Context, idx int) bool {
 
 // jitLevelHost reports whether op, an instruction a native callee's code
 // has Go make from native code (ssa.GoHost), may be made on the frame of
-// its level that Go makes, which has its closure, its receiver and its
-// operands, but neither its locals, which native code holds, nor its
-// function object: a definition's (compile's frameDefinition).
+// its level that Go makes, which has its closure, its receiver, its
+// operands and, where its code reads it, its function object (the call
+// wrote it, jitFrameCallee), but not its locals, which native code holds:
+// a definition's (compile's frameDefinition), a super reference's, a
+// mapped arguments object's of a function of no parameters, which aliases
+// none.
 func jitLevelHost(op bytecode.Op) bool {
 	switch op {
+	case bytecode.OpGetSuperProp, bytecode.OpGetSuperIndex, bytecode.OpSetSuperProp, bytecode.OpSetSuperIndex, bytecode.OpSuperBase,
+		bytecode.OpGetArguments:
+		return true
 	case bytecode.OpGetLength, bytecode.OpNewClass, bytecode.OpSetHomeObject, bytecode.OpSetFieldInit, bytecode.OpDefineMethod,
 		bytecode.OpDefineGetter, bytecode.OpDefineSetter, bytecode.OpSetFuncName,
 		bytecode.OpPrivateName, bytecode.OpNewPrivateMethods, bytecode.OpInstallPrivateMethods,
@@ -12334,6 +12354,23 @@ func jitFrameArgs(fn *bytecode.Function) bool {
 		fn.Kind == bytecode.KindDerivedConstructor && slices.ContainsFunc(fn.Code, func(in bytecode.Instr) bool {
 			return in.Op == bytecode.OpSuperCall && in.B == bytecode.SuperForward
 		})
+}
+
+// jitFrameCallee reports whether fn's code reads its frame's function
+// object -- a super reference's home object, push_callee's, a mapped
+// arguments object's callee (ir.Program's FrameCallee) -- which a native
+// call of it writes to its callee's context (ssa.CallSite's Function,
+// abi.Context's Function), where Go finds it for the frames it makes of
+// the callee's level, as V8's frame has its function.
+func jitFrameCallee(fn *bytecode.Function) bool {
+	return fn.MappedArguments || slices.ContainsFunc(fn.Code, func(in bytecode.Instr) bool {
+		switch in.Op {
+		case bytecode.OpGetSuperProp, bytecode.OpGetSuperIndex, bytecode.OpSetSuperProp, bytecode.OpSetSuperIndex, bytecode.OpSuperBase,
+			bytecode.OpPushCallee:
+			return true
+		}
+		return false
+	})
 }
 
 // jitCallArgs is a copy of the arguments a native call of fn wrote to its

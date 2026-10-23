@@ -821,14 +821,16 @@ func TestGoOperationLowering(t *testing.T) {
 			t.Errorf("no %v lowered", op)
 		}
 	}
-	// Callees, for native callers and inlining, take them, but push_callee.
+	// Callees, for native callers and inlining, take them, push_callee too:
+	// a native call writes the function object to its callee's context,
+	// which the program says it reads (FrameCallee).
 	callee := compiledFunction(t, `function f(o, k) { return { ...o, [k]: 1 } }`)
 	if _, err := LowerSSAInline(callee); err != nil {
 		t.Fatal(err)
 	}
 	named := compiledFunction(t, `var g = function self(n) { while (n) n--; return self }`)
-	if _, err := LowerSSAInline(named); err == nil || !strings.Contains(err.Error(), "push_callee") {
-		t.Fatalf("LowerSSAInline: %v, want push_callee refused", err)
+	if p, err := LowerSSAInline(named); err != nil || !p.FrameCallee {
+		t.Fatalf("LowerSSAInline: %v, want push_callee lowered, the function object read", err)
 	}
 	if _, err := LowerSSA(named); err != nil {
 		t.Fatal(err)

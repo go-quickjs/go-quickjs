@@ -533,8 +533,10 @@ type Program struct {
 	// those calls.
 	FrameArgs bool
 	// FrameCallee marks code that reads its frame's function object -- a
-	// super reference's home object -- which only a frame Go made for a
-	// call has: native callers do not call it (no call entry).
+	// super reference's home object, push_callee's, a mapped arguments
+	// object's callee -- which a frame Go made for a call has, and a native
+	// call writes to its callee's context (abi.Context's Function), where
+	// Go finds it for the frames it makes of the callee's level.
 	FrameCallee bool
 }
 

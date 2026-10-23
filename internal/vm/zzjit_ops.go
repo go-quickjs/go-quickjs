@@ -605,16 +605,3 @@ func (r *Runtime) jitOpMade(f *frame, in bytecode.Instr, args []Value) (Value, e
 	}
 	panic("jit: not an operation Go makes: " + in.Op.String())
 }
-
-// jitPushesCallee reports whether fn pushes its own function object
-// (push_callee), which the frame Go makes has (frame's callee) and a
-// native callee's context does not: its code has no call entry, and Go
-// makes native callers' calls of it (ssa.Func's CallEntry).
-func jitPushesCallee(fn *bytecode.Function) bool {
-	for _, in := range fn.Code {
-		if in.Op == bytecode.OpPushCallee {
-			return true
-		}
-	}
-	return false
-}

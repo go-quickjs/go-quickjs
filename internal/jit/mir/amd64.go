@@ -1575,8 +1575,19 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 			c.storeImm(locals, at+c.enc.NumOffset, c.enc.Undefined, top)
 			c.storeImm(locals, at+c.enc.RefOffset, 0, top)
 		}
-		if t.Tail || t.Pool != 0 || t.Super || t.ArrowThis || t.PlainThis || t.FrameArgs || (t.ThisSlot >= 0 || site.Method && site.Via == 0) && !direct || !receiver {
+		if t.Tail || t.Pool != 0 || t.Super || t.ArrowThis || t.PlainThis || t.FrameArgs || t.Function || (t.ThisSlot >= 0 || site.Method && site.Via == 0) && !direct || !receiver {
 			c.a.Load(calleeCtx, regCtx, abi.OffNext)
+		}
+		if t.Function && !t.Derived && !t.Super {
+			// Its function object, which its code reads (abi.Context's
+			// Function): a derived construction's and a super()'s are
+			// written below.
+			if t.ByCode != 0 {
+				c.a.Load(top, regCtx, abi.OffCallCallee)
+			} else {
+				c.movImm(top, uint64(t.Callee))
+			}
+			c.a.Store(calleeCtx, abi.OffFunction, top)
 		}
 		if t.FrameArgs {
 			// All its arguments and their count, which the frames Go makes
@@ -3498,7 +3509,7 @@ func (c *compiler) tailSelf(v *ssa.Value, guard func(amd64.Cond)) {
 	c.a.Bind(other)
 	var sites []*ssa.CallSite
 	for _, t := range v.Calls() {
-		if t.Go == 0 && !t.Literal && !t.Push && !t.Pop && !t.Alloc && !t.Receiver && t.Via == 0 && t.Pool == 0 && !t.Coerce && t.Entry != 0 && !t.FrameArgs {
+		if t.Go == 0 && !t.Literal && !t.Push && !t.Pop && !t.Alloc && !t.Receiver && t.Via == 0 && t.Pool == 0 && !t.Coerce && t.Entry != 0 && !t.FrameArgs && !t.Function {
 			sites = append(sites, t)
 		}
 	}

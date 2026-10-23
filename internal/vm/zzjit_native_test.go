@@ -876,8 +876,8 @@ func TestJITSSACallExits(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	// h reads arguments: Go calls it, never native code (jitNativeCallee).
-	setup := `var O={p:[1,2,3]};function h(a){a.n=arguments.length;return a.length}
+	// h has a with statement, which native code makes none of: Go calls it.
+	setup := `var O={p:[1,2,3]};function h(a){with(a){}a.n=arguments.length;return a.length}
 		function f(n){let s=0;for(let i=0;i<n;i++){s=(s+g(i))|0;s=(s*31+i)|0;s^=s>>>3;s=(s+i*7)|0;s^=s<<2}return s}
 		function k(n){let s=0;for(let i=0;i<n;i++){s=(s+h(O.p))|0;s=(s*31+i)|0;s^=s>>>3;s=(s+i*7)|0;s^=s<<2}return s}`
 	rounds := []struct {
@@ -4661,8 +4661,8 @@ func TestJITSSAPrototypeMethods(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	// m reads arguments: Go calls it, never native code (jitNativeCallee).
-	setup := `function A(){this.v=1}A.prototype.m=function(){this.n=arguments.length;return this.v+1};
+	// m has a with statement, which native code makes none of: Go calls it.
+	setup := `function A(){this.v=1}A.prototype.m=function(){with(this){}this.n=arguments.length;return this.v+1};
 		function B(){this.v=2}B.prototype=Object.create(A.prototype);
 		function run(o,n){let s=0;for(let i=0;i<n;i++){s+=o.m();for(let j=0;j<12;j++)s=(s*3+j)%1000003}return s}
 		function swap(o,n){let s=0;for(let i=0;i<n;i++){s+=o.m();for(let j=0;j<12;j++)s=(s*3+j)%1000003;if(i==20)change()}return s}
@@ -7431,9 +7431,9 @@ func TestJITSSAProfitReturns(t *testing.T) {
 	// about: stretches its marking ended had not been judged.
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	// Go calls bump, which reads arguments, and step, through apply with
-	// an array: native code calls neither (jitNativeCallee).
-	setup := `function T(){this.n=0;this.v=1}T.prototype.bump=function(){this.n+=arguments.length+1};
+	// Go calls bump, which has a with statement native code makes none of,
+	// and step, through apply with an array: native code calls neither.
+	setup := `function T(){this.n=0;this.v=1}T.prototype.bump=function(){with(this){}this.n+=arguments.length+1};
 		T.prototype.step=function(k){let s=this.v;for(let i=0;i<2;i++)s=(s*3+i)|0;this.bump();return s+k};
 		function heavy(n){let s=0;for(let i=0;i<n;i++){s=(s*31+i)|0;s^=s>>>7}return s}
 		function drive(){let s=0;for(let i=0;i<300;i++)s=(s+t.step.apply(t,[i]))|0;return [s,t.n,heavy(500)].join()}
@@ -9089,14 +9089,16 @@ func TestJITSSAGoCalls(t *testing.T) {
 		}
 	}
 	defer func() { jitGoCallWork = nil }()
-	setup := `function h(a){a.n=arguments.length;return a.length}
+	// h, Q, thrower and inc have with statements, which native code makes
+	// none of: Go makes their calls.
+	setup := `function h(a){with(a){}a.n=arguments.length;return a.length}
 		var Class={create:function(){return function(){this.initialize.apply(this,arguments)}}};
-		function Q(x){this.y=arguments.length+x}
+		function Q(x){with(this){}this.y=arguments.length+x}
 		var P=Class.create();P.prototype={initialize:function(x){this.x=x;this.c=new Q(x)}};
 		var bound=function(a,b){return a*10+b}.bind(null,7);
 		var made=0;
-		function thrower(i){made++;if(i===777)throw new TypeError('boom '+arguments.length);return i&7}
-		function mk(){let c=0;const inc=function(){c+=2;return arguments.length};
+		function thrower(i){with({}){}made++;if(i===777)throw new TypeError('boom '+arguments.length);return i&7}
+		function mk(){let c=0;const inc=function(){with({}){}c+=2;return arguments.length};
 			return function loop(n){let s=0;const o={length:3};
 				for(let i=0;i<n;i++){let w=i;for(let k=0;k<30;k++)w=(w*31+k)^(w>>>3);s=(s+w+h(o)+new P(i).c.y+bound(i&3)+[i,1].at(1)+inc()+c+thrower(i))|0}return s+':'+o.n}}
 		var loop=mk();

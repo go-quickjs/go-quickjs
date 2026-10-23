@@ -329,7 +329,11 @@ type Context struct {
 	// slot the collector scans. Function is the function object whose
 	// code runs, whose [[Prototype]] its super() constructs with, which the
 	// caller's code keeps alive: the class constructed, or the class whose
-	// code a class with no constructor of its own runs.
+	// code a class with no constructor of its own runs. A native call of
+	// any other function whose code reads its function object -- push_callee,
+	// a super reference's home object, a mapped arguments object's callee
+	// (ssa.CallSite's Function) -- writes that object here, which Go gives
+	// the frames it makes of the callee's level.
 	Instance Slot
 	Function uint64
 	// EnterCallee is the function object a native call called that had no

@@ -263,14 +263,14 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		return nil, refuse(-1, "special function kind")
 	case fn.HasDirectEval || len(fn.EvalScopes) != 0:
 		return nil, refuse(-1, "direct eval")
-	case (fn.UsesArguments || fn.MappedArguments) && !m.forward && (!m.ssa || !argumentsOwn(fn) || m.callee && fn.MappedArguments):
+	case (fn.UsesArguments || fn.MappedArguments) && !m.forward && (!m.ssa || !argumentsOwn(fn)):
 		// A function's own code reads its arguments, and makes its
 		// arguments object, by Go, from the frame of the VM's it was
 		// entered with, which has them (ir.Host); a native callee's from
-		// those its call wrote to its context (the VM's jitFrameArgs),
-		// but a mapped object's, which names the function, whose object a
-		// native callee's frame has none of; an inlined one's from the
-		// call's, a forwarding constructor's (LowerSSAForward), or none.
+		// those its call wrote to its context (the VM's jitFrameArgs), a
+		// mapped object's naming the function its call wrote there too
+		// (FrameCallee); an inlined one's from the call's, a forwarding
+		// constructor's (LowerSSAForward), or none.
 		return nil, refuse(-1, "arguments object")
 	case fn.HasRest && !m.ssa:
 		// A rest parameter is Go's array of the arguments past the
@@ -372,17 +372,18 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			// call it.
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
-		if GoOperation(in.Op) && (!m.ssa || in.Op == bytecode.OpPushCallee && m.callee) {
+		if GoOperation(in.Op) && !m.ssa {
 			// The new pipeline has Go make them, called from native code
 			// (GoOperation). A callee's own function object, which
-			// push_callee pushes, is the frame's, which a native callee
-			// has none of.
+			// push_callee pushes, is the frame's, which a native call
+			// writes to its callee's context (FrameCallee).
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
-		if superRef(in.Op) && (!m.ssa || m.callee) {
+		if superRef(in.Op) && !m.ssa {
 			// A super reference reads the frame's function object's home
-			// object, which only a frame Go made for a call has: a native
-			// callee's and an inlined one's have none.
+			// object: a frame Go made for a call has it, and a native call
+			// writes it to its callee's context (FrameCallee). An inlined
+			// callee's has none: the inliner takes no such program.
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
 		if (in.Op == bytecode.OpTailCall || in.Op == bytecode.OpTailCallMethod) && (!m.ssa || m.callee) {
@@ -754,8 +755,9 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			// super(...) of the call's arguments, which it hands on.
 			p.FrameArgs = p.FrameArgs || in.Op == bytecode.OpSuperCall && in.B == bytecode.SuperForward
 		}
+		p.FrameCallee = fn.MappedArguments
 		for _, in := range fn.Code {
-			p.FrameCallee = p.FrameCallee || superRef(in.Op)
+			p.FrameCallee = p.FrameCallee || superRef(in.Op) || in.Op == bytecode.OpPushCallee
 		}
 		if !prologueArgs(p) && m.callee {
 			// A native callee's frame, and an inlined one's, has the call's

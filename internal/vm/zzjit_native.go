@@ -1976,7 +1976,7 @@ func jitLinkFlags(fn *bytecode.Function) uint64 {
 	if fn.Kind != bytecode.KindNormal && fn.Kind != bytecode.KindArrow && fn.Kind != bytecode.KindMethod ||
 		fn.Async || fn.Generator || isGeneratorTemplate(fn) ||
 		fn.TopLevel || fn.IsModule || fn.UsesArguments || fn.MappedArguments || fn.HasDirectEval || len(fn.EvalScopes) != 0 ||
-		fn.HasRest {
+		fn.HasRest || jitFrameCallee(fn) {
 		f |= abi.LinkNotGeneric
 	}
 	return f

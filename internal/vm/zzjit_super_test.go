@@ -3,6 +3,7 @@
 package vm
 
 import (
+	"runtime"
 	"runtime/debug"
 	"testing"
 )
@@ -46,8 +47,10 @@ const superSetup = `
 // with, which has the function object whose home object it reads through,
 // and the this it reads with: a method's loop of super calls stays native.
 // Such methods -- 117 of npm's own functions -- had been refused whole.
-// Their code has no call entry (ir.Program's FrameCallee), as a native
-// callee's frame has no function object. Each answer is the
+// A native call of one writes its function object to its callee's context
+// (ssa.CallSite's Function, ir.Program's FrameCallee), where Go finds it
+// for the frame of its level it makes the reference on: they have call
+// entries (TestJITSuperReferencesCalledNatively). Each answer is the
 // interpreter's, the throws included.
 func TestJITSuperReferences(t *testing.T) {
 	if !jitSSABackend {
@@ -65,11 +68,11 @@ func TestJITSuperReferences(t *testing.T) {
 			cl = v.Object().fn().closure
 		}
 		e := r.jit.entryFor(cl.fn)
-		if e == nil || e.ssa == nil || e.ssaStats.entries == 0 {
+		if e == nil || e.ssa == nil || e.ssaStats.entries == 0 && (e.link == nil || e.link.in == 0) {
 			t.Fatalf("%s never ran natively: %+v", src, e)
 		}
-		if e.ssa.CallEntry() != 0 {
-			t.Errorf("%s has a call entry", src)
+		if e.ssa.CallEntry() == 0 {
+			t.Errorf("%s has no call entry", src)
 		}
 		if e.ssaStats.hosts > 8 {
 			t.Errorf("%s left native code %d times", src, e.ssaStats.hosts)
@@ -147,4 +150,67 @@ func TestJITDefinitionCallees(t *testing.T) {
 		}
 	}
 	jitAgreesForTest(t, definitionSetup, `run(10)`, `run(30)`, `run(10)`, `runExt(30)`, `runLit(30)`, `runCls(30)`)
+}
+
+// Methods whose super references read their function object's home object
+// -- a method's, a static method's, an object literal's method's -- are
+// called natively: the call writes the function object to the callee's
+// context (ssa.CallSite's Function), which Go gives the frame of the
+// callee's level it makes the reference on. A function that pushes its own
+// function object (push_callee: a named function expression's name read
+// inside it) is too. Each answer is the interpreter's, at every stress
+// setting, and the loop calls each method natively, making no call of Go.
+func TestJITSuperReferencesCalledNatively(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		class A { m(x) { return x + 1 } static st(x) { return x * 2 } get g() { return 5 } }
+		function mix(s) { for (let i = 0; i < 8; i++) s = (s * 31 + i) % 1000003; return s }
+		class B extends A {
+			m(x) { return mix(super.m(x)) + (x & 1 ? super.g : 0) }
+			static st(x) { return mix(super.st(x) - 1) }
+			n(x) { super.seen = x; return mix(this.seen) }
+		}
+		const lit = { __proto__: { f(x) { return x * 7 } }, f(x) { return mix(super.f(x) + 1) } }
+		const named = function self(n) { return n > 0 ? typeof self + n : 0 }
+		var b = new B()
+		function loop(n) { let s = 0; for (let i = 0; i < n; i++) s += b.m(i) + B.st(i) + lit.f(i) + b.n(i); return s }
+		function selfs(n) { let s = 0; for (let i = 0; i < n; i++) s += named(i + 1).length; return s }`
+	r := jitAgreesForTest(t, setup, `loop(200)`, `selfs(200)`, `loop(200)`, `selfs(200)`, `loop(200)`, `loop(200)`, `loop(200)`)
+	m := jitNativeForTest(t, r, "loop")
+	runtime.GC()
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	var callees []*jitEntry
+	for _, src := range []string{`B.prototype.m`, `B.st`, `lit.f`, `B.prototype.n`} {
+		v, err := r.Run(compileForTest(t, src))
+		if err != nil || !v.IsObject() || v.Object().fn() == nil {
+			t.Fatalf("%s: %v, %v", src, v, err)
+		}
+		e := r.jit.entryFor(v.Object().fn().closure.fn)
+		if e == nil || e.ssa == nil || e.ssa.CallEntry() == 0 || e.link == nil {
+			t.Fatalf("%s has no code native callers call: %+v", src, e)
+		}
+		callees = append(callees, e)
+	}
+	ins := make([]uint64, len(callees))
+	for i, e := range callees {
+		ins[i] = e.link.in
+	}
+	goCalls := m.ssaStats.goCalls
+	if v, err := r.Run(compileForTest(t, `''+loop(100)`)); err != nil || v.String().Go() != "195753851" {
+		t.Fatalf("loop(100) = %s, %v; want 195753851", v.String().Go(), err)
+	}
+	for i, e := range callees {
+		if d := e.link.in - ins[i]; d != 100 {
+			t.Errorf("callee %d was called natively %d times, want 100", i, d)
+		}
+	}
+	if d := m.ssaStats.goCalls - goCalls; d != 0 {
+		t.Errorf("loop made %d calls of Go, want none", d)
+	}
+	if e := jitNativeForTest(t, r, "selfs"); e == nil {
+		t.Fatal("selfs never ran natively")
+	}
+	jitDifferential(t, setup+`; [loop(100), selfs(100), loop(50)].join()`)
 }

@@ -1128,6 +1128,13 @@ type CallSite struct {
 	// and Argc), as V8's call pushes them all, where Go finds them for the
 	// frames it makes of the callee's level.
 	FrameArgs bool
+	// Function says the callee's code reads its function object -- it
+	// pushes it (push_callee), reads its home object (a super reference)
+	// or names it (a mapped arguments object's callee): the call writes it
+	// to its callee's context (abi.Context's Function), as a derived
+	// construction's does, where Go finds it for the frames it makes of
+	// the callee's level, as V8's frame has its function.
+	Function bool
 	// Parent, for a construction with a class whose constructor is the
 	// one a class without one has, is the class it extends, whose
 	// function Closure is: the call checks the callee's prototype is still

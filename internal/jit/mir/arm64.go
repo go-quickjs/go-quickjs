@@ -3530,8 +3530,17 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 			c.a.Store(locals, at+c.enc.NumOffset, top)
 			c.a.Store(locals, at+c.enc.RefOffset, arm64.ZR)
 		}
-		if t.Tail || t.Pool != 0 || t.Super || t.ArrowThis || t.PlainThis || t.FrameArgs || (t.ThisSlot >= 0 || site.Method && site.Via == 0) && !direct || !receiver {
+		if t.Tail || t.Pool != 0 || t.Super || t.ArrowThis || t.PlainThis || t.FrameArgs || t.Function || (t.ThisSlot >= 0 || site.Method && site.Via == 0) && !direct || !receiver {
 			c.a.Load(calleeCtx, a64Ctx, abi.OffNext)
+		}
+		if t.Function && !t.Derived && !t.Super {
+			// As amd64's: its function object.
+			if t.ByCode != 0 {
+				c.a.Load(top, a64Ctx, abi.OffCallCallee)
+			} else {
+				c.movImm(top, uint64(t.Callee))
+			}
+			c.a.Store(calleeCtx, abi.OffFunction, top)
 		}
 		if t.FrameArgs {
 			// As amd64's: all its arguments and their count.
@@ -5572,7 +5581,7 @@ func (c *a64Compiler) tailSelf(v *ssa.Value, guard func(arm64.Cond)) {
 	c.a.Bind(other)
 	var sites []*ssa.CallSite
 	for _, t := range v.Calls() {
-		if t.Go == 0 && !t.Literal && !t.Push && !t.Pop && !t.Alloc && !t.Receiver && t.Via == 0 && t.Pool == 0 && !t.Coerce && t.Entry != 0 && !t.FrameArgs {
+		if t.Go == 0 && !t.Literal && !t.Push && !t.Pop && !t.Alloc && !t.Receiver && t.Via == 0 && t.Pool == 0 && !t.Coerce && t.Entry != 0 && !t.FrameArgs && !t.Function {
 			sites = append(sites, t)
 		}
 	}

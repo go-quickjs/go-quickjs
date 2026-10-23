@@ -154,3 +154,29 @@ func TestJITCalleeArgumentsTailCall(t *testing.T) {
 		function deep(d, n) { return d === 0 ? hop(n, 1, 2) : deep(d - 1, n) + 0 }`,
 		`deep(40, 8)`, `deep(40, 20)`, `deep(4, 4)`, `deep(40, 20)`, `deep(5, 20)`, `deep(40, 30)`, `deep(40, 30)`)
 }
+
+// A sloppy function of no parameters that makes its arguments object -- a
+// mapped one, which aliases no parameter and names the function as its
+// callee -- is called natively: the call writes its arguments and its
+// function object to its context (ssa.CallSite's FrameArgs, Function), and
+// Go makes the object on the frame of its level, its callee the function.
+// Each answer is the interpreter's, at every stress setting. (Its object's
+// reads are calls of Go, which its callers' code does not pay for: how
+// often it is called natively is the profit model's.)
+func TestJITCalleeMappedArguments(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		function list() { const a = arguments; let r = a.callee === list ? 1000 : 0; for (let i = 0; i < a.length; i++) r += a[i]; return r }
+		function run(n) { let s = 0; for (let i = 0; i < n; i++) s += list(i, 1, 2) + list(); return s }`
+	r := jitAgreesForTest(t, setup, `run(200)`, `run(200)`, `run(200)`, `run(200)`)
+	e := jitEntryForTest(t, r, "list")
+	if e.ssa == nil || e.ssa.CallEntry() == 0 || e.link == nil {
+		t.Fatalf("list has no code native callers call: %+v", e)
+	}
+	if e.link.in == 0 {
+		t.Errorf("list was never called natively")
+	}
+	jitDifferential(t, setup+`; [run(50), run(20)].join()`)
+}

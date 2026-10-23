@@ -47,7 +47,9 @@ func TestJITArgumentsInRecursion(t *testing.T) {
 	for range 30 {
 		both.agree(t, `run(20)`)
 	}
-	if s := both.jit.jit; s.interpreted > 4 || s.hosts > 4 {
+	// A few, each speculation's first failure: lst's and app's code too,
+	// native callees of their own.
+	if s := both.jit.jit; s.interpreted > 8 || s.hosts > 8 {
 		t.Errorf("finished in the interpreter %d times, left for Go %d times", s.interpreted, s.hosts)
 	}
 	jitAgreesForTest(t, argsRecursionSetup, `run(2)`, `run(5)`)
