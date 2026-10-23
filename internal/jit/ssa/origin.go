@@ -704,30 +704,62 @@ func (a *aliases) mayElemCell(call, s *Value) bool {
 }
 
 // liveAcross is every property store, and for each the values with a
-// shadow -- read from cells, and phis that may hold such -- used after it.
-// Liveness is by bitsets over those values: each block's, live at its
-// start and at its end, to a fixed point, then a walk back through each
-// block with a store, from its end, past each value: its own value dies,
-// what it uses lives.
+// shadow -- read from cells, and phis that may hold such -- used after it:
+// by bitsets over those values (liveBits), or by walks back from each
+// one's uses (liveWalks), whichever costs less (liveAcrossSets).
 func liveAcross(f *Func) ([]*Value, [][]*Value) {
-	stores, live := liveAcrossSets(f)
 	if verifyLiveness {
+		// Each way, checked against the reference.
 		refStores, refLive := liveAcrossRef(f)
-		if !slices.Equal(stores, refStores) {
-			panic("ssa: liveAcross's stores differ from the reference's")
-		}
-		for i := range live {
-			if !slices.Equal(live[i], refLive[i]) {
-				panic(fmt.Sprintf("ssa: live across %v: %v, the reference %v", stores[i], live[i], refLive[i]))
+		for _, how := range []int{liveByBits, liveByWalks} {
+			stores, live := liveAcrossSets(f, how)
+			if !slices.Equal(stores, refStores) {
+				panic("ssa: liveAcross's stores differ from the reference's")
+			}
+			for i := range live {
+				if !slices.Equal(live[i], refLive[i]) {
+					panic(fmt.Sprintf("ssa: live across %v (%d): %v, the reference %v", stores[i], how, live[i], refLive[i]))
+				}
 			}
 		}
 	}
-	return stores, live
+	return liveAcrossSets(f, liveByCost)
 }
 
-// liveAcrossSets is liveAcross. What it returns is the Func's scratch's,
-// until it runs again.
-func liveAcrossSets(f *Func) ([]*Value, [][]*Value) {
+// How liveAcrossSets finds what is live: by what costs less, by bitsets
+// (liveBits), by walks (liveWalks).
+const (
+	liveByCost = iota
+	liveByBits
+	liveByWalks
+)
+
+// liveUse is a use of one of liveAcrossSets' candidates: the block it is
+// in, or, for a phi's argument (phi), the predecessor it comes from, at
+// whose end it is used; and the candidate's next use's index plus one, or
+// 0.
+type liveUse struct {
+	b    *Block
+	next int32
+	phi  bool
+}
+
+// liveNode is an entry of a block's list of the candidates live out of it
+// (liveAcrossSets): the candidate, and the next entry's index plus one, or
+// 0.
+type liveNode struct {
+	cand, next int32
+}
+
+// liveAcrossSets' marks of blocks, by block ID.
+const (
+	liveBlock = 1 << iota // a block of the Func's
+	liveStore             // with a store in it
+)
+
+// liveAcrossSets is liveAcross, found how says. What it returns is the
+// Func's scratch's, until it runs again.
+func liveAcrossSets(f *Func, how int) ([]*Value, [][]*Value) {
 	sc := f.scr()
 	stores, cands := sc.liveStores[:0], sc.liveCands[:0]
 	defer func() { sc.liveStores, sc.liveCands = stores[:0], cands[:0] }()
@@ -751,6 +783,28 @@ func liveAcrossSets(f *Func) ([]*Value, [][]*Value) {
 	if len(stores) == 0 || len(cands) == 0 {
 		return stores, live
 	}
+	nb, values := 0, 0
+	for _, b := range f.Blocks {
+		nb = max(nb, b.ID+1)
+		values += len(b.Values)
+	}
+	// Bitsets over the candidates for every block cost their words, five
+	// tables of them, cleared and walked to a fixed point; the walks from
+	// each use cost the uses: the bitsets where their words are fewer than
+	// the values, which is most functions', the walks where not.
+	if how == liveByBits || how == liveByCost && 5*nb*((len(cands)+63)/64) <= values {
+		liveBits(f, sc, stores, cands, live)
+	} else {
+		liveWalks(f, sc, nb, stores, cands, live)
+	}
+	return stores, live
+}
+
+// liveBits is liveAcrossSets by bitsets over the candidates: each block's,
+// live at its start and at its end, to a fixed point, then a walk back
+// through each block with a store, from its end, past each value: its own
+// value dies, what it uses lives.
+func liveBits(f *Func, sc *scratch, stores, cands []*Value, live [][]*Value) {
 	nb := 0
 	for _, b := range f.Blocks {
 		nb = max(nb, b.ID+1)
@@ -877,7 +931,221 @@ func liveAcrossSets(f *Func) ([]*Value, [][]*Value) {
 		}
 	}
 	sc.liveFlat, sc.liveFrom = flat[:0], from[:0]
-	return stores, live
+}
+
+// liveWalks is liveAcrossSets by walks back from each candidate's uses:
+// what is live out of each block with a store found so, then the walk back
+// through each such block that liveBits makes.
+func liveWalks(f *Func, sc *scratch, nb int, stores, cands []*Value, live [][]*Value) {
+	cand := idTable(sc.liveCand, f.nextID)
+	sc.liveCand = cand
+	for k, c := range cands {
+		cand[c.ID] = int32(k + 1)
+	}
+	flags := idTable(sc.liveFlags, nb)
+	sc.liveFlags = flags
+	for _, b := range f.Blocks {
+		flags[b.ID] = liveBlock
+	}
+	for _, v := range stores {
+		flags[v.Block.ID] |= liveStore
+	}
+	// Each candidate's uses, by the block each is in -- a phi's argument by
+	// the predecessor it comes from: a list by candidate, from uses[at[k]-1]
+	// through each one's next.
+	at := idTable(sc.liveAt, len(cands))
+	sc.liveAt = at
+	uses := sc.liveUses[:0]
+	for _, b := range f.Blocks {
+		if st := b.Header; st != nil {
+			for _, x := range st.Slots {
+				if x != nil && x.ID < len(cand) && cand[x.ID] != 0 {
+					k := cand[x.ID] - 1
+					uses = append(uses, liveUse{b, at[k], false})
+					at[k] = int32(len(uses))
+				}
+			}
+		}
+		var last *FrameState
+		for _, v := range b.Values {
+			if v.Op == OpPhi {
+				for j, a := range v.Args {
+					if a != nil && a.ID < len(cand) && cand[a.ID] != 0 {
+						k := cand[a.ID] - 1
+						uses = append(uses, liveUse{b.Preds[j], at[k], true})
+						at[k] = int32(len(uses))
+					}
+				}
+				continue
+			}
+			for _, a := range v.Args {
+				if a != nil && a.ID < len(cand) && cand[a.ID] != 0 {
+					k := cand[a.ID] - 1
+					uses = append(uses, liveUse{b, at[k], false})
+					at[k] = int32(len(uses))
+				}
+			}
+			// The guards of an instruction share its state, met once.
+			if st := v.State; st != last && st != nil {
+				last = st
+				for _, x := range st.Slots {
+					if x != nil && x.ID < len(cand) && cand[x.ID] != 0 {
+						k := cand[x.ID] - 1
+						uses = append(uses, liveUse{b, at[k], false})
+						at[k] = int32(len(uses))
+					}
+				}
+			}
+		}
+		if x := b.Control; x != nil && x.ID < len(cand) && cand[x.ID] != 0 {
+			k := cand[x.ID] - 1
+			uses = append(uses, liveUse{b, at[k], false})
+			at[k] = int32(len(uses))
+		}
+		if st := b.State; st != nil {
+			for _, x := range st.Slots {
+				if x != nil && x.ID < len(cand) && cand[x.ID] != 0 {
+					k := cand[x.ID] - 1
+					uses = append(uses, liveUse{b, at[k], false})
+					at[k] = int32(len(uses))
+				}
+			}
+		}
+	}
+	// Each candidate is live into a block from which a use of it is reached
+	// without passing its definition, and out of each predecessor of such a
+	// block, and out of the block a phi's argument of it comes from: found
+	// from each use backwards through the predecessors, a block once for
+	// each candidate (in and out, 1 plus the candidate it was last found
+	// live into or out of), as V8's and the backend's liveness is, rather
+	// than by bitsets over every candidate for every block -- which for
+	// Mandreel's initPhysics, 4,718 blocks and tens of thousands of
+	// candidates, were 24 MB, cleared and walked to a fixed point. A block
+	// with a store keeps the list of those live out of it (head, nodes).
+	in, out, head := idTable(sc.liveIn, nb), idTable(sc.liveOut, nb), idTable(sc.liveHead, nb)
+	sc.liveIn, sc.liveOut, sc.liveHead = in, out, head
+	nodes, stack := sc.liveNodes[:0], sc.liveStack[:0]
+	for k, c := range cands {
+		mark, def := int32(k+1), c.Block
+		for i := at[k]; i != 0; {
+			u := &uses[i-1]
+			i = u.next
+			b := u.b
+			if b.ID >= nb || flags[b.ID]&liveBlock == 0 {
+				continue
+			}
+			if u.phi && out[b.ID] != mark {
+				out[b.ID] = mark
+				if flags[b.ID]&liveStore != 0 {
+					nodes = append(nodes, liveNode{int32(k), head[b.ID]})
+					head[b.ID] = int32(len(nodes))
+				}
+			}
+			if b != def && in[b.ID] != mark {
+				in[b.ID] = mark
+				stack = append(stack, b)
+			}
+		}
+		for len(stack) > 0 {
+			s := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			for _, p := range s.Preds {
+				if p.ID >= nb || flags[p.ID]&liveBlock == 0 {
+					continue
+				}
+				if out[p.ID] != mark {
+					out[p.ID] = mark
+					if flags[p.ID]&liveStore != 0 {
+						nodes = append(nodes, liveNode{int32(k), head[p.ID]})
+						head[p.ID] = int32(len(nodes))
+					}
+				}
+				if p != def && in[p.ID] != mark {
+					in[p.ID] = mark
+					stack = append(stack, p)
+				}
+			}
+		}
+	}
+	sc.liveUses, sc.liveNodes, sc.liveStack = uses[:0], nodes[:0], stack[:0]
+	// Back through each block with a store, from what is live out of it:
+	// what is live after each value, each store's in one list, from
+	// liveFrom[i] on, in the candidates' order. A candidate is in the walk's
+	// set while its mark (cur) is the block's walk's (gen), and is in the
+	// walk's list (members) once (listed).
+	cur, listed := idTable(sc.liveCur, len(cands)), idTable(sc.liveListed, len(cands))
+	sc.liveCur, sc.liveListed = cur, listed
+	members, emit := sc.liveMembers[:0], sc.liveEmit[:0]
+	gen := int32(0)
+	add := func(v *Value) {
+		if v != nil && v.ID < len(cand) && cand[v.ID] != 0 {
+			c := cand[v.ID] - 1
+			cur[c] = gen
+			if listed[c] != gen {
+				listed[c] = gen
+				members = append(members, c)
+			}
+		}
+	}
+	flat, from := sc.liveFlat[:0], sc.liveFrom[:0]
+	for range stores {
+		from = append(from, 0)
+	}
+	k := 0
+	for _, b := range f.Blocks {
+		first := k
+		for k < len(stores) && stores[k].Block == b {
+			k++
+		}
+		if first == k {
+			continue
+		}
+		gen++
+		members = members[:0]
+		for n := head[b.ID]; n != 0; n = nodes[n-1].next {
+			add(cands[nodes[n-1].cand])
+		}
+		add(b.Control)
+		if st := b.State; st != nil {
+			for _, x := range st.Slots {
+				add(x)
+			}
+		}
+		next := k - 1
+		for i := len(b.Values) - 1; i >= 0 && next >= first; i-- {
+			v := b.Values[i]
+			if v == stores[next] {
+				from[next] = len(flat)
+				emit = emit[:0]
+				for _, c := range members {
+					if cur[c] == gen {
+						emit = append(emit, c)
+					}
+				}
+				slices.Sort(emit)
+				for _, c := range emit {
+					flat = append(flat, cands[c])
+				}
+				live[next] = flat[from[next]:len(flat):len(flat)]
+				next--
+			}
+			if v.ID < len(cand) && cand[v.ID] != 0 {
+				cur[cand[v.ID]-1] = 0
+			}
+			if v.Op != OpPhi {
+				for _, a := range v.Args {
+					add(a)
+				}
+				if st := v.State; st != nil {
+					for _, x := range st.Slots {
+						add(x)
+					}
+				}
+			}
+		}
+	}
+	sc.liveMembers, sc.liveEmit = members[:0], emit[:0]
+	sc.liveFlat, sc.liveFrom = flat[:0], from[:0]
 }
 
 // clearStoreChecks drops the stores' checks, for storeChecks to remake.

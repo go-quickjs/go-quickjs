@@ -977,12 +977,22 @@ type scratch struct {
 	// indexes past their first and last in guards, 0 for none.
 	first, last []int32
 	guards      []guardSeen
-	// liveStores, liveCands, liveFlat, live, liveFrom and liveWords are
-	// liveAcrossSets's: what it returns lasts until it runs again.
+	// liveStores, liveCands, liveFlat, live and liveFrom are
+	// liveAcrossSets's, what it returns lasting until it runs again; the
+	// others its tables: liveBits' bitsets, and liveWalks' tables by value
+	// ID, by candidate, by block ID.
 	liveStores, liveCands, liveFlat []*Value
 	live                            [][]*Value
 	liveFrom                        []int
 	liveWords                       []uint64
+	liveCand, liveAt                []int32
+	liveIn, liveOut, liveHead       []int32
+	liveCur, liveListed             []int32
+	liveMembers, liveEmit           []int32
+	liveFlags                       []uint8
+	liveUses                        []liveUse
+	liveNodes                       []liveNode
+	liveStack                       []*Block
 	// subst is Optimize's replacements, by value ID.
 	subst []*Value
 	// originPhis is Origins' list of the phis.
