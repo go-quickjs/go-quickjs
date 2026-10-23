@@ -578,3 +578,83 @@ func TestJITDerivedSuperNotInlined(t *testing.T) {
 		t.Errorf("Un's code left native code %d times in a round", d)
 	}
 }
+
+// A derived constructor that makes arrows is constructed natively too: an
+// arrow made once its super() has bound this captures this's value, which
+// the binding holds from then on, Go making the arrow on the native
+// callee's frame; one made before super() shares a binding not yet
+// initialized, which only a frame of the VM's has, and its making leaves
+// native code, Go finishing the construction. A constructor whose arrows
+// all come after its super()s (jitArrowBeforeSuper) has its super() made
+// natively, and Go, making an arrow on a frame it entered the code with,
+// binds the frame's this as that super() bound it (jitBindThis). Each
+// arrow, called later, reads the this its constructor bound -- and one
+// read before super(), called before it, throws the interpreter's
+// ReferenceError. Every answer is the interpreter's, and the constructions
+// of the classes whose arrows come after super() are native calls, with
+// no call of Go of the constructing function's.
+func TestJITDerivedNativeConstructArrows(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		class A { constructor(x) { this.x = x } }
+		class B extends A { constructor(x, y) { super(x); this.y = y; this.get = () => this.x + this.y } }
+		class C extends B { constructor(x) { super(x, 2); const k = 3; this.add = (d) => this.get() + d + k } }
+		class E extends A { constructor(x) { const f = () => this.x * 10; super(x); this.f = f } }
+		class T extends A { constructor(x, early) { const f = () => this.x; if (early) f(); super(x); this.f = f } }
+		class L extends A { constructor(x) { let f; for (let i = 0; i < 2; i++) { if (i) super(x); else f = () => this.x + 1 } this.f = f } }
+		class W extends A { constructor(x) { super(x); let s = 0; for (let i = 0; i < 3; i++) s += i; this.f = () => this.x + s; this.v = this.f() } }
+		class P extends A { constructor(x) { const f = () => this.x * 10; let s = 0; for (let i = 0; i < 3; i++) s += i; super(x + s); this.f = f; this.v = f() } }
+		var last
+		function make(n) {
+			let s = 0
+			for (let i = 0; i < n; i++) {
+				const b = new B(i, 1), c = new C(i)
+				s += b.y + c.y + c.x
+				last = [b, c]
+			}
+			return s
+		}
+		function probe() { return last[0].get() + ':' + last[1].add(5) + ':' + Object.keys(last[1]).join() }
+		function early(n) {
+			let s = 0
+			for (let i = 0; i < n; i++) {
+				try { s += new T(i, i % 50 === 49).f() + new E(i).f() + new L(i).f() } catch (e) { s += e.constructor === ReferenceError ? 1000 : -1 }
+			}
+			return s
+		}
+	`
+	rounds := []string{}
+	for range 10 {
+		rounds = append(rounds, `make(300)`, `probe()`, `early(100)`, `[new W(1).f(), new W(2).v, new P(1).f(), new P(2).v].join()`)
+	}
+	r := jitAgreesForTest(t, setup, rounds...)
+	for _, name := range []string{"W", "P"} {
+		if w := jitDerivedForTest(t, r, name); w.ssa == nil || w.ssaStats.entries == 0 {
+			t.Errorf("%s's own code never entered by Go: %+v", name, w)
+		}
+	}
+	b, c := jitDerivedForTest(t, r, "B"), jitDerivedForTest(t, r, "C")
+	m := jitNativeForTest(t, r, "make")
+	runtime.GC()
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	bIn, cIn, goCalls := jitDerivedCalls(b), jitDerivedCalls(c), m.ssaStats.goCalls
+	if v, err := r.Run(compileForTest(t, `''+make(300)`)); err != nil || v.String().Go() != "45750" {
+		t.Fatalf("make(300) = %s, %v; want 45750", v.String().Go(), err)
+	}
+	// B's code twice a pass, for new B and C's super(); C's once.
+	if d := jitDerivedCalls(b) - bIn; d != 600 {
+		t.Errorf("B's code was called natively %d times in a round, want 600", d)
+	}
+	if d := jitDerivedCalls(c) - cIn; d != 300 {
+		t.Errorf("C's code was called natively %d times in a round, want 300", d)
+	}
+	if d := m.ssaStats.goCalls - goCalls; d != 0 {
+		t.Errorf("make made %d calls of Go in a round, want none", d)
+	}
+	if v, err := r.Run(compileForTest(t, `probe()`)); err != nil || v.String().Go() != "300:309:x,y,get,add" {
+		t.Errorf("probe() = %s, %v; want 300:309:x,y,get,add", v.String().Go(), err)
+	}
+	jitDifferential(t, setup+`; [make(200), probe(), early(100), make(200), probe(), new W(1).f(), new W(2).v, new P(1).f(), new P(2).v].join()`)
+}

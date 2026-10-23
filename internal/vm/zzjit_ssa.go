@@ -3020,9 +3020,10 @@ func (fb *jitFeedback) closureCallSite(pc int, in jitInline, call bytecode.Instr
 		// A super()'s parent (jitSuperSeen), constructed with the
 		// instance: its operands the arguments, its this the instance's
 		// (ssa.CallSite's Super). One of a function the code was not
-		// compiled for, a class that makes arrows, or of spread or
-		// forwarded arguments, Go makes.
-		if call.Op != bytecode.OpSuperCall || call.B != bytecode.SuperArgs || fb.fn.Kind != bytecode.KindDerivedConstructor || jitMakesArrow(fb.fn) {
+		// compiled for, a class that may make an arrow before it
+		// (jitArrowBeforeSuper), or of spread or forwarded arguments, Go
+		// makes.
+		if call.Op != bytecode.OpSuperCall || call.B != bytecode.SuperArgs || fb.fn.Kind != bytecode.KindDerivedConstructor || jitArrowBeforeSuper(fb.fn) {
 			fb.links = fb.links[:len(fb.links)-1]
 			return ssa.CallSite{}, false
 		}
@@ -3658,6 +3659,10 @@ func jitHostCall(ctx *abi.Context) bool {
 			if f = r.jitCalleeFrame(ctx); f == nil {
 				return false
 			}
+		} else {
+			// An arrow shares a derived constructor's binding, which a
+			// super() native code made has bound in the context alone.
+			jitBindThis(f, ctx)
 		}
 		i := int(ctx.GoOp >> abi.GoOpIndexShift)
 		if ctx.GoOp>>abi.GoOpKindShift&0xff == abi.GoClosurePool {
@@ -3676,7 +3681,7 @@ func jitHostCall(ctx *abi.Context) bool {
 		}
 		v := Undefined
 		if ssa.GoOp(ctx.GoOp&0xff) == ssa.GoClosure {
-			if i >= len(f.cl.consts) || callee && jitNeedsMaker(f.cl.consts[i]) {
+			if i >= len(f.cl.consts) || callee && !jitCalleeMakes(f, f.cl.consts[i]) {
 				return false
 			}
 			v = Obj(r.makeClosure(f, f.cl.consts[i]))
@@ -4429,7 +4434,7 @@ func (r *Runtime) jitCellsClosure(ctx *abi.Context, f *frame, i int) bool {
 	run := r.jitRunFrame(ctx) == f
 	v := Undefined
 	if ssa.GoOp(ctx.GoOp&0xff) == ssa.GoClosure {
-		if i >= len(f.cl.consts) || !run && jitNeedsMaker(f.cl.consts[i]) {
+		if i >= len(f.cl.consts) || !run && !jitCalleeMakes(f, f.cl.consts[i]) {
 			return false
 		}
 		o := r.newClosureIn(f, f.cl.consts[i], cells)
@@ -4541,6 +4546,24 @@ func jitNeedsMaker(c Value) bool {
 		return false
 	}
 	return reads(t.fn)
+}
+
+// jitCalleeMakes reports whether Go may make the closure c on f, the
+// stand-in for a native callee's frame (jitCalleeFrame), which has no
+// function object, new.target or this binding of its own: not an arrow
+// that reads its maker's new.target or super (jitNeedsMaker), nor one a
+// derived constructor makes before its super() binds its this. The arrow
+// shares that binding, which super() initializes later; once it has, the
+// binding is fixed -- a second super() throws -- and the arrow captures
+// its value, as one made after super() in a frame of the VM's reads it
+// from the binding it shares. Refused, the operation leaves native code,
+// and the frame Go makes of the callee, its this unbound, makes it.
+func jitCalleeMakes(f *frame, c Value) bool {
+	if jitNeedsMaker(c) {
+		return false
+	}
+	t := c.template()
+	return t == nil || t.fn.Kind != bytecode.KindArrow || f.cl.fn.Kind != bytecode.KindDerivedConstructor || !f.this.IsUninitialized()
 }
 
 // jitGoPin pins the code the run in context idx runs, until its native code
@@ -11364,15 +11387,16 @@ func jitSuperBound(f *frame, v Value) Value {
 
 // jitSuperTarget is the parent d's super() constructs with, natively
 // (ssa.CallSite's Super), and the code it runs: d a derived class of no
-// fields -- which super() would give the instance -- making no arrow --
-// whose this its binding is, which native code has none of -- its
+// fields -- which super() would give the instance -- making no arrow
+// before a super() -- whose this its binding is, which native code binds
+// in the context alone (jitArrowBeforeSuper) -- its
 // prototype p a constructor of the realm's script, a base one of no
 // fields, or derived; p a class with no constructor of its own, the code
 // of the one it extends, skip, as V8 skips a default derived constructor
 // (FindNonDefaultConstructorOrConstruct). nil where there is none.
 func (r *Runtime) jitSuperTarget(d *Object) (p, skip *Object, cl *closure) {
 	dfd := d.fn()
-	if dfd == nil || dfd.closure == nil || dfd.ctorKind != ctorDerived || dfd.superCtor != d || dfd.fieldInit != nil || jitMakesArrow(dfd.closure.fn) {
+	if dfd == nil || dfd.closure == nil || dfd.ctorKind != ctorDerived || dfd.superCtor != d || dfd.fieldInit != nil || jitArrowBeforeSuper(dfd.closure.fn) {
 		return nil, nil, nil
 	}
 	code := func(o *Object) *closure {
@@ -11408,15 +11432,58 @@ func (r *Runtime) jitSuperTarget(d *Object) (p, skip *Object, cl *closure) {
 	return p, nil, cl
 }
 
-// jitMakesArrow reports whether fn makes an arrow, which shares its this
-// binding.
-func jitMakesArrow(fn *bytecode.Function) bool {
-	for _, k := range fn.Constants {
-		if k.Kind == bytecode.ConstFunction && k.Fn != nil && k.Fn.Kind == bytecode.KindArrow {
-			return true
+// jitArrowBeforeSuper reports whether fn, a derived constructor, may make
+// an arrow before a super() of its runs: an arrow shares the constructor's
+// this binding, which a super() native code makes binds in the context
+// (its This), not in a binding of the VM's an arrow made before shares. No
+// arrow at a PC before a super()'s, and no loop back from one to a
+// super(), and every arrow fn makes is made once any super() it runs has
+// run: Go makes it then on a binding bound (jitBindThis), or, on a native
+// callee's frame, of the this its context holds (jitCalleeMakes).
+func jitArrowBeforeSuper(fn *bytecode.Function) bool {
+	lastSuper, firstArrow := -1, len(fn.Code)
+	for pc, in := range fn.Code {
+		switch in.Op {
+		case bytecode.OpSuperCall:
+			lastSuper = pc
+		case bytecode.OpClosure:
+			if int(in.A) < len(fn.Constants) {
+				if k := fn.Constants[in.A]; k.Kind == bytecode.ConstFunction && k.Fn != nil && k.Fn.Kind == bytecode.KindArrow {
+					firstArrow = min(firstArrow, pc)
+				}
+			}
+		}
+	}
+	if firstArrow == len(fn.Code) || lastSuper < 0 {
+		return false
+	}
+	if firstArrow < lastSuper {
+		return true
+	}
+	for pc, in := range fn.Code {
+		switch in.Op {
+		case bytecode.OpJump, bytecode.OpJumpIfFalse, bytecode.OpJumpIfTrue, bytecode.OpJumpIfCmpFalse:
+			if pc >= firstArrow && int(in.A) <= lastSuper {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+// jitBindThis binds the this of f, a derived constructor's frame Go
+// entered its code with, as a super() native code made bound it (its
+// context's This), where Go has not: as the interpreter's super() binds
+// the frame's binding, which a closure Go makes on f, an arrow, shares.
+// Native code made such a super() only where no arrow is made before it
+// (jitArrowBeforeSuper): none shares the binding unbound.
+func jitBindThis(f *frame, ctx *abi.Context) {
+	if f.thisRef == nil || f.thisRef.init || f.cl.fn.Kind != bytecode.KindDerivedConstructor {
+		return
+	}
+	if this := *(*Value)(unsafe.Pointer(&ctx.This)); !this.IsUninitialized() {
+		f.this, f.thisRef.value, f.thisRef.init = this, this, true
+	}
 }
 
 // jitSuperCall is superCall for a super() Go makes for native code

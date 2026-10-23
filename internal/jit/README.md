@@ -260,7 +260,14 @@ and assigns them there (`ssa.InlineSite`'s `Upvalues`), as V8's inlined
 code reads a context it knows, and an assignment has the caller read its
 own captured bindings again, which may be the same cells. One made anew
 at each call of its maker fails the check and is called by its code from
-then on (`jitInlinedCalls`).
+then on (`jitInlinedCalls`). An arrow a derived constructor makes shares
+its this binding: on a native callee's frame Go makes one once a super()
+has bound this, of this's value, which the binding holds from then on,
+and leaves native code for one made before (`jitCalleeMakes`); a super()
+is made natively in a constructor that makes no arrow before one
+(`jitArrowBeforeSuper`), and Go binds the this of a frame it entered the
+code with, as that super() bound it, before it makes an arrow there
+(`jitBindThis`).
 
 **Generators and async functions.** `yield` and `await` are exits at which
 Go suspends the frame as the interpreter does, and each resumption enters

@@ -166,17 +166,6 @@ func LowerSSAForward(fn *bytecode.Function) (*ir.Program, error) {
 	return lowerRecovered(fn, lowering{ssa: true, callee: true, forward: true})
 }
 
-// makesArrow reports whether fn makes an arrow, which shares its this
-// binding: one an ordinary function it makes makes shares that function's.
-func makesArrow(fn *bytecode.Function) bool {
-	for _, k := range fn.Constants {
-		if k.Kind == bytecode.ConstFunction && k.Fn != nil && k.Fn.Kind == bytecode.KindArrow {
-			return true
-		}
-	}
-	return false
-}
-
 // closureAssigned is, by local, whether a closure fn makes, or one a
 // closure of it makes in turn, assigns the local it captured; or nil if
 // none does. A nested function with a direct eval may assign any.
@@ -272,10 +261,6 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		// DerivedConstructor): its super() binds its this, which Go makes
 		// (OpSuperCall). A class's field initializers are not.
 		return nil, refuse(-1, "special function kind")
-	case fn.Kind == bytecode.KindDerivedConstructor && m.callee && makesArrow(fn):
-		// An arrow shares the constructor's this binding, which a frame
-		// native code constructs has none of until Go makes its frame.
-		return nil, refuse(-1, "derived constructor making an arrow, for native callers")
 	case fn.HasDirectEval || len(fn.EvalScopes) != 0:
 		return nil, refuse(-1, "direct eval")
 	case (fn.UsesArguments || fn.MappedArguments) && !m.forward && (!m.ssa || m.callee || !argumentsOwn(fn)):
