@@ -80,8 +80,10 @@ type Asm struct {
 	// past it (Finish's).
 	bound []Label
 	at    []int32
-	// open are the fixups whose jumps Finish may yet shorten, in order.
-	open []int32
+	// open are the fixups whose jumps Finish may shorten, in order; openQ
+	// those of them it may yet, by place in open, candPast how many of them
+	// are before each's label, and sums what those before each remove.
+	open, openQ, candPast, sums []int32
 	// aligned says the code has alignments (Align).
 	aligned bool
 }
@@ -134,7 +136,7 @@ func (a *Asm) Len() int { return len(a.buf) }
 func (a *Asm) Reset() {
 	a.buf, a.labels, a.fixups = a.buf[:0], a.labels[:0], a.fixups[:0]
 	a.short, a.never, a.removed, a.past, a.bound, a.at = a.short[:0], a.never[:0], a.removed[:0], a.past[:0], a.bound[:0], a.at[:0]
-	a.open = a.open[:0]
+	a.open, a.openQ, a.candPast, a.sums = a.open[:0], a.openQ[:0], a.candPast[:0], a.sums[:0]
 	a.aligned = false
 }
 
@@ -142,14 +144,14 @@ func (a *Asm) Reset() {
 func (a *Asm) Bytes() int {
 	return cap(a.buf)*int(unsafe.Sizeof(a.buf[:1][0])) + cap(a.labels)*int(unsafe.Sizeof(0)) + cap(a.fixups)*int(unsafe.Sizeof(fixup{})) +
 		cap(a.short) + cap(a.never) + cap(a.removed)*int(unsafe.Sizeof(0)) + cap(a.past)*4 + cap(a.bound)*int(unsafe.Sizeof(Label(0))) + cap(a.at)*4 +
-		cap(a.open)*4
+		(cap(a.open)+cap(a.openQ)+cap(a.candPast)+cap(a.sums))*4
 }
 
 // Used is what of Bytes the last function used: its tables' lengths.
 func (a *Asm) Used() int {
 	return len(a.buf)*int(unsafe.Sizeof(a.buf[:1][0])) + len(a.labels)*int(unsafe.Sizeof(0)) + len(a.fixups)*int(unsafe.Sizeof(fixup{})) +
 		len(a.short) + len(a.never) + len(a.removed)*int(unsafe.Sizeof(0)) + len(a.past)*4 + len(a.bound)*int(unsafe.Sizeof(Label(0))) + len(a.at)*4 +
-		len(a.open)*4
+		(len(a.open)+len(a.openQ)+len(a.candPast)+len(a.sums))*4
 }
 
 // NewLabel makes an unbound label.
@@ -252,27 +254,52 @@ func (a *Asm) Finish() ([]byte, error) {
 		}
 		a.never[i] = d-4*max(between, 0)-4 > 127
 	}
-	// The rounds look at the jumps still open, each until it is shortened;
-	// the last, which shortens none, leaves removed as it is to be.
-	open := a.open[:0]
+	// The rounds look at the jumps that may be shortened (cand, by fixup),
+	// those still open each until it is shortened. Only they remove bytes:
+	// what is removed before a fixup is what those before it remove, a sum
+	// over them alone (sums, by place in cand, made again each round), and
+	// candPast is, by place in cand, how many of them are before its
+	// label's fixup (past). A round shortens what fits as the round before
+	// left them; the last shortens none.
+	cand := a.open[:0]
+	a.candPast = grow(a.candPast, n+1)
 	for i := range a.fixups {
+		a.candPast[i] = int32(len(cand))
 		if !a.never[i] {
-			open = append(open, int32(i))
+			cand = append(cand, int32(i))
 		}
+	}
+	m := len(cand)
+	a.candPast[n] = int32(m)
+	a.sums = grow(a.sums, m+1)
+	for q, j := range cand {
+		// How many are before the fixup's label's: those before the
+		// fixup it is by index, taken before they are overwritten.
+		a.sums[q] = a.candPast[a.past[j]]
+	}
+	copy(a.candPast, a.sums[:m])
+	a.candPast = a.candPast[:m]
+	open := a.openList(m)
+	for q := range cand {
+		open = append(open, int32(q))
 	}
 	for changed := true; changed; {
 		changed = false
-		a.count()
+		sum := int32(0)
+		for q, j := range cand {
+			a.sums[q] = sum
+			if a.short[j] {
+				sum += int32(shortened(a.fixups[j].kind))
+			}
+		}
+		a.sums[m] = sum
 		kept := open[:0]
-		for _, j := range open {
-			i := int(j)
+		for _, q := range open {
+			i := int(cand[q])
 			f := a.fixups[i]
 			start := f.at - opLen(f.kind)
-			from := start + 2
-			if i > 0 {
-				from -= a.removed[i-1]
-			}
-			d := a.movedPast(a.labels[f.label], int(a.past[i])) - from
+			from := start + 2 - int(a.sums[q])
+			d := a.labels[f.label] - int(a.sums[a.candPast[q]]) - from
 			if a.labels[f.label] > start {
 				// A label past it comes nearer by what it loses itself.
 				d -= shortened(f.kind)
@@ -280,12 +307,13 @@ func (a *Asm) Finish() ([]byte, error) {
 			if d >= -128 && d <= 127 {
 				a.short[i], changed = true, true
 			} else {
-				kept = append(kept, j)
+				kept = append(kept, q)
 			}
 		}
 		open = kept
 	}
-	a.open = open[:0]
+	a.open, a.openQ = cand[:0], open[:0]
+	a.count()
 	// The jumps shortened with every alignment's padding whole, each keeps
 	// what the code after it, moved, needs: no shortened jump's
 	// displacement grows.
@@ -341,6 +369,14 @@ func (a *Asm) Finish() ([]byte, error) {
 }
 
 // grow is s with n elements, cleared, from its memory where it has room.
+// openList is an empty list of room n, a's own.
+func (a *Asm) openList(n int) []int32 {
+	if cap(a.openQ) < n {
+		a.openQ = make([]int32, 0, n)
+	}
+	return a.openQ[:0]
+}
+
 func grow[T any](s []T, n int) []T {
 	if cap(s) < n {
 		return make([]T, n, n+n/4)
