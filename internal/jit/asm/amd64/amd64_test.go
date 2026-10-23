@@ -56,6 +56,15 @@ func decodeJumps(t *testing.T, code []byte) (targets []int, shortCount int) {
 		switch b := code[i]; {
 		case b == 0x90:
 			i++
+		case b == 0x66 && code[i+1] == 0x90:
+			i += 2
+		case b == 0x0F && code[i+1] == 0x1F || b == 0x66 && code[i+1] == 0x0F && code[i+2] == 0x1F:
+			// Align's NOPs, by their ModRM: 00, 40 and 44, 80 and 84.
+			j := i + 2
+			if b == 0x66 {
+				j++
+			}
+			i = j + map[byte]int{0x00: 1, 0x40: 2, 0x44: 3, 0x80: 5, 0x84: 6}[code[j]]
 		case b == 0xEB || b&0xF0 == 0x70:
 			targets = append(targets, i+2+int(int8(code[i+1])))
 			shortCount++
@@ -167,5 +176,55 @@ func TestBsr(t *testing.T) {
 		if !bytes.Equal(a.buf, tc.want) {
 			t.Errorf("Bsr(%d, %d, %v) = % x, want % x", tc.dst, tc.src, tc.wide, a.buf, tc.want)
 		}
+	}
+}
+
+// Align pads to a multiple of its alignment, with one NOP or a jump over
+// the padding, after the jumps are shortened: every aligned label is on
+// its multiple, every jump, a padding's included, reaches a label, and the
+// jumps across paddings were shortened as if the paddings were whole.
+func TestAlign(t *testing.T) {
+	var a Asm
+	nops := func(n int) {
+		for range n {
+			a.buf = append(a.buf, 0x90)
+		}
+	}
+	loop, exit, second := a.NewLabel(), a.NewLabel(), a.NewLabel()
+	nops(5)
+	a.Jcc(CondE, exit) // over the loop, its padding whole: 5+63+20 bytes
+	nops(3)
+	a.Align(64)
+	a.Bind(loop)
+	nops(20)
+	a.Jcc(CondNE, loop) // back: short
+	a.Align(16)
+	a.Bind(exit)
+	nops(7)
+	a.Align(64)
+	a.Bind(second)
+	nops(130)
+	a.Jmp(loop) // far back: long
+	code, err := a.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		l Label
+		n int
+	}{{loop, 64}, {exit, 16}, {second, 64}} {
+		if a.Offset(c.l)%c.n != 0 {
+			t.Errorf("label at %d, not a multiple of %d: % x", a.Offset(c.l), c.n, code)
+		}
+	}
+	targets, short := decodeJumps(t, code)
+	at := map[int]bool{a.Offset(loop): true, a.Offset(exit): true, a.Offset(second): true}
+	for i, to := range targets {
+		if !at[to] {
+			t.Errorf("jump %d reaches %d, no label's offset: % x", i, to, code)
+		}
+	}
+	if short < 2 {
+		t.Errorf("%d jumps short, want the forward and the back one", short)
 	}
 }

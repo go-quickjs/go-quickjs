@@ -82,12 +82,15 @@ type Asm struct {
 	at    []int32
 	// open are the fixups whose jumps Finish may yet shorten, in order.
 	open []int32
+	// aligned says the code has alignments (Align).
+	aligned bool
 }
 
 type fixup struct {
-	at    int // where the rel32 is
+	at    int // where the rel32 is, or an alignment's padding starts
 	label Label
 	kind  uint8
+	n     uint8 // an alignment's
 }
 
 // The fixups' kinds: a lea's displacement, which stays 32 bits, and a
@@ -97,6 +100,7 @@ const (
 	fixLea uint8 = iota
 	fixJmp
 	fixJcc
+	fixAlign
 )
 
 // shortened is how many bytes a fixup of kind k's jump loses shortened, and
@@ -117,6 +121,8 @@ func opLen(k uint8) int {
 		return 1
 	case fixJcc:
 		return 2
+	case fixAlign:
+		return 0
 	}
 	return 3
 }
@@ -129,6 +135,7 @@ func (a *Asm) Reset() {
 	a.buf, a.labels, a.fixups = a.buf[:0], a.labels[:0], a.fixups[:0]
 	a.short, a.never, a.removed, a.past, a.bound, a.at = a.short[:0], a.never[:0], a.removed[:0], a.past[:0], a.bound[:0], a.at[:0]
 	a.open = a.open[:0]
+	a.aligned = false
 }
 
 // Bytes is the memory the assembler keeps for the next function.
@@ -151,6 +158,42 @@ func (a *Asm) Bind(l Label) {
 	}
 	a.labels[l] = len(a.buf)
 	a.bound = append(a.bound, l)
+}
+
+// Align pads the code to the next multiple of n bytes, n a power of two
+// at most 128: it emits n-1 bytes now, of which Finish keeps as many as
+// the code after them, its jumps shortened, needs -- one NOP, or, past
+// nine bytes, a jump over the rest.
+func (a *Asm) Align(n int) {
+	if n <= 1 {
+		return
+	}
+	end := a.NewLabel()
+	a.fixups = append(a.fixups, fixup{len(a.buf), end, fixAlign, uint8(n)})
+	for range n - 1 {
+		a.emit(0x90)
+	}
+	a.Bind(end)
+	a.aligned = true
+}
+
+// nops are NOPs of 0 to 9 bytes.
+var nops = [...][]byte{nil, {0x90}, {0x66, 0x90}, {0x0f, 0x1f, 0x00}, {0x0f, 0x1f, 0x40, 0x00},
+	{0x0f, 0x1f, 0x44, 0x00, 0x00}, {0x66, 0x0f, 0x1f, 0x44, 0x00, 0x00},
+	{0x0f, 0x1f, 0x80, 0x00, 0x00, 0x00, 0x00}, {0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00},
+	{0x66, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00}}
+
+// pad fills b with code that does nothing: one NOP of its length, or a
+// jump over it.
+func pad(b []byte) {
+	if len(b) < len(nops) {
+		copy(b, nops[len(b)])
+		return
+	}
+	b[0], b[1] = 0xEB, byte(len(b)-2)
+	for i := 2; i < len(b); i++ {
+		b[i] = 0x90
+	}
 }
 
 // Offset is a bound label's position.
@@ -191,7 +234,7 @@ func (a *Asm) Finish() ([]byte, error) {
 	// function's blocks -- are.
 	a.never = grow(a.never, n)
 	for i, f := range a.fixups {
-		if f.kind == fixLea {
+		if f.kind == fixLea || f.kind == fixAlign {
 			a.never[i] = true
 			continue
 		}
@@ -236,6 +279,22 @@ func (a *Asm) Finish() ([]byte, error) {
 		open = kept
 	}
 	a.open = open[:0]
+	// The jumps shortened with every alignment's padding whole, each keeps
+	// what the code after it, moved, needs: no shortened jump's
+	// displacement grows.
+	if a.aligned {
+		sum := 0
+		for i, f := range a.fixups {
+			switch {
+			case f.kind == fixAlign:
+				n := int(f.n)
+				sum += n - 1 - (n-(f.at-sum)%n)%n
+			case a.short[i]:
+				sum += shortened(f.kind)
+			}
+			a.removed[i] = sum
+		}
+	}
 	// The code is the buffer, moved down over what the shortened jumps
 	// remove: what is written never passes what is still to be read, and
 	// a jump's own bytes are read before they are written over.
@@ -243,6 +302,13 @@ func (a *Asm) Finish() ([]byte, error) {
 	for i, f := range a.fixups {
 		start := f.at - opLen(f.kind)
 		w += copy(buf[w:], buf[last:start])
+		if f.kind == fixAlign {
+			n := int(f.n)
+			k := (n - w%n) % n
+			pad(buf[w : w+k])
+			w, last = w+k, f.at+n-1
+			continue
+		}
 		to := a.movedPast(a.labels[f.label], int(a.past[i]))
 		switch {
 		case a.short[i] && f.kind == fixJmp:
@@ -381,7 +447,7 @@ func (a *Asm) Ret() { a.emit(0xC3) }
 // Jmp jumps to l.
 func (a *Asm) Jmp(l Label) {
 	a.emit(0xE9)
-	a.fixups = append(a.fixups, fixup{len(a.buf), l, fixJmp})
+	a.fixups = append(a.fixups, fixup{len(a.buf), l, fixJmp, 0})
 	a.imm32(0)
 }
 
@@ -407,7 +473,7 @@ func (a *Asm) LeaLabel(dst Reg, l Label) {
 		rex |= 0x04
 	}
 	a.emit3(rex, 0x8D, byte(dst&7)<<3|5)
-	a.fixups = append(a.fixups, fixup{len(a.buf), l, fixLea})
+	a.fixups = append(a.fixups, fixup{len(a.buf), l, fixLea, 0})
 	a.imm32(0)
 }
 
@@ -420,7 +486,7 @@ func (a *Asm) LoadLabel(dst Reg, l Label) {
 		rex |= 0x04
 	}
 	a.emit3(rex, 0x8B, byte(dst&7)<<3|5)
-	a.fixups = append(a.fixups, fixup{len(a.buf), l, fixLea})
+	a.fixups = append(a.fixups, fixup{len(a.buf), l, fixLea, 0})
 	a.imm32(0)
 }
 
@@ -432,7 +498,7 @@ func (a *Asm) CmpLabel(r Reg, l Label) {
 		rex |= 0x04
 	}
 	a.emit3(rex, 0x3B, byte(r&7)<<3|5)
-	a.fixups = append(a.fixups, fixup{len(a.buf), l, fixLea})
+	a.fixups = append(a.fixups, fixup{len(a.buf), l, fixLea, 0})
 	a.imm32(0)
 }
 
@@ -442,7 +508,7 @@ func (a *Asm) Quad(v uint64) { a.buf = binary.LittleEndian.AppendUint64(a.buf, v
 // Jcc jumps to l if c holds.
 func (a *Asm) Jcc(c Cond, l Label) {
 	a.emit2(0x0F, 0x80|byte(c))
-	a.fixups = append(a.fixups, fixup{len(a.buf), l, fixJcc})
+	a.fixups = append(a.fixups, fixup{len(a.buf), l, fixJcc, 0})
 	a.imm32(0)
 }
 

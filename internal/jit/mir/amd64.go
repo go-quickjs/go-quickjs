@@ -239,6 +239,16 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 				c.mark("call entry")
 				c.callEntry()
 			}
+			if b.LoopHeader {
+				// A loop's code starts a 64-byte line, the op cache's: so
+				// its lines are the same whatever comes before it in the
+				// function, and its hot code is in as few as its length
+				// allows. microbench's prop_write and array_length_read,
+				// their loops main's to the instruction, were 4 to 5%
+				// slower than main at every placement with their loops'
+				// starts a few bytes on.
+				c.a.Align(64)
+			}
 			c.a.Bind(c.labels[b.ID])
 			if c.ann != nil {
 				c.mark(fmt.Sprintf("b%d", b.ID))
