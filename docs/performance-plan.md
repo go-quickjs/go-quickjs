@@ -1100,9 +1100,38 @@ before; three alternated runs of each, then four JIT code placements,
 The round as a whole (`3d997a4`..`eceffb6` against `0c96ef6`, four
 placements): V8 suite -3.2%, Are We Fast Yet -10.0% (geometric mean
 -13.5%: Towers -45%, NBody -30%, List -23%, Richards -12.5%), Octane -2.9%;
-56 micro-benchmarks -10.5% by their geometric mean, `generator_next`
-(+19%) and `string_build_large2` (+19%) slower at the one placement
-measured.
+56 micro-benchmarks -10.5% by their geometric mean. `generator_next`
+(+19%) and `string_build_large2` (+19%), slower at the one placement
+measured, were Go's code placement: over four placements built in one
+checkout -0.6% and +12.5% bimodal (+23, -9, +14, +25), its time in Go's
+string code; a micro-benchmark compared across binaries built in other
+checkouts measures where Go placed the code, not the change.
+
+The backend's second round (`91f6829`..`dfe1be4`, against `7717386`;
+four Go code placements, `placements compare -jit` for the suites, the
+regressed benchmarks alone in fresh processes): phis grouped with their
+arguments, the groups the one scan's preferences (Octane's edge moves
+107,309 -> 59,528); a loop's back-edge budget counted in a register
+where its turn would wait on the counter in memory, by the turn's
+loop-carried chain (loop_sum had been bound by the counter's
+store-to-load forward, 1.31 or 1.68 ns a turn by where it landed); loop
+headers at 64-byte lines, the padding jumped over; and the backend's
+compile made cheaper than main's -- liveness found from each value's
+uses rather than by block sets to a fixpoint, the groups in sorted
+arrays, exits' slots and code constants found by hash (Typescript's
+backend 425 -> 404 ms of compiles a run; 480 with the groups before).
+V8 suite -0.5%, Are We Fast Yet -0.5%, Octane -1.8% (Typescript -6.5%,
+Gameboy -3.3%; alone, Typescript, Box2D, Mandreel, zlib and Gameboy
+-0.5 to -1.1%); micro-benchmarks -5.7% by their geometric mean
+(empty_loop -55%, loop_locals -46%, loop_sum -18%, method_call_leaf -9%,
+try_catch -4%). Slower at every placement: `prop_in` +7.4% and
+`array_for` +5.9%. On the way: a register-group design that compiled
+every function two and three times (the backend 11 to 20% dearer), and a
+limit of 500 values a function on its second scan, rejected as an
+arbitrary threshold; a budget read at every entry of a loop that turns
+seldom (`method_call` +5.9%); exit edges laid out in a loop's code (a
+taken branch a turn); and a budget wrongly stored as a float after a
+poll, which stopped every later compile in the runtime.
 
 Open from it:
 
