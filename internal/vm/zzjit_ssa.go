@@ -3363,6 +3363,10 @@ func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 		e.nativeCalls = append(e.nativeCalls, r.jitNativeTarget(int32(pc), cl, o, in))
 		e.callSites[pc] = jitCallNative
 		e.inlinePending = true
+	} else if ce := r.jit.entryFor(cl.fn); ce != nil && ce.warming {
+		// A callee warming up (jitNativeCallee): decided once it is
+		// compiled, or refused.
+		e.callSites[pc] = settle - 1
 	}
 }
 
@@ -8234,6 +8238,25 @@ func (r *Runtime) jitNativeCallee(cl *closure) *jitEntry {
 		// A call of a generator or an async function makes its object: its
 		// body is not what a call runs.
 		return nil
+	}
+	if ce := r.jit.entryFor(fn); len(fn.Code) > ssa.MaxInline && (ce == nil || ce.warming) {
+		// One too long to inline warms up as any function does, the calls
+		// Go makes of it for its native callers spending its budget, and
+		// is compiled once that is spent: its compile decides nothing its
+		// callers inline. Compiled at sight -- at a native caller's first
+		// call of it, or when that caller is compiled (jitSeedCalls) --
+		// Typescript's callees made 911 compiles a run where they make
+		// 699, and Mandreel's initPhysics, 13,098 instructions and called
+		// once, took a second's compile once the JIT compiled that long a
+		// function.
+		if ce == nil {
+			if ce = r.jitWarmFor(cl); ce != nil {
+				cl.setHint(hintFor(ce))
+			}
+		}
+		if ce == nil || ce.warming && ce.tierBudget > 0 {
+			return nil
+		}
 	}
 	e := r.jitFor(cl)
 	if e == nil || e.ssa != nil || e.deferred || e.calleeRefused {

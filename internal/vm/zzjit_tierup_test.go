@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
+	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
 // jitTierSetup has f read x off its receivers' prototypes, which a site that
@@ -468,6 +469,96 @@ func TestJITWarmingCalleeCompiledOnDemand(t *testing.T) {
 	}
 	if e = r.jit.entryFor(cl.fn); e == nil || e.ssa == nil || e.warming || e.calleeRefused {
 		t.Fatalf("g not compiled at its native caller's call: %+v", e != nil && e.ssa != nil)
+	}
+}
+
+// A callee too long to inline (ssa.MaxInline), which native code calls
+// through Go, warms up as any function does and is compiled once it has
+// spent its own budget -- not at its native caller's first call of it, nor
+// when that caller is compiled: its compile decides nothing its callers
+// inline, and Mandreel's initPhysics, 13,098 instructions and called
+// once, had been compiled so, for a second. g, called by h's code from its
+// 400th call on, is compiled at its own 400th call, and is called
+// natively by h from then on.
+func TestJITLongCalleeWarmsUp(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	r, run := v8TierRuntimeForTest(t, `function g(x){`+strings.Repeat(`x=(x*3+1)|0;`, 16)+`return x}
+		function h(n,k){let t=0;for(let i=0;i<n;i++){t=(t+i)|0;if(k)t=(t+g(i))|0}return t}`)
+	g := r.global.getOwn(r.atoms.intern("g")).value().Object().fn().closure
+	h := r.global.getOwn(r.atoms.intern("h")).value().Object().fn().closure
+	if len(g.fn.Code) <= ssa.MaxInline {
+		t.Fatalf("g is %d instructions, short enough to inline", len(g.fn.Code))
+	}
+	for range jitInvocationsForMaglev {
+		run(`h(4,0)`)
+	}
+	if e := r.jit.entryFor(h.fn); e == nil || e.ssa == nil {
+		t.Fatal("h has no code")
+	}
+	for i := range jitInvocationsForMaglev - 1 {
+		run(`h(1,1)`)
+		if e := r.jit.entryFor(g.fn); e != nil && e.ssa != nil {
+			t.Fatalf("g compiled at its %d. call", i+1)
+		}
+	}
+	for range 8 {
+		run(`h(1,1)`)
+	}
+	e := r.jit.entryFor(g.fn)
+	if e == nil || e.ssa == nil {
+		t.Fatalf("g not compiled once warm: %+v", e)
+	}
+	in := e.link.in
+	run(`h(100,1)`)
+	if e.link.in-in < 100 {
+		t.Fatalf("h's code called g natively %d times of 100", e.link.in-in)
+	}
+}
+
+// A long callee native callers may not call through its link -- an arrow
+// that reads this, its link's frame none of its own -- whose calls Go makes
+// for its native caller meanwhile, warms up so too: its calls Go makes
+// spend its budget, those the existing tiers answer without a frame
+// (jitInvokedFrameless) as well, and the call is decided once it is
+// compiled, not settled as Go's while it warms up.
+func TestJITLongArrowCalleeWarmsUp(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	r, run := v8TierRuntimeForTest(t, `function C(){this.v=1;this.f=(x)=>{`+strings.Repeat(`x=(x*3+1)|0;`, 16)+`return (x+this.v)|0}}
+		var c=new C();
+		function h(n,k){let t=0;for(let i=0;i<n;i++){t=(t+i)|0;if(k)t=(t+c.f(i))|0}return t}`)
+	f := r.global.getOwn(r.atoms.intern("c")).value().Object().getOwn(r.atoms.intern("f")).value().Object().fn().closure
+	h := r.global.getOwn(r.atoms.intern("h")).value().Object().fn().closure
+	if len(f.fn.Code) <= ssa.MaxInline || r.jitLinkable(f) {
+		t.Fatalf("f is %d instructions, linkable %v", len(f.fn.Code), r.jitLinkable(f))
+	}
+	for range jitInvocationsForMaglev {
+		run(`h(4,0)`)
+	}
+	he := r.jit.entryFor(h.fn)
+	if he == nil || he.ssa == nil {
+		t.Fatal("h has no code")
+	}
+	for i := range jitInvocationsForMaglev - 8 {
+		run(`h(1,1)`)
+		if e := r.jit.entryFor(f.fn); e != nil && e.ssa != nil {
+			t.Fatalf("f compiled at its %d. call", i+1)
+		}
+	}
+	// Its caches' feedback changes in its first calls, which raises what
+	// is left of its budget (jitWarmUp).
+	for range 2 * jitInvocationsForMaglev {
+		run(`h(1,1)`)
+	}
+	e := r.jit.entryFor(f.fn)
+	if e == nil || e.ssa == nil {
+		t.Fatalf("f not compiled once warm: %+v", e)
+	}
+	if !slices.ContainsFunc(he.nativeCalls, func(x jitInline) bool { return x.cl == f }) {
+		t.Fatalf("h does not call f natively: %+v", he.nativeCalls)
 	}
 }
 
