@@ -1458,18 +1458,29 @@ The rounds that followed, each measured as above. The commit says more.
   functions of npm's own code the JIT's lowering takes 5,618 (5,101
   before), most of the rest doing no loop's or array's work (51%);
   refused:
-  - Object spread, `copy_data_props` (337 functions): made by a call of Go
-    with a frame, it takes longer than the tree tier's spread (a loop of
-    `{ ...o, k: i }` 80 to 85 ms against 77 to 78; with a getter's source
-    among them 123 to 128 against 112 to 116), and without a frame a
-    source with a getter exits at each spread, its site never marked
-    generic (173 to 185 ms). Wanted: a call of Go that tries without a
-    frame and falls back to one in the same call, and a literal's fields
-    after a spread defined by a call of Go rather than an exit (the
-    layout Define plans statically gives up at a spread).
-  - Rest parameters (148), `get_super_prop` (117), array spread (122),
-    spread calls (59) and, in a function of its own, the arguments object
-    (104): an inlined callee's `arguments[k]` is native, a function that
+  - Done since: object spread and rest, array spread and spread calls, a
+    literal's computed keys, `__proto__` and the fields after them, tagged
+    templates and a named function expression's own name, which had
+    refused 1,062 of npm's functions, compile, each an operation Go makes
+    from native code (`compile.GoOperation`, `abi.GoCallOp`): without a
+    frame where that runs no script, with the code's in the same call
+    where it may (a getter, a proxy, an iterator, a key's `toString`, a
+    callee), never an exit. Native code makes the common ones itself: an
+    object spread by the runtime's table of spreads by layout (V8's
+    CloneObjectIC), the fields after it along their shapes' first
+    transitions, an array spread under the iteration's protector into the
+    room its literal's arrays learned to need (V8's allocation sites), an
+    element appended; Go an object rest by its source's layout, and a
+    leaf's spread call. TestLowerCorpusRefusals measures it: of npm's
+    14,033 functions 1,968 are refused (3,030 before), Are We Fast Yet's
+    13 of 477 (20). Micro-benchmarks against the tree tier: object_spread
+    0.45 times its time, array_spread 0.5, object_rest 0.3, object_computed
+    0.85; spread_call and object_getter_spread, framed, judged not to pay
+    and left to it. Open: a spread call of a script function is Go's call
+    with the frame, where a native call of the array's elements would
+    serve; a callee's `push_callee` (11).
+  - Rest parameters (148), `get_super_prop` (117) and, in a function of
+    its own, the arguments object (104): an inlined callee's `arguments[k]` is native, a function that
     reads `arguments` is refused, EarleyBoyer's `sc_list` and `sc_append`
     among them. A context's pointer to the frame's arguments, which Go
     sets at each entry, would serve rest parameters and `arguments`
