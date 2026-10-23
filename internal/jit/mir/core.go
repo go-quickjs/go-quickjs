@@ -2797,7 +2797,9 @@ func (c *core) goState(op uint64, keep int, v *ssa.Value, args []*ssa.Value) (*a
 	enc := c.enc
 	st := &abi.GoCallState{Op: op, Keep: uint64(keep), NumOffset: enc.NumOffset, RefOffset: enc.RefOffset,
 		UpvalueSlot: enc.UpvalueSlot, True: enc.True, False: enc.False, NaN: enc.CanonicalNaN}
-	if v != nil && ssa.GoOp(op&0xff) == ssa.GoCall {
+	if v != nil && (ssa.GoOp(op&0xff) == ssa.GoCall || ssa.GoOp(op&0xff) == ssa.GoHost) {
+		// A call's, or an instruction's Go makes on the frame (GoHost):
+		// the instruction Go finds at the PC.
 		st.SetsPC, st.PC, st.Depth = true, uint32(v.State.PC), uint32(v.State.Depth)
 		if in := v.State.Inline; in != nil {
 			// Inside an inlined callee: its instruction, which Go makes
@@ -3108,7 +3110,7 @@ func goOpWord(site *ssa.CallSite) uint64 {
 	if (site.Go == ssa.GoClosure || site.Go == ssa.GoCells || site.Go == ssa.GoClose) && site.Pool != 0 {
 		op |= abi.GoClosurePool << abi.GoOpKindShift
 	}
-	if site.Go == ssa.GoConcat || site.Go == ssa.GoArgument {
+	if site.Go == ssa.GoConcat || site.Go == ssa.GoArgument || site.Go == ssa.GoHost {
 		// Its operands' count; an argument's read or the arguments' count.
 		op |= uint64(site.Argc) << abi.GoOpArgcShift
 	}

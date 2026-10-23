@@ -400,6 +400,12 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			// has none of.
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
+		if superRef(in.Op) && (!m.ssa || m.callee) {
+			// A super reference reads the frame's function object's home
+			// object, which only a frame Go made for a call has: a native
+			// callee's and an inlined one's have none.
+			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
+		}
 		if (in.Op == bytecode.OpTailCall || in.Op == bytecode.OpTailCallMethod) && (!m.ssa || m.callee) {
 			// A tail call gives up its frame deep enough in the stack: a
 			// function's own, in the new pipeline, which a callee inlined
@@ -434,7 +440,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			// throws it, as V8's code calls the runtime to throw.
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
-		host = host || str || iters || isPrivate(in.Op) || isDefinition(in.Op) || GoOperation(in.Op) || in.Op == bytecode.OpClosure || in.Op == bytecode.OpCloseUpvalues || in.Op == bytecode.OpImport || in.Op == bytecode.OpImportMeta || in.Op == bytecode.OpYield || in.Op == bytecode.OpAwait || in.Op == bytecode.OpThrow ||
+		host = host || str || iters || superRef(in.Op) || isPrivate(in.Op) || isDefinition(in.Op) || GoOperation(in.Op) || in.Op == bytecode.OpClosure || in.Op == bytecode.OpCloseUpvalues || in.Op == bytecode.OpImport || in.Op == bytecode.OpImportMeta || in.Op == bytecode.OpYield || in.Op == bytecode.OpAwait || in.Op == bytecode.OpThrow ||
 			in.Op == bytecode.OpNewDisposeCapability || in.Op == bytecode.OpAddDisposable || in.Op == bytecode.OpDispose || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpIn || in.Op == bytecode.OpDeleteProp || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpApplyArguments || in.Op == bytecode.OpNew || in.Op == bytecode.OpSuperCall || in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict || in.Op == bytecode.OpCheckGlobalRef || in.Op == bytecode.OpNewObject || in.Op == bytecode.OpNewRegExp || in.Op == bytecode.OpDefineField || in.Op == bytecode.OpPushEmptyString || in.Op == bytecode.OpConcat || in.Op == bytecode.OpToString || in.Op == bytecode.OpNewArray || in.Op == bytecode.OpCall || in.Op == bytecode.OpCallMethod || in.Op == bytecode.OpTailCall || in.Op == bytecode.OpTailCallMethod || in.Op == bytecode.OpGetGlobal || in.Op == bytecode.OpGetGlobalOpt || in.Op == bytecode.OpGetPropThis || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		property = property || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		// A derived constructor's this slot is what it returns, bound by
@@ -759,6 +765,9 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		markBools(p)
 		p.UpvalueBase, p.Upvalues, p.Params = fn.LocalCount, len(fn.Upvalues), fn.ParamCount
 		p.FrameArgs = fn.HasRest || fn.UsesArguments || fn.MappedArguments || fn.ParamsAreLexical
+		for _, in := range fn.Code {
+			p.FrameCallee = p.FrameCallee || superRef(in.Op)
+		}
 		if !prologueArgs(p) && m.callee {
 			// A native callee's frame, and an inlined one's, has the call's
 			// arguments nowhere but where the prologue's states keep them.
@@ -779,6 +788,16 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 	selectPropertyLoops(fn, p, m.calls, m.callee, codes)
 	selectGlobalSlots(fn, p, codes)
 	return p, nil
+}
+
+// superRef reports whether op is a super reference's: a read or a write
+// of a property of the home object's prototype, or that base.
+func superRef(op bytecode.Op) bool {
+	switch op {
+	case bytecode.OpGetSuperProp, bytecode.OpGetSuperIndex, bytecode.OpSetSuperProp, bytecode.OpSetSuperIndex, bytecode.OpSuperBase:
+		return true
+	}
+	return false
 }
 
 // argumentsOwn reports whether fn's own code may read its arguments and
@@ -1943,6 +1962,24 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 	case bytecode.OpRestParam, bytecode.OpGetArguments:
 		// The rest parameter's array, or the arguments object.
 		return effect{delta: 1}, nil
+	case bytecode.OpGetSuperProp, bytecode.OpSuperBase:
+		// super.k's value, or a super reference's base.
+		if in.Op == bytecode.OpGetSuperProp && uint64(in.A) >= uint64(len(fn.Names)) {
+			return bad("invalid super property")
+		}
+		return effect{delta: 1}, nil
+	case bytecode.OpGetSuperIndex:
+		// The base and the key, for the value.
+		return effect{need: 2, delta: -1}, nil
+	case bytecode.OpSetSuperProp:
+		// The value, assigned.
+		if uint64(in.A) >= uint64(len(fn.Names)) {
+			return bad("invalid super property")
+		}
+		return effect{need: 1, delta: -1}, nil
+	case bytecode.OpSetSuperIndex:
+		// The base, the key and the value, assigned.
+		return effect{need: 3, delta: -3}, nil
 	case bytecode.OpCheckGlobalVar, bytecode.OpCheckGlobalLex, bytecode.OpDefineGlobalVar, bytecode.OpDeclareGlobalLex, bytecode.OpDeclareModuleLex:
 		// A top-level declaration's: its check, or its binding made.
 		if !fn.TopLevel {
@@ -2245,9 +2282,20 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this, charCode bool
 	case bytecode.OpArgumentsLength:
 		// Their count, so (When).
 		return ir.Instruction{Op: ir.ArgumentRead, When: true, Left: ir.Literal(ir.Float(0)), Third: ir.Slot(int(in.A)), Dest: sp}
-	case bytecode.OpLazyArguments, bytecode.OpRestParam, bytecode.OpGetArguments:
-		// Go's, from the frame's arguments (argumentsOwn).
+	case bytecode.OpLazyArguments:
+		// Go's, from the frame's arguments (argumentsOwn): it writes the
+		// local the object is kept in.
 		return ir.Instruction{Op: ir.Host}
+	case bytecode.OpRestParam, bytecode.OpGetArguments, bytecode.OpGetSuperProp, bytecode.OpSuperBase:
+		// Go's, from the frame Go entered the code with -- its arguments,
+		// its function and this -- from native code (ir's Frame).
+		return ir.Instruction{Op: ir.Host, Frame: true, Dest: sp}
+	case bytecode.OpGetSuperIndex:
+		return ir.Instruction{Op: ir.Host, Frame: true, Extra: 2, Dest: sp - 2}
+	case bytecode.OpSetSuperProp:
+		return ir.Instruction{Op: ir.Host, Frame: true, Extra: 1, Dest: -1}
+	case bytecode.OpSetSuperIndex:
+		return ir.Instruction{Op: ir.Host, Frame: true, Extra: 3, Dest: -1}
 	case bytecode.OpPushConst:
 		if fn.Constants[in.A].Kind != bytecode.ConstNumber {
 			// A string or a BigInt, which Go pushes.

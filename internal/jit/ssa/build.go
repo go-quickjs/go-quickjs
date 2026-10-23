@@ -1573,6 +1573,7 @@ const (
 	GoBigString
 	GoLeaf
 	GoArgument
+	GoHost
 )
 
 // GoArgument is arguments[k] in a function's own code (ir.ArgumentRead
@@ -1582,6 +1583,13 @@ const (
 // one operand that local, arguments.length, their count. Go refuses the
 // rest, and the code leaves for Go to make it there (jitHost): the object
 // made, an index past the arguments, any other key.
+
+// GoHost is an instruction of a function's own code that reads only its
+// Argc operands and the frame Go entered the code with (ir.Instruction's
+// Frame) -- a super reference's read or write, a rest parameter's array,
+// the arguments object -- which Go makes there, as the interpreter does,
+// from native code: it may run anything, a getter or a setter, as a call
+// Go makes (GoCall) may. Its result, where the instruction pushes one.
 
 // IndexOfFrom is GoIndexOf's Argc's low bit, where the call gives a
 // position, its second argument; the bits above it are the VM's kind of
@@ -1619,7 +1627,7 @@ func allocOnly(v *Value) bool {
 		// but a call it makes (GoCall), which runs anything, and a
 		// deletion (GoDelete), which clears the cell of the property it
 		// deletes, one a value used after it may have been read from.
-		if !c.Alloc && !c.Receiver && !c.Push && (c.Go == 0 || c.Go == GoCall || c.Go == GoDelete || c.Go == GoDeleteStrict) {
+		if !c.Alloc && !c.Receiver && !c.Push && (c.Go == 0 || c.Go == GoCall || c.Go == GoHost || c.Go == GoDelete || c.Go == GoDeleteStrict) {
 			return false
 		}
 	}
@@ -3381,6 +3389,10 @@ func (b *builder) goConcat(blk *Block, in ir.Instruction, operand func(ir.Operan
 // nativeHost reports whether native code makes the host operation at pc
 // itself: an intrinsic call or instanceof the VM knows.
 func (b *builder) nativeHost(pc int) bool {
+	if b.p.Code[pc].Frame && b.cur == b.root && b.goCalls() {
+		// Go's from native code (GoHost).
+		return true
+	}
 	if _, ok := b.intrinsic(pc); ok {
 		return true
 	}
@@ -5814,6 +5826,30 @@ func (b *builder) instruction(blk *Block, pc int) {
 		}
 		b.assign(in.Dest, blk, boxB(v))
 	case ir.Host, ir.Call:
+		if in.Op == ir.Host && in.Frame && b.cur == b.root && b.goCalls() {
+			// Go makes it from native code, on the frame it entered the code
+			// with (GoHost), and native code goes on after it.
+			sp := b.p.Locals + b.p.Maps[pc].Depth
+			args := make([]*Value, in.Extra)
+			for i := range args {
+				args[i] = b.read(sp-in.Extra+i, blk)
+			}
+			call := guard(OpCall, Tagged, ir.HostExit, args...)
+			b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoHost, Argc: in.Extra, ThisSlot: -1}}, b.f.Keeps
+			b.f.Keeps++
+			b.f.HostsLeft = append(b.f.HostsLeft, pc)
+			if in.Dest >= 0 {
+				cell := f.newValue(blk, OpCallCell, Source, call)
+				r := f.newValue(blk, OpKept, Tagged, cell, call)
+				r.Shadow = cell
+				b.assign(in.Dest, blk, r)
+			}
+			// A getter or a setter Go calls may assign a captured binding.
+			if b.hasCells() {
+				b.reloadAfterCall(blk)
+			}
+			break
+		}
 		if in.Tail {
 			// Deep in the stack the frame is given up, where it holds no
 			// captured local: native code makes a call of the function

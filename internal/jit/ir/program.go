@@ -414,6 +414,13 @@ type Instruction struct {
 	// Rest marks a destructuring's step (IterStep, When) that is its rest
 	// element, iter_rest: an array of what the cursor has left.
 	Rest bool
+	// Frame marks a Host that reads only its operands and the frame Go
+	// entered a function's own code with -- its function object, its this,
+	// its arguments: a super reference's read or write, a rest
+	// parameter's array, the arguments object -- which Go makes from
+	// native code there (ssa's GoHost), its Extra operands popped and its
+	// result, unless Dest is -1, at Dest.
+	Frame bool
 }
 
 // StateMap describes state immediately before a bytecode instruction. PC is
@@ -525,6 +532,10 @@ type Program struct {
 	// start (ssa's OpTailSelf) would leave as the first call's: Go makes
 	// those calls.
 	FrameArgs bool
+	// FrameCallee marks code that reads its frame's function object -- a
+	// super reference's home object -- which only a frame Go made for a
+	// call has: native callers do not call it (no call entry).
+	FrameCallee bool
 }
 
 // PrologueAt reports whether a frame at pc, its operands depth deep, has

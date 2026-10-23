@@ -2067,7 +2067,7 @@ func (r *Runtime) jitBuildSSA(fn *bytecode.Function, p *ir.Program, fb *jitFeedb
 	// object's -- which Go makes from the frame's (compile's argumentsOwn):
 	// a native call writes the parameters alone. Go makes their calls.
 	f.CallEntry = !fn.TopLevel && !fn.IsModule && !fn.Async && !fn.Generator && !isGeneratorTemplate(fn) && !p.PrologueFrameOnly &&
-		!jitPushesCallee(fn) && !fn.HasRest && !fn.UsesArguments && !fn.MappedArguments
+		!jitPushesCallee(fn) && !fn.HasRest && !fn.UsesArguments && !fn.MappedArguments && !p.FrameCallee
 	if jitGenCallable(fn) && !p.Cells {
 		// A generator a loop's step may resume natively: where it resumes
 		// it (mir's genEntry).
@@ -3677,6 +3677,8 @@ func jitHostCall(ctx *abi.Context) bool {
 			*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
 		}
 		return ok
+	case ssa.GoHost:
+		return r.jitGoHost(ctx)
 	case ssa.GoArgument:
 		v, ok := r.jitArgument(ctx)
 		if ok {
@@ -11650,6 +11652,10 @@ func jitCallInstr(in bytecode.Instr) bytecode.Instr {
 // (jitHost). It returns the operands' top, and false for a throw, which
 // the interpreter takes from there.
 func (r *Runtime) jitCallResult(f *frame, pc, depth int, v Value, err error) (int, bool) {
+	if sp, ok, host := r.jitHostResult(f, pc, depth, v, err); host {
+		// One Go made from native code on the frame (jitGoHost).
+		return sp, ok
+	}
 	in := jitCallInstr(f.cl.fn.Code[pc])
 	if in.Op == bytecode.OpIterStep {
 		// A destructuring's step Go made (abi.GoCallFill): its cursor
@@ -11729,6 +11735,100 @@ func (r *Runtime) jitCallResult(f *frame, pc, depth int, v Value, err error) (in
 	}
 	r.stack[sp] = v
 	return sp + 1, true
+}
+
+// jitGoHost makes an instruction of a function's own code that reads only
+// its operands and the frame Go entered the code with (ssa.GoHost) -- a
+// super reference's, a rest parameter's array, the arguments object --
+// for the code ctx runs, on that frame, as jitHost makes it at an exit,
+// its operands the call's: from native code, which goes on after it, as
+// after a call Go makes (jitGoCall), whose pins and accounting it shares.
+// One that threw, or after which the code is due to be compiled again, is
+// left for Go to finish at its exit (goPending), and a level of a native
+// call, which has no such frame, makes none.
+func (r *Runtime) jitGoHost(ctx *abi.Context) bool {
+	s := r.jit
+	idx := int(ctx.Level)
+	if ctx.Live != 0 || idx >= len(s.goRuns) || s.goRuns[idx].f == nil || s.ssaCtxs[idx] != ctx || jitGoInline(ctx) {
+		return false
+	}
+	run := &s.goRuns[idx]
+	f, e, code := run.f, run.e, run.code
+	s.levels.serial = 0
+	pc := int(ctx.ExitPC)
+	n := int(ctx.GoOp >> abi.GoOpArgcShift & 0xff)
+	top := r.stackTop
+	if pc >= len(f.cl.fn.Code) || n > abi.MaxGoArgs || top+n+1 > len(r.stack) {
+		return false
+	}
+	for i := range n {
+		r.stack[top+i] = jitGoArg(ctx, i)
+	}
+	sp := top + n
+	r.stackTop, r.stackHigh = sp+1, max(r.stackHigh, sp+1)
+	e.ssaStats.goCalls++
+	s.goCalls++
+	if !run.pinned {
+		r.jitGoPin(idx)
+	}
+	last, shared := s.ssaCtx, s.ssaSharedGen
+	goCallDepth := s.goCallDepth
+	s.goCallDepth = r.frameDepth + 1
+	f.pc = uint32(pc)
+	end, steps, err := r.jitHost(f, sp, 1)
+	v := Undefined
+	if err == nil && steps == 1 && end > top {
+		v = r.stack[end-1]
+	}
+	// Past it meanwhile, as after a call, which a stack trace shows.
+	f.pc = uint32(pc + 1)
+	s.goCallDepth = goCallDepth
+	jitClearArgs(r.stack, top, max(sp, end)+1)
+	r.stackTop = top
+	s.ssaCtx = last
+	if s.ssaSharedGen != shared {
+		r.jitShareContexts(idx, f)
+	}
+	if err == nil && steps != 1 {
+		// Nothing Go made (jitHost): the exit makes it.
+		f.pc = uint32(pc)
+		return false
+	}
+	if err != nil || r.stopped != nil || e.invalid || r.jitLearnedDue(f.cl, e) || e.ssa != code {
+		s.goPending = jitGoPending{set: true, pc: pc, ctx: idx, v: v, err: err}
+		return false
+	}
+	*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
+	return true
+}
+
+// jitHostResult is jitCallResult for an instruction Go made from native
+// code on the frame (ssa.GoHost), at pc, with depth operands: its operands
+// popped, and its result v, if it pushes one, pushed; false for a throw.
+func (r *Runtime) jitHostResult(f *frame, pc, depth int, v Value, err error) (int, bool, bool) {
+	in := f.cl.fn.Code[pc]
+	pops, pushes := 0, true
+	switch in.Op {
+	case bytecode.OpRestParam, bytecode.OpGetArguments, bytecode.OpGetSuperProp, bytecode.OpSuperBase:
+	case bytecode.OpGetSuperIndex:
+		pops = 2
+	case bytecode.OpSetSuperProp:
+		pops, pushes = 1, false
+	case bytecode.OpSetSuperIndex:
+		pops, pushes = 3, false
+	default:
+		return 0, false, false
+	}
+	sp := f.base + depth - pops
+	f.pc = uint32(pc + 1)
+	if err != nil {
+		return sp, false, true
+	}
+	if pushes {
+		r.stack[sp] = v
+		sp++
+	}
+	return sp, true, true
 }
 
 // jitArgument is ssa.GoArgument's answer, for the code ctx runs, a run of

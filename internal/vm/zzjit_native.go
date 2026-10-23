@@ -3034,7 +3034,8 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 			bytecode.OpCopyDataProps, bytecode.OpArraySpread, bytecode.OpSpreadIter, bytecode.OpArrayPush, bytecode.OpSetProtoOf,
 			bytecode.OpObjectRest, bytecode.OpCallSpread, bytecode.OpNewSpread, bytecode.OpTemplateObject, bytecode.OpPushCallee,
 			bytecode.OpRestParam, bytecode.OpGetArguments, bytecode.OpLazyArguments, bytecode.OpArgumentsIndex, bytecode.OpArgumentsLength,
-			bytecode.OpApplyArguments:
+			bytecode.OpApplyArguments, bytecode.OpGetSuperProp, bytecode.OpGetSuperIndex, bytecode.OpSetSuperProp, bytecode.OpSetSuperIndex,
+			bytecode.OpSuperBase:
 		case bytecode.OpDispose:
 		default:
 			return sp, steps, nil
@@ -3313,6 +3314,16 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 			if sp, v, err = r.jitArguments(f, in, sp); err != nil {
 				return sp, steps, err
 			}
+		case bytecode.OpGetSuperProp, bytecode.OpGetSuperIndex, bytecode.OpSetSuperProp, bytecode.OpSetSuperIndex, bytecode.OpSuperBase:
+			// Through the frame's function's home object, and with its
+			// this, as executeAt's cases do.
+			var push bool
+			if sp, v, push, err = r.jitSuper(f, in, sp); err != nil {
+				return sp, steps, err
+			}
+			if !push {
+				continue
+			}
 		default:
 			panic("invalid JIT host operation")
 		}
@@ -3356,6 +3367,47 @@ func (r *Runtime) jitArguments(f *frame, in bytecode.Instr, sp int) (int, Value,
 	target, apply, this := stack[sp-3], stack[sp-2], stack[sp-1]
 	v, err := r.applyArguments(f, in.A, target, apply, this)
 	return sp - 3, v, err
+}
+
+// jitSuper is a super reference's instruction, in, of f's frame, as
+// executeAt's cases make it, its operands on the VM's stack up to sp: the
+// operands' top after it, and what it pushes, if it does (push).
+func (r *Runtime) jitSuper(f *frame, in bytecode.Instr, sp int) (int, Value, bool, error) {
+	stack := r.stack
+	switch in.Op {
+	case bytecode.OpGetSuperProp:
+		v, err := r.superGet(f, f.cl.names[in.A])
+		return sp, v, true, err
+	case bytecode.OpSetSuperProp:
+		return sp - 1, Undefined, false, r.superSet(f, f.cl.names[in.A], stack[sp-1], f.cl.fn.Strict)
+	case bytecode.OpSuperBase:
+		base, _, err := r.superRef(f)
+		if err != nil || base == nil {
+			return sp, Null, true, err
+		}
+		return sp, Obj(base), true, nil
+	case bytecode.OpGetSuperIndex:
+		base, rawKey := stack[sp-2], stack[sp-1]
+		if !base.IsObject() {
+			return sp - 2, Undefined, false, r.throwTypeError("\"super\" has no prototype to read from")
+		}
+		key, err := r.toPropertyKey(rawKey)
+		if err != nil {
+			return sp - 2, Undefined, false, err
+		}
+		this, _ := f.thisValue()
+		v, err := r.getProp(base.Object(), key, this)
+		return sp - 2, v, true, err
+	}
+	base, rawKey, val := stack[sp-3], stack[sp-2], stack[sp-1]
+	if !base.IsObject() {
+		return sp - 3, Undefined, false, r.throwTypeError("\"super\" has no prototype to assign to")
+	}
+	key, err := r.toPropertyKey(rawKey)
+	if err != nil {
+		return sp - 3, Undefined, false, err
+	}
+	return sp - 3, Undefined, false, r.superSetFrom(f, base, key, val, f.cl.fn.Strict)
 }
 
 // jitDefinition is an instruction that makes a class or an object

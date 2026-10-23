@@ -341,6 +341,15 @@ the function itself is Go's (`ir.Program`'s `FrameArgs`), never a jump to
 the code's start, which would leave that frame the first call's
 arguments.
 
+**The frame's own.** What reads only its operands and the frame Go
+entered a function's own code with -- a super reference's read or write
+(through the function object's home object, with the frame's this), a
+rest parameter's array, the arguments object -- Go makes from native code
+on that frame (`ir.Instruction`'s `Frame`, `ssa.GoHost`, the VM's
+`jitGoHost`), as V8's code calls the runtime, native code going on after
+it. Code with super references has no call entry (`ir.Program`'s
+`FrameCallee`): a native callee's frame has no function object.
+
 **Accessors.** A read whose site found a getter on its receivers'
 prototypes, or a write a setter -- a class's accessor, or one
 `Object.defineProperty` put on a prototype -- is a call of it, as V8's

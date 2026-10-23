@@ -1488,7 +1488,10 @@ The rounds that followed, each measured as above. The commit says more.
     object aliasing a parameter the function assigns or an object it
     lets out (npm 31, Octane 149, most of them forwarding constructors
     the inliner takes), and native callers' calls of these functions.
-    `get_super_prop` (117) stays refused.
+    Super references (`get_super_prop` 117 functions) likewise, Go's
+    from native code on the frame (`ssa.GoHost`), such code having no call
+    entry, a native callee's frame no function object to read the home
+    object of.
   - A parameter list's prologue is native for native callers, inlining
     and generic calls too (2026-10-23): its states keep the call's
     arguments past their operands, which a frame Go makes there is given
