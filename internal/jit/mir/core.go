@@ -940,6 +940,9 @@ func (c *core) allocate() error {
 			if v.Shadow != nil {
 				r.slot |= slotShadow
 			}
+			if isFloat(v) {
+				r.slot |= slotFloat
+			}
 		}
 		end[b.ID] = count
 		count++
@@ -1176,8 +1179,13 @@ func (c *core) allocate() error {
 	// backwards through the predecessors, a block once for each value
 	// (seen, by block ID, 1 plus the ID of the value it was last found
 	// live into), and the value's interval stretched over each.
+	//
+	// Each value's interval is then made, and counted by its start for the
+	// sort (below): first, n and floats.
 	seen := c.ints(nb)
 	stack := c.blockList(nb)[:0]
+	first := c.ints(count + 1)
+	n, floats := 0, 0
 	for id := range rec {
 		r := &rec[id]
 		if r.def <= 0 {
@@ -1210,6 +1218,11 @@ func (c *core) allocate() error {
 				}
 			}
 		}
+		first[it.start+1]++
+		n++
+		if r.slot&slotFloat != 0 {
+			floats++
+		}
 	}
 	lap(PhaseLiveness)
 	// Each budget loop's register, from its header's start to the end of
@@ -1222,21 +1235,11 @@ func (c *core) allocate() error {
 				it.start, it.end = min(it.start, start[b.ID]), max(it.end, end[b.ID])
 			}
 		}
+		first[it.start+1]++
+		n++
 	}
 	// By start, then value ID: a counting sort over the positions, the
-	// intervals taken in ID order. floats counts those of floating-point
-	// values.
-	first := c.ints(count + 1)
-	n, floats := 0, 0
-	for i := range iv {
-		if iv[i].v != nil {
-			first[iv[i].start+1]++
-			n++
-			if isFloat(iv[i].v) {
-				floats++
-			}
-		}
-	}
+	// intervals counted as they were made, taken in ID order.
 	for p := 1; p <= count; p++ {
 		first[p] += first[p-1]
 	}
@@ -2306,6 +2309,9 @@ type useRec struct {
 const (
 	slotMade = 1 << iota
 	slotShadow
+	// slotFloat is no use's but the value's class: a floating-point
+	// value's.
+	slotFloat
 )
 
 // gmember is a member of allocate's phis' groups: of the member, group, 1
