@@ -309,6 +309,46 @@ func genResumes(p *ir.Program, f *ssa.Func) []ssa.GenResume {
 	return out
 }
 
+// spreadCorpus is object and array spread, a literal's fields after a
+// spread and an array literal's elements, which native code makes itself
+// where it can (mir's copyProps, defineNext, spreadElems, appendElem) and
+// calls Go for otherwise.
+var spreadCorpus = []string{
+	`function f(o,n){let s=0,x;for(let i=0;i<n;i++){x={...o,k:i};s+=x.k}return x}`,
+	`function f(a,n){let s=0,x;for(let i=0;i<n;i++){x=[i,...a,7];s+=x.length}return x}`,
+	`function f(a,b,n){let x;for(let i=0;i<n;i++)x=Math.max(...a,...b,i);return x}`,
+	`function f(o,p){return{a:1,...o,...p,b:2}}`,
+}
+
+// spreads is globals whose operations Go makes, by its bytecode, are the
+// VM's sites of them (ssa.CallSite's Instr), with what native code makes
+// them by: the table of object spreads by layout, the shapes' first
+// transitions, the arrays' iteration's methods, room to append into.
+type spreads struct {
+	globals
+	fn *bytecode.Function
+}
+
+func (spreads) GoCalls() bool { return true }
+func (s spreads) NativeCalls(pc int) []ssa.CallSite {
+	in := s.fn.Code[pc]
+	if !jitcompile.GoOperation(in.Op) {
+		return nil
+	}
+	site := ssa.CallSite{Go: ssa.GoCall, Instr: int(in.Op) | int(in.A)<<8, Argc: jitcompile.GoOperands(in), ThisSlot: -1}
+	switch in.Op {
+	case bytecode.OpCopyDataProps:
+		site.Copies = 0x90000
+	case bytecode.OpDefineField:
+		site.DefineNext, site.Key = true, 77
+	case bytecode.OpArraySpread, bytecode.OpSpreadIter:
+		site.ArrayIter = 0x91000
+	case bytecode.OpArrayPush:
+		site.Append = true
+	}
+	return []ssa.CallSite{site}
+}
+
 // inCorpus is the in operator, whose answers Go makes from native code
 // (ssa.GoHas) and native code itself where the object is an array and the
 // key an index (mir's keyedHas).
@@ -416,6 +456,75 @@ func TestMirEmitted(t *testing.T) {
 					n++
 				}
 			}
+		}
+	}
+	// Spreads, of an encoding that has what native code makes them by.
+	spreadEnc := enc
+	spreadEnc.WriteBarrier, spreadEnc.Object, spreadEnc.ShapeNext, spreadEnc.ShapeNextKey, spreadEnc.ShapeNextFlags = 0x71000, 0xFFFC000000000000, 40, 48, 52
+	spreadEnc.ShapeIndex, spreadEnc.LinearScan, spreadEnc.PropDefault, spreadEnc.ObjectShape, spreadEnc.ObjectProps = 56, 8, 7, 8, 16
+	spreadEnc.ObjectElems, spreadEnc.ObjectClass, spreadEnc.ObjectFlags, spreadEnc.ObjectProto, spreadEnc.ClassArray = 64, 1, 2, 40, 1
+	spreadEnc.FlagSparse, spreadEnc.FlagExtensible = 4, 1
+	natives := map[string]int{}
+	for _, src := range spreadCorpus {
+		prog, err := parser.Parse(src, parser.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		top, err := compiler.Compile(prog, compiler.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range top.Constants {
+			if c.Kind != bytecode.ConstFunction {
+				continue
+			}
+			for _, lower := range []func(*bytecode.Function) (*ir.Program, error){jitcompile.LowerSSA, jitcompile.LowerSSAInline} {
+				p, err := lower(c.Fn)
+				if err != nil {
+					continue
+				}
+				f, err := ssa.BuildWith(p, spreads{fn: c.Fn})
+				if err != nil {
+					t.Fatalf("%s: %v", src, err)
+				}
+				f.CallEntry = true
+				ssa.Optimize(f)
+				for _, b := range f.Blocks {
+					for _, v := range b.Values {
+						for _, site := range v.Calls() {
+							switch {
+							case site.Copies != 0:
+								natives["copies"]++
+							case site.DefineNext:
+								natives["defines"]++
+							case site.ArrayIter != 0:
+								natives["spreads"]++
+							case site.Append:
+								natives["appends"]++
+							}
+						}
+					}
+				}
+				for _, arch := range arches {
+					compile := mir.CompileAMD64
+					if arch == "arm64" {
+						compile = mir.CompileARM64
+					}
+					mc, err := compile(f, spreadEnc)
+					if err != nil {
+						t.Fatalf("%s (spreads), %s: %v", src, arch, err)
+					}
+					if err := check(arch, mc.Bytes[:mc.Text]); err != nil {
+						t.Fatalf("%s (spreads), %s: %v", src, arch, err)
+					}
+				}
+				n++
+			}
+		}
+	}
+	for _, k := range []string{"copies", "defines", "spreads", "appends"} {
+		if natives[k] == 0 {
+			t.Errorf("no native %s compiled", k)
 		}
 	}
 	// A generator's layout, and a cursor's, for the generators' code and

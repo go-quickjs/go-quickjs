@@ -1233,6 +1233,27 @@ type CallSite struct {
 	// key's conversion, to_property_key -- which native code tests,
 	// calling Go for any other.
 	StringSelf bool
+	// Copies, of an object spread Go makes (Instr, copy_data_props), is
+	// the address of the VM's table of spreads by layout (abi's CopyBits),
+	// by which native code makes one it finds there, as V8's CloneObjectIC
+	// copies a fast object by its map, calling Go for any other.
+	Copies uintptr
+	// DefineNext, of a literal's field Go defines (Instr, define_field),
+	// has native code define it where the object's shape's first
+	// transition is by the field's key, Key, with the default attributes,
+	// as the VM's appendTransition does -- the object of a layout no plan
+	// knows, past a spread or a computed key -- calling Go otherwise.
+	DefineNext bool
+	// ArrayIter, of an array's spread Go makes (Instr, array_spread or
+	// spread_iter), is the address of where the VM's arrays find their
+	// iteration's methods (abi's IterCellArray): native code copies the
+	// elements of an array that iterates as Array.prototype's intrinsics
+	// do, no hole among them, into room the array spread into has, as V8's
+	// code spreads a fast array under its ArrayIteratorProtector, calling
+	// Go for any other. Append, of an element's (array_push), has native
+	// code append it where the array has room.
+	ArrayIter uintptr
+	Append    bool
 	// Super marks a call of Go (GoCall) that is a derived constructor's
 	// super(...) of its Argc operands, the arguments -- no function among
 	// them -- as V8's code calls the parent constructor: Go makes it on

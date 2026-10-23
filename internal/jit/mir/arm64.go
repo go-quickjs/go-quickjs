@@ -4182,6 +4182,30 @@ func (c *a64Compiler) pointerWord(x *ssa.Value, w arm64.Reg) {
 
 // goCall calls Go, as amd64's does.
 func (c *a64Compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(arm64.Cond)) {
+	if (site.Copies != 0 || site.DefineNext || site.ArrayIter != 0 || site.Append) && len(v.Args) == 2 && c.enc.ValueSize == 16 && c.enc.WriteBarrier != 0 && c.enc.ShapeNext != 0 {
+		// As amd64's: an object spread by the layouts where the VM has
+		// made one so, a literal's field along its shape's first
+		// transition, an array spread by its elements, an element
+		// appended, any other Go's.
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		switch {
+		case site.DefineNext:
+			c.defineNext(v, site, slow)
+		case site.ArrayIter != 0:
+			c.spreadElems(v, site, slow)
+		case site.Append:
+			c.appendElem(v, slow)
+		default:
+			c.copyProps(v, site, slow)
+		}
+		c.a.B(join)
+		c.a.Bind(slow)
+		c.goCallOp(v, goOpWord(site), false)
+		c.a.Bind(join)
+		c.a.Load(a64A, a64Ctx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
+		c.setG(v, a64A)
+		return
+	}
 	if site.Go == ssa.GoKeyedWrite && len(v.Args) == 3 && c.enc.ValueSize == 16 && c.enc.WriteBarrier != 0 {
 		slow, join := c.a.NewLabel(), c.a.NewLabel()
 		c.keyedStore(v, slow)
@@ -4809,6 +4833,294 @@ func (c *a64Compiler) keyedStore(v *ssa.Value, slow arm64.Label) {
 // false where it names none of a dense array whose prototypes are as they
 // were; and where key is a string the VM's cache answers for obj. It uses
 // A, B, C, D, F1 and F2, and no other.
+// copyProps is amd64's: the object spread v by the VM's table of spreads
+// by layout, or slow, having written nothing. The values left are counted
+// in a64D.
+func (c *a64Compiler) copyProps(v *ssa.Value, site *ssa.CallSite, slow arm64.Label) {
+	size := int32(unsafe.Sizeof(abi.GoArg{}))
+	tgt, src := abi.OffGoArgs, abi.OffGoArgs+size
+	at := func(i int32) int32 { return abi.OffGoArgs + 2*size + i*8 }
+	entry, next, dst, vals, length := at(0), at(2), at(3), at(4), at(5)
+	c.goArg(tgt, v.Args[0])
+	c.goArg(src, v.Args[1])
+	c.movImm(a64A, c.enc.WriteBarrier)
+	c.a.LoadU8(a64A, a64A, 0)
+	c.a.Cbnz(a64A, slow, false)
+	c.movImm(a64C, c.enc.Object)
+	for _, o := range []int32{tgt, src} {
+		c.a.Load(a64A, a64Ctx, o+c.enc.NumOffset)
+		c.a.Cmp(a64A, a64C, true)
+		c.a.BCond(arm64.NE, slow)
+		c.a.Load(a64B, a64Ctx, o+c.enc.RefOffset)
+		c.a.Cbz(a64B, slow, true)
+	}
+	c.a.Load(a64A, a64B, c.enc.ObjectShape)
+	c.a.Load(a64C, a64Ctx, tgt+c.enc.RefOffset)
+	c.a.Load(a64C, a64C, c.enc.ObjectShape)
+	c.a.ShiftImm(arm64.Lsr, a64B, a64A, 4, true)
+	c.a.ShiftImm(arm64.Lsr, a64C, a64C, 6, true)
+	c.a.Op(arm64.Eor, a64B, a64B, a64C, true)
+	c.movImm(a64C, abi.CopyMul)
+	c.a.Mul(a64B, a64B, a64C)
+	c.a.ShiftImm(arm64.Lsr, a64B, a64B, 64-abi.CopyBits, true)
+	c.movImm(a64C, abi.CopyEntrySize)
+	c.a.Mul(a64B, a64B, a64C)
+	c.movImm(a64C, uint64(site.Copies))
+	c.a.Op(arm64.Add, a64B, a64B, a64C, true)
+	c.a.Load(a64C, a64B, abi.CopySrc)
+	c.a.Cmp(a64A, a64C, true)
+	c.a.BCond(arm64.NE, slow)
+	c.a.Load(a64A, a64Ctx, tgt+c.enc.RefOffset)
+	c.a.Load(a64C, a64A, c.enc.ObjectShape)
+	c.a.Load(a64D, a64B, abi.CopyFrom)
+	c.a.Cmp(a64C, a64D, true)
+	c.a.BCond(arm64.NE, slow)
+	c.a.Store(a64Ctx, entry, a64B)
+	// Room: the target's length and the values', its capacity or less.
+	c.a.Load(a64D, a64B, abi.CopySlots+8)
+	c.a.Load(a64B, a64A, c.enc.ObjectProps+8)
+	c.a.Op(arm64.Add, a64C, a64D, a64B, true)
+	c.a.Load(a64A, a64A, c.enc.ObjectProps+16)
+	c.a.Cmp(a64C, a64A, true)
+	c.a.BCond(arm64.HI, slow)
+	c.a.Store(a64Ctx, length, a64C)
+	c.a.Load(a64A, a64Ctx, tgt+c.enc.RefOffset)
+	c.a.ShiftImm(arm64.Lsl, a64B, a64B, 4, true)
+	c.a.Load(a64C, a64A, c.enc.ObjectProps)
+	c.a.Op(arm64.Add, a64B, a64B, a64C, true)
+	c.a.Store(a64Ctx, dst, a64B)
+	c.a.Load(a64A, a64Ctx, src+c.enc.RefOffset)
+	c.a.Load(a64A, a64A, c.enc.ObjectProps)
+	c.a.Store(a64Ctx, vals, a64A)
+	c.a.Load(a64B, a64Ctx, entry)
+	c.a.Load(a64C, a64B, abi.CopySlots)
+	c.a.Store(a64Ctx, next, a64C)
+	loop, done := c.a.NewLabel(), c.a.NewLabel()
+	c.a.Cbz(a64D, done, true)
+	c.a.Bind(loop)
+	c.a.Load(a64A, a64Ctx, next)
+	c.a.LoadU32(a64B, a64A, 0)
+	c.a.AddImm(a64A, a64A, 4, true)
+	c.a.Store(a64Ctx, next, a64A)
+	c.a.ShiftImm(arm64.Lsl, a64B, a64B, 4, true)
+	c.a.Load(a64A, a64Ctx, vals)
+	c.a.Op(arm64.Add, a64B, a64B, a64A, true)
+	c.a.Load(a64A, a64B, 0)
+	c.a.Load(a64C, a64B, 8)
+	c.a.Load(a64B, a64Ctx, dst)
+	c.a.Store(a64B, 0, a64A)
+	c.a.Store(a64B, 8, a64C)
+	c.a.AddImm(a64B, a64B, 16, true)
+	c.a.Store(a64Ctx, dst, a64B)
+	c.a.AddImm(a64D, a64D, -1, true)
+	c.a.Cbnz(a64D, loop, true)
+	c.a.Bind(done)
+	c.a.Load(a64A, a64Ctx, tgt+c.enc.RefOffset)
+	c.a.Load(a64C, a64Ctx, length)
+	c.a.Store(a64A, c.enc.ObjectProps+8, a64C)
+	c.a.Load(a64B, a64Ctx, entry)
+	c.a.Load(a64C, a64B, abi.CopyTo)
+	c.a.Store(a64A, c.enc.ObjectShape, a64C)
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	c.movImm(a64B, c.enc.Object)
+	c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64B)
+	c.a.Store(a64Ctx, keep+c.enc.RefOffset, a64A)
+}
+
+// defineNext is amd64's: a literal's field along its object's shape's
+// first transition, or slow, having written nothing.
+func (c *a64Compiler) defineNext(v *ssa.Value, site *ssa.CallSite, slow arm64.Label) {
+	size := int32(unsafe.Sizeof(abi.GoArg{}))
+	obj, val := abi.OffGoArgs, abi.OffGoArgs+size
+	c.goArg(obj, v.Args[0])
+	c.goArg(val, v.Args[1])
+	c.movImm(a64A, c.enc.WriteBarrier)
+	c.a.LoadU8(a64A, a64A, 0)
+	c.a.Cbnz(a64A, slow, false)
+	c.a.Load(a64A, a64Ctx, obj+c.enc.NumOffset)
+	c.movImm(a64B, c.enc.Object)
+	c.a.Cmp(a64A, a64B, true)
+	c.a.BCond(arm64.NE, slow)
+	c.a.Load(a64A, a64Ctx, obj+c.enc.RefOffset)
+	c.a.Cbz(a64A, slow, true)
+	c.a.LoadU8(a64B, a64A, c.enc.ObjectFlags)
+	c.movImm(a64C, uint64(c.enc.FlagExtensible))
+	c.a.Op(arm64.And, a64B, a64B, a64C, false)
+	c.a.Cbz(a64B, slow, false)
+	c.a.Load(a64B, a64A, c.enc.ObjectShape)
+	c.a.Cbz(a64B, slow, true)
+	c.a.Load(a64D, a64B, c.enc.ShapeNext)
+	c.a.Cbz(a64D, slow, true)
+	c.a.LoadU32(a64C, a64B, c.enc.ShapeNextKey)
+	c.movImm(a64B, uint64(site.Key))
+	c.a.Cmp(a64C, a64B, false)
+	c.a.BCond(arm64.NE, slow)
+	c.a.Load(a64B, a64A, c.enc.ObjectShape)
+	c.a.LoadU8(a64C, a64B, c.enc.ShapeNextFlags)
+	c.a.CmpImm(a64C, int64(c.enc.PropDefault), false)
+	c.a.BCond(arm64.NE, slow)
+	c.a.Load(a64B, a64A, c.enc.ObjectProps+8)
+	c.a.Load(a64C, a64A, c.enc.ObjectProps+16)
+	c.a.Cmp(a64B, a64C, true)
+	c.a.BCond(arm64.HS, slow)
+	indexed := c.a.NewLabel()
+	c.a.CmpImm(a64B, int64(c.enc.LinearScan), true)
+	c.a.BCond(arm64.LO, indexed)
+	c.a.Load(a64C, a64D, c.enc.ShapeIndex)
+	c.a.Cbz(a64C, slow, true)
+	c.a.Bind(indexed)
+	c.a.Load(a64C, a64A, c.enc.ObjectProps)
+	c.a.ShiftImm(arm64.Lsl, a64B, a64B, 4, true)
+	c.a.Op(arm64.Add, a64C, a64C, a64B, true)
+	c.a.Load(a64B, a64Ctx, val)
+	c.a.Store(a64C, 0, a64B)
+	c.a.Load(a64B, a64Ctx, val+8)
+	c.a.Store(a64C, 8, a64B)
+	c.a.Load(a64B, a64A, c.enc.ObjectProps+8)
+	c.a.AddImm(a64B, a64B, 1, true)
+	c.a.Store(a64A, c.enc.ObjectProps+8, a64B)
+	c.a.Store(a64A, c.enc.ObjectShape, a64D)
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	c.movImm(a64B, c.enc.Object)
+	c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64B)
+	c.a.Store(a64Ctx, keep+c.enc.RefOffset, a64A)
+}
+
+// arrayOperand is amd64's: a64B holds the pointer of the operand at the
+// context's at, an array with no element kept as a property, or slow. It
+// uses a64A and a64C.
+func (c *a64Compiler) arrayOperand(at int32, slow arm64.Label) {
+	c.a.Load(a64A, a64Ctx, at+c.enc.NumOffset)
+	c.movImm(a64C, c.enc.Object)
+	c.a.Cmp(a64A, a64C, true)
+	c.a.BCond(arm64.NE, slow)
+	c.a.Load(a64B, a64Ctx, at+c.enc.RefOffset)
+	c.a.Cbz(a64B, slow, true)
+	c.a.LoadU8(a64A, a64B, c.enc.ObjectClass)
+	c.a.CmpImm(a64A, int64(c.enc.ClassArray), false)
+	c.a.BCond(arm64.NE, slow)
+	c.a.LoadU8(a64A, a64B, c.enc.ObjectFlags)
+	c.movImm(a64C, uint64(c.enc.FlagSparse))
+	c.a.Op(arm64.And, a64A, a64A, a64C, false)
+	c.a.Cbnz(a64A, slow, false)
+}
+
+// notMarking is amd64's. It uses a64A.
+func (c *a64Compiler) notMarking(slow arm64.Label) {
+	c.movImm(a64A, c.enc.WriteBarrier)
+	c.a.LoadU8(a64A, a64A, 0)
+	c.a.Cbnz(a64A, slow, false)
+}
+
+// spreadElems is amd64's: an array spread by its elements, or slow, the
+// target's length as it was. The elements left are counted in a64D.
+func (c *a64Compiler) spreadElems(v *ssa.Value, site *ssa.CallSite, slow arm64.Label) {
+	size := int32(unsafe.Sizeof(abi.GoArg{}))
+	tgt, src := abi.OffGoArgs, abi.OffGoArgs+size
+	at := func(i int32) int32 { return abi.OffGoArgs + 2*size + i*8 }
+	from, cur, dst, length := at(0), at(2), at(3), at(4)
+	c.goArg(tgt, v.Args[0])
+	c.goArg(src, v.Args[1])
+	c.notMarking(slow)
+	c.arrayOperand(src, slow)
+	c.a.Store(a64Ctx, from, a64B)
+	c.a.Load(a64A, a64B, c.enc.ObjectProps+8)
+	c.a.Cbnz(a64A, slow, true)
+	c.movImm(a64C, uint64(site.ArrayIter))
+	c.a.Load(a64A, a64B, c.enc.ObjectProto)
+	c.a.Load(a64D, a64C, abi.IterProto)
+	c.a.Cmp(a64A, a64D, true)
+	c.a.BCond(arm64.NE, slow)
+	for _, cell := range []int32{abi.IterCellArray, abi.IterCellIter} {
+		c.a.Load(a64A, a64C, cell)
+		c.a.Cbz(a64A, slow, true)
+		c.a.LoadU8(a64A, a64A, 0)
+		c.a.Cbz(a64A, slow, false)
+	}
+	for _, m := range [][3]int32{{abi.IterValuesObj, abi.IterValuesAt, abi.IterValuesFn}, {abi.IterNextObj, abi.IterNextAt, abi.IterNextFn}} {
+		c.a.Load(a64A, a64C, m[0])
+		c.a.Load(a64A, a64A, c.enc.ObjectProps)
+		c.a.LoadU32(a64B, a64C, m[1])
+		c.a.ShiftImm(arm64.Lsl, a64B, a64B, 4, true)
+		c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+		c.a.Load(a64A, a64A, c.enc.RefOffset)
+		c.a.Load(a64D, a64C, m[2])
+		c.a.Cmp(a64A, a64D, true)
+		c.a.BCond(arm64.NE, slow)
+	}
+	c.arrayOperand(tgt, slow)
+	c.a.Load(a64C, a64Ctx, from)
+	c.a.Load(a64D, a64C, c.enc.ObjectElems+8)
+	c.a.Load(a64C, a64C, c.enc.ObjectElems)
+	c.a.Store(a64Ctx, cur, a64C)
+	c.a.Load(a64C, a64B, c.enc.ObjectElems+8)
+	c.a.Op(arm64.Add, a64A, a64D, a64C, true)
+	c.a.Store(a64Ctx, length, a64A)
+	c.a.Load(a64A, a64B, c.enc.ObjectElems+16)
+	c.a.Load(a64B, a64Ctx, length)
+	c.a.Cmp(a64B, a64A, true)
+	c.a.BCond(arm64.HI, slow)
+	c.a.Load(a64A, a64Ctx, tgt+c.enc.RefOffset)
+	c.a.Load(a64A, a64A, c.enc.ObjectElems)
+	c.a.ShiftImm(arm64.Lsl, a64C, a64C, 4, true)
+	c.a.Op(arm64.Add, a64C, a64C, a64A, true)
+	c.a.Store(a64Ctx, dst, a64C)
+	loop, done := c.a.NewLabel(), c.a.NewLabel()
+	c.a.Cbz(a64D, done, true)
+	c.a.Bind(loop)
+	c.a.Load(a64A, a64Ctx, cur)
+	c.a.Load(a64B, a64A, c.enc.NumOffset)
+	c.movImm(a64C, c.enc.Uninitialized)
+	c.a.Cmp(a64B, a64C, true)
+	c.a.BCond(arm64.EQ, slow)
+	c.a.Load(a64C, a64A, c.enc.RefOffset)
+	c.a.AddImm(a64A, a64A, 16, true)
+	c.a.Store(a64Ctx, cur, a64A)
+	c.a.Load(a64A, a64Ctx, dst)
+	c.a.Store(a64A, c.enc.NumOffset, a64B)
+	c.a.Store(a64A, c.enc.RefOffset, a64C)
+	c.a.AddImm(a64A, a64A, 16, true)
+	c.a.Store(a64Ctx, dst, a64A)
+	c.a.AddImm(a64D, a64D, -1, true)
+	c.a.Cbnz(a64D, loop, true)
+	c.a.Bind(done)
+	c.a.Load(a64A, a64Ctx, tgt+c.enc.RefOffset)
+	c.a.Load(a64C, a64Ctx, length)
+	c.a.Store(a64A, c.enc.ObjectElems+8, a64C)
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	c.movImm(a64B, c.enc.Object)
+	c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64B)
+	c.a.Store(a64Ctx, keep+c.enc.RefOffset, a64A)
+}
+
+// appendElem is amd64's: an element appended where its array has room,
+// or slow, having written nothing.
+func (c *a64Compiler) appendElem(v *ssa.Value, slow arm64.Label) {
+	size := int32(unsafe.Sizeof(abi.GoArg{}))
+	tgt, val := abi.OffGoArgs, abi.OffGoArgs+size
+	c.goArg(tgt, v.Args[0])
+	c.goArg(val, v.Args[1])
+	c.notMarking(slow)
+	c.arrayOperand(tgt, slow)
+	c.a.Load(a64A, a64B, c.enc.ObjectElems+8)
+	c.a.Load(a64C, a64B, c.enc.ObjectElems+16)
+	c.a.Cmp(a64A, a64C, true)
+	c.a.BCond(arm64.HS, slow)
+	c.a.Load(a64C, a64B, c.enc.ObjectElems)
+	c.a.ShiftImm(arm64.Lsl, a64D, a64A, 4, true)
+	c.a.Op(arm64.Add, a64C, a64C, a64D, true)
+	c.a.AddImm(a64A, a64A, 1, true)
+	c.a.Store(a64B, c.enc.ObjectElems+8, a64A)
+	c.a.Load(a64A, a64Ctx, val)
+	c.a.Store(a64C, 0, a64A)
+	c.a.Load(a64A, a64Ctx, val+8)
+	c.a.Store(a64C, 8, a64A)
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	c.movImm(a64A, c.enc.Object)
+	c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64A)
+	c.a.Store(a64Ctx, keep+c.enc.RefOffset, a64B)
+}
+
 func (c *a64Compiler) keyedHas(v *ssa.Value, slow arm64.Label) {
 	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
 	key, recv := v.Args[0], v.Args[1]

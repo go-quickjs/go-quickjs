@@ -290,3 +290,73 @@ func TestJITSpreadFramedAtLoops(t *testing.T) {
 		}
 	}
 }
+
+// Native code makes the common spreads itself, without a call of Go: an
+// object spread of a plain object by the layouts Go made it by before
+// (copyProps), the fields after it along their shapes' first transitions
+// (defineNext), an array spread of a dense array that iterates as
+// Array.prototype does, into room its literal's arrays learned to be made
+// with (spreadElems, jitFillLiteral's room), and an element appended
+// (appendElem). A loop of a thousand of each calls Go only to fill its
+// literals' pools and at its polls. Each answer is the interpreter's.
+func TestJITSpreadNative(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		function objects(n, o) { let s = 0, x; for (let i = 0; i < n; i++) { x = { ...o, k: i, l: 1 }; s += x.k + x.b } return s + JSON.stringify(x) }
+		function arrays(n, a) { let s = 0, x; for (let i = 0; i < n; i++) { x = [i, ...a, 7]; s += x.length + x[1] + (2 in x ? 1 : 0) } return s + JSON.stringify(x) }
+		function args(n, a) { let s = 0; for (let i = 0; i < n; i++) s += Math.max(...a, i); return s }`
+	want := map[string]string{
+		`objects(1000, {a: 1, b: 2, c: 3})`: `501500{"a":1,"b":2,"c":3,"k":999,"l":1}`,
+		`arrays(1000, [5, 6, 7, 8])`:        `12000[999,5,6,7,8,7]`,
+	}
+	r := jitAgreesForTest(t, setup, `objects(1000, {a: 1, b: 2, c: 3})`, `arrays(1000, [5, 6, 7, 8])`, `args(100, [1, 2])`,
+		`objects(10, {a: 1, b: 2, c: 3}) + objects(10, {b: 2, a: 1})`, `arrays(10, [1, , 3]) + arrays(10, new Set([1, 2]))`)
+	for src, w := range want {
+		for range 2 {
+			r.Run(compileForTest(t, src))
+		}
+		v, calls := jitCountGoCalls(t, r, "''+"+src)
+		if v.String().Go() != w {
+			t.Fatalf("%s = %s, want %s", src, v.String().Go(), w)
+		}
+		if calls > 200 {
+			t.Errorf("%s: %d calls of Go", src, calls)
+		}
+	}
+	// An array whose prototype is not Array.prototype iterates as its own
+	// prototype says; a field after a spread is defined with the default
+	// attributes, a property of its key defined with others on such an
+	// object made after it.
+	jitAgreesForTest(t, setup+`
+		var ownIterProto = Object.create(Array.prototype);
+		ownIterProto[Symbol.iterator] = function* () { yield 100 };
+		function protoArrays(n, a, p) {
+			let s = 0;
+			for (let i = 0; i < n; i++) { if (i === n - 3) Object.setPrototypeOf(a, p); const x = [...a]; s += x[0] + x.length }
+			return s;
+		}
+		function swapIter(f) { Array.prototype[Symbol.iterator] = f }
+		function replaced(n, a, gen, values) {
+			let s = 0;
+			for (let i = 0; i < n; i++) { if (i === n - 3) swapIter(gen); const x = [...a]; s += x[0] + x.length }
+			swapIter(values);
+			return s;
+		}
+		function flagged(n, o) {
+			let s = '';
+			for (let i = 0; i < n; i++) {
+				if (i === n - 3) Object.defineProperty({ ...o }, 'k', { value: 0, enumerable: false, writable: true, configurable: true });
+				s += Object.keys({ ...o, k: i }).join() + ';';
+			}
+			return s;
+		}`, `protoArrays(100, [1, 2, 3], ownIterProto)`, `flagged(100, {a: 1, b: 2})`,
+		`replaced(100, [1, 2, 3], Array.prototype[Symbol.iterator], Array.prototype[Symbol.iterator])`,
+		`replaced(100, [1, 2, 3], ownIterProto[Symbol.iterator], Array.prototype[Symbol.iterator])`)
+	// While the collector marks, Go makes each.
+	t.Run("marking", func(t *testing.T) {
+		jitMarkingForTest(t)
+		jitAgreesForTest(t, setup, `objects(100, {a: 1, b: 2, c: 3})`, `arrays(100, [5, 6, 7, 8])`, `arrays(10, [1, , 3])`)
+	})
+}

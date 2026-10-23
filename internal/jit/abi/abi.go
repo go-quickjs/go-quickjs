@@ -1181,6 +1181,15 @@ type Encoding struct {
 	// prototype's pointer, which the shape does not settle.
 	ObjectShape, ObjectProps, ShapeKeys, KeySize, PropertyKey, PropertyFlags int32
 	ObjectProto                                                              int32
+	// A shared shape's first transition: the pointer at ShapeNext, the
+	// shape a property added makes -- nil for none -- of the key, the
+	// uint32 at ShapeNextKey, and the attributes, the byte at
+	// ShapeNextFlags; the pointer at ShapeIndex the shape's index, nil
+	// for a table of no more than LinearScan keys, which is searched.
+	// PropDefault is the attributes byte of a property an assignment or a
+	// literal's field makes.
+	ShapeNext, ShapeNextKey, ShapeNextFlags, ShapeIndex, LinearScan int32
+	PropDefault                                                     uint8
 
 	// WriteBarrier is the address of the byte compiled Go tests before it
 	// stores a pointer: the runtime's write-barrier flag, set while the
@@ -1308,6 +1317,48 @@ const (
 	GoCallRest       = 11
 	GoCallOp         = 12
 	GoClosurePool    = 1
+)
+
+// The VM's object spreads by layout (its copies, the VM's jitCopyFast),
+// which native code reads, never writes, before it calls Go for one
+// (ssa.CallSite's Copies): 1<<CopyBits entries of CopyEntrySize bytes. A
+// spread of a source whose shape -- the pointer at ObjectShape -- is s into
+// a target whose shape is f is entry ((s>>4 ^ f>>6) * CopyMul) >> (64 -
+// CopyBits), which makes it where the pointers at CopySrc and CopyFrom are
+// s and f: the source's values at the uint32 positions of the slice at
+// CopySlots appended to the target's, in order, and the target given the
+// shape at CopyTo, as the VM makes it.
+const (
+	CopyBits      = 8
+	CopyMul       = 0x9E3779B97F4A7C15
+	CopyEntrySize = 48
+	CopySrc       = 0
+	CopyFrom      = 8
+	CopyTo        = 16
+	CopySlots     = 24
+)
+
+// Where an array of the realm's prototype with no property of its own
+// finds its iteration's methods (the VM's jitArrayIter, ssa.CallSite's
+// ArrayIter), which native code reads, never writes: the pointers at
+// IterCellArray and IterCellIter are the validity cells of the chains from
+// Array.prototype and from %ArrayIteratorPrototype%, nil while there are
+// none, each valid while its first byte is set; the objects at
+// IterValuesObj and IterNextObj hold Array.prototype's Symbol.iterator and
+// next at the int32 positions at IterValuesAt and IterNextAt of their
+// values, which are the intrinsics where their pointer words are the
+// pointers at IterValuesFn and IterNextFn; and the pointer at IterProto is
+// Array.prototype.
+const (
+	IterCellArray = 0
+	IterCellIter  = 8
+	IterValuesObj = 16
+	IterNextObj   = 24
+	IterValuesAt  = 32
+	IterNextAt    = 36
+	IterProto     = 40
+	IterValuesFn  = 48
+	IterNextFn    = 56
 )
 
 // The VM's cache of the in operator's answers (its hasCache), which native

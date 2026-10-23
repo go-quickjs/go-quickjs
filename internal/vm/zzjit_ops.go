@@ -3,6 +3,7 @@
 package vm
 
 import (
+	"slices"
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
@@ -27,7 +28,7 @@ func (r *Runtime) jitOpPlain(ctx *abi.Context) bool {
 	var f *frame
 	var cl *closure
 	switch in.Op {
-	case bytecode.OpDefineField, bytecode.OpTemplateObject, bytecode.OpPushCallee:
+	case bytecode.OpTemplateObject, bytecode.OpPushCallee:
 		if f, cl = r.jitOpCode(ctx, in); cl == nil {
 			return false
 		}
@@ -155,6 +156,11 @@ func (r *Runtime) jitOpFrameless(f *frame, cl *closure, in bytecode.Instr, args 
 				return Undefined, false
 			}
 		}
+		if src.IsObject() {
+			if out, ok := r.jitRestFast(src.Object(), excluded); ok {
+				return Obj(out), true
+			}
+		}
 		v, err := r.objectRest(src, excluded)
 		return v, err == nil
 	case bytecode.OpTemplateObject:
@@ -210,10 +216,12 @@ func (r *Runtime) jitOpFrameless(f *frame, cl *closure, in bytecode.Instr, args 
 			return obj, true
 		}
 		o := obj.Object()
-		if o.class != ClassObject || o.flags&objExtensible == 0 || int(in.A) >= len(cl.names) {
+		if o.class != ClassObject || o.flags&objExtensible == 0 {
 			return Undefined, false
 		}
-		key := cl.names[in.A]
+		// The key's atom, which the call's word has in place of its name's
+		// index (the VM's NativeCalls).
+		key := Atom(in.A)
 		if next := o.transition(key, propDefault); next != nil {
 			o.appendTransition(val, next)
 			return obj, true
@@ -266,10 +274,23 @@ func (r *Runtime) jitDenseElems(src Value) ([]Value, bool) {
 // %ArrayIteratorPrototype%, and the places there of Symbol.iterator and
 // of next.
 type jitArrayIter struct {
-	array, iter     *protoCell
-	values, next    int32
-	valuesAt, nexts *Object
+	array, iter       *protoCell
+	valuesAt, nexts   *Object
+	values, next      int32
+	proto             *Object
+	valuesFn, nextFns *Object
 }
+
+// Its layout is what native code reads (abi.IterCellArray).
+var _ [0]struct{} = [unsafe.Offsetof(jitArrayIter{}.array) - abi.IterCellArray]struct{}{}
+var _ [0]struct{} = [unsafe.Offsetof(jitArrayIter{}.iter) - abi.IterCellIter]struct{}{}
+var _ [0]struct{} = [unsafe.Offsetof(jitArrayIter{}.valuesAt) - abi.IterValuesObj]struct{}{}
+var _ [0]struct{} = [unsafe.Offsetof(jitArrayIter{}.nexts) - abi.IterNextObj]struct{}{}
+var _ [0]struct{} = [unsafe.Offsetof(jitArrayIter{}.values) - abi.IterValuesAt]struct{}{}
+var _ [0]struct{} = [unsafe.Offsetof(jitArrayIter{}.next) - abi.IterNextAt]struct{}{}
+var _ [0]struct{} = [unsafe.Offsetof(jitArrayIter{}.proto) - abi.IterProto]struct{}{}
+var _ [0]struct{} = [unsafe.Offsetof(jitArrayIter{}.valuesFn) - abi.IterValuesFn]struct{}{}
+var _ [0]struct{} = [unsafe.Offsetof(jitArrayIter{}.nextFns) - abi.IterNextFn]struct{}{}
 
 // jitArrayIterates reports whether an array of the realm's prototype with
 // no property of its own iterates as Array.prototype's intrinsics do
@@ -290,14 +311,16 @@ func (r *Runtime) jitArrayIterates() bool {
 		if array == nil || iter == nil {
 			return false
 		}
-		*c = jitArrayIter{array: array, iter: iter, values: values, next: next, valuesAt: ap, nexts: ip}
+		*c = jitArrayIter{array: array, iter: iter, values: values, next: next, valuesAt: ap, nexts: ip,
+			proto: ap, valuesFn: r.arrayValuesFn, nextFns: r.arrayIterNextFn}
 	}
 	return c.valuesAt.vals[c.values].ref == unsafe.Pointer(r.arrayValuesFn) && c.nexts.vals[c.next].ref == unsafe.Pointer(r.arrayIterNextFn)
 }
 
 // jitCopyEntries is how many object spreads the runtime remembers how to
-// make by their layouts (jitState's copies).
-const jitCopyEntries = 256
+// make by their layouts (jitState's copies), which native code reads too
+// (abi.CopyBits).
+const jitCopyEntries = 1 << abi.CopyBits
 
 // jitCopyEntry is an object spread Go made by the layouts, as V8's
 // CloneObjectIC remembers a source's map and the result's: a source of
@@ -309,11 +332,20 @@ type jitCopyEntry struct {
 	slots         []int32
 }
 
+// The table's layout is what native code reads (abi.CopyEntrySize).
+var _ [0]struct{} = [unsafe.Sizeof(jitCopyEntry{}) - abi.CopyEntrySize]struct{}{}
+var _ [0]struct{} = [abi.CopyEntrySize - unsafe.Sizeof(jitCopyEntry{})]struct{}{}
+var _ [0]struct{} = [unsafe.Offsetof(jitCopyEntry{}.src) - abi.CopySrc]struct{}{}
+var _ [0]struct{} = [unsafe.Offsetof(jitCopyEntry{}.from) - abi.CopyFrom]struct{}{}
+var _ [0]struct{} = [unsafe.Offsetof(jitCopyEntry{}.to) - abi.CopyTo]struct{}{}
+var _ [0]struct{} = [unsafe.Offsetof(jitCopyEntry{}.slots) - abi.CopySlots]struct{}{}
+
 // jitCopySlot is where an object spread of a source of layout src into a
-// target of layout from is remembered (jitState's copies).
+// target of layout from is remembered (jitState's copies), as native code
+// finds it (abi.CopyMul).
 func jitCopySlot(src, from *shape) int {
 	h := uint64(uintptr(unsafe.Pointer(src)))>>4 ^ uint64(uintptr(unsafe.Pointer(from)))>>6
-	return int((h * 0x9E3779B97F4A7C15) >> (64 - 8))
+	return int((h * abi.CopyMul) >> (64 - abi.CopyBits))
 }
 
 // jitCopyFast makes object spread of o into t, an ordinary object, as an
@@ -358,7 +390,10 @@ func (r *Runtime) jitCopyLearn(t, o *Object, from *shape, n int) {
 	c := r.shapeKeys(o)
 	to := t.shape
 	if c == nil || !c.copyable || from == nil || to == nil || from.unique || from.loose || to.unique || to.loose ||
-		n != int(from.n) || len(t.vals) != n+len(c.slots) || len(o.vals) != int(o.shape.n) {
+		n != int(from.n) || len(t.vals) != n+len(c.slots) || len(o.vals) != int(o.shape.n) ||
+		to.index == nil && int(to.n) > linearScanLimit {
+		// Native code makes it as remembered (abi.CopyBits), and builds no
+		// index: one the layout needs it has, made by this copy.
 		return
 	}
 	k := to
@@ -375,6 +410,37 @@ func (r *Runtime) jitCopyLearn(t, o *Object, from *shape, n int) {
 		r.jit.copies = new([jitCopyEntries]jitCopyEntry)
 	}
 	r.jit.copies[jitCopySlot(o.shape, from)] = jitCopyEntry{src: o.shape, from: from, to: to, slots: c.slots}
+}
+
+// jitRestFast is objectRest of o, a plain object of a shared layout whose
+// enumerable own keys are all data under string keys (shapeKeys), less the
+// keys excluded, strings: its values read where the layout has them, in
+// its keys' order, each appended to the rest object, with no key looked up
+// on o -- or false, for objectRest to make.
+func (r *Runtime) jitRestFast(o *Object, excluded []Value) (*Object, bool) {
+	c := r.shapeKeys(o)
+	if c == nil || !c.copyable || len(excluded) > 8 {
+		return nil, false
+	}
+	var skip [8]Atom
+	for i, k := range excluded {
+		if !k.IsString() {
+			return nil, false
+		}
+		skip[i] = r.atoms.intern(k.String().Go())
+	}
+	out := newObject(r.proto.object, ClassObject)
+	if len(c.atoms) > len(excluded) {
+		out.reserveProps(len(c.atoms) - len(excluded))
+	}
+	for i, k := range c.atoms {
+		if slices.Contains(skip[:len(excluded)], k) {
+			continue
+		}
+		// A key of its own, none before it the same.
+		out.appendProp(Property{key: k, flags: propDefault, value: o.vals[c.slots[i]]})
+	}
+	return out, true
 }
 
 // jitCopyPlain reports whether copying o's own enumerable properties, as
@@ -463,6 +529,13 @@ func (r *Runtime) jitOpMade(f *frame, in bytecode.Instr, args []Value) (Value, e
 			return Undefined, err
 		}
 		return r.keyToValue(k), nil
+	case bytecode.OpDefineField:
+		if obj := args[0]; obj.IsObject() {
+			if err := r.defineOwnProp(obj.Object(), f.cl.names[in.A], args[1], propDefault); err != nil {
+				return Undefined, err
+			}
+		}
+		return args[0], nil
 	}
 	if v, ok := r.jitOpFrameless(f, f.cl, in, args); ok {
 		return v, nil
@@ -489,13 +562,6 @@ func (r *Runtime) jitOpMade(f *frame, in bytecode.Instr, args []Value) (Value, e
 		return obj, nil
 	case bytecode.OpTemplateObject:
 		return Obj(r.templateObject(f.cl.fn, int(in.A))), nil
-	case bytecode.OpDefineField:
-		if obj := args[0]; obj.IsObject() {
-			if err := r.defineOwnProp(obj.Object(), f.cl.names[in.A], args[1], propDefault); err != nil {
-				return Undefined, err
-			}
-		}
-		return args[0], nil
 	case bytecode.OpPushCallee:
 		if f.callee == nil {
 			return Undefined, nil

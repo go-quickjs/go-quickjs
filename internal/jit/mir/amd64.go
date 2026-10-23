@@ -1877,6 +1877,31 @@ func (c *compiler) restoreSaves(v *ssa.Value) {
 // collector included: the frame's registers are read again, and every
 // store after it tests the collector's flag, as every store does.
 func (c *compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(amd64.Cond)) {
+	if (site.Copies != 0 || site.DefineNext || site.ArrayIter != 0 || site.Append) && len(v.Args) == 2 && c.enc.ValueSize == 16 && c.enc.WriteBarrier != 0 && c.enc.ShapeNext != 0 {
+		// An object spread by the layouts where the VM has made one so
+		// (copyProps), a literal's field along its shape's first
+		// transition (defineNext), an array spread by its elements
+		// (spreadElems), an element appended (appendElem), any other
+		// Go's.
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		switch {
+		case site.DefineNext:
+			c.defineNext(v, site, slow)
+		case site.ArrayIter != 0:
+			c.spreadElems(v, site, slow)
+		case site.Append:
+			c.appendElem(v, slow)
+		default:
+			c.copyProps(v, site, slow)
+		}
+		c.a.Jmp(join)
+		c.a.Bind(slow)
+		c.goCallOp(v, goOpWord(site), guard, false)
+		c.a.Bind(join)
+		c.a.Load(scratchA, regCtx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
+		c.setG(v, scratchA)
+		return
+	}
 	if site.Step && c.enc.IterState != 0 {
 		// A loop's step over an array native code makes itself; any other
 		// Go makes.
@@ -1987,6 +2012,335 @@ func (c *compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(amd64.Con
 		defer func() { c.goCallBig = false }()
 	}
 	c.goCallOp(v, goOpWord(site), guard, false)
+}
+
+// copyProps makes the object spread v, of its target and its source
+// (ssa.CallSite's Copies), as the VM's table of spreads by layout says
+// (abi.CopyBits) -- both objects, the entry's for their shapes, room in the
+// target's table for the values, the collector not marking -- and goes to
+// slow otherwise, having written nothing: the source's values at the
+// entry's positions appended to the target's table, its length and its
+// shape the entry's, as the VM's jitCopyFast makes it, as V8's
+// CloneObjectIC copies a fast object by its map. The operands' words, and
+// what the copy keeps between its steps, are in the context's GoArgs,
+// integers the collector does not read, the operands kept by their
+// sources. The result is the target, in the call's keep cell. It uses
+// every scratch register.
+func (c *compiler) copyProps(v *ssa.Value, site *ssa.CallSite, slow amd64.Label) {
+	size := int32(unsafe.Sizeof(abi.GoArg{}))
+	tgt, src := abi.OffGoArgs, abi.OffGoArgs+size
+	// The copy's state: the entry, the values left, the next position,
+	// where the next value goes, the source's values and the target's
+	// length after.
+	at := func(i int32) int32 { return abi.OffGoArgs + 2*size + i*8 }
+	entry, left, next, dst, vals, length := at(0), at(1), at(2), at(3), at(4), at(5)
+	c.goArg(tgt, v.Args[0])
+	c.goArg(src, v.Args[1])
+	c.movImm(scratchA, c.enc.WriteBarrier)
+	c.a.LoadU8(scratchA, scratchA, 0)
+	c.a.Op(amd64.Test, scratchA, scratchA, false)
+	c.a.Jcc(amd64.CondNE, slow)
+	for _, o := range []int32{tgt, src} {
+		c.a.Load(scratchA, regCtx, o+c.enc.NumOffset)
+		c.cmpWord(scratchA, c.enc.Object)
+		c.a.Jcc(amd64.CondNE, slow)
+		c.a.Load(scratchB, regCtx, o+c.enc.RefOffset)
+		c.a.Op(amd64.Test, scratchB, scratchB, true)
+		c.a.Jcc(amd64.CondE, slow)
+	}
+	// The entry for the source's shape, in scratchA, and the target's, in
+	// scratchC: in scratchB.
+	c.a.Load(scratchA, scratchB, c.enc.ObjectShape)
+	c.a.Load(scratchC, regCtx, tgt+c.enc.RefOffset)
+	c.a.Load(scratchC, scratchC, c.enc.ObjectShape)
+	c.a.MovRR(scratchB, scratchA)
+	c.a.ShiftImm(amd64.Shr, scratchB, 4, true)
+	c.a.ShiftImm(amd64.Shr, scratchC, 6, true)
+	c.a.Op(amd64.Xor, scratchB, scratchC, true)
+	c.movImm(scratchC, abi.CopyMul)
+	c.a.Imul(scratchB, scratchC)
+	c.a.ShiftImm(amd64.Shr, scratchB, 64-abi.CopyBits, true)
+	c.movImm(scratchC, abi.CopyEntrySize)
+	c.a.Imul(scratchB, scratchC)
+	c.movImm(scratchC, uint64(site.Copies))
+	c.a.Op(amd64.Add, scratchB, scratchC, true)
+	c.a.CmpMem(scratchA, scratchB, abi.CopySrc, true)
+	c.a.Jcc(amd64.CondNE, slow)
+	c.a.Load(scratchA, regCtx, tgt+c.enc.RefOffset)
+	c.a.Load(scratchC, scratchA, c.enc.ObjectShape)
+	c.a.CmpMem(scratchC, scratchB, abi.CopyFrom, true)
+	c.a.Jcc(amd64.CondNE, slow)
+	c.a.Store(regCtx, entry, scratchB)
+	// Room: the target's length and the values', its capacity or less.
+	c.a.Load(scratchC, scratchB, abi.CopySlots+8)
+	c.a.Store(regCtx, left, scratchC)
+	c.a.Load(scratchB, scratchA, c.enc.ObjectProps+8)
+	c.a.Op(amd64.Add, scratchC, scratchB, true)
+	c.a.CmpMem(scratchC, scratchA, c.enc.ObjectProps+16, true)
+	c.a.Jcc(amd64.CondA, slow)
+	c.a.Store(regCtx, length, scratchC)
+	c.a.ShiftImm(amd64.Shl, scratchB, 4, true)
+	c.a.Load(scratchC, scratchA, c.enc.ObjectProps)
+	c.a.Op(amd64.Add, scratchB, scratchC, true)
+	c.a.Store(regCtx, dst, scratchB)
+	c.a.Load(scratchA, regCtx, src+c.enc.RefOffset)
+	c.a.Load(scratchA, scratchA, c.enc.ObjectProps)
+	c.a.Store(regCtx, vals, scratchA)
+	c.a.Load(scratchB, regCtx, entry)
+	c.a.Load(scratchC, scratchB, abi.CopySlots)
+	c.a.Store(regCtx, next, scratchC)
+	// Each value, both its words, from its position in the source's.
+	loop, done := c.a.NewLabel(), c.a.NewLabel()
+	c.a.Load(scratchC, regCtx, left)
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	c.a.Jcc(amd64.CondE, done)
+	c.a.Bind(loop)
+	c.a.Load(scratchA, regCtx, next)
+	c.a.LoadU32(scratchB, scratchA, 0)
+	c.a.OpImm(amd64.Add, scratchA, 4, true)
+	c.a.Store(regCtx, next, scratchA)
+	c.a.ShiftImm(amd64.Shl, scratchB, 4, true)
+	c.a.Load(scratchA, regCtx, vals)
+	c.a.Op(amd64.Add, scratchB, scratchA, true)
+	c.a.Load(scratchA, scratchB, 0)
+	c.a.Load(scratchC, scratchB, 8)
+	c.a.Load(scratchB, regCtx, dst)
+	c.a.Store(scratchB, 0, scratchA)
+	c.a.Store(scratchB, 8, scratchC)
+	c.a.OpImm(amd64.Add, scratchB, 16, true)
+	c.a.Store(regCtx, dst, scratchB)
+	c.a.DecMem(regCtx, left)
+	c.a.Jcc(amd64.CondNE, loop)
+	c.a.Bind(done)
+	// The length, then the shape, which has the keys.
+	c.a.Load(scratchA, regCtx, tgt+c.enc.RefOffset)
+	c.a.Load(scratchC, regCtx, length)
+	c.a.Store(scratchA, c.enc.ObjectProps+8, scratchC)
+	c.a.Load(scratchB, regCtx, entry)
+	c.a.Load(scratchC, scratchB, abi.CopyTo)
+	c.a.Store(scratchA, c.enc.ObjectShape, scratchC)
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	c.storeImm(regCtx, keep+c.enc.NumOffset, c.enc.Object, scratchB)
+	c.a.Store(regCtx, keep+c.enc.RefOffset, scratchA)
+}
+
+// defineNext defines a literal's field v, of its object and its value
+// (ssa.CallSite's DefineNext), along the first transition of the object's
+// shape where that is by the field's key with the default attributes, as
+// the VM's appendTransition does -- an extensible object, room in its
+// table, the next shape's index where it needs one, the collector not
+// marking -- and goes to slow otherwise, having written nothing. The
+// operands' words, and the next shape, are in the context's GoArgs. The
+// result is the object, in the call's keep cell. It uses every scratch
+// register.
+func (c *compiler) defineNext(v *ssa.Value, site *ssa.CallSite, slow amd64.Label) {
+	size := int32(unsafe.Sizeof(abi.GoArg{}))
+	obj, val, next := abi.OffGoArgs, abi.OffGoArgs+size, abi.OffGoArgs+2*size
+	c.goArg(obj, v.Args[0])
+	c.goArg(val, v.Args[1])
+	c.movImm(scratchA, c.enc.WriteBarrier)
+	c.a.LoadU8(scratchA, scratchA, 0)
+	c.a.Op(amd64.Test, scratchA, scratchA, false)
+	c.a.Jcc(amd64.CondNE, slow)
+	c.a.Load(scratchA, regCtx, obj+c.enc.NumOffset)
+	c.cmpWord(scratchA, c.enc.Object)
+	c.a.Jcc(amd64.CondNE, slow)
+	c.a.Load(scratchA, regCtx, obj+c.enc.RefOffset)
+	c.a.Op(amd64.Test, scratchA, scratchA, true)
+	c.a.Jcc(amd64.CondE, slow)
+	c.a.LoadU8(scratchB, scratchA, c.enc.ObjectFlags)
+	c.a.OpImm(amd64.And, scratchB, int32(c.enc.FlagExtensible), false)
+	c.a.Jcc(amd64.CondE, slow)
+	// The shape's first transition, by the key, with the attributes.
+	c.a.Load(scratchB, scratchA, c.enc.ObjectShape)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	c.a.Jcc(amd64.CondE, slow)
+	c.a.Load(scratchC, scratchB, c.enc.ShapeNext)
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	c.a.Jcc(amd64.CondE, slow)
+	c.a.Store(regCtx, next, scratchC)
+	c.movImm(scratchC, uint64(site.Key))
+	c.a.CmpMem(scratchC, scratchB, c.enc.ShapeNextKey, false)
+	c.a.Jcc(amd64.CondNE, slow)
+	c.a.LoadU8(scratchC, scratchB, c.enc.ShapeNextFlags)
+	c.a.OpImm(amd64.Cmp, scratchC, int32(c.enc.PropDefault), false)
+	c.a.Jcc(amd64.CondNE, slow)
+	// Room, and the next shape's index if its table needs one.
+	c.a.Load(scratchB, scratchA, c.enc.ObjectProps+8)
+	c.a.CmpMem(scratchB, scratchA, c.enc.ObjectProps+16, true)
+	c.a.Jcc(amd64.CondAE, slow)
+	indexed := c.a.NewLabel()
+	c.a.OpImm(amd64.Cmp, scratchB, c.enc.LinearScan, true)
+	c.a.Jcc(amd64.CondB, indexed)
+	c.a.Load(scratchC, regCtx, next)
+	c.a.Load(scratchC, scratchC, c.enc.ShapeIndex)
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	c.a.Jcc(amd64.CondE, slow)
+	c.a.Bind(indexed)
+	// The value at the length, both its words, then the length, then the
+	// shape, which has the key.
+	c.a.Load(scratchC, scratchA, c.enc.ObjectProps)
+	c.a.ShiftImm(amd64.Shl, scratchB, 4, true)
+	c.a.Op(amd64.Add, scratchC, scratchB, true)
+	c.a.Load(scratchB, regCtx, val)
+	c.a.Store(scratchC, 0, scratchB)
+	c.a.Load(scratchB, regCtx, val+8)
+	c.a.Store(scratchC, 8, scratchB)
+	c.a.Load(scratchB, scratchA, c.enc.ObjectProps+8)
+	c.a.OpImm(amd64.Add, scratchB, 1, true)
+	c.a.Store(scratchA, c.enc.ObjectProps+8, scratchB)
+	c.a.Load(scratchC, regCtx, next)
+	c.a.Store(scratchA, c.enc.ObjectShape, scratchC)
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	c.storeImm(regCtx, keep+c.enc.NumOffset, c.enc.Object, scratchB)
+	c.a.Store(regCtx, keep+c.enc.RefOffset, scratchA)
+}
+
+// arrayOperand has scratchB hold the pointer of the operand whose words are
+// at the context's at, an array -- its number word an object's, its class
+// an array's, no element kept as a property -- and goes to slow otherwise.
+// It uses scratchA.
+func (c *compiler) arrayOperand(at int32, slow amd64.Label) {
+	c.a.Load(scratchA, regCtx, at+c.enc.NumOffset)
+	c.cmpWord(scratchA, c.enc.Object)
+	c.a.Jcc(amd64.CondNE, slow)
+	c.a.Load(scratchB, regCtx, at+c.enc.RefOffset)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	c.a.Jcc(amd64.CondE, slow)
+	c.a.LoadU8(scratchA, scratchB, c.enc.ObjectClass)
+	c.a.OpImm(amd64.Cmp, scratchA, int32(c.enc.ClassArray), false)
+	c.a.Jcc(amd64.CondNE, slow)
+	c.a.LoadU8(scratchA, scratchB, c.enc.ObjectFlags)
+	c.a.OpImm(amd64.And, scratchA, int32(c.enc.FlagSparse), false)
+	c.a.Jcc(amd64.CondNE, slow)
+}
+
+// notMarking goes to slow while the collector marks, when stores of
+// pointers are Go's. It uses scratchA.
+func (c *compiler) notMarking(slow amd64.Label) {
+	c.movImm(scratchA, c.enc.WriteBarrier)
+	c.a.LoadU8(scratchA, scratchA, 0)
+	c.a.Op(amd64.Test, scratchA, scratchA, false)
+	c.a.Jcc(amd64.CondNE, slow)
+}
+
+// spreadElems spreads v's source into its target, an array literal's
+// array (ssa.CallSite's ArrayIter): an array of the realm's prototype, no
+// property of its own, whose iteration is Array.prototype's intrinsics' --
+// the chains' validity cells set, the two methods' places holding them
+// (abi.IterCellArray) -- its elements, no hole among them, appended to the
+// target's, in its room, as V8's code spreads a fast array under its
+// ArrayIteratorProtector; it goes to slow otherwise, the target's length
+// as it was. The operands' words, and the copy's state, are in the
+// context's GoArgs. The result is the target, in the call's keep cell. It
+// uses every scratch register.
+func (c *compiler) spreadElems(v *ssa.Value, site *ssa.CallSite, slow amd64.Label) {
+	size := int32(unsafe.Sizeof(abi.GoArg{}))
+	tgt, src := abi.OffGoArgs, abi.OffGoArgs+size
+	at := func(i int32) int32 { return abi.OffGoArgs + 2*size + i*8 }
+	from, left, cur, dst, length := at(0), at(1), at(2), at(3), at(4)
+	c.goArg(tgt, v.Args[0])
+	c.goArg(src, v.Args[1])
+	c.notMarking(slow)
+	c.arrayOperand(src, slow)
+	c.a.Store(regCtx, from, scratchB)
+	c.a.Load(scratchA, scratchB, c.enc.ObjectProps+8)
+	c.a.Op(amd64.Test, scratchA, scratchA, true)
+	c.a.Jcc(amd64.CondNE, slow)
+	c.movImm(scratchC, uint64(site.ArrayIter))
+	c.a.Load(scratchA, scratchB, c.enc.ObjectProto)
+	c.a.CmpMem(scratchA, scratchC, abi.IterProto, true)
+	c.a.Jcc(amd64.CondNE, slow)
+	for _, cell := range []int32{abi.IterCellArray, abi.IterCellIter} {
+		c.a.Load(scratchA, scratchC, cell)
+		c.a.Op(amd64.Test, scratchA, scratchA, true)
+		c.a.Jcc(amd64.CondE, slow)
+		c.a.LoadU8(scratchA, scratchA, 0)
+		c.a.Op(amd64.Test, scratchA, scratchA, false)
+		c.a.Jcc(amd64.CondE, slow)
+	}
+	for _, m := range [][3]int32{{abi.IterValuesObj, abi.IterValuesAt, abi.IterValuesFn}, {abi.IterNextObj, abi.IterNextAt, abi.IterNextFn}} {
+		c.a.Load(scratchA, scratchC, m[0])
+		c.a.Load(scratchA, scratchA, c.enc.ObjectProps)
+		c.a.LoadU32(scratchB, scratchC, m[1])
+		c.a.ShiftImm(amd64.Shl, scratchB, 4, true)
+		c.a.Op(amd64.Add, scratchA, scratchB, true)
+		c.a.Load(scratchA, scratchA, c.enc.RefOffset)
+		c.a.CmpMem(scratchA, scratchC, m[2], true)
+		c.a.Jcc(amd64.CondNE, slow)
+	}
+	// The target, its length and the source's, its capacity or less.
+	c.arrayOperand(tgt, slow)
+	c.a.Load(scratchC, regCtx, from)
+	c.a.Load(scratchA, scratchC, c.enc.ObjectElems+8)
+	c.a.Store(regCtx, left, scratchA)
+	c.a.Load(scratchC, scratchC, c.enc.ObjectElems)
+	c.a.Store(regCtx, cur, scratchC)
+	c.a.Load(scratchC, scratchB, c.enc.ObjectElems+8)
+	c.a.Op(amd64.Add, scratchA, scratchC, true)
+	c.a.CmpMem(scratchA, scratchB, c.enc.ObjectElems+16, true)
+	c.a.Jcc(amd64.CondA, slow)
+	c.a.Store(regCtx, length, scratchA)
+	c.a.ShiftImm(amd64.Shl, scratchC, 4, true)
+	c.a.Load(scratchA, scratchB, c.enc.ObjectElems)
+	c.a.Op(amd64.Add, scratchC, scratchA, true)
+	c.a.Store(regCtx, dst, scratchC)
+	// Each element, no hole, both its words.
+	loop, done := c.a.NewLabel(), c.a.NewLabel()
+	c.a.Load(scratchA, regCtx, left)
+	c.a.Op(amd64.Test, scratchA, scratchA, true)
+	c.a.Jcc(amd64.CondE, done)
+	c.a.Bind(loop)
+	c.a.Load(scratchA, regCtx, cur)
+	c.a.Load(scratchB, scratchA, c.enc.NumOffset)
+	c.cmpWord(scratchB, c.enc.Uninitialized)
+	c.a.Jcc(amd64.CondE, slow)
+	c.a.Load(scratchC, scratchA, c.enc.RefOffset)
+	c.a.OpImm(amd64.Add, scratchA, 16, true)
+	c.a.Store(regCtx, cur, scratchA)
+	c.a.Load(scratchA, regCtx, dst)
+	c.a.Store(scratchA, c.enc.NumOffset, scratchB)
+	c.a.Store(scratchA, c.enc.RefOffset, scratchC)
+	c.a.OpImm(amd64.Add, scratchA, 16, true)
+	c.a.Store(regCtx, dst, scratchA)
+	c.a.DecMem(regCtx, left)
+	c.a.Jcc(amd64.CondNE, loop)
+	c.a.Bind(done)
+	c.a.Load(scratchA, regCtx, tgt+c.enc.RefOffset)
+	c.a.Load(scratchC, regCtx, length)
+	c.a.Store(scratchA, c.enc.ObjectElems+8, scratchC)
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	c.storeImm(regCtx, keep+c.enc.NumOffset, c.enc.Object, scratchB)
+	c.a.Store(regCtx, keep+c.enc.RefOffset, scratchA)
+}
+
+// appendElem appends v's value to its array, an array literal's array
+// (ssa.CallSite's Append), where it has room and the collector is not
+// marking, both its words at the length, the length one more; it goes to
+// slow otherwise, having written nothing. The result is the array, in
+// the call's keep cell. It uses every scratch register.
+func (c *compiler) appendElem(v *ssa.Value, slow amd64.Label) {
+	size := int32(unsafe.Sizeof(abi.GoArg{}))
+	tgt, val := abi.OffGoArgs, abi.OffGoArgs+size
+	c.goArg(tgt, v.Args[0])
+	c.goArg(val, v.Args[1])
+	c.notMarking(slow)
+	c.arrayOperand(tgt, slow)
+	c.a.Load(scratchA, scratchB, c.enc.ObjectElems+8)
+	c.a.CmpMem(scratchA, scratchB, c.enc.ObjectElems+16, true)
+	c.a.Jcc(amd64.CondAE, slow)
+	c.a.Load(scratchC, scratchB, c.enc.ObjectElems)
+	c.a.OpImm(amd64.Add, scratchA, 1, true)
+	c.a.Store(scratchB, c.enc.ObjectElems+8, scratchA)
+	c.a.ShiftImm(amd64.Shl, scratchA, 4, true)
+	c.a.Op(amd64.Add, scratchC, scratchA, true)
+	c.a.Load(scratchA, regCtx, val)
+	c.a.Store(scratchC, -16, scratchA)
+	c.a.Load(scratchA, regCtx, val+8)
+	c.a.Store(scratchC, -8, scratchA)
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	c.storeImm(regCtx, keep+c.enc.NumOffset, c.enc.Object, scratchA)
+	c.a.Store(regCtx, keep+c.enc.RefOffset, scratchB)
 }
 
 // superGuards checks a super() may call t's parent natively

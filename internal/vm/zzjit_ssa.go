@@ -72,6 +72,12 @@ var jitEncoding = abi.Encoding{
 	StoreRef:         jit.StoreRef(),
 	Round:            runtime.GOARCH == "arm64" || cpu.X86.HasSSE41,
 	ShapeKeys:        int32(unsafe.Offsetof(shape{}.keys)),
+	ShapeNext:        int32(unsafe.Offsetof(shape{}.next)),
+	ShapeNextKey:     int32(unsafe.Offsetof(shape{}.nextEdge) + unsafe.Offsetof(shapeEdge{}.key)),
+	ShapeNextFlags:   int32(unsafe.Offsetof(shape{}.nextEdge) + unsafe.Offsetof(shapeEdge{}.flags)),
+	ShapeIndex:       int32(unsafe.Offsetof(shape{}.index)),
+	LinearScan:       linearScanLimit,
+	PropDefault:      uint8(propDefault),
 	KeySize:          int32(unsafe.Sizeof(propKey{})),
 	PropertyKey:      int32(unsafe.Offsetof(propKey{}.key)),
 	PropertyFlags:    int32(unsafe.Offsetof(propKey{}.flags)),
@@ -1193,6 +1199,10 @@ type jitLiteral struct {
 	env  *Object
 }
 
+// jitLiteralRoom bounds the room an array literal's arrays learn to be
+// made with (jitLiteral's room).
+const jitLiteralRoom = 64
+
 // jitLiteralAt is e's literal at pc of cl's function -- e's, or a callee's
 // its code inlines -- made for cl's site if it has none, or nil if the
 // literal's objects have no shape to start from.
@@ -1285,11 +1295,28 @@ func (r *Runtime) jitFillLiteral(l *jitLiteral) {
 		jitFillObjectPool(pool, r.proto.object, l.root, n)
 		return
 	}
+	n := l.n
+	src := (*jitPoolSource)(pool.Source)
+	if src != nil {
+		if s := src.sample; s != nil && len(s.elemsOf()) > n {
+			// The last array the pool gave grew past the literal's
+			// elements -- a spread's, an append's -- as the next will:
+			// they are made with room for as many, as V8's allocation
+			// sites size what their literals come to hold, so that native
+			// code spreads into them.
+			src.room = max(src.room, min(len(s.elemsOf()), jitLiteralRoom))
+		}
+		n = max(n, src.room)
+	}
 	for i := range int(pool.Size) {
-		a := newArrayObject(r.proto.array, l.n)
+		a := newArrayObject(r.proto.array, n)
 		a.extOf().elems = a.elemsOf()[:0]
 		r.ensureShape(a)
 		pool.Objects[i] = unsafe.Pointer(a)
+	}
+	if src != nil {
+		// The pool gives its first last.
+		src.sample = (*Object)(pool.Objects[0])
 	}
 	pool.Count, pool.Proto = pool.Size, unsafe.Pointer(r.proto.array)
 }
@@ -2794,7 +2821,39 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 			if n := jitcompile.GoOperands(call); n <= abi.MaxGoArgs && call.A < 1<<24 {
 				// A computed key that is a string is its own key, which
 				// native code tells (ssa.CallSite's StringSelf).
-				return []ssa.CallSite{{Go: ssa.GoCall, Instr: int(call.Op) | int(call.A)<<8, Argc: n, ThisSlot: -1, StringSelf: call.Op == bytecode.OpToPropertyKey}}
+				site := ssa.CallSite{Go: ssa.GoCall, Instr: int(call.Op) | int(call.A)<<8, Argc: n, ThisSlot: -1, StringSelf: call.Op == bytecode.OpToPropertyKey}
+				if call.Op == bytecode.OpDefineField {
+					// The field's atom in place of its name's index: Go
+					// defines it without looking for the code's names
+					// (jitOpPlain); native code along the shape's first
+					// transition where it is the field's (ssa.CallSite's
+					// DefineNext).
+					key := fb.cl.names[call.A]
+					if key >= 1<<24 {
+						return nil
+					}
+					site.Instr, site.Key, site.DefineNext = int(call.Op)|int(key)<<8, uint32(key), true
+				}
+				switch call.Op {
+				case bytecode.OpArraySpread, bytecode.OpSpreadIter:
+					// Native code spreads an array that iterates as
+					// Array.prototype's intrinsics do by its elements
+					// (jitArrayIterates).
+					site.ArrayIter = uintptr(unsafe.Pointer(&fb.r.jit.arrayIter))
+				case bytecode.OpArrayPush:
+					site.Append = true
+				}
+				if call.Op == bytecode.OpCopyDataProps {
+					// Native code copies by the layouts where Go has
+					// (jitCopyFast): the runtime's table, made now, for as
+					// long as the runtime lives.
+					s := fb.r.jit
+					if s.copies == nil {
+						s.copies = new([jitCopyEntries]jitCopyEntry)
+					}
+					site.Copies = uintptr(unsafe.Pointer(s.copies))
+				}
+				return []ssa.CallSite{site}
 			}
 			return nil
 		}
@@ -7951,6 +8010,11 @@ type jitPoolSource struct {
 	tmpl Value
 	fn   *bytecode.Function
 	env  *Object
+	// room is how many elements an array literal's arrays are made with
+	// room for, past its own, learned of sample, the last array of the
+	// pool's last filling (jitFillLiteral).
+	room   int
+	sample *Object
 }
 
 // jitRefillPool fills pool again, run out, with more objects (ssa's
