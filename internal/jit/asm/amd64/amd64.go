@@ -145,6 +145,13 @@ func (a *Asm) Bytes() int {
 		cap(a.open)*4
 }
 
+// Used is what of Bytes the last function used: its tables' lengths.
+func (a *Asm) Used() int {
+	return len(a.buf)*int(unsafe.Sizeof(a.buf[:1][0])) + len(a.labels)*int(unsafe.Sizeof(0)) + len(a.fixups)*int(unsafe.Sizeof(fixup{})) +
+		len(a.short) + len(a.never) + len(a.removed)*int(unsafe.Sizeof(0)) + len(a.past)*4 + len(a.bound)*int(unsafe.Sizeof(Label(0))) + len(a.at)*4 +
+		len(a.open)*4
+}
+
 // NewLabel makes an unbound label.
 func (a *Asm) NewLabel() Label {
 	a.labels = append(a.labels, -1)

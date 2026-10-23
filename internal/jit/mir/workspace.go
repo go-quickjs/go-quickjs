@@ -30,9 +30,15 @@ type Workspace struct {
 	saved     arena.Arena[saved]
 	sched     schedule
 	// xuses is allocate's list of uses in other blocks, kept from compile
-	// to compile.
-	xuses []xuse
-	ready bool
+	// to compile, and xusesUsed what the last compile used of it.
+	xuses     []xuse
+	xusesUsed int
+	// needs are what each of the recent compiles used of the scratch
+	// tables (scratchUsed), the next to replace at needs[next]: the
+	// tables keep what those needed, as the arenas keep theirs.
+	needs       [16]int
+	next, known int
+	ready       bool
 	// What a compile's exit descriptions share (abi.ExitFrame) is built
 	// here, then copied out once at its length (core's finishExits).
 	exitWords    map[uint64]int32
@@ -120,17 +126,35 @@ func (w *Workspace) Rewind() {
 	w.ivRefs.Rewind()
 	w.locs.Rewind()
 	w.saved.Rewind()
-	// As ssa.Workspace's Rewind does its scratch tables: the move
-	// schedule's, the exit descriptions' and the assemblers' tables go
-	// once they hold more than the arenas keep, which is what the recent
-	// compiles needed.
-	if arenas := w.arenaBytes(); w.Bytes()-arenas > arenas {
-		w.sched, w.xuses = schedule{}, nil
+	// The scratch tables -- the move schedule's, the uses', the exit
+	// descriptions' and the assemblers' -- go once they hold more than
+	// twice what any of the recent compiles used of them, as the arenas
+	// keep what those compiles used: a compile bigger than they grew them.
+	// (Compared with what the arenas keep, they went with every compile
+	// whose tables had grown as the arenas' shrank.)
+	used := w.scratchUsed()
+	keep := used
+	for _, n := range w.needs[:w.known] {
+		keep = max(keep, n)
+	}
+	w.needs[w.next], w.next, w.known = used, (w.next+1)%len(w.needs), min(w.known+1, len(w.needs))
+	if w.Bytes()-w.arenaBytes() > 2*keep {
+		w.sched, w.xuses, w.xusesUsed = schedule{}, nil, 0
 		w.exitWords = nil
 		w.exitSlotsBuf, w.exitIndexBuf, w.exitWordsBuf, w.exitHeadBuf, w.exitNextBuf = nil, nil, nil, nil, nil
 		w.amd64.a, w.amd64.labels, w.amd64.stubs, w.amd64.stubFor, w.amd64.cold = amd64.Asm{}, nil, nil, nil, nil
 		w.arm64.a, w.arm64.labels, w.arm64.stubs, w.arm64.stubFor, w.arm64.cold = arm64.Asm{}, nil, nil, nil, nil
 	}
+}
+
+// scratchUsed is what the last compile used of the scratch tables: of the
+// assemblers' and the uses' list, their lengths, of the others, as they
+// are emptied for reuse, all they hold.
+func (w *Workspace) scratchUsed() int {
+	n := w.Bytes() - w.arenaBytes()
+	n -= w.amd64.a.Bytes() + w.arm64.a.Bytes() + capBytes(w.xuses)
+	n += w.amd64.a.Used() + w.arm64.a.Used() + w.xusesUsed*int(unsafe.Sizeof(xuse{}))
+	return n
 }
 
 // arenaBytes is what the workspace's arenas keep.
@@ -209,7 +233,7 @@ func (c *core) xuseList() []xuse {
 
 func (c *core) keepXuses(s []xuse) {
 	if c.ws != nil {
-		c.ws.xuses = s[:0]
+		c.ws.xuses, c.ws.xusesUsed = s[:0], len(s)
 	}
 }
 
