@@ -46,8 +46,10 @@ type compiler struct {
 	// consts are the words every context holds (abi.Context's Consts).
 	consts [abi.NumConsts]uint64
 	// pool is the code's own constants, placed after its last instruction
-	// (movImm).
-	pool []poolConst
+	// (movImm), found by poolTab: by a hash of the constant, 1 plus its
+	// index in pool, or 0, open addressed, at most half full.
+	pool    []poolConst
+	poolTab []int32
 	// label of each block's code.
 	labels []amd64.Label // by block ID
 	// stubs: one exit per frame state and kind, by state ID and kind
@@ -196,9 +198,11 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 		}
 		g.a.Reset()
 		clear(g.stubs)
-		c.a, c.stubs, c.stubFor, c.cold = &g.a, g.stubs, g.stubFor[:0], g.cold[:0]
+		c.a, c.stubs, c.stubFor, c.cold, c.pool, c.poolTab = &g.a, g.stubs, g.stubFor[:0], g.cold[:0], g.pool[:0], g.poolTab[:0]
 		c.labels = slices.Grow(g.labels[:0], numBlocks(f))[:numBlocks(f)]
-		defer func() { g.labels, g.stubFor, g.cold = c.labels[:0], c.stubFor[:0], clearFuncs(c.cold) }()
+		defer func() {
+			g.labels, g.stubFor, g.cold, g.pool, g.poolTab = c.labels[:0], c.stubFor[:0], clearFuncs(c.cold), c.pool[:0], c.poolTab[:0]
+		}()
 	} else {
 		c.a, c.stubs = &amd64.Asm{}, map[stubKey]amd64.Label{}
 		c.labels = make([]amd64.Label, numBlocks(f))
@@ -422,14 +426,38 @@ func (c *compiler) movImm(dst amd64.Reg, v uint64) {
 // poolLabel is where the code's own constant v is (movImm), made if it is
 // not one yet.
 func (c *compiler) poolLabel(v uint64) amd64.Label {
-	for _, k := range c.pool {
-		if k.v == v {
+	if 2*(len(c.pool)+1) > len(c.poolTab) {
+		// Twice the room, the constants placed again.
+		n := max(64, 2*len(c.poolTab))
+		if cap(c.poolTab) < n {
+			c.poolTab = make([]int32, n)
+		}
+		c.poolTab = c.poolTab[:n]
+		clear(c.poolTab)
+		for i, k := range c.pool {
+			h := poolHash(k.v, n)
+			for c.poolTab[h] != 0 {
+				h = (h + 1) & (n - 1)
+			}
+			c.poolTab[h] = int32(i + 1)
+		}
+	}
+	n := len(c.poolTab)
+	h := poolHash(v, n)
+	for ; c.poolTab[h] != 0; h = (h + 1) & (n - 1) {
+		if k := c.pool[c.poolTab[h]-1]; k.v == v {
 			return k.label
 		}
 	}
 	k := poolConst{v: v, label: c.a.NewLabel()}
 	c.pool = append(c.pool, k)
+	c.poolTab[h] = int32(len(c.pool))
 	return k.label
+}
+
+// poolHash is where constant v is first looked for among n.
+func poolHash(v uint64, n int) int {
+	return int((v * 0x9E3779B97F4A7C15) >> 40 & uint64(n-1))
 }
 
 // cmpWord compares r with the word v, the flags as a compare with a
