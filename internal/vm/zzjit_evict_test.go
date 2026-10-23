@@ -338,6 +338,7 @@ func TestJITEvictedWaitToCompileAgain(t *testing.T) {
 	jitEpochNow = func() uint64 { tick++; return tick }
 	t.Cleanup(func() { jitEpochNow = now })
 	r := New(Config{JIT: true, JITMemoryLimit: 256 << 10})
+	jitDefaultsForTest(r)
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	if _, err := r.Run(compileForTest(t, b.String())); err != nil {
 		t.Fatal(err)

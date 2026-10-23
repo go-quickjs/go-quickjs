@@ -17,6 +17,7 @@ func jitDefaultRuns(t *testing.T, setup string, srcs ...string) *Runtime {
 	want := New(Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	r := New(Config{JIT: true})
+	jitDefaultsForTest(r)
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	for _, rt := range []*Runtime{want, r} {
 		if _, err := rt.Run(compileForTest(t, setup)); err != nil {

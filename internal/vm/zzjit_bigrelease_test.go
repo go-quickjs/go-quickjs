@@ -197,6 +197,7 @@ func TestJITBigIntGivenBackAllocs(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	r := New(Config{JIT: true})
+	jitDefaultsForTest(r)
 	defer func() { r.Close(); r.ReleaseClosed() }()
 	if _, err := r.Run(compileForTest(t, `
 		function arith(n) {

@@ -123,6 +123,7 @@ func TestJITArrowCallsNative(t *testing.T) {
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	r := New(Config{JIT: true})
+	jitDefaultsForTest(r)
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	const setup = `
 		class Sched {

@@ -488,6 +488,7 @@ func TestJITBigIntTruth(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	r := New(Config{JIT: true})
+	jitDefaultsForTest(r)
 	want := New(Config{})
 	for _, rt := range []*Runtime{want, r} {
 		if _, err := rt.Run(compileForTest(t, bigTruthSetup)); err != nil {

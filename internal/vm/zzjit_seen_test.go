@@ -43,6 +43,7 @@ func TestJITSSADeepChainsSeenByTheInterpreter(t *testing.T) {
 	want := New(Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := New(Config{JIT: true})
+	jitDefaultsForTest(r)
 	defer func() { r.Close(); r.ReleaseClosed() }()
 	for _, rt := range []*Runtime{want, r} {
 		if _, err := rt.Run(compileForTest(t, setup)); err != nil {
@@ -105,6 +106,7 @@ func TestJITSSASeedsBuiltinsAndCalleesCalls(t *testing.T) {
 	want := New(Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := New(Config{JIT: true})
+	jitDefaultsForTest(r)
 	defer func() { r.Close(); r.ReleaseClosed() }()
 	for _, rt := range []*Runtime{want, r} {
 		if _, err := rt.Run(compileForTest(t, setup)); err != nil {

@@ -1567,6 +1567,10 @@ func jitRuntimeForTest(t *testing.T, cfg Config) *Runtime {
 	// Boundary tests force promotion so guard and budget assertions cannot
 	// pass by running only the existing tiers.
 	r.jitCallThreshold, r.jitICThreshold = 1, 1
+	// Without QJS_JIT_STRESS's budgets and deoptimizations, whose exits the
+	// tests' counts of native calls, exits and compiles are not written
+	// for; a test that runs under them sets them itself (r.jitStress).
+	r.jitStress = jitStressConfig{}
 	t.Cleanup(func() {
 		// A compile the backend refused for its own panic is a bug, which a
 		// refusal hides.
@@ -1577,6 +1581,14 @@ func jitRuntimeForTest(t *testing.T, cfg Config) *Runtime {
 		r.ReleaseClosed()
 	})
 	return r
+}
+
+// jitDefaultsForTest gives r, made by New, the JIT's own thresholds,
+// whatever QJS_JIT_STRESS says: for a test whose counts of compiles, native
+// calls and exits are those of ordinary use.
+func jitDefaultsForTest(r *Runtime) {
+	r.jitCallThreshold, r.jitICThreshold = jitInvocationsForMaglev, jitInvocationsAfterICUpdate
+	r.jitStress = jitStressConfig{}
 }
 
 // jitOtherGuards is how many guards failed in r's code but the map checks
@@ -3336,6 +3348,7 @@ func TestJITPromotionRuntimeIsolation(t *testing.T) {
 
 func TestJITPromotionKeepsFramelessCalls(t *testing.T) {
 	r := New(Config{JIT: true})
+	jitDefaultsForTest(r)
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	v, err := r.Run(compileForTest(t, `function f(a) { return a+1 } var result; for(var i=0;i<1000;i++) result=f(i); result`))
 	if err != nil || v.Number() != 1000 {
@@ -3362,6 +3375,7 @@ func TestJITLoopPromotionFirstCall(t *testing.T) {
 				defer SetTreeTier(true)
 			}
 			r := New(Config{JIT: true})
+			jitDefaultsForTest(r)
 			t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 			source := "function sum(n) { " + keyword + " s=0; for(" + keyword + " i=0;i<n;i++) s+=i; return s } sum(10000)"
 			v, err := r.Run(compileForTest(t, source))
@@ -3385,6 +3399,7 @@ func TestJITLoopPromotionFirstCall(t *testing.T) {
 
 func TestJITLoopPromotionAtEntryPC(t *testing.T) {
 	r := New(Config{JIT: true})
+	jitDefaultsForTest(r)
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	v, err := r.Run(compileForTest(t, `function f(n) { while(n) n--; return n } f(10000)`))
 	if err != nil || v.Number() != 0 {
@@ -3399,6 +3414,7 @@ func TestJITLoopPromotionLiveOperands(t *testing.T) {
 	for _, keyword := range []string{"var", "let"} {
 		t.Run(keyword, func(t *testing.T) {
 			r := New(Config{JIT: true})
+			jitDefaultsForTest(r)
 			t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 			original := jitFunctionForTest(t, "function f(a,n) { "+keyword+" s=0; for("+keyword+" i=0;i<n;i++) s+=i; return s }")
 			fn := *original
@@ -3473,6 +3489,7 @@ func TestJITLoopPromotionCancellation(t *testing.T) {
 	for _, keyword := range []string{"var", "let"} {
 		t.Run(keyword, func(t *testing.T) {
 			r := New(Config{JIT: true})
+			jitDefaultsForTest(r)
 			t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 			defer cancel()
@@ -3500,6 +3517,7 @@ func TestJITLoopGuardErrors(t *testing.T) {
 			var baseline *Thrown
 			for _, enabled := range []bool{false, true} {
 				r := New(Config{JIT: enabled})
+				jitDefaultsForTest(r)
 				t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 				_, err := r.Run(p)
 				var thrown *Thrown
@@ -6526,6 +6544,7 @@ func TestJITSSASeedsMethodCalls(t *testing.T) {
 	want := New(Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := New(Config{JIT: true})
+	jitDefaultsForTest(r)
 	defer func() { r.Close(); r.ReleaseClosed() }()
 	for _, rt := range []*Runtime{want, r} {
 		if _, err := rt.Run(compileForTest(t, setup)); err != nil {
@@ -6906,6 +6925,7 @@ func TestJITLoopPromotedPastCalleesLoops(t *testing.T) {
 	want := New(Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := New(Config{JIT: true})
+	jitDefaultsForTest(r)
 	defer func() { r.Close(); r.ReleaseClosed() }()
 	for _, rt := range []*Runtime{want, r} {
 		if _, err := rt.Run(compileForTest(t, setup)); err != nil {
@@ -6963,6 +6983,7 @@ func TestJITSSASeedsCalleesWithoutCode(t *testing.T) {
 	want := New(Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := New(Config{JIT: true})
+	jitDefaultsForTest(r)
 	defer func() { r.Close(); r.ReleaseClosed() }()
 	for _, rt := range []*Runtime{want, r} {
 		if _, err := rt.Run(compileForTest(t, setup)); err != nil {

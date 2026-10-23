@@ -2,7 +2,11 @@
 
 package vm
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/go-quickjs/go-quickjs/internal/jit"
+)
 
 // staleInlineSetup's run inlines get and calls step natively, whose
 // forEach -- a call of Go -- calls replaceRun at the run's 30th object and
@@ -48,6 +52,7 @@ func TestJITInlinedByCodeReplaced(t *testing.T) {
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	var e *jitEntry
 	var had []*closure
+	var code *jit.SSACode
 	calls := 0
 	for _, rt := range []*Runtime{want, r} {
 		rt.global.setOwnRaw(rt.atoms.intern("replaceRun"), Obj(rt.newNativeFunc("replaceRun", 0,
@@ -68,6 +73,14 @@ func TestJITInlinedByCodeReplaced(t *testing.T) {
 					return Undefined, nil
 				}
 				had, e.ssaInlined = e.ssaInlined, nil
+				// Invalidated too, as code compiled again leaves the code
+				// it replaced: only the run under way goes on in that
+				// code, a run entered later -- after one of the exits
+				// QJS_JIT_STRESS makes -- compiling the function again
+				// rather than entering code whose lists are not its own.
+				code = e.ssa
+				fd := rt.global.getOwn(rt.atoms.intern("run")).value().Object().fn()
+				rt.jitInvalidate(fd.closure, e)
 				return Undefined, nil
 			})), propDefault)
 		if _, err := rt.Run(compileForTest(t, staleInlineSetup)); err != nil {
@@ -90,7 +103,9 @@ func TestJITInlinedByCodeReplaced(t *testing.T) {
 	if had == nil {
 		t.Fatal("run's entry was never given other code's lists")
 	}
-	e.ssaInlined = had
+	if e.ssa == code && e.ssaInlined == nil {
+		e.ssaInlined = had
+	}
 	if e.ssaStats.hosts == 0 {
 		t.Fatal("run's code never left get's inlined code")
 	}

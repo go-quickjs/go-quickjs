@@ -180,6 +180,12 @@ jobs:
         shell: bash
         run: TEST262_DIR="$GITHUB_WORKSPACE/test262" go test -tags quickjs_jit ./conformance -run TestConformance -count=1 -timeout 35m -v -args -conformance.jit 2>&1 | tee test262.log | grep -E "test262:|native code ran|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
 
+      # The VM's own tests under the same stress: those that count native
+      # calls, exits and compiles take the JIT's own thresholds
+      # (jitRuntimeForTest, jitDefaultsForTest); the rest run stressed.
+      - name: Run the VM's tests
+        run: go test -tags quickjs_jit -count=1 -timeout 20m ./internal/vm
+
   # The JIT's kernels and the tree tier's, on arm64 (macOS) and amd64
   # (Linux). A shared
   # runner's times are noisy, so the summary compares the tiers within one

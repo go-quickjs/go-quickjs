@@ -189,6 +189,7 @@ func TestJITGenStepAgreesWithNode(t *testing.T) {
 	SetTreeTier(true)
 	jit := func() *Runtime {
 		r := New(Config{JIT: true})
+		jitDefaultsForTest(r)
 		r.jitCallThreshold, r.jitICThreshold = 1, 1
 		return r
 	}
