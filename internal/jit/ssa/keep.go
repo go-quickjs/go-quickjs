@@ -298,8 +298,11 @@ func reconstruct(f *Func, order []*Value, kept [][]*Value) {
 	// A frame state its users share -- the guards of one instruction do,
 	// some before a keep and some after -- is copied before one's slot
 	// changes.
-	// users counts, by state ID, the values and blocks that use each.
-	users := f.ints(f.nextState)
+	// users counts, by state ID, the values and blocks that use each, and
+	// kin is, by state ID, 1 if one of its slots holds a kept value, 2 if
+	// none does, 0 until it is looked at: a state its users share is read
+	// for that once, not by each of them.
+	users, kin := f.ints(f.nextState), f.bools(2*f.nextState)
 	for _, b := range f.Blocks {
 		for _, v := range b.Values {
 			if v.State != nil {
@@ -310,9 +313,24 @@ func reconstruct(f *Func, order []*Value, kept [][]*Value) {
 			users[b.State.id]++
 		}
 	}
+	holdsKept := func(s *FrameState) bool {
+		if s.id >= len(users) {
+			return true // a copy made here
+		}
+		if !kin[2*s.id] {
+			kin[2*s.id] = true
+			for _, x := range s.Slots {
+				if candOf(x) != 0 {
+					kin[2*s.id+1] = true
+					break
+				}
+			}
+		}
+		return kin[2*s.id+1]
+	}
 	state := func(s *FrameState, b *Block, at int) *FrameState {
-		if s == nil {
-			return nil
+		if s == nil || !holdsKept(s) {
+			return s
 		}
 		out := s
 		copied := false
@@ -385,9 +403,18 @@ func reconstruct(f *Func, order []*Value, kept [][]*Value) {
 	if len(alias) == 0 {
 		return
 	}
-	// Phis made, then found to merge one value, are that value.
+	// Phis made, then found to merge one value, are that value: each
+	// state's slots resolved once, however many use it (done, by state ID
+	// for the states there were, or past them).
+	done := f.bools(f.nextState)
 	slots := func(s *FrameState) {
 		if s != nil {
+			if s.id < len(done) {
+				if done[s.id] {
+					return
+				}
+				done[s.id] = true
+			}
 			for i, x := range s.Slots {
 				if x != nil {
 					s.Slots[i] = resolve(x)
