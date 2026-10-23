@@ -24,7 +24,8 @@ import (
 // microbench_extra.js is ours: tests of what microbench.js has none of --
 // generators, async functions, try statements, iterators, using
 // declarations, Math.random, the in operator, a delete of an object's
-// last property, BigInts beyond microbench.js's sums and products,
+// last property, object and array spread, object rest, computed keys,
+// spread calls, BigInts beyond microbench.js's sums and products,
 // regular expressions as programs use them -- validating, tokenizing,
 // replacing, splitting, named groups, the u flag --
 // written as its tests are. A test of
@@ -81,7 +82,10 @@ var microWork = []struct {
 	{"loop_props", 8388608},
 	{"private_field", 4194304}, {"private_method", 2097152}, {"math_random", 4194304},
 	{"random_shuffle", 2097152}, {"prop_in", 1048576}, {"prop_in_keyed", 4194304},
-	{"array_in", 2097152}, {"prop_delete_last", 1048576}, {"array_forEach", 32768}, {"array_reduce", 32768},
+	{"array_in", 2097152}, {"prop_delete_last", 1048576},
+	{"object_spread", 262144}, {"object_getter_spread", 262144}, {"object_rest", 262144},
+	{"object_computed", 1048576}, {"array_spread", 262144}, {"spread_call", 262144},
+	{"array_forEach", 32768}, {"array_reduce", 32768},
 	{"array_map", 16384}, {"array_filter", 16384}, {"array_some", 32768},
 	{"typed_forEach", 32768}, {"string_indexOf", 16384}, {"array_indexOf", 524288},
 	{"string_at", 2097152}, {"string_code_point_at", 2097152}, {"string_upper", 524288},

@@ -1218,6 +1218,21 @@ type CallSite struct {
 	// Go makes it, as the interpreter does -- an instanceof may run code,
 	// a Symbol.hasInstance method or a proxy's trap.
 	TypeOf, InstanceOf bool
+	// Instr, where not 0, marks a call of Go (GoCall) that is an operation
+	// Go makes, the VM's instruction at the call's PC (compile's
+	// GoOperation) -- its opcode in Instr's low byte, its A operand in the
+	// 24 bits above -- of its Argc operands, the top of the stack, its
+	// result in their place: object spread and rest, array spread, a spread call,
+	// a literal's computed key or __proto__ -- as V8's code calls its
+	// CloneObject, CopyDataProperties and CallWithSpread builtins. Go makes
+	// it without a frame where that runs no script, and with the code's
+	// frame where it may.
+	Instr int
+	// StringSelf, of an operation Go makes (Instr) of one operand, says its
+	// result is the operand itself where that is a string -- a computed
+	// key's conversion, to_property_key -- which native code tests,
+	// calling Go for any other.
+	StringSelf bool
 	// Super marks a call of Go (GoCall) that is a derived constructor's
 	// super(...) of its Argc operands, the arguments -- no function among
 	// them -- as V8's code calls the parent constructor: Go makes it on
@@ -3462,6 +3477,34 @@ func (b *builder) substringCall(blk *Block, pc int, fn uintptr, kind int, guard 
 	}
 }
 
+// stringSelfCall makes the operation Go makes at pc (CallSite's Instr) of
+// the one operand at slot, whose result is the operand itself where that is
+// a string (StringSelf): told by its word, natively, as V8's ToPropertyKey
+// takes a string as it is, and by the call, on a branch of its own
+// (split), where it is anything else, native code going on after either.
+func (b *builder) stringSelfCall(blk *Block, pc int, calls []*CallSite, slot int) {
+	f := b.f
+	x := b.read(slot, blk)
+	st := b.state(blk, pc)
+	is := f.newValue(blk, OpTypeIs, Bool, x)
+	is.Index, is.Aux, is.State = int(ir.TypeString), int(ir.HostExit), st
+	st.addUse()
+	_, other, _ := b.split(blk, is, true)
+	call := f.newValue(other, OpCall, Tagged, x)
+	f.cache(call).Calls = calls
+	call.Aux, call.State, call.Index = int(ir.HostExit), st, b.callKeeps[pc]
+	st.addUse()
+	kept := f.newValue(other, OpCallCell, Source, call)
+	r := f.newValue(other, OpKept, Tagged, kept, call)
+	r.Shadow = kept
+	b.write(slot, other, r)
+	// A key's conversion may run script, which may assign a captured
+	// binding, as a callee may.
+	if b.hasCells() {
+		b.reloadAfterCall(other)
+	}
+}
+
 // charCode reports whether the method call of one argument at pc calls
 // String.prototype.charCodeAt (CharCodeFeedback), which charCodeCall
 // makes.
@@ -3913,7 +3956,8 @@ func (b *builder) plan() error {
 			// it. A fixed global's check only deoptimizes: the binding can
 			// never move, so it never fails, and what follows sees its
 			// constant rather than a merge with a slot loaded at an entry.
-			if site, ok := b.global(pc); (!ok || !site.Fixed) && resumes(pc) {
+			// A field Go defines from native code goes on natively.
+			if site, ok := b.global(pc); (!ok || !site.Fixed) && resumes(pc) && !(in.Op == ir.FieldDefine && b.goesOn(pc)) {
 				entries[pc+1] = true
 			}
 		case ir.Binary:
@@ -5621,6 +5665,23 @@ func (b *builder) instruction(blk *Block, pc int) {
 		b.assign(in.Dest, blk, v)
 	case ir.FieldDefine:
 		add, ok := b.define(pc)
+		if calls := b.calls[pc]; !ok && len(calls) == 1 && calls[0].Instr != 0 && b.cur == b.root {
+			// A field Go defines, called from native code (CallSite's
+			// Instr): one whose literal's layout Define does not plan --
+			// past a spread, a computed key or __proto__ -- as V8's code
+			// calls its DefineKeyedOwnIC's runtime. Each had left native
+			// code.
+			call := guard(OpCall, Tagged, ir.HostExit, operand(in.Left), operand(in.Right))
+			b.f.cache(call).Calls, call.Index = calls, b.callKeeps[pc]
+			cell := f.newValue(blk, OpCallCell, Source, call)
+			r := f.newValue(blk, OpKept, Tagged, cell, call)
+			r.Shadow = cell
+			b.write(in.Left.Slot, blk, r)
+			if b.hasCells() {
+				b.reloadAfterCall(blk)
+			}
+			break
+		}
 		if !ok {
 			blk.ExitKind = ir.HostExit
 			blk.State = state()
@@ -5730,7 +5791,15 @@ func (b *builder) instruction(blk *Block, pc int) {
 				// The this slot, then the arguments.
 				n = calls[0].Argc + 1
 			}
+			if calls[0].Instr != 0 {
+				// An operation's operands (CallSite's Instr).
+				n = calls[0].Argc
+			}
 			sp := b.p.Locals + b.p.Maps[pc].Depth
+			if calls[0].StringSelf && n == 1 && len(calls) == 1 {
+				b.stringSelfCall(blk, pc, calls, sp-1)
+				break
+			}
 			args := make([]*Value, n)
 			for i := range args {
 				if i > 0 || !calls[0].Super {
@@ -5823,8 +5892,8 @@ func (b *builder) nativeCalls(pc int) []*CallSite {
 		if site.Method {
 			operands++
 		}
-		if site.Super {
-			// Its arguments alone.
+		if site.Super || site.Instr != 0 {
+			// Its arguments alone; an operation's operands.
 			operands = site.Argc
 		}
 		// A callee that reads its receiver gets the method call's, or a

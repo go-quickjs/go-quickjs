@@ -2031,8 +2031,10 @@ func (r *Runtime) jitBuildSSA(fn *bytecode.Function, p *ir.Program, fb *jitFeedb
 	// for -- top-level code's, a generator's, an async function's -- has
 	// none, nor code whose parameter list has a prologue (ir's ParamsDead),
 	// which the interpreter goes on with from the call's arguments, which
-	// only a frame of the VM's has: Go makes its calls.
-	f.CallEntry = !fn.TopLevel && !fn.IsModule && !fn.Async && !fn.Generator && !isGeneratorTemplate(fn) && !fn.ParamsAreLexical
+	// only a frame of the VM's has, nor code that pushes its own function
+	// object (push_callee), which a native callee's context does not hold:
+	// Go makes its calls.
+	f.CallEntry = !fn.TopLevel && !fn.IsModule && !fn.Async && !fn.Generator && !isGeneratorTemplate(fn) && !fn.ParamsAreLexical && !jitPushesCallee(fn)
 	if jitGenCallable(fn) && !p.Cells {
 		// A generator a loop's step may resume natively: where it resumes
 		// it (mir's genEntry).
@@ -2778,6 +2780,23 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 			// Its cursor, which Go makes, called from native code: a
 			// destructuring makes one each time.
 			return []ssa.CallSite{{Go: ssa.GoCall, ForOf: true, ThisSlot: -1}}
+		}
+		if jitcompile.GoOperation(call.Op) {
+			// An operation Go makes from native code (abi.GoCallOp):
+			// without a frame where it runs no script, with the code's
+			// where it may (jitOpPlain, jitGoCall). A literal's field
+			// whose transition was not made when the code was compiled
+			// leaves, for the code to be compiled again with it
+			// (jitDefineSeen).
+			if call.Op == bytecode.OpDefineField && slices.Contains(fb.definesUnfed, int32(pc)) {
+				return nil
+			}
+			if n := jitcompile.GoOperands(call); n <= abi.MaxGoArgs && call.A < 1<<24 {
+				// A computed key that is a string is its own key, which
+				// native code tells (ssa.CallSite's StringSelf).
+				return []ssa.CallSite{{Go: ssa.GoCall, Instr: int(call.Op) | int(call.A)<<8, Argc: n, ThisSlot: -1, StringSelf: call.Op == bytecode.OpToPropertyKey}}
+			}
+			return nil
 		}
 		switch call.Op {
 		case bytecode.OpTypeOf:
@@ -3840,12 +3859,18 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 	if n > abi.MaxGoArgs || depth < jitGoStacked(in, n) || top+n > len(r.stack) || !jitGoPropertyAt(f.cl.fn, pc, in) {
 		return false
 	}
+	op := ctx.GoOp>>abi.GoOpKindShift&0xff == abi.GoCallOp
+	if op {
+		if in = f.cl.fn.Code[pc]; jitcompile.GoOperands(in) != n {
+			return false
+		}
+	}
 	for i := range n {
 		r.stack[top+i] = jitGoArg(ctx, i)
 	}
 	sp := top + n
 	r.stackTop, r.stackHigh = sp, max(r.stackHigh, sp)
-	step := in.Op == bytecode.OpIterNextOrJump || in.Op == bytecode.OpIterStep || in.Op == bytecode.OpIterRest || in.Op == bytecode.OpForOfStart || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpSuperCall
+	step := op || in.Op == bytecode.OpIterNextOrJump || in.Op == bytecode.OpIterStep || in.Op == bytecode.OpIterRest || in.Op == bytecode.OpForOfStart || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpSuperCall
 	prop := in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 	if in.Op == bytecode.OpIterNextOrJump || in.Op == bytecode.OpIterStep {
 		// A step over a generator the code may resume natively.
@@ -3878,6 +3903,9 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 	var v Value
 	var err error
 	switch {
+	case op:
+		// An operation Go makes (abi.GoCallOp), with the frame.
+		v, err = r.jitOpMade(f, in, r.stack[sp-n:sp])
 	case prop:
 		if in.Op == bytecode.OpGetProp && r.jitSiteMegamorphic(f.cl, e, pc) {
 			// A megamorphic site's read that native code did not find,
@@ -3991,6 +4019,11 @@ func jitGoPropertyAt(fn *bytecode.Function, pc int, in bytecode.Instr) bool {
 		return pc < len(fn.Code) && fn.Code[pc].Op == bytecode.OpSetProp
 	case bytecode.OpGetProp:
 		return pc < len(fn.Code) && (fn.Code[pc].Op == bytecode.OpGetProp || fn.Code[pc].Op == bytecode.OpGetPropThis)
+	}
+	if jitcompile.GoOperation(in.Op) {
+		// An operation Go makes (abi.GoCallOp), as the instruction there
+		// says.
+		return pc < len(fn.Code) && fn.Code[pc].Op == in.Op
 	}
 	return true
 }
@@ -4406,6 +4439,12 @@ func (r *Runtime) jitGoCallNested(ctx *abi.Context, idx int) bool {
 	if cl := (*closure)(ctx.Closure); cl == nil || !jitGoPropertyAt(cl.fn, pc, in) {
 		return false
 	}
+	op := ctx.GoOp>>abi.GoOpKindShift&0xff == abi.GoCallOp
+	if op {
+		if in = (*closure)(ctx.Closure).fn.Code[pc]; jitcompile.GoOperands(in) != n {
+			return false
+		}
+	}
 	// Where each level is: at the native call it makes, as its code
 	// described it (abi.Context's CallState); this one at this call of Go,
 	// which its code wrote -- a description its context holds is an
@@ -4572,7 +4611,7 @@ framed:
 		// A step over a generator the code may resume natively.
 		r.jitGenStepSeen(e, f.cl, pc, r.stack[sp-1])
 	}
-	if in.Op != bytecode.OpIterNextOrJump && in.Op != bytecode.OpIterStep && in.Op != bytecode.OpIterRest && in.Op != bytecode.OpForOfStart && in.Op != bytecode.OpTypeOf && in.Op != bytecode.OpInstanceOf && in.Op != bytecode.OpSuperCall && !prop && jitCallUnsettled(e, pc, in) {
+	if !op && in.Op != bytecode.OpIterNextOrJump && in.Op != bytecode.OpIterStep && in.Op != bytecode.OpIterRest && in.Op != bytecode.OpForOfStart && in.Op != bytecode.OpTypeOf && in.Op != bytecode.OpInstanceOf && in.Op != bytecode.OpSuperCall && !prop && jitCallUnsettled(e, pc, in) {
 		r.jitCallSeen(f, e, pc, sp, in)
 	}
 	r.jitCalleeProfit(e, serial, pc)
@@ -4589,7 +4628,10 @@ framed:
 	s.goCallDepth = r.frameDepth + 1
 	var v Value
 	var err error
-	if prop {
+	if op {
+		// An operation Go makes (abi.GoCallOp), with the level's frame.
+		v, err = r.jitOpMade(f, in, r.stack[sp-n:sp])
+	} else if prop {
 		if in.Op == bytecode.OpGetProp && r.jitSiteMegamorphic(f.cl, e, pc) {
 			// A megamorphic site's read that native code did not find,
 			// learned as at an exit (jitPolySeen): the megamorphic cache
@@ -5156,6 +5198,10 @@ func jitGoCallInstr(op uint64) (bytecode.Instr, int) {
 	case abi.GoCallSuper:
 		// The frame's this slot, then the arguments.
 		return bytecode.Instr{Op: bytecode.OpSuperCall, A: argc}, int(argc) + 1
+	case abi.GoCallOp:
+		// An operation's opcode and its A, of its operands: the
+		// instruction at the call's PC (jitGoPropertyAt).
+		return bytecode.Instr{Op: bytecode.Op(op >> abi.GoOpIndexShift), A: uint32(op >> (abi.GoOpIndexShift + 8))}, int(argc)
 	}
 	return in, n
 }
@@ -11543,6 +11589,10 @@ func (r *Runtime) jitCallResult(f *frame, pc, depth int, v Value, err error) (in
 		return sp + 1, true
 	}
 	sp := f.base + depth - int(in.A) - 1
+	if jitcompile.GoOperation(in.Op) {
+		// An operation Go made (abi.GoCallOp): its operands go.
+		sp = f.base + depth - jitcompile.GoOperands(in)
+	}
 	switch in.Op {
 	case bytecode.OpTypeOf:
 		// Its operand (abi.GoCallTypeOf).

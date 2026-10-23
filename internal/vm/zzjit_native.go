@@ -854,6 +854,12 @@ type jitState struct {
 	// searchArgs are a search's arguments (jitSearch), given to its Go
 	// function, which keeps nothing of them, and cleared after.
 	searchArgs [2]Value
+	// copies are the object spreads Go learned to make by their layouts
+	// (jitCopyFast), made the first time one is learned.
+	copies *[jitCopyEntries]jitCopyEntry
+	// arrayIter is where arrays find their iteration's methods, to spread
+	// them by their elements (jitArrayIterates).
+	arrayIter jitArrayIter
 	// ssaShared is what the contexts from ssaSharedFrom on hold of what
 	// they share (jitShareContexts); ssaSharedGen counts the times either,
 	// or bounds, changed, which a call of Go compares, not the struct.
@@ -3022,7 +3028,9 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 			bytecode.OpGetPrivate, bytecode.OpSetPrivate, bytecode.OpPrivateIn,
 			bytecode.OpDefinePrivate, bytecode.OpDefinePrivateMethod, bytecode.OpDefinePrivateGetter, bytecode.OpDefinePrivateSetter,
 			bytecode.OpAddPrivateMethod, bytecode.OpAddPrivateGetter, bytecode.OpAddPrivateSetter,
-			bytecode.OpPrivateName, bytecode.OpNewPrivateMethods, bytecode.OpInstallPrivateMethods:
+			bytecode.OpPrivateName, bytecode.OpNewPrivateMethods, bytecode.OpInstallPrivateMethods,
+			bytecode.OpCopyDataProps, bytecode.OpArraySpread, bytecode.OpSpreadIter, bytecode.OpArrayPush, bytecode.OpSetProtoOf,
+			bytecode.OpObjectRest, bytecode.OpCallSpread, bytecode.OpNewSpread, bytecode.OpTemplateObject, bytecode.OpPushCallee:
 		case bytecode.OpDispose:
 		default:
 			return sp, steps, nil
@@ -3145,6 +3153,15 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 			v, err = r.iterStep(stack[sp-1-int(in.A)])
 		case bytecode.OpIterRest:
 			v, err = r.iterRest(stack[sp-1-int(in.A)])
+		case bytecode.OpCopyDataProps, bytecode.OpArraySpread, bytecode.OpSpreadIter, bytecode.OpArrayPush, bytecode.OpSetProtoOf,
+			bytecode.OpObjectRest, bytecode.OpCallSpread, bytecode.OpNewSpread, bytecode.OpTemplateObject, bytecode.OpPushCallee:
+			// An operation Go makes (jitcompile.GoOperation), as the
+			// interpreter does: its operands go, its result comes.
+			n := jitcompile.GoOperands(in)
+			if v, err = r.jitOpMade(f, in, stack[sp-n:sp]); err != nil {
+				return sp, steps, err
+			}
+			sp -= n
 		case bytecode.OpNewClass, bytecode.OpSetHomeObject, bytecode.OpSetFieldInit, bytecode.OpDefineMethod,
 			bytecode.OpDefineIndex, bytecode.OpDefineGetter, bytecode.OpDefineSetter, bytecode.OpSetFuncName,
 			bytecode.OpDefineGetterIndex, bytecode.OpDefineSetterIndex, bytecode.OpToPropertyKey, bytecode.OpToPropertyKeyOfBase:

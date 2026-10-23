@@ -776,3 +776,62 @@ func TestLowerCoversDescribedOpcodes(t *testing.T) {
 		t.Fatalf("only %d opcodes accepted: the fixture no longer exercises describe", len(accepted))
 	}
 }
+
+// The operations Go makes from native code (GoOperation) lower, in the new
+// pipeline, to host operations of their operands at the top of the stack,
+// which their one result replaces (GoOperands); the old pipeline refuses
+// them, and a callee its own function object (push_callee), which a native
+// callee's frame does not hold.
+func TestGoOperationLowering(t *testing.T) {
+	src := `function f(o, a, k, p, g) {
+		let s = 0;
+		for (let i = 0; i < 3; i++) {
+			const x = { ...o, [k]: i, __proto__: p, y: 1 }, { b, ...r } = o, y = [i, ...a];
+			s += g(...y) + new g(...a) + x.y + r.c + tag` + "`t${i}`" + `;
+		}
+		return s;
+	}`
+	fn := compiledFunction(t, src)
+	if _, err := Lower(fn); err == nil || !strings.Contains(err.Error(), "unsupported opcode") {
+		t.Fatalf("Lower: %v, want a refusal", err)
+	}
+	p, err := LowerSSA(fn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[bytecode.Op]bool{}
+	for pc, in := range fn.Code {
+		if !GoOperation(in.Op) || p.Maps[pc].Depth < 0 {
+			continue
+		}
+		seen[in.Op] = true
+		if want := p.Maps[pc].Depth - GoOperands(in) + 1; p.Maps[pc+1].Depth != want {
+			t.Fatalf("pc %d %v: depth %d after, want %d", pc, in.Op, p.Maps[pc+1].Depth, want)
+		}
+		if out := p.Code[pc]; out.Op != ir.Host && !(in.Op == bytecode.OpDefineField && out.Op == ir.FieldDefine) {
+			t.Fatalf("pc %d %v: %+v", pc, in.Op, out)
+		}
+	}
+	for _, op := range []bytecode.Op{bytecode.OpCopyDataProps, bytecode.OpToPropertyKey, bytecode.OpDefineIndex, bytecode.OpSetProtoOf,
+		bytecode.OpDefineField, bytecode.OpObjectRest, bytecode.OpArrayPush, bytecode.OpArraySpread, bytecode.OpSpreadIter,
+		bytecode.OpCallSpread, bytecode.OpNewSpread, bytecode.OpTemplateObject} {
+		if !seen[op] {
+			t.Errorf("no %v lowered", op)
+		}
+	}
+	// Callees, for native callers and inlining, take them, but push_callee.
+	callee := compiledFunction(t, `function f(o, k) { return { ...o, [k]: 1 } }`)
+	if _, err := LowerSSAInline(callee); err != nil {
+		t.Fatal(err)
+	}
+	named := compiledFunction(t, `var g = function self(n) { while (n) n--; return self }`)
+	if _, err := LowerSSAInline(named); err == nil || !strings.Contains(err.Error(), "push_callee") {
+		t.Fatalf("LowerSSAInline: %v, want push_callee refused", err)
+	}
+	if _, err := LowerSSA(named); err != nil {
+		t.Fatal(err)
+	}
+}

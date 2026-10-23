@@ -38,6 +38,9 @@ func (r *Runtime) jitGoCallPlain(ctx *abi.Context) bool {
 	// alone: most calls of Go are of none of these, which jitGoCall makes.
 	switch ctx.GoOp >> abi.GoOpKindShift & 0xff {
 	case abi.GoCallSet:
+	case abi.GoCallOp:
+		// An operation Go makes (jitOpPlain).
+		return r.jitOpPlain(ctx)
 	case 0, abi.GoCallMethod:
 		at := 0
 		if ctx.GoOp>>abi.GoOpKindShift&0xff == abi.GoCallMethod {
@@ -207,7 +210,7 @@ func jitLeafOp(op uint8) bool {
 // and a few others', which jitGoCallPlain then refuses.
 func (r *Runtime) jitMaybePlain(ctx *abi.Context) bool {
 	switch kind := ctx.GoOp >> abi.GoOpKindShift & 0xff; kind {
-	case abi.GoCallSet:
+	case abi.GoCallSet, abi.GoCallOp:
 		return true
 	case 0, abi.GoCallMethod:
 		// The function, the call's first operand, or a method call's

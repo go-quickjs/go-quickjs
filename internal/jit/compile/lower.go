@@ -371,13 +371,20 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			// property, its key checked; Go makes the rest.
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
-		if m.callee && (isDefinition(in.Op) || isPrivate(in.Op) && in.Op != bytecode.OpGetPrivate && in.Op != bytecode.OpSetPrivate && in.Op != bytecode.OpPrivateIn) {
+		if m.callee && (isDefinition(in.Op) && !GoOperation(in.Op) || isPrivate(in.Op) && in.Op != bytecode.OpGetPrivate && in.Op != bytecode.OpSetPrivate && in.Op != bytecode.OpPrivateIn) {
 			// What Go makes of them -- a class's or a literal's member, a
 			// private member's definition -- leaves native code, after which
 			// Go goes on natively in a function's own code, at the entry
 			// after it, but finishes a callee in the interpreter, which has
 			// none: a callee's every call would leave, and Go is the one to
 			// call it.
+			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
+		}
+		if GoOperation(in.Op) && (!m.ssa || in.Op == bytecode.OpPushCallee && m.callee) {
+			// The new pipeline has Go make them, called from native code
+			// (GoOperation). A callee's own function object, which
+			// push_callee pushes, is the frame's, which a native callee
+			// has none of.
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
 		if (in.Op == bytecode.OpTailCall || in.Op == bytecode.OpTailCallMethod) && (!m.ssa || m.callee) {
@@ -411,7 +418,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			// throws it, as V8's code calls the runtime to throw.
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
-		host = host || str || iters || isPrivate(in.Op) || isDefinition(in.Op) || in.Op == bytecode.OpClosure || in.Op == bytecode.OpCloseUpvalues || in.Op == bytecode.OpImport || in.Op == bytecode.OpImportMeta || in.Op == bytecode.OpYield || in.Op == bytecode.OpAwait || in.Op == bytecode.OpThrow ||
+		host = host || str || iters || isPrivate(in.Op) || isDefinition(in.Op) || GoOperation(in.Op) || in.Op == bytecode.OpClosure || in.Op == bytecode.OpCloseUpvalues || in.Op == bytecode.OpImport || in.Op == bytecode.OpImportMeta || in.Op == bytecode.OpYield || in.Op == bytecode.OpAwait || in.Op == bytecode.OpThrow ||
 			in.Op == bytecode.OpNewDisposeCapability || in.Op == bytecode.OpAddDisposable || in.Op == bytecode.OpDispose || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpIn || in.Op == bytecode.OpDeleteProp || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpApplyArguments || in.Op == bytecode.OpNew || in.Op == bytecode.OpSuperCall || in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict || in.Op == bytecode.OpCheckGlobalRef || in.Op == bytecode.OpNewObject || in.Op == bytecode.OpNewRegExp || in.Op == bytecode.OpDefineField || in.Op == bytecode.OpPushEmptyString || in.Op == bytecode.OpConcat || in.Op == bytecode.OpToString || in.Op == bytecode.OpNewArray || in.Op == bytecode.OpCall || in.Op == bytecode.OpCallMethod || in.Op == bytecode.OpTailCall || in.Op == bytecode.OpTailCallMethod || in.Op == bytecode.OpGetGlobal || in.Op == bytecode.OpGetGlobalOpt || in.Op == bytecode.OpGetPropThis || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		property = property || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		// A derived constructor's this slot is what it returns, bound by
@@ -1465,6 +1472,29 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 	case bytecode.OpInstallPrivateMethods:
 		// The class's private methods, popped, onto the receiver.
 		return effect{need: 1, delta: -1}, nil
+	case bytecode.OpCopyDataProps, bytecode.OpArraySpread, bytecode.OpSpreadIter, bytecode.OpArrayPush, bytecode.OpSetProtoOf:
+		// What is spread, appended or made the prototype popped; the
+		// literal's object, or array, kept.
+		return effect{need: 2, delta: -1}, nil
+	case bytecode.OpObjectRest:
+		// The source and the A keys above it, for the rest object.
+		if in.A >= MaxSlots {
+			return bad("invalid object rest")
+		}
+		return effect{need: int(in.A) + 1, delta: -int(in.A)}, nil
+	case bytecode.OpCallSpread:
+		// The receiver, the function and the array of arguments, for the
+		// result.
+		return effect{need: 3, delta: -2}, nil
+	case bytecode.OpNewSpread:
+		return effect{need: 2, delta: -1}, nil
+	case bytecode.OpTemplateObject:
+		if uint64(in.A) >= uint64(len(fn.Templates)) {
+			return bad("invalid template")
+		}
+		return effect{delta: 1}, nil
+	case bytecode.OpPushCallee:
+		return effect{delta: 1}, nil
 	case bytecode.OpGetGlobalOpt:
 		// typeof's read of a name, which has no site of its own.
 		if uint64(in.A) >= uint64(len(fn.Names)) {
@@ -1811,6 +1841,45 @@ func isDefinition(op bytecode.Op) bool {
 	return false
 }
 
+// GoOperation reports whether op is one the new pipeline has Go make,
+// called from native code, where its operands are the top of the stack and
+// its one result replaces them: the VM's GoCall of an operation
+// (abi.GoCallOp), which makes it without a frame where that runs no script
+// -- an object's own data properties copied, a dense array's elements
+// spread, a key that is a primitive converted -- and with the code's frame
+// where it may run some, a getter, a proxy's trap, an iterator's next, a
+// key's toString, a call: object spread and rest, array spread and spread
+// calls, an element appended to an array literal, a literal's __proto__,
+// its computed keys and its fields where native code does not define them
+// along the shapes' transitions (ir.FieldDefine), a tagged template's
+// strings and a function's own object.
+func GoOperation(op bytecode.Op) bool {
+	switch op {
+	case bytecode.OpCopyDataProps, bytecode.OpArraySpread, bytecode.OpSpreadIter, bytecode.OpArrayPush, bytecode.OpSetProtoOf,
+		bytecode.OpObjectRest, bytecode.OpCallSpread, bytecode.OpNewSpread, bytecode.OpTemplateObject, bytecode.OpPushCallee,
+		bytecode.OpDefineIndex, bytecode.OpToPropertyKey, bytecode.OpDefineField:
+		return true
+	}
+	return false
+}
+
+// GoOperands is how many operands an operation Go makes (GoOperation)
+// takes from the top of the stack, whose one result replaces them.
+func GoOperands(in bytecode.Instr) int {
+	switch in.Op {
+	case bytecode.OpCopyDataProps, bytecode.OpArraySpread, bytecode.OpSpreadIter, bytecode.OpArrayPush, bytecode.OpSetProtoOf,
+		bytecode.OpNewSpread, bytecode.OpDefineField:
+		return 2
+	case bytecode.OpObjectRest:
+		return int(in.A) + 1
+	case bytecode.OpCallSpread, bytecode.OpDefineIndex:
+		return 3
+	case bytecode.OpToPropertyKey:
+		return 1
+	}
+	return 0
+}
+
 // privateKeySlot is the slot of the binding a private instruction's B
 // names, which holds its key: a local, or, its low bit set, a captured
 // binding, whose slots follow the locals.
@@ -1946,6 +2015,10 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this, charCode bool
 		bytecode.OpDefineIndex, bytecode.OpDefineGetter, bytecode.OpDefineSetter, bytecode.OpSetFuncName,
 		bytecode.OpDefineGetterIndex, bytecode.OpDefineSetterIndex, bytecode.OpToPropertyKey:
 		// Go's (jitHost): a class or an object literal's members made.
+		return ir.Instruction{Op: ir.Host}
+	case bytecode.OpCopyDataProps, bytecode.OpArraySpread, bytecode.OpSpreadIter, bytecode.OpArrayPush, bytecode.OpSetProtoOf,
+		bytecode.OpObjectRest, bytecode.OpCallSpread, bytecode.OpNewSpread, bytecode.OpTemplateObject, bytecode.OpPushCallee:
+		// Go's, called from native code (GoOperation).
 		return ir.Instruction{Op: ir.Host}
 	case bytecode.OpTailCall, bytecode.OpTailCallMethod:
 		// A call, made as an ordinary one where the stack is shallow, as

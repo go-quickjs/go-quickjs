@@ -333,7 +333,12 @@ func TestJITUsing(t *testing.T) {
 	}
 	// A scope's resources are added and disposed of at exits native code
 	// goes on after: scoped's runs, which throw nothing, never finish in
-	// the interpreter.
+	// the interpreter -- once res, a literal's computed key (an operation
+	// Go makes, jitcompile.GoOperation), is compiled for native callers,
+	// and scoped's code again for calling it: a run first.
+	if _, err := r.Run(compileForTest(t, `scoped(5)`)); err != nil {
+		t.Fatal(err)
+	}
 	interpreted := r.jit.interpreted
 	if _, err := r.Run(compileForTest(t, `scoped(5)`)); err != nil {
 		t.Fatal(err)

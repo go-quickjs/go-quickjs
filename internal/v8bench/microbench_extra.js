@@ -652,6 +652,75 @@ function prop_delete_last(n)
     return n;
 }
 
+/* object spread of a plain object of four properties, a field after it:
+   the copy, and a field defined past it */
+function object_spread(n)
+{
+    var ref = { a: 1, b: 2, c: 3, d: 4 }, j, o;
+    for (j = 0; j < n; j++)
+        o = { ...ref, k: j };
+    global_res = o;
+    return n;
+}
+
+/* object spread of an object with a getter among its properties, which
+   the copy calls */
+function object_getter_spread(n)
+{
+    var ref = { a: 1, get b() { return this.a + 1; }, c: 3 }, j, o;
+    for (j = 0; j < n; j++)
+        o = { ...ref, k: j };
+    global_res = o;
+    return n;
+}
+
+/* an object pattern's rest element, of the four properties it does not
+   name */
+function object_rest(n)
+{
+    var ref = { a: 1, b: 2, c: 3, d: 4, e: 5 }, j, a, r;
+    for (j = 0; j < n; j++) {
+        ({ a, ...r } = ref);
+    }
+    global_res = r;
+    return n;
+}
+
+/* an object literal of a computed key and a field */
+function object_computed(n)
+{
+    var keys = ["x", "y", "z", "w"], j, o;
+    for (j = 0; j < n; j++)
+        o = { [keys[j & 3]]: j, v: 1 };
+    global_res = o;
+    return n;
+}
+
+/* an array literal of an element and an array of eight spread */
+function array_spread(n)
+{
+    var ref = [1, 2, 3, 4, 5, 6, 7, 8], j, a;
+    for (j = 0; j < n; j++)
+        a = [j, ...ref];
+    global_res = a;
+    return n;
+}
+
+function extra_sum3(a, b, c)
+{
+    return a + b + c;
+}
+
+/* a call whose arguments are an array of three spread */
+function spread_call(n)
+{
+    var args = [1, 2, 3], j, s = 0;
+    for (j = 0; j < n; j++)
+        s += extra_sum3(...args);
+    global_res = s;
+    return n;
+}
+
 /* Array.prototype.forEach over a hundred numbers, its callback an arrow
    made anew at each call that adds to a binding it captured, as AWFY
    NBody's advance has it */
