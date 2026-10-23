@@ -92,10 +92,7 @@ type core struct {
 	// index of the one a block is in, or 0.
 	budgets  []budget
 	budgetOf []int
-	// iv and pos are the intervals and positions the last allocation
-	// found (allocate), for colorKeeps; masks loopMasks's.
-	iv    []interval
-	pos   []int
+	// masks are loopMasks's.
 	masks valueSet
 }
 
@@ -448,7 +445,7 @@ func prepare(w *Workspace, f *ssa.Func, enc abi.Encoding, gprs, fprs []int) (*co
 	c.layout()
 	c.findLazy()
 	c.findBudgets()
-	if err := c.allocateBest(); err != nil {
+	if err := c.allocate(); err != nil {
 		return nil, err
 	}
 	c.findKeepRuns()
@@ -873,8 +870,8 @@ func numBlocks(f *ssa.Func) int {
 // allocate computes liveness and assigns locations by linear scan. Its
 // tables are indexed by value and block ID: a compile at run time pays for
 // every pass (BenchmarkJITCompile).
-func (c *core) allocate(groups int) error {
-	c.used, c.usedList, c.saves, c.saveAt, c.dropped = [2]uint64{}, [2][]int{}, c.saves[:0], nil, nil
+func (c *core) allocate() error {
+	c.dropped = nil
 	nv, nb := c.f.NumValues()+len(c.budgets), numBlocks(c.f)
 	// Number positions: each block has a start, one position per value, and
 	// an end. at is the block of each position.
@@ -1178,20 +1175,35 @@ func (c *core) allocate(groups int) error {
 			}
 		}
 	}
-	c.locs, c.hasLoc = c.locList(nv), c.bools(nv)
 	// A phi and its arguments are given one register where they can be, as
 	// a linear scan's hints have it: the phi the register of an argument
 	// that is free when the phi begins, an argument the phi's if free when
 	// it begins. An edge's phi moves (phiMoves) are then no moves at all:
 	// given whichever register came free last, a fifth of a function's
 	// code had been the moves at its edges. phiOf is, by value ID, a phi
-	// the value is an argument of, or nil.
-	phiOf := c.valueList(nv)
+	// the value is an argument of, or nil; most bounds the phis' members
+	// (below). weight is how often an edge into b, from its i'th
+	// predecessor, runs against the function's entry: 16 to the power of
+	// the loops (at most three) holding both its ends, a move on an inner
+	// loop's edge running many times one before it does.
+	phiOf, most := c.valueList(nv), 0
+	var masks valueSet
+	weight := func(b *ssa.Block, i int) int {
+		if masks == nil {
+			masks = c.loopMasks()
+		}
+		w := 1
+		for d := min(bits.OnesCount64(masks[b.ID]&masks[b.Preds[i].ID]), 3); d > 0; d-- {
+			w *= 16
+		}
+		return w
+	}
 	for _, b := range c.order {
 		for _, v := range b.Values {
 			if v.Op != ssa.OpPhi {
 				break
 			}
+			most += 1 + len(v.Args)
 			for _, a := range v.Args {
 				if a != v && phiOf[a.ID] == nil {
 					phiOf[a.ID] = v
@@ -1206,62 +1218,129 @@ func (c *core) allocate(groups int) error {
 	// register through all of them: given each its neighbour's, a phi in
 	// a block laid out before the header took the register of a header
 	// phi of another variable, and the loop-carried value went through a
-	// chain of moves, one an edge (try_catch's sum: three). group is a
-	// union-find over value IDs, 1 plus the parent or 0 for a root; link
-	// links each group's members, from its root, 1 plus the next or 0;
-	// left counts, by root, its members not yet given a location; reg is,
-	// by root, 1 plus the register its first member was given.
-	group, link, left, greg := c.ints(nv), c.ints(nv), c.ints(nv), c.ints(nv)
-	find := func(id int) int {
-		for group[id] != 0 {
-			id = group[id] - 1
+	// chain of moves, one an edge (try_catch's sum: three). The groups are
+	// made before the scan, from the intervals, and the scan alone uses
+	// them: a second scan with them, kept where its edges moved less, had
+	// been a compile's allocation again. The groups' members are the phis
+	// and their arguments, numbered from 0 in mem
+	// (value IDs); mid is, by value ID, 1 plus a member's number, or 0 for
+	// a value of no group, which the groups' tables leave out. Of members:
+	// group is 1 plus its group's root, or 0 for a root; link links each
+	// group's members, from its root, 1 plus the next or 0, and tail is, by
+	// root, its last member; size counts, by root, its members past the
+	// first; hs and he are, by root, the first start and the last end of
+	// its members' intervals; mw is the weight of the heaviest edge the
+	// member is a phi or an argument at.
+	mid, mem := c.ints(nv), c.ints(most)[:0]
+	member := func(v *ssa.Value) {
+		if v.ID < nv && mid[v.ID] == 0 && iv[v.ID].v != nil {
+			mem = append(mem, v.ID)
+			mid[v.ID] = len(mem)
 		}
-		return id
-	}
-	meets := func(a, b *interval) bool { return a.start <= b.end && b.start <= a.end }
-	// unite joins the groups of x and y if no member of one meets a member
-	// of the other: a bounded check, as a large function's phis can make
-	// large groups.
-	unite := func(x, y *ssa.Value) {
-		if x == y || isFloat(x) != isFloat(y) || iv[x.ID].v == nil || iv[y.ID].v == nil {
-			return
-		}
-		rx, ry := find(x.ID), find(y.ID)
-		if rx == ry {
-			return
-		}
-		work := 0
-		for a := rx; ; {
-			for b := ry; ; {
-				if work++; work > 4096 || meets(&iv[a], &iv[b]) {
-					return
-				}
-				if link[b] == 0 {
-					break
-				}
-				b = link[b] - 1
-			}
-			if link[a] == 0 {
-				break
-			}
-			a = link[a] - 1
-		}
-		// ry's members after rx's.
-		last := rx
-		for link[last] != 0 {
-			last = link[last] - 1
-		}
-		link[last] = ry + 1
-		group[ry] = rx + 1
 	}
 	for _, b := range c.order {
 		for _, v := range b.Values {
 			if v.Op != ssa.OpPhi {
 				break
 			}
+			member(v)
 			for _, a := range v.Args {
-				if groups != groupsNone {
-					unite(v, a)
+				member(a)
+			}
+		}
+	}
+	// mb is, by member, the block of a member that is a phi.
+	nm := len(mem)
+	mb := c.blockList(nm)
+	group, link, tail, size := c.ints(nm), c.ints(nm), c.ints(nm), c.ints(nm)
+	hs, he, mw := c.ints(nm), c.ints(nm), c.ints(nm)
+	for i, id := range mem {
+		tail[i], hs[i], he[i] = i, iv[id].start, iv[id].end
+	}
+	// phiAt is the block of a phi that is a member, or nil.
+	phiAt := func(v *ssa.Value) *ssa.Block {
+		if m := mid[v.ID]; m != 0 {
+			return mb[m-1]
+		}
+		return nil
+	}
+	find := func(i int) int {
+		if g := group[i]; g != 0 {
+			return g - 1
+		}
+		return i
+	}
+	// root is the root of v's group, or -1 for a value of none.
+	root := func(v *ssa.Value) int {
+		if m := mid[v.ID]; m != 0 {
+			return find(m - 1)
+		}
+		return -1
+	}
+	meets := func(a, b *interval) bool { return a.start <= b.end && b.start <= a.end }
+	// unite joins the groups of x and y if no member of one meets a member
+	// of the other: not where x's and y's own intervals meet, as a phi's
+	// and its argument's on its back edge mostly do; none where their
+	// groups' spans are apart; else by a bounded check, as a large
+	// function's phis can make large groups. The smaller group's members
+	// join the larger's, each pointed at its new root.
+	unite := func(x, y *ssa.Value) {
+		if x == y || isFloat(x) != isFloat(y) || y.ID >= nv || meets(&iv[x.ID], &iv[y.ID]) {
+			return
+		}
+		rx, ry := root(x), root(y)
+		if rx < 0 || ry < 0 || rx == ry {
+			return
+		}
+		if size[rx] < size[ry] {
+			rx, ry = ry, rx
+		}
+		if hs[rx] <= he[ry] && hs[ry] <= he[rx] {
+			work := 0
+			for b := ry; ; {
+				for a := rx; ; {
+					if work++; work > 4096 || meets(&iv[mem[a]], &iv[mem[b]]) {
+						return
+					}
+					if link[a] == 0 {
+						break
+					}
+					a = link[a] - 1
+				}
+				if link[b] == 0 {
+					break
+				}
+				b = link[b] - 1
+			}
+		}
+		for b := ry; ; {
+			group[b] = rx + 1
+			if link[b] == 0 {
+				break
+			}
+			b = link[b] - 1
+		}
+		link[tail[rx]], tail[rx] = ry+1, tail[ry]
+		size[rx] += size[ry] + 1
+		hs[rx], he[rx] = min(hs[rx], hs[ry]), max(he[rx], he[ry])
+	}
+	for _, b := range c.order {
+		for _, v := range b.Values {
+			if v.Op != ssa.OpPhi {
+				break
+			}
+			m := mid[v.ID] - 1
+			if m >= 0 {
+				mb[m] = b
+			}
+			for i, a := range v.Args {
+				unite(v, a)
+				w := weight(b, i)
+				if m >= 0 {
+					mw[m] = max(mw[m], w)
+				}
+				if a.ID < nv && mid[a.ID] != 0 {
+					mw[mid[a.ID]-1] = max(mw[mid[a.ID]-1], w)
 				}
 			}
 		}
@@ -1270,42 +1349,56 @@ func (c *core) allocate(groups int) error {
 	// come; wait is, by class and register, a list of the groups that
 	// wait for it, linked through wnext (1 plus the next root, 0 at the
 	// end; heads 1 plus a root), those done unlinked as they are met. A
-	// register is spoken for, for an interval of start s and end e, where
-	// a group waits for it a member of which, still to come, begins in
-	// s..e: one that would find it taken. Then the first member of a group
-	// does not take it for the group (two groups waiting for one register,
-	// the second to come had found it taken and gone through moves at
-	// every edge: array_for_of's iterator, round its loop, two), and the
-	// hints of a value of no group, or of another, pass over it. Spoken
-	// for by any group waiting for it at all, or by any whose members span
-	// the interval, Mandreel's and zlib's largest functions, of many
-	// groups and many entries, had lost the hints along their loops'
-	// chains of joins by the dozen a turn. starts are, by group, its
-	// members' starts in order, from mfrom[root].
-	hs, he, wnext := c.ints(nv), c.ints(nv), c.ints(nv)
-	mfrom, starts := c.ints(nv+1), c.ints(nv)
-	for i := range iv {
-		if iv[i].v != nil {
-			r := find(i)
-			if left[r] == 0 || iv[i].start < hs[r] {
-				hs[r] = iv[i].start
-			}
-			he[r] = max(he[r], iv[i].end)
-			left[r]++
-		}
+	// register is spoken for (spoken), to a value of start s and end e,
+	// where another group waits for it: the first member of a group does
+	// not take it for the group (two groups waiting for one register, the
+	// second to come had found it taken and gone through moves at every
+	// edge: array_for_of's iterator, round its loop, two), nor does a
+	// value with no hint where it is free. A value's hint passes over it
+	// only where the group's member that would find it taken, still to
+	// come, begins in s..e, and the group's edges weigh more than the
+	// hint's (gw, weight): a hint given up for any group waiting -- or any
+	// whose member would find the register taken -- had broken the hints'
+	// chains through a large function's loops (Mandreel's sortMinDown, a
+	// dozen moves a turn), while a value whose hint was an entry's edge
+	// had taken an inner loop's group's register (array_for_of's iterator
+	// again). left counts, by root, its members not yet given a location;
+	// greg is, by root, 1 plus the register its first member was given;
+	// gw is, by root, its heaviest member's weight; starts are, by group,
+	// its members' starts in order, from mfrom[root]. The unions done,
+	// these take the tables only they used: tail's, size's, link's and
+	// mem's room, and mw, which becomes gw in place.
+	left, greg, gw, wnext, fill := tail[:nm], size[:nm], mw[:nm], mem[:nm], link[:nm]
+	clear(left)
+	clear(greg)
+	for i := range nm {
+		r := find(i)
+		gw[r] = max(gw[r], gw[i])
+		left[r]++
 	}
+	mfrom, starts := c.ints(nm+1), c.ints(nm)
 	for r := range left {
 		mfrom[r+1] = mfrom[r] + left[r]
 	}
-	fill := c.ints(nv)
-	for _, it := range all {
-		// all is in order of start.
-		r := find(it.v.ID)
-		starts[mfrom[r]+fill[r]] = it.start
-		fill[r]++
-	}
-	var wait [2][64]int
-	spoken := func(k, reg, s, e, self int) bool {
+	clear(wnext)
+	clear(fill)
+	// waiting counts, by class and register, the groups on its wait list
+	// with members still to come.
+	var wait, waiting [2][64]int
+	// spoken reports whether reg is spoken for to a value of group self
+	// (-1 for none), start s and end e, whose hint to it is the edge into
+	// hb from its hi'th predecessor -- for hi -1, the one ha is the phi
+	// hp's argument at, found only if a group asks -- or which has none
+	// (hb nil).
+	spoken := func(k, reg, s, e, self int, hb *ssa.Block, hi int, hp, ha *ssa.Value) bool {
+		if hb == nil {
+			n := waiting[k][reg]
+			if self >= 0 && greg[self] == reg+1 && left[self] > 0 {
+				n--
+			}
+			return n > 0
+		}
+		hw := -1 // the hint's weight, once a group asks for it
 		prev := -1
 		for w := wait[k][reg]; w != 0; {
 			r := w - 1
@@ -1319,12 +1412,15 @@ func (c *core) allocate(groups int) error {
 				w = nx
 				continue
 			}
-			if r != self && groups == groupsStrict {
-				return true
-			}
 			if r != self && he[r] >= s && hs[r] <= e {
+				if hw < 0 {
+					if hi < 0 {
+						hi = slices.Index(hp.Args, ha)
+					}
+					hw = weight(hb, hi)
+				}
 				ms := starts[mfrom[r]:mfrom[r+1]]
-				if i, _ := slices.BinarySearch(ms, s); i < len(ms) && ms[i] <= e {
+				if i, _ := slices.BinarySearch(ms, s); gw[r] > hw && i < len(ms) && ms[i] <= e {
 					return true
 				}
 			}
@@ -1332,29 +1428,37 @@ func (c *core) allocate(groups int) error {
 		}
 		return false
 	}
-	placed := func(v *ssa.Value) {
-		r, k := find(v.ID), b2i(isFloat(v))
-		if l := c.locAt(v); l.reg >= 0 && greg[r] == 0 && left[r] > 1 && !spoken(k, l.reg, hs[r], he[r], r) {
+	placed := func(v *ssa.Value, r int) {
+		if r < 0 {
+			return
+		}
+		k := b2i(isFloat(v))
+		if l := c.locAt(v); l.reg >= 0 && greg[r] == 0 && left[r] > 1 && !spoken(k, l.reg, hs[r], he[r], r, nil, 0, nil, nil) {
 			greg[r] = l.reg + 1
 			wnext[r], wait[k][l.reg] = wait[k][l.reg], r+1
+			waiting[k][l.reg]++
 		}
-		left[r]--
+		if left[r]--; left[r] == 0 && greg[r] != 0 {
+			waiting[k][greg[r]-1]--
+		}
 	}
 	// hinted is the register free holds that v is to share, or -1: its
 	// group's, else a phi's or an argument's (above), not spoken for.
-	hinted := func(v *ssa.Value, free []int) int {
-		r, k := find(v.ID), b2i(isFloat(v))
-		if g := greg[r]; g != 0 {
-			if i := slices.Index(free, g-1); i >= 0 {
-				return i
+	hinted := func(v *ssa.Value, r int, free []int) int {
+		k := b2i(isFloat(v))
+		if r >= 0 {
+			if g := greg[r]; g != 0 {
+				if i := slices.Index(free, g-1); i >= 0 {
+					return i
+				}
 			}
 		}
 		it := &iv[v.ID]
-		want := func(x *ssa.Value) int {
+		want := func(x *ssa.Value, hb *ssa.Block, hi int) int {
 			if x == nil || !c.hasLoc[x.ID] {
 				return -1
 			}
-			if l := c.locAt(x); l.reg >= 0 && !spoken(k, l.reg, it.start, it.end, r) {
+			if l := c.locAt(x); l.reg >= 0 && !spoken(k, l.reg, it.start, it.end, r, hb, hi, x, v) {
 				if i := slices.Index(free, l.reg); i >= 0 {
 					return i
 				}
@@ -1362,14 +1466,36 @@ func (c *core) allocate(groups int) error {
 			return -1
 		}
 		if v.Op == ssa.OpPhi {
-			for _, a := range v.Args {
-				if i := want(a); i >= 0 {
+			for j, a := range v.Args {
+				if i := want(a, phiAt(v), j); i >= 0 {
 					return i
 				}
 			}
 		}
-		return want(phiOf[v.ID])
+		if p := phiOf[v.ID]; p != nil {
+			return want(p, phiAt(p), -1)
+		}
+		return -1
 	}
+	// The intervals of each class, in order, for its pass, and, by
+	// interval, the root of its group (rootIn), as the starts are filled.
+	var classes [2][]*interval
+	var rootIn [2][]int
+	for k := range classes {
+		classes[k], rootIn[k] = c.intervalRefs(len(all))[:0], c.ints(len(all))[:0]
+	}
+	for _, it := range all {
+		// all is in order of start.
+		r := root(it.v)
+		if r >= 0 {
+			starts[mfrom[r]+fill[r]] = it.start
+			fill[r]++
+		}
+		k := b2i(isFloat(it.v))
+		classes[k], rootIn[k] = append(classes[k], it), append(rootIn[k], r)
+	}
+	c.used, c.usedList = [2]uint64{}, [2][]int{}
+	c.locs, c.hasLoc = c.locList(nv), c.bools(nv)
 	// Spill slots are reused as registers are: a spilled interval's slot is
 	// free once it ends. Spilling an active interval puts all of it in the
 	// slot, from its start, so a slot is taken only where its last
@@ -1378,18 +1504,6 @@ func (c *core) allocate(groups int) error {
 	// spilled values die.
 	type freeSlot struct{ slot, end int }
 	spills := 0
-	// The intervals of each class, in order, for its pass.
-	var classes [2][]*interval
-	for k := range classes {
-		classes[k] = c.intervalRefs(len(all))[:0]
-	}
-	for _, it := range all {
-		if isFloat(it.v) {
-			classes[1] = append(classes[1], it)
-		} else {
-			classes[0] = append(classes[0], it)
-		}
-	}
 	for class, float := range [2]bool{false, true} {
 		var freeSlots []freeSlot
 		regs := c.gprs
@@ -1485,7 +1599,7 @@ func (c *core) allocate(groups int) error {
 		// ends before an interval that starts no later, and the active
 		// are looked at only once one may.
 		minEnd := math.MaxInt
-		for _, it := range classes[class] {
+		for j, it := range classes[class] {
 			if minEnd < it.start {
 				kept := active[:0]
 				minEnd = math.MaxInt
@@ -1512,20 +1626,21 @@ func (c *core) allocate(groups int) error {
 				a := spilled[k]
 				freeSlots = append(freeSlots, freeSlot{c.locAt(a.v).spill, a.end})
 			}
+			r := rootIn[class][j]
 			if len(free) > 0 {
-				i := hinted(it.v, free)
+				i := hinted(it.v, r, free)
 				if i < 0 {
 					// The last freed, but one spoken for.
 					i = len(free) - 1
 					for j := len(free) - 1; j >= 0; j-- {
-						if !spoken(b2i(float), free[j], it.start, it.end, find(it.v.ID)) {
+						if !spoken(b2i(float), free[j], it.start, it.end, r, nil, 0, nil, nil) {
 							i = j
 							break
 						}
 					}
 				}
 				c.setLoc(it.v, loc{reg: free[i], spill: -1})
-				placed(it.v)
+				placed(it.v, r)
 				free = append(free[:i], free[i+1:]...)
 				active = append(active, it)
 				minEnd = min(minEnd, it.end)
@@ -1567,13 +1682,14 @@ func (c *core) allocate(groups int) error {
 				active[vi] = it
 				minEnd = min(minEnd, it.end)
 			}
-			placed(it.v)
+			placed(it.v, r)
 			if !budget {
 				spilled = append(spilled, victim)
 				push(len(spilled) - 1)
 			}
 		}
 	}
+
 	// What each native call saves: the values live across it in registers,
 	// each in a slot of its own past the spill slots while it lives, which
 	// a value saved later takes once it has ended, as the spill slots are
@@ -1636,95 +1752,7 @@ func (c *core) allocate(groups int) error {
 			c.saveAt[2*v.ID+1] = len(c.saves)
 		}
 	}
-	c.iv, c.pos = iv, pos
-	return nil
-}
-
-// allocateBest allocates the function twice, with the hints alone and
-// with the phis' groups too (allocate), and keeps whichever leaves the
-// fewer moves on its edges, weighed by how deep in loops each edge is
-// (edgeCost), the hints' on a tie: the groups carry a value round a loop
-// in one register through its chains of phis, but where many groups vie
-// for few registers they could break the chains the hints made, as in
-// microbench's array_write (6 moves on its edges with the hints, 27 with
-// the groups) where the groups saved Mandreel's sortMinDown a third of its.
-// Either is a linear scan's allocation, spilling the same values: only
-// which free register each value takes differs. Then the keep cells are
-// given out (colorKeeps), by the intervals the one kept found.
-func (c *core) allocateBest() error {
-	if err := c.allocate(groupsNone); err != nil {
-		return err
-	}
-	if c.hasPhiArgs() {
-		best, cost := groupsNone, c.edgeCost()
-		for _, g := range [...]int{groupsStrict, groupsLoose} {
-			if err := c.allocate(g); err != nil {
-				return err
-			}
-			if k := c.edgeCost(); k < cost {
-				best, cost = g, k
-			}
-		}
-		if best != groupsLoose {
-			if err := c.allocate(best); err != nil {
-				return err
-			}
-		}
-	}
-	return c.colorKeeps(c.iv, c.pos)
-}
-
-// The allocations allocate makes: with the hints alone; with the phis'
-// groups too, a register spoken for while any other group waits for it
-// (strict) or only where a member of another, still to come, begins in an
-// interval that would take it (loose). Strict keeps small functions'
-// chains, which loose lets other groups break (array_write); loose,
-// large functions', where strict leaves few registers unspoken for, and
-// the hints with them (Mandreel's sortMinDown).
-const (
-	groupsNone = iota
-	groupsStrict
-	groupsLoose
-)
-
-// hasPhiArgs reports whether the function has a phi, which groups need.
-func (c *core) hasPhiArgs() bool {
-	for _, b := range c.f.Blocks {
-		if len(b.Values) > 0 && b.Values[0].Op == ssa.OpPhi {
-			return true
-		}
-	}
-	return false
-}
-
-// edgeCost is the moves the edges' phis make (a phi whose argument is not
-// where it is), each weighed 16 to the power of how many loops (at most
-// three) hold both the edge's ends: a move on an inner loop's edge runs
-// many times one before it.
-func (c *core) edgeCost() int {
-	masks := c.loopMasks()
-	cost := 0
-	for _, b := range c.f.Blocks {
-		for i, p := range b.Preds {
-			w := 1
-			for d := min(bits.OnesCount64(masks[b.ID]&masks[p.ID]), 3); d > 0; d-- {
-				w *= 16
-			}
-			for _, phi := range b.Values {
-				if phi.Op != ssa.OpPhi {
-					break
-				}
-				l, ok := c.loc(phi)
-				if !ok {
-					continue
-				}
-				if a := phi.Args[i]; c.isLazy(a) || c.locAt(a) != l {
-					cost += w
-				}
-			}
-		}
-	}
-	return cost
+	return c.colorKeeps(iv, pos)
 }
 
 // loopMasks are, by block ID, the loops each block is in, a bit for each

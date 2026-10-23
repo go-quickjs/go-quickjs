@@ -103,15 +103,17 @@ func TestMirPhisCoalesced(t *testing.T) {
 				}
 			}
 			if strings.HasPrefix(src, "function array_write") && a > 6 {
-				// Many groups for few registers: the allocation with the
-				// hints alone, or the strict groups', where the loose
-				// groups' had put 27 moves on its edges (allocateBest).
+				// Groups that vie for registers: a register spoken for
+				// only where a waiting group's member would find it taken
+				// had put 27 moves on its edges (allocate's spoken).
 				t.Errorf("%s (%d): %d moves on its edges, not 6", src, i, a)
 			}
 			if src == moveCorpus[len(moveCorpus)-1] && a > 3 {
 				// array_for_of: two groups, its sum's and its iterator's,
 				// that waited for one register had put the iterator through
-				// a move on both its inner loop's edges (5).
+				// a move on both its inner loop's edges (5); so had a value
+				// taking, by its hint from an entry's edge, the register of
+				// the iterator's group.
 				t.Errorf("%s (%d): %d moves on its edges, not 3", src, i, a)
 			}
 			spills += strings.Count(mc.Locations(), "spill")
@@ -122,8 +124,8 @@ func TestMirPhisCoalesced(t *testing.T) {
 	}
 	t.Logf("%d edge moves, %d into loop headers, %d values spilled", total, loops, spills)
 	// Without the groups, at 77173866: 507 edge moves, 283 into headers,
-	// 37 values spilled.
-	if total > 160 || loops > 130 || spills > 37 {
-		t.Errorf("%d edge moves, %d into loop headers, %d values spilled: want at most 160, 130, 37", total, loops, spills)
+	// 37 values spilled; with them, 150, 123, 37.
+	if total > 155 || loops > 125 || spills > 37 {
+		t.Errorf("%d edge moves, %d into loop headers, %d values spilled: want at most 155, 125, 37", total, loops, spills)
 	}
 }
