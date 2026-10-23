@@ -62,12 +62,15 @@ type core struct {
 	// its slots and words each once, found again by exitHead and
 	// exitWords; exitDescs are the descriptions, carved from blocks, as
 	// the code keeps them all as long: each block twice the last, up to a
-	// limit, so a small function takes little. exitHead is, by slot, 1
-	// plus the index in the frame's Slots of the entry of it last found or
-	// added, or 0, and exitNext, by entry, 1 plus that of the next in its
-	// slot's chain, or 0: a slot's entries are compared one by one, the
-	// last found first, where a map had hashed every one -- a twentieth of
-	// a compile's time in the backend.
+	// limit, so a small function takes little. exitHead is, by a hash of
+	// an entry (exitHash), 1 plus the index in the frame's Slots of the
+	// last added of its chain, or 0, and exitNext, by entry, 1 plus that of
+	// the next in its chain, or 0: as many chains as entries at least,
+	// made again twice as many as they fill (exitRehash). A map had hashed
+	// every entry -- a twentieth of a compile's time in the backend -- and
+	// chains by slot had grown with every entry of a slot, each new one
+	// compared with all its slot's: four million comparisons in a run of
+	// Typescript's compiles.
 	exitFrame *abi.ExitFrame
 	exitHead  []int32
 	exitNext  []int32
@@ -2447,7 +2450,7 @@ func (c *core) exitDescriptor(s *ssa.FrameState, kind uint64, localsReg, stackRe
 		// Each entry it added unchained from its slot's chain, wherever
 		// it has come to be in it.
 		for i := len(f.Slots) - 1; i >= slots; i-- {
-			at, k := &c.exitHead[f.Slots[i].Slot], int32(i+1)
+			at, k := &c.exitHead[exitHash(&f.Slots[i])&uint64(len(c.exitHead)-1)], int32(i+1)
 			for *at != k {
 				at = &c.exitNext[*at-1]
 			}
@@ -2498,19 +2501,13 @@ func (c *core) exitDescriptor(s *ssa.FrameState, kind uint64, localsReg, stackRe
 			e.Origin >= 0 && e.Origin != e.Slot && writes(e.Origin):
 			direct = false
 		}
-		for int(e.Slot) >= len(c.exitHead) {
-			c.exitHead = append(c.exitHead, 0)
+		if len(f.Slots) >= len(c.exitHead) {
+			c.exitRehash(max(64, 2*len(c.exitHead)))
 		}
-		// Most recently found first: the next exit's slot is most often
-		// where the last one's was.
-		k, prev := c.exitHead[e.Slot], int32(0)
+		h := exitHash(&e) & uint64(len(c.exitHead)-1)
+		k := c.exitHead[h]
 		for k != 0 && f.Slots[k-1] != e {
-			k, prev = c.exitNext[k-1], k
-		}
-		if k != 0 && prev != 0 {
-			c.exitNext[prev-1] = c.exitNext[k-1]
-			c.exitNext[k-1] = c.exitHead[e.Slot]
-			c.exitHead[e.Slot] = k
+			k = c.exitNext[k-1]
 		}
 		if k == 0 {
 			if len(f.Slots) > math.MaxUint16 {
@@ -2518,9 +2515,9 @@ func (c *core) exitDescriptor(s *ssa.FrameState, kind uint64, localsReg, stackRe
 				return undo()
 			}
 			f.Slots = append(f.Slots, e)
-			c.exitNext = append(c.exitNext, c.exitHead[e.Slot])
+			c.exitNext = append(c.exitNext, c.exitHead[h])
 			k = int32(len(f.Slots))
-			c.exitHead[e.Slot] = k
+			c.exitHead[h] = k
 		}
 		f.Index = append(f.Index, uint16(k-1))
 	}
@@ -2545,6 +2542,28 @@ func (c *core) exitDescriptor(s *ssa.FrameState, kind uint64, localsReg, stackRe
 	}
 	c.exitDescs = append(c.exitDescs, d)
 	return &c.exitDescs[len(c.exitDescs)-1]
+}
+
+// exitHash is where e's chain is among exitHead's: a hash of all its
+// fields.
+func exitHash(e *abi.ExitSlot) uint64 {
+	h := uint64(uint32(e.Slot)) | uint64(uint32(e.Origin))<<32
+	h ^= (uint64(uint32(e.Value.N)) | uint64(e.Value.Kind)<<32 | b2u(e.Load)<<40) * 0x9E3779B97F4A7C15
+	h ^= (uint64(uint32(e.Shadow.N)) | uint64(e.Shadow.Kind)<<32) * 0xC2B2AE3D27D4EB4F
+	return (h * 0x9E3779B97F4A7C15) >> 32
+}
+
+// exitRehash makes n chains (a power of 2) of the frame's slot entries.
+func (c *core) exitRehash(n int) {
+	if cap(c.exitHead) < n {
+		c.exitHead = make([]int32, n)
+	}
+	c.exitHead = c.exitHead[:n]
+	clear(c.exitHead)
+	for i := range c.exitFrame.Slots {
+		h := exitHash(&c.exitFrame.Slots[i]) & uint64(n-1)
+		c.exitNext[i], c.exitHead[h] = c.exitHead[h], int32(i+1)
+	}
 }
 
 // exitLayout is what the code's descriptions share (abi.ExitFrame), made
