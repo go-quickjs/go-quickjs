@@ -434,6 +434,42 @@ func TestJITV8LoopTierUp(t *testing.T) {
 	}
 }
 
+// A loop's back edges spend its function's budget at the loop's own
+// length (loopAt), not at the mean of its function's loops': k's short
+// loop, run for half its budget at its length, is not compiled, where at
+// the mean, which k's long loop makes many times as long, the budget would
+// have been spent several times over; run for twice it, it is.
+func TestJITLoopSpendsItsOwnLength(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	r, run := v8TierRuntimeForTest(t, `function k(n,m){let t=0;for(let j=0;j<m;j++){`+strings.Repeat(`t=(t*3+j)|0;`, 30)+`}for(let i=0;i<n;i++)t=(t+i)|0;return t}`)
+	cl := r.global.getOwn(r.atoms.intern("k")).value().Object().fn().closure
+	short := len(cl.fn.Code)
+	for pc, in := range cl.fn.Code {
+		switch in.Op {
+		case bytecode.OpJump, bytecode.OpJumpIfFalse, bytecode.OpJumpIfTrue, bytecode.OpJumpIfCmpFalse:
+			if int(in.A) <= pc {
+				short = min(short, pc-int(in.A)+1)
+			}
+		}
+	}
+	mean := int(jitLoopLength(cl.fn))
+	if mean < 8*short {
+		t.Fatalf("k's loops: mean %d, short %d", mean, short)
+	}
+	budget := r.jitTierBudget(cl.fn, nil)
+	edges := int(budget) / short / 2
+	run(fmt.Sprintf(`k(%d,0)`, edges))
+	if e := r.jit.entryFor(cl.fn); e == nil || e.ssa != nil || !e.warming {
+		t.Fatalf("k compiled within half its budget at its short loop's length: %+v", e != nil && e.ssa != nil)
+	}
+	run(fmt.Sprintf(`k(%d,0)`, 4*edges))
+	if e := r.jit.entryFor(cl.fn); e == nil || e.ssa == nil {
+		t.Fatal("k not compiled at its short loop once its budget is spent")
+	}
+}
+
 // jitTierWorkForTest is the work a full budget of back edges in cl's loops
 // spends at the least: half the interval, as backEdgeBudget varies it.
 func jitTierWorkForTest(r *Runtime, cl *closure) int64 {

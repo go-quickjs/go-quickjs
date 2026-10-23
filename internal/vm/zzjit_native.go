@@ -518,8 +518,10 @@ type jitEntry struct {
 	// reopts counts the times it was (jitDeoptimized).
 	failed        []int32
 	failedEntries []uint32
-	reopt         bool
-	reopts        uint8
+	// loopPC and loopLen are the loop loopAt last measured.
+	loopPC, loopLen int32
+	reopt           bool
+	reopts          uint8
 	// bigints are the sites, by slot IR PC, of arithmetic and comparisons
 	// whose guard failed at BigInts in the int64 range: the code compiled
 	// again makes them on those natively (jitBigIntSeen), until that
@@ -2432,7 +2434,7 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, err
 		f.cl.setHint(hintFor(e))
 	}
 	if e != nil && e.warming {
-		if !r.jitWarmUp(f.cl, e, r.jitTierWork(f.cl.fn, e, osr, spent)) {
+		if !r.jitWarmUp(f.cl, e, r.jitTierWork(f.cl.fn, e, pc, osr, spent)) {
 			return Undefined, nil, false
 		}
 		e = r.jitFor(f.cl)
@@ -2449,7 +2451,7 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, err
 			e.starts++
 		} else {
 			r.jit.osrs++
-			e.osrWork += r.jitTierWork(f.cl.fn, e, osr, spent)
+			e.osrWork += r.jitTierWork(f.cl.fn, e, pc, osr, spent)
 		}
 		// Code that learned what to be compiled again for is, once it has
 		// spent a budget (jitLearnedDue); invalidated code, once the
@@ -2459,7 +2461,7 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, err
 		// jitGoOn made due at once, nothing.
 		r.jitRecompileLearned(f.cl, e)
 		if e.invalid {
-			if !r.jitTierUp(f.cl, e, r.jitTierWork(f.cl.fn, e, osr, spent)) {
+			if !r.jitTierUp(f.cl, e, r.jitTierWork(f.cl.fn, e, pc, osr, spent)) {
 				return Undefined, nil, false
 			}
 		}
@@ -2597,11 +2599,15 @@ func (r *Runtime) jitWarmUp(cl *closure, e *jitEntry, work int64) bool {
 
 // jitTierWork is the work of e's budget, fn's entry's, that an invocation
 // spends -- fn's length -- or, osr, a full budget of the existing tiers'
-// back edges in one of its loops, if spent: as many back edges as the
-// budget had (jitState.edgesSpent), each its loops' mean length
-// (jitLoopLength), as V8's JumpLoop spends its bytecodes' distance. A
-// check jitGoOn made due at once spends nothing.
-func (r *Runtime) jitTierWork(fn *bytecode.Function, e *jitEntry, osr, spent bool) int64 {
+// back edges in its loop at pc, if spent: as many back edges as the budget
+// had (jitState.edgesSpent), each the loop's length (loopAt), as V8's
+// JumpLoop spends its own bytecodes' distance. Counted at the mean length
+// of the function's loops (jitLoopLength), Mandreel's initPhysics, whose
+// loops' mean is 546 instructions, spent its budget at a loop of 26 over
+// twenty times as fast as it ran, and was compiled, 13,098 instructions,
+// for a few hundred thousand of them. A check jitGoOn made due at once
+// spends nothing.
+func (r *Runtime) jitTierWork(fn *bytecode.Function, e *jitEntry, pc int, osr, spent bool) int64 {
 	if !osr {
 		return int64(max(len(fn.Code), 1))
 	}
@@ -2612,7 +2618,28 @@ func (r *Runtime) jitTierWork(fn *bytecode.Function, e *jitEntry, osr, spent boo
 	if r.jit != nil && r.jit.edgesSpent != 0 {
 		edges = r.jit.edgesSpent
 	}
-	return int64(edges) * int64(max(e.ssaLoop, 1))
+	return int64(edges) * int64(e.loopAt(fn, pc))
+}
+
+// loopAt is the length of fn's loop whose header is at pc: from it to its
+// last backward jump to it, at least one. The last one asked for is kept
+// (loopPC, loopLen): the checks of a frame's back edges are at its hot
+// loop's header, one after another.
+func (e *jitEntry) loopAt(fn *bytecode.Function, pc int) int {
+	if e.loopLen != 0 && int(e.loopPC) == pc {
+		return int(e.loopLen)
+	}
+	n := 1
+	for q := pc; q < len(fn.Code); q++ {
+		switch in := fn.Code[q]; in.Op {
+		case bytecode.OpJump, bytecode.OpJumpIfFalse, bytecode.OpJumpIfTrue, bytecode.OpJumpIfCmpFalse:
+			if int(in.A) == pc {
+				n = q - pc + 1
+			}
+		}
+	}
+	e.loopPC, e.loopLen = int32(pc), int32(n)
+	return n
 }
 
 // jitHotEntry is the entry of f's function compiled once hot for Go to
