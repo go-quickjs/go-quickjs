@@ -507,7 +507,6 @@ func TestCompilerBudgets(t *testing.T) {
 		name string
 		edit func(*bytecode.Function)
 	}{
-		{"instructions", func(f *bytecode.Function) { f.Code = make([]bytecode.Instr, MaxInstructions+1) }},
 		{"slots", func(f *bytecode.Function) { f.MaxStack = MaxSlots }},
 		{"negative", func(f *bytecode.Function) { f.LocalCount = -1 }},
 		{"layout", func(f *bytecode.Function) { f.Locals = nil }},

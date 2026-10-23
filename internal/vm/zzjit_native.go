@@ -2122,7 +2122,9 @@ func (r *Runtime) jitBudget() int {
 // jitCompiles reports whether a compile of fn could fit the budget at all:
 // the compiler's transient work -- analysis tables over every slot for each
 // instruction, and the code it emits -- must. It costs a few comparisons
-// and never measures the heap, so a refusal can be cheaply repeated.
+// and never measures the heap, so a refusal can be cheaply repeated. It is
+// what bounds how long a function is compiled: 4,080 instructions at the
+// default budget, 16,368 at 32 MiB.
 func jitCompiles(fn *bytecode.Function, budget int) bool {
 	return len(fn.Code)*ir.MaxSlots*8+32<<10 <= budget
 }
@@ -2153,10 +2155,6 @@ func (r *Runtime) jitForFunction(fn *bytecode.Function, cl *closure) *jitEntry {
 // jitCompileFor is jitForFunction, the program lowered as kind says.
 func (r *Runtime) jitCompileFor(fn *bytecode.Function, cl *closure, kind jitLowerKind) *jitEntry {
 	if r.jit != nil && r.jit.unavailable {
-		return nil
-	}
-	if len(fn.Code) > jitcompile.MaxInstructions {
-		r.jitSkipped(fn, "%d instructions, past the %d the JIT compiles", len(fn.Code), jitcompile.MaxInstructions)
 		return nil
 	}
 	key := weak.Make(fn)
@@ -2558,7 +2556,7 @@ func (r *Runtime) jitWarmFor(cl *closure) *jitEntry {
 		return r.jitFor(cl)
 	}
 	calls := int64(max(cl.jitCalls, 1))
-	if int64(r.jitCallThreshold) <= calls || len(fn.Code) > jitcompile.MaxInstructions || s.unavailable {
+	if int64(r.jitCallThreshold) <= calls || s.unavailable {
 		return r.jitFor(cl)
 	}
 	s.budget = r.jitBudget()

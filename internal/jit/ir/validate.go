@@ -3,8 +3,6 @@ package ir
 import "fmt"
 
 const (
-	// MaxInstructions bounds validation, lowering, and native emission work.
-	MaxInstructions = 4096
 	// MaxSlots bounds pointer-free scratch storage, including locals.
 	MaxSlots = 256
 )
@@ -12,7 +10,7 @@ const (
 // Validate checks all memory operands and control-flow destinations before
 // native emission. Unreachable instructions are never emitted or entered.
 func (p *Program) Validate() error {
-	if p == nil || len(p.Code) == 0 || len(p.Code) > MaxInstructions || len(p.Code) != len(p.Maps) {
+	if p == nil || len(p.Code) == 0 || len(p.Code) != len(p.Maps) {
 		return fmt.Errorf("jit IR: invalid instruction layout")
 	}
 	if p.Locals < 0 || p.StackSize < 0 || p.Locals > MaxSlots || p.StackSize > MaxSlots || p.Locals+p.StackSize > MaxSlots || len(p.Globals) > p.Locals || p.This && p.Locals <= len(p.Globals) {

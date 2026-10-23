@@ -470,6 +470,35 @@ func TestJITLoopSpendsItsOwnLength(t *testing.T) {
 	}
 }
 
+// A function past the 4,096 instructions the JIT had compiled is compiled
+// as any other, where its compile fits the JIT's budget (jitCompiles):
+// zlib's bk, 5,039 instructions and called hundreds of times a run, had
+// run in the interpreter. With the runtime's default budget, long is past
+// what a compile may take of it, and is not tried.
+func TestJITCompilesLongFunctions(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	src := `function long(n){let t=0;for(let i=0;i<n;i++){` + strings.Repeat(`t=(t*3+i)|0;`, 1100) + `}return t}`
+	for _, budget := range []int64{32 << 20, 0} {
+		r, run := jitTierRuntimeForTest(t, 2, src)
+		r.jitMemoryLimit = budget
+		cl := r.global.getOwn(r.atoms.intern("long")).value().Object().fn().closure
+		if len(cl.fn.Code) <= 4096 {
+			t.Fatalf("long is %d instructions", len(cl.fn.Code))
+		}
+		for range 4 {
+			run(`long(3)`)
+		}
+		e := r.jit.entryFor(cl.fn)
+		if compiles := jitCompiles(cl.fn, r.jitBudget()); budget != 0 && (!compiles || e == nil || e.ssa == nil || e.ssaStats.entries == 0) {
+			t.Fatalf("long (%d instructions) not run natively within %d bytes: %+v", len(cl.fn.Code), budget, e != nil && e.ssa != nil)
+		} else if budget == 0 && (compiles || e != nil && e.ssa != nil) {
+			t.Fatalf("long compiled within the default budget, %d bytes", r.jitBudget())
+		}
+	}
+}
+
 // jitTierWorkForTest is the work a full budget of back edges in cl's loops
 // spends at the least: half the interval, as backEdgeBudget varies it.
 func jitTierWorkForTest(r *Runtime, cl *closure) int64 {

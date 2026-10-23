@@ -13,8 +13,6 @@ import (
 // Compiler work and scratch size are bounded even for permanently refused
 // functions. Runtime code/metadata ownership is handled by the optional VM tier.
 const (
-	// MaxInstructions bounds control-flow analysis and IR allocation.
-	MaxInstructions = ir.MaxInstructions
 	// MaxSlots bounds the locals and operand scratch storage together.
 	MaxSlots = ir.MaxSlots
 )
@@ -300,8 +298,8 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		// makes of a native or an inlined callee's is given them from the
 		// state the exit wrote (ir.Program's PrologueArgs).
 		return nil, refuse(-1, "non-simple parameters")
-	case len(fn.Code) == 0 || len(fn.Code) > MaxInstructions:
-		return nil, refuse(-1, "instruction budget")
+	case len(fn.Code) == 0:
+		return nil, refuse(-1, "no instructions")
 	case fn.LocalCount < 0 || fn.MaxStack < 0 || fn.LocalCount > MaxSlots || fn.MaxStack > MaxSlots || len(fn.Upvalues) > MaxSlots || fn.LocalCount+fn.MaxStack+len(fn.Upvalues) > MaxSlots:
 		return nil, refuse(-1, "slot budget")
 	case fn.ParamCount < 0 || fn.ParamCount > fn.LocalCount || len(fn.Locals) != fn.LocalCount:
