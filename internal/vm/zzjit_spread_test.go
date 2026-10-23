@@ -337,6 +337,7 @@ func TestJITSpreadNative(t *testing.T) {
 			for (let i = 0; i < n; i++) { if (i === n - 3) Object.setPrototypeOf(a, p); const x = [...a]; s += x[0] + x.length }
 			return s;
 		}
+		function leafSpread(n, m) { for (let i = 0; i < n; i++) m.set(...[i, i * 2]); return m.size * 1000 + m.get(n - 1) }
 		function swapIter(f) { Array.prototype[Symbol.iterator] = f }
 		function replaced(n, a, gen, values) {
 			let s = 0;
@@ -352,7 +353,7 @@ func TestJITSpreadNative(t *testing.T) {
 			}
 			return s;
 		}`, `protoArrays(100, [1, 2, 3], ownIterProto)`, `flagged(100, {a: 1, b: 2})`,
-		`replaced(100, [1, 2, 3], Array.prototype[Symbol.iterator], Array.prototype[Symbol.iterator])`,
+		`leafSpread(100, new Map())`, `leafSpread(100, new Map())`, `leafSpread(100, new Map())`, `leafSpread(100, new Map())`, `replaced(100, [1, 2, 3], Array.prototype[Symbol.iterator], Array.prototype[Symbol.iterator])`,
 		`replaced(100, [1, 2, 3], ownIterProto[Symbol.iterator], Array.prototype[Symbol.iterator])`)
 	// While the collector marks, Go makes each.
 	t.Run("marking", func(t *testing.T) {

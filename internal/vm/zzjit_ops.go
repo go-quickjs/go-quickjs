@@ -163,6 +163,24 @@ func (r *Runtime) jitOpFrameless(f *frame, cl *closure, in bytecode.Instr, args 
 		}
 		v, err := r.objectRest(src, excluded)
 		return v, err == nil
+	case bytecode.OpCallSpread:
+		// A leaf's call, Math.max(...a): applied as every tier applies it
+		// without a frame (jitPlainCall), its arguments the array's
+		// elements, where its check passes; any other call is the
+		// frame's.
+		this, callee, list := args[0], args[1], args[2]
+		if !callee.IsObject() || !list.IsObject() {
+			return Undefined, false
+		}
+		fd := callee.Object().fn()
+		if fd == nil || !jitLeafOp(fd.elemOp) || fd.realm != nil && fd.realm != r.Realm {
+			return Undefined, false
+		}
+		a := list.Object()
+		if a.class != ClassArray || a.flags&objHasSparseElements != 0 {
+			return Undefined, false
+		}
+		return r.jitLeafApply(fd, this, a.elemsOf())
 	case bytecode.OpTemplateObject:
 		return Obj(r.templateObject(cl.fn, int(in.A))), true
 	case bytecode.OpPushCallee:
@@ -441,6 +459,23 @@ func (r *Runtime) jitRestFast(o *Object, excluded []Value) (*Object, bool) {
 		out.appendProp(Property{key: k, flags: propDefault, value: o.vals[c.slots[i]]})
 	}
 	return out, true
+}
+
+// jitLeafApply applies fd, a leaf's function of this realm (jitLeafOp),
+// to this and args without a frame, as jitPlainCall does, where its check
+// passes and it throws nothing; false otherwise, having done nothing.
+func (r *Runtime) jitLeafApply(fd *funcData, this Value, args []Value) (Value, bool) {
+	switch op := fd.elemOp; {
+	case op >= elemNativeFirst:
+		if !leafChecks[op](r, this, args) {
+			return Undefined, false
+		}
+		v, err := fd.native(r, this, args)
+		return v, err == nil
+	case op > elemRandom:
+		return leafOps[op](r, this, args, true)
+	}
+	return r.collectionOp(fd.elemOp, this, args, true)
 }
 
 // jitCopyPlain reports whether copying o's own enumerable properties, as
