@@ -891,7 +891,7 @@ func (c *core) allocate() error {
 	c.dropped = nil
 	nv, nb := c.f.NumValues()+len(c.budgets), numBlocks(c.f)
 	// Number positions: each block has a start, one position per value, and
-	// an end. at is the block of each position.
+	// an end; count bounds them.
 	pos := c.ints(nv)
 	for i := range pos {
 		pos[i] = -1
@@ -899,22 +899,70 @@ func (c *core) allocate() error {
 	start, end := c.ints(nb), c.ints(nb)
 	count := 0
 	for _, b := range c.order {
-		count += len(b.Values) + 2
-	}
-	at := c.blockList(count)[:0]
-	for _, b := range c.order {
-		start[b.ID] = len(at)
-		at = append(at, b)
+		start[b.ID] = count
+		count++
 		for _, v := range b.Values {
-			pos[v.ID] = len(at)
-			at = append(at, b)
+			pos[v.ID] = count
+			count++
 		}
-		end[b.ID] = len(at)
-		at = append(at, b)
+		end[b.ID] = count
+		count++
 	}
-	// Uses: each value's uses, by the position of the use.
-	uses := c.useList(4 * count)[:0]
+	// Intervals, by value ID (v nil until made): each from its definition
+	// -- a phi's from its block's start -- to its last use, stretched over
+	// every block where the value is live in or out. The uses are met once,
+	// block by block: each stretches its value's interval to it, and one in
+	// another block than its value's is noted (xuses) for the liveness,
+	// which is then found value by value, backwards from those blocks to
+	// the value's own (liveAround) -- what a value is live in, as many
+	// steps as it is, where block-level sets over all values, iterated
+	// until none grew, had taken a pass over every block and every word of
+	// the sets each time.
+	// What the uses read and write of each value is in one record (rec):
+	// its last use's position, its block, the head of its uses in other
+	// blocks, and how a frame state's slot naming it is used.
 	need := func(v *ssa.Value) bool { return hasResult(v) && !c.isLazy(v) }
+	rec := c.useRecs(nv)
+	iv := c.intervalList(nv)
+	for _, b := range c.order {
+		for _, v := range b.Values {
+			r := &rec[v.ID]
+			r.def = -1
+			if need(v) {
+				p := pos[v.ID]
+				if v.Op == ssa.OpPhi {
+					p = start[v.Block.ID]
+				}
+				iv[v.ID] = interval{v: v, start: p, end: p}
+				r.end, r.def = int32(p), int32(b.ID)+1
+			}
+			if bigKept(v) != nil || c.isLazy(v) || remat(v) || v.Shadow != nil {
+				r.slot = 1
+			}
+		}
+	}
+	// xuses are the uses in another block than their value's, a block once
+	// for each value in a row: each's next is 1 plus the index of the one
+	// before it of its value, or 0, from its record's xhead.
+	xuses := c.xuseList()
+	var cur *ssa.Block
+	use := func(x *ssa.Value, p int) {
+		r := &rec[x.ID]
+		if r.def <= 0 {
+			if r.def == 0 && need(x) {
+				// Only a value defined outside the function has none.
+				panic(fmt.Sprintf("use of %v defined outside the function", x))
+			}
+			return
+		}
+		r.end = max(r.end, int32(p))
+		if r.def != int32(cur.ID)+1 {
+			if h := r.xhead; h == 0 || xuses[h-1].b != cur {
+				xuses = append(xuses, xuse{cur, h})
+				r.xhead = int32(len(xuses))
+			}
+		}
+	}
 	// useState uses what state s reads at position at. moved, if not nil,
 	// is the loop header whose state a back edge's poll reads after the
 	// edge's phi moves (edge): the header's phis it names are then in their
@@ -930,11 +978,17 @@ func (c *core) allocate() error {
 		}
 		add := func(x *ssa.Value) {
 			if moved == nil || x.Op != ssa.OpPhi || x.Block != moved {
-				uses = append(uses, use{x, at})
+				use(x, at)
 			}
 		}
 		for _, v := range s.Slots {
 			if v == nil {
+				continue
+			}
+			if moved == nil && rec[v.ID].slot == 0 {
+				// Neither a BigInt's box, nor made where needed, nor with
+				// a shadow: the value itself.
+				use(v, at)
 				continue
 			}
 			if x := bigKept(v); x != nil {
@@ -957,6 +1011,7 @@ func (c *core) allocate() error {
 		}
 	}
 	for _, b := range c.order {
+		cur = b
 		for i, v := range b.Values {
 			if v.Op == ssa.OpPhi {
 				continue // phi arguments are used at their predecessors' ends
@@ -968,7 +1023,7 @@ func (c *core) allocate() error {
 				p = end[b.ID]
 			}
 			for _, a := range v.Args {
-				uses = append(uses, use{a, p})
+				use(a, p)
 				if a.Shadow != nil {
 					// It may read where its operand came from: a keep
 					// (mir's keep), or an operation that finds an object's
@@ -976,7 +1031,7 @@ func (c *core) allocate() error {
 					// state names keeps its shadow alive there too, but a
 					// captured local's is in no state (its slot is its
 					// cell), and the slot IR reads a local as an operand.
-					uses = append(uses, use{a.Shadow, p})
+					use(a.Shadow, p)
 				}
 			}
 			at := p
@@ -999,12 +1054,12 @@ func (c *core) allocate() error {
 		if b.Control != nil {
 			if c.isLazy(b.Control) {
 				for _, a := range b.Control.Args {
-					uses = append(uses, use{a, end[b.ID]})
+					use(a, end[b.ID])
 				}
 			} else {
-				uses = append(uses, use{b.Control, end[b.ID]})
+				use(b.Control, end[b.ID])
 				if b.Control.Shadow != nil {
-					uses = append(uses, use{b.Control.Shadow, end[b.ID]})
+					use(b.Control.Shadow, end[b.ID])
 				}
 			}
 		}
@@ -1021,7 +1076,7 @@ func (c *core) allocate() error {
 					if phi.Op != ssa.OpPhi {
 						break
 					}
-					uses = append(uses, use{phi.Args[i], end[b.ID]})
+					use(phi.Args[i], end[b.ID])
 				}
 				if s.LoopHeader && s.Backedge[i] {
 					// A poll on this edge exits to the header's state,
@@ -1031,125 +1086,55 @@ func (c *core) allocate() error {
 			}
 		}
 	}
+	c.keepXuses(xuses)
 	lap(PhaseUses)
 	// Block-level liveness, so that values live around a loop stay live for
-	// all of it. Only a value used outside the block that defines it can be
-	// live into a block: those are numbered, and the sets are over them, a
-	// fraction of the values. byID finds a value from its number.
-	defBlock := c.blockList(nv)
+	// all of it: a value is live into each block from which a use of it in
+	// another block than its own is reached without passing its own, and
+	// out of each predecessor of such a block -- found from each such use
+	// backwards through the predecessors, a block once for each value
+	// (seen, by block ID, 1 plus the ID of the value it was last found
+	// live into), and the value's interval stretched over each.
+	seen := c.ints(nb)
+	inOrder := c.bools(nb)
 	for _, b := range c.order {
-		for _, v := range b.Values {
-			defBlock[v.ID] = b
-		}
+		inOrder[b.ID] = true
 	}
-	gid := c.ints(nv) // 1 plus a value's number, or 0
-	byID := c.valueList(nv)[:0]
-	for _, u := range uses {
-		if need(u.v) && gid[u.v.ID] == 0 && defBlock[u.v.ID] != at[u.pos] {
-			byID = append(byID, u.v)
-			gid[u.v.ID] = len(byID)
+	stack := c.blockList(nb)[:0]
+	for id := range rec {
+		r := &rec[id]
+		if r.def <= 0 {
+			continue
 		}
-	}
-	// The three sets of every block share one array.
-	words := (len(byID) + 63) / 64
-	sets := c.words(3 * nb * words)
-	defsIn, usesIn, liveIn := c.setList(nb), c.setList(nb), c.setList(nb)
-	for _, b := range c.order {
-		at := 3 * b.ID * words
-		defsIn[b.ID], usesIn[b.ID], liveIn[b.ID] = sets[at:at+words:at+words], sets[at+words:at+2*words:at+2*words], sets[at+2*words:at+3*words:at+3*words]
-		for _, v := range b.Values {
-			if g := gid[v.ID]; g != 0 {
-				defsIn[b.ID].add(g - 1)
+		it, own, mark := &iv[id], int(r.def)-1, id+1
+		it.end = int(r.end)
+		for u := r.xhead; u != 0; u = xuses[u-1].next {
+			b := xuses[u-1].b
+			if seen[b.ID] == mark {
+				continue
 			}
-		}
-	}
-	for _, u := range uses {
-		if g := gid[u.v.ID]; g != 0 && defBlock[u.v.ID] != at[u.pos] {
-			usesIn[at[u.pos].ID].add(g - 1)
-		}
-	}
-	in := c.words(words)
-	for changed := true; changed; {
-		changed = false
-		for i := len(c.order) - 1; i >= 0; i-- {
-			b := c.order[i]
-			copy(in, usesIn[b.ID])
-			defs := defsIn[b.ID]
-			for _, s := range b.Succs {
-				if live := liveIn[s.ID]; live != nil {
-					for w := range in {
-						in[w] |= live[w] &^ defs[w]
+			seen[b.ID] = mark
+			stack = append(stack[:0], b)
+			for len(stack) > 0 {
+				s := stack[len(stack)-1]
+				stack = stack[:len(stack)-1]
+				// Live into s, out of each of its predecessors.
+				bs := start[s.ID]
+				it.start, it.end = min(it.start, bs), max(it.end, bs)
+				for _, p := range s.Preds {
+					if !inOrder[p.ID] {
+						continue
+					}
+					it.end = max(it.end, end[p.ID])
+					if p.ID != own && seen[p.ID] != mark {
+						seen[p.ID] = mark
+						stack = append(stack, p)
 					}
 				}
-			}
-			if !slices.Equal(in, liveIn[b.ID]) {
-				copy(liveIn[b.ID], in)
-				changed = true
 			}
 		}
 	}
 	lap(PhaseLiveness)
-	// Intervals: from definition to last use, stretched over every block
-	// where the value is live in or out.
-	iv := c.intervalList(nv) // by value ID; v is nil until made
-	get := func(v *ssa.Value) *interval {
-		it := &iv[v.ID]
-		if it.v == nil {
-			p := pos[v.ID]
-			if p < 0 {
-				panic(fmt.Sprintf("use of %v defined outside the function", v))
-			}
-			if v.Op == ssa.OpPhi {
-				p = start[v.Block.ID]
-			}
-			*it = interval{v: v, start: p, end: p}
-		}
-		return it
-	}
-	for _, b := range c.order {
-		for _, v := range b.Values {
-			if need(v) {
-				get(v)
-			}
-		}
-	}
-	for _, u := range uses {
-		if need(u.v) {
-			if it := get(u.v); u.pos > it.end {
-				it.end = u.pos
-			}
-		}
-	}
-	for _, b := range c.order {
-		bs := start[b.ID]
-		liveIn[b.ID].each(func(id int) {
-			it := get(byID[id])
-			if bs < it.start {
-				it.start = bs
-			}
-			if bs > it.end {
-				it.end = bs
-			}
-		})
-		for _, s := range b.Succs {
-			if liveIn[s.ID] == nil {
-				continue
-			}
-			liveIn[s.ID].each(func(id int) {
-				v := byID[id]
-				if !need(v) || v.Block == s && v.Op == ssa.OpPhi {
-					return
-				}
-				it := get(v)
-				if end[b.ID] > it.end {
-					it.end = end[b.ID]
-				}
-				if bs < it.start && !defsIn[b.ID].has(id) {
-					it.start = bs
-				}
-			})
-		}
-	}
 	// Each budget loop's register, from its header's start to the end of
 	// the last of its blocks laid out.
 	for _, bu := range c.budgets {
@@ -2205,10 +2190,23 @@ func isFloat(v *ssa.Value) bool { return v.Type == ssa.Float64 }
 
 func hasResult(v *ssa.Value) bool { return v.Type != ssa.None }
 
-// use is a value's use, at the position of the instruction that uses it.
-type use struct {
-	v   *ssa.Value
-	pos int
+// useRec is what allocate's uses read and write of a value: end, its last
+// use's position; def, 1 plus the ID of the block defining it, or -1 for a
+// value that needs no location, 0 for one not in the function; xhead, 1
+// plus the index in xuses of its last use in another block, or 0; slot,
+// 0 if a frame state's slot naming it uses the value itself, 1 if it uses
+// what it is made of or boxes, or its shadow besides.
+type useRec struct {
+	end, def, xhead int32
+	slot            uint8
+}
+
+// xuse is a use of a value in block b, another block than the value's
+// (allocate), and next 1 plus the index of the value's use before it in
+// another block, or 0.
+type xuse struct {
+	b    *ssa.Block
+	next int32
 }
 
 // interval is a value's live range over the linear instruction numbering.

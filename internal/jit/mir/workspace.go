@@ -23,13 +23,16 @@ type Workspace struct {
 	sets      arena.Arena[valueSet]
 	values    arena.Arena[*ssa.Value]
 	blocks    arena.Arena[*ssa.Block]
-	uses      arena.Arena[use]
 	intervals arena.Arena[interval]
+	recs      arena.Arena[useRec]
 	ivRefs    arena.Arena[*interval]
 	locs      arena.Arena[loc]
 	saved     arena.Arena[saved]
 	sched     schedule
-	ready     bool
+	// xuses is allocate's list of uses in other blocks, kept from compile
+	// to compile.
+	xuses []xuse
+	ready bool
 	// What a compile's exit descriptions share (abi.ExitFrame) is built
 	// here, then copied out once at its length (core's finishExits).
 	exitWords    map[uint64]int32
@@ -75,8 +78,8 @@ func (w *Workspace) init() {
 	w.sets.KeepBig()
 	w.values.KeepBig()
 	w.blocks.KeepBig()
-	w.uses.KeepBig()
 	w.intervals.KeepBig()
+	w.recs.KeepBig()
 	w.ivRefs.KeepBig()
 	w.locs.KeepBig()
 	w.saved.KeepBig()
@@ -87,8 +90,8 @@ func (w *Workspace) init() {
 // and tables.
 func (w *Workspace) Bytes() int {
 	n := w.bools.Bytes() + w.ints.Bytes() + w.words.Bytes() + w.sets.Bytes() + w.values.Bytes() + w.blocks.Bytes() +
-		w.uses.Bytes() + w.intervals.Bytes() + w.ivRefs.Bytes() + w.locs.Bytes() + w.saved.Bytes()
-	n += capBytes(w.sched.moves) + capBytes(w.sched.steps) + capBytes(w.sched.parked) + capBytes(w.sched.readers)
+		w.intervals.Bytes() + w.recs.Bytes() + w.ivRefs.Bytes() + w.locs.Bytes() + w.saved.Bytes()
+	n += capBytes(w.sched.moves) + capBytes(w.sched.steps) + capBytes(w.sched.parked) + capBytes(w.sched.readers) + capBytes(w.xuses)
 	n += w.amd64.a.Bytes() + capBytes(w.amd64.labels) + capBytes(w.amd64.stubFor) + capBytes(w.amd64.cold)
 	n += w.arm64.a.Bytes() + capBytes(w.arm64.labels) + capBytes(w.arm64.stubFor) + capBytes(w.arm64.cold)
 	// A map's entries, as their keys and values, at least.
@@ -112,8 +115,8 @@ func (w *Workspace) Rewind() {
 	w.sets.Rewind()
 	w.values.Rewind()
 	w.blocks.Rewind()
-	w.uses.Rewind()
 	w.intervals.Rewind()
+	w.recs.Rewind()
 	w.ivRefs.Rewind()
 	w.locs.Rewind()
 	w.saved.Rewind()
@@ -122,7 +125,7 @@ func (w *Workspace) Rewind() {
 	// once they hold more than the arenas keep, which is what the recent
 	// compiles needed.
 	if arenas := w.arenaBytes(); w.Bytes()-arenas > arenas {
-		w.sched = schedule{}
+		w.sched, w.xuses = schedule{}, nil
 		w.exitWords = nil
 		w.exitSlotsBuf, w.exitIndexBuf, w.exitWordsBuf, w.exitHeadBuf, w.exitNextBuf = nil, nil, nil, nil, nil
 		w.amd64.a, w.amd64.labels, w.amd64.stubs, w.amd64.stubFor, w.amd64.cold = amd64.Asm{}, nil, nil, nil, nil
@@ -133,7 +136,7 @@ func (w *Workspace) Rewind() {
 // arenaBytes is what the workspace's arenas keep.
 func (w *Workspace) arenaBytes() int {
 	return w.bools.Bytes() + w.ints.Bytes() + w.words.Bytes() + w.sets.Bytes() + w.values.Bytes() + w.blocks.Bytes() +
-		w.uses.Bytes() + w.intervals.Bytes() + w.ivRefs.Bytes() + w.locs.Bytes() + w.saved.Bytes()
+		w.intervals.Bytes() + w.recs.Bytes() + w.ivRefs.Bytes() + w.locs.Bytes() + w.saved.Bytes()
 }
 
 // CompileIn is Compile, in w.
@@ -195,11 +198,19 @@ func (c *core) blockList(n int) []*ssa.Block {
 	return make([]*ssa.Block, n)
 }
 
-func (c *core) useList(n int) []use {
+// xuseList is an empty list for allocate's uses in other blocks: the
+// workspace's, if there is one, which keepXuses gives back.
+func (c *core) xuseList() []xuse {
 	if c.ws != nil {
-		return c.ws.uses.Make(n)
+		return c.ws.xuses[:0]
 	}
-	return make([]use, n)
+	return nil
+}
+
+func (c *core) keepXuses(s []xuse) {
+	if c.ws != nil {
+		c.ws.xuses = s[:0]
+	}
 }
 
 func (c *core) intervalList(n int) []interval {
@@ -207,6 +218,13 @@ func (c *core) intervalList(n int) []interval {
 		return c.ws.intervals.Make(n)
 	}
 	return make([]interval, n)
+}
+
+func (c *core) useRecs(n int) []useRec {
+	if c.ws != nil {
+		return c.ws.recs.Make(n)
+	}
+	return make([]useRec, n)
 }
 
 func (c *core) intervalRefs(n int) []*interval {
