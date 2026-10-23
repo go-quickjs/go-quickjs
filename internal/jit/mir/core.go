@@ -1040,6 +1040,10 @@ func (c *core) allocate() error {
 	// Of a block with phis, each predecessor's end -- -1 for one not laid
 	// out -- and its edge's weight, found once for all its phis.
 	var predEnd, predW []int32
+	// kv are the values the calls' saves and the keep cells' coloring
+	// look at -- the calls, the keeps, the BigInts' boxes, the cells'
+	// addresses, the phis of sources -- in order, met with the uses.
+	kv := c.keepList()
 	for _, b := range c.order {
 		cur = b
 		if len(b.Values) != 0 && b.Values[0].Op == ssa.OpPhi {
@@ -1055,6 +1059,9 @@ func (c *core) allocate() error {
 		for _, v := range b.Values {
 			if v.Op != ssa.OpPhi {
 				break
+			}
+			if v.Type == ssa.Source {
+				kv = append(kv, v)
 			}
 			mv := member(&rec[v.ID], v.ID)
 			for i, a := range v.Args {
@@ -1084,8 +1091,14 @@ func (c *core) allocate() error {
 		}
 		cur = b
 		for i, v := range b.Values {
-			if v.Op == ssa.OpPhi {
+			switch v.Op {
+			case ssa.OpPhi:
 				continue // phi arguments are used at their predecessors' ends
+			case ssa.OpCall, ssa.OpKeep, ssa.OpBigBox, ssa.OpCallCell, ssa.OpBigCell:
+				kv = append(kv, v)
+				if v.Op == ssa.OpKeep {
+					c.keepRunAt(b, i, v)
+				}
 			}
 			// A fused value is computed at its block's branch (findFused):
 			// what it reads is used there.
@@ -1767,12 +1780,8 @@ func (c *core) allocate() error {
 	var home []int
 	var free []int
 	open, next := c.intervalRefs(len(all))[:0], 0
-	// The runs of keeps are found in the same pass (keepRunAt).
-	for _, b := range c.order {
-		for i, v := range b.Values {
-			if v.Op == ssa.OpKeep {
-				c.keepRunAt(b, i, v)
-			}
+	{
+		for _, v := range kv {
 			if v.Op != ssa.OpCall || v.Calls() == nil {
 				continue
 			}
@@ -1791,7 +1800,11 @@ func (c *core) allocate() error {
 			c.saveAt[2*v.ID] = len(c.saves)
 			p := pos[v.ID]
 			for ; next < len(all) && all[next].start < p; next++ {
-				open = append(open, all[next])
+				// Only what is in a register is saved; nor is a budget
+				// loop's, whose loop calls nothing.
+				if it := all[next]; c.locs[it.v.ID].reg >= 0 && it.v.ID < c.f.NumValues() {
+					open = append(open, it)
+				}
 			}
 			kept := open[:0]
 			for _, it := range open {
@@ -1835,7 +1848,9 @@ func (c *core) allocate() error {
 	if CheckAllocations {
 		c.checkAllocation(iv, scanSpills)
 	}
-	return c.colorKeeps(iv, pos)
+	err := c.colorKeeps(iv, pos, kv)
+	c.keepKeepList(kv)
+	return err
 }
 
 // loopMasks are, by block ID, the loops each block is in, a bit for each
@@ -1914,7 +1929,7 @@ var ErrKeeps = errors.New("mir: more keep cells live at once than the context ha
 // reads after its write, a call's result no one uses, is live at the write
 // alone, and calls one after another share one. Cells whose intervals do
 // not meet share a cell, the first free, in the order they begin.
-func (c *core) colorKeeps(iv []interval, pos []int) error {
+func (c *core) colorKeeps(iv []interval, pos []int, kv []*ssa.Value) error {
 	f := c.f
 	nk := f.Keeps
 	if nk == 0 {
@@ -1938,8 +1953,8 @@ func (c *core) colorKeeps(iv []interval, pos []int) error {
 	// cell is, by value ID, 1 plus the cell an address is of.
 	cell := c.ints(f.NumValues())
 	var phis []*ssa.Value
-	for _, b := range c.order {
-		for _, v := range b.Values {
+	{
+		for _, v := range kv {
 			switch {
 			case writes(v):
 				if v.Index < 0 || v.Index >= nk {
@@ -2019,23 +2034,13 @@ func (c *core) colorKeeps(iv []interval, pos []int) error {
 	// A BigInt's box made only at its exits (findLazy) is written to its
 	// cell there, by an exit's code (bigRebox), wherever a state names its
 	// value: where the BigInt it boxes is live.
-	var ivOf []int
-	for _, b := range c.order {
-		for _, v := range b.Values {
-			if v.Op != ssa.OpBigBox || !c.isLazy(v) {
-				continue
-			}
-			if ivOf == nil {
-				ivOf = c.ints(f.NumValues())
-				for i := range iv {
-					if iv[i].v != nil && iv[i].v.ID < len(ivOf) {
-						ivOf[iv[i].v.ID] = i + 1
-					}
-				}
-			}
-			if j := ivOf[v.Args[0].ID]; j != 0 {
-				extend(v.Index, iv[j-1].start, iv[j-1].end)
-			}
+	for _, v := range kv {
+		if v.Op != ssa.OpBigBox || !c.isLazy(v) {
+			continue
+		}
+		// The intervals are by value ID.
+		if it := &iv[v.Args[0].ID]; it.v != nil {
+			extend(v.Index, it.start, it.end)
 		}
 	}
 	// In the order they begin, then by number.
@@ -2104,11 +2109,9 @@ func (c *core) colorKeeps(iv []interval, pos []int) error {
 			i = up
 		}
 	}
-	for _, b := range c.order {
-		for _, v := range b.Values {
-			if writes(v) {
-				v.Index = phys[v.Index]
-			}
+	for _, v := range kv {
+		if writes(v) {
+			v.Index = phys[v.Index]
 		}
 	}
 	f.Keeps = n
