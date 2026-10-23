@@ -267,3 +267,83 @@ func TestMirLoopExitsOutOfLine(t *testing.T) {
 		t.Fatal("no loop's way out stored its budget back at its block")
 	}
 }
+
+// A loop's code starts a 64-byte line (mir's startsLoop), and the padding
+// before it is run only on the ways into it: never by a back edge, which
+// had fallen into a header's padding, a jump over it, on every turn
+// where the loop's blocks before its header -- a for loop's update, a
+// join on the way back -- end in the edge back to it.
+func TestMirLoopsAligned(t *testing.T) {
+	enc := abi.Encoding{ValueSize: 16, NumOffset: 0, RefOffset: 8,
+		Undefined: 0xFFF8000000000001, Null: 0xFFF8000000000002, True: 0xFFF8000000000103,
+		False: 0xFFF8000000000003, Uninitialized: 0xFFF8000000000008, CanonicalNaN: 0x7FF8000000000000,
+		Object: 0xFFF8000000000007, Mega: true, UndefinedCell: 0x60000, StoreRef: 0x70000, WriteBarrier: 0x71000,
+		CallGo: 0x72000}
+	defer func() { mir.Annotate = false }()
+	mir.Annotate = true
+	backs, aligned := 0, 0
+	for _, src := range append(append(append([]string(nil), budgetCorpus...), moveCorpus...), jsCorpus...) {
+		for i, p := range lowered(t, src) {
+			f, err := ssa.BuildWith(p, calls{props{p: p}})
+			if err != nil {
+				continue
+			}
+			ssa.Optimize(f)
+			mc, err := mir.CompileAMD64(f, enc)
+			if err != nil {
+				t.Fatalf("%s (%d): %v", src, i, err)
+			}
+			// turns are the edges a loop's turn takes back to its header:
+			// from a block the header reaches (an entry at a PC in the
+			// loop's body comes back by an edge flagged so, once).
+			turns := map[string]bool{}
+			for _, h := range f.Blocks {
+				if !h.LoopHeader {
+					continue
+				}
+				seen := map[*ssa.Block]bool{h: true}
+				for work := []*ssa.Block{h}; len(work) > 0; {
+					b := work[len(work)-1]
+					work = work[:len(work)-1]
+					for _, s := range b.Succs {
+						if s == h {
+							turns[fmt.Sprintf("edge b%d->b%d", b.ID, h.ID)] = true
+						}
+						if !seen[s] {
+							seen[s] = true
+							work = append(work, s)
+						}
+					}
+				}
+			}
+			for k, m := range mc.Marks {
+				end := mc.Text
+				if k+1 < len(mc.Marks) {
+					end = min(end, mc.Marks[k+1].Off)
+				}
+				if regexp.MustCompile(`^b[0-9]+$`).MatchString(m.Tag) && m.Off%64 == 0 && m.Off > 0 {
+					aligned++
+				}
+				if !turns[m.Tag] {
+					continue
+				}
+				code := insts(mc.Bytes, m.Off, end)
+				back := false
+				for j, in := range code {
+					if _, mem := in.Args[0].(x86asm.Mem); mem && in.Op == x86asm.DEC || in.Op == x86asm.SUB && in.Args[1] == x86asm.Imm(1) {
+						back = true
+					}
+					if back && in.Op == x86asm.JMP && in.Len == 2 && j+1 < len(code) && code[j+1].Op == x86asm.NOP {
+						t.Errorf("%s (%d): %s, a back edge, runs a loop's padding: %v", src, i, m.Tag, code)
+					}
+				}
+				if back {
+					backs++
+				}
+			}
+		}
+	}
+	if backs == 0 || aligned == 0 {
+		t.Fatalf("%d back edges, %d blocks at a 64-byte line's start", backs, aligned)
+	}
+}

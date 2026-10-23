@@ -251,7 +251,7 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 				c.mark("call entry")
 				c.callEntry()
 			}
-			if b.LoopHeader {
+			if c.startsLoop(i) {
 				// A loop's code starts a 64-byte line, the op cache's: so
 				// its lines are the same whatever comes before it in the
 				// function, and its hot code is in as few as its length

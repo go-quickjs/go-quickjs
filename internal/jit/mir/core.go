@@ -902,6 +902,24 @@ func (c *core) leaves(b, to, other *ssa.Block) bool {
 // its ends: 16 to the power of them, up to three.
 var edgeWeights = [4]int{1, 16, 256, 4096}
 
+// startsLoop reports whether the i'th block laid out begins the code of a
+// loop (of the first 64, loopMasks's): it is in a loop the block before
+// it is not in. That block, not the loop's header, is the one aligned
+// (amd64's Align): a loop's blocks laid out before its header -- the
+// update of a for loop, a join on the way back -- end in the edge back
+// to it, which had fallen into the header's padding, a jump over it, on
+// every turn (microbench's array_for and prop_in: 6 and 7% slower than
+// with no padding). Before the loop's first block only the ways into the
+// loop pass the padding.
+func (c *core) startsLoop(i int) bool {
+	m := c.loopMasks()
+	b := c.order[i]
+	if i == 0 {
+		return m[b.ID] != 0
+	}
+	return m[b.ID]&^m[c.order[i-1].ID] != 0
+}
+
 // numBlocks bounds f's block IDs.
 func numBlocks(f *ssa.Func) int {
 	n := 0
