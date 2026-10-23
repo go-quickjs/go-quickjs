@@ -64,6 +64,10 @@ type compiler struct {
 	// again from there (refillOnEmpty).
 	callV   *ssa.Value
 	callTop amd64.Label
+	// allocDone, where not 0, is where `new Array(n)`'s construction goes
+	// on once Go has made its array, a length past what a pool's arrays
+	// have room for (lengthGuards).
+	allocDone amd64.Label
 	// tail is where exits that filled records go (recordsTail), if any
 	// does; recorded marks the exit being emitted as one.
 	tail               amd64.Label
@@ -1215,9 +1219,12 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	}
 	c.callV, c.callTop = v, c.a.NewLabel()
 	c.a.Bind(c.callTop)
-	defer func() { c.callV = nil }()
+	defer func() { c.callV, c.allocDone = nil, 0 }()
 	site := sites[0]
 	vs := int32(c.enc.ValueSize)
+	if site.Alloc && site.Argc == 1 && c.enc.CallGo != 0 && len(v.Args) <= abi.MaxGoArgs {
+		c.allocDone = c.a.NewLabel()
+	}
 	if site.Go != 0 {
 		c.goCall(v, site, guard)
 		return
@@ -1446,6 +1453,9 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		c.a.Bind(join)
 		if site.Alloc && site.Argc == 1 {
 			c.allocLength(v, v.Args[len(v.Args)-1])
+		}
+		if c.allocDone != 0 {
+			c.a.Bind(c.allocDone)
 		}
 		return
 	}
@@ -4327,9 +4337,25 @@ func (c *compiler) lengthGuards(t *ssa.CallSite, x *ssa.Value, guard func(amd64.
 	c.a.Op(amd64.Cmp, scratchA, scratchC, true)
 	fits := c.a.NewLabel()
 	c.a.Jcc(amd64.CondBE, fits)
-	// Past its room: a negative n, unsigned, is past every room.
+	// Past its room: a negative n, unsigned, is past every room. Past
+	// what any pool's arrays have room for, Go makes the construction,
+	// called from native code, which goes on after it (allocDone) -- a
+	// RangeError Go throws for a negative n -- as V8's code calls its
+	// ArrayConstructor builtin for an array too large to allocate inline:
+	// it had left native code, `new Array(5000)` once a call of AWFY's
+	// Sieve.
 	c.a.OpImm(amd64.Cmp, scratchA, abi.PoolRoomLimit, true)
-	guard(amd64.CondA)
+	if done := c.allocDone; done != 0 {
+		big, op, v := c.a.NewLabel(), goOpWord(&ssa.CallSite{Go: ssa.GoCall, Argc: t.Argc, New: true}), c.callV
+		c.a.Jcc(amd64.CondA, big)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(big)
+			c.goCallOp(v, op, guard, true)
+			c.a.Jmp(done)
+		})
+	} else {
+		guard(amd64.CondA)
+	}
 	v, top := c.callV, c.callTop
 	if v == nil {
 		// No call to make again: Go makes it. n is at most the limit, as

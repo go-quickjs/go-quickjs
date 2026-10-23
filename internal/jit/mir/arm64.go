@@ -54,9 +54,10 @@ type a64Compiler struct {
 	stubAt  []int
 	stubFor []a64Stub
 	cold    []func()
-	// callV and callTop are amd64's.
-	callV   *ssa.Value
-	callTop arm64.Label
+	// callV, callTop and allocDone are amd64's.
+	callV     *ssa.Value
+	callTop   arm64.Label
+	allocDone arm64.Label
 	// genDone is amd64's: where a generator a loop's step resumed natively
 	// goes once it finishes (genFinish).
 	genDone     arm64.Label
@@ -3234,9 +3235,12 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	}
 	c.callV, c.callTop = v, c.a.NewLabel()
 	c.a.Bind(c.callTop)
-	defer func() { c.callV = nil }()
+	defer func() { c.callV, c.allocDone = nil, 0 }()
 	site := sites[0]
 	vs := int32(c.enc.ValueSize)
+	if site.Alloc && site.Argc == 1 && c.enc.CallGo != 0 && len(v.Args) <= abi.MaxGoArgs {
+		c.allocDone = c.a.NewLabel()
+	}
 	if site.Go != 0 {
 		c.goCall(v, site, c.guardFor(v))
 		return
@@ -3426,6 +3430,9 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 		c.a.Bind(join)
 		if site.Alloc && site.Argc == 1 {
 			c.allocLength(v, v.Args[len(v.Args)-1])
+		}
+		if c.allocDone != 0 {
+			c.a.Bind(c.allocDone)
 		}
 		return
 	}
@@ -4099,9 +4106,20 @@ func (c *a64Compiler) lengthGuards(t *ssa.CallSite, x *ssa.Value, guard func(arm
 	c.a.Cmp(a64A, a64C, true)
 	fits := c.a.NewLabel()
 	c.a.BCond(arm64.LS, fits)
-	// Past its room: a negative n, unsigned, is past every room.
+	// Past its room: a negative n, unsigned, is past every room. Past
+	// what any pool's arrays have room for, as amd64's: Go's.
 	c.a.CmpImm(a64A, abi.PoolRoomLimit, true)
-	guard(arm64.HI)
+	if done := c.allocDone; done != 0 {
+		big, op, v := c.a.NewLabel(), goOpWord(&ssa.CallSite{Go: ssa.GoCall, Argc: t.Argc, New: true}), c.callV
+		c.a.BCond(arm64.HI, big)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(big)
+			c.goCallOp(v, op, true)
+			c.a.B(done)
+		})
+	} else {
+		guard(arm64.HI)
+	}
 	v, top := c.callV, c.callTop
 	if v == nil {
 		// No call to make again: Go makes it. n is at most the limit, as

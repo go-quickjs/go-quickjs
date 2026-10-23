@@ -106,3 +106,34 @@ func TestJITNewArrayLength(t *testing.T) {
 		_ = unsafe.Pointer(pool)
 	}
 }
+
+// `new Array(n)` of a length past what a pool's arrays have room for
+// (abi.PoolRoomLimit) is Go's construction, called from native code, which
+// goes on after it: it had been an exit at every such construction --
+// AWFY's Sieve's new Array(5000), Bounce's 100, Json's 32. A negative or
+// too large length throws the interpreter's RangeError there, caught.
+// Each answer is the interpreter's, at every stress setting, and a loop of
+// such constructions does not leave native code.
+func TestJITNewArrayPastPoolRoom(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		function mk(n) { const a = new Array(n); return a.length * 10 + (a[0] === undefined ? 1 : 0) + (1 in a ? 100 : 0) }
+		function run(k) { let s = 0; for (let i = 0; i < k; i++) s += mk(i % 40) + mk(5000) + mk(17); return s }
+		function bad(n) { try { return new Array(n).length } catch (e) { return e.constructor.name } }
+		function runBad(k) { let r = ''; for (let i = 0; i < k; i++) r += bad(i % 3 === 0 ? -1 : i % 3 === 1 ? 2 ** 32 : 20); return r }`
+	r := jitAgreesForTest(t, setup, `run(200)`, `run(200)`, `run(200)`, `runBad(30)`, `runBad(30)`)
+	m, e := jitEntryForTest(t, r, "run"), jitEntryForTest(t, r, "mk")
+	hosts, unwound, in := r.jit.hosts, r.jit.unwound, e.link.in
+	if v, err := r.Run(compileForTest(t, `''+run(200)`)); err != nil || v.String().Go() != "10073600" {
+		t.Fatalf("run(200) = %s, %v; want 10073600", v.String().Go(), err)
+	}
+	if n, u := r.jit.hosts-hosts, r.jit.unwound-unwound; n != 0 || u != 0 {
+		t.Errorf("run left native code %d times, Go finished %d levels", n, u)
+	}
+	if d := e.link.in - in; m.ssa == nil || d != 600 {
+		t.Errorf("mk was called natively %d times, want 600", d)
+	}
+	jitDifferential(t, setup+`; [run(50), runBad(20), run(20)].join()`)
+}
