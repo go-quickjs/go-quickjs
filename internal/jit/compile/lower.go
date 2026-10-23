@@ -280,9 +280,19 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		return nil, refuse(-1, "derived constructor making an arrow, for native callers")
 	case fn.HasDirectEval || len(fn.EvalScopes) != 0:
 		return nil, refuse(-1, "direct eval")
-	case (fn.UsesArguments || fn.MappedArguments) && !m.forward:
+	case (fn.UsesArguments || fn.MappedArguments) && !m.forward && (!m.ssa || m.callee || !argumentsOwn(fn)):
+		// A function's own code reads its arguments, and makes its
+		// arguments object, by Go, from the frame of the VM's it was
+		// entered with, which has them (ir.Host); a native callee's or an
+		// inlined one's has none, but a forwarding constructor's
+		// (LowerSSAForward).
 		return nil, refuse(-1, "arguments object")
-	case fn.HasRest || (!fn.HasSimpleParams && !fn.TopLevel || fn.ParamsAreLexical) && (!m.ssa || m.forward || fn.Generator || fn.Async):
+	case fn.HasRest && (!m.ssa || m.callee):
+		// A rest parameter is Go's array of the arguments past the
+		// parameters, which only a frame of the VM's has: a native call
+		// writes the parameters alone.
+		return nil, refuse(-1, "non-simple parameters")
+	case (!fn.HasSimpleParams && !fn.TopLevel || fn.ParamsAreLexical) && (!m.ssa || m.forward):
 		// Top-level code has no parameter list, simple or not. A list with
 		// a default or a pattern is bound by its prologue from the call's
 		// arguments (ir's ParamsDead), which the interpreter goes on with
@@ -364,7 +374,9 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			// inlined callee's (ssa's InlineCalls).
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
-		if (in.Op == bytecode.OpApplyArguments || in.Op == bytecode.OpArgumentsIndex) && !m.forward {
+		if (in.Op == bytecode.OpApplyArguments || in.Op == bytecode.OpArgumentsIndex) && !m.forward && (!m.ssa || m.callee) {
+			// Go's in a function's own code (argumentsOwn), the inliner's
+			// in a forwarding constructor's.
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
 		if (isPrivate(in.Op) || isDefinition(in.Op)) && !m.ssa {
@@ -746,6 +758,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		stringParts(p, fn)
 		markBools(p)
 		p.UpvalueBase, p.Upvalues, p.Params = fn.LocalCount, len(fn.Upvalues), fn.ParamCount
+		p.FrameArgs = fn.HasRest || fn.UsesArguments || fn.MappedArguments || fn.ParamsAreLexical
 		if !prologueArgs(p) && m.callee {
 			// A native callee's frame, and an inlined one's, has the call's
 			// arguments nowhere but where the prologue's states keep them.
@@ -766,6 +779,46 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 	selectPropertyLoops(fn, p, m.calls, m.callee, codes)
 	selectGlobalSlots(fn, p, codes)
 	return p, nil
+}
+
+// argumentsOwn reports whether fn's own code may read its arguments and
+// make its arguments object by Go, at host exits, on the frame of the
+// VM's it was entered with. An unmapped object is a copy of the
+// arguments. A mapped one -- a sloppy function's of simple parameters --
+// aliases the parameters, which native code holds as values, written to
+// the frame only at its exits: so only where it has none, or where the
+// function never assigns a parameter and never lets the object out, its
+// arguments read by index and counted alone (arguments_index,
+// arguments_length), which read what the parameters were given.
+func argumentsOwn(fn *bytecode.Function) bool {
+	if fn.Leaf == bytecode.LeafForward || fn.ForwardsArguments {
+		// A forwarding constructor's, which its callers inline, its
+		// arguments forwarded (LowerSSAForward): its own code would leave
+		// at each.
+		return false
+	}
+	if !fn.MappedArguments || fn.ParamCount == 0 {
+		return true
+	}
+	for i := 0; i < fn.ParamCount && i < len(fn.Locals); i++ {
+		if fn.Locals[i].Captured {
+			// A closure's assignment of it, which the object would see.
+			return false
+		}
+	}
+	for _, in := range fn.Code {
+		switch in.Op {
+		case bytecode.OpGetArguments, bytecode.OpLazyArguments, bytecode.OpApplyArguments:
+			return false
+		case bytecode.OpSetLocal, bytecode.OpInitLocal, bytecode.OpPutLocal, bytecode.OpClearLocal, bytecode.OpSetLocalGet,
+			bytecode.OpSetLocalCheck, bytecode.OpIncLocal, bytecode.OpDecLocal, bytecode.OpUpdateLocal, bytecode.OpGetLocalIndexUpdate,
+			bytecode.OpInitParam:
+			if int(in.A) < fn.ParamCount {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // prologueArgs gives p, if its parameter list has a prologue (ir's
@@ -1321,6 +1374,10 @@ func liveLocals(fn *bytecode.Function, p *ir.Program, effects []effect) {
 				read(in, ins.B>>2)
 			case bytecode.OpLocalBinImm:
 				read(in, ins.A&(1<<24-1))
+			case bytecode.OpArgumentsIndex, bytecode.OpArgumentsLength, bytecode.OpLazyArguments, bytecode.OpApplyArguments:
+				// The local the arguments object is kept in once made, which
+				// native code reads (ssa's GoArgument).
+				read(in, ins.A)
 			case bytecode.OpParamsToDeadZone:
 				// It takes the arguments from the parameters' slots, which
 				// the prologue binds the parameters from (ir's ParamsDead):
@@ -1576,7 +1633,13 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 		// A destructuring's value, checked where it is.
 		return effect{need: 1}, nil
 	case bytecode.OpParamsToDeadZone, bytecode.OpInitParam:
-		if int(in.A) > fn.ParamCount || in.Op == bytecode.OpInitParam && int(in.A) >= fn.ParamCount {
+		// A rest parameter's slot, past the others, is in the dead zone
+		// too, until rest_param's array is put there.
+		rest := 0
+		if fn.HasRest {
+			rest = 1
+		}
+		if int(in.A) > fn.ParamCount+rest || in.Op == bytecode.OpInitParam && int(in.A) >= fn.ParamCount {
 			return bad("invalid parameter")
 		}
 		return effect{}, nil
@@ -1871,6 +1934,15 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 			return bad("invalid arguments slot")
 		}
 		return effect{need: 1}, nil
+	case bytecode.OpArgumentsLength, bytecode.OpLazyArguments:
+		// arguments.length, or the arguments object, kept in Locals[A].
+		if !local(in.A) {
+			return bad("invalid arguments slot")
+		}
+		return effect{delta: 1}, nil
+	case bytecode.OpRestParam, bytecode.OpGetArguments:
+		// The rest parameter's array, or the arguments object.
+		return effect{delta: 1}, nil
 	case bytecode.OpCheckGlobalVar, bytecode.OpCheckGlobalLex, bytecode.OpDefineGlobalVar, bytecode.OpDeclareGlobalLex, bytecode.OpDeclareModuleLex:
 		// A top-level declaration's: its check, or its binding made.
 		if !fn.TopLevel {
@@ -2166,8 +2238,16 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this, charCode bool
 		// The inliner makes it a call (LowerSSAForward).
 		return ir.Instruction{Op: ir.Host}
 	case bytecode.OpArgumentsIndex:
-		// The inliner reads the call's argument where it can (LowerSSAForward).
-		return ir.Instruction{Op: ir.ArgumentRead, Left: top, Dest: sp - 1}
+		// The inliner reads the call's argument where it can (LowerSSAForward);
+		// a function's own code, from its frame's, by Go (ssa.GoArgument),
+		// while the object, kept in the local Third, is not made.
+		return ir.Instruction{Op: ir.ArgumentRead, Left: top, Third: ir.Slot(int(in.A)), Dest: sp - 1}
+	case bytecode.OpArgumentsLength:
+		// Their count, so (When).
+		return ir.Instruction{Op: ir.ArgumentRead, When: true, Left: ir.Literal(ir.Float(0)), Third: ir.Slot(int(in.A)), Dest: sp}
+	case bytecode.OpLazyArguments, bytecode.OpRestParam, bytecode.OpGetArguments:
+		// Go's, from the frame's arguments (argumentsOwn).
+		return ir.Instruction{Op: ir.Host}
 	case bytecode.OpPushConst:
 		if fn.Constants[in.A].Kind != bytecode.ConstNumber {
 			// A string or a BigInt, which Go pushes.

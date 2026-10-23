@@ -3108,7 +3108,8 @@ func goOpWord(site *ssa.CallSite) uint64 {
 	if (site.Go == ssa.GoClosure || site.Go == ssa.GoCells || site.Go == ssa.GoClose) && site.Pool != 0 {
 		op |= abi.GoClosurePool << abi.GoOpKindShift
 	}
-	if site.Go == ssa.GoConcat {
+	if site.Go == ssa.GoConcat || site.Go == ssa.GoArgument {
+		// Its operands' count; an argument's read or the arguments' count.
 		op |= uint64(site.Argc) << abi.GoOpArgcShift
 	}
 	if site.Go == ssa.GoLeaf {

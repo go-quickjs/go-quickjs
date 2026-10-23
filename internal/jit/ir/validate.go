@@ -91,6 +91,7 @@ func (p *Program) Validate() error {
 			left, right, write = true, true, true
 		case ArgumentRead:
 			left, write = true, true
+			third = in.Third.Slot >= 0
 		case ObjectLiteral, StringConst, BigIntConst, Closure:
 			write = true
 		case IterClose, Coercible:

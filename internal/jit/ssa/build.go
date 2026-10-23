@@ -1572,7 +1572,16 @@ const (
 	GoKeyedWrite
 	GoBigString
 	GoLeaf
+	GoArgument
 )
+
+// GoArgument is arguments[k] in a function's own code (ir.ArgumentRead
+// at the root), of two operands, the key and the local the arguments
+// object is kept in once made: Go reads the frame's argument k, where the
+// object is not made and k is an index of the arguments; with Argc 1, its
+// one operand that local, arguments.length, their count. Go refuses the
+// rest, and the code leaves for Go to make it there (jitHost): the object
+// made, an index past the arguments, any other key.
 
 // IndexOfFrom is GoIndexOf's Argc's low bit, where the call gives a
 // position, its second argument; the bits above it are the VM's kind of
@@ -2135,8 +2144,13 @@ func (b *builder) hostOf(pc int) bool {
 		return b.generic(pc)
 	case ir.ArgumentRead:
 		// The call's arguments, an inlined callee's (InlineSite's
-		// ReadsArguments), but where a read of them failed before.
-		return b.cur == b.root || !b.cur.site.ReadsArguments || b.generic(pc)
+		// ReadsArguments), but where a read of them failed before; the
+		// function's own, a call of Go (GoArgument), where the VM answers
+		// it.
+		if b.cur == b.root {
+			return !b.goCalls() || b.f.Keeps >= b.f.keepLimit()
+		}
+		return !b.cur.site.ReadsArguments || b.generic(pc)
 	case ir.IterStep:
 		// A call of Go (GoCall, Step), where the VM answers it.
 		return !b.goCalls()
@@ -3873,7 +3887,7 @@ func (b *builder) plan() error {
 	resumes := func(pc int) bool {
 		switch op := p.Code[pc].Op; {
 		case b.host(pc), b.keyedRead(pc), op == ir.ObjectLiteral, op == ir.ArrayLiteral, op == ir.StringAdd, op == ir.StringConcat, op == ir.StringPart, op == ir.ArrayWrite, op == ir.IterStep,
-			op == ir.IterClose, op == ir.HasProperty, op == ir.DeleteProperty,
+			op == ir.IterClose, op == ir.HasProperty, op == ir.DeleteProperty, op == ir.ArgumentRead && b.cur == b.root,
 			op == ir.Closure, op == ir.CloseUpvalues:
 			return true
 		}
@@ -5588,6 +5602,24 @@ func (b *builder) instruction(blk *Block, pc int) {
 			blk.State.addUse()
 			break
 		}
+		if b.cur == b.root {
+			// The function's own arguments, which Go reads from the frame
+			// it entered the code with (GoArgument): arguments[k], or with
+			// When arguments.length.
+			args := []*Value{operand(in.Left), operand(in.Third)}
+			argc := 2
+			if in.When {
+				args, argc = args[1:], 1
+			}
+			call := guard(OpCall, Tagged, ir.HostExit, args...)
+			b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoArgument, Argc: argc, ThisSlot: -1}}, b.f.Keeps
+			b.f.Keeps++
+			cell := f.newValue(blk, OpCallCell, Source, call)
+			r := f.newValue(blk, OpKept, Tagged, cell, call)
+			r.Shadow = cell
+			b.assign(in.Dest, blk, r)
+			break
+		}
 		// arguments[k] of an inlined call (InlineSite's ReadsArguments), a
 		// constant k below the arguments' count, is its argument k, as V8
 		// eliminates the arguments object; any other key deoptimizes, and
@@ -5789,7 +5821,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			// one of a function the call is seen to call a jump to that
 			// function's code, its frame in place of this one (OpTailSelf);
 			// Go makes any other.
-			if p := b.root.p; b.cur == b.root && p.Captured == nil && !p.ArrowThis && !p.ClassConstructor {
+			if p := b.root.p; b.cur == b.root && p.Captured == nil && !p.ArrowThis && !p.ClassConstructor && !p.FrameArgs {
 				sp := p.Locals + p.Maps[pc].Depth
 				args := make([]*Value, in.Extra+1, in.Extra+2)
 				for i := range args {

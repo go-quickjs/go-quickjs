@@ -2062,8 +2062,12 @@ func (r *Runtime) jitBuildSSA(fn *bytecode.Function, p *ir.Program, fb *jitFeedb
 	// there, which only a frame of the VM's has then -- where they have, a
 	// frame Go makes of a native callee's is given them (jitPrologueArgs) --
 	// nor code that pushes its own function object (push_callee), which a
-	// native callee's context does not hold: Go makes its calls.
-	f.CallEntry = !fn.TopLevel && !fn.IsModule && !fn.Async && !fn.Generator && !isGeneratorTemplate(fn) && !p.PrologueFrameOnly && !jitPushesCallee(fn)
+	// native callee's context does not hold, nor code that reads its
+	// arguments past its parameters -- a rest parameter's, the arguments
+	// object's -- which Go makes from the frame's (compile's argumentsOwn):
+	// a native call writes the parameters alone. Go makes their calls.
+	f.CallEntry = !fn.TopLevel && !fn.IsModule && !fn.Async && !fn.Generator && !isGeneratorTemplate(fn) && !p.PrologueFrameOnly &&
+		!jitPushesCallee(fn) && !fn.HasRest && !fn.UsesArguments && !fn.MappedArguments
 	if jitGenCallable(fn) && !p.Cells {
 		// A generator a loop's step may resume natively: where it resumes
 		// it (mir's genEntry).
@@ -3669,6 +3673,12 @@ func jitHostCall(ctx *abi.Context) bool {
 		return ok
 	case ssa.GoIndex:
 		v, ok := r.jitKeyedRead(jitGoArg(ctx, 0), jitGoArg(ctx, 1))
+		if ok {
+			*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
+		}
+		return ok
+	case ssa.GoArgument:
+		v, ok := r.jitArgument(ctx)
 		if ok {
 			*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
 		}
@@ -11719,6 +11729,38 @@ func (r *Runtime) jitCallResult(f *frame, pc, depth int, v Value, err error) (in
 	}
 	r.stack[sp] = v
 	return sp + 1, true
+}
+
+// jitArgument is ssa.GoArgument's answer, for the code ctx runs, a run of
+// a function's own code Go entered with its frame, which has the call's
+// arguments: arguments[k] -- the first operand k, the second the local
+// the arguments object is kept in once made -- or, of one operand, that
+// local, arguments.length; and whether it answers. While the object is
+// not made, an index of the arguments is the argument, as the
+// interpreter's argumentsIndex reads it -- a mapped object's too, which
+// aliases parameters the function never assigns (compile's
+// argumentsOwn) -- and their count is how many there are. The rest it
+// leaves to the code's exit, where Go makes it.
+func (r *Runtime) jitArgument(ctx *abi.Context) (Value, bool) {
+	s, idx := r.jit, int(ctx.Level)
+	if ctx.Live != 0 || idx >= len(s.goRuns) || idx >= len(s.ssaCtxs) || s.ssaCtxs[idx] != ctx || s.goRuns[idx].f == nil {
+		return Undefined, false
+	}
+	f := s.goRuns[idx].f
+	if ctx.GoOp>>abi.GoOpArgcShift&0xff == 1 {
+		if jitGoArg(ctx, 0).IsObject() {
+			return Undefined, false
+		}
+		return Int(len(f.args)), true
+	}
+	k := jitGoArg(ctx, 0)
+	if jitGoArg(ctx, 1).IsObject() || !k.IsNumber() {
+		return Undefined, false
+	}
+	if i := uint32(k.num); float64(i) == k.num && uint(i) < uint(len(f.args)) {
+		return f.args[i], true
+	}
+	return Undefined, false
 }
 
 // jitPrologueArgs is the arguments of the call that made a frame of p's

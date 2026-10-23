@@ -1479,12 +1479,16 @@ The rounds that followed, each measured as above. The commit says more.
     and left to it. Open: a spread call of a script function is Go's call
     with the frame, where a native call of the array's elements would
     serve; a callee's `push_callee` (11).
-  - Rest parameters (148), `get_super_prop` (117) and, in a function of
-    its own, the arguments object (104): an inlined callee's `arguments[k]` is native, a function that
-    reads `arguments` is refused, EarleyBoyer's `sc_list` and `sc_append`
-    among them. A context's pointer to the frame's arguments, which Go
-    sets at each entry, would serve rest parameters and `arguments`
-    alike.
+  - Rest parameters and, in a function's own code, the arguments object
+    (2026-10-23): the array and the object are Go's at host exits, from
+    the frame Go entered the code with, `arguments[k]` and
+    `arguments.length` Go's reads from native code (`ssa.GoArgument`) --
+    a call of Go each, where V8 reads its frame; such code has no call
+    entry, a native call writing the parameters alone. Left: a mapped
+    object aliasing a parameter the function assigns or an object it
+    lets out (npm 31, Octane 149, most of them forwarding constructors
+    the inliner takes), and native callers' calls of these functions.
+    `get_super_prop` (117) stays refused.
   - A parameter list's prologue is native for native callers, inlining
     and generic calls too (2026-10-23): its states keep the call's
     arguments past their operands, which a frame Go makes there is given

@@ -251,7 +251,10 @@ const (
 	// (LowerSSAForward): an inlined call has the new pipeline read the
 	// call's own argument for a constant index below their count that names
 	// no aliased parameter, as V8 eliminates the arguments object, and
-	// leaves any other to Go, which makes the object.
+	// leaves any other to Go, which makes the object. In a function's own
+	// code it is Go's read of the frame's arguments (ssa's GoArgument),
+	// while the local Third, which keeps the object once made, holds none;
+	// with When, arguments_length, their count.
 	ArgumentRead
 	// BigIntConst is push_const of a BigInt, constant Key, at Dest: read
 	// natively from a cell the VM keeps it in (ssa.BigIntConstFeedback),
@@ -516,6 +519,12 @@ type Program struct {
 	// one Go enters -- no native caller's.
 	PrologueArgs, PrologueStart, PrologueEnd int
 	PrologueFrameOnly                        bool
+	// FrameArgs marks code that reads its call's arguments from the frame
+	// of the VM's -- a rest parameter's, the arguments object's, a
+	// prologue's -- which a call in tail position that jumps to the code's
+	// start (ssa's OpTailSelf) would leave as the first call's: Go makes
+	// those calls.
+	FrameArgs bool
 }
 
 // PrologueAt reports whether a frame at pc, its operands depth deep, has

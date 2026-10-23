@@ -3032,7 +3032,9 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 			bytecode.OpAddPrivateMethod, bytecode.OpAddPrivateGetter, bytecode.OpAddPrivateSetter,
 			bytecode.OpPrivateName, bytecode.OpNewPrivateMethods, bytecode.OpInstallPrivateMethods,
 			bytecode.OpCopyDataProps, bytecode.OpArraySpread, bytecode.OpSpreadIter, bytecode.OpArrayPush, bytecode.OpSetProtoOf,
-			bytecode.OpObjectRest, bytecode.OpCallSpread, bytecode.OpNewSpread, bytecode.OpTemplateObject, bytecode.OpPushCallee:
+			bytecode.OpObjectRest, bytecode.OpCallSpread, bytecode.OpNewSpread, bytecode.OpTemplateObject, bytecode.OpPushCallee,
+			bytecode.OpRestParam, bytecode.OpGetArguments, bytecode.OpLazyArguments, bytecode.OpArgumentsIndex, bytecode.OpArgumentsLength,
+			bytecode.OpApplyArguments:
 		case bytecode.OpDispose:
 		default:
 			return sp, steps, nil
@@ -3304,6 +3306,13 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 			if !push {
 				continue
 			}
+		case bytecode.OpRestParam, bytecode.OpGetArguments, bytecode.OpLazyArguments, bytecode.OpArgumentsIndex, bytecode.OpArgumentsLength,
+			bytecode.OpApplyArguments:
+			// From the frame's arguments, which a function's own code has
+			// Go make (compile's argumentsOwn), as executeAt's cases do.
+			if sp, v, err = r.jitArguments(f, in, sp); err != nil {
+				return sp, steps, err
+			}
 		default:
 			panic("invalid JIT host operation")
 		}
@@ -3314,6 +3323,39 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 		sp++
 	}
 	return sp, steps, nil
+}
+
+// jitArguments is an instruction that reads f's arguments past its
+// parameters' slots, in -- a rest parameter's array, the arguments object,
+// an index of the arguments, their count, f.apply(this, arguments) -- as
+// executeAt's cases make it, its operands on the VM's stack up to sp: the
+// operands' top after it, beneath what it pushes, v.
+func (r *Runtime) jitArguments(f *frame, in bytecode.Instr, sp int) (int, Value, error) {
+	stack := r.stack
+	switch in.Op {
+	case bytecode.OpRestParam:
+		var rest []Value
+		if start := int(in.A); start < len(f.args) {
+			rest = f.args[start:]
+		}
+		return sp, Obj(r.newArrayFrom(rest)), nil
+	case bytecode.OpGetArguments:
+		return sp, Obj(r.newArgumentsObject(f)), nil
+	case bytecode.OpLazyArguments:
+		if !f.locals[in.A].IsObject() {
+			f.locals[in.A] = Obj(r.newArgumentsObject(f))
+		}
+		return sp, f.locals[in.A], nil
+	case bytecode.OpArgumentsIndex:
+		v, err := r.argumentsIndex(f, in.A, stack[sp-1])
+		return sp - 1, v, err
+	case bytecode.OpArgumentsLength:
+		v, err := r.argumentsLength(f, in.A)
+		return sp, v, err
+	}
+	target, apply, this := stack[sp-3], stack[sp-2], stack[sp-1]
+	v, err := r.applyArguments(f, in.A, target, apply, this)
+	return sp - 3, v, err
 }
 
 // jitDefinition is an instruction that makes a class or an object

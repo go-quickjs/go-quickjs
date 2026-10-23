@@ -329,7 +329,17 @@ going on binding the parameters from them; a frame Go runs from its start
 (`jitEnterArgs`). Such code has a call entry, is inlined, and is called
 through links by generic calls. A prologue whose states have no room for
 the arguments within the frame's operand slots is Go's to enter only
-(`PrologueFrameOnly`).
+(`PrologueFrameOnly`). A rest parameter's array, and the arguments
+object's operations -- an unmapped object's, or a mapped one's where the
+function never assigns a parameter nor lets the object out
+(`compile`'s `argumentsOwn`) -- are Go's at host exits, from the frame of
+the VM's the code was entered with, but `arguments[k]` and
+`arguments.length`, which Go reads from native code while the object is
+not made (`ssa.GoArgument`): such code has no call entry, as a
+native call writes the parameters alone, and a call in tail position of
+the function itself is Go's (`ir.Program`'s `FrameArgs`), never a jump to
+the code's start, which would leave that frame the first call's
+arguments.
 
 **Accessors.** A read whose site found a getter on its receivers'
 prototypes, or a write a setter -- a class's accessor, or one
