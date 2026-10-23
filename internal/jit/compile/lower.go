@@ -648,18 +648,6 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		}
 		liveLocals(fn, p, effects)
 		typeTests(fn, p, effects)
-		if p.Live != nil && chains != nil {
-			// A throw resumes the interpreter at a handler, which native
-			// code never runs, so what the handler reads is not known:
-			// every local is live where one is in force.
-			for pc, h := range chains {
-				if h != 0 {
-					for w := range p.LiveWords {
-						p.Live[pc*p.LiveWords+w] = ^uint64(0)
-					}
-				}
-			}
-		}
 	}
 	if m.ssa {
 		for pc, in := range p.Code {
@@ -1354,9 +1342,14 @@ func typeTests(fn *bytecode.Function, p *ir.Program, effects []effect) {
 // both. Only the instructions describe takes reach here; of those, the
 // ones below name locals, in A and B, and no other reads or writes one by
 // index -- a host operation runs the instruction itself, so a local it
-// names is read as the instruction reads it. describe takes no exception
-// handler: one that it comes to take must be a successor here of every
-// instruction it guards, or a catch would find its locals unwritten.
+// names is read as the instruction reads it. A throw goes to the handler
+// in force (Program's HandlerAt), the innermost, a successor of every
+// instruction it guards, before what the instruction writes: what the
+// handler may read is live at each of them, whatever the instruction
+// writes, as V8's liveness takes a try's handler as every instruction's
+// exceptional successor. (Every local had been live where a handler was in
+// force, a frame state naming a local dead past an iteration's try as its
+// value in the iteration before: an object made in it left made.)
 func liveLocals(fn *bytecode.Function, p *ir.Program, effects []effect) {
 	n := fn.LocalCount
 	if n == 0 {
@@ -1418,6 +1411,11 @@ func liveLocals(fn *bytecode.Function, p *ir.Program, effects []effect) {
 				// start must have them, read or not.
 				for i := uint32(0); i < ins.A && int(i) < n; i++ {
 					read(in, i)
+				}
+			}
+			if p.HandlerAt != nil && p.HandlerAt[pc] != 0 {
+				for w, x := range at(int(p.Handlers[p.HandlerAt[pc]-1].PC)) {
+					in[w] |= x
 				}
 			}
 			if s := at(pc); !slices.Equal(s, in) {

@@ -114,7 +114,7 @@ func escapeRounds() []string {
 
 // escapeUnmade are escapeSetup's functions whose code makes none of the
 // objects their loops make, in the warm rounds.
-var escapeUnmade = []string{"dots", "literal", "nested", "branches", "readsOther", "twice", "holds", "constructs", "stack", "construct", "added", "protos"}
+var escapeUnmade = []string{"dots", "literal", "nested", "branches", "readsOther", "throwsIn", "twice", "holds", "constructs", "stack", "construct", "added", "protos"}
 
 // Objects nothing but their code sees are not made natively, and where
 // native code leaves while one is live, Go makes it, once for every slot
