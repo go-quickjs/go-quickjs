@@ -3284,7 +3284,18 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	c.a.Load(a64C, a64Ctx, abi.OffBounds)
 	c.a.Load(a64C, a64C, abi.OffBoundsLevelLimit)
 	c.a.Cmp(a64B, a64C, true)
-	guard(arm64.HS)
+	if generic {
+		// As amd64's: none past the deepest context, the call Go's.
+		deep, op := c.a.NewLabel(), goCallWord(site)
+		c.a.BCond(arm64.HS, deep)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(deep)
+			c.goCallOp(v, op, true)
+			c.a.B(join)
+		})
+	} else {
+		guard(arm64.HS)
+	}
 	if callee == nil {
 		c.movImm(a64C, uint64(site.Callee))
 	} else {

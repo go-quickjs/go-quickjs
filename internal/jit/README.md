@@ -133,8 +133,10 @@ generator's or an async function's. A callee
 reached so, or by any native call, that has no code yet has its frame made
 and leaves for Go to run it (`abi.ExitEnter`), which compiles it for
 native callers. A call none of that covers -- a call of a built-in, of a
-function the code does not call natively, a generic call's miss -- is a
-call of Go (`ssa.GoCall`): native code calls into Go and goes on after it,
+function the code does not call natively, a generic call's miss, a call
+past the deepest context the runtime has (its contexts grow, as many
+again each time, at such a call, up to `jitContextsMax`) -- is a call of
+Go (`ssa.GoCall`): native code calls into Go and goes on after it,
 without leaving. As V8's deoptimization
 data describes a call's frame, a call's state and a call of Go's operands
 are static descriptions (`abi.CallState`, `abi.GoCallState`) of where the

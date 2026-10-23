@@ -1276,7 +1276,22 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	c.a.OpImm(amd64.Add, scratchB, 1, true)
 	c.a.Load(scratchC, regCtx, abi.OffBounds)
 	c.a.CmpMem(scratchB, scratchC, abi.OffBoundsLevelLimit, true)
-	guard(amd64.CondAE)
+	if generic {
+		// None past the deepest the runtime has: the call is Go's, from
+		// native code, which runs the callee in the existing tiers, the
+		// code going on after it, as where its callee has no code -- a
+		// recursion deeper than the contexts had left native code at its
+		// deepest call, Go finishing the level in the interpreter.
+		deep, op := c.a.NewLabel(), goCallWord(site)
+		c.a.Jcc(amd64.CondAE, deep)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(deep)
+			c.goCallOp(v, op, guard, true)
+			c.a.Jmp(join)
+		})
+	} else {
+		guard(amd64.CondAE)
+	}
 	// The callee is one of the functions, which has native code. A call
 	// through Function.prototype.call is made of its one function, its
 	// operands written where the callee has them (directOperand).

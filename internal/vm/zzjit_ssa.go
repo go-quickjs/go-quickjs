@@ -4664,6 +4664,16 @@ func (r *Runtime) jitGoCallNested(ctx *abi.Context, idx int) bool {
 			return false
 		}
 	}
+	if !op && !host && idx == len(ctxs)-1 && s.bounds.LevelLimit == uint64(len(ctxs)) {
+		switch in.Op {
+		case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew, bytecode.OpSuperCall:
+			// A call native code made by Go for want of a context past this
+			// one (mir's native calls): more of them, for the calls after it
+			// to be native, as an exit for want of one had them made
+			// (jitUnwindNative).
+			r.jitGrowContexts()
+		}
+	}
 	// Where each level is: at the native call it makes, as its code
 	// described it (abi.Context's CallState); this one at this call of Go,
 	// which its code wrote -- a description its context holds is an
