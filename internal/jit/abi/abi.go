@@ -469,6 +469,16 @@ type Context struct {
 	// At the end, as GoLast.
 	GenObject, GenCursor uint64
 	GenEntry             uintptr
+	// A native call of a function whose code reads its call's arguments
+	// past its parameters -- a rest parameter's, the arguments object's,
+	// a super() of them (ir.Program's FrameArgs) -- writes their count to
+	// its callee's context's Argc and their words to Args, as V8's call
+	// pushes all of a call's arguments and their count: Go gives the frames
+	// it makes for the callee's level (the VM's f.args) a copy of them. The
+	// caller's records and frame keep them alive meanwhile, as they keep
+	// every operand of the call. At the end, as GoLast.
+	Argc uint64
+	Args [MaxGoArgs]GoArg
 }
 
 // GoArg is an operand of a call of Go: a slot's two words, its pointer word
@@ -875,6 +885,9 @@ var (
 	OffGenObject = int32(unsafe.Offsetof(Context{}.GenObject))
 	OffGenCursor = int32(unsafe.Offsetof(Context{}.GenCursor))
 	OffGenEntry  = int32(unsafe.Offsetof(Context{}.GenEntry))
+
+	OffArgc = int32(unsafe.Offsetof(Context{}.Argc))
+	OffArgs = int32(unsafe.Offsetof(Context{}.Args))
 
 	// OffGoCallBigOff is GoCallState's BigOff.
 	OffGoCallBigOff = int32(unsafe.Offsetof(GoCallState{}.BigOff))

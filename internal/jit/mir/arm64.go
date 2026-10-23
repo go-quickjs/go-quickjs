@@ -3420,7 +3420,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	}
 	// As amd64's: a call of one function writes its operands where the
 	// callee has them, unrecorded.
-	direct, ops := len(sites) == 1 && !gen && !site.ArrowThis && (site.ThisSlot < 0 || site.Method || site.Pool != 0 || site.Super || site.PlainThis), calleeSlot
+	direct, ops := len(sites) == 1 && !gen && !site.ArrowThis && !site.FrameArgs && (site.ThisSlot < 0 || site.Method || site.Pool != 0 || site.Super || site.PlainThis), calleeSlot
 	if site.Method {
 		ops--
 	}
@@ -3530,8 +3530,21 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 			c.a.Store(locals, at+c.enc.NumOffset, top)
 			c.a.Store(locals, at+c.enc.RefOffset, arm64.ZR)
 		}
-		if t.Tail || t.Pool != 0 || t.Super || t.ArrowThis || t.PlainThis || (t.ThisSlot >= 0 || site.Method && site.Via == 0) && !direct || !receiver {
+		if t.Tail || t.Pool != 0 || t.Super || t.ArrowThis || t.PlainThis || t.FrameArgs || (t.ThisSlot >= 0 || site.Method && site.Via == 0) && !direct || !receiver {
 			c.a.Load(calleeCtx, a64Ctx, abi.OffNext)
+		}
+		if t.FrameArgs {
+			// As amd64's: all its arguments and their count.
+			c.movImm(top, uint64(argc))
+			c.a.Store(calleeCtx, abi.OffArgc, top)
+			for i := range argc {
+				at := abi.OffArgs + int32(i)*int32(unsafe.Sizeof(abi.GoArg{}))
+				nb, nd, rb, rd := words(first + i)
+				c.a.Load(top, nb, nd)
+				c.a.Store(calleeCtx, at+int32(unsafe.Offsetof(abi.GoArg{}.Num)), top)
+				c.a.Load(top, rb, rd)
+				c.a.Store(calleeCtx, at+int32(unsafe.Offsetof(abi.GoArg{}.Ref)), top)
+			}
 		}
 		if t.Tail {
 			c.movImm(top, b2u(t.TailFrame))
@@ -5559,7 +5572,7 @@ func (c *a64Compiler) tailSelf(v *ssa.Value, guard func(arm64.Cond)) {
 	c.a.Bind(other)
 	var sites []*ssa.CallSite
 	for _, t := range v.Calls() {
-		if t.Go == 0 && !t.Literal && !t.Push && !t.Pop && !t.Alloc && !t.Receiver && t.Via == 0 && t.Pool == 0 && !t.Coerce && t.Entry != 0 {
+		if t.Go == 0 && !t.Literal && !t.Push && !t.Pop && !t.Alloc && !t.Receiver && t.Via == 0 && t.Pool == 0 && !t.Coerce && t.Entry != 0 && !t.FrameArgs {
 			sites = append(sites, t)
 		}
 	}

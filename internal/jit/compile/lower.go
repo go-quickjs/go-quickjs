@@ -263,17 +263,19 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		return nil, refuse(-1, "special function kind")
 	case fn.HasDirectEval || len(fn.EvalScopes) != 0:
 		return nil, refuse(-1, "direct eval")
-	case (fn.UsesArguments || fn.MappedArguments) && !m.forward && (!m.ssa || m.callee || !argumentsOwn(fn)):
+	case (fn.UsesArguments || fn.MappedArguments) && !m.forward && (!m.ssa || !argumentsOwn(fn) || m.callee && fn.MappedArguments):
 		// A function's own code reads its arguments, and makes its
 		// arguments object, by Go, from the frame of the VM's it was
-		// entered with, which has them (ir.Host); a native callee's or an
-		// inlined one's has none, but a forwarding constructor's
-		// (LowerSSAForward).
+		// entered with, which has them (ir.Host); a native callee's from
+		// those its call wrote to its context (the VM's jitFrameArgs),
+		// but a mapped object's, which names the function, whose object a
+		// native callee's frame has none of; an inlined one's from the
+		// call's, a forwarding constructor's (LowerSSAForward), or none.
 		return nil, refuse(-1, "arguments object")
-	case fn.HasRest && (!m.ssa || m.callee):
+	case fn.HasRest && !m.ssa:
 		// A rest parameter is Go's array of the arguments past the
-		// parameters, which only a frame of the VM's has: a native call
-		// writes the parameters alone.
+		// parameters, of a frame of the VM's, or of those a native call
+		// wrote to its callee's context (the VM's jitFrameArgs).
 		return nil, refuse(-1, "non-simple parameters")
 	case (!fn.HasSimpleParams && !fn.TopLevel || fn.ParamsAreLexical) && (!m.ssa || m.forward):
 		// Top-level code has no parameter list, simple or not. A list with
@@ -313,13 +315,6 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		if err != nil {
 			return nil, err
 		}
-		if in.Op == bytecode.OpSuperCall && in.B == bytecode.SuperForward && m.callee {
-			// super(...arguments) hands on the call's arguments, which a
-			// frame native code constructs has none of (the VM's f.args):
-			// the constructor a class without one has, which a
-			// construction skips (the VM's jitDerivedBase).
-			return nil, refuse(pc, "super of the call's arguments, for native callers")
-		}
 		effects[pc] = e
 		if in.Op == bytecode.OpNew && !m.ssa || (in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict ||
 			in.Op == bytecode.OpCheckGlobalRef || in.Op == bytecode.OpAssertResolved ||
@@ -357,9 +352,10 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			// inlined callee's (ssa's InlineCalls).
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
-		if (in.Op == bytecode.OpApplyArguments || in.Op == bytecode.OpArgumentsIndex) && !m.forward && (!m.ssa || m.callee) {
-			// Go's in a function's own code (argumentsOwn), the inliner's
-			// in a forwarding constructor's.
+		if (in.Op == bytecode.OpApplyArguments && (!m.ssa || m.callee) || in.Op == bytecode.OpArgumentsIndex && !m.ssa) && !m.forward {
+			// Go's in a function's own code (argumentsOwn), and an index of
+			// the arguments in a native callee's, of those its call wrote
+			// to its context; the inliner's in a forwarding constructor's.
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
 		if (isPrivate(in.Op) || isDefinition(in.Op)) && !m.ssa {
@@ -754,6 +750,10 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		markBools(p)
 		p.UpvalueBase, p.Upvalues, p.Params = fn.LocalCount, len(fn.Upvalues), fn.ParamCount
 		p.FrameArgs = fn.HasRest || fn.UsesArguments || fn.MappedArguments || fn.ParamsAreLexical
+		for _, in := range fn.Code {
+			// super(...) of the call's arguments, which it hands on.
+			p.FrameArgs = p.FrameArgs || in.Op == bytecode.OpSuperCall && in.B == bytecode.SuperForward
+		}
 		for _, in := range fn.Code {
 			p.FrameCallee = p.FrameCallee || superRef(in.Op)
 		}

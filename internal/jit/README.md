@@ -345,20 +345,29 @@ the arguments within the frame's operand slots is Go's to enter only
 (`PrologueFrameOnly`). A rest parameter's array, and the arguments
 object's operations -- an unmapped object's, or a mapped one's where the
 function never assigns a parameter nor lets the object out
-(`compile`'s `argumentsOwn`) -- are Go's at host exits, from the frame of
-the VM's the code was entered with, but `arguments[k]` and
-`arguments.length`, which Go reads from native code while the object is
-not made (`ssa.GoArgument`): such code has no call entry, as a
-native call writes the parameters alone, and a call in tail position of
-the function itself is Go's (`ir.Program`'s `FrameArgs`), never a jump to
-the code's start, which would leave that frame the first call's
-arguments.
+(`compile`'s `argumentsOwn`) -- are Go's, from the frame of the VM's the
+code was entered with, but `arguments[k]` and `arguments.length`, which
+Go reads from native code while the object is not made
+(`ssa.GoArgument`). A native call of such code, or of a constructor's
+`super(...)` of its call's arguments, writes all of its arguments and
+their count to its callee's context (`ssa.CallSite`'s `FrameArgs`,
+`abi.Context`'s `Args`), as V8's call pushes them all: Go makes the array
+and an unmapped object of them without a frame (the VM's `jitGoHostPlain`),
+reads `arguments[k]` there, and gives every frame it makes of the callee's
+level a copy (`jitCallArgs`); the caller's records keep them alive
+meanwhile. A mapped object names its function, which a native callee's
+frame has none of: such code has no call entry. A call in tail position
+that gives its frame up does not take a callee whose arguments its context
+would hold alone -- Go makes it -- and one of the function itself is Go's
+(`ir.Program`'s `FrameArgs`), never a jump to the code's start, which would
+leave that frame the first call's arguments. Inlining takes none of these
+but forwarding constructors (`LowerSSAForward`).
 
 **The frame's own.** What reads only its operands and the frame Go
 entered a function's own code with -- a super reference's read or write
 (through the function object's home object, with the frame's this), a
-rest parameter's array, the arguments object -- Go makes from native code
-on that frame (`ir.Instruction`'s `Frame`, `ssa.GoHost`, the VM's
+rest parameter's array, the arguments object (see Parameter lists for a
+native callee's) -- Go makes from native code on that frame (`ir.Instruction`'s `Frame`, `ssa.GoHost`, the VM's
 `jitGoHost`), as V8's code calls the runtime, native code going on after
 it. Code with super references has no call entry (`ir.Program`'s
 `FrameCallee`): a native callee's frame has no function object. A class's

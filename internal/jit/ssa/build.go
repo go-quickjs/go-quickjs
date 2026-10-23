@@ -1122,6 +1122,12 @@ type CallSite struct {
 	// parameters undefined as it starts (Func's StartOnly): the call leaves
 	// them to it.
 	StartOnly bool
+	// FrameArgs says the callee's code reads its call's arguments past its
+	// parameters (ir.Program's FrameArgs): the call writes all Argc of
+	// them, and their count, to its callee's context (abi.Context's Args
+	// and Argc), as V8's call pushes them all, where Go finds them for the
+	// frames it makes of the callee's level.
+	FrameArgs bool
 	// Parent, for a construction with a class whose constructor is the
 	// one a class without one has, is the class it extends, whose
 	// function Closure is: the call checks the callee's prototype is still

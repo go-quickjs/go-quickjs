@@ -2112,12 +2112,13 @@ func (r *Runtime) jitBuildSSA(fn *bytecode.Function, p *ir.Program, fb *jitFeedb
 	// there, which only a frame of the VM's has then -- where they have, a
 	// frame Go makes of a native callee's is given them (jitPrologueArgs) --
 	// nor code that pushes its own function object (push_callee), which a
-	// native callee's context does not hold, nor code that reads its
-	// arguments past its parameters -- a rest parameter's, the arguments
-	// object's -- which Go makes from the frame's (compile's argumentsOwn):
-	// a native call writes the parameters alone. Go makes their calls.
+	// native callee's context does not hold, nor a mapped arguments
+	// object's, which names it. Go makes their calls. Code that reads its
+	// arguments past its parameters -- a rest parameter's, an unmapped
+	// arguments object's, a super() of them -- has one: a native call of
+	// it writes them all to its context (ssa.CallSite's FrameArgs).
 	f.CallEntry = !fn.TopLevel && !fn.IsModule && !fn.Async && !fn.Generator && !isGeneratorTemplate(fn) && !p.PrologueFrameOnly &&
-		!jitPushesCallee(fn) && !fn.HasRest && !fn.UsesArguments && !fn.MappedArguments && !p.FrameCallee
+		!jitPushesCallee(fn) && !p.FrameCallee && !fn.MappedArguments
 	if jitGenCallable(fn) && !p.Cells {
 		// A generator a loop's step may resume natively: where it resumes
 		// it (mir's genEntry).
@@ -2924,8 +2925,10 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 			return []ssa.CallSite{{Go: ssa.GoCall, InstanceOf: true, Argc: 1, ThisSlot: -1}}
 		case bytecode.OpSuperCall:
 			// A derived constructor's super(...) of its arguments on the
-			// stack: Go's, on the code's own frame (jitGoCall).
-			if call.B == bytecode.SuperArgs && int(call.A)+1 <= abi.MaxGoArgs {
+			// stack, or of its call's (bytecode.SuperForward), which the
+			// frame Go makes has: Go's, on the code's own frame (jitGoCall),
+			// or its level's (jitGoCallNested).
+			if call.B == bytecode.SuperArgs && int(call.A)+1 <= abi.MaxGoArgs || call.B == bytecode.SuperForward {
 				return []ssa.CallSite{{Go: ssa.GoCall, Super: true, Argc: int(call.A), ThisSlot: -1}}
 			}
 			return nil
@@ -3000,6 +3003,11 @@ func (fb *jitFeedback) closureCallSite(pc int, in jitInline, call bytecode.Instr
 		Entry: uintptr(unsafe.Pointer(&link.entry)), Count: uintptr(unsafe.Pointer(&link.in)),
 		Argc: int(call.A), Method: call.Op == bytecode.OpCallMethod,
 		Params: fn.ParamCount, LocalCount: fn.LocalCount, MaxStack: fn.MaxStack, ThisSlot: this, Coerce: fn.CoerceThis,
+	}
+	if site.FrameArgs = jitFrameArgs(fn); site.FrameArgs && site.Argc > abi.MaxGoArgs {
+		// More arguments than its context has room for: Go makes its calls.
+		fb.links = fb.links[:len(fb.links)-1]
+		return ssa.CallSite{}, false
 	}
 	site.ArrowThis = arrowThis
 	if this >= 0 && !arrowThis && call.Op == bytecode.OpCall && (fn.Kind == bytecode.KindNormal || fn.Kind == bytecode.KindMethod) {
@@ -4074,7 +4082,12 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 		// code's frame, as executeAt's case makes it: the this it binds.
 		// Its first operand, the frame's this slot, is the binding's.
 		r.jitSuperSeen(f, e, pc)
-		if err = r.jitSuperCall(f, slices.Clone(r.stack[sp-n+1:sp])); err == nil {
+		args := slices.Clone(r.stack[sp-n+1 : sp])
+		if f.cl.fn.Code[pc].B == bytecode.SuperForward {
+			// super(...) of the frame's arguments.
+			args = f.args
+		}
+		if err = r.jitSuperCall(f, args); err == nil {
 			v = f.this
 		}
 	default:
@@ -4874,7 +4887,13 @@ framed:
 				f.thisRef = &thisBinding{value: f.this}
 			}
 			r.jitSuperSeen(f, e, pc)
-			if err = r.jitSuperCall(f, slices.Clone(r.stack[sp-n+1:sp])); err == nil {
+			args := slices.Clone(r.stack[sp-n+1 : sp])
+			if f.cl.fn.Code[pc].B == bytecode.SuperForward {
+				// super(...) of the call's arguments, which the native call
+				// wrote to the level's context (jitFrameArgs).
+				args = jitCallArgs(f.cl.fn, ctx)
+			}
+			if err = r.jitSuperCall(f, args); err == nil {
 				// The level's binding, its context's This, which an exit
 				// does not write (ir.Program's This, a snapshot): the frame
 				// Go makes for it is bound from it (jitDerivedFrame).
@@ -5588,7 +5607,7 @@ const jitInlineDepth = 3
 // of its closures.
 func (r *Runtime) jitInlinesCalls(cl *closure, depth int) bool {
 	fn := cl.fn
-	if jitNoInline != nil && jitNoInline(fn) || fn.TopLevel || fn.IsModule || fn.UsesArguments || fn.HasDirectEval || isGeneratorTemplate(fn) {
+	if jitNoInline != nil && jitNoInline(fn) || fn.TopLevel || fn.IsModule || jitFrameArgs(fn) || fn.HasDirectEval || isGeneratorTemplate(fn) {
 		return false
 	}
 	p, err := r.jitLower(fn, jitLowerInline)
@@ -5755,7 +5774,7 @@ func (r *Runtime) jitSeedCalls(cl *closure, e *jitEntry, p *ir.Program) {
 			continue
 		}
 		cf := callee.fn
-		if cf == fn || cf.TopLevel || cf.IsModule || cf.UsesArguments || cf.HasDirectEval || isGeneratorTemplate(cf) {
+		if cf == fn || cf.TopLevel || cf.IsModule || cf.MappedArguments || cf.HasDirectEval || isGeneratorTemplate(cf) {
 			continue
 		}
 		ce := r.jit.entryFor(cf)
@@ -5934,7 +5953,7 @@ func (r *Runtime) jitSeedNativeCalls(e *jitEntry, fn *bytecode.Function, pc int,
 	for _, t := range targets {
 		cf := t.cl.fn
 		if len(e.nativeCalls) != 0 && slices.ContainsFunc(e.nativeCalls, func(x jitInline) bool { return int(x.pc) == pc && x.obj == t.o }) ||
-			cf == fn || cf.TopLevel || cf.IsModule || cf.UsesArguments || cf.HasDirectEval || isGeneratorTemplate(cf) ||
+			cf == fn || cf.TopLevel || cf.IsModule || cf.MappedArguments || cf.HasDirectEval || isGeneratorTemplate(cf) ||
 			jitCountAt(e.nativeCalls, pc) >= jitCallTargets {
 			continue
 		}
@@ -6293,7 +6312,7 @@ func (r *Runtime) jitSeenTargets(f *frame, e *jitEntry, pc int, o *Object, in by
 			return
 		}
 		cf := t.cl.fn
-		if cf == f.cl.fn || cf.TopLevel || cf.IsModule || cf.UsesArguments || cf.HasDirectEval || isGeneratorTemplate(cf) ||
+		if cf == f.cl.fn || cf.TopLevel || cf.IsModule || cf.MappedArguments || cf.HasDirectEval || isGeneratorTemplate(cf) ||
 			slices.ContainsFunc(e.nativeCalls, func(x jitInline) bool {
 				return int(x.pc) == pc && (x.obj == t.o || x.byCode && x.cl != nil && jitSameCode(x.cl, t.cl))
 			}) {
@@ -7190,16 +7209,19 @@ func (r *Runtime) jitDerivedBase(o *Object) *Object {
 }
 
 // jitConstructsDerived reports whether native code may construct with o, a
-// derived class whose constructor is its own -- not a class without one,
-// whose construction runs the code of the class it extends (jitDerivedBase)
-// -- called natively as a construction (ssa.CallSite's Derived): its
-// instance from a pool made for o, as constructWithTarget makes it before
-// the body runs, its super() Go's, which runs the parent and the class's
-// field initializers.
+// derived class whose constructor is its own -- or a class without one
+// whose construction the code of the class it extends cannot make
+// (jitDerivedBase), one with fields, or of a parent native code does not
+// construct -- called natively as a construction (ssa.CallSite's Derived):
+// its instance from a pool made for o, as constructWithTarget makes it
+// before the body runs, its super() Go's, which runs the parent and the
+// class's field initializers -- a class without a constructor's of the
+// call's arguments, which the call writes to its context (jitFrameArgs).
 func (r *Runtime) jitConstructsDerived(o *Object) bool {
 	fd := o.fn()
 	return fd != nil && fd.closure != nil && fd.native == nil && !fd.bound && fd.ctorKind == ctorDerived && fd.superCtor == o &&
-		fd.closure.realm == r.Realm && o.class == ClassFunction && o.findOwn(atomPrototype) >= 0 && !jitForwardsSuper(fd.closure.fn)
+		fd.closure.realm == r.Realm && o.class == ClassFunction && o.findOwn(atomPrototype) >= 0 &&
+		(!jitForwardsSuper(fd.closure.fn) || r.jitDerivedBase(o) == nil)
 }
 
 // jitForwardsSuper reports whether fn is the constructor a derived class
@@ -8334,9 +8356,13 @@ func (r *Runtime) jitCalledOftenBy(cl *closure, caller *jitEntry) bool {
 // want of code budget, which may change.
 func (r *Runtime) jitNativeCallee(cl *closure) *jitEntry {
 	fn := cl.fn
-	if fn.TopLevel || fn.IsModule || fn.UsesArguments || fn.HasDirectEval || isGeneratorTemplate(fn) {
+	if fn.TopLevel || fn.IsModule || fn.MappedArguments || fn.HasDirectEval || isGeneratorTemplate(fn) {
 		// A call of a generator or an async function makes its object: its
-		// body is not what a call runs.
+		// body is not what a call runs. A mapped arguments object names its
+		// function, which a native callee's frame has none of. A function
+		// that reads its call's arguments past its parameters otherwise
+		// is compiled for native callers, who write them to its context
+		// (jitFrameArgs).
 		return nil
 	}
 	if len(fn.Code) > ssa.MaxInline && r.jitLongWarming(cl) && !r.jitCalledOften(cl) {
@@ -8630,7 +8656,9 @@ func (r *Runtime) jitInlinable(fn *bytecode.Function) bool {
 	l := r.jit.lowering(fn)
 	if l.inlinable == 0 {
 		ok := false
-		if !fn.TopLevel && !fn.IsModule && !fn.UsesArguments && !fn.HasDirectEval {
+		if !fn.TopLevel && !fn.IsModule && !jitFrameArgs(fn) && !fn.HasDirectEval {
+			// Not one that reads its call's arguments past its parameters,
+			// which an inlined frame has none of.
 			p, err := r.jitLower(fn, jitLowerInline)
 			ok = err == nil && ssa.Inlinable(p)
 		} else if jitReadsArguments(fn) {
@@ -11065,6 +11093,10 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure) (Value, e
 			switch {
 			case l.inline:
 				f.args = l.prologue
+			case jitFrameArgs(fn):
+				// All its call's arguments, which its code reads past its
+				// parameters, as the call wrote them to its context.
+				f.args = jitCallArgs(fn, s.ssaCtxs[l.ctx])
 			case l.kind == abi.ExitEnter:
 				f.args = jitEnterArgs(fn, f.locals)
 			default:
@@ -11319,6 +11351,11 @@ func (r *Runtime) jitEnterOne(c *abi.Context, i int, code *bytecode.Function, ca
 	f.base = base + fn.LocalCount
 	f.pc = 0
 	f.this, f.newTarget, f.callee, f.args = this, newTarget, nil, jitEnterArgs(fn, f.locals)
+	if args := jitCallArgs(fn, c); args != nil {
+		// All its call's arguments, which its code reads past its
+		// parameters, as the call wrote them to its context.
+		f.args = args
+	}
 	f.openUpvalues, f.handlers = f.openUpvalues[:0], f.handlers[:0]
 	f.thisRef, f.withScopes, f.evalVars, f.native, f.savedSP = nil, nil, nil, "", 0
 	derived := construct && fn.Kind == bytecode.KindDerivedConstructor
@@ -12097,6 +12134,23 @@ func (r *Runtime) jitGoHostPlain(ctx *abi.Context, idx int) bool {
 	case bytecode.OpSetHomeObject, bytecode.OpDefineMethod, bytecode.OpDefineGetter, bytecode.OpDefineSetter, bytecode.OpSetFuncName,
 		bytecode.OpSetFieldInit, bytecode.OpPrivateName, bytecode.OpNewPrivateMethods:
 		plain = true
+	case bytecode.OpRestParam, bytecode.OpGetArguments:
+		// A native callee's rest parameter's array, or its arguments object
+		// -- an unmapped one's, which names no function -- of the arguments
+		// its call wrote to its context (jitFrameArgs), as rest_param and
+		// get_arguments make them of a frame's: each a copy of them.
+		if ctx.Live != abi.LiveCall || in.Op == bytecode.OpGetArguments && cl.fn.MappedArguments || !jitFrameArgs(cl.fn) {
+			return false
+		}
+		args := jitContextArgs(ctx)
+		var o *Object
+		if in.Op == bytecode.OpRestParam {
+			o = r.newArrayFrom(args[min(int(in.A), len(args)):])
+		} else {
+			o = r.newArgumentsObject(&frame{cl: cl, args: args})
+		}
+		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = Obj(o)
+		return true
 	}
 	top := r.stackTop
 	if !plain || top+n+1 > len(r.stack) {
@@ -12198,22 +12252,32 @@ func (r *Runtime) jitHostResult(f *frame, pc, depth int, v Value, err error) (in
 // leaves to the code's exit, where Go makes it.
 func (r *Runtime) jitArgument(ctx *abi.Context) (Value, bool) {
 	s, idx := r.jit, int(ctx.Level)
-	if ctx.Live != 0 || idx >= len(s.goRuns) || idx >= len(s.ssaCtxs) || s.ssaCtxs[idx] != ctx || s.goRuns[idx].f == nil {
+	var args []Value
+	switch {
+	case ctx.Live == abi.LiveCall:
+		// A native callee's, whose call wrote them to its context
+		// (jitFrameArgs).
+		if cl := (*closure)(ctx.Closure); cl == nil || !jitFrameArgs(cl.fn) {
+			return Undefined, false
+		}
+		args = jitContextArgs(ctx)
+	case ctx.Live != 0 || idx >= len(s.goRuns) || idx >= len(s.ssaCtxs) || s.ssaCtxs[idx] != ctx || s.goRuns[idx].f == nil:
 		return Undefined, false
+	default:
+		args = s.goRuns[idx].f.args
 	}
-	f := s.goRuns[idx].f
 	if ctx.GoOp>>abi.GoOpArgcShift&0xff == 1 {
 		if jitGoArg(ctx, 0).IsObject() {
 			return Undefined, false
 		}
-		return Int(len(f.args)), true
+		return Int(len(args)), true
 	}
 	k := jitGoArg(ctx, 0)
 	if jitGoArg(ctx, 1).IsObject() || !k.IsNumber() {
 		return Undefined, false
 	}
-	if i := uint32(k.num); float64(i) == k.num && uint(i) < uint(len(f.args)) {
-		return f.args[i], true
+	if i := uint32(k.num); float64(i) == k.num && uint(i) < uint(len(args)) {
+		return args[i], true
 	}
 	return Undefined, false
 }
@@ -12256,6 +12320,40 @@ func (r *Runtime) jitLevelPrologue(cl *closure, pc, depth int, f *frame) []Value
 		p, _ = r.jitLower(cl.fn, jitLowerInline)
 	}
 	return jitPrologueArgs(p, pc, depth, f.locals, r.stack[f.base:])
+}
+
+// jitFrameArgs reports whether fn's code reads its call's arguments past
+// its parameters, from the frame of the VM's: a rest parameter's, the
+// arguments object's, a super() of them (bytecode.SuperForward). A native
+// call of it writes them all to its callee's context (ssa.CallSite's
+// FrameArgs, abi.Context's Args), where Go finds them for the frames it
+// makes of the callee's level, as V8's call pushes all of a call's
+// arguments, its callee reading them past its parameters.
+func jitFrameArgs(fn *bytecode.Function) bool {
+	return fn.HasRest || fn.UsesArguments || fn.MappedArguments ||
+		fn.Kind == bytecode.KindDerivedConstructor && slices.ContainsFunc(fn.Code, func(in bytecode.Instr) bool {
+			return in.Op == bytecode.OpSuperCall && in.B == bytecode.SuperForward
+		})
+}
+
+// jitCallArgs is a copy of the arguments a native call of fn wrote to its
+// callee's context, c (abi.Context's Args), for a frame Go makes of the
+// callee's level that outlives what Go does there -- one the interpreter
+// finishes -- or a super() that hands them on: fn's code reads them past
+// its parameters (jitFrameArgs). nil for any other function.
+func jitCallArgs(fn *bytecode.Function, c *abi.Context) []Value {
+	if !jitFrameArgs(fn) {
+		return nil
+	}
+	return slices.Clone(jitContextArgs(c))
+}
+
+// jitContextArgs is the arguments a native call wrote to its callee's
+// context, c (abi.Context's Args), in place: valid while the callee's level
+// runs, its next call writing the next context's.
+func jitContextArgs(c *abi.Context) []Value {
+	n := min(int(c.Argc), len(c.Args))
+	return unsafe.Slice((*Value)(unsafe.Pointer(&c.Args[0])), n)
 }
 
 // jitEnterArgs is the arguments of a native call of fn whose frame Go

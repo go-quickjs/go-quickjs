@@ -351,6 +351,9 @@ func (fb *jitFeedback) accessorCall(cl *closure, callee *Object, write bool) (ss
 		Entry: uintptr(unsafe.Pointer(&link.entry)), Count: uintptr(unsafe.Pointer(&link.in)),
 		Argc: jitB2i(write), Method: true,
 		Params: fn.ParamCount, LocalCount: fn.LocalCount, MaxStack: fn.MaxStack, ThisSlot: this, Coerce: fn.CoerceThis,
+		// A setter's value its one argument, a getter none: written to its
+		// context where its code reads them (jitFrameArgs).
+		FrameArgs: jitFrameArgs(fn),
 	}
 	if fn.HasTailCall {
 		// As a method call's: its calls in tail position may give its

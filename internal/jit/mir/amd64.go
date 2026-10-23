@@ -1439,7 +1439,10 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	// them (directOperand), not recorded: Go never reads them, as a callee
 	// that leaves native code is finished from its own frame, and its
 	// result replaces them (the VM's jitCallResult).
-	direct, ops := len(sites) == 1 && !gen && !site.ArrowThis && (site.ThisSlot < 0 || site.Method || site.Pool != 0 || site.Super || site.PlainThis), calleeSlot
+	// But a callee that reads its arguments past its parameters is given
+	// all of them in its context (FrameArgs), copied from where the state
+	// keeps them.
+	direct, ops := len(sites) == 1 && !gen && !site.ArrowThis && !site.FrameArgs && (site.ThisSlot < 0 || site.Method || site.Pool != 0 || site.Super || site.PlainThis), calleeSlot
 	if site.Method {
 		ops--
 	}
@@ -1572,8 +1575,21 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 			c.storeImm(locals, at+c.enc.NumOffset, c.enc.Undefined, top)
 			c.storeImm(locals, at+c.enc.RefOffset, 0, top)
 		}
-		if t.Tail || t.Pool != 0 || t.Super || t.ArrowThis || t.PlainThis || (t.ThisSlot >= 0 || site.Method && site.Via == 0) && !direct || !receiver {
+		if t.Tail || t.Pool != 0 || t.Super || t.ArrowThis || t.PlainThis || t.FrameArgs || (t.ThisSlot >= 0 || site.Method && site.Via == 0) && !direct || !receiver {
 			c.a.Load(calleeCtx, regCtx, abi.OffNext)
+		}
+		if t.FrameArgs {
+			// All its arguments and their count, which the frames Go makes
+			// of its level have (abi.Context's Args).
+			c.storeImm(calleeCtx, abi.OffArgc, uint64(argc), top)
+			for i := range argc {
+				at := abi.OffArgs + int32(i)*int32(unsafe.Sizeof(abi.GoArg{}))
+				nb, nd, rb, rd := words(first + i)
+				c.a.Load(top, nb, nd)
+				c.a.Store(calleeCtx, at+int32(unsafe.Offsetof(abi.GoArg{}.Num)), top)
+				c.a.Load(top, rb, rd)
+				c.a.Store(calleeCtx, at+int32(unsafe.Offsetof(abi.GoArg{}.Ref)), top)
+			}
 		}
 		if t.Tail {
 			// Whether its calls in tail position may give its frame up;
@@ -3482,7 +3498,7 @@ func (c *compiler) tailSelf(v *ssa.Value, guard func(amd64.Cond)) {
 	c.a.Bind(other)
 	var sites []*ssa.CallSite
 	for _, t := range v.Calls() {
-		if t.Go == 0 && !t.Literal && !t.Push && !t.Pop && !t.Alloc && !t.Receiver && t.Via == 0 && t.Pool == 0 && !t.Coerce && t.Entry != 0 {
+		if t.Go == 0 && !t.Literal && !t.Push && !t.Pop && !t.Alloc && !t.Receiver && t.Via == 0 && t.Pool == 0 && !t.Coerce && t.Entry != 0 && !t.FrameArgs {
 			sites = append(sites, t)
 		}
 	}

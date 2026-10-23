@@ -43,8 +43,13 @@ const frameArgsSetup = `
 // (ssa.GoArgument) while the object is not made -- written's, lengthSet's
 // and indexSet's, made and changed, are read from the object. Such
 // functions -- 146 and 95 of npm's own code, 186 of Octane's -- had been
-// refused whole. Their code has no call entry: a native call writes the
-// parameters alone. Each answer is the interpreter's.
+// refused whole. A native call of one writes all its arguments to its
+// callee's context (ssa.CallSite's FrameArgs), from which Go makes the
+// array and the object, and reads arguments[k] and arguments.length: sum,
+// rest and strictArgs are called natively, at their call entries. A mapped
+// object names its function, which a native callee's frame has none of:
+// count, mapped and noParams have no call entry, and Go enters them. Each
+// answer is the interpreter's.
 func TestJITFrameArguments(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -55,7 +60,16 @@ func TestJITFrameArguments(t *testing.T) {
 		both.agree(t, `run(300)`)
 	}
 	r := both.jit
-	for _, name := range []string{"sum", "rest", "count", "strictArgs", "mapped", "noParams"} {
+	for _, name := range []string{"sum", "rest", "strictArgs"} {
+		e := jitEntryForTest(t, r, name)
+		if e.ssa.CallEntry() == 0 {
+			t.Errorf("%s has no call entry", name)
+		}
+		if e.link == nil || e.link.in == 0 {
+			t.Errorf("%s was never called natively", name)
+		}
+	}
+	for _, name := range []string{"count", "mapped", "noParams"} {
 		e := jitEntryForTest(t, r, name)
 		if e.ssa.CallEntry() != 0 {
 			t.Errorf("%s has a call entry", name)
