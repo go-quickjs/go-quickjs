@@ -74,6 +74,10 @@ type core struct {
 	exitFrame *abi.ExitFrame
 	exitHead  []int32
 	exitNext  []int32
+	// exitLastV and exitLastK are, by slot, the value the last exit to
+	// write it found there and 1 plus its entry's index.
+	exitLastV []*ssa.Value
+	exitLastK []int32
 	exitWords map[uint64]int32
 	exitDescs []abi.ExitDescriptor
 	// calls are the descriptions of the native calls' states (callState),
@@ -2499,12 +2503,32 @@ func (c *core) exitDescriptor(s *ssa.FrameState, kind uint64, localsReg, stackRe
 			delete(c.exitWords, w)
 		}
 		f.Index, f.Slots, f.Words = f.Index[:index], f.Slots[:slots], f.Words[:words]
+		// The entries it found may be those it added.
+		clear(c.exitLastV)
 		return nil
+	}
+	if len(c.exitLastV) < len(s.Slots) {
+		n := max(len(s.Slots), 2*len(c.exitLastV))
+		c.exitLastV, c.exitLastK = c.valueList(n), c.int32s(n)
 	}
 	direct := true
 	writes := func(i int32) bool { return int(i) < len(s.Slots) && written(int(i), s.Slots[i]) }
 	for i, v := range s.Slots {
 		if !written(i, v) {
+			continue
+		}
+		if c.exitLastV[i] == v {
+			// Its entry is the one it had at the last exit that wrote
+			// it: an entry is what the slot's value is and where it
+			// lives, which the code keeps throughout.
+			k := c.exitLastK[i]
+			switch e := &f.Slots[k-1]; {
+			case e.Shadow.Kind == abi.ExitReg || e.Shadow.Kind == abi.ExitSpill,
+				e.Shadow.Kind == abi.ExitSlotAddr && e.Shadow.N != e.Slot && writes(e.Shadow.N),
+				e.Origin >= 0 && e.Origin != e.Slot && writes(e.Origin):
+				direct = false
+			}
+			f.Index = append(f.Index, uint16(k-1))
 			continue
 		}
 		e := abi.ExitSlot{Slot: int32(i), Origin: -1}
@@ -2557,6 +2581,7 @@ func (c *core) exitDescriptor(s *ssa.FrameState, kind uint64, localsReg, stackRe
 			k = int32(len(f.Slots))
 			c.exitHead[h] = k
 		}
+		c.exitLastV[i], c.exitLastK[i] = v, k
 		f.Index = append(f.Index, uint16(k-1))
 	}
 	if len(f.Index)-index > math.MaxUint16 {
