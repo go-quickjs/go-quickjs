@@ -26,6 +26,7 @@ type Workspace struct {
 	blocks    arena.Arena[*ssa.Block]
 	intervals arena.Arena[interval]
 	recs      arena.Arena[useRec]
+	gms       arena.Arena[gmember]
 	ivRefs    arena.Arena[*interval]
 	locs      arena.Arena[loc]
 	saved     arena.Arena[saved]
@@ -91,6 +92,7 @@ func (w *Workspace) init() {
 	w.blocks.KeepBig()
 	w.intervals.KeepBig()
 	w.recs.KeepBig()
+	w.gms.KeepBig()
 	w.ivRefs.KeepBig()
 	w.locs.KeepBig()
 	w.saved.KeepBig()
@@ -101,7 +103,7 @@ func (w *Workspace) init() {
 // and tables.
 func (w *Workspace) Bytes() int {
 	n := w.bools.Bytes() + w.ints.Bytes() + w.int32s.Bytes() + w.words.Bytes() + w.sets.Bytes() + w.values.Bytes() + w.blocks.Bytes() +
-		w.intervals.Bytes() + w.recs.Bytes() + w.ivRefs.Bytes() + w.locs.Bytes() + w.saved.Bytes()
+		w.intervals.Bytes() + w.recs.Bytes() + w.gms.Bytes() + w.ivRefs.Bytes() + w.locs.Bytes() + w.saved.Bytes()
 	n += capBytes(w.sched.moves) + capBytes(w.sched.steps) + capBytes(w.sched.parked) + capBytes(w.sched.readers) + capBytes(w.xuses) + capBytes(w.states) + capBytes(w.gpool)
 	n += w.amd64.a.Bytes() + capBytes(w.amd64.labels) + capBytes(w.amd64.stubFor) + capBytes(w.amd64.cold)
 	n += w.arm64.a.Bytes() + capBytes(w.arm64.labels) + capBytes(w.arm64.stubFor) + capBytes(w.arm64.cold)
@@ -129,6 +131,7 @@ func (w *Workspace) Rewind() {
 	w.blocks.Rewind()
 	w.intervals.Rewind()
 	w.recs.Rewind()
+	w.gms.Rewind()
 	w.ivRefs.Rewind()
 	w.locs.Rewind()
 	w.saved.Rewind()
@@ -167,7 +170,7 @@ func (w *Workspace) scratchUsed() int {
 // arenaBytes is what the workspace's arenas keep.
 func (w *Workspace) arenaBytes() int {
 	return w.bools.Bytes() + w.ints.Bytes() + w.int32s.Bytes() + w.words.Bytes() + w.sets.Bytes() + w.values.Bytes() + w.blocks.Bytes() +
-		w.intervals.Bytes() + w.recs.Bytes() + w.ivRefs.Bytes() + w.locs.Bytes() + w.saved.Bytes()
+		w.intervals.Bytes() + w.recs.Bytes() + w.gms.Bytes() + w.ivRefs.Bytes() + w.locs.Bytes() + w.saved.Bytes()
 }
 
 // CompileIn is Compile, in w.
@@ -298,6 +301,13 @@ func (c *core) useRecs(n int) []useRec {
 		return c.ws.recs.Make(n)
 	}
 	return make([]useRec, n)
+}
+
+func (c *core) groupMembers(n int) []gmember {
+	if c.ws != nil {
+		return c.ws.gms.Make(n)
+	}
+	return make([]gmember, n)
 }
 
 func (c *core) intervalRefs(n int) []*interval {

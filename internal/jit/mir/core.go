@@ -438,44 +438,35 @@ func prepare(w *Workspace, f *ssa.Func, enc abi.Encoding, gprs, fprs []int) (*co
 		return nil, fmt.Errorf("%w: %s", ErrUnsupported, f.Unsafe)
 	}
 	c.origin = ssa.Origins(f)
-	for _, b := range f.Blocks {
-		for _, v := range b.Values {
-			if o, ok := c.origin.Of(v); ok && (o == ssa.OriginAmbiguous || o == ssa.OriginHeap) && v.Shadow == nil {
-				return nil, fmt.Errorf("%w: %v merges two slots' values with no shadow", ErrUnsupported, v)
-			}
-		}
-	}
 	c.layout()
-	c.findLazy()
+	if err := c.findLazy(); err != nil {
+		return nil, err
+	}
 	c.findBudgets()
 	lap(PhasePrepare)
 	if err := c.allocate(); err != nil {
 		return nil, err
 	}
-	c.findKeepRuns()
 	lap(PhaseSaves)
 	return c, nil
 }
 
-// findKeepRuns marks the runs of keeps (keepRuns): each keep made, of a
-// block's values one after another.
-func (c *core) findKeepRuns() {
+// keepRunAt marks keep v, b's i'th value, if it is the first or the last
+// of a run of keeps (keepRuns): each keep made, of a block's values one
+// after another.
+func (c *core) keepRunAt(b *ssa.Block, i int, v *ssa.Value) {
 	isKeep := func(v *ssa.Value) bool { return v.Op == ssa.OpKeep && !c.isLazy(v) }
-	for _, b := range c.f.Blocks {
-		for i, v := range b.Values {
-			if !isKeep(v) {
-				continue
-			}
-			if c.keepRuns == nil {
-				c.keepRuns = c.ints(c.f.NumValues())
-			}
-			if i == 0 || !isKeep(b.Values[i-1]) {
-				c.keepRuns[v.ID] |= keepFirst
-			}
-			if i+1 == len(b.Values) || !isKeep(b.Values[i+1]) {
-				c.keepRuns[v.ID] |= keepLast
-			}
-		}
+	if !isKeep(v) {
+		return
+	}
+	if c.keepRuns == nil {
+		c.keepRuns = c.ints(c.f.NumValues())
+	}
+	if i == 0 || !isKeep(b.Values[i-1]) {
+		c.keepRuns[v.ID] |= keepFirst
+	}
+	if i+1 == len(b.Values) || !isKeep(b.Values[i+1]) {
+		c.keepRuns[v.ID] |= keepLast
 	}
 }
 
@@ -661,7 +652,10 @@ func (c *core) layout() {
 // (refs, by state ID) as the values are met, the states listed the first
 // time each is, and each listed state's slots are read once, counted
 // that many times as uses (findFused's).
-func (c *core) findLazy() {
+//
+// It refuses a function whose values merge two slots' references with no
+// shadow to tell which (ssa.Origins), as it meets each.
+func (c *core) findLazy() error {
 	f := c.f
 	n := f.NumValues()
 	used := c.bools(n) // by an argument, a control or a phi
@@ -682,6 +676,9 @@ func (c *core) findLazy() {
 	}
 	for _, b := range f.Blocks {
 		for _, v := range b.Values {
+			if o, ok := c.origin.Of(v); ok && (o == ssa.OriginAmbiguous || o == ssa.OriginHeap) && v.Shadow == nil {
+				return fmt.Errorf("%w: %v merges two slots' values with no shadow", ErrUnsupported, v)
+			}
 			for _, a := range v.Args {
 				used[a.ID] = true
 				uses[a.ID]++
@@ -743,6 +740,7 @@ func (c *core) findLazy() {
 		}
 	}
 	c.findFused(uses)
+	return nil
 }
 
 // fusable reports whether a boolean operation can be computed by a branch
@@ -895,20 +893,6 @@ func (c *core) allocate() error {
 		pos[i] = -1
 	}
 	start, end := c.ints(nb), c.ints(nb)
-	count, most := 0, 0
-	for _, b := range c.order {
-		start[b.ID] = count
-		count++
-		for _, v := range b.Values {
-			pos[v.ID] = count
-			count++
-			if v.Op == ssa.OpPhi {
-				most += 1 + len(v.Args)
-			}
-		}
-		end[b.ID] = count
-		count++
-	}
 	// Intervals, by value ID (v nil until made): each from its definition
 	// -- a phi's from its block's start -- to its last use, stretched over
 	// every block where the value is live in or out. The uses are met once,
@@ -921,26 +905,40 @@ func (c *core) allocate() error {
 	// the sets each time.
 	// What the uses read and write of each value is in one record (rec):
 	// its last use's position, its block, the head of its uses in other
-	// blocks, and how a frame state's slot naming it is used.
+	// blocks, and how a frame state's slot naming it is used. The records
+	// and the intervals are begun as the positions are numbered.
 	need := func(v *ssa.Value) bool { return hasResult(v) && !c.isLazy(v) }
 	rec := c.useRecs(nv)
 	iv := c.intervalList(nv)
+	count, most := 0, 0
+	inOrder := c.bools(nb)
 	for _, b := range c.order {
+		inOrder[b.ID] = true
+		start[b.ID] = count
+		count++
 		for _, v := range b.Values {
+			p := count
+			pos[v.ID] = p
+			count++
+			if v.Op == ssa.OpPhi {
+				most += 1 + len(v.Args)
+				p = start[v.Block.ID]
+			}
 			r := &rec[v.ID]
 			r.def = -1
 			if need(v) {
-				p := pos[v.ID]
-				if v.Op == ssa.OpPhi {
-					p = start[v.Block.ID]
-				}
 				iv[v.ID] = interval{v: v, start: p, end: p}
 				r.end, r.def = int32(p), int32(b.ID)+1
 			}
-			if bigKept(v) != nil || c.isLazy(v) || remat(v) || v.Shadow != nil {
-				r.slot = 1
+			if bigKept(v) != nil || c.isLazy(v) || remat(v) {
+				r.slot = slotMade
+			}
+			if v.Shadow != nil {
+				r.slot |= slotShadow
 			}
 		}
+		end[b.ID] = count
+		count++
 	}
 	// xuses are the uses in another block than their value's, a block once
 	// for each value in a row: each's next is 1 plus the index of the one
@@ -1011,7 +1009,75 @@ func (c *core) allocate() error {
 			}
 		}
 	}
+	// A phi's arguments are used at its block's predecessors' ends, as its
+	// block is met: the phis are walked in order, each argument read once,
+	// and what the groups (below) take of them noted as they are -- the
+	// first phi of each argument (phiOf), the phis and their arguments
+	// that have intervals numbered as members (mem, and each's record's
+	// mid), each member's heaviest edge (mw), and the pairs of a phi and
+	// an argument of one class, which may be joined.
+	phiOf := c.valueList(nv)
+	var masks valueSet
+	weight := func(b *ssa.Block, i int) int {
+		if masks == nil {
+			masks = c.loopMasks()
+		}
+		return edgeWeights[min(bits.OnesCount64(masks[b.ID]&masks[b.Preds[i].ID]), 3)]
+	}
+	mem, pairs := c.int32s(most)[:0], c.int32s(2 * most)[:0]
+	gm := c.groupMembers(most)
+	member := func(r *useRec, id int) int32 {
+		if r.mid == 0 && r.def > 0 {
+			mem = append(mem, int32(id))
+			r.mid = int32(len(mem))
+		}
+		return r.mid - 1
+	}
+	// Of a block with phis, each predecessor's end -- -1 for one not laid
+	// out -- and its edge's weight, found once for all its phis.
+	var predEnd, predW []int32
 	for _, b := range c.order {
+		cur = b
+		if len(b.Values) != 0 && b.Values[0].Op == ssa.OpPhi {
+			predEnd, predW = predEnd[:0], predW[:0]
+			for i, p := range b.Preds {
+				e := int32(-1)
+				if inOrder[p.ID] {
+					e = int32(end[p.ID])
+				}
+				predEnd, predW = append(predEnd, e), append(predW, int32(weight(b, i)))
+			}
+		}
+		for _, v := range b.Values {
+			if v.Op != ssa.OpPhi {
+				break
+			}
+			mv := member(&rec[v.ID], v.ID)
+			for i, a := range v.Args {
+				if e := predEnd[i]; e >= 0 {
+					cur = b.Preds[i]
+					use(a, int(e))
+				}
+				if a != v && phiOf[a.ID] == nil {
+					phiOf[a.ID] = v
+				}
+				ma := int32(-1)
+				if a.ID < nv {
+					ma = member(&rec[a.ID], a.ID)
+				}
+				w := predW[i]
+				if mv >= 0 {
+					gm[mv].weight = max(gm[mv].weight, w)
+				}
+				if ma < 0 {
+					continue
+				}
+				gm[ma].weight = max(gm[ma].weight, w)
+				if a != v && mv >= 0 && isFloat(a) == isFloat(v) {
+					pairs = append(pairs, mv, ma)
+				}
+			}
+		}
 		cur = b
 		for i, v := range b.Values {
 			if v.Op == ssa.OpPhi {
@@ -1025,7 +1091,7 @@ func (c *core) allocate() error {
 			}
 			for _, a := range v.Args {
 				use(a, p)
-				if a.Shadow != nil {
+				if r := &rec[a.ID]; r.slot&slotShadow != 0 || r.def == 0 && a.Shadow != nil {
 					// It may read where its operand came from: a keep
 					// (mir's keep), or an operation that finds an object's
 					// pointer word there (sourceRef). A value the frame
@@ -1069,17 +1135,14 @@ func (c *core) allocate() error {
 			useState(b.Header, start[b.ID], nil)
 		}
 		for _, s := range b.Succs {
+			if !s.LoopHeader {
+				continue
+			}
 			for i, p := range s.Preds {
 				if p != b {
 					continue
 				}
-				for _, phi := range s.Values {
-					if phi.Op != ssa.OpPhi {
-						break
-					}
-					use(phi.Args[i], end[b.ID])
-				}
-				if s.LoopHeader && s.Backedge[i] {
+				if s.Backedge[i] {
 					// A poll on this edge exits to the header's state,
 					// after the moves.
 					useState(s.Header, end[b.ID], s)
@@ -1097,10 +1160,6 @@ func (c *core) allocate() error {
 	// (seen, by block ID, 1 plus the ID of the value it was last found
 	// live into), and the value's interval stretched over each.
 	seen := c.ints(nb)
-	inOrder := c.bools(nb)
-	for _, b := range c.order {
-		inOrder[b.ID] = true
-	}
 	stack := c.blockList(nb)[:0]
 	for id := range rec {
 		r := &rec[id]
@@ -1178,18 +1237,11 @@ func (c *core) allocate() error {
 	// it begins. An edge's phi moves (phiMoves) are then no moves at all:
 	// given whichever register came free last, a fifth of a function's
 	// code had been the moves at its edges. phiOf is, by value ID, a phi
-	// the value is an argument of, or nil. weight is how often an edge into
-	// b, from its i'th predecessor, runs against the function's entry: 16
-	// to the power of the loops (at most three) holding both its ends, a
-	// move on an inner loop's edge running many times one before it does.
-	phiOf := c.valueList(nv)
-	var masks valueSet
-	weight := func(b *ssa.Block, i int) int {
-		if masks == nil {
-			masks = c.loopMasks()
-		}
-		return edgeWeights[min(bits.OnesCount64(masks[b.ID]&masks[b.Preds[i].ID]), 3)]
-	}
+	// the value is an argument of, or nil (made with the uses, above).
+	// weight is how often an edge into b, from its i'th predecessor, runs
+	// against the function's entry: 16 to the power of the loops (at most
+	// three) holding both its ends, a move on an inner loop's edge running
+	// many times one before it does.
 	// Beyond those hints, a phi and its arguments are coalesced into one
 	// group where none of their intervals meet, so that a value carried
 	// round a loop through several phis -- a loop whose body has an edge
@@ -1202,9 +1254,9 @@ func (c *core) allocate() error {
 	// them: a second scan with them, kept where its edges moved less, had
 	// been a compile's allocation again. The groups' members are the phis
 	// and their arguments, numbered from 0 in mem (value IDs) as the phis
-	// are met (most bounds them); mid is, by value ID, 1 plus a member's
-	// number, or 0 for a value of no group, which the groups' tables leave
-	// out. Of members: me is the end of its interval; group is 1 plus its
+	// are met with the uses (most bounds them); a record's mid is 1 plus
+	// its value's number, or 0 for a value of no group, which the groups'
+	// tables leave out. Of members: me is the end of its interval; group is 1 plus its
 	// group's root, or 0 for a root; mw is the weight of the heaviest edge
 	// the member is a phi or an argument at. Of roots: hs and he are the
 	// first start and the last end of the group's members' intervals; its
@@ -1213,78 +1265,43 @@ func (c *core) allocate() error {
 	// (a member's own interval meets none of its group's others, and none
 	// shares a start): a member's interval is checked against a group by a
 	// binary search, not against each member, and joins it by a copy.
-	// The members are numbered, and their tables filled, as the phis are
-	// met, with each edge's weight, and the pairs of a phi and an
-	// argument that may be joined -- members of one class whose own
-	// intervals do not meet -- listed in the order met (pairs: the phi's
-	// number, then the argument's), which is the order they are joined in:
-	// a pass over the phis that reads each value once, and a pass over the
-	// pairs that reads the members' tables alone.
-	mid, mem := c.ints(nv), c.int32s(most)[:0]
-	tables := c.int32s(8*most + 2*most)
-	group, me, mw, hs, he := tables[:most], tables[most:2*most], tables[2*most:3*most], tables[3*most:4*most], tables[4*most:5*most]
-	goff, gn, gcap, pairs := tables[5*most:6*most], tables[6*most:7*most], tables[7*most:8*most], tables[8*most : 8*most][:0:2*most]
+	// The members' tables are filled from their intervals, and the pairs
+	// listed with the uses kept where the two's own intervals do not meet,
+	// in the order met, which is the order they are joined in.
 	pool := c.groupPool(2 * most)
-	member := func(v *ssa.Value) int {
-		if m := mid[v.ID]; m != 0 {
-			return m - 1
-		}
-		if v.ID >= nv || iv[v.ID].v == nil {
-			return -1
-		}
-		i, it := len(mem), &iv[v.ID]
-		mem = append(mem, int32(v.ID))
-		mid[v.ID] = i + 1
-		me[i], hs[i], he[i] = int32(it.end), int32(it.start), int32(it.end)
-		goff[i], gn[i], gcap[i] = int32(2*i), 1, 2
+	for i, id := range mem {
+		it := &iv[id]
+		gm[i].end, gm[i].start, gm[i].last = int32(it.end), int32(it.start), int32(it.end)
+		gm[i].off, gm[i].n, gm[i].room = int32(2*i), 1, 2
 		pool[2*i] = uint64(it.start)<<32 | uint64(i)
-		return i
 	}
-	for _, b := range c.order {
-		for _, v := range b.Values {
-			if v.Op != ssa.OpPhi {
-				break
-			}
-			mv := member(v)
-			for i, a := range v.Args {
-				if a != v && phiOf[a.ID] == nil {
-					phiOf[a.ID] = v
-				}
-				ma := member(a)
-				w := int32(weight(b, i))
-				if mv >= 0 {
-					mw[mv] = max(mw[mv], w)
-				}
-				if ma < 0 {
-					continue
-				}
-				mw[ma] = max(mw[ma], w)
-				if a != v && mv >= 0 && isFloat(a) == isFloat(v) && (hs[mv] > me[ma] || hs[ma] > me[mv]) {
-					pairs = append(pairs, int32(mv), int32(ma))
-				}
-			}
+	kept := pairs[:0]
+	for p := 0; p < len(pairs); p += 2 {
+		if mv, ma := pairs[p], pairs[p+1]; gm[mv].start > gm[ma].end || gm[ma].start > gm[mv].end {
+			kept = append(kept, mv, ma)
 		}
 	}
+	pairs = kept
 	nm := len(mem)
-	group, me, mw, hs, he, goff, gn, gcap = group[:nm], me[:nm], mw[:nm], hs[:nm], he[:nm], goff[:nm], gn[:nm], gcap[:nm]
+	gm = gm[:nm]
 	// members is root r's members, in order of start.
-	members := func(r int) []uint64 { return pool[goff[r]:][:gn[r]] }
+	members := func(r int) []uint64 { return pool[gm[r].off:][:gm[r].n] }
 	find := func(i int) int {
-		if g := group[i]; g != 0 {
+		if g := gm[i].group; g != 0 {
 			return int(g) - 1
 		}
 		return i
 	}
 	// root is the root of v's group, or -1 for a value of none.
 	root := func(v *ssa.Value) int {
-		if m := mid[v.ID]; m != 0 {
-			return find(m - 1)
+		if m := rec[v.ID].mid; m != 0 {
+			return find(int(m) - 1)
 		}
 		return -1
 	}
 	// phiAt is the block of a phi that is a member, or nil.
 	phiAt := func(v *ssa.Value) *ssa.Block {
-		if mid[v.ID] != 0 {
+		if rec[v.ID].mid != 0 {
 			return v.Block
 		}
 		return nil
@@ -1295,9 +1312,9 @@ func (c *core) allocate() error {
 	overlap := func(ra, rb int) bool {
 		in := members(ra)
 		for _, w := range members(rb) {
-			s, e := w>>32, uint64(me[uint32(w)])
+			s, e := w>>32, uint64(gm[uint32(w)].end)
 			i, _ := slices.BinarySearch(in, e<<32|math.MaxUint32)
-			if i > 0 && uint64(me[uint32(in[i-1])]) >= s {
+			if i > 0 && uint64(gm[uint32(in[i-1])].end) >= s {
 				return true
 			}
 		}
@@ -1314,25 +1331,25 @@ func (c *core) allocate() error {
 		if rx == ry {
 			continue
 		}
-		if gn[rx] < gn[ry] {
+		if gm[rx].n < gm[ry].n {
 			rx, ry = ry, rx
 		}
-		if hs[rx] <= he[ry] && hs[ry] <= he[rx] && (int(gn[rx])*int(gn[ry]) > 4096 || overlap(rx, ry)) {
+		if gm[rx].start <= gm[ry].last && gm[ry].start <= gm[rx].last && (int(gm[rx].n)*int(gm[ry].n) > 4096 || overlap(rx, ry)) {
 			continue
 		}
 		from := members(ry)
 		for _, w := range from {
-			group[uint32(w)] = int32(rx) + 1
+			gm[uint32(w)].group = int32(rx) + 1
 		}
-		na, nb := int(gn[rx]), len(from)
-		if na+nb > int(gcap[rx]) {
+		na, nb := int(gm[rx].n), len(from)
+		if na+nb > int(gm[rx].room) {
 			// Room twice what it now holds, at the pool's end.
 			at := len(pool)
 			pool = append(pool, make([]uint64, 2*(na+nb))...)
 			copy(pool[at:], members(rx))
-			goff[rx], gcap[rx] = int32(at), int32(2*(na+nb))
+			gm[rx].off, gm[rx].room = int32(at), int32(2*(na+nb))
 		}
-		to := pool[goff[rx]:][:na+nb]
+		to := pool[gm[rx].off:][:na+nb]
 		for i, j, k := na-1, nb-1, na+nb-1; j >= 0; k-- {
 			if i >= 0 && to[i] > from[j] {
 				to[k], i = to[i], i-1
@@ -1340,8 +1357,8 @@ func (c *core) allocate() error {
 				to[k], j = from[j], j-1
 			}
 		}
-		gn[rx] = int32(na + nb)
-		hs[rx], he[rx] = min(hs[rx], hs[ry]), max(he[rx], he[ry])
+		gm[rx].n = int32(na + nb)
+		gm[rx].start, gm[rx].last = min(gm[rx].start, gm[ry].start), max(gm[rx].last, gm[ry].last)
 	}
 	c.keepGroupPool(pool)
 	// A group's register is waited for while members of it are still to
@@ -1366,14 +1383,13 @@ func (c *core) allocate() error {
 	// gw is, by root, its heaviest member's weight. The unions done, these
 	// take the tables only they used: gcap's, me's and mem's room, and mw,
 	// which becomes gw in place.
-	left, greg, gw, wnext := gcap, me, mw, mem[:nm]
-	clear(greg)
-	for i := range nm {
+	wnext := mem[:nm]
+	for i := range gm {
 		r := find(i)
-		gw[r] = max(gw[r], gw[i])
-		left[i] = 0
+		gm[r].weight = max(gm[r].weight, gm[i].weight)
+		gm[i].room, gm[i].end = 0, 0
 		if r == i {
-			left[i] = gn[i]
+			gm[i].room = gm[i].n
 		}
 	}
 	clear(wnext)
@@ -1390,7 +1406,7 @@ func (c *core) allocate() error {
 	spoken := func(k, reg, s, e, self int, hb *ssa.Block, hi int, hp, ha *ssa.Value) bool {
 		if hb == nil {
 			n := waiting[k][reg]
-			if self >= 0 && greg[self] == int32(reg)+1 && left[self] > 0 {
+			if self >= 0 && gm[self].end == int32(reg)+1 && gm[self].room > 0 {
 				n--
 			}
 			return n > 0
@@ -1400,7 +1416,7 @@ func (c *core) allocate() error {
 		for w := wait[k][reg]; w != 0; {
 			r := int(w) - 1
 			nx := wnext[r]
-			if left[r] == 0 {
+			if gm[r].room == 0 {
 				if prev < 0 {
 					wait[k][reg] = nx
 				} else {
@@ -1409,7 +1425,7 @@ func (c *core) allocate() error {
 				w = nx
 				continue
 			}
-			if r != self && int(he[r]) >= s && int(hs[r]) <= e {
+			if r != self && int(gm[r].last) >= s && int(gm[r].start) <= e {
 				if hw < 0 {
 					if hi < 0 {
 						hi = slices.Index(hp.Args, ha)
@@ -1417,7 +1433,7 @@ func (c *core) allocate() error {
 					hw = weight(hb, hi)
 				}
 				ms := members(r)
-				if i, _ := slices.BinarySearch(ms, uint64(s)<<32); int(gw[r]) > hw && i < len(ms) && int(ms[i]>>32) <= e {
+				if i, _ := slices.BinarySearch(ms, uint64(s)<<32); int(gm[r].weight) > hw && i < len(ms) && int(ms[i]>>32) <= e {
 					return true
 				}
 			}
@@ -1431,13 +1447,13 @@ func (c *core) allocate() error {
 		if r < 0 {
 			return
 		}
-		if reg >= 0 && greg[r] == 0 && left[r] > 1 && !spoken(k, reg, int(hs[r]), int(he[r]), r, nil, 0, nil, nil) {
-			greg[r] = int32(reg) + 1
+		if reg >= 0 && gm[r].end == 0 && gm[r].room > 1 && !spoken(k, reg, int(gm[r].start), int(gm[r].last), r, nil, 0, nil, nil) {
+			gm[r].end = int32(reg) + 1
 			wnext[r], wait[k][reg] = wait[k][reg], int32(r)+1
 			waiting[k][reg]++
 		}
-		if left[r]--; left[r] == 0 && greg[r] != 0 {
-			waiting[k][greg[r]-1]--
+		if gm[r].room--; gm[r].room == 0 && gm[r].end != 0 {
+			waiting[k][gm[r].end-1]--
 		}
 	}
 	// hinted is the register free holds that the value of interval it, of
@@ -1445,7 +1461,7 @@ func (c *core) allocate() error {
 	// an argument's (above), not spoken for.
 	hinted := func(it *interval, k, r int, free []int) int {
 		if r >= 0 {
-			if g := greg[r]; g != 0 {
+			if g := gm[r].end; g != 0 {
 				if i := slices.Index(free, int(g)-1); i >= 0 {
 					return i
 				}
@@ -1660,7 +1676,7 @@ func (c *core) allocate() error {
 					for j := len(free) - 1; j >= 0; j-- {
 						reg := free[j]
 						n := waiting[k][reg]
-						if r >= 0 && greg[r] == int32(reg)+1 && left[r] > 0 {
+						if r >= 0 && gm[r].end == int32(reg)+1 && gm[r].room > 0 {
 							n--
 						}
 						if n <= 0 {
@@ -1747,8 +1763,12 @@ func (c *core) allocate() error {
 	var home []int
 	var free []int
 	open, next := c.intervalRefs(len(all))[:0], 0
+	// The runs of keeps are found in the same pass (keepRunAt).
 	for _, b := range c.order {
-		for _, v := range b.Values {
+		for i, v := range b.Values {
+			if v.Op == ssa.OpKeep {
+				c.keepRunAt(b, i, v)
+			}
 			if v.Op != ssa.OpCall || v.Calls() == nil {
 				continue
 			}
@@ -2266,12 +2286,30 @@ func hasResult(v *ssa.Value) bool { return v.Type != ssa.None }
 // useRec is what allocate's uses read and write of a value: end, its last
 // use's position; def, 1 plus the ID of the block defining it, or -1 for a
 // value that needs no location, 0 for one not in the function; xhead, 1
-// plus the index in xuses of its last use in another block, or 0; slot,
-// 0 if a frame state's slot naming it uses the value itself, 1 if it uses
-// what it is made of or boxes, or its shadow besides.
+// plus the index in xuses of its last use in another block, or 0; mid, 1
+// plus its number among the phis' groups' members, or 0 (allocate's);
+// slot, what a use of it uses besides or instead (slotMade, slotShadow).
 type useRec struct {
-	end, def, xhead int32
-	slot            uint8
+	end, def, xhead, mid int32
+	slot                 uint8
+}
+
+// useRec's slot: a value made where needed or a BigInt's box, whose state
+// slots use what it is made of; one with a shadow.
+const (
+	slotMade = 1 << iota
+	slotShadow
+)
+
+// gmember is a member of allocate's phis' groups: of the member, group, 1
+// plus its group's root or 0 for a root, end, its interval's, and weight,
+// its heaviest edge's; of a root, start and last, the span of its members'
+// intervals, and n of its members in the groups' pool from off, with
+// room for room. Once the groups are made, a root's room counts its
+// members not yet placed, end is 1 plus the register its first was
+// given, or 0, and weight the heaviest of its members'.
+type gmember struct {
+	group, end, weight, start, last, off, n, room int32
 }
 
 // xuse is a use of a value in block b, another block than the value's
