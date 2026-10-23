@@ -18,6 +18,40 @@ const MaxRecords = 256
 // MaxKeeps is how many references a function's code keeps (Context.Keep).
 const MaxKeeps = 256
 
+// An object native code does not make (ssa's escape.go), as V8's escape
+// analysis leaves one unmade, is named in a slot an exit writes by a word
+// no value has, the number word of a slot whose pointer word is none:
+// VirtualBase, a NaN past the VM's tags and below its BigInts, with the
+// first slot of the object's home -- past the frame's own -- shifted
+// VirtualHomeShift bits, and how many properties the object has there in
+// the bits below. At its home, the first slot's number word is the
+// address of the object's shape, the next one's that of its prototype,
+// and its properties' values follow, VirtualFields on, in its table's
+// order. Go makes the object of them where the exit wrote them, one for
+// each home, which every slot naming it is given (the VM's
+// jitMaterialize), as V8's deoptimizer materializes an object escape
+// analysis removed.
+const (
+	VirtualBase      = 0xFFF9000000000000
+	VirtualHomeShift = 16
+	VirtualFields    = 2
+)
+
+// VirtualWord is the word naming the object at home with fields
+// properties.
+func VirtualWord(home, fields int) uint64 {
+	return VirtualBase | uint64(home)<<VirtualHomeShift | uint64(fields)
+}
+
+// IsVirtualWord reports whether w is a VirtualWord, and which: its home
+// and how many properties it has.
+func IsVirtualWord(w uint64) (home, fields int, ok bool) {
+	if w&^(1<<(2*VirtualHomeShift)-1) != VirtualBase {
+		return 0, 0, false
+	}
+	return int(w >> VirtualHomeShift & (1<<VirtualHomeShift - 1)), int(w & (1<<VirtualHomeShift - 1)), true
+}
+
 // Record is an exit's instruction to Go for one slot, which native code
 // cannot write. Slot is the slot, and its flags say what to write there:
 //   - none: the value of slot Arg, a reference;

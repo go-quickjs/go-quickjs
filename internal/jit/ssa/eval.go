@@ -600,6 +600,9 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 		if s.Inline != nil {
 			return ir.Exit{}, fmt.Errorf("%w: an inlined callee's frame", ErrUnsupported)
 		}
+		if s.Virtual != 0 {
+			return ir.Exit{}, fmt.Errorf("%w: an object not made", ErrUnsupported)
+		}
 		// A slot with no value is a local dead there (ir.Program.Live): the
 		// exit leaves it as it was.
 		for i, v := range s.Slots {
@@ -935,6 +938,8 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 				return ir.Exit{}, fmt.Errorf("%w: a symbol", ErrUnsupported)
 			case OpIterClosed:
 				return ir.Exit{}, fmt.Errorf("%w: a cursor", ErrUnsupported)
+			case OpHolderCell, OpChainCheck, OpProtoIs:
+				return ir.Exit{}, fmt.Errorf("%w: an object not made", ErrUnsupported)
 			default:
 				vals[v.ID] = apply(v.Op, v.Aux, a, b)
 			}

@@ -274,7 +274,9 @@ const (
 	// OpFrameRoom guards that the VM's stack has Index slots past the
 	// operands' first and that Const.Bits contexts follow this one: room
 	// for an inlined callee's frame, and its callers' if they are inlined
-	// too, which an exit inside it writes there (InlineState).
+	// too, which an exit inside it writes there (InlineState). With Key 1,
+	// only the slots: room for the homes of objects the code does not make
+	// (escape.go), which an exit writes there, and no context.
 	OpFrameRoom // -> none
 	// OpTailRoom guards that a call in tail position is made where the
 	// stack is shallow (abi.Bounds' TailLevel): deeper, Go makes it,
@@ -502,6 +504,31 @@ const (
 	// OpPowI64 is x ** y of two Int64s: it exits for a negative exponent,
 	// which throws, and where the power is outside the int64 range.
 	OpPowI64 // i64, i64 -> i64
+
+	// What escape analysis leaves of an object it does not make (escape.go):
+	// the checks its making and its properties' operations made of the
+	// heap's other objects, with the object's own part known.
+	//
+	// OpHolderCell is the cell of the property at Index of the table of the
+	// last of the prototypes IC's Holders are, checked as a property read
+	// found on them checks them (PropertySite's Holders), but for the first
+	// one's being the receiver's prototype, which the receiver, an object
+	// the code does not make, is known to have: each has the shape it had,
+	// and each after the first is the prototype of the one before. Key is
+	// the property's, as OpPropCell's.
+	OpHolderCell // -> source
+	// OpChainCheck guards that the prototypes an addition found nothing on
+	// that intercepts its write (IC's Add, PropertyAdd's Chain) are as
+	// they were: each has the shape it had, each after the first is the
+	// prototype of the one before, and the last has none -- the first being
+	// the receiver's prototype, as the object the code does not make is
+	// known to have.
+	OpChainCheck // -> none
+	// OpProtoIs guards that a function (Args[0]) has, as its own property
+	// at Index of its table, Key's, the prototype at Const's address, which
+	// the VM keeps alive: what a construction's receiver from a pool checks
+	// (CallSite's ProtoIndex and ProtoKey), for one the code does not make.
+	OpProtoIs // ptr -> none
 )
 
 var opNames = [...]string{
@@ -525,6 +552,7 @@ var opNames = [...]string{
 	OpAndW: "andw", OpOrW: "orw", OpXorW: "xorw", OpShlW: "shlw", OpShrW: "shrw", OpSarW: "sarw", OpZextW: "zextw", OpSextW: "sextw",
 	OpAddU64: "addu64", OpSubU64: "subu64", OpMulU64: "mulu64", OpShlI64: "shli64", OpShlU64: "shlu64",
 	OpDivI64: "divi64", OpModI64: "modi64", OpDivU64: "divu64", OpModU64: "modu64", OpBigOfF64: "bigoff", OpPowI64: "powi64",
+	OpHolderCell: "holdercell", OpChainCheck: "chaincheck", OpProtoIs: "protois",
 }
 
 func (o Op) String() string {
@@ -563,7 +591,8 @@ func (o Op) isGuard() bool {
 		OpObjectOf, OpPropRead, OpPropWrite, OpPropCell, OpGlobalCell, OpLexCell, OpBindingCell, OpStringMethod, OpStringProp, OpStringCode, OpStringChar, OpCodeChar, OpLooseNullish, OpEqTagged,
 		OpSameObject, OpSameSymbol, OpIterClosed, OpFrameRoom, OpTailRoom, OpTailSelf, OpCall, OpInstanceOf, OpTypeIs, OpCheckTrue, OpPowF64, OpAccessorIs, OpPrimitive,
 		OpBigUnbox, OpAddI64, OpSubI64, OpMulI64,
-		OpBigUnboxU64, OpBigLow, OpBigSign, OpAddU64, OpSubU64, OpMulU64, OpShlI64, OpShlU64, OpDivI64, OpModI64, OpDivU64, OpModU64, OpBigOfF64, OpPowI64:
+		OpBigUnboxU64, OpBigLow, OpBigSign, OpAddU64, OpSubU64, OpMulU64, OpShlI64, OpShlU64, OpDivI64, OpModI64, OpDivU64, OpModU64, OpBigOfF64, OpPowI64,
+		OpHolderCell, OpChainCheck, OpProtoIs:
 		return true
 	}
 	return false
@@ -578,7 +607,7 @@ func (o Op) isGuard() bool {
 func (o Op) readsMemory() bool {
 	return o == OpElemRead || o == OpElemWrite || o == OpElemCell || o == OpElemStore || o == OpPropRead || o == OpPropWrite || o == OpPropCell ||
 		o == OpGlobalCell || o == OpLexCell || o == OpBindingCell || o == OpStringProp || o == OpKeep || o == OpCall || o == OpLength ||
-		o == OpAccessorIs
+		o == OpAccessorIs || o == OpHolderCell || o == OpChainCheck || o == OpProtoIs
 }
 
 // Value is one SSA value.
@@ -756,9 +785,20 @@ type FrameState struct {
 	// operands, where the frame has them (ir.Program's PrologueArgs):
 	// Slots up to them end with the operands still.
 	Args int
+	// Virtual, where not 0, is how many of Slots, the last, are past the
+	// frame's own: the homes of the objects the code does not make, which
+	// an exit writes and Go makes the objects of (escape.go), and the slots
+	// between the frame's and them, nil. Args and the operands' top are
+	// counted back from the frame's own end (Own).
+	Virtual int
 	// id numbers the function's states, for tables by state (newState).
 	id int
 }
+
+// Own is how many of s's slots are its frame's own -- the caller's and an
+// inlined callee's, the operands, a prologue's arguments -- not the homes
+// past them (Virtual).
+func (s *FrameState) Own() int { return len(s.Slots) - s.Virtual }
 
 // InlineState is an inlined callee's frame at an exit inside it, which,
 // as V8's deoptimizer does, makes the frame the callee would have had: the
@@ -839,6 +879,14 @@ type Entry struct {
 	PC    int
 	Depth int
 	Block *Block
+	// Resume marks an entry there only for Go to go on at after an
+	// instruction it ran (a host exit's, a call's): not a function's start,
+	// a loop's header, a handler, nor a place the lowering asks for (ir's
+	// Entries). Without it, Go goes on in the interpreter to the next loop
+	// header, as after a guard's exit (the VM's jitGoOn): escape analysis
+	// drops one where it merges an object the code does not make with the
+	// slot it loads (escape.go).
+	Resume bool
 }
 
 // GenResume is where a generator's resumption goes on (Func's GenEntry):
@@ -891,8 +939,9 @@ type Func struct {
 	LoopsEnd int
 	// Callbacks counts the loops whose callbacks the code inlines in them
 	// (ForEachSite's Inline), and Unmade those of them whose closures it
-	// does not make (ForEachSite's Made).
-	Callbacks, Unmade int
+	// does not make (ForEachSite's Made). Virtuals counts the objects it
+	// does not make (escape.go).
+	Callbacks, Unmade, Virtuals int
 	// FrameLocals is how many of the Locals are the frame's own; the rest,
 	// up to Locals, are captured bindings, which native code reads through
 	// their cells (abi.Context.Upvalues) and never writes. Build sets it to
@@ -930,6 +979,18 @@ type Func struct {
 	// writable, with room, the prototypes with those shapes and no
 	// elements. Zero where Go appends (AppendFeedback).
 	ArrayProtos [2]Holder
+	// HomesEnd is the slot past the homes of the objects the code does
+	// not make (escape.go), which an exit writes past the frame's slots and
+	// Go makes the objects of: 0 for none. The frame takes them, as it
+	// takes its loops' slots (LoopsEnd), its callees' frames past them.
+	HomesEnd int
+	// slotCount is how many slots the build numbered: the function's, its
+	// inlined callees', its loops' (the builder's nslots), past which
+	// homes are (escape.go).
+	slotCount int
+	// virtual is what the VM says of the objects the code may not make
+	// (VirtualFeedback), or nil: none is left unmade.
+	virtual VirtualFeedback
 	// HasCache is the address of the VM's cache of the in operator's
 	// answers (abi.HasCacheBits), which native code looks a key string in
 	// before it calls Go for one (GoHas); 0 for none (HasCacheFeedback).

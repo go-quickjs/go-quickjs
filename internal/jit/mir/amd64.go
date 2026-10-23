@@ -1246,7 +1246,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	}
 	// The call's operands end the state's slots but for the arguments a
 	// parameter list's prologue keeps past them (ssa.FrameState's Args).
-	sp := len(s.Slots) - s.Args
+	sp := s.Own() - s.Args
 	calleeSlot := sp - site.Argc - 1
 	var callee *ssa.Value
 	if site.Accessor != ssa.AccessorNone || site.Super {
@@ -5999,6 +5999,29 @@ func (c *compiler) savingCall() {
 	c.a.JmpReg(scratchA)
 }
 
+// protoChain checks the prototypes chain is, a receiver's the code does not
+// make (ssa's escape.go), whose prototype is the first, as holder and
+// addAlong check those of one it has: each has its shape, and each after
+// the first is the prototype of the one before -- and, if null, the last
+// has none. It leaves the last in scratchA. It uses every scratch register.
+func (c *compiler) protoChain(chain []ssa.Holder, guard func(amd64.Cond), null bool) {
+	for i, h := range chain {
+		c.movImm(scratchA, uint64(h.Object))
+		if i > 0 {
+			c.a.Op(amd64.Cmp, scratchB, scratchA, true)
+			guard(amd64.CondNE)
+		}
+		c.a.Load(scratchB, scratchA, c.enc.ObjectShape)
+		c.cmpWord(scratchB, uint64(h.Shape))
+		guard(amd64.CondNE)
+		c.a.Load(scratchB, scratchA, c.enc.ObjectProto)
+	}
+	if null {
+		c.a.Op(amd64.Test, scratchB, scratchB, true)
+		guard(amd64.CondNE)
+	}
+}
+
 // addAlong adds the property a write's cache adds (ssa.PropertyAdd), as
 // the VM's appendTransition does, when the object may take it -- of the
 // shape it is added to, extensible, its prototypes those the cache found
@@ -7862,6 +7885,37 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		}
 		c.cmpWord(c.gpr(arg(0), scratchA), v.Const.Bits)
 		guard(amd64.CondNE)
+	case ssa.OpHolderCell:
+		// A prototype's property, of the receiver the code does not make
+		// (ssa's escape.go): the chain from its prototype on, as a read's
+		// holders are checked (holder), then the last one's table.
+		c.protoChain(v.Holders().List(), guard, false)
+		c.a.Load(scratchA, scratchA, c.enc.ObjectProps)
+		c.a.OpImm(amd64.Add, scratchA, int32(v.Index)*c.enc.ValueSize, true)
+		c.setG(v, scratchA)
+	case ssa.OpChainCheck:
+		// The prototypes an addition to such a receiver found nothing on
+		// that intercepts it, as addAlong checks them, then none.
+		c.protoChain(v.Add().Chain(), guard, true)
+	case ssa.OpProtoIs:
+		// A construction's receiver's prototype, as constructGuards checks
+		// it, against the one the code was compiled for.
+		p := c.gpr(arg(0), scratchC)
+		if p != scratchC {
+			c.a.MovRR(scratchC, p)
+		}
+		c.a.Load(scratchB, scratchC, c.enc.ObjectProps+8)
+		c.a.OpImm(amd64.Cmp, scratchB, int32(v.Index), true)
+		guard(amd64.CondBE)
+		c.a.Load(scratchB, scratchC, c.enc.ObjectShape)
+		c.a.Load(scratchB, scratchB, c.enc.ShapeKeys)
+		c.a.LoadU32(scratchB, scratchB, int32(v.Index)*c.enc.KeySize+c.enc.PropertyKey)
+		c.a.OpImm(amd64.Cmp, scratchB, int32(v.Key), false)
+		guard(amd64.CondNE)
+		c.a.Load(scratchB, scratchC, c.enc.ObjectProps)
+		c.a.Load(scratchC, scratchB, int32(v.Index)*c.enc.ValueSize+c.enc.RefOffset)
+		c.cmpWord(scratchC, v.Const.Bits)
+		guard(amd64.CondNE)
 	case ssa.OpAccessorIs:
 		// The cell's accessor pair, and its getter's or its setter's
 		// function.
@@ -7932,6 +7986,10 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.Load(scratchB, regCtx, abi.OffStackEnd)
 		c.a.Op(amd64.Cmp, scratchA, scratchB, true)
 		guard(amd64.CondA)
+		if v.Key == 1 {
+			// Room for homes alone (ssa's escape.go).
+			break
+		}
 		c.a.Load(scratchA, regCtx, abi.OffLevel)
 		c.a.OpImm(amd64.Add, scratchA, int32(max(v.Const.Bits, 1)), true)
 		c.a.Load(scratchB, regCtx, abi.OffBounds)

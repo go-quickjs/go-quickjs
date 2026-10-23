@@ -66,6 +66,12 @@ func Optimize(f *Func) {
 		}
 		last[a.ID] = n
 	}
+	// Escape analysis once the rounds are done, which leave it the
+	// operations as simple as they get, then the rounds again for what it
+	// leaves: a property's value read where it was stored, its box's
+	// unboxing.
+	escaped := false
+rounds:
 	for round := 0; round < 32; round++ {
 		// Phis are unboxed first, so that the boxes and unboxings it makes
 		// cancel in this round's walk, not the next's: most functions are
@@ -142,6 +148,13 @@ func Optimize(f *Func) {
 		f.rounds = round + 1
 		if !changed {
 			break
+		}
+	}
+	if !escaped {
+		escaped = true
+		if scalarReplace(f) {
+			dom = dominators(f)
+			goto rounds
 		}
 	}
 	if rematerializeUpvalues(f) {

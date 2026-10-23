@@ -341,7 +341,7 @@ func latency(op ssa.Op) int {
 	case ssa.OpObjectOf, ssa.OpArrayOf, ssa.OpIndexedOf, ssa.OpElemRead, ssa.OpElemCell,
 		ssa.OpLength, ssa.OpPropRead, ssa.OpPropCell, ssa.OpLoadCell, ssa.OpStringProp,
 		ssa.OpStringCode, ssa.OpStringChar, ssa.OpCodeChar, ssa.OpSubstringChar,
-		ssa.OpUpvalueCell, ssa.OpLocalCell, ssa.OpGlobalCell, ssa.OpLexCell, ssa.OpBindingCell:
+		ssa.OpUpvalueCell, ssa.OpLocalCell, ssa.OpGlobalCell, ssa.OpLexCell, ssa.OpBindingCell, ssa.OpHolderCell:
 		return 4
 	case ssa.OpAddF64, ssa.OpSubF64, ssa.OpMulF64, ssa.OpMaxF64, ssa.OpMinF64, ssa.OpSignF64,
 		ssa.OpMulI32, ssa.OpMulI64, ssa.OpMulW, ssa.OpMulU64:
@@ -2180,7 +2180,7 @@ func (c *core) savesOf(v *ssa.Value) []saved {
 // only its own slot holds, and the call writes them where its callee has
 // them (directOperand). A call is never in an entry block, so none is.
 func (c *core) operandsLive(s *ssa.FrameState, ops int) bool {
-	for _, x := range s.Slots[ops : len(s.Slots)-s.Args] {
+	for _, x := range s.Slots[ops : s.Own()-s.Args] {
 		if x == nil || x.Op == ssa.OpLoadSlot && c.isLazy(x) {
 			return false
 		}
@@ -2224,7 +2224,7 @@ func (c *core) entryAt(pc int) *ssa.Block {
 // decoding (sourceAddr) and no test.
 func cellSource(s *ssa.Value) bool {
 	switch s.Op {
-	case ssa.OpPropCell, ssa.OpElemCell, ssa.OpGlobalCell, ssa.OpLexCell, ssa.OpBindingCell, ssa.OpStringMethod, ssa.OpStringChar, ssa.OpCodeChar, ssa.OpSubstringChar, ssa.OpStringProp, ssa.OpCallCell, ssa.OpBigCell, ssa.OpConstCell, ssa.OpUpvalueCell, ssa.OpLocalCell, ssa.OpKeep:
+	case ssa.OpPropCell, ssa.OpHolderCell, ssa.OpElemCell, ssa.OpGlobalCell, ssa.OpLexCell, ssa.OpBindingCell, ssa.OpStringMethod, ssa.OpStringChar, ssa.OpCodeChar, ssa.OpSubstringChar, ssa.OpStringProp, ssa.OpCallCell, ssa.OpBigCell, ssa.OpConstCell, ssa.OpUpvalueCell, ssa.OpLocalCell, ssa.OpKeep:
 		return true
 	}
 	return false
@@ -2254,6 +2254,10 @@ func (c *core) constWord(k ir.Value) uint64 {
 		return c.enc.False
 	case ir.Uninitialized:
 		return c.enc.Uninitialized
+	case ir.Word:
+		// A word written as it is: an object the code does not make, its
+		// shape, its prototype (abi.VirtualBase).
+		return k.Bits
 	}
 	panic(fmt.Sprintf("tagged constant of kind %d", k.Kind))
 }
@@ -2272,6 +2276,11 @@ func (c *core) frameSize() int {
 	n := c.f.FrameLocals + c.f.StackSize
 	if c.f.Loops {
 		n = max(n, c.f.FrameLocals+c.f.LoopsEnd-c.f.Locals)
+	}
+	if c.f.HomesEnd != 0 {
+		// The homes of the objects it does not make, which its exits write
+		// there (ssa's escape.go).
+		n = max(n, c.f.FrameLocals+c.f.HomesEnd-c.f.Locals)
 	}
 	return n
 }
@@ -2755,7 +2764,7 @@ func (c *core) callState(v *ssa.Value, s *ssa.FrameState, skip func(int) bool, o
 			continue
 		}
 		rec, r := abi.CallRecord{Slot: int32(i), Origin: -1}, callRecord{slot: i, x: x}
-		full := operands >= 0 && i >= operands
+		full := operands >= 0 && i >= operands && i < s.Own()
 		if bigKept(x) != nil {
 			r.num, r.ref, r.big, rec.Ref = true, true, true, true
 			refs, refRecs = append(refs, r), append(refRecs, rec)

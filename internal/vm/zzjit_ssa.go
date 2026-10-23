@@ -1932,6 +1932,7 @@ func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
 	e.ssaSerial++
 	e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaHostsLeft = fb.inlinedAt, fb.definesUnfed, fb.cells, fb.hostsLeft
 	e.ssaStrings, e.ssaInlined, e.ssaPools, e.ssaMade = e.ssaStrings || fb.strings, fb.inlined, fb.pools, fb.made
+	e.ssaHomes, e.ssaVirtuals = max(e.ssaHomes, fb.homes), fb.virtuals
 	e.ssaCallbacks, e.ssaUnmade = fb.callbacks, fb.unmade
 	r.jit.setLinks(e, fb.links)
 	e.ssaKeeps = max(e.ssaKeeps, fb.keeps)
@@ -2023,6 +2024,14 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 		return nil, nil, fmt.Errorf("%w: %v", jitRefused, err)
 	}
 	ssa.Optimize(f)
+	fb.virtuals = f.Virtuals
+	if f.HomesEnd != 0 {
+		// The homes of the objects it does not make, past its operands,
+		// which its frame takes, as it does its loops' slots: its callees'
+		// frames start past them.
+		fb.homes = f.HomesEnd - p.Locals
+		fb.loopSlots = max(fb.loopSlots, fb.homes)
+	}
 	if t := mir.Timing; t != nil {
 		t.Lap(mir.PhaseOptimize)
 	}
@@ -2225,6 +2234,10 @@ type jitFeedback struct {
 	// (ssa.Func's Callbacks and Unmade).
 	made              []*closure
 	callbacks, unmade int
+	// homes is how far past the frame's operands' first the homes of the
+	// objects the code does not make end (ssa.Func's HomesEnd), or 0, and
+	// virtuals how many objects it does not make (ssa.Func's Virtuals).
+	homes, virtuals int
 	// wanted are callees of calls to inline that the compile made calls
 	// instead -- past its budget (ssa's maxInlines) -- which had no code
 	// for native callers: compiled after it (jitWantedCallees). linked
@@ -7611,7 +7624,13 @@ func (r *Runtime) jitPushLoopFrame(f *frame, loop uint64, written bool) {
 // nothing of the frame before: the exit has written it, its records and
 // cells.
 func (r *Runtime) jitMaterialize(f *frame, e *jitEntry) {
-	if e == nil || len(e.ssaMade) == 0 || f.cl == nil {
+	if e == nil || f.cl == nil {
+		return
+	}
+	if e.ssaHomes != 0 {
+		r.jitMaterializeObjects(f, e)
+	}
+	if len(e.ssaMade) == 0 {
 		return
 	}
 	var made [4]struct {
@@ -8476,6 +8495,7 @@ func (e *jitEntry) setSSA(s *jitState, fn *bytecode.Function, p *ir.Program, cod
 	e.ssaProg = p
 	e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaHostsLeft = fb.inlinedAt, fb.definesUnfed, fb.cells, fb.hostsLeft
 	e.ssaStrings, e.ssaInlined, e.ssaPools, e.ssaMade = fb.strings, fb.inlined, fb.pools, fb.made
+	e.ssaHomes, e.ssaVirtuals = max(e.ssaHomes, fb.homes), fb.virtuals
 	e.ssaCallbacks, e.ssaUnmade = fb.callbacks, fb.unmade
 	s.setLinks(e, fb.links)
 	e.ssaKeeps = max(e.ssaKeeps, fb.keeps)

@@ -78,6 +78,12 @@ const (
 	Uninitialized
 	Opaque
 	String
+	// Word is no value of the language's: a word an exit writes as it is,
+	// Bits, into a slot's number word, its pointer word none -- what a frame
+	// state names an object the code does not make by, and its shape and
+	// prototype at the object's home, which Go makes it of (ssa's
+	// escape.go, abi.VirtualBase). Only the new pipeline's states have it.
+	Word
 )
 
 // Value is pointer-free. Opaque Bits is an index into a caller-owned root

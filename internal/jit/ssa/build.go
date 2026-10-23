@@ -1957,6 +1957,19 @@ type HolderChain struct {
 	More    []Holder
 }
 
+// List is the chain, object by object: Holders' up to the first of none,
+// then More.
+func (h *HolderChain) List() []Holder {
+	var chain []Holder
+	for _, x := range h.Holders {
+		if x.Object == 0 {
+			return chain
+		}
+		chain = append(chain, x)
+	}
+	return append(chain, h.More...)
+}
+
 // Holder is a prototype a property read was answered by, or passed through,
 // at its address, which the VM keeps alive, with the shape it had: 0 for
 // none.
@@ -1990,6 +2003,10 @@ func build(w *Workspace, p *ir.Program, fb Feedback) (*Func, error) {
 	}
 	b.translate()
 	bigLeafSites(f)
+	f.slotCount = b.nslots
+	if vf, ok := fb.(VirtualFeedback); ok {
+		f.virtual = vf
+	}
 	// The shadows and the stores' checks are Optimize's to make, which
 	// would remake them, or the first to run or compile f's (Finish).
 	return b.f, nil
@@ -4218,12 +4235,28 @@ func (b *builder) plan() error {
 		b.planInline(b.inlined[pc], b.inlined[pc].callBlock, b.blockAt[pc+1])
 	}
 	// Entry blocks load the live slots and go to the block for their PC.
+	// One is there only for Go to go on at after an instruction it ran
+	// (Entry's Resume) unless a loop's back edge goes there, the lowering
+	// asks for it -- a handler, a generator's first resumption -- or it is
+	// the start; and none is in a generator whose yields a loop's step
+	// resumes natively, at the entries after them (Func's GenResumes). An
+	// async function's resumption after an await where no entry is runs in
+	// the interpreter (the VM's jitResume).
+	looped := b.f.bools(len(p.Code) + 1)
+	suspends := false
+	for pc, in := range p.Code {
+		if (in.Op == ir.Jump || in.Op == ir.Branch) && in.Target <= pc {
+			looped[in.Target] = true
+		}
+		suspends = suspends || in.Suspend
+	}
 	for _, pc := range b.entryPCs {
 		e := b.f.newBlock(-1)
 		e.Kind = BlockPlain
 		e.Generic = b.fb != nil && b.fb.EntryGeneric(int(p.Maps[pc].PC))
 		b.edge(e, b.blockAt[pc])
-		b.f.Entries = append(b.f.Entries, Entry{PC: pc, Depth: p.Maps[pc].Depth, Block: e})
+		resume := pc != 0 && !looped[pc] && !suspends && !slices.Contains(p.Entries, pc)
+		b.f.Entries = append(b.f.Entries, Entry{PC: pc, Depth: p.Maps[pc].Depth, Block: e, Resume: resume})
 	}
 	// A loop header is reached by an edge from a block at or after it, in
 	// one frame: a callee's blocks have their own PCs, and no loops.

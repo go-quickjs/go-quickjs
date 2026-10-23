@@ -648,6 +648,15 @@ type jitEntry struct {
 	// (jitFeedback's made), which Go makes where an exit's frame names them
 	// (jitMaterialize).
 	ssaMade []*closure
+	// ssaHomes is how many slots past its frame's operands' first the
+	// homes of the objects any code of the entry's does not make end at
+	// (ssa.Func's HomesEnd), which Go makes where an exit's frame names them
+	// (jitMaterialize): 0 for none. It only grows, as code an earlier
+	// compile made may exit after a later one.
+	ssaHomes int
+	// ssaVirtuals is how many objects its code does not make (ssa.Func's
+	// Virtuals).
+	ssaVirtuals int
 	// ssaCallbacks counts the loops' callbacks the code inlines, and
 	// ssaUnmade those of them it does not make (ssa.Func's Callbacks and
 	// Unmade).

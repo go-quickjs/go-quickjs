@@ -212,6 +212,36 @@ constructions, are taken from pools of objects the VM makes ahead
 (`abi.ObjectPool`), as V8's code allocates inline; Go refills a pool that
 runs out.
 
+**Escape analysis.** As V8's TurboFan does, an object a pool would give
+the code -- an object literal's, the receiver of a construction the code
+inlines -- that nothing but the code sees is not made (`ssa/escape.go`):
+its properties are the values stored to them, held in SSA values,
+registers and spill slots, and a read of one is that value, unboxed where
+a number is read. What it does not make keeps the checks its making and
+its operations made of the heap: the constructor's prototype
+(`ssa.OpProtoIs`, which deoptimizes once it is replaced), an addition's
+prototypes intercepting nothing (`OpChainCheck`), a method's holders on
+the object's prototypes (`OpHolderCell`). An object escapes, and is made
+as before, where anything else may see it: a store into an object that is
+made, a call's operand, a return, a phi merging it with anything but
+itself, a loop's header (none is left unmade across one), and any
+operation whose shape escape analysis cannot follow -- its stores change
+its shape along the transitions its sites' caches know, the same on every
+path to a merge, where phis merge its properties. A phi merging it with
+the slot an entry loads, at an entry there only for Go to go on at after
+an instruction it ran (`ssa.Entry`'s `Resume`), is the object: the entry
+is dropped, Go going on in the interpreter there instead. Where the code
+exits, as V8's deoptimization data names a materialized object, the frame
+state names it by a word no value has (`abi.VirtualBase`), with the first
+slot of its home past the frame's slots, where the state holds its shape,
+its prototype and its properties' values (`ssa.FrameState`'s `Virtual`):
+Go makes the object of them (the VM's `jitMaterializeObjects`), one for
+each home, which every slot naming it is given, the words of others among
+its properties made too, as V8's deoptimizer materializes them. The frame
+takes the homes as it takes its loops' slots (`ssa.Func`'s `HomesEnd`),
+its callees' frames starting past them, and checks the VM's stack has
+room for them where it does not make the object (`OpFrameRoom`).
+
 **Exceptions.** The compiler emits structured code, so the handlers in
 force at each instruction are known when lowering (`ir.Program`'s
 `Handlers`), and native code registers none: wherever Go takes the frame

@@ -8839,7 +8839,10 @@ func TestJITSSAStringAddCallsGo(t *testing.T) {
 // literals, far more of each than a pool holds, never leaves native code;
 // it did at every refill. A constructor whose prototype is replaced gets
 // objects of the new one. The collector runs at each call of Go, which
-// churns every register. Each answer is the interpreter's.
+// churns every register. Each answer is the interpreter's. The literal is
+// kept, and so made, the construction it holds with it: one that nothing
+// but the loop sees is not made at all (ssa's escape.go), nor its pool
+// filled.
 func TestJITSSAPoolsRefilledByGo(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -8861,7 +8864,8 @@ func TestJITSSAPoolsRefilledByGo(t *testing.T) {
 	defer func() { jitGoCallWork = nil }()
 	setup := `function P(x){this.x=x;this.y=x*2} P.prototype.z=1;
 		function Q(x){for(let k=0;k<1;k++)this.v=x+k}
-		function mk(n){let s=0;for(let i=0;i<n;i++){const p=new P(i),q=new Q(i);const o={a:i,b:p};const a=[i,i+1,q];s=(s+o.b.y+a[1]+a[2].v+(p.z|0))|0}return s}`
+		var last;
+		function mk(n){let s=0;for(let i=0;i<n;i++){const p=new P(i),q=new Q(i);const o={a:i,b:p};last=o;const a=[i,i+1,q];s=(s+o.b.y+a[1]+a[2].v+(p.z|0))|0}return s}`
 	want := New(Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})

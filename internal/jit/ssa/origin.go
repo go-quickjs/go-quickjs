@@ -529,7 +529,7 @@ func (a *aliases) search(s *Value) {
 // mayCall, mayOwnCell and mayElemCell answer of it.
 func (a *aliases) leaf(sum *aliasSum, x *Value) {
 	switch x.Op {
-	case OpPropCell, OpGlobalCell, OpLexCell, OpBindingCell, OpStringProp:
+	case OpPropCell, OpHolderCell, OpGlobalCell, OpLexCell, OpBindingCell, OpStringProp:
 		sum.any = true
 		sum.keys = append(sum.keys, x.Key)
 	case OpElemCell:
@@ -607,7 +607,7 @@ func localKey(slot int) uint32 { return ^uint32(2) - uint32(slot) }
 // may reports whether a store through key may write the cell at s.
 func (a *aliases) may(key uint32, s *Value) bool {
 	switch s.Op {
-	case OpPropCell, OpGlobalCell, OpLexCell, OpBindingCell, OpStringProp:
+	case OpPropCell, OpHolderCell, OpGlobalCell, OpLexCell, OpBindingCell, OpStringProp:
 		return key == anyKey || s.Key == key
 	case OpElemCell:
 		// No property store writes an element; a call's callee may, or
@@ -678,7 +678,7 @@ func (a *aliases) mayElem(s *Value) bool {
 	switch s.Op {
 	case OpElemCell:
 		return true
-	case OpPropCell, OpGlobalCell, OpLexCell, OpBindingCell, OpStringProp, OpStringMethod, OpStringChar, OpCodeChar, OpSubstringChar, OpConstSource, OpConstCell,
+	case OpPropCell, OpHolderCell, OpGlobalCell, OpLexCell, OpBindingCell, OpStringProp, OpStringMethod, OpStringChar, OpCodeChar, OpSubstringChar, OpConstSource, OpConstCell,
 		OpCallCell, OpBigCell, OpUpvalueCell, OpLocalCell:
 		return false
 	case OpKeep, OpPhi:

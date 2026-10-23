@@ -3261,7 +3261,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	}
 	// The call's operands end the state's slots but for the arguments a
 	// parameter list's prologue keeps past them (ssa.FrameState's Args).
-	sp := len(s.Slots) - s.Args
+	sp := s.Own() - s.Args
 	calleeSlot := sp - site.Argc - 1
 	var callee *ssa.Value
 	if site.Accessor != ssa.AccessorNone || site.Super {
@@ -6009,6 +6009,27 @@ func (c *a64Compiler) holder(v *ssa.Value, guard func(arm64.Cond)) {
 	c.a.Bind(done)
 }
 
+// protoChain checks the prototypes chain is, as amd64's does, the last left
+// in A. It uses A, B and C.
+func (c *a64Compiler) protoChain(chain []ssa.Holder, guard func(arm64.Cond), null bool) {
+	for i, h := range chain {
+		c.movImm(a64A, uint64(h.Object))
+		if i > 0 {
+			c.a.Cmp(a64B, a64A, true)
+			guard(arm64.NE)
+		}
+		c.a.Load(a64B, a64A, c.enc.ObjectShape)
+		c.movImm(a64C, uint64(h.Shape))
+		c.a.Cmp(a64B, a64C, true)
+		guard(arm64.NE)
+		c.a.Load(a64B, a64A, c.enc.ObjectProto)
+	}
+	if null {
+		c.a.CmpImm(a64B, 0, true)
+		guard(arm64.NE)
+	}
+}
+
 // integer converts the double x to an integer in r, failing unless it is
 // one an int64 holds exactly: FCVTZS saturates, so a result of 2**63-1,
 // which no double converts to exactly, means x is 2**63 or more. It uses
@@ -7039,6 +7060,10 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.Load(a64B, a64Ctx, abi.OffStackEnd)
 		c.a.Cmp(a64A, a64B, true)
 		guard(arm64.HI)
+		if v.Key == 1 {
+			// Room for homes alone, as amd64's.
+			break
+		}
 		c.a.Load(a64A, a64Ctx, abi.OffLevel)
 		c.a.AddImm(a64A, a64A, int64(max(v.Const.Bits, 1)), true)
 		c.a.Load(a64B, a64Ctx, abi.OffBounds)
@@ -7104,6 +7129,35 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		}
 		c.movImm(a64B, v.Const.Bits)
 		c.a.Cmp(c.gpr(arg(0), a64A), a64B, true)
+		guard(arm64.NE)
+	case ssa.OpHolderCell:
+		// As amd64's: the chain from the prototype on, then the last one's
+		// table.
+		c.protoChain(v.Holders().List(), guard, false)
+		c.a.Load(a64A, a64A, c.enc.ObjectProps)
+		c.a.AddImm(a64A, a64A, int64(int32(v.Index)*c.enc.ValueSize), true)
+		c.setG(v, a64A)
+	case ssa.OpChainCheck:
+		c.protoChain(v.Add().Chain(), guard, true)
+	case ssa.OpProtoIs:
+		// As amd64's, as constructGuards checks the prototype.
+		p := c.gpr(arg(0), a64C)
+		if p != a64C {
+			c.a.MovRR(a64C, p)
+		}
+		c.a.Load(a64B, a64C, c.enc.ObjectProps+8)
+		c.a.CmpImm(a64B, int64(v.Index), true)
+		guard(arm64.LS)
+		c.a.Load(a64B, a64C, c.enc.ObjectShape)
+		c.a.Load(a64B, a64B, c.enc.ShapeKeys)
+		c.a.LoadU32(a64B, a64B, int32(v.Index)*c.enc.KeySize+c.enc.PropertyKey)
+		c.movImm(a64A, uint64(v.Key))
+		c.a.Cmp(a64B, a64A, false)
+		guard(arm64.NE)
+		c.a.Load(a64B, a64C, c.enc.ObjectProps)
+		c.a.Load(a64C, a64B, int32(v.Index)*c.enc.ValueSize+c.enc.RefOffset)
+		c.movImm(a64A, v.Const.Bits)
+		c.a.Cmp(a64C, a64A, true)
 		guard(arm64.NE)
 	case ssa.OpAccessorIs:
 		// The cell's accessor pair, and its getter's or its setter's
