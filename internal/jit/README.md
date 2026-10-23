@@ -247,6 +247,24 @@ takes the homes as it takes its loops' slots (`ssa.Func`'s `HomesEnd`),
 its callees' frames starting past them, and checks the VM's stack has
 room for them where it does not make the object (`OpFrameRoom`).
 
+A closure the code makes that nothing uses but the code's own calls of it
+-- `const sq = (x) => x * x + n` called in a loop, a function expression
+made and called in a loop's turn -- is a call whose target the code
+knows, as V8's graph knows it once the closure is a constant of it: the
+function is built twice (`ssa/called.go`), the first build's SSA saying
+which closures they are -- its values used only as a call's callee, the
+call's check of it, a frame state and phis merging it with itself or
+with the slot an entry loads of the local it is kept in, out of every
+loop, and no scope's end closing what it captured before a call -- and
+the second inlining their calls with no check of the callee and leaving
+the closures unmade, as a callback the caller makes is (`MadeCallback`):
+what they capture is read and assigned as the caller's slots, a frame
+state names the template, Go makes the closure at an exit, and an exit
+inside the inlined call has Go make its frame calling that closure
+(`jitCalledClosure`). The entry after the closure, there for Go to go on
+after making it, is dropped. Where it makes no other closure, its cells
+go back to their pool too (`CellsBack`).
+
 **Exceptions.** The compiler emits structured code, so the handlers in
 force at each instruction are known when lowering (`ir.Program`'s
 `Handlers`), and native code registers none: wherever Go takes the frame

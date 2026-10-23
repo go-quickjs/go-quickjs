@@ -657,6 +657,9 @@ type jitEntry struct {
 	// ssaVirtuals is how many objects its code does not make (ssa.Func's
 	// Virtuals).
 	ssaVirtuals int
+	// ssaCalled is how many closures its code makes that it only calls,
+	// inlined and not made (ssa.Func's Called).
+	ssaCalled int
 	// ssaCallbacks counts the loops' callbacks the code inlines, and
 	// ssaUnmade those of them it does not make (ssa.Func's Callbacks and
 	// Unmade).

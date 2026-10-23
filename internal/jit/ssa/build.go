@@ -1978,9 +1978,29 @@ type Holder struct{ Object, Shape uintptr }
 // BuildWith is Build with what the VM knows of the sites.
 func BuildWith(p *ir.Program, fb Feedback) (*Func, error) { return build(nil, p, fb) }
 
+// build builds p, and, where the build finds closures the function makes
+// that nothing uses but its calls of them (calledClosures), builds it again
+// with those calls inlined and the closures not made, as V8 inlines a
+// call whose target its graph knows and its escape analysis then removes
+// the closure. The first build stands where the second fails.
 func build(w *Workspace, p *ir.Program, fb Feedback) (*Func, error) {
+	f, called, err := buildCalls(w, p, fb, nil)
+	if err != nil || len(called) == 0 {
+		return f, err
+	}
+	if g, _, err := buildCalls(w, p, fb, called); err == nil {
+		return g, nil
+	}
+	return f, nil
+}
+
+// buildCalls is a build of p, the calls called names -- by PC, the PC of the
+// closure each calls -- inlined, the closures not made where all their
+// calls are; and, with called nil, the closures it finds so
+// (calledClosures).
+func buildCalls(w *Workspace, p *ir.Program, fb Feedback, called map[int]int) (*Func, map[int]int, error) {
 	if err := p.Validate(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	p = referenceReads(p, fb)
 	f := &Func{Locals: p.Locals, StackSize: p.StackSize, FrameLocals: p.Locals, ThisSlot: -1, ws: w}
@@ -1995,11 +2015,11 @@ func build(w *Workspace, p *ir.Program, fb Feedback) (*Func, error) {
 	}
 	f.written = f.bools(p.Locals + p.StackSize)
 	f.assigned = p.Assigned
-	b := &builder{p: p, fb: fb, f: f, nslots: p.Locals + p.StackSize}
+	b := &builder{p: p, fb: fb, f: f, nslots: p.Locals + p.StackSize, called: called}
 	b.root = &frame{p: p, fb: fb}
 	b.cur = b.root
 	if err := b.plan(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	b.cellsBack()
 	b.translate()
@@ -2008,9 +2028,12 @@ func build(w *Workspace, p *ir.Program, fb Feedback) (*Func, error) {
 	if vf, ok := fb.(VirtualFeedback); ok {
 		f.virtual = vf
 	}
+	if called == nil {
+		called = b.calledClosures()
+	}
 	// The shadows and the stores' checks are Optimize's to make, which
 	// would remake them, or the first to run or compile f's (Finish).
-	return b.f, nil
+	return b.f, called, nil
 }
 
 type builder struct {
@@ -2043,6 +2066,11 @@ type builder struct {
 	// callbacks of loops their calls are inlined in (forEachPlan's made),
 	// each its template's address (MadeCallback's Template).
 	made map[int]uintptr
+	// called are the calls to inline of closures the function makes that
+	// nothing else uses (calledClosures), by PC, each the PC of its
+	// closure; madeCalls the closures their inlining leaves unmade.
+	called    map[int]int
+	madeCalls map[int]*MadeCallback
 	// typedArrays are the global reads whose bindings held typed arrays
 	// (GlobalSite's Typed), which element reads of them read as such.
 	typedArrays map[*Value]bool
@@ -2711,6 +2739,81 @@ func (b *builder) cellsBack() {
 	}
 }
 
+// looped reports whether a backward branch of p goes to pc: a loop's
+// header.
+func looped(p *ir.Program, pc int) bool {
+	for q, in := range p.Code {
+		if (in.Op == ir.Jump || in.Op == ir.Branch) && in.Target == pc && pc <= q {
+			return true
+		}
+	}
+	return false
+}
+
+// calledSite is the callee to inline at pc, a call of the closure the
+// function makes at pc0 (calledClosures): its function, as the VM gives it
+// (CalledClosureFeedback), called with the call's arguments and no
+// receiver, what it captured read and assigned as the function's own
+// slots where they are (InlineSite's Captured), as a loop's callback the
+// function makes is (planCallback); no check of the callee, which the
+// analysis found is that closure.
+func (b *builder) calledSite(pc, pc0 int) (InlineSite, bool) {
+	cf, ok := b.fb.(CalledClosureFeedback)
+	if !ok || b.cur != b.root {
+		return InlineSite{}, false
+	}
+	made, s, ok := cf.CalledClosure(pc0)
+	if !ok || s.Program == nil {
+		return InlineSite{}, false
+	}
+	argc, method, ok := cf.CallShape(pc)
+	if !ok || method {
+		return InlineSite{}, false
+	}
+	p := b.root.p
+	s.Callee, s.Closure, s.Upvalues, s.Argc, s.Method = 0, made.Closure, 0, argc, false
+	s.Captured = make([]int, len(made.Captures))
+	for i, c := range made.Captures {
+		k := int(c >> 1)
+		switch {
+		case c&1 != 0 && k < p.UpvalueBase && p.IsCaptured(k):
+			s.Captured[i] = k
+		case c&1 == 0 && k < p.Upvalues:
+			s.Captured[i] = p.UpvalueBase + k
+		default:
+			return InlineSite{}, false
+		}
+	}
+	if b.madeCalls == nil {
+		b.madeCalls = map[int]*MadeCallback{}
+	}
+	b.madeCalls[pc0] = &made
+	return s, true
+}
+
+// unmakeCalled leaves unmade the closures all of whose calls planning
+// inlined (calledSite): their slots hold their templates, which only frame
+// states name, as a loop's callback the function makes (MadeCallback).
+func (b *builder) unmakeCalled() {
+	for pc0, made := range b.madeCalls {
+		all := true
+		for pc, at := range b.called {
+			if at == pc0 && b.inlined[pc] == nil {
+				all = false
+			}
+		}
+		if !all || b.made[pc0] != 0 {
+			delete(b.madeCalls, pc0)
+			continue
+		}
+		if b.made == nil {
+			b.made = map[int]uintptr{}
+		}
+		b.made[pc0] = made.Template
+		b.f.Called++
+	}
+}
+
 // returnsThis reports whether p's return at pc returns its receiver, in
 // slot this, as a class's constructor does (push_this, return): the value
 // the instruction before it, which nothing jumps past, copies there. A
@@ -3062,10 +3165,14 @@ func (b *builder) inlineCall(blk *Block, pc int, fr *frame, guard func(Op, Type,
 		return
 	}
 	// Another callee is called by Go, from the call's state, as a call that
-	// is not inlined is, and native code goes on after it.
-	object := guard(OpObjectOf, Ptr, ir.HostExit, b.read(sp-site.Argc-1, blk))
-	same := guard(OpSameObject, None, ir.HostExit, object)
-	same.Const = ir.Value{Bits: uint64(site.Callee)}
+	// is not inlined is, and native code goes on after it -- but for a
+	// closure the function makes, which the call calls (calledSite), no
+	// object until an exit makes it.
+	if site.Callee != 0 {
+		object := guard(OpObjectOf, Ptr, ir.HostExit, b.read(sp-site.Argc-1, blk))
+		same := guard(OpSameObject, None, ir.HostExit, object)
+		same.Const = ir.Value{Bits: uint64(site.Callee)}
+	}
 	if site.Coerce && site.ThisSlot >= 0 {
 		// A receiver that is not an object is coerced, which Go does.
 		guard(OpObjectOf, Ptr, ir.HostExit, b.read(sp-site.Argc-2, blk))
@@ -3948,7 +4055,9 @@ func (b *builder) plan() error {
 			k := &asked[pc]
 			if !k.asked {
 				k.asked = true
-				if _, isAccessor := b.accessor(pc); b.fb != nil && p.Code[pc].Op == ir.Host && !isAccessor && !b.fb.Generic(pc) {
+				if pc0, ok := b.called[pc]; ok {
+					k.site, k.ok = b.calledSite(pc, pc0)
+				} else if _, isAccessor := b.accessor(pc); b.fb != nil && p.Code[pc].Op == ir.Host && !isAccessor && !b.fb.Generic(pc) {
 					k.site, k.ok = b.fb.Inline(pc)
 				}
 			}
@@ -3972,6 +4081,7 @@ func (b *builder) plan() error {
 			}
 		}
 	}
+	b.unmakeCalled()
 	// Go goes on natively after what it ran where it is sure to run it:
 	// an instruction left to Go whole; a call, which leaves while the
 	// collector marks; and an element's write, which leaves past the
@@ -4132,6 +4242,13 @@ func (b *builder) plan() error {
 		switch {
 		case in.Op == ir.Jump || in.Op == ir.Branch || in.Op == ir.Return || in.Op == ir.IterStep && !in.When || b.host(pc) && !b.goesOn(pc) || b.unfed(pc):
 			leaders[pc+1] = true
+		}
+	}
+	for pc0 := range b.madeCalls {
+		// The closure is not made: nothing exits there, for Go to go on
+		// after.
+		if !looped(p, pc0+1) {
+			entries[pc0+1] = false
 		}
 	}
 	// A parameter list's prologue binds its parameters from what their

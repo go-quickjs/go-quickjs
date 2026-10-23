@@ -1932,7 +1932,7 @@ func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
 	e.ssaSerial++
 	e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaHostsLeft = fb.inlinedAt, fb.definesUnfed, fb.cells, fb.hostsLeft
 	e.ssaStrings, e.ssaInlined, e.ssaPools, e.ssaMade = e.ssaStrings || fb.strings, fb.inlined, fb.pools, fb.made
-	e.ssaHomes, e.ssaVirtuals = max(e.ssaHomes, fb.homes), fb.virtuals
+	e.ssaHomes, e.ssaVirtuals, e.ssaCalled = max(e.ssaHomes, fb.homes), fb.virtuals, fb.called
 	e.ssaCallbacks, e.ssaUnmade = fb.callbacks, fb.unmade
 	r.jit.setLinks(e, fb.links)
 	e.ssaKeeps = max(e.ssaKeeps, fb.keeps)
@@ -2024,7 +2024,7 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 		return nil, nil, fmt.Errorf("%w: %v", jitRefused, err)
 	}
 	ssa.Optimize(f)
-	fb.virtuals = f.Virtuals
+	fb.virtuals, fb.called = f.Virtuals, f.Called
 	if f.HomesEnd != 0 {
 		// The homes of the objects it does not make, past its operands,
 		// which its frame takes, as it does its loops' slots: its callees'
@@ -2238,6 +2238,9 @@ type jitFeedback struct {
 	// objects the code does not make end (ssa.Func's HomesEnd), or 0, and
 	// virtuals how many objects it does not make (ssa.Func's Virtuals).
 	homes, virtuals int
+	// called is how many closures the code makes that it only calls and
+	// does not make (ssa.Func's Called).
+	called int
 	// wanted are callees of calls to inline that the compile made calls
 	// instead -- past its budget (ssa's maxInlines) -- which had no code
 	// for native callers: compiled after it (jitWantedCallees). linked
@@ -7478,8 +7481,33 @@ func (fb *jitFeedback) ForEach(pc int) (ssa.ForEachSite, bool) {
 // (madeCallback) -- called as a method of argc arguments. Not one whose
 // inlining has left native code too often (jitInlineLeft).
 func (fb *jitFeedback) callbackInline(x *jitInline, argc int) (ssa.InlineSite, bool) {
-	r, cl := fb.r, x.cb
-	if x.cbLeft || cl == nil || cl.fn == fb.fn || jitNoInline != nil && jitNoInline(cl.fn) ||
+	if x.cbLeft {
+		return ssa.InlineSite{}, false
+	}
+	site, ok := fb.closureInline(x.cb, argc)
+	if !ok {
+		return ssa.InlineSite{}, false
+	}
+	if !x.byCode && x.cbObj != nil {
+		// The one closure: its captured bindings in its cells, as an
+		// inlined call's (jitFeedback's Inline).
+		k := fb.keep()
+		site.Callee, site.Upvalues = uintptr(unsafe.Pointer(x.cbObj)), jitUpvalueCells(x.cb)
+		k.holders = append(k.holders, x.cbObj)
+		k.inlined = append(k.inlined, x.cb)
+	}
+	return site, true
+}
+
+// closureInline is the InlineSite of cl's function, to inline as a
+// method's call of argc arguments -- a loop's callback (callbackInline),
+// or a closure the function makes and only calls (CalledClosure), whose
+// call the builder makes one of no receiver -- under the rules any
+// callee's inlining follows (jitInlinable, jitInlinesCalls), with no
+// closure object: the builder's to check, or to know.
+func (fb *jitFeedback) closureInline(cl *closure, argc int) (ssa.InlineSite, bool) {
+	r := fb.r
+	if cl == nil || cl.fn == fb.fn || jitNoInline != nil && jitNoInline(cl.fn) ||
 		!r.jitInlinable(cl.fn) && !r.jitInlinesCalls(cl, jitInlineDepth-1) {
 		return ssa.InlineSite{}, false
 	}
@@ -7506,14 +7534,59 @@ func (fb *jitFeedback) callbackInline(x *jitInline, argc int) (ssa.InlineSite, b
 		Closure: uintptr(unsafe.Pointer(cl)), Argc: argc, Method: true,
 		Params: cl.fn.ParamCount, ThisSlot: this, Coerce: cl.fn.CoerceThis, ReadsArguments: reads,
 	}
-	if !x.byCode && x.cbObj != nil {
-		// The one closure: its captured bindings in its cells, as an
-		// inlined call's (jitFeedback's Inline).
-		site.Callee, site.Upvalues = uintptr(unsafe.Pointer(x.cbObj)), jitUpvalueCells(cl)
-		k.holders = append(k.holders, x.cbObj)
-		k.inlined = append(k.inlined, cl)
-	}
 	return site, true
+}
+
+// CalledClosure is ssa.CalledClosureFeedback's: the closure fb's function
+// makes at pc, which its calls of it may inline, leaving it unmade (ssa's
+// calledClosures) -- its template, which the code keeps, as the inlined
+// frames' closure an exit names, and what it captures (madeCallback) --
+// and its function's InlineSite (closureInline). Not an arrow that reads
+// its maker's new.target or super (jitNeedsMaker); in the function's own
+// code alone.
+func (fb *jitFeedback) CalledClosure(pc int) (ssa.MadeCallback, ssa.InlineSite, bool) {
+	if fb.e == nil || fb.root != nil || fb.fwd != nil || fb.cl == nil || pc >= len(fb.fn.Code) || fb.fn.Code[pc].Op != bytecode.OpClosure ||
+		int(fb.fn.Code[pc].A) >= len(fb.cl.consts) {
+		return ssa.MadeCallback{}, ssa.InlineSite{}, false
+	}
+	c := &fb.cl.consts[fb.fn.Code[pc].A]
+	t := c.template()
+	if t == nil || jitNeedsMaker(*c) {
+		return ssa.MadeCallback{}, ssa.InlineSite{}, false
+	}
+	site, ok := fb.closureInline(t, 0)
+	if !ok {
+		return ssa.MadeCallback{}, ssa.InlineSite{}, false
+	}
+	caps := make([]int32, len(t.fn.Upvalues))
+	for i, desc := range t.fn.Upvalues {
+		caps[i] = int32(desc.Index) << 1
+		if desc.FromParent {
+			caps[i] |= 1
+		}
+	}
+	k := fb.keep()
+	if !slices.Contains(k.made, t) {
+		k.inlined = append(k.inlined, t)
+		k.made = append(k.made, t)
+	}
+	return ssa.MadeCallback{PC: pc, Template: uintptr(unsafe.Pointer(c)), Closure: uintptr(unsafe.Pointer(t)), Captures: caps}, site, true
+}
+
+// CallShape is ssa.CalledClosureFeedback's: the call at pc's argument
+// count, and whether it is a method's -- not one whose inlining left
+// native code too often (jitInlineLeft), nor a call in tail position.
+func (fb *jitFeedback) CallShape(pc int) (int, bool, bool) {
+	if fb.e == nil || pc < 0 || pc >= len(fb.fn.Code) || slices.Contains(fb.e.notInline, int32(pc)) {
+		return 0, false, false
+	}
+	switch in := fb.fn.Code[pc]; in.Op {
+	case bytecode.OpCall:
+		return int(in.A), false, true
+	case bytecode.OpCallMethod:
+		return int(in.A), true, true
+	}
+	return 0, false, false
 }
 
 // madeCallback is the closure the method call at pc of fb's function is
@@ -7680,6 +7753,28 @@ func (r *Runtime) jitLoopCallback(f *frame, loop uint64, tmpl *closure) (*closur
 	fd := o.fn()
 	if fd == nil || fd.closure == nil || fd.closure.fn != tmpl.fn {
 		panic("jit: an inlined callback's loop has another callback")
+	}
+	return fd.closure, o
+}
+
+// jitCalledClosure is the closure f calls at pc, its operands' depth there
+// depth: one of tmpl's function the caller's code made and only calls
+// (ssa's calledClosures), which it did not make, inlined at the call, whose
+// frame Go makes at an exit inside it -- the callee its call's slot holds,
+// made by Go in place of the template (jitMaterialize).
+func (r *Runtime) jitCalledClosure(f *frame, pc, depth int, tmpl *closure) (*closure, *Object) {
+	if pc >= len(f.cl.fn.Code) {
+		panic("jit: an inlined closure's call is past its caller's code")
+	}
+	in := jitCallInstr(f.cl.fn.Code[pc])
+	at := f.base + depth - int(in.A) - 1
+	if in.Op != bytecode.OpCall || at < f.base || at >= len(r.stack) || !r.stack[at].IsObject() {
+		panic("jit: an inlined closure's call has no closure")
+	}
+	o := r.stack[at].Object()
+	fd := o.fn()
+	if fd == nil || fd.closure == nil || fd.closure.fn != tmpl.fn {
+		panic("jit: an inlined closure's call calls another function")
 	}
 	return fd.closure, o
 }
@@ -8495,7 +8590,7 @@ func (e *jitEntry) setSSA(s *jitState, fn *bytecode.Function, p *ir.Program, cod
 	e.ssaProg = p
 	e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaHostsLeft = fb.inlinedAt, fb.definesUnfed, fb.cells, fb.hostsLeft
 	e.ssaStrings, e.ssaInlined, e.ssaPools, e.ssaMade = fb.strings, fb.inlined, fb.pools, fb.made
-	e.ssaHomes, e.ssaVirtuals = max(e.ssaHomes, fb.homes), fb.virtuals
+	e.ssaHomes, e.ssaVirtuals, e.ssaCalled = max(e.ssaHomes, fb.homes), fb.virtuals, fb.called
 	e.ssaCallbacks, e.ssaUnmade = fb.callbacks, fb.unmade
 	s.setLinks(e, fb.links)
 	e.ssaKeeps = max(e.ssaKeeps, fb.keeps)
@@ -11072,12 +11167,20 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure) (Value, e
 		if l.inline && l.owner != nil && slices.Contains(l.owner.ssaMade, l.cl) {
 			// A loop's callback its caller's code did not make
 			// (ssa.MadeCallback): the closure Go made in its place, which
-			// the caller's loop's slots hold (jitMaterialize).
+			// the caller's loop's slots hold (jitMaterialize); or a closure
+			// the caller only calls (ssa's calledClosures), the callee of
+			// its call there.
 			pf, loop := s.goRuns[idx].f, s.ssaCtxs[idx].Loop
+			pc, depth := int(s.ssaCtxs[idx].ExitPC), int(s.ssaCtxs[idx].ExitDepth)
 			if k > 0 {
 				pf, loop = s.unwindingFrames[start+k-1], s.unwinding[start+k-1].loop
+				pc, depth = int(s.unwinding[start+k-1].pc), int(s.unwinding[start+k-1].depth)
 			}
-			l.cl, l.callee = r.jitLoopCallback(pf, loop, l.cl)
+			if loop != 0 {
+				l.cl, l.callee = r.jitLoopCallback(pf, loop, l.cl)
+			} else {
+				l.cl, l.callee = r.jitCalledClosure(pf, pc, depth, l.cl)
+			}
 		}
 		fn := l.cl.fn
 		var f *frame

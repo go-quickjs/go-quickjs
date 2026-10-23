@@ -13,7 +13,8 @@ import (
 // Cells false): an arrow reading the this of a method called natively, as
 // AWFY Havlak's findSet does; the same function called plainly, sloppy and
 // strict, its this the global object and undefined; an arrow capturing
-// its maker's own captured binding.
+// its maker's own captured binding, called where it is made, which is
+// then not made at all.
 const arrowPoolSetup = `
 	class Node { constructor(v) { this.v = v; this.parent = this } link(p) { this.parent = p } find(list) { list.forEach((x) => x.link(this.parent)); return this.v } }
 	function each(a, f) { for (let i = 0; i < a.length; i++) f(a[i]) }
@@ -51,6 +52,14 @@ func TestJITPooledArrowsWithoutCells(t *testing.T) {
 		}
 		if e == nil || e.ssa == nil || e.ssaProg == nil || e.ssaProg.Cells {
 			t.Errorf("%s has no code with its captured locals in its frame: %+v", name, e)
+			continue
+		}
+		if name == "inner" {
+			// The arrow it calls where it makes it, which its code inlines
+			// and does not make (ssa's called.go).
+			if e.ssaCalled == 0 {
+				t.Errorf("inner makes the arrow it only calls")
+			}
 			continue
 		}
 		// A pool grows past its first size only as native code takes
