@@ -113,6 +113,10 @@ type core struct {
 // several cycles a turn), and whose cost hung on where the loop landed.
 // v is the register's value, made for the allocator (no SSA value): if it
 // is spilled, the loop counts in memory as any other.
+// noBudget is a cold path's budget where none was set for it
+// (setBudget): it takes the budget in force as it is emitted.
+const noBudget = -2
+
 type budget struct {
 	header *ssa.Block
 	in     []bool // by block ID
@@ -149,6 +153,10 @@ func (c *core) findBudgets() {
 	f := c.f
 	nb := numBlocks(f)
 	var stack []*ssa.Block
+	if c.ws != nil {
+		stack, c.budgets = c.ws.budgetStack[:0], c.ws.budgets[:0]
+		defer func() { c.ws.budgetStack, c.ws.budgets = stack[:0], c.budgets[:0] }()
+	}
 	var chains chainTables
 	for _, h := range f.Blocks {
 		if !h.LoopHeader {
@@ -216,12 +224,29 @@ func (c *core) findBudgets() {
 		if c.budgetOf == nil {
 			c.budgetOf = c.ints(nb)
 		}
-		c.budgets = append(c.budgets, budget{header: h, in: in, v: &ssa.Value{ID: f.NumValues() + len(c.budgets), Type: ssa.Int64}})
+		c.budgets = append(c.budgets, budget{header: h, in: in})
 		for id, x := range in {
 			if x {
 				c.budgetOf[id] = len(c.budgets)
 			}
 		}
+	}
+	// Each loop's register a value of its own, made once the loops are
+	// known, from the workspace's: no value made for each.
+	var vals []ssa.Value
+	if c.ws != nil {
+		vals = c.ws.budgetVals
+	}
+	if cap(vals) < len(c.budgets) {
+		vals = make([]ssa.Value, len(c.budgets))
+	}
+	vals = vals[:len(c.budgets)]
+	for i := range c.budgets {
+		vals[i] = ssa.Value{ID: f.NumValues() + i, Type: ssa.Int64}
+		c.budgets[i].v = &vals[i]
+	}
+	if c.ws != nil {
+		c.ws.budgetVals = vals
 	}
 }
 
@@ -262,28 +287,6 @@ func (c *core) turnChain(h *ssa.Block, in []bool, t *chainTables) int {
 			}
 		}
 	}
-	var path func(v, p *ssa.Value) int
-	path = func(v, p *ssa.Value) int {
-		if v == p {
-			return 0
-		}
-		if v.ID >= nv || t.at[v.ID] != t.loop {
-			return -1 // outside the loop, or another header phi
-		}
-		if t.seen[v.ID] == t.phi {
-			return max(t.memo[v.ID], -1)
-		}
-		t.seen[v.ID], t.memo[v.ID] = t.phi, -2
-		d := -1
-		for _, a := range v.Args {
-			d = max(d, path(a, p))
-		}
-		if d >= 0 && v.Op != ssa.OpPhi {
-			d += latency(v.Op)
-		}
-		t.memo[v.ID] = d
-		return d
-	}
 	chain := 0
 	for _, p := range h.Values {
 		if p.Op != ssa.OpPhi {
@@ -292,11 +295,36 @@ func (c *core) turnChain(h *ssa.Block, in []bool, t *chainTables) int {
 		t.phi++
 		for i, a := range p.Args {
 			if h.Backedge[i] && in[h.Preds[i].ID] {
-				chain = max(chain, path(a, p))
+				chain = max(chain, t.path(a, p, nv))
 			}
 		}
 	}
 	return chain
+}
+
+// path is the longest path, in cycles, from the header phi p to v through
+// the loop being looked at (turnChain), or -1 where none reaches it; nv is
+// the function's values' count.
+func (t *chainTables) path(v, p *ssa.Value, nv int) int {
+	if v == p {
+		return 0
+	}
+	if v.ID >= nv || t.at[v.ID] != t.loop {
+		return -1 // outside the loop, or another header phi
+	}
+	if t.seen[v.ID] == t.phi {
+		return max(t.memo[v.ID], -1)
+	}
+	t.seen[v.ID], t.memo[v.ID] = t.phi, -2
+	d := -1
+	for _, a := range v.Args {
+		d = max(d, t.path(a, p, nv))
+	}
+	if d >= 0 && v.Op != ssa.OpPhi {
+		d += latency(v.Op)
+	}
+	t.memo[v.ID] = d
+	return d
 }
 
 // chainTables are turnChain's tables, made once for a compile's loops.

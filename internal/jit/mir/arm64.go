@@ -107,8 +107,12 @@ type a64Compiler struct {
 	// entered is amd64's.
 	entered *ssa.Block
 	// budget, budgetCold, budgetStubs and budgetReal are amd64's.
-	budget      int
-	budgetCold  int
+	budget     int
+	budgetCold int
+	// coldBudget is, by its index in cold, the budget a cold path is
+	// emitted with (setBudget), or noBudget where it takes the one in force
+	// when it is.
+	coldBudget  []int
 	budgetStubs map[budgetStub]arm64.Label
 	budgetReal  map[arm64.Label]arm64.Label
 	// keepCold and keeping are amd64's (keep).
@@ -168,8 +172,11 @@ func compileARM64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 		g.a.Reset()
 		clear(g.stubs)
 		c.a, c.stubs, c.stubFor, c.cold = &g.a, g.stubs, g.stubFor[:0], g.cold[:0]
+		c.coldBudget = g.coldBudget[:0]
 		c.labels = slices.Grow(g.labels[:0], numBlocks(f))[:numBlocks(f)]
-		defer func() { g.labels, g.stubFor, g.cold = c.labels[:0], c.stubFor[:0], clearFuncs(c.cold) }()
+		defer func() {
+			g.labels, g.stubFor, g.cold, g.coldBudget = c.labels[:0], c.stubFor[:0], clearFuncs(c.cold), c.coldBudget[:0]
+		}()
 	} else {
 		c.a, c.stubs = &arm64.Asm{}, map[stubKey]arm64.Label{}
 		c.labels = make([]arm64.Label, numBlocks(f))
@@ -226,7 +233,7 @@ func compileARM64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 	}
 	stubs := len(c.stubFor)
 	for i := 0; i < len(c.cold); i++ {
-		c.cold[i]()
+		c.coldPath(i)
 	}
 	// Cold code's guards' exits.
 	for i := stubs; i < len(c.stubFor); i++ {
@@ -942,18 +949,30 @@ func (c *a64Compiler) setBudget(b int) {
 	if b >= 0 && c.budgetReg(b) < 0 {
 		b = -1
 	}
+	for len(c.coldBudget) < len(c.cold) {
+		c.coldBudget = append(c.coldBudget, noBudget)
+	}
 	if old := c.budget; old >= 0 {
 		for i := c.budgetCold; i < len(c.cold); i++ {
-			f := c.cold[i]
-			c.cold[i] = func() {
-				saved := c.budget
-				c.budget = old
-				f()
-				c.budget = saved
+			if c.coldBudget[i] == noBudget {
+				c.coldBudget[i] = old
 			}
 		}
 	}
 	c.budget, c.budgetCold = b, len(c.cold)
+}
+
+// coldPath emits the i'th cold path, with the budget it was appended under
+// (setBudget's coldBudget), the one in force after it.
+func (c *a64Compiler) coldPath(i int) {
+	if i >= len(c.coldBudget) || c.coldBudget[i] == noBudget {
+		c.cold[i]()
+		return
+	}
+	saved := c.budget
+	c.budget = c.coldBudget[i]
+	c.cold[i]()
+	c.budget = saved
 }
 
 // returnTail ends a native call, from the callee's context, as amd64's.

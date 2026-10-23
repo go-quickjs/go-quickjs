@@ -1364,14 +1364,17 @@ func TestSSANativeMatchesEvaluator(t *testing.T) {
 // A compile in warm workspaces allocates little beyond what the code keeps
 // (its exits' descriptions): a runtime compiles at run time, and what a
 // compile leaves the collector is paid by the program. The budget is a
-// little over what random programs take now, so that a pass allocating per
-// value again shows here: 49 a compile (51.5 with Go 1.24) without accessor
-// sites; 56.2 (59.0) since a quarter of their property sites are
-// accessors' and megamorphic -- each inlined getter or setter a frame of
-// its own, each site's out-of-line paths a closure (mir's cold), which
-// are per site, not per value. Their sites' feedback and their guards'
-// operands come from the workspace (accessorSite, guardOf): 58.6 (61.3)
-// before.
+// little over what random programs take with the oldest Go the module
+// supports, so that a pass allocating per value or per loop again shows
+// here: 51.2 a compile with Go 1.27, 59.6 with Go 1.24, whose escape
+// analysis keeps fewer of the closures on the stack. What is left is per
+// site, not per value: a quarter of the programs' property sites are
+// accessors' and megamorphic, each inlined getter or setter a frame of its
+// own and each site's out-of-line paths a closure (mir's cold). Their
+// sites' feedback, their guards' operands (accessorSite, guardOf) and the
+// back-edge budgets' tables (findBudgets) come from the workspace: a
+// budget's table and a closure for each cold path, made for each loop, had
+// taken Go 1.24 past the budget (62.4).
 func TestWorkspaceCompileAllocations(t *testing.T) {
 	r := rand.New(rand.NewPCG(41, 42))
 	var ws ssa.Workspace

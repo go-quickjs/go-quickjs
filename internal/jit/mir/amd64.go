@@ -124,8 +124,12 @@ type compiler struct {
 	// there; budgetStubs the stubs that store the register back before
 	// the exit (stubLabel), by state, kind and loop, and budgetReal the
 	// exit's own stub each is in front of.
-	budget      int
-	budgetCold  int
+	budget     int
+	budgetCold int
+	// coldBudget is, by its index in cold, the budget a cold path is
+	// emitted with (setBudget), or noBudget where it takes the one in force
+	// when it is.
+	coldBudget  []int
 	budgetStubs map[budgetStub]amd64.Label
 	budgetReal  map[amd64.Label]amd64.Label
 	// entered is the block whose entries read the frame's registers
@@ -199,9 +203,10 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 		g.a.Reset()
 		clear(g.stubs)
 		c.a, c.stubs, c.stubFor, c.cold, c.pool, c.poolTab = &g.a, g.stubs, g.stubFor[:0], g.cold[:0], g.pool[:0], g.poolTab[:0]
+		c.coldBudget = g.coldBudget[:0]
 		c.labels = slices.Grow(g.labels[:0], numBlocks(f))[:numBlocks(f)]
 		defer func() {
-			g.labels, g.stubFor, g.cold, g.pool, g.poolTab = c.labels[:0], c.stubFor[:0], clearFuncs(c.cold), c.pool[:0], c.poolTab[:0]
+			g.labels, g.stubFor, g.cold, g.pool, g.poolTab, g.coldBudget = c.labels[:0], c.stubFor[:0], clearFuncs(c.cold), c.pool[:0], c.poolTab[:0], c.coldBudget[:0]
 		}()
 	} else {
 		c.a, c.stubs = &amd64.Asm{}, map[stubKey]amd64.Label{}
@@ -283,7 +288,7 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 	stubs := len(c.stubFor)
 	for i := 0; i < len(c.cold); i++ {
 		c.markCold(i)
-		c.cold[i]()
+		c.coldPath(i)
 	}
 	c.tagCold()
 	// Cold code's guards' exits.
@@ -753,18 +758,30 @@ func (c *compiler) setBudget(b int) {
 	if b >= 0 && c.budgetReg(b) < 0 {
 		b = -1
 	}
+	for len(c.coldBudget) < len(c.cold) {
+		c.coldBudget = append(c.coldBudget, noBudget)
+	}
 	if old := c.budget; old >= 0 {
 		for i := c.budgetCold; i < len(c.cold); i++ {
-			f := c.cold[i]
-			c.cold[i] = func() {
-				saved := c.budget
-				c.budget = old
-				f()
-				c.budget = saved
+			if c.coldBudget[i] == noBudget {
+				c.coldBudget[i] = old
 			}
 		}
 	}
 	c.budget, c.budgetCold = b, len(c.cold)
+}
+
+// coldPath emits the i'th cold path, with the budget it was appended under
+// (setBudget's coldBudget), the one in force after it.
+func (c *compiler) coldPath(i int) {
+	if i >= len(c.coldBudget) || c.coldBudget[i] == noBudget {
+		c.cold[i]()
+		return
+	}
+	saved := c.budget
+	c.budget = c.coldBudget[i]
+	c.cold[i]()
+	c.budget = saved
 }
 
 // returnNative returns, the result in the context's Ret and RetFrom: to a

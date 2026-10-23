@@ -57,21 +57,28 @@ type Workspace struct {
 	// CompileIn are the assembler's: they hold until the workspace's next
 	// compile.
 	amd64 struct {
-		a       amd64.Asm
-		labels  []amd64.Label
-		stubs   map[stubKey]amd64.Label
-		stubFor []stub
-		cold    []func()
-		pool    []poolConst
-		poolTab []int32
+		a          amd64.Asm
+		labels     []amd64.Label
+		stubs      map[stubKey]amd64.Label
+		stubFor    []stub
+		cold       []func()
+		coldBudget []int
+		pool       []poolConst
+		poolTab    []int32
 	}
 	arm64 struct {
-		a       arm64.Asm
-		labels  []arm64.Label
-		stubs   map[stubKey]arm64.Label
-		stubFor []a64Stub
-		cold    []func()
+		a          arm64.Asm
+		labels     []arm64.Label
+		stubs      map[stubKey]arm64.Label
+		stubFor    []a64Stub
+		cold       []func()
+		coldBudget []int
 	}
+	// findBudgets' tables, kept from compile to compile: its walk's stack,
+	// the loops it finds and the values their registers are given.
+	budgetStack []*ssa.Block
+	budgets     []budget
+	budgetVals  []ssa.Value
 }
 
 // clearFuncs empties fs, dropping the closures it held, for reuse.
