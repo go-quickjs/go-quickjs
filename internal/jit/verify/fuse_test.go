@@ -143,7 +143,9 @@ func TestMirFusedBranches(t *testing.T) {
 			t.Fatal(err)
 		}
 		for k, m := range mc.Marks {
-			if !strings.HasSuffix(m.Tag, " strictnullish") {
+			if !strings.HasSuffix(m.Tag, " strictnullish") || strings.HasPrefix(m.Tag, "cold ") {
+				// A cold path appended at the test: an edge out of the
+				// loop (mir's leaves), whose stretch is its own.
 				continue
 			}
 			end := mc.Text

@@ -87,11 +87,248 @@ type core struct {
 	// dropped marks, by value ID, the native calls whose results nothing
 	// uses (resultDropped).
 	dropped []bool
+	// budgets are the loops whose back edges count the back-edge budget
+	// in a register (findBudgets), and budgetOf, by block ID, 1 plus the
+	// index of the one a block is in, or 0.
+	budgets  []budget
+	budgetOf []int
 	// iv and pos are the intervals and positions the last allocation
 	// found (allocate), for colorKeeps; masks loopMasks's.
 	iv    []interval
 	pos   []int
 	masks valueSet
+}
+
+// budget is an innermost loop that calls nothing (findBudgets): its back
+// edges count the interpreter's back-edge budget (abi.Context's BackEdges)
+// in a register of its own, loaded where the loop is entered and stored
+// back wherever Go may read it -- before a call of Go, at an exit, where
+// the loop is left -- rather than decrementing the counter in memory each
+// time round: a store and a load on every turn's critical path, which
+// store-to-load forwarding made the bound of tight loops (loop_sum's
+// several cycles a turn), and whose cost hung on where the loop landed.
+// v is the register's value, made for the allocator (no SSA value): if it
+// is spilled, the loop counts in memory as any other.
+type budget struct {
+	header *ssa.Block
+	in     []bool // by block ID
+	v      *ssa.Value
+}
+
+// budgetReg is the register b counts in, or -1 if it counts in memory.
+func (c *core) budgetReg(b int) int {
+	if b < 0 {
+		return -1
+	}
+	if l, ok := c.loc(c.budgets[b].v); ok && l.reg >= 0 {
+		return l.reg
+	}
+	return -1
+}
+
+// loopBudget is the budget loop block b is in, or -1.
+func (c *core) loopBudget(b *ssa.Block) int {
+	if b.ID < len(c.budgetOf) {
+		return c.budgetOf[b.ID] - 1
+	}
+	return -1
+}
+
+// findBudgets finds the loops that count their budget in a register
+// (budget): each loop's body -- the blocks its header reaches that reach
+// one of its back edges without passing it -- that holds no other loop's
+// header, no call, native or Go's (OpCall), and no call in tail position,
+// whose own poll counts in memory: blocks whose code reads or writes the
+// counter but for the calls of Go any operation may make, which
+// goCalling stores it back around.
+func (c *core) findBudgets() {
+	f := c.f
+	nb := numBlocks(f)
+	var stack []*ssa.Block
+	var chains chainTables
+	for _, h := range f.Blocks {
+		if !h.LoopHeader {
+			continue
+		}
+		in := c.bools(nb)
+		in[h.ID] = true
+		stack = stack[:0]
+		for i, p := range h.Preds {
+			if h.Backedge[i] && !in[p.ID] {
+				in[p.ID] = true
+				stack = append(stack, p)
+			}
+		}
+		for len(stack) > 0 {
+			b := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			for _, p := range b.Preds {
+				if !in[p.ID] {
+					in[p.ID] = true
+					stack = append(stack, p)
+				}
+			}
+		}
+		// Of those, the blocks the header reaches: an entry at a PC in the
+		// loop's body (an entry block, then the body's blocks after it)
+		// reaches a back edge without passing the header, but is no part
+		// of the loop, which the edge from it enters (edge's load).
+		fwd := c.bools(nb)
+		fwd[h.ID] = true
+		stack = append(stack[:0], h)
+		for len(stack) > 0 {
+			b := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			for _, s := range b.Succs {
+				if in[s.ID] && !fwd[s.ID] {
+					fwd[s.ID] = true
+					stack = append(stack, s)
+				}
+			}
+		}
+		in = fwd
+		ok := true
+		for _, b := range f.Blocks {
+			if !in[b.ID] {
+				continue
+			}
+			if b != h && b.LoopHeader || b.ID < len(c.budgetOf) && c.budgetOf[b.ID] != 0 {
+				ok = false
+				break
+			}
+			for _, v := range b.Values {
+				if v.Op == ssa.OpCall || v.Op == ssa.OpTailSelf {
+					ok = false
+					break
+				}
+			}
+			if !ok {
+				break
+			}
+		}
+		if !ok || c.turnChain(h, in, &chains) >= counterChain {
+			continue
+		}
+		if c.budgetOf == nil {
+			c.budgetOf = c.ints(nb)
+		}
+		c.budgets = append(c.budgets, budget{header: h, in: in, v: &ssa.Value{ID: f.NumValues() + len(c.budgets), Type: ssa.Int64}})
+		for id, x := range in {
+			if x {
+				c.budgetOf[id] = len(c.budgets)
+			}
+		}
+	}
+}
+
+// counterChain is how long, in cycles, a loop's turn waits on a budget
+// counted in memory: the counter's load, its decrement and its store,
+// forwarded to the next turn's load -- microbench's loop_sum, its turn an
+// addition, ran 1.3 to 1.7 ns a turn counting so.
+const counterChain = 6
+
+// turnChain is how long a turn of the loop of header h, its blocks in,
+// waits on itself: of each header phi, the latency (latency) of the
+// longest path through the loop's values from the phi to its value on a
+// back edge. A loop whose chain is as long as the counter's own
+// (counterChain) or longer hides the counter in memory, and a register
+// would save it nothing a turn, while each entry paid the register's load
+// and each exit its store: AWFY's List, 1.5 to 2.9% slower with the
+// budget in a register, whose isShorterThan walks two lists of a few
+// nodes a call (x = x.next: an object's check, its shape's, its field's
+// cell, the field, each a load the next waits on).
+func (c *core) turnChain(h *ssa.Block, in []bool, t *chainTables) int {
+	nv := c.f.NumValues()
+	if t.at == nil {
+		t.at, t.memo, t.seen = c.ints(nv), c.ints(nv), c.ints(nv)
+	}
+	// at is, by value ID, the loop being looked at (t.loop) where the value
+	// is in it, negated for a header phi; seen, the phi being looked at
+	// (t.phi) where memo holds the longest path to the value from it, -1
+	// where none reaches it, -2 while it is being found (a cycle through a
+	// phi of a block in the loop).
+	t.loop++
+	for _, b := range c.f.Blocks {
+		if in[b.ID] {
+			for _, v := range b.Values {
+				t.at[v.ID] = t.loop
+				if b == h && v.Op == ssa.OpPhi {
+					t.at[v.ID] = -t.loop
+				}
+			}
+		}
+	}
+	var path func(v, p *ssa.Value) int
+	path = func(v, p *ssa.Value) int {
+		if v == p {
+			return 0
+		}
+		if v.ID >= nv || t.at[v.ID] != t.loop {
+			return -1 // outside the loop, or another header phi
+		}
+		if t.seen[v.ID] == t.phi {
+			return max(t.memo[v.ID], -1)
+		}
+		t.seen[v.ID], t.memo[v.ID] = t.phi, -2
+		d := -1
+		for _, a := range v.Args {
+			d = max(d, path(a, p))
+		}
+		if d >= 0 && v.Op != ssa.OpPhi {
+			d += latency(v.Op)
+		}
+		t.memo[v.ID] = d
+		return d
+	}
+	chain := 0
+	for _, p := range h.Values {
+		if p.Op != ssa.OpPhi {
+			break
+		}
+		t.phi++
+		for i, a := range p.Args {
+			if h.Backedge[i] && in[h.Preds[i].ID] {
+				chain = max(chain, path(a, p))
+			}
+		}
+	}
+	return chain
+}
+
+// chainTables are turnChain's tables, made once for a compile's loops.
+type chainTables struct {
+	at, memo, seen []int
+	loop, phi      int
+}
+
+// latency is how many cycles an operation's result takes from its
+// operands', as amd64's code computes it: a load's four, a floating-point
+// addition's three, an integer operation's one; a call of Go's a hundred.
+func latency(op ssa.Op) int {
+	switch op {
+	case ssa.OpObjectOf, ssa.OpArrayOf, ssa.OpIndexedOf, ssa.OpElemRead, ssa.OpElemCell,
+		ssa.OpLength, ssa.OpPropRead, ssa.OpPropCell, ssa.OpLoadCell, ssa.OpStringProp,
+		ssa.OpStringCode, ssa.OpStringChar, ssa.OpCodeChar, ssa.OpSubstringChar,
+		ssa.OpUpvalueCell, ssa.OpLocalCell, ssa.OpGlobalCell, ssa.OpLexCell, ssa.OpBindingCell:
+		return 4
+	case ssa.OpAddF64, ssa.OpSubF64, ssa.OpMulF64, ssa.OpMaxF64, ssa.OpMinF64, ssa.OpSignF64,
+		ssa.OpMulI32, ssa.OpMulI64, ssa.OpMulW, ssa.OpMulU64:
+		return 3
+	case ssa.OpToInt32, ssa.OpI32ToF64, ssa.OpU32ToF64, ssa.OpFroundF64, ssa.OpBigOfF64:
+		return 4
+	case ssa.OpFloorF64, ssa.OpCeilF64, ssa.OpTruncF64, ssa.OpRoundF64:
+		return 6
+	case ssa.OpDivF64:
+		return 13
+	case ssa.OpSqrtF64:
+		return 20
+	case ssa.OpDivI64, ssa.OpModI64, ssa.OpDivU64, ssa.OpModU64:
+		return 40
+	case ssa.OpModF64, ssa.OpPowF64, ssa.OpPowI64, ssa.OpMathCall, ssa.OpStringMethod,
+		ssa.OpInstanceOf, ssa.OpBigBox:
+		return 100
+	}
+	return 1
 }
 
 // resultDropped reports a call whose result nothing uses: its return
@@ -210,6 +447,7 @@ func prepare(w *Workspace, f *ssa.Func, enc abi.Encoding, gprs, fprs []int) (*co
 	}
 	c.layout()
 	c.findLazy()
+	c.findBudgets()
 	if err := c.allocateBest(); err != nil {
 		return nil, err
 	}
@@ -365,6 +603,13 @@ func (s valueSet) each(f func(int)) {
 			word &= word - 1
 		}
 	}
+}
+
+// budgetStub is a stub of a budget loop's exit (stubLabel).
+type budgetStub struct {
+	state *ssa.FrameState
+	kind  uint64
+	loop  int
 }
 
 type stubKey struct {
@@ -557,6 +802,23 @@ func (c *core) lastEmitted(b *ssa.Block, v *ssa.Value) bool {
 // emptyEdge reports whether the edge from from to to does nothing -- no
 // phi moves, as phiSchedule finds them, and no poll -- so that a branch
 // can jump to to itself.
+// flushIn is the loop counting its budget in a register whose register
+// the start of b stores back (budgetFlush), or -1: of a block outside
+// every such loop whose one predecessor is in one -- a loop's way out
+// to a block of its own. Stored there, not on the edge, the edge moves
+// nothing and the loop's test jumps straight to the block: the edge's
+// code, out of line (leaves), had cost a loop entered for few turns a
+// jump there and one back each time it left.
+func (c *core) flushIn(b *ssa.Block) int {
+	if len(b.Preds) != 1 || c.loopBudget(b) >= 0 {
+		return -1
+	}
+	if f := c.loopBudget(b.Preds[0]); f >= 0 && c.budgetReg(f) >= 0 {
+		return f
+	}
+	return -1
+}
+
 func (c *core) emptyEdge(from, to *ssa.Block) bool {
 	idx := -1
 	for i, p := range to.Preds {
@@ -565,6 +827,11 @@ func (c *core) emptyEdge(from, to *ssa.Block) bool {
 		}
 	}
 	if idx < 0 || to.LoopHeader && to.Backedge[idx] {
+		return false
+	}
+	if f, t := c.budgetReg(c.loopBudget(from)), c.budgetReg(c.loopBudget(to)); (f >= 0 || t >= 0) && c.loopBudget(from) != c.loopBudget(to) && (t >= 0 || c.flushIn(to) != c.loopBudget(from)) {
+		// Into or out of a loop that counts its budget in a register: the
+		// register loaded, or stored back (edge).
 		return false
 	}
 	for _, phi := range to.Values {
@@ -581,6 +848,19 @@ func (c *core) emptyEdge(from, to *ssa.Block) bool {
 	return true
 }
 
+// leaves reports whether the edge from b to to leaves a loop that the
+// edge from b to other stays in: an If's way out of a loop, which branch
+// lays out with the cold code, so that the loop's way falls through from
+// the test rather than jumping past the edge's code on every turn -- an
+// edge that had moved nothing, until it stored a loop's budget register
+// back (edge), had put a taken branch in microbench's prop_read's turn.
+// The way out runs once a loop's entry, through a jump there and one
+// back.
+func (c *core) leaves(b, to, other *ssa.Block) bool {
+	m := c.loopMasks()
+	return m[b.ID]&^m[to.ID]&m[other.ID] != 0
+}
+
 // numBlocks bounds f's block IDs.
 func numBlocks(f *ssa.Func) int {
 	n := 0
@@ -595,7 +875,7 @@ func numBlocks(f *ssa.Func) int {
 // every pass (BenchmarkJITCompile).
 func (c *core) allocate(groups int) error {
 	c.used, c.usedList, c.saves, c.saveAt, c.dropped = [2]uint64{}, [2][]int{}, c.saves[:0], nil, nil
-	nv, nb := c.f.NumValues(), numBlocks(c.f)
+	nv, nb := c.f.NumValues()+len(c.budgets), numBlocks(c.f)
 	// Number positions: each block has a start, one position per value, and
 	// an end. at is the block of each position.
 	pos := c.ints(nv)
@@ -852,6 +1132,17 @@ func (c *core) allocate(groups int) error {
 					it.start = bs
 				}
 			})
+		}
+	}
+	// Each budget loop's register, from its header's start to the end of
+	// the last of its blocks laid out.
+	for _, bu := range c.budgets {
+		it := &iv[bu.v.ID]
+		*it = interval{v: bu.v, start: start[bu.header.ID], end: start[bu.header.ID]}
+		for _, b := range c.order {
+			if bu.in[b.ID] {
+				it.start, it.end = min(it.start, start[b.ID]), max(it.end, end[b.ID])
+			}
 		}
 	}
 	// By start, then value ID: a counting sort over the positions, the
@@ -1240,7 +1531,9 @@ func (c *core) allocate(groups int) error {
 				minEnd = min(minEnd, it.end)
 				continue
 			}
-			// Spill whichever interval ends last.
+			// Spill whichever interval ends last -- but a budget loop's
+			// register first, whose loop then counts in memory: the
+			// register costs no value of the loop a spill.
 			victim := it
 			vi := -1
 			for i, a := range active {
@@ -1248,9 +1541,23 @@ func (c *core) allocate(groups int) error {
 					victim, vi = a, i
 				}
 			}
-			s, err := slot(victim.start, victim.v)
-			if err != nil {
-				return err
+			if it.v.ID >= c.f.NumValues() {
+				victim, vi = it, -1
+			}
+			for i, a := range active {
+				if a.v.ID >= c.f.NumValues() {
+					victim, vi = a, i
+				}
+			}
+			budget := victim.v.ID >= c.f.NumValues()
+			s := -1
+			if !budget {
+				// A budget's register given up takes no spill slot, which
+				// another value's phi or argument may be hinted to.
+				var err error
+				if s, err = slot(victim.start, victim.v); err != nil {
+					return err
+				}
 			}
 			if victim == it {
 				c.setLoc(it.v, loc{reg: -1, spill: s})
@@ -1261,8 +1568,10 @@ func (c *core) allocate(groups int) error {
 				minEnd = min(minEnd, it.end)
 			}
 			placed(it.v)
-			spilled = append(spilled, victim)
-			push(len(spilled) - 1)
+			if !budget {
+				spilled = append(spilled, victim)
+				push(len(spilled) - 1)
+			}
 		}
 	}
 	// What each native call saves: the values live across it in registers,
@@ -1300,7 +1609,10 @@ func (c *core) allocate(groups int) error {
 			open = kept
 			for _, it := range open {
 				l := c.locAt(it.v)
-				if l.reg < 0 {
+				if l.reg < 0 || it.v.ID >= c.f.NumValues() {
+					// Not in a register; or a budget loop's, whose loop
+					// calls nothing: the call is in a block laid out
+					// among its blocks.
 					continue
 				}
 				s := home[it.v.ID] - 1
@@ -1569,7 +1881,8 @@ func (c *core) colorKeeps(iv []interval, pos []int) error {
 		}
 	}
 	cellsOf := func(x *ssa.Value, each func(int)) {
-		if x == nil {
+		if x == nil || x.ID >= len(cell) {
+			// None, or a budget loop's register (findBudgets).
 			return
 		}
 		if k := cell[x.ID]; k != 0 {
@@ -1604,7 +1917,7 @@ func (c *core) colorKeeps(iv []interval, pos []int) error {
 			if ivOf == nil {
 				ivOf = c.ints(f.NumValues())
 				for i := range iv {
-					if iv[i].v != nil {
+					if iv[i].v != nil && iv[i].v.ID < len(ivOf) {
 						ivOf[iv[i].v.ID] = i + 1
 					}
 				}

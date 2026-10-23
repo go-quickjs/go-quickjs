@@ -116,6 +116,16 @@ type compiler struct {
 	// which goes on to saving for the rest.
 	appending     amd64.Label
 	appendingUsed bool
+	// budget is the budget loop (core's budgets) whose register counts the
+	// back-edge budget where the code being emitted is, or -1;
+	// budgetCold how many of cold were appended before the code went
+	// there; budgetStubs the stubs that store the register back before
+	// the exit (stubLabel), by state, kind and loop, and budgetReal the
+	// exit's own stub each is in front of.
+	budget      int
+	budgetCold  int
+	budgetStubs map[budgetStub]amd64.Label
+	budgetReal  map[amd64.Label]amd64.Label
 	// entered is the block whose entries read the frame's registers
 	// before native callers' entry (compile's layout), while it is laid
 	// out: its own code does not read them again.
@@ -171,7 +181,7 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 	if err != nil {
 		return nil, err
 	}
-	c := &compiler{core: k, consts: enc.ConstWords()}
+	c := &compiler{core: k, consts: enc.ConstWords(), budget: -1}
 	if Annotate {
 		c.ann = &annotation{}
 	}
@@ -601,6 +611,30 @@ func (c *compiler) boxBool(b, dst amd64.Reg) {
 // map, which a guard asked for the one it shares with others of its
 // instruction had cost.
 func (c *compiler) stubLabel(s *ssa.FrameState, kind uint64) amd64.Label {
+	if c.budget >= 0 {
+		// In a loop that counts its budget in a register: the register
+		// stored back, then the exit (budgetStub).
+		k := budgetStub{s, kind, c.budget}
+		if l, ok := c.budgetStubs[k]; ok {
+			return l
+		}
+		b := c.budget
+		c.budget = -1
+		real := c.stubLabel(s, kind)
+		c.budget = b
+		l := c.a.NewLabel()
+		if c.budgetStubs == nil {
+			c.budgetStubs, c.budgetReal = map[budgetStub]amd64.Label{}, map[amd64.Label]amd64.Label{}
+		}
+		c.budgetStubs[k], c.budgetReal[l] = l, real
+		reg := amd64.Reg(c.budgetReg(b))
+		c.cold = append(c.cold, func() {
+			c.a.Bind(l)
+			c.budgetFlush(reg)
+			c.a.Jmp(real)
+		})
+		return l
+	}
 	i := -1
 	switch kind {
 	case abi.ExitHost:
@@ -627,6 +661,64 @@ func (c *compiler) stubLabel(s *ssa.FrameState, kind uint64) amd64.Label {
 	}
 	c.stubFor = append(c.stubFor, stub{k, l})
 	return l
+}
+
+// budgetStore stores the back-edge budget a loop counts in register r
+// back where Go reads it (abi.Context's BackEdges), and budgetLoad loads
+// it there. Each uses scratchB.
+func (c *compiler) budgetStore(r amd64.Reg) {
+	c.a.Load(scratchB, regCtx, abi.OffBackEdges)
+	c.a.Store(scratchB, 0, r)
+}
+
+func (c *compiler) budgetLoad(r amd64.Reg) {
+	c.a.Load(r, regCtx, abi.OffBackEdges)
+	c.a.Load(r, r, 0)
+}
+
+// The register is read from memory only at a loop's first back edge, not
+// on the way in: on entry it is 0 (budgetStart), which says it holds
+// nothing yet, and the first back edge, finding it -1, reads the budget
+// and takes its turn from it (edge). budgetFlush stores it back where it
+// holds the budget -- not 0 -- on the way out, and before a call of Go,
+// after which it holds nothing again. A loop entered for no turn, as
+// microbench's method_call's callee's is on every call, then touches no
+// memory for its budget: the register's load on the way in and store on
+// the way out had made method_call 6% slower.
+func (c *compiler) budgetStart(r amd64.Reg) { c.a.Op(amd64.Xor, r, r, false) }
+
+// budgetFlush's store is cold: a loop left after no turn goes straight on.
+func (c *compiler) budgetFlush(r amd64.Reg) {
+	store, back := c.a.NewLabel(), c.a.NewLabel()
+	c.a.Op(amd64.Test, r, r, true)
+	c.a.Jcc(amd64.CondNE, store)
+	c.a.Bind(back)
+	c.cold = append(c.cold, func() {
+		c.a.Bind(store)
+		c.budgetStore(r)
+		c.a.Jmp(back)
+	})
+}
+
+// setBudget has the code emitted from here on be in budget loop b, or in
+// none (-1): the cold paths appended until now go on in the loop they were
+// appended in, whose register their stubs and calls of Go store back.
+func (c *compiler) setBudget(b int) {
+	if b >= 0 && c.budgetReg(b) < 0 {
+		b = -1
+	}
+	if old := c.budget; old >= 0 {
+		for i := c.budgetCold; i < len(c.cold); i++ {
+			f := c.cold[i]
+			c.cold[i] = func() {
+				saved := c.budget
+				c.budget = old
+				f()
+				c.budget = saved
+			}
+		}
+	}
+	c.budget, c.budgetCold = b, len(c.cold)
 }
 
 // returnNative returns, the result in the context's Ret and RetFrom: to a
@@ -4257,6 +4349,12 @@ func (c *compiler) recordsTail() {
 
 // block emits one block. next is the block laid out after it.
 func (c *compiler) block(b *ssa.Block, next *ssa.Block) {
+	c.setBudget(c.loopBudget(b))
+	defer c.setBudget(-1)
+	if f := c.flushIn(b); f >= 0 {
+		// A loop's way out to a block of its own: its budget stored back.
+		c.budgetFlush(amd64.Reg(c.budgetReg(f)))
+	}
 	if b.PC < 0 {
 		if b != c.entered {
 			c.a.Load(regLocals, regCtx, abi.OffLocals)
@@ -4345,13 +4443,66 @@ func (c *compiler) edge(from, to, next *ssa.Block) {
 			idx = i
 		}
 	}
+	from_, to_ := c.budget, c.loopBudget(to)
+	if c.budgetReg(to_) < 0 {
+		to_ = -1
+	}
+	// A block's other edges are its loop's still.
+	defer c.setBudget(from_)
+	if from_ >= 0 && from_ != to_ {
+		// Out of a loop that counts its budget in a register: stored back,
+		// before the moves, which may write its register -- or at the
+		// start of the block it goes to (flushIn).
+		if c.flushIn(to) != from_ {
+			c.budgetFlush(amd64.Reg(c.budgetReg(from_)))
+		}
+		c.setBudget(-1)
+	}
 	c.phiMoves(to, idx)
-	if to.LoopHeader && to.Backedge[idx] {
+	if to.LoopHeader && to.Backedge[idx] && to_ >= 0 && to_ == from_ {
+		// Round a loop that counts its budget in a register: no memory's
+		// store and load on the turn's critical path. Run out, stored
+		// back for the poll, which gives it a new one, read again.
+		r := amd64.Reg(c.budgetReg(to_))
+		poll, turned := c.a.NewLabel(), c.a.NewLabel()
+		c.a.OpImm(amd64.Sub, r, 1, true)
+		c.a.Jcc(amd64.CondLE, poll)
+		c.a.Bind(turned)
+		header := to.Header
+		c.cold = append(c.cold, func() {
+			saved := c.budget
+			c.budget = -1
+			defer func() { c.budget = saved }()
+			c.a.Bind(poll)
+			// -1: the register held nothing (budgetStart): the budget
+			// read, this turn taken from it.
+			exhausted := c.a.NewLabel()
+			c.a.OpImm(amd64.Cmp, r, -1, true)
+			c.a.Jcc(amd64.CondNE, exhausted)
+			c.budgetLoad(r)
+			c.a.OpImm(amd64.Sub, r, 1, true)
+			c.a.Jcc(amd64.CondG, turned)
+			c.a.Bind(exhausted)
+			c.budgetStore(r)
+			if c.enc.CallGo != 0 {
+				stub := c.stubLabel(header, abi.ExitPoll)
+				c.goSaving(uint64(ssa.GoPoll), &stub)
+				c.budgetLoad(r)
+				c.a.Jmp(c.labels[to.ID])
+				return
+			}
+			c.exitTo(header, abi.ExitPoll)
+		})
+	} else if to.LoopHeader && to.Backedge[idx] {
 		poll := c.a.NewLabel()
 		c.a.Load(scratchB, regCtx, abi.OffBackEdges)
 		c.a.DecMem(scratchB, 0)
 		c.a.Jcc(amd64.CondLE, poll)
 		header := to.Header
+		// Back from the poll to what follows it on the edge -- an entry's
+		// load of a loop's budget (below) -- not to the header.
+		polled := c.a.NewLabel()
+		c.a.Bind(polled)
 		c.cold = append(c.cold, func() {
 			c.a.Bind(poll)
 			if c.enc.CallGo != 0 {
@@ -4360,13 +4511,18 @@ func (c *compiler) edge(from, to, next *ssa.Block) {
 				// level of its callers.
 				stub := c.stubLabel(header, abi.ExitPoll)
 				c.goSaving(uint64(ssa.GoPoll), &stub)
-				c.a.Jmp(c.labels[to.ID])
+				c.a.Jmp(polled)
 				return
 			}
 			// The phis hold the header's values now; the state names them,
 			// or values live across the loop.
 			c.exitTo(header, abi.ExitPoll)
 		})
+	}
+	if to_ >= 0 && to_ != from_ {
+		// Into a loop that counts its budget in a register, after the
+		// moves: what the register held is dead here (budget).
+		c.budgetStart(amd64.Reg(c.budgetReg(to_)))
 	}
 	if to != next {
 		c.a.Jmp(c.labels[to.ID])
@@ -4459,7 +4615,11 @@ func (c *compiler) jumpIfEqual(t target) {
 // branch emits an If block's end: the test of its control (test), which
 // jumps to each successor's edge, or to the successor itself where the
 // edge moves nothing (emptyEdge); then the edges' code, the one laid out
-// last falling through to next where it can.
+// last falling through to next where it can. An edge out of a loop the
+// other edge stays in is laid out with the cold code (leaves), where the
+// other way then falls through from the test: to next, or to its own
+// edge's code. Where it jumps to a successor laid out further on, it
+// jumps on every turn whichever way the code goes.
 func (c *compiler) branch(b *ssa.Block, next *ssa.Block) {
 	type way struct {
 		to     *ssa.Block
@@ -4477,12 +4637,17 @@ func (c *compiler) branch(b *ssa.Block, next *ssa.Block) {
 	if no.to == next && yes.to != next {
 		ways[0], ways[1] = yes, no
 	}
-	// What follows the test: the first edge's code, or next.
+	var out [2]bool
+	for i, w := range ways {
+		o := ways[1-i]
+		out[i] = !w.direct && c.leaves(b, w.to, o.to) && (!o.direct || o.to == next)
+	}
+	// What follows the test: the first edge's code laid out here, or next.
 	fall := noLabel
 	switch {
-	case !ways[0].direct:
+	case !ways[0].direct && !out[0]:
 		fall = ways[0].label
-	case !ways[1].direct:
+	case !ways[1].direct && !out[1]:
 		fall = ways[1].label
 	case next != nil:
 		fall = c.labels[next.ID]
@@ -4492,9 +4657,18 @@ func (c *compiler) branch(b *ssa.Block, next *ssa.Block) {
 		if w.direct {
 			continue
 		}
+		if out[i] {
+			c.cold = append(c.cold, func() {
+				c.a.Bind(w.label)
+				// Only what the edge appends is its (setBudget).
+				c.budgetCold = len(c.cold)
+				c.edge(b, w.to, nil)
+			})
+			continue
+		}
 		c.a.Bind(w.label)
 		to := next
-		if i == 0 && !ways[1].direct {
+		if i == 0 && !ways[1].direct && !out[1] {
 			to = nil // the other edge's code follows
 		}
 		c.edge(b, w.to, to)
@@ -5051,10 +5225,18 @@ func (c *compiler) goAppending(stub *amd64.Label) {
 		c.appending, c.appendingUsed = c.a.NewLabel(), true
 	}
 	back := c.a.NewLabel()
+	reg := c.budgetReg(c.budget)
+	if reg >= 0 {
+		// As goCalling: the budget stored back for Go, and read again.
+		c.budgetFlush(amd64.Reg(reg))
+	}
 	c.a.LeaLabel(scratchA, back)
 	c.a.Store(regCtx, abi.OffGoSite, scratchA)
 	c.a.Jmp(c.appending)
 	c.a.Bind(back)
+	if reg >= 0 {
+		c.budgetStart(amd64.Reg(reg))
+	}
 	c.a.Load(scratchB, regCtx, abi.OffGoStatus)
 	c.a.Op(amd64.Test, scratchB, scratchB, true)
 	c.a.Jcc(amd64.CondNE, *stub)
@@ -5197,12 +5379,28 @@ func (c *compiler) goCalling(st *abi.GoCallState, stub *amd64.Label) {
 		c.saving, c.savingUsed = c.a.NewLabel(), true
 	}
 	back := c.a.NewLabel()
+	reg := c.budgetReg(c.budget)
+	if reg >= 0 {
+		// In a loop that counts its budget in a register: stored back
+		// for Go, which may read it and change it, and read again at the
+		// next back edge (budgetStart).
+		c.budgetFlush(amd64.Reg(reg))
+	}
 	c.movImm(scratchC, uint64(uintptr(unsafe.Pointer(st))))
 	c.a.LeaLabel(scratchA, back)
 	c.a.Jmp(c.calling)
 	c.a.Bind(back)
+	if reg >= 0 {
+		c.budgetStart(amd64.Reg(reg))
+	}
 	if stub != nil {
-		c.goFails = append(c.goFails, goFail{st, back, *stub})
+		// Go sends a refusal straight to the exit's own stub: the budget
+		// is where Go left it.
+		to := *stub
+		if real, ok := c.budgetReal[to]; ok {
+			to = real
+		}
+		c.goFails = append(c.goFails, goFail{st, back, to})
 	}
 }
 
