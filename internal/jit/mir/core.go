@@ -531,6 +531,21 @@ type Code struct {
 // demand, since compiling at run time never asks.
 func (c *Code) Locations() string { return c.core.describe() }
 
+// Spilled counts the values the allocation put in spill slots, for
+// measuring the code: a value lazy or in a register is none.
+func (c *Code) Spilled() int {
+	n := 0
+	k := c.core
+	for _, b := range k.order {
+		for _, v := range b.Values {
+			if l, ok := k.loc(v); ok && !k.isLazy(v) && l.reg < 0 {
+				n++
+			}
+		}
+	}
+	return n
+}
+
 // loc is where a value lives: a register of its class, or a spill slot.
 type loc struct {
 	reg   int // register number, or -1

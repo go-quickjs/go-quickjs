@@ -81,6 +81,9 @@ type jitCode struct {
 	Bytes        []byte
 	Marks        []mir.Mark
 	Listing      string
+	// Spills counts the values the allocation spilled (mir.Code's
+	// Spilled).
+	Spills int
 }
 
 // startCodeDump has the JIT write every function's code to path as it is
@@ -97,7 +100,7 @@ func startCodeDump(path string) {
 	seq := 0
 	vm.JITCodeHook = func(fn vm.JITFunction, text []byte, c *mir.Code) {
 		seq++
-		rec := jitCode{Seq: seq, Name: fn.Name, Script: fn.Script, Line: fn.Line, Text: c.Text, Bytes: text, Marks: c.Marks, Listing: c.Listing}
+		rec := jitCode{Seq: seq, Name: fn.Name, Script: fn.Script, Line: fn.Line, Text: c.Text, Bytes: text, Marks: c.Marks, Listing: c.Listing, Spills: c.Spilled()}
 		if len(text) > 0 {
 			rec.Addr = uint64(uintptr(unsafe.Pointer(&text[0])))
 		}
