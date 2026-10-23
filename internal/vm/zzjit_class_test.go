@@ -2,7 +2,10 @@
 
 package vm
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 // A base class's constructor is compiled, and constructed with natively
 // as a function is: fields set in its body, a returned object in place of
@@ -56,9 +59,12 @@ func TestJITClassConstructors(t *testing.T) {
 	jitDifferential(t, src)
 }
 
-// The constructor of a class constructed in a loop runs natively, called
-// by the loop's own native code: it had been refused (a special function
-// kind), and AWFY's Havlak and CD made every object in the tree tier.
+// The constructor of a class constructed in a loop runs natively, inlined
+// in the loop's own native code, as a function's constructor is: it had
+// been refused (a special function kind), and AWFY's Havlak and CD made
+// every object in the tree tier; then called natively, not inlined, as it
+// returns its this (push_this, return), where a function's constructor
+// returns nothing (ssa's returnsThis).
 func TestJITClassConstructorsNative(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -77,13 +83,9 @@ func TestJITClassConstructorsNative(t *testing.T) {
 		}
 	}
 	e := jitNativeForTest(t, r, "chain")
-	ctor := jitNativeOrCalleeForTest(t, r, "Node")
-	in := ctor.link.in
-	if _, err := r.Run(compileForTest(t, `chain(500)`)); err != nil {
-		t.Fatal(err)
-	}
-	if n := ctor.link.in - in; n < 500 && len(e.ssaInlined) == 0 {
-		t.Errorf("Node was constructed natively %d times of 500, inlined nowhere", n)
+	node := r.global.getOwn(r.atoms.intern("Node")).value().Object().fn().closure
+	if !slices.Contains(e.ssaInlined, node) {
+		t.Errorf("chain inlines %v, not Node's constructor %p", e.ssaInlined, node)
 	}
 }
 

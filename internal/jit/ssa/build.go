@@ -2651,7 +2651,7 @@ func (b *builder) inlineSiteAt(pc int, total *int, known *inlineAsked) (*frame, 
 			return nil, false
 		}
 		for pc, in := range site.Program.Code {
-			if reachable(site.Program, pc) && in.Op == ir.Return && in.Left != ir.Literal(ir.Value{Kind: ir.Undefined}) {
+			if reachable(site.Program, pc) && in.Op == ir.Return && in.Left != ir.Literal(ir.Value{Kind: ir.Undefined}) && !returnsThis(site.Program, pc, site.ThisSlot) {
 				return nil, false
 			}
 		}
@@ -2665,6 +2665,31 @@ func (b *builder) inlineSiteAt(pc int, total *int, known *inlineAsked) (*frame, 
 		}
 	}
 	return b.inlineFrame(site, calls, total, result)
+}
+
+// returnsThis reports whether p's return at pc returns its receiver, in
+// slot this, as a class's constructor does (push_this, return): the value
+// the instruction before it, which nothing jumps past, copies there. A
+// construction's result is its receiver then, as when it returns nothing.
+func returnsThis(p *ir.Program, pc, this int) bool {
+	in := p.Code[pc]
+	if this < 0 || pc == 0 || in.Left.Slot < 0 {
+		return false
+	}
+	if c := p.Code[pc-1]; c.Op != ir.Copy || c.Left.Slot != this || c.Dest != in.Left.Slot {
+		return false
+	}
+	for _, x := range p.Code {
+		if (x.Op == ir.Jump || x.Op == ir.Branch || x.Op == ir.IterStep) && x.Target == pc {
+			return false
+		}
+	}
+	for _, h := range p.Handlers {
+		if int(h.PC) == pc {
+			return false
+		}
+	}
+	return true
 }
 
 // inlineFrame is the frame of site inlined in the frame being translated,
