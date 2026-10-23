@@ -415,6 +415,16 @@ func (r *Runtime) jitPropertyMade(cl *closure, pc, sp int) (Value, error) {
 		return Undefined, r.setValueProp(obj, key, val, cl.fn.Strict)
 	}
 	obj := r.stack[sp-1]
+	if in.Op == bytecode.OpGetPropUnder {
+		// An object pattern's, whose B is no cache: its source's own
+		// table, or the read.
+		if obj.IsObject() {
+			if v, ok := plainOwn(obj.Object(), key); ok {
+				return v, nil
+			}
+		}
+		return r.getValueProp(obj, key)
+	}
 	if obj.IsObject() && int(in.B) < len(cl.ic) {
 		o := obj.Object()
 		if in.Op == bytecode.OpGetPropThis {

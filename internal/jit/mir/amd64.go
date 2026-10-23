@@ -1237,7 +1237,9 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		c.arrayLiteral(v, site)
 		return
 	}
-	sp := len(s.Slots)
+	// The call's operands end the state's slots but for the arguments a
+	// parameter list's prologue keeps past them (ssa.FrameState's Args).
+	sp := len(s.Slots) - s.Args
 	calleeSlot := sp - site.Argc - 1
 	var callee *ssa.Value
 	if site.Accessor != ssa.AccessorNone || site.Super {
@@ -1452,7 +1454,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	if !direct {
 		operands = calleeSlot - 1
 	}
-	st, recs := c.callState(v, s, func(i int) bool { return direct && i >= ops }, operands)
+	st, recs := c.callState(v, s, func(i int) bool { return direct && i >= ops && i < sp }, operands)
 	record := c.callRecords(v, recs)
 	c.movImm(scratchA, uint64(uintptr(unsafe.Pointer(st))))
 	c.a.Store(regCtx, abi.OffCallState, scratchA)

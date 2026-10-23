@@ -1485,8 +1485,14 @@ The rounds that followed, each measured as above. The commit says more.
     among them. A context's pointer to the frame's arguments, which Go
     sets at each entry, would serve rest parameters and `arguments`
     alike.
-  - A parameter list's prologue is native only where Go enters the code:
-    its code has no call entry, and native callers' calls are Go's.
+  - A parameter list's prologue is native for native callers, inlining
+    and generic calls too (2026-10-23): its states keep the call's
+    arguments past their operands, which a frame Go makes there is given
+    (npm's callee refusals for non-simple parameters 404 -> 2). An object
+    pattern's read of a property its source lacks -- `{ x, y = 1 } = o` --
+    had deoptimized at every read, nothing learned, until the function was
+    compiled no more; it looks in the megamorphic cache, and Go reads a
+    miss from native code.
   - Shapes known: a loop header starts knowing nothing -- its entry for
     on-stack replacement knows nothing -- so a loop's first read of an
     object checks its shape at each turn; moving the check before the

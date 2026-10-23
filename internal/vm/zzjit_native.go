@@ -1925,11 +1925,13 @@ func (s *jitState) linkOf(fn *bytecode.Function) *jitLink {
 // its captured one, or makes calls in tail position, whose frame depends on
 // its object -- one whose call is not its body: a generator's, an async
 // function's, a class constructor's -- or one whose frame is not its
-// arguments in its parameters' locals: rest parameters, defaults,
-// destructuring. A link is a refused function's too, which a generic call
-// makes as a native call of code with no entry, Go running it from the
-// frame native code made (abi.ExitEnter): with its arguments cut to its
-// parameters, a rest parameter's would be lost.
+// arguments in its parameters' locals: rest parameters. A link is a
+// refused function's too, which a generic call makes as a native call of
+// code with no entry, Go running it from the frame native code made
+// (abi.ExitEnter): with its arguments cut to its parameters, a rest
+// parameter's would be lost. A parameter list with defaults or patterns
+// binds its parameters from those arguments, which a frame Go makes is
+// given (jitEnterArgs, jitPrologueArgs).
 func jitLinkFlags(fn *bytecode.Function) uint64 {
 	var f uint64
 	if fn.CoerceThis {
@@ -1944,7 +1946,7 @@ func jitLinkFlags(fn *bytecode.Function) uint64 {
 	if fn.Kind != bytecode.KindNormal && fn.Kind != bytecode.KindArrow && fn.Kind != bytecode.KindMethod ||
 		fn.Async || fn.Generator || isGeneratorTemplate(fn) ||
 		fn.TopLevel || fn.IsModule || fn.UsesArguments || fn.MappedArguments || fn.HasDirectEval || len(fn.EvalScopes) != 0 ||
-		!fn.HasSimpleParams || fn.HasRest || fn.ParamsAreLexical {
+		fn.HasRest {
 		f |= abi.LinkNotGeneric
 	}
 	return f

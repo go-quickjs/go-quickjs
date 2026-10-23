@@ -26,6 +26,19 @@ func (p *Program) Validate() error {
 	if p.Maps[0].Depth != 0 {
 		return fmt.Errorf("jit IR: invalid initial stack depth")
 	}
+	if p.PrologueArgs != 0 {
+		// The arguments a prologue's states keep past their operands fit
+		// in the frame's operand slots.
+		if p.PrologueArgs < 0 || p.PrologueArgs > p.Locals || p.PrologueStart < 0 || p.PrologueStart >= p.PrologueEnd || p.PrologueEnd > len(p.Code) ||
+			p.Code[p.PrologueStart].Op != ParamsDead || int(p.Code[p.PrologueStart].Key) != p.PrologueArgs {
+			return fmt.Errorf("jit IR: invalid parameter prologue")
+		}
+		for pc := p.PrologueStart + 1; pc < p.PrologueEnd; pc++ {
+			if p.Maps[pc].Depth+p.PrologueArgs > p.StackSize {
+				return fmt.Errorf("jit IR: pc %d: no room for the prologue's arguments", pc)
+			}
+		}
+	}
 	if p.HandlerAt != nil && len(p.HandlerAt) != len(p.Code) {
 		return fmt.Errorf("jit IR: invalid handler table")
 	}

@@ -128,8 +128,8 @@ A call that has met that many calls any other function through its link,
 as V8 makes a megamorphic call through the code the function points to
 (`ssa.CallSite`'s `Generic`): a closure of the caller's environment and
 realm whose hint names its function's link (`abi.HintTable`), whose frame
-is its arguments in its parameters (no rest, defaults, destructuring or
-`arguments`), and not a generator's or an async function's. A callee
+is its arguments in its parameters (no rest or `arguments`), and not a
+generator's or an async function's. A callee
 reached so, or by any native call, that has no code yet has its frame made
 and leaves for Go to run it (`abi.ExitEnter`), which compiles it for
 native callers. A call none of that covers -- a call of a built-in, of a
@@ -310,6 +310,21 @@ entered the code with, which the VM's frame describes, is given up by Go
 (`errTailCall`), as the interpreter gives it up. Frames the interpreter
 keeps for such a call -- a construction's, an arrow's sharing a derived
 constructor's this -- native code keeps too (`TailFrame`).
+
+**Parameter lists.** A list with defaults or patterns binds its
+parameters one at a time from the call's arguments, in its prologue (`ir`'s
+`ParamsDead`), which a frame of the VM's has (the VM's `f.args`) and one
+native code makes -- a native call's, an inlined callee's -- does not. So,
+as V8's frame states keep an arguments adaptor frame's arguments, every
+state inside the prologue keeps them past its operands (`ir.Program`'s
+`PrologueArgs`, `ssa.FrameState`'s `Args`), and a frame Go makes at an
+exit there is given them (the VM's `jitPrologueArgs`), the interpreter
+going on binding the parameters from them; a frame Go runs from its start
+(`abi.ExitEnter`) is given its parameters' slots as written
+(`jitEnterArgs`). Such code has a call entry, is inlined, and is called
+through links by generic calls. A prologue whose states have no room for
+the arguments within the frame's operand slots is Go's to enter only
+(`PrologueFrameOnly`).
 
 **Accessors.** A read whose site found a getter on its receivers'
 prototypes, or a write a setter -- a class's accessor, or one

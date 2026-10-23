@@ -751,6 +751,11 @@ type FrameState struct {
 	// caller's at the call, which PC, Depth and Site are, and those between
 	// are nil.
 	Inline *InlineState
+	// Args, for a state inside a parameter list's prologue, is how many of
+	// Slots, the last, are its frame's call's arguments, past the
+	// operands, where the frame has them (ir.Program's PrologueArgs):
+	// Slots up to them end with the operands still.
+	Args int
 	// id numbers the function's states, for tables by state (newState).
 	id int
 }

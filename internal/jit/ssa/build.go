@@ -2003,11 +2003,7 @@ type builder struct {
 	rootPC  int
 
 	entryPCs []int
-	// paramArgs are a parameter list's arguments, the values its slots had
-	// at the function's start, which its prologue binds them from (ir's
-	// ParamsDead).
-	paramArgs []*Value
-	blockAt   []*Block // by the PC a block starts at
+	blockAt  []*Block // by the PC a block starts at
 	// endOf is the last PC of each block, by block ID.
 	endOf []int
 
@@ -2488,6 +2484,11 @@ type frame struct {
 	// each with the keep cell planning gave it (literal): an inlined
 	// callee's too, from its own code's pools.
 	literals map[int]literalKeep
+	// paramArgs are a parameter list's arguments, the values its slots had
+	// at the frame's start, which its prologue binds them from (ir's
+	// ParamsDead), and which the states inside it keep past their operands
+	// (ir.Program's PrologueArgs).
+	paramArgs []*Value
 }
 
 // siteAnswer is a property site, if the feedback has one, and a string
@@ -4446,7 +4447,7 @@ func (b *builder) state(blk *Block, pc int) *FrameState {
 		// Go makes the call over again (InlineSite's Restart): the
 		// caller's state at it, a copy, as states are not shared.
 		call := fr.call
-		s := b.f.newState(FrameState{PC: call.PC, Depth: call.Depth, Site: call.Site, Slots: b.f.refsOf(len(call.Slots)), Inline: call.Inline})
+		s := b.f.newState(FrameState{PC: call.PC, Depth: call.Depth, Site: call.Site, Slots: b.f.refsOf(len(call.Slots)), Inline: call.Inline, Args: call.Args})
 		for i, v := range call.Slots {
 			if v != nil {
 				s.Slots[i] = v
@@ -4483,10 +4484,12 @@ func (b *builder) frameState(blk *Block, pc int) *FrameState {
 		if fr.site.Arguments || fr.site.ReadsArguments {
 			s.Inline.Args = uint64(len(fr.args)+1)<<32 | uint64(fr.base-fr.argSlot)
 		}
+		b.prologueArgs(s, fr, pc)
 		return s
 	}
 	depth := b.p.Maps[pc].Depth
 	s := b.f.newState(FrameState{PC: b.p.Maps[pc].PC, Depth: depth, Slots: b.f.refsOf(b.p.Locals + depth), Site: pc})
+	defer b.prologueArgs(s, b.root, pc)
 	for i := range s.Slots {
 		if !b.p.LiveAt(pc, i) || i >= b.p.UpvalueBase && i < b.p.UpvalueBase+b.p.Upvalues || b.p.IsCaptured(i) {
 			// A local the interpreter writes before it reads from here:
@@ -4504,6 +4507,27 @@ func (b *builder) frameState(blk *Block, pc int) *FrameState {
 		}
 	}
 	return s
+}
+
+// prologueArgs adds to s, the state at pc in fr's code, the arguments of
+// fr's call past its operands, where pc is inside its parameter list's
+// prologue after ParamsDead (ir.Program's PrologueArgs): the interpreter,
+// going on there, binds the parameters still in the dead zone from them,
+// which a frame Go makes of a native or an inlined callee's has nowhere
+// else.
+func (b *builder) prologueArgs(s *FrameState, fr *frame, pc int) {
+	n, inSlots, ok := fr.p.PrologueAt(pc)
+	if !ok || inSlots || len(fr.paramArgs) != n {
+		return
+	}
+	at := len(s.Slots)
+	slots := b.f.refsOf(at + n)
+	copy(slots, s.Slots)
+	for i, v := range fr.paramArgs {
+		slots[at+i] = v
+		v.Uses++
+	}
+	s.Slots, s.Args = slots, n
 }
 
 func (b *builder) fill(blk *Block) {
@@ -5291,10 +5315,12 @@ func (b *builder) instruction(blk *Block, pc int) {
 			}
 			break
 		}
-		if in.Op == ir.ReferenceRead || in.Op == ir.PropertyRead && b.fb != nil && b.fb.Generic(pc) {
+		if in.Op == ir.ReferenceRead || in.Op == ir.PropertyRead && (b.fb != nil && b.fb.Generic(pc) || site.Scan && site.Megamorphic && site.Shape == 0) {
 			// A reference's read; or a number's that met a value that was
 			// not one, read as a value now, whose uses that want a number
-			// unbox it (Feedback's Generic).
+			// unbox it (Feedback's Generic); or one of no shape that looks
+			// in the megamorphic cache, an object pattern's in an inlined
+			// callee, whose values are anything.
 			cell := guard(OpPropCell, Source, kind, object)
 			cell.Const, cell.Index, cell.Key = ir.Value{Bits: uint64(site.Shape)}, int(site.Index), site.Key
 			f.setProperty(cell, holders, cases, nil, nil)
@@ -5451,20 +5477,22 @@ func (b *builder) instruction(blk *Block, pc int) {
 		// The arguments, what the slots have at the function's start --
 		// undefined where one is missing, as the VM's call fills them --
 		// and the slots in the dead zone.
-		b.paramArgs = make([]*Value, in.Key)
-		for i := range b.paramArgs {
-			b.paramArgs[i] = operand(ir.Slot(i))
+		// An inlined callee's are its own slots, past its caller's.
+		fr := b.cur
+		fr.paramArgs = make([]*Value, in.Key)
+		for i := range fr.paramArgs {
+			fr.paramArgs[i] = operand(ir.Slot(fr.base + i))
 		}
-		for i := range b.paramArgs {
+		for i := range fr.paramArgs {
 			u := f.newValue(blk, OpConst, Tagged)
 			u.Const = ir.Value{Kind: ir.Uninitialized}
-			b.assign(i, blk, u)
+			b.assign(fr.base+i, blk, u)
 		}
 	case ir.ParamInit:
-		b.assign(in.Dest, blk, b.paramArgs[in.Key])
+		b.assign(in.Dest, blk, b.cur.paramArgs[in.Key])
 	case ir.ParamDefault:
 		// Undefined, passed or missing, is what makes a default run.
-		undef := f.newValue(blk, OpStrictNullish, Bool, b.paramArgs[in.Key])
+		undef := f.newValue(blk, OpStrictNullish, Bool, b.cur.paramArgs[in.Key])
 		undef.Aux = 1
 		b.assign(in.Dest, blk, boxB(undef))
 	case ir.Coercible:

@@ -2180,7 +2180,7 @@ func (c *core) savesOf(v *ssa.Value) []saved {
 // only its own slot holds, and the call writes them where its callee has
 // them (directOperand). A call is never in an entry block, so none is.
 func (c *core) operandsLive(s *ssa.FrameState, ops int) bool {
-	for _, x := range s.Slots[ops:] {
+	for _, x := range s.Slots[ops : len(s.Slots)-s.Args] {
 		if x == nil || x.Op == ssa.OpLoadSlot && c.isLazy(x) {
 			return false
 		}

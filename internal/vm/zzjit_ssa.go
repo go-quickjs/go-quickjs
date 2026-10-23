@@ -2056,12 +2056,14 @@ func (r *Runtime) jitBuildSSA(fn *bytecode.Function, p *ir.Program, fb *jitFeedb
 	// Native callers call a function's code at its call entry, which makes
 	// its frame (mir's callEntry): code a call makes no frame of its own
 	// for -- top-level code's, a generator's, an async function's -- has
-	// none, nor code whose parameter list has a prologue (ir's ParamsDead),
-	// which the interpreter goes on with from the call's arguments, which
-	// only a frame of the VM's has, nor code that pushes its own function
-	// object (push_callee), which a native callee's context does not hold:
-	// Go makes its calls.
-	f.CallEntry = !fn.TopLevel && !fn.IsModule && !fn.Async && !fn.Generator && !isGeneratorTemplate(fn) && !fn.ParamsAreLexical && !jitPushesCallee(fn)
+	// none, nor code whose parameter list has a prologue (ir's ParamsDead)
+	// whose states have no room for the call's arguments (ir.Program's
+	// PrologueFrameOnly), which the interpreter goes on with after an exit
+	// there, which only a frame of the VM's has then -- where they have, a
+	// frame Go makes of a native callee's is given them (jitPrologueArgs) --
+	// nor code that pushes its own function object (push_callee), which a
+	// native callee's context does not hold: Go makes its calls.
+	f.CallEntry = !fn.TopLevel && !fn.IsModule && !fn.Async && !fn.Generator && !isGeneratorTemplate(fn) && !p.PrologueFrameOnly && !jitPushesCallee(fn)
 	if jitGenCallable(fn) && !p.Cells {
 		// A generator a loop's step may resume natively: where it resumes
 		// it (mir's genEntry).
@@ -3966,12 +3968,8 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 		// An operation Go makes (abi.GoCallOp), with the frame.
 		v, err = r.jitOpMade(f, in, r.stack[sp-n:sp])
 	case prop:
-		if in.Op == bytecode.OpGetProp && r.jitSiteMegamorphic(f.cl, e, pc) {
-			// A megamorphic site's read that native code did not find,
-			// learned as at an exit (jitPolySeen): the megamorphic cache
-			// filled for the receiver's shape, which the next such read
-			// finds natively, as V8's miss handler fills its stub cache.
-			r.jitPolySeen(f, e, pc, sp, f.cl.fn.Code[pc])
+		if in.Op == bytecode.OpGetProp {
+			r.jitPropertySeen(f, e, pc, sp)
 		}
 		v, err = r.jitPropertyMade(f.cl, pc, sp)
 	case in.Op == bytecode.OpSuperCall:
@@ -4077,7 +4075,7 @@ func jitGoPropertyAt(fn *bytecode.Function, pc int, in bytecode.Instr) bool {
 	case bytecode.OpSetProp:
 		return pc < len(fn.Code) && fn.Code[pc].Op == bytecode.OpSetProp
 	case bytecode.OpGetProp:
-		return pc < len(fn.Code) && (fn.Code[pc].Op == bytecode.OpGetProp || fn.Code[pc].Op == bytecode.OpGetPropThis)
+		return pc < len(fn.Code) && (fn.Code[pc].Op == bytecode.OpGetProp || fn.Code[pc].Op == bytecode.OpGetPropThis || fn.Code[pc].Op == bytecode.OpGetPropUnder)
 	}
 	if jitcompile.GoOperation(in.Op) {
 		// An operation Go makes (abi.GoCallOp), as the instruction there
@@ -4085,6 +4083,28 @@ func jitGoPropertyAt(fn *bytecode.Function, pc int, in bytecode.Instr) bool {
 		return pc < len(fn.Code) && fn.Code[pc].Op == in.Op
 	}
 	return true
+}
+
+// jitPropertySeen learns, at a call of Go that reads the property at pc
+// of f's function, which native code did not find, what the read met, as
+// at an exit: at a megamorphic site's (jitPolySeen); at an object
+// pattern's, which has no cache, the megamorphic cache filled for the
+// receiver at sp-1, which the next such read finds natively, the
+// property's absence too (jitMegaFillProto).
+func (r *Runtime) jitPropertySeen(f *frame, e *jitEntry, pc, sp int) {
+	switch in := f.cl.fn.Code[pc]; {
+	case in.Op == bytecode.OpGetPropUnder:
+		if recv := r.stack[sp-1]; recv.IsObject() && int(in.A) < len(f.cl.names) {
+			r.jit.megaFill(recv.Object(), f.cl.names[in.A])
+			r.jitMegaFillProto(recv.Object(), f.cl.names[in.A])
+		}
+	case r.jitSiteMegamorphic(f.cl, e, pc):
+		// A megamorphic site's read that native code did not find,
+		// learned as at an exit (jitPolySeen): the megamorphic cache
+		// filled for the receiver's shape, which the next such read
+		// finds natively, as V8's miss handler fills its stub cache.
+		r.jitPolySeen(f, e, pc, sp, in)
+	}
 }
 
 // jitRunFrame is the frame Go entered the code running in ctx with, or
@@ -4691,12 +4711,8 @@ framed:
 		// An operation Go makes (abi.GoCallOp), with the level's frame.
 		v, err = r.jitOpMade(f, in, r.stack[sp-n:sp])
 	} else if prop {
-		if in.Op == bytecode.OpGetProp && r.jitSiteMegamorphic(f.cl, e, pc) {
-			// A megamorphic site's read that native code did not find,
-			// learned as at an exit (jitPolySeen): the megamorphic cache
-			// filled for the receiver's shape, which the next such read
-			// finds natively, as V8's miss handler fills its stub cache.
-			r.jitPolySeen(f, e, pc, sp, f.cl.fn.Code[pc])
+		if in.Op == bytecode.OpGetProp {
+			r.jitPropertySeen(f, e, pc, sp)
 		}
 		v, err = r.jitPropertyMade(f.cl, pc, sp)
 	} else if in.Op == bytecode.OpSuperCall {
@@ -8997,9 +9013,15 @@ func (fb *jitFeedback) Property(pc int) (ssa.PropertySite, bool) {
 		} else if in.Op == bytecode.OpGetPropUnder && fb.fwd == nil && int(in.A) < len(fb.cl.names) {
 			// An object pattern's read, which has no cache of its own (its
 			// B is how far down its source is): it searches the source's
-			// own small table, and leaves for Go where that has no such
-			// data property, as a read whose cache is empty does.
-			return ssa.PropertySite{Key: uint32(fb.cl.names[in.A]), Scan: true}, true
+			// own small table, then the megamorphic cache, as a megamorphic
+			// site's read does, and Go reads what neither has, from native
+			// code, filling the megamorphic cache -- a property the source
+			// lacks, whose default the pattern gives, found absent natively
+			// from then on (abi.MegaAbsent). It had deoptimized there, its
+			// code compiled again for nothing it learned, until the
+			// function was compiled no more: `{ x, y = 1 } = o`, o with no
+			// y, an options object's usual pattern.
+			return ssa.PropertySite{Key: uint32(fb.cl.names[in.A]), Scan: true, Megamorphic: true}, true
 		}
 	}
 	site, ok := fb.property(pc)
@@ -10550,6 +10572,10 @@ type jitNativeLevel struct {
 	// args, for an inlined callee's that keeps its call's arguments
 	// (abi.Context's InlineArgs), says where they are; 0 for none.
 	args uint64
+	// prologue, for an inlined callee's that left inside its parameter
+	// list's prologue, is its call's arguments, which its frame is given
+	// (jitPrologueArgs).
+	prologue []Value
 	// construct marks a callee a construction called, whose result, if not
 	// an object, is its receiver, and newTarget is then the function the
 	// construction called, the frame's new.target.
@@ -10775,6 +10801,10 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure) (Value, e
 					l.this = r.stack[l.base+l.thisSlot-1]
 				}
 				from, to := l.base+l.locals, l.base+fn.LocalCount
+				if p, err := r.jitLower(fn, jitLowerInline); err == nil {
+					// Before its operands move: the arguments past them.
+					l.prologue = jitPrologueArgs(p, int(l.pc), int(l.depth), r.stack[l.base:to], r.stack[from:])
+				}
 				copy(r.stack[to:to+int(l.depth)], r.stack[from:from+int(l.depth)])
 				clear(r.stack[to+int(l.depth) : from+int(l.depth)])
 				r.stackTop = max(r.stackTop, l.base+fn.LocalCount+fn.MaxStack)
@@ -10809,6 +10839,14 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure) (Value, e
 				f.pc++
 			}
 			f.this, f.newTarget, f.callee, f.args = l.this, Undefined, l.callee, nil
+			switch {
+			case l.inline:
+				f.args = l.prologue
+			case l.kind == abi.ExitEnter:
+				f.args = jitEnterArgs(fn, f.locals)
+			default:
+				f.args = r.jitLevelPrologue(l.cl, int(l.pc), int(l.depth), f)
+			}
 			if l.inline && l.args != 0 {
 				// Its call's arguments, in its caller's operands, which its
 				// apply_arguments hands on (ssa.InlineState's Args).
@@ -11057,7 +11095,7 @@ func (r *Runtime) jitEnterOne(c *abi.Context, i int, code *bytecode.Function, ca
 	jitStartLocals(fn, f.locals)
 	f.base = base + fn.LocalCount
 	f.pc = 0
-	f.this, f.newTarget, f.callee, f.args = this, newTarget, nil, nil
+	f.this, f.newTarget, f.callee, f.args = this, newTarget, nil, jitEnterArgs(fn, f.locals)
 	f.openUpvalues, f.handlers = f.openUpvalues[:0], f.handlers[:0]
 	f.thisRef, f.withScopes, f.evalVars, f.native, f.savedSP = nil, nil, nil, "", 0
 	derived := construct && fn.Kind == bytecode.KindDerivedConstructor
@@ -11630,11 +11668,12 @@ func (r *Runtime) jitCallResult(f *frame, pc, depth int, v Value, err error) (in
 		return sp + 1, true
 	}
 	switch in.Op {
-	case bytecode.OpGetProp, bytecode.OpGetPropThis, bytecode.OpSetProp:
+	case bytecode.OpGetProp, bytecode.OpGetPropThis, bytecode.OpGetPropUnder, bytecode.OpSetProp:
 		// An accessor's read or write, its getter or setter called
 		// (ssa.AccessorSite), or one Go made (abi.GoCallGet): the object
-		// goes but for get_prop_this, which keeps it below the value; a
-		// write's value goes too, and leaves nothing.
+		// goes but for get_prop_this, which keeps it below the value, and
+		// an object pattern's get_prop_under, whose source stays where it
+		// is; a write's value goes too, and leaves nothing.
 		sp := f.base + depth
 		f.pc = uint32(pc + 1)
 		switch in.Op {
@@ -11680,6 +11719,57 @@ func (r *Runtime) jitCallResult(f *frame, pc, depth int, v Value, err error) (in
 	}
 	r.stack[sp] = v
 	return sp + 1, true
+}
+
+// jitPrologueArgs is the arguments of the call that made a frame of p's
+// code that native code left at pc, depth operands deep, inside its
+// parameter list's prologue (ir.Program's PrologueArgs) -- before the
+// prologue's ParamsDead, the parameters' slots, locals; after it, the
+// operands past depth, from operands on, where the exit's state kept them
+// -- or nil where the frame needs none. A frame Go makes of a native
+// callee's, or of an inlined one's, has no call's arguments of its own, as
+// a frame of the VM's has, which the interpreter, going on in the
+// prologue, binds the parameters still in the dead zone from (OpInitParam,
+// OpParamNeedsDefault).
+func jitPrologueArgs(p *ir.Program, pc, depth int, locals, operands []Value) []Value {
+	n, inSlots, ok := p.PrologueAt(pc)
+	switch {
+	case !ok:
+		return nil
+	case inSlots && n <= len(locals):
+		return slices.Clone(locals[:n])
+	case !inSlots && depth >= 0 && depth+n <= len(operands):
+		return slices.Clone(operands[depth : depth+n])
+	}
+	return nil
+}
+
+// jitLevelPrologue is jitPrologueArgs for f, the frame Go makes of a
+// native callee's level, cl's, that left at pc, depth deep: from the
+// program its code was compiled from.
+func (r *Runtime) jitLevelPrologue(cl *closure, pc, depth int, f *frame) []Value {
+	if !cl.fn.ParamsAreLexical {
+		return nil
+	}
+	var p *ir.Program
+	if e := r.jitEntryOf(cl); e != nil {
+		p = e.ssaProg
+	}
+	if p == nil {
+		p, _ = r.jitLower(cl.fn, jitLowerInline)
+	}
+	return jitPrologueArgs(p, pc, depth, f.locals, r.stack[f.base:])
+}
+
+// jitEnterArgs is the arguments of a native call of fn whose frame Go
+// runs from its start (abi.ExitEnter), where its parameter list has a
+// prologue that binds its parameters from them: the parameters' slots, as
+// the call wrote them; or nil.
+func jitEnterArgs(fn *bytecode.Function, locals []Value) []Value {
+	if !fn.ParamsAreLexical || fn.HasRest || fn.ParamCount > len(locals) {
+		return nil
+	}
+	return slices.Clone(locals[:fn.ParamCount])
 }
 
 // jitHandlers gives f, a frame native code ran p's code in, the exception

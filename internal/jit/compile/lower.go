@@ -282,12 +282,13 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		return nil, refuse(-1, "direct eval")
 	case (fn.UsesArguments || fn.MappedArguments) && !m.forward:
 		return nil, refuse(-1, "arguments object")
-	case fn.HasRest || (!fn.HasSimpleParams && !fn.TopLevel || fn.ParamsAreLexical) && (!m.ssa || m.callee || fn.Generator || fn.Async):
+	case fn.HasRest || (!fn.HasSimpleParams && !fn.TopLevel || fn.ParamsAreLexical) && (!m.ssa || m.forward || fn.Generator || fn.Async):
 		// Top-level code has no parameter list, simple or not. A list with
 		// a default or a pattern is bound by its prologue from the call's
-		// arguments (ir's ParamsDead), which only a frame of the VM's has,
-		// where the interpreter goes on after an exit in it: not a native
-		// callee's.
+		// arguments (ir's ParamsDead), which the interpreter goes on with
+		// after an exit in it: a frame of the VM's has them, and one Go
+		// makes of a native or an inlined callee's is given them from the
+		// state the exit wrote (ir.Program's PrologueArgs).
 		return nil, refuse(-1, "non-simple parameters")
 	case len(fn.Code) == 0 || len(fn.Code) > MaxInstructions:
 		return nil, refuse(-1, "instruction budget")
@@ -729,6 +730,11 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		stringParts(p, fn)
 		markBools(p)
 		p.UpvalueBase, p.Upvalues, p.Params = fn.LocalCount, len(fn.Upvalues), fn.ParamCount
+		if !prologueArgs(p) && m.callee {
+			// A native callee's frame, and an inlined one's, has the call's
+			// arguments nowhere but where the prologue's states keep them.
+			return nil, refuse(-1, "non-simple parameters")
+		}
 		if captured {
 			p.Captured = make([]bool, fn.LocalCount)
 			for i, local := range fn.Locals {
@@ -744,6 +750,47 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 	selectPropertyLoops(fn, p, m.calls, m.callee, codes)
 	selectGlobalSlots(fn, p, codes)
 	return p, nil
+}
+
+// prologueArgs gives p, if its parameter list has a prologue (ir's
+// ParamsDead), its PrologueArgs: the arguments its states keep past their
+// operands, from ParamsDead to the prologue's last binding, as V8's frame
+// states keep an arguments adaptor frame's arguments. It reports false for
+// a prologue whose states have no room for them, which only a frame of the
+// VM's, with its arguments, may then run.
+func prologueArgs(p *ir.Program) bool {
+	start, end := -1, 0
+	for pc, in := range p.Code {
+		if p.Maps[pc].Depth < 0 {
+			continue
+		}
+		switch in.Op {
+		case ir.ParamsDead:
+			if start >= 0 {
+				p.PrologueFrameOnly = true
+				return false
+			}
+			start = pc
+		case ir.ParamInit, ir.ParamDefault:
+			end = pc + 1
+		}
+	}
+	if start < 0 {
+		return true
+	}
+	n := int(p.Code[start].Key)
+	if n == 0 || end <= start {
+		// Nothing to bind: no arguments to keep.
+		return true
+	}
+	for pc := start + 1; pc < end; pc++ {
+		if p.Maps[pc].Depth+n > p.StackSize {
+			p.PrologueFrameOnly = true
+			return false
+		}
+	}
+	p.PrologueArgs, p.PrologueStart, p.PrologueEnd = n, start, end
+	return true
 }
 
 // Numeric global reads borrow live cells, rather than snapshotting their values.
@@ -1258,6 +1305,14 @@ func liveLocals(fn *bytecode.Function, p *ir.Program, effects []effect) {
 				read(in, ins.B>>2)
 			case bytecode.OpLocalBinImm:
 				read(in, ins.A&(1<<24-1))
+			case bytecode.OpParamsToDeadZone:
+				// It takes the arguments from the parameters' slots, which
+				// the prologue binds the parameters from (ir's ParamsDead):
+				// a frame Go makes of an inlined callee's at the function's
+				// start must have them, read or not.
+				for i := uint32(0); i < ins.A && int(i) < n; i++ {
+					read(in, i)
+				}
 			}
 			if s := at(pc); !slices.Equal(s, in) {
 				copy(s, in)

@@ -491,6 +491,34 @@ type Program struct {
 	// captures those cells, which native code may write into one it takes
 	// from a pool, and no return closes anything.
 	Cells bool
+	// PrologueArgs, where not 0, is how many parameters a parameter list's
+	// prologue (ParamsDead) puts in the dead zone, whose arguments every
+	// state inside it holds past its operands: at a PC after ParamsDead's,
+	// PrologueStart, and before PrologueEnd, the one past the prologue's
+	// last ParamInit or ParamDefault, the frame's operands from Depth on
+	// are the call's arguments, PrologueArgs of them, as V8's frame states
+	// keep an arguments adaptor's -- and at PrologueStart and before, the
+	// parameters' slots still are. Go gives a frame it makes there of a
+	// native callee's, or of an inlined one's, those arguments (the VM's
+	// f.args), which the interpreter goes on binding the parameters from:
+	// such a frame has no call's arguments of its own. Every such state
+	// has room for them, PrologueArgs past its depth within StackSize.
+	// PrologueFrameOnly marks a prologue whose states had no room for
+	// them: only a frame of the VM's, which has its arguments, may run it,
+	// one Go enters -- no native caller's.
+	PrologueArgs, PrologueStart, PrologueEnd int
+	PrologueFrameOnly                        bool
+}
+
+// PrologueAt reports whether a frame at pc, its operands depth deep, has
+// its call's arguments past its operands (PrologueArgs), or, before
+// ParamsDead, in its parameters' slots (inSlots), as states inside a
+// parameter list's prologue keep them.
+func (p *Program) PrologueAt(pc int) (n int, inSlots, ok bool) {
+	if p == nil || p.PrologueArgs == 0 || pc < 0 || pc >= p.PrologueEnd {
+		return 0, false, false
+	}
+	return p.PrologueArgs, pc <= p.PrologueStart, true
 }
 
 // IsCaptured reports whether local i is one an inner closure captures
