@@ -19,6 +19,7 @@ import (
 type Workspace struct {
 	bools     arena.Arena[bool]
 	ints      arena.Arena[int]
+	int32s    arena.Arena[int32]
 	words     arena.Arena[uint64]
 	sets      arena.Arena[valueSet]
 	values    arena.Arena[*ssa.Value]
@@ -30,9 +31,11 @@ type Workspace struct {
 	saved     arena.Arena[saved]
 	sched     schedule
 	// xuses is allocate's list of uses in other blocks, kept from compile
-	// to compile, and xusesUsed what the last compile used of it.
-	xuses     []xuse
-	xusesUsed int
+	// to compile, and gpool its room for the phis' groups' members; of
+	// each, what the last compile used.
+	xuses                []xuse
+	gpool                []uint64
+	xusesUsed, gpoolUsed int
 	// needs are what each of the recent compiles used of the scratch
 	// tables (scratchUsed), the next to replace at needs[next]: the
 	// tables keep what those needed, as the arenas keep theirs.
@@ -80,6 +83,7 @@ func (w *Workspace) init() {
 	w.ready = true
 	w.bools.KeepBig()
 	w.ints.KeepBig()
+	w.int32s.KeepBig()
 	w.words.KeepBig()
 	w.sets.KeepBig()
 	w.values.KeepBig()
@@ -95,9 +99,9 @@ func (w *Workspace) init() {
 // chunks, its move schedule's tables and its code generators' assemblers
 // and tables.
 func (w *Workspace) Bytes() int {
-	n := w.bools.Bytes() + w.ints.Bytes() + w.words.Bytes() + w.sets.Bytes() + w.values.Bytes() + w.blocks.Bytes() +
+	n := w.bools.Bytes() + w.ints.Bytes() + w.int32s.Bytes() + w.words.Bytes() + w.sets.Bytes() + w.values.Bytes() + w.blocks.Bytes() +
 		w.intervals.Bytes() + w.recs.Bytes() + w.ivRefs.Bytes() + w.locs.Bytes() + w.saved.Bytes()
-	n += capBytes(w.sched.moves) + capBytes(w.sched.steps) + capBytes(w.sched.parked) + capBytes(w.sched.readers) + capBytes(w.xuses)
+	n += capBytes(w.sched.moves) + capBytes(w.sched.steps) + capBytes(w.sched.parked) + capBytes(w.sched.readers) + capBytes(w.xuses) + capBytes(w.gpool)
 	n += w.amd64.a.Bytes() + capBytes(w.amd64.labels) + capBytes(w.amd64.stubFor) + capBytes(w.amd64.cold)
 	n += w.arm64.a.Bytes() + capBytes(w.arm64.labels) + capBytes(w.arm64.stubFor) + capBytes(w.arm64.cold)
 	// A map's entries, as their keys and values, at least.
@@ -117,6 +121,7 @@ func capBytes[T any](s []T) int {
 func (w *Workspace) Rewind() {
 	w.bools.Rewind()
 	w.ints.Rewind()
+	w.int32s.Rewind()
 	w.words.Rewind()
 	w.sets.Rewind()
 	w.values.Rewind()
@@ -126,12 +131,12 @@ func (w *Workspace) Rewind() {
 	w.ivRefs.Rewind()
 	w.locs.Rewind()
 	w.saved.Rewind()
-	// The scratch tables -- the move schedule's, the uses', the exit
-	// descriptions' and the assemblers' -- go once they hold more than
-	// twice what any of the recent compiles used of them, as the arenas
-	// keep what those compiles used: a compile bigger than they grew them.
-	// (Compared with what the arenas keep, they went with every compile
-	// whose tables had grown as the arenas' shrank.)
+	// The scratch tables -- the move schedule's, the uses', the groups',
+	// the exit descriptions' and the assemblers' -- go once they hold more
+	// than twice what any of the recent compiles used of them, as the
+	// arenas keep what those compiles used: a compile bigger than they
+	// grew them. (Compared with what the arenas keep, they went with every
+	// compile whose tables had grown as the arenas' shrank.)
 	used := w.scratchUsed()
 	keep := used
 	for _, n := range w.needs[:w.known] {
@@ -139,7 +144,7 @@ func (w *Workspace) Rewind() {
 	}
 	w.needs[w.next], w.next, w.known = used, (w.next+1)%len(w.needs), min(w.known+1, len(w.needs))
 	if w.Bytes()-w.arenaBytes() > 2*keep {
-		w.sched, w.xuses, w.xusesUsed = schedule{}, nil, 0
+		w.sched, w.xuses, w.gpool, w.xusesUsed, w.gpoolUsed = schedule{}, nil, nil, 0, 0
 		w.exitWords = nil
 		w.exitSlotsBuf, w.exitIndexBuf, w.exitWordsBuf, w.exitHeadBuf, w.exitNextBuf = nil, nil, nil, nil, nil
 		w.amd64.a, w.amd64.labels, w.amd64.stubs, w.amd64.stubFor, w.amd64.cold = amd64.Asm{}, nil, nil, nil, nil
@@ -148,18 +153,19 @@ func (w *Workspace) Rewind() {
 }
 
 // scratchUsed is what the last compile used of the scratch tables: of the
-// assemblers' and the uses' list, their lengths, of the others, as they
-// are emptied for reuse, all they hold.
+// assemblers' and the uses' and groups' lists, their lengths, of the
+// others, as they are emptied for reuse, all they hold.
 func (w *Workspace) scratchUsed() int {
 	n := w.Bytes() - w.arenaBytes()
-	n -= w.amd64.a.Bytes() + w.arm64.a.Bytes() + capBytes(w.xuses)
-	n += w.amd64.a.Used() + w.arm64.a.Used() + w.xusesUsed*int(unsafe.Sizeof(xuse{}))
+	n -= w.amd64.a.Bytes() + w.arm64.a.Bytes() + capBytes(w.xuses) + capBytes(w.gpool)
+	n += w.amd64.a.Used() + w.arm64.a.Used()
+	n += w.xusesUsed*int(unsafe.Sizeof(xuse{})) + w.gpoolUsed*8
 	return n
 }
 
 // arenaBytes is what the workspace's arenas keep.
 func (w *Workspace) arenaBytes() int {
-	return w.bools.Bytes() + w.ints.Bytes() + w.words.Bytes() + w.sets.Bytes() + w.values.Bytes() + w.blocks.Bytes() +
+	return w.bools.Bytes() + w.ints.Bytes() + w.int32s.Bytes() + w.words.Bytes() + w.sets.Bytes() + w.values.Bytes() + w.blocks.Bytes() +
 		w.intervals.Bytes() + w.recs.Bytes() + w.ivRefs.Bytes() + w.locs.Bytes() + w.saved.Bytes()
 }
 
@@ -192,6 +198,32 @@ func (c *core) ints(n int) []int {
 		return c.ws.ints.Make(n)
 	}
 	return make([]int, n)
+}
+
+func (c *core) int32s(n int) []int32 {
+	if c.ws != nil {
+		return c.ws.int32s.Make(n)
+	}
+	return make([]int32, n)
+}
+
+// groupPool is n words for allocate's groups, which it may grow: the
+// workspace's, if there is one, which keepGroupPool gives back, as they
+// are, not cleared.
+func (c *core) groupPool(n int) []uint64 {
+	if c.ws != nil {
+		if cap(c.ws.gpool) < n {
+			c.ws.gpool = make([]uint64, n, 2*n)
+		}
+		return c.ws.gpool[:n]
+	}
+	return make([]uint64, n)
+}
+
+func (c *core) keepGroupPool(s []uint64) {
+	if c.ws != nil {
+		c.ws.gpool, c.ws.gpoolUsed = s[:0], len(s)
+	}
 }
 
 func (c *core) words(n int) valueSet {
