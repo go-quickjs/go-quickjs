@@ -1220,38 +1220,60 @@ func (c *core) allocate() error {
 	// (a member's own interval meets none of its group's others, and none
 	// shares a start): a member's interval is checked against a group by a
 	// binary search, not against each member, and joins it by a copy.
+	// The members are numbered, and their tables filled, as the phis are
+	// met, with each edge's weight, and the pairs of a phi and an
+	// argument that may be joined -- members of one class whose own
+	// intervals do not meet -- listed in the order met (pairs: the phi's
+	// number, then the argument's), which is the order they are joined in:
+	// a pass over the phis that reads each value once, and a pass over the
+	// pairs that reads the members' tables alone.
 	mid, mem := c.ints(nv), c.int32s(most)[:0]
+	tables := c.int32s(8*most + 2*most)
+	group, me, mw, hs, he := tables[:most], tables[most:2*most], tables[2*most:3*most], tables[3*most:4*most], tables[4*most:5*most]
+	goff, gn, gcap, pairs := tables[5*most:6*most], tables[6*most:7*most], tables[7*most:8*most], tables[8*most : 8*most][:0:2*most]
+	pool := c.groupPool(2 * most)
+	member := func(v *ssa.Value) int {
+		if m := mid[v.ID]; m != 0 {
+			return m - 1
+		}
+		if v.ID >= nv || iv[v.ID].v == nil {
+			return -1
+		}
+		i, it := len(mem), &iv[v.ID]
+		mem = append(mem, int32(v.ID))
+		mid[v.ID] = i + 1
+		me[i], hs[i], he[i] = int32(it.end), int32(it.start), int32(it.end)
+		goff[i], gn[i], gcap[i] = int32(2*i), 1, 2
+		pool[2*i] = uint64(it.start)<<32 | uint64(i)
+		return i
+	}
 	for _, b := range c.order {
 		for _, v := range b.Values {
 			if v.Op != ssa.OpPhi {
 				break
 			}
-			if mid[v.ID] == 0 && iv[v.ID].v != nil {
-				mem = append(mem, int32(v.ID))
-				mid[v.ID] = len(mem)
-			}
-			for _, a := range v.Args {
+			mv := member(v)
+			for i, a := range v.Args {
 				if a != v && phiOf[a.ID] == nil {
 					phiOf[a.ID] = v
 				}
-				if a.ID < nv && mid[a.ID] == 0 && iv[a.ID].v != nil {
-					mem = append(mem, int32(a.ID))
-					mid[a.ID] = len(mem)
+				ma := member(a)
+				w := int32(weight(b, i))
+				if mv >= 0 {
+					mw[mv] = max(mw[mv], w)
+				}
+				if ma < 0 {
+					continue
+				}
+				mw[ma] = max(mw[ma], w)
+				if a != v && mv >= 0 && isFloat(a) == isFloat(v) && (hs[mv] > me[ma] || hs[ma] > me[mv]) {
+					pairs = append(pairs, int32(mv), int32(ma))
 				}
 			}
 		}
 	}
 	nm := len(mem)
-	tables := c.int32s(8 * nm)
-	group, me, mw, hs, he := tables[:nm], tables[nm:2*nm], tables[2*nm:3*nm], tables[3*nm:4*nm], tables[4*nm:5*nm]
-	goff, gn, gcap := tables[5*nm:6*nm], tables[6*nm:7*nm], tables[7*nm:]
-	pool := c.groupPool(2 * nm)
-	for i, id := range mem {
-		it := &iv[id]
-		me[i], hs[i], he[i] = int32(it.end), int32(it.start), int32(it.end)
-		goff[i], gn[i], gcap[i] = int32(2*i), 1, 2
-		pool[2*i] = uint64(it.start)<<32 | uint64(i)
-	}
+	group, me, mw, hs, he, goff, gn, gcap = group[:nm], me[:nm], mw[:nm], hs[:nm], he[:nm], goff[:nm], gn[:nm], gcap[:nm]
 	// members is root r's members, in order of start.
 	members := func(r int) []uint64 { return pool[goff[r]:][:gn[r]] }
 	find := func(i int) int {
@@ -1274,7 +1296,6 @@ func (c *core) allocate() error {
 		}
 		return nil
 	}
-	meets := func(a, b *interval) bool { return a.start <= b.end && b.start <= a.end }
 	// overlap reports whether a member of group rb meets one of group ra:
 	// for each of rb's, the last of ra's to begin no later than it ends,
 	// which ends latest of those, ending no sooner than it begins.
@@ -1289,27 +1310,22 @@ func (c *core) allocate() error {
 		}
 		return false
 	}
-	// unite joins the groups of x and y if no member of one meets a member
-	// of the other: not where x's and y's own intervals meet, as a phi's
-	// and its argument's on its back edge mostly do; none where their
-	// groups' spans are apart; else if the groups' members meet nowhere
-	// (overlap) -- and not if the two groups' pairs of members are more
-	// than 4096, as a check of the pairs had been bounded. The smaller
-	// group's members join the larger's, each pointed at its new root, the
-	// two lists merged in order of start, from their ends.
-	unite := func(x, y *ssa.Value) {
-		if x == y || isFloat(x) != isFloat(y) || y.ID >= nv || meets(&iv[x.ID], &iv[y.ID]) {
-			return
-		}
-		rx, ry := root(x), root(y)
-		if rx < 0 || ry < 0 || rx == ry {
-			return
+	// Each pair's groups are joined if no member of one meets a member of
+	// the other: none where their spans are apart; else if the groups'
+	// members meet nowhere (overlap) -- and not if the two groups' pairs of
+	// members are more than 4096, as a check of the pairs had been bounded.
+	// The smaller group's members join the larger's, each pointed at its
+	// new root, the two arrays merged in order of start, from their ends.
+	for p := 0; p < len(pairs); p += 2 {
+		rx, ry := find(int(pairs[p])), find(int(pairs[p+1]))
+		if rx == ry {
+			continue
 		}
 		if gn[rx] < gn[ry] {
 			rx, ry = ry, rx
 		}
 		if hs[rx] <= he[ry] && hs[ry] <= he[rx] && (int(gn[rx])*int(gn[ry]) > 4096 || overlap(rx, ry)) {
-			return
+			continue
 		}
 		from := members(ry)
 		for _, w := range from {
@@ -1333,24 +1349,6 @@ func (c *core) allocate() error {
 		}
 		gn[rx] = int32(na + nb)
 		hs[rx], he[rx] = min(hs[rx], hs[ry]), max(he[rx], he[ry])
-	}
-	for _, b := range c.order {
-		for _, v := range b.Values {
-			if v.Op != ssa.OpPhi {
-				break
-			}
-			m := mid[v.ID] - 1
-			for i, a := range v.Args {
-				unite(v, a)
-				w := int32(weight(b, i))
-				if m >= 0 {
-					mw[m] = max(mw[m], w)
-				}
-				if a.ID < nv && mid[a.ID] != 0 {
-					mw[mid[a.ID]-1] = max(mw[mid[a.ID]-1], w)
-				}
-			}
-		}
 	}
 	c.keepGroupPool(pool)
 	// A group's register is waited for while members of it are still to
@@ -1434,24 +1432,25 @@ func (c *core) allocate() error {
 		}
 		return false
 	}
-	placed := func(v *ssa.Value, r int) {
+	// placed notes that a member of group r, of class k, was given
+	// register reg, or -1 for none.
+	placed := func(k, reg, r int) {
 		if r < 0 {
 			return
 		}
-		k := b2i(isFloat(v))
-		if l := c.locAt(v); l.reg >= 0 && greg[r] == 0 && left[r] > 1 && !spoken(k, l.reg, int(hs[r]), int(he[r]), r, nil, 0, nil, nil) {
-			greg[r] = int32(l.reg) + 1
-			wnext[r], wait[k][l.reg] = wait[k][l.reg], int32(r)+1
-			waiting[k][l.reg]++
+		if reg >= 0 && greg[r] == 0 && left[r] > 1 && !spoken(k, reg, int(hs[r]), int(he[r]), r, nil, 0, nil, nil) {
+			greg[r] = int32(reg) + 1
+			wnext[r], wait[k][reg] = wait[k][reg], int32(r)+1
+			waiting[k][reg]++
 		}
 		if left[r]--; left[r] == 0 && greg[r] != 0 {
 			waiting[k][greg[r]-1]--
 		}
 	}
-	// hinted is the register free holds that v is to share, or -1: its
-	// group's, else a phi's or an argument's (above), not spoken for.
-	hinted := func(v *ssa.Value, r int, free []int) int {
-		k := b2i(isFloat(v))
+	// hinted is the register free holds that the value of interval it, of
+	// class k and group r, is to share, or -1: its group's, else a phi's or
+	// an argument's (above), not spoken for.
+	hinted := func(it *interval, k, r int, free []int) int {
 		if r >= 0 {
 			if g := greg[r]; g != 0 {
 				if i := slices.Index(free, int(g)-1); i >= 0 {
@@ -1459,7 +1458,7 @@ func (c *core) allocate() error {
 				}
 			}
 		}
-		it := &iv[v.ID]
+		v := it.v
 		want := func(x *ssa.Value, hb *ssa.Block, hi int) int {
 			if x == nil || !c.hasLoc[x.ID] {
 				return -1
@@ -1504,7 +1503,7 @@ func (c *core) allocate() error {
 	// separate slots, since the second does not know when the first's
 	// spilled values die.
 	spills := 0
-	for _, float := range [2]bool{false, true} {
+	for k, float := range [2]bool{false, true} {
 		regs := c.gprs
 		if float {
 			regs = c.fprs
@@ -1659,20 +1658,29 @@ func (c *core) allocate() error {
 			}
 			r := roots[j]
 			if len(free) > 0 {
-				i := hinted(it.v, r, free)
+				i := hinted(it, k, r, free)
 				if i < 0 {
-					// The last freed, but one spoken for.
+					// The last freed, but one spoken for (spoken, for a
+					// value with no hint): waited for by a group but its
+					// own, whose register it is.
 					i = len(free) - 1
 					for j := len(free) - 1; j >= 0; j-- {
-						if !spoken(b2i(float), free[j], it.start, it.end, r, nil, 0, nil, nil) {
+						reg := free[j]
+						n := waiting[k][reg]
+						if r >= 0 && greg[r] == int32(reg)+1 && left[r] > 0 {
+							n--
+						}
+						if n <= 0 {
 							i = j
 							break
 						}
 					}
 				}
-				c.setLoc(it.v, loc{reg: free[i], spill: -1})
-				placed(it.v, r)
-				active, aEnd, aReg = append(active, it), append(aEnd, it.end), append(aReg, free[i])
+				reg := free[i]
+				c.locs[it.v.ID], c.hasLoc[it.v.ID] = loc{reg: reg, spill: -1}, true
+				c.used[k] |= 1 << reg
+				placed(k, reg, r)
+				active, aEnd, aReg = append(active, it), append(aEnd, it.end), append(aReg, reg)
 				if it.v.ID >= nf {
 					budgets++
 				}
@@ -1710,10 +1718,12 @@ func (c *core) allocate() error {
 					return err
 				}
 			}
+			reg := -1
 			if victim == it {
 				c.setLoc(it.v, loc{reg: -1, spill: s})
 			} else {
-				c.setLoc(it.v, loc{reg: c.locAt(victim.v).reg, spill: -1})
+				reg = c.locAt(victim.v).reg
+				c.setLoc(it.v, loc{reg: reg, spill: -1})
 				c.setLoc(victim.v, loc{reg: -1, spill: s})
 				active[vi], aEnd[vi] = it, it.end
 				if budget {
@@ -1724,7 +1734,7 @@ func (c *core) allocate() error {
 				}
 				minEnd = min(minEnd, it.end)
 			}
-			placed(it.v, r)
+			placed(k, reg, r)
 			if !budget {
 				spilled = append(spilled, victim)
 				push(len(spilled) - 1)
