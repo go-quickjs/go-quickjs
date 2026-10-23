@@ -491,7 +491,7 @@ func (r *Runtime) jitPrimitiveSeen(f *frame, e *jitEntry, pc int, in bytecode.In
 // jitPropertyOp reports whether op is a named property's read or write,
 // whose site's cache the interpreter fills (propCache).
 func jitPropertyOp(op bytecode.Op) bool {
-	return op == bytecode.OpGetProp || op == bytecode.OpGetPropThis || op == bytecode.OpSetProp
+	return op == bytecode.OpGetProp || op == bytecode.OpGetPropThis || op == bytecode.OpSetProp || op == bytecode.OpGetPropUnder
 }
 
 // jitPropertyDeopt handles a deoptimization at site of the code owner's
@@ -527,7 +527,9 @@ func (r *Runtime) jitPropertyDeopt(f *frame, e, owner *jitEntry, site int32, pc,
 // megamorphic): its cache gave up, or e, the function's entry, found what
 // no case holds.
 func (r *Runtime) jitSiteMegamorphic(cl *closure, e *jitEntry, pc int) bool {
-	if in := cl.fn.Code[pc]; int(in.B) < len(cl.ic) && cl.ic[in.B].fills >= maxCacheFills {
+	if in := cl.fn.Code[pc]; in.Op != bytecode.OpGetPropUnder && int(in.B) < len(cl.ic) && cl.ic[in.B].fills >= maxCacheFills {
+		// An object pattern's read has no cache: its B is how far down its
+		// source is.
 		return true
 	}
 	if e != nil {
@@ -573,10 +575,28 @@ func (r *Runtime) jitDeoptSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.In
 	if write {
 		at = sp - 2
 	}
+	if in.Op == bytecode.OpGetPropUnder {
+		at = sp - 1 - int(in.B)
+	}
 	if at < f.base || at >= len(r.stack) {
 		return
 	}
 	recv := r.stack[at]
+	if in.Op == bytecode.OpGetPropUnder {
+		// An object pattern's read, which has no cache, missed its source's
+		// own table -- a property the source lacks, its default the
+		// pattern's: it looks in the megamorphic cache from the next
+		// compile on, filled now, and Go reads what it does not find from
+		// native code (jitFeedback's Property), rather than deoptimize at
+		// each such read. One that never misses keeps its own table's
+		// search alone, with no branch for Go.
+		jitPolySiteAt(e, pc).mega = true
+		if recv.IsObject() {
+			r.jit.megaFill(recv.Object(), key)
+			r.jitMegaFillProto(recv.Object(), key)
+		}
+		return
+	}
 	if recv.IsBigInt() && in.Op == bytecode.OpGetPropThis && !slices.Contains(e.bigSites, uint32(pc)) {
 		// A BigInt's method: read off BigInt.prototype by the code compiled
 		// again, the site no polymorphic one (jitFeedback's StringProperty).
@@ -6390,6 +6410,17 @@ func (r *Runtime) jitIndexOperands(f *frame, in bytecode.Instr, sp int) (o, k Va
 	return Value{}, Value{}, false
 }
 
+// jitPolyMega reports whether e's code found the site at pc megamorphic
+// (jitPolySite's mega).
+func jitPolyMega(e *jitEntry, pc int) bool {
+	for i := range e.poly {
+		if p := &e.poly[i]; int(p.pc) == pc {
+			return p.mega
+		}
+	}
+	return false
+}
+
 // jitKeyedClass reports whether o's elements by a number Go reads from
 // native code where an array's are not (ssa.GoIndex, jitKeyedRead): an
 // ordinary object's, and an arguments object's that aliases no parameter
@@ -9091,15 +9122,20 @@ func (fb *jitFeedback) Property(pc int) (ssa.PropertySite, bool) {
 		} else if in.Op == bytecode.OpGetPropUnder && fb.fwd == nil && int(in.A) < len(fb.cl.names) {
 			// An object pattern's read, which has no cache of its own (its
 			// B is how far down its source is): it searches the source's
-			// own small table, then the megamorphic cache, as a megamorphic
-			// site's read does, and Go reads what neither has, from native
-			// code, filling the megamorphic cache -- a property the source
-			// lacks, whose default the pattern gives, found absent natively
-			// from then on (abi.MegaAbsent). It had deoptimized there, its
-			// code compiled again for nothing it learned, until the
-			// function was compiled no more: `{ x, y = 1 } = o`, o with no
-			// y, an options object's usual pattern.
-			return ssa.PropertySite{Key: uint32(fb.cl.names[in.A]), Scan: true, Megamorphic: true}, true
+			// own small table, and deoptimizes where that has no such data
+			// property -- once: the site then looks in the megamorphic
+			// cache too, as a megamorphic site's read does, and Go reads
+			// what neither has, from native code, filling the megamorphic
+			// cache -- a property the source lacks, whose default the
+			// pattern gives, found absent natively from then on
+			// (abi.MegaAbsent; jitDeoptSeen). It had deoptimized there at
+			// every read, nothing learned, until the function was compiled
+			// no more: `{ x, y = 1 } = o`, o with no y, an options
+			// object's usual pattern. A site that never misses has no
+			// branch for Go: local_destruct's reads, made megamorphic at
+			// once, had taken 9% longer.
+			e := fb.ownEntry()
+			return ssa.PropertySite{Key: uint32(fb.cl.names[in.A]), Scan: true, Megamorphic: e != nil && jitPolyMega(e, pc)}, true
 		}
 	}
 	site, ok := fb.property(pc)

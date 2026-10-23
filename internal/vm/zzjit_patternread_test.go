@@ -5,6 +5,8 @@ package vm
 import (
 	"runtime/debug"
 	"testing"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
 // An object pattern's read (get_prop_under), which has no cache of its
@@ -61,5 +63,42 @@ func TestJITPatternReadPending(t *testing.T) {
 		}`)
 	for range 3 {
 		both.agree(t, `ws(300, { x: 2 })`)
+	}
+}
+
+// An object pattern's read is compiled to search its source's own table
+// alone until it misses there: its first miss deoptimizes, once, and the
+// site looks in the megamorphic cache from then on, Go reading what that
+// has not (jitDeoptSeen, jitFeedback's Property). A read that never misses
+// has no branch for Go -- microbench's local_destruct, compiled with one
+// at each of its eight reads, had taken 9% longer.
+func TestJITPatternReadsLearnTheirMisses(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	both := jitBothForTest(t, `
+		function hits(o) { let s = 0; for (let i = 0; i < 4; i++) { const { a, b } = o; s += a + b } return s }
+		function misses(o) { let s = 0; for (let i = 0; i < 4; i++) { const { a, b = 2 } = o; s += a + b } return s }
+		function run(n) { let s = 0; for (let i = 0; i < n; i++) s += hits({ a: i, b: 1 }) + misses({ a: i }); return s }`)
+	for range 3 {
+		both.agree(t, `run(300)`)
+	}
+	r := both.jit
+	for _, c := range []struct {
+		name string
+		mega bool
+	}{{"hits", false}, {"misses", true}} {
+		e := jitEntryForTest(t, r, c.name)
+		fn := r.global.getOwn(r.atoms.intern(c.name)).value().Object().fn().closure.fn
+		mega := false
+		for pc, in := range fn.Code {
+			if in.Op == bytecode.OpGetPropUnder && jitPolyMega(e, pc) {
+				mega = true
+			}
+		}
+		if mega != c.mega || e.deopts > 2 {
+			t.Errorf("%s: a pattern read megamorphic %v, want %v; %d deoptimizations", c.name, mega, c.mega, e.deopts)
+		}
 	}
 }

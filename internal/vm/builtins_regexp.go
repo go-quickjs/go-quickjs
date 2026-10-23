@@ -95,6 +95,15 @@ func (r *Runtime) newRegExpLiteral(c *bytecode.Constant) (Value, error) {
 			return Undefined, r.throwSyntaxError("%s", err.Error())
 		}
 		*e = regexpLiteral{c: c, re: re}
+		// The spare of the literal the entry held goes with it: kept, it
+		// would keep c from being given its RegExp back for good
+		// (regexpLiteralDone), each evaluation then a new one -- the
+		// literal it held never evaluated again, a loop's /x/.test(s)
+		// whose constant shares its entry allocated a RegExp at every
+		// turn, by where the constants happened to be.
+		if sp := &r.regexpSpares[i]; sp.c != c {
+			*sp = regexpSpare{}
+		}
 	}
 	if sp := &r.regexpSpares[i]; sp.c == c {
 		ro := sp.ro
