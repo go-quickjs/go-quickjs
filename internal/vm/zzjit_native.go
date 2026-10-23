@@ -3034,7 +3034,7 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 			bytecode.OpCopyDataProps, bytecode.OpArraySpread, bytecode.OpSpreadIter, bytecode.OpArrayPush, bytecode.OpSetProtoOf,
 			bytecode.OpObjectRest, bytecode.OpCallSpread, bytecode.OpNewSpread, bytecode.OpTemplateObject, bytecode.OpPushCallee,
 			bytecode.OpRestParam, bytecode.OpGetArguments, bytecode.OpLazyArguments, bytecode.OpArgumentsIndex, bytecode.OpArgumentsLength,
-			bytecode.OpApplyArguments, bytecode.OpGetSuperProp, bytecode.OpGetSuperIndex, bytecode.OpSetSuperProp, bytecode.OpSetSuperIndex,
+			bytecode.OpApplyArguments, bytecode.OpGetLength, bytecode.OpGetLocalIndex, bytecode.OpGetSuperProp, bytecode.OpGetSuperIndex, bytecode.OpSetSuperProp, bytecode.OpSetSuperIndex,
 			bytecode.OpSuperBase:
 		case bytecode.OpDispose:
 		default:
@@ -3314,6 +3314,16 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 			if sp, v, err = r.jitArguments(f, in, sp); err != nil {
 				return sp, steps, err
 			}
+		case bytecode.OpGetLength:
+			// One native code did not read (ssa's OpLength): an arguments
+			// object's, a plain object's, as executeAt's case reads it.
+			sp--
+			v, err = r.getValueProp(stack[sp], atomLength)
+		case bytecode.OpGetLocalIndex:
+			// An element of a local by a local, which native code did not
+			// read -- an arguments object's -- from the frame the exit
+			// wrote, as executeAt's case reads it.
+			v, err = r.getIndexed(f.locals[in.A], f.locals[in.B])
 		case bytecode.OpGetSuperProp, bytecode.OpGetSuperIndex, bytecode.OpSetSuperProp, bytecode.OpSetSuperIndex, bytecode.OpSuperBase:
 			// Through the frame's function's home object, and with its
 			// this, as executeAt's cases do.

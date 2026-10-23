@@ -1620,6 +1620,34 @@ func (r *Runtime) jitLearnedDue(cl *closure, e *jitEntry) bool {
 	return true
 }
 
+// jitCompileDueNow reports whether a call of Go from e's code, cl's
+// function's, in the run whose context is root, is to leave the code for
+// it to be compiled again: due for what it learned (jitLearnedDue), and
+// compiled again once the run has left -- not refused for a native call of
+// it in an outer run, below root, which goes on in it later and which the
+// run's leaving does not end (otherwiseInUse). It would leave at every such
+// call, the rest of each invocation the interpreter's, for a compile made
+// only once those calls return: a recursive closure's, EarleyBoyer's
+// loop3, called natively from deeper in its own recursion, had left at
+// each call of Go some 3,000 times a run. The run's own levels, which its
+// leaving unwinds, do not keep it.
+func (r *Runtime) jitCompileDueNow(cl *closure, e *jitEntry, root int) bool {
+	if !r.jitLearnedDue(cl, e) {
+		return false
+	}
+	s := r.jit
+	if e.link == nil {
+		return true
+	}
+	fn := e.link.key.Value()
+	for i := 0; i < root && i < len(s.ssaCtxs); i++ {
+		if c := s.ssaCtxs[i]; c.Live == abi.LiveCall && c.Closure != nil && (*closure)(c.Closure).fn == fn {
+			return false
+		}
+	}
+	return true
+}
+
 // jitLearnedSpent is the work e's code has done since it was compiled, as
 // the existing tiers' budget counts it (jitTierBudget): its invocations,
 // each fn's length -- Go's entries, native callers' calls, calls of it the
@@ -4020,7 +4048,7 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 	}
 	// Its calls of Go judged not to pay, the code leaves after this one,
 	// and the existing tiers run the rest of the invocation (jitGoOn).
-	if slow || err != nil || r.stopped != nil || e.invalid || r.jitLearnedDue(f.cl, e) || e.ssa != code {
+	if slow || err != nil || r.stopped != nil || e.invalid || r.jitCompileDueNow(f.cl, e, idx) || e.ssa != code {
 		s.goPending = jitGoPending{set: true, pc: pc, ctx: idx, v: v, err: err}
 		return false
 	}
@@ -4802,7 +4830,7 @@ framed:
 		// the run's, which its levels' calls run in.
 		r.jitShareContexts(root, runF)
 	}
-	if err != nil || r.stopped != nil || e.invalid || r.jitLearnedDue(f.cl, e) || e.ssa != code || runE.ssa != runCode {
+	if err != nil || r.stopped != nil || e.invalid || r.jitCompileDueNow(f.cl, e, root) || e.ssa != code || runE.ssa != runCode {
 		s.goPending = jitGoPending{set: true, pc: pc, ctx: idx, v: v, err: err}
 		return false
 	}
@@ -6362,6 +6390,15 @@ func (r *Runtime) jitIndexOperands(f *frame, in bytecode.Instr, sp int) (o, k Va
 	return Value{}, Value{}, false
 }
 
+// jitKeyedClass reports whether o's elements by a number Go reads from
+// native code where an array's are not (ssa.GoIndex, jitKeyedRead): an
+// ordinary object's, and an arguments object's that aliases no parameter
+// -- EarleyBoyer's sc_list reads `var a = arguments` so, a[i], which had
+// left native code at each read.
+func jitKeyedClass(o *Object) bool {
+	return o.class == ClassObject || o.class == ClassArguments && o.flags&objMappedArguments == 0
+}
+
 // jitIndexSeen notes an element read at pc that left native code, of
 // receiver o at key k (jitIndexOperands): one compiled to read an
 // element's cell (ir.Instruction's Reference) whose receiver is a typed
@@ -6390,7 +6427,7 @@ func (r *Runtime) jitIndexSeen(e *jitEntry, pc int, o, k Value) {
 		// A string read so, a string's character or an array's element,
 		// is a hint of its own (StringReads): the additions of it are Go's
 		// from the same lowering on, not learned an exit each.
-		keyed := o.IsObject() && (k.IsString() || k.IsNumber() && o.Object().class == ClassObject)
+		keyed := o.IsObject() && (k.IsString() || k.IsNumber() && jitKeyedClass(o.Object()))
 		chars := o.IsString() && k.IsNumber()
 		l := r.jit.lowering(e.link.key.Value())
 		switch {
@@ -6432,7 +6469,7 @@ func (r *Runtime) jitIndexSeen(e *jitEntry, pc int, o, k Value) {
 		e.stringReads = append(e.stringReads, int32(pc))
 	case o.IsObject() && o.Object().class == ClassTypedArray:
 		e.typedReads = append(e.typedReads, int32(pc))
-	case o.IsObject() && (k.IsString() || k.IsNumber() && o.Object().class == ClassObject):
+	case o.IsObject() && (k.IsString() || k.IsNumber() && jitKeyedClass(o.Object())):
 		// An object's property by its name, obj[name], which Go reads from
 		// native code from then on (ssa.GoIndex), if it would have read
 		// this one: PDF.js's Type1 fonts look their commands up so, map[command],
@@ -11834,7 +11871,7 @@ func (r *Runtime) jitGoHost(ctx *abi.Context) bool {
 		f.pc = uint32(pc)
 		return false
 	}
-	if err != nil || r.stopped != nil || e.invalid || r.jitLearnedDue(f.cl, e) || e.ssa != code {
+	if err != nil || r.stopped != nil || e.invalid || r.jitCompileDueNow(f.cl, e, idx) || e.ssa != code {
 		s.goPending = jitGoPending{set: true, pc: pc, ctx: idx, v: v, err: err}
 		return false
 	}
@@ -11908,7 +11945,7 @@ func (r *Runtime) jitGoHostPlain(ctx *abi.Context, idx int) bool {
 // function object: a definition's (compile's frameDefinition).
 func jitLevelHost(op bytecode.Op) bool {
 	switch op {
-	case bytecode.OpNewClass, bytecode.OpSetHomeObject, bytecode.OpSetFieldInit, bytecode.OpDefineMethod,
+	case bytecode.OpGetLength, bytecode.OpNewClass, bytecode.OpSetHomeObject, bytecode.OpSetFieldInit, bytecode.OpDefineMethod,
 		bytecode.OpDefineGetter, bytecode.OpDefineSetter, bytecode.OpSetFuncName,
 		bytecode.OpPrivateName, bytecode.OpNewPrivateMethods, bytecode.OpInstallPrivateMethods,
 		bytecode.OpDefinePrivate, bytecode.OpDefinePrivateMethod, bytecode.OpDefinePrivateGetter,
@@ -11929,6 +11966,8 @@ func (r *Runtime) jitHostResult(f *frame, pc, depth int, v Value, err error) (in
 		bytecode.OpPrivateName, bytecode.OpNewPrivateMethods:
 	case bytecode.OpGetSuperIndex:
 		pops = 2
+	case bytecode.OpGetLength:
+		pops = 1
 	case bytecode.OpSetSuperProp:
 		pops, pushes = 1, false
 	case bytecode.OpSetSuperIndex:

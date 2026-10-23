@@ -5170,6 +5170,23 @@ func (b *builder) instruction(blk *Block, pc int) {
 		kind := ir.GuardExit
 		if b.fb != nil && b.fb.Generic(pc) {
 			kind = ir.HostExit
+			if b.cur == b.root && b.goCalls() {
+				// Go reads it from native code, on the frame (GoHost), as
+				// the interpreter does: an arguments object's, EarleyBoyer's
+				// sc_list's, had left native code at every call.
+				call := guard(OpCall, Tagged, ir.HostExit, operand(in.Left))
+				b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoHost, Argc: 1, ThisSlot: -1}}, b.f.Keeps
+				b.f.Keeps++
+				b.f.HostsLeft = append(b.f.HostsLeft, pc)
+				cell := f.newValue(blk, OpCallCell, Source, call)
+				r := f.newValue(blk, OpKept, Tagged, cell, call)
+				r.Shadow = cell
+				b.assign(in.Dest, blk, r)
+				if b.hasCells() {
+					b.reloadAfterCall(blk)
+				}
+				break
+			}
 		}
 		b.assign(in.Dest, blk, boxF(guard(OpLength, Float64, kind, operand(in.Left))))
 	case ir.ArrayKey:
