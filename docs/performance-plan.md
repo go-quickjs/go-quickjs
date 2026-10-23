@@ -1520,6 +1520,31 @@ The rounds that followed, each measured as above. The commit says more.
     had deoptimized at every read, nothing learned, until the function was
     compiled no more; it looks in the megamorphic cache, and Go reads a
     miss from native code.
+  - Callees' frames and resumptions (2026-10-23, `ba55f1a`..`714177b`):
+    async functions and generators of calls and no loop compiled once
+    their resumptions make them hot (LowerSSAHot, which Go had never
+    asked: npm's 521); a native call writes what a frame of the VM's has
+    that its callee's code reads -- all its arguments past the parameters
+    (`abi.Context`'s `Args`: rest parameters, arguments objects, a
+    default derived constructor's super() of them) and its function
+    object (`Function`: super references, push_callee, a mapped
+    object's callee) -- so such callees have call entries; a derived
+    constructor that makes arrows is constructed natively, its super()
+    native where no arrow precedes it, and arrows sharing a bound
+    derived constructor's binding are called natively. TestLowerCorpusRefusals,
+    refused: npm 896 -> 66, Octane 170 -> 163 (all for Go's entry),
+    AWFY 13 -> 0. At run time, a native call past the deepest context is
+    a call of Go, not an exit (AWFY Havlak's exits 7,816 -> 2,344, its
+    invocations finished in the interpreter 5,714 -> 524), and `new
+    Array(n)` past a pool's room Go's construction from native code
+    (Sieve's exits 2,101 -> 64, Bounce's 1,499 -> 0, Json's 269 -> 13).
+    Left: a private method's key in a local (npm 14), which a native
+    callee's frame does not hold; `for await` (13) and a mapped object
+    that aliases (31) in a function's own code; a super reference's or a
+    mapped object's read is a call of Go each, so small methods of them
+    are judged not to pay as native callees; CD's and DeltaBlue's
+    polymorphic calls inlined for one target, which leave at the other's
+    calls until they are called natively.
   - Shapes known: a loop header starts knowing nothing -- its entry for
     on-stack replacement knows nothing -- so a loop's first read of an
     object checks its shape at each turn; moving the check before the
