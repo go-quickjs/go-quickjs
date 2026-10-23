@@ -982,6 +982,8 @@ type scratch struct {
 	subst []*Value
 	// originPhis is Origins' list of the phis.
 	originPhis []*Value
+	// states is recount's list of the states it has met.
+	states []*FrameState
 	// aliases is the store passes' answers (newAliases).
 	aliases aliases
 	// reaching is reconstruct's: the definition of each kept value that

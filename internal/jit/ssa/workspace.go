@@ -68,7 +68,7 @@ func (w *Workspace) scratchBytes() int {
 	n := capBytes(s.flags) + capBytes(s.vals) + capBytes(s.phis) + capBytes(s.ordered) + capBytes(s.front) +
 		capBytes(s.boxes) + capBytes(s.rest) + capBytes(s.work) + capBytes(s.first) + capBytes(s.last) +
 		capBytes(s.guards) + capBytes(s.liveStores) + capBytes(s.liveCands) + capBytes(s.liveFlat) +
-		capBytes(s.live) + capBytes(s.liveFrom) + capBytes(s.liveWords) + capBytes(s.subst) + capBytes(s.originPhis)
+		capBytes(s.live) + capBytes(s.liveFrom) + capBytes(s.liveWords) + capBytes(s.subst) + capBytes(s.originPhis) + capBytes(s.states)
 	for _, l := range s.live {
 		n += capBytes(l)
 	}

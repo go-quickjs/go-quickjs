@@ -759,13 +759,24 @@ func recount(f *Func) {
 			v.Uses++
 		}
 	}
+	// A state's slots are uses once for each value and block naming it:
+	// its users are counted (refs, by state ID), and its slots read once,
+	// the states listed the first time each is met -- the guards of an
+	// instruction share its state. A state past the table is read by each.
+	refs := f.ints(f.nextState)
+	states := f.scr().states[:0]
 	state := func(s *FrameState) {
-		if s != nil {
-			for _, v := range s.Slots {
-				if v != nil {
-					use(v)
-				}
+		if s == nil {
+			return
+		}
+		if s.id < len(refs) {
+			if refs[s.id]++; refs[s.id] == 1 {
+				states = append(states, s)
 			}
+			return
+		}
+		for _, v := range s.Slots {
+			use(v)
 		}
 	}
 	for _, b := range f.Blocks {
@@ -779,6 +790,16 @@ func recount(f *Func) {
 		state(b.State)
 		state(b.Header)
 	}
+	for _, s := range states {
+		k := refs[s.id]
+		for _, v := range s.Slots {
+			if v != nil {
+				v.Uses += k
+			}
+		}
+	}
+	clear(states)
+	f.scr().states = states[:0]
 }
 
 // insertAfter places v in a's block right after a.
