@@ -1699,8 +1699,12 @@ const (
 	maxInlineDepth = 3
 )
 
-// MaxInline is the most instructions a callee inlined may have.
-const MaxInline = maxInline
+// MaxInline is the most instructions a callee inlined may have, and
+// MaxInlineTotal the most a function inlines in all.
+const (
+	MaxInline      = maxInline
+	MaxInlineTotal = maxInlineTotal
+)
 
 // Inlinable reports whether a callee may be inlined: a small program that
 // reads and writes properties and elements, computes, branches forward

@@ -537,20 +537,26 @@ func TestJITWarmingCalleeCompiledOnDemand(t *testing.T) {
 	}
 }
 
-// A callee too long to inline (ssa.MaxInline), which native code calls
-// through Go, warms up as any function does and is compiled once it has
-// spent its own budget -- not at its native caller's first call of it, nor
-// when that caller is compiled: its compile decides nothing its callers
-// inline, and Mandreel's initPhysics, 13,098 instructions and called
-// once, had been compiled so, for a second. g, called by h's code from its
-// 400th call on, is compiled at its own 400th call, and is called
-// natively by h from then on.
+// jitRareCallForTest has h make call, of i, once in ten of its calls: less
+// often than jitInliningFrequency.
+func jitRareCallForTest(call string) string {
+	return `var q=0;function h(n,k){let t=0;for(let i=0;i<n;i++){t=(t+i)|0;if(k&&(++q%10===0))t=(t+` + call + `)|0}return t}`
+}
+
+// A callee too long to inline (ssa.MaxInline) that its native caller calls
+// seldom warms up as any function does, and is compiled once it has spent
+// its own budget -- not at its native caller's first call of it, nor when
+// that caller is compiled: it would not be inlined in V8 either
+// (jitCalledOften), and Mandreel's per-frame functions, __udivmoddi4's
+// 1,233 instructions among them, had been compiled so. g, called by h's
+// code once in ten of h's calls, is compiled at about its own 400th call,
+// and is called natively by h from then on. Meanwhile h's call waits for
+// it, decided no more at each of g's calls (jitCallWaiting).
 func TestJITLongCalleeWarmsUp(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	r, run := v8TierRuntimeForTest(t, `function g(x){`+strings.Repeat(`x=(x*3+1)|0;`, 16)+`return x}
-		function h(n,k){let t=0;for(let i=0;i<n;i++){t=(t+i)|0;if(k)t=(t+g(i))|0}return t}`)
+	r, run := v8TierRuntimeForTest(t, `function g(x){`+strings.Repeat(`x=(x*3+1)|0;`, 16)+`return x}`+jitRareCallForTest(`g(i)`))
 	g := r.global.getOwn(r.atoms.intern("g")).value().Object().fn().closure
 	h := r.global.getOwn(r.atoms.intern("h")).value().Object().fn().closure
 	if len(g.fn.Code) <= ssa.MaxInline {
@@ -562,13 +568,19 @@ func TestJITLongCalleeWarmsUp(t *testing.T) {
 	if e := r.jit.entryFor(h.fn); e == nil || e.ssa == nil {
 		t.Fatal("h has no code")
 	}
-	for i := range jitInvocationsForMaglev - 1 {
+	decided := r.jit.callsDecided
+	for i := range 10 * (jitInvocationsForMaglev - 8) {
 		run(`h(1,1)`)
 		if e := r.jit.entryFor(g.fn); e != nil && e.ssa != nil {
-			t.Fatalf("g compiled at its %d. call", i+1)
+			t.Fatalf("g compiled at its %d. call", (i+1)/10)
 		}
 	}
-	for range 8 {
+	// h's call waits for g (jitCallWaiting): decided once, not at each of
+	// g's calls while it warms.
+	if n := r.jit.callsDecided - decided; n > 4 {
+		t.Fatalf("h's call of g decided %d times while g warmed", n)
+	}
+	for range 10 * jitInvocationsForMaglev {
 		run(`h(1,1)`)
 	}
 	e := r.jit.entryFor(g.fn)
@@ -577,24 +589,100 @@ func TestJITLongCalleeWarmsUp(t *testing.T) {
 	}
 	in := e.link.in
 	run(`h(100,1)`)
-	if e.link.in-in < 100 {
-		t.Fatalf("h's code called g natively %d times of 100", e.link.in-in)
+	if e.link.in-in < 10 {
+		t.Fatalf("h's code called g natively %d times of 10", e.link.in-in)
+	}
+}
+
+// A callee too long to inline that its native caller calls often is
+// compiled for it once it has been invoked jitInliningFrequency hundredths
+// as often as the caller, as V8 would inline it, well before its own
+// budget is spent: g, called at each of h's calls once h is compiled, is
+// compiled by its 100th, and h calls it natively. One past what a
+// function inlines in all (ssa.MaxInlineTotal), which V8 would not inline,
+// waits for its budget however often it is called: big. The calls are
+// counted as invocations of their caller, not by the work of its loop's
+// back edges, which a long loop's would make look seldom: w's loop, run
+// once, calls g at every tenth of its iterations, which is compiled when w
+// is, before its own budget is spent. Octane's Richards had run
+// HandlerTask.run, called 0.37 times a call of its caller, in the tree
+// tier for 750 calls.
+func TestJITFrequentLongCalleeCompiledForCaller(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	body := func(n int) string { return strings.Repeat(`x=(x*3+1)|0;`, n) }
+	r, run := v8TierRuntimeForTest(t, `function g(x){`+body(16)+`return x}
+		function big(x){`+body(60)+`return x}
+		function h(n,k){let t=0;for(let i=0;i<n;i++){t=(t+i)|0;if(k===1)t=(t+g(i))|0;if(k===2)t=(t+big(i))|0}return t}`)
+	closure := func(name string) *closure {
+		return r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
+	}
+	g, big, h := closure("g"), closure("big"), closure("h")
+	if n := len(g.fn.Code); n <= ssa.MaxInline || n > ssa.MaxInlineTotal || len(big.fn.Code) <= ssa.MaxInlineTotal {
+		t.Fatalf("g is %d instructions, big %d", n, len(big.fn.Code))
+	}
+	for range jitInvocationsForMaglev {
+		run(`h(4,0)`)
+	}
+	he := r.jit.entryFor(h.fn)
+	if he == nil || he.ssa == nil {
+		t.Fatal("h has no code")
+	}
+	calls := 0
+	for ; calls < jitInvocationsForMaglev/4; calls++ {
+		if e := r.jit.entryFor(g.fn); e != nil && e.ssa != nil {
+			break
+		}
+		run(`h(1,1)`)
+	}
+	if calls < jitInvocationsForFeedback || calls >= jitInvocationsForMaglev/4 {
+		t.Fatalf("g compiled at its %d. call", calls)
+	}
+	// h's code is compiled again for the call once it has spent a budget
+	// (jitLearnedDue).
+	for range 2 * jitInvocationsForMaglev {
+		run(`h(1,1)`)
+	}
+	ge := r.jit.entryFor(g.fn)
+	in := ge.link.in
+	run(`h(100,1)`)
+	if he = r.jit.entryFor(h.fn); !slices.ContainsFunc(he.nativeCalls, func(x jitInline) bool { return x.cl == g }) || ge.link.in-in < 100 {
+		t.Fatalf("h's code called g natively %d times of 100", ge.link.in-in)
+	}
+	rb, runb := v8TierRuntimeForTest(t, `function big(x){`+body(60)+`return x}
+		function h(n,k){let t=0;for(let i=0;i<n;i++){t=(t+i)|0;if(k)t=(t+big(i))|0}return t}`)
+	big = rb.global.getOwn(rb.atoms.intern("big")).value().Object().fn().closure
+	for range jitInvocationsForMaglev {
+		runb(`h(4,0)`)
+	}
+	for i := range jitInvocationsForMaglev / 2 {
+		runb(`h(1,1)`)
+		if e := rb.jit.entryFor(big.fn); e != nil && e.ssa != nil {
+			t.Fatalf("big compiled at its %d. call", i+1)
+		}
+	}
+	r2, run2 := v8TierRuntimeForTest(t, `function g(x){`+body(16)+`return x}
+		function w(n){let t=0;for(let i=0;i<n;i++){t=(t*3+i)|0;if(i%10===0)t=(t+g(i))|0}return t}`)
+	g2 := r2.global.getOwn(r2.atoms.intern("g")).value().Object().fn().closure
+	run2(fmt.Sprintf(`w(%d)`, 64*backEdgeCheckInterval))
+	if e := r2.jit.entryFor(g2.fn); e == nil || e.ssa == nil || e.invoked >= jitInvocationsForMaglev || e.link.in == 0 {
+		t.Fatalf("g, called at every tenth iteration of w's loop, not compiled for w: %+v", e)
 	}
 }
 
 // A long callee native callers may not call through its link -- an arrow
 // that reads this, its link's frame none of its own -- whose calls Go makes
-// for its native caller meanwhile, warms up so too: its calls Go makes
-// spend its budget, those the existing tiers answer without a frame
-// (jitInvokedFrameless) as well, and the call is decided once it is
-// compiled, not settled as Go's while it warms up.
+// for its native caller meanwhile, warms up so too, called seldom: its
+// calls Go makes spend its budget, those the existing tiers answer without
+// a frame (jitInvokedFrameless) as well, and the call is decided once it
+// is compiled, not settled as Go's while it warms up.
 func TestJITLongArrowCalleeWarmsUp(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
 	r, run := v8TierRuntimeForTest(t, `function C(){this.v=1;this.f=(x)=>{`+strings.Repeat(`x=(x*3+1)|0;`, 16)+`return (x+this.v)|0}}
-		var c=new C();
-		function h(n,k){let t=0;for(let i=0;i<n;i++){t=(t+i)|0;if(k)t=(t+c.f(i))|0}return t}`)
+		var c=new C();`+jitRareCallForTest(`c.f(i)`))
 	f := r.global.getOwn(r.atoms.intern("c")).value().Object().getOwn(r.atoms.intern("f")).value().Object().fn().closure
 	h := r.global.getOwn(r.atoms.intern("h")).value().Object().fn().closure
 	if len(f.fn.Code) <= ssa.MaxInline || r.jitLinkable(f) {
@@ -607,15 +695,15 @@ func TestJITLongArrowCalleeWarmsUp(t *testing.T) {
 	if he == nil || he.ssa == nil {
 		t.Fatal("h has no code")
 	}
-	for i := range jitInvocationsForMaglev - 8 {
+	for i := range 10 * (jitInvocationsForMaglev - 8) {
 		run(`h(1,1)`)
 		if e := r.jit.entryFor(f.fn); e != nil && e.ssa != nil {
-			t.Fatalf("f compiled at its %d. call", i+1)
+			t.Fatalf("f compiled at its %d. call", (i+1)/10)
 		}
 	}
 	// Its caches' feedback changes in its first calls, which raises what
 	// is left of its budget (jitWarmUp).
-	for range 2 * jitInvocationsForMaglev {
+	for range 20 * jitInvocationsForMaglev {
 		run(`h(1,1)`)
 	}
 	e := r.jit.entryFor(f.fn)

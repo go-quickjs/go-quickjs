@@ -743,6 +743,13 @@ type jitEntry struct {
 	used, seen, serial uint64
 	flushSeen, flushAt uint64
 	slowCalls          uint64
+	// invoked is how many times the existing tiers invoked the function
+	// before it had code: before it had an entry (its closure's
+	// jitCalls), and while it warmed (tryJITAt) -- invocations, not the
+	// work its loops' back edges spent of its budget, which a call's
+	// frequency is not made of (jitCalledOften). Its code keeps it
+	// (jitCompileFor). See invocations.
+	invoked int64
 	// slowSince is slowCalls when Go last stopped entering the code, and
 	// slowBackoff how many times it has: Go enters it again after
 	// jitNativeRetry<<slowBackoff calls, judging it afresh (jitRetrySlow).
@@ -766,6 +773,16 @@ type jitEntry struct {
 // afresh: it changes all the same.
 func (e *jitEntry) uses() uint64 {
 	return e.starts + e.ssaStats.entries + e.link.in + e.slowCalls
+}
+
+// invocations is about how many times the function has been invoked: in
+// the existing tiers before it had code (invoked), and since -- Go's entries
+// at its start, native callers' calls through its link, and calls the
+// existing tiers ran for code Go does not enter (slowCalls) -- not Go's
+// entries in all (ssaStats.entries), which count those at its start again
+// and those at its loops (uses).
+func (e *jitEntry) invocations() int64 {
+	return e.invoked + int64(e.starts+e.link.in+e.slowCalls)
 }
 
 // jitLink is where native callers call a function's code, as V8's code
@@ -936,6 +953,11 @@ type jitState struct {
 	// are being decided, from the outermost.
 	seeding    int
 	seedingFns []*bytecode.Function
+	// deciding is the entry whose calls are being decided -- at its
+	// compile (jitSeedCalls), or at a call it left native code for
+	// (jitCallSeen) -- which a callee compiled for it is called by
+	// (jitCalledOften); nil elsewhere.
+	deciding *jitEntry
 	// unwound counts the native calls whose callees left native code, which
 	// Go finished (jitUnwindNative).
 	unwound uint64
@@ -1020,12 +1042,14 @@ type jitState struct {
 	// in, innermost last, and retired the code compiled again or dropped
 	// meanwhile, closed once none is (closeSSA). goPending is a call of
 	// Go that made the call and left the rest to Go, at its exit; goCalls
-	// counts the calls Go made so.
-	goCalls   uint64
-	pinSerial uint64
-	goMark    jitGoMark
-	levels    jitLevels
-	goRuns    []jitGoRun
+	// counts the calls Go made so, and callsDecided the calls jitCallSeen
+	// decided, past their count.
+	goCalls      uint64
+	callsDecided uint64
+	pinSerial    uint64
+	goMark       jitGoMark
+	levels       jitLevels
+	goRuns       []jitGoRun
 	// calleeOpen is, by context, what closures a native callee made
 	// captured of its locals, not closed yet (abi.Context's Open), and
 	// calleeFrame the frame a callee's context stands for while Go makes
@@ -2158,11 +2182,13 @@ func (r *Runtime) jitCompileFor(fn *bytecode.Function, cl *closure, kind jitLowe
 		return nil
 	}
 	key := weak.Make(fn)
+	var invoked int64
 	if r.jit != nil {
 		if e := r.jit.cache[key]; e != nil {
 			if !e.warming && (!e.deferred || e.generation == r.jit.generation) {
 				return e
 			}
+			invoked = e.invoked
 			// Deferred for a generation past, or warming up (jitWarmFor):
 			// compiled now, its budget spent or a native caller's call
 			// asking for it, as before it had an entry.
@@ -2188,7 +2214,7 @@ func (r *Runtime) jitCompileFor(fn *bytecode.Function, cl *closure, kind jitLowe
 		return nil
 	}
 	s.serial++
-	e := &jitEntry{used: s.epoch(), serial: s.serial, hot: kind == jitLowerHot}
+	e := &jitEntry{used: s.epoch(), serial: s.serial, hot: kind == jitLowerHot, invoked: invoked}
 	if g, ok := s.ghosts[uintptr(unsafe.Pointer(fn))]; ok {
 		// What its code dropped before had learned (jitGhost).
 		e.failed, e.failedEntries, e.typedReads, e.stringReads, e.keyedReads, e.keyedWrites = g.failed, g.failedEntries, g.typedReads, g.stringReads, g.keyedReads, g.keyedWrites
@@ -2432,6 +2458,9 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, err
 		f.cl.setHint(hintFor(e))
 	}
 	if e != nil && e.warming {
+		if !osr {
+			e.invoked++
+		}
 		if !r.jitWarmUp(f.cl, e, r.jitTierWork(f.cl.fn, e, pc, osr, spent)) {
 			return Undefined, nil, false
 		}
@@ -2565,7 +2594,7 @@ func (r *Runtime) jitWarmFor(cl *closure) *jitEntry {
 		return nil
 	}
 	s.serial++
-	e := &jitEntry{used: s.epoch(), serial: s.serial, warming: true}
+	e := &jitEntry{used: s.epoch(), serial: s.serial, warming: true, invoked: calls}
 	e.ssaLoop = jitLoopLength(fn)
 	e.tierBudget = r.jitTierBudget(fn, e) - (calls-1)*int64(max(len(fn.Code), 1))
 	e.tierMark = jitFeedbackMark(cl)

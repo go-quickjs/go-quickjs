@@ -3169,9 +3169,11 @@ const (
 )
 
 // What jitCallSeen knows of a call (jitEntry.callSites), past its count: that
-// it is made natively, that it is neither that nor inlined, or that it is
-// inlined.
+// it waits for its callee, too long to inline, to be compiled (jitCallSeen),
+// that it is made natively, that it is neither that nor inlined, or that it
+// is inlined.
 const (
+	jitCallWaiting = 252
 	jitCallNative  = 253
 	jitCallDone    = 254
 	jitCallInlined = 255
@@ -3195,6 +3197,22 @@ const jitInlineExits = 16
 // been seen too -- or at its next entry. A call seen before costs a look
 // at the lists.
 func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Instr) {
+	if e.callSites != nil && e.callSites[pc] == jitCallWaiting {
+		// Waiting for a long callee warming up: looked at no further while
+		// it is the one called and warms. Decided at every call, Go's call
+		// of such a callee for native code had cost five times the tree
+		// tier's of it, a third of it the inlining check of the callee.
+		if _, cl := r.jitCalled(f, sp, in); cl != nil && len(cl.fn.Code) > ssa.MaxInline && r.jitLongWarming(cl) && !r.jitCalledOftenBy(cl, e) {
+			return
+		}
+		e.callSites[pc] = jitCallsToInline - 1
+		if e.inlineReopts >= jitInlineReoptimizations {
+			e.callSites[pc] = jitCallsHot - 1
+		}
+	}
+	was := r.jit.deciding
+	r.jit.deciding = e
+	defer func() { r.jit.deciding = was }()
 	if o, cb, cbObj, proto := r.jitForEaches(sp, in); o != nil {
 		r.jitForEachSeen(e, f.cl.fn, pc, o, cb, cbObj, proto)
 		return
@@ -3256,6 +3274,7 @@ func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 		return
 	}
 	e.callSites[pc] = jitCallDone
+	r.jit.callsDecided++
 	o, cl := r.jitCalled(f, sp, in)
 	if cl == nil {
 		if o, cl := r.jitCalledVia(f, sp, in); cl != nil {
@@ -3359,14 +3378,20 @@ func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 		}
 		cl = p.fn().closure
 	}
+	if len(cl.fn.Code) > ssa.MaxInline && r.jitNativeCallee(cl) == nil && r.jitLongWarming(cl) {
+		// A long callee warming up (jitCalledOften): decided once it is
+		// compiled, or refused. Till then the call is Go's, from native
+		// code, and the callee's code, once it has some, called by its
+		// hint -- not through its link, which would leave native code
+		// at each call while it has none (ExitEnter): AWFY's Richards'
+		// schedule, 826 times a run, for runTask.
+		e.callSites[pc] = jitCallWaiting
+		return
+	}
 	if r.jitNativeOrLinked(cl) {
 		e.nativeCalls = append(e.nativeCalls, r.jitNativeTarget(int32(pc), cl, o, in))
 		e.callSites[pc] = jitCallNative
 		e.inlinePending = true
-	} else if ce := r.jit.entryFor(cl.fn); ce != nil && ce.warming {
-		// A callee warming up (jitNativeCallee): decided once it is
-		// compiled, or refused.
-		e.callSites[pc] = settle - 1
 	}
 }
 
@@ -5652,7 +5677,9 @@ func (r *Runtime) jitSeedCalls(cl *closure, e *jitEntry, p *ir.Program) {
 	// started: a target among them is not compiled again (jitSeedCallee).
 	s := r.jit
 	s.seedingFns = append(s.seedingFns, fn)
-	defer func() { s.seedingFns = s.seedingFns[:len(s.seedingFns)-1] }()
+	was := s.deciding
+	s.deciding = e
+	defer func() { s.seedingFns, s.deciding = s.seedingFns[:len(s.seedingFns)-1], was }()
 	for pc, in := range fn.Code {
 		in = jitCallInstr(in)
 		switch in.Op {
@@ -5712,7 +5739,9 @@ func (r *Runtime) jitSeedCalls(cl *closure, e *jitEntry, p *ir.Program) {
 			// (jitSeedCallee). How often it was called is not known: the
 			// tree tier may run a call without one (closure.jitCalls).
 			if ce = r.jitSeedCallee(callee); ce == nil {
-				if r.jitLinkable(callee) {
+				if r.jitLinkable(callee) && (len(cf.Code) <= ssa.MaxInline || !r.jitLongWarming(callee)) {
+					// Not a long callee warming up: the call is Go's
+					// till it is compiled (jitCallSeen).
 					e.nativeCalls = append(e.nativeCalls, r.jitNativeTarget(int32(pc), callee, o, in))
 					e.callSites[pc] = jitCallNative
 				}
@@ -8219,6 +8248,51 @@ func (r *Runtime) jitRefillPools(f *frame, e *jitEntry, pc, sp int, in bytecode.
 	return refilled
 }
 
+// jitInliningFrequency is, in hundredths, how many calls of a callee too
+// long to inline each invocation of the caller deciding its call must have
+// made for it to be compiled for that caller at once (jitCalledOften):
+// V8's min_inlining_frequency, 0.15.
+const jitInliningFrequency = 15
+
+// jitLongWarming reports whether cl's function is warming up, its budget
+// not spent (jitWarmFor): an entry warming, or none yet where it would be
+// given one to warm, not compiled at once (jitCallThreshold).
+func (r *Runtime) jitLongWarming(cl *closure) bool {
+	if ce := r.jit.entryFor(cl.fn); ce != nil {
+		return ce.warming
+	}
+	return int64(r.jitCallThreshold) > int64(max(cl.jitCalls, 1))
+}
+
+// jitCalledOften reports whether a function too long to inline (past
+// ssa.MaxInline), which has no code yet (jitLongWarming), is compiled for
+// the native caller deciding its call (jitState.deciding) at once rather
+// than once its own budget is spent: where V8 would inline it -- with a
+// feedback vector (an entry: jitFeedbackCalls invocations), no longer than
+// a function inlines in all (ssa.MaxInlineTotal; V8 inlines up to 460
+// bytes of its bytecode), and invoked at least jitInliningFrequency
+// hundredths as often as its caller, as V8's call frequency at the site
+// has it. Our inliner takes no callee past ssa.MaxInline: the compile
+// stands in for it. Compiled whenever met, Typescript's long callees made
+// 911 compiles a run -- 54 of them called fewer than ten times after it --
+// and Mandreel's per-frame functions, called once a frame, were compiled
+// at their callers' compiles, __udivmoddi4's 1,233 instructions among
+// them. Waiting for their budgets, Octane's and the V8 suite's Richards
+// ran HandlerTask.run, called by TaskControlBlock.run 0.37 times a call,
+// and its own callees, in the tree tier for 750 calls.
+func (r *Runtime) jitCalledOften(cl *closure) bool {
+	return r.jitCalledOftenBy(cl, r.jit.deciding)
+}
+
+// jitCalledOftenBy is jitCalledOften for the native caller caller.
+func (r *Runtime) jitCalledOftenBy(cl *closure, caller *jitEntry) bool {
+	ce := r.jit.entryFor(cl.fn)
+	if ce == nil || caller == nil || len(cl.fn.Code) > ssa.MaxInlineTotal {
+		return false
+	}
+	return ce.invoked*100 >= jitInliningFrequency*max(caller.invocations(), 1)
+}
+
 // jitNativeCallee is the entry of cl's function, compiled now if it is not,
 // if a call may make it natively (NativeCalls), or nil: the new pipeline
 // compiles it, with a frame of its own, as a call makes it. One LowerSSA
@@ -8239,24 +8313,10 @@ func (r *Runtime) jitNativeCallee(cl *closure) *jitEntry {
 		// body is not what a call runs.
 		return nil
 	}
-	if ce := r.jit.entryFor(fn); len(fn.Code) > ssa.MaxInline && (ce == nil || ce.warming) {
-		// One too long to inline warms up as any function does, the calls
-		// Go makes of it for its native callers spending its budget, and
-		// is compiled once that is spent: its compile decides nothing its
-		// callers inline. Compiled at sight -- at a native caller's first
-		// call of it, or when that caller is compiled (jitSeedCalls) --
-		// Typescript's callees made 911 compiles a run where they make
-		// 699, and Mandreel's initPhysics, 13,098 instructions and called
-		// once, took a second's compile once the JIT compiled that long a
-		// function.
-		if ce == nil {
-			if ce = r.jitWarmFor(cl); ce != nil {
-				cl.setHint(hintFor(ce))
-			}
-		}
-		if ce == nil || ce.warming && ce.tierBudget > 0 {
-			return nil
-		}
+	if len(fn.Code) > ssa.MaxInline && r.jitLongWarming(cl) && !r.jitCalledOften(cl) {
+		// Too long to inline, and not called often by the caller deciding
+		// it: it warms up as any function does (jitCalledOften).
+		return nil
 	}
 	e := r.jitFor(cl)
 	if e == nil || e.ssa != nil || e.deferred || e.calleeRefused {
@@ -11519,7 +11579,7 @@ func jitLearning(e *jitEntry) bool {
 		return true
 	}
 	for _, n := range e.callSites {
-		if n != 0 && n < jitCallNative {
+		if n != 0 && n < jitCallWaiting {
 			return true
 		}
 	}
