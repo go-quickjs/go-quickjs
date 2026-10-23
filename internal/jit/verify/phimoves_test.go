@@ -124,8 +124,11 @@ func TestMirPhisCoalesced(t *testing.T) {
 	}
 	t.Logf("%d edge moves, %d into loop headers, %d values spilled", total, loops, spills)
 	// Without the groups, at 77173866: 507 edge moves, 283 into headers,
-	// 37 values spilled; with them, 150, 123, 37.
-	if total > 155 || loops > 125 || spills > 37 {
-		t.Errorf("%d edge moves, %d into loop headers, %d values spilled: want at most 155, 125, 37", total, loops, spills)
+	// 37 values spilled; with them, 150, 123, 37. With the lowering for
+	// native callers taking try statements and cursors (8a5c0ab..6a76211),
+	// three functions more have a callee's program, each as the same
+	// function's own, which the bounds above check: 156, 128, 37.
+	if total > 161 || loops > 130 || spills > 37 {
+		t.Errorf("%d edge moves, %d into loop headers, %d values spilled: want at most 161, 130, 37", total, loops, spills)
 	}
 }

@@ -1479,6 +1479,26 @@ The rounds that followed, each measured as above. The commit says more.
     and left to it. Open: a spread call of a script function is Go's call
     with the frame, where a native call of the array's elements would
     serve; a callee's `push_callee` (11).
+  - Frames (2026-10-23, `a5bc68f`..`f3a2c34`): parameter prologues,
+    try statements, cursors and class and literal member definitions in
+    native callees' code, rest parameters, the arguments object and
+    super references in a function's own code. npm's functions their own
+    code takes 5,622 -> 5,858, and those native callers and inlining take
+    5,048 -> 5,911; Octane's own 3,151 -> 3,181, callers' 3,552 -> 3,612;
+    AWFY's callers' 295 -> 311. Left of the frames' refusals: a mapped
+    arguments object that aliases (npm 31, Octane 149, mostly forwarding
+    constructors the inliner takes), private members whose key is a
+    local (48), the implicit derived constructor's `super(...args)` for
+    native callers (144, which constructions skip), a derived constructor
+    making an arrow (20), `for await` (13), and async functions as native
+    callers' callees (420, nearly all of which `LowerSSAHot` takes once
+    hot). A super reference, and the arguments, in code native callers
+    call need the function object and the call's arguments in the
+    callee's context, which native calls do not write. With the operations
+    Go makes (above), TestLowerCorpusRefusals refuses 896 of npm's 14,033
+    functions (1,968 with those alone), 178 of Octane's 6,955 (148 a
+    mapped arguments object), 13 of Are We Fast Yet's 477 (the implicit
+    derived constructors).
   - Rest parameters and, in a function's own code, the arguments object
     (2026-10-23): the array and the object are Go's at host exits, from
     the frame Go entered the code with, `arguments[k]` and
