@@ -1820,8 +1820,15 @@ var (
 // numeric kernel, one phase of a program's after another -- each
 // jitEpochTime besides. A variable, which the tests set.
 var jitEpochNow = func() uint64 {
-	return jitGCEpoch.Load() + uint64(time.Since(jitEpochBase)/jitEpochTime)
+	g, k := jitGCEpoch.Load(), jitRepeatCycles.Load()
+	return g - min(k, g) + uint64(time.Since(jitEpochBase)/jitEpochTime)
 }
+
+// jitRepeatCycles are the collector's cycles JITCompileRepeat's compiles
+// ran, which the cache's clock leaves out, as it leaves out their time
+// (compileSSA moves jitEpochBase past it): the program's code ages, and is
+// flushed, as it would have without them.
+var jitRepeatCycles atomic.Uint64
 
 // jitEpochMark is what the epoch's finalizer is set on: an object with a
 // pointer, so that it is not a tiny allocation, whose finalizer could wait

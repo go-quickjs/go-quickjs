@@ -9,9 +9,11 @@ import (
 	"math"
 	"math/bits"
 	"runtime"
+	"runtime/metrics"
 	"slices"
 	"strings"
 	"sync/atomic"
+	"time"
 	"unsafe"
 	"weak"
 
@@ -1906,10 +1908,13 @@ func (r *Runtime) compileSSA(fn *bytecode.Function, cl *closure, p *ir.Program, 
 		keepLimit = abi.MaxKeeps
 		code, fb, err = r.compileSSAKeeping(fn, cl, p, e, keepLimit)
 	}
-	if err == nil {
+	if err == nil && JITCompileRepeat > 0 {
+		t0, c0 := time.Now(), jitGCCycles()
 		for range JITCompileRepeat {
 			r.jitCompileAgain(fn, cl, p, e, keepLimit)
 		}
+		jitEpochBase = jitEpochBase.Add(time.Since(t0))
+		jitRepeatCycles.Add(jitGCCycles() - c0)
 	}
 	return code, fb, err
 }
@@ -2047,9 +2052,18 @@ func (r *Runtime) jitBuildSSA(fn *bytecode.Function, p *ir.Program, fb *jitFeedb
 // succeeds run that many times more, its build, optimization and backend,
 // what each makes thrown away: for timing the compiler (mir.Timing) over
 // the compiles a program makes, each as the program makes it, with
-// clocks that read too coarsely for one compile. Set it before any
-// runtime compiles.
+// clocks that read too coarsely for one compile. Their time and the
+// collector's cycles they run are left out of the JIT cache's clocks
+// (jitRepeatCycles), so that the program's code ages as without them. Set
+// it before any runtime compiles; for one runtime at a time.
 var JITCompileRepeat int
+
+// jitGCCycles is how many cycles the collector has completed.
+func jitGCCycles() uint64 {
+	s := []metrics.Sample{{Name: "/gc/cycles/total:gc-cycles"}}
+	metrics.Read(s)
+	return s[0].Value.Uint64()
+}
 
 // jitCompileAgain is a compile of JITCompileRepeat's: p built with fresh
 // feedback, as compileSSAKeeping builds it with keepLimit, optimized and
