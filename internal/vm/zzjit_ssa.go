@@ -4523,11 +4523,23 @@ func (r *Runtime) jitGoCallNested(ctx *abi.Context, idx int) bool {
 	}
 	pc, depth := int(ctx.ExitPC), int(ctx.ExitDepth)
 	in, n := jitGoCallInstr(ctx.GoOp)
+	// An instruction Go makes on the level's frame (ssa.GoHost), that
+	// frame's instruction at pc, of its operands: a definition's, which
+	// reads no local (compile's frameDefinition) -- none a frame of the
+	// function's object reads, which a native callee's has not.
+	host := ssa.GoOp(ctx.GoOp&0xff) == ssa.GoHost
+	if host {
+		cl := (*closure)(ctx.Closure)
+		if cl == nil || pc >= len(cl.fn.Code) || !jitLevelHost(cl.fn.Code[pc].Op) {
+			return false
+		}
+		in, n = cl.fn.Code[pc], int(ctx.GoOp>>abi.GoOpArgcShift&0xff)
+	}
 	top := r.stackTop
-	if n > abi.MaxGoArgs || depth < jitGoStacked(in, n) || top+n > len(r.stack) {
+	if n > abi.MaxGoArgs || !host && depth < jitGoStacked(in, n) || top+n+1 > len(r.stack) {
 		return false
 	}
-	if cl := (*closure)(ctx.Closure); cl == nil || !jitGoPropertyAt(cl.fn, pc, in) {
+	if cl := (*closure)(ctx.Closure); cl == nil || !host && !jitGoPropertyAt(cl.fn, pc, in) {
 		return false
 	}
 	op := ctx.GoOp>>abi.GoOpKindShift&0xff == abi.GoCallOp
@@ -4702,7 +4714,7 @@ framed:
 		// A step over a generator the code may resume natively.
 		r.jitGenStepSeen(e, f.cl, pc, r.stack[sp-1])
 	}
-	if !op && in.Op != bytecode.OpIterNextOrJump && in.Op != bytecode.OpIterStep && in.Op != bytecode.OpIterRest && in.Op != bytecode.OpForOfStart && in.Op != bytecode.OpTypeOf && in.Op != bytecode.OpInstanceOf && in.Op != bytecode.OpSuperCall && !prop && jitCallUnsettled(e, pc, in) {
+	if !op && !host && in.Op != bytecode.OpIterNextOrJump && in.Op != bytecode.OpIterStep && in.Op != bytecode.OpIterRest && in.Op != bytecode.OpForOfStart && in.Op != bytecode.OpTypeOf && in.Op != bytecode.OpInstanceOf && in.Op != bytecode.OpSuperCall && !prop && jitCallUnsettled(e, pc, in) {
 		r.jitCallSeen(f, e, pc, sp, in)
 	}
 	r.jitCalleeProfit(e, serial, pc)
@@ -4722,6 +4734,23 @@ framed:
 	if op {
 		// An operation Go makes (abi.GoCallOp), with the level's frame.
 		v, err = r.jitOpMade(f, in, r.stack[sp-n:sp])
+	} else if host {
+		// As jitHost makes it at an exit, on the level's frame, at pc,
+		// room for what it pushes past its operands.
+		r.stackTop, r.stackHigh = sp+1, max(r.stackHigh, sp+1)
+		at := f.pc
+		f.pc = uint32(pc)
+		end, steps, herr := r.jitHost(f, sp, 1)
+		f.pc = at
+		switch {
+		case herr != nil:
+			err = herr
+		case steps != 1:
+			err = r.throwTypeError("jit: no host operation at %d", pc)
+		case end > top:
+			v = r.stack[end-1]
+		}
+		jitClearArgs(r.stack, sp, sp+1)
 	} else if prop {
 		if in.Op == bytecode.OpGetProp {
 			r.jitPropertySeen(f, e, pc, sp)
@@ -11749,7 +11778,18 @@ func (r *Runtime) jitCallResult(f *frame, pc, depth int, v Value, err error) (in
 func (r *Runtime) jitGoHost(ctx *abi.Context) bool {
 	s := r.jit
 	idx := int(ctx.Level)
-	if ctx.Live != 0 || idx >= len(s.goRuns) || s.goRuns[idx].f == nil || s.ssaCtxs[idx] != ctx || jitGoInline(ctx) {
+	if jitGoInline(ctx) {
+		return false
+	}
+	if r.jitGoHostPlain(ctx, idx) {
+		return true
+	}
+	if ctx.Live == abi.LiveCall {
+		// A native callee's: on its level's frame, which Go makes as for
+		// any call of Go it makes (jitGoCallNested).
+		return r.jitGoCallNested(ctx, idx)
+	}
+	if ctx.Live != 0 || idx >= len(s.goRuns) || s.goRuns[idx].f == nil || s.ssaCtxs[idx] != ctx {
 		return false
 	}
 	run := &s.goRuns[idx]
@@ -11802,6 +11842,82 @@ func (r *Runtime) jitGoHost(ctx *abi.Context) bool {
 	return true
 }
 
+// jitGoHostPlain makes an instruction of the code ctx runs that Go makes
+// from native code (ssa.GoHost) without a frame where it runs no script
+// and cannot throw -- a method's home object set, a method or an accessor
+// defined on its object, a function named, a private name or a class's
+// private methods made -- as jitGoCallPlain makes a call: of its closure's
+// names and its operands alone, as jitDefinition and jitPrivate make it,
+// the operands put past the VM's stack's top. Each had cost a call of Go
+// its frames, its levels' each, which native callers then found did not
+// pay (jitCalleeProfit): an object literal with methods, made by a
+// function called natively, cost more than the tree tier's.
+func (r *Runtime) jitGoHostPlain(ctx *abi.Context, idx int) bool {
+	s := r.jit
+	var cl *closure
+	switch {
+	case ctx.Live == abi.LiveCall:
+		cl = (*closure)(ctx.Closure)
+	case ctx.Live == 0 && idx < len(s.goRuns) && s.goRuns[idx].f != nil:
+		cl = s.goRuns[idx].f.cl
+	}
+	pc, n := int(ctx.ExitPC), int(ctx.GoOp>>abi.GoOpArgcShift&0xff)
+	if cl == nil || pc >= len(cl.fn.Code) || n > abi.MaxGoArgs {
+		return false
+	}
+	in := cl.fn.Code[pc]
+	plain := false
+	switch in.Op {
+	case bytecode.OpSetHomeObject, bytecode.OpDefineMethod, bytecode.OpDefineGetter, bytecode.OpDefineSetter, bytecode.OpSetFuncName,
+		bytecode.OpSetFieldInit, bytecode.OpPrivateName, bytecode.OpNewPrivateMethods:
+		plain = true
+	}
+	top := r.stackTop
+	if !plain || top+n+1 > len(r.stack) {
+		return false
+	}
+	for i := range n {
+		r.stack[top+i] = jitGoArg(ctx, i)
+	}
+	sp := top + n
+	f := frame{cl: cl}
+	var end int
+	var v Value
+	var push bool
+	var err error
+	if in.Op == bytecode.OpPrivateName || in.Op == bytecode.OpNewPrivateMethods {
+		end, v, push, err = r.jitPrivate(&f, in, sp)
+	} else {
+		end, v, push, err = r.jitDefinition(&f, in, sp)
+	}
+	jitClearArgs(r.stack, top, sp)
+	if err != nil || end < top {
+		return false
+	}
+	if !push {
+		v = Undefined
+	}
+	*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
+	return true
+}
+
+// jitLevelHost reports whether op, an instruction a native callee's code
+// has Go make from native code (ssa.GoHost), may be made on the frame of
+// its level that Go makes, which has its closure, its receiver and its
+// operands, but neither its locals, which native code holds, nor its
+// function object: a definition's (compile's frameDefinition).
+func jitLevelHost(op bytecode.Op) bool {
+	switch op {
+	case bytecode.OpNewClass, bytecode.OpSetHomeObject, bytecode.OpSetFieldInit, bytecode.OpDefineMethod,
+		bytecode.OpDefineGetter, bytecode.OpDefineSetter, bytecode.OpSetFuncName,
+		bytecode.OpPrivateName, bytecode.OpNewPrivateMethods, bytecode.OpInstallPrivateMethods,
+		bytecode.OpDefinePrivate, bytecode.OpDefinePrivateMethod, bytecode.OpDefinePrivateGetter,
+		bytecode.OpDefinePrivateSetter, bytecode.OpAddPrivateMethod, bytecode.OpAddPrivateGetter, bytecode.OpAddPrivateSetter:
+		return true
+	}
+	return false
+}
+
 // jitHostResult is jitCallResult for an instruction Go made from native
 // code on the frame (ssa.GoHost), at pc, with depth operands: its operands
 // popped, and its result v, if it pushes one, pushed; false for a throw.
@@ -11809,13 +11925,24 @@ func (r *Runtime) jitHostResult(f *frame, pc, depth int, v Value, err error) (in
 	in := f.cl.fn.Code[pc]
 	pops, pushes := 0, true
 	switch in.Op {
-	case bytecode.OpRestParam, bytecode.OpGetArguments, bytecode.OpGetSuperProp, bytecode.OpSuperBase:
+	case bytecode.OpRestParam, bytecode.OpGetArguments, bytecode.OpGetSuperProp, bytecode.OpSuperBase,
+		bytecode.OpPrivateName, bytecode.OpNewPrivateMethods:
 	case bytecode.OpGetSuperIndex:
 		pops = 2
 	case bytecode.OpSetSuperProp:
 		pops, pushes = 1, false
 	case bytecode.OpSetSuperIndex:
 		pops, pushes = 3, false
+	case bytecode.OpSetHomeObject, bytecode.OpSetFuncName:
+		// What they change stays where it is.
+		pushes = false
+	case bytecode.OpNewClass, bytecode.OpSetFieldInit, bytecode.OpDefineMethod, bytecode.OpDefineGetter, bytecode.OpDefineSetter,
+		bytecode.OpDefinePrivate, bytecode.OpDefinePrivateMethod, bytecode.OpDefinePrivateGetter, bytecode.OpDefinePrivateSetter,
+		bytecode.OpInstallPrivateMethods:
+		// The member, or the parent, popped; the object kept.
+		pops, pushes = 1, false
+	case bytecode.OpAddPrivateMethod, bytecode.OpAddPrivateGetter, bytecode.OpAddPrivateSetter:
+		pops, pushes = 2, false
 	default:
 		return 0, false, false
 	}

@@ -384,7 +384,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			// property, its key checked; Go makes the rest.
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
-		if m.callee && (isDefinition(in.Op) && !GoOperation(in.Op) || isPrivate(in.Op) && in.Op != bytecode.OpGetPrivate && in.Op != bytecode.OpSetPrivate && in.Op != bytecode.OpPrivateIn) {
+		if m.callee && (isDefinition(in.Op) && !GoOperation(in.Op) || isPrivate(in.Op) && in.Op != bytecode.OpGetPrivate && in.Op != bytecode.OpSetPrivate && in.Op != bytecode.OpPrivateIn) && !frameDefinition(in) {
 			// What Go makes of them -- a class's or a literal's member, a
 			// private member's definition -- leaves native code, after which
 			// Go goes on natively in a function's own code, at the entry
@@ -788,6 +788,29 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 	selectPropertyLoops(fn, p, m.calls, m.callee, codes)
 	selectGlobalSlots(fn, p, codes)
 	return p, nil
+}
+
+// frameDefinition reports whether in, a class's or an object literal's
+// member's definition, reads nothing but its operands -- objects and
+// functions it changes in place, keeping them -- and the frame's this
+// and captured bindings: Go makes it from native code (ir.Instruction's
+// Frame), on the frame of a function's own code or of a native callee's
+// level, which keeps those, but not its locals, which native code holds.
+// A private member's key in a local, and a key a computed name converts,
+// which may run code a frame Go makes from native code (jitGoCallNested)
+// would not show, are not.
+func frameDefinition(in bytecode.Instr) bool {
+	switch in.Op {
+	case bytecode.OpNewClass, bytecode.OpSetHomeObject, bytecode.OpSetFieldInit, bytecode.OpDefineMethod,
+		bytecode.OpDefineGetter, bytecode.OpDefineSetter, bytecode.OpSetFuncName,
+		bytecode.OpPrivateName, bytecode.OpNewPrivateMethods, bytecode.OpInstallPrivateMethods:
+		return true
+	case bytecode.OpDefinePrivate, bytecode.OpDefinePrivateMethod, bytecode.OpDefinePrivateGetter,
+		bytecode.OpDefinePrivateSetter, bytecode.OpAddPrivateMethod, bytecode.OpAddPrivateGetter, bytecode.OpAddPrivateSetter:
+		// Its key in a captured binding's cell.
+		return in.B&1 != 0
+	}
+	return false
 }
 
 // superRef reports whether op is a super reference's: a read or a write
@@ -2187,14 +2210,21 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this, charCode bool
 		return ir.Instruction{Op: ir.PropertyRead, Left: top, Dest: sp - 1, Key: in.A, Third: privateKeySlot(fn, in.B), Private: true, When: true}
 	case bytecode.OpDefinePrivate, bytecode.OpDefinePrivateMethod, bytecode.OpDefinePrivateGetter,
 		bytecode.OpDefinePrivateSetter, bytecode.OpAddPrivateMethod, bytecode.OpAddPrivateGetter, bytecode.OpAddPrivateSetter,
-		bytecode.OpPrivateName, bytecode.OpNewPrivateMethods, bytecode.OpInstallPrivateMethods:
-		// Go's (jitHost): a class's members made and given to an
-		// instance as it is constructed, and #x in o.
-		return ir.Instruction{Op: ir.Host}
-	case bytecode.OpNewClass, bytecode.OpSetHomeObject, bytecode.OpSetFieldInit, bytecode.OpDefineMethod,
+		bytecode.OpPrivateName, bytecode.OpNewPrivateMethods, bytecode.OpInstallPrivateMethods,
+		bytecode.OpNewClass, bytecode.OpSetHomeObject, bytecode.OpSetFieldInit, bytecode.OpDefineMethod,
 		bytecode.OpDefineIndex, bytecode.OpDefineGetter, bytecode.OpDefineSetter, bytecode.OpSetFuncName,
 		bytecode.OpDefineGetterIndex, bytecode.OpDefineSetterIndex, bytecode.OpToPropertyKey:
-		// Go's (jitHost): a class or an object literal's members made.
+		// Go's (jitHost): a class's or an object literal's members made,
+		// and given to an instance as it is constructed -- from native
+		// code where they read only their operands (frameDefinition).
+		if frameDefinition(in) {
+			e, _ := describe(fn, 0, in)
+			dest := -1
+			if in.Op == bytecode.OpPrivateName || in.Op == bytecode.OpNewPrivateMethods {
+				dest = sp
+			}
+			return ir.Instruction{Op: ir.Host, Frame: true, Extra: e.need, Dest: dest}
+		}
 		return ir.Instruction{Op: ir.Host}
 	case bytecode.OpCopyDataProps, bytecode.OpArraySpread, bytecode.OpSpreadIter, bytecode.OpArrayPush, bytecode.OpSetProtoOf,
 		bytecode.OpObjectRest, bytecode.OpCallSpread, bytecode.OpNewSpread, bytecode.OpTemplateObject, bytecode.OpPushCallee:

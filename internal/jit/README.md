@@ -348,7 +348,14 @@ rest parameter's array, the arguments object -- Go makes from native code
 on that frame (`ir.Instruction`'s `Frame`, `ssa.GoHost`, the VM's
 `jitGoHost`), as V8's code calls the runtime, native code going on after
 it. Code with super references has no call entry (`ir.Program`'s
-`FrameCallee`): a native callee's frame has no function object.
+`FrameCallee`): a native callee's frame has no function object. A class's
+or an object literal's member's definition that reads no local -- a home
+object set, a method or an accessor defined, a class linked to its
+parent, a private name, member or methods' install whose key a captured
+binding holds (`compile`'s `frameDefinition`) -- is Go's from native code
+so in a native callee's code too, on the frame Go makes of its level
+(`jitGoCallNested`), or with no frame where it runs no script and throws
+nothing (`jitGoHostPlain`).
 
 **Accessors.** A read whose site found a getter on its receivers'
 prototypes, or a write a setter -- a class's accessor, or one

@@ -77,3 +77,74 @@ func TestJITSuperReferences(t *testing.T) {
 	}
 	jitAgreesForTest(t, superSetup, `run(20)`, `nul()`, `run(30)`, `out.join()`)
 }
+
+// definitionSetup's callees, called natively by loops, make classes and
+// object literals with methods, accessors and private members: point's
+// literal has a method and an accessor, which its home object is given;
+// cls makes a class extending Root, with a method, a getter and a static
+// method; mixin's has a private field and a private method too, whose
+// methods' object it keeps in a local, which a native callee's frame Go
+// makes does not have, so it stays Go's to call; counter's literal method
+// reads super.
+const definitionSetup = `
+	function point(x, y) { return { x, y, len() { return this.x + this.y }, get twice() { return this.len() * 2 } } }
+	function mixin(Base, k) {
+		return class extends Base {
+			#v = k
+			#bump() { return this.#v + 1 }
+			get v() { return this.#bump() }
+			static make() { return new this() }
+		}
+	}
+	class Root { constructor() { this.r = 1 } }
+	function cls(k) { return class extends Root { m() { return k + this.r } get g() { return k * 2 } static s() { return k } } }
+	function counter(n) { return { __proto__: { base() { return n } }, get() { return super.base() + 1 } } }
+	function run(n) {
+		let s = 0
+		for (let i = 0; i < n; i++) {
+			const p = point(i, 2)
+			s += p.len() + p.twice
+			const C = mixin(Root, i)
+			s += new C().v + C.make().r
+			s += counter(i).get()
+			const D = cls(i)
+			s += new D().m() + new D().g + D.s()
+		}
+		return s
+	}
+	function ext(p) { return class extends p { q() { return 1 } } }
+	function runExt(n) { let s = 0, errs = ''; for (let i = 0; i < n; i++) { try { const C = ext(i % 50 === 49 ? 5 : Root); s += typeof C === 'function' ? 1 : 0 } catch (e) { errs = e.constructor.name + ': ' + e.message } } return s + ':' + errs }
+	function runLit(n) { let s = 0; for (let i = 0; i < n; i++) { const p = point(i, 2); s += p.x + p.y } return s }
+	function runCls(n) { let s = 0; for (let i = 0; i < n; i++) { const D = cls(i); s += typeof D === 'function' ? 1 : 0 } return s }`
+
+// A native callee's definitions of class members and object literals'
+// methods -- new_class, set_home_object, define_method, a getter's, a
+// private name's and member's, install_private_methods -- are Go's from
+// native code, on the frame Go makes of its level (jitGoCallNested), which
+// has its closure and this, or with no frame where they run no script and
+// throw nothing (jitGoHostPlain): they read no local, which native code
+// holds, nor the function object, which it has not (compile's
+// frameDefinition).
+// Such callees -- 161 functions of npm's own code making classes, 124
+// literals' methods, 190 private members' -- had been called by Go.
+func TestJITDefinitionCallees(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	jitNoInlineForTest(t, "point")
+	both := jitBothForTest(t, definitionSetup)
+	for range 6 {
+		both.agree(t, `run(100)`, `runLit(200)`, `runCls(200)`, `runExt(100)`)
+	}
+	r := both.jit
+	for _, name := range []string{"point", "cls", "ext"} {
+		e := jitEntryForTest(t, r, name)
+		in := e.link.in
+		both.agree(t, `runLit(200)`, `runCls(200)`, `runExt(200)`)
+		if e.link.in-in < 150 {
+			t.Errorf("%s was called natively %d times of 200", name, e.link.in-in)
+		}
+	}
+	jitAgreesForTest(t, definitionSetup, `run(10)`, `run(30)`, `run(10)`, `runExt(30)`, `runLit(30)`, `runCls(30)`)
+}
