@@ -651,54 +651,72 @@ func (c *core) layout() {
 }
 
 // findLazy marks values that need no location of their own.
+//
+// It reads every frame state once: each value, block state and loop
+// header names a state, and many name the same one -- the guards of an
+// instruction share its state -- so the states' references are counted
+// (refs, by state ID) as the values are met, the states listed the first
+// time each is, and each listed state's slots are read once, counted
+// that many times as uses (findFused's).
 func (c *core) findLazy() {
-	n := c.f.NumValues()
+	f := c.f
+	n := f.NumValues()
 	used := c.bools(n) // by an argument, a control or a phi
-	for _, b := range c.f.Blocks {
-		for _, v := range b.Values {
-			for _, a := range v.Args {
-				used[a.ID] = true
-			}
-		}
-		if b.Control != nil && b.Kind != ssa.BlockReturn {
-			used[b.Control.ID] = true
-		}
-	}
 	// A slot loaded at an entry and named only by frame states for that same
 	// slot needs no register: an exit leaves that slot as it is.
 	elsewhere := c.bools(n)
-	state := func(s *ssa.FrameState) {
-		if s == nil {
-			return
-		}
-		for i, v := range s.Slots {
-			if v != nil && !(v.Op == ssa.OpLoadSlot && v.Aux == i) {
-				elsewhere[v.ID] = true
+	// Uses, counted here rather than taken from ssa.Value's Uses: a fused
+	// value has no location, which any other use would need (findFused).
+	uses := c.int32s(n)
+	refs := c.int32s(f.NumStates())
+	states := c.stateList()
+	ref := func(s *ssa.FrameState) {
+		if s != nil {
+			if refs[s.ID()]++; refs[s.ID()] == 1 {
+				states = append(states, s)
 			}
 		}
 	}
-	for _, b := range c.f.Blocks {
-		// The guards of one instruction share its state, looked at once.
-		var last *ssa.FrameState
+	for _, b := range f.Blocks {
 		for _, v := range b.Values {
 			for _, a := range v.Args {
+				used[a.ID] = true
+				uses[a.ID]++
 				if a.Op == ssa.OpLoadSlot {
 					elsewhere[a.ID] = true
 				}
 			}
-			if v.State != last {
-				state(v.State)
-				last = v.State
+			if v.Shadow != nil {
+				uses[v.Shadow.ID]++
+			}
+			ref(v.State)
+		}
+		if b.Control != nil {
+			uses[b.Control.ID]++
+			if b.Kind != ssa.BlockReturn {
+				used[b.Control.ID] = true
+			}
+			if b.Control.Op == ssa.OpLoadSlot {
+				elsewhere[b.Control.ID] = true
 			}
 		}
-		state(b.State)
-		state(b.Header)
-		if b.Control != nil && b.Control.Op == ssa.OpLoadSlot {
-			elsewhere[b.Control.ID] = true
+		ref(b.State)
+		ref(b.Header)
+	}
+	for _, s := range states {
+		k := refs[s.ID()]
+		for i, v := range s.Slots {
+			if v != nil {
+				uses[v.ID] += k
+				if !(v.Op == ssa.OpLoadSlot && v.Aux == i) {
+					elsewhere[v.ID] = true
+				}
+			}
 		}
 	}
+	c.keepStates(states)
 	c.lazy = c.bools(n)
-	for _, b := range c.f.Blocks {
+	for _, b := range f.Blocks {
 		for _, v := range b.Values {
 			switch v.Op {
 			case ssa.OpConstSource:
@@ -721,7 +739,7 @@ func (c *core) findLazy() {
 			}
 		}
 	}
-	c.findFused()
+	c.findFused(uses)
 }
 
 // fusable reports whether a boolean operation can be computed by a branch
@@ -749,37 +767,9 @@ func fusable(op ssa.Op) (ok, pure bool) {
 // operand, as far as the chain goes. Such a value needs no location: the
 // branch jumps on the flags it sets, where a boolean had been set from
 // them, and tested again.
-func (c *core) findFused() {
+func (c *core) findFused(uses []int32) {
 	n := c.f.NumValues()
 	c.fused = c.bools(n)
-	// Uses, counted here rather than taken from ssa.Value's Uses: a fused
-	// value has no location, which any other use would need.
-	uses := c.ints(n)
-	state := func(s *ssa.FrameState) {
-		if s != nil {
-			for _, v := range s.Slots {
-				if v != nil {
-					uses[v.ID]++
-				}
-			}
-		}
-	}
-	for _, b := range c.f.Blocks {
-		for _, v := range b.Values {
-			for _, a := range v.Args {
-				uses[a.ID]++
-			}
-			if v.Shadow != nil {
-				uses[v.Shadow.ID]++
-			}
-			state(v.State)
-		}
-		if b.Control != nil {
-			uses[b.Control.ID]++
-		}
-		state(b.State)
-		state(b.Header)
-	}
 	for _, b := range c.f.Blocks {
 		if b.Kind != ssa.BlockIf {
 			continue
@@ -2034,33 +2024,58 @@ func (c *core) colorKeeps(iv []interval, pos []int) error {
 		}
 		return a - b
 	})
+	// Each cell taken is the first free: the cells live are a heap of
+	// their ends, shifted 32 bits, and numbers, those that end before a
+	// keep begins freed (free, a set of cells) as it is met.
 	phys := c.ints(nk)
-	type active struct{ end, cell int }
-	var live []active
-	var free []int
+	live := c.words(min(nk, abi.MaxKeeps))[:0]
+	var free [(abi.MaxKeeps + 63) / 64]uint64
 	n := 0
 	for _, k := range order {
-		kept := live[:0]
-		for _, a := range live {
-			if a.end < lo[k] {
-				free = append(free, a.cell)
-			} else {
-				kept = append(kept, a)
+		for len(live) > 0 && int(live[0]>>32) < lo[k] {
+			cell := uint32(live[0])
+			free[cell/64] |= 1 << (cell % 64)
+			last := len(live) - 1
+			live[0], live = live[last], live[:last]
+			for i := 0; ; {
+				m, l, r := i, 2*i+1, 2*i+2
+				if l < len(live) && live[l] < live[m] {
+					m = l
+				}
+				if r < len(live) && live[r] < live[m] {
+					m = r
+				}
+				if m == i {
+					break
+				}
+				live[i], live[m] = live[m], live[i]
+				i = m
 			}
 		}
-		live = kept
-		var at int
-		if len(free) != 0 {
-			slices.Sort(free)
-			at, free = free[0], free[1:]
-		} else {
+		at := -1
+		for w, word := range free {
+			if word != 0 {
+				at = w*64 + bits.TrailingZeros64(word)
+				free[w] &^= 1 << (at % 64)
+				break
+			}
+		}
+		if at < 0 {
 			if n == abi.MaxKeeps {
 				return ErrKeeps
 			}
 			at, n = n, n+1
 		}
 		phys[k] = at
-		live = append(live, active{hi[k], at})
+		live = append(live, uint64(hi[k])<<32|uint64(at))
+		for i := len(live) - 1; i > 0; {
+			up := (i - 1) / 2
+			if live[i] >= live[up] {
+				break
+			}
+			live[i], live[up] = live[up], live[i]
+			i = up
+		}
 	}
 	for _, b := range c.order {
 		for _, v := range b.Values {
