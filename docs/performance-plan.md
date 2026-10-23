@@ -1208,6 +1208,54 @@ Open from it:
   value, is more than a local's copy (`a.forEach(f, this.x)`) is made,
   called natively by its code, not inlined.
 
+Step 3 below, begun since (2026-10-23; `5dc9733`..`6cd7c96`, counted by
+the runner's allocations with `-jit`, a run each): escape analysis as an
+SSA pass (`ssa/escape.go`), TurboFan's. An object literal's object, or
+the receiver of a construction the code inlines (a class's constructor
+returning its this included, `5dc9733`), that nothing but the code sees
+is not made: its properties are SSA values, its field reads those values,
+and the checks its making made of the heap stay (the constructor's
+prototype, deoptimizing once replaced; an addition's prototypes; a
+method's holders). An exit's frame state names it by a word no value has,
+its shape, prototype and properties in a home past the frame's slots, and
+Go makes it there, one object for every slot naming it (`f3eaa79`).
+Octane's RayTrace 86,456 -> 74,915 allocations (16.6 -> 10.9 MB), Box2D
+91,273 -> 82,886 (21.3 -> 16.8 MB); the V8 suite's RayTrace 85,101 ->
+79,108; Are We Fast Yet's CD 3,260,567 -> 3,211,100. The handler in force
+is now an exceptional successor of what it guards in the compiler's
+liveness, so a try statement's frame keeps only what its handler reads
+(`457e0e6`). A native call whose closures are all callbacks it never
+makes gives its context's cells back to their pool as it returns
+(`9b86e46`): NBody 252,301 -> 5,558 allocations (8.4 -> 0.9 MB). A
+closure the code makes and only calls -- `const sq = (x) => x * x + n` in
+a loop, a function expression made and called in a loop's turn, a nested
+function declaration -- is found in a first build's SSA, inlined at its
+calls with no check of the callee in a second, and not made, Go making
+it at an exit (`6cd7c96`): `closure_make`, `closure_counter`,
+`closure_callback` and `func_closure_call` 3,973,442 -> 2,382,168
+allocations (705.6 -> 272.4 MB). test262 under `-conformance.jit`, plain
+and with `threshold,budget=3,deopt=7`: 99,637 passed, none failed.
+
+Open from it:
+
+- Havlak's and DeltaBlue's closures (915 MB of Are We Fast Yet's
+  allocation) and their contexts' cells: given to script methods with
+  loops (SOM's `Vector.forEach`), which callees with loops not being
+  inlined keeps out.
+- An iterator's `{value, done}` and a destructuring's array: native code
+  makes no iteration protocol of its own, the step a call of Go
+  (`ir.IterStep`), which sees the result.
+- An object the code reads an absent property of, tests for truth, or
+  compares with `===` or `typeof` escapes; so does one live across a
+  loop's header, and one given to a call not inlined -- CD's vectors.
+- A closure whose body calls another closure it captures needs its
+  calls' feedback, which a template's function has only once it runs
+  natively on its own; and a closure only called, made in a loop's turn
+  over a per-iteration binding, still takes the binding's cells at each
+  turn (`closure_make`'s remaining allocations): a scope's end gives fresh
+  ones unless the frame is a native call's, as Go may have made closures
+  on the old ones at an exit.
+
 The plan, in order -- the compiler first, since micro-optimizations do not
 close a gap of three to seven times:
 
