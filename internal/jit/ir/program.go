@@ -202,6 +202,10 @@ const (
 	// of its completion record, the operand on top: a normal completion's
 	// record (the number 0) is dropped and the code goes on; any other --
 	// a throw, a return -- the interpreter reproduces, from a guard's exit.
+	// With When, a return's record (the number 2) returns its value, the
+	// operand below the kind, natively: no finally clause is in force
+	// around it, which the return would run first, and nothing is beneath
+	// the record.
 	Rethrow
 	// IterStep is iter_next_or_jump, a for...of or for...in loop's step:
 	// the next value of the cursor at Left at Dest, or, the cursor done, a
@@ -272,8 +276,12 @@ const (
 	ParamDefault
 )
 
-// RethrowNormal is the kind a normal completion's record has (Rethrow).
-const RethrowNormal = 0
+// RethrowNormal and RethrowReturn are the kinds a normal completion's
+// record, and a return's, have (Rethrow).
+const (
+	RethrowNormal = 0
+	RethrowReturn = 2
+)
 
 // MaxArrayLiteral is the most elements an ArrayLiteral has: new_array
 // with more is Go's.

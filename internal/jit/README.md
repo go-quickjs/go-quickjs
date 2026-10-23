@@ -217,8 +217,13 @@ at an exit it gives it those handlers. A throw from what Go does there --
 a call, an operation, a throw statement -- is unwound to its handler as
 the interpreter unwinds it, and native code goes on at the handler, an
 entry of its own, as V8's code goes on at a handler (`jitCatch`). A
-finally clause's normal completion goes on natively; any other (a return,
-a throw) deoptimizes, the interpreter reproducing it. A using declaration's
+finally clause's normal completion goes on natively, and so does a return,
+where no other finally clause is in force around it and no loop's cursor
+is beneath the completion record (`ir`'s `Rethrow`, `When`); any other (a
+throw) deoptimizes, the interpreter reproducing it. A native callee may
+have handlers: the frame Go makes where it leaves has those in force there
+(`jitHandlers`), which the interpreter's unwinding of a throw finds; an
+inlined callee may not (`ssa.InlineCalls`). A using declaration's
 scope is such a try statement, its resources added and disposed of by Go.
 
 **Iteration.** A for...of or for...in loop's cursor, and `yield*`'s

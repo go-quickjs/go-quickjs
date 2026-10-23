@@ -176,7 +176,7 @@ func TestJITPrologueCalleesAgree(t *testing.T) {
 // The arguments a frame Go makes inside a callee's prologue is given are
 // those the exit's state kept (ssa.FrameState's Args), not whatever the
 // VM's stack held past the callee's operands: here a function the
-// interpreter alone runs, for its direct eval, fills that stack with nines
+// interpreter alone runs, for its with statement, fills that stack with nines
 // before every call, and the callee leaves inside its prologue at each
 // source of a shape it had not met, its defaults then bound from the
 // arguments the state kept.

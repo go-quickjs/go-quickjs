@@ -394,10 +394,13 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			// has none of.
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
-		if (in.Op == bytecode.OpPushCatch || in.Op == bytecode.OpPushFinally || in.Op == bytecode.OpPopCatch || in.Op == bytecode.OpRethrow) && (!m.ssa || m.callee) {
-			// Exception handlers are the new pipeline's, in a function's
-			// own code: a callee inlined has no frame of its own for Go to
-			// give them to.
+		if (in.Op == bytecode.OpPushCatch || in.Op == bytecode.OpPushFinally || in.Op == bytecode.OpPopCatch || in.Op == bytecode.OpRethrow) && (!m.ssa || m.forward) {
+			// Exception handlers are the new pipeline's: in a function's own
+			// code, and a native callee's, whose frame Go makes with the
+			// handlers in force where it leaves (the VM's jitHandlers),
+			// which the interpreter's unwinding of a throw finds. A callee
+			// inlined has no frame of its own for Go to give them to: the
+			// inliner takes no program with handlers (ssa's InlineCalls).
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
 		switch in.Op {
@@ -612,6 +615,19 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			p.Code[pc] = ir.Instruction{Op: ir.Jump, Target: int(table[chains[pc]-1].PC)}
 		default:
 			p.Code[pc] = lower(fn, in, p.Locals+maps[pc].Depth, p.This, codes[pc])
+			if m.ssa && in.Op == bytecode.OpRethrow && maps[pc].Depth == 2 && !fn.Async && !fn.Generator && fn.Kind != bytecode.KindDerivedConstructor {
+				// A return's completion record returns natively where no
+				// finally clause is in force around the rethrow, which the
+				// return would run first, and no operand beneath the record,
+				// a loop's cursor, is there to close (ir's Rethrow, When).
+				fin := false
+				if chains != nil {
+					for k := chains[pc]; k != 0; k = table[k-1].Outer {
+						fin = fin || table[k-1].Finally
+					}
+				}
+				p.Code[pc].When = !fin
+			}
 		}
 	}
 	if m.ssa {

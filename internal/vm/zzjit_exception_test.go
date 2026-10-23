@@ -147,8 +147,13 @@ func TestJITExceptionHandlers(t *testing.T) {
 		`operation({p: {q: 1}}, 50)`, `operation({}, 50)`, `operation({p: {q: 2}}, 50)`,
 		`throwsOwn(60)`, `throwsOwn(60)`,
 	)
-	for _, name := range []string{"caught", "withFinally", "returnThrough", "nested", "breaks", "rethrows", "operation", "throwsOwn"} {
+	for _, name := range []string{"caught", "withFinally", "nested", "breaks", "rethrows", "operation", "throwsOwn"} {
 		jitNativeForTest(t, r, name)
+	}
+	// Called natively, a native callee with handlers of its own, whose
+	// return through its finally clause returns natively.
+	if e := r.jit.entryFor(r.global.getOwn(r.atoms.intern("returnThrough")).value().Object().fn().closure.fn); e == nil || e.ssa == nil || e.link == nil || e.link.in == 0 {
+		t.Fatalf("returnThrough was never called natively: %+v", e)
 	}
 	// A throw caught in the function goes on natively at its handler: a
 	// run in which every turn's property read throws, or every third's

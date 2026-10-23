@@ -1697,10 +1697,12 @@ func Inlinable(p *ir.Program) bool {
 // leaves to Go, which it returns by PC, are calls inlined in it too: it is
 // Inlinable but for those.
 func InlineCalls(p *ir.Program) ([]int, bool) {
-	if p == nil || p.Validate() != nil || len(p.Code) > maxInline || len(p.Globals) != 0 || p.Captured != nil || p.DerivedConstructor {
+	if p == nil || p.Validate() != nil || len(p.Code) > maxInline || len(p.Globals) != 0 || p.Captured != nil || p.DerivedConstructor || len(p.Handlers) != 0 {
 		// A callee whose locals closures capture: an inlined frame's
 		// slots have no cells, and Go makes no closure on one. A derived
-		// constructor's super() is Go's, on a frame of its own.
+		// constructor's super() is Go's, on a frame of its own. A callee
+		// with exception handlers registers none in an inlined frame,
+		// which a throw would unwind past them.
 		return nil, false
 	}
 	var calls []int
@@ -5467,12 +5469,44 @@ func (b *builder) instruction(blk *Block, pc int) {
 		}
 		// The completion record is a normal completion's, which is
 		// dropped; for any other the interpreter reproduces it, from the
-		// state before the rethrow.
+		// state before the rethrow -- but a return's where the lowering
+		// says it may return natively (When), as the interpreter's rethrow
+		// returns: `try { return x } finally { ... }` had deoptimized at
+		// each return.
 		normal := f.newValue(blk, OpConstF64, Float64)
 		normal.Const = ir.Float(ir.RethrowNormal)
-		is := f.newValue(blk, OpCmpF64, Bool, number(in.Left, ir.GuardExit), normal)
+		kind := number(in.Left, ir.GuardExit)
+		is := f.newValue(blk, OpCmpF64, Bool, kind, normal)
 		is.Aux = int(ir.Eq)
-		guard(OpCheckTrue, None, ir.GuardExit, boxB(is))
+		if !in.When || b.cur != b.root {
+			guard(OpCheckTrue, None, ir.GuardExit, boxB(is))
+			break
+		}
+		ret, cont := b.blockAfter(blk), b.blockAfter(blk)
+		b.placeAfter(blk, []*Block{ret, cont}, cont)
+		blk.Kind, blk.Control, blk.State, blk.ExitKind = BlockIf, is, nil, 0
+		is.Uses++
+		blk.Succs = []*Block{cont, ret}
+		cont.Preds, cont.Backedge = []*Block{blk}, []bool{false}
+		ret.Kind, ret.Preds, ret.Backedge = BlockReturn, []*Block{blk}, []bool{false}
+		b.seal(ret)
+		b.seal(cont)
+		b.splits = append(b.splits, ret, cont)
+		b.next = cont
+		blk = ret
+		two := f.newValue(blk, OpConstF64, Float64)
+		two.Const = ir.Float(ir.RethrowReturn)
+		returns := f.newValue(blk, OpCmpF64, Bool, kind, two)
+		returns.Aux = int(ir.Eq)
+		guard(OpCheckTrue, None, ir.GuardExit, boxB(returns))
+		v := operand(ir.Slot(in.Left.Slot - 1))
+		guard(OpCheckInit, None, ir.GuardExit, v)
+		if b.p.Captured != nil && !b.p.Cells {
+			// Closed before it returns, as a return closes them.
+			b.goFrame(blk, pc, ir.Instruction{Op: ir.CloseUpvalues}, guard)
+		}
+		blk.Control = v
+		v.Uses++
 	case ir.ParamsDead:
 		// The arguments, what the slots have at the function's start --
 		// undefined where one is missing, as the VM's call fills them --
