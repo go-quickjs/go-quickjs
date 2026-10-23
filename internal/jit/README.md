@@ -266,8 +266,11 @@ then on (`jitInlinedCalls`).
 Go suspends the frame as the interpreter does, and each resumption enters
 native code at the frame's pc -- the entry after the yield or await, or,
 the first time, past the parameters -- as the tree tier resumes a tree at
-the block there (`jitResume`, `runGeneratorTree`). A call of one makes its
-object, so none is called natively or inlined. But a for...of's or a
+the block there (`jitResume`, `runGeneratorTree`). One of calls and no
+loop is compiled once its resumptions have made it hot, as any function's
+calls do (`LowerSSAHot`, `jitHotEntry`), each resumption spending its
+length of the budget. A call of one makes its object, so none is called
+natively or inlined. But a for...of's or a
 destructuring's step over a generator (`ssa.CallSite`'s `Gens`) resumes it
 by a native call, as V8's code calls a generator's resumption: the step
 checks the cursor's generator -- of a function it has met, suspended, not

@@ -21,7 +21,10 @@ import (
 // every function of the .js files under the directory QUICKJS_JIT_REFUSALS
 // names (npm's own code, Octane's, Are We Fast Yet's) is lowered as Go's
 // entry lowers it (LowerSSA), and those it refuses for doing no loop's or
-// array's work as native callers and inlining lower them (LowerSSAInline).
+// array's work as native callers and inlining lower them (LowerSSAInline)
+// -- but a generator or an async function, whose call makes its object and
+// runs none of its body, as Go lowers it once its resumptions have made it
+// hot (LowerSSAHot).
 // It prints how many each takes and why the rest are refused, by the first
 // reason, most common first; QUICKJS_JIT_REFUSALS_TOP is how many reasons
 // to print (25). Each file is compiled as Node loads a CommonJS module,
@@ -43,7 +46,8 @@ func TestLowerCorpusRefusals(t *testing.T) {
 	}
 	standalone := map[string]int{}
 	callee := map[string]int{}
-	var files, unparsed, total, lowered, calleeLowered int
+	resumed := map[string]int{}
+	var files, unparsed, total, lowered, calleeLowered, hotLowered int
 	reason := func(err error) string {
 		var rf *Refusal
 		if errors.As(err, &rf) {
@@ -59,6 +63,12 @@ func TestLowerCorpusRefusals(t *testing.T) {
 			switch {
 			case err == nil:
 				lowered++
+			case HostOnly(err) && (fn.Async || fn.Generator):
+				if _, err := LowerSSAHot(fn); err == nil {
+					hotLowered++
+				} else {
+					resumed[reason(err)]++
+				}
 			case HostOnly(err):
 				if _, err := LowerSSAInline(fn); err == nil {
 					calleeLowered++
@@ -135,10 +145,11 @@ func TestLowerCorpusRefusals(t *testing.T) {
 	}
 	pct := func(n int) float64 { return 100 * float64(n) / float64(max(total, 1)) }
 	var out strings.Builder
-	refused := total - lowered - calleeLowered
+	refused := total - lowered - calleeLowered - hotLowered
 	fmt.Fprintf(&out, "%d files (%d not parsed), %d functions\n", files, unparsed, total)
 	fmt.Fprintf(&out, "%7d %5.1f%%  lowered for Go's entry\n", lowered, pct(lowered))
 	fmt.Fprintf(&out, "%7d %5.1f%%  lowered for native callers and inlining (no loop or array work)\n", calleeLowered, pct(calleeLowered))
+	fmt.Fprintf(&out, "%7d %5.1f%%  lowered once hot, for their resumptions (generators and async functions of no loop or array work)\n", hotLowered, pct(hotLowered))
 	fmt.Fprintf(&out, "%7d %5.1f%%  refused\n", refused, pct(refused))
 	fmt.Fprintf(&out, "refused, for Go's entry:\n")
 	for _, r := range sorted(standalone) {
@@ -146,6 +157,10 @@ func TestLowerCorpusRefusals(t *testing.T) {
 	}
 	fmt.Fprintf(&out, "refused, for native callers and inlining:\n")
 	for _, r := range sorted(callee) {
+		fmt.Fprintf(&out, "%7d %5.1f%%  %s\n", r.n, pct(r.n), r.reason)
+	}
+	fmt.Fprintf(&out, "refused, once hot, for their resumptions:\n")
+	for _, r := range sorted(resumed) {
 		fmt.Fprintf(&out, "%7d %5.1f%%  %s\n", r.n, pct(r.n), r.reason)
 	}
 	t.Log("\n" + out.String())

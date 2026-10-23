@@ -12269,12 +12269,29 @@ func (r *Runtime) jitResume(f *frame) (Value, error, bool) {
 			return Undefined, nil, false
 		}
 	}
+	if e != nil && e.ssa == nil && e.hostOnly {
+		// No loop and no array work, but calls (LowerSSAHot): compiled
+		// once its resumptions have made it hot, as any function's calls
+		// do (jitHotEntry), which an async function's -- each await a
+		// resumption -- had never been. Until then a resumption spends
+		// its length of that, and looks at no program.
+		if e = r.jitHotEntry(f, e); e == nil {
+			return Undefined, nil, false
+		}
+	}
 	// The depth beneath the resumption's pc, which its entry loads: the
 	// stack as the suspension left it, and the value sent in.
 	p := (*ir.Program)(nil)
 	if e != nil && e.ssa != nil {
 		p = e.ssaProg
-	} else if p, _ = r.jitLower(f.cl.fn, jitLowerSSA); p == nil {
+	} else if lp, err := r.jitLower(f.cl.fn, jitLowerSSA); lp != nil {
+		p = lp
+	} else if jitcompile.HostOnly(err) {
+		// Warming up, to be compiled once hot (above): the hot program,
+		// the same bytecode's, has the same states.
+		p, _ = r.jitLower(f.cl.fn, jitLowerHot)
+	}
+	if p == nil {
 		// Refused for good, as tryJITAt has a refusal: asked again at each
 		// resumption, a short generator's -- one with no loop -- looked
 		// its lowering up every time, a quarter of what it cost.
