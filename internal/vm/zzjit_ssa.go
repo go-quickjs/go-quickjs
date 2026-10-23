@@ -163,6 +163,8 @@ var jitEncoding = abi.Encoding{
 	FuncExtra:          int32(unsafe.Offsetof(funcData{}.extra)),
 	ExtraLexThis:       int32(unsafe.Offsetof(funcExtra{}.lexThis)),
 	ExtraLexThisRef:    int32(unsafe.Offsetof(funcExtra{}.lexThisRef)),
+	ThisBindingValue:   int32(unsafe.Offsetof(thisBinding{}.value)),
+	ThisBindingInit:    int32(unsafe.Offsetof(thisBinding{}.init)),
 	HintSlotSize:       int32(unsafe.Sizeof(jitHintSlot{})),
 	HintSlotFn:         int32(unsafe.Offsetof(jitHintSlot{}.fn)),
 	HintSlotLink:       int32(unsafe.Offsetof(jitHintSlot{}.link)),
@@ -2946,12 +2948,13 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 // for one Go makes. targets are the others the call has met.
 func (fb *jitFeedback) closureCallSite(pc int, in jitInline, call bytecode.Instr, targets []*jitInline) (ssa.CallSite, bool) {
 	arrowThis := in.cl.fn.Kind == bytecode.KindArrow && in.cl.fn.UsesThis
-	if fd := in.obj.fn(); arrowThis && (fd == nil || fd.extra == nil || fd.extra.lexThisRef != nil || in.via) {
+	if fd := in.obj.fn(); arrowThis && (fd == nil || fd.extra == nil || fd.extra.lexThisRef != nil && !fd.extra.lexThisRef.init || in.via) {
 		// An arrow's this is the one it captured, which the call gives
-		// it (ssa.CallSite's ArrowThis): one that shares a derived
-		// constructor's binding, or called through
-		// Function.prototype.call, whose object the call's checks find,
-		// Go makes.
+		// it (ssa.CallSite's ArrowThis), or the one the derived
+		// constructor's binding it shares holds, once bound -- each
+		// call checks it is (mir's arrowThis). One met sharing a binding
+		// not bound, or called through Function.prototype.call, whose
+		// object the call's checks find, Go makes.
 		return ssa.CallSite{}, false
 	}
 	// Only looked up: a compile here would share the workspaces of the

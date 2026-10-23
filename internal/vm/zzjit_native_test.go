@@ -1093,6 +1093,12 @@ func TestJITObjectLayout(t *testing.T) {
 	if x = &g; jitTypeWord(x) != jitEncoding.GenData {
 		t.Fatal("a generator's data type word is not jitEncoding's")
 	}
+	// A derived constructor's this binding, which a call of an arrow that
+	// shares it reads (mir's arrowBound): its init a byte.
+	var b thisBinding
+	if unsafe.Sizeof(b.init) != 1 || unsafe.Sizeof(b.value) != 16 {
+		t.Fatal("a this binding's field native code reads changed its width; update jitEncoding and mir")
+	}
 }
 
 func TestJITEqualityBoundaries(t *testing.T) {

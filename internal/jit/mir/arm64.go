@@ -2279,6 +2279,21 @@ func (c *a64Compiler) superGuards(t *ssa.CallSite, x *ssa.Value, guard func(arm6
 	guard(arm64.NE)
 }
 
+// arrowBound is amd64's.
+func (c *a64Compiler) arrowBound(ref, extra arm64.Reg, miss, done arm64.Label) {
+	shared := c.a.NewLabel()
+	c.a.Cbnz(ref, shared, true)
+	c.a.AddImm(extra, extra, int64(c.enc.ExtraLexThis), true)
+	c.a.Store(a64Ctx, abi.OffCallThis, extra)
+	c.a.B(done)
+	c.a.Bind(shared)
+	c.a.LoadU8(extra, ref, c.enc.ThisBindingInit)
+	c.a.Cbz(extra, miss, false)
+	c.a.AddImm(ref, ref, int64(c.enc.ThisBindingValue), true)
+	c.a.Store(a64Ctx, abi.OffCallThis, ref)
+	c.a.B(done)
+}
+
 func (c *a64Compiler) arrowThis(t *ssa.CallSite, next arm64.Label) {
 	miss, done := c.a.NewLabel(), c.a.NewLabel()
 	if t.ByCode == 0 {
@@ -2290,10 +2305,7 @@ func (c *a64Compiler) arrowThis(t *ssa.CallSite, next arm64.Label) {
 	c.a.Load(a64B, a64B, c.enc.FuncExtra)
 	c.a.Cbz(a64B, miss, true)
 	c.a.Load(a64A, a64B, c.enc.ExtraLexThisRef)
-	c.a.Cbnz(a64A, miss, true)
-	c.a.AddImm(a64B, a64B, int64(c.enc.ExtraLexThis), true)
-	c.a.Store(a64Ctx, abi.OffCallThis, a64B)
-	c.a.B(done)
+	c.arrowBound(a64A, a64B, miss, done)
 	c.a.Bind(miss)
 	c.a.Load(a64C, a64Ctx, abi.OffCallCallee)
 	c.a.B(next)
@@ -2488,9 +2500,7 @@ func (c *a64Compiler) genericCheck(v *ssa.Value, site *ssa.CallSite, target int,
 	c.a.Load(a64B, a64B, c.enc.FuncExtra)
 	c.a.Cbz(a64B, miss, true)
 	c.a.Load(a64C, a64B, c.enc.ExtraLexThisRef)
-	c.a.Cbnz(a64C, miss, true)
-	c.a.AddImm(a64B, a64B, int64(c.enc.ExtraLexThis), true)
-	c.a.Store(a64Ctx, abi.OffCallThis, a64B)
+	c.arrowBound(a64C, a64B, miss, notArrow)
 	c.a.Bind(notArrow)
 	c.movImm(a64B, abi.LinkCoerce)
 	c.a.Tst(a64A, a64B, true)

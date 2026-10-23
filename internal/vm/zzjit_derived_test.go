@@ -658,3 +658,57 @@ func TestJITDerivedNativeConstructArrows(t *testing.T) {
 	}
 	jitDifferential(t, setup+`; [make(200), probe(), early(100), make(200), probe(), new W(1).f(), new W(2).v, new P(1).f(), new P(2).v].join()`)
 }
+
+// An arrow a derived constructor made in a frame of the VM's shares the
+// constructor's this binding (lexThisRef); once a super() has bound it,
+// it changes no more, and a native call of the arrow gives it the
+// binding's value as its this, checking at each call that the binding is
+// bound (mir's arrowBound). One called before its constructor's super()
+// is Go's call, which throws the interpreter's ReferenceError. Every
+// answer is the interpreter's, and the loop calling the bound arrows makes
+// no call of Go.
+func TestJITArrowSharedBindingCalled(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		class A { constructor(x) { this.x = x } }
+		class H extends A { constructor(x) { super(x); this.h = () => this.x * 2; this.g = (d) => this.h() + d } }
+		// Made in the interpreter (with is no native code's), whose arrows
+		// share the binding.
+		function mk(i) { with ({}) { return new H(i) } }
+		var hs = []
+		for (let i = 0; i < 40; i++) hs.push(mk(i))
+		function callAll(n) { let s = 0; for (let k = 0; k < n; k++) for (let j = 0; j < hs.length; j++) { const o = hs[j]; s += o.g(k) + o.h() } return s }
+		class U extends A { constructor(x, early) { const f = () => this.x; let s = 0; for (let i = 0; i < 2; i++) s += i; if (early) s += f(); super(x + s); this.f = f } }
+		function us(n) { let s = 0; for (let i = 0; i < n; i++) { try { s += new U(i, i % 40 === 39).f() } catch (e) { s += e instanceof ReferenceError ? 1000 : -1 } } return s }
+		// One arrow's function met at callIt's call bound and, from inside
+		// its constructor before super(), not.
+		function callIt(f, n) { let s = 0; for (let i = 0; i < n; i++) s += f(); return s }
+		class V extends A { constructor(x, early) { const f = () => this.x + 1; if (early) callIt(f, 1); super(x); this.f = f } }
+		function mkV(i, early) { with ({}) { return new V(i, early) } }
+		var vs = []
+		for (let i = 0; i < 20; i++) vs.push(mkV(i, false))
+		function drive(n) { let s = 0; for (let k = 0; k < n; k++) for (let j = 0; j < vs.length; j++) s += callIt(vs[j].f, 2); return s }
+		function early(n) { let s = 0; for (let i = 0; i < n; i++) { try { mkV(i, true) } catch (e) { s += e instanceof ReferenceError ? 1 : -1000 } } return s }
+	`
+	rounds := []string{}
+	for range 6 {
+		rounds = append(rounds, `callAll(20)`, `us(80)`, `drive(10)`, `early(5)`)
+	}
+	r := jitAgreesForTest(t, setup, rounds...)
+	if fd := r.global.getOwn(r.atoms.intern("hs")).value().Object().elemsOf()[0].Object().getOwn(r.atoms.intern("h")).value().Object().fn(); fd.extra == nil || fd.extra.lexThisRef == nil || !fd.extra.lexThisRef.init {
+		t.Fatalf("hs[0].h shares no bound binding: %+v", fd.extra)
+	}
+	m := jitNativeForTest(t, r, "callAll")
+	runtime.GC()
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	goCalls := m.ssaStats.goCalls
+	if v, err := r.Run(compileForTest(t, `''+callAll(20)`)); err != nil || v.String().Go() != "70000" {
+		t.Fatalf("callAll(20) = %s, %v; want 70000", v.String().Go(), err)
+	}
+	if d := m.ssaStats.goCalls - goCalls; d != 0 {
+		t.Errorf("callAll made %d calls of Go in a round, want none", d)
+	}
+	jitDifferential(t, setup+`; [callAll(10), us(80), callAll(10), drive(10), early(5), drive(5)].join()`)
+}

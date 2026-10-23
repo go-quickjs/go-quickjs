@@ -1118,8 +1118,11 @@ type Encoding struct {
 	// An arrow's function data has, at FuncExtra, a pointer to what it
 	// captured where it was made: the this at ExtraLexThis, a value, and,
 	// at ExtraLexThisRef, the binding of a derived constructor's this it
-	// shares, nil for none.
+	// shares, nil for none. That binding holds the value at
+	// ThisBindingValue and, at ThisBindingInit, a byte, 1 once a super()
+	// has bound it, after which it never changes.
 	FuncExtra, ExtraLexThis, ExtraLexThisRef                                  int32
+	ThisBindingValue, ThisBindingInit                                         int32
 	LinkEntry, LinkBody, LinkIn, LinkParams, LinkLocals, LinkFrame, LinkFlags int32
 	// LinkGen is, in a generator's link, the address of its code's entry
 	// for a loop's step that resumes it natively (mir's Code.GenEntry), a

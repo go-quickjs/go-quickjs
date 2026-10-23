@@ -3642,15 +3642,32 @@ func (c *compiler) arrowThis(t *ssa.CallSite, next amd64.Label) {
 	c.a.Op(amd64.Test, scratchB, scratchB, true)
 	c.a.Jcc(amd64.CondE, miss)
 	c.a.Load(scratchA, scratchB, c.enc.ExtraLexThisRef)
-	c.a.Op(amd64.Test, scratchA, scratchA, true)
-	c.a.Jcc(amd64.CondNE, miss)
-	c.a.OpImm(amd64.Add, scratchB, c.enc.ExtraLexThis, true)
-	c.a.Store(regCtx, abi.OffCallThis, scratchB)
-	c.a.Jmp(done)
+	c.arrowBound(scratchA, scratchB, miss, done)
 	c.a.Bind(miss)
 	c.a.Load(scratchC, regCtx, abi.OffCallCallee)
 	c.a.Jmp(next)
 	c.a.Bind(done)
+}
+
+// arrowBound gives a call of an arrow the this it captured (abi.Context's
+// CallThis): the binding of a derived constructor's this it shares, in
+// ref, once bound -- it changes no more -- or, where it shares none, the
+// value in what it captured, extra. It goes on to done, or, the binding
+// not bound, to miss. It writes ref and extra.
+func (c *compiler) arrowBound(ref, extra amd64.Reg, miss, done amd64.Label) {
+	shared := c.a.NewLabel()
+	c.a.Op(amd64.Test, ref, ref, true)
+	c.a.Jcc(amd64.CondNE, shared)
+	c.a.OpImm(amd64.Add, extra, c.enc.ExtraLexThis, true)
+	c.a.Store(regCtx, abi.OffCallThis, extra)
+	c.a.Jmp(done)
+	c.a.Bind(shared)
+	c.a.LoadU8(extra, ref, c.enc.ThisBindingInit)
+	c.a.Op(amd64.Test, extra, extra, false)
+	c.a.Jcc(amd64.CondE, miss)
+	c.a.OpImm(amd64.Add, ref, c.enc.ThisBindingValue, true)
+	c.a.Store(regCtx, abi.OffCallThis, ref)
+	c.a.Jmp(done)
 }
 
 // genericCheck has call v, of a function none of its sites is, the callee
@@ -3721,10 +3738,7 @@ func (c *compiler) genericCheck(v *ssa.Value, site *ssa.CallSite, target int, ch
 	c.a.Op(amd64.Test, scratchB, scratchB, true)
 	c.a.Jcc(amd64.CondE, miss)
 	c.a.Load(scratchC, scratchB, c.enc.ExtraLexThisRef)
-	c.a.Op(amd64.Test, scratchC, scratchC, true)
-	c.a.Jcc(amd64.CondNE, miss)
-	c.a.OpImm(amd64.Add, scratchB, c.enc.ExtraLexThis, true)
-	c.a.Store(regCtx, abi.OffCallThis, scratchB)
+	c.arrowBound(scratchC, scratchB, miss, notArrow)
 	c.a.Bind(notArrow)
 	c.a.OpImm(amd64.And, scratchA, abi.LinkCoerce, true)
 	if site.Method {

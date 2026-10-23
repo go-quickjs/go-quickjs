@@ -267,7 +267,10 @@ and leaves native code for one made before (`jitCalleeMakes`); a super()
 is made natively in a constructor that makes no arrow before one
 (`jitArrowBeforeSuper`), and Go binds the this of a frame it entered the
 code with, as that super() bound it, before it makes an arrow there
-(`jitBindThis`).
+(`jitBindThis`). A native call of an arrow that shares such a binding --
+one a frame of the VM's made -- gives it the binding's value as its this
+once bound, which each call checks (mir's `arrowBound`); one that meets
+it unbound Go makes.
 
 **Generators and async functions.** `yield` and `await` are exits at which
 Go suspends the frame as the interpreter does, and each resumption enters
