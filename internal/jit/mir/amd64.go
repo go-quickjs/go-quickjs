@@ -838,11 +838,55 @@ func (c *compiler) returnFast(x *ssa.Value) {
 	if !c.retTailUsed {
 		c.retTail, c.retTailUsed = c.a.NewLabel(), true
 		c.a.Bind(c.retTail)
+		if c.f.CellsBack {
+			c.cellsBack()
+		}
 		c.returnTail()
 	} else {
 		c.a.Jmp(c.retTail)
 	}
 	c.a.Bind(toGo)
+}
+
+// cellsBack gives the cells a native call's frame took (ssa.Func's
+// CellsBack), its context's, back to their pool as it returns natively,
+// where the collector does not mark and the pool has room: each cell its
+// block's again, holding undefined, its slot pointing there, as Go makes
+// them (the VM's jitFillCells), and the block the pool's next. Nothing
+// else holds them: no closure took them. It keeps retNum, retRef and
+// callLink, using the allocatable registers, none live at a return.
+func (c *compiler) cellsBack() {
+	const block, pool, count, cell, word, at = amd64.R8, amd64.R9, amd64.R10, amd64.R12, amd64.R13, amd64.R15
+	skip := c.a.NewLabel()
+	c.a.Load(block, regCtx, abi.OffCells)
+	c.a.Op(amd64.Test, block, block, true)
+	c.a.Jcc(amd64.CondE, skip)
+	c.movImm(word, c.enc.WriteBarrier)
+	c.a.LoadU8(word, word, 0)
+	c.a.Op(amd64.Test, word, word, false)
+	c.a.Jcc(amd64.CondNE, skip)
+	c.movImm(pool, uint64(c.f.CellsPool))
+	c.a.Load(count, pool, abi.OffPoolCount)
+	c.a.OpImm(amd64.Cmp, count, abi.PoolCapacity, true)
+	c.a.Jcc(amd64.CondAE, skip)
+	c.movImm(word, c.enc.Undefined)
+	n := int32(c.f.CellsCount)
+	for k := range n {
+		c.a.Lea(cell, block, 8*n+k*c.enc.UpvalueSize)
+		c.a.Store(block, k*8, cell)
+		c.a.Lea(at, cell, c.enc.UpvalueClosed)
+		c.a.Store(cell, c.enc.UpvalueSlot, at)
+		c.a.Store(cell, c.enc.UpvalueClosed+c.enc.NumOffset, word)
+		c.a.StoreImm(cell, c.enc.UpvalueClosed+c.enc.RefOffset, 0)
+	}
+	c.a.MovRR(at, count)
+	c.a.ShiftImm(amd64.Shl, at, 3, true)
+	c.a.Op(amd64.Add, at, pool, true)
+	c.a.Store(at, abi.OffPoolObjects, block)
+	c.a.OpImm(amd64.Add, count, 1, true)
+	c.a.Store(pool, abi.OffPoolCount, count)
+	c.a.StoreImm(regCtx, abi.OffCells, 0)
+	c.a.Bind(skip)
 }
 
 // returnTail ends a native call, from the callee's context, the result in
@@ -2038,6 +2082,15 @@ func (c *compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(amd64.Con
 		// Natively from the function's pool of cells where it can be
 		// (cellsClose), by Go otherwise, which fills the pool again.
 		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		if c.f.CellsBack {
+			// Nothing in a native call's frame of code whose cells go back
+			// to their pool (ssa.Func's CellsBack): no closure has taken
+			// them, to keep the old ones. A frame Go entered the code with
+			// may have closures the interpreter made on its cells.
+			c.a.Load(scratchA, regCtx, abi.OffLive)
+			c.a.OpImm(amd64.Cmp, scratchA, abi.LiveCall, true)
+			c.a.Jcc(amd64.CondE, join)
+		}
 		c.cellsClose(site, slow)
 		c.a.Jmp(join)
 		c.a.Bind(slow)

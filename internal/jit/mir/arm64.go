@@ -913,11 +913,48 @@ func (c *a64Compiler) returnFast(x *ssa.Value) {
 	if !c.retTailUsed {
 		c.retTail, c.retTailUsed = c.a.NewLabel(), true
 		c.a.Bind(c.retTail)
+		if c.f.CellsBack {
+			c.cellsBack()
+		}
 		c.returnTail()
 	} else {
 		c.a.B(c.retTail)
 	}
 	c.a.Bind(toGo)
+}
+
+// cellsBack is amd64's: the cells a native call's frame took back to
+// their pool as it returns natively. It keeps A, B and C, the result and
+// where it returns to, using allocatable registers, none live at a return.
+func (c *a64Compiler) cellsBack() {
+	block, pool, count, cell, word, at := arm64.Reg(3), arm64.Reg(4), arm64.Reg(5), arm64.Reg(6), arm64.Reg(7), arm64.Reg(8)
+	skip := c.a.NewLabel()
+	c.a.Load(block, a64Ctx, abi.OffCells)
+	c.a.Cbz(block, skip, true)
+	c.movImm(word, c.enc.WriteBarrier)
+	c.a.LoadU8(word, word, 0)
+	c.a.Cbnz(word, skip, false)
+	c.movImm(pool, uint64(c.f.CellsPool))
+	c.a.Load(count, pool, abi.OffPoolCount)
+	c.a.CmpImm(count, abi.PoolCapacity, true)
+	c.a.BCond(arm64.HS, skip)
+	c.movImm(word, c.enc.Undefined)
+	n := int32(c.f.CellsCount)
+	for k := range n {
+		c.a.AddImm(cell, block, int64(8*n+k*c.enc.UpvalueSize), true)
+		c.a.Store(block, k*8, cell)
+		c.a.AddImm(at, cell, int64(c.enc.UpvalueClosed), true)
+		c.a.Store(cell, c.enc.UpvalueSlot, at)
+		c.a.Store(cell, c.enc.UpvalueClosed+c.enc.NumOffset, word)
+		c.a.Store(cell, c.enc.UpvalueClosed+c.enc.RefOffset, arm64.ZR)
+	}
+	c.a.ShiftImm(arm64.Lsl, at, count, 3, true)
+	c.a.Op(arm64.Add, at, at, pool, true)
+	c.a.Store(at, abi.OffPoolObjects, block)
+	c.a.AddImm(count, count, 1, true)
+	c.a.Store(pool, abi.OffPoolCount, count)
+	c.a.Store(a64Ctx, abi.OffCells, arm64.ZR)
+	c.a.Bind(skip)
 }
 
 // budgetStore and budgetLoad are amd64's. Each uses B.
@@ -4343,8 +4380,14 @@ func (c *a64Compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(arm64.
 	}
 	if site.Go == ssa.GoClose && site.Pool != 0 {
 		// As amd64's: natively from the function's pool of cells where it
-		// can be, by Go otherwise.
+		// can be, by Go otherwise; nothing in a native call's frame of code
+		// whose cells go back to their pool.
 		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		if c.f.CellsBack {
+			c.a.Load(a64A, a64Ctx, abi.OffLive)
+			c.a.CmpImm(a64A, abi.LiveCall, true)
+			c.a.BCond(arm64.EQ, join)
+		}
 		c.cellsClose(site, slow)
 		c.a.B(join)
 		c.a.Bind(slow)

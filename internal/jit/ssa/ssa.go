@@ -979,6 +979,15 @@ type Func struct {
 	// writable, with room, the prototypes with those shapes and no
 	// elements. Zero where Go appends (AppendFeedback).
 	ArrayProtos [2]Holder
+	// CellsBack says the cells of the code's captured locals, which a
+	// native call's frame takes from CellsPool at its entries (GoCells),
+	// CellsCount of them, go back to the pool once it returns natively:
+	// no closure the code makes takes them, every one it makes being a
+	// loop's callback it does not make (ForEachSite's Made), as V8's
+	// escape analysis leaves a context only such closures read unmade.
+	CellsBack  bool
+	CellsPool  uintptr
+	CellsCount int
 	// HomesEnd is the slot past the homes of the objects the code does
 	// not make (escape.go), which an exit writes past the frame's slots and
 	// Go makes the objects of: 0 for none. The frame takes them, as it

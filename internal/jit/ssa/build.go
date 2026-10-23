@@ -2001,6 +2001,7 @@ func build(w *Workspace, p *ir.Program, fb Feedback) (*Func, error) {
 	if err := b.plan(); err != nil {
 		return nil, err
 	}
+	b.cellsBack()
 	b.translate()
 	bigLeafSites(f)
 	f.slotCount = b.nslots
@@ -2682,6 +2683,32 @@ func (b *builder) inlineSiteAt(pc int, total *int, known *inlineAsked) (*frame, 
 		}
 	}
 	return b.inlineFrame(site, calls, total, result)
+}
+
+// cellsBack has the cells a native call's frame takes at its entries go
+// back to their pool when it returns natively (Func's CellsBack), where
+// nothing past the call can hold them: every closure the function makes
+// is a loop's callback it inlines and does not make (planCallback's
+// made), whose frame Go makes, the closure with it, only at an exit,
+// after which the frame is Go's and returns through Go; and no inlined
+// callee makes a closure (InlineCalls).
+func (b *builder) cellsBack() {
+	p := b.root.p
+	if !p.Cells || len(b.made) == 0 {
+		return
+	}
+	for pc, in := range p.Code {
+		if in.Op == ir.Closure && reachable(p, pc) && b.made[pc] == 0 {
+			return
+		}
+	}
+	fb, ok := b.fb.(CellsFeedback)
+	if !ok {
+		return
+	}
+	if pool, cells, ok := fb.CellsPool(); ok {
+		b.f.CellsBack, b.f.CellsPool, b.f.CellsCount = true, pool, len(cells)
+	}
 }
 
 // returnsThis reports whether p's return at pc returns its receiver, in

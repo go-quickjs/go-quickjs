@@ -204,7 +204,12 @@ materializes an object. An exit inside the callback has Go make its frame
 past the loop's, finish it and go on with the loop after its index; one
 that leaves too often (`jitInlineExits`) has the callback called natively
 again. The captured locals' cells the caller's code takes at its entry
-(`ssa.GoCells`) are made still.
+(`ssa.GoCells`) are made still; but where every closure the code makes is
+such a callback, a native call's frame gives its cells back to their pool
+as it returns (`ssa.Func`'s `CellsBack`), and a scope's end gives it none
+fresh: nothing else can hold them, as V8's escape analysis leaves a
+context only such closures read unmade. A frame that leaves native code is
+Go's, the closures Go makes on its cells with it, and returns through Go.
 
 **Allocation.** Object, array and regular expression literals, closures
 and their captured cells (see Closures), and the receivers of
