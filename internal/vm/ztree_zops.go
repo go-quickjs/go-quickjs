@@ -719,7 +719,7 @@ func init() {
 				return Undefined, nil
 			}
 		}
-		return r.getProp(env, name, Obj(env))
+		return r.getProp(env, name, r.globalReceiver(env))
 	}
 
 	inOperator = func(r *Runtime, key, obj Value) (Value, error) {

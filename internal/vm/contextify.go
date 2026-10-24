@@ -47,6 +47,20 @@ func (r *Runtime) isGlobalScope(env *Object) bool {
 	return env == r.global || (r.scope != nil && env == r.scope)
 }
 
+// globalReceiver is the receiver a get or a set of a global name through env
+// passes on: the global scope, which a module's environment inherits from,
+// rather than that environment -- which a getter or a setter would otherwise
+// see as this, and a set of a global variable would create the name on,
+// leaving the global as it was. The module's own bindings are found before
+// this is asked; an imported one, an accessor with no setter, is refused
+// whatever the receiver.
+func (r *Runtime) globalReceiver(env *Object) Value {
+	if r.isGlobalScope(env) || env.proto == nil {
+		return Obj(env)
+	}
+	return Obj(env.proto)
+}
+
 // sandboxGet reads a name through a context's global: the sandbox's, if it
 // has one, and otherwise the realm's.
 func (r *Runtime) sandboxGet(p *proxyData, key Atom, receiver Value) (Value, error) {

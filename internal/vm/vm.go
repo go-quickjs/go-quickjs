@@ -471,7 +471,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 					goto onError
 				}
 			}
-			v, err := r.getProp(env, name, Obj(env))
+			v, err := r.getProp(env, name, r.globalReceiver(env))
 			if err != nil {
 				vmErr = err
 				goto onError
@@ -526,7 +526,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 					break
 				}
 			}
-			v, err := r.getProp(env, cl.names[in.A], Obj(env))
+			v, err := r.getProp(env, cl.names[in.A], r.globalReceiver(env))
 			if err != nil {
 				vmErr = err
 				goto onError
@@ -657,7 +657,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				}
 			}
 			sp--
-			if _, err := r.setProp(env, name, stack[sp], Obj(env), cl.fn.Strict); err != nil {
+			if _, err := r.setProp(env, name, stack[sp], r.globalReceiver(env), cl.fn.Strict); err != nil {
 				vmErr = err
 				goto onError
 			}

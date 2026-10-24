@@ -69,7 +69,7 @@ func (r *Runtime) getGlobalAt(c *tctx, in bytecode.Instr, pc int) (Value, error)
 			return Undefined, r.throwReferenceError("%s is not defined", r.atoms.name(name))
 		}
 	}
-	v, err := r.getProp(env, name, Obj(env))
+	v, err := r.getProp(env, name, r.globalReceiver(env))
 	if err != nil {
 		return Undefined, err
 	}
@@ -146,7 +146,7 @@ func (r *Runtime) setGlobalIn(f *frame, cl *closure, in bytecode.Instr, v Value)
 			return r.throwReferenceError("%s is not defined", r.atoms.name(name))
 		}
 	}
-	_, err := r.setProp(env, name, v, Obj(env), cl.fn.Strict)
+	_, err := r.setProp(env, name, v, r.globalReceiver(env), cl.fn.Strict)
 	return err
 }
 
