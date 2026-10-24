@@ -88,9 +88,10 @@ func (c *compiler) hoistBlockDeclarations(body []ast.Stmt, inOrder bool) {
 		if !ok {
 			continue
 		}
-		if c.moduleBindingsDone {
+		if c.moduleBindingsDone && c.atModuleTopLevel() {
 			// A module's top-level functions were defined when it was linked,
-			// which is before any of this runs.
+			// which is before any of this runs. A block's are its own, and
+			// are made when the block is entered, as anywhere else.
 			continue
 		}
 		h := hoistedFunc{fd: fd, name: name}
