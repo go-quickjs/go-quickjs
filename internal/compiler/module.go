@@ -164,7 +164,7 @@ func (c *compiler) collectExport(n *ast.ExportDecl) {
 				// binding the module declares itself -- which happens whenever
 				// a module re-exports a name it also defines, including the
 				// degenerate case of re-exporting from its own specifier.
-				local := "*re*" + bytecode.ModuleRequest(n.Source, n.Type) + ":" + spec.Local
+				local := bytecode.ReExportLocal(bytecode.ModuleRequest(n.Source, n.Type), spec.Local)
 				c.module.Imports = append(c.module.Imports, ImportRequest{
 					Specifier: bytecode.ModuleRequest(n.Source, n.Type), Local: local, Imported: spec.Local,
 				})

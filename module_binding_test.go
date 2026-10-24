@@ -1,6 +1,7 @@
 package quickjs_test
 
 import (
+	"fmt"
 	"testing"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
@@ -30,6 +31,51 @@ func TestModuleBlockFunctions(t *testing.T) {
 			t.Fatal(err)
 		}
 		if _, err := rt.EvalModule("/entry.mjs", c.src); err != nil {
+			t.Errorf("%s: %v", c.name, err)
+		} else if v, err := rt.Get("result"); err != nil {
+			t.Errorf("%s: %v", c.name, err)
+		} else if got := v.String(); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+		rt.Close()
+	}
+}
+
+// TestReExportColonSpecifier pins a named re-export from a module whose
+// specifier, or whose export's name, holds a colon: the module asked for is the
+// one named, whole (issue #5).
+func TestReExportColonSpecifier(t *testing.T) {
+	for _, c := range []struct{ name, barrel, entry, want string }{
+		{"no colon", `export { f } from "demo-dep";`, `import { f } from "barrel"; result = f();`, "7"},
+		{"colon", `export { f } from "demo:dep";`, `import { f } from "barrel"; result = f();`, "7"},
+		{"renamed", `export { f as g } from "demo:dep";`, `import { g } from "barrel"; result = g();`, "7"},
+		{"colon in the name", `export { "a:b" as h } from "demo:dep";`, `import { h } from "barrel"; result = h;`, "ab"},
+		{"colons in both", `export { "a:b" } from "1:2:3";`, `import { "a:b" as x } from "barrel"; result = x;`, "123"},
+		{"digits and colon", `export { f } from "12:x";`, `import { f } from "barrel"; result = f();`, "12"},
+		{"through a namespace", `export { f } from "demo:dep";`, `import * as ns from "barrel"; result = ns.f() + "," + Object.keys(ns);`, "7,f"},
+		{"two steps", `export { f } from "demo:mid";`, `import { f } from "barrel"; result = f();`, "7"},
+		{"local workaround", `import { f } from "demo:dep"; export { f };`, `import { f } from "barrel"; result = f();`, "7"},
+	} {
+		rt := quickjs.New()
+		if _, err := rt.Eval(`globalThis.result = undefined`); err != nil {
+			t.Fatal(err)
+		}
+		rt.SetModuleLoader(func(specifier, referrer string) (string, string, error) {
+			switch specifier {
+			case "demo-dep", "demo:dep":
+				return `export function f() { return 7; } const ab = "ab"; export { ab as "a:b" };`, specifier, nil
+			case "demo:mid":
+				return `export { f } from "demo:dep";`, specifier, nil
+			case "1:2:3":
+				return `const v = "123"; export { v as "a:b" };`, specifier, nil
+			case "12:x":
+				return `export function f() { return 12; }`, specifier, nil
+			case "barrel":
+				return c.barrel, specifier, nil
+			}
+			return "", "", fmt.Errorf("unexpected module specifier %q", specifier)
+		})
+		if _, err := rt.EvalModule("/entry.mjs", c.entry); err != nil {
 			t.Errorf("%s: %v", c.name, err)
 		} else if v, err := rt.Get("result"); err != nil {
 			t.Errorf("%s: %v", c.name, err)

@@ -24,14 +24,6 @@ import (
 // lets the other paths answer -- which is what makes two modules that import
 // from each other link at all.
 
-// reExportPrefix marks the hidden local name a re-export imports under.
-//
-// `export {x} from "m"` is compiled as an import under a name no identifier can
-// spell, plus an export of that name, so that the binding is live and does not
-// collide with anything the module declares itself. Resolution has to see
-// through it: the export belongs to the other module, not to this one.
-const reExportPrefix = "*re*"
-
 // nsExportPrefix marks an export that is another module's namespace, which
 // `export * as ns from "m"` makes. What it names is the module rather than a
 // binding, so two modules re-exporting the same one under the same name agree.
@@ -46,16 +38,13 @@ const (
 
 // indirectSource picks apart the hidden name a re-export is stored under,
 // reporting the module it names and the export it asks that module for.
+//
+// `export {x} from "m"` is compiled as an import under a name no identifier can
+// spell, plus an export of that name, so that the binding is live and does not
+// collide with anything the module declares itself. Resolution has to see
+// through it: the export belongs to the other module, not to this one.
 func indirectSource(local string) (specifier, imported string, ok bool) {
-	if !strings.HasPrefix(local, reExportPrefix) {
-		return "", "", false
-	}
-	rest := local[len(reExportPrefix):]
-	specifier, imported, ok = strings.Cut(rest, ":")
-	if !ok {
-		return "", "", false
-	}
-	return specifier, imported, true
+	return bytecode.SplitReExportLocal(local)
 }
 
 // exportBinding is where an export name leads.

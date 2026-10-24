@@ -9,6 +9,11 @@
 // larger win.
 package bytecode
 
+import (
+	"strconv"
+	"strings"
+)
+
 // Op is an instruction opcode.
 type Op uint8
 
@@ -850,6 +855,33 @@ func SplitDeferRequest(request string) (string, bool) {
 		return request[1:], true
 	}
 	return request, false
+}
+
+// ReExportLocal names the binding `export {imported} from request` imports
+// under: a name no identifier can spell, which says which module and which of
+// its exports it stands for. The request's length goes first, because a
+// specifier, like an export name, may hold any character: `export {f} from
+// "demo:dep"` and `export {"dep:f"} from "demo"` are different re-exports.
+func ReExportLocal(request, imported string) string {
+	return "*re*" + strconv.Itoa(len(request)) + ":" + request + imported
+}
+
+// SplitReExportLocal takes a name ReExportLocal made apart, reporting whether
+// it was one.
+func SplitReExportLocal(local string) (request, imported string, ok bool) {
+	rest, ok := strings.CutPrefix(local, "*re*")
+	if !ok {
+		return "", "", false
+	}
+	size, rest, ok := strings.Cut(rest, ":")
+	if !ok {
+		return "", "", false
+	}
+	n, err := strconv.Atoi(size)
+	if err != nil || n < 0 || n > len(rest) {
+		return "", "", false
+	}
+	return rest[:n], rest[n:], true
 }
 
 // SourceRequest marks a module request as `import source`'s, which asks for
