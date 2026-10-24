@@ -1009,7 +1009,9 @@ What the gap is made of:
   `iterator_for_of`, `local_destruct`, `generator_next`).
 - **Coverage and tiering in large programs.** zlib's two largest
   functions, 13,660 and 5,039 instructions, are past the 4,096 the JIT
-  compiles, and leave a fifth of its time in the interpreter;
+  compiles, and leave a fifth of its time in the interpreter (since
+  `300e8a5` such functions compile where their compile fits the budget:
+  the 5,039 does, the 13,660 is refused for its 514 slots);
   Typescript leaves native code 125,000 times a run, compiles about four
   times a function and drops 107 functions for room; Box2D and PdfJS
   spend 12 to 20% of their CPU parsing and compiling source, much of it
@@ -1132,6 +1134,38 @@ arbitrary threshold; a budget read at every entry of a loop that turns
 seldom (`method_call` +5.9%); exit edges laid out in a loop's code (a
 taken branch a turn); and a budget wrongly stored as a float after a
 poll, which stopped every later compile in the runtime.
+
+The coverage round (2026-10-23, `675cc0b`..`b90a77d`, against `ed8cf09`;
+four Go code placements, `placements compare -jit` for the suites, the
+micro-benchmarks run on each placement's binary, the least of three, by
+their geometric mean over the placements): the operations Go makes, the
+frames, and callees' frames and resumptions (the coverage below), step
+3's escape analysis (above), and step 4's first part -- functions past
+4,096 instructions compiled where their compile fits the budget
+(`300e8a5`), a callee too long to inline warmed up before it is compiled
+for native callers (`ab7c5e5`) and compiled for a caller that calls it
+0.15 times a call or more, V8's rule for inlining (`f2805ae`), a loop's
+back edges spending the budget at that loop's own length (`f401f56`),
+and what is live across a store found by walks from its uses in large
+functions (`be45131`). V8 suite +0.8% (RayTrace -8.5%; Crypto +2.2%,
+RegExp +2.0%), Are We Fast Yet +0.1% (CD -4.7%, NBody -4.2%; Sieve
++5.6%, Havlak +2.5% and Bounce +2.3%, which each commit's build run
+alone puts within its runs' spread), Octane -2.6% (Mandreel -6.8%,
+RayTrace -7.5%, Typescript -4.0%, PdfJS -3.5%, Gameboy -1.6%; Splay
++4.2%); micro-benchmarks -2.6% by their geometric mean, of 153
+(`closure_make` -69%, `prop_clone` -65%, `func_closure_call` -38%,
+`func_call` -28%, `array_reduce` -14%). Slower: `private_method` +12%,
+its functions judged slow and run by the tree tier, the JIT's compiles,
+entries and exits the same in every build of the round (Go's placement
+of the tree tier's private members); `global_destruct` +7.7% and
+`async_call` +5%, level in each commit's build alone. `placements
+compare` picks the runs a benchmark shorter than a second is given from
+each binary's own first run: Gameboy, whose first run takes 330 to 350
+ms, was run 10 times on one side and 3 on the other, its warm-up
+weighing three times as much on one (+19% in the suite, +48% alone);
+given 10 runs on both, -1.6%. The runs should be picked once, for both
+labels. The VM's own tests pass under `QJS_JIT_STRESS` since
+`9bda4ec`, which CI runs.
 
 Open from it:
 
@@ -1453,10 +1487,12 @@ The rounds that followed, each measured as above. The commit says more.
     takes one context and two frames, so the frames' depth may reach twice
     the limit before Go throws its RangeError; the frames made for calls
     of Go from a generator's level are not shared between calls.
-- **QJS_JIT_STRESS and the VM's Go tests:** `go test -tags quickjs_jit
-  ./internal/vm` under `QJS_JIT_STRESS` fails at `e1f5608` already
-  (`TestJITInlinedByCodeReplaced` among others), which no CI job runs;
-  test262 under it passes.
+- **QJS_JIT_STRESS and the VM's Go tests:** done (`9bda4ec`): the tests
+  that count native calls, exits and compiles take the JIT's own
+  thresholds, the rest run stressed, and CI's stressed test262 job runs
+  them. `TestJITNoHeapWalks` failed once in four full runs under it (a
+  heap walk with the JIT, none without): the meter counts the process's
+  allocations, which another runtime's cleanups may make meanwhile.
 - **Calls, private members and tail calls in the tree tier** (after
   `d4b1ed5`..`d99aa74`), not done:
   - A recursive call of the tree tier's with a frame costs about 80 ns,
