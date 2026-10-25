@@ -258,6 +258,9 @@ type Runtime struct {
 	// from the three above when a Date first needs it and made again when
 	// one of them changes.
 	dates *date.Environment
+	// intlData is go-intl's data with the locale as ICU's default, made when
+	// first used (intlSource).
+	intlData intl.Source
 
 	// The caches below are tables of their own, kilobytes long, kept last
 	// so that the fields the interpreter reads on every call and step stay

@@ -176,7 +176,7 @@ func (r *Runtime) durationOptionsFrom(args []Value) (*durationOptions, error) {
 	if o.hasFractional {
 		opts.FractionalDigits = intl.Digits(o.fractionalDigits)
 	}
-	if o.format, err = intl.NewDurationFormat(loc, opts); err != nil {
+	if o.format, err = intl.NewDurationFormatFrom(r.intlSource(), loc, opts); err != nil {
 		// What go-intl refuses of the options that reading them did not,
 		// which V8 reports with the options object.
 		return nil, r.intlInvalidRange("object", r.v8Describe(Obj(options)))

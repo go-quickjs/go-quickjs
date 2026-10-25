@@ -192,7 +192,7 @@ func (r *Runtime) initLocale(namespace *Object) {
 
 // localeInfo answers Intl.Locale's questions of a locale.
 func (r *Runtime) localeInfo() (*intl.LocaleInfo, error) {
-	info, err := intl.NewLocaleInfo(intl.Embedded, intl.LocaleInfoOptions{Compat: r.intlCompat()})
+	info, err := intl.NewLocaleInfo(r.intlSource(), intl.LocaleInfoOptions{Compat: r.intlCompat()})
 	if err != nil {
 		return nil, r.intlInternal()
 	}

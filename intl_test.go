@@ -1278,3 +1278,58 @@ func TestIntlDoubleRangeIdentity(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// The divergences of Node's that go-intl adds after the ones standards mode
+// was written for take the standard's side there too: resolvedOptions
+// reports the year a pattern writes as the week-based year, as Telugu's
+// month and year does (go-intl's WeekYearOmitted), and getTimezoneOffset
+// counts a local mean time's seconds, Abidjan's 16 minutes and 8 seconds in
+// 1900 (WholeMinuteOffset). WithNodeQuirks answers as Node 26 does.
+func TestIntlLaterDivergences(t *testing.T) {
+	const year = `String(new Intl.DateTimeFormat("te", {calendar: "buddhist", year: "numeric", month: "long", timeZone: "UTC"}).resolvedOptions().year)`
+	const offset = `String(new Date(-2208988800000).getTimezoneOffset())`
+	for _, c := range []struct {
+		quirks       bool
+		year, offset string
+	}{
+		{false, "numeric", "16.133333333333333"},
+		{true, "undefined", "16"},
+	} {
+		var opts []quickjs.Option
+		if c.quirks {
+			opts = append(opts, quickjs.WithNodeQuirks())
+		}
+		rt := quickjs.New(opts...)
+		rt.SetTimeZone(time.FixedZone("Africa/Abidjan", 0))
+		if got := evalString(t, rt, year); got != c.year {
+			t.Errorf("quirks %v: year %q, want %q", c.quirks, got, c.year)
+		}
+		if got := evalString(t, rt, offset); got != c.offset {
+			t.Errorf("quirks %v: offset %q, want %q", c.quirks, got, c.offset)
+		}
+		rt.Close()
+	}
+}
+
+// The runtime's locale is ICU's default locale, as V8's is, whose data ICU
+// reads where a locale's own leaves something out: ICU has no collation
+// data for Akan, so the collations Intl.Locale lists for it are the
+// default locale's, Korean's among them "searchjl".
+func TestIntlLocaleIsTheDefault(t *testing.T) {
+	const listed = `String(new Intl.Locale("ak").getCollations().includes("searchjl"))`
+	for _, c := range []struct{ locale, want string }{
+		{"ko-KR", "true"},
+		{"en-US", "false"},
+	} {
+		rt := quickjs.New(quickjs.WithLocale(c.locale))
+		if got := evalString(t, rt, listed); got != c.want {
+			t.Errorf("%s: %s, want %s", c.locale, got, c.want)
+		}
+		// Setting another locale is a default of its own.
+		rt.SetLocale("ko-KR")
+		if got := evalString(t, rt, listed); got != "true" {
+			t.Errorf("%s, then ko-KR: %s, want true", c.locale, got)
+		}
+		rt.Close()
+	}
+}

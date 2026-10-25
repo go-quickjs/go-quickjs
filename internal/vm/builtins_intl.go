@@ -721,7 +721,7 @@ func (r *Runtime) numberOptionsFrom(args []Value) (*numberOptions, error) {
 	case o.style == "currency" && o.notation == "standard":
 		// A currency is written with as many decimal places as it has, unless
 		// the number is being shortened, where those places are not the point.
-		places, err := intl.CurrencyDigits(intl.Embedded, o.currency)
+		places, err := intl.CurrencyDigits(r.intlSource(), o.currency)
 		if err != nil {
 			return nil, r.intlInternal()
 		}
@@ -744,7 +744,7 @@ func (r *Runtime) numberOptionsFrom(args []Value) (*numberOptions, error) {
 		"auto", "never", "always", "exceptZero", "negative"); err != nil {
 		return nil, err
 	}
-	if o.nf, err = intl.NewNumberFormat(loc, o.intlOptions(numbering, r.intlCompat())); err != nil {
+	if o.nf, err = intl.NewNumberFormatFrom(r.intlSource(), loc, o.intlOptions(numbering, r.intlCompat())); err != nil {
 		return nil, r.intlInternal()
 	}
 	return o, nil
@@ -1093,7 +1093,7 @@ func (r *Runtime) localZoneName() string {
 		if name == "" {
 			continue
 		}
-		if _, err := intl.ResolveTimeZone(intl.Embedded, name, r.intlCompat()); err == nil {
+		if _, err := intl.ResolveTimeZone(r.intlSource(), name, r.intlCompat()); err == nil {
 			return name
 		}
 	}

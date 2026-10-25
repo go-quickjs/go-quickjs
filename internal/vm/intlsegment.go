@@ -67,7 +67,7 @@ func (r *Runtime) initSegmenter(intlObj *Object) {
 		opts := intl.SegmenterOptions{Granularity: map[string]intl.Granularity{
 			"grapheme": intl.GranularityGrapheme, "word": intl.GranularityWord,
 			"sentence": intl.GranularitySentence}[o.granularity]}
-		if o.segmenter, err = intl.NewSegmenter(loc, opts); err != nil {
+		if o.segmenter, err = intl.NewSegmenterFrom(rt.intlSource(), loc, opts); err != nil {
 			return Undefined, rt.intlInternal()
 		}
 		// The Segmenter uses none of the Unicode extension; ICU's variant

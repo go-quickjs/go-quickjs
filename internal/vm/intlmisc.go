@@ -151,7 +151,7 @@ func (r *Runtime) collatorFor(args []Value) (*collatorOptions, error) {
 	if ignoreSet {
 		opts.IgnorePunctuation = intl.Bool(ignore)
 	}
-	if o.collator, err = intl.NewCollator(loc, opts); err != nil {
+	if o.collator, err = intl.NewCollatorFrom(r.intlSource(), loc, opts); err != nil {
 		return nil, r.intlInternal()
 	}
 	return o, nil
@@ -236,7 +236,7 @@ func (r *Runtime) initPluralRules(intlObj *Object) {
 		if o.ordinal {
 			opts.Type = intl.Ordinal
 		}
-		if o.rules, err = intl.NewPluralRules(loc, opts); err != nil {
+		if o.rules, err = intl.NewPluralRulesFrom(rt.intlSource(), loc, opts); err != nil {
 			return Undefined, rt.intlInternal()
 		}
 		out := newObject(proto, ClassObject)
@@ -399,7 +399,7 @@ func (r *Runtime) initDisplayNames(intlObj *Object) {
 		if o.languageDisplay == "standard" {
 			opts.LanguageDisplay = intl.LanguageStandard
 		}
-		if o.names, err = intl.NewDisplayNames(loc, opts); err != nil {
+		if o.names, err = intl.NewDisplayNamesFrom(rt.intlSource(), loc, opts); err != nil {
 			return Undefined, rt.intlInternal()
 		}
 		out := newObject(proto, ClassObject)
@@ -571,7 +571,7 @@ func (r *Runtime) initListFormat(intlObj *Object) {
 			Style:  map[string]intl.ListStyle{"long": intl.ListLong, "short": intl.ListShort, "narrow": intl.ListNarrow}[o.style],
 			Compat: rt.intlCompat(),
 		}
-		if o.format, err = intl.NewListFormat(loc, opts); err != nil {
+		if o.format, err = intl.NewListFormatFrom(rt.intlSource(), loc, opts); err != nil {
 			return Undefined, rt.intlInternal()
 		}
 		out := newObject(proto, ClassObject)
@@ -705,7 +705,7 @@ func (r *Runtime) initRelativeTimeFormat(intlObj *Object) {
 		if o.numeric == "auto" {
 			opts.Numeric = intl.RelativeAuto
 		}
-		if o.format, err = intl.NewRelativeTimeFormat(loc, opts); err != nil {
+		if o.format, err = intl.NewRelativeTimeFormatFrom(rt.intlSource(), loc, opts); err != nil {
 			return Undefined, rt.intlInternal()
 		}
 		out := newObject(proto, ClassObject)

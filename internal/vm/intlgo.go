@@ -8,46 +8,38 @@ import intl "github.com/go-quickjs/go-intl"
 // formatter writes.
 
 // intlCompat is where the runtime answers as Node does rather than as the
-// standard: everywhere under WithNodeQuirks, and otherwise everywhere but
-// the places its standards mode corrects -- the twelve-hour clock hour12
-// chooses, the Islamic eras before the Hijrah, the formats of Temporal
-// values, a Unicode extension keyword's value "yes", the currencies
-// DisplayNames names, a duration's fraction of a second summed exactly
-// rather than in an int64, the separator a digital duration's minutes take
-// when its hours are left out, the fields a date pattern's literals seem to
-// write, the deprecated Islamic calendars, when a resolved locale keeps its
-// hour cycle, the zone a plain Temporal value is read in, the time zone
-// names a DateTimeFormat takes and reports, a coptic year before the era,
-// the days of the Chinese and Korean calendars, which are Temporal's, the
-// region of a locale's hour cycles, the time zones in no region, the two
-// roundings of Temporal the standard fixed after Node's temporal_rs, the
-// calendar uz-AF's date patterns are read from, the digit options
-// PluralRules reports, the unknown script and region a locale maximizes
-// past, an accounting amount with signDisplay "never", the offsets near a
-// whole one RelativeTimeFormat names in words, a double rounded to an
-// increment, the format a currency is written in, an empty item of a list,
-// a time style under a -u-hc keyword hour12 overrode, the prefix two
-// strings a Collator compares share, the host's zone where nothing names
-// it, and a range of two ends that are the same double.
+// standard: everywhere under WithNodeQuirks, and otherwise in three places
+// only -- the plain space V8 writes where ICU writes a narrow no-break one,
+// the two-letter language tags it keeps, and the collation keyword it
+// reports. Every other divergence go-intl names, those it adds in later
+// versions among them, takes the standard's side.
 func (r *Runtime) intlCompat() intl.Compat {
 	if r.nodeQuirks {
 		return intl.NodeICU
 	}
-	return intl.NodeICU &^ (intl.TwelveHourCycle | intl.IslamicEras | intl.TemporalFormats | intl.YesValues |
-		intl.CurrencyNames | intl.DurationOverflow | intl.DurationSeparator | intl.LiteralFields |
-		intl.IslamicFallback | intl.HourCycleKeyword | intl.PlainValueZone | intl.ZoneIdentifiers |
-		intl.CopticEra | intl.ChineseAstronomy | intl.SubdivisionHourCycles | intl.RegionZones |
-		intl.RoundingWindow | intl.RepeatedMidnight | intl.PatternCalendar | intl.PluralRulesDigits |
-		intl.UnknownSubtags | intl.AccountingNever | intl.RelativeEpsilon | intl.ApproximateIncrement |
-		intl.CurrencyFormats | intl.EmptyListItems | intl.HourCycleStyles | intl.IdenticalPrefix |
-		intl.HostAbbreviations | intl.DoubleRangeIdentity | intl.TrueKeywords |
-		intl.LeftToRightDirection)
+	return intl.NarrowSpace | intl.TwoLetterTags | intl.CollationKeyword
+}
+
+// intlSource is go-intl's data as this runtime reads it: with its locale as
+// ICU's default locale, whose data ICU reads for a locale it has none for,
+// as V8's default locale is ICU's. Without a locale of its own, the
+// default is the machine's, which go-intl's data takes as it is.
+func (r *Runtime) intlSource() intl.Source {
+	if r.intlData == nil {
+		r.intlData = intl.Embedded
+		if r.locale != "" {
+			if l, err := intl.ParseLocale(r.locale); err == nil {
+				r.intlData = intl.WithDefaultLocale(intl.Embedded, l)
+			}
+		}
+	}
+	return r.intlData
 }
 
 // canonicalizer puts locale identifiers in canonical form, as
 // Intl.getCanonicalLocales does.
 func (r *Runtime) canonicalizer() (*intl.Canonicalizer, error) {
-	return intl.NewCanonicalizer(intl.Embedded, intl.CanonicalizeOptions{Compat: r.intlCompat()})
+	return intl.NewCanonicalizer(r.intlSource(), intl.CanonicalizeOptions{Compat: r.intlCompat()})
 }
 
 // intlDefaultLocale is ECMA-402's DefaultLocale: the runtime's language, in
@@ -86,7 +78,7 @@ func intlLocales(tags []string) []intl.Locale {
 // requested locale the service is available in, with its Unicode extension,
 // or the default locale. The service reads the extension's keywords itself.
 func (r *Runtime) intlLocale(service intl.Service, tags []string, matcher string) (intl.Locale, error) {
-	m, err := intl.NewLocaleMatcher(intl.Embedded, service)
+	m, err := intl.NewLocaleMatcher(r.intlSource(), service)
 	if err != nil {
 		return intl.Locale{}, r.intlInternal()
 	}
@@ -114,7 +106,7 @@ func (r *Runtime) defSupportedLocalesOfService(ctor *Object, service intl.Servic
 		if err != nil {
 			return Undefined, err
 		}
-		m, err := intl.NewLocaleMatcher(intl.Embedded, service)
+		m, err := intl.NewLocaleMatcher(rt.intlSource(), service)
 		if err != nil {
 			return Undefined, rt.intlInternal()
 		}

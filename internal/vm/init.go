@@ -113,7 +113,7 @@ func timeZoneOf(loc *time.Location) *intl.TimeZone {
 
 // SetLocale installs the language a program means when it does not say which.
 // Passing nothing restores the one the machine is set to.
-func (r *Runtime) SetLocale(tag string) { r.locale, r.dates = tag, nil }
+func (r *Runtime) SetLocale(tag string) { r.locale, r.dates, r.intlData = tag, nil, nil }
 
 // Locale is the language this runtime formats in when a program does not say:
 // the one the host chose, or the one the machine is set to, as V8 takes it

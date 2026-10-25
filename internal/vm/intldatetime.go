@@ -89,7 +89,7 @@ func (r *Runtime) newDateTimeFormat(args []Value, required, defaults intl.DateTi
 	case zoneValue.IsUndefined():
 		// The zone a Date is written in, where go-intl knows it.
 		opts.TimeZone = r.localZoneName()
-		if _, err := intl.ResolveTimeZone(intl.Embedded, opts.TimeZone, opts.Compat); err != nil {
+		if _, err := intl.ResolveTimeZone(r.intlSource(), opts.TimeZone, opts.Compat); err != nil {
 			opts.TimeZone = "UTC"
 		}
 	case zoned != "":
@@ -101,7 +101,7 @@ func (r *Runtime) newDateTimeFormat(args []Value, required, defaults intl.DateTi
 			return nil, err
 		}
 		opts.TimeZone = name.Go()
-		if _, err := intl.ResolveTimeZone(intl.Embedded, opts.TimeZone, opts.Compat); err != nil {
+		if _, err := intl.ResolveTimeZone(r.intlSource(), opts.TimeZone, opts.Compat); err != nil {
 			return nil, r.throwRangeError("Invalid time zone specified: %s", opts.TimeZone)
 		}
 	}
@@ -176,7 +176,7 @@ func (r *Runtime) newDateTimeFormat(args []Value, required, defaults intl.DateTi
 		return nil, r.intlInvalidType("option", "dateStyle")
 	}
 
-	f, err := intl.NewDateTimeFormat(loc, opts)
+	f, err := intl.NewDateTimeFormatFrom(r.intlSource(), loc, opts)
 	if err != nil {
 		return nil, r.intlInternal()
 	}

@@ -249,6 +249,10 @@ const defaultModuleFetchLimit = 8
 // locale on Windows, LC_ALL, LC_MESSAGES or LANG on Unix, and English where
 // none of them says. That is what every other engine does, so that a program
 // run twice in the same environment is not given two different answers.
+//
+// It is ICU's default locale too, as V8's is, whose data ICU reads where a
+// locale's own leaves something out: the collations Intl.Locale lists for a
+// locale ICU has no collation data for are the default locale's.
 func WithLocale(tag string) Option {
 	return func(c *config) { c.locale = tag }
 }
@@ -310,6 +314,11 @@ func WithLocale(tag string) Option {
 // that with numeric Arabic-Indic 15 sorts after 100. And the host's zone, where
 // nothing names it, is ICU's guess from the C library's abbreviations, or
 // Etc/Unknown on Windows, where the standard takes the host's offset.
+// Intl.DateTimeFormat's resolvedOptions reports no year where the pattern it
+// chose writes the week-based one, as Telugu's month and year does, where the
+// standard reports the year it writes. And Date's getTimezoneOffset counts
+// whole minutes, truncated: 16 for Abidjan's local mean time in 1900, 16
+// minutes and 8 seconds, where the standard answers 16.133333333333333.
 //
 // It is useful for hosts that prioritize Node compatibility over conformance.
 func WithNodeQuirks() Option {
