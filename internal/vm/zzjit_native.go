@@ -687,6 +687,12 @@ type jitEntry struct {
 	// native code.
 	inlines   []jitInline
 	notInline []int32
+	// ssaTargets are the targets of the calls the code makes natively or
+	// inlines, by pc, as nativeCalls and inlines had them when it was
+	// compiled: a target learned since, at a call's exit, the code meets at
+	// that call's exit again and again until it is compiled again
+	// (jitCallRepeats).
+	ssaTargets []jitTarget
 	// nativeCallers are the entries whose code calls this one's natively,
 	// up to jitNativeCallers: when this code is compiled again to inline
 	// more, they are too, to inline it with its calls (jitInlineNativeCalls).

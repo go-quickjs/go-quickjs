@@ -1949,6 +1949,7 @@ func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
 	e.setLoopSlots(fn, fb.loopSlots)
 	e.ssaSerial++
 	e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaHostsLeft = fb.inlinedAt, fb.definesUnfed, fb.cells, fb.hostsLeft
+	e.ssaTargets = fb.targets
 	e.ssaStrings, e.ssaInlined, e.ssaPools, e.ssaMade = e.ssaStrings || fb.strings, fb.inlined, fb.pools, fb.made
 	e.ssaHomes, e.ssaVirtuals, e.ssaCalled = max(e.ssaHomes, fb.homes), fb.virtuals, fb.called
 	e.ssaCallbacks, e.ssaUnmade = fb.callbacks, fb.unmade
@@ -2027,7 +2028,7 @@ var jitKeepLimit int
 // (roomFor), its code and what describes it included: jit.ErrCodeBudget
 // otherwise.
 func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Program, e *jitEntry, keepLimit int) (*jit.SSACode, *jitFeedback, error) {
-	fb := &jitFeedback{r: r, fn: fn, cl: cl, e: e, keepLimit: keepLimit, prog: p}
+	fb := &jitFeedback{r: r, fn: fn, cl: cl, e: e, keepLimit: keepLimit, prog: p, targets: jitTargetsOf(e)}
 	// The compile's memory comes from the runtime's workspaces, taken back
 	// once its code is placed.
 	s := r.jit
@@ -2214,6 +2215,9 @@ var jitRefused = errors.New("jit: the program is refused")
 // of none -- the VM gives a small object a shape only when a cache asks --
 // are searched for the key.
 type jitFeedback struct {
+	// targets are the calls' targets the compile was given (jitTargetsOf),
+	// which its entry's code is compiled for (jitEntry's ssaTargets).
+	targets []jitTarget
 	// lexThis says the code makes an arrow from a pool (Closure), whose
 	// this native code writes from the context's This; loops that it makes
 	// a loop of a forEach (ForEach), and loopSlots how far past the frame's
@@ -3233,6 +3237,56 @@ const jitCallTargets = 4
 // Go before the call stops being inlined: each such exit has Go make the
 // call over again.
 const jitInlineExits = 16
+
+// jitTarget is a call's target, at pc: the function object, and, for one
+// called by its code (jitInline's byCode), its closure.
+type jitTarget struct {
+	pc     int32
+	byCode bool
+	obj    *Object
+	cl     *closure
+}
+
+// jitTargetsOf is what e's calls are decided to make, natively or inlined,
+// as a compile from now would be given them (jitEntry's ssaTargets).
+func jitTargetsOf(e *jitEntry) []jitTarget {
+	if e == nil || len(e.nativeCalls)+len(e.inlines) == 0 {
+		return nil
+	}
+	t := make([]jitTarget, 0, len(e.nativeCalls)+len(e.inlines))
+	for _, xs := range [2][]jitInline{e.nativeCalls, e.inlines} {
+		for _, x := range xs {
+			t = append(t, jitTarget{pc: x.pc, byCode: x.byCode, obj: x.obj, cl: x.cl})
+		}
+	}
+	return t
+}
+
+// jitCallRepeats reports whether the call in at pc of f's function, its
+// operands on the VM's stack up to sp, which e's code left to Go, calls a
+// target an earlier exit there taught e -- one of its decided native
+// calls or inlines, the call still decided so -- that the code was not
+// compiled for (ssaTargets), while the code waits to be compiled again for
+// what it learned: an exit that teaches nothing, which the code would make
+// at every such call until then.
+func (r *Runtime) jitCallRepeats(f *frame, e *jitEntry, pc, sp int, in bytecode.Instr) bool {
+	if e == nil || e.ssa == nil || e.invalid || !e.reoptPending() || e.callSites == nil || pc >= len(e.callSites) {
+		return false
+	}
+	if st := e.callSites[pc]; st != jitCallNative && st != jitCallInlined {
+		return false
+	}
+	o, cl := r.jitCalled(f, sp, in)
+	if o == nil || cl == nil {
+		return false
+	}
+	is := func(p int32, byCode bool, obj *Object, tcl *closure) bool {
+		return int(p) == pc && (obj == o || byCode && tcl != nil && jitSameCode(tcl, cl))
+	}
+	learned := slices.ContainsFunc(e.nativeCalls, func(x jitInline) bool { return is(x.pc, x.byCode, x.obj, x.cl) }) ||
+		slices.ContainsFunc(e.inlines, func(x jitInline) bool { return is(x.pc, x.byCode, x.obj, x.cl) })
+	return learned && !slices.ContainsFunc(e.ssaTargets, func(t jitTarget) bool { return is(t.pc, t.byCode, t.obj, t.cl) })
+}
 
 // jitCallSeen notes a call native code left to Go at pc, with the frame's
 // operands up to sp: from inside the callee, where it is inlined, which
@@ -8675,6 +8729,7 @@ func (e *jitEntry) setSSA(s *jitState, fn *bytecode.Function, p *ir.Program, cod
 	e.ssaSerial++
 	e.ssaProg = p
 	e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaHostsLeft = fb.inlinedAt, fb.definesUnfed, fb.cells, fb.hostsLeft
+	e.ssaTargets = fb.targets
 	e.ssaStrings, e.ssaInlined, e.ssaPools, e.ssaMade = fb.strings, fb.inlined, fb.pools, fb.made
 	e.ssaHomes, e.ssaVirtuals, e.ssaCalled = max(e.ssaHomes, fb.homes), fb.virtuals, fb.called
 	e.ssaCallbacks, e.ssaUnmade = fb.callbacks, fb.unmade
@@ -10789,7 +10844,17 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			case bytecode.OpYield, bytecode.OpAwait, bytecode.OpYieldStar:
 				return r.jitSuspend(f, in, f.base+int(ctx.ExitDepth))
 			case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew:
+				repeats := e.ssa == ran && r.jitCallRepeats(f, e, exitPC, f.base+int(ctx.ExitDepth), jitCallInstr(in))
 				r.jitCallSeen(f, e, exitPC, f.base+int(ctx.ExitDepth), jitCallInstr(in))
+				if repeats {
+					// What it learned there, it learned at an earlier exit:
+					// invalidated, as V8's code deoptimizes at a call of a
+					// target it was not compiled for, the existing tiers
+					// running the function until it is compiled again with
+					// it, rather than leaving at each such call for the
+					// interpreter's rest of the iteration.
+					r.jitInvalidate(f.cl, e)
+				}
 			case bytecode.OpGetProp, bytecode.OpGetPropThis:
 				r.jitPolySeen(f, e, exitPC, f.base+int(ctx.ExitDepth), in)
 			case bytecode.OpGetIndex, bytecode.OpGetIndexThis, bytecode.OpGetLocalIndex, bytecode.OpGetIndexUnder:
@@ -12052,7 +12117,12 @@ func (r *Runtime) jitFinishExit(f *frame, e *jitEntry, l *jitNativeLevel) (Value
 			r.jitStringAddSeen(f, e, pc)
 			switch jitCallOp(in.Op) {
 			case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew:
+				// As runSSA's (jitCallRepeats), for the code this level ran.
+				repeats := l.owner == nil && e.ssa == l.code && r.jitCallRepeats(f, e, pc, f.base+depth, jitCallInstr(in))
 				r.jitCallSeen(f, e, pc, f.base+depth, jitCallInstr(in))
+				if repeats {
+					r.jitInvalidate(f.cl, e)
+				}
 			case bytecode.OpGetProp, bytecode.OpGetPropThis:
 				r.jitPolySeen(f, e, pc, f.base+depth, in)
 			case bytecode.OpGetIndex, bytecode.OpGetIndexThis, bytecode.OpGetLocalIndex, bytecode.OpGetIndexUnder:
