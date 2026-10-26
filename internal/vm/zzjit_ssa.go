@@ -5828,7 +5828,20 @@ func (r *Runtime) jitSeedCalls(cl *closure, e *jitEntry, p *ir.Program) {
 			continue
 		}
 		cf := callee.fn
-		if cf == fn || cf.TopLevel || cf.IsModule || cf.HasDirectEval || isGeneratorTemplate(cf) {
+		if cf == fn {
+			// A recursive call: called natively through the function's own
+			// link, which holds the code compiled now once it is placed, as
+			// jitCallSeen decides such a call at its first exits -- which
+			// had cost every recursive function a compile after its first:
+			// RayTrace's rayTrace, EarleyBoyer's list walkers, Typescript's
+			// tree walks. Not compiled for it here: that is this compile.
+			if r.jitLinkable(callee) {
+				e.nativeCalls = append(e.nativeCalls, r.jitNativeTarget(int32(pc), callee, o, in))
+				e.callSites[pc] = jitCallNative
+			}
+			continue
+		}
+		if cf.TopLevel || cf.IsModule || cf.HasDirectEval || isGeneratorTemplate(cf) {
 			continue
 		}
 		ce := r.jit.entryFor(cf)
