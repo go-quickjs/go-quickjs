@@ -7122,12 +7122,38 @@ func (c *compiler) stringCode(v *ssa.Value, guard func(amd64.Cond)) {
 }
 
 // stringChar is s[i] (ssa.OpStringChar): the cell of the runtime's string
-// of the code unit at the index, if it is below 256, into v's register.
+// of the code unit at the index, if it is below 256, into v's register;
+// at an index past the string's end, the undefined cell where Go says
+// nothing up String.prototype's chain has it (ssa.GoStringAbsent), out of
+// line, as an array's element read past its end (OpElemCell).
 func (c *compiler) stringChar(v *ssa.Value, guard func(amd64.Cond)) {
-	if !c.stringUnit(v, v.Args[0], v.Args[1], guard) {
+	var past func(amd64.Cond)
+	done := amd64.Label(0)
+	if c.enc.CallGo != 0 && c.enc.UndefinedCell != 0 {
+		slow, stub := c.a.NewLabel(), c.stubLabel(v.State, exitKind(v.Aux))
+		done = c.a.NewLabel()
+		past = func(cond amd64.Cond) { c.a.Jcc(cond, slow) }
+		c.cold = append(c.cold, func() {
+			// The string in scratchC, its index in scratchA (stringUnit).
+			c.a.Bind(slow)
+			size := int32(unsafe.Sizeof(abi.GoArg{}))
+			c.a.Store(regCtx, abi.OffGoArgs+c.enc.RefOffset, scratchC)
+			c.a.Cvtsi2sd(xScratch0, scratchA, true)
+			c.a.MovQFromX(scratchA, xScratch0)
+			c.a.Store(regCtx, abi.OffGoArgs+size+c.enc.NumOffset, scratchA)
+			c.goSaving(uint64(ssa.GoStringAbsent), &stub)
+			c.movImm(scratchA, c.enc.UndefinedCell)
+			c.a.Jmp(done)
+		})
+	}
+	if !c.stringUnitPast(v, v.Args[0], v.Args[1], guard, past) {
 		return
 	}
-	c.charCell(v, guard)
+	c.charAddr(guard)
+	if done != 0 {
+		c.a.Bind(done)
+	}
+	c.setG(v, scratchA)
 }
 
 // substringChar is s.substring(i, j) or s.slice(i, j), j being i + 1,
@@ -7257,6 +7283,12 @@ func (c *compiler) freeze(v *ssa.Value) {
 // charCell is the cell of the runtime's string of the code unit in
 // scratchA, below 256 (abi.Context.CharStrings), into v's register.
 func (c *compiler) charCell(v *ssa.Value, guard func(amd64.Cond)) {
+	c.charAddr(guard)
+	c.setG(v, scratchA)
+}
+
+// charAddr is charCell's cell, in scratchA.
+func (c *compiler) charAddr(guard func(amd64.Cond)) {
 	c.a.OpImm(amd64.Cmp, scratchA, 256, true)
 	guard(amd64.CondAE)
 	c.a.Load(scratchB, regCtx, abi.OffCharStrings)
@@ -7264,7 +7296,6 @@ func (c *compiler) charCell(v *ssa.Value, guard func(amd64.Cond)) {
 	guard(amd64.CondE)
 	c.a.ShiftImm(amd64.Shl, scratchA, 4, true)
 	c.a.Op(amd64.Add, scratchA, scratchB, true)
-	c.setG(v, scratchA)
 }
 
 // stringUnit reads the code unit at index key of str, a flat string, into
@@ -7272,6 +7303,15 @@ func (c *compiler) charCell(v *ssa.Value, guard func(amd64.Cond)) {
 // index past its end, and reports whether the code goes on. It uses
 // scratchB and scratchC.
 func (c *compiler) stringUnit(v, str, key *ssa.Value, guard func(amd64.Cond)) bool {
+	return c.stringUnitPast(v, str, key, guard, nil)
+}
+
+// stringUnitPast is stringUnit, an index past the string's end going to
+// past, if not nil, the string in scratchC and the index in scratchA.
+func (c *compiler) stringUnitPast(v, str, key *ssa.Value, guard, past func(amd64.Cond)) bool {
+	if past == nil {
+		past = guard
+	}
 	if !c.reference(v, str, c.enc.String, guard) {
 		return false
 	}
@@ -7281,7 +7321,7 @@ func (c *compiler) stringUnit(v, str, key *ssa.Value, guard func(amd64.Cond)) bo
 	c.index(key, guard)
 	c.a.Load(scratchB, scratchC, c.enc.StringLength)
 	c.a.Op(amd64.Cmp, scratchA, scratchB, true)
-	guard(amd64.CondAE)
+	past(amd64.CondAE)
 	units, done := c.a.NewLabel(), c.a.NewLabel()
 	c.a.LoadU8(scratchB, scratchC, c.enc.StringASCII)
 	c.a.Op(amd64.Test, scratchB, scratchB, false)

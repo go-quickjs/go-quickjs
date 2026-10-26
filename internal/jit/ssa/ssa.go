@@ -165,7 +165,9 @@ const (
 	OpStringCode // tagged callee, tagged string, f64 index -> f64
 	// OpStringChar is s[i], an element read of a string: the cell of the
 	// runtime's string of the code unit at an index of a flat string
-	// (abi.Context.CharStrings), if it is below 256, which no store writes.
+	// (abi.Context.CharStrings), if it is below 256, which no store writes;
+	// at an index past its end, the undefined cell, where Go says nothing up
+	// String.prototype's chain has the index (GoStringAbsent).
 	OpStringChar // tagged string, f64 index -> source
 	// OpCodeChar is String.fromCharCode(c) once its function is checked:
 	// the cell of the runtime's string of code unit c, if it is an integer

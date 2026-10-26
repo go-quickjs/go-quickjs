@@ -1413,6 +1413,12 @@ type GoOp uint8
 // no index, the first operand its pointer word, the key its number word;
 // the read is then from Encoding's UndefinedCell.
 //
+// GoStringAbsent is a string's element read (OpStringChar) at an index
+// past the string's end: Go says whether it is undefined with nothing to
+// ask, String.prototype and its chain holding no element and no index,
+// the first operand the string's pointer word, the key its number word;
+// the read is then from Encoding's UndefinedCell, as GoElemCell's is.
+//
 // GoConcat is concat (ir.StringConcat): Go converts its Argc operands to
 // strings and joins them, as GoAdd adds; what could run code or throw it
 // leaves to an exit, after which Go makes it.
@@ -1587,6 +1593,7 @@ const (
 	GoLeaf
 	GoArgument
 	GoHost
+	GoStringAbsent
 )
 
 // GoArgument is arguments[k] in a function's own code (ir.ArgumentRead

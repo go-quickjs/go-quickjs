@@ -3765,6 +3765,9 @@ func jitHostCall(ctx *abi.Context) bool {
 	case ssa.GoElemCell:
 		o := *(**Object)(unsafe.Pointer(&ctx.GoArgs[0].Ref))
 		return o != nil && jitElemAbsent(o, math.Float64frombits(ctx.GoArgs[1].Num))
+	case ssa.GoStringAbsent:
+		s := *(**String)(unsafe.Pointer(&ctx.GoArgs[0].Ref))
+		return s != nil && r.jitStringAbsent(s, math.Float64frombits(ctx.GoArgs[1].Num))
 	case ssa.GoIndexOf:
 		// A search of a string or an array (jitSearch), what it searches
 		// for, and its position if the call gives one.
@@ -5168,6 +5171,27 @@ func jitElemAbsent(o *Object, n float64) bool {
 		}
 	}
 	return true
+}
+
+// jitStringAbsent reports whether s[n] is undefined with nothing to ask
+// (ssa.GoStringAbsent): n an index at or past s's end, which the string
+// has no character at, and neither String.prototype -- the realm's, a
+// wrapper of the empty string -- nor anything up its chain, each an
+// ordinary object or array, has an element or an index of its own, as
+// jitElemAbsent asks of an array's chain. As V8 loads an index past a
+// string's end in its code once its feedback has met one, under its
+// NoElementsProtector: a tokenizer's read one past its text's end,
+// PDF.js's Type1 header's, had left native code at each.
+func (r *Runtime) jitStringAbsent(s *String, n float64) bool {
+	i := uint32(n)
+	if float64(i) != n || i == math.MaxUint32 || int64(i) < int64(s.length) {
+		return false
+	}
+	p := r.proto.str
+	if p == nil || p.flags&(objHasSparseElements|objMappedArguments) != 0 || len(p.elemsOf()) != 0 || !p.noIndexKeys() {
+		return false
+	}
+	return p.proto == nil || jitElemAbsent(p.proto, n)
 }
 
 // jitCloseRetired closes the retired code no call of Go is suspended in.

@@ -6332,12 +6332,37 @@ func (c *a64Compiler) stringCode(v *ssa.Value, guard func(arm64.Cond)) {
 	c.setF(v, a64F0)
 }
 
-// stringChar is s[i] (ssa.OpStringChar), as amd64's.
+// stringChar is s[i] (ssa.OpStringChar), as amd64's: past the string's
+// end, the undefined cell where Go says so (ssa.GoStringAbsent).
 func (c *a64Compiler) stringChar(v *ssa.Value, guard func(arm64.Cond)) {
-	if !c.stringUnit(v, v.Args[0], v.Args[1], guard) {
+	var past func(arm64.Cond)
+	done := arm64.Label(0)
+	if c.enc.CallGo != 0 && c.enc.UndefinedCell != 0 {
+		slow, stub := c.a.NewLabel(), c.stubLabel(v.State, exitKind(v.Aux))
+		done = c.a.NewLabel()
+		past = func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+		c.cold = append(c.cold, func() {
+			// The string in C, its index in A (stringUnitAt).
+			c.a.Bind(slow)
+			size := int32(unsafe.Sizeof(abi.GoArg{}))
+			c.a.Store(a64Ctx, abi.OffGoArgs+c.enc.RefOffset, a64C)
+			c.a.Scvtf(a64F0, a64A, true)
+			c.a.FMovFromF(a64A, a64F0)
+			c.a.Store(a64Ctx, abi.OffGoArgs+size+c.enc.NumOffset, a64A)
+			c.goSaving(uint64(ssa.GoStringAbsent), &stub)
+			c.movImm(a64A, c.enc.UndefinedCell)
+			c.a.B(done)
+		})
+	}
+	if !c.reference(v, v.Args[0], c.enc.String, guard) {
 		return
 	}
-	c.charCell(v, guard)
+	c.stringUnitPast(v.Args[1], guard, past, c.stubLabel(v.State, exitKind(v.Aux)))
+	c.charAddr(v, guard)
+	if done != 0 {
+		c.a.Bind(done)
+	}
+	c.setG(v, a64A)
 }
 
 // codeChar is String.fromCharCode(c) (ssa.OpCodeChar), as amd64's.
@@ -6420,13 +6445,18 @@ func (c *a64Compiler) freeze(v *ssa.Value) {
 // charCell is the cell of the runtime's string of the code unit in A,
 // below 256, as amd64's.
 func (c *a64Compiler) charCell(v *ssa.Value, guard func(arm64.Cond)) {
+	c.charAddr(v, guard)
+	c.setG(v, a64A)
+}
+
+// charAddr is charCell's cell, in A.
+func (c *a64Compiler) charAddr(v *ssa.Value, guard func(arm64.Cond)) {
 	c.a.CmpImm(a64A, 256, true)
 	guard(arm64.HS)
 	c.a.Load(a64B, a64Ctx, abi.OffCharStrings)
 	c.a.Cbz(a64B, c.stubLabel(v.State, exitKind(v.Aux)), true)
 	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
 	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
-	c.setG(v, a64A)
 }
 
 // stringUnit reads the code unit at index key of str, a flat string, into
@@ -6442,12 +6472,21 @@ func (c *a64Compiler) stringUnit(v, str, key *ssa.Value, guard func(arm64.Cond))
 // stringUnitAt is stringUnit once the string is in C, failing at fail, as
 // guard does.
 func (c *a64Compiler) stringUnitAt(key *ssa.Value, guard func(arm64.Cond), fail arm64.Label) {
+	c.stringUnitPast(key, guard, nil, fail)
+}
+
+// stringUnitPast is stringUnitAt, an index past the string's end going to
+// past, if not nil, the string in C and the index in A.
+func (c *a64Compiler) stringUnitPast(key *ssa.Value, guard, past func(arm64.Cond), fail arm64.Label) {
+	if past == nil {
+		past = guard
+	}
 	c.a.Load(a64B, a64C, c.enc.StringLeft)
 	c.a.Cbnz(a64B, fail, true)
 	c.index(key, guard)
 	c.a.Load(a64B, a64C, c.enc.StringLength)
 	c.a.Cmp(a64A, a64B, true)
-	guard(arm64.HS)
+	past(arm64.HS)
 	units, done := c.a.NewLabel(), c.a.NewLabel()
 	c.a.LoadU8(a64B, a64C, c.enc.StringASCII)
 	c.a.Cbz(a64B, units, false)

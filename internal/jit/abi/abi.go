@@ -1030,7 +1030,7 @@ type Encoding struct {
 	CanonicalNaN uint64
 	// UndefinedCell is the address of a value that is undefined, which
 	// nothing writes: the cell of an element a read finds absent, where
-	// nothing up the chain has it (ssa.GoElemCell).
+	// nothing up the chain has it (ssa.GoElemCell, GoStringAbsent).
 	UndefinedCell uint64
 	// Object is every object's number word: its pointer word tells objects
 	// apart.

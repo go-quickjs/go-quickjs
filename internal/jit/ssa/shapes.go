@@ -67,7 +67,7 @@ func changesShapes(v *Value) bool {
 // computes, reads, or makes something new, and runs no code.
 func shapeSafeGo(op GoOp) bool {
 	switch op {
-	case GoAdd, GoRefill, GoPow, GoMath, GoAtan2, GoHypot, GoMod, GoTypedRead, GoElemCell, GoConcat, GoIndex, GoAppend,
+	case GoAdd, GoRefill, GoPow, GoMath, GoAtan2, GoHypot, GoMod, GoTypedRead, GoElemCell, GoStringAbsent, GoConcat, GoIndex, GoAppend,
 		GoCompare, GoRandom, GoNumber, GoEqual, GoCells, GoHas, GoClosure, GoIndexOf, GoNewArray, GoArith, GoBigString, GoArgument:
 		return true
 	}
