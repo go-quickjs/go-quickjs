@@ -318,6 +318,11 @@ type Runtime struct {
 	// JIT to know them by (jitPlainSet). At the end, so that no field the
 	// interpreter reads moves.
 	leafFns []*Object
+	// thisCells hold the this bindings of derived constructors' frames
+	// that no closure or eval can capture, by the frame's depth
+	// (constructTree): each construction of such a class had allocated
+	// one. At the end, so that no field the interpreter reads moves.
+	thisCells []thisBinding
 	// jitFields is the optional native tier's state, empty in builds
 	// without it. It comes after everything the interpreter reads, so that
 	// a build with the tier moves none of their offsets, and before the last

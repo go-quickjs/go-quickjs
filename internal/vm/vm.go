@@ -3858,6 +3858,8 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 			}
 			if !done && fd.treeCall != nil {
 				res, err = r.callTreeWith(o, fd, fd.treeCall, this, args, newTarget, false)
+			} else if !done && fd.treeNew {
+				res, err = constructTree(r, o, fd, this, args, newTarget)
 			} else if !done {
 				res, err = r.runFD(fd.closure, this, args, newTarget, o, fd)
 				if err == errNoSuper {
@@ -3865,6 +3867,9 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 				}
 				if !fd.treePlanned {
 					planTreeCall(fd)
+				}
+				if !fd.newPlanned {
+					planTreeNew(fd)
 				}
 			}
 		}
@@ -4553,12 +4558,26 @@ func (r *Runtime) superCall(f *frame, args []Value) error {
 	// would build a second object for the one already made here, so its own
 	// instance initializer is run on the way in. A derived parent runs its own
 	// in its own super().
-	if pfd := parent.fn(); pfd != nil && pfd.ctorKind != ctorDerived {
+	pfd := parent.fn()
+	if pfd != nil && pfd.ctorKind != ctorDerived {
 		if err := r.initInstanceElements(parent, f.this); err != nil {
 			return err
 		}
 	}
-	res, err := r.callObject(parent, f.this, args, newTarget)
+	var res Value
+	var err error
+	if pfd != nil && pfd.treeNew && pfd.closure.realm == r.Realm {
+		// A compiled constructor of this realm is constructed on its tree,
+		// as a new of it is: nothing else callObject asks applies.
+		if err = r.tick(); err == nil {
+			res, err = constructTree(r, parent, pfd, f.this, args, newTarget)
+		}
+	} else {
+		res, err = r.callObject(parent, f.this, args, newTarget)
+		if pfd != nil && !pfd.newPlanned && err == nil {
+			planTreeNew(pfd)
+		}
+	}
 	if err != nil {
 		return err
 	}

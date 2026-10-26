@@ -1604,6 +1604,13 @@ type funcData struct {
 	// (callTreeWith), which callTree does not: one that ends in a tail
 	// call, or an arrow; see planTreeCall.
 	treeRest bool
+	// treeNew marks a constructor whose constructions are made on its tree
+	// (constructTree), as treeCall's calls are: a class's, which a call
+	// refuses, and a pure body's, which pureCall answers calls of but no
+	// construction; see planTreeNew. It is in the padding after the flags.
+	treeNew bool
+	// newPlanned records that planTreeNew has decided about the function.
+	newPlanned bool
 
 	// extra is what only some functions have -- an arrow's surroundings, a
 	// bound function's target, the scopes of one made inside a `with` body
