@@ -1419,12 +1419,11 @@ func (r *Runtime) setPropCached(c *propCache, o *Object, key Atom, v Value, stri
 		if o.shape == before && r.fillSetterCache(c, o, key, before) {
 			return nil
 		}
-		if r.fillStoreCache(c, o, before, key); c.shape != before && c.fills < maxCacheFills {
-			// A write no cache holds -- an addition past more prototypes
-			// than a cache keeps, as Typescript's classes' objects have --
-			// counts as a fill too, so that the site gives up asking: it
-			// had walked the chain again at every write, after the write's
-			// own walk.
+		if fillStoreAt(r, c, o, before, key) {
+			// A write no cache holds -- an addition past a chain no cell
+			// can be kept for -- counts as a fill too, so that the site
+			// gives up asking: it had walked the chain again at every write,
+			// after the write's own walk.
 			c.fills++
 		}
 	}
@@ -1446,7 +1445,10 @@ func (r *Runtime) storeCached(c *propCache, o *Object, key Atom, v Value) (bool,
 	if c.next == setterNext {
 		return r.cachedSetter(c, o, key, v)
 	}
-	if c.adds(o) || c.cell != nil && c.cell.valid && o.proto == c.p1 && o.flags&objExtensible != 0 {
+	// adds's test, an entry of a chain longer than an entry holds
+	// (fillChainStore) answered by the chain's cell.
+	if o.flags&objExtensible != 0 && o.proto == c.p1 && (c.p1 == nil || c.p1.shape == c.s1 && c.p1.proto == c.p2 || c.cell != nil && c.cell.valid) &&
+		(c.p2 == nil || c.p2.shape == c.s2 && c.p2.proto == nil) {
 		if verifyShapes {
 			r.verifyStoreCache(c, o, key)
 		}
@@ -1459,11 +1461,7 @@ func (r *Runtime) storeCached(c *propCache, o *Object, key Atom, v Value) (bool,
 // adds reports whether the property a write cache says is added may be
 // added to o, which has the shape the cache remembers: o is extensible, and
 // its prototype chain is the one found to have no setter or read-only
-// property of the name to intercept the write. An entry for a chain longer
-// than it holds, which its validity cell answers for (fillChainStore), it
-// refuses -- its p1 is no prototype of s1's shape -- and storeCached
-// answers: a pure body's write and a leaf's (pureCallAt, leafStores),
-// which ask only this, leave such an addition to the ordinary write.
+// property of the name to intercept the write.
 func (c *propCache) adds(o *Object) bool {
 	return o.flags&objExtensible != 0 && o.proto == c.p1 && (c.p1 == nil || c.p1.shape == c.s1 && c.p1.proto == c.p2) &&
 		(c.p2 == nil || c.p2.shape == c.s2 && c.p2.proto == nil)
@@ -1588,8 +1586,6 @@ func (r *Runtime) fillStoreCache(c *propCache, o *Object, before *shape, key Ato
 				// Deeper than the cache holds: noted for the JIT's code.
 				jitNoteDeepAdd(c, before, next, o.proto)
 			}
-			// Remembered by the chain's validity cell instead.
-			fillChainStore(r, c, o, before, next, key)
 			return
 		}
 		if r.ensureProtoShape(p) == nil || !shapeClass(p.class) || synthesized(p.class, key) || !passesWrite(p, key) {

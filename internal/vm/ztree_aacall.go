@@ -33,6 +33,18 @@ var (
 	// else.
 	callOperandsN func(op bytecode.Op, f tval, args []tval, p, pc int) tval
 
+	// methodCallAny is the method call node b.methodCall builds:
+	// methodCallN's, for up to three arguments, or methodCall's. The
+	// builder calls it where it had called methodCall, so that it is as
+	// long as it was, as is callAll calling callOperandsAny: the code of
+	// the package's functions laid out after them, and the closures, stay
+	// where they were (AGENTS.md).
+	methodCallAny func(recv tentry, get bytecode.Instr, gpc int, args []tval, p, pc int) tval
+
+	// callOperandsAny is the call node callAll builds: callOperandsN's, or
+	// callOperands's.
+	callOperandsAny func(op bytecode.Op, f tval, args []tval, p, pc int) tval
+
 	// callApply calls fv with recv as this and the arguments as, in their
 	// slots, as callOperands's node calls it once it has found fv no
 	// function planTreeCall has given a tree.
@@ -68,6 +80,20 @@ var (
 )
 
 func init() {
+	methodCallAny = func(recv tentry, get bytecode.Instr, gpc int, args []tval, p, pc int) tval {
+		if node := methodCallN(recv, get, gpc, args, p, pc); node != nil {
+			return node
+		}
+		return methodCall(recv, get, gpc, args, p, pc)
+	}
+
+	callOperandsAny = func(op bytecode.Op, f tval, args []tval, p, pc int) tval {
+		if node := callOperandsN(op, f, args, p, pc); node != nil {
+			return node
+		}
+		return callOperands(op, f, args, p, pc)
+	}
+
 	restCall = func(c *tctx, o *Object, fd *funcData, this Value, as []Value) (Value, bool) {
 		cl := fd.closure
 		fn := cl.fn

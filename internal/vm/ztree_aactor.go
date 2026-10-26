@@ -45,6 +45,35 @@ var (
 	// has made the interrupt check: what runFD would do, on the function's
 	// tree.
 	constructTree func(r *Runtime, o *Object, fd *funcData, this Value, args []Value, newTarget Value) (Value, error)
+
+	// constructRun is constructWithTarget's construction of a compiled
+	// constructor planTreeCall gave no tree's call: constructTree's where
+	// planTreeNew allows it, runFD's otherwise, which it plans after.
+	// constructWithTarget calls it where it had called runFD, and asks
+	// what it asked after, so that it is as long as it was: the code of
+	// the package's functions laid out after it, the hot ones among them,
+	// stays where it was (AGENTS.md).
+	constructRun func(r *Runtime, this Value, args []Value, newTarget Value, o *Object, fd *funcData) (Value, error)
+
+	// superConstruct is super()'s construction of its parent in frame f,
+	// with f's object as this and new.target, after the parent's instance
+	// initializer: constructTree's where planTreeNew allows it,
+	// callObject's otherwise, which it plans after. superCall calls it
+	// where it had called callObject, for the same reason; the frame
+	// rather than its this, which keeps superCall's code as long as it was.
+	superConstruct func(r *Runtime, parent *Object, f *frame, args []Value, newTarget Value) (Value, error)
+
+	// constructNativeAt is constructWithTarget's construction by a
+	// built-in: a native leaf whose construction is its call
+	// (elemNewFirst...) applied without a frame where new.target is the
+	// built-in itself, and constructNative otherwise, where it had called
+	// constructNative.
+	constructNativeAt func(r *Runtime, o *Object, args []Value, newTarget Value, derived bool) (Value, error)
+
+	// setArrayCtor records the realm's Array constructor, made by
+	// initArrayBuiltins, and declares its native leaf (elemArrayNew), in
+	// place of the store initArrayBuiltins had made.
+	setArrayCtor func(r *Runtime, ctor *Object)
 )
 
 func init() {
@@ -56,6 +85,52 @@ func init() {
 			return n >= 0 && n <= math.MaxUint32 && n == math.Trunc(n)
 		}
 		return true
+	}
+
+	setArrayCtor = func(r *Runtime, ctor *Object) {
+		r.proto.arrayCtor = ctor
+		setElemOp(r, ctor, elemArrayNew)
+	}
+
+	constructNativeAt = func(r *Runtime, o *Object, args []Value, newTarget Value, derived bool) (Value, error) {
+		fd := o.fn()
+		if op := fd.elemOp; op >= elemNewFirst && !derived && r.meter == nil &&
+			(fd.realm == nil || fd.realm == r.Realm) && leafChecks[op](r, Undefined, args) {
+			// A leaf whose construction is its call, by new.target itself:
+			// applied without a frame, as its call is.
+			if v, err := fd.native(r, Undefined, args); err == nil {
+				return v, nil
+			}
+		}
+		return r.constructNative(o, args, newTarget, derived)
+	}
+
+	constructRun = func(r *Runtime, this Value, args []Value, newTarget Value, o *Object, fd *funcData) (Value, error) {
+		if fd.treeNew {
+			return constructTree(r, o, fd, this, args, newTarget)
+		}
+		v, err := r.runFD(fd.closure, this, args, newTarget, o, fd)
+		if !fd.newPlanned {
+			planTreeNew(fd)
+		}
+		return v, err
+	}
+
+	superConstruct = func(r *Runtime, parent *Object, f *frame, args []Value, newTarget Value) (Value, error) {
+		pfd, this := parent.fn(), f.this
+		if pfd != nil && pfd.treeNew && pfd.closure.realm == r.Realm {
+			// A compiled constructor of this realm is constructed on its
+			// tree, as a new of it is: nothing else callObject asks applies.
+			if err := r.tick(); err != nil {
+				return Undefined, err
+			}
+			return constructTree(r, parent, pfd, this, args, newTarget)
+		}
+		v, err := r.callObject(parent, this, args, newTarget)
+		if pfd != nil && !pfd.newPlanned && err == nil {
+			planTreeNew(pfd)
+		}
+		return v, err
 	}
 
 	planTreeNew = func(fd *funcData) {

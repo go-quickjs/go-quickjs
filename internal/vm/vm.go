@@ -3793,15 +3793,7 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 	// here -- and reading new.target's prototype now would be out of order: a
 	// built-in checks its arguments first, and the read is observable.
 	if fd.native != nil {
-		if op := fd.elemOp; op >= elemNewFirst && target == o && r.meter == nil &&
-			(fd.realm == nil || fd.realm == r.Realm) && leafChecks[op](r, Undefined, args) {
-			// A leaf whose construction is its call, by new.target itself:
-			// applied without a frame, as its call is.
-			if v, err := fd.native(r, Undefined, args); err == nil {
-				return v, nil
-			}
-		}
-		return r.constructNative(o, args, newTarget, target != o)
+		return constructNativeAt(r, o, args, newTarget, target != o)
 	}
 
 	// A function's own data property is what the read would find, and is
@@ -3866,18 +3858,13 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 			}
 			if !done && fd.treeCall != nil {
 				res, err = r.callTreeWith(o, fd, fd.treeCall, this, args, newTarget, false)
-			} else if !done && fd.treeNew {
-				res, err = constructTree(r, o, fd, this, args, newTarget)
 			} else if !done {
-				res, err = r.runFD(fd.closure, this, args, newTarget, o, fd)
+				res, err = constructRun(r, this, args, newTarget, o, fd)
 				if err == errNoSuper {
 					err = r.throwError(errReference, "%s", errNoSuper.Error())
 				}
 				if !fd.treePlanned {
 					planTreeCall(fd)
-				}
-				if !fd.newPlanned {
-					planTreeNew(fd)
 				}
 			}
 		}
@@ -4566,26 +4553,12 @@ func (r *Runtime) superCall(f *frame, args []Value) error {
 	// would build a second object for the one already made here, so its own
 	// instance initializer is run on the way in. A derived parent runs its own
 	// in its own super().
-	pfd := parent.fn()
-	if pfd != nil && pfd.ctorKind != ctorDerived {
+	if pfd := parent.fn(); pfd != nil && pfd.ctorKind != ctorDerived {
 		if err := r.initInstanceElements(parent, f.this); err != nil {
 			return err
 		}
 	}
-	var res Value
-	var err error
-	if pfd != nil && pfd.treeNew && pfd.closure.realm == r.Realm {
-		// A compiled constructor of this realm is constructed on its tree,
-		// as a new of it is: nothing else callObject asks applies.
-		if err = r.tick(); err == nil {
-			res, err = constructTree(r, parent, pfd, f.this, args, newTarget)
-		}
-	} else {
-		res, err = r.callObject(parent, f.this, args, newTarget)
-		if pfd != nil && !pfd.newPlanned && err == nil {
-			planTreeNew(pfd)
-		}
-	}
+	res, err := superConstruct(r, parent, f, args, newTarget)
 	if err != nil {
 		return err
 	}

@@ -283,10 +283,7 @@ func (b *tbuilder) methodCall(n int, m *methodOf, pc int) tval {
 	if lit.regexp && lit.slot < 0 {
 		return regexpArgMethodCall(recv, m.in, m.pc, args, b.depth()+1, pc, lit.k)
 	}
-	if node := methodCallN(recv, m.in, m.pc, args, b.depth()+1, pc); node != nil {
-		return node
-	}
-	return methodCall(recv, m.in, m.pc, args, b.depth()+1, pc)
+	return methodCallAny(recv, m.in, m.pc, args, b.depth()+1, pc)
 }
 
 // callAll builds call, call_method or new at pc of n arguments into
@@ -316,10 +313,6 @@ func (b *tbuilder) callAll(op bytecode.Op, n, pc int) bool {
 	if op == bytecode.OpCallMethod {
 		b.pop()
 	}
-	if node := callOperandsN(op, f, args, p, pc); node != nil {
-		b.push(node)
-		return true
-	}
-	b.push(callOperands(op, f, args, p, pc))
+	b.push(callOperandsAny(op, f, args, p, pc))
 	return true
 }

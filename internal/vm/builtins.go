@@ -945,8 +945,7 @@ func (r *Runtime) initArrayBuiltins() {
 		return Obj(rt.newArrayFrom(args)), nil
 	})
 
-	r.proto.arrayCtor = ctor
-	setElemOp(r, ctor, elemArrayNew)
+	setArrayCtor(r, ctor)
 
 	r.defMethod(ctor, "isArray", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		yes, err := rt.isArray(arg(args, 0))
