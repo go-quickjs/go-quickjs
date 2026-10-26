@@ -4554,7 +4554,7 @@ func (r *Runtime) superCall(f *frame, args []Value) error {
 	// instance initializer is run on the way in. A derived parent runs its own
 	// in its own super().
 	if pfd := parent.fn(); pfd != nil && pfd.ctorKind != ctorDerived {
-		if err := r.initInstanceElements(parent, f.this); err != nil {
+		if err := superInit(r, parent, f); err != nil {
 			return err
 		}
 	}

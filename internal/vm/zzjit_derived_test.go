@@ -425,8 +425,9 @@ func jitClassForTest(t *testing.T, r *Runtime, name string) *closure {
 }
 
 // One super() made twice, natively, its second time this bound
-// (mir's superGuards): the parent runs again, then it throws, as the
-// interpreter's super() does, the constructor catching it.
+// (mir's superGuards): Go constructs the parent's own object, then it
+// throws, as the interpreter's super() does, the constructor catching it;
+// the instance keeps what its first super() gave it ("a0"), as in Node.
 func TestJITDerivedNativeSuperTwice(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -444,7 +445,7 @@ func TestJITDerivedNativeSuperTwice(t *testing.T) {
 		rounds = append(rounds, `twice(100)`)
 	}
 	r := jitAgreesForTest(t, setup, rounds...)
-	if v, err := r.Run(compileForTest(t, `''+twice(100)`)); err != nil || v.String().Go() != `200:{"strength":"a1","k":2,"err":"ReferenceError: super() has already been called"}` {
+	if v, err := r.Run(compileForTest(t, `''+twice(100)`)); err != nil || v.String().Go() != `200:{"strength":"a0","k":2,"err":"ReferenceError: super() has already been called"}` {
 		t.Errorf("twice(100) = %q, %v", v.String().Go(), err)
 	}
 	// Its super() native, the second time left to Go, which throws.

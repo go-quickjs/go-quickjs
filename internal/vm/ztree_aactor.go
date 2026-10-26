@@ -70,6 +70,14 @@ var (
 	// constructNative.
 	constructNativeAt func(r *Runtime, o *Object, args []Value, newTarget Value, derived bool) (Value, error)
 
+	// superInit is super()'s instance initializer of a base parent, in
+	// frame f, run on f's object before the parent's body as runFD's
+	// construction of it would -- where super() has not bound this yet: a
+	// second super()'s parent makes an object of its own, which
+	// superConstruct's construction initializes. superCall calls it where
+	// it had called initInstanceElements.
+	superInit func(r *Runtime, parent *Object, f *frame) error
+
 	// setArrayCtor records the realm's Array constructor, made by
 	// initArrayBuiltins, and declares its native leaf (elemArrayNew), in
 	// place of the store initArrayBuiltins had made.
@@ -85,6 +93,20 @@ func init() {
 			return n >= 0 && n <= math.MaxUint32 && n == math.Trunc(n)
 		}
 		return true
+	}
+
+	superInit = func(r *Runtime, parent *Object, f *frame) error {
+		if f.thisRef.init {
+			return nil
+		}
+		// initInstanceElements, written out: a class without fields or
+		// private methods has no initializer, the common case.
+		fd := parent.fn()
+		if fd == nil || fd.fieldInit == nil {
+			return nil
+		}
+		_, err := r.callObject(fd.fieldInit, f.this, nil, Undefined)
+		return err
 	}
 
 	setArrayCtor = func(r *Runtime, ctor *Object) {
@@ -117,6 +139,17 @@ func init() {
 	}
 
 	superConstruct = func(r *Runtime, parent *Object, f *frame, args []Value, newTarget Value) (Value, error) {
+		if f.thisRef.init {
+			// A second super(): the parent's [[Construct]] with new.target
+			// makes an object of its own and runs the parent on it, its
+			// fields included (superInit left them to it), and only then is
+			// binding this an error (BindThisValue); the object the first
+			// super() bound is left as it is.
+			if _, err := r.constructWithTarget(Obj(parent), args, newTarget); err != nil {
+				return Undefined, err
+			}
+			return Undefined, r.throwError(errReference, "super() has already been called")
+		}
 		pfd, this := parent.fn(), f.this
 		if pfd != nil && pfd.treeNew && pfd.closure.realm == r.Realm {
 			// A compiled constructor of this realm is constructed on its
