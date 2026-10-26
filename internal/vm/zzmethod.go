@@ -283,6 +283,9 @@ func (b *tbuilder) methodCall(n int, m *methodOf, pc int) tval {
 	if lit.regexp && lit.slot < 0 {
 		return regexpArgMethodCall(recv, m.in, m.pc, args, b.depth()+1, pc, lit.k)
 	}
+	if node := methodCallN(recv, m.in, m.pc, args, b.depth()+1, pc); node != nil {
+		return node
+	}
 	return methodCall(recv, m.in, m.pc, args, b.depth()+1, pc)
 }
 
