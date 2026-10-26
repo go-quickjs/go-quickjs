@@ -285,8 +285,10 @@ three fresh-process runs (lower is better).
 - On six of Octane's fifteen the JIT is level with the interpreter or
   behind it: level on Richards, CodeLoad and Typescript, behind on
   DeltaBlue (24%), RegExp (17%) and RayTrace (5%). Octane's fixed work is
-  one run of each benchmark, so compiling counts. Why DeltaBlue and RegExp
-  take longer is not yet explained.
+  one run of each benchmark, so compiling counts: DeltaBlue's 16 compiles
+  take about 2.5 ms of its 8.5, and RegExp's run blocks were compiled
+  two and three times, their calls of a captured closure learned at
+  exits (since `f877a6e`, once).
 
 ### Micro-benchmarks
 

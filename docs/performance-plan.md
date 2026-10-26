@@ -1164,8 +1164,94 @@ each binary's own first run: Gameboy, whose first run takes 330 to 350
 ms, was run 10 times on one side and 3 on the other, its warm-up
 weighing three times as much on one (+19% in the suite, +48% alone);
 given 10 runs on both, -1.6%. The runs are picked once now, for both
-labels, by the first run that times a benchmark (`repsTable`). The VM's own tests pass under `QJS_JIT_STRESS` since
-`9bda4ec`, which CI runs.
+labels, by the first run that times a benchmark (`repsTable`). The VM's
+own tests pass under `QJS_JIT_STRESS` since `9bda4ec`, which CI runs.
+
+The round of 2026-10-26 (`36cd021`..`7b3754a`, against `fb48e4f`; four Go
+code placements, `placements compare -parallel` for the suites, the
+micro-benchmarks on each placement's binary, the least of three):
+
+- **Why the JIT trailed the interpreter on six of Octane's benchmarks**:
+  in one run it spent its gain compiling. Richards makes 12 compiles,
+  2.4 to 3.3 ms of its 5; Typescript 766 of 464 functions, about 60% of
+  them again, 38% of its CPU; CodeLoad compiles nothing, its time is
+  parsing. Recompiles that need not have been: a shape another came from
+  dropped from a read's cases while there was room (`8f32baa`;
+  Typescript's `bindSymbol` deoptimized at 9 sites in turn), a call of a
+  captured closure and a function's calls of itself not decided at the
+  caller's compile (`f877a6e`, `10879b1`; RegExp's recompiles 2 -> 0,
+  zlib's 13 -> 5, EarleyBoyer's 17 -> 8), and a long callee warming up
+  called through Go rather than its link (`1e66601`). Deciding more calls
+  made more of PdfJS native, which met three exits at every call: a
+  string's read past its end, a call target learned after the compile
+  (code that leaves for it twice is invalidated now, as V8 deoptimizes
+  on a wrong target) and `String.fromCharCode` past Latin-1 (`51c53e7`,
+  `bc75633`, `c2591b3`): PdfJS's exits 5,006 -> 3,057, Octane's 34,952 ->
+  31,865, Are We Fast Yet's 8,306 -> 5,748. Octane's recompiles 586 ->
+  470.
+- **The interpreter's calls and allocation** (`8174354`..`6549b9f`): a
+  class's construction had been refused by the call planner, so every
+  `new` of a class went through `runFD` (Havlak 3,308,370 a run -> 481);
+  additions past a long prototype chain are cached by the chain's cell
+  (writes through `deepStore`: DeltaBlue 155,868 -> 0, Havlak 1,304,840
+  -> 0); `super(a, b)` passes its arguments in place; calls of up to
+  three arguments as nodes of their own count (a two-argument method
+  call 215 -> 156 instructions to `callTree`), which call a tail-calling
+  function on its tree themselves; `Array(n)` a native leaf. Are We Fast
+  Yet allocates 4.9% less. What the round added to named functions is in
+  closures (`6549b9f`), every named function as long as the base's, so
+  that the hot ones keep their places; the closures sit 672 bytes later,
+  the new `init` code's. A second `super()` constructs the parent's own
+  object, its fields and body run on it, then throws (`09789cf`): the
+  instance made before the first had been given them again (`this.x` 2
+  where Node and QuickJS have 1, a private field's TypeError where they
+  throw the ReferenceError). A method read off a string or a number
+  in the method nodes is the primitives' table's (`7b3754a`):
+  String.prototype is a wrapper, which the shape caches leave out, so
+  every such read had gone the long way, in the base too
+  (`string_indexOf`'s node to `callRest` about 250 -> 192 instructions).
+
+Over four placements, against the base, in one session: without the
+JIT, V8 suite level, Are We Fast Yet -1.0% (Storage -6.5%, Towers
+-4.7%), Octane -1.2%; micro-benchmarks -0.2% by their geometric mean of
+159 (`math_imul` -15%, `math_min` -15%, `map_set_bigint` -13%,
+`string_indexOf` -9%). With the JIT, V8 suite +0.2%, Are We Fast Yet
+-0.7% (DeltaBlue -4.8%), Octane -3.2% (Box2D -30%, Typescript -4.8%,
+RayTrace -3.9%, RegExp -3.5%, PdfJS -1.8%); micro-benchmarks level. The
+same binaries of the base measured 1.5% faster on Are We Fast Yet in
+this session than in an earlier one, where the round's interpreter was
+-3.7% (Sieve -16.6%, Queens -7.8%); the last two commits, timed against
+the round without them, are +0.1% (`09789cf`) and +0.6% (`7b3754a`, at
+two placements slower and two faster). On the
+way: the nodes by count had sent every call not on a tree through a
+closure that asked again what the node had (`func_call` +12.9%,
+`method_call_leaf` +17.9% at every placement), and the chain cell's case
+had grown `pureCallAt`, moving every case after it; both are folded into
+the commits that made them.
+
+Open from it:
+
+- Storage with the JIT +1.7%, slower at three placements of four, is
+  placement: the same native code (its bytes differ only in 55 heap
+  pointers), the same Go instructions and allocations; the round's growth
+  of the JIT's packages moved `jitFillPool`, a third of its profile,
+  against `jit.goCall` and `newArrayObject`, and a pad file that moves
+  nothing but addresses brings it within 1% of the base at five shifts
+  (+10.5% unpadded, timed alone).
+- Without the JIT, `array_forEach` 37 -> 53 ns at two placements of four
+  and level at two, `math_clz32` 42-50 -> 50-54: the 64 bytes the last
+  two commits add before the closures, their paths unchanged.
+- With the JIT, `array_forEach` +30% and `array_some` -40% in a whole
+  run, level each run alone: where the code earlier tests compiled puts
+  theirs.
+- Compiling is still what a single run of Typescript or Richards spends
+  most on: 5 to 10 microseconds an instruction, the backend 45%,
+  optimization 25%, the build 23%; calls are 23% of Typescript's code,
+  keep cells 15%. V8's answer, compiling in the background, meets a
+  runtime's one goroutine.
+- `toInt32` is 20.7% of zlib's interpreted time, 870 million conversions
+  a run: QuickJS keeps small integers as integers; nested bitwise results
+  kept as int32 in the tree tier would need a second kind of value.
 
 Open from it:
 
