@@ -316,6 +316,10 @@ func (b *tbuilder) callAll(op bytecode.Op, n, pc int) bool {
 	if op == bytecode.OpCallMethod {
 		b.pop()
 	}
+	if node := callOperandsN(op, f, args, p, pc); node != nil {
+		b.push(node)
+		return true
+	}
 	b.push(callOperands(op, f, args, p, pc))
 	return true
 }
