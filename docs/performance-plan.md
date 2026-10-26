@@ -1163,8 +1163,8 @@ compare` picks the runs a benchmark shorter than a second is given from
 each binary's own first run: Gameboy, whose first run takes 330 to 350
 ms, was run 10 times on one side and 3 on the other, its warm-up
 weighing three times as much on one (+19% in the suite, +48% alone);
-given 10 runs on both, -1.6%. The runs should be picked once, for both
-labels. The VM's own tests pass under `QJS_JIT_STRESS` since
+given 10 runs on both, -1.6%. The runs are picked once now, for both
+labels, by the first run that times a benchmark (`repsTable`). The VM's own tests pass under `QJS_JIT_STRESS` since
 `9bda4ec`, which CI runs.
 
 Open from it:

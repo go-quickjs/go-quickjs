@@ -88,6 +88,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/go-quickjs/go-quickjs/internal/cmd/v8bench/internal/cpuset"
 )
@@ -386,6 +387,7 @@ func compareCmd(args []string) error {
 		}
 	}
 	var names []string
+	var reps repsTable
 	add := func(l, i int, got []named) {
 		for _, nv := range got {
 			if !slices.Contains(names, nv.name) {
@@ -398,7 +400,7 @@ func compareCmd(args []string) error {
 		for i, n := range ns {
 			if !*parallel {
 				for l := range labels {
-					got, err := runPlacement(exePath(*out, labels[l], n), *dir, *bench, *suite, n, *jitEnabled, nil)
+					got, err := runPlacement(exePath(*out, labels[l], n), *dir, *bench, *suite, n, *jitEnabled, nil, &reps)
 					if err != nil {
 						return err
 					}
@@ -414,7 +416,7 @@ func compareCmd(args []string) error {
 			for l := range labels {
 				g := groups[(l+i+round)%2]
 				go func() {
-					got[l], errs[l] = runPlacement(exePath(*out, labels[l], n), *dir, *bench, *suite, n, *jitEnabled, g)
+					got[l], errs[l] = runPlacement(exePath(*out, labels[l], n), *dir, *bench, *suite, n, *jitEnabled, g, &reps)
 					done <- struct{}{}
 				}()
 			}
@@ -479,11 +481,39 @@ type named struct {
 	ms   float64
 }
 
+// repsTable is how many runs each benchmark is given again, decided once
+// for a comparison: by the first run that timed it, of whichever label and
+// placement, and kept for every other. A benchmark whose one run is near a
+// boundary of repeats would otherwise be run 10 times by one label and 3
+// by the other, and one whose first runs warm up -- Octane's Gameboy,
+// about 231 ms a run over 3 and 150 over 10 -- compared by how its warm-up
+// weighs, not by its speed.
+type repsTable struct {
+	mu   sync.Mutex
+	reps map[string]int
+}
+
+// of is the runs name is given again, decided by ms, its one run, if no
+// run has decided it yet.
+func (t *repsTable) of(name string, ms float64) int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.reps == nil {
+		t.reps = map[string]int{}
+	}
+	r, ok := t.reps[name]
+	if !ok {
+		r = repsFor(ms)
+		t.reps[name] = r
+	}
+	return r
+}
+
 // runPlacement runs one build and reads its times, in milliseconds a run,
 // in the order it printed them, then the total of theirs: every benchmark
-// once, then those shorter than longRun again, in a process for each of
+// once, then those reps says are short again, in a process for each of
 // repeats that one needs. On cpus, if any, with GOMAXPROCS as many.
-func runPlacement(exe, dir, bench, suite string, n int, jitEnabled bool, cpus cpuset.Set) ([]named, error) {
+func runPlacement(exe, dir, bench, suite string, n int, jitEnabled bool, cpus cpuset.Set, reps *repsTable) ([]named, error) {
 	run := func(reps int, only string) ([]named, error) {
 		args := []string{"-dir", dir, "-n", strconv.Itoa(reps)}
 		if bench != "" {
@@ -527,16 +557,16 @@ func runPlacement(exe, dir, bench, suite string, n int, jitEnabled bool, cpus cp
 	// The short ones again, grouped by the runs each needs.
 	byReps := map[int][]string{}
 	for _, g := range got {
-		if reps := repsFor(g.ms); reps > 0 {
-			byReps[reps] = append(byReps[reps], g.name)
+		if r := reps.of(g.name, g.ms); r > 0 {
+			byReps[r] = append(byReps[r], g.name)
 		}
 	}
-	for _, reps := range repeats {
-		names := byReps[reps]
+	for _, r := range repeats {
+		names := byReps[r]
 		if len(names) == 0 {
 			continue
 		}
-		again, err := run(reps, strings.Join(names, ","))
+		again, err := run(r, strings.Join(names, ","))
 		if err != nil {
 			return nil, err
 		}

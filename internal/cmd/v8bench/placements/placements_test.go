@@ -35,3 +35,20 @@ func TestRepsFor(t *testing.T) {
 		}
 	}
 }
+
+// A benchmark's runs are decided by the first run that times it and kept
+// for every other, whichever label or placement it is: Gameboy's first run
+// of 330 ms by one label and 350 by the other must not give it 10 runs and
+// 3.
+func TestRepsDecidedOnce(t *testing.T) {
+	var reps repsTable
+	if got := reps.of("Gameboy", 330); got != 10 {
+		t.Fatalf("first run of 330 ms: %d runs, want 10", got)
+	}
+	if got := reps.of("Gameboy", 350); got != 10 {
+		t.Errorf("second label's run of 350 ms: %d runs, want the first's 10", got)
+	}
+	if got := reps.of("Richards", 4); got != 300 {
+		t.Errorf("another benchmark: %d runs, want its own 300", got)
+	}
+}
