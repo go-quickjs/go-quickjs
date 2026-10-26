@@ -3426,11 +3426,15 @@ func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 	}
 	if len(cl.fn.Code) > ssa.MaxInline && r.jitNativeCallee(cl) == nil && r.jitLongWarming(cl) {
 		// A long callee warming up (jitCalledOften): decided once it is
-		// compiled, or refused. Till then the call is Go's, from native
+		// compiled, or refused -- decided at an exit, a call has the code
+		// compiled again for it, which this one would need once more when
+		// the callee is compiled. Till then the call is Go's, from native
 		// code, and the callee's code, once it has some, called by its
-		// hint -- not through its link, which would leave native code
-		// at each call while it has none (ExitEnter): AWFY's Richards'
-		// schedule, 826 times a run, for runTask.
+		// hint. (A compile seeding the call makes it through the callee's
+		// link from the first, where Go may make it from native code while
+		// the link has no code, jitGoCallFits; where it may not, the call
+		// leaves native code at each call (ExitEnter): AWFY's Richards'
+		// schedule, 826 times a run, for runTask.)
 		e.callSites[pc] = jitCallWaiting
 		return
 	}
@@ -5851,9 +5855,19 @@ func (r *Runtime) jitSeedCalls(cl *closure, e *jitEntry, p *ir.Program) {
 			// (jitSeedCallee). How often it was called is not known: the
 			// tree tier may run a call without one (closure.jitCalls).
 			if ce = r.jitSeedCallee(callee); ce == nil {
-				if r.jitLinkable(callee) && (len(cf.Code) <= ssa.MaxInline || !r.jitLongWarming(callee)) {
-					// Not a long callee warming up: the call is Go's
-					// till it is compiled (jitCallSeen).
+				if r.jitLinkable(callee) && (len(cf.Code) <= ssa.MaxInline || !r.jitLongWarming(callee) || jitGoCallFits(in)) {
+					// Called through its link, which has no code yet: the
+					// call is Go's from native code till the callee is
+					// compiled, then native, the code calling whatever code
+					// its link holds, as V8's code calls a function's
+					// current code -- its interpreter's entry until it is
+					// optimized. So a long callee warming up, whose call is
+					// one of Go's operands can hold (jitGoCallFits), had
+					// been left to Go here, decided at the call's exits once
+					// it was compiled, and the caller compiled again for it:
+					// Typescript's compiler's methods, a few hundred
+					// instructions each, whose callers are compiled before
+					// they are.
 					e.nativeCalls = append(e.nativeCalls, r.jitNativeTarget(int32(pc), callee, o, in))
 					e.callSites[pc] = jitCallNative
 				}
@@ -5942,6 +5956,15 @@ func jitViaRead(op bytecode.Op) bool {
 		return true
 	}
 	return false
+}
+
+// jitGoCallFits reports whether native code that calls through a link
+// with no code may have Go make the call in, its operands -- a method's
+// receiver, the function and the arguments -- no more than a call of Go
+// takes (abi.MaxGoArgs), rather than leave native code at it (mir's
+// enterExit).
+func jitGoCallFits(in bytecode.Instr) bool {
+	return int(in.A)+2 <= abi.MaxGoArgs
 }
 
 // jitSeedDepth is how many compiles deep seeding a call's target may
