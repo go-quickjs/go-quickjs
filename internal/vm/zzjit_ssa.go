@@ -6111,8 +6111,10 @@ func (r *Runtime) jitSeenCallees(cl *closure, p *ir.Program, pc int, o *Object) 
 // found one plain data property on a prototype, or another's get_global,
 // whose cache found the global's, or get_prop of an object so read, a
 // namespace's constructor, new Flog.RayTracer.Vector(...), whose value now
-// is taken as V8 folds a constant's loads (jitChainValue) -- a function
-// jitCalled would take. Or nil. The call checks the function it calls.
+// is taken as V8 folds a constant's loads (jitChainValue), or a captured
+// binding's read, the function the binding holds now, as V8's code knows
+// a closure its context holds -- a function jitCalled would take. Or nil.
+// The call checks the function it calls.
 func (r *Runtime) jitCalleeAt(cl *closure, p *ir.Program, pc int) (*Object, *closure) {
 	o, _ := r.jitCalleeObjectAt(cl, p, pc)
 	if o == nil {
@@ -6141,8 +6143,14 @@ func (r *Runtime) jitCalleeObjectAt(cl *closure, p *ir.Program, pc int) (*Object
 			read = q
 			break
 		}
-		if d == slot+1 && op == bytecode.OpGetGlobal && fn.Code[q].Op == bytecode.OpGetProp {
-			// A property of an object read so, its value now.
+		if d == slot+1 && op == bytecode.OpGetGlobal && fn.Code[q].Op == bytecode.OpGetProp ||
+			d == slot && op == bytecode.OpGetGlobal && (fn.Code[q].Op == bytecode.OpGetUpvalue || fn.Code[q].Op == bytecode.OpGetUpvalueCheck) {
+			// A property of an object read so, its value now; or what a
+			// captured binding holds now: a module's functions, which call
+			// one another through the bindings of the scope they were made
+			// in, RegExp's Exec, called by each of runBlock0's two dozen
+			// loops, had been decided one call, at its exits, at a time,
+			// and the function compiled again for them.
 			v, ok := r.jitChainValue(cl, p, q, jitChainReads)
 			if !ok || !v.IsObject() {
 				return nil, -1
