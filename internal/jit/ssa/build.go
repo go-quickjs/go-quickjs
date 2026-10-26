@@ -3628,17 +3628,50 @@ func (b *builder) fromCharCode(pc int) (uintptr, bool) {
 // fromCharCodeCall makes the call of String.fromCharCode at pc, at address
 // fn: checked to call it, its argument an integer below 256, the result is
 // the runtime's string of that code unit (OpCodeChar), in the call's result
-// slot, with nothing made; anything else leaves for Go.
+// slot, with nothing made; anything else leaves for Go. In the function's
+// own code, where the call has a keep cell for its result, a number that is
+// another code -- a character past Latin-1, as a font's glyphs are -- Go
+// makes from native code, as V8's code makes a string of any code unit
+// (StringFromSingleCharCode): a call of Go of the leaf (GoLeaf) on a branch
+// of its own (split), native code going on after either. Leaving there,
+// PDF.js's Font.charToGlyph, whose characters are past 255, left native
+// code at each call, the interpreter finishing the rest of each.
 func (b *builder) fromCharCodeCall(blk *Block, pc int, fn uintptr, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
 	sp := b.cur.base + b.p.Locals + b.p.Maps[pc].Depth
-	object := guard(OpObjectOf, Ptr, ir.HostExit, b.read(sp-2, blk))
+	callee := b.read(sp-2, blk)
+	object := guard(OpObjectOf, Ptr, ir.HostExit, callee)
 	same := guard(OpSameObject, None, ir.HostExit, object)
 	same.Const = ir.Value{Bits: uint64(fn)}
-	code := guard(OpUnboxF64, Float64, ir.HostExit, b.read(sp-1, blk))
-	cell := guard(OpCodeChar, Source, ir.HostExit, code)
-	v := b.f.newValue(blk, OpLoadCell, Tagged, cell)
+	x := b.read(sp-1, blk)
+	code := guard(OpUnboxF64, Float64, ir.HostExit, x)
+	keep, kept := b.callKeeps[pc]
+	if b.cur != b.root || !kept || !b.goCalls() {
+		cell := guard(OpCodeChar, Source, ir.HostExit, code)
+		v := b.f.newValue(blk, OpLoadCell, Tagged, cell)
+		v.Shadow = cell
+		b.assign(sp-3, blk, v)
+		return
+	}
+	f := b.f
+	recv := b.read(sp-3, blk)
+	cell := f.newValue(blk, OpCodeCharOr, Source, code)
+	none := f.newValue(blk, OpCellNone, Bool, cell)
+	st := b.state(blk, pc)
+	miss, hit, _ := b.split(blk, none, true)
+	v := f.newValue(hit, OpLoadCell, Tagged, cell)
 	v.Shadow = cell
-	b.assign(sp-3, blk, v)
+	b.write(sp-3, hit, v)
+	call := f.newValue(miss, OpCall, Tagged, callee, recv, x)
+	f.cache(call).Calls = []*CallSite{{Go: GoLeaf, Argc: 1, Method: true, ThisSlot: -1}}
+	call.Aux, call.State, call.Index = int(ir.HostExit), st, keep
+	st.addUse()
+	kc := f.newValue(miss, OpCallCell, Source, call)
+	r := f.newValue(miss, OpKept, Tagged, kc, call)
+	r.Shadow = kc
+	b.write(sp-3, miss, r)
+	if b.hasCells() {
+		b.reloadAfterCall(miss)
+	}
 }
 
 // substring is the address of String.prototype.substring, slice, substr
@@ -4121,6 +4154,16 @@ func (b *builder) plan() error {
 		// here, which the entries, the blocks and the translation take, and
 		// the keep cell each one's result is kept in, taken now, as a
 		// literal's is: planning and building must agree.
+		if _, ok := b.fromCharCode(pc); ok && b.cur == b.root && b.inlined[pc] == nil && b.f.Keeps < b.f.keepLimit() && b.goCalls() {
+			// String.fromCharCode's, which native code makes itself but for
+			// a code past Latin-1, a call of Go's (fromCharCodeCall): its
+			// result's keep cell.
+			if b.calls == nil {
+				b.calls, b.callKeeps = map[int][]*CallSite{}, map[int]int{}
+			}
+			b.callKeeps[pc] = b.f.Keeps
+			b.f.Keeps++
+		}
 		if b.host(pc) && b.inlined[pc] == nil && b.f.Keeps < b.f.keepLimit() {
 			if calls := b.nativeCalls(pc); len(calls) != 0 {
 				if b.calls == nil {

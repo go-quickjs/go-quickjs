@@ -6371,6 +6371,24 @@ func (c *a64Compiler) codeChar(v *ssa.Value, guard func(arm64.Cond)) {
 	c.charCell(v, guard)
 }
 
+// codeCharOr is ssa.OpCodeCharOr, as amd64's. It uses A, B, F0 and F1.
+func (c *a64Compiler) codeCharOr(v *ssa.Value) {
+	none, done := c.a.NewLabel(), c.a.NewLabel()
+	fail := func(cond arm64.Cond) { c.a.BCond(cond, none) }
+	c.index(v.Args[0], fail)
+	c.a.CmpImm(a64A, 256, true)
+	fail(arm64.HS)
+	c.a.Load(a64B, a64Ctx, abi.OffCharStrings)
+	c.a.Cbz(a64B, none, true)
+	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
+	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	c.a.B(done)
+	c.a.Bind(none)
+	c.movImm(a64A, 0)
+	c.a.Bind(done)
+	c.setG(v, a64A)
+}
+
 // oddball is ssa.OpOddballF64, as amd64's. It uses A.
 func (c *a64Compiler) oddball(v *ssa.Value, fail func(arm64.Cond)) {
 	r := c.gpr(v.Args[0], a64B)
@@ -7394,6 +7412,8 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.substringChar(v)
 	case ssa.OpCodeChar:
 		c.codeChar(v, c.guardFor(v))
+	case ssa.OpCodeCharOr:
+		c.codeCharOr(v)
 	case ssa.OpLoopMark:
 		// As amd64's: abi.Context's Loop.
 		c.movImm(a64A, v.Const.Bits)

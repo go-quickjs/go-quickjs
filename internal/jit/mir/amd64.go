@@ -7205,6 +7205,21 @@ func (c *compiler) codeChar(v *ssa.Value, guard func(amd64.Cond)) {
 	c.charCell(v, guard)
 }
 
+// codeCharOr is ssa.OpCodeCharOr: codeChar's cell into v's register, or 0
+// for a code it has none for. It uses scratchA, scratchB, xScratch0 and
+// xScratch1.
+func (c *compiler) codeCharOr(v *ssa.Value) {
+	none, done := c.a.NewLabel(), c.a.NewLabel()
+	fail := func(cond amd64.Cond) { c.a.Jcc(cond, none) }
+	c.index(v.Args[0], fail)
+	c.charAddr(fail)
+	c.a.Jmp(done)
+	c.a.Bind(none)
+	c.movImm(scratchA, 0)
+	c.a.Bind(done)
+	c.setG(v, scratchA)
+}
+
 // oddball is ssa.OpOddballF64: v's operand's number, an oddball's as
 // ToNumber makes it -- NaN for undefined, 0 for null and false, 1 for true
 // -- into xScratch0 and v's register; anything else fails. It uses
@@ -8278,6 +8293,8 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.stringChar(v, c.guardFor(v))
 	case ssa.OpCodeChar:
 		c.codeChar(v, c.guardFor(v))
+	case ssa.OpCodeCharOr:
+		c.codeCharOr(v)
 	case ssa.OpSubstringChar:
 		c.substringChar(v)
 	case ssa.OpLoopMark:

@@ -531,6 +531,10 @@ const (
 	// the VM keeps alive: what a construction's receiver from a pool checks
 	// (CallSite's ProtoIndex and ProtoKey), for one the code does not make.
 	OpProtoIs // ptr -> none
+	// OpCodeCharOr is OpCodeChar's cell, or none (0) for a code it has no
+	// string of -- not an integer below 256 -- where a call of Go makes
+	// String.fromCharCode (a split): it never exits.
+	OpCodeCharOr // f64 code -> source
 )
 
 var opNames = [...]string{
@@ -554,7 +558,7 @@ var opNames = [...]string{
 	OpAndW: "andw", OpOrW: "orw", OpXorW: "xorw", OpShlW: "shlw", OpShrW: "shrw", OpSarW: "sarw", OpZextW: "zextw", OpSextW: "sextw",
 	OpAddU64: "addu64", OpSubU64: "subu64", OpMulU64: "mulu64", OpShlI64: "shli64", OpShlU64: "shlu64",
 	OpDivI64: "divi64", OpModI64: "modi64", OpDivU64: "divu64", OpModU64: "modu64", OpBigOfF64: "bigoff", OpPowI64: "powi64",
-	OpHolderCell: "holdercell", OpChainCheck: "chaincheck", OpProtoIs: "protois",
+	OpHolderCell: "holdercell", OpChainCheck: "chaincheck", OpProtoIs: "protois", OpCodeCharOr: "codecharor",
 }
 
 func (o Op) String() string {
