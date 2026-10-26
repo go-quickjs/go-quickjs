@@ -10027,6 +10027,18 @@ func (fb *jitFeedback) add(c *propCache) *ssa.PropertyAdd {
 	if c.shape == nil || c.shape == noShape || next.index == nil && int(next.n) > linearScanLimit {
 		return nil
 	}
+	if c.cell != nil {
+		// An addition past a chain longer than the entry holds, which it
+		// checks by the chain's cell (fillChainStore): compiled as the
+		// additions along such chains are, for each prototype as it is.
+		if !c.cell.valid {
+			return nil
+		}
+		if d, ok := fb.r.jitDeepAddFrom(c.shape, next, c.p1, next.key); ok {
+			return fb.deepAdd(d)
+		}
+		return nil
+	}
 	add := &ssa.PropertyAdd{From: uintptr(unsafe.Pointer(c.shape)), Next: uintptr(unsafe.Pointer(next)), Flags: uint8(next.flags)}
 	for i, h := range [2]struct {
 		p *Object
