@@ -603,8 +603,15 @@ const (
 	elemArrIndexOf
 	elemArrLastIndexOf
 	elemArrIncludes
+	// Native leaves a construction applies too, where new.target is the
+	// built-in itself (constructWithTarget): its call and its construction
+	// are the same, as Array's are. Array(...) and new Array(...).
+	elemArrayNew
 	elemLeafEnd
 )
+
+// elemNewFirst is the first native leaf a construction applies.
+const elemNewFirst = elemArrayNew
 
 // elemNativeFirst is the first native leaf's op. A call applies a native
 // leaf itself (leafChecks), never by pureElemOp.

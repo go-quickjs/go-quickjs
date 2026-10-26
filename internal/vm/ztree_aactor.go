@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"math"
 	"sync/atomic"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
@@ -47,6 +48,16 @@ var (
 )
 
 func init() {
+	// Array(...) and new Array(...) make an array and run nothing: of its
+	// arguments, or of a length, which only throws where it is not one.
+	leafChecks[elemArrayNew] = func(_ *Runtime, _ Value, args []Value) bool {
+		if len(args) == 1 && args[0].IsNumber() {
+			n := args[0].num
+			return n >= 0 && n <= math.MaxUint32 && n == math.Trunc(n)
+		}
+		return true
+	}
+
 	planTreeNew = func(fd *funcData) {
 		cl := fd.closure
 		if cl == nil || fd.native != nil || fd.bound {

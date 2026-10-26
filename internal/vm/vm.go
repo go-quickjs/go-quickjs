@@ -3793,6 +3793,14 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 	// here -- and reading new.target's prototype now would be out of order: a
 	// built-in checks its arguments first, and the read is observable.
 	if fd.native != nil {
+		if op := fd.elemOp; op >= elemNewFirst && target == o && r.meter == nil &&
+			(fd.realm == nil || fd.realm == r.Realm) && leafChecks[op](r, Undefined, args) {
+			// A leaf whose construction is its call, by new.target itself:
+			// applied without a frame, as its call is.
+			if v, err := fd.native(r, Undefined, args); err == nil {
+				return v, nil
+			}
+		}
 		return r.constructNative(o, args, newTarget, target != o)
 	}
 
