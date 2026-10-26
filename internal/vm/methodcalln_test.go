@@ -143,3 +143,70 @@ func TestCallNodesByCount(t *testing.T) {
 		t.Errorf("%d nodes built by count, want the run's", built)
 	}
 }
+
+// A call of a function whose frame may end in a tail call, or of an arrow,
+// which only callRest made on its tree (treeRest), is made by restCall from
+// the call nodes, without callRest's questions: methods ending in a call
+// of another, through a receiver in a local and one in a slot, recursions
+// through tail calls 100,000 deep -- past the depth a frame is given up
+// at, so that the call ends in errTailCall and tailFromTree makes the rest
+// -- mutual ones, an exception thrown in the tail call, an arrow's this,
+// and a sloppy body given a primitive this, which restCall leaves to
+// callRest. The answers are the interpreter's: Node and QuickJS make no
+// tail calls, and run out of stack.
+func TestRestCallFromNodes(t *testing.T) {
+	const src = `'use strict'
+		class T {
+			constructor(n) { this.n = n; this.hits = 0 }
+			run(x) { let k = 1; return this.step(x + k) }
+			step(x) { let k = 2; this.hits++; return x * k }
+			down(i) { let k = 0; if (i === 0) return this.hits + k; this.hits++; return this.down(i - 1) }
+			even(i) { let k = 0; if (i === 0) return true + k; return this.odd(i - 1) }
+			odd(i) { let k = 0; if (i === 0) return false + k; return this.even(i - 1) }
+			boom(x) { let k = 0; return this.thrower(x + k) }
+			thrower(x) { throw new RangeError('boom ' + x) }
+			arrowed() { let k = 3; const f = (y) => { let j = 1; return this.step(y + j + k) }; const r = []; for (let i = 0; i < 3; i++) r.push(f(i)); return r.join() }
+		}
+		function sloppyTail(x) { return String(this === undefined ? 'u' : typeof this) + x }
+		const holder = { s: function (x) { let k = 0; return sloppyTail.call(this, x + k) } }
+		function plainTail(a, b) { let k = 0; return Math.max(a, b + k) }
+		function run() {
+			const t = new T(1)
+			const r = []
+			const box = { t }
+			for (let i = 0; i < 3; i++) {
+				r.push(t.run(i), box.t.run(i), t.down(50), t.down(100000), t.even(100001), t.odd(7))
+				try { box.t.boom(i) } catch (e) { r.push(e.constructor.name + ':' + e.message) }
+				r.push(t.arrowed(), holder.s(i), plainTail(i, 2))
+			}
+			return r.join(' ')
+		}
+		run()`
+	const want = "2 2 52 100052 0 1 RangeError:boom 0 8,10,12 object0 2 4 4 100107 200107 0 1 RangeError:boom 1 8,10,12 object1 2 6 6 200162 300162 0 1 RangeError:boom 2 8,10,12 object2 2"
+	made := 0
+	orig := restCall
+	restCall = func(c *tctx, o *Object, fd *funcData, this Value, as []Value) (Value, bool) {
+		v, ok := orig(c, o, fd, this, as)
+		if ok {
+			made++
+		}
+		return v, ok
+	}
+	defer func() { restCall = orig }()
+	for _, tree := range []bool{true, false} {
+		previous := treeTier.Swap(tree)
+		r := New(Config{})
+		v, err := r.Run(compileForTest(t, src))
+		r.Close()
+		treeTier.Store(previous)
+		if err != nil {
+			t.Fatalf("tree %v: %v", tree, err)
+		}
+		if got := v.String().Go(); got != want {
+			t.Errorf("tree %v: got %s\nwant %s", tree, got, want)
+		}
+	}
+	if made < 20 {
+		t.Errorf("%d calls made by restCall", made)
+	}
+}

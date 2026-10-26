@@ -1,6 +1,10 @@
 package vm
 
-import "github.com/go-quickjs/go-quickjs/internal/bytecode"
+import (
+	"sync/atomic"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+)
 
 // recv.name(a, b) with up to three arguments, as methodCall's node makes it
 // but written out for the count. methodCall's node evaluates its arguments
@@ -34,9 +38,28 @@ var (
 	// function planTreeCall has given a tree.
 	callApply func(c *tctx, fv, recv Value, as []Value) Value
 
+	// restCall is callRest's call of a function planTreeCall has found
+	// may be run on its tree only by callRest (treeRest) -- one whose frame
+	// may end in a tail call, or an arrow -- made without callRest's
+	// questions, every one of which planTreeCall has answered: o of this
+	// realm, compiled, not bound, called directly, with a tree. A body a
+	// leaf or pureCall may answer is left to callRest, which asks them
+	// first, as is a sloppy one given a primitive this, which runFD wraps;
+	// it reports false for those, having done nothing.
+	restCall func(c *tctx, o *Object, fd *funcData, this Value, as []Value) (Value, bool)
+
 	// methodMiss is the read of the method key of o at gpc that the
 	// site's cache did not answer.
 	methodMiss func(c *tctx, o Value, key Atom, gpc int) Value
+
+	// methodRest is what methodCallN's node does with a call of m, with o
+	// as this and the arguments as, once it has found m no method with a
+	// tree's call (treeCall), nor a leaf or a pure body it calls itself: f
+	// is m's object and fd its function data, or nil, where it is no
+	// object. Only a function that ends in a tail call (restCall) is left
+	// to ask about, then callRest; methodApply had asked again what the
+	// node had.
+	methodRest func(c *tctx, m Value, f *Object, fd *funcData, o Value, as []Value) Value
 
 	// methodApply calls the method m with o as this and the arguments as,
 	// in their slots, as methodCall's node calls it, and returns what it
@@ -45,10 +68,43 @@ var (
 )
 
 func init() {
+	restCall = func(c *tctx, o *Object, fd *funcData, this Value, as []Value) (Value, bool) {
+		cl := fd.closure
+		fn := cl.fn
+		if cl.realm != c.r.Realm || fn.Leaf != bytecode.LeafNone {
+			return Undefined, false
+		}
+		newTarget := Undefined
+		if fd.arrow {
+			this, newTarget = fd.extra.lexThis, fd.extra.lexNewTarget
+		}
+		if fn.CoerceThis && !this.IsObject() {
+			return Undefined, false
+		}
+		r := c.r
+		if err := r.tick(); err != nil {
+			c.throw(err)
+		}
+		v, err := r.callTreeWith(o, fd, (*tree)(atomic.LoadPointer(&fn.VMCode)), this, as, newTarget, true)
+		if err == errTailCall {
+			v, err = r.tailFromTree()
+		}
+		if err != nil {
+			c.throw(err)
+		}
+		return v, true
+	}
+
 	callApply = func(c *tctx, fv, recv Value, as []Value) Value {
 		if fv.IsObject() {
 			o := fv.object()
-			v, err := c.r.callRest(o, o.fn(), recv, as)
+			fd := o.fn()
+			if fd != nil && fd.treeRest {
+				if v, ok := restCall(c, o, fd, recv, as); ok {
+					return v
+				}
+			}
+			v, err := c.r.callRest(o, fd, recv, as)
 			if err != nil {
 				c.throw(err)
 			}
@@ -70,6 +126,26 @@ func init() {
 		return m
 	}
 
+	methodRest = func(c *tctx, m Value, f *Object, fd *funcData, o Value, as []Value) Value {
+		if f == nil {
+			v, err := c.r.call(m, o, as)
+			if err != nil {
+				c.throw(err)
+			}
+			return v
+		}
+		if fd != nil && fd.treeRest {
+			if v, ok := restCall(c, f, fd, o, as); ok {
+				return v
+			}
+		}
+		v, err := c.r.callRest(f, fd, o, as)
+		if err != nil {
+			c.throw(err)
+		}
+		return v
+	}
+
 	methodApply = func(c *tctx, m, o Value, as []Value) Value {
 		if m.IsObject() {
 			f := m.object()
@@ -84,6 +160,11 @@ func init() {
 					c.throw(err)
 				}
 				return v
+			}
+			if fd != nil && fd.treeRest {
+				if v, ok := restCall(c, f, fd, o, as); ok {
+					return v
+				}
 			}
 			if fd != nil && fd.native == nil && !fd.bound && fd.closure != nil &&
 				fd.closure.realm == c.r.Realm && fd.closure.fn.Leaf != bytecode.LeafNone && fd.closure.fn.DirectCall {
@@ -142,12 +223,22 @@ func init() {
 				}
 				if fv.IsObject() {
 					o := fv.object()
-					if fd := o.fn(); fd != nil && fd.treeCall != nil && fd.closure.realm == c.r.Realm {
+					fd := o.fn()
+					if fd != nil && fd.treeCall != nil && fd.closure.realm == c.r.Realm {
 						r := c.r
 						if err := r.tick(); err != nil {
 							c.throw(err)
 						}
 						v, err := r.callTree(o, fd, recv, as, true)
+						if err != nil {
+							c.throw(err)
+						}
+						return v
+					}
+					// What callOperands's node does: callRest, which calls a leaf
+					// or a pure body itself, made here rather than by callApply.
+					if fd == nil || !fd.treeRest {
+						v, err := c.r.callRest(o, fd, recv, as)
 						if err != nil {
 							c.throw(err)
 						}
@@ -168,12 +259,22 @@ func init() {
 				}
 				if fv.IsObject() {
 					o := fv.object()
-					if fd := o.fn(); fd != nil && fd.treeCall != nil && fd.closure.realm == c.r.Realm {
+					fd := o.fn()
+					if fd != nil && fd.treeCall != nil && fd.closure.realm == c.r.Realm {
 						r := c.r
 						if err := r.tick(); err != nil {
 							c.throw(err)
 						}
 						v, err := r.callTree(o, fd, recv, as, true)
+						if err != nil {
+							c.throw(err)
+						}
+						return v
+					}
+					// What callOperands's node does: callRest, which calls a leaf
+					// or a pure body itself, made here rather than by callApply.
+					if fd == nil || !fd.treeRest {
+						v, err := c.r.callRest(o, fd, recv, as)
 						if err != nil {
 							c.throw(err)
 						}
@@ -195,12 +296,22 @@ func init() {
 				}
 				if fv.IsObject() {
 					o := fv.object()
-					if fd := o.fn(); fd != nil && fd.treeCall != nil && fd.closure.realm == c.r.Realm {
+					fd := o.fn()
+					if fd != nil && fd.treeCall != nil && fd.closure.realm == c.r.Realm {
 						r := c.r
 						if err := r.tick(); err != nil {
 							c.throw(err)
 						}
 						v, err := r.callTree(o, fd, recv, as, true)
+						if err != nil {
+							c.throw(err)
+						}
+						return v
+					}
+					// What callOperands's node does: callRest, which calls a leaf
+					// or a pure body itself, made here rather than by callApply.
+					if fd == nil || !fd.treeRest {
+						v, err := c.r.callRest(o, fd, recv, as)
 						if err != nil {
 							c.throw(err)
 						}
@@ -223,12 +334,22 @@ func init() {
 			}
 			if fv.IsObject() {
 				o := fv.object()
-				if fd := o.fn(); fd != nil && fd.treeCall != nil && fd.closure.realm == c.r.Realm {
+				fd := o.fn()
+				if fd != nil && fd.treeCall != nil && fd.closure.realm == c.r.Realm {
 					r := c.r
 					if err := r.tick(); err != nil {
 						c.throw(err)
 					}
 					v, err := r.callTree(o, fd, recv, as, true)
+					if err != nil {
+						c.throw(err)
+					}
+					return v
+				}
+				// What callOperands's node does: callRest, which calls a leaf
+				// or a pure body itself, made here rather than by callApply.
+				if fd == nil || !fd.treeRest {
+					v, err := c.r.callRest(o, fd, recv, as)
 					if err != nil {
 						c.throw(err)
 					}
@@ -260,9 +381,12 @@ func init() {
 				}
 				c.at(nd.pc)
 				as := c.stack[nd.p+1 : nd.p+1]
+				var f *Object
+				var fd *funcData
 				if m.IsObject() {
-					f := m.object()
-					if fd := f.fn(); fd != nil && fd.treeCall != nil && fd.closure.realm == c.r.Realm {
+					f = m.object()
+					fd = f.fn()
+					if fd != nil && fd.treeCall != nil && fd.closure.realm == c.r.Realm {
 						r := c.r
 						if err := r.tick(); err != nil {
 							c.throw(err)
@@ -273,8 +397,33 @@ func init() {
 						}
 						return v
 					}
+					// What methodCall's node does: a leaf or a pure body called here,
+					// rather than by methodApply.
+					if fd != nil && fd.native == nil && !fd.bound && fd.closure != nil &&
+						fd.closure.realm == c.r.Realm && fd.closure.fn.Leaf != bytecode.LeafNone && fd.closure.fn.DirectCall {
+						r := c.r
+						if err := r.tick(); err != nil {
+							c.throw(err)
+						}
+						if fn := fd.closure.fn; fn.Leaf == bytecode.LeafPure {
+							if pureFirst(fd, fn) {
+								if v, ok := r.pureCall(fd, o, as); ok {
+									return v
+								}
+							}
+						} else if o.IsObject() {
+							if v, ok := r.leafCall(fd.closure, o.object(), as); ok {
+								return v
+							}
+						}
+						v, err := leafRest(r, f, fd, o, as)
+						if err != nil {
+							c.throw(err)
+						}
+						return v
+					}
 				}
-				return methodApply(c, m, o, as)
+				return methodRest(c, m, f, fd, o, as)
 			}
 		case 1:
 			return func(c *tctx) Value {
@@ -293,9 +442,12 @@ func init() {
 				c.stack[nd.p+1] = nd.a0(c)
 				c.at(nd.pc)
 				as := c.stack[nd.p+1 : nd.p+2]
+				var f *Object
+				var fd *funcData
 				if m.IsObject() {
-					f := m.object()
-					if fd := f.fn(); fd != nil && fd.treeCall != nil && fd.closure.realm == c.r.Realm {
+					f = m.object()
+					fd = f.fn()
+					if fd != nil && fd.treeCall != nil && fd.closure.realm == c.r.Realm {
 						r := c.r
 						if err := r.tick(); err != nil {
 							c.throw(err)
@@ -306,8 +458,33 @@ func init() {
 						}
 						return v
 					}
+					// What methodCall's node does: a leaf or a pure body called here,
+					// rather than by methodApply.
+					if fd != nil && fd.native == nil && !fd.bound && fd.closure != nil &&
+						fd.closure.realm == c.r.Realm && fd.closure.fn.Leaf != bytecode.LeafNone && fd.closure.fn.DirectCall {
+						r := c.r
+						if err := r.tick(); err != nil {
+							c.throw(err)
+						}
+						if fn := fd.closure.fn; fn.Leaf == bytecode.LeafPure {
+							if pureFirst(fd, fn) {
+								if v, ok := r.pureCall(fd, o, as); ok {
+									return v
+								}
+							}
+						} else if o.IsObject() {
+							if v, ok := r.leafCall(fd.closure, o.object(), as); ok {
+								return v
+							}
+						}
+						v, err := leafRest(r, f, fd, o, as)
+						if err != nil {
+							c.throw(err)
+						}
+						return v
+					}
 				}
-				return methodApply(c, m, o, as)
+				return methodRest(c, m, f, fd, o, as)
 			}
 		case 2:
 			return func(c *tctx) Value {
@@ -327,9 +504,12 @@ func init() {
 				c.stack[nd.p+2] = nd.a1(c)
 				c.at(nd.pc)
 				as := c.stack[nd.p+1 : nd.p+3]
+				var f *Object
+				var fd *funcData
 				if m.IsObject() {
-					f := m.object()
-					if fd := f.fn(); fd != nil && fd.treeCall != nil && fd.closure.realm == c.r.Realm {
+					f = m.object()
+					fd = f.fn()
+					if fd != nil && fd.treeCall != nil && fd.closure.realm == c.r.Realm {
 						r := c.r
 						if err := r.tick(); err != nil {
 							c.throw(err)
@@ -340,8 +520,33 @@ func init() {
 						}
 						return v
 					}
+					// What methodCall's node does: a leaf or a pure body called here,
+					// rather than by methodApply.
+					if fd != nil && fd.native == nil && !fd.bound && fd.closure != nil &&
+						fd.closure.realm == c.r.Realm && fd.closure.fn.Leaf != bytecode.LeafNone && fd.closure.fn.DirectCall {
+						r := c.r
+						if err := r.tick(); err != nil {
+							c.throw(err)
+						}
+						if fn := fd.closure.fn; fn.Leaf == bytecode.LeafPure {
+							if pureFirst(fd, fn) {
+								if v, ok := r.pureCall(fd, o, as); ok {
+									return v
+								}
+							}
+						} else if o.IsObject() {
+							if v, ok := r.leafCall(fd.closure, o.object(), as); ok {
+								return v
+							}
+						}
+						v, err := leafRest(r, f, fd, o, as)
+						if err != nil {
+							c.throw(err)
+						}
+						return v
+					}
 				}
-				return methodApply(c, m, o, as)
+				return methodRest(c, m, f, fd, o, as)
 			}
 		case 3:
 			return func(c *tctx) Value {
@@ -362,9 +567,12 @@ func init() {
 				c.stack[nd.p+3] = nd.a2(c)
 				c.at(nd.pc)
 				as := c.stack[nd.p+1 : nd.p+4]
+				var f *Object
+				var fd *funcData
 				if m.IsObject() {
-					f := m.object()
-					if fd := f.fn(); fd != nil && fd.treeCall != nil && fd.closure.realm == c.r.Realm {
+					f = m.object()
+					fd = f.fn()
+					if fd != nil && fd.treeCall != nil && fd.closure.realm == c.r.Realm {
 						r := c.r
 						if err := r.tick(); err != nil {
 							c.throw(err)
@@ -375,8 +583,33 @@ func init() {
 						}
 						return v
 					}
+					// What methodCall's node does: a leaf or a pure body called here,
+					// rather than by methodApply.
+					if fd != nil && fd.native == nil && !fd.bound && fd.closure != nil &&
+						fd.closure.realm == c.r.Realm && fd.closure.fn.Leaf != bytecode.LeafNone && fd.closure.fn.DirectCall {
+						r := c.r
+						if err := r.tick(); err != nil {
+							c.throw(err)
+						}
+						if fn := fd.closure.fn; fn.Leaf == bytecode.LeafPure {
+							if pureFirst(fd, fn) {
+								if v, ok := r.pureCall(fd, o, as); ok {
+									return v
+								}
+							}
+						} else if o.IsObject() {
+							if v, ok := r.leafCall(fd.closure, o.object(), as); ok {
+								return v
+							}
+						}
+						v, err := leafRest(r, f, fd, o, as)
+						if err != nil {
+							c.throw(err)
+						}
+						return v
+					}
 				}
-				return methodApply(c, m, o, as)
+				return methodRest(c, m, f, fd, o, as)
 			}
 		}
 		return nil
