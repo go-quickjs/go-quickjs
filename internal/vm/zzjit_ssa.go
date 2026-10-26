@@ -829,7 +829,7 @@ func (r *Runtime) jitPrivateSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.
 		// A read that met a value not a number reads it as a value.
 		jitNumberMissed(e, pc)
 	}
-	if jitAddReadCase(jitPolySiteAt(e, pc), propCache{shape: sh, idx: i}) {
+	if jitAddReadCase(jitPolySiteAt(e, pc), propCache{shape: sh, idx: i}, nil) {
 		e.polyReopt = true
 	}
 }
@@ -919,29 +919,49 @@ func jitPolySiteAt(e *jitEntry, pc int) *jitPolySite {
 }
 
 // jitAddReadCase adds c to a read's cases (jitPolySite), up to
-// jitPropertyCases, and reports whether it did. A case it supersedes goes
-// -- one of a shape its own came from by adding properties, as an object
-// whose methods give it fields after its construction moves on from its
-// constructor's shape, which no object of the site may have any more --
-// and one superseded by a case there is not added: the stale shapes took
-// the cases, and the code left native code at every read of the live
-// ones, compiled again and again for the same stale ones until its
-// compiles ran out. V8 drops deprecated maps from its inline caches so.
-func jitAddReadCase(p *jitPolySite, c propCache) bool {
-	if slices.ContainsFunc(p.cases, func(k propCache) bool { return k.shape == c.shape || jitSuperseded(c.shape, k.shape) }) {
+// jitPropertyCases, and reports whether it did. A shape another came from
+// by adding properties -- an object's whose methods give it fields after
+// its construction, as it moves on from its constructor's shape -- may be
+// stale, no object of it left, or live, objects of it never given those
+// properties; V8's inline caches keep both maps, deprecating only one whose
+// field generalized. So it keeps its case while there is room, as a case
+// costs only its check; where they are full, a case superseded -- by c, by
+// now, the shape the site's cache holds, or by another case -- gives c its
+// place, and c, superseded itself, takes none: the stale shapes had taken
+// the cases, and the code left native code at every read of the live ones,
+// compiled again and again for the same stale ones until its compiles ran
+// out. Dropped where there was room, a shape that lived on deoptimized
+// each of a function's reads of its objects in turn, one compile each --
+// Typescript's Binder.bindSymbol, of symbols some of which are never given
+// a type, nine times.
+func jitAddReadCase(p *jitPolySite, c propCache, now *shape) bool {
+	if slices.ContainsFunc(p.cases, func(k propCache) bool { return k.shape == c.shape }) {
 		return false
 	}
-	p.cases = slices.DeleteFunc(p.cases, func(k propCache) bool { return jitSuperseded(k.shape, c.shape) })
-	if len(p.cases) >= jitPropertyCases {
+	if len(p.cases) < jitPropertyCases {
+		p.cases = append(p.cases, c)
+		return true
+	}
+	stale := func(s *shape) bool {
+		return jitSuperseded(s, now) || slices.ContainsFunc(p.cases, func(k propCache) bool { return jitSuperseded(s, k.shape) })
+	}
+	if stale(c.shape) {
 		return false
 	}
-	p.cases = append(p.cases, c)
+	i := slices.IndexFunc(p.cases, func(k propCache) bool { return jitSuperseded(k.shape, c.shape) || stale(k.shape) })
+	if i < 0 {
+		return false
+	}
+	p.cases = append(slices.Delete(p.cases, i, i+1), c)
 	return true
 }
 
 // jitSuperseded reports whether t came from s by adding properties: s is
-// one of t's ancestors along the shapes' transitions.
+// one of t's ancestors along the shapes' transitions. A nil t has none.
 func jitSuperseded(s, t *shape) bool {
+	if t == nil {
+		return false
+	}
 	for a := t.parent; a != nil; a = a.parent {
 		if a == s {
 			return true
@@ -1143,11 +1163,6 @@ func (r *Runtime) jitSeenFeedback(cl *closure, e *jitEntry) {
 			if c.shape == nil || c.shape == noShape || c.getter || c.idx < 0 || write && (c.next == setterNext || c.next == nil && c.p1 != nil) {
 				continue
 			}
-			if !write && now != nil && jitSuperseded(c.shape, now) {
-				// What the site's objects were before they took the shape
-				// its cache remembers now.
-				continue
-			}
 			i := slices.IndexFunc(e.poly, func(p jitPolySite) bool { return int(p.pc) == pc })
 			if i < 0 {
 				e.poly = append(e.poly, jitPolySite{pc: uint32(pc)})
@@ -1155,7 +1170,10 @@ func (r *Runtime) jitSeenFeedback(cl *closure, e *jitEntry) {
 			}
 			p := &e.poly[i]
 			if !write {
-				jitAddReadCase(p, c)
+				// What the site's objects were before they took the shape
+				// its cache remembers now (now) is a case while there is
+				// room.
+				jitAddReadCase(p, c, now)
 				continue
 			}
 			if len(p.cases)+len(p.adds) >= jitPropertyCases || slices.ContainsFunc(p.cases, func(k propCache) bool { return k.shape == c.shape }) {
@@ -9529,7 +9547,9 @@ func (fb *jitFeedback) deepAdd(d jitDeepAdd) *ssa.PropertyAdd {
 // a read's found on the receiver or on a prototype a cache holds, a
 // write's own properties; up to jitPropertyCases. An inlined callee's
 // site is compiled for them, as V8 compiles a site inlined for the maps
-// its inline cache met: at any other shape it deoptimizes.
+// its inline cache met: at any other shape it deoptimizes. A shape the one
+// the cache holds came from by adding properties takes what room the
+// others leave, as a root's does (jitAddReadCase).
 func (fb *jitFeedback) seenCases(pc int, site ssa.PropertySite) []ssa.PropertyCase {
 	in := fb.fn.Code[pc]
 	if int(in.B) >= len(fb.cl.ic) || fb.cl.ic[in.B].seen == nil || site.Holders[0].Object != 0 && in.Op == bytecode.OpSetProp {
@@ -9539,13 +9559,17 @@ func (fb *jitFeedback) seenCases(pc int, site ssa.PropertySite) []ssa.PropertyCa
 	write := in.Op == bytecode.OpSetProp
 	var cases []ssa.PropertyCase
 	k := fb.keep()
-	for _, x := range c.seen.entries[:c.seen.n] {
+	// The entries the cache holds shapes of besides its own, then those of
+	// the ones superseded.
+	entries := c.seen.entries[:c.seen.n]
+	for i := range 2 * len(entries) {
+		x := entries[i%len(entries)]
 		if len(cases)+1 >= jitPropertyCases {
 			break
 		}
 		from := uintptr(unsafe.Pointer(x.shape))
 		if x.shape == nil || x.shape == noShape || x.getter || x.idx < 0 || x.next != nil || from == site.Shape ||
-			c.shape != nil && jitSuperseded(x.shape, c.shape) || write && x.p1 != nil {
+			jitSuperseded(x.shape, c.shape) != (i >= len(entries)) || write && x.p1 != nil {
 			continue
 		}
 		if slices.ContainsFunc(cases, func(p ssa.PropertyCase) bool { return p.Shape == from }) {
