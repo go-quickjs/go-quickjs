@@ -111,9 +111,9 @@ func TestClassConstructionsOnTrees(t *testing.T) {
 	}
 }
 
-// A construction of a derived class on its tree allocates the object and
-// the arguments super() passes on, and no this binding: runFD's had been
-// an allocation of its own.
+// A construction of a derived class on its tree allocates the object it
+// makes and nothing else: no this binding, which runFD's had been an
+// allocation of its own, and no copy of the arguments super() passes on.
 func TestDerivedConstructionAllocations(t *testing.T) {
 	const src = `'use strict'
 		class A { constructor(x) { this.x = x; this.y = 0 } }
@@ -133,7 +133,7 @@ func TestDerivedConstructionAllocations(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime.ReadMemStats(&after)
-	if per := float64(after.Mallocs-before.Mallocs) / n; per > 2.05 {
-		t.Errorf("%.2f allocations a derived construction, want at most 2", per)
+	if per := float64(after.Mallocs-before.Mallocs) / n; per > 1.05 {
+		t.Errorf("%.2f allocations a derived construction, want 1", per)
 	}
 }

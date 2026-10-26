@@ -433,7 +433,10 @@ func init() {
 						args = a.Object().elemsOf()
 					}
 				} else {
-					args = append([]Value(nil), c.stack[d-n:d]...)
+					// The arguments in their slots, as a call node passes
+					// them: the parent's frame is made above this one's
+					// window, and no callee keeps the slice it is given.
+					args = c.stack[d-n : d : d]
 				}
 				c.at(pc)
 				if err := c.r.superCall(c.f, args); err != nil {
