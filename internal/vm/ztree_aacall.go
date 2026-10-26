@@ -60,6 +60,12 @@ var (
 	// it reports false for those, having done nothing.
 	restCall func(c *tctx, o *Object, fd *funcData, this Value, as []Value) (Value, bool)
 
+	// primMethod is the method key of o, a string or a number, where the
+	// runtime's table of what the primitives' prototypes hold (primProps)
+	// has it, as primProp reads it; it reports false for anything else,
+	// which methodMiss reads.
+	primMethod func(r *Runtime, o Value, key Atom) (Value, bool)
+
 	// methodMiss is the read of the method key of o at gpc that the
 	// site's cache did not answer.
 	methodMiss func(c *tctx, o Value, key Atom, gpc int) Value
@@ -141,6 +147,24 @@ func init() {
 			c.throw(err)
 		}
 		return v
+	}
+
+	primMethod = func(r *Runtime, o Value, key Atom) (Value, bool) {
+		var p *Object
+		if o.IsString() {
+			p = r.proto.str
+		} else if o.IsNumber() {
+			p = r.proto.number
+		} else {
+			return Undefined, false
+		}
+		if e := &r.primProps[key&63]; e.key == key && e.proto == p && e.shape == p.shape {
+			if verifyShapes {
+				checkShape(p)
+			}
+			return p.vals[e.idx], true
+		}
+		return Undefined, false
 	}
 
 	methodMiss = func(c *tctx, o Value, key Atom, gpc int) Value {
@@ -399,11 +423,14 @@ func init() {
 				}
 				var m Value
 				ok := false
+				key := c.names[nd.name]
 				if o.IsObject() {
-					m, ok = c.r.cachedProp(&c.ic[nd.site], o.object(), c.names[nd.name])
+					m, ok = c.r.cachedProp(&c.ic[nd.site], o.object(), key)
+				} else {
+					m, ok = primMethod(c.r, o, key)
 				}
 				if !ok {
-					m = methodMiss(c, o, c.names[nd.name], nd.gpc)
+					m = methodMiss(c, o, key, nd.gpc)
 				}
 				c.at(nd.pc)
 				as := c.stack[nd.p+1 : nd.p+1]
@@ -459,11 +486,14 @@ func init() {
 				}
 				var m Value
 				ok := false
+				key := c.names[nd.name]
 				if o.IsObject() {
-					m, ok = c.r.cachedProp(&c.ic[nd.site], o.object(), c.names[nd.name])
+					m, ok = c.r.cachedProp(&c.ic[nd.site], o.object(), key)
+				} else {
+					m, ok = primMethod(c.r, o, key)
 				}
 				if !ok {
-					m = methodMiss(c, o, c.names[nd.name], nd.gpc)
+					m = methodMiss(c, o, key, nd.gpc)
 				}
 				c.stack[nd.p+1] = nd.a0(c)
 				c.at(nd.pc)
@@ -520,11 +550,14 @@ func init() {
 				}
 				var m Value
 				ok := false
+				key := c.names[nd.name]
 				if o.IsObject() {
-					m, ok = c.r.cachedProp(&c.ic[nd.site], o.object(), c.names[nd.name])
+					m, ok = c.r.cachedProp(&c.ic[nd.site], o.object(), key)
+				} else {
+					m, ok = primMethod(c.r, o, key)
 				}
 				if !ok {
-					m = methodMiss(c, o, c.names[nd.name], nd.gpc)
+					m = methodMiss(c, o, key, nd.gpc)
 				}
 				c.stack[nd.p+1] = nd.a0(c)
 				c.stack[nd.p+2] = nd.a1(c)
@@ -582,11 +615,14 @@ func init() {
 				}
 				var m Value
 				ok := false
+				key := c.names[nd.name]
 				if o.IsObject() {
-					m, ok = c.r.cachedProp(&c.ic[nd.site], o.object(), c.names[nd.name])
+					m, ok = c.r.cachedProp(&c.ic[nd.site], o.object(), key)
+				} else {
+					m, ok = primMethod(c.r, o, key)
 				}
 				if !ok {
-					m = methodMiss(c, o, c.names[nd.name], nd.gpc)
+					m = methodMiss(c, o, key, nd.gpc)
 				}
 				c.stack[nd.p+1] = nd.a0(c)
 				c.stack[nd.p+2] = nd.a1(c)
@@ -641,6 +677,18 @@ func init() {
 		return nil
 	}
 }
+
+// A method read off a string or a number -- s.indexOf(c), n.toFixed(2) --
+// is answered by methodCallN's nodes from the runtime's table of what the
+// primitives' prototypes hold (primProps), as primProp answers it, by one
+// call (primMethod) that calls nothing: each such call had gone to
+// methodMiss, getValueProp and primProp. An entry is of a plain data property the prototype has
+// itself, with its layout, and the table holds none of a string's own --
+// its length, its indices -- which primProp never enters; a getter, a
+// method on a prototype's prototype, a layout changed since go the long
+// way, methodMiss, which enters it again where it can. The site's own
+// cache is of no use here: String.prototype is a String wrapper, whose
+// indices and length are its own before its table (shapeClass).
 
 // methodNode is what methodCallN's node is of: the receiver -- this, or
 // local k -- the get_prop_this's name, site and pc, the slots the
