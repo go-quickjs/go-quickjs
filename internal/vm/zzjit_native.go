@@ -145,7 +145,7 @@ func (r *Runtime) JITStats() JITStats {
 	return JITStats{Compiled: s.compiled, Entries: s.entries, Guards: s.guards,
 		Hosts: s.hosts, Budgets: s.budgets, Interpreted: s.interpreted, SSAEntries: s.ssaEntries, SSARecords: s.ssaRecords,
 		Held: int64(s.held()), Budget: int64(r.jitBudget()), Evicted: s.evicted, Refused: s.refusedRoom,
-		Discarded: s.discarded}
+		Discarded: s.discarded, Reoptimized: s.reoptimized}
 }
 
 // jitStressDeopt reports whether this budget exit should finish the

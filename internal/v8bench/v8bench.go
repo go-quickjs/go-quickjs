@@ -37,6 +37,7 @@
 package v8bench
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -224,7 +225,9 @@ func runFixed(e Engine, s *suite, src map[string]string, n int, only string) Run
 		var m0, m1 runtime.MemStats
 		runtime.ReadMemStats(&m0)
 		t0, c0 := clock(), processCPU()
-		_, err := rt.EvalString(fmt.Sprintf(`(() => {
+		var err error
+		pprof.Do(context.Background(), pprof.Labels("bench", name), func(context.Context) {
+			_, err = rt.EvalString(fmt.Sprintf(`(() => {
 			const s = BenchmarkSuite.suites.find(s => s.name === %q);
 			// Octane's Math.random, seeded again for each suite as its
 			// harness does, which its checksums assume.
@@ -236,6 +239,7 @@ func runFixed(e Engine, s *suite, src map[string]string, n int, only string) Run
 			}
 			return "";
 		})()`, name, n))
+		})
 		d, c := clock()-t0, processCPU()-c0
 		runtime.ReadMemStats(&m1)
 		if err != nil {
@@ -263,7 +267,10 @@ func runAWFY(e Engine, s *suite, src map[string]string, n int, only string) Runt
 		var m0, m1 runtime.MemStats
 		runtime.ReadMemStats(&m0)
 		t0, c0 := clock(), processCPU()
-		_, err := rt.EvalString(awfyRun(w.module, w.inner, n))
+		var err error
+		pprof.Do(context.Background(), pprof.Labels("bench", w.name), func(context.Context) {
+			_, err = rt.EvalString(awfyRun(w.module, w.inner, n))
+		})
 		d, c := clock()-t0, processCPU()-c0
 		runtime.ReadMemStats(&m1)
 		if err != nil {

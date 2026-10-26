@@ -126,8 +126,8 @@ func (r runtimeOf) Report(name string) {
 	v := hostaccess.VM(r.rt)
 	st := v.JITStats()
 	was := jitReport.stats
-	fmt.Printf("  jit: %d compiled, %d entries, %d guard failures, %d exits to Go, %d finished in the interpreter\n",
-		st.Compiled-was.Compiled, st.Entries-was.Entries, st.Guards-was.Guards, st.Hosts-was.Hosts, st.Interpreted-was.Interpreted)
+	fmt.Printf("  jit: %d compiled, %d compiled again, %d entries, %d guard failures, %d exits to Go, %d finished in the interpreter\n",
+		st.Compiled-was.Compiled, st.Reoptimized-was.Reoptimized, st.Entries-was.Entries, st.Guards-was.Guards, st.Hosts-was.Hosts, st.Interpreted-was.Interpreted)
 	fmt.Printf("  jit: %d dropped to make room, %d compiles refused it, %d of them once compiled; holds %.1f of %.1f MiB\n",
 		st.Evicted-was.Evicted, st.Refused-was.Refused, st.Discarded-was.Discarded, float64(st.Held)/(1<<20), float64(st.Budget)/(1<<20))
 	jitReport.stats = st
