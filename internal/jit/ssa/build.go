@@ -4112,7 +4112,13 @@ func (b *builder) plan() error {
 	// had taken the bounds once callees reading globals and making
 	// constructions of their own could be inlined, and RayTrace's
 	// constructions of its colors and intersections were made by Go.
-	asked := make([]inlineAsked, len(p.Code))
+	// By PC, from the workspace's scratch, taken while planning: an
+	// InlineSite a PC, made afresh at each compile, had been a fifth of
+	// what Typescript's compiles allocated.
+	sc := b.f.scr()
+	asked := idTable(sc.asked, len(p.Code))
+	sc.asked = nil
+	defer func() { clear(asked); sc.asked = asked[:0] }()
 	for _, pass := range []bool{true, false} {
 		for pc := range p.Code {
 			if !reachable(p, pc) || b.inlined[pc] != nil {

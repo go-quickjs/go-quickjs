@@ -1076,6 +1076,8 @@ type scratch struct {
 	liveUses                        []liveUse
 	liveNodes                       []liveNode
 	liveStack                       []*Block
+	// asked is plan's: each call's inlining asked of the feedback, by PC.
+	asked []inlineAsked
 	// subst is Optimize's replacements, by value ID.
 	subst []*Value
 	// originPhis is Origins' list of the phis.
