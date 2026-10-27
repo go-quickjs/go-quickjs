@@ -411,6 +411,12 @@ type Function struct {
 	// Text is the original source text of the function, which
 	// Function.prototype.toString returns.
 	Text string
+	// TraceName is what a stack trace calls a function the language leaves
+	// anonymous, as V8's name inferrer calls it: a.b for
+	// `a.b = function () {}` (see the compiler's traceJoin). Only traces read
+	// it; the function's name property is Name's. It is last, so that the
+	// fields a call reads stay where they were.
+	TraceName string
 }
 
 // LineAt returns the source line of the instruction at pc, or 0 if unknown.

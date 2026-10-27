@@ -385,6 +385,11 @@ func (fr *stackFrame) functionName() string {
 			return name
 		}
 	}
+	if fr.fn.TraceName != "" {
+		// What V8's name inferrer calls a function the language leaves
+		// anonymous (a.b for a.b = function () {}).
+		return fr.fn.TraceName
+	}
 	if fr.isEval() {
 		return "eval"
 	}
@@ -488,8 +493,16 @@ func (r *Runtime) typeName(fr *stackFrame) string {
 		if !c.ok() || c.isAccessor() || !c.value().IsObject() {
 			continue
 		}
-		if fd := c.value().Object().fn(); fd != nil && fd.name != "" && fd.name != "Object" {
-			return fd.name
+		if fd := c.value().Object().fn(); fd != nil {
+			name := fd.name
+			if name == "" && fd.closure != nil {
+				// An anonymous class, named for where it was assigned (m.n
+				// for m.n = class {}), as V8 names it.
+				name = fd.closure.fn.TraceName
+			}
+			if name != "" && name != "Object" {
+				return name
+			}
 		}
 	}
 	return "Object"
@@ -531,6 +544,11 @@ func (r *Runtime) methodName(fr *stackFrame) string {
 				continue
 			}
 			name := r.atoms.name(p.key)
+			if _, index := arrayIndexOf(name); index {
+				// An index is an element's, which V8 looks among no more
+				// than among a method's keys.
+				continue
+			}
 			if found != "" && found != name {
 				// Two keys hold it, and neither is the one.
 				return ""
@@ -581,7 +599,10 @@ func (r *Runtime) writeMethodCall(b *strings.Builder, fr *stackFrame, fnName str
 		b.WriteString(methodName)
 		return
 	}
-	if typeName != "" && !strings.HasPrefix(fnName, typeName+".") {
+	// A name inferred from where the function was assigned, a.b, is a path
+	// already, which V8 writes without the receiver's type.
+	inferred := fr.fn != nil && fnName == fr.fn.TraceName && strings.Contains(fnName, ".")
+	if typeName != "" && !inferred && !strings.HasPrefix(fnName, typeName+".") {
 		b.WriteString(typeName)
 		b.WriteByte('.')
 	}

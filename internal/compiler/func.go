@@ -13,6 +13,8 @@ import (
 // compileFunctionLiteral compiles a nested function and emits the instruction
 // that builds a closure from it.
 func (c *compiler) compileFunctionLiteral(fn *ast.FuncLit, inferredName string) {
+	trace := c.traceName
+	c.traceName = ""
 	sub := newCompiler(c, c.opts)
 	sub.fn.Strict = fn.Strict || c.fn.Strict
 	sub.fn.Async = fn.Async
@@ -25,6 +27,9 @@ func (c *compiler) compileFunctionLiteral(fn *ast.FuncLit, inferredName string) 
 		sub.fn.Name = fn.Name.Name
 	default:
 		sub.fn.Name = inferredName
+	}
+	if sub.fn.Name == "" {
+		sub.fn.TraceName = trace
 	}
 
 	sub.compileFunctionBody(fn)
@@ -722,6 +727,8 @@ func (c *compiler) applyDefault(def ast.Expr, name string) {
 // members, constructors for static ones -- which is what makes a static method
 // visible on a subclass.
 func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
+	trace := c.traceName
+	c.traceName = ""
 	name := inferredName
 	if cls.Name != nil {
 		name = cls.Name.Name
@@ -802,6 +809,7 @@ func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
 	}
 
 	c.evalComputedFieldKeys(cls, keyNames)
+	c.traceName = trace
 	c.compileFunctionLiteral(ctor, name)
 	if cls.Extends != nil {
 		c.emit(bytecode.OpSwap, 0, 0)

@@ -256,6 +256,11 @@ type compiler struct {
 	parent *compiler
 	opts   Options
 
+	// traceName is the name V8's inferrer would hand the next function or
+	// class literal compiled (tracename.go), and traceIn the one the
+	// expression being compiled was handed.
+	traceName, traceIn string
+
 	// lazyArguments is set for a function whose arguments object is made
 	// only where a call of apply needs it, in lazyArgumentsSlot.
 	lazyArguments     bool

@@ -68,6 +68,119 @@ frames(e)`, "at <eval>:2:23"},
 	})
 }
 
+// trace returns the frame its argument's error is thrown from. Each case's
+// answer is V8's, from Node's vm.runInThisContext with the file named <eval>.
+const trace = `function top(f) { try { f() } catch (e) { return e.stack.split("\n")[1].trim() } }
+`
+
+// TestStackTraceInferredNames pins the names V8's inferrer gives functions
+// and classes the language leaves anonymous: by where they are assigned, a
+// path with prototype and this left out, a key no string literal names as
+// <computed>, a capitalized enclosing function first, handed through
+// conditionals, logical operators, commas and literals but not into calls
+// or bodies. A path is written without the receiver's type, and the name
+// property stays the language's.
+func TestStackTraceInferredNames(t *testing.T) {
+	evalCases(t, []struct{ src, want string }{
+		// dot
+		{trace + "var a = {}; a.b = function () { throw new Error() }; top(() => a.b())", "at a.b (<eval>:2:39)"},
+		// dot2
+		{trace + "var a = { b: {} }; a.b.c = function () { throw new Error() }; top(() => a.b.c())", "at a.b.c (<eval>:2:48)"},
+		// proto inst
+		{trace + "function Foo() {}; Foo.prototype.m = function () { throw new Error() }; top(() => new Foo().m())", "at Foo.m (<eval>:2:58)"},
+		// proto direct
+		{trace + "function Foo() {}; Foo.prototype.m = function () { throw new Error() }; top(() => Foo.prototype.m())", "at Foo.m (<eval>:2:58)"},
+		// computed var
+		{trace + "var a = {}, k = \"z\"; a[k] = function () { throw new Error() }; top(() => a.z())", "at a.<computed> [as z] (<eval>:2:49)"},
+		// computed str
+		{trace + "var a = {}; a[\"lit\"] = function () { throw new Error() }; top(() => a.lit())", "at a.lit (<eval>:2:44)"},
+		// computed num
+		{trace + "var a = {}; a[0] = function () { throw new Error() }; top(() => a[0]())", "at a.<computed> (<eval>:2:40)"},
+		// this.x
+		{trace + "function C() { this.x = function () { throw new Error() } }; top(() => new C().x())", "at C.x (<eval>:2:45)"},
+		// exports
+		{trace + "var exports = {}; exports.f = function () { throw new Error() }; top(() => exports.f())", "at exports.f (<eval>:2:51)"},
+		// module.exports
+		{trace + "var module = { exports: {} }; module.exports.f = function () { throw new Error() }; top(() => module.exports.f())", "at module.exports.f (<eval>:2:70)"},
+		// arrow
+		{trace + "var a = {}; a.b = () => { throw new Error() }; top(() => a.b())", "at a.b (<eval>:2:33)"},
+		// called bare
+		{trace + "var a = {}; a.b = function () { throw new Error() }; var g = a.b; top(() => g())", "at a.b (<eval>:2:39)"},
+		// named
+		{trace + "var a = {}; a.b = function real() { throw new Error() }; top(() => a.b())", "at Object.real [as b] (<eval>:2:43)"},
+		// chain assign
+		{trace + "var a = {}, c = {}; a.b = c.d = function () { throw new Error() }; top(() => a.b())", "at a.b.c.d [as b] (<eval>:2:53)"},
+		// ternary
+		{trace + "var a = {}; a.b = true ? function () { throw new Error() } : null; top(() => a.b())", "at a.b (<eval>:2:46)"},
+		// iife inner
+		{trace + "var a = {}; a.b = (function () { return function () { throw new Error() } })(); top(() => a.b())", "at Object.b (<eval>:2:61)"},
+		// call arg
+		{trace + "function h(f) { return f } var a = {}; a.b = h(function () { throw new Error() }); top(() => a.b())", "at Object.b (<eval>:2:68)"},
+		// nested obj lit
+		{trace + "var o = { p: { q: function () { throw new Error() } } }; top(() => o.p.q())", "at Object.q (<eval>:2:39)"},
+		// var anon later
+		{trace + "var x; x = function () { throw new Error() }; top(() => x())", "at x (<eval>:2:32)"},
+		// obj lit in assign
+		{trace + "var a = {}; a.b = { c: function () { throw new Error() } }; top(() => a.b.c())", "at Object.c (<eval>:2:44)"},
+		// obj lit computed
+		{trace + "var k = \"kk\"; var o = { [k]: function () { throw new Error() } }; top(() => o.kk())", "at Object.kk (<eval>:2:50)"},
+		// class expr
+		{trace + "var a = {}; a.K = class { m() { throw new Error() } }; top(() => new a.K().m())", "at a.K.m (<eval>:2:39)"},
+		// class ctor
+		{trace + "var a = {}; a.K = class { constructor() { throw new Error() } }; top(() => new a.K())", "at new a.K (<eval>:2:49)"},
+		// fn ctor
+		{trace + "var a = {}; a.F = function () { throw new Error() }; top(() => new a.F())", "at new a.F (<eval>:2:39)"},
+		// deep chain
+		{trace + "var a = { b: { c: {} } }; a.b.c.d = function () { throw new Error() }; top(() => a.b.c.d())", "at a.b.c.d (<eval>:2:57)"},
+		// call on member
+		{trace + "var a = { get() { return {} } }; var t = a.get(); t.x = function () { throw new Error() }; top(() => t.x())", "at t.x (<eval>:2:77)"},
+		// array elem
+		{trace + "var arr = []; arr[0] = function () { throw new Error() }; top(() => arr[0]())", "at arr.<computed> (<eval>:2:44)"},
+		// static assign
+		{trace + "class S {}; S.m = function () { throw new Error() }; top(() => S.m())", "at S.m (<eval>:2:39)"},
+		// logical assign
+		{trace + "var a = {}; a.b ||= function () { throw new Error() }; top(() => a.b())", "at a.b (<eval>:2:41)"},
+		// param default
+		{trace + "function d(f = function () { throw new Error() }) { return f } var a = {}; a.b = d(); top(() => a.b())", "at Object.f [as b] (<eval>:2:36)"},
+		// export default style
+		{trace + "var o = {}; o.default = function () { throw new Error() }; top(() => o.default())", "at o.default (<eval>:2:45)"},
+		// cap other
+		{trace + "function Cap() { var o = {}; o.y = function () { throw new Error() }; return o }; top(() => Cap().y())", "at Cap.o.y (<eval>:2:56)"},
+		// cap this
+		{trace + "function Cap2() { this.w = function () { throw new Error() } }; top(() => new Cap2().w())", "at Cap2.w (<eval>:2:48)"},
+		// class ctor this
+		{trace + "class K { constructor() { this.v = function () { throw new Error() } } }; top(() => new K().v())", "at K.v (<eval>:2:56)"},
+		// this.x moved
+		{trace + "function C() { this.x = function () { throw new Error() } } var o3 = { k: new C().x }; top(() => o3.k())", "at C.x [as k] (<eval>:2:45)"},
+		// other holder
+		{trace + "var a = {}; a.b = function () { throw new Error() }; var o2 = { m: a.b }; top(() => o2.m())", "at a.b [as m] (<eval>:2:39)"},
+		// class method
+		{trace + "var m = {}; m.n = class { s() { throw new Error() } }; top(() => new m.n().s())", "at m.n.s (<eval>:2:39)"},
+		// array literal
+		{trace + "var arr = [function () { throw new Error() }]; top(() => arr[0]())", "at Array.arr (<eval>:2:32)"},
+		// str key space
+		{trace + "var u = {}; u[\"a b\"] = function () { throw new Error() }; top(() => u[\"a b\"]())", "at u.a b (<eval>:2:44)"},
+		// sym key
+		{trace + "var w = {}; w[Symbol.iterator] = function () { throw new Error() }; top(() => w[Symbol.iterator]())", "at w.<computed> (<eval>:2:54)"},
+		// bound
+		{trace + "var x1 = {}; x1.y1 = function () { throw new Error() }.bind(null); top(() => x1.y1())", "at <eval>:2:42"},
+		// nested ret
+		{trace + "var h = {}; h.i = function () { return function () { throw new Error() } }; top(() => h.i()())", "at <eval>:2:60"},
+		// or rhs
+		{trace + "var a = {}; a.b = null || function () { throw new Error() }; top(() => a.b())", "at a.b (<eval>:2:47)"},
+		// comma
+		{trace + "var f = {}; f.g = (0, function () { throw new Error() }); top(() => f.g())", "at f.g (<eval>:2:43)"},
+		// nested assign
+		{trace + "var j = {}; j.k = function () { var l = {}; l.m = function () { throw new Error() }; return l }; top(() => j.k().m())", "at l.m (<eval>:2:71)"},
+		// arr in obj lit
+		{trace + "var obj = { arr: [function () { throw new Error() }] }; top(() => obj.arr[0]())", "at obj.arr (<eval>:2:39)"},
+		// generator
+		{trace + "var g = {}; g.h = function* () { throw new Error() }; top(() => g.h().next())", "at g.h (<eval>:2:40)"},
+		// name unchanged
+		{trace + "var a = {}; a.b = function () {}; var c = {}; c.d = class {}; [a.b.name, c.d.name].join() + \"|\"", ",|"},
+	})
+}
+
 // TestStackTraceSubclass pins that a subclass's constructors are left out,
 // and that the header is its name and message as they are when the stack is
 // first read.

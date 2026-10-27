@@ -28,6 +28,8 @@ func takesItsValue(op bytecode.Op) bool {
 }
 
 func (c *compiler) compileExprForEffect(e ast.Expr) {
+	// What is evaluated for its effect alone hands no name on.
+	c.traceName, c.traceIn = "", ""
 	switch n := e.(type) {
 	case *ast.StringLit, *ast.NumberLit, *ast.BigIntLit, *ast.BoolLit, *ast.NullLit:
 		// A literal has no effect -- "use strict"; is one -- so nothing is
@@ -60,7 +62,13 @@ func (c *compiler) compileExprForEffect(e ast.Expr) {
 		if m, ok := n.Target.(*ast.Member); ok {
 			switch n.Op {
 			case "=":
+				c.traceIn = ""
+				trace := ""
+				if handsName(n.Value) {
+					trace = c.assignTraceName(n.Target)
+				}
 				c.compileMemberStore(m, func() {
+					c.traceName = trace
 					c.compileExprNamed(n.Value, "")
 				}, false)
 				return
@@ -245,6 +253,8 @@ func (c *compiler) compileExpr(e ast.Expr) {
 func (c *compiler) compileExprNamed(e ast.Expr, name string) {
 	c.enter(e.Pos())
 	defer c.leave()
+	trace := c.traceName
+	c.traceName, c.traceIn = "", trace
 
 	switch n := e.(type) {
 	case *ast.NumberLit:
@@ -308,9 +318,11 @@ func (c *compiler) compileExprNamed(e ast.Expr, name string) {
 		c.compileObjectLit(n)
 
 	case *ast.FuncLit:
+		c.traceName = trace
 		c.compileFunctionLiteral(n, name)
 
 	case *ast.ClassLit:
+		c.traceName = trace
 		c.compileClass(n, name)
 
 	case *ast.Unary:
@@ -352,6 +364,7 @@ func (c *compiler) compileExprNamed(e ast.Expr, name string) {
 				c.compileExprForEffect(x)
 				continue
 			}
+			c.traceName = trace
 			c.compileExpr(x)
 		}
 
@@ -693,6 +706,7 @@ func (c *compiler) templateIdx(q *ast.TemplateLit) uint32 {
 }
 
 func (c *compiler) compileArrayLit(n *ast.ArrayLit) {
+	trace := c.traceIn
 	// Without spread the whole literal is built in one instruction from
 	// values already on the stack. A hole is the uninitialized value, which
 	// is what an array's storage holds for one: it advances the length
@@ -713,6 +727,7 @@ func (c *compiler) compileArrayLit(n *ast.ArrayLit) {
 				c.emit(bytecode.OpPushUninitialized, 0, 0)
 				continue
 			}
+			c.traceName = trace
 			c.compileExpr(el)
 		}
 		c.emit(bytecode.OpNewArray, uint32(len(n.Elements)), 0)
@@ -734,6 +749,7 @@ func (c *compiler) compileArrayLit(n *ast.ArrayLit) {
 				c.emit(bytecode.OpArraySpread, 0, 0)
 				continue
 			}
+			c.traceName = trace
 			c.compileExpr(el)
 			c.emit(bytecode.OpArrayPush, 0, 0)
 		}
@@ -741,6 +757,7 @@ func (c *compiler) compileArrayLit(n *ast.ArrayLit) {
 }
 
 func (c *compiler) compileObjectLit(n *ast.ObjectLit) {
+	trace := c.traceIn
 	if n.ProtoDup != 0 {
 		// Two __proto__ properties in a literal are an error: each would set
 		// the prototype and the second would silently win. Reaching here means
@@ -822,6 +839,11 @@ func (c *compiler) compileObjectLit(n *ast.ObjectLit) {
 			continue
 		}
 		key := propKeyName(p.Key)
+		if trace != "" {
+			if handsName(p.Value) {
+				c.traceName = c.traceJoin(trace, key)
+			}
+		}
 		c.compileExprNamed(p.Value, key)
 		if p.Method {
 			// A shorthand method may use super, which resolves against the
@@ -1293,6 +1315,8 @@ func (c *compiler) dupObject() {
 }
 
 func (c *compiler) compileLogical(n *ast.Logical) {
+	trace := c.traceIn
+	c.traceName = trace
 	c.compileExpr(n.Left)
 	var jump int
 	switch n.Op {
@@ -1303,18 +1327,22 @@ func (c *compiler) compileLogical(n *ast.Logical) {
 	default: // "??"
 		jump = c.emitJump(bytecode.OpJumpIfNotNullish)
 	}
+	c.traceName = trace
 	c.compileExpr(n.Right)
 	c.patchJump(jump)
 }
 
 func (c *compiler) compileConditional(n *ast.Conditional) {
+	trace := c.traceIn
 	elseJumps := c.emitTestJumpIfFalse(n.Test)
+	c.traceName = trace
 	c.compileExpr(n.Cons)
 	endJump := c.emitJump(bytecode.OpJump)
 	c.patchJumps(elseJumps)
 	// Both branches leave one value, so the depth tracked after the jump is
 	// one too high; correct it so MaxStack is not inflated.
 	c.stackDepth--
+	c.traceName = trace
 	c.compileExpr(n.Alt)
 	c.patchJump(endJump)
 }
@@ -1847,6 +1875,14 @@ func (c *compiler) compileChainLink(e ast.Expr, jumps *[]chainJump) {
 // ---------------------------------------------------------------------------
 
 func (c *compiler) compileAssign(n *ast.Assign) {
+	trace := ""
+	if handsName(n.Value) {
+		trace = c.assignTraceName(n.Target)
+	}
+	value := func(name string) {
+		c.traceName = trace
+		c.compileExprNamed(n.Value, name)
+	}
 	if call, ok := n.Target.(*ast.Call); ok {
 		// Sloppy code may assign to a call: the call is made, and the
 		// assignment is a ReferenceError before the value is evaluated.
@@ -1862,7 +1898,7 @@ func (c *compiler) compileAssign(n *ast.Assign) {
 		}
 		if m, ok := n.Target.(*ast.Member); ok {
 			c.compileMemberStore(m, func() {
-				c.compileExprNamed(n.Value, "")
+				value("")
 			}, true)
 			return
 		}
@@ -1871,7 +1907,7 @@ func (c *compiler) compileAssign(n *ast.Assign) {
 			// evaluated, so a value that removes the property still writes to
 			// the object the name named.
 			c.resolveWithRef(id)
-			c.compileExprNamed(n.Value, id.Name)
+			value(id.Name)
 			c.endWithRef(id)
 			return
 		}
@@ -1883,7 +1919,7 @@ func (c *compiler) compileAssign(n *ast.Assign) {
 			// creates the global does not excuse the assignment, and a value
 			// that throws is what the assignment reports.
 			check := len(c.fn.Code) - 1
-			c.compileExprNamed(n.Value, nameOf(n.Target))
+			value(nameOf(n.Target))
 			if c.foldGlobalCheck(check, id) {
 				return
 			}
@@ -1891,13 +1927,13 @@ func (c *compiler) compileAssign(n *ast.Assign) {
 			c.assignTo(n.Target, false)
 			return
 		}
-		c.compileExprNamed(n.Value, nameOf(n.Target))
+		value(nameOf(n.Target))
 		c.assignTo(n.Target, false)
 
 	case "&&=", "||=", "??=":
 		if m, ok := n.Target.(*ast.Member); ok {
 			c.compileMemberUpdate(m, n.Op, func() {
-				c.compileExprNamed(n.Value, nameOf(n.Target))
+				value(nameOf(n.Target))
 			}, n.Start, true)
 			return
 		}
@@ -1906,7 +1942,7 @@ func (c *compiler) compileAssign(n *ast.Assign) {
 			// written back to whatever that found.
 			c.beginWithRef(id)
 			c.finishUpdate(n.Op, func() {
-				c.compileExprNamed(n.Value, id.Name)
+				value(id.Name)
 			}, n.Start, 1, func() { c.endWithRef(id) })
 			return
 		}
@@ -1922,7 +1958,7 @@ func (c *compiler) compileAssign(n *ast.Assign) {
 		default:
 			jump = c.emitJump(bytecode.OpJumpIfNotNullish)
 		}
-		c.compileExprNamed(n.Value, nameOf(n.Target))
+		value(nameOf(n.Target))
 		c.assignTo(n.Target, false)
 		c.patchJump(jump)
 
