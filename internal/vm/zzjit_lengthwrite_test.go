@@ -54,7 +54,9 @@ var lengthRounds = [][2]string{
 // natively (mir's lengthWrite): each answer is Node's and the
 // interpreter's, shorten's writes call no Go, and the elements past the
 // length are cleared, as setArrayLength clears them, so that they hold
-// nothing. While the collector marks, Go writes them.
+// nothing -- while the collector marks too, native code clearing their
+// pointers with Go's write barrier (mir's lengthClear): the same work
+// (internal/jit/README.md, the write barrier's rule).
 func TestJITLengthWrites(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -87,11 +89,9 @@ func TestJITLengthWrites(t *testing.T) {
 		v, calls := jitCountGoCalls(t, r, `shorten(arr)`)
 		if marking {
 			*flag = 0
-			if calls < 50 {
-				t.Errorf("while marking, shorten called Go %d times for 50 writes", calls)
-			}
-		} else if calls != 0 {
-			t.Errorf("shorten called Go %d times", calls)
+		}
+		if calls != 0 {
+			t.Errorf("marking %v: shorten called Go %d times", marking, calls)
 		}
 		a := v.Object()
 		if n := len(a.elemsOf()); n != 0 {
@@ -102,6 +102,20 @@ func TestJITLengthWrites(t *testing.T) {
 				t.Errorf("marking %v: element %d past the length holds %#x %v", marking, i, *(*uint64)(unsafe.Pointer(&e.num)), e.ref)
 				break
 			}
+		}
+	}
+	// With the collector itself marking as shorten runs, the objects it
+	// clears shaded.
+	r := jitAgreesForTest(t, lengthSetup, `decr(30)`, `decr(30)`, `decr(30)`)
+	stop := jitCollectingForTest(t)
+	defer stop()
+	for range 50 {
+		v, err := r.Run(compileForTest(t, `''+decr(30)+shorten(filled(200, 2)).length`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := v.String().Go(); got != `0:[]0` {
+			t.Fatalf("collecting: %s, want 0:[]0", got)
 		}
 	}
 }

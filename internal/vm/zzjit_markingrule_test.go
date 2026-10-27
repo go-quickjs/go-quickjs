@@ -61,11 +61,7 @@ func TestJITSameWorkWhileMarking(t *testing.T) {
 // (the test fails while it is listed and keeps the rule), and no path is
 // added to it -- a new native path keeps the rule or is not compiled
 // natively.
-var jitMarkingBreaches = map[string]string{
-	// Calls of Go in a run of 256, idle -> marking (2026-10-27).
-	"array_length_decr":      "array length written smaller: 513 -> 256,513",
-	"array_hole_length_decr": "array length written smaller, holes: 615 -> 256,615",
-}
+var jitMarkingBreaches = map[string]string{}
 
 // jitMarkingCorpus is the micro-benchmarks' source, without microbench.js's
 // own driver, and the names of their tests: each function of one argument,

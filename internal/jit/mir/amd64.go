@@ -3799,10 +3799,11 @@ func (c *compiler) mapStep(v *ssa.Value, nexts [2]uintptr, slow amd64.Label) {
 // (lengthWrites): its receiver an array, dense, no property of its own,
 // whose length may be written, and the value a number that is an integer
 // from 0 to its length -- the length set, the elements past it cleared, as
-// the VM's setArrayLength shortens it -- while the collector does not
-// mark, which wants the pointers cleared shaded. Its result, undefined, is
-// in the call's keep cell. Anything else goes to slow, where Go makes it.
-// It uses every scratch register and xScratch2, and no other.
+// the VM's setArrayLength shortens it; while the collector marks, each
+// pointer cleared with Go's write barrier, which shades it (lengthClear).
+// Its result, undefined, is in the call's keep cell. Anything else goes to
+// slow, where Go makes it. It uses every scratch register and xScratch2,
+// and no other.
 func (c *compiler) lengthWrite(v *ssa.Value, slow amd64.Label) {
 	fail := func(cond amd64.Cond) { c.a.Jcc(cond, slow) }
 	recv, x := v.Args[0], v.Args[1]
@@ -3837,11 +3838,6 @@ func (c *compiler) lengthWrite(v *ssa.Value, slow amd64.Label) {
 	c.a.Load(scratchC, scratchB, c.enc.ObjectProps+8)
 	c.a.Op(amd64.Test, scratchC, scratchC, true)
 	fail(amd64.CondNE)
-	// The collector not marking.
-	c.movImm(scratchC, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchC, scratchC, 0)
-	c.a.Op(amd64.Test, scratchC, scratchC, false)
-	fail(amd64.CondNE)
 	// The length, no more than the array's, which becomes it; the
 	// elements from it to the old one cleared.
 	c.a.MovQFromX(scratchA, xScratch2)
@@ -3855,7 +3851,16 @@ func (c *compiler) lengthWrite(v *ssa.Value, slow amd64.Label) {
 	c.a.ShiftImm(amd64.Shl, scratchC, 4, true)
 	c.a.Op(amd64.Add, scratchA, scratchB, true)
 	c.a.Op(amd64.Add, scratchC, scratchB, true)
-	loop, cleared := c.a.NewLabel(), c.a.NewLabel()
+	loop, cleared, marked := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	c.movImm(scratchB, c.enc.WriteBarrier)
+	c.a.LoadU8(scratchB, scratchB, 0)
+	c.a.Op(amd64.Test, scratchB, scratchB, false)
+	c.a.Jcc(amd64.CondNE, marked)
+	c.cold = append(c.cold, func() {
+		c.a.Bind(marked)
+		c.lengthClear()
+		c.a.Jmp(cleared)
+	})
 	c.a.Bind(loop)
 	c.a.Op(amd64.Cmp, scratchA, scratchC, true)
 	c.a.Jcc(amd64.CondAE, cleared)
@@ -3867,7 +3872,53 @@ func (c *compiler) lengthWrite(v *ssa.Value, slow amd64.Label) {
 	c.a.Bind(cleared)
 	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
 	c.storeImm(regCtx, keep+c.enc.NumOffset, c.enc.Undefined, scratchA)
-	c.storeImm(regCtx, keep+c.enc.RefOffset, 0, scratchA)
+	c.a.Lea(scratchA, regCtx, keep+c.enc.RefOffset)
+	c.movImm(scratchC, 0)
+	c.storeByFlag()
+}
+
+// lengthClear is lengthWrite's clearing while the collector marks: the
+// elements from scratchA to scratchC, addresses of an array's, made empty,
+// each one's number word as it is, its pointer word, where it has one,
+// with Go's write barrier (ptrStore), which shades what it clears, as the
+// VM's setArrayLength clears them with Go's. Where it is, and where it
+// ends, it keeps in the context's GoArgs, which the call does not read.
+func (c *compiler) lengthClear() {
+	cur, end := abi.OffGoArgs, abi.OffGoArgs+8
+	c.a.Store(regCtx, cur, scratchA)
+	c.a.Store(regCtx, end, scratchC)
+	loop, done := c.a.NewLabel(), c.a.NewLabel()
+	c.a.Bind(loop)
+	c.a.Load(scratchA, regCtx, cur)
+	c.a.CmpMem(scratchA, regCtx, end, true)
+	c.a.Jcc(amd64.CondAE, done)
+	c.a.StoreImm(scratchA, c.enc.NumOffset, 0)
+	c.a.Lea(scratchA, scratchA, c.enc.RefOffset)
+	c.movImm(scratchC, 0)
+	c.ptrStore(true)
+	c.a.Load(scratchA, regCtx, cur)
+	c.a.OpImm(amd64.Add, scratchA, c.enc.ValueSize, true)
+	c.a.Store(regCtx, cur, scratchA)
+	c.a.Jmp(loop)
+	c.a.Bind(done)
+}
+
+// storeByFlag is ptrStore, plainly or marking as the collector's flag says:
+// the pointer word in scratchC to the address in scratchA. It uses every
+// scratch register.
+func (c *compiler) storeByFlag() {
+	marked, done := c.a.NewLabel(), c.a.NewLabel()
+	c.movImm(scratchB, c.enc.WriteBarrier)
+	c.a.LoadU8(scratchB, scratchB, 0)
+	c.a.Op(amd64.Test, scratchB, scratchB, false)
+	c.a.Jcc(amd64.CondNE, marked)
+	c.ptrStore(false)
+	c.a.Bind(done)
+	c.cold = append(c.cold, func() {
+		c.a.Bind(marked)
+		c.ptrStore(true)
+		c.a.Jmp(done)
+	})
 }
 
 // keyedStore makes call v, an element's write Go makes from native code

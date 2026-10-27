@@ -6058,9 +6058,6 @@ func (c *a64Compiler) lengthWrite(v *ssa.Value, slow arm64.Label) {
 	fail(arm64.NE)
 	c.a.Load(a64C, a64B, c.enc.ObjectProps+8)
 	c.a.Cbnz(a64C, slow, true)
-	c.movImm(a64C, c.enc.WriteBarrier)
-	c.a.LoadU8(a64C, a64C, 0)
-	c.a.Cbnz(a64C, slow, false)
 	c.a.FMovFromF(a64A, a64F2)
 	c.a.Load(a64C, a64B, c.enc.ObjectElems+8)
 	c.a.Cmp(a64A, a64C, true)
@@ -6071,8 +6068,16 @@ func (c *a64Compiler) lengthWrite(v *ssa.Value, slow arm64.Label) {
 	c.a.ShiftImm(arm64.Lsl, a64C, a64C, 4, true)
 	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
 	c.a.Op(arm64.Add, a64C, a64C, a64B, true)
+	loop, cleared, marked := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	c.movImm(a64B, c.enc.WriteBarrier)
+	c.a.LoadU8(a64B, a64B, 0)
+	c.a.Cbnz(a64B, marked, false)
+	c.cold = append(c.cold, func() {
+		c.a.Bind(marked)
+		c.lengthClear()
+		c.a.B(cleared)
+	})
 	c.movImm(a64D, 0)
-	loop, cleared := c.a.NewLabel(), c.a.NewLabel()
 	c.a.Bind(loop)
 	c.a.Cmp(a64A, a64C, true)
 	c.a.BCond(arm64.HS, cleared)
@@ -6085,7 +6090,49 @@ func (c *a64Compiler) lengthWrite(v *ssa.Value, slow arm64.Label) {
 	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
 	c.movImm(a64C, c.enc.Undefined)
 	c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64C)
-	c.a.Store(a64Ctx, keep+c.enc.RefOffset, a64D)
+	c.a.AddImm(a64A, a64Ctx, int64(keep+c.enc.RefOffset), true)
+	c.movImm(a64C, 0)
+	c.storeByFlag()
+}
+
+// lengthClear is amd64's: the elements from a64A to a64C cleared while the
+// collector marks, each pointer word through storeRef (ptrStore), where
+// it is and where it ends kept in the context's GoArgs.
+func (c *a64Compiler) lengthClear() {
+	cur, end := abi.OffGoArgs, abi.OffGoArgs+8
+	c.a.Store(a64Ctx, cur, a64A)
+	c.a.Store(a64Ctx, end, a64C)
+	loop, done := c.a.NewLabel(), c.a.NewLabel()
+	c.a.Bind(loop)
+	c.a.Load(a64A, a64Ctx, cur)
+	c.a.Load(a64C, a64Ctx, end)
+	c.a.Cmp(a64A, a64C, true)
+	c.a.BCond(arm64.HS, done)
+	c.movImm(a64C, 0)
+	c.a.Store(a64A, c.enc.NumOffset, a64C)
+	c.a.AddImm(a64A, a64A, int64(c.enc.RefOffset), true)
+	c.ptrStore(true)
+	c.a.Load(a64A, a64Ctx, cur)
+	c.a.AddImm(a64A, a64A, int64(c.enc.ValueSize), true)
+	c.a.Store(a64Ctx, cur, a64A)
+	c.a.B(loop)
+	c.a.Bind(done)
+}
+
+// storeByFlag is amd64's: ptrStore, plainly or marking as the collector's
+// flag says, the pointer word in a64C to the address in a64A.
+func (c *a64Compiler) storeByFlag() {
+	marked, done := c.a.NewLabel(), c.a.NewLabel()
+	c.movImm(a64B, c.enc.WriteBarrier)
+	c.a.LoadU8(a64B, a64B, 0)
+	c.a.Cbnz(a64B, marked, false)
+	c.ptrStore(false)
+	c.a.Bind(done)
+	c.cold = append(c.cold, func() {
+		c.a.Bind(marked)
+		c.ptrStore(true)
+		c.a.B(done)
+	})
 }
 
 // mapStep is amd64's: a for...of's step of a Map's or a Set's iterator,
