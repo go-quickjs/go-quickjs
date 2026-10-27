@@ -20,18 +20,21 @@ import (
 // string and null, at keys negative, out of range and past 2^31; stores
 // with int32 keys into every kind, of numbers, strings and objects with
 // valueOf, a frozen array's, sloppy and strict; and an asm.js loop over an
-// Int32Array in an upvalue. On the trees, the operators' int32 trees are
-// built (i32Of).
+// Int32Array in an upvalue. On the trees, the int32 nodes are built: the
+// operators' (i32Of), the element reads' under an operator (i32Elem) and
+// the int32-keyed reads' (i32GetNode).
 func TestInt32Trees(t *testing.T) {
-	of := i32Of
-	defer func() { i32Of = of }()
-	ofs := 0
+	of, elem, get := i32Of, i32Elem, i32GetNode
+	defer func() { i32Of, i32Elem, i32GetNode = of, elem, get }()
+	ofs, elems, gets := 0, 0, 0
 	i32Of = func(e tentry) (ti32, bool) { ofs++; return of(e) }
+	i32Elem = func(obj, key tentry, s *i32Site) ti32 { elems++; return elem(obj, key, s) }
+	i32GetNode = func(obj, key tentry, pc int) tval { gets++; return get(obj, key, pc) }
 	runInt32Script(t, "ops", func(tree bool) {
-		if tree && ofs < 50 {
-			t.Errorf("tree tier: %d int32 trees built", ofs)
+		if tree && (ofs < 50 || elems < 10 || gets < 5) {
+			t.Errorf("tree tier: %d int32 trees, %d element reads under an operator, %d int32-keyed reads built", ofs, elems, gets)
 		}
-		ofs = 0
+		ofs, elems, gets = 0, 0, 0
 	})
 }
 

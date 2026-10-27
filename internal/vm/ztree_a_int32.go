@@ -39,8 +39,11 @@ import (
 // throw as they did. An entry whose operands may both be BigInts is built
 // as before.
 //
-// The code is closures assigned in this file's inits, which sorts before
-// every other tree file with an init: their closures are laid out
+// ztree_a_int32elem.go reads and writes elements at int32 keys, and reads
+// an element under an operator as an int32.
+//
+// The code is closures assigned in the inits of these files, which sort
+// before every other tree file with an init: their closures are laid out
 // after every other closure of the package (see ztree_zkself.go). Each
 // builder has an init of its own, which keeps every function small enough
 // for its closures to inline what they call.
@@ -95,11 +98,13 @@ func i32Wide(i int32, uns bool) int64 {
 
 // i32Do is the bitwise operator op of a and b, ToInt32's bits of each.
 func i32Do(op bytecode.Op, a, b int32) int32 {
+	if op == bytecode.OpBitOr {
+		// x | 0, every int32 of code compiled from C, tested first.
+		return a | b
+	}
 	switch op {
 	case bytecode.OpBitAnd:
 		return a & b
-	case bytecode.OpBitOr:
-		return a | b
 	case bytecode.OpBitXor:
 		return a ^ b
 	case bytecode.OpShl:
@@ -361,6 +366,12 @@ func init() {
 	i32Of = func(e tentry) (ti32, bool) {
 		a := e.arith
 		uns := a.op == bytecode.OpUShr
+		if g := a.y.arith; a.imm && g != nil && g.op == bytecode.OpGetIndex {
+			// An element read under the operator, which getIndexAt
+			// made one entry: its object and key are kept in y, which
+			// an operator with a constant has no use for.
+			return i32Elem(g.x, g.y, &i32Site{op: a.op, k: a.k, kv: Int32(a.k), gpc: g.pc, bpc: a.pc}), uns
+		}
 		if a.imm {
 			return i32Imm(a.op, a.x, a.k, a.pc), uns
 		}

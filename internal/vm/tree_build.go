@@ -1136,7 +1136,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 	case bytecode.OpGetIndex:
 		// a[0] op= y, whose object and key the compiler reads twice rather
 		// than copying.
-		if skip, ok := b.placeUpdate(pc, in); ok {
+		if skip, ok := getIndexAt(b, pc, in); ok {
 			return skip, true
 		}
 		key, obj := b.pop(), b.pop()
@@ -1172,7 +1172,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		b.push(getLocalIndexUpdateNode(in, pc))
 	case bytecode.OpSetIndex:
 		val, key, obj := b.pop(), b.pop(), b.pop()
-		return 0, b.stmt(setIndexStmt(obj, key, val.tree(), pc, fn.Strict))
+		return 0, b.stmt(setIndexAt(obj, key, val.tree(), pc, fn.Strict))
 	case bytecode.OpGetProp:
 		// o.x op= y, whose object the compiler reads twice or copies.
 		if skip, ok := b.placeUpdate(pc, in); ok {
