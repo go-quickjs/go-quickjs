@@ -884,7 +884,7 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 					return exit(v.State, ir.ExitKind(v.Aux))
 				}
 				vals[v.ID] = val{cell: &g.Props[i]}
-			case OpConstCell, OpUpvalueCell, OpLocalCell, OpLexCell, OpBindingCell, OpStringProp, OpStringChar, OpCodeChar, OpCodeCharOr, OpSubstringChar:
+			case OpConstCell, OpUpvalueCell, OpLocalCell, OpLexCell, OpBindingCell, OpStringProp, OpStringChar, OpCodeChar, OpCodeCharOr, OpSubstringChar, OpStringAtOr:
 				// The heap model has no constants' or captured bindings'
 				// cells.
 				return ir.Exit{}, fmt.Errorf("%w: a constant's or binding's cell", ErrUnsupported)
@@ -901,6 +901,21 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 					return exit(v.State, ir.ExitKind(v.Aux))
 				}
 				vals[v.ID] = val{f: float64(s.Units[i])}
+			case OpStringCodePointOr:
+				// The code point, as the VM's codePointAt makes it of a flat
+				// string; -1 for anything else.
+				r := -1.0
+				if s, ok := heap.Strings[a.t.Bits]; ok && a.t.Kind == ir.String && s.Flat && b.t.Kind == ir.Number {
+					if i, isIndex := index(math.Float64frombits(b.t.Bits)); isIndex && i < uint64(len(s.Units)) {
+						r = float64(s.Units[i])
+						if u := s.Units[i]; u >= 0xD800 && u < 0xDC00 && i+1 < uint64(len(s.Units)) {
+							if w := s.Units[i+1]; w >= 0xDC00 && w < 0xE000 {
+								r = float64((rune(u)-0xD800)<<10 + (rune(w) - 0xDC00) + 0x10000)
+							}
+						}
+					}
+				}
+				vals[v.ID] = val{f: r}
 			case OpLoadCell:
 				vals[v.ID] = val{t: *a.cell}
 			case OpKeep:

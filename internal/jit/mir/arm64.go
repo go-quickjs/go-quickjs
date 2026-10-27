@@ -6447,6 +6447,118 @@ func (c *a64Compiler) codeChar(v *ssa.Value, guard func(arm64.Cond)) {
 	c.charCell(v, guard)
 }
 
+// stringKeyUnit is amd64's: the index in A, the unit's address in B and
+// the unit in A, the units left from it in C where units. It uses A, B, C,
+// F0 and F1.
+func (c *a64Compiler) stringKeyUnit(v *ssa.Value, rel, units bool, none arm64.Label) {
+	fail := func(cond arm64.Cond) { c.a.BCond(cond, none) }
+	s, key := v.Args[0], v.Args[1]
+	if s.Shadow == nil && c.origin.At(s) < 0 {
+		c.a.B(none)
+		return
+	}
+	if key.Op == ssa.OpBoxF64 {
+		if k := c.fpr(key.Args[0], a64F0); k != a64F0 {
+			c.a.FMov(a64F0, k)
+		}
+	} else {
+		var w arm64.Reg
+		if remat(key) {
+			c.materialize(key, a64A)
+			w = a64A
+		} else {
+			w = c.gpr(key, a64A)
+		}
+		c.movImm(a64B, abi.NumberLimit)
+		c.a.Cmp(w, a64B, true)
+		fail(arm64.HS)
+		c.a.FMovToF(a64F0, w)
+	}
+	c.referenceTo(v, s, c.enc.String, fail, none)
+	c.a.Load(a64B, a64C, c.enc.StringLeft)
+	c.a.Cbnz(a64B, none, true)
+	// An integer: FCVTZS and back, the key itself; unordered is not equal.
+	c.a.Fcvtzs(a64A, a64F0)
+	c.a.Scvtf(a64F1, a64A, true)
+	c.a.FCmp(a64F1, a64F0)
+	fail(arm64.NE)
+	c.a.Load(a64B, a64C, c.enc.StringLength)
+	if rel {
+		nonNegative := c.a.NewLabel()
+		c.a.CmpImm(a64A, 0, true)
+		c.a.BCond(arm64.GE, nonNegative)
+		c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+		c.a.Bind(nonNegative)
+	}
+	c.a.Cmp(a64A, a64B, true)
+	fail(arm64.HS)
+	ascii, done := c.a.NewLabel(), c.a.NewLabel()
+	c.a.LoadU8(a64B, a64C, c.enc.StringASCII)
+	c.a.Cbnz(a64B, ascii, false)
+	c.a.Load(a64B, a64C, c.enc.StringU16)
+	c.a.Cbz(a64B, none, true)
+	if units {
+		c.a.Load(a64C, a64C, c.enc.StringLength)
+		c.a.Op(arm64.Sub, a64C, a64C, a64A, true)
+	}
+	c.a.Op(arm64.Add, a64B, a64B, a64A, true)
+	c.a.Op(arm64.Add, a64B, a64B, a64A, true)
+	c.a.LoadU16(a64A, a64B, 0)
+	c.a.B(done)
+	c.a.Bind(ascii)
+	c.a.Load(a64B, a64C, c.enc.StringData)
+	c.a.Op(arm64.Add, a64B, a64B, a64A, true)
+	c.a.LoadU8(a64A, a64B, 0)
+	if units {
+		c.movImm(a64C, 1)
+	}
+	c.a.Bind(done)
+}
+
+// stringCodePointOr is ssa.OpStringCodePointOr, as amd64's. It uses A, B,
+// C, F0 and F1.
+func (c *a64Compiler) stringCodePointOr(v *ssa.Value) {
+	none, unit, done := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	c.stringKeyUnit(v, false, true, none)
+	c.a.CmpImm(a64C, 1, true)
+	c.a.BCond(arm64.LS, unit)
+	c.a.AddImm(a64C, a64A, -0xD800, false)
+	c.a.CmpImm(a64C, 0x400, false)
+	c.a.BCond(arm64.HS, unit)
+	c.a.LoadU16(a64B, a64B, 2)
+	c.a.AddImm(a64B, a64B, -0xDC00, false)
+	c.a.CmpImm(a64B, 0x400, false)
+	c.a.BCond(arm64.HS, unit)
+	c.a.ShiftImm(arm64.Lsl, a64C, a64C, 10, false)
+	c.a.Op(arm64.Add, a64C, a64C, a64B, false)
+	c.a.AddImm(a64A, a64C, 0x10000, false)
+	c.a.Bind(unit)
+	c.a.Scvtf(a64F0, a64A, true)
+	c.a.B(done)
+	c.a.Bind(none)
+	c.movImm(a64A, math.Float64bits(-1))
+	c.a.FMovToF(a64F0, a64A)
+	c.a.Bind(done)
+	c.setF(v, a64F0)
+}
+
+// stringAtOr is ssa.OpStringAtOr, as amd64's. It uses A, B, C, F0 and F1.
+func (c *a64Compiler) stringAtOr(v *ssa.Value) {
+	none, done := c.a.NewLabel(), c.a.NewLabel()
+	c.stringKeyUnit(v, true, false, none)
+	c.a.CmpImm(a64A, 256, true)
+	c.a.BCond(arm64.HS, none)
+	c.a.Load(a64B, a64Ctx, abi.OffCharStrings)
+	c.a.Cbz(a64B, none, true)
+	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
+	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	c.a.B(done)
+	c.a.Bind(none)
+	c.movImm(a64A, 0)
+	c.a.Bind(done)
+	c.setG(v, a64A)
+}
+
 // codeCharOr is ssa.OpCodeCharOr, as amd64's. It uses A, B, F0 and F1.
 func (c *a64Compiler) codeCharOr(v *ssa.Value) {
 	none, done := c.a.NewLabel(), c.a.NewLabel()
@@ -7490,6 +7602,10 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.codeChar(v, c.guardFor(v))
 	case ssa.OpCodeCharOr:
 		c.codeCharOr(v)
+	case ssa.OpStringCodePointOr:
+		c.stringCodePointOr(v)
+	case ssa.OpStringAtOr:
+		c.stringAtOr(v)
 	case ssa.OpLoopMark:
 		// As amd64's: abi.Context's Loop.
 		c.movImm(a64A, v.Const.Bits)

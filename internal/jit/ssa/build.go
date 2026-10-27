@@ -708,6 +708,27 @@ type LeafFeedback interface {
 	Leaf(pc int) (fn uintptr, ok bool)
 }
 
+// LeafKindFeedback is LeafFeedback that knows which of the leaves native
+// code makes itself where it can (LeafKind) the function at fn is, as V8's
+// call reducer knows a builtin by its id: leafCall makes those natively
+// first, the leaf's call made where native code says nothing.
+type LeafKindFeedback interface {
+	LeafKind(fn uintptr) LeafKind
+}
+
+// LeafKind is a leaf native code makes itself where it can: the
+// realm's String.prototype.codePointAt (LeafCodePointAt) and
+// String.prototype.at (LeafAt), each of one argument, made of a flat
+// string's code units (OpStringCodePointOr, OpStringAtOr). LeafOther is
+// any other.
+type LeafKind uint8
+
+const (
+	LeafOther LeafKind = iota
+	LeafCodePointAt
+	LeafAt
+)
+
 // leafAt is the leaf the call at pc of the root, one Go makes (a GoCall
 // site) of at most abi.MaxGoArgs-2 arguments, calls (LeafFeedback).
 func (b *builder) leafAt(pc int) (uintptr, bool) {
@@ -761,12 +782,66 @@ func (b *builder) leafCall(blk *Block, pc int, fn uintptr, guard func(Op, Type, 
 		args = append(args, b.read(at+1+k, blk))
 	}
 	site := &CallSite{Go: GoLeaf, Argc: c.Argc, Method: c.Method, ThisSlot: -1, Leaf: fn}
+	if kind := b.leafKind(fn); kind != LeafOther && c.Method && c.Argc == 1 {
+		b.leafNative(blk, pc, kind, base, args, site)
+		return
+	}
 	call := guard(OpCall, Tagged, ir.HostExit, args...)
 	f.cache(call).Calls, call.Index = []*CallSite{site}, b.callKeeps[pc]
 	kept := f.newValue(blk, OpCallCell, Source, call)
 	r := f.newValue(blk, OpKept, Tagged, kept, call)
 	r.Shadow = kept
 	b.write(base, blk, r)
+}
+
+// leafKind is which of the leaves native code makes itself the function at
+// fn is (LeafKindFeedback), or LeafOther.
+func (b *builder) leafKind(fn uintptr) LeafKind {
+	if f, ok := b.fb.(LeafKindFeedback); ok {
+		return f.LeafKind(fn)
+	}
+	return LeafOther
+}
+
+// leafNative makes the call at pc of a leaf native code makes itself where
+// it can (kind), its function checked, args the leaf's call's operands --
+// the function, the receiver, the one argument -- as V8 reduces a call of
+// a builtin it knows: the result made of the receiver's code units where
+// native code says what it is (OpStringCodePointOr, OpStringAtOr), and
+// the leaf's call of Go (GoLeaf, site) made on a branch of its own where
+// it does not (split), native code going on after either, the result
+// where the call's would be.
+func (b *builder) leafNative(blk *Block, pc int, kind LeafKind, base int, args []*Value, site *CallSite) {
+	f := b.f
+	recv, key := args[1], args[2]
+	var made *Value
+	var miss, hit *Block
+	st := b.state(blk, pc)
+	switch kind {
+	case LeafCodePointAt:
+		code := f.newValue(blk, OpStringCodePointOr, Float64, recv, key)
+		zero := f.newValue(blk, OpConstF64, Float64)
+		zero.Const = ir.Float(0)
+		none := f.newValue(blk, OpCmpF64, Bool, code, zero)
+		none.Aux = int(ir.Lt)
+		miss, hit, _ = b.split(blk, none, true)
+		made = f.newValue(hit, OpBoxF64, Tagged, code)
+	default:
+		cell := f.newValue(blk, OpStringAtOr, Source, recv, key)
+		none := f.newValue(blk, OpCellNone, Bool, cell)
+		miss, hit, _ = b.split(blk, none, true)
+		made = f.newValue(hit, OpLoadCell, Tagged, cell)
+		made.Shadow = cell
+	}
+	b.write(base, hit, made)
+	call := f.newValue(miss, OpCall, Tagged, args...)
+	f.cache(call).Calls = []*CallSite{site}
+	call.Aux, call.State, call.Index = int(ir.HostExit), st, b.callKeeps[pc]
+	st.addUse()
+	kept := f.newValue(miss, OpCallCell, Source, call)
+	r := f.newValue(miss, OpKept, Tagged, kept, call)
+	r.Shadow = kept
+	b.write(base, miss, r)
 }
 
 // BigStringFeedback is Feedback that knows a method call at a PC, of no

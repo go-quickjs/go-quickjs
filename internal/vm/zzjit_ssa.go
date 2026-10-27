@@ -8168,6 +8168,24 @@ func (fb *jitFeedback) Leaf(pc int) (uintptr, bool) {
 	return 0, false
 }
 
+// LeafKind is ssa.LeafKindFeedback's: which of the leaves native code
+// makes itself where it can the leaf at fn is -- a function Leaf found,
+// which the code checks it calls -- by its frameless application (elemOp):
+// String.prototype's codePointAt and at.
+func (fb *jitFeedback) LeafKind(fn uintptr) ssa.LeafKind {
+	fd := (*Object)(*(*unsafe.Pointer)(unsafe.Pointer(&fn))).fn()
+	if fd == nil {
+		return ssa.LeafOther
+	}
+	switch fd.elemOp {
+	case elemStrCodePointAt:
+		return ssa.LeafCodePointAt
+	case elemStrAt:
+		return ssa.LeafAt
+	}
+	return ssa.LeafOther
+}
+
 // jitSearch is the answer of the search of kind, one of jitSearches, on
 // recv with args (Go's GoIndexOf): the built-in's own, by its Go function,
 // where nothing it does can run script or throw -- a string searched for

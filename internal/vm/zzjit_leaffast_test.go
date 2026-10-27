@@ -29,7 +29,7 @@ function leafTurns(s, m, xs, ks, n) {
 	return h + '|' + out
 }
 var sm = new Map([[0, 'a'], [1, 'b'], [2, 'c']])
-function leafs(n) { return leafTurns('héllo😀', sm, [1.5, '42', true, null, NaN, -0], [0, 3, -1, 9], n) }
+function leafs(n) { return leafTurns('h\u00e9llo\ud83d\ude00', sm, [1.5, '42', true, null, NaN, -0], [0, 3, -1, 9], n) }
 function odd(n) { conversions = 0; return leafTurns('hello', sm, [2], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, { valueOf() { conversions++; return 1 } }], n) + '|' + conversions }
 `
 
@@ -74,18 +74,27 @@ func TestJITLeafFast(t *testing.T) {
 	if _, err := r.Run(compileForTest(t, "leafs(40)")); err != nil {
 		t.Fatal(err)
 	}
-	// Seven leaves a turn, each made by the routine; the Map's get read
-	// once, by Go.
-	if got := r.jit.leafFast - fast; got != 7*40 || r.jit.leafRefused != refused || e.ssaStats.goCalls-calls > 1 {
-		t.Errorf("leafs(40) made %d leaves' calls through the routine, refused %d, %d calls of Go with frames; want 280, 0, at most 1",
+	// Seven leaves a turn, made by the routine but for those native code
+	// makes itself (ssa.LeafKind): every codePointAt, and at's of 0 and 3,
+	// below 256, its of -1, a surrogate, and of 9, past the end, the
+	// routine's. The Map's get read once, by Go.
+	if got := r.jit.leafFast - fast; got != 5*40+20 || r.jit.leafRefused != refused || e.ssaStats.goCalls-calls > 1 {
+		t.Errorf("leafs(40) made %d leaves' calls through the routine, refused %d, %d calls of Go with frames; want 220, 0, at most 1",
 			got, r.jit.leafRefused-refused, e.ssaStats.goCalls-calls)
 	}
 	// Each call's form made once, at its first call, and kept in its
 	// description (jitLeafForm).
+	forms := 0
 	for _, st := range e.ssa.GoCallStates() {
-		if ssa.GoOp(st.Op&0xff) == ssa.GoLeaf && (st.LeafForm == nil || (*jitLeafForm)(st.LeafForm).keep != st.Keep) {
-			t.Errorf("a leaf's call made without its form: %+v", st)
+		if ssa.GoOp(st.Op&0xff) == ssa.GoLeaf && st.LeafForm != nil {
+			if (*jitLeafForm)(st.LeafForm).keep != st.Keep {
+				t.Errorf("a leaf's call made with another's form: %+v", st)
+			}
+			forms++
 		}
+	}
+	if forms < 6 {
+		t.Errorf("%d leaves' calls have their forms, want the six the routine made", forms)
 	}
 	if _, err := r.Run(compileForTest(t, "odd(40)")); err != nil {
 		t.Fatal(err)
@@ -161,7 +170,7 @@ func TestJITLeafFastWhileCollecting(t *testing.T) {
 // call, of an object key, has its frame made of them, the interpreter
 // going on with the object's valueOf.
 const chainSetup = `
-var gs = 'abcdefgh', calls = 0
+var gs = '\u03b1\u03b2\u03b3\u03b4\u03b5\u03b6\u03b7\u03b8', calls = 0
 function chain3(a, b, c) { let out = '', h = 0; for (let j = 0; j < 8; j++) { out = gs.at(a) + '-' + gs.at(b) + '-' + gs.at(c); h += out.length } return out + h }
 function chain(ks, n) { let out = '', h = 0; for (let i = 0; i < n; i++) { out = chain3(ks[i % 3], ks[(i + 1) % 3], ks[i % ks.length]); h = (h * 7 + out.charCodeAt(4)) | 0 } return out + h }
 function plain(n) { return chain([1, 2, 3], n) }
@@ -183,9 +192,9 @@ func TestJITLeafColdSaves(t *testing.T) {
 	r := jitAgreesForTest(t, chainSetup, rounds...)
 	fast := r.jit.leafFast
 	for _, rd := range [][2]string{
-		{"plain(30)", "d-b-d40-1178309528"},
-		{"odd(30)", "d-b-f401034345824:48"},
-		{"plain(30)", "d-b-d40-1178309528"},
+		{"plain(30)", "\u03b4-\u03b2-\u03b440-531811864"},
+		{"odd(30)", "\u03b4-\u03b2-\u03b6401680843488:48"},
+		{"plain(30)", "\u03b4-\u03b2-\u03b440-531811864"},
 	} {
 		v, err := r.Run(compileForTest(t, "''+("+rd[0]+")"))
 		if err != nil {
@@ -198,5 +207,71 @@ func TestJITLeafColdSaves(t *testing.T) {
 	cl := r.global.getOwn(r.atoms.intern("chain3")).value().Object().fn().closure
 	if e := r.jit.hint(cl); e == nil || e.ssa == nil || r.jit.leafFast-fast < 3*8*90-48 {
 		t.Errorf("chain3's leaves' calls through the routine: %d, want 3 a call but the refused", r.jit.leafFast-fast)
+	}
+}
+
+// nativeFormsSetup's functions call String.prototype's codePointAt and
+// at, which native code makes itself where it can (ssa.LeafKind), of
+// strings of ASCII's bytes, of Latin-1, of UTF-16 with pairs, lone
+// surrogates at either end, empty, of one unit, a rope, and of wrapper
+// objects, at every kind of key: in range, at and past the end, below 0,
+// fractions, -0, NaN, past 2**32, and keys that are no numbers.
+const nativeFormsSetup = `
+var big = String.fromCharCode(0xd83d, 0xde00, 0x3b1, 0xd800, 0x61, 0xdc00, 0xe9, 0xd83d)
+var strs = ['hello', 'h' + String.fromCharCode(0xe9) + 'llo', big, '', 'x']
+var keys = [0, 1, 2, 3, 4, 5, 6, 7, 8, -1, -2, -8, -9, 1.5, -0, NaN, 4294967296, '2', undefined, null, true]
+function codes(s, ks) { let out = ''; for (let i = 0; i < ks.length; i++) out += s.codePointAt(ks[i]) + ','; return out }
+function ats(s, ks) { let out = ''; for (let i = 0; i < ks.length; i++) { const c = s.at(ks[i]); out += (c === undefined ? 'u' : c.charCodeAt(0)) + ',' } return out }
+function every() { let out = ''; for (const s of strs) out += codes(s, keys) + '|' + ats(s, keys) + '\n'; const r = strs[0] + strs[2]; return out + codes(r, [0, 5, 6]) + ats(r, [4, -3]) }
+function sum(s, n) { let h = 0; for (let i = 0; i < n; i++) h = (h * 31 + s.codePointAt(i % s.length) + s.at(-1 - (i % s.length)).length) | 0; return h }
+function wrapped(n) { return codes(new String('abc'), [0, 1, 2]) + ats(new String('abc'), [0, -1]) }
+`
+
+// codePointAt and at are made of their receivers' code units natively
+// (OpStringCodePointOr, OpStringAtOr), the leaf's call made where native
+// code says nothing of the call: every answer is Node's (v26.10.0), and a
+// loop of in-range calls on a string of ASCII's bytes makes no call of Go.
+func TestJITLeafNativeForms(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	var rounds []string
+	for range 6 {
+		rounds = append(rounds, "every()", "sum('hello world', 50)")
+	}
+	r := jitAgreesForTest(t, nativeFormsSetup, rounds...)
+	fast := r.jit.leafFast
+	for _, rd := range [][2]string{
+		{"every()", "104,101,108,108,111,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,101,104,104,undefined,108,104,104,101,|104,101,108,108,111,u,u,u,u,111,108,u,u,101,104,104,u,108,104,104,101,\n104,233,108,108,111,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,233,104,104,undefined,108,104,104,233,|104,233,108,108,111,u,u,u,u,111,108,u,u,233,104,104,u,108,104,104,233,\n128512,56832,945,55296,97,56320,233,55357,undefined,undefined,undefined,undefined,undefined,56832,128512,128512,undefined,945,128512,128512,56832,|55357,56832,945,55296,97,56320,233,55357,u,55357,233,55357,u,56832,55357,55357,u,945,55357,55357,56832,\nundefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,|u,u,u,u,u,u,u,u,u,u,u,u,u,u,u,u,u,u,u,u,u,\n120,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,120,120,undefined,undefined,120,120,undefined,|120,u,u,u,u,u,u,u,u,120,u,u,u,u,120,120,u,u,120,120,u,\n104,128512,56832,111,56320,"},
+		{"sum('hello world', 50)", "1935277998"},
+	} {
+		v, err := r.Run(compileForTest(t, "''+("+rd[0]+")"))
+		if err != nil {
+			t.Fatalf("%s: %v", rd[0], err)
+		}
+		if got := v.String().Go(); got != rd[1] {
+			t.Errorf("%s = %q, want Node's %q", rd[0], got, rd[1])
+		}
+		if rd[0] == "every()" {
+			fast = r.jit.leafFast
+		}
+	}
+	if r.jit.leafFast != fast {
+		t.Errorf("sum's calls of ASCII's units made %d calls of Go", r.jit.leafFast-fast)
+	}
+	for _, name := range []string{"codes", "ats", "sum"} {
+		jitNativeForTest(t, r, name)
+	}
+	for _, rd := range [][2]string{
+		{"sum(big + 'abc', 50)", "-1963823730"},
+		{"wrapped(1)", "97,98,99,97,99,"},
+	} {
+		v, err := r.Run(compileForTest(t, "''+("+rd[0]+")"))
+		if err != nil {
+			t.Fatalf("%s: %v", rd[0], err)
+		}
+		if got := v.String().Go(); got != rd[1] {
+			t.Errorf("%s = %q, want Node's %q", rd[0], got, rd[1])
+		}
 	}
 }

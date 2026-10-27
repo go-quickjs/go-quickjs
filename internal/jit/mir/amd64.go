@@ -7295,6 +7295,140 @@ func (c *compiler) substringChar(v *ssa.Value) {
 	c.setG(v, scratchA)
 }
 
+// stringKeyUnit reads the code unit of v's string, a flat one, at v's key,
+// a number, for s.codePointAt(i) and s.at(i) (ssa.OpStringCodePointOr,
+// OpStringAtOr): the index in scratchA -- below 0, where rel, counting from
+// the string's end -- the address of its unit in scratchB and the unit in
+// scratchA, and, where units, how many units are left from it in scratchC;
+// anything else jumps to none. It uses every scratch register, xScratch0
+// and xScratch1.
+func (c *compiler) stringKeyUnit(v *ssa.Value, rel, units bool, none amd64.Label) {
+	fail := func(cond amd64.Cond) { c.a.Jcc(cond, none) }
+	s, key := v.Args[0], v.Args[1]
+	if s.Shadow == nil && c.origin.At(s) < 0 {
+		// A primitive, never a string's reference.
+		c.a.Jmp(none)
+		return
+	}
+	if key.Op == ssa.OpBoxF64 {
+		// A number's own, unboxed.
+		if k := c.xmm(key.Args[0], xScratch0); k != xScratch0 {
+			c.a.SSEOp(amd64.MovAPD, xScratch0, k)
+		}
+	} else {
+		var w amd64.Reg
+		if remat(key) {
+			c.materialize(key, scratchA)
+			w = scratchA
+		} else {
+			w = c.gpr(key, scratchA)
+		}
+		c.cmpWord(w, abi.NumberLimit)
+		fail(amd64.CondAE)
+		c.a.MovQToX(xScratch0, w)
+	}
+	c.reference(v, s, c.enc.String, fail)
+	c.a.Load(scratchB, scratchC, c.enc.StringLeft)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	fail(amd64.CondNE)
+	// An integer: truncated and back, the key itself (NaN and anything past
+	// 2**63 are not); -0 is 0.
+	c.a.Cvttsd2si(scratchA, xScratch0)
+	c.a.Cvtsi2sd(xScratch1, scratchA, true)
+	c.a.SSEOp(amd64.UcomiSD, xScratch1, xScratch0)
+	fail(amd64.CondNE)
+	fail(amd64.CondP)
+	c.a.Load(scratchB, scratchC, c.enc.StringLength)
+	if rel {
+		nonNegative := c.a.NewLabel()
+		c.a.Op(amd64.Test, scratchA, scratchA, true)
+		c.a.Jcc(amd64.CondNS, nonNegative)
+		c.a.Op(amd64.Add, scratchA, scratchB, true)
+		c.a.Bind(nonNegative)
+	}
+	// Below the length, unsigned: an index still below 0 is past it.
+	c.a.Op(amd64.Cmp, scratchA, scratchB, true)
+	fail(amd64.CondAE)
+	ascii, done := c.a.NewLabel(), c.a.NewLabel()
+	c.a.LoadU8(scratchB, scratchC, c.enc.StringASCII)
+	c.a.Op(amd64.Test, scratchB, scratchB, false)
+	c.a.Jcc(amd64.CondNE, ascii)
+	c.a.Load(scratchB, scratchC, c.enc.StringU16)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	fail(amd64.CondE)
+	if units {
+		c.a.Load(scratchC, scratchC, c.enc.StringLength)
+		c.a.Op(amd64.Sub, scratchC, scratchA, true)
+	}
+	c.a.Op(amd64.Add, scratchB, scratchA, true)
+	c.a.Op(amd64.Add, scratchB, scratchA, true)
+	c.a.LoadU16(scratchA, scratchB, 0)
+	c.a.Jmp(done)
+	c.a.Bind(ascii)
+	c.a.Load(scratchB, scratchC, c.enc.StringData)
+	c.a.Op(amd64.Add, scratchB, scratchA, true)
+	c.a.LoadU8(scratchA, scratchB, 0)
+	if units {
+		// No surrogate in a string of ASCII's bytes: one unit left will do.
+		c.movImm(scratchC, 1)
+	}
+	c.a.Bind(done)
+}
+
+// stringCodePointOr is s.codePointAt(i) (ssa.OpStringCodePointOr): the
+// code point at i of a flat string s into v's register -- the unit there,
+// or, a leading surrogate's with a trailing one after it, the pair's -- or
+// -1 for anything else, which Go makes. It uses every scratch register,
+// xScratch0 and xScratch1.
+func (c *compiler) stringCodePointOr(v *ssa.Value) {
+	none, unit, done := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	c.stringKeyUnit(v, false, true, none)
+	// A pair: a leading surrogate, a unit after it, a trailing surrogate.
+	c.a.OpImm(amd64.Cmp, scratchC, 1, true)
+	c.a.Jcc(amd64.CondBE, unit)
+	c.a.MovRR(scratchC, scratchA)
+	c.a.OpImm(amd64.Sub, scratchC, 0xD800, false)
+	c.a.OpImm(amd64.Cmp, scratchC, 0x400, false)
+	c.a.Jcc(amd64.CondAE, unit)
+	c.a.LoadU16(scratchB, scratchB, 2)
+	c.a.OpImm(amd64.Sub, scratchB, 0xDC00, false)
+	c.a.OpImm(amd64.Cmp, scratchB, 0x400, false)
+	c.a.Jcc(amd64.CondAE, unit)
+	c.a.ShiftImm(amd64.Shl, scratchC, 10, false)
+	c.a.Op(amd64.Add, scratchC, scratchB, false)
+	c.a.OpImm(amd64.Add, scratchC, 0x10000, false)
+	c.a.MovRR(scratchA, scratchC)
+	c.a.Bind(unit)
+	c.a.Cvtsi2sd(xScratch0, scratchA, true)
+	c.a.Jmp(done)
+	c.a.Bind(none)
+	c.movImm(scratchA, math.Float64bits(-1))
+	c.a.MovQToX(xScratch0, scratchA)
+	c.a.Bind(done)
+	c.setX(v, xScratch0)
+}
+
+// stringAtOr is s.at(i) (ssa.OpStringAtOr): the cell of the runtime's
+// string of the code unit at i -- below 0, counting from the end -- below
+// 256, of a flat string s, into v's register; 0 for anything else, which
+// Go makes. It uses every scratch register, xScratch0 and xScratch1.
+func (c *compiler) stringAtOr(v *ssa.Value) {
+	none, done := c.a.NewLabel(), c.a.NewLabel()
+	c.stringKeyUnit(v, true, false, none)
+	c.a.OpImm(amd64.Cmp, scratchA, 256, true)
+	c.a.Jcc(amd64.CondAE, none)
+	c.a.Load(scratchB, regCtx, abi.OffCharStrings)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	c.a.Jcc(amd64.CondE, none)
+	c.a.ShiftImm(amd64.Shl, scratchA, 4, true)
+	c.a.Op(amd64.Add, scratchA, scratchB, true)
+	c.a.Jmp(done)
+	c.a.Bind(none)
+	c.movImm(scratchA, 0)
+	c.a.Bind(done)
+	c.setG(v, scratchA)
+}
+
 // codeChar is String.fromCharCode(c) (ssa.OpCodeChar): the cell of the
 // runtime's string of code unit c, an integer below 256, into v's
 // register.
@@ -8395,6 +8529,10 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.codeCharOr(v)
 	case ssa.OpSubstringChar:
 		c.substringChar(v)
+	case ssa.OpStringCodePointOr:
+		c.stringCodePointOr(v)
+	case ssa.OpStringAtOr:
+		c.stringAtOr(v)
 	case ssa.OpLoopMark:
 		// A loop of a built-in's call under way, or done (abi.Context's
 		// Loop).

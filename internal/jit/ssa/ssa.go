@@ -537,6 +537,18 @@ const (
 	// string of -- not an integer below 256 -- where a call of Go makes
 	// String.fromCharCode (a split): it never exits.
 	OpCodeCharOr // f64 code -> source
+	// OpStringCodePointOr is s.codePointAt(i) once its function is checked
+	// (LeafCodePointAt): the code point at index i of a flat string s, the
+	// code unit there, or the pair a leading surrogate begins with the
+	// trailing one after it; or -1 where it says nothing -- s not a flat
+	// string, i not a number that is an integer below s's length -- where a
+	// call of Go makes the call (a split). OpStringAtOr is s.at(i)
+	// (LeafAt): the cell of the runtime's string of the code unit at i, or
+	// at i plus s's length for an i below 0, of a flat string s
+	// (abi.Context.CharStrings), if it is below 256; or none (0), where a
+	// call of Go makes the call. Neither exits.
+	OpStringCodePointOr // tagged string, tagged index -> f64
+	OpStringAtOr        // tagged string, tagged index -> source
 )
 
 var opNames = [...]string{
@@ -561,6 +573,7 @@ var opNames = [...]string{
 	OpAddU64: "addu64", OpSubU64: "subu64", OpMulU64: "mulu64", OpShlI64: "shli64", OpShlU64: "shlu64",
 	OpDivI64: "divi64", OpModI64: "modi64", OpDivU64: "divu64", OpModU64: "modu64", OpBigOfF64: "bigoff", OpPowI64: "powi64",
 	OpHolderCell: "holdercell", OpChainCheck: "chaincheck", OpProtoIs: "protois", OpCodeCharOr: "codecharor",
+	OpStringCodePointOr: "codepointor", OpStringAtOr: "stringator",
 }
 
 func (o Op) String() string {
