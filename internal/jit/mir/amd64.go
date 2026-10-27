@@ -3492,9 +3492,9 @@ func (c *compiler) genNext(v *ssa.Value, slow, done amd64.Label) {
 // 0 (genFinish); and where Go finished its level, the result object, the
 // context's generator 1. The call's result is { value, done } of the
 // first two, the pool's next object (ssa.CallSite's Pool) with the value
-// and the done written to it -- or, while the collector marks or the pool
-// is empty, Go's (ssa.GoIterResult), which fills the pool again -- and
-// the third as it is. Code that could not resume the generator goes back
+// and the done written to it, with Go's write barrier while the collector
+// marks -- or, the pool empty, Go's (ssa.GoIterResult), which fills it
+// again -- and the third as it is. Code that could not resume the generator goes back
 // to slow, where Go makes the call.
 func (c *compiler) genNextCall(v *ssa.Value, t ssa.GenStep, slow, done amd64.Label) {
 	site := v.Calls()[0]
@@ -3573,17 +3573,19 @@ func (c *compiler) genNextCall(v *ssa.Value, t ssa.GenStep, slow, done amd64.Lab
 	c.movImm(scratchC, c.enc.True)
 	c.a.Bind(word)
 	c.a.MovQToX(xScratch1, scratchC)
-	// The pool's next object, where the collector does not mark: the
-	// value and the done its two properties, and it the call's result.
-	goMake := c.a.NewLabel()
-	c.movImm(scratchB, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchB, scratchB, 0)
-	c.a.Op(amd64.Test, scratchB, scratchB, false)
-	c.a.Jcc(amd64.CondNE, goMake)
+	// The pool's next object: the value and the done its two properties,
+	// and it the call's result -- with Go's write barrier while the
+	// collector marks (marking). A pool run out Go fills again, making the
+	// object (goMake).
+	goMake, marking := c.a.NewLabel(), c.a.NewLabel()
 	c.movImm(scratchA, uint64(site.Pool))
 	c.a.Load(scratchB, scratchA, abi.OffPoolCount)
 	c.a.Op(amd64.Test, scratchB, scratchB, true)
 	c.a.Jcc(amd64.CondE, goMake)
+	c.movImm(scratchC, c.enc.WriteBarrier)
+	c.a.LoadU8(scratchC, scratchC, 0)
+	c.a.Op(amd64.Test, scratchC, scratchC, false)
+	c.a.Jcc(amd64.CondNE, marking)
 	c.a.OpImm(amd64.Sub, scratchB, 1, true)
 	c.a.Store(scratchA, abi.OffPoolCount, scratchB)
 	c.a.ShiftImm(amd64.Shl, scratchB, 3, true)
@@ -3607,6 +3609,26 @@ func (c *compiler) genNextCall(v *ssa.Value, t ssa.GenStep, slow, done amd64.Lab
 		c.a.Lea(scratchA, regCtx, at+c.enc.RefOffset)
 		c.refStore()
 		c.a.Jmp(stored)
+		// While the collector marks: the pool's next object given the
+		// value while the pool holds it, its pointer word with the barrier
+		// (refStore), then taken (poolTakeMarking), its cell cleared with
+		// the barrier, which shades it, and the keep cell given it in the
+		// value's place -- shaded by the store into the object.
+		c.a.Bind(marking)
+		c.a.ShiftImm(amd64.Shl, scratchB, 3, true)
+		c.a.Op(amd64.Add, scratchB, scratchA, true)
+		c.a.Load(scratchC, scratchB, abi.OffPoolObjects-8)
+		c.a.Load(scratchC, scratchC, c.enc.ObjectProps)
+		c.a.Load(scratchA, regCtx, at+c.enc.NumOffset)
+		c.a.Store(scratchC, c.enc.NumOffset, scratchA)
+		c.a.MovQFromX(scratchA, xScratch1)
+		c.a.Store(scratchC, vs+c.enc.NumOffset, scratchA)
+		c.a.StoreImm(scratchC, vs+c.enc.RefOffset, 0)
+		c.a.Lea(scratchA, scratchC, c.enc.RefOffset)
+		c.a.Load(scratchC, regCtx, at+c.enc.RefOffset)
+		c.refStore()
+		c.poolTakeMarking(v, site)
+		c.a.Jmp(done)
 		// Go makes the object, of the value the keep cell holds, and
 		// fills the pool again if it ran out.
 		c.a.Bind(goMake)

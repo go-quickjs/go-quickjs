@@ -5335,14 +5335,15 @@ func (c *a64Compiler) genNextCall(v *ssa.Value, t ssa.GenStep, slow, done arm64.
 	c.movImm(a64C, c.enc.True)
 	c.a.Bind(word)
 	c.a.FMovToF(a64F1, a64C)
-	// The pool's next object, where the collector does not mark.
-	goMake := c.a.NewLabel()
-	c.movImm(a64B, c.enc.WriteBarrier)
-	c.a.LoadU8(a64B, a64B, 0)
-	c.a.Cbnz(a64B, goMake, false)
+	// As amd64's: the pool's next object, with Go's write barrier while
+	// the collector marks (marking); Go's, the pool run out (goMake).
+	goMake, marking := c.a.NewLabel(), c.a.NewLabel()
 	c.movImm(a64A, uint64(site.Pool))
 	c.a.Load(a64B, a64A, abi.OffPoolCount)
 	c.a.Cbz(a64B, goMake, true)
+	c.movImm(a64C, c.enc.WriteBarrier)
+	c.a.LoadU8(a64C, a64C, 0)
+	c.a.Cbnz(a64C, marking, false)
 	c.a.AddImm(a64B, a64B, -1, true)
 	c.a.Store(a64A, abi.OffPoolCount, a64B)
 	c.a.ShiftImm(arm64.Lsl, a64B, a64B, 3, true)
@@ -5367,6 +5368,24 @@ func (c *a64Compiler) genNextCall(v *ssa.Value, t ssa.GenStep, slow, done arm64.
 		c.a.AddImm(a64A, a64Ctx, int64(at+c.enc.RefOffset), true)
 		c.refStore()
 		c.a.B(stored)
+		// As amd64's: while the collector marks, the pool's next object
+		// given the value while the pool holds it, its pointer word with
+		// the barrier, then taken (poolTakeMarking).
+		c.a.Bind(marking)
+		c.a.ShiftImm(arm64.Lsl, a64B, a64B, 3, true)
+		c.a.Op(arm64.Add, a64B, a64B, a64A, true)
+		c.a.Load(a64C, a64B, abi.OffPoolObjects-8)
+		c.a.Load(a64C, a64C, c.enc.ObjectProps)
+		c.a.Load(a64A, a64Ctx, at+c.enc.NumOffset)
+		c.a.Store(a64C, c.enc.NumOffset, a64A)
+		c.a.FMovFromF(a64A, a64F1)
+		c.a.Store(a64C, vs+c.enc.NumOffset, a64A)
+		c.a.Store(a64C, vs+c.enc.RefOffset, arm64.ZR)
+		c.a.AddImm(a64A, a64C, int64(c.enc.RefOffset), true)
+		c.a.Load(a64C, a64Ctx, at+c.enc.RefOffset)
+		c.refStore()
+		c.poolTakeMarking(v, site)
+		c.a.B(done)
 		// Go makes the object, of the value the keep cell holds, and
 		// fills the pool again if it ran out.
 		c.a.Bind(goMake)

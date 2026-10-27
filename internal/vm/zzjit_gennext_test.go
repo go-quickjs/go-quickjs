@@ -120,14 +120,16 @@ func TestJITGenNextAgreesWithNode(t *testing.T) {
 		r.jitCallThreshold, r.jitICThreshold = 1, 1
 		return r
 	}
-	rounds(t, jit, 8, func(r *Runtime, name, gen string) {
+	native := func(r *Runtime, name, gen string) {
 		if gen != "" && jitGenInForTest(r, gen) == 0 {
 			t.Errorf("%s: no call of next resumed %s natively", name, gen)
 		}
-	})
+	}
+	rounds(t, jit, 8, native)
 	t.Run("marking", func(t *testing.T) {
+		// Native while the collector marks, as when it does not.
 		jitMarkingForTest(t)
-		rounds(t, jit, 6, nil)
+		rounds(t, jit, 6, native)
 	})
 	for _, c := range []jitStressConfig{{threshold: true, budget: 3, deopt: 7}, {threshold: true, budget: 1}} {
 		rounds(t, func() *Runtime {
@@ -142,36 +144,40 @@ func TestJITGenNextAgreesWithNode(t *testing.T) {
 // its calls: each resumes the generator natively, its result an object of
 // its call's pool, a few calls of Go made in all -- the generator's making,
 // the pool's fillings, the polls at the back edges' budgets -- where each
-// call had been one. The collector is held off from the warming up on:
-// while it marks, each call is Go's, and a warming up that met it marking
-// long enough had the loop judged slow, left to the tree tier, which
-// makes no native call at all (a CI runner's failure).
+// call had been one. So too while the collector marks (jitMarkingForTest),
+// the result's pointer words stored through the write barrier: a result
+// Go made while it marked was a call of Go at every call of next.
 func TestJITGenNextCallsNoGo(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	r := jitRuntimeForTest(t, Config{JIT: true})
-	if _, err := r.Run(compileForTest(t, `function* count(n) { for (var i = 0; i < n; i++) yield i }
-		function sum(n) { var g = count(n), s = 0; for (var r = g.next(); !r.done; r = g.next()) s += r.value; return s }`)); err != nil {
-		t.Fatal(err)
-	}
-	for range 8 {
-		if v, err := r.Run(compileForTest(t, "''+sum(100)")); err != nil || v.String().Go() != "4950" {
-			t.Fatalf("sum(100) = %v, %v", v, err)
-		}
-	}
-	in := jitGenInForTest(r, "count")
-	v, calls := jitCountGoCalls(t, r, "''+sum(10000)")
-	if v.String().Go() != "49995000" {
-		t.Fatalf("sum(10000) = %v", v)
-	}
-	if calls > 10000/50 {
-		t.Errorf("a loop of 10000 calls of next made %d calls of Go", calls)
-	}
-	if n := jitGenInForTest(r, "count") - in; n < 10000 {
-		t.Errorf("10001 calls of next resumed the generator natively %d times", n)
+	for _, marking := range []bool{false, true} {
+		t.Run(map[bool]string{false: "idle", true: "marking"}[marking], func(t *testing.T) {
+			if marking {
+				jitMarkingForTest(t)
+			}
+			r := jitRuntimeForTest(t, Config{JIT: true})
+			if _, err := r.Run(compileForTest(t, `function* count(n) { for (var i = 0; i < n; i++) yield i }
+				function sum(n) { var g = count(n), s = 0; for (var r = g.next(); !r.done; r = g.next()) s += r.value; return s }`)); err != nil {
+				t.Fatal(err)
+			}
+			for range 8 {
+				if v, err := r.Run(compileForTest(t, "''+sum(100)")); err != nil || v.String().Go() != "4950" {
+					t.Fatalf("sum(100) = %v, %v", v, err)
+				}
+			}
+			in := jitGenInForTest(r, "count")
+			v, calls := jitCountGoCalls(t, r, "''+sum(10000)")
+			if v.String().Go() != "49995000" {
+				t.Fatalf("sum(10000) = %v", v)
+			}
+			if calls > 10000/50 {
+				t.Errorf("a loop of 10000 calls of next made %d calls of Go", calls)
+			}
+			if n := jitGenInForTest(r, "count") - in; n < 10000 {
+				t.Errorf("10001 calls of next resumed the generator natively %d times", n)
+			}
+		})
 	}
 }
 
