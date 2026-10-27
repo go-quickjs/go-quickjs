@@ -155,6 +155,29 @@ pool. Strings' and arrays' `indexOf`, `lastIndexOf` and `includes` are a
 call of Go of their own (`ssa.GoIndexOf`), which answers where the
 built-in runs nothing. Anything else such a call meets is Go's.
 
+**Leaves.** A built-in that runs no script where its check passes -- a
+leaf: String's methods, Number's, a Map's or a Set's operations, `Date.now`
+-- that a call has been seen to call is a call of Go of its own
+(`ssa.GoLeaf`), checked to call that function, as V8's code calls a fast
+API function: native code jumps to the VM's routine for leaves
+(`abi.Encoding`'s `LeafFast`), the call's description naming the leaf
+(`abi.GoCallState`'s `Leaf`) and the receiver's and the arguments' words
+written past it, and the routine applies the leaf as the form it made of
+the call at its first says (the VM's `jitLeafForm`) -- no expansion of the
+call, no dispatch of calls of Go -- and comes straight back, the result's
+number word in a register. Some leaves native code makes itself, as V8's
+call reducer reduces the builtins it knows (`ssa.LeafKind`): `codePointAt`
+and `at` of a flat string's code units (`ssa.OpStringCodePointOr`,
+`OpStringAtOr`), the leaf's call made on a branch of its own where native
+code says nothing, and Number's `isNaN`, `isFinite`, `isInteger` and
+`isSafeInteger` with no call at all (`OpNumberIs`). Every other call of Go
+whose site saves its live registers goes through the VM's routine for calls
+of Go (`GoFast`), which calls the VM's dispatch of them directly, Math's
+functions Go computes (`ssa.OpMathCall`) among them, saving what lives
+across them rather than every register. What only a call's refusal reads
+after it, its state's, is restored on the refusal's way alone (mir's cold
+saves).
+
 **BigInts.** As V8's code makes its BigInt64 values, an operator of
 BigInts the existing tiers saw held in their values (`abi.Encoding`'s
 `ShortBigTag`) is made on them unboxed (`ssa/bigint.go`): as Int64s, or,
@@ -635,9 +658,12 @@ the context block in a register, and the code returns with a plain `RET` to
   `callGo` (`abi.Context.GoOp`);
 - uses Go's ABI0, not the platform C convention, on every OS.
 
-**Calls of Go.** To the Go runtime, `callGo` is a function the Go function
-that entered the code called: its frame and return address are all a
-traceback, a stack scan or the stack's growth meets. Go may do anything
+**Calls of Go.** To the Go runtime, `callGo` -- and so each of the VM's
+routines native code jumps to as it jumps to `callGo`, for leaves, for
+other calls of Go and for BigInts' operators (`LeafFast`, `GoFast`,
+`BigFast`), which call the VM's Go directly -- is a function the Go
+function that entered the code called: its frame and return address are all
+a traceback, a stack scan or the stack's growth meets. Go may do anything
 there, run JavaScript included, and the code goes on where Go says.
 
 **Registers.**

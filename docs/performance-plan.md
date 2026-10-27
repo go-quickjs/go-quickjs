@@ -1312,6 +1312,76 @@ Open from it:
 - Compiling: still spread thinly; `===`'s cold paths 9% of code, exit
   stubs 15 bytes each, 31% of Typescript's compiles recompiles.
 
+Step 5 below, the calls of Go for built-ins (2026-10-27,
+`375a3bd`..`54c1dbb`, against `131390c`; counted in thread cycles a call
+-- QueryThreadCycleTime, the least of 25 runs of 2^18 turns, the binaries
+alternated -- and by the micro-benchmarks, the least of two runs of each
+binary, on a machine other jobs shared; no placements):
+
+- **A leaf's call through a routine of its own** (`375a3bd`, `bf51174`):
+  native code jumps to the VM's `jitLeafFast` (`abi.Encoding`'s
+  `LeafFast`), the description naming the leaf (`abi.GoCallState`'s
+  `Leaf`), no operand written for the function, the result's number word
+  back in a register; Go applies the leaf from a form it makes at the
+  call's first (`jitLeafForm`), past `callGo`, `goCall`, `ExpandGoCall`,
+  `jit.HostCall`'s function value, `jitHostCall`'s dispatch and the code's
+  own routine of calls of Go. `Number.isNaN` through a local 93 -> 48
+  cycles, a Map's get 158 -> 111, `Date.now` 125 -> 80, `startsWith` 247
+  -> 193.
+- **What only a call's refusal reads, restored on the refusal's way
+  alone** (`bd72f8c`): the receiver, the function and the cells they were
+  read through, beneath a call in its state, saved for an exit and dead
+  after the call; a loop of `str.codePointAt(j & 15)` read back 3 values
+  where 8.
+- **Leaves native code makes itself** (`0af16eb`, `54c1dbb`), by kind
+  (`ssa.LeafKind`, the VM's elemOp): `codePointAt` and `at` of a flat
+  string's units, the leaf's call on a branch of its own otherwise (146 ->
+  26 and 160 -> 26 cycles; charCodeAt's 19), and Number's four predicates
+  with no call (`Number.isNaN` 71-87 -> 10-14, an empty turn's 10-11).
+- **Every other call of Go that saves its live registers through a routine
+  of the VM's** (`e80e014`, `GoFast`, `jitGoDirect`): `jit.goCall` with
+  `jitHostCall` called directly and no routine of the code's: a string
+  comparison 202 -> 170 cycles, indexOf 300 -> 275; and Math's functions
+  Go computes save what lives across them, not every register (`9abbe36`:
+  trig's `Math.sin` 34 register moves to 14; fdlibm's work is most of a
+  call).
+
+Micro-benchmarks with the JIT, base -> the round: `string_code_point_at`
+40.7 -> 7.4 ns (Node 2.7, 15 times its time before), `string_at` 47.9 ->
+7.9, `date_now` -35%, `map_set_int` -18%, `map_set_bigint` -23%,
+`map_delete` -15%, `string_repeat` -24%, `string_trim` and `string_slice`
+-18%, `string_pad_start` -17%, `string_starts_with` -16%, `string_chain`
+-16%, `string_concat` -16%, `float_toPrecision` -13%, `float_toFixed`
+-10%; `string_template` +3.1% and `float_to_string` +3.5%, single
+binaries, which measure their placement as much. Are We Fast Yet and
+Octane run as before (one run each, alternated, a shared machine: level).
+The hot functions are the base's in builds with and without the JIT
+(hotdiff).
+
+Found on the way: a routine in Go's text that jumps straight back to the
+native code that jumped to it -- `MOVQ x, R11; JMP AX` -- cost some 60
+cycles a round trip on this Zen 2, where a direct jump in between, or the
+same two instructions in the code's own memory, cost a cycle or two: the
+distance between the JIT's memory and Go's text did not matter (an arena
+placed within the same 2 GB as Go's text measured the same). None of the
+routines jumps back so; each calls Go first.
+
+Open from it:
+
+- A leaf's Go side is still about a hundred instructions besides the
+  leaf's own: the routine and the ABI0 wrapper (27), `jitLeafGo`'s frame
+  and its spills around the check's and the function's closures, the
+  operands' slice's checks, the keep cell's barrier test. V8's fast API
+  calls a function of a typed signature; a native leaf's check and
+  function fused, or forms of typed operands, would take most of it.
+- Calls that save every register (goSaving) -- a back edge's poll, a
+  pool's refill, a string's absent index -- go through callGo still.
+- `string_indexOf` and `array_indexOf` are the built-ins' own work now
+  (`strAndSearch`, `clampedPosition`, `stringslite.Index`).
+- More leaves native code could make itself by the same kinds: `charAt`
+  and `at` past Latin-1 (a string made), `String.fromCodePoint`, Map's get
+  of a key the code knows the kind of.
+
 Open from it:
 
 - Typescript, +4.0% at every placement, before its sites were fixed
@@ -1456,7 +1526,8 @@ close a gap of three to seven times:
    least their loops; fewer recompiles and smaller code (52 KB a
    function in Typescript); function bodies compiled when first called.
 5. **Calls of Go for built-ins** through a trampoline of their own (step
-   3 of the leaf calls, under the JIT's items below).
+   3 of the leaf calls, under the JIT's items below). Done 2026-10-27
+   (`375a3bd`..`54c1dbb`, above).
 
 The interpreter, which every build without the JIT runs, is behind C
 QuickJS on Octane (1.10 times its time) and Are We Fast Yet (1.08): Are
@@ -1866,7 +1937,9 @@ The rounds that followed, each measured as above. The commit says more.
       `ExpandGoCall` and `HostCall`'s indirect call (about 10). A routine
       for leaves' calls of their own, as `jitBigFast` is BigInts', takes
       only the last; the native side wants the operands passed where they
-      are and fewer registers saved -- step 3.
+      are and fewer registers saved -- step 3. Done 2026-10-27 (plan E's
+      step 5): the leaves' routine, their forms, cold saves, native forms
+      of codePointAt, at and Number's predicates, the other calls' routine.
     - The objects' and arrays', Date's getters and the collections' `size`
       (an accessor's read, not a call).
     - A sloppy method of the script's on a primitive exits at each call
