@@ -294,42 +294,19 @@ func (r *Runtime) jitPlainWrite(cl *closure, in bytecode.Instr, obj, val Value) 
 }
 
 // jitLeafCall makes a leaf's call native code makes as one (ssa.GoLeaf),
-// whose function, its first operand, the code has checked it calls: as
-// jitPlainCall applies it, with nothing of the call to find out first --
-// its function's, its receiver's and its arguments' places are the call's
-// own. It writes the result to the call's keep cell and reports whether
-// it made the call.
+// whose function, its first operand, the code has checked it calls, where
+// it goes through jit's callGo -- an encoding without the VM's routine for
+// leaves (abi.Encoding's LeafFast, jitLeafGo), or a test's work at each
+// call of Go -- as jitLeafOf applies it. It writes the result to the
+// call's keep cell and reports whether it made the call.
 func (r *Runtime) jitLeafCall(ctx *abi.Context) bool {
-	argc := int(ctx.GoOp>>abi.GoOpArgcShift) & 0xff
-	first, this := 1, Undefined
-	if ctx.GoOp>>abi.GoOpKindShift&0xff == abi.GoCallMethod {
-		first, this = 2, jitGoArg(ctx, 1)
-	}
-	if first+argc > abi.MaxGoArgs {
+	fn := jitGoArg(ctx, 0)
+	if !fn.IsObject() {
 		return false
 	}
-	fd := jitGoArg(ctx, 0).Object().fn()
-	args := unsafe.Slice((*Value)(unsafe.Pointer(&ctx.GoArgs[first])), argc)
-	var v Value
-	switch op := fd.elemOp; {
-	case op >= elemNativeFirst:
-		if r.meter != nil || !leafChecks[op](r, this, args) {
-			return false
-		}
-		var err error
-		if v, err = fd.native(r, this, args); err != nil {
-			return false
-		}
-	case op > elemRandom:
-		var ok bool
-		if v, ok = leafOps[op](r, this, args, true); !ok {
-			return false
-		}
-	default:
-		var ok bool
-		if v, ok = r.collectionOp(op, this, args, true); !ok {
-			return false
-		}
+	v, ok := r.jitLeafOf(ctx, ctx.GoOp, fn.Object())
+	if !ok {
+		return false
 	}
 	*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
 	return true

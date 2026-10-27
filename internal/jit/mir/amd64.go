@@ -2126,7 +2126,62 @@ func (c *compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(amd64.Con
 		c.goCallBig = true
 		defer func() { c.goCallBig = false }()
 	}
+	if leafFast(site, c.enc) {
+		c.leafCall(v, site)
+		return
+	}
 	c.goCallOp(v, goOpWord(site), guard, false)
+}
+
+// leafCall calls a leaf (ssa.GoLeaf) through the VM's routine for them
+// (abi.Encoding's LeafFast), as V8's code calls a fast API function: the
+// receiver's and the arguments' words written to the context's operands
+// -- not the function's, which Go takes from the call's description
+// (abi.GoCallState's Leaf) -- what is live in registers saved, the
+// description's address in RCX and where to come back in RAX, and a jump
+// to the routine, which comes straight back, the result's number word in
+// R11, or, where Go did nothing, to the refusal's code. Neither the code's
+// routine of calls of Go nor Go's expansion of the call is on the way.
+func (c *compiler) leafCall(v *ssa.Value, site *ssa.CallSite) {
+	size := int32(unsafe.Sizeof(abi.GoArg{}))
+	st, _ := c.goState(goOpWord(site), v.Index, v, nil)
+	for i, x := range v.Args {
+		if i != 0 {
+			c.goArg(abi.OffGoArgs+int32(i)*size, x)
+		}
+	}
+	for _, sv := range c.savesOf(v) {
+		switch {
+		case sv.frame != 0:
+			// Read back from the frame's slot, which holds it.
+		case sv.float:
+			c.a.StoreSD(regCtx, c.spillDisp(sv.slot), amd64.XReg(sv.reg))
+		default:
+			c.a.Store(regCtx, c.spillDisp(sv.slot), amd64.Reg(sv.reg))
+		}
+	}
+	back, fail := c.a.NewLabel(), c.a.NewLabel()
+	c.movImm(scratchC, uint64(uintptr(unsafe.Pointer(st))))
+	c.a.LeaLabel(scratchA, back)
+	c.movImm(scratchB, c.enc.LeafFast)
+	c.a.JmpReg(scratchB)
+	c.a.Bind(back)
+	restore := func() {
+		// The frame's registers first, which the frame's own slots are
+		// read back through.
+		c.a.Load(regLocals, regCtx, abi.OffLocals)
+		c.a.Load(regStack, regCtx, abi.OffStack)
+		c.restoreSaves(v)
+	}
+	restore()
+	c.setG(v, scratchB)
+	stub := c.stubLabel(v.State, exitKind(v.Aux))
+	c.goFails = append(c.goFails, goFail{st, back, fail})
+	c.cold = append(c.cold, func() {
+		c.a.Bind(fail)
+		restore()
+		c.a.Jmp(stub)
+	})
 }
 
 // copyProps makes the object spread v, of its target and its source

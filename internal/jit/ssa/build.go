@@ -760,7 +760,7 @@ func (b *builder) leafCall(blk *Block, pc int, fn uintptr, guard func(Op, Type, 
 	for k := range c.Argc {
 		args = append(args, b.read(at+1+k, blk))
 	}
-	site := &CallSite{Go: GoLeaf, Argc: c.Argc, Method: c.Method, ThisSlot: -1}
+	site := &CallSite{Go: GoLeaf, Argc: c.Argc, Method: c.Method, ThisSlot: -1, Leaf: fn}
 	call := guard(OpCall, Tagged, ir.HostExit, args...)
 	f.cache(call).Calls, call.Index = []*CallSite{site}, b.callKeeps[pc]
 	kept := f.newValue(blk, OpCallCell, Source, call)
@@ -1312,6 +1312,11 @@ type CallSite struct {
 	// closes, as V8's code allocates a block's context at each iteration.
 	Captures []int32
 	LexThis  bool
+	// Leaf, of a leaf's call (GoLeaf), is the address of the function the
+	// call checked it calls (OpSameObject's), which the VM keeps alive with
+	// the code: Go takes the leaf from there (abi.GoCallState's Leaf), and
+	// the call writes no operand for it.
+	Leaf uintptr
 }
 
 // ClosureSite is a closure's site that native code makes the closure at
@@ -3688,7 +3693,7 @@ func (b *builder) fromCharCodeCall(blk *Block, pc int, fn uintptr, guard func(Op
 	v.Shadow = cell
 	b.write(sp-3, hit, v)
 	call := f.newValue(miss, OpCall, Tagged, callee, recv, x)
-	f.cache(call).Calls = []*CallSite{{Go: GoLeaf, Argc: 1, Method: true, ThisSlot: -1}}
+	f.cache(call).Calls = []*CallSite{{Go: GoLeaf, Argc: 1, Method: true, ThisSlot: -1, Leaf: fn}}
 	call.Aux, call.State, call.Index = int(ir.HostExit), st, keep
 	st.addUse()
 	kc := f.newValue(miss, OpCallCell, Source, call)
@@ -3773,7 +3778,7 @@ func (b *builder) substringCall(blk *Block, pc int, fn uintptr, kind int, guard 
 		// rather than the call Go would make with one.
 		args := append([]*Value{callee, recv}, operands[2:]...)
 		call = f.newValue(miss, OpCall, Tagged, args...)
-		f.cache(call).Calls = []*CallSite{{Go: GoLeaf, Argc: argc, Method: true, ThisSlot: -1}}
+		f.cache(call).Calls = []*CallSite{{Go: GoLeaf, Argc: argc, Method: true, ThisSlot: -1, Leaf: fn}}
 	} else {
 		call = f.newValue(miss, OpCall, Tagged, operands...)
 		f.cache(call).Calls = b.calls[pc]

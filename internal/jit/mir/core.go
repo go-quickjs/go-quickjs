@@ -2816,6 +2816,10 @@ func (c *core) goState(op uint64, keep int, v *ssa.Value, args []*ssa.Value) (*a
 			st.Inline, st.InlinePC = in.Closure, in.PC
 		}
 	}
+	if v != nil && ssa.GoOp(op&0xff) == ssa.GoLeaf && len(v.Calls()) == 1 {
+		// The leaf the call checked it calls, which Go takes from here.
+		st.Leaf = v.Calls()[0].Leaf
+	}
 	c.goCalls = append(c.goCalls, st)
 	if len(args) == 0 {
 		return st, nil
@@ -3091,6 +3095,14 @@ func derivedFunction(t *ssa.CallSite) uintptr {
 		return t.Parent
 	}
 	return t.Callee
+}
+
+// leafFast reports whether a call of Go, site, is a leaf's that native
+// code makes through the VM's routine for them (abi.Encoding's LeafFast):
+// one that knows its leaf (ssa.CallSite's Leaf), of an encoding that has
+// the routine.
+func leafFast(site *ssa.CallSite, enc abi.Encoding) bool {
+	return site.Go == ssa.GoLeaf && site.Leaf != 0 && enc.LeafFast != 0
 }
 
 // lengthWrites reports whether a call of Go, site, of argc operands, is a

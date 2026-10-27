@@ -1096,6 +1096,9 @@ type jitState struct {
 	// without a call of Go (jitBigLeaf), bigLeafNew the new blocks it
 	// made them in, none having been given back.
 	bigLeafs, bigLeafNew uint64
+	// leafFast counts the leaves' calls native code made through the VM's
+	// routine for them (jitLeafGo), leafRefused those it left to an exit.
+	leafFast, leafRefused uint64
 	// ssaKeeps is the most keep cells (abi.Context.Keep) any code compiled
 	// uses: what Go clears in a native callee's context.
 	ssaKeeps int

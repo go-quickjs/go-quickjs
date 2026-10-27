@@ -573,6 +573,11 @@ type GoCallState struct {
 	// own.
 	Inline   uintptr
 	InlinePC uint32
+	// Leaf, for a leaf's call (ssa.GoLeaf), is the address of the leaf's
+	// function object, which the code checked the call calls and holds
+	// while it runs (ssa.CallSite's Leaf): Go takes the function from
+	// here, and the code passes no operand for it.
+	Leaf uintptr
 }
 
 // GoCallArg is a GoCallState's operand, the i'th, laid out for Go to read
@@ -1266,6 +1271,20 @@ type Encoding struct {
 	// inline -- and goes on to CallGo for any other. 0 sends every such
 	// call to CallGo.
 	BigFast uint64
+	// LeafFast is where native code jumps for a leaf's call (ssa.GoLeaf),
+	// as V8's code calls a fast API function: the VM's routine that applies
+	// the leaf from native code with no more than the call needs -- not
+	// CallGo's expansion of a description, nor its dispatch of every kind
+	// of call of Go. To the Go runtime it is, as CallGo is, a function the
+	// Go function that entered the code called. Its inputs are the
+	// context's register, the call's description (a *GoCallState) in
+	// amd64's RCX and arm64's R17, and where the call goes on in amd64's
+	// RAX and arm64's R15; it comes back there, or Fail bytes past it where
+	// Go did nothing, with the result's number word in amd64's R11 and
+	// arm64's R16 -- its pointer word in the call's keep cell, as any call
+	// of Go leaves it -- and every register but the context's and the
+	// stack's clobbered. 0 sends every such call to CallGo.
+	LeafFast uint64
 	// StoreRef is where native code jumps to store a pointer word while
 	// the collector marks, as V8's code calls its write barrier: the
 	// address of jit's storeRef, which, as callGo, is to the Go runtime a

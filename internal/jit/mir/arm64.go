@@ -4417,7 +4417,53 @@ func (c *a64Compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(arm64.
 		c.goCallBig = true
 		defer func() { c.goCallBig = false }()
 	}
+	if leafFast(site, c.enc) {
+		c.leafCall(v, site)
+		return
+	}
 	c.goCallOp(v, goOpWord(site), false)
+}
+
+// leafCall is amd64's: the description's address in C, where to come back
+// in A, the result's number word back in B.
+func (c *a64Compiler) leafCall(v *ssa.Value, site *ssa.CallSite) {
+	size := int32(unsafe.Sizeof(abi.GoArg{}))
+	st, _ := c.goState(goOpWord(site), v.Index, v, nil)
+	for i, x := range v.Args {
+		if i != 0 {
+			c.goArg(abi.OffGoArgs+int32(i)*size, x)
+		}
+	}
+	for _, sv := range c.savesOf(v) {
+		switch {
+		case sv.frame != 0:
+			// Read back from the frame's slot, which holds it.
+		case sv.float:
+			c.a.StoreF(a64Ctx, c.spillDisp(sv.slot), arm64.FReg(sv.reg))
+		default:
+			c.a.Store(a64Ctx, c.spillDisp(sv.slot), arm64.Reg(sv.reg))
+		}
+	}
+	back, fail := c.a.NewLabel(), c.a.NewLabel()
+	c.movImm(a64C, uint64(uintptr(unsafe.Pointer(st))))
+	c.a.Adr(a64A, back)
+	c.movImm(a64B, c.enc.LeafFast)
+	c.a.Br(a64B)
+	c.a.Bind(back)
+	restore := func() {
+		c.a.Load(a64Locals, a64Ctx, abi.OffLocals)
+		c.a.Load(a64Stack, a64Ctx, abi.OffStack)
+		c.restoreSaves(v)
+	}
+	restore()
+	c.setG(v, a64B)
+	stub := c.stubLabel(v.State, exitKind(v.Aux))
+	c.goFails = append(c.goFails, a64GoFail{st, back, fail})
+	c.cold = append(c.cold, func() {
+		c.a.Bind(fail)
+		restore()
+		c.a.B(stub)
+	})
 }
 
 // closureTake is amd64's: a closure taken from its pool, its captured
