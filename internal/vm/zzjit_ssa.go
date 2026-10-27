@@ -2333,7 +2333,7 @@ type jitFeedback struct {
 	// does not make (ssa.Func's Called).
 	called int
 	// wanted are callees of calls to inline that the compile made calls
-	// instead -- past its budget (ssa's maxInlines) -- which had no code
+	// instead -- past its budget (ssa's maxInlineTotal) -- which had no code
 	// for native callers: compiled after it (jitWantedCallees). linked
 	// are the callees it calls through their links before they have code,
 	// compiled after it too, which native code then calls, the caller's code
@@ -2894,7 +2894,7 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 	targets := fb.targetsBy[pc]
 	for _, x := range targets {
 		// The calls it makes natively, and those it inlines, which a
-		// compile past its budget for inlining (ssa's maxInlines) calls
+		// compile past its budget for inlining (ssa's maxInlineTotal) calls
 		// instead, as V8's does: they had been made by Go.
 		in := *x
 		if int(in.pc) != pc || slices.ContainsFunc(sites, func(s ssa.CallSite) bool { return s.Callee == uintptr(unsafe.Pointer(in.obj)) }) {

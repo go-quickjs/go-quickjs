@@ -270,7 +270,7 @@ func (b *builder) forEachAt(pc int) (ForEachSite, bool) {
 // Captured), and an exit's frame names its template where it would be,
 // for Go to make it there. It reports whether it planned it so.
 func (b *builder) planCallback(pc int, fp *forEachPlan, total *int) bool {
-	if fp.site.Inline == nil || fp.site.Inline.Program == nil || b.inlines >= maxInlines || b.cur.nest >= maxInlineDepth {
+	if fp.site.Inline == nil || fp.site.Inline.Program == nil || b.cur.nest >= maxInlineDepth {
 		return false
 	}
 	s := *fp.site.Inline
@@ -305,13 +305,13 @@ func (b *builder) planCallback(pc int, fp *forEachPlan, total *int) bool {
 		}
 	}
 	calls, ok := InlineCalls(s.Program)
-	if !ok || *total+len(s.Program.Code) > maxInlineTotal {
+	if !ok || !inlineFits(*total, len(s.Program.Code)) {
 		return false
 	}
-	nslots, before, inlines, keeps, inlined := b.nslots, *total, b.inlines, b.f.Keeps, len(b.f.Inlined)
+	nslots, before, keeps, inlined := b.nslots, *total, b.f.Keeps, len(b.f.Inlined)
 	fr, ok := b.inlineFrame(s, calls, nil, total, fp.base+loopLocals, pc)
 	if ok && !b.returnsNatively(fr) {
-		b.nslots, *total, b.inlines, b.f.Keeps = nslots, before, inlines, keeps
+		b.nslots, *total, b.f.Keeps = nslots, before, keeps
 		b.f.Inlined = b.f.Inlined[:inlined]
 		ok = false
 	}
@@ -1843,15 +1843,40 @@ type InlineSite struct {
 	Captured        []int
 }
 
-// Inlining's bounds: a callee's instructions, all callees' in a function,
-// the calls a function inlines, and how deep: a callee's calls are inlined
-// in it, as V8 inlines them, to this many levels.
+// Inlining's bounds, by size alone, as V8's JSInliningHeuristic has them:
+// a callee's instructions (maxInline), all callees' in a function
+// (maxInlineTotal), and how deep a callee's calls are inlined in it, as V8
+// inlines them (maxInlineDepth). A small callee -- maxInlineSmall
+// instructions or fewer, the callees inlined in it counted in -- is
+// inlined past the function's budget, up to maxInlineAbsolute, as V8
+// inlines one of max_inlined_bytecode_size_small past
+// max_inlined_bytecode_size_cumulative, up to
+// max_inlined_bytecode_size_absolute: its code is about the call's it
+// replaces. V8 counts bytecode bytes, and ours instructions: V8's
+// bytecode is 2.6 bytes to an instruction of ours, the median of the 270
+// functions of Are We Fast Yet's whose names are unique in both, so that
+// its small callee, 27 bytes, is 10 of ours, and its bounds of a callee
+// and of a function, 460 and 920 bytes, some 180 and 350 -- ours, 48 and
+// 192, are tighter; its absolute bound is five times a function's. No
+// count of the calls a function inlines bounds it, as none bounds V8's:
+// one of eight had, which AWFY's CD's findIntersection spent six of on
+// this.delta() twice, three frames each -- delta, Vector3D's minus, its
+// constructor -- its minus() calls after them made natively and their
+// objects made, which, inlined, escape analysis does not make.
 const (
-	maxInline      = 48
-	maxInlineTotal = 192
-	maxInlines     = 8
-	maxInlineDepth = 3
+	maxInline         = 48
+	maxInlineTotal    = 192
+	maxInlineSmall    = 10
+	maxInlineAbsolute = 5 * maxInlineTotal
+	maxInlineDepth    = 3
 )
+
+// inlineFits reports whether a callee of n instructions may be inlined
+// where a function has inlined total already: within the function's
+// budget, or, if n is small (maxInlineSmall), within the absolute bound.
+func inlineFits(total, n int) bool {
+	return total+n <= maxInlineTotal || n <= maxInlineSmall && total+n <= maxInlineAbsolute
+}
 
 // MaxInline is the most instructions a callee inlined may have, and
 // MaxInlineTotal the most a function inlines in all.
@@ -2358,12 +2383,10 @@ type builder struct {
 	nslots int
 
 	// root is the function's own frame, cur the one translated now;
-	// inlined are the callees, by the PC of their call, inlines how many
-	// calls are inlined, at every level; frameOf is each block's frame, by
-	// block ID, nil for the function's own.
+	// inlined are the callees, by the PC of their call; frameOf is each
+	// block's frame, by block ID, nil for the function's own.
 	root, cur *frame
 	inlined   map[int]*frame
-	inlines   int
 	// calls are the calls made natively (OpCall), by PC: their blocks go
 	// on to the next instruction's.
 	calls map[int][]*CallSite
@@ -3025,7 +3048,7 @@ func (b *builder) inlineSiteAt(pc int, total *int, known *inlineAsked) (*frame, 
 	// A closure the root makes, called where a callee calls what it is
 	// given (givenSite), whatever else the call has called.
 	given := known != nil && known.given
-	if b.fb == nil || b.p.Code[pc].Op != ir.Host && !isAccessor || b.inlines >= maxInlines || b.cur.nest >= maxInlineDepth || !isAccessor && !given && b.fb.Generic(pc) {
+	if b.fb == nil || b.p.Code[pc].Op != ir.Host && !isAccessor || b.cur.nest >= maxInlineDepth || !isAccessor && !given && b.fb.Generic(pc) {
 		return nil, false
 	}
 	var site InlineSite
@@ -3046,7 +3069,7 @@ func (b *builder) inlineSiteAt(pc int, total *int, known *inlineAsked) (*frame, 
 	if ok {
 		calls, givenCalls, ok = b.inlineCalls(site, isAccessor)
 	}
-	if !ok || *total+len(site.Program.Code) > maxInlineTotal ||
+	if !ok || !inlineFits(*total, len(site.Program.Code)) ||
 		site.Argc < 0 || site.Params < 0 || pc+1 >= len(b.p.Code) || !reachable(b.p, pc+1) {
 		return nil, false
 	}
@@ -3407,7 +3430,7 @@ func (b *builder) inlineFrame(site InlineSite, calls, given []int, total *int, r
 	if b.nslots+q.Locals+q.StackSize > abi.MaxRecords {
 		return nil, false
 	}
-	nslots, before, inlines, keeps := b.nslots, *total, b.inlines, b.f.Keeps
+	nslots, before, keeps := b.nslots, *total, b.f.Keeps
 	*total += len(site.Program.Code)
 	fr := &frame{p: q, fb: site.Feedback, site: site, result: result, base: b.nslots,
 		parent: b.cur, depth: b.cur.depth + 1, nest: b.cur.nest + 1, keep: -1, at: at, givenPC0: -1}
@@ -3428,25 +3451,20 @@ func (b *builder) inlineFrame(site InlineSite, calls, given []int, total *int, r
 		fr.nest = b.cur.nest
 	}
 	b.nslots += q.Locals + q.StackSize
-	if !site.Restart && !site.Arguments {
-		// A forwarding constructor is its calls of the methods it forwards
-		// to, which count: not a callee more toward maxInlines.
-		b.inlines++
-	}
 	inlined := len(b.f.Inlined)
+	cur := b.cur
+	refuse := func() (*frame, bool) {
+		b.enter(cur)
+		b.nslots, *total, b.f.Keeps = nslots, before, keeps
+		b.f.Inlined = b.f.Inlined[:inlined]
+		return nil, false
+	}
 	if len(calls) != 0 || len(given) != 0 {
-		cur := b.cur
 		b.enter(fr)
 		// fixed says a call in one of its loops calls the closure the root
 		// gives it, inlined -- or, in a first build, left to an exit to
 		// find whether it does.
 		fixed := false
-		refuse := func() (*frame, bool) {
-			b.enter(cur)
-			b.nslots, *total, b.inlines, b.f.Keeps = nslots, before, inlines, keeps
-			b.f.Inlined = b.f.Inlined[:inlined]
-			return nil, false
-		}
 		for _, at := range calls {
 			if b.nativeHost(at) || b.inlineExit(at) {
 				// Made natively, or left to an exit in the callee's frame,
@@ -3504,6 +3522,13 @@ func (b *builder) inlineFrame(site InlineSite, calls, given []int, total *int, r
 			return refuse()
 		}
 		b.enter(cur)
+	}
+	if !inlineFits(before, *total-before) {
+		// Past the function's budget only a small callee is inlined, its
+		// own callees counted in, as V8's candidate is small with the
+		// bytecode its code inlines (JSInliningHeuristic's
+		// candidate_is_small).
+		return refuse()
 	}
 	b.f.Inlined = append(b.f.Inlined, site.Closure)
 	b.inlineAccessors(fr, total)
@@ -4689,16 +4714,16 @@ func (b *builder) plan() error {
 		entries[pc], leaders[pc] = true, true
 	}
 	total := 0
-	// The calls to inline, a construction first: what inlining's bounds
-	// allow (maxInlines, maxInlineTotal) goes to what saves the most first,
-	// as V8's budget goes to the hottest sites. A construction not inlined
-	// is made by a call of Go wherever its constructor has no code native
-	// callers may call -- one forwarding its arguments, Prototype's
-	// Class.create's -- where any other call is a native call: inlined in
-	// the order of their PCs, the calls before a function's constructions
-	// had taken the bounds once callees reading globals and making
-	// constructions of their own could be inlined, and RayTrace's
-	// constructions of its colors and intersections were made by Go.
+	// The calls to inline, a construction first: what inlining's budget
+	// (maxInlineTotal) allows goes to what saves the most first, as V8's
+	// budget goes to the hottest sites. A construction not inlined is made
+	// by a call of Go wherever its constructor has no code native callers
+	// may call -- one forwarding its arguments, Prototype's Class.create's
+	// -- where any other call is a native call: inlined in the order of
+	// their PCs, the calls before a function's constructions had taken the
+	// bounds once callees reading globals and making constructions of
+	// their own could be inlined, and RayTrace's constructions of its
+	// colors and intersections were made by Go.
 	// By PC, from the workspace's scratch, taken while planning: an
 	// InlineSite a PC, made afresh at each compile, had been a fifth of
 	// what Typescript's compiles allocated.

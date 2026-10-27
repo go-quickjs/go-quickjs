@@ -121,7 +121,11 @@ callee's return hands the result back in registers (`abi.Context`'s
 `ReturnTo`). Small callees are inlined, with
 their own frames made at an exit, and with the globals they read, read
 from their own sites, and the speculations their own code learned failed
-built generic. A callee's throw, or a call its own code has never been
+built generic. What a function inlines is bounded by size alone, as V8's
+JSInliningHeuristic bounds it, never by a count of calls: a callee's
+instructions, a budget of all a function inlines, and past it only
+small callees (`ssa`'s `maxInlineTotal`, `maxInlineSmall`). A callee's
+throw, or a call its own code has never been
 seen to make, does not keep it from being inlined: native code leaves the
 inlined frame there, as V8's code deoptimizes at a call with no feedback
 (`ssa.InlineExitFeedback`), and such exits, if they are taken after all,

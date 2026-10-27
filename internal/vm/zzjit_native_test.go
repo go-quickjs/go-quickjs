@@ -9018,10 +9018,11 @@ func TestJITSSAPolymorphicStores(t *testing.T) {
 	}
 }
 
-// TestJITSSAInlineBudgetCallsNatively: a function with more small callees
-// than a compile inlines (ssa's maxInlines) calls the rest natively, as
-// V8's does, instead of leaving each such call to Go at every iteration --
-// RayTrace's rayTrace had some 20 such calls.
+// TestJITSSAInlineBudgetCallsNatively: a function with more callees than
+// its budget for inlining holds (ssa's maxInlineTotal) -- twelve of 17
+// instructions, none small -- calls the rest natively, as V8's does,
+// instead of leaving each such call to Go at every iteration -- RayTrace's
+// rayTrace had some 20 such calls.
 func TestJITSSAInlineBudgetCallsNatively(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -9031,10 +9032,20 @@ func TestJITSSAInlineBudgetCallsNatively(t *testing.T) {
 	// GOMAXPROCS=1, would count as the calls' exits.
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	setup := `function f0(x){return x+1} function f1(x){return x*2} function f2(x){return x-3} function f3(x){return x^5}
-		function f4(x){return x+7} function f5(x){return x*3} function f6(x){return x-11} function f7(x){return x^13}
-		function f8(x){return x+17} function f9(x){return x*5} function f10(x){return x-19} function f11(x){return x^23}
+	setup := `function f0(x) { return ((x + 1) * 2 - 3) ^ ((x + 7) * 3 - 11) ^ ((x - 13) * 5 + 17) ^ ((x + 19) * 7 - 23) }
+		function f1(x) { return ((x * 2) * 2 - 3) ^ ((x + 7) * 3 - 11) ^ ((x - 13) * 5 + 17) ^ ((x + 19) * 7 - 23) }
+		function f2(x) { return ((x - 3) * 2 - 3) ^ ((x + 7) * 3 - 11) ^ ((x - 13) * 5 + 17) ^ ((x + 19) * 7 - 23) }
+		function f3(x) { return ((x ^ 5) * 2 - 3) ^ ((x + 7) * 3 - 11) ^ ((x - 13) * 5 + 17) ^ ((x + 19) * 7 - 23) }
+		function f4(x) { return ((x + 7) * 2 - 3) ^ ((x + 7) * 3 - 11) ^ ((x - 13) * 5 + 17) ^ ((x + 19) * 7 - 23) }
+		function f5(x) { return ((x * 11) * 2 - 3) ^ ((x + 7) * 3 - 11) ^ ((x - 13) * 5 + 17) ^ ((x + 19) * 7 - 23) }
+		function f6(x) { return ((x - 13) * 2 - 3) ^ ((x + 7) * 3 - 11) ^ ((x - 13) * 5 + 17) ^ ((x + 19) * 7 - 23) }
+		function f7(x) { return ((x ^ 17) * 2 - 3) ^ ((x + 7) * 3 - 11) ^ ((x - 13) * 5 + 17) ^ ((x + 19) * 7 - 23) }
+		function f8(x) { return ((x + 19) * 2 - 3) ^ ((x + 7) * 3 - 11) ^ ((x - 13) * 5 + 17) ^ ((x + 19) * 7 - 23) }
+		function f9(x) { return ((x * 23) * 2 - 3) ^ ((x + 7) * 3 - 11) ^ ((x - 13) * 5 + 17) ^ ((x + 19) * 7 - 23) }
+		function f10(x) { return ((x - 29) * 2 - 3) ^ ((x + 7) * 3 - 11) ^ ((x - 13) * 5 + 17) ^ ((x + 19) * 7 - 23) }
+		function f11(x) { return ((x ^ 31) * 2 - 3) ^ ((x + 7) * 3 - 11) ^ ((x - 13) * 5 + 17) ^ ((x + 19) * 7 - 23) }
 		function wide(n){let t=0;for(let i=0;i<n;i++){t=(f0(t)+f1(i)+f2(t)+f3(i)+f4(t)+f5(i)+f6(t)+f7(i)+f8(t)+f9(i)+f10(t)+f11(i))|0}return t}`
+	inlined := jitInlinedForTest(t)
 	want := New(Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
@@ -9072,6 +9083,9 @@ func TestJITSSAInlineBudgetCallsNatively(t *testing.T) {
 			}
 			if e := e(); e == nil || e.ssa == nil || e.entrySlow {
 				t.Fatalf("wide did not run natively: %+v", e)
+			}
+			if n := len(inlined["wide"]); n == 0 || n >= 12 {
+				t.Fatalf("wide inlines %d of its 12 callees", n)
 			}
 		}
 	}
