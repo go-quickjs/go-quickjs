@@ -6049,22 +6049,35 @@ func (c *compiler) goCallingLive(v *ssa.Value, st *abi.GoCallState, stub amd64.L
 			c.a.Store(regCtx, c.spillDisp(sv.slot), amd64.Reg(sv.reg))
 		}
 	}
-	if !c.liveUsed {
-		c.live, c.liveUsed = c.a.NewLabel(), true
-	}
-	routine := &c.live
-	if c.goCallBig {
-		if !c.bigLiveUsed {
-			c.bigLive, c.bigLiveUsed = c.a.NewLabel(), true
-		}
-		routine = &c.bigLive
-	}
 	back, fail := c.a.NewLabel(), c.a.NewLabel()
+	direct := c.enc.GoFast != 0 && !c.goCallBig
 	c.movImm(scratchC, uint64(uintptr(unsafe.Pointer(st))))
 	c.a.LeaLabel(scratchA, back)
-	c.a.Jmp(*routine)
+	if direct {
+		// Through the VM's routine for calls of Go (abi.Encoding's
+		// GoFast), which comes straight back, as a leaf's does.
+		c.movImm(scratchB, c.enc.GoFast)
+		c.a.JmpReg(scratchB)
+	} else {
+		if !c.liveUsed {
+			c.live, c.liveUsed = c.a.NewLabel(), true
+		}
+		routine := &c.live
+		if c.goCallBig {
+			if !c.bigLiveUsed {
+				c.bigLive, c.bigLiveUsed = c.a.NewLabel(), true
+			}
+			routine = &c.bigLive
+		}
+		c.a.Jmp(*routine)
+	}
 	c.a.Bind(back)
 	restore := func(refused bool) {
+		if direct {
+			// The frame's registers, which the routine does not read again.
+			c.a.Load(regLocals, regCtx, abi.OffLocals)
+			c.a.Load(regStack, regCtx, abi.OffStack)
+		}
 		for _, sv := range saves {
 			switch {
 			case sv.cold && !refused:

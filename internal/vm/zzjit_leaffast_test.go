@@ -275,3 +275,58 @@ func TestJITLeafNativeForms(t *testing.T) {
 		}
 	}
 }
+
+// goFastSetup's loop makes calls of Go of other kinds than a leaf's -- a
+// comparison of strings (ssa.GoCompare), a concatenation's, an indexOf
+// (GoIndexOf) -- and, in oddRuns, compares an object, whose conversion
+// runs script, which Go refuses there.
+const goFastSetup = `
+var conv = 0
+function mixed(xs, n) {
+	let h = 0, s = ''
+	for (let i = 0; i < n; i++) {
+		const x = xs[i % xs.length]
+		if (x < 'm') h++
+		s = 'k' + x + i
+		h = (h * 31 + s.length + 'abcdefghijklmnop'.indexOf(s.charAt(1))) | 0
+	}
+	return h + ':' + s
+}
+function plainRuns(n) { return mixed(['a', 'q', 'mm', 'b'], n) }
+function oddRuns(n) { conv = 0; return mixed(['a', 'q', { valueOf() { conv++; return 'c' }, toString() { conv += 10; return 'd' } }], n) + ':' + conv }
+`
+
+// Every other call of Go whose site saves its live registers goes through
+// the VM's routine for them (abi.Encoding's GoFast, jitGoDirect), past
+// jit's callGo and its call of jit.HostCall and the code's own routine:
+// each answer is Node's (v26.10.0), the loop's calls made so, and a
+// comparison Go refuses leaves for the interpreter, which converts the
+// object.
+func TestJITGoFast(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	var rounds []string
+	for range 6 {
+		rounds = append(rounds, "plainRuns(40)")
+	}
+	r := jitAgreesForTest(t, goFastSetup, rounds...)
+	fast := r.jit.goFast
+	for _, rd := range [][2]string{
+		{"plainRuns(40)", "1457902686:kb39"},
+		{"oddRuns(40)", "-1317125250:ka39:26"},
+		{"plainRuns(40)", "1457902686:kb39"},
+	} {
+		v, err := r.Run(compileForTest(t, "''+("+rd[0]+")"))
+		if err != nil {
+			t.Fatalf("%s: %v", rd[0], err)
+		}
+		if got := v.String().Go(); got != rd[1] {
+			t.Errorf("%s = %q, want Node's %q", rd[0], got, rd[1])
+		}
+	}
+	jitNativeForTest(t, r, "mixed")
+	if r.jit.goFast-fast < 3*40 {
+		t.Errorf("%d calls of Go through the routine in 120 turns, want at least one a turn", r.jit.goFast-fast)
+	}
+}

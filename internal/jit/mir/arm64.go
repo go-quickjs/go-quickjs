@@ -2178,22 +2178,33 @@ func (c *a64Compiler) goCallingLive(v *ssa.Value, st *abi.GoCallState, stub arm6
 			c.a.Store(a64Ctx, c.spillDisp(sv.slot), arm64.Reg(sv.reg))
 		}
 	}
-	if !c.liveUsed {
-		c.live, c.liveUsed = c.a.NewLabel(), true
-	}
-	routine := &c.live
-	if c.goCallBig {
-		if !c.bigLiveUsed {
-			c.bigLive, c.bigLiveUsed = c.a.NewLabel(), true
-		}
-		routine = &c.bigLive
-	}
 	back, fail := c.a.NewLabel(), c.a.NewLabel()
+	direct := c.enc.GoFast != 0 && !c.goCallBig
 	c.movImm(a64C, uint64(uintptr(unsafe.Pointer(st))))
 	c.a.Adr(a64A, back)
-	c.a.B(*routine)
+	if direct {
+		// As amd64's: through the VM's routine for calls of Go.
+		c.movImm(a64B, c.enc.GoFast)
+		c.a.Br(a64B)
+	} else {
+		if !c.liveUsed {
+			c.live, c.liveUsed = c.a.NewLabel(), true
+		}
+		routine := &c.live
+		if c.goCallBig {
+			if !c.bigLiveUsed {
+				c.bigLive, c.bigLiveUsed = c.a.NewLabel(), true
+			}
+			routine = &c.bigLive
+		}
+		c.a.B(*routine)
+	}
 	c.a.Bind(back)
 	restore := func(refused bool) {
+		if direct {
+			c.a.Load(a64Locals, a64Ctx, abi.OffLocals)
+			c.a.Load(a64Stack, a64Ctx, abi.OffStack)
+		}
 		for _, sv := range saves {
 			switch {
 			case sv.cold && !refused:

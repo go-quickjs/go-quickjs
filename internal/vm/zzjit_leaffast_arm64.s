@@ -28,3 +28,26 @@ TEXT ·jitLeafFastAddr(SB), NOSPLIT, $0-8
 	MOVD $·jitLeafFast(SB), R0
 	MOVD R0, ret+0(FP)
 	RET
+
+// jitGoFast is amd64's: the context in R0, the description in R17, where
+// the call goes on in R15.
+TEXT ·jitGoFast(SB), NOSPLIT|NOFRAME, $0-0
+	SUB $48, RSP
+	NO_LOCAL_POINTERS
+	MOVD R30, 0(RSP)
+	MOVD R0, 40(RSP)
+	MOVD R0, 8(RSP)
+	MOVD R17, 16(RSP)
+	MOVD R15, 24(RSP)
+	BL ·jitGoDirect(SB)
+	MOVD 32(RSP), R15
+	MOVD 40(RSP), R0
+	MOVD 0(RSP), R30
+	ADD $48, RSP
+	JMP (R15)
+
+// jitGoFastAddr is jitGoFast's address.
+TEXT ·jitGoFastAddr(SB), NOSPLIT, $0-8
+	MOVD $·jitGoFast(SB), R0
+	MOVD R0, ret+0(FP)
+	RET

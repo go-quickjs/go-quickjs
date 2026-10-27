@@ -67,7 +67,8 @@ func (leaves) LeafKind(fn uintptr) ssa.LeafKind {
 // The calls of leaves are made through the VM's routine for them
 // (abi.Encoding's LeafFast) by code that keeps the rules on both targets,
 // each call's description naming its leaf (abi.GoCallState's Leaf); and
-// through CallGo, as before, where the encoding has no such routine. The
+// through CallGo, as before, where the encoding has no such routine, the
+// other calls of Go through GoFast or the code's routine of them alike. The
 // native forms of codePointAt and at, before their calls, keep them too.
 func TestMirLeafCalls(t *testing.T) {
 	enc := abi.Encoding{ValueSize: 16, NumOffset: 0, RefOffset: 8,
@@ -77,6 +78,10 @@ func TestMirLeafCalls(t *testing.T) {
 	for _, fast := range []uint64{0x73000, 0} {
 		e := enc
 		e.LeafFast = fast
+		if fast != 0 {
+			// And every other call of Go through the VM's routine.
+			e.GoFast = fast + 0x100
+		}
 		named, sites := 0, 0
 		natives := map[ssa.Op]int{}
 		for _, c := range leafCorpus {

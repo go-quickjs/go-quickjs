@@ -28,3 +28,26 @@ TEXT ·jitLeafFastAddr(SB), NOSPLIT, $0-8
 	LEAQ ·jitLeafFast(SB), AX
 	MOVQ AX, ret+0(FP)
 	RET
+
+// jitGoFast is where native code jumps for any other call of Go whose
+// site saves its live registers (abi.Encoding's GoFast): as jitLeafFast,
+// the call's description in CX and where it goes on in AX. It calls
+// jitGoDirect and goes where it says, DI as it found it.
+TEXT ·jitGoFast(SB), NOSPLIT|NOFRAME, $0-0
+	ADJSP $40
+	NO_LOCAL_POINTERS
+	MOVQ DI, 32(SP)
+	MOVQ DI, 0(SP)
+	MOVQ CX, 8(SP)
+	MOVQ AX, 16(SP)
+	CALL ·jitGoDirect(SB)
+	MOVQ 24(SP), AX
+	MOVQ 32(SP), DI
+	ADJSP $-40
+	JMP AX
+
+// jitGoFastAddr is jitGoFast's address.
+TEXT ·jitGoFastAddr(SB), NOSPLIT, $0-8
+	LEAQ ·jitGoFast(SB), AX
+	MOVQ AX, ret+0(FP)
+	RET

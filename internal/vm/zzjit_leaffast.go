@@ -6,6 +6,7 @@ import (
 	"math"
 	"unsafe"
 
+	"github.com/go-quickjs/go-quickjs/internal/jit"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 )
 
@@ -34,6 +35,35 @@ func jitLeafFast()
 
 // jitLeafFastAddr is jitLeafFast's address.
 func jitLeafFastAddr() uintptr
+
+// jitGoFast is where native code jumps for any other call of Go whose site
+// saves its live registers (abi.Encoding's GoFast): as jitLeafFast, it
+// calls jitGoDirect, and goes straight back where it says.
+func jitGoFast()
+
+// jitGoFastAddr is jitGoFast's address.
+func jitGoFastAddr() uintptr
+
+// jitGoDirect makes the call of Go st describes, as jit.goCall would --
+// the description read into ctx (jit.ExpandGoCall), the call made by
+// jitHostCall, its status -- and returns back, where the call goes on, or
+// where its refusal does (GoCallState's Fail): what jit's callGo, its
+// call of jit.HostCall's function value and the code's routine of calls
+// of Go, saved and resumed through the context, had cost every call of Go
+// besides.
+func jitGoDirect(ctx *abi.Context, st *abi.GoCallState, back uintptr) uintptr {
+	ctx.GoState = uintptr(unsafe.Pointer(st))
+	fail := jit.ExpandGoCall(ctx)
+	ctx.GoStatus = 1
+	if r := (*Runtime)(ctx.Host); r != nil && r.jit != nil {
+		r.jit.goFast++
+	}
+	if jitHostCall(ctx) {
+		ctx.GoStatus = 0
+		return back
+	}
+	return back + uintptr(int64(fail))
+}
 
 // jitLeafGo makes the leaf's call st describes, of the operands native code
 // wrote to ctx's GoArgs past the function's -- the receiver of a method

@@ -1288,6 +1288,15 @@ type Encoding struct {
 	// of Go leaves it -- and every register but the context's and the
 	// stack's clobbered. 0 sends every such call to CallGo.
 	LeafFast uint64
+	// GoFast is where native code jumps, as to LeafFast, for any other
+	// call of Go whose live registers its site saves (mir's
+	// goCallingLive): the VM's routine that reads the call's description
+	// and makes the call as CallGo's would, but for the code's own routine
+	// and the dispatch through jit.HostCall, and comes straight back, or
+	// Fail bytes past, with every register but the context's and the
+	// stack's clobbered. Its inputs are LeafFast's. 0 sends every such call
+	// to CallGo.
+	GoFast uint64
 	// StoreRef is where native code jumps to store a pointer word while
 	// the collector marks, as V8's code calls its write barrier: the
 	// address of jit's storeRef, which, as callGo, is to the Go runtime a
