@@ -7479,6 +7479,73 @@ func (c *compiler) stringAtOr(v *ssa.Value) {
 	c.setG(v, scratchA)
 }
 
+// numberIs is Number.isNaN(x), isFinite, isInteger or isSafeInteger
+// (ssa.OpNumberIs, its Aux the predicate): false for x no number, and the
+// predicate of a number, 0 or 1 into v's register. It uses every scratch
+// register, xScratch0 and xScratch1.
+func (c *compiler) numberIs(v *ssa.Value) {
+	x := v.Args[0]
+	no, done := c.a.NewLabel(), c.a.NewLabel()
+	if x.Op == ssa.OpBoxF64 {
+		if k := c.xmm(x.Args[0], xScratch0); k != xScratch0 {
+			c.a.SSEOp(amd64.MovAPD, xScratch0, k)
+		}
+		c.a.MovQFromX(scratchA, xScratch0)
+	} else {
+		w := scratchA
+		if remat(x) {
+			c.materialize(x, scratchA)
+		} else if w = c.gpr(x, scratchA); w != scratchA {
+			c.a.MovRR(scratchA, w)
+		}
+		c.cmpWord(scratchA, abi.NumberLimit)
+		c.a.Jcc(amd64.CondAE, no)
+		c.a.MovQToX(xScratch0, scratchA)
+	}
+	switch v.Aux {
+	case ssa.NumberIsNaN:
+		c.a.SSEOp(amd64.UcomiSD, xScratch0, xScratch0)
+		c.a.Setcc(amd64.CondP, scratchA)
+	case ssa.NumberIsFinite:
+		// x - x is 0 for a finite x, NaN for an infinity or NaN.
+		c.a.SSEOp(amd64.MovAPD, xScratch1, xScratch0)
+		c.a.SSEOp(amd64.SubSD, xScratch1, xScratch0)
+		c.a.SSEOp(amd64.UcomiSD, xScratch1, xScratch1)
+		c.a.Setcc(amd64.CondNP, scratchA)
+	default:
+		// |x|'s bits, which order as the magnitudes do: past 2**53 every
+		// number is an integer -- a finite one, below the infinity's bits;
+		// below, x is one where truncating it and back gives it.
+		c.a.ShiftImm(amd64.Shl, scratchA, 1, true)
+		c.a.ShiftImm(amd64.Shr, scratchA, 1, true)
+		if v.Aux == ssa.NumberIsSafeInteger {
+			c.movImm(scratchB, math.Float64bits(1<<53-1))
+			c.a.Op(amd64.Cmp, scratchA, scratchB, true)
+			c.a.Jcc(amd64.CondA, no)
+		} else {
+			small := c.a.NewLabel()
+			c.movImm(scratchB, math.Float64bits(1<<53))
+			c.a.Op(amd64.Cmp, scratchA, scratchB, true)
+			c.a.Jcc(amd64.CondB, small)
+			c.movImm(scratchB, math.Float64bits(math.Inf(1)))
+			c.a.Op(amd64.Cmp, scratchA, scratchB, true)
+			c.a.Setcc(amd64.CondB, scratchA)
+			c.a.Jmp(done)
+			c.a.Bind(small)
+		}
+		c.a.Cvttsd2si(scratchA, xScratch0)
+		c.a.Cvtsi2sd(xScratch1, scratchA, true)
+		c.a.SSEOp(amd64.UcomiSD, xScratch1, xScratch0)
+		c.a.Setcc(amd64.CondE, scratchA)
+	}
+	c.a.Jmp(done)
+	c.a.Bind(no)
+	c.movImm(scratchA, 0)
+	c.a.Bind(done)
+	c.a.MovZX8(scratchA, scratchA)
+	c.setG(v, scratchA)
+}
+
 // codeChar is String.fromCharCode(c) (ssa.OpCodeChar): the cell of the
 // runtime's string of code unit c, an integer below 256, into v's
 // register.
@@ -8583,6 +8650,8 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.stringCodePointOr(v)
 	case ssa.OpStringAtOr:
 		c.stringAtOr(v)
+	case ssa.OpNumberIs:
+		c.numberIs(v)
 	case ssa.OpLoopMark:
 		// A loop of a built-in's call under way, or done (abi.Context's
 		// Loop).

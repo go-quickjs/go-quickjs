@@ -67,19 +67,20 @@ func TestJITLeafFast(t *testing.T) {
 			leaves++
 		}
 	}
-	if leaves < 7 {
-		t.Errorf("leafTurns' code has %d leaves' calls, want the seven", leaves)
+	if leaves < 6 {
+		// Number.isNaN's made natively, no call (ssa.OpNumberIs).
+		t.Errorf("leafTurns' code has %d leaves' calls, want six", leaves)
 	}
 	fast, refused, calls := r.jit.leafFast, r.jit.leafRefused, e.ssaStats.goCalls
 	if _, err := r.Run(compileForTest(t, "leafs(40)")); err != nil {
 		t.Fatal(err)
 	}
 	// Seven leaves a turn, made by the routine but for those native code
-	// makes itself (ssa.LeafKind): every codePointAt, and at's of 0 and 3,
-	// below 256, its of -1, a surrogate, and of 9, past the end, the
-	// routine's. The Map's get read once, by Go.
-	if got := r.jit.leafFast - fast; got != 5*40+20 || r.jit.leafRefused != refused || e.ssaStats.goCalls-calls > 1 {
-		t.Errorf("leafs(40) made %d leaves' calls through the routine, refused %d, %d calls of Go with frames; want 220, 0, at most 1",
+	// makes itself (ssa.LeafKind): every Number.isNaN and codePointAt, and
+	// at's of 0 and 3, below 256, its of -1, a surrogate, and of 9, past
+	// the end, the routine's. The Map's get read once, by Go.
+	if got := r.jit.leafFast - fast; got != 4*40+20 || r.jit.leafRefused != refused || e.ssaStats.goCalls-calls > 1 {
+		t.Errorf("leafs(40) made %d leaves' calls through the routine, refused %d, %d calls of Go with frames; want 180, 0, at most 1",
 			got, r.jit.leafRefused-refused, e.ssaStats.goCalls-calls)
 	}
 	// Each call's form made once, at its first call, and kept in its
@@ -93,8 +94,8 @@ func TestJITLeafFast(t *testing.T) {
 			forms++
 		}
 	}
-	if forms < 6 {
-		t.Errorf("%d leaves' calls have their forms, want the six the routine made", forms)
+	if forms < 5 {
+		t.Errorf("%d leaves' calls have their forms, want the five the routine made", forms)
 	}
 	if _, err := r.Run(compileForTest(t, "odd(40)")); err != nil {
 		t.Fatal(err)
@@ -385,5 +386,54 @@ func TestJITMathCallsSaveLive(t *testing.T) {
 		if got := r.jit.goFast - fast; got < 4*100+1000 {
 			t.Errorf("marking %v: %d calls of Math's functions through the routine, want 1400", marking, got)
 		}
+	}
+}
+
+// numberIsSetup's functions ask Number's predicates of numbers -- 0, -0,
+// fractions, NaN, the infinities, the safe integers' bounds and past
+// them, the denormals, 2**63, 2**64 -- and of values that are none, as a
+// method and through a local, and with Number.isInteger replaced.
+const numberIsSetup = `
+var vals = [0, -0, 1, 1.5, -1.5, NaN, Infinity, -Infinity, 9007199254740991, 9007199254740992, -9007199254740991, -9007199254740992, 9007199254740994, 1e300, 5e-324, -5e-324, 9223372036854775808, 18446744073709551616, 4294967296.5, -4294967296, '1', '', true, null, undefined, {}, [], 1n, Symbol('s')]
+function preds(vs) { let out = ''; for (let i = 0; i < vs.length; i++) { const x = vs[i]; out += (Number.isNaN(x) ? 1 : 0) + '' + (Number.isFinite(x) ? 1 : 0) + (Number.isInteger(x) ? 1 : 0) + (Number.isSafeInteger(x) ? 1 : 0) + ',' } return out }
+function plain(vs) { const f = Number.isInteger, g = Number.isSafeInteger; let c = 0; for (let i = 0; i < vs.length; i++) { if (f(vs[i])) c++; if (g(vs[i])) c += 10 } return c }
+function counts(n) { let c = 0; for (let i = 0; i < n; i++) { const x = i * 0.25; if (Number.isInteger(x)) c++; if (Number.isNaN(x - x)) c += 100 } return c }
+function swapped(n) { const save = Number.isInteger; Number.isInteger = x => true; try { return counts(n) } finally { Number.isInteger = save } }
+`
+
+// Number.isNaN, isFinite, isInteger and isSafeInteger are made natively,
+// no call at all (ssa.OpNumberIs), their function checked: each answer is
+// Node's (v26.10.0), and the loop with the function replaced fails the
+// check, the interpreter calling the replacement.
+func TestJITNumberPredicates(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	var rounds []string
+	for range 6 {
+		rounds = append(rounds, "preds(vals)", "plain(vals)", "counts(40)")
+	}
+	r := jitAgreesForTest(t, numberIsSetup, rounds...)
+	fast := r.jit.leafFast
+	for _, rd := range [][2]string{
+		{"preds(vals)", "0111,0111,0111,0100,0100,1000,0000,0000,0111,0110,0111,0110,0110,0110,0100,0100,0110,0110,0100,0111,0000,0000,0000,0000,0000,0000,0000,0000,0000,"},
+		{"plain(vals)", "72"},
+		{"counts(40)", "10"},
+		{"swapped(40)", "40"},
+		{"counts(40)", "10"},
+	} {
+		v, err := r.Run(compileForTest(t, "''+("+rd[0]+")"))
+		if err != nil {
+			t.Fatalf("%s: %v", rd[0], err)
+		}
+		if got := v.String().Go(); got != rd[1] {
+			t.Errorf("%s = %q, want Node's %q", rd[0], got, rd[1])
+		}
+	}
+	for _, name := range []string{"preds", "plain", "counts"} {
+		jitNativeForTest(t, r, name)
+	}
+	if r.jit.leafFast != fast {
+		t.Errorf("Number's predicates made %d calls of Go", r.jit.leafFast-fast)
 	}
 }

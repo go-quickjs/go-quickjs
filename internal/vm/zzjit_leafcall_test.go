@@ -47,8 +47,9 @@ func TestJITLeafCalls(t *testing.T) {
 			leaves++
 		}
 	}
-	if leaves < 5 {
-		t.Errorf("leafLoop's code has %d leaves' calls, want the five", leaves)
+	if leaves < 4 {
+		// Number.isNaN's made natively, no call (ssa.OpNumberIs).
+		t.Errorf("leafLoop's code has %d leaves' calls, want the four", leaves)
 	}
 	calls, hosts, entries := e.ssaStats.goCalls, e.ssaStats.hosts, e.ssaStats.entries
 	if _, err := r.Run(compileForTest(t, "leaves(30)")); err != nil {

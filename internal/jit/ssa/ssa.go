@@ -549,6 +549,19 @@ const (
 	// call of Go makes the call. Neither exits.
 	OpStringCodePointOr // tagged string, tagged index -> f64
 	OpStringAtOr        // tagged string, tagged index -> source
+	// OpNumberIs is Number.isNaN(x), isFinite, isInteger or isSafeInteger
+	// once its function is checked (Aux NumberIsNaN, NumberIsFinite,
+	// NumberIsInteger, NumberIsSafeInteger): false for anything that is no
+	// number, which none of them converts, and the predicate of a number.
+	OpNumberIs // tagged -> bool
+)
+
+// OpNumberIs's Aux: which of Number's predicates.
+const (
+	NumberIsNaN = iota
+	NumberIsFinite
+	NumberIsInteger
+	NumberIsSafeInteger
 )
 
 var opNames = [...]string{
@@ -573,7 +586,7 @@ var opNames = [...]string{
 	OpAddU64: "addu64", OpSubU64: "subu64", OpMulU64: "mulu64", OpShlI64: "shli64", OpShlU64: "shlu64",
 	OpDivI64: "divi64", OpModI64: "modi64", OpDivU64: "divu64", OpModU64: "modu64", OpBigOfF64: "bigoff", OpPowI64: "powi64",
 	OpHolderCell: "holdercell", OpChainCheck: "chaincheck", OpProtoIs: "protois", OpCodeCharOr: "codecharor",
-	OpStringCodePointOr: "codepointor", OpStringAtOr: "stringator",
+	OpStringCodePointOr: "codepointor", OpStringAtOr: "stringator", OpNumberIs: "numberis",
 }
 
 func (o Op) String() string {

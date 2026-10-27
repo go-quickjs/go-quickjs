@@ -901,6 +901,23 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 					return exit(v.State, ir.ExitKind(v.Aux))
 				}
 				vals[v.ID] = val{f: float64(s.Units[i])}
+			case OpNumberIs:
+				// Number's predicates, of a number; false of anything else.
+				is := false
+				if a.t.Kind == ir.Number {
+					x := math.Float64frombits(a.t.Bits)
+					switch v.Aux {
+					case NumberIsNaN:
+						is = x != x
+					case NumberIsFinite:
+						is = !math.IsInf(x, 0) && x == x
+					case NumberIsInteger:
+						is = !math.IsInf(x, 0) && x == math.Trunc(x)
+					default:
+						is = !math.IsInf(x, 0) && x == math.Trunc(x) && math.Abs(x) <= 1<<53-1
+					}
+				}
+				vals[v.ID] = val{b: is}
 			case OpStringCodePointOr:
 				// The code point, as the VM's codePointAt makes it of a flat
 				// string; -1 for anything else.

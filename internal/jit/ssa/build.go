@@ -719,15 +719,24 @@ type LeafKindFeedback interface {
 // LeafKind is a leaf native code makes itself where it can: the
 // realm's String.prototype.codePointAt (LeafCodePointAt) and
 // String.prototype.at (LeafAt), each of one argument, made of a flat
-// string's code units (OpStringCodePointOr, OpStringAtOr). LeafOther is
-// any other.
+// string's code units (OpStringCodePointOr, OpStringAtOr); Number.isNaN,
+// isFinite, isInteger and isSafeInteger (LeafNumberIsNaN...), of any value,
+// which convert nothing (OpNumberIs). LeafOther is any other.
 type LeafKind uint8
 
 const (
 	LeafOther LeafKind = iota
 	LeafCodePointAt
 	LeafAt
+	LeafNumberIsNaN
+	LeafNumberIsFinite
+	LeafNumberIsInteger
+	LeafNumberIsSafeInteger
 )
+
+// reads reports whether the leaf's answer is of its receiver's: a method
+// it makes only of a method call.
+func (k LeafKind) reads() bool { return k == LeafCodePointAt || k == LeafAt }
 
 // leafAt is the leaf the call at pc of the root, one Go makes (a GoCall
 // site) of at most abi.MaxGoArgs-2 arguments, calls (LeafFeedback).
@@ -782,7 +791,14 @@ func (b *builder) leafCall(blk *Block, pc int, fn uintptr, guard func(Op, Type, 
 		args = append(args, b.read(at+1+k, blk))
 	}
 	site := &CallSite{Go: GoLeaf, Argc: c.Argc, Method: c.Method, ThisSlot: -1, Leaf: fn}
-	if kind := b.leafKind(fn); kind != LeafOther && c.Method && c.Argc == 1 {
+	if kind := b.leafKind(fn); kind != LeafOther && c.Argc == 1 && (c.Method || !kind.reads()) {
+		if kind >= LeafNumberIsNaN {
+			// Of the one argument alone, whatever it is: no call.
+			is := f.newValue(blk, OpNumberIs, Bool, args[len(args)-1])
+			is.Aux = int(kind - LeafNumberIsNaN)
+			b.write(base, blk, f.newValue(blk, OpBoxBool, Tagged, is))
+			return
+		}
 		b.leafNative(blk, pc, kind, base, args, site)
 		return
 	}

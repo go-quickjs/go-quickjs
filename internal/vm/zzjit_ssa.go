@@ -8172,7 +8172,8 @@ func (fb *jitFeedback) Leaf(pc int) (uintptr, bool) {
 // LeafKind is ssa.LeafKindFeedback's: which of the leaves native code
 // makes itself where it can the leaf at fn is -- a function Leaf found,
 // which the code checks it calls -- by its frameless application (elemOp):
-// String.prototype's codePointAt and at.
+// String.prototype's codePointAt and at, Number's isNaN, isFinite,
+// isInteger and isSafeInteger.
 func (fb *jitFeedback) LeafKind(fn uintptr) ssa.LeafKind {
 	fd := (*Object)(*(*unsafe.Pointer)(unsafe.Pointer(&fn))).fn()
 	if fd == nil {
@@ -8183,6 +8184,14 @@ func (fb *jitFeedback) LeafKind(fn uintptr) ssa.LeafKind {
 		return ssa.LeafCodePointAt
 	case elemStrAt:
 		return ssa.LeafAt
+	case elemNumIsNaN:
+		return ssa.LeafNumberIsNaN
+	case elemNumIsFinite:
+		return ssa.LeafNumberIsFinite
+	case elemNumIsInteger:
+		return ssa.LeafNumberIsInteger
+	case elemNumIsSafeInteger:
+		return ssa.LeafNumberIsSafeInteger
 	}
 	return ssa.LeafOther
 }

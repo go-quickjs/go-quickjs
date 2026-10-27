@@ -55,13 +55,12 @@ func (leaves) Leaf(pc int) (uintptr, bool) {
 	return 0x86000 + uintptr(pc)*16, true
 }
 
-// LeafKind has the leaves at odd PCs codePointAt, those at even PCs at,
-// the kinds native code makes itself where the call allows (ssa.LeafKind).
+// LeafKind has the leaves by their PCs each of the kinds native code makes
+// itself where the call allows (ssa.LeafKind): codePointAt, at, and
+// Number's four predicates.
 func (leaves) LeafKind(fn uintptr) ssa.LeafKind {
-	if (fn-0x86000)/16%2 == 1 {
-		return ssa.LeafCodePointAt
-	}
-	return ssa.LeafAt
+	return [...]ssa.LeafKind{ssa.LeafAt, ssa.LeafCodePointAt, ssa.LeafNumberIsNaN, ssa.LeafNumberIsFinite,
+		ssa.LeafNumberIsInteger, ssa.LeafNumberIsSafeInteger}[(fn-0x86000)/16%6]
 }
 
 // The calls of leaves are made through the VM's routine for them
@@ -69,7 +68,8 @@ func (leaves) LeafKind(fn uintptr) ssa.LeafKind {
 // each call's description naming its leaf (abi.GoCallState's Leaf); and
 // through CallGo, as before, where the encoding has no such routine, the
 // other calls of Go through GoFast or the code's routine of them alike. The
-// native forms of codePointAt and at, before their calls, keep them too.
+// native forms of codePointAt and at, before their calls, and of Number's
+// predicates, keep them too.
 func TestMirLeafCalls(t *testing.T) {
 	enc := abi.Encoding{ValueSize: 16, NumOffset: 0, RefOffset: 8,
 		Undefined: 0xFFF8000000000001, Null: 0xFFF8000000000002, True: 0xFFF8000000000103,
@@ -98,7 +98,7 @@ func TestMirLeafCalls(t *testing.T) {
 						if calls := v.Calls(); len(calls) == 1 && calls[0].Go == ssa.GoLeaf {
 							sites++
 						}
-						if v.Op == ssa.OpStringCodePointOr || v.Op == ssa.OpStringAtOr {
+						if v.Op == ssa.OpStringCodePointOr || v.Op == ssa.OpStringAtOr || v.Op == ssa.OpNumberIs {
 							natives[v.Op]++
 						}
 					}
@@ -130,7 +130,7 @@ func TestMirLeafCalls(t *testing.T) {
 		if sites < len(leafCorpus) || named < 2*len(leafCorpus) {
 			t.Errorf("LeafFast %#x: %d leaves' calls built, %d compiled, want each function's", fast, sites, named)
 		}
-		if natives[ssa.OpStringCodePointOr] == 0 || natives[ssa.OpStringAtOr] == 0 {
+		if natives[ssa.OpStringCodePointOr] == 0 || natives[ssa.OpStringAtOr] == 0 || natives[ssa.OpNumberIs] == 0 {
 			t.Errorf("native forms built: %v", natives)
 		}
 	}

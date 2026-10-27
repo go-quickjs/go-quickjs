@@ -6605,6 +6605,64 @@ func (c *a64Compiler) stringAtOr(v *ssa.Value) {
 	c.setG(v, a64A)
 }
 
+// numberIs is ssa.OpNumberIs, as amd64's. It uses A, B, F0 and F1.
+func (c *a64Compiler) numberIs(v *ssa.Value) {
+	x := v.Args[0]
+	no, done := c.a.NewLabel(), c.a.NewLabel()
+	if x.Op == ssa.OpBoxF64 {
+		if k := c.fpr(x.Args[0], a64F0); k != a64F0 {
+			c.a.FMov(a64F0, k)
+		}
+		c.a.FMovFromF(a64A, a64F0)
+	} else {
+		if remat(x) {
+			c.materialize(x, a64A)
+		} else if w := c.gpr(x, a64A); w != a64A {
+			c.a.MovRR(a64A, w)
+		}
+		c.movImm(a64B, abi.NumberLimit)
+		c.a.Cmp(a64A, a64B, true)
+		c.a.BCond(arm64.HS, no)
+		c.a.FMovToF(a64F0, a64A)
+	}
+	switch v.Aux {
+	case ssa.NumberIsNaN:
+		c.a.FCmp(a64F0, a64F0)
+		c.a.Cset(a64A, arm64.VS)
+	case ssa.NumberIsFinite:
+		c.a.FArith(arm64.FSub, a64F1, a64F0, a64F0)
+		c.a.FCmp(a64F1, a64F1)
+		c.a.Cset(a64A, arm64.VC)
+	default:
+		c.a.ShiftImm(arm64.Lsl, a64A, a64A, 1, true)
+		c.a.ShiftImm(arm64.Lsr, a64A, a64A, 1, true)
+		if v.Aux == ssa.NumberIsSafeInteger {
+			c.movImm(a64B, math.Float64bits(1<<53-1))
+			c.a.Cmp(a64A, a64B, true)
+			c.a.BCond(arm64.HI, no)
+		} else {
+			small := c.a.NewLabel()
+			c.movImm(a64B, math.Float64bits(1<<53))
+			c.a.Cmp(a64A, a64B, true)
+			c.a.BCond(arm64.LO, small)
+			c.movImm(a64B, math.Float64bits(math.Inf(1)))
+			c.a.Cmp(a64A, a64B, true)
+			c.a.Cset(a64A, arm64.LO)
+			c.a.B(done)
+			c.a.Bind(small)
+		}
+		c.a.Fcvtzs(a64A, a64F0)
+		c.a.Scvtf(a64F1, a64A, true)
+		c.a.FCmp(a64F1, a64F0)
+		c.a.Cset(a64A, arm64.EQ)
+	}
+	c.a.B(done)
+	c.a.Bind(no)
+	c.movImm(a64A, 0)
+	c.a.Bind(done)
+	c.setG(v, a64A)
+}
+
 // codeCharOr is ssa.OpCodeCharOr, as amd64's. It uses A, B, F0 and F1.
 func (c *a64Compiler) codeCharOr(v *ssa.Value) {
 	none, done := c.a.NewLabel(), c.a.NewLabel()
@@ -7652,6 +7710,8 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.stringCodePointOr(v)
 	case ssa.OpStringAtOr:
 		c.stringAtOr(v)
+	case ssa.OpNumberIs:
+		c.numberIs(v)
 	case ssa.OpLoopMark:
 		// As amd64's: abi.Context's Loop.
 		c.movImm(a64A, v.Const.Bits)
