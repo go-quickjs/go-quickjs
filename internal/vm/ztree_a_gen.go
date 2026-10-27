@@ -40,8 +40,12 @@ import (
 
 var (
 	// iterNextTree is iterNext for a tree's loop, c's, stepping cursor:
-	// a dense array's walk and, where its body allows (tgen.plain), a
-	// generator's resumption, made here; anything else is iterNext's. An
+	// a dense array's walk, a for-in's, a Map's or a Set's iterator's and,
+	// where its body allows (tgen.plain), a generator's resumption, made
+	// here, and any other iterator stepped as iterNext steps it
+	// (stepIter) -- what iterNext does past finding the cursor, so that
+	// the step is no call deeper than iterNext's had been; an array's
+	// hole or end is iterNext's. An
 	// exception a generator's body throws leaves through the loop's
 	// recover.
 	iterNextTree func(c *tctx, cursor Value) (Value, bool, error)
@@ -49,9 +53,10 @@ var (
 	// stepGenTree resumes g, the generator st steps, in t, its tree, as
 	// stepIter and resumeTree would, with no recover of its own (see
 	// above), and reports the value it yields, or false once it is done.
-	// false, having done nothing, where it cannot: the step is
-	// iterNext's.
-	stepGenTree func(c *tctx, st *iterState, g *generator, t *tree) (Value, bool, bool)
+	// st's next is gn, the realm's generators' next, which its caller
+	// found it is. false, having done nothing, where it cannot: the step
+	// is iterNext's.
+	stepGenTree func(c *tctx, st *iterState, g *generator, t *tree, gn *Object) (Value, bool, bool)
 
 	// resumeTreeBare is resumeTree for a yield*'s step of its delegate in
 	// a tree (delegateNext), whose exception goes on out of the delegating
@@ -200,7 +205,50 @@ func init() {
 			}
 			return c.r.iterNext(cursor)
 		}
-		if !st.forIn && st.iter.IsObject() {
+		r := c.r
+		if st.forIn {
+			// As iterNext walks a for-in's keys: an array's elements by
+			// index, then the snapshot's keys, a key deleted since skipped.
+			in := st.forInOf()
+			for st.idx < in.indexKeys {
+				i := st.idx
+				st.idx++
+				if o := in.obj; i < len(o.elemsOf()) && !holeAt(&o.extOf().elems[i]) {
+					return Str(r.keyString(r.atoms.indexAtom(uint32(i)))), true, nil
+				}
+				key := r.atoms.indexAtom(uint32(i))
+				has, err := r.hasPropErr(in.obj, key)
+				if err != nil {
+					st.done = true
+					return Undefined, false, err
+				}
+				if has {
+					return Str(r.keyString(key)), true, nil
+				}
+			}
+			for st.idx < len(in.keys) {
+				k, key := in.keys[st.idx], in.keyAtoms[st.idx]
+				st.idx++
+				if in.obj != nil && (in.shape == nil || in.obj.shape != in.shape) {
+					has, err := r.hasPropErr(in.obj, key)
+					if err != nil {
+						st.done = true
+						return Undefined, false, err
+					}
+					if !has {
+						continue
+					}
+				}
+				return k, true, nil
+			}
+			st.done = true
+			return Undefined, false, nil
+		}
+		// A generator stepped by the realm's next, which stepGenTree and
+		// stepIter look for first: asked by next's identity before the
+		// iterator's class, which any other iterator's step -- a Map's, an
+		// array iterator's -- had paid for at every value.
+		if gn := r.genNextFn; gn != nil && st.next.ref == unsafe.Pointer(gn) && st.iter.IsObject() {
 			if it := st.iter.Object(); it.class == ClassGenerator {
 				g := genOf(it)
 				if g.state <= genSuspendedYield {
@@ -211,7 +259,7 @@ func init() {
 							p = genPlain(t, fn)
 						}
 						if p == genPlainYes {
-							if v, more, ok := stepGenTree(c, st, g, t); ok {
+							if v, more, ok := stepGenTree(c, st, g, t, gn); ok {
 								return v, more, nil
 							}
 						}
@@ -219,15 +267,38 @@ func init() {
 				}
 			}
 		}
-		return c.r.iterNext(cursor)
+		// A Map's or a Set's iterator of this realm, stepped as stepIter
+		// steps one, whose generator test the one above has made: the
+		// test had been made twice at each value, here and in stepIter.
+		if st.next.IsObject() && st.iter.IsObject() {
+			if fd := st.next.Object().fn(); fd != nil && fd.iterNext == iterNextMap && (fd.realm == nil || fd.realm == r.Realm) {
+				if d, ok := st.iter.Object().dataOf().(*mapIterData); ok {
+					if err := r.tick(); err != nil {
+						st.done = true
+						return Undefined, false, err
+					}
+					v, ok := r.mapIterStep(d)
+					if !ok {
+						st.done = true
+					}
+					return v, ok, nil
+				}
+			}
+		}
+		// As iterNext steps any other iterator: done once its result says
+		// so or fails.
+		val, ok, err := r.stepIter(st.iter, st.next)
+		if !ok {
+			st.done = true
+		}
+		return val, ok, err
 	}
 
-	stepGenTree = func(c *tctx, st *iterState, g *generator, t *tree) (Value, bool, bool) {
+	stepGenTree = func(c *tctx, st *iterState, g *generator, t *tree, gn *Object) (Value, bool, bool) {
 		r := c.r
-		gn := r.genNextFn
 		cl := g.cl
 		fn := cl.fn
-		if gn == nil || st.next.ref != unsafe.Pointer(gn) || g.async ||
+		if g.async ||
 			(cl.realm != nil && cl.realm != r.Realm) || r.stopped != nil || r.frameDepth+1 >= r.maxFrames {
 			return Undefined, false, false
 		}
