@@ -158,6 +158,7 @@ rounds:
 			goto rounds
 		}
 	}
+	numberEqualities(f)
 	sinkLoopBoxes(f)
 	if rematerializeUpvalues(f) {
 		removeDead(f)
@@ -780,6 +781,46 @@ func sinkLoopBoxes(f *Func) {
 			b.Control = w
 			boxes[k].Uses--
 			w.Uses++
+		}
+	}
+}
+
+// numberEqualities makes an equality of two numbers (OpEqTagged), each a
+// float64's box or a numeric constant, a comparison of the float64s
+// (OpCmpF64), as V8's typed lowering makes a strict or loose equality of
+// two Numbers a NumberEqual: two numbers are equal, strictly or loosely,
+// where they are as float64s -- NaN equal to nothing, +0 to -0. The boxes
+// it no longer uses are then made where something else uses them, or at
+// an exit alone, rather than for a comparison of their words: Mandelbrot's
+// x === size - 1 boxed both operands at every pixel, and the loop's x at
+// every turn of the loop inside it, before sinkLoopBoxes moved that box out
+// to the comparison. It runs once the rounds are done, which leave the
+// boxes and the constants as they get.
+func numberEqualities(f *Func) {
+	number := func(a *Value) bool {
+		return a.Op == OpBoxF64 || a.Op == OpConst && a.Const.Kind == ir.Number
+	}
+	for _, b := range f.Blocks {
+		for i := 0; i < len(b.Values); i++ {
+			v := b.Values[i]
+			if v.Op != OpEqTagged || !number(v.Args[0]) || !number(v.Args[1]) {
+				continue
+			}
+			args := f.refsOf(2)
+			for k, a := range v.Args {
+				a.Uses--
+				if a.Op == OpBoxF64 {
+					args[k] = a.Args[0]
+				} else {
+					// A constant's float64, before the comparison.
+					c := f.alloc(Value{Op: OpConstF64, Type: Float64, Const: a.Const, Block: b})
+					insertBefore(f, v, c)
+					i++
+					args[k] = c
+				}
+				args[k].Uses++
+			}
+			v.Op, v.Args, v.State, v.Aux, v.Index = OpCmpF64, args, nil, int(ir.Eq), 0
 		}
 	}
 }
