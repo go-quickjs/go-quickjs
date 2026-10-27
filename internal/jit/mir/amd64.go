@@ -6615,6 +6615,23 @@ func (c *compiler) keep(v *ssa.Value) {
 // cell's address as v.
 func (c *compiler) keepStore(v *ssa.Value, marking bool) {
 	at := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	if len(v.Args) == 1 {
+		// Its pointer word read here, where its ref had read it
+		// (ssa's fuseKeepRefs): into scratchB, the number word after.
+		x := v.Args[0]
+		w := c.gpr(x, scratchA)
+		c.pointerWord(x, w)
+		c.a.Store(regCtx, at+c.enc.NumOffset, w)
+		if marking {
+			c.a.MovRR(scratchC, scratchB)
+			c.a.Lea(scratchA, regCtx, at+c.enc.RefOffset)
+			c.refStore()
+		} else {
+			c.a.Store(regCtx, at+c.enc.RefOffset, scratchB)
+		}
+		c.cellAddr(v, at)
+		return
+	}
 	c.a.Store(regCtx, at+c.enc.NumOffset, c.gpr(v.Args[0], scratchB))
 	if marking {
 		c.gprInto(v.Args[1], scratchC)

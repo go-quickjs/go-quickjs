@@ -311,11 +311,13 @@ const (
 	// marks. Every keep at a store reads first (keep.go).
 	OpKeepRef // tagged -> ptr
 	// OpKeep copies a tagged value (Args[0]) into the context's keep cell
-	// Index (abi.Context.Keep) -- its number word, and its pointer word
-	// (Args[1], OpKeepRef) -- and is that cell's address: a value read from
-	// a cell a store then overwrites is read from there since (keep.go).
+	// Index (abi.Context.Keep) -- its number word, and its pointer word,
+	// read where it came from by the keep itself, or before it (Args[1],
+	// OpKeepRef) where another keep of its store writes that cell first
+	// (fuseKeepRefs) -- and is that cell's address: a value read from a
+	// cell a store then overwrites is read from there since (keep.go).
 	// While the collector marks Go writes it, called from native code.
-	OpKeep // tagged, ptr -> source
+	OpKeep // tagged[, ptr] -> source
 	// OpKept is a tagged value (Args[1]) whose shadow is a keep (Args[0]).
 	OpKept // source, tagged -> tagged
 

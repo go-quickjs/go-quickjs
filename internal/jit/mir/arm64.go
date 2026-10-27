@@ -5909,6 +5909,22 @@ func (c *a64Compiler) keep(v *ssa.Value) {
 // keepStore is amd64's.
 func (c *a64Compiler) keepStore(v *ssa.Value, marking bool) {
 	at := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	if len(v.Args) == 1 {
+		// As amd64's: its pointer word read here, into B.
+		x := v.Args[0]
+		w := c.gpr(x, a64A)
+		c.pointerWord(x, w)
+		c.a.Store(a64Ctx, at+c.enc.NumOffset, w)
+		if marking {
+			c.a.MovRR(a64C, a64B)
+			c.a.AddImm(a64A, a64Ctx, int64(at+c.enc.RefOffset), true)
+			c.refStore()
+		} else {
+			c.a.Store(a64Ctx, at+c.enc.RefOffset, a64B)
+		}
+		c.cellAddr(v, at)
+		return
+	}
 	c.a.Store(a64Ctx, at+c.enc.NumOffset, c.gpr(v.Args[0], a64B))
 	if marking {
 		c.gprInto(v.Args[1], a64C)

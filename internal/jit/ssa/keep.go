@@ -159,6 +159,100 @@ func keepAcrossStores(f *Func) (bool, []*Value, [][]*Value) {
 	return true, nil, nil
 }
 
+// fuseKeepRefs has each keep read the pointer word it copies itself, where
+// that reads what its OpKeepRef would have: the keep takes its value alone
+// (OpKeep's one operand), and the ref goes. A store's keeps read every
+// pointer word before writing any keep cell, since one value's pointer
+// word may be read from a cell another's keep writes -- a phi of copies
+// kept the last time round a loop, whose shadow is a merge of keep cells.
+// Where no value's source is a keep cell another keep of the store writes
+// before its own, reading it at its own keep reads the same word: so it
+// is for nearly every keep, and the refs had been a tenth of a compile's
+// values, each a register live across the keeps before its own.
+func fuseKeepRefs(f *Func) {
+	if f.Keeps == 0 {
+		return
+	}
+	// writes is, by keep cell, the stamp of the keep whose ref-to-keep
+	// stretch writes it, and seen, by value ID, that of the walk that met
+	// a phi: stamp numbers the keeps looked at. dropped marks the refs
+	// fused, by value ID.
+	var writes, seen []int
+	var dropped []bool
+	var stack []*Value
+	stamp := 0
+	for _, b := range f.Blocks {
+		fused := false
+		for at, k := range b.Values {
+			if k.Op != OpKeep || len(k.Args) != 2 || k.Args[1].Op != OpKeepRef || k.Args[1].Block != b {
+				continue
+			}
+			r := k.Args[1]
+			if writes == nil {
+				writes, seen, dropped = f.ints(f.Keeps), f.ints(f.nextID), f.bools(f.nextID)
+			}
+			// Where r is: the keeps after it and before k write their cells
+			// in between.
+			from := -1
+			for i := at - 1; i >= 0; i-- {
+				if b.Values[i] == r {
+					from = i
+					break
+				}
+			}
+			if from < 0 || r.ID >= len(dropped) {
+				continue
+			}
+			stamp++
+			between := false
+			for _, w := range b.Values[from+1 : at] {
+				if w.Op == OpKeep && w.Index >= 0 && w.Index < len(writes) {
+					writes[w.Index], between = stamp, true
+				}
+			}
+			ok := true
+			if between {
+				// The keep cells k's value's source may be: its shadow, and
+				// through phis, theirs.
+				stack = append(stack[:0], k.Args[0].Shadow)
+				for len(stack) > 0 && ok {
+					s := stack[len(stack)-1]
+					stack = stack[:len(stack)-1]
+					switch {
+					case s == nil:
+					case s.Op == OpKeep:
+						ok = s.Index < 0 || s.Index >= len(writes) || writes[s.Index] != stamp
+					case s.Op == OpPhi:
+						if s.ID < len(seen) {
+							if seen[s.ID] == stamp {
+								continue
+							}
+							seen[s.ID] = stamp
+						}
+						stack = append(stack, s.Args...)
+					}
+				}
+			}
+			if ok {
+				// The ref is k's alone (keepAcrossStores makes one for each).
+				k.Args = k.Args[:1]
+				dropped[r.ID], fused = true, true
+			}
+		}
+		if fused {
+			// The refs no keep reads any more go.
+			kept := b.Values[:0]
+			for _, v := range b.Values {
+				if v.Op == OpKeepRef && v.ID < len(dropped) && dropped[v.ID] {
+					continue
+				}
+				kept = append(kept, v)
+			}
+			b.Values = kept
+		}
+	}
+}
+
 func indexOf(vs []*Value, v *Value) int {
 	for i, w := range vs {
 		if w == v {

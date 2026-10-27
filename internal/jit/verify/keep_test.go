@@ -86,7 +86,7 @@ func TestMirKeepsCheap(t *testing.T) {
 		Object: 0xFFF8000000000007, Mega: true, UndefinedCell: 0x60000, StoreRef: 0x70000, WriteBarrier: 0x71000}
 	defer func() { mir.Annotate = false }()
 	mir.Annotate = true
-	keeps, runs, refs := 0, 0, 0
+	keeps, runs, refs, fused := 0, 0, 0, 0
 	for _, src := range keepCorpus {
 		for i, p := range lowered(t, src) {
 			f, err := ssa.BuildWith(p, props{p: p})
@@ -129,6 +129,16 @@ func TestMirKeepsCheap(t *testing.T) {
 						}
 					}
 					want := 3
+					if v := byID[tag[0]]; len(v.Args) == 1 {
+						// Its pointer word read itself, as its ref had
+						// (ssa's fuseKeepRefs): a load, tested first where
+						// the cell is a phi's, which may be none.
+						fused++
+						want++
+						if x := v.Args[0]; x.Shadow != nil && x.Shadow.Op == ssa.OpPhi {
+							want += 3
+						}
+					}
 					if first {
 						runs++
 						want += 4
@@ -166,10 +176,10 @@ func TestMirKeepsCheap(t *testing.T) {
 			}
 		}
 	}
-	if keeps == 0 || runs == 0 || refs == 0 || runs == keeps {
-		t.Fatalf("keeps %d in %d runs, %d keeprefs compiled", keeps, runs, refs)
+	if keeps == 0 || runs == 0 || fused == 0 || runs == keeps {
+		t.Fatalf("keeps %d in %d runs, %d reading their pointer words, %d keeprefs compiled", keeps, runs, fused, refs)
 	}
-	t.Logf("%d keeps in %d runs, %d keeprefs", keeps, runs, refs)
+	t.Logf("%d keeps in %d runs, %d reading their pointer words, %d keeprefs", keeps, runs, fused, refs)
 }
 
 // keepRenameCorpus keeps values at stores in several blocks of one
@@ -242,5 +252,88 @@ func TestSSAKeptUsesTakeTheLastCopy(t *testing.T) {
 	}
 	if kept == 0 {
 		t.Fatal("the corpus keeps nothing")
+	}
+}
+
+// keepSwapCorpus swaps values read from cells round a loop: at the store
+// that keeps both, one's source is the keep cell the other's keep writes,
+// the copy kept there the last time round.
+var keepSwapCorpus = []string{
+	`function f(o,n){let p=o.a,q=o.b;for(let i=0;i<n;i++){o.a=q;o.b=p;const t=p;p=q;q=t}return p.v+q.v}`,
+	`function f(o,n){let p=o.a,q=o.b;for(let i=0;i<n;i++){const t=i&1?p:q;o.a=p;o.b=q;p=t}return p.v+q.v}`,
+	`function f(o,g,n){let p=o.a,q=o.b;for(let i=0;i<n;i++){g(p,q);const t=p;p=q;q=t}return p.v+q.v}`,
+}
+
+// A keep reads the pointer word it copies itself (ssa's fuseKeepRefs)
+// unless another keep of its store writes the cell it is read from before
+// it: there it is read first, with the store's other pointer words
+// (OpKeepRef), before any keep cell is written.
+func TestSSAKeepsReadTheirPointerWords(t *testing.T) {
+	count := func(srcs []string) (keeps, refs int) {
+		for _, src := range srcs {
+			for i, p := range lowered(t, src) {
+				f, err := ssa.BuildWith(p, calls{props{p: p}})
+				if err != nil {
+					continue
+				}
+				ssa.Optimize(f)
+				if err := ssa.Check(f); err != nil {
+					t.Fatalf("%s (%d): %v", src, i, err)
+				}
+				for _, b := range f.Blocks {
+					for at, v := range b.Values {
+						switch {
+						case v.Op == ssa.OpKeep:
+							keeps++
+						case v.Op == ssa.OpKeepRef:
+							refs++
+							// Its keep's value's source is a keep cell another
+							// keep between them writes.
+							var k *ssa.Value
+							written := map[int]bool{}
+							for _, w := range b.Values[at+1:] {
+								if w.Op == ssa.OpKeep && len(w.Args) == 2 && w.Args[1] == v {
+									k = w
+									break
+								}
+								if w.Op == ssa.OpKeep {
+									written[w.Index] = true
+								}
+							}
+							if k == nil {
+								t.Fatalf("%s (%d): v%d is no keep's ref", src, i, v.ID)
+							}
+							conflict, seen := false, map[*ssa.Value]bool{}
+							var walk func(s *ssa.Value)
+							walk = func(s *ssa.Value) {
+								if s == nil || seen[s] {
+									return
+								}
+								seen[s] = true
+								switch s.Op {
+								case ssa.OpKeep:
+									conflict = conflict || written[s.Index]
+								case ssa.OpPhi:
+									for _, a := range s.Args {
+										walk(a)
+									}
+								}
+							}
+							walk(k.Args[0].Shadow)
+							if !conflict {
+								t.Errorf("%s (%d): v%d keeps its ref, its source no cell its store's keeps write before it", src, i, k.ID)
+							}
+						}
+					}
+				}
+			}
+		}
+		return keeps, refs
+	}
+	if keeps, refs := count(append(append([]string(nil), keepCorpus...), keepRenameCorpus...)); keeps == 0 || refs != 0 {
+		t.Errorf("the keep corpora: %d keeps, %d refs, where every keep may read its own pointer word", keeps, refs)
+	}
+	if keeps, refs := count(keepSwapCorpus); keeps == 0 || refs == 0 {
+		t.Errorf("the swaps: %d keeps, %d refs, where some read a cell another keep writes", keeps, refs)
 	}
 }

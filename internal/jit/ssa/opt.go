@@ -180,6 +180,7 @@ rounds:
 	clear(subst)
 	sc.subst = subst[:0]
 	f.shadowed, f.originsKept = true, true
+	fuseKeepRefs(f)
 	recount(f)
 	knownShapes(f)
 }
