@@ -1382,6 +1382,117 @@ Open from it:
   and `at` past Latin-1 (a string made), `String.fromCodePoint`, Map's get
   of a key the code knows the kind of.
 
+The round of 2026-10-28 (`2460953`..`608137b`, against `131390c`; four Go
+code placements, `placements compare -parallel -k 4`, the micro-benchmarks
+on each placement's binary, the least of three), step 5 above among it:
+
+- **Stack traces named as V8 names them** (`2460953`, `d2b6d52`): a
+  frame's type is V8's GetConstructorName's -- a toStringTag, a
+  generator's function (`g.next`, where it was `Object.next`) -- and an
+  anonymous function's name V8's FuncNameInferrer's, the compiler handing
+  `obj.method`, `<computed>` and an enclosing constructor's name through
+  conditionals, logical operators, commas and literals; 48 cases Node
+  gives.
+- **Callees with loops, calls in tail position, unboxed loops**
+  (`66ae2b9`..`d20628f`): a loop's numbers are unboxed where that
+  speculates nothing, their boxes made where they are used (`array_reduce`
+  and `array_map` 2 and 1 boxes a turn to none); a callee with a loop is
+  inlined where the loop calls a closure the caller gives it, the closure
+  not made (`closure_callback` 278,015 -> 17,337 allocations); a callee
+  whose last act is a call is inlined, its frames counted toward the
+  depth (Havlak 9.1 -> 7.2 million allocations).
+- **Generators in both tiers** (`d9173a4`..`6124758`): a generator of 96
+  bytes without an ext, made by kind (an async function's with its
+  promise, a loop's with its cursor): `generator_create`'s work allocates
+  288 bytes in one allocation where it allocated 448 in two; the
+  tree tier's loop steps it in one place with no recover, yield* too; the
+  JIT calls next, makes a generator and takes a for-of's cursor natively,
+  from pools.
+- **The marking rule** (`dfbf26d`..`72a5580`): native code does the same
+  work whether the collector marks (the JIT README's write barrier);
+  `TestJITSameWorkWhileMarking` runs every micro-benchmark both ways and
+  compares the calls of Go, exits and interpreter finishes. It found the
+  round's generators leaving for Go while marking (`generator_next` 513
+  -> 26,422 calls of Go a run) and eight older paths on main -- array
+  length writes, spreads, computed keys, a literal's clone, delete,
+  spread calls -- all brought to it; its list of known breaches is empty.
+- **What the first placements found** (`9920b27`..`39834f8`): a string
+  builder's append, and a + no builder takes (a prepend, `i + ''`), past
+  `jitHostCall`'s dispatch (`string_build1` 148 -> 128 cycles, main's
+  150; `string_build3` 221 -> 202, main's 213); a call that met more
+  than one function made natively to each, not inlined; an exit inside an
+  inlined callee teaches
+  the callee's feedback and its inliner is compiled again (Game Boy 3,641
+  -> 2,009 runs finished in the interpreter, main's 3,238); and the tree
+  tier's step over a Map, a for-in or any iterator doing `iterNext`'s work
+  itself (`map_for_of` 289 -> 224 instructions a step, main's 243).
+  `bytecode.Function`'s new `TraceName` had gone after `Name`, among the
+  fields a call reads, which changed the displacements in `executeAt`,
+  `runTree`, `runTreeNested`, `callTree` and `runFD`; it is the struct's
+  last field, and hotdiff finds the hot functions main's.
+- **Numbers' equalities** (`608137b`): `===` and `!==` of two values
+  known to be numbers compare float64s, as V8 lowers them, not the boxes
+  through the generic path; Mandelbrot's code 4,819 -> 4,221 bytes,
+  Octane's 2.0% smaller, every compile, exit and interpreter finish the
+  same.
+
+Over four placements, against the base: without the JIT, V8 suite -0.2%,
+Are We Fast Yet -0.5%, Octane -0.1%, micro-benchmarks -1.2% by their
+geometric mean (`generator_create` -25%, `generator_for_of` -23%,
+`async_busy` -14%, `private_method` -10%, `map_for_of` -8%); with it, V8
+suite -0.3%, Are We Fast Yet -4.5% (Havlak -11.5%, Sieve -7.8%, Bounce
+-3.6%), Octane -0.5%, micro-benchmarks -5.5% (`closure_callback` -80%,
+`private_method` -67%, `generator_create` -65%, `generator_next` -57%,
+`array_forEach` -36%).
+
+What the slower ones were, each run alone and counted (thread cycles,
+Delve's instructions a turn, `-jitreport`), at a first placement run:
+
+- Layout, the same work: `array_length_read` (+4.9% with the JIT) and
+  Mandelbrot (+2.5%) run fewer instructions, the box `66ae2b9` sinks out
+  of their loops, and their loops sit elsewhere in their 64-byte lines:
+  NOPs run once before the loop make the round 5 to 24% faster than main
+  at most offsets, and moving the code by whole lines changes nothing.
+  `bigint64_search` (+6.7%) the same within its function. RegExp (+2.4%)
+  was package vm moved 10,464 bytes against regexp and the runtime by a
+  change in `internal/jit/mir` alone: the parent padded to that layout is
+  as slow, the same source; placements do not vary where vm sits against
+  the packages before it. `array_spread`, `bigint64_pow`,
+  `method_call_leaf` and `string_build2` without the JIT run main's
+  instructions, function by function (1,738, 736, 526, 507).
+- Warm-up, the same work done earlier: PdfJS (+1.3%) and Game Boy
+  (+1.6%), measured with few runs, compile what main compiles a few runs
+  later, `195667b` moving where back-edge budgets fall (PdfJS's
+  `getOperatorList`, 135 KB of code, compiled in the measured window);
+  at 15 to 30 runs both are level or faster.
+- Noise: Sieve (memory-bound, the same native code, the same allocation
+  and marking), `array_slice` (never native, its functions main's),
+  CodeLoad, EarleyBoyer. Without the JIT, Crypto +5.2% and Sieve +4.1%
+  are one placement each (17% and 24% there, level at the others).
+
+Open from it:
+
+- `prop_in_keyed` without the JIT +20% at every placement: it runs the
+  same 439 instructions a turn, its closures instruction for instruction
+  the base's; the generators' closures before the tree tier's other init
+  closures moved them 192 bytes, which placements, moving the closures as
+  a group, do not vary. A pad that won it back made `generator_delegate`
+  28% slower at one placement, and is not kept.
+- CD with the JIT: `195667b` inlines `delta()` twice in
+  `findIntersection`, three frames each, which takes 6 of the 8 inlines a
+  function may have (`maxInlines`), so its later `minus()` calls are made
+  natively and their objects allocated (+1.7%). V8 bounds inlining by
+  size alone; without the count CD allocates 9.4% less, but Octane's code
+  is 1.6% larger and Typescript allocates 4.5% more: a round of its own.
+- Huge functions compiled again for each call target learned
+  (`getOperatorList` six times), and callees inlined before their own
+  calls have feedback (`memoryHighRead`): main does both.
+- `string_concat` +6.7% and `regexp_test` +5.3% with the JIT at three
+  placements, not yet looked at.
+- A yield whose operand is an object beneath it still leaves for Go while
+  the collector marks, through the exit records' tail, the one exception
+  the rule names.
+
 Open from it:
 
 - Typescript, +4.0% at every placement, before its sites were fixed
@@ -1402,7 +1513,8 @@ Open from it:
 - Callees with loops are not inlined: inlining Crypto's `am3` made its
   callers' code 60% larger and Crypto 25% slower. A rule that inlines a
   loop only where the call's cost is not spread over the loop's turns is
-  wanted first.
+  wanted first. (Where the loop calls a closure the caller gives, the
+  round of 2026-10-28, above.)
 - A call is still an indirect jump each way: native code runs on the
   goroutine's stack and never moves SP, so that Go's unwinder, stack scan
   and growth meet no return address of its, and a return is not
