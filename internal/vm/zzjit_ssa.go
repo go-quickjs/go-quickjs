@@ -1909,6 +1909,11 @@ func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
 	if e.polyReopt {
 		e.polyReopts++
 	}
+	// Calls it has decided since (jitCallSeen), which its native callers
+	// may inline it with now -- though it does not inline them itself: a
+	// method calling one with a loop that calls a closure its callers give
+	// it (ssa.InlineCallsGiven).
+	learned := e.inlineReopt
 	e.reopt, e.inlineReopt, e.polyReopt, e.upgradeReopt, e.unwindReopt, e.resumeReopt = false, false, false, false, false, false
 	if e.reoptRoom > 0 && !r.jit.roomFor(e, nil, e.bytes+e.reoptRoom) {
 		// Its last compile was refused the room its code needed, the
@@ -1946,11 +1951,11 @@ func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
 	old := e.ssa
 	// What the old code holds, which a call of Go suspended in it needs.
 	oldKeep := []any{e.ssaShapes, e.ssaHolders, e.ssaInlined, e.ssaPools, e.ssaLinks, e.ssaCells}
-	if fb.inlinedN > e.ssaInlinedN {
-		// It inlines more: its native callers may inline it now, and
-		// theirs, with it. (What its compile asked to inline is more than
-		// it inlines, where a first build inlined callees a second did not:
-		// ssa's calledClosures.)
+	if fb.inlinedN > e.ssaInlinedN || learned {
+		// It inlines more, or has decided calls it may be inlined with: its
+		// native callers may inline it now, and theirs, with it. (What its
+		// compile asked to inline is more than it inlines, where a first
+		// build inlined callees a second did not: ssa's calledClosures.)
 		r.jitCallersReopt(e, jitInlineDepth)
 	}
 	e.ssaInlinedN = fb.inlinedN
