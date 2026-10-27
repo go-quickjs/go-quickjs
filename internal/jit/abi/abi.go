@@ -1084,15 +1084,19 @@ type Encoding struct {
 	ObjectClass, ObjectFlags, ObjectArrayLen, ObjectElems int32
 	ObjectExt, ExtElems                                   int32
 	ClassArray, FlagSparse                                uint8
-	// A for...of or for...in loop's cursor is an object whose data, an
-	// interface at ObjectData, is the VM's iteration state when its type
-	// word is IterState (0 where native code does not step one): the
-	// state's byte at IterDone says the loop is done, the pointer at IterArr
-	// is the array a for...of walks in place, nil for any other iteration,
-	// and the int at IterIdx the next element's index. Native code writes
-	// nothing there but that index.
+	// ObjectData is the offset of an object's data in its side fields, an
+	// interface.
+	//
+	// A for...of or for...in loop's cursor is an object of class
+	// ClassCursor whose VM iteration state is IterState bytes past it (0
+	// where native code does not step one), in the cursor's allocation:
+	// the state's byte at IterDone says the loop is done, the pointer at
+	// IterArr is the array a for...of walks in place, nil for any other
+	// iteration, and the int at IterIdx the next element's index. Native
+	// code writes nothing there but that index.
 	ObjectData                 int32
-	IterState                  uint64
+	IterState                  int32
+	ClassCursor                uint8
 	IterDone, IterArr, IterIdx int32
 	// A for...of over a Map's or a Set's iterator has the iterator at
 	// IterIter and its next at IterNext, values both; the iterator's data's

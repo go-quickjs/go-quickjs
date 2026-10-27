@@ -530,7 +530,7 @@ func TestMirEmitted(t *testing.T) {
 	// A generator's layout, and a cursor's, for the generators' code and
 	// the steps that resume them.
 	genEnc := enc
-	genEnc.IterState, genEnc.IterDone, genEnc.IterArr, genEnc.IterIdx, genEnc.IterIter, genEnc.IterNext = 0x1111, 8, 16, 24, 32, 48
+	genEnc.IterState, genEnc.ClassCursor, genEnc.IterDone, genEnc.IterArr, genEnc.IterIdx, genEnc.IterIter, genEnc.IterNext = 56, 30, 8, 16, 24, 32, 48
 	genEnc.ObjectExt, genEnc.ObjectData, genEnc.ObjectElems = 40, 8, 64
 	genEnc.GenData, genEnc.GenClosure, genEnc.GenThis, genEnc.GenVals, genEnc.GenArgs = 0x2222, 0, 8, 24, 48
 	genEnc.GenStack, genEnc.GenPC, genEnc.GenHandlers, genEnc.GenRare = 56, 80, 88, 112

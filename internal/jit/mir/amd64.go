@@ -2869,7 +2869,7 @@ func (c *compiler) iterStep(v *ssa.Value, slow amd64.Label) {
 	c.pointerWord(x, c.gpr(x, scratchA))
 	c.a.Op(amd64.Test, scratchB, scratchB, true)
 	c.a.Jcc(amd64.CondE, slow)
-	c.objectData(scratchB, scratchB, scratchC, c.enc.IterState, func(cond amd64.Cond) { c.a.Jcc(cond, slow) })
+	c.objectPart(scratchB, scratchB, scratchC, c.enc.ClassCursor, c.enc.IterState, func(cond amd64.Cond) { c.a.Jcc(cond, slow) })
 	c.a.LoadU8(scratchC, scratchB, c.enc.IterDone)
 	c.a.Op(amd64.Test, scratchC, scratchC, false)
 	c.a.Jcc(amd64.CondNE, slow)
@@ -3936,6 +3936,16 @@ func (c *compiler) genericCheck(v *ssa.Value, site *ssa.CallSite, target int, ch
 	c.a.Jcc(amd64.CondA, miss)
 	c.a.StoreImm(regCtx, abi.OffCallTarget, int32(target))
 	c.a.Jmp(checked)
+}
+
+// objectPart finds, into dst, what an object of class cls keeps off
+// bytes past it in its allocation, obj being the object: anything of
+// another class goes to fail. It uses t too.
+func (c *compiler) objectPart(dst, obj, t amd64.Reg, cls uint8, off int32, fail func(amd64.Cond)) {
+	c.a.LoadU8(t, obj, c.enc.ObjectClass)
+	c.a.OpImm(amd64.Cmp, t, int32(cls), false)
+	fail(amd64.CondNE)
+	c.a.Lea(dst, obj, off)
 }
 
 // objectData has dst be the pointer word of the data (abi.Encoding's
@@ -8465,7 +8475,7 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.pointerWord(x, c.gpr(x, scratchA))
 		c.a.Op(amd64.Test, scratchB, scratchB, true)
 		guard(amd64.CondE)
-		c.objectData(scratchB, scratchB, scratchC, c.enc.IterState, guard)
+		c.objectPart(scratchB, scratchB, scratchC, c.enc.ClassCursor, c.enc.IterState, guard)
 		c.a.LoadU8(scratchC, scratchB, c.enc.IterDone)
 		c.a.Op(amd64.Test, scratchC, scratchC, false)
 		c.a.Jcc(amd64.CondNE, ok)

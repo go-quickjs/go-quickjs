@@ -1066,15 +1066,18 @@ func TestJITObjectLayout(t *testing.T) {
 		t.Fatal("a class or flag native code tests is out of a byte")
 	}
 	// A loop's cursor, which a step reads in place (mir's iterStep): its
-	// data an interface, the type word then the pointer; the state's done
-	// a byte, its array a pointer, its index an int it adds one to.
+	// class a byte, its state in its allocation, the state's done a byte,
+	// its array a pointer, its index an int it adds one to.
 	var st iterState
 	if unsafe.Sizeof(o.dataOf()) != 2*unsafe.Sizeof(uintptr(0)) || unsafe.Sizeof(st.done) != 1 ||
-		unsafe.Sizeof(st.arr) != unsafe.Sizeof(uintptr(0)) || unsafe.Sizeof(st.idx) != 8 {
+		unsafe.Sizeof(st.arr) != unsafe.Sizeof(uintptr(0)) || unsafe.Sizeof(st.idx) != 8 || int(ClassCursor) > 255 {
 		t.Fatal("an iteration state field native code reads changed its width; update jitEncoding and mir")
 	}
+	if cur := (*Runtime)(nil).newIterObject(iterState{}); uintptr(unsafe.Pointer(cursorOf(cur))) != uintptr(cur.ref)+uintptr(jitEncoding.IterState) {
+		t.Fatal("a cursor's state is not where native code reads it")
+	}
 	var x any = &st
-	if jitTypeWord(x) != jitEncoding.IterState || (*[2]unsafe.Pointer)(unsafe.Pointer(&x))[1] != unsafe.Pointer(&st) {
+	if (*[2]unsafe.Pointer)(unsafe.Pointer(&x))[1] != unsafe.Pointer(&st) {
 		t.Fatal("an interface's words are not the type's and the pointer, as native code reads them")
 	}
 	// A generator a loop's step resumes natively (mir's genEntry,

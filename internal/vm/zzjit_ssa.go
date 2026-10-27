@@ -112,7 +112,8 @@ var jitEncoding = abi.Encoding{
 	ObjectElems:        int32(unsafe.Sizeof(Object{}) + unsafe.Offsetof(objectExt{}.elems)),
 	ExtElems:           int32(unsafe.Offsetof(objectExt{}.elems)),
 	ObjectData:         int32(unsafe.Offsetof(objectExt{}.data)),
-	IterState:          jitTypeWord((*iterState)(nil)),
+	IterState:          int32(unsafe.Offsetof(iterObject{}.st)),
+	ClassCursor:        uint8(ClassCursor),
 	IterDone:           int32(unsafe.Offsetof(iterState{}.done)),
 	IterArr:            int32(unsafe.Offsetof(iterState{}.arr)),
 	IterIdx:            int32(unsafe.Offsetof(iterState{}.idx)),
@@ -13023,7 +13024,7 @@ func (r *Runtime) jitCatch(f *frame, e *jitEntry, sp int, err error) (int, error
 }
 
 // jitTypeWord is the type word an interface holding x has (abi.Encoding's
-// IterState): what native code compares an object's data with to know
+// MapIterData): what native code compares an object's data with to know
 // what it holds.
 // The element types native code reads are the VM's: either difference
 // overflows, which does not compile, unless they are the same.

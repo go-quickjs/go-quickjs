@@ -676,7 +676,7 @@ func returnsAtOnce(r *Runtime, g *generator) bool {
 		return false
 	}
 	for _, v := range g.stack {
-		if iterStateOf(v) != nil {
+		if cursorOf(v) != nil {
 			return false
 		}
 	}

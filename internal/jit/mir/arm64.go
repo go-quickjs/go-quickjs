@@ -2579,6 +2579,15 @@ func (c *a64Compiler) genericCheck(v *ssa.Value, site *ssa.CallSite, target int,
 	c.a.B(checked)
 }
 
+// objectPart is amd64's: what an object of class cls keeps off bytes
+// past it, into dst. It uses t too.
+func (c *a64Compiler) objectPart(dst, obj, t arm64.Reg, cls uint8, off int32, fail func(arm64.Cond)) {
+	c.a.LoadU8(t, obj, c.enc.ObjectClass)
+	c.a.CmpImm(t, int64(cls), false)
+	fail(arm64.NE)
+	c.a.AddImm(dst, obj, int64(off), true)
+}
+
 // objectData is amd64's: dst the pointer word of the data of the object in
 // obj, which has its side fields and data of type typ. It uses t, which
 // may be obj, and A; dst must be neither.
@@ -4897,7 +4906,7 @@ func (c *a64Compiler) iterStep(v *ssa.Value, slow arm64.Label) {
 	x := v.Args[0]
 	c.pointerWord(x, c.gpr(x, a64A))
 	c.a.Cbz(a64B, slow, true)
-	c.objectData(a64D, a64B, a64C, c.enc.IterState, func(cond arm64.Cond) { c.a.BCond(cond, slow) })
+	c.objectPart(a64D, a64B, a64C, c.enc.ClassCursor, c.enc.IterState, func(cond arm64.Cond) { c.a.BCond(cond, slow) })
 	c.a.LoadU8(a64C, a64D, c.enc.IterDone)
 	c.a.Cbnz(a64C, slow, false)
 	c.a.Load(a64A, a64D, c.enc.IterIdx)
@@ -7474,7 +7483,7 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.pointerWord(x, c.gpr(x, a64A))
 		c.a.CmpImm(a64B, 0, true)
 		guard(arm64.EQ)
-		c.objectData(a64B, a64B, a64C, c.enc.IterState, guard)
+		c.objectPart(a64B, a64B, a64C, c.enc.ClassCursor, c.enc.IterState, guard)
 		c.a.LoadU8(a64C, a64B, c.enc.IterDone)
 		c.a.Cbnz(a64C, ok, false)
 		c.a.Load(a64C, a64B, c.enc.IterArr)

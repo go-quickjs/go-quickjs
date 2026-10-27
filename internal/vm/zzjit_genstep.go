@@ -135,7 +135,7 @@ func (fb *jitFeedback) GenNext() uintptr { return uintptr(unsafe.Pointer(fb.r.ge
 // next, which the code resumes natively once compiled again (ssa.CallSite's
 // Gens), as a call learns its target.
 func (r *Runtime) jitGenStepSeen(e *jitEntry, cl *closure, pc int, cursor Value) {
-	st := iterStateOf(cursor)
+	st := cursorOf(cursor)
 	if st == nil || st.done || st.arr != nil || st.forIn || !st.iter.IsObject() || r.genNextFn == nil ||
 		st.next.ref != unsafe.Pointer(r.genNextFn) || cl == nil {
 		return

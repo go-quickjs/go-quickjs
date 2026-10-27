@@ -464,6 +464,15 @@ func (m *memoryMeter) object(o *Object) {
 	if o.dataOf() != nil && o.class != ClassArray {
 		m.values = append(m.values, reflect.ValueOf(o.dataOf()))
 	}
+	// A cursor's state is in its object's allocation rather than its data,
+	// and a for-in's snapshot after it.
+	if o.class == ClassCursor {
+		st := &(*iterObject)(unsafe.Pointer(o)).st
+		m.values = append(m.values, reflect.ValueOf(st))
+		if st.forIn {
+			m.values = append(m.values, reflect.ValueOf(st.forInOf()))
+		}
+	}
 }
 
 // string counts a string: a flat one's bytes, or a rope's nodes.

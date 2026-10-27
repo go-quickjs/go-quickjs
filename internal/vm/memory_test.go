@@ -39,6 +39,8 @@ func TestMemoryMeterAccuracy(t *testing.T) {
 		{"dates", `for (let i = 0; i < 1e5; i++) keep.push(new Date(i))`},
 		{"regular expressions", `for (let i = 0; i < 1e4; i++) keep.push(new RegExp("a" + i + "b+c"))`},
 		{"one regular expression many times", `for (let i = 0; i < 1e5; i++) keep.push(/a(b+)c[\p{L}\d]/u)`},
+		{"generators suspended in loops", `function* h(n) { for (const x of [n, n + 1, {n}, [n, n]]) yield x } for (let i = 0; i < 2e4; i++) { const it = h(i); it.next(); keep.push(it) }`},
+		{"generators suspended in for-in", `function* h(n) { for (const k in {a: n, b: [n, n], c: {n}}) yield k } for (let i = 0; i < 2e4; i++) { const it = h(i); it.next(); keep.push(it) }`},
 	} {
 		r := New(Config{MemoryLimit: 1 << 40})
 		if _, err := r.Run(compileForTest(t, `var keep = []`)); err != nil {

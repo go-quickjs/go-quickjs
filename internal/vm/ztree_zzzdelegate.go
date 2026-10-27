@@ -39,7 +39,7 @@ var (
 func init() {
 	delegateNext = func(c *tctx, d int, sent Value) bool {
 		cur := c.stack[d-1]
-		st := iterStateOf(cur)
+		st := cursorOf(cur)
 		if st == nil || st.forIn || st.arr != nil || !st.iter.IsObject() || !st.next.IsObject() {
 			return false
 		}

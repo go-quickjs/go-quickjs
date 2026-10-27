@@ -45,6 +45,10 @@ const (
 	// properties are a module's exports and nothing else.
 	ClassModuleNamespace
 	ClassJSONObject
+	// ClassCursor is a loop's cursor (iterObject), which only the VM
+	// reaches: it never has properties, so it is past the classes that
+	// have a root layout (shapeTree's roots).
+	ClassCursor
 )
 
 // propFlags holds a property's attributes.

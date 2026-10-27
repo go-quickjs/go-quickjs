@@ -375,7 +375,7 @@ func (r *Runtime) DebugDescribe(v Value) DebugValue {
 		d.Subtype = "dataview"
 	case ClassGenerator, ClassAsyncGenerator:
 		d.Subtype = "generator"
-	case ClassIterator, ClassIteratorHelper, ClassIteratorWrap:
+	case ClassIterator, ClassIteratorHelper, ClassIteratorWrap, ClassCursor:
 		d.Subtype = "iterator"
 	}
 	return d

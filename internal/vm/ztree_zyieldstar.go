@@ -200,7 +200,7 @@ func init() {
 					// has finished has its cursor marked done. A raw yield
 					// is left the mark, for yield_star to yield the value.
 					v := c.stack[d+1]
-					if iterStateOf(cur).done {
+					if cursorOf(cur).done {
 						c.stack[d] = v
 						return taken
 					}
@@ -226,7 +226,7 @@ func init() {
 				if err != nil {
 					c.throw(err)
 				}
-				if st := iterStateOf(c.stack[d-1]); st != nil {
+				if st := cursorOf(c.stack[d-1]); st != nil {
 					st.done = true
 				}
 				c.stack[d] = v
@@ -319,12 +319,12 @@ func init() {
 			}
 			return Undefined, false, nil
 		case 2:
-			if st := iterStateOf(v); st != nil {
+			if st := cursorOf(v); st != nil {
 				st.done = true
 			}
 			return Undefined, false, nil
 		}
-		st := iterStateOf(v)
+		st := cursorOf(v)
 		if st == nil || st.done {
 			return Undefined, false, nil
 		}

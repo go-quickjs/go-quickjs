@@ -3735,7 +3735,7 @@ func (r *Runtime) jitUnpackDelegate(in bytecode.Instr, sp int) (int, Value, bool
 	if err != nil || !done.Truthy() {
 		return sp, val, false, err
 	}
-	if st := iterStateOf(stack[sp-1]); st != nil {
+	if st := cursorOf(stack[sp-1]); st != nil {
 		st.done = true
 	}
 	return sp, val, true, nil

@@ -20,7 +20,8 @@ import (
 //
 // What only for-in reads is kept apart, in a forInState of its own, so that
 // a for-of's cursor -- every for-of's, spread's and array destructuring's
-// -- with its object, fits 160 bytes rather than 240.
+// -- with its object, fits 112 bytes. The object has no ext: its class,
+// ClassCursor, says where the state is (cursorOf).
 type iterState struct {
 	// iter and next drive the for-of protocol.
 	iter Value
@@ -32,10 +33,9 @@ type iterState struct {
 	arr *Object
 	// idx is how far arr's walk, or for-in's, has gone.
 	idx int
-	// in is for-in's snapshot, and nil for anything else.
-	in *forInState
 
-	// forIn selects between the snapshot and the protocol.
+	// forIn selects between the snapshot, which follows the state in its
+	// forInObject (forInOf), and the protocol.
 	forIn bool
 
 	// asyncIter marks an iterator reached through Symbol.asyncIterator, whose
@@ -76,46 +76,73 @@ type forInState struct {
 // object and the cursor are one allocation: every for-of, spread and array
 // destructuring makes one.
 func (r *Runtime) newIterObject(st iterState) Value {
-	io := &iterObject{Object: Object{class: ClassIterator, flags: objExtensible}, st: st}
-	io.embedExt(&io.side)
-	io.side.data = &io.st
+	io := &iterObject{Object: Object{class: ClassCursor}, st: st}
 	return Obj(&io.Object)
 }
 
-// iterObject is a cursor's object and the cursor, made together.
+// iterObject is a cursor's object and the cursor, made together. Nothing
+// but the VM reaches a cursor -- it lives on the operand stack -- so the
+// object has neither an ext nor room for properties: it is not extensible,
+// and its class has no root layout (ClassCursor).
 type iterObject struct {
 	Object
-	side objectExt
-	st   iterState
+	st iterState
 }
 
 // newForInObject is newIterObject for a for-in's cursor over in, done
 // where there is nothing to walk: the object, the cursor and the snapshot
 // are one allocation.
+//
+//go:noinline
 func (r *Runtime) newForInObject(in *forInState, done bool) Value {
-	fo := &forInObject{Object: Object{class: ClassIterator, flags: objExtensible}, in: *in}
-	fo.st = iterState{forIn: true, done: done, in: &fo.in}
-	fo.embedExt(&fo.side)
-	fo.side.data = &fo.st
+	fo := &forInObject{iterObject: iterObject{Object: Object{class: ClassCursor},
+		st: iterState{forIn: true, done: done}}, in: *in}
 	return Obj(&fo.Object)
 }
 
 // forInObject is a for-in's cursor's object, the cursor and its snapshot,
-// made together.
+// made together: an iterObject, the snapshot after it.
 type forInObject struct {
-	Object
-	side objectExt
-	st   iterState
-	in   forInState
+	iterObject
+	in forInState
 }
 
-// iterStateOf recovers the cursor from a stack slot.
-func iterStateOf(v Value) *iterState {
+// forInOf is the snapshot of st, a for-in's cursor (st.forIn), which
+// follows it in its forInObject.
+func (st *iterState) forInOf() *forInState {
+	return &(*forInObject)(unsafe.Add(unsafe.Pointer(st), -int(unsafe.Offsetof(iterObject{}.st)))).in
+}
+
+// cursorOf recovers the cursor from a stack slot: a ClassCursor object's
+// state, which follows it in its iterObject.
+func cursorOf(v Value) *iterState {
+	if v.IsObject() {
+		if o := v.Object(); o.class == ClassCursor {
+			return &(*iterObject)(unsafe.Pointer(o)).st
+		}
+	}
+	return nil
+}
+
+// iterStateOf is a cursor's state where it is its object's data, which it
+// no longer is anywhere: it finds none. It is what the interpreter's
+// yield* cases mark a cursor done through, kept as it was so that
+// executeAt's code is -- the mark it returns has its done where the state
+// had it -- and a yield*'s cursor left unmarked is one nothing closes
+// anyway (iterState.delegation). Every reader of a cursor's state finds
+// it with cursorOf.
+func iterStateOf(v Value) *doneMark {
 	if !v.IsObject() {
 		return nil
 	}
-	st, _ := v.Object().dataOf().(*iterState)
+	st, _ := v.Object().dataOf().(*doneMark)
 	return st
+}
+
+// doneMark is what iterStateOf finds: nothing is one.
+type doneMark struct {
+	_    [59]byte
+	done bool
 }
 
 // startForIn snapshots the enumerable string keys of a value.
@@ -315,7 +342,7 @@ func (r *Runtime) startForOf(v Value) (Value, error) {
 
 // iterNext advances a cursor, reporting whether a value was produced.
 func (r *Runtime) iterNext(cursor Value) (Value, bool, error) {
-	st := iterStateOf(cursor)
+	st := cursorOf(cursor)
 	if st == nil || st.done {
 		return Undefined, false, nil
 	}
@@ -345,7 +372,7 @@ func (r *Runtime) iterNext(cursor Value) (Value, bool, error) {
 	}
 
 	if st.forIn {
-		in := st.in
+		in := st.forInOf()
 		// An array's elements, walked by index: one still in its dense
 		// storage is still there, and one that is not is looked for.
 		for st.idx < in.indexKeys {
@@ -545,7 +572,7 @@ func (r *Runtime) stepIter(iter, next Value) (Value, bool, error) {
 // closeIter runs an iterator's return method when a loop exits early, which is
 // how a generator learns that nothing more will be requested of it.
 func (r *Runtime) closeIter(cursor Value) {
-	st := iterStateOf(cursor)
+	st := cursorOf(cursor)
 	if st == nil || st.forIn || st.done || st.arr != nil && !r.unwalkToClose(st) {
 		return
 	}
@@ -567,7 +594,7 @@ func (r *Runtime) closeIter(cursor Value) {
 // because the completion that caused the unwind is the one that matters.
 func (r *Runtime) closeIteratorsIn(from, to int) {
 	for i := to - 1; i >= from; i-- {
-		st := iterStateOf(r.stack[i])
+		st := cursorOf(r.stack[i])
 		if st == nil || st.forIn || st.done || st.delegation || st.arr != nil && !r.unwalkToClose(st) {
 			continue
 		}
@@ -584,7 +611,7 @@ func (r *Runtime) closeIteratorsIn(from, to int) {
 func (r *Runtime) closeIteratorsReturning(from, to int) error {
 	var first error
 	for i := to - 1; i >= from; i-- {
-		if st := iterStateOf(r.stack[i]); st != nil && st.delegation {
+		if st := cursorOf(r.stack[i]); st != nil && st.delegation {
 			continue
 		}
 		if err := r.iterCloseNormal(r.stack[i]); err != nil && first == nil {
@@ -1173,7 +1200,7 @@ func (r *Runtime) startForAwaitOf(v Value) (Value, error) {
 // The raw iterator result is returned rather than an unpacked value, because
 // the caller needs the done flag and the returned value separately.
 func (r *Runtime) iterSend(cursor Value, sent Value, async bool) (Value, error) {
-	st := iterStateOf(cursor)
+	st := cursorOf(cursor)
 	if st == nil {
 		return Undefined, r.throwTypeError("not an iterator")
 	}
@@ -1230,7 +1257,7 @@ func (r *Runtime) asyncResult(st *iterState, res Value) Value {
 // produces. A synchronous iterator is wrapped so that both protocols can be
 // driven by the same instruction sequence.
 func (r *Runtime) asyncIterNext(cursor Value) (Value, error) {
-	st := iterStateOf(cursor)
+	st := cursorOf(cursor)
 	if st == nil {
 		return Undefined, r.throwTypeError("not an iterator")
 	}
@@ -1353,7 +1380,7 @@ func (r *Runtime) iterRest(cursor Value) (Value, error) {
 // back something other than an object, which is the one place the protocol
 // checks that.
 func (r *Runtime) iterCloseNormal(cursor Value) error {
-	st := iterStateOf(cursor)
+	st := cursorOf(cursor)
 	if st == nil || st.forIn || st.done || st.arr != nil && !r.unwalkToClose(st) {
 		return nil
 	}
@@ -1462,7 +1489,7 @@ func (r *Runtime) arrayIterNoReturn() bool {
 // not take, which the outer generator turns into a return of its own.
 func (r *Runtime) iterResume(cursor Value, sent Value, mode resumeMode,
 	async bool) (Value, bool, error) {
-	st := iterStateOf(cursor)
+	st := cursorOf(cursor)
 	if st == nil {
 		return Undefined, false, r.throwTypeError("not an iterator")
 	}
