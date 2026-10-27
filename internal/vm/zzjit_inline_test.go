@@ -484,10 +484,10 @@ func TestJITInlinedExitsOnlyWhereCodeRan(t *testing.T) {
 }
 
 // Inlining's budget (ssa's maxInlineTotal) goes to a function's
-// constructions first: one not inlined is made by a call of Go wherever its
-// constructor has no code native callers may call -- one forwarding its
-// arguments, Prototype's Class.create's -- where any other call not
-// inlined is a native call. Inlined in the order
+// constructions first, of its calls equally often made: one not inlined is
+// made by a call of Go wherever its constructor has no code native callers
+// may call -- one forwarding its arguments, Prototype's Class.create's --
+// where any other call not inlined is a native call. Inlined in the order
 // of their PCs, the method calls before paint's construction took every
 // bound, and each construction was a call of Go, as Octane's and the V8
 // suite's RayTrace's colors and intersections were once their callers'
@@ -624,6 +624,36 @@ func TestJITInlinesSmallPastBudget(t *testing.T) {
 	}{{`big`, 4}, {`mid`, 1}, {`tiny`, 1}, {`wrap2`, 0}} {
 		if n := jitCountForTest(got, jitClosureForTest(t, r, c.src)); n != c.want {
 			t.Errorf("spend inlines %s %d times, want %d (%x)", c.src, n, c.want, got)
+		}
+	}
+}
+
+// Inlining's budget goes to the calls loops hold first, as V8's goes to the
+// calls made most often (JSInliningHeuristic's candidates, by frequency):
+// loopy's mid2, 31 instructions, in its loop, is inlined, and three of the
+// four bigs before the loop, 44 each, with it. In the order of their PCs
+// the bigs took the budget, and mid2 was called natively at every turn.
+func TestJITInlinesLoopsFirst(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	inlined := jitInlinedForTest(t)
+	both := jitBothForTest(t, `
+		function big(o) { return (o.a + o.b * 3 - o.c) * (o.b - o.a) + (o.c ^ o.a) - (o.a | o.c) * o.b + (o.c - o.b) * (o.a + o.c) }
+		function mid2(o) { return (o.a + o.b) * (o.c - o.a) + o.b * (o.a - o.c) + (o.b ^ o.c) - o.a }
+		function loopy(o, n) { let s = big(o) + big(o) + big(o) + big(o); for (let i = 0; i < n; i++) s = (s + mid2(o)) | 0; return s }
+		function drive(k) { let s = 0; for (let i = 0; i < k; i++) s = (s + loopy({a: i, b: 2, c: 7}, 20)) | 0; return s }`)
+	for range 6 {
+		both.agree(t, `drive(300)`)
+	}
+	r := both.jit
+	got := inlined["loopy"]
+	for _, c := range []struct {
+		src  string
+		want int
+	}{{`mid2`, 1}, {`big`, 3}} {
+		if n := jitCountForTest(got, jitClosureForTest(t, r, c.src)); n != c.want {
+			t.Errorf("loopy inlines %s %d times, want %d (%x)", c.src, n, c.want, got)
 		}
 	}
 }

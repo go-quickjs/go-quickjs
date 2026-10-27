@@ -3544,6 +3544,33 @@ type inlineAsked struct {
 	// given says the site is a closure the root makes, called where a
 	// callee calls what it is given (givenSite).
 	given bool
+	// loops is how many of the root's loops hold the PC (loopNesting);
+	// end, at a loop's header, is one past its furthest back edge, and
+	// ends how many loops end at the PC.
+	loops, end, ends int32
+}
+
+// loopNesting has asked, by PC, how many of p's loops hold each PC, and
+// returns the most: a loop is a header, which a backward branch or jump
+// goes to, and the code from it to the furthest such branch.
+func loopNesting(p *ir.Program, asked []inlineAsked) int {
+	for pc, in := range p.Code {
+		if (in.Op == ir.Jump || in.Op == ir.Branch) && in.Target <= pc && reachable(p, pc) {
+			asked[in.Target].end = max(asked[in.Target].end, int32(pc+1))
+		}
+	}
+	open, most := int32(0), int32(0)
+	for pc := range asked {
+		k := &asked[pc]
+		if k.end != 0 {
+			open++
+			asked[k.end-1].ends++
+		}
+		k.loops = open
+		most = max(most, open)
+		open -= k.ends
+	}
+	return int(most)
 }
 
 // planInline makes an inlined callee's blocks, between the block that ends
@@ -4714,16 +4741,20 @@ func (b *builder) plan() error {
 		entries[pc], leaders[pc] = true, true
 	}
 	total := 0
-	// The calls to inline, a construction first: what inlining's budget
-	// (maxInlineTotal) allows goes to what saves the most first, as V8's
-	// budget goes to the hottest sites. A construction not inlined is made
-	// by a call of Go wherever its constructor has no code native callers
-	// may call -- one forwarding its arguments, Prototype's Class.create's
-	// -- where any other call is a native call: inlined in the order of
-	// their PCs, the calls before a function's constructions had taken the
-	// bounds once callees reading globals and making constructions of
-	// their own could be inlined, and RayTrace's constructions of its
-	// colors and intersections were made by Go.
+	// The calls to inline, the most frequent first, and of those a
+	// construction first: what inlining's budget (maxInlineTotal) allows
+	// goes to what saves the most, as V8's goes to the sites its feedback
+	// finds called most often for each call of the function
+	// (JSInliningHeuristic's candidates, by frequency). The VM counts no
+	// site's calls: a call that loops hold is made more often than one
+	// outside them, in all but the loops' first turns. A construction not
+	// inlined is made by a call of Go wherever its constructor has no code
+	// native callers may call -- one forwarding its arguments, Prototype's
+	// Class.create's -- where any other call is a native call: inlined in
+	// the order of their PCs, the calls before a function's constructions
+	// had taken the bounds once callees reading globals and making
+	// constructions of their own could be inlined, and RayTrace's
+	// constructions of its colors and intersections were made by Go.
 	// By PC, from the workspace's scratch, taken while planning: an
 	// InlineSite a PC, made afresh at each compile, had been a fifth of
 	// what Typescript's compiles allocated.
@@ -4731,40 +4762,42 @@ func (b *builder) plan() error {
 	asked := idTable(sc.asked, len(p.Code))
 	sc.asked = nil
 	defer func() { clear(asked); sc.asked = asked[:0] }()
-	for _, pass := range []bool{true, false} {
-		for pc := range p.Code {
-			if !reachable(p, pc) || b.inlined[pc] != nil {
-				continue
-			}
-			k := &asked[pc]
-			if !k.asked {
-				k.asked = true
-				if pc0, ok := b.called[pc]; ok {
-					k.site, k.ok = b.calledSite(pc, pc0)
-				} else if _, isAccessor := b.accessor(pc); b.fb != nil && p.Code[pc].Op == ir.Host && !isAccessor && !b.fb.Generic(pc) {
-					k.site, k.ok = b.fb.Inline(pc)
+	for loops := loopNesting(p, asked); loops >= 0; loops-- {
+		for _, pass := range []bool{true, false} {
+			for pc := range p.Code {
+				if !reachable(p, pc) || b.inlined[pc] != nil || int(asked[pc].loops) != loops {
+					continue
 				}
-			}
-			if k.done || pass != (k.ok && k.site.Construct) {
-				continue
-			}
-			k.done = true
-			inlined := len(b.f.Inlined)
-			fr, ok := b.inlineSiteAt(pc, &total, k)
-			if pc0, called := b.called[pc]; ok && called {
-				fr.given, fr.givenPC0 = true, pc0
-			}
-			if ok && !b.host(pc) {
-				b.f.Inlined = b.f.Inlined[:inlined]
-			}
-			if ok && b.host(pc) {
-				// Not a call native code makes itself (nativeHost) -- an
-				// intrinsic its feedback names, though another site's
-				// feedback has it inline the function the call met.
-				if b.inlined == nil {
-					b.inlined = map[int]*frame{}
+				k := &asked[pc]
+				if !k.asked {
+					k.asked = true
+					if pc0, ok := b.called[pc]; ok {
+						k.site, k.ok = b.calledSite(pc, pc0)
+					} else if _, isAccessor := b.accessor(pc); b.fb != nil && p.Code[pc].Op == ir.Host && !isAccessor && !b.fb.Generic(pc) {
+						k.site, k.ok = b.fb.Inline(pc)
+					}
 				}
-				b.inlined[pc] = fr
+				if k.done || pass != (k.ok && k.site.Construct) {
+					continue
+				}
+				k.done = true
+				inlined := len(b.f.Inlined)
+				fr, ok := b.inlineSiteAt(pc, &total, k)
+				if pc0, called := b.called[pc]; ok && called {
+					fr.given, fr.givenPC0 = true, pc0
+				}
+				if ok && !b.host(pc) {
+					b.f.Inlined = b.f.Inlined[:inlined]
+				}
+				if ok && b.host(pc) {
+					// Not a call native code makes itself (nativeHost) -- an
+					// intrinsic its feedback names, though another site's
+					// feedback has it inline the function the call met.
+					if b.inlined == nil {
+						b.inlined = map[int]*frame{}
+					}
+					b.inlined[pc] = fr
+				}
 			}
 		}
 	}
