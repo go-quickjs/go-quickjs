@@ -1106,6 +1106,10 @@ type scratch struct {
 	liveStack                       []*Block
 	// asked is plan's: each call's inlining asked of the feedback, by PC.
 	asked []inlineAsked
+	// phiIdx, phiUsers and phiFill are unboxPhis' list of each
+	// candidate's users (candUsers).
+	phiIdx, phiFill []int32
+	phiUsers        []*Value
 	// subst is Optimize's replacements, by value ID.
 	subst []*Value
 	// originPhis is Origins' list of the phis.
