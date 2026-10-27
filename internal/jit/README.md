@@ -633,6 +633,25 @@ JIT's tests run under `-d=checkptr=2` and `GODEBUG=gccheckmark=1`.
 
 ### The write barrier
 
+**The rule: native code does the same work whether the collector marks or
+not.** A path compiled natively stays native while the collector marks:
+it stores its pointer words through `storeRef` (below), takes objects from
+its pools as the paragraphs below say, and goes on. It never tests the
+write-barrier flag to leave native code, call Go instead or make an object
+by Go's hand. The one exception is an exit's records (`recordsTail`, below),
+written where Go is called anyway. The rule holds for every new native path,
+and a path that cannot yet keep it is not compiled natively.
+
+The reason is more than the calls themselves. The tiers count calls of Go,
+exits and the like to judge what pays (the profit model), so work that leaves
+native code only while the collector marks makes code look slow at whatever
+moment a collection happens to run. A loop warming up during one is judged
+slow and left to the tree tier for the rest of the run, though nothing about
+it changed, and allocation-heavy programs mark much of the time. A test of
+such a path checks it while the collector marks (`jitMarkingForTest`) as well
+as plainly. Holding the collector off in a test only hides a breach of the
+rule.
+
 Native code tests the runtime's write-barrier flag before it writes a
 pointer, as compiled Go does. While the collector marks, it calls Go's
 barrier, as V8's code calls its own: a store of a pointer word -- a
