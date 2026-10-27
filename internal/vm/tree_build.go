@@ -528,7 +528,7 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 			case in.Op == bytecode.OpJumpIfCmpFalse && isEquality(bytecode.Op(in.B)):
 				next = eqJump(bytecode.Op(in.B), x, y, pc, taken, fall)
 			case in.Op == bytecode.OpJumpIfCmpFalse:
-				if next = cmpJump(bytecode.Op(in.B), x, y, pc, taken, fall); next != nil {
+				if next = cmpJumpAt(bytecode.Op(in.B), x, y, pc, taken, fall); next != nil {
 					b.cmp = cmpOf(bytecode.Op(in.B), x, y, taken, fall)
 				}
 			case in.Op == bytecode.OpJumpIfFalse:
@@ -2712,7 +2712,7 @@ func isEquality(op bytecode.Op) bool {
 // a boolean is that boolean, whose value has one spelling. A number
 // constant on one side, or a local on both, is eqNumJump's.
 func eqJump(op bytecode.Op, x, y tentry, pc, taken, fall int) tnext {
-	if next := eqNumJump(op, x, y, pc, taken, fall); next != nil {
+	if next := eqJumpAt(op, x, y, pc, taken, fall); next != nil {
 		return next
 	}
 	if x.literal && !y.literal {

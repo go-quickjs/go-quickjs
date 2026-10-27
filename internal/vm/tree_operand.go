@@ -946,7 +946,7 @@ func cmpJump(op bytecode.Op, x, y tentry, pc, taken, fall int) tnext {
 // constant, reading a local in place.
 func bitwiseImmOperand(op bytecode.Op, x tentry, k int32, pc int) tval {
 	if !x.local {
-		return bitwiseImmNode(op, x.tree(), k, pc)
+		return bitwiseImmTree(op, x, k, pc)
 	}
 	j, kv, n := x.k, Int32(k), uint32(k)&31
 	switch op {

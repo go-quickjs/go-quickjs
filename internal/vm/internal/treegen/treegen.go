@@ -157,7 +157,7 @@ func Generate() ([]byte, error) {
 	w("// constant, reading a local in place.")
 	w("func bitwiseImmOperand(op bytecode.Op, x tentry, k int32, pc int) tval {")
 	w("	if !x.local {")
-	w("		return bitwiseImmNode(op, x.tree(), k, pc)")
+	w("		return bitwiseImmTree(op, x, k, pc)")
 	w("	}")
 	w("	j, kv, n := x.k, Int32(k), uint32(k)&31")
 	w("	switch op {")
