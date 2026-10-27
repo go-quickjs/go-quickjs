@@ -4394,18 +4394,23 @@ func (c *a64Compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(arm64.
 		// made one so, a literal's field along its shape's first
 		// transition, an array spread by its elements, an element
 		// appended, any other Go's.
+		// Each alike whether the collector marks or not (byMarking).
 		slow, join := c.a.NewLabel(), c.a.NewLabel()
-		switch {
-		case site.DefineNext:
-			c.defineNext(v, site, slow)
-		case site.ArrayIter != 0:
-			c.spreadElems(v, site, slow)
-		case site.Append:
-			c.appendElem(v, slow)
-		default:
-			c.copyProps(v, site, slow)
-		}
-		c.a.B(join)
+		size := int32(unsafe.Sizeof(abi.GoArg{}))
+		c.goArg(abi.OffGoArgs, v.Args[0])
+		c.goArg(abi.OffGoArgs+size, v.Args[1])
+		c.byMarking(join, func(marking bool) {
+			switch {
+			case site.DefineNext:
+				c.defineNext(v, site, slow, marking)
+			case site.ArrayIter != 0:
+				c.spreadElems(v, site, slow, marking)
+			case site.Append:
+				c.appendElem(v, slow, marking)
+			default:
+				c.copyProps(v, site, slow, marking)
+			}
+		})
 		c.a.Bind(slow)
 		c.goCallOp(v, goOpWord(site), false)
 		c.a.Bind(join)
@@ -5546,19 +5551,59 @@ func (c *a64Compiler) keyedStore(v *ssa.Value, slow arm64.Label) {
 // false where it names none of a dense array whose prototypes are as they
 // were; and where key is a string the VM's cache answers for obj. It uses
 // A, B, C, D, F1 and F2, and no other.
+// byMarking is amd64's: made for the collector idle, and out of line for
+// it marking, either going on at join. It uses a64A.
+func (c *a64Compiler) byMarking(join arm64.Label, made func(marking bool)) {
+	marked := c.a.NewLabel()
+	c.movImm(a64A, c.enc.WriteBarrier)
+	c.a.LoadU8(a64A, a64A, 0)
+	c.a.Cbnz(a64A, marked, false)
+	made(false)
+	c.a.B(join)
+	c.cold = append(c.cold, func() {
+		c.a.Bind(marked)
+		made(true)
+		c.a.B(join)
+	})
+}
+
+// ptrStore is amd64's: the pointer word in a64C to the address in a64A,
+// as it is, or, marking, through storeRef (refStore) unless both it and
+// the word it overwrites are nil. Marking, it uses a64A, a64B, a64C and
+// a64D.
+func (c *a64Compiler) ptrStore(marking bool) {
+	if !marking {
+		c.a.Store(a64A, 0, a64C)
+		return
+	}
+	none := c.a.NewLabel()
+	c.a.Load(a64B, a64A, 0)
+	c.a.Op(arm64.Orr, a64B, a64B, a64C, true)
+	c.a.Cbz(a64B, none, true)
+	c.refStore()
+	c.a.Bind(none)
+}
+
+// keepObject is amd64's: the object whose pointer word is at the
+// context's from as call v's result, in its keep cell (ptrStore).
+func (c *a64Compiler) keepObject(v *ssa.Value, from int32, marking bool) {
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	c.movImm(a64B, c.enc.Object)
+	c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64B)
+	c.a.Load(a64C, a64Ctx, from)
+	c.a.AddImm(a64A, a64Ctx, int64(keep+c.enc.RefOffset), true)
+	c.ptrStore(marking)
+}
+
 // copyProps is amd64's: the object spread v by the VM's table of spreads
-// by layout, or slow, having written nothing. The values left are counted
-// in a64D.
-func (c *a64Compiler) copyProps(v *ssa.Value, site *ssa.CallSite, slow arm64.Label) {
+// by layout, or slow, having written nothing; while the collector marks,
+// its pointer words through storeRef (ptrStore). The values left are
+// counted in a64D, kept in the context's GoArgs across a store marking.
+func (c *a64Compiler) copyProps(v *ssa.Value, site *ssa.CallSite, slow arm64.Label, marking bool) {
 	size := int32(unsafe.Sizeof(abi.GoArg{}))
 	tgt, src := abi.OffGoArgs, abi.OffGoArgs+size
 	at := func(i int32) int32 { return abi.OffGoArgs + 2*size + i*8 }
-	entry, next, dst, vals, length := at(0), at(2), at(3), at(4), at(5)
-	c.goArg(tgt, v.Args[0])
-	c.goArg(src, v.Args[1])
-	c.movImm(a64A, c.enc.WriteBarrier)
-	c.a.LoadU8(a64A, a64A, 0)
-	c.a.Cbnz(a64A, slow, false)
+	entry, left, next, dst, vals, length := at(0), at(1), at(2), at(3), at(4), at(5)
 	c.movImm(a64C, c.enc.Object)
 	for _, o := range []int32{tgt, src} {
 		c.a.Load(a64A, a64Ctx, o+c.enc.NumOffset)
@@ -5618,11 +5663,19 @@ func (c *a64Compiler) copyProps(v *ssa.Value, site *ssa.CallSite, slow arm64.Lab
 	c.a.ShiftImm(arm64.Lsl, a64B, a64B, 4, true)
 	c.a.Load(a64A, a64Ctx, vals)
 	c.a.Op(arm64.Add, a64B, a64B, a64A, true)
-	c.a.Load(a64A, a64B, 0)
-	c.a.Load(a64C, a64B, 8)
+	c.a.Load(a64A, a64B, c.enc.NumOffset)
+	c.a.Load(a64C, a64B, c.enc.RefOffset)
 	c.a.Load(a64B, a64Ctx, dst)
-	c.a.Store(a64B, 0, a64A)
-	c.a.Store(a64B, 8, a64C)
+	c.a.Store(a64B, c.enc.NumOffset, a64A)
+	c.a.AddImm(a64A, a64B, int64(c.enc.RefOffset), true)
+	if marking {
+		c.a.Store(a64Ctx, left, a64D)
+	}
+	c.ptrStore(marking)
+	if marking {
+		c.a.Load(a64D, a64Ctx, left)
+	}
+	c.a.Load(a64B, a64Ctx, dst)
 	c.a.AddImm(a64B, a64B, 16, true)
 	c.a.Store(a64Ctx, dst, a64B)
 	c.a.AddImm(a64D, a64D, -1, true)
@@ -5633,23 +5686,18 @@ func (c *a64Compiler) copyProps(v *ssa.Value, site *ssa.CallSite, slow arm64.Lab
 	c.a.Store(a64A, c.enc.ObjectProps+8, a64C)
 	c.a.Load(a64B, a64Ctx, entry)
 	c.a.Load(a64C, a64B, abi.CopyTo)
-	c.a.Store(a64A, c.enc.ObjectShape, a64C)
-	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
-	c.movImm(a64B, c.enc.Object)
-	c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64B)
-	c.a.Store(a64Ctx, keep+c.enc.RefOffset, a64A)
+	c.a.AddImm(a64A, a64A, int64(c.enc.ObjectShape), true)
+	c.ptrStore(marking)
+	c.keepObject(v, tgt+c.enc.RefOffset, marking)
 }
 
 // defineNext is amd64's: a literal's field along its object's shape's
-// first transition, or slow, having written nothing.
-func (c *a64Compiler) defineNext(v *ssa.Value, site *ssa.CallSite, slow arm64.Label) {
+// first transition, or slow, having written nothing; while the collector
+// marks, its pointer words through storeRef (ptrStore). The next shape is
+// kept in the context's GoArgs across a store marking.
+func (c *a64Compiler) defineNext(v *ssa.Value, site *ssa.CallSite, slow arm64.Label, marking bool) {
 	size := int32(unsafe.Sizeof(abi.GoArg{}))
-	obj, val := abi.OffGoArgs, abi.OffGoArgs+size
-	c.goArg(obj, v.Args[0])
-	c.goArg(val, v.Args[1])
-	c.movImm(a64A, c.enc.WriteBarrier)
-	c.a.LoadU8(a64A, a64A, 0)
-	c.a.Cbnz(a64A, slow, false)
+	obj, val, next := abi.OffGoArgs, abi.OffGoArgs+size, abi.OffGoArgs+2*size
 	c.a.Load(a64A, a64Ctx, obj+c.enc.NumOffset)
 	c.movImm(a64B, c.enc.Object)
 	c.a.Cmp(a64A, a64B, true)
@@ -5682,21 +5730,23 @@ func (c *a64Compiler) defineNext(v *ssa.Value, site *ssa.CallSite, slow arm64.La
 	c.a.Load(a64C, a64D, c.enc.ShapeIndex)
 	c.a.Cbz(a64C, slow, true)
 	c.a.Bind(indexed)
+	c.a.Store(a64Ctx, next, a64D)
 	c.a.Load(a64C, a64A, c.enc.ObjectProps)
 	c.a.ShiftImm(arm64.Lsl, a64B, a64B, 4, true)
 	c.a.Op(arm64.Add, a64C, a64C, a64B, true)
-	c.a.Load(a64B, a64Ctx, val)
-	c.a.Store(a64C, 0, a64B)
-	c.a.Load(a64B, a64Ctx, val+8)
-	c.a.Store(a64C, 8, a64B)
+	c.a.Load(a64B, a64Ctx, val+c.enc.NumOffset)
+	c.a.Store(a64C, c.enc.NumOffset, a64B)
+	c.a.AddImm(a64A, a64C, int64(c.enc.RefOffset), true)
+	c.a.Load(a64C, a64Ctx, val+c.enc.RefOffset)
+	c.ptrStore(marking)
+	c.a.Load(a64A, a64Ctx, obj+c.enc.RefOffset)
 	c.a.Load(a64B, a64A, c.enc.ObjectProps+8)
 	c.a.AddImm(a64B, a64B, 1, true)
 	c.a.Store(a64A, c.enc.ObjectProps+8, a64B)
-	c.a.Store(a64A, c.enc.ObjectShape, a64D)
-	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
-	c.movImm(a64B, c.enc.Object)
-	c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64B)
-	c.a.Store(a64Ctx, keep+c.enc.RefOffset, a64A)
+	c.a.Load(a64C, a64Ctx, next)
+	c.a.AddImm(a64A, a64A, int64(c.enc.ObjectShape), true)
+	c.ptrStore(marking)
+	c.keepObject(v, obj+c.enc.RefOffset, marking)
 }
 
 // arrayOperand is amd64's: a64B holds the pointer of the operand at the
@@ -5718,23 +5768,15 @@ func (c *a64Compiler) arrayOperand(at int32, slow arm64.Label) {
 	c.a.Cbnz(a64A, slow, false)
 }
 
-// notMarking is amd64's. It uses a64A.
-func (c *a64Compiler) notMarking(slow arm64.Label) {
-	c.movImm(a64A, c.enc.WriteBarrier)
-	c.a.LoadU8(a64A, a64A, 0)
-	c.a.Cbnz(a64A, slow, false)
-}
-
 // spreadElems is amd64's: an array spread by its elements, or slow, the
-// target's length as it was. The elements left are counted in a64D.
-func (c *a64Compiler) spreadElems(v *ssa.Value, site *ssa.CallSite, slow arm64.Label) {
+// target's length as it was; while the collector marks, its pointer words
+// through storeRef (ptrStore). The elements left are counted in a64D, kept
+// in the context's GoArgs across a store marking.
+func (c *a64Compiler) spreadElems(v *ssa.Value, site *ssa.CallSite, slow arm64.Label, marking bool) {
 	size := int32(unsafe.Sizeof(abi.GoArg{}))
 	tgt, src := abi.OffGoArgs, abi.OffGoArgs+size
 	at := func(i int32) int32 { return abi.OffGoArgs + 2*size + i*8 }
-	from, cur, dst, length := at(0), at(2), at(3), at(4)
-	c.goArg(tgt, v.Args[0])
-	c.goArg(src, v.Args[1])
-	c.notMarking(slow)
+	from, left, cur, dst, length := at(0), at(1), at(2), at(3), at(4)
 	c.arrayOperand(src, slow)
 	c.a.Store(a64Ctx, from, a64B)
 	c.a.Load(a64A, a64B, c.enc.ObjectProps+8)
@@ -5791,7 +5833,15 @@ func (c *a64Compiler) spreadElems(v *ssa.Value, site *ssa.CallSite, slow arm64.L
 	c.a.Store(a64Ctx, cur, a64A)
 	c.a.Load(a64A, a64Ctx, dst)
 	c.a.Store(a64A, c.enc.NumOffset, a64B)
-	c.a.Store(a64A, c.enc.RefOffset, a64C)
+	c.a.AddImm(a64A, a64A, int64(c.enc.RefOffset), true)
+	if marking {
+		c.a.Store(a64Ctx, left, a64D)
+	}
+	c.ptrStore(marking)
+	if marking {
+		c.a.Load(a64D, a64Ctx, left)
+	}
+	c.a.Load(a64A, a64Ctx, dst)
 	c.a.AddImm(a64A, a64A, 16, true)
 	c.a.Store(a64Ctx, dst, a64A)
 	c.a.AddImm(a64D, a64D, -1, true)
@@ -5800,20 +5850,15 @@ func (c *a64Compiler) spreadElems(v *ssa.Value, site *ssa.CallSite, slow arm64.L
 	c.a.Load(a64A, a64Ctx, tgt+c.enc.RefOffset)
 	c.a.Load(a64C, a64Ctx, length)
 	c.a.Store(a64A, c.enc.ObjectElems+8, a64C)
-	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
-	c.movImm(a64B, c.enc.Object)
-	c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64B)
-	c.a.Store(a64Ctx, keep+c.enc.RefOffset, a64A)
+	c.keepObject(v, tgt+c.enc.RefOffset, marking)
 }
 
 // appendElem is amd64's: an element appended where its array has room,
-// or slow, having written nothing.
-func (c *a64Compiler) appendElem(v *ssa.Value, slow arm64.Label) {
+// or slow, having written nothing; while the collector marks, its pointer
+// words through storeRef (ptrStore).
+func (c *a64Compiler) appendElem(v *ssa.Value, slow arm64.Label, marking bool) {
 	size := int32(unsafe.Sizeof(abi.GoArg{}))
 	tgt, val := abi.OffGoArgs, abi.OffGoArgs+size
-	c.goArg(tgt, v.Args[0])
-	c.goArg(val, v.Args[1])
-	c.notMarking(slow)
 	c.arrayOperand(tgt, slow)
 	c.a.Load(a64A, a64B, c.enc.ObjectElems+8)
 	c.a.Load(a64C, a64B, c.enc.ObjectElems+16)
@@ -5824,14 +5869,12 @@ func (c *a64Compiler) appendElem(v *ssa.Value, slow arm64.Label) {
 	c.a.Op(arm64.Add, a64C, a64C, a64D, true)
 	c.a.AddImm(a64A, a64A, 1, true)
 	c.a.Store(a64B, c.enc.ObjectElems+8, a64A)
-	c.a.Load(a64A, a64Ctx, val)
-	c.a.Store(a64C, 0, a64A)
-	c.a.Load(a64A, a64Ctx, val+8)
-	c.a.Store(a64C, 8, a64A)
-	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
-	c.movImm(a64A, c.enc.Object)
-	c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64A)
-	c.a.Store(a64Ctx, keep+c.enc.RefOffset, a64B)
+	c.a.Load(a64A, a64Ctx, val+c.enc.NumOffset)
+	c.a.Store(a64C, c.enc.NumOffset, a64A)
+	c.a.AddImm(a64A, a64C, int64(c.enc.RefOffset), true)
+	c.a.Load(a64C, a64Ctx, val+c.enc.RefOffset)
+	c.ptrStore(marking)
+	c.keepObject(v, tgt+c.enc.RefOffset, marking)
 }
 
 func (c *a64Compiler) keyedHas(v *ssa.Value, slow arm64.Label) {

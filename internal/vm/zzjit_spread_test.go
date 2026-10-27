@@ -3,6 +3,7 @@
 package vm
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -355,9 +356,68 @@ func TestJITSpreadNative(t *testing.T) {
 		}`, `protoArrays(100, [1, 2, 3], ownIterProto)`, `flagged(100, {a: 1, b: 2})`,
 		`leafSpread(100, new Map())`, `leafSpread(100, new Map())`, `leafSpread(100, new Map())`, `leafSpread(100, new Map())`, `replaced(100, [1, 2, 3], Array.prototype[Symbol.iterator], Array.prototype[Symbol.iterator])`,
 		`replaced(100, [1, 2, 3], ownIterProto[Symbol.iterator], Array.prototype[Symbol.iterator])`)
-	// While the collector marks, Go makes each.
+	// While the collector marks, native code makes each as it does
+	// otherwise, its pointers stored with Go's write barrier (mir's
+	// byMarking): as many calls of Go (internal/jit/README.md, the write
+	// barrier's rule).
 	t.Run("marking", func(t *testing.T) {
-		jitMarkingForTest(t)
-		jitAgreesForTest(t, setup, `objects(100, {a: 1, b: 2, c: 3})`, `arrays(100, [5, 6, 7, 8])`, `arrays(10, [1, , 3])`)
+		flag := jitMarkingForTest(t)
+		r := jitAgreesForTest(t, setup, `objects(1000, {a: 1, b: 2, c: 3})`, `arrays(1000, [5, 6, 7, 8])`, `arrays(10, [1, , 3])`)
+		for src, w := range want {
+			for range 2 {
+				r.Run(compileForTest(t, src))
+			}
+			v, calls := jitCountGoCalls(t, r, "''+"+src)
+			if v.String().Go() != w {
+				t.Fatalf("marking: %s = %s, want %s", src, v.String().Go(), w)
+			}
+			if calls > 200 {
+				t.Errorf("marking: %s: %d calls of Go", src, calls)
+			}
+		}
+		*flag = 0
 	})
+	// With the collector itself marking as the loops run, every object
+	// they made reached from what holds it.
+	t.Run("collecting", func(t *testing.T) {
+		r := jitAgreesForTest(t, setup, `objects(1000, {a: 1, b: 2, c: 3})`, `arrays(1000, [5, 6, 7, 8])`)
+		stop := jitCollectingForTest(t)
+		defer stop()
+		for range 20 {
+			for src, w := range want {
+				v, err := r.Run(compileForTest(t, "''+"+src))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if v.String().Go() != w {
+					t.Fatalf("collecting: %s = %s, want %s", src, v.String().Go(), w)
+				}
+			}
+		}
+	})
+}
+
+// jitCollectingForTest has the collector collect again and again, on a
+// goroutine of its own, until the function it returns is called: native
+// code running meanwhile meets it marking, its stores of pointers through
+// Go's write barrier, which GODEBUG=gccheckmark=1 checks.
+func jitCollectingForTest(t *testing.T) func() {
+	t.Helper()
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				runtime.GC()
+			}
+		}
+	}()
+	return func() {
+		close(done)
+		<-finished
+	}
 }

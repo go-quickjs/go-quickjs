@@ -65,12 +65,6 @@ var jitMarkingBreaches = map[string]string{
 	// Calls of Go in a run of 256, idle -> marking (2026-10-27).
 	"array_length_decr":      "array length written smaller: 513 -> 256,513",
 	"array_hole_length_decr": "array length written smaller, holes: 615 -> 256,615",
-	"array_spread":           "array spread: 2 -> 514",
-	"object_spread":          "object spread: 2 -> 514",
-	"object_computed":        "literal with a computed key: 259 -> 515",
-	"prop_clone":             "literal cloned: 12 -> 268",
-	"prop_delete":            "property deleted: 5,135 -> 5,391",
-	"spread_call":            "spread call: 48 -> 96",
 }
 
 // jitMarkingCorpus is the micro-benchmarks' source, without microbench.js's

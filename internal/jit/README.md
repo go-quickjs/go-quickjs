@@ -686,8 +686,13 @@ pool's cell cleared through it, which shades the object, or, a
 construction's receiver, is shaded in its pool before the call takes it;
 what native code then writes into it -- an array literal's elements, a
 closure's captured cells, the arguments in an entry's cells -- and a
-value pushed or popped go through it too. A loop's step copies an
-array's element with no barrier: the element stays in the array.
+value pushed or popped go through it too, as do the pointer words of the
+calls of Go native code makes itself, made alike whether the collector
+marks or not (mir's `byMarking`): an object spread by layout and a
+literal's field along its shape's transition -- the values, the shape,
+the result -- and an array spread and an element appended -- the
+elements, the result. A loop's step copies an array's element with no
+barrier: the element stays in the array.
 
 What native code holds where the collector does not look while it
 rewrites what the value came from -- a call in tail position's operands,

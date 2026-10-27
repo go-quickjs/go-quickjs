@@ -2077,18 +2077,24 @@ func (c *compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(amd64.Con
 		// transition (defineNext), an array spread by its elements
 		// (spreadElems), an element appended (appendElem), any other
 		// Go's.
+		// Each made alike whether the collector marks or not, its pointer
+		// words stored through storeRef while it marks (byMarking).
 		slow, join := c.a.NewLabel(), c.a.NewLabel()
-		switch {
-		case site.DefineNext:
-			c.defineNext(v, site, slow)
-		case site.ArrayIter != 0:
-			c.spreadElems(v, site, slow)
-		case site.Append:
-			c.appendElem(v, slow)
-		default:
-			c.copyProps(v, site, slow)
-		}
-		c.a.Jmp(join)
+		size := int32(unsafe.Sizeof(abi.GoArg{}))
+		c.goArg(abi.OffGoArgs, v.Args[0])
+		c.goArg(abi.OffGoArgs+size, v.Args[1])
+		c.byMarking(join, func(marking bool) {
+			switch {
+			case site.DefineNext:
+				c.defineNext(v, site, slow, marking)
+			case site.ArrayIter != 0:
+				c.spreadElems(v, site, slow, marking)
+			case site.Append:
+				c.appendElem(v, slow, marking)
+			default:
+				c.copyProps(v, site, slow, marking)
+			}
+		})
 		c.a.Bind(slow)
 		c.goCallOp(v, goOpWord(site), guard, false)
 		c.a.Bind(join)
@@ -2308,19 +2314,71 @@ func (c *compiler) leafCall(v *ssa.Value, site *ssa.CallSite) {
 	})
 }
 
+// byMarking emits made, a path of a call of Go native code makes itself,
+// for the collector idle, and, out of line, for it marking, where the
+// path's stores of pointer words go through storeRef (ptrStore): either
+// goes on at join, as the rule for the write barrier says
+// (internal/jit/README.md): the same work whether the collector marks or
+// not. made uses no value's register, only the context's GoArgs the
+// operands' words are in, and constants. It uses scratchA.
+func (c *compiler) byMarking(join amd64.Label, made func(marking bool)) {
+	marked := c.a.NewLabel()
+	c.movImm(scratchA, c.enc.WriteBarrier)
+	c.a.LoadU8(scratchA, scratchA, 0)
+	c.a.Op(amd64.Test, scratchA, scratchA, false)
+	c.a.Jcc(amd64.CondNE, marked)
+	made(false)
+	c.a.Jmp(join)
+	c.cold = append(c.cold, func() {
+		c.a.Bind(marked)
+		made(true)
+		c.a.Jmp(join)
+	})
+}
+
+// ptrStore stores the pointer word in scratchC at the address in scratchA:
+// as it is, or, marking, with Go's write barrier (refStore), which shades
+// the word it overwrites and the one it writes -- not where both are nil,
+// a primitive's over a primitive's, which has nothing to shade. Marking,
+// it uses every scratch register.
+func (c *compiler) ptrStore(marking bool) {
+	if !marking {
+		c.a.Store(scratchA, 0, scratchC)
+		return
+	}
+	none := c.a.NewLabel()
+	c.a.Load(scratchB, scratchA, 0)
+	c.a.Op(amd64.Or, scratchB, scratchC, true)
+	c.a.Jcc(amd64.CondE, none)
+	c.refStore()
+	c.a.Bind(none)
+}
+
+// keepObject writes the object whose pointer word is at the context's
+// from, an operand's, as call v's result, to its keep cell (ptrStore). It
+// uses every scratch register.
+func (c *compiler) keepObject(v *ssa.Value, from int32, marking bool) {
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	c.storeImm(regCtx, keep+c.enc.NumOffset, c.enc.Object, scratchB)
+	c.a.Load(scratchC, regCtx, from)
+	c.a.Lea(scratchA, regCtx, keep+c.enc.RefOffset)
+	c.ptrStore(marking)
+}
+
 // copyProps makes the object spread v, of its target and its source
 // (ssa.CallSite's Copies), as the VM's table of spreads by layout says
 // (abi.CopyBits) -- both objects, the entry's for their shapes, room in the
-// target's table for the values, the collector not marking -- and goes to
-// slow otherwise, having written nothing: the source's values at the
-// entry's positions appended to the target's table, its length and its
-// shape the entry's, as the VM's jitCopyFast makes it, as V8's
-// CloneObjectIC copies a fast object by its map. The operands' words, and
-// what the copy keeps between its steps, are in the context's GoArgs,
-// integers the collector does not read, the operands kept by their
-// sources. The result is the target, in the call's keep cell. It uses
-// every scratch register.
-func (c *compiler) copyProps(v *ssa.Value, site *ssa.CallSite, slow amd64.Label) {
+// target's table for the values -- and goes to slow otherwise, having
+// written nothing: the source's values at the entry's positions appended
+// to the target's table, its length and its shape the entry's, as the VM's
+// jitCopyFast makes it, as V8's CloneObjectIC copies a fast object by its
+// map; while the collector marks, each pointer word -- the values', the
+// shape's, the result's -- with Go's write barrier (ptrStore). The
+// operands' words, which byMarking's caller wrote, and what the copy keeps
+// between its steps, are in the context's GoArgs, integers the collector
+// does not read, the operands kept by their sources. The result is the
+// target, in the call's keep cell. It uses every scratch register.
+func (c *compiler) copyProps(v *ssa.Value, site *ssa.CallSite, slow amd64.Label, marking bool) {
 	size := int32(unsafe.Sizeof(abi.GoArg{}))
 	tgt, src := abi.OffGoArgs, abi.OffGoArgs+size
 	// The copy's state: the entry, the values left, the next position,
@@ -2328,12 +2386,6 @@ func (c *compiler) copyProps(v *ssa.Value, site *ssa.CallSite, slow amd64.Label)
 	// length after.
 	at := func(i int32) int32 { return abi.OffGoArgs + 2*size + i*8 }
 	entry, left, next, dst, vals, length := at(0), at(1), at(2), at(3), at(4), at(5)
-	c.goArg(tgt, v.Args[0])
-	c.goArg(src, v.Args[1])
-	c.movImm(scratchA, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchA, scratchA, 0)
-	c.a.Op(amd64.Test, scratchA, scratchA, false)
-	c.a.Jcc(amd64.CondNE, slow)
 	for _, o := range []int32{tgt, src} {
 		c.a.Load(scratchA, regCtx, o+c.enc.NumOffset)
 		c.cmpWord(scratchA, c.enc.Object)
@@ -2396,11 +2448,13 @@ func (c *compiler) copyProps(v *ssa.Value, site *ssa.CallSite, slow amd64.Label)
 	c.a.ShiftImm(amd64.Shl, scratchB, 4, true)
 	c.a.Load(scratchA, regCtx, vals)
 	c.a.Op(amd64.Add, scratchB, scratchA, true)
-	c.a.Load(scratchA, scratchB, 0)
-	c.a.Load(scratchC, scratchB, 8)
+	c.a.Load(scratchA, scratchB, c.enc.NumOffset)
+	c.a.Load(scratchC, scratchB, c.enc.RefOffset)
 	c.a.Load(scratchB, regCtx, dst)
-	c.a.Store(scratchB, 0, scratchA)
-	c.a.Store(scratchB, 8, scratchC)
+	c.a.Store(scratchB, c.enc.NumOffset, scratchA)
+	c.a.Lea(scratchA, scratchB, c.enc.RefOffset)
+	c.ptrStore(marking)
+	c.a.Load(scratchB, regCtx, dst)
 	c.a.OpImm(amd64.Add, scratchB, 16, true)
 	c.a.Store(regCtx, dst, scratchB)
 	c.a.DecMem(regCtx, left)
@@ -2412,30 +2466,24 @@ func (c *compiler) copyProps(v *ssa.Value, site *ssa.CallSite, slow amd64.Label)
 	c.a.Store(scratchA, c.enc.ObjectProps+8, scratchC)
 	c.a.Load(scratchB, regCtx, entry)
 	c.a.Load(scratchC, scratchB, abi.CopyTo)
-	c.a.Store(scratchA, c.enc.ObjectShape, scratchC)
-	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
-	c.storeImm(regCtx, keep+c.enc.NumOffset, c.enc.Object, scratchB)
-	c.a.Store(regCtx, keep+c.enc.RefOffset, scratchA)
+	c.a.Lea(scratchA, scratchA, c.enc.ObjectShape)
+	c.ptrStore(marking)
+	c.keepObject(v, tgt+c.enc.RefOffset, marking)
 }
 
 // defineNext defines a literal's field v, of its object and its value
 // (ssa.CallSite's DefineNext), along the first transition of the object's
 // shape where that is by the field's key with the default attributes, as
 // the VM's appendTransition does -- an extensible object, room in its
-// table, the next shape's index where it needs one, the collector not
-// marking -- and goes to slow otherwise, having written nothing. The
-// operands' words, and the next shape, are in the context's GoArgs. The
-// result is the object, in the call's keep cell. It uses every scratch
-// register.
-func (c *compiler) defineNext(v *ssa.Value, site *ssa.CallSite, slow amd64.Label) {
+// table, the next shape's index where it needs one -- and goes to slow
+// otherwise, having written nothing; while the collector marks, each
+// pointer word -- the value's, the shape's, the result's -- with Go's
+// write barrier (ptrStore). The operands' words, which byMarking's caller
+// wrote, and the next shape, are in the context's GoArgs. The result is
+// the object, in the call's keep cell. It uses every scratch register.
+func (c *compiler) defineNext(v *ssa.Value, site *ssa.CallSite, slow amd64.Label, marking bool) {
 	size := int32(unsafe.Sizeof(abi.GoArg{}))
 	obj, val, next := abi.OffGoArgs, abi.OffGoArgs+size, abi.OffGoArgs+2*size
-	c.goArg(obj, v.Args[0])
-	c.goArg(val, v.Args[1])
-	c.movImm(scratchA, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchA, scratchA, 0)
-	c.a.Op(amd64.Test, scratchA, scratchA, false)
-	c.a.Jcc(amd64.CondNE, slow)
 	c.a.Load(scratchA, regCtx, obj+c.enc.NumOffset)
 	c.cmpWord(scratchA, c.enc.Object)
 	c.a.Jcc(amd64.CondNE, slow)
@@ -2476,18 +2524,19 @@ func (c *compiler) defineNext(v *ssa.Value, site *ssa.CallSite, slow amd64.Label
 	c.a.Load(scratchC, scratchA, c.enc.ObjectProps)
 	c.a.ShiftImm(amd64.Shl, scratchB, 4, true)
 	c.a.Op(amd64.Add, scratchC, scratchB, true)
-	c.a.Load(scratchB, regCtx, val)
-	c.a.Store(scratchC, 0, scratchB)
-	c.a.Load(scratchB, regCtx, val+8)
-	c.a.Store(scratchC, 8, scratchB)
+	c.a.Load(scratchB, regCtx, val+c.enc.NumOffset)
+	c.a.Store(scratchC, c.enc.NumOffset, scratchB)
+	c.a.Lea(scratchA, scratchC, c.enc.RefOffset)
+	c.a.Load(scratchC, regCtx, val+c.enc.RefOffset)
+	c.ptrStore(marking)
+	c.a.Load(scratchA, regCtx, obj+c.enc.RefOffset)
 	c.a.Load(scratchB, scratchA, c.enc.ObjectProps+8)
 	c.a.OpImm(amd64.Add, scratchB, 1, true)
 	c.a.Store(scratchA, c.enc.ObjectProps+8, scratchB)
 	c.a.Load(scratchC, regCtx, next)
-	c.a.Store(scratchA, c.enc.ObjectShape, scratchC)
-	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
-	c.storeImm(regCtx, keep+c.enc.NumOffset, c.enc.Object, scratchB)
-	c.a.Store(regCtx, keep+c.enc.RefOffset, scratchA)
+	c.a.Lea(scratchA, scratchA, c.enc.ObjectShape)
+	c.ptrStore(marking)
+	c.keepObject(v, obj+c.enc.RefOffset, marking)
 }
 
 // arrayOperand has scratchB hold the pointer of the operand whose words are
@@ -2509,15 +2558,6 @@ func (c *compiler) arrayOperand(at int32, slow amd64.Label) {
 	c.a.Jcc(amd64.CondNE, slow)
 }
 
-// notMarking goes to slow while the collector marks, when stores of
-// pointers are Go's. It uses scratchA.
-func (c *compiler) notMarking(slow amd64.Label) {
-	c.movImm(scratchA, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchA, scratchA, 0)
-	c.a.Op(amd64.Test, scratchA, scratchA, false)
-	c.a.Jcc(amd64.CondNE, slow)
-}
-
 // spreadElems spreads v's source into its target, an array literal's
 // array (ssa.CallSite's ArrayIter): an array of the realm's prototype, no
 // property of its own, whose iteration is Array.prototype's intrinsics' --
@@ -2525,17 +2565,16 @@ func (c *compiler) notMarking(slow amd64.Label) {
 // (abi.IterCellArray) -- its elements, no hole among them, appended to the
 // target's, in its room, as V8's code spreads a fast array under its
 // ArrayIteratorProtector; it goes to slow otherwise, the target's length
-// as it was. The operands' words, and the copy's state, are in the
-// context's GoArgs. The result is the target, in the call's keep cell. It
-// uses every scratch register.
-func (c *compiler) spreadElems(v *ssa.Value, site *ssa.CallSite, slow amd64.Label) {
+// as it was. While the collector marks, each pointer word -- the
+// elements', the result's -- is stored with Go's write barrier
+// (ptrStore). The operands' words, which byMarking's caller wrote, and the
+// copy's state, are in the context's GoArgs. The result is the target, in
+// the call's keep cell. It uses every scratch register.
+func (c *compiler) spreadElems(v *ssa.Value, site *ssa.CallSite, slow amd64.Label, marking bool) {
 	size := int32(unsafe.Sizeof(abi.GoArg{}))
 	tgt, src := abi.OffGoArgs, abi.OffGoArgs+size
 	at := func(i int32) int32 { return abi.OffGoArgs + 2*size + i*8 }
 	from, left, cur, dst, length := at(0), at(1), at(2), at(3), at(4)
-	c.goArg(tgt, v.Args[0])
-	c.goArg(src, v.Args[1])
-	c.notMarking(slow)
 	c.arrayOperand(src, slow)
 	c.a.Store(regCtx, from, scratchB)
 	c.a.Load(scratchA, scratchB, c.enc.ObjectProps+8)
@@ -2594,7 +2633,9 @@ func (c *compiler) spreadElems(v *ssa.Value, site *ssa.CallSite, slow amd64.Labe
 	c.a.Store(regCtx, cur, scratchA)
 	c.a.Load(scratchA, regCtx, dst)
 	c.a.Store(scratchA, c.enc.NumOffset, scratchB)
-	c.a.Store(scratchA, c.enc.RefOffset, scratchC)
+	c.a.Lea(scratchA, scratchA, c.enc.RefOffset)
+	c.ptrStore(marking)
+	c.a.Load(scratchA, regCtx, dst)
 	c.a.OpImm(amd64.Add, scratchA, 16, true)
 	c.a.Store(regCtx, dst, scratchA)
 	c.a.DecMem(regCtx, left)
@@ -2603,22 +2644,20 @@ func (c *compiler) spreadElems(v *ssa.Value, site *ssa.CallSite, slow amd64.Labe
 	c.a.Load(scratchA, regCtx, tgt+c.enc.RefOffset)
 	c.a.Load(scratchC, regCtx, length)
 	c.a.Store(scratchA, c.enc.ObjectElems+8, scratchC)
-	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
-	c.storeImm(regCtx, keep+c.enc.NumOffset, c.enc.Object, scratchB)
-	c.a.Store(regCtx, keep+c.enc.RefOffset, scratchA)
+	c.keepObject(v, tgt+c.enc.RefOffset, marking)
 }
 
 // appendElem appends v's value to its array, an array literal's array
-// (ssa.CallSite's Append), where it has room and the collector is not
-// marking, both its words at the length, the length one more; it goes to
-// slow otherwise, having written nothing. The result is the array, in
-// the call's keep cell. It uses every scratch register.
-func (c *compiler) appendElem(v *ssa.Value, slow amd64.Label) {
+// (ssa.CallSite's Append), where it has room, both its words at the
+// length, the length one more -- while the collector marks, the pointer
+// words, the element's and the result's, with Go's write barrier
+// (ptrStore); it goes to slow otherwise, having written nothing. The
+// operands' words are in the context's GoArgs, which byMarking's caller
+// wrote. The result is the array, in the call's keep cell. It uses every
+// scratch register.
+func (c *compiler) appendElem(v *ssa.Value, slow amd64.Label, marking bool) {
 	size := int32(unsafe.Sizeof(abi.GoArg{}))
 	tgt, val := abi.OffGoArgs, abi.OffGoArgs+size
-	c.goArg(tgt, v.Args[0])
-	c.goArg(val, v.Args[1])
-	c.notMarking(slow)
 	c.arrayOperand(tgt, slow)
 	c.a.Load(scratchA, scratchB, c.enc.ObjectElems+8)
 	c.a.CmpMem(scratchA, scratchB, c.enc.ObjectElems+16, true)
@@ -2628,13 +2667,12 @@ func (c *compiler) appendElem(v *ssa.Value, slow amd64.Label) {
 	c.a.Store(scratchB, c.enc.ObjectElems+8, scratchA)
 	c.a.ShiftImm(amd64.Shl, scratchA, 4, true)
 	c.a.Op(amd64.Add, scratchC, scratchA, true)
-	c.a.Load(scratchA, regCtx, val)
-	c.a.Store(scratchC, -16, scratchA)
-	c.a.Load(scratchA, regCtx, val+8)
-	c.a.Store(scratchC, -8, scratchA)
-	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
-	c.storeImm(regCtx, keep+c.enc.NumOffset, c.enc.Object, scratchA)
-	c.a.Store(regCtx, keep+c.enc.RefOffset, scratchB)
+	c.a.Load(scratchA, regCtx, val+c.enc.NumOffset)
+	c.a.Store(scratchC, c.enc.NumOffset-16, scratchA)
+	c.a.Lea(scratchA, scratchC, c.enc.RefOffset-16)
+	c.a.Load(scratchC, regCtx, val+c.enc.RefOffset)
+	c.ptrStore(marking)
+	c.keepObject(v, tgt+c.enc.RefOffset, marking)
 }
 
 // superGuards checks a super() may call t's parent natively
