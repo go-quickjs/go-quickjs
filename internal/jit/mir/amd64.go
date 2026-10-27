@@ -1017,9 +1017,23 @@ func (c *compiler) genEntry() {
 		skip := c.a.NewLabel()
 		c.a.OpImm(amd64.Cmp, t, int32(gr.PC), false)
 		c.a.Jcc(amd64.CondNE, skip)
-		c.a.Load(t, g, c.enc.GenStack+8)
-		c.a.OpImm(amd64.Cmp, t, int32(gr.Saved), true)
-		c.a.Jcc(amd64.CondNE, miss)
+		// The operands its suspension saved, as many as the entry's: none
+		// where it has no saved part.
+		c.a.Load(t, g, c.enc.GenSaved)
+		c.a.Op(amd64.Test, t, t, true)
+		if gr.Saved == 0 {
+			none := c.a.NewLabel()
+			c.a.Jcc(amd64.CondE, none)
+			c.a.Load(t, t, c.enc.SavedStack+8)
+			c.a.Op(amd64.Test, t, t, true)
+			c.a.Jcc(amd64.CondNE, miss)
+			c.a.Bind(none)
+		} else {
+			c.a.Jcc(amd64.CondE, miss)
+			c.a.Load(t, t, c.enc.SavedStack+8)
+			c.a.OpImm(amd64.Cmp, t, int32(gr.Saved), true)
+			c.a.Jcc(amd64.CondNE, miss)
+		}
 		c.a.LoadU8(t, g, c.enc.GenStarted)
 		c.a.OpImm(amd64.Cmp, t, int32(b2i(gr.Started)), false)
 		c.a.Jcc(amd64.CondNE, miss)
@@ -1080,7 +1094,8 @@ func (c *compiler) genFrame(gr ssa.GenResume, blk *ssa.Block) {
 	}
 	// The operands its suspension saved, and on them the value sent in.
 	if gr.Saved > 0 {
-		c.a.Load(u, g, c.enc.GenStack)
+		c.a.Load(u, g, c.enc.GenSaved)
+		c.a.Load(u, u, c.enc.SavedStack)
 		for i := range int32(gr.Saved) {
 			for _, w := range [2]int32{c.enc.NumOffset, c.enc.RefOffset} {
 				c.a.Load(scratchA, u, i*vs+w)
@@ -1124,10 +1139,24 @@ func (c *compiler) yieldExit(b *ssa.Block) {
 	c.a.Op(amd64.Test, scratchA, scratchA, true)
 	c.a.Jcc(amd64.CondNE, toGo)
 	saved, n := int32(s.Depth-1), int32(len(hs))
+	// What the generator's suspensions leave besides its place, which Go
+	// makes where it has none and the yield leaves anything.
 	c.a.Load(scratchB, regCtx, abi.OffGenObject)
+	c.a.Load(scratchB, scratchB, c.enc.GenSaved)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	if n > 0 || saved > 0 {
+		c.a.Jcc(amd64.CondE, toGo)
+	} else {
+		// Nothing left: the saved part's lengths none, where it has one.
+		none := c.a.NewLabel()
+		c.a.Jcc(amd64.CondE, none)
+		c.storeImm(scratchB, c.enc.SavedStack+8, 0, scratchA)
+		c.storeImm(scratchB, c.enc.SavedHandlers+8, 0, scratchA)
+		c.a.Bind(none)
+	}
 	if n > 0 {
 		// Room where the generator keeps its handlers.
-		c.a.Load(scratchC, scratchB, c.enc.GenHandlers+16)
+		c.a.Load(scratchC, scratchB, c.enc.SavedHandlers+16)
 		c.a.OpImm(amd64.Cmp, scratchC, n, true)
 		c.a.Jcc(amd64.CondB, toGo)
 	}
@@ -1138,10 +1167,10 @@ func (c *compiler) yieldExit(b *ssa.Block) {
 		c.a.LoadU8(scratchC, scratchC, 0)
 		c.a.Op(amd64.Test, scratchC, scratchC, false)
 		c.a.Jcc(amd64.CondNE, toGo)
-		c.a.Load(scratchC, scratchB, c.enc.GenStack+16)
+		c.a.Load(scratchC, scratchB, c.enc.SavedStack+16)
 		c.a.OpImm(amd64.Cmp, scratchC, saved, true)
 		c.a.Jcc(amd64.CondB, toGo)
-		c.a.Load(scratchC, scratchB, c.enc.GenStack)
+		c.a.Load(scratchC, scratchB, c.enc.SavedStack)
 		for i := range saved {
 			for _, w := range [2]int32{c.enc.NumOffset, c.enc.RefOffset} {
 				c.a.Load(scratchA, regStack, i*vs+w)
@@ -1149,20 +1178,23 @@ func (c *compiler) yieldExit(b *ssa.Block) {
 			}
 		}
 	}
-	c.storeImm(scratchB, c.enc.GenStack+8, uint64(saved), scratchA)
-	if n > 0 {
-		// The handlers in force, no pointers among their words.
-		c.a.Load(scratchC, scratchB, c.enc.GenHandlers)
-		for i, h := range hs {
-			at := int32(i) * c.enc.HandlerSize
-			c.a.MovImm(scratchA, uint64(h.PC))
-			c.a.Store32(scratchC, at+c.enc.HandlerPC, scratchA)
-			c.storeImm(scratchC, at+c.enc.HandlerDepth, uint64(int64(h.Depth)), scratchA)
-			c.a.MovImm(scratchA, uint64(b2i(h.Finally)))
-			c.a.Store8(scratchC, at+c.enc.HandlerFinally, scratchA)
+	if n > 0 || saved > 0 {
+		c.storeImm(scratchB, c.enc.SavedStack+8, uint64(saved), scratchA)
+		if n > 0 {
+			// The handlers in force, no pointers among their words.
+			c.a.Load(scratchC, scratchB, c.enc.SavedHandlers)
+			for i, h := range hs {
+				at := int32(i) * c.enc.HandlerSize
+				c.a.MovImm(scratchA, uint64(h.PC))
+				c.a.Store32(scratchC, at+c.enc.HandlerPC, scratchA)
+				c.storeImm(scratchC, at+c.enc.HandlerDepth, uint64(int64(h.Depth)), scratchA)
+				c.a.MovImm(scratchA, uint64(b2i(h.Finally)))
+				c.a.Store8(scratchC, at+c.enc.HandlerFinally, scratchA)
+			}
 		}
+		c.storeImm(scratchB, c.enc.SavedHandlers+8, uint64(n), scratchA)
 	}
-	c.storeImm(scratchB, c.enc.GenHandlers+8, uint64(n), scratchA)
+	c.a.Load(scratchB, regCtx, abi.OffGenObject)
 	c.a.MovImm(scratchA, uint64(s.PC)+1)
 	c.a.Store32(scratchB, c.enc.GenPC, scratchA)
 	c.a.MovImm(scratchA, uint64(c.enc.GenSuspendedYield))
@@ -1197,7 +1229,13 @@ func (c *compiler) genFinish() {
 	c.a.Load(scratchB, regCtx, abi.OffGenObject)
 	c.a.MovImm(scratchA, uint64(c.enc.GenCompleted))
 	c.a.Store8(scratchB, c.enc.GenState, scratchA)
-	c.storeImm(scratchB, c.enc.GenStack+8, 0, scratchA)
+	// Its saved operands none, where it has a saved part.
+	none := c.a.NewLabel()
+	c.a.Load(scratchB, scratchB, c.enc.GenSaved)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	c.a.Jcc(amd64.CondE, none)
+	c.storeImm(scratchB, c.enc.SavedStack+8, 0, scratchA)
+	c.a.Bind(none)
 	c.a.Load(scratchC, regCtx, abi.OffGenCursor)
 	c.a.MovImm(scratchA, 1)
 	c.a.Store8(scratchC, c.enc.IterDone, scratchA)
@@ -2942,7 +2980,7 @@ func (c *compiler) genStep(v *ssa.Value, notGen, slow, done amd64.Label) {
 	c.cmpWord(scratchC, c.enc.Object)
 	fail(amd64.CondNE)
 	c.a.Load(scratchA, scratchB, c.enc.IterIter+c.enc.RefOffset)
-	c.objectData(scratchB, scratchA, scratchC, c.enc.GenData, fail)
+	c.objectPart(scratchB, scratchA, scratchC, c.enc.ClassGenerator, c.enc.GenObject, fail)
 	c.a.LoadU8(scratchC, scratchB, c.enc.GenState)
 	c.a.OpImm(amd64.Cmp, scratchC, int32(c.enc.GenSuspendedYield), false)
 	fail(amd64.CondA)
@@ -3940,8 +3978,12 @@ func (c *compiler) genericCheck(v *ssa.Value, site *ssa.CallSite, target int, ch
 
 // objectPart finds, into dst, what an object of class cls keeps off
 // bytes past it in its allocation, obj being the object: anything of
-// another class goes to fail. It uses t too.
+// another class goes to fail. It uses t too, which must not be obj, whose
+// address the class's byte read into t would overwrite.
 func (c *compiler) objectPart(dst, obj, t amd64.Reg, cls uint8, off int32, fail func(amd64.Cond)) {
+	if t == obj {
+		panic("mir: objectPart's scratch register is its object's")
+	}
 	c.a.LoadU8(t, obj, c.enc.ObjectClass)
 	c.a.OpImm(amd64.Cmp, t, int32(cls), false)
 	fail(amd64.CondNE)

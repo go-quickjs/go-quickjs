@@ -377,7 +377,7 @@ func (r *Runtime) callClosure(o *Object, fd *funcData, this Value, args []Value,
 			}
 			return Undefined, err
 		}
-		g := gen.dataOf().(*generator)
+		g := genOf(gen)
 		switch {
 		case fn.Generator:
 			// An async generator is still a generator: it returns an object

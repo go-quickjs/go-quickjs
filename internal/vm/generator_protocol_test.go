@@ -21,6 +21,30 @@ import (
 // instance and on the intrinsics; with scopes and direct evals across
 // suspensions; and for-in, whose snapshot a cursor keeps.
 var generatorCases = []struct{ name, want, src string }{
+	// What a suspension leaves besides its place -- the operands beneath
+	// the value, the handlers in force, the captures -- kept in the
+	// generator's saved part, made by the first that leaves any, and let
+	// go of when the generator finishes.
+	{"savedHandlersReturn", `t0,f0,t1,f1,t2,f2,{"value":9,"done":true},{"done":true}`,
+		`var log = []; function* g() { for (var i = 0; ; i++) { try { log.push('t' + i); yield i } finally { log.push('f' + i) } } } var it = g(); it.next(); it.next(); it.next(); log.push(JSON.stringify(it.return(9))); log.push(JSON.stringify(it.next())); log.join()`},
+	{"savedCursorReturn", `10,inner fin,{"value":5,"done":true},{"done":true}`,
+		`var log = []; function* inner() { try { yield 1; yield 2 } finally { log.push('inner fin') } } function* g() { for (const x of inner()) yield x * 10 } var it = g(); log.push(it.next().value); log.push(JSON.stringify(it.return(5))); log.push(JSON.stringify(it.next())); log.join()`},
+	{"savedThenNothing", `a,1-2-3,z,{"done":true}`,
+		`function* g() { var a = [1, (yield 'a'), 3]; yield a.join('-'); yield 'z' } var it = g(); [it.next().value, it.next(2).value, it.next().value, JSON.stringify(it.next())].join()`},
+	{"prologueCapture", `2,3`,
+		`function* g(a, f = () => a) { a = 2; yield f(); a = 3; yield f() } [...g(1)].join()`},
+	{"capturesAcrossResumptions", `1,10|6,60`,
+		`function* g() { var x = 0; var f1 = () => ++x; yield 0; var f2 = () => x * 10; yield f1() + ',' + f2(); x = 5; yield f1() + ',' + f2() } var it = g(); it.next(); [it.next().value, it.next().value].join('|')`},
+	{"savedThrowCaught", `{"value":"cx,6,8","done":true}`,
+		`function* g() { var s = []; for (var i = 0; i < 3; i++) { try { s.push(1 + (yield i)) } catch (e) { s.push('c' + e) } } return s.join() } var it = g(); it.next(); it.throw('x'); it.next(5); JSON.stringify(it.next(7))`},
+	{"savedThrowsOut", `[5,{"done":true},{"value":2,"done":true}]`,
+		`function* g() { var a = 1 + (yield 1); throw a } var it = g(); it.next(); var e; try { it.next(4) } catch (x) { e = x } JSON.stringify([e, it.next(), it.return(2)])`},
+	// A generator's object has no ext of its own: an element, a property
+	// and a WeakMap's entry give it one.
+	{"ownProperties", `a 5 9 3 0,x {"done":true}`,
+		`function* g() { yield 1; yield 2 } var it = g(); it[0] = 'a'; it.x = 5; var wm = new WeakMap(); wm.set(it, 9); var c = 0; for (var v of it) c += v; [it[0], it.x, wm.get(it), c, Object.keys(it).join(), JSON.stringify(it.next())].join(' ')`},
+	{"savedOperandsReturnFinally", `fin,{"value":3,"done":true}`,
+		`var log = []; function* g() { try { var t = 'x' + (yield 1); log.push(t) } finally { log.push('fin') } } var it = g(); it.next(); log.push(JSON.stringify(it.return(3))); log.join()`},
 	{"breakReturns", `1,2,fin`,
 		`var log = []; function* g() { try { yield 1; yield 2; yield 3 } finally { log.push('fin') } } for (var x of g()) { log.push(x); if (x == 2) break } log.join()`},
 	{"continueThenEnd", `2,fin`,
@@ -311,7 +335,7 @@ func TestHelperStepsAllocate(t *testing.T) {
 // without the result object it would make (iterReturn), and a return at a
 // yield nothing between it and the top of the body sees finishes the
 // generator without a frame or the signal a frame is given
-// (returnsAtOnce). A loop or a destructuring allocates its generator and
+// (returnAtOnce). A loop or a destructuring allocates its generator and
 // its cursor; each had made a result object and a return signal as well.
 func TestGeneratorCloseAllocates(t *testing.T) {
 	r := New(Config{})

@@ -3213,7 +3213,7 @@ func b2i(b bool) int {
 // generators natively (CallSite's Gens): of 16-byte values, the encoding
 // knowing a generator's layout and the collector's flag.
 func stepGens(v *ssa.Value, enc abi.Encoding) bool {
-	if enc.GenData == 0 || enc.ValueSize != 16 || enc.WriteBarrier == 0 || len(v.Calls()) != 1 {
+	if enc.GenObject == 0 || enc.ValueSize != 16 || enc.WriteBarrier == 0 || len(v.Calls()) != 1 {
 		return false
 	}
 	site := v.Calls()[0]

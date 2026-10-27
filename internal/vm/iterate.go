@@ -449,7 +449,7 @@ func (r *Runtime) stepIter(iter, next Value) (Value, bool, error) {
 		// identity says so, found first: a loop over a generator steps
 		// it at every value.
 		if it := iter.Object(); it.class == ClassGenerator {
-			if g, ok := it.dataOf().(*generator); ok {
+			if g := genOf(it); g != nil {
 				if err := r.tick(); err != nil {
 					return Undefined, false, err
 				}
@@ -1416,7 +1416,7 @@ func (r *Runtime) iterCloseNormal(cursor Value) error {
 func (r *Runtime) iterReturn(ret, iter Value) (bool, error) {
 	if n := r.genReturnFn; n != nil && ret.ref == unsafe.Pointer(n) && iter.IsObject() {
 		if it := iter.Object(); it.class == ClassGenerator {
-			if g, ok := it.dataOf().(*generator); ok {
+			if g := genOf(it); g != nil {
 				if err := r.pushNativeFrame(n, iter, nil, Undefined); err != nil {
 					return false, err
 				}

@@ -1,6 +1,9 @@
 package vm
 
-import "testing"
+import (
+	"testing"
+	"unsafe"
+)
 
 // TestGeneratorValues pins generators and async functions with each count
 // of arguments and locals around the sizes newGenerator makes in one
@@ -85,6 +88,81 @@ func TestGeneratorOneAllocation(t *testing.T) {
 	}
 }
 
+// TestGeneratorSavedPart pins the generator's size and what its saved
+// part holds: a generator with two values or fewer is 184 bytes, the 192
+// of a size class, with no ext, and the 96 of its state; one that
+// suspends with nothing beneath the value, in no try statement and with
+// nothing captured has no saved part however often it suspends, one
+// that leaves operands, handlers or captures makes it once, and a
+// generator that finishes lets it go. Each resumption runs as its tree
+// and in the interpreter, which make the same saved part.
+func TestGeneratorSavedPart(t *testing.T) {
+	defer SetTreeTier(true)
+	if unsafe.Sizeof(uintptr(0)) != 8 {
+		t.Skip("sizes of a 64-bit build")
+	}
+	if n := unsafe.Sizeof(generatorVals[[2]Value]{}); n != 184 {
+		t.Errorf("a generator of two values is %d bytes, want 184", n)
+	}
+	if n := unsafe.Sizeof(generator{}); n != 96 {
+		t.Errorf("a generator's state is %d bytes, want 96", n)
+	}
+	for _, tt := range []struct {
+		src string
+		// saved says whether the generator has a saved part after each
+		// next(), the last of which finishes it.
+		saved []bool
+		// stack is the operands saved after each next() where saved.
+		stack []int
+	}{
+		{`(function* () { for (var i = 0; i < 3; i++) yield i })`, []bool{false, false, false, false}, nil},
+		{`(function* () { var a = [1, (yield 0), (yield 1)]; yield a })`, []bool{true, true, true, false}, []int{1, 2, 0}},
+		{`(function* () { try { yield 1; yield 2 } finally { } })`, []bool{true, true, false}, []int{0, 0}},
+		{`(function* () { var x = 1; yield () => x; yield 2 })`, []bool{true, true, false}, []int{0, 0}},
+		{`(function* () { for (const x of [1, 2]) yield x })`, []bool{true, true, false}, []int{1, 1}},
+		{`(function* (a, f = () => a) { yield f() })`, []bool{true, false}, []int{0}},
+	} {
+		for _, on := range []bool{false, true} {
+			SetTreeTier(on)
+			r := New(Config{})
+			fn, err := r.Run(compileForTest(t, tt.src))
+			if err != nil {
+				t.Fatal(err)
+			}
+			gv, err := r.call(fn, Undefined, []Value{Int(1)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			g := genOf(gv.Object())
+			var first *genSaved
+			for i, want := range tt.saved {
+				if _, _, err := r.resume(g, Int(i), resumeNext); err != nil {
+					t.Fatalf("%s: %v", tt.src, err)
+				}
+				if got := g.saved != nil; got != want {
+					t.Errorf("tree %v, %s, next %d: saved part %v, want %v", on, tt.src, i, got, want)
+					continue
+				}
+				if g.saved == nil {
+					continue
+				}
+				if first == nil {
+					first = g.saved
+				} else if g.saved != first {
+					t.Errorf("tree %v, %s, next %d: the saved part made again", on, tt.src, i)
+				}
+				if n := len(g.saved.stack); n != tt.stack[i] {
+					t.Errorf("tree %v, %s, next %d: %d operands saved, want %d", on, tt.src, i, n, tt.stack[i])
+				}
+			}
+			if g.state != genCompleted {
+				t.Errorf("tree %v, %s: not finished", on, tt.src)
+			}
+			r.Close()
+		}
+	}
+}
+
 // A generator or an async function whose parameters are bound at its call
 // and whose body reads no arguments after -- no arguments object, no
 // direct eval, a prologue of end_params alone -- keeps only its locals:
@@ -122,7 +200,7 @@ func TestGeneratorArgsKept(t *testing.T) {
 				// An async function's generator is not seen: its result is.
 				res = p.value
 			} else {
-				g := v.Object().dataOf().(*generator)
+				g := genOf(v.Object())
 				if g.nargs != tt.nargs || len(g.vals) != tt.vals {
 					t.Errorf("%s: %d arguments of %d values kept, want %d of %d", tt.decl, g.nargs, len(g.vals), tt.nargs, tt.vals)
 				}

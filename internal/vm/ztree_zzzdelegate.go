@@ -49,10 +49,7 @@ func init() {
 			it.class != ClassGenerator {
 			return false
 		}
-		g, ok := it.dataOf().(*generator)
-		if !ok {
-			return false
-		}
+		g := genOf(it)
 		r := c.r
 		st.delegation = true
 		// As stepIter, the delegate's next has its frame, which a stack

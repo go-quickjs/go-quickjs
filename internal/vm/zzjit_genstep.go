@@ -140,8 +140,12 @@ func (r *Runtime) jitGenStepSeen(e *jitEntry, cl *closure, pc int, cursor Value)
 		st.next.ref != unsafe.Pointer(r.genNextFn) || cl == nil {
 		return
 	}
-	g, ok := st.iter.Object().dataOf().(*generator)
-	if !ok || g.cl == nil || g.cl.env != cl.env || g.cl.realm != cl.realm || g.cl.realm != nil && g.cl.realm != r.Realm ||
+	it := st.iter.Object()
+	if it.class != ClassGenerator {
+		return
+	}
+	g := genOf(it)
+	if g.cl == nil || g.cl.env != cl.env || g.cl.realm != cl.realm || g.cl.realm != nil && g.cl.realm != r.Realm ||
 		!jitGenCallable(g.cl.fn) {
 		return
 	}
@@ -221,7 +225,7 @@ func (r *Runtime) jitGenFrame(l *jitNativeLevel, c *abi.Context, past bool) *fra
 		f.pc++
 	}
 	f.this, f.callee, f.args = g.this, g.callee, g.vals[:g.nargs:g.nargs]
-	f.handlers, f.openUpvalues = g.handlers, g.openUpvalues
+	f.handlers, f.openUpvalues = g.savedHandlers(), g.savedUpvalues()
 	g.frameRare(f)
 	f.native, f.savedSP, f.paramsOnly = "", 0, false
 	tc := &f.tc
@@ -258,10 +262,7 @@ func (r *Runtime) jitGenDone(f *frame, l *jitNativeLevel, v Value, err error) (V
 	}()
 	if s, ok := err.(*suspendSignal); ok {
 		g.pc = f.pc
-		if g.stack = g.stack[:0]; f.savedSP > f.base {
-			g.stack = append(g.stack, r.stack[f.base:f.savedSP]...)
-		}
-		g.handlers, g.openUpvalues = f.handlers, f.openUpvalues
+		g.keep(r.stack[f.base:max(f.savedSP, f.base)], f.handlers, f.openUpvalues)
 		g.saveWith(f.withScopes)
 		g.delegating, g.state, g.started = s.delegate, genSuspendedYield, true
 		// A yield's: the generator has no yield* (jitGenCallable), whose
@@ -273,7 +274,7 @@ func (r *Runtime) jitGenDone(f *frame, l *jitNativeLevel, v Value, err error) (V
 	for _, u := range f.openUpvalues {
 		u.close()
 	}
-	g.state, g.stack = genCompleted, g.stack[:0]
+	g.state, g.saved = genCompleted, nil
 	l.cursor.done = true
 	switch {
 	case err != nil:

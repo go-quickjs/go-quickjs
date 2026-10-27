@@ -461,16 +461,28 @@ func (m *memoryMeter) object(o *Object) {
 	if refs := o.weakMapRefsOf(); refs != nil {
 		m.weakMapRefs(refs)
 	}
-	if o.dataOf() != nil && o.class != ClassArray {
-		m.values = append(m.values, reflect.ValueOf(o.dataOf()))
-	}
-	// A cursor's state is in its object's allocation rather than its data,
-	// and a for-in's snapshot after it.
-	if o.class == ClassCursor {
+	m.data(o)
+}
+
+// data visits o's internal slots: its data, or what a cursor or a
+// generator keeps in its allocation instead -- a cursor's state, and a
+// for-in's snapshot after it, or a generator.
+//
+//go:noinline
+func (m *memoryMeter) data(o *Object) {
+	switch o.class {
+	case ClassGenerator:
+		m.values = append(m.values, reflect.ValueOf(genOf(o)))
+	case ClassCursor:
 		st := &(*iterObject)(unsafe.Pointer(o)).st
 		m.values = append(m.values, reflect.ValueOf(st))
 		if st.forIn {
 			m.values = append(m.values, reflect.ValueOf(st.forInOf()))
+		}
+	case ClassArray:
+	default:
+		if d := o.dataOf(); d != nil {
+			m.values = append(m.values, reflect.ValueOf(d))
 		}
 	}
 }

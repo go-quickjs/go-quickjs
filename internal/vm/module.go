@@ -716,7 +716,7 @@ func (r *Runtime) executeAsyncModule(m *Module) error {
 	if err != nil {
 		return err
 	}
-	promise := r.runAsync(gen.dataOf().(*generator))
+	promise := r.runAsync(genOf(gen))
 	onFulfilled := r.newNativeFunc("", 0, func(rt *Runtime, _ Value, _ []Value) (Value, error) {
 		rt.asyncModuleFulfilled(m)
 		return Undefined, nil

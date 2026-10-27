@@ -532,9 +532,9 @@ func TestMirEmitted(t *testing.T) {
 	genEnc := enc
 	genEnc.IterState, genEnc.ClassCursor, genEnc.IterDone, genEnc.IterArr, genEnc.IterIdx, genEnc.IterIter, genEnc.IterNext = 56, 30, 8, 16, 24, 32, 48
 	genEnc.ObjectExt, genEnc.ObjectData, genEnc.ObjectElems = 40, 8, 64
-	genEnc.GenData, genEnc.GenClosure, genEnc.GenThis, genEnc.GenVals, genEnc.GenArgs = 0x2222, 0, 8, 24, 48
-	genEnc.GenStack, genEnc.GenPC, genEnc.GenHandlers, genEnc.GenRare = 56, 80, 88, 112
-	genEnc.GenState, genEnc.GenStarted, genEnc.GenDelegating = 120, 121, 122
+	genEnc.GenObject, genEnc.ClassGenerator, genEnc.GenClosure, genEnc.GenThis, genEnc.GenVals, genEnc.GenArgs = 56, 21, 0, 8, 24, 48
+	genEnc.GenPC, genEnc.GenSaved, genEnc.GenRare, genEnc.SavedStack, genEnc.SavedHandlers = 52, 56, 64, 0, 24
+	genEnc.GenState, genEnc.GenStarted, genEnc.GenDelegating = 88, 89, 90
 	genEnc.GenSuspendedYield, genEnc.GenExecuting, genEnc.GenCompleted = 1, 2, 3
 	genEnc.ClosureFn, genEnc.ClosureEnv, genEnc.ClosureRealm, genEnc.ClosureUpvalues = 0, 8, 16, 24
 	genEnc.LinkIn, genEnc.LinkGen, genEnc.WriteBarrier, genEnc.CallGo = 16, 72, 0x71000, 0x72000

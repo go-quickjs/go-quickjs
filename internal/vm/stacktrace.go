@@ -478,7 +478,7 @@ func (r *Runtime) typeName(fr *stackFrame) string {
 		return fd.name
 	}
 	if o.class == ClassGenerator {
-		if g, ok := o.dataOf().(*generator); ok && g.callee != nil {
+		if g := genOf(o); g.callee != nil {
 			if fd := g.callee.fn(); fd != nil && fd.name != "" && fd.name != "Object" {
 				return fd.name
 			}

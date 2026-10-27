@@ -1120,23 +1120,28 @@ type Encoding struct {
 	MapKeys, MapValues                              uint8
 	MapDeleted                                      uint64
 	// A for...of over a generator has the generator object at IterIter,
-	// whose data's type word is GenData (0 where native code resumes
-	// none): the VM's generator, which native code resumes where it is
-	// (ssa.CallSite's Gens). Its closure is the pointer at GenClosure, its
-	// receiver the value at GenThis; its locals follow its GenArgs
-	// arguments (a uint32) in the slice at GenVals; the operands saved at
-	// its suspension are the slice at GenStack; the uint32 at GenPC is
-	// where it goes on, the slice at GenHandlers the handlers then in
-	// force, and the pointer at GenRare what few generators need. Its
-	// state is the byte at GenState -- GenSuspendedStart, GenSuspendedYield,
-	// GenExecuting or GenCompleted -- the byte at GenStarted is set once
-	// its body has begun, and the one at GenDelegating while it is
-	// suspended in a yield*. Native code writes its state, its place and
-	// the operands it saves, and the lengths of the operands and the
+	// an object of class ClassGenerator whose VM generator is GenObject
+	// bytes past it, in its allocation (0 where native code resumes
+	// none), which native code resumes where it is (ssa.CallSite's Gens).
+	// Its closure is the pointer at GenClosure, its receiver the value at
+	// GenThis; its locals follow its GenArgs arguments (a uint32) in the
+	// slice at GenVals; the uint32 at GenPC is where it goes on, and the
+	// pointer at GenRare what few generators need. What its last
+	// suspension left besides its place is at the pointer at GenSaved, nil
+	// where none ever left anything: the operands saved there are the
+	// slice at SavedStack, the handlers then in force the slice at
+	// SavedHandlers. Its state is the byte at GenState --
+	// GenSuspendedStart, GenSuspendedYield, GenExecuting or GenCompleted
+	// -- the byte at GenStarted is set once its body has begun, and the
+	// one at GenDelegating while it is suspended in a yield*. Native code
+	// writes its state and its place, and in what its saved part points
+	// to, the operands it saves and the lengths of the operands and the
 	// handlers.
-	GenData                               uint64
+	GenObject                             int32
+	ClassGenerator                        uint8
 	GenClosure, GenThis, GenVals, GenArgs int32
-	GenStack, GenPC, GenHandlers, GenRare int32
+	GenPC, GenRare, GenSaved              int32
+	SavedStack, SavedHandlers             int32
 	GenState, GenStarted, GenDelegating   int32
 	GenSuspendedStart, GenSuspendedYield  uint8
 	GenExecuting, GenCompleted            uint8

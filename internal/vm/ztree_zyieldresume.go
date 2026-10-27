@@ -41,9 +41,10 @@ func init() {
 		// value sent in, which is the yield's or the await's. What starts
 		// the body is sent nowhere.
 		sp := base
-		if len(g.stack) != 0 {
-			copy(r.stack[base:], g.stack)
-			sp += len(g.stack)
+		saved := g.saved
+		if saved != nil && len(saved.stack) != 0 {
+			copy(r.stack[base:], saved.stack)
+			sp += len(saved.stack)
 		}
 		if g.started {
 			r.stack[sp] = sent
@@ -78,8 +79,11 @@ func init() {
 		f.this = g.this
 		f.callee = g.callee
 		f.args = g.vals[:g.nargs:g.nargs]
-		f.handlers = g.handlers
-		f.openUpvalues = g.openUpvalues
+		if saved != nil {
+			f.handlers, f.openUpvalues = saved.handlers, saved.openUpvalues
+		} else {
+			f.handlers, f.openUpvalues = nil, nil
+		}
 		if x := g.rare; x != nil {
 			f.newTarget, f.thisRef, f.evalVars, f.withScopes = x.newTarget, x.thisRef, x.evalVars, x.withScopes
 		} else {
@@ -113,11 +117,9 @@ func init() {
 		}
 		// Suspended again: what finishResume saves, and the frame let go.
 		g.pc = f.pc
-		if g.stack = g.stack[:0]; f.savedSP > base {
-			g.stack = append(g.stack, r.stack[base:f.savedSP]...)
+		if saved != nil || f.savedSP > base || len(f.handlers) != 0 || len(f.openUpvalues) != 0 {
+			g.keep(r.stack[base:max(f.savedSP, base)], f.handlers, f.openUpvalues)
 		}
-		g.handlers = f.handlers
-		g.openUpvalues = f.openUpvalues
 		// The with scopes are what the frame was given: the tier builds no
 		// with statement, which is all that changes them.
 		g.delegating = s.delegate

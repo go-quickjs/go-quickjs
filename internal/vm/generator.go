@@ -2,6 +2,7 @@ package vm
 
 import (
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
@@ -39,10 +40,10 @@ const (
 // generator holds a suspended generator's state.
 //
 // One is made at every call of a generator or an async function, so what
-// few of them need is kept apart, in rare, and the arguments and the locals
-// share one slice: the object and its generator then fit a smaller size
-// class, with room for a small function's values beside them (see
-// newGenerator).
+// few of them need is kept apart, in rare, what a suspension leaves but
+// for its place in saved, and the arguments and the locals share one
+// slice: the object and its generator then fit a smaller size class, with
+// room for a small function's values beside them (see newGenerator).
 type generator struct {
 	cl     *closure
 	this   Value
@@ -51,17 +52,17 @@ type generator struct {
 	// vals is the arguments, nargs of them, and then the locals: see args
 	// and locals. It is heap-allocated so that upvalues captured by closures
 	// created inside the generator survive suspension.
-	vals []Value
-	// stack holds the operand stack contents at the point of suspension.
-	stack    []Value
-	pc       uint32
-	nargs    uint32
-	handlers []handler
-	// openUpvalues carries the captures across a suspension, so that two
-	// closures made in different resumptions still share a binding.
-	openUpvalues []*upvalue
+	vals  []Value
+	pc    uint32
+	nargs uint32
+	// saved is what the last suspension left besides its place -- the
+	// operands, the handlers in force, the captures -- or nil where it has
+	// never left any (see keep).
+	saved *genSaved
 	// rare is what only some generators need, or nil.
 	rare *genRare
+	// promise is the async function's result promise.
+	promise *Object
 
 	state genState
 	// started marks a generator whose body has begun, which decides whether a
@@ -76,8 +77,77 @@ type generator struct {
 	// async marks a generator that backs an async function, whose suspensions
 	// are awaits rather than yields.
 	async bool
-	// promise is the async function's result promise.
-	promise *Object
+}
+
+// genSaved is what a generator's suspension leaves for its next
+// resumption besides its place, made by the first that leaves any: most
+// suspend with nothing beneath the value, inside no try statement, with
+// nothing captured.
+type genSaved struct {
+	// stack holds the operand stack contents at the point of suspension,
+	// in stackRoom where there are few.
+	stack []Value
+	// handlers is the handlers in force there.
+	handlers []handler
+	// openUpvalues carries the captures across a suspension, so that two
+	// closures made in different resumptions still share a binding.
+	openUpvalues []*upvalue
+	stackRoom    [2]Value
+}
+
+// noneSaved is the saved part of a generator that has none, which
+// nothing writes.
+var noneSaved genSaved
+
+// savedStack is the operands g's last suspension left.
+func (g *generator) savedStack() []Value {
+	if s := g.saved; s != nil {
+		return s.stack
+	}
+	return nil
+}
+
+// savedHandlers is the handlers in force where g last suspended.
+func (g *generator) savedHandlers() []handler {
+	if s := g.saved; s != nil {
+		return s.handlers
+	}
+	return nil
+}
+
+// savedUpvalues is the captures of g's locals its frames have made.
+func (g *generator) savedUpvalues() []*upvalue {
+	if s := g.saved; s != nil {
+		return s.openUpvalues
+	}
+	return nil
+}
+
+// keep saves what a suspension of g leaves for its next resumption: ops,
+// the operands beneath what it suspended with, which it copies, and the
+// handlers and captures its frame had, which g takes over (see
+// detachSuspended). g's saved part is made where one of them is the first
+// thing left.
+//
+//go:noinline
+func (g *generator) keep(ops []Value, hs []handler, ups []*upvalue) {
+	s := g.saved
+	if s == nil {
+		if len(ops) == 0 && len(hs) == 0 && len(ups) == 0 {
+			return
+		}
+		s = &genSaved{}
+		s.stack = s.stackRoom[:0]
+		g.saved = s
+	}
+	s.stack = append(s.stack[:0], ops...)
+	s.handlers, s.openUpvalues = hs, ups
+}
+
+// genOf is the generator of o, an object of class ClassGenerator: the
+// generator follows it in its generatorObject.
+func genOf(o *Object) *generator {
+	return &(*generatorObject)(unsafe.Pointer(o)).g
 }
 
 // genRare is what a generator needs only where it is an async generator,
@@ -330,16 +400,16 @@ func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Ob
 		}
 	}
 	gobj.proto = proto
-	gobj.embedExt(&gobj.side)
-	gobj.side.data = g
 	return &gobj.Object, nil
 }
 
 // generatorObject is a generator's object and its state, made together.
+// The object has no ext, its class saying where the state is (genOf):
+// one of a generator would be an ext of its own, as an ordinary object's
+// is (extOf).
 type generatorObject struct {
 	Object
-	side objectExt
-	g    generator
+	g generator
 }
 
 // generatorVals is a generatorObject and the arguments and locals of a
@@ -393,7 +463,7 @@ func (r *Runtime) bindGeneratorParams(g *generator) error {
 	_, err := r.executeAt(f, base, nil)
 	// The body resumes where the prologue stopped.
 	g.pc = f.pc
-	g.openUpvalues = f.openUpvalues
+	g.keep(nil, nil, f.openUpvalues)
 	g.saveWith(f.withScopes)
 	f.detachSuspended()
 
@@ -407,11 +477,7 @@ func (r *Runtime) generatorOf(this Value, name string) (*generator, error) {
 	if !this.IsObject() || this.Object().class != ClassGenerator {
 		return nil, r.throwTypeError("%s called on an incompatible receiver", name)
 	}
-	g, ok := this.Object().dataOf().(*generator)
-	if !ok {
-		return nil, r.throwTypeError("%s called on an uninitialized generator", name)
-	}
-	return g, nil
+	return genOf(this.Object()), nil
 }
 
 // asyncGeneratorOf is generatorOf for the asynchronous methods, which a
@@ -578,18 +644,7 @@ func (r *Runtime) resumeFrame(g *generator, sent Value, mode resumeMode) (resume
 	if r.frameDepth >= r.maxFrames {
 		return resumeResult{value: Undefined, how: resumeDone}, r.throwRangeError("maximum call stack size exceeded")
 	}
-	if mode == resumeReturn && g.state == genSuspendedYield && returnsAtOnce(r, g) {
-		// A return at a yield that nothing between it and the top of the
-		// body sees -- no finally, no loop's iterator to close -- finishes
-		// the generator as its frame would, without one: what runGenerator
-		// does for it is to find neither, and finishResume to close the
-		// captures.
-		for _, u := range g.openUpvalues {
-			u.close()
-		}
-		g.openUpvalues = nil
-		g.state = genCompleted
-		g.stack = g.stack[:0]
+	if mode == resumeReturn && g.state == genSuspendedYield && returnAtOnce(r, g) {
 		return resumeResult{value: sent, how: resumeDone}, nil
 	}
 
@@ -605,9 +660,13 @@ func (r *Runtime) resumeFrame(g *generator, sent Value, mode resumeMode) (resume
 
 	// Restore the operand stack from the previous suspension.
 	sp := base
-	if len(g.stack) != 0 {
-		copy(r.stack[base:], g.stack)
-		sp += len(g.stack)
+	saved := g.saved
+	if saved == nil {
+		saved = &noneSaved
+	}
+	if len(saved.stack) != 0 {
+		copy(r.stack[base:], saved.stack)
+		sp += len(saved.stack)
 	}
 
 	// The frame is set field by field, as runFD sets a call's: a frame is
@@ -621,8 +680,7 @@ func (r *Runtime) resumeFrame(g *generator, sent Value, mode resumeMode) (resume
 	f.this = g.this
 	f.callee = g.callee
 	f.args = g.args()
-	f.handlers = g.handlers
-	f.openUpvalues = g.openUpvalues
+	f.handlers, f.openUpvalues = saved.handlers, saved.openUpvalues
 	g.frameRare(f)
 	if f.native != "" {
 		f.native = ""
@@ -666,20 +724,33 @@ func (r *Runtime) resumeFrame(g *generator, sent Value, mode resumeMode) (resume
 	return r.runGeneratorFrom(g, f, base, sp, sent, nil)
 }
 
-// returnsAtOnce reports whether a return injected at g's yield finishes g
-// with nothing run: g is not inside a yield*, which forwards it, has no
-// handler in force, of which a finally would run, and has no loop's cursor
-// on its stack, whose iterator would be closed; and nothing could see a
-// frame -- the runtime is not stopped, nor watched by a debugger.
-func returnsAtOnce(r *Runtime, g *generator) bool {
-	if g.delegating || len(g.handlers) != 0 || r.stopped != nil || r.debug != nil {
+// returnAtOnce finishes g, suspended at a yield, as a return injected
+// there would, where that runs nothing, and reports whether it did: g is
+// not inside a yield*, which forwards it, has no handler in force, of
+// which a finally would run, and has no loop's cursor on its stack, whose
+// iterator would be closed; and nothing could see a frame -- the runtime
+// is not stopped, nor watched by a debugger. It finishes g as its frame
+// would, without one: what runGenerator does for the return is to find
+// neither, and finishResume to close the captures.
+func returnAtOnce(r *Runtime, g *generator) bool {
+	if g.delegating || r.stopped != nil || r.debug != nil {
 		return false
 	}
-	for _, v := range g.stack {
-		if cursorOf(v) != nil {
+	if s := g.saved; s != nil {
+		if len(s.handlers) != 0 {
 			return false
 		}
+		for _, v := range s.stack {
+			if cursorOf(v) != nil {
+				return false
+			}
+		}
+		for _, u := range s.openUpvalues {
+			u.close()
+		}
+		g.saved = nil
 	}
+	g.state = genCompleted
 	return true
 }
 
@@ -713,11 +784,7 @@ func (r *Runtime) finishResume(g *generator, f *frame, base int,
 	if sig, ok := err.(*suspendSignal); ok {
 		// Save everything the next resumption needs and release the window.
 		g.pc = f.pc
-		if g.stack = g.stack[:0]; f.savedSP > base {
-			g.stack = append(g.stack, r.stack[base:f.savedSP]...)
-		}
-		g.handlers = f.handlers
-		g.openUpvalues = f.openUpvalues
+		g.keep(r.stack[base:max(f.savedSP, base)], f.handlers, f.openUpvalues)
 		g.saveWith(f.withScopes)
 		g.delegating = sig.delegate
 		g.state = genSuspendedYield
@@ -734,7 +801,7 @@ func (r *Runtime) finishResume(g *generator, f *frame, base int,
 	}
 
 	g.state = genCompleted
-	g.stack = g.stack[:0]
+	g.saved = nil
 	r.releaseGeneratorFrame(g, base)
 	if err != nil {
 		return resumeResult{value: Undefined, how: resumeDone}, err

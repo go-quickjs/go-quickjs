@@ -2580,8 +2580,12 @@ func (c *a64Compiler) genericCheck(v *ssa.Value, site *ssa.CallSite, target int,
 }
 
 // objectPart is amd64's: what an object of class cls keeps off bytes
-// past it, into dst. It uses t too.
+// past it, into dst. It uses t too, which must not be obj: the class read
+// into it had made obj the class's number, and dst a field of address 21.
 func (c *a64Compiler) objectPart(dst, obj, t arm64.Reg, cls uint8, off int32, fail func(arm64.Cond)) {
+	if t == obj {
+		panic("mir: objectPart's scratch register is its object's")
+	}
 	c.a.LoadU8(t, obj, c.enc.ObjectClass)
 	c.a.CmpImm(t, int64(cls), false)
 	fail(arm64.NE)
@@ -3106,9 +3110,21 @@ func (c *a64Compiler) genEntry() {
 		skip := c.a.NewLabel()
 		c.a.CmpImm(t, int64(gr.PC), false)
 		c.a.BCond(arm64.NE, skip)
-		c.a.Load(u, g, c.enc.GenStack+8)
-		c.a.CmpImm(u, int64(gr.Saved), true)
-		c.a.BCond(arm64.NE, miss)
+		// As amd64's: as many saved operands as the entry's, none where
+		// it has no saved part.
+		c.a.Load(u, g, c.enc.GenSaved)
+		if gr.Saved == 0 {
+			none := c.a.NewLabel()
+			c.a.Cbz(u, none, true)
+			c.a.Load(u, u, c.enc.SavedStack+8)
+			c.a.Cbnz(u, miss, true)
+			c.a.Bind(none)
+		} else {
+			c.a.Cbz(u, miss, true)
+			c.a.Load(u, u, c.enc.SavedStack+8)
+			c.a.CmpImm(u, int64(gr.Saved), true)
+			c.a.BCond(arm64.NE, miss)
+		}
 		c.a.LoadU8(u, g, c.enc.GenStarted)
 		c.a.CmpImm(u, int64(b2i(gr.Started)), false)
 		c.a.BCond(arm64.NE, miss)
@@ -3171,7 +3187,8 @@ func (c *a64Compiler) genFrame(gr ssa.GenResume, blk *ssa.Block) {
 	}
 	// The operands its suspension saved, and on them the value sent in.
 	if gr.Saved > 0 {
-		c.a.Load(u, g, c.enc.GenStack)
+		c.a.Load(u, g, c.enc.GenSaved)
+		c.a.Load(u, u, c.enc.SavedStack)
 		for i := range int32(gr.Saved) {
 			for _, w := range [2]int32{c.enc.NumOffset, c.enc.RefOffset} {
 				c.a.Load(a64A, u, i*vs+w)
@@ -3205,10 +3222,22 @@ func (c *a64Compiler) yieldExit(b *ssa.Block) {
 	c.a.Load(a64A, a64Ctx, abi.OffRecords)
 	c.a.Cbnz(a64A, toGo, true)
 	saved, n := int32(s.Depth-1), int32(len(hs))
+	// As amd64's: the generator's saved part, which Go makes where it has
+	// none and the yield leaves anything.
 	c.a.Load(a64B, a64Ctx, abi.OffGenObject)
+	c.a.Load(a64B, a64B, c.enc.GenSaved)
+	if n > 0 || saved > 0 {
+		c.a.Cbz(a64B, toGo, true)
+	} else {
+		none := c.a.NewLabel()
+		c.a.Cbz(a64B, none, true)
+		c.a.Store(a64B, c.enc.SavedStack+8, arm64.ZR)
+		c.a.Store(a64B, c.enc.SavedHandlers+8, arm64.ZR)
+		c.a.Bind(none)
+	}
 	if n > 0 {
 		// Room where the generator keeps its handlers.
-		c.a.Load(a64C, a64B, c.enc.GenHandlers+16)
+		c.a.Load(a64C, a64B, c.enc.SavedHandlers+16)
 		c.a.CmpImm(a64C, int64(n), true)
 		c.a.BCond(arm64.LO, toGo)
 	}
@@ -3218,10 +3247,10 @@ func (c *a64Compiler) yieldExit(b *ssa.Block) {
 		c.movImm(a64C, c.enc.WriteBarrier)
 		c.a.LoadU8(a64C, a64C, 0)
 		c.a.Cbnz(a64C, toGo, false)
-		c.a.Load(a64C, a64B, c.enc.GenStack+16)
+		c.a.Load(a64C, a64B, c.enc.SavedStack+16)
 		c.a.CmpImm(a64C, int64(saved), true)
 		c.a.BCond(arm64.LO, toGo)
-		c.a.Load(a64C, a64B, c.enc.GenStack)
+		c.a.Load(a64C, a64B, c.enc.SavedStack)
 		for i := range saved {
 			for _, w := range [2]int32{c.enc.NumOffset, c.enc.RefOffset} {
 				c.a.Load(a64A, a64Stack, i*vs+w)
@@ -3229,23 +3258,26 @@ func (c *a64Compiler) yieldExit(b *ssa.Block) {
 			}
 		}
 	}
-	c.movImm(a64A, uint64(saved))
-	c.a.Store(a64B, c.enc.GenStack+8, a64A)
-	if n > 0 {
-		// The handlers in force, no pointers among their words.
-		c.a.Load(a64C, a64B, c.enc.GenHandlers)
-		for i, h := range hs {
-			at := int32(i) * c.enc.HandlerSize
-			c.a.MovImm(a64A, uint64(h.PC))
-			c.a.Store32(a64C, at+c.enc.HandlerPC, a64A)
-			c.movImm(a64A, uint64(int64(h.Depth)))
-			c.a.Store(a64C, at+c.enc.HandlerDepth, a64A)
-			c.a.MovImm(a64A, uint64(b2i(h.Finally)))
-			c.a.Store8(a64C, at+c.enc.HandlerFinally, a64A)
+	if n > 0 || saved > 0 {
+		c.movImm(a64A, uint64(saved))
+		c.a.Store(a64B, c.enc.SavedStack+8, a64A)
+		if n > 0 {
+			// The handlers in force, no pointers among their words.
+			c.a.Load(a64C, a64B, c.enc.SavedHandlers)
+			for i, h := range hs {
+				at := int32(i) * c.enc.HandlerSize
+				c.a.MovImm(a64A, uint64(h.PC))
+				c.a.Store32(a64C, at+c.enc.HandlerPC, a64A)
+				c.movImm(a64A, uint64(int64(h.Depth)))
+				c.a.Store(a64C, at+c.enc.HandlerDepth, a64A)
+				c.a.MovImm(a64A, uint64(b2i(h.Finally)))
+				c.a.Store8(a64C, at+c.enc.HandlerFinally, a64A)
+			}
 		}
+		c.movImm(a64A, uint64(n))
+		c.a.Store(a64B, c.enc.SavedHandlers+8, a64A)
 	}
-	c.movImm(a64A, uint64(n))
-	c.a.Store(a64B, c.enc.GenHandlers+8, a64A)
+	c.a.Load(a64B, a64Ctx, abi.OffGenObject)
 	c.a.MovImm(a64A, uint64(s.PC)+1)
 	c.a.Store32(a64B, c.enc.GenPC, a64A)
 	c.a.MovImm(a64A, uint64(c.enc.GenSuspendedYield))
@@ -3276,7 +3308,12 @@ func (c *a64Compiler) genFinish() {
 	c.a.Load(a64B, a64Ctx, abi.OffGenObject)
 	c.a.MovImm(a64A, uint64(c.enc.GenCompleted))
 	c.a.Store8(a64B, c.enc.GenState, a64A)
-	c.a.Store(a64B, c.enc.GenStack+8, arm64.ZR)
+	// Its saved operands none, where it has a saved part.
+	none := c.a.NewLabel()
+	c.a.Load(a64B, a64B, c.enc.GenSaved)
+	c.a.Cbz(a64B, none, true)
+	c.a.Store(a64B, c.enc.SavedStack+8, arm64.ZR)
+	c.a.Bind(none)
 	c.a.Load(a64C, a64Ctx, abi.OffGenCursor)
 	c.a.MovImm(a64A, 1)
 	c.a.Store8(a64C, c.enc.IterDone, a64A)
@@ -4769,7 +4806,7 @@ func (c *a64Compiler) genStep(v *ssa.Value, notGen, slow, done arm64.Label) {
 	c.a.Cmp(a64C, a64B, true)
 	fail(arm64.NE)
 	c.a.Load(a64C, a64D, c.enc.IterIter+c.enc.RefOffset)
-	c.objectData(a64B, a64C, a64C, c.enc.GenData, fail)
+	c.objectPart(a64B, a64C, a64A, c.enc.ClassGenerator, c.enc.GenObject, fail)
 	c.a.LoadU8(a64C, a64B, c.enc.GenState)
 	c.a.CmpImm(a64C, int64(c.enc.GenSuspendedYield), false)
 	fail(arm64.HI)

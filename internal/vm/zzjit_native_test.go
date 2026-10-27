@@ -1081,20 +1081,25 @@ func TestJITObjectLayout(t *testing.T) {
 		t.Fatal("an interface's words are not the type's and the pointer, as native code reads them")
 	}
 	// A generator a loop's step resumes natively (mir's genEntry,
-	// yieldExit): its state, begun and delegating bytes, its place and its
-	// arguments' count uint32s, its values, saved operands and handlers
-	// slices, and a handler's place a uint32, its depth an int and its kind
-	// a byte, which native code writes.
+	// yieldExit): its object's class a byte, the generator in the object's
+	// allocation; its state, begun and delegating bytes, its place and its
+	// arguments' count uint32s, its values slice, its saved part a
+	// pointer, whose saved operands and handlers are slices, and a
+	// handler's place a uint32, its depth an int and its kind a byte,
+	// which native code writes.
 	var g generator
+	var sv genSaved
 	var h handler
 	if unsafe.Sizeof(g.state) != 1 || unsafe.Sizeof(g.started) != 1 || unsafe.Sizeof(g.delegating) != 1 ||
 		unsafe.Sizeof(g.pc) != 4 || unsafe.Sizeof(g.nargs) != 4 || unsafe.Sizeof(g.vals) != 3*unsafe.Sizeof(uintptr(0)) ||
-		unsafe.Sizeof(g.stack) != 3*unsafe.Sizeof(uintptr(0)) || unsafe.Sizeof(g.handlers) != 3*unsafe.Sizeof(uintptr(0)) ||
-		unsafe.Sizeof(h.pc) != 4 || unsafe.Sizeof(h.stackDepth) != 8 || unsafe.Sizeof(h.isFinally) != 1 {
+		unsafe.Sizeof(g.saved) != unsafe.Sizeof(uintptr(0)) ||
+		unsafe.Sizeof(sv.stack) != 3*unsafe.Sizeof(uintptr(0)) || unsafe.Sizeof(sv.handlers) != 3*unsafe.Sizeof(uintptr(0)) ||
+		unsafe.Sizeof(h.pc) != 4 || unsafe.Sizeof(h.stackDepth) != 8 || unsafe.Sizeof(h.isFinally) != 1 || int(ClassGenerator) > 255 {
 		t.Fatal("a generator field native code reads or writes changed its width; update jitEncoding and mir")
 	}
-	if x = &g; jitTypeWord(x) != jitEncoding.GenData {
-		t.Fatal("a generator's data type word is not jitEncoding's")
+	var gobj generatorObject
+	if uintptr(unsafe.Pointer(genOf(&gobj.Object))) != uintptr(unsafe.Pointer(&gobj))+uintptr(jitEncoding.GenObject) {
+		t.Fatal("a generator is not where native code reads it")
 	}
 	// A derived constructor's this binding, which a call of an arrow that
 	// shares it reads (mir's arrowBound): its init a byte.
