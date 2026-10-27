@@ -719,6 +719,12 @@ type jitEntry struct {
 	// again for once the calls around them have been seen.
 	callSites     []uint8
 	inlinePending bool
+	// settling are the functions each call met at its exits before it was
+	// decided (callSites' count), by PC, one of each code: as V8's call
+	// feedback holds every target a call met before its function is
+	// optimized, one that met more than one function is polymorphic, made
+	// natively to each, not inlined for the one it met last (jitCallSeen).
+	settling []jitInline
 	// inlineReopt marks code to be compiled again for the calls found to
 	// inline, and inlineReopts counts the times it was, apart from reopts.
 	inlineReopt  bool
@@ -1257,7 +1263,7 @@ func jitCompiledBytes(shapes []*shape, holders []*Object, inlinedAt, definesUnfe
 func (e *jitEntry) learnedBytes() int {
 	n := jitCapBytes(e.failed) + jitCapBytes(e.failedEntries) + jitCapBytes(e.resumed) + jitCapBytes(e.bigints) + jitCapBytes(e.bigwide) + jitCapBytes(e.literals) + jitCapBytes(e.poly) + jitCapBytes(e.typedReads) +
 		jitCapBytes(e.stringReads) + jitCapBytes(e.keyedReads) + jitCapBytes(e.keyedWrites) + jitCapBytes(e.strSites) + jitCapBytes(e.bigSites) + jitCapBytes(e.numSites) + jitCapBytes(e.boolSites) + jitCapBytes(e.nativeCalls) + jitCapBytes(e.inlines) + jitCapBytes(e.notInline) +
-		jitCapBytes(e.nativeCallers) + jitCapBytes(e.callSites)
+		jitCapBytes(e.nativeCallers) + jitCapBytes(e.callSites) + jitCapBytes(e.settling)
 	for i := range e.poly {
 		p := &e.poly[i]
 		n += jitCapBytes(p.cases) + jitCapBytes(p.reads) + jitCapBytes(p.adds) + jitCapBytes(p.missed)

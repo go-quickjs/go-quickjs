@@ -3459,6 +3459,10 @@ func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 		return
 	case n+1 < settle:
 		e.callSites[pc]++
+		if o, cl := r.jitCalled(f, sp, in); cl != nil && !slices.ContainsFunc(e.settling, func(x jitInline) bool { return int(x.pc) == pc && jitSameCode(x.cl, cl) }) {
+			e.settling = append(e.settling, jitInline{pc: int32(pc), cl: cl, obj: o})
+			r.jit.account(e)
+		}
 		if e.inlinePending && n > 0 {
 			e.inlinePending, e.inlineReopt = false, true
 		}
@@ -3467,6 +3471,25 @@ func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 	e.callSites[pc] = jitCallDone
 	r.jit.callsDecided++
 	o, cl := r.jitCalled(f, sp, in)
+	// The other functions it met while it settled: a table of functions,
+	// a handler each object has its own of. Such a call is polymorphic,
+	// as V8's feedback has it, and is made natively to each of them, up to
+	// jitCallTargets, rather than inlined for the one it met last, which
+	// leaves for Go at every other (jitInlineLeft) -- in every caller that
+	// inlines this function with it, too. Octane's Game Boy emulator reads
+	// its memory through memoryHighReader[address](this, address): its
+	// memoryHighRead, inlined in the opcodes, inlined the one reader its
+	// call had met last, each other leaving for the interpreter.
+	var met []jitInline
+	for i := 0; i < len(e.settling); i++ {
+		if x := e.settling[i]; int(x.pc) == pc {
+			if cl != nil && !jitSameCode(x.cl, cl) {
+				met = append(met, x)
+			}
+			e.settling = slices.Delete(e.settling, i, i+1)
+			i--
+		}
+	}
 	if cl == nil {
 		if o, cl := r.jitCalledVia(f, sp, in); cl != nil {
 			// G.call(this, ...): G called natively, never inlined -- through
@@ -3553,7 +3576,7 @@ func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 		}
 		return
 	}
-	if cl.fn != f.cl.fn && r.jitInlinesAt(cl, o, in) {
+	if len(met) == 0 && cl.fn != f.cl.fn && r.jitInlinesAt(cl, o, in) {
 		e.inlines = append(e.inlines, r.jitInlineTarget(int32(pc), cl, o, in))
 		e.callSites[pc] = jitCallInlined
 		e.inlinePending = true
@@ -3587,6 +3610,15 @@ func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 		e.nativeCalls = append(e.nativeCalls, r.jitNativeTarget(int32(pc), cl, o, in))
 		e.callSites[pc] = jitCallNative
 		e.inlinePending = true
+	}
+	for _, x := range met {
+		if e.callSites[pc] != jitCallNative || jitCountAt(e.nativeCalls, pc) >= jitCallTargets {
+			// Past them, through its link (jitCallTarget).
+			break
+		}
+		if (in.Op != bytecode.OpNew || r.jitConstructs(x.obj)) && r.jitNativeOrLinked(x.cl) {
+			e.nativeCalls = append(e.nativeCalls, r.jitNativeTarget(int32(pc), x.cl, x.obj, in))
+		}
 	}
 }
 
