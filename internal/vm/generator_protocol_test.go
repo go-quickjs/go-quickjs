@@ -41,6 +41,26 @@ var generatorCases = []struct{ name, want, src string }{
 		`function* g(n) { for (var i = 0; i < n; i++) { if (i == 3) return 'r'; yield i } } var s = []; for (var v of g(10)) s.push(v); var it = g(2); s.push(JSON.stringify([...it]), JSON.stringify(it.next())); s.join()`},
 	{"treeStepBreakCloses", `1,ret`,
 		`var log = []; function* g() { yield 1; yield 2 } var it = g(); it.return = function () { log.push('ret'); return {} }; for (var v of it) { log.push(v); if (v == 1) break } log.join()`},
+	// A yield* in a body the tree's step resumes with no recover: its
+	// cursor a delegation's, which nothing closes; the kind of resumption
+	// pushed at its resumption; a delegate's own result, read as a loop
+	// reads one.
+	{"treeStepDelegates", `01201`,
+		`function* inner(n) { for (let i = 0; i < n; i++) yield i } function* outer(n) { yield* inner(n); yield* inner(2) } var s = ''; for (const v of outer(3)) s += v; s`},
+	{"treeStepDelegatesIterables", `12ab3`,
+		`function* outer() { yield* [1, 2]; yield* 'ab'; yield* new Set([3]) } var s = ''; for (const v of outer()) s += v; s`},
+	{"treeStepDelegatesRaw", `01z|ddvddvdv`,
+		`var log = []; var it = { [Symbol.iterator]() { return this }, i: 0, next() { return { get done() { log.push('d'); return it.i >= 2 }, get value() { log.push('v'); return it.i++ } } } }; function* outer() { yield* it; yield 'z' } var s = ''; for (const v of outer()) s += v; s + '|' + log.join('')`},
+	{"treeStepDelegateThrowsFinally", `1RangeError|fin,outer`,
+		`var log = []; function* inner() { try { yield 1; throw new RangeError('in') } finally { log.push('fin') } } function* outer() { try { yield* inner() } finally { log.push('outer') } } var s = ''; try { for (const v of outer()) s += v } catch (e) { s += e.name } s + '|' + log.join()`},
+	{"treeStepDelegateThrows", `1TypeError{"done":true}`,
+		`function* inner() { yield 1; null.x } function* outer() { yield* inner(); yield 'never' } var o = outer(), s = ''; try { for (const v of o) s += v } catch (e) { s += e.name } s + JSON.stringify(o.next())`},
+	{"treeStepDelegateBreak", `1|inner fin`,
+		`var log = []; function* inner() { try { yield 1; yield 2 } finally { log.push('inner fin') } } function* outer() { yield* inner() } var s = ''; for (const v of outer()) { s += v; break } s + '|' + log.join()`},
+	{"treeStepDelegatesNested", `123123`,
+		`function* a() { yield 1; yield 2 } function* b() { yield* a(); yield 3 } function* c() { yield* b(); yield* b() } var s = ''; for (const v of c()) s += v; s`},
+	{"treeStepDelegateResult", `1,,`,
+		`function* inner() { const x = yield 1; yield x } function* outer() { const r = yield* inner(); yield r } var s = []; for (const v of outer()) s.push(v); s.join()`},
 	{"treeStepSendsUndefined", `1,`,
 		`function* g() { var a = yield 1; yield a } var it = g(); var s = []; for (var v of it) s.push(v); s.join()`},
 	// What a suspension leaves besides its place -- the operands beneath

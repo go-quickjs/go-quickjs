@@ -64,7 +64,7 @@ func init() {
 		var err error
 		ran := false
 		if t := g.nextTree(); t != nil {
-			got, ran, err = resumeTree(r, g, t, sent)
+			got, ran, err = resumeTreeBare(r, g, t, sent)
 		}
 		if !ran {
 			got, err = r.resumeFull(g, sent, resumeNext)

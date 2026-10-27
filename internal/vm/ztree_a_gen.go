@@ -15,9 +15,10 @@ import (
 // resumeTree, runGeneratorTree and runTreeProtected, each of them
 // checking what the one before had, the last setting a recover so that
 // an exception the body throws finishes the generator before it goes on
-// out. Where the body has no handler and no loop's cursor of its own,
-// nothing in it catches an exception or has an iterator to close, and
-// the exception goes from the body straight to the loop's: the step runs
+// out. Where the body has no handler and no loop's cursor of its own -- a
+// yield*'s it may have, which no exception closes -- nothing in it
+// catches an exception or has an iterator to close, and the exception
+// goes from the body straight to the loop's: the step runs
 // the body's blocks with no recover of its own, as runTreeNested runs a
 // callee's, and lets the exception go on to the recover of the tree whose
 // loop it is (runTree, runTreeProtected), which unwinds the frames the
@@ -27,7 +28,10 @@ import (
 // before the body runs, so that the loop's unwinding does not close its
 // iterator, which threw; and the generator, executing in a tree's step
 // (generator.treeRun), is executing while its frame is on the stack and
-// finished once it is not (stillRunning).
+// finished once it is not (stillRunning). A yield*'s step of its delegate
+// in a tree (delegateNext) resumes the delegate so too (resumeTreeBare):
+// its exception goes on out of the delegating generator's body, which
+// does not close a delegation's cursor.
 //
 // Its functions are variables, each assigned a closure in init, as the
 // tree tier's are (see ztree_zyield.go). The file sorts before every other
@@ -48,6 +52,14 @@ var (
 	// false, having done nothing, where it cannot: the step is
 	// iterNext's.
 	stepGenTree func(c *tctx, st *iterState, g *generator, t *tree) (Value, bool, bool)
+
+	// resumeTreeBare is resumeTree for a yield*'s step of its delegate in
+	// a tree (delegateNext), whose exception goes on out of the delegating
+	// generator's body, as a loop's step's goes on out of the loop's:
+	// where the delegate's body allows (tgen.plain) and no JIT may run it,
+	// it runs with no recover of its own, left executing in a step
+	// (generator.treeRun) where it throws; resumeTree's otherwise.
+	resumeTreeBare func(r *Runtime, g *generator, t *tree, sent Value) (resumeResult, bool, error)
 
 	// stillRunning is the TypeError a resumption of g, executing, throws,
 	// or nil where g is a generator a tree's step resumed whose body threw
@@ -149,15 +161,24 @@ func init() {
 	}
 
 	genPlain = func(t *tree, fn *bytecode.Function) uint32 {
+		// A cursor a yield* starts, one for each, is a delegation's, which
+		// nothing an exception leaves closes (iterState.delegation): its
+		// first resumption marks it so, and nothing between its start and
+		// that can throw. Only a loop's is closed.
 		p := uint32(genPlainYes)
-		if t.gen.iters {
-			p = genPlainNo
-		}
+		starts, delegations := 0, 0
 		for _, in := range fn.Code {
-			if in.Op == bytecode.OpPushCatch || in.Op == bytecode.OpPushFinally {
+			switch in.Op {
+			case bytecode.OpPushCatch, bytecode.OpPushFinally, bytecode.OpForInStart, bytecode.OpForAwaitOfStart:
 				p = genPlainNo
-				break
+			case bytecode.OpForOfStart:
+				starts++
+			case bytecode.OpYieldStar:
+				delegations++
 			}
+		}
+		if t.gen.iters && starts != delegations {
+			p = genPlainNo
 		}
 		t.gen.plain.Store(p)
 		return p
@@ -206,7 +227,7 @@ func init() {
 		gn := r.genNextFn
 		cl := g.cl
 		fn := cl.fn
-		if gn == nil || st.next.ref != unsafe.Pointer(gn) || g.async || g.delegating ||
+		if gn == nil || st.next.ref != unsafe.Pointer(gn) || g.async ||
 			(cl.realm != nil && cl.realm != r.Realm) || r.stopped != nil || r.frameDepth+1 >= r.maxFrames {
 			return Undefined, false, false
 		}
@@ -256,6 +277,14 @@ func init() {
 		}
 		if g.started {
 			r.stack[sp] = Undefined
+			sp++
+		}
+		if g.delegating {
+			// Suspended inside a yield*, whose resumption is given the kind
+			// of resumption above the value, to forward to the delegate
+			// (see runDelegating).
+			g.delegating = false
+			r.stack[sp] = Int(int(resumeNext))
 			sp++
 		}
 		off = r.frameDepth - r.frameBase
@@ -333,19 +362,37 @@ func init() {
 		}
 		g.treeRun = false
 		if s, ok := err.(*suspendSignal); ok {
-			// Suspended at a yield, the body having no yield* (a loop's
-			// cursor): what resumeTree saves, and the frames let go.
+			// Suspended at a yield or a yield*: what resumeTree saves, and
+			// the frames let go.
 			g.pc = f.pc
 			if saved != nil || f.savedSP > base || len(f.handlers) != 0 || len(f.openUpvalues) != 0 {
 				g.keep(r.stack[base:max(f.savedSP, base)], f.handlers, f.openUpvalues)
 			}
+			g.delegating = s.delegate
 			g.state = genSuspendedYield
 			g.started = true
 			f.detachSuspended()
 			r.frameDepth -= 2
 			r.stackTop = base
 			v = s.value
+			raw := s.raw && v.IsObject()
 			s.value = Undefined
+			if raw {
+				// A delegate's own result, which a yield* hands out as it is:
+				// its done and value read as stepIter reads them, with the
+				// cursor done while they are, as iterNext leaves one whose
+				// result threw.
+				done, err := r.getValueProp(v, atomDone)
+				if err != nil {
+					c.throw(err)
+				}
+				if done.Truthy() {
+					return Undefined, false, true
+				}
+				if v, err = r.getValueProp(v, atomValue); err != nil {
+					c.throw(err)
+				}
+			}
 			st.done = false
 			return v, true, true
 		}
@@ -364,6 +411,124 @@ func init() {
 			c.throw(err)
 		}
 		return Undefined, false, true
+	}
+
+	resumeTreeBare = func(r *Runtime, g *generator, t *tree, sent Value) (resumeResult, bool, error) {
+		cl := g.cl
+		fn := cl.fn
+		p := t.gen.plain.Load()
+		if p == 0 {
+			p = genPlain(t, fn)
+		}
+		if p != genPlainYes || g.async || r.jitOn() || (cl.realm != nil && cl.realm != r.Realm) || r.stopped != nil ||
+			r.frameDepth >= r.maxFrames {
+			return resumeTree(r, g, t, sent)
+		}
+		base := r.stackTop
+		top := base + fn.MaxStack
+		if top > len(r.stack) {
+			return resumeResult{}, false, nil
+		}
+		r.stackTop = top
+		r.stackHigh = max(r.stackHigh, top)
+		// The frame, as resumeTree makes it.
+		sp := base
+		saved := g.saved
+		if saved != nil && len(saved.stack) != 0 {
+			copy(r.stack[base:], saved.stack)
+			sp += len(saved.stack)
+		}
+		if g.started {
+			r.stack[sp] = sent
+			sp++
+		}
+		if g.delegating {
+			g.delegating = false
+			r.stack[sp] = Int(int(resumeNext))
+			sp++
+		}
+		off := r.frameDepth - r.frameBase
+		if uint(off) >= uint(len(r.cur)) {
+			r.seekFrameBlock()
+			off = r.frameDepth - r.frameBase
+		}
+		r.frameDepth++
+		if r.frameDepth > r.frameHigh {
+			r.frameHigh = r.frameDepth
+		}
+		f := &r.cur[off]
+		locals := g.vals[g.nargs:]
+		f.cl = cl
+		f.locals = locals
+		f.base = base
+		f.pc = g.pc
+		f.this = g.this
+		f.callee = g.callee
+		f.args = g.vals[:g.nargs:g.nargs]
+		if saved != nil {
+			f.handlers, f.openUpvalues = saved.handlers, saved.openUpvalues
+		} else {
+			f.handlers, f.openUpvalues = nil, nil
+		}
+		if x := g.rare; x != nil {
+			f.newTarget, f.thisRef, f.evalVars, f.withScopes = x.newTarget, x.thisRef, x.evalVars, x.withScopes
+		} else {
+			f.newTarget, f.thisRef, f.evalVars, f.withScopes = Undefined, nil, nil, nil
+		}
+		if f.native != "" {
+			f.native = ""
+		}
+		if f.savedSP != 0 {
+			f.savedSP = 0
+		}
+		if f.paramsOnly {
+			f.paramsOnly = false
+		}
+		tc := &f.tc
+		tc.r, tc.f, tc.cl, tc.locals = r, f, cl, locals
+		tc.closureCode = cl.closureCode
+		tc.stack = r.stack[base:top]
+		g.state, g.treeRun = genExecuting, true
+		for b := t.gen.index[f.pc]; ; {
+			blk := &t.blocks[b]
+			for _, s := range blk.body {
+				s(tc)
+			}
+			if b = blk.next(tc); b < 0 {
+				break
+			}
+		}
+		g.treeRun = false
+		s := r.treeSuspend
+		if s == nil {
+			// Finished: as finishResume finishes it.
+			g.state = genCompleted
+			g.saved = nil
+			for _, u := range f.openUpvalues {
+				u.close()
+			}
+			f.detachSuspended()
+			r.frameDepth--
+			r.stackTop = base
+			return resumeResult{value: tc.ret, how: resumeDone}, true, nil
+		}
+		r.treeSuspend = nil
+		g.pc = f.pc
+		if saved != nil || f.savedSP > base || len(f.handlers) != 0 || len(f.openUpvalues) != 0 {
+			g.keep(r.stack[base:max(f.savedSP, base)], f.handlers, f.openUpvalues)
+		}
+		g.delegating = s.delegate
+		g.state = genSuspendedYield
+		g.started = true
+		f.detachSuspended()
+		r.frameDepth--
+		r.stackTop = base
+		res := resumeResult{value: s.value, how: suspendHow(s)}
+		if s.delegate && !s.raw {
+			res.realm = cl.realm
+		}
+		s.value = Undefined
+		return res, true, nil
 	}
 
 	stillRunning = func(r *Runtime, g *generator) error {

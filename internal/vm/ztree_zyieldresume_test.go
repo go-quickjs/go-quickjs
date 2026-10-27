@@ -288,3 +288,33 @@ var it = g(); var s = run(it); it`))
 		r.Close()
 	}
 }
+
+// TestTreeStepDelegates pins that a generator whose only cursors are its
+// yield*'s is one a tree's loop steps with no recover of the resumption's
+// own (ztree_a_gen.go's genPlain), and its delegate one its yield* steps
+// so (resumeTreeBare): an exception the delegate throws leaves both
+// executing in a step, each finished by its next resumption.
+func TestTreeStepDelegates(t *testing.T) {
+	defer SetTreeTier(true)
+	SetTreeTier(true)
+	r := New(Config{})
+	defer r.Close()
+	v, err := r.Run(compileForTest(t, `function* inner() { yield 1; null.x }
+var i; function* outer() { yield* (i = inner()); yield 'never' }
+function run(o) { var s = ''; try { for (var v of o) s += v } catch (e) { s += e.name } return s }
+var o = outer(); var s = run(o); [o, i]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair := v.Object().elemsOf()
+	for k, name := range []string{"delegating", "delegate"} {
+		g := genOf(pair[k].Object())
+		if g.state != genExecuting || !g.treeRun {
+			t.Errorf("the %s generator's state %d, treeRun %v; want it left executing in a step", name, g.state, g.treeRun)
+		}
+	}
+	v, err = r.Run(compileForTest(t, `s + JSON.stringify(o.next()) + JSON.stringify(i.next())`))
+	if got, _ := r.ToString(v); err != nil || got.Go() != `1TypeError{"done":true}{"done":true}` {
+		t.Errorf("got %v, %v", got, err)
+	}
+}
