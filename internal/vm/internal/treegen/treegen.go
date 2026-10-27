@@ -194,7 +194,7 @@ func Generate() ([]byte, error) {
 	w("		return nil")
 	w("	}")
 	w("	if a.imm {")
-	w("		return bitwiseImmStore(a.op, k, a.x, a.k, a.pc)")
+	w("		return bitwiseImmStoreAt(a.op, k, a.x, a.k, a.pc)")
 	w("	}")
 	w("	return arithStore(a.op, k, a.x, a.y, a.pc)")
 	w("}")

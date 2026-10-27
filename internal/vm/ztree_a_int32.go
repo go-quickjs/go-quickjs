@@ -40,7 +40,8 @@ import (
 // as before.
 //
 // ztree_a_int32elem.go reads and writes elements at int32 keys, and reads
-// an element under an operator as an int32.
+// an element under an operator as an int32; ztree_a_int32sum.go makes a
+// sum under an operator in place.
 //
 // The code is closures assigned in the inits of these files, which sort
 // before every other tree file with an init: their closures are laid out
@@ -235,6 +236,9 @@ func init() {
 				}
 			}
 		}
+		if f := i32Sum(op, x, k, pc); f != nil {
+			return f
+		}
 		t := x.tree()
 		switch op {
 		case bytecode.OpBitAnd:
@@ -388,6 +392,9 @@ func init() {
 
 	bitwiseImmTree = func(op bytecode.Op, x tentry, k int32, pc int) tval {
 		if !i32Sure(x) {
+			if i32Summed(x) {
+				return i32Value(i32Imm(op, x, k, pc), op == bytecode.OpUShr)
+			}
 			return bitwiseImmNode(op, x.tree(), k, pc)
 		}
 		p, _ := i32Of(x)

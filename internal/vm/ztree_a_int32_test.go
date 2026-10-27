@@ -3,6 +3,8 @@ package vm
 import (
 	"bytes"
 	"os"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"strings"
 	"testing"
 )
@@ -35,6 +37,33 @@ func TestInt32Trees(t *testing.T) {
 			t.Errorf("tree tier: %d int32 trees, %d element reads under an operator, %d int32-keyed reads built", ofs, elems, gets)
 		}
 		ofs, elems, gets = 0, 0, 0
+	})
+}
+
+// TestInt32Sums runs testdata/int32/sums.js, whose answers are Node's, on
+// the trees and in the interpreter: sums and differences under every
+// bitwise operator, of locals, constants -- integers, fractions, past
+// 2^52 -- and int32 trees, in both orders, as operands and stored to
+// locals; of every kind of value, strings concatenated before the
+// operator converts them; BigInts; valueOf and toString, once each and in
+// order; and zlib's longest_match loop. On the trees, the sums are made in
+// place (i32Sum).
+func TestInt32Sums(t *testing.T) {
+	sum := i32Sum
+	defer func() { i32Sum = sum }()
+	made := 0
+	i32Sum = func(op bytecode.Op, x tentry, k int32, pc int) ti32 {
+		f := sum(op, x, k, pc)
+		if f != nil {
+			made++
+		}
+		return f
+	}
+	runInt32Script(t, "sums", func(tree bool) {
+		if tree && made < 30 {
+			t.Errorf("tree tier: %d sums made in place", made)
+		}
+		made = 0
 	})
 }
 

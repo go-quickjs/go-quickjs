@@ -1012,7 +1012,7 @@ func storeArith(k uint32, e tentry) tstmt {
 		return nil
 	}
 	if a.imm {
-		return bitwiseImmStore(a.op, k, a.x, a.k, a.pc)
+		return bitwiseImmStoreAt(a.op, k, a.x, a.k, a.pc)
 	}
 	return arithStore(a.op, k, a.x, a.y, a.pc)
 }
