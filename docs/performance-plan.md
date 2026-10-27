@@ -640,7 +640,8 @@ faster: its loss is its steady state's.
 - **Still open, of the above:** callees whose lowering for native
   callers refuses a captured local, every call of them made by Go
   (DeltaBlue's `inputsKnown` 64K, `satisfy` 35K, `constraintsConsuming`
-  10K a run); calls, and writes, inside inlined callees (below). New:
+  10K a run; done since by context allocation, `074e65c`, `5a2bc9d`);
+  calls, and writes, inside inlined callees (below). New:
   RayTrace's small methods (`add`, `multiplyScalar`, `initialize`)
   judged slow early in a short run; Box2D's steady state 14% slower with
   the JIT (above). A megamorphic site's read of an object is a call of Go
@@ -1794,7 +1795,8 @@ The rounds that followed, each measured as above. The commit says more.
     alone wrapping the receiver.
 - **Native code's generators** (after `fc452f0`, `9eeaa8b`: a for-of's
   or a destructuring's step resumes a generator by a native call of its
-  code), not done, by what each would gain:
+  code), not done, by what each would gain (the first two done in the
+  round of 2026-10-28, `bf64954`, `e562a0e`, `94cf520`):
   - A call of `next()` -- a site calling the realm's next on a
     generator -- through the same entry, its `{value, done}` from a pool
     of objects of the result's shape, as object literals are; `return()`
@@ -1956,7 +1958,8 @@ The rounds that followed, each measured as above. The commit says more.
     mapped object's read is a call of Go each, so small methods of them
     are judged not to pay as native callees; CD's and DeltaBlue's
     polymorphic calls inlined for one target, which leave at the other's
-    calls until they are called natively.
+    calls until they are called natively (done since, `7e5b3f9`: a call
+    that met more than one function is made natively to each).
   - Shapes known: a loop header starts knowing nothing -- its entry for
     on-stack replacement knows nothing -- so a loop's first read of an
     object checks its shape at each turn; moving the check before the
@@ -2105,3 +2108,375 @@ The rounds that followed, each measured as above. The commit says more.
     and the context's level could shed.
   - `placements -jit` to vary the offsets of later code chunks and the
     JIT's Go-side code (see "How an item is measured").
+
+### Open items collected on 2026-10-28
+
+Open items found by the rounds and their agents since the review, which no
+section above records, collected from their reports so that none is lost.
+Each gives what it was found with and when. Some were not checked again
+since (marked *unchecked*). None is judged here; each is to be measured
+first, as the rest of the plan is.
+
+**The JIT's coverage and exits**
+
+- A callee with `define_index` or a spread compiles for native callers
+  but is never inlined (2026-10-23).
+- With a memory limit set, every operation Go makes for native code takes
+  the framed path: the frameless paths do not charge the meter
+  (2026-10-23).
+- `template_object` is not native (5 npm functions, 2026-10-23).
+- Reads off a number that only Object.prototype answers
+  (`x.hasOwnProperty`), and non-method reads (`n.foo`), are Go's
+  (2026-10-21, *unchecked*).
+- A megamorphic read where a few receivers have a getter exits for those
+  receivers (2026-10-17, *unchecked*).
+- Callbacks with default or destructured parameters are not inlined; two
+  closures passed in one call are not analysed, a limit for root-level
+  closures too (2026-10-22, 2026-10-27).
+- DeltaBlue: `Plan.execute` never compiled (host-only) and about 681,000
+  callback calls a run not entering native code (2026-10-19); an arrow in
+  `removePropagateFrom` invalidated and never compiled again, closures
+  made anew never building up the recompile budget, about 1,100 Go entries
+  a run (2026-10-22). Both *unchecked* since the callback inlining.
+- RayTrace: a read in `getPixelColor`'s copy inlined in `renderScene` had
+  no feedback, the callee's own code never filling its caches; its miss
+  invalidated `renderScene` (Go entries into `getRay` 3,271 -> 7,127,
+  2026-10-22). Likely served by an exit inside an inlined callee teaching
+  the callee's feedback (`aad0d8c`), *unchecked*.
+- Richards' warm-up: 400 Go entries into `IdleTask.run` in short runs;
+  `WorkerTask.run` warming at 225-436 calls a run, 361 ns against 60
+  native, called 0.08 times a caller's invocation, under V8's inlining
+  rule (2026-10-22). AWFY Richards' 33 exits: a fourth target of
+  `runTask`'s site found after the compile, each call exiting until
+  `jitLearnedDue` (2026-10-23).
+- A polymorphic miss with room for more targets made by a call of Go that
+  stays native (`ssa.CallSite.MissGo`): AWFY DeltaBlue's exits 1,699 ->
+  699, Gameboy's 9,222 -> 7,311, but it broke a case like AstWalker's; a
+  generic fallback through the callee's link at every site with targets
+  took V8 DeltaBlue's exits 67 -> 4 and made AWFY Richards' worse (947 ->
+  1,384). Tried, not committed (2026-10-23).
+- Towers' exits 1 -> 290 once `buildTowerAt` was inlined: it refills its
+  object pool by an exit, not a call of Go, about one a 700 constructions
+  (2026-10-22, *unchecked*).
+- `jitEnterCallee` gives no `f.args` to a callee whose parameters are
+  lexical, and no test reaches it; the tail-call depth's offset cannot be
+  seen by a test (2026-10-22).
+- The cap of 96 native call contexts (about 18 KB each): EarleyBoyer's
+  `deriv_trees` recursion has calls at the last context made by Go and
+  finished in the interpreter (2026-10-23). Raising it is a question of
+  memory.
+- `jitLearnedMark` does not count `bigSites`; `inlinePending` is still
+  turned into `inlineReopt` at an entry to code already invalidated,
+  harmless since `jitReoptimize` changed (2026-10-21).
+- Derived construction: an empty base parent (stage 2a), inlining (stage
+  3), field initializers lowered as method callees so that `jitConstructs`
+  drops its `fieldInit == nil` condition; derived roots are never
+  slack-tracked (`noteBuilt` skipped, 2026-10-19).
+- PdfJS's sites of 2026-10-14: deopts at `atob`, `transportObj` and
+  `fontLoaderBind`'s additions; `decodeCharString`'s `get_index` and
+  compare, about 8,500 exits (*unchecked*).
+- `String.fromCharCode` past Latin-1 is a call of Go only in a function's
+  own code with a keep cell for it, and still exits in inlined code:
+  PDF.js's `Lexer_getObj` inlining `Stream_lookChar` (`c2591b3`).
+- Native generators, besides the list above: a `next()` result is still
+  a 96-byte object from the pool's fillings, which escape analysis could
+  make virtual; native creation excludes generators that read
+  `arguments`, have more than eight locals, are in a with or eval scope,
+  or are sloppy and read `this`; the pools are filled by one
+  `newGenerator` call an object, most of `generator_create`'s cost with
+  the JIT (2026-10-27).
+
+**The JIT's compile cost, tiering and memory**
+
+- Resume points only where Go resumed: reloading every live slot at each
+  resume point is 110K of `initPhysics`'s 128K values. Points only where
+  Go resumed cut compile CPU 25-40%, but doubled the interpreter's
+  continuations and broke 7 tests (2026-10-23, kept as a patch, not
+  committed).
+- A flush's back-off, the wait doubled once for code flushed before:
+  Typescript's five runs compiled 1,807 -> 995 times, its compiles 3,361
+  -> 2,575 ms, exits 48.0K -> 34.5K; the live heap after a collection 262
+  -> 356 MB, and 164 drops for room (2026-10-23, kept as a patch, not
+  committed).
+- A compile's working memory is about 7.5 KB an instruction (17 KB for
+  `initPhysics`), which the JIT's budget does not count; its fit check
+  assumes 2 KB, and the measured figure would refuse functions that
+  compile today (2026-10-23).
+- The cache-change raise: any cache change since an entry was made adds
+  500 invocations, where V8's NotifyICChanged raises only a function
+  already due. Dropping it: EarleyBoyer's exits 1,320 -> 132, Typescript
+  829 compiles and 1,936 interpreter finishes; the "due" variants made
+  every large program worse; `TestJITV8Budgets` pins the rule
+  (2026-10-23).
+- Branches never run before the compile deoptimize one at a time
+  (Gameboy's `memoryReadJumpCompile` 10 times, Typescript's `innerScan`
+  11): borrowing the shape from the function's other reads of `this` cut
+  Gameboy's code 33% and grew Typescript's 6-13%, dropped; learning more
+  at each deopt would depart from V8 (2026-10-26).
+- Optimize's last round finds nothing in most compiles (3-4%), and
+  skipping it soundly needs care with `unboxPhis`; worklists in place of
+  rounds; `removeDead` and the two liveness passes behind the store
+  checks scan the same frame states. The build and optimization are more
+  than half of all compile time (2026-10-27).
+- `reconstruct`'s stubs merged: consecutive guards that share one rebuilt
+  state sharing one exit stub (2026-10-18).
+- The register-group allocator's own cost: allocation about +25% on
+  Typescript, `mir.CompileIn` +7-20%; "a different way of building the
+  groups" would be needed (2026-10-23).
+- Encoding 3-10% above its earlier cost on every program, from loop
+  alignment; zlib's and Mandreel's compile allocations 1-7% above, from
+  reading every phi argument and frame-state slot (2026-10-23,
+  *unchecked*).
+- The compile budget of the JIT's second phase -- under 50 us and 64 KB
+  transient for a function of 200 instructions -- was never confirmed;
+  about four times over when it was last tracked (2026-10-12).
+- The code arena's free space between live functions is neither counted
+  nor reused until its 64 KB chunk empties (460-520 KB mapped for 323 KB
+  live under a 1 MB limit); a lowered program made outside a compile is
+  not checked against the budget (2026-10-12, *unchecked*).
+- The 1 MiB limit a placement's code has, from arm64's conditional
+  branches' range (2026-10-23).
+- Decisions made once for good, from the inventory of 2026-10-14, not
+  checked again since the budgets of D7: `hostOnly` cleared and then
+  `cl.jitRefused` set after a budget's passing failure; refusals that
+  depend on feedback setting `cl.jitRefused`; `notInline` after 16
+  inlined exits over an entry's whole life; a compile refused for its
+  code's size or its spills not tried again with less inlining; `tryJITAt`
+  testing `< 4` where the others test `< 8` (*unchecked*).
+- An `ir.Instruction` is 128 bytes, with a 16-byte StateMap for each
+  bytecode instruction, which packing would halve; descriptors' headers
+  about 64 bytes. It was what made Box2D and Typescript unstable at 8 MiB
+  (2026-10-14, *unchecked*).
+
+**The JIT's code**
+
+- A native call's state found from its return address, as V8's safepoint
+  tables are, not stored by two instructions; an xmm15 round trip for
+  each argument (2026-10-22).
+- Keeps of operands only the call reads (`x.next` in `tail`), unless
+  their source may be a keep cell the same run writes (2026-10-22).
+- `this` carried as a phi takes the compare-number-words path when its
+  pointer word is read (2026-10-22).
+- Lifetime holes, or a result reusing a dying operand's register:
+  intervals touching at one instruction leave loop-carried moves
+  (try_catch's sum, array_for_of's, a counter after its `addsd`); every
+  emitter would have to allow it (2026-10-23).
+- Exit stubs of 10 bytes, an index in place of the descriptor's address;
+  call-free loops' extra 3-instruction stub at each exit, which Go could
+  replace by reading the budget register from the saved registers
+  (2026-10-27).
+- Spills at offset 10,816 of the context, 749K accesses all with 4-byte
+  displacements; `[reg+0]` carrying a displacement byte, about 220K
+  operands (2026-10-23).
+- Keep cells are never reused: past the 256th of a function, each call of
+  Go is an exit (RegExp's `runBlock11`, 2026-10-12); reusing them by
+  liveness. KeepHigh, a keep cell's clearing from its highest used:
+  Typescript -1.4%, Towers +11-15% from layout (2026-10-20, parked).
+- Compare-and-branch fusion's rule that nothing is emitted after the
+  compare leaves about 80 Octane sites unfused where only captured
+  bindings' loads follow; a truthiness that redundancy elimination shares
+  between branches stays a boolean (2026-10-22).
+- Unboxed loops' boxes left: a box feeding a value on the loop's exit
+  edge is made every turn; forEach's and typed forEach's captured `sum`
+  stored to its cell; `some`'s `===` (2026-10-27).
+- A loop of few turns could be inlined without a closure passed, given
+  turns-a-call feedback a function does not have (2026-10-27).
+- Calls inside inlined callees take the bounds in their PCs' order, not
+  by frequency, as V8's do, which needs counts by site (2026-10-22).
+- Constants stored into spilled phis (25K in Box2D); cold code about 23%
+  of all (2026-10-14, *unchecked*).
+- The plan for the op cache's sake (2026-10-16), judged by hot bytes and
+  the op cache's share, besides the flag tested once a run and loop
+  headers at 64-byte lines, which are done: entry blocks and slow paths
+  out of the hot region; constants from a RIP-relative pool (10-byte
+  `movabs` were 10-15% of hot bytes); `MovAddr`'s 45K of 10 bytes
+  pooled; stubs' conditional jumps never short (*unchecked*).
+- `Math.sin` and `Math.cos` natively on amd64: about 1% of Box2D,
+  115,000 calls of Go in three runs at 18 ns (2026-10-20).
+- `jitGoCall` runs `jitGenCallSeen` and `jitGenMakeSeen` at every call Go
+  makes for native code, about 0.2 s of a 27 s profile (2026-10-27).
+- `bigint64_arith`'s loop counters as unboxed f64 phis, about 7% slower
+  than tagged, unexplained (2026-10-20, *unchecked*).
+- ADX and MULX kernels for bignums on amd64: math/big still beats our
+  64-word multiply, 1,756 against 3,048 ns (2026-10-20, parked).
+- `aliases.may` can store a "false" computed while a phi round around a
+  loop is in progress; never seen to change an answer, a fix kept
+  uncommitted (2026-10-11, *unchecked*).
+- Frames the debugger and stack traces see from `jitGoCallNested` show
+  captured locals as they were while cells hold their values; entering
+  code with cells from Go mid-function wants a test of its own
+  (2026-10-18, *unchecked*).
+- What the review of the old pipeline (2026-10-08) asked of it, for the
+  SSA pipeline: stale `*byte` pointers to unmapped code (store
+  `uintptr`), hand-kept assembly offsets (`go_asm.h`),
+  `runtime.AddCleanup`, `Validate` accepting Opaque, String and
+  Uninitialized literals, layout asserts at compile time, `qjs --jit`
+  falling back silently in builds without the tag (*unchecked*).
+
+**The JIT, the collector and allocation**
+
+- Escape analysis of `arguments` objects, never tried.
+- Context allocation's step B: callees with cells inlined (cells in keep
+  slots, `InlineState.Cells`, `ExitInline.Cells`), and native recells,
+  left until a profile asks (2026-10-19).
+- A test scanning the source for a raw store to a pointer field outside
+  the `storeRef` helpers; `storeRef`'s bulk forms, clearing n values or
+  copying n from GoArgs, a call's setup two or three calls of the routine
+  (2026-10-19).
+- Under `-race`, `TestWorkspaceCompileAllocations` fails: 64.2 against
+  its limit of 62, main's 63.9 (2026-10-27).
+
+**The interpreter and the tree tier**
+
+- A per-funcData flag letting the call node skip `callRest`'s tests, 20
+  to 30 instructions a call; Go's recursion replaced by a frame stack of
+  the tree tier's own, a redesign.
+- Tail calls with the callee recorded: `tail_mutual` -16.7%, the suites
+  +0.8 to +2.5% mostly at one placement, kept on a branch, not merged;
+  Richards' 12 million shallow tail calls a run on the slow path, which a
+  fix grows a function before `callTree` to serve.
+- The tree tier's generators: a `next` frame made lazily; the stack's
+  save and a try's state allocated only when needed.
+- A "global" operand kind in treegen, a global read in place (the file
+  grows).
+- int32 trees do not cover bitwise operators made by `op()` on two plain
+  trees (`c[i>>2] << c[j>>2]`, about 6M), comparisons pushed as values
+  (about 3M), an int32 written into an integer typed array (15.7M, boxed
+  and converted again); the fused read applies its operator through a
+  switch (2026-10-27). zlib's upvalues' heap reads.
+- In a switch, `dup; case; strict_eq; jump_if_true` as
+  `jump_if_cmp_false strict_ne`, a dispatch fewer a case, a local
+  discriminant read again with no `drop` (2026-10-04).
+- The interpreter's caches (2026-10-04, *unchecked*, `executeAt` being
+  kept as it is): `OpSetProp` calling `setPropCached` always, where an
+  inline `storeOwn` would save a call of six arguments; `leafCall` trying
+  `plainOwn` before `cl.ic[...].own`; propCache's hot fields first, or
+  64 bytes.
+- The for-of cursor (160 bytes) as a kind of Value with no Object
+  header: 96 bytes less for every for-of, spread and destructuring
+  (2026-10-12).
+- Queens, 1.31 times QuickJS: 47% of its time is the calls of two tiny
+  methods reading and writing elements; pure bodies with element reads
+  and several stores (2026-10-15).
+- Implicit derived constructors, 1.21 times QuickJS (356 against 295 ns);
+  closures of 264-328 bytes, their layout fixed by the frozen functions'
+  reads (2026-10-26).
+- The compiler's speed (CodeLoad): its four scans of a function (this,
+  arguments, direct eval, this's properties) merged, about 4% of compile
+  time; the code buffers sized, 3-5%; a RegExp literal validated by
+  building and dropping its parse tree; the collector about a quarter of
+  compile time (2026-10-26).
+- NewRuntime: about 600 built-in functions made eagerly, its largest cost;
+  made lazily they would change what scripts see of the global's
+  descriptors, a decision for the API; a lazy property index for large
+  built-in objects, about 12 KB a runtime (2026-10-02).
+- Goroutine stack growth, about 3% with the interpreter's frame of 1.7 KB
+  (2026-09-30, *unchecked*).
+- Pure calls deeper than 32 fall back to frames entirely; switching at the
+  limit alone needs the pure path to pass on an error such as a stack
+  overflow (2026-10-05).
+- Structured control flow: structuring lazily, a loop once its back edges
+  prove it hot (eagerly cost V8 +1.5%); `&&` and else-if arms as
+  statements (Splay +2%, dropped); a loop whose branches need a structure
+  of their own runs block to block (2026-10-08).
+- The hot functions made insensitive to their alignment; the hot files'
+  grouping cost `array_for` +43%, `array_update` +36%, `func_call` +26%,
+  and a layout keeping both was not tried; `elemAt` sits outside what
+  placements vary (Crypto +4 to +11% at 3 of 8 placements, 2026-10-25).
+- `a?.b` as one logical node, `a` held in a slot (2026-10-15).
+- BigInts in the interpreter: `bigint32_arith` level with QuickJS, not
+  below (a closure, two failed number checks, `arithSlow`'s frame, the
+  short BigInt's write barrier); `pidigits` 13% in the free list, 9% in
+  `s += y` (2026-10-20).
+- The place updates' fallbacks: `arguments[k]`, TDZ upvalues, operands
+  with calls, `super`, private names and `with`, `G.x += 1` reading the
+  global twice (2026-10-08, *unchecked*).
+- `getElem`'s fast part merged into the tree's `getIndexSlow`, a call and
+  about 15 instructions a typed element (2026-10-07, *unchecked*).
+- A tree callee's locals over its caller's argument slots, which breaks
+  `arguments` unless restricted; a case byte for each function in
+  `pureCallAt` (2026-10-07).
+- Arrays starting at a capacity of 8 at their first growth; a cache by
+  site for `obj[i] = v` on plain objects (`setIndexed` 32% of
+  `prop_create`'s profile), which wants a keyed store cache of several
+  entries (2026-10-12).
+- An Object of 48 bytes, its values a pointer and two 32-bit lengths
+  (stage 3 of 2026-10-13); a closure's blocks inside its function object,
+  about 4.9K allocations fewer in EarleyBoyer, at the cost of many size
+  combinations (2026-10-12).
+
+**Built-ins**
+
+- RegExp: lending and returning the matcher's state costs 3-4% on many
+  short ASCII matches; `recordLegacyMatch` copying the positions at every
+  exec, about 3% (2026-10-21, *unchecked*). Its allocations: captures'
+  substrings, match results, `wtf8.ToUTF16`, split's appends, a long
+  replace's builder; a layout made in advance for `lastIndex` (2026-10-12,
+  *unchecked*). No match array where an exec's result is dropped
+  (2026-10-01, *unchecked*). DeltaBlue with the JIT +13% in placements,
+  not seen in fixed mode, to check again (2026-10-22).
+- `date_parse`'s 12 allocations left, which want go-intl's formatting to
+  append (2026-10-12).
+- JSON.parse defines each key by the generic `defineOwnProp`; no gap
+  points at it (2026-10-04).
+- Strings appended in place, as C QuickJS reallocates; Splay's
+  `String(key)`, 24K allocations (2026-10-12).
+- `mayTie` counting digits by a loop, not `FormatUint` (2026-10-04,
+  *unchecked*).
+
+**The JIT slower than the interpreter, unexplained**
+
+- `string_template` +17%, `array_forEach` +8% and `local_destruct` +5% at
+  every seed and placement (2026-10-23); after a fix, `string_template`
+  about 4% and `local_destruct` 3-4% "from something else" (*unchecked*).
+- RegExp (1.02 the interpreter's time, its time in the matcher), CodeLoad
+  (1.03, parsing), `regexp_fresh`, `regexp_search_i` and
+  `regexp_search_utf16`, 7% or more (2026-10-27).
+- `async_call`, `async_chain` and `async_generator` 2-6% (2026-10-20).
+
+**Measurement and tooling**
+
+- Placements varying where package vm sits against the packages before
+  it, as a pad in mir would.
+- Data's layout: a build of the same bytes 14% slower at one placement,
+  `type:*` and `go:func.*` 192 bytes further on (a longer path); ASLR's
+  effect on the interpreter's comparisons (2026-10-16, 2026-10-20).
+- test262 with `-conformance.debugger` and `-conformance.jit` together
+  fails "no test ran native code", the debugger's code never native
+  (2026-10-22).
+- A cold matrix, single runs, after the compile work: the release's had
+  the JIT slower on Octane's DeltaBlue (+24%), RegExp (+17%) and RayTrace
+  (+5%) (2026-10-27).
+- The 24-hour differential fuzz, never run; the longest stopped at 2 h 39
+  min (run at milestones).
+- `TestAsyncWorkTimer` flaking under the full suite's load.
+- A test that tree closures call no tiny helpers (`IsNumber`, `Float`,
+  `IsObject`, `at`), after the inlining budget's finding of 2026-10-07.
+- arm64: the JIT runs only on darwin/arm64, not linux/arm64, and was
+  never timed beyond small kernels.
+- test262 under JIT stress 10-50% slower since `45d15dc` (*unchecked*).
+
+**Semantics**
+
+- Stack traces still unlike Node's: a receiver's own `constructor`
+  property, which V8 passes over; an arrow called as a method, which V8
+  names by its receiver; an object made by `new P` after `P.prototype`
+  was replaced.
+- `new.target.prototype` is read at `new`, where the specification and V8
+  read it in `super()`, which a Proxy given to `Reflect.construct` as its
+  new.target shows (2026-10-19, *unchecked*).
+- `a[k] op= y` with an object key converts the key once, as C QuickJS
+  does, where Node converts it twice; not pinned by a test (2026-10-08).
+
+**Dropped, not to be tried again without a new angle** (besides
+[Rejected](#rejected)): fusing `get_prop` with `get_prop`; an inline rope
+check in `String.Go()`; fusing method calls on expression receivers (25
+test262 failures); a self tail call as a loop; one free block a size for
+BigInts; new, instanceof, new_object and set_global as host operations
+(DeltaBlue +10%); no RegExp object for `/lit/.exec(s)`, which scripts can
+observe; a generator's frame reused, unsafe where `super()` in an async
+arrow writes the frame's this; first compiles at higher call thresholds.
+Judged when little of the suites ran natively, and not judged since
+(2026-10-09): OpGlobalCell shared across stores and calls, entry blocks
+after the hot blocks, V8's constant globals watched for writes (39 write
+sites).
