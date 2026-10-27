@@ -1248,10 +1248,69 @@ Open from it:
   most on: 5 to 10 microseconds an instruction, the backend 45%,
   optimization 25%, the build 23%; calls are 23% of Typescript's code,
   keep cells 15%. V8's answer, compiling in the background, meets a
-  runtime's one goroutine.
+  runtime's one goroutine. (The round of 2026-10-27, below.)
 - `toInt32` is 20.7% of zlib's interpreted time, 870 million conversions
   a run: QuickJS keeps small integers as integers; nested bitwise results
   kept as int32 in the tree tier would need a second kind of value.
+  (Done without one, below.)
+
+The round of 2026-10-27 (`6ffbb54`..`f838b8c`, against `b07caea`; four Go
+code placements, `placements compare -parallel`, the micro-benchmarks on
+each placement's binary, the least of three):
+
+- **The JIT's compiles** (`6ffbb54`..`6d28f33`): what made them dear was
+  how much they made, 613 SSA values a compile in Typescript, 22% of them
+  phis, about eleven entries a compile of which Go went on at 27 of 6,146
+  after calls in a run. An entry after a call of a function's code is
+  made once Go has gone on there, the code compiled again at once and
+  the frame going on in it, as V8 compiles code to enter where a frame
+  needs it; an inlined call keeps its entry, its exits the code's own.
+  One call of Go out of line for each native call that does not make
+  it; the kept values' definitions found by block; plan's table of
+  inlining answers from the workspace; a keep reads the pointer word it
+  copies; a word compared with a kind's once (amd64). Typescript's
+  compiles 611 -> 495 ms a run (-19%), 872 -> 683 us a compile, its code
+  31.2 -> 24.5 KB a compile; PdfJS -11%, Box2D -7%, AWFY -6.5% of their
+  compile CPU.
+- **int32 trees in the interpreter** (`cf27162`..`f838b8c`): a bitwise
+  operator one of whose operands is a number is an int32 (a BigInt would
+  throw), so its entry builds a tree returning int32, without a second
+  kind of Value; an element read or write at an int32 key, an element
+  read under a bitwise operator, and a sum under one are made in place
+  in such trees, everything else the slow paths' in their order.
+  `F = c[g >> 2] | 0` 219 -> 179 instructions and 4 -> 1 conversions,
+  `(g >>> 7) & 255` 72 -> 43.
+
+Over four placements, against the base: without the JIT, V8 suite +0.2%,
+Are We Fast Yet +1.0%, Octane -10.5% (zlib -17.9%, Mandreel -3.5%),
+micro-benchmarks -0.1% by their geometric mean; with it, V8 suite -1.7%
+(EarleyBoyer -4.8%, NavierStokes -4.8%), Are We Fast Yet -2.1% (CD -6.0%,
+Towers -4.9%, Json -4.6%), Octane -3.5% (Typescript -6.1%, PdfJS -4.2%,
+Gameboy -3.3%), micro-benchmarks -0.2%. On the way: entries made lazily
+left Go arriving where there was none, each turn going on in the
+interpreter until a compile a budget later, and the turns so cut short
+had code judged slow and never entered (`private_method` +70%, Are We
+Fast Yet's finished in the interpreter 594 -> 1,691), and entries after
+inlined calls made lazily kept Queens' column boxed through its loop
+(+2.8%); both are folded into the commit that made them. On Windows,
+checked out with CRLFs, the int32 tests' expected output had them.
+
+Open from it:
+
+- Mandelbrot without the JIT +4.8%, `generator_for_of` +6%: neither
+  builds an int32 tree nor runs another instruction; a control build, the
+  round's layout with every tree the base's, is as slow (+3.8% and
+  95-98 ns): everything after the int32 files moved 1,216 bytes.
+- Sieve with the JIT +4.5% timed alone (faster at one placement of four,
+  about 10% slower at three): the same compiles, entries and exits, its
+  code smaller (5,292 -> 5,208); it allocates 235 MB in 8,400 objects,
+  as Storage, whose like was the Go helpers' placement.
+- Locals that only ever hold int32 still convert at each use (`g >> 2`
+  with `g` a local, 8.6% of zlib's samples): proving it needs mapped
+  `arguments`, eval and reads before the first store accounted for.
+- Mandreel's time is its heap's global read (13%), not conversions.
+- Compiling: still spread thinly; `===`'s cold paths 9% of code, exit
+  stubs 15 bytes each, 31% of Typescript's compiles recompiles.
 
 Open from it:
 
