@@ -2512,6 +2512,32 @@ type KeepFeedback interface {
 	KeepLimit() int
 }
 
+// functionCalls reports whether calls are all of functions' code, through
+// their links (CallSite's Entry), as opposed to built-ins native code makes
+// itself or calls of Go.
+func functionCalls(calls []*CallSite) bool {
+	for _, t := range calls {
+		if t.Entry == 0 || t.Go != 0 {
+			return false
+		}
+	}
+	return len(calls) != 0
+}
+
+// ResumeFeedback is Feedback that knows where Go has gone on after a call
+// native code makes or inlines, by the PC after it, the interpreter's: the
+// code is built with an entry there (Func's Unresumed).
+type ResumeFeedback interface {
+	Resumed(pc int) bool
+}
+
+// resumed reports whether Go has gone on at pc, the PC after a call, in the
+// function's code (ResumeFeedback).
+func (b *builder) resumed(pc int) bool {
+	f, ok := b.fb.(ResumeFeedback)
+	return ok && f.Resumed(int(b.p.Maps[pc].PC))
+}
+
 // generic reports an arithmetic operation or a comparison at pc whose
 // speculation failed (Feedback's Generic): what are not numbers go to Go,
 // which resumes after it, as they do for == and %.
@@ -4278,12 +4304,36 @@ func (b *builder) plan() error {
 				entries[in.Target] = true
 			}
 		case ir.Host, ir.Call:
-			if b.goesOn(pc) {
+			switch {
+			case b.goesOn(pc):
 				// A call Go makes goes on natively: Go leaves it only for
 				// a throw, the runtime stopping, or the code to be compiled
 				// again -- then the interpreter runs on to the next loop
 				// header, as from V8's deoptimizations.
-			} else if resumes(pc) {
+			case !resumes(pc):
+			case b.inlined[pc] == nil && functionCalls(b.calls[pc]) && !b.resumed(pc+1):
+				// A call of a function native code makes returns to it: Go
+				// goes on after it only where the call left -- its callee
+				// not one the code checks for -- which seldom happens, and
+				// at few of a program's calls. Unlike it, a built-in's that
+				// native code makes itself, such as push, leaves whenever
+				// its fast path does not apply; and an inlined callee is the
+				// code itself, whose exits -- an operation it leaves to Go
+				// -- leave the code there as the code's own do, where they
+				// keep their entries: those calls keep theirs, which made
+				// lazily had also cost the loops around them what entries
+				// give, values reloaded and unboxed where they come in
+				// (AWFY's Queens: placeQueen's column held boxed through the
+				// loop, its spills doubled). An entry after each call of a
+				// function, its live slots loaded and merged in phis at
+				// every join after it, had been a sixth of Typescript's
+				// compiles, for a few dozen of its thousands of calls that
+				// Go ever went on after. As V8's code is entered only at a
+				// function's start and at its loops, there is none until Go
+				// has gone on there (ResumeFeedback): the code is compiled
+				// again with the entry then (Func's Unresumed).
+				b.f.Unresumed = append(b.f.Unresumed, int(p.Maps[pc+1].PC))
+			default:
 				entries[pc+1] = true
 			}
 		default:

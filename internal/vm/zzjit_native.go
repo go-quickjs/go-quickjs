@@ -537,6 +537,14 @@ type jitEntry struct {
 	// leaves to Go (ssa.Func's HostsLeft): a call there its code has never
 	// been seen to make is one seldom made (jitInlineExit).
 	ssaHostsLeft []int32
+	// ssaUnresumed are the PCs after the calls the code makes or inlines
+	// that it has no entry after (ssa.Func's Unresumed); resumed those of
+	// them Go has gone on at (jitGoOn), which the next compile has entries
+	// at (ssa.ResumeFeedback), and resumeReopt marks code to be compiled
+	// again for one.
+	ssaUnresumed []int32
+	resumed      []uint32
+	resumeReopt  bool
 	// invalid marks code an eager deoptimization invalidated: Go enters it no
 	// more, nor do native callers call it (its link), and the existing
 	// tiers run the function until they have spent a fresh budget,
@@ -1212,13 +1220,13 @@ func (e *jitEntry) measure() int {
 // compiledBytes is what e holds that its code was compiled with: the
 // slices a compile gives it (setSSA), which jitCompiledBytes measures.
 func (e *jitEntry) compiledBytes() int {
-	return jitCompiledBytes(e.ssaShapes, e.ssaHolders, e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaInlined, e.ssaPools, e.ssaLinks) + jitCapBytes(e.ssaHostsLeft)
+	return jitCompiledBytes(e.ssaShapes, e.ssaHolders, e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaInlined, e.ssaPools, e.ssaLinks) + jitCapBytes(e.ssaHostsLeft) + jitCapBytes(e.ssaUnresumed)
 }
 
 // compiledBytes is what fb's code would have its entry hold, in place of
 // what the entry's code was compiled with (jitEntry.compiledBytes).
 func (fb *jitFeedback) compiledBytes() int {
-	return jitCompiledBytes(fb.shapes, fb.holders, fb.inlinedAt, fb.definesUnfed, fb.cells, fb.inlined, fb.pools, fb.links) + jitCapBytes(fb.hostsLeft)
+	return jitCompiledBytes(fb.shapes, fb.holders, fb.inlinedAt, fb.definesUnfed, fb.cells, fb.inlined, fb.pools, fb.links) + jitCapBytes(fb.hostsLeft) + jitCapBytes(fb.unresumed)
 }
 
 func jitCompiledBytes(shapes []*shape, holders []*Object, inlinedAt, definesUnfed []int32,
@@ -1232,7 +1240,7 @@ func jitCompiledBytes(shapes []*shape, holders []*Object, inlinedAt, definesUnfe
 // more shapes, and the object pools of its literals and constructions,
 // with the objects made for them.
 func (e *jitEntry) learnedBytes() int {
-	n := jitCapBytes(e.failed) + jitCapBytes(e.failedEntries) + jitCapBytes(e.bigints) + jitCapBytes(e.bigwide) + jitCapBytes(e.literals) + jitCapBytes(e.poly) + jitCapBytes(e.typedReads) +
+	n := jitCapBytes(e.failed) + jitCapBytes(e.failedEntries) + jitCapBytes(e.resumed) + jitCapBytes(e.bigints) + jitCapBytes(e.bigwide) + jitCapBytes(e.literals) + jitCapBytes(e.poly) + jitCapBytes(e.typedReads) +
 		jitCapBytes(e.stringReads) + jitCapBytes(e.keyedReads) + jitCapBytes(e.keyedWrites) + jitCapBytes(e.strSites) + jitCapBytes(e.bigSites) + jitCapBytes(e.numSites) + jitCapBytes(e.boolSites) + jitCapBytes(e.nativeCalls) + jitCapBytes(e.inlines) + jitCapBytes(e.notInline) +
 		jitCapBytes(e.nativeCallers) + jitCapBytes(e.callSites)
 	for i := range e.poly {
@@ -1597,6 +1605,7 @@ type jitGhost struct {
 	stringReads   []int32
 	keyedReads    []int32
 	keyedWrites   []int32
+	resumed       []uint32
 }
 
 // jitGhosts bounds the ghosts kept; past it they are forgotten.
@@ -1610,7 +1619,7 @@ func (s *jitState) ghost(addr uintptr, e *jitEntry) {
 	g := s.ghosts[addr]
 	g.evictions, g.asks = min(g.evictions+1, 16), 0
 	g.failed, g.failedEntries, g.typedReads, g.stringReads, g.keyedReads, g.keyedWrites = e.failed, e.failedEntries, e.typedReads, e.stringReads, e.keyedReads, e.keyedWrites
-	g.bigints, g.bigwide = e.bigints, e.bigwide
+	g.bigints, g.bigwide, g.resumed = e.bigints, e.bigwide, e.resumed
 	s.ghosts[addr] = g
 }
 
@@ -1624,7 +1633,7 @@ func (s *jitState) rememberFlushed(addr uintptr, e *jitEntry) {
 	}
 	g := s.ghosts[addr]
 	g.failed, g.failedEntries, g.typedReads, g.stringReads, g.keyedReads, g.keyedWrites = e.failed, e.failedEntries, e.typedReads, e.stringReads, e.keyedReads, e.keyedWrites
-	g.bigints, g.bigwide = e.bigints, e.bigwide
+	g.bigints, g.bigwide, g.resumed = e.bigints, e.bigwide, e.resumed
 	s.ghosts[addr] = g
 }
 
@@ -2236,7 +2245,7 @@ func (r *Runtime) jitCompileFor(fn *bytecode.Function, cl *closure, kind jitLowe
 	if g, ok := s.ghosts[uintptr(unsafe.Pointer(fn))]; ok {
 		// What its code dropped before had learned (jitGhost).
 		e.failed, e.failedEntries, e.typedReads, e.stringReads, e.keyedReads, e.keyedWrites = g.failed, g.failedEntries, g.typedReads, g.stringReads, g.keyedReads, g.keyedWrites
-		e.bigints, e.bigwide = g.bigints, g.bigwide
+		e.bigints, e.bigwide, e.resumed = g.bigints, g.bigwide, g.resumed
 	}
 	s.linkFor(fn, e)
 	p, err := r.jitLower(fn, kind)

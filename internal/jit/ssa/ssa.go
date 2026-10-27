@@ -976,6 +976,11 @@ type Func struct {
 	// code (GoCall) -- none it makes natively, nor a call it makes or
 	// inlines.
 	HostsLeft []int
+	// Unresumed are the PCs, the interpreter's, after the calls the code
+	// makes or inlines that it has no entry after, Go not having gone on
+	// there (ResumeFeedback): where Go goes on, the interpreter runs to the
+	// next loop header, and the code is to be compiled again with the entry.
+	Unresumed []int
 	// Unsafe, where not empty, says why the code may not be compiled: a
 	// BigInt's box a value read from its cell was not kept from, the keep
 	// cells run out (keepAcrossStores).

@@ -1603,7 +1603,7 @@ func (fb *jitFeedback) Define(pc int) (*ssa.PropertyAdd, bool) {
 // runs on, and is compiled again once it has spent a budget itself
 // (jitLearnedDue).
 func (e *jitEntry) reoptPending() bool {
-	return e.reopt || e.inlineReopt || e.polyReopt || e.upgradeReopt || e.unwindReopt
+	return e.reopt || e.inlineReopt || e.polyReopt || e.upgradeReopt || e.unwindReopt || e.resumeReopt
 }
 
 // native reports whether Go may enter e's code, and go on in it after an
@@ -1715,7 +1715,7 @@ func jitLearnedSpent(fn *bytecode.Function, e *jitEntry) int64 {
 // learned at its exits counted in: a change of either delays the compile
 // for it (jitLearnedDue), as V8's NotifyICChanged does.
 func jitLearnedMark(cl *closure, e *jitEntry) uint64 {
-	n := len(e.failed) + len(e.failedEntries) + len(e.bigints) + len(e.bigwide) + len(e.poly) + len(e.typedReads) + len(e.stringReads) +
+	n := len(e.failed) + len(e.failedEntries) + len(e.resumed) + len(e.bigints) + len(e.bigwide) + len(e.poly) + len(e.typedReads) + len(e.stringReads) +
 		len(e.keyedReads) + len(e.keyedWrites) + len(e.strSites) + len(e.numSites) + len(e.boolSites) + len(e.nativeCalls) + len(e.inlines) + len(e.notInline) +
 		len(e.literals) + len(e.definesUnfed)
 	return jitFeedbackMark(cl) + uint64(n)*0x9e3779b97f4a7c15
@@ -1876,6 +1876,19 @@ func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
 		// once it has returned.
 		return
 	}
+	// The runs of its code Go is inside go on from their frames after the
+	// calls they are in, at entries of the new code: a recursion's outer
+	// runs, which would have the interpreter go on to their loops' headers,
+	// each, where the code is built with no entry after a call until Go
+	// has gone on there (ssa.Func's Unresumed).
+	for k := 0; k < r.jit.ctxTop && k < len(r.jit.goRuns) && k < len(r.jit.ssaCtxs); k++ {
+		if run := &r.jit.goRuns[k]; run.e == e && run.f != nil {
+			if pc := uint32(r.jit.ssaCtxs[k].ExitPC) + 1; slices.Contains(e.ssaUnresumed, int32(pc)) && !slices.Contains(e.resumed, pc) {
+				e.resumed = append(e.resumed, pc)
+				r.jit.account(e)
+			}
+		}
+	}
 	switch {
 	case e.reopt:
 		e.reopts++
@@ -1894,7 +1907,7 @@ func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
 	if e.polyReopt {
 		e.polyReopts++
 	}
-	e.reopt, e.inlineReopt, e.polyReopt, e.upgradeReopt, e.unwindReopt = false, false, false, false, false
+	e.reopt, e.inlineReopt, e.polyReopt, e.upgradeReopt, e.unwindReopt, e.resumeReopt = false, false, false, false, false, false
 	if e.reoptRoom > 0 && !r.jit.roomFor(e, nil, e.bytes+e.reoptRoom) {
 		// Its last compile was refused the room its code needed, the
 		// budget full of code too young to drop: not compiled again until
@@ -1948,7 +1961,7 @@ func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
 	e.lexThis, e.loops = fb.lexThis, fb.loops
 	e.setLoopSlots(fn, fb.loopSlots)
 	e.ssaSerial++
-	e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaHostsLeft = fb.inlinedAt, fb.definesUnfed, fb.cells, fb.hostsLeft
+	e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaHostsLeft, e.ssaUnresumed = fb.inlinedAt, fb.definesUnfed, fb.cells, fb.hostsLeft, fb.unresumed
 	e.ssaTargets = fb.targets
 	e.ssaStrings, e.ssaInlined, e.ssaPools, e.ssaMade = e.ssaStrings || fb.strings, fb.inlined, fb.pools, fb.made
 	e.ssaHomes, e.ssaVirtuals, e.ssaCalled = max(e.ssaHomes, fb.homes), fb.virtuals, fb.called
@@ -2071,9 +2084,12 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 	}
 	// The cells the backend gave the kept values (mir's keep cells).
 	fb.keeps = f.Keeps
-	fb.hostsLeft = nil
+	fb.hostsLeft, fb.unresumed = nil, nil
 	for _, pc := range f.HostsLeft {
 		fb.hostsLeft = append(fb.hostsLeft, int32(pc))
+	}
+	for _, pc := range f.Unresumed {
+		fb.unresumed = append(fb.unresumed, int32(pc))
 	}
 	s.ssaKeeps = max(s.ssaKeeps, f.Keeps)
 	need := jitEntryFixed + jit.CodeFootprint(mc) + fb.compiledBytes()
@@ -2236,8 +2252,10 @@ type jitFeedback struct {
 	definesUnfed []int32
 	cells        []*Value
 	// inlinedAt, the root's, are the calls of its own it inlines, and
-	// hostsLeft its host operations it leaves to Go (ssa.Func's HostsLeft).
-	inlinedAt, hostsLeft []int32
+	// hostsLeft its host operations it leaves to Go (ssa.Func's HostsLeft),
+	// and unresumed the PCs after its calls it has no entry after (ssa.Func's
+	// Unresumed).
+	inlinedAt, hostsLeft, unresumed []int32
 	// root is the function's feedback for an inlined callee's, which keeps
 	// what the callee's sites hold for the code; nil for the function's
 	// own. strings marks an inlined callee that calls charCodeAt. links
@@ -2289,6 +2307,10 @@ type jitFeedback struct {
 	// targetsBy are the calls e's code learned (jitTargets), by PC, once
 	// NativeCalls asks.
 	targetsBy map[int][]*jitInline
+	// selfCalls are the PCs of the function's calls of itself among them,
+	// once Resumed asks (selfKnown).
+	selfCalls []int32
+	selfKnown bool
 }
 
 // CharCode is ssa.CharCodeFeedback's: whether the method call of one
@@ -8728,7 +8750,7 @@ func (e *jitEntry) setSSA(s *jitState, fn *bytecode.Function, p *ir.Program, cod
 	e.setLoopSlots(fn, fb.loopSlots)
 	e.ssaSerial++
 	e.ssaProg = p
-	e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaHostsLeft = fb.inlinedAt, fb.definesUnfed, fb.cells, fb.hostsLeft
+	e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaHostsLeft, e.ssaUnresumed = fb.inlinedAt, fb.definesUnfed, fb.cells, fb.hostsLeft, fb.unresumed
 	e.ssaTargets = fb.targets
 	e.ssaStrings, e.ssaInlined, e.ssaPools, e.ssaMade = fb.strings, fb.inlined, fb.pools, fb.made
 	e.ssaHomes, e.ssaVirtuals, e.ssaCalled = max(e.ssaHomes, fb.homes), fb.virtuals, fb.called
@@ -9221,6 +9243,35 @@ func (fb *jitFeedback) Generic(pc int) bool {
 
 func (fb *jitFeedback) EntryGeneric(pc int) bool {
 	return fb.e != nil && slices.Contains(fb.e.failedEntries, uint32(pc))
+}
+
+// Resumed is ssa.ResumeFeedback's: Go has gone on at pc, after a call the
+// function's code made or inlined, where the code had no entry (jitGoOn).
+func (fb *jitFeedback) Resumed(pc int) bool {
+	e := fb.e
+	if e == nil {
+		e = fb.r.jit.entryFor(fb.fn)
+	}
+	if e == nil {
+		return false
+	}
+	if slices.Contains(e.resumed, uint32(pc)) {
+		return true
+	}
+	// After a call of the function itself, which its recursion's outer runs
+	// are all suspended at: one leaving deep in it has Go go on after the
+	// call in each, its frames' code compiled again after they return. The
+	// calls' PCs found once a compile, where a walk of every target at each
+	// call had been a fourteenth of Typescript's builds.
+	if !fb.selfKnown {
+		fb.selfKnown = true
+		for _, x := range jitTargets(e) {
+			if x.cl != nil && x.cl.fn == fb.fn {
+				fb.selfCalls = append(fb.selfCalls, x.pc)
+			}
+		}
+	}
+	return slices.Contains(fb.selfCalls, int32(pc-1))
 }
 
 // Global is where the global a site reads was last found in the closure's
@@ -10339,6 +10390,26 @@ func jitLoopLength(fn *bytecode.Function) uint32 {
 func (r *Runtime) jitGoOn(f *frame, e *jitEntry, pc, sp int, run bool) (v Value, err error, done, again bool) {
 	f.pc = uint32(pc)
 	e.goOns++
+	if !e.invalid && (!run || !e.entrySlow) && slices.Contains(e.ssaUnresumed, int32(pc)) && !slices.Contains(e.resumed, uint32(pc)) {
+		// After a call the code made or inlined, built with no entry until
+		// Go went on there (ssa.Func's Unresumed), where Go would have gone
+		// on in it -- a run of code that pays, or, whatever its entries
+		// cost, a frame native code made (jitUnwindNative): learned, and
+		// the code compiled again with the entry now, as V8 compiles code
+		// to enter at a loop where a frame needs it (OSR), and the frame
+		// goes on in it from here. Learned for the compile a budget later
+		// (jitLearnedDue), each pass had gone on in the interpreter until
+		// then -- private_method's loop calling #get, which left at its
+		// call each time -- and the stretches so cut short had the code
+		// judged slow, never entered once it had the entry.
+		e.resumed = append(e.resumed, uint32(pc))
+		e.resumeReopt = true
+		r.jit.account(e)
+		if r.jitReoptimize(f.cl, e); e.native() && e.ssa != nil && e.ssa.HasEntry(pc) {
+			r.jit.goOnPC, r.jit.goOnDepth = pc, sp-f.base
+			return Undefined, nil, false, true
+		}
+	}
 	n := -1
 	if run {
 		// Out of its code, the run goes on natively at an entry of the
