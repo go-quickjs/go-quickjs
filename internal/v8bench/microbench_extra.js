@@ -96,6 +96,26 @@ function generator_delegate(n)
     return n * 100;
 }
 
+function* extra_list_gen(head)
+{
+    for (var node = head; node !== null; node = node.next)
+        yield node;
+}
+
+/* a generator yielding the objects it walks, a linked list's nodes */
+function generator_objects(n)
+{
+    var j, v, sum = 0, head = null;
+    for(j = 0; j < 100; j++)
+        head = { value: j, next: head };
+    for(j = 0; j < n; j++) {
+        for (v of extra_list_gen(head))
+            sum += v.value;
+    }
+    global_res = sum;
+    return n * 100;
+}
+
 async function extra_await_each(n)
 {
     var i, s = 0;
