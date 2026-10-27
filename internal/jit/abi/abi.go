@@ -476,8 +476,11 @@ type Context struct {
 	// barrier (Encoding's StoreRef) only to shade it, while the collector
 	// marks: a pointer it holds where the collector does not look -- a
 	// call in tail position's operands, in GoArgs, as it rewrites the
-	// frame they came from -- is so seen whatever the collector has
-	// scanned. It holds the last such pointer, which it keeps alive.
+	// frame they came from, and an exit's records, as it writes them --
+	// is so seen whatever the collector has scanned. Native code clears it
+	// once it has shaded them, so that it keeps none of them alive past
+	// that: the store through the barrier shaded the pointer it holds,
+	// which a plain store of nil over it need not shade again.
 	Shade unsafe.Pointer
 	// TailFrame is 1 when the frame is one the interpreter gives up for a
 	// call in tail position -- no construction's, no arrow's sharing a
@@ -529,6 +532,12 @@ type Context struct {
 	// result. The caller's operands keep the value alive. At the end, as
 	// GoLast.
 	GenSent GoArg
+	// RecordAt is the record an exit's records' tail is at while the
+	// collector marks (mir's recordsTail): its stores through Go's write
+	// barrier (Encoding's StoreRef) keep no scratch register, so the count
+	// of those left to shade or to write is kept here. At the end, as
+	// GoLast.
+	RecordAt uint64
 }
 
 // GoArg is an operand of a call of Go: a slot's two words, its pointer word
@@ -947,7 +956,8 @@ var (
 	OffArgc = int32(unsafe.Offsetof(Context{}.Argc))
 	OffArgs = int32(unsafe.Offsetof(Context{}.Args))
 
-	OffGenSent = int32(unsafe.Offsetof(Context{}.GenSent))
+	OffGenSent  = int32(unsafe.Offsetof(Context{}.GenSent))
+	OffRecordAt = int32(unsafe.Offsetof(Context{}.RecordAt))
 
 	// OffGoCallBigOff is GoCallState's BigOff.
 	OffGoCallBigOff = int32(unsafe.Offsetof(GoCallState{}.BigOff))

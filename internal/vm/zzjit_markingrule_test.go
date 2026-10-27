@@ -14,8 +14,10 @@ import (
 
 // jitMarkingWork is what one run of a test of the micro-benchmarks did that
 // a breach of the marking rule changes: its calls of Go, the times native
-// code left for Go, and the runs the interpreter finished.
-type jitMarkingWork struct{ calls, hosts, interpreted uint64 }
+// code left for Go, the runs the interpreter finished, and the records of
+// exits Go applied (jitApplyRecords, jit.ApplyExit), which native code
+// applies itself as it leaves (mir's recordsTail).
+type jitMarkingWork struct{ calls, hosts, interpreted, records uint64 }
 
 // TestJITSameWorkWhileMarking holds native code to internal/jit/README.md's
 // rule for the write barrier: a path compiled natively does the same work
@@ -25,10 +27,11 @@ type jitMarkingWork struct{ calls, hosts, interpreted uint64 }
 // once, in a runtime whose native code sees the collector idle and in one
 // whose native code sees it marking throughout (jitMarkingForTest), the
 // collector itself held off in both so that only the flag differs; each
-// test must make as many calls of Go, leave native code as often and have
-// the interpreter finish as many runs in the one as in the other. A test
-// that differs names a path that leaves native code, or calls Go, for the
-// marking's sake, which is to be brought to the rule, not listed here.
+// test must make as many calls of Go, leave native code as often, have
+// the interpreter finish as many runs and have Go apply as many records in
+// the one as in the other. A test that differs names a path that leaves
+// native code, or calls Go, for the marking's sake, which is to be brought
+// to the rule, not listed here.
 func TestJITSameWorkWhileMarking(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -43,8 +46,8 @@ func TestJITSameWorkWhileMarking(t *testing.T) {
 		switch {
 		case p != m && !known:
 			differ++
-			t.Errorf("%s: %d calls of Go, %d exits, %d finished in the interpreter; while marking %d, %d, %d: a path leaves native code or calls Go for the marking's sake (internal/jit/README.md, the write barrier's rule)",
-				name, p.calls, p.hosts, p.interpreted, m.calls, m.hosts, m.interpreted)
+			t.Errorf("%s: %d calls of Go, %d exits, %d finished in the interpreter, %d records Go applied; while marking %d, %d, %d, %d: a path leaves native code or calls Go for the marking's sake (internal/jit/README.md, the write barrier's rule)",
+				name, p.calls, p.hosts, p.interpreted, p.records, m.calls, m.hosts, m.interpreted, m.records)
 		case p != m:
 			differ++
 			t.Logf("%s, a known breach (%s): %d calls of Go, %d exits; while marking %d, %d", name, why, p.calls, p.hosts, m.calls, m.hosts)
@@ -118,16 +121,16 @@ func jitMarkingRun(t *testing.T, src string, names []string, marking bool) map[s
 				t.Fatalf("%s: %v", name, err)
 			}
 		}
-		calls0, hosts0, interpreted0 := calls, uint64(0), uint64(0)
+		calls0, hosts0, interpreted0, records0 := calls, uint64(0), uint64(0), uint64(0)
 		if r.jit != nil {
-			hosts0, interpreted0 = r.jit.hosts, r.jit.interpreted
+			hosts0, interpreted0, records0 = r.jit.hosts, r.jit.interpreted, r.jit.ssaRecords
 		}
 		if _, err := r.Run(compileForTest(t, name+"(256)")); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
 		w := jitMarkingWork{calls: calls - calls0}
 		if r.jit != nil {
-			w.hosts, w.interpreted = r.jit.hosts-hosts0, r.jit.interpreted-interpreted0
+			w.hosts, w.interpreted, w.records = r.jit.hosts-hosts0, r.jit.interpreted-interpreted0, r.jit.ssaRecords-records0
 		}
 		work[name] = w
 	}

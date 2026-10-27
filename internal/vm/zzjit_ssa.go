@@ -10327,9 +10327,14 @@ func jitSource(word *uint64) *Value {
 	return *(**Value)(unsafe.Pointer(word))
 }
 
-// jitApplyRecords writes the slots an exit left to Go (abi.Record): the
-// references it moved, and the primitives it put where a reference was,
-// numbered as the code that left has them (this, jitSlot's). The slots
+// jitApplyRecords writes the slots records name (abi.Record): the
+// references moved, and the primitives put where a reference was,
+// numbered as the code that left has them (this, jitSlot's). They are a
+// native call's caller's state, which the call described rather than
+// wrote, made records of (jit.ExpandCall) when its callee left native
+// code. An exit applies its own records natively as it leaves (mir's
+// recordsTail), whether the collector marks or not, or leaves its frame
+// to its description (jit.ApplyExit): at an exit none are left. The slots
 // records read hold their values from entry until the first write, so
 // every one is read first; one record, the usual case, reads its value and
 // writes it.
@@ -10892,8 +10897,9 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			// after one Go made.
 			s.hosts++
 			e.ssaStats.hosts++
-			// An inlined callee's exit while the collector marks leaves its
-			// records, its frame's included, to Go.
+			// Its records, an inlined callee's frame's included, native code
+			// applied as it left, or Go from its description, whether the
+			// collector marks or not.
 			e.ssaStats.records += ctx.Records
 			r.jitApplyRecords(f, e.this, ctx)
 			r.jitMaterialize(f, e)
@@ -11621,9 +11627,9 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure, made bool
 			}
 			f = r.pushFrame()
 			if c := s.ssaCtxs[l.ctx]; !l.inline && c.Records != 0 {
-				// Records its exit left to Go, the collector marking: before
-				// anything else reads its frame, an inlined callee's past it
-				// included.
+				// The records of the native call it was making (jit.ExpandCall):
+				// before anything else reads its frame, an inlined callee's
+				// past it included.
 				if e := r.jitEntryOf(l.cl); e != nil {
 					f.cl, f.locals, f.base = l.cl, r.stack[l.base:l.base+fn.LocalCount:l.base+fn.LocalCount], l.base+fn.LocalCount
 					saved := s.ssaCtx

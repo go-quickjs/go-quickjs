@@ -8,7 +8,8 @@ package vm
 // Budgets returns to Go when an entry's instruction budget ran out; and
 // Interpreted invocations finished in the interpreter after native code;
 // SSAEntries counts the entries into code the new pipeline compiled, and
-// SSARecords the slots its exits left to Go: references moved, and
+// SSARecords the slots Go wrote of the frames native code left, from a
+// native call's state or an exit's description: references moved, and
 // primitives stored over references. Held is the memory the JIT holds, and
 // Budget the most it may (Config.JITMemoryLimit); Evicted counts the
 // functions whose code or refusal it dropped to make room, Refused the

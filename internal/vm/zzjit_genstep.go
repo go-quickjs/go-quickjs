@@ -234,7 +234,8 @@ func (r *Runtime) jitPushGenNext(g *generator) {
 // would have made it (resumeTree), its next's frame below it: its locals
 // the generator's, its operands at the level's base, its handlers those in
 // force at its exit, or, past, after its call, which a stack trace shows.
-// The records its exit left, the collector marking, are written to it.
+// The records of a native call it was making (jit.ExpandCall) are written
+// to it.
 func (r *Runtime) jitGenFrame(l *jitNativeLevel, c *abi.Context, past bool) *frame {
 	s := r.jit
 	g, fn := l.gen, l.cl.fn

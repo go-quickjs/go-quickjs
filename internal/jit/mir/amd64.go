@@ -69,9 +69,12 @@ type compiler struct {
 	// have room for (lengthGuards).
 	allocDone amd64.Label
 	// tail is where exits that filled records go (recordsTail), if any
-	// does; recorded marks the exit being emitted as one.
-	tail               amd64.Label
-	tailUsed, recorded bool
+	// does; recorded marks the exit being emitted as one. tailMarked is
+	// where the tail goes while the collector marks, laid out past every
+	// other routine (recordsTailMarked), and tailRet where it returns.
+	tail                amd64.Label
+	tailMarked, tailRet amd64.Label
+	tailUsed, recorded  bool
 	// table is where an exit that leaves its frame to Go goes (tableExit),
 	// if any does; exits are those exits' descriptions.
 	table     amd64.Label
@@ -339,7 +342,8 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 		c.mark("routine appending")
 		c.appendingCall()
 	}
-	if c.refStoringUsed {
+	refStoring := c.refStoringUsed
+	if refStoring {
 		c.a.Bind(c.refStoring)
 		c.mark("routine refStoring")
 		c.refStoringCall()
@@ -370,6 +374,19 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 		c.a.Bind(c.saving)
 		c.mark("routine saving")
 		c.savingCall()
+	}
+	if c.tailUsed {
+		// Past every routine the code runs while the collector does not
+		// mark, which it would otherwise move.
+		c.a.Bind(c.tailMarked)
+		c.mark("routine tail marking")
+		c.recordsTailMarked()
+	}
+	if c.refStoringUsed && !refStoring {
+		// Its stores' routine, where nothing before it stored so.
+		c.a.Bind(c.refStoring)
+		c.mark("routine refStoring")
+		c.refStoringCall()
 	}
 	// Last: the code's own constants (movImm), past every instruction.
 	text := c.a.Len()
@@ -1120,13 +1137,12 @@ func (c *compiler) genFrame(gr ssa.GenResume, blk *ssa.Block) {
 // yieldExit is the exit of b, a generator's yield (ssa.Block's Yield), in
 // its state, where the yield's value is on top: in code a loop's step
 // resumed natively (genEntry), the frame is written, as an exit writes it
-// -- its records applied natively, as recordsTail applies them while the
-// collector does not mark -- and the generator suspended there, as Go's
-// suspension would: the operands beneath the value saved, its place past
-// the yield, the handlers in force, suspended and begun; and the value
-// returned to the step. Where Go entered the code, the collector marks and
-// there are records to apply or operands to save, or the generator has no
-// room for the operands or the handlers, it is the exit, Go suspending the
+// -- its records applied natively (recordsTail), whether the collector
+// marks or not -- and the generator suspended there, as Go's suspension
+// would: the operands beneath the value saved, its place past the yield,
+// the handlers in force, suspended and begun; and the value returned to
+// the step. Where Go entered the code, or the generator has no room for
+// the operands or the handlers, it is the exit, Go suspending the
 // generator.
 func (c *compiler) yieldExit(b *ssa.Block) {
 	s, hs := b.State, b.YieldHandlers
@@ -1137,11 +1153,6 @@ func (c *compiler) yieldExit(b *ssa.Block) {
 	then, toGo := c.a.NewLabel(), c.a.NewLabel()
 	c.exitThen(s, abi.ExitHost, &then)
 	c.a.Bind(then)
-	// Records the collector's marking left, which Go applies, as it does
-	// any store of a pointer while it marks: Go suspends the generator.
-	c.a.Load(scratchA, regCtx, abi.OffRecords)
-	c.a.Op(amd64.Test, scratchA, scratchA, true)
-	c.a.Jcc(amd64.CondNE, toGo)
 	saved, n := int32(s.Depth-1), int32(len(hs))
 	// What the generator's suspensions leave besides its place, which Go
 	// makes where it has none and the yield leaves anything.
@@ -1230,8 +1241,10 @@ func (c *compiler) yieldExit(b *ssa.Block) {
 	c.a.Load(retRef, regStack, saved*vs+c.enc.RefOffset)
 	c.a.Load(callLink, regCtx, abi.OffReturnTo)
 	c.returnTail()
-	c.a.Bind(toGo)
-	c.a.Ret()
+	if n > 0 || saved > 0 {
+		c.a.Bind(toGo)
+		c.a.Ret()
+	}
 }
 
 // genReturn sends a return of a generator a loop's step resumed natively
@@ -4293,6 +4306,8 @@ func (c *compiler) tailSelf(v *ssa.Value, guard func(amd64.Cond)) {
 			c.a.Load(scratchC, regCtx, abi.OffGoArgs+int32(i)*size+c.enc.RefOffset)
 			c.refStore()
 		}
+		// Shaded, kept no longer (abi.Context's Shade).
+		c.storeImm(regCtx, abi.OffShade, 0, scratchB)
 		c.a.Jmp(shaded)
 	})
 	other := c.a.NewLabel()
@@ -5577,27 +5592,133 @@ func (c *compiler) record(kind, pc, depth, site uint64, then *amd64.Label) {
 	c.a.Jmp(c.tail)
 }
 
-// recordsTail applies an exit's records natively while the collector is
-// not marking (abi.Encoding's WriteBarrier), as the VM's jitApplyRecords
-// does in Go, and returns; while it marks, Go applies them. It reads every
-// value the records write before writing any, since one may read a slot
-// another writes: the first pass leaves each record's value in its Word
-// and, for its pointer word, its Arg; the second writes them. The pointers
-// are held there only meanwhile, where the collector, which cannot run,
-// would not see them.
+// recordsTail applies an exit's records natively, as the VM's
+// jitApplyRecords does in Go, and returns, whether the collector marks
+// (abi.Encoding's WriteBarrier) or not. It reads every value the records
+// write before writing any, since one may read a slot another writes: the
+// first pass (recordsRead) leaves each record's value in its Word and, for
+// its pointer word, its Arg; the second writes them. The collector does
+// not look at the records, where the pointers are held meanwhile. While
+// it does not mark, it cannot begin to, native code not being a safe
+// point, and the second pass writes the words as they are. While it
+// marks, it runs alongside, and has the frame's slots scanned or not: so
+// the tail goes on in recordsTailMarked, where, as a call in tail
+// position's operands are, every pointer the first pass read is shaded
+// first, stored through storeRef into the context's Shade, before any
+// slot it came from is written over; and the second pass stores each
+// pointer word through storeRef too (ptrStore), which shades the one it
+// overwrites. Those stores keep no scratch register, so the record the
+// passes are at is kept in the context (abi.Context's RecordAt). The flag
+// cannot change meanwhile: Go sets it only with the world stopped.
 func (c *compiler) recordsTail() {
-	ret, read, write, maybe, scalar, copyValue, next := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(),
-		c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	ret, write := c.a.NewLabel(), c.a.NewLabel()
+	c.tailMarked, c.tailRet = c.a.NewLabel(), ret
 	c.movImm(scratchB, c.enc.WriteBarrier)
 	c.a.LoadU8(scratchB, scratchB, 0)
 	c.a.Op(amd64.Test, scratchB, scratchB, false)
-	c.a.Jcc(amd64.CondNE, ret)
+	c.a.Jcc(amd64.CondNE, c.tailMarked)
 	c.a.Load(scratchA, regCtx, abi.OffRecords)
 	c.a.Op(amd64.Test, scratchA, scratchA, true)
 	c.a.Jcc(amd64.CondE, ret)
+	c.recordsRead()
+	c.a.MovQFromX(scratchA, xScratch2)
+	c.a.Bind(write)
+	c.a.OpImm(amd64.Sub, scratchA, 1, true)
+	c.a.MovQToX(xScratch1, scratchA)
+	c.a.ShiftImm(amd64.Shl, scratchA, 5, true)
+	c.a.Op(amd64.Add, scratchA, regCtx, true)
+	c.a.Load(scratchC, scratchA, abi.OffRecord)
+	c.movImm(scratchB, ^uint64(abi.RecordScalar|abi.RecordMaybe))
+	c.a.Op(amd64.And, scratchC, scratchB, true)
+	c.sourceAddr()
+	c.a.Load(scratchB, scratchA, abi.OffRecord+16)
+	c.a.Store(scratchC, c.enc.NumOffset, scratchB)
+	c.a.Load(scratchB, scratchA, abi.OffRecord+8)
+	c.a.Store(scratchC, c.enc.RefOffset, scratchB)
+	c.a.MovQFromX(scratchA, xScratch1)
+	c.a.Op(amd64.Test, scratchA, scratchA, true)
+	c.a.Jcc(amd64.CondNE, write)
+	c.storeImm(regCtx, abi.OffRecords, 0, scratchB)
+	c.a.Bind(ret)
+	// A native call's writing of its caller's state goes on in the
+	// caller's code (exitThen).
+	toGo := c.a.NewLabel()
+	c.a.Load(scratchB, regCtx, abi.OffTailReturn)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	c.a.Jcc(amd64.CondE, toGo)
+	c.storeImm(regCtx, abi.OffTailReturn, 0, scratchA)
+	c.a.JmpReg(scratchB)
+	c.a.Bind(toGo)
+	c.a.Ret()
+}
+
+// recordsTailMarked is recordsTail while the collector marks, which goes
+// on there at tailMarked: the same passes, with the shading between them
+// and the second's pointer words through storeRef; then back to the
+// tail's return (tailRet).
+func (c *compiler) recordsTailMarked() {
+	ret := c.tailRet
+	shade, shaded, store := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	c.a.Load(scratchA, regCtx, abi.OffRecords)
+	c.a.Op(amd64.Test, scratchA, scratchA, true)
+	c.a.Jcc(amd64.CondE, ret)
+	c.recordsRead()
+	// Each pointer read, from the last record to the first.
+	c.a.Load(scratchA, regCtx, abi.OffRecords)
+	c.a.Store(regCtx, abi.OffRecordAt, scratchA)
+	c.a.Bind(shade)
+	c.a.Load(scratchA, regCtx, abi.OffRecordAt)
+	c.a.OpImm(amd64.Sub, scratchA, 1, true)
+	c.a.Store(regCtx, abi.OffRecordAt, scratchA)
+	c.a.ShiftImm(amd64.Shl, scratchA, 5, true)
+	c.a.Op(amd64.Add, scratchA, regCtx, true)
+	c.a.Load(scratchC, scratchA, abi.OffRecord+8)
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	c.a.Jcc(amd64.CondE, shaded)
+	c.a.Lea(scratchA, regCtx, abi.OffShade)
+	c.refStore()
+	c.a.Bind(shaded)
+	c.a.Load(scratchA, regCtx, abi.OffRecordAt)
+	c.a.Op(amd64.Test, scratchA, scratchA, true)
+	c.a.Jcc(amd64.CondNE, shade)
+	// Shaded, kept no longer (abi.Context's Shade).
+	c.storeImm(regCtx, abi.OffShade, 0, scratchB)
+	// Then the writes, in the same order as the plain pass's.
+	c.a.Load(scratchA, regCtx, abi.OffRecords)
+	c.a.Store(regCtx, abi.OffRecordAt, scratchA)
+	c.a.Bind(store)
+	c.a.Load(scratchA, regCtx, abi.OffRecordAt)
+	c.a.OpImm(amd64.Sub, scratchA, 1, true)
+	c.a.Store(regCtx, abi.OffRecordAt, scratchA)
+	c.a.ShiftImm(amd64.Shl, scratchA, 5, true)
+	c.a.Op(amd64.Add, scratchA, regCtx, true)
+	c.a.Load(scratchC, scratchA, abi.OffRecord)
+	c.movImm(scratchB, ^uint64(abi.RecordScalar|abi.RecordMaybe))
+	c.a.Op(amd64.And, scratchC, scratchB, true)
+	c.sourceAddr()
+	c.a.Load(scratchB, scratchA, abi.OffRecord+16)
+	c.a.Store(scratchC, c.enc.NumOffset, scratchB)
+	c.a.Load(scratchB, scratchA, abi.OffRecord+8)
+	c.a.Lea(scratchA, scratchC, c.enc.RefOffset)
+	c.a.MovRR(scratchC, scratchB)
+	c.ptrStore(true)
+	c.a.Load(scratchA, regCtx, abi.OffRecordAt)
+	c.a.Op(amd64.Test, scratchA, scratchA, true)
+	c.a.Jcc(amd64.CondNE, store)
+	c.storeImm(regCtx, abi.OffRecords, 0, scratchB)
+	c.a.Jmp(ret)
+}
+
+// recordsRead is recordsTail's first pass, the count of records, not 0,
+// in scratchA: from the last record to the first, each record's value
+// read into its Word and, its pointer word, its Arg -- another slot's
+// value, a reference; its source's, if that holds a reference; else the
+// primitive Word, with no pointer. It leaves the count in xScratch2, and
+// uses every scratch register and xScratch1.
+func (c *compiler) recordsRead() {
+	read, maybe, scalar, copyValue, next := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
 	c.a.MovQToX(xScratch2, scratchA)
-	// From the last record to the first: scratchA its address, xScratch1
-	// its index.
+	// scratchA the record's address, xScratch1 its index.
 	c.a.Bind(read)
 	c.a.OpImm(amd64.Sub, scratchA, 1, true)
 	c.a.MovQToX(xScratch1, scratchA)
@@ -5634,35 +5755,6 @@ func (c *compiler) recordsTail() {
 	c.a.MovQFromX(scratchA, xScratch1)
 	c.a.Op(amd64.Test, scratchA, scratchA, true)
 	c.a.Jcc(amd64.CondNE, read)
-	c.a.MovQFromX(scratchA, xScratch2)
-	c.a.Bind(write)
-	c.a.OpImm(amd64.Sub, scratchA, 1, true)
-	c.a.MovQToX(xScratch1, scratchA)
-	c.a.ShiftImm(amd64.Shl, scratchA, 5, true)
-	c.a.Op(amd64.Add, scratchA, regCtx, true)
-	c.a.Load(scratchC, scratchA, abi.OffRecord)
-	c.movImm(scratchB, ^uint64(abi.RecordScalar|abi.RecordMaybe))
-	c.a.Op(amd64.And, scratchC, scratchB, true)
-	c.sourceAddr()
-	c.a.Load(scratchB, scratchA, abi.OffRecord+16)
-	c.a.Store(scratchC, c.enc.NumOffset, scratchB)
-	c.a.Load(scratchB, scratchA, abi.OffRecord+8)
-	c.a.Store(scratchC, c.enc.RefOffset, scratchB)
-	c.a.MovQFromX(scratchA, xScratch1)
-	c.a.Op(amd64.Test, scratchA, scratchA, true)
-	c.a.Jcc(amd64.CondNE, write)
-	c.storeImm(regCtx, abi.OffRecords, 0, scratchB)
-	c.a.Bind(ret)
-	// A native call's writing of its caller's state goes on in the
-	// caller's code (exitThen).
-	toGo := c.a.NewLabel()
-	c.a.Load(scratchB, regCtx, abi.OffTailReturn)
-	c.a.Op(amd64.Test, scratchB, scratchB, true)
-	c.a.Jcc(amd64.CondE, toGo)
-	c.storeImm(regCtx, abi.OffTailReturn, 0, scratchA)
-	c.a.JmpReg(scratchB)
-	c.a.Bind(toGo)
-	c.a.Ret()
 }
 
 // block emits one block. next is the block laid out after it.

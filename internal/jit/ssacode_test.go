@@ -787,9 +787,40 @@ func (n *nativeHeap) word(v ir.Value) testValue {
 
 // referenceExits counts the harness's exit records -- references copied,
 // primitives stored over references, sources known only at run time, and
-// among them heap cells -- returned references, and exits that left their
-// frames to Go (abi.ExitTable), so that the test can tell it reaches them.
-var referenceExits struct{ copies, scalars, maybes, cells, returns, tables int }
+// among them heap cells, the Go applied, the rest the records native
+// code applied itself (mir's recordsTail), marked those of them it applied
+// while the collector marked -- returned references, and exits that left
+// their frames to Go (abi.ExitTable), so that the test can tell it reaches
+// them.
+var referenceExits struct{ copies, scalars, maybes, cells, returns, tables, marked int }
+
+// noRecord is what the harness fills the context's records' slots with
+// before a run, so that it finds those an exit's code wrote, and applied
+// itself (nativeRecords).
+const noRecord = ^uint64(0)
+
+// nativeRecords counts the records an exit's code wrote and applied itself
+// (recordsTail), which leaves their count 0 but their slots as it wrote
+// them, in order from the first.
+func nativeRecords(ctx *abi.Context) {
+	for i := range ctx.Record {
+		r := ctx.Record[i].Slot
+		if r == noRecord {
+			return
+		}
+		switch {
+		case r&abi.RecordScalar != 0:
+			referenceExits.scalars++
+		case r&abi.RecordMaybe != 0:
+			referenceExits.maybes++
+		default:
+			referenceExits.copies++
+		}
+		if testBarrier != 0 {
+			referenceExits.marked++
+		}
+	}
+}
 
 // source is the value a run-time source names (origin.go): the value at
 // its address, one of the state's slots or a heap cell, which it counts; nil
@@ -1189,11 +1220,16 @@ func nativeMismatch(c *compiled, pc int, slots []ir.Value, poll int, heap testHe
 			ctx.CharCodeAtOffset = 0
 		}
 	}
+	for i := range ctx.Record {
+		ctx.Record[i].Slot = noRecord
+	}
 	if err := c.code.Run(pc, ctx); err != nil {
 		return err.Error()
 	}
 	if ctx.ExitKind == abi.ExitTable {
 		referenceExits.tables++
+	} else if ctx.Records == 0 {
+		nativeRecords(ctx)
 	}
 	ApplyExit(ctx)
 	got := ir.Exit{Kind: exitNames[ctx.ExitKind], State: ir.StateMap{PC: uint32(ctx.ExitPC), Depth: int(ctx.ExitDepth)}}
@@ -1356,7 +1392,7 @@ func TestSSANativeMatchesEvaluator(t *testing.T) {
 		t.Fatalf("only %d programs compiled", compiled)
 	}
 	t.Logf("%d programs; exits with references: %+v", compiled, referenceExits)
-	if referenceExits.copies == 0 || referenceExits.scalars == 0 || referenceExits.maybes == 0 || referenceExits.cells == 0 || referenceExits.returns == 0 || referenceExits.tables == 0 {
+	if referenceExits.copies == 0 || referenceExits.scalars == 0 || referenceExits.maybes == 0 || referenceExits.cells == 0 || referenceExits.returns == 0 || referenceExits.tables == 0 || referenceExits.marked == 0 {
 		t.Fatalf("some kind of record or reference return never happened: %+v", referenceExits)
 	}
 }

@@ -357,3 +357,65 @@ func TestJITGenYieldSavesWhileMarking(t *testing.T) {
 		})
 	}
 }
+
+// A yield whose frame has records -- an object a local holds, yielded or
+// an operand beneath the yield, and locals that swap their objects, each
+// record reading a slot another writes -- applies them natively while the
+// collector marks as when it does not (mir's recordsTail: the pointers
+// read shaded first, the pointer words written through the write
+// barrier), and suspends the generator natively: every step resumes it
+// natively, Go applies none of the records, and the calls of Go are as
+// many either way. The records had been Go's while the collector marked,
+// which made each yield Go's suspension and left the loop judged slow, to
+// the tree tier, which made no native step.
+func TestJITGenYieldRecordsWhileMarking(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	// Node v26.10.0's, for f(100) and f(10000).
+	cases := []struct{ name, src, small, large string }{
+		{"yield an object", `function* g(n) { const o = { v: 0 }; for (let i = 0; i < n; i++) { o.v = i; yield o } }
+			function f(n) { let s = 0; for (const v of g(n)) s += v.v; return s }`, "4950", "49995000"},
+		{"an object beneath", `function pair(o, x) { return o.v + x }
+			function* g(n) { const o = { v: 0 }; let s = 0; for (let i = 0; i < n; i++) { o.v = i; s = pair(o, (yield s) | 0) } }
+			function f(n) { let s = 0; for (const v of g(n)) s += v; return s }`, "4851", "49985001"},
+		{"objects swapped", `function* g(n) { let a = { v: 1 }, b = { v: 2 }, s = 0; for (let i = 0; i < n; i++) { const t = a; a = b; b = t; a.v += i & 3; s += (yield a.v + b.v) | 0 } }
+			function f(n) { let s = 0; for (const v of g(n)) s += v; return s }`, "7750", "75025000"},
+	}
+	for _, c := range cases {
+		calls := map[bool]int{}
+		for _, marking := range []bool{false, true} {
+			t.Run(c.name+map[bool]string{false: "/idle", true: "/marking"}[marking], func(t *testing.T) {
+				if marking {
+					jitMarkingForTest(t)
+					// What the stores through the barrier keep, kept.
+					jitClobberStoresForTest(t)
+				}
+				r := jitRuntimeForTest(t, Config{JIT: true})
+				if _, err := r.Run(compileForTest(t, c.src)); err != nil {
+					t.Fatal(err)
+				}
+				for range 8 {
+					if v, err := r.Run(compileForTest(t, "''+f(100)")); err != nil || v.String().Go() != c.small {
+						t.Fatalf("f(100) = %v, %v; want %s", v, err, c.small)
+					}
+				}
+				in, records := jitGenInForTest(r, "g"), r.jit.ssaRecords
+				v, n := jitCountGoCalls(t, r, "''+f(10000)")
+				if v.String().Go() != c.large {
+					t.Fatalf("f(10000) = %v; want %s", v, c.large)
+				}
+				calls[marking] = n
+				if n := jitGenInForTest(r, "g") - in; n < 10000 {
+					t.Errorf("10001 steps resumed the generator natively %d times", n)
+				}
+				if n := r.jit.ssaRecords - records; n != 0 {
+					t.Errorf("Go applied %d of the yields' records", n)
+				}
+			})
+		}
+		if calls[false] != calls[true] {
+			t.Errorf("%s: %d calls of Go; while marking %d", c.name, calls[false], calls[true])
+		}
+	}
+}

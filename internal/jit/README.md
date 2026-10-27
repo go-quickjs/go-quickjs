@@ -643,9 +643,10 @@ not.** A path compiled natively stays native while the collector marks:
 it stores its pointer words through `storeRef` (below), takes objects from
 its pools as the paragraphs below say, and goes on. It never tests the
 write-barrier flag to leave native code, call Go instead or make an object
-by Go's hand. The one exception is an exit's records (`recordsTail`, below),
-written where Go is called anyway. The rule holds for every new native path,
-and a path that cannot yet keep it is not compiled natively.
+by Go's hand, nor to leave to Go what it writes as it leaves, an exit's
+records (`recordsTail`, below). The rule has no exception: it holds for
+every new native path, and a path that cannot yet keep it is not compiled
+natively.
 
 The reason is more than the calls themselves. The tiers count calls of Go,
 exits and the like to judge what pays (the profit model), so work that leaves
@@ -701,15 +702,25 @@ it are cleared so, which shades what they held. A loop's step copies an array's 
 barrier: the element stays in the array.
 
 What native code holds where the collector does not look while it
-rewrites what the value came from -- a call in tail position's operands,
-read into `GoArgs` before the frame is written over -- it shades first,
-storing each pointer through `storeRef` into the context's `Shade`, so
-that a collector scanning the frame midway misses none. An exit's records
-are the one thing native code leaves to Go while the collector marks
-(`recordsTail`): read into `GoArgs` in one pass and written in a second,
-they would need the same, at an exit, where Go is called anyway. Nothing
-else is Go's for the marking's sake, and nothing leaves native code for
-it: code is compiled only with `storeRef` (`abi.Encoding.StoreRef`).
+rewrites what the value came from it shades first, storing each pointer
+through `storeRef` into the context's `Shade`, so that a collector
+scanning the frame midway misses none: a call in tail position's
+operands, read into `GoArgs` before the frame is written over; and an
+exit's records (`recordsTail`), whose first pass reads every value they
+write into the records themselves -- one record may read a slot another
+writes -- and whose second writes them, each pointer word through
+`storeRef`, which shades the one it overwrites too. `storeRef` keeps no
+scratch register, so the record the passes are at is kept in the context
+(`RecordAt`). So an exit writes its frame natively, and a yield suspends
+its generator natively, whether the collector marks or not. Go applies
+records (the VM's `jitApplyRecords`) only where native code never wrote
+them, the same whether the collector marks or not: a native call's
+caller's state, which the call describes rather than writes
+(`abi.Context.CallState`), Go expands (`jit.ExpandCall`) and writes when
+the callee leaves native code; and an exit that leaves its frame to a
+description (`abi.ExitDescriptor`) Go writes from it (`jit.ApplyExit`).
+Nothing is Go's for the marking's sake, and nothing leaves native code
+for it: code is compiled only with `storeRef` (`abi.Encoding.StoreRef`).
 
 ## The execution boundary
 

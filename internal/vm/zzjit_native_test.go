@@ -583,11 +583,15 @@ func TestJITReferenceReturns(t *testing.T) {
 }
 
 // The new pipeline carries references it never touches: native code holds
-// a reference's number word only, and an exit has Go copy it from the slot
-// it came from, or clear it where a primitive replaces it (abi.Record). Each
-// function here moves, returns or overwrites a reference across polls,
-// which a budget of one makes at every back-edge, and must answer as the
-// interpreter does, natively.
+// a reference's number word only, and an exit copies it from the slot it
+// came from, or clears it where a primitive replaces it (abi.Record) --
+// Go, from the exit's description (mir.TableExits), or the exit's own
+// code (mir's recordsTail), which reads every record's value before it
+// writes any, a swap's and a rotation's each reading a slot another
+// writes. Each function here moves, returns or overwrites a reference
+// across polls, which a budget of one makes at every back-edge, and must
+// answer as the interpreter does, natively, whether the collector marks
+// or not.
 func TestJITSSAReferences(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -612,12 +616,17 @@ func TestJITSSAReferences(t *testing.T) {
 		{"rotate", `function f(a,b,c,n){for(let i=0;i<n;i++){let t=a;a=b;b=c;c=t}return [a,b,c]}`,
 			`var a={},b=[],c='c';var r=f(a,b,c,4);[r[0]===b,r[1]===c,r[2]===a]`, false},
 	} {
-		// Native code applies an exit's records itself unless the collector
-		// marks; marking, they are Go's.
-		for _, marking := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/marking=%v", tc.name, marking), func(t *testing.T) {
+		// An exit's code applies its records itself whether the collector
+		// marks or not, the pointer words through the write barrier while
+		// it marks; an exit described, Go applies them.
+		for _, c := range []struct{ marking, table bool }{{false, true}, {true, true}, {false, false}, {true, false}} {
+			marking := c.marking
+			t.Run(fmt.Sprintf("%s/marking=%v/table=%v", tc.name, marking, c.table), func(t *testing.T) {
+				defer func(table bool) { mir.TableExits = table }(mir.TableExits)
+				mir.TableExits = c.table
 				if marking {
 					jitMarkingForTest(t)
+					jitClobberStoresForTest(t)
 				}
 				src := tc.fn + ";" + tc.run + ".map(String).join()"
 				want := New(Config{})
@@ -635,8 +644,13 @@ func TestJITSSAReferences(t *testing.T) {
 				if got, want := gv.String().Go(), wv.String().Go(); got != want {
 					t.Fatalf("got %q, interpreter %q", got, want)
 				}
-				if st := r.JITStats(); st.SSAEntries == 0 || marking && tc.records && st.SSARecords == 0 {
-					t.Fatalf("never entered the new pipeline, or left no reference to Go: %+v", st)
+				switch st := r.JITStats(); {
+				case st.SSAEntries == 0:
+					t.Fatalf("never entered the new pipeline: %+v", st)
+				case c.table && tc.records && st.SSARecords == 0:
+					t.Fatalf("left no reference to Go to write from an exit's description: %+v", st)
+				case !c.table && st.SSARecords != 0:
+					t.Fatalf("Go applied %d records the exits' code writes: %+v", st.SSARecords, st)
 				}
 			})
 		}
@@ -1012,10 +1026,13 @@ func TestJITSSAStrings(t *testing.T) {
 }
 
 // TestJITSSACellsUnderGC stresses reading the heap in place: native code carries a
-// reference read from an object by its cell's address, which Go reads back
-// at exit. That holds while Go's heap does not move and the graph does not
-// change while native code runs. Here the collector runs continuously, on
-// another goroutine, while lists are built, walked natively and dropped.
+// reference read from an object by its cell's address, which an exit reads
+// back -- Go, from the exit's description, or the exit's own code
+// (mir's recordsTail), which, the collector marking, shades what it reads
+// and writes through the write barrier. That holds while Go's heap does not
+// move and the graph does not change while native code runs. Here the
+// collector runs continuously, on another goroutine, while lists are
+// built, walked natively and dropped.
 func TestJITSSACellsUnderGC(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -1035,6 +1052,14 @@ func TestJITSSACellsUnderGC(t *testing.T) {
 		}
 	}()
 	defer func() { close(stop); <-done }()
+	defer func(table bool) { mir.TableExits = table }(mir.TableExits)
+	for _, table := range []bool{true, false} {
+		mir.TableExits = table
+		jitSSACellsUnderGC(t, table)
+	}
+}
+
+func jitSSACellsUnderGC(t *testing.T, table bool) {
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	src := `function walk(h){let s=0,n=h;while(n){s+=n.v;n=n.next}return s}
 		function last(h){let n=h;while(n.next)n=n.next;return n}
@@ -1049,8 +1074,13 @@ func TestJITSSACellsUnderGC(t *testing.T) {
 	if err != nil || !v.IsBool() || !v.Truthy() {
 		t.Fatalf("= %v, %v", v, err)
 	}
-	if st := r.JITStats(); st.SSAEntries == 0 || st.SSARecords == 0 {
-		t.Fatalf("the walks did not run natively or leave cells to Go: %+v", st)
+	switch st := r.JITStats(); {
+	case st.SSAEntries == 0:
+		t.Fatalf("table=%v: the walks did not run natively: %+v", table, st)
+	case table && st.SSARecords == 0:
+		t.Fatalf("the walks left no cells to Go to read from an exit's description: %+v", st)
+	case !table && st.SSARecords != 0:
+		t.Fatalf("Go read %d cells the exits' code reads: %+v", st.SSARecords, st)
 	}
 }
 
@@ -8441,9 +8471,24 @@ func TestJITSSACallerDroppedWhileItsCalleeLeaves(t *testing.T) {
 // kept once Go's run of the caller ends, nor the caller's own receiver and
 // captured bindings: the contexts held them, frames gone once they
 // returned, and kept alive whatever they reached for as long as the
-// runtime lived.
+// runtime lived. So too while the collector marks, the exits' code
+// applying their records (mir.TableExits off), which shades what they
+// read through the context's Shade: it keeps none of it.
 func TestJITSSACalleeContextsKeepNothing(t *testing.T) {
-	// Native calls are Go's while the collector marks.
+	for _, marking := range []bool{false, true} {
+		t.Run(map[bool]string{false: "idle", true: "marking"}[marking], func(t *testing.T) {
+			if marking {
+				defer func(table bool) { mir.TableExits = table }(mir.TableExits)
+				mir.TableExits = false
+				jitMarkingForTest(t)
+			}
+			jitCalleeContextsKeepNothing(t)
+		})
+	}
+}
+
+func jitCalleeContextsKeepNothing(t *testing.T) {
+	// The collector held off: only the flag says it marks.
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	setup := `function M(k){this.k=k;this.q={k:k}}
 		M.prototype.g=function(){let r=null;for(let j=0;j<2;j++)r=this.q;return r};
@@ -8468,8 +8513,8 @@ func TestJITSSACalleeContextsKeepNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := range r.jit.ssaCtxs {
-		if c := r.jit.ssaCtxs[i]; c.Closure != nil || c.Upvalues != nil || c.This.Ref != nil || c.RetValue.Ref != nil {
-			t.Fatalf("context %d keeps what code ran with: %+v %+v %v %v", i, c.This, c.RetValue, c.Closure, c.Upvalues)
+		if c := r.jit.ssaCtxs[i]; c.Closure != nil || c.Upvalues != nil || c.This.Ref != nil || c.RetValue.Ref != nil || c.Shade != nil {
+			t.Fatalf("context %d keeps what code ran with: %+v %+v %v %v %v", i, c.This, c.RetValue, c.Closure, c.Upvalues, c.Shade)
 		}
 		for k, x := range r.jit.ssaCtxs[i].Keep {
 			if x.Ref != nil {

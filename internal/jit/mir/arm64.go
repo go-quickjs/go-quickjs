@@ -63,9 +63,11 @@ type a64Compiler struct {
 	genDone     arm64.Label
 	genDoneUsed bool
 	// tail is where exits that filled records go (recordsTail), if any
-	// does; recorded marks the exit being emitted as one.
-	tail               arm64.Label
-	tailUsed, recorded bool
+	// does; recorded marks the exit being emitted as one. tailMarked and
+	// tailRet are amd64's.
+	tail                arm64.Label
+	tailMarked, tailRet arm64.Label
+	tailUsed, recorded  bool
 	// table is where exits that leave their frames to Go go (tableExit),
 	// if any does, with exits their descriptions.
 	table     arm64.Label
@@ -272,7 +274,8 @@ func compileARM64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 		c.a.Bind(c.appending)
 		c.appendingCall()
 	}
-	if c.refStoringUsed {
+	refStoring := c.refStoringUsed
+	if refStoring {
 		c.a.Bind(c.refStoring)
 		c.refStoringCall()
 	}
@@ -297,6 +300,16 @@ func compileARM64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 	if c.savingUsed {
 		c.a.Bind(c.saving)
 		c.savingCall()
+	}
+	if c.tailUsed {
+		// As amd64's: past every other routine.
+		c.a.Bind(c.tailMarked)
+		c.recordsTailMarked()
+	}
+	if c.refStoringUsed && !refStoring {
+		// As amd64's: where nothing before it stored so.
+		c.a.Bind(c.refStoring)
+		c.refStoringCall()
 	}
 	for _, g := range c.goFails {
 		g.st.Fail = int32(c.a.Offset(g.to) - c.a.Offset(g.back))
@@ -809,16 +822,100 @@ func (c *a64Compiler) record(kind, pc, depth, site uint64, then *arm64.Label) {
 	c.a.B(c.tail)
 }
 
-// recordsTail applies an exit's records natively while the collector is
-// not marking, as amd64's does. D counts the records; F1 keeps how many.
+// recordsTail applies an exit's records natively, whether the collector
+// marks or not, as amd64's does. D counts the records; F1 keeps how many.
+// While the collector marks, the record its passes are at is kept in the
+// context (abi.Context's RecordAt), since storeRef keeps neither.
 func (c *a64Compiler) recordsTail() {
-	ret, read, write, maybe, scalar, copyValue, next := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(),
-		c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	ret, write := c.a.NewLabel(), c.a.NewLabel()
+	c.tailMarked, c.tailRet = c.a.NewLabel(), ret
 	c.movImm(a64B, c.enc.WriteBarrier)
 	c.a.LoadU8(a64B, a64B, 0)
-	c.a.Cbnz(a64B, ret, false)
+	c.a.Cbnz(a64B, c.tailMarked, false)
 	c.a.Load(a64D, a64Ctx, abi.OffRecords)
 	c.a.Cbz(a64D, ret, true)
+	c.recordsRead()
+	c.a.FMovFromF(a64D, a64F1)
+	c.a.Bind(write)
+	c.a.AddImm(a64D, a64D, -1, true)
+	c.a.ShiftImm(arm64.Lsl, a64A, a64D, 5, true)
+	c.a.Op(arm64.Add, a64A, a64A, a64Ctx, true)
+	c.a.Load(a64C, a64A, abi.OffRecord)
+	c.movImm(a64B, ^uint64(abi.RecordScalar|abi.RecordMaybe))
+	c.a.Op(arm64.And, a64C, a64C, a64B, true)
+	c.sourceAddr()
+	c.a.Load(a64B, a64A, abi.OffRecord+16)
+	c.a.Store(a64C, c.enc.NumOffset, a64B)
+	c.a.Load(a64B, a64A, abi.OffRecord+8)
+	c.a.Store(a64C, c.enc.RefOffset, a64B)
+	c.a.Cbnz(a64D, write, true)
+	c.a.Store(a64Ctx, abi.OffRecords, arm64.ZR)
+	c.a.Bind(ret)
+	// A native call's writing of its caller's state goes on in the
+	// caller's code (exitThen).
+	toGo := c.a.NewLabel()
+	c.a.Load(a64B, a64Ctx, abi.OffTailReturn)
+	c.a.Cbz(a64B, toGo, true)
+	c.a.Store(a64Ctx, abi.OffTailReturn, arm64.ZR)
+	c.a.Br(a64B)
+	c.a.Bind(toGo)
+	c.a.Ret()
+}
+
+// recordsTailMarked is amd64's: the collector marking, the pointers the
+// first pass read shaded through storeRef into the context's Shade, then
+// the second pass's pointer words stored through it (ptrStore), and back
+// to the tail's return.
+func (c *a64Compiler) recordsTailMarked() {
+	ret := c.tailRet
+	shade, shaded, store := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	c.a.Load(a64D, a64Ctx, abi.OffRecords)
+	c.a.Cbz(a64D, ret, true)
+	c.recordsRead()
+	c.a.Load(a64A, a64Ctx, abi.OffRecords)
+	c.a.Store(a64Ctx, abi.OffRecordAt, a64A)
+	c.a.Bind(shade)
+	c.a.Load(a64A, a64Ctx, abi.OffRecordAt)
+	c.a.AddImm(a64A, a64A, -1, true)
+	c.a.Store(a64Ctx, abi.OffRecordAt, a64A)
+	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 5, true)
+	c.a.Op(arm64.Add, a64A, a64A, a64Ctx, true)
+	c.a.Load(a64C, a64A, abi.OffRecord+8)
+	c.a.Cbz(a64C, shaded, true)
+	c.a.AddImm(a64A, a64Ctx, int64(abi.OffShade), true)
+	c.refStore()
+	c.a.Bind(shaded)
+	c.a.Load(a64A, a64Ctx, abi.OffRecordAt)
+	c.a.Cbnz(a64A, shade, true)
+	c.a.Store(a64Ctx, abi.OffShade, arm64.ZR)
+	c.a.Load(a64A, a64Ctx, abi.OffRecords)
+	c.a.Store(a64Ctx, abi.OffRecordAt, a64A)
+	c.a.Bind(store)
+	c.a.Load(a64A, a64Ctx, abi.OffRecordAt)
+	c.a.AddImm(a64A, a64A, -1, true)
+	c.a.Store(a64Ctx, abi.OffRecordAt, a64A)
+	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 5, true)
+	c.a.Op(arm64.Add, a64A, a64A, a64Ctx, true)
+	c.a.Load(a64C, a64A, abi.OffRecord)
+	c.movImm(a64B, ^uint64(abi.RecordScalar|abi.RecordMaybe))
+	c.a.Op(arm64.And, a64C, a64C, a64B, true)
+	c.sourceAddr()
+	c.a.Load(a64B, a64A, abi.OffRecord+16)
+	c.a.Store(a64C, c.enc.NumOffset, a64B)
+	c.a.Load(a64B, a64A, abi.OffRecord+8)
+	c.a.AddImm(a64A, a64C, int64(c.enc.RefOffset), true)
+	c.a.MovRR(a64C, a64B)
+	c.ptrStore(true)
+	c.a.Load(a64A, a64Ctx, abi.OffRecordAt)
+	c.a.Cbnz(a64A, store, true)
+	c.a.Store(a64Ctx, abi.OffRecords, arm64.ZR)
+	c.a.B(ret)
+}
+
+// recordsRead is amd64's: recordsTail's first pass, the count of records,
+// not 0, in D, which it leaves in F1. It uses A, B, C and D.
+func (c *a64Compiler) recordsRead() {
+	read, maybe, scalar, copyValue, next := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
 	c.a.FMovToF(a64F1, a64D)
 	c.a.Bind(read)
 	c.a.AddImm(a64D, a64D, -1, true)
@@ -848,31 +945,6 @@ func (c *a64Compiler) recordsTail() {
 	c.a.Store(a64A, abi.OffRecord+8, arm64.ZR)
 	c.a.Bind(next)
 	c.a.Cbnz(a64D, read, true)
-	c.a.FMovFromF(a64D, a64F1)
-	c.a.Bind(write)
-	c.a.AddImm(a64D, a64D, -1, true)
-	c.a.ShiftImm(arm64.Lsl, a64A, a64D, 5, true)
-	c.a.Op(arm64.Add, a64A, a64A, a64Ctx, true)
-	c.a.Load(a64C, a64A, abi.OffRecord)
-	c.movImm(a64B, ^uint64(abi.RecordScalar|abi.RecordMaybe))
-	c.a.Op(arm64.And, a64C, a64C, a64B, true)
-	c.sourceAddr()
-	c.a.Load(a64B, a64A, abi.OffRecord+16)
-	c.a.Store(a64C, c.enc.NumOffset, a64B)
-	c.a.Load(a64B, a64A, abi.OffRecord+8)
-	c.a.Store(a64C, c.enc.RefOffset, a64B)
-	c.a.Cbnz(a64D, write, true)
-	c.a.Store(a64Ctx, abi.OffRecords, arm64.ZR)
-	c.a.Bind(ret)
-	// A native call's writing of its caller's state goes on in the
-	// caller's code (exitThen).
-	toGo := c.a.NewLabel()
-	c.a.Load(a64B, a64Ctx, abi.OffTailReturn)
-	c.a.Cbz(a64B, toGo, true)
-	c.a.Store(a64Ctx, abi.OffTailReturn, arm64.ZR)
-	c.a.Br(a64B)
-	c.a.Bind(toGo)
-	c.a.Ret()
 }
 
 // returnNative returns, to the native caller, if there is one, with the
@@ -3220,9 +3292,6 @@ func (c *a64Compiler) yieldExit(b *ssa.Block) {
 	then, toGo := c.a.NewLabel(), c.a.NewLabel()
 	c.exitThen(s, abi.ExitHost, &then)
 	c.a.Bind(then)
-	// As amd64's: records the collector's marking left, Go's.
-	c.a.Load(a64A, a64Ctx, abi.OffRecords)
-	c.a.Cbnz(a64A, toGo, true)
 	saved, n := int32(s.Depth-1), int32(len(hs))
 	// As amd64's: the generator's saved part, which Go makes where it has
 	// none and the yield leaves anything.
@@ -3310,8 +3379,10 @@ func (c *a64Compiler) yieldExit(b *ssa.Block) {
 	c.a.Load(a64RetRef, a64Stack, saved*vs+c.enc.RefOffset)
 	c.a.Load(a64CallLink, a64Ctx, abi.OffReturnTo)
 	c.returnTail()
-	c.a.Bind(toGo)
-	c.a.Ret()
+	if n > 0 || saved > 0 {
+		c.a.Bind(toGo)
+		c.a.Ret()
+	}
 }
 
 // genReturn is amd64's: a return of a generator a loop's step resumed
@@ -6309,6 +6380,8 @@ func (c *a64Compiler) tailSelf(v *ssa.Value, guard func(arm64.Cond)) {
 			c.a.Load(a64C, a64Ctx, abi.OffGoArgs+int32(i)*size+c.enc.RefOffset)
 			c.refStore()
 		}
+		// Shaded, kept no longer (abi.Context's Shade).
+		c.a.Store(a64Ctx, abi.OffShade, arm64.ZR)
 		c.a.B(shaded)
 	})
 	other := c.a.NewLabel()
