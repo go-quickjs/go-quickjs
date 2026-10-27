@@ -1272,6 +1272,16 @@ type CallSite struct {
 	// which nothing could tell from it.
 	Gens    []GenStep
 	GenNext uintptr
+	// GenMake, on a call Go makes (GoCall), plain or a method's, is the
+	// object of a synchronous generator function the call has met, whose
+	// generators native code makes: a call of it takes its generator from
+	// Pool, made as a call of it with no arguments makes one -- the
+	// function's prototype, which the call checks its own property at
+	// ProtoIndex, of the key ProtoKey, holds still, the pool's -- and
+	// writes the call's receiver, or undefined, and its arguments, up to
+	// the function's Params and LocalCount, to it. Go makes any other
+	// call, and the call while the collector marks.
+	GenMake uintptr
 	// ForOf marks a for...of's or a destructuring's cursor made of the
 	// iterable, its one operand.
 	ForOf bool

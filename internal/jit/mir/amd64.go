@@ -2075,6 +2075,18 @@ func (c *compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(amd64.Con
 		c.setG(v, scratchA)
 		return
 	}
+	if genMakes(v, c.enc) {
+		// A call of a generator function whose generator native code
+		// makes from its pool (genMake); any other Go makes.
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		c.genMake(v, slow, join)
+		c.a.Bind(slow)
+		c.goCallOp(v, goOpWord(site), guard, false)
+		c.a.Bind(join)
+		c.a.Load(scratchA, regCtx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
+		c.setG(v, scratchA)
+		return
+	}
 	if genNexts(v, c.enc) {
 		// A call of a generator's next native code makes itself
 		// (genNext); any other Go makes.
@@ -3152,6 +3164,90 @@ func (c *compiler) genCall(v *ssa.Value, t ssa.GenStep, slow, done amd64.Label) 
 		c.a.Load(amd64.Reg(kept), regCtx, abi.OffGoArgs+c.enc.NumOffset)
 	}
 	c.a.Jmp(slow)
+}
+
+// genMake makes v, a call Go would make of a generator function
+// (ssa.CallSite's GenMake), where it calls that function and the function's
+// prototype is the pool's: the pool's next generator, made as a call of the
+// function with no arguments makes one, the call's receiver -- or
+// undefined, a plain call's -- and its arguments, up to the function's
+// parameters and locals, written to it, as V8's code allocates a
+// generator object; while the collector marks, or for any other function,
+// it goes to slow, where Go makes the call -- and, the pool run out, fills
+// it again. It reads the call's operands after its checks, which call
+// nothing. It goes on at done, the generator in the call's keep cell. It
+// uses every scratch register and xScratch0.
+func (c *compiler) genMake(v *ssa.Value, slow, done amd64.Label) {
+	site := v.Calls()[0]
+	vs := int32(c.enc.ValueSize)
+	fail := func(cond amd64.Cond) { c.a.Jcc(cond, slow) }
+	at := 0
+	if site.Method {
+		at = 1
+	}
+	callee := v.Args[at]
+	c.pointerWord(callee, c.gpr(callee, scratchA))
+	c.cmpWord(scratchB, uint64(site.GenMake))
+	fail(amd64.CondNE)
+	// Its prototype the pool's, as a construction's is checked
+	// (constructGuards), and a generator in the pool: one run out, Go's
+	// call fills again (the VM's jitGoCall).
+	c.a.Load(scratchA, scratchB, c.enc.ObjectProps+8)
+	c.a.OpImm(amd64.Cmp, scratchA, int32(site.ProtoIndex), true)
+	fail(amd64.CondBE)
+	c.a.Load(scratchA, scratchB, c.enc.ObjectShape)
+	c.a.Load(scratchA, scratchA, c.enc.ShapeKeys)
+	c.a.LoadU32(scratchA, scratchA, int32(site.ProtoIndex)*c.enc.KeySize+c.enc.PropertyKey)
+	c.a.OpImm(amd64.Cmp, scratchA, int32(site.ProtoKey), false)
+	fail(amd64.CondNE)
+	c.a.Load(scratchA, scratchB, c.enc.ObjectProps)
+	c.a.Load(scratchC, scratchA, int32(site.ProtoIndex)*c.enc.ValueSize+c.enc.RefOffset)
+	c.movImm(scratchA, uint64(site.Pool))
+	c.a.Load(scratchB, scratchA, abi.OffPoolProto)
+	c.a.Op(amd64.Cmp, scratchC, scratchB, true)
+	fail(amd64.CondNE)
+	c.a.Load(scratchB, scratchA, abi.OffPoolCount)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	fail(amd64.CondE)
+	c.movImm(scratchC, c.enc.WriteBarrier)
+	c.a.LoadU8(scratchC, scratchC, 0)
+	c.a.Op(amd64.Test, scratchC, scratchC, false)
+	fail(amd64.CondNE)
+	// The pool's next generator, its cell cleared: nothing has seen it.
+	c.a.OpImm(amd64.Sub, scratchB, 1, true)
+	c.a.Store(scratchA, abi.OffPoolCount, scratchB)
+	c.a.ShiftImm(amd64.Shl, scratchB, 3, true)
+	c.a.Op(amd64.Add, scratchB, scratchA, true)
+	c.a.Load(scratchC, scratchB, abi.OffPoolObjects)
+	c.a.StoreImm(scratchB, abi.OffPoolObjects, 0)
+	c.a.MovQToX(xScratch0, scratchC)
+	// put writes x's words at off from the generator, or, vals, from its
+	// values.
+	put := func(x *ssa.Value, off int32, vals bool) {
+		r := c.gpr(x, scratchA)
+		if c.scalar(x) {
+			c.movImm(scratchB, 0)
+		} else {
+			c.pointerWord(x, r)
+		}
+		c.a.MovQFromX(scratchC, xScratch0)
+		if vals {
+			c.a.Load(scratchC, scratchC, c.enc.GenObject+c.enc.GenVals)
+		}
+		c.a.Store(scratchC, off+c.enc.NumOffset, r)
+		c.a.Store(scratchC, off+c.enc.RefOffset, scratchB)
+	}
+	if site.Method {
+		put(v.Args[0], c.enc.GenObject+c.enc.GenThis, false)
+	}
+	for i := 0; i < site.Argc && i < site.Params && i < site.LocalCount; i++ {
+		put(v.Args[at+1+i], int32(i)*vs, true)
+	}
+	keep := abi.OffKeep + int32(v.Index)*vs
+	c.a.MovQFromX(scratchC, xScratch0)
+	c.a.Store(regCtx, keep+c.enc.RefOffset, scratchC)
+	c.storeImm(regCtx, keep+c.enc.NumOffset, c.enc.Object, scratchA)
+	c.a.Jmp(done)
 }
 
 // genNext makes v, a method call Go would make (ssa.CallSite's Gens on a

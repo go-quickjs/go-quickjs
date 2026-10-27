@@ -3223,6 +3223,22 @@ func genNexts(v *ssa.Value, enc abi.Encoding) bool {
 		site.Argc <= 1 && len(v.Args) == site.Argc+2
 }
 
+// genMakes reports whether v, a call Go would make, makes a generator
+// natively (ssa.CallSite's GenMake, genMake): of 16-byte values, the
+// encoding knowing a generator's layout, an object's properties and the
+// collector's flag, the call its generators' pool.
+func genMakes(v *ssa.Value, enc abi.Encoding) bool {
+	if enc.GenObject == 0 || enc.ValueSize != 16 || enc.WriteBarrier == 0 || enc.ObjectProps == 0 || enc.ShapeKeys == 0 || len(v.Calls()) != 1 {
+		return false
+	}
+	site := v.Calls()[0]
+	ops := site.Argc + 1
+	if site.Method {
+		ops++
+	}
+	return site.Go == ssa.GoCall && site.GenMake != 0 && site.Pool != 0 && !site.New && !site.Step && len(v.Args) == ops
+}
+
 // stepGens reports whether v, a loop's step (ssa.CallSite's Step), resumes
 // generators natively (CallSite's Gens): of 16-byte values, the encoding
 // knowing a generator's layout and the collector's flag.

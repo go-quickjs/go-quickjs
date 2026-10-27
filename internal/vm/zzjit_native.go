@@ -622,8 +622,10 @@ type jitEntry struct {
 	genSteps   []jitGenStep
 	genLearned bool
 	// genResults are the pools of the calls of next the code makes
-	// natively (jitGenResultPool).
+	// natively (jitGenResultPool); genMakes the calls of generator
+	// functions whose generators it makes natively (jitGenMakeSeen).
 	genResults []jitGenResult
+	genMakes   []jitGenMake
 	polyReopt  bool
 	polyReopts uint8
 	// strSites are the method reads that met a string receiver, which the

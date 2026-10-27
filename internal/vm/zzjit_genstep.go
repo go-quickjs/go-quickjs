@@ -322,6 +322,131 @@ func (r *Runtime) jitGenDone(f *frame, l *jitNativeLevel, v Value, err error) (V
 	return uninitialized, nil
 }
 
+// jitGenMake is a call of a generator function at pc of an entry's code
+// that native code makes the generator of (ssa.CallSite's GenMake): the
+// function's object and the pool of its generators, made as a call of it
+// makes one with no arguments, the call's own written to them.
+type jitGenMake struct {
+	pc   int32
+	obj  *Object
+	pool *abi.ObjectPool
+}
+
+// jitGenMakes bounds the generator functions a call makes the generators
+// of natively: one, as most calls of one call no other.
+const jitGenMakes = 1
+
+// jitGenMakeable reports whether native code of cl's may make the
+// generators of o, a function a call at pc met (jitGenMakeSeen), as a call
+// of it makes them: a synchronous generator function of the script's, of
+// cl's realm and scope, unbound, whose generator and object are one
+// allocation (genAlloc) with its locals only -- no arguments object, no
+// direct eval, a prologue of end_params alone or none, at most eight
+// locals -- and no rare part: no with or eval scope around it, nothing
+// the receiver of a plain call is coerced to that its body reads; its
+// prototype its own data property holding an object.
+func (r *Runtime) jitGenMakeable(o *Object, cl *closure) bool {
+	fd := o.fn()
+	if fd == nil || fd.native != nil || fd.bound || fd.arrow || fd.closure == nil || fd.closure.realm != r.Realm || cl == nil ||
+		fd.closure.scope() != cl.scope() || r.debug != nil {
+		return false
+	}
+	fn := fd.closure.fn
+	if !fn.Generator || fn.Async || fn.UsesArguments || fn.HasDirectEval || fn.LocalCount > 8 || fn.UsesThis && fn.CoerceThis ||
+		!(fn.ParamEnd == 0 || fn.ParamEnd == 1 && fn.Code[0].Op == bytecode.OpEndParams) {
+		return false
+	}
+	if x := fd.extra; x != nil && (len(x.with()) != 0 || x.lexThisRef != nil || x.evalVars() != nil) {
+		return false
+	}
+	p := o.getOwn(atomPrototype)
+	return p.ok() && p.flags()&(propAccessor|propPrivate|propDeleted) == 0 && p.value().IsObject()
+}
+
+// jitGenMakeSeen notes a call at pc of e's code, cl's, which Go made from
+// native code, of callee: a generator function native code may make the
+// generators of (jitGenMakeable), which, compiled again, the code makes
+// natively from the call's pool (ssa.CallSite's GenMake), as a call learns
+// its target; or one it makes so already, whose pool has run out, which
+// it fills again.
+func (r *Runtime) jitGenMakeSeen(e *jitEntry, cl *closure, pc int, callee Value) {
+	if !callee.IsObject() {
+		return
+	}
+	o := callee.Object()
+	for _, x := range e.genMakes {
+		if int(x.pc) == pc && x.obj == o {
+			if x.pool != nil && x.pool.Count == 0 {
+				// Its pool run out, which native code takes its generators
+				// from: filled again, with more.
+				r.jitRefillPool(x.pool)
+			}
+			return
+		}
+	}
+	n := 0
+	for _, x := range e.genMakes {
+		if int(x.pc) == pc {
+			n++
+		}
+	}
+	if n < jitGenMakes && r.jitGenMakeable(o, cl) {
+		e.genMakes = append(e.genMakes, jitGenMake{pc: int32(pc), obj: o})
+		e.genLearned, e.reopt = true, true
+	}
+}
+
+// jitGenMakePool is the pool of e's call at pc of the generator function
+// o, made and filled if it has none, or nil where native code no longer
+// makes them: the function's prototype is not what it was made with.
+func (r *Runtime) jitGenMakePool(e *jitEntry, pc int, o *Object) *abi.ObjectPool {
+	for i := range e.genMakes {
+		x := &e.genMakes[i]
+		if int(x.pc) != pc || x.obj != o {
+			continue
+		}
+		if x.pool == nil {
+			x.pool = &abi.ObjectPool{Source: unsafe.Pointer(&jitPoolSource{gen: o})}
+			r.jitFillGens(x.pool)
+		}
+		if x.pool.Count == 0 {
+			return nil
+		}
+		return x.pool
+	}
+	return nil
+}
+
+// jitFillGens fills pool, of a call of a generator function (jitGenMake),
+// with Size generators made as a call of it with no arguments makes them
+// (newGenerator), each its own -- its locals undefined, its receiver
+// undefined -- for native code to write the call's receiver and arguments
+// to; none where the function's prototype is not its own object, or no
+// generator is made so.
+func (r *Runtime) jitFillGens(pool *abi.ObjectPool) {
+	src := (*jitPoolSource)(pool.Source)
+	clear(pool.Objects[:])
+	pool.Count, pool.Proto = 0, nil
+	if pool.Size == 0 {
+		pool.Size = abi.PoolSize
+	}
+	o := src.gen
+	p := o.getOwn(atomPrototype)
+	if !p.ok() || p.flags()&(propAccessor|propPrivate|propDeleted) != 0 || !p.value().IsObject() || r.stopped != nil {
+		return
+	}
+	fd := o.fn()
+	for i := range int(pool.Size) {
+		g, err := r.newGenerator(fd.closure, Undefined, nil, o, false, Undefined)
+		if err != nil {
+			clear(pool.Objects[:i])
+			return
+		}
+		pool.Objects[i] = unsafe.Pointer(g)
+	}
+	pool.Count, pool.Proto = pool.Size, unsafe.Pointer(p.value().Object())
+}
+
 // jitGenResult is the pool of result objects, { value, done }, a call of
 // next at pc of an entry's code takes its results from (ssa.CallSite's
 // Pool on a call of next).

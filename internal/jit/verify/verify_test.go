@@ -303,6 +303,30 @@ var genNextCorpus = []struct {
 	{`function f(g,n){let s=0,r=g.next();for(let i=0;i<n&&!r.done;i++){s+=r.value;r=g.next(i)}return s}`, 1},
 }
 
+// genMakeCorpus is calls of generator functions native code makes the
+// generators of (mir's genMake), plainly and as methods.
+var genMakeCorpus = []struct {
+	src    string
+	argc   int
+	method bool
+}{
+	{`function f(G,n){let s=0;for(let j=0;j<n;j++)for(const v of G(j,1))s+=v;return s}`, 2, false},
+	{`function f(o,n){let s=0;for(let j=0;j<n;j++){const g=o.m(j);s+=g.next().value}return s}`, 1, true},
+}
+
+// genMakes is gens whose calls of argc arguments have met a generator
+// function whose generators they make natively, from a pool.
+type genMakes struct {
+	gens
+	argc   int
+	method bool
+}
+
+func (g genMakes) NativeCalls(int) []ssa.CallSite {
+	return []ssa.CallSite{{Go: ssa.GoCall, Method: g.method, Argc: g.argc, ThisSlot: -1, GenMake: 0x86000, Pool: 0x87000,
+		ProtoIndex: 1, ProtoKey: 7, Params: 2, LocalCount: 3}}
+}
+
 // genCalls is gens whose method calls of argc arguments have met the
 // realm's generators' next on generators of one function, which they
 // resume by a native call, their results from a pool.
@@ -644,6 +668,42 @@ func TestMirEmitted(t *testing.T) {
 	}
 	if genNexts == 0 {
 		t.Error("no call of next made natively compiled")
+	}
+	makes := 0
+	makeEnc := genEnc
+	makeEnc.ObjectShape, makeEnc.ShapeKeys, makeEnc.KeySize, makeEnc.PropertyKey = 8, 16, 8, 0
+	for _, tc := range genMakeCorpus {
+		for i, p := range lowered(t, tc.src) {
+			f, err := ssa.BuildWith(p, genMakes{argc: tc.argc, method: tc.method})
+			if err != nil {
+				continue
+			}
+			ssa.Optimize(f)
+			for _, b := range f.Blocks {
+				for _, v := range b.Values {
+					if calls := v.Calls(); len(calls) == 1 && calls[0].GenMake != 0 {
+						makes++
+					}
+				}
+			}
+			for _, arch := range arches {
+				compile := mir.CompileAMD64
+				if arch == "arm64" {
+					compile = mir.CompileARM64
+				}
+				mc, err := compile(f, makeEnc)
+				if err != nil {
+					t.Fatalf("%s (%d, make), %s: %v", tc.src, i, arch, err)
+				}
+				if err := check(arch, mc.Bytes[:mc.Text]); err != nil {
+					t.Fatalf("%s (%d, make), %s: %v", tc.src, i, arch, err)
+				}
+			}
+			n++
+		}
+	}
+	if makes == 0 {
+		t.Error("no call making a generator natively compiled")
 	}
 	r := rand.New(rand.NewPCG(5, 6))
 	for attempt := 0; attempt < 50000 && n < 2000; attempt++ {

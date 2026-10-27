@@ -4426,6 +4426,18 @@ func (c *a64Compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(arm64.
 		c.setG(v, a64A)
 		return
 	}
+	if genMakes(v, c.enc) {
+		// As amd64's: a call of a generator function, its generator from
+		// its pool (genMake).
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		c.genMake(v, slow, join)
+		c.a.Bind(slow)
+		c.goCallOp(v, goOpWord(site), false)
+		c.a.Bind(join)
+		c.a.Load(a64A, a64Ctx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
+		c.setG(v, a64A)
+		return
+	}
 	if genNexts(v, c.enc) {
 		// As amd64's: a call of a generator's next natively (genNext).
 		slow, join := c.a.NewLabel(), c.a.NewLabel()
@@ -4966,6 +4978,80 @@ func (c *a64Compiler) genCall(v *ssa.Value, t ssa.GenStep, slow, done arm64.Labe
 		c.a.Load(arm64.Reg(kept), a64Ctx, abi.OffGoArgs+c.enc.NumOffset)
 	}
 	c.a.B(slow)
+}
+
+// genMake is amd64's: a call of a generator function, the pool's next
+// generator, the receiver and the arguments written to it. It uses A, B,
+// C, D and F2, which holds the generator while the arguments are read: not
+// F1, which gpr loads a spilled number into to box it (materialize).
+func (c *a64Compiler) genMake(v *ssa.Value, slow, done arm64.Label) {
+	site := v.Calls()[0]
+	vs := int32(c.enc.ValueSize)
+	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+	at := 0
+	if site.Method {
+		at = 1
+	}
+	callee := v.Args[at]
+	c.pointerWord(callee, c.gpr(callee, a64A))
+	c.movImm(a64C, uint64(site.GenMake))
+	c.a.Cmp(a64B, a64C, true)
+	fail(arm64.NE)
+	// As amd64's: its prototype the pool's, a generator in the pool, the
+	// collector not marking.
+	c.a.Load(a64A, a64B, c.enc.ObjectProps+8)
+	c.a.CmpImm(a64A, int64(site.ProtoIndex), true)
+	fail(arm64.LS)
+	c.a.Load(a64A, a64B, c.enc.ObjectShape)
+	c.a.Load(a64A, a64A, c.enc.ShapeKeys)
+	c.a.LoadU32(a64A, a64A, int32(site.ProtoIndex)*c.enc.KeySize+c.enc.PropertyKey)
+	c.movImm(a64C, uint64(site.ProtoKey))
+	c.a.Cmp(a64A, a64C, false)
+	fail(arm64.NE)
+	c.a.Load(a64A, a64B, c.enc.ObjectProps)
+	c.a.Load(a64C, a64A, int32(site.ProtoIndex)*c.enc.ValueSize+c.enc.RefOffset)
+	c.movImm(a64A, uint64(site.Pool))
+	c.a.Load(a64B, a64A, abi.OffPoolProto)
+	c.a.Cmp(a64C, a64B, true)
+	fail(arm64.NE)
+	c.a.Load(a64B, a64A, abi.OffPoolCount)
+	c.a.Cbz(a64B, slow, true)
+	c.movImm(a64C, c.enc.WriteBarrier)
+	c.a.LoadU8(a64C, a64C, 0)
+	c.a.Cbnz(a64C, slow, false)
+	c.a.AddImm(a64B, a64B, -1, true)
+	c.a.Store(a64A, abi.OffPoolCount, a64B)
+	c.a.ShiftImm(arm64.Lsl, a64B, a64B, 3, true)
+	c.a.Op(arm64.Add, a64B, a64B, a64A, true)
+	c.a.Load(a64D, a64B, abi.OffPoolObjects)
+	c.a.Store(a64B, abi.OffPoolObjects, arm64.ZR)
+	c.a.FMovToF(a64F2, a64D)
+	put := func(x *ssa.Value, off int32, vals bool) {
+		r := c.gpr(x, a64A)
+		if c.scalar(x) {
+			c.movImm(a64B, 0)
+		} else {
+			c.pointerWord(x, r)
+		}
+		c.a.FMovFromF(a64D, a64F2)
+		if vals {
+			c.a.Load(a64D, a64D, c.enc.GenObject+c.enc.GenVals)
+		}
+		c.a.Store(a64D, off+c.enc.NumOffset, r)
+		c.a.Store(a64D, off+c.enc.RefOffset, a64B)
+	}
+	if site.Method {
+		put(v.Args[0], c.enc.GenObject+c.enc.GenThis, false)
+	}
+	for i := 0; i < site.Argc && i < site.Params && i < site.LocalCount; i++ {
+		put(v.Args[at+1+i], int32(i)*vs, true)
+	}
+	keep := abi.OffKeep + int32(v.Index)*vs
+	c.a.FMovFromF(a64D, a64F2)
+	c.a.Store(a64Ctx, keep+c.enc.RefOffset, a64D)
+	c.movImm(a64A, c.enc.Object)
+	c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64A)
+	c.a.B(done)
 }
 
 // genNext is amd64's: a call of the realm's generators' next on a generator

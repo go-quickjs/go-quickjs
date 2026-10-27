@@ -3030,6 +3030,27 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 					site.Gens, site.GenNext, site.Pool = gens, fb.GenNext(), uintptr(unsafe.Pointer(pool))
 				}
 			}
+			if call.Op != bytecode.OpNew && site.Pool == 0 {
+				// A call of a generator function whose generators the code
+				// makes natively (jitGenMakeSeen), from a pool, where the
+				// function is still as it was learned.
+				for _, x := range fb.e.genMakes {
+					if int(x.pc) != pc || !fb.r.jitGenMakeable(x.obj, fb.cl) {
+						continue
+					}
+					pool := fb.r.jitGenMakePool(fb.e, pc, x.obj)
+					i := x.obj.findOwn(atomPrototype)
+					if pool == nil || i < 0 {
+						continue
+					}
+					k := fb.keep()
+					k.pools, k.holders = append(k.pools, pool), append(k.holders, x.obj)
+					fn := x.obj.fn().closure.fn
+					site.GenMake, site.Pool, site.ProtoIndex, site.ProtoKey = uintptr(unsafe.Pointer(x.obj)), uintptr(unsafe.Pointer(pool)), int(i), uint32(atomPrototype)
+					site.Params, site.LocalCount = fn.ParamCount, fn.LocalCount
+					break
+				}
+			}
 			sites = append(sites, site)
 		}
 	}
@@ -4204,6 +4225,11 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 	} else if in.Op == bytecode.OpCallMethod && n <= 3 {
 		// A call of a generator's next the code may make natively.
 		r.jitGenCallSeen(e, f.cl, pc, r.stack[sp-n:sp])
+	}
+	if (in.Op == bytecode.OpCall || in.Op == bytecode.OpCallMethod) && int(in.A) < n {
+		// A call of a generator function whose generators the code may
+		// make natively, or does, from a pool run out, filled again here.
+		r.jitGenMakeSeen(e, f.cl, pc, r.stack[sp-int(in.A)-1])
 	}
 	// A loop's step Go makes costs what any call of Go does: a loop of
 	// them, over a Map or a generator, whose body does little, the tree
@@ -8634,8 +8660,10 @@ type jitPoolSource struct {
 	room   int
 	sample *Object
 	// results marks a call of next's pool of result objects
-	// (jitFillResults).
+	// (jitFillResults); gen is the generator function a call's pool of
+	// generators is of (jitFillGens).
 	results bool
+	gen     *Object
 }
 
 // jitRefillPool fills pool again, run out, with more objects (ssa's
@@ -8664,6 +8692,8 @@ func (r *Runtime) jitRefillPool(pool *abi.ObjectPool) bool {
 		r.jitFillPool(pool, src.ctor)
 	} else if src.results {
 		r.jitFillResults(pool)
+	} else if src.gen != nil {
+		r.jitFillGens(pool)
 	} else {
 		r.jitFillLiteral(&jitLiteral{root: src.root, pool: pool, n: src.n, array: src.array, lit: src.lit, tmpl: src.tmpl, fn: src.fn, env: src.env})
 	}
