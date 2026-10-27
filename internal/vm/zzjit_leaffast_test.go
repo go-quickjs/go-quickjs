@@ -332,6 +332,51 @@ func TestJITGoFast(t *testing.T) {
 	}
 }
 
+// goAddSetup's loops make + of Go (ssa.GoAdd) that no string builder
+// takes: a string prepended to, s = x + s, and in mixedAdd a sum of
+// BigInts beside a string's concatenation of numbers, booleans, null and
+// BigInts; withSymbol's + of a symbol throws, which Go refuses.
+const goAddSetup = `
+function prepend(n) { let s = ''; for (let i = 0; i < n; i++) s = (i % 10) + s; return s.length + ':' + s.slice(0, 12) }
+function mixedAdd(xs, n) { let r = '', t = 0n; for (let i = 0; i < n; i++) { const x = xs[i % xs.length]; if (typeof x === 'bigint') t = x + t; else r = x + r.slice(0, 16) } return r + ':' + t }
+function plain(n) { return mixedAdd([1.5, 'ab', 7n, true, null, -0, 12345678901234567890n], n) }
+function withSymbol(n) { try { return mixedAdd([1, 'x', Symbol('s')], n) } catch (e) { return e.constructor.name } }
+`
+
+// A + of Go that is no string builder's append goes from the VM's routine
+// for calls of Go (jitGoDirect) to jitGoAdd, past jitHostCall's dispatch:
+// each answer is Node's (v26.10.0), and the loops' calls are made so.
+func TestJITGoAddDirect(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	var rounds []string
+	for range 6 {
+		rounds = append(rounds, "prepend(40)", "plain(40)")
+	}
+	r := jitAgreesForTest(t, goAddSetup, rounds...)
+	fast := r.jit.goFast
+	for _, rd := range [][2]string{
+		{"prepend(40)", "40:987654321098"},
+		{"plain(40)", "nulltrueab1.50nulltr:61728394506172839492"},
+		{"withSymbol(40)", "TypeError"},
+		{"plain(40)", "nulltrueab1.50nulltr:61728394506172839492"},
+	} {
+		v, err := r.Run(compileForTest(t, "''+("+rd[0]+")"))
+		if err != nil {
+			t.Fatalf("%s: %v", rd[0], err)
+		}
+		if got := v.String().Go(); got != rd[1] {
+			t.Errorf("%s = %q, want Node's %q", rd[0], got, rd[1])
+		}
+	}
+	jitNativeForTest(t, r, "prepend")
+	jitNativeForTest(t, r, "mixedAdd")
+	if r.jit.goFast-fast < 3*40 {
+		t.Errorf("%d calls of Go through the routine in 160 turns, want at least one a turn", r.jit.goFast-fast)
+	}
+}
+
 // mathSetup's loops call Math's functions Go computes (ssa.OpMathCall) --
 // sin, atan2, hypot, exp -- with numbers, a float and an int32, live
 // across them; onlySin's loop calls nothing else, so that it counts its

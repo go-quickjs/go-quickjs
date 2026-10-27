@@ -3682,37 +3682,7 @@ func jitHostCall(ctx *abi.Context) bool {
 	case ssa.GoLeaf:
 		return r.jitLeafCall(ctx)
 	case ssa.GoAdd:
-		a, b := jitGoArg(ctx, 0), jitGoArg(ctx, 1)
-		if r.meter == nil {
-			if v, ok := r.jitConcatAdd(a, b); ok {
-				*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
-				return true
-			}
-		}
-		// Primitives, and nothing that throws: an object's conversion may
-		// call anything, and making an error may too (a getter of
-		// Error.stackTraceLimit) -- a symbol's, a BigInt's with a number,
-		// a string too long, a memory limit reached. Go makes those after
-		// the code leaves.
-		if a.IsBigInt() || b.IsBigInt() {
-			if a.IsBigInt() && b.IsBigInt() {
-				return r.jitGoBigAdd(ctx, a, b)
-			}
-			if !jitAddOperand(a, b) || !jitAddOperand(b, a) {
-				return false
-			}
-		} else if !jitPlainOperand(a) || !jitPlainOperand(b) {
-			return false
-		}
-		if r.meter != nil || a.IsString() && b.IsString() && a.String().length+b.String().length > maxStringLength-64 {
-			return false
-		}
-		v, err := r.add(a, b)
-		if err != nil {
-			return false
-		}
-		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
-		return true
+		return r.jitGoAdd(ctx)
 	case ssa.GoArith:
 		// An operator of two BigInts that throws nothing.
 		op, ok := jitArithOp(ir.Operator(ctx.GoOp >> abi.GoOpIndexShift))
@@ -3741,46 +3711,7 @@ func jitHostCall(ctx *abi.Context) bool {
 		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = Bool(relationalResult(op, c))
 		return true
 	case ssa.GoAppend:
-		// A loop's string builder's s += x (jitAppend): what GoAdd takes,
-		// a string's grown in place or made a builder of.
-		a, b := jitGoArg(ctx, 0), jitGoArg(ctx, 1)
-		if a.IsBigInt() && b.IsBigInt() {
-			// A loop's sum of BigInts, which it takes for a string's.
-			return r.jitGoBigAdd(ctx, a, b)
-		}
-		if a.IsBigInt() || b.IsBigInt() {
-			if !jitAddOperand(a, b) || !jitAddOperand(b, a) {
-				return false
-			}
-		} else if !jitPlainOperand(a) || !jitPlainOperand(b) {
-			return false
-		}
-		if r.meter != nil {
-			return false
-		}
-		var v Value
-		if a.IsString() {
-			x := b
-			if !b.IsString() {
-				s, err := r.toString(b)
-				if err != nil {
-					return false
-				}
-				x = Str(s)
-			}
-			s, ok := r.jitAppend(a.String(), x.String())
-			if !ok {
-				return false
-			}
-			v = Str(s)
-		} else {
-			var err error
-			if v, err = r.add(a, b); err != nil {
-				return false
-			}
-		}
-		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
-		return true
+		return r.jitGoAppend(ctx)
 	case ssa.GoConcat:
 		// As concat joins its parts: primitives, converted without running
 		// anything, and nothing that throws -- the same refusals as GoAdd's.

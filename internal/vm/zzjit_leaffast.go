@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-quickjs/go-quickjs/internal/jit"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
+	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
 // A leaf's call from native code (ssa.GoLeaf) -- a built-in that runs no
@@ -46,23 +47,126 @@ func jitGoFastAddr() uintptr
 
 // jitGoDirect makes the call of Go st describes, as jit.goCall would --
 // the description read into ctx (jit.ExpandGoCall), the call made by
-// jitHostCall, its status -- and returns back, where the call goes on, or
-// where its refusal does (GoCallState's Fail): what jit's callGo, its
-// call of jit.HostCall's function value and the code's routine of calls
-// of Go, saved and resumed through the context, had cost every call of Go
-// besides.
+// jitHostCall, or a +'s by jitGoAppend or jitGoAdd, its status -- and
+// returns back, where the call goes on, or where its refusal does
+// (GoCallState's Fail): what jit's callGo, its call of jit.HostCall's
+// function value and the code's routine of calls of Go, saved and resumed
+// through the context, had cost every call of Go besides.
 func jitGoDirect(ctx *abi.Context, st *abi.GoCallState, back uintptr) uintptr {
 	ctx.GoState = uintptr(unsafe.Pointer(st))
 	fail := jit.ExpandGoCall(ctx)
 	ctx.GoStatus = 1
-	if r := (*Runtime)(ctx.Host); r != nil && r.jit != nil {
+	r := (*Runtime)(ctx.Host)
+	if r != nil && r.jit != nil {
 		r.jit.goFast++
 	}
-	if jitHostCall(ctx) {
+	ok := false
+	switch op := ssa.GoOp(ctx.GoOp & 0xff); {
+	case r == nil || ctx.GoKeep >= abi.MaxKeeps || jitGoCallWork != nil:
+		ok = jitHostCall(ctx)
+	case op == ssa.GoAppend:
+		// A loop's string builder's s += x, the most frequent of them in
+		// a loop, and below any other +, made here rather than through
+		// jitHostCall's dispatch of every kind of call.
+		ok = r.jitGoAppend(ctx)
+	case op == ssa.GoAdd:
+		ok = r.jitGoAdd(ctx)
+	default:
+		ok = jitHostCall(ctx)
+	}
+	if ok {
 		ctx.GoStatus = 0
 		return back
 	}
 	return back + uintptr(int64(fail))
+}
+
+// jitGoAppend makes a loop's string builder's s += x (ssa.GoAppend), of
+// the operands in ctx's GoArgs, its result to the call's keep cell, and
+// reports whether it did: what GoAdd takes, a string grown in place or
+// made a builder of (jitAppend). jitGoDirect calls it first, and
+// jitHostCall for a call made otherwise.
+func (r *Runtime) jitGoAppend(ctx *abi.Context) bool {
+	// A loop's string builder's s += x (jitAppend): what GoAdd takes,
+	// a string's grown in place or made a builder of.
+	a, b := jitGoArg(ctx, 0), jitGoArg(ctx, 1)
+	if a.IsBigInt() && b.IsBigInt() {
+		// A loop's sum of BigInts, which it takes for a string's.
+		return r.jitGoBigAdd(ctx, a, b)
+	}
+	if a.IsBigInt() || b.IsBigInt() {
+		if !jitAddOperand(a, b) || !jitAddOperand(b, a) {
+			return false
+		}
+	} else if !jitPlainOperand(a) || !jitPlainOperand(b) {
+		return false
+	}
+	if r.meter != nil {
+		return false
+	}
+	var v Value
+	if a.IsString() {
+		x := b
+		if !b.IsString() {
+			s, err := r.toString(b)
+			if err != nil {
+				return false
+			}
+			x = Str(s)
+		}
+		s, ok := r.jitAppend(a.String(), x.String())
+		if !ok {
+			return false
+		}
+		v = Str(s)
+	} else {
+		var err error
+		if v, err = r.add(a, b); err != nil {
+			return false
+		}
+	}
+	*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
+	return true
+}
+
+// jitGoAdd makes a + of Go's (ssa.GoAdd) that is no string builder's
+// append -- a string's concatenation, s = x + s among them, a number's
+// conversion to a string by + "", a sum of BigInts -- of the operands in
+// ctx's GoArgs, its result to the call's keep cell, and reports whether it
+// did. jitGoDirect calls it first, and jitHostCall for a call made
+// otherwise.
+func (r *Runtime) jitGoAdd(ctx *abi.Context) bool {
+	a, b := jitGoArg(ctx, 0), jitGoArg(ctx, 1)
+	if r.meter == nil {
+		if v, ok := r.jitConcatAdd(a, b); ok {
+			*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
+			return true
+		}
+	}
+	// Primitives, and nothing that throws: an object's conversion may
+	// call anything, and making an error may too (a getter of
+	// Error.stackTraceLimit) -- a symbol's, a BigInt's with a number,
+	// a string too long, a memory limit reached. Go makes those after
+	// the code leaves.
+	if a.IsBigInt() || b.IsBigInt() {
+		if a.IsBigInt() && b.IsBigInt() {
+			return r.jitGoBigAdd(ctx, a, b)
+		}
+		if !jitAddOperand(a, b) || !jitAddOperand(b, a) {
+			return false
+		}
+	} else if !jitPlainOperand(a) || !jitPlainOperand(b) {
+		return false
+	}
+	if r.meter != nil || a.IsString() && b.IsString() && a.String().length+b.String().length > maxStringLength-64 {
+		return false
+	}
+	v, err := r.add(a, b)
+	if err != nil {
+		return false
+	}
+	*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
+	return true
 }
 
 // jitLeafGo makes the leaf's call st describes, of the operands native code
