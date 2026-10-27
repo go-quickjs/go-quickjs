@@ -576,8 +576,11 @@ type GoCallState struct {
 	// Leaf, for a leaf's call (ssa.GoLeaf), is the address of the leaf's
 	// function object, which the code checked the call calls and holds
 	// while it runs (ssa.CallSite's Leaf): Go takes the function from
-	// here, and the code passes no operand for it.
-	Leaf uintptr
+	// here, and the code passes no operand for it. LeafForm is the VM's
+	// own: what it made of the call at its first, which it keeps here for
+	// the calls after.
+	Leaf     uintptr
+	LeafForm unsafe.Pointer
 }
 
 // GoCallArg is a GoCallState's operand, the i'th, laid out for Go to read

@@ -45,8 +45,9 @@ var leafFastWants = [][2]string{
 // routine for leaves (abi.Encoding's LeafFast, jitLeafGo): the call's
 // description names its function (abi.GoCallState's Leaf), which native
 // code passes no operand for, and Go applies the leaf with no expansion of
-// the call nor any dispatch of calls of Go, the result's number word back
-// in a register. A leaf that refuses -- at's check, of an object -- leaves
+// the call nor any dispatch of calls of Go, as the form it made of the
+// call at its first says (jitLeafForm), the result's number word back in a
+// register. A leaf that refuses -- at's check, of an object -- leaves
 // the call to an exit, the interpreter converting the object; each answer
 // is Node's and the interpreter's.
 func TestJITLeafFast(t *testing.T) {
@@ -78,6 +79,13 @@ func TestJITLeafFast(t *testing.T) {
 	if got := r.jit.leafFast - fast; got != 7*40 || r.jit.leafRefused != refused || e.ssaStats.goCalls-calls > 1 {
 		t.Errorf("leafs(40) made %d leaves' calls through the routine, refused %d, %d calls of Go with frames; want 280, 0, at most 1",
 			got, r.jit.leafRefused-refused, e.ssaStats.goCalls-calls)
+	}
+	// Each call's form made once, at its first call, and kept in its
+	// description (jitLeafForm).
+	for _, st := range e.ssa.GoCallStates() {
+		if ssa.GoOp(st.Op&0xff) == ssa.GoLeaf && (st.LeafForm == nil || (*jitLeafForm)(st.LeafForm).keep != st.Keep) {
+			t.Errorf("a leaf's call made without its form: %+v", st)
+		}
 	}
 	if _, err := r.Run(compileForTest(t, "odd(40)")); err != nil {
 		t.Fatal(err)
