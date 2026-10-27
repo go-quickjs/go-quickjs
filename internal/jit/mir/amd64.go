@@ -1954,8 +1954,15 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 
 // restoreSaves reads back what native call v saved (savesOf), or the frame
 // holds.
-func (c *compiler) restoreSaves(v *ssa.Value) {
+func (c *compiler) restoreSaves(v *ssa.Value) { c.restoreSavesOf(v, true) }
+
+// restoreSavesOf is restoreSaves, but for what only a call of Go's refusal
+// reads after it (saved's cold), unless refused.
+func (c *compiler) restoreSavesOf(v *ssa.Value, refused bool) {
 	for _, sv := range c.savesOf(v) {
+		if sv.cold && !refused {
+			continue
+		}
 		if sv.frame != 0 {
 			base, disp := c.slotAddr(sv.frame-1, false, scratchA)
 			if sv.float {
@@ -2166,20 +2173,20 @@ func (c *compiler) leafCall(v *ssa.Value, site *ssa.CallSite) {
 	c.movImm(scratchB, c.enc.LeafFast)
 	c.a.JmpReg(scratchB)
 	c.a.Bind(back)
-	restore := func() {
+	restore := func(refused bool) {
 		// The frame's registers first, which the frame's own slots are
-		// read back through.
+		// read back through; what only the refusal reads only on its way.
 		c.a.Load(regLocals, regCtx, abi.OffLocals)
 		c.a.Load(regStack, regCtx, abi.OffStack)
-		c.restoreSaves(v)
+		c.restoreSavesOf(v, refused)
 	}
-	restore()
+	restore(false)
 	c.setG(v, scratchB)
 	stub := c.stubLabel(v.State, exitKind(v.Aux))
 	c.goFails = append(c.goFails, goFail{st, back, fail})
 	c.cold = append(c.cold, func() {
 		c.a.Bind(fail)
-		restore()
+		restore(true)
 		c.a.Jmp(stub)
 	})
 }
@@ -6057,20 +6064,23 @@ func (c *compiler) goCallingLive(v *ssa.Value, st *abi.GoCallState, stub amd64.L
 	c.a.LeaLabel(scratchA, back)
 	c.a.Jmp(*routine)
 	c.a.Bind(back)
-	restore := func() {
+	restore := func(refused bool) {
 		for _, sv := range saves {
-			if sv.float {
+			switch {
+			case sv.cold && !refused:
+				// Read after the call by its refusal alone.
+			case sv.float:
 				c.a.LoadSD(amd64.XReg(sv.reg), regCtx, c.spillDisp(sv.slot))
-			} else {
+			default:
 				c.a.Load(amd64.Reg(sv.reg), regCtx, c.spillDisp(sv.slot))
 			}
 		}
 	}
-	restore()
+	restore(false)
 	c.goFails = append(c.goFails, goFail{st, back, fail})
 	c.cold = append(c.cold, func() {
 		c.a.Bind(fail)
-		restore()
+		restore(true)
 		c.a.Jmp(stub)
 	})
 }

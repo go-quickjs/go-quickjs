@@ -152,3 +152,51 @@ func TestJITLeafFastWhileCollecting(t *testing.T) {
 		}
 	}
 }
+
+// chainSetup's chain makes three leaves' calls in a row, the operands of
+// the concatenation around them -- the first call's result, the '-'
+// constants -- on the frame's stack across the calls after: what a call
+// reads only for its refusal's state (mir's cold saves) is restored for
+// the next call, which saves it for its own, and a refusal at the third
+// call, of an object key, has its frame made of them, the interpreter
+// going on with the object's valueOf.
+const chainSetup = `
+var gs = 'abcdefgh', calls = 0
+function chain3(a, b, c) { let out = '', h = 0; for (let j = 0; j < 8; j++) { out = gs.at(a) + '-' + gs.at(b) + '-' + gs.at(c); h += out.length } return out + h }
+function chain(ks, n) { let out = '', h = 0; for (let i = 0; i < n; i++) { out = chain3(ks[i % 3], ks[(i + 1) % 3], ks[i % ks.length]); h = (h * 7 + out.charCodeAt(4)) | 0 } return out + h }
+function plain(n) { return chain([1, 2, 3], n) }
+function odd(n) { calls = 0; return chain([1, 2, 3, 4, { valueOf() { calls++; return 5 } }], n) + ':' + calls }
+`
+
+// Values only a call of Go's refusal reads after it are saved, and
+// restored on its way alone, where another call after it reads them too
+// for its own state: the answers are Node's (v26.10.0), as the frames the
+// refusals make are.
+func TestJITLeafColdSaves(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	var rounds []string
+	for range 6 {
+		rounds = append(rounds, "plain(30)")
+	}
+	r := jitAgreesForTest(t, chainSetup, rounds...)
+	fast := r.jit.leafFast
+	for _, rd := range [][2]string{
+		{"plain(30)", "d-b-d40-1178309528"},
+		{"odd(30)", "d-b-f401034345824:48"},
+		{"plain(30)", "d-b-d40-1178309528"},
+	} {
+		v, err := r.Run(compileForTest(t, "''+("+rd[0]+")"))
+		if err != nil {
+			t.Fatalf("%s: %v", rd[0], err)
+		}
+		if got := v.String().Go(); got != rd[1] {
+			t.Errorf("%s = %s, want Node's %s", rd[0], got, rd[1])
+		}
+	}
+	cl := r.global.getOwn(r.atoms.intern("chain3")).value().Object().fn().closure
+	if e := r.jit.hint(cl); e == nil || e.ssa == nil || r.jit.leafFast-fast < 3*8*90-48 {
+		t.Errorf("chain3's leaves' calls through the routine: %d, want 3 a call but the refused", r.jit.leafFast-fast)
+	}
+}

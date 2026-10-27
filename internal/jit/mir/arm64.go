@@ -2193,20 +2193,23 @@ func (c *a64Compiler) goCallingLive(v *ssa.Value, st *abi.GoCallState, stub arm6
 	c.a.Adr(a64A, back)
 	c.a.B(*routine)
 	c.a.Bind(back)
-	restore := func() {
+	restore := func(refused bool) {
 		for _, sv := range saves {
-			if sv.float {
+			switch {
+			case sv.cold && !refused:
+				// Read after the call by its refusal alone.
+			case sv.float:
 				c.a.LoadF(arm64.FReg(sv.reg), a64Ctx, c.spillDisp(sv.slot))
-			} else {
+			default:
 				c.a.Load(arm64.Reg(sv.reg), a64Ctx, c.spillDisp(sv.slot))
 			}
 		}
 	}
-	restore()
+	restore(false)
 	c.goFails = append(c.goFails, a64GoFail{st, back, fail})
 	c.cold = append(c.cold, func() {
 		c.a.Bind(fail)
-		restore()
+		restore(true)
 		c.a.B(stub)
 	})
 }
@@ -3880,8 +3883,14 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 }
 
 // restoreSaves is amd64's.
-func (c *a64Compiler) restoreSaves(v *ssa.Value) {
+func (c *a64Compiler) restoreSaves(v *ssa.Value) { c.restoreSavesOf(v, true) }
+
+// restoreSavesOf is amd64's.
+func (c *a64Compiler) restoreSavesOf(v *ssa.Value, refused bool) {
 	for _, sv := range c.savesOf(v) {
+		if sv.cold && !refused {
+			continue
+		}
 		if sv.frame != 0 {
 			base, disp := c.slotAddr(sv.frame-1, false, a64A)
 			if sv.float {
@@ -4450,18 +4459,18 @@ func (c *a64Compiler) leafCall(v *ssa.Value, site *ssa.CallSite) {
 	c.movImm(a64B, c.enc.LeafFast)
 	c.a.Br(a64B)
 	c.a.Bind(back)
-	restore := func() {
+	restore := func(refused bool) {
 		c.a.Load(a64Locals, a64Ctx, abi.OffLocals)
 		c.a.Load(a64Stack, a64Ctx, abi.OffStack)
-		c.restoreSaves(v)
+		c.restoreSavesOf(v, refused)
 	}
-	restore()
+	restore(false)
 	c.setG(v, a64B)
 	stub := c.stubLabel(v.State, exitKind(v.Aux))
 	c.goFails = append(c.goFails, a64GoFail{st, back, fail})
 	c.cold = append(c.cold, func() {
 		c.a.Bind(fail)
-		restore()
+		restore(true)
 		c.a.B(stub)
 	})
 }

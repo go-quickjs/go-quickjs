@@ -380,11 +380,16 @@ const (
 // id is the value saved, by ID: a register the call saves holds that
 // value, and no other the code may also have kept there before or after
 // it (callWord).
+//
+// cold marks, at a call of Go, a value only the call's refusal reads after
+// it: saved for that, restored only on its way (mir's goCallingLive), not
+// on the way the code goes on after the call.
 type saved struct {
 	reg, slot int
 	float     bool
 	frame     int
 	id        int
+	cold      bool
 }
 
 // frameResident reports whether x, live across native call v, is the word
@@ -998,6 +1003,9 @@ func (c *core) allocate() error {
 	// before it of its value, or 0, from its record's xhead.
 	xuses := c.xuseList()
 	var cur *ssa.Block
+	// refused says the uses being met are a call of Go's state's, which
+	// only its refusal reads (below): they leave a record's hot as it is.
+	refused := false
 	use := func(x *ssa.Value, p int) {
 		r := &rec[x.ID]
 		if r.def <= 0 {
@@ -1008,6 +1016,9 @@ func (c *core) allocate() error {
 			return
 		}
 		r.end = max(r.end, int32(p))
+		if !refused {
+			r.hot = max(r.hot, int32(p))
+		}
 		if r.def != int32(cur.ID)+1 {
 			if h := r.xhead; h == 0 || xuses[h-1].b != cur {
 				xuses = append(xuses, xuse{cur, h})
@@ -1182,7 +1193,9 @@ func (c *core) allocate() error {
 				// others, as they are in one block.
 				continue
 			}
+			refused = at != p && v.Calls()[0].Go != 0
 			useState(v.State, at, nil)
+			refused = false
 		}
 		if b.Control != nil {
 			if c.isLazy(b.Control) {
@@ -1889,6 +1902,14 @@ func (c *core) allocate() error {
 				if o, ok := c.frameResident(it.v, v); ok {
 					sv.frame = o + 1
 				}
+				if r := &rec[it.v.ID]; len(v.Calls()) != 0 && v.Calls()[0].Go != 0 && it.v.Op != ssa.OpPhi && r.def == int32(v.Block.ID)+1 && it.end == p+1 && int(r.hot) <= p {
+					// A call of Go's, defined in the call's block before
+					// it and read after it only by its state, for its
+					// refusal: restored there alone (saved's cold), the
+					// code that goes on after the call not reading it
+					// before the block's next pass makes it again.
+					sv.cold = true
+				}
 				c.saves = c.appendSaved(c.saves, sv)
 			}
 			c.saveAt[2*v.ID+1] = len(c.saves)
@@ -2354,9 +2375,12 @@ func hasResult(v *ssa.Value) bool { return v.Type != ssa.None }
 // plus the index in xuses of its last use in another block, or 0; mid, 1
 // plus its number among the phis' groups' members, or 0 (allocate's);
 // slot, what a use of it uses besides or instead (slotMade, slotShadow).
+//
+// hot is the last use's position but a call of Go's state's, which only its
+// refusal reads (saved's cold).
 type useRec struct {
-	end, def, xhead, mid int32
-	slot                 uint8
+	end, def, xhead, mid, hot int32
+	slot                      uint8
 }
 
 // useRec's slot: a value made where needed or a BigInt's box, whose state
