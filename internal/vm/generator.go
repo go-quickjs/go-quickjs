@@ -61,8 +61,6 @@ type generator struct {
 	saved *genSaved
 	// rare is what only some generators need, or nil.
 	rare *genRare
-	// promise is the async function's result promise.
-	promise *Object
 
 	state genState
 	// started marks a generator whose body has begun, which decides whether a
@@ -81,6 +79,9 @@ type generator struct {
 	// of the resumption's own, which an exception its body throws leaves
 	// executing, with its frame gone (see ztree_a_gen.go).
 	treeRun bool
+	// room marks a generator made with room for the cursor of the first
+	// loop over it, which no loop has taken yet (see genAlloc).
+	room bool
 }
 
 // genSaved is what a generator's suspension leaves for its next
@@ -294,21 +295,13 @@ func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Ob
 		kept = nil
 	}
 	n := len(kept) + fn.LocalCount
-	var gobj *generatorObject
-	var vals []Value
-	switch {
-	case n <= 2:
-		o := &generatorVals[[2]Value]{}
-		gobj, vals = &o.generatorObject, o.vals[:n]
-	case n <= 4:
-		o := &generatorVals[[4]Value]{}
-		gobj, vals = &o.generatorObject, o.vals[:n]
-	case n <= 8:
-		o := &generatorVals[[8]Value]{}
-		gobj, vals = &o.generatorObject, o.vals[:n]
-	default:
-		gobj, vals = &generatorObject{}, make([]Value, n)
+	room := genPlainKind
+	if async {
+		room = genAsyncKind
+	} else if cl.genLoops {
+		room = genLoopKind
 	}
+	gobj, vals := genAlloc(n, room)
 	copy(vals, kept)
 	gobj.Object = Object{class: ClassGenerator, flags: objExtensible}
 	g := &gobj.g
@@ -319,6 +312,7 @@ func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Ob
 		vals:   vals,
 		nargs:  uint32(len(kept)),
 		async:  async,
+		room:   g.room,
 	}
 	// Nothing constructs a generator or an async function, so new.target
 	// there is undefined, but for an async arrow's, which is where it was
@@ -422,6 +416,49 @@ type generatorVals[V any] struct {
 	generatorObject
 	vals V
 }
+
+// generatorLoop is a generatorObject with room for the cursor of the
+// first loop over it (see genAlloc), and generatorLoopVals one with its
+// arguments and locals too.
+type generatorLoop struct {
+	generatorObject
+	cur iterObject
+}
+
+type generatorLoopVals[V any] struct {
+	generatorLoop
+	vals V
+}
+
+// asyncObject is the generatorObject of an async function, which no loop
+// steps and nothing sees, with the promise of the function's result
+// (promiseOf), and asyncVals one with its arguments and locals too.
+type asyncObject struct {
+	generatorObject
+	promise *Object
+}
+
+type asyncVals[V any] struct {
+	asyncObject
+	vals V
+}
+
+// promiseOf is the promise of the result of the async function g backs,
+// in its asyncObject.
+func (g *generator) promiseOf() **Object {
+	o := (*asyncObject)(unsafe.Add(unsafe.Pointer(g), -int(unsafe.Offsetof(generatorObject{}.g))))
+	return &o.promise
+}
+
+// The kinds of generator genAlloc makes.
+const (
+	genPlainKind = iota
+	// genLoopKind is a generator with room for the cursor of the first
+	// loop over it.
+	genLoopKind
+	// genAsyncKind is an async function's, with its promise.
+	genAsyncKind
+)
 
 // bindGeneratorParams runs a generator's parameter prologue, which evaluates
 // defaults and unpacks patterns.

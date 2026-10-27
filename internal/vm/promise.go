@@ -1102,7 +1102,7 @@ func (r *Runtime) toPromiseErr(v Value) (*Object, error) {
 // resumes the generator, so the whole function is driven by the job queue.
 func (r *Runtime) runAsync(g *generator) Value {
 	result := r.newPromise()
-	g.promise = result
+	*g.promiseOf() = result
 	r.stepAsync(g, Undefined, resumeNext)
 	return Obj(result)
 }
@@ -1113,11 +1113,11 @@ func (r *Runtime) stepAsync(g *generator, sent Value, mode resumeMode) {
 	if err != nil {
 		// An exception that escapes the body rejects the function's promise
 		// rather than propagating to the caller, which has long since returned.
-		r.rejectPromise(g.promise, thrownValue(err))
+		r.rejectPromise(*g.promiseOf(), thrownValue(err))
 		return
 	}
 	if done {
-		r.resolvePromise(g.promise, v)
+		r.resolvePromise(*g.promiseOf(), v)
 		return
 	}
 

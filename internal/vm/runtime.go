@@ -648,6 +648,9 @@ type closureCode struct {
 	// ic is the caches of the template's property reads, shared by every
 	// closure made from it in the runtime; see propCache.
 	ic []propCache
+	// genLoops says a loop has stepped a generator of the template made
+	// with no room for its cursor, which those made after have (genAlloc).
+	genLoops bool
 }
 
 // closure is a function template paired with the upvalues it captured.

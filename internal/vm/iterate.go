@@ -314,7 +314,7 @@ func (r *Runtime) startForOf(v Value) (Value, error) {
 		// up, or the iterator method called.
 		if o.class == ClassGenerator {
 			if next := r.generatorIteration(o); next != nil {
-				return r.newIterObject(iterState{iter: v, next: Obj(next)}), nil
+				return genCursor(r, o, next), nil
 			}
 		}
 	}

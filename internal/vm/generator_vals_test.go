@@ -88,9 +88,59 @@ func TestGeneratorOneAllocation(t *testing.T) {
 	}
 }
 
+// TestGeneratorLoopRoom pins that once a loop has stepped a generator of a
+// function, the function's generators are made with their first loop's
+// cursor, in one allocation: a loop over one, made and run, allocates
+// once, where an async function's call is unchanged; and that every way of
+// looping over a generator gives Node's answer, whether its cursor is the
+// one in the generator's allocation or one of its own -- a second loop over
+// it, loops nested over one generator, a loop left by break and one
+// begun again, spread, destructuring, Array.from, yield*, and generators
+// made before the function learned.
+func TestGeneratorLoopRoom(t *testing.T) {
+	defer SetTreeTier(true)
+	r := New(Config{})
+	defer r.Close()
+	fn, err := r.Run(compileForTest(t, `(function () { function* g(a, b) { yield a; yield b }
+		return function (x) { var s = 0; for (var v of g(x, 1)) s += v; return s } })()`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := []Value{Int(2)}
+	if _, err := r.call(fn, Undefined, args); err != nil {
+		t.Fatal(err)
+	}
+	if n := testing.AllocsPerRun(100, func() {
+		if v, err := r.call(fn, Undefined, args); err != nil || v.Number() != 3 {
+			t.Fatalf("got %v, %v", v, err)
+		}
+	}); n != 1 {
+		t.Errorf("a generator made and run by for-of: %v allocations, want 1", n)
+	}
+	for _, tt := range []struct{ src, want string }{
+		{`function* g() { yield 1; yield 2; yield 3 } for (var x of g()); var it = g(), a = []; for (var v of it) { a.push(v); if (v == 1) break } for (var v of it) a.push(v); a.join()`, "1"},
+		{`function* g() { yield 1; yield 2; yield 3 } for (var x of g()); var it = g(), a = []; for (var v of it) for (var w of it) a.push(v + ':' + w); a.join()`, "1:2,1:3"},
+		{`function* g(n) { for (var i = 0; i < n; i++) yield i } for (var x of g(1)); var a = [...g(3)], [p, q] = g(5); a.join() + '|' + p + q + '|' + Array.from(g(2)).join()`, "0,1,2|01|0,1"},
+		{`function* g(n) { for (var i = 0; i < n; i++) yield i } var early = g(2); for (var x of g(1)); var late = g(3), a = []; for (var v of early) a.push(v); for (var v of late) a.push(v); a.join()`, "0,1,0,1,2"},
+		{`function* g() { yield 1; yield 2 } function* d() { yield* g(); yield* g() } for (var x of d()); [...d()].join()`, "1,2,1,2"},
+		{`function* g() { yield 1; yield 2 } for (var x of g()); var it = g(); it.next(); [...it].join() + '|' + JSON.stringify(it.next())`, `2|{"done":true}`},
+	} {
+		for _, on := range []bool{false, true} {
+			SetTreeTier(on)
+			v, err := r.Run(compileForTest(t, tt.src))
+			if err != nil {
+				t.Fatalf("%s: %v", tt.src, err)
+			}
+			if got, _ := r.ToString(v); got.Go() != tt.want {
+				t.Errorf("tree %v: %s = %s, want %s", on, tt.src, got.Go(), tt.want)
+			}
+		}
+	}
+}
+
 // TestGeneratorSavedPart pins the generator's size and what its saved
-// part holds: a generator with two values or fewer is 184 bytes, the 192
-// of a size class, with no ext, and the 96 of its state; one that
+// part holds: a generator with two values or fewer is 176 bytes, a size
+// class, with no ext, and the 88 of its state; one that
 // suspends with nothing beneath the value, in no try statement and with
 // nothing captured has no saved part however often it suspends, one
 // that leaves operands, handlers or captures makes it once, and a
@@ -101,11 +151,14 @@ func TestGeneratorSavedPart(t *testing.T) {
 	if unsafe.Sizeof(uintptr(0)) != 8 {
 		t.Skip("sizes of a 64-bit build")
 	}
-	if n := unsafe.Sizeof(generatorVals[[2]Value]{}); n != 184 {
-		t.Errorf("a generator of two values is %d bytes, want 184", n)
+	if n := unsafe.Sizeof(generatorVals[[2]Value]{}); n != 176 {
+		t.Errorf("a generator of two values is %d bytes, want 176", n)
 	}
-	if n := unsafe.Sizeof(generator{}); n != 96 {
-		t.Errorf("a generator's state is %d bytes, want 96", n)
+	if n := unsafe.Sizeof(generator{}); n != 88 {
+		t.Errorf("a generator's state is %d bytes, want 88", n)
+	}
+	if n := unsafe.Sizeof(generatorLoopVals[[2]Value]{}); n != 288 {
+		t.Errorf("a generator of two values with its loop's cursor is %d bytes, want 288", n)
 	}
 	for _, tt := range []struct {
 		src string
