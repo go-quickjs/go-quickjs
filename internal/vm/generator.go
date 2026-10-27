@@ -77,6 +77,10 @@ type generator struct {
 	// async marks a generator that backs an async function, whose suspensions
 	// are awaits rather than yields.
 	async bool
+	// treeRun marks a generator a tree's loop is stepping with no recover
+	// of the resumption's own, which an exception its body throws leaves
+	// executing, with its frame gone (see ztree_a_gen.go).
+	treeRun bool
 }
 
 // genSaved is what a generator's suspension leaves for its next
@@ -600,7 +604,10 @@ func (r *Runtime) resumeFull(g *generator, sent Value, mode resumeMode) (resumeR
 	}
 	switch g.state {
 	case genExecuting:
-		return resumeResult{value: Undefined, how: resumeDone}, r.throwTypeError("the generator is already running")
+		if err := stillRunning(r, g); err != nil {
+			return resumeResult{value: Undefined, how: resumeDone}, err
+		}
+		fallthrough
 	case genCompleted:
 		// A completed generator answers every request the same way.
 		switch mode {

@@ -21,6 +21,28 @@ import (
 // instance and on the intrinsics; with scopes and direct evals across
 // suspensions; and for-in, whose snapshot a cursor keeps.
 var generatorCases = []struct{ name, want, src string }{
+	// A tree's loop steps a generator whose body has no handler and no
+	// loop's cursor with no recover of the resumption's own: an exception
+	// the body throws, or a call in it, goes to the loop's handler, the
+	// cursor is not closed, the generator's captures are closed, and the
+	// generator is done for every later resumption; one running is still
+	// running for a call in its body.
+	{"treeStepThrowCaught", `1TypeError{"done":true}{"value":4,"done":true}`,
+		`function* g() { yield 1; null.x } var it = g(), s = ''; try { for (var v of it) s += v } catch (e) { s += e.name } s + JSON.stringify(it.next()) + JSON.stringify(it.return(4))`},
+	{"treeStepThrowDeep", `RangeError`,
+		`function thrower(x) { if (x == 2) throw new RangeError('r'); return x } function* g() { for (var i = 0; i < 5; i++) yield thrower(i) } function run() { var s = ''; for (var v of g()) s += v; return s } var out; try { run() } catch (e) { out = e.name } out`},
+	{"treeStepReentrant", `1TypeError{"done":true}`,
+		`var it; function* g() { yield 1; it.next(); yield 2 } it = g(); var s = ''; try { for (var v of it) s += v } catch (e) { s += e.name } s + JSON.stringify(it.next())`},
+	{"treeStepCapturesClosed", `2`,
+		`var f; function* g() { var x = 1; f = () => x; yield 1; x = 2; throw 'e' } try { for (var v of g()); } catch (e) {} f()`},
+	{"treeStepInGenerator", `10,after|cx`,
+		`var log = []; function* inner() { yield 1; throw 'x' } function* outer() { try { for (var v of inner()) yield v * 10 } catch (e) { log.push('c' + e) } yield 'after' } var r = []; for (var v of outer()) r.push(v); r.join() + '|' + log.join()`},
+	{"treeStepReturn", `0,1,2,[0,1],{"done":true}`,
+		`function* g(n) { for (var i = 0; i < n; i++) { if (i == 3) return 'r'; yield i } } var s = []; for (var v of g(10)) s.push(v); var it = g(2); s.push(JSON.stringify([...it]), JSON.stringify(it.next())); s.join()`},
+	{"treeStepBreakCloses", `1,ret`,
+		`var log = []; function* g() { yield 1; yield 2 } var it = g(); it.return = function () { log.push('ret'); return {} }; for (var v of it) { log.push(v); if (v == 1) break } log.join()`},
+	{"treeStepSendsUndefined", `1,`,
+		`function* g() { var a = yield 1; yield a } var it = g(); var s = []; for (var v of it) s.push(v); s.join()`},
 	// What a suspension leaves besides its place -- the operands beneath
 	// the value, the handlers in force, the captures -- kept in the
 	// generator's saved part, made by the first that leaves any, and let

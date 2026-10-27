@@ -39,10 +39,14 @@ import (
 
 // tgen is what a generator's tree keeps for its resumptions: the block
 // each pc begins, and whether the function has for...of loops, whose
-// cursors an exception closes (see ztree_zof.go).
+// cursors an exception closes (see ztree_zof.go); plain is, once a step
+// has asked (genPlain), genPlainYes where it has neither those nor a
+// handler, so that nothing in it catches an exception or has anything to
+// close (see ztree_a_gen.go), and genPlainNo where it has.
 type tgen struct {
 	index []int
 	iters bool
+	plain atomic.Uint32
 }
 
 var (

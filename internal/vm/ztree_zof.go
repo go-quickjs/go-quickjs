@@ -149,7 +149,7 @@ func init() {
 		}
 		t.blocks[bi] = tblock{body: b.takeBody(), next: func(c *tctx) int {
 			c.at(pc)
-			v, more, err := c.r.iterNext(c.stack[d-1])
+			v, more, err := iterNextTree(c, c.stack[d-1])
 			if err != nil {
 				c.throw(err)
 			}

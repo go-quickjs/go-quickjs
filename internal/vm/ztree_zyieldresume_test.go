@@ -247,3 +247,44 @@ log.join()`
 		r.Close()
 	}
 }
+
+// TestTreeStepFinishesLater pins how a tree's loop's step of a generator
+// whose body has no handler and no cursor (ztree_a_gen.go) leaves it when
+// the body throws: executing in a tree's step, its frame gone, until the
+// next resumption finds it so and finishes it -- done, as Node's is -- and
+// the interpreter's, which finishes it at once. A generator still running,
+// whose frame is there, is not finished by a call in its body.
+func TestTreeStepFinishesLater(t *testing.T) {
+	defer SetTreeTier(true)
+	for _, on := range []bool{false, true} {
+		SetTreeTier(on)
+		r := New(Config{})
+		v, err := r.Run(compileForTest(t, `function* g() { yield 1; null.x }
+function run(it) { var s = ''; try { for (var v of it) s += v } catch (e) { s += e.name } return s }
+var it = g(); var s = run(it); it`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		g := genOf(v.Object())
+		if on && (g.state != genExecuting || !g.treeRun) {
+			t.Errorf("tree: the generator's state %d, treeRun %v; want it left executing in a step", g.state, g.treeRun)
+		}
+		if !on && g.state != genCompleted {
+			t.Errorf("interpreter: the generator's state %d, want finished", g.state)
+		}
+		v, err = r.Run(compileForTest(t, `s + JSON.stringify(it.next()) + JSON.stringify(it.next())`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := r.ToString(v); got.Go() != `1TypeError{"done":true}{"done":true}` {
+			t.Errorf("tree %v: got %s", on, got.Go())
+		}
+		if g.state != genCompleted || g.treeRun || g.saved != nil {
+			t.Errorf("tree %v: state %d, treeRun %v, saved %v after a resumption; want finished", on, g.state, g.treeRun, g.saved != nil)
+		}
+		if r.frameDepth != 0 {
+			t.Errorf("tree %v: %d frames left", on, r.frameDepth)
+		}
+		r.Close()
+	}
+}
