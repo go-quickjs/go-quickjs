@@ -5455,7 +5455,7 @@ func (c *compiler) typeIs(v *ssa.Value, guard func(amd64.Cond), to *target) {
 		}
 		c.cmpWord(w, c.enc.Object)
 		c.a.Jcc(amd64.CondNE, no)
-		if c.reference(v, a, c.enc.Object, guard) {
+		if c.knownReference(v, a, guard) {
 			c.a.LoadU8(scratchA, scratchC, c.enc.ObjectFlags)
 			c.a.OpImm(amd64.And, scratchA, int32(c.enc.FlagHTMLDDA), false)
 			if v.Index == ir.TypeUndefined {
@@ -5506,16 +5506,24 @@ func (c *compiler) objectOf(v *ssa.Value, guard func(amd64.Cond)) bool {
 // scratchC, as objectOf finds an object, exiting to v's state when a is not
 // one. It uses scratchA and scratchB.
 func (c *compiler) reference(v, a *ssa.Value, word uint64, guard func(amd64.Cond)) bool {
-	o := c.origin.At(a)
-	if a.Shadow == nil && o < 0 {
+	if a.Shadow == nil && c.origin.At(a) < 0 {
 		// A primitive is never a reference.
 		c.a.Jmp(c.stubLabel(v.State, exitKind(v.Aux)))
 		return false
 	}
-	w := c.gpr(a, scratchA)
-	c.movImm(scratchB, word)
-	c.a.Op(amd64.Cmp, w, scratchB, true)
+	c.cmpWord(c.gpr(a, scratchA), word)
 	guard(amd64.CondNE)
+	return c.knownReference(v, a, guard)
+}
+
+// knownReference is reference of a value whose word the code has just
+// compared with the kind's, and gone on only where it is that word: no
+// second compare.
+func (c *compiler) knownReference(v, a *ssa.Value, guard func(amd64.Cond)) bool {
+	if a.Shadow == nil && c.origin.At(a) < 0 {
+		c.a.Jmp(c.stubLabel(v.State, exitKind(v.Aux)))
+		return false
+	}
 	c.sourceRef(a, guard)
 	c.a.Op(amd64.Test, scratchC, scratchC, true)
 	guard(amd64.CondE)
@@ -7088,7 +7096,7 @@ func (c *compiler) length(v *ssa.Value, guard func(amd64.Cond)) {
 	array, have := c.a.NewLabel(), c.a.NewLabel()
 	c.cmpWord(c.gpr(a, scratchA), c.enc.String)
 	c.a.Jcc(amd64.CondNE, array)
-	c.reference(v, a, c.enc.String, guard)
+	c.knownReference(v, a, guard)
 	c.a.Load(scratchC, scratchC, c.enc.StringLength)
 	c.a.Jmp(have)
 	c.a.Bind(array)
@@ -8622,7 +8630,7 @@ func (c *compiler) looseNullish(v *ssa.Value, guard func(amd64.Cond), to *target
 	}
 	c.cmpWord(w, c.enc.Object)
 	c.a.Jcc(amd64.CondNE, t.no)
-	if c.reference(v, a, c.enc.Object, guard) {
+	if c.knownReference(v, a, guard) {
 		c.a.LoadU8(scratchA, scratchC, c.enc.ObjectFlags)
 		c.a.OpImm(amd64.And, scratchA, int32(c.enc.FlagHTMLDDA), false)
 		c.jumpIf(t, amd64.CondNE)
@@ -8667,13 +8675,13 @@ func (c *compiler) eqTagged(v *ssa.Value, guard func(amd64.Cond), to *target) {
 	// line, a primitive or strings.
 	c.cmpWord(wx, abi.NumberLimit)
 	c.a.Jcc(amd64.CondB, number)
+	// The words are one: x's an object's or a string's is y's too.
 	notObject := c.a.NewLabel()
-	c.movImm(scratchC, c.enc.Object)
-	c.a.Op(amd64.Cmp, wx, scratchC, true)
+	c.cmpWord(wx, c.enc.Object)
 	c.a.Jcc(amd64.CondNE, notObject)
-	if c.reference(v, x, c.enc.Object, guard) {
+	if c.knownReference(v, x, guard) {
 		c.a.MovQToX(xScratch1, scratchC)
-		if c.reference(v, y, c.enc.Object, guard) {
+		if c.knownReference(v, y, guard) {
 			c.a.MovQFromX(scratchA, xScratch1)
 			c.a.Op(amd64.Cmp, scratchA, scratchC, true)
 			c.a.Jcc(amd64.CondE, yes)
@@ -8690,12 +8698,11 @@ func (c *compiler) eqTagged(v *ssa.Value, guard func(amd64.Cond), to *target) {
 		c.a.Jcc(amd64.CondE, yes)
 	}
 	notString, units := c.a.NewLabel(), c.a.NewLabel()
-	c.movImm(scratchC, c.enc.String)
-	c.a.Op(amd64.Cmp, wx, scratchC, true)
+	c.cmpWord(wx, c.enc.String)
 	c.a.Jcc(amd64.CondNE, notString)
-	if c.reference(v, x, c.enc.String, guard) {
+	if c.knownReference(v, x, guard) {
 		c.a.MovQToX(xScratch1, scratchC)
-		if c.reference(v, y, c.enc.String, guard) {
+		if c.knownReference(v, y, guard) {
 			c.a.MovQFromX(scratchA, xScratch1)
 			c.a.Op(amd64.Cmp, scratchA, scratchC, true)
 			c.a.Jcc(amd64.CondE, yes)
@@ -8774,7 +8781,7 @@ func (c *compiler) eqTagged(v *ssa.Value, guard func(amd64.Cond), to *target) {
 				}
 				c.cmpWord(k.w, c.enc.Object)
 				c.a.Jcc(amd64.CondNE, no)
-				if c.reference(v, k.other, c.enc.Object, guard) {
+				if c.knownReference(v, k.other, guard) {
 					c.a.LoadU8(scratchC, scratchC, c.enc.ObjectFlags)
 					c.a.OpImm(amd64.And, scratchC, int32(c.enc.FlagHTMLDDA), false)
 					c.a.Jcc(amd64.CondNE, yes)
@@ -8783,10 +8790,9 @@ func (c *compiler) eqTagged(v *ssa.Value, guard func(amd64.Cond), to *target) {
 			}
 		})
 	}
-	c.movImm(scratchC, abi.NumberLimit)
-	c.a.Op(amd64.Cmp, wx, scratchC, true)
+	c.cmpWord(wx, abi.NumberLimit)
 	c.a.Jcc(amd64.CondAE, other)
-	c.a.Op(amd64.Cmp, wy, scratchC, true)
+	c.cmpWord(wy, abi.NumberLimit)
 	c.a.Jcc(amd64.CondAE, other)
 	c.a.MovQToX(xScratch0, wx)
 	c.a.MovQToX(xScratch1, wy)
@@ -8819,7 +8825,7 @@ func (c *compiler) truth(v *ssa.Value, guard func(amd64.Cond), to *target) {
 	notObject := c.a.NewLabel()
 	c.cmpWord(r, c.enc.Object)
 	c.a.Jcc(amd64.CondNE, notObject)
-	if c.reference(v, v.Args[0], c.enc.Object, guard) {
+	if c.knownReference(v, v.Args[0], guard) {
 		c.a.LoadU8(scratchA, scratchC, c.enc.ObjectFlags)
 		c.a.OpImm(amd64.And, scratchA, int32(c.enc.FlagHTMLDDA), false)
 		c.a.Jcc(amd64.CondNE, no)
@@ -8849,7 +8855,7 @@ func (c *compiler) truth(v *ssa.Value, guard func(amd64.Cond), to *target) {
 			c.a.Jcc(amd64.CondB, notBig)
 			c.cmpWord(r, c.enc.ShortBigTag)
 			c.a.Jcc(amd64.CondNE, yes)
-			if c.reference(v, v.Args[0], c.enc.ShortBigTag, guard) {
+			if c.knownReference(v, v.Args[0], guard) {
 				c.cmpWord(scratchC, c.enc.ShortBigHigh)
 				c.a.Jcc(amd64.CondE, no)
 				c.a.Jmp(yes)
@@ -8858,7 +8864,7 @@ func (c *compiler) truth(v *ssa.Value, guard func(amd64.Cond), to *target) {
 		}
 		c.cmpWord(r, c.enc.String)
 		guard(amd64.CondNE)
-		if c.reference(v, v.Args[0], c.enc.String, guard) {
+		if c.knownReference(v, v.Args[0], guard) {
 			c.a.Load(scratchA, scratchC, c.enc.StringLength)
 			c.a.Op(amd64.Test, scratchA, scratchA, true)
 			c.a.Jcc(amd64.CondNE, yes)
