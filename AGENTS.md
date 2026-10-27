@@ -64,6 +64,15 @@ concurrently.
   the older Go too: `buffers_go127.go`'s method is `NewTypedArray`'s function.
   An older gofmt cannot parse such a file, so CI formats with the newest Go
   and tests with both.
+- Native code does the same work whether the collector marks or not
+  (internal/jit/README.md, "The write barrier"): a native path stores its
+  pointers through the barrier's routine while the collector marks, and never
+  leaves native code or calls Go for the marking's sake, or it is not
+  compiled natively. `TestJITSameWorkWhileMarking` runs the micro-benchmarks
+  with native code seeing the collector idle and marking and fails on any
+  difference; its list of known breaches only shrinks. Test a native path
+  under `jitMarkingForTest` too; holding the collector off in a test hides a
+  breach.
 - Add a regression test for every semantic bug. Prefer an exact result and
   error type over a broad smoke test.
 - Do not weaken conformance expectations, add skips, or change expected
