@@ -3309,6 +3309,22 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 		callee = v.Args[len(v.Args)-site.Argc-1]
 	}
 	join, generic := arm64.Label(0), false
+	// As amd64's: one cold call Go makes in the call's place, which every
+	// way the call does not make it natively goes to.
+	var goCold arm64.Label
+	goColdUsed := false
+	goCall := func() arm64.Label {
+		if !goColdUsed {
+			goCold, goColdUsed = c.a.NewLabel(), true
+			op := goCallWord(site)
+			c.cold = append(c.cold, func() {
+				c.a.Bind(goCold)
+				c.goCallOp(v, op, true)
+				c.a.B(join)
+			})
+		}
+		return goCold
+	}
 	if !site.Alloc && !site.Receiver {
 		// As amd64's: natively while the collector marks, its result stored
 		// with Go's barrier then, a receiver from a pool shaded first.
@@ -3327,13 +3343,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	c.a.Cmp(a64B, a64C, true)
 	if generic {
 		// As amd64's: none past the deepest context, the call Go's.
-		deep, op := c.a.NewLabel(), goCallWord(site)
-		c.a.BCond(arm64.HS, deep)
-		c.cold = append(c.cold, func() {
-			c.a.Bind(deep)
-			c.goCallOp(v, op, true)
-			c.a.B(join)
-		})
+		c.a.BCond(arm64.HS, goCall())
 	} else {
 		guard(arm64.HS)
 	}
@@ -3444,13 +3454,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 		miss := c.a.NewLabel()
 		c.genericCheck(v, site, len(sites), checked, miss)
 		c.a.Bind(miss)
-		cold, op := c.a.NewLabel(), goCallWord(site)
-		c.a.B(cold)
-		c.cold = append(c.cold, func() {
-			c.a.Bind(cold)
-			c.goCallOp(v, op, true)
-			c.a.B(join)
-		})
+		c.a.B(goCall())
 	}
 	c.a.Bind(checked)
 	if site.Push {
@@ -3541,7 +3545,6 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	const calleeCtx, locals, tmp, top, high2 = arm64.Reg(3), arm64.Reg(5), arm64.Reg(6), arm64.Reg(7), arm64.Reg(8)
 	back := c.a.NewLabel()
 	c.resumeUsed = true
-	op := goCallWord(site)
 	enter := func() {
 		if !c.enterUsed {
 			c.enter, c.enterUsed = c.a.NewLabel(), true
@@ -3715,19 +3718,21 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 			c.a.Bind(next)
 			continue
 		}
-		none := c.a.NewLabel()
 		c.movImm(a64CallLink, uint64(t.Entry)-uint64(c.enc.LinkEntry))
 		c.a.Load(a64D, a64CallLink, c.enc.LinkEntry)
+		if generic {
+			c.a.Cbz(a64D, goCall(), true)
+			setup(t)
+			c.a.Br(a64D)
+			c.a.Bind(next)
+			continue
+		}
+		none := c.a.NewLabel()
 		c.a.Cbz(a64D, none, true)
 		setup(t)
 		c.a.Br(a64D)
 		c.cold = append(c.cold, func() {
 			c.a.Bind(none)
-			if generic {
-				c.goCallOp(v, op, true)
-				c.a.B(join)
-				return
-			}
 			setup(t)
 			if t.ByCode != 0 {
 				c.a.Load(a64CallObject, a64Ctx, abi.OffCallCallee)

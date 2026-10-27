@@ -1305,6 +1305,25 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		callee = v.Args[len(v.Args)-site.Argc-1]
 	}
 	join, generic := amd64.Label(0), false
+	// goCold is the call Go makes in the call's place from native code,
+	// out of line, which every way the call does not make it natively goes
+	// to: one copy a call, where there had been one at each -- a callee
+	// past the deepest context, one with no code, one none of the sites is
+	// -- the same instructions each time.
+	var goCold amd64.Label
+	goColdUsed := false
+	goCall := func() amd64.Label {
+		if !goColdUsed {
+			goCold, goColdUsed = c.a.NewLabel(), true
+			op := goCallWord(site)
+			c.cold = append(c.cold, func() {
+				c.a.Bind(goCold)
+				c.goCallOp(v, op, guard, true)
+				c.a.Jmp(join)
+			})
+		}
+		return goCold
+	}
 	if !site.Alloc && !site.Receiver {
 		// Natively, the collector marking or not: what the call writes --
 		// the records, the callee's context and frame -- outlives none of
@@ -1333,13 +1352,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		// code going on after it, as where its callee has no code -- a
 		// recursion deeper than the contexts had left native code at its
 		// deepest call, Go finishing the level in the interpreter.
-		deep, op := c.a.NewLabel(), goCallWord(site)
-		c.a.Jcc(amd64.CondAE, deep)
-		c.cold = append(c.cold, func() {
-			c.a.Bind(deep)
-			c.goCallOp(v, op, guard, true)
-			c.a.Jmp(join)
-		})
+		c.a.Jcc(amd64.CondAE, goCall())
 	} else {
 		guard(amd64.CondAE)
 	}
@@ -1472,13 +1485,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		miss := c.a.NewLabel()
 		c.genericCheck(v, site, len(sites), checked, miss)
 		c.a.Bind(miss)
-		cold, op := c.a.NewLabel(), goCallWord(site)
-		c.a.Jmp(cold)
-		c.cold = append(c.cold, func() {
-			c.a.Bind(cold)
-			c.goCallOp(v, op, guard, true)
-			c.a.Jmp(join)
-		})
+		c.a.Jmp(goCall())
 	}
 	c.a.Bind(checked)
 	if site.Push {
@@ -1594,7 +1601,6 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	const calleeCtx, locals, tmp, top, high2 = amd64.R8, amd64.R10, amd64.RBX, amd64.R12, amd64.R13
 	back := c.a.NewLabel()
 	c.resumeUsed = true
-	op := goCallWord(site)
 	enter := func() {
 		if !c.enterUsed {
 			c.enter, c.enterUsed = c.a.NewLabel(), true
@@ -1770,20 +1776,22 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 			c.a.Bind(next)
 			continue
 		}
-		none := c.a.NewLabel()
 		c.movImm(callLink, uint64(t.Entry)-uint64(c.enc.LinkEntry))
 		c.a.Load(scratchA, callLink, c.enc.LinkEntry)
 		c.a.Op(amd64.Test, scratchA, scratchA, true)
+		if generic {
+			c.a.Jcc(amd64.CondE, goCall())
+			setup(t)
+			c.a.JmpMem(callLink, c.enc.LinkEntry)
+			c.a.Bind(next)
+			continue
+		}
+		none := c.a.NewLabel()
 		c.a.Jcc(amd64.CondE, none)
 		setup(t)
 		c.a.JmpMem(callLink, c.enc.LinkEntry)
 		c.cold = append(c.cold, func() {
 			c.a.Bind(none)
-			if generic {
-				c.goCallOp(v, op, guard, true)
-				c.a.Jmp(join)
-				return
-			}
 			setup(t)
 			if t.ByCode != 0 {
 				c.a.Load(callObject, regCtx, abi.OffCallCallee)

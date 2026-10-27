@@ -211,3 +211,62 @@ func TestMirCallsLean(t *testing.T) {
 	t.Logf("calls %d dropped, %d used, %d with boxes held, %d registers read back from frames; %d call entries, %d returns",
 		dropped, used, boxes, frames, entries, returns)
 }
+
+// A native call that does not make its call natively -- its callee past
+// the deepest context, or with no code -- has Go make it from native code,
+// out of line: one such call of Go a call, whichever way leads there, on
+// both targets (mir's call). Each way had had its own copy, the same
+// instructions and a description of their own each time: a twentieth of
+// Typescript's code.
+func TestMirCallsOneGoFallback(t *testing.T) {
+	enc := abi.Encoding{ValueSize: 16, NumOffset: 0, RefOffset: 8,
+		Undefined: 0xFFF8000000000001, Null: 0xFFF8000000000002, True: 0xFFF8000000000103,
+		False: 0xFFF8000000000003, Uninitialized: 0xFFF8000000000008, CanonicalNaN: 0x7FF8000000000000,
+		Object: 0xFFF8000000000007, Mega: true, UndefinedCell: 0x60000, StoreRef: 0x70000, WriteBarrier: 0x71000,
+		LinkEntry: 8, LinkIn: 16, ClosureUpvalues: 24, CallGo: 0x72000}
+	for _, target := range []struct {
+		name    string
+		compile func(*ssa.Func, abi.Encoding) (*mir.Code, error)
+	}{{"amd64", mir.CompileAMD64}, {"arm64", mir.CompileARM64}} {
+		made, fallbacks := 0, 0
+		for _, src := range callCorpus {
+			for i, p := range lowered(t, src) {
+				f, err := ssa.BuildWith(p, calls{props{p: p}})
+				if err != nil {
+					continue
+				}
+				f.CallEntry = true
+				ssa.Optimize(f)
+				mc, err := target.compile(f, enc)
+				if err != nil {
+					t.Fatalf("%s: %s (%d): %v", target.name, src, i, err)
+				}
+				keeps := map[int]bool{}
+				for _, b := range f.Blocks {
+					for _, v := range b.Values {
+						if v.Op == ssa.OpCall && len(v.Calls()) != 0 && v.Calls()[0].Go == 0 {
+							made++
+							keeps[v.Index] = true
+						}
+					}
+				}
+				// By the call's PC, which each call of Go in its place says.
+				per := map[uint32]int{}
+				for _, st := range mc.GoCalls {
+					if ssa.GoOp(st.Op&0xff) == ssa.GoCall && keeps[int(st.Keep)] {
+						per[st.PC]++
+						fallbacks++
+					}
+				}
+				for pc, n := range per {
+					if n > 1 {
+						t.Errorf("%s: %s (%d): the call at %d has %d calls of Go in its place", target.name, src, i, pc, n)
+					}
+				}
+			}
+		}
+		if made == 0 || fallbacks == 0 {
+			t.Fatalf("%s: %d calls, %d calls of Go in their place: the corpus makes none", target.name, made, fallbacks)
+		}
+	}
+}
