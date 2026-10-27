@@ -167,7 +167,8 @@ func jitGenRounds(t *testing.T, mk func() *Runtime, rounds int, native func(r *R
 // suspended, and its yield returns the value to the step: each answer is
 // Node's -- in the interpreter, in the tree tier, and with the JIT
 // compiling at the first call, the collector marking (its yields then
-// leaving pointers to Go), and under QJS_JIT_STRESS's budgets and
+// saving their operands through the write barrier, or, where the frame has
+// records, leaving them to Go), and under QJS_JIT_STRESS's budgets and
 // deoptimizations, which leave the generator's code for Go to finish its
 // resumption (jitGenFrame, jitGenDone) -- and, compiled, the steps resume
 // each generator the cases name natively.
@@ -312,5 +313,47 @@ func TestJITGenStepStack(t *testing.T) {
 		function f(a) { const out = []; for (const v of g(a)) out.push(v); return out.join('|') }`, rounds...)
 	if jitGenInForTest(r, "g") == 0 {
 		t.Error("no step resumed g natively")
+	}
+}
+
+// A yield with an operand beneath its value -- a number, which the frame
+// holds without a record -- saves the operand where the generator keeps it
+// natively, while the collector marks as when it does not (its pointer
+// words through the write barrier): every step resumes the generator
+// natively, a few calls of Go in all. A yield saving operands had been
+// Go's suspension while the collector marked, which left the loop judged
+// slow, to the tree tier, which made no native step.
+func TestJITGenYieldSavesWhileMarking(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	for _, marking := range []bool{false, true} {
+		t.Run(map[bool]string{false: "idle", true: "marking"}[marking], func(t *testing.T) {
+			if marking {
+				jitMarkingForTest(t)
+			}
+			r := jitRuntimeForTest(t, Config{JIT: true})
+			if _, err := r.Run(compileForTest(t, `function* g(n) { let last = 0; for (let i = 0; i < n; i++) last = i * 10 + ((yield last) | 0) }
+				function f(n) { let s = 0; for (const v of g(n)) s += v; return s }`)); err != nil {
+				t.Fatal(err)
+			}
+			for range 8 {
+				if v, err := r.Run(compileForTest(t, "''+f(100)")); err != nil || v.String().Go() != "48510" {
+					t.Fatalf("f(100) = %v, %v", v, err)
+				}
+			}
+			in := jitGenInForTest(r, "g")
+			// Node v26.10.0's.
+			v, calls := jitCountGoCalls(t, r, "''+f(10000)")
+			if v.String().Go() != "499850010" {
+				t.Fatalf("f(10000) = %v", v)
+			}
+			if calls > 10000/50 {
+				t.Errorf("a loop of 10000 steps over a saving yield made %d calls of Go", calls)
+			}
+			if n := jitGenInForTest(r, "g") - in; n < 10000 {
+				t.Errorf("10001 steps resumed the generator natively %d times", n)
+			}
+		})
 	}
 }

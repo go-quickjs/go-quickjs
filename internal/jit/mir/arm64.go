@@ -3244,14 +3244,17 @@ func (c *a64Compiler) yieldExit(b *ssa.Block) {
 		c.a.BCond(arm64.LO, toGo)
 	}
 	if saved > 0 {
-		// The operands beneath the value, pointers stored where the
-		// generator keeps them, Go's while the collector marks.
-		c.movImm(a64C, c.enc.WriteBarrier)
-		c.a.LoadU8(a64C, a64C, 0)
-		c.a.Cbnz(a64C, toGo, false)
+		// As amd64's: the operands beneath the value where the generator
+		// keeps them, where it has room, their pointer words with Go's
+		// write barrier while the collector marks, the saved part read
+		// again from the generator at each.
 		c.a.Load(a64C, a64B, c.enc.SavedStack+16)
 		c.a.CmpImm(a64C, int64(saved), true)
 		c.a.BCond(arm64.LO, toGo)
+		marked, copied := c.a.NewLabel(), c.a.NewLabel()
+		c.movImm(a64C, c.enc.WriteBarrier)
+		c.a.LoadU8(a64C, a64C, 0)
+		c.a.Cbnz(a64C, marked, false)
 		c.a.Load(a64C, a64B, c.enc.SavedStack)
 		for i := range saved {
 			for _, w := range [2]int32{c.enc.NumOffset, c.enc.RefOffset} {
@@ -3259,6 +3262,23 @@ func (c *a64Compiler) yieldExit(b *ssa.Block) {
 				c.a.Store(a64C, i*vs+w, a64A)
 			}
 		}
+		c.a.Bind(copied)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(marked)
+			for i := range saved {
+				c.a.Load(a64C, a64Ctx, abi.OffGenObject)
+				c.a.Load(a64C, a64C, c.enc.GenSaved)
+				c.a.Load(a64C, a64C, c.enc.SavedStack)
+				c.a.Load(a64A, a64Stack, i*vs+c.enc.NumOffset)
+				c.a.Store(a64C, i*vs+c.enc.NumOffset, a64A)
+				c.a.AddImm(a64A, a64C, int64(i*vs+c.enc.RefOffset), true)
+				c.a.Load(a64C, a64Stack, i*vs+c.enc.RefOffset)
+				c.refStore()
+			}
+			c.a.Load(a64B, a64Ctx, abi.OffGenObject)
+			c.a.Load(a64B, a64B, c.enc.GenSaved)
+			c.a.B(copied)
+		})
 	}
 	if n > 0 || saved > 0 {
 		c.movImm(a64A, uint64(saved))

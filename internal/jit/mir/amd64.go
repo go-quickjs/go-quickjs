@@ -1165,15 +1165,19 @@ func (c *compiler) yieldExit(b *ssa.Block) {
 		c.a.Jcc(amd64.CondB, toGo)
 	}
 	if saved > 0 {
-		// The operands beneath the value, pointers stored where the
-		// generator keeps them, Go's while the collector marks.
-		c.movImm(scratchC, c.enc.WriteBarrier)
-		c.a.LoadU8(scratchC, scratchC, 0)
-		c.a.Op(amd64.Test, scratchC, scratchC, false)
-		c.a.Jcc(amd64.CondNE, toGo)
+		// The operands beneath the value, stored where the generator keeps
+		// them, where it has room for them: their pointer words with Go's
+		// write barrier while the collector marks (refStore), which keeps
+		// no scratch register -- the saved part is read again, from the
+		// generator, at each.
 		c.a.Load(scratchC, scratchB, c.enc.SavedStack+16)
 		c.a.OpImm(amd64.Cmp, scratchC, saved, true)
 		c.a.Jcc(amd64.CondB, toGo)
+		marked, copied := c.a.NewLabel(), c.a.NewLabel()
+		c.movImm(scratchC, c.enc.WriteBarrier)
+		c.a.LoadU8(scratchC, scratchC, 0)
+		c.a.Op(amd64.Test, scratchC, scratchC, false)
+		c.a.Jcc(amd64.CondNE, marked)
 		c.a.Load(scratchC, scratchB, c.enc.SavedStack)
 		for i := range saved {
 			for _, w := range [2]int32{c.enc.NumOffset, c.enc.RefOffset} {
@@ -1181,6 +1185,23 @@ func (c *compiler) yieldExit(b *ssa.Block) {
 				c.a.Store(scratchC, i*vs+w, scratchA)
 			}
 		}
+		c.a.Bind(copied)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(marked)
+			for i := range saved {
+				c.a.Load(scratchC, regCtx, abi.OffGenObject)
+				c.a.Load(scratchC, scratchC, c.enc.GenSaved)
+				c.a.Load(scratchC, scratchC, c.enc.SavedStack)
+				c.a.Load(scratchA, regStack, i*vs+c.enc.NumOffset)
+				c.a.Store(scratchC, i*vs+c.enc.NumOffset, scratchA)
+				c.a.Lea(scratchA, scratchC, i*vs+c.enc.RefOffset)
+				c.a.Load(scratchC, regStack, i*vs+c.enc.RefOffset)
+				c.refStore()
+			}
+			c.a.Load(scratchB, regCtx, abi.OffGenObject)
+			c.a.Load(scratchB, scratchB, c.enc.GenSaved)
+			c.a.Jmp(copied)
+		})
 	}
 	if n > 0 || saved > 0 {
 		c.storeImm(scratchB, c.enc.SavedStack+8, uint64(saved), scratchA)
