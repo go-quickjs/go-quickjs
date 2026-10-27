@@ -6265,7 +6265,42 @@ func (c *a64Compiler) mathCall(v *ssa.Value) {
 		c.movImm(a64A, uint64(v.Aux))
 		c.a.Store(a64Ctx, abi.OffGoArgs+size+c.enc.NumOffset, a64A)
 	}
-	c.goSaving(uint64(v.Index), nil)
+	if c.enc.GoFast != 0 {
+		// As amd64's: what lives across it saved, through GoFast.
+		st, _ := c.goState(uint64(v.Index), 0, nil, nil)
+		saves := c.savesOf(v)
+		for _, sv := range saves {
+			if sv.float {
+				c.a.StoreF(a64Ctx, c.spillDisp(sv.slot), arm64.FReg(sv.reg))
+			} else {
+				c.a.Store(a64Ctx, c.spillDisp(sv.slot), arm64.Reg(sv.reg))
+			}
+		}
+		reg := c.budgetReg(c.budget)
+		if reg >= 0 {
+			c.budgetFlush(arm64.Reg(reg))
+		}
+		back := c.a.NewLabel()
+		c.movImm(a64C, uint64(uintptr(unsafe.Pointer(st))))
+		c.a.Adr(a64A, back)
+		c.movImm(a64B, c.enc.GoFast)
+		c.a.Br(a64B)
+		c.a.Bind(back)
+		c.a.Load(a64Locals, a64Ctx, abi.OffLocals)
+		c.a.Load(a64Stack, a64Ctx, abi.OffStack)
+		for _, sv := range saves {
+			if sv.float {
+				c.a.LoadF(arm64.FReg(sv.reg), a64Ctx, c.spillDisp(sv.slot))
+			} else {
+				c.a.Load(arm64.Reg(sv.reg), a64Ctx, c.spillDisp(sv.slot))
+			}
+		}
+		if reg >= 0 {
+			c.budgetStart(arm64.Reg(reg))
+		}
+	} else {
+		c.goSaving(uint64(v.Index), nil)
+	}
 	c.a.LoadF(a64F0, a64Ctx, abi.OffGoArgs+c.enc.NumOffset)
 	c.setF(v, a64F0)
 }

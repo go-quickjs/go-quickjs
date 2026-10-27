@@ -7079,7 +7079,44 @@ func (c *compiler) mathCall(v *ssa.Value) {
 	if ssa.GoOp(v.Index) == ssa.GoMath {
 		c.storeImm(regCtx, abi.OffGoArgs+size+c.enc.NumOffset, uint64(v.Aux), scratchA)
 	}
-	c.goSaving(uint64(v.Index), nil)
+	if c.enc.GoFast != 0 {
+		// What lives across it saved (savesOf), not every register, and
+		// through the VM's routine for calls of Go, as a call's: no
+		// refusal, Go always answering.
+		st, _ := c.goState(uint64(v.Index), 0, nil, nil)
+		saves := c.savesOf(v)
+		for _, sv := range saves {
+			if sv.float {
+				c.a.StoreSD(regCtx, c.spillDisp(sv.slot), amd64.XReg(sv.reg))
+			} else {
+				c.a.Store(regCtx, c.spillDisp(sv.slot), amd64.Reg(sv.reg))
+			}
+		}
+		reg := c.budgetReg(c.budget)
+		if reg >= 0 {
+			c.budgetFlush(amd64.Reg(reg))
+		}
+		back := c.a.NewLabel()
+		c.movImm(scratchC, uint64(uintptr(unsafe.Pointer(st))))
+		c.a.LeaLabel(scratchA, back)
+		c.movImm(scratchB, c.enc.GoFast)
+		c.a.JmpReg(scratchB)
+		c.a.Bind(back)
+		c.a.Load(regLocals, regCtx, abi.OffLocals)
+		c.a.Load(regStack, regCtx, abi.OffStack)
+		for _, sv := range saves {
+			if sv.float {
+				c.a.LoadSD(amd64.XReg(sv.reg), regCtx, c.spillDisp(sv.slot))
+			} else {
+				c.a.Load(amd64.Reg(sv.reg), regCtx, c.spillDisp(sv.slot))
+			}
+		}
+		if reg >= 0 {
+			c.budgetStart(amd64.Reg(reg))
+		}
+	} else {
+		c.goSaving(uint64(v.Index), nil)
+	}
 	c.a.LoadSD(xScratch0, regCtx, abi.OffGoArgs+c.enc.NumOffset)
 	c.setX(v, xScratch0)
 }

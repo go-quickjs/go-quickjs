@@ -135,3 +135,85 @@ func TestMirLeafCalls(t *testing.T) {
 		}
 	}
 }
+
+// mathCorpus calls Math's functions Go computes (ssa.OpMathCall) with
+// numbers live across the calls, in loops and out.
+var mathCorpus = []string{
+	`function f(n){let s=0,t=0.5,k=3;for(let i=0;i<n;i++){s+=Math.sin(i*t)*k+Math.atan2(i,k);t+=0.001;k^=i&1}return s+t}`,
+	`function f(x,y){const a=Math.sin(x),b=Math.hypot(x,y);return a*b+x-y}`,
+}
+
+// maths is globals whose method calls of one argument are Math.sin's, of
+// two Math.atan2's or Math.hypot's, each a call of Go (OpMathCall).
+type maths struct {
+	globals
+	p *ir.Program
+}
+
+func (maths) GoCalls() bool { return true }
+func (m maths) Intrinsic(pc int) (ssa.Intrinsic, bool) {
+	if pc+1 >= len(m.p.Maps) {
+		return ssa.Intrinsic{}, false
+	}
+	switch m.p.Maps[pc].Depth - m.p.Maps[pc+1].Depth {
+	case 2:
+		return ssa.Intrinsic{Callee: 0x88000, Op: ssa.OpMathCall, Go: ssa.GoMath, Fn: 1}, true
+	case 3:
+		g := ssa.GoAtan2
+		if pc%2 == 1 {
+			g = ssa.GoHypot
+		}
+		return ssa.Intrinsic{Callee: 0x89000, Op: ssa.OpMathCall, Go: g}, true
+	}
+	return ssa.Intrinsic{}, false
+}
+
+// Math's calls of Go save what lives across them and go through the VM's
+// routine for calls of Go where the encoding has it (GoFast), through
+// CallGo saving every register where it has not, by code that keeps the
+// rules on both targets.
+func TestMirMathCalls(t *testing.T) {
+	enc := abi.Encoding{ValueSize: 16, NumOffset: 0, RefOffset: 8,
+		Undefined: 0xFFF8000000000001, Null: 0xFFF8000000000002, True: 0xFFF8000000000103,
+		False: 0xFFF8000000000003, Uninitialized: 0xFFF8000000000008, CanonicalNaN: 0x7FF8000000000000,
+		Mega: true, UndefinedCell: 0x60000, StoreRef: 0x70000, WriteBarrier: 0x71000, CallGo: 0x72000}
+	for _, fast := range []uint64{0x74000, 0} {
+		e := enc
+		e.GoFast = fast
+		calls := 0
+		for _, src := range mathCorpus {
+			for i, p := range lowered(t, src) {
+				f, err := ssa.BuildWith(p, maths{p: p})
+				if err != nil {
+					continue
+				}
+				f.CallEntry = true
+				ssa.Optimize(f)
+				for _, b := range f.Blocks {
+					for _, v := range b.Values {
+						if v.Op == ssa.OpMathCall {
+							calls++
+						}
+					}
+				}
+				for _, arch := range arches {
+					compile := mir.CompileAMD64
+					if arch == "arm64" {
+						compile = mir.CompileARM64
+					}
+					name := fmt.Sprintf("%s (%d, GoFast %#x), %s", src, i, fast, arch)
+					mc, err := compile(f, e)
+					if err != nil {
+						t.Fatalf("%s: %v", name, err)
+					}
+					if err := check(arch, mc.Bytes[:mc.Text]); err != nil {
+						t.Fatalf("%s: %v", name, err)
+					}
+				}
+			}
+		}
+		if calls < len(mathCorpus) {
+			t.Errorf("GoFast %#x: %d Math calls built", fast, calls)
+		}
+	}
+}

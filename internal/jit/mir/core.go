@@ -1154,7 +1154,7 @@ func (c *core) allocate() error {
 			switch v.Op {
 			case ssa.OpPhi:
 				continue // phi arguments are used at their predecessors' ends
-			case ssa.OpCall, ssa.OpKeep, ssa.OpBigBox, ssa.OpCallCell, ssa.OpBigCell:
+			case ssa.OpCall, ssa.OpKeep, ssa.OpBigBox, ssa.OpCallCell, ssa.OpBigCell, ssa.OpMathCall:
 				kv = append(kv, v)
 				if v.Op == ssa.OpKeep {
 					c.keepRunAt(b, i, v)
@@ -1844,10 +1844,13 @@ func (c *core) allocate() error {
 	open, next := c.intervalRefs(len(all))[:0], 0
 	{
 		for _, v := range kv {
-			if v.Op != ssa.OpCall || v.Calls() == nil {
+			if (v.Op != ssa.OpCall || v.Calls() == nil) && v.Op != ssa.OpMathCall {
+				// A call, native or Go's; or a Math function's call of
+				// Go, which saves what lives across it too (mir's
+				// mathCall).
 				continue
 			}
-			if iv[v.ID].v != nil && iv[v.ID].end == pos[v.ID] {
+			if v.Op == ssa.OpCall && iv[v.ID].v != nil && iv[v.ID].end == pos[v.ID] {
 				// A native call's result nothing uses -- no value, state or
 				// control, nor its keep cell's address (OpCallCell) -- is
 				// stored nowhere (dropped).

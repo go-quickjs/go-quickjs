@@ -330,3 +330,60 @@ func TestJITGoFast(t *testing.T) {
 		t.Errorf("%d calls of Go through the routine in 120 turns, want at least one a turn", r.jit.goFast-fast)
 	}
 }
+
+// mathSetup's loops call Math's functions Go computes (ssa.OpMathCall) --
+// sin, atan2, hypot, exp -- with numbers, a float and an int32, live
+// across them; onlySin's loop calls nothing else, so that it counts its
+// back edges' budget in a register.
+const mathSetup = `
+function trig(n) { let s = 0, t = 0.5, k = 3; for (let i = 0; i < n; i++) { s += Math.sin(i * t) * k + Math.atan2(i, k) + Math.hypot(i, t) + Math.exp(-i / n); t += 0.001; k ^= i & 1 } return s + ':' + t + ':' + k }
+function onlySin(n) { let s = 0; for (let i = 0; i < n; i++) s += Math.sin(i); return s }
+`
+
+// A Math function's call of Go saves only what lives across it (savesOf),
+// not every register the code uses, and goes through the VM's routine for
+// calls of Go (abi.Encoding's GoFast), the loop's budget in a register
+// stored back around it: each answer is Node's (v26.10.0), also with a
+// collection in the middle of the calls (jitGoCallWork) and with the code
+// compiled for a collector that marks.
+func TestJITMathCallsSaveLive(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	for _, marking := range []bool{false, true} {
+		if marking {
+			jitMarkingForTest(t)
+		}
+		calls := 0
+		jitGoCallWork = func() {
+			if calls++; calls%113 == 0 {
+				runtime.GC()
+			}
+		}
+		var rounds []string
+		for range 6 {
+			rounds = append(rounds, "trig(100)", "onlySin(1000)")
+		}
+		r := jitAgreesForTest(t, mathSetup, rounds...)
+		fast := r.jit.goFast
+		for _, rd := range [][2]string{
+			{"trig(100)", "5167.733570685861:0.6000000000000001:3"},
+			{"onlySin(1000)", "-0.012909906458837123"},
+		} {
+			v, err := r.Run(compileForTest(t, "''+("+rd[0]+")"))
+			if err != nil {
+				t.Fatalf("%s: %v", rd[0], err)
+			}
+			if got := v.String().Go(); got != rd[1] {
+				t.Errorf("marking %v: %s = %q, want Node's %q", marking, rd[0], got, rd[1])
+			}
+		}
+		jitGoCallWork = nil
+		for _, name := range []string{"trig", "onlySin"} {
+			jitNativeForTest(t, r, name)
+		}
+		if got := r.jit.goFast - fast; got < 4*100+1000 {
+			t.Errorf("marking %v: %d calls of Math's functions through the routine, want 1400", marking, got)
+		}
+	}
+}
