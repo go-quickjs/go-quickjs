@@ -1159,6 +1159,21 @@ type Encoding struct {
 	GenState, GenStarted, GenDelegating   int32
 	GenSuspendedStart, GenSuspendedYield  uint8
 	GenExecuting, GenCompleted            uint8
+	// A generator made with room for the cursor of the first loop over it
+	// (the VM's generatorLoop) has the byte at GenRoom set until a loop
+	// takes it, the cursor's object GenRoomCursor bytes past the
+	// generator's, all of it zero till then (0 where native code makes
+	// none). Whether a generator iterates as the intrinsics do the VM's
+	// cache of it says (its genIterationCache): the pointer at GenIterFrom
+	// the prototype the chain is held from, the pointer at GenIterCell the
+	// chain's validity cell, whose first byte is set while it is valid, and
+	// where next and Symbol.iterator are, an object's pointer at
+	// GenIterNextObj and GenIterIterObj and its property's index, an
+	// int32, at GenIterNextIdx and GenIterIterIdx.
+	GenRoom, GenRoomCursor         int32
+	GenIterFrom, GenIterCell       int32
+	GenIterNextObj, GenIterNextIdx int32
+	GenIterIterObj, GenIterIterIdx int32
 	// A handler the generator saves is HandlerSize bytes: the uint32 at
 	// HandlerPC where it goes on, the int at HandlerDepth the operands
 	// beneath it, and the byte at HandlerFinally set for a finally clause's.

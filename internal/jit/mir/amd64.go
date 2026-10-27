@@ -2075,6 +2075,18 @@ func (c *compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(amd64.Con
 		c.setG(v, scratchA)
 		return
 	}
+	if genForOfs(v, c.enc) {
+		// A for...of's cursor over a generator native code takes from the
+		// generator's room (genForOf); any other Go makes.
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		c.genForOf(v, slow, join)
+		c.a.Bind(slow)
+		c.goCallOp(v, goOpWord(site), guard, false)
+		c.a.Bind(join)
+		c.a.Load(scratchA, regCtx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
+		c.setG(v, scratchA)
+		return
+	}
 	if genMakes(v, c.enc) {
 		// A call of a generator function whose generator native code
 		// makes from its pool (genMake); any other Go makes.
@@ -3164,6 +3176,103 @@ func (c *compiler) genCall(v *ssa.Value, t ssa.GenStep, slow, done amd64.Label) 
 		c.a.Load(amd64.Reg(kept), regCtx, abi.OffGoArgs+c.enc.NumOffset)
 	}
 	c.a.Jmp(slow)
+}
+
+// genForOf makes v, a for...of's cursor Go would make (ssa.CallSite's
+// GenIter), of a generator with room for its loop's cursor that iterates
+// as the intrinsics do, the VM's startForOf's first case: the cursor the
+// room's, its object's class a cursor's, its iterator the generator and
+// its next the realm's, the room taken -- where the collector does not
+// mark, which does not change while native code runs. Anything else goes
+// to slow, where Go makes it. It goes on at done, the cursor in the call's
+// keep cell. It uses every scratch register and xScratch0.
+func (c *compiler) genForOf(v *ssa.Value, slow, done amd64.Label) {
+	site := v.Calls()[0]
+	fail := func(cond amd64.Cond) { c.a.Jcc(cond, slow) }
+	x := v.Args[0]
+	r := c.gpr(x, scratchA)
+	c.cmpWord(r, c.enc.Object)
+	fail(amd64.CondNE)
+	c.pointerWord(x, r)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	fail(amd64.CondE)
+	// A generator with its room, no property of its own.
+	c.a.LoadU8(scratchA, scratchB, c.enc.ObjectClass)
+	c.a.OpImm(amd64.Cmp, scratchA, int32(c.enc.ClassGenerator), false)
+	fail(amd64.CondNE)
+	c.a.LoadU8(scratchA, scratchB, c.enc.GenObject+c.enc.GenRoom)
+	c.a.Op(amd64.Test, scratchA, scratchA, false)
+	fail(amd64.CondE)
+	c.a.Load(scratchA, scratchB, c.enc.ObjectShape)
+	c.a.Op(amd64.Test, scratchA, scratchA, true)
+	fail(amd64.CondNE)
+	// Its prototype an ordinary object with none, the chain up from that
+	// the cache's, valid.
+	c.a.Load(scratchC, scratchB, c.enc.ObjectProto)
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	fail(amd64.CondE)
+	c.a.LoadU8(scratchA, scratchC, c.enc.ObjectClass)
+	c.a.OpImm(amd64.Cmp, scratchA, int32(c.enc.ClassObject), false)
+	fail(amd64.CondNE)
+	c.a.Load(scratchA, scratchC, c.enc.ObjectProps+8)
+	c.a.Op(amd64.Test, scratchA, scratchA, true)
+	fail(amd64.CondNE)
+	c.a.Load(scratchC, scratchC, c.enc.ObjectProto)
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	fail(amd64.CondE)
+	c.movImm(scratchA, uint64(site.GenIter))
+	c.a.CmpMem(scratchC, scratchA, c.enc.GenIterFrom, true)
+	fail(amd64.CondNE)
+	c.a.Load(scratchC, scratchA, c.enc.GenIterCell)
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	fail(amd64.CondE)
+	c.a.LoadU8(scratchC, scratchC, 0)
+	c.a.Op(amd64.Test, scratchC, scratchC, false)
+	fail(amd64.CondE)
+	c.a.MovQToX(xScratch0, scratchB)
+	// Its next and Symbol.iterator, where the cache found them, the
+	// realm's.
+	for _, k := range [...]struct {
+		obj, idx int32
+		want     uintptr
+	}{{c.enc.GenIterNextObj, c.enc.GenIterNextIdx, site.GenNext}, {c.enc.GenIterIterObj, c.enc.GenIterIterIdx, site.GenIterFn}} {
+		c.movImm(scratchA, uint64(site.GenIter))
+		c.a.Load(scratchC, scratchA, k.obj)
+		c.a.Op(amd64.Test, scratchC, scratchC, true)
+		fail(amd64.CondE)
+		c.a.LoadU32(scratchA, scratchA, k.idx)
+		c.a.Load(scratchB, scratchC, c.enc.ObjectProps+8)
+		c.a.Op(amd64.Cmp, scratchA, scratchB, true)
+		fail(amd64.CondAE)
+		c.a.Load(scratchB, scratchC, c.enc.ObjectProps)
+		c.a.ShiftImm(amd64.Shl, scratchA, 4, true)
+		c.a.Op(amd64.Add, scratchB, scratchA, true)
+		c.a.Load(scratchB, scratchB, c.enc.RefOffset)
+		c.cmpWord(scratchB, uint64(k.want))
+		fail(amd64.CondNE)
+	}
+	c.movImm(scratchB, c.enc.WriteBarrier)
+	c.a.LoadU8(scratchB, scratchB, 0)
+	c.a.Op(amd64.Test, scratchB, scratchB, false)
+	fail(amd64.CondNE)
+	// The room's cursor: its class, its iterator and next; the room taken.
+	c.a.MovQFromX(scratchB, xScratch0)
+	c.a.Lea(scratchC, scratchB, c.enc.GenRoomCursor)
+	c.a.MovImm(scratchA, uint64(c.enc.ClassCursor))
+	c.a.Store8(scratchC, c.enc.ObjectClass, scratchA)
+	st := c.enc.IterState
+	c.movImm(scratchA, c.enc.Object)
+	c.a.Store(scratchC, st+c.enc.IterIter+c.enc.NumOffset, scratchA)
+	c.a.Store(scratchC, st+c.enc.IterIter+c.enc.RefOffset, scratchB)
+	c.a.Store(scratchC, st+c.enc.IterNext+c.enc.NumOffset, scratchA)
+	c.movImm(scratchA, uint64(site.GenNext))
+	c.a.Store(scratchC, st+c.enc.IterNext+c.enc.RefOffset, scratchA)
+	c.a.MovImm(scratchA, 0)
+	c.a.Store8(scratchB, c.enc.GenObject+c.enc.GenRoom, scratchA)
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	c.a.Store(regCtx, keep+c.enc.RefOffset, scratchC)
+	c.storeImm(regCtx, keep+c.enc.NumOffset, c.enc.Object, scratchA)
+	c.a.Jmp(done)
 }
 
 // genMake makes v, a call Go would make of a generator function

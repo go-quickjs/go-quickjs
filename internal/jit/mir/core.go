@@ -3223,6 +3223,19 @@ func genNexts(v *ssa.Value, enc abi.Encoding) bool {
 		site.Argc <= 1 && len(v.Args) == site.Argc+2
 }
 
+// genForOfs reports whether v, a for...of's cursor's making Go would make
+// (ssa.CallSite's ForOf), takes a generator's room's cursor natively
+// (ssa.CallSite's GenIter, genForOf): of 16-byte values, the encoding
+// knowing a generator's room, an object's layout and the collector's flag.
+func genForOfs(v *ssa.Value, enc abi.Encoding) bool {
+	if enc.GenObject == 0 || enc.GenRoomCursor == 0 || enc.IterState == 0 || enc.ValueSize != 16 || enc.WriteBarrier == 0 ||
+		enc.ObjectProps == 0 || enc.ObjectShape == 0 || len(v.Calls()) != 1 {
+		return false
+	}
+	site := v.Calls()[0]
+	return site.Go == ssa.GoCall && site.ForOf && site.GenIter != 0 && site.GenIterFn != 0 && site.GenNext != 0 && len(v.Args) == 1
+}
+
 // genMakes reports whether v, a call Go would make, makes a generator
 // natively (ssa.CallSite's GenMake, genMake): of 16-byte values, the
 // encoding knowing a generator's layout, an object's properties and the

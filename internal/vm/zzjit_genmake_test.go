@@ -2,20 +2,30 @@
 
 package vm
 
-import "testing"
+import (
+	"runtime"
+	"runtime/debug"
+	"testing"
+)
 
 // jitGenMakeCases are calls of generator functions in loops, each a setup,
 // expressions and their answers, Node v26.10.0's (vm.runInContext, as a
 // classic script), and the generator function whose generators a native
 // call makes, whose resumptions the steps then make natively, if one is
 // global -- "once" runs the expressions once, in order, for a case that
-// changes what it calls: a short generator made and run by for-of; fewer
+// changes what it calls: a short generator made and run by for-of; one
+// given numbers, live across the call, which arm64 reads from where they
+// are spilled through F1 (its materialize); fewer
 // arguments than parameters and more; a method's, its this; the
 // function's prototype read, replaced and made a primitive; a strict
 // generator's undefined this, a sloppy one's global; one reading its
 // arguments; locals past the parameters; next with a value sent; a
 // generator made inside another; a break closing one with a finally; one
-// that throws as it starts.
+// that throws as it starts. And the loops' cursors, taken from the
+// generators' room where they iterate as the intrinsics do: a generator
+// given a property of its own; the realm's next replaced and put back;
+// %IteratorPrototype%[Symbol.iterator] replaced and put back; a next on the
+// function's prototype; a second loop over a generator a break closed.
 var jitGenMakeCases = []struct {
 	name, setup string
 	exprs, want []string
@@ -24,6 +34,9 @@ var jitGenMakeCases = []struct {
 	{"makePair", `function* pair(a, b) { yield a; yield b }
 		function f(n) { let s = 0; for (let j = 0; j < n; j++) for (const v of pair(j, 1)) s += v; return s }`,
 		[]string{`f(10)`, `f(100)`, `f(0)`}, []string{`55`, `5050`, `0`}, "pair"},
+	{"makeFloats", `function* g(a, b) { yield a; yield b }
+		function f(n) { let s = 0, x = 0.5, y = 0.75; for (let j = 0; j < n; j++) { for (const v of g(x, y * j)) s += v + x * y; x += 1.5; y += 0.125 } return s + ":" + x + ":" + y }`,
+		[]string{`f(10)`, `f(100)`, `f(1)`}, []string{`363.125:15.5:2`, `187193.75:150.5:13.25`, `1.25:2:0.875`}, "g"},
 	{"makeArgs", `function* g(a, b) { var c = a; yield c; yield b }
 		function f(n) { const out = []; for (let j = 0; j < n; j++) { out.push([...g(j)].join('/')); out.push([...g(j, 7, 8)].join('/')) } return out.join() }`,
 		[]string{`f(3)`, `f(1)`}, []string{`0/,0/7,1/,1/7,2/,2/7`, `0/,0/7`}, ""},
@@ -62,6 +75,26 @@ var jitGenMakeCases = []struct {
 	{"makeThrow", `function* g(a) { if (a == 2) throw new RangeError('r' + a); yield a }
 		function f(n) { const out = []; for (let j = 0; j < n; j++) { try { for (const v of g(j)) out.push(v) } catch (e) { out.push(e.message) } } return out.join() }`,
 		[]string{`f(4)`}, []string{`0,1,r2,3`}, "g"},
+	{"cursorOwnProp", `function* g(n) { yield n; yield n + 1 }
+		function f(n) { let s = ''; for (let j = 0; j < n; j++) { const it = g(j); if (j == 2) it.tag = 1; for (const v of it) s += v } return s }`,
+		[]string{`f(4)`, `f(1)`}, []string{`01122334`, `01`}, "g"},
+	{"cursorPatchedNext", `function* g(n) { yield n }
+		var GP = Object.getPrototypeOf(function* () {}).prototype, orig = GP.next
+		function f(n) { let s = ''; for (let j = 0; j < n; j++) for (const v of g(j)) s += v; return s }
+		function patch() { GP.next = function () { const r = orig.call(this); return r.done ? r : { value: 'p' + r.value, done: false } }; const out = f(3); GP.next = orig; return out + '|' + f(3) }`,
+		[]string{`f(3)`, `f(3)`, `f(3)`, `f(3)`, `patch()`, `f(3)`, `f(3)`}, []string{`012`, `012`, `012`, `012`, `p0p1p2|012`, `012`, `012`}, "once"},
+	{"cursorPatchedIter", `function* g(n) { yield n }
+		var IP = Object.getPrototypeOf(Object.getPrototypeOf(function* () {}).prototype), origIt = IP[Symbol.iterator]
+		function f(n) { let s = ''; for (let j = 0; j < n; j++) for (const v of g(j)) s += v; return s }
+		function patch() { IP[Symbol.iterator] = function () { return [7, 8][Symbol.iterator]() }; const out = f(2); IP[Symbol.iterator] = origIt; return out + '|' + f(2) }`,
+		[]string{`f(3)`, `f(3)`, `f(3)`, `f(3)`, `patch()`, `f(3)`}, []string{`012`, `012`, `012`, `012`, `7878|01`, `012`}, "once"},
+	{"cursorProtoNext", `function* G(n) { yield n; yield n * 10 }
+		function f(n) { let s = ''; for (let j = 0; j < n; j++) for (const v of G(j)) s += v + ','; return s }
+		function own() { G.prototype.next = function () { return { done: true } }; const out = f(3); delete G.prototype.next; return out + '|' + f(3) }`,
+		[]string{`f(3)`, `f(3)`, `f(3)`, `f(3)`, `own()`, `f(3)`}, []string{`0,0,1,10,2,20,`, `0,0,1,10,2,20,`, `0,0,1,10,2,20,`, `0,0,1,10,2,20,`, `|0,0,1,10,2,20,`, `0,0,1,10,2,20,`}, "once"},
+	{"cursorTwice", `function* g(n) { yield n; yield n + 1; yield n + 2 }
+		function f(n) { let s = ''; for (let j = 0; j < n; j++) { const it = g(j); for (const v of it) { s += v; break } for (const v of it) s += v; s += ';' } return s }`,
+		[]string{`f(3)`, `f(1)`}, []string{`0;1;2;`, `0;`}, "g"},
 }
 
 // TestJITGenMakeAgreesWithNode runs jitGenMakeCases in the interpreter, in
@@ -133,14 +166,20 @@ func TestJITGenMakeAgreesWithNode(t *testing.T) {
 }
 
 // A loop making a short generator at each turn and running it, compiled,
-// makes the generator natively, from its call's pool, where it had been a
-// call of Go: the calls of Go a turn makes are fewer than two -- the
-// loop's cursor's making, the pool's fillings, the polls -- and every step
-// resumes its generator natively.
-func TestJITGenMakeCallsLessGo(t *testing.T) {
+// makes the generator natively, from its call's pool, and takes the loop's
+// cursor from the generator's room, where each had been a call of Go: a
+// few calls of Go in all -- the pool's fillings, the polls -- and every
+// step resumes its generator natively. The collector is held off from the
+// warming up on: while it marks, each making and each cursor is Go's, and
+// a warming up that met it marking through half its rounds had the loop
+// judged slow, left to the tree tier, which makes no native step (a CI
+// runner's failure).
+func TestJITGenMakeCallsNoGo(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
+	runtime.GC()
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	if _, err := r.Run(compileForTest(t, `function* pair(a, b) { yield a; yield b }
 		function f(n) { let s = 0; for (let j = 0; j < n; j++) for (const v of pair(j, 1)) s += v; return s }`)); err != nil {
@@ -156,7 +195,7 @@ func TestJITGenMakeCallsLessGo(t *testing.T) {
 	if v.String().Go() != "50005000" {
 		t.Fatalf("f(10000) = %v", v)
 	}
-	if calls > 10000*12/10 {
+	if calls > 10000/50 {
 		t.Errorf("a loop making 10000 generators made %d calls of Go", calls)
 	}
 	if n := jitGenInForTest(r, "pair") - in; n < 30000 {

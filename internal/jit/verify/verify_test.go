@@ -327,6 +327,14 @@ func (g genMakes) NativeCalls(int) []ssa.CallSite {
 		ProtoIndex: 1, ProtoKey: 7, Params: 2, LocalCount: 3}}
 }
 
+// genForOfs is gens whose for...of loops' cursors native code takes from
+// the generators' room where they iterate as the intrinsics do.
+type genForOfs struct{ gens }
+
+func (genForOfs) NativeCalls(int) []ssa.CallSite {
+	return []ssa.CallSite{{Go: ssa.GoCall, ForOf: true, ThisSlot: -1, GenIter: 0x88000, GenIterFn: 0x89000, GenNext: 0x84000}}
+}
+
 // genCalls is gens whose method calls of argc arguments have met the
 // realm's generators' next on generators of one function, which they
 // resume by a native call, their results from a pool.
@@ -704,6 +712,41 @@ func TestMirEmitted(t *testing.T) {
 	}
 	if makes == 0 {
 		t.Error("no call making a generator natively compiled")
+	}
+	cursors := 0
+	roomEnc := makeEnc
+	roomEnc.ObjectProto, roomEnc.GenRoom, roomEnc.GenRoomCursor = 24, 94, 152
+	roomEnc.GenIterFrom, roomEnc.GenIterCell, roomEnc.GenIterNextObj, roomEnc.GenIterNextIdx, roomEnc.GenIterIterObj, roomEnc.GenIterIterIdx = 0, 8, 16, 24, 32, 40
+	for i, p := range lowered(t, `function f(G,n){let s=0;for(let j=0;j<n;j++)for(const v of G(j))s+=v;return s}`) {
+		f, err := ssa.BuildWith(p, genForOfs{})
+		if err != nil {
+			continue
+		}
+		ssa.Optimize(f)
+		for _, b := range f.Blocks {
+			for _, v := range b.Values {
+				if calls := v.Calls(); len(calls) == 1 && calls[0].GenIter != 0 {
+					cursors++
+				}
+			}
+		}
+		for _, arch := range arches {
+			compile := mir.CompileAMD64
+			if arch == "arm64" {
+				compile = mir.CompileARM64
+			}
+			mc, err := compile(f, roomEnc)
+			if err != nil {
+				t.Fatalf("%d, cursor, %s: %v", i, arch, err)
+			}
+			if err := check(arch, mc.Bytes[:mc.Text]); err != nil {
+				t.Fatalf("%d, cursor, %s: %v", i, arch, err)
+			}
+		}
+		n++
+	}
+	if cursors == 0 {
+		t.Error("no loop's cursor taken natively compiled")
 	}
 	r := rand.New(rand.NewPCG(5, 6))
 	for attempt := 0; attempt < 50000 && n < 2000; attempt++ {

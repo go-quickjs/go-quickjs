@@ -152,6 +152,14 @@ var jitEncoding = abi.Encoding{
 	GenSuspendedYield:  uint8(genSuspendedYield),
 	GenExecuting:       uint8(genExecuting),
 	GenCompleted:       uint8(genCompleted),
+	GenRoom:            int32(unsafe.Offsetof(generator{}.room)),
+	GenRoomCursor:      int32(unsafe.Offsetof(generatorLoop{}.cur)),
+	GenIterFrom:        int32(unsafe.Offsetof(genIterationCache{}.from)),
+	GenIterCell:        int32(unsafe.Offsetof(genIterationCache{}.cell)),
+	GenIterNextObj:     int32(unsafe.Offsetof(genIterationCache{}.next) + unsafe.Offsetof(ownProp{}.o)),
+	GenIterNextIdx:     int32(unsafe.Offsetof(genIterationCache{}.next) + unsafe.Offsetof(ownProp{}.i)),
+	GenIterIterObj:     int32(unsafe.Offsetof(genIterationCache{}.iter) + unsafe.Offsetof(ownProp{}.o)),
+	GenIterIterIdx:     int32(unsafe.Offsetof(genIterationCache{}.iter) + unsafe.Offsetof(ownProp{}.i)),
 	HandlerSize:        int32(unsafe.Sizeof(handler{})),
 	HandlerPC:          int32(unsafe.Offsetof(handler{}.pc)),
 	HandlerDepth:       int32(unsafe.Offsetof(handler{}.stackDepth)),
@@ -2942,8 +2950,15 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 		call := jitCallInstr(fb.fn.Code[pc])
 		if call.Op == bytecode.OpForOfStart {
 			// Its cursor, which Go makes, called from native code: a
-			// destructuring makes one each time.
-			return []ssa.CallSite{{Go: ssa.GoCall, ForOf: true, ThisSlot: -1}}
+			// destructuring makes one each time. One over a generator with
+			// room for it native code takes from the generator (genAlloc),
+			// by the runtime's cache of how generators iterate, as long as
+			// the runtime.
+			site := ssa.CallSite{Go: ssa.GoCall, ForOf: true, ThisSlot: -1}
+			if fb.r.genNextFn != nil && fb.r.genIterFn != nil {
+				site.GenIter, site.GenIterFn, site.GenNext = uintptr(unsafe.Pointer(&fb.r.genIteration)), uintptr(unsafe.Pointer(fb.r.genIterFn)), fb.GenNext()
+			}
+			return []ssa.CallSite{site}
 		}
 		if jitcompile.GoOperation(call.Op) {
 			// An operation Go makes from native code (abi.GoCallOp):

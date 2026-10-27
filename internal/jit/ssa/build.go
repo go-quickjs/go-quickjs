@@ -1272,6 +1272,16 @@ type CallSite struct {
 	// which nothing could tell from it.
 	Gens    []GenStep
 	GenNext uintptr
+	// GenIter, on a for...of's cursor's making Go makes (ForOf), is the
+	// address of the VM's cache of how generators iterate, and GenIterFn
+	// the realm's %IteratorPrototype%[Symbol.iterator], with GenNext the
+	// realm's generators' next: of a generator with room for its loop's
+	// cursor, which iterates as the intrinsics do -- no property of its
+	// own, its prototype an ordinary object with none, the chain up from
+	// that the cache's, valid, its next and Symbol.iterator the two --
+	// native code makes the cursor the one in the generator's allocation.
+	// Go makes any other.
+	GenIter, GenIterFn uintptr
 	// GenMake, on a call Go makes (GoCall), plain or a method's, is the
 	// object of a synchronous generator function the call has met, whose
 	// generators native code makes: a call of it takes its generator from

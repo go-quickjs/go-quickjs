@@ -4426,6 +4426,17 @@ func (c *a64Compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(arm64.
 		c.setG(v, a64A)
 		return
 	}
+	if genForOfs(v, c.enc) {
+		// As amd64's: a for...of's cursor, a generator's room's (genForOf).
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		c.genForOf(v, slow, join)
+		c.a.Bind(slow)
+		c.goCallOp(v, goOpWord(site), false)
+		c.a.Bind(join)
+		c.a.Load(a64A, a64Ctx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
+		c.setG(v, a64A)
+		return
+	}
 	if genMakes(v, c.enc) {
 		// As amd64's: a call of a generator function, its generator from
 		// its pool (genMake).
@@ -4978,6 +4989,83 @@ func (c *a64Compiler) genCall(v *ssa.Value, t ssa.GenStep, slow, done arm64.Labe
 		c.a.Load(arm64.Reg(kept), a64Ctx, abi.OffGoArgs+c.enc.NumOffset)
 	}
 	c.a.B(slow)
+}
+
+// genForOf is amd64's: a for...of's cursor over a generator, the one in its
+// room. It uses A, B, C and D.
+func (c *a64Compiler) genForOf(v *ssa.Value, slow, done arm64.Label) {
+	site := v.Calls()[0]
+	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+	x := v.Args[0]
+	r := c.gpr(x, a64A)
+	c.movImm(a64C, c.enc.Object)
+	c.a.Cmp(r, a64C, true)
+	fail(arm64.NE)
+	c.pointerWord(x, r)
+	c.a.Cbz(a64B, slow, true)
+	c.a.MovRR(a64D, a64B)
+	c.a.LoadU8(a64A, a64D, c.enc.ObjectClass)
+	c.a.CmpImm(a64A, int64(c.enc.ClassGenerator), false)
+	fail(arm64.NE)
+	c.a.LoadU8(a64A, a64D, c.enc.GenObject+c.enc.GenRoom)
+	c.a.Cbz(a64A, slow, false)
+	c.a.Load(a64A, a64D, c.enc.ObjectShape)
+	c.a.Cbnz(a64A, slow, true)
+	c.a.Load(a64C, a64D, c.enc.ObjectProto)
+	c.a.Cbz(a64C, slow, true)
+	c.a.LoadU8(a64A, a64C, c.enc.ObjectClass)
+	c.a.CmpImm(a64A, int64(c.enc.ClassObject), false)
+	fail(arm64.NE)
+	c.a.Load(a64A, a64C, c.enc.ObjectProps+8)
+	c.a.Cbnz(a64A, slow, true)
+	c.a.Load(a64C, a64C, c.enc.ObjectProto)
+	c.a.Cbz(a64C, slow, true)
+	c.movImm(a64A, uint64(site.GenIter))
+	c.a.Load(a64B, a64A, c.enc.GenIterFrom)
+	c.a.Cmp(a64C, a64B, true)
+	fail(arm64.NE)
+	c.a.Load(a64C, a64A, c.enc.GenIterCell)
+	c.a.Cbz(a64C, slow, true)
+	c.a.LoadU8(a64C, a64C, 0)
+	c.a.Cbz(a64C, slow, false)
+	for _, k := range [...]struct {
+		obj, idx int32
+		want     uintptr
+	}{{c.enc.GenIterNextObj, c.enc.GenIterNextIdx, site.GenNext}, {c.enc.GenIterIterObj, c.enc.GenIterIterIdx, site.GenIterFn}} {
+		c.movImm(a64A, uint64(site.GenIter))
+		c.a.Load(a64C, a64A, k.obj)
+		c.a.Cbz(a64C, slow, true)
+		c.a.LoadU32(a64A, a64A, k.idx)
+		c.a.Load(a64B, a64C, c.enc.ObjectProps+8)
+		c.a.Cmp(a64A, a64B, true)
+		fail(arm64.HS)
+		c.a.Load(a64B, a64C, c.enc.ObjectProps)
+		c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
+		c.a.Op(arm64.Add, a64B, a64B, a64A, true)
+		c.a.Load(a64B, a64B, c.enc.RefOffset)
+		c.movImm(a64A, uint64(k.want))
+		c.a.Cmp(a64B, a64A, true)
+		fail(arm64.NE)
+	}
+	c.movImm(a64B, c.enc.WriteBarrier)
+	c.a.LoadU8(a64B, a64B, 0)
+	c.a.Cbnz(a64B, slow, false)
+	c.a.AddImm(a64C, a64D, int64(c.enc.GenRoomCursor), true)
+	c.a.MovImm(a64A, uint64(c.enc.ClassCursor))
+	c.a.Store8(a64C, c.enc.ObjectClass, a64A)
+	st := c.enc.IterState
+	c.movImm(a64A, c.enc.Object)
+	c.a.Store(a64C, st+c.enc.IterIter+c.enc.NumOffset, a64A)
+	c.a.Store(a64C, st+c.enc.IterIter+c.enc.RefOffset, a64D)
+	c.a.Store(a64C, st+c.enc.IterNext+c.enc.NumOffset, a64A)
+	c.movImm(a64A, uint64(site.GenNext))
+	c.a.Store(a64C, st+c.enc.IterNext+c.enc.RefOffset, a64A)
+	c.a.Store8(a64D, c.enc.GenObject+c.enc.GenRoom, arm64.ZR)
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	c.a.Store(a64Ctx, keep+c.enc.RefOffset, a64C)
+	c.movImm(a64A, c.enc.Object)
+	c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64A)
+	c.a.B(done)
 }
 
 // genMake is amd64's: a call of a generator function, the pool's next
