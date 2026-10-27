@@ -6794,7 +6794,11 @@ func (b *builder) instruction(blk *Block, pc int) {
 					b.f.cache(v).Calls = calls
 				}
 			} else {
-				guard(OpTailRoom, None, ir.HostExit)
+				// An inlined callee's frame is not a level of its own: the
+				// frames it is inlined in count, as the interpreter's
+				// frames would (OpTailRoom's Index).
+				room := guard(OpTailRoom, None, ir.HostExit)
+				room.Index = b.cur.depth
 			}
 		}
 		if k, ok := b.intrinsic(pc); ok && in.Op == ir.Host {

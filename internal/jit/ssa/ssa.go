@@ -282,7 +282,9 @@ const (
 	OpFrameRoom // -> none
 	// OpTailRoom guards that a call in tail position is made where the
 	// stack is shallow (abi.Bounds' TailLevel): deeper, Go makes it,
-	// giving up the frame, as the interpreter's tail_call does.
+	// giving up the frame, as the interpreter's tail_call does. Index is
+	// how many frames inlined in the level the call is made in, its own
+	// included, which count toward its depth as the interpreter's frames.
 	OpTailRoom // -> none
 	// OpTailSelf is OpTailRoom where the call may be the function's own:
 	// deep in the stack, a call of the closure the frame runs (abi.Context's

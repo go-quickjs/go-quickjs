@@ -7502,6 +7502,10 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		}
 	case ssa.OpTailRoom:
 		c.a.Load(a64A, a64Ctx, abi.OffLevel)
+		if v.Index != 0 {
+			// The frames inlined in the level, its call's included.
+			c.a.AddImm(a64A, a64A, int64(v.Index), true)
+		}
 		c.a.Load(a64B, a64Ctx, abi.OffBounds)
 		c.a.Load(a64B, a64B, abi.OffBoundsTailLevel)
 		c.a.Cmp(a64A, a64B, true)

@@ -506,8 +506,9 @@ func jitTierWorkForTest(r *Runtime, cl *closure) int64 {
 }
 
 // A function warming up (jitWarmFor) that a native caller's call asks for
-// is compiled at once, as one with no entry is (jitFor): g, a loop with a
-// call in tail position, which its lowering for native callers refuses, has been called a few
+// is compiled at once, as one with no entry is (jitFor): g, a loop that
+// defines an accessor of a computed key (define_getter_index), which its
+// lowering for native callers refuses, has been called a few
 // times, its budget far from spent, when its caller learns the call, and
 // is compiled for Go to enter and its callers to call -- not refused for
 // native callers for good, its warming entry taken for a compile that had
@@ -517,7 +518,7 @@ func TestJITWarmingCalleeCompiledOnDemand(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	r, run := v8TierRuntimeForTest(t, `function id(v){return v} function g(x){'use strict';let s=0;for(let i=0;i<2;i++)s+=x;return id(s)}`)
+	r, run := v8TierRuntimeForTest(t, `function id(v){return v} function g(x){'use strict';let s=0;for(let i=0;i<2;i++)s+=x;const o={get ['k'+x](){return 1}};return id(s)}`)
 	for range 2 * jitInvocationsForFeedback {
 		run(`g(1)`)
 	}

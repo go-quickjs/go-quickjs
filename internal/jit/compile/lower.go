@@ -386,10 +386,12 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			// callee's has none: the inliner takes no such program.
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
-		if (in.Op == bytecode.OpTailCall || in.Op == bytecode.OpTailCallMethod) && (!m.ssa || m.callee) {
+		if (in.Op == bytecode.OpTailCall || in.Op == bytecode.OpTailCallMethod) && !m.ssa {
 			// A tail call gives up its frame deep enough in the stack: a
-			// function's own, in the new pipeline, which a callee inlined
-			// has none of.
+			// function's own, in the new pipeline. A callee inlined makes
+			// it as an ordinary call where the stack is shallow, its frame
+			// counted (ssa's OpTailRoom), and leaves for Go deeper, which
+			// makes its frame and gives it up as the interpreter does.
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
 		if (in.Op == bytecode.OpPushCatch || in.Op == bytecode.OpPushFinally || in.Op == bytecode.OpPopCatch || in.Op == bytecode.OpRethrow) && (!m.ssa || m.forward) {
