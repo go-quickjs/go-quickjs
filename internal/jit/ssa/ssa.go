@@ -978,6 +978,12 @@ type Func struct {
 	// only calls, all of whose calls it inlines and which it does not make
 	// (calledClosures).
 	Callbacks, Unmade, Virtuals, Called int
+	// InlinedAt are the function's own calls the code inlines the callee
+	// of that its feedback named (Feedback's Inline), by PC: not those it
+	// asked the feedback of and then did not inline -- past inlining's
+	// bounds, or a callee whose loop calls nothing the function gives it
+	// (InlineCallsGiven) -- and not a closure it makes (calledClosures).
+	InlinedAt []int
 	// FrameLocals is how many of the Locals are the frame's own; the rest,
 	// up to Locals, are captured bindings, which native code reads through
 	// their cells (abi.Context.Upvalues) and never writes. Build sets it to

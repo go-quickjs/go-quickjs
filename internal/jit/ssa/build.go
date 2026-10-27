@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
@@ -307,7 +309,7 @@ func (b *builder) planCallback(pc int, fp *forEachPlan, total *int) bool {
 		return false
 	}
 	nslots, before, inlines, keeps, inlined := b.nslots, *total, b.inlines, b.f.Keeps, len(b.f.Inlined)
-	fr, ok := b.inlineFrame(s, calls, total, fp.base+loopLocals)
+	fr, ok := b.inlineFrame(s, calls, nil, total, fp.base+loopLocals, pc)
 	if ok && !b.returnsNatively(fr) {
 		b.nslots, *total, b.inlines, b.f.Keeps = nslots, before, inlines, keeps
 		b.f.Inlined = b.f.Inlined[:inlined]
@@ -1866,6 +1868,116 @@ func InlineCalls(p *ir.Program) ([]int, bool) {
 	return calls, true
 }
 
+// InlineCallsGiven is InlineCalls for a callee that calls what it is
+// given: of the calls it leaves to Go, those whose callee is one of its
+// parameters, read just before the call (given; argc is a call's argument
+// count, ok false for a method's or one it does not know), apart from the
+// others (calls). A loop does not keep it from being inlined where one of
+// those calls is in the loop: inlining the callee where its caller gives
+// it a closure the caller makes fixes what the loop calls, which is then
+// inlined in its turn and the closure not made (calledClosures), as V8
+// inlines Array.prototype.forEach's loop and its callback. Elsewhere a
+// call of a callee with a loop is made once for all the loop's turns,
+// and inlining it saves only that call's cost, spread over them, against
+// the code it adds to its caller: inlining Crypto's am3, a loop of a few
+// dozen turns a call, made its callers' code 60% larger and Crypto 25%
+// slower. A callee whose loops call none of what it is given is refused.
+func InlineCallsGiven(p *ir.Program, argc func(pc int) (int, bool)) (calls, given []int, ok bool) {
+	if p == nil || p.Validate() != nil || len(p.Code) > maxInline || len(p.Globals) != 0 || p.Captured != nil || p.DerivedConstructor || len(p.Handlers) != 0 {
+		return nil, nil, false
+	}
+	// Each loop, by its back edge: from its header to the branch.
+	type span struct{ from, to int }
+	var loops []span
+	targets := make([]bool, len(p.Code)+1)
+	for pc, in := range p.Code {
+		if !reachable(p, pc) {
+			continue
+		}
+		switch in.Op {
+		case ir.Call, ir.Closure, ir.CloseUpvalues, ir.IterStep, ir.IterClose:
+			return nil, nil, false
+		case ir.Jump, ir.Branch:
+			targets[in.Target] = true
+			if in.Target <= pc {
+				loops = append(loops, span{in.Target, pc})
+			}
+		}
+	}
+	looped := len(loops) == 0
+	for pc, in := range p.Code {
+		if !reachable(p, pc) || in.Op != ir.Host {
+			continue
+		}
+		if !givenCall(p, pc, targets, argc) {
+			calls = append(calls, pc)
+			continue
+		}
+		given = append(given, pc)
+		for _, l := range loops {
+			looped = looped || l.from <= pc && pc <= l.to
+		}
+	}
+	if !looped {
+		return nil, nil, false
+	}
+	return calls, given, true
+}
+
+// looping reports whether p has a loop: a backward branch.
+func looping(p *ir.Program) bool {
+	for pc, in := range p.Code {
+		if (in.Op == ir.Jump || in.Op == ir.Branch) && in.Target <= pc && reachable(p, pc) {
+			return true
+		}
+	}
+	return false
+}
+
+// loopHolds reports whether one of p's loops holds pc: a backward branch
+// at or after it to a header at or before it.
+func loopHolds(p *ir.Program, pc int) bool {
+	for q, in := range p.Code {
+		if (in.Op == ir.Jump || in.Op == ir.Branch) && in.Target <= pc && pc <= q && reachable(p, q) {
+			return true
+		}
+	}
+	return false
+}
+
+// givenCall reports whether p's call at pc calls one of p's parameters: its
+// callee the slot a copy of a parameter wrote, at the depth below the
+// call's arguments, in the same block (targets marks the PCs a branch goes
+// to) -- a copy of one, or the second of a pair's (get_local2 s f, as
+// s = s + f(x) compiles). Which value the call calls the SSA says
+// (calledClosures); this only picks the calls that may call a closure the
+// caller gives.
+func givenCall(p *ir.Program, pc int, targets []bool, argc func(pc int) (int, bool)) bool {
+	n, ok := argc(pc)
+	if !ok || pc >= len(p.Maps) {
+		return false
+	}
+	depth := p.Maps[pc].Depth - n - 1
+	if depth < 0 {
+		return false
+	}
+	slot := p.Locals + depth
+	param := func(o ir.Operand) bool { return o.Slot >= 0 && o.Slot < p.Params }
+	for q := pc - 1; q >= 0 && !targets[q+1]; q-- {
+		in := p.Code[q]
+		switch d := p.Maps[q].Depth; {
+		case d > depth:
+			continue
+		case d == depth:
+			return (in.Op == ir.Copy || in.Op == ir.CopyPair) && in.Dest == slot && param(in.Left)
+		case d == depth-1:
+			return in.Op == ir.CopyPair && in.Extra == slot && param(in.Right)
+		}
+		return false
+	}
+	return false
+}
+
 // InlineExitFeedback is Feedback that keeps a callee inlined with an
 // operation it leaves to Go that native code neither makes itself nor
 // inlines (InlineCalls): InlineExit reports, of an inlined callee's
@@ -2086,24 +2198,59 @@ func BuildWith(p *ir.Program, fb Feedback) (*Func, error) { return build(nil, p,
 // with those calls inlined and the closures not made, as V8 inlines a
 // call whose target its graph knows and its escape analysis then removes
 // the closure. The first build stands where the second fails.
+//
+// Where the root makes a closure, the first build also inlines callees that
+// call what they are given (InlineCallsGiven), leaving those calls to
+// exits, whose states say whether what a callee calls is a closure the
+// root gave it: the second build inlines those, the callees around them
+// and their loops, and leaves the closures unmade too (a closure given to
+// SOM's Vector.forEach, called in its loop). Such a first build is never
+// the code: where nothing was found, or the second build is refused
+// (unmadeAlone), the function is built again without them.
 func build(w *Workspace, p *ir.Program, fb Feedback) (*Func, error) {
-	f, called, err := buildCalls(w, p, fb, nil)
-	if err != nil || len(called) == 0 {
+	f, plan, provisional, err := buildCalls(w, p, fb, nil)
+	if err != nil {
 		return f, err
 	}
-	if g, _, err := buildCalls(w, p, fb, called); err == nil {
-		return g, nil
+	if len(plan.calls) != 0 || len(plan.given) != 0 {
+		if g, _, _, err := buildCalls(w, p, fb, &plan); err == nil {
+			return g, nil
+		}
+		if !provisional {
+			return f, nil
+		}
+		if len(plan.given) != 0 && len(plan.calls) != 0 {
+			// The root's own calls of its closures, without the callees'.
+			if g, _, _, err := buildCalls(w, p, fb, &calledPlan{calls: plan.calls}); err == nil {
+				return g, nil
+			}
+		}
 	}
-	return f, nil
+	if !provisional {
+		return f, nil
+	}
+	f, _, _, err = buildCalls(w, p, fb, &calledPlan{})
+	return f, err
 }
 
-// buildCalls is a build of p, the calls called names -- by PC, the PC of the
-// closure each calls -- inlined, the closures not made where all their
-// calls are; and, with called nil, the closures it finds so
-// (calledClosures).
-func buildCalls(w *Workspace, p *ir.Program, fb Feedback, called map[int]int) (*Func, map[int]int, error) {
+// calledPlan is what a first build found to inline of the closures the
+// root makes and only calls (calledClosures): calls, by the PC of each of
+// the root's calls of one, the PC of the closure; given, by the path of a
+// callee's call of what it is given (frame's path), the PC of the closure
+// the root gave it.
+type calledPlan struct {
+	calls map[int]int
+	given map[string]int
+}
+
+// buildCalls is a build of p, the calls plan names inlined, the closures
+// not made where all their calls are; and, with plan nil, the closures it
+// finds so (calledClosures), and whether it inlined callees whose calls of
+// what they are given it left to exits (provisional), which makes it no
+// code to run.
+func buildCalls(w *Workspace, p *ir.Program, fb Feedback, plan *calledPlan) (*Func, calledPlan, bool, error) {
 	if err := p.Validate(); err != nil {
-		return nil, nil, err
+		return nil, calledPlan{}, false, err
 	}
 	p = referenceReads(p, fb)
 	f := &Func{Locals: p.Locals, StackSize: p.StackSize, FrameLocals: p.Locals, ThisSlot: -1, ws: w}
@@ -2118,11 +2265,16 @@ func buildCalls(w *Workspace, p *ir.Program, fb Feedback, called map[int]int) (*
 	}
 	f.written = f.bools(p.Locals + p.StackSize)
 	f.assigned = p.Assigned
-	b := &builder{p: p, fb: fb, f: f, nslots: p.Locals + p.StackSize, called: called}
-	b.root = &frame{p: p, fb: fb}
+	b := &builder{p: p, fb: fb, f: f, nslots: p.Locals + p.StackSize}
+	b.root = &frame{p: p, fb: fb, at: -1, givenPC0: -1}
 	b.cur = b.root
+	if plan != nil {
+		b.called, b.given = plan.calls, plan.given
+	} else if _, ok := fb.(CalledClosureFeedback); ok {
+		b.provisional = makesClosure(p)
+	}
 	if err := b.plan(); err != nil {
-		return nil, nil, err
+		return nil, calledPlan{}, false, err
 	}
 	b.cellsBack()
 	b.translate()
@@ -2131,12 +2283,34 @@ func buildCalls(w *Workspace, p *ir.Program, fb Feedback, called map[int]int) (*
 	if vf, ok := fb.(VirtualFeedback); ok {
 		f.virtual = vf
 	}
-	if called == nil {
-		called = b.calledClosures()
+	if len(b.inlined) != 0 {
+		for _, pc := range sortedKeys(b.inlined) {
+			if fr := b.inlined[pc]; !fr.given && p.Code[pc].Op == ir.Host {
+				f.InlinedAt = append(f.InlinedAt, pc)
+			}
+		}
+	}
+	provisional, found := false, calledPlan{}
+	if plan == nil {
+		found.calls, found.given = b.calledClosures()
+		provisional = b.pendingAny
+	} else if err := b.unmadeAlone(); err != nil {
+		return nil, calledPlan{}, false, err
 	}
 	// The shadows and the stores' checks are Optimize's to make, which
 	// would remake them, or the first to run or compile f's (Finish).
-	return b.f, called, nil
+	return b.f, found, provisional, nil
+}
+
+// makesClosure reports whether p makes a closure (ir.Closure) where it
+// runs.
+func makesClosure(p *ir.Program) bool {
+	for pc, in := range p.Code {
+		if in.Op == ir.Closure && reachable(p, pc) {
+			return true
+		}
+	}
+	return false
 }
 
 type builder struct {
@@ -2225,6 +2399,25 @@ type builder struct {
 	// asked (soleAsked).
 	sole              uint64
 	soleOK, soleAsked bool
+
+	// provisional says a first build inlines callees whose calls of what
+	// they are given (InlineCallsGiven) it leaves to exits, for its
+	// analysis to find the closures the root gives them (calledClosures);
+	// givenStates are those exits' states. given are, in a second build,
+	// the calls of what a callee is given to inline, by their paths (frame's
+	// path), each the PC of the closure the root makes that it calls.
+	provisional bool
+	pendingAny  bool
+	givenStates []givenState
+	given       map[string]int
+}
+
+// givenState is a first build's exit at a call of what an inlined callee
+// is given (frame's pending): the frame, the call's PC and the state.
+type givenState struct {
+	fr    *frame
+	pc    int
+	state *FrameState
 }
 
 // property is the feedback for a property operation at pc, if any.
@@ -2710,7 +2903,26 @@ type frame struct {
 	// ParamsDead), and which the states inside it keep past their operands
 	// (ir.Program's PrologueArgs).
 	paramArgs []*Value
+	// path names the frame by the calls it is inlined at, the PC of each
+	// in its caller's code, from the root's on (givenPath), and at is the
+	// last of them.
+	path string
+	at   int
+	// pending are, in a first build, the calls of what the frame is given
+	// (InlineCallsGiven) it leaves to exits, whose states the build's
+	// analysis reads (calledClosures). given says the frame is a closure
+	// the root makes, inlined at such a call in a second build, made at
+	// givenPC0 (givenSite), and callee the value its call calls there,
+	// which the build checks is that closure (unmadeAlone).
+	pending  []int
+	given    bool
+	givenPC0 int
+	callee   *Value
 }
+
+// givenPath is the path of a frame inlined at pc in the code of the frame
+// whose path is parent (frame's path).
+func givenPath(parent string, pc int) string { return parent + "." + strconv.Itoa(pc) }
 
 // siteAnswer is a property site, if the feedback has one, and a string
 // property's (frame's answers).
@@ -2774,7 +2986,10 @@ func (b *builder) inlineAt(pc int, total *int) (*frame, bool) {
 // calls by what inlining them saves (plan).
 func (b *builder) inlineSiteAt(pc int, total *int, known *inlineAsked) (*frame, bool) {
 	accessor, isAccessor := b.accessor(pc)
-	if b.fb == nil || b.p.Code[pc].Op != ir.Host && !isAccessor || b.inlines >= maxInlines || b.cur.nest >= maxInlineDepth || !isAccessor && b.fb.Generic(pc) {
+	// A closure the root makes, called where a callee calls what it is
+	// given (givenSite), whatever else the call has called.
+	given := known != nil && known.given
+	if b.fb == nil || b.p.Code[pc].Op != ir.Host && !isAccessor || b.inlines >= maxInlines || b.cur.nest >= maxInlineDepth || !isAccessor && !given && b.fb.Generic(pc) {
 		return nil, false
 	}
 	var site InlineSite
@@ -2791,9 +3006,9 @@ func (b *builder) inlineSiteAt(pc int, total *int, known *inlineAsked) (*frame, 
 	default:
 		site, ok = b.fb.Inline(pc)
 	}
-	var calls []int
+	var calls, givenCalls []int
 	if ok {
-		calls, ok = InlineCalls(site.Program)
+		calls, givenCalls, ok = b.inlineCalls(site, isAccessor)
 	}
 	if !ok || *total+len(site.Program.Code) > maxInlineTotal ||
 		site.Argc < 0 || site.Params < 0 || pc+1 >= len(b.p.Code) || !reachable(b.p, pc+1) {
@@ -2839,7 +3054,30 @@ func (b *builder) inlineSiteAt(pc int, total *int, known *inlineAsked) (*frame, 
 			result = -1
 		}
 	}
-	return b.inlineFrame(site, calls, total, result)
+	return b.inlineFrame(site, calls, givenCalls, total, result, pc)
+}
+
+// inlineCalls is what a callee to inline at a site leaves to Go
+// (InlineCalls), and, where the build inlines calls of what callees are
+// given -- a first one leaving them to exits for its analysis (pending),
+// a second one inlining what its analysis found (given) -- those calls
+// apart (InlineCallsGiven): not in an accessor, a construction or a
+// frame Go makes again or of its arguments, whose callees are given
+// nothing a closure could be.
+func (b *builder) inlineCalls(site InlineSite, accessor bool) (calls, given []int, ok bool) {
+	if !b.provisional && b.given == nil || accessor || site.Construct || site.Restart || site.Forward || site.Arguments || site.Captured != nil {
+		calls, ok = InlineCalls(site.Program)
+		return calls, nil, ok
+	}
+	cf, isCF := site.Feedback.(CalledClosureFeedback)
+	if !isCF {
+		calls, ok = InlineCalls(site.Program)
+		return calls, nil, ok
+	}
+	return InlineCallsGiven(site.Program, func(pc int) (int, bool) {
+		argc, method, ok := cf.CallShape(pc)
+		return argc, ok && !method
+	})
 }
 
 // cellsBack has the cells a native call's frame takes at its entries go
@@ -2887,15 +3125,28 @@ func looped(p *ir.Program, pc int) bool {
 // function makes is (planCallback); no check of the callee, which the
 // analysis found is that closure.
 func (b *builder) calledSite(pc, pc0 int) (InlineSite, bool) {
-	cf, ok := b.fb.(CalledClosureFeedback)
-	if !ok || b.cur != b.root {
+	if b.cur != b.root {
+		return InlineSite{}, false
+	}
+	return b.givenSite(pc, pc0)
+}
+
+// givenSite is calledSite's callee in the frame being translated, the
+// root's or a callee's: the closure the root makes at pc0, called at pc
+// with no receiver, what it captured the root's slots where they are --
+// in a callee, at a call of what the callee is given, where the closure
+// is what the root gave it (calledClosures).
+func (b *builder) givenSite(pc, pc0 int) (InlineSite, bool) {
+	cf, ok := b.root.fb.(CalledClosureFeedback)
+	at, ok2 := b.fb.(CalledClosureFeedback)
+	if !ok || !ok2 {
 		return InlineSite{}, false
 	}
 	made, s, ok := cf.CalledClosure(pc0)
 	if !ok || s.Program == nil {
 		return InlineSite{}, false
 	}
-	argc, method, ok := cf.CallShape(pc)
+	argc, method, ok := at.CallShape(pc)
 	if !ok || method {
 		return InlineSite{}, false
 	}
@@ -2931,6 +3182,12 @@ func (b *builder) unmakeCalled() {
 				all = false
 			}
 		}
+		for path, at := range b.given {
+			// And every call of it a callee it is given makes.
+			if fr := b.frameAtPath(path); at == pc0 && (fr == nil || !fr.given || fr.givenPC0 != pc0) {
+				all = false
+			}
+		}
 		if !all || b.made[pc0] != 0 {
 			delete(b.madeCalls, pc0)
 			continue
@@ -2941,6 +3198,141 @@ func (b *builder) unmakeCalled() {
 		b.made[pc0] = made.Template
 		b.f.Called++
 	}
+}
+
+// frameAtPath is the callee inlined at path (frame's path), if planning
+// inlined one there, among the root's inlined calls and theirs.
+func (b *builder) frameAtPath(path string) *frame {
+	fr, at := b.root, b.inlined
+	for _, part := range strings.Split(path, ".")[1:] {
+		pc, err := strconv.Atoi(part)
+		if err != nil || at == nil || at[pc] == nil {
+			return nil
+		}
+		fr = at[pc]
+		at = fr.inlined
+	}
+	if fr == b.root {
+		return nil
+	}
+	return fr
+}
+
+// closureFrames are the callees inlined that are closures the root makes,
+// called with no check of the callee (frame's given), in the root's
+// inlined calls and theirs.
+func (b *builder) closureFrames() []*frame {
+	var out []*frame
+	var walk func(at map[int]*frame)
+	walk = func(at map[int]*frame) {
+		for _, pc := range sortedKeys(at) {
+			fr := at[pc]
+			if fr.given {
+				out = append(out, fr)
+			}
+			walk(fr.inlined)
+		}
+	}
+	walk(b.inlined)
+	return out
+}
+
+// errUnmadeSeen is a second build's refusal of closures it left unmade
+// (calledClosures) that its own SSA shows are seen, or not called, where
+// the first build's did not show it: the first build had left a callee's
+// calls of what it is given to exits (frame's pending), past which it
+// built nothing.
+var errUnmadeSeen = errors.New("ssa: a closure not made is seen")
+
+// unmadeAlone checks, in a second build, each closure planning left unmade
+// that the root makes and only calls (unmakeCalled): its values -- the
+// template its slot holds, and phis merging nothing but those -- are used
+// by nothing but frame states and its initialization's check, and every
+// call inlined of it with no check of its callee (closureFrames) calls
+// one of them. The first build found so, but where it left a callee's
+// calls of what it is given to exits, it built nothing past them -- a
+// parameter assigned after its call, a closure given on to another call
+// in the loop's turn -- which this one does.
+func (b *builder) unmadeAlone() error {
+	frames := b.closureFrames()
+	for pc0 := range b.madeCalls {
+		tmpl := b.made[pc0]
+		var closes []*frame
+		for _, fr := range frames {
+			if fr.givenPC0 == pc0 {
+				closes = append(closes, fr)
+			}
+		}
+		if tmpl == 0 {
+			if len(closes) != 0 {
+				// Inlined with no check of its callee, and made: the check
+				// is only that its value is the closure, which a made one's
+				// is not.
+				return errUnmadeSeen
+			}
+			continue
+		}
+		// The local it is kept in, the instruction after it: an entry's
+		// load of it is the closure too, made by the interpreter, as
+		// calledClosures has it, and so is its dead zone's marker.
+		p, home := b.root.p, -1
+		if next := p.Code[pc0+1]; (next.Op == ir.Copy || next.Op == ir.StoreLoad) && next.Left.Slot == p.Code[pc0].Dest && next.Dest < b.f.FrameLocals {
+			home = next.Dest
+		}
+		set, also := map[*Value]bool{}, map[*Value]bool{}
+		var phis []*Value
+		for _, blk := range b.f.Blocks {
+			for _, v := range blk.Values {
+				switch {
+				case v.Op == OpLoadCell && len(v.Args) == 1 && v.Args[0].Op == OpConstCell && v.Args[0].Const.Bits == uint64(tmpl):
+					set[v] = true
+				case v.Op == OpPhi:
+					phis = append(phis, v)
+				case home >= 0 && (v.Op == OpLoadSlot && blk.PC < 0 && v.Aux == home || v.Op == OpConst && v.Const.Kind == ir.Uninitialized):
+					also[v] = true
+				}
+			}
+		}
+		for _, v := range phis {
+			set[v] = true
+		}
+		for changed := true; changed; {
+			changed = false
+			for _, v := range phis {
+				if !set[v] {
+					continue
+				}
+				for _, a := range v.Args {
+					if !set[a] && !also[a] {
+						delete(set, v)
+						changed = true
+						break
+					}
+				}
+			}
+		}
+		for _, blk := range b.f.Blocks {
+			if blk.Control != nil && set[blk.Control] {
+				return errUnmadeSeen
+			}
+			for _, v := range blk.Values {
+				if set[v] && v.Op == OpPhi || v.Op == OpCheckInit {
+					continue
+				}
+				for _, a := range v.Args {
+					if set[a] {
+						return errUnmadeSeen
+					}
+				}
+			}
+		}
+		for _, fr := range closes {
+			if fr.callee == nil || !set[fr.callee] {
+				return errUnmadeSeen
+			}
+		}
+	}
+	return nil
 }
 
 // returnsThis reports whether p's return at pc returns its receiver, in
@@ -2972,7 +3364,7 @@ func returnsThis(p *ir.Program, pc, this int) bool {
 // its result to slot result, if inlining's bounds allow it, with calls,
 // those of its operations it leaves to Go (InlineCalls), inlined in it,
 // every one, or it is not.
-func (b *builder) inlineFrame(site InlineSite, calls []int, total *int, result int) (*frame, bool) {
+func (b *builder) inlineFrame(site InlineSite, calls, given []int, total *int, result, at int) (*frame, bool) {
 	q := referenceReads(site.Program, site.Feedback)
 	// Its slots follow the function's and earlier callees': every slot's
 	// number stays below abi.MaxRecords, as records name slots by number.
@@ -2982,7 +3374,12 @@ func (b *builder) inlineFrame(site InlineSite, calls []int, total *int, result i
 	nslots, before, inlines, keeps := b.nslots, *total, b.inlines, b.f.Keeps
 	*total += len(site.Program.Code)
 	fr := &frame{p: q, fb: site.Feedback, site: site, result: result, base: b.nslots,
-		parent: b.cur, depth: b.cur.depth + 1, nest: b.cur.nest + 1, keep: -1}
+		parent: b.cur, depth: b.cur.depth + 1, nest: b.cur.nest + 1, keep: -1, at: at, givenPC0: -1}
+	if b.provisional || b.given != nil {
+		// Its path, which only a build inlining calls of what callees are
+		// given asks for.
+		fr.path = givenPath(b.cur.path, at)
+	}
 	if site.Construct {
 		// Its receiver's keep cell, taken now, as a literal's is
 		// (literal): the inlining is decided now.
@@ -3001,9 +3398,19 @@ func (b *builder) inlineFrame(site InlineSite, calls []int, total *int, result i
 		b.inlines++
 	}
 	inlined := len(b.f.Inlined)
-	if len(calls) != 0 {
+	if len(calls) != 0 || len(given) != 0 {
 		cur := b.cur
 		b.enter(fr)
+		// fixed says a call in one of its loops calls the closure the root
+		// gives it, inlined -- or, in a first build, left to an exit to
+		// find whether it does.
+		fixed := false
+		refuse := func() (*frame, bool) {
+			b.enter(cur)
+			b.nslots, *total, b.inlines, b.f.Keeps = nslots, before, inlines, keeps
+			b.f.Inlined = b.f.Inlined[:inlined]
+			return nil, false
+		}
 		for _, at := range calls {
 			if b.nativeHost(at) || b.inlineExit(at) {
 				// Made natively, or left to an exit in the callee's frame,
@@ -3012,15 +3419,53 @@ func (b *builder) inlineFrame(site InlineSite, calls []int, total *int, result i
 			}
 			child, ok := b.inlineAt(at, total)
 			if !ok {
-				b.enter(cur)
-				b.nslots, *total, b.inlines, b.f.Keeps = nslots, before, inlines, keeps
-				b.f.Inlined = b.f.Inlined[:inlined]
-				return nil, false
+				return refuse()
 			}
 			if fr.inlined == nil {
 				fr.inlined = map[int]*frame{}
 			}
 			fr.inlined[at] = child
+		}
+		for _, at := range given {
+			// A call of what it is given: in a first build an exit, whose
+			// state says what the callee is (calledClosures) -- not what
+			// the call's feedback inlines, a closure checked by its object,
+			// which a closure the caller makes anew at each call fails;
+			// in a second, the closure the root makes that the first found
+			// there, inlined (givenSite); otherwise, as any call, what its
+			// feedback inlines. Else the callee is not inlined at all: its
+			// loop would leave native code at every turn.
+			if b.provisional {
+				fr.pending = append(fr.pending, at)
+				b.pendingAny = true
+				fixed = fixed || loopHolds(fr.p, at)
+				continue
+			}
+			var child *frame
+			if pc0, found := b.given[givenPath(fr.path, at)]; found {
+				if s, ok := b.givenSite(at, pc0); ok {
+					if child, ok = b.inlineSiteAt(at, total, &inlineAsked{site: s, ok: true, given: true}); ok {
+						child.given, child.givenPC0 = true, pc0
+						fixed = fixed || loopHolds(fr.p, at)
+					}
+				}
+			} else if b.nativeHost(at) || b.inlineExit(at) {
+				continue
+			} else {
+				child, _ = b.inlineAt(at, total)
+			}
+			if child == nil {
+				return refuse()
+			}
+			if fr.inlined == nil {
+				fr.inlined = map[int]*frame{}
+			}
+			fr.inlined[at] = child
+		}
+		if !fixed && looping(fr.p) {
+			// A loop whose calls the inlining fixes none of: its call is
+			// made once for all its turns (InlineCallsGiven).
+			return refuse()
 		}
 		b.enter(cur)
 	}
@@ -3035,6 +3480,9 @@ func (b *builder) inlineFrame(site InlineSite, calls []int, total *int, result i
 type inlineAsked struct {
 	site            InlineSite
 	ok, asked, done bool
+	// given says the site is a closure the root makes, called where a
+	// callee calls what it is given (givenSite).
+	given bool
 }
 
 // planInline makes an inlined callee's blocks, between the block that ends
@@ -3252,6 +3700,9 @@ func (b *builder) inlineBlocks(fr *frame, from, to *Block) {
 			}
 		}
 		blk.Preds, blk.Backedge = preds, f.bools(len(preds))
+		if blk != to {
+			b.markBackedges(blk)
+		}
 	}
 	at := slices.Index(f.Blocks, from) + 1
 	f.Blocks = slices.Insert(f.Blocks, at, order...)
@@ -3301,6 +3752,10 @@ func (b *builder) inlineCall(blk *Block, pc int, fr *frame, guard func(Op, Type,
 		object := guard(OpObjectOf, Ptr, ir.HostExit, b.read(sp-site.Argc-1, blk))
 		same := guard(OpSameObject, None, ir.HostExit, object)
 		same.Const = ir.Value{Bits: uint64(site.Callee)}
+	} else if fr.given {
+		// What the call calls, which the build checks is the closure it
+		// was found to (unmadeAlone).
+		fr.callee = b.read(sp-site.Argc-1, blk)
 	}
 	if site.Coerce && site.ThisSlot >= 0 {
 		// A receiver that is not an object is coerced, which Go does.
@@ -4235,6 +4690,9 @@ func (b *builder) plan() error {
 			k.done = true
 			inlined := len(b.f.Inlined)
 			fr, ok := b.inlineSiteAt(pc, &total, k)
+			if pc0, called := b.called[pc]; ok && called {
+				fr.given, fr.givenPC0 = true, pc0
+			}
 			if ok && !b.host(pc) {
 				b.f.Inlined = b.f.Inlined[:inlined]
 			}
@@ -4605,17 +5063,26 @@ func (b *builder) plan() error {
 		b.f.Entries = append(b.f.Entries, Entry{PC: pc, Depth: p.Maps[pc].Depth, Block: e, Resume: resume})
 	}
 	// A loop header is reached by an edge from a block at or after it, in
-	// one frame: a callee's blocks have their own PCs, and no loops.
+	// one frame: a callee's blocks have their own PCs, and its loops their
+	// own headers (InlineCallsGiven).
 	for _, blk := range b.f.Blocks {
 		blk.Backedge = b.f.bools(len(blk.Preds))
-		for i, pred := range blk.Preds {
-			if pred.PC >= 0 && blk.PC >= 0 && pred.PC >= blk.PC && b.frameAt(pred) == b.root && b.frameAt(blk) == b.root {
-				blk.Backedge[i] = true
-				blk.LoopHeader = true
-			}
-		}
+		b.markBackedges(blk)
 	}
 	return nil
+}
+
+// markBackedges marks the edges into blk from blocks of its frame at or
+// after it -- but a callee's start, which goes to its first block -- as a
+// loop's back edges, and blk its header.
+func (b *builder) markBackedges(blk *Block) {
+	fr := b.frameAt(blk)
+	for i, pred := range blk.Preds {
+		if pred.PC >= 0 && blk.PC >= 0 && pred.PC >= blk.PC && b.frameAt(pred) == fr && (fr == b.root || pred != fr.start) {
+			blk.Backedge[i] = true
+			blk.LoopHeader = true
+		}
+	}
 }
 
 func (b *builder) edge(from, to *Block) {
@@ -6433,6 +6900,11 @@ func (b *builder) instruction(blk *Block, pc int) {
 		blk.ExitKind = ir.HostExit
 		blk.State = state()
 		blk.State.addUse()
+		if b.provisional && b.cur != b.root && slices.Contains(b.cur.pending, pc) {
+			// A call of what the callee is given, which the analysis reads
+			// the callee of here (calledClosures).
+			b.givenStates = append(b.givenStates, givenState{fr: b.cur, pc: pc, state: blk.State})
+		}
 		// A generator's yield, which code a loop's step resumed natively
 		// makes itself (Block's Yield), saving the handlers in force.
 		if in.Suspend && b.cur == b.root {

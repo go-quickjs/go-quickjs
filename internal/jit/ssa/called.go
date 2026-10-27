@@ -50,10 +50,17 @@ type CalledClosureFeedback interface {
 // loop's turn is of that turn's own. And the captured bindings the inlined
 // code reads in the function's slots must be the ones the closure took: no
 // scope's end closes them (CloseUpvalues) between its making and a call.
-func (b *builder) calledClosures() map[int]int {
+//
+// A closure given to a callee inlined in the first build that calls what
+// it is given (InlineCallsGiven) is in the callee's slots, no value's
+// operand: the call, an exit there (frame's pending), is of it where the
+// exit's state has one of its values as the call's callee. Those calls,
+// by their paths (frame's path), are given: the second build inlines them,
+// and checks what the first could not see past those exits (unmadeAlone).
+func (b *builder) calledClosures() (map[int]int, map[string]int) {
 	cf, ok := b.fb.(CalledClosureFeedback)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	f, p := b.f, b.root.p
 	type cand struct {
@@ -72,7 +79,7 @@ func (b *builder) calledClosures() map[int]int {
 		}
 	}
 	if len(cands) == 0 {
-		return nil
+		return nil, nil
 	}
 	// Each value's users, by ID, in one slice -- those of the value of ID
 	// i are all[start[i]:start[i+1]] -- and the values blocks branch on
@@ -147,7 +154,38 @@ func (b *builder) calledClosures() map[int]int {
 		}
 		return false
 	}
+	// The given calls' callees, by exit: the callee's slot in the state, and
+	// the root's call the callee's frame is inlined at, that of the frame
+	// the root inlined.
+	type givenCall struct {
+		path   string
+		callee *Value
+		root   int
+	}
+	var givens []givenCall
+	for _, gs := range b.givenStates {
+		at, ok := gs.fr.fb.(CalledClosureFeedback)
+		if !ok {
+			continue
+		}
+		argc, method, ok := at.CallShape(gs.pc)
+		slot := gs.fr.base + gs.fr.p.Locals + gs.fr.p.Maps[gs.pc].Depth - argc - 1
+		if !ok || method || slot < gs.fr.base || slot >= len(gs.state.Slots) || gs.state.Slots[slot] == nil {
+			continue
+		}
+		top := gs.fr
+		for top.parent != nil && top.parent != b.root {
+			top = top.parent
+		}
+		if top.parent != b.root || b.inlined[top.at] != top {
+			// Inside a loop's callback (inlineCallback): its frame is
+			// planned after the closures are (unmakeCalled).
+			continue
+		}
+		givens = append(givens, givenCall{path: givenPath(gs.fr.path, gs.pc), callee: gs.state.Slots[slot], root: top.at})
+	}
 	called := map[int]int{}
+	var given map[string]int
 	for _, c := range cands {
 		var obj *Value
 		for _, u := range users(c.call) {
@@ -289,28 +327,49 @@ func (b *builder) calledClosures() map[int]int {
 				calls = append(calls, pc)
 			}
 		}
-		if !good || len(calls) == 0 {
+		var mine []givenCall
+		for _, g := range givens {
+			if set[g.callee] {
+				mine = append(mine, g)
+			}
+		}
+		if !good || len(calls) == 0 && len(mine) == 0 {
 			continue
 		}
-		for _, pc := range calls {
-			v, _ := callee(pc)
+		// No scope's end closes what it captured between its making and a
+		// call -- a given one's, the root's call the callee is inlined at.
+		closes := func(v *Value, pc int) bool {
 			lo, hi := c.pc, pc
 			if !same[v] || pc < c.pc {
 				lo, hi = 0, len(p.Code)
 			}
-			for q := lo; q < hi && good; q++ {
+			for q := lo; q < hi; q++ {
 				if in := p.Code[q]; in.Op == ir.CloseUpvalues && reachable(p, q) && closesCaptured(int(in.Key), made.Captures) {
-					good = false
+					return true
 				}
 			}
+			return false
+		}
+		for _, pc := range calls {
+			v, _ := callee(pc)
+			good = good && !closes(v, pc)
+		}
+		for _, g := range mine {
+			good = good && !closes(g.callee, g.root)
 		}
 		if good {
 			for _, pc := range calls {
 				called[pc] = c.pc
 			}
+			for _, g := range mine {
+				if given == nil {
+					given = map[string]int{}
+				}
+				given[g.path] = c.pc
+			}
 		}
 	}
-	return called
+	return called, given
 }
 
 // closesCaptured reports whether a scope's end closing the locals from key

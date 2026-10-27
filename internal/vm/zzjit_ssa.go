@@ -1946,11 +1946,14 @@ func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
 	old := e.ssa
 	// What the old code holds, which a call of Go suspended in it needs.
 	oldKeep := []any{e.ssaShapes, e.ssaHolders, e.ssaInlined, e.ssaPools, e.ssaLinks, e.ssaCells}
-	if len(fb.inlined) > len(e.ssaInlined) {
+	if fb.inlinedN > e.ssaInlinedN {
 		// It inlines more: its native callers may inline it now, and
-		// theirs, with it.
+		// theirs, with it. (What its compile asked to inline is more than
+		// it inlines, where a first build inlined callees a second did not:
+		// ssa's calledClosures.)
 		r.jitCallersReopt(e, jitInlineDepth)
 	}
+	e.ssaInlinedN = fb.inlinedN
 	e.ssa, e.ssaShapes, e.ssaHolders, e.ssaStats = code, fb.shapes, fb.holders, jitSSAStats{}
 	if e.genLearned {
 		// Its loops' steps over generators resume them natively now, which
@@ -2059,6 +2062,12 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 	}
 	ssa.Optimize(f)
 	fb.virtuals, fb.called = f.Virtuals, f.Called
+	// The calls it inlines, of those whose inlining it asked (Inline).
+	fb.inlinedN = len(f.Inlined)
+	fb.inlinedAt = fb.inlinedAt[:0]
+	for _, pc := range f.InlinedAt {
+		fb.inlinedAt = append(fb.inlinedAt, int32(pc))
+	}
 	if f.HomesEnd != 0 {
 		// The homes of the objects it does not make, past its operands,
 		// which its frame takes, as it does its loops' slots: its callees'
@@ -2265,10 +2274,12 @@ type jitFeedback struct {
 	root    *jitFeedback
 	strings bool
 	links   []*jitLink
-	// inlined are the closures of the callees the code inlines; pools the
-	// object pools its constructions take from.
-	inlined []*closure
-	pools   []*abi.ObjectPool
+	// inlined are the closures of the callees the code inlines, or that
+	// its compile asked to inline, inlinedN how many it inlines (ssa.Func's
+	// Inlined); pools the object pools its constructions take from.
+	inlined  []*closure
+	inlinedN int
+	pools    []*abi.ObjectPool
 	// made are the templates of the closures the code may not make, the
 	// loops' callbacks inlined where their callers make them (ForEachSite's
 	// Made), which an exit's frame names in their places (jitMaterialize);
@@ -5774,8 +5785,17 @@ func (r *Runtime) jitInlinesCalls(cl *closure, depth int) bool {
 	if err != nil {
 		return false
 	}
-	calls, ok := ssa.InlineCalls(p)
-	if !ok || len(calls) == 0 {
+	// Its calls of what it is given may be of a closure its caller makes,
+	// which the caller's compile finds and inlines -- or, if it finds none,
+	// does not inline the function (ssa.InlineCallsGiven).
+	calls, given, ok := ssa.InlineCallsGiven(p, func(pc int) (int, bool) {
+		if pc >= len(fn.Code) {
+			return 0, false
+		}
+		argc, method, ok := jitCallShape(fn.Code[pc])
+		return argc, ok && !method
+	})
+	if !ok || len(calls) == 0 && len(given) == 0 || len(given) != 0 && depth <= 0 {
 		return false
 	}
 	fb := &jitFeedback{r: r, fn: fn, cl: cl, prog: p}
@@ -7739,12 +7759,29 @@ func (fb *jitFeedback) CalledClosure(pc int) (ssa.MadeCallback, ssa.InlineSite, 
 
 // CallShape is ssa.CalledClosureFeedback's: the call at pc's argument
 // count, and whether it is a method's -- not one whose inlining left
-// native code too often (jitInlineLeft), nor a call in tail position.
+// native code too often (jitInlineLeft), nor a call in tail position. An
+// inlined callee's calls have theirs from the code alone: where a closure
+// its caller gives it is called (ssa.InlineCallsGiven).
 func (fb *jitFeedback) CallShape(pc int) (int, bool, bool) {
+	if fb.root != nil && fb.e == nil && pc >= 0 && pc < len(fb.fn.Code) {
+		return jitCallShape(fb.fn.Code[pc])
+	}
 	if fb.e == nil || pc < 0 || pc >= len(fb.fn.Code) || slices.Contains(fb.e.notInline, int32(pc)) {
 		return 0, false, false
 	}
 	switch in := fb.fn.Code[pc]; in.Op {
+	case bytecode.OpCall:
+		return int(in.A), false, true
+	case bytecode.OpCallMethod:
+		return int(in.A), true, true
+	}
+	return 0, false, false
+}
+
+// jitCallShape is in's argument count and whether it is a method's call,
+// if it is a call, not in tail position.
+func jitCallShape(in bytecode.Instr) (int, bool, bool) {
+	switch in.Op {
 	case bytecode.OpCall:
 		return int(in.A), false, true
 	case bytecode.OpCallMethod:
@@ -7870,37 +7907,54 @@ func (r *Runtime) jitMaterialize(f *frame, e *jitEntry) {
 	if len(e.ssaMade) == 0 {
 		return
 	}
-	var made [4]struct {
-		t *closure
-		o *Object
-	}
-	n := 0
+	// The closures this exit makes, from here: those it made at an earlier
+	// one are not this one's, though its frame be the same.
+	s := r.jit
+	clear(s.made)
+	s.made = s.made[:0]
+	r.jitMaterializeIn(f, f, e, max(f.cl.fn.MaxStack, e.loopSlots))
+}
+
+// jitMade is a closure Go made at an exit in place of its template, on the
+// frame of the code that did not make it (jitMaterialize).
+type jitMade struct {
+	f *frame
+	t *closure
+	o *Object
+}
+
+// jitMaterializeIn makes, in f's slots, its locals and the stack slots past
+// its base, depth of them, the closures e's code did not make, on the
+// frame maker of e's code -- f, or, where f is a callee e's code inlined,
+// e's own (jitUnwindNative) -- one for each template, the closures this
+// exit made before included (jitState's made): a closure the root gave
+// an inlined callee (ssa's calledClosures) is in the callee's slots and
+// in the root's.
+func (r *Runtime) jitMaterializeIn(f, maker *frame, e *jitEntry, depth int) {
+	s := r.jit
 	fix := func(v *Value) {
 		t := v.template()
 		if t == nil || !slices.Contains(e.ssaMade, t) {
 			return
 		}
-		for i := range n {
-			if made[i].t == t {
-				*v = Obj(made[i].o)
+		for _, m := range s.made {
+			if m.f == maker && m.t == t {
+				*v = Obj(m.o)
 				return
 			}
 		}
-		o := r.makeClosure(f, templateValue(t))
-		if n < len(made) {
-			made[n].t, made[n].o = t, o
-			n++
-		}
+		o := r.makeClosure(maker, templateValue(t))
+		s.made = append(s.made, jitMade{f: maker, t: t, o: o})
+		s.materialized++
 		*v = Obj(o)
 	}
 	for i := range f.locals {
 		fix(&f.locals[i])
 	}
-	end := min(len(r.stack), f.base+max(f.cl.fn.MaxStack, e.loopSlots))
+	end := min(len(r.stack), f.base+depth)
 	for i := f.base; i < end; i++ {
 		fix(&r.stack[i])
 	}
-	r.jit.materialized += uint64(n)
 }
 
 // jitLoopCallback is the callback of the loop of a built-in's call native
@@ -8782,6 +8836,7 @@ func (e *jitEntry) setSSA(s *jitState, fn *bytecode.Function, p *ir.Program, cod
 	e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaHostsLeft, e.ssaUnresumed = fb.inlinedAt, fb.definesUnfed, fb.cells, fb.hostsLeft, fb.unresumed
 	e.ssaTargets = fb.targets
 	e.ssaStrings, e.ssaInlined, e.ssaPools, e.ssaMade = fb.strings, fb.inlined, fb.pools, fb.made
+	e.ssaInlinedN = fb.inlinedN
 	e.ssaHomes, e.ssaVirtuals, e.ssaCalled = max(e.ssaHomes, fb.homes), fb.virtuals, fb.called
 	e.ssaCallbacks, e.ssaUnmade = fb.callbacks, fb.unmade
 	s.setLinks(e, fb.links)
@@ -10712,7 +10767,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			// Past its call meanwhile, as the interpreter's frame is during
 			// one, which a stack trace shows (stackFrame).
 			f.pc = uint32(exitPC) + 1
-			v, err := r.jitUnwindNative(idx, e, f.cl)
+			v, err := r.jitUnwindNative(idx, e, f.cl, false)
 			if err == nil && r.stopped == nil && back != 0 && e.ssa == code && !e.invalid && code.Contains(back) {
 				// Native code run meanwhile may have used the context.
 				c.Base, c.Live, c.ReturnTo = base, 0, 0
@@ -10774,7 +10829,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			f.pc = uint32(exitPC) + 1
 			// A loop's, taken before Go runs anything.
 			loop := jitLoopIn(e.loops, ctx, f.cl.fn, exitPC)
-			v, err := r.jitUnwindNative(idx, e, f.cl)
+			v, err := r.jitUnwindNative(idx, e, f.cl, true)
 			if loop != 0 {
 				// The callee was a loop's callback, inlined in it
 				// (ssa.ForEachSite's Inline): Go goes on with the loop after
@@ -11271,9 +11326,17 @@ type jitNativeLevel struct {
 // each, as runFD would have, from the outermost; then finishes each from
 // the innermost -- that one from its exit, as runSSA does, the others from
 // after their call, with what the one they called returned or threw -- and
-// returns what the outermost returned or threw.
-func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure) (Value, error) {
+// returns what the outermost returned or threw. made says the run's frame
+// has had the closures its code did not make made for this exit
+// (jitMaterialize), which the callees it inlined share.
+func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure, made bool) (Value, error) {
 	s := r.jit
+	if !made {
+		// What an earlier exit made, which a frame of this one's, at the
+		// same address, is not given.
+		clear(s.made)
+		s.made = s.made[:0]
+	}
 	code := root.fn
 	if c := s.ssaCtxs[idx+1]; c.Live == abi.LiveCall && c.ExitKind == abi.ExitEnter && (idx+2 == len(s.ssaCtxs) || s.ssaCtxs[idx+2].Live == 0) {
 		return r.jitEnterOne(c, idx+1, code, int(s.ssaCtxs[idx].ExitPC))
@@ -11404,6 +11467,9 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure) (Value, e
 		clear(s.unwinding[start:])
 		clear(s.unwindingFrames[start:])
 		s.unwinding, s.unwindingFrames = s.unwinding[:start], s.unwindingFrames[:start]
+		// The closures the exit made, the frames' now.
+		clear(s.made)
+		s.made = s.made[:0]
 	}()
 	s.unwound += uint64(n)
 	if n != 0 {
@@ -11547,6 +11613,22 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure) (Value, e
 				// The closures its code did not make, where its frame names
 				// them.
 				r.jitMaterialize(f, r.jitEntryOf(l.cl))
+			} else if l.owner != nil && len(l.owner.ssaMade) != 0 {
+				// Those the code that inlined it did not make, given it --
+				// a closure the root made and passed to a callee calling it
+				// in its loop (ssa's calledClosures) -- made on that code's
+				// own frame, the level's below it not inlined or the run's,
+				// the same closure its slots there have.
+				maker := s.goRuns[idx].f
+				for j := k - 1; j >= 0; j-- {
+					if !s.unwinding[start+j].inline {
+						maker = s.unwindingFrames[start+j]
+						break
+					}
+				}
+				if maker != nil {
+					r.jitMaterializeIn(f, maker, l.owner, fn.MaxStack)
+				}
 			}
 			f.thisRef, f.withScopes, f.evalVars, f.native, f.savedSP = nil, nil, nil, "", 0
 			if !l.inline && l.construct && fn.Kind == bytecode.KindDerivedConstructor {

@@ -649,9 +649,11 @@ type jitEntry struct {
 	// ssaLinks are the links of the functions the code calls natively,
 	// whose addresses it holds, and ssaInlined the closures of those it
 	// inlines, whose frames Go makes at an exit inside them
-	// (jitUnwindNative).
-	ssaLinks   []*jitLink
-	ssaInlined []*closure
+	// (jitUnwindNative), and of those whose inlining its compile asked
+	// for; ssaInlinedN how many callees it inlines (ssa.Func's Inlined).
+	ssaLinks    []*jitLink
+	ssaInlined  []*closure
+	ssaInlinedN int
 	// ssaMade are the templates of the closures the code does not make
 	// (jitFeedback's made), which Go makes where an exit's frame names them
 	// (jitMaterialize).
@@ -894,8 +896,10 @@ type jitState struct {
 	// at an exit (jitLoopFinish).
 	loopsFinished uint64
 	// materialized counts the closures Go made at exits that native code
-	// had not made (jitMaterialize).
+	// had not made (jitMaterialize); made are those the exit being made
+	// has made, by the frame they are made on.
 	materialized uint64
+	made         []jitMade
 	// searchArgs are a search's arguments (jitSearch), given to its Go
 	// function, which keeps nothing of them, and cleared after.
 	searchArgs [2]Value
