@@ -659,6 +659,11 @@ type jitEntry struct {
 	ssaLinks    []*jitLink
 	ssaInlined  []*closure
 	ssaInlinedN int
+	// ssaInlinedLearned is, for each of ssaInlined, what its function's
+	// entry had learned when the code was compiled (jitInlinedLearned):
+	// an exit inside one that has learned more since has the code compiled
+	// again with it (jitFinishExit).
+	ssaInlinedLearned []int32
 	// ssaMade are the templates of the closures the code does not make
 	// (jitFeedback's made), which Go makes where an exit's frame names them
 	// (jitMaterialize).
@@ -1241,7 +1246,7 @@ func (e *jitEntry) measure() int {
 // compiledBytes is what e holds that its code was compiled with: the
 // slices a compile gives it (setSSA), which jitCompiledBytes measures.
 func (e *jitEntry) compiledBytes() int {
-	return jitCompiledBytes(e.ssaShapes, e.ssaHolders, e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaInlined, e.ssaPools, e.ssaLinks) + jitCapBytes(e.ssaHostsLeft) + jitCapBytes(e.ssaUnresumed)
+	return jitCompiledBytes(e.ssaShapes, e.ssaHolders, e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaInlined, e.ssaPools, e.ssaLinks) + jitCapBytes(e.ssaHostsLeft) + jitCapBytes(e.ssaUnresumed) + jitCapBytes(e.ssaInlinedLearned)
 }
 
 // compiledBytes is what fb's code would have its entry hold, in place of

@@ -1728,10 +1728,29 @@ func jitLearnedSpent(fn *bytecode.Function, e *jitEntry) int64 {
 // learned at its exits counted in: a change of either delays the compile
 // for it (jitLearnedDue), as V8's NotifyICChanged does.
 func jitLearnedMark(cl *closure, e *jitEntry) uint64 {
-	n := len(e.failed) + len(e.failedEntries) + len(e.resumed) + len(e.bigints) + len(e.bigwide) + len(e.poly) + len(e.typedReads) + len(e.stringReads) +
+	return jitFeedbackMark(cl) + uint64(jitLearnedCount(e))*0x9e3779b97f4a7c15
+}
+
+// jitLearnedCount is how much e's exits have learned, which grows as they
+// learn more.
+func jitLearnedCount(e *jitEntry) int {
+	return len(e.failed) + len(e.failedEntries) + len(e.resumed) + len(e.bigints) + len(e.bigwide) + len(e.poly) + len(e.typedReads) + len(e.stringReads) +
 		len(e.keyedReads) + len(e.keyedWrites) + len(e.strSites) + len(e.numSites) + len(e.boolSites) + len(e.nativeCalls) + len(e.inlines) + len(e.notInline) +
 		len(e.literals) + len(e.definesUnfed)
-	return jitFeedbackMark(cl) + uint64(n)*0x9e3779b97f4a7c15
+}
+
+// jitInlinedLearned is, for each closure the code inlines, what its
+// function's entry had learned when the code was compiled
+// (jitLearnedCount), appended to to.
+func (s *jitState) jitInlinedLearned(inlined []*closure, to []int32) []int32 {
+	for _, cl := range inlined {
+		n := int32(-1)
+		if e := s.entryFor(cl.fn); e != nil {
+			n = int32(jitLearnedCount(e))
+		}
+		to = append(to, n)
+	}
+	return to
 }
 
 // jitInvalidate invalidates e's code, cl's function's, for an eager
@@ -1985,6 +2004,7 @@ func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
 	e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaHostsLeft, e.ssaUnresumed = fb.inlinedAt, fb.definesUnfed, fb.cells, fb.hostsLeft, fb.unresumed
 	e.ssaTargets = fb.targets
 	e.ssaStrings, e.ssaInlined, e.ssaPools, e.ssaMade = e.ssaStrings || fb.strings, fb.inlined, fb.pools, fb.made
+	e.ssaInlinedLearned = r.jit.jitInlinedLearned(fb.inlined, e.ssaInlinedLearned[:0])
 	e.ssaHomes, e.ssaVirtuals, e.ssaCalled = max(e.ssaHomes, fb.homes), fb.virtuals, fb.called
 	e.ssaCallbacks, e.ssaUnmade = fb.callbacks, fb.unmade
 	r.jit.setLinks(e, fb.links)
@@ -6774,6 +6794,11 @@ func jitKeyedClass(o *Object) bool {
 // one.
 func (r *Runtime) jitIndexSeen(e *jitEntry, pc int, o, k Value) {
 	p := e.ssaProg
+	if p == nil && e.link != nil {
+		// An entry with no code yet, learning at an exit of a caller's
+		// that inlined it: the program inlining it is made from.
+		p, _ = r.jitLower(e.link.key.Value(), jitLowerInline)
+	}
 	// Not bounded by jitReoptimizations, which speculations that failed
 	// spend: each read is learned once, and the compile waits for the next
 	// invocation, taking every one met meanwhile.
@@ -8882,6 +8907,7 @@ func (e *jitEntry) setSSA(s *jitState, fn *bytecode.Function, p *ir.Program, cod
 	e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaHostsLeft, e.ssaUnresumed = fb.inlinedAt, fb.definesUnfed, fb.cells, fb.hostsLeft, fb.unresumed
 	e.ssaTargets = fb.targets
 	e.ssaStrings, e.ssaInlined, e.ssaPools, e.ssaMade = fb.strings, fb.inlined, fb.pools, fb.made
+	e.ssaInlinedLearned = s.jitInlinedLearned(fb.inlined, e.ssaInlinedLearned[:0])
 	e.ssaInlinedN = fb.inlinedN
 	e.ssaHomes, e.ssaVirtuals, e.ssaCalled = max(e.ssaHomes, fb.homes), fb.virtuals, fb.called
 	e.ssaCallbacks, e.ssaUnmade = fb.callbacks, fb.unmade
@@ -12352,6 +12378,37 @@ func (r *Runtime) jitFinishExit(f *frame, e *jitEntry, l *jitNativeLevel) (Value
 			}
 			r.jitInvalidate(l.ownerCl, l.owner)
 		}
+		// What an inlined callee's feedback knows that the code inlining it
+		// was not compiled with -- learned at this exit, a call's targets,
+		// an element read's kind, or since the code was compiled, by the
+		// callee's own code -- the code is invalidated for, as for its shape
+		// miss (above), and compiled again with it once the existing tiers
+		// have spent their budget: as V8's inlined code deoptimizes where
+		// its feedback was insufficient, the function's feedback gathered
+		// for the next optimization. Each such exit had counted toward the
+		// inlining's being given up (jitInlineLeft), the rest of the
+		// invocation the interpreter's, the code that inlined it compiled
+		// again for the callee's exits never. A callee with no code of its
+		// own -- warming up, or called only where it is inlined -- learns
+		// as its code's exit would, what its code would be compiled again
+		// for kept for its first compile, which takes it all: Octane's Game
+		// Boy emulator's memoryHighRead, inlined in its opcodes with the
+		// reader its table's call met, read the emulator's memory, a typed
+		// array, by Go at each call of the reader, which had run no code of
+		// its own.
+		taught := l.inline && l.owner != nil && e != nil
+		if taught && e.ssa == nil {
+			flags := [...]bool{e.reopt, e.inlineReopt, e.polyReopt, e.inlinePending}
+			switch jitCallOp(in.Op) {
+			case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew:
+				r.jitCallSeen(f, e, pc, f.base+depth, jitCallInstr(in))
+			case bytecode.OpGetIndex, bytecode.OpGetIndexThis, bytecode.OpGetLocalIndex, bytecode.OpGetIndexUnder:
+				if o, k, ok := r.jitIndexOperands(f, in, f.base+depth); ok {
+					r.jitIndexSeen(e, pc, o, k)
+				}
+			}
+			e.reopt, e.inlineReopt, e.polyReopt, e.inlinePending = flags[0], flags[1], flags[2], flags[3]
+		}
 		if e != nil && e.ssa != nil {
 			e.ssaStats.hosts++
 			r.jitStringAddSeen(f, e, pc)
@@ -12375,6 +12432,16 @@ func (r *Runtime) jitFinishExit(f *frame, e *jitEntry, l *jitNativeLevel) (Value
 				r.jitRefillLiteral(f, e, pc)
 			case bytecode.OpDefineField:
 				jitDefineSeen(e, pc)
+			}
+		}
+		if taught && !l.owner.invalid {
+			n := int32(jitLearnedCount(e))
+			for i, c := range l.owner.ssaInlined {
+				if c.fn == f.cl.fn && i < len(l.owner.ssaInlinedLearned) && l.owner.ssaInlinedLearned[i] != n {
+					r.jit.account(e)
+					r.jitInvalidate(l.ownerCl, l.owner)
+					break
+				}
 			}
 		}
 		if l.inline && l.owner != nil {
