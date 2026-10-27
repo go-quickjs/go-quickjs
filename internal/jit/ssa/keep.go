@@ -186,17 +186,38 @@ func reconstruct(f *Func, order []*Value, kept [][]*Value) {
 			pos[v.ID] = i
 		}
 	}
+	// The definitions of the kept values, c's own and its copies', by
+	// block: start[b.ID] to start[b.ID+1] in defs, each with its value's
+	// index among the kept and its place in the block. A use asks only its
+	// own block's, which hold a few, where a list by value had been walked
+	// whole at every use -- every frame state's slot among them.
 	type def struct {
-		block, at int
-		v         *Value
+		k, at int
+		v     *Value
 	}
-	defs := make([][]def, len(order))
+	start := f.ints(nb + 1)
+	n := 0
 	for k, c := range order {
 		cand[c.ID] = k + 1
-		defs[k] = make([]def, 0, 1+len(kept[k]))
-		defs[k] = append(defs[k], def{c.Block.ID, pos[c.ID], c})
+		start[c.Block.ID+1]++
 		for _, d := range kept[k] {
-			defs[k] = append(defs[k], def{d.Block.ID, pos[d.ID], d})
+			start[d.Block.ID+1]++
+		}
+		n += 1 + len(kept[k])
+	}
+	for b := 0; b < nb; b++ {
+		start[b+1] += start[b]
+	}
+	defs, fill := make([]def, n), f.ints(nb)
+	add := func(k int, d *Value) {
+		b := d.Block.ID
+		defs[start[b]+fill[b]] = def{k, pos[d.ID], d}
+		fill[b]++
+	}
+	for k, c := range order {
+		add(k, c)
+		for _, d := range kept[k] {
+			add(k, d)
 		}
 	}
 	// candOf is 1 plus v's index among the kept values, or 0; phis made here
@@ -207,12 +228,13 @@ func reconstruct(f *Func, order []*Value, kept [][]*Value) {
 		}
 		return cand[v.ID]
 	}
-	// The last definition of the k'th value in a block before index at.
+	// The last definition of the k'th value in a block before index at: a
+	// phi made here at its start is atStart's.
 	before := func(k int, b *Block, at int) *Value {
 		var last *Value
-		best := -2
-		for _, d := range defs[k] {
-			if d.block == b.ID && d.at < at && d.at > best {
+		best := -1
+		for _, d := range defs[start[b.ID]:start[b.ID+1]] {
+			if d.k == k && d.at < at && d.at > best {
 				last, best = d.v, d.at
 			}
 		}
@@ -286,14 +308,21 @@ func reconstruct(f *Func, order []*Value, kept [][]*Value) {
 			phis = make([][]*Value, nb)
 		}
 		phis[b.ID] = append(phis[b.ID], phi)
-		defs[k] = append(defs[k], def{b.ID, -1, phi})
 		return phi
 	}
+	// reach is the definition of the k'th value that reaches index at of
+	// block b: the walk below asks it of one block at a time, which keeps
+	// what reaches the block's start for each value it has asked of
+	// (startOf, by 1 plus the block's ID in startIn).
+	startIn, startOf := f.ints(len(order)), f.refsOf(len(order))
 	reach := func(k int, b *Block, at int) *Value {
 		if d := before(k, b, at); d != nil {
 			return d
 		}
-		return atStart(k, b)
+		if startIn[k] != b.ID+1 {
+			startIn[k], startOf[k] = b.ID+1, atStart(k, b)
+		}
+		return resolve(startOf[k])
 	}
 	// A frame state its users share -- the guards of one instruction do,
 	// some before a keep and some after -- is copied before one's slot

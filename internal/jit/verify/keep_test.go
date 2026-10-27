@@ -171,3 +171,76 @@ func TestMirKeepsCheap(t *testing.T) {
 	}
 	t.Logf("%d keeps in %d runs, %d keeprefs", keeps, runs, refs)
 }
+
+// keepRenameCorpus keeps values at stores in several blocks of one
+// function, each value kept again at each store while it is still used:
+// a use, an operand's or a frame state's slot, takes the copy kept last
+// before it in its block (ssa's reconstruct), or what reaches the block.
+var keepRenameCorpus = []string{
+	`function f(o,n){let s=0;for(let i=0;i<n;i++){const p=o.a,q=o.b;o.a=q;s+=p.v;if(i&1){o.b=p;s+=q.v}else{o.c=q;s+=p.w}o.d=p;s+=p.v+q.v}return s}`,
+	`function f(o,g){const a=o.x,b=o.y;o.x=b;g(a);o.y=a;if(a.k){o.z=b;g(b)}o.w=a;return a.z+b.z}`,
+	`function f(o){const p=o.a,q=o.b;o.c=q;o.d=p;o.e=q;o.a=p;return p.v+q.v}`,
+	`function f(o,x){const p=o.a;o.a=x;const s=p.v;o.a=s;return p.v+s}`,
+	`function f(o,g){const p=o.a;g(p);g(p);o.b=p;g(p);return p.v}`,
+}
+
+// Each use of a kept value takes the last of its copies (OpKept) made
+// before the use in the use's block, or, if none is, the one that reaches
+// the block: a use reading an earlier copy, past a store that may have
+// written the cell that copy's pointer word is read from, would read
+// another value's.
+func TestSSAKeptUsesTakeTheLastCopy(t *testing.T) {
+	kept := 0
+	for _, src := range append(append([]string(nil), keepCorpus...), keepRenameCorpus...) {
+		for i, p := range lowered(t, src) {
+			f, err := ssa.BuildWith(p, calls{props{p: p}})
+			if err != nil {
+				continue
+			}
+			ssa.Optimize(f)
+			if err := ssa.Check(f); err != nil {
+				t.Fatalf("%s (%d): %v", src, i, err)
+			}
+			// What each copy is a copy of, followed to the first value.
+			origin := func(v *ssa.Value) *ssa.Value {
+				for v != nil && v.Op == ssa.OpKept {
+					v = v.Args[1]
+				}
+				return v
+			}
+			for _, b := range f.Blocks {
+				// The copy of each value made last so far in the block.
+				last := map[*ssa.Value]*ssa.Value{}
+				check := func(at string, x *ssa.Value) {
+					if x == nil || x.Type != ssa.Tagged {
+						return
+					}
+					if l, ok := last[origin(x)]; ok && l != x {
+						t.Errorf("%s (%d): b%d %s takes v%d, not v%d, its value's last copy before it", src, i, b.ID, at, x.ID, l.ID)
+					}
+				}
+				for _, v := range b.Values {
+					if v.Op != ssa.OpPhi {
+						for _, a := range v.Args {
+							if v.Op != ssa.OpKept && v.Op != ssa.OpKeep && v.Op != ssa.OpKeepRef {
+								check(fmt.Sprintf("v%d's operand", v.ID), a)
+							}
+						}
+						if v.State != nil {
+							for _, x := range v.State.Slots {
+								check(fmt.Sprintf("v%d's state", v.ID), x)
+							}
+						}
+					}
+					if v.Op == ssa.OpKept {
+						kept++
+						last[origin(v)] = v
+					}
+				}
+			}
+		}
+	}
+	if kept == 0 {
+		t.Fatal("the corpus keeps nothing")
+	}
+}
