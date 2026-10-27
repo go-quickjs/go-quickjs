@@ -54,7 +54,12 @@ cell, the functions a call has called, a literal's pool. `ssa.Optimize`
 unboxes numbers, merges guards a dominating one already made, removes dead
 code and keeps references alive across stores and calls (`keep.go`).
 `mir` allocates registers by linear scan and encodes amd64 or arm64; the
-code is placed in the runtime's arena (`SSACode`).
+code is placed in the runtime's arena (`SSACode`). A loop's phi of
+numbers is a float64 where a use unboxes it -- any use, where the phi
+merges nothing but numbers and unboxing it speculates nothing, as V8's
+representation selection takes a phi of Float64 inputs -- its box made
+where a use outside the loop needs it, or by an exit (`unboxPhis`,
+`sinkLoopBoxes`).
 
 **Speculation and deoptimization.** A guard checks what the code was
 compiled for -- a number, a shape, a callee -- and exits to the interpreter
@@ -120,7 +125,13 @@ built generic. A callee's throw, or a call its own code has never been
 seen to make, does not keep it from being inlined: native code leaves the
 inlined frame there, as V8's code deoptimizes at a call with no feedback
 (`ssa.InlineExitFeedback`), and such exits, if they are taken after all,
-count toward the call's not being inlined any more (`jitInlineLeft`). A call is compiled for the functions it
+count toward the call's not being inlined any more (`jitInlineLeft`). A
+callee's call in tail position is made as an ordinary call inlined, where
+the stack is shallow: its depth check counts the frames it is inlined in,
+and deeper it leaves for Go, which gives the frame up as the interpreter
+does (`ssa.OpTailRoom`'s Index). A callee whose calls are decided after
+its native callers were compiled has them compiled again, to inline it
+with its calls where they now may (`jitCallersReopt`). A call is compiled for the functions it
 was seen to call natively, up to `jitCallTargets` (4), each checked by its
 object or, for a closure made anew, by its code (see Closures); one that
 meets any other leaves native code, Go learning there what to call next.
@@ -233,6 +244,29 @@ as it returns (`ssa.Func`'s `CellsBack`), and a scope's end gives it none
 fresh: nothing else can hold them, as V8's escape analysis leaves a
 context only such closures read unmade. A frame that leaves native code is
 Go's, the closures Go makes on its cells with it, and returns through Go.
+
+**Callees with loops.** A callee with a loop is inlined only where the
+loop calls a closure its caller makes and gives it -- SOM's
+`Vector.forEach(fn)` and `hasSome(fn)`, given `(e) => e === obj` --
+that closure inlined at the call and not made (`ssa.InlineCallsGiven`).
+Elsewhere a call of a loop is made once for all its turns, so inlining it
+saves that call spread over them, against the code it adds to its caller
+(Crypto's `am3`: its callers' code 60% larger, Crypto 25% slower); what
+inlining a loop can save at every turn is what the caller makes known to
+it, the call of the closure it gives, and the closure, made at every call.
+The function is built twice, as for a closure it only calls (Closures): a
+first build, where the root makes a closure, inlines the callees that call
+what they are given, leaving those calls to exits, whose states say which
+calls are of a closure the root gave them, used by nothing else
+(`calledClosures`); a second inlines the closure at those calls, by their
+paths through the frames, with no check, and leaves it unmade -- and its
+own SSA checks what the first could not see past its exits: that the
+closure is used by nothing but frame states and that every such call calls
+it (`unmadeAlone`), the second build refused otherwise. The first is never
+the code. A loop in an inlined frame has its own header, whose state is
+the frame's: its poll and its exits make the inlined frames, where Go makes
+the closures they name on the root's frame, the same closure in every
+frame (the VM's `jitMaterializeIn`).
 
 **Allocation.** Object, array and regular expression literals, closures
 and their captured cells (see Closures), and the receivers of
