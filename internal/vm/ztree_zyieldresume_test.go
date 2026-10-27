@@ -24,7 +24,7 @@ func TestGeneratorResumption(t *testing.T) {
 		tree bool
 	}{
 		{name: "stackTrace", tree: true, src: `function* f() { for (let i = 0; i < 2; i++) yield new Error('e').stack.split('\n').slice(1, 4).map(l => l.trim().split(' ')[1]).join() }
-function outer() { const r = []; for (const s of f()) r.push(s); return r.join(';') } outer()`, want: "f,Object.next,outer;f,Object.next,outer"},
+function outer() { const r = []; for (const s of f()) r.push(s); return r.join(';') } outer()`, want: "f,f.next,outer;f,f.next,outer"},
 		{name: "depths", tree: true, src: `function* f() { for (let i = 0; ; i++) yield i + ':' + new Error().stack.split('\n').length }
 var g = f(); function d(n) { return n ? d(n - 1) : g.next().value } [d(0), d(5), d(1), g.next().value].join()`, want: "0:5,1:10,2:6,3:4"},
 		{name: "liveStack", tree: true, src: `function* f() { var s = 0; for (let i = 0; i < 3; i++) s += 10 * (yield i) + (yield -i); return s }

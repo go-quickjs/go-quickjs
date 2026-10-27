@@ -34,6 +34,20 @@ frames(o.alias())`, "at Object.real [as alias] (<eval>:2:43) | at <eval>:3:10"},
 		// A built-in is named for its receiver's type and has no location.
 		{frames + `var e; try { [1].map(() => { throw new Error() }) } catch (x) { e = x }
 frames(e)`, "at <eval>:2:36 | at Array.map (<anonymous>) | at <eval>:2:18"},
+		// The type is V8's constructor name: a namespace's Symbol.toStringTag,
+		// a generator's function, an object's own tag; a constructor named
+		// Object leaves the receiver Object.
+		{frames + `var e; try { JSON.parse("{") } catch (x) { e = x }
+frames(e)`, "at JSON.parse (<anonymous>) | at <eval>:2:19"},
+		{frames + `var e; try { Math.max({ valueOf() { throw new Error() } }) } catch (x) { e = x }
+frames(e)`, "at Object.valueOf (<eval>:2:43) | at Math.max (<anonymous>) | at <eval>:2:19"},
+		{frames + `var t = { [Symbol.toStringTag]: "Tagged", m() { return new Error() } }
+frames(t.m())`, "at Tagged.m (<eval>:2:56) | at <eval>:3:10"},
+		{frames + `function* h() { throw new Error() }
+var e; try { h().next() } catch (x) { e = x }
+frames(e)`, "at h (<eval>:2:23) | at h.next (<anonymous>) | at <eval>:3:18"},
+		{frames + `var u = { constructor: Object, n() { return new Error() } }
+frames(Object.create(u).n())`, "at Object.n (<eval>:2:45) | at <eval>:3:25"},
 		// An error the engine throws is placed at the property it failed on.
 		{frames + `var e; try { null.x } catch (x) { e = x }
 e.stack`, "TypeError: cannot read property \"x\" of null\n    at <eval>:2:19"},

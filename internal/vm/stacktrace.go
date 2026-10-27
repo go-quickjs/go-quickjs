@@ -444,9 +444,12 @@ func (fr *stackFrame) sourceName() string {
 }
 
 // typeName is the name of the receiver's constructor, found without running
-// any code: a function receiver -- a static method's class -- is named for
-// itself, and anything else for the nearest constructor property on its
-// prototype chain.
+// any code, as V8's JSReceiver::GetConstructorName finds it: a function
+// receiver -- a static method's class -- is named for itself, a generator's
+// object for its generator function (g.next), and anything else for the
+// nearest Symbol.toStringTag or constructor data property on its prototype
+// chain, each level's tag before its constructor (JSON.parse, Math.max,
+// Array Iterator.next), a constructor named Object passed over.
 func (r *Runtime) typeName(fr *stackFrame) string {
 	v := fr.this
 	switch {
@@ -469,17 +472,25 @@ func (r *Runtime) typeName(fr *stackFrame) string {
 	if fd := o.fn(); fd != nil && fd.name != "" {
 		return fd.name
 	}
-	for p := o; p != nil; p = p.proto {
-		c := p.getOwn(atomConstructor)
-		if !c.ok() {
-			continue
-		}
-		if !c.isAccessor() && c.value().IsObject() {
-			if fd := c.value().Object().fn(); fd != nil && fd.name != "" {
+	if o.class == ClassGenerator {
+		if g, ok := o.dataOf().(*generator); ok && g.callee != nil {
+			if fd := g.callee.fn(); fd != nil && fd.name != "" && fd.name != "Object" {
 				return fd.name
 			}
 		}
-		break
+	}
+	tag := r.atoms.internSymbol(r.wellKnown.toStringTag)
+	for p := o; p != nil; p = p.proto {
+		if t := p.getOwn(tag); t.ok() && !t.isAccessor() && t.value().IsString() {
+			return t.value().String().Go()
+		}
+		c := p.getOwn(atomConstructor)
+		if !c.ok() || c.isAccessor() || !c.value().IsObject() {
+			continue
+		}
+		if fd := c.value().Object().fn(); fd != nil && fd.name != "" && fd.name != "Object" {
+			return fd.name
+		}
 	}
 	return "Object"
 }

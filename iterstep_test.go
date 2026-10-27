@@ -36,7 +36,7 @@ func TestBuiltinIteratorSteps(t *testing.T) {
 		  log.join()`, "done0,done0,value0,got0,done1,done1,value1,got1,done2,value2"},
 		{"next keeps its frame", `function* g() { yield new Error().stack.split("\n")[2].trim() }
 		  var a; for (a of g()); var b = [...g()][0], c = g().next().value;
-		  [a == c, b == c, c].join()`, "true,true,at Object.next (<anonymous>)"},
+		  [a == c, b == c, c].join()`, "true,true,at g.next (<anonymous>)"},
 		{"generator throws", `function* g() { yield 1; throw new RangeError("stop") }
 		  var r = []
 		  try { for (var v of g()) r.push(v) } catch (e) { r.push(e.name) }
