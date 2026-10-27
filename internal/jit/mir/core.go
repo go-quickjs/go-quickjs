@@ -3252,6 +3252,22 @@ func genMakes(v *ssa.Value, enc abi.Encoding) bool {
 	return site.Go == ssa.GoCall && site.GenMake != 0 && site.Pool != 0 && !site.New && !site.Step && len(v.Args) == ops
 }
 
+// genMakeArgs has put write what a generator a call v makes natively
+// (genMake) is given: the receiver of a method call, at the generator's
+// GenThis, then each argument up to the function's parameters and locals,
+// at its place in the generator's values (vals).
+func genMakeArgs(v *ssa.Value, enc abi.Encoding, put func(x *ssa.Value, off int32, vals bool)) {
+	site := v.Calls()[0]
+	at := 0
+	if site.Method {
+		put(v.Args[0], enc.GenObject+enc.GenThis, false)
+		at = 1
+	}
+	for i := 0; i < site.Argc && i < site.Params && i < site.LocalCount; i++ {
+		put(v.Args[at+1+i], int32(i)*int32(enc.ValueSize), true)
+	}
+}
+
 // stepGens reports whether v, a loop's step (ssa.CallSite's Step), resumes
 // generators natively (CallSite's Gens): of 16-byte values, the encoding
 // knowing a generator's layout and the collector's flag.

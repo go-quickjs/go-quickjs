@@ -2,11 +2,7 @@
 
 package vm
 
-import (
-	"runtime"
-	"runtime/debug"
-	"testing"
-)
+import "testing"
 
 // jitGenMakeCases are calls of generator functions in loops, each a setup,
 // expressions and their answers, Node v26.10.0's (vm.runInContext, as a
@@ -147,14 +143,16 @@ func TestJITGenMakeAgreesWithNode(t *testing.T) {
 		r.jitCallThreshold, r.jitICThreshold = 1, 1
 		return r
 	}
-	rounds(t, jit, 8, func(r *Runtime, name, gen string) {
+	native := func(r *Runtime, name, gen string) {
 		if gen != "" && jitGenInForTest(r, gen) == 0 {
 			t.Errorf("%s: no step resumed %s natively", name, gen)
 		}
-	})
+	}
+	rounds(t, jit, 8, native)
 	t.Run("marking", func(t *testing.T) {
+		// Native while the collector marks, as when it does not.
 		jitMarkingForTest(t)
-		rounds(t, jit, 6, nil)
+		rounds(t, jit, 6, native)
 	})
 	for _, c := range []jitStressConfig{{threshold: true, budget: 3, deopt: 7}, {threshold: true, budget: 1}} {
 		rounds(t, func() *Runtime {
@@ -169,36 +167,40 @@ func TestJITGenMakeAgreesWithNode(t *testing.T) {
 // makes the generator natively, from its call's pool, and takes the loop's
 // cursor from the generator's room, where each had been a call of Go: a
 // few calls of Go in all -- the pool's fillings, the polls -- and every
-// step resumes its generator natively. The collector is held off from the
-// warming up on: while it marks, each making and each cursor is Go's, and
-// a warming up that met it marking through half its rounds had the loop
-// judged slow, left to the tree tier, which makes no native step (a CI
-// runner's failure).
+// step resumes its generator natively. So too while the collector marks
+// (jitMarkingForTest), its pointer words stored through the write barrier:
+// a making or a cursor left to Go while it marked had the loop judged
+// slow, left to the tree tier, which makes no native step.
 func TestJITGenMakeCallsNoGo(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	runtime.GC()
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	r := jitRuntimeForTest(t, Config{JIT: true})
-	if _, err := r.Run(compileForTest(t, `function* pair(a, b) { yield a; yield b }
-		function f(n) { let s = 0; for (let j = 0; j < n; j++) for (const v of pair(j, 1)) s += v; return s }`)); err != nil {
-		t.Fatal(err)
-	}
-	for range 8 {
-		if v, err := r.Run(compileForTest(t, "''+f(100)")); err != nil || v.String().Go() != "5050" {
-			t.Fatalf("f(100) = %v, %v", v, err)
-		}
-	}
-	in := jitGenInForTest(r, "pair")
-	v, calls := jitCountGoCalls(t, r, "''+f(10000)")
-	if v.String().Go() != "50005000" {
-		t.Fatalf("f(10000) = %v", v)
-	}
-	if calls > 10000/50 {
-		t.Errorf("a loop making 10000 generators made %d calls of Go", calls)
-	}
-	if n := jitGenInForTest(r, "pair") - in; n < 30000 {
-		t.Errorf("30000 steps resumed the generators natively %d times", n)
+	for _, marking := range []bool{false, true} {
+		t.Run(map[bool]string{false: "idle", true: "marking"}[marking], func(t *testing.T) {
+			if marking {
+				jitMarkingForTest(t)
+			}
+			r := jitRuntimeForTest(t, Config{JIT: true})
+			if _, err := r.Run(compileForTest(t, `function* pair(a, b) { yield a; yield b }
+				function f(n) { let s = 0; for (let j = 0; j < n; j++) for (const v of pair(j, 1)) s += v; return s }`)); err != nil {
+				t.Fatal(err)
+			}
+			for range 8 {
+				if v, err := r.Run(compileForTest(t, "''+f(100)")); err != nil || v.String().Go() != "5050" {
+					t.Fatalf("f(100) = %v, %v", v, err)
+				}
+			}
+			in := jitGenInForTest(r, "pair")
+			v, calls := jitCountGoCalls(t, r, "''+f(10000)")
+			if v.String().Go() != "50005000" {
+				t.Fatalf("f(10000) = %v", v)
+			}
+			if calls > 10000/50 {
+				t.Errorf("a loop making 10000 generators made %d calls of Go", calls)
+			}
+			if n := jitGenInForTest(r, "pair") - in; n < 30000 {
+				t.Errorf("30000 steps resumed the generators natively %d times", n)
+			}
+		})
 	}
 }

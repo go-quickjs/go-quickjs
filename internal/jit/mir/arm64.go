@@ -5047,25 +5047,42 @@ func (c *a64Compiler) genForOf(v *ssa.Value, slow, done arm64.Label) {
 		c.a.Cmp(a64B, a64A, true)
 		fail(arm64.NE)
 	}
-	c.movImm(a64B, c.enc.WriteBarrier)
-	c.a.LoadU8(a64B, a64B, 0)
-	c.a.Cbnz(a64B, slow, false)
 	c.a.AddImm(a64C, a64D, int64(c.enc.GenRoomCursor), true)
 	c.a.MovImm(a64A, uint64(c.enc.ClassCursor))
 	c.a.Store8(a64C, c.enc.ObjectClass, a64A)
 	st := c.enc.IterState
 	c.movImm(a64A, c.enc.Object)
 	c.a.Store(a64C, st+c.enc.IterIter+c.enc.NumOffset, a64A)
-	c.a.Store(a64C, st+c.enc.IterIter+c.enc.RefOffset, a64D)
 	c.a.Store(a64C, st+c.enc.IterNext+c.enc.NumOffset, a64A)
-	c.movImm(a64A, uint64(site.GenNext))
-	c.a.Store(a64C, st+c.enc.IterNext+c.enc.RefOffset, a64A)
 	c.a.Store8(a64D, c.enc.GenObject+c.enc.GenRoom, arm64.ZR)
 	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
-	c.a.Store(a64Ctx, keep+c.enc.RefOffset, a64C)
-	c.movImm(a64A, c.enc.Object)
 	c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64A)
+	// As amd64's: the pointer words, and the cursor to the keep cell, with
+	// Go's write barrier while the collector marks, the cursor read again
+	// from the keep cell.
+	marked := c.a.NewLabel()
+	c.movImm(a64A, c.enc.WriteBarrier)
+	c.a.LoadU8(a64A, a64A, 0)
+	c.a.Cbnz(a64A, marked, false)
+	c.a.Store(a64C, st+c.enc.IterIter+c.enc.RefOffset, a64D)
+	c.movImm(a64A, uint64(site.GenNext))
+	c.a.Store(a64C, st+c.enc.IterNext+c.enc.RefOffset, a64A)
+	c.a.Store(a64Ctx, keep+c.enc.RefOffset, a64C)
 	c.a.B(done)
+	c.cold = append(c.cold, func() {
+		c.a.Bind(marked)
+		c.a.AddImm(a64A, a64Ctx, int64(keep+c.enc.RefOffset), true)
+		c.refStore()
+		c.a.Load(a64C, a64Ctx, keep+c.enc.RefOffset)
+		c.a.AddImm(a64A, a64C, int64(st+c.enc.IterIter+c.enc.RefOffset), true)
+		c.a.AddImm(a64C, a64C, -int64(c.enc.GenRoomCursor), true)
+		c.refStore()
+		c.a.Load(a64C, a64Ctx, keep+c.enc.RefOffset)
+		c.a.AddImm(a64A, a64C, int64(st+c.enc.IterNext+c.enc.RefOffset), true)
+		c.movImm(a64C, uint64(site.GenNext))
+		c.refStore()
+		c.a.B(done)
+	})
 }
 
 // genMake is amd64's: a call of a generator function, the pool's next
@@ -5085,8 +5102,7 @@ func (c *a64Compiler) genMake(v *ssa.Value, slow, done arm64.Label) {
 	c.movImm(a64C, uint64(site.GenMake))
 	c.a.Cmp(a64B, a64C, true)
 	fail(arm64.NE)
-	// As amd64's: its prototype the pool's, a generator in the pool, the
-	// collector not marking.
+	// As amd64's: its prototype the pool's, a generator in the pool.
 	c.a.Load(a64A, a64B, c.enc.ObjectProps+8)
 	c.a.CmpImm(a64A, int64(site.ProtoIndex), true)
 	fail(arm64.LS)
@@ -5104,9 +5120,10 @@ func (c *a64Compiler) genMake(v *ssa.Value, slow, done arm64.Label) {
 	fail(arm64.NE)
 	c.a.Load(a64B, a64A, abi.OffPoolCount)
 	c.a.Cbz(a64B, slow, true)
+	marked := c.a.NewLabel()
 	c.movImm(a64C, c.enc.WriteBarrier)
 	c.a.LoadU8(a64C, a64C, 0)
-	c.a.Cbnz(a64C, slow, false)
+	c.a.Cbnz(a64C, marked, false)
 	c.a.AddImm(a64B, a64B, -1, true)
 	c.a.Store(a64A, abi.OffPoolCount, a64B)
 	c.a.ShiftImm(arm64.Lsl, a64B, a64B, 3, true)
@@ -5128,18 +5145,44 @@ func (c *a64Compiler) genMake(v *ssa.Value, slow, done arm64.Label) {
 		c.a.Store(a64D, off+c.enc.NumOffset, r)
 		c.a.Store(a64D, off+c.enc.RefOffset, a64B)
 	}
-	if site.Method {
-		put(v.Args[0], c.enc.GenObject+c.enc.GenThis, false)
-	}
-	for i := 0; i < site.Argc && i < site.Params && i < site.LocalCount; i++ {
-		put(v.Args[at+1+i], int32(i)*vs, true)
-	}
+	genMakeArgs(v, c.enc, put)
 	keep := abi.OffKeep + int32(v.Index)*vs
 	c.a.FMovFromF(a64D, a64F2)
 	c.a.Store(a64Ctx, keep+c.enc.RefOffset, a64D)
 	c.movImm(a64A, c.enc.Object)
 	c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64A)
 	c.a.B(done)
+	c.cold = append(c.cold, func() {
+		c.a.Bind(marked)
+		c.genMakeMarking(v)
+		c.a.B(done)
+	})
+}
+
+// genMakeMarking is amd64's: the generator taken while the collector
+// marks (poolTakeMarking), the receiver's and the arguments' pointer words
+// written into it with Go's write barrier (refStore), the generator read
+// again from the keep cell at each.
+func (c *a64Compiler) genMakeMarking(v *ssa.Value) {
+	site := v.Calls()[0]
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	c.poolTakeMarking(v, site)
+	genMakeArgs(v, c.enc, func(x *ssa.Value, off int32, vals bool) {
+		r := c.gpr(x, a64A)
+		if c.scalar(x) {
+			c.movImm(a64B, 0)
+		} else {
+			c.pointerWord(x, r)
+		}
+		c.a.Load(a64C, a64Ctx, keep+c.enc.RefOffset)
+		if vals {
+			c.a.Load(a64C, a64C, c.enc.GenObject+c.enc.GenVals)
+		}
+		c.a.Store(a64C, off+c.enc.NumOffset, r)
+		c.a.AddImm(a64A, a64C, int64(off+c.enc.RefOffset), true)
+		c.a.MovRR(a64C, a64B)
+		c.refStore()
+	})
 }
 
 // genNext is amd64's: a call of the realm's generators' next on a generator

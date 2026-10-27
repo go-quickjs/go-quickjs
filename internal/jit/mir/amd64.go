@@ -3182,9 +3182,9 @@ func (c *compiler) genCall(v *ssa.Value, t ssa.GenStep, slow, done amd64.Label) 
 // GenIter), of a generator with room for its loop's cursor that iterates
 // as the intrinsics do, the VM's startForOf's first case: the cursor the
 // room's, its object's class a cursor's, its iterator the generator and
-// its next the realm's, the room taken -- where the collector does not
-// mark, which does not change while native code runs. Anything else goes
-// to slow, where Go makes it. It goes on at done, the cursor in the call's
+// its next the realm's, the room taken -- the pointer words written with
+// Go's write barrier while the collector marks. Anything else goes to
+// slow, where Go makes it. It goes on at done, the cursor in the call's
 // keep cell. It uses every scratch register and xScratch0.
 func (c *compiler) genForOf(v *ssa.Value, slow, done amd64.Label) {
 	site := v.Calls()[0]
@@ -3251,11 +3251,8 @@ func (c *compiler) genForOf(v *ssa.Value, slow, done amd64.Label) {
 		c.cmpWord(scratchB, uint64(k.want))
 		fail(amd64.CondNE)
 	}
-	c.movImm(scratchB, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchB, scratchB, 0)
-	c.a.Op(amd64.Test, scratchB, scratchB, false)
-	fail(amd64.CondNE)
-	// The room's cursor: its class, its iterator and next; the room taken.
+	// The room's cursor: its class, its iterator's and next's number
+	// words; the room taken.
 	c.a.MovQFromX(scratchB, xScratch0)
 	c.a.Lea(scratchC, scratchB, c.enc.GenRoomCursor)
 	c.a.MovImm(scratchA, uint64(c.enc.ClassCursor))
@@ -3263,16 +3260,38 @@ func (c *compiler) genForOf(v *ssa.Value, slow, done amd64.Label) {
 	st := c.enc.IterState
 	c.movImm(scratchA, c.enc.Object)
 	c.a.Store(scratchC, st+c.enc.IterIter+c.enc.NumOffset, scratchA)
-	c.a.Store(scratchC, st+c.enc.IterIter+c.enc.RefOffset, scratchB)
 	c.a.Store(scratchC, st+c.enc.IterNext+c.enc.NumOffset, scratchA)
-	c.movImm(scratchA, uint64(site.GenNext))
-	c.a.Store(scratchC, st+c.enc.IterNext+c.enc.RefOffset, scratchA)
 	c.a.MovImm(scratchA, 0)
 	c.a.Store8(scratchB, c.enc.GenObject+c.enc.GenRoom, scratchA)
 	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
-	c.a.Store(regCtx, keep+c.enc.RefOffset, scratchC)
 	c.storeImm(regCtx, keep+c.enc.NumOffset, c.enc.Object, scratchA)
+	// Its pointer words, and the cursor to the call's keep cell -- with Go's
+	// write barrier while the collector marks (refStore), which keeps no
+	// scratch register: the cursor is read again from the keep cell.
+	marked := c.a.NewLabel()
+	c.movImm(scratchA, c.enc.WriteBarrier)
+	c.a.LoadU8(scratchA, scratchA, 0)
+	c.a.Op(amd64.Test, scratchA, scratchA, false)
+	c.a.Jcc(amd64.CondNE, marked)
+	c.a.Store(scratchC, st+c.enc.IterIter+c.enc.RefOffset, scratchB)
+	c.movImm(scratchA, uint64(site.GenNext))
+	c.a.Store(scratchC, st+c.enc.IterNext+c.enc.RefOffset, scratchA)
+	c.a.Store(regCtx, keep+c.enc.RefOffset, scratchC)
 	c.a.Jmp(done)
+	c.cold = append(c.cold, func() {
+		c.a.Bind(marked)
+		c.a.Lea(scratchA, regCtx, keep+c.enc.RefOffset)
+		c.refStore()
+		c.a.Load(scratchC, regCtx, keep+c.enc.RefOffset)
+		c.a.Lea(scratchA, scratchC, st+c.enc.IterIter+c.enc.RefOffset)
+		c.a.Lea(scratchC, scratchC, -c.enc.GenRoomCursor)
+		c.refStore()
+		c.a.Load(scratchC, regCtx, keep+c.enc.RefOffset)
+		c.a.Lea(scratchA, scratchC, st+c.enc.IterNext+c.enc.RefOffset)
+		c.movImm(scratchC, uint64(site.GenNext))
+		c.refStore()
+		c.a.Jmp(done)
+	})
 }
 
 // genMake makes v, a call Go would make of a generator function
@@ -3281,11 +3300,13 @@ func (c *compiler) genForOf(v *ssa.Value, slow, done amd64.Label) {
 // function with no arguments makes one, the call's receiver -- or
 // undefined, a plain call's -- and its arguments, up to the function's
 // parameters and locals, written to it, as V8's code allocates a
-// generator object; while the collector marks, or for any other function,
-// it goes to slow, where Go makes the call -- and, the pool run out, fills
-// it again. It reads the call's operands after its checks, which call
-// nothing. It goes on at done, the generator in the call's keep cell. It
-// uses every scratch register and xScratch0.
+// generator object -- while the collector marks too, the pool's cell
+// cleared and the pointer words written through Go's write barrier
+// (genMakeMarking). For any other function it goes to slow, where Go makes
+// the call -- and, the pool run out, fills it again. It reads the call's
+// operands after its checks, which call nothing. It goes on at done, the
+// generator in the call's keep cell. It uses every scratch register and
+// xScratch0.
 func (c *compiler) genMake(v *ssa.Value, slow, done amd64.Label) {
 	site := v.Calls()[0]
 	vs := int32(c.enc.ValueSize)
@@ -3318,10 +3339,11 @@ func (c *compiler) genMake(v *ssa.Value, slow, done amd64.Label) {
 	c.a.Load(scratchB, scratchA, abi.OffPoolCount)
 	c.a.Op(amd64.Test, scratchB, scratchB, true)
 	fail(amd64.CondE)
+	marked := c.a.NewLabel()
 	c.movImm(scratchC, c.enc.WriteBarrier)
 	c.a.LoadU8(scratchC, scratchC, 0)
 	c.a.Op(amd64.Test, scratchC, scratchC, false)
-	fail(amd64.CondNE)
+	c.a.Jcc(amd64.CondNE, marked)
 	// The pool's next generator, its cell cleared: nothing has seen it.
 	c.a.OpImm(amd64.Sub, scratchB, 1, true)
 	c.a.Store(scratchA, abi.OffPoolCount, scratchB)
@@ -3346,17 +3368,46 @@ func (c *compiler) genMake(v *ssa.Value, slow, done amd64.Label) {
 		c.a.Store(scratchC, off+c.enc.NumOffset, r)
 		c.a.Store(scratchC, off+c.enc.RefOffset, scratchB)
 	}
-	if site.Method {
-		put(v.Args[0], c.enc.GenObject+c.enc.GenThis, false)
-	}
-	for i := 0; i < site.Argc && i < site.Params && i < site.LocalCount; i++ {
-		put(v.Args[at+1+i], int32(i)*vs, true)
-	}
+	genMakeArgs(v, c.enc, put)
 	keep := abi.OffKeep + int32(v.Index)*vs
 	c.a.MovQFromX(scratchC, xScratch0)
 	c.a.Store(regCtx, keep+c.enc.RefOffset, scratchC)
 	c.storeImm(regCtx, keep+c.enc.NumOffset, c.enc.Object, scratchA)
 	c.a.Jmp(done)
+	c.cold = append(c.cold, func() {
+		c.a.Bind(marked)
+		c.genMakeMarking(v)
+		c.a.Jmp(done)
+	})
+}
+
+// genMakeMarking is genMake's taking of the generator while the collector
+// marks, its checks made: the pool's cell cleared with Go's write barrier
+// (poolTakeMarking), which shades the generator, and the receiver's and
+// the arguments' pointer words written into it with the barrier
+// (refStore), as an array literal's elements are -- the generator
+// outlives the frame they come from. refStore keeps no scratch register,
+// so the generator is read again from the call's keep cell at each.
+func (c *compiler) genMakeMarking(v *ssa.Value) {
+	site := v.Calls()[0]
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	c.poolTakeMarking(v, site)
+	genMakeArgs(v, c.enc, func(x *ssa.Value, off int32, vals bool) {
+		r := c.gpr(x, scratchA)
+		if c.scalar(x) {
+			c.movImm(scratchB, 0)
+		} else {
+			c.pointerWord(x, r)
+		}
+		c.a.Load(scratchC, regCtx, keep+c.enc.RefOffset)
+		if vals {
+			c.a.Load(scratchC, scratchC, c.enc.GenObject+c.enc.GenVals)
+		}
+		c.a.Store(scratchC, off+c.enc.NumOffset, r)
+		c.a.Lea(scratchA, scratchC, off+c.enc.RefOffset)
+		c.a.MovRR(scratchC, scratchB)
+		c.refStore()
+	})
 }
 
 // genNext makes v, a method call Go would make (ssa.CallSite's Gens on a
