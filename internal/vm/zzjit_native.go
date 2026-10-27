@@ -621,6 +621,9 @@ type jitEntry struct {
 	// (jitGenStepSeen).
 	genSteps   []jitGenStep
 	genLearned bool
+	// genResults are the pools of the calls of next the code makes
+	// natively (jitGenResultPool).
+	genResults []jitGenResult
 	polyReopt  bool
 	polyReopts uint8
 	// strSites are the method reads that met a string receiver, which the

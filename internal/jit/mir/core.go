@@ -3209,6 +3209,20 @@ func b2i(b bool) int {
 	return 0
 }
 
+// genNexts reports whether v, a method call Go would make, of no argument
+// or one, calls a generator's next natively (ssa.CallSite's Gens on a
+// call, genNext): of 16-byte values, the encoding knowing a generator's
+// layout, an object's properties and the collector's flag, the call its
+// result objects' pool.
+func genNexts(v *ssa.Value, enc abi.Encoding) bool {
+	if enc.GenObject == 0 || enc.ValueSize != 16 || enc.WriteBarrier == 0 || enc.ObjectProps == 0 || len(v.Calls()) != 1 {
+		return false
+	}
+	site := v.Calls()[0]
+	return site.Go == ssa.GoCall && site.Method && !site.Step && len(site.Gens) != 0 && site.GenNext != 0 && site.Pool != 0 &&
+		site.Argc <= 1 && len(v.Args) == site.Argc+2
+}
+
 // stepGens reports whether v, a loop's step (ssa.CallSite's Step), resumes
 // generators natively (CallSite's Gens): of 16-byte values, the encoding
 // knowing a generator's layout and the collector's flag.

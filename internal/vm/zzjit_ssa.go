@@ -3018,7 +3018,19 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 			n++
 		}
 		if (call.Op == bytecode.OpCall || call.Op == bytecode.OpCallMethod || call.Op == bytecode.OpNew) && n <= abi.MaxGoArgs {
-			sites = append(sites, ssa.CallSite{Go: ssa.GoCall, Argc: int(call.A), Method: call.Op == bytecode.OpCallMethod, New: call.Op == bytecode.OpNew, ThisSlot: -1})
+			site := ssa.CallSite{Go: ssa.GoCall, Argc: int(call.A), Method: call.Op == bytecode.OpCallMethod, New: call.Op == bytecode.OpNew, ThisSlot: -1}
+			if call.Op == bytecode.OpCallMethod && call.A <= 1 {
+				// A call of the realm's generators' next on generators the
+				// code may resume natively (jitGenCallSeen), made natively,
+				// its result objects from a pool.
+				if gens := fb.GenSteps(pc); len(gens) != 0 {
+					pool := fb.r.jitGenResultPool(fb.e, pc)
+					k := fb.keep()
+					k.pools = append(k.pools, pool)
+					site.Gens, site.GenNext, site.Pool = gens, fb.GenNext(), uintptr(unsafe.Pointer(pool))
+				}
+			}
+			sites = append(sites, site)
 		}
 	}
 	return sites
@@ -3786,6 +3798,16 @@ func jitHostCall(ctx *abi.Context) bool {
 	case ssa.GoRefill:
 		// The pool's address, a constant of the code's, which keeps it.
 		return r.jitRefillPool(*(**abi.ObjectPool)(unsafe.Pointer(&ctx.GoArgs[0].Ref)))
+	case ssa.GoIterResult:
+		// A call of next's result object (mir's genNextCall), of the value
+		// and the done; its pool, the code's, filled again if it ran out.
+		if pool := *(**abi.ObjectPool)(unsafe.Pointer(&ctx.GoArgs[2].Ref)); pool != nil && pool.Count == 0 {
+			r.jitRefillPool(pool)
+		}
+		// A boolean's word, which a NaN's comparison would not tell.
+		done := ctx.GoArgs[1].Num == math.Float64bits(True.num)
+		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = Obj(r.iterResult(jitGoArg(ctx, 0), done))
+		return true
 	case ssa.GoCall:
 		return r.jitMaybePlain(ctx) && r.jitGoCallPlain(ctx) || r.jitGoCall(ctx)
 	case ssa.GoCells:
@@ -4179,6 +4201,9 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 	if in.Op == bytecode.OpIterNextOrJump || in.Op == bytecode.OpIterStep {
 		// A step over a generator the code may resume natively.
 		r.jitGenStepSeen(e, f.cl, pc, r.stack[sp-1])
+	} else if in.Op == bytecode.OpCallMethod && n <= 3 {
+		// A call of a generator's next the code may make natively.
+		r.jitGenCallSeen(e, f.cl, pc, r.stack[sp-n:sp])
 	}
 	// A loop's step Go makes costs what any call of Go does: a loop of
 	// them, over a Map or a generator, whose body does little, the tree
@@ -4908,7 +4933,7 @@ func (r *Runtime) jitGoCallNested(ctx *abi.Context, idx int) bool {
 		base := int(c.Base)
 		g := jitGenLevel(c, lcl, abi.ExitHost)
 		if g != nil {
-			r.jitPushGenNext(jitGenCursor(c))
+			r.jitPushGenNext(g)
 		}
 		f = r.pushFrame()
 		f.cl = lcl
@@ -8608,6 +8633,9 @@ type jitPoolSource struct {
 	// pool's last filling (jitFillLiteral).
 	room   int
 	sample *Object
+	// results marks a call of next's pool of result objects
+	// (jitFillResults).
+	results bool
 }
 
 // jitRefillPool fills pool again, run out, with more objects (ssa's
@@ -8634,6 +8662,8 @@ func (r *Runtime) jitRefillPool(pool *abi.ObjectPool) bool {
 	pool.Size = min(2*max(pool.Size, abi.PoolSize), abi.PoolCapacity)
 	if src.ctor != nil {
 		r.jitFillPool(pool, src.ctor)
+	} else if src.results {
+		r.jitFillResults(pool)
 	} else {
 		r.jitFillLiteral(&jitLiteral{root: src.root, pool: pool, n: src.n, array: src.array, lit: src.lit, tmpl: src.tmpl, fn: src.fn, env: src.env})
 	}

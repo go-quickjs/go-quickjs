@@ -517,6 +517,18 @@ type Context struct {
 	// every operand of the call. At the end, as GoLast.
 	Argc uint64
 	Args [MaxGoArgs]GoArg
+	// GenSent is the value a native resumption of a generator sends in,
+	// the result of the yield it was suspended at, written by the step or
+	// the call of next before it jumps to the generator's code, which
+	// reads it there (mir's genEntry): undefined for a loop's step, next's
+	// argument for a call of next. A call of next (ssa.CallSite's Gens on
+	// a method call) leaves GenCursor 0, and the generator's code tells
+	// how the call ended by GenObject: 0 once its body has returned
+	// (mir's genFinish), its value the call's; Go, finishing the
+	// generator's level, makes it 1, the call's result object its
+	// result. The caller's operands keep the value alive. At the end, as
+	// GoLast.
+	GenSent GoArg
 }
 
 // GoArg is an operand of a call of Go: a slot's two words, its pointer word
@@ -934,6 +946,8 @@ var (
 
 	OffArgc = int32(unsafe.Offsetof(Context{}.Argc))
 	OffArgs = int32(unsafe.Offsetof(Context{}.Args))
+
+	OffGenSent = int32(unsafe.Offsetof(Context{}.GenSent))
 
 	// OffGoCallBigOff is GoCallState's BigOff.
 	OffGoCallBigOff = int32(unsafe.Offsetof(GoCallState{}.BigOff))

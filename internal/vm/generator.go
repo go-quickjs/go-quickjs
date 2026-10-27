@@ -149,6 +149,11 @@ func (g *generator) keep(ops []Value, hs []handler, ups []*upvalue) {
 	s.handlers, s.openUpvalues = hs, ups
 }
 
+// object is g's object, in whose generatorObject it is.
+func (g *generator) object() *Object {
+	return &(*generatorObject)(unsafe.Add(unsafe.Pointer(g), -int(unsafe.Offsetof(generatorObject{}.g)))).Object
+}
+
 // genOf is the generator of o, an object of class ClassGenerator: the
 // generator follows it in its generatorObject.
 func genOf(o *Object) *generator {

@@ -137,11 +137,29 @@ func (fb *jitFeedback) GenNext() uintptr { return uintptr(unsafe.Pointer(fb.r.ge
 func (r *Runtime) jitGenStepSeen(e *jitEntry, cl *closure, pc int, cursor Value) {
 	st := cursorOf(cursor)
 	if st == nil || st.done || st.arr != nil || st.forIn || !st.iter.IsObject() || r.genNextFn == nil ||
-		st.next.ref != unsafe.Pointer(r.genNextFn) || cl == nil {
+		st.next.ref != unsafe.Pointer(r.genNextFn) {
 		return
 	}
-	it := st.iter.Object()
-	if it.class != ClassGenerator {
+	r.jitGenSeen(e, cl, pc, st.iter.Object())
+}
+
+// jitGenCallSeen notes a method call at pc of e's code, cl's, which Go
+// made from native code, of ops, its receiver, its function and its
+// arguments: the realm's generators' next, of no argument or one, on a
+// generator native code may resume, of cl's environment and realm, which
+// the code calls natively once compiled again (ssa.CallSite's Gens on a
+// call), as a loop's step learns its generators (jitGenStepSeen).
+func (r *Runtime) jitGenCallSeen(e *jitEntry, cl *closure, pc int, ops []Value) {
+	if len(ops) < 2 || len(ops) > 3 || r.genNextFn == nil || ops[1].ref != unsafe.Pointer(r.genNextFn) || !ops[0].IsObject() {
+		return
+	}
+	r.jitGenSeen(e, cl, pc, ops[0].Object())
+}
+
+// jitGenSeen is jitGenStepSeen's and jitGenCallSeen's: it, a generator
+// the step or the call at pc resumed, learned there.
+func (r *Runtime) jitGenSeen(e *jitEntry, cl *closure, pc int, it *Object) {
+	if it.class != ClassGenerator || cl == nil {
 		return
 	}
 	g := genOf(it)
@@ -172,11 +190,13 @@ func (r *Runtime) jitGenStepSeen(e *jitEntry, cl *closure, pc int, cursor Value)
 
 // jitGenLevel is the generator a native call's context c, a level of
 // closure cl that left as kind says, runs, where it is a loop's step's
-// resumption of it (mir's genEntry), or nil: no other native call runs a
-// generator's code -- a call of a generator function makes its object,
-// which Go does (abi.ExitEnter).
+// resumption of it or a call of next's (mir's genEntry), or nil: no other
+// native call runs a generator's code -- a call of a generator function
+// makes its object, which Go does (abi.ExitEnter). A call of next leaves
+// the context's cursor 0, and its generator 0 or 1 once over (abi.Context's
+// GenSent).
 func jitGenLevel(c *abi.Context, cl *closure, kind uint64) *generator {
-	if c.Live != abi.LiveCall || kind == abi.ExitEnter || cl == nil || !cl.fn.Generator || c.GenObject == 0 || c.GenCursor == 0 {
+	if c.Live != abi.LiveCall || kind == abi.ExitEnter || cl == nil || !cl.fn.Generator || c.GenObject <= 1 {
 		return nil
 	}
 	// Addresses native code wrote, which the step's frame keeps alive.
@@ -187,20 +207,24 @@ func jitGenLevel(c *abi.Context, cl *closure, kind uint64) *generator {
 }
 
 // jitGenCursor is the cursor of the step whose resumption of a generator
-// context c runs (jitGenLevel).
+// context c runs (jitGenLevel), or nil for a call of next's.
 func jitGenCursor(c *abi.Context) *iterState {
+	if c.GenCursor == 0 {
+		return nil
+	}
 	return *(**iterState)(unsafe.Pointer(&c.GenCursor))
 }
 
-// jitPushGenNext pushes the frame of the generator's next a step's
-// resumption of a generator calls, st's, as stepIter makes it, below the
-// generator's own, for a stack trace to show.
-func (r *Runtime) jitPushGenNext(st *iterState) {
+// jitPushGenNext pushes the frame of the realm's generators' next a step's
+// or a call's native resumption of g calls -- the step's cursor's next,
+// the call's function, which each checked is it -- as stepIter makes it,
+// below the generator's own, for a stack trace to show.
+func (r *Runtime) jitPushGenNext(g *generator) {
 	f := r.pushFrame()
-	gn := st.next.Object()
+	gn := r.genNextFn
 	f.cl = nil
 	f.native = gn.fn().name
-	f.this, f.newTarget, f.callee, f.args = st.iter, Undefined, gn, nil
+	f.this, f.newTarget, f.callee, f.args = Obj(g.object()), Undefined, gn, nil
 	f.handlers, f.openUpvalues = f.handlers[:0], f.openUpvalues[:0]
 	f.thisRef, f.withScopes, f.evalVars, f.savedSP = nil, nil, nil, 0
 }
@@ -215,7 +239,7 @@ func (r *Runtime) jitGenFrame(l *jitNativeLevel, c *abi.Context, past bool) *fra
 	s := r.jit
 	g, fn := l.gen, l.cl.fn
 	l.top = l.base
-	r.jitPushGenNext(l.cursor)
+	r.jitPushGenNext(g)
 	f := r.pushFrame()
 	f.cl = g.cl
 	f.locals = g.vals[g.nargs:]
@@ -251,8 +275,10 @@ func (r *Runtime) jitGenFrame(l *jitNativeLevel, c *abi.Context, past bool) *fra
 // what the next resumption needs saved, and its value the step's result;
 // finished, by a return or a throw, the generator done and the step's
 // cursor too -- the step's result its done, the uninitialized value, or for
-// a destructuring's step undefined, or the throw. The frame is then popped,
-// with its next's below it.
+// a destructuring's step undefined, or the throw. A call of next's result
+// is its object, { value, done }, as the realm's next makes it, which the
+// context's generator, 1, tells its native caller (abi.Context's GenSent).
+// The frame is then popped, with its next's below it.
 func (r *Runtime) jitGenDone(f *frame, l *jitNativeLevel, v Value, err error) (Value, error) {
 	g := l.gen
 	defer func() {
@@ -269,18 +295,66 @@ func (r *Runtime) jitGenDone(f *frame, l *jitNativeLevel, v Value, err error) (V
 		// suspension hands out a result object.
 		v = s.value
 		s.value = Undefined
+		if l.cursor == nil {
+			r.jit.ssaCtxs[l.ctx].GenObject = 1
+			v = Obj(r.iterResult(v, false))
+		}
 		return v, nil
 	}
 	for _, u := range f.openUpvalues {
 		u.close()
 	}
 	g.state, g.saved = genCompleted, nil
-	l.cursor.done = true
 	switch {
 	case err != nil:
+		if l.cursor != nil {
+			l.cursor.done = true
+		}
 		return Undefined, err
-	case l.fill:
+	case l.cursor == nil:
+		r.jit.ssaCtxs[l.ctx].GenObject = 1
+		return Obj(r.iterResult(v, true)), nil
+	}
+	l.cursor.done = true
+	if l.fill {
 		return Undefined, nil
 	}
 	return uninitialized, nil
+}
+
+// jitGenResult is the pool of result objects, { value, done }, a call of
+// next at pc of an entry's code takes its results from (ssa.CallSite's
+// Pool on a call of next).
+type jitGenResult struct {
+	pc   int32
+	pool *abi.ObjectPool
+}
+
+// jitGenResultPool is e's pool of the call of next at pc, made and filled
+// if it has none.
+func (r *Runtime) jitGenResultPool(e *jitEntry, pc int) *abi.ObjectPool {
+	for _, x := range e.genResults {
+		if int(x.pc) == pc {
+			return x.pool
+		}
+	}
+	pool := &abi.ObjectPool{Source: unsafe.Pointer(&jitPoolSource{results: true})}
+	r.jitFillResults(pool)
+	e.genResults = append(e.genResults, jitGenResult{pc: int32(pc), pool: pool})
+	return pool
+}
+
+// jitFillResults fills pool, a call of next's (jitGenResultPool), with
+// Size result objects as iterResult makes them -- the realm's
+// Object.prototype their prototype, its two properties' shape, a value
+// and a done -- which native code writes the two values of.
+func (r *Runtime) jitFillResults(pool *abi.ObjectPool) {
+	if pool.Size == 0 {
+		pool.Size = abi.PoolSize
+	}
+	clear(pool.Objects[:])
+	for i := range int(pool.Size) {
+		pool.Objects[i] = unsafe.Pointer(r.iterResult(Undefined, false))
+	}
+	pool.Count, pool.Proto = pool.Size, unsafe.Pointer(r.proto.object)
 }

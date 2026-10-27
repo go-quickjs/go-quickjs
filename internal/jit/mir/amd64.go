@@ -1104,8 +1104,12 @@ func (c *compiler) genFrame(gr ssa.GenResume, blk *ssa.Block) {
 		}
 	}
 	if gr.Started {
-		c.storeImm(t, int32(gr.Saved)*vs+c.enc.NumOffset, c.enc.Undefined, scratchA)
-		c.storeImm(t, int32(gr.Saved)*vs+c.enc.RefOffset, 0, scratchA)
+		// The value sent in, which the step or the call wrote to the
+		// context (abi.Context's GenSent).
+		c.a.Load(scratchA, next, abi.OffGenSent+c.enc.NumOffset)
+		c.a.Store(t, int32(gr.Saved)*vs+c.enc.NumOffset, scratchA)
+		c.a.Load(scratchA, next, abi.OffGenSent+c.enc.RefOffset)
+		c.a.Store(t, int32(gr.Saved)*vs+c.enc.RefOffset, scratchA)
 	}
 	c.a.MovImm(scratchA, uint64(c.enc.GenExecuting))
 	c.a.Store8(g, c.enc.GenState, scratchA)
@@ -1236,11 +1240,29 @@ func (c *compiler) genFinish() {
 	c.a.Jcc(amd64.CondE, none)
 	c.storeImm(scratchB, c.enc.SavedStack+8, 0, scratchA)
 	c.a.Bind(none)
+	// A call of next (no cursor): the body's value the call's, and the
+	// context's generator none, which tells the caller the generator is
+	// done (genNextCall). The value is where the return left it for a
+	// return to Go (returnNative).
+	call := c.a.NewLabel()
 	c.a.Load(scratchC, regCtx, abi.OffGenCursor)
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	c.a.Jcc(amd64.CondE, call)
 	c.a.MovImm(scratchA, 1)
 	c.a.Store8(scratchC, c.enc.IterDone, scratchA)
 	c.movImm(retNum, c.enc.Uninitialized)
 	c.movImm(retRef, 0)
+	c.a.Load(callLink, regCtx, abi.OffReturnTo)
+	c.returnTail()
+	c.a.Bind(call)
+	c.a.StoreImm(regCtx, abi.OffGenObject, 0)
+	word := c.a.NewLabel()
+	c.a.Load(retNum, regCtx, abi.OffRet)
+	c.a.Load(retRef, regCtx, abi.OffRetFrom)
+	c.a.Op(amd64.Test, retRef, retRef, true)
+	c.a.Jcc(amd64.CondE, word)
+	c.a.Load(retRef, retRef, c.enc.RefOffset)
+	c.a.Bind(word)
 	c.a.Load(callLink, regCtx, abi.OffReturnTo)
 	c.returnTail()
 }
@@ -2046,6 +2068,18 @@ func (c *compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(amd64.Con
 			c.copyProps(v, site, slow)
 		}
 		c.a.Jmp(join)
+		c.a.Bind(slow)
+		c.goCallOp(v, goOpWord(site), guard, false)
+		c.a.Bind(join)
+		c.a.Load(scratchA, regCtx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
+		c.setG(v, scratchA)
+		return
+	}
+	if genNexts(v, c.enc) {
+		// A call of a generator's next native code makes itself
+		// (genNext); any other Go makes.
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		c.genNext(v, slow, join)
 		c.a.Bind(slow)
 		c.goCallOp(v, goOpWord(site), guard, false)
 		c.a.Bind(join)
@@ -3040,6 +3074,9 @@ func (c *compiler) genCall(v *ssa.Value, t ssa.GenStep, slow, done amd64.Label) 
 	c.a.Store(scratchC, abi.OffGenObject, scratchB)
 	c.a.MovQFromX(scratchB, xScratch2)
 	c.a.Store(scratchC, abi.OffGenCursor, scratchB)
+	// A loop sends undefined.
+	c.storeImm(scratchC, abi.OffGenSent+c.enc.NumOffset, c.enc.Undefined, scratchB)
+	c.a.StoreImm(scratchC, abi.OffGenSent+c.enc.RefOffset, 0)
 	st, recs := c.callState(v, v.State, func(int) bool { return false }, -1)
 	c.callRecords(v, recs)
 	c.movImm(scratchA, uint64(uintptr(unsafe.Pointer(st))))
@@ -3114,6 +3151,223 @@ func (c *compiler) genCall(v *ssa.Value, t ssa.GenStep, slow, done amd64.Label) 
 	if kept >= 0 {
 		c.a.Load(amd64.Reg(kept), regCtx, abi.OffGoArgs+c.enc.NumOffset)
 	}
+	c.a.Jmp(slow)
+}
+
+// genNext makes v, a method call Go would make (ssa.CallSite's Gens on a
+// call), where it calls the realm's generators' next (GenNext) on a
+// generator of one of the functions the call has met, suspended at its
+// start or at a yield, not in a yield*, of no rare part, its closure of
+// the caller's environment and realm, whose code has a generator entry:
+// by a native call of the generator's code (genNextCall), as a loop's step
+// makes one (genStep), the call's argument the value sent in. Anything
+// else goes to slow, where Go makes the call; the call made, it goes on at
+// done, the result in the call's keep cell.
+func (c *compiler) genNext(v *ssa.Value, slow, done amd64.Label) {
+	site := v.Calls()[0]
+	fail := func(cond amd64.Cond) { c.a.Jcc(cond, slow) }
+	recv, callee := v.Args[0], v.Args[1]
+	if site.Argc == 1 {
+		// The value sent in, its words, which the call writes once its
+		// checks pass.
+		x := v.Args[2]
+		r := c.gpr(x, scratchA)
+		c.a.MovQToX(xScratch0, r)
+		if c.scalar(x) {
+			c.movImm(scratchB, 0)
+		} else {
+			c.pointerWord(x, r)
+		}
+		c.a.MovQToX(xScratch1, scratchB)
+	}
+	// The function called, the realm's next: its pointer word.
+	c.pointerWord(callee, c.gpr(callee, scratchA))
+	c.cmpWord(scratchB, uint64(site.GenNext))
+	fail(amd64.CondNE)
+	// The receiver, a generator.
+	r := c.gpr(recv, scratchA)
+	c.cmpWord(r, c.enc.Object)
+	fail(amd64.CondNE)
+	c.pointerWord(recv, r)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	fail(amd64.CondE)
+	c.objectPart(scratchB, scratchB, scratchC, c.enc.ClassGenerator, c.enc.GenObject, fail)
+	c.a.LoadU8(scratchC, scratchB, c.enc.GenState)
+	c.a.OpImm(amd64.Cmp, scratchC, int32(c.enc.GenSuspendedYield), false)
+	fail(amd64.CondA)
+	c.a.LoadU8(scratchC, scratchB, c.enc.GenDelegating)
+	c.a.Op(amd64.Test, scratchC, scratchC, false)
+	fail(amd64.CondNE)
+	c.a.Load(scratchC, scratchB, c.enc.GenRare)
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	fail(amd64.CondNE)
+	// A context for the generator's frame.
+	c.a.Load(scratchC, regCtx, abi.OffLevel)
+	c.a.OpImm(amd64.Add, scratchC, 1, true)
+	c.a.Load(scratchA, regCtx, abi.OffBounds)
+	c.a.CmpMem(scratchC, scratchA, abi.OffBoundsLevelLimit, true)
+	fail(amd64.CondAE)
+	c.a.Load(scratchA, scratchB, c.enc.GenClosure)
+	for _, t := range site.Gens {
+		next := c.a.NewLabel()
+		c.a.Load(scratchC, scratchA, c.enc.ClosureFn)
+		c.cmpWord(scratchC, uint64(t.Fn))
+		c.a.Jcc(amd64.CondNE, next)
+		for _, f := range [...]struct {
+			off  int32
+			want uintptr
+		}{{c.enc.ClosureEnv, t.Env}, {c.enc.ClosureRealm, t.Realm}} {
+			c.a.Load(scratchC, scratchA, f.off)
+			c.cmpWord(scratchC, uint64(f.want))
+			fail(amd64.CondNE)
+		}
+		c.genNextCall(v, t, slow, done)
+		c.a.Bind(next)
+	}
+	c.a.Jmp(slow)
+}
+
+// genNextCall is genNext's call of the generator's code at its generator
+// entry (genEntry), as genCall's for a step: the generator's closure in
+// scratchA, the generator in scratchB, the value sent in, of a call of one
+// argument, in xScratch0 and xScratch1. The next context has no cursor
+// (abi.Context's GenCursor): the generator's code returns what it yields,
+// or, its body returned, what that returned, with the context's generator
+// 0 (genFinish); and where Go finished its level, the result object, the
+// context's generator 1. The call's result is { value, done } of the
+// first two, the pool's next object (ssa.CallSite's Pool) with the value
+// and the done written to it -- or, while the collector marks or the pool
+// is empty, Go's (ssa.GoIterResult), which fills the pool again -- and
+// the third as it is. Code that could not resume the generator goes back
+// to slow, where Go makes the call.
+func (c *compiler) genNextCall(v *ssa.Value, t ssa.GenStep, slow, done amd64.Label) {
+	site := v.Calls()[0]
+	vs := int32(c.enc.ValueSize)
+	c.movImm(scratchC, uint64(t.Entry))
+	c.a.Load(scratchC, scratchC, 0)
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	c.a.Jcc(amd64.CondE, slow)
+	c.a.Store(regCtx, abi.OffGenEntry, scratchC)
+	c.a.Store(regCtx, abi.OffCallClosure, scratchA)
+	c.a.Load(scratchC, regCtx, abi.OffNext)
+	c.a.Store(scratchC, abi.OffGenObject, scratchB)
+	c.a.StoreImm(scratchC, abi.OffGenCursor, 0)
+	if site.Argc == 1 {
+		c.a.MovQFromX(scratchB, xScratch0)
+		c.a.Store(scratchC, abi.OffGenSent+c.enc.NumOffset, scratchB)
+		c.a.MovQFromX(scratchB, xScratch1)
+		c.a.Store(scratchC, abi.OffGenSent+c.enc.RefOffset, scratchB)
+	} else {
+		c.storeImm(scratchC, abi.OffGenSent+c.enc.NumOffset, c.enc.Undefined, scratchB)
+		c.a.StoreImm(scratchC, abi.OffGenSent+c.enc.RefOffset, 0)
+	}
+	st, recs := c.callState(v, v.State, func(int) bool { return false }, -1)
+	c.callRecords(v, recs)
+	c.movImm(scratchA, uint64(uintptr(unsafe.Pointer(st))))
+	c.a.Store(regCtx, abi.OffCallState, scratchA)
+	saves := c.savesOf(v)
+	for _, sv := range saves {
+		if sv.float {
+			c.a.StoreSD(regCtx, c.spillDisp(sv.slot), amd64.XReg(sv.reg))
+		} else {
+			c.a.Store(regCtx, c.spillDisp(sv.slot), amd64.Reg(sv.reg))
+		}
+	}
+	restore := func() {
+		for _, sv := range saves {
+			if sv.float {
+				c.a.LoadSD(amd64.XReg(sv.reg), regCtx, c.spillDisp(sv.slot))
+			} else {
+				c.a.Load(amd64.Reg(sv.reg), regCtx, c.spillDisp(sv.slot))
+			}
+		}
+	}
+	back, miss := c.a.NewLabel(), c.a.NewLabel()
+	c.resumeUsed = true
+	c.a.LeaLabel(callRet, back)
+	c.a.Load(callClosure, regCtx, abi.OffCallClosure)
+	c.movImm(callLink, uint64(t.Entry)-uint64(c.enc.LinkGen))
+	c.a.LeaLabel(amd64.R10, miss)
+	c.a.JmpMem(regCtx, abi.OffGenEntry)
+	// The generator returned (yieldExit, genFinish), or Go finished it
+	// (resumeCall): what it gave in retNum and retRef, to the call's keep
+	// cell first, its pointer word with Go's write barrier while the
+	// collector marks.
+	c.a.Bind(back)
+	at := abi.OffKeep + int32(v.Index)*vs
+	marked, stored := c.a.NewLabel(), c.a.NewLabel()
+	c.movImm(scratchB, c.enc.WriteBarrier)
+	c.a.LoadU8(scratchB, scratchB, 0)
+	c.a.Op(amd64.Test, scratchB, scratchB, false)
+	c.a.Jcc(amd64.CondNE, marked)
+	c.a.Store(regCtx, at+c.enc.RefOffset, retRef)
+	c.a.Store(regCtx, at+c.enc.NumOffset, retNum)
+	c.a.Bind(stored)
+	restore()
+	// The result object Go made, which the keep cell holds; or done, the
+	// context's generator 0, or not.
+	c.a.Load(scratchA, regCtx, abi.OffNext)
+	c.a.Load(scratchA, scratchA, abi.OffGenObject)
+	c.a.OpImm(amd64.Cmp, scratchA, 1, true)
+	c.a.Jcc(amd64.CondE, done)
+	word := c.a.NewLabel()
+	c.movImm(scratchC, c.enc.False)
+	c.a.Op(amd64.Test, scratchA, scratchA, true)
+	c.a.Jcc(amd64.CondNE, word)
+	c.movImm(scratchC, c.enc.True)
+	c.a.Bind(word)
+	c.a.MovQToX(xScratch1, scratchC)
+	// The pool's next object, where the collector does not mark: the
+	// value and the done its two properties, and it the call's result.
+	goMake := c.a.NewLabel()
+	c.movImm(scratchB, c.enc.WriteBarrier)
+	c.a.LoadU8(scratchB, scratchB, 0)
+	c.a.Op(amd64.Test, scratchB, scratchB, false)
+	c.a.Jcc(amd64.CondNE, goMake)
+	c.movImm(scratchA, uint64(site.Pool))
+	c.a.Load(scratchB, scratchA, abi.OffPoolCount)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	c.a.Jcc(amd64.CondE, goMake)
+	c.a.OpImm(amd64.Sub, scratchB, 1, true)
+	c.a.Store(scratchA, abi.OffPoolCount, scratchB)
+	c.a.ShiftImm(amd64.Shl, scratchB, 3, true)
+	c.a.Op(amd64.Add, scratchB, scratchA, true)
+	c.a.Load(scratchC, scratchB, abi.OffPoolObjects)
+	c.a.StoreImm(scratchB, abi.OffPoolObjects, 0)
+	c.a.Load(scratchA, scratchC, c.enc.ObjectProps)
+	c.a.Load(scratchB, regCtx, at+c.enc.NumOffset)
+	c.a.Store(scratchA, c.enc.NumOffset, scratchB)
+	c.a.Load(scratchB, regCtx, at+c.enc.RefOffset)
+	c.a.Store(scratchA, c.enc.RefOffset, scratchB)
+	c.a.MovQFromX(scratchB, xScratch1)
+	c.a.Store(scratchA, vs+c.enc.NumOffset, scratchB)
+	c.a.StoreImm(scratchA, vs+c.enc.RefOffset, 0)
+	c.a.Store(regCtx, at+c.enc.RefOffset, scratchC)
+	c.storeImm(regCtx, at+c.enc.NumOffset, c.enc.Object, scratchA)
+	c.a.Jmp(done)
+	c.cold = append(c.cold, func() {
+		c.a.Bind(marked)
+		c.a.Store(regCtx, at+c.enc.NumOffset, retNum)
+		c.a.Lea(scratchA, regCtx, at+c.enc.RefOffset)
+		c.refStore()
+		c.a.Jmp(stored)
+		// Go makes the object, of the value the keep cell holds, and
+		// fills the pool again if it ran out.
+		c.a.Bind(goMake)
+		c.a.Load(scratchA, regCtx, at+c.enc.NumOffset)
+		c.a.Store(regCtx, abi.OffGoArgs+c.enc.NumOffset, scratchA)
+		c.a.Load(scratchA, regCtx, at+c.enc.RefOffset)
+		c.a.Store(regCtx, abi.OffGoArgs+c.enc.RefOffset, scratchA)
+		c.a.MovQFromX(scratchA, xScratch1)
+		c.a.Store(regCtx, abi.OffGoArgs+vs+c.enc.NumOffset, scratchA)
+		c.storeImm(regCtx, abi.OffGoArgs+2*vs+c.enc.RefOffset, uint64(site.Pool), scratchA)
+		c.callGo(v, uint64(ssa.GoIterResult), v.Index)
+		c.a.Jmp(done)
+	})
+	// Its code could not resume it: Go makes the call, from the registers
+	// as they were.
+	c.a.Bind(miss)
+	restore()
 	c.a.Jmp(slow)
 }
 

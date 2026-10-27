@@ -1261,7 +1261,15 @@ type CallSite struct {
 	// suspended and not in a yield*, native code resumes by a native call
 	// of the generator's code (Func's GenEntry), as V8's code calls a
 	// generator's resumption -- the generator's value, or, once it
-	// finishes, the step's done.
+	// finishes, the step's done. On a method call Go makes (GoCall,
+	// Method) of no argument or one, they are the generators the call has
+	// met calling GenNext (GenStepFeedback at the call's PC), and Pool the
+	// abi.ObjectPool of the result objects, { value, done }, the call
+	// makes: a call of GenNext on a generator of one of them native code
+	// makes by the same native call, its argument the value sent in, its
+	// result the pool's next object, the value and the done written to it
+	// (the VM's iterResult's layout) -- the realm's next's result,
+	// which nothing could tell from it.
 	Gens    []GenStep
 	GenNext uintptr
 	// ForOf marks a for...of's or a destructuring's cursor made of the
@@ -1692,7 +1700,15 @@ const (
 	GoArgument
 	GoHost
 	GoStringAbsent
+	GoIterResult
 )
+
+// GoIterResult is the result object of a call of a generator's next
+// native code made (CallSite's Gens on a call), { value, done }, of its
+// first operand, the value, and its second, the done, a boolean's word:
+// Go makes it as the realm's next makes it, and fills the call's pool of
+// them, its third operand's pointer word, if it ran out. Go refuses
+// nothing.
 
 // GoArgument is arguments[k] in a function's own code (ir.ArgumentRead
 // at the root), of two operands, the key and the local the arguments

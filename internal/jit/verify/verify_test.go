@@ -291,6 +291,30 @@ func (gens) GenSteps(int) []ssa.GenStep {
 }
 func (gens) GenNext() uintptr { return 0x84000 }
 
+// genNextCorpus is calls of a generator's next native code makes (mir's
+// genNext): of no argument, in a loop and not, and of one, the value sent
+// in.
+var genNextCorpus = []struct {
+	src  string
+	argc int
+}{
+	{`function f(g){let s=0;for(let r=g.next();!r.done;r=g.next())s+=r.value;return s}`, 0},
+	{`function f(g){const a=g.next(),b=g.next();return a.value+b.value}`, 0},
+	{`function f(g,n){let s=0,r=g.next();for(let i=0;i<n&&!r.done;i++){s+=r.value;r=g.next(i)}return s}`, 1},
+}
+
+// genCalls is gens whose method calls of argc arguments have met the
+// realm's generators' next on generators of one function, which they
+// resume by a native call, their results from a pool.
+type genCalls struct {
+	gens
+	argc int
+}
+
+func (g genCalls) NativeCalls(int) []ssa.CallSite {
+	return []ssa.CallSite{{Go: ssa.GoCall, Method: true, Argc: g.argc, ThisSlot: -1, Gens: g.GenSteps(0), GenNext: g.GenNext(), Pool: 0x85000}}
+}
+
 // genResumes is where code built as f, of p, a generator's, resumes it
 // natively (ssa.Func's GenResumes), as the VM finds them: each entry after a
 // yield, and the first other as its start.
@@ -531,7 +555,7 @@ func TestMirEmitted(t *testing.T) {
 	// the steps that resume them.
 	genEnc := enc
 	genEnc.IterState, genEnc.ClassCursor, genEnc.IterDone, genEnc.IterArr, genEnc.IterIdx, genEnc.IterIter, genEnc.IterNext = 56, 30, 8, 16, 24, 32, 48
-	genEnc.ObjectExt, genEnc.ObjectData, genEnc.ObjectElems = 40, 8, 64
+	genEnc.ObjectExt, genEnc.ObjectData, genEnc.ObjectElems, genEnc.ObjectProps = 40, 8, 64, 16
 	genEnc.GenObject, genEnc.ClassGenerator, genEnc.GenClosure, genEnc.GenThis, genEnc.GenVals, genEnc.GenArgs = 56, 21, 0, 8, 24, 48
 	genEnc.GenPC, genEnc.GenSaved, genEnc.GenRare, genEnc.SavedStack, genEnc.SavedHandlers = 52, 56, 64, 0, 24
 	genEnc.GenState, genEnc.GenStarted, genEnc.GenDelegating = 88, 89, 90
@@ -586,6 +610,40 @@ func TestMirEmitted(t *testing.T) {
 	}
 	if genEntries == 0 || genYields == 0 || genSteps == 0 {
 		t.Errorf("generators' entries %d, native yields %d, steps resuming generators %d compiled", genEntries, genYields, genSteps)
+	}
+	genNexts := 0
+	for _, tc := range genNextCorpus {
+		for i, p := range lowered(t, tc.src) {
+			f, err := ssa.BuildWith(p, genCalls{argc: tc.argc})
+			if err != nil {
+				continue
+			}
+			ssa.Optimize(f)
+			for _, b := range f.Blocks {
+				for _, v := range b.Values {
+					if calls := v.Calls(); len(calls) == 1 && len(calls[0].Gens) != 0 && calls[0].Method {
+						genNexts++
+					}
+				}
+			}
+			for _, arch := range arches {
+				compile := mir.CompileAMD64
+				if arch == "arm64" {
+					compile = mir.CompileARM64
+				}
+				mc, err := compile(f, genEnc)
+				if err != nil {
+					t.Fatalf("%s (%d, next), %s: %v", tc.src, i, arch, err)
+				}
+				if err := check(arch, mc.Bytes[:mc.Text]); err != nil {
+					t.Fatalf("%s (%d, next), %s: %v", tc.src, i, arch, err)
+				}
+			}
+			n++
+		}
+	}
+	if genNexts == 0 {
+		t.Error("no call of next made natively compiled")
 	}
 	r := rand.New(rand.NewPCG(5, 6))
 	for attempt := 0; attempt < 50000 && n < 2000; attempt++ {
