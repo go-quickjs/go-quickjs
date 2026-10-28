@@ -121,6 +121,12 @@ func DivMod(q, r, x, y []uint) ([]uint, []uint) {
 		return qq, r
 	}
 	n, m := len(y), len(x)-len(y)
+	if n >= burnikelThreshold && m >= burnikelThreshold {
+		p := newProc(nil)
+		q, r = divLarge(q, r, x, y, p)
+		p.done()
+		return q, r
+	}
 	// Scratch for the shifted operands: on the stack while they are small.
 	var buf [96]uint
 	need := (m + n + 1) + n
@@ -182,9 +188,13 @@ func DivMod(q, r, x, y []uint) ([]uint, []uint) {
 	return q, r
 }
 
-// divMod is DivMod, p's account kept: a long dividend's quotient by a
-// divisor of a few words that p could stop in pieces, a check between them.
+// divMod is DivMod, p's account kept: a long division by divLarge, and a
+// long dividend's quotient by a divisor of a few words that p could stop
+// in pieces, a check between them.
 func divMod(q, r, x, y []uint, p *proc) ([]uint, []uint) {
+	if len(y) >= burnikelThreshold && len(x)-len(y) >= burnikelThreshold && Cmp(x, y) >= 0 {
+		return divLarge(q, r, x, y, p)
+	}
 	if p.check != nil && len(y) > 1 && len(x)-len(y) > divRows(len(y)) {
 		return divPieces(q, r, x, y, p)
 	}

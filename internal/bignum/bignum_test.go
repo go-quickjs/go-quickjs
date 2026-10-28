@@ -245,18 +245,46 @@ func TestFloats(t *testing.T) {
 	}
 }
 
+// FuzzDivMod divides fuzzed operands, and operands made of them past the
+// thresholds of what fuzzing makes: words words of a's bytes over and
+// over, divided by ywords of b's, the dividend's top word the divisor's
+// top word or one more, in which a quotient's guesses go wrong most --
+// with the thresholds as they are and lowered.
 func FuzzDivMod(f *testing.F) {
-	f.Add([]byte{1, 2, 3}, []byte{4, 5})
-	f.Fuzz(func(t *testing.T, a, b []byte) {
+	f.Add([]byte{1, 2, 3}, []byte{4, 5}, uint16(0), uint16(0))
+	f.Add([]byte{0xff, 0xff, 0, 1}, []byte{0xff, 0xff, 0xff}, uint16(300), uint16(120))
+	f.Fuzz(func(t *testing.T, a, b []byte, words, ywords uint16) {
 		bx, by := new(big.Int).SetBytes(a), new(big.Int).SetBytes(b)
+		if n, m := int(words%6000), int(ywords%3000); n > 0 && m > 0 && len(a) > 0 && len(b) > 0 {
+			rep := func(src []byte, n int, salt byte) *big.Int {
+				r := make([]byte, n*W/8)
+				for i := range r {
+					r[i] = src[i%len(src)] ^ byte(i>>8)*salt
+				}
+				return new(big.Int).SetBytes(r)
+			}
+			bx, by = rep(a, n, 1), rep(b, m, 3)
+			if len(a)&1 != 0 && n > m {
+				// The dividend's top words the divisor's.
+				bx.Add(new(big.Int).Lsh(by, uint(n-m)*W), new(big.Int).SetBytes(a))
+			}
+		}
 		if by.Sign() == 0 {
 			return
 		}
 		x, y := fromBig(bx), fromBig(by)
+		wq, wr := new(big.Int).QuoRem(bx, by, new(big.Int))
 		q, r := DivMod(make([]uint, QuoRoom(len(x), len(y))), make([]uint, len(y)), x, y)
-		check(t, "quo", q, new(big.Int).Quo(bx, by))
-		check(t, "rem", r, new(big.Int).Rem(bx, by))
-		check(t, "mul", Mul(make([]uint, MulRoom(len(x), len(y))), x, y), new(big.Int).Mul(bx, by))
+		check(t, "quo", q, wq)
+		check(t, "rem", r, wr)
+		withThresholds(func() {
+			q, r := DivMod(make([]uint, QuoRoom(len(x), len(y))), make([]uint, len(y)), x, y)
+			check(t, "quo low", q, wq)
+			check(t, "rem low", r, wr)
+		})
+		if len(x)+len(y) < 600 {
+			check(t, "mul", Mul(make([]uint, MulRoom(len(x), len(y))), x, y), new(big.Int).Mul(bx, by))
+		}
 	})
 }
 

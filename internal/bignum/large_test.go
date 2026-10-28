@@ -98,10 +98,11 @@ func TestMulLarge(t *testing.T) {
 // withThresholds runs f with the thresholds lowered as low as each method
 // allows, restored after.
 func withThresholds(f func()) {
-	saved, savedFFT := toomThreshold, fftThreshold
-	defer func() { toomThreshold, fftThreshold = saved, savedFFT }()
+	saved, savedFFT, savedBZ := toomThreshold, fftThreshold, burnikelThreshold
+	defer func() { toomThreshold, fftThreshold, burnikelThreshold = saved, savedFFT, savedBZ }()
 	toomThreshold = karatsubaThreshold
 	fftThreshold = 64
+	burnikelThreshold = 4
 	f()
 }
 
@@ -142,5 +143,94 @@ func FuzzMul(f *testing.F) {
 		withThresholds(func() {
 			check(t, "mul low", Mul(make([]uint, len(x)+len(y)), x, y), want)
 		})
+	})
+}
+
+// divSizes are the pairs of dividend and divisor sizes the division tests
+// take: quotients as long as the divisor, longer, and shorter -- shorter
+// than half of it, and the divisor longer than half the dividend -- at
+// and around each threshold.
+func divSizes() [][2]int {
+	var ps [][2]int
+	add := func(nx, ny int) {
+		if ny > 0 && nx >= ny {
+			ps = append(ps, [2]int{nx, ny})
+		}
+	}
+	for _, n := range around(burnikelThreshold, 2*burnikelThreshold, 4*burnikelThreshold+3, 300) {
+		for _, m := range around(1, burnikelThreshold, n/2, n, 2*n) {
+			add(n+m, n)
+		}
+		add(3*n+1, n)
+		add(7*n+5, n)
+	}
+	for _, n := range []int{1000, 3000, 10000} {
+		add(2*n, n)
+		add(2*n+1, n)
+		add(n+n/2, n)
+		add(n+n/3, n)
+		add(n+100, n)
+		add(3*n, n)
+		add(5*n, n/2)
+		add(n, 70)
+		add(n, 7)
+	}
+	return ps
+}
+
+// checkDiv checks x/y and x%y, of nx and ny words of each kind, and of x
+// made y*q+r of a remainder of zero, of one, and of y-1.
+func checkDiv(t *testing.T, r *rand.Rand, nx, ny int) {
+	t.Helper()
+	for kind := 0; kind < 4; kind++ {
+		y := kindNat(r, (kind+1)%4, ny)
+		xs := [][]uint{kindNat(r, kind, nx)}
+		if nx > ny {
+			qq := kindNat(r, kind, nx-ny)
+			by := toBig(y)
+			base := new(big.Int).Mul(toBig(qq), by)
+			xs = append(xs,
+				fromBig(base),
+				fromBig(new(big.Int).Add(base, big.NewInt(1))),
+				fromBig(new(big.Int).Add(base, new(big.Int).Sub(by, big.NewInt(1)))))
+		}
+		for i, x := range xs {
+			bq, br := new(big.Int).QuoRem(toBig(x), toBig(y), new(big.Int))
+			what := fmt.Sprintf("%d/%d kind %d x%d", len(x), ny, kind, i)
+			q, rem := DivMod(make([]uint, QuoRoom(len(x), ny)), make([]uint, ny), x, y)
+			check(t, "quo "+what, q, bq)
+			check(t, "rem "+what, rem, br)
+			q, _ = DivMod(make([]uint, QuoRoom(len(x), ny)), nil, x, y)
+			check(t, "quo alone "+what, q, bq)
+			_, rem = DivMod(nil, make([]uint, ny), x, y)
+			check(t, "rem alone "+what, rem, br)
+			q, rem, err := DivModChecked(make([]uint, QuoRoom(len(x), ny)), make([]uint, ny), x, y, func() error { return nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			check(t, "quo checked "+what, q, bq)
+			check(t, "rem checked "+what, rem, br)
+		}
+	}
+}
+
+func TestDivLarge(t *testing.T) {
+	r := rand.New(rand.NewPCG(25, 26))
+	for _, s := range divSizes() {
+		checkDiv(t, r, s[0], s[1])
+	}
+}
+
+func TestDivLowThresholds(t *testing.T) {
+	r := rand.New(rand.NewPCG(27, 28))
+	withThresholds(func() {
+		for ny := 1; ny < 200; ny += 1 + ny/6 {
+			for _, nx := range []int{ny, ny + 1, ny + 3, ny + ny/2, 2 * ny, 2*ny + 1, 3*ny + 2, 9 * ny} {
+				checkDiv(t, r, nx, ny)
+			}
+		}
+		for _, s := range [][2]int{{4000, 2000}, {4001, 1999}, {6000, 1000}, {3000, 2500}} {
+			checkDiv(t, r, s[0], s[1])
+		}
 	})
 }
