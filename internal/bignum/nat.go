@@ -140,6 +140,8 @@ func Mul(z, x, y []uint) []uint {
 // of a long x that p could stop in pieces of x, a check between them.
 func mul(z, x, y []uint, p *proc) []uint {
 	switch {
+	case len(y) >= fftThreshold:
+		return fftMul(z, x, y, false, p)
 	case len(y) >= toomThreshold:
 		return toomMul(z, x, y, p)
 	case len(y) >= karatsubaThreshold:
@@ -183,6 +185,9 @@ func mulPieces(z, x, y []uint, n int, p *proc) []uint {
 // sqr writes x*x to z, 2*len(x) words, for len(x) at least
 // karatsubaThreshold, p's account kept.
 func sqr(z, x []uint, p *proc) []uint {
+	if len(x) >= fftThreshold {
+		return fftMul(z, x, x, true, p)
+	}
 	if len(x) >= toomThreshold {
 		return toom3(z, x, x, true, p)
 	}

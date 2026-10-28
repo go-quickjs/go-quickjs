@@ -58,7 +58,7 @@ func mulSizes() [][2]int {
 			ps = append(ps, [2]int{n, m})
 		}
 	}
-	for _, n := range around(karatsubaThreshold, toomThreshold, 2*toomThreshold, 3*toomThreshold) {
+	for _, n := range around(karatsubaThreshold, toomThreshold, 2*toomThreshold, 3*toomThreshold, fftThreshold, 2*fftThreshold) {
 		add(n, n)
 		add(n, n-7)
 		add(2*n+1, n)
@@ -66,10 +66,11 @@ func mulSizes() [][2]int {
 		add(n, karatsubaThreshold+3)
 		add(n, 5)
 	}
-	for _, n := range []int{600, 1000, 2500} {
+	for _, n := range []int{600, 1000, 2500, 7000, 20000} {
 		add(n, n)
 		add(n, n/2+1)
 		add(n, n/3)
+		add(n, fftThreshold)
 	}
 	return ps
 }
@@ -97,9 +98,10 @@ func TestMulLarge(t *testing.T) {
 // withThresholds runs f with the thresholds lowered as low as each method
 // allows, restored after.
 func withThresholds(f func()) {
-	saved := toomThreshold
-	defer func() { toomThreshold = saved }()
+	saved, savedFFT := toomThreshold, fftThreshold
+	defer func() { toomThreshold, fftThreshold = saved, savedFFT }()
 	toomThreshold = karatsubaThreshold
+	fftThreshold = 64
 	f()
 }
 
@@ -113,7 +115,7 @@ func TestMulLowThresholds(t *testing.T) {
 				}
 			}
 		}
-		for _, n := range []int{1000, 3001} {
+		for _, n := range []int{1000, 3001, 20000} {
 			checkMul(t, r, n, n)
 			checkMul(t, r, n, n/2)
 		}

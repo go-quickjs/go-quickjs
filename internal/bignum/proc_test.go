@@ -17,6 +17,8 @@ func checkedOps(r *rand.Rand, n int) map[string]func(check func() error) (string
 	x, y := randNat(r, n), randNat(r, n)
 	short := randNat(r, 7)
 	wide := randNat(r, 2*n)
+	// Products by FFT take little work: of operands four times longer.
+	xl, yl := randNat(r, 4*n), randNat(r, 4*n)
 	s := toBig(x).Text(10)
 	text := func(z []uint, err error) (string, error) {
 		if err != nil {
@@ -26,13 +28,13 @@ func checkedOps(r *rand.Rand, n int) map[string]func(check func() error) (string
 	}
 	return map[string]func(func() error) (string, error){
 		"mul": func(c func() error) (string, error) {
-			return text(MulChecked(make([]uint, 2*n), x, y, c))
+			return text(MulChecked(make([]uint, 8*n), xl, yl, c))
 		},
 		"mul by a short one": func(c func() error) (string, error) {
 			return text(MulChecked(make([]uint, n+7), x, short, c))
 		},
 		"sqr": func(c func() error) (string, error) {
-			return text(SqrChecked(make([]uint, 2*n), x, c))
+			return text(SqrChecked(make([]uint, 8*n), xl, c))
 		},
 		"quo": func(c func() error) (string, error) {
 			q, _, err := DivModChecked(make([]uint, QuoRoom(2*n, n)), nil, wide, y, c)
@@ -74,13 +76,15 @@ func TestChecked(t *testing.T) {
 	x, y := randNat(r, n), randNat(r, n)
 	short := randNat(r, 7)
 	wide := randNat(r, 2*n)
+	xl, yl := randNat(r, 4*n), randNat(r, 4*n)
 	bx, by, bw, bs := toBig(x), toBig(y), toBig(wide), toBig(short)
+	bxl, byl := toBig(xl), toBig(yl)
 	q, rem := new(big.Int).QuoRem(bw, by, new(big.Int))
 	qs, rs := new(big.Int).QuoRem(bw, bs, new(big.Int))
 	want := map[string]string{
-		"mul":                new(big.Int).Mul(bx, by).Text(16),
+		"mul":                new(big.Int).Mul(bxl, byl).Text(16),
 		"mul by a short one": new(big.Int).Mul(bx, bs).Text(16),
-		"sqr":                new(big.Int).Mul(bx, bx).Text(16),
+		"sqr":                new(big.Int).Mul(bxl, bxl).Text(16),
 		"quo":                q.Text(16),
 		"rem":                rem.Text(16),
 		"quo by a short one": rs.Text(16) + "," + qs.Text(16),
