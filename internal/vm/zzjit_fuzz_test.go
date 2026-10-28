@@ -3,10 +3,12 @@
 package vm
 
 import (
+	"context"
 	"fmt"
 	"math/rand/v2"
 	"strings"
 	"testing"
+	"time"
 )
 
 // jitProgram writes a JavaScript program from a byte string, as a fuzzer
@@ -19,6 +21,10 @@ type jitProgram struct {
 	data []byte
 	pos  int
 	b    strings.Builder
+	// repeat, if not 0, is how many times the program makes its runs,
+	// its log begun again each time, so that its functions warm as a
+	// program's do (jitDifferentialWarm).
+	repeat int
 }
 
 func (g *jitProgram) next() int {
@@ -144,6 +150,9 @@ func (g *jitProgram) source() string {
 	b.WriteString("function show(v){return typeof v==='number'&&Object.is(v,-0)?'-0':String(v)}\n")
 	b.WriteString("function run(a,o,n){try{let r=f(a,o,n);log.push(show(r[0])+','+show(r[1]))}catch(e){log.push(e.name+':'+e.message)}" +
 		"log.push(a.length+':'+Array.from(a,show).join(','),show(o.x))}\n")
+	if g.repeat > 0 {
+		fmt.Fprintf(b, "for(var rep=0;rep<%d;rep++){log=[];\n", g.repeat)
+	}
 	for k := 1 + g.pick(4); k > 0; k-- {
 		n := 1 + g.pick(40)
 		var elems []string
@@ -160,6 +169,9 @@ func (g *jitProgram) source() string {
 		}
 		fmt.Fprintf(b, "run([%s],%s,%d);\n", strings.Join(elems, ","), obj, n)
 	}
+	if g.repeat > 0 {
+		b.WriteString("}\n")
+	}
 	b.WriteString("log.join('|')")
 	return b.String()
 }
@@ -169,7 +181,7 @@ func (g *jitProgram) source() string {
 // JIT's counters summed over the stress runs.
 func jitDifferential(t *testing.T, src string) JITStats {
 	t.Helper()
-	run := func(tree, jit bool, c jitStressConfig) (string, JITStats) {
+	run := func(tree, jit bool, c jitStressConfig, within time.Duration) (string, time.Duration, JITStats) {
 		previous := treeTier.Swap(tree)
 		defer treeTier.Store(previous)
 		// A generated program can grow a string without bound -- o.x=s;
@@ -186,22 +198,16 @@ func jitDifferential(t *testing.T, src string) JITStats {
 		r.jitStress = c
 		// Each tier compiles its own bytecode: a function's tree decision is
 		// cached in it.
-		v, err := r.Run(compileForTest(t, src))
-		if err != nil {
-			return "uncaught: " + err.Error(), r.JITStats()
-		}
-		s, err := r.ToString(v)
-		if err != nil {
-			return "uncaught: " + err.Error(), r.JITStats()
-		}
-		return s.Go(), r.JITStats()
+		got, took := jitRunWithin(t, r, src, within)
+		return got, took, r.JITStats()
 	}
-	want, _ := run(false, false, jitStressConfig{})
-	if outOfMemory(want) {
+	want, took, _ := run(false, false, jitStressConfig{}, jitFuzzTime)
+	if outOfMemory(want) || want == jitTimedOut {
 		return JITStats{}
 	}
-	if got, _ := run(true, false, jitStressConfig{}); got != want && !outOfMemory(got) {
-		t.Fatalf("tree tier: %q\ninterpreter: %q\n%s", got, want, src)
+	within := jitFuzzSlack(took)
+	if got, _, _ := run(true, false, jitStressConfig{}, within); got != want && !outOfMemory(got) {
+		t.Fatalf("tree tier: %q\ninterpreter: %q, in %v\n%s", got, want, took, src)
 	}
 	var total JITStats
 	for _, c := range []jitStressConfig{
@@ -212,19 +218,164 @@ func jitDifferential(t *testing.T, src string) JITStats {
 		// threshold,budget=3,deopt=7).
 		{threshold: true, budget: 3, deopt: 7},
 	} {
-		got, st := run(true, true, c)
+		got, _, st := run(true, true, c, within)
 		if got != want && !outOfMemory(got) {
-			t.Fatalf("JIT %+v: %q\ninterpreter: %q\n%s", c, got, want, src)
+			t.Fatalf("JIT %+v: %q\ninterpreter: %q, in %v\n%s", c, got, want, took, src)
 		}
 		total.Entries += st.Entries
 		total.Guards += st.Guards
 		total.Interpreted += st.Interpreted
 		total.SSAEntries += st.SSAEntries
+	}
+	return total
+}
+
+// jitFuzzTime is how long the interpreter may take on a generated program
+// before it is passed over: a program can do work that grows without bound
+// -- o.x=-(o.x)*o.x squares a BigInt at each turn, millions of bits in
+// two dozen -- which no tier finishes in a fuzzer's time, and which the
+// memory limit, far from reached, does not stop. Such a program decides
+// nothing, as one over the memory limit does not. The fuzzer stops a
+// worker whose input takes a minute ("deadlocked!"), every tier's run
+// included: the interpreter's second and five runs of jitFuzzSlack's at
+// most fit.
+const jitFuzzTime = time.Second
+
+// jitTimedOut is a run's result once it ran past its time (jitRunWithin).
+const jitTimedOut = "timed out"
+
+// jitFuzzSlack is how long the other tiers may take on a program the
+// interpreter ran in took: ten times it, from five seconds to ten, long
+// enough that no tier is judged for being slower by a constant factor --
+// the JIT under stress, leaving native code at every back edge, included
+// -- short enough that one that does not finish -- native code that loops
+// where the interpreter does not -- is reported as different, its result
+// jitTimedOut, within the fuzzer's minute (jitFuzzTime).
+func jitFuzzSlack(took time.Duration) time.Duration {
+	return min(max(5*jitFuzzTime, 10*took), 10*jitFuzzTime)
+}
+
+// jitRunWithin runs src in r, stopped once within has passed, as a host's
+// context deadline stops it, and gives its result and how long it took.
+func jitRunWithin(t *testing.T, r *Runtime, src string, within time.Duration) (string, time.Duration) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), within)
+	defer cancel()
+	r.SetContext(ctx)
+	start := time.Now()
+	v, err := r.Run(compileForTest(t, src))
+	var s *String
+	if err == nil {
+		s, err = r.ToString(v)
+	}
+	// A run past its time is timed out, though it finished: what stops it
+	// is checked at back edges and calls, not within one long operation
+	// -- a BigInt's toString -- which can carry it far past.
+	if ctx.Err() != nil {
+		return jitTimedOut, time.Since(start)
+	}
+	if err != nil {
+		return "uncaught: " + err.Error(), time.Since(start)
+	}
+	return s.Go(), time.Since(start)
+}
+
+// jitDifferentialWarm runs src, a program that makes its runs again and
+// again (jitProgram.repeat), in the interpreter and in the JIT at warm-up
+// thresholds, not compiling at the first call: what the existing tiers
+// count while a function warms -- its calls' frequencies, its caches'
+// feedback -- decides what is compiled and inlined, and code is compiled
+// again for what it learned, which jitDifferential's runs, compiling at
+// once, never reach. It reports any difference.
+func jitDifferentialWarm(t *testing.T, src string) JITStats {
+	t.Helper()
+	run := func(jit bool, warm int, c jitStressConfig, within time.Duration) (string, time.Duration, JITStats) {
+		r := New(Config{JIT: jit, MemoryLimit: 16 << 20})
+		defer func() { r.Close(); r.ReleaseClosed() }()
+		r.jitStress = c
+		r.jitCallThreshold, r.jitICThreshold = jitInvocationsForMaglev, jitInvocationsAfterICUpdate
+		if warm != 0 {
+			r.SetJITWarmUp(warm, warm)
+		}
+		got, took := jitRunWithin(t, r, src, within)
+		return got, took, r.JITStats()
+	}
+	want, took, _ := run(false, 0, jitStressConfig{}, jitFuzzTime)
+	if outOfMemory(want) || want == jitTimedOut {
+		return JITStats{}
+	}
+	within := jitFuzzSlack(took)
+	var total JITStats
+	for _, w := range []struct {
+		warm int
+		c    jitStressConfig
+	}{
+		{0, jitStressConfig{}},
+		{24, jitStressConfig{}},
+		{24, jitStressConfig{budget: 3, deopt: 7}},
+	} {
+		got, _, st := run(true, w.warm, w.c, within)
+		if got != want && !outOfMemory(got) {
+			t.Fatalf("JIT warmed at %d %+v: %q\ninterpreter: %q, in %v\n%s", w.warm, w.c, got, want, took, src)
+		}
 		total.Entries += st.Entries
 		total.Guards += st.Guards
 		total.Interpreted += st.Interpreted
+		total.SSAEntries += st.SSAEntries
+		total.Inlined += st.Inlined
 	}
 	return total
+}
+
+// jitWarmRepeat is how many times a warm program makes its runs: past the
+// 19 counted invocations a call's frequency needs (jitCountsEnough) at the
+// warm-up of 24 jitDifferentialWarm gives, and its feedback's changes.
+const jitWarmRepeat = 40
+
+// FuzzJITDifferentialWarm is FuzzJITDifferential's programs, warmed
+// (jitDifferentialWarm). Without -fuzz it runs its seeds:
+//
+//	go test -tags quickjs_jit ./internal/vm -run '^$' -fuzz '^FuzzJITDifferentialWarm$' -fuzztime=10m
+func FuzzJITDifferentialWarm(f *testing.F) {
+	for i := 0; i < 8; i++ {
+		seed := make([]byte, 64)
+		r := rand.New(rand.NewPCG(uint64(i), 11))
+		for j := range seed {
+			seed[j] = byte(r.Uint32())
+		}
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		jitDifferentialWarm(t, (&jitProgram{data: data, repeat: jitWarmRepeat}).source())
+	})
+}
+
+// TestJITDifferentialWarmRandom runs a fixed set of warm programs in every
+// ordinary test run, and checks that they reach native code.
+func TestJITDifferentialWarmRandom(t *testing.T) {
+	var total JITStats
+	native := 0
+	const programs = 40
+	for i := 0; i < programs; i++ {
+		data := make([]byte, 96)
+		r := rand.New(rand.NewPCG(uint64(i), 101))
+		for j := range data {
+			data[j] = byte(r.Uint32())
+		}
+		st := jitDifferentialWarm(t, (&jitProgram{data: data, repeat: jitWarmRepeat}).source())
+		if st.SSAEntries != 0 {
+			native++
+		}
+		total.Entries += st.Entries
+		total.Guards += st.Guards
+		total.Interpreted += st.Interpreted
+		total.SSAEntries += st.SSAEntries
+		total.Inlined += st.Inlined
+	}
+	t.Logf("%d of %d warm programs ran natively: %+v", native, programs, total)
+	if jitSSABackend && (native < programs/2 || total.Inlined == 0) {
+		t.Fatalf("warm programs no longer reach native code: %d of %d, %+v", native, programs, total)
+	}
 }
 
 // outOfMemory reports whether a run stopped at its memory limit, which
