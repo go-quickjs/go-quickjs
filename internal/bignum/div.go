@@ -86,7 +86,9 @@ func QuoRoom(n, m int) int { return max(n-m+1, 1) }
 // not wanted. A divisor of one word divides a word at a time; a longer one
 // by Knuth's algorithm D (The Art of Computer Programming, 4.3.1), each
 // quotient word guessed from the dividend's top two and the divisor's top
-// word, corrected by the divisor's next.
+// word, corrected by the divisor's next; a long divisor, for a long
+// quotient, by Burnikel and Ziegler's recursion (burnikel.go), the longest
+// by Barrett's method (barrett.go), in scratch DivMod allocates.
 func DivMod(q, r, x, y []uint) ([]uint, []uint) {
 	if Cmp(x, y) < 0 {
 		if r != nil {

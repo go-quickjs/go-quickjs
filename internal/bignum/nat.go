@@ -2,7 +2,9 @@
 // words, least significant first, normalized -- no most significant zero
 // word -- which the caller owns and gives the signs of, and which results
 // are written into, so that a result is made where it will be kept, with
-// nothing allocated but what an operation asks the caller for room in.
+// nothing allocated but what an operation asks the caller for room in --
+// but for the scratch of operations of many words, which take it from a
+// stack of their own (proc), kept between them.
 //
 // It is the VM's BigInts' arithmetic. math/big's had cost more than C
 // QuickJS's whole operation for numbers of a few words: its general entry,
@@ -117,7 +119,8 @@ func MulRoom(n, m int) int { return n + m }
 
 // Mul writes x*y to z, which has room for len(x)+len(y) words (MulRoom) and
 // overlaps neither. Operands of many words are multiplied by Karatsuba's
-// method, in scratch Mul allocates.
+// method, longer ones by Toom-Cook 3 (toom.go), the longest by
+// Schönhage and Strassen's (fft.go), in scratch Mul allocates.
 func Mul(z, x, y []uint) []uint {
 	if len(x) < len(y) {
 		x, y = y, x
@@ -241,7 +244,8 @@ func basicMul(z, x, y []uint) {
 }
 
 // Sqr writes x*x to z, which has room for 2*len(x) words and overlaps x not:
-// each product of two different words once, doubled, and the squares.
+// each product of two different words once, doubled, and the squares; of
+// many words, by Mul's methods, each its square's.
 func Sqr(z, x []uint) []uint {
 	n := len(x)
 	if n == 0 {

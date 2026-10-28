@@ -26,7 +26,8 @@ func chunk(base int) (uint, int) {
 // Append appends x in base, 2 to 36, its digits in lower case, to dst: "0"
 // for zero, a minus for neg. A magnitude of many words is written by
 // halves, divided by a power of the base about the square root of it, each
-// half the same way, so that its time is a product's, not quadratic.
+// half the same way, so that its time is a product's, not quadratic; a
+// power of two's digits are its bits.
 func Append(dst []byte, neg bool, x []uint, base int) []byte {
 	return appendNat(dst, neg, x, base, nil)
 }
@@ -257,7 +258,8 @@ func writeSplit(buf []byte, w int, x []uint, base int, cw uint, cn int, p []conv
 }
 
 // Parse is the magnitude of s's digits in base, 2 to 36, of either case:
-// false for an empty s or one with another character.
+// false for an empty s or one with another character. A long string is
+// read by halves (parseHalves), a power of two's as bits.
 func Parse(s string, base int) ([]uint, bool) {
 	return parse(s, base, nil)
 }
