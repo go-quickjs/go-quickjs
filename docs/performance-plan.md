@@ -1651,6 +1651,64 @@ Open from it:
 - `jitCalledOftenBy`, which compiles a long callee early for its caller,
   still judges by the callee's invocations, not the site's count.
 
+A fourth round of 2026-10-28 (`d0acb93`..`599e74d`, against `cf4e6f2`),
+from the JIT's differential fuzzer: a program squaring a BigInt 24
+times, then writing it out, never finished. `String(x)` of its 19.5
+million bits took 54 s, every algorithm in `internal/bignum` past
+Karatsuba being quadratic, and no deadline could stop it: one Go call
+did all of it. V8's `src/bigint` is the model throughout:
+
+- **Interruption** (`d0acb93`, `241ed67`), as V8's `ProcessorImpl`
+  checks `should_terminate`: an operation of 256 words or more checks,
+  about every 4 million word operations, the runtime's context and its
+  memory limit, and returns the error the VM throws for them. A
+  deadline stops `String(x)` of 20 million bits within 15 ms. Shorter
+  operations take the paths they took (`0393d3c`).
+- **Multiplication:** Toom-Cook 3 above 200 words (`4000577`), its
+  scratch from one stack, and Schönhage–Strassen above 2,500
+  (`7c7cf11`).
+- **Division:** Burnikel–Ziegler above 57 words (`15f4eb9`), and
+  Barrett division with a Newton inverse for divisors of 13,310 words
+  and more (`7819c6d`).
+- **Conversions:** `toString` (`ced0de0`) and parsing (`52b7020`) by
+  halves on the fast division and multiplication, the reciprocals of
+  the powers kept for the conversion; a power-of-two base is linear.
+  Intl's format of a long BigInt converts by the checked path
+  (`23d3268`).
+- **The fuzzer** (`83fbb08`): a target that warms programs as programs
+  warm -- the default thresholds, then 24, then 24 under stress, each
+  run 40 times -- and every run bounded in time, the interpreter's
+  outcome skipped when it runs out and any other tier's a failure. The
+  program above is in both targets' corpora; it passes in 0.16 s.
+- **A BigInt written out past 2^30 bits** is refused as V8 refuses it
+  (`8fd6ba0`): a string, by V8's StringToBigInt, past 2^24 parts of as
+  many whole digits as fit in 64 bits, leading zeros not counted, is no
+  BigInt (a SyntaxError, a comparison false); a literal, by V8's
+  scanner, of more than 2^28 characters after its prefix, separators
+  and leading zeros counted, is an early SyntaxError. BigInt's
+  SyntaxError quotes at most 1,000 code units of the string
+  (`599e74d`): refusing one of 2^28 digits took 2 s writing them out.
+
+The program above, ours against Node (24 squarings, 19.5 million bits):
+multiplying 159 ms against 158 (1,694 before), `toString` 1,674 against
+1,827 (54,244 before), parsing its output 743 against 735.
+
+Over four placements, against the base: without the JIT, V8 suite
++0.5%, Are We Fast Yet -1.0%; with it, -0.5% and +0.2%;
+micro-benchmarks +0.1% and -0.2% by their geometric mean. The BigInt
+micro-benchmarks and `string_slice` and `string_upper`, up to 13% slower
+on one build, are level with main padded to the branch's addresses;
+`async_await` (+18%) and `async_call` (+10%) are two thirds the tree
+tier's closures moved, about 4 KB later, and the rest the same code,
+every function in their profile the same size.
+
+Open from it:
+
+- The FFT's scratch memory is not counted against the memory limit.
+- Linear operations (addition, shifts, bitwise operations) are not
+  interruptible.
+- `async_await`'s remaining 6%, of layout.
+
 Open from it:
 
 - Typescript, +4.0% at every placement, before its sites were fixed
