@@ -123,6 +123,11 @@ func (r *Runtime) leafForward(cl *closure, callee, o *Object, args []Value, newT
 		// run throws the RangeError.
 		return false, nil
 	}
+	if jitBuilt && r.jitOn() && r.jitCountsCaller(r.frameDepth-1) {
+		// Counted for the JIT at its call site, as a construction made
+		// with the constructor's frame is (jitCountPure).
+		r.jitCountPure()
+	}
 	f := r.pushFrame()
 	f.cl = cl
 	f.locals = nil

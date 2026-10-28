@@ -114,7 +114,7 @@ count them where every call they make passes once the JIT is on: the call
 path's hook (`tryJITFrame`), for a call made with a frame -- the callee's
 invocation, and the call at its caller's site, the frame below, whose pc
 is past the call as a stack trace reads it (the VM's `jitCallCounts`,
-`jitCountCall`) -- and a pure body's evaluation, for one the call path
+`jitCountCallAt`) -- and a pure body's evaluation, for one the call path
 answers without a frame (`jitCountPure`). They count while the
 function's code is to be compiled -- its entry warming, its code
 invalidated -- from its first entry on, which its later entries and the
@@ -153,14 +153,15 @@ most often get first, and past it only small callees (`ssa`'s
 which the existing tiers count (Call frequency): a call made less often
 than `ssa.MinInliningFrequency` (0.15, V8's `min_inlining_frequency`)
 for each invocation of the function compiled is not inlined, small or
-not, and the VM decides it a native call (`jitCallCold`); the calls
-whose frequencies are known come first, the most frequent first, then
-those whose are not, the calls loops hold first (`ssa`'s
-`inlineOrder`). A call inside an inlined callee is made its own
-frequency times its callee's call's (`ssa.FrequencyFeedback`), as V8's
-graph builder gives an inlined callee its call's frequency: one below
-the minimum keeps the callee from being inlined, which inlines all its
-calls or none. A callee's throw, or a call its own
+not, and the VM decides it a native call (`jitCallCold`); the most
+frequent come first, a call whose frequency is not known taken as made
+once outside the loops and more often inside one, as the calls were
+ordered before they were counted (`ssa`'s `inlineOrder`). Frequencies
+are known once the function has run 19 times, in which a call made at
+the minimum is made at least once 19 times in 20 (`jitCountsEnough`). A
+call inside an inlined callee is inlined however
+seldom: V8 inlines the callee and leaves such a call a call, which an
+inlined frame here does not make. A callee's throw, or a call its own
 code has never been seen to make, does not keep it from being inlined:
 native code leaves the
 inlined frame there, as V8's code deoptimizes at a call with no feedback

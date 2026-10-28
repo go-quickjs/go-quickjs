@@ -99,16 +99,16 @@ func TestJITInlinesByFrequency(t *testing.T) {
 	}
 }
 
-// A call inside an inlined callee is made its own frequency, in its
-// callee's counts, times its callee's call's, as V8 multiplies them
-// through the frames it inlines: mid calls leaf at four in ten of its
-// invocations. pick calls mid at each of its invocations, so that leaf's
-// call is made 0.4 times one of pick's, and mid is inlined with leaf; mid
-// at three in ten, so that leaf's is 0.12, below V8's minimum, and mid,
-// which inlines all of its calls or none, is not inlined -- though leaf's
-// own frequency, and mid's call's, are above it. Each answer is the
-// interpreter's.
-func TestJITInlinedFrequenciesMultiply(t *testing.T) {
+// A call inside a callee inlined is inlined however seldom it is made, as
+// before the calls were counted: V8 inlines the callee and leaves such a
+// call a call, which an inlined frame here does not make, and not
+// inlining the callee for it would leave a call made more often. mid,
+// whose calls the existing tiers counted over its own budget, calls leaf
+// at four in ten of its invocations: pick, calling mid at three in ten,
+// inlines mid with leaf, made 0.12 times one of pick's, below V8's
+// minimum; calling it at one in ten, it inlines neither. pick has a loop,
+// so that Go enters its code. Each answer is the interpreter's.
+func TestJITInlinesCalleesColdCalls(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -117,20 +117,24 @@ func TestJITInlinedFrequenciesMultiply(t *testing.T) {
 		return `
 		function leaf(o) { let t = (o.x * 3 + o.y) | 0; return t }
 		function mid(o, i) { let s = o.x + 1; if (i % 10 < 4) s += leaf(o); return s }
-		function pick(o, i) { let s = o.y; if (` + often + `) s += mid(o, i); return s }
-		function drive(n, o) { let s = 0; for (let i = 0; i < n; i++) s = (s + pick(o, i)) | 0; return s }
+		function pick(o, i) { let s = o.y; for (let j = 0; j < 2; j++) s = (s * 3 + j) | 0; if (` + often + `) s += mid(o, i); return s }
+		function drive(n, o) { with (o) {} let s = 0; for (let i = 0; i < n; i++) s = (s + pick(o, i)) | 0; return s }
+		function warm(n, o) { with (o) {} let s = 0; for (let i = 0; i < n; i++) s = (s + mid(o, i)) | 0; return s }
 		var p = {x: 5, y: 9}`
 	}
 	for _, c := range []struct {
 		often string
 		want  int
-	}{{`true`, 1}, {`i % 10 >= 7`, 0}} {
+	}{{`i % 10 >= 7`, 1}, {`i % 10 === 9`, 0}} {
 		both := jitFreqBothForTest(t, setup(c.often))
-		both.agree(t, `drive(2000, p)`, `drive(500, p)`)
+		// mid's own budget spent in warm, and pick's in drive, which the
+		// JIT does not compile (with): their calls counted, neither
+		// compiled for a native caller before.
+		both.agree(t, `warm(1000, p)`, `drive(3000, p)`, `drive(500, p)`)
 		r := both.jit
 		e, me := jitCallbackEntry(r, "pick"), jitCallbackEntry(r, "mid")
-		if e == nil || e.ssa == nil || me == nil || me.calls == nil || me.calls.runs == 0 {
-			t.Fatalf("%s: pick has no code, or mid no counts: %+v, %+v", c.often, e, me)
+		if e == nil || e.ssa == nil || me == nil || me.calls == nil || me.calls.runs < jitCountsEnough {
+			t.Fatalf("%s: pick has no code, or mid too few counts: %+v, %+v", c.often, e, me)
 		}
 		if got := jitInlinesForTest(t, r, inlined, "pick", `mid`, `leaf`); got[0] != c.want || got[1] != c.want {
 			t.Errorf("%s: pick inlines mid and leaf %v times, want %d", c.often, got, c.want)

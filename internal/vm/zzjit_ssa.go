@@ -3604,7 +3604,7 @@ func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 		return
 	}
 	// One made too seldom to be inlined is called natively (jitCallCold).
-	if len(met) == 0 && cl.fn != f.cl.fn && !jitCallCold(e, pc, cl) && r.jitInlinesAt(cl, o, in) {
+	if len(met) == 0 && cl.fn != f.cl.fn && !r.jitCallCold(e, pc, cl) && r.jitInlinesAt(cl, o, in) {
 		e.inlines = append(e.inlines, r.jitInlineTarget(int32(pc), cl, o, in))
 		e.callSites[pc] = jitCallInlined
 		e.inlinePending = true
@@ -3700,7 +3700,7 @@ func (r *Runtime) jitNativeCallsInline(e *jitEntry, inline func(int)) bool {
 		pc := int(x.pc)
 		one := !slices.ContainsFunc(e.nativeCalls, func(y jitInline) bool { return y.pc == x.pc && y.cl != x.cl })
 		if !one || x.cl == nil || x.active != nil || x.parent != nil || r.jit.entryFor(x.cl.fn) == e || e.callSites == nil || pc >= len(e.callSites) ||
-			e.callSites[pc] != jitCallNative || slices.Contains(e.notInline, x.pc) || jitCallCold(e, pc, x.cl) || !r.jitInlinesCalls(x.cl, jitInlineDepth-1) ||
+			e.callSites[pc] != jitCallNative || slices.Contains(e.notInline, x.pc) || r.jitCallCold(e, pc, x.cl) || !r.jitInlinesCalls(x.cl, jitInlineDepth-1) ||
 			x.pool != nil && !r.jitInlinesAt(x.cl, x.obj, bytecode.Instr{Op: bytecode.OpNew}) {
 			continue
 		}
@@ -6015,7 +6015,7 @@ func (r *Runtime) jitSeedCalls(cl *closure, e *jitEntry, p *ir.Program) {
 		}
 		// One made too seldom to be inlined is called natively
 		// (jitCallCold).
-		cold := jitCallCold(e, pc, callee)
+		cold := r.jitCallCold(e, pc, callee)
 		if callee.fn != fn && !cold && r.jitInlinesAt(callee, o, in) {
 			e.inlines = append(e.inlines, r.jitInlineTarget(int32(pc), callee, o, in))
 			e.callSites[pc] = jitCallInlined

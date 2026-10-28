@@ -39,6 +39,7 @@ func (*Runtime) SetJITWarmUp(int, int) {}
 func (*Runtime) initJIT(bool, int64)                                  {}
 func (*Runtime) tryJITFrame(*frame) (Value, error, bool)              { return Value{}, nil, false }
 func (*Runtime) jitCountPure()                                        {}
+func (*Runtime) jitCountsCaller(int) bool                             { return false }
 func (*Runtime) jitResume(*frame) (Value, error, bool)                { return Value{}, nil, false }
 func (*Runtime) jitBackEdge(*frame, uint32, int) (Value, error, bool) { return Value{}, nil, false }
 func (*Runtime) tryJITTreeLoop(*tctx, int, int, bool)                 {}

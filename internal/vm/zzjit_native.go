@@ -974,7 +974,7 @@ type jitState struct {
 	// exit, which Go makes on the code's frame (jitHost), and of a callee
 	// with no code native code called, which Go runs (jitEnterCallee):
 	// native code's calls, which the existing tiers' counts leave out
-	// (jitCountCall).
+	// (jitCountCallAt).
 	nativeCallDepth int
 	// arena holds the code of every entry: a few mappings, however many
 	// functions the runtime compiles.
@@ -2467,10 +2467,12 @@ func (r *Runtime) jitOn() bool { return r.jitEnabled }
 
 // tryJITFrame is the call path's hook, for a runtime that runs the JIT. The
 // call that made the frame is counted at its caller's site first
-// (jitCountCall), and an invocation the existing tiers run where they
+// (jitCountCallAt), and an invocation the existing tiers run where they
 // count the function's calls (jitCountRun).
 func (r *Runtime) tryJITFrame(f *frame) (Value, error, bool) {
-	r.jitCountCall()
+	if r.jitCountsCaller(r.frameDepth - 2) {
+		r.jitCountCallAt(r.frameDepth)
+	}
 	if f.cl.jitRefused {
 		return Undefined, nil, false
 	}

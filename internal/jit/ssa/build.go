@@ -2333,7 +2333,7 @@ func buildCalls(w *Workspace, p *ir.Program, fb Feedback, plan *calledPlan) (*Fu
 	f.written = f.bools(p.Locals + p.StackSize)
 	f.assigned = p.Assigned
 	b := &builder{p: p, fb: fb, f: f, nslots: p.Locals + p.StackSize}
-	b.root = &frame{p: p, fb: fb, at: -1, givenPC0: -1, freq: 1, freqKnown: true}
+	b.root = &frame{p: p, fb: fb, at: -1, givenPC0: -1}
 	b.cur = b.root
 	if plan != nil {
 		b.called, b.given = plan.calls, plan.given
@@ -2856,12 +2856,13 @@ type AppendFeedback interface {
 // calls is made for each invocation of it, as the existing tiers counted
 // them: V8's call frequency, a call site's count of calls over its
 // function's invocations, which V8's feedback vector keeps from its lower
-// tiers. The builder multiplies it through the frames it inlines, as V8's
-// graph builder gives an inlined callee its call's frequency as its own
-// invocations' (frame's freq): a call inside an inlined callee is made its
-// own frequency times its callee's call's. Inlining takes the calls made
-// most often first, and none made less often than minInliningFrequency
-// (plan, inlineSiteAt).
+// tiers. Inlining takes the function's own calls made most often first,
+// and none made less often than minInliningFrequency (plan,
+// inlineSiteAt). A call inside a callee inlined is inlined however seldom
+// it is made, as before the counts: V8 inlines the callee and leaves such
+// a call a call, where an inlined frame here makes none (InlineCalls) --
+// not inlining the callee for it would make a call of the callee, made
+// at least that often, of a cold one inlined.
 type FrequencyFeedback interface {
 	// Frequency is how often the call at pc is made for each invocation
 	// of the frame's function, if the feedback knows.
@@ -2879,18 +2880,15 @@ const minInliningFrequency = 0.15
 // jitCallCold).
 const MinInliningFrequency = minInliningFrequency
 
-// siteFrequency is how often the call at pc of the frame being translated
-// is made for each invocation of the function being compiled, if known
-// (FrequencyFeedback): the call's own frequency in its frame's function,
-// times the frame's (frame's freq).
+// siteFrequency is how often the root's call at pc, the frame being
+// translated being the root's, is made for each invocation of it, if known
+// (FrequencyFeedback).
 func (b *builder) siteFrequency(pc int) (float64, bool) {
-	fr := b.cur
 	ff, ok := b.fb.(FrequencyFeedback)
-	if !fr.freqKnown || !ok {
+	if b.cur != b.root || !ok {
 		return 0, false
 	}
-	f, ok := ff.Frequency(pc)
-	return fr.freq * f, ok
+	return ff.Frequency(pc)
 }
 
 // HasCacheFeedback is Feedback that has native code look the in
@@ -3024,13 +3022,6 @@ type frame struct {
 	given    bool
 	givenPC0 int
 	callee   *Value
-	// freq is how often the frame's function is invoked for each
-	// invocation of the function being compiled, where freqKnown: 1 for
-	// the root, and for a callee inlined, its call's frequency
-	// (siteFrequency), as V8's graph builder gives an inlined callee its
-	// call's frequency.
-	freq      float64
-	freqKnown bool
 }
 
 // givenPath is the path of a frame inlined at pc in the code of the frame
@@ -3107,9 +3098,7 @@ func (b *builder) inlineSiteAt(pc int, total *int, known *inlineAsked) (*frame, 
 	}
 	if f, ok := b.siteFrequency(pc); ok && f < minInliningFrequency {
 		// Made too seldom to pay for its code, as V8's heuristic finds a
-		// call below min_inlining_frequency: in a callee, that callee is
-		// not inlined, as it inlines all its calls or none
-		// (inlineFrame).
+		// call below min_inlining_frequency.
 		return nil, false
 	}
 	var site InlineSite
@@ -3495,9 +3484,6 @@ func (b *builder) inlineFrame(site InlineSite, calls, given []int, total *int, r
 	*total += len(site.Program.Code)
 	fr := &frame{p: q, fb: site.Feedback, site: site, result: result, base: b.nslots,
 		parent: b.cur, depth: b.cur.depth + 1, nest: b.cur.nest + 1, keep: -1, at: at, givenPC0: -1}
-	// Invoked as often as its call is made (siteFrequency): a call of its
-	// own is made that times its own frequency.
-	fr.freq, fr.freqKnown = b.siteFrequency(at)
 	if b.provisional || b.given != nil {
 		// Its path, which only a build inlining calls of what callees are
 		// given asks for.
@@ -3619,21 +3605,35 @@ type inlineAsked struct {
 }
 
 // inlineOrder orders two calls of the root's to inline, asked as x and y
-// (plan): by their frequencies, the call made more often first, one whose
-// frequency is known before one whose is not, as V8's JSInliningHeuristic
-// orders its candidates; among those not known, the call more loops hold
-// first, made more often but in the loops' first turns; then a
-// construction first.
+// (plan): by their frequencies, the call made more often first, as V8's
+// JSInliningHeuristic orders its candidates (frequency); then the call
+// more loops hold first; then a construction first.
 func inlineOrder(x, y *inlineAsked) int {
-	switch {
-	case x.known != y.known:
-		return b2i(y.known) - b2i(x.known)
-	case x.known && x.freq != y.freq:
-		return cmp.Compare(y.freq, x.freq)
+	switch fx, fy := x.frequency(), y.frequency(); {
+	case fx != fy:
+		return cmp.Compare(fy, fx)
 	case x.loops != y.loops:
 		return int(y.loops - x.loops)
 	}
 	return b2i(y.ok && y.site.Construct) - b2i(x.ok && x.site.Construct)
+}
+
+// frequency is how often k's call is made for each invocation of the
+// function, to order the calls to inline by (inlineOrder): the existing
+// tiers' count where known (FrequencyFeedback); otherwise as often as the
+// order before the counts took it, so that no call the counts do not know
+// is judged colder than it was -- once for each invocation outside the
+// function's loops, more often than any count inside one. V8 knows almost
+// every call's frequency; a call here may be of a body the call path
+// answers without a frame, which nothing counts.
+func (k *inlineAsked) frequency() float64 {
+	switch {
+	case k.known:
+		return k.freq
+	case k.loops > 0:
+		return math.Inf(1)
+	}
+	return 1
 }
 
 // loopNesting has asked, by PC, how many of p's loops hold each PC, and
@@ -4831,14 +4831,13 @@ func (b *builder) plan() error {
 	// construction first: what inlining's budget (maxInlineTotal) allows
 	// goes to what saves the most, as V8's goes to the sites its feedback
 	// finds called most often for each call of the function
-	// (JSInliningHeuristic's candidates, by frequency, those whose
-	// frequency is known first: inlineOrder). Where the existing tiers have
-	// not counted a call (FrequencyFeedback), a call that loops hold is
-	// taken as made more often than one outside them, in all but the
-	// loops' first turns. A construction not inlined is made by a call of
-	// Go wherever its constructor has no code native callers may call --
-	// one forwarding its arguments, Prototype's Class.create's -- where any
-	// other call is a native call: inlined in the order of their PCs, the
+	// (JSInliningHeuristic's candidates, by frequency); a call whose
+	// frequency is not known is taken as made once outside the function's
+	// loops, and more often than any inside one (inlineOrder). A
+	// construction not inlined is made by a call of Go wherever its
+	// constructor has no code native callers may call -- one forwarding its
+	// arguments, Prototype's Class.create's -- where any other call is a
+	// native call: inlined in the order of their PCs, the
 	// calls before a function's constructions had taken the bounds once
 	// callees reading globals and making constructions of their own could
 	// be inlined, and RayTrace's constructions of its colors and
