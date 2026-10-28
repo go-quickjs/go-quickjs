@@ -106,6 +106,18 @@ jobs:
       CGO_ENABLED: "0"
       QUICKJS_REQUIRE_JIT: "1"
     steps:
+      # The machine, first, which a failure on a Windows runner needs:
+      # a few of them have met corrupted memory ("found pointer to free
+      # object") in the steps below, in Check encodings and in Exercise
+      # native execution, which no other runner has in a thousand runs.
+      - name: Machine
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $p = Get-CimInstance Win32_Processor
+          "CPU: " + $p.Name + " | " + $p.Caption
+          "OS: " + (Get-CimInstance Win32_OperatingSystem).Version
+
       - name: Check out repository
         uses: actions/checkout@v4
 
@@ -130,17 +142,6 @@ jobs:
 
       - name: Check native pointer lifetimes
         run: go test -tags quickjs_jit -gcflags=all=-d=checkptr=2 -count=1 -timeout=10m ./internal/jit/... ./internal/vm . -run 'JIT|Native|Program|Validate|Lower'
-
-      # The machine, which a failure on a Windows runner needs: two of
-      # about thirty runners met corrupted memory in about half their runs
-      # of the step below, no other runner in a thousand runs.
-      - name: Machine
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $p = Get-CimInstance Win32_Processor
-          "CPU: " + $p.Name + " | " + $p.Caption
-          "OS: " + (Get-CimInstance Win32_OperatingSystem).Version
 
       # Both emitters' code, for every target, against golang.org/x/arch's
       # disassemblers: a module of its own, so go-quickjs never depends on it.
