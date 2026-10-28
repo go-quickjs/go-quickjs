@@ -98,10 +98,11 @@ func TestMulLarge(t *testing.T) {
 // withThresholds runs f with the thresholds lowered as low as each method
 // allows, restored after.
 func withThresholds(f func()) {
-	saved := [...]int{toomThreshold, fftThreshold, burnikelThreshold, barrettThreshold, newtonThreshold}
+	saved := [...]int{toomThreshold, fftThreshold, burnikelThreshold, barrettThreshold, newtonThreshold, parseSplit}
 	defer func() {
-		toomThreshold, fftThreshold, burnikelThreshold, barrettThreshold, newtonThreshold = saved[0], saved[1], saved[2], saved[3], saved[4]
+		toomThreshold, fftThreshold, burnikelThreshold, barrettThreshold, newtonThreshold, parseSplit = saved[0], saved[1], saved[2], saved[3], saved[4], saved[5]
 	}()
+	parseSplit = 2
 	toomThreshold = karatsubaThreshold
 	fftThreshold = 64
 	burnikelThreshold = 4
@@ -319,9 +320,6 @@ func checkConv(t *testing.T, r *rand.Rand, n, base int) {
 		if got != want {
 			t.Fatalf("%d words, %d, in base %d: %d digits, want %d; first difference at %d", n, i, base, len(got), len(want), firstDiff(got, want))
 		}
-		if n > 2000 {
-			continue
-		}
 		p, ok := Parse(want, base)
 		if !ok {
 			t.Fatalf("%d words, %d: not parsed in base %d", n, i, base)
@@ -394,5 +392,45 @@ func FuzzAppend(f *testing.F) {
 				t.Fatalf("%v in base %d, thresholds lowered: %s", bx, b, got)
 			}
 		})
+	})
+}
+
+func FuzzParse(f *testing.F) {
+	f.Add("123", uint8(10), uint16(0))
+	f.Add("9z8y7x", uint8(36), uint16(3000))
+	f.Fuzz(func(t *testing.T, s string, base uint8, repeat uint16) {
+		b := 2 + int(base)%35
+		// s, repeated, of digits only: a string of up to some 60000
+		// digits.
+		var sb []byte
+		for i := 0; i < len(s); i++ {
+			if digitValue(s[i]) < b {
+				sb = append(sb, s[i])
+			}
+		}
+		if len(sb) > 0 {
+			for n := int(repeat % 3000); n > 0 && len(sb) < 60000; n-- {
+				sb = append(sb, sb[:min(len(sb), 20)]...)
+			}
+		}
+		want, ok := new(big.Int).SetString(string(sb), b)
+		got, gok := Parse(string(sb), b)
+		if ok != gok || len(sb) > 0 && toBig(got).Cmp(want) != 0 {
+			t.Fatalf("%q in base %d: %v %v, want %v %v", sb, b, toBig(got), gok, want, ok)
+		}
+		withThresholds(func() {
+			got, gok := Parse(string(sb), b)
+			if ok != gok || len(sb) > 0 && toBig(got).Cmp(want) != 0 {
+				t.Fatalf("%q in base %d, thresholds lowered: %v %v", sb, b, toBig(got), gok)
+			}
+		})
+		// A character past the base's digits fails, wherever it is.
+		if len(sb) > 0 && b < 36 {
+			bad := []byte(string(sb))
+			bad[int(repeat)%len(bad)] = digitChars[b]
+			if _, ok := Parse(string(bad), b); ok {
+				t.Fatalf("parsed %q in base %d", bad, b)
+			}
+		}
 	})
 }

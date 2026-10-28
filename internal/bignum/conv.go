@@ -251,12 +251,29 @@ func Parse(s string, base int) ([]uint, bool) {
 	return z, ok
 }
 
-// parse is Parse, p's account kept.
+// parseSplit is the chunks of digits, words, from which Parse reads a
+// magnitude by halves, not a chunk at a time: measured, as V8's
+// kFromStringLargeThreshold (300) is. In cycles on a Zen 2, decimal
+// strings by halves took 1.15 the time at 100 chunks, the same at 150,
+// 0.81 at 200, 0.58 at 600, 0.28 at 3000. A variable, which the tests
+// lower.
+var parseSplit = 150
+
+// parse is Parse, p's account kept: a power of two's digits as bits; a
+// long string's chunks of a word's digits each, combined by pairs, by
+// halves, which is products of the size of what they combine, not a
+// chunk at a time, which is quadratic, as V8's fromstring.cc reads them.
 func parse(s string, base int, p *proc) ([]uint, bool) {
 	if s == "" {
 		return nil, false
 	}
+	if base&(base-1) == 0 {
+		return parsePow2(s, uint(bits.TrailingZeros(uint(base))), p)
+	}
 	cw, cn := chunk(base)
+	if n := (len(s) + cn - 1) / cn; n >= parseSplit {
+		return parseHalves(s, base, cw, cn, n, p)
+	}
 	z := make([]uint, 0, len(s)/cn+2)
 	for i := 0; i < len(s); {
 		// A chunk of digits, the first one short if it must be.
@@ -286,6 +303,91 @@ func parse(s string, base int, p *proc) ([]uint, bool) {
 		i += k
 	}
 	return Norm(z), true
+}
+
+// parsePow2 is parse of s's digits in base 2^b: its bits, from its last
+// digit on.
+func parsePow2(s string, b uint, p *proc) ([]uint, bool) {
+	z := make([]uint, (len(s)*int(b)+W-1)/W)
+	base := 1 << b
+	pos := 0
+	for i := len(s) - 1; i >= 0; i-- {
+		d := digitValue(s[i])
+		if d >= base {
+			return nil, false
+		}
+		w, o := pos/W, uint(pos%W)
+		z[w] |= uint(d) << o
+		if o+b > W {
+			z[w+1] |= uint(d) >> (W - o)
+		}
+		pos += int(b)
+	}
+	p.spend(len(z))
+	return Norm(z), true
+}
+
+// parseHalves is parse of s's n chunks of cn digits, the first short: the
+// chunks' values, least significant first, each a word; then pairs of
+// them, each the higher times cw plus the lower, in two words; then pairs
+// of those, the higher times cw^2, in four; and so on, each level's
+// elements, of 2^l words, a number below cw^(2^l), and the last of an
+// odd count carried up as it is.
+func parseHalves(s string, base int, cw uint, cn, n int, p *proc) ([]uint, bool) {
+	defer p.release(p.mark())
+	a, b := p.alloc(2*n), p.alloc(2*n)
+	for j := 0; j < n; j++ {
+		hi := len(s) - j*cn
+		var v uint
+		for _, c := range []byte(s[max(hi-cn, 0):hi]) {
+			d := digitValue(c)
+			if d >= base {
+				return nil, false
+			}
+			v = v*uint(base) + uint(d)
+		}
+		a[j] = v
+	}
+	if p.spend(len(s)) {
+		return nil, false
+	}
+	m := []uint{cw}
+	size := 1
+	for cnt := n; cnt > 1; cnt = (cnt + 1) / 2 {
+		if size > 1 {
+			sq := p.alloc(2 * len(m))
+			m = sqrAny(sq, m, p)
+			if p.stopped() {
+				return nil, false
+			}
+		}
+		for j := 0; j < cnt/2; j++ {
+			lo := Norm(a[2*j*size : (2*j+1)*size])
+			hi := Norm(a[(2*j+1)*size : (2*j+2)*size])
+			z := b[2*j*size : 2*(j+1)*size]
+			clear(z)
+			if len(hi) > 0 {
+				if len(hi) >= len(m) {
+					mul(z[:len(hi)+len(m)], hi, m, p)
+				} else {
+					mul(z[:len(hi)+len(m)], m, hi, p)
+				}
+				if p.stopped() {
+					return nil, false
+				}
+			}
+			addAt(z, lo, 0)
+		}
+		if cnt&1 != 0 {
+			last := (cnt - 1) * size
+			copy(b[last:], a[last:last+size])
+			clear(b[last+size : last+2*size])
+		}
+		a, b = b, a
+		size *= 2
+	}
+	z := Norm(a[:size])
+	return append([]uint(nil), z...), true
 }
 
 // digitValue is a digit's value, or 99 for a character that is no digit.
