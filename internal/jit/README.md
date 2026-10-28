@@ -110,18 +110,27 @@ threshold compiles at once, as tests do (`jitCallThreshold` 1).
 
 **Call frequency.** As V8's lower tiers count, in a function's feedback
 vector, its invocations and each call site's calls, the existing tiers
-count them where every call they make with a frame passes once the JIT is
-on, the call path's hook (`tryJITFrame`): the callee's invocation, and the
-call at its caller's site, the frame below, whose pc is past the call as a
-stack trace reads it (the VM's `jitCallCounts`, `jitCountCall`). They
-count while the function's code is to be compiled -- its entry warming,
-its code invalidated -- from its first entry on, which its later entries
-and the cache's ghosts keep (`jitCounting`). Native code counts nothing:
-its own calls through Go, at an exit and of callees with no code are left
-out (`goCallDepth`, `nativeCallDepth`). A call the call path answers
-without a frame -- a pure body's, a leaf's -- is not counted, nor one
-through `Function.prototype.call`; such a site's frequency is not known
-(`jitCallFrequency`).
+count them where every call they make passes once the JIT is on: the call
+path's hook (`tryJITFrame`), for a call made with a frame -- the callee's
+invocation, and the call at its caller's site, the frame below, whose pc
+is past the call as a stack trace reads it (the VM's `jitCallCounts`,
+`jitCountCall`) -- and a pure body's evaluation, for one the call path
+answers without a frame (`jitCountPure`). They count while the
+function's code is to be compiled -- its entry warming, its code
+invalidated -- from its first entry on, which its later entries and the
+cache's ghosts keep (`jitCounting`), and only the calls of frames whose
+invocations they counted (`jitCodeFields`' `jitCounting`). Native code
+counts nothing: its own calls through Go, at an exit and of callees with
+no code are left out (`goCallDepth`, `nativeCallDepth`), and so are the
+calls of a frame it left to the interpreter. A site's frequency is its
+calls over its function's runs (`jitCallFrequency`), known where every
+callee its decisions name is one whose calls they count -- not a leaf's
+other bodies (`bytecode.LeafKind`), which the call path answers without a
+frame, nor one called through `Function.prototype.call`, nor a built-in
+-- and not for a call they never made that native code went on to make,
+learned at its exits (`jitCountLearned`): V8's code deoptimizes at a call
+its feedback has none for, to be compiled again from the counts its
+interpreter makes then.
 
 **Calls.** A call the VM has seen call a compiled function is made
 natively: the callee's frame is made in the VM's stack, its context is the

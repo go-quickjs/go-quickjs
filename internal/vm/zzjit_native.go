@@ -400,6 +400,10 @@ type jitCodeFields struct {
 	jitResumeSkip   uint8
 	jitGenericCalls uint8
 	jitHint         [4]byte
+	// jitCounting says the existing tiers count the calls of the
+	// function's frames of the template's closures, which they have since
+	// one of its invocations they counted (jitCountRun, jitCountCallAt).
+	jitCounting bool
 }
 
 // hint is the hint of the code of cl's function, its template's closures'
@@ -2496,7 +2500,7 @@ func (r *Runtime) tryJITFrame(f *frame) (Value, error, bool) {
 		if f.cl.jitCalls < a {
 			if e != nil {
 				// A closure of another template's of a function warming.
-				jitCountRun(e)
+				jitCountRun(e, f.cl)
 			}
 			return Undefined, nil, false
 		}
@@ -2628,7 +2632,7 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, err
 		}
 		if !r.jitWarmUp(f.cl, e, r.jitTierWork(f.cl.fn, e, pc, osr, spent)) {
 			if !osr {
-				jitCountRun(e)
+				jitCountRun(e, f.cl)
 			}
 			return Undefined, nil, false
 		}
@@ -2658,7 +2662,7 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, err
 		if e.invalid {
 			if !r.jitTierUp(f.cl, e, r.jitTierWork(f.cl.fn, e, pc, osr, spent)) {
 				if !osr {
-					jitCountRun(e)
+					jitCountRun(e, f.cl)
 				}
 				return Undefined, nil, false
 			}

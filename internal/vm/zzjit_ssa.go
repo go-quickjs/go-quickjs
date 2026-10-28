@@ -3494,6 +3494,9 @@ func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 	}
 	e.callSites[pc] = jitCallDone
 	r.jit.callsDecided++
+	// Made by native code, which the existing tiers' counts are not of
+	// (jitCountLearned).
+	jitCountLearned(e, pc)
 	o, cl := r.jitCalled(f, sp, in)
 	// The other functions it met while it settled: a table of functions,
 	// a handler each object has its own of. Such a call is polymorphic,

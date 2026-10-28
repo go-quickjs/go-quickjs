@@ -65,10 +65,12 @@ func frequencyCounts(t *testing.T, r *Runtime, name string) (uint32, []uint32) {
 // vector's allocation: exactly, in the interpreter and in the tree tier
 // alike. caller, invoked 50 times, counts 43 runs; g's call in the loop
 // 129 calls, three for each, the method call and the construction 43, the
-// call never made none; the pure body's, answered without a frame, and
-// g's through Function.prototype.call, made in call's frame, none. A call
+// call never made none; the pure body's, answered without a frame, 43
+// (jitCountPure), and g's through Function.prototype.call, made in call's
+// frame, none. A call
 // in tail position, not deep in the stack, is counted as any call is:
-// caller's of tail 43, tail's of g 43 of its own 43 runs.
+// caller's of tail 43, tail's of g 43 of its own 43 runs. Their
+// counts over the runs (jitCallCount) are 3, 1, 0 and 1.
 func TestJITCountsCallsBySite(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -83,7 +85,7 @@ func TestJITCountsCallsBySite(t *testing.T) {
 				t.Fatalf("caller's entry %+v, not warming: the test is of the existing tiers", e)
 			}
 			runs, calls := frequencyCounts(t, r, "caller")
-			if want := []uint32{129, 43, 0, 43, 0, 0, 43}; runs != 43 || !slices.Equal(calls, want) {
+			if want := []uint32{129, 43, 0, 43, 43, 0, 43}; runs != 43 || !slices.Equal(calls, want) {
 				t.Errorf("caller counts %d runs, calls %v; want 43, %v", runs, calls, want)
 			}
 			runs, calls = frequencyCounts(t, r, "tail")
@@ -96,7 +98,7 @@ func TestJITCountsCallsBySite(t *testing.T) {
 			}
 			for i, want := range []float64{3, 1, 0, 1} {
 				pc := int(e.calls.pcs[i])
-				if f, ok := jitCallFrequency(e, pc); !ok || f != want {
+				if f, ok := jitCallCount(e, pc); ok != (want >= 0) || ok && f != want {
 					t.Errorf("caller's call at %d: frequency %v, %v; want %v", pc, f, ok, want)
 				}
 			}
@@ -106,8 +108,9 @@ func TestJITCountsCallsBySite(t *testing.T) {
 
 // Every form of a call the compiler makes -- of a global, a local, a
 // captured binding, a method by name, by key, on this, optional, a
-// construction, calls in another's arguments, and of 0 to 5 arguments --
-// is counted at its own site, in the interpreter and in the tree tier: each
+// construction, calls in another's arguments, and of 0 to 5 arguments, of
+// pure bodies, which the call path answers without a frame, too -- is
+// counted at its own site, in the interpreter and in the tree tier: each
 // of forms' calls, made once at each invocation, counts its runs.
 func TestJITCountsEveryCallForm(t *testing.T) {
 	if !jitSSABackend {
@@ -119,13 +122,14 @@ func TestJITCountsEveryCallForm(t *testing.T) {
 			src := `
 				function h(a, b, c, d, e) { let t = (a | 0) + 1; return t }
 				function K(a) { let t = a; this.a = t }
-				var box = { h, k: 'h', p: { q: { h } } }
+				var box = { h, k: 'h', p: { q: { h } }, n: 3, pm(i) { return this.n + i } }
+				const p0 = () => 0, p1 = (x) => x * 2
 				function forms(o, i) {
 					const loc = h, up = (x) => { let z = x + 1; return z }
 					let s = h() + h(1) + h(1, 2) + h(1, 2, 3) + h(1, 2, 3, 4) + h(1, 2, 3, 4, 5)
 					s += loc(i) + box.h(i) + box[box.k](i) + box.p.q.h(i) + (box.h?.(i) ?? 0)
 					s += new K(i).a + h(h(i), h(i + 1))
-					s += o.self(i)
+					s += o.self(i) + box.pm(i) + p0() + p1(i)
 					function inner() { return loc(s) }
 					return s + inner() + up(i)
 				}

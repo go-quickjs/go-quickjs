@@ -477,8 +477,16 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 			sp--
 			cl.upvalues[in.A].set(stack[sp])
 		case pcReturn:
+			if jitBuilt && depth == 0 && r.jitOn() {
+				// Counted for the JIT at its call site, as a call made with
+				// a frame is (jitCountPure).
+				r.jitCountPure()
+			}
 			return stack[sp-1], true
 		case pcReturnUndef:
+			if jitBuilt && depth == 0 && r.jitOn() {
+				r.jitCountPure()
+			}
 			return Undefined, true
 		default:
 			return miss()
