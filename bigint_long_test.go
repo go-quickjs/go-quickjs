@@ -51,9 +51,11 @@ func TestLongBigIntOperationsAreInterruptible(t *testing.T) {
 				if v, err := rt.EvalContext(ctx, src); !errors.Is(err, context.DeadlineExceeded) {
 					t.Fatalf("= %v, %v, want the deadline", v, err)
 				}
-				if d := time.Since(start); d > 2*time.Second {
+				d := time.Since(start)
+				if d > 2*time.Second {
 					t.Errorf("stopped after %v", d)
 				}
+				t.Logf("stopped after %v", d)
 				// The runtime's next call runs.
 				if v, err := rt.Eval(`String(x % 1000n)`); err != nil || v.String() != "125" {
 					t.Errorf("after: %v, %v", v, err)

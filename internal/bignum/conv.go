@@ -143,8 +143,10 @@ func writePow2(buf []byte, w int, x []uint, s uint, p *proc) int {
 		}
 		w--
 		buf[w] = digitChars[d&mask]
+		if pos&(1<<20-1) < int(s) && p.spend(1<<20/W) {
+			return w
+		}
 	}
-	p.spend(len(x))
 	return w
 }
 
@@ -322,8 +324,10 @@ func parsePow2(s string, b uint, p *proc) ([]uint, bool) {
 			z[w+1] |= uint(d) >> (W - o)
 		}
 		pos += int(b)
+		if i&(1<<16-1) == 0 && p.spend(1<<16) {
+			return nil, false
+		}
 	}
-	p.spend(len(z))
 	return Norm(z), true
 }
 
@@ -347,9 +351,9 @@ func parseHalves(s string, base int, cw uint, cn, n int, p *proc) ([]uint, bool)
 			v = v*uint(base) + uint(d)
 		}
 		a[j] = v
-	}
-	if p.spend(len(s)) {
-		return nil, false
+		if j&(1<<12-1) == 1<<12-1 && p.spend(1<<12*cn) {
+			return nil, false
+		}
 	}
 	m := []uint{cw}
 	size := 1
