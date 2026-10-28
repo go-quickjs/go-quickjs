@@ -52,7 +52,10 @@ func appendNat(dst []byte, neg bool, x []uint, base int, p *proc) []byte {
 	buf := dst[start:]
 	w := len(buf)
 	cw, cn := chunk(base)
-	if len(x) > convSplit {
+	if base&(base-1) == 0 {
+		// A power of two's digits are the bits, a few at a time.
+		w = writePow2(buf, w, x, uint(bits.TrailingZeros(uint(base))), p)
+	} else if len(x) > convSplit {
 		pw := powers(cw, len(x), p)
 		if p.stopped() {
 			return dst
@@ -125,14 +128,46 @@ func writeSmall(buf []byte, w int, x []uint, base int, cw uint, cn int) int {
 	return w
 }
 
+// writePow2 writes x's digits in base 2^s backward into buf, ending
+// before w, each s of its bits, its leading zeros dropped, and returns
+// where they begin: in time linear in x, as V8's ToStringFormatter writes
+// a power of two's.
+func writePow2(buf []byte, w int, x []uint, s uint, p *proc) int {
+	mask := uint(1)<<s - 1
+	n := BitLen(x)
+	for pos := 0; pos < n; pos += int(s) {
+		i, o := pos/W, uint(pos%W)
+		d := x[i] >> o
+		if o+s > W && i+1 < len(x) {
+			d |= x[i+1] << (W - o)
+		}
+		w--
+		buf[w] = digitChars[d&mask]
+	}
+	p.spend(len(x))
+	return w
+}
+
+// convPower is a divisor writeSplit halves by, cw^(2^k), and whether it
+// divides by Barrett's method, and its reciprocal, made the first time it
+// does: a power divides as many of the halves of its size as there are,
+// each by the same reciprocal, as V8's tostring.cc keeps its levels'.
+type convPower struct {
+	d       []uint
+	inv     []uint
+	barrett bool
+}
+
 // powers are cw^(2^k), k from 0, while one is under the words of a
-// magnitude of n: the divisors writeSplit halves by.
-func powers(cw uint, n int, pr *proc) [][]uint {
-	p := [][]uint{{cw}}
+// magnitude of n: the divisors writeSplit halves by. A power of d words
+// divides about n/(2d) halves, by Barrett's method where that pays for
+// as many divisions by its reciprocal (barrettPays).
+func powers(cw uint, n int, pr *proc) []convPower {
+	p := []convPower{{d: []uint{cw}}}
 	for {
-		last := p[len(p)-1]
+		last := p[len(p)-1].d
 		if 2*len(last) > n {
-			return p
+			break
 		}
 		sq := make([]uint, 2*len(last))
 		if len(last) >= karatsubaThreshold {
@@ -143,8 +178,35 @@ func powers(cw uint, n int, pr *proc) [][]uint {
 		} else {
 			sq = Sqr(sq, last)
 		}
-		p = append(p, sq)
+		p = append(p, convPower{d: sq})
 	}
+	for i := range p {
+		d := len(p[i].d)
+		uses := max(1, n/(2*d))
+		p[i].barrett = d >= 2 && barrettPays(d, uses*d-1)
+	}
+	return p
+}
+
+// divide writes x/c's power to q and the remainder to r, by Barrett's
+// method and the power's reciprocal where it divides so, for a quotient
+// long enough, as divLarge would.
+func (c *convPower) divide(q, r, x []uint, pr *proc) ([]uint, []uint) {
+	n := len(c.d)
+	if !c.barrett || 2*(len(x)-n+1) < n {
+		return divMod(q, r, x, c.d, pr)
+	}
+	if c.inv == nil {
+		b := make([]uint, n)
+		shlInto(b, c.d, uint(bits.LeadingZeros(c.d[n-1])))
+		inv := make([]uint, n+1)
+		invert(inv, b, pr)
+		if pr.stopped() {
+			return nil, nil
+		}
+		c.inv = inv
+	}
+	return divBarrett(q, r, x, c.d, c.inv, pr)
 }
 
 // writeSplit writes x by halves, backward, ending before w, its leading
@@ -153,17 +215,18 @@ func powers(cw uint, n int, pr *proc) [][]uint {
 // its 2^k chunks of digits.
 //
 // A write pr stops leaves the digits undefined.
-func writeSplit(buf []byte, w int, x []uint, base int, cw uint, cn int, p [][]uint, pr *proc) int {
+func writeSplit(buf []byte, w int, x []uint, base int, cw uint, cn int, p []convPower, pr *proc) int {
 	if len(x) <= convSplit {
 		pr.spend(len(x) * len(x))
 		return writeSmall(buf, w, x, base, cw, cn)
 	}
 	k := len(p) - 1
-	for k > 0 && Cmp(p[k], x) > 0 {
+	for k > 0 && Cmp(p[k].d, x) > 0 {
 		k--
 	}
-	d := p[k]
-	q, r := divMod(make([]uint, QuoRoom(len(x), len(d))), make([]uint, len(d)), x, d, pr)
+	c := &p[k]
+	defer pr.release(pr.mark())
+	q, r := c.divide(pr.alloc(QuoRoom(len(x), len(c.d))), pr.alloc(len(c.d)), x, pr)
 	if pr.stopped() {
 		return w
 	}

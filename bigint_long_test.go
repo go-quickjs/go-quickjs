@@ -76,3 +76,22 @@ func TestLongBigIntOperationsUnderAMemoryLimit(t *testing.T) {
 		t.Errorf("= %v, %v", v, err)
 	}
 }
+
+// TestLongBigIntConversions pins the conversions of BigInts of hundreds of
+// thousands of bits, of either sign, in bases 10, 16, 7, 2 and 36, and back
+// from decimal, hexadecimal, octal and binary literals' strings: Node's
+// digits.
+func TestLongBigIntConversions(t *testing.T) {
+	checkEval(t, `const x = 3n ** 300000n + 12345n;
+const r = [];
+for (const v of [x, -x, x * x, -(x << 1000n)]) {
+  for (const b of [10, 16, 7, 2, 36]) {
+    const s = v.toString(b);
+    r.push(b + ':' + s.length + ':' + s.slice(0, 12) + ':' + s.slice(-12));
+  }
+}
+const s = String(-x * x);
+r.push(s.length, s.slice(0, 15), s.slice(-15), BigInt(s) === -x * x, BigInt("0x" + (x*x).toString(16)) === x * x, BigInt("0o" + x.toString(8)) === x, BigInt("0b" + x.toString(2)) === x);
+r.join(",")`,
+		"10:143137:237911753945:596566012346,16:118873:1ae9a8126486:1953551941ba,7:169373:246146655223:611665551405,2:475489:110101110100:000110111010,36:91973:1brkl51hml1m:wdw1wxwrvwl6,10:143138:-23791175394:596566012346,16:118874:-1ae9a812648:1953551941ba,7:169374:-24614665522:611665551405,2:475490:-11010111010:000110111010,36:91974:-1brkl51hml1:wdw1wxwrvwl6,10:286273:566020026653:407824423716,16:237745:2d44b671c3e6:babf6b33fb24,7:338746:101662456614:336552451534,2:950978:101101010001:101100100100,36:183945:1rdkvena9yuw:5gg11scyb410,10:143439:-25492449210:540800516096,16:119124:-1ae9a812648:000000000000,7:169730:-40162454536:006036624463,2:476490:-11010111010:000000000000,36:92167:-645mdwz43fa:qnk854xtju2o,286274,-56602002665327,098407824423716,true,true,true,true")
+}

@@ -291,3 +291,108 @@ func TestInvert(t *testing.T) {
 		test(3001)
 	})
 }
+
+// convNats are magnitudes of n words the conversion tests take: of each
+// kind, and powers of base and one less -- a remainder of zeros, the
+// halves' padding, and of nines -- where n words hold them.
+func convNats(r *rand.Rand, n, base int) [][]uint {
+	xs := [][]uint{}
+	for kind := 0; kind < 4; kind++ {
+		if n > 20000 && kind >= 2 {
+			// Of the longest, fewer.
+			continue
+		}
+		xs = append(xs, kindNat(r, kind, n))
+	}
+	digits := int(float64(n*W)/log2(base)) - 1
+	pw := new(big.Int).Exp(big.NewInt(int64(base)), big.NewInt(int64(digits)), nil)
+	xs = append(xs, fromBig(pw), fromBig(new(big.Int).Sub(pw, big.NewInt(1))))
+	return xs
+}
+
+func checkConv(t *testing.T, r *rand.Rand, n, base int) {
+	t.Helper()
+	for i, x := range convNats(r, n, base) {
+		bx := toBig(x)
+		want := bx.Text(base)
+		got := string(Append(nil, false, x, base))
+		if got != want {
+			t.Fatalf("%d words, %d, in base %d: %d digits, want %d; first difference at %d", n, i, base, len(got), len(want), firstDiff(got, want))
+		}
+		if n > 2000 {
+			continue
+		}
+		p, ok := Parse(want, base)
+		if !ok {
+			t.Fatalf("%d words, %d: not parsed in base %d", n, i, base)
+		}
+		check(t, fmt.Sprintf("parse %d words, %d, base %d", n, i, base), p, bx)
+	}
+}
+
+func firstDiff(a, b string) int {
+	for i := 0; i < len(a) && i < len(b); i++ {
+		if a[i] != b[i] {
+			return i
+		}
+	}
+	return min(len(a), len(b))
+}
+
+func TestConvLarge(t *testing.T) {
+	r := rand.New(rand.NewPCG(31, 32))
+	for _, n := range around(convSplit, 2*convSplit, 4*convSplit, 1000) {
+		for _, base := range []int{2, 3, 7, 8, 10, 16, 32, 36} {
+			checkConv(t, r, n, base)
+		}
+	}
+	sizes := []int{5000, 2*barrettThreshold + 3}
+	if !testing.Short() {
+		sizes = append(sizes, 8*barrettThreshold+5)
+	}
+	for _, n := range sizes {
+		for _, base := range []int{10, 16, 7} {
+			if n < 20000 || base == 10 {
+				checkConv(t, r, n, base)
+			}
+		}
+	}
+}
+
+func TestConvLowThresholds(t *testing.T) {
+	r := rand.New(rand.NewPCG(33, 34))
+	withThresholds(func() {
+		for n := 1; n < 300; n += 1 + n/5 {
+			for _, base := range []int{3, 10, 36} {
+				checkConv(t, r, n, base)
+			}
+		}
+		checkConv(t, r, 3000, 10)
+	})
+}
+
+func FuzzAppend(f *testing.F) {
+	f.Add([]byte{1, 2, 3}, uint8(10), uint16(0))
+	f.Add([]byte{0x9f, 0xff}, uint8(7), uint16(500))
+	f.Fuzz(func(t *testing.T, a []byte, base uint8, words uint16) {
+		b := 2 + int(base)%35
+		bx := new(big.Int).SetBytes(a)
+		if n := int(words % 4000); n > 0 && len(a) > 0 {
+			rep := make([]byte, n*W/8)
+			for i := range rep {
+				rep[i] = a[i%len(a)] ^ byte(i>>8)
+			}
+			bx.SetBytes(rep)
+		}
+		x := fromBig(bx)
+		want := bx.Text(b)
+		if got := string(Append(nil, false, x, b)); got != want {
+			t.Fatalf("%v in base %d: %s", bx, b, got)
+		}
+		withThresholds(func() {
+			if got := string(Append(nil, false, x, b)); got != want {
+				t.Fatalf("%v in base %d, thresholds lowered: %s", bx, b, got)
+			}
+		})
+	})
+}
