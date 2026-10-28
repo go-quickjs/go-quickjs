@@ -26,6 +26,9 @@ func divLarge(q, r, x, y []uint, p *proc) ([]uint, []uint) {
 	if 2*(m+1) < n {
 		return divShort(q, r, x, y, p)
 	}
+	if barrettPays(n, m) {
+		return divBarrett(q, r, x, y, nil, p)
+	}
 	defer p.release(p.mark())
 	// The block size: nb = j*2^e, at least n, 2^e the least power of two
 	// that halves it below the threshold.

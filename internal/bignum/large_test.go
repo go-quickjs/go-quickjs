@@ -98,11 +98,15 @@ func TestMulLarge(t *testing.T) {
 // withThresholds runs f with the thresholds lowered as low as each method
 // allows, restored after.
 func withThresholds(f func()) {
-	saved, savedFFT, savedBZ := toomThreshold, fftThreshold, burnikelThreshold
-	defer func() { toomThreshold, fftThreshold, burnikelThreshold = saved, savedFFT, savedBZ }()
+	saved := [...]int{toomThreshold, fftThreshold, burnikelThreshold, barrettThreshold, newtonThreshold}
+	defer func() {
+		toomThreshold, fftThreshold, burnikelThreshold, barrettThreshold, newtonThreshold = saved[0], saved[1], saved[2], saved[3], saved[4]
+	}()
 	toomThreshold = karatsubaThreshold
 	fftThreshold = 64
 	burnikelThreshold = 4
+	barrettThreshold = 40
+	newtonThreshold = 6
 	f()
 }
 
@@ -164,6 +168,12 @@ func divSizes() [][2]int {
 		add(3*n+1, n)
 		add(7*n+5, n)
 	}
+	for _, n := range []int{barrettThreshold, barrettThreshold + 1} {
+		add(2*n, n)
+		add(2*n+1, n)
+		add(3*n, n)
+		add(n+n/2, n)
+	}
 	for _, n := range []int{1000, 3000, 10000} {
 		add(2*n, n)
 		add(2*n+1, n)
@@ -182,7 +192,15 @@ func divSizes() [][2]int {
 // made y*q+r of a remainder of zero, of one, and of y-1.
 func checkDiv(t *testing.T, r *rand.Rand, nx, ny int) {
 	t.Helper()
+	// Of the longest, fewer: random and all ones.
+	long := nx > 15000
+	if long && testing.Short() {
+		return
+	}
 	for kind := 0; kind < 4; kind++ {
+		if long && kind >= 2 {
+			continue
+		}
 		y := kindNat(r, (kind+1)%4, ny)
 		xs := [][]uint{kindNat(r, kind, nx)}
 		if nx > ny {
@@ -200,6 +218,9 @@ func checkDiv(t *testing.T, r *rand.Rand, nx, ny int) {
 			q, rem := DivMod(make([]uint, QuoRoom(len(x), ny)), make([]uint, ny), x, y)
 			check(t, "quo "+what, q, bq)
 			check(t, "rem "+what, rem, br)
+			if long && i > 0 {
+				continue
+			}
 			q, _ = DivMod(make([]uint, QuoRoom(len(x), ny)), nil, x, y)
 			check(t, "quo alone "+what, q, bq)
 			_, rem = DivMod(nil, make([]uint, ny), x, y)
@@ -232,5 +253,41 @@ func TestDivLowThresholds(t *testing.T) {
 		for _, s := range [][2]int{{4000, 2000}, {4001, 1999}, {6000, 1000}, {3000, 2500}} {
 			checkDiv(t, r, s[0], s[1])
 		}
+	})
+}
+
+// TestInvert pins Newton's reciprocal, which Barrett's division guesses
+// with: v*X < 2^(2nW) <= v*(X+2), never over, at every size to 300 words
+// and some longer, with the threshold as it is and lowered.
+func TestInvert(t *testing.T) {
+	r := rand.New(rand.NewPCG(29, 30))
+	test := func(n int) {
+		for kind := 0; kind < 4; kind++ {
+			v := kindNat(r, kind, n)
+			v[n-1] |= 1 << (W - 1)
+			p := newProc(nil)
+			x := make([]uint, n+1)
+			invert(x, v, p)
+			p.done()
+			bv, bx := toBig(v), toBig(x)
+			b2n := new(big.Int).Lsh(big.NewInt(1), uint(2*n*W))
+			lo := new(big.Int).Mul(bv, bx)
+			hi := new(big.Int).Mul(bv, new(big.Int).Add(bx, big.NewInt(2)))
+			if lo.Cmp(b2n) >= 0 || hi.Cmp(b2n) < 0 {
+				t.Fatalf("n %d kind %d: the reciprocal %v of %v is off", n, kind, bx, bv)
+			}
+		}
+	}
+	for n := 1; n < 300; n += 1 + n/10 {
+		test(n)
+	}
+	for _, n := range []int{1000, 5000} {
+		test(n)
+	}
+	withThresholds(func() {
+		for n := 1; n < 300; n += 1 + n/10 {
+			test(n)
+		}
+		test(3001)
 	})
 }
