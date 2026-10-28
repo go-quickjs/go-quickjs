@@ -11884,8 +11884,13 @@ func (r *Runtime) jitEnterCallee(f *frame, e *jitEntry, ctx int) (Value, error) 
 	}
 	// As runFD runs a frame it made: its native code first, entered from
 	// Go -- which no native caller may jump to for now (notNative), not
-	// none at all -- or its tree.
+	// none at all -- or its tree. Native code's call, which the existing
+	// tiers' counts leave out (nativeCallDepth).
+	s := r.jit
+	was := s.nativeCallDepth
+	s.nativeCallDepth = r.frameDepth
 	v, err, native := r.tryJITFrame(f)
+	s.nativeCallDepth = was
 	if !native {
 		fn := f.cl.fn
 		t := (*tree)(atomic.LoadPointer(&fn.VMCode))

@@ -805,6 +805,12 @@ type jitEntry struct {
 	// frequency is not made of (jitCalledOften). Its code keeps it
 	// (jitCompileFor). See invocations.
 	invoked int64
+	// calls are what the existing tiers counted of the function's calls,
+	// and of its invocations, since it was first given an entry
+	// (jitCallCounts): its code, and the entries made for it after this
+	// one, keep them (jitCompileFor, jitGhost); nil until it is invoked
+	// with this entry.
+	calls *jitCallCounts
 	// slowSince is slowCalls when Go last stopped entering the code, and
 	// slowBackoff how many times it has: Go enters it again after
 	// jitNativeRetry<<slowBackoff calls, judging it afresh (jitRetrySlow).
@@ -960,6 +966,12 @@ type jitState struct {
 	// makes for native code (jitGoCall, jitGoCallNested), while it makes
 	// it: native code's call, not the existing tiers' (jitHotWork).
 	goCallDepth int
+	// nativeCallDepth is the same of a call native code left to Go at an
+	// exit, which Go makes on the code's frame (jitHost), and of a callee
+	// with no code native code called, which Go runs (jitEnterCallee):
+	// native code's calls, which the existing tiers' counts leave out
+	// (jitCountCall).
+	nativeCallDepth int
 	// arena holds the code of every entry: a few mappings, however many
 	// functions the runtime compiles.
 	arena *jit.Arena
@@ -1292,7 +1304,7 @@ func jitCompiledBytes(shapes []*shape, holders []*Object, inlinedAt, definesUnfe
 func (e *jitEntry) learnedBytes() int {
 	n := jitCapBytes(e.failed) + jitCapBytes(e.failedEntries) + jitCapBytes(e.resumed) + jitCapBytes(e.bigints) + jitCapBytes(e.bigwide) + jitCapBytes(e.literals) + jitCapBytes(e.poly) + jitCapBytes(e.typedReads) +
 		jitCapBytes(e.stringReads) + jitCapBytes(e.keyedReads) + jitCapBytes(e.keyedWrites) + jitCapBytes(e.strSites) + jitCapBytes(e.bigSites) + jitCapBytes(e.numSites) + jitCapBytes(e.boolSites) + jitCapBytes(e.nativeCalls) + jitCapBytes(e.inlines) + jitCapBytes(e.notInline) +
-		jitCapBytes(e.nativeCallers) + jitCapBytes(e.callSites) + jitCapBytes(e.settling)
+		jitCapBytes(e.nativeCallers) + jitCapBytes(e.callSites) + jitCapBytes(e.settling) + e.calls.bytes()
 	for i := range e.poly {
 		p := &e.poly[i]
 		n += jitCapBytes(p.cases) + jitCapBytes(p.reads) + jitCapBytes(p.adds) + jitCapBytes(p.missed)
@@ -1660,6 +1672,8 @@ type jitGhost struct {
 	keyedReads    []int32
 	keyedWrites   []int32
 	resumed       []uint32
+	// calls are the existing tiers' counts of its calls (jitCallCounts).
+	calls *jitCallCounts
 }
 
 // jitGhosts bounds the ghosts kept; past it they are forgotten.
@@ -1673,7 +1687,7 @@ func (s *jitState) ghost(addr uintptr, e *jitEntry) {
 	g := s.ghosts[addr]
 	g.evictions, g.asks, g.dropped = min(g.evictions+1, 16), 0, true
 	g.failed, g.failedEntries, g.typedReads, g.stringReads, g.keyedReads, g.keyedWrites = e.failed, e.failedEntries, e.typedReads, e.stringReads, e.keyedReads, e.keyedWrites
-	g.bigints, g.bigwide, g.resumed = e.bigints, e.bigwide, e.resumed
+	g.bigints, g.bigwide, g.resumed, g.calls = e.bigints, e.bigwide, e.resumed, e.calls
 	s.ghosts[addr] = g
 }
 
@@ -1688,7 +1702,7 @@ func (s *jitState) rememberFlushed(addr uintptr, e *jitEntry) {
 	g := s.ghosts[addr]
 	g.dropped = true
 	g.failed, g.failedEntries, g.typedReads, g.stringReads, g.keyedReads, g.keyedWrites = e.failed, e.failedEntries, e.typedReads, e.stringReads, e.keyedReads, e.keyedWrites
-	g.bigints, g.bigwide, g.resumed = e.bigints, e.bigwide, e.resumed
+	g.bigints, g.bigwide, g.resumed, g.calls = e.bigints, e.bigwide, e.resumed, e.calls
 	s.ghosts[addr] = g
 }
 
@@ -2312,12 +2326,13 @@ func (r *Runtime) jitCompileFor(fn *bytecode.Function, cl *closure, kind jitLowe
 	}
 	key := weak.Make(fn)
 	var invoked int64
+	var calls *jitCallCounts
 	if r.jit != nil {
 		if e := r.jit.cache[key]; e != nil {
 			if !e.warming && (!e.deferred || e.generation == r.jit.generation) {
 				return e
 			}
-			invoked = e.invoked
+			invoked, calls = e.invoked, e.calls
 			// Deferred for a generation past, or warming up (jitWarmFor):
 			// compiled now, its budget spent or a native caller's call
 			// asking for it, as before it had an entry.
@@ -2343,8 +2358,14 @@ func (r *Runtime) jitCompileFor(fn *bytecode.Function, cl *closure, kind jitLowe
 		return nil
 	}
 	s.serial++
-	e := &jitEntry{used: s.epoch(), serial: s.serial, hot: kind == jitLowerHot, invoked: invoked}
-	if g, ok := s.ghosts[uintptr(unsafe.Pointer(fn))]; ok {
+	e := &jitEntry{used: s.epoch(), serial: s.serial, hot: kind == jitLowerHot, invoked: invoked, calls: calls}
+	g, ok := s.ghosts[uintptr(unsafe.Pointer(fn))]
+	if e.calls == nil {
+		// The calls the existing tiers counted for its entry warming, or
+		// for one the cache dropped, if any (jitGhost).
+		e.calls = jitGhostCounts(g, ok, fn)
+	}
+	if ok {
 		// What its code dropped before had learned (jitGhost).
 		e.failed, e.failedEntries, e.typedReads, e.stringReads, e.keyedReads, e.keyedWrites = g.failed, g.failedEntries, g.typedReads, g.stringReads, g.keyedReads, g.keyedWrites
 		e.bigints, e.bigwide, e.resumed = g.bigints, g.bigwide, g.resumed
@@ -2440,8 +2461,12 @@ func (r *Runtime) jitCompileFor(fn *bytecode.Function, cl *closure, kind jitLowe
 // nothing else; without the JIT built in it is the constant false.
 func (r *Runtime) jitOn() bool { return r.jitEnabled }
 
-// tryJITFrame is the call path's hook, for a runtime that runs the JIT.
+// tryJITFrame is the call path's hook, for a runtime that runs the JIT. The
+// call that made the frame is counted at its caller's site first
+// (jitCountCall), and an invocation the existing tiers run where they
+// count the function's calls (jitCountRun).
 func (r *Runtime) tryJITFrame(f *frame) (Value, error, bool) {
+	r.jitCountCall()
 	if f.cl.jitRefused {
 		return Undefined, nil, false
 	}
@@ -2469,6 +2494,10 @@ func (r *Runtime) tryJITFrame(f *frame) (Value, error, bool) {
 	if a := r.jitFeedbackCalls(); f.cl.jitCalls < a && (e == nil || e.ssa == nil) {
 		f.cl.jitCalls++
 		if f.cl.jitCalls < a {
+			if e != nil {
+				// A closure of another template's of a function warming.
+				jitCountRun(e)
+			}
 			return Undefined, nil, false
 		}
 	}
@@ -2598,6 +2627,9 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, err
 			e.invoked++
 		}
 		if !r.jitWarmUp(f.cl, e, r.jitTierWork(f.cl.fn, e, pc, osr, spent)) {
+			if !osr {
+				jitCountRun(e)
+			}
 			return Undefined, nil, false
 		}
 		e = r.jitFor(f.cl)
@@ -2625,6 +2657,9 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, err
 		r.jitRecompileLearned(f.cl, e)
 		if e.invalid {
 			if !r.jitTierUp(f.cl, e, r.jitTierWork(f.cl.fn, e, pc, osr, spent)) {
+				if !osr {
+					jitCountRun(e)
+				}
 				return Undefined, nil, false
 			}
 		}
@@ -2731,6 +2766,10 @@ func (r *Runtime) jitWarmFor(cl *closure) *jitEntry {
 	}
 	s.serial++
 	e := &jitEntry{used: s.epoch(), serial: s.serial, warming: true, invoked: calls}
+	// Its calls counted while it warms, from what they counted for an
+	// entry the cache dropped, if any (jitGhost).
+	g, ok := s.ghosts[uintptr(unsafe.Pointer(fn))]
+	e.calls = jitGhostCounts(g, ok, fn)
 	e.ssaLoop = jitLoopLength(fn)
 	e.tierBudget = r.jitTierBudget(fn, e) - (calls-1)*int64(max(len(fn.Code), 1))
 	e.tierMark = jitFeedbackMark(cl)
@@ -3393,8 +3432,13 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 			continue
 		case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew, bytecode.OpTailCall, bytecode.OpTailCallMethod:
 			// One in tail position is an ordinary call, shallow in the
-			// stack, as the interpreter's is.
+			// stack, as the interpreter's is: native code's
+			// (nativeCallDepth).
+			s := r.jit
+			was := s.nativeCallDepth
+			s.nativeCallDepth = r.frameDepth + 1
 			v, sp, err = r.jitCallAt(jitCallInstr(in), sp)
+			s.nativeCallDepth = was
 		case bytecode.OpGetGlobal:
 			c := tctx{r: r, f: f, cl: f.cl, closureCode: f.cl.closureCode, locals: f.locals}
 			v, err = r.getGlobalAt(&c, in, pc)
