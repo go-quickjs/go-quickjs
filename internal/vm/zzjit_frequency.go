@@ -6,6 +6,7 @@ import (
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
 // Call frequency, as V8's feedback has it: how often a call site calls for
@@ -17,11 +18,13 @@ import (
 // where every call they make with a frame passes once the JIT is on: the
 // call path's hook, tryJITFrame, which the interpreter's calls, the tree
 // tier's call nodes and constructions, and the calls of built-ins and
-// accessors all reach once the callee's frame is made. The callee's frame
-// is the top one; its caller's, the one below, is at the call, its pc past
-// it, as a stack trace reads it (jitCountCall). Native code counts
-// nothing: its calls through Go, at its exits, and of callees with no code
-// are left out (jitState's goCallDepth, nativeCallDepth), and so are its
+// accessors all reach once the callee's frame is made, and the end of a
+// pure body's evaluation (pureCallAt), for a call the call path answers
+// without one. The callee's frame is the top one, or would be; its
+// caller's, the one below, is at the call, its pc past it, as a stack
+// trace reads it (jitCountCall, jitCountPure). Native code counts nothing:
+// its calls through Go, at its exits, and of callees with no code are left
+// out (jitState's goCallDepth, nativeCallDepth), and so are its
 // invocations.
 //
 // They are counted while the function's code is to be compiled: while
@@ -40,12 +43,12 @@ import (
 // are checked against (jitGhostCounts).
 //
 // A call the call path answers without a frame -- a leaf's
-// (bytecode.LeafKind) but a pure body's (jitCountPure), a built-in's -- is
-// not counted, nor a call made through Function.prototype.call, whose
-// frame is the built-in's: such a site's frequency is not known
-// (jitCallFrequency). A call in tail
-// position deep in the stack gives its frame up (tailCallDepth), and its
-// callee's frame is counted at its caller's caller's call.
+// (bytecode.LeafKind) other than a pure body's (jitCountPure), a
+// built-in's -- is not counted, nor a call made through
+// Function.prototype.call, whose frame is the built-in's: such a site's
+// frequency is not known (jitCallFrequency). A call in tail position deep
+// in the stack gives its frame up (tailCallDepth), and its callee's frame
+// is counted at its caller's caller's call.
 type jitCallCounts struct {
 	runs  uint32
 	code  int
@@ -236,6 +239,9 @@ func jitGhostCounts(g jitGhost, ok bool, fn *bytecode.Function) *jitCallCounts {
 // deoptimizes, to be compiled again from what its interpreter counts then;
 // native code learns the call at its exits instead, going on.
 func jitCallFrequency(e *jitEntry, pc int) (float64, bool) {
+	if e == nil {
+		return 0, false
+	}
 	counted := false
 	for _, list := range [...][]jitInline{e.inlines, e.nativeCalls} {
 		for _, x := range list {
@@ -281,4 +287,41 @@ func jitCallCount(e *jitEntry, pc int) (float64, bool) {
 		return 0, false
 	}
 	return float64(c.calls[i]) / float64(c.runs), true
+}
+
+// jitCallCold reports whether the call at pc of e's function, being
+// decided to call cl's, is known to be made too seldom to be inlined
+// (ssa.MinInliningFrequency), as V8's heuristic finds a call below
+// min_inlining_frequency: it is called natively, as any call not inlined
+// is. Its callees, cl's among them, are ones whose calls the existing
+// tiers count, or it is not known (jitCallFrequency).
+func jitCallCold(e *jitEntry, pc int, cl *closure) bool {
+	if e == nil || cl == nil || !jitCountedCallee(cl) {
+		return false
+	}
+	for _, list := range [...][]jitInline{e.inlines, e.nativeCalls} {
+		for _, x := range list {
+			if int(x.pc) == pc && !jitFramed(x) {
+				return false
+			}
+		}
+	}
+	f, ok := jitCallCount(e, pc)
+	return ok && f < ssa.MinInliningFrequency
+}
+
+// Frequency is ssa.FrequencyFeedback's: how often the call at pc is made
+// for each invocation of the frame's function, as the existing tiers
+// counted them (jitCallFrequency) -- the function's own entry's counts, an
+// inlined callee's too; not a pure body's, whose invocations the call path
+// answers without a frame are not counted, nor the calls they make.
+func (fb *jitFeedback) Frequency(pc int) (float64, bool) {
+	if fb.fn.Leaf != bytecode.LeafNone {
+		return 0, false
+	}
+	e := fb.e
+	if fb.root != nil || e == nil {
+		e = fb.r.jit.entryFor(fb.fn)
+	}
+	return jitCallFrequency(e, pc)
 }

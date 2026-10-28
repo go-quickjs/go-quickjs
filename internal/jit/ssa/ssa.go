@@ -1116,8 +1116,10 @@ type scratch struct {
 	liveUses                        []liveUse
 	liveNodes                       []liveNode
 	liveStack                       []*Block
-	// asked is plan's: each call's inlining asked of the feedback, by PC.
+	// asked is plan's: each call's inlining asked of the feedback, by PC;
+	// order the PCs of the calls it may inline, in the order it takes them.
 	asked []inlineAsked
+	order []int32
 	// phiIdx, phiUsers and phiFill are unboxPhis' list of each
 	// candidate's users (candUsers).
 	phiIdx, phiFill []int32

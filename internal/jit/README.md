@@ -147,9 +147,20 @@ their own frames made at an exit, and with the globals they read, read
 from their own sites, and the speculations their own code learned failed
 built generic. What a function inlines is bounded by size alone, as V8's
 JSInliningHeuristic bounds it, never by a count of calls: a callee's
-instructions, a budget of all a function inlines, which the calls loops
-hold get first, and past it only small callees (`ssa`'s
-`maxInlineTotal`, `maxInlineSmall`). A callee's throw, or a call its own
+instructions, a budget of all a function inlines, which the calls made
+most often get first, and past it only small callees (`ssa`'s
+`maxInlineTotal`, `maxInlineSmall`). How often is V8's call frequency,
+which the existing tiers count (Call frequency): a call made less often
+than `ssa.MinInliningFrequency` (0.15, V8's `min_inlining_frequency`)
+for each invocation of the function compiled is not inlined, small or
+not, and the VM decides it a native call (`jitCallCold`); the calls
+whose frequencies are known come first, the most frequent first, then
+those whose are not, the calls loops hold first (`ssa`'s
+`inlineOrder`). A call inside an inlined callee is made its own
+frequency times its callee's call's (`ssa.FrequencyFeedback`), as V8's
+graph builder gives an inlined callee its call's frequency: one below
+the minimum keeps the callee from being inlined, which inlines all its
+calls or none. A callee's throw, or a call its own
 code has never been seen to make, does not keep it from being inlined:
 native code leaves the
 inlined frame there, as V8's code deoptimizes at a call with no feedback

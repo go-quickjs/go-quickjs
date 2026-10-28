@@ -3603,7 +3603,8 @@ func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 		}
 		return
 	}
-	if len(met) == 0 && cl.fn != f.cl.fn && r.jitInlinesAt(cl, o, in) {
+	// One made too seldom to be inlined is called natively (jitCallCold).
+	if len(met) == 0 && cl.fn != f.cl.fn && !jitCallCold(e, pc, cl) && r.jitInlinesAt(cl, o, in) {
 		e.inlines = append(e.inlines, r.jitInlineTarget(int32(pc), cl, o, in))
 		e.callSites[pc] = jitCallInlined
 		e.inlinePending = true
@@ -3699,7 +3700,7 @@ func (r *Runtime) jitNativeCallsInline(e *jitEntry, inline func(int)) bool {
 		pc := int(x.pc)
 		one := !slices.ContainsFunc(e.nativeCalls, func(y jitInline) bool { return y.pc == x.pc && y.cl != x.cl })
 		if !one || x.cl == nil || x.active != nil || x.parent != nil || r.jit.entryFor(x.cl.fn) == e || e.callSites == nil || pc >= len(e.callSites) ||
-			e.callSites[pc] != jitCallNative || slices.Contains(e.notInline, x.pc) || !r.jitInlinesCalls(x.cl, jitInlineDepth-1) ||
+			e.callSites[pc] != jitCallNative || slices.Contains(e.notInline, x.pc) || jitCallCold(e, pc, x.cl) || !r.jitInlinesCalls(x.cl, jitInlineDepth-1) ||
 			x.pool != nil && !r.jitInlinesAt(x.cl, x.obj, bytecode.Instr{Op: bytecode.OpNew}) {
 			continue
 		}
@@ -6012,7 +6013,10 @@ func (r *Runtime) jitSeedCalls(cl *closure, e *jitEntry, p *ir.Program) {
 			r.jitSeedNativeCalls(e, fn, pc, in, append([]jitCallee{{o, callee}}, more...))
 			continue
 		}
-		if callee.fn != fn && r.jitInlinesAt(callee, o, in) {
+		// One made too seldom to be inlined is called natively
+		// (jitCallCold).
+		cold := jitCallCold(e, pc, callee)
+		if callee.fn != fn && !cold && r.jitInlinesAt(callee, o, in) {
 			e.inlines = append(e.inlines, r.jitInlineTarget(int32(pc), callee, o, in))
 			e.callSites[pc] = jitCallInlined
 			continue
@@ -6059,7 +6063,7 @@ func (r *Runtime) jitSeedCalls(cl *closure, e *jitEntry, p *ir.Program) {
 				}
 				continue
 			}
-			if callee.fn != fn && r.jitInlinesAt(callee, o, in) {
+			if callee.fn != fn && !cold && r.jitInlinesAt(callee, o, in) {
 				// Its calls decided now, it may be inlined with them, as
 				// V8 inlines a callee's callees: it would have been once
 				// its callers were compiled again for them.

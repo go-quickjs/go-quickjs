@@ -1,6 +1,7 @@
 package ssa
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"math"
@@ -271,6 +272,11 @@ func (b *builder) forEachAt(pc int) (ForEachSite, bool) {
 // for Go to make it there. It reports whether it planned it so.
 func (b *builder) planCallback(pc int, fp *forEachPlan, total *int) bool {
 	if fp.site.Inline == nil || fp.site.Inline.Program == nil || b.cur.nest >= maxInlineDepth {
+		return false
+	}
+	if f, ok := b.siteFrequency(pc); ok && f < minInliningFrequency {
+		// Its call made too seldom, as V8's call reducer gives the
+		// callback's call the frequency of the call of the built-in.
 		return false
 	}
 	s := *fp.site.Inline
@@ -2327,7 +2333,7 @@ func buildCalls(w *Workspace, p *ir.Program, fb Feedback, plan *calledPlan) (*Fu
 	f.written = f.bools(p.Locals + p.StackSize)
 	f.assigned = p.Assigned
 	b := &builder{p: p, fb: fb, f: f, nslots: p.Locals + p.StackSize}
-	b.root = &frame{p: p, fb: fb, at: -1, givenPC0: -1}
+	b.root = &frame{p: p, fb: fb, at: -1, givenPC0: -1, freq: 1, freqKnown: true}
 	b.cur = b.root
 	if plan != nil {
 		b.called, b.given = plan.calls, plan.given
@@ -2846,6 +2852,47 @@ type AppendFeedback interface {
 	ArrayProtos() ([2]Holder, bool)
 }
 
+// FrequencyFeedback is Feedback that knows how often each of a function's
+// calls is made for each invocation of it, as the existing tiers counted
+// them: V8's call frequency, a call site's count of calls over its
+// function's invocations, which V8's feedback vector keeps from its lower
+// tiers. The builder multiplies it through the frames it inlines, as V8's
+// graph builder gives an inlined callee its call's frequency as its own
+// invocations' (frame's freq): a call inside an inlined callee is made its
+// own frequency times its callee's call's. Inlining takes the calls made
+// most often first, and none made less often than minInliningFrequency
+// (plan, inlineSiteAt).
+type FrequencyFeedback interface {
+	// Frequency is how often the call at pc is made for each invocation
+	// of the frame's function, if the feedback knows.
+	Frequency(pc int) (float64, bool)
+}
+
+// minInliningFrequency is V8's min_inlining_frequency: a call made less
+// often than this for each invocation of the function being compiled is
+// not inlined, as JSInliningHeuristic does not take such a candidate,
+// small or not.
+const minInliningFrequency = 0.15
+
+// MinInliningFrequency is minInliningFrequency, for the VM, which decides
+// a call made less often a native call, not one to inline (its
+// jitCallCold).
+const MinInliningFrequency = minInliningFrequency
+
+// siteFrequency is how often the call at pc of the frame being translated
+// is made for each invocation of the function being compiled, if known
+// (FrequencyFeedback): the call's own frequency in its frame's function,
+// times the frame's (frame's freq).
+func (b *builder) siteFrequency(pc int) (float64, bool) {
+	fr := b.cur
+	ff, ok := b.fb.(FrequencyFeedback)
+	if !fr.freqKnown || !ok {
+		return 0, false
+	}
+	f, ok := ff.Frequency(pc)
+	return fr.freq * f, ok
+}
+
 // HasCacheFeedback is Feedback that has native code look the in
 // operator's answers up in the VM's cache of them (Func.HasCache): its
 // address, made if there is none yet, or 0 for none.
@@ -2977,6 +3024,13 @@ type frame struct {
 	given    bool
 	givenPC0 int
 	callee   *Value
+	// freq is how often the frame's function is invoked for each
+	// invocation of the function being compiled, where freqKnown: 1 for
+	// the root, and for a callee inlined, its call's frequency
+	// (siteFrequency), as V8's graph builder gives an inlined callee its
+	// call's frequency.
+	freq      float64
+	freqKnown bool
 }
 
 // givenPath is the path of a frame inlined at pc in the code of the frame
@@ -3049,6 +3103,13 @@ func (b *builder) inlineSiteAt(pc int, total *int, known *inlineAsked) (*frame, 
 	// given (givenSite), whatever else the call has called.
 	given := known != nil && known.given
 	if b.fb == nil || b.p.Code[pc].Op != ir.Host && !isAccessor || b.cur.nest >= maxInlineDepth || !isAccessor && !given && b.fb.Generic(pc) {
+		return nil, false
+	}
+	if f, ok := b.siteFrequency(pc); ok && f < minInliningFrequency {
+		// Made too seldom to pay for its code, as V8's heuristic finds a
+		// call below min_inlining_frequency: in a callee, that callee is
+		// not inlined, as it inlines all its calls or none
+		// (inlineFrame).
 		return nil, false
 	}
 	var site InlineSite
@@ -3434,6 +3495,9 @@ func (b *builder) inlineFrame(site InlineSite, calls, given []int, total *int, r
 	*total += len(site.Program.Code)
 	fr := &frame{p: q, fb: site.Feedback, site: site, result: result, base: b.nslots,
 		parent: b.cur, depth: b.cur.depth + 1, nest: b.cur.nest + 1, keep: -1, at: at, givenPC0: -1}
+	// Invoked as often as its call is made (siteFrequency): a call of its
+	// own is made that times its own frequency.
+	fr.freq, fr.freqKnown = b.siteFrequency(at)
 	if b.provisional || b.given != nil {
 		// Its path, which only a build inlining calls of what callees are
 		// given asks for.
@@ -3537,10 +3601,10 @@ func (b *builder) inlineFrame(site InlineSite, calls, given []int, total *int, r
 
 // inlineAsked is what the feedback gave for a call of the root's to
 // inline (Feedback's Inline), asked once while planning orders the calls
-// (plan): whether it gave a site, and whether planning took the call.
+// (plan): whether it gave a site.
 type inlineAsked struct {
-	site            InlineSite
-	ok, asked, done bool
+	site InlineSite
+	ok   bool
 	// given says the site is a closure the root makes, called where a
 	// callee calls what it is given (givenSite).
 	given bool
@@ -3548,6 +3612,28 @@ type inlineAsked struct {
 	// end, at a loop's header, is one past its furthest back edge, and
 	// ends how many loops end at the PC.
 	loops, end, ends int32
+	// freq is how often the call is made for each invocation of the
+	// function, where known (siteFrequency).
+	freq  float64
+	known bool
+}
+
+// inlineOrder orders two calls of the root's to inline, asked as x and y
+// (plan): by their frequencies, the call made more often first, one whose
+// frequency is known before one whose is not, as V8's JSInliningHeuristic
+// orders its candidates; among those not known, the call more loops hold
+// first, made more often but in the loops' first turns; then a
+// construction first.
+func inlineOrder(x, y *inlineAsked) int {
+	switch {
+	case x.known != y.known:
+		return b2i(y.known) - b2i(x.known)
+	case x.known && x.freq != y.freq:
+		return cmp.Compare(y.freq, x.freq)
+	case x.loops != y.loops:
+		return int(y.loops - x.loops)
+	}
+	return b2i(y.ok && y.site.Construct) - b2i(x.ok && x.site.Construct)
 }
 
 // loopNesting has asked, by PC, how many of p's loops hold each PC, and
@@ -4745,60 +4831,67 @@ func (b *builder) plan() error {
 	// construction first: what inlining's budget (maxInlineTotal) allows
 	// goes to what saves the most, as V8's goes to the sites its feedback
 	// finds called most often for each call of the function
-	// (JSInliningHeuristic's candidates, by frequency). The VM counts no
-	// site's calls: a call that loops hold is made more often than one
-	// outside them, in all but the loops' first turns. A construction not
-	// inlined is made by a call of Go wherever its constructor has no code
-	// native callers may call -- one forwarding its arguments, Prototype's
-	// Class.create's -- where any other call is a native call: inlined in
-	// the order of their PCs, the calls before a function's constructions
-	// had taken the bounds once callees reading globals and making
-	// constructions of their own could be inlined, and RayTrace's
-	// constructions of its colors and intersections were made by Go.
-	// By PC, from the workspace's scratch, taken while planning: an
-	// InlineSite a PC, made afresh at each compile, had been a fifth of
-	// what Typescript's compiles allocated.
+	// (JSInliningHeuristic's candidates, by frequency, those whose
+	// frequency is known first: inlineOrder). Where the existing tiers have
+	// not counted a call (FrequencyFeedback), a call that loops hold is
+	// taken as made more often than one outside them, in all but the
+	// loops' first turns. A construction not inlined is made by a call of
+	// Go wherever its constructor has no code native callers may call --
+	// one forwarding its arguments, Prototype's Class.create's -- where any
+	// other call is a native call: inlined in the order of their PCs, the
+	// calls before a function's constructions had taken the bounds once
+	// callees reading globals and making constructions of their own could
+	// be inlined, and RayTrace's constructions of its colors and
+	// intersections were made by Go. By PC, from the workspace's scratch,
+	// taken while planning: an InlineSite a PC, made afresh at each
+	// compile, had been a fifth of what Typescript's compiles allocated.
 	sc := b.f.scr()
 	asked := idTable(sc.asked, len(p.Code))
-	sc.asked = nil
-	defer func() { clear(asked); sc.asked = asked[:0] }()
-	for loops := loopNesting(p, asked); loops >= 0; loops-- {
-		for _, pass := range []bool{true, false} {
-			for pc := range p.Code {
-				if !reachable(p, pc) || b.inlined[pc] != nil || int(asked[pc].loops) != loops {
-					continue
-				}
-				k := &asked[pc]
-				if !k.asked {
-					k.asked = true
-					if pc0, ok := b.called[pc]; ok {
-						k.site, k.ok = b.calledSite(pc, pc0)
-					} else if _, isAccessor := b.accessor(pc); b.fb != nil && p.Code[pc].Op == ir.Host && !isAccessor && !b.fb.Generic(pc) {
-						k.site, k.ok = b.fb.Inline(pc)
-					}
-				}
-				if k.done || pass != (k.ok && k.site.Construct) {
-					continue
-				}
-				k.done = true
-				inlined := len(b.f.Inlined)
-				fr, ok := b.inlineSiteAt(pc, &total, k)
-				if pc0, called := b.called[pc]; ok && called {
-					fr.given, fr.givenPC0 = true, pc0
-				}
-				if ok && !b.host(pc) {
-					b.f.Inlined = b.f.Inlined[:inlined]
-				}
-				if ok && b.host(pc) {
-					// Not a call native code makes itself (nativeHost) -- an
-					// intrinsic its feedback names, though another site's
-					// feedback has it inline the function the call met.
-					if b.inlined == nil {
-						b.inlined = map[int]*frame{}
-					}
-					b.inlined[pc] = fr
-				}
+	order := sc.order[:0]
+	sc.asked, sc.order = nil, nil
+	defer func() { clear(asked); sc.asked, sc.order = asked[:0], order[:0] }()
+	loopNesting(p, asked)
+	for pc := range p.Code {
+		if !reachable(p, pc) || b.inlined[pc] != nil {
+			continue
+		}
+		k := &asked[pc]
+		_, isAccessor := b.accessor(pc)
+		if pc0, ok := b.called[pc]; ok {
+			k.site, k.ok = b.calledSite(pc, pc0)
+		} else if b.fb != nil && p.Code[pc].Op == ir.Host && !isAccessor && !b.fb.Generic(pc) {
+			k.site, k.ok = b.fb.Inline(pc)
+		}
+		if !k.ok && !isAccessor {
+			// Nothing to inline (inlineSiteAt).
+			continue
+		}
+		k.freq, k.known = b.siteFrequency(pc)
+		order = append(order, int32(pc))
+	}
+	slices.SortStableFunc(order, func(x, y int32) int { return inlineOrder(&asked[x], &asked[y]) })
+	for _, at := range order {
+		pc := int(at)
+		if b.inlined[pc] != nil {
+			continue
+		}
+		k := &asked[pc]
+		inlined := len(b.f.Inlined)
+		fr, ok := b.inlineSiteAt(pc, &total, k)
+		if pc0, called := b.called[pc]; ok && called {
+			fr.given, fr.givenPC0 = true, pc0
+		}
+		if ok && !b.host(pc) {
+			b.f.Inlined = b.f.Inlined[:inlined]
+		}
+		if ok && b.host(pc) {
+			// Not a call native code makes itself (nativeHost) -- an
+			// intrinsic its feedback names, though another site's
+			// feedback has it inline the function the call met.
+			if b.inlined == nil {
+				b.inlined = map[int]*frame{}
 			}
+			b.inlined[pc] = fr
 		}
 	}
 	b.unmakeCalled()
