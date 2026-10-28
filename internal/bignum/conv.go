@@ -28,7 +28,10 @@ func chunk(base int) (uint, int) {
 // halves, divided by a power of the base about the square root of it, each
 // half the same way, so that its time is a product's, not quadratic.
 func Append(dst []byte, neg bool, x []uint, base int) []byte {
-	return appendNat(dst, neg, x, base, nil)
+	p := newProc(nil)
+	dst = appendNat(dst, neg, x, base, p)
+	p.done()
+	return dst
 }
 
 // appendNat is Append, p's account kept.
@@ -152,9 +155,7 @@ func powers(cw uint, n int, pr *proc) [][]uint {
 // A write pr stops leaves the digits undefined.
 func writeSplit(buf []byte, w int, x []uint, base int, cw uint, cn int, p [][]uint, pr *proc) int {
 	if len(x) <= convSplit {
-		if pr != nil {
-			pr.spend(len(x) * len(x))
-		}
+		pr.spend(len(x) * len(x))
 		return writeSmall(buf, w, x, base, cw, cn)
 	}
 	k := len(p) - 1
@@ -181,7 +182,10 @@ func writeSplit(buf []byte, w int, x []uint, base int, cw uint, cn int, p [][]ui
 // Parse is the magnitude of s's digits in base, 2 to 36, of either case:
 // false for an empty s or one with another character.
 func Parse(s string, base int) ([]uint, bool) {
-	return parse(s, base, nil)
+	p := newProc(nil)
+	z, ok := parse(s, base, p)
+	p.done()
+	return z, ok
 }
 
 // parse is Parse, p's account kept.

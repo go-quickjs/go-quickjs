@@ -59,3 +59,23 @@ func BenchmarkKernels(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkMulThresholds times products of n words by n at each candidate
+// threshold of the method above Karatsuba's, for choosing it.
+func BenchmarkMulThresholds(b *testing.B) {
+	r := rand.New(rand.NewPCG(1, 1))
+	for _, n := range []int{120, 160, 200, 250, 300, 400, 600, 1000, 2000} {
+		x, y := randNat(r, n), randNat(r, n)
+		z := make([]uint, 2*n)
+		for _, t := range []int{150, 200, 250, 300, 400, 1 << 30} {
+			b.Run(strconv.Itoa(n)+"/toom"+strconv.Itoa(t), func(b *testing.B) {
+				saved := toomThreshold
+				toomThreshold = t
+				defer func() { toomThreshold = saved }()
+				for range b.N {
+					Mul(z, x, y)
+				}
+			})
+		}
+	}
+}

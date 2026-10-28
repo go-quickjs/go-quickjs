@@ -185,7 +185,7 @@ func DivMod(q, r, x, y []uint) ([]uint, []uint) {
 // divMod is DivMod, p's account kept: a long dividend's quotient by a
 // divisor of a few words that p could stop in pieces, a check between them.
 func divMod(q, r, x, y []uint, p *proc) ([]uint, []uint) {
-	if p != nil && len(y) > 1 && len(x)-len(y) > divRows(len(y)) {
+	if p.check != nil && len(y) > 1 && len(x)-len(y) > divRows(len(y)) {
 		return divPieces(q, r, x, y, p)
 	}
 	return DivMod(q, r, x, y)

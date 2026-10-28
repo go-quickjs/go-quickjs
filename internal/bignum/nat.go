@@ -126,7 +126,10 @@ func Mul(z, x, y []uint) []uint {
 		return z[:0]
 	}
 	if len(y) >= karatsubaThreshold {
-		return Norm(mul(z[:len(x)+len(y)], x, y, nil))
+		p := newProc(nil)
+		z = Norm(mul(z[:len(x)+len(y)], x, y, p))
+		p.done()
+		return z
 	}
 	basicMul(z, x, y)
 	return Norm(z[:len(x)+len(y)])
@@ -137,15 +140,15 @@ func Mul(z, x, y []uint) []uint {
 // of a long x that p could stop in pieces of x, a check between them.
 func mul(z, x, y []uint, p *proc) []uint {
 	switch {
+	case len(y) >= toomThreshold:
+		return toomMul(z, x, y, p)
 	case len(y) >= karatsubaThreshold:
 		return karatsubaMul(z, x, y, p)
-	case p != nil && len(x) > chopWords:
+	case p.check != nil && len(x) > chopWords:
 		return mulPieces(z, x, y, chopWords, p)
 	}
 	basicMul(z, x, y)
-	if p != nil {
-		p.spend(len(x) * len(y))
-	}
+	p.spend(len(x) * len(y))
 	return z
 }
 
@@ -159,7 +162,8 @@ const chopWords = 1024
 // its place.
 func mulPieces(z, x, y []uint, n int, p *proc) []uint {
 	clear(z)
-	t := make([]uint, n+len(y))
+	defer p.release(p.mark())
+	t := p.alloc(n + len(y))
 	for i := 0; i < len(x); i += n {
 		px := x[i:min(i+n, len(x))]
 		var pr []uint
@@ -179,7 +183,19 @@ func mulPieces(z, x, y []uint, n int, p *proc) []uint {
 // sqr writes x*x to z, 2*len(x) words, for len(x) at least
 // karatsubaThreshold, p's account kept.
 func sqr(z, x []uint, p *proc) []uint {
+	if len(x) >= toomThreshold {
+		return toom3(z, x, x, true, p)
+	}
 	return karatsubaMul(z, x, x, p)
+}
+
+// sqrAny writes x*x to z, which has room for 2*len(x) words, and returns
+// it normalized, p's account kept.
+func sqrAny(z, x []uint, p *proc) []uint {
+	if len(x) < karatsubaThreshold {
+		return Sqr(z, x)
+	}
+	return Norm(sqr(z[:2*len(x)], x, p))
 }
 
 // basicMul writes x*y to z[:len(x)+len(y)], schoolbook, a row a word of y:
@@ -207,7 +223,10 @@ func Sqr(z, x []uint) []uint {
 		return z[:0]
 	}
 	if n >= karatsubaThreshold {
-		return Norm(sqr(z[:2*n], x, nil))
+		p := newProc(nil)
+		z = Norm(sqr(z[:2*n], x, p))
+		p.done()
+		return z
 	}
 	if n < sqrThreshold {
 		// A product of the rows takes less than the products of different
@@ -278,9 +297,13 @@ const sqrThreshold = 20
 // the longer operand in pieces of the shorter's length, each piece's
 // product by Karatsuba's method, added in, with scratch of its own.
 func karatsubaMul(z, x, y []uint, p *proc) []uint {
-	clear(z)
 	m := len(y)
-	t := make([]uint, 2*m+karatsubaScratch(m))
+	defer p.release(p.mark())
+	if len(x) == m {
+		return karatsuba(z, x, y, p.alloc(karatsubaScratch(m)), p)
+	}
+	clear(z)
+	t := p.alloc(2*m + karatsubaScratch(m))
 	p2, rest := t[:2*m], t[2*m:]
 	for i := 0; i < len(x); i += m {
 		px := x[i:min(i+m, len(x))]
@@ -318,9 +341,7 @@ func karatsuba(z, x, y, t []uint, p *proc) []uint {
 	n := len(x)
 	if n < karatsubaThreshold {
 		basicMul(z, x, y)
-		if p != nil {
-			p.spend(n * n)
-		}
+		p.spend(n * n)
 		return z[:2*n]
 	}
 	h := n / 2
@@ -382,13 +403,13 @@ func subOne(z []uint) {
 
 // addAt adds x to z from word i on, z having room for the carry.
 func addAt(z, x []uint, i int) {
-	var c uint
-	j := 0
-	for ; j < len(x); j++ {
-		z[i+j], c = bits.Add(z[i+j], x[j], c)
+	n := len(x)
+	if n == 0 {
+		return
 	}
-	for ; c != 0; j++ {
-		z[i+j], c = bits.Add(z[i+j], 0, c)
+	c := addVV(z[i:i+n], z[i:i+n], x)
+	for j := i + n; c != 0; j++ {
+		z[j], c = bits.Add(z[j], 0, c)
 	}
 }
 
