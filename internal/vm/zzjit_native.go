@@ -1167,6 +1167,13 @@ type jitState struct {
 	// recompiled counts the entries made, to be compiled, for functions
 	// whose code the cache had dropped (jitGhost.dropped).
 	recompiled uint64
+	// The cache's clocks' time (running): from clockFrom, less
+	// compileTime, what the compiles took, and, compiling, the compile
+	// begun at compileFrom; compiling counts the compiles begun within
+	// it.
+	clockFrom, compileFrom time.Time
+	compileTime            time.Duration
+	compiling              int
 }
 
 // Only selected own reference fields are prepared. The receiver bound keeps
@@ -1682,18 +1689,24 @@ func (s *jitState) rememberFlushed(addr uintptr, e *jitEntry) {
 	s.ghosts[addr] = g
 }
 
-// jitFlushAge is how many of the flush's ticks (jitFlushNow) apart the
+// jitFlushAge is how many of the flush's ticks (flushNow) apart the
 // cache looks for code to flush (flush): code unused between two looks
-// is, a second apart. V8's code ages so before it is flushed. A variable,
-// which tests of the cache's room set past any tick they reach.
+// is, a second of the program's apart. V8's code ages so before it is
+// flushed. A variable, which tests of the cache's room set past any tick
+// they reach.
 var jitFlushAge uint64 = 20
 
-// jitFlushNow is the flush's clock: jitEpochTime's ticks, time alone. The
-// cache's epochs count the collector's cycles too, which a program that
-// collects all the while -- a test's collector, run in a loop -- has go by
-// within a call: code a function runs once a call was flushed within it.
-// A variable, which the tests set.
-var jitFlushNow = func() uint64 { return uint64(time.Since(jitEpochBase) / jitEpochTime) }
+// flushNow is the flush's clock: jitEpochTime's ticks of the program's
+// time (running) alone. The cache's epochs count the collector's cycles
+// too, which a program that collects all the while -- a test's collector,
+// run in a loop -- has go by within a call: code a function runs once a
+// call was flushed within it.
+func (s *jitState) flushNow() uint64 {
+	if jitFlushNow != nil {
+		return jitFlushNow()
+	}
+	return uint64(s.running() / jitEpochTime)
+}
 
 // flush drops, once every jitFlushAge ticks, the entries unused since its
 // last look, whatever room the budget has, as V8 flushes code that has
@@ -1709,7 +1722,7 @@ var jitFlushNow = func() uint64 { return uint64(time.Since(jitEpochBase) / jitEp
 // (rememberFlushed), and the function is compiled again once it is hot
 // again. It looks at a back-edge check (idle) and before a compile (age).
 func (s *jitState) flush() {
-	tick := jitFlushNow()
+	tick := s.flushNow()
 	if tick < s.flushedAt+jitFlushAge {
 		return
 	}
@@ -1898,8 +1911,59 @@ const (
 // workspaces are kept for (idle).
 const jitWorkAge = 2
 
-// epoch is the cache's clock (jitEpochNow).
-func (s *jitState) epoch() uint64 { return jitEpochNow() }
+// epoch is the cache's clock: the collector's cycles (jitGCEpoch), as V8
+// ages code by them, and, for a program that allocates little -- a
+// numeric kernel, one phase of a program's after another -- each
+// jitEpochTime of the program's time (running) besides.
+func (s *jitState) epoch() uint64 {
+	if jitEpochNow != nil {
+		return jitEpochNow()
+	}
+	g, k := jitGCEpoch.Load(), jitRepeatCycles.Load()
+	return g - min(k, g) + uint64(s.running()/jitEpochTime)
+}
+
+// jitEpochNow and jitFlushNow, where a test sets them, stand in for the
+// cache's clocks (epoch, flushNow).
+var jitEpochNow, jitFlushNow func() uint64
+
+// running is the program's time, which the cache's clocks run on: the
+// time since the runtime's JIT state was made, less what its compiles
+// took (compileBegin), which is the JIT's, not the program's. Code aged
+// by the compiles' time had the more of it dropped, and compiled again,
+// the more the JIT compiled: Octane's Typescript, its compiles a fifth of
+// its time, looked for code to flush a time more each run of three, and
+// compiled 70 to 190 functions again; a compile made longer, by a tenth,
+// compiled more again. V8 ages code by the collector's cycles and by what
+// the program runs, not by its compiler's work.
+func (s *jitState) running() time.Duration {
+	now := time.Now()
+	if s.clockFrom.IsZero() {
+		s.clockFrom = now
+	}
+	d := now.Sub(s.clockFrom) - s.compileTime
+	if s.compiling != 0 {
+		d -= now.Sub(s.compileFrom)
+	}
+	return d
+}
+
+// compileBegin begins a compile, whose time the cache's clocks leave out
+// (running) until compileEnd ends it; a compile made within one -- a
+// callee's -- is part of it.
+func (s *jitState) compileBegin() {
+	if s.compiling == 0 {
+		s.compileFrom = time.Now()
+	}
+	s.compiling++
+}
+
+// compileEnd ends the compile compileBegin began.
+func (s *jitState) compileEnd() {
+	if s.compiling--; s.compiling == 0 {
+		s.compileTime += time.Since(s.compileFrom)
+	}
+}
 
 // idle flushes code gone unused (flush), and lets the compiles' workspaces
 // go once the runtime has compiled nothing for jitWorkAge epochs, at a
@@ -1920,21 +1984,11 @@ func (s *jitState) idle() {
 var (
 	jitGCEpoch   atomic.Uint64
 	jitEpochOnce sync.Once
-	jitEpochBase = time.Now()
 )
 
-// jitEpochNow is the cache's clock: the collector's cycles (jitGCEpoch), as
-// V8 ages code by them, and, for a program that allocates little -- a
-// numeric kernel, one phase of a program's after another -- each
-// jitEpochTime besides. A variable, which the tests set.
-var jitEpochNow = func() uint64 {
-	g, k := jitGCEpoch.Load(), jitRepeatCycles.Load()
-	return g - min(k, g) + uint64(time.Since(jitEpochBase)/jitEpochTime)
-}
-
 // jitRepeatCycles are the collector's cycles JITCompileRepeat's compiles
-// ran, which the cache's clock leaves out, as it leaves out their time
-// (compileSSA moves jitEpochBase past it): the program's code ages, and is
+// ran, which the cache's clock leaves out, as it leaves out their time,
+// part of their compile's (running): the program's code ages, and is
 // flushed, as it would have without them.
 var jitRepeatCycles atomic.Uint64
 

@@ -13,7 +13,6 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
-	"time"
 	"unsafe"
 	"weak"
 
@@ -2050,6 +2049,10 @@ func (r *Runtime) compileSSA(fn *bytecode.Function, cl *closure, p *ir.Program, 
 	if e != nil && cl != nil {
 		r.jitSeenFeedback(cl, e)
 	}
+	// The compile's time is the JIT's, which the cache's clocks leave out
+	// (running).
+	r.jit.compileBegin()
+	defer r.jit.compileEnd()
 	keepLimit := jitKeepLimit
 	code, fb, err := r.compileSSAKeeping(fn, cl, p, e, keepLimit)
 	if errors.Is(err, mir.ErrKeeps) {
@@ -2060,11 +2063,10 @@ func (r *Runtime) compileSSA(fn *bytecode.Function, cl *closure, p *ir.Program, 
 		code, fb, err = r.compileSSAKeeping(fn, cl, p, e, keepLimit)
 	}
 	if err == nil && JITCompileRepeat > 0 {
-		t0, c0 := time.Now(), jitGCCycles()
+		c0 := jitGCCycles()
 		for range JITCompileRepeat {
 			r.jitCompileAgain(fn, cl, p, e, keepLimit)
 		}
-		jitEpochBase = jitEpochBase.Add(time.Since(t0))
 		jitRepeatCycles.Add(jitGCCycles() - c0)
 	}
 	return code, fb, err

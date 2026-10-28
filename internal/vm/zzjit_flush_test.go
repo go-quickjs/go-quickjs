@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"slices"
 	"testing"
+	"time"
 	"weak"
 )
 
@@ -313,5 +314,51 @@ func TestJITFlushByTimeNotCollections(t *testing.T) {
 	}
 	if s.cache[weak.Make(jitGlobalClosure(r, "f").fn)] != e {
 		t.Fatal("f's code was flushed by the collector's cycles alone")
+	}
+}
+
+// The cache's clocks run on the program's time, which a compile's is not
+// (running): the JIT's own work had aged its code, the more of it dropped,
+// and compiled again, the more it compiled. Each compile made 200 times
+// over (JITCompileRepeat), the compiles take most of the run, which the
+// clocks leave out.
+func TestJITClocksLeaveOutCompiles(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	if _, err := r.Run(compileForTest(t, `function f(n) { var s = 0; for (var i = 0; i < n; i++) s += i; return s } f(10)`)); err != nil {
+		t.Fatal(err)
+	}
+	s := r.jit
+	if s == nil {
+		t.Fatal("the JIT did not run")
+	}
+	was := JITCompileRepeat
+	JITCompileRepeat = 200
+	t.Cleanup(func() { JITCompileRepeat = was })
+	start, from, compiled := time.Now(), s.running(), s.compileTime
+	v, err := r.Run(compileForTest(t, `
+		function g(n) { var s = 0; for (var i = 0; i < n; i++) s = (s + (i * 7) % 13) | 0; return s }
+		for (var k = 0; k < 50; k++) g(1000);
+		g(1000)`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The clocks are read before the wall, which began before them: what
+	// they ran is within it, to the nanosecond.
+	ran := s.running() - from
+	wall := time.Since(start)
+	if e := s.cache[weak.Make(jitGlobalClosure(r, "g").fn)]; e == nil || e.ssa == nil {
+		t.Fatalf("g has no code: %+v", e)
+	}
+	if got := v.Number(); got != 6000 {
+		t.Fatalf("g(1000) = %v, want 6000 (Node's)", got)
+	}
+	if s.compiling != 0 {
+		t.Fatalf("%d compiles still begun", s.compiling)
+	}
+	if c := s.compileTime - compiled; c < wall/2 || ran > wall-c {
+		t.Fatalf("the clocks ran %v of %v, %v of it compiling", ran, wall, c)
 	}
 }

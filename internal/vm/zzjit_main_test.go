@@ -11,7 +11,7 @@ import (
 
 // TestMain stops the JIT cache's flush clock (jitFlushNow) for this
 // package's tests. The flush drops code that has gone unused for a second
-// of wall time, so a test that runs a function, then others, and then
+// of the program's time, so a test that runs a function, then others, and then
 // looks at the first one's code would find it gone on a machine slow
 // enough: TestJITBigLeaf did, under checkptr on Windows. The flush's own
 // tests set its clock themselves (jitFlushForTest); the conformance and
