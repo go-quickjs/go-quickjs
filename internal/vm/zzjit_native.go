@@ -145,7 +145,7 @@ func (r *Runtime) JITStats() JITStats {
 	return JITStats{Compiled: s.compiled, Entries: s.entries, Guards: s.guards,
 		Hosts: s.hosts, Budgets: s.budgets, Interpreted: s.interpreted, SSAEntries: s.ssaEntries, SSARecords: s.ssaRecords,
 		Held: int64(s.held()), Budget: int64(r.jitBudget()), Evicted: s.evicted, Refused: s.refusedRoom,
-		Discarded: s.discarded, Reoptimized: s.reoptimized}
+		Discarded: s.discarded, Reoptimized: s.reoptimized, Inlined: s.inlined, InlinedCode: s.inlinedCode}
 }
 
 // JITCacheCounts reports what the JIT's cache dropped in this runtime and
@@ -1120,6 +1120,9 @@ type jitState struct {
 	ssaRecords  uint64
 	// backendPanics counts the compiles a backend refused for panicking.
 	backendPanics uint64
+	// inlined counts the callees the code placed inlines, and inlinedCode
+	// their instructions (ssa.Func's Inlined, InlinedCode).
+	inlined, inlinedCode uint64
 	// entered counts the native calls Go ran the callee of from its
 	// start, the callee having no native code (abi.ExitEnter).
 	entered uint64

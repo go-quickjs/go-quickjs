@@ -5163,6 +5163,7 @@ func (b *builder) plan() error {
 		blk.Backedge = b.f.bools(len(blk.Preds))
 		b.markBackedges(blk)
 	}
+	b.f.InlinedCode = total
 	return nil
 }
 

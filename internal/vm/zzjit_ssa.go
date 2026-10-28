@@ -2168,6 +2168,8 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 	if err != nil {
 		return nil, nil, err
 	}
+	s.inlined += uint64(len(f.Inlined))
+	s.inlinedCode += uint64(f.InlinedCode)
 	if JITCodeHook != nil {
 		JITCodeHook(jitFunctionOf(fn), code.Text(), mc)
 	}

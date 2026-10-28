@@ -129,6 +129,7 @@ func (r runtimeOf) Report(name string) {
 	was := jitReport.stats
 	fmt.Printf("  jit: %d compiled, %d compiled again, %d entries, %d guard failures, %d exits to Go, %d finished in the interpreter\n",
 		st.Compiled-was.Compiled, st.Reoptimized-was.Reoptimized, st.Entries-was.Entries, st.Guards-was.Guards, st.Hosts-was.Hosts, st.Interpreted-was.Interpreted)
+	fmt.Printf("  jit: %d callees inlined, %d instructions of them\n", st.Inlined-was.Inlined, st.InlinedCode-was.InlinedCode)
 	flushed, recompiled := v.JITCacheCounts()
 	fmt.Printf("  jit: %d dropped to make room, %d compiles refused it, %d of them once compiled; %d flushed unused, %d compiles of code dropped; holds %.1f of %.1f MiB\n",
 		st.Evicted-was.Evicted, st.Refused-was.Refused, st.Discarded-was.Discarded, flushed-jitReport.flushed, recompiled-jitReport.recompiled,

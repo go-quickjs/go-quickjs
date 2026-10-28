@@ -1007,6 +1007,10 @@ type Func struct {
 	// (InlineSite's Closure), at every depth, in the order they were
 	// decided.
 	Inlined []uintptr
+	// InlinedCode is how many instructions the callees the code inlines
+	// have, at every depth, the loops' callbacks among them: what
+	// inlining's budget (maxInlineTotal) is spent in.
+	InlinedCode int
 	// HostsLeft are the PCs of the function's own host operations (ir.Host)
 	// the code leaves to Go -- at an exit, or a call Go makes from native
 	// code (GoCall) -- none it makes natively, nor a call it makes or

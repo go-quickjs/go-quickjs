@@ -14,10 +14,12 @@ package vm
 // Budget the most it may (Config.JITMemoryLimit); Evicted counts the
 // functions whose code or refusal it dropped to make room, Refused the
 // compiles it found no room for, and Discarded those of them it found none
-// for only once it had compiled them.
+// for only once it had compiled them. Inlined counts the callees the code
+// it placed inlines, every compile's, and InlinedCode their instructions.
 type JITStats struct {
 	Compiled, Entries, Guards, Hosts, Budgets, Interpreted, SSAEntries, SSARecords uint64
 	Held, Budget                                                                   int64
 	Evicted, Refused, Discarded                                                    uint64
 	Reoptimized                                                                    uint64
+	Inlined, InlinedCode                                                           uint64
 }
