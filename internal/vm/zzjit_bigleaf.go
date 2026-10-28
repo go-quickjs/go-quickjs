@@ -158,13 +158,6 @@ func jitBigLeafMake(ctx *abi.Context, st *abi.GoCallState) uintptr {
 		// A result that may pass maxBigIntBits: Go's call, which throws.
 		return 0
 	}
-	if (div || mod) && lx >= bignum.Long || mul && lx+ly >= bignum.Long {
-		if r.bigStoppable() {
-			// A long product or quotient the host can stop, which
-			// throws: Go's call, bigOp's.
-			return 0
-		}
-	}
 	f := r.bigFree
 	if f == nil {
 		f = new(bigFreeList)
@@ -179,7 +172,9 @@ func jitBigLeafMake(ctx *abi.Context, st *abi.GoCallState) uintptr {
 		// which throws: the quotient truncated, the remainder the
 		// dividend's sign, in a block of its own length (bigOfKept) given
 		// back, the value before's, or a new one.
-		if ly == 0 {
+		if ly == 0 || lx >= bignum.Long && r.bigStoppable() {
+			// A long quotient the host can stop, which throws: Go's
+			// call, bigOp's.
 			return 0
 		}
 		xs, ys := unsafe.Slice((*uint)(x), lx), unsafe.Slice((*uint)(y), ly)
@@ -204,6 +199,11 @@ func jitBigLeafMake(ctx *abi.Context, st *abi.GoCallState) uintptr {
 			goto made
 		}
 		n = lx + ly
+		if n >= bignum.Long && r.bigStoppable() {
+			// A long product the host can stop, which throws: Go's
+			// call, bigOp's.
+			return 0
+		}
 		if blk = jitLeafTake(f, n); blk == nil {
 			if blk = jitLeafOwnRoom(jitLeafOwn(ctx, op, a, b), n); blk == nil {
 				blk = jitLeafNew(r, n)

@@ -89,6 +89,31 @@ func (r *Runtime) bigDivLong(op bytecode.Op, an bool, x []uint, bn bool, y []uin
 	return r.bigOfKept(an, rem), nil
 }
 
+// bigPowLong is bigPow's squarings and products of a power of
+// bignum.Long words or more, acc and sq its factors so far, t its scratch
+// and e what is left of its exponent.
+func (r *Runtime) bigPowLong(neg bool, acc, sq, t []uint, e uint64) (Value, error) {
+	check := r.bigCheck()
+	for {
+		if e&1 != 0 {
+			p, err := bignum.MulChecked(t[:len(acc)+len(sq)], acc, sq, check)
+			if err != nil {
+				return Undefined, err
+			}
+			acc = append(acc[:0], p...)
+		}
+		if e >>= 1; e == 0 {
+			break
+		}
+		p, err := bignum.SqrChecked(t[:2*len(sq)], sq, check)
+		if err != nil {
+			return Undefined, err
+		}
+		sq = append(sq[:0], p...)
+	}
+	return bigOf(neg, acc), nil
+}
+
 // bigLong reports whether v is a BigInt of bignum.Long words or more.
 func bigLong(v Value) bool {
 	if !v.isHeapBig() {

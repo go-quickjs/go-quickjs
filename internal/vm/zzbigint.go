@@ -372,29 +372,22 @@ func (r *Runtime) bigPow(xn bool, x []uint, b Value, yn bool, y []uint) (Value, 
 	acc[0] = 1
 	copy(sq, x)
 	t := make([]uint, 2*words)
-	// A long power's steps are bignum's checked ones.
-	var check func() error
+	neg := xn && b.int64Big()&1 != 0
 	if words >= bignum.Long {
-		check = r.bigCheck()
+		return r.bigPowLong(neg, acc, sq, t, e)
 	}
 	for {
 		if e&1 != 0 {
-			p, err := bignum.MulChecked(t[:len(acc)+len(sq)], acc, sq, check)
-			if err != nil {
-				return Undefined, err
-			}
+			p := bignum.Mul(t[:len(acc)+len(sq)], acc, sq)
 			acc = append(acc[:0], p...)
 		}
 		if e >>= 1; e == 0 {
 			break
 		}
-		p, err := bignum.SqrChecked(t[:2*len(sq)], sq, check)
-		if err != nil {
-			return Undefined, err
-		}
+		p := bignum.Sqr(t[:2*len(sq)], sq)
 		sq = append(sq[:0], p...)
 	}
-	return bigOf(xn && b.int64Big()&1 != 0, acc), nil
+	return bigOf(neg, acc), nil
 }
 
 // bigBits is the bitwise operator or shift op of two BigInts: a shift's

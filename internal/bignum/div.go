@@ -122,10 +122,7 @@ func DivMod(q, r, x, y []uint) ([]uint, []uint) {
 	}
 	n, m := len(y), len(x)-len(y)
 	if n >= burnikelThreshold && m >= burnikelThreshold {
-		p := newProc(nil)
-		q, r = divLarge(q, r, x, y, p)
-		p.done()
-		return q, r
+		return divLargeAlone(q, r, x, y)
 	}
 	// Scratch for the shifted operands: on the stack while they are small.
 	var buf [96]uint
@@ -185,6 +182,16 @@ func DivMod(q, r, x, y []uint) ([]uint, []uint) {
 		shrInto(r, u[:n], shift)
 		r = Norm(r)
 	}
+	return q, r
+}
+
+// divLargeAlone is divLarge with a proc of its own, as mulLarge is Mul's.
+//
+//go:noinline
+func divLargeAlone(q, r, x, y []uint) ([]uint, []uint) {
+	p := newProc(nil)
+	q, r = divLarge(q, r, x, y, p)
+	p.done()
 	return q, r
 }
 

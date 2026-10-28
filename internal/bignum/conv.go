@@ -28,13 +28,11 @@ func chunk(base int) (uint, int) {
 // halves, divided by a power of the base about the square root of it, each
 // half the same way, so that its time is a product's, not quadratic.
 func Append(dst []byte, neg bool, x []uint, base int) []byte {
-	p := newProc(nil)
-	dst = appendNat(dst, neg, x, base, p)
-	p.done()
-	return dst
+	return appendNat(dst, neg, x, base, nil)
 }
 
-// appendNat is Append, p's account kept.
+// appendNat is Append, p's account kept, nil for an operation no one can
+// stop, which makes its own where it needs one, for a long x.
 func appendNat(dst []byte, neg bool, x []uint, base int, p *proc) []byte {
 	if len(x) == 0 {
 		return append(dst, '0')
@@ -56,12 +54,7 @@ func appendNat(dst []byte, neg bool, x []uint, base int, p *proc) []byte {
 		// A power of two's digits are the bits, a few at a time.
 		w = writePow2(buf, w, x, uint(bits.TrailingZeros(uint(base))), p)
 	} else if len(x) > convSplit {
-		pw := powers(cw, len(x), p)
-		if p.stopped() {
-			return dst
-		}
-		w = writeSplit(buf, w, x, base, cw, cn, pw, p)
-		if p.stopped() {
+		if w = appendSplit(buf, w, x, base, cw, cn, p); w < 0 {
 			return dst
 		}
 	} else {
@@ -70,6 +63,25 @@ func appendNat(dst []byte, neg bool, x []uint, base int, p *proc) []byte {
 	// The digits were written from the end of the room: move them down.
 	copy(buf, buf[w:])
 	return dst[:start+len(buf)-w]
+}
+
+// appendSplit writes x's digits by halves backward into buf, ending
+// before w, and returns where they begin, or -1 where p stopped it: with
+// a proc of its own for a nil p.
+func appendSplit(buf []byte, w int, x []uint, base int, cw uint, cn int, p *proc) int {
+	if p == nil {
+		p = newProc(nil)
+		defer p.done()
+	}
+	pw := powers(cw, len(x), p)
+	if p.stopped() {
+		return -1
+	}
+	w = writeSplit(buf, w, x, base, cw, cn, pw, p)
+	if p.stopped() {
+		return -1
+	}
+	return w
 }
 
 // log2 is a base's logarithm in base 2, for the digits of a magnitude.
@@ -143,7 +155,7 @@ func writePow2(buf []byte, w int, x []uint, s uint, p *proc) int {
 		}
 		w--
 		buf[w] = digitChars[d&mask]
-		if pos&(1<<20-1) < int(s) && p.spend(1<<20/W) {
+		if p != nil && pos&(1<<20-1) < int(s) && p.spend(1<<20/W) {
 			return w
 		}
 	}
@@ -247,10 +259,7 @@ func writeSplit(buf []byte, w int, x []uint, base int, cw uint, cn int, p []conv
 // Parse is the magnitude of s's digits in base, 2 to 36, of either case:
 // false for an empty s or one with another character.
 func Parse(s string, base int) ([]uint, bool) {
-	p := newProc(nil)
-	z, ok := parse(s, base, p)
-	p.done()
-	return z, ok
+	return parse(s, base, nil)
 }
 
 // parseSplit is the chunks of digits, words, from which Parse reads a
@@ -261,7 +270,8 @@ func Parse(s string, base int) ([]uint, bool) {
 // lower.
 var parseSplit = 150
 
-// parse is Parse, p's account kept: a power of two's digits as bits; a
+// parse is Parse, p's account kept, nil for an operation no one can stop,
+// which makes its own where it needs one: a power of two's digits as bits; a
 // long string's chunks of a word's digits each, combined by pairs, by
 // halves, which is products of the size of what they combine, not a
 // chunk at a time, which is quadratic, as V8's fromstring.cc reads them.
@@ -299,7 +309,7 @@ func parse(s string, base int, p *proc) ([]uint, bool) {
 		}
 		z = z[:len(z)+1]
 		z = MulAddWord(z, z[:len(z)-1], m, v)
-		if p.spend(len(z)) {
+		if p != nil && p.spend(len(z)) {
 			return nil, false
 		}
 		i += k
@@ -324,7 +334,7 @@ func parsePow2(s string, b uint, p *proc) ([]uint, bool) {
 			z[w+1] |= uint(d) >> (W - o)
 		}
 		pos += int(b)
-		if i&(1<<16-1) == 0 && p.spend(1<<16) {
+		if p != nil && i&(1<<16-1) == 0 && p.spend(1<<16) {
 			return nil, false
 		}
 	}
@@ -337,7 +347,13 @@ func parsePow2(s string, b uint, p *proc) ([]uint, bool) {
 // of those, the higher times cw^2, in four; and so on, each level's
 // elements, of 2^l words, a number below cw^(2^l), and the last of an
 // odd count carried up as it is.
+//
+// A nil p is a proc of its own.
 func parseHalves(s string, base int, cw uint, cn, n int, p *proc) ([]uint, bool) {
+	if p == nil {
+		p = newProc(nil)
+		defer p.done()
+	}
 	defer p.release(p.mark())
 	a, b := p.alloc(2*n), p.alloc(2*n)
 	for j := 0; j < n; j++ {

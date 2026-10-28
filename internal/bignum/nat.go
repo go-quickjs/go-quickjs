@@ -126,13 +126,22 @@ func Mul(z, x, y []uint) []uint {
 		return z[:0]
 	}
 	if len(y) >= karatsubaThreshold {
-		p := newProc(nil)
-		z = Norm(mul(z[:len(x)+len(y)], x, y, p))
-		p.done()
-		return z
+		return mulLarge(z[:len(x)+len(y)], x, y)
 	}
 	basicMul(z, x, y)
 	return Norm(z[:len(x)+len(y)])
+}
+
+// mulLarge is Mul of operands of karatsubaThreshold words or more, with a
+// proc of its own: a call of its own, so that Mul of short ones is what it
+// was.
+//
+//go:noinline
+func mulLarge(z, x, y []uint) []uint {
+	p := newProc(nil)
+	z = Norm(mul(z, x, y, p))
+	p.done()
+	return z
 }
 
 // mul writes x*y to z, len(x)+len(y) words, for len(x) >= len(y) >= 1, by
@@ -194,6 +203,17 @@ func sqr(z, x []uint, p *proc) []uint {
 	return karatsubaMul(z, x, x, p)
 }
 
+// sqrLarge is Sqr of karatsubaThreshold words or more, as mulLarge is
+// Mul's.
+//
+//go:noinline
+func sqrLarge(z, x []uint) []uint {
+	p := newProc(nil)
+	z = Norm(sqr(z, x, p))
+	p.done()
+	return z
+}
+
 // sqrAny writes x*x to z, which has room for 2*len(x) words, and returns
 // it normalized, p's account kept.
 func sqrAny(z, x []uint, p *proc) []uint {
@@ -228,10 +248,7 @@ func Sqr(z, x []uint) []uint {
 		return z[:0]
 	}
 	if n >= karatsubaThreshold {
-		p := newProc(nil)
-		z = Norm(sqr(z[:2*n], x, p))
-		p.done()
-		return z
+		return sqrLarge(z[:2*n], x)
 	}
 	if n < sqrThreshold {
 		// A product of the rows takes less than the products of different
