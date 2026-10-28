@@ -30,8 +30,9 @@ func init() {
 // jitReport is the report's state: what the JIT had done when the last
 // benchmark ended, the counters and each function's.
 var jitReport struct {
-	stats vm.JITStats
-	funcs map[string]vm.JITFunction
+	stats               vm.JITStats
+	flushed, recompiled uint64
+	funcs               map[string]vm.JITFunction
 }
 
 // reportStart has the runtime's JIT note what it skips, for the report,
@@ -128,9 +129,11 @@ func (r runtimeOf) Report(name string) {
 	was := jitReport.stats
 	fmt.Printf("  jit: %d compiled, %d compiled again, %d entries, %d guard failures, %d exits to Go, %d finished in the interpreter\n",
 		st.Compiled-was.Compiled, st.Reoptimized-was.Reoptimized, st.Entries-was.Entries, st.Guards-was.Guards, st.Hosts-was.Hosts, st.Interpreted-was.Interpreted)
-	fmt.Printf("  jit: %d dropped to make room, %d compiles refused it, %d of them once compiled; holds %.1f of %.1f MiB\n",
-		st.Evicted-was.Evicted, st.Refused-was.Refused, st.Discarded-was.Discarded, float64(st.Held)/(1<<20), float64(st.Budget)/(1<<20))
-	jitReport.stats = st
+	flushed, recompiled := v.JITCacheCounts()
+	fmt.Printf("  jit: %d dropped to make room, %d compiles refused it, %d of them once compiled; %d flushed unused, %d compiles of code dropped; holds %.1f of %.1f MiB\n",
+		st.Evicted-was.Evicted, st.Refused-was.Refused, st.Discarded-was.Discarded, flushed-jitReport.flushed, recompiled-jitReport.recompiled,
+		float64(st.Held)/(1<<20), float64(st.Budget)/(1<<20))
+	jitReport.stats, jitReport.flushed, jitReport.recompiled = st, flushed, recompiled
 	var used, other []vm.JITFunction
 	now := map[string]vm.JITFunction{}
 	for _, f := range v.JITReport() {

@@ -148,6 +148,17 @@ func (r *Runtime) JITStats() JITStats {
 		Discarded: s.discarded, Reoptimized: s.reoptimized}
 }
 
+// JITCacheCounts reports what the JIT's cache dropped in this runtime and
+// compiled again: the entries it flushed for going unused (flush), and the
+// entries it made again, to compile, for functions whose code it had
+// dropped, flushed or evicted for room (jitGhost.dropped).
+func (r *Runtime) JITCacheCounts() (flushed, recompiled uint64) {
+	if s := r.jit; s != nil {
+		return s.flushed, s.recompiled
+	}
+	return 0, 0
+}
+
 // jitStressDeopt reports whether this budget exit should finish the
 // invocation in the interpreter (jitStressConfig.deopt).
 func (r *Runtime) jitStressDeopt(s *jitState) bool {
@@ -1153,6 +1164,9 @@ type jitState struct {
 	// arrayIter is where arrays find their iteration's methods, to spread
 	// them by their elements (jitArrayIterates).
 	arrayIter jitArrayIter
+	// recompiled counts the entries made, to be compiled, for functions
+	// whose code the cache had dropped (jitGhost.dropped).
+	recompiled uint64
 }
 
 // Only selected own reference fields are prepared. The receiver bound keeps
@@ -1617,6 +1631,10 @@ func (s *jitState) reclaim(x *jitVictim, now uint64) bool {
 type jitGhost struct {
 	evictions uint8
 	asks      uint32
+	// dropped: its code has been dropped, by makeRoom or flush, since the
+	// function was last compiled, which its next compile counts
+	// (jitState.recompiled).
+	dropped bool
 	// What the code had learned that is a function's alone, by its PCs
 	// -- the guards that failed, the entries whose speculation did, the
 	// element reads of typed arrays -- which the next entry starts from,
@@ -1643,7 +1661,7 @@ func (s *jitState) ghost(addr uintptr, e *jitEntry) {
 		s.ghosts = map[uintptr]jitGhost{}
 	}
 	g := s.ghosts[addr]
-	g.evictions, g.asks = min(g.evictions+1, 16), 0
+	g.evictions, g.asks, g.dropped = min(g.evictions+1, 16), 0, true
 	g.failed, g.failedEntries, g.typedReads, g.stringReads, g.keyedReads, g.keyedWrites = e.failed, e.failedEntries, e.typedReads, e.stringReads, e.keyedReads, e.keyedWrites
 	g.bigints, g.bigwide, g.resumed = e.bigints, e.bigwide, e.resumed
 	s.ghosts[addr] = g
@@ -1658,6 +1676,7 @@ func (s *jitState) rememberFlushed(addr uintptr, e *jitEntry) {
 		s.ghosts = map[uintptr]jitGhost{}
 	}
 	g := s.ghosts[addr]
+	g.dropped = true
 	g.failed, g.failedEntries, g.typedReads, g.stringReads, g.keyedReads, g.keyedWrites = e.failed, e.failedEntries, e.typedReads, e.stringReads, e.keyedReads, e.keyedWrites
 	g.bigints, g.bigwide, g.resumed = e.bigints, e.bigwide, e.resumed
 	s.ghosts[addr] = g
@@ -2272,6 +2291,13 @@ func (r *Runtime) jitCompileFor(fn *bytecode.Function, cl *closure, kind jitLowe
 		// What its code dropped before had learned (jitGhost).
 		e.failed, e.failedEntries, e.typedReads, e.stringReads, e.keyedReads, e.keyedWrites = g.failed, g.failedEntries, g.typedReads, g.stringReads, g.keyedReads, g.keyedWrites
 		e.bigints, e.bigwide, e.resumed = g.bigints, g.bigwide, g.resumed
+		if g.dropped {
+			// To be compiled again: here, or as a native caller's callee
+			// (jitNativeCallee).
+			g.dropped = false
+			s.ghosts[uintptr(unsafe.Pointer(fn))] = g
+			s.recompiled++
+		}
 	}
 	s.linkFor(fn, e)
 	p, err := r.jitLower(fn, kind)
