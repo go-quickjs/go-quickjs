@@ -271,8 +271,13 @@ func (r *Runtime) numberArgument(v Value) (intl.Decimal, error) {
 	if v.IsBigInt() {
 		// A BigInt is taken as the integer it is, however large, where a
 		// string past a double's range is an infinity (KI-53): its own
-		// decimal string, which has no exponent, is kept as it is written.
-		return intl.ParseExactDecimal(v.BigInt().String()), nil
+		// decimal string, which has no exponent, is kept as it is written,
+		// a long one's written by the conversion the host can stop.
+		s, err := r.bigStringOf(v, 10)
+		if err != nil {
+			return intl.Decimal{}, err
+		}
+		return intl.ParseExactDecimal(s.Go()), nil
 	}
 	prim, err := r.toPrimitive(v, hintNumber)
 	if err != nil {

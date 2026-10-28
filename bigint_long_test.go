@@ -27,6 +27,7 @@ func TestLongBigIntOperationsAreInterruptible(t *testing.T) {
 		"power":          `(3n ** 40000000n) & 1n`,
 		"parse":          `BigInt(s) & 1n`,
 		"compare":        `x < s`,
+		"Intl":           `new Intl.NumberFormat("en").format(x).length`,
 		"equal":          `x == s`,
 		"native product": `function f(a, b) { return a * b }
 			for (let i = 0; i < 2e4; i++) f(BigInt(i) << 100n, 3n << 100n);
