@@ -802,9 +802,9 @@ faster: its loss is its steady state's.
      abi.GoOpMarking and ExitMarking, the VM's jitMarkingCallee and
      goCallMarking, and its jitMarking() exceptions in jitCalleeProfit,
      jitInlineLeft and jitUnwound, which marking no longer gives cause
-     for. An exit's records are still Go's to apply while marking
-     (recordsTail): staged in GoArgs as tail calls are, at an exit, where
-     Go is called anyway.
+     for. An exit's records were still Go's to apply while marking
+     (recordsTail), staged in GoArgs as tail calls are, until `6f3509b`
+     applied them natively (the second round of 2026-10-28, in E).
   Stages 3 to 5 had waited (counted 2026-10-19 over one AWFY run, the
   calls of Go made only because the collector marked were 12,000 in
   DeltaBlue, 21,000 in CD, 50,000 in Storage and 65,000 in Havlak, a
@@ -1485,6 +1485,7 @@ Open from it:
   natively and their objects allocated (+1.7%). V8 bounds inlining by
   size alone; without the count CD allocates 9.4% less, but Octane's code
   is 1.6% larger and Typescript allocates 4.5% more: a round of its own.
+  Done in the next round (`e79cb47`, below).
 - Huge functions compiled again for each call target learned
   (`getOperatorList` six times), and callees inlined before their own
   calls have feedback (`memoryHighRead`): main does both.
@@ -1492,7 +1493,87 @@ Open from it:
   placements, not yet looked at.
 - A yield whose operand is an object beneath it still leaves for Go while
   the collector marks, through the exit records' tail, the one exception
-  the rule names.
+  the rule names. Done in the next round (`6f3509b`, below).
+
+A second round of 2026-10-28 (`2bf51d4`..`cdfe563`, against `93336ae`;
+four Go code placements with the JIT, `placements compare -parallel -k
+4`, the micro-benchmarks on each placement's binary, the least of
+three), the two items above and what measuring them found:
+
+- **Inlining bounded by size alone** (`e79cb47`, `3b178e7`), as V8's
+  inliner is: the count of inlines a function may have (`maxInlines`)
+  is gone, a cumulative budget of 192 instructions and 48 a callee
+  left; a callee of 10 instructions or fewer is inlined past the
+  budget, up to five times it, as V8 inlines small functions whatever
+  the budget; and the calls loops hold take the budget first, deepest
+  loop first, standing in for V8's order by call frequency. CD's
+  `findIntersection` inlines its `minus()` calls (program allocations
+  9.73 -> 8.78 million).
+- **An exit's records applied natively while the collector marks**
+  (`6f3509b`): the exit records' tail (recordsTail) stores through the
+  barrier's routine, as the rest of native code does, so a yield whose
+  operand is an object beneath it no longer leaves for Go; the marking
+  rule has no exception left. `TestJITGenYieldRecordsWhileMarking`, and
+  `TestJITSameWorkWhileMarking` compares the records applied too; a new
+  micro-benchmark, `generator_objects` (`cdfe563`), yields the nodes a
+  generator walks.
+- **The JIT cache's code ages by the program's time** (`3822dbc`): its
+  clocks -- the epochs makeRoom ages code by, the flush's ticks -- left
+  the compiles' time in, which runs on the program's thread, so the
+  more the JIT compiled, the sooner code went unused for a second, was
+  flushed, and was compiled again. They now run on the runtime's time
+  less its compiles' (`jitState.running`), and are the runtime's own,
+  not a base every runtime shared. Octane's Typescript alone, three
+  runs of three: compiles 652, 659, 883 -> 580, 578, 580; flushed 70,
+  77, 278 -> 6, 4, 6; every other suite's counts and live heaps the
+  same or less. `-jitreport` counts the code flushed and the compiles it
+  cost (`2bf51d4`).
+
+Over four placements, against the base, with the JIT: V8 suite -0.1%,
+Are We Fast Yet -0.7% (CD -4.3%, Havlak -1.4%), Octane -0.5% (Mandreel
+-7.0%), micro-benchmarks -0.2% by their geometric mean, none slower at
+every placement (`array_reduce` -11.1%). The aging alone is level
+(Octane -0.4%, Typescript -0.3%): the placements take each build's
+least run, which the flushes' bad runs never were. The interpreter's
+code is main's: hotdiff finds the hot functions the same.
+
+What the slower ones were, counted (`-jitreport`, SSA and code by
+compile, thread cycles):
+
+- Typescript +2.6% at every placement is the compiler's time: it
+  inlines 50% more IR (20.9K -> 31.3K instructions at `-n 3`), its
+  compiles 6 to 10% longer, compiles, exits and interpreter finishes
+  level. Matched against every site's calls counted in an interpreted
+  run, the extra inlined instructions are 6,078 at sites called less
+  than 0.15 times a caller's invocation -- where V8 would not inline --
+  3,150 from 0.15 to 1, 296 at 1 or more, and 2,277 at sites not
+  counted (tail calls). Those counts given to the inliner, with V8's
+  0.15, bring Typescript back to the base's compile time.
+- PdfJS +1.2% (two placements of four) did not reproduce run alone
+  (`-n 10`, fewer compiles than the base, 94 against 115); Splay's,
+  `array_forEach`'s, `array_map`'s and the other micro-benchmarks' SSA
+  and code are the base's compile for compile: layout.
+
+Open from it:
+
+- Call frequency by site, which Typescript's cost needs. No tier counts
+  a site's calls: the property caches count fills, `jitCallSeen` only
+  undecided calls, and a callee's invocations mix every caller's. A
+  count in native code (a saturating counter at each call site outside
+  loops, the frequency known after 400 returns) took the extra inlined
+  IR down 14% and half the extra compile time, but cost as much as it
+  saved, and inside loops `func_call` +11%; it is not kept. V8 takes
+  the counts from its lower tiers: here the tree tier's call nodes,
+  which are hot closures and need placements of their own.
+- The cache's clock is still time, the program's, so one run of three
+  still flushed 124 functions in Typescript. A clock of the program's
+  work -- the back-edge budget's units, in every tier -- runs from 34 a
+  millisecond (Towers) to 200,000 (Mandelbrot): at the slower rates
+  zlib's code and heap outlived it (Octane's live heap 229 -> 350 MB),
+  at 64K units a tick Octane flushed 968 for 566. It needs native
+  code's calls counted into one counter of the runtime's, on both
+  architectures. A compile's lowering before `compileSSA` (3.5% of its
+  time) still counts toward the clock.
 
 Open from it:
 
@@ -1981,7 +2062,8 @@ The rounds that followed, each measured as above. The commit says more.
     takes 0.86 times it (7.2 s against 8.4 over three runs, 2026-10-20, at
     v8bench's budget of 32 MiB), among the least the JIT gains of the
     suite's programs; with code unused flushed since (`bc35a9f`) it evicts
-    no code for room, where it evicted 1,075 entries a run, and leaves
+    16 entries in three runs for room, at 31.9 of the 32 MiB (2026-10-28),
+    where it evicted 1,075 a run, and leaves
     native code 34,399 times a run where 74,847. Most of its compiling is compiling again for what a function
     learned, 1.5 to 4.6 ms each as they inline more. Compiled code whose
     exits cost more than it saves is not always given up: a stretch is
@@ -2282,7 +2364,9 @@ first, as the rest of the plan is.
 - A loop of few turns could be inlined without a closure passed, given
   turns-a-call feedback a function does not have (2026-10-27).
 - Calls inside inlined callees take the bounds in their PCs' order, not
-  by frequency, as V8's do, which needs counts by site (2026-10-22).
+  by frequency, as V8's do, which needs counts by site (2026-10-22);
+  loops' calls first since (`3b178e7`), by depth, and the counts by site
+  are open from the second round of 2026-10-28, in E.
 - Constants stored into spilled phis (25K in Box2D); cold code about 23%
   of all (2026-10-14, *unchecked*).
 - The plan for the op cache's sake (2026-10-16), judged by hot bytes and
