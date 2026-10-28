@@ -143,7 +143,7 @@ func (r *Runtime) toBigIntValue(v Value) (Value, error) {
 		}
 		if !ok {
 			return Undefined, r.throwSyntaxError("cannot convert %q to a BigInt",
-				prim.String().Go())
+				messageText(prim.String()))
 		}
 		return Big(b), nil
 	case prim.IsBool():
@@ -153,6 +153,23 @@ func (r *Runtime) toBigIntValue(v Value) (Value, error) {
 		return shortBig(0), nil
 	}
 	return Undefined, r.throwTypeError("cannot convert %s to a BigInt", r.describe(prim))
+}
+
+// messageText is s as an error message quotes it: whole up to 1,000 code
+// units, and past that its first 1,000 and an ellipsis, as V8 quotes it, so
+// that a string of millions of digits refused is not written out again. A
+// cut that would split a surrogate pair is made before it, where V8's leaves
+// half of it.
+func messageText(s *String) string {
+	const max = 1000
+	if s.Len() <= max {
+		return s.Go()
+	}
+	end := max
+	if c := s.CharCodeAt(max - 1); c >= 0xD800 && c < 0xDC00 {
+		end--
+	}
+	return s.Substring(0, end).Go() + "…"
 }
 
 // toBigIntOperand implements ToBigInt, which is what an operation expecting a
