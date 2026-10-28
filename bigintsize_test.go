@@ -15,3 +15,17 @@ func TestBigIntSizeLimit(t *testing.T) {
 		"bits:8388609,RangeError: Maximum BigInt size exceeded,bits:1,RangeError: Maximum BigInt size exceeded,bits:1,"+
 			"RangeError: Maximum BigInt size exceeded,RangeError: Maximum BigInt size exceeded,bits:1,bits:1")
 }
+
+// TestBigIntSizeLimitOfText pins where V8 refuses a BigInt written out, past
+// 2^30 bits however it is written: a string past it is no BigInt -- BigInt
+// throws a SyntaxError, a comparison is false -- its leading zeros not
+// counted, and a literal past it is an early SyntaxError, its leading zeros
+// counted. Each was made at length before.
+func TestBigIntSizeLimitOfText(t *testing.T) {
+	checkEval(t, `const t = (f) => { try { return String(f()) } catch (e) { return e.name + (e.name === "SyntaxError" && e.message.startsWith("Max") ? ": " + e.message : "") } };
+		const over = "0x1" + "0".repeat(2 ** 28);
+		[t(() => BigInt(over)), t(() => over == 1n), t(() => over < 1n), t(() => ("0x" + "0".repeat(2 ** 28) + "1") == 1n),
+		 t(() => eval(over + "n")), t(() => Function("return -" + over + "n"))].join()`,
+		"SyntaxError,false,false,true,"+
+			"SyntaxError: Maximum BigInt size exceeded (line 1, column 1),SyntaxError: Maximum BigInt size exceeded (line 3, column 9)")
+}

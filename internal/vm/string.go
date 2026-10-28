@@ -1342,6 +1342,9 @@ func parseBigInt(s string, check func() error) (*BigInt, bool, error) {
 			return nil, false, nil
 		}
 	}
+	if len(digits) > bigStringDigits[16] && bigStringTooLong(digits, base) {
+		return nil, false, nil
+	}
 	mag, ok, err := bignum.ParseChecked(digits, base, check)
 	if err != nil || !ok {
 		return nil, false, err
@@ -1349,6 +1352,30 @@ func parseBigInt(s string, check func() error) (*BigInt, bool, error) {
 	b := newBigWords(len(mag), neg)
 	copy(b.words(), mag)
 	return b, true, nil
+}
+
+// bigStringDigits is, for each base, the most digits past its leading zeros
+// a string may have to convert to a BigInt. It is V8's limit: its conversion
+// reads a string in parts of 64 bits, each as many whole digits as fit -- 64
+// binary, 21 octal, 19 decimal, 16 hexadecimal -- and refuses a string of
+// more parts than a BigInt of maxBigIntBits has words, a little below that
+// size for the bases of digits that do not fill a part.
+var bigStringDigits = [17]int{2: 64 * bigStringParts, 8: 21 * bigStringParts, 10: 19 * bigStringParts, 16: 16 * bigStringParts}
+
+// bigStringParts is the most 64-bit parts a string converted to a BigInt
+// may have.
+const bigStringParts = maxBigIntBits / 64
+
+// bigStringTooLong reports whether digits, valid in base, are more than a
+// string converted to a BigInt may have, which is no BigInt at all, as a
+// malformed string is not: BigInt throws a SyntaxError, and a comparison is
+// false.
+func bigStringTooLong(digits string, base int) bool {
+	i := 0
+	for i < len(digits) && digits[i] == '0' {
+		i++
+	}
+	return len(digits)-i > bigStringDigits[base]
 }
 
 // bigDigitValue is the value of one digit, or a number above every base for a

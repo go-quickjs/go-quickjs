@@ -107,6 +107,33 @@ func TestBigIntLiteral(t *testing.T) {
 	}
 }
 
+// TestBigIntLiteralLimit pins V8's limit on a BigInt literal: 2^28
+// characters of digits, the prefix left out and the separators and leading
+// zeros counted, past which the literal is an early SyntaxError.
+func TestBigIntLiteralLimit(t *testing.T) {
+	const max = 1 << 28
+	for _, c := range []struct {
+		src  string
+		fits bool
+	}{
+		{"0x" + strings.Repeat("f", max) + "n", true},
+		{"0x" + strings.Repeat("f", max+1) + "n", false},
+		{"0x" + strings.Repeat("0", max) + "1n", false},
+		{"0x" + strings.Repeat("f_", max/2) + "fn", false},
+		{"1" + strings.Repeat("0", max-1) + "n", true},
+		{"1" + strings.Repeat("0", max) + "n", false},
+	} {
+		tok, err := New(c.src).Next()
+		head := c.src[:4] + "..." + c.src[len(c.src)-2:]
+		switch {
+		case c.fits && err != nil:
+			t.Errorf("%s (%d characters): %v", head, len(c.src), err)
+		case !c.fits && (err == nil || err.(*Error).Msg != "Maximum BigInt size exceeded" || err.(*Error).Pos != 0):
+			t.Errorf("%s (%d characters): %v, %v; want Maximum BigInt size exceeded at 0", head, len(c.src), tok.Kind, err)
+		}
+	}
+}
+
 func TestNumberFollowedByIdentifierIsAnError(t *testing.T) {
 	// `3in[]` must not lex as 3 followed by `in`.
 	l := New("3in")

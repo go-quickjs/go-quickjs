@@ -926,6 +926,9 @@ func (l *Lexer) scanNumber(tok Token) (Token, error) {
 done:
 	raw := l.src[start:l.pos]
 	if l.peekByte(0) == 'n' && !seenDot && !seenExp {
+		if len(raw) > maxBigIntLiteral {
+			return tok, l.errf(start, "Maximum BigInt size exceeded")
+		}
 		l.pos++
 		tok.Kind, tok.Value, tok.Raw = BigInt, strings.ReplaceAll(raw, "_", ""), raw+"n"
 		return tok, nil
@@ -944,6 +947,12 @@ done:
 	tok.Num = n
 	return tok, nil
 }
+
+// maxBigIntLiteral is the most characters a BigInt literal's digits may
+// have, its separators and leading zeros counted but not its prefix: V8's
+// scanner's limit, 2^30 bits at four bits a character, past which the
+// literal is an early SyntaxError.
+const maxBigIntLiteral = 1 << 28
 
 // scanRadix reads a 0x/0o/0b literal, which may carry a BigInt suffix.
 func (l *Lexer) scanRadix(tok Token, start, radix int, valid func(byte) bool) (Token, error) {
@@ -972,6 +981,9 @@ func (l *Lexer) scanRadix(tok Token, start, radix int, valid func(byte) bool) (T
 	}
 	raw := l.src[start:l.pos]
 	if l.peekByte(0) == 'n' {
+		if l.pos-digitStart > maxBigIntLiteral {
+			return tok, l.errf(start, "Maximum BigInt size exceeded")
+		}
 		l.pos++
 		tok.Kind, tok.Value, tok.Raw = BigInt, strings.ReplaceAll(raw, "_", ""), raw+"n"
 		return tok, nil
