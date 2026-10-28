@@ -1564,7 +1564,9 @@ Open from it:
   IR down 14% and half the extra compile time, but cost as much as it
   saved, and inside loops `func_call` +11%; it is not kept. V8 takes
   the counts from its lower tiers: here the tree tier's call nodes,
-  which are hot closures and need placements of their own.
+  which are hot closures and need placements of their own. Done in the
+  next round (`324bd1a`..`0b79a06`, below), from the frames the tiers
+  below native code make.
 - The cache's clock is still time, the program's, so one run of three
   still flushed 124 functions in Typescript. A clock of the program's
   work -- the back-edge budget's units, in every tier -- runs from 34 a
@@ -1574,6 +1576,80 @@ Open from it:
   code's calls counted into one counter of the runtime's, on both
   architectures. A compile's lowering before `compileSSA` (3.5% of its
   time) still counts toward the clock.
+
+A third round of 2026-10-28 (`9df3b5e`..`0b79a06`, against `9a4375c`;
+four Go code placements with the JIT, the micro-benchmarks on each
+placement's binary, the least of three), the first item above:
+
+- **Call frequency by site** (`324bd1a`, `b148f70`), as V8's lower
+  tiers count it in a function's feedback: while a function waits to
+  be compiled -- warming, or its code invalidated -- every call its
+  frames make is counted at its site, and its invocations with it.
+  `tryJITFrame`, which every framed call of the interpreter and the
+  tree tier reaches (constructions, accessors and built-ins' callbacks
+  among them), counts it; `pureCallAt` and `leafForward` count the
+  calls they answer without a frame, and a call through
+  `Function.prototype.call` or `apply` is counted at the site that
+  calls them. Native code counts nothing: a counter in it (the round
+  before) cost what it saved. The counting is under `jitBuilt`, so the
+  build without the JIT has main's text, every symbol's name, size and
+  address; a caller that does not count pays an inlined check of its
+  template's flag, about 24 instructions a call.
+- **Inlining ordered and cut by frequency** (`b1dfaf5`, `0b79a06`), as
+  JSInliningHeuristic takes its candidates: a call made less than 0.15
+  times an invocation (`min_inlining_frequency`) is not inlined, small
+  or not, and is made as a native call; the most frequent are inlined
+  first. A frequency is known after 19 counted runs, the fewest in which
+  a call at 0.15 is seen at least once 19 times in 20; a call whose
+  frequency is not known is ordered as before the counts, once an
+  invocation outside loops and more than any count inside one. A call
+  inside an inlined callee is inlined however seldom it is made: V8
+  leaves such a call a call, which an inlined frame here does not make.
+  `-jitreport` counts the callees inlined and their instructions
+  (`9df3b5e`).
+
+Typescript inlines 18,602 instructions where it inlined 30,802 (the
+count rule before the size rule, 20.9K); Octane's code is 55.6 MB, not
+58.1, and its allocations 16.4 million, not 17.0. The first placements
+found RayTrace 21% slower: its constructions, all of Class.create's
+wrapper, were answered by `leafForward` without a frame, so not counted,
+and ordered after every counted call; the wrapper, inlined no more, was
+refused on its own ("arguments object"). Counting them, and ordering
+the unknown as before, made it level.
+
+Over four placements, against the base, with the JIT: V8 suite -0.6%,
+Are We Fast Yet +0.8%, Octane -0.2% (Typescript -2.4%),
+micro-benchmarks +0.3% by their geometric mean.
+
+What the slower ones were, compile by compile (`-jitreport`, `-jitcode`)
+and with the cut compiled out of the same commit:
+
+- Richards (+1.2% at every placement) is the cut: `runTask`'s
+  `packetPending`, made 0.129 times a call over a whole run, is a
+  native call, 2.5 million a run; without the cut Richards is -0.2%.
+  V8's rule cuts it too, but a native call costs more here than a call
+  in V8's code: a cheaper native call (open above) would win it back.
+  Never cutting small callees instead took Typescript's inlined
+  instructions back to 28.2K.
+- Havlak (+2.0%), zlib (+1.9%): two and one calls below the cut, which
+  cost nothing measured, the cut compiled out or not; rerun, Havlak
+  +1.0% from one placement, the session's noise about 2%. Json and
+  `array_reduce` (+12.2%) compile as the base does, compile for
+  compile: layout. Main with package vm moved to the branch's addresses
+  (pads in ssa and after `vm_leaf_pure.go`) is not slower, so it is not
+  vm's offset against the packages before it either.
+- Octane's live heap after a run is bimodal on both builds, about 230
+  or 360 MB, two runs of six each.
+
+Open from it:
+
+- Frequencies are the warm-up's: code compiled again for what it
+  learned uses the counts its function had before it was native, and a
+  call never made while it warmed is not known, not cold.
+- Leaf bodies other than pure ones, answered without a frame, are not
+  counted; a tail call past depth 32 is counted at its caller's caller.
+- `jitCalledOftenBy`, which compiles a long callee early for its caller,
+  still judges by the callee's invocations, not the site's count.
 
 Open from it:
 
@@ -2365,8 +2441,8 @@ first, as the rest of the plan is.
   turns-a-call feedback a function does not have (2026-10-27).
 - Calls inside inlined callees take the bounds in their PCs' order, not
   by frequency, as V8's do, which needs counts by site (2026-10-22);
-  loops' calls first since (`3b178e7`), by depth, and the counts by site
-  are open from the second round of 2026-10-28, in E.
+  loops' calls first since (`3b178e7`), by depth, and by the counts by
+  site since the third round of 2026-10-28 (`b1dfaf5`), in E.
 - Constants stored into spilled phis (25K in Box2D); cold code about 23%
   of all (2026-10-14, *unchecked*).
 - The plan for the op cache's sake (2026-10-16), judged by hot bytes and
