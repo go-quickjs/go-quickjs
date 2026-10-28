@@ -3,6 +3,7 @@
 package vm
 
 import (
+	"context"
 	"runtime"
 	"sync/atomic"
 	"testing"
@@ -425,5 +426,49 @@ func TestJITBigLeafOwn(t *testing.T) {
 	}
 	if n := r.bigFree.n[5-bigBlockFrom]; n != 2 || r.bigFree.b[5-bigBlockFrom][0] == r.bigFree.b[5-bigBlockFrom][1] {
 		t.Errorf("blocks of room five given back: %d, the same twice %v", n, n == 2 && r.bigFree.b[5-bigBlockFrom][0] == r.bigFree.b[5-bigBlockFrom][1])
+	}
+}
+
+// A long product or quotient (bignum.Long) is left to Go's call, bigOp's,
+// which the host can stop, where the host can stop the script; where it
+// cannot, the leaf makes it as before.
+func TestJITBigLeafLeavesLongOperations(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	r := New(Config{JIT: true})
+	if r.jit == nil {
+		r.jit = &jitState{}
+	}
+	run := func(src string) Value {
+		v, err := r.Run(compileForTest(t, src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	a, b := run("(1n << 17000n) / 3n"), run("(1n << 8100n) / 7n")
+	for _, o := range []ir.Operator{ir.Mul, ir.Div, ir.Mod, ir.Add} {
+		st := &abi.GoCallState{Op: uint64(ssa.GoArith) | uint64(o)<<abi.GoOpIndexShift}
+		call := func() bool {
+			ctx := &abi.Context{Host: unsafe.Pointer(r), GoResume: 1}
+			ctx.GoState = uintptr(unsafe.Pointer(st))
+			*(*Value)(unsafe.Pointer(&ctx.GoArgs[0])) = a
+			*(*Value)(unsafe.Pointer(&ctx.GoArgs[1])) = b
+			made := jitBigLeaf(ctx) != 0
+			runtime.KeepAlive(st)
+			return made
+		}
+		r.ctx = nil
+		if !call() {
+			t.Errorf("operator %v: not made where nothing can stop it", o)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		r.ctx = ctx
+		if made := call(); made != (o == ir.Add) {
+			t.Errorf("operator %v: made %v where the host can stop it", o, made)
+		}
+		cancel()
+		r.ctx = nil
 	}
 }

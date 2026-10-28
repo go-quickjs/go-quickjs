@@ -313,7 +313,7 @@ func (r *Runtime) toString(v Value) (*String, error) {
 		// implicitly, so that a typo in a template literal is caught.
 		return nil, r.throwTypeError("cannot convert a symbol to a string")
 	case KindBigInt:
-		return bigString(v, 10), nil
+		return r.bigStringOf(v, 10)
 	}
 	p, err := r.toPrimitive(v, hintString)
 	if err != nil {
@@ -617,11 +617,11 @@ func (r *Runtime) looseEquals(a, b Value) (bool, error) {
 		return jsnum.ToNumber(a.String().Go()) == b.Number(), nil
 
 	case ak == KindBigInt && bk == KindString:
-		o, ok := StringToBigInt(b.String().Go())
-		return ok && a.BigInt().Cmp(o) == 0, nil
+		o, ok, err := r.stringToBigInt(b.String().Go())
+		return ok && a.BigInt().Cmp(o) == 0, err
 	case ak == KindString && bk == KindBigInt:
-		o, ok := StringToBigInt(a.String().Go())
-		return ok && o.Cmp(b.BigInt()) == 0, nil
+		o, ok, err := r.stringToBigInt(a.String().Go())
+		return ok && o.Cmp(b.BigInt()) == 0, err
 
 	case ak == KindBool:
 		n, err := r.toNumber(a)
@@ -744,7 +744,10 @@ func (r *Runtime) compareBigInt(a, b Value) (cmpResult, error) {
 		}
 		// Nothing but whitespace is an empty integer literal, which is zero;
 		// anything that is not an integer literal at all compares with nothing.
-		n, ok := StringToBigInt(s.String().Go())
+		n, ok, err := r.stringToBigInt(s.String().Go())
+		if err != nil {
+			return cmpUndefined, err
+		}
 		if !ok {
 			return cmpUndefined, nil
 		}

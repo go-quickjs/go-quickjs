@@ -158,6 +158,13 @@ func jitBigLeafMake(ctx *abi.Context, st *abi.GoCallState) uintptr {
 		// A result that may pass maxBigIntBits: Go's call, which throws.
 		return 0
 	}
+	if (div || mod) && lx >= bignum.Long || mul && lx+ly >= bignum.Long {
+		if r.bigStoppable() {
+			// A long product or quotient the host can stop, which
+			// throws: Go's call, bigOp's.
+			return 0
+		}
+	}
 	f := r.bigFree
 	if f == nil {
 		f = new(bigFreeList)

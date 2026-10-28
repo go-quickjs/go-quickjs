@@ -52,7 +52,11 @@ func (r *Runtime) initBigIntBuiltins() {
 			}
 			radix = int(n)
 		}
-		return Str(bigString(v, radix)), nil
+		str, err := rt.bigStringOf(v, radix)
+		if err != nil {
+			return Undefined, err
+		}
+		return Str(str), nil
 	})
 
 	r.defMethod(p, "toLocaleString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -133,7 +137,10 @@ func (r *Runtime) toBigIntValue(v Value) (Value, error) {
 	case prim.IsString():
 		// A string of nothing but whitespace is zero, the way it is for
 		// Number: it is an empty numeric literal, not a malformed one.
-		b, ok := StringToBigInt(prim.String().Go())
+		b, ok, err := r.stringToBigInt(prim.String().Go())
+		if err != nil {
+			return Undefined, err
+		}
 		if !ok {
 			return Undefined, r.throwSyntaxError("cannot convert %q to a BigInt",
 				prim.String().Go())

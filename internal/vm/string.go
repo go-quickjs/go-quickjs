@@ -1314,6 +1314,13 @@ func NewBigInt(v int64) *BigInt {
 // to a decimal literal only, and a leading zero makes nothing octal. So the
 // text is checked before big.Int sees it, which otherwise accepts all three.
 func ParseBigInt(s string) (*BigInt, bool) {
+	b, ok, _ := parseBigInt(s, nil)
+	return b, ok
+}
+
+// parseBigInt is ParseBigInt, the digits read by bignum's checked
+// conversion with check, nil for none.
+func parseBigInt(s string, check func() error) (*BigInt, bool, error) {
 	digits, base, neg := s, 10, false
 	switch {
 	case len(digits) > 1 && digits[0] == '0' && (digits[1] == 'x' || digits[1] == 'X'):
@@ -1328,20 +1335,20 @@ func ParseBigInt(s string) (*BigInt, bool) {
 		digits, neg = digits[1:], true
 	}
 	if digits == "" {
-		return nil, false
+		return nil, false, nil
 	}
 	for i := 0; i < len(digits); i++ {
 		if bigDigitValue(digits[i]) >= base {
-			return nil, false
+			return nil, false, nil
 		}
 	}
-	mag, ok := bignum.Parse(digits, base)
-	if !ok {
-		return nil, false
+	mag, ok, err := bignum.ParseChecked(digits, base, check)
+	if err != nil || !ok {
+		return nil, false, err
 	}
 	b := newBigWords(len(mag), neg)
 	copy(b.words(), mag)
-	return b, true
+	return b, true, nil
 }
 
 // bigDigitValue is the value of one digit, or a number above every base for a
@@ -1362,11 +1369,18 @@ func bigDigitValue(c byte) int {
 // the surrounding whitespace is ignored, and a string of nothing but whitespace
 // is zero rather than a failure.
 func StringToBigInt(s string) (*BigInt, bool) {
+	b, ok, _ := stringToBigIntChecked(s, nil)
+	return b, ok
+}
+
+// stringToBigIntChecked is StringToBigInt, the digits read by bignum's
+// checked conversion with check, nil for none.
+func stringToBigIntChecked(s string, check func() error) (*BigInt, bool, error) {
 	text := jsnum.TrimSpace(s)
 	if text == "" {
-		return NewBigInt(0), true
+		return NewBigInt(0), true, nil
 	}
-	return ParseBigInt(text)
+	return parseBigInt(text, check)
 }
 
 // IsZero reports whether the value is zero.

@@ -8406,7 +8406,9 @@ func (fb *jitFeedback) BigString(pc int) (uintptr, bool) {
 // converts with nothing run and nothing thrown -- no radix, undefined, or
 // a number that is an integer from 2 to 36. It refuses the rest.
 func jitBigString(recv Value, args []Value) (Value, bool) {
-	if !recv.IsBigInt() {
+	if !recv.IsBigInt() || bigLong(recv) {
+		// A long one's digits are written by a conversion the host can
+		// stop, which throws: the call's.
 		return Undefined, false
 	}
 	radix := 10

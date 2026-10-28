@@ -182,6 +182,63 @@ func DivMod(q, r, x, y []uint) ([]uint, []uint) {
 	return q, r
 }
 
+// divMod is DivMod, p's account kept: a long dividend's quotient by a
+// divisor of a few words that p could stop in pieces, a check between them.
+func divMod(q, r, x, y []uint, p *proc) ([]uint, []uint) {
+	if p != nil && len(y) > 1 && len(x)-len(y) > divRows(len(y)) {
+		return divPieces(q, r, x, y, p)
+	}
+	return DivMod(q, r, x, y)
+}
+
+// divRows is how many words of quotient divPieces finds at a time of a
+// divisor of n words: some tens of thousands of word operations.
+func divRows(n int) int { return max(16, chopWords*64/n) }
+
+// divPieces is DivMod as long division in base 2^(W*k), k divRows's: each
+// piece of x's words, from the top, with the remainder so far above it,
+// divided by y, which leaves the next remainder and that piece's quotient.
+func divPieces(q, r, x, y []uint, p *proc) ([]uint, []uint) {
+	n := len(y)
+	k := divRows(n)
+	u := make([]uint, k+n)
+	rem := make([]uint, n)
+	var qb []uint
+	if q != nil {
+		q = q[:QuoRoom(len(x), n)]
+		qb = make([]uint, QuoRoom(k+n, n))
+	}
+	rem = rem[:0]
+	for hi := len(x); hi > 0; {
+		lo := max(hi-k, 0)
+		copy(u, x[lo:hi])
+		copy(u[hi-lo:], rem)
+		uu := Norm(u[:hi-lo+len(rem)])
+		var pq []uint
+		if q != nil {
+			pq, rem = DivMod(qb, rem[:n], uu, y)
+			if lo < len(q) {
+				w := copy(q[lo:], pq)
+				clear(q[lo+w : min(hi, len(q))])
+			}
+		} else {
+			_, rem = DivMod(nil, rem[:n], uu, y)
+		}
+		if p.spend((hi - lo) * n) {
+			return nil, nil
+		}
+		hi = lo
+	}
+	if q != nil {
+		q = Norm(q)
+	}
+	if r != nil {
+		r = r[:len(rem)]
+		copy(r, rem)
+	}
+	return q, r
+}
+
 // shlInto writes x<<s, for s under a word, to z, of len(x) words, and
 // returns the bits shifted out of its top.
 func shlInto(z, x []uint, s uint) uint {

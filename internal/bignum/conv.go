@@ -28,6 +28,11 @@ func chunk(base int) (uint, int) {
 // halves, divided by a power of the base about the square root of it, each
 // half the same way, so that its time is a product's, not quadratic.
 func Append(dst []byte, neg bool, x []uint, base int) []byte {
+	return appendNat(dst, neg, x, base, nil)
+}
+
+// appendNat is Append, p's account kept.
+func appendNat(dst []byte, neg bool, x []uint, base int, p *proc) []byte {
 	if len(x) == 0 {
 		return append(dst, '0')
 	}
@@ -45,7 +50,14 @@ func Append(dst []byte, neg bool, x []uint, base int) []byte {
 	w := len(buf)
 	cw, cn := chunk(base)
 	if len(x) > convSplit {
-		w = writeSplit(buf, w, x, base, cw, cn, powers(cw, len(x)))
+		pw := powers(cw, len(x), p)
+		if p.stopped() {
+			return dst
+		}
+		w = writeSplit(buf, w, x, base, cw, cn, pw, p)
+		if p.stopped() {
+			return dst
+		}
 	} else {
 		w = writeSmall(buf, w, x, base, cw, cn)
 	}
@@ -112,14 +124,23 @@ func writeSmall(buf []byte, w int, x []uint, base int, cw uint, cn int) int {
 
 // powers are cw^(2^k), k from 0, while one is under the words of a
 // magnitude of n: the divisors writeSplit halves by.
-func powers(cw uint, n int) [][]uint {
+func powers(cw uint, n int, pr *proc) [][]uint {
 	p := [][]uint{{cw}}
 	for {
 		last := p[len(p)-1]
 		if 2*len(last) > n {
 			return p
 		}
-		p = append(p, Sqr(make([]uint, 2*len(last)), last))
+		sq := make([]uint, 2*len(last))
+		if len(last) >= karatsubaThreshold {
+			sq = Norm(sqr(sq, last, pr))
+			if pr.stopped() {
+				return p
+			}
+		} else {
+			sq = Sqr(sq, last)
+		}
+		p = append(p, sq)
 	}
 }
 
@@ -127,8 +148,13 @@ func powers(cw uint, n int) [][]uint {
 // zeros dropped: the quotient and the remainder by the largest power p[k]
 // not above it, the remainder -- the lower half -- padded with zeros to
 // its 2^k chunks of digits.
-func writeSplit(buf []byte, w int, x []uint, base int, cw uint, cn int, p [][]uint) int {
+//
+// A write pr stops leaves the digits undefined.
+func writeSplit(buf []byte, w int, x []uint, base int, cw uint, cn int, p [][]uint, pr *proc) int {
 	if len(x) <= convSplit {
+		if pr != nil {
+			pr.spend(len(x) * len(x))
+		}
 		return writeSmall(buf, w, x, base, cw, cn)
 	}
 	k := len(p) - 1
@@ -136,19 +162,30 @@ func writeSplit(buf []byte, w int, x []uint, base int, cw uint, cn int, p [][]ui
 		k--
 	}
 	d := p[k]
-	q, r := DivMod(make([]uint, QuoRoom(len(x), len(d))), make([]uint, len(d)), x, d)
+	q, r := divMod(make([]uint, QuoRoom(len(x), len(d))), make([]uint, len(d)), x, d, pr)
+	if pr.stopped() {
+		return w
+	}
 	end := w
-	w = writeSplit(buf, w, r, base, cw, cn, p[:k])
+	w = writeSplit(buf, w, r, base, cw, cn, p[:k], pr)
+	if pr.stopped() {
+		return w
+	}
 	for end-w < (1<<k)*cn {
 		w--
 		buf[w] = '0'
 	}
-	return writeSplit(buf, w, q, base, cw, cn, p)
+	return writeSplit(buf, w, q, base, cw, cn, p, pr)
 }
 
 // Parse is the magnitude of s's digits in base, 2 to 36, of either case:
 // false for an empty s or one with another character.
 func Parse(s string, base int) ([]uint, bool) {
+	return parse(s, base, nil)
+}
+
+// parse is Parse, p's account kept.
+func parse(s string, base int, p *proc) ([]uint, bool) {
 	if s == "" {
 		return nil, false
 	}
@@ -176,6 +213,9 @@ func Parse(s string, base int) ([]uint, bool) {
 		}
 		z = z[:len(z)+1]
 		z = MulAddWord(z, z[:len(z)-1], m, v)
+		if p.spend(len(z)) {
+			return nil, false
+		}
 		i += k
 	}
 	return Norm(z), true

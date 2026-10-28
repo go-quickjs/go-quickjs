@@ -300,6 +300,9 @@ func (r *Runtime) bigOp(op bytecode.Op, a, b Value) (Value, error) {
 			return Undefined, err
 		}
 		blk, z := r.bigInPlace(bignum.MulRoom(len(x), len(y)))
+		if len(x)+len(y) >= bignum.Long {
+			return r.bigMulLong(blk, z, an != bn, x, y, a.sameBits(b))
+		}
 		if a.sameBits(b) {
 			z = bignum.Sqr(z, x)
 		} else {
@@ -309,6 +312,9 @@ func (r *Runtime) bigOp(op bytecode.Op, a, b Value) (Value, error) {
 	case bytecode.OpDiv, bytecode.OpMod:
 		if len(y) == 0 {
 			return Undefined, r.throwRangeError("division by zero")
+		}
+		if len(x) >= bignum.Long {
+			return r.bigDivLong(op, an, x, bn, y)
 		}
 		if op == bytecode.OpDiv {
 			q, _ := bignum.DivMod(r.bigRoom(bignum.QuoRoom(len(x), len(y))), nil, x, y)
@@ -366,15 +372,26 @@ func (r *Runtime) bigPow(xn bool, x []uint, b Value, yn bool, y []uint) (Value, 
 	acc[0] = 1
 	copy(sq, x)
 	t := make([]uint, 2*words)
+	// A long power's steps are bignum's checked ones.
+	var check func() error
+	if words >= bignum.Long {
+		check = r.bigCheck()
+	}
 	for {
 		if e&1 != 0 {
-			p := bignum.Mul(t[:len(acc)+len(sq)], acc, sq)
+			p, err := bignum.MulChecked(t[:len(acc)+len(sq)], acc, sq, check)
+			if err != nil {
+				return Undefined, err
+			}
 			acc = append(acc[:0], p...)
 		}
 		if e >>= 1; e == 0 {
 			break
 		}
-		p := bignum.Sqr(t[:2*len(sq)], sq)
+		p, err := bignum.SqrChecked(t[:2*len(sq)], sq, check)
+		if err != nil {
+			return Undefined, err
+		}
 		sq = append(sq[:0], p...)
 	}
 	return bigOf(xn && b.int64Big()&1 != 0, acc), nil
