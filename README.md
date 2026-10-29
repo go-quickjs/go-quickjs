@@ -84,13 +84,13 @@ workload suite does not represent every application; see the
 [goja comparison](docs/benchmarks.md#v8-version-7-benchmark-suite) for the
 individual scores and measurement details.
 
-On the V8 benchmark suite as a whole it is ahead of C QuickJS: it takes 0.59
-times QuickJS's time over the suite and has a 24% higher composite score,
+On the V8 benchmark suite as a whole it is ahead of C QuickJS: it takes 0.60
+times QuickJS's time over the suite and has a 25% higher composite score,
 and with the experimental JIT 0.33 times its time and a composite score 3.8
 times as high. On the larger programs of Octane and Are We Fast Yet it
-takes 1.14 and 1.09 times QuickJS's time, and 0.56 and 0.27 times with the
+takes 1.00 and 1.07 times QuickJS's time, and 0.53 and 0.26 times with the
 JIT. Single operations cost less: QuickJS's own micro-benchmarks take 0.90
-times as long on average, and 0.36 times with the JIT, though a few take
+times as long on average, and 0.35 times with the JIT, though a few take
 about twice as long, the weak collections and an
 array grown by assigning past its end among them. See [Compared with C QuickJS](docs/benchmarks.md#compared-with-c-quickjs).
 
