@@ -1083,7 +1083,7 @@ func (p *jsonParser) parseNumber() (Value, error) {
 			return Undefined, p.rt.throwSyntaxError("invalid number in JSON at position %d", start)
 		}
 	}
-	f, err := strconv.ParseFloat(p.src[start:p.pos], 64)
+	f, err := jsnum.ParseFloat(p.src[start:p.pos])
 	if err != nil {
 		// Overflow yields infinity, which is the same result JavaScript gives.
 		if ne, ok := err.(*strconv.NumError); ok && ne.Err == strconv.ErrRange {

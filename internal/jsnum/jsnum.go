@@ -236,7 +236,7 @@ func ParseFloatPrefix(s string) float64 {
 		// Infinity is accepted by parseFloat but not by strconv.
 		return math.NaN()
 	}
-	f, err := strconv.ParseFloat(s[:end], 64)
+	f, err := ParseFloat(s[:end])
 	if err != nil {
 		// Overflow: ParseFloat reports ErrRange but still returns ±Inf, which
 		// is what the spec wants.
@@ -259,14 +259,9 @@ func decimalPrefixEnd(s string) int {
 		return i + len("Infinity")
 	}
 	digitsStart := i
-	for i < len(s) && isDigit(s[i]) {
-		i++
-	}
+	i = digitsEnd(s, i)
 	if i < len(s) && s[i] == '.' {
-		i++
-		for i < len(s) && isDigit(s[i]) {
-			i++
-		}
+		i = digitsEnd(s, i+1)
 	}
 	if i == digitsStart || (i == digitsStart+1 && s[digitsStart] == '.') {
 		return 0
@@ -279,10 +274,7 @@ func decimalPrefixEnd(s string) int {
 			j++
 		}
 		if j < len(s) && isDigit(s[j]) {
-			for j < len(s) && isDigit(s[j]) {
-				j++
-			}
-			i = j
+			i = digitsEnd(s, j)
 		}
 	}
 	return i
@@ -316,6 +308,9 @@ func ParseIntPrefix(s string, radix int) float64 {
 	}
 
 	end := 0
+	if radix == 10 {
+		end = digitsEnd(s, 0)
+	}
 	for end < len(s) && digitVal(s[end]) < radix {
 		end++
 	}
@@ -337,12 +332,16 @@ func ParseIntPrefix(s string, radix int) float64 {
 // approximation, which the standard allows and which a script can see.
 func parseDigits(s string, radix int) float64 {
 	// Values that fit in an int64 are exact, and the conversion rounds once.
-	if v, err := strconv.ParseInt(s, radix, 64); err == nil {
-		return float64(v)
+	// None has more than 64 digits, and a longer string is not given to
+	// ParseInt, whose error would copy it.
+	if len(s) <= 64 {
+		if v, err := strconv.ParseInt(s, radix, 64); err == nil {
+			return float64(v)
+		}
 	}
 	switch radix {
 	case 10:
-		f, _ := strconv.ParseFloat(s, 64)
+		f, _ := ParseFloat(s)
 		return f
 	case 2, 4, 8, 16, 32:
 		return parsePow2(s, bits.TrailingZeros(uint(radix)))
@@ -435,6 +434,16 @@ func ToNumber(s string) float64 {
 		return math.Inf(1)
 	case "-Infinity":
 		return math.Inf(-1)
+	}
+	// A literal of many digits is read in its shorter form (shortDecimal),
+	// and anything else that long is not a number: what follows is for
+	// what strconv reads that a literal is not.
+	if len(t) > maxDecimalDigits {
+		short, ok := shortDecimal(t)
+		if !ok {
+			return math.NaN()
+		}
+		t = short
 	}
 	// Reject anything strconv accepts but JavaScript does not: underscores,
 	// "inf", "nan", and hex-float syntax.
