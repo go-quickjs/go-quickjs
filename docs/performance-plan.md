@@ -2041,7 +2041,9 @@ to remove:
   `gocall` makes no Go call, `host` makes one instead of exiting, `cgo`,
   `cgonat`, `cnewgo` and `cngo` make none, `chost`, `cmidh` and `inl` make
   no exit, `tret` and `tdeo1` are inlined, `tdeoq` does not deoptimize, and
-  8 of its 12 built-in sweeps are native now. A nested script Go call even
+  six of its twelve built-in sweeps no longer measure their ending:
+  `indexOf`, `substring`, a Map's `get`, a Set's `has` and `String` are
+  native, and `typeof` is a call of Go where the kernel expected an exit. A nested script Go call even
   measures cheaper than the tree tier's own call since the lazy frames
   landed. So the JIT has changed under its own measurements in the 461
   commits since, and whoever returns to the model starts by redesigning the
