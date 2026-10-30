@@ -6389,6 +6389,19 @@ func (b *builder) instruction(blk *Block, pc int) {
 		if site.Shape != 0 || in.Op == ir.PropertyWrite {
 			cases = site.Cases
 		}
+		if in.Op == ir.PropertyWrite && site.Shape == 0 && len(cases) != 0 {
+			// A write whose cache holds no shape native code is compiled
+			// for -- one it gave up, a dictionary's, an accessor's -- and
+			// which met objects of other shapes it wrote to (the feedback's
+			// cases): compiled for the first of them, the rest its cases, as
+			// a read past its cache's chain is. The code compares the
+			// receiver's shape with the site's first: a site of shape 0 had
+			// matched an object with no properties, whose shape is none and
+			// whose table is too, and stored through the table, at address
+			// 8 -- the FormatJS Intl polyfill's top level, every time.
+			site.Shape, site.Index = cases[0].Shape, cases[0].Index
+			cases = cases[1:]
+		}
 		if in.Private && in.When {
 			// #x in o: true where the read finds the member -- an object of
 			// a shape the site has met -- and Go's answer elsewhere.
