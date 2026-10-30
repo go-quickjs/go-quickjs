@@ -1907,7 +1907,7 @@ to remove:
 | F1 | A string builder in the tree tier | 21% of a render's allocation, string building 1.13x C | High | Open |
 | F2 | A `for...in` cursor from a free list | 8.5% of a render's allocation | Medium | Open |
 | F3 | An array's old elements reused when it grows | up to 14% of a render's allocation | High | Open |
-| F4 | The JIT slower than the interpreter here | 1.20x the interpreter | Medium | Open, in part |
+| F4 | The JIT slower than the interpreter here | 1.20x the interpreter | Medium | Done, bar the profit model |
 
 - **F1.** `s += x` makes a rope node an iteration, 48 bytes, and the JIT
   already avoids it: a loop whose appends are the only readers of the
@@ -1993,6 +1993,30 @@ to remove:
   pays for the check. The frequency counting that reads two and three
   frames down never forces the build: it skips a call made through Go, and
   the deeper read lands exactly on the calling level's own frame.
+
+  **Done**, the second: a `for...in` over an object of a shared layout
+  steps natively (`036a5248`). Its start is a call of Go rather than a host
+  exit, and the step is native while the cursor walks the layout's keys and
+  the object still has that layout, which is V8's ForInNext against the
+  enum cache, the keys being the snapshot `shapeKeys` keeps with the shape.
+  A delete or an attribute change takes the object off a shared layout, so
+  the check fails and Go steps it, which is what makes it safe to skip the
+  Go path's per-key lookup; a dictionary stays Go's. `object_for_in` went
+  43.5 ns a key to 26.3, where the interpreter takes 36.3 -- the JIT build
+  was slower than the interpreter at this and is now faster -- and
+  `dict_for_in` is unchanged at 166. Four placements with the JIT: Octane
+  -0.4% (PdfJS -2.7% at every placement, it uses `for...in`), the V8 suite
+  +0.5% and Are We Fast Yet +0.4%, both inside their placements' spread.
+
+  The render's JIT time went 15.8 ms to 14.2, against the interpreter's
+  13.8 and C QuickJS's 12.0, which is far more than the per-key calls
+  promised: the exits a render fell from about 2,430 to about 570, and an
+  exit and resume at a loop's start costs about 0.8 us here. So the two
+  items together took the JIT from 1.23 times the interpreter on this
+  render to 1.02. What is left for the profit model is to make it faster
+  than the interpreter rather than level with it, and the JIT's own
+  published costs -- a first render 3.8 times the interpreter's and 18.7
+  MiB a runtime against 2.0 -- which compiling less should serve.
 
 Landed here: a number part of a string concatenation is written into the
 join rather than through a string of its own (`ba508d37`), which took a
