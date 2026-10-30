@@ -2037,16 +2037,19 @@ to remove:
   JIT and getting nothing, which is what our documentation has to say
   plainly rather than leave to the reader's arithmetic.
 
-  Where the first render's 36 ms of compiles go: 31.5 ms in the SSA and the
-  backend (build 8.6, optimize 8.4, the calls' saves 4.5, emit 5.8, encode
-  2.0) and 4.3 in lowering, over 77 functions, 58 compiles and 5 again. Two
-  functions are 46% of it: the renderer's element and node functions, 1,734
-  and 729 bytes of bytecode, 9.2 and 7.6 ms. The second render's 62 ms is
-  almost one function: a tag-name switch of 2,982 bytes, each arm with a
-  `for...in` over its props, compiled twice at about 24 ms -- once, then
-  again after a single deoptimization -- for 352 KB of code, and it runs
-  about 440 times a render. Compile cost grows faster than bytecode size,
-  5.4 us a byte for the first of those functions and about 8 for this one.
+  Where the first render's 32.6 ms of compiles go: the SSA and the backend
+  (build 8.6, optimize 8.4, the calls' saves 0.5, emit 5.8, encode 2.0) and
+  4.3 in lowering, over 77 functions, 58 compiles and 5 again. Two functions
+  are 46% of it: the renderer's element and node functions, 1,734 and 729
+  bytes of bytecode, 8.3 and 7.0 ms. The second render's 55 ms is almost one
+  function: a tag-name switch of 2,982 bytes, each arm with a `for...in`
+  over its props, compiled twice at about 22 ms -- once, then again after a
+  single deoptimization -- for 352 KB of code, and it runs about 440 times a
+  render. Compile cost grows faster than bytecode size, 4.3 us a byte for
+  the first of those functions and 7.2 for this one. (Figures measured in a
+  test read high at first: `internal/vm`'s `TestMain` sets
+  `mir.CheckAllocations`, which charged the calls' saves 4.5 ms rather than
+  0.5. Time the compiles outside that, or with it off.)
   Native code's collector share is visible too: 20 fresh first renders take
   1.81 s of CPU with the JIT against 0.63 without, of which the mark
   workers are 0.36 s, about 18 ms a render on other threads, where in the
@@ -2061,10 +2064,37 @@ to remove:
   0.95, footprint 1.50, learned 0.38) and 1.14 for 64 shared contexts.
   After the first render alone the figures are 2.36 and 4.28 MiB.
 
-  So, in order: the workspaces released or pooled process-wide and counted;
-  then the lowerings dropped once their compile is done, with what
-  re-lowering costs measured rather than assumed; then two policy
-  mechanisms, which is where the profit model comes back in scoped form --
+  **Done**, the workspaces: a compile takes the memory it works in from a
+  pool the process shares between its runtimes and gives it back once its
+  code is placed, so a runtime holds none between compiles, and the pool
+  lets one go after two of the collector's cycles unused (`d4d57347`). Over
+  20 runtimes each loading the bundle and rendering twice, the live heap a
+  runtime went 25.5 MiB to 12.2, against the interpreter's 5.7; after one
+  render, 12.3 to 9.7. The steady render is unchanged and the placements
+  flat (V8 -0.1%, AWFY -0.3%, Octane -0.4%, its Typescript -0.1%, so
+  pooling costs no compile time). The pool is reported as the process's
+  figure (`JITStats.Pooled`) rather than counted against a runtime's
+  budget, which is deliberate: counted there, it had code dropped to make
+  room for it. `WithJITMemoryLimit`'s documentation says what the pool is
+  and what it does not count, where it had described the old per-runtime
+  workspace.
+
+  **Declined**, the lowerings, measured rather than assumed: of the 3.29
+  MiB, only 1.8 is freeable at all -- the own-code programs are held by
+  their entries' code anyway -- and dropping them costs about 10 ms a
+  render. Re-lowering every inline request, which is what dropping means,
+  took lowering from 3.3 ms to 25.0 over a load and two renders, the first
+  render from 61-64 ms to 73.6, the second from 75-80 to 88-91, and added
+  9.8 MiB to the first render's allocation. They are already inside the
+  budget, and `makeRoom` drops the ones of functions with no entry before
+  it drops any code, so they go first under pressure and earn their keep
+  without it. If this memory matters later, the lever is `ir.Instruction`
+  at 136 bytes -- 83% of a program's bytes -- where packing the operands'
+  slots to `int32` is about 18% and literals as indexes into a constant
+  table would roughly halve it; an ir-wide change, not worth it before the
+  two policy mechanisms.
+
+  So, next: two policy mechanisms, which is where the profit model comes back in scoped form --
   a tier-up that weighs a compile's cost, close to linear in bytecode size
   at the rates above, against the time already spent in that function, so
   that a compile whose payback is 100 renders away is not made; and no

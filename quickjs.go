@@ -152,11 +152,14 @@ func WithJIT() Option { return func(c *config) { c.jit = true } }
 // WithMemoryLimit when that is set. It does nothing in a build without the
 // JIT, or a runtime without WithJIT.
 //
-// The compiler's working memory is not counted: what a compile needs while
-// it runs, and keeps for the next, is what the runtime's recent compiles
-// needed -- usually a megabyte or two; tens of megabytes while it compiles
-// functions of thousands of instructions, let go once it compiles them no
-// more.
+// The compiler's working memory is not counted, and is not this
+// Runtime's: a compile takes the memory it works in from a pool the
+// process shares between its runtimes and gives it back once its code is
+// placed, so a runtime holds none between its compiles. The pool keeps as
+// many as compile at once, each as large as the recent compiles needed --
+// usually a megabyte or two, tens of megabytes while a function of
+// thousands of instructions is compiled -- and lets one go once nothing
+// has compiled in it for two of the collector's cycles.
 //
 // When the JIT's memory is full, it drops the code that has gone longest
 // unused, once it is old -- not used within the last two collections or
