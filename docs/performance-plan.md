@@ -2156,9 +2156,29 @@ to remove:
      off the runtime's goroutine would need, as V8 compiles concurrently:
      the other answer to the same complaint, worth knowing the shape of
      before it is needed.
-  And what those 120 bytes are made of -- per-op expansion, inline caches,
-  guards and exits, frame writes -- before any of it changes: if one of them
-  is most of it, that is the item rather than cold arms.
+  **What those 120 bytes are**, by mir's annotation marks: the ops' inline
+  code is 52 to 59% of a compile's text, cold paths 23 to 36%, and edges,
+  exit stubs and shared routines the rest. Three ops are about half of it --
+  on this render, `call` 28.7%, `eqtagged` 20.4% and `keep` 10.5%, and on
+  Typescript 22.8%, 12.5% and 13.5% -- where a call is about 520 bytes a
+  value (320 inline, 185 cold), a tagged equality 410 to 600, and a keep
+  only 110 but numerous: 2,768 of them on this render, 18,541 in Typescript.
+  The 2,982-byte switch has the same profile, its tag-string comparisons
+  about 1,300 equalities at some 450 bytes each. Box2D is the exception, its
+  property ops leading (`propwrite` 12.9%, `propcell` 8.3%, `objectof`
+  6.9%, `propread` 6.6%), so whatever is done must be judged on it too.
+
+  So the item is those ops' expansion rather than cold arms in general, with
+  two conditions. A slow path is worth moving out of line only if it is
+  cold, and a switch over tag strings must compare string contents, so
+  `eqtagged`'s may be taken on most executions in the very function this is
+  about: pick what to out-line by the taken rate, not the byte share, and
+  judge it on the steady render and the suites, not on code size alone.
+  `keep` is not an out-lining question at all but a count one: a keep exists
+  only to make a value visible to the collector, so the question is why
+  there are 18,541 of them -- one a value a site rather than one a value,
+  and whether a value already in a scanned place needs one -- which would be
+  a pass over the SSA, costing nothing per execution.
 
   **Recompiles are 40 to 65% of all compile time**, which qualifies "policy
   cannot fix it" above: that holds for first compiles, not for these. By
@@ -2169,8 +2189,8 @@ to remove:
   Box2D 101.8 with 38 in recompiles; PdfJS 112.2 with 65. So the
   deoptimization half of the policy is worth more than it looked.
 
-  Waiting in proportion to the *cost* of what deoptimized is not enough,
-  though, and was dropped: it put the second render below the first (74-78
+  The policy is nonetheless **dropped**, on measurement, both ways round.
+  Waiting in proportion to the *cost* of what deoptimized was not enough: it put the second render below the first (74-78
   ms to 46-49, the first ten from 307 to 253) and took the steady render to
   12.9, but cost Box2D 11.0%, zlib 5.4%, Typescript 4.1% and DeltaBlue
   5.7%, because cost alone cannot tell a switch where recompiling buys
@@ -2181,10 +2201,24 @@ to remove:
   already judges `entrySlow` by. Weighing the wait by cost over realized
   work keeps both sides counters, so a program recompiles the same
   functions on every run, and separates the two cases. Its bar is those
-  four benchmarks flat again with the second render still below the first --
-  and if it cannot have both, no policy at all, since a policy that taxes
-  the workloads where recompiling is what makes the JIT worth having is
-  worse than none.
+  four benchmarks flat again with the second render still below the first.
+  It does not clear it: logged at every deoptimization, the native use a
+  code had made of its budget before deoptimizing is 0.028 for that switch
+  and 0.027 for Box2D's hot function, with 73 of Typescript's 161
+  deoptimizations below 0.1 and 6 of this render's 9 -- so the early
+  feedback deoptimizations whose quick recompile is what makes Box2D,
+  DeltaBlue and Typescript fast look exactly like the switch where
+  recompiling buys nothing. There is no separation to be had from these
+  counters, and no policy at all is better than one that taxes the
+  workloads where recompiling is what makes the JIT worth having. The
+  recompile pot stays real; C attacks it at its cost instead.
+
+  One finding fell out of that measurement and is worth a commit of its
+  own: the counters are not monotonic, since `jitUnwound` resets `link.in`,
+  so a delta can come out negative. `jitSSAProfit` judges `entrySlow` from
+  those counters, so whether the judge can act on a reset or negative delta
+  today is an open question, and would explain some of the functions this
+  render leaves slow.
 
   The profit model as a whole is **parked**, not dropped -- the two
   mechanisms above are the part of it F5's data pays for, and they need
