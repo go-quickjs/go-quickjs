@@ -2199,9 +2199,33 @@ to remove:
   back into it. Dropping it changes no word anything reads -- Go's barrier
   is needed only where a pointer slot changes, so it is safe mid-cycle too
   -- which makes it a pass after `reconstruct` with no cost per execution,
-  about 2 MB of Typescript's 15.3. What the pass must assert rather than
+  about a tenth of a compile's code. What the pass must assert rather than
   infer: that the kept copy dominates the re-keep, and that nothing but
   keeps of that value writes its cell.
+
+  **Done** (`05690650`), with both of those checked rather than inferred --
+  the dominator tree and the order within a block, and one predicate
+  (`ssa.Value.WritesKeepCell`) that the pass and `colorKeeps` share, so a
+  writer added to either is seen by both; a re-keep that fails either check
+  is kept, and the `quickjs_verify` build panics. Re-keeps went to zero
+  everywhere, and the code shrank 3.3% on this render, 5.9% on PdfJS, 1.0%
+  on Box2D and 1.5% on RayTrace. Compile time and the renders are level,
+  and the placements flat (V8 +0.4%, AWFY -0.1%, Octane +0.0%): keeps were
+  about a tenth of the code, so this is code size and memory rather than
+  time. An earlier "2 MB of Typescript" was a six-iteration run's count
+  multiplied; Typescript cannot be compared this way at all, its compiles
+  varying 648 to 700 between runs of either side.
+
+  `call`'s Go path turned out **not** to be a shared-stub item and is
+  parked: the call into Go is already shared per function (about 20 bytes a
+  site), and the remaining 180 is `goArg` per operand -- the number word, a
+  reference test, the pointer read from the operand's own origin -- which no
+  routine keyed by site index can share. Removing it means having Go read
+  the operands from the call's records instead of `OffGoArgs`, and the jumps
+  to `goCold` happen before those records are written, so it is a reordering
+  of `call` and a change to what `jitGoCall` reads, across mir and vm: a
+  protocol change worth about 30 bytes a site, to be sized against `call`'s
+  335 to 356 inline bytes before anyone starts it.
 
   **Recompiles are 40 to 65% of all compile time**, which qualifies "policy
   cannot fix it" above: that holds for first compiles, not for these. By
