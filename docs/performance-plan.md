@@ -1907,7 +1907,7 @@ to remove:
 | F1 | A string builder in the tree tier | 21% of a render's allocation, string building 1.13x C | High | Open |
 | F2 | A `for...in` cursor from a free list | 8.5% of a render's allocation | Medium | Open |
 | F3 | An array's old elements reused when it grows | up to 14% of a render's allocation | High | Open |
-| F4 | The JIT slower than the interpreter here | 1.20x the interpreter | Medium | Open |
+| F4 | The JIT slower than the interpreter here | 1.20x the interpreter | Medium | Open, in part |
 
 - **F1.** `s += x` makes a rope node an iteration, 48 bytes, and the JIT
   already avoids it: a loop whose appends are the only readers of the
@@ -1978,6 +1978,21 @@ to remove:
   `QUICKJS_JIT_CALIBRATE=1`) and charges a callee's exits to the callee,
   and whose open problem -- Splay, Json and RegExp slower -- is the
   acceptance bar.
+
+  **Done**, the first of those: a call of Go from a native callee makes
+  only the calling level's frame and leaves room for the levels below it,
+  which `frameAt` fills from their contexts if a frame among them is read
+  -- a stack trace, a function's caller, a generator's search for its run,
+  the memory meter's walk -- as V8 walks its optimized frames only when
+  asked (`ae764285`). The render's JIT time went 17.2 ms to 15.5 against
+  the interpreter's 13.9 and C QuickJS's 12.0, about half the gap; four
+  placements with the JIT put the V8 suite at -0.4%, Are We Fast Yet at
+  -0.3% and Octane at +0.2%, every benchmark within its spread but
+  EarleyBoyer (-2.3% and -2.7%) and Json (-2.3%). Instrumented runs of the
+  three suites put frames off and built none of them, so nothing there
+  pays for the check. The frequency counting that reads two and three
+  frames down never forces the build: it skips a call made through Go, and
+  the deeper read lands exactly on the calling level's own frame.
 
 Landed here: a number part of a string concatenation is written into the
 join rather than through a string of its own (`ba508d37`), which took a
