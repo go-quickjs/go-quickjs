@@ -1908,7 +1908,7 @@ to remove:
 | F2 | A `for...in` cursor from a free list | 8.5% of a render's allocation | Medium | Open |
 | F3 | An array's old elements reused when it grows | up to 14% of a render's allocation | High | Open |
 | F4 | The JIT slower than the interpreter here | 1.20x the interpreter | Medium | Done |
-| F5 | A fresh runtime's first render and its memory, with the JIT | first render 66 ms against 22, live heap 26.2 MiB against 7.3 | Medium | Open, measured |
+| F5 | A fresh runtime's first render and its memory, with the JIT | first render 66 ms against 22, live heap 26.2 MiB against 7.3 | Medium | Memory done; first render measured, documented, not fixed |
 
 - **F1.** `s += x` makes a rope node an iteration, 48 bytes, and the JIT
   already avoids it: a loop whose appends are the only readers of the
@@ -2149,13 +2149,33 @@ to remove:
      code, as V8 compiles a cold branch. Measured by code bytes an
      instruction and compile time, on that switch and across the five
      workloads.
-  2. What a first compile without the optimizer costs and keeps (1.5 of the
-     5 us an instruction) -- V8's Maglev before TurboFan, and the answer to
-     compiling at Maglev's invocation count with a TurboFan-class compiler.
+  2. A first compile without the optimizer: **measured, and the answer is
+     no.** Every level ran in one binary switched by an environment
+     variable, so no layout difference stood between them. Without the
+     optimizer's rounds the code grows 15 to 30% and compile time falls 0 to
+     13% -- on Typescript it rises 9% -- because the optimizer is not a cost
+     on top of the backend but what makes the backend's input small. The
+     same r=0.96 from the other side. Never re-tiered, that code keeps 59 to
+     85% of the speed (Octane +41%, Crypto and NavierStokes twice as slow);
+     re-tiered to full once hot it keeps the speed (Octane +0.6%, AWFY
+     +4.3%) but makes the first render worse, 80-85 ms against 63-66, since
+     hot functions then compile twice inside it. One optimizer round without
+     escape analysis is a side finding -- about the same speed for 4 to 19%
+     less compile time -- which is optimizer tuning, not a tier. If a tier
+     is ever built, two things found here wait for it: a function only ever
+     called natively never passes `jitLearnedDue`'s checks and would stay
+     cheap for ever, and thirteen tests assert compile counts, deopts and
+     escape analysis rather than answers.
   3. What a compile reads that the runtime mutates, which is what compiling
      off the runtime's goroutine would need, as V8 compiles concurrently:
-     the other answer to the same complaint, worth knowing the shape of
-     before it is needed.
+     **the remaining structural option, not started.** It would put the
+     first render at about the interpreter's 22 ms, since the render would
+     run interpreted while compiles happened elsewhere. The mapping is about
+     a day -- feedback and caches, shapes, the code cache's room accounting,
+     the lowerings and links, the workspace (already pooled) -- and the
+     build is far more, against the engine's rule that a `Runtime` is not
+     safe for concurrent use. A deliberate decision for the project, not
+     something to drift into.
   **What those 120 bytes are**, by mir's annotation marks: the ops' inline
   code is 52 to 59% of a compile's text, cold paths 23 to 36%, and edges,
   exit stubs and shared routines the rest. Three ops are about half of it --
