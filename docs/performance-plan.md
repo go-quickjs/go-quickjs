@@ -1863,6 +1863,93 @@ We Fast Yet's DeltaBlue (1.29) and Havlak (1.23), Mandreel (1.24),
 Typescript and CodeLoad (1.20) -- calls, allocation and the compiler's
 own speed. It is a track of its own beside the JIT's.
 
+## F. Server-side rendering and the collector
+
+A React 18 server-rendering bundle of 117 KB, rendering one page per call,
+is the workload public comparisons of Go engines lead with, and the one a
+host embedding this engine behind a web server runs. Measured 2026-10-30
+on the Ryzen, fresh processes, the steady-state time of one render (the
+time of 2n renders less the time of n, so neither the process's start nor
+the bundle's load counts), median of five rounds:
+
+| Engine | wall a render | CPU a render |
+|---|---|---|
+| go-quickjs, interpreter | 14.2 ms | 18.8 ms |
+| go-quickjs, JIT | 17.0 ms | 15.6 ms |
+| C QuickJS 2026-06-04 | 12.0 ms | 12.0 ms |
+
+So the interpreter's own work is close to C's -- 1.18 times its wall time
+-- and its CPU is 1.57 times, all of the difference the collector's
+threads. A host that gives each core a runtime pays that CPU; one with
+cores to spare does not. It is the figure the comparisons report (they
+run with `GOMAXPROCS=1`, where the collector's work lands in wall time
+too), and it is the gap to close.
+
+A render allocates 1.8 MiB in 16,500 Go objects. Go's collector costs
+time in proportion to the allocation rate, so the CPU over wall follows
+that figure and nothing else; the live heap after a render is 9 MB.
+Where the 1.8 MiB goes, from an allocation profile of 400 renders:
+
+| Site | Share | What it is |
+|---|---|---|
+| `pureElemOp` | 25% | `arr.push(v)` growing an array's elements |
+| `String.Concat` | 21% | a rope node for each of ~8,200 concatenations |
+| `newLiteralObject`, `newLargeLiteralObject` | 22% | the objects the program makes |
+| `newArrayStorage` | 10% | the arrays the program makes |
+| `newForInObject` | 8.5% | a cursor for each of ~780 `for...in` loops |
+
+Three quarters of it is the program's own objects, strings and arrays,
+which C QuickJS allocates too and frees by reference count. What is ours
+to remove:
+
+| ID | Item | Targets | Risk | Status |
+|---|---|---|---|---|
+| F1 | A string builder in the tree tier | 21% of a render's allocation, string building 1.13x C | High | Open |
+| F2 | A `for...in` cursor from a free list | 8.5% of a render's allocation | Medium | Open |
+| F3 | An array's old elements reused when it grows | up to 14% of a render's allocation | High | Open |
+| F4 | The JIT slower than the interpreter here | 1.20x the interpreter | Medium | Open |
+
+- **F1.** `s += x` makes a rope node an iteration, 48 bytes, and the JIT
+  already avoids it: a loop whose appends are the only readers of the
+  string grows one buffer in place (`zzjit_builder.go`, `ssa.GoAppend`),
+  frozen at every exit to Go. The tree tier has no such analysis. It
+  needs the same property proved over the bytecode -- every read of the
+  local is the left side of an addition stored back to it, any other read
+  freezing the builder first -- and nothing may hold the string meanwhile.
+  It is the largest single item here and the one that can go wrong
+  silently, since a string that is mutated after something else has seen
+  it is a wrong answer, not a crash.
+- **F2.** A cursor is one allocation of the object, the cursor and the
+  snapshot together (`newForInObject`), and nothing outside the VM can
+  reach one: a cursor the step reports done could go on a free list of
+  the runtime's and be taken by the next loop. The reasoning to get right
+  is that the step reporting done is the last read of it -- a loop left by
+  `break`, an exception or a suspended generator must not return a cursor
+  to the list.
+- **F3.** Go's `append` allocates a new block and copies, so about half
+  the bytes a growing array allocates are the blocks it has outgrown,
+  dead the moment they are copied. A free list of element blocks by size
+  class would take them back. The risk is that anything holding the
+  slice across a growth -- `o.elemsOf()` passed to a helper that appends
+  -- would see reused values rather than stale ones, which is a wrong
+  answer rather than a crash. A capacity floor on the first growths was
+  tried first and is not the answer: the growth here is in large arrays,
+  and floors of 4, 8 and 16 elements left the render's allocation count
+  unchanged to the object (2026-10-30).
+- **F4.** The JIT is 1.20 times the interpreter's wall time on this
+  workload, which is mostly short polymorphic calls and string building
+  rather than loops, and a JIT runtime holds 18.7 MiB against the
+  interpreter's 2.0. Profile where the native time goes and what is
+  compiled before changing anything; "the profit model should refuse this
+  code" is an answer.
+
+Landed here: a number part of a string concatenation is written into the
+join rather than through a string of its own (`ba508d37`), which took a
+third of the allocations off a string-building benchmark and 20% of its
+time, and left the render's allocation unchanged -- it concatenates
+strings, not numbers. Fusing `a + b + c` into one join needed nothing:
+the compiler already does it (`compileStringChain`).
+
 ## Rejected
 
 Measured and dropped earlier; each needs a new angle before it is tried
