@@ -2162,10 +2162,15 @@ to remove:
      hot functions then compile twice inside it. One optimizer round without
      escape analysis is a side finding -- about the same speed for 4 to 19%
      less compile time -- which is optimizer tuning, not a tier. If a tier
-     is ever built, two things found here wait for it: a function only ever
-     called natively never passes `jitLearnedDue`'s checks and would stay
-     cheap for ever, and thirteen tests assert compile counts, deopts and
-     escape analysis rather than answers.
+     is ever built, two things found here wait for it. A function only ever
+     called natively never reaches `jitLearnedDue`'s checks, which run on
+     Go's entries (`tryJITAt`) and on calls of Go (`jitCompileDueNow`), so
+     it would stay at the cheap level for ever: a tier needs a re-tier
+     trigger that native-only callees pass. And thirteen tests assert
+     compile counts, deoptimizations and escape analysis rather than
+     answers -- the same shape as the three that fail with the optimizer's
+     rounds off, where liveness matched the interpreter under every stress
+     setting.
   3. What a compile reads that the runtime mutates, which is what compiling
      off the runtime's goroutine would need, as V8 compiles concurrently:
      **the remaining structural option, not started.** It would put the
@@ -2245,7 +2250,36 @@ to remove:
   to `goCold` happen before those records are written, so it is a reordering
   of `call` and a change to what `jitGoCall` reads, across mir and vm: a
   protocol change worth about 30 bytes a site, to be sized against `call`'s
-  335 to 356 inline bytes before anyone starts it.
+  inline bytes before anyone starts it.
+
+  Those inline bytes were then taken apart, and **a call's code is
+  irreducibly per site**. Bytes a native call site, this render /
+  Typescript / Box2D: the context-depth check 28 / 28 / 28, the callee
+  check 19 / 16 / 18, the per-target checks 135 / 109 / 112, the records 59
+  / 62 / 61, the direct operands 129 / 106 / 121, the saves 13 / 23 / 26,
+  the callee's setup 79 / 62 / 38 and the return 35 / 49 / 39 -- 430 to 470
+  inline, with 268 to 334 of cold paths beside it. The two largest, the
+  per-target checks and the arguments, are per site by their nature: an
+  identity compare against each target the site has seen, and each argument
+  from its own register or origin. Sharing them is what the generic path
+  already is. The constants are already 7-byte RIP-relative reads from the
+  context's table, moved there for the op cache, so there is no encoding
+  left to win. A polymorphic site could make one stack-room check against
+  its largest target rather than one a target, about 25 bytes an extra
+  target, and most sites have one target. All told 5 to 10% of a call's
+  bytes, 1 to 3% of the code: **not worth pursuing**. A calling convention
+  that pushes arguments and jumps to one entry, as V8's does, would be a
+  backend redesign, the same class of item as a baseline generator.
+
+  What remains open here is `eqtagged`, the largest single op in this
+  render's code at about 20%, whose string comparison runs on 85 to 90% of
+  2.33 million comparisons here and 4.97 million on PdfJS -- so it is a
+  speed item, not a size one. Worth measuring before any design: how many
+  of those inequalities a length compare settles, how many have a literal
+  operand whose length is known when the code is made, and what the VM
+  guarantees about interning -- stated as a guarantee, since native code
+  could treat two different pointers as proof of inequality only if
+  something promises it.
 
   **Recompiles are 40 to 65% of all compile time**, which qualifies "policy
   cannot fix it" above: that holds for first compiles, not for these. By
