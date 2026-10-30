@@ -290,6 +290,34 @@ function map_for_of(n)
     return n * 100;
 }
 
+/* a for-in loop over objects of one layout, the keys of the layout */
+function object_for_in(n)
+{
+    var j, k, c = 0, objs = [];
+    for (j = 0; j < 4; j++)
+        objs.push({ a: j, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8 });
+    for (j = 0; j < n; j++) {
+        for (k in objs[j & 3])
+            c++;
+    }
+    global_res = c;
+    return n * 8;
+}
+
+/* a for-in loop over a dictionary: an object a key was deleted from,
+   not the last added */
+function dict_for_in(n)
+{
+    var j, k, c = 0, d = { z: 0, a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8 };
+    delete d.z;
+    for (j = 0; j < n; j++) {
+        for (k in d)
+            c++;
+    }
+    global_res = c;
+    return n * 8;
+}
+
 /* a scope with a using declaration each turn, made with Function, as an
    engine without using declarations cannot parse them: there it does
    nothing, and reports none */
