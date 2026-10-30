@@ -1907,7 +1907,8 @@ to remove:
 | F1 | A string builder in the tree tier | 21% of a render's allocation, string building 1.13x C | High | Open |
 | F2 | A `for...in` cursor from a free list | 8.5% of a render's allocation | Medium | Open |
 | F3 | An array's old elements reused when it grows | up to 14% of a render's allocation | High | Open |
-| F4 | The JIT slower than the interpreter here | 1.20x the interpreter | Medium | Done, bar the profit model |
+| F4 | The JIT slower than the interpreter here | 1.20x the interpreter | Medium | Done |
+| F5 | A fresh runtime's first render and its memory, with the JIT | 50 ms against 14, 16.4 MiB against 6.2 | Medium | Open |
 
 - **F1.** `s += x` makes a rope node an iteration, 48 bytes, and the JIT
   already avoids it: a loop whose appends are the only readers of the
@@ -2017,6 +2018,34 @@ to remove:
   than the interpreter rather than level with it, and the JIT's own
   published costs -- a first render 3.8 times the interpreter's and 18.7
   MiB a runtime against 2.0 -- which compiling less should serve.
+- **F5.** Measured on this machine, 20 runtimes each loading the bundle and
+  rendering once: a first render takes 50 ms with the JIT against the
+  interpreter's 14, and a runtime costs 16.4 MiB RSS and 12.4 MiB of Go
+  heap against 6.2 and 5.8. So for a host that makes a runtime for each
+  request -- which is what a page render is -- the JIT is a net loss even
+  now that its steady state is level: what it costs is paid on the first
+  render, not won back over later ones. That is the JIT's remaining
+  published complaint and the item to take next: where the extra 35 ms go
+  (the compiler's own phases, `-jitcompile`), and what a runtime still
+  holds after one render, per compiled function. `df23abbe` flushed
+  finished programs' heaps on a timer and took Octane's live heap from 355
+  to 230 MB, so the question here is what is held per runtime rather than
+  per program. A higher first-compile threshold is not the answer: it is in
+  [Rejected](#rejected) already.
+
+  The profit model is **parked**, not dropped. Judged against F5 it is the
+  indirect route: its published benefit would come from compiling less,
+  which F5 measures directly. And its calibration has to be rebuilt first.
+  `a21df702`'s harness was ported onto main and most of its kernels no
+  longer measure the ending they were written for, by its own checks:
+  `gocall` makes no Go call, `host` makes one instead of exiting, `cgo`,
+  `cgonat`, `cnewgo` and `cngo` make none, `chost`, `cmidh` and `inl` make
+  no exit, `tret` and `tdeo1` are inlined, `tdeoq` does not deoptimize, and
+  8 of its 12 built-in sweeps are native now. A nested script Go call even
+  measures cheaper than the tree tier's own call since the lazy frames
+  landed. So the JIT has changed under its own measurements in the 461
+  commits since, and whoever returns to the model starts by redesigning the
+  kernels for today's endings, not by porting the constants.
 
 Landed here: a number part of a string concatenation is written into the
 join rather than through a string of its own (`ba508d37`), which took a
