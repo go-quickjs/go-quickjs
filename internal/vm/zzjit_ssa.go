@@ -1723,6 +1723,15 @@ func (r *Runtime) jitCompileDueNow(cl *closure, e *jitEntry, root int) bool {
 // Typescript's Symbol.prototype.visible, inlining a method a subclass
 // overrides, left at its call in each such run, and in thousands of them
 // was never compiled again for the call it had learned.
+//
+// It is not monotonic: the native calls in (jitLink's in) it counts are
+// zeroed by jitUnwound and jitRetryNative, as the counts they are judged
+// against are. A compile for what the code learned, pending then, its
+// base (tierBase) taken before, would find its spend below that base and
+// wait as many calls' worth more. Counted across seven workloads -- a
+// React renderer's 160 renders, Octane's Typescript, Box2D and PdfJS, the
+// V8 suite's RayTrace, DeltaBlue and Richards -- it never was: jitUnwound
+// zeroes them as it asks a compile itself, which begins a budget afresh.
 func jitLearnedSpent(fn *bytecode.Function, e *jitEntry) int64 {
 	st := &e.ssaStats
 	calls := e.starts + e.goOns + e.link.in + e.slowCalls
