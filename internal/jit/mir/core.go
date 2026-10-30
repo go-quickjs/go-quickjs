@@ -2020,9 +2020,7 @@ func (c *core) colorKeeps(iv []interval, pos []int, kv []*ssa.Value) error {
 			hi[k] = b
 		}
 	}
-	writes := func(v *ssa.Value) bool {
-		return v.Op == ssa.OpCall && len(v.Calls()) != 0 || v.Op == ssa.OpKeep || v.Op == ssa.OpBigBox
-	}
+	writes := (*ssa.Value).WritesKeepCell
 	// cell is, by value ID, 1 plus the cell an address is of.
 	cell := c.ints(f.NumValues())
 	var phis []*ssa.Value

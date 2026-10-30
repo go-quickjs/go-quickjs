@@ -2,6 +2,7 @@ package ssa
 
 import (
 	"fmt"
+	"slices"
 )
 
 // Native code holds a reference's number word, and reads its pointer word
@@ -156,7 +157,144 @@ func keepAcrossStores(f *Func) (bool, []*Value, [][]*Value) {
 		return false, stores, live
 	}
 	reconstruct(f, order, kept)
+	dropRekeeps(f)
 	return true, nil, nil
+}
+
+// WritesKeepCell reports whether v writes the context's keep cell v.Index
+// (abi.Context.Keep): a keep (OpKeep), a native call's result
+// (OpCall), a BigInt's box (OpBigBox). mir gives the cells out by these
+// writes (core's colorKeeps), and dropRekeeps drops a keep only where they
+// show its cell holds what it would write.
+func (v *Value) WritesKeepCell() bool {
+	return v.Op == OpCall && len(v.Calls()) != 0 || v.Op == OpKeep || v.Op == OpBigBox
+}
+
+// dropRekeeps takes out the keeps that copy into a cell the word it holds
+// already. keepAcrossStores gives a value one cell for every store that
+// keeps it, and reconstruct then has a later store's keep of it take the
+// copy an earlier store's keep made, which reads its pointer word from that
+// same cell: the later keep writes the cell the word it holds. Such a keep
+// is dropped, and its copy is the earlier one -- whose cell the collector
+// scans with the context's, so nothing it must see changes, whether or not
+// it marks: Go's write barrier is for a pointer slot that changes, and this
+// one does not. They had been a fifth to two fifths of the keeps a compile
+// made (Box2D 19%, a React renderer 28%, Typescript 35%, PdfJS 41%), each
+// some hundred bytes of code before a store. A keep is dropped only if the
+// copy it takes is an earlier keep's of its cell, that keep dominates it,
+// and every write of the cell is a keep of one value, its copies followed
+// back to it (keptRoot): otherwise what the cell holds when the keep runs
+// is not known to be what it writes. The quickjs_verify build panics where
+// a keep of a cell's own copy fails the last two.
+func dropRekeeps(f *Func) {
+	n := f.Keeps
+	if n == 0 {
+		return
+	}
+	// owner is, by cell, the value every keep of the cell keeps; mixed
+	// marks a cell another kind of write writes, or keeps of two values.
+	owner, mixed := f.refsOf(n), f.bools(n)
+	roots := f.refsOf(f.nextID)
+	found := false
+	for _, b := range f.Blocks {
+		for _, v := range b.Values {
+			if !v.WritesKeepCell() || v.Index < 0 || v.Index >= n {
+				continue
+			}
+			if v.Op != OpKeep {
+				mixed[v.Index] = true
+				continue
+			}
+			switch r := keptRoot(v.Args[0], roots); {
+			case owner[v.Index] == nil:
+				owner[v.Index] = r
+			case owner[v.Index] != r:
+				mixed[v.Index] = true
+			}
+			found = found || isRekeep(v)
+		}
+	}
+	if !found {
+		return
+	}
+	dom := dominators(f)
+	subst := f.refsOf(f.nextID)
+	dropped := false
+	for _, b := range f.Blocks {
+		for at, k := range b.Values {
+			if k.Op != OpKeep || !isRekeep(k) {
+				continue
+			}
+			a := k.Args[0]
+			first := a.Args[0]
+			ok := !mixed[k.Index] && dom.dominates(a.Block, b) && (a.Block != b || slices.Contains(b.Values[:at], a))
+			if !ok {
+				if verifyLiveness {
+					panic(fmt.Sprintf("ssa: %v keeps %v into cell %d, which %v may not hold (mixed %v)", k, a, k.Index, first, mixed[k.Index]))
+				}
+				continue
+			}
+			subst[k.ID] = first
+			dropped = true
+		}
+	}
+	if !dropped {
+		return
+	}
+	// Each dropped keep's copy is the copy it took.
+	for _, b := range f.Blocks {
+		for _, v := range b.Values {
+			if v.Op == OpKept && subst[v.Args[0].ID] != nil {
+				subst[v.ID] = v.Args[0].Args[0]
+			}
+		}
+	}
+	rewrite(f, func(v *Value) *Value {
+		for v.ID < len(subst) && subst[v.ID] != nil {
+			v = subst[v.ID]
+		}
+		return v
+	})
+}
+
+// isRekeep reports whether k, a keep, takes a copy an earlier keep of its
+// own cell made (OpKept of an OpKeep with k's Index).
+func isRekeep(k *Value) bool {
+	a := k.Args[0]
+	return a.Op == OpKept && a.Args[0].Op == OpKeep && a.Args[0].Index == k.Index
+}
+
+// keptRoot is the value x is a copy of, through keeps' copies (OpKept) and
+// the phis reconstruct made of one value's copies, or x: roots holds, by
+// value ID, each phi's once found, or the phi itself while it is looked at
+// -- a phi of a loop's copies reaches itself.
+func keptRoot(x *Value, roots []*Value) *Value {
+	for x.Op == OpKept {
+		x = x.Args[1]
+	}
+	if x.Op != OpPhi || x.ID >= len(roots) {
+		return x
+	}
+	if r := roots[x.ID]; r != nil {
+		return r
+	}
+	roots[x.ID] = x
+	var root *Value
+	for _, a := range x.Args {
+		r := keptRoot(a, roots)
+		if r == x {
+			continue
+		}
+		if root != nil && r != root {
+			return x
+		}
+		root = r
+	}
+	if root == nil {
+		root = x
+	}
+	roots[x.ID] = root
+	return root
 }
 
 // fuseKeepRefs has each keep read the pointer word it copies itself, where
