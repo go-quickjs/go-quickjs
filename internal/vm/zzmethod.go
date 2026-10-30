@@ -293,7 +293,7 @@ func (b *tbuilder) methodCall(n int, m *methodOf, pc int) tval {
 // leaves it. It reports false for a receiver that is not.
 func (b *tbuilder) callAll(op bytecode.Op, n, pc int) bool {
 	p := len(b.stack) - n - 1
-	if op == bytecode.OpCallMethod && (p < 1 || b.stack[p-1].slot != p-1) {
+	if op == bytecode.OpCallMethod && (p < 1 || int(b.stack[p-1].slot) != p-1) {
 		return false
 	}
 	if a := b.stack[len(b.stack)-1].arith; op == bytecode.OpCallMethod && n == 2 && a != nil && wrapsOperator(a) {

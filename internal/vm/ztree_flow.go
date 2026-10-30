@@ -1169,11 +1169,11 @@ func loopW(hb []tstmt, test tnext, at int, bb []tstmt, st tstep, back bool, pc, 
 // block, as cmpJump makes it: op, the locals x and y, or the number n where
 // num says so, and the blocks it goes on to where it is false and true.
 type tcmp struct {
-	op          bytecode.Op
-	x, y        uint32
 	n           Value
-	num         bool
 	taken, fall int
+	x, y        uint32
+	op          bytecode.Op
+	num         bool
 }
 
 // cmpOf is the comparison cmpJump ends a block with, for a loop to make in
@@ -1280,8 +1280,8 @@ type wloop struct {
 // in place where the local is a number, as s's own fast path does, calling
 // s for anything else.
 type tstep struct {
-	k     uint32
 	delta float64
-	ok    bool
 	s     tstmt
+	k     uint32
+	ok    bool
 }

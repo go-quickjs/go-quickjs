@@ -10,25 +10,45 @@ import (
 )
 
 // tentry is a value on the operand stack, as the builder follows it: a tree
-// to evaluate, or the frame's stack slot it is in.
+// to evaluate, or the frame's stack slot it is in. Its fields go by size,
+// the words first and the flags last, which packs it in 64 bytes: in the
+// order they were written, padding before each word after a flag, it took
+// 88, a stack entry the builder appends, copies and spills at each push, and
+// two of them in each arithmetic node's arithOf.
 type tentry struct {
 	// v is the tree, for an entry that is one; tree makes one for the other
 	// kinds, where a node calls it rather than reading it in place.
 	v tval
+	// n is the number, for number, and undefined, null, true or false, for
+	// literal.
+	n Value
+	// method is set for a get_prop_this of a receiver read in place, which
+	// is the entry beneath (see zzmethod.go).
+	method *methodOf
+	// arith is, for a tree that is an arithmetic or bitwise node over
+	// operands, what it is of: a store of it to a local can then be one
+	// statement (see storeArith), and BigInt.asUintN of it made of its
+	// operands (see ztree_awrap.go).
+	arith *arithOf
+	// regexpCall is set for the get_prop_this of exec or test on a RegExp
+	// literal (regexp), which the call of it builds into regexpLitCall's
+	// node.
+	regexpCall *regexpCallOf
 	// slot is the stack slot the entry is a read of, or -1 for a tree still
 	// to be evaluated. It is the entry's own position, except for the copy
 	// a dup or dup2 leaves for the get_prop or get_index right after it,
 	// which reads the slot it copies, beneath it (see OpDup): every reader
 	// goes by slot, and spill evaluates such an entry like a tree.
-	slot int
+	slot int32
+	// k is the local or upvalue a read is of, or a RegExp literal's
+	// constant.
+	k uint32
 	// local is set for a read of local k, upvalue for a read of upvalue k,
 	// number for the number n, and this for this where it is a value rather
 	// than a binding: what a node can read in place rather than call v for.
 	local   bool
 	upvalue bool
-	k       uint32
 	number  bool
-	n       Value
 	this    bool
 	// literal is set for undefined, null, true or false, in n.
 	literal bool
@@ -38,20 +58,9 @@ type tentry struct {
 	// says that its right side is an operand the join can take as it is
 	// (see OpConcat).
 	emptyStr bool
-	// method is set for a get_prop_this of a receiver read in place, which
-	// is the entry beneath (see zzmethod.go).
-	method *methodOf
-	// arith is, for a tree that is an arithmetic or bitwise node over
-	// operands, what it is of: a store of it to a local can then be one
-	// statement (see storeArith), and BigInt.asUintN of it made of its
-	// operands (see ztree_awrap.go).
-	arith *arithOf
 	// regexp is set for a RegExp literal's tree, of constant k, which a
-	// method call given it first builds into regexpArgCall's node, and
-	// regexpCall for the get_prop_this of exec or test on one, which the
-	// call of it builds into regexpLitCall's node.
-	regexp     bool
-	regexpCall *regexpCallOf
+	// method call given it first builds into regexpArgCall's node.
+	regexp bool
 }
 
 // regexpCallOf is the RegExp literal, of constant k, whose exec, or test
@@ -64,11 +73,11 @@ type regexpCallOf struct {
 // arithOf is an arithmetic node's operator and operands, or a bitwise
 // node's operator, operand and integer constant.
 type arithOf struct {
-	op   bytecode.Op
 	x, y tentry
-	imm  bool
-	k    int32
 	pc   int
+	k    int32
+	op   bytecode.Op
+	imm  bool
 }
 
 // tbuilder builds a function's tree a block at a time, keeping what it grows
@@ -85,23 +94,19 @@ type tbuilder struct {
 	// handlerSucc are exceptional entries, built like successors but kept
 	// apart from the normal edges the loop structurer follows.
 	handlerSucc []thandlerEntry
-	// protected says the function has handlers. handlers is then the ones
-	// in force where the block being built has got to, innermost last, and
+	// handlers is, where the function has handlers (protected), the ones in
+	// force where the block being built has got to, innermost last, and
 	// entryHandlers each block's at its start (see enterHandlers).
-	protected     bool
 	handlers      []thandlerEntry
 	entryHandlers [][]thandlerEntry
-	// iters says the function has a for...of loop (see ztree_zof.go).
-	iters bool
+	// logical is the && and || jumps that end no block (logicalJumps),
+	// with where they go, and logic the ones whose y the block being built
+	// has got into, innermost last.
+	logical map[int]int
+	logic   []tlogic
 	// end is where the block being built ends, for an instruction that
 	// takes in those after it.
 	end int
-	// noUpdate is set while an update's operand is built, whose reads are
-	// not looked at as updates of their own (see tbuilder.update).
-	noUpdate bool
-	// how is how the block built last ends, for structureTree: endFalls
-	// where it runs on into the next one, endThrows where it throws.
-	how uint8
 	// cmp is the comparison the block built last ends with, where a loop
 	// can make it in place (see cmpOf), or one whose op is 0.
 	cmp tcmp
@@ -110,22 +115,26 @@ type tbuilder struct {
 	// was added, say so (see tstep).
 	step   tstep
 	stepAt int
-	// logical is the && and || jumps that end no block (logicalJumps),
-	// with where they go, and logic the ones whose y the block being built
-	// has got into, innermost last.
-	logical map[int]int
-	logic   []tlogic
 	// badLogic is the jump of an && or || or ternary that the block being
 	// built found its y, a or b add a statement to, or -1.
 	badLogic int
 	// sole is the locals that hold their values alone (soleLocals), once
 	// soleDone says it has been asked.
-	sole     uint64
-	soleDone bool
+	sole uint64
 	// privN is how many reads and writes of private members privateOp has
 	// counted in the code before privPC: the number of the next one's cache,
 	// past the function's PropSites (bytecode.Function.PrivateSites).
 	privPC, privN int
+	// how is how the block built last ends, for structureTree: endFalls
+	// where it runs on into the next one, endThrows where it throws.
+	how uint8
+	// protected says the function has handlers (see handlers), and iters a
+	// for...of loop (see ztree_zof.go).
+	protected, iters bool
+	// noUpdate is set while an update's operand is built, whose reads are
+	// not looked at as updates of their own (see tbuilder.update).
+	noUpdate bool
+	soleDone bool
 }
 
 // target records a way from the block being built to the one at pc, whose
@@ -796,7 +805,7 @@ func (b *tbuilder) pop() tentry {
 }
 func (b *tbuilder) depth() int { return len(b.stack) }
 func (b *tbuilder) pushSlot(d int) {
-	b.stack = append(b.stack, tentry{slot: d})
+	b.stack = append(b.stack, tentry{slot: int32(d)})
 }
 
 // spill evaluates every entry still a tree into its stack slot, in order,
@@ -813,7 +822,7 @@ func (b *tbuilder) spill() bool {
 	var p, q, o int
 	var v, w, u tval
 	for i := range b.stack {
-		if e := b.stack[i]; e.slot != i {
+		if e := b.stack[i]; int(e.slot) != i {
 			switch n {
 			case 0:
 				p, v = i, e.tree()
@@ -838,7 +847,7 @@ func (b *tbuilder) spill() bool {
 		var pos []int
 		vals := []tval{v, w, u}
 		for i, e := range b.stack {
-			if e.slot != i {
+			if int(e.slot) != i {
 				pos = append(pos, i)
 				if len(pos) > 3 {
 					vals = append(vals, e.tree())
@@ -852,8 +861,8 @@ func (b *tbuilder) spill() bool {
 		})
 	}
 	for i := range b.stack {
-		if b.stack[i].slot != i {
-			b.stack[i] = tentry{slot: i}
+		if int(b.stack[i].slot) != i {
+			b.stack[i] = tentry{slot: int32(i)}
 		}
 	}
 	return true
@@ -914,7 +923,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		if more && code[pc+1].Op == bytecode.OpGetProp {
 			// o.p.q op= v: the copy the read takes is read from the slot
 			// beneath it, which nothing writes before the read.
-			b.pushEntry(tentry{slot: d - 1})
+			b.pushEntry(tentry{slot: int32(d - 1)})
 			break
 		}
 		b.body = append(b.body, func(c *tctx) { c.stack[d] = c.stack[d-1] })
@@ -1295,8 +1304,8 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		d := b.depth()
 		if in.Op == bytecode.OpDup2 && more && code[pc+1].Op == bytecode.OpGetIndex {
 			// o.a[0] op= v: as dup's before get_prop.
-			b.pushEntry(tentry{slot: d - 2})
-			b.pushEntry(tentry{slot: d - 1})
+			b.pushEntry(tentry{slot: int32(d - 2)})
+			b.pushEntry(tentry{slot: int32(d - 1)})
 			break
 		}
 		switch in.Op {

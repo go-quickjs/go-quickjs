@@ -62,7 +62,7 @@ func init() {
 			return false
 		}
 		m := b.stack[p]
-		if m.regexpCall == nil || m.slot == p || b.stack[p-1].slot != p-1 {
+		if m.regexpCall == nil || int(m.slot) == p || int(b.stack[p-1].slot) != p-1 {
 			return false
 		}
 		args := make([]tval, n)
@@ -105,7 +105,7 @@ func init() {
 
 	regexpArgCall = func(b *tbuilder, n, pc int) bool {
 		p := len(b.stack) - n - 1
-		if n == 0 || p < 1 || b.stack[p-1].slot != p-1 || b.fn.Generator || b.fn.Async {
+		if n == 0 || p < 1 || int(b.stack[p-1].slot) != p-1 || b.fn.Generator || b.fn.Async {
 			return false
 		}
 		if lit := b.stack[p+1]; !lit.regexp || lit.slot >= 0 {

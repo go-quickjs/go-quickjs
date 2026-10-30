@@ -168,7 +168,7 @@ func init() {
 				b.push(tailMethod(recv, m.in, m.pc, args, b.depth()+1, pc))
 				return true
 			}
-			if p < 1 || b.stack[p-1].slot != p-1 {
+			if p < 1 || int(b.stack[p-1].slot) != p-1 {
 				return false
 			}
 		}
