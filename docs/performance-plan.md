@@ -1939,9 +1939,38 @@ to remove:
 - **F4.** The JIT is 1.20 times the interpreter's wall time on this
   workload, which is mostly short polymorphic calls and string building
   rather than loops, and a JIT runtime holds 18.7 MiB against the
-  interpreter's 2.0. Profile where the native time goes and what is
-  compiled before changing anything; "the profit model should refuse this
-  code" is an answer.
+  interpreter's 2.0. Profiled 2026-10-30, after 300 warm renders so that
+  it is the steady state and not the warm-up (14.3 ms against 17.1): the
+  glue between the tiers costs more than native code saves. In seconds of
+  samples over 600 renders -- interpreter build first, JIT build second --
+  the interpreter and tree tier take 5.00 against 1.36 and other VM code
+  2.43 against 1.76, so native code takes over about 3.6 s of work and
+  does it in 2.2; but the glue around it takes 3.71, of which
+  `jitGoCallNested` is 1.48 flat, about 190 ns a call rebuilding the level
+  frames. A render crosses the boundary about 27,500 times into native
+  code and 13,200 out of it. What those calls out are: 3,652 calls of
+  compiled closures the profit model marked slow, because it judges each
+  function alone and so splits the renderer's recursion into a native half
+  and a slow half with every call between them going through Go; 1,431
+  `Function.prototype.call`; 1,404 `RegExp.prototype.exec`; 802 calls of
+  native closures called through Go anyway. Of the exits, almost all that
+  end in the interpreter are `for...in`: one function is entered natively
+  1,700 times a render and leaves at `for_in_start` 571 of them, the
+  interpreter then finishing the call and its loop, because native code
+  has no `for...in` at all (`compile/lower.go` makes `OpForInStart` a host
+  operation).
+
+  So, in the order they are being tried: `for...in` over ordinary objects
+  compiled natively, keyed by shape as V8's ForInPrepare and ForInNext are
+  -- the layout's key list is already made once and kept with the shape
+  (`shapeKeys`), which is the enum cache -- then a cheaper native-to-Go
+  call with native levels on the stack, then the profit model judged
+  across calls, so that a callee judged slow counts the Go calls it
+  imposes on its native callers and a recursion is wholly in one tier.
+  The last of those starts from `a21df702`, held off main: it has the
+  calibration (`TestJITCalibration`, `QUICKJS_JIT_CALIBRATE=1`) and
+  charges a callee's exits to the callee, and its open problem -- Splay,
+  Json and RegExp slower -- is the acceptance bar.
 
 Landed here: a number part of a string concatenation is written into the
 join rather than through a string of its own (`ba508d37`), which took a
