@@ -142,9 +142,11 @@ func (r *Runtime) RunJobsContext(ctx context.Context) error {
 	rt := r.rt
 	prev := rt.Context()
 	rt.SetContext(ctx)
+	r.watchStop()
 	defer func() {
 		if !r.closed {
 			rt.SetContext(prev)
+			r.watchStop()
 		}
 	}()
 	return r.RunJobs()
@@ -157,6 +159,8 @@ func (r *Runtime) RunJobsContext(ctx context.Context) error {
 func (r *Runtime) AbortOn(done <-chan struct{}) {
 	if !r.closed && r.rt != nil {
 		r.rt.SetAbort(done)
+		r.abort = done
+		r.watchStop()
 	}
 }
 

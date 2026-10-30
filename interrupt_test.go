@@ -107,6 +107,53 @@ func TestNativeLoopsAreInterruptible(t *testing.T) {
 	}
 }
 
+// TestSlowTurnsAreInterruptible pins that a deadline, or AbortOn's channel,
+// stops a loop at the turn it is in, however few turns it makes and however
+// long each takes, as Node stops it. The engine's checks are counted, every
+// 1,024 back edges and every 4,096 calls, so a loop each of whose turns
+// converted a string of 10 million digits to a number ran 20 seconds past a
+// deadline of 100 ms, until the host's stop came to run the counters out.
+// The JIT's differential fuzzer found it: a program whose number strings
+// grew ran past the fuzz worker's 10 seconds. With the race detector on, a
+// stop is noticed at the counted checks only (stopwatch.go).
+func TestSlowTurnsAreInterruptible(t *testing.T) {
+	if raceDetector {
+		t.Skip("the race detector keeps a stop to the counted checks")
+	}
+	for name, opts := range map[string][]quickjs.Option{"interpreter": nil, "jit": {quickjs.WithJIT()}} {
+		t.Run(name, func(t *testing.T) {
+			rt := quickjs.New(opts...)
+			defer rt.Close()
+			if _, err := rt.Eval(`var s = "1".repeat(1e7), t = "1".repeat(1e7), n = 0; s.length + t.length`); err != nil {
+				t.Fatal(err)
+			}
+			for _, body := range []string{"+s", "s * 1", "s < 1", "s == 1", "Number(s)", "parseFloat(s)",
+				"parseInt(s)", "Math.abs(s)", "JSON.parse(s)", "s === t"} {
+				ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+				start := time.Now()
+				_, err := rt.EvalContext(ctx, "for (;;) { n += "+body+" }")
+				cancel()
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("%s: err = %v, want the deadline", body, err)
+				}
+				if d := time.Since(start); d > 2*time.Second {
+					t.Errorf("%s: stopped after %v", body, d)
+				}
+			}
+			stop := make(chan struct{})
+			rt.AbortOn(stop)
+			time.AfterFunc(100*time.Millisecond, func() { close(stop) })
+			start := time.Now()
+			if _, err := rt.Eval(`for (;;) { n += +s }`); err == nil {
+				t.Error("an aborted script returned no error")
+			}
+			if d := time.Since(start); d > 2*time.Second {
+				t.Errorf("aborted: stopped after %v", d)
+			}
+		})
+	}
+}
+
 // TestRegExpMatchingIsInterruptible pins that a regular expression's match
 // takes as long as it takes, as in V8, and that a deadline stops it: a match
 // had a budget of steps instead, which a pattern with a catastrophic backtrack

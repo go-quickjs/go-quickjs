@@ -263,12 +263,15 @@ func jitFuzzWindows(tiers int) (interp, other time.Duration) {
 const jitTimedOut = "timed out"
 
 // jitRunWithin runs src in r, stopped once within has passed, as a host's
-// context deadline stops it, and gives its result and how long it took.
+// context deadline stops it -- at the next back edge or call, as the public
+// Runtime's is (watchStopForTest) -- and gives its result and how long it
+// took.
 func jitRunWithin(t *testing.T, r *Runtime, src string, within time.Duration) (string, time.Duration) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), within)
 	defer cancel()
 	r.SetContext(ctx)
+	defer watchStopForTest(r, ctx)()
 	start := time.Now()
 	v, err := r.Run(compileForTest(t, src))
 	var s *String

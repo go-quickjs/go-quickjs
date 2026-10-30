@@ -107,6 +107,11 @@ type Runtime struct {
 	// iterator was collected to the runtime's goroutine. See seq.go.
 	seqs       map[*seqIter]struct{}
 	seqDropped *AsyncWork
+	// abort is AbortOn's channel. unwatch ends the watch watchStop keeps
+	// on it and on the context in force, whose Done is watchDone; nil
+	// before the first.
+	abort, watchDone, watchAbort <-chan struct{}
+	unwatch                      func()
 }
 
 // Option configures a Runtime.
@@ -372,6 +377,10 @@ func New(opts ...Option) *Runtime {
 // runtime from another cancels the context it runs under.
 func (r *Runtime) Close() error {
 	r.closed = true
+	if r.unwatch != nil {
+		r.unwatch()
+		r.unwatch = nil
+	}
 	rt := r.rt
 	if rt != nil {
 		if rt.Running() {
@@ -612,8 +621,10 @@ func (r *Runtime) enter(ctx context.Context) (nested bool, leave func()) {
 		// for the rest of its turn leaves it there.
 		prev, prevAsync := rt.Context(), rt.AsyncContext()
 		rt.SetContext(ctx)
+		r.watchStop()
 		return false, func() {
 			rt.SetContext(prev)
+			r.watchStop()
 			rt.SetAsyncContext(prevAsync)
 		}
 	}
@@ -632,9 +643,11 @@ func (r *Runtime) enter(ctx context.Context) (nested bool, leave func()) {
 		cancel = func() { stop(); prev() }
 	}
 	rt.SetContext(run)
+	r.watchStop()
 	return true, func() {
 		cancel()
 		rt.SetContext(outer)
+		r.watchStop()
 	}
 }
 
