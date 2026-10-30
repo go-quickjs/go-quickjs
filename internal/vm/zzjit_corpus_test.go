@@ -22,6 +22,7 @@ import (
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/compiler"
+	"github.com/go-quickjs/go-quickjs/internal/jit"
 	jitcompile "github.com/go-quickjs/go-quickjs/internal/jit/compile"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/mir"
@@ -289,15 +290,14 @@ func TestJITCompileCorpus(t *testing.T) {
 // does, without placing its code, and returns the code's hash, when
 // hashing.
 func (r *Runtime) jitCorpusCompile(cl *closure, p *ir.Program, e *jitEntry, hashing bool) (string, error) {
-	s := r.jit
-	defer s.ssaWork.Rewind()
-	defer s.mirWork.Rewind()
-	f, err := jitCorpusBuild(r, cl, p, e)
+	w := jit.GetWorkspace()
+	defer jit.PutWorkspace(w)
+	f, err := jitCorpusBuild(w, r, cl, p, e)
 	if err != nil {
 		return "", err
 	}
 	ssa.Optimize(f)
-	mc, err := mir.CompileIn(&s.mirWork, f, jitEncoding)
+	mc, err := mir.CompileIn(&w.MIR, f, jitEncoding)
 	if err != nil || !hashing {
 		return "", err
 	}
@@ -306,10 +306,9 @@ func (r *Runtime) jitCorpusCompile(cl *closure, p *ir.Program, e *jitEntry, hash
 
 // jitCorpusPhases runs the first phases of jitCorpusCompile's.
 func (r *Runtime) jitCorpusPhases(cl *closure, p *ir.Program, e *jitEntry, phases int) {
-	s := r.jit
-	defer s.ssaWork.Rewind()
-	defer s.mirWork.Rewind()
-	f, err := jitCorpusBuild(r, cl, p, e)
+	w := jit.GetWorkspace()
+	defer jit.PutWorkspace(w)
+	f, err := jitCorpusBuild(w, r, cl, p, e)
 	if err != nil || phases < 2 {
 		return
 	}
@@ -317,14 +316,14 @@ func (r *Runtime) jitCorpusPhases(cl *closure, p *ir.Program, e *jitEntry, phase
 	if phases < 3 {
 		return
 	}
-	mir.CompileIn(&s.mirWork, f, jitEncoding)
+	mir.CompileIn(&w.MIR, f, jitEncoding)
 }
 
 // jitCorpusBuild is compileSSAKeeping's build.
-func jitCorpusBuild(r *Runtime, cl *closure, p *ir.Program, e *jitEntry) (*ssa.Func, error) {
+func jitCorpusBuild(w *jit.Workspace, r *Runtime, cl *closure, p *ir.Program, e *jitEntry) (*ssa.Func, error) {
 	fn := cl.fn
 	fb := &jitFeedback{r: r, fn: fn, cl: cl, e: e, prog: p}
-	f, err := ssa.BuildIn(&r.jit.ssaWork, p, fb)
+	f, err := ssa.BuildIn(&w.SSA, p, fb)
 	if err != nil {
 		return nil, err
 	}

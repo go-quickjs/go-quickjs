@@ -16,9 +16,12 @@ package vm
 // compiles it found no room for, and Discarded those of them it found none
 // for only once it had compiled them. Inlined counts the callees the code
 // it placed inlines, every compile's, and InlinedCode their instructions.
+// Pooled is the process's, not the runtime's: what the workspaces compiles
+// are made in keep while no compile uses them, shared by every runtime,
+// which no runtime's Held counts (jit.Workspace).
 type JITStats struct {
 	Compiled, Entries, Guards, Hosts, Budgets, Interpreted, SSAEntries, SSARecords uint64
-	Held, Budget                                                                   int64
+	Held, Budget, Pooled                                                           int64
 	Evicted, Refused, Discarded                                                    uint64
 	Reoptimized                                                                    uint64
 	Inlined, InlinedCode                                                           uint64

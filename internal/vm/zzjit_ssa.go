@@ -2091,16 +2091,15 @@ var jitKeepLimit int
 // otherwise.
 func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Program, e *jitEntry, keepLimit int) (*jit.SSACode, *jitFeedback, error) {
 	fb := &jitFeedback{r: r, fn: fn, cl: cl, e: e, keepLimit: keepLimit, prog: p, targets: jitTargetsOf(e)}
-	// The compile's memory comes from the runtime's workspaces, taken back
-	// once its code is placed.
+	// The compile's memory comes from a workspace of the process's, given
+	// back once its code is placed.
 	s := r.jit
-	s.workAt = s.epoch() + 1
-	defer s.ssaWork.Rewind()
-	defer s.mirWork.Rewind()
+	w := jit.GetWorkspace()
+	defer jit.PutWorkspace(w)
 	if t := mir.Timing; t != nil {
 		t.Start()
 	}
-	f, err := r.jitBuildSSA(fn, p, fb)
+	f, err := r.jitBuildSSA(w, fn, p, fb)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %v", jitRefused, err)
 	}
@@ -2125,7 +2124,7 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 	if jitSSAOptimized != nil {
 		jitSSAOptimized(fn, f)
 	}
-	mc, err := mir.CompileIn(&s.mirWork, f, jitEncoding)
+	mc, err := mir.CompileIn(&w.MIR, f, jitEncoding)
 	if err != nil && strings.Contains(err.Error(), "runtime error") {
 		// A refusal the backend's own panic made: a bug, which the tests
 		// look for (backendPanics).
@@ -2189,11 +2188,10 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 	return code, fb, nil
 }
 
-// jitBuildSSA is compileSSAKeeping's build of p, with fb, in the runtime's
-// workspace: the function as ssa builds it, told what of fn the backend
-// needs.
-func (r *Runtime) jitBuildSSA(fn *bytecode.Function, p *ir.Program, fb *jitFeedback) (*ssa.Func, error) {
-	f, err := ssa.BuildIn(&r.jit.ssaWork, p, fb)
+// jitBuildSSA is compileSSAKeeping's build of p, with fb, in w: the
+// function as ssa builds it, told what of fn the backend needs.
+func (r *Runtime) jitBuildSSA(w *jit.Workspace, fn *bytecode.Function, p *ir.Program, fb *jitFeedback) (*ssa.Func, error) {
+	f, err := ssa.BuildIn(&w.SSA, p, fb)
 	if err != nil {
 		return nil, err
 	}
@@ -2255,14 +2253,13 @@ func jitGCCycles() uint64 {
 // feedback, as compileSSAKeeping builds it with keepLimit, optimized and
 // compiled, and all it made taken back.
 func (r *Runtime) jitCompileAgain(fn *bytecode.Function, cl *closure, p *ir.Program, e *jitEntry, keepLimit int) {
-	s := r.jit
-	defer s.ssaWork.Rewind()
-	defer s.mirWork.Rewind()
+	w := jit.GetWorkspace()
+	defer jit.PutWorkspace(w)
 	if t := mir.Timing; t != nil {
 		t.Start()
 	}
 	fb := &jitFeedback{r: r, fn: fn, cl: cl, e: e, keepLimit: keepLimit, prog: p}
-	f, err := r.jitBuildSSA(fn, p, fb)
+	f, err := r.jitBuildSSA(w, fn, p, fb)
 	if err != nil {
 		return
 	}
@@ -2270,7 +2267,7 @@ func (r *Runtime) jitCompileAgain(fn *bytecode.Function, cl *closure, p *ir.Prog
 	if t := mir.Timing; t != nil {
 		t.Lap(mir.PhaseOptimize)
 	}
-	mir.CompileIn(&s.mirWork, f, jitEncoding)
+	mir.CompileIn(&w.MIR, f, jitEncoding)
 }
 
 // jitRefused is compileSSA's refusal of a program it does not compile:

@@ -138,14 +138,15 @@ func (r *Runtime) JITStats() JITStats {
 	s := r.jit
 	if s == nil {
 		if r.jitEnabled {
-			return JITStats{Budget: int64(r.jitBudget())}
+			return JITStats{Budget: int64(r.jitBudget()), Pooled: jit.PooledWorkspaceBytes()}
 		}
 		return JITStats{}
 	}
 	return JITStats{Compiled: s.compiled, Entries: s.entries, Guards: s.guards,
 		Hosts: s.hosts, Budgets: s.budgets, Interpreted: s.interpreted, SSAEntries: s.ssaEntries, SSARecords: s.ssaRecords,
 		Held: int64(s.held()), Budget: int64(r.jitBudget()), Evicted: s.evicted, Refused: s.refusedRoom,
-		Discarded: s.discarded, Reoptimized: s.reoptimized, Inlined: s.inlined, InlinedCode: s.inlinedCode}
+		Discarded: s.discarded, Reoptimized: s.reoptimized, Inlined: s.inlined, InlinedCode: s.inlinedCode,
+		Pooled: jit.PooledWorkspaceBytes()}
 }
 
 // JITCacheCounts reports what the JIT's cache dropped in this runtime and
@@ -979,13 +980,6 @@ type jitState struct {
 	// arena holds the code of every entry: a few mappings, however many
 	// functions the runtime compiles.
 	arena *jit.Arena
-	// ssaWork and mirWork are the memory the new pipeline compiles in,
-	// rewound after each compile (ssa.Workspace, mir.Workspace); workAt is
-	// 1 plus the epoch of the last compile in them, or 0 once they are let
-	// go (idle).
-	ssaWork ssa.Workspace
-	mirWork mir.Workspace
-	workAt  uint64
 	// generation advances whenever the cache releases code, which is when a
 	// program refused for want of budget may fit.
 	generation uint64
@@ -1366,9 +1360,10 @@ func (s *jitState) held() int {
 // sharedBytes is what the JIT holds for the runtime apart from its entries
 // and lowerings: its state; the contexts native code runs in; its hint
 // table and links; and code compiled again or dropped that a call of Go is
-// still suspended in (retired). Not the workspaces its compiles keep
-// (workBytes), which are a compile's working memory, as V8's compile
-// zones are not its code space: they hold what the recent compiles needed
+// still suspended in (retired). Not the workspace a compile is made in,
+// which is the process's, the runtime's only while it compiles
+// (jit.Workspace), a compile's working memory as V8's compile zones are
+// not its code space: they hold what the recent compiles needed
 // (ssa.Workspace's Rewind), and counted against the budget they had code
 // dropped for them and were let go themselves to make room, for the next
 // compile to make again -- Octane's Typescript, its median compile a
@@ -1384,9 +1379,6 @@ func (s *jitState) sharedBytes() int {
 	}
 	return n
 }
-
-// workBytes is what the compiles' workspaces keep between compiles.
-func (s *jitState) workBytes() int { return s.ssaWork.Bytes() + s.mirWork.Bytes() }
 
 // account counts what e holds now, if the cache holds it.
 func (s *jitState) account(e *jitEntry) {
@@ -1749,7 +1741,7 @@ func (s *jitState) flushNow() uint64 {
 // young (jitCodeAge), stays, and so does one with no code, whose uses
 // are not counted. What its code learned of its sites is kept
 // (rememberFlushed), and the function is compiled again once it is hot
-// again. It looks at a back-edge check (idle) and before a compile (age).
+// again. It looks at a back-edge check (backEdgeBudget) and before a compile (age).
 func (s *jitState) flush() {
 	tick := s.flushNow()
 	if tick < s.flushedAt+jitFlushAge {
@@ -1936,10 +1928,6 @@ const (
 	jitEpochTime = 50 * time.Millisecond
 )
 
-// jitWorkAge is how many epochs without a compile the compiles'
-// workspaces are kept for (idle).
-const jitWorkAge = 2
-
 // epoch is the cache's clock: the collector's cycles (jitGCEpoch), as V8
 // ages code by them, and, for a program that allocates little -- a
 // numeric kernel, one phase of a program's after another -- each
@@ -1991,19 +1979,6 @@ func (s *jitState) compileBegin() {
 func (s *jitState) compileEnd() {
 	if s.compiling--; s.compiling == 0 {
 		s.compileTime += time.Since(s.compileFrom)
-	}
-}
-
-// idle flushes code gone unused (flush), and lets the compiles' workspaces
-// go once the runtime has compiled nothing for jitWorkAge epochs, at a
-// back-edge check (backEdgeBudget), as V8 gives a compile's zone back once
-// it is done: the budget does not count them (sharedBytes), and kept, a
-// program that compiles no more had the collector mark them at every
-// cycle, megabytes of tables with pointers -- AWFY's Sieve took 5% longer.
-func (s *jitState) idle() {
-	s.flush()
-	if s.workAt != 0 && s.epoch() >= s.workAt-1+jitWorkAge {
-		s.ssaWork, s.mirWork, s.workAt = ssa.Workspace{}, mir.Workspace{}, 0
 	}
 }
 
@@ -2572,7 +2547,7 @@ func (s *jitState) backEdgeBudget() int {
 	if s == nil {
 		return backEdgeCheckInterval
 	}
-	s.idle()
+	s.flush()
 	// The budget that ran out, which tiering counts (jitTierWork).
 	s.edgesSpent = s.edgesNext
 	if s.stressBudget != 0 {

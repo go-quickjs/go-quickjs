@@ -114,75 +114,89 @@ func TestJITForKeepsWhatItCompiled(t *testing.T) {
 	}
 }
 
-// The compiles' workspaces are their working memory, outside the budget:
-// a compile that grows them past it keeps its code, and the workspaces
-// are kept for the next compile, the room the cache makes never made of
-// them. Counted against the budget, they had code dropped for them, and
-// were let go themselves, for the next compile to make again: Octane's
-// Typescript allocated twice as much as with them kept, Box2D three times.
-func TestJITWorkspacesOutsideBudget(t *testing.T) {
-	r := jitRuntimeForTest(t, Config{JIT: true})
-	if _, err := r.Run(compileForTest(t, `
-		function f(n) { let s = 0; for (let i = 0; i < n; i++) s += (i * 7) % 13; return s }`)); err != nil {
-		t.Fatal(err)
+// A compile's workspace is the process's (jit.Workspace): given back once
+// its code is placed, the runtime holds none of it, and the next compile,
+// its own or another runtime's, is made in the one given back, not in one
+// made anew. Kept by each runtime, they were as big as its biggest recent
+// compile for as long as it lived -- 12.6 MiB a runtime rendering React,
+// beside the 6.5 its budget counted.
+func TestJITWorkspacesPooled(t *testing.T) {
+	compile := func() JITStats {
+		r := jitRuntimeForTest(t, Config{JIT: true})
+		if _, err := r.Run(compileForTest(t, `
+			function f(n) { let s = 0; for (let i = 0; i < n; i++) s += (i * 7) % 13; return s }`)); err != nil {
+			t.Fatal(err)
+		}
+		cl := r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure
+		if e := r.jitFor(cl); e == nil || e.ssa == nil {
+			t.Fatalf("f has no code: %+v", e)
+		}
+		return r.JITStats()
 	}
-	cl := r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure
-	now := jitEpochNow
-	var tick uint64
-	jitEpochNow = func() uint64 { tick += 10; return tick }
-	t.Cleanup(func() { jitEpochNow = now })
-	e := r.jitFor(cl)
-	s := r.jit
-	work := s.workBytes()
-	if e == nil || e.ssa == nil || work == 0 {
-		t.Fatalf("f has no code, or the compile kept no workspaces: %+v", e)
+	// The first may grow the workspace it is given; the ones after need
+	// no more of it.
+	compile()
+	first := compile()
+	if first.Pooled == 0 {
+		t.Fatal("a compile gave back no workspace")
 	}
-	// A budget the code fits, and the workspaces do not with it.
-	s.budget = s.held()
-	if work < s.budget/8 {
-		t.Fatalf("workspaces of %d bytes are small for the test, the budget %d", work, s.budget)
-	}
-	if !s.makeRoom(0) || s.evicted != 0 {
-		t.Fatalf("room made of the code: %d evicted", s.evicted)
-	}
-	if !e.owned() || e.ssa == nil || s.workBytes() != work {
-		t.Errorf("code kept %v, workspaces %d of %d", e.owned() && e.ssa != nil, s.workBytes(), work)
+	if again := compile(); again.Pooled > first.Pooled {
+		t.Errorf("a compile made a workspace of its own: %d bytes pooled, %d before", again.Pooled, first.Pooled)
 	}
 }
 
-// The workspaces are let go once the runtime has compiled nothing for
-// jitWorkAge epochs, at a back-edge check: kept, the collector marked them
-// at every cycle of a program that compiles no more.
-func TestJITWorkspacesLetGoWhenIdle(t *testing.T) {
-	r := jitRuntimeForTest(t, Config{JIT: true})
-	if _, err := r.Run(compileForTest(t, `
-		function f(n) { let s = 0; for (let i = 0; i < n; i++) s += (i * 7) % 13; return s }`)); err != nil {
-		t.Fatal(err)
+// Runtimes on goroutines of their own compile at once, each in a workspace
+// of the pool's no other compile uses meanwhile: their code computes what
+// the interpreter does.
+func TestJITWorkspacesConcurrentRuntimes(t *testing.T) {
+	const src = `
+		function f(n, k) { let s = 0; for (let i = 0; i < n; i++) s = (s + (i * k) % 13) | 0; return s }
+		function g(n, k) { const o = {a: k}; let s = 0; for (let i = 0; i < n; i++) s = (s + o.a * i) % 1000003; return s }
+		function h(n, k) { let s = ""; for (let i = 0; i < n; i++) s = (s + (i % k)).slice(-8); return s }
+		function all(k) { let r = 0; for (let j = 0; j < 30; j++) r = (r + f(2000, k) + g(2000, k) + h(500, k).length) | 0; return r }`
+	want := make([]string, 8)
+	for k := range want {
+		r := New(Config{})
+		if _, err := r.Run(compileForTest(t, src)); err != nil {
+			t.Fatal(err)
+		}
+		v, err := r.Run(compileForTest(t, fmt.Sprintf("''+all(%d)", k+3)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want[k] = v.String().Go()
 	}
-	cl := r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure
-	now := jitEpochNow
-	epoch := uint64(100)
-	jitEpochNow = func() uint64 { return epoch }
-	t.Cleanup(func() { jitEpochNow = now })
-	e := r.jitFor(cl)
-	if e == nil || e.ssa == nil || r.jit.workBytes() == 0 {
-		t.Fatalf("f has no code, or the compile kept no workspaces: %+v", e)
+	errs := make(chan error, len(want))
+	for k := range want {
+		go func() {
+			r := New(Config{JIT: true})
+			defer r.Close()
+			if _, err := r.Run(compileForTest(t, src)); err != nil {
+				errs <- err
+				return
+			}
+			for range 3 {
+				v, err := r.Run(compileForTest(t, fmt.Sprintf("''+all(%d)", k+3)))
+				if err != nil {
+					errs <- err
+					return
+				}
+				if got := v.String().Go(); got != want[k] {
+					errs <- fmt.Errorf("all(%d) = %s, the interpreter's %s", k+3, got, want[k])
+					return
+				}
+			}
+			if r.JITStats().Compiled == 0 {
+				errs <- fmt.Errorf("all(%d) compiled nothing", k+3)
+				return
+			}
+			errs <- nil
+		}()
 	}
-	s := r.jit
-	epoch += jitWorkAge - 1
-	s.backEdgeBudget()
-	if s.workBytes() == 0 {
-		t.Fatalf("let go %d epochs after a compile", jitWorkAge-1)
-	}
-	epoch++
-	s.backEdgeBudget()
-	if s.workBytes() != 0 {
-		t.Fatalf("%d bytes of workspaces kept %d epochs after the last compile", s.workBytes(), jitWorkAge)
-	}
-	// A compile after makes them again, and keeps them.
-	s.dropEntry(e.link.key, e)
-	if e := r.jitFor(cl); e == nil || e.ssa == nil || s.workBytes() == 0 {
-		t.Fatalf("compiled again with no workspaces kept: %+v", e)
+	for range want {
+		if err := <-errs; err != nil {
+			t.Error(err)
+		}
 	}
 }
 

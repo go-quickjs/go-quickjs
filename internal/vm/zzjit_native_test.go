@@ -2963,15 +2963,13 @@ func TestJITCacheDropsLeastRecentlyUsed(t *testing.T) {
 // exits, what it was compiled with and what it learned, its literals' and
 // constructions' pools with their objects; the programs it lowered; the
 // contexts native code ran in, the hint table and the links -- not the
-// compiles' workspaces (sharedBytes). The sums the cache keeps are what
+// compiles' workspaces, which are the process's (jit.Workspace). The sums the cache keeps are what
 // measuring each afresh finds.
 func TestJITHeldCountsEachKind(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	// The clock stopped: the workspaces, let go once the runtime has
-	// compiled nothing for jitWorkAge epochs (idle), are held to be
-	// counted -- under checkptr, the script ran past them.
+	// The clock stopped: under checkptr, the script ran past code's ages.
 	now := jitEpochNow
 	jitEpochNow = func() uint64 { return 100 }
 	t.Cleanup(func() { jitEpochNow = now })
@@ -3039,18 +3037,12 @@ func TestJITHeldCountsEachKind(t *testing.T) {
 	if lowered != s.lowerBytes || lowered == 0 {
 		t.Fatalf("lowerings hold %d, counted %d", lowered, s.lowerBytes)
 	}
-	if len(s.ssaCtxs) == 0 || s.workBytes() == 0 || len(s.links) == 0 || len(s.hints) == 0 {
-		t.Fatalf("%d contexts, %d bytes of workspaces, %d links, %d hints", len(s.ssaCtxs), s.workBytes(), len(s.links), len(s.hints))
+	if len(s.ssaCtxs) == 0 || len(s.links) == 0 || len(s.hints) == 0 {
+		t.Fatalf("%d contexts, %d links, %d hints", len(s.ssaCtxs), len(s.links), len(s.hints))
 	}
 	shared := len(s.ssaCtxs)*jitContextBytes + len(s.links)*jitLinkFixed + jitCapBytes(s.hints)
 	if s.sharedBytes() < shared || s.held() != s.entryBytes+s.lowerBytes+s.sharedBytes() {
 		t.Fatalf("shared %d counted, at least %d held", s.sharedBytes(), shared)
-	}
-	// The workspaces are not counted: without them, the JIT holds the same.
-	before := s.sharedBytes()
-	s.ssaWork, s.mirWork = ssa.Workspace{}, mir.Workspace{}
-	if s.workBytes() != 0 || s.sharedBytes() != before {
-		t.Fatalf("shared %d counted with the workspaces, %d without", before, s.sharedBytes())
 	}
 	if r.jitHeldBytes() > int64(r.jitBudget()) {
 		t.Fatalf("%d bytes held, past the budget's %d", r.jitHeldBytes(), r.jitBudget())
