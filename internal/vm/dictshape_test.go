@@ -140,3 +140,60 @@ func TestShapeDictionarySites(t *testing.T) {
 		}
 	}
 }
+
+// A dictionary grown past the keys a table scans is given a layout of its
+// own, which a cache may remember and which is in no tree (shapeAdded). An
+// object whose prototype is one of those has no tree to join: it is given a
+// loose layout, as one with a null prototype is, rather than reading a tree
+// its prototype's layout does not have. Its first property added by a
+// define -- Object.defineProperty, Object.defineProperties and the
+// descriptors of Object.create, which the tifa shop's blog pages reach
+// through React's jsx-runtime -- had dereferenced that tree.
+func TestShapeDictionaryPrototypeNoTree(t *testing.T) {
+	r := New(Config{})
+	defer r.Close()
+	v, err := r.Run(compileForTest(t, `
+		function dict() { var d = Object.create(null); for (var i = 0; i < 12; i++) d["k" + i] = i; return d }
+		var proto = dict()
+		var one = Object.create(proto)
+		Object.defineProperty(one, "x", {value: 1, writable: true, enumerable: true, configurable: true})
+		var many = Object.create(dict())
+		Object.defineProperties(many, {y: {value: 2, enumerable: true}, z: {value: 3}})
+		var made = Object.create(dict(), {w: {value: 4, enumerable: true}})
+		var stored = Object.create(dict())
+		stored.v = 5
+		function read(o) { return o.k3 }
+		var sum = 0
+		for (var i = 0; i < 3; i++) sum += read(one) + read(many) + read(made) + read(stored)
+		function hot(p) { var o = Object.create(p); o.v = 6; return o.v + o.k3 }
+		var hotSum = 0
+		for (var i = 0; i < 2000; i++) hotSum += hot(proto)
+		;[one.x, one.k11, many.y, many.z, Object.keys(many).join(""), made.w, stored.v, sum, hotSum].join()`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// sum: 3 rounds of four objects reading k3 of the prototype. hotSum:
+	// 2,000 rounds of 6 and k3, the store of a function run hot enough for
+	// the tree tier and for the JIT, which reach shapeAdded with no shape on
+	// the object, where a store through a cache does not. That is what made
+	// the JIT build fail on 18 of the 20 pages where the interpreter failed
+	// on 2.
+	if got, want := v.String().Go(), "1,11,2,3,y,4,5,36,18000"; got != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
+	if p := globalObject(r, "proto"); p.shape == nil || p.shape.loose || p.shape.tree != nil {
+		t.Fatalf("the dictionary prototype: shape %p loose %v tree %p; want a layout of its own, in no tree", p.shape, p.shape.loose, p.shape.tree)
+	}
+	for _, name := range []string{"one", "many", "made"} {
+		o := globalObject(r, name)
+		if o.shape == nil || !o.shape.loose {
+			t.Errorf("%s, defined under a prototype in no tree: shape %p loose %v; want a loose layout, there being no tree to join", name, o.shape, o.shape != nil && o.shape.loose)
+		}
+	}
+	// A store goes through a cache, which gives the object its class's root
+	// in the runtime's tree before the property is added: that path is the
+	// one it was, and keeps the layouts a cache remembers.
+	if o := globalObject(r, "stored"); o.shape == nil || o.shape.loose || o.shape.tree != r.shapes {
+		t.Errorf("stored, assigned under the same prototype: shape %p loose %v tree %p; want the runtime's tree %p", o.shape, o.shape != nil && o.shape.loose, o.shape.tree, r.shapes)
+	}
+}

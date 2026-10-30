@@ -548,6 +548,16 @@ func (o *Object) cacheShape() *shape {
 	return nil
 }
 
+// cacheTree is the tree of the object's shape as a cache may remember it: nil
+// for none, for a loose one, and for one of a kind that is in no tree, which a
+// dictionary grown past the keys a table scans is given (shapeAdded).
+func (o *Object) cacheTree() *shapeTree {
+	if s := o.cacheShape(); s != nil {
+		return s.tree
+	}
+	return nil
+}
+
 // child is the shape one property added makes, or nil where the tree will not
 // hold it.
 func (s *shape) child(e shapeEdge) *shape {
@@ -628,8 +638,11 @@ func (o *Object) shapeAdded(k propKey) {
 	if s == nil {
 		// A first property: an object whose prototype has a tree joins it,
 		// at the root for its class -- or, while the realm is being made,
-		// gets a layout of its own, being one of a kind.
-		if n == 1 && shapeClass(o.class) && o.proto != nil && o.proto.cacheShape() != nil {
+		// gets a layout of its own, being one of a kind. A prototype's own
+		// layout is in no tree where it is one a cache may remember and yet
+		// of no tree's making: a dictionary grown past the keys a table
+		// scans (below). There is then no tree to join.
+		if n == 1 && shapeClass(o.class) && o.proto != nil && o.proto.cacheTree() != nil {
 			t := o.proto.shape.tree
 			if t.building {
 				o.shape = newUniqueShape(t, []propKey{k}, nil)
