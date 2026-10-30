@@ -1122,7 +1122,15 @@ type jitState struct {
 	pinSerial    uint64
 	goMark       jitGoMark
 	levels       jitLevels
-	goRuns       []jitGoRun
+	// lazy are the native levels whose frames calls of Go put off, the
+	// innermost call's last, and lazyTop the depth below which they are
+	// (jitLazyLevels).
+	lazy    []jitLazyLevels
+	lazyTop int
+	// lazyCalls counts the calls that put frames off, lazyMade the times
+	// frames put off were made, and lazyHeld the codes not closed for them.
+	lazyCalls, lazyMade, lazyHeld uint64
+	goRuns                        []jitGoRun
 	// calleeOpen is, by context, what closures a native callee made
 	// captured of its locals, not closed yet (abi.Context's Open), and
 	// calleeFrame the frame a callee's context stands for while Go makes

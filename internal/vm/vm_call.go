@@ -748,6 +748,11 @@ func (r *Runtime) seekFrameBlock() {
 
 // frameAt is the frame at a depth, counting from the bottom.
 func (r *Runtime) frameAt(i int) *frame {
+	if jitBuilt {
+		// One of the native levels whose frames a call of Go put off, made
+		// first (jitLazyLevels).
+		r.jitFramesDue(i)
+	}
 	u := uint(i)
 	return &r.frames[u/frameBlockSize][u%frameBlockSize]
 }

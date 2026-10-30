@@ -4167,7 +4167,10 @@ type jitRetired struct {
 // returns there: then code and keep, what it holds -- the shapes it
 // compares, the objects and pools it reads -- stay until none is.
 func (s *jitState) closeSSA(code *jit.SSACode, keep any) error {
-	if code != nil && slices.Contains(s.goPinned, code) {
+	if code != nil && (len(s.lazy) != 0 || slices.Contains(s.goPinned, code)) {
+		if len(s.lazy) != 0 {
+			s.lazyHeld++
+		}
 		s.retired = append(s.retired, jitRetired{code, keep})
 		return nil
 	}
@@ -4913,7 +4916,19 @@ func (r *Runtime) jitGoCallNested(ctx *abi.Context, idx int) bool {
 	for i := root + 1; i <= idx && !gens; i++ {
 		gens = jitGenLevel(ctxs[i], (*closure)(ctxs[i].Closure), abi.ExitHost) != nil
 	}
-	if !loops && !gens && lv.serial == serial && lv.root == root && lv.depth == depthBefore {
+	// The levels below the one that calls are given frames only when one
+	// of them is read (jitLazyLevels): a stack trace, a function's caller.
+	// The call reads the calling level's frame, which it makes; making the
+	// others at every call had cost a deep recursion of native callees --
+	// a React server render's, two dozen levels deep -- more than a tenth
+	// of its time, as V8 walks its optimized frames only when asked to.
+	// Levels that run a built-in's loop or a generator have frames of
+	// their own between them, which are made now, as before.
+	lazy := !loops && !gens && idx-root > 1
+	if lazy {
+		k = idx - root - 1
+		r.jitFrameBlocks(depthBefore + k)
+	} else if !loops && !gens && lv.serial == serial && lv.root == root && lv.depth == depthBefore {
 		for k < min(lv.n, idx-root) {
 			c, at := ctxs[root+1+k], &lv.at[k]
 			if c.Closure != at.cl || c.Base != at.base || c.This != at.this || c.Instance != at.instance {
@@ -4962,47 +4977,20 @@ func (r *Runtime) jitGoCallNested(ctx *abi.Context, idx int) bool {
 			}
 			e.pinSerial, e.pinCode = serial, e.ssa
 		}
-		base := int(c.Base)
 		g := jitGenLevel(c, lcl, abi.ExitHost)
 		if g != nil {
 			r.jitPushGenNext(g)
 		}
-		f = r.pushFrame()
-		f.cl = lcl
-		f.pc = uint32(callPC) + 1
-		if g != nil {
-			// A generator's, its locals its own, its operands at the
-			// level's base (jitGenFrame).
-			f.locals, f.base = g.vals[g.nargs:], base
-			f.this, f.newTarget, f.callee, f.args = g.this, Undefined, g.callee, g.vals[:g.nargs:g.nargs]
-		} else {
-			f.locals = r.stack[base : base+lcl.fn.LocalCount : base+lcl.fn.LocalCount]
-			f.base = base + lcl.fn.LocalCount
-			f.this, f.newTarget, f.callee, f.args = *(*Value)(unsafe.Pointer(&c.This)), Undefined, nil, nil
-		}
-		// Its function object, where the call it runs for says (an
-		// accessor's): the level's caller's, at its call. Asked only of a
-		// property's read or write: this runs for every call of Go a native
-		// callee makes, and each level's lookup had cost AWFY's Json 2%.
 		callerFn := runF.cl.fn
 		if i > root+1 {
 			callerFn = (*closure)(ctxs[i-1].Closure).fn
 		}
-		if pc := int(prevPC); pc < len(callerFn.Code) {
-			if op := callerFn.Code[pc].Op; op == bytecode.OpGetProp || op == bytecode.OpSetProp {
-				f.callee = r.jitLevelCallee(callerFn, pc, f.this)
-			}
-		}
-		if c.Function != 0 && lcl.fn.Kind != bytecode.KindDerivedConstructor && e.ssaProg != nil && e.ssaProg.FrameCallee {
-			// The function object its code reads, which the call wrote
-			// (jitFrameCallee); a derived construction's is jitDerivedFrame's.
-			f.callee = *(**Object)(unsafe.Pointer(&c.Function))
-		}
+		f = r.pushFrame()
+		r.jitLevelFrameFill(f, c, lcl, e, g, callPC, prevPC, callerFn)
 		prevPC = callPC
-		f.openUpvalues, f.handlers = f.openUpvalues[:0], f.handlers[:0]
-		f.thisRef, f.withScopes, f.evalVars, f.native, f.savedSP = nil, nil, nil, "", 0
-		if lcl.fn.Kind == bytecode.KindDerivedConstructor {
-			jitDerivedFrame(f, c)
+		if lazy {
+			// The calling level's, the cache's no more (below).
+			continue
 		}
 		at := jitLevelFrame{f: f, e: e, cl: c.Closure, base: c.Base, this: c.This, instance: c.Instance}
 		if k := i - root - 1; k < len(lv.at) {
@@ -5017,7 +5005,7 @@ func (r *Runtime) jitGoCallNested(ctx *abi.Context, idx int) bool {
 		}
 	}
 	lv.serial, lv.root, lv.depth = serial, root, depthBefore
-	if loops || gens {
+	if loops || gens || lazy {
 		// Frames no other call shares.
 		lv.serial = 0
 	}
@@ -5033,6 +5021,11 @@ framed:
 	}
 	sp := top + n
 	r.stackTop, r.stackHigh = sp, max(r.stackHigh, sp)
+	if lazy {
+		s.lazy = append(s.lazy, jitLazyLevels{root: root, idx: idx, depth: depthBefore, runF: runF})
+		s.lazyTop = depthBefore + idx - root - 1
+		s.lazyCalls++
+	}
 	e.ssaStats.goCalls++
 	s.goCalls++
 	prop := in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
@@ -5129,6 +5122,9 @@ framed:
 	}
 	s.goCallDepth = goCallDepth
 	s.ctxTop = ctxTop
+	if lazy {
+		r.jitLazyDone()
+	}
 	jitClearArgs(r.stack, top, sp)
 	r.stackTop = top
 	r.frameDepth = depthBefore
@@ -5351,6 +5347,11 @@ func (r *Runtime) jitStringAbsent(s *String, n float64) bool {
 // jitCloseRetired closes the retired code no call of Go is suspended in.
 func (r *Runtime) jitCloseRetired() {
 	s := r.jit
+	if len(s.lazy) != 0 {
+		// Native levels whose frames a call of Go put off, whose code is
+		// not pinned (jitLazyLevels): until they go on, none is closed.
+		return
+	}
 	kept := s.retired[:0]
 	for _, x := range s.retired {
 		if slices.Contains(s.goPinned, x.code) {

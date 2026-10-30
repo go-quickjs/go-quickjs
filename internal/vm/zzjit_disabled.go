@@ -47,3 +47,6 @@ func (*Runtime) jitTreeRecovery(*frame) bool                          { return f
 func jitTreeResult(any) (Value, error, bool)                          { return Value{}, nil, false }
 func (*Runtime) jitCodeBytes() int64                                  { return 0 }
 func (*Runtime) releaseJIT()                                          {}
+
+// jitFramesDue makes no frames: no native code puts one off.
+func (r *Runtime) jitFramesDue(i int) {}
