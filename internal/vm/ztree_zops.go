@@ -338,6 +338,36 @@ func init() {
 		case bytecode.OpConcat:
 			// A template literal's parts, joined once.
 			n := int(a)
+			// A + chain's parts, which the compiler converts by adding each
+			// operand that is no string literal to the empty string
+			// (compileStringChain): the string it makes of a number the join
+			// would only copy and drop, so the number goes to the join as it
+			// is, which writes its text where it belongs (joinValues). A
+			// string needs no conversion either. Anything else is converted
+			// as the addition converted it, at the same point, since it may
+			// run user code.
+			if len(b.stack) >= n {
+				for i := len(b.stack) - n; i < len(b.stack); i++ {
+					e := b.stack[i]
+					if e.arith == nil || e.v == nil || e.slot >= 0 ||
+						e.arith.op != bytecode.OpAdd || e.arith.imm || !e.arith.x.emptyStr {
+						continue
+					}
+					y, ypc := e.arith.y.tree(), e.arith.pc&treePCMask
+					b.stack[i] = tentry{slot: -1, v: func(c *tctx) Value {
+						v := y(c)
+						if v.IsString() || v.IsNumber() {
+							return v
+						}
+						c.at(ypc)
+						s, err := c.r.add(Str(emptyString), v)
+						if err != nil {
+							c.throw(err)
+						}
+						return s
+					}}
+				}
+			}
 			if !b.spill() || b.depth() < n {
 				return 0, false
 			}

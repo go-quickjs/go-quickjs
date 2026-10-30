@@ -32,6 +32,12 @@ type tentry struct {
 	this    bool
 	// literal is set for undefined, null, true or false, in n.
 	literal bool
+	// emptyStr is set for the empty string a push_empty_string pushes,
+	// which the compiler adds an operand of a string concatenation to in
+	// order to convert it (compileStringChain): the addition's entry then
+	// says that its right side is an operand the join can take as it is
+	// (see OpConcat).
+	emptyStr bool
 	// method is set for a get_prop_this of a receiver read in place, which
 	// is the entry beneath (see zzmethod.go).
 	method *methodOf
@@ -1269,7 +1275,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			return x
 		})
 	case bytecode.OpPushEmptyString:
-		b.push(func(*tctx) Value { return Str(emptyString) })
+		b.pushEntry(tentry{slot: -1, emptyStr: true, v: func(*tctx) Value { return Str(emptyString) }})
 	case bytecode.OpPutLocal:
 		// The value is stored and stays: it is stored when it is evaluated,
 		// which is in its turn.
