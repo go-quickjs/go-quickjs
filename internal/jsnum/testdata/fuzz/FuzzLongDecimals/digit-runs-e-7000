@@ -1,0 +1,6 @@
+go test fuzz v1
+string("")
+string("00000000010")
+uint16(935)
+string("-7000")
+bool(true)
