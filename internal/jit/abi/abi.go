@@ -1117,11 +1117,23 @@ type Encoding struct {
 	// the state's byte at IterDone says the loop is done, the pointer at
 	// IterArr is the array a for...of walks in place, nil for any other
 	// iteration, and the int at IterIdx the next element's index. Native
-	// code writes nothing there but that index.
-	ObjectData                 int32
-	IterState                  int32
-	ClassCursor                uint8
-	IterDone, IterArr, IterIdx int32
+	// code writes nothing there but that index, and, as it steps a cursor
+	// to its end, the done byte.
+	//
+	// A for...in's cursor has a nonzero byte at IterForIn, and its walk
+	// ForInState bytes past the state: the slice of the keys it hands out
+	// at ForInKeys, values, the object they are the keys of at ForInObj,
+	// that object's shape when the keys are its layout's at ForInShape (nil
+	// otherwise), and at ForInIndexKeys the int count of the array indices
+	// walked before them, which IterIdx counts too (0 where native code does
+	// not step one).
+	ObjectData                                  int32
+	IterState                                   int32
+	ClassCursor                                 uint8
+	IterDone, IterArr, IterIdx                  int32
+	IterForIn                                   int32
+	ForInState, ForInKeys, ForInObj, ForInShape int32
+	ForInIndexKeys                              int32
 	// A for...of over a Map's or a Set's iterator has the iterator at
 	// IterIter and its next at IterNext, values both; the iterator's data's
 	// type word is then MapIterData (0 where native code does not step
@@ -1418,7 +1430,8 @@ func IsNumber(word uint64) bool { return word < NumberLimit }
 // derived constructor's super(...) (GoCallSuper), of the frame's this
 // slot, unbound or not, then its arguments, the result the this it binds;
 // or a destructuring's rest element (GoCallRest), of its one operand, the
-// cursor, the result the array of what it has left; or an operation Go
+// cursor, the result the array of what it has left; or a for...in's cursor
+// made (GoCallForIn) of its one operand, the object; or an operation Go
 // makes (GoCallOp, the lowering's GoOperation), the VM's opcode in the high
 // half's low byte and its instruction's A operand in the 24 bits above, of
 // the argument count's operands, the top of the stack, which its result
@@ -1449,6 +1462,7 @@ const (
 	GoCallSuper      = 10
 	GoCallRest       = 11
 	GoCallOp         = 12
+	GoCallForIn      = 13
 	GoClosurePool    = 1
 )
 

@@ -1299,8 +1299,8 @@ type CallSite struct {
 	// call, and the call while the collector marks.
 	GenMake uintptr
 	// ForOf marks a for...of's or a destructuring's cursor made of the
-	// iterable, its one operand.
-	ForOf bool
+	// iterable, its one operand; ForIn a for...in's, of the object.
+	ForOf, ForIn bool
 	// Rest marks a destructuring's rest element made of its cursor, the
 	// one operand: the array of what the cursor has left (ir's IterStep,
 	// Rest).

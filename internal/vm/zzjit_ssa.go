@@ -116,6 +116,12 @@ var jitEncoding = abi.Encoding{
 	IterDone:           int32(unsafe.Offsetof(iterState{}.done)),
 	IterArr:            int32(unsafe.Offsetof(iterState{}.arr)),
 	IterIdx:            int32(unsafe.Offsetof(iterState{}.idx)),
+	IterForIn:          int32(unsafe.Offsetof(iterState{}.forIn)),
+	ForInState:         int32(unsafe.Offsetof(forInObject{}.in) - unsafe.Offsetof(iterObject{}.st)),
+	ForInKeys:          int32(unsafe.Offsetof(forInState{}.keys)),
+	ForInObj:           int32(unsafe.Offsetof(forInState{}.obj)),
+	ForInShape:         int32(unsafe.Offsetof(forInState{}.shape)),
+	ForInIndexKeys:     int32(unsafe.Offsetof(forInState{}.indexKeys)),
 	IterIter:           int32(unsafe.Offsetof(iterState{}.iter)),
 	IterNext:           int32(unsafe.Offsetof(iterState{}.next)),
 	MapIterData:        jitTypeWord((*mapIterData)(nil)),
@@ -2972,6 +2978,13 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 		// None it calls natively: Go makes it, called from native code
 		// (jitGoCall), as V8's code calls a function it has no code for.
 		call := jitCallInstr(fb.fn.Code[pc])
+		if call.Op == bytecode.OpForInStart {
+			// A for...in's cursor, which Go makes, called from native code
+			// (abi.GoCallForIn), native code going on after it, where it had
+			// left at each loop's start; its steps native code makes over the
+			// keys of its object's layout (mir's forInStep).
+			return []ssa.CallSite{{Go: ssa.GoCall, ForIn: true, ThisSlot: -1}}
+		}
 		if call.Op == bytecode.OpForOfStart {
 			// Its cursor, which Go makes, called from native code: a
 			// destructuring makes one each time. One over a generator with
@@ -4226,7 +4239,7 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 	}
 	sp := top + n
 	r.stackTop, r.stackHigh = sp, max(r.stackHigh, sp)
-	step := op || in.Op == bytecode.OpIterNextOrJump || in.Op == bytecode.OpIterStep || in.Op == bytecode.OpIterRest || in.Op == bytecode.OpForOfStart || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpSuperCall
+	step := op || in.Op == bytecode.OpIterNextOrJump || in.Op == bytecode.OpIterStep || in.Op == bytecode.OpIterRest || in.Op == bytecode.OpForOfStart || in.Op == bytecode.OpForInStart || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpSuperCall
 	prop := in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 	if in.Op == bytecode.OpIterNextOrJump || in.Op == bytecode.OpIterStep {
 		// A step over a generator the code may resume natively.
@@ -5033,7 +5046,7 @@ framed:
 		// A step over a generator the code may resume natively.
 		r.jitGenStepSeen(e, f.cl, pc, r.stack[sp-1])
 	}
-	if !op && !host && in.Op != bytecode.OpIterNextOrJump && in.Op != bytecode.OpIterStep && in.Op != bytecode.OpIterRest && in.Op != bytecode.OpForOfStart && in.Op != bytecode.OpTypeOf && in.Op != bytecode.OpInstanceOf && in.Op != bytecode.OpSuperCall && !prop && jitCallUnsettled(e, pc, in) {
+	if !op && !host && in.Op != bytecode.OpIterNextOrJump && in.Op != bytecode.OpIterStep && in.Op != bytecode.OpIterRest && in.Op != bytecode.OpForOfStart && in.Op != bytecode.OpForInStart && in.Op != bytecode.OpTypeOf && in.Op != bytecode.OpInstanceOf && in.Op != bytecode.OpSuperCall && !prop && jitCallUnsettled(e, pc, in) {
 		r.jitCallSeen(f, e, pc, sp, in)
 	}
 	r.jitCalleeProfit(e, serial, pc)
@@ -5656,6 +5669,9 @@ func jitGoCallInstr(op uint64) (bytecode.Instr, int) {
 	case abi.GoCallForOf:
 		// A cursor made, of the iterable, the one operand.
 		return bytecode.Instr{Op: bytecode.OpForOfStart}, 1
+	case abi.GoCallForIn:
+		// A for...in's cursor made, of the object, the one operand.
+		return bytecode.Instr{Op: bytecode.OpForInStart}, 1
 	case abi.GoCallRest:
 		// A destructuring's rest element, of the cursor, the one operand.
 		return bytecode.Instr{Op: bytecode.OpIterRest}, 1
@@ -5705,6 +5721,10 @@ func (r *Runtime) jitCallMade(in bytecode.Instr, sp int) (Value, error) {
 	if in.Op == bytecode.OpForOfStart {
 		// A for...of's or a destructuring's cursor (abi.GoCallForOf).
 		return r.startForOf(r.stack[sp-1])
+	}
+	if in.Op == bytecode.OpForInStart {
+		// A for...in's cursor (abi.GoCallForIn).
+		return r.startForIn(r.stack[sp-1])
 	}
 	if in.Op == bytecode.OpIterRest {
 		// A destructuring's rest element (abi.GoCallRest): the array of

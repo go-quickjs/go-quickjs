@@ -3045,17 +3045,28 @@ func (c *compiler) iterStep(v *ssa.Value, slow amd64.Label) {
 	c.a.Load(scratchA, scratchB, c.enc.IterIdx)
 	c.a.Load(scratchC, scratchB, c.enc.IterArr)
 	c.a.Op(amd64.Test, scratchC, scratchC, true)
-	// No array: a generator, which genStep resumes natively, or a Map's
-	// or a Set's iterator, which mapStep steps, out of the array's way,
-	// with the code's cold paths.
-	nexts, gens := stepNexts(v, c.enc), stepGens(v, c.enc)
+	// No array: a for...in's, which forInStep steps, a generator, which
+	// genStep resumes natively, or a Map's or a Set's iterator, which
+	// mapStep steps, out of the array's way, with the code's cold paths.
+	nexts, gens, forIn := stepNexts(v, c.enc), stepGens(v, c.enc), c.enc.ForInState != 0
 	others := slow
-	if nexts != ([2]uintptr{}) || gens {
+	if nexts != ([2]uintptr{}) || gens || forIn {
 		others = c.a.NewLabel()
 		done := c.a.NewLabel()
 		defer c.a.Bind(done)
 		c.cold = append(c.cold, func() {
 			c.a.Bind(others)
+			if forIn {
+				notForIn := slow
+				if nexts != ([2]uintptr{}) || gens {
+					notForIn = c.a.NewLabel()
+				}
+				c.forInStep(v, notForIn, slow, done)
+				if notForIn == slow {
+					return
+				}
+				c.a.Bind(notForIn)
+			}
 			if gens {
 				notGen := slow
 				if nexts != ([2]uintptr{}) {
@@ -3090,6 +3101,63 @@ func (c *compiler) iterStep(v *ssa.Value, slow amd64.Label) {
 	c.a.Load(scratchC, scratchB, c.enc.IterIdx)
 	c.a.OpImm(amd64.Add, scratchC, 1, true)
 	c.a.Store(scratchB, c.enc.IterIdx, scratchC)
+}
+
+// forInStep is iterStep's step of a for...in's cursor, its state in
+// scratchB and xScratch2, or on to notForIn for any other cursor: one
+// walking the keys of its object's layout (the VM's shapeKeys), past any
+// array indices it walked first, its object of that layout still -- so
+// that no key has been deleted since -- has the next key copied into the
+// call's keep cell, both words, and the walk advanced, as iterNext does,
+// as V8's ForInNext loads a key from the enum cache where the receiver's
+// map is still the cache's. Past the last key the cursor is done, and the
+// answer the uninitialized value, which no step yields. Anything else goes
+// to slow, where Go steps it. It goes on at done. Native code stores no
+// pointer: the key goes to the context, the walk's index and the done
+// byte to the cursor, an int and a byte. It uses every scratch register.
+func (c *compiler) forInStep(v *ssa.Value, notForIn, slow, done amd64.Label) {
+	fail := func(cond amd64.Cond) { c.a.Jcc(cond, slow) }
+	in := c.enc.ForInState
+	c.a.LoadU8(scratchC, scratchB, c.enc.IterForIn)
+	c.a.Op(amd64.Test, scratchC, scratchC, false)
+	c.a.Jcc(amd64.CondE, notForIn)
+	// The object of the keys' layout still: nothing deleted from it.
+	c.a.Load(scratchC, scratchB, in+c.enc.ForInShape)
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	fail(amd64.CondE)
+	c.a.Load(scratchA, scratchB, in+c.enc.ForInObj)
+	c.a.Load(scratchA, scratchA, c.enc.ObjectShape)
+	c.a.Op(amd64.Cmp, scratchA, scratchC, true)
+	fail(amd64.CondNE)
+	// Past the array indices, which Go walks.
+	c.a.Load(scratchA, scratchB, c.enc.IterIdx)
+	c.a.Load(scratchC, scratchB, in+c.enc.ForInIndexKeys)
+	c.a.Op(amd64.Cmp, scratchA, scratchC, true)
+	fail(amd64.CondL)
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	end := c.a.NewLabel()
+	c.a.Load(scratchC, scratchB, in+c.enc.ForInKeys+8)
+	c.a.Op(amd64.Cmp, scratchA, scratchC, true)
+	c.a.Jcc(amd64.CondGE, end)
+	c.a.Load(scratchC, scratchB, in+c.enc.ForInKeys)
+	c.a.ShiftImm(amd64.Shl, scratchA, 4, true)
+	c.a.Op(amd64.Add, scratchA, scratchC, true)
+	c.a.Load(scratchC, scratchA, c.enc.NumOffset)
+	c.a.Store(regCtx, keep+c.enc.NumOffset, scratchC)
+	c.a.Load(scratchC, scratchA, c.enc.RefOffset)
+	c.a.Store(regCtx, keep+c.enc.RefOffset, scratchC)
+	c.a.Load(scratchC, scratchB, c.enc.IterIdx)
+	c.a.OpImm(amd64.Add, scratchC, 1, true)
+	c.a.Store(scratchB, c.enc.IterIdx, scratchC)
+	c.a.Jmp(done)
+	// Done: the cursor marked so, the answer the uninitialized value.
+	c.a.Bind(end)
+	c.a.MovImm(scratchA, 1)
+	c.a.Store8(scratchB, c.enc.IterDone, scratchA)
+	c.movImm(scratchA, c.enc.Uninitialized)
+	c.a.Store(regCtx, keep+c.enc.NumOffset, scratchA)
+	c.a.StoreImm(regCtx, keep+c.enc.RefOffset, 0)
+	c.a.Jmp(done)
 }
 
 // genStep is iterStep's step of a cursor over a generator of one of the

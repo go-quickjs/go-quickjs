@@ -5514,16 +5514,28 @@ func (c *a64Compiler) iterStep(v *ssa.Value, slow arm64.Label) {
 	c.a.Cbnz(a64C, slow, false)
 	c.a.Load(a64A, a64D, c.enc.IterIdx)
 	c.a.Load(a64C, a64D, c.enc.IterArr)
-	// No array: a generator, which genStep resumes natively, or a Map's
-	// or a Set's iterator, which mapStep steps.
-	nexts, gens := stepNexts(v, c.enc), stepGens(v, c.enc)
+	// No array: a for...in's, which forInStep steps, a generator, which
+	// genStep resumes natively, or a Map's or a Set's iterator, which
+	// mapStep steps.
+	nexts, gens, forIn := stepNexts(v, c.enc), stepGens(v, c.enc), c.enc.ForInState != 0
 	others := slow
-	if nexts != ([2]uintptr{}) || gens {
+	if nexts != ([2]uintptr{}) || gens || forIn {
 		others = c.a.NewLabel()
 		done := c.a.NewLabel()
 		defer c.a.Bind(done)
 		c.cold = append(c.cold, func() {
 			c.a.Bind(others)
+			if forIn {
+				notForIn := slow
+				if nexts != ([2]uintptr{}) || gens {
+					notForIn = c.a.NewLabel()
+				}
+				c.forInStep(v, notForIn, slow, done)
+				if notForIn == slow {
+					return
+				}
+				c.a.Bind(notForIn)
+			}
 			if gens {
 				notGen := slow
 				if nexts != ([2]uintptr{}) {
@@ -5558,6 +5570,53 @@ func (c *a64Compiler) iterStep(v *ssa.Value, slow arm64.Label) {
 	c.a.Load(a64C, a64D, c.enc.IterIdx)
 	c.a.AddImm(a64C, a64C, 1, true)
 	c.a.Store(a64D, c.enc.IterIdx, a64C)
+}
+
+// forInStep is amd64's: a for...in's step over the keys of its object's
+// layout, the cursor's state in D, or on to notForIn for another cursor.
+// It stores no pointer. It uses A, B and C.
+func (c *a64Compiler) forInStep(v *ssa.Value, notForIn, slow, done arm64.Label) {
+	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+	in := c.enc.ForInState
+	c.a.LoadU8(a64C, a64D, c.enc.IterForIn)
+	c.a.Cbz(a64C, notForIn, false)
+	// The object of the keys' layout still: nothing deleted from it.
+	c.a.Load(a64C, a64D, in+c.enc.ForInShape)
+	c.a.Cbz(a64C, slow, true)
+	c.a.Load(a64A, a64D, in+c.enc.ForInObj)
+	c.a.Load(a64A, a64A, c.enc.ObjectShape)
+	c.a.Cmp(a64A, a64C, true)
+	fail(arm64.NE)
+	// Past the array indices, which Go walks.
+	c.a.Load(a64A, a64D, c.enc.IterIdx)
+	c.a.Load(a64C, a64D, in+c.enc.ForInIndexKeys)
+	c.a.Cmp(a64A, a64C, true)
+	fail(arm64.LT)
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	end := c.a.NewLabel()
+	c.a.Load(a64C, a64D, in+c.enc.ForInKeys+8)
+	c.a.Cmp(a64A, a64C, true)
+	c.a.BCond(arm64.GE, end)
+	c.a.Load(a64C, a64D, in+c.enc.ForInKeys)
+	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
+	c.a.Op(arm64.Add, a64A, a64A, a64C, true)
+	c.a.Load(a64B, a64A, c.enc.NumOffset)
+	c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64B)
+	c.a.Load(a64C, a64A, c.enc.RefOffset)
+	c.a.Store(a64Ctx, keep+c.enc.RefOffset, a64C)
+	c.a.Load(a64C, a64D, c.enc.IterIdx)
+	c.a.AddImm(a64C, a64C, 1, true)
+	c.a.Store(a64D, c.enc.IterIdx, a64C)
+	c.a.B(done)
+	// Done: the cursor marked so, the answer the uninitialized value.
+	c.a.Bind(end)
+	c.movImm(a64A, 1)
+	c.a.Store8(a64D, c.enc.IterDone, a64A)
+	c.movImm(a64A, c.enc.Uninitialized)
+	c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64A)
+	c.movImm(a64A, 0)
+	c.a.Store(a64Ctx, keep+c.enc.RefOffset, a64A)
+	c.a.B(done)
 }
 
 // keyedStore is amd64's: an array's dense element stored natively at a
