@@ -2274,12 +2274,40 @@ to remove:
   What remains open here is `eqtagged`, the largest single op in this
   render's code at about 20%, whose string comparison runs on 85 to 90% of
   2.33 million comparisons here and 4.97 million on PdfJS -- so it is a
-  speed item, not a size one. Worth measuring before any design: how many
-  of those inequalities a length compare settles, how many have a literal
-  operand whose length is known when the code is made, and what the VM
-  guarantees about interning -- stated as a guarantee, since native code
-  could treat two different pointers as proof of inequality only if
-  something promises it.
+  speed item as well as a size one. Measured, and it is the best-founded
+  item left in this part.
+
+  **Nothing promises interning**, so the pointer lever is closed: a literal
+  becomes a new `*String` for each closure prepared (`prepare` fills
+  `cl.consts` through `materialize`), a key handed to a script is a new one
+  each time (`keyString`), the atom table interns names rather than string
+  values, and a `String` carries no mark of a canonical instance. Pointer
+  equality is used only as a sufficient test of equality -- `eqtagged`'s
+  inline "same pointer, so equal", and `keyAtoms` -- and nothing treats
+  different pointers as unequal. Equal strings behind different pointers
+  are 7.9% of this render's string-path executions and 2.2% of PdfJS's, so
+  that is real traffic, not a corner. Native code could read different
+  pointers as inequality only if the VM kept one `*String` a content for
+  every string that can meet such a comparison and marked it, which is a
+  representation change across the VM, not a codegen item.
+
+  **A literal operand, though, is the common case**, which an earlier count
+  of `const` alone had missed: a literal arrives as `loadcell(constcell)`,
+  and counted so, the `eqtagged` values with one are 84.4% here (1,096 of
+  1,299), 94.8% on PdfJS, 39.5% on Box2D and 3.8% on Typescript. At such a
+  site the other side's string is known when the code is made -- its length,
+  and for a short literal its bytes -- and of the executions: 80.2% here and
+  70.3% on PdfJS differ in length, 11.9% and 27.5% are the same length and
+  unequal, the rest equal. So a length compare against an immediate would
+  settle seven or eight in ten inline, and an immediate compare of the first
+  bytes most of the rest, where today the cold path is the main path.
+  Stricter still: at a literal's site an operand whose word is not a
+  string's is unequal at once, so such a site needs none of the number,
+  object and loose paths -- roughly 450 bytes today against perhaps a few
+  dozen. `eqtagged` being about 20% of this render's code, that is plausibly
+  the largest code-size item in this section, and compile time follows code
+  size. Its speed value is smaller: about 50,000 executions a render at a
+  few nanoseconds each is a fraction of a millisecond in 14.
 
   **Recompiles are 40 to 65% of all compile time**, which qualifies "policy
   cannot fix it" above: that holds for first compiles, not for these. By
