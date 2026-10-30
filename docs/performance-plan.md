@@ -1908,7 +1908,7 @@ to remove:
 | F2 | A `for...in` cursor from a free list | 8.5% of a render's allocation | Medium | Open |
 | F3 | An array's old elements reused when it grows | up to 14% of a render's allocation | High | Open |
 | F4 | The JIT slower than the interpreter here | 1.20x the interpreter | Medium | Done |
-| F5 | A fresh runtime's first render and its memory, with the JIT | 50 ms against 14, 16.4 MiB against 6.2 | Medium | Open |
+| F5 | A fresh runtime's first render and its memory, with the JIT | first render 66 ms against 22, live heap 26.2 MiB against 7.3 | Medium | Open, measured |
 
 - **F1.** `s += x` makes a rope node an iteration, 48 bytes, and the JIT
   already avoids it: a loop whose appends are the only readers of the
@@ -2018,24 +2018,65 @@ to remove:
   than the interpreter rather than level with it, and the JIT's own
   published costs -- a first render 3.8 times the interpreter's and 18.7
   MiB a runtime against 2.0 -- which compiling less should serve.
-- **F5.** Measured on this machine, 20 runtimes each loading the bundle and
-  rendering once: a first render takes 50 ms with the JIT against the
-  interpreter's 14, and a runtime costs 16.4 MiB RSS and 12.4 MiB of Go
-  heap against 6.2 and 5.8. So for a host that makes a runtime for each
-  request -- which is what a page render is -- the JIT is a net loss even
-  now that its steady state is level: what it costs is paid on the first
-  render, not won back over later ones. That is the JIT's remaining
-  published complaint and the item to take next: where the extra 35 ms go
-  (the compiler's own phases, `-jitcompile`), and what a runtime still
-  holds after one render, per compiled function. `df23abbe` flushed
-  finished programs' heaps on a timer and took Octane's live heap from 355
-  to 230 MB, so the question here is what is held per runtime rather than
-  per program. A higher first-compile threshold is not the answer: it is in
-  [Rejected](#rejected) already.
+- **F5.** Measured on this machine, one fresh runtime loading the bundle
+  and rendering, and 20 of them for the memory:
 
-  The profit model is **parked**, not dropped. Judged against F5 it is the
-  indirect route: its published benefit would come from compiling less,
-  which F5 measures directly. And its calibration has to be rebuilt first.
+  | | interpreter | JIT |
+  |---|---|---|
+  | first render | 22-24 ms | 66-71 ms |
+  | second render | 15 ms | 80-82 ms |
+  | steady state | 14.1 ms | 13.6 ms |
+  | allocated a render | 5.1 MiB | 26.5 first, 44.0 second |
+  | live heap a runtime | 7.3 MiB | 26.2 MiB |
+
+  The second render costs more than the first, and the first two together
+  spend about 100 ms compiling to win 0.5 ms a render: on the order of 100
+  renders to pay back, and a single render can never pay back at all, since
+  the compiling alone (36 ms) costs more than the interpreter's whole first
+  render. So a host that makes a runtime for each request is paying for the
+  JIT and getting nothing, which is what our documentation has to say
+  plainly rather than leave to the reader's arithmetic.
+
+  Where the first render's 36 ms of compiles go: 31.5 ms in the SSA and the
+  backend (build 8.6, optimize 8.4, the calls' saves 4.5, emit 5.8, encode
+  2.0) and 4.3 in lowering, over 77 functions, 58 compiles and 5 again. Two
+  functions are 46% of it: the renderer's element and node functions, 1,734
+  and 729 bytes of bytecode, 9.2 and 7.6 ms. The second render's 62 ms is
+  almost one function: a tag-name switch of 2,982 bytes, each arm with a
+  `for...in` over its props, compiled twice at about 24 ms -- once, then
+  again after a single deoptimization -- for 352 KB of code, and it runs
+  about 440 times a render. Compile cost grows faster than bytecode size,
+  5.4 us a byte for the first of those functions and about 8 for this one.
+  Native code's collector share is visible too: 20 fresh first renders take
+  1.81 s of CPU with the JIT against 0.63 without, of which the mark
+  workers are 0.36 s, about 18 ms a render on other threads, where in the
+  interpreter's profile they do not reach the top 200 lines.
+
+  Where the 19 MiB a runtime goes: 12.58 MiB is compile workspaces, which
+  grow to fit the largest compile and stay, and which the 8 MiB budget does
+  not count at all -- so `WithJITMemoryLimit` bounds 6.5 MiB while the
+  runtime holds 12.6 it never sees, which makes this as much a fix for that
+  option as for memory. The counted 6.51 MiB is lowerings 3.29 (kept after
+  the compile; the switch function's alone is 1.05 MB), entries 2.07 (code
+  0.95, footprint 1.50, learned 0.38) and 1.14 for 64 shared contexts.
+  After the first render alone the figures are 2.36 and 4.28 MiB.
+
+  So, in order: the workspaces released or pooled process-wide and counted;
+  then the lowerings dropped once their compile is done, with what
+  re-lowering costs measured rather than assumed; then two policy
+  mechanisms, which is where the profit model comes back in scoped form --
+  a tier-up that weighs a compile's cost, close to linear in bytecode size
+  at the rates above, against the time already spent in that function, so
+  that a compile whose payback is 100 renders away is not made; and no
+  recompilation of an expensive function on the strength of one
+  deoptimization. Neither needs the calibration rebuilt, and neither is the
+  blanket call-count threshold in [Rejected](#rejected): the point is to
+  compare a compile's cost with its return, not to raise a count.
+
+  The profit model as a whole is **parked**, not dropped -- the two
+  mechanisms above are the part of it F5's data pays for, and they need
+  none of its machinery. The rest is the indirect route to the same
+  complaint, and its calibration has to be rebuilt before any of it.
   `a21df702`'s harness was ported onto main and most of its kernels no
   longer measure the ending they were written for, by its own checks:
   `gocall` makes no Go call, `host` makes one instead of exiting, `cgo`,
