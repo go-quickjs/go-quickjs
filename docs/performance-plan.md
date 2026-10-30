@@ -2168,17 +2168,40 @@ to remove:
   property ops leading (`propwrite` 12.9%, `propcell` 8.3%, `objectof`
   6.9%, `propread` 6.6%), so whatever is done must be judged on it too.
 
-  So the item is those ops' expansion rather than cold arms in general, with
-  two conditions. A slow path is worth moving out of line only if it is
-  cold, and a switch over tag strings must compare string contents, so
-  `eqtagged`'s may be taken on most executions in the very function this is
-  about: pick what to out-line by the taken rate, not the byte share, and
-  judge it on the steady render and the suites, not on code size alone.
-  `keep` is not an out-lining question at all but a count one: a keep exists
-  only to make a value visible to the collector, so the question is why
-  there are 18,541 of them -- one a value a site rather than one a value,
-  and whether a value already in a scanned place needs one -- which would be
-  a pass over the SSA, costing nothing per execution.
+  So the item is those ops' expansion rather than cold arms in general --
+  and which part of each, the taken rates settle. Counted in native code
+  over 40 renders and the suites' runs:
+
+  | slow path | taken |
+  |---|---|
+  | `eqtagged`'s string compare | 85.4% here, 89.5% PdfJS, 0.7% Typescript, 0 Box2D |
+  | `call`'s Go-made path | 0.4 to 4.1% |
+  | `keep`'s marking copy | 0.4 to 1.3% |
+
+  So `eqtagged`'s cold path **must not** be moved out of line: on the
+  string-heavy workloads it is the main path, and a call on 85 to 90% of
+  executions would make the very function this is about slower while making
+  it smaller. Its lever is the string comparison itself, which needs a look
+  at what interning guarantees first; a constant operand's known length
+  would settle many, but a literal is only 1.5% of Typescript's comparisons
+  and 10% of this render's. `call`'s Go path, 180 bytes a site and truly
+  cold, is one shared routine per function taking the site's index -- about
+  9% of this render's code and 7% of Typescript's, for one jump on a few per
+  cent of calls. `keep`'s marking copy is the same shape and much smaller.
+
+  `keep` itself is a count question, not an out-lining one, and the count
+  is the finding: **27 to 41% of all keeps are redundant** -- 762 of 2,768
+  here, 18,592 of 52,497 in Typescript, 1,459 of 3,554 in PdfJS -- each a
+  keep of a value already kept into the same cell, writing a word identical
+  to the one the cell holds. `keepAcrossStores` gives a value one cell for
+  every store that keeps it, and `reconstruct` rewrites a later keep to take
+  the dominating kept copy, so the later keep copies the cell's own pointer
+  back into it. Dropping it changes no word anything reads -- Go's barrier
+  is needed only where a pointer slot changes, so it is safe mid-cycle too
+  -- which makes it a pass after `reconstruct` with no cost per execution,
+  about 2 MB of Typescript's 15.3. What the pass must assert rather than
+  infer: that the kept copy dominates the re-keep, and that nothing but
+  keeps of that value writes its cell.
 
   **Recompiles are 40 to 65% of all compile time**, which qualifies "policy
   cannot fix it" above: that holds for first compiles, not for these. By
@@ -2213,12 +2236,22 @@ to remove:
   workloads where recompiling is what makes the JIT worth having. The
   recompile pot stays real; C attacks it at its cost instead.
 
-  One finding fell out of that measurement and is worth a commit of its
-  own: the counters are not monotonic, since `jitUnwound` resets `link.in`,
-  so a delta can come out negative. `jitSSAProfit` judges `entrySlow` from
-  those counters, so whether the judge can act on a reset or negative delta
-  today is an open question, and would explain some of the functions this
-  render leaves slow.
+  The counters' resets were suspected of a live bug and are clear: the entry
+  judge reads only totals that grow against bases reset with them, the
+  callee judge resets `calleeGoCalls`, `calleeWork` and `link.in` together
+  at every reset, and the learned budget's one window -- `jitUnwound`
+  zeroing `link.in` while a learned recompile is pending -- was instrumented
+  across seven workloads with no occurrence, since the same call starts the
+  learning afresh. The negative deltas were a probe's own artifact. What
+  leaves functions slow on this render is early recompiles cutting native
+  stretches short, not the counters.
+
+  And a cheap first tier is sound on correctness: with the optimizer's
+  rounds off, the handler-liveness test still matches the interpreter under
+  every stress configuration, and the three tests that fail assert the
+  optimizer's output -- an object not made, a sum unboxed, an allocation
+  count -- so they need tier-aware forms whenever a first tier arrives, and
+  nothing depends on an optimizer pass for its answers.
 
   The profit model as a whole is **parked**, not dropped -- the two
   mechanisms above are the part of it F5's data pays for, and they need
