@@ -1908,7 +1908,7 @@ to remove:
 | F2 | A `for...in` cursor from a free list | 8.5% of a render's allocation | Medium | Open |
 | F3 | An array's old elements reused when it grows | up to 14% of a render's allocation | High | Open |
 | F4 | The JIT slower than the interpreter here | 1.20x the interpreter | Medium | Done |
-| F5 | A fresh runtime's first render and its memory, with the JIT | first render 66 ms against 22, live heap 26.2 MiB against 7.3 | Medium | Memory done; first render measured, documented, not fixed |
+| F5 | A fresh runtime's first render and its memory, with the JIT | first render 66 ms against 22, live heap 26.2 MiB against 7.3 | Medium | Memory done; first render measured, to be fixed by compiling in the background (D's last step) |
 
 - **F1.** `s += x` makes a rope node an iteration, 48 bytes, and the JIT
   already avoids it: a loop whose appends are the only readers of the
@@ -2034,8 +2034,10 @@ to remove:
   renders to pay back, and a single render can never pay back at all, since
   the compiling alone (36 ms) costs more than the interpreter's whole first
   render. So a host that makes a runtime for each request is paying for the
-  JIT and getting nothing, which is what our documentation has to say
-  plainly rather than leave to the reader's arithmetic.
+  JIT and getting nothing, until the compiles run off the runtime's
+  goroutine: D's last step,
+  [compiling in the background](#d-v8s-model-for-objects-and-tiering),
+  which is what this item waits for.
 
   Where the first render's 32.6 ms of compiles go: the SSA and the backend
   (build 8.6, optimize 8.4, the calls' saves 0.5, emit 5.8, encode 2.0) and
@@ -2173,14 +2175,15 @@ to remove:
      setting.
   3. What a compile reads that the runtime mutates, which is what compiling
      off the runtime's goroutine would need, as V8 compiles concurrently:
-     **the remaining structural option, not started.** It would put the
-     first render at about the interpreter's 22 ms, since the render would
-     run interpreted while compiles happened elsewhere. The mapping is about
-     a day -- feedback and caches, shapes, the code cache's room accounting,
-     the lowerings and links, the workspace (already pooled) -- and the
-     build is far more, against the engine's rule that a `Runtime` is not
-     safe for concurrent use. A deliberate decision for the project, not
-     something to drift into.
+     **planned, as the JIT's last step** -- D's compiling in the
+     background, once compiles are cheap, so that the time they take is
+     not hidden off the measured thread first. It would put the first
+     render at about the interpreter's 22 ms, since the render would run
+     interpreted while compiles happened elsewhere. What it has to map --
+     feedback and caches, shapes, the code cache's room accounting, the
+     lowerings and links, the workspace (already pooled) -- is the snapshot
+     D names (V8's JSHeapBroker), a `Runtime` being unsafe for concurrent
+     use.
   **What those 120 bytes are**, by mir's annotation marks: the ops' inline
   code is 52 to 59% of a compile's text, cold paths 23 to 36%, and edges,
   exit stubs and shared routines the rest. Three ops are about half of it --
