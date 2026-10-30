@@ -734,8 +734,21 @@ marks or not (mir's `byMarking`): an object spread by layout and a
 literal's field along its shape's transition -- the values, the shape,
 the result -- an array spread and an element appended -- the elements,
 the result -- and an array's length written shorter, whose elements past
-it are cleared so, which shades what they held. A loop's step copies an array's element with no
-barrier: the element stays in the array.
+it are cleared so, which shades what they held.
+
+A loop's step copies a pointer into a keep cell with no barrier, by that
+same rule read the other way: an array's element, a Map entry's, a
+`for...in` key off the layout's keys the cursor walks (mir's `iterStep`,
+`mapStep`, `forInStep`). The cell does not outlive what the pointer came
+from -- the array, the table, the keys -- so nothing moves into what
+outlives it. Two things make that enough. The cell holds one value of the
+code's own, so the one it overwrites is a definition of that value nothing
+reads again, never a reference something else needs. And a loop body that
+takes the element out from under the step removes it with a barriered
+store, which shades what it overwrote, so the collector keeps it for the
+cycle in hand. A pointer no live structure holds -- a string made for an
+index, a call's result -- has no such cover: it goes through `storeRef`,
+as the result's store does, or it is not written natively at all.
 
 What native code holds where the collector does not look while it
 rewrites what the value came from it shades first, storing each pointer
