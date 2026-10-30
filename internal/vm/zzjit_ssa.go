@@ -4841,8 +4841,18 @@ func (r *Runtime) jitGoCallNested(ctx *abi.Context, idx int) bool {
 	if idx >= len(ctxs) || ctxs[idx] != ctx {
 		return false
 	}
+	// The walk down to the run's own level notes, as it goes, whether a
+	// level between may run a built-in's loop (Loop) or a generator a step
+	// resumed natively (GenObject), which the checks below look at closely
+	// only then: each context read once, at every call of Go a native
+	// callee makes, where three walks over two dozen levels had cost a
+	// React server render's calls a twentieth of their time.
 	root := idx - 1
+	maybeLoops, maybeGens := false, ctx.GenObject > 1
 	for root >= 0 && ctxs[root].Live == abi.LiveCall {
+		c := ctxs[root]
+		maybeLoops = maybeLoops || c.Loop != 0
+		maybeGens = maybeGens || c.GenObject > 1
 		root--
 	}
 	if root < 0 || ctxs[root].Live != 0 || root >= len(s.goRuns) || s.goRuns[root].f == nil {
@@ -4917,7 +4927,7 @@ func (r *Runtime) jitGoCallNested(ctx *abi.Context, idx int) bool {
 	// built-in's frame between the level and its callee, and no frames
 	// shared with the last call, whose levels may have had none.
 	loops := jitLoopIn(run.e.loops, ctxs[root], runF.cl.fn, int(levelPC(root))) != 0
-	for i := root + 1; i < idx && !loops; i++ {
+	for i := root + 1; i < idx && !loops && maybeLoops; i++ {
 		if lcl := (*closure)(ctxs[i].Closure); lcl != nil && ctxs[i].Loop != 0 {
 			loops = jitLoopIn(r.jitEntryOf(lcl).makesLoops(), ctxs[i], lcl.fn, int(levelPC(i))) != 0
 		}
@@ -4926,7 +4936,7 @@ func (r *Runtime) jitGoCallNested(ctx *abi.Context, idx int) bool {
 	// of its own, its next's and its own (jitGenFrame), which no other
 	// call shares either.
 	gens := false
-	for i := root + 1; i <= idx && !gens; i++ {
+	for i := root + 1; i <= idx && !gens && maybeGens; i++ {
 		gens = jitGenLevel(ctxs[i], (*closure)(ctxs[i].Closure), abi.ExitHost) != nil
 	}
 	// The levels below the one that calls are given frames only when one
