@@ -201,23 +201,25 @@ func jitDifferential(t *testing.T, src string) JITStats {
 		got, took := jitRunWithin(t, r, src, within)
 		return got, took, r.JITStats()
 	}
-	want, took, _ := run(false, false, jitStressConfig{}, jitFuzzTime)
-	if outOfMemory(want) || want == jitTimedOut {
-		return JITStats{}
-	}
-	within := jitFuzzSlack(took)
-	if got, _, _ := run(true, false, jitStressConfig{}, within); got != want && !outOfMemory(got) {
-		t.Fatalf("tree tier: %q\ninterpreter: %q, in %v\n%s", got, want, took, src)
-	}
-	var total JITStats
-	for _, c := range []jitStressConfig{
+	stress := []jitStressConfig{
 		{threshold: true},
 		{threshold: true, budget: 1},
 		{threshold: true, budget: 5, deopt: 2},
 		// CI's test262 setting under stress (QJS_JIT_STRESS's
 		// threshold,budget=3,deopt=7).
 		{threshold: true, budget: 3, deopt: 7},
-	} {
+	}
+	// The tree tier's run and the JIT's.
+	interp, within := jitFuzzWindows(1 + len(stress))
+	want, took, _ := run(false, false, jitStressConfig{}, interp)
+	if outOfMemory(want) || want == jitTimedOut {
+		return JITStats{}
+	}
+	if got, _, _ := run(true, false, jitStressConfig{}, within); got != want && !outOfMemory(got) {
+		t.Fatalf("tree tier: %q\ninterpreter: %q, in %v\n%s", got, want, took, src)
+	}
+	var total JITStats
+	for _, c := range stress {
 		got, _, st := run(true, true, c, within)
 		if got != want && !outOfMemory(got) {
 			t.Fatalf("JIT %+v: %q\ninterpreter: %q, in %v\n%s", c, got, want, took, src)
@@ -230,30 +232,35 @@ func jitDifferential(t *testing.T, src string) JITStats {
 	return total
 }
 
-// jitFuzzTime is how long the interpreter may take on a generated program
-// before it is passed over: a program can do work that grows without bound
-// -- o.x=-(o.x)*o.x squares a BigInt at each turn, millions of bits in
-// two dozen -- which no tier finishes in a fuzzer's time, and which the
-// memory limit, far from reached, does not stop. Such a program decides
-// nothing, as one over the memory limit does not. The fuzzer stops a
-// worker whose input takes a minute ("deadlocked!"), every tier's run
-// included: the interpreter's second and five runs of jitFuzzSlack's at
-// most fit.
-const jitFuzzTime = time.Second
+// jitFuzzBudget is what all of an input's runs may take together. Go's
+// fuzz worker kills a worker whose input runs for 10 seconds
+// ("deadlocked!") -- 60 from Go 1.27, but the module builds with 1.24 --
+// which the fuzzer reports as a hang. A run can carry past its window by
+// one long operation (jitRunWithin), so the windows add up to less.
+const jitFuzzBudget = 6 * time.Second
+
+// jitFuzzWindows gives, for an input run in the interpreter and then in
+// tiers other runs, how long the interpreter may take before the program
+// is passed over, and how long each other run may take, ten times that;
+// together they are jitFuzzBudget.
+//
+// A program can do work that grows without bound -- o.x=-(o.x)*o.x squares
+// a BigInt at each turn, millions of bits in two dozen -- which no tier
+// finishes in a fuzzer's time, and which the memory limit, far from
+// reached, does not stop. Such a program decides nothing, as one over the
+// memory limit does not. The other runs' ten times is long enough that no
+// tier is judged for being slower by a constant factor -- the JIT under
+// stress, leaving native code at every back edge, or compiling a short
+// program, included -- and short enough that one that does not finish --
+// native code that loops where the interpreter does not -- is reported as
+// different, its result jitTimedOut.
+func jitFuzzWindows(tiers int) (interp, other time.Duration) {
+	interp = jitFuzzBudget / time.Duration(1+10*tiers)
+	return interp, 10 * interp
+}
 
 // jitTimedOut is a run's result once it ran past its time (jitRunWithin).
 const jitTimedOut = "timed out"
-
-// jitFuzzSlack is how long the other tiers may take on a program the
-// interpreter ran in took: ten times it, from five seconds to ten, long
-// enough that no tier is judged for being slower by a constant factor --
-// the JIT under stress, leaving native code at every back edge, included
-// -- short enough that one that does not finish -- native code that loops
-// where the interpreter does not -- is reported as different, its result
-// jitTimedOut, within the fuzzer's minute (jitFuzzTime).
-func jitFuzzSlack(took time.Duration) time.Duration {
-	return min(max(5*jitFuzzTime, 10*took), 10*jitFuzzTime)
-}
 
 // jitRunWithin runs src in r, stopped once within has passed, as a host's
 // context deadline stops it, and gives its result and how long it took.
@@ -300,20 +307,21 @@ func jitDifferentialWarm(t *testing.T, src string) JITStats {
 		got, took := jitRunWithin(t, r, src, within)
 		return got, took, r.JITStats()
 	}
-	want, took, _ := run(false, 0, jitStressConfig{}, jitFuzzTime)
-	if outOfMemory(want) || want == jitTimedOut {
-		return JITStats{}
-	}
-	within := jitFuzzSlack(took)
-	var total JITStats
-	for _, w := range []struct {
+	warmed := []struct {
 		warm int
 		c    jitStressConfig
 	}{
 		{0, jitStressConfig{}},
 		{24, jitStressConfig{}},
 		{24, jitStressConfig{budget: 3, deopt: 7}},
-	} {
+	}
+	interp, within := jitFuzzWindows(len(warmed))
+	want, took, _ := run(false, 0, jitStressConfig{}, interp)
+	if outOfMemory(want) || want == jitTimedOut {
+		return JITStats{}
+	}
+	var total JITStats
+	for _, w := range warmed {
 		got, _, st := run(true, w.warm, w.c, within)
 		if got != want && !outOfMemory(got) {
 			t.Fatalf("JIT warmed at %d %+v: %q\ninterpreter: %q, in %v\n%s", w.warm, w.c, got, want, took, src)
