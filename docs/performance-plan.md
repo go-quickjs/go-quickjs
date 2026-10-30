@@ -2094,14 +2094,97 @@ to remove:
   table would roughly halve it; an ir-wide change, not worth it before the
   two policy mechanisms.
 
-  So, next: two policy mechanisms, which is where the profit model comes back in scoped form --
-  a tier-up that weighs a compile's cost, close to linear in bytecode size
-  at the rates above, against the time already spent in that function, so
-  that a compile whose payback is 100 renders away is not made; and no
-  recompilation of an expensive function on the strength of one
-  deoptimization. Neither needs the calibration rebuilt, and neither is the
-  blanket call-count threshold in [Rejected](#rejected): the point is to
-  compare a compile's cost with its return, not to raise a count.
+  **The tier-up's units do not measure time**, which decides what is worth
+  doing here. The budget charges `len(fn.Code)` an invocation and a loop's
+  length a back edge, and the interpreter's time for one of those units is
+  2.1 ns on this render, 4.5 on Richards, 15 on DeltaBlue and 10 to 18 on
+  RayTrace: a sevenfold spread. So a break-even rule in those units -- spend
+  no more compiling a function than the interpreter has spent running it --
+  is the call-count threshold of [Rejected](#rejected) with a size factor,
+  and would delay Richards-like code for nothing while under-protecting
+  this one. The overcount falls hardest on the functions this item is
+  about: a 2,982-byte switch is charged its whole length for a call that
+  runs one arm, and V8's charge (a Return's bytecode offset) would charge it
+  the same, since its common tags break to the generic path at the end. What
+  V8 can afford there and we cannot is the compiler behind the count: we
+  tier up at V8's Maglev invocation count (400) with a compiler costing 4 to
+  7 us a bytecode byte, which is TurboFan-class.
+
+  **And policy cannot fix it.** With the tier-up warmed later --
+  `SetJITWarmUp` at 400, 1,500, 3,000 and 10,000 -- the first ten renders
+  sum to 315, 268, 250 and 197 ms against the interpreter's 152, and the
+  steady state is 13.8 ms either way. Later compiles spread the cost and
+  never remove it, because the functions are hot across renders and compile
+  in the end. A measured per-function benefit would let the same 100 ms of
+  compiling be scheduled more cleverly; the problem is that the 100 ms
+  exists. A sampling profiler to measure it (a ticker poking the check
+  counters, V8's old runtime profiler) was therefore declined as well, on
+  that ground and three others: a 1 kHz ticker a runtime is a poor bargain
+  for a host running one a core or a request, tiering would stop being
+  reproducible where the differential fuzzer and every placement comparison
+  need two runs to compile the same functions, and it would be off under the
+  race detector, so that the detector ran a different policy from
+  production.
+
+  So, next: the deoptimization half of the policy, which is where the profit model comes back in scoped form --
+  which does not need a benefit measure: a recompilation after a
+  deoptimization waits in proportion to the measured compile time of the
+  code that deoptimized, so that a 22 ms compile waits far longer than a
+  0.3 ms one. That is what makes the second render dearer than the first,
+  and the cost side of it is measured exactly rather than counted.
+
+  **There is no superlinear phase.** Over 1,057 compiles from this render,
+  Typescript, Box2D, PdfJS and RayTrace, every phase is flat or falling per
+  bytecode byte, and compile time grows as size^0.82 in bytecode and
+  size^0.87 in emitted code. The 4.3-against-7.2 us a byte that suggested
+  one was noise between compiles: the same function varies twofold, 15.7 to
+  23.9 ms for that switch and 10.0 to 16.5 for one of Typescript's. What
+  there is instead is a large constant an instruction -- about 1 us to build
+  and 1 us to emit, 1.5 to optimize, 5 in all -- and, behind it, the figure
+  to attack: about **120 bytes of machine code a bytecode instruction**,
+  156 in Typescript, 168 in PdfJS, and 352 KB for a 2,982-byte switch whose
+  few arms run. Compile time follows the code emitted, so cheapening the
+  compile means emitting less:
+  1. An arm its feedback says never runs compiled as an exit rather than as
+     code, as V8 compiles a cold branch. Measured by code bytes an
+     instruction and compile time, on that switch and across the five
+     workloads.
+  2. What a first compile without the optimizer costs and keeps (1.5 of the
+     5 us an instruction) -- V8's Maglev before TurboFan, and the answer to
+     compiling at Maglev's invocation count with a TurboFan-class compiler.
+  3. What a compile reads that the runtime mutates, which is what compiling
+     off the runtime's goroutine would need, as V8 compiles concurrently:
+     the other answer to the same complaint, worth knowing the shape of
+     before it is needed.
+  And what those 120 bytes are made of -- per-op expansion, inline caches,
+  guards and exits, frame writes -- before any of it changes: if one of them
+  is most of it, that is the item rather than cold arms.
+
+  **Recompiles are 40 to 65% of all compile time**, which qualifies "policy
+  cannot fix it" above: that holds for first compiles, not for these. By
+  reason, total compile time: this render 131.8 ms, of which first compiles
+  are 52.1 and recompiles about 80 (resume 23.8, learned and deopt 20.8,
+  learned with inline and unwind 17.4, deopt 6.4, inline 5.7); Typescript
+  520.6 ms, of which deoptimization alone is 228.9 over 127 recompiles;
+  Box2D 101.8 with 38 in recompiles; PdfJS 112.2 with 65. So the
+  deoptimization half of the policy is worth more than it looked.
+
+  Waiting in proportion to the *cost* of what deoptimized is not enough,
+  though, and was dropped: it put the second render below the first (74-78
+  ms to 46-49, the first ten from 307 to 253) and took the steady render to
+  12.9, but cost Box2D 11.0%, zlib 5.4%, Typescript 4.1% and DeltaBlue
+  5.7%, because cost alone cannot tell a switch where recompiling buys
+  nothing from a big hot function where recompiling soon is what makes it
+  fast. The benefit side has to be in it, and it need not be a clock: the
+  deoptimized code has counted the native work its runs did
+  (`ssaStats.work`, `calleeWork`), which is the measure `jitSSAProfit`
+  already judges `entrySlow` by. Weighing the wait by cost over realized
+  work keeps both sides counters, so a program recompiles the same
+  functions on every run, and separates the two cases. Its bar is those
+  four benchmarks flat again with the second render still below the first --
+  and if it cannot have both, no policy at all, since a policy that taxes
+  the workloads where recompiling is what makes the JIT worth having is
+  worse than none.
 
   The profit model as a whole is **parked**, not dropped -- the two
   mechanisms above are the part of it F5's data pays for, and they need
