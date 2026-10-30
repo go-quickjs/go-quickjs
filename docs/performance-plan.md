@@ -1953,24 +1953,31 @@ to remove:
   function alone and so splits the renderer's recursion into a native half
   and a slow half with every call between them going through Go; 1,431
   `Function.prototype.call`; 1,404 `RegExp.prototype.exec`; 802 calls of
-  native closures called through Go anyway. Of the exits, almost all that
-  end in the interpreter are `for...in`: one function is entered natively
-  1,700 times a render and leaves at `for_in_start` 571 of them, the
-  interpreter then finishing the call and its loop, because native code
-  has no `for...in` at all (`compile/lower.go` makes `OpForInStart` a host
-  operation).
+  native closures called through Go anyway. On top of those, a `for...in`
+  loop costs one host operation at its start and one Go call for each key:
+  native code has no `for...in` of its own (`compile/lower.go` makes
+  `OpForInStart` a host operation, which "sets where native code goes
+  on"), and each step is an `ir.IterStep`. It does not abandon the call to
+  the interpreter -- native code resumes after the start, and the 571 a
+  render counted at one function's `for_in_start` are the native stretches
+  that end there, not calls given up.
 
-  So, in the order they are being tried: `for...in` over ordinary objects
-  compiled natively, keyed by shape as V8's ForInPrepare and ForInNext are
-  -- the layout's key list is already made once and kept with the shape
-  (`shapeKeys`), which is the enum cache -- then a cheaper native-to-Go
-  call with native levels on the stack, then the profit model judged
-  across calls, so that a callee judged slow counts the Go calls it
-  imposes on its native callers and a recursion is wholly in one tier.
-  The last of those starts from `a21df702`, held off main: it has the
-  calibration (`TestJITCalibration`, `QUICKJS_JIT_CALIBRATE=1`) and
-  charges a callee's exits to the callee, and its open problem -- Splay,
-  Json and RegExp slower -- is the acceptance bar.
+  So, by what each is worth: `jitGoCallNested` is 2.5 ms of the 3.0 ms a
+  render the JIT is behind, so a cheaper native-to-Go call with native
+  levels on the stack is first. `for...in` over ordinary objects compiled
+  natively comes next -- the start a Go call rather than a host exit, and
+  the step native while the cursor walks a key snapshot of the object's
+  own layout and the object still has it, which is V8's ForInNext map
+  check against the enum cache, the snapshot being the one `shapeKeys`
+  already keeps with the shape. It is worth a few tenths of a millisecond
+  here, and more wherever a program walks objects, since every key costs a
+  call of Go today. Last, the profit model judged across calls, so that a
+  callee judged slow counts the Go calls it imposes on its native callers
+  and a recursion is wholly in one tier: that starts from `a21df702`, held
+  off main, which has the calibration (`TestJITCalibration`,
+  `QUICKJS_JIT_CALIBRATE=1`) and charges a callee's exits to the callee,
+  and whose open problem -- Splay, Json and RegExp slower -- is the
+  acceptance bar.
 
 Landed here: a number part of a string concatenation is written into the
 join rather than through a string of its own (`ba508d37`), which took a
