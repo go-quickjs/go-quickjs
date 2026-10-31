@@ -1273,3 +1273,151 @@ function regexp_fresh(n)
     global_res = c;
     return n;
 }
+
+/* objects as Are We Fast Yet's are written: a list of elements of two
+   properties, walked by a method while each next is not null */
+class ExtraElement
+{
+    constructor(v) { this.val = v; this.next = null; }
+}
+
+class ExtraList
+{
+    constructor(n)
+    {
+        var i;
+        this.head = null;
+        for (i = 0; i < n; i++) {
+            const e = new ExtraElement(i);
+            e.next = this.head;
+            this.head = e;
+        }
+    }
+    count()
+    {
+        let x = this.head, k = 0;
+        while (x !== null) {
+            k += 1;
+            x = x.next;
+        }
+        return k;
+    }
+}
+
+function list_walk(n)
+{
+    var j, l = new ExtraList(32), s = 0;
+    for (j = 0; j < n; j += 32)
+        s = (s + l.count()) | 0;
+    global_res = s;
+    return n;
+}
+
+/* small methods of an object keeping its state in an array, calling each
+   other with their parameters, as Towers' piles are moved */
+class ExtraPiles
+{
+    constructor()
+    {
+        this.piles = [null, null, null];
+        this.moves = 0;
+    }
+    push(d, p)
+    {
+        const top = this.piles[p];
+        if (top && d.size >= top.size)
+            throw new Error("too big");
+        d.next = top;
+        this.piles[p] = d;
+    }
+    pop(p)
+    {
+        const top = this.piles[p];
+        if (top === null)
+            throw new Error("empty");
+        this.piles[p] = top.next;
+        top.next = null;
+        return top;
+    }
+    move(from, to)
+    {
+        this.push(this.pop(from), to);
+        this.moves += 1;
+    }
+}
+
+function method_moves(n)
+{
+    var j, o = new ExtraPiles();
+    o.push({ size: 1, next: null }, 0);
+    for (j = 0; j < n; j += 2) {
+        o.move(0, 1);
+        o.move(1, 0);
+    }
+    global_res = o.moves;
+    return n;
+}
+
+/* a class's elements walked by forEach with an arrow ending in a method
+   call, as DeltaBlue executes a plan */
+class ExtraVector
+{
+    constructor() { this.storage = []; this.size = 0; }
+    append(e) { this.storage[this.size] = e; this.size += 1; }
+    forEach(fn)
+    {
+        for (let i = 0; i < this.size; i += 1)
+            fn(this.storage[i]);
+    }
+}
+
+class ExtraStep
+{
+    constructor(a, b) { this.from = a; this.to = b; this.dir = "forward"; }
+    run()
+    {
+        if (this.dir === "forward")
+            this.to.v = this.from.v;
+        else
+            this.from.v = this.to.v;
+    }
+}
+
+function method_forEach(n)
+{
+    var j, plan = new ExtraVector(), prev = { v: 1 };
+    for (j = 0; j < 64; j++) {
+        const next = { v: 0 };
+        plan.append(new ExtraStep(prev, next));
+        prev = next;
+    }
+    for (j = 0; j < n; j += 64)
+        plan.forEach((c) => c.run());
+    global_res = prev.v;
+    return n;
+}
+
+/* a method making an arrow of its parameters and this at each call, for
+   forEach, as Havlak's do */
+class ExtraPool
+{
+    constructor() { this.items = new ExtraVector(); this.n = 0; for (let i = 0; i < 4; i++) this.items.append(i); }
+    step(w, pool)
+    {
+        this.items.forEach((x) => {
+            if (x !== w) {
+                pool.append(x);
+                this.n += 1;
+            }
+        });
+    }
+}
+
+function method_closure(n)
+{
+    var j, h = new ExtraPool();
+    for (j = 0; j < n; j++)
+        h.step(j & 3, new ExtraVector());
+    global_res = h.n;
+    return n;
+}
