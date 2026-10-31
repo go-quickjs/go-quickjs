@@ -973,6 +973,14 @@ func (c *compiler) compileUnary(n *ast.Unary) {
 		c.emit(bytecode.OpPushTrue, 0, 0)
 
 	case "void":
+		switch n.Operand.(type) {
+		case *ast.NumberLit, *ast.StringLit, *ast.BoolLit, *ast.NullLit, *ast.BigIntLit:
+			// void 0, minifiers' undefined: a literal evaluates to nothing
+			// that could be seen, so only the result is pushed, which an
+			// x === void 0 then compares as it does x === undefined.
+			c.emit(bytecode.OpPushUndef, 0, 0)
+			return
+		}
 		c.compileExpr(n.Operand)
 		c.emit(bytecode.OpDrop, 0, 0)
 		c.emit(bytecode.OpPushUndef, 0, 0)

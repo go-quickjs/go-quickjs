@@ -7,8 +7,8 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/parser"
 )
 
-// TestUndefinedPushed pins a read of undefined that nothing can shadow
-// compiled as push_undef, and one that something may as the read of the
+// TestUndefinedPushed pins a read of undefined that nothing can shadow, and
+// void of a literal, compiled as push_undef alone, and one that something may as the read of the
 // global it is: a parameter or a local of that name, a with body, a sloppy
 // function with a direct eval and a function inside one.
 func TestUndefinedPushed(t *testing.T) {
@@ -18,6 +18,7 @@ func TestUndefinedPushed(t *testing.T) {
 		want int
 	}{
 		{`function f(x) { return x === undefined; }`, pushed},
+		{`function f(x) { return x === void 0 ? void "a" : void 1n; }`, pushed},
 		{`function f() { return function () { return undefined; }; }`, pushed},
 		{`function f(undefined) { return undefined; }`, local},
 		{`function f() { var undefined = 1; return undefined; }`, local},
