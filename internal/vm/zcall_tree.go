@@ -85,8 +85,8 @@ func (r *Runtime) makeClosure(f *frame, c Value) *Object {
 // the nearest handler wrapper or runTree that catches it.
 func (r *Runtime) callTree(o *Object, fd *funcData, this Value, args []Value, nested bool) (Value, error) {
 	cl := fd.closure
-	fn := cl.fn
-	if fn.CoerceThis && !this.IsObject() {
+	t := fd.treeCall
+	if t.coerceThis && !this.IsObject() {
 		if !this.IsNullish() {
 			return r.runFD(cl, this, args, Undefined, o, fd)
 		}
@@ -96,13 +96,18 @@ func (r *Runtime) callTree(o *Object, fd *funcData, this Value, args []Value, ne
 		return Undefined, r.throwRangeError("maximum call stack size exceeded")
 	}
 	base := r.stackTop
-	need := fn.LocalCount + fn.MaxStack
+	lc := int(t.localCount)
+	need := lc + int(t.maxStack)
 	if base+need > len(r.stack) {
 		return Undefined, r.throwRangeError("maximum call stack size exceeded")
 	}
 	r.stackTop = base + need
-	locals := r.stack[base : base+fn.LocalCount : base+fn.LocalCount]
-	m := min(fn.ParamCount, len(locals), len(args))
+	locals := r.stack[base : base+lc : base+lc]
+	m := min(int(t.paramCount), len(locals), len(args))
+	// A loop, not copy: copy of Values, which hold pointers, is a call of
+	// runtime.typedslicecopy, which for the one to three arguments of most
+	// calls made a method-call micro-benchmark 11% slower.
+	//lint:ignore S1001 see above
 	for i, a := range args[:m] {
 		locals[i] = a
 	}
@@ -126,7 +131,7 @@ func (r *Runtime) callTree(o *Object, fd *funcData, this Value, args []Value, ne
 	f := &r.cur[off]
 	f.cl = cl
 	f.locals = locals
-	f.base = base + fn.LocalCount
+	f.base = base + lc
 	f.pc = 0
 	f.this = this
 	f.newTarget = Undefined
@@ -163,9 +168,9 @@ func (r *Runtime) callTree(o *Object, fd *funcData, this Value, args []Value, ne
 	}
 	if native {
 	} else if nested && !(r.jitOn() && r.jitTreeRecovery(f)) {
-		v, err = r.runTreeNested(f, fd.treeCall)
+		v, err = r.runTreeNested(f, t)
 	} else {
-		v, err = r.runTree(f, fd.treeCall)
+		v, err = r.runTree(f, t)
 	}
 	r.popFrameOf(f, base)
 	return v, err
@@ -184,7 +189,7 @@ func (r *Runtime) runTreeNested(f *frame, t *tree) (Value, error) {
 	}
 	c.r, c.f, c.cl, c.locals = r, f, f.cl, f.locals
 	c.closureCode = f.cl.closureCode
-	c.stack = r.stack[f.base : f.base+f.cl.fn.MaxStack]
+	c.stack = r.stack[f.base : f.base+int(t.maxStack)]
 	blocks := t.blocks
 	b := 0
 	for {
@@ -360,6 +365,7 @@ func (r *Runtime) callTreeWith(o *Object, fd *funcData, t *tree, this Value, arg
 	r.stackTop = base + need
 	locals := r.stack[base : base+fn.LocalCount : base+fn.LocalCount]
 	m := min(fn.ParamCount, len(locals), len(args))
+	//lint:ignore S1001 a loop, not copy, as in callTree
 	for i, a := range args[:m] {
 		locals[i] = a
 	}

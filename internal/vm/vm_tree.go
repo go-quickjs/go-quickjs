@@ -81,6 +81,13 @@ type tblock struct {
 // in every runtime.
 type tree struct {
 	blocks []tblock
+	// localCount, maxStack and paramCount are the function's, and
+	// coerceThis says a call makes this an object (bytecode.Function's
+	// fields of those names): what a call of the tree reads to make its
+	// frame, beside the blocks the call node has loaded the tree for,
+	// rather than in the function, two cache lines away from each other.
+	localCount, maxStack, paramCount int32
+	coerceThis                       bool
 	// gen is a generator's or an async function's, for its resumptions
 	// (see ztree_zyield.go), and nil for any other function's.
 	gen *tgen
@@ -138,6 +145,10 @@ func firstTree(fn *bytecode.Function) *tree {
 		p = noTree
 	} else {
 		treesBuilt.Add(1)
+		// What a call of it reads to make its frame, in the tree it has
+		// loaded, whichever of buildTree's makers made it.
+		p.localCount, p.maxStack, p.paramCount = int32(fn.LocalCount), int32(fn.MaxStack), int32(fn.ParamCount)
+		p.coerceThis = fn.CoerceThis
 	}
 	atomic.StorePointer(&fn.VMCode, unsafe.Pointer(p))
 	return p
