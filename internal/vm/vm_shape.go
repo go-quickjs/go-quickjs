@@ -958,14 +958,14 @@ func (r *Runtime) cachedProp(c *propCache, o *Object, key Atom) (Value, bool) {
 			return v, true
 		}
 	}
+	if c.fills >= maxCacheFills {
+		return r.sharedProp(o, key)
+	}
 	if e, h := c.polyEntry(o); e != nil && !e.getter {
 		if verifyShapes {
 			r.verifyPropCache(o, h, e, key)
 		}
 		return h.vals[e.idx], true
-	}
-	if c.fills >= maxCacheFills {
-		return r.sharedProp(o, key)
 	}
 	r.fillPropCache(c, o, key, false)
 	return Undefined, false
@@ -1077,7 +1077,7 @@ func (c *propCache) noteOwn(o *Object, i int32) {
 // the cache then remembers for objects of o's shape -- unless one of the
 // site's other entries (poly) already does, which answers.
 func ownScan(c *propCache, o *Object, key Atom) (Value, bool) {
-	if c.poly != nil {
+	if c.poly != nil && c.fills < maxCacheFills {
 		if e, h := c.polyEntry(o); h == o && !e.getter {
 			return o.vals[e.idx], true
 		}

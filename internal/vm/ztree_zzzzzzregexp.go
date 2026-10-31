@@ -28,7 +28,7 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 var (
 	// regexpLitCall builds call_method at pc of n arguments of a RegExp
 	// literal's exec or test, the get_prop_this's entry beneath them
-	// (tentry's regexpCall) and the RegExp in its slot beneath that, into
+	// (tentry's rare.regexpCall) and the RegExp in its slot beneath that, into
 	// regexpLitCallNode's node, and reports whether it did.
 	regexpLitCall func(b *tbuilder, n, pc int) bool
 
@@ -62,7 +62,7 @@ func init() {
 			return false
 		}
 		m := b.stack[p]
-		if m.regexpCall == nil || int(m.slot) == p || int(b.stack[p-1].slot) != p-1 {
+		if m.rare == nil || m.rare.regexpCall == nil || int(m.slot) == p || int(b.stack[p-1].slot) != p-1 {
 			return false
 		}
 		args := make([]tval, n)
@@ -71,7 +71,7 @@ func init() {
 		}
 		f := b.pop().tree()
 		b.pop()
-		b.push(regexpLitCallNode(f, m.regexpCall.k, m.regexpCall.test, args, p, pc))
+		b.push(regexpLitCallNode(f, m.rare.regexpCall.k, m.rare.regexpCall.test, args, p, pc))
 		return true
 	}
 

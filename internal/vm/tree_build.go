@@ -30,10 +30,14 @@ type tentry struct {
 	// statement (see storeArith), and BigInt.asUintN of it made of its
 	// operands (see ztree_awrap.go).
 	arith *arithOf
-	// regexpCall is set for the get_prop_this of exec or test on a RegExp
+	// rare is what an entry of two rarer kinds says of itself, for the node
+	// that builds it again: the get_prop_this of exec or test on a RegExp
 	// literal (regexp), which the call of it builds into regexpLitCall's
-	// node.
-	regexpCall *regexpCallOf
+	// node, and a property read of an object read in place, which a
+	// property read of it builds with it (see ztree_a_achain.go). One
+	// pointer for both keeps the entry at 72 bytes, which every builder
+	// that copies one lays out by.
+	rare *tentryRare
 	// global is set for a read of a global name, v the read's tree: what a
 	// node can read in place where the global is its operand, as the int32
 	// element reads and writes do of Mandreel's heap, typed arrays in
@@ -76,6 +80,11 @@ type globalOf struct {
 
 // regexpCallOf is the RegExp literal, of constant k, whose exec, or test
 // where test is set, a get_prop_this entry reads.
+type tentryRare struct {
+	regexpCall *regexpCallOf
+	prop       *propOf
+}
+
 type regexpCallOf struct {
 	k    uint32
 	test bool
@@ -1204,7 +1213,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		if skip, ok := b.placeUpdate(pc, in); ok {
 			return skip, true
 		}
-		b.push(getPropOperand(b.pop(), in, pc))
+		b.pushEntry(propEntry(b.pop(), in, pc))
 	case bytecode.OpGetPropThis:
 		// A receiver read in place is read again in place: the method's
 		// call builds both into one node (see zzmethod.go).
@@ -1223,10 +1232,15 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		if name := fn.Names[in.A]; lit.regexp && lit.slot < 0 && (name == "exec" || name == "test") && !fn.Generator && !fn.Async {
 			// A RegExp literal's exec or test, which its call may give
 			// the RegExp back after (see ztree_zzzzzzregexp.go).
-			b.stack[len(b.stack)-1].regexpCall = &regexpCallOf{k: lit.k, test: name == "test"}
+			b.stack[len(b.stack)-1].rare = &tentryRare{regexpCall: &regexpCallOf{k: lit.k, test: name == "test"}}
 		}
 	case bytecode.OpSetProp:
 		val, obj := b.pop(), b.pop()
+		if obj.rare != nil && obj.rare.prop != nil && obj.v != nil && obj.slot < 0 {
+			// this.emitState.column = v: the object's read and the store as
+			// one node (see ztree_a_achain.go).
+			return 0, b.stmt(propSetChain(obj.rare.prop, val.tree(), in, pc, fn.Strict))
+		}
 		return 0, b.stmt(setPropStmt(obj, val.tree(), in, pc, fn.Strict))
 	case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew:
 		if k := len(b.stack) - int(in.A) - 1; in.Op == bytecode.OpCallMethod && k > 0 {
