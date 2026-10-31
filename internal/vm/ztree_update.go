@@ -348,7 +348,8 @@ func endsBlock(op bytecode.Op) bool {
 // tbuilder.update builds: get_prop over an object read twice (or copied, or
 // this pushed twice), get_index over an object and key read twice,
 // get_local_index over the locals beneath it, to_property_key_of_base's
-// dup2 and get_index, get_global and get_upvalue.
+// dup2 and get_index, get_global and get_upvalue; and a get_global that
+// begins an element read or write heapAt builds.
 func (b *tbuilder) placeUpdate(pc int, in bytecode.Instr) (int, bool) {
 	if b.noUpdate {
 		return 0, false
@@ -378,7 +379,12 @@ func (b *tbuilder) placeUpdate(pc int, in bytecode.Instr) (int, bool) {
 		// Followed by dup2 and get_index, which the caller has seen.
 		return b.update(&rmw{kind: placeElem, obj: refOf(s[n-2]), key: refOf(s[n-1]), ofBase: pc, getPC: pc + 2}, 2, pc, pc+3)
 	case bytecode.OpGetGlobal:
-		return b.update(&rmw{kind: placeGlobal, name: in.A, site: in.B, getIn: in, getPC: pc}, 0, pc, pc+1)
+		if skip, ok := b.update(&rmw{kind: placeGlobal, name: in.A, site: in.B, getIn: in, getPC: pc}, 0, pc, pc+1); ok {
+			return skip, true
+		}
+		// A read of the global's element stored to a local, or a write of
+		// a local to it (see ztree_a_aheap.go).
+		return heapAt(b, pc, in)
 	case bytecode.OpGetUpvalue:
 		return b.update(&rmw{kind: placeUpvalue, upv: in.A, getPC: pc}, 0, pc, pc+1)
 	}
