@@ -1102,6 +1102,11 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 	case bytecode.OpLt, bytecode.OpLe, bytecode.OpGt, bytecode.OpGe,
 		bytecode.OpEq, bytecode.OpNe, bytecode.OpStrictEq, bytecode.OpStrictNe:
 		y, x := b.pop(), b.pop()
+		if v := eqValue(in.Op, x, y, pc); v != nil {
+			// Against a literal, a string or a number (see ztree_a_aaeqv.go).
+			b.push(v)
+			break
+		}
 		test := compareNode(in.Op, x.tree(), y.tree(), pc)
 		b.push(func(c *tctx) Value { return Bool(test(c)) })
 	case bytecode.OpNeg:
