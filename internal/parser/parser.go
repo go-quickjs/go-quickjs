@@ -246,11 +246,9 @@ func Parse(src string, opts Options) (prog *ast.Program, err error) {
 // next advances to the following token.
 func (p *parser) next() {
 	p.prevEnd = p.lex.Pos()
-	tok, err := p.lex.Next()
-	if err != nil {
+	if err := p.lex.NextInto(&p.tok); err != nil {
 		p.fail(err)
 	}
-	p.tok = tok
 }
 
 // fail raises a lexer error as a parser error.

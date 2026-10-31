@@ -64,7 +64,6 @@ func (k Kind) String() string {
 // template parts, the raw source text for numbers and regexps, and the operator
 // spelling for punctuators and keywords.
 type Token struct {
-	Kind  Kind
 	Value string
 	// Num holds the parsed value for Kind == Number.
 	Num float64
@@ -92,8 +91,10 @@ type Token struct {
 	// is what drives automatic semicolon insertion and the restricted
 	// productions (return/throw/break/continue, postfix ++/--).
 	NewlineBefore bool
-	Pos           int // byte offset of the token start
-	Line          int // 1-based
+	// Kind is beside the flags, where it packs with them.
+	Kind Kind
+	Pos  int // byte offset of the token start
+	Line int // 1-based
 	// LineStart is the byte offset of the first byte of Line. Columns are
 	// derived from it on demand rather than measured for every token, because
 	// counting runes eagerly makes scanning a long line quadratic.

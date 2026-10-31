@@ -356,11 +356,20 @@ func lineTerminatorWidth(src string, i int) int {
 
 // Next scans and returns the next token, treating '/' as a division operator.
 func (l *Lexer) Next() (Token, error) {
+	var tok Token
+	err := l.NextInto(&tok)
+	return tok, err
+}
+
+// NextInto is Next, the token scanned into *tok: a token is some hundred
+// bytes, which the parser had copied out of each scanner, out of Next and
+// into its own, three times a token.
+func (l *Lexer) NextInto(tok *Token) error {
 	l.nlBefore = false
 	if err := l.skipSpace(); err != nil {
-		return Token{}, err
+		return err
 	}
-	tok := Token{
+	*tok = Token{
 		Pos:           l.pos,
 		Line:          l.line,
 		LineStart:     l.lineStart,
@@ -368,7 +377,7 @@ func (l *Lexer) Next() (Token, error) {
 	}
 	if l.atEnd() {
 		tok.Kind = EOF
-		return tok, nil
+		return nil
 	}
 
 	c := l.src[l.pos]
@@ -385,14 +394,14 @@ func (l *Lexer) Next() (Token, error) {
 		l.pos++
 		name, err := l.scanIdentName()
 		if err != nil {
-			return tok, err
+			return err
 		}
 		tok.Kind, tok.Value = PrivateIdent, name
-		return tok, nil
+		return nil
 	case isIdentStartByte(c) || c >= utf8.RuneSelf || c == '\\':
 		name, err := l.scanIdentName()
 		if err != nil {
-			return tok, err
+			return err
 		}
 		tok.Value = name
 		tok.Escaped = l.identEscaped
@@ -403,7 +412,7 @@ func (l *Lexer) Next() (Token, error) {
 		} else {
 			tok.Kind = Ident
 		}
-		return tok, nil
+		return nil
 	}
 
 	// c is ASCII here: anything else began an identifier.
@@ -415,13 +424,13 @@ func (l *Lexer) Next() (Token, error) {
 			}
 			l.pos += len(p)
 			tok.Kind, tok.Value = Punct, p
-			return tok, nil
+			return nil
 		}
 	}
 
 	r, size := l.peekRune()
 	l.pos += size
-	return tok, l.errf(tok.Pos, "unexpected character %q", r)
+	return l.errf(tok.Pos, "unexpected character %q", r)
 }
 
 // ScanRegExp rescans from the start of a token known to begin a regular
@@ -487,13 +496,14 @@ func (l *Lexer) ScanRegExp(start Token) (Token, error) {
 func (l *Lexer) ScanTemplateTail(brace Token) (Token, error) {
 	l.pos = brace.Pos // position at the '}'
 	tok := brace
-	return l.scanTemplate(tok, false)
+	err := l.scanTemplate(&tok, false)
+	return tok, err
 }
 
 // scanTemplate reads one template part. When head is true the scanner is
 // positioned at the opening backtick; otherwise it is at the '}' that resumes
 // the literal.
-func (l *Lexer) scanTemplate(tok Token, head bool) (Token, error) {
+func (l *Lexer) scanTemplate(tok *Token, head bool) error {
 	start := l.pos
 	l.pos++ // consume '`' or '}'
 	var cooked strings.Builder
@@ -503,7 +513,7 @@ func (l *Lexer) scanTemplate(tok Token, head bool) (Token, error) {
 
 	for {
 		if l.atEnd() {
-			return tok, l.errf(start, "unterminated template literal")
+			return l.errf(start, "unterminated template literal")
 		}
 		c := l.src[l.pos]
 		switch c {
@@ -522,7 +532,7 @@ func (l *Lexer) scanTemplate(tok Token, head bool) (Token, error) {
 			if valid {
 				tok.Value = cooked.String()
 			}
-			return tok, nil
+			return nil
 		case '$':
 			if l.peekByte(1) == '{' {
 				// A substitution follows, so this part is a head or a middle.
@@ -538,7 +548,7 @@ func (l *Lexer) scanTemplate(tok Token, head bool) (Token, error) {
 				if valid {
 					tok.Value = cooked.String()
 				}
-				return tok, nil
+				return nil
 			}
 			cooked.WriteByte('$')
 			l.pos++
@@ -578,7 +588,7 @@ func normalizeTemplateRaw(raw string) string {
 	return strings.ReplaceAll(raw, "\r", "\n")
 }
 
-func (l *Lexer) scanString(tok Token, quote byte) (Token, error) {
+func (l *Lexer) scanString(tok *Token, quote byte) error {
 	start := l.pos
 	l.pos++
 	l.legacyEscape = false
@@ -589,7 +599,7 @@ func (l *Lexer) scanString(tok Token, quote byte) (Token, error) {
 	escaped := false
 	for {
 		if l.atEnd() {
-			return tok, l.errf(start, "unterminated string literal")
+			return l.errf(start, "unterminated string literal")
 		}
 		c := l.src[l.pos]
 		if c == quote {
@@ -600,7 +610,7 @@ func (l *Lexer) scanString(tok Token, quote byte) (Token, error) {
 			}
 			tok.Kind, tok.Value, tok.Raw = String, value, l.src[start:l.pos]
 			tok.LegacyEscape = l.legacyEscape
-			return tok, nil
+			return nil
 		}
 		switch c {
 		case '\\':
@@ -609,10 +619,10 @@ func (l *Lexer) scanString(tok Token, quote byte) (Token, error) {
 				escaped = true
 			}
 			if err := l.scanEscape(&sb); err != nil {
-				return tok, err
+				return err
 			}
 		case '\n', '\r':
-			return tok, l.errf(start, "unterminated string literal")
+			return l.errf(start, "unterminated string literal")
 		default:
 			if !escaped {
 				// The quote, a backslash and a line break are all ASCII, so
@@ -844,14 +854,14 @@ func (l *Lexer) scanIdentName() (string, error) {
 	return l.src[start:l.pos], nil
 }
 
-func (l *Lexer) scanNumber(tok Token) (Token, error) {
+func (l *Lexer) scanNumber(tok *Token) error {
 	start := l.pos
 	tok.Kind = Number
 
 	if l.src[l.pos] == '0' && l.peekByte(1) == '_' {
 		// A leading zero is a literal all by itself, so there is nothing for a
 		// separator to sit between: 0_0 is not 00.
-		return tok, l.errf(l.pos+1, "a numeric separator may not follow a leading zero")
+		return l.errf(l.pos+1, "a numeric separator may not follow a leading zero")
 	}
 	if l.src[l.pos] == '0' && l.pos+1 < len(l.src) {
 		switch lower(l.peekByte(1)) {
@@ -889,7 +899,7 @@ func (l *Lexer) scanNumber(tok Token) (Token, error) {
 				}
 				tok.Num = v
 				tok.Value = tok.Raw
-				return tok, nil
+				return nil
 			}
 		}
 	}
@@ -903,7 +913,7 @@ func (l *Lexer) scanNumber(tok Token) (Token, error) {
 		case c == '_':
 			// Numeric separators must sit between two digits.
 			if !isDigit(l.peekByte(-1)) || !isDigit(l.peekByte(1)) {
-				return tok, l.errf(l.pos, "invalid numeric separator")
+				return l.errf(l.pos, "invalid numeric separator")
 			}
 			l.pos++
 		case c == '.' && !seenDot && !seenExp:
@@ -912,7 +922,7 @@ func (l *Lexer) scanNumber(tok Token) (Token, error) {
 		case lower(c) == 'e' && !seenExp:
 			next := l.peekByte(1)
 			if !isDigit(next) && !((next == '+' || next == '-') && isDigit(l.peekByte(2))) {
-				return tok, l.errf(l.pos, "missing exponent")
+				return l.errf(l.pos, "missing exponent")
 			}
 			seenExp = true
 			l.pos++
@@ -927,25 +937,25 @@ done:
 	raw := l.src[start:l.pos]
 	if l.peekByte(0) == 'n' && !seenDot && !seenExp {
 		if len(raw) > maxBigIntLiteral {
-			return tok, l.errf(start, "Maximum BigInt size exceeded")
+			return l.errf(start, "Maximum BigInt size exceeded")
 		}
 		l.pos++
 		tok.Kind, tok.Value, tok.Raw = BigInt, strings.ReplaceAll(raw, "_", ""), raw+"n"
-		return tok, nil
+		return nil
 	}
 	// A digit or identifier immediately after the literal is always an error
 	// (`3in` must not lex as `3` followed by `in`).
 	if r, _ := l.peekRune(); isIdentStart(r) {
-		return tok, l.errf(l.pos, "identifier starts immediately after numeric literal")
+		return l.errf(l.pos, "identifier starts immediately after numeric literal")
 	}
 	tok.Raw = raw
 	tok.Value = raw
 	n, err := parseFloatLiteral(strings.ReplaceAll(raw, "_", ""))
 	if err != nil {
-		return tok, l.errf(start, "invalid number")
+		return l.errf(start, "invalid number")
 	}
 	tok.Num = n
-	return tok, nil
+	return nil
 }
 
 // maxBigIntLiteral is the most characters a BigInt literal's digits may
@@ -955,7 +965,7 @@ done:
 const maxBigIntLiteral = 1 << 28
 
 // scanRadix reads a 0x/0o/0b literal, which may carry a BigInt suffix.
-func (l *Lexer) scanRadix(tok Token, start, radix int, valid func(byte) bool) (Token, error) {
+func (l *Lexer) scanRadix(tok *Token, start, radix int, valid func(byte) bool) error {
 	l.pos += 2
 	digitStart := l.pos
 	var v float64
@@ -965,7 +975,7 @@ func (l *Lexer) scanRadix(tok Token, start, radix int, valid func(byte) bool) (T
 		c := l.src[l.pos]
 		if c == '_' {
 			if l.pos == digitStart || !valid(l.peekByte(1)) {
-				return tok, l.errf(l.pos, "invalid numeric separator")
+				return l.errf(l.pos, "invalid numeric separator")
 			}
 			l.pos++
 			continue
@@ -977,22 +987,22 @@ func (l *Lexer) scanRadix(tok Token, start, radix int, valid func(byte) bool) (T
 		l.pos++
 	}
 	if l.pos == digitStart {
-		return tok, l.errf(start, "missing digits after radix prefix")
+		return l.errf(start, "missing digits after radix prefix")
 	}
 	raw := l.src[start:l.pos]
 	if l.peekByte(0) == 'n' {
 		if l.pos-digitStart > maxBigIntLiteral {
-			return tok, l.errf(start, "Maximum BigInt size exceeded")
+			return l.errf(start, "Maximum BigInt size exceeded")
 		}
 		l.pos++
 		tok.Kind, tok.Value, tok.Raw = BigInt, strings.ReplaceAll(raw, "_", ""), raw+"n"
-		return tok, nil
+		return nil
 	}
 	if r, _ := l.peekRune(); isIdentStart(r) {
-		return tok, l.errf(l.pos, "identifier starts immediately after numeric literal")
+		return l.errf(l.pos, "identifier starts immediately after numeric literal")
 	}
 	tok.Num, tok.Raw, tok.Value = v, raw, raw
-	return tok, nil
+	return nil
 }
 
 // parseFloatLiteral converts a decimal literal to a float64. Overflow maps to
