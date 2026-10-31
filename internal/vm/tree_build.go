@@ -2163,6 +2163,11 @@ func (c *tctx) getIndexSlow(o, k Value, pc int) Value {
 			return t.getElem(i)
 		}
 	}
+	if o.IsObject() && k.IsString() {
+		if v, ok := c.r.stringKeyRead(o.object(), k.String()); ok {
+			return v
+		}
+	}
 	c.at(pc)
 	v, err := c.r.getIndexed(o, k)
 	if err != nil {

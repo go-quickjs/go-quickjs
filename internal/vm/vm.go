@@ -3551,6 +3551,34 @@ func (r *Runtime) newArrayFrom(vals []Value) *Object {
 	return o
 }
 
+// stringKeyRead is o[s] for a string s the runtime has handed out as a key
+// before (keyAtoms), whose atom is no array index, where o and each of its
+// prototypes up to the one holding the key are ordinary objects holding it,
+// if at all, as a plain data property: the walk getProp makes, without
+// getIndexed's conversion of the key and its questions of each object's
+// kind. A symbol table kept in an object -- Typescript's StringHashTable,
+// this.table[key] -- is read so, most often for a key it does not have,
+// which every prototype is asked for. It reports false for anything else.
+func (r *Runtime) stringKeyRead(o *Object, s *String) (Value, bool) {
+	e := &r.keyAtoms[keySlot(s)]
+	if e.s != s || e.none || e.atom.IsIndex() {
+		return Undefined, false
+	}
+	key := e.atom
+	for p := o; p != nil; p = p.proto {
+		if p.class != ClassObject {
+			return Undefined, false
+		}
+		if i := p.findOwn(key); i >= 0 {
+			if p.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted|propUninit) != 0 {
+				return Undefined, false
+			}
+			return p.vals[i], true
+		}
+	}
+	return Undefined, true
+}
+
 // getIndexed reads a computed property, taking a fast path for an array index
 // on a dense array.
 func (r *Runtime) getIndexed(obj, key Value) (Value, error) {
