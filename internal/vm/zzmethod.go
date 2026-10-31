@@ -283,6 +283,9 @@ func (b *tbuilder) methodCall(n int, m *methodOf, pc int) tval {
 	if lit.regexp && lit.slot < 0 {
 		return regexpArgMethodCall(recv, m.in, m.pc, args, b.depth()+1, pc, lit.k)
 	}
+	if n == 1 && b.fn.Names[m.in.A] == "charCodeAt" {
+		return charCodeAtCall(recv, m.in, m.pc, args[0], b.depth()+1, pc)
+	}
 	return methodCallAny(recv, m.in, m.pc, args, b.depth()+1, pc)
 }
 
