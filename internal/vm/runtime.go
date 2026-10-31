@@ -656,6 +656,13 @@ type closureCode struct {
 	// genLoops says a loop has stepped a generator of the template made
 	// with no room for its cursor, which those made after have (genAlloc).
 	genLoops bool
+	// pureMiss counts the calls pureCall gave up on, for a body LeafPure
+	// marks: past pureMissLimit it is not tried. It is the template's, so
+	// that a function made anew at each call of its maker -- a callback,
+	// as Typescript's binder passes one to each table's map -- stops trying
+	// as one made once does; counted per closure, it was tried, and given
+	// up on, at every call of every closure, each then made with a frame.
+	pureMiss uint8
 }
 
 // closure is a function template paired with the upvalues it captured.
@@ -675,9 +682,6 @@ type closure struct {
 	// environment for module code -- which inherits from the global object, so
 	// the prototype chain performs the scope lookup.
 	env *Object
-	// pureMiss counts the calls pureCall gave up on, for a body LeafPure
-	// marks: past pureMissLimit it is not tried.
-	pureMiss uint8
 }
 
 // upvalue is a captured variable.

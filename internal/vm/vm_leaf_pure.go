@@ -181,8 +181,15 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 	fn := cl.fn
 	// An arrow is marked pure by the compiler only where its body never
 	// reads this, so the this it is called with does not matter.
-	if cl.pureMiss >= pureMissLimit || len(fd.extra.with()) > 0 || fd.extra.evalVars() != nil ||
-		fn.CoerceThis && !this.IsObject() {
+	if cl.pureMiss >= pureMissLimit || len(fd.extra.with()) > 0 || fd.extra.evalVars() != nil {
+		return Undefined, false
+	}
+	if fn.CoerceThis && !this.IsObject() {
+		// A sloppy body called without an object for this -- a plain
+		// call, f() -- whose this a frame makes: a miss, so that its calls
+		// are planned (planTreeCall), callTree making the global object
+		// its this, rather than each tried here and then made by runFD.
+		cl.pureMiss++
 		return Undefined, false
 	}
 	// The body's operands go in the runtime's stack above every frame's,
