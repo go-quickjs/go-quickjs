@@ -83,6 +83,9 @@ func init() {
 					return no
 				}
 			}
+			if p := propIn(x); p != nil {
+				return eqPropJump(p, 0, true, j, yes, no)
+			}
 			v := x.tree()
 			return func(c *tctx) int {
 				if l := v(c); l.IsString() {
@@ -170,6 +173,9 @@ func init() {
 					return no
 				}
 			}
+		}
+		if p := propIn(x); p != nil && test != litBits {
+			return eqPropJump(p, test, false, 0, yes, no)
 		}
 		v := x.tree()
 		switch test {

@@ -123,3 +123,47 @@ func TestEqualityWithStrings(t *testing.T) {
 	}
 	SetTreeTier(true)
 }
+
+// An equality branch of a property of a local or of this, read in place,
+// with null, undefined, == null and a string constant (eqPropJump) answers
+// as the interpreter does: for an own property of several shapes, one of
+// the prototype, a missing one, a getter, a proxy's, a primitive's, and
+// null's, which throws a TypeError. Each function has a local of its own,
+// so that it is run on its tree rather than by pureCall.
+func TestEqualityWithProps(t *testing.T) {
+	const src = `
+		class N { constructor(p) { this.p = p }
+		  t() { let _k = 0; if (this.p === null) return 'a'; if (this.p === undefined) return 'b'; if (this.p == null) return 'c'; if (this.p === 'go') return 'd'; return 'e' } }
+		N.prototype.q = 'go'
+		function l(o) { let _k = 0; if (o.p === null) return 'f'; if (undefined === o.p) return 'g'; if (o.p != null) { if (o.p !== 'go') return 'h'; return 'i' } return 'j' }
+		function q(o) { let _k = 0; if (o.q === 'go') return 'k'; return 'm' }
+		const vals = [null, undefined, 'go', 'g' + 'o', 0, {}, dda]
+		const objs = () => [{ p: null }, { a: 1, p: 'go' }, {}, { get p() { return 'go' } }, new Proxy({}, { get() { return null } }), 'str', 5, new N('x')]
+		const s = []
+		for (let round = 0; round < 3; round++) {
+		  const r = []
+		  for (const v of vals) r.push(new N(v).t())
+		  for (const o of objs()) { let k = ''; for (const f of [l, q]) { try { k += f(o) } catch (err) { k += err.constructor.name } } r.push(k) }
+		  try { l(null) } catch (err) { r.push(err.constructor.name) }
+		  s.push(r.join(','))
+		}
+		const out = s[0] + ' | ' + (s[0] === s[1] && s[1] === s[2])
+		out`
+	const want = "a,b,d,d,e,e,c,fm,im,gm,im,fm,gm,gm,hk,TypeError | true"
+	for _, tree := range []bool{true, false} {
+		SetTreeTier(tree)
+		r := New(Config{})
+		dda := r.NewObject()
+		dda.MarkHTMLDDA()
+		r.global.setOwnRaw(r.atoms.intern("dda"), Obj(dda), propDefault)
+		v, err := r.Run(compileForTest(t, src))
+		r.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := v.String().Go(); got != want {
+			t.Errorf("tree tier %v: got\n%s\nwant\n%s", tree, got, want)
+		}
+	}
+	SetTreeTier(true)
+}
