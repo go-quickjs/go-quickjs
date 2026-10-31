@@ -891,6 +891,31 @@ func (c *propCache) refill(n propCache, jit bool) {
 type propPoly struct {
 	n       uint8
 	entries [maxPolyEntries]propCache
+	// mega is, for a site that has given up (maxCacheFills), the slots of
+	// the plain own properties it has found, by the objects' shapes
+	// (megaOwn), or nil before it finds one.
+	mega *megaOwn
+}
+
+// megaOwn is a site's own table of where the property it reads is in
+// objects of each shape it has met, once it has met too many for its
+// entries: a read of ast.nodeType over Typescript's AST nodes of every
+// class, which had found the key in each node's layout's index -- the
+// layout, its index, the index's recent keys and the layout's keys, four
+// loads apart in memory -- a table the site keeps in the processor's cache.
+// An entry is checked against the object's shape, as an entry of the
+// site's own is, and remembers it (remember), so that a layout that would
+// change in place gets another identity instead.
+type megaOwn [16]megaEntry
+
+type megaEntry struct {
+	shape *shape
+	idx   int32
+}
+
+// megaSlot is where s goes in a megaOwn.
+func megaSlot(s *shape) uintptr {
+	return uintptr(uint64(uintptr(unsafe.Pointer(s))>>4) * 0x9e3779b97f4a7c15 >> 60)
 }
 
 // maxPolyEntries is how many shapes a site remembers besides its entry's:
@@ -1073,6 +1098,19 @@ func (c *propCache) noteOwn(o *Object, i int32) {
 	if c.fills < maxCacheFills && o.cacheShape() != nil {
 		// Native code searches a small object's own table itself.
 		c.refill(propCache{shape: remember(o.shape), idx: i, fills: c.fills + 1}, false)
+		return
+	}
+	if s := o.cacheShape(); c.fills >= maxCacheFills && s != nil && o.class == ClassObject {
+		// A site that has given up remembers it in its own table (megaOwn).
+		if c.poly == nil {
+			c.poly = &propPoly{}
+		}
+		m := c.poly.mega
+		if m == nil {
+			m = new(megaOwn)
+			c.poly.mega = m
+		}
+		m[megaSlot(s)] = megaEntry{shape: remember(s), idx: i}
 	}
 }
 
@@ -1080,9 +1118,17 @@ func (c *propCache) noteOwn(o *Object, i int32) {
 // the cache then remembers for objects of o's shape -- unless one of the
 // site's other entries (poly) already does, which answers.
 func ownScan(c *propCache, o *Object, key Atom) (Value, bool) {
-	if c.poly != nil && c.fills < maxCacheFills {
-		if e, h := c.polyEntry(o); h == o && !e.getter {
-			return o.vals[e.idx], true
+	if p := c.poly; p != nil {
+		if c.fills < maxCacheFills {
+			if e, h := c.polyEntry(o); h == o && !e.getter {
+				return o.vals[e.idx], true
+			}
+		} else if m := p.mega; m != nil {
+			if s := o.shape; s != nil {
+				if e := &m[megaSlot(s)]; e.shape == s && o.class == ClassObject {
+					return o.vals[e.idx], true
+				}
+			}
 		}
 	}
 	v, i, ok := plainOwnAt(o, key)
