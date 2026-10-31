@@ -2295,6 +2295,24 @@ func getPropOperand(obj tentry, in bytecode.Instr, pc int) tval {
 			return c.getPropSlow(o, name, site, pc)
 		}
 	}
+	if k := obj.k; obj.upvalue {
+		// An upvalue's property, read in place: a closure's module object,
+		// ts.SyntaxKind in Typescript's compiler, which had been a call of
+		// the upvalue's own node at each read.
+		return func(c *tctx) Value {
+			o := c.cl.upvalues[k].get()
+			if o.IsObject() {
+				ob := o.object()
+				if v, ok := c.ic[site].own(ob); ok {
+					return v
+				}
+				if v, ok := ownScan(&c.ic[site], ob, c.names[name]); ok {
+					return v
+				}
+			}
+			return c.getPropSlow(o, name, site, pc)
+		}
+	}
 	x := obj.tree()
 	return func(c *tctx) Value {
 		o := x(c)
