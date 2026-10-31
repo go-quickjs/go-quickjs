@@ -69,17 +69,25 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 	}
 	c.fn.Start = int32(fn.Start)
 
+	// What the body and parameters say of this, arguments, a direct eval
+	// and the properties a constructor's object is given, in one walk.
+	constructible := false
+	switch c.fn.Kind {
+	case bytecode.KindNormal, bytecode.KindConstructor, bytecode.KindDerivedConstructor:
+		constructible = true
+	}
+	facts := scanFunction(fn, constructible)
+
 	// Parameters must occupy slots 0..n-1, because the interpreter copies
 	// arguments into those slots positionally. Nothing may be declared before
 	// them.
-	c.fn.UsesThis = referencesThis(fn)
+	c.fn.UsesThis = facts.usesThis
 
 	// A direct eval in the body may declare a var here, and it would belong to
 	// this function. The answer is needed before anything is compiled: a frame
 	// needs somewhere to put such a binding, and every reference to a name
 	// this function does not bind has to be compiled to look there first.
-	c.fn.HasDirectEval = !c.fn.Strict && !c.varScopeIsGlobal() &&
-		(containsDirectEval(fn.Body) || containsDirectEvalInParams(fn.Params))
+	c.fn.HasDirectEval = !c.fn.Strict && !c.varScopeIsGlobal() && facts.directEval
 	if c.fn.HasDirectEval {
 		// Those bindings are reached the way a `with` object's properties are:
 		// they have no slot, they shadow whatever the name meant outside the
@@ -100,17 +108,15 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 	// parameters are initialized, so a default may refer to it, and the slot
 	// has to exist before the body is compiled, because an arrow can only
 	// capture a binding that is already there.
-	wantArguments := c.fn.Kind != bytecode.KindArrow &&
-		(referencesArguments(fn.Body) || referencesArgumentsInParams(fn.Params)) &&
+	wantArguments := c.fn.Kind != bytecode.KindArrow && facts.usesArguments &&
 		!bindsArguments(fn.Params) &&
 		!(simpleParams(fn.Params) && declaresArguments(fn.Body))
 	// A constructible function's object is made with room for the properties
 	// the body assigns to `this`, so that a constructor of three fields does
 	// not grow its table three times. Nothing else builds an object, so nothing
-	// else pays for the walk.
-	switch c.fn.Kind {
-	case bytecode.KindNormal, bytecode.KindConstructor, bytecode.KindDerivedConstructor:
-		c.fn.ThisProps = uint8(thisPropertyCount(fn.Body))
+	// else collects them.
+	if constructible {
+		c.fn.ThisProps = uint8(len(facts.thisProps))
 	}
 
 	// A named function expression can refer to itself by name.
@@ -140,7 +146,7 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 		// A body that only hands the object to apply gets none: each such
 		// call is one instruction, which gives the arguments themselves to
 		// the built-in apply, and makes the object then for anything else.
-		if !fn.Generator && !fn.Async && !referencesArgumentsInParams(fn.Params) &&
+		if !fn.Generator && !fn.Async && !facts.argumentsInParams &&
 			argumentsOnlyApplied(fn.Body) {
 			c.lazyArguments, c.lazyArgumentsSlot = true, slot
 			return

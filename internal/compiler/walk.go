@@ -2,33 +2,6 @@ package compiler
 
 import "github.com/go-quickjs/go-quickjs/internal/ast"
 
-// referencesArguments reports whether a function body mentions `arguments`.
-//
-// The scan descends into arrow functions, because an arrow has no arguments
-// object of its own and refers to the enclosing function's, but stops at any
-// other function, which gets its own.
-//
-// The compiler needs this before emitting a function's prologue: an arrow can
-// only capture `arguments` if the enclosing function materialized it into a
-// slot, and adding that slot later would mean rewriting a prologue that has
-// already been emitted.
-func referencesArguments(body []ast.Stmt) bool {
-	w := &argumentsScanner{}
-	w.stmts(body)
-	return w.found
-}
-
-// referencesArgumentsInParams reports whether a parameter list mentions
-// `arguments`, which a default value may: the object exists before the
-// parameters are initialized.
-func referencesArgumentsInParams(params []ast.Expr) bool {
-	w := &argumentsScanner{}
-	for _, p := range params {
-		w.expr(p)
-	}
-	return w.found
-}
-
 type argumentsScanner struct {
 	found bool
 	// seekThis looks for `this` and `super` instead of `arguments`, which needs
@@ -65,6 +38,61 @@ type argumentsScanner struct {
 	// function, an arrow, a class -- whose methods and fields are functions
 	// -- or a direct eval, whose code may make one.
 	seekClosure bool
+	// scanning has the walk find what scanFunction asks, all at once, into
+	// facts, and run to the end; inParams says the walk is in the
+	// function's parameter list. The facts are the scanner's own, not a
+	// pointer's, so that neither is made on the heap.
+	scanning bool
+	inParams bool
+	facts    functionFacts
+}
+
+// functionFacts is what a function's compile asks of its body and
+// parameters before it compiles them, found in one walk by scanFunction.
+// Each is needed first:
+//
+//   - usesThis: whether the code can observe its this, so that a sloppy
+//     call need not substitute the global object, a pointer write on every
+//     call, where nothing would see the difference.
+//   - usesArguments, and argumentsInParams for the parameters alone:
+//     whether it mentions arguments, which is then made into a slot before
+//     the prologue, where a default may read it and an arrow capture it.
+//   - directEval: whether it calls eval by that name outside any function
+//     written in it, whose frame then needs room for the bindings the
+//     evaluated code may declare.
+//   - thisProps: the properties the body assigns to this by name, which a
+//     constructor's object is made with room for.
+//
+// A direct eval counts as using this and arguments: what it says cannot be
+// known from here. Each fact had been a walk of its own of the whole body,
+// four of every function's compile: a twentieth of the time of Octane's
+// CodeLoad, which compiles what it loads.
+type functionFacts struct {
+	usesThis, usesArguments, argumentsInParams, directEval bool
+	thisProps                                              []string
+	// propsDone stops the collection of thisProps where the body first
+	// mentions arguments or eval, as thisPropertyCount's walk stopped there,
+	// its scanner's default search having found what it looks for.
+	propsDone bool
+}
+
+// scanFunction is fn's functionFacts. A walk for one fact stops at the
+// first sign of it; this one runs to the end, and finds each as its own
+// walk would: this and arguments through arrows, which share them, and a
+// direct eval in no function written inside, an arrow included, which has
+// a variable scope of its own. thisProps are collected only where props is
+// set, from the body alone.
+func scanFunction(fn *ast.FuncLit, props bool) functionFacts {
+	w := &argumentsScanner{scanning: true, inParams: true}
+	if props {
+		w.facts.thisProps = []string{}
+	}
+	for _, p := range fn.Params {
+		w.expr(p)
+	}
+	w.inParams = false
+	w.stmts(fn.Body)
+	return w.facts
 }
 
 // containsClosure reports whether code could capture a binding in scope
@@ -112,25 +140,26 @@ func isApplyOfArguments(n *ast.Call) bool {
 	return ok && id.Name == "arguments"
 }
 
-// noteThisProp records an assignment of the form `this.name = ...`.
-func (w *argumentsScanner) noteThisProp(n *ast.Assign) {
+// noteThisProp is props with the name an assignment of the form
+// `this.name = ...` assigns, if it is one.
+func noteThisProp(props []string, n *ast.Assign) []string {
 	m, ok := n.Target.(*ast.Member)
 	if !ok || m.Computed {
-		return
+		return props
 	}
 	if _, ok := m.Object.(*ast.This); !ok {
-		return
+		return props
 	}
 	name := propKeyName(m.Property)
-	if name == "" || len(w.thisProps) >= maxThisProps {
-		return
+	if name == "" || len(props) >= maxThisProps {
+		return props
 	}
-	for _, have := range w.thisProps {
+	for _, have := range props {
 		if have == name {
-			return
+			return props
 		}
 	}
-	w.thisProps = append(w.thisProps, name)
+	return append(props, name)
 }
 
 // maxThisProps bounds the count, which is a hint at how much room to make:
@@ -139,40 +168,6 @@ func (w *argumentsScanner) noteThisProp(n *ast.Assign) {
 // builds are made with that room until their first few have measured what
 // they use (the VM's slack tracking).
 const maxThisProps = 252
-
-// thisPropertyCount is how many distinct properties a function body assigns to
-// `this` by name.
-//
-// A constructor's object is made with room for them, rather than growing its
-// table as the body fills it in. The walk descends into arrows, which share the
-// `this` they are written in, and stops at any other function.
-func thisPropertyCount(body []ast.Stmt) int {
-	w := &argumentsScanner{thisProps: []string{}}
-	w.stmts(body)
-	return len(w.thisProps)
-}
-
-// containsDirectEval reports whether a statement list calls `eval` by that
-// name, outside any function written inside it.
-//
-// The answer is needed before the body is compiled: a frame of a function that
-// contains one needs somewhere to put the bindings the evaluated code may
-// declare, and the references to them have to be compiled to look there.
-func containsDirectEval(body []ast.Stmt) bool {
-	w := &argumentsScanner{seekDirectEval: true}
-	w.stmts(body)
-	return w.found
-}
-
-// containsDirectEvalInParams is the same for a parameter list, where a default
-// value may contain one.
-func containsDirectEvalInParams(params []ast.Expr) bool {
-	w := &argumentsScanner{seekDirectEval: true}
-	for _, p := range params {
-		w.expr(p)
-	}
-	return w.found
-}
 
 // referencesName reports whether a function mentions a name anywhere, nested
 // functions included.
@@ -200,22 +195,6 @@ func referencesName(fn *ast.FuncLit, name string) bool {
 func containsArgumentsInStmts(body []ast.Stmt) bool {
 	w := &argumentsScanner{literalOnly: true}
 	w.stmts(body)
-	return w.found
-}
-
-// referencesThis reports whether a function body can observe its `this`.
-//
-// It is asked so that a sloppy-mode call can skip substituting the global
-// object when nothing would see the difference -- which is most functions, and
-// the substitution costs a pointer write on every call.
-//
-// A direct eval could see it, so a body containing one counts as using it.
-func referencesThis(fn *ast.FuncLit) bool {
-	w := &argumentsScanner{seekThis: true}
-	for _, p := range fn.Params {
-		w.expr(p)
-	}
-	w.stmts(fn.Body)
 	return w.found
 }
 
@@ -330,6 +309,11 @@ func (w *argumentsScanner) expr(e ast.Expr) {
 	}
 	switch n := e.(type) {
 	case *ast.Call:
+		if f := &w.facts; w.scanning && w.inArrow == 0 {
+			if id, ok := n.Callee.(*ast.Ident); ok && id.Name == "eval" {
+				f.directEval = true
+			}
+		}
 		if w.seekDirectEval {
 			if id, ok := n.Callee.(*ast.Ident); ok && id.Name == "eval" {
 				w.found = true
@@ -346,6 +330,20 @@ func (w *argumentsScanner) expr(e ast.Expr) {
 			w.expr(a)
 		}
 	case *ast.Ident:
+		if f := &w.facts; w.scanning {
+			// A direct eval can read both this and arguments.
+			switch n.Name {
+			case "eval":
+				f.usesThis, f.usesArguments = true, true
+				f.argumentsInParams = f.argumentsInParams || w.inParams
+				f.propsDone = f.propsDone || !w.inParams
+			case "arguments":
+				f.usesArguments = true
+				f.argumentsInParams = f.argumentsInParams || w.inParams
+				f.propsDone = f.propsDone || !w.inParams
+			}
+			return
+		}
 		if w.seekDirectEval {
 			return
 		}
@@ -373,10 +371,16 @@ func (w *argumentsScanner) expr(e ast.Expr) {
 			w.found = true
 		}
 	case *ast.This:
+		if w.scanning {
+			w.facts.usesThis = true
+		}
 		if w.seekThis && !w.seekSuper {
 			w.found = true
 		}
 	case *ast.Super:
+		if w.scanning {
+			w.facts.usesThis = true
+		}
 		if w.seekThis {
 			w.found = true
 		}
@@ -433,7 +437,9 @@ func (w *argumentsScanner) expr(e ast.Expr) {
 		w.expr(n.Right)
 	case *ast.Assign:
 		if w.thisProps != nil {
-			w.noteThisProp(n)
+			w.thisProps = noteThisProp(w.thisProps, n)
+		} else if f := &w.facts; w.scanning && f.thisProps != nil && !w.inParams && !f.propsDone {
+			f.thisProps = noteThisProp(f.thisProps, n)
 		}
 		w.expr(n.Target)
 		w.expr(n.Value)
