@@ -83,6 +83,9 @@ type globalOf struct {
 type tentryRare struct {
 	regexpCall *regexpCallOf
 	prop       *propOf
+	// str is set for a string constant's push_const, of constant k, which
+	// an equality with it reads in place (see ztree_a_aalit.go).
+	str bool
 }
 
 type regexpCallOf struct {
@@ -905,6 +908,10 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 	case bytecode.OpPushConst:
 		k := in.A
 		b.push(func(c *tctx) Value { return c.consts[k] })
+		if fn.Constants[k].Kind == bytecode.ConstString {
+			e := &b.stack[len(b.stack)-1]
+			e.k, e.rare = k, strConstRare
+		}
 	case bytecode.OpPushUndef:
 		b.pushEntry(tentry{slot: -1, literal: true, n: Undefined})
 	case bytecode.OpPushNull:
@@ -2776,6 +2783,9 @@ func isEquality(op bytecode.Op) bool {
 // constant on one side, or a local on both, is eqNumJump's.
 func eqJump(op bytecode.Op, x, y tentry, pc, taken, fall int) tnext {
 	if next := eqJumpAt(op, x, y, pc, taken, fall); next != nil {
+		return next
+	}
+	if next := eqLitJump(op, x, y, taken, fall); next != nil {
 		return next
 	}
 	if x.literal && !y.literal {
