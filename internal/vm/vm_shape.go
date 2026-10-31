@@ -1465,6 +1465,16 @@ func (r *Runtime) setPropCached(c *propCache, o *Object, key Atom, v Value, stri
 		}
 	}
 	gaveUp := c.fills >= maxCacheFills
+	if gaveUp && o.class == ClassObject && o.shape != nil {
+		// A write of a plain writable property the object has, at a site
+		// that has given up: made in its table, found by its layout --
+		// ast.type = null over Typescript's AST nodes of every class, which
+		// had been setProp's whole walk.
+		if i := o.findOwn(key); i >= 0 && o.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted|propUninit|propWritable) == propWritable {
+			o.vals[i] = v
+			return nil
+		}
+	}
 	if gaveUp && !key.IsIndex() && r.deepStore(o, key, v) {
 		return nil
 	}

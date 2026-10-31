@@ -1038,8 +1038,19 @@ func (r *Runtime) toElementValue(t *typedArrayData, v Value) (Value, error) {
 // small enough to be inlined where the interpreter reads a property.
 // plainOwnAt is plainOwn, also giving where in the table the property is.
 func plainOwnAt(o *Object, key Atom) (Value, int32, bool) {
-	if o.class != ClassObject || o.shapeIndex() != nil {
+	if o.class != ClassObject {
 		return Undefined, 0, false
+	}
+	if o.shapeIndex() != nil {
+		// A large table's index, which its layout has: what a read whose
+		// cache has given up asks before the runtime's shared cache, as
+		// the layout is in the processor's cache already and the shared
+		// one's entries seldom are.
+		i := o.findOwn(key)
+		if i < 0 {
+			return Undefined, 0, false
+		}
+		return o.vals[i], i, o.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted) == 0
 	}
 	for i, p := range o.keys() {
 		if p.key == key {
