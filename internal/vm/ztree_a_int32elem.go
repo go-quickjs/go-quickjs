@@ -110,6 +110,22 @@ func init() {
 					i, idx := i32Index(k, uns)
 					return i32Read(c, s, o, i, idx, Int32(k))
 				}
+			case obj.global != nil:
+				read, name, site := obj.v, obj.global.name, obj.global.site
+				return func(c *tctx) int32 {
+					// The global read in place, where its site's slot holds it,
+					// as its get_global's node reads it (OpGetGlobal).
+					var o Value
+					if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint(s.idx) < uint(len(s.p1.vals)) && s.p1.shape == s.shape &&
+						(len(c.r.globalLex.vals) == 0 || !c.r.lexShadows(c.names[name])) {
+						o = s.p1.vals[s.idx]
+					} else {
+						o = read(c)
+					}
+					k := p(c)
+					i, idx := i32Index(k, uns)
+					return i32Read(c, s, o, i, idx, Int32(k))
+				}
 			}
 			t := obj.tree()
 			return func(c *tctx) int32 {
@@ -132,6 +148,22 @@ func init() {
 				o := obj.k
 				return func(c *tctx) int32 {
 					o, k := c.cl.upvalues[o].get(), c.locals[k]
+					i, idx := valueIndex(k)
+					return i32Read(c, s, o, i, idx, k)
+				}
+			case obj.global != nil:
+				read, name, site := obj.v, obj.global.name, obj.global.site
+				return func(c *tctx) int32 {
+					// The global read in place, where its site's slot holds it,
+					// as its get_global's node reads it (OpGetGlobal).
+					var o Value
+					if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint(s.idx) < uint(len(s.p1.vals)) && s.p1.shape == s.shape &&
+						(len(c.r.globalLex.vals) == 0 || !c.r.lexShadows(c.names[name])) {
+						o = s.p1.vals[s.idx]
+					} else {
+						o = read(c)
+					}
+					k := c.locals[k]
 					i, idx := valueIndex(k)
 					return i32Read(c, s, o, i, idx, k)
 				}
@@ -158,6 +190,22 @@ func init() {
 			o := obj.k
 			return func(c *tctx) int32 {
 				o := c.cl.upvalues[o].get()
+				k := u(c)
+				i, idx := valueIndex(k)
+				return i32Read(c, s, o, i, idx, k)
+			}
+		case obj.global != nil:
+			read, name, site := obj.v, obj.global.name, obj.global.site
+			return func(c *tctx) int32 {
+				// The global read in place, where its site's slot holds it,
+				// as its get_global's node reads it (OpGetGlobal).
+				var o Value
+				if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint(s.idx) < uint(len(s.p1.vals)) && s.p1.shape == s.shape &&
+					(len(c.r.globalLex.vals) == 0 || !c.r.lexShadows(c.names[name])) {
+					o = s.p1.vals[s.idx]
+				} else {
+					o = read(c)
+				}
 				k := u(c)
 				i, idx := valueIndex(k)
 				return i32Read(c, s, o, i, idx, k)
@@ -331,6 +379,22 @@ func init() {
 				i, idx := i32Index(k, uns)
 				return i32Get(c, o, i, idx, Int32(k), pc)
 			}
+		case obj.global != nil:
+			read, name, site := obj.v, obj.global.name, obj.global.site
+			return func(c *tctx) Value {
+				// The global read in place, where its site's slot holds it,
+				// as its get_global's node reads it (OpGetGlobal).
+				var o Value
+				if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint(s.idx) < uint(len(s.p1.vals)) && s.p1.shape == s.shape &&
+					(len(c.r.globalLex.vals) == 0 || !c.r.lexShadows(c.names[name])) {
+					o = s.p1.vals[s.idx]
+				} else {
+					o = read(c)
+				}
+				k := p(c)
+				i, idx := i32Index(k, uns)
+				return i32Get(c, o, i, idx, Int32(k), pc)
+			}
 		}
 		t := obj.tree()
 		return func(c *tctx) Value {
@@ -430,6 +494,21 @@ func init() {
 			o := obj.k
 			return func(c *tctx) {
 				o := c.cl.upvalues[o].get()
+				k := p(c)
+				i32Put(c, o, k, uns, val(c), pc, strict)
+			}
+		case obj.global != nil:
+			read, name, site := obj.v, obj.global.name, obj.global.site
+			return func(c *tctx) {
+				// The global read in place, where its site's slot holds it,
+				// as its get_global's node reads it (OpGetGlobal).
+				var o Value
+				if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint(s.idx) < uint(len(s.p1.vals)) && s.p1.shape == s.shape &&
+					(len(c.r.globalLex.vals) == 0 || !c.r.lexShadows(c.names[name])) {
+					o = s.p1.vals[s.idx]
+				} else {
+					o = read(c)
+				}
 				k := p(c)
 				i32Put(c, o, k, uns, val(c), pc, strict)
 			}

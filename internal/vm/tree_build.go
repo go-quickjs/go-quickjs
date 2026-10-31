@@ -34,6 +34,11 @@ type tentry struct {
 	// literal (regexp), which the call of it builds into regexpLitCall's
 	// node.
 	regexpCall *regexpCallOf
+	// global is set for a read of a global name, v the read's tree: what a
+	// node can read in place where the global is its operand, as the int32
+	// element reads and writes do of Mandreel's heap, typed arrays in
+	// globals (see ztree_a_int32elem.go).
+	global *globalOf
 	// slot is the stack slot the entry is a read of, or -1 for a tree still
 	// to be evaluated. It is the entry's own position, except for the copy
 	// a dup or dup2 leaves for the get_prop or get_index right after it,
@@ -61,6 +66,12 @@ type tentry struct {
 	// regexp is set for a RegExp literal's tree, of constant k, which a
 	// method call given it first builds into regexpArgCall's node.
 	regexp bool
+}
+
+// globalOf is a global name's read: the name, and the site its get_global
+// reads the slot the name was in by.
+type globalOf struct {
+	name, site uint32
 }
 
 // regexpCallOf is the RegExp literal, of constant k, whose exec, or test
@@ -1514,7 +1525,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			return skip, true
 		}
 		name, site := in.A, in.B
-		b.push(func(c *tctx) Value {
+		b.pushEntry(tentry{slot: -1, global: &globalOf{name, site}, v: func(c *tctx) Value {
 			// The global object's slot the site remembers, read here where
 			// nothing can shadow it -- a direct eval's variables or a
 			// script's lexical binding of the name, which getGlobalAt asks
@@ -1545,7 +1556,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 				c.throw(err)
 			}
 			return v
-		})
+		}})
 	case bytecode.OpSetGlobalStrict:
 		// As set_global: a plain writable property of the global object, in
 		// the slot the site remembers, is one the check would have found in
