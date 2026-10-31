@@ -682,8 +682,10 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 			return b.succ, true
 		case bytecode.OpReturn, bytecode.OpReturnUndef:
 			v := tval(func(*tctx) Value { return Undefined })
+			var e tentry
 			if in.Op == bytecode.OpReturn {
-				v = b.pop().tree()
+				e = b.pop()
+				v = e.tree()
 			}
 			if !b.spill() {
 				return nil, false
@@ -710,6 +712,8 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 			if b.fn.HasTailCall {
 				// It may start the function again: see ztree_zkself.go.
 				next = restartReturn(v, d, pc)
+			} else if r := returnAt(e, in.Op == bytecode.OpReturnUndef, d, pc); r != nil {
+				next = r
 			}
 			t.blocks[bi] = tblock{body: b.takeBody(), next: next}
 			return b.succ, true
