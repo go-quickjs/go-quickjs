@@ -678,6 +678,16 @@ func (c *compiler) fuse(op bytecode.Op, a uint32) (int, bool) {
 		return 0, false
 	}
 	last := &c.fn.Code[n-1]
+	if immediateOp(op) && last.Op == bytecode.OpPushConst {
+		// A negative int32 literal, which compileUnary folds into a
+		// constant, taken by an operator as an immediate as a positive one
+		// is: sp + -8, x & -4. Elsewhere -1 stays the constant it was.
+		if k := c.fn.Constants[last.A]; k.Kind == bytecode.ConstNumber {
+			if i := int32(k.Num); float64(i) == k.Num && !isNegZero(k.Num) {
+				last.Op, last.A = bytecode.OpPushInt, uint32(i)
+			}
+		}
+	}
 	switch {
 	case op == bytecode.OpGetLocal && last.Op == bytecode.OpGetLocal:
 		last.Op, last.B = bytecode.OpGetLocal2, a
