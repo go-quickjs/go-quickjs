@@ -236,7 +236,8 @@ type shapeTree struct {
 	building bool
 	// shared is the cache of the reads that have given up their own, made
 	// when one first does.
-	shared *sharedCache
+	shared     *sharedCache
+	sharedTurn bool
 	// deep is the cache of the additions made at the sites that have given
 	// up their own (deepStore), made when one first is.
 	deep *deepAdds
@@ -1004,6 +1005,12 @@ func (r *Runtime) cachedGet(c *propCache, o *Object, key Atom) (Value, bool, err
 			return v, true, nil
 		}
 	}
+	if c.fills >= maxCacheFills {
+		// A site that has given up: the runtime's cache answers, which
+		// has what its own entries had too.
+		v, ok := r.sharedProp(o, key)
+		return v, ok, nil
+	}
 	if e, h := c.polyEntry(o); e != nil {
 		v := h.vals[e.idx]
 		if !e.getter {
@@ -1018,10 +1025,6 @@ func (r *Runtime) cachedGet(c *propCache, o *Object, key Atom) (Value, bool, err
 		}
 		v, err := r.callDirect(Obj(a.getter), Obj(o), nil)
 		return v, true, err
-	}
-	if c.fills >= maxCacheFills {
-		v, ok := r.sharedProp(o, key)
-		return v, ok, nil
 	}
 	r.fillPropCache(c, o, key, true)
 	return Undefined, false, nil
@@ -1126,11 +1129,49 @@ func (c *propCache) holder(o *Object) *Object {
 // found by the shape and the key together, so it serves every such read.
 type sharedCache [sharedCacheSize]sharedEntry
 
-const sharedCacheSize = 512
+// sharedCacheSize is the entries of a runtime's shared cache, in pairs: a
+// key is looked for in the two of its pair, the one found last first.
+const (
+	sharedCacheBits = 10
+	sharedCacheSize = 1 << sharedCacheBits
+)
 
+// sharedEntry is where the cache says a key is for objects of shape: as a
+// propCache's holder says, from the same fields, without the rest of one,
+// so that the cache is a few pages, not a few hundred kilobytes, and an
+// entry two cache lines at most.
 type sharedEntry struct {
-	key Atom
-	c   propCache
+	shape  *shape
+	p1, p2 *Object
+	s1, s2 *shape
+	cell   *protoCell
+	key    Atom
+	idx    int32
+}
+
+// holder is propCache.holder of the entry's fields, for o of its shape.
+func (e *sharedEntry) holder(o *Object) *Object {
+	p := e.p1
+	if e.cell != nil {
+		if o.proto != p || !e.cell.valid {
+			return nil
+		}
+		return e.p2
+	}
+	if p == nil {
+		return o
+	}
+	if o.proto != p || p.shape != e.s1 {
+		return nil
+	}
+	q := e.p2
+	if q == nil {
+		return p
+	}
+	if p.proto != q || q.shape != e.s2 {
+		return nil
+	}
+	return q
 }
 
 // sharedProp is cachedProp for a read whose own cache has given up, answered
@@ -1144,13 +1185,21 @@ func (r *Runtime) sharedProp(o *Object, key Atom) (Value, bool) {
 	if t.shared == nil {
 		t.shared = new(sharedCache)
 	}
-	e := &t.shared[(uintptr(unsafe.Pointer(s))>>4^uintptr(key)*0x9e3779b1)%sharedCacheSize]
-	if e.key == key {
-		if h := e.c.holder(o); h != nil {
-			if verifyShapes {
-				r.verifyPropCache(o, h, &e.c, key)
-			}
-			return h.vals[e.c.idx], true
+	// The shape and the key mixed by a multiplication, whose top bits are
+	// the index: the shapes of a hierarchy are allocated near each other,
+	// and their low bits, with a key's, collided in a cache of pairs.
+	mix := (uint64(uintptr(unsafe.Pointer(s)))>>4 ^ uint64(key)<<24) * 0x9e3779b97f4a7c15
+	i := uintptr(mix>>(64-sharedCacheBits)) &^ 1
+	e := &t.shared[i]
+	if e.shape == s && e.key == key {
+		if h := e.holder(o); h != nil {
+			return h.vals[e.idx], true
+		}
+	}
+	f := &t.shared[i+1]
+	if f.shape == s && f.key == key {
+		if h := f.holder(o); h != nil {
+			return h.vals[f.idx], true
 		}
 	}
 	var c propCache
@@ -1158,8 +1207,16 @@ func (r *Runtime) sharedProp(o *Object, key Atom) (Value, bool) {
 	if c.fills == 0 {
 		return Undefined, false
 	}
-	e.key, e.c = key, c
-	return c.holder(o).vals[c.idx], true
+	h := c.holder(o)
+	if verifyShapes {
+		r.verifyPropCache(o, h, &c, key)
+	}
+	// The pair's entries are filled in turn, each replacing the older.
+	if t.sharedTurn = !t.sharedTurn; t.sharedTurn {
+		e = f
+	}
+	*e = sharedEntry{shape: c.shape, p1: c.p1, p2: c.p2, s1: c.s1, s2: c.s2, cell: c.cell, key: key, idx: c.idx}
+	return h.vals[c.idx], true
 }
 
 // deepAdd is an addition of key along the shared transition from from to
@@ -1652,15 +1709,15 @@ func checkShape(o *Object) {
 		// past the table, or ones deleted where a tombstone is.
 		keys := s.keys[:s.n]
 		for i, k := range keys {
-			if j, ok := x.slots[k.key]; k.flags&propDeleted == 0 && (!ok || j != int32(i)) {
+			if j, ok := x.slots.get(k.key); k.flags&propDeleted == 0 && (!ok || j != int32(i)) {
 				panic("index disagrees with table")
 			}
 		}
-		for key, j := range x.slots {
+		x.slots.all(func(key Atom, j int32) {
 			if j < s.n && keys[j].key != key && keys[j].flags&propDeleted == 0 {
 				panic("index names another key in the table")
 			}
-		}
+		})
 	}
 	if s.unique || s.loose {
 		return
