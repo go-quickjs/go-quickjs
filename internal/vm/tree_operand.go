@@ -1003,13 +1003,14 @@ func bitwiseImmOperand(op bytecode.Op, x tentry, k int32, pc int) tval {
 }
 
 // storeArith is local k = e as one statement, for an entry that is an
-// arithmetic or bitwise node over operands it read in place, or nil where
+// arithmetic or bitwise node over operands it read in place, or a
+// property read of an object read in place (storeProp), or nil where
 // there is no statement for it. The statement does what the node and the
 // store did, in their order, without calling the node.
 func storeArith(k uint32, e tentry) tstmt {
 	a := e.arith
 	if a == nil {
-		return nil
+		return storeProp(k, e)
 	}
 	if a.imm {
 		return bitwiseImmStoreAt(a.op, k, a.x, a.k, a.pc)
