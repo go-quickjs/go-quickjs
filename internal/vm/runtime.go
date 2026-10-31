@@ -323,6 +323,11 @@ type Runtime struct {
 	// (constructTree): each construction of such a class had allocated
 	// one. At the end, so that no field the interpreter reads moves.
 	thisCells []thisBinding
+	// keyStrings is the string keyString made for each atom that is no
+	// index, by its number: made once, as a string is never changed, where
+	// each loop over a dictionary's keys had made each of them anew. At the
+	// end, so that no field the interpreter reads moves.
+	keyStrings []*String
 	// jitFields is the optional native tier's state, empty in builds
 	// without it. It comes after everything the interpreter reads, so that
 	// a build with the tier moves none of their offsets, and before the last

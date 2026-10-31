@@ -190,6 +190,17 @@ func (r *Runtime) startForIn(v Value) (Value, error) {
 			st.indexKeys = n
 			return r.newForInObject(st, false), nil
 		}
+		// A plain object of no layout objects share -- a dictionary, used
+		// as a map -- whose keys are all strings: its enumerable keys are
+		// its table's, in order, each asked of its flags where it is,
+		// rather than listed, then each looked up again.
+		if o.class == ClassObject && len(o.elemsOf()) == 0 && proxyOf(o) == nil {
+			if ks, ok := r.tableKeys(o); ok {
+				st.keys, st.keyAtoms = ks.keys, ks.atoms
+				return r.newForInObject(st, false), nil
+			}
+			st.keys, st.keyAtoms = nil, nil
+		}
 	}
 	var seen map[Atom]bool
 	if last != o {
@@ -200,6 +211,7 @@ func (r *Runtime) startForIn(v Value) (Value, error) {
 		if err != nil {
 			return Undefined, err
 		}
+		st.keys, st.keyAtoms = slices.Grow(st.keys, len(keys)), slices.Grow(st.keyAtoms, len(keys))
 		for _, k := range keys {
 			if seen != nil {
 				if seen[k] {
@@ -225,6 +237,27 @@ func (r *Runtime) startForIn(v Value) (Value, error) {
 		}
 	}
 	return r.newForInObject(st, false), nil
+}
+
+// tableKeys is the enumerable keys of o, a plain object with no elements,
+// from its table: or false where one of its keys is an index, which comes
+// first, in order of its value, and the list must be sorted.
+func (r *Runtime) tableKeys(o *Object) (forInKeys, bool) {
+	ks := o.keys()
+	out := forInKeys{keys: make([]Value, 0, len(ks)), atoms: make([]Atom, 0, len(ks))}
+	for _, p := range ks {
+		if p.flags&propDeleted != 0 {
+			continue
+		}
+		if _, ok := r.atoms.arrayIndex(p.key); ok {
+			return forInKeys{}, false
+		}
+		if p.flags&(propEnumerable|propPrivate) == propEnumerable && !r.atoms.IsSymbol(p.key) {
+			out.keys = append(out.keys, Str(r.keyString(p.key)))
+			out.atoms = append(out.atoms, p.key)
+		}
+	}
+	return out, true
 }
 
 // shapeKeys is the enumerable own string keys of a plain object of a layout

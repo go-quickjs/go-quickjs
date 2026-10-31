@@ -2,6 +2,7 @@ package vm
 
 import (
 	"math"
+	"slices"
 	"strconv"
 	"unsafe"
 
@@ -190,10 +191,22 @@ func asciiString(b []byte) *String {
 // the property by it, o[k], finds the atom without looking the name up.
 func (r *Runtime) keyString(k Atom) *String {
 	var s *String
-	if k.IsIndex() && k.Index() < 1024 {
+	switch {
+	case k.IsIndex() && k.Index() < 1024:
 		s = r.intString(k.Index())
-	} else {
+	case k.IsIndex():
 		s = NewString(r.atoms.name(k))
+	default:
+		if i := int(k); i < len(r.keyStrings) {
+			s = r.keyStrings[i]
+		}
+		if s == nil {
+			s = NewString(r.atoms.name(k))
+			if int(k) >= len(r.keyStrings) {
+				r.keyStrings = slices.Grow(r.keyStrings, int(k)+1-len(r.keyStrings))[:int(k)+1]
+			}
+			r.keyStrings[k] = s
+		}
 	}
 	r.keyAtoms[keySlot(s)] = keyAtom{s: s, atom: k}
 	return s
