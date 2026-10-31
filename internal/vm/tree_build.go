@@ -1248,6 +1248,9 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			// one node (see ztree_a_achain.go).
 			return 0, b.stmt(propSetChain(obj.rare.prop, val.tree(), in, pc, fn.Strict))
 		}
+		if s := setPropAt(obj, val, in, pc, fn.Strict); s != nil {
+			return 0, b.stmt(s)
+		}
 		return 0, b.stmt(setPropStmt(obj, val.tree(), in, pc, fn.Strict))
 	case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew:
 		if k := len(b.stack) - int(in.A) - 1; in.Op == bytecode.OpCallMethod && k > 0 {
