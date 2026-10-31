@@ -147,6 +147,10 @@ type localVar struct {
 	// be entered past the declaration of: it stays in its dead zone to the
 	// compiler, whatever has been compiled, so every access is checked.
 	jumpedOver bool
+	// lit is a const's initializer where it is a literal -- null, a boolean,
+	// a number or a string -- which every read of it once it is
+	// initialized gives (constLiteral).
+	lit ast.Expr
 }
 
 // varScoped reports whether a binding belongs to its function's variable scope
@@ -348,6 +352,10 @@ type compiler struct {
 	// same as withDepth: a function containing a direct eval has a scope of
 	// its own on that chain without any `with` being written.
 	withStatements int
+	// litNames names the consts given a literal (localVar.lit) in this
+	// function and its makers before it was made, shared with the
+	// functions made after them (constLiteral); nil while there are none.
+	litNames map[string]bool
 	// evalOwnVars names the vars this eval's code declares in the calling
 	// function, which have no slot there. A reference to one resolves to the
 	// binding the declaration made rather than to whatever the name meant
@@ -555,6 +563,7 @@ func newCompiler(parent *compiler, opts Options) *compiler {
 		// body against the objects too, so it is compiled the same way.
 		c.withDepth = parent.withDepth
 		c.withStatements = parent.withStatements
+		c.litNames = parent.litNames
 	} else {
 		c.hiddenCount = new(int)
 		c.script = bytecode.NewScript(opts.Source, opts.Text)
@@ -1025,6 +1034,40 @@ func (c *compiler) markInitialized(name string) {
 			return
 		}
 	}
+}
+
+// constLiteral is the literal a read of name gives, where the name is a
+// const of this function or of one enclosing it, initialized with a
+// literal -- const NO_WORK = null, const DATA_SIZE = 4 -- and out of its
+// dead zone where the read is: nil for anything else. A const's value is
+// its initializer's from its initialization on, whichever closure reads
+// it, so the read is the literal, and a function made after it captures
+// nothing for it. That a binding of an enclosing function is out of its
+// dead zone where a function is compiled means it is whenever the function
+// runs, as resolveUpvalue's checks have it: a function is compiled where it
+// is made, a hoisted one at its block's start, and a switch's case block's
+// bindings are never out of it to the compiler. A with body or a direct
+// eval that could answer for the name is probed before the read, as it is
+// before any. Code compiled for a debugger keeps its reads, so that the
+// binding is in every scope that names it.
+//
+// litNames, the names of the consts given a literal that this function or
+// its makers had compiled when it was made, answers for the rest without
+// the search: identifiers are read everywhere, and a search of each
+// enclosing function's locals for a global's name cost loading code 5%.
+func (c *compiler) constLiteral(name string) ast.Expr {
+	if c.opts.Debug || !c.litNames[name] {
+		return nil
+	}
+	for f := c; f != nil; f = f.parent {
+		if l, ok := f.resolveLocal(name); ok {
+			if l.kind == bindConst && l.initialized && !l.jumpedOver {
+				return l.lit
+			}
+			return nil
+		}
+	}
+	return nil
 }
 
 // callerBinding finds what the call site of this eval binds a name to.

@@ -426,6 +426,10 @@ func (c *compiler) compileIdentRead(n *ast.Ident) {
 func (c *compiler) compileIdentReadStatic(n *ast.Ident) {
 	// undefined, NaN and Infinity are properties of the global object, not
 	// keywords, so they resolve like any other name.
+	if lit := c.constLiteral(n.Name); lit != nil {
+		c.compileExpr(lit)
+		return
+	}
 	if l, ok := c.resolveLocal(n.Name); ok {
 		if l.initialized {
 			c.emit(bytecode.OpGetLocal, l.slot, 0)

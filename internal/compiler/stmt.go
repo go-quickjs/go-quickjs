@@ -511,6 +511,22 @@ func (c *compiler) compileVarDecl(n *ast.VarDecl) {
 			c.addDisposable(n.Kind, d.Target.Pos())
 		}
 		c.initBinding(d.Target, n.Kind)
+		if id, ok := d.Target.(*ast.Ident); ok && n.Kind == ast.DeclConst {
+			// What its reads give from here on (constLiteral).
+			switch d.Init.(type) {
+			case *ast.NullLit, *ast.BoolLit, *ast.NumberLit, *ast.StringLit:
+				if l, ok := c.resolveLocal(id.Name); ok {
+					l.lit = d.Init
+					if c.litNames == nil {
+						// Shared with every function made from here on, the
+						// only ones that may read it without the dead zone's
+						// check (constLiteral).
+						c.litNames = map[string]bool{}
+					}
+					c.litNames[id.Name] = true
+				}
+			}
+		}
 	}
 }
 
