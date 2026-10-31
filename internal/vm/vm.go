@@ -3552,19 +3552,30 @@ func (r *Runtime) newArrayFrom(vals []Value) *Object {
 }
 
 // stringKeyRead is o[s] for a string s the runtime has handed out as a key
-// before (keyAtoms), whose atom is no array index, where o and each of its
-// prototypes up to the one holding the key are ordinary objects holding it,
-// if at all, as a plain data property: the walk getProp makes, without
-// getIndexed's conversion of the key and its questions of each object's
-// kind. A symbol table kept in an object -- Typescript's StringHashTable,
-// this.table[key] -- is read so, most often for a key it does not have,
-// which every prototype is asked for. It reports false for anything else.
+// before (keyAtoms), where o and each of its prototypes up to the one
+// holding the key are ordinary objects holding it, if at all, as a plain
+// data property: the walk getProp makes, without getIndexed's conversion
+// of the key and its questions of each object's kind. A symbol table kept
+// in an object -- Typescript's StringHashTable, this.table[key] -- is read
+// so, most often for a key it does not have, which every prototype is
+// asked for. A key whose atom is an array index is an element of o's dense
+// storage, read as getIndexed reads one by its number, which names the
+// same property: a[k] in for (k in a), whose keys are an array's indices.
+// It reports false for anything else.
 func (r *Runtime) stringKeyRead(o *Object, s *String) (Value, bool) {
 	e := &r.keyAtoms[keySlot(s)]
-	if e.s != s || e.none || e.atom.IsIndex() {
+	if e.s != s || e.none {
 		return Undefined, false
 	}
 	key := e.atom
+	if key.IsIndex() {
+		if i := key.Index(); uint(i) < uint(len(o.elemsOf())) && o.flags&objMappedArguments == 0 {
+			if v := o.elemsOf()[i]; !isHole(v) {
+				return v, true
+			}
+		}
+		return Undefined, false
+	}
 	for p := o; p != nil; p = p.proto {
 		if p.class != ClassObject {
 			return Undefined, false
