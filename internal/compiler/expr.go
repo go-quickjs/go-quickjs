@@ -447,6 +447,16 @@ func (c *compiler) compileIdentReadStatic(n *ast.Ident) {
 		c.emit(bytecode.OpPushCallee, 0, 0)
 		return
 	}
+	if n.Name == "undefined" && c.withDepth == 0 && c.opts.EvalScope == nil && c.opts.EvalWithDepth == 0 &&
+		!c.opts.EvalOwnVarScope && !c.opts.EvalConfigurable {
+		// The global object's undefined is neither writable nor configurable,
+		// and a script's lexical binding of it is an error, so where no
+		// binding of the function's or its makers', no with and no direct
+		// eval can stand in front of it, it is undefined: pushed, rather
+		// than read from the global object at every x === undefined.
+		c.emit(bytecode.OpPushUndef, 0, 0)
+		return
+	}
 	// A function that uses `arguments` binds it to a slot in its prologue, so
 	// the searches above will have found it. Reaching here means the reference
 	// is in a position with no arguments object at all, such as the top level.
