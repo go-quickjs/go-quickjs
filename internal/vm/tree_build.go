@@ -2579,6 +2579,9 @@ func callNode(op bytecode.Op, p, n, this, pc int) tval {
 
 // getIndexOperands is obj[key], reading a local object or key in place.
 func getIndexOperands(obj, key tentry, pc int) tval {
+	if v := propIndexGet(obj, key, pc); v != nil {
+		return v
+	}
 	switch o, k := obj.k, key.k; {
 	case obj.local && key.number && float64(uint32(key.n.num)) == key.n.num && uint32(key.n.num) < 1<<31:
 		// A constant index is an index once, when the tree is built.
@@ -2710,6 +2713,9 @@ func (c *tctx) keyOfBase(base, v Value, pc int) Value {
 
 // setIndexStmt is obj[key] = val as a statement.
 func setIndexStmt(obj, key tentry, val tval, pc int, strict bool) tstmt {
+	if s := propIndexSet(obj, key, val, pc, strict); s != nil {
+		return s
+	}
 	switch o, k := obj.k, key.k; {
 	case obj.local && key.local:
 		return func(c *tctx) {
