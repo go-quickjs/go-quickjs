@@ -274,6 +274,7 @@ func (b *tbuilder) methodCall(n int, m *methodOf, pc int) tval {
 	if n > 0 && !b.fn.Generator && !b.fn.Async {
 		lit = b.stack[len(b.stack)-n]
 	}
+	ks := argLocals(b.stack[len(b.stack)-n:])
 	args := make([]tval, n)
 	for i := n - 1; i >= 0; i-- {
 		args[i] = b.pop().tree()
@@ -285,6 +286,10 @@ func (b *tbuilder) methodCall(n int, m *methodOf, pc int) tval {
 	}
 	if n == 1 && b.fn.Names[m.in.A] == "charCodeAt" {
 		return charCodeAtCall(recv, m.in, m.pc, args[0], b.depth()+1, pc)
+	}
+	if ks != nil {
+		// Arguments that are locals, read into their slots in place.
+		return methodLocals(recv, m.in, m.pc, ks, b.depth()+1, pc)
 	}
 	return methodCallAny(recv, m.in, m.pc, args, b.depth()+1, pc)
 }
