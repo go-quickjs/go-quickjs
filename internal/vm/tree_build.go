@@ -788,7 +788,9 @@ func upvalueEntry(k uint32) tentry {
 
 // thisEntry is a read of this, in a function whose this is never a
 // binding: one that is neither a derived constructor, whose this is unbound
-// until super() binds it, nor an arrow, which may share one.
+// until super() binds it, nor an arrow that may share one -- an arrow the
+// compiler has not found outside every derived constructor
+// (ArrowThisValue).
 func thisEntry() tentry {
 	return tentry{slot: -1, this: true}
 }
@@ -931,7 +933,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 	case bytecode.OpPushInt:
 		b.pushEntry(numberEntry(Int32(int32(in.A))))
 	case bytecode.OpPushThis:
-		if fn.Kind != bytecode.KindDerivedConstructor && fn.Kind != bytecode.KindArrow {
+		if fn.Kind != bytecode.KindDerivedConstructor && (fn.Kind != bytecode.KindArrow || fn.ArrowThisValue) {
 			b.pushEntry(thisEntry())
 			break
 		}

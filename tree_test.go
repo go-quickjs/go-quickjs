@@ -375,6 +375,18 @@ var treeScripts = []string{
 	 function h() { var r = []; for (var i = 0; i < 6; i++) { if (i == 2) i = "3"; r.push(typeof i + i) } return r.join() }
 	 function k(n) { var c = 0; for (var i = 0; i < n; i++) c++; for (var j = n; j > 0; j--) c--; return c + "," + i + "," + j }
 	 [f(0), f("1"), f(1n), f({ valueOf() { return 1 } }), f(undefined), f(-0.5), g(2), g("x"), g(2n), h(), k(1e5)].join(" ")`,
+	// An arrow's this through eval code, which may be inside a derived
+	// constructor (ArrowThisValue): an arrow of eval code in a function and
+	// in a derived constructor, before super() and after, and one calling
+	// eval of this, each in a loop so that the tree is built.
+	`class B { constructor() { this.n = 1 } }
+	 class D extends B { constructor(early) { let a = () => eval("(() => { let r = 0; for (let i = 0; i < 2; i++) r += this.n; return r })()");
+	   if (early) a(); super(); this.n = 4; this.out = a() + eval("(() => { let r = 0; for (let i = 0; i < 2; i++) r += this.n; return r })()") } }
+	 function f() { let r = ""; for (let i = 0; i < 2; i++) r += eval("(() => typeof this + this)()"); return r }
+	 function g() { const h = () => eval("this.n"); let r = 0; for (let i = 0; i < 2; i++) r += h(); return r }
+	 var out = [new D(false).out, f.call(7), g.call({ n: 3 })];
+	 try { new D(true) } catch (e) { out.push(e.constructor.name) }
+	 out.join(" ")`,
 }
 
 // treeRun evaluates a script and gives its value, or its error.

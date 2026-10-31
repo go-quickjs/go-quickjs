@@ -417,6 +417,13 @@ type Function struct {
 	// it; the function's name property is Name's. It is last, so that the
 	// fields a call reads stay where they were.
 	TraceName string
+	// ArrowThisValue is set for an arrow whose this is a value from the
+	// start of its body, never a derived constructor's binding that super()
+	// has still to bind: one inside no derived constructor and in no eval
+	// code, whose call site may be inside one. The tree tier reads such an
+	// arrow's this in place, as a method's. After TraceName, so that the
+	// fields a call reads stay where they were.
+	ArrowThisValue bool
 }
 
 // LineAt returns the source line of the instruction at pc, or 0 if unknown.

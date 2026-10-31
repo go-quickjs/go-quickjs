@@ -21,6 +21,9 @@ func (c *compiler) compileFunctionLiteral(fn *ast.FuncLit, inferredName string) 
 	sub.fn.Generator = fn.Generator
 	sub.fn.Kind = funcKindOf(fn)
 	sub.fn.IsExprBody = fn.ExprBody
+	if sub.fn.Kind == bytecode.KindArrow {
+		sub.fn.ArrowThisValue = c.thisIsValue()
+	}
 
 	switch {
 	case fn.Name != nil:
@@ -37,6 +40,26 @@ func (c *compiler) compileFunctionLiteral(fn *ast.FuncLit, inferredName string) 
 
 	idx := c.addConst(bytecode.Constant{Kind: bytecode.ConstFunction, Fn: sub.fn})
 	c.emit(bytecode.OpClosure, idx, 0)
+}
+
+// thisIsValue reports whether this, in the code c compiles, is a value
+// from the start, rather than a derived constructor's binding, which is
+// unbound until super() binds it: an arrow's is its maker's, a derived
+// constructor's is a binding, any other function's is a value, and so is a
+// script's or a module's. Eval code's is the call site's, which may be a
+// derived constructor's: AllowSuperCall says it is, and eval code, or code
+// compiled for a debugger at a frame, is taken as one.
+func (c *compiler) thisIsValue() bool {
+	switch {
+	case c.fn.Kind == bytecode.KindArrow:
+		return c.fn.ArrowThisValue
+	case c.fn.Kind == bytecode.KindDerivedConstructor:
+		return false
+	case c.parent != nil:
+		return true
+	}
+	o := c.opts
+	return !o.AllowSuperCall && !o.EvalOwnVarScope && o.EvalScope == nil && !o.Debug
 }
 
 func funcKindOf(fn *ast.FuncLit) bytecode.FuncKind {
