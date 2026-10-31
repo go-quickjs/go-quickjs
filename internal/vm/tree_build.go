@@ -553,7 +553,11 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 			// A forward jump's test is the block's end itself, rather than
 			// a condition the end calls.
 			var next tnext
+			if int(in.A) > pc && in.Op != bytecode.OpJumpIfCmpFalse {
+				next = truthJump(x, in.Op == bytecode.OpJumpIfTrue, taken, fall)
+			}
 			switch {
+			case next != nil:
 			case int(in.A) <= pc:
 				cond := cond()
 				next = func(c *tctx) int {
