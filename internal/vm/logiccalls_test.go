@@ -11,10 +11,12 @@ import (
 // run only where x does not decide, a property's property, a construction,
 // ?? of each kind of value there is, chained, in an || and in a ternary.
 // A y that spills -- the receiver of Math.max, a global's property, or of
-// a getter that logs -- is found as it is built, and the function built
-// again with that jump ending a block (tbuilder.badLogic): the getter runs
-// only where x does not decide, as it must. Every function is a tree, one
-// node and a return but those two.
+// a getter that logs, a global's property's -- is found as it is built, and
+// the function built again with that jump ending a block
+// (tbuilder.badLogic): the getter runs only where x does not decide, as it
+// must. A getter of a local's property is a method call's receiver read in
+// place (methodProp), which spills nothing. Every function is a tree, one
+// node and a return but deepCall and deepGetGlobal.
 func TestLogicalCallsAndNullish(t *testing.T) {
 	const src = `
 		const r = []
@@ -32,6 +34,7 @@ func TestLogicalCallsAndNullish(t *testing.T) {
 		function deep(o, x) { let _k = 0; return x && o.inner.w + x }
 		function deepCall(o, x) { let _k = 0; return x && Math.max(o.v, x) }
 		function deepGet(o, x) { let _k = 0; return x && o.lg.m(x) }
+		function deepGetGlobal(x) { let _k = 0; return x && globalThis.gc.lg.m(x) }
 		function made(x) { let _k = 0; return x && new C(x).v }
 		function nq(a, b) { let _k = 0; return a ?? b }
 		function nqCall(o, x) { let _k = 0; return o.missing ?? o.g(x) }
@@ -52,10 +55,13 @@ func TestLogicalCallsAndNullish(t *testing.T) {
 			s.push(String(nqChain(null, undefined, 3)), String(nqChain(0, null, 3)), String(nqChain(undefined, '', 3)))
 			s.push(String(nqMix(null, 0, 'c')), String(nqMix(undefined, 'b', 'c')), String(nqMix(false, 'b', 'c')))
 			s.push(String(nqTern(1, null, 9)), String(nqTern(0, null, undefined)), String(nqTern(1, 0, 9)))
+			log = ''
+			for (let i = 0; i < 3; i++) { globalThis.gc = new C(i); s.push(String(deepGetGlobal(i))) }
+			s.push(log)
 			r.push(s.join(','))
 		}
 		r[0] + ' | ' + (r[0] === r[1] && r[1] === r[2])`
-	const want = "false,2,0,0,0,0,0,false,3,4,2,1,2,1,3,4,5,4,2,3,2,4,true,6,6,3,4,3,f1f2g2f1f2g2g3Lf1g1f2g2g3Lf1g1f2g3L,0,0,1,1,,,x,x,7,null,7,null,NaN,NaN,false,false,0,0,0,0,2,2,6,g1,3,0,,c,b,false,9,null,0 | true"
+	const want = "false,2,0,0,0,0,0,false,3,4,2,1,2,1,3,4,5,4,2,3,2,4,true,6,6,3,4,3,f1f2g2f1f2g2g3Lf1g1f2g2g3Lf1g1f2g3L,0,0,1,1,,,x,x,7,null,7,null,NaN,NaN,false,false,0,0,0,0,2,2,6,g1,3,0,,c,b,false,9,null,0,0,2,3,LL | true"
 	for _, c := range compileForTest(t, src).Constants {
 		if c.Kind != bytecode.ConstFunction || c.Fn == nil || c.Fn.Name == "" {
 			continue
@@ -64,7 +70,7 @@ func TestLogicalCallsAndNullish(t *testing.T) {
 		switch {
 		case tr == nil:
 			t.Errorf("%s is not built as a tree", c.Fn.Name)
-		case c.Fn.Name == "deepCall" || c.Fn.Name == "deepGet":
+		case c.Fn.Name == "deepCall" || c.Fn.Name == "deepGetGlobal":
 			if len(tr.blocks) <= 2 {
 				t.Errorf("%s is one node, its y spilling", c.Fn.Name)
 			}

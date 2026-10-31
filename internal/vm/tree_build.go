@@ -720,6 +720,9 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 		}
 		if in.Op == bytecode.OpTailCall || in.Op == bytecode.OpTailCallMethod {
 			// Built apart from op: see zcall_tail.go and ztree_aatail.go.
+			if in.Op == bytecode.OpTailCallMethod && !propTailSpill(b, int(in.A)) {
+				return nil, false
+			}
 			if !tailAll(b, in, pc) && !b.tailCall(in, pc) {
 				return nil, false
 			}
@@ -1236,6 +1239,15 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		// call builds both into one node (see zzmethod.go).
 		if top := b.stack[len(b.stack)-1]; (top.local || top.this) && top.v == nil && top.slot < 0 {
 			b.pushEntry(tentry{v: methodRead(top, in, pc), slot: -1, method: &methodOf{in: in, pc: pc}})
+			return 0, true
+		} else if propIn(top) != nil && (pc+1 >= len(code) || code[pc+1].Op != bytecode.OpNewRegExp) {
+			// A property of this or of a local, read in place by the call
+			// (see ztree_a_aamprop.go); anything else reads it from its slot.
+			// A RegExp literal's argument keeps regexpArgCall's node, which
+			// takes the receiver from its slot.
+			d := len(b.stack) - 1
+			b.stack[d].v = recvToSlot(top.v, d)
+			b.pushEntry(tentry{v: getPropThisNode(d, in, pc), slot: -1, method: &methodOf{in: in, pc: pc}})
 			return 0, true
 		}
 		// The receiver stays beneath the method: it is read from its slot

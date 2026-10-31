@@ -281,6 +281,14 @@ func (b *tbuilder) methodCall(n int, m *methodOf, pc int) tval {
 	}
 	b.pop()
 	recv := b.pop()
+	if p := propIn(recv); p != nil {
+		// A property of this or of a local (see ztree_a_aamprop.go);
+		// charCodeAt's node reads any receiver by its tree.
+		if n == 1 && b.fn.Names[m.in.A] == "charCodeAt" {
+			return charCodeAtCall(recv, m.in, m.pc, args[0], b.depth()+1, pc)
+		}
+		return methodProp(p, m.in, m.pc, args, b.depth()+1, pc)
+	}
 	if lit.regexp && lit.slot < 0 {
 		return regexpArgMethodCall(recv, m.in, m.pc, args, b.depth()+1, pc, lit.k)
 	}
