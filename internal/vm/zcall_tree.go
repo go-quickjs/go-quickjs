@@ -276,7 +276,7 @@ func (r *Runtime) callRest(o *Object, fd *funcData, this Value, args []Value) (V
 		}
 	}
 	if o == r.callFn {
-		return r.callThrough(o, this, args)
+		return r.callThroughTree(o, this, args)
 	}
 	if fd != nil && fd.native != nil && !fd.bound && (fd.realm == nil || fd.realm == r.Realm) {
 		if op := fd.elemOp; op >= elemNativeFirst {
@@ -304,6 +304,32 @@ func (r *Runtime) callRest(o *Object, fd *funcData, this Value, args []Value) (V
 		return v, err
 	}
 	return r.call(Obj(o), this, args)
+}
+
+// callThroughTree is callThrough, f.call(this, ...rest), made from a tree's
+// call node: call's frame pushed as the built-in's is, and f, where
+// planTreeCall has given it a tree, called on it as a nested call --
+// an exception passing through to the node's recover, as from any call a
+// node makes -- rather than by callDirect, which runs it under runTree's
+// recover of its own. Typescript's constructors call their base's so,
+// _super.call(this, ...), at every AST node they make.
+func (r *Runtime) callThroughTree(call *Object, f Value, args []Value) (Value, error) {
+	if f.IsObject() {
+		o := f.object()
+		if fd := o.fn(); fd != nil && fd.treeCall != nil && fd.closure.realm == r.Realm {
+			this, rest := Undefined, args
+			if len(args) > 0 {
+				this, rest = args[0], args[1:]
+			}
+			if err := r.pushNativeFrame(call, f, args, Undefined); err != nil {
+				return Undefined, err
+			}
+			v, err := r.callTree(o, fd, this, rest, true)
+			r.frameDepth--
+			return v, err
+		}
+	}
+	return r.callThrough(call, f, args)
 }
 
 // tailFromTree makes the call a frame callTreeWith ran ended in
