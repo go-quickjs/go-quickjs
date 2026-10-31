@@ -99,10 +99,10 @@ func TestDeleteBorrowedIndexShape(t *testing.T) {
 	if b.shape.borrowed || b.shape.index == c.shape.index {
 		t.Errorf("adding after deleting kept the borrowed index")
 	}
-	if _, ok := b.shape.index.slots[r.atoms.intern("k3")]; ok {
+	if _, ok := b.shape.index.slots.get(r.atoms.intern("k3")); ok {
 		t.Errorf("an index of its own has the deleted key")
 	}
-	if _, ok := c.shape.index.slots[r.atoms.intern("k3")]; !ok {
+	if _, ok := c.shape.index.slots.get(r.atoms.intern("k3")); !ok {
 		t.Errorf("the layout's index lost a key an object of it deleted")
 	}
 }

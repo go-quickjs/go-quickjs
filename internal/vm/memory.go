@@ -444,7 +444,7 @@ func (m *memoryMeter) object(o *Object) {
 	// A shared layout's index is the layout's, not the object's, and so is
 	// one an object borrows from it.
 	if s := o.shape; s != nil && s.unique && s.index != nil && !s.borrowed {
-		m.total += propIndexSize + int64(len(s.index.slots))*16
+		m.total += propIndexSize + int64(s.index.slots.n)*16
 	}
 	// So are a shared layout's keys, and the layout; the object's own
 	// layout is its, a dictionary object's (dictShape).

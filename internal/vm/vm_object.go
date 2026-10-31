@@ -879,7 +879,7 @@ func (o *Object) IsArray() bool {
 
 // propIndex is the lookup table of an object with many properties.
 type propIndex struct {
-	slots map[Atom]int32
+	slots slotTable
 	// recent caches lookups in slots, by the key's low bits. The same few keys
 	// are asked for over and over -- the globals a loop reads and writes, the
 	// methods of a prototype, the setters an assignment looks for up the chain
@@ -902,12 +902,129 @@ type recentKey struct {
 }
 
 func newPropIndex(n int) *propIndex {
-	return &propIndex{slots: make(map[Atom]int32, n)}
+	x := &propIndex{}
+	x.slots.init(n)
+	return x
+}
+
+// slotTable is an index's keys and their slots: a table of open addressing,
+// probed in turn from the key's hash. A Go map of the same, hashing each key
+// with AES and probing its groups, had been three quarters of the time a
+// lookup of a dictionary's key took -- a symbol table's, which Typescript's
+// compiler keeps in objects.
+type slotTable struct {
+	e []slotEntry
+	// n is the keys it holds, used the entries a key has had, deleted
+	// ones included, which stay in the probe.
+	n, used int
+}
+
+// slotEntry is a key and its slot, or slotEmpty or slotDeleted.
+type slotEntry struct {
+	key Atom
+	idx int32
+}
+
+const (
+	slotEmpty   = -2
+	slotDeleted = -1
+)
+
+func (t *slotTable) init(n int) {
+	size := 8
+	for size < 2*n {
+		size *= 2
+	}
+	t.e = make([]slotEntry, size)
+	for i := range t.e {
+		t.e[i].idx = slotEmpty
+	}
+	t.n, t.used = 0, 0
+}
+
+func (t *slotTable) home(key Atom) int {
+	return int((uint32(key) * 0x9e3779b1) >> 7)
+}
+
+// get is key's slot.
+func (t *slotTable) get(key Atom) (int32, bool) {
+	mask := len(t.e) - 1
+	for i := t.home(key) & mask; ; i = (i + 1) & mask {
+		e := &t.e[i]
+		if e.idx == slotEmpty {
+			return 0, false
+		}
+		if e.key == key {
+			return e.idx, e.idx >= 0
+		}
+	}
+}
+
+// set records key's slot.
+func (t *slotTable) set(key Atom, idx int32) {
+	if 2*(t.used+1) > len(t.e) {
+		t.grow()
+	}
+	mask := len(t.e) - 1
+	for i := t.home(key) & mask; ; i = (i + 1) & mask {
+		e := &t.e[i]
+		if e.idx == slotEmpty {
+			*e = slotEntry{key, idx}
+			t.n++
+			t.used++
+			return
+		}
+		if e.key == key {
+			if e.idx < 0 {
+				t.n++
+			}
+			e.idx = idx
+			return
+		}
+	}
+}
+
+// del forgets key.
+func (t *slotTable) del(key Atom) {
+	mask := len(t.e) - 1
+	for i := t.home(key) & mask; ; i = (i + 1) & mask {
+		e := &t.e[i]
+		if e.idx == slotEmpty {
+			return
+		}
+		if e.key == key {
+			if e.idx >= 0 {
+				e.idx = slotDeleted
+				t.n--
+			}
+			return
+		}
+	}
+}
+
+// grow makes room, leaving deleted keys behind.
+func (t *slotTable) grow() {
+	old := t.e
+	t.init(t.n + 1)
+	for _, e := range old {
+		if e.idx >= 0 {
+			t.set(e.key, e.idx)
+		}
+	}
+}
+
+// all calls f with each key and its slot.
+func (t *slotTable) all(f func(Atom, int32)) {
+	for _, e := range t.e {
+		if e.idx >= 0 {
+			f(e.key, e.idx)
+		}
+	}
 }
 
 // add records a key's slot.
 func (x *propIndex) add(key Atom, i int32) {
-	x.slots[key] = i
+	x.slots.set(key, i)
 	x.recent[key&15] = recentKey{key, i}
 	if key.IsIndex() {
 		x.indexKeys = true
@@ -983,7 +1100,7 @@ func (o *Object) findOwn(key Atom) int32 {
 				return c.idx
 			}
 		}
-		i, ok := x.slots[key]
+		i, ok := x.slots.get(key)
 		if !ok {
 			i = -1
 		}
@@ -1212,7 +1329,7 @@ func (o *Object) tombstone(i int32) {
 	o.shape.keys[i] = propKey{key: atomEmpty, flags: propDeleted}
 	o.vals[i] = Value{}
 	if x := o.shapeIndex(); x != nil && !o.shape.borrowed {
-		delete(x.slots, key)
+		x.slots.del(key)
 	}
 }
 
