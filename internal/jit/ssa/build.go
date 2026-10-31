@@ -2330,6 +2330,9 @@ func buildCalls(w *Workspace, p *ir.Program, fb Feedback, plan *calledPlan) (*Fu
 	if hf, ok := fb.(HasCacheFeedback); ok {
 		f.HasCache = hf.HasCache()
 	}
+	if kf, ok := fb.(KeyAtomsFeedback); ok {
+		f.KeyAtoms, f.IntStrings = kf.KeyAtoms()
+	}
 	f.written = f.bools(p.Locals + p.StackSize)
 	f.assigned = p.Assigned
 	b := &builder{p: p, fb: fb, f: f, nslots: p.Locals + p.StackSize}
@@ -2896,6 +2899,14 @@ func (b *builder) siteFrequency(pc int) (float64, bool) {
 // address, made if there is none yet, or 0 for none.
 type HasCacheFeedback interface {
 	HasCache() uintptr
+}
+
+// KeyAtomsFeedback is Feedback that has native code hand out a for...in's
+// keys of an array's indices and read an element by a key string through
+// the VM's tables of them (Func's KeyAtoms and IntStrings): their
+// addresses, the strings' made if there is none yet, or 0 for none.
+type KeyAtomsFeedback interface {
+	KeyAtoms() (keyAtoms, intStrings uintptr)
 }
 
 // KeepFeedback is Feedback that bounds the keep cells a build takes

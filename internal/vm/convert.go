@@ -228,8 +228,12 @@ type keyAtom struct {
 // keySlot is where a key string goes in a runtime's keyAtoms, by its
 // address.
 func keySlot(s *String) uint64 {
-	return uint64(uintptr(unsafe.Pointer(s))) * 0x9E3779B97F4A7C15 >> 56
+	return uint64(uintptr(unsafe.Pointer(s))) * keySlotMul >> 56
 }
+
+// keySlotMul is keySlot's multiplier, which native code's is too
+// (abi.KeyAtomsMul).
+const keySlotMul = 0x9E3779B97F4A7C15
 
 // intString is the string of an integer below 1024. A small integer becomes a
 // string over and over -- an index for-in hands out, a counter joined to a

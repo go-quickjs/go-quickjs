@@ -1057,6 +1057,13 @@ type Func struct {
 	// answers (abi.HasCacheBits), which native code looks a key string in
 	// before it calls Go for one (GoHas); 0 for none (HasCacheFeedback).
 	HasCache uintptr
+	// KeyAtoms is the address of the VM's table of the key strings it has
+	// handed out with their atoms (abi.KeyAtomsBits), and IntStrings that
+	// of its strings of small integers (abi.IntStrings), which a for...in's
+	// step over an array's indices hands out and records in the table, and
+	// an element read by a key string looks up before it calls Go (GoIndex);
+	// 0 for none (KeyAtomsFeedback).
+	KeyAtoms, IntStrings uintptr
 	// written marks the slots some instruction writes (Written).
 	written []bool
 	// assigned marks the captured locals a closure assigns (ir.Program's

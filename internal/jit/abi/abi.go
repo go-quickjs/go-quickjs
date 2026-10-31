@@ -1528,3 +1528,27 @@ const (
 	HasEntryCell  = 24
 	HasEntryHas   = 32
 )
+
+// The VM's table of the key strings it has handed out with their atoms
+// (its keyAtoms), which a for...in's step over an array's indices writes
+// and an element read by a key string reads (ssa.Func's KeyAtoms): 1 <<
+// KeyAtomsBits entries of KeyAtomSize bytes. A string of pointer word k is
+// at entry (k * KeyAtomsMul) >> (64 - KeyAtomsBits). The entry names it
+// where the pointer at KeyAtomString is k and the byte at KeyAtomNone is
+// 0: its atom is the uint32 at KeyAtomAtom, an array index i where it is
+// AtomIndexTag|i. A key's entry is written in that order, its string's
+// word last, through the write barrier while the collector marks.
+//
+// The VM's strings of the integers below IntStrings (ssa.Func's
+// IntStrings), each a pointer, nil while none has been made, are those a
+// for...in hands out for an array's indices.
+const (
+	KeyAtomsBits  = 8
+	KeyAtomsMul   = 0x9E3779B97F4A7C15
+	KeyAtomSize   = 16
+	KeyAtomString = 0
+	KeyAtomAtom   = 8
+	KeyAtomNone   = 12
+	AtomIndexTag  = 0x80000000
+	IntStrings    = 1024
+)

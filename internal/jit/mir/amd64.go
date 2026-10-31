@@ -2177,6 +2177,20 @@ func (c *compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(amd64.Con
 		c.setG(v, scratchA)
 		return
 	}
+	if keyedReads(site, len(v.Args), c.f, c.enc) {
+		// An array's dense element, no hole, by an index or by a key
+		// string the VM handed out for one, natively (keyedRead), any
+		// other read Go's.
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		c.keyedRead(v, slow)
+		c.a.Jmp(join)
+		c.a.Bind(slow)
+		c.goCallOp(v, goOpWord(site), guard, false)
+		c.a.Bind(join)
+		c.a.Load(scratchA, regCtx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
+		c.setG(v, scratchA)
+		return
+	}
 	if site.Go == ssa.GoHas && len(v.Args) == 2 && c.enc.ValueSize == 16 {
 		// An index of an array's dense elements, no hole, natively
 		// (keyedHas), any other key Go's.
@@ -3031,7 +3045,8 @@ func (c *compiler) closureTakeMarking(v *ssa.Value, site *ssa.CallSite, slow amd
 // collector does not mark: the element is copied into the call's keep cell,
 // both words, and the index advanced, as iterNext does -- as V8's code
 // iterates an array without a call. Any other step goes to slow, where Go
-// makes it. It uses every scratch register and xScratch2, and no other.
+// makes it. It uses every scratch register and every scratch XMM
+// register, and no other.
 func (c *compiler) iterStep(v *ssa.Value, slow amd64.Label) {
 	x := v.Args[0]
 	c.pointerWord(x, c.gpr(x, scratchA))
@@ -3104,23 +3119,45 @@ func (c *compiler) iterStep(v *ssa.Value, slow amd64.Label) {
 }
 
 // forInStep is iterStep's step of a for...in's cursor, its state in
-// scratchB and xScratch2, or on to notForIn for any other cursor: one
-// walking the keys of its object's layout (the VM's shapeKeys), past any
-// array indices it walked first, its object of that layout still -- so
-// that no key has been deleted since -- has the next key copied into the
-// call's keep cell, both words, and the walk advanced, as iterNext does,
-// as V8's ForInNext loads a key from the enum cache where the receiver's
-// map is still the cache's. Past the last key the cursor is done, and the
-// answer the uninitialized value, which no step yields. Anything else goes
-// to slow, where Go steps it. It goes on at done. Native code stores no
-// pointer: the key goes to the context, the walk's index and the done
-// byte to the cursor, an int and a byte. It uses every scratch register.
+// scratchB and xScratch2, or on to notForIn for any other cursor, as
+// iterNext steps it. Past its last key the cursor is done, and the answer
+// the uninitialized value, which no step yields. One walking the keys of
+// its object's layout (the VM's shapeKeys), its object of that layout
+// still -- so that no key has been deleted since -- has the next key
+// copied into the call's keep cell, both words, and the walk advanced, as
+// V8's ForInNext loads a key from the enum cache where the receiver's map
+// is still the cache's. One walking an array's indices hands out the next
+// while it is one of the array's elements still (forInIndex). Anything
+// else goes to slow, where Go steps it. It goes on at done. The key goes
+// to the context, the walk's index and the done byte to the cursor, an
+// int and a byte, and an index's string to the VM's table of key strings,
+// its pointer through the write barrier while the collector marks. It
+// uses every scratch register, and xScratch0 and xScratch1.
 func (c *compiler) forInStep(v *ssa.Value, notForIn, slow, done amd64.Label) {
 	fail := func(cond amd64.Cond) { c.a.Jcc(cond, slow) }
 	in := c.enc.ForInState
 	c.a.LoadU8(scratchC, scratchB, c.enc.IterForIn)
 	c.a.Op(amd64.Test, scratchC, scratchC, false)
 	c.a.Jcc(amd64.CondE, notForIn)
+	// An array's indices, walked first.
+	c.a.Load(scratchA, scratchB, c.enc.IterIdx)
+	c.a.Load(scratchC, scratchB, in+c.enc.ForInIndexKeys)
+	c.a.Op(amd64.Cmp, scratchA, scratchC, true)
+	indices := slow
+	if forInIndices(c.f) {
+		indices = c.a.NewLabel()
+		defer func() {
+			c.a.Bind(indices)
+			c.forInIndex(v, slow, done)
+		}()
+	}
+	c.a.Jcc(amd64.CondL, indices)
+	// Past the last key, done, whatever the object: no key is looked up.
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	end := c.a.NewLabel()
+	c.a.Load(scratchC, scratchB, in+c.enc.ForInKeys+8)
+	c.a.Op(amd64.Cmp, scratchA, scratchC, true)
+	c.a.Jcc(amd64.CondGE, end)
 	// The object of the keys' layout still: nothing deleted from it.
 	c.a.Load(scratchC, scratchB, in+c.enc.ForInShape)
 	c.a.Op(amd64.Test, scratchC, scratchC, true)
@@ -3129,16 +3166,7 @@ func (c *compiler) forInStep(v *ssa.Value, notForIn, slow, done amd64.Label) {
 	c.a.Load(scratchA, scratchA, c.enc.ObjectShape)
 	c.a.Op(amd64.Cmp, scratchA, scratchC, true)
 	fail(amd64.CondNE)
-	// Past the array indices, which Go walks.
 	c.a.Load(scratchA, scratchB, c.enc.IterIdx)
-	c.a.Load(scratchC, scratchB, in+c.enc.ForInIndexKeys)
-	c.a.Op(amd64.Cmp, scratchA, scratchC, true)
-	fail(amd64.CondL)
-	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
-	end := c.a.NewLabel()
-	c.a.Load(scratchC, scratchB, in+c.enc.ForInKeys+8)
-	c.a.Op(amd64.Cmp, scratchA, scratchC, true)
-	c.a.Jcc(amd64.CondGE, end)
 	c.a.Load(scratchC, scratchB, in+c.enc.ForInKeys)
 	c.a.ShiftImm(amd64.Shl, scratchA, 4, true)
 	c.a.Op(amd64.Add, scratchA, scratchC, true)
@@ -3158,6 +3186,192 @@ func (c *compiler) forInStep(v *ssa.Value, notForIn, slow, done amd64.Label) {
 	c.a.Store(regCtx, keep+c.enc.NumOffset, scratchA)
 	c.a.StoreImm(regCtx, keep+c.enc.RefOffset, 0)
 	c.a.Jmp(done)
+}
+
+// forInIndices reports whether a for...in's step over an array's indices
+// is native code's (forInIndex): where the VM's tables of key strings are
+// the code's to read and write (ssa.Func's KeyAtoms and IntStrings).
+func forInIndices(f *ssa.Func) bool { return f.KeyAtoms != 0 && f.IntStrings != 0 }
+
+// forInIndex is forInStep's step over an array's indices -- those of an
+// array whose keys were its elements and nothing else (the VM's
+// elemKeysOnly) -- the cursor's state in scratchB and the walk's index,
+// below the count of them, in scratchA: where that index is still one of
+// the array's dense elements, no hole, below abi.IntStrings, and the VM
+// has made its string, the string is the key, in the call's keep cell, the
+// walk is advanced, and the string is recorded with its atom in the VM's
+// table of key strings handed out (abi.KeyAtomsBits), as iterNext's
+// keyString records it, so that an element read by it finds the index
+// (keyedRead). The string, which the VM's table of them holds, needs no
+// barrier into the keep cell, as an element copied out of its array does
+// not; the entry, which outlives the cell, takes it through the write
+// barrier while the collector marks, after the atom, and is not written
+// where it holds it already. Anything else goes to slow, where Go steps
+// it, nothing written. It goes on at done. It uses every scratch
+// register, and xScratch0 and xScratch1.
+func (c *compiler) forInIndex(v *ssa.Value, slow, done amd64.Label) {
+	fail := func(cond amd64.Cond) { c.a.Jcc(cond, slow) }
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	// The element, an array's dense one, no hole.
+	c.a.Load(scratchC, scratchB, c.enc.ForInState+c.enc.ForInObj)
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	fail(amd64.CondE)
+	c.a.MovQToX(xScratch1, scratchB)
+	c.a.LoadU8(scratchB, scratchC, c.enc.ObjectClass)
+	c.a.OpImm(amd64.Cmp, scratchB, int32(c.enc.ClassArray), false)
+	fail(amd64.CondNE)
+	c.a.CmpMem(scratchA, scratchC, c.enc.ObjectElems+8, true)
+	fail(amd64.CondAE)
+	c.a.Load(scratchC, scratchC, c.enc.ObjectElems)
+	c.a.MovRR(scratchB, scratchA)
+	c.a.ShiftImm(amd64.Shl, scratchB, 4, true)
+	c.a.Op(amd64.Add, scratchC, scratchB, true)
+	c.a.Load(scratchC, scratchC, c.enc.NumOffset)
+	c.cmpWord(scratchC, c.enc.Uninitialized)
+	fail(amd64.CondE)
+	// Its string, made already.
+	c.a.OpImm(amd64.Cmp, scratchA, abi.IntStrings, true)
+	fail(amd64.CondAE)
+	c.a.MovQToX(xScratch0, scratchA)
+	c.movImm(scratchC, uint64(c.f.IntStrings))
+	c.a.ShiftImm(amd64.Shl, scratchA, 3, true)
+	c.a.Op(amd64.Add, scratchC, scratchA, true)
+	c.a.Load(scratchC, scratchC, 0)
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	fail(amd64.CondE)
+	// The key, and the walk advanced.
+	c.a.Store(regCtx, keep+c.enc.RefOffset, scratchC)
+	c.movImm(scratchA, c.enc.String)
+	c.a.Store(regCtx, keep+c.enc.NumOffset, scratchA)
+	c.a.MovQFromX(scratchB, xScratch1)
+	c.a.MovQFromX(scratchA, xScratch0)
+	c.a.OpImm(amd64.Add, scratchA, 1, true)
+	c.a.Store(scratchB, c.enc.IterIdx, scratchA)
+	// The string's entry in the table of key strings, in scratchA, and its
+	// atom, the index's, in scratchB.
+	c.a.MovQToX(xScratch1, scratchC)
+	c.a.MovRR(scratchA, scratchC)
+	c.movImm(scratchB, abi.KeyAtomsMul)
+	c.a.Imul(scratchA, scratchB)
+	c.a.ShiftImm(amd64.Shr, scratchA, 64-abi.KeyAtomsBits, true)
+	c.a.ShiftImm(amd64.Shl, scratchA, keyAtomShift, true)
+	c.movImm(scratchB, uint64(c.f.KeyAtoms))
+	c.a.Op(amd64.Add, scratchA, scratchB, true)
+	c.a.MovQFromX(scratchB, xScratch0)
+	c.a.OpImm(amd64.Or, scratchB, -1<<31, false)
+	write := c.a.NewLabel()
+	c.a.CmpMem(scratchC, scratchA, abi.KeyAtomString, true)
+	c.a.Jcc(amd64.CondNE, write)
+	c.a.LoadU32(scratchC, scratchA, abi.KeyAtomAtom)
+	c.a.Op(amd64.Cmp, scratchC, scratchB, false)
+	c.a.Jcc(amd64.CondNE, write)
+	c.a.LoadU8(scratchC, scratchA, abi.KeyAtomNone)
+	c.a.Op(amd64.Test, scratchC, scratchC, false)
+	c.a.Jcc(amd64.CondE, done)
+	c.a.Bind(write)
+	c.a.Store32(scratchA, abi.KeyAtomAtom, scratchB)
+	c.a.MovImm(scratchC, 0)
+	c.a.Store8(scratchA, abi.KeyAtomNone, scratchC)
+	c.a.MovQFromX(scratchC, xScratch1)
+	if abi.KeyAtomString != 0 {
+		c.a.OpImm(amd64.Add, scratchA, abi.KeyAtomString, true)
+	}
+	c.storeByFlag()
+	c.a.Jmp(done)
+}
+
+// keyAtomShift is log2 of abi.KeyAtomSize, which an entry's slot is
+// shifted by.
+const keyAtomShift = 4
+
+var _ [0]struct{} = [1<<keyAtomShift - abi.KeyAtomSize]struct{}{}
+var _ [0]struct{} = [abi.KeyAtomSize - 1<<keyAtomShift]struct{}{}
+
+// keyedReads reports whether call site's element read, of n operands, is
+// made natively where it is an array's dense element (keyedRead): an
+// element read Go makes (ssa.GoIndex), where the VM's table of key strings
+// is the code's to read.
+func keyedReads(site *ssa.CallSite, n int, f *ssa.Func, enc abi.Encoding) bool {
+	return site.Go == ssa.GoIndex && n == 2 && enc.ValueSize == 16 && f.KeyAtoms != 0
+}
+
+// keyedRead makes call v, obj[key], which Go reads from native code
+// (ssa.GoIndex), where obj is an array and key names one of its dense
+// elements that is no hole -- the array's own data property: a number
+// whose truncation is itself, or a string the VM has handed out as a key
+// whose atom, in its table of them (abi.KeyAtomsBits), is that index, as a
+// for...in over an array's indices hands them out (forInIndex). The
+// element's words are copied to the call's keep cell, as an array's
+// element read copies them. Anything else goes to slow, where Go reads it.
+// It uses every scratch register and xScratch2, and no other.
+func (c *compiler) keyedRead(v *ssa.Value, slow amd64.Label) {
+	fail := func(cond amd64.Cond) { c.a.Jcc(cond, slow) }
+	recv, key := v.Args[0], v.Args[1]
+	named, have := c.a.NewLabel(), c.a.NewLabel()
+	// The index, in xScratch2: a number whose truncation is itself.
+	if w := c.gpr(key, scratchA); w != scratchA {
+		c.a.MovRR(scratchA, w)
+	}
+	c.cmpWord(scratchA, abi.NumberLimit)
+	c.a.Jcc(amd64.CondAE, named)
+	c.a.MovQToX(xScratch2, scratchA)
+	c.a.Cvttsd2si(scratchB, xScratch2)
+	c.a.Cvtsi2sd(xScratch2, scratchB, true)
+	c.a.MovQFromX(scratchC, xScratch2)
+	c.a.Op(amd64.Cmp, scratchC, scratchA, true)
+	fail(amd64.CondNE)
+	c.a.MovQToX(xScratch2, scratchB)
+	c.a.Jmp(have)
+	// Or a string whose entry in the table of key strings is an index's.
+	c.a.Bind(named)
+	c.cmpWord(scratchA, c.enc.String)
+	fail(amd64.CondNE)
+	c.pointerWord(key, scratchA)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	fail(amd64.CondE)
+	c.a.MovRR(scratchA, scratchB)
+	c.movImm(scratchC, abi.KeyAtomsMul)
+	c.a.Imul(scratchA, scratchC)
+	c.a.ShiftImm(amd64.Shr, scratchA, 64-abi.KeyAtomsBits, true)
+	c.a.ShiftImm(amd64.Shl, scratchA, keyAtomShift, true)
+	c.movImm(scratchC, uint64(c.f.KeyAtoms))
+	c.a.Op(amd64.Add, scratchA, scratchC, true)
+	c.a.CmpMem(scratchB, scratchA, abi.KeyAtomString, true)
+	fail(amd64.CondNE)
+	c.a.LoadU8(scratchC, scratchA, abi.KeyAtomNone)
+	c.a.Op(amd64.Test, scratchC, scratchC, false)
+	fail(amd64.CondNE)
+	c.a.LoadU32(scratchB, scratchA, abi.KeyAtomAtom)
+	c.a.MovRR(scratchC, scratchB)
+	c.a.ShiftImm(amd64.Shr, scratchC, 31, false)
+	fail(amd64.CondE)
+	c.a.OpImm(amd64.And, scratchB, abi.AtomIndexTag-1, false)
+	c.a.MovQToX(xScratch2, scratchB)
+	// The object, an array, and the element, within the dense ones -- a
+	// negative index is, unsigned, a count past them -- and no hole.
+	c.a.Bind(have)
+	w := c.gpr(recv, scratchA)
+	c.cmpWord(w, c.enc.Object)
+	fail(amd64.CondNE)
+	c.pointerWord(recv, w)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	fail(amd64.CondE)
+	c.a.LoadU8(scratchC, scratchB, c.enc.ObjectClass)
+	c.a.OpImm(amd64.Cmp, scratchC, int32(c.enc.ClassArray), false)
+	fail(amd64.CondNE)
+	c.a.MovQFromX(scratchA, xScratch2)
+	c.a.CmpMem(scratchA, scratchB, c.enc.ObjectElems+8, true)
+	fail(amd64.CondAE)
+	c.a.Load(scratchB, scratchB, c.enc.ObjectElems)
+	c.a.ShiftImm(amd64.Shl, scratchA, 4, true)
+	c.a.Op(amd64.Add, scratchA, scratchB, true)
+	c.a.Load(scratchC, scratchA, c.enc.NumOffset)
+	c.cmpWord(scratchC, c.enc.Uninitialized)
+	fail(amd64.CondE)
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	c.a.Store(regCtx, keep+c.enc.NumOffset, scratchC)
+	c.a.Load(scratchC, scratchA, c.enc.RefOffset)
+	c.a.Store(regCtx, keep+c.enc.RefOffset, scratchC)
 }
 
 // genStep is iterStep's step of a cursor over a generator of one of the

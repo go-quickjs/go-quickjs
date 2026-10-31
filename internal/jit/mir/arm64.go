@@ -4500,6 +4500,17 @@ func (c *a64Compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(arm64.
 		c.setG(v, a64A)
 		return
 	}
+	if keyedReads(site, len(v.Args), c.f, c.enc) {
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		c.keyedRead(v, slow)
+		c.a.B(join)
+		c.a.Bind(slow)
+		c.goCallOp(v, goOpWord(site), false)
+		c.a.Bind(join)
+		c.a.Load(a64A, a64Ctx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
+		c.setG(v, a64A)
+		return
+	}
 	if site.Go == ssa.GoHas && len(v.Args) == 2 && c.enc.ValueSize == 16 {
 		slow, join := c.a.NewLabel(), c.a.NewLabel()
 		c.keyedHas(v, slow)
@@ -5504,7 +5515,7 @@ func (c *a64Compiler) genNextCall(v *ssa.Value, t ssa.GenStep, slow, done arm64.
 }
 
 // iterStep is amd64's: a loop's step over an array, made in place. It
-// uses A, B, C and D, and no other.
+// uses A, B, C and D, F0 and F1, and no other.
 func (c *a64Compiler) iterStep(v *ssa.Value, slow arm64.Label) {
 	x := v.Args[0]
 	c.pointerWord(x, c.gpr(x, a64A))
@@ -5573,30 +5584,39 @@ func (c *a64Compiler) iterStep(v *ssa.Value, slow arm64.Label) {
 }
 
 // forInStep is amd64's: a for...in's step over the keys of its object's
-// layout, the cursor's state in D, or on to notForIn for another cursor.
-// It stores no pointer. It uses A, B and C.
+// layout or over an array's indices (forInIndex), the cursor's state in D,
+// or on to notForIn for another cursor. It uses A, B, C and D, and F0.
 func (c *a64Compiler) forInStep(v *ssa.Value, notForIn, slow, done arm64.Label) {
 	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
 	in := c.enc.ForInState
 	c.a.LoadU8(a64C, a64D, c.enc.IterForIn)
 	c.a.Cbz(a64C, notForIn, false)
-	// The object of the keys' layout still: nothing deleted from it.
-	c.a.Load(a64C, a64D, in+c.enc.ForInShape)
-	c.a.Cbz(a64C, slow, true)
-	c.a.Load(a64A, a64D, in+c.enc.ForInObj)
-	c.a.Load(a64A, a64A, c.enc.ObjectShape)
-	c.a.Cmp(a64A, a64C, true)
-	fail(arm64.NE)
-	// Past the array indices, which Go walks.
+	// An array's indices, walked first.
 	c.a.Load(a64A, a64D, c.enc.IterIdx)
 	c.a.Load(a64C, a64D, in+c.enc.ForInIndexKeys)
 	c.a.Cmp(a64A, a64C, true)
-	fail(arm64.LT)
+	indices := slow
+	if forInIndices(c.f) {
+		indices = c.a.NewLabel()
+		defer func() {
+			c.a.Bind(indices)
+			c.forInIndex(v, slow, done)
+		}()
+	}
+	c.a.BCond(arm64.LT, indices)
+	// Past the last key, done, whatever the object.
 	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
 	end := c.a.NewLabel()
 	c.a.Load(a64C, a64D, in+c.enc.ForInKeys+8)
 	c.a.Cmp(a64A, a64C, true)
 	c.a.BCond(arm64.GE, end)
+	// The object of the keys' layout still: nothing deleted from it.
+	c.a.Load(a64C, a64D, in+c.enc.ForInShape)
+	c.a.Cbz(a64C, slow, true)
+	c.a.Load(a64B, a64D, in+c.enc.ForInObj)
+	c.a.Load(a64B, a64B, c.enc.ObjectShape)
+	c.a.Cmp(a64B, a64C, true)
+	fail(arm64.NE)
 	c.a.Load(a64C, a64D, in+c.enc.ForInKeys)
 	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
 	c.a.Op(arm64.Add, a64A, a64A, a64C, true)
@@ -5617,6 +5637,146 @@ func (c *a64Compiler) forInStep(v *ssa.Value, notForIn, slow, done arm64.Label) 
 	c.movImm(a64A, 0)
 	c.a.Store(a64Ctx, keep+c.enc.RefOffset, a64A)
 	c.a.B(done)
+}
+
+// forInIndex is amd64's: forInStep's step over an array's indices, the
+// cursor's state in D and the walk's index in A, its key the VM's string
+// of it, recorded in the VM's table of key strings, the entry's pointer
+// through the write barrier while the collector marks. It uses A, B, C and
+// D, and F0.
+func (c *a64Compiler) forInIndex(v *ssa.Value, slow, done arm64.Label) {
+	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	// The element, an array's dense one, no hole.
+	c.a.Load(a64C, a64D, c.enc.ForInState+c.enc.ForInObj)
+	c.a.Cbz(a64C, slow, true)
+	c.a.LoadU8(a64B, a64C, c.enc.ObjectClass)
+	c.a.CmpImm(a64B, int64(c.enc.ClassArray), false)
+	fail(arm64.NE)
+	c.a.Load(a64B, a64C, c.enc.ObjectElems+8)
+	c.a.Cmp(a64A, a64B, true)
+	fail(arm64.HS)
+	c.a.Load(a64C, a64C, c.enc.ObjectElems)
+	c.a.ShiftImm(arm64.Lsl, a64B, a64A, 4, true)
+	c.a.Op(arm64.Add, a64C, a64C, a64B, true)
+	c.a.Load(a64C, a64C, c.enc.NumOffset)
+	c.movImm(a64B, c.enc.Uninitialized)
+	c.a.Cmp(a64C, a64B, true)
+	fail(arm64.EQ)
+	// Its string, made already.
+	c.a.CmpImm(a64A, abi.IntStrings, true)
+	fail(arm64.HS)
+	c.movImm(a64C, uint64(c.f.IntStrings))
+	c.a.ShiftImm(arm64.Lsl, a64B, a64A, 3, true)
+	c.a.Op(arm64.Add, a64C, a64C, a64B, true)
+	c.a.Load(a64C, a64C, 0)
+	c.a.Cbz(a64C, slow, true)
+	// The key, and the walk advanced.
+	c.a.Store(a64Ctx, keep+c.enc.RefOffset, a64C)
+	c.movImm(a64B, c.enc.String)
+	c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64B)
+	c.a.AddImm(a64B, a64A, 1, true)
+	c.a.Store(a64D, c.enc.IterIdx, a64B)
+	// The string's entry in the table of key strings, in D, and its atom,
+	// the index's, in B.
+	c.a.FMovToF(a64F0, a64A)
+	c.movImm(a64B, abi.KeyAtomsMul)
+	c.a.Mul(a64B, a64C, a64B)
+	c.a.ShiftImm(arm64.Lsr, a64B, a64B, 64-abi.KeyAtomsBits, true)
+	c.a.ShiftImm(arm64.Lsl, a64B, a64B, keyAtomShift, true)
+	c.movImm(a64D, uint64(c.f.KeyAtoms))
+	c.a.Op(arm64.Add, a64D, a64D, a64B, true)
+	c.a.FMovFromF(a64A, a64F0)
+	c.movImm(a64B, abi.AtomIndexTag)
+	c.a.Op(arm64.Orr, a64B, a64A, a64B, false)
+	write := c.a.NewLabel()
+	c.a.Load(a64A, a64D, abi.KeyAtomString)
+	c.a.Cmp(a64A, a64C, true)
+	c.a.BCond(arm64.NE, write)
+	c.a.LoadU32(a64A, a64D, abi.KeyAtomAtom)
+	c.a.Cmp(a64A, a64B, false)
+	c.a.BCond(arm64.NE, write)
+	c.a.LoadU8(a64A, a64D, abi.KeyAtomNone)
+	c.a.Cbz(a64A, done, false)
+	c.a.Bind(write)
+	c.a.Store32(a64D, abi.KeyAtomAtom, a64B)
+	c.movImm(a64A, 0)
+	c.a.Store8(a64D, abi.KeyAtomNone, a64A)
+	c.a.AddImm(a64A, a64D, abi.KeyAtomString, true)
+	c.storeByFlag()
+	c.a.B(done)
+}
+
+// keyedRead is amd64's: an array's dense element, no hole, read natively
+// by an index or by a key string the VM handed out for one, at a site
+// whose reads Go makes for other receivers and keys. It uses A, B, C, D
+// and F2, and no other.
+func (c *a64Compiler) keyedRead(v *ssa.Value, slow arm64.Label) {
+	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+	recv, key := v.Args[0], v.Args[1]
+	named, have := c.a.NewLabel(), c.a.NewLabel()
+	if w := c.gpr(key, a64A); w != a64A {
+		c.a.MovRR(a64A, w)
+	}
+	c.movImm(a64B, abi.NumberLimit)
+	c.a.Cmp(a64A, a64B, true)
+	c.a.BCond(arm64.HS, named)
+	c.a.FMovToF(a64F2, a64A)
+	c.a.Fcvtzs(a64B, a64F2)
+	c.a.Scvtf(a64F2, a64B, true)
+	c.a.FMovFromF(a64C, a64F2)
+	c.a.Cmp(a64C, a64A, true)
+	fail(arm64.NE)
+	c.a.FMovToF(a64F2, a64B)
+	c.a.B(have)
+	c.a.Bind(named)
+	c.movImm(a64B, c.enc.String)
+	c.a.Cmp(a64A, a64B, true)
+	fail(arm64.NE)
+	c.pointerWord(key, a64A)
+	c.a.Cbz(a64B, slow, true)
+	c.movImm(a64C, abi.KeyAtomsMul)
+	c.a.Mul(a64A, a64B, a64C)
+	c.a.ShiftImm(arm64.Lsr, a64A, a64A, 64-abi.KeyAtomsBits, true)
+	c.a.ShiftImm(arm64.Lsl, a64A, a64A, keyAtomShift, true)
+	c.movImm(a64C, uint64(c.f.KeyAtoms))
+	c.a.Op(arm64.Add, a64A, a64A, a64C, true)
+	c.a.Load(a64C, a64A, abi.KeyAtomString)
+	c.a.Cmp(a64C, a64B, true)
+	fail(arm64.NE)
+	c.a.LoadU8(a64C, a64A, abi.KeyAtomNone)
+	c.a.Cbnz(a64C, slow, false)
+	c.a.LoadU32(a64B, a64A, abi.KeyAtomAtom)
+	c.a.ShiftImm(arm64.Lsr, a64C, a64B, 31, false)
+	c.a.Cbz(a64C, slow, false)
+	c.movImm(a64C, abi.AtomIndexTag-1)
+	c.a.Op(arm64.And, a64B, a64B, a64C, false)
+	c.a.FMovToF(a64F2, a64B)
+	c.a.Bind(have)
+	w := c.gpr(recv, a64A)
+	c.movImm(a64C, c.enc.Object)
+	c.a.Cmp(w, a64C, true)
+	fail(arm64.NE)
+	c.pointerWord(recv, w)
+	c.a.Cbz(a64B, slow, true)
+	c.a.LoadU8(a64C, a64B, c.enc.ObjectClass)
+	c.a.CmpImm(a64C, int64(c.enc.ClassArray), false)
+	fail(arm64.NE)
+	c.a.FMovFromF(a64A, a64F2)
+	c.a.Load(a64C, a64B, c.enc.ObjectElems+8)
+	c.a.Cmp(a64A, a64C, true)
+	fail(arm64.HS)
+	c.a.Load(a64B, a64B, c.enc.ObjectElems)
+	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
+	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	c.a.Load(a64C, a64A, c.enc.NumOffset)
+	c.movImm(a64D, c.enc.Uninitialized)
+	c.a.Cmp(a64C, a64D, true)
+	fail(arm64.EQ)
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64C)
+	c.a.Load(a64C, a64A, c.enc.RefOffset)
+	c.a.Store(a64Ctx, keep+c.enc.RefOffset, a64C)
 }
 
 // keyedStore is amd64's: an array's dense element stored natively at a

@@ -5633,6 +5633,36 @@ func (fb *jitFeedback) HasCache() uintptr {
 	return uintptr(unsafe.Pointer(fb.r.shapes.has))
 }
 
+// KeyAtoms is ssa.KeyAtomsFeedback's: the runtime's keyAtoms, and its
+// intStrings, made if it has none, both of which it keeps for as long as it
+// lives, and so for as long as any code of its does.
+func (fb *jitFeedback) KeyAtoms() (uintptr, uintptr) {
+	r := fb.r
+	if r.intStrings == nil {
+		r.intStrings = new([1024]*String)
+	}
+	return uintptr(unsafe.Pointer(&r.keyAtoms)), uintptr(unsafe.Pointer(r.intStrings))
+}
+
+// keyAtoms' and intStrings' layouts are what native code reads and writes
+// (abi.KeyAtomSize).
+var _ [0]struct{} = [unsafe.Sizeof(keyAtom{}) - abi.KeyAtomSize]struct{}{}
+var _ [0]struct{} = [abi.KeyAtomSize - unsafe.Sizeof(keyAtom{})]struct{}{}
+var _ [0]struct{} = [unsafe.Offsetof(keyAtom{}.s) - abi.KeyAtomString]struct{}{}
+var _ [0]struct{} = [unsafe.Offsetof(keyAtom{}.atom) - abi.KeyAtomAtom]struct{}{}
+var _ [0]struct{} = [abi.KeyAtomAtom - unsafe.Offsetof(keyAtom{}.atom)]struct{}{}
+var _ [0]struct{} = [unsafe.Offsetof(keyAtom{}.none) - abi.KeyAtomNone]struct{}{}
+var _ [0]struct{} = [abi.KeyAtomNone - unsafe.Offsetof(keyAtom{}.none)]struct{}{}
+var _ [0]struct{} = [len(Runtime{}.keyAtoms) - 1<<abi.KeyAtomsBits]struct{}{}
+var _ [0]struct{} = [1<<abi.KeyAtomsBits - len(Runtime{}.keyAtoms)]struct{}{}
+var _ [0]struct{} = [keySlotMul - abi.KeyAtomsMul]struct{}{}
+var _ [0]struct{} = [abi.KeyAtomsMul - keySlotMul]struct{}{}
+var _ [0]struct{} = [len(Runtime{}.keyAtoms) - 1<<(64-56)]struct{}{}
+var _ [0]struct{} = [atomIndexTag - abi.AtomIndexTag]struct{}{}
+var _ [0]struct{} = [abi.AtomIndexTag - atomIndexTag]struct{}{}
+var _ [0]struct{} = [len(*Runtime{}.intStrings) - abi.IntStrings]struct{}{}
+var _ [0]struct{} = [abi.IntStrings - len(*Runtime{}.intStrings)]struct{}{}
+
 // hasCache's layout is what native code reads (abi.HasEntrySize).
 var _ [0]struct{} = [unsafe.Sizeof(hasEntry{}) - abi.HasEntrySize]struct{}{}
 var _ [0]struct{} = [abi.HasEntrySize - unsafe.Sizeof(hasEntry{})]struct{}{}

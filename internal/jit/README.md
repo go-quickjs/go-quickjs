@@ -380,9 +380,12 @@ inlined callee may not (`ssa.InlineCalls`). A using declaration's
 scope is such a try statement, its resources added and disposed of by Go.
 
 **Iteration.** A for...of or for...in loop's cursor, and `yield*`'s
-delegate, are Go's. Native code steps an array's for...of in place; any
-other step is a call of Go, which answers the next value or, done, the
-uninitialized value native code branches on. A step's iterator is closed
+delegate, are Go's. Native code steps an array's for...of in place, and a
+for...in over the keys of its object's layout or over an array's indices
+-- each the VM's string of its index, which an element read by it finds
+again (mir's `forInIndex`, `keyedRead`); any other step is a call of Go,
+which answers the next value or, done, the uninitialized value native code
+branches on. A step's iterator is closed
 however the loop is left, as the interpreter closes it. `yield*`, an
 `await using` scope's disposal steps, `import()` and `import.meta` leave
 for Go and go on past it.
@@ -738,10 +741,13 @@ it are cleared so, which shades what they held.
 
 A loop's step copies a pointer into a keep cell with no barrier, by that
 same rule read the other way: an array's element, a Map entry's, a
-`for...in` key off the layout's keys the cursor walks (mir's `iterStep`,
-`mapStep`, `forInStep`). The cell does not outlive what the pointer came
-from -- the array, the table, the keys -- so nothing moves into what
-outlives it. Two things make that enough. The cell holds one value of the
+`for...in` key off the layout's keys the cursor walks, or the VM's string
+of an array's index, which its table of them holds for as long as it lives
+(mir's `iterStep`, `mapStep`, `forInStep`, `forInIndex`), and an element
+read by a key (`keyedRead`). The cell does not outlive what the pointer
+came from -- the array, the table, the keys -- so nothing moves into what
+outlives it; the index's string recorded in the VM's table of key strings,
+which does, goes there through `storeRef` while the collector marks. Two things make that enough. The cell holds one value of the
 code's own, so the one it overwrites is a definition of that value nothing
 reads again, never a reference something else needs. And a loop body that
 takes the element out from under the step removes it with a barriered
