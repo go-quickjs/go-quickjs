@@ -18,7 +18,7 @@ type jitEntry struct{}
 // (propCache.seen).
 type jitCacheSeen struct{}
 
-func jitNoteSeen(seen jitCacheSeen, _, _ propCache) jitCacheSeen { return seen }
+func jitNoteSeen(p *propPoly, _, _ propCache) *propPoly { return p }
 
 func jitNoteDeepAdd(*propCache, *shape, *shape, *Object) {}
 
@@ -39,7 +39,6 @@ func (*Runtime) SetJITWarmUp(int, int) {}
 func (*Runtime) initJIT(bool, int64)                                  {}
 func (*Runtime) tryJITFrame(*frame) (Value, error, bool)              { return Value{}, nil, false }
 func (*Runtime) jitCountPure()                                        {}
-func (*Runtime) jitCountPureCall()                                    {}
 func (*Runtime) jitCountsCaller(int) bool                             { return false }
 func (*Runtime) jitResume(*frame) (Value, error, bool)                { return Value{}, nil, false }
 func (*Runtime) jitBackEdge(*frame, uint32, int) (Value, error, bool) { return Value{}, nil, false }

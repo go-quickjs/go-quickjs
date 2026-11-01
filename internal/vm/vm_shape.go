@@ -836,14 +836,6 @@ type propCache struct {
 	// of four maps (polyEntry). Made when a site first meets a second
 	// shape.
 	poly *propPoly
-	// seen, with the JIT on, holds the entries the site had before, the
-	// last few, of other shapes, which no read or write here uses: the
-	// shapes the optimizing tier compiles the site for besides this one,
-	// as V8's inline caches keep up to four maps for its optimizing
-	// compiler, so that it knows them when it first compiles rather than
-	// at the exits of code compiled without them (jitNoteSeen). A build
-	// without the JIT has nothing here.
-	seen jitCacheSeen
 	idx  int32
 	// getter marks an entry for an accessor: a read's, whose getter is
 	// called, which only cachedGet fills, for OpGetProp; or a write's, whose
@@ -874,22 +866,34 @@ func ownOf(n *propCache) *shape {
 // refill makes c n, what the site now remembers; with the JIT on, what it
 // remembered before is kept among the entries it has seen (jitNoteSeen).
 func (c *propCache) refill(n propCache, jit bool) {
-	seen := c.seen
+	poly := notePoly(c.poly, *c, n)
 	if jit && c.shape != dictShape && c.cell == nil {
 		// Not an entry for dictionary objects, which no code is compiled
 		// for.
-		seen = jitNoteSeen(seen, *c, n)
+		poly = jitNoteSeen(poly, *c, n)
 	}
-	poly := notePoly(c.poly, *c, n)
 	n.ownShape = ownOf(&n)
 	*c = n
-	c.seen, c.poly = seen, poly
+	c.poly = poly
 }
 
 // propPoly is a site's entries for objects of shapes other than its
 // entry's (propCache.poly).
 type propPoly struct {
-	n       uint8
+	n uint8
+	// seen, with the JIT on, holds the entries the site had before, the
+	// last few, of other shapes, which no read or write here uses: the
+	// shapes the optimizing tier compiles the site for besides this one,
+	// as V8's inline caches keep up to four maps for its optimizing
+	// compiler, so that it knows them when it first compiles rather than
+	// at the exits of code compiled without them (jitNoteSeen). A build
+	// without the JIT has nothing here. It is the poly's, not the
+	// propCache's, which every closure has one of for each of its sites:
+	// a pointer more there had made the JIT build's entry 88 bytes, the
+	// other's 80, and pureCallAt's index of its sites, cl.ic[k], a
+	// multiplication, the code around it given other registers and
+	// spills, and a pure body's call slower than without the JIT.
+	seen    jitCacheSeen
 	entries [maxPolyEntries]propCache
 	// mega is, for a site that has given up (maxCacheFills), the slots of
 	// the plain own properties it has found, by the objects' shapes
@@ -931,8 +935,7 @@ func notePoly(p *propPoly, old, n propCache) *propPoly {
 	if old.shape == nil || old.shape == noShape || old.shape == dictShape || old.shape == n.shape {
 		return p
 	}
-	var none jitCacheSeen
-	old.seen, old.poly = none, nil
+	old.poly = nil
 	if p == nil {
 		p = &propPoly{}
 	}

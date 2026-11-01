@@ -163,9 +163,9 @@ func (fb *jitFeedback) Accessor(pc int) (ssa.AccessorSite, bool) {
 	if a, ok := jitCacheAccessor(c, write); ok {
 		add(a)
 	}
-	if c.seen != nil {
-		for i := range c.seen.entries[:c.seen.n] {
-			if a, ok := jitCacheAccessor(&c.seen.entries[i], write); ok {
+	if seen := c.seenOf(); seen != nil {
+		for i := range seen.entries[:seen.n] {
+			if a, ok := jitCacheAccessor(&seen.entries[i], write); ok {
 				add(a)
 			}
 		}

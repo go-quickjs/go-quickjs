@@ -99,7 +99,7 @@ func TestJITShapeMissesDeoptimize(t *testing.T) {
 		}
 	}
 	mega, c := jitReadSite(t, r, "sum", "x")
-	if mega || c.shape == nil || c.shape == noShape || c.seen == nil || c.seen.n == 0 {
+	if mega || c.shape == nil || c.shape == noShape || c.seenOf() == nil || c.seenOf().n == 0 {
 		t.Fatalf("the read's cache did not learn its two shapes: megamorphic %v, %+v", mega, c)
 	}
 }

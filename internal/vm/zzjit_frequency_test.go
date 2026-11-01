@@ -260,7 +260,7 @@ func jitFnForTest(t *testing.T, r *Runtime, name string) *bytecode.Function {
 // and the others make for each element -- are no call site native code
 // compiles, and are counted at none: each's calls of forEach, map, slice
 // and sort, built-ins called, count nothing, however many elements their
-// callbacks are called for -- pure bodies (pureCallAt's jitCountPureCall),
+// callbacks are called for -- pure bodies (pureCall's count),
 // bodies with a frame and a comparator alike -- while its call of g
 // through Function.prototype.call, whose frame is a built-in's too, still
 // counts one at every run, at the call of call (jitCountsCaller).

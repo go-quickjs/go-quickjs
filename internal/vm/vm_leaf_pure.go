@@ -18,7 +18,16 @@ const pureMissLimit = 64
 // store, a body's one, is in the tail of it that cannot give up.
 func (r *Runtime) pureCall(fd *funcData, this Value, args []Value) (Value, bool) {
 	r.pureRefused = false
-	return r.pureCallAt(fd, this, args, 0, true)
+	v, ok := r.pureCallAt(fd, this, args, 0, true)
+	if jitBuilt && ok && r.jitOn() && r.jitCountsCaller(r.frameDepth-1) {
+		// Counted for the JIT at its call site, as a call made with a
+		// frame is (jitCountPure): here, not in pureCallAt, whose code is
+		// then the same with the JIT built in as without, and asked first
+		// whether the caller counts, which a built-in -- a sort calling
+		// its comparator -- does not.
+		r.jitCountPure()
+	}
+	return v, ok
 }
 
 // pureTreeCode is the shortest pure body, in instructions, that is called
@@ -484,16 +493,8 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 			sp--
 			cl.upvalues[in.A].set(stack[sp])
 		case pcReturn:
-			if jitBuilt && depth == 0 {
-				// Counted for the JIT at its call site, as a call made with
-				// a frame is (jitCountPureCall).
-				r.jitCountPureCall()
-			}
 			return stack[sp-1], true
 		case pcReturnUndef:
-			if jitBuilt && depth == 0 {
-				r.jitCountPureCall()
-			}
 			return Undefined, true
 		default:
 			return miss()

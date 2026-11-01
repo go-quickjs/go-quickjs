@@ -988,9 +988,26 @@ func jitSuperseded(s, t *shape) bool {
 	return false
 }
 
-// jitCacheSeen is a cache's earlier entries (propCache.seen), nil until
+// jitCacheSeen is a cache's earlier entries (propPoly.seen), nil until
 // the site has met objects of a second shape.
 type jitCacheSeen = *propSeen
+
+// seenOf is c's earlier entries (propPoly.seen), or nil.
+func (c *propCache) seenOf() *propSeen {
+	if c.poly == nil {
+		return nil
+	}
+	return c.poly.seen
+}
+
+// setSeen makes s c's earlier entries, its poly made for them if it has
+// none.
+func (c *propCache) setSeen(s *propSeen) {
+	if c.poly == nil {
+		c.poly = &propPoly{}
+	}
+	c.poly.seen = s
+}
 
 // propSeen is a site's earlier cache entries, each of its own shape, the
 // latest last.
@@ -1054,7 +1071,7 @@ func (r *Runtime) jitDeepReadOf(o *Object, key Atom) (jitDeepRead, bool) {
 // every such read, learning nothing, until its callers stopped calling it
 // natively.
 func (r *Runtime) jitNoteDeepRead(c *propCache, o *Object, key Atom) {
-	s := c.seen
+	s := c.seenOf()
 	if s != nil {
 		for i := range s.reads {
 			if s.reads[i].shape == o.shape {
@@ -1071,7 +1088,7 @@ func (r *Runtime) jitNoteDeepRead(c *propCache, o *Object, key Atom) {
 	}
 	if s == nil {
 		s = &propSeen{}
-		c.seen = s
+		c.setSeen(s)
 	}
 	s.reads = append(s.reads, d)
 }
@@ -1104,7 +1121,7 @@ type jitDeepSeen struct {
 // a constructor's at each of its sites in turn, for each of its receivers'
 // shapes.
 func jitNoteDeepAdd(c *propCache, from, next *shape, proto *Object) {
-	s := c.seen
+	s := c.seenOf()
 	if s != nil {
 		for _, d := range s.deep {
 			if d.from == from {
@@ -1116,7 +1133,7 @@ func jitNoteDeepAdd(c *propCache, from, next *shape, proto *Object) {
 		}
 	} else {
 		s = &propSeen{}
-		c.seen = s
+		c.setSeen(s)
 	}
 	s.deep = append(s.deep, jitDeepSeen{from: remember(from), next: remember(next), proto: proto})
 }
@@ -1124,28 +1141,33 @@ func jitNoteDeepAdd(c *propCache, from, next *shape, proto *Object) {
 // jitNoteSeen keeps old, what a cache remembered before it remembers n,
 // among the entries it has seen, if it was of another shape: replacing
 // the one of its shape, or the oldest when they are full.
-func jitNoteSeen(s *propSeen, old, n propCache) *propSeen {
+func jitNoteSeen(p *propPoly, old, n propCache) *propPoly {
 	if old.shape == nil || old.shape == noShape || old.shape == n.shape {
-		return s
+		return p
 	}
-	old.seen, old.poly = nil, nil
+	old.poly = nil
+	if p == nil {
+		p = &propPoly{}
+	}
+	s := p.seen
 	if s == nil {
 		s = &propSeen{}
+		p.seen = s
 	}
 	for i := range s.n {
 		if s.entries[i].shape == old.shape {
 			s.entries[i] = old
-			return s
+			return p
 		}
 	}
 	if int(s.n) < len(s.entries) {
 		s.entries[s.n] = old
 		s.n++
-		return s
+		return p
 	}
 	copy(s.entries[:], s.entries[1:])
 	s.entries[len(s.entries)-1] = old
-	return s
+	return p
 }
 
 // jitSeenFeedback adds to e's sites what cl's caches have seen besides
@@ -1157,10 +1179,10 @@ func jitNoteSeen(s *propSeen, old, n propCache) *propSeen {
 func (r *Runtime) jitSeenFeedback(cl *closure, e *jitEntry) {
 	for pc, in := range cl.fn.Code {
 		write := in.Op == bytecode.OpSetProp
-		if !write && in.Op != bytecode.OpGetProp && in.Op != bytecode.OpGetPropThis || int(in.B) >= len(cl.ic) || cl.ic[in.B].seen == nil && cl.ic[in.B].poly == nil {
+		if !write && in.Op != bytecode.OpGetProp && in.Op != bytecode.OpGetPropThis || int(in.B) >= len(cl.ic) || cl.ic[in.B].poly == nil {
 			continue
 		}
-		seen, now := cl.ic[in.B].seen, cl.ic[in.B].shape
+		seen, now := cl.ic[in.B].seenOf(), cl.ic[in.B].shape
 		// What the site remembers besides its entry (poly), which every
 		// tier's reads and writes fill -- the tree's scans of an object's
 		// own table too, which note nothing in seen -- and what it met
@@ -1890,11 +1912,11 @@ func jitFeedbackMark(cl *closure) uint64 {
 				entry(&p.entries[k])
 			}
 		}
-		if c.seen != nil {
-			for k := range c.seen.entries[:c.seen.n] {
-				entry(&c.seen.entries[k])
+		if seen := c.seenOf(); seen != nil {
+			for k := range seen.entries[:seen.n] {
+				entry(&seen.entries[k])
 			}
-			m += uint64(len(c.seen.reads))<<32 + uint64(len(c.seen.deep))<<40
+			m += uint64(len(seen.reads))<<32 + uint64(len(seen.deep))<<40
 		}
 	}
 	return m
@@ -6397,7 +6419,7 @@ func (r *Runtime) jitSeenCallees(cl *closure, p *ir.Program, pc int, o *Object) 
 			take(&p.entries[i])
 		}
 	}
-	if seen := c.seen; seen != nil {
+	if seen := c.seenOf(); seen != nil {
 		for i := range seen.entries[:seen.n] {
 			take(&seen.entries[i])
 		}
@@ -10084,7 +10106,7 @@ func (fb *jitFeedback) deepAdd(d jitDeepAdd) *ssa.PropertyAdd {
 // others leave, as a root's does (jitAddReadCase).
 func (fb *jitFeedback) seenCases(pc int, site ssa.PropertySite) []ssa.PropertyCase {
 	in := fb.fn.Code[pc]
-	if int(in.B) >= len(fb.cl.ic) || fb.cl.ic[in.B].seen == nil || site.Holders[0].Object != 0 && in.Op == bytecode.OpSetProp {
+	if int(in.B) >= len(fb.cl.ic) || fb.cl.ic[in.B].seenOf() == nil || site.Holders[0].Object != 0 && in.Op == bytecode.OpSetProp {
 		return nil
 	}
 	c := &fb.cl.ic[in.B]
@@ -10093,7 +10115,8 @@ func (fb *jitFeedback) seenCases(pc int, site ssa.PropertySite) []ssa.PropertyCa
 	k := fb.keep()
 	// The entries the cache holds shapes of besides its own, then those of
 	// the ones superseded.
-	entries := c.seen.entries[:c.seen.n]
+	seen := c.seenOf()
+	entries := seen.entries[:seen.n]
 	for i := range 2 * len(entries) {
 		x := entries[i%len(entries)]
 		if len(cases)+1 >= jitPropertyCases {
@@ -10150,9 +10173,9 @@ func (fb *jitFeedback) seenAdds(pc int, site ssa.PropertySite) []*ssa.PropertyAd
 			adds = append(adds, a)
 		}
 	}
-	if c.seen != nil {
-		for i := range c.seen.n {
-			note(&c.seen.entries[i])
+	if seen := c.seenOf(); seen != nil {
+		for i := range seen.n {
+			note(&seen.entries[i])
 		}
 	}
 	if c.poly != nil {
@@ -10160,11 +10183,11 @@ func (fb *jitFeedback) seenAdds(pc int, site ssa.PropertySite) []*ssa.PropertyAd
 			note(&c.poly.entries[i])
 		}
 	}
-	if c.seen != nil && int(in.A) < len(fb.cl.names) {
+	if seen := c.seenOf(); seen != nil && int(in.A) < len(fb.cl.names) {
 		// The additions along chains deeper than a cache holds -- a
 		// subclass's object's, two prototypes below the class whose
 		// initializer adds the property -- as the chain is now.
-		for _, d := range c.seen.deep {
+		for _, d := range seen.deep {
 			from := uintptr(unsafe.Pointer(d.from))
 			if len(adds)+1 >= jitPropertyCases || from == site.Shape || site.Add != nil && from == site.Add.From ||
 				slices.ContainsFunc(adds, func(a *ssa.PropertyAdd) bool { return a.From == from }) {
@@ -10243,8 +10266,8 @@ func (fb *jitFeedback) deepCases(pc int) []ssa.PropertyCase {
 	if fb.e != nil && fb.root == nil {
 		cases = fb.cases(pc, 0)
 	}
-	if in := fb.fn.Code[pc]; int(in.B) < len(fb.cl.ic) && fb.cl.ic[in.B].seen != nil {
-		reads := fb.cl.ic[in.B].seen.reads
+	if in := fb.fn.Code[pc]; int(in.B) < len(fb.cl.ic) && fb.cl.ic[in.B].seenOf() != nil {
+		reads := fb.cl.ic[in.B].seenOf().reads
 		for i := range reads {
 			d := &reads[i]
 			if len(cases) < jitPropertyCases && !slices.ContainsFunc(cases, func(k ssa.PropertyCase) bool { return k.Shape == uintptr(unsafe.Pointer(d.shape)) }) {

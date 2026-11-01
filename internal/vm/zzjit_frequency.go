@@ -202,20 +202,6 @@ func (r *Runtime) jitCountsCaller(i int) bool {
 // first whether the top frame may count it (jitCountsCaller).
 func (r *Runtime) jitCountPure() { r.jitCountCallAt(r.frameDepth + 1) }
 
-// jitCountPureCall is pureCallAt's count of a pure body's call it
-// answered (jitCountPure), out of line: the tests written in each of
-// pureCallAt's returns had its code given other registers, and spills,
-// and a pure body's call taken a quarter longer than without the JIT's
-// code, over the same work -- the callbacks of a typed array's sort among
-// them, whose caller is a built-in, which counts nothing.
-//
-//go:noinline
-func (r *Runtime) jitCountPureCall() {
-	if r.jitOn() && r.jitCountsCaller(r.frameDepth-1) {
-		r.jitCountPure()
-	}
-}
-
 // jitCountCallAt counts a call whose callee's frame is, or would be, the
 // d-th, at its caller's call site, the frame below's (jitCallCounts),
 // where the caller is a frame of a function whose calls the existing tiers
