@@ -304,6 +304,45 @@ function object_for_in(n)
     return n * 8;
 }
 
+/* fixed data properties, all filled before the object leaves the literal */
+function object_literal_fixed(n)
+{
+    var j, o;
+    for (j = 0; j < n; j++)
+        o = { a: j, b: j + 1, c: "key", d: true,
+              e: null, f: j, g: false, h: "end" };
+    global_res = o;
+    return n;
+}
+
+/* repeated growth past the small array capacity classes */
+function array_push_large(n)
+{
+    var i, j, a;
+    for (j = 0; j < n; j++) {
+        a = [];
+        for (i = 0; i < 8192; i++)
+            a.push(i);
+    }
+    global_res = a.length + a[8191];
+    return n * 8192;
+}
+
+/* a callback appending fragments to a captured string, then reading it */
+function upvalue_string_append(n)
+{
+    var i, j, s, sum = 0;
+    var sink = { push: function (x) { return x !== null && (s += x), true; } };
+    for (j = 0; j < n; j += 1024) {
+        s = "";
+        for (i = 0; i < 1024; i++)
+            sink.push("<x>");
+        sum += s.length + s.lastIndexOf("<x>");
+    }
+    global_res = sum;
+    return j;
+}
+
 /* a for-in loop over a dictionary: an object a key was deleted from,
    not the last added */
 function dict_for_in(n)

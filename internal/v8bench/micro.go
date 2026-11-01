@@ -82,6 +82,7 @@ var microWork = []struct {
 	{"loop_props", 8388608},
 	{"string_switch_first", 4194304}, {"string_switch_last", 1048576},
 	{"string_switch_miss", 1048576}, {"string_switch_mixed", 2097152},
+	{"object_literal_fixed", 524288}, {"array_push_large", 512}, {"upvalue_string_append", 1048576},
 	{"private_field", 4194304}, {"private_method", 2097152}, {"math_random", 4194304},
 	{"random_shuffle", 2097152}, {"prop_in", 1048576}, {"prop_in_keyed", 4194304},
 	{"array_in", 2097152}, {"prop_delete_last", 1048576},

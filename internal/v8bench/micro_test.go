@@ -31,3 +31,21 @@ func TestStringSwitchMicrobenchmarks(t *testing.T) {
 		})
 	}
 }
+
+func TestAllocationMicrobenchmarks(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	if _, err := rt.Eval("var global_res;\n" + microbenchExtra); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ src, want string }{
+		{`object_literal_fixed(9) + ':' + JSON.stringify(global_res)`, `9:{"a":8,"b":9,"c":"key","d":true,"e":null,"f":8,"g":false,"h":"end"}`},
+		{`array_push_large(1) + ':' + global_res`, "8192:16383"},
+		{`upvalue_string_append(1025) + ':' + global_res`, "2048:12282"},
+	} {
+		v, err := rt.Eval(tc.src)
+		if err != nil || v.String() != tc.want {
+			t.Fatalf("%s = %v, %v; want %q", tc.src, v, err, tc.want)
+		}
+	}
+}
