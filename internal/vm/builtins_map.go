@@ -345,7 +345,7 @@ func (r *Runtime) getOrInsertComputed(m mapUpsertStore, key, cb Value) (Value, e
 	if v, ok := m.get(r, key); ok {
 		return v, nil
 	}
-	v, err := r.call(cb, Undefined, []Value{key})
+	v, err := r.callDirect(cb, Undefined, []Value{key})
 	if err != nil {
 		return Undefined, err
 	}
@@ -430,7 +430,7 @@ func (r *Runtime) initMapBuiltins() {
 		m := newJSMap()
 		i := 0
 		err := rt.iterate(arg(args, 0), func(v Value) error {
-			key, err := rt.call(cb, Undefined, []Value{v, Int(i)})
+			key, err := rt.callDirect(cb, Undefined, []Value{v, Int(i)})
 			i++
 			if err != nil {
 				return err
@@ -547,7 +547,7 @@ func (r *Runtime) initMapBuiltins() {
 		var c mapCursor
 		for i := m.next(&c); i >= 0; i = m.next(&c) {
 			argv[0], argv[1], argv[2] = m.entries[i].value, m.entries[i].key, this
-			if _, err := rt.call(cb, arg(args, 1), argv[:]); err != nil {
+			if _, err := rt.callDirect(cb, arg(args, 1), argv[:]); err != nil {
 				return Undefined, err
 			}
 		}
@@ -649,7 +649,7 @@ func (r *Runtime) initSetBuiltins() {
 		var c mapCursor
 		for i := m.next(&c); i >= 0; i = m.next(&c) {
 			argv[0], argv[1], argv[2] = m.entries[i].value, m.entries[i].key, this
-			if _, err := rt.call(cb, arg(args, 1), argv[:]); err != nil {
+			if _, err := rt.callDirect(cb, arg(args, 1), argv[:]); err != nil {
 				return Undefined, err
 			}
 		}

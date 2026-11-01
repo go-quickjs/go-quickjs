@@ -763,7 +763,7 @@ func (r *Runtime) regExpReplaceIn(rx Value, args []Value, fl regexp.Flags, direc
 			if !named.IsUndefined() {
 				callArgs = append(callArgs, named)
 			}
-			res, err := r.call(replValue, Undefined, callArgs)
+			res, err := r.callDirect(replValue, Undefined, callArgs)
 			if err != nil {
 				return Undefined, err
 			}

@@ -248,7 +248,7 @@ func (r *Runtime) mapFromAsync(st *fromAsyncState, value Value) {
 		r.storeFromAsync(st, i, value)
 		return
 	}
-	mapped, err := r.call(st.mapper, st.thisArg, []Value{value, Float(float64(i))})
+	mapped, err := r.callDirect(st.mapper, st.thisArg, []Value{value, Float(float64(i))})
 	if err != nil {
 		r.failFromAsync(st, thrownValue(err))
 		return

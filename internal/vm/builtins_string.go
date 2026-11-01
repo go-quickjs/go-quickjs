@@ -1018,7 +1018,7 @@ func (r *Runtime) replacementFor(replVal Value, replText string, matched *String
 	offset int, whole *String, argv *[3]Value) (string, error) {
 	if isCallable(replVal) {
 		argv[0], argv[1], argv[2] = Str(matched), Int(offset), Str(whole)
-		res, err := r.call(replVal, Undefined, argv[:])
+		res, err := r.callDirect(replVal, Undefined, argv[:])
 		if err != nil {
 			return "", err
 		}

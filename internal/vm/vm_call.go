@@ -154,8 +154,11 @@ func (r *Runtime) pushNativeFrame(o *Object, this Value, args []Value, newTarget
 // callDirect is call for the engine's own calls of what is most often a
 // compiled function: the interpreter's and the tree tier's call
 // instructions, f.call(...), a bound function's target, a getter or setter
-// a property cache remembers, and the callbacks sort, forEach, map and the
-// other array methods call once per element. What call would find out
+// a property cache remembers, and the callbacks built-ins call once per
+// element: sort's, forEach's, map's and the other array methods', the
+// iterator helpers', Map's and Set's forEach, groupBy's, Array.from's and
+// %TypedArray%.from's mapping, replace's function, JSON's replacer and
+// reviver. What call would find out
 // through callObject and callClosure, it asks in one place, in this order:
 //
 //   - a function planTreeCall has given a tree is called on it, by

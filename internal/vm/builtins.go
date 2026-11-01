@@ -1041,7 +1041,7 @@ func (r *Runtime) initArrayBuiltins() {
 			err = rt.iterateWith(src, method, func(v Value) error {
 				if mapping {
 					argv[0], argv[1] = v, Float(float64(k))
-					mapped, err := rt.call(mapFn, thisArg, argv[:])
+					mapped, err := rt.callDirect(mapFn, thisArg, argv[:])
 					if err != nil {
 						return err
 					}
@@ -1080,7 +1080,7 @@ func (r *Runtime) initArrayBuiltins() {
 			}
 			if mapping {
 				argv[0], argv[1] = v, Float(float64(k))
-				mapped, err := rt.call(mapFn, thisArg, argv[:])
+				mapped, err := rt.callDirect(mapFn, thisArg, argv[:])
 				if err != nil {
 					return Undefined, err
 				}

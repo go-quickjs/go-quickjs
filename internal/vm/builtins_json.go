@@ -278,7 +278,7 @@ func (e *jsonEncoder) apply(holder Value, key Atom, v Value) (Value, error) {
 		}
 		if isCallable(tj) {
 			keyValue = e.rt.keyToValue(key)
-			v, err = e.rt.call(tj, v, []Value{keyValue})
+			v, err = e.rt.callDirect(tj, v, []Value{keyValue})
 			if err != nil {
 				return Undefined, err
 			}
@@ -288,7 +288,7 @@ func (e *jsonEncoder) apply(holder Value, key Atom, v Value) (Value, error) {
 		if keyValue.IsUndefined() {
 			keyValue = e.rt.keyToValue(key)
 		}
-		return e.rt.call(e.replacer, holder, []Value{keyValue, v})
+		return e.rt.callDirect(e.replacer, holder, []Value{keyValue, v})
 	}
 	return v, nil
 }
@@ -389,7 +389,7 @@ func (r *Runtime) reviveJSONAt(holder *Object, key Value, reviver Value, rec *js
 			}
 		}
 	}
-	return r.call(reviver, Obj(holder), []Value{key, val, Obj(context)})
+	return r.callDirect(reviver, Obj(holder), []Value{key, val, Obj(context)})
 }
 
 // reviveWrite puts back what the reviver returned, or removes the property

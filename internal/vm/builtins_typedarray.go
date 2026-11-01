@@ -1941,7 +1941,7 @@ func (r *Runtime) initTypedArrayStatics(abstract *Object) {
 		put := func(t *typedArrayData, i int64, el Value) error {
 			if !mapFn.IsUndefined() {
 				var err error
-				if el, err = rt.call(mapFn, thisArg, []Value{el, Float(float64(i))}); err != nil {
+				if el, err = rt.callDirect(mapFn, thisArg, []Value{el, Float(float64(i))}); err != nil {
 					return err
 				}
 			}

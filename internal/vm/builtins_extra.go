@@ -206,7 +206,7 @@ func (r *Runtime) initArrayExtras2() {
 				continue
 			}
 			argv[0], argv[1], argv[2] = el, Float(float64(i)), Obj(a.o)
-			v, err := rt.call(cb, thisArg, argv[:])
+			v, err := rt.callDirect(cb, thisArg, argv[:])
 			if err != nil {
 				return Undefined, err
 			}
@@ -517,7 +517,7 @@ func (r *Runtime) initObjectExtras() {
 		var argv [2]Value
 		err := rt.iterate(arg(args, 0), func(v Value) error {
 			argv[0], argv[1] = v, Int(i)
-			keyVal, err := rt.call(cb, Undefined, argv[:])
+			keyVal, err := rt.callDirect(cb, Undefined, argv[:])
 			i++
 			if err != nil {
 				return err
