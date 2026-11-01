@@ -33,9 +33,10 @@ const (
 	BigConstUint64
 )
 
-// PureBodyFeedback is Feedback that knows its function is a pure body,
-// which the call path evaluates without its tree (the VM's pureCall), so
-// that none of its sites has the tree tier's marks.
+// PureBodyFeedback is Feedback that knows its function is a pure body the
+// call path evaluates without its tree (the VM's pureCall), so that none of
+// its sites has the tree tier's marks or can have them. A pure body the VM
+// gives its tree is none: its sites are marked as any function's are.
 type PureBodyFeedback interface {
 	PureBody() bool
 }
