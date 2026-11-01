@@ -2317,6 +2317,23 @@ function array_find_upvalue(n)
     return n * len;
 }
 
+/* Array.prototype.sort of a hundred numbers, a permutation copied in each
+   turn, by a comparator, as typed_sort sorts an Int32Array's; an operation
+   is an element sorted, whatever comparisons the engine's sort makes */
+function array_sort(n)
+{
+    var r, s, i, j, len = 100;
+    s = [];
+    for (i = 0; i < len; i++)
+        s[i] = (i * 37) % len;
+    for (j = 0; j < n; j++) {
+        r = s.slice();
+        r.sort((a, b) => a - b);
+    }
+    global_res = r[len - 1];
+    return n * len;
+}
+
 /* digit sums of numbers of nineteen digits: a remainder and a division in
    the int64 range a digit */
 function bigint64_divmod(n)

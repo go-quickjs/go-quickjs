@@ -93,7 +93,7 @@ var microWork = []struct {
 	{"array_map", 16384}, {"array_filter", 16384}, {"array_some", 32768},
 	{"array_forEach_once", 32768}, {"array_forEach_function", 32768}, {"array_forEach_this", 32768},
 	{"array_forEach_user", 32768}, {"array_reduce_upvalue", 32768}, {"array_every_upvalue", 32768},
-	{"array_find_upvalue", 32768},
+	{"array_find_upvalue", 32768}, {"array_sort", 4096},
 	{"typed_forEach", 32768}, {"typed_map", 32768}, {"typed_filter", 16384}, {"typed_reduce", 32768},
 	{"typed_some", 32768}, {"typed_every", 32768}, {"typed_find", 32768}, {"typed_findIndex", 32768},
 	{"typed_sort", 4096},
