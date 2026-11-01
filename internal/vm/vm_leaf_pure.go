@@ -610,6 +610,18 @@ const (
 	elemArrIndexOf
 	elemArrLastIndexOf
 	elemArrIncludes
+	// DataView.prototype's getters and setters, by the bytes they move, a
+	// setter of a BigInt apart: an index in the view, its buffer there
+	// (zzz_dataview.go).
+	elemViewGet1
+	elemViewGet2
+	elemViewGet4
+	elemViewGet8
+	elemViewSet1
+	elemViewSet2
+	elemViewSet4
+	elemViewSet8
+	elemViewSetBig
 	// Native leaves a construction applies too, where new.target is the
 	// built-in itself (constructWithTarget): its call and its construction
 	// are the same, as Array's are. Array(...) and new Array(...).

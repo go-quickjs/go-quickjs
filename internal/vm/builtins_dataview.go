@@ -209,7 +209,8 @@ func (r *Runtime) initDataViewBuiltins() {
 		r.defMethod(proto, "set"+spec.name, 2, r.dataViewSetter(spec))
 	}
 
-	r.defToStringTag(proto, "DataView")
+	// Its toStringTag, and its accessors declared leaves (zzz_dataview.go).
+	dataViewLeaves[struct{}](r, proto)
 }
 
 // dataViewType describes one of the element types a DataView understands.
