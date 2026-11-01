@@ -35,7 +35,8 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 
 // opHook is buildBlock's call of op, for the instruction at pc of code: a
 // typeof is typeofOp's, a dup that begins a switch's literal cases
-// switchStart's, anything else op's.
+// switchStart's, a new_object literalNew's and a define_field its literal
+// takes literalField's, anything else op's.
 //
 //go:noinline
 func opHook[_ any](b *tbuilder, pc int, code []bytecode.Instr, more bool) (int, bool) {
@@ -47,6 +48,15 @@ func opHook[_ any](b *tbuilder, pc int, code []bytecode.Instr, more bool) (int, 
 		// A switch's literal cases, as one lookup (zzz_switch.go).
 		if skip, ok, handled := switchStart[struct{}](b, pc); handled {
 			return skip, ok
+		}
+	case bytecode.OpNewObject:
+		// An object literal, as one node with its fields
+		// (zzz_literal.go).
+		literalNew[struct{}](b, in)
+		return 0, true
+	case bytecode.OpDefineField:
+		if literalField[struct{}](b, pc, in) {
+			return 0, true
 		}
 	}
 	return b.op(pc, in, code, more)

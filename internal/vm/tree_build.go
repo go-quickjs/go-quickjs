@@ -92,6 +92,9 @@ type tentryRare struct {
 	// first case's jump_if_true takes, which makes it its end (see
 	// zzz_switch.go).
 	sw tnext
+	// lit is an object literal's new_object's record of the fields its
+	// node takes (see zzz_literal.go).
+	lit *litOf
 	// str is set for a string constant's push_const, of constant k, which
 	// an equality with it reads in place (see ztree_a_aalit.go).
 	str bool
