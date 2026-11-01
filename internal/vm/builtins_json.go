@@ -42,7 +42,7 @@ func (r *Runtime) initJSONBuiltins() {
 			root.setOwnRaw(rt.atoms.intern(""), arg(args, 0), propDefault)
 			holder = Obj(root)
 		}
-		v, err := enc.apply(holder, Str(emptyString), arg(args, 0))
+		v, err := enc.apply(holder, atomEmpty, arg(args, 0))
 		if err != nil {
 			return Undefined, err
 		}
@@ -263,7 +263,10 @@ func (e *jsonEncoder) needsApply(v Value) bool {
 }
 
 // apply runs toJSON and then the replacer on one value, in that order.
-func (e *jsonEncoder) apply(holder Value, key Value, v Value) (Value, error) {
+func (e *jsonEncoder) apply(holder Value, key Atom, v Value) (Value, error) {
+	// Most objects have no toJSON and no replacer. Materialize the key string
+	// only when one of those callbacks can observe it.
+	keyValue := Undefined
 	// A BigInt has a toJSON hook like an object does, which is the only way to
 	// serialize one at all: without it there is no JSON form and the attempt
 	// is an error. A string, like a number or a boolean, is not asked
@@ -274,14 +277,18 @@ func (e *jsonEncoder) apply(holder Value, key Value, v Value) (Value, error) {
 			return Undefined, err
 		}
 		if isCallable(tj) {
-			v, err = e.rt.call(tj, v, []Value{key})
+			keyValue = e.rt.keyToValue(key)
+			v, err = e.rt.call(tj, v, []Value{keyValue})
 			if err != nil {
 				return Undefined, err
 			}
 		}
 	}
 	if isCallable(e.replacer) {
-		return e.rt.call(e.replacer, holder, []Value{key, v})
+		if keyValue.IsUndefined() {
+			keyValue = e.rt.keyToValue(key)
+		}
+		return e.rt.call(e.replacer, holder, []Value{keyValue, v})
 	}
 	return v, nil
 }
@@ -525,7 +532,6 @@ func (e *jsonEncoder) encode(buf []byte, v Value, prefix string) ([]byte, bool, 
 		}
 		buf = append(buf, '[')
 		buf = append(buf, open...)
-		var keybuf []byte
 		for i := int64(0); i < a.n; i++ {
 			// A dense array is read without the script running, so the
 			// walk checks for an interrupt itself; and what it writes may
@@ -546,8 +552,14 @@ func (e *jsonEncoder) encode(buf []byte, v Value, prefix string) ([]byte, bool, 
 			if e.needsApply(el) {
 				// The key reaches the replacer as a string, the way a property
 				// name does: an array index is not a number here.
-				keybuf = strconv.AppendInt(keybuf[:0], i, 10)
-				el, err = e.apply(v, Str(NewString(string(keybuf))), el)
+				var key Atom
+				if i <= math.MaxUint32 {
+					key = e.rt.atoms.indexAtom(uint32(i))
+				} else {
+					// A proxy over an array can report a length past uint32.
+					key = e.rt.atoms.intern(strconv.FormatInt(i, 10))
+				}
+				el, err = e.apply(v, key, el)
 				if err != nil {
 					return buf, false, err
 				}
@@ -570,34 +582,54 @@ func (e *jsonEncoder) encode(buf []byte, v Value, prefix string) ([]byte, bool, 
 	// An explicit key list fixes both which properties appear and their order;
 	// otherwise the object's own enumerable string keys are used.
 	keys := e.allowed
+	var localKeys [8]Atom
 	if !e.hasAllowed {
-		keys = nil
-		var own []Atom
-		if p := proxyOf(o); p != nil {
-			// A proxy's keys come from its ownKeys trap, which the plain
-			// property table would not reflect.
-			var err error
-			if own, err = e.rt.proxyOwnKeys(p); err != nil {
-				return buf, false, err
-			}
-		} else {
-			var err error
-			if own, err = e.rt.ownKeysOf(o, false); err != nil {
-				return buf, false, err
+		// Small ordinary objects can snapshot their keys on the stack. Keep
+		// the snapshot even for getters: one may change the keys still to come.
+		plain := o.class == ClassObject && o.ext == nil && len(o.vals) <= len(localKeys)
+		if plain {
+			keys = localKeys[:0]
+			for _, p := range o.keys() {
+				if p.flags&propDeleted != 0 || p.flags&propEnumerable == 0 || e.rt.atoms.symbol(p.key) != nil {
+					continue
+				}
+				if _, index := e.rt.atoms.arrayIndex(p.key); index {
+					plain = false
+					break
+				}
+				keys = append(keys, p.key)
 			}
 		}
-		for _, k := range own {
-			if e.rt.atoms.symbol(k) != nil {
-				continue
+		if !plain {
+			keys = nil
+			var own []Atom
+			if p := proxyOf(o); p != nil {
+				// A proxy's keys come from its ownKeys trap, which the plain
+				// property table would not reflect.
+				var err error
+				if own, err = e.rt.proxyOwnKeys(p); err != nil {
+					return buf, false, err
+				}
+			} else {
+				var err error
+				if own, err = e.rt.ownKeysOf(o, false); err != nil {
+					return buf, false, err
+				}
 			}
-			enumerable, err := e.rt.isEnumerable(o, k)
-			if err != nil {
-				return buf, false, err
+			keys = own[:0]
+			for _, k := range own {
+				if e.rt.atoms.symbol(k) != nil {
+					continue
+				}
+				enumerable, err := e.rt.isEnumerable(o, k)
+				if err != nil {
+					return buf, false, err
+				}
+				if !enumerable {
+					continue
+				}
+				keys = append(keys, k)
 			}
-			if !enumerable {
-				continue
-			}
-			keys = append(keys, k)
 		}
 	}
 
@@ -621,7 +653,7 @@ func (e *jsonEncoder) encode(buf []byte, v Value, prefix string) ([]byte, bool, 
 			return buf, false, err
 		}
 		if e.needsApply(val) {
-			if val, err = e.apply(v, e.rt.keyToValue(k), val); err != nil {
+			if val, err = e.apply(v, k, val); err != nil {
 				return buf, false, err
 			}
 		}

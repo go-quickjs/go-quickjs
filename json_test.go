@@ -111,6 +111,34 @@ func TestJSONKeysAreStrings(t *testing.T) {
 	}
 }
 
+func TestJSONStringifyKeySnapshots(t *testing.T) {
+	evalCases(t, []struct{ src, want string }{
+		// toJSON sees the root, property and array index as strings. The
+		// replacer sees that same key after toJSON returns.
+		{`var seen = []; var value = {toJSON(k) { seen.push("j:" + typeof k + ":" + k); return 1 }};
+		  JSON.stringify({a: value, b: [value]}, function(k, v) { if (v === 1) seen.push("r:" + typeof k + ":" + k); return v });
+		  JSON.stringify(value); seen.join("|")`, "j:string:a|r:string:a|j:string:0|r:string:0|j:string:"},
+		// The keys are fixed before a getter adds one, deletes another, or
+		// changes its enumerability. Values are still read when visited.
+		{`var o = {get a() { this.c = 3; delete this.b; return 1 }, b: 2}; JSON.stringify(o)`, `{"a":1}`},
+		{`var o = {get a() { Object.defineProperty(this, "b", {enumerable: false}); return 1 }, b: 2}; JSON.stringify(o)`, `{"a":1,"b":2}`},
+		{`var o = {get a() { delete this.b; return 1 }, b: 2};
+		  Object.setPrototypeOf(o, {b: 4}); JSON.stringify(o)`, `{"a":1,"b":4}`},
+		// Indices precede other strings, including indices too large for a
+		// packed atom. Non-enumerable and symbol keys do not appear.
+		{`var o = {z: 0, 2: 2, 1: 1, 4294967294: 3, a: 4};
+		  o[Symbol()] = 5; Object.defineProperty(o, "hidden", {value: 6});
+		  JSON.stringify(o)`, `{"1":1,"2":2,"4294967294":3,"z":0,"a":4}`},
+		// Proxy ownKeys order and descriptor traps must still be honored.
+		{`JSON.stringify(new Proxy({a: 1, b: 2}, {
+		    ownKeys() { return ["b", "a"] },
+		    getOwnPropertyDescriptor(t, k) { return {configurable: true, enumerable: k === "b", value: t[k]} }
+		  }))`, `{"b":2}`},
+		// Recursive stringify calls use independent snapshots.
+		{`var o = {get a() { return JSON.stringify({c: 3, d: 4}) }, b: 2}; JSON.stringify(o)`, `{"a":"{\"c\":3,\"d\":4}","b":2}`},
+	})
+}
+
 // TestJSONReviverWalk covers what the reviver may do to the object it is
 // walking. The keys are settled before the walk starts, a refusal to write back
 // is ignored, and a trap that throws is not.

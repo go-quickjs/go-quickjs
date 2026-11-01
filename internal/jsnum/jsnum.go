@@ -16,8 +16,6 @@ import (
 	"strings"
 )
 
-// FormatFloat renders v using the ECMAScript Number::toString algorithm in
-// base 10.
 // AppendFloat appends what FormatFloat would return.
 //
 // An integer below 2^53 is written digit by digit, which is what a serializer
@@ -27,7 +25,8 @@ import (
 // The bound is where integers stop being exactly representable. Above it a
 // double stands for a range of integers, and what must be printed is the
 // shortest decimal that reads back as the same double rather than the exact
-// value -- the two differ, so anything that large goes the long way.
+// value -- the two differ, so anything that large uses strconv's shortest
+// representation, with JavaScript's fixed/exponential thresholds.
 func AppendFloat(dst []byte, v float64) []byte {
 	if v == 0 {
 		// Negative zero included, which prints as "0".
@@ -39,9 +38,30 @@ func AppendFloat(dst []byte, v float64) []byte {
 			return strconv.AppendInt(dst, i, 10)
 		}
 	}
-	return append(dst, FormatFloat(v)...)
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return append(dst, FormatFloat(v)...)
+	}
+	if a := math.Abs(v); a >= 1e-6 && a < 1e21 {
+		return strconv.AppendFloat(dst, v, 'f', -1, 64)
+	}
+	// strconv writes the same shortest digits, but pads an exponent below
+	// ten with a zero. JavaScript's exponential form has no such padding.
+	start := len(dst)
+	dst = strconv.AppendFloat(dst, v, 'e', -1, 64)
+	for i := len(dst) - 1; i >= start; i-- {
+		if dst[i] == 'e' {
+			if dst[i+2] == '0' {
+				copy(dst[i+2:], dst[i+3:])
+				dst = dst[:len(dst)-1]
+			}
+			break
+		}
+	}
+	return dst
 }
 
+// FormatFloat renders v using the ECMAScript Number::toString algorithm in
+// base 10.
 func FormatFloat(v float64) string {
 	switch {
 	case math.IsNaN(v):

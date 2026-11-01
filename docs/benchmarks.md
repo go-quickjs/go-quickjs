@@ -53,6 +53,49 @@ while the runtime benchmarks construct and close one runtime per operation.
 with one second per benchmark and `-benchmem`, not repeated measurements
 inside a single test process.
 
+## JSON parsing and serialization
+
+`BenchmarkJSONParse` and `BenchmarkJSONStringify` use a 161,481-byte UTF-8
+document containing 1,000 records, nested objects and arrays, fractional
+numbers, escaped strings and Unicode. Input construction, compilation and
+runtime setup are outside the measured interval. Each operation parses or
+serializes the whole document; `BenchmarkJSONRoundTrip` instead runs 500
+small round trips per operation.
+
+```sh
+CGO_ENABLED=0 go test -c -pgo=off -trimpath -o /tmp/quickjs-json.test .
+TZ=UTC GOMAXPROCS=1 /usr/bin/time -l /tmp/quickjs-json.test \
+  -test.run '^$' -test.bench '^BenchmarkJSONStringify$' \
+  -test.benchtime=1s -test.benchmem
+```
+
+Run each benchmark separately in fresh processes, alternating the two builds.
+On an Apple M5 Max, macOS/arm64, Go 1.27.3, with JIT disabled and the settings
+above, five runs per benchmark give these per-metric medians against
+`4bd21ea0`:
+
+| Operation | Before | After | Bytes allocated before / after | Allocations before / after |
+|---|---:|---:|---:|---:|
+| Parse | 690 us | 683 us | 876,163 / 876,163 | 12,015 / 12,015 |
+| Stringify | 1,093 us | 803 us | 1,114,450 / 850,801 | 11,268 / 25 |
+| 500 round trips | 598 us | 534 us | 612,013 / 544,012 | 8,500 / 6,500 |
+
+Serialization creates callback key strings only when a callback observes
+them, snapshots small ordinary objects' keys on the stack, and writes
+fractional numbers directly into the output buffer while preserving
+JavaScript's number-formatting rules. The parser is unchanged; its timing
+difference is measurement variation.
+
+With `-test.benchtime=1x`, five fresh processes measure the first stringify
+after fixture setup at 972 us before and 705 us after, with 11,293 versus
+50 allocations. This excludes runtime construction and fixture setup but
+includes the first use of the JSON builtin. No work moves to later use and
+no persistent cache is added. Peak process RSS for the one-second runs,
+including untimed setup, is 41.36 / 41.02 MiB for stringify, 52.88 / 53.09 MiB
+for parse and 30.36 / 30.45 MiB for round trips. The `qjs` binaries are both
+42,055,698 bytes. Four balanced V8 code placements, two comparison rounds,
+give 194.4 / 195.6 ms for fixed work, essentially level.
+
 ## Loading large bundles
 
 The optional open-source corpus uses two unmodified MIT-licensed upstream

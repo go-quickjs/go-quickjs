@@ -73,10 +73,17 @@ func TestAppendFloatMatchesFormatFloat(t *testing.T) {
 	for v := 1.0; v < 1e300; v *= 7.3 {
 		values = append(values, v, -v, math.Trunc(v), math.Nextafter(v, 0))
 	}
+	for _, v := range []float64{1e-6, 1e21, 1e-7, 1e9} {
+		values = append(values, v, -v, math.Nextafter(v, 0), math.Nextafter(v, math.Inf(1)))
+	}
+	rng := rand.New(rand.NewSource(1))
+	for i := 0; i < 10000; i++ {
+		values = append(values, math.Float64frombits(rng.Uint64()))
+	}
 	for _, v := range values {
 		want := FormatFloat(v)
-		if got := string(AppendFloat(nil, v)); got != want {
-			t.Errorf("AppendFloat(%v) = %q, want %q", v, got, want)
+		if got := string(AppendFloat([]byte("n="), v)); got != "n="+want {
+			t.Errorf("AppendFloat(%v) = %q, want %q", v, got, "n="+want)
 		}
 	}
 }
