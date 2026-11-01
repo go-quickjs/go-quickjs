@@ -7,12 +7,13 @@ import (
 	"testing"
 )
 
-// The tree tier's object literals (zzz_zliteral.go) and additions to
-// captured bindings (zzz_zupvstr.go) answer as the interpreter does with
-// the JIT on too, the tree tier warming code up and running what native
-// code leaves -- under every stress setting, with the collector idle and
-// while it marks -- and native code runs some of each.
-func TestJITTreeLiteralsAndUpvalueAdds(t *testing.T) {
+// The tree tier's object literals (zzz_zliteral.go), additions to
+// captured bindings (zzz_zupvstr.go), and push and pop (pureElemOp, which
+// native code's growth of an array calls too) answer as the interpreter
+// does with the JIT on, the tree tier warming code up and running what
+// native code leaves -- under every stress setting, with the collector
+// idle and while it marks -- and native code runs some of each.
+func TestJITLiteralsUpvalueAddsPushes(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -20,7 +21,7 @@ func TestJITTreeLiteralsAndUpvalueAdds(t *testing.T) {
 		// The string doubled past the longest would pass jitDifferential's
 		// memory limit first: doubled twelve times.
 		upvalues := strings.Replace(upvalueAddTestSrc, "i < 40", "i < 12", 1)
-		for name, src := range map[string]string{"literals": literalTestSrc, "upvalue adds": upvalues} {
+		for name, src := range map[string]string{"literals": literalTestSrc, "upvalue adds": upvalues, "push and pop": pushTestSrc} {
 			t.Run(name, func(t *testing.T) {
 				if marking {
 					jitMarkingForTest(t)

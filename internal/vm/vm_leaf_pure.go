@@ -654,18 +654,27 @@ func (r *Runtime) pureElemOp(op uint8, this Value, args []Value, mayStore bool) 
 	}
 	switch op {
 	case elemPush:
+		els := o.elemsOf()
 		if !r.noInheritedIndices(o) || o.flags&(objExtensible|objArrayLengthWritable) != objExtensible|objArrayLengthWritable ||
-			int64(len(o.elemsOf()))+int64(len(args)) > maxArrayLength {
+			int64(len(els))+int64(len(args)) > maxArrayLength {
 			return Undefined, false
 		}
-		o.extOf().elems = append(o.elemsOf(), args...)
-		return Float(float64(len(o.elemsOf()))), true
+		// Each element stored where it goes: a slice appended is a call
+		// of the runtime's copy, made for any length, where most pushes
+		// are of one.
+		e := o.extOf()
+		for _, v := range args {
+			els = append(els, v)
+		}
+		e.elems = els
+		return Float(float64(len(els))), true
 	case elemPop:
-		n := len(o.elemsOf()) - 1
-		if n < 0 || o.flags&objArrayLengthWritable == 0 || isHole(o.elemsOf()[n]) {
+		els := o.elemsOf()
+		n := len(els) - 1
+		if n < 0 || o.flags&objArrayLengthWritable == 0 || isHole(els[n]) {
 			return Undefined, false
 		}
-		v := o.elemsOf()[n]
+		v := els[n]
 		o.extOf().elems[n] = Undefined
 		o.extOf().elems = o.elemsOf()[:n]
 		return v, true
