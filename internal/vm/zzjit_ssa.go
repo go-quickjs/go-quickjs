@@ -3913,6 +3913,14 @@ func jitHostCall(ctx *abi.Context) bool {
 		}
 		return true
 	case ssa.GoNewArray:
+		form := int(ctx.GoOp >> abi.GoOpIndexShift)
+		if form&ssa.NewArrayTyped != 0 {
+			v, ok := r.jitNewTypedResult(form, jitGoArg(ctx, 0), jitGoArg(ctx, 1))
+			if ok {
+				*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
+			}
+			return ok
+		}
 		// map's or filter's array, of no length, room for the array's in
 		// map's: where the array's species is Array's (plainSpecies), as
 		// their ArraySpeciesCreate would make it.
@@ -3922,7 +3930,7 @@ func jitHostCall(ctx *abi.Context) bool {
 			return false
 		}
 		room := int64(0)
-		if ctx.GoOp>>abi.GoOpIndexShift&1 != 0 {
+		if form&ssa.NewArrayRoom != 0 {
 			room = int64(n.Number())
 		}
 		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = Obj(r.newArrayOfLength(room))
@@ -8173,7 +8181,7 @@ func (r *Runtime) jitLoopFinish(f *frame, pc int, loop uint64, after bool, v Val
 	if typed {
 		t, _ = arr.Object().dataOf().(*typedArrayData)
 	}
-	if fe == nil || !arr.IsObject() || !k.IsNumber() || !n.IsNumber() || makes && (typed || !out.IsObject()) || typed && t == nil {
+	if fe == nil || !arr.IsObject() || !k.IsNumber() || !n.IsNumber() || makes && !out.IsObject() || typed && t == nil {
 		panic("jit: a loop's slots are not a built-in's")
 	}
 	if !after && !res.IsUninitialized() {
@@ -8191,8 +8199,19 @@ func (r *Runtime) jitLoopFinish(f *frame, pc int, loop uint64, after bool, v Val
 	defer func() { r.frameDepth-- }()
 	a := &arrayLike{o: arr.Object(), n: int64(n.Number())}
 	var o *arrayOut
-	if makes {
-		// The loop's array, of the realm's species, as GoNewArray made it.
+	var mapped *typedArrayData
+	switch {
+	case typed && kind == abi.LoopMap:
+		// The typed array of the length GoNewArray made, its elements
+		// stored at their indices, as %TypedArray%.prototype.map stores
+		// them.
+		mapped, _ = out.Object().dataOf().(*typedArrayData)
+		if mapped == nil {
+			panic("jit: a typed array's map has no typed array")
+		}
+	case makes:
+		// The loop's array, of the realm's species, as GoNewArray made it:
+		// a typed array's filter's, the elements it kept.
 		o = &arrayOut{o: out.Object(), plain: true, n: int64(len(out.Object().elemsOf()))}
 	}
 	// use is what the built-in does with the callback's result res at index
@@ -8202,6 +8221,14 @@ func (r *Runtime) jitLoopFinish(f *frame, pc int, loop uint64, after bool, v Val
 		case abi.LoopReduce:
 			this = res
 		case abi.LoopMap:
+			if mapped != nil {
+				// A write past the end of a result that has since shrunk is
+				// dropped, as any such write is.
+				if err := r.setElem(mapped, int(i), res); err != nil {
+					return true, Undefined, err
+				}
+				break
+			}
 			if err := o.push(r, res); err != nil {
 				return true, Undefined, err
 			}
@@ -8282,6 +8309,15 @@ func (r *Runtime) jitLoopFinish(f *frame, pc int, loop uint64, after bool, v Val
 	case abi.LoopReduce:
 		return this, nil
 	case abi.LoopMap, abi.LoopFilter:
+		switch {
+		case mapped != nil:
+			return out, nil
+		case typed:
+			// The typed array of the elements kept, of the species, as
+			// the method makes it after its loop.
+			kept := o.o.elemsOf()
+			return r.fillTypedArrayLike(arr, t, kept[:min(int(o.n), len(kept))])
+		}
 		return o.value(), nil
 	case abi.LoopSome:
 		return False, nil
@@ -8291,6 +8327,92 @@ func (r *Runtime) jitLoopFinish(f *frame, pc int, loop uint64, after bool, v Val
 		return Float(-1), nil
 	}
 	return Undefined, nil
+}
+
+// jitNewTypedResult is GoNewArray's for a typed array's map or filter
+// (ssa.NewArrayTyped): map's result, a typed array of recv's type and the
+// length n, as TypedArraySpeciesCreate makes it; filter's Array of no
+// length, which its loop appends the elements it keeps to; and, with
+// ssa.NewArrayFill, filter's result made of that Array, kept, as the
+// method makes it after its loop. Each only where recv is a typed array a
+// loop is made over (jitLoopTyped) whose species is its type's own
+// constructor, as it was made (jitPlainTypedSpecies), so that making it
+// runs nothing; anything else, and anything that would throw, is refused,
+// for Go to make it after an exit.
+func (r *Runtime) jitNewTypedResult(form int, recv, n Value) (Value, bool) {
+	t := r.jitLoopTyped(recv)
+	if t == nil || !r.jitPlainTypedSpecies(recv.Object(), t) {
+		return Undefined, false
+	}
+	// The species its type's own constructor, which makes a view of a
+	// buffer of its own, as one of the type is made here: with no frame,
+	// which would be written over a native callee's level's, still to be
+	// made (jitGoCallNested).
+	made := func(length int) (*Object, *typedArrayData, bool) {
+		o := newObject(r.typedArrayProtoFor(t.kind), ClassTypedArray)
+		nt, err := r.allocTypedArrayChecked(o, t.kind, int64(length))
+		return o, nt, err == nil
+	}
+	switch {
+	case form&ssa.NewArrayFill != 0:
+		kept := r.plainArray(n)
+		if kept == nil {
+			return Undefined, false
+		}
+		els := kept.elemsOf()
+		for _, v := range els {
+			if !v.IsNumber() {
+				return Undefined, false
+			}
+		}
+		o, nt, ok := made(len(els))
+		if !ok {
+			return Undefined, false
+		}
+		for i, v := range els {
+			// Numbers, which convert running nothing.
+			if err := r.setElem(nt, i, v); err != nil {
+				return Undefined, false
+			}
+		}
+		return Obj(o), true
+	case form&ssa.NewArrayRoom != 0:
+		if !n.IsNumber() || n.Number() != float64(t.count()) {
+			return Undefined, false
+		}
+		o, _, ok := made(t.count())
+		if !ok {
+			return Undefined, false
+		}
+		return Obj(o), true
+	}
+	return Obj(r.newArrayOfLength(0)), true
+}
+
+// jitPlainTypedSpecies reports whether TypedArraySpeciesCreate of o, a
+// typed array of t, makes one of its type's own constructor without
+// running anything: o has no constructor of its own, its prototype's is
+// the type's constructor, a data property, and that constructor's
+// Symbol.species is %TypedArray%'s accessor as it was made -- as
+// plainSpecies asks of an array.
+func (r *Runtime) jitPlainTypedSpecies(o *Object, t *typedArrayData) bool {
+	if o.findOwn(atomConstructor) >= 0 || o.proto == nil {
+		return false
+	}
+	ctor := r.typedArrayCtorFor(t.kind)
+	if c := o.proto.getOwn(atomConstructor); !c.ok() || c.flags()&propAccessor != 0 || !c.value().IsObject() || c.value().Object() != ctor {
+		return false
+	}
+	species := r.atoms.internSymbol(r.wellKnown.species)
+	if ctor.findOwn(species) >= 0 || ctor.proto != r.typedArrayCtor || r.jitTypedSpecies == nil {
+		return false
+	}
+	sp := r.typedArrayCtor.getOwn(species)
+	if !sp.ok() || sp.flags()&propAccessor == 0 {
+		return false
+	}
+	a := sp.value().accessorPair()
+	return a != nil && a.getter == r.jitTypedSpecies
 }
 
 // jitSearchKind is the kind of o among jitSearches, or -1.

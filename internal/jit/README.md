@@ -263,7 +263,12 @@ method of those names, is made a loop of the code's own, as V8's
 JSCallReducer reduces it (`ssa.ForEachSite`): the array checked and its
 length read once, then each element given to the callback, called
 natively. `map`'s and `filter`'s arrays Go makes (`ssa.GoNewArray`, where
-the array's species is `Array`), and the code appends to them. A hole, or
+the array's species is `Array`), and the code appends to them; a typed
+array's `map`'s is a typed array of its type and length, where its
+species is its type's own constructor, which the code stores each result
+in as a number, and its `filter`'s an `Array` the code appends the
+elements it keeps to, of which Go makes the typed array after the loop,
+as the method makes it then. A hole, or
 anything the loop's checks find, leaves, and Go goes on with the loop from
 that index (`abi.Context`'s `Loop`), then native code after the call.
 The callback is inlined in the loop where any callee may be, under the

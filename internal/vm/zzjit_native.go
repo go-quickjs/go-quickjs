@@ -180,10 +180,13 @@ type jitRealmFields struct {
 	// jitLoops are Array.prototype's methods native code makes loops of
 	// (ssa.ForEachSite), by their kind (abi.LoopForEach and those after
 	// it); nil for none. jitTypedLoops are %TypedArray%.prototype's of the
-	// same names, those whose loops native code makes of a typed array's
-	// calls (abi.LoopTyped): all but map and filter, whose result is a
-	// typed array its species makes.
+	// same names, whose loops native code makes of a typed array's calls
+	// (abi.LoopTyped): map's and filter's results typed arrays Go makes
+	// where the species is the type's own (jitNewTypedResult).
 	jitLoops, jitTypedLoops [abi.LoopKinds]*Object
+	// jitTypedSpecies is %TypedArray%[Symbol.species]'s getter as the
+	// realm made it (jitPlainTypedSpecies).
+	jitTypedSpecies *Object
 	// jitParseInt is the global parseInt, Number.parseInt too, whose call
 	// of a number native code makes itself (ssa.ParseIntFeedback).
 	jitParseInt *Object
@@ -286,12 +289,23 @@ func (r *Runtime) recordJITSubstrings() {
 			}
 		}
 	}
+	// %TypedArray%[Symbol.species]'s getter, as the realm made it, which a
+	// typed array's map and filter ask their species is
+	// (jitPlainTypedSpecies).
+	r.jitTypedSpecies = nil
+	if r.typedArrayCtor != nil {
+		if sp := r.typedArrayCtor.getOwn(r.atoms.internSymbol(r.wellKnown.species)); sp.ok() && sp.flags()&propAccessor != 0 {
+			if a := sp.value().accessorPair(); a != nil {
+				r.jitTypedSpecies = a.getter
+			}
+		}
+	}
 	for kind, name := range jitLoopNames {
 		r.jitLoops[kind], r.jitTypedLoops[kind] = nil, nil
 		if m := r.proto.array.getOwn(r.atoms.intern(name)); name != "" && m.ok() && m.value().IsObject() {
 			r.jitLoops[kind] = m.value().Object()
 		}
-		if kind == abi.LoopMap || kind == abi.LoopFilter || r.typedArrayProto == nil {
+		if r.typedArrayProto == nil {
 			continue
 		}
 		if m := r.typedArrayProto.getOwn(r.atoms.intern(name)); name != "" && m.ok() && m.value().IsObject() {

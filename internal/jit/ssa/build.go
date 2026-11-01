@@ -253,7 +253,7 @@ func (b *builder) forEachAt(pc int) (ForEachSite, bool) {
 	}
 	site, ok := f.ForEach(pc)
 	typed := site.Kind&abi.LoopTyped != 0
-	if base := site.Kind & abi.LoopKindMask; !ok || base <= 0 || base >= abi.LoopKinds || makesArray(base) && (typed || !b.goCalls()) || typed && site.Proto == 0 {
+	if base := site.Kind & abi.LoopKindMask; !ok || base <= 0 || base >= abi.LoopKinds || makesArray(base) && !b.goCalls() || typed && site.Proto == 0 {
 		return ForEachSite{}, false
 	}
 	return site, true
@@ -484,13 +484,21 @@ func (b *builder) forEachCall(blk *Block, pc int, fp forEachPlan) {
 	// map's and filter's array, as their ArraySpeciesCreate makes it, of
 	// the length's room, map's: Go makes it where the array's species is
 	// Array's, its constructor as it was made, and refuses otherwise,
-	// leaving the call to Go.
+	// leaving the call to Go. A typed array's map's is a typed array of
+	// the length, as its TypedArraySpeciesCreate makes it, where the
+	// species is the type's own constructor as it was made; a typed
+	// array's filter's an Array its kept elements are appended to, of
+	// which Go makes the typed array after the loop (GoNewArray's
+	// NewArrayFill), when the specification makes it, of the count kept.
 	out := undefined(blk)
 	if makesArray(kind) {
 		mk := at(blk, call, OpCall, Tagged, recv, boxF(blk, n))
 		site := &CallSite{Go: GoNewArray, ThisSlot: -1}
 		if kind == abi.LoopMap {
-			site.Argc = 1
+			site.Argc = NewArrayRoom
+		}
+		if typed {
+			site.Argc |= NewArrayTyped
 		}
 		f.cache(mk).Calls, mk.Index = []*CallSite{site}, fp.keep+1
 		cell := f.newValue(blk, OpCallCell, Source, mk)
@@ -602,9 +610,17 @@ func (b *builder) forEachCall(blk *Block, pc int, fp forEachPlan) {
 		case abi.LoopReduce:
 			b.write(base+loopThis, body, v)
 		case abi.LoopMap:
+			st := state(body, 0)
+			if typed {
+				// Stored at the index of the typed array of the length,
+				// as a number, converted to its type as a store converts
+				// one (OpElemWrite); anything else -- a BigInt, an object
+				// whose valueOf runs -- leaves for Go to store, and go on.
+				at(body, st, OpElemWrite, None, at(body, st, OpIndexedOf, Ptr, out), k, at(body, st, OpUnboxF64, Float64, v))
+				break
+			}
 			// Appended at the index, which is the array's length: the
 			// elements before it all appended.
-			st := state(body, 0)
 			at(body, st, OpElemStore, None, at(body, st, OpArrayOf, Ptr, out), k, v).Index = StoreFresh
 		default:
 			test := at(body, state(body, 0), OpTruth, Bool, v)
@@ -641,6 +657,20 @@ func (b *builder) forEachCall(blk *Block, pc int, fp forEachPlan) {
 		b.write(base+loopElem, step, undefined(step))
 	}
 	b.seal(head)
+	if typed && kind == abi.LoopFilter {
+		// The typed array of the elements kept, which Go makes of them as
+		// %TypedArray%.prototype.filter does after its loop, where the
+		// species is the type's own constructor as it was made; an exit
+		// at its refusal has Go make it from the loop's end, as the
+		// method would.
+		st := state(cont, 0)
+		mk := at(cont, st, OpCall, Tagged, recv, out)
+		f.cache(mk).Calls, mk.Index = []*CallSite{{Go: GoNewArray, Argc: NewArrayTyped | NewArrayFill, ThisSlot: -1}}, fp.keep
+		cell := f.newValue(cont, OpCallCell, Source, mk)
+		made := f.newValue(cont, OpKept, Tagged, cell, mk)
+		made.Shadow = cell
+		b.write(dest, cont, made)
+	}
 	done := f.newValue(cont, OpLoopMark, None)
 	done.Const = ir.Value{}
 	if reduce {
@@ -1653,11 +1683,18 @@ type GoOp uint8
 // GoNewArray makes the array a loop of map or filter fills (forEachCall),
 // as their ArraySpeciesCreate makes it, the array they are called on the
 // first operand and its length the second: an Array of no length, with
-// room for that many elements if Argc is 1, map's, where the array's
-// species is Array's -- no constructor of its own, Array.prototype's and
-// Array[Symbol.species] as they were made -- as V8's code checks its
-// ArraySpeciesProtector. It refuses any other, which leaves the call for Go
-// to make after an exit.
+// room for that many elements if Argc has NewArrayRoom, map's, where the
+// array's species is Array's -- no constructor of its own,
+// Array.prototype's and Array[Symbol.species] as they were made -- as
+// V8's code checks its ArraySpeciesProtector. It refuses any other, which
+// leaves the call for Go to make after an exit. With NewArrayTyped the
+// first operand is a typed array: map's is a typed array of its type and
+// the length, filter's an Array of no length; with NewArrayFill too, the
+// second operand is that Array, and filter's result is made of its
+// elements, as %TypedArray%.prototype.filter makes it after its loop --
+// each where the typed array's species is its type's own constructor, its
+// prototype's constructor and %TypedArray%[Symbol.species] as they were
+// made.
 //
 // GoArith is an arithmetic, bitwise or shift operator -- ir's Operator in
 // Argc -- of two BigInts, at a site that met BigInts and whose speculation
@@ -1727,6 +1764,13 @@ const (
 	GoHost
 	GoStringAbsent
 	GoIterResult
+)
+
+// GoNewArray's flags, in its CallSite's Argc.
+const (
+	NewArrayRoom = 1 << iota
+	NewArrayTyped
+	NewArrayFill
 )
 
 // GoIterResult is the result object of a call of a generator's next
