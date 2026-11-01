@@ -53,6 +53,90 @@ while the runtime benchmarks construct and close one runtime per operation.
 with one second per benchmark and `-benchmem`, not repeated measurements
 inside a single test process.
 
+## Loading large bundles
+
+The optional open-source corpus uses two unmodified MIT-licensed upstream
+builds: [Three.js r160][three-bundle] (1,315,993 bytes, [license][three-license])
+and [Babel standalone 7.26.10][babel-bundle] (3,014,882 bytes,
+[license][babel-license]). Three.js exercises a large unminified library;
+Babel adds a larger minified bundle with many nested functions. The
+tests pin each file's SHA-256 and run without a network connection. Download
+the corpus once, outside the checkout, as with the V8 suites:
+
+```sh
+go run ./internal/cmd/bundlefetch -dir /tmp/quickjs-bundles
+export QUICKJS_BUNDLE_DIR=/tmp/quickjs-bundles
+
+go test . -run '^TestOpenSourceBundles$' -count=1
+GOMAXPROCS=1 go test ./internal/compiler -run '^$' \
+  -bench '^BenchmarkCompileBundle$' -benchmem
+```
+
+`BenchmarkCompileBundle` parses once outside the measured interval and
+compiles the AST anew each iteration, reporting compiler allocations.
+`BenchmarkLoadBundle` measures parsing, compilation and execution in a new
+runtime each iteration. Runtime construction, file reads, host setup and
+checks are outside its interval. Both bundles run as classic scripts, as
+`Runtime.EvalFile` does; the host supplies a console stub. The checks exercise
+Three.js vector operations and use Babel to transform an arrow function,
+with exact expected results. Without `QUICKJS_BUNDLE_DIR` the optional tests
+and benchmarks skip; with it, missing files or checksum mismatches fail.
+
+For first-use latency, build once and run one operation in each fresh
+process, alternating the two builds being compared:
+
+```sh
+CGO_ENABLED=0 go test -c -pgo=off -trimpath -o /tmp/quickjs-load.test .
+TZ=UTC GOMAXPROCS=1 /usr/bin/time -l /tmp/quickjs-load.test \
+  -test.run '^$' -test.bench '^BenchmarkLoadBundle/Three$' \
+  -test.benchtime=1x -test.benchmem
+```
+
+Choose `Babel` separately so that each fresh process loads just one bundle.
+On macOS, `time -l` reports peak process RSS; Linux's equivalent is `time -v`.
+
+On an Apple M5 Max, macOS/arm64, Go 1.27.3, `GOMAXPROCS=1`, `TZ=UTC`,
+with `CGO_ENABLED=0 -pgo=off -trimpath` and JIT disabled, the compiler
+changes compared with `925cf47c` give these medians. Compiler figures use
+five fresh processes with 500 ms per benchmark; load figures use twenty
+fresh processes per bundle, one load per process. Builds run sequentially
+in alternating order, with no concurrent builds or tests:
+
+| Bundle | Compile before | Compile after | Load before | Load after |
+|---|---:|---:|---:|---:|
+| Three.js | 17.89 ms | 14.52 ms | 40.77 ms | 36.46 ms |
+| Babel | 156.07 ms | 43.12 ms | 303.38 ms | 198.66 ms |
+
+Large functions now index local names from 32 bindings onward, restoring
+shadowed bindings on scope exit; smaller functions keep linear lookup.
+Compiler state and the buffers used to collect closure captures are reused
+with the existing scratch buffers. Returned functions own exact-size copies
+of their tables, and released compiler state is zeroed so the pool retains
+neither the source nor settings from a previous function. Work is not moved
+to later feature use.
+
+Before/after memory figures for the same runs are below. Allocations are
+total bytes allocated per operation, in decimal MB. Peak RSS is the whole
+test process, including its untimed setup and functional checks, in MiB:
+
+| Bundle | Compiler MB before / after | Load MB before / after | Peak RSS MiB before / after |
+|---|---:|---:|---:|
+| Three.js | 8.18 / 6.25 | 25.97 / 24.24 | 47.41 / 47.35 |
+| Babel | 26.07 / 16.62 | 115.37 / 109.44 | 112.08 / 116.68 |
+
+Babel's peak RSS rises by 4.60 MiB despite the lower allocation totals.
+The language/Annex B conformance run's peak RSS changes from 546.19 to
+557.30 MiB in a separate single-process comparison. The `qjs` binary grows
+by 432 bytes, from 42,055,266 to 42,055,698 bytes. V8 fixed work (`-n 5`,
+three alternating fresh processes per build) stays level: 1160.2 versus
+1161.6 ms, with 9.0 MB live after GC in both builds. The hot VM functions
+have identical addresses in these builds.
+
+[three-bundle]: https://unpkg.com/three@0.160.0/build/three.js
+[three-license]: https://github.com/mrdoob/three.js/blob/r160/LICENSE
+[babel-bundle]: https://unpkg.com/@babel/standalone@7.26.10/babel.min.js
+[babel-license]: https://github.com/babel/babel/blob/v7.26.10/LICENSE
+
 ## V8 version 7 benchmark suite
 
 `go run ./internal/cmd/v8bench -dir /tmp/v8-v7 -fetch -mode score` runs the

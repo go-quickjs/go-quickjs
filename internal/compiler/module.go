@@ -94,8 +94,7 @@ func CompileModule(prog *ast.Program, opts Options) (fn *bytecode.Function, info
 	c.emit(bytecode.OpGetLocal, uint32(c.completionSlot), 0)
 	c.emit(bytecode.OpReturn, 0, 0)
 	c.finish()
-	c.done()
-	return c.fn, info, nil
+	return c.done(), info, nil
 }
 
 // collectModuleShape records the imports and exports before the body is
@@ -331,8 +330,7 @@ func compileModuleInit(prog *ast.Program, opts Options, info *ModuleInfo, script
 	c.emit(bytecode.OpPushUndef, 0, 0)
 	c.emit(bytecode.OpReturn, 0, 0)
 	c.finish()
-	c.done()
-	return c.fn
+	return c.done()
 }
 
 // lexicalName is a top-level lexical binding and the kind of declaration it

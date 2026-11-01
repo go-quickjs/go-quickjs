@@ -36,9 +36,9 @@ func (c *compiler) compileFunctionLiteral(fn *ast.FuncLit, inferredName string) 
 	}
 
 	sub.compileFunctionBody(fn)
-	sub.release()
+	compiled := sub.release()
 
-	idx := c.addConst(bytecode.Constant{Kind: bytecode.ConstFunction, Fn: sub.fn})
+	idx := c.addConst(bytecode.Constant{Kind: bytecode.ConstFunction, Fn: compiled})
 	c.emit(bytecode.OpClosure, idx, 0)
 }
 
@@ -437,7 +437,7 @@ func (c *compiler) bindParameters(fn *ast.FuncLit, materialize func(), wantArgs 
 func (c *compiler) anonymousParamSlot() uint32 {
 	slot := c.nextSlot
 	c.nextSlot++
-	c.locals = append(c.locals, localVar{
+	c.addLocal(localVar{
 		name: "", kind: bindParam, slot: slot, depth: c.depth, initialized: true,
 	})
 	return slot

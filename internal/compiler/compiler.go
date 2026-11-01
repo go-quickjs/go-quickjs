@@ -127,6 +127,9 @@ type localVar struct {
 	kind  bindKind
 	slot  uint32
 	depth int
+	// previous is the preceding binding of this name, as an index plus one,
+	// when localIndex is in use. Scope exit restores that binding.
+	previous int
 	// withDepth is how many `with` bodies enclosed the declaration. A binding
 	// declared inside one is inner to it, so a reference to it is not probed
 	// against that object.
@@ -270,8 +273,9 @@ type compiler struct {
 	lazyArguments     bool
 	lazyArgumentsSlot uint32
 
-	locals   []localVar
-	nextSlot uint32
+	locals     []localVar
+	localIndex map[string]int
+	nextSlot   uint32
 	// hiddenCount names the compiler-generated bindings, which are spelled
 	// with a character no identifier may contain so that nothing a script
 	// writes can collide with one.
@@ -482,8 +486,7 @@ func Compile(prog *ast.Program, opts Options) (fn *bytecode.Function, err error)
 	c.emit(bytecode.OpGetLocal, uint32(c.completionSlot), 0)
 	c.emit(bytecode.OpReturn, 0, 0)
 	c.finish()
-	c.done()
-	return c.fn, nil
+	return c.done(), nil
 }
 
 // scratch is what compiling one function grows as it goes: its code and
@@ -491,15 +494,18 @@ func Compile(prog *ast.Program, opts Options) (fn *bytecode.Function, err error)
 // that only the compiling needs. A script's functions are compiled one inside
 // another, so a few of these serve them all, in turn.
 type scratch struct {
+	state      compiler
 	code       []bytecode.Instr
 	lines      []bytecode.SourceLoc
 	names      []string
 	consts     []bytecode.Constant
+	upvalues   []bytecode.UpvalueDesc
 	locals     []localVar
 	pending    []bytecode.LocalDesc
 	targets    []bool
 	nameIndex  map[string]uint32
 	constIndex map[constKey]uint32
+	localIndex map[string]int
 }
 
 // scratchPool holds the scratch no function being compiled has.
@@ -533,13 +539,15 @@ func newCompiler(parent *compiler, opts Options) *compiler {
 		pool = scratchPools.Get().(*scratchPool)
 	}
 	s := pool.get()
-	c := &compiler{
+	c := &s.state
+	*c = compiler{
 		fn: &bytecode.Function{
 			Source:    opts.Source,
 			Code:      s.code[:0],
 			Lines:     s.lines[:0],
 			Names:     s.names[:0],
 			Constants: s.consts[:0],
+			Upvalues:  s.upvalues[:0],
 		},
 		parent:        parent,
 		opts:          opts,
@@ -597,13 +605,15 @@ func (c *compiler) finish() {
 // release copies the function's tables out of the scratch they were built
 // in, at their size, and gives the scratch back for the next function. It is
 // the last thing done with a function's compiler.
-func (c *compiler) release() {
+func (c *compiler) release() *bytecode.Function {
 	s := c.scratch
 	fn := c.fn
+	pool := c.pool
 	s.code, fn.Code = fn.Code[:0], exact(fn.Code)
 	s.lines, fn.Lines = fn.Lines[:0], exact(fn.Lines)
 	s.names, fn.Names = fn.Names[:0], exact(fn.Names)
 	s.consts, fn.Constants = fn.Constants[:0], exact(fn.Constants)
+	s.upvalues, fn.Upvalues = fn.Upvalues[:0], exact(fn.Upvalues)
 	s.locals = c.locals[:0]
 	s.pending = c.pendingLocals[:0]
 	s.targets = c.targets[:0]
@@ -612,19 +622,26 @@ func (c *compiler) release() {
 	// for the next compile does not keep this one's script alive.
 	clear(s.names[:cap(s.names)])
 	clear(s.consts[:cap(s.consts)])
+	clear(s.upvalues[:cap(s.upvalues)])
 	clear(s.locals[:cap(s.locals)])
 	clear(s.pending[:cap(s.pending)])
 	clear(s.nameIndex)
 	clear(s.constIndex)
-	c.scratch = nil
-	c.pool.free = append(c.pool.free, s)
+	clear(s.localIndex)
+	// The state is reused too; drop its source, enclosing compiler and all
+	// function-specific settings before making it available to a sibling.
+	*c = compiler{}
+	pool.free = append(pool.free, s)
+	return fn
 }
 
 // done releases a script's own compiler, the last of a compile, and hands
 // its pool on to the next compile. One that fails keeps neither.
-func (c *compiler) done() {
-	c.release()
-	scratchPools.Put(c.pool)
+func (c *compiler) done() *bytecode.Function {
+	pool := c.pool
+	fn := c.release()
+	scratchPools.Put(pool)
+	return fn
 }
 
 // exact is a copy of s no larger than it, or nil for an empty s.
@@ -954,6 +971,16 @@ func (c *compiler) endScope() {
 	for _, l := range c.locals[i:] {
 		c.recordLocal(l)
 	}
+	if c.localIndex != nil {
+		for j := len(c.locals) - 1; j >= i; j-- {
+			l := &c.locals[j]
+			if l.previous == 0 {
+				delete(c.localIndex, l.name)
+			} else {
+				c.localIndex[l.name] = l.previous
+			}
+		}
+	}
 	// Slots are not reclaimed: reusing them would let a closure created in one
 	// iteration of a loop observe a later iteration's value.
 	c.locals = c.locals[:i]
@@ -1005,16 +1032,24 @@ func (c *compiler) declare(name string, kind bindKind, pos int) uint32 {
 	// compilation begins, since the rule is about the shape of the source
 	// rather than the order bindings happen to be created in.
 	if kind == bindVar {
-		for i := range c.locals {
-			if c.locals[i].name == name && c.locals[i].kind == bindVar {
-				return c.locals[i].slot
+		if c.localIndex != nil {
+			for i := c.localIndex[name] - 1; i >= 0; i = c.locals[i].previous - 1 {
+				if c.locals[i].kind == bindVar {
+					return c.locals[i].slot
+				}
+			}
+		} else {
+			for i := range c.locals {
+				if c.locals[i].name == name && c.locals[i].kind == bindVar {
+					return c.locals[i].slot
+				}
 			}
 		}
 	}
 
 	slot := c.nextSlot
 	c.nextSlot++
-	c.locals = append(c.locals, localVar{
+	c.addLocal(localVar{
 		name:      name,
 		kind:      kind,
 		slot:      slot,
@@ -1028,10 +1063,30 @@ func (c *compiler) declare(name string, kind bindKind, pos int) uint32 {
 
 // markInitialized clears a lexical binding's dead zone.
 func (c *compiler) markInitialized(name string) {
-	for i := len(c.locals) - 1; i >= 0; i-- {
-		if c.locals[i].name == name {
-			c.locals[i].initialized = !c.locals[i].jumpedOver
-			return
+	if l, ok := c.resolveLocal(name); ok {
+		l.initialized = !l.jumpedOver
+	}
+}
+
+// Small functions need no map. Bundles with thousands of bindings otherwise
+// scan the whole enclosing function for each identifier in a nested function.
+const indexedLocals = 32
+
+func (c *compiler) addLocal(l localVar) {
+	if c.localIndex != nil {
+		l.previous = c.localIndex[l.name]
+		c.localIndex[l.name] = len(c.locals) + 1
+	}
+	c.locals = append(c.locals, l)
+	if c.localIndex == nil && len(c.locals) == indexedLocals {
+		if c.scratch.localIndex == nil {
+			c.scratch.localIndex = make(map[string]int, indexedLocals)
+		}
+		c.localIndex = c.scratch.localIndex
+		for i := range c.locals {
+			l := &c.locals[i]
+			l.previous = c.localIndex[l.name]
+			c.localIndex[l.name] = i + 1
 		}
 	}
 }
@@ -1082,6 +1137,12 @@ func (c *compiler) callerBinding(name string) (bytecode.EvalBinding, bool) {
 
 // resolveLocal finds a binding in the current function.
 func (c *compiler) resolveLocal(name string) (*localVar, bool) {
+	if c.localIndex != nil {
+		if i := c.localIndex[name]; i != 0 {
+			return &c.locals[i-1], true
+		}
+		return nil, false
+	}
 	for i := len(c.locals) - 1; i >= 0; i-- {
 		if c.locals[i].name == name {
 			return &c.locals[i], true

@@ -306,11 +306,8 @@ func mentionsDeclared(vd *ast.VarDecl, before []ast.Stmt) bool {
 
 // markUninitialized records that a binding is still in its dead zone.
 func (c *compiler) markUninitialized(name string) {
-	for i := len(c.locals) - 1; i >= 0; i-- {
-		if c.locals[i].name == name {
-			c.locals[i].initialized = false
-			return
-		}
+	if l, ok := c.resolveLocal(name); ok {
+		l.initialized = false
 	}
 }
 
