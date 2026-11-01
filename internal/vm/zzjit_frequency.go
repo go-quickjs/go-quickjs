@@ -175,13 +175,20 @@ func jitCountRun(e *jitEntry, cl *closure) {
 // jitCountsCaller reports whether the frame at depth i, a call's caller,
 // may be one whose calls are counted (jitCountCallAt): not a frame of a
 // template whose calls are not (jitCodeFields' jitCounting), which is what
-// almost every call meets once its caller has code -- asked first, and
-// inlined where a call counts, so that it costs a few loads.
+// almost every call meets once its caller has code, nor a built-in's, but
+// Function.prototype.call's and apply's, whose calls count at the call of
+// them -- asked first, and inlined where a call counts, so that it costs
+// a few loads. A built-in's calls -- a callback's that forEach, map, sort
+// or another makes for each element -- are no site native code compiles,
+// and jitCountCallAt counts none of them: each had made its call, of every
+// element, to find that out.
 func (r *Runtime) jitCountsCaller(i int) bool {
 	if off := i - r.frameBase; i >= 0 && uint(off) < uint(len(r.cur)) {
-		if cl := r.cur[off].cl; cl != nil && cl.closureCode != nil && !cl.jitCounting {
-			return false
+		g := &r.cur[off]
+		if cl := g.cl; cl != nil {
+			return cl.closureCode == nil || cl.jitCounting
 		}
+		return g.callee == r.callFn || g.callee == r.applyFn
 	}
 	return true
 }
@@ -194,6 +201,20 @@ func (r *Runtime) jitCountsCaller(i int) bool {
 // it makes with the frame, which tryJITFrame counts. The caller asks
 // first whether the top frame may count it (jitCountsCaller).
 func (r *Runtime) jitCountPure() { r.jitCountCallAt(r.frameDepth + 1) }
+
+// jitCountPureCall is pureCallAt's count of a pure body's call it
+// answered (jitCountPure), out of line: the tests written in each of
+// pureCallAt's returns had its code given other registers, and spills,
+// and a pure body's call taken a quarter longer than without the JIT's
+// code, over the same work -- the callbacks of a typed array's sort among
+// them, whose caller is a built-in, which counts nothing.
+//
+//go:noinline
+func (r *Runtime) jitCountPureCall() {
+	if r.jitOn() && r.jitCountsCaller(r.frameDepth-1) {
+		r.jitCountPure()
+	}
+}
 
 // jitCountCallAt counts a call whose callee's frame is, or would be, the
 // d-th, at its caller's call site, the frame below's (jitCallCounts),

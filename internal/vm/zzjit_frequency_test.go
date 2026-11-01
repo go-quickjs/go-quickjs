@@ -255,3 +255,39 @@ func jitFnForTest(t *testing.T, r *Runtime, name string) *bytecode.Function {
 	t.Helper()
 	return r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure.fn
 }
+
+// A built-in's calls -- the callbacks forEach, map, a typed array's sort
+// and the others make for each element -- are no call site native code
+// compiles, and are counted at none: each's calls of forEach, map, slice
+// and sort, built-ins called, count nothing, however many elements their
+// callbacks are called for -- pure bodies (pureCallAt's jitCountPureCall),
+// bodies with a frame and a comparator alike -- while its call of g
+// through Function.prototype.call, whose frame is a built-in's too, still
+// counts one at every run, at the call of call (jitCountsCaller).
+func TestJITCountsNoBuiltinCalls(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	for _, trees := range []bool{true, false} {
+		t.Run(fmt.Sprintf("tree=%v", trees), func(t *testing.T) {
+			r := frequencyRuntime(t, trees)
+			src := `
+				var arr = [3, 1, 2, 5, 4], ta = new Int32Array([9, 7, 8])
+				function each(a) {
+					let s = 0
+					a.forEach((x) => { s += x })
+					s += a.map(function (x) { let t = x; return t * 2 }).length
+					s += ta.slice().sort((x, y) => x - y)[0]
+					return s + g.call(null, o)
+				}
+				for (let i = 0; i < 40; i++) each(arr)`
+			if _, err := r.Run(compileForTest(t, src)); err != nil {
+				t.Fatal(err)
+			}
+			runs, calls := frequencyCounts(t, r, "each")
+			if want := []uint32{0, 0, 0, 0, 33}; runs != 33 || !slices.Equal(calls, want) {
+				t.Errorf("each counts %d runs, calls %v; want 33, %v", runs, calls, want)
+			}
+		})
+	}
+}
