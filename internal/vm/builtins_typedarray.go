@@ -349,7 +349,7 @@ func (r *Runtime) setElem(t *typedArrayData, i int, v Value) error {
 	// coercion before the bounds check precisely so that it still runs.
 	var (
 		n  float64
-		bv *BigInt
+		bv Value
 	)
 	big := t.kind >= elemBigInt64
 	if big {
@@ -357,7 +357,7 @@ func (r *Runtime) setElem(t *typedArrayData, i int, v Value) error {
 		// a Number is refused -- mixing the two kinds is almost always a
 		// mistake rather than a request to convert.
 		var err error
-		if bv, err = r.toBigIntOperand(v); err != nil {
+		if bv, err = toBigIntOperandValue[struct{}](r, v); err != nil {
 			return err
 		}
 	} else if v.IsNumber() {
@@ -387,7 +387,7 @@ func (r *Runtime) setElem(t *typedArrayData, i int, v Value) error {
 	b := st.bytes
 
 	if big {
-		binary.LittleEndian.PutUint64(b[off:], bigLowUint64(bv))
+		binary.LittleEndian.PutUint64(b[off:], bigLow64(bv))
 		return nil
 	}
 

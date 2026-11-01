@@ -781,7 +781,7 @@ func (r *Runtime) pureCompare(op bytecode.Op, a, b Value) (res, ok bool) {
 		return eq == (op == bytecode.OpEq), true
 	}
 	if !a.IsNumber() || !b.IsNumber() {
-		return false, false
+		return pureBigCompare[struct{}](op, a, b)
 	}
 	return compareFloats(op, a.num, b.num), true
 }
