@@ -238,7 +238,7 @@ func (r *Runtime) callRest(o *Object, fd *funcData, this Value, args []Value) (V
 			}
 			if leaf := fn.Leaf; leaf == bytecode.LeafPure {
 				if pureFirst(fd, fn) {
-					if v, ok := r.pureCall(fd, this, args); ok {
+					if v, ok := r.pureCallCounted(fd, this, args); ok {
 						return v, nil
 					}
 				}

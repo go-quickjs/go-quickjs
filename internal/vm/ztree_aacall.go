@@ -224,7 +224,7 @@ func init() {
 				}
 				if fn := fd.closure.fn; fn.Leaf == bytecode.LeafPure {
 					if pureFirst(fd, fn) {
-						if v, ok := r.pureCall(fd, o, as); ok {
+						if v, ok := r.pureCallCounted(fd, o, as); ok {
 							return v
 						}
 					}
@@ -460,7 +460,7 @@ func init() {
 						}
 						if fn := fd.closure.fn; fn.Leaf == bytecode.LeafPure {
 							if pureFirst(fd, fn) {
-								if v, ok := r.pureCall(fd, o, as); ok {
+								if v, ok := r.pureCallCounted(fd, o, as); ok {
 									return v
 								}
 							}
@@ -524,7 +524,7 @@ func init() {
 						}
 						if fn := fd.closure.fn; fn.Leaf == bytecode.LeafPure {
 							if pureFirst(fd, fn) {
-								if v, ok := r.pureCall(fd, o, as); ok {
+								if v, ok := r.pureCallCounted(fd, o, as); ok {
 									return v
 								}
 							}
@@ -589,7 +589,7 @@ func init() {
 						}
 						if fn := fd.closure.fn; fn.Leaf == bytecode.LeafPure {
 							if pureFirst(fd, fn) {
-								if v, ok := r.pureCall(fd, o, as); ok {
+								if v, ok := r.pureCallCounted(fd, o, as); ok {
 									return v
 								}
 							}
@@ -655,7 +655,7 @@ func init() {
 						}
 						if fn := fd.closure.fn; fn.Leaf == bytecode.LeafPure {
 							if pureFirst(fd, fn) {
-								if v, ok := r.pureCall(fd, o, as); ok {
+								if v, ok := r.pureCallCounted(fd, o, as); ok {
 									return v
 								}
 							}

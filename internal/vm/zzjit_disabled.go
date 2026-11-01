@@ -50,3 +50,12 @@ func (*Runtime) releaseJIT()                                          {}
 
 // jitFramesDue makes no frames: no native code puts one off.
 func (r *Runtime) jitFramesDue(i int) {}
+
+func (*Runtime) jitPureCounted() bool { return false }
+func (*Runtime) jitCountPureCall()    {}
+
+// pureCallCounted is pureCall: there is no JIT to count calls for.
+func (r *Runtime) pureCallCounted(fd *funcData, this Value, args []Value) (Value, bool) {
+	r.pureRefused = false
+	return r.pureCallAt(fd, this, args, 0, true)
+}

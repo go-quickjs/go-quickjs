@@ -369,3 +369,45 @@ func (fb *jitFeedback) Frequency(pc int) (float64, bool) {
 	}
 	return fb.r.jitCallFrequency(e, pc)
 }
+
+// pureCallCounted is pureCall made at a call site of the script's -- a
+// tree's call node, callRest -- whose call the JIT counts for its inliner,
+// as a call made with a frame is (jitCountPure): here and in callDirect,
+// not in pureCallAt or pureCall, so that pureCallAt's code is the same
+// with the JIT built in as without, and pureCall small enough to inline
+// where callDirect calls it, which it does for a built-in's callbacks too:
+// a sort's comparator, whose caller, a built-in's frame, counts nothing,
+// had paid a call of pureCall and its count's tests at every comparison,
+// a tenth of a typed array's sort.
+func (r *Runtime) pureCallCounted(fd *funcData, this Value, args []Value) (Value, bool) {
+	v, ok := r.pureCall(fd, this, args)
+	if ok && r.jitPureCounted() {
+		r.jitCountPureCall()
+	}
+	return v, ok
+}
+
+// jitPureCounted reports, for pureCall, whether the caller's frame, the
+// top one, may count the pure body's call it answered: one of a function
+// of the script's (jitCountsCaller asks the rest, out of line), or of
+// Function.prototype.call or apply, whose calls count at the call of them;
+// not another built-in's -- a sort's, a forEach's -- which counts none. It
+// is one load and a test, so that pureCall stays small enough to inline
+// where callDirect calls it, as it is without the JIT.
+func (r *Runtime) jitPureCounted() bool {
+	if off := r.frameDepth - 1 - r.frameBase; uint(off) < uint(len(r.cur)) {
+		g := &r.cur[off]
+		return g.cl != nil || g.callee == r.callFn || g.callee == r.applyFn
+	}
+	return true
+}
+
+// jitCountPureCall is pureCall's count of a pure body's call, where
+// jitPureCounted said its caller may count it.
+//
+//go:noinline
+func (r *Runtime) jitCountPureCall() {
+	if r.jitOn() && r.jitCountsCaller(r.frameDepth-1) {
+		r.jitCountPure()
+	}
+}

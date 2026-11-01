@@ -212,6 +212,12 @@ func (r *Runtime) callDirect(callee, this Value, args []Value) (Value, error) {
 				if leaf := fn.Leaf; leaf == bytecode.LeafPure {
 					if pureFirst(fd, fn) {
 						if v, ok := r.pureCall(fd, this, args); ok {
+							if jitBuilt && r.jitPureCounted() {
+								// Counted for the JIT where the caller may
+								// count it, which a built-in's frame does
+								// not (pureCallCounted).
+								r.jitCountPureCall()
+							}
 							return v, nil
 						}
 					}

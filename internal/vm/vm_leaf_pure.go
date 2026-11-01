@@ -18,16 +18,7 @@ const pureMissLimit = 64
 // store, a body's one, is in the tail of it that cannot give up.
 func (r *Runtime) pureCall(fd *funcData, this Value, args []Value) (Value, bool) {
 	r.pureRefused = false
-	v, ok := r.pureCallAt(fd, this, args, 0, true)
-	if jitBuilt && ok && r.jitOn() && r.jitCountsCaller(r.frameDepth-1) {
-		// Counted for the JIT at its call site, as a call made with a
-		// frame is (jitCountPure): here, not in pureCallAt, whose code is
-		// then the same with the JIT built in as without, and asked first
-		// whether the caller counts, which a built-in -- a sort calling
-		// its comparator -- does not.
-		r.jitCountPure()
-	}
-	return v, ok
+	return r.pureCallAt(fd, this, args, 0, true)
 }
 
 // pureTreeCode is the shortest pure body, in instructions, that is called
