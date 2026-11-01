@@ -201,16 +201,30 @@ const (
 // its locals and its callback's call's operands -- this, the callback and
 // its arguments, three, or four, reduce's.
 func loopSlots(kind int) int {
-	if kind&abi.LoopKindMask == abi.LoopReduce {
+	switch kind & abi.LoopKindMask {
+	case abi.LoopReduce:
 		return loopLocals + 6
+	case abi.LoopSort:
+		// sortCall's locals, and the comparator's call's operands: this,
+		// the comparator and its two arguments.
+		return sortLocals + 4
 	}
 	return loopLocals + 5
+}
+
+// loopLocalsOf is how many of a loop of kind's slots are its own, past
+// which its callback's call's operands are.
+func loopLocalsOf(kind int) int {
+	if kind&abi.LoopKindMask == abi.LoopSort {
+		return sortLocals
+	}
+	return loopLocals
 }
 
 // loopKeeps is how many keep cells a loop of kind takes: its callback's
 // result's, and map's and filter's array's.
 func loopKeeps(kind int) int {
-	if makesArray(kind) {
+	if makesArray(kind) || kind&abi.LoopKindMask == abi.LoopSort {
 		return 2
 	}
 	return 1
@@ -253,7 +267,8 @@ func (b *builder) forEachAt(pc int) (ForEachSite, bool) {
 	}
 	site, ok := f.ForEach(pc)
 	typed := site.Kind&abi.LoopTyped != 0
-	if base := site.Kind & abi.LoopKindMask; !ok || base <= 0 || base >= abi.LoopKinds || makesArray(base) && !b.goCalls() || typed && site.Proto == 0 {
+	if base := site.Kind & abi.LoopKindMask; !ok || base <= 0 || base >= abi.LoopKinds || (makesArray(base) || base == abi.LoopSort) && !b.goCalls() ||
+		base == abi.LoopSort && site.Inline == nil || typed && site.Proto == 0 {
 		return ForEachSite{}, false
 	}
 	return site, true
@@ -285,8 +300,11 @@ func (b *builder) planCallback(pc int, fp *forEachPlan, total *int) bool {
 		made = nil
 	}
 	argc := 3
-	if fp.site.Kind&abi.LoopKindMask == abi.LoopReduce {
+	switch fp.site.Kind & abi.LoopKindMask {
+	case abi.LoopReduce:
 		argc = 4
+	case abi.LoopSort:
+		argc = 2
 	}
 	if made == nil && s.Callee == 0 || s.Construct || s.Restart || s.Forward || s.Arguments || !s.Method || s.Argc != argc || s.Params < 0 ||
 		s.Coerce && s.ThisSlot >= 0 {
@@ -315,7 +333,7 @@ func (b *builder) planCallback(pc int, fp *forEachPlan, total *int) bool {
 		return false
 	}
 	nslots, before, keeps, inlined := b.nslots, *total, b.f.Keeps, len(b.f.Inlined)
-	fr, ok := b.inlineFrame(s, calls, nil, total, fp.base+loopLocals, pc)
+	fr, ok := b.inlineFrame(s, calls, nil, total, fp.base+loopLocalsOf(fp.site.Kind), pc)
 	if ok && !b.returnsNatively(fr) {
 		b.nslots, *total, b.f.Keeps = nslots, before, keeps
 		b.f.Inlined = b.f.Inlined[:inlined]
@@ -676,6 +694,247 @@ func (b *builder) forEachCall(blk *Block, pc int, fp forEachPlan) {
 	if reduce {
 		b.write(dest, cont, b.read(base+loopThis, cont))
 	}
+}
+
+// sortLocals is how many of a sort's slots (sortCall) are its own: the
+// array and the comparator, which Go sorts again from at an exit, and the
+// merge sort's run width, the half it reads from, a pass's run, the next
+// index of each of the two runs a merge reads, the next index it writes,
+// and the value it writes there.
+const sortLocals = 9
+
+// A sort's slots, past its first.
+const (
+	sortArray = iota
+	sortComparator
+	sortWidth
+	sortFrom
+	sortRun
+	sortLeft
+	sortRight
+	sortTo
+	sortValue
+)
+
+// sortCall makes x.sort(cmp), the realm's %TypedArray%.prototype.sort on
+// a typed array of a number type or Array.prototype.sort on an Array (a
+// ForEachSite of abi.LoopSort), a sort of the code's own: the comparator
+// inlined in it, as V8's code inlines a builtin's callback, and no call of
+// Go for any comparison. Go makes a Float64Array of twice the array's
+// length whose first half holds its elements, as numbers -- for an Array
+// only where each is a number it has, no hole, nothing undefined, nothing
+// a getter answers (GoNewArray's NewArraySort) -- and refuses anything
+// else, which leaves the call to Go before anything has run. The code
+// sorts that copy, bottom-up, by merges of runs of one, two, four
+// elements and on between its two halves, taking the right run's element
+// first only where the comparator's result for it and the left's, as
+// ToNumber makes it, is below zero: an equal one, NaN, -0, keeps the
+// left's first, which makes the sort stable, as the specification asks,
+// and no answer the comparator gives can take an index past its run's
+// end. So a comparator that is not consistent sorts in some order and
+// nothing more -- one the specification leaves to the implementation,
+// which need not be the order Go's sort, of other merges, would give.
+// Go then writes the copy's sorted half back to the array
+// (NewArrayFill), the call's result the array.
+//
+// Any exit inside -- the comparator's result neither a number nor an
+// oddball, which ToNumber would have Go convert; anything else the code
+// does not make -- has Go sort the array again from its first element, as
+// the built-in sorts it (jitLoopFinish). Nothing shows that it did: the
+// comparator is a function the VM has found free of effects (its body
+// reads its parameters and constants, which are numbers, and computes,
+// compares and branches on them, jitSortComparator), given the array's
+// numbers, so that the calls made of it before the exit did nothing the
+// calls made again could tell apart, and the array is the same until the
+// copy is written back, in one call of Go after the last comparison.
+func (b *builder) sortCall(blk *Block, pc int, fp forEachPlan) {
+	f := b.f
+	mark := fp.site.Kind
+	typed := mark&abi.LoopTyped != 0
+	argc := b.calls[pc][0].Argc
+	sp := b.p.Locals + b.p.Maps[pc].Depth
+	dest := b.p.Locals + b.p.Maps[pc+1].Depth - 1
+	recv, fn, cb := b.read(sp-argc-2, blk), b.read(sp-argc-1, blk), b.read(sp-argc, blk)
+	fr := fp.inline
+	call := b.rootState()
+	at := func(blk *Block, st *FrameState, op Op, t Type, args ...*Value) *Value {
+		v := f.newValue(blk, op, t, args...)
+		v.Aux, v.State = int(ir.HostExit), st
+		st.addUse()
+		return v
+	}
+	num := func(blk *Block, x float64) *Value {
+		v := f.newValue(blk, OpConstF64, Float64)
+		v.Const = ir.Float(x)
+		return v
+	}
+	boxF := func(blk *Block, x *Value) *Value { return f.newValue(blk, OpBoxF64, Tagged, x) }
+	add := func(blk *Block, x, y *Value) *Value { return f.newValue(blk, OpAddF64, Float64, x, y) }
+	less := func(blk *Block, x, y *Value) *Value {
+		c := f.newValue(blk, OpCmpF64, Bool, x, y)
+		c.Aux = int(ir.Lt)
+		return c
+	}
+	object := at(blk, call, OpObjectOf, Ptr, fn)
+	same := at(blk, call, OpSameObject, None, object)
+	same.Const = ir.Value{Bits: uint64(fp.site.Fn)}
+	if !fp.made {
+		// The closure inlined, which a function is.
+		is := at(blk, call, OpSameObject, None, at(blk, call, OpObjectOf, Ptr, cb))
+		is.Const = ir.Value{Bits: uint64(fr.site.Callee)}
+	}
+	if typed {
+		is := at(blk, call, OpSameObject, None, at(blk, call, OpObjectOf, Ptr, recv))
+		is.Const, is.Index = ir.Value{Bits: uint64(fp.site.Proto)}, 1
+		at(blk, call, OpIndexedOf, Ptr, recv)
+	} else {
+		at(blk, call, OpArrayOf, Ptr, recv)
+	}
+	n := at(blk, call, OpLength, Float64, recv)
+	room := at(blk, call, OpFrameRoom, None)
+	room.Index = fp.base - b.root.p.Locals + loopSlots(mark)
+	{
+		// And past them for the comparator's frame, which an exit inside it
+		// writes there, and a context for Go to make it from.
+		room := at(blk, call, OpFrameRoom, None)
+		room.Index = fr.base - b.root.p.Locals + fr.p.Locals + fr.p.StackSize
+		room.Const = ir.Value{Bits: uint64(fr.depth)}
+	}
+	// The copy of the elements, its first half, the second the merges'.
+	mk := at(blk, call, OpCall, Tagged, recv, boxF(blk, n))
+	form := NewArraySort
+	if typed {
+		form |= NewArrayTyped
+	}
+	f.cache(mk).Calls, mk.Index = []*CallSite{{Go: GoNewArray, Argc: form, ThisSlot: -1}}, fp.keep+1
+	cell := f.newValue(blk, OpCallCell, Source, mk)
+	scratch := f.newValue(blk, OpKept, Tagged, cell, mk)
+	scratch.Shadow = cell
+	base := fp.base
+	zero := boxF(blk, num(blk, 0))
+	for i, v := range []*Value{recv, cb, boxF(blk, num(blk, 1)), zero, zero, zero, zero, zero, zero} {
+		b.write(base+i, blk, v)
+	}
+	// The call's result, the array.
+	b.write(dest, blk, recv)
+	loop := f.newValue(blk, OpLoopMark, None)
+	loop.Const = ir.Value{Bits: uint64(mark)<<32 | uint64(base-b.root.p.Locals+1)}
+	state := func(blk *Block, depth int) *FrameState {
+		s := f.newState(FrameState{PC: call.PC, Depth: call.Depth, Site: call.Site, Slots: f.refsOf(base + sortLocals + depth)})
+		for i, v := range call.Slots {
+			if v != nil {
+				s.Slots[i] = v
+				v.Uses++
+			}
+		}
+		for i := base; i < base+sortLocals+depth; i++ {
+			s.Slots[i] = b.read(i, blk)
+			s.Slots[i].Uses++
+		}
+		return s
+	}
+	get := func(blk *Block, slot int) *Value {
+		return at(blk, state(blk, 0), OpUnboxF64, Float64, b.read(base+slot, blk))
+	}
+	set := func(blk *Block, slot int, x *Value) { b.write(base+slot, blk, boxF(blk, x)) }
+	read := func(blk *Block, k *Value) *Value {
+		st := state(blk, 0)
+		return at(blk, st, OpElemRead, Float64, at(blk, st, OpIndexedOf, Ptr, scratch), k)
+	}
+	write := func(blk *Block, k, x *Value) {
+		st := state(blk, 0)
+		at(blk, st, OpElemWrite, None, at(blk, st, OpIndexedOf, Ptr, scratch), k, x)
+	}
+	// while is a loop from blk, of cond's test at its head, of the blocks
+	// body makes from the loop's first, given the loop's end: it returns
+	// the block the code goes on in after the loop.
+	while := func(blk *Block, cond func(*Block) *Value, body func(*Block, *Block) *Block) *Block {
+		head, first, cont := b.loop(blk)
+		head.Header = state(head, 0)
+		head.Header.Site = -1
+		c := cond(head)
+		head.Control = c
+		c.Uses++
+		body(first, cont)
+		b.seal(head)
+		return cont
+	}
+	// copyRun copies the elements from the slot's index up to end from the
+	// half at from to the one at to, from the slot sortTo's index on.
+	copyRun := func(blk *Block, slot int, end, from, to *Value) *Block {
+		return while(blk, func(h *Block) *Value { return less(h, get(h, slot), end) }, func(body, _ *Block) *Block {
+			k, t := get(body, slot), get(body, sortTo)
+			write(body, add(body, to, t), read(body, add(body, from, k)))
+			set(body, slot, add(body, k, num(body, 1)))
+			set(body, sortTo, add(body, t, num(body, 1)))
+			return body
+		})
+	}
+	end := while(blk, func(h *Block) *Value { return less(h, get(h, sortWidth), n) }, func(pass, _ *Block) *Block {
+		w, from := get(pass, sortWidth), get(pass, sortFrom)
+		to := f.newValue(pass, OpSubF64, Float64, n, from)
+		w2 := add(pass, w, w)
+		set(pass, sortRun, num(pass, 0))
+		runs := while(pass, func(h *Block) *Value { return less(h, get(h, sortRun), n) }, func(run, _ *Block) *Block {
+			lo := get(run, sortRun)
+			mid := f.newValue(run, OpMinF64, Float64, add(run, lo, w), n)
+			hi := f.newValue(run, OpMinF64, Float64, add(run, lo, w2), n)
+			set(run, sortLeft, lo)
+			set(run, sortRight, mid)
+			set(run, sortTo, lo)
+			merged := while(run, func(h *Block) *Value { return less(h, get(h, sortLeft), mid) }, func(body, cont *Block) *Block {
+				j := get(body, sortRight)
+				// The right run used up: the left's rest is copyRun's.
+				_, step := b.loopTest(body, cont, f.newValue(body, OpNot, Bool, less(body, j, hi)), true)
+				i := get(step, sortLeft)
+				x, y := read(step, add(step, from, j)), read(step, add(step, from, i))
+				ops := []*Value{f.newValue(step, OpConst, Tagged), cb, boxF(step, x), boxF(step, y)}
+				ops[0].Const = ir.Value{Kind: ir.Undefined}
+				for k, v := range ops {
+					b.write(base+sortLocals+k, step, v)
+				}
+				res, after := b.inlineCallback(step, fr, ops, base+sortLocals+2, state(step, len(ops)))
+				// The result as ToNumber makes it, of a number, a boolean,
+				// undefined or null (OpOddballF64): NaN is no answer below
+				// zero. Anything else is Go's to convert.
+				r := at(after, state(after, 0), OpOddballF64, Float64, res)
+				// The left's element, unless the right's sorts before it.
+				set(after, sortValue, y)
+				set(after, sortLeft, add(after, i, num(after, 1)))
+				yes, next := b.loopTest(after, cont, less(after, r, num(after, 0)), false)
+				set(yes, sortValue, x)
+				set(yes, sortLeft, i)
+				set(yes, sortRight, add(yes, j, num(yes, 1)))
+				t := get(next, sortTo)
+				write(next, add(next, to, t), get(next, sortValue))
+				set(next, sortTo, add(next, t, num(next, 1)))
+				return next
+			})
+			left := copyRun(merged, sortLeft, mid, from, to)
+			right := copyRun(left, sortRight, hi, from, to)
+			set(right, sortRun, add(right, lo, w2))
+			return right
+		})
+		// The next pass reads what this one wrote.
+		set(runs, sortFrom, to)
+		set(runs, sortWidth, w2)
+		return runs
+	})
+	// The sorted elements in the first half, where Go reads them.
+	from := get(end, sortFrom)
+	set(end, sortTo, num(end, 0))
+	copied := while(end, func(h *Block) *Value { return less(h, get(h, sortTo), from) }, func(body, _ *Block) *Block {
+		t := get(body, sortTo)
+		write(body, t, read(body, add(body, from, t)))
+		set(body, sortTo, add(body, t, num(body, 1)))
+		return body
+	})
+	st := state(copied, 0)
+	back := at(copied, st, OpCall, Tagged, recv, scratch)
+	f.cache(back).Calls, back.Index = []*CallSite{{Go: GoNewArray, Argc: form | NewArrayFill, ThisSlot: -1}}, fp.keep
+	done := f.newValue(copied, OpLoopMark, None)
+	done.Const = ir.Value{}
+	b.next = copied
 }
 
 // IndexOfFeedback is Feedback that knows a method call at a PC calls one
@@ -1766,11 +2025,18 @@ const (
 	GoIterResult
 )
 
-// GoNewArray's flags, in its CallSite's Argc.
+// GoNewArray's flags, in its CallSite's Argc. With NewArraySort, the
+// first operand is what a sort is called on, a typed array of a number
+// type (NewArrayTyped) or an Array: Go makes the Float64Array of twice
+// its length whose first half holds its elements, as numbers, where every
+// one is a number the array has, and refuses anything else; with
+// NewArrayFill too, the second operand is that Float64Array, whose first
+// half Go writes back to the array, in order, its result the array.
 const (
 	NewArrayRoom = 1 << iota
 	NewArrayTyped
 	NewArrayFill
+	NewArraySort
 )
 
 // GoIterResult is the result object of a call of a generator's next
@@ -5006,15 +5272,23 @@ func (b *builder) plan() error {
 						b.forEaches = map[int]forEachPlan{}
 					}
 					fp := forEachPlan{site: site, base: b.nslots, keep: b.f.Keeps}
+					nslots, keeps, loops, loopsEnd := b.nslots, b.f.Keeps, b.f.Loops, b.f.LoopsEnd
 					b.nslots += loopSlots(site.Kind)
 					b.f.Keeps += loopKeeps(site.Kind)
 					b.f.Loops, b.f.LoopsEnd = true, b.nslots
-					if b.planCallback(pc, &fp, &total) && fp.made {
-						// The closure is not made: nothing exits there,
-						// for Go to go on after.
-						entries[fp.site.Made.PC+1] = false
+					planned := b.planCallback(pc, &fp, &total)
+					if site.Kind&abi.LoopKindMask == abi.LoopSort && !planned {
+						// A sort is made natively with its comparator
+						// inlined, or not at all: the call is Go's.
+						b.nslots, b.f.Keeps, b.f.Loops, b.f.LoopsEnd = nslots, keeps, loops, loopsEnd
+					} else {
+						if planned && fp.made {
+							// The closure is not made: nothing exits there,
+							// for Go to go on after.
+							entries[fp.site.Made.PC+1] = false
+						}
+						b.forEaches[pc] = fp
 					}
-					b.forEaches[pc] = fp
 				}
 			}
 		}
@@ -7069,6 +7343,10 @@ func (b *builder) instruction(blk *Block, pc int) {
 			break
 		}
 		if fp, ok := b.forEaches[pc]; ok && in.Op == ir.Host && b.cur == b.root {
+			if fp.site.Kind&abi.LoopKindMask == abi.LoopSort {
+				b.sortCall(blk, pc, fp)
+				break
+			}
 			b.forEachCall(blk, pc, fp)
 			break
 		}

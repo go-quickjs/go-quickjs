@@ -3,6 +3,7 @@
 package vm
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"iter"
@@ -3936,6 +3937,13 @@ func jitHostCall(ctx *abi.Context) bool {
 		return true
 	case ssa.GoNewArray:
 		form := int(ctx.GoOp >> abi.GoOpIndexShift)
+		if form&ssa.NewArraySort != 0 {
+			v, ok := r.jitSortCopy(form, jitGoArg(ctx, 0), jitGoArg(ctx, 1))
+			if ok {
+				*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
+			}
+			return ok
+		}
 		if form&ssa.NewArrayTyped != 0 {
 			v, ok := r.jitNewTypedResult(form, jitGoArg(ctx, 0), jitGoArg(ctx, 1))
 			if ok {
@@ -7808,8 +7816,16 @@ func (fb *jitFeedback) ForEach(pc int) (ssa.ForEachSite, bool) {
 		}
 		cb := jitInline{pc: x.pc, cl: x.cb, obj: x.cbObj, byCode: x.byCode}
 		argc := uint32(3)
-		if kind&abi.LoopKindMask == abi.LoopReduce {
+		switch kind & abi.LoopKindMask {
+		case abi.LoopReduce:
 			argc = 4
+		case abi.LoopSort:
+			// A comparator, called with two elements; native code sorts
+			// only with one it may call again at will.
+			argc = 2
+			if !jitSortComparator(x.cb.fn) {
+				return ssa.ForEachSite{}, false
+			}
 		}
 		site, ok := fb.closureCallSite(pc, cb, bytecode.Instr{Op: bytecode.OpCallMethod, A: argc}, nil)
 		if !ok {
@@ -8173,6 +8189,11 @@ func (r *Runtime) jitCalledClosure(f *frame, pc, depth int, tmpl *closure) (*clo
 // or find gave the callback, and its result, uninitialized if none yet.
 const jitLoopLocals = 8
 
+// jitSortLocals is how many slots a sort's loop has (ssa's sortLocals):
+// the array and the comparator, which Go sorts again from, and the merge
+// sort's own, which it clears.
+const jitSortLocals = 9
+
 // jitLoopFinish finishes the loop native code was making of a built-in's
 // call in f, at pc, at an exit there, as V8's builtin continuation frames
 // finish the builtin: loop is the context's Loop word (abi.Context), which says
@@ -8198,6 +8219,26 @@ func (r *Runtime) jitLoopFinish(f *frame, pc int, loop uint64, after bool, v Val
 	fe := r.jitLoopFn(int(loop >> 32))
 	typed := int(loop>>32)&abi.LoopTyped != 0
 	kind := int(loop>>32) & abi.LoopKindMask
+	if kind == abi.LoopSort {
+		// A sort's exit, anywhere in it: Go sorts the array again from the
+		// first, as the built-in sorts it. Nothing the code did shows --
+		// its comparator does nothing a call made again could tell apart
+		// (jitSortComparator), and the array is as it was until the copy
+		// the code sorted is written back, which it is in one call of Go
+		// after the last comparison (ssa's sortCall).
+		if fe == nil || !arr.IsObject() {
+			panic("jit: a sort's slots are not a built-in's")
+		}
+		clear(r.stack[at+jitLoopLocals : at+jitSortLocals])
+		r.jit.loopsFinished++
+		r.jit.sortsRestarted++
+		f.pc = uint32(pc + 1)
+		if err := r.nativeFrame(fe, fe.fn(), arr, []Value{cb}, Undefined); err != nil {
+			return Undefined, err
+		}
+		defer func() { r.frameDepth-- }()
+		return fe.fn().native(r, arr, []Value{cb})
+	}
 	makes := kind == abi.LoopMap || kind == abi.LoopFilter
 	var t *typedArrayData
 	if typed {
@@ -8435,6 +8476,164 @@ func (r *Runtime) jitPlainTypedSpecies(o *Object, t *typedArrayData) bool {
 	}
 	a := sp.value().accessorPair()
 	return a != nil && a.getter == r.jitTypedSpecies
+}
+
+// jitSortCopy is GoNewArray's for a sort native code makes (ssa's
+// sortCall, ssa.NewArraySort): of recv, a typed array of a number type a
+// loop is made over (jitLoopTyped), in bounds, its buffer not immutable --
+// one the built-in would throw for is Go's to throw for -- or an Array
+// whose every element is a number it has (jitSortArray), the Float64Array
+// of twice its length whose first half holds its elements, as numbers --
+// and, with ssa.NewArrayFill, x that Float64Array, whose first half is
+// written back to recv's elements, in order, the result recv. Anything
+// else is refused, before anything has run, for Go to make the call.
+func (r *Runtime) jitSortCopy(form int, recv, x Value) (Value, bool) {
+	var t *typedArrayData
+	var a *Object
+	n := 0
+	if form&ssa.NewArrayTyped != 0 {
+		if t = r.jitLoopTyped(recv); t == nil || t.outOfBounds() || t.storage().immutable {
+			return Undefined, false
+		}
+		n = t.count()
+	} else {
+		if a = r.jitSortArray(recv); a == nil {
+			return Undefined, false
+		}
+		n = len(a.elemsOf())
+	}
+	if form&ssa.NewArrayFill == 0 {
+		o := newObject(r.typedArrayProtoFor(elemFloat64), ClassTypedArray)
+		s, err := r.allocTypedArrayChecked(o, elemFloat64, 2*int64(n))
+		if err != nil {
+			return Undefined, false
+		}
+		b := s.st.bytes[s.byteOffset:s.end]
+		for i := range n {
+			var v Value
+			if t != nil {
+				v = t.getElem(i)
+			} else {
+				v = a.elemsOf()[i]
+			}
+			binary.LittleEndian.PutUint64(b[i<<3:], math.Float64bits(v.num))
+		}
+		return Obj(o), true
+	}
+	if !x.IsObject() {
+		return Undefined, false
+	}
+	s, ok := x.Object().dataOf().(*typedArrayData)
+	if !ok || s.kind != elemFloat64 || s.count() != 2*n || s.st == nil {
+		// Refused before anything is written: the exit has Go sort the
+		// array as it was.
+		return Undefined, false
+	}
+	b := s.st.bytes[s.byteOffset:s.end]
+	for i := range n {
+		v := Float(math.Float64frombits(binary.LittleEndian.Uint64(b[i<<3:])))
+		if t != nil {
+			// A number of the array's own, converted back to its type
+			// exactly, which no conversion of a number fails.
+			if err := r.setElem(t, i, v); err != nil {
+				panic("jit: a sorted element not stored back")
+			}
+		} else {
+			a.extOf().elems[i] = v
+		}
+	}
+	return recv, true
+}
+
+// jitSortArray is recv if it is an Array a sort native code makes may
+// sort (jitSortCopy): of the realm's, extensible, dense (plainArray: its
+// length its elements'), whose prototypes have no element
+// (noInheritedIndices), its every element a number -- no hole, nothing
+// undefined -- so that reading and writing them back is
+// what the property protocol would make of them, calling nothing; or nil.
+func (r *Runtime) jitSortArray(recv Value) *Object {
+	o := r.plainArray(recv)
+	if o == nil || o.flags&objExtensible == 0 || !r.noInheritedIndices(o) {
+		return nil
+	}
+	for _, v := range o.elemsOf() {
+		if !v.IsNumber() {
+			return nil
+		}
+	}
+	return o
+}
+
+// jitSortComparator reports whether fn, a sort's comparator, is a body
+// native code may call again at will (ssa's sortCall), given numbers: a
+// function, an arrow or a method a call runs the body of (DirectCall) --
+// no class constructor, which a call refuses -- whose every instruction
+// reads a parameter or a constant that is a number, computes with an
+// operator, compares, branches forward, or returns: no local of its own,
+// no call, no property, no global, no captured binding, no store
+// anywhere. Called with numbers, it makes only numbers, booleans,
+// undefined and null, runs nothing and changes nothing.
+func jitSortComparator(fn *bytecode.Function) bool {
+	if fn == nil || !fn.DirectCall || fn.Kind != bytecode.KindNormal && fn.Kind != bytecode.KindArrow && fn.Kind != bytecode.KindMethod ||
+		fn.Generator || fn.Async || fn.HasRest || fn.HasDirectEval || !fn.HasSimpleParams || fn.ParamsAreLexical ||
+		fn.UsesArguments || fn.UsesThis || fn.LocalCount != fn.ParamCount || len(fn.Code) > 64 {
+		return false
+	}
+	param := func(k uint32) bool { return int(k) < fn.ParamCount }
+	operator := func(op bytecode.Op) bool {
+		switch op {
+		case bytecode.OpAdd, bytecode.OpSub, bytecode.OpMul, bytecode.OpDiv, bytecode.OpMod,
+			bytecode.OpBitAnd, bytecode.OpBitOr, bytecode.OpBitXor, bytecode.OpShl, bytecode.OpShr, bytecode.OpUShr,
+			bytecode.OpLt, bytecode.OpLe, bytecode.OpGt, bytecode.OpGe, bytecode.OpEq, bytecode.OpNe, bytecode.OpStrictEq, bytecode.OpStrictNe:
+			return true
+		}
+		return false
+	}
+	for pc, in := range fn.Code {
+		switch in.Op {
+		case bytecode.OpPushInt, bytecode.OpPushTrue, bytecode.OpPushFalse, bytecode.OpPushUndef, bytecode.OpPushNull,
+			bytecode.OpNeg, bytecode.OpNot, bytecode.OpBitNot, bytecode.OpToNumeric, bytecode.OpInc, bytecode.OpDec,
+			bytecode.OpDup, bytecode.OpDrop, bytecode.OpSwap, bytecode.OpNop, bytecode.OpReturn, bytecode.OpReturnUndef:
+		case bytecode.OpPushConst:
+			if int(in.A) >= len(fn.Constants) || fn.Constants[in.A].Kind != bytecode.ConstNumber {
+				return false
+			}
+		case bytecode.OpGetLocal:
+			if !param(in.A) {
+				return false
+			}
+		case bytecode.OpGetLocal2:
+			if !param(in.A) || !param(in.B) {
+				return false
+			}
+		case bytecode.OpBinLocal:
+			if !param(in.A) || !operator(bytecode.Op(in.B)) {
+				return false
+			}
+		case bytecode.OpBinImm:
+			if !operator(bytecode.Op(in.B)) {
+				return false
+			}
+		case bytecode.OpLocalBinImm:
+			if !param(in.A&(1<<24-1)) || !operator(bytecode.Op(in.A>>24)) {
+				return false
+			}
+		case bytecode.OpJump, bytecode.OpJumpIfFalse, bytecode.OpJumpIfTrue, bytecode.OpJumpIfFalseKeep, bytecode.OpJumpIfTrueKeep:
+			if int(in.A) <= pc || int(in.A) > len(fn.Code) {
+				return false
+			}
+		case bytecode.OpJumpIfCmpFalse:
+			if int(in.A) <= pc || int(in.A) > len(fn.Code) || !operator(bytecode.Op(in.B)) {
+				return false
+			}
+		default:
+			if operator(in.Op) {
+				continue
+			}
+			return false
+		}
+	}
+	return true
 }
 
 // jitSearchKind is the kind of o among jitSearches, or -1.

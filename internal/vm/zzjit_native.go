@@ -231,6 +231,7 @@ var jitSearchNames = [3]string{"indexOf", "lastIndexOf", "includes"}
 var jitLoopNames = [abi.LoopKinds]string{
 	abi.LoopForEach: "forEach", abi.LoopReduce: "reduce", abi.LoopMap: "map", abi.LoopFilter: "filter",
 	abi.LoopSome: "some", abi.LoopEvery: "every", abi.LoopFind: "find", abi.LoopFindIndex: "findIndex",
+	abi.LoopSort: "sort",
 }
 
 // recordJITStringIntrinsic notes the realm's String.prototype.charCodeAt and
@@ -947,6 +948,9 @@ type jitState struct {
 	// loopsFinished counts the loops of built-ins' calls Go went on with
 	// at an exit (jitLoopFinish).
 	loopsFinished uint64
+	// sortsRestarted counts the sorts native code made (ssa's sortCall)
+	// that left it, which Go then sorted again from the first.
+	sortsRestarted uint64
 	// materialized counts the closures Go made at exits that native code
 	// had not made (jitMaterialize); made are those the exit being made
 	// has made, by the frame they are made on.

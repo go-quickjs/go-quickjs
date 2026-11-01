@@ -762,6 +762,11 @@ const (
 	LoopEvery
 	LoopFind
 	LoopFindIndex
+	// LoopSort is sort's by a comparator (ssa's sortCall), which sorts a
+	// copy of the elements and writes them back once it is done: any exit
+	// inside has Go sort them again from the first, its slots the array
+	// and the comparator alone.
+	LoopSort
 	// LoopKinds is one past the last kind.
 	LoopKinds
 )
