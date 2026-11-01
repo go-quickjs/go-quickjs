@@ -607,6 +607,169 @@ function string_switch_mixed(n)
     return extra_string_switch(n, ["a", "section", "unknown", "label"]);
 }
 
+/* the same switch on strings made at run time, as a parser's or a DOM's
+   are, rather than the literals the cases are written with */
+function string_switch_built(n)
+{
+    var keys = ["a", "section", "unknown", "label"].map(function (k) {
+        return (k + "?").slice(0, k.length);
+    });
+    return extra_string_switch(n, keys);
+}
+
+/* a switch of three cases, as on an HTTP method, one key a miss */
+function string_switch_small(n)
+{
+    var j, sum = 0, keys = ["GET", "POST", "PUT", "DELETE"];
+    for (j = 0; j < n; j++) {
+        switch (keys[j & 3]) {
+        case "GET": sum += 1; break;
+        case "POST": sum += 2; break;
+        case "PUT": sum += 3; break;
+        default: break;
+        }
+    }
+    global_res = sum;
+    return n;
+}
+
+/* a switch of forty cases, a lexer's keyword table */
+function string_switch_large(n)
+{
+    var j, sum = 0, keys = ["if", "return", "function", "protected"];
+    for (j = 0; j < n; j++) {
+        switch (keys[j & 3]) {
+        case "break": sum += 1; break;
+        case "case": sum += 2; break;
+        case "catch": sum += 3; break;
+        case "class": sum += 4; break;
+        case "const": sum += 5; break;
+        case "continue": sum += 6; break;
+        case "debugger": sum += 7; break;
+        case "default": sum += 8; break;
+        case "delete": sum += 9; break;
+        case "do": sum += 10; break;
+        case "else": sum += 11; break;
+        case "export": sum += 12; break;
+        case "extends": sum += 13; break;
+        case "finally": sum += 14; break;
+        case "for": sum += 15; break;
+        case "function": sum += 16; break;
+        case "if": sum += 17; break;
+        case "import": sum += 18; break;
+        case "in": sum += 19; break;
+        case "instanceof": sum += 20; break;
+        case "new": sum += 21; break;
+        case "return": sum += 22; break;
+        case "super": sum += 23; break;
+        case "switch": sum += 24; break;
+        case "this": sum += 25; break;
+        case "throw": sum += 26; break;
+        case "try": sum += 27; break;
+        case "typeof": sum += 28; break;
+        case "var": sum += 29; break;
+        case "void": sum += 30; break;
+        case "while": sum += 31; break;
+        case "with": sum += 32; break;
+        case "yield": sum += 33; break;
+        case "let": sum += 34; break;
+        case "static": sum += 35; break;
+        case "enum": sum += 36; break;
+        case "await": sum += 37; break;
+        case "implements": sum += 38; break;
+        case "package": sum += 39; break;
+        case "protected": sum += 40; break;
+        default: break;
+        }
+    }
+    global_res = sum;
+    return n;
+}
+
+/* cases that share their first letters, as DOM event names do */
+function string_switch_prefix(n)
+{
+    var j, sum = 0, keys = ["mouseleave", "touchcancel", "pointerup", "mousemove"];
+    for (j = 0; j < n; j++) {
+        switch (keys[j & 3]) {
+        case "mousedown": sum += 1; break;
+        case "mouseup": sum += 2; break;
+        case "mousemove": sum += 3; break;
+        case "mouseover": sum += 4; break;
+        case "mouseout": sum += 5; break;
+        case "mouseenter": sum += 6; break;
+        case "mouseleave": sum += 7; break;
+        case "keydown": sum += 8; break;
+        case "keyup": sum += 9; break;
+        case "keypress": sum += 10; break;
+        case "touchstart": sum += 11; break;
+        case "touchmove": sum += 12; break;
+        case "touchend": sum += 13; break;
+        case "touchcancel": sum += 14; break;
+        case "pointerdown": sum += 15; break;
+        case "pointerup": sum += 16; break;
+        default: break;
+        }
+    }
+    global_res = sum;
+    return n;
+}
+
+/* long cases with long common prefixes, as a reducer's action types are,
+   one key a miss that differs only at its end */
+function string_switch_long(n)
+{
+    var j, sum = 0, keys = ["filters/colorFilterChanged", "todos/todosLoaded",
+                            "user/loggedOut", "todos/allCompletedX"];
+    for (j = 0; j < n; j++) {
+        switch (keys[j & 3]) {
+        case "todos/todoAdded": sum += 1; break;
+        case "todos/todoToggled": sum += 2; break;
+        case "todos/todoDeleted": sum += 3; break;
+        case "todos/colorSelected": sum += 4; break;
+        case "todos/allCompleted": sum += 5; break;
+        case "todos/completedCleared": sum += 6; break;
+        case "todos/todosLoading": sum += 7; break;
+        case "todos/todosLoaded": sum += 8; break;
+        case "filters/statusFilterChanged": sum += 9; break;
+        case "filters/colorFilterChanged": sum += 10; break;
+        case "user/loggedIn": sum += 11; break;
+        case "user/loggedOut": sum += 12; break;
+        default: break;
+        }
+    }
+    global_res = sum;
+    return n;
+}
+
+/* a switch on typeof, as a serializer's or a validator's is */
+function string_switch_typeof(n)
+{
+    var j, sum = 0, values = [1, "s", null, undefined];
+    for (j = 0; j < n; j++) {
+        switch (typeof values[j & 3]) {
+        case "number": sum += 1; break;
+        case "string": sum += 2; break;
+        case "boolean": sum += 3; break;
+        case "object": sum += 4; break;
+        case "undefined": sum += 5; break;
+        case "function": sum += 6; break;
+        case "bigint": sum += 7; break;
+        case "symbol": sum += 8; break;
+        default: break;
+        }
+    }
+    global_res = sum;
+    return n;
+}
+
+/* the switch of strings given values that are no strings: every case a
+   miss, 1 not even "1" */
+function string_switch_nonstring(n)
+{
+    return extra_string_switch(n, [1, null, undefined, 3.5]);
+}
+
 /* a class's private field, read and written, and its private method,
    called */
 class PrivateCounter

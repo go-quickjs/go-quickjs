@@ -21,6 +21,13 @@ func TestStringSwitchMicrobenchmarks(t *testing.T) {
 		{"string_switch_last", 144},
 		{"string_switch_miss", 0},
 		{"string_switch_mixed", 51},
+		{"string_switch_built", 51},
+		{"string_switch_small", 13},
+		{"string_switch_large", 207},
+		{"string_switch_prefix", 87},
+		{"string_switch_long", 70},
+		{"string_switch_typeof", 25},
+		{"string_switch_nonstring", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			v, err := rt.Eval(fmt.Sprintf("%s(9) + ':' + global_res", tc.name))
