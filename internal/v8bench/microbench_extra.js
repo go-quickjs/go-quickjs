@@ -1053,6 +1053,1128 @@ function typed_forEach(n)
     return n * len;
 }
 
+/* an Int32Array of a hundred, 0 to 99, as typed_forEach's */
+function extra_int32s(len)
+{
+    var r = new Int32Array(len);
+    for (var i = 0; i < len; i++)
+        r[i] = i;
+    return r;
+}
+
+/* %TypedArray%.prototype.map into a new Int32Array of a hundred */
+function typed_map(n)
+{
+    var r, j, len = 100;
+    r = extra_int32s(len);
+    for (j = 0; j < n; j++)
+        global_res = r.map((x) => x * 2);
+    return n * len;
+}
+
+/* %TypedArray%.prototype.filter of a hundred, keeping half */
+function typed_filter(n)
+{
+    var r, j, len = 100;
+    r = extra_int32s(len);
+    for (j = 0; j < n; j++)
+        global_res = r.filter((x) => (x & 1) === 0);
+    return n * len;
+}
+
+/* %TypedArray%.prototype.reduce of a hundred, with an initial value */
+function typed_reduce(n)
+{
+    var r, j, len = 100;
+    r = extra_int32s(len);
+    for (j = 0; j < n; j++)
+        global_res = r.reduce((acc, x) => acc + x, 0);
+    return n * len;
+}
+
+/* %TypedArray%.prototype.some of a hundred, the one it looks for the last */
+function typed_some(n)
+{
+    var r, j, len = 100;
+    r = extra_int32s(len);
+    for (j = 0; j < n; j++)
+        global_res = r.some((x) => x === len - 1);
+    return n * len;
+}
+
+/* %TypedArray%.prototype.every of a hundred, each true */
+function typed_every(n)
+{
+    var r, j, len = 100;
+    r = extra_int32s(len);
+    for (j = 0; j < n; j++)
+        global_res = r.every((x) => x < len);
+    return n * len;
+}
+
+/* %TypedArray%.prototype.find of the last of a hundred */
+function typed_find(n)
+{
+    var r, j, len = 100;
+    r = extra_int32s(len);
+    for (j = 0; j < n; j++)
+        global_res = r.find((x) => x === len - 1);
+    return n * len;
+}
+
+/* %TypedArray%.prototype.findIndex of the last of a hundred */
+function typed_findIndex(n)
+{
+    var r, j, len = 100;
+    r = extra_int32s(len);
+    for (j = 0; j < n; j++)
+        global_res = r.findIndex((x) => x === len - 1);
+    return n * len;
+}
+
+/* %TypedArray%.prototype.sort of a hundred, a permutation of 0 to 99
+   copied in each turn, by a comparator; an operation is an element sorted,
+   whatever comparisons the engine's sort makes */
+function typed_sort(n)
+{
+    var r, s, i, j, len = 100;
+    s = new Int32Array(len);
+    for (i = 0; i < len; i++)
+        s[i] = (i * 37) % len;
+    r = new Int32Array(len);
+    for (j = 0; j < n; j++) {
+        r.set(s);
+        r.sort((a, b) => a - b);
+    }
+    global_res = r[len - 1];
+    return n * len;
+}
+
+/* The typed array tests above over each element type: forEach and reduce
+   over all of them, the other callback methods over a Uint8Array, a
+   Float64Array and a BigInt64Array, and typed_array_read's and
+   typed_array_write's loops, which are an Int32Array's. */
+
+/* a Int8Array of -50 to 49 */
+function extra_i8s(len)
+{
+    var r = new Int8Array(len);
+    for (var i = 0; i < len; i++)
+        r[i] = i - 50;
+    return r;
+}
+
+/* a Uint8Array of 50 to 248, as a byte buffer's */
+function extra_u8s(len)
+{
+    var r = new Uint8Array(len);
+    for (var i = 0; i < len; i++)
+        r[i] = i * 2 + 50;
+    return r;
+}
+
+/* a Uint8ClampedArray of 50 to 248, as an image's pixels */
+function extra_u8cs(len)
+{
+    var r = new Uint8ClampedArray(len);
+    for (var i = 0; i < len; i++)
+        r[i] = i * 2 + 50;
+    return r;
+}
+
+/* a Int16Array of -30000 to 29400 */
+function extra_i16s(len)
+{
+    var r = new Int16Array(len);
+    for (var i = 0; i < len; i++)
+        r[i] = (i - 50) * 600;
+    return r;
+}
+
+/* a Uint16Array of 0 to 64350 */
+function extra_u16s(len)
+{
+    var r = new Uint16Array(len);
+    for (var i = 0; i < len; i++)
+        r[i] = i * 650;
+    return r;
+}
+
+/* a Uint32Array whose odd elements are above 2**31, no int32s */
+function extra_u32s(len)
+{
+    var r = new Uint32Array(len);
+    for (var i = 0; i < len; i++)
+        r[i] = i & 1 ? 0x80000000 + i : i;
+    return r;
+}
+
+/* a Float32Array of i / 4 + 0.1, each rounded to float32 */
+function extra_f32s(len)
+{
+    var r = new Float32Array(len);
+    for (var i = 0; i < len; i++)
+        r[i] = i * 0.25 + 0.1;
+    return r;
+}
+
+/* a Float64Array of i / 4 + 0.1 */
+function extra_f64s(len)
+{
+    var r = new Float64Array(len);
+    for (var i = 0; i < len; i++)
+        r[i] = i * 0.25 + 0.1;
+    return r;
+}
+
+/* a BigInt64Array of (i - 50) * 10**12 */
+function extra_i64s(len)
+{
+    var r = new BigInt64Array(len);
+    for (var i = 0; i < len; i++)
+        r[i] = BigInt(i - 50) * 1000000000000n;
+    return r;
+}
+
+/* a BigUint64Array whose odd elements are above 2**63 */
+function extra_u64s(len)
+{
+    var r = new BigUint64Array(len);
+    for (var i = 0; i < len; i++)
+        r[i] = i & 1 ? 2n ** 63n + BigInt(i) : BigInt(i);
+    return r;
+}
+
+/* typed_forEach over extra_i8s */
+function typed_i8_forEach(n)
+{
+    var r, j, sum, len = 100;
+    r = extra_i8s(len);
+    for (j = 0; j < n; j++) {
+        sum = 0;
+        r.forEach((x) => { sum += x; });
+        global_res = sum;
+    }
+    return n * len;
+}
+
+/* typed_reduce over extra_i8s */
+function typed_i8_reduce(n)
+{
+    var r, j, len = 100;
+    r = extra_i8s(len);
+    for (j = 0; j < n; j++)
+        global_res = r.reduce((acc, x) => acc + x, 0);
+    return n * len;
+}
+
+/* typed_array_read over a Int8Array of ten, as extra_i8s fills it */
+function typed_i8_read(n)
+{
+    var tab, sum, j, len = 10;
+    tab = extra_i8s(len);
+    sum = 0;
+    for (j = 0; j < n; j++) {
+        sum += tab[0];
+        sum += tab[1];
+        sum += tab[2];
+        sum += tab[3];
+        sum += tab[4];
+        sum += tab[5];
+        sum += tab[6];
+        sum += tab[7];
+        sum += tab[8];
+        sum += tab[9];
+    }
+    global_res = sum;
+    return len * n;
+}
+
+/* typed_array_write over a Int8Array of ten, of j wrapped to a byte */
+function typed_i8_write(n)
+{
+    var tab, j, v = 0, len = 10;
+    tab = extra_i8s(len);
+    for (j = 0; j < n; j++) {
+        v = j;
+        tab[0] = v;
+        tab[1] = v;
+        tab[2] = v;
+        tab[3] = v;
+        tab[4] = v;
+        tab[5] = v;
+        tab[6] = v;
+        tab[7] = v;
+        tab[8] = v;
+        tab[9] = v;
+    }
+    global_res = tab[9];
+    return len * n;
+}
+
+/* typed_forEach over extra_u8s */
+function typed_u8_forEach(n)
+{
+    var r, j, sum, len = 100;
+    r = extra_u8s(len);
+    for (j = 0; j < n; j++) {
+        sum = 0;
+        r.forEach((x) => { sum += x; });
+        global_res = sum;
+    }
+    return n * len;
+}
+
+/* typed_reduce over extra_u8s */
+function typed_u8_reduce(n)
+{
+    var r, j, len = 100;
+    r = extra_u8s(len);
+    for (j = 0; j < n; j++)
+        global_res = r.reduce((acc, x) => acc + x, 0);
+    return n * len;
+}
+
+/* typed_map over extra_u8s */
+function typed_u8_map(n)
+{
+    var r, j, len = 100;
+    r = extra_u8s(len);
+    for (j = 0; j < n; j++)
+        global_res = r.map((x) => x * 2);
+    return n * len;
+}
+
+/* typed_filter over extra_u8s, keeping the even indices */
+function typed_u8_filter(n)
+{
+    var r, j, len = 100;
+    r = extra_u8s(len);
+    for (j = 0; j < n; j++)
+        global_res = r.filter((x, i) => (i & 1) === 0);
+    return n * len;
+}
+
+/* typed_every over extra_u8s, each no more than the last */
+function typed_u8_every(n)
+{
+    var r, j, last, len = 100;
+    r = extra_u8s(len);
+    last = r[len - 1];
+    for (j = 0; j < n; j++)
+        global_res = r.every((x) => x <= last);
+    return n * len;
+}
+
+/* typed_find over extra_u8s, of the last */
+function typed_u8_find(n)
+{
+    var r, j, last, len = 100;
+    r = extra_u8s(len);
+    last = r[len - 1];
+    for (j = 0; j < n; j++)
+        global_res = r.find((x) => x === last);
+    return n * len;
+}
+
+/* typed_sort over extra_u8s, permuted */
+function typed_u8_sort(n)
+{
+    var r, s, i, j, len = 100;
+    r = extra_u8s(len);
+    s = new Uint8Array(len);
+    for (i = 0; i < len; i++)
+        s[i] = r[(i * 37) % len];
+    for (j = 0; j < n; j++) {
+        r.set(s);
+        r.sort((a, b) => a - b);
+    }
+    global_res = r[len - 1];
+    return n * len;
+}
+
+/* typed_array_read over a Uint8Array of ten, as extra_u8s fills it */
+function typed_u8_read(n)
+{
+    var tab, sum, j, len = 10;
+    tab = extra_u8s(len);
+    sum = 0;
+    for (j = 0; j < n; j++) {
+        sum += tab[0];
+        sum += tab[1];
+        sum += tab[2];
+        sum += tab[3];
+        sum += tab[4];
+        sum += tab[5];
+        sum += tab[6];
+        sum += tab[7];
+        sum += tab[8];
+        sum += tab[9];
+    }
+    global_res = sum;
+    return len * n;
+}
+
+/* typed_array_write over a Uint8Array of ten, of j wrapped to a byte */
+function typed_u8_write(n)
+{
+    var tab, j, v = 0, len = 10;
+    tab = extra_u8s(len);
+    for (j = 0; j < n; j++) {
+        v = j;
+        tab[0] = v;
+        tab[1] = v;
+        tab[2] = v;
+        tab[3] = v;
+        tab[4] = v;
+        tab[5] = v;
+        tab[6] = v;
+        tab[7] = v;
+        tab[8] = v;
+        tab[9] = v;
+    }
+    global_res = tab[9];
+    return len * n;
+}
+
+/* typed_forEach over extra_u8cs */
+function typed_u8c_forEach(n)
+{
+    var r, j, sum, len = 100;
+    r = extra_u8cs(len);
+    for (j = 0; j < n; j++) {
+        sum = 0;
+        r.forEach((x) => { sum += x; });
+        global_res = sum;
+    }
+    return n * len;
+}
+
+/* typed_reduce over extra_u8cs */
+function typed_u8c_reduce(n)
+{
+    var r, j, len = 100;
+    r = extra_u8cs(len);
+    for (j = 0; j < n; j++)
+        global_res = r.reduce((acc, x) => acc + x, 0);
+    return n * len;
+}
+
+/* typed_array_read over a Uint8ClampedArray of ten, as extra_u8cs fills it */
+function typed_u8c_read(n)
+{
+    var tab, sum, j, len = 10;
+    tab = extra_u8cs(len);
+    sum = 0;
+    for (j = 0; j < n; j++) {
+        sum += tab[0];
+        sum += tab[1];
+        sum += tab[2];
+        sum += tab[3];
+        sum += tab[4];
+        sum += tab[5];
+        sum += tab[6];
+        sum += tab[7];
+        sum += tab[8];
+        sum += tab[9];
+    }
+    global_res = sum;
+    return len * n;
+}
+
+/* typed_array_write over a Uint8ClampedArray of ten, of -128 to 383, clamped to 0 to 255 */
+function typed_u8c_write(n)
+{
+    var tab, j, v = 0, len = 10;
+    tab = extra_u8cs(len);
+    for (j = 0; j < n; j++) {
+        v = (j & 511) - 128;
+        tab[0] = v;
+        tab[1] = v;
+        tab[2] = v;
+        tab[3] = v;
+        tab[4] = v;
+        tab[5] = v;
+        tab[6] = v;
+        tab[7] = v;
+        tab[8] = v;
+        tab[9] = v;
+    }
+    global_res = tab[9];
+    return len * n;
+}
+
+/* typed_forEach over extra_i16s */
+function typed_i16_forEach(n)
+{
+    var r, j, sum, len = 100;
+    r = extra_i16s(len);
+    for (j = 0; j < n; j++) {
+        sum = 0;
+        r.forEach((x) => { sum += x; });
+        global_res = sum;
+    }
+    return n * len;
+}
+
+/* typed_reduce over extra_i16s */
+function typed_i16_reduce(n)
+{
+    var r, j, len = 100;
+    r = extra_i16s(len);
+    for (j = 0; j < n; j++)
+        global_res = r.reduce((acc, x) => acc + x, 0);
+    return n * len;
+}
+
+/* typed_array_read over a Int16Array of ten, as extra_i16s fills it */
+function typed_i16_read(n)
+{
+    var tab, sum, j, len = 10;
+    tab = extra_i16s(len);
+    sum = 0;
+    for (j = 0; j < n; j++) {
+        sum += tab[0];
+        sum += tab[1];
+        sum += tab[2];
+        sum += tab[3];
+        sum += tab[4];
+        sum += tab[5];
+        sum += tab[6];
+        sum += tab[7];
+        sum += tab[8];
+        sum += tab[9];
+    }
+    global_res = sum;
+    return len * n;
+}
+
+/* typed_array_write over a Int16Array of ten, of j wrapped */
+function typed_i16_write(n)
+{
+    var tab, j, v = 0, len = 10;
+    tab = extra_i16s(len);
+    for (j = 0; j < n; j++) {
+        v = j;
+        tab[0] = v;
+        tab[1] = v;
+        tab[2] = v;
+        tab[3] = v;
+        tab[4] = v;
+        tab[5] = v;
+        tab[6] = v;
+        tab[7] = v;
+        tab[8] = v;
+        tab[9] = v;
+    }
+    global_res = tab[9];
+    return len * n;
+}
+
+/* typed_forEach over extra_u16s */
+function typed_u16_forEach(n)
+{
+    var r, j, sum, len = 100;
+    r = extra_u16s(len);
+    for (j = 0; j < n; j++) {
+        sum = 0;
+        r.forEach((x) => { sum += x; });
+        global_res = sum;
+    }
+    return n * len;
+}
+
+/* typed_reduce over extra_u16s */
+function typed_u16_reduce(n)
+{
+    var r, j, len = 100;
+    r = extra_u16s(len);
+    for (j = 0; j < n; j++)
+        global_res = r.reduce((acc, x) => acc + x, 0);
+    return n * len;
+}
+
+/* typed_array_read over a Uint16Array of ten, as extra_u16s fills it */
+function typed_u16_read(n)
+{
+    var tab, sum, j, len = 10;
+    tab = extra_u16s(len);
+    sum = 0;
+    for (j = 0; j < n; j++) {
+        sum += tab[0];
+        sum += tab[1];
+        sum += tab[2];
+        sum += tab[3];
+        sum += tab[4];
+        sum += tab[5];
+        sum += tab[6];
+        sum += tab[7];
+        sum += tab[8];
+        sum += tab[9];
+    }
+    global_res = sum;
+    return len * n;
+}
+
+/* typed_array_write over a Uint16Array of ten, of j wrapped */
+function typed_u16_write(n)
+{
+    var tab, j, v = 0, len = 10;
+    tab = extra_u16s(len);
+    for (j = 0; j < n; j++) {
+        v = j;
+        tab[0] = v;
+        tab[1] = v;
+        tab[2] = v;
+        tab[3] = v;
+        tab[4] = v;
+        tab[5] = v;
+        tab[6] = v;
+        tab[7] = v;
+        tab[8] = v;
+        tab[9] = v;
+    }
+    global_res = tab[9];
+    return len * n;
+}
+
+/* typed_forEach over extra_u32s */
+function typed_u32_forEach(n)
+{
+    var r, j, sum, len = 100;
+    r = extra_u32s(len);
+    for (j = 0; j < n; j++) {
+        sum = 0;
+        r.forEach((x) => { sum += x; });
+        global_res = sum;
+    }
+    return n * len;
+}
+
+/* typed_reduce over extra_u32s */
+function typed_u32_reduce(n)
+{
+    var r, j, len = 100;
+    r = extra_u32s(len);
+    for (j = 0; j < n; j++)
+        global_res = r.reduce((acc, x) => acc + x, 0);
+    return n * len;
+}
+
+/* typed_array_read over a Uint32Array of ten, as extra_u32s fills it */
+function typed_u32_read(n)
+{
+    var tab, sum, j, len = 10;
+    tab = extra_u32s(len);
+    sum = 0;
+    for (j = 0; j < n; j++) {
+        sum += tab[0];
+        sum += tab[1];
+        sum += tab[2];
+        sum += tab[3];
+        sum += tab[4];
+        sum += tab[5];
+        sum += tab[6];
+        sum += tab[7];
+        sum += tab[8];
+        sum += tab[9];
+    }
+    global_res = sum;
+    return len * n;
+}
+
+/* typed_array_write over a Uint32Array of ten, of above 2**31 */
+function typed_u32_write(n)
+{
+    var tab, j, v = 0, len = 10;
+    tab = extra_u32s(len);
+    for (j = 0; j < n; j++) {
+        v = j + 0x80000000;
+        tab[0] = v;
+        tab[1] = v;
+        tab[2] = v;
+        tab[3] = v;
+        tab[4] = v;
+        tab[5] = v;
+        tab[6] = v;
+        tab[7] = v;
+        tab[8] = v;
+        tab[9] = v;
+    }
+    global_res = tab[9];
+    return len * n;
+}
+
+/* typed_forEach over extra_f32s */
+function typed_f32_forEach(n)
+{
+    var r, j, sum, len = 100;
+    r = extra_f32s(len);
+    for (j = 0; j < n; j++) {
+        sum = 0;
+        r.forEach((x) => { sum += x; });
+        global_res = sum;
+    }
+    return n * len;
+}
+
+/* typed_reduce over extra_f32s */
+function typed_f32_reduce(n)
+{
+    var r, j, len = 100;
+    r = extra_f32s(len);
+    for (j = 0; j < n; j++)
+        global_res = r.reduce((acc, x) => acc + x, 0);
+    return n * len;
+}
+
+/* typed_array_read over a Float32Array of ten, as extra_f32s fills it */
+function typed_f32_read(n)
+{
+    var tab, sum, j, len = 10;
+    tab = extra_f32s(len);
+    sum = 0;
+    for (j = 0; j < n; j++) {
+        sum += tab[0];
+        sum += tab[1];
+        sum += tab[2];
+        sum += tab[3];
+        sum += tab[4];
+        sum += tab[5];
+        sum += tab[6];
+        sum += tab[7];
+        sum += tab[8];
+        sum += tab[9];
+    }
+    global_res = sum;
+    return len * n;
+}
+
+/* typed_array_write over a Float32Array of ten, of j / 10, rounded to float32 */
+function typed_f32_write(n)
+{
+    var tab, j, v = 0, len = 10;
+    tab = extra_f32s(len);
+    for (j = 0; j < n; j++) {
+        v = j * 0.1;
+        tab[0] = v;
+        tab[1] = v;
+        tab[2] = v;
+        tab[3] = v;
+        tab[4] = v;
+        tab[5] = v;
+        tab[6] = v;
+        tab[7] = v;
+        tab[8] = v;
+        tab[9] = v;
+    }
+    global_res = tab[9];
+    return len * n;
+}
+
+/* typed_forEach over extra_f64s */
+function typed_f64_forEach(n)
+{
+    var r, j, sum, len = 100;
+    r = extra_f64s(len);
+    for (j = 0; j < n; j++) {
+        sum = 0;
+        r.forEach((x) => { sum += x; });
+        global_res = sum;
+    }
+    return n * len;
+}
+
+/* typed_reduce over extra_f64s */
+function typed_f64_reduce(n)
+{
+    var r, j, len = 100;
+    r = extra_f64s(len);
+    for (j = 0; j < n; j++)
+        global_res = r.reduce((acc, x) => acc + x, 0);
+    return n * len;
+}
+
+/* typed_map over extra_f64s */
+function typed_f64_map(n)
+{
+    var r, j, len = 100;
+    r = extra_f64s(len);
+    for (j = 0; j < n; j++)
+        global_res = r.map((x) => x * 2);
+    return n * len;
+}
+
+/* typed_filter over extra_f64s, keeping the even indices */
+function typed_f64_filter(n)
+{
+    var r, j, len = 100;
+    r = extra_f64s(len);
+    for (j = 0; j < n; j++)
+        global_res = r.filter((x, i) => (i & 1) === 0);
+    return n * len;
+}
+
+/* typed_every over extra_f64s, each no more than the last */
+function typed_f64_every(n)
+{
+    var r, j, last, len = 100;
+    r = extra_f64s(len);
+    last = r[len - 1];
+    for (j = 0; j < n; j++)
+        global_res = r.every((x) => x <= last);
+    return n * len;
+}
+
+/* typed_find over extra_f64s, of the last */
+function typed_f64_find(n)
+{
+    var r, j, last, len = 100;
+    r = extra_f64s(len);
+    last = r[len - 1];
+    for (j = 0; j < n; j++)
+        global_res = r.find((x) => x === last);
+    return n * len;
+}
+
+/* typed_sort over extra_f64s, permuted */
+function typed_f64_sort(n)
+{
+    var r, s, i, j, len = 100;
+    r = extra_f64s(len);
+    s = new Float64Array(len);
+    for (i = 0; i < len; i++)
+        s[i] = r[(i * 37) % len];
+    for (j = 0; j < n; j++) {
+        r.set(s);
+        r.sort((a, b) => a - b);
+    }
+    global_res = r[len - 1];
+    return n * len;
+}
+
+/* typed_array_read over a Float64Array of ten, as extra_f64s fills it */
+function typed_f64_read(n)
+{
+    var tab, sum, j, len = 10;
+    tab = extra_f64s(len);
+    sum = 0;
+    for (j = 0; j < n; j++) {
+        sum += tab[0];
+        sum += tab[1];
+        sum += tab[2];
+        sum += tab[3];
+        sum += tab[4];
+        sum += tab[5];
+        sum += tab[6];
+        sum += tab[7];
+        sum += tab[8];
+        sum += tab[9];
+    }
+    global_res = sum;
+    return len * n;
+}
+
+/* typed_array_write over a Float64Array of ten, of j / 10 */
+function typed_f64_write(n)
+{
+    var tab, j, v = 0, len = 10;
+    tab = extra_f64s(len);
+    for (j = 0; j < n; j++) {
+        v = j * 0.1;
+        tab[0] = v;
+        tab[1] = v;
+        tab[2] = v;
+        tab[3] = v;
+        tab[4] = v;
+        tab[5] = v;
+        tab[6] = v;
+        tab[7] = v;
+        tab[8] = v;
+        tab[9] = v;
+    }
+    global_res = tab[9];
+    return len * n;
+}
+
+/* typed_forEach over extra_i64s */
+function typed_i64_forEach(n)
+{
+    var r, j, sum, len = 100;
+    r = extra_i64s(len);
+    for (j = 0; j < n; j++) {
+        sum = 0n;
+        r.forEach((x) => { sum += x; });
+        global_res = sum;
+    }
+    return n * len;
+}
+
+/* typed_reduce over extra_i64s */
+function typed_i64_reduce(n)
+{
+    var r, j, len = 100;
+    r = extra_i64s(len);
+    for (j = 0; j < n; j++)
+        global_res = r.reduce((acc, x) => acc + x, 0n);
+    return n * len;
+}
+
+/* typed_map over extra_i64s */
+function typed_i64_map(n)
+{
+    var r, j, len = 100;
+    r = extra_i64s(len);
+    for (j = 0; j < n; j++)
+        global_res = r.map((x) => x * 2n);
+    return n * len;
+}
+
+/* typed_filter over extra_i64s, keeping the even indices */
+function typed_i64_filter(n)
+{
+    var r, j, len = 100;
+    r = extra_i64s(len);
+    for (j = 0; j < n; j++)
+        global_res = r.filter((x, i) => (i & 1) === 0);
+    return n * len;
+}
+
+/* typed_every over extra_i64s, each no more than the last */
+function typed_i64_every(n)
+{
+    var r, j, last, len = 100;
+    r = extra_i64s(len);
+    last = r[len - 1];
+    for (j = 0; j < n; j++)
+        global_res = r.every((x) => x <= last);
+    return n * len;
+}
+
+/* typed_find over extra_i64s, of the last */
+function typed_i64_find(n)
+{
+    var r, j, last, len = 100;
+    r = extra_i64s(len);
+    last = r[len - 1];
+    for (j = 0; j < n; j++)
+        global_res = r.find((x) => x === last);
+    return n * len;
+}
+
+/* typed_sort over extra_i64s, permuted */
+function typed_i64_sort(n)
+{
+    var r, s, i, j, len = 100;
+    r = extra_i64s(len);
+    s = new BigInt64Array(len);
+    for (i = 0; i < len; i++)
+        s[i] = r[(i * 37) % len];
+    for (j = 0; j < n; j++) {
+        r.set(s);
+        r.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    }
+    global_res = r[len - 1];
+    return n * len;
+}
+
+/* typed_array_read over a BigInt64Array of ten, as extra_i64s fills it */
+function typed_i64_read(n)
+{
+    var tab, sum, j, len = 10;
+    tab = extra_i64s(len);
+    sum = 0n;
+    for (j = 0; j < n; j++) {
+        sum += tab[0];
+        sum += tab[1];
+        sum += tab[2];
+        sum += tab[3];
+        sum += tab[4];
+        sum += tab[5];
+        sum += tab[6];
+        sum += tab[7];
+        sum += tab[8];
+        sum += tab[9];
+    }
+    global_res = sum;
+    return len * n;
+}
+
+/* typed_array_write over a BigInt64Array of ten, of a BigInt stepped by 3 */
+function typed_i64_write(n)
+{
+    var tab, j, v = 0n, len = 10;
+    tab = extra_i64s(len);
+    for (j = 0; j < n; j++) {
+        v += 3n;
+        tab[0] = v;
+        tab[1] = v;
+        tab[2] = v;
+        tab[3] = v;
+        tab[4] = v;
+        tab[5] = v;
+        tab[6] = v;
+        tab[7] = v;
+        tab[8] = v;
+        tab[9] = v;
+    }
+    global_res = tab[9];
+    return len * n;
+}
+
+/* typed_forEach over extra_u64s */
+function typed_u64_forEach(n)
+{
+    var r, j, sum, len = 100;
+    r = extra_u64s(len);
+    for (j = 0; j < n; j++) {
+        sum = 0n;
+        r.forEach((x) => { sum += x; });
+        global_res = sum;
+    }
+    return n * len;
+}
+
+/* typed_reduce over extra_u64s */
+function typed_u64_reduce(n)
+{
+    var r, j, len = 100;
+    r = extra_u64s(len);
+    for (j = 0; j < n; j++)
+        global_res = r.reduce((acc, x) => acc + x, 0n);
+    return n * len;
+}
+
+/* typed_array_read over a BigUint64Array of ten, as extra_u64s fills it */
+function typed_u64_read(n)
+{
+    var tab, sum, j, len = 10;
+    tab = extra_u64s(len);
+    sum = 0n;
+    for (j = 0; j < n; j++) {
+        sum += tab[0];
+        sum += tab[1];
+        sum += tab[2];
+        sum += tab[3];
+        sum += tab[4];
+        sum += tab[5];
+        sum += tab[6];
+        sum += tab[7];
+        sum += tab[8];
+        sum += tab[9];
+    }
+    global_res = sum;
+    return len * n;
+}
+
+/* typed_array_write over a BigUint64Array of ten, of a BigInt above 2**63 stepped by 3 */
+function typed_u64_write(n)
+{
+    var tab, j, v = 2n ** 63n, len = 10;
+    tab = extra_u64s(len);
+    for (j = 0; j < n; j++) {
+        v += 3n;
+        tab[0] = v;
+        tab[1] = v;
+        tab[2] = v;
+        tab[3] = v;
+        tab[4] = v;
+        tab[5] = v;
+        tab[6] = v;
+        tab[7] = v;
+        tab[8] = v;
+        tab[9] = v;
+    }
+    global_res = tab[9];
+    return len * n;
+}
+
+/* a DataView's getters over a record of 64 bytes, as a binary format's
+   reader takes its fields: bytes, little-endian int32s and float64s */
+function extra_record()
+{
+    var v = new DataView(new ArrayBuffer(64));
+    for (var i = 0; i < 64; i++)
+        v.setUint8(i, i * 7);
+    v.setFloat64(16, 1.5, true);
+    v.setFloat64(24, -2.25, true);
+    v.setFloat64(32, 1e10, true);
+    return v;
+}
+
+function dataview_read(n)
+{
+    var v, j, sum = 0;
+    v = extra_record();
+    for (j = 0; j < n; j++) {
+        sum += v.getUint8(0);
+        sum += v.getUint8(1);
+        sum += v.getUint8(2);
+        sum += v.getUint8(3);
+        sum += v.getInt32(4, true);
+        sum += v.getInt32(8, true);
+        sum += v.getInt32(12, true);
+        sum += v.getFloat64(16, true);
+        sum += v.getFloat64(24, true);
+        sum += v.getFloat64(32, true);
+    }
+    global_res = sum;
+    return 10 * n;
+}
+
+/* a DataView's setters, as dataview_read's getters */
+function dataview_write(n)
+{
+    var v, j, x;
+    v = extra_record();
+    for (j = 0; j < n; j++) {
+        x = j * 0.5;
+        v.setUint8(0, j);
+        v.setUint8(1, j);
+        v.setUint8(2, j);
+        v.setUint8(3, j);
+        v.setInt32(4, j, true);
+        v.setInt32(8, j, true);
+        v.setInt32(12, j, true);
+        v.setFloat64(16, x, true);
+        v.setFloat64(24, x, true);
+        v.setFloat64(32, x, true);
+    }
+    global_res = v.getFloat64(16, true);
+    return 10 * n;
+}
+
+/* Map.prototype.forEach over a hundred entries, its callback an arrow made
+   anew at each call that adds to a binding it captured */
+function map_forEach(n)
+{
+    var m, i, j, sum, len = 100;
+    m = new Map();
+    for (i = 0; i < len; i++)
+        m.set(i, i);
+    for (j = 0; j < n; j++) {
+        sum = 0;
+        m.forEach((v, k) => { sum += v; });
+        global_res = sum;
+    }
+    return n * len;
+}
+
+/* Set.prototype.forEach over a hundred numbers, as map_forEach */
+function set_forEach(n)
+{
+    var s, i, j, sum, len = 100;
+    s = new Set();
+    for (i = 0; i < len; i++)
+        s.add(i);
+    for (j = 0; j < n; j++) {
+        sum = 0;
+        s.forEach((x) => { sum += x; });
+        global_res = sum;
+    }
+    return n * len;
+}
+
 /* Array.prototype.some over a hundred numbers, the one it looks for the
    last, as every, find and findIndex walk an array */
 function array_some(n)
@@ -1063,6 +2185,135 @@ function array_some(n)
         r[i] = i;
     for (j = 0; j < n; j++)
         global_res = r.some((x) => x === len - 1);
+    return n * len;
+}
+
+/* The callbacks a built-in calls for each element, as array_forEach and
+   typed_forEach have them -- an arrow made anew at each call that writes
+   a binding it captured -- each varied in one thing: made once, a function
+   expression, an arrow reading this in a method, a loop of the script's own
+   calling it, other methods calling it, a typed array's, a Map's or a Set's
+   method. */
+
+/* array_forEach's arrow made once, before the loop */
+function array_forEach_once(n)
+{
+    var r, i, j, sum, add, len = 100;
+    r = [];
+    for (i = 0; i < len; i++)
+        r[i] = i;
+    add = (x) => { sum += x; };
+    for (j = 0; j < n; j++) {
+        sum = 0;
+        r.forEach(add);
+        global_res = sum;
+    }
+    return n * len;
+}
+
+/* array_forEach's callback a function expression rather than an arrow */
+function array_forEach_function(n)
+{
+    var r, i, j, sum, len = 100;
+    r = [];
+    for (i = 0; i < len; i++)
+        r[i] = i;
+    for (j = 0; j < n; j++) {
+        sum = 0;
+        r.forEach(function (x) { sum += x; });
+        global_res = sum;
+    }
+    return n * len;
+}
+
+/* a method whose forEach callback, an arrow made at each call, adds to a
+   property of the method's this */
+class ExtraTally
+{
+    constructor(len)
+    {
+        this.sum = 0;
+        this.items = [];
+        for (var i = 0; i < len; i++)
+            this.items[i] = i;
+    }
+    total()
+    {
+        this.sum = 0;
+        this.items.forEach((x) => { this.sum += x; });
+        return this.sum;
+    }
+}
+
+function array_forEach_this(n)
+{
+    var j, len = 100, t = new ExtraTally(len);
+    for (j = 0; j < n; j++)
+        global_res = t.total();
+    return n * len;
+}
+
+/* array_forEach's arrow called by a loop of the script's own rather than
+   by the built-in */
+function extra_forEach(a, f)
+{
+    for (var i = 0; i < a.length; i++)
+        f(a[i], i, a);
+}
+
+function array_forEach_user(n)
+{
+    var r, i, j, sum, len = 100;
+    r = [];
+    for (i = 0; i < len; i++)
+        r[i] = i;
+    for (j = 0; j < n; j++) {
+        sum = 0;
+        extra_forEach(r, (x) => { sum += x; });
+        global_res = sum;
+    }
+    return n * len;
+}
+
+/* array_reduce's callback also counting its calls in a captured binding */
+function array_reduce_upvalue(n)
+{
+    var r, i, j, calls = 0, len = 100;
+    r = [];
+    for (i = 0; i < len; i++)
+        r[i] = i;
+    for (j = 0; j < n; j++)
+        global_res = r.reduce((acc, x) => { calls++; return acc + x; }, 0);
+    global_res += calls;
+    return n * len;
+}
+
+/* Array.prototype.every over a hundred numbers, each true, its callback
+   keeping the last it was given in a captured binding */
+function array_every_upvalue(n)
+{
+    var r, i, j, last = 0, len = 100;
+    r = [];
+    for (i = 0; i < len; i++)
+        r[i] = i;
+    for (j = 0; j < n; j++)
+        global_res = r.every((x) => { last = x; return x < len; });
+    global_res += last;
+    return n * len;
+}
+
+/* Array.prototype.find of the last of a hundred numbers, its callback
+   adding each it is given to a captured binding */
+function array_find_upvalue(n)
+{
+    var r, i, j, seen, len = 100;
+    r = [];
+    for (i = 0; i < len; i++)
+        r[i] = i;
+    for (j = 0; j < n; j++) {
+        seen = 0;
+        global_res = r.find((x) => { seen += x; return x === len - 1; }) + seen;
+    }
     return n * len;
 }
 
