@@ -221,7 +221,7 @@ func (r *Runtime) callDirect(callee, this Value, args []Value) (Value, error) {
 				if fd.arrow {
 					this, newTarget = fd.extra.lexThis, fd.extra.lexNewTarget
 				}
-				v, err := r.runFD(fd.closure, this, args, newTarget, o, fd)
+				v, err := directRest[struct{}](r, o, fd, this, args, newTarget)
 				if err == errNoSuper {
 					err = r.throwError(errReference, "%s", errNoSuper.Error())
 				}
