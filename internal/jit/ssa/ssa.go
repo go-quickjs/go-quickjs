@@ -720,6 +720,19 @@ type InlineCache struct {
 	// Primitive, for a primitive's property (OpStringProp), is the kind of
 	// receiver it reads (PropertySite's Primitive).
 	Primitive Primitive
+	// Str, for a string constant's cell (OpConstCell), is the string, as
+	// StringContentFeedback says it: what native code compares a string
+	// with by its length and its bytes.
+	Str *string
+}
+
+// ConstString is the string v, a string constant's cell (OpConstCell), holds
+// (InlineCache's Str), if it is known.
+func (v *Value) ConstString() (string, bool) {
+	if v.Op != OpConstCell || v.IC == nil || v.IC.Str == nil {
+		return "", false
+	}
+	return *v.IC.Str, true
 }
 
 // Tries reports whether v, a property's cell, is none where it finds no

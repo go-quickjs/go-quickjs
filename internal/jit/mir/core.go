@@ -2283,6 +2283,81 @@ func (c *core) constWord(k ir.Value) uint64 {
 	}
 	panic(fmt.Sprintf("tagged constant of kind %d", k.Kind))
 }
+
+// maxConstString is the longest string constant, in bytes, a strict
+// equality compares a string with as immediates (strConstOf).
+const maxConstString = 64
+
+// eqConstOf is v's operands, an OpEqTagged's, where one is a constant
+// whose strict equality is its word's -- a number, a boolean, null or
+// undefined -- the other and the constant; false for any other.
+func eqConstOf(v *ssa.Value) (*ssa.Value, ir.Value, bool) {
+	x, y := v.Args[0], v.Args[1]
+	if x.Op == ssa.OpConst {
+		x, y = y, x
+	}
+	if y.Op != ssa.OpConst || x.Op == ssa.OpConst {
+		return nil, ir.Value{}, false
+	}
+	switch y.Const.Kind {
+	case ir.Number, ir.Boolean, ir.Null, ir.Undefined:
+		return x, y.Const, true
+	}
+	return nil, ir.Value{}, false
+}
+
+// strConstOf is v's operands, an OpEqTagged's, where one is a string
+// constant's cell loaded whose string is known (ssa.Value's ConstString),
+// ASCII and of no more than maxConstString bytes: the other and the
+// string; false for any other.
+func strConstOf(v *ssa.Value) (*ssa.Value, string, bool) {
+	for i, y := range v.Args[:2] {
+		if y.Op != ssa.OpLoadCell || len(y.Args) != 1 {
+			continue
+		}
+		k, ok := y.Args[0].ConstString()
+		if !ok || len(k) > maxConstString {
+			continue
+		}
+		ascii := true
+		for j := 0; j < len(k); j++ {
+			ascii = ascii && k[j] < 0x80
+		}
+		if ascii {
+			return v.Args[1-i], k, true
+		}
+	}
+	return nil, "", false
+}
+
+// strBytes compares n bytes as chunk compares a chunk of size bytes at at
+// -- 8, 4, 2 or 1 -- in as few as cover them: words, the last overlapping
+// the one before where n is not a multiple of 8; below a word, two halves
+// that may overlap.
+func strBytes(n int, chunk func(at, size int)) {
+	switch {
+	case n >= 8:
+		for at := 0; at+8 <= n; at += 8 {
+			chunk(at, 8)
+		}
+		if n%8 != 0 {
+			chunk(n-8, 8)
+		}
+	case n >= 4:
+		chunk(0, 4)
+		if n > 4 {
+			chunk(n-4, 4)
+		}
+	case n >= 2:
+		chunk(0, 2)
+		if n > 2 {
+			chunk(n-1, 1)
+		}
+	case n == 1:
+		chunk(0, 1)
+	}
+}
+
 func exitKind(aux int) uint64 {
 	if ir.ExitKind(aux) == ir.HostExit {
 		return abi.ExitHost

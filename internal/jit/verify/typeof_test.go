@@ -21,6 +21,13 @@ var typeofCorpus = []string{
 	`function f(a,n){let s=0;for(let i=0;i<n;i++){const t=typeof a[i&7];if(t==='number')s+=1;else if(t==='object')s+=2}return s}`,
 	`function f(a,n){let s=0;for(let i=0;i<n;i++){const v=a[i&7];if(typeof v==='object')s++;if(typeof v!=='function')s+=2;` +
 		`if(typeof v=='symbol')s+=4;if(typeof v==='bigint')s+=8;if(typeof v==='strnig')s+=16;if(typeof v!='undefined')s+=32}return s}`,
+	// Strict equalities with constants, a switch's among them, which
+	// native code compares by the word or by the string's length and bytes
+	// (mir's strictConst).
+	`function f(a,n){let s=0;for(let i=0;i<n;i++){switch(a[i&7]){case 'a':s+=1;break;case 'section':s+=2;break;` +
+		`case 'todos/todosLoaded':s+=3;break;case '':s+=4;break;case 'abc':s+=5;break;case 'abcdefghij':s+=6;break;case 'été':s+=7;break;` +
+		`case 1:s+=8;break;case 0:s+=9;break;case 1.5:s+=10;break;case true:s+=11;break;case null:s+=12;break;default:s+=13}}return s}`,
+	`function f(a,n){let s=0;for(let i=0;i<n;i++){const x=a[i&7];if(x==='ab')s++;if(x!=='abcd')s+=2;if('abcdefg'===x)s+=4;if(x===NaN)s+=8;if(x!==-0)s+=16}return s}`,
 }
 
 // typeofs is globals whose typeofs Go makes from native code (a GoCall
@@ -33,6 +40,25 @@ type typeofs struct {
 
 func (typeofs) GoCalls() bool                { return true }
 func (typeofs) TypeofCells() (uintptr, bool) { return 0x94000, true }
+
+// StringCell and StringContent keep the string constants in cells of
+// their own and say what each is (ssa.ConstantFeedback,
+// ssa.StringContentFeedback).
+func (t typeofs) StringCell(pc int) (uintptr, bool) {
+	_, ok := t.StringContent(pc)
+	return 0x95000 + uintptr(pc)*16, ok
+}
+func (t typeofs) StringContent(pc int) (string, bool) {
+	switch in := t.fn.Code[pc]; in.Op {
+	case bytecode.OpPushEmptyString:
+		return "", true
+	case bytecode.OpPushConst:
+		if k := t.fn.Constants[in.A]; k.Kind == bytecode.ConstString {
+			return k.Str, true
+		}
+	}
+	return "", false
+}
 func (t typeofs) NativeCalls(pc int) []ssa.CallSite {
 	if t.fn.Code[pc].Op != bytecode.OpTypeOf {
 		return nil
@@ -40,8 +66,9 @@ func (t typeofs) NativeCalls(pc int) []ssa.CallSite {
 	return []ssa.CallSite{{Go: ssa.GoCall, TypeOf: true, ThisSlot: -1}}
 }
 
-// typeof's answer made natively (ssa.OpTypeofCell) and its tests of every
-// type (ssa.OpTypeIs) keep the rules, for each target.
+// typeof's answer made natively (ssa.OpTypeofCell), its tests of every
+// type (ssa.OpTypeIs) and strict equalities with constants keep the
+// rules, for each target.
 func TestMirTypeof(t *testing.T) {
 	enc := abi.Encoding{ValueSize: 16, NumOffset: 0, RefOffset: 8,
 		Undefined: 0xFFF8000000000001, Null: 0xFFF8000000000002, True: 0xFFF8000000000103,
@@ -49,7 +76,7 @@ func TestMirTypeof(t *testing.T) {
 		Object: 0xFFF8000000000006, String: 0xFFF8000000000004, Symbol: 0xFFF8000000000005,
 		HeapBigTag: 0xFFFBFFFFFFFFFFFF, ObjectFlags: 2, ObjectClass: 1, FlagHTMLDDA: 8, ClassFunction: 2,
 		ClassProxy: 26, UndefinedCell: 0x60000, StoreRef: 0x70000, CallGo: 0x72000}
-	cells, tests := 0, 0
+	cells, tests, strs := 0, 0, 0
 	for _, src := range typeofCorpus {
 		prog, err := parser.Parse(src, parser.Options{})
 		if err != nil {
@@ -81,6 +108,10 @@ func TestMirTypeof(t *testing.T) {
 							cells++
 						case ssa.OpTypeIs:
 							tests++
+						case ssa.OpConstCell:
+							if _, ok := v.ConstString(); ok {
+								strs++
+							}
 						}
 					}
 				}
@@ -100,7 +131,7 @@ func TestMirTypeof(t *testing.T) {
 			}
 		}
 	}
-	if cells == 0 || tests < 6 {
-		t.Errorf("typeof's answers made natively %d, its tests %d", cells, tests)
+	if cells == 0 || tests < 6 || strs < 8 {
+		t.Errorf("typeof's answers made natively %d, its tests %d, string constants known %d", cells, tests, strs)
 	}
 }

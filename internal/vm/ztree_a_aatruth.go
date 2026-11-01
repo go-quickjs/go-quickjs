@@ -19,10 +19,16 @@ package vm
 // to fall, on x, for jump_if_true where onTrue is set and jump_if_false
 // where it is not, where x is a local or an upvalue read in place; nil
 // for anything else, which buildBlock builds.
-var truthJump func(x tentry, onTrue bool, taken, fall int) tnext
+//
+// It is truthJumpHook, which asks for a switch's lookup first (see
+// zzz_switch.go), and then truthJumpLocal, this file's.
+var truthJump = truthJumpHook[struct{}]
+
+// truthJumpLocal is truthJump's end of a local or an upvalue.
+var truthJumpLocal func(x tentry, onTrue bool, taken, fall int) tnext
 
 func init() {
-	truthJump = func(x tentry, onTrue bool, taken, fall int) tnext {
+	truthJumpLocal = func(x tentry, onTrue bool, taken, fall int) tnext {
 		if x.v != nil || x.slot >= 0 {
 			return nil
 		}

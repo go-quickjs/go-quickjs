@@ -1447,6 +1447,24 @@ func (fb *jitFeedback) StringCell(pc int) (uintptr, bool) {
 	return uintptr(unsafe.Pointer(cell)), true
 }
 
+// StringContent is ssa.StringContentFeedback's: the string the constant
+// pushed at pc is, as the closure has it, flat, which StringCell's cell
+// holds.
+func (fb *jitFeedback) StringContent(pc int) (string, bool) {
+	if fb.cl == nil || pc >= len(fb.fn.Code) {
+		return "", false
+	}
+	switch in := fb.fn.Code[pc]; {
+	case in.Op == bytecode.OpPushEmptyString:
+		return "", true
+	case in.Op == bytecode.OpPushConst && int(in.A) < len(fb.cl.consts) && fb.cl.consts[in.A].IsString():
+		if s := fb.cl.consts[in.A].String(); s.left == nil {
+			return s.s, true
+		}
+	}
+	return "", false
+}
+
 // TypeofCells is ssa.TypeofFeedback's: the table of the runtime's strings
 // typeof answers (jitState's typeofCells), made the first time a compile
 // asks for it, as typeofString makes each, which the runtime keeps.

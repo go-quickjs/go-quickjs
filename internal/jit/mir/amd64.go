@@ -10110,6 +10110,110 @@ func (c *compiler) looseNullish(v *ssa.Value, guard func(amd64.Cond), to *target
 	c.setBool(v, to, t, 1)
 }
 
+// strictConst is OpEqTagged's x === k where k is a constant whose
+// strict equality is a test of x's word -- a number, a boolean, null or
+// undefined (eqConstOf) -- or an ASCII string constant (strConstOf): x
+// is a string of k's length, its bytes k's, compared with k's as
+// immediates, a word at a time, as V8's code compares a string with an
+// internalized constant it cannot compare by address; a rope of that
+// length is Go's (ssa.GoEqual) or exits, as eqTagged's two strings are.
+// It reports false for any other comparison, which eqTagged makes.
+func (c *compiler) strictConst(v *ssa.Value, guard func(amd64.Cond), to *target) bool {
+	if x, k, ok := eqConstOf(v); ok {
+		t := c.tests(to, true)
+		w := c.gpr(x, scratchA)
+		switch {
+		case k.Kind == ir.Number && k.Bits&^(1<<63) > 0x7FF0000000000000:
+			// NaN equals nothing.
+			c.jumpTo(t, t.no)
+		case k.Kind == ir.Number && k.Bits&^(1<<63) == 0:
+			// 0 and -0, whose words differ by the sign alone.
+			c.a.MovRR(scratchA, w)
+			c.a.ShiftImm(amd64.Shl, scratchA, 1, true)
+			c.a.Op(amd64.Test, scratchA, scratchA, true)
+			c.jumpIf(t, amd64.CondE)
+		default:
+			c.cmpWord(w, c.constWord(k))
+			c.jumpIf(t, amd64.CondE)
+		}
+		c.setBool(v, to, t, 1)
+		return true
+	}
+	x, k, ok := strConstOf(v)
+	if !ok {
+		return false
+	}
+	t := c.tests(to, true)
+	yes, no := t.yes, t.no
+	w := c.gpr(x, scratchA)
+	c.cmpWord(w, c.enc.String)
+	c.a.Jcc(amd64.CondNE, no)
+	if x.Shadow == nil && c.origin.At(x) < 0 {
+		// A primitive, never a string's reference.
+		c.jumpTo(t, no)
+		c.setBool(v, to, t, 1)
+		return true
+	}
+	if !c.knownReference(v, x, guard) {
+		c.setBool(v, to, t, 1)
+		return true
+	}
+	c.a.Load(scratchA, scratchC, c.enc.StringLength)
+	c.a.OpImm(amd64.Cmp, scratchA, int32(len(k)), true)
+	c.a.Jcc(amd64.CondNE, no)
+	if len(k) > 0 {
+		rope := c.a.NewLabel()
+		c.a.Load(scratchA, scratchC, c.enc.StringLeft)
+		c.a.Op(amd64.Test, scratchA, scratchA, true)
+		c.a.Jcc(amd64.CondNE, rope)
+		c.a.Load(scratchB, scratchC, c.enc.StringData)
+		chunk := func(at, size int) {
+			var u uint64
+			for i := size - 1; i >= 0; i-- {
+				u = u<<8 | uint64(k[at+i])
+			}
+			switch size {
+			case 8:
+				c.a.Load(scratchA, scratchB, int32(at))
+				c.cmpWord(scratchA, u)
+			case 4:
+				c.a.LoadU32(scratchA, scratchB, int32(at))
+				c.a.OpImm(amd64.Cmp, scratchA, int32(uint32(u)), false)
+			case 2:
+				c.a.LoadU16(scratchA, scratchB, int32(at))
+				c.a.OpImm(amd64.Cmp, scratchA, int32(u), false)
+			default:
+				c.a.LoadU8(scratchA, scratchB, int32(at))
+				c.a.OpImm(amd64.Cmp, scratchA, int32(u), false)
+			}
+			c.a.Jcc(amd64.CondNE, no)
+		}
+		strBytes(len(k), chunk)
+		c.jumpTo(t, yes)
+		exit := c.stubLabel(v.State, exitKind(v.Aux))
+		c.cold = append(c.cold, func() {
+			c.a.Bind(rope)
+			if c.enc.CallGo != 0 && exitKind(v.Aux) == abi.ExitHost {
+				// Go compares them (ssa.GoEqual), strictly.
+				size := int32(unsafe.Sizeof(abi.GoArg{}))
+				c.goArg(abi.OffGoArgs, v.Args[0])
+				c.goArg(abi.OffGoArgs+size, v.Args[1])
+				c.goSaving(uint64(ssa.GoEqual)|1<<abi.GoOpIndexShift, &exit)
+				c.a.Load(scratchA, regCtx, abi.OffGoArgs+c.enc.NumOffset)
+				c.a.Op(amd64.Test, scratchA, scratchA, true)
+				c.a.Jcc(amd64.CondNE, yes)
+				c.a.Jmp(no)
+				return
+			}
+			c.a.Jmp(exit)
+		})
+	} else {
+		c.jumpTo(t, yes)
+	}
+	c.setBool(v, to, t, 1)
+	return true
+}
+
 // eqTagged is OpEqTagged: x == y or x === y by the two words, and for two
 // objects by their pointers, found as objectOf finds an object's. What
 // most comparisons meet is inline -- one word, a number or an object; two
@@ -10118,6 +10222,9 @@ func (c *compiler) looseNullish(v *ssa.Value, guard func(amd64.Cond), to *target
 // inline had made the comparison 500 bytes a site, of the code's hottest,
 // whose size decides how much of it the op cache holds.
 func (c *compiler) eqTagged(v *ssa.Value, guard func(amd64.Cond), to *target) {
+	if v.Index == 1 && c.strictConst(v, guard, to) {
+		return
+	}
 	x, y := v.Args[0], v.Args[1]
 	t := c.tests(to, true)
 	yes, no := t.yes, t.no

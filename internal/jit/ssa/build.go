@@ -1310,6 +1310,14 @@ type ConstantFeedback interface {
 	StringCell(pc int) (uintptr, bool)
 }
 
+// StringContentFeedback is ConstantFeedback that says what the string
+// constant pushed at pc is, too: its WTF-8, which the cell's string holds
+// flat. Native code compares a string with it by its length and its bytes
+// (OpConstCell's ConstString).
+type StringContentFeedback interface {
+	StringContent(pc int) (string, bool)
+}
+
 // TypeofFeedback is Feedback that keeps the runtime's strings typeof
 // answers in a table of cells, eight values in the order of TypeofUndefined
 // and the rest, which the VM keeps alive and unchanged: its address
@@ -7271,6 +7279,11 @@ func (b *builder) instruction(blk *Block, pc int) {
 		}
 		c := f.newValue(blk, OpConstCell, Source)
 		c.Const = ir.Value{Bits: uint64(cell)}
+		if sf, ok := b.fb.(StringContentFeedback); ok {
+			if s, ok := sf.StringContent(pc); ok {
+				f.cache(c).Str = &s
+			}
+		}
 		v := f.newValue(blk, OpLoadCell, Tagged, c)
 		v.Shadow = c
 		b.assign(in.Dest, blk, v)

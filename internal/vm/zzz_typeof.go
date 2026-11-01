@@ -34,13 +34,20 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 // package stays at its address (go tool nm).
 
 // opHook is buildBlock's call of op, for the instruction at pc of code: a
-// typeof is typeofOp's, anything else op's.
+// typeof is typeofOp's, a dup that begins a switch's literal cases
+// switchStart's, anything else op's.
 //
 //go:noinline
 func opHook[_ any](b *tbuilder, pc int, code []bytecode.Instr, more bool) (int, bool) {
 	in := code[pc]
-	if in.Op == bytecode.OpTypeOf {
+	switch in.Op {
+	case bytecode.OpTypeOf:
 		return typeofOp[struct{}](b, pc, code), true
+	case bytecode.OpDup:
+		// A switch's literal cases, as one lookup (zzz_switch.go).
+		if skip, ok, handled := switchStart[struct{}](b, pc); handled {
+			return skip, ok
+		}
 	}
 	return b.op(pc, in, code, more)
 }

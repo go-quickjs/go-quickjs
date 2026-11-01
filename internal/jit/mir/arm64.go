@@ -1588,8 +1588,105 @@ func (c *a64Compiler) looseNullish(v *ssa.Value, guard func(arm64.Cond), to *a64
 	c.setBool(v, to, t, 1)
 }
 
+// strictConst is amd64's (x === k of a constant k's word, or of an ASCII
+// string constant's bytes). It uses A, B, C and D.
+func (c *a64Compiler) strictConst(v *ssa.Value, guard func(arm64.Cond), to *a64Target) bool {
+	if x, k, ok := eqConstOf(v); ok {
+		t := c.tests(to, true)
+		w := c.gpr(x, a64A)
+		switch {
+		case k.Kind == ir.Number && k.Bits&^(1<<63) > 0x7FF0000000000000:
+			// NaN equals nothing.
+			c.jumpTo(t, t.no)
+		case k.Kind == ir.Number && k.Bits&^(1<<63) == 0:
+			// 0 and -0, whose words differ by the sign alone.
+			c.a.ShiftImm(arm64.Lsl, a64B, w, 1, true)
+			c.jumpIfZero(t, a64B, true)
+		default:
+			c.movImm(a64B, c.constWord(k))
+			c.a.Cmp(w, a64B, true)
+			c.jumpIf(t, arm64.EQ)
+		}
+		c.setBool(v, to, t, 1)
+		return true
+	}
+	x, k, ok := strConstOf(v)
+	if !ok {
+		return false
+	}
+	t := c.tests(to, true)
+	yes, no := t.yes, t.no
+	w := c.gpr(x, a64A)
+	c.movImm(a64B, c.enc.String)
+	c.a.Cmp(w, a64B, true)
+	c.a.BCond(arm64.NE, no)
+	if x.Shadow == nil && c.origin.At(x) < 0 {
+		// A primitive, never a string's reference.
+		c.jumpTo(t, no)
+		c.setBool(v, to, t, 1)
+		return true
+	}
+	if !c.reference(v, x, c.enc.String, guard) {
+		c.setBool(v, to, t, 1)
+		return true
+	}
+	c.a.Load(a64A, a64C, c.enc.StringLength)
+	c.a.CmpImm(a64A, int64(len(k)), true)
+	c.a.BCond(arm64.NE, no)
+	if len(k) > 0 {
+		rope := c.a.NewLabel()
+		c.a.Load(a64A, a64C, c.enc.StringLeft)
+		c.a.Cbnz(a64A, rope, true)
+		c.a.Load(a64B, a64C, c.enc.StringData)
+		chunk := func(at, size int) {
+			var u uint64
+			for i := size - 1; i >= 0; i-- {
+				u = u<<8 | uint64(k[at+i])
+			}
+			switch size {
+			case 8:
+				c.a.Load(a64A, a64B, int32(at))
+			case 4:
+				c.a.LoadU32(a64A, a64B, int32(at))
+			case 2:
+				c.a.LoadU16(a64A, a64B, int32(at))
+			default:
+				c.a.LoadU8(a64A, a64B, int32(at))
+			}
+			c.movImm(a64D, u)
+			c.a.Cmp(a64A, a64D, true)
+			c.a.BCond(arm64.NE, no)
+		}
+		strBytes(len(k), chunk)
+		c.jumpTo(t, yes)
+		exit := c.stubLabel(v.State, exitKind(v.Aux))
+		c.cold = append(c.cold, func() {
+			c.a.Bind(rope)
+			if c.enc.CallGo != 0 && exitKind(v.Aux) == abi.ExitHost {
+				// Go compares them (ssa.GoEqual), strictly.
+				size := int32(unsafe.Sizeof(abi.GoArg{}))
+				c.goArg(abi.OffGoArgs, v.Args[0])
+				c.goArg(abi.OffGoArgs+size, v.Args[1])
+				c.goSaving(uint64(ssa.GoEqual)|1<<abi.GoOpIndexShift, &exit)
+				c.a.Load(a64A, a64Ctx, abi.OffGoArgs+c.enc.NumOffset)
+				c.a.Cbnz(a64A, yes, true)
+				c.a.B(no)
+				return
+			}
+			c.a.B(exit)
+		})
+	} else {
+		c.jumpTo(t, yes)
+	}
+	c.setBool(v, to, t, 1)
+	return true
+}
+
 // eqTagged is OpEqTagged, as amd64's.
 func (c *a64Compiler) eqTagged(v *ssa.Value, guard func(arm64.Cond), to *a64Target) {
+	if v.Index == 1 && c.strictConst(v, guard, to) {
+		return
+	}
 	x, y := v.Args[0], v.Args[1]
 	t := c.tests(to, true)
 	yes, no := t.yes, t.no

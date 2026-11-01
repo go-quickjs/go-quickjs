@@ -88,6 +88,10 @@ type tentryRare struct {
 	// go before str, which a flag after them would leave a hole before:
 	// the struct is then compared as memory, by no function of its own.
 	typeOf *typeofOf
+	// sw is the lookup of a switch's literal cases, for the entry the
+	// first case's jump_if_true takes, which makes it its end (see
+	// zzz_switch.go).
+	sw tnext
 	// str is set for a string constant's push_const, of constant k, which
 	// an equality with it reads in place (see ztree_a_aalit.go).
 	str bool
