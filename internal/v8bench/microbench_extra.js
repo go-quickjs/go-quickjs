@@ -770,6 +770,80 @@ function string_switch_nonstring(n)
     return extra_string_switch(n, [1, null, undefined, 3.5]);
 }
 
+/* a switch of the tag names with one case that is no literal, a name
+   held in a variable, as a parser's set of tags configured is */
+function string_switch_nonliteral(n)
+{
+    var j, sum = 0, custom = "header",
+        keys = ["div", "header", "unknown", "section"];
+    for (j = 0; j < n; j++) {
+        switch (keys[j & 3]) {
+        case "a": sum += 1; break;
+        case "div": sum += 2; break;
+        case "p": sum += 3; break;
+        case "span": sum += 4; break;
+        case custom: sum += 5; break;
+        case "button": sum += 6; break;
+        case "input": sum += 7; break;
+        case "form": sum += 8; break;
+        case "label": sum += 9; break;
+        case "select": sum += 10; break;
+        case "option": sum += 11; break;
+        case "table": sum += 12; break;
+        case "ul": sum += 13; break;
+        case "li": sum += 14; break;
+        case "section": sum += 15; break;
+        default: break;
+        }
+    }
+    global_res = sum;
+    return n;
+}
+
+/* a switch of sixteen numbers, as an interpreter's on its opcodes or a
+   state machine's on its states, one key a miss */
+function number_switch(n)
+{
+    var j, sum = 0, keys = [1, 9, 16, 17];
+    for (j = 0; j < n; j++) {
+        switch (keys[j & 3]) {
+        case 1: sum += 1; break;
+        case 2: sum += 2; break;
+        case 3: sum += 3; break;
+        case 4: sum += 4; break;
+        case 5: sum += 5; break;
+        case 6: sum += 6; break;
+        case 7: sum += 7; break;
+        case 8: sum += 8; break;
+        case 9: sum += 9; break;
+        case 10: sum += 10; break;
+        case 11: sum += 11; break;
+        case 12: sum += 12; break;
+        case 13: sum += 13; break;
+        case 14: sum += 14; break;
+        case 15: sum += 15; break;
+        case 16: sum += 16; break;
+        default: break;
+        }
+    }
+    global_res = sum;
+    return n;
+}
+
+/* typeof v === "function" over values of every kind, as a callback's
+   guard or an options check is */
+function typeof_test(n)
+{
+    var j, sum = 0,
+        values = [1, "s", function () {}, null, {}, undefined, true, Math.max];
+    for (j = 0; j < n; j++) {
+        if (typeof values[j & 7] === "function")
+            sum += 1;
+    }
+    global_res = sum;
+    return n;
+}
+
 /* a class's private field, read and written, and its private method,
    called */
 class PrivateCounter
