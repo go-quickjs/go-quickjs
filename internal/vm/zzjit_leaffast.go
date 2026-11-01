@@ -161,7 +161,7 @@ func (r *Runtime) jitGoAdd(ctx *abi.Context) bool {
 	if r.meter != nil || a.IsString() && b.IsString() && a.String().length+b.String().length > maxStringLength-64 {
 		return false
 	}
-	v, err := r.add(a, b)
+	v, err := jitAddHook[struct{}](r, a, b)
 	if err != nil {
 		return false
 	}
