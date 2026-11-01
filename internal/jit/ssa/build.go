@@ -1310,6 +1310,26 @@ type ConstantFeedback interface {
 	StringCell(pc int) (uintptr, bool)
 }
 
+// TypeofFeedback is Feedback that keeps the runtime's strings typeof
+// answers in a table of cells, eight values in the order of TypeofUndefined
+// and the rest, which the VM keeps alive and unchanged: its address
+// (OpTypeofCell), or false where it keeps none.
+type TypeofFeedback interface {
+	TypeofCells() (uintptr, bool)
+}
+
+// The types' places in TypeofFeedback's table.
+const (
+	TypeofUndefined = iota
+	TypeofObject
+	TypeofBoolean
+	TypeofNumber
+	TypeofString
+	TypeofSymbol
+	TypeofBigInt
+	TypeofFunction
+)
+
 // BigIntConstFeedback is Feedback that keeps BigInt constants in cells, as
 // ConstantFeedback keeps strings: the address of the cell the constant
 // pushed at pc is in, and, for one held in its value (kind
@@ -4746,6 +4766,53 @@ func (b *builder) fromCharCodeCall(blk *Block, pc int, fn uintptr, guard func(Op
 	}
 }
 
+// typeofAt is the address of the table of the runtime's strings typeof
+// answers (TypeofFeedback) if pc, in the function's own code, is a typeof
+// Go makes otherwise (a GoCall site of TypeOf), which typeofCall makes.
+func (b *builder) typeofAt(pc int) (uintptr, bool) {
+	if b.fb == nil || b.cur != b.root || b.p.Code[pc].Op != ir.Host || pc+1 >= len(b.p.Code) || !reachable(b.p, pc+1) ||
+		b.p.Maps[pc].Depth < 1 || b.p.Maps[pc+1].Depth != b.p.Maps[pc].Depth || !b.goCalls() {
+		return 0, false
+	}
+	if calls := b.calls[pc]; len(calls) != 1 || calls[0].Go != GoCall || !calls[0].TypeOf {
+		return 0, false
+	}
+	f, ok := b.fb.(TypeofFeedback)
+	if !ok {
+		return 0, false
+	}
+	cells, ok := f.TypeofCells()
+	return cells, ok && cells != 0
+}
+
+// typeofCall makes the typeof at pc, its operand and its result the top
+// of the stack: the runtime's string of the type, loaded from its cell in
+// the table at cells (OpTypeofCell), with nothing made or called, as V8's
+// code loads a type's name from its roots; what native code cannot tell,
+// a proxy's, a call of Go (the site's GoCall) makes, on a branch of its
+// own (split), native code going on after either.
+func (b *builder) typeofCall(blk *Block, pc int, cells uintptr) {
+	f := b.f
+	slot := b.p.Locals + b.p.Maps[pc].Depth - 1
+	x := b.read(slot, blk)
+	cell := f.newValue(blk, OpTypeofCell, Source, x)
+	cell.Const = ir.Value{Bits: uint64(cells)}
+	none := f.newValue(blk, OpCellNone, Bool, cell)
+	st := b.state(blk, pc)
+	miss, hit, _ := b.split(blk, none, true)
+	v := f.newValue(hit, OpLoadCell, Tagged, cell)
+	v.Shadow = cell
+	b.write(slot, hit, v)
+	call := f.newValue(miss, OpCall, Tagged, x)
+	f.cache(call).Calls = b.calls[pc]
+	call.Aux, call.State, call.Index = int(ir.HostExit), st, b.callKeeps[pc]
+	st.addUse()
+	kept := f.newValue(miss, OpCallCell, Source, call)
+	r := f.newValue(miss, OpKept, Tagged, kept, call)
+	r.Shadow = kept
+	b.write(slot, miss, r)
+}
+
 // substring is the address of String.prototype.substring, slice, substr
 // or charAt if the method call at pc, of two arguments -- one, charAt's --
 // in the function's own code, calls it (SubstringFeedback) and Go makes it
@@ -7372,6 +7439,10 @@ func (b *builder) instruction(blk *Block, pc int) {
 		}
 		if k, ok := b.instanceOf(pc); ok && in.Op == ir.Host {
 			b.instanceOfOp(blk, pc, k, guard, boxB)
+			break
+		}
+		if cells, ok := b.typeofAt(pc); ok && in.Op == ir.Host {
+			b.typeofCall(blk, pc, cells)
 			break
 		}
 		if fr := b.inlinedAt(pc); fr != nil {

@@ -556,6 +556,13 @@ const (
 	// NumberIsInteger, NumberIsSafeInteger): false for anything that is no
 	// number, which none of them converts, and the predicate of a number.
 	OpNumberIs // tagged -> bool
+	// OpTypeofCell is typeof x's answer: the cell of the runtime's string
+	// of x's type in the table of them at Const's address, eight values
+	// in the order TypeofFeedback says, as V8's code loads the name from
+	// its roots; or none (0) for what native code cannot tell -- a proxy,
+	// a function where its target is -- where a call of Go makes it (a
+	// split). It never exits.
+	OpTypeofCell // tagged -> source
 )
 
 // OpNumberIs's Aux: which of Number's predicates.
@@ -588,7 +595,7 @@ var opNames = [...]string{
 	OpAddU64: "addu64", OpSubU64: "subu64", OpMulU64: "mulu64", OpShlI64: "shli64", OpShlU64: "shlu64",
 	OpDivI64: "divi64", OpModI64: "modi64", OpDivU64: "divu64", OpModU64: "modu64", OpBigOfF64: "bigoff", OpPowI64: "powi64",
 	OpHolderCell: "holdercell", OpChainCheck: "chaincheck", OpProtoIs: "protois", OpCodeCharOr: "codecharor",
-	OpStringCodePointOr: "codepointor", OpStringAtOr: "stringator", OpNumberIs: "numberis",
+	OpStringCodePointOr: "codepointor", OpStringAtOr: "stringator", OpNumberIs: "numberis", OpTypeofCell: "typeofcell",
 }
 
 func (o Op) String() string {

@@ -6550,9 +6550,12 @@ func (c *compiler) instanceOf(v *ssa.Value, guard func(amd64.Cond), to *target) 
 
 // typeIs tells whether typeof its value is the type v.Index says
 // (OpTypeIs): a number's word is below NumberLimit, a string's, a
-// boolean's and undefined's are theirs; an object with [[IsHTMLDDA]] is
-// undefined, one of ClassFunction a function and one of ClassObject or
-// ClassArray neither; another exits. It uses every scratch register.
+// boolean's, undefined's and a symbol's are theirs, a BigInt's from
+// HeapBigTag up, and null's is an object's; an object with [[IsHTMLDDA]]
+// is undefined, one of ClassFunction a function, one of ClassProxy, which
+// is a function where its target is, exits, and any other is an object --
+// the VM makes no other callable. A name of no type (ir.TypeNone) is no
+// value's. It uses every scratch register.
 func (c *compiler) typeIs(v *ssa.Value, guard func(amd64.Cond), to *target) {
 	a := v.Args[0]
 	t := c.tests(to, false)
@@ -6579,9 +6582,20 @@ func (c *compiler) typeIs(v *ssa.Value, guard func(amd64.Cond), to *target) {
 		is(c.enc.True)
 		c.cmpWord(w, c.enc.False)
 		c.jumpIf(it, amd64.CondE)
-	case ir.TypeUndefined, ir.TypeFunction:
-		if v.Index == ir.TypeUndefined {
+	case ir.TypeSymbol:
+		c.cmpWord(w, c.enc.Symbol)
+		c.jumpIf(it, amd64.CondE)
+	case ir.TypeBigInt:
+		c.cmpWord(w, c.enc.HeapBigTag)
+		c.jumpIf(it, amd64.CondAE)
+	case ir.TypeNone:
+		c.jumpTo(it, no)
+	case ir.TypeUndefined, ir.TypeFunction, ir.TypeObject:
+		switch v.Index {
+		case ir.TypeUndefined:
 			is(c.enc.Undefined)
+		case ir.TypeObject:
+			is(c.enc.Null)
 		}
 		c.cmpWord(w, c.enc.Object)
 		c.a.Jcc(amd64.CondNE, no)
@@ -6592,14 +6606,16 @@ func (c *compiler) typeIs(v *ssa.Value, guard func(amd64.Cond), to *target) {
 				c.jumpIf(it, amd64.CondNE)
 			} else {
 				c.a.Jcc(amd64.CondNE, no)
+				fn, obj := yes, no
+				if v.Index == ir.TypeObject {
+					fn, obj = no, yes
+				}
 				c.a.LoadU8(scratchA, scratchC, c.enc.ObjectClass)
 				c.a.OpImm(amd64.Cmp, scratchA, int32(c.enc.ClassFunction), false)
-				c.a.Jcc(amd64.CondE, yes)
-				c.a.OpImm(amd64.Cmp, scratchA, int32(c.enc.ClassObject), false)
-				c.a.Jcc(amd64.CondE, no)
-				c.a.OpImm(amd64.Cmp, scratchA, int32(c.enc.ClassArray), false)
-				guard(amd64.CondNE)
-				c.jumpTo(it, no)
+				c.a.Jcc(amd64.CondE, fn)
+				c.a.OpImm(amd64.Cmp, scratchA, int32(c.enc.ClassProxy), false)
+				guard(amd64.CondE)
+				c.jumpTo(it, obj)
 			}
 		}
 	}
@@ -8547,6 +8563,66 @@ func (c *compiler) stringAtOr(v *ssa.Value) {
 	c.setG(v, scratchA)
 }
 
+// typeofCell is typeof x's answer (ssa.OpTypeofCell): the cell of the
+// runtime's string of x's type, in the table at v's Const -- undefined,
+// object, boolean, number, string, symbol, bigint and function's, a value
+// each -- into v's register, told by x's word as typeIs tells it, and by
+// an object's flags and class; 0 for a proxy, which Go asks. It uses
+// every scratch register.
+func (c *compiler) typeofCell(v *ssa.Value) {
+	a := v.Args[0]
+	none, done := c.a.NewLabel(), c.a.NewLabel()
+	var at [8]amd64.Label
+	for i := range at {
+		at[i] = c.a.NewLabel()
+	}
+	w := c.gpr(a, scratchB)
+	c.cmpWord(w, abi.NumberLimit)
+	c.a.Jcc(amd64.CondB, at[ssa.TypeofNumber])
+	for _, k := range []struct {
+		word uint64
+		i    int
+	}{{c.enc.String, ssa.TypeofString}, {c.enc.Undefined, ssa.TypeofUndefined}, {c.enc.Null, ssa.TypeofObject},
+		{c.enc.True, ssa.TypeofBoolean}, {c.enc.False, ssa.TypeofBoolean}, {c.enc.Symbol, ssa.TypeofSymbol}} {
+		c.cmpWord(w, k.word)
+		c.a.Jcc(amd64.CondE, at[k.i])
+	}
+	object := c.a.NewLabel()
+	c.cmpWord(w, c.enc.Object)
+	c.a.Jcc(amd64.CondE, object)
+	c.cmpWord(w, c.enc.HeapBigTag)
+	c.a.Jcc(amd64.CondAE, at[ssa.TypeofBigInt])
+	c.a.Jmp(none)
+	c.a.Bind(object)
+	if a.Shadow == nil && c.origin.At(a) < 0 {
+		// A primitive, never an object's reference.
+		c.a.Jmp(none)
+	} else {
+		fail := func(cond amd64.Cond) { c.a.Jcc(cond, none) }
+		c.sourceRef(a, fail)
+		c.a.Op(amd64.Test, scratchC, scratchC, true)
+		fail(amd64.CondE)
+		c.a.LoadU8(scratchA, scratchC, c.enc.ObjectFlags)
+		c.a.OpImm(amd64.And, scratchA, int32(c.enc.FlagHTMLDDA), false)
+		c.a.Jcc(amd64.CondNE, at[ssa.TypeofUndefined])
+		c.a.LoadU8(scratchA, scratchC, c.enc.ObjectClass)
+		c.a.OpImm(amd64.Cmp, scratchA, int32(c.enc.ClassFunction), false)
+		c.a.Jcc(amd64.CondE, at[ssa.TypeofFunction])
+		c.a.OpImm(amd64.Cmp, scratchA, int32(c.enc.ClassProxy), false)
+		c.a.Jcc(amd64.CondE, none)
+		c.a.Jmp(at[ssa.TypeofObject])
+	}
+	for i, l := range at {
+		c.a.Bind(l)
+		c.movImm(scratchA, v.Const.Bits+uint64(i)*uint64(c.enc.ValueSize))
+		c.a.Jmp(done)
+	}
+	c.a.Bind(none)
+	c.movImm(scratchA, 0)
+	c.a.Bind(done)
+	c.setG(v, scratchA)
+}
+
 // numberIs is Number.isNaN(x), isFinite, isInteger or isSafeInteger
 // (ssa.OpNumberIs, its Aux the predicate): false for x no number, and the
 // predicate of a number, 0 or 1 into v's register. It uses every scratch
@@ -9724,6 +9800,8 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.stringAtOr(v)
 	case ssa.OpNumberIs:
 		c.numberIs(v)
+	case ssa.OpTypeofCell:
+		c.typeofCell(v)
 	case ssa.OpLoopMark:
 		// A loop of a built-in's call under way, or done (abi.Context's
 		// Loop).

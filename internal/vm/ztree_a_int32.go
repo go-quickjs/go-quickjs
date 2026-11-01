@@ -59,9 +59,12 @@ var (
 	bitwiseImmTree func(op bytecode.Op, x tentry, k int32, pc int) tval
 	// cmpJumpAt is cmpJump, with nodes for an int32 operand.
 	cmpJumpAt func(op bytecode.Op, x, y tentry, pc, taken, fall int) tnext
-	// eqJumpAt is eqNumJump, which eqJump calls it for, with nodes for an
-	// int32 operand.
-	eqJumpAt func(op bytecode.Op, x, y tentry, pc, taken, fall int) tnext
+	// eqJumpAt is what eqJump asks first: typeof's tests and the
+	// comparisons with a string constant (eqJumpAtHook, zzz_typeof.go),
+	// then eqJumpInt32. eqJumpInt32 is eqNumJump, which eqJump calls it
+	// for, with nodes for an int32 operand.
+	eqJumpAt    = eqJumpAtHook[struct{}]
+	eqJumpInt32 func(op bytecode.Op, x, y tentry, pc, taken, fall int) tnext
 
 	// i32Sure reports whether e is a bitwise operator's tree whose value is
 	// always an int32 or a uint32, as the comment above says.
@@ -542,7 +545,7 @@ func init() {
 }
 
 func init() {
-	eqJumpAt = func(op bytecode.Op, x, y tentry, pc, taken, fall int) tnext {
+	eqJumpInt32 = func(op bytecode.Op, x, y tentry, pc, taken, fall int) tnext {
 		xs, ys := i32Sure(x), i32Sure(y)
 		if !xs && !ys {
 			return eqNumJump(op, x, y, pc, taken, fall)

@@ -980,6 +980,10 @@ type jitState struct {
 	// String.fromCharCode's of (abi.Context.CharStrings): the strings
 	// unitString hands out.
 	charStrings *[256]Value
+	// typeofCells are the runtime's strings typeof answers, in
+	// typeofNames' order, which native code loads typeof's answer from
+	// (ssa.OpTypeofCell): typeofString's strings.
+	typeofCells *[8]Value
 	// builders are the strings loops' appends build (jitAppend), until
 	// native code leaves for Go (jitFreezeBuilders); appended counts the
 	// appends made in place.

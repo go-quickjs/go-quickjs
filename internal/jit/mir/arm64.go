@@ -1829,9 +1829,20 @@ func (c *a64Compiler) typeIs(v *ssa.Value, guard func(arm64.Cond), to *a64Target
 		is(c.enc.True)
 		cmp(c.enc.False)
 		c.jumpIf(it, arm64.EQ)
-	case ir.TypeUndefined, ir.TypeFunction:
-		if v.Index == ir.TypeUndefined {
+	case ir.TypeSymbol:
+		cmp(c.enc.Symbol)
+		c.jumpIf(it, arm64.EQ)
+	case ir.TypeBigInt:
+		cmp(c.enc.HeapBigTag)
+		c.jumpIf(it, arm64.HS)
+	case ir.TypeNone:
+		c.jumpTo(it, no)
+	case ir.TypeUndefined, ir.TypeFunction, ir.TypeObject:
+		switch v.Index {
+		case ir.TypeUndefined:
 			is(c.enc.Undefined)
+		case ir.TypeObject:
+			is(c.enc.Null)
 		}
 		cmp(c.enc.Object)
 		c.a.BCond(arm64.NE, no)
@@ -1843,14 +1854,16 @@ func (c *a64Compiler) typeIs(v *ssa.Value, guard func(arm64.Cond), to *a64Target
 				c.jumpIf(it, arm64.NE)
 			} else {
 				c.a.BCond(arm64.NE, no)
+				fn, obj := yes, no
+				if v.Index == ir.TypeObject {
+					fn, obj = no, yes
+				}
 				c.a.LoadU8(a64A, a64C, c.enc.ObjectClass)
 				c.a.CmpImm(a64A, int64(c.enc.ClassFunction), false)
-				c.a.BCond(arm64.EQ, yes)
-				c.a.CmpImm(a64A, int64(c.enc.ClassObject), false)
-				c.a.BCond(arm64.EQ, no)
-				c.a.CmpImm(a64A, int64(c.enc.ClassArray), false)
-				guard(arm64.NE)
-				c.jumpTo(it, no)
+				c.a.BCond(arm64.EQ, fn)
+				c.a.CmpImm(a64A, int64(c.enc.ClassProxy), false)
+				guard(arm64.EQ)
+				c.jumpTo(it, obj)
 			}
 		}
 	}
@@ -7523,6 +7536,65 @@ func (c *a64Compiler) stringAtOr(v *ssa.Value) {
 	c.setG(v, a64A)
 }
 
+// typeofCell is ssa.OpTypeofCell, as amd64's. It uses A, B and C.
+func (c *a64Compiler) typeofCell(v *ssa.Value) {
+	a := v.Args[0]
+	none, done := c.a.NewLabel(), c.a.NewLabel()
+	var at [8]arm64.Label
+	for i := range at {
+		at[i] = c.a.NewLabel()
+	}
+	w := c.gpr(a, a64B)
+	cmp := func(word uint64) {
+		c.movImm(a64A, word)
+		c.a.Cmp(w, a64A, true)
+	}
+	cmp(abi.NumberLimit)
+	c.a.BCond(arm64.LO, at[ssa.TypeofNumber])
+	for _, k := range []struct {
+		word uint64
+		i    int
+	}{{c.enc.String, ssa.TypeofString}, {c.enc.Undefined, ssa.TypeofUndefined}, {c.enc.Null, ssa.TypeofObject},
+		{c.enc.True, ssa.TypeofBoolean}, {c.enc.False, ssa.TypeofBoolean}, {c.enc.Symbol, ssa.TypeofSymbol}} {
+		cmp(k.word)
+		c.a.BCond(arm64.EQ, at[k.i])
+	}
+	object := c.a.NewLabel()
+	cmp(c.enc.Object)
+	c.a.BCond(arm64.EQ, object)
+	cmp(c.enc.HeapBigTag)
+	c.a.BCond(arm64.HS, at[ssa.TypeofBigInt])
+	c.a.B(none)
+	c.a.Bind(object)
+	if a.Shadow == nil && c.origin.At(a) < 0 {
+		// A primitive, never an object's reference.
+		c.a.B(none)
+	} else {
+		fail := func(cond arm64.Cond) { c.a.BCond(cond, none) }
+		c.sourceRef(a, fail)
+		c.a.Cbz(a64C, none, true)
+		c.a.LoadU8(a64A, a64C, c.enc.ObjectFlags)
+		c.movImm(a64B, uint64(c.enc.FlagHTMLDDA))
+		c.a.Tst(a64A, a64B, false)
+		c.a.BCond(arm64.NE, at[ssa.TypeofUndefined])
+		c.a.LoadU8(a64A, a64C, c.enc.ObjectClass)
+		c.a.CmpImm(a64A, int64(c.enc.ClassFunction), false)
+		c.a.BCond(arm64.EQ, at[ssa.TypeofFunction])
+		c.a.CmpImm(a64A, int64(c.enc.ClassProxy), false)
+		c.a.BCond(arm64.EQ, none)
+		c.a.B(at[ssa.TypeofObject])
+	}
+	for i, l := range at {
+		c.a.Bind(l)
+		c.movImm(a64A, v.Const.Bits+uint64(i)*uint64(c.enc.ValueSize))
+		c.a.B(done)
+	}
+	c.a.Bind(none)
+	c.movImm(a64A, 0)
+	c.a.Bind(done)
+	c.setG(v, a64A)
+}
+
 // numberIs is ssa.OpNumberIs, as amd64's. It uses A, B, F0 and F1.
 func (c *a64Compiler) numberIs(v *ssa.Value) {
 	x := v.Args[0]
@@ -8634,6 +8706,8 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.stringAtOr(v)
 	case ssa.OpNumberIs:
 		c.numberIs(v)
+	case ssa.OpTypeofCell:
+		c.typeofCell(v)
 	case ssa.OpLoopMark:
 		// As amd64's: abi.Context's Loop.
 		c.movImm(a64A, v.Const.Bits)

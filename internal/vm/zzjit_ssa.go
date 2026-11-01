@@ -1447,6 +1447,24 @@ func (fb *jitFeedback) StringCell(pc int) (uintptr, bool) {
 	return uintptr(unsafe.Pointer(cell)), true
 }
 
+// TypeofCells is ssa.TypeofFeedback's: the table of the runtime's strings
+// typeof answers (jitState's typeofCells), made the first time a compile
+// asks for it, as typeofString makes each, which the runtime keeps.
+func (fb *jitFeedback) TypeofCells() (uintptr, bool) {
+	if fb.r == nil || fb.r.jit == nil {
+		return 0, false
+	}
+	s := fb.r.jit
+	if s.typeofCells == nil {
+		t := new([8]Value)
+		for i := range t {
+			t[i] = Str(typeofOfStr[struct{}](fb.r, i))
+		}
+		s.typeofCells = t
+	}
+	return uintptr(unsafe.Pointer(s.typeofCells)), true
+}
+
 // BigIntCell is ssa.BigIntConstFeedback's: the cell a copy of the BigInt
 // constant pushed at pc is in, as StringCell's, and its bits if it is held
 // in its value: of one in the int64 range, or of one from 2^63 to 2^64-1.

@@ -83,6 +83,11 @@ type globalOf struct {
 type tentryRare struct {
 	regexpCall *regexpCallOf
 	prop       *propOf
+	// typeOf is a typeof's operand, for its entry, which a test of its
+	// answer tests the operand's kind for (see zzz_typeof.go). The words
+	// go before str, which a flag after them would leave a hole before:
+	// the struct is then compared as memory, by no function of its own.
+	typeOf *typeofOf
 	// str is set for a string constant's push_const, of constant k, which
 	// an equality with it reads in place (see ztree_a_aalit.go).
 	str bool
@@ -728,7 +733,7 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 			}
 			continue
 		}
-		skip, ok := b.op(pc, in, code, pc+1 < end)
+		skip, ok := opHook[struct{}](b, pc, code, pc+1 < end)
 		if !ok {
 			return nil, false
 		}

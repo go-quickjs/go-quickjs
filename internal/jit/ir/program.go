@@ -296,13 +296,18 @@ const (
 // with more is Go's.
 const MaxArrayLiteral = 16
 
-// The types a TypeTest asks about.
+// The types a TypeTest asks about. TypeNone is a name of no type, which
+// typeof never answers: typeof x === 'strnig' is false, whatever x is.
 const (
 	TypeNumber = iota + 1
 	TypeString
 	TypeBoolean
 	TypeUndefined
 	TypeFunction
+	TypeObject
+	TypeSymbol
+	TypeBigInt
+	TypeNone
 )
 
 // Operator selects an arithmetic, comparison, or truthiness operation.

@@ -1289,9 +1289,12 @@ func stringConcats(p *ir.Program, reads []int32) {
 	}
 }
 
-// typeNames are the strings typeof compared with tells natively.
+// typeNames are the strings typeof answers, each type's name, which a
+// comparison with typeof tells natively; it is false for any other string
+// (ir.TypeNone).
 var typeNames = map[string]int{"number": ir.TypeNumber, "string": ir.TypeString, "boolean": ir.TypeBoolean,
-	"undefined": ir.TypeUndefined, "function": ir.TypeFunction}
+	"undefined": ir.TypeUndefined, "function": ir.TypeFunction, "object": ir.TypeObject, "symbol": ir.TypeSymbol,
+	"bigint": ir.TypeBigInt}
 
 // typeTests has typeof compared with a string constant, typeof x ===
 // "number", tell the type natively, as V8 folds it into a check of the
@@ -1314,7 +1317,7 @@ func typeTests(fn *bytecode.Function, p *ir.Program, effects []effect) {
 		}
 		kind, ok := typeNames[fn.Constants[k.A].Str]
 		if !ok {
-			continue
+			kind = ir.TypeNone
 		}
 		op := uint32(cmp.Op)
 		if cmp.Op == bytecode.OpJumpIfCmpFalse {
