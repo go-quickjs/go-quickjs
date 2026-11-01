@@ -2436,6 +2436,20 @@ func TestJITWeakCache(t *testing.T) {
 	if p.Value() != nil {
 		t.Fatal("native cache retained function graph")
 	}
+	// The cache drops a collected function's entry when it next ages, which
+	// it does once an epoch (age): f's compile aged it at the epoch it was
+	// made in, and a compile in that epoch drops nothing. The collection that
+	// cleared p ends it only once the finalizer goroutine has counted the
+	// cycle (jitArmEpoch), which can be well after p cleared on a loaded
+	// machine, so wait for the epoch to pass, as the cache would.
+	deadline = time.Now().Add(3 * time.Second)
+	for r.jit.epoch() < r.jit.agedAt && time.Now().Before(deadline) {
+		runtime.GC()
+		time.Sleep(time.Millisecond)
+	}
+	if r.jit.epoch() < r.jit.agedAt {
+		t.Fatalf("epoch %d did not pass in 3 s", r.jit.agedAt-1)
+	}
 	fn := jitFunctionForTest(t, `function g(n) { let s=0; for(let i=0;i<n;i++) s+=i; return s }`)
 	if e := r.jitForFunction(fn, nil); e == nil || e.ssa == nil {
 		t.Fatal("compilation refused")
