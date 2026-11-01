@@ -33,6 +33,20 @@ const (
 	BigConstUint64
 )
 
+// PureBodyFeedback is Feedback that knows its function is a pure body,
+// which the call path evaluates without its tree (the VM's pureCall), so
+// that none of its sites has the tree tier's marks.
+type PureBodyFeedback interface {
+	PureBody() bool
+}
+
+// pureBody reports whether the frame being built is a pure body's
+// (PureBodyFeedback).
+func (b *builder) pureBody() bool {
+	f, ok := b.fb.(PureBodyFeedback)
+	return ok && f.PureBody()
+}
+
 // bigFeedback is the builder's BigIntFeedback, or nil.
 func (b *builder) bigFeedback() BigIntFeedback {
 	fb, _ := b.fb.(BigIntFeedback)
@@ -144,8 +158,11 @@ func bigCount(y *Value) int {
 	return -1
 }
 
-// bigNative is in, an operator at pc of the root, made on BigInts unboxed
-// where the site met BigInts held in their values (BigIntFeedback) and its
+// bigNative is in, an operator at pc of the frame being built -- the
+// root's, or a callee's inlined, whose own feedback the builder asks --
+// made on BigInts unboxed where the site met BigInts held in their values
+// (BigIntFeedback), or, in a pure body, an operand is one unboxed
+// already, and its
 // speculation has not failed: an arithmetic or bitwise operator's result
 // boxed, which exits where it is outside its type's range, a shift by a
 // constant from 0 to 63, a division by none but zero; or a comparison's
@@ -154,12 +171,26 @@ func (b *builder) bigNative(blk *Block, pc int, in ir.Instruction, operand func(
 	op := in.Operator
 	native, arith := bigOperator(op)
 	fb := b.bigFeedback()
-	if !native || fb == nil || b.cur != b.root || b.generic(pc) || !fb.BigInt(pc) || arith && b.f.Keeps >= b.f.keepLimit() ||
+	if !native || fb == nil || b.generic(pc) || arith && b.f.Keeps >= b.f.keepLimit() ||
 		in.Left.Slot < 0 || in.Right.Slot < 0 {
 		return nil
 	}
 	f := b.f
 	x, y := operand(in.Left), operand(in.Right)
+	if !fb.BigInt(pc) && !(b.pureBody() && (boxedBig(x) != nil || boxedBig(y) != nil)) {
+		// No BigInt met. In a pure body, whose sites the tree tier never
+		// runs and never marks (the VM's pureCall) -- a callback such as
+		// (x) => x <= last -- an operand native code has unboxed already,
+		// a BigInt typed array's element (OpBigElemRead), is a BigInt
+		// whatever the site met, as V8's code types its BigInt64 values.
+		// Anywhere else the site learns at its exits, first that it met
+		// BigInts and then, once its int64's form overflows, BigInts from
+		// 0 to 2^64-1 (the VM's jitBigIntSeen): made as an int64's before
+		// either, a sum of squares past 2^63 had met an entry's
+		// speculation of an Int64 first, under QJS_JIT_STRESS, and its
+		// phis had been left generic.
+		return nil
+	}
 	count := 0
 	if op == ir.Shl || op == ir.Shr {
 		if count = bigCount(y); count < 0 {
@@ -223,13 +254,14 @@ func (b *builder) bigNative(blk *Block, pc int, in ir.Instruction, operand func(
 	return b.bigBoxed(blk, r)
 }
 
-// bigUnary is in, a negation or a bitwise not at pc of the root, made on a
+// bigUnary is in, a negation or a bitwise not at pc of the frame being
+// built, the root's or an inlined callee's, made on a
 // BigInt unboxed as an Int64 where the site met BigInts held in their
 // values (BigIntFeedback) and its speculation has not failed: -x exits for
 // the most negative int64, ~x nowhere; or nil.
 func (b *builder) bigUnary(blk *Block, pc int, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) *Value {
 	fb := b.bigFeedback()
-	if in.Operator != ir.Neg && in.Operator != ir.BitNot || fb == nil || b.cur != b.root || b.generic(pc) || !fb.BigInt(pc) ||
+	if in.Operator != ir.Neg && in.Operator != ir.BitNot || fb == nil || b.generic(pc) || !fb.BigInt(pc) ||
 		b.f.Keeps >= b.f.keepLimit() || in.Left.Slot < 0 {
 		return nil
 	}
