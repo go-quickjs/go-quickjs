@@ -519,6 +519,55 @@ function loop_props(n)
     return n;
 }
 
+/* long string switches: early hits, late hits, misses and mixed keys */
+function extra_string_switch(n, keys)
+{
+    var j, sum = 0;
+    for (j = 0; j < n; j++) {
+        switch (keys[j & 3]) {
+        case "a": sum += 1; break;
+        case "div": sum += 2; break;
+        case "p": sum += 3; break;
+        case "span": sum += 4; break;
+        case "button": sum += 5; break;
+        case "input": sum += 6; break;
+        case "form": sum += 7; break;
+        case "label": sum += 8; break;
+        case "select": sum += 9; break;
+        case "option": sum += 10; break;
+        case "table": sum += 11; break;
+        case "tr": sum += 12; break;
+        case "td": sum += 13; break;
+        case "ul": sum += 14; break;
+        case "li": sum += 15; break;
+        case "section": sum += 16; break;
+        default: break;
+        }
+    }
+    global_res = sum;
+    return n;
+}
+
+function string_switch_first(n)
+{
+    return extra_string_switch(n, ["a", "a", "a", "a"]);
+}
+
+function string_switch_last(n)
+{
+    return extra_string_switch(n, ["section", "section", "section", "section"]);
+}
+
+function string_switch_miss(n)
+{
+    return extra_string_switch(n, ["unknown", "unknown", "unknown", "unknown"]);
+}
+
+function string_switch_mixed(n)
+{
+    return extra_string_switch(n, ["a", "section", "unknown", "label"]);
+}
+
 /* a class's private field, read and written, and its private method,
    called */
 class PrivateCounter
