@@ -380,3 +380,40 @@ func (c *compiler) bigRebox(v *ssa.Value) amd64.Reg {
 	c.a.Bind(done)
 	return scratchA
 }
+
+// bigElemRead reads a BigInt64Array's or a BigUint64Array's element
+// (ssa.OpBigElemRead), its Type's word: the view in its buffer, the key
+// an integer below its length, as typedElement finds them, and the view's
+// element type the one its Type reads; anything else fails.
+func (c *compiler) bigElemRead(v *ssa.Value, fail func(amd64.Cond)) {
+	c.typedElement(v.Args[0], v.Args[1], false, fail)
+	kind := int32(abi.ElemBigInt64)
+	if v.Type == ssa.Uint64 {
+		kind = abi.ElemBigUint64
+	}
+	c.a.OpImm(amd64.Cmp, scratchC, kind, false)
+	fail(amd64.CondNE)
+	c.a.ShiftImm(amd64.Shl, scratchA, 3, true)
+	c.a.Op(amd64.Add, scratchA, scratchB, true)
+	d := c.gdst(v)
+	c.a.Load(d, scratchA, 0)
+	c.setG(v, d)
+}
+
+// bigElemWrite stores a BigInt's low 64 bits in a BigInt64Array's or a
+// BigUint64Array's element (ssa.OpBigElemWrite): the view in its buffer,
+// its bytes writable, the key an integer below its length, as
+// typedElement finds them, and the view's element type the one Index
+// names; anything else fails.
+func (c *compiler) bigElemWrite(v *ssa.Value, fail func(amd64.Cond)) {
+	c.typedElement(v.Args[0], v.Args[1], true, fail)
+	kind := int32(abi.ElemBigInt64)
+	if v.Index == 1 {
+		kind = abi.ElemBigUint64
+	}
+	c.a.OpImm(amd64.Cmp, scratchC, kind, false)
+	fail(amd64.CondNE)
+	c.a.ShiftImm(amd64.Shl, scratchA, 3, true)
+	c.a.Op(amd64.Add, scratchA, scratchB, true)
+	c.a.Store(scratchA, 0, c.gpr(v.Args[2], scratchB))
+}

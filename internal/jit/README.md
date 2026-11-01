@@ -232,7 +232,11 @@ saves).
 
 **BigInts.** As V8's code makes its BigInt64 values, an operator of
 BigInts the existing tiers saw held in their values (`abi.Encoding`'s
-`ShortBigTag`) is made on them unboxed (`ssa/bigint.go`): as Int64s, or,
+`ShortBigTag`) -- or one with an operand native code has unboxed already,
+a BigInt typed array's element, whatever the site met: a pure body's,
+which the call path evaluates without its tree, has no marks -- is made
+on them unboxed (`ssa/bigint.go`), in the root or in a callee inlined,
+whose own feedback the builder asks: as Int64s, or,
 where the site met BigInts past the int64 range from 0 to 2^64-1 -- a
 64-bit hash's or generator's -- as Uint64s. The arithmetic exits where a
 result leaves its type's range, for a division by zero and for the most
@@ -268,7 +272,11 @@ array's `map`'s is a typed array of its type and length, where its
 species is its type's own constructor, which the code stores each result
 in as a number, and its `filter`'s an `Array` the code appends the
 elements it keeps to, of which Go makes the typed array after the loop,
-as the method makes it then. A hole, or
+as the method makes it then. A BigInt64Array's or a BigUint64Array's
+element is its type's word (`ssa.OpBigElemRead`), boxed where a use needs
+a value, as at an element read that met one (the VM's `jitBigTyped`),
+and its `map`'s result's low 64 bits are stored as one
+(`ssa.OpBigElemWrite`); its `sort` is Go's. A hole, or
 anything the loop's checks find, leaves, and Go goes on with the loop from
 that index (`abi.Context`'s `Loop`), then native code after the call.
 The callback is inlined in the loop where any callee may be, under the

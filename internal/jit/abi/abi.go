@@ -1410,6 +1410,8 @@ const (
 	ElemFloat16
 	ElemFloat32
 	ElemFloat64
+	ElemBigInt64
+	ElemBigUint64
 )
 
 // NumberLimit bounds number words: a word below it holds a number, and

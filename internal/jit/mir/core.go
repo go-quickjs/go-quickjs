@@ -338,7 +338,7 @@ type chainTables struct {
 // addition's three, an integer operation's one; a call of Go's a hundred.
 func latency(op ssa.Op) int {
 	switch op {
-	case ssa.OpObjectOf, ssa.OpArrayOf, ssa.OpIndexedOf, ssa.OpElemRead, ssa.OpElemCell,
+	case ssa.OpObjectOf, ssa.OpArrayOf, ssa.OpIndexedOf, ssa.OpElemRead, ssa.OpBigElemRead, ssa.OpElemCell,
 		ssa.OpLength, ssa.OpPropRead, ssa.OpPropCell, ssa.OpLoadCell, ssa.OpStringProp,
 		ssa.OpStringCode, ssa.OpStringChar, ssa.OpCodeChar, ssa.OpCodeCharOr, ssa.OpTypeofCell, ssa.OpSubstringChar, ssa.OpStringCodePointOr, ssa.OpStringAtOr,
 		ssa.OpUpvalueCell, ssa.OpLocalCell, ssa.OpGlobalCell, ssa.OpLexCell, ssa.OpBindingCell, ssa.OpHolderCell:

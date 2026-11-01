@@ -487,7 +487,19 @@ func (b *builder) forEachCall(blk *Block, pc int, fp forEachPlan) {
 	// The element at k: a typed array's a number, an array's from its cell
 	// -- where it has one, but find's and findIndex's -- whatever it is.
 	finds := kind == abi.LoopFind || kind == abi.LoopFindIndex
+	// A BigInt typed array's element is a BigInt held in its value, read
+	// as its type's word (OpBigElemRead) and boxed.
+	big := None
+	switch mark >> abi.LoopTypedShift {
+	case abi.ElemBigInt64:
+		big = Int64
+	case abi.ElemBigUint64:
+		big = Uint64
+	}
 	element := func(blk *Block, st *FrameState, k *Value, present bool) *Value {
+		if typed && big != None {
+			return b.bigBoxed(blk, at(blk, st, OpBigElemRead, big, array, k))
+		}
 		if typed {
 			return boxF(blk, at(blk, st, OpElemRead, Float64, array, k))
 		}
@@ -629,6 +641,16 @@ func (b *builder) forEachCall(blk *Block, pc int, fp forEachPlan) {
 			b.write(base+loopThis, body, v)
 		case abi.LoopMap:
 			st := state(body, 0)
+			if typed && big != None {
+				// A BigInt typed array's: the result's low 64 bits, a
+				// BigInt held in its value (OpBigLow), stored at the
+				// index as its type's word; anything else leaves for Go.
+				w := at(body, st, OpBigElemWrite, None, at(body, st, OpIndexedOf, Ptr, out), k, at(body, st, OpBigLow, Uint64, v))
+				if big == Uint64 {
+					w.Index = 1
+				}
+				break
+			}
 			if typed {
 				// Stored at the index of the typed array of the length,
 				// as a number, converted to its type as a store converts
@@ -1387,6 +1409,29 @@ const (
 // feedback's elements kind. Any other receiver Go reads.
 type ElementFeedback interface {
 	TypedRead(pc int) bool
+}
+
+// BigElementFeedback is Feedback that knows the element reads, read as
+// they are, that have met BigInt64Arrays, or BigUint64Arrays (unsigned),
+// whose elements native code reads as BigInts (OpBigElemRead), boxed
+// where a use needs a value, as V8's code reads a BigInt64Array's element
+// as a word.
+type BigElementFeedback interface {
+	TypedBigRead(pc int) (unsigned, ok bool)
+}
+
+// typedBigRead is BigElementFeedback's TypedBigRead, the Type the element
+// is read as: Int64, or Uint64 for a BigUint64Array's.
+func (b *builder) typedBigRead(pc int) (Type, bool) {
+	f, ok := b.fb.(BigElementFeedback)
+	if !ok {
+		return None, false
+	}
+	unsigned, ok := f.TypedBigRead(pc)
+	if unsigned {
+		return Uint64, ok
+	}
+	return Int64, ok
 }
 
 // KeyedFeedback is Feedback that knows the element reads, read as they
@@ -6601,6 +6646,14 @@ func (b *builder) instruction(blk *Block, pc int) {
 			v := f.newValue(blk, OpLoadCell, Tagged, cell)
 			v.Shadow = cell
 			b.assign(in.Dest, blk, v)
+			break
+		}
+		if t, ok := b.typedBigRead(pc); ok && in.Reference && in.Op == ir.ArrayRead {
+			// A BigInt64Array's or a BigUint64Array's element, a BigInt
+			// held in its value; Go reads any other's.
+			array := guard(OpIndexedOf, Ptr, ir.HostExit, operand(in.Left))
+			key, _ := keyOf(ir.HostExit)
+			b.assign(in.Dest, blk, b.bigBoxed(blk, guard(OpBigElemRead, t, ir.HostExit, array, key)))
 			break
 		}
 		if in.Reference && in.Op == ir.ArrayRead && b.typedReceiver(pc, operand(in.Left)) {

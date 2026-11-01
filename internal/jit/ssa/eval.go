@@ -725,6 +725,10 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 				if _, ok := index(a.f); !ok {
 					return exit(v.State, ir.ExitKind(v.Aux))
 				}
+			case OpBigElemRead, OpBigElemWrite:
+				// The model's arrays hold numbers' words: no BigInt
+				// typed array's element is one of them.
+				return exit(v.State, ir.ExitKind(v.Aux))
 			case OpElemRead, OpElemWrite:
 				cell, ok := element(arrays[a.p], b.f)
 				if !ok {

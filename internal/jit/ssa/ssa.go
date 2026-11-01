@@ -95,6 +95,20 @@ const (
 	// code does not make -- Float16, a BigInt -- or a view out of its
 	// buffer, is the guard's failure, or the store's call of Go.
 	OpIndexedOf // tagged -> ptr, if an array or a typed array
+	// OpBigElemRead is the element of a BigInt64Array (Type Int64) or a
+	// BigUint64Array (Type Uint64) at the index Args[1], an integer below
+	// its length, the view in its buffer: Args[0], OpIndexedOf's, is a
+	// typed array of that type, or the read exits. Its BigInt is the
+	// element's 64 bits, which OpBigBox makes a value of, as V8's code
+	// loads a BigInt64Array's element as a machine word.
+	OpBigElemRead // ptr, f64 -> i64 | u64
+	// OpBigElemWrite stores Args[2], a BigInt's low 64 bits, in the
+	// element of a BigInt64Array (Index 0) or a BigUint64Array (Index 1)
+	// at the index Args[1], as the typed array's [[Set]] stores
+	// ToBigInt64's or ToBigUint64's: the view in its buffer, its bytes
+	// writable, the index an integer below its length, or it exits. It
+	// writes bytes, no cell a value is read from.
+	OpBigElemWrite // ptr, f64, u64 -> none
 	// OpElemCell is an element read as a reference: the element's cell, if
 	// the index is an integer within the dense elements and the element is
 	// not a hole, whatever it holds. OpLoadCell reads it, with the cell as
@@ -576,7 +590,7 @@ const (
 var opNames = [...]string{
 	OpInvalid: "invalid", OpLoadSlot: "load", OpConst: "const", OpConstF64: "constf", OpConstSource: "consts", OpPhi: "phi",
 	OpUnboxF64: "unbox", OpTruth: "truth", OpCheckInit: "checkinit", OpBoxF64: "boxf", OpBoxBool: "boxb",
-	OpArrayOf: "arrayof", OpIndexedOf: "indexedof", OpElemKey: "elemkey", OpElemRead: "elemread", OpElemWrite: "elemwrite", OpElemCell: "elemcell", OpElemStore: "elemstore", OpLength: "length",
+	OpArrayOf: "arrayof", OpIndexedOf: "indexedof", OpElemKey: "elemkey", OpElemRead: "elemread", OpBigElemRead: "bigelemread", OpBigElemWrite: "bigelemwrite", OpElemWrite: "elemwrite", OpElemCell: "elemcell", OpElemStore: "elemstore", OpLength: "length",
 	OpObjectOf: "objectof", OpPropRead: "propread", OpPropWrite: "propwrite", OpPropCell: "propcell", OpLoadCell: "loadcell", OpGlobalCell: "globalcell", OpLexCell: "lexcell", OpBindingCell: "bindingcell",
 	OpStringMethod: "stringmethod", OpStringProp: "stringprop", OpStringCode: "stringcode", OpStringChar: "stringchar", OpCodeChar: "codechar", OpSubstringChar: "substringchar", OpLoopMark: "loopmark", OpFreeze: "freeze", OpOddballF64: "oddball",
 	OpAddF64: "addf", OpSubF64: "subf", OpMulF64: "mulf", OpDivF64: "divf", OpModF64: "modf", OpNegF64: "negf", OpCmpF64: "cmpf",
@@ -630,7 +644,7 @@ const (
 // isGuard reports whether an op exits when its operand is not what it needs.
 func (o Op) isGuard() bool {
 	switch o {
-	case OpUnboxF64, OpOddballF64, OpTruth, OpCheckInit, OpModF64, OpArrayOf, OpIndexedOf, OpElemKey, OpElemRead, OpElemWrite, OpElemCell, OpElemStore, OpLength,
+	case OpUnboxF64, OpOddballF64, OpTruth, OpCheckInit, OpModF64, OpArrayOf, OpIndexedOf, OpElemKey, OpElemRead, OpBigElemRead, OpBigElemWrite, OpElemWrite, OpElemCell, OpElemStore, OpLength,
 		OpObjectOf, OpPropRead, OpPropWrite, OpPropCell, OpGlobalCell, OpLexCell, OpBindingCell, OpStringMethod, OpStringProp, OpStringCode, OpStringChar, OpCodeChar, OpLooseNullish, OpEqTagged,
 		OpSameObject, OpSameSymbol, OpIterClosed, OpFrameRoom, OpTailRoom, OpTailSelf, OpCall, OpInstanceOf, OpTypeIs, OpCheckTrue, OpPowF64, OpAccessorIs, OpPrimitive,
 		OpBigUnbox, OpAddI64, OpSubI64, OpMulI64,
@@ -648,7 +662,7 @@ func (o Op) isGuard() bool {
 // length read after was the one read before it, a.length one short.
 // (An object's shape changes only in Go.)
 func (o Op) readsMemory() bool {
-	return o == OpElemRead || o == OpElemWrite || o == OpElemCell || o == OpElemStore || o == OpPropRead || o == OpPropWrite || o == OpPropCell ||
+	return o == OpElemRead || o == OpBigElemRead || o == OpBigElemWrite || o == OpElemWrite || o == OpElemCell || o == OpElemStore || o == OpPropRead || o == OpPropWrite || o == OpPropCell ||
 		o == OpGlobalCell || o == OpLexCell || o == OpBindingCell || o == OpStringProp || o == OpKeep || o == OpCall || o == OpLength ||
 		o == OpAccessorIs || o == OpHolderCell || o == OpChainCheck || o == OpProtoIs
 }

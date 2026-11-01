@@ -342,3 +342,35 @@ func (c *a64Compiler) bigRebox(v *ssa.Value) arm64.Reg {
 	c.a.Bind(done)
 	return a64A
 }
+
+// bigElemRead reads a BigInt64Array's or a BigUint64Array's element, as
+// amd64's.
+func (c *a64Compiler) bigElemRead(v *ssa.Value, fail func(arm64.Cond)) {
+	c.typedElement(v.Args[0], v.Args[1], false, fail)
+	kind := int64(abi.ElemBigInt64)
+	if v.Type == ssa.Uint64 {
+		kind = abi.ElemBigUint64
+	}
+	c.a.CmpImm(a64C, kind, false)
+	fail(arm64.NE)
+	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 3, true)
+	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	d := c.gdst(v)
+	c.a.Load(d, a64A, 0)
+	c.setG(v, d)
+}
+
+// bigElemWrite stores a BigInt's low 64 bits in a BigInt typed array's
+// element, as amd64's.
+func (c *a64Compiler) bigElemWrite(v *ssa.Value, fail func(arm64.Cond)) {
+	c.typedElement(v.Args[0], v.Args[1], true, fail)
+	kind := int64(abi.ElemBigInt64)
+	if v.Index == 1 {
+		kind = abi.ElemBigUint64
+	}
+	c.a.CmpImm(a64C, kind, false)
+	fail(arm64.NE)
+	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 3, true)
+	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	c.a.Store(a64A, 0, c.gpr(v.Args[2], a64B))
+}

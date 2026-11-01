@@ -8500,6 +8500,10 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.bigWord(v, c.guardFor(v))
 	case ssa.OpBigBox:
 		c.bigBox(v)
+	case ssa.OpBigElemRead:
+		c.bigElemRead(v, c.guardFor(v))
+	case ssa.OpBigElemWrite:
+		c.bigElemWrite(v, c.guardFor(v))
 	case ssa.OpConstI64:
 		d := c.gdst(v)
 		c.movImm(d, v.Const.Bits)

@@ -6958,7 +6958,8 @@ func (r *Runtime) jitIndexSeen(e *jitEntry, pc int, o, k Value) {
 		return
 	}
 	in := p.Code[pc]
-	if in.Op != ir.ArrayRead || slices.Contains(e.typedReads, int32(pc)) || slices.Contains(e.stringReads, int32(pc)) || slices.Contains(e.keyedReads, int32(pc)) {
+	if in.Op != ir.ArrayRead || slices.Contains(e.typedReads, int32(pc)) || jitBigReadAt(e.typedReads, pc) != 0 ||
+		slices.Contains(e.stringReads, int32(pc)) || slices.Contains(e.keyedReads, int32(pc)) {
 		return
 	}
 	if !in.Reference {
@@ -6972,8 +6973,16 @@ func (r *Runtime) jitIndexSeen(e *jitEntry, pc int, o, k Value) {
 		// from the same lowering on, not learned an exit each.
 		keyed := o.IsObject() && (k.IsString() || k.IsNumber() && jitKeyedClass(o.Object()))
 		chars := o.IsString() && k.IsNumber()
+		// A BigInt typed array's element, a BigInt, which a read as a
+		// number never is: read as it is from the next lowering on, as
+		// a BigInt (TypedBigRead).
+		big := int32(0)
+		if !keyed && !chars && k.IsNumber() {
+			big = jitBigTyped(o)
+		}
 		l := r.jit.lowering(e.link.key.Value())
 		switch {
+		case big != 0:
 		case keyed:
 			if _, ok := r.jitKeyedRead(o, k); !ok {
 				return
@@ -6988,7 +6997,7 @@ func (r *Runtime) jitIndexSeen(e *jitEntry, pc int, o, k Value) {
 			return
 		}
 		hint := &l.hints.ElementReads
-		if !keyed {
+		if !keyed && big == 0 {
 			hint = &l.hints.StringReads
 		}
 		before := jitCapBytes(*hint)
@@ -6996,7 +7005,9 @@ func (r *Runtime) jitIndexSeen(e *jitEntry, pc int, o, k Value) {
 		l.bytes += jitCapBytes(*hint) - before
 		r.jit.lowerBytes += jitCapBytes(*hint) - before
 		r.jit.relower(l)
-		if keyed {
+		if big != 0 {
+			e.typedReads = append(e.typedReads, int32(pc)|big)
+		} else if keyed {
 			e.keyedReads = append(e.keyedReads, int32(pc))
 		} else if chars {
 			e.stringReads = append(e.stringReads, int32(pc))
@@ -7010,6 +7021,10 @@ func (r *Runtime) jitIndexSeen(e *jitEntry, pc int, o, k Value) {
 		// (ssa.OpStringChar). PDF.js's font parsers read their programs
 		// so, every character leaving native code.
 		e.stringReads = append(e.stringReads, int32(pc))
+	case k.IsNumber() && jitBigTyped(o) != 0:
+		// A BigInt typed array's element, read as a BigInt from the next
+		// compile on (TypedBigRead).
+		e.typedReads = append(e.typedReads, int32(pc)|jitBigTyped(o))
 	case o.IsObject() && o.Object().class == ClassTypedArray:
 		e.typedReads = append(e.typedReads, int32(pc))
 	case o.IsObject() && (k.IsString() || k.IsNumber() && jitKeyedClass(o.Object())):
@@ -7758,7 +7773,13 @@ func (r *Runtime) jitForEaches(sp int, in bytecode.Instr) (*Object, *closure, *O
 	case kind == 0:
 		return nil, nil, nil, nil
 	case kind&abi.LoopTyped != 0:
-		if r.jitLoopTyped(recv) == nil {
+		t := r.jitLoopTyped(recv)
+		if t == nil {
+			return nil, nil, nil, nil
+		}
+		if base := kind & abi.LoopKindMask; t.info().big && base == abi.LoopSort {
+			// A BigInt typed array's sort compares BigInts, which its
+			// loop does not: Go's.
 			return nil, nil, nil, nil
 		}
 		proto = recv.Object().proto
@@ -8459,8 +8480,9 @@ func (r *Runtime) jitNewTypedResult(form int, recv, n Value) (Value, bool) {
 			return Undefined, false
 		}
 		els := kept.elemsOf()
+		big := t.info().big
 		for _, v := range els {
-			if !v.IsNumber() {
+			if big && !v.IsBigInt() || !big && !v.IsNumber() {
 				return Undefined, false
 			}
 		}
@@ -8469,7 +8491,8 @@ func (r *Runtime) jitNewTypedResult(form int, recv, n Value) (Value, bool) {
 			return Undefined, false
 		}
 		for i, v := range els {
-			// Numbers, which convert running nothing.
+			// Numbers, or a BigInt type's BigInts, which convert running
+			// nothing.
 			if err := r.setElem(nt, i, v); err != nil {
 				return Undefined, false
 			}
@@ -8528,7 +8551,7 @@ func (r *Runtime) jitSortCopy(form int, recv, x Value) (Value, bool) {
 	var a *Object
 	n := 0
 	if form&ssa.NewArrayTyped != 0 {
-		if t = r.jitLoopTyped(recv); t == nil || t.outOfBounds() || t.storage().immutable {
+		if t = r.jitLoopTyped(recv); t == nil || t.info().big || t.outOfBounds() || t.storage().immutable {
 			return Undefined, false
 		}
 		n = t.count()
@@ -13613,6 +13636,8 @@ const (
 	_ = uint8(elemUint32-abi.ElemUint32) + uint8(abi.ElemUint32-elemUint32)
 	_ = uint8(elemFloat16-abi.ElemFloat16) + uint8(abi.ElemFloat16-elemFloat16)
 	_ = uint8(elemFloat64-abi.ElemFloat64) + uint8(abi.ElemFloat64-elemFloat64)
+	_ = uint8(elemBigInt64-abi.ElemBigInt64) + uint8(abi.ElemBigInt64-elemBigInt64)
+	_ = uint8(elemBigUint64-abi.ElemBigUint64) + uint8(abi.ElemBigUint64-elemBigUint64)
 )
 
 func jitTypeWord(x any) uint64 {

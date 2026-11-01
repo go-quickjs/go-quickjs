@@ -350,7 +350,7 @@ func (r *Runtime) jitLoopFn(kind int) *Object {
 
 // jitLoopTyped is the typed array a loop of a %TypedArray%.prototype
 // method's is made over, as Go reads it (jitTypedLoops): a view of a
-// number type and a fixed length, its prototype its type's, the realm's --
+// number type or a BigInt type (zzjit_bigtyped.go) and a fixed length, its prototype its type's, the realm's --
 // an instance of a subclass, a view that tracks a resizable buffer's
 // length, are Go's -- its storage looked at, which native code reads its
 // length and elements by (fixedStorage); or nil.
@@ -359,7 +359,7 @@ func (r *Runtime) jitLoopTyped(v Value) *typedArrayData {
 		return nil
 	}
 	t, ok := v.Object().dataOf().(*typedArrayData)
-	if !ok || t.info().big || t.tracking || int(t.kind) >= len(r.typedArrayProtos) || v.Object().proto != r.typedArrayProtos[t.kind] {
+	if !ok || t.tracking || int(t.kind) >= len(r.typedArrayProtos) || v.Object().proto != r.typedArrayProtos[t.kind] {
 		return nil
 	}
 	if t.st == nil && t.fixedStorage() == nil {
