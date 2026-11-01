@@ -189,17 +189,19 @@ func typeofTest[_ any](e tentry, i int) func(c *tctx) bool {
 
 // typeofJump is eqJump's end for op, an equality, of x and y, where one is
 // a typeof typeofOp marked and the other a string constant, for the jump to
-// taken, or falling to fall; nil for anything else, which eqJump builds.
+// taken, or falling to fall; strEqJump's for any other; nil for anything
+// else, which eqJump builds.
 func typeofJump[_ any](op bytecode.Op, x, y tentry, taken, fall int) tnext {
 	if x.rare == strConstRare && x.slot < 0 {
 		x, y = y, x
 	}
 	if x.rare == nil || x.rare.typeOf == nil || x.v == nil || x.slot >= 0 || y.rare != strConstRare || y.slot >= 0 {
-		return nil
+		// Any other equality with a string constant (see zzz_streq.go).
+		return strEqJump[struct{}](op, x, y, taken, fall)
 	}
 	t := x.rare.typeOf
 	if !t.has || t.k != y.k {
-		return nil
+		return strEqJump[struct{}](op, x, y, taken, fall)
 	}
 	// yes is where a comparison that holds goes, no where one that
 	// does not.
