@@ -325,8 +325,8 @@ func (b *tbuilder) update(u *rmw, n, pc, next int) (int, bool) {
 		i++
 	}
 	if u.value {
-		b.push(rmwNode(u))
-	} else if !b.stmt(rmwStmt(u)) {
+		b.push(rmwNodeHook[struct{}](u))
+	} else if !b.stmt(rmwStmtHook[struct{}](u)) {
 		return fail()
 	}
 	return i - pc - 1, true
