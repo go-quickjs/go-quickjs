@@ -4421,6 +4421,9 @@ func (b *builder) goCalls() bool {
 func (b *builder) goAdd(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
 	release, old := b.bigRelease(blk, b.herePC, in)
 	args := []*Value{operand(in.Left), operand(in.Right)}
+	if old == nil && b.emptyAdd(blk, in, args) {
+		return
+	}
 	if old != nil {
 		args = append(args, old)
 	}
@@ -4435,6 +4438,58 @@ func (b *builder) goAdd(blk *Block, in ir.Instruction, operand func(ir.Operand) 
 	r := b.f.newValue(blk, OpKept, Tagged, cell, call)
 	r.Shadow = cell
 	b.assign(in.Dest, blk, r)
+}
+
+// emptyAdd makes in, "" + x or x + "", an addition Go makes (GoAdd) one
+// operand of which, args', is the empty string's constant, and reports
+// whether it did: x itself where it is a string, told by its word, as
+// V8's StringAdd of the empty string is the other operand, and Go's
+// addition on a branch of its own where it is anything else -- a number
+// it converts, a value it refuses -- native code going on after either.
+// "" + x is how scripts convert to a string, and had been a call of Go
+// for every string: an HTML escaper's of its input, the string it
+// mostly is, 11% of its time.
+func (b *builder) emptyAdd(blk *Block, in ir.Instruction, args []*Value) bool {
+	var x *Value
+	switch {
+	case emptyStringConst(args[0]):
+		x = args[1]
+	case emptyStringConst(args[1]):
+		x = args[0]
+	default:
+		return false
+	}
+	f := b.f
+	if f.Keeps >= f.keepLimit() {
+		return false
+	}
+	st := b.state(blk, b.herePC)
+	is := f.newValue(blk, OpTypeIs, Bool, x)
+	is.Index, is.Aux, is.State = int(ir.TypeString), int(ir.HostExit), st
+	st.addUse()
+	yes, other, _ := b.split(blk, is, true)
+	b.assign(in.Dest, yes, x)
+	call := f.newValue(other, OpCall, Tagged, args...)
+	f.cache(call).Calls = []*CallSite{{Go: GoAdd, ThisSlot: -1}}
+	call.Aux, call.State, call.Index = int(ir.HostExit), st, f.Keeps
+	f.Keeps++
+	st.addUse()
+	cell := f.newValue(other, OpCallCell, Source, call)
+	r := f.newValue(other, OpKept, Tagged, cell, call)
+	r.Shadow = cell
+	b.assign(in.Dest, other, r)
+	return true
+}
+
+// emptyStringConst reports whether v is the empty string's constant: a
+// load of a string constant's cell whose string is known to be empty
+// (ConstString).
+func emptyStringConst(v *Value) bool {
+	if v == nil || v.Op != OpLoadCell || len(v.Args) != 1 {
+		return false
+	}
+	s, ok := v.Args[0].ConstString()
+	return ok && s == ""
 }
 
 // goCompare is in, a relational comparison whose guard has failed, by a
