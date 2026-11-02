@@ -810,13 +810,18 @@ func (r *Runtime) regExpReplaceIn(rx Value, args []Value, fl regexp.Flags, direc
 	if next < size {
 		sb.WriteString(j.slice(next, size))
 	}
+	// Made of ASCII alone, a string as long as its bytes -- unless longer
+	// than a string may be, which no check has seen whole, the last
+	// replacement and the tail being written after the last: builtString
+	// throws for it, as for any other.
+	t := sb.String()
 	if (plain || pieces != nil) && s.ascii && tv.ascii {
-		// Made of ASCII alone, as long as its bytes, which overlong has
-		// kept within a string's length.
-		t := sb.String()
+		if len(t) > maxStringLength {
+			return r.builtString(t)
+		}
 		return Str(&String{s: t, length: len(t), ascii: true}), nil
 	}
-	return r.builtString(sb.String())
+	return r.builtString(t)
 }
 
 // maxKeptSpans is the most indices the room a runtime keeps for a global

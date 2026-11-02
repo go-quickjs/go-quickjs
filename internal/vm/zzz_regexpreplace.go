@@ -58,27 +58,24 @@ func replaceFlat[_ any](r *Runtime, rx Value, s, tv *String, fl regexp.Flags) (V
 // replacedFlat is the result of replacing count matches of an ASCII
 // subject s, spans of width each, by an ASCII template without a $, tv, as
 // regExpReplace makes it: the subject itself where nothing matched, and
-// otherwise the pieces between the matches and the template for each. The
-// replace's builder asked, before it wrote each match's, whether what it had
-// written was longer than a string may be, and threw where it was.
+// otherwise the pieces between the matches and the template for each. One
+// longer than a string may be is a RangeError, as V8's is; n is known
+// before anything is written, and the template runs no code, so when the
+// error is thrown cannot be seen.
 func replacedFlat[_ any](r *Runtime, s, tv *String, spans []int, width, count int) (Value, error) {
 	if count == 0 {
 		return Str(s), nil
 	}
-	n := s.length + count*tv.length
+	// In int64: count times tv's length is past an int of 32 bits where
+	// either is near a string's longest.
+	n64 := int64(s.length) + int64(count)*int64(tv.length)
 	for k := 0; k < count; k++ {
-		n -= spans[k*width+1] - spans[k*width]
+		n64 -= int64(spans[k*width+1] - spans[k*width])
 	}
-	if n > maxStringLength {
-		written, next := 0, 0
-		for k := 0; k < count; k++ {
-			if written > maxStringLength {
-				return Undefined, r.throwStringLength()
-			}
-			written += spans[k*width] - next + tv.length
-			next = spans[k*width+1]
-		}
+	if n64 > maxStringLength {
+		return Undefined, r.throwStringLength()
 	}
+	n := int(n64)
 	if n == 0 {
 		return Str(emptyString), nil
 	}

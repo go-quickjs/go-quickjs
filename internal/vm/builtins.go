@@ -1432,8 +1432,12 @@ func (r *Runtime) initArrayBuiltins() {
 			if err != nil {
 				return Undefined, err
 			}
-			// null and undefined contribute nothing, unlike String(el).
+			// null and undefined contribute nothing, unlike String(el), but
+			// the separator before them is written all the same, and asked.
 			if el.IsNullish() {
+				if err := sb.check(); err != nil {
+					return Undefined, err
+				}
 				continue
 			}
 			s, err := rt.toString(el)
@@ -1447,10 +1451,9 @@ func (r *Runtime) initArrayBuiltins() {
 			}
 		}
 		if ascii {
-			// Every piece was ASCII, so the result is, and is as long as its
-			// bytes, which overlong has kept within a string's length.
-			t := sb.String()
-			return Str(&String{s: t, length: len(t), ascii: true}), nil
+			// Every piece was ASCII, so the result is, its length asked
+			// whole there (asciiParts), past the last separators.
+			return asciiParts[struct{}](rt, sb.String())
 		}
 		return rt.builtString(sb.String())
 	})
