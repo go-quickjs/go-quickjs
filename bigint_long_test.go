@@ -13,25 +13,36 @@ import (
 // BigInt operation of millions of bits, each of which had run in one call
 // for seconds or minutes past it, as V8 stops its BigInt library's: a
 // product, a quotient, a remainder, a power, a conversion to a string and
-// back, and a product native code makes, which it leaves to Go's call. x is
-// made of shifts and a division by a word, which take no time.
+// back, and a product native code makes, which it leaves to Go's call. x
+// and y are made of shifts and a division by a word, which take no time.
+//
+// Each operation must outlast the deadline on any machine the test runs
+// on, or it ends with its answer and no deadline to report. Run to their
+// ends on a Ryzen 5 3600, the conversions take 1.5 to 2.8 s, the quotient,
+// remainder, power, parse and comparisons 0.6 to 0.8 s, and the products
+// of y, 80 million bits, 1.1 to 1.2 s: 30 times interruptDeadline or more.
+// A product of 20 million bits took 0.17 s, under twice the 100 ms the
+// test once gave it, which a faster machine finished inside. Only the
+// operation runs under the deadline: what it is given, and native code's
+// warming up, is made before.
 func TestLongBigIntOperationsAreInterruptible(t *testing.T) {
-	for name, src := range map[string]string{
-		"toString":       `String(x).length`,
-		"toString radix": `x.toString(7).length`,
-		"template":       "`${x}`.length",
-		"product":        `(x * (x + 1n)) & 1n`,
-		"square":         `(x * x) & 1n`,
-		"quotient":       `((1n << 40000000n) / (x + 7n)) & 1n`,
-		"remainder":      `((1n << 40000000n) % (x + 7n)) & 1n`,
-		"power":          `(3n ** 40000000n) & 1n`,
-		"parse":          `BigInt(s) & 1n`,
-		"compare":        `x < s`,
-		"Intl":           `new Intl.NumberFormat("en").format(x).length`,
-		"equal":          `x == s`,
-		"native product": `function f(a, b) { return a * b }
-			for (let i = 0; i < 2e4; i++) f(BigInt(i) << 100n, 3n << 100n);
-			f(x, x + 1n) & 1n`,
+	const interruptDeadline = 20 * time.Millisecond
+	for name, tc := range map[string]struct{ setup, src string }{
+		"toString":       {"", `String(x).length`},
+		"toString radix": {"", `x.toString(7).length`},
+		"template":       {"", "`${x}`.length"},
+		"product":        {"", `(y * (y + 1n)) & 1n`},
+		"square":         {"", `(y * y) & 1n`},
+		"quotient":       {"", `((1n << 40000000n) / (x + 7n)) & 1n`},
+		"remainder":      {"", `((1n << 40000000n) % (x + 7n)) & 1n`},
+		"power":          {"", `(3n ** 40000000n) & 1n`},
+		"parse":          {"", `BigInt(s) & 1n`},
+		"compare":        {"", `x < s`},
+		"Intl":           {"", `new Intl.NumberFormat("en").format(x).length`},
+		"equal":          {"", `x == s`},
+		"native product": {`function f(a, b) { return a * b }
+			for (let i = 0; i < 2e4; i++) f(BigInt(i) << 100n, 3n << 100n);`,
+			`f(y, y + 1n) & 1n`},
 	} {
 		for _, jit := range []bool{false, true} {
 			opts := []quickjs.Option{}
@@ -43,13 +54,13 @@ func TestLongBigIntOperationsAreInterruptible(t *testing.T) {
 			t.Run(label, func(t *testing.T) {
 				rt := quickjs.New(opts...)
 				defer rt.Close()
-				if _, err := rt.Eval(`var x = (1n << 20000000n) / 3n, s = "7".repeat(6e6); 0`); err != nil {
+				if _, err := rt.Eval(`var x = (1n << 20000000n) / 3n, y = (1n << 80000000n) / 3n, s = "7".repeat(6e6);` + tc.setup + `0`); err != nil {
 					t.Fatal(err)
 				}
-				ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+				ctx, cancel := context.WithTimeout(context.Background(), interruptDeadline)
 				defer cancel()
 				start := time.Now()
-				if v, err := rt.EvalContext(ctx, src); !errors.Is(err, context.DeadlineExceeded) {
+				if v, err := rt.EvalContext(ctx, tc.src); !errors.Is(err, context.DeadlineExceeded) {
 					t.Fatalf("= %v, %v, want the deadline", v, err)
 				}
 				d := time.Since(start)
