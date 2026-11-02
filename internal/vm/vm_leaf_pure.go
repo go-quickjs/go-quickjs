@@ -610,6 +610,12 @@ const (
 	elemArrIndexOf
 	elemArrLastIndexOf
 	elemArrIncludes
+	// RegExp.prototype's exec and test, on a RegExp neither global nor
+	// sticky, of a primitive, where the match calls nothing and cannot fail
+	// (zzz_regexpleaf.go). Next to the searches, which native code's calls
+	// of Go do not make without a frame either (jitLeafOp).
+	elemRegExpExec
+	elemRegExpTest
 	// DataView.prototype's getters and setters, by the bytes they move, a
 	// setter of a BigInt apart: an index in the view, its buffer there
 	// (zzz_dataview.go).

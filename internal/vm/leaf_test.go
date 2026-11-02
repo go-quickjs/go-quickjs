@@ -16,7 +16,8 @@ func TestNativeLeafChecksExact(t *testing.T) {
 	defer func() { r.Close(); r.ReleaseClosed() }()
 	v, err := r.Run(compileForTest(t, `[0, 1, -1, 2, 3.7, -0, NaN, Infinity, -Infinity, 1e9, 2 ** 31, 0x10FFFF, 0x110000,
 		1.9, 36.5, 37, 100.9, 101, -0.5, 1e300, "", "a", "abc", "1", "-2", "1e9", "NFC", "NFKD", "NFX", "  x  ", "\uD83D\uDE00", "\uD800", "xy".repeat(300),
-		true, false, undefined, null, 5n, Symbol("s"), Symbol.for("r"), {}, [1], new String("w"), { valueOf() { return 2 } }]`))
+		true, false, undefined, null, 5n, Symbol("s"), Symbol.for("r"), {}, [1], new String("w"), { valueOf() { return 2 } },
+		/["'&<>]/, /ab/, /[a-c]/iu, /a+b/, /x/g, /y/y, Object.freeze(/z/), new (class extends RegExp {})("[w]")]`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +29,9 @@ func TestNativeLeafChecksExact(t *testing.T) {
 	}
 	// Each native leaf's function, as the calls take it (funcData.native).
 	fns := map[uint8]NativeFunc{}
-	for _, o := range r.leafFns {
+	// RegExp's exec and test among them, which are not among the leaves
+	// native code's calls of Go are asked to be of (zzz_regexpleaf.go).
+	for _, o := range append(r.leafFns, r.regexpExecFn, r.regexpTestFn) {
 		if fd := o.fn(); fd.elemOp >= elemNativeFirst {
 			fns[fd.elemOp] = fd.native
 		}

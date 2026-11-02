@@ -192,12 +192,15 @@ func (r *Runtime) jitPlainCall(ctx *abi.Context, in bytecode.Instr, n int) (Valu
 // makes (jitCallSeen) -- push and pop, Math.random, a string's charCodeAt,
 // its one character's substring, slice, substr and charAt, its searches,
 // String.fromCharCode, parseInt of a number, and an array's searches --
-// which, made without a frame, it would never learn.
+// which, made without a frame, it would never learn -- and RegExp's exec
+// and test, whose call of a literal's RegExp gives it back to the
+// literal's pool (jitRegExpLitPool), and whose others native code learns
+// at the call of Go are leaves' (jitRegExpLitSite).
 func jitLeafOp(op uint8) bool {
 	switch op {
 	case 0, elemPush, elemPop, elemRandom, elemStrCharCodeAt, elemStrCharAt, elemStrSlice, elemStrSubstring,
 		elemStrSubstr, elemStrIndexOf, elemStrLastIndexOf, elemStrIncludes, elemStrFromCharCode, elemParseInt,
-		elemArrIndexOf, elemArrLastIndexOf, elemArrIncludes:
+		elemArrIndexOf, elemArrLastIndexOf, elemArrIncludes, elemRegExpExec, elemRegExpTest:
 		return false
 	}
 	return true

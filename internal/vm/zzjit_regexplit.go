@@ -66,7 +66,8 @@ func (r *Runtime) jitRegExpLitPool(e *jitEntry, f *frame, pc int, in bytecode.In
 	key := int32(pc)<<1 | which
 	lpc, ok := e.regexpLitCalls[key]
 	if !ok {
-		lpc = int32(jitRegExpLitPC(e, fn, pc, argc, which == 1))
+		// A receiver no literal's may be a leaf's (jitRegExpLitSite).
+		lpc = jitRegExpLitSite[struct{}](r, e, fn, pc, argc, which == 1)
 		if e.regexpLitCalls == nil {
 			e.regexpLitCalls = make(map[int32]int32)
 		}
