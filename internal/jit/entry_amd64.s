@@ -10,6 +10,13 @@ TEXT ·enterSSA(SB), NOSPLIT|NOFRAME, $0-16
 	MOVQ ctx+8(FP), DI
 	JMP AX
 
+// enterRaw is enterSSA for code another compiler made (RawCode), with a
+// context of its maker's own in DI.
+TEXT ·enterRaw(SB), NOSPLIT|NOFRAME, $0-16
+	MOVQ code+0(FP), AX
+	MOVQ ctx+8(FP), DI
+	JMP AX
+
 // callGo is where native code calls Go (abi.Context's GoOp). Native code
 // jumps here, its context in DI, the stack as the Go function that entered
 // it left it -- native code never moves SP -- so that, to the Go runtime,

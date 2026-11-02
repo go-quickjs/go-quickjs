@@ -38,6 +38,9 @@ type core struct {
 	utf8 bool
 	// annex is what the embedder keeps with the pattern; see Annex.
 	annex any
+	// native is the pattern's native code and what decides when it is
+	// made, for a runtime with the JIT (see UseNative); nil for one without.
+	native *nativeSlot
 }
 
 // Compile parses and compiles a pattern.

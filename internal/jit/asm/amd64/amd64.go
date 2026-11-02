@@ -847,6 +847,14 @@ func (a *Asm) ShiftImm(op Shift, dst Reg, n uint8, wide bool) {
 	a.emit(n)
 }
 
+// Bt sets CF to bit bit&63 of src: a set of 64 members tested at once, as a
+// regular expression's class is (internal/regexp).
+func (a *Asm) Bt(src, bit Reg) {
+	a.rex(true, byte(bit), byte(src), false)
+	a.emit2(0x0F, 0xA3)
+	a.modrmRR(byte(bit), byte(src))
+}
+
 // Not32 is dst = ^dst, 32 bits.
 func (a *Asm) Not32(dst Reg) {
 	a.rex(false, 0, byte(dst), false)

@@ -57,6 +57,7 @@ type matcherASCII struct {
 	busy       bool
 	skipNext   [2]int
 	bytes      *matcherASCII
+	native     *nativeRun
 }
 
 func (m *matcherASCII) ready(prog *program, check func() error) {
@@ -115,7 +116,7 @@ func (m *matcherASCII) search(re *Regexp, dst []int, start int, sticky bool) ([]
 				continue
 			}
 		}
-		ok, err := m.run(re.prog.code, pos)
+		ok, err := m.attempt(re, pos)
 		if err != nil {
 			return nil, err
 		}

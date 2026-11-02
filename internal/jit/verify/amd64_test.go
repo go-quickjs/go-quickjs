@@ -210,6 +210,9 @@ func TestAMD64Integer(t *testing.T) {
 		}
 	}
 	for _, d := range regs {
+		for _, s := range regs {
+			expect(t, fmt.Sprintf("Bt r%d,r%d", d, s), encode(func(a *amd64.Asm) { a.Bt(d, s) }), x86asm.BT, r64(d), r64(s))
+		}
 		expect(t, "Not32", encode(func(a *amd64.Asm) { a.Not32(d) }), x86asm.NOT, r32(d))
 		for c := amd64.Cond(0); c < 16; c++ {
 			expect(t, "Setcc", encode(func(a *amd64.Asm) { a.Setcc(c, d) }), setcc[c], r8(d))

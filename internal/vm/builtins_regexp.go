@@ -245,6 +245,9 @@ func (r *Runtime) compileRegExp(source, flags string) (*regexp.Regexp, error) {
 	if err != nil {
 		return nil, err
 	}
+	if jitBuilt && r.jitOn() {
+		r.jitRegExpNative(re)
+	}
 	if r.regexpCache == nil || len(r.regexpCache) >= maxRegExpCache {
 		r.regexpCache = make(map[regexpKey]*regexp.Regexp)
 	}

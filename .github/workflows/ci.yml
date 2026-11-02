@@ -133,6 +133,7 @@ jobs:
       - name: Exercise native execution
         run: |
           go test -tags quickjs_jit -count=1 -timeout=5m ./internal/jit/...
+          go test -tags quickjs_jit -count=1 -timeout=5m ./internal/regexp -run Native
           go test -tags quickjs_jit -count=1 -timeout=10m ./internal/vm . -run 'JIT|Native'
 
       # The compiler's cross-checks: liveness against its reference, the
@@ -141,7 +142,7 @@ jobs:
         run: go test -tags quickjs_jit,quickjs_verify -count=1 -timeout=10m ./internal/jit/... ./internal/vm -run 'JIT|Native|SSA|Optimize|Build|Live'
 
       - name: Check native pointer lifetimes
-        run: go test -tags quickjs_jit -gcflags=all=-d=checkptr=2 -count=1 -timeout=10m ./internal/jit/... ./internal/vm . -run 'JIT|Native|Program|Validate|Lower'
+        run: go test -tags quickjs_jit -gcflags=all=-d=checkptr=2 -count=1 -timeout=10m ./internal/jit/... ./internal/regexp ./internal/vm . -run 'JIT|Native|Program|Validate|Lower'
 
       # Both emitters' code, for every target, against golang.org/x/arch's
       # disassemblers: a module of its own, so go-quickjs never depends on it.

@@ -159,6 +159,10 @@ type matcher struct {
 	// made when first needed. The matchers generated from this one have the
 	// field, and leave it unused.
 	bytes *matcherASCII
+	// native is what the pattern's native code runs with, over an ASCII
+	// subject's bytes (see native_jit.go): made when first needed, by the
+	// matcher over bytes alone; the others leave it unused.
+	native *nativeRun
 }
 
 //go:generate go run ./internal/asciigen/cmd
@@ -219,6 +223,9 @@ func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error,
 	// The input is the matcher's own, rather than made for each match.
 	m.input = input{units: units, unicode: re.flags&FlagUnicode != 0}
 	m.ready(re.prog, check)
+	if nativeBuilt && re.native != nil {
+		re.nativeTick(true)
+	}
 	// The budget is what this attempt may spend, so it starts again here: a
 	// matcher is lent out over and over, and a pattern that had spent its
 	// budget once would have been refused for the rest of the program.
@@ -301,8 +308,11 @@ func largeMatcher(m *matcher) bool {
 	if cap(m.stack) > maxLentFrames || cap(m.trail) > maxLentFrames {
 		return true
 	}
+	if m.native.large() {
+		return true
+	}
 	a := m.bytes
-	return a != nil && (cap(a.stack) > maxLentFrames || cap(a.trail) > maxLentFrames)
+	return a != nil && (cap(a.stack) > maxLentFrames || cap(a.trail) > maxLentFrames || a.native.large())
 }
 
 // search is the leftmost match at or after start, into dst, made with the
@@ -371,7 +381,7 @@ func (m *matcher) search(re *Regexp, dst []int, start int, sticky bool) ([]int, 
 				continue
 			}
 		}
-		ok, err := m.run(re.prog.code, pos)
+		ok, err := m.attempt(re, pos)
 		if err != nil {
 			return nil, err
 		}

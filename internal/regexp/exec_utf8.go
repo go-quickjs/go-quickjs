@@ -22,6 +22,7 @@ type matcherUTF8 struct {
 	busy       bool
 	skipNext   [2]int
 	bytes      *matcherASCII
+	native     *nativeRun
 }
 
 func (m *matcherUTF8) ready(prog *program, check func() error) {
@@ -80,7 +81,7 @@ func (m *matcherUTF8) search(re *Regexp, dst []int, start int, sticky bool) ([]i
 				continue
 			}
 		}
-		ok, err := m.run(re.prog.code, pos)
+		ok, err := m.attempt(re, pos)
 		if err != nil {
 			return nil, err
 		}

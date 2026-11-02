@@ -99,6 +99,9 @@ func (re *Regexp) execASCIILent(dst []int, b []byte, start int, check func() err
 	}
 	a.input = inputASCII{units: b, unicode: re.flags&FlagUnicode != 0}
 	a.ready(re.prog, check)
+	if nativeBuilt && re.native != nil {
+		re.nativeTick(false)
+	}
 	a.steps, a.checkAt = 0, checkInterval
 	defer re.giveBackASCII(m, a, lent)
 	return a.search(re, dst, start, sticky)

@@ -11,6 +11,13 @@ TEXT ·enterSSA(SB), NOSPLIT|NOFRAME, $0-16
 	MOVD ctx+8(FP), R0
 	JMP (R16)
 
+// enterRaw is enterSSA for code another compiler made (RawCode), with a
+// context of its maker's own in R0.
+TEXT ·enterRaw(SB), NOSPLIT|NOFRAME, $0-16
+	MOVD code+0(FP), R16
+	MOVD ctx+8(FP), R0
+	JMP (R16)
+
 // callGo is where native code calls Go, as amd64's is: native code jumps
 // here, its context in R0, SP and the link register as the Go function that
 // entered it left them -- native code touches neither -- so that, to the Go

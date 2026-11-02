@@ -24,6 +24,7 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/mir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
+	"github.com/go-quickjs/go-quickjs/internal/regexp"
 )
 
 // jitCacheBytes is the JIT's budget (jitBudget) in a runtime without a
@@ -1002,6 +1003,9 @@ type jitState struct {
 	// arena holds the code of every entry: a few mappings, however many
 	// functions the runtime compiles.
 	arena *jit.Arena
+	// regexpHost places the runtime's patterns' native code in the arena,
+	// within the budget (jitRegExpNative); nil until the first pattern.
+	regexpHost *regexp.NativeHost
 	// generation advances whenever the cache releases code, which is when a
 	// program refused for want of budget may fit.
 	generation uint64
@@ -1398,6 +1402,9 @@ func (s *jitState) sharedBytes() int {
 		jitCapBytes(s.seedingFns)
 	for _, x := range s.retired {
 		n += x.code.Footprint()
+	}
+	if s.regexpHost != nil {
+		n += s.regexpHost.Held()
 	}
 	return n
 }

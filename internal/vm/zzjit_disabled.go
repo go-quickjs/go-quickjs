@@ -2,6 +2,8 @@
 
 package vm
 
+import "github.com/go-quickjs/go-quickjs/internal/regexp"
+
 // jitBuilt is false: the hooks it guards are compiled out, so the
 // interpreter's code is what it is without the JIT.
 const jitBuilt = false
@@ -29,6 +31,8 @@ func (*Runtime) recordJITStringIntrinsic(*Object) {}
 func (*Runtime) recordJITSubstrings()             {}
 
 func (*Runtime) jitOn() bool { return false }
+
+func (*Runtime) jitRegExpNative(*regexp.Regexp) {}
 
 // JITStats is zero: a build without the JIT runs none of it.
 func (*Runtime) JITStats() JITStats { return JITStats{} }

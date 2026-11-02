@@ -144,6 +144,17 @@ func (a *Asm) Finish() ([]byte, error) {
 
 func (a *Asm) emit(w uint32) { a.buf = append(a.buf, w) }
 
+// Data emits b, a whole number of words, as data among the instructions: a
+// table the code reads (Adr finds it).
+func (a *Asm) Data(b []byte) {
+	if len(b)%4 != 0 {
+		panic("arm64: data not a whole number of words")
+	}
+	for i := 0; i < len(b); i += 4 {
+		a.emit(binary.LittleEndian.Uint32(b[i:]))
+	}
+}
+
 func sf(wide bool) uint32 {
 	if wide {
 		return 1 << 31
@@ -339,6 +350,13 @@ func (a *Asm) Tst(n, m Reg, wide bool) { a.Op(Ands, ZR, n, m, wide) }
 // only for a sum through tmp.
 func (a *Asm) AddImm(dst, n Reg, imm int64, wide bool) {
 	a.addImm(0x11000000, 0x51000000, dst, n, imm, wide)
+}
+
+// SubsImm is dst = n - imm, for any imm, setting the flags: a count
+// taken down and tested in one, as a regular expression's steps are
+// (internal/regexp).
+func (a *Asm) SubsImm(dst, n Reg, imm int64, wide bool) {
+	a.addImm(0x71000000, 0x31000000, dst, n, imm, wide)
 }
 
 // CmpImm sets the flags for n - imm.
