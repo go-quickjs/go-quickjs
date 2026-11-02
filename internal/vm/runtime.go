@@ -562,6 +562,10 @@ type Realm struct {
 	// back after (regexpArgCall).
 	strReplaceFn, strSplitFn, strMatchFn     *Object
 	regexpSymSplitProps, regexpSymMatchProps []builtinProp
+	// regexpExecDead is where exec's leaf, the function regexpExecFn holds
+	// (regexpLeaves), is told that nothing reads the result of the call
+	// about to be made (regexpLeaf's dead).
+	regexpExecDead **Object
 	jitRealmFields
 	genNextFn *Object
 }

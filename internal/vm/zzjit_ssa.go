@@ -4387,7 +4387,7 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 		if r.jitRegExpLitCallee(in, sp) {
 			lit, rx = r.jitRegExpLitPool(e, f, pc, in, sp)
 		}
-		v, err = r.jitCallMade(in, sp)
+		v, err = jitCallMadeDead[struct{}](r, f, pc, in, sp)
 		if lit != nil && err == nil {
 			r.jitRegExpLitDone(lit, rx)
 		}
@@ -5218,7 +5218,7 @@ framed:
 		if r.jitRegExpLitCallee(in, sp) {
 			lit, rx = r.jitRegExpLitPool(e, f, pc, in, sp)
 		}
-		v, err = r.jitCallMade(in, sp)
+		v, err = jitCallMadeDead[struct{}](r, f, pc, in, sp)
 		if lit != nil && err == nil {
 			r.jitRegExpLitDone(lit, rx)
 		}

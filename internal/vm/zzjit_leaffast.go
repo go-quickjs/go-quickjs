@@ -266,6 +266,10 @@ func (r *Runtime) jitLeafFormOf(st *abi.GoCallState) *jitLeafForm {
 			// RegExp's call passes too (regexpNativeChecks).
 			form.check = c
 		}
+		if st.Unused {
+			// Nothing reads the result (zzjit_regexpdead.go).
+			form.native = jitRegExpDeadNative[struct{}](r, (*Object)(*(*unsafe.Pointer)(unsafe.Pointer(&st.Leaf))), form.native)
+		}
 	case op > elemRandom:
 		f := leafOps[op]
 		form.apply = func(r *Runtime, this Value, args []Value) (Value, bool) { return f(r, this, args, true) }

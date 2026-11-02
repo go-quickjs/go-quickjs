@@ -73,6 +73,7 @@ func regexpLeaves[_ any](r *Runtime, p *Object, search NativeFunc) {
 	if fd := r.regexpExecFn.fn(); fd != nil && fd.native != nil {
 		l := &regexpLeaf[struct{}]{slow: fd.native}
 		fd.native, fd.elemOp = l.match, elemRegExpExec
+		r.regexpExecDead = &l.dead
 	}
 	if fd := r.regexpTestFn.fn(); fd != nil && fd.native != nil {
 		l := &regexpLeaf[struct{}]{test: true, slow: fd.native}
@@ -102,6 +103,14 @@ var regexpNativeChecks [2]func(r *Runtime, this Value, args []Value) bool
 type regexpLeaf[_ any] struct {
 	slow NativeFunc
 	test bool
+	// dead is the RegExp the call about to be made -- its next, and only
+	// that one -- is of where nothing reads the call's result but, at
+	// most, whether it is truthy (see zzz_regexpdead.go): exec's match
+	// then makes what it does besides, the legacy statics and lastIndex,
+	// and gives back dummy, an object, for the array it would have made.
+	// match takes it as it begins, whatever it then does.
+	dead  *Object
+	dummy *Object
 	// spent is the match a leaf's call last found past the step budget,
 	// which the calls made again find without matching again: a pattern's
 	// source and flags, its subject and where the match began -- the start,
@@ -153,6 +162,8 @@ var errRegExpLeafAgain = errors.New("regexp: a leaf's match made again with a fr
 // (framed). Every tier calls it, the leaf's check passed or not: the
 // interpreter, the tree tier and native code's leaf routine.
 func (l *regexpLeaf[_]) match(r *Runtime, this Value, args []Value) (Value, error) {
+	dead := l.dead
+	l.dead = nil
 	if len(args) == 0 || !args[0].IsString() || !this.IsObject() {
 		return l.slow(r, this, args)
 	}
@@ -163,7 +174,7 @@ func (l *regexpLeaf[_]) match(r *Runtime, this Value, args []Value) (Value, erro
 	}
 	re, s := d.re, args[0].String()
 	if re.Flags()&(regexp.FlagGlobal|regexp.FlagSticky) != 0 {
-		return l.stateful(r, o, d, s)
+		return l.stateful(r, o, d, s, dead == o)
 	}
 	var check func() error
 	if (r.abort != nil || r.ctx != nil && r.ctx.Done() != nil) && !re.NeverFails(s.ascii) {
@@ -201,13 +212,26 @@ func (l *regexpLeaf[_]) match(r *Runtime, this Value, args []Value) (Value, erro
 	if l.test {
 		return True, nil
 	}
+	if dead == o {
+		return Obj(l.dummyOf(r)), nil
+	}
 	return Obj(r.buildMatchResult(re, caps, s)), nil
+}
+
+// dummyOf is what exec gives back for its result where nothing reads it
+// (dead): an empty array, frozen, made at its first, the same each time.
+func (l *regexpLeaf[_]) dummyOf(r *Runtime) *Object {
+	if l.dummy == nil {
+		l.dummy = r.freezeArray(r.newArrayFrom(nil))
+	}
+	return l.dummy
 }
 
 // stateful is match's of s by o, d's RegExp, global or sticky: from where
 // lastIndex, a number, says, and written back, as regexpMatch's
-// stateful branch matches.
-func (l *regexpLeaf[_]) stateful(r *Runtime, o *Object, d *regexpData, s *String) (Value, error) {
+// stateful branch matches. Where dead is set, nothing reads the result
+// (see match).
+func (l *regexpLeaf[_]) stateful(r *Runtime, o *Object, d *regexpData, s *String, dead bool) (Value, error) {
 	re := d.re
 	li, err := r.toLength(o.vals[0])
 	if err != nil {
@@ -260,6 +284,9 @@ func (l *regexpLeaf[_]) stateful(r *Runtime, o *Object, d *regexpData, s *String
 	r.takeLegacyMatch(d.legacy(), s, caps)
 	if l.test {
 		return True, nil
+	}
+	if dead {
+		return Obj(l.dummyOf(r)), nil
 	}
 	return Obj(r.buildMatchResult(re, caps, s)), nil
 }

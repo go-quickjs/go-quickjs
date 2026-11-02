@@ -1109,7 +1109,7 @@ func (b *builder) leafCall(blk *Block, pc int, fn uintptr, guard func(Op, Type, 
 	for k := range c.Argc {
 		args = append(args, b.read(at+1+k, blk))
 	}
-	site := &CallSite{Go: GoLeaf, Argc: c.Argc, Method: c.Method, ThisSlot: -1, Leaf: fn}
+	site := &CallSite{Go: GoLeaf, Argc: c.Argc, Method: c.Method, ThisSlot: -1, Leaf: fn, Unused: b.resultUnused(pc, base)}
 	if kind := b.leafKind(fn); kind != LeafOther && c.Argc == 1 && (c.Method || !kind.reads()) {
 		if kind >= LeafNumberIsNaN {
 			// Of the one argument alone, whatever it is: no call.
@@ -1127,6 +1127,36 @@ func (b *builder) leafCall(blk *Block, pc int, fn uintptr, guard func(Op, Type, 
 	r := f.newValue(blk, OpKept, Tagged, kept, call)
 	r.Shadow = kept
 	b.write(base, blk, r)
+}
+
+// resultUnused reports whether nothing reads the result of the call at pc,
+// in slot at, but, at most, whether it is truthy (CallSite's Unused): the
+// next instruction pops it (a drop, a Nop the depth falls by one at),
+// branches on its truth and pops it -- or keeps it where it is falsy
+// alone, as && keeps it -- or negates it in its slot.
+func (b *builder) resultUnused(pc, at int) bool {
+	p := b.p
+	if pc+2 >= len(p.Code) || pc+2 >= len(p.Maps) {
+		return false
+	}
+	d := p.Maps[pc+1].Depth
+	if d < 1 || p.Locals+d-1 != at {
+		return false
+	}
+	top := ir.Slot(at)
+	switch in := p.Code[pc+1]; in.Op {
+	case ir.Nop:
+		return p.Maps[pc+2].Depth == d-1
+	case ir.Branch:
+		if in.Operator != ir.Truth || in.Left != top || p.Maps[pc+2].Depth != d-1 {
+			return false
+		}
+		// Where it jumps: popped, or, jumping where it is falsy, kept.
+		return !in.When || in.Target >= 0 && in.Target < len(p.Maps) && p.Maps[in.Target].Depth == d-1
+	case ir.Unary:
+		return in.Operator == ir.Not && in.Left == top && in.Dest == at
+	}
+	return false
 }
 
 // leafKind is which of the leaves native code makes itself the function at
@@ -1806,6 +1836,13 @@ type CallSite struct {
 	// the code: Go takes the leaf from there (abi.GoCallState's Leaf), and
 	// the call writes no operand for it.
 	Leaf uintptr
+	// Unused, of a leaf's call (GoLeaf), says that nothing reads its result
+	// but, at most, whether it is truthy (resultUnused): the instruction
+	// after the call drops it, branches on it -- keeping it only where it
+	// is falsy -- or negates it. Go may then give back, for an object the
+	// leaf would make, another object that nothing else can reach
+	// (abi.GoCallState's Unused).
+	Unused bool
 }
 
 // ClosureSite is a closure's site that native code makes the closure at

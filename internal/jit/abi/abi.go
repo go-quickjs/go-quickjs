@@ -602,6 +602,11 @@ type GoCallState struct {
 	// the calls after.
 	Leaf     uintptr
 	LeafForm unsafe.Pointer
+	// Unused, for a leaf's call, says that nothing reads its result but,
+	// at most, whether it is truthy (ssa.CallSite's Unused): the leaf may
+	// give back, for an object it would make, another that nothing else
+	// reaches.
+	Unused bool
 }
 
 // GoCallArg is a GoCallState's operand, the i'th, laid out for Go to read

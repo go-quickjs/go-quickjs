@@ -33,12 +33,16 @@ var leafOps [elemNativeFirst]leafFunc
 
 // leafChecks are the native leaves' checks, by their elemOp: whether the
 // built-in's own function, called with this and args, runs no script,
-// throws nothing and keeps nothing -- a string receiver and arguments that
+// makes no error and keeps nothing -- a string receiver and arguments that
 // convert without calling anything, results within a string's length --
 // so that it is called without a frame. A check must be exact: a function
 // called on what it passes, that made an error after all, had run what
 // making one may run (Error.stackTraceLimit's getter) with no frame to show
-// for it.
+// for it. RegExp's exec and test are the one kind that may still fail
+// where their check passed -- a match that spends the step budget or
+// meets an interrupt -- and then make no error: they err with
+// errRegExpLeafAgain, having made nothing, and are made again with a
+// frame, which throws (see zzz_regexpleaf.go).
 //
 // Each call that applies leaves asks the check itself and calls the
 // function it holds (funcData.native) -- callDirect, callRest, pureInvoke,
