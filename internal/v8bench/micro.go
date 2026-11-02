@@ -137,6 +137,7 @@ var microWork = []struct {
 	{"string_trim", 1048576}, {"string_starts_with", 2097152}, {"string_pad_start", 1048576},
 	{"string_repeat", 1048576}, {"string_slice", 1048576}, {"string_concat", 1048576},
 	{"string_from_code_point", 1048576},
+	{"html_escape_plain", 1048576}, {"html_escape_entities", 262144}, {"html_escape_mixed", 524288},
 	{"math_imul", 4194304}, {"math_clz32", 4194304}, {"math_pow", 2097152}, {"math_atan2_hypot", 1048576},
 	{"string_template", 524288}, {"string_chain", 262144},
 	{"bigint64_divmod", 131072}, {"bigint64_xorshift", 1048576}, {"bigint64_fnv1a", 16384},

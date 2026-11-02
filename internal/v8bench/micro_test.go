@@ -59,3 +59,36 @@ func TestAllocationMicrobenchmarks(t *testing.T) {
 		}
 	}
 }
+
+func TestHTMLEscapeMicrobenchmarks(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	if _, err := rt.Eval("var global_res;\n" + microbenchExtra); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ src, want string }{
+		{`extra_html_escape("")`, ""},
+		{`extra_html_escape("plain text")`, "plain text"},
+		{`extra_html_escape("Tom & Jerry")`, "Tom &amp; Jerry"},
+		{`extra_html_escape('<a title="x">\'sale\'</a>')`, "&lt;a title=&quot;x&quot;&gt;&#x27;sale&#x27;&lt;/a&gt;"},
+		{`extra_html_escape('"\'&<>')`, "&quot;&#x27;&amp;&lt;&gt;"},
+		{`extra_html_escape("<tail")`, "&lt;tail"},
+		{`extra_html_escape("head>")`, "head&gt;"},
+		{`extra_html_escape("\ud83d\ude00 & \u00e9")`, "\U0001f600 &amp; \u00e9"},
+		{`extra_html_escape(42)`, "42"},
+		{`extra_html_escape(true)`, "true"},
+		{`extra_html_escape(42n)`, "42"},
+		{`extra_html_escape(null)`, "null"},
+		{`extra_html_escape(undefined)`, "undefined"},
+		{`html_escape_plain(9) + ':' + global_res`, "9:91"},
+		{`html_escape_entities(9) + ':' + global_res`, "9:339"},
+		{`html_escape_mixed(9) + ':' + global_res`, "9:107"},
+	} {
+		t.Run(tc.src, func(t *testing.T) {
+			v, err := rt.Eval(tc.src)
+			if err != nil || v.String() != tc.want {
+				t.Fatalf("got %v, %v; want %q", v, err, tc.want)
+			}
+		})
+	}
+}

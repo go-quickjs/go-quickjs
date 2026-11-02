@@ -1274,6 +1274,70 @@ function string_from_code_point(n)
     return n;
 }
 
+/* HTML escaping: check for a match, then scan, slice and join replacements. */
+var extra_html_escape_re = /["'&<>]/;
+
+function extra_html_escape(n)
+{
+    if (typeof n == "boolean" || typeof n == "number" || typeof n == "bigint")
+        return "" + n;
+    n = "" + n;
+    var e = extra_html_escape_re.exec(n);
+    if (e) {
+        var t = "", l, r = 0;
+        for (l = e.index; l < n.length; l++) {
+            switch (n.charCodeAt(l)) {
+            case 34: e = "&quot;"; break;
+            case 38: e = "&amp;"; break;
+            case 39: e = "&#x27;"; break;
+            case 60: e = "&lt;"; break;
+            case 62: e = "&gt;"; break;
+            default: continue;
+            }
+            r !== l && (t += n.slice(r, l)), r = l + 1, t += e;
+        }
+        n = r !== l ? t + n.slice(r, l) : t;
+    }
+    return n;
+}
+
+var extra_html_plain = ["article", "product-card", "linen", "A plain text value"];
+var extra_html_entities = [
+    "Tom & Jerry", '<a title="x">\'sale\'</a>', '"\'&<>',
+    "A long plain prefix before < and a long plain suffix after &"
+];
+var extra_html_mixed = [
+    "article", "product-card", "linen", "Tom & Jerry",
+    '<a title="x">\'sale\'</a>', "", 42, true
+];
+
+function html_escape_plain(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++)
+        s += extra_html_escape(extra_html_plain[j & 3]).length;
+    global_res = s;
+    return n;
+}
+
+function html_escape_entities(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++)
+        s += extra_html_escape(extra_html_entities[j & 3]).length;
+    global_res = s;
+    return n;
+}
+
+function html_escape_mixed(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++)
+        s += extra_html_escape(extra_html_mixed[j & 7]).length;
+    global_res = s;
+    return n;
+}
+
 /* %TypedArray%.prototype.forEach over an Int32Array of a hundred, its
    callback an arrow that adds to a binding it captured */
 function typed_forEach(n)
