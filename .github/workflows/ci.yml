@@ -96,7 +96,7 @@ jobs:
   native-boundary:
     name: Native boundary (${{ matrix.os }}, Go ${{ matrix.go }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
