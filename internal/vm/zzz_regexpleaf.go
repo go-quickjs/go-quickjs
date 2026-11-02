@@ -94,13 +94,25 @@ type regexpLeaf[_ any] struct {
 	slow NativeFunc
 	test bool
 	// spent is the match a leaf's call last found past the step budget,
-	// which the call made again with a frame finds without matching again:
-	// a pattern, its subject and where the match began fix whether it
-	// spends the budget.
+	// which the calls made again find without matching again: a pattern's
+	// source and flags, its subject and where the match began -- the start,
+	// for a pattern neither global nor sticky -- fix whether a match with no
+	// check spends the budget. They are compared, not the RegExp and the
+	// String: a pure body evaluated again, from its start, makes its
+	// literal's RegExp and its subject's concatenation anew.
 	spent struct {
-		re *regexp.Regexp
-		s  *String
+		source string
+		flags  regexp.Flags
+		s      *String
 	}
+}
+
+// spends reports whether re's match of s, with no check, is the one spent
+// remembers.
+func (l *regexpLeaf[_]) spends(re *regexp.Regexp, s *String) bool {
+	m := l.spent.s
+	return m != nil && re.Flags() == l.spent.flags && re.Source() == l.spent.source &&
+		(m == s || m.ascii == s.ascii && m.Equals(s))
 }
 
 // errRegExpLeafAgain is a leaf's call's error where its match failed: it
@@ -137,21 +149,27 @@ func (l *regexpLeaf[_]) match(r *Runtime, this Value, args []Value) (Value, erro
 	if re.Flags()&(regexp.FlagGlobal|regexp.FlagSticky) != 0 {
 		return l.stateful(r, o, d, s)
 	}
-	if l.spent.re == re && l.spent.s == s && l.framed(r) {
-		// The leaf's call that found it past the budget, made again.
-		l.spent.re, l.spent.s = nil, nil
-		return l.failed(r, regexp.ErrComplexity)
-	}
 	var check func() error
 	if (r.abort != nil || r.ctx != nil && r.ctx.Done() != nil) && !re.NeverFails(s.ascii) {
 		check = r.checkInterruptNow
+	}
+	if check == nil && l.spent.s != nil && l.spends(re, s) {
+		// A leaf's call found it past the budget: made again with a frame,
+		// it throws; made again without one -- a pure body that gave up
+		// evaluated again, a leaf's call in it made anew, as often as pure
+		// calls nest it -- it errs again, without matching again.
+		if !l.framed(r) {
+			return Undefined, errRegExpLeafAgain
+		}
+		l.spent.source, l.spent.s = "", nil
+		return l.failed(r, regexp.ErrComplexity)
 	}
 	j := subjectOf(s)
 	caps, err := j.match(re, r.legacyRegExp.spare(), 0, check)
 	if err != nil {
 		if !l.framed(r) {
-			if errors.Is(err, regexp.ErrComplexity) {
-				l.spent.re, l.spent.s = re, s
+			if check == nil && errors.Is(err, regexp.ErrComplexity) {
+				l.spent.source, l.spent.flags, l.spent.s = re.Source(), re.Flags(), s
 			}
 			return Undefined, errRegExpLeafAgain
 		}

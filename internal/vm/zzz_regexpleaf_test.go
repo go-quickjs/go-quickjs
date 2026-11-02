@@ -3,6 +3,7 @@ package vm
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"testing"
 	"time"
@@ -430,4 +431,55 @@ func TestRegExpLeafDeadline(t *testing.T) {
 	if v, err := r.Run(compileForTest(t, `f(/(a+)b/, 'xaab')[1]`)); err != nil || v.String().Go() != "aa" {
 		t.Fatalf("after: %v, %v", v, err)
 	}
+}
+
+// A leaf's call whose match spends the step budget, in a pure body nested in
+// pure bodies, is matched once: each body that gives up is evaluated again
+// with a frame, its pure callee's body again without one, the leaf's call in
+// it made anew, which finds the match remembered rather than making it
+// again. It had been made once for each level the pure calls nested it, and
+// once more: a call of f2 below took four times what a call of a global
+// pattern's exec, never a leaf's, takes. (A body pureCall has found closed
+// often enough is no longer tried: the warm-up calls f2 with a pattern
+// whose leaf's call passes.)
+func TestRegExpLeafSpentOnceNested(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spends the step budget")
+	}
+	for _, tree := range []bool{true, false} {
+		SetTreeTier(tree)
+		r := New(Config{})
+		src := `function f0(re, s) { return re.exec(s) }
+function f1(re, s) { return f0(re, s) }
+function f2(re, s) { return f1(re, s) }
+var s = 'a'.repeat(32) + 'cb'
+function warm() { for (var i = 0; i < 300; i++) f2(/(a+)+b/, 'aab') }
+warm(); warm()`
+		if _, err := r.Run(compileForTest(t, src)); err != nil {
+			t.Fatal(err)
+		}
+		best := func(src string) time.Duration {
+			b := time.Duration(1 << 62)
+			for range 2 {
+				start := time.Now()
+				v, err := r.Run(compileForTest(t, src))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := v.String().Go(); got != "SyntaxError: regular expression is too complex" {
+					t.Fatalf("tree tier %v: %s = %s", tree, src, got)
+				}
+				b = min(b, time.Since(start))
+			}
+			return b
+		}
+		call := "var out; try { %s } catch (e) { out = e.name + ': ' + e.message } out"
+		leaf, framed := best(fmt.Sprintf(call, "f2(/(a+)+b/, s)")), best(fmt.Sprintf(call, "/(a+)+b/g.exec(s)"))
+		r.Close()
+		if leaf > 2*framed {
+			t.Errorf("tree tier %v: the leaf's failed call took %v, one with a frame %v: the match made %.1f times",
+				tree, leaf, framed, float64(leaf)/float64(framed))
+		}
+	}
+	SetTreeTier(true)
 }
