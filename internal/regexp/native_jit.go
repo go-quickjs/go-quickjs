@@ -357,6 +357,12 @@ func (re *Regexp) execASCIINative(dst []int, b []byte, start int, check func() e
 	if a.native != nil {
 		stack = len(a.native.stack)
 	}
+	if check == nil {
+		// Nothing but the code runs until the matcher is given back.
+		caps, err = a.searchBytes(c, b, dst, start, sticky, lit, nil)
+		re.giveBackNative(m, lent, &a.native, stack)
+		return caps, true, err
+	}
 	defer re.giveBackNative(m, lent, &a.native, stack)
 	caps, err = a.searchBytes(c, b, dst, start, sticky, lit, check)
 	return caps, true, err
@@ -385,6 +391,11 @@ func (re *Regexp) execNative(dst []int, units []uint16, start int, check func() 
 	stack := 0
 	if m.native != nil {
 		stack = len(m.native.stack)
+	}
+	if check == nil {
+		caps, err = m.searchUnits(c, units, dst, start, sticky, lit, nil)
+		re.giveBackNative(m, lent, &m.native, stack)
+		return caps, true, err
 	}
 	defer re.giveBackNative(m, lent, &m.native, stack)
 	caps, err = m.searchUnits(c, units, dst, start, sticky, lit, check)
