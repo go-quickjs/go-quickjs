@@ -261,6 +261,11 @@ func (r *Runtime) jitLeafFormOf(st *abi.GoCallState) *jitLeafForm {
 	switch op := fd.elemOp; {
 	case op >= elemNativeFirst:
 		form.check, form.native = leafChecks[op], fd.native
+		if c := jitRegExpNativeCheck[struct{}](op); c != nil {
+			// A RegExp's exec or test, called once: a global or a sticky
+			// RegExp's call passes too (regexpNativeChecks).
+			form.check = c
+		}
 	case op > elemRandom:
 		f := leafOps[op]
 		form.apply = func(r *Runtime, this Value, args []Value) (Value, bool) { return f(r, this, args, true) }

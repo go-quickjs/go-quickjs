@@ -84,7 +84,16 @@ func regexpLeaves[_ any](r *Runtime, p *Object, search NativeFunc) {
 func regexpLeafChecks[_ any]() {
 	exec, test := &regexpLeaf[struct{}]{}, &regexpLeaf[struct{}]{test: true}
 	leafChecks[elemRegExpExec], leafChecks[elemRegExpTest] = exec.check, test.check
+	regexpNativeChecks[0], regexpNativeChecks[1] = exec.statefulCheck, test.statefulCheck
 }
+
+// regexpNativeChecks are exec's and test's checks for native code's leaf's
+// calls (jitLeafFormOf), which pass on a global or a sticky RegExp too:
+// leafChecks' refuse them, as a pure body that gave up after one is
+// evaluated again, its match made again from where the first left
+// lastIndex, but native code makes a leaf's call once, made again with a
+// frame only where it errs, before it has written anything.
+var regexpNativeChecks [2]func(r *Runtime, this Value, args []Value) bool
 
 // regexpLeaf is exec's leaf, or test's where test is set, and the
 // built-in's own function, slow. Its methods are what would be closures: a
@@ -104,15 +113,22 @@ type regexpLeaf[_ any] struct {
 		source string
 		flags  regexp.Flags
 		s      *String
+		start  int
 	}
 }
 
-// spends reports whether re's match of s, with no check, is the one spent
-// remembers.
-func (l *regexpLeaf[_]) spends(re *regexp.Regexp, s *String) bool {
+// spends reports whether re's match of s from start, with no check, is the
+// one spent remembers.
+func (l *regexpLeaf[_]) spends(re *regexp.Regexp, s *String, start int) bool {
 	m := l.spent.s
-	return m != nil && re.Flags() == l.spent.flags && re.Source() == l.spent.source &&
+	return m != nil && start == l.spent.start && re.Flags() == l.spent.flags && re.Source() == l.spent.source &&
 		(m == s || m.ascii == s.ascii && m.Equals(s))
+}
+
+// spend remembers re's match of s from start as one past the step budget,
+// found by a call without a frame, for the calls made again (spends).
+func (l *regexpLeaf[_]) spend(re *regexp.Regexp, s *String, start int) {
+	l.spent.source, l.spent.flags, l.spent.s, l.spent.start = re.Source(), re.Flags(), s, start
 }
 
 // errRegExpLeafAgain is a leaf's call's error where its match failed: it
@@ -153,7 +169,7 @@ func (l *regexpLeaf[_]) match(r *Runtime, this Value, args []Value) (Value, erro
 	if (r.abort != nil || r.ctx != nil && r.ctx.Done() != nil) && !re.NeverFails(s.ascii) {
 		check = r.checkInterruptNow
 	}
-	if check == nil && l.spent.s != nil && l.spends(re, s) {
+	if check == nil && l.spent.s != nil && l.spends(re, s, 0) {
 		// A leaf's call found it past the budget: made again with a frame,
 		// it throws; made again without one -- a pure body that gave up
 		// evaluated again, a leaf's call in it made anew, as often as pure
@@ -169,7 +185,7 @@ func (l *regexpLeaf[_]) match(r *Runtime, this Value, args []Value) (Value, erro
 	if err != nil {
 		if !l.framed(r) {
 			if check == nil && errors.Is(err, regexp.ErrComplexity) {
-				l.spent.source, l.spent.flags, l.spent.s = re.Source(), re.Flags(), s
+				l.spend(re, s, 0)
 			}
 			return Undefined, errRegExpLeafAgain
 		}
@@ -208,7 +224,24 @@ func (l *regexpLeaf[_]) stateful(r *Runtime, o *Object, d *regexpData, s *String
 		if (r.abort != nil || r.ctx != nil && r.ctx.Done() != nil) && !re.NeverFails(s.ascii) {
 			check = r.checkInterruptNow
 		}
+		if check == nil && l.spent.s != nil && l.spends(re, s, start) {
+			// As match's: a call without a frame found it past the budget.
+			if !l.framed(r) {
+				return Undefined, errRegExpLeafAgain
+			}
+			l.spent.source, l.spent.s = "", nil
+			return l.failed(r, regexp.ErrComplexity)
+		}
 		if caps, err = j.match(re, r.legacyRegExp.spare(), start, check); err != nil {
+			// A call without a frame -- native code's, whose check passes
+			// on a global or a sticky RegExp (statefulCheck) -- has written
+			// nothing yet, and errs with nothing made, as match's does.
+			if !l.framed(r) {
+				if check == nil && errors.Is(err, regexp.ErrComplexity) {
+					l.spend(re, s, start)
+				}
+				return Undefined, errRegExpLeafAgain
+			}
 			return l.failed(r, err)
 		}
 	}
@@ -287,5 +320,30 @@ func (l *regexpLeaf[_]) check(r *Runtime, this Value, args []Value) bool {
 		return false
 	}
 	// test's call of exec is the built-in's (execIsBuiltin).
+	return !l.test || o.proto == r.proto.regexp && len(o.vals) == 1 && propsIntact(o.proto, r.regexpExecProps)
+}
+
+// statefulCheck is check where the call is made once (regexpNativeChecks):
+// a global or a sticky RegExp passes too, given a string, matched from where
+// lastIndex, a number, says -- which ToLength converts calling nothing --
+// and lastIndex written back, which it must be writable for, as a frozen
+// RegExp's is not: setLastIndex then cannot fail, and a match that fails
+// errs with nothing written (stateful).
+func (l *regexpLeaf[_]) statefulCheck(r *Runtime, this Value, args []Value) bool {
+	if !this.IsObject() {
+		return false
+	}
+	o := this.Object()
+	if o.class != ClassRegExp {
+		return false
+	}
+	d, ok := o.dataOf().(*regexpData)
+	if !ok || d.re.Flags()&(regexp.FlagGlobal|regexp.FlagSticky) == 0 {
+		return l.check(r, this, args)
+	}
+	if len(args) == 0 || !args[0].IsString() || len(o.vals) == 0 || o.shape == nil || len(o.shape.keys) == 0 ||
+		o.shape.keys[0].key != atomLastIndex || o.shape.keys[0].flags&propWritable == 0 || !o.vals[0].IsNumber() {
+		return false
+	}
 	return !l.test || o.proto == r.proto.regexp && len(o.vals) == 1 && propsIntact(o.proto, r.regexpExecProps)
 }

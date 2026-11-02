@@ -52,7 +52,7 @@ func jitRegExpLeafSeen[_ any](r *Runtime, e *jitEntry, pc, argc int) {
 		return
 	}
 	fd := o.fn()
-	if fd == nil || fd.elemOp != elemRegExpExec && fd.elemOp != elemRegExpTest || !leafChecks[fd.elemOp](r, this, r.stack[sp-argc:sp]) {
+	if fd == nil || fd.elemOp != elemRegExpExec && fd.elemOp != elemRegExpTest || !jitRegExpNativeCheck[struct{}](fd.elemOp)(r, this, r.stack[sp-argc:sp]) {
 		return
 	}
 	for _, list := range [2][]jitInline{e.nativeCalls, e.inlines} {
@@ -110,8 +110,24 @@ func jitRegExpLeafGuess[_ any](r *Runtime, cl *closure, p *ir.Program, pc int) *
 	fd := f.fn()
 	if fd == nil || fd.elemOp != elemRegExpExec && fd.elemOp != elemRegExpTest || !propsIntact(recv.proto, r.regexpExecProps) ||
 		f == r.regexpTestFn && !propsIntact(recv.proto, r.regexpTestProps) ||
-		!leafChecks[fd.elemOp](r, Obj(recv), []Value{Str(emptyString)}) {
+		!jitRegExpNativeCheck[struct{}](fd.elemOp)(r, Obj(recv), []Value{Str(emptyString)}) {
 		return nil
 	}
 	return f
+}
+
+// jitRegExpNativeCheck is the check native code's leaf's call of exec or
+// test, op, asks (regexpNativeChecks), which passes on a global or a sticky
+// RegExp too: one leafChecks refuses -- a site of exec that met both kinds
+// was a leaf's call, refused at every global RegExp's, each an exit to Go,
+// the rest of the invocation the interpreter's (Octane RegExp's Exec, 28K
+// times a run). nil for any other op.
+func jitRegExpNativeCheck[_ any](op uint8) func(r *Runtime, this Value, args []Value) bool {
+	switch op {
+	case elemRegExpExec:
+		return regexpNativeChecks[0]
+	case elemRegExpTest:
+		return regexpNativeChecks[1]
+	}
+	return nil
 }

@@ -13,13 +13,13 @@ import (
 
 // RegExp.prototype's exec and test, native leaves (zzz_regexpleaf.go), are
 // leaves' calls of native code (ssa.GoLeaf) where their receiver is no
-// literal's: loop's exec of a RegExp it holds and its test of one neither
-// global nor sticky, and esc's exec, from a native callee of escs's loop,
-// are made through the VM's routine for leaves, with the collector idle
-// and while it marks, each answer the interpreter's and Node's
-// (regexpLeafTestWant). A global pattern's test, which writes lastIndex,
-// and a literal's, whose RegExp its call of Go gives back to the literal's
-// pool (jitRegExpLitPool), stay calls of Go.
+// literal's: loop's exec of a RegExp it holds, its test of one neither
+// global nor sticky and its test of a global one, which writes lastIndex,
+// read right after (regexpNativeChecks), and esc's exec, from a native
+// callee of escs's loop, are made through the VM's routine for leaves, with
+// the collector idle and while it marks, each answer the interpreter's and
+// Node's (regexpLeafTestWant). A literal's, whose RegExp its call of Go
+// gives back to the literal's pool (jitRegExpLitPool), stays a call of Go.
 func TestJITRegExpLeaves(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -39,7 +39,7 @@ func TestJITRegExpLeaves(t *testing.T) {
 		for _, c := range []struct {
 			name        string
 			execs, test int
-		}{{"loop", 1, 1}, {"esc", 1, 0}} {
+		}{{"loop", 1, 2}, {"esc", 1, 0}} {
 			e := jitNativeForTest(t, r, c.name)
 			execs, tests := 0, 0
 			for _, st := range e.ssa.GoCallStates() {
@@ -60,7 +60,7 @@ func TestJITRegExpLeaves(t *testing.T) {
 		for _, c := range []struct {
 			src, want string
 			leaves    uint64
-		}{{"loop(200)", "70347", 400}, {"escs(200)", "q&#x27;s11", 150}} {
+		}{{"loop(200)", "70347", 600}, {"escs(200)", "q&#x27;s11", 150}} {
 			fast := r.jit.leafFast
 			v, err := r.Run(compileForTest(t, "''+"+c.src))
 			if err != nil {
@@ -130,4 +130,60 @@ function booms(n) { var out = []; for (var i = 0; i < n; i++) out.push(boom(i ==
 	if leaves != 1 || r.jit.compiled != 1 {
 		t.Errorf("find compiled %d times, its code with %d leaves' calls of exec; want once, with 1", r.jit.compiled, leaves)
 	}
+}
+
+// A site of exec or test that meets RegExps global, sticky and neither --
+// Octane RegExp's Exec, re.lastIndex = 0 and then re.exec(string) for every
+// pattern of the suite -- is a leaf's call for all three (regexpNativeChecks)
+// rather than refused at each global or sticky one, which left native code
+// for Go, the rest of the invocation the interpreter's: 10,000 such calls
+// below made 10,000 exits. A frozen RegExp's lastIndex, or one made
+// read-only, which the match's write would throw for, and a match spending
+// the step budget, are still the call's with a frame, as is their answer.
+// Each answer is the interpreter's (and Node's), with the collector idle
+// and while it marks.
+func TestJITRegExpLeafStateful(t *testing.T) {
+	// run(10000), as the interpreter and Node have it.
+	const regexpStatefulWant = "74500"
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `var res = [/a(b)/, /a(b)/g, /a(b)/y, /(?:)/g, /x*/y]
+function Exec(re, string) { var sum = 0; re.lastIndex = 0; var array = re.exec(string);
+  if (array) { for (var i = 0; i < array.length; i++) { var substring = array[i]; if (substring) sum += substring.length; } } return sum + re.lastIndex }
+function Test(re, string, li) { re.lastIndex = li; return (re.test(string) ? 1 : 0) + re.lastIndex * 2 }
+function run(k) { var s = 0; for (var i = 0; i < k; i++) { var re = res[i % 5]; s += Exec(re, i & 1 ? "xxab" + i : "abq"); s += Test(re, "zab ab", i % 4) } return s }
+function frozen() { var f = Object.freeze(/a/g), w = /a/y; Object.defineProperty(w, 'lastIndex', { value: 0, writable: false });
+  var out = []; for (var re of [f, w]) { try { out.push(re.exec('aa')) } catch (e) { out.push(e.name) } try { out.push(re.test('ba')) } catch (e) { out.push(e.name) } }
+  return out.join() }
+function costly() { var g = /(a+)+b/g; try { return Exec(g, 'a'.repeat(30) + 'c') } catch (e) { return e.name + ':' + g.lastIndex } }`
+	for _, marking := range []bool{false, true} {
+		runtime.GC()
+		gc := debug.SetGCPercent(-1)
+		if marking {
+			jitMarkingForTest(t)
+		}
+		r := jitAgreesForTest(t, setup, "run(500)", "run(500)", "run(2000)", "frozen()", "frozen()", "run(2000)")
+		before := r.JITStats()
+		fast := r.jit.leafFast
+		v, err := r.Run(compileForTest(t, "''+run(10000)"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		after := r.JITStats()
+		if got, want := v.String().Go(), regexpStatefulWant; got != want {
+			t.Errorf("marking %v: run(10000) = %s, want the interpreter's (and Node's) %s", marking, got, want)
+		}
+		if exits := after.Hosts - before.Hosts; exits != 0 || after.Interpreted != before.Interpreted {
+			t.Errorf("marking %v: %d exits to Go, %d invocations finished in the interpreter; want none", marking, exits, after.Interpreted-before.Interpreted)
+		}
+		if got := r.jit.leafFast - fast; got < 20000 {
+			t.Errorf("marking %v: %d leaves' calls through the routine, want 20,000", marking, got)
+		}
+		debug.SetGCPercent(gc)
+	}
+	if testing.Short() {
+		return
+	}
+	jitAgreesForTest(t, setup, "run(500)", "run(500)", "costly()", "costly()", "run(500)")
 }
