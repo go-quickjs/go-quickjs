@@ -3,6 +3,7 @@ package vm
 import (
 	"context"
 	"errors"
+	"fmt"
 	"runtime/debug"
 	"strings"
 	"testing"
@@ -141,6 +142,51 @@ func TestRegExpReplaceFlatInterrupt(t *testing.T) {
 			}
 			if got[0] != got[1] {
 				t.Errorf("%s at %d ticks: %s, replace's own way %s", re, ticks, got[0], got[1])
+			}
+		}
+	}
+}
+
+// A global pattern's matches of an ASCII subject collected with the matcher
+// borrowed once (execMatchAllASCII) are execMatchAll's: the spans, the
+// error, lastIndex and the legacy statics, with an interrupt at each of
+// the first ticks and where a match spends the step budget.
+func TestRegExpMatchAllASCII(t *testing.T) {
+	stopped := make(chan struct{})
+	close(stopped)
+	subject := strings.Repeat("ab", 6) + strings.Repeat("c", 40) + "ab"
+	for _, c := range []struct{ re, s string }{
+		{"/b/g", subject}, {"/b(a)?/g", subject}, {"/(?:)/g", "abc"}, {"/[bc]/g", subject}, {"/c*/g", subject},
+		{"/(a+)+b/g", "ab" + strings.Repeat("a", 40) + "c"}, {"/b/gy", "bbab"},
+	} {
+		for ticks := 0; ticks <= 12; ticks++ {
+			var got [2]string
+			for i := range got {
+				r := New(Config{})
+				rx, err := r.Run(compileForTest(t, "var re = "+c.re+"; re.lastIndex = 1; re"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if ticks > 0 {
+					r.abort, r.interruptCounter = stopped, ticks
+				}
+				s := NewString(c.s)
+				var spans []int
+				if i == 0 {
+					spans, err = execMatchAllASCII[struct{}](r, rx, s, nil)
+				} else {
+					spans, err = r.execMatchAll(rx, s, false, nil)
+				}
+				r.abort, r.stopped = nil, nil
+				st, serr := r.Run(compileForTest(t, "re.lastIndex + '/' + RegExp.lastMatch + '/' + RegExp.leftContext.length + '/' + RegExp['$1']"))
+				if serr != nil {
+					t.Fatal(serr)
+				}
+				got[i] = fmt.Sprint(spans, " ", err, " ", st.String().Go())
+				r.Close()
+			}
+			if got[0] != got[1] {
+				t.Errorf("%s at %d ticks: %s, execMatchAll's %s", c.re, ticks, got[0], got[1])
 			}
 		}
 	}

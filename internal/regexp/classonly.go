@@ -101,16 +101,3 @@ func (re *Regexp) NeverFails(ascii bool) bool {
 	}
 	return p.classOnly && (ascii || re.flags&(FlagUnicode|FlagUnicodeSets) == 0)
 }
-
-// LiteralASCII is the text of a pattern of nothing but characters, every one
-// of them ASCII, whose match over an ASCII subject is where that text is next
-// found -- a search the matcher never makes, which spends no step of the
-// budget and asks no check (NeverFails) -- and reports whether the pattern is
-// one: not a sticky one, which is matched at its one position.
-func (re *Regexp) LiteralASCII() (string, bool) {
-	l := re.prog.litOnly
-	if l == nil || !l.isASCII || re.flags&FlagSticky != 0 {
-		return "", false
-	}
-	return l.ascii, true
-}

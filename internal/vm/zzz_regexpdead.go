@@ -377,7 +377,12 @@ func regexpReplaceDead[_ any](r *Runtime, rx Value, s, tv *String, fl regexp.Fla
 		return Undefined, true, err
 	}
 	room := r.takeSpans()
-	room, err := r.execMatchAll(rx, s, fl&(regexp.FlagUnicode|regexp.FlagUnicodeSets) != 0, room)
+	var err error
+	if s.ascii {
+		room, err = execMatchAllASCII[struct{}](r, rx, s, room)
+	} else {
+		room, err = r.execMatchAll(rx, s, fl&(regexp.FlagUnicode|regexp.FlagUnicodeSets) != 0, room)
+	}
 	r.giveSpans(room)
 	return Str(s), true, err
 }

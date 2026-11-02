@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"errors"
 	"strings"
 
 	"github.com/go-quickjs/go-quickjs/internal/regexp"
@@ -18,9 +19,10 @@ import (
 // the matches are, and it is made in one allocation and written with a
 // copy for each piece (replacedFlat), as replacedShort writes one of up to
 // 72 bytes -- V8 replaces so, in StringReplaceGlobalRegExpWithString. A
-// pattern of nothing but characters is looked for with strings.Index from
-// one match to the next (execMatchAllLit), where each had been a match of
-// the pattern's, three calls deep. Each replace of a long string by Octane's
+// global pattern's matches are collected with the matcher borrowed once
+// for them all (execMatchAllASCII), and one of nothing but characters is
+// looked for with strings.Index from one match to the next, where each had
+// been a match of the pattern's, three calls deep. Each replace of a long string by Octane's
 // RegExp, /d1/g's in a script of 4 KB with 38 matches, went from 3.8 to
 // 2.1 us, and a short one's, the replace micro-benchmark's, from 420 to
 // 315 ns.
@@ -31,18 +33,12 @@ import (
 // the legacy statics and the errors regExpReplace makes, and its result.
 func replaceFlat[_ any](r *Runtime, rx Value, s, tv *String, fl regexp.Flags) (Value, error) {
 	o := rx.Object()
-	d := o.dataOf().(*regexpData)
-	re := d.re
-	room := r.takeSpans()
-	spans := room
+	re := o.dataOf().(*regexpData).re
+	spans := r.takeSpans()
 	var err error
 	if fl&regexp.FlagGlobal != 0 {
 		if err = r.setLastIndex(o, Int(0)); err == nil {
-			if lit, ok := re.LiteralASCII(); ok {
-				spans, err = execMatchAllLit[struct{}](r, o, d, s, lit, spans)
-			} else {
-				spans, err = r.execMatchAll(rx, s, fl&(regexp.FlagUnicode|regexp.FlagUnicodeSets) != 0, spans)
-			}
+			spans, err = execMatchAllASCII[struct{}](r, rx, s, spans)
 		}
 	} else if err = r.tick(); err == nil {
 		var caps []int
@@ -114,49 +110,40 @@ func replacedFlat[_ any](r *Runtime, s, tv *String, spans []int, width, count in
 	return Str(&String{s: b.String(), length: n, ascii: true}), nil
 }
 
-// execMatchAllLit is execMatchAll's matches of an ASCII subject s by o, d's
-// RegExp, global, a pattern of nothing but the characters lit, all ASCII
-// (regexp's LiteralASCII), each looked for with strings.Index from where
-// the last ended: the frame of exec, the tick before each search after a
-// match, lastIndex and the legacy statics as execMatchAll makes them. A
-// literal's search spends no step of the matcher's budget and asks no
-// check.
-func execMatchAllLit[_ any](r *Runtime, o *Object, d *regexpData, s *String, lit string, spans []int) ([]int, error) {
-	src := s.Go()
+// execMatchAllASCII is execMatchAll for an ASCII subject s: its matches by
+// rx, global, collected by regexp's MatchAllASCIIInto, which borrows the
+// matcher once for them all and searches for a pattern of nothing but
+// characters or of one class where it is, rather than three calls deep for
+// each -- in exec's frame, ticking before each match after the first, the
+// step budget's error a SyntaxError, and lastIndex and the legacy statics
+// written as execMatchAll writes them.
+func execMatchAllASCII[_ any](r *Runtime, rx Value, s *String, spans []int) ([]int, error) {
+	o := rx.Object()
+	d := o.dataOf().(*regexpData)
+	re := d.re
 	i := len(r.argStack)
 	r.argStack = append(r.argStack, Str(s))
-	err := r.pushNativeFrame(r.regexpExecFn, Obj(o), r.argStack[i:i+1:i+1], Undefined)
+	err := r.pushNativeFrame(r.regexpExecFn, rx, r.argStack[i:i+1:i+1], Undefined)
 	if err == nil {
-		first := len(spans)
-		pos := 0
-		for {
-			if len(spans) > first {
-				// Each search after the first is a turn of the caller's
-				// loop, which counts it.
-				if err = r.tick(); err != nil {
-					break
-				}
-			}
-			at := -1
-			if pos <= len(src)-len(lit) {
-				if src[pos:pos+len(lit)] == lit {
-					at = pos
-				} else if k := strings.Index(src[pos+1:], lit); k >= 0 {
-					at = pos + 1 + k
-				}
-			}
-			if at < 0 {
-				// The search that found nothing left lastIndex at 0.
-				pos = 0
-				break
-			}
-			pos = at + len(lit)
-			spans = append(spans, at, pos)
+		var check func() error
+		if r.abort != nil || r.ctx != nil && r.ctx.Done() != nil {
+			check = r.checkInterruptNow
 		}
-		if serr := r.setLastIndex(o, Int(pos)); serr != nil {
+		first := len(spans)
+		var next int
+		spans, next, err = regexp.MatchAllASCIIInto[struct{}](re, spans, s.Go(), check, r.tick)
+		if errors.Is(err, regexp.ErrComplexity) {
+			err = r.throwError(errSyntax, "%s", err.Error())
+		}
+		if next < 0 {
+			// The match that found nothing left lastIndex at 0.
+			next = 0
+		}
+		if serr := r.setLastIndex(o, Int(next)); serr != nil {
 			err = serr
 		} else if len(spans) > first {
-			r.recordLegacyMatch(d.legacy(), s, spans[len(spans)-2:])
+			width := 2 * (re.GroupCount() + 1)
+			r.recordLegacyMatch(d.legacy(), s, spans[len(spans)-width:])
 		}
 		r.frameDepth--
 	}
