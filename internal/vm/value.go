@@ -70,9 +70,10 @@ func (k Kind) String() string {
 // The representation is a NaN box split across two fields. num holds a real
 // number when the value is a number, and otherwise holds a quiet NaN whose
 // payload encodes the kind; ref holds the pointer for the reference kinds and
-// is nil for primitives. This keeps a Value at 24 bytes with no allocation for
-// any kind -- pointers stored in an interface do not allocate -- while making
-// the kind check a single mask-and-compare rather than a dynamic dispatch.
+// is nil for primitives. This keeps a Value at 16 bytes (12 where pointers are
+// 4) with no allocation for any kind -- ref is a pointer of no type, which
+// holds a reference without boxing it -- while making the kind check a single
+// mask-and-compare rather than a dynamic dispatch.
 //
 // The one invariant this depends on is that a genuine NaN never collides with a
 // tag. Arithmetic can produce a negative quiet NaN, which would land inside the
