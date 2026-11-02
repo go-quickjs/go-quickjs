@@ -219,6 +219,13 @@ func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error,
 		}
 		return nil, nil
 	}
+	if nativeBuilt && re.native != nil {
+		// A pattern with native code for UTF-16 has it search, with no
+		// more of the matcher than the code uses.
+		if caps, done, err := re.execNative(dst, units, start, check, sticky); done {
+			return caps, err
+		}
+	}
 	m, lent := re.borrow()
 	// The input is the matcher's own, rather than made for each match.
 	m.input = input{units: units, unicode: re.flags&FlagUnicode != 0}

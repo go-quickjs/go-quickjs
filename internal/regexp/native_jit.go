@@ -230,10 +230,17 @@ func (m *matcherASCII) searchNative(re *Regexp, dst []int, start int, sticky boo
 	if c == nil || uint(start) > uint(len(units)) {
 		return nil, false, nil
 	}
+	caps, err = m.searchBytes(c, units, dst, start, sticky, lit, m.check)
+	return caps, true, err
+}
+
+// searchBytes is searchNative by the code c over units, asking check.
+func (m *matcherASCII) searchBytes(c *nativeCode, units []byte, dst []int, start int, sticky bool, lit *requiredLit,
+	check func() error) ([]int, error) {
 	litAt := 0
 	if lit != nil {
 		if litAt = indexUnitsASCII(units, &lit.literal, start+lit.minOff); litAt < 0 {
-			return nil, true, nil
+			return nil, nil
 		}
 	}
 	r := m.native
@@ -243,20 +250,20 @@ func (m *matcherASCII) searchNative(re *Regexp, dst []int, start int, sticky boo
 	}
 	r.begin(c, unsafe.Pointer(unsafe.SliceData(units)), len(units), m.caps, m.counters, m.emptyMarks, start, sticky, litAt)
 	for {
-		ok, err := r.run(c, &m.steps, &m.checkAt, m.check)
+		ok, err := r.run(c, &m.steps, &m.checkAt, check)
 		if err != nil {
-			return nil, true, err
+			return nil, err
 		}
 		if ok {
-			return append(dst[:0], m.caps...), true, nil
+			return append(dst[:0], m.caps...), nil
 		}
 		if r.ctx.status == nativeFailed {
-			return nil, true, nil
+			return nil, nil
 		}
 		// The search has passed where the literal was: it is looked for
 		// again.
 		if litAt = indexUnitsASCII(units, &lit.literal, int(r.ctx.cur)+lit.minOff); litAt < 0 {
-			return nil, true, nil
+			return nil, nil
 		}
 		r.ctx.litAt = int64(litAt)
 	}
@@ -267,15 +274,20 @@ func (m *matcherASCII) searchNative(re *Regexp, dst []int, start int, sticky boo
 func (m *matcher) searchNative(re *Regexp, dst []int, start int, sticky bool, lit *requiredLit) (caps []int, done bool, err error) {
 	c := re.native.wide.code
 	units := m.in.units
-	// The code reads the subject from start: a start outside it is the
-	// matcher's to refuse.
 	if c == nil || uint(start) > uint(len(units)) {
 		return nil, false, nil
 	}
+	caps, err = m.searchUnits(c, units, dst, start, sticky, lit, m.check)
+	return caps, true, err
+}
+
+// searchUnits is searchNative by the code c over units, asking check.
+func (m *matcher) searchUnits(c *nativeCode, units []uint16, dst []int, start int, sticky bool, lit *requiredLit,
+	check func() error) ([]int, error) {
 	litAt := 0
 	if lit != nil {
 		if litAt = indexUnits(units, &lit.literal, start+lit.minOff); litAt < 0 {
-			return nil, true, nil
+			return nil, nil
 		}
 	}
 	r := m.native
@@ -285,20 +297,108 @@ func (m *matcher) searchNative(re *Regexp, dst []int, start int, sticky bool, li
 	}
 	r.begin(c, unsafe.Pointer(unsafe.SliceData(units)), 2*len(units), m.caps, m.counters, m.emptyMarks, start, sticky, litAt)
 	for {
-		ok, err := r.run(c, &m.steps, &m.checkAt, m.check)
+		ok, err := r.run(c, &m.steps, &m.checkAt, check)
 		if err != nil {
-			return nil, true, err
+			return nil, err
 		}
 		if ok {
-			return append(dst[:0], m.caps...), true, nil
+			return append(dst[:0], m.caps...), nil
 		}
 		if r.ctx.status == nativeFailed {
-			return nil, true, nil
+			return nil, nil
 		}
 		if litAt = indexUnits(units, &lit.literal, int(r.ctx.cur>>1)+lit.minOff); litAt < 0 {
-			return nil, true, nil
+			return nil, nil
 		}
 		r.ctx.litAt = int64(litAt) << 1
+	}
+}
+
+// execASCIINative is execASCIILent for a pattern with native code for ASCII
+// subjects, which needs of the matcher over bytes only its captures,
+// counters, marks and code's state -- not its input, program or check,
+// which search reads -- and gives the matcher back without asking whether
+// it grew unless the code's stack did; done is false where there is no
+// code, or start is outside the subject.
+func (re *Regexp) execASCIINative(dst []int, b []byte, start int, check func() error, sticky bool) (caps []int, done bool, err error) {
+	c := re.native.ascii.code
+	if c == nil || uint(start) > uint(len(b)) {
+		return nil, false, nil
+	}
+	prog := re.prog
+	if prog.anchored {
+		// See search.
+		if start != 0 {
+			return nil, true, nil
+		}
+		sticky = true
+	}
+	lit := prog.lit
+	if sticky || re.flags&FlagUnicode != 0 {
+		lit = nil
+	}
+	m, lent := re.borrow()
+	a := m.bytes
+	if a == nil {
+		a = &matcherASCII{}
+		m.bytes = a
+	}
+	if len(a.caps) != len(m.caps) {
+		a.caps = fitInts(a.caps, len(m.caps))
+	}
+	if len(a.counters) != len(m.counters) {
+		a.counters = fitInts(a.counters, len(m.counters))
+	}
+	if len(a.emptyMarks) != len(m.emptyMarks) {
+		a.emptyMarks = fitInts(a.emptyMarks, len(m.emptyMarks))
+	}
+	a.steps, a.checkAt = 0, checkInterval
+	stack := 0
+	if a.native != nil {
+		stack = len(a.native.stack)
+	}
+	defer re.giveBackNative(m, lent, &a.native, stack)
+	caps, err = a.searchBytes(c, b, dst, start, sticky, lit, check)
+	return caps, true, err
+}
+
+// execNative is exec for a pattern with native code for UTF-16 subjects, as
+// execASCIINative is execASCIILent.
+func (re *Regexp) execNative(dst []int, units []uint16, start int, check func() error, sticky bool) (caps []int, done bool, err error) {
+	c := re.native.wide.code
+	if c == nil || uint(start) > uint(len(units)) {
+		return nil, false, nil
+	}
+	prog := re.prog
+	if prog.anchored {
+		if start != 0 {
+			return nil, true, nil
+		}
+		sticky = true
+	}
+	lit := prog.lit
+	if sticky || re.flags&FlagUnicode != 0 {
+		lit = nil
+	}
+	m, lent := re.borrow()
+	m.steps, m.checkAt = 0, checkInterval
+	stack := 0
+	if m.native != nil {
+		stack = len(m.native.stack)
+	}
+	defer re.giveBackNative(m, lent, &m.native, stack)
+	caps, err = m.searchUnits(c, units, dst, start, sticky, lit, check)
+	return caps, true, err
+}
+
+// giveBackNative is giveBack for a match execASCIINative or execNative
+// made, which set neither the matcher's input nor its check: a matcher
+// lent small is large now only if the code's stack r, which had stack
+// words, grew.
+func (re *Regexp) giveBackNative(m *matcher, lent bool, r **nativeRun, stack int) {
+	m.busy = false
+	if lent && *r != nil && len((*r).stack) != stack && re.lent == m && largeMatcher(m) {
+		re.lent, re.scratch = nil, m
 	}
 }
 

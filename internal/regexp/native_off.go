@@ -38,3 +38,13 @@ func (m *matcherASCII) searchNative(*Regexp, []int, int, bool, *requiredLit) ([]
 func (m *matcherUTF8) searchNative(*Regexp, []int, int, bool, *requiredLit) ([]int, bool, error) {
 	return nil, false, nil
 }
+
+// execASCIINative is execASCIILent by native code, which there is none of.
+func (re *Regexp) execASCIINative([]int, []byte, int, func() error, bool) ([]int, bool, error) {
+	return nil, false, nil
+}
+
+// execNative is exec by native code, which there is none of.
+func (re *Regexp) execNative([]int, []uint16, int, func() error, bool) ([]int, bool, error) {
+	return nil, false, nil
+}

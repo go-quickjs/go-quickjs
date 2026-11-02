@@ -234,7 +234,7 @@ function search(n) {
       "ab cd".match(/\b/g).length, "Grüße é x1 éé y2".match(/[xy]\d/g).join(), ("é" + long + "x1").search(/x\d/),
       "é a px 5 6 7 99px".match(/\d{1,3}px/g).join(), "aéb é".split(/(?:)/).length, /(a)|b*/.exec("cab").join(),
       "a,b , c".split(/\s*,\s*/).join("|"), /.{0,3}ab(c)?/.exec("xxxxab abc"),
-      /b/y.exec("ab"), /x\d/y.test("ax1"), "ab".replace(/b/y, "#"), /ab/y.exec("aab"), /a(b)?c/y.test("aabc"), /\s*\d/y.test("a 1"));
+      /b/y.exec("ab"), /x\d/y.test("ax1"), "ab".replace(/b/y, "#"), /ab/y.exec("aab"), /ab/y.exec("aabé"), /a(b)?c/y.test("aabc"), /\s*\d/y.test("a 1"));
   }
   return out.join(";");
 }
@@ -242,7 +242,7 @@ function search(n) {
 
 // regexpNativeSearchWant is Node's search(1), run as a script.
 const regexpNativeSearchWant = "let x = 10 * ( y + 42 ) ;;;;bc;x1,y2;100;-1;n,N,n,Ne,NE,ne;f9;😀x,😀x;😀#a#;" +
-	"99px,234px;77-88-abc,77,88;q <xyz> a b <axyz>;-a-b-c-;a😀|b|;8;9;4;x1,y2;101;99px;5;,;a|b|c;xxxab,;;false;ab;;false;false"
+	"99px,234px;77-88-abc,77,88;q <xyz> a b <axyz>;-a-b-c-;a😀|b|;8;9;4;x1,y2;101;99px;5;,;a|b|c;xxxab,;;false;ab;;;false;false"
 
 // The search native code makes around its attempts -- sticky, anchored,
 // the unicode flag's advance over a pair, the units no match begins with

@@ -81,6 +81,11 @@ func (re *Regexp) execASCIILent(dst []int, b []byte, start int, check func() err
 		}
 		return nil, nil
 	}
+	if nativeBuilt && re.native != nil {
+		if caps, done, err := re.execASCIINative(dst, b, start, check, sticky); done {
+			return caps, err
+		}
+	}
 	m, lent := re.borrow()
 	a := m.bytes
 	if a == nil {

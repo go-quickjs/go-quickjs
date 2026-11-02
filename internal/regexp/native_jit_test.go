@@ -195,8 +195,15 @@ func TestNativeStackGrows(t *testing.T) {
 		s := strings.Repeat("ab", 5000)
 		sameOutcome(t, p, "", s, 0, plain, nat)
 		sameOutcome(t, p, "", s+"c", 0, plain, nat)
-		if r := nat.lent; r != nil && r.bytes != nil && r.bytes.native != nil && len(r.bytes.native.stack) <= 4*maxLentFrames {
-			t.Errorf("/%s/: the stack did not grow", p)
+		got := searchASCII(nat, s+"c", 0, nil).stack
+		if strings.Contains(p, "{") {
+			// A run of a's is what grows the counted loop's.
+			as := strings.Repeat("a", 5000)
+			sameOutcome(t, p, "", as, 0, plain, nat)
+			got = searchASCII(nat, as, 0, nil).stack
+		}
+		if got <= 4*maxLentFrames {
+			t.Errorf("/%s/: the stack did not grow (%d words)", p, got)
 		}
 	}
 }
@@ -819,6 +826,104 @@ func TestNativeSearchStopsAndGrows(t *testing.T) {
 			if got := searchASCII(nat, s, start, nil); got.stack <= 4*maxLentFrames || got.caps == nil {
 				t.Errorf("/%s/ from %d: %v, the stack %d words", p, start, got.caps, got.stack)
 			}
+		}
+	}
+}
+
+// A match through the entries the engine calls -- exec and execASCIILent,
+// which hand a pattern with native code to it with no more of the matcher
+// than the code uses -- is the matcher's: its captures and errors, sticky
+// and anchored and from every start, its budget its own each time, its
+// check asked, and a lent matcher whose stack the match grew no longer
+// lent.
+func TestNativeExec(t *testing.T) {
+	patterns := []struct{ pattern, flags string }{
+		{`x(\d)?`, ""}, {`[xy]\d`, "y"}, {`^ab`, ""}, {`^ab`, "m"}, {`\d{1,3}px`, ""}, {`[a😀]x`, "u"}, {`(a)|b*`, ""},
+		{`(?:)`, "u"}, {`[]a`, ""}, {`(\w+)@(\w+)\.com`, "i"}, {`n(e)?`, "i"},
+	}
+	subjects := []string{"", "x1 y2", "abab", "12px 1234px", "😀x a😀x", "cab", "bob@example.com", "nNnNe NE", "ab\nab"}
+	for _, p := range patterns {
+		plain, nat, _ := compileBoth(t, p.pattern, p.flags)
+		for _, s := range subjects {
+			units := wtf8ToUnits(s)
+			for start := 0; start <= len(units)+1; start++ {
+				want, werr := plain.MatchCheckedInto(nil, units, start, nil)
+				got, gerr := nat.MatchCheckedInto(nil, units, start, nil)
+				if !slices.Equal(got, want) || gerr != werr {
+					t.Fatalf("/%s/%s on %q from %d over UTF-16: %v %v, want %v %v", p.pattern, p.flags, s, start, got, gerr, want, werr)
+				}
+				want, _ = plain.SearchCheckedInto(nil, units, start, nil)
+				got, _ = nat.SearchCheckedInto(nil, units, start, nil)
+				if !slices.Equal(got, want) {
+					t.Fatalf("/%s/%s on %q from %d, searched over UTF-16: %v, want %v", p.pattern, p.flags, s, start, got, want)
+				}
+				if !isASCII(s) {
+					continue
+				}
+				want, _ = plain.MatchASCIICheckedInto(nil, s, start, nil)
+				got, _ = nat.MatchASCIICheckedInto(nil, s, start, nil)
+				if !slices.Equal(got, want) {
+					t.Fatalf("/%s/%s on %q from %d over bytes: %v, want %v", p.pattern, p.flags, s, start, got, want)
+				}
+				want, _ = plain.SearchASCIICheckedInto(nil, s, start, nil)
+				got, _ = nat.SearchASCIICheckedInto(nil, s, start, nil)
+				if !slices.Equal(got, want) {
+					t.Fatalf("/%s/%s on %q from %d, searched over bytes: %v, want %v", p.pattern, p.flags, s, start, got, want)
+				}
+			}
+		}
+		if !nat.HasNative() || !nat.HasNativeUTF16() {
+			t.Errorf("/%s/%s: native code over bytes %v, over UTF-16 %v", p.pattern, p.flags, nat.HasNative(), nat.HasNativeUTF16())
+		}
+	}
+
+	// Each match has a budget of its own: a hundred of some million steps
+	// each spend none of the next's.
+	_, nat, _ := compileBoth(t, `(a+)+b`, "")
+	s := strings.Repeat("a", 18) + "c"
+	for range 100 {
+		if got, err := nat.MatchASCIICheckedInto(nil, s, 0, nil); got != nil || err != nil {
+			t.Fatalf("over bytes: %v %v, want no match", got, err)
+		}
+		if got, err := nat.MatchCheckedInto(nil, wtf8ToUnits(s), 0, nil); got != nil || err != nil {
+			t.Fatalf("over UTF-16: %v %v, want no match", got, err)
+		}
+	}
+	// The check is asked.
+	stop := errors.New("stop")
+	check := func() error { return stop }
+	if _, err := nat.MatchASCIICheckedInto(nil, s, 0, check); err != stop {
+		t.Fatalf("over bytes with a check: %v, want the check's error", err)
+	}
+	if _, err := nat.MatchCheckedInto(nil, wtf8ToUnits(s), 0, check); err != stop {
+		t.Fatalf("over UTF-16 with a check: %v, want the check's error", err)
+	}
+
+	// A match that grows the code's stack past what a lent matcher keeps
+	// has the matcher the pattern's own from then on.
+	for _, ascii := range []bool{true, false} {
+		plain, nat, _ := compileBoth(t, `(a|b)*c`, "")
+		s := "abc"
+		match := func(re *Regexp) []int {
+			if ascii {
+				m, _ := re.MatchASCIICheckedInto(nil, s, 0, nil)
+				return m
+			}
+			m, _ := re.MatchCheckedInto(nil, wtf8ToUnits(s), 0, nil)
+			return m
+		}
+		match(nat)
+		match(nat)
+		if nat.lent == nil || nat.scratch != nil {
+			t.Fatalf("ascii %v: lent %v, scratch %v before the stack grows", ascii, nat.lent != nil, nat.scratch != nil)
+		}
+		s = strings.Repeat("ab", 1500) + "c"
+		want, got := match(plain), match(nat)
+		if !slices.Equal(got, want) || got == nil {
+			t.Fatalf("ascii %v: %v, want %v", ascii, got, want)
+		}
+		if nat.lent != nil || nat.scratch == nil || !largeMatcher(nat.scratch) {
+			t.Fatalf("ascii %v: lent %v, scratch %v once the stack grew", ascii, nat.lent != nil, nat.scratch != nil)
 		}
 	}
 }
