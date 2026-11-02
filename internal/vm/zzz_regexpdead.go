@@ -313,6 +313,10 @@ func deadCallRest[_ any](r *Runtime, dead **Object, mark, o *Object, fd *funcDat
 type replaceDead[_ any] struct {
 	slow NativeFunc
 	dead *Object
+	// measure is the RegExp of the call about to be made, its next and
+	// only that one, where its result is only measured (see
+	// zzz_regexpreplacelen.go). call takes it as it begins.
+	measure *Object
 }
 
 // replaceDeadOf wraps the realm's String.prototype.replace (replaceDead),
@@ -335,6 +339,14 @@ func replaceDeadOf[_ any](r *Runtime) {
 func (l *replaceDead[_]) call(r *Runtime, this Value, args []Value) (Value, error) {
 	dead := l.dead
 	l.dead = nil
+	if m := l.measure; m != nil {
+		l.measure = nil
+		if len(args) > 0 && args[0].IsObject() && args[0].Object() == m {
+			if v, ok, err := measuredCall[struct{}](r, this, args); ok {
+				return v, err
+			}
+		}
+	}
 	if dead != nil && len(args) >= 2 && this.IsString() && args[1].IsString() && args[0].IsObject() && args[0].Object() == dead && r.meter == nil {
 		if fl, ok := r.replaceDirect(args[0]); ok {
 			if v, ok, err := regexpReplaceDead[struct{}](r, args[0], this.String(), args[1].String(), fl); ok {

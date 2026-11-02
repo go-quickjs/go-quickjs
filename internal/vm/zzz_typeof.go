@@ -39,7 +39,8 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 // takes literalField's, a get_prop_this of exec deadExecGet's, a
 // call_method whose result nothing reads deadExecCall's and one of exec
 // whose arrays may be made again reuseExecCall's (zzz_regexpreuse.go),
-// anything else op's.
+// one of replace whose result is only measured, and the get_length after
+// it, replaceLenCall's (zzz_regexpreplacelen.go), anything else op's.
 //
 //go:noinline
 func opHook[_ any](b *tbuilder, pc int, code []bytecode.Instr, more bool) (int, bool) {
@@ -54,6 +55,10 @@ func opHook[_ any](b *tbuilder, pc int, code []bytecode.Instr, more bool) (int, 
 	case bytecode.OpCallMethod:
 		if deadExecCall[struct{}](b, pc, code) || reuseExecCall[struct{}](b, pc, code) {
 			return 0, true
+		}
+		if replaceLenCall[struct{}](b, pc, code, more) {
+			// The get_length after it is the node's.
+			return 1, true
 		}
 	case bytecode.OpTypeOf:
 		return typeofOp[struct{}](b, pc, code), true
