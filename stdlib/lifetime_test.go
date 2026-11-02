@@ -62,8 +62,9 @@ func TestRuntimeContext(t *testing.T) {
 // library started for it: a request is abandoned, a program killed, and a
 // server stops listening.
 func TestCloseStopsHostWork(t *testing.T) {
-	abandoned := make(chan struct{})
+	arrived, abandoned := make(chan struct{}), make(chan struct{})
 	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(arrived)
 		<-r.Context().Done()
 		close(abandoned)
 	}))
@@ -78,8 +79,17 @@ func TestCloseStopsHostWork(t *testing.T) {
 	rt := quickjs.New()
 	loop := stdlib.NewLoop(rt)
 	if err := stdlib.Install(rt, stdlib.Config{
-		Loop:  loop,
-		Fetch: &stdlib.Fetch{Allow: func(*http.Request) error { return nil }},
+		Loop: loop,
+		// The request is sent only after the program has started beating,
+		// as a slow network can delay it, which pins that the wait below
+		// waits for the request too.
+		Fetch: &stdlib.Fetch{Allow: func(*http.Request) error {
+			for size(heartbeat) == 0 {
+				time.Sleep(5 * time.Millisecond)
+			}
+			time.Sleep(50 * time.Millisecond)
+			return nil
+		}},
 		Serve: &stdlib.Serve{Allow: func(string) error { return nil }},
 		Run: &stdlib.Run{
 			Allow: func(string, []string) error { return nil },
@@ -98,16 +108,15 @@ func TestCloseStopsHostWork(t *testing.T) {
 	}
 	port := strconv.Itoa(v.Int())
 
-	// Run until the program is beating, then close the runtime.
+	// Run until the request has reached the server and the program is
+	// beating, then close the runtime. A request closed before it arrived
+	// would never reach the handler that sees it abandoned.
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	for size(heartbeat) == 0 {
-		if ctx.Err() != nil {
-			t.Fatal("the program never started")
-		}
-		short, stop := context.WithTimeout(ctx, 20*time.Millisecond)
-		loop.Run(short)
-		stop()
+	if err := runUntil(ctx, loop, func() bool {
+		return closed(arrived) && size(heartbeat) > 0
+	}); err != nil {
+		t.Fatalf("never ready: %v: request %v, program %d", err, closed(arrived), size(heartbeat))
 	}
 	rt.Close()
 
@@ -176,14 +185,25 @@ func TestCloseReleasesBeforeReturning(t *testing.T) {
 	if err := requireWorkerThreads(rt); err != nil {
 		t.Fatal(err)
 	}
+	// The script says when its streams are open. Between the read and the
+	// second open it stalls for 30 ms, as an open can on a loaded machine,
+	// which pins that the wait below lets a callback take as long as it
+	// takes: a loop run in 20 ms slices stopped this one halfway.
+	streams := make(chan struct{})
+	if err := rt.Set("streamsOpen", func() { close(streams) }); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.Set("slowDisk", func() { time.Sleep(30 * time.Millisecond) }); err != nil {
+		t.Fatal(err)
+	}
 	v, err := rt.Eval(fmt.Sprintf(`
-		globalThis.ready = false;
 		import("fs").then(async ({default: fs}) => {
 			const reader = fs.createReadStream("/big.txt").getReader();
 			await reader.read();
+			slowDisk();
 			const writer = fs.createWriteStream("/out.txt");
 			await writer.getWriter().write(new Uint8Array([1, 2, 3]));
-			globalThis.ready = true;
+			streamsOpen();
 		});
 		import("child_process").then(({default: cp}) => cp.execFile(%q, ["-test.run=^TestHelperHeartbeat$"]).catch(() => {}));
 		new require_worker_threads.Worker("./beat.mjs");
@@ -197,17 +217,10 @@ func TestCloseReleasesBeforeReturning(t *testing.T) {
 	// Run until the streams are open, the program beats and the worker too.
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	for {
-		ready, _ := rt.Get("ready")
-		if ready.Bool() && size(heartbeat) > 0 && size(wbeat) > 0 {
-			break
-		}
-		if ctx.Err() != nil {
-			t.Fatalf("never ready: streams %v, program %d, worker %d", ready.Bool(), size(heartbeat), size(wbeat))
-		}
-		short, stop := context.WithTimeout(ctx, 20*time.Millisecond)
-		loop.Run(short)
-		stop()
+	if err := runUntil(ctx, loop, func() bool {
+		return closed(streams) && size(heartbeat) > 0 && size(wbeat) > 0
+	}); err != nil {
+		t.Fatalf("never ready: %v: streams %v, program %d, worker %d", err, closed(streams), size(heartbeat), size(wbeat))
 	}
 	rt.Close()
 
@@ -229,6 +242,44 @@ func TestCloseReleasesBeforeReturning(t *testing.T) {
 	}
 	if size(wbeat) != worker {
 		t.Error("the worker was still running after Close")
+	}
+}
+
+// runUntil runs the loop until ready, which it asks every few milliseconds
+// on a goroutine of its own, reports true, or until ctx ends. ready must not
+// touch the runtime.
+//
+// What it waits for is partly outside the runtime -- a file another process
+// writes -- so the loop cannot be run until it has nothing left to do, and it
+// is not run in short slices either: a Run's context stops the callback
+// running when it ends, as TestLoopDeadlineStopsACallback pins, and an async
+// function stopped there never finishes. RunUntil's channel stops the loop
+// only between callbacks.
+func runUntil(ctx context.Context, loop *stdlib.Loop, ready func() bool) error {
+	done, stop := make(chan struct{}), make(chan struct{})
+	defer close(stop)
+	go func() {
+		tick := time.NewTicker(5 * time.Millisecond)
+		defer tick.Stop()
+		for !ready() {
+			select {
+			case <-tick.C:
+			case <-stop:
+				return
+			}
+		}
+		close(done)
+	}()
+	return loop.RunUntil(ctx, done)
+}
+
+// closed reports whether ch is closed.
+func closed(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
 	}
 }
 
