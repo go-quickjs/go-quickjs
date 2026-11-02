@@ -1,6 +1,7 @@
 package v8bench
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -88,6 +89,53 @@ func TestHTMLEscapeMicrobenchmarks(t *testing.T) {
 			v, err := rt.Eval(tc.src)
 			if err != nil || v.String() != tc.want {
 				t.Fatalf("got %v, %v; want %q", v, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestHasOwnAndPushMicrobenchmarks(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	if _, err := rt.Eval("var global_res;\n" + microbenchExtra); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ src, want string }{
+		{`has_own_call_hit(9) + ':' + global_res`, "9:9"},
+		{`has_own_call_miss(9) + ':' + global_res`, "9:0"},
+		{`has_own_call_for_in(9) + ':' + global_res`, "36:36"},
+		{`has_own_method_hit(9) + ':' + global_res`, "9:9"},
+	} {
+		t.Run(tc.src, func(t *testing.T) {
+			v, err := rt.Eval(tc.src)
+			if err != nil || v.String() != tc.want {
+				t.Fatalf("got %v, %v; want %q", v, err, tc.want)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name  string
+		parts []string
+	}{
+		{"array_push_args3", []string{" ", "disabled", `=""`}},
+		{"array_push_args3_single", []string{" ", "disabled", `=""`}},
+		{"array_push_args5", []string{" ", "data-id", `="`, "42", `"`}},
+		{"array_push_args5_single", []string{" ", "data-id", `="`, "42", `"`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var parts []string
+			for i := 0; i < 1024; i++ {
+				parts = append(parts, tc.parts...)
+			}
+			encoded, err := json.Marshal(parts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			src := tc.name + "(2) + ':' + global_res.length + ':' + JSON.stringify(global_res)"
+			want := fmt.Sprintf("2048:%d:%s", len(parts), encoded)
+			v, err := rt.Eval(src)
+			if err != nil || v.String() != want {
+				t.Fatalf("got %v, %v; want %q", v, err, want)
 			}
 		})
 	}

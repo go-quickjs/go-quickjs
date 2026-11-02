@@ -328,6 +328,112 @@ function array_push_large(n)
     return n * 8192;
 }
 
+/* The same fragment groups appended by one call or by single-argument calls.
+   An operation is one group, three or five elements, including array growth. */
+function array_push_args3(n)
+{
+    var i, j, a;
+    for (j = 0; j < n; j++) {
+        a = [];
+        for (i = 0; i < 1024; i++)
+            a.push(" ", "disabled", '=""');
+    }
+    global_res = a;
+    return n * 1024;
+}
+
+function array_push_args3_single(n)
+{
+    var i, j, a;
+    for (j = 0; j < n; j++) {
+        a = [];
+        for (i = 0; i < 1024; i++) {
+            a.push(" ");
+            a.push("disabled");
+            a.push('=""');
+        }
+    }
+    global_res = a;
+    return n * 1024;
+}
+
+function array_push_args5(n)
+{
+    var i, j, a;
+    for (j = 0; j < n; j++) {
+        a = [];
+        for (i = 0; i < 1024; i++)
+            a.push(" ", "data-id", '="', "42", '"');
+    }
+    global_res = a;
+    return n * 1024;
+}
+
+function array_push_args5_single(n)
+{
+    var i, j, a;
+    for (j = 0; j < n; j++) {
+        a = [];
+        for (i = 0; i < 1024; i++) {
+            a.push(" ");
+            a.push("data-id");
+            a.push('="');
+            a.push("42");
+            a.push('"');
+        }
+    }
+    global_res = a;
+    return n * 1024;
+}
+
+/* Borrowed hasOwnProperty.call on cached string keys, and a direct-method
+   control. False-valued own properties count; inherited properties do not. */
+var extra_own_object = { className: 0, title: false, id: null, "data-kind": true };
+var extra_own_hit_keys = ["className", "title", "id", "data-kind"];
+var extra_own_miss_keys = ["missing", "toString", "valueOf", "constructor"];
+
+function has_own_call_hit(n)
+{
+    var j, s = 0, own = Object.prototype.hasOwnProperty;
+    for (j = 0; j < n; j++)
+        if (own.call(extra_own_object, extra_own_hit_keys[j & 3]))
+            s++;
+    global_res = s;
+    return n;
+}
+
+function has_own_call_miss(n)
+{
+    var j, s = 0, own = Object.prototype.hasOwnProperty;
+    for (j = 0; j < n; j++)
+        if (own.call(extra_own_object, extra_own_miss_keys[j & 3]))
+            s++;
+    global_res = s;
+    return n;
+}
+
+function has_own_call_for_in(n)
+{
+    var j, k, s = 0, own = Object.prototype.hasOwnProperty;
+    for (j = 0; j < n; j++) {
+        for (k in extra_own_object)
+            if (own.call(extra_own_object, k))
+                s++;
+    }
+    global_res = s;
+    return n * 4;
+}
+
+function has_own_method_hit(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++)
+        if (extra_own_object.hasOwnProperty(extra_own_hit_keys[j & 3]))
+            s++;
+    global_res = s;
+    return n;
+}
+
 /* a callback appending fragments to a captured string, then reading it */
 function upvalue_string_append(n)
 {
