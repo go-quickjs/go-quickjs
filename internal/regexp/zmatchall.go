@@ -123,3 +123,44 @@ func MatchAllASCIIInto[_ any](re *Regexp, spans []int, s string, check, tick fun
 	}
 	return spans, -1, nil
 }
+
+// MissesASCII reports whether a match of the pattern, neither global nor
+// sticky, of the ASCII subject s from start is sure to find nothing, which
+// a look at the subject says before any matcher is borrowed: a pattern
+// anchored at the start, without the m flag, whose matches each begin with
+// one of its first units, tried at the start alone, where the unit there
+// is not one of them, or there is none; any other whose required literal
+// is not in the subject where a match from start could reach it, or whose
+// one first unit, or either of two, is not in it from start -- what the
+// search would find first, before it tried any position. A match that
+// finds nothing then costs no borrowed matcher, no reset of its captures
+// and no attempt that fails at its first instruction: /^ba/ of a subject
+// of other units had been a third of exec's work. Patterns of one literal
+// or of one class, searched for where they are without a matcher, are
+// left to their match. It is generic for the reason MatchAllASCIIInto is.
+func MissesASCII[_ any](re *Regexp, s string, start int) bool {
+	p := re.prog
+	if p.classOnly || p.litOnly != nil || start > len(s) {
+		return false
+	}
+	if !p.anchored {
+		if l := p.lit; l != nil && l.isASCII {
+			if from := start + l.minOff; from > len(s)-len(l.ascii) || !strings.Contains(s[from:], l.ascii) {
+				return true
+			}
+		}
+		if f := p.first; f != nil && (f.sole || f.pair) {
+			t := s[start:]
+			return strings.IndexByte(t, f.single) < 0 && (!f.pair || strings.IndexByte(t, f.second) < 0)
+		}
+		return false
+	}
+	if p.first == nil {
+		return false
+	}
+	if start != 0 || len(s) == 0 {
+		return true
+	}
+	u := s[0]
+	return u < 128 && p.first.ascii[u>>6]&(1<<(u&63)) == 0
+}

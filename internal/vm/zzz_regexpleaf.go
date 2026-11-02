@@ -192,6 +192,14 @@ func (l *regexpLeaf[_]) match(r *Runtime, this Value, args []Value) (Value, erro
 		l.spent.source, l.spent.s = "", nil
 		return l.failed(r, regexp.ErrComplexity)
 	}
+	if s.ascii && regexp.MissesASCII[struct{}](re, s.Go(), 0) {
+		// A pattern anchored at the start whose first unit is not the
+		// subject's: no match, which writes nothing.
+		if l.test {
+			return False, nil
+		}
+		return Null, nil
+	}
 	j := subjectOf(s)
 	caps, err := j.match(re, r.legacyRegExp.spare(), 0, check)
 	if err != nil {
