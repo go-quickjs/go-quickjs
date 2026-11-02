@@ -26,11 +26,17 @@ import (
 // is set and otherwise as its receiver, which jitRegExpLitPool asks once a
 // site: the pc of the literal whose RegExp the call is given, or -1. A
 // receiver that is no literal's is asked whether its call is a leaf's
-// (jitRegExpLeafSeen).
+// (jitRegExpLeafSeen), and so is a string's replace given a RegExp that is
+// no literal's (jitReplaceLeafSeen).
 func jitRegExpLitSite[_ any](r *Runtime, e *jitEntry, fn *bytecode.Function, pc, argc int, arg bool) int32 {
 	lpc := int32(jitRegExpLitPC(e, fn, pc, argc, arg))
-	if lpc < 0 && !arg {
+	switch {
+	case lpc >= 0:
+	case !arg:
 		jitRegExpLeafSeen[struct{}](r, e, pc, argc)
+	default:
+		// A string's replace (zzjit_regexpreplaceleaf.go).
+		jitReplaceLeafSeen[struct{}](r, e, pc, argc)
 	}
 	return lpc
 }
@@ -75,8 +81,10 @@ func jitRegExpLeafSeen[_ any](r *Runtime, e *jitEntry, pc, argc int) {
 // built-in, its check passing on it given a string. A loop's re.exec(s)
 // was learned to be a leaf's at its call of Go, the function compiled
 // again for it: one compile more for each loop that first ran such a call.
-// The guess is a guess: the code checks the function each call calls, and
-// the leaf's routine its check, refusing what fails them.
+// So is a string's replace whose RegExp a global or a captured binding holds
+// (jitReplaceLeafGuess). The guess is a guess: the code checks the function
+// each call calls, and the leaf's routine its check, refusing what fails
+// them.
 func jitRegExpLeafGuess[_ any](r *Runtime, cl *closure, p *ir.Program, pc int) *Object {
 	fn := cl.fn
 	if p == nil || len(p.Maps) != len(fn.Code) || pc >= len(fn.Code) || fn.Code[pc].Op != bytecode.OpCallMethod || p.Maps[pc].Depth < 0 {
@@ -93,6 +101,10 @@ func jitRegExpLeafGuess[_ any](r *Runtime, cl *closure, p *ir.Program, pc int) *
 	}
 	if q < 0 || q < pc-64 || fn.Code[q].Op != bytecode.OpGetPropThis || int(fn.Code[q].A) >= len(cl.names) {
 		return nil
+	}
+	if cl.names[fn.Code[q].A] == r.atoms.intern("replace") {
+		// A string's replace (zzjit_regexpreplaceleaf.go).
+		return jitReplaceLeafGuess[struct{}](r, cl, p, pc, q)
 	}
 	recv, ok := r.jitChainReceiver(cl, p, q, jitChainReads)
 	if !ok || recv.class != ClassRegExp || recv.proto != r.proto.regexp || len(recv.vals) != 1 {

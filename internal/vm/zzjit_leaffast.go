@@ -255,7 +255,8 @@ func (r *Runtime) jitLeafFormOf(st *abi.GoCallState) *jitLeafForm {
 	}
 	fd := (*Object)(*(*unsafe.Pointer)(unsafe.Pointer(&st.Leaf))).fn()
 	if fd == nil || fd.elemOp == 0 {
-		return nil
+		// A string's replace (zzjit_regexpreplaceleaf.go), or no leaf.
+		return jitReplaceLeafForm[struct{}](r, st, fd, first, argc, method)
 	}
 	form := &jitLeafForm{first: first, argc: argc, keep: st.Keep, method: method}
 	switch op := fd.elemOp; {
