@@ -50,8 +50,13 @@ func TestMatchAllASCIIAgrees(t *testing.T) {
 		{"\\s+|^\\s*|\\s*$", "g"}, {"^\\s*|\\s*$", "g"}, {"(\\d*)(\\D*)", "g"}, {"\\bk\\w*", "g"},
 		{"a", "gy"}, {"ab", "gy"}, {"[ab]", "gy"}, {"(a)b", "gy"}, {"k", "gi"}, {"[a-z]+", "gi"},
 		{"\\w", "gu"}, {"a", "gd"}, {"(?<n>a)", "g"}, {"x*", "gy"}, {"(?<=a)b", "g"},
+		// A trim's: an alternative anchored at the start and a run to the
+		// end (trimTail), and ones like it it must not take.
+		{`^\s+|\s+$`, "g"}, {`\s+$|^\s+`, "g"}, {`^[\s\xa0]+|[\s\xa0]+$`, "g"}, {`^\s*|\s*$`, "gi"},
+		{`^(a)(b)?|[ab]*$`, "g"}, {`^k|[a\n ]+$`, "g"}, {`^\s+|\s+$`, "gm"}, {`^\s+|\s+$`, "gy"},
+		{`^\s+|\s+(?=$)`, "g"}, {`^\s+|\s+\b`, "g"}, {`^a|b$`, "g"}, {`a|\s+$`, "g"},
 	}
-	alphabet := []string{"a", "b", "c", "k", "K", " ", "\n", "1", "7", "ab", "aab", "needle", "_"}
+	alphabet := []string{"a", "b", "c", "k", "K", " ", "\n", "1", "7", "ab", "aab", "needle", "_", "  ", "\t"}
 	r := rand.New(rand.NewSource(5))
 	subjects := []string{"", "a", "ab", strings.Repeat("a", 30) + "c"}
 	for i := 0; i < 150; i++ {
