@@ -23,9 +23,10 @@ import (
 // is the built-in's direct replace (replaceDirect), which runs nothing of
 // the script's, it makes the matches, the statics and lastIndex as it
 // would, and not the string they make (regexpReplaceDead), the subject
-// standing for it. A replacement that could make a string too long to be
-// one, which throws, is replaced as before; so is any other replace -- a
-// function's, which is called as it was.
+// standing for it -- or, where that string is empty, the empty string, or
+// where only the subject is, the template. A replacement that could make a
+// string too long to be one, which throws, is replaced as before; so is any
+// other replace -- a function's, which is called as it was.
 //
 // Whether a call's result is read the bytecode says: the instruction
 // after the call takes it (deadResultAt) -- a drop, a jump on its truth,
@@ -355,11 +356,12 @@ func (l *replaceDead[_]) call(r *Runtime, this Value, args []Value) (Value, erro
 
 // regexpReplaceDead is regExpReplace's replace of s by rx, whose flags are
 // fl, with the template tv, directly (replaceDirect), where nothing reads
-// the result: lastIndex, the matches and the legacy statics as it makes
-// them, the result the subject. It reports false, having done nothing,
-// where the replacement could be too long to be a string -- each match's
-// at most the template, each $ in it the subject -- which regExpReplace
-// throws for.
+// the result but, at most, whether it is truthy: lastIndex, the matches and
+// the legacy statics as it makes them, and for the result one as truthy as
+// the string it would have made (deadReplaced). It reports false, having
+// done nothing, where the replacement could be too long to be a string --
+// each match's at most the template, each $ in it the subject -- which
+// regExpReplace throws for.
 func regexpReplaceDead[_ any](r *Runtime, rx Value, s, tv *String, fl regexp.Flags) (Value, bool, error) {
 	n := int64(s.length)
 	if per := int64(tv.length) + int64(strings.Count(tv.Go(), "$"))*n; per > maxStringLength || n+(n+1)*per > maxStringLength {
@@ -370,8 +372,11 @@ func regexpReplaceDead[_ any](r *Runtime, rx Value, s, tv *String, fl regexp.Fla
 		if err := r.tick(); err != nil {
 			return Undefined, true, err
 		}
-		_, err := r.execMatch(rx, s)
-		return Str(s), true, err
+		caps, err := r.execMatch(rx, s)
+		if err != nil || caps == nil {
+			return Str(s), true, err
+		}
+		return deadReplaced[struct{}](r, rx, s, tv, caps, len(caps)), true, nil
 	}
 	if err := r.setLastIndex(rx.Object(), Int(0)); err != nil {
 		return Undefined, true, err
@@ -383,6 +388,82 @@ func regexpReplaceDead[_ any](r *Runtime, rx Value, s, tv *String, fl regexp.Fla
 	} else {
 		room, err = r.execMatchAll(rx, s, fl&(regexp.FlagUnicode|regexp.FlagUnicodeSets) != 0, room)
 	}
+	v := Str(s)
+	if err == nil {
+		v = deadReplaced[struct{}](r, rx, s, tv, room, 2*(rx.Object().dataOf().(*regexpData).re.GroupCount()+1))
+	}
 	r.giveSpans(room)
-	return Str(s), true, err
+	return v, true, err
+}
+
+// deadReplaced stands for the string a replace of s by rx's matches, spans
+// of width each, with the template tv would make, where nothing reads it
+// but whether it is truthy: the empty string where that is, and otherwise
+// one that is not -- the subject, or, where it is empty, the template. The
+// string is empty where the matches are all of the subject and each
+// replacement is empty: the template is, or each of its pieces (templatePieces)
+// is for that match. The subject had stood for every result, and
+// if (s.replace(re, "")) taken a replace of all of a string for a string.
+func deadReplaced[_ any](r *Runtime, rx Value, s, tv *String, spans []int, width int) Value {
+	left := s.length
+	for k := 0; k+1 < len(spans); k += width {
+		left -= spans[k+1] - spans[k]
+	}
+	if left > 0 || len(spans) == 0 {
+		return Str(s)
+	}
+	empty := tv.length == 0
+	if !empty && strings.IndexByte(tv.Go(), '$') >= 0 {
+		re := rx.Object().dataOf().(*regexpData).re
+		gl := r.groupsLayoutOf(re)
+		var room [16]templatePiece
+		pieces := r.templatePieces(room[:0], tv.Go(), width/2-1, gl)
+		empty = true
+		for k := 0; empty && k+1 < len(spans); k += width {
+			empty = templateEmpty[struct{}](pieces, spans[k:k+width], s.length, gl)
+		}
+	}
+	switch {
+	case empty:
+		return Str(emptyString)
+	case s.length > 0:
+		return Str(s)
+	}
+	return Str(tv)
+}
+
+// templateEmpty reports whether the replacement writeTemplate writes for
+// the match caps of a subject of n code units, by the template pieces were
+// read from, is empty.
+func templateEmpty[_ any](pieces []templatePiece, caps []int, n int, gl *groupsLayout) bool {
+	for _, p := range pieces {
+		switch p.kind {
+		case pieceText:
+			if p.hi > p.lo {
+				return false
+			}
+		case pieceGroup:
+			if lo, hi := caps[2*p.lo], caps[2*p.lo+1]; lo >= 0 && hi > lo {
+				return false
+			}
+		case pieceBefore:
+			if caps[0] > 0 {
+				return false
+			}
+		case pieceAfter:
+			if caps[1] < n {
+				return false
+			}
+		case pieceNamed:
+			for _, g := range gl.groups[p.lo] {
+				if lo, hi := caps[2*g], caps[2*g+1]; lo >= 0 && hi >= 0 {
+					if hi > lo {
+						return false
+					}
+					break
+				}
+			}
+		}
+	}
+	return true
 }

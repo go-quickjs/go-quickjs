@@ -589,3 +589,74 @@ func TestRegExpDeadReplaceTooLong(t *testing.T) {
 		t.Errorf("after the replace: %v, %v, want 0,30000", v, err)
 	}
 }
+
+// regexpDeadTruthSrc tests a replace's result for truth alone -- an if, a
+// not, an && -- where the string it makes is empty though its subject is
+// not, or not empty though its subject is: of global, sticky and plain
+// RegExps, templates with a $ -- a group, a named group, what is before the
+// match -- and a subject not all ASCII. regexpDeadTruth are calls of it
+// with Node's answers (v26.10.0, vm.runInThisContext).
+const regexpDeadTruthSrc = `var R
+function tIf(ss, re, t, n) { var k = 0; for (var i = 0; i < n; i++) if (ss[i % ss.length].replace(re, t)) k++; return k }
+function tNot(ss, re, t, n) { var k = 0; for (var i = 0; i < n; i++) if (!ss[i % ss.length].replace(re, t)) k++; return k }
+function tAnd(ss, re, t, n) { var k = 0; for (var i = 0; i < n; i++) ss[i % ss.length].replace(re, t) && k++; return k }
+`
+
+var regexpDeadTruth = []struct{ call, want string }{
+	{"tIf(['a', 'aa', 'ab', ''], R = /a/g, '', 4) + '/' + R.lastIndex + '/' + RegExp.lastMatch", "1/0/a"},
+	{"tNot(['a', 'aa', 'ab', ''], R = /a/g, '', 4) + '/' + R.lastIndex + '/' + RegExp.lastMatch", "3/0/a"},
+	{"tAnd(['a', 'aa', 'ab', ''], R = /a/g, '', 4) + '/' + R.lastIndex + '/' + RegExp.lastMatch", "1/0/a"},
+	{"tIf(['a', 'b', ''], R = /a/, '', 3) + '/' + R.lastIndex + '/' + RegExp.lastMatch", "1/0/a"},
+	{"tNot(['a', 'b', ''], R = /a/, '', 3) + '/' + R.lastIndex + '/' + RegExp.lastMatch", "2/0/a"},
+	{"tAnd(['a', 'b', ''], R = /a/, '', 3) + '/' + R.lastIndex + '/' + RegExp.lastMatch", "1/0/a"},
+	{"tIf(['', 'x'], R = /^/, 'y', 2) + '/' + R.lastIndex + '/' + RegExp.lastMatch", "2/0/"},
+	{"tNot(['', 'x'], R = /^/, 'y', 2) + '/' + R.lastIndex + '/' + RegExp.lastMatch", "0/0/"},
+	{"tAnd(['', 'x'], R = /^/, 'y', 2) + '/' + R.lastIndex + '/' + RegExp.lastMatch", "2/0/"},
+	{"tIf(['', 'a'], R = /a?/g, '', 2) + '/' + R.lastIndex + '/' + RegExp.lastMatch", "0/0/"},
+	{"tNot(['', 'a'], R = /a?/g, '', 2) + '/' + R.lastIndex + '/' + RegExp.lastMatch", "2/0/"},
+	{"tAnd(['', 'a'], R = /a?/g, '', 2) + '/' + R.lastIndex + '/' + RegExp.lastMatch", "0/0/"},
+	{"tIf(['ab', 'a'], R = /(a)(b)?/g, '$2', 2) + '/' + R.lastIndex + '/' + RegExp.lastMatch", "1/0/a"},
+	{"tNot(['ab', 'a'], R = /(a)(b)?/g, '$2', 2) + '/' + R.lastIndex + '/' + RegExp.lastMatch", "1/0/a"},
+	{"tAnd(['ab', 'a'], R = /(a)(b)?/g, '$2', 2) + '/' + R.lastIndex + '/' + RegExp.lastMatch", "1/0/a"},
+	{"tIf(['ab', 'a', 'ba'], R = /a/y, '', 3) + '/' + R.lastIndex + '/' + RegExp.lastMatch", "3/0/a"},
+	{"tNot(['ab', 'a', 'ba'], R = /a/y, '', 3) + '/' + R.lastIndex + '/' + RegExp.lastMatch", "0/0/a"},
+	{"tAnd(['ab', 'a', 'ba'], R = /a/y, '', 3) + '/' + R.lastIndex + '/' + RegExp.lastMatch", "3/0/a"},
+	{"tIf(['éé', 'éa'], R = /é/g, '', 2) + '/' + R.lastIndex + '/' + RegExp.lastMatch", "1/0/é"},
+	{"tNot(['éé', 'éa'], R = /é/g, '', 2) + '/' + R.lastIndex + '/' + RegExp.lastMatch", "1/0/é"},
+	{"tAnd(['éé', 'éa'], R = /é/g, '', 2) + '/' + R.lastIndex + '/' + RegExp.lastMatch", "1/0/é"},
+	{"tIf(['ab', 'b'], R = /(?<x>a)?b/g, '$<x>', 2) + '/' + R.lastIndex + '/' + RegExp.lastMatch", "1/0/b"},
+	{"tNot(['ab', 'b'], R = /(?<x>a)?b/g, '$<x>', 2) + '/' + R.lastIndex + '/' + RegExp.lastMatch", "1/0/b"},
+	{"tAnd(['ab', 'b'], R = /(?<x>a)?b/g, '$<x>', 2) + '/' + R.lastIndex + '/' + RegExp.lastMatch", "1/0/b"},
+	{"tIf(['xa', 'a'], R = /a/, \"$`\", 2) + '/' + R.lastIndex + '/' + RegExp.lastMatch", "1/0/a"},
+	{"tNot(['xa', 'a'], R = /a/, \"$`\", 2) + '/' + R.lastIndex + '/' + RegExp.lastMatch", "1/0/a"},
+	{"tAnd(['xa', 'a'], R = /a/, \"$`\", 2) + '/' + R.lastIndex + '/' + RegExp.lastMatch", "1/0/a"},
+}
+
+// A replace whose result is tested for truth alone is as truthy as the
+// string it would have made: in the tree tier and in the interpreter, with
+// the collector idle, each answer is Node's. The subject had stood for the
+// string, and 'a'.replace(/a/g, "") been true.
+func TestRegExpDeadReplaceTruth(t *testing.T) {
+	for _, tree := range []bool{true, false} {
+		SetTreeTier(tree)
+		gc := debug.SetGCPercent(-1)
+		r := New(Config{})
+		if _, err := r.Run(compileForTest(t, regexpDeadTruthSrc)); err != nil {
+			t.Fatal(err)
+		}
+		for range 3 {
+			for _, c := range regexpDeadTruth {
+				v, err := r.Run(compileForTest(t, "''+("+c.call+")"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := v.String().Go(); got != c.want {
+					t.Errorf("tree tier %v: %s = %s, want Node's %s", tree, c.call, got, c.want)
+				}
+			}
+		}
+		r.Close()
+		debug.SetGCPercent(gc)
+	}
+	SetTreeTier(true)
+}

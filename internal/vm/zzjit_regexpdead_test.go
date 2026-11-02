@@ -5,6 +5,7 @@ package vm
 import (
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -187,5 +188,39 @@ func TestJITRegExpDeadReplace(t *testing.T) {
 		if *r.strReplaceDead != nil {
 			t.Errorf("replace followed by %v left replace told of a call", c.next)
 		}
+	}
+}
+
+// Native code's replace whose result is tested for truth alone is as
+// truthy as the string it would have made (zzz_regexpdead.go's
+// regexpDeadTruth): each answer is the interpreter's and Node's, with the
+// collector idle and while it marks, the call made natively -- each from a
+// runtime of its own, as code that met them all would be compiled for none.
+func TestJITRegExpDeadReplaceTruth(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	for _, marking := range []bool{false, true} {
+		runtime.GC()
+		gc := debug.SetGCPercent(-1)
+		if marking {
+			jitMarkingForTest(t)
+		}
+		for _, c := range regexpDeadTruth {
+			r := jitAgreesForTest(t, regexpDeadTruthSrc, c.call, c.call, c.call, c.call, c.call, c.call)
+			e := jitNativeForTest(t, r, c.call[:strings.IndexByte(c.call, '(')])
+			entries := e.ssaStats.entries
+			v, err := r.Run(compileForTest(t, "''+("+c.call+")"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := v.String().Go(); got != c.want {
+				t.Errorf("marking %v: %s = %s, want Node's %s", marking, c.call, got, c.want)
+			}
+			if e.ssaStats.entries == entries {
+				t.Errorf("marking %v: %s did not run natively", marking, c.call)
+			}
+		}
+		debug.SetGCPercent(gc)
 	}
 }
