@@ -130,8 +130,12 @@ type nativeSlot struct {
 
 // nativeVariant is the code for one kind of subject.
 type nativeVariant struct {
-	code    *nativeCode
-	runs    int32
+	code *nativeCode
+	runs int32
+	// size is the bytes of the code the budget last had no room for, which
+	// is asked for again before the code is made again: the same program
+	// makes the same code.
+	size    int32
 	refused bool
 }
 
@@ -173,13 +177,21 @@ func (re *Regexp) nativeTick(wide bool) {
 	if v.runs++; v.runs < after {
 		return
 	}
+	// Code the budget had no room for is not made again until there is
+	// room: made at every retry and thrown away, a large pattern's code --
+	// tens of milliseconds of it -- had made its matches 75 times slower
+	// than the matcher's in a runtime with a small JIT budget.
+	if v.size > 0 && !n.host.Room(int(v.size)) {
+		v.runs = after - nativeRetry
+		return
+	}
 	prog, ok := genNative(runtime.GOARCH, re.prog, 2*(re.groupCount+1), wide, re.flags&FlagUnicode != 0)
 	if !ok {
 		v.refused = true
 		return
 	}
 	if !n.host.Room(len(prog.bytes)) {
-		v.runs = after - nativeRetry
+		v.runs, v.size = after-nativeRetry, int32(len(prog.bytes))
 		return
 	}
 	raw, err := n.host.Place(prog.bytes)

@@ -307,6 +307,48 @@ func FuzzNative(f *testing.F) {
 	})
 }
 
+// Code the budget has no room for is not made again at each retry, but once
+// there is room: a pattern of a dozen \p{L}, 96 KB of code over UTF-16, in a
+// runtime whose JIT had 64 KiB, had its code made and thrown away every
+// nativeRetry matches, 3 ms each, which made its matches 75 times slower
+// than the matcher's.
+func TestNativeNoRoomNotMadeAgain(t *testing.T) {
+	arena := jit.NewArena()
+	room, asked := false, 0
+	h := &NativeHost{
+		Place: func(code []byte) (NativeCode, error) { return jit.PlaceRaw(arena, code) },
+		Room:  func(int) bool { asked++; return room },
+		After: 1,
+	}
+	pattern := strings.Repeat(`(?:\p{L}\d)`, 12)
+	plain, _ := Compile(pattern, "u")
+	re, _ := Compile(pattern, "u")
+	re.UseNative(h)
+	units := wtf8ToUnits("é1é2é3é4é5é6é7é8é9é0é1é2 x")
+	sameOutcomeUnits(t, pattern, "u", units, 0, plain, re)
+	if re.HasNativeUTF16() || asked != 1 {
+		t.Fatalf("native %v, room asked %d times; want no code, asked once", re.HasNativeUTF16(), asked)
+	}
+	if allocs := testing.AllocsPerRun(1, func() {
+		for range 4 * nativeRetry {
+			re.nativeTick(true)
+		}
+	}); allocs != 0 {
+		t.Errorf("%v allocations in %d matches with no room: the code made again", allocs, 4*nativeRetry)
+	}
+	if asked < 4 {
+		t.Errorf("room asked %d times, want once a retry", asked)
+	}
+	room = true
+	for range nativeRetry {
+		sameOutcomeUnits(t, pattern, "u", units, 0, plain, re)
+	}
+	if !re.HasNativeUTF16() {
+		t.Fatal("no code once there is room")
+	}
+	sameOutcomeUnits(t, pattern, "u", units, 0, plain, re)
+}
+
 // The code is given back when its pattern is collected.
 func TestNativeReleased(t *testing.T) {
 	h := testHost()
