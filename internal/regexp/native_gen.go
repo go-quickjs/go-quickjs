@@ -59,11 +59,11 @@ type nativeGen struct {
 	code  []instr
 	ncaps int
 	// wide marks code over UTF-16 units, and unicode an input that reads a
-	// pair of surrogates as one character (the u flag); us is a unit's
-	// bytes, and shift its log2.
-	wide, unicode bool
-	us            int32
-	shift         uint8
+	// pair of surrogates as one character (the u flag); uflag is the flag,
+	// over bytes too; us is a unit's bytes, and shift its log2.
+	wide, unicode, uflag bool
+	us                   int32
+	shift                uint8
 	// bad marks code that could not be made.
 	bad bool
 	// at is each instruction's start, its stack check and its step; body
@@ -93,7 +93,7 @@ func genNative(arch string, prog *program, ncaps int, wide, unicode bool) (nativ
 	if m == nil {
 		return nativeProgram{}, false
 	}
-	g := &nativeGen{m: m, prog: prog, code: prog.code, ncaps: ncaps, wide: wide, unicode: unicode && wide, us: 1,
+	g := &nativeGen{m: m, prog: prog, code: prog.code, ncaps: ncaps, wide: wide, unicode: unicode && wide, uflag: unicode, us: 1,
 		data: map[string]label{}, undoCaps: map[int]label{}, undoCtrs: map[int]label{}, undoMk: map[int]label{}}
 	if wide {
 		g.us, g.shift = 2, 1
@@ -230,7 +230,7 @@ func (g *nativeGen) emit() {
 	g.bt, g.fail, g.matched, g.exit, g.dataStart = a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
 
 	// The entry loads the registers from the context, and goes on where it
-	// says, or begins an attempt, pushing its failure.
+	// says, or begins a search.
 	a.Load(rSubj, rCtx, offSubject)
 	a.Load(rEnd, rCtx, offEnd)
 	a.Load(rCaps, rCtx, offCaps)
@@ -246,9 +246,7 @@ func (g *nativeGen) emit() {
 	a.Jcc(condE, start)
 	a.JmpReg(rA)
 	a.Bind(start)
-	a.LeaLabel(rA, g.fail)
-	a.Store(rTop, 0, rA)
-	a.OpImm(aluAdd, rTop, 8, true)
+	g.search()
 
 	for pc := range g.code {
 		g.instr(pc)
@@ -287,6 +285,236 @@ func (g *nativeGen) emit() {
 		}
 		a.Data(b)
 	}
+}
+
+// search is the search around the attempts, as the matcher's search makes
+// it: the captures, counters and marks reset, then from the start each
+// position a match can begin at -- in reach of the required literal, which
+// Go finds (nativeLit), and with a unit the pattern can begin with -- tried
+// in turn, the next tried where an attempt fails, a character on, until one
+// matches or none is left; a sticky search tries its start alone. An
+// attempt begins with its position pushed under the address of its
+// failure, which is where backtracking ends once every write the attempt
+// made is undone.
+func (g *nativeGen) search() {
+	a := g.m
+	prog := g.prog
+	g.fill(rCaps, -1, g.ncaps, -1)
+	g.fill(rC, offCounters, prog.counters, 0)
+	g.fill(rC, offMarks, prog.emptyChecks, -1)
+
+	// firstSet is the units a match can begin with where the program
+	// knows them (prog.first), which may be none.
+	var firstSet []span
+	if f := prog.first; f != nil {
+		var set [128]bool
+		for b := range set {
+			set[b] = f.admits(uint16(b))
+		}
+		firstSet = spansOf128(&set)
+		if f.nonASCII {
+			firstSet = normSpans(append(firstSet, span{0x80, 0xFFFF}))
+		}
+	}
+	lit := prog.lit
+	loop, attempt, attemptFail, sticky := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+	a.Load(rA, rCtx, offSticky)
+	a.Op(aluTest, rA, rA, true)
+	a.Jcc(condNE, sticky)
+
+	a.Bind(loop)
+	if lit != nil {
+		// A match can begin only where the literal is within reach: past
+		// where it was found, it is looked for again; before where it could
+		// be reached from, the positions are passed over.
+		again := a.NewLabel()
+		a.MovRR(rB, rCur)
+		a.Op(aluSub, rB, rSubj, true)
+		a.Lea(rA, rB, int32(lit.minOff)*g.us)
+		a.CmpMem(rA, rCtx, offLitAt, true)
+		a.Jcc(condG, again)
+		g.later(func() {
+			a.Bind(again)
+			g.exitTo(loop, nativeLit)
+		})
+		a.Load(rA, rCtx, offLitAt)
+		a.OpImm(aluSub, rA, int32(lit.maxOff)*g.us, true)
+		skip := a.NewLabel()
+		a.Op(aluCmp, rA, rB, true)
+		a.Jcc(condLE, skip)
+		a.MovRR(rCur, rSubj)
+		a.Op(aluAdd, rCur, rA, true)
+		a.Bind(skip)
+	}
+	switch {
+	case prog.first != nil && !g.uflag:
+		// The units no match can begin with are passed over in a loop of
+		// their own.
+		next, found := a.NewLabel(), a.NewLabel()
+		scan := a.NewLabel()
+		if f := prog.first; (f.sole || f.pair) && (!g.wide || !f.nonASCII) {
+			g.scanWords(f, firstSet, scan, found)
+		}
+		a.Bind(scan)
+		a.Op(aluCmp, rCur, rEnd, true)
+		a.Jcc(condAE, g.fail)
+		g.load(rB, rCur, 0)
+		g.testUnit(firstSet, rB, next)
+		a.Jmp(found)
+		a.Bind(next)
+		a.OpImm(aluAdd, rCur, g.us, true)
+		a.Jmp(scan)
+		a.Bind(found)
+		if lit != nil {
+			// Past where the literal could be reached from: it is looked
+			// for again.
+			a.MovRR(rA, rCur)
+			a.Op(aluSub, rA, rSubj, true)
+			a.OpImm(aluAdd, rA, int32(lit.minOff)*g.us, true)
+			a.CmpMem(rA, rCtx, offLitAt, true)
+			a.Jcc(condG, loop)
+		}
+	case prog.first != nil:
+		// Under the unicode flag a position no match can begin at is passed
+		// over a character at a time, so that the search never lands inside
+		// a pair of surrogates.
+		next := a.NewLabel()
+		a.Op(aluCmp, rCur, rEnd, true)
+		a.Jcc(condAE, g.fail)
+		g.load(rB, rCur, 0)
+		g.testUnit(firstSet, rB, next)
+		g.later(func() {
+			a.Bind(next)
+			g.nextChar()
+			a.Jmp(loop)
+		})
+	}
+	a.Jmp(attempt)
+
+	// A sticky search tries its start alone.
+	a.Bind(sticky)
+	if prog.first != nil {
+		a.Op(aluCmp, rCur, rEnd, true)
+		a.Jcc(condAE, g.fail)
+		g.load(rB, rCur, 0)
+		g.testUnit(firstSet, rB, g.fail)
+	}
+
+	a.Bind(attempt)
+	g.pushPos(attemptFail)
+	// The attempt's instructions follow.
+
+	g.later(func() {
+		a.Bind(attemptFail)
+		a.OpImm(aluSub, rTop, 8, true)
+		a.Load(rCur, rTop, 0)
+		a.Op(aluAdd, rCur, rSubj, true)
+		a.Load(rA, rCtx, offSticky)
+		a.Op(aluTest, rA, rA, true)
+		a.Jcc(condNE, g.fail)
+		a.Op(aluCmp, rCur, rEnd, true)
+		a.Jcc(condAE, g.fail)
+		g.nextChar()
+		a.Jmp(loop)
+	})
+}
+
+// scanWords passes over the units that are neither of the one or two a
+// match can begin with -- all of them ASCII -- a word at a time, as
+// bytes.IndexByte does: a word with none of them is passed over whole, and
+// in one with a lane that may be one each unit is tested, going to found at
+// the first that is. Where less than a word is left, it goes to tail, the
+// loop of a unit at a time.
+//
+// A lane is one of the units where it is 0 once xored with it: its high bit
+// is set once 1 is taken from it, as no other lane's is -- an ASCII
+// subject's bytes are below 0x80, and of UTF-16's units only those from
+// 0x8000 on, which the test of each unit then passes over.
+func (g *nativeGen) scanWords(f *firstUnits, set []span, tail, found label) {
+	a := g.m
+	ones, highs := uint64(0x0101010101010101), uint64(0x8080808080808080)
+	if g.wide {
+		ones, highs = 0x0001000100010001, 0x8000800080008000
+	}
+	init, loop, hit := a.NewLabel(), a.NewLabel(), a.NewLabel()
+	a.Bind(init)
+	a.MovImm(rW, ones)
+	a.MovImm(rD, highs)
+	a.MovImm(rC, uint64(f.single)*ones)
+	if f.pair {
+		a.MovImm(rT, uint64(f.second)*ones)
+	}
+	a.Bind(loop)
+	a.Lea(rB, rCur, 8)
+	a.Op(aluCmp, rB, rEnd, true)
+	a.Jcc(condA, tail)
+	a.Load(rA, rCur, 0)
+	a.MovRR(rB, rA)
+	a.Op(aluXor, rB, rC, true)
+	a.Op(aluSub, rB, rW, true)
+	if f.pair {
+		a.Op(aluXor, rA, rT, true)
+		a.Op(aluSub, rA, rW, true)
+		a.Op(aluOr, rB, rA, true)
+	}
+	a.Op(aluAnd, rB, rD, true)
+	a.Jcc(condNE, hit)
+	a.OpImm(aluAdd, rCur, 8, true)
+	a.Jmp(loop)
+	// The units of the word are tested one by one; the test writes rT,
+	// so the constants are made again past them.
+	a.Bind(hit)
+	for k := int32(0); k < 8/g.us; k++ {
+		next := a.NewLabel()
+		g.load(rB, rCur, k*g.us)
+		g.testUnit(set, rB, next)
+		if k > 0 {
+			a.OpImm(aluAdd, rCur, k*g.us, true)
+		}
+		a.Jmp(found)
+		a.Bind(next)
+	}
+	a.OpImm(aluAdd, rCur, 8, true)
+	a.Jmp(init)
+}
+
+// nextChar moves rCur past the character there, below the subject's end: a
+// unit, or under the unicode flag over UTF-16 a pair of surrogates.
+func (g *nativeGen) nextChar() {
+	a := g.m
+	if !g.unicode {
+		a.OpImm(aluAdd, rCur, g.us, true)
+		return
+	}
+	g.readChar(rCur)
+	a.Op(aluAdd, rCur, rW, true)
+}
+
+// fill sets the n words of an array to v: the captures' at rCaps where off
+// is negative, else those at the address at off in the context, loaded into
+// base.
+func (g *nativeGen) fill(base vreg, off int32, n int, v int32) {
+	a := g.m
+	if n == 0 {
+		return
+	}
+	if off >= 0 {
+		a.Load(base, rCtx, off)
+	}
+	if n <= 16 {
+		for i := 0; i < n; i++ {
+			a.StoreImm(base, int32(8*i), v)
+		}
+		return
+	}
+	loop := a.NewLabel()
+	a.MovRR(rA, base)
+	a.Lea(rB, base, int32(8*n))
+	a.Bind(loop)
+	a.StoreImm(rA, 0, v)
+	a.OpImm(aluAdd, rA, 8, true)
+	a.Op(aluCmp, rA, rB, true)
+	a.Jcc(condB, loop)
 }
 
 // dataAt is where the code's data b is, placed after the code once however

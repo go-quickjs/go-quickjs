@@ -13,19 +13,20 @@ import (
 // A runtime with the JIT gives the patterns it compiles a host (UseNative).
 // Once a pattern has been matched nativeAfter times over subjects of one
 // kind -- an ASCII string's bytes, or a string's UTF-16 code units -- its
-// program is compiled for that kind to amd64 machine code (native_gen.go),
-// placed in the runtime's arena, and every later attempt of that kind's
-// matcher at a position runs that code rather than the matcher's run. The
-// search around the attempts -- the required literal, the first units, the
-// advance -- stays the matcher's. The matcher over UTF-8, for patterns Go
-// programs share between goroutines (Concurrent), runs none.
+// program is compiled for that kind to machine code (native_gen.go),
+// placed in the runtime's arena, and every later search of that kind's
+// matcher runs that code rather than the matcher's search: the attempts and
+// the search around them -- the first units, the advance, sticky -- as
+// Irregexp's code is the whole match. The matcher over UTF-8, for patterns
+// Go programs share between goroutines (Concurrent), runs none.
 //
 // The code returns to Go when it matches, when it fails, when its stack is
-// full -- Go grows it and enters again where it left off -- and when its
-// steps run out, which they do at the next check the matcher would make,
-// at the end of the budget, or after nativePoll steps: native code is never
-// a safe point, and goes back to Go that often so that the goroutine can be
-// preempted.
+// full -- Go grows it and enters again where it left off -- when its steps
+// run out, which they do at the next check the matcher would make, at the
+// end of the budget, or after nativePoll steps: native code is never a safe
+// point, and goes back to Go that often so that the goroutine can be
+// preempted -- and when the search has passed where the required literal
+// was found, for Go to look for it again.
 
 const nativeBuilt = true
 
@@ -208,32 +209,102 @@ func (re *Regexp) nativeTick(wide bool) {
 	v.code = c
 }
 
-// attempt is the match of the pattern at pos: its native code's, where it
-// has some for ASCII subjects.
-func (m *matcherASCII) attempt(re *Regexp, pos int) (bool, error) {
-	if n := re.native; n != nil && n.ascii.code != nil {
-		units := m.in.units
-		return runNative(&m.native, n.ascii.code, unsafe.Pointer(unsafe.SliceData(units)), len(units),
-			m.caps, m.counters, m.emptyMarks, pos, &m.steps, &m.checkAt, m.check)
+// attempt is the match of the pattern at pos, by the matcher: a pattern
+// with native code for the subject's kind has it search (searchNative).
+func (m *matcherASCII) attempt(re *Regexp, pos int) (bool, error) { return m.run(re.prog.code, pos) }
+
+// attempt is the match of the pattern at pos, by the matcher.
+func (m *matcher) attempt(re *Regexp, pos int) (bool, error) { return m.run(re.prog.code, pos) }
+
+// attempt is the match of the pattern at pos, by the matcher.
+func (m *matcherUTF8) attempt(re *Regexp, pos int) (bool, error) { return m.run(re.prog.code, pos) }
+
+// searchNative is search from start done by the pattern's native code for
+// ASCII subjects, sticky where it is to try start alone, with lit the
+// required literal search looks for; done is false where there is no code.
+func (m *matcherASCII) searchNative(re *Regexp, dst []int, start int, sticky bool, lit *requiredLit) (caps []int, done bool, err error) {
+	c := re.native.ascii.code
+	units := m.in.units
+	// The code reads the subject from start: a start outside it is the
+	// matcher's to refuse.
+	if c == nil || uint(start) > uint(len(units)) {
+		return nil, false, nil
 	}
-	return m.run(re.prog.code, pos)
+	litAt := 0
+	if lit != nil {
+		if litAt = indexUnitsASCII(units, &lit.literal, start+lit.minOff); litAt < 0 {
+			return nil, true, nil
+		}
+	}
+	r := m.native
+	if r == nil {
+		r = new(nativeRun)
+		m.native = r
+	}
+	r.begin(c, unsafe.Pointer(unsafe.SliceData(units)), len(units), m.caps, m.counters, m.emptyMarks, start, sticky, litAt)
+	for {
+		ok, err := r.run(c, &m.steps, &m.checkAt, m.check)
+		if err != nil {
+			return nil, true, err
+		}
+		if ok {
+			return append(dst[:0], m.caps...), true, nil
+		}
+		if r.ctx.status == nativeFailed {
+			return nil, true, nil
+		}
+		// The search has passed where the literal was: it is looked for
+		// again.
+		if litAt = indexUnitsASCII(units, &lit.literal, int(r.ctx.cur)+lit.minOff); litAt < 0 {
+			return nil, true, nil
+		}
+		r.ctx.litAt = int64(litAt)
+	}
 }
 
-// attempt is the match of the pattern at pos: its native code's, where it
-// has some for UTF-16 subjects.
-func (m *matcher) attempt(re *Regexp, pos int) (bool, error) {
-	if n := re.native; n != nil && n.wide.code != nil {
-		units := m.in.units
-		return runNative(&m.native, n.wide.code, unsafe.Pointer(unsafe.SliceData(units)), 2*len(units),
-			m.caps, m.counters, m.emptyMarks, pos, &m.steps, &m.checkAt, m.check)
+// searchNative is search from start done by the pattern's native code for
+// UTF-16 subjects, as matcherASCII's is for ASCII ones.
+func (m *matcher) searchNative(re *Regexp, dst []int, start int, sticky bool, lit *requiredLit) (caps []int, done bool, err error) {
+	c := re.native.wide.code
+	units := m.in.units
+	// The code reads the subject from start: a start outside it is the
+	// matcher's to refuse.
+	if c == nil || uint(start) > uint(len(units)) {
+		return nil, false, nil
 	}
-	return m.run(re.prog.code, pos)
+	litAt := 0
+	if lit != nil {
+		if litAt = indexUnits(units, &lit.literal, start+lit.minOff); litAt < 0 {
+			return nil, true, nil
+		}
+	}
+	r := m.native
+	if r == nil {
+		r = new(nativeRun)
+		m.native = r
+	}
+	r.begin(c, unsafe.Pointer(unsafe.SliceData(units)), 2*len(units), m.caps, m.counters, m.emptyMarks, start, sticky, litAt)
+	for {
+		ok, err := r.run(c, &m.steps, &m.checkAt, m.check)
+		if err != nil {
+			return nil, true, err
+		}
+		if ok {
+			return append(dst[:0], m.caps...), true, nil
+		}
+		if r.ctx.status == nativeFailed {
+			return nil, true, nil
+		}
+		if litAt = indexUnits(units, &lit.literal, int(r.ctx.cur>>1)+lit.minOff); litAt < 0 {
+			return nil, true, nil
+		}
+		r.ctx.litAt = int64(litAt) << 1
+	}
 }
 
-// attempt is the match of the pattern at pos, which over UTF-8 is the
-// matcher's.
-func (m *matcherUTF8) attempt(re *Regexp, pos int) (bool, error) {
-	return m.run(re.prog.code, pos)
+// searchNative is search over UTF-8, which runs no native code.
+func (m *matcherUTF8) searchNative(*Regexp, []int, int, bool, *requiredLit) ([]int, bool, error) {
+	return nil, false, nil
 }
 
 // nativeCtx is what native code runs with: the addresses it reads and
@@ -254,10 +325,13 @@ type nativeCtx struct {
 	// code may yet take, less one.
 	top, cur, left int64
 	// resume is where the code goes on when entered, or 0 at the start of
-	// an attempt.
+	// a search.
 	resume uintptr
 	// status says why the code returned.
 	status int64
+	// sticky is not 0 where the search tries its start alone, and litAt is
+	// where the required literal was found last, an offset in bytes.
+	sticky, litAt int64
 }
 
 // The context's fields' offsets, for the code.
@@ -274,6 +348,8 @@ const (
 	offLeft       = int32(unsafe.Offsetof(nativeCtx{}.left))
 	offResume     = int32(unsafe.Offsetof(nativeCtx{}.resume))
 	offStatus     = int32(unsafe.Offsetof(nativeCtx{}.status))
+	offSticky     = int32(unsafe.Offsetof(nativeCtx{}.sticky))
+	offLitAt      = int32(unsafe.Offsetof(nativeCtx{}.litAt))
 )
 
 // Why native code returned.
@@ -284,6 +360,8 @@ const (
 	nativeLimit
 	// nativeGrow: its stack is full.
 	nativeGrow
+	// nativeLit: the search has passed where the required literal was.
+	nativeLit
 )
 
 // nativeRun is a matcher's state for native code: the context, and the
@@ -303,17 +381,12 @@ func (r *nativeRun) setStack(c *nativeCode) {
 	x.stackLimit = x.stackBase + uintptr(len(r.stack)-c.maxPush)*8
 }
 
-// runNative is a matcher's run at pos done by the pattern's code c, over
-// the n bytes of the subject at subject, with the matcher's captures,
-// counters, marks, steps and check; *rp is the matcher's state for native
-// code, made when first needed.
-func runNative(rp **nativeRun, c *nativeCode, subject unsafe.Pointer, n int, caps, counters, marks []int,
-	pos int, steps, checkAt *int, check func() error) (bool, error) {
-	r := *rp
-	if r == nil {
-		r = new(nativeRun)
-		*rp = r
-	}
+// begin readies the context for a search from start by the pattern's code
+// c, over the n bytes of the subject at subject, with the matcher's
+// captures, counters and marks, sticky or not, with the required literal
+// found at litAt; the stack is made when first needed.
+func (r *nativeRun) begin(c *nativeCode, subject unsafe.Pointer, n int, caps, counters, marks []int,
+	start int, sticky bool, litAt int) {
 	if len(r.stack) < c.maxPush+16 {
 		r.stack = make([]uint64, max(4*maxLentFrames, 2*(c.maxPush+16)))
 	}
@@ -324,7 +397,19 @@ func runNative(rp **nativeRun, c *nativeCode, subject unsafe.Pointer, n int, cap
 	x.caps = uintptr(unsafe.Pointer(unsafe.SliceData(caps)))
 	x.counters = uintptr(unsafe.Pointer(unsafe.SliceData(counters)))
 	x.marks = uintptr(unsafe.Pointer(unsafe.SliceData(marks)))
-	x.top, x.cur, x.resume = 0, int64(pos)<<c.shift, 0
+	x.top, x.cur, x.resume = 0, int64(start)<<c.shift, 0
+	x.sticky, x.litAt = 0, int64(litAt)<<c.shift
+	if sticky {
+		x.sticky = 1
+	}
+}
+
+// run enters the code until it matches, fails, or the search needs the
+// required literal looked for again -- ctx.status says which of the last
+// two -- with the matcher's steps and check; or until the check or the
+// budget stops it. The matcher holds what the context addresses.
+func (r *nativeRun) run(c *nativeCode, steps, checkAt *int, check func() error) (bool, error) {
+	x := &r.ctx
 	for {
 		limit := nativeStepLimit(*steps, *checkAt, check)
 		x.left = int64(limit - *steps)
@@ -332,10 +417,8 @@ func runNative(rp **nativeRun, c *nativeCode, subject unsafe.Pointer, n int, cap
 		*steps = limit - int(x.left)
 		switch x.status {
 		case nativeMatched:
-			runtime.KeepAlive(subject)
 			return true, nil
-		case nativeFailed:
-			runtime.KeepAlive(subject)
+		case nativeFailed, nativeLit:
 			return false, nil
 		case nativeLimit:
 			if err := nativeBudget(*steps, checkAt, check); err != nil {

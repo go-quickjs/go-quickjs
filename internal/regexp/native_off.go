@@ -23,3 +23,18 @@ func (m *matcherASCII) attempt(re *Regexp, pos int) (bool, error) { return m.run
 
 // attempt is the match of the pattern at pos.
 func (m *matcherUTF8) attempt(re *Regexp, pos int) (bool, error) { return m.run(re.prog.code, pos) }
+
+// searchNative is search by native code, which there is none of.
+func (m *matcher) searchNative(*Regexp, []int, int, bool, *requiredLit) ([]int, bool, error) {
+	return nil, false, nil
+}
+
+// searchNative is search by native code, which there is none of.
+func (m *matcherASCII) searchNative(*Regexp, []int, int, bool, *requiredLit) ([]int, bool, error) {
+	return nil, false, nil
+}
+
+// searchNative is search by native code, which there is none of.
+func (m *matcherUTF8) searchNative(*Regexp, []int, int, bool, *requiredLit) ([]int, bool, error) {
+	return nil, false, nil
+}

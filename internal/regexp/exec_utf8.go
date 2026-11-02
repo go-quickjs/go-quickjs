@@ -50,6 +50,11 @@ func (m *matcherUTF8) search(re *Regexp, dst []int, start int, sticky bool) ([]i
 	if sticky || in.unicode {
 		lit = nil
 	}
+	if nativeBuilt && re.native != nil {
+		if caps, done, err := m.searchNative(re, dst, start, sticky, lit); done {
+			return caps, err
+		}
+	}
 	m.reset()
 	m.skipNext = [2]int{-1, -1}
 	for pos := start; pos <= in.length(); {

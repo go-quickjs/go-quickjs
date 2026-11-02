@@ -4,6 +4,7 @@ package vm
 
 import (
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"testing"
@@ -210,5 +211,81 @@ acc.join() + run(3) + wide(3)`)
 	close(errs)
 	for e := range errs {
 		t.Error(e)
+	}
+}
+
+const regexpNativeSearchSetup = `
+var long = "qwertyuiop".repeat(10), pair = String.fromCodePoint(0x1F600), lo = String.fromCharCode(0xDE00)
+function search(n) {
+  var out = [];
+  for (var i = 0; i < n; i++) {
+    var lex = /\s*(?:(\d+)|(\w+)|([^\s\w]))/y, m, toks = [];
+    lex.lastIndex = 0;
+    while ((m = lex.exec("let x = 10 * (y + 42);")) !== null) toks.push(m[1] || m[2] || m[3]);
+    var anc = /^ab/g;
+    anc.lastIndex = 2;
+    out.push(toks.join(" "), anc.exec("abab"), /^ab/.exec("xab"), /^(?:a|b)c/.exec("bc")[0],
+      (long + "x1" + long + "y2").match(/[xy]\d/g).join(), (long + "x1").search(/x\d/), long.search(/x\d/),
+      ("nNnNe NE" + long + "ne").match(/n(e)?/gi).join(), (long + "f9" + long).match(/[a-f]\d/g),
+      ("😀x a😀x" + long).match(/[a😀]x/gu).join(), (pair + lo + "a" + lo).replace(/\uDE00/gu, "#"),
+      "a px 5 6 7 99px 1234px".match(/\d{1,3}px/g).join(), /(\d\d)-(\d\d)-abc/.exec("12-34-abd 5 6 77-88-abc").join(),
+      "q xyz a b axyz".replace(/[ab]?xyz/g, "<$&>"), "abc".replace(/x*/g, "-"), "a" + pair + "b".replace(/(?:)/gu, "|"),
+      ("a" + pair + "b").replace(/(?:)/gu, "|").length, ("a" + pair + "b").replace(/(?:)/g, "|").length,
+      "ab cd".match(/\b/g).length, "Grüße é x1 éé y2".match(/[xy]\d/g).join(), ("é" + long + "x1").search(/x\d/),
+      "é a px 5 6 7 99px".match(/\d{1,3}px/g).join(), "aéb é".split(/(?:)/).length, /(a)|b*/.exec("cab").join(),
+      "a,b , c".split(/\s*,\s*/).join("|"), /.{0,3}ab(c)?/.exec("xxxxab abc"),
+      /b/y.exec("ab"), /x\d/y.test("ax1"), "ab".replace(/b/y, "#"), /ab/y.exec("aab"), /a(b)?c/y.test("aabc"), /\s*\d/y.test("a 1"));
+  }
+  return out.join(";");
+}
+`
+
+// regexpNativeSearchWant is Node's search(1), run as a script.
+const regexpNativeSearchWant = "let x = 10 * ( y + 42 ) ;;;;bc;x1,y2;100;-1;n,N,n,Ne,NE,ne;f9;😀x,😀x;😀#a#;" +
+	"99px,234px;77-88-abc,77,88;q <xyz> a b <axyz>;-a-b-c-;a😀|b|;8;9;4;x1,y2;101;99px;5;,;a|b|c;xxxab,;;false;ab;;false;false"
+
+// The search native code makes around its attempts -- sticky, anchored,
+// the unicode flag's advance over a pair, the units no match begins with
+// passed over a word at a time and a unit at a time, the required literal,
+// empty matches -- gets Node's answers and the interpreter's and the tree
+// tier's, over bytes and UTF-16, with the collector idle and while it
+// marks.
+func TestJITRegExpNativeSearch(t *testing.T) {
+	SetTreeTier(false)
+	interp := New(Config{})
+	v, err := interp.Run(compileForTest(t, regexpNativeSearchSetup+"search(2)"))
+	interp.Close()
+	SetTreeTier(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := regexpNativeSearchWant + ";" + regexpNativeSearchWant
+	if got := v.String().Go(); got != want {
+		t.Fatalf("the interpreter: %s, want Node's %s", got, want)
+	}
+	for _, marking := range []bool{false, true} {
+		runtime.GC()
+		gc := debug.SetGCPercent(-1)
+		if marking {
+			jitMarkingForTest(t)
+		}
+		r := jitAgreesForTest(t, regexpNativeSearchSetup, "search(1)", "search(1)", "search(3)", "search(1)")
+		v, err := r.Run(compileForTest(t, "search(1)"))
+		if err != nil || v.String().Go() != regexpNativeSearchWant {
+			t.Fatalf("marking %v: search(1) = %v %v, want Node's %s", marking, v, err, regexpNativeSearchWant)
+		}
+		ascii, wide := 0, 0
+		for _, re := range r.regexpCache {
+			if re.HasNative() {
+				ascii++
+			}
+			if re.HasNativeUTF16() {
+				wide++
+			}
+		}
+		if ascii < 15 || wide < 4 {
+			t.Errorf("marking %v: %d patterns have native code over bytes, %d over UTF-16", marking, ascii, wide)
+		}
+		debug.SetGCPercent(gc)
 	}
 }

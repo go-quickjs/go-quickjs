@@ -20,6 +20,12 @@ var regexpCorpus = []struct{ pattern, flags string }{
 	{`é+`, ""}, {`[à-ÿ]+`, "i"}, {`\p{L}+`, "u"}, {`\P{L}`, "iu"}, {`😀+`, "u"}, {`[^😀]`, "u"}, {`.`, "u"},
 	{`[\uD800-\uDBFF]`, "u"}, {`\p{Cs}`, "u"}, {`(.)\1`, "u"}, {`[\p{L}\p{N}]+`, "u"}, {`K`, "iu"},
 	{`[一-鿿]+`, ""}, {`(?:é|è){2,3}`, ""}, {`"[^"]*"`, ""}, {`^.$`, "mu"}, {`\S+$`, "u"},
+	// The search around the attempts: a unit or either of two passed over a
+	// word at a time, a class's units one at a time, under the unicode
+	// flag a character at a time, sticky, the required literal, and the
+	// captures, counters and marks reset by a loop.
+	{`x\d`, ""}, {`[xy]\d`, "y"}, {`n`, "i"}, {`[éa]b`, "u"}, {`[a😀]x`, "u"}, {`\d{1,3}px`, ""}, {`^ab`, ""},
+	{`(a)(b)(c)(d)(e)(f)(g)(h)(i)`, ""}, {`(?:(?:(a)*b){2,3}(?:(c)*d){2}){1,2}`, ""},
 }
 
 // Every pattern's native code, for each machine and each kind of subject,

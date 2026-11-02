@@ -32,6 +32,8 @@ type nativeOutcome struct {
 	caps  []int
 	steps int
 	err   error
+	// stack is the words of native code's stack, which it grew to.
+	stack int
 }
 
 // searchASCII is execASCIILent's search over s's bytes, with a matcher of
@@ -49,7 +51,7 @@ func searchASCII(re *Regexp, s string, start int, check func() error) nativeOutc
 	a.ready(re.prog, check)
 	a.steps, a.checkAt = 0, checkInterval
 	caps, err := a.search(re, nil, start, re.flags&FlagSticky != 0)
-	return nativeOutcome{caps, a.steps, err}
+	return nativeOutcome{caps, a.steps, err, nativeStack(a.native)}
 }
 
 // searchUTF16 is exec's search over units, with a matcher of its own,
@@ -63,7 +65,15 @@ func searchUTF16(re *Regexp, units []uint16, start int, check func() error) nati
 	m.ready(re.prog, check)
 	m.steps, m.checkAt = 0, checkInterval
 	caps, err := m.search(re, nil, start, re.flags&FlagSticky != 0)
-	return nativeOutcome{caps, m.steps, err}
+	return nativeOutcome{caps, m.steps, err, nativeStack(m.native)}
+}
+
+// nativeStack is the length of r's stack.
+func nativeStack(r *nativeRun) int {
+	if r == nil {
+		return 0
+	}
+	return len(r.stack)
 }
 
 // compileBoth is the pattern compiled twice: matched by the matcher, and by
@@ -665,6 +675,150 @@ func TestNativeLoneSurrogates(t *testing.T) {
 		got := searchUTF16(nat, tc.subject, 0, nil)
 		if !nat.HasNativeUTF16() || !slices.Equal(got.caps, tc.want) || got.err != nil {
 			t.Errorf("/%s/%s on %x: %v %v (native %v), want %v", tc.pattern, tc.flags, tc.subject, got.caps, got.err, nat.HasNativeUTF16(), tc.want)
+		}
+	}
+}
+
+// The search native code makes around its attempts is the matcher's:
+// sticky and anchored patterns try one position, the unicode flag advances
+// over a pair of surrogates whole, the units no match begins with are
+// passed over -- one unit or either of two a word at a time, others a unit
+// at a time, past ASCII too -- positions out of reach of the required
+// literal are not tried, the literal looked for again past where it was,
+// and empty matches are found at every position, the end included; over
+// subjects long enough for a word's scan and its tail, from every start,
+// with the same captures, errors and steps.
+func TestNativeSearch(t *testing.T) {
+	type kind uint8
+	const (
+		sole kind = 1 << iota
+		pair
+		class
+		noFirst
+		withLit
+		anchored
+	)
+	patterns := []struct {
+		pattern, flags string
+		kind           kind
+	}{
+		{`x\d`, "", sole}, {`x(\d)?`, "y", sole}, {`a\w*\.js`, "", sole}, {`[xy]\d`, "", pair}, {`n(e)?`, "i", pair},
+		{`[a-f]\d`, "", class}, {`[a-f]\d`, "y", class}, {`\s+-->`, "", class}, {`[éa]b`, "", sole}, {`[éa]b`, "u", sole},
+		{`[a😀]x`, "u", sole}, {`[^a]x`, "u", noFirst}, {`\uDE00`, "u", class}, {`(?:)`, "", noFirst}, {`x*`, "", noFirst},
+		{`\b`, "", noFirst}, {`(a)|b*`, "", noFirst}, {`$`, "", noFirst}, {`.?`, "u", noFirst},
+		// No unit can begin a match.
+		{`[]a`, "", class}, {`[^\s\S]ß`, "v", class}, {`[]a`, "y", class},
+		{`\d{1,3}px`, "", class | withLit}, {`[ab]?xyz`, "", class | withLit}, {`(\d\d)-(\d\d)-abc`, "", class | withLit},
+		{`(\w{1,5})@example`, "", class | withLit}, {`.{0,3}ab(c)?`, "", noFirst | withLit},
+		{`^ab`, "", sole | withLit | anchored}, {`^(?:a|b)c`, "", pair | anchored}, {`^.*x`, "", noFirst | anchored},
+	}
+	var subjects []string
+	for _, n := range []int{0, 1, 7, 8, 9, 15, 16, 17, 33} {
+		for _, at := range []int{-1, 0, n / 2, n - 1} {
+			b := []byte(strings.Repeat("qwertyuiop", 4)[:n])
+			if at >= 0 && at < n {
+				copy(b[at:], "x1")
+			}
+			subjects = append(subjects, string(b))
+		}
+	}
+	subjects = append(subjects,
+		"zz x y1 x2", "nNnNe NE", "fed 9a 3f2", "a -->\t-->", "ébé ab", "😀x a😀x", "12px 1234px 99px",
+		"axyz bxyz xyz", "12-34-abd 56-78-abc", "bob@example joe@exampl", "abab abcab", "ab", "cab", "acbc", "aaax",
+		"x\n-->", "a.js ab.j abc.js", "1px2px3px", "x9x9x9x9x9x9x9x9x9x",
+		// The units passed over reach past where the literal was found.
+		"a px 5 6 7 99px", "12-34-abc 5 6 77-88-abc", "q xyz a b axyz", "ab x x x x x abc")
+	units := [][]uint16{
+		{0xD83D, 0xDE00, 'x', 'a', 0xD83D, 0xDE00, 'x'}, {'a', 0xDE00, 0xD83D, 0xDE00}, {0xE9, 'b', 0x4E00, 'a', 'b'},
+		{0x4E00, 0x4E01, 0x4E02, 0x4E03, 0x4E04, 0x4E05, 0x4E06, 0x4E07, 'x', '1'}, {0xFFFF, 0x8000, 'x', '2', 0x8078, 'x', '3'},
+	}
+	for _, p := range patterns {
+		plain, nat, ok := compileBoth(t, p.pattern, p.flags)
+		if !ok {
+			t.Fatalf("/%s/%s does not compile", p.pattern, p.flags)
+		}
+		f, prog := plain.prog.first, plain.prog
+		got := kind(0)
+		switch {
+		case f == nil:
+			got = noFirst
+		case f.sole:
+			got = sole
+		case f.pair:
+			got = pair
+		default:
+			got = class
+		}
+		if prog.lit != nil {
+			got |= withLit
+		}
+		if prog.anchored {
+			got |= anchored
+		}
+		if got != p.kind || prog.litOnly != nil {
+			t.Fatalf("/%s/%s is of kind %b, not %b (only a literal: %v)", p.pattern, p.flags, got, p.kind, prog.litOnly != nil)
+		}
+		for _, s := range subjects {
+			for start := 0; start <= len(s); start++ {
+				sameOutcome(t, p.pattern, p.flags, s, start, plain, nat)
+			}
+		}
+		for _, u := range units {
+			for start := 0; start <= len(u); start++ {
+				sameOutcomeUnits(t, p.pattern, p.flags, u, start, plain, nat)
+			}
+		}
+		if !nat.HasNative() || !nat.HasNativeUTF16() {
+			t.Errorf("/%s/%s: native code over bytes %v, over UTF-16 %v", p.pattern, p.flags, nat.HasNative(), nat.HasNativeUTF16())
+		}
+	}
+}
+
+// A search's step budget and its check run across its attempts: they stop
+// it at an attempt past the first, and the stack grows in one -- with the
+// matcher's steps, and the matcher's result once it goes on.
+func TestNativeSearchStopsAndGrows(t *testing.T) {
+	// Each run of a's has its attempts fail after millions of steps, so
+	// that the budget runs out in the fourth or the fifth.
+	s := strings.Repeat(strings.Repeat("a", 22)+"c", 5)
+	plain, nat, _ := compileBoth(t, `(a+)+b`, "")
+	for _, start := range []int{0, 3} {
+		want, got := searchASCII(plain, s, start, nil), searchASCII(nat, s, start, nil)
+		if !errors.Is(want.err, ErrComplexity) {
+			t.Fatalf("the matcher: %v in %d steps, want ErrComplexity", want.err, want.steps)
+		}
+		sameResult(t, "bytes", `(a+)+b`, "", s, start, got, want)
+		sameOutcomeUnits(t, `(a+)+b`, "", wtf8ToUnits(s), start, plain, nat)
+	}
+	// The check is asked at the matcher's steps from attempt to attempt.
+	stop := errors.New("stop")
+	s = strings.Repeat("aaaaaaaaaaaaac", 40)
+	for _, after := range []int{2, 7, 30} {
+		checker := func() func() error {
+			n := 0
+			return func() error {
+				if n++; n == after {
+					return stop
+				}
+				return nil
+			}
+		}
+		want := searchASCII(plain, s, 0, checker())
+		got := searchASCII(nat, s, 0, checker())
+		if !errors.Is(want.err, stop) || !errors.Is(got.err, stop) || got.steps != want.steps {
+			t.Fatalf("stopping at check %d: native %v in %d steps, matcher %v in %d steps", after, got.err, got.steps, want.err, want.steps)
+		}
+	}
+	// The stack grows in an attempt past the first, which then fails: the
+	// search goes on from the position under it.
+	for _, p := range []string{`(a|b)*c`, `(?:(a)|b)*?c`} {
+		plain, nat, _ := compileBoth(t, p, "")
+		s := strings.Repeat("ab", 40) + "x" + strings.Repeat("ab", 750) + "x" + "abc"
+		for _, start := range []int{0, 81} {
+			sameOutcome(t, p, "", s, start, plain, nat)
+			if got := searchASCII(nat, s, start, nil); got.stack <= 4*maxLentFrames || got.caps == nil {
+				t.Errorf("/%s/ from %d: %v, the stack %d words", p, start, got.caps, got.stack)
+			}
 		}
 	}
 }
