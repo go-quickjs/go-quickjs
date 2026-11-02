@@ -112,6 +112,12 @@ type regexpLeaf[_ any] struct {
 	// match takes it as it begins, whatever it then does.
 	dead  *Object
 	dummy *Object
+	// reuse is the call about to be made -- its next, and only that one --
+	// where its array may be made again in the memory of its site's last
+	// (see zzz_regexpreuse.go), and reuseTable the arrays to make again.
+	// match takes it as it begins.
+	reuse      execReuseCall
+	reuseTable *execReuseTable
 	// spent is the match a leaf's call last found past the step budget,
 	// which the calls made again find without matching again: a pattern's
 	// source and flags, its subject and where the match began -- the start,
@@ -165,6 +171,11 @@ var errRegExpLeafAgain = errors.New("regexp: a leaf's match made again with a fr
 func (l *regexpLeaf[_]) match(r *Runtime, this Value, args []Value) (Value, error) {
 	dead := l.dead
 	l.dead = nil
+	var reuse execReuseCall
+	if l.reuse.site != nil {
+		reuse = l.reuse
+		l.reuse = execReuseCall{}
+	}
 	if len(args) == 0 || !args[0].IsString() || !this.IsObject() {
 		return l.slow(r, this, args)
 	}
@@ -175,7 +186,7 @@ func (l *regexpLeaf[_]) match(r *Runtime, this Value, args []Value) (Value, erro
 	}
 	re, s := d.re, args[0].String()
 	if re.Flags()&(regexp.FlagGlobal|regexp.FlagSticky) != 0 {
-		return l.stateful(r, o, d, s, dead == o)
+		return l.stateful(r, o, d, s, dead == o, reuse)
 	}
 	var check func() error
 	if (r.abort != nil || r.ctx != nil && r.ctx.Done() != nil) && !re.NeverFails(s.ascii) {
@@ -224,6 +235,9 @@ func (l *regexpLeaf[_]) match(r *Runtime, this Value, args []Value) (Value, erro
 	if dead == o {
 		return Obj(l.dummyOf(r)), nil
 	}
+	if reuse.recv == o {
+		return Obj(matchResultReused[struct{}](r, &l.reuseTable, reuse, re, caps, s)), nil
+	}
 	return Obj(matchResultOf[struct{}](r, re, caps, s)), nil
 }
 
@@ -240,7 +254,7 @@ func (l *regexpLeaf[_]) dummyOf(r *Runtime) *Object {
 // lastIndex, a number, says, and written back, as regexpMatch's
 // stateful branch matches. Where dead is set, nothing reads the result
 // (see match).
-func (l *regexpLeaf[_]) stateful(r *Runtime, o *Object, d *regexpData, s *String, dead bool) (Value, error) {
+func (l *regexpLeaf[_]) stateful(r *Runtime, o *Object, d *regexpData, s *String, dead bool, reuse execReuseCall) (Value, error) {
 	re := d.re
 	li, err := r.toLength(o.vals[0])
 	if err != nil {
@@ -296,6 +310,9 @@ func (l *regexpLeaf[_]) stateful(r *Runtime, o *Object, d *regexpData, s *String
 	}
 	if dead {
 		return Obj(l.dummyOf(r)), nil
+	}
+	if reuse.recv == o {
+		return Obj(matchResultReused[struct{}](r, &l.reuseTable, reuse, re, caps, s)), nil
 	}
 	return Obj(matchResultOf[struct{}](r, re, caps, s)), nil
 }

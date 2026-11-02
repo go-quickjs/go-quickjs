@@ -36,9 +36,10 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 // opHook is buildBlock's call of op, for the instruction at pc of code: a
 // typeof is typeofOp's, a dup that begins a switch's literal cases
 // switchStart's, a new_object literalNew's and a define_field its literal
-// takes literalField's, a get_prop_this of exec deadExecGet's and a
-// call_method whose result nothing reads deadExecCall's, anything else
-// op's.
+// takes literalField's, a get_prop_this of exec deadExecGet's, a
+// call_method whose result nothing reads deadExecCall's and one of exec
+// whose arrays may be made again reuseExecCall's (zzz_regexpreuse.go),
+// anything else op's.
 //
 //go:noinline
 func opHook[_ any](b *tbuilder, pc int, code []bytecode.Instr, more bool) (int, bool) {
@@ -51,7 +52,7 @@ func opHook[_ any](b *tbuilder, pc int, code []bytecode.Instr, more bool) (int, 
 			return skip, ok
 		}
 	case bytecode.OpCallMethod:
-		if deadExecCall[struct{}](b, pc, code) {
+		if deadExecCall[struct{}](b, pc, code) || reuseExecCall[struct{}](b, pc, code) {
 			return 0, true
 		}
 	case bytecode.OpTypeOf:
