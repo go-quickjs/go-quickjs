@@ -1,8 +1,11 @@
 package vm
 
 import (
+	"context"
+	"errors"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
@@ -143,11 +146,16 @@ func TestRegExpLeaves(t *testing.T) {
 		{`/[<>]/`, `null`, true, true},
 		{`/[<>]/`, `true`, true, true},
 		{`(function () { var x = /[<>]/; x.lastIndex = 1.5; return x })()`, `'a'`, true, true},
-		// The matcher's.
-		{`/[é<]/u`, `'café'`, false, false},
-		{`/a+b/`, `'aab'`, false, false},
+		// The matcher's, of a string: a match that fails errs with nothing
+		// made, and is made again with a frame (errRegExpLeafAgain).
+		{`/[é<]/u`, `'café'`, true, true},
+		{`/a+b/`, `'aab'`, true, true},
+		{`/(a)/`, `'a'`, true, true},
+		// The matcher's, of another primitive, which the built-in converts
+		// and matches itself; and a sticky pattern's.
+		{`/a+b/`, `42`, false, false},
+		{`/(a)/`, `undefined`, false, false},
 		{`/ab/y`, `'ab'`, false, false},
-		{`/(a)/`, `'a'`, false, false},
 		// lastIndex written, or converted by a call.
 		{`/[<>]/g`, `'a'`, false, false},
 		{`/[<>]/y`, `'a'`, false, false},
@@ -319,4 +327,107 @@ f(/(a+)+b/)`))
 		}
 	}
 	SetTreeTier(true)
+}
+
+// A leaf's call of exec or test whose match fails -- spends the step
+// budget -- throws what a call with a frame throws: the SyntaxError, its
+// stack, and Error.stackTraceLimit's getter run as often, as for the call
+// with a frame of a global pattern, which is never a leaf's. The leaf's own
+// call erred with nothing made, and its call made again found the match's
+// failure without matching again.
+func TestRegExpLeafFailsAgainWithFrame(t *testing.T) {
+	src := `var gets = 0, limit = Error.stackTraceLimit;
+Object.defineProperty(Error, 'stackTraceLimit', { get() { gets++; return limit }, set(v) { limit = v }, configurable: true });
+function call(re, how) { gets = 0; try { return String(re[how]('a'.repeat(32) + 'cb')) } catch (e) { return [e.name, e.message, e.stack, gets].join(',') } }
+var out = [];
+for (var how of ['exec', 'test']) {
+  var leaf = call(/(a+)+b/, how), framed = call(/(a+)+b/g, how);
+  out.push(leaf === framed ? leaf : leaf + ' != ' + framed);
+}
+out.join('|')`
+	want := "SyntaxError,regular expression is too complex,,0|SyntaxError,regular expression is too complex,,0"
+	for _, tree := range []bool{true, false} {
+		SetTreeTier(tree)
+		r := New(Config{})
+		v, err := r.Run(compileForTest(t, src))
+		r.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := v.String().Go(); got != want {
+			t.Errorf("tree tier %v:\ngot  %s\nwant %s", tree, got, want)
+		}
+	}
+	SetTreeTier(true)
+
+	// The leaf's call itself, without a frame: an error that is no
+	// exception, and the match remembered for the call made again.
+	r := New(Config{})
+	defer r.Close()
+	recv, err := r.Run(compileForTest(t, `/(a+)+b/`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := r.Run(compileForTest(t, `'a'.repeat(32) + 'cb'`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := []Value{s}
+	fd := r.regexpExecFn.fn()
+	if !leafChecks[elemRegExpExec](r, recv, args) {
+		t.Fatal("exec's check fails")
+	}
+	if _, err := fd.native(r, recv, args); err != errRegExpLeafAgain {
+		t.Fatalf("the leaf's call: %v, want errRegExpLeafAgain", err)
+	}
+	if _, err := r.callObject(r.regexpExecFn, recv, args, Undefined); err == nil || err == errRegExpLeafAgain {
+		t.Fatalf("the call with a frame: %v, want the SyntaxError", err)
+	}
+
+	// The call made again finds the failure without matching again: a
+	// leaf's failed call costs what a call with a frame of a global
+	// pattern, never a leaf's, does -- one match spending the budget, not
+	// two.
+	if testing.Short() {
+		return
+	}
+	if _, err := r.Run(compileForTest(t, `function g(re, s) { try { re.exec(s) } catch (e) {} }`)); err != nil {
+		t.Fatal(err)
+	}
+	best := func(src string) time.Duration {
+		b := time.Duration(1 << 62)
+		for range 3 {
+			start := time.Now()
+			if _, err := r.Run(compileForTest(t, src)); err != nil {
+				t.Fatal(err)
+			}
+			b = min(b, time.Since(start))
+		}
+		return b
+	}
+	leaf := best(`g(/(a+)+b/, 'a'.repeat(32) + 'cb')`)
+	framed := best(`g(/(a+)+b/g, 'a'.repeat(32) + 'cb')`)
+	if leaf > framed*3/2 {
+		t.Errorf("a leaf's failed call took %v, one with a frame %v: the match made twice", leaf, framed)
+	}
+}
+
+// A deadline stops a leaf's call of exec on a match that would run for
+// ever, and the runtime runs on.
+func TestRegExpLeafDeadline(t *testing.T) {
+	r := New(Config{})
+	defer r.Close()
+	if _, err := r.Run(compileForTest(t, `function f(re, s) { return re.exec(s) }`)); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	r.SetContext(ctx)
+	if _, err := r.Run(compileForTest(t, `f(/(a+)+b/, 'a'.repeat(64) + 'cb')`)); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("%v, want the deadline", err)
+	}
+	r.SetContext(context.Background())
+	if v, err := r.Run(compileForTest(t, `f(/(a+)b/, 'xaab')[1]`)); err != nil || v.String().Go() != "aa" {
+		t.Fatalf("after: %v, %v", v, err)
+	}
 }

@@ -2,7 +2,10 @@
 
 package vm
 
-import "github.com/go-quickjs/go-quickjs/internal/bytecode"
+import (
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
+)
 
 // Native code's call of RegExp.prototype's exec or test (zzz_regexpleaf.go)
 // on a RegExp that is no literal's is learned to be a leaf's at the call of
@@ -61,4 +64,54 @@ func jitRegExpLeafSeen[_ any](r *Runtime, e *jitEntry, pc, argc int) {
 	}
 	e.nativeCalls = append(e.nativeCalls, jitInline{pc: int32(pc), obj: o, leaf: true})
 	e.inlinePending = true
+}
+
+// jitRegExpLeafGuess is the function a compile's call at pc of cl's code,
+// whose site has no leaf learned yet, is guessed to call as a leaf's
+// (jitFeedback.Leaf): RegExp.prototype's exec or test, where the call's
+// method read -- the get_prop_this its callee is, from the instructions
+// before the call -- is of a RegExp no literal's that a global or a
+// captured binding holds now (jitChainReceiver), and finds there the
+// built-in, its check passing on it given a string. A loop's re.exec(s)
+// was learned to be a leaf's at its call of Go, the function compiled
+// again for it: one compile more for each loop that first ran such a call.
+// The guess is a guess: the code checks the function each call calls, and
+// the leaf's routine its check, refusing what fails them.
+func jitRegExpLeafGuess[_ any](r *Runtime, cl *closure, p *ir.Program, pc int) *Object {
+	fn := cl.fn
+	if p == nil || len(p.Maps) != len(fn.Code) || pc >= len(fn.Code) || fn.Code[pc].Op != bytecode.OpCallMethod || p.Maps[pc].Depth < 0 {
+		return nil
+	}
+	slot := p.Maps[pc].Depth - int(fn.Code[pc].A) - 1
+	q := pc - 1
+	for ; q >= 0 && q >= pc-64; q-- {
+		if d := p.Maps[q].Depth; d < slot {
+			return nil
+		} else if d == slot {
+			break
+		}
+	}
+	if q < 0 || q < pc-64 || fn.Code[q].Op != bytecode.OpGetPropThis || int(fn.Code[q].A) >= len(cl.names) {
+		return nil
+	}
+	recv, ok := r.jitChainReceiver(cl, p, q, jitChainReads)
+	if !ok || recv.class != ClassRegExp || recv.proto != r.proto.regexp || len(recv.vals) != 1 {
+		return nil
+	}
+	var f *Object
+	switch cl.names[fn.Code[q].A] {
+	case r.atoms.intern("exec"):
+		f = r.regexpExecFn
+	case r.atoms.intern("test"):
+		f = r.regexpTestFn
+	default:
+		return nil
+	}
+	fd := f.fn()
+	if fd == nil || fd.elemOp != elemRegExpExec && fd.elemOp != elemRegExpTest || !propsIntact(recv.proto, r.regexpExecProps) ||
+		f == r.regexpTestFn && !propsIntact(recv.proto, r.regexpTestProps) ||
+		!leafChecks[fd.elemOp](r, Obj(recv), []Value{Str(emptyString)}) {
+		return nil
+	}
+	return f
 }

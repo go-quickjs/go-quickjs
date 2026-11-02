@@ -76,3 +76,58 @@ func TestJITRegExpLeaves(t *testing.T) {
 		debug.SetGCPercent(gc)
 	}
 }
+
+// A RegExp the matcher matches is a leaf's call of native code too, for a
+// string: find's exec of a pattern with groups is made through the VM's
+// routine for leaves; and where the match fails, spending the step budget,
+// the leaf's call errs with nothing made, the code leaves the call to Go,
+// which makes it with a frame and throws the interpreter's SyntaxError.
+func TestJITRegExpLeafMatcher(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `var re = /(\w+)@(\w+)\.com/, bad = /(a+)+b/;
+function find(n) { var c = 0; for (var i = 0; i < n; i++) { var m = re.exec('mail bob' + (i % 10) + '@example.com now'); c += m[2].length + m.index } return c }
+function boom(s) { try { return String(bad.exec(s)) } catch (e) { return e.name + ': ' + e.message } }
+function booms(n) { var out = []; for (var i = 0; i < n; i++) out.push(boom(i === n - 1 ? 'a'.repeat(32) + 'cb' : 'aab')); return out[0] + '|' + out[n - 1] + '|' + out.length }`
+	var rounds []string
+	for range 4 {
+		rounds = append(rounds, "find(200)", "booms(100)")
+	}
+	r := jitAgreesForTest(t, setup, rounds...)
+	exec := uintptr(unsafe.Pointer(r.regexpExecFn))
+	leaves := 0
+	for _, st := range jitNativeForTest(t, r, "find").ssa.GoCallStates() {
+		if ssa.GoOp(st.Op&0xff) == ssa.GoLeaf && st.Leaf == exec {
+			leaves++
+		}
+	}
+	if leaves != 1 {
+		t.Fatalf("find's code has %d leaves' calls of exec, want 1", leaves)
+	}
+	fast := r.jit.leafFast
+	v, err := r.Run(compileForTest(t, `''+find(200) + ' ' + booms(100)`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := v.String().Go(), "2400 aab,aa|SyntaxError: regular expression is too complex|100"; got != want {
+		t.Errorf("= %s, want %s", got, want)
+	}
+	if got := r.jit.leafFast - fast; got < 200 {
+		t.Errorf("%d leaves' calls through the routine, want at least 200", got)
+	}
+
+	// find's exec, of a global's RegExp, is compiled a leaf's call from
+	// the first (jitRegExpLeafGuess), not learned at a call of Go and
+	// compiled again for.
+	r = jitAgreesForTest(t, setup, "find(200)", "find(200)", "find(200)")
+	leaves = 0
+	for _, st := range jitNativeForTest(t, r, "find").ssa.GoCallStates() {
+		if ssa.GoOp(st.Op&0xff) == ssa.GoLeaf && st.Leaf == uintptr(unsafe.Pointer(r.regexpExecFn)) {
+			leaves++
+		}
+	}
+	if leaves != 1 || r.jit.compiled != 1 {
+		t.Errorf("find compiled %d times, its code with %d leaves' calls of exec; want once, with 1", r.jit.compiled, leaves)
+	}
+}

@@ -24,12 +24,18 @@ import (
 // the pattern neither global nor sticky, so that the match leaves lastIndex
 // as it is; the argument, if any, a primitive ToString converts without
 // calling anything or throwing -- a string, a number, a boolean, undefined
-// or null, not a symbol; and the pattern one whose match is a search that
-// never fails (regexp's NeverFails), for the subject a primitive's string
-// is: a match the matcher makes may run out of its step budget, and its
-// error, made without a frame, would have run what making one may run
-// (Error.stackTraceLimit's getter). test calls the RegExp's exec, which
-// must be the built-in, read as execIsBuiltin reads it. What the match
+// or null, not a symbol. A match the matcher makes may fail -- run out of
+// its step budget, or meet the check's interrupt -- and its error, made
+// without a frame, would have run what making one may run
+// (Error.stackTraceLimit's getter): a string's match that fails, nothing
+// made yet, errs with nothing made (errRegExpLeafAgain), which every tier
+// takes for a leaf's call refused and makes again with a frame, which
+// throws -- the budget's failure remembered (regexpLeaf's spent), so that
+// the match is not made twice. Any other primitive's match is the
+// built-in's own, which throws where it fails, and so a leaf's only where
+// its pattern's match is a search that never fails (regexp's NeverFails).
+// test calls the RegExp's exec, which must be the built-in, read as
+// execIsBuiltin reads it. What the match
 // does besides -- the result, the legacy statics -- calls nothing, and is
 // the same done twice: a pure body applies a leaf wherever its check
 // passes, and an evaluation refused after it is made again with a frame
@@ -87,7 +93,21 @@ func regexpLeafChecks[_ any]() {
 type regexpLeaf[_ any] struct {
 	slow NativeFunc
 	test bool
+	// spent is the match a leaf's call last found past the step budget,
+	// which the call made again with a frame finds without matching again:
+	// a pattern, its subject and where the match began fix whether it
+	// spends the budget.
+	spent struct {
+		re *regexp.Regexp
+		s  *String
+	}
 }
+
+// errRegExpLeafAgain is a leaf's call's error where its match failed: it
+// made nothing -- no error, which making may run the script's code
+// (Error.stackTraceLimit's getter) -- and is made again with a frame, as
+// every tier makes a leaf's call whose function errs, which throws.
+var errRegExpLeafAgain = errors.New("regexp: a leaf's match made again with a frame")
 
 // match is exec's or test's function (funcData.native): the built-in's
 // own, slow, for anything but a string matched by a RegExp whose lastIndex
@@ -99,10 +119,11 @@ type regexpLeaf[_ any] struct {
 // matters only to a global or a sticky pattern (stateful). A match is
 // asked the check regexpMatch would ask (a deadline's, an abort's) and its
 // errors are regexpMatch's, the step budget's SyntaxError among them, and
-// so is a write of lastIndex that cannot be: a leaf's call meets none, its
-// RegExp neither global nor sticky, its pattern one no matcher matches
-// (regexp's NeverFails). Every tier calls it, the leaf's check passed or
-// not: the interpreter, the tree tier and native code's leaf routine.
+// so is a write of lastIndex that cannot be: a leaf's call, its RegExp
+// neither global nor sticky, writes none, and where its match fails errs
+// with nothing made (errRegExpLeafAgain), its call made again with a frame
+// (framed). Every tier calls it, the leaf's check passed or not: the
+// interpreter, the tree tier and native code's leaf routine.
 func (l *regexpLeaf[_]) match(r *Runtime, this Value, args []Value) (Value, error) {
 	if len(args) == 0 || !args[0].IsString() || !this.IsObject() {
 		return l.slow(r, this, args)
@@ -116,6 +137,11 @@ func (l *regexpLeaf[_]) match(r *Runtime, this Value, args []Value) (Value, erro
 	if re.Flags()&(regexp.FlagGlobal|regexp.FlagSticky) != 0 {
 		return l.stateful(r, o, d, s)
 	}
+	if l.spent.re == re && l.spent.s == s && l.framed(r) {
+		// The leaf's call that found it past the budget, made again.
+		l.spent.re, l.spent.s = nil, nil
+		return l.failed(r, regexp.ErrComplexity)
+	}
 	var check func() error
 	if (r.abort != nil || r.ctx != nil && r.ctx.Done() != nil) && !re.NeverFails(s.ascii) {
 		check = r.checkInterruptNow
@@ -123,6 +149,12 @@ func (l *regexpLeaf[_]) match(r *Runtime, this Value, args []Value) (Value, erro
 	j := subjectOf(s)
 	caps, err := j.match(re, r.legacyRegExp.spare(), 0, check)
 	if err != nil {
+		if !l.framed(r) {
+			if errors.Is(err, regexp.ErrComplexity) {
+				l.spent.re, l.spent.s = re, s
+			}
+			return Undefined, errRegExpLeafAgain
+		}
 		return l.failed(r, err)
 	}
 	if caps == nil {
@@ -181,6 +213,14 @@ func (l *regexpLeaf[_]) stateful(r *Runtime, o *Object, d *regexpData, s *String
 	return Obj(r.buildMatchResult(re, caps, s)), nil
 }
 
+// framed reports whether exec's or test's call has a frame of its own, the
+// innermost: a leaf's call has none, and its innermost frame is its
+// caller's.
+func (l *regexpLeaf[_]) framed(r *Runtime) bool {
+	f := r.topFrame()
+	return f != nil && f.cl == nil && (f.callee == r.regexpExecFn || f.callee == r.regexpTestFn)
+}
+
 // failed is match's error where the matcher's match failed, as
 // regexpMatch makes it: the step budget's SyntaxError, or the check's.
 func (l *regexpLeaf[_]) failed(r *Runtime, err error) (Value, error) {
@@ -190,9 +230,13 @@ func (l *regexpLeaf[_]) failed(r *Runtime, err error) (Value, error) {
 	return Undefined, err
 }
 
-// check is the leaf's check (leafChecks). A global or a sticky pattern,
-// and one the matcher matches, are refused first: every exec and test of
-// them asks it, which a leaf's call never makes.
+// check is the leaf's check (leafChecks). A global or a sticky pattern is
+// refused first: every exec and test of them asks it, which a leaf's call
+// never makes. A string's match by any other may fail -- spend the step
+// budget, or meet the check's interrupt -- and then errs with nothing made
+// (errRegExpLeafAgain), to be made again with a frame; a match of any other
+// primitive is the built-in's (slow), which throws where it fails, and so
+// is a leaf's only where it cannot (regexp's NeverFails).
 func (l *regexpLeaf[_]) check(r *Runtime, this Value, args []Value) bool {
 	if !this.IsObject() {
 		return false
@@ -210,18 +254,18 @@ func (l *regexpLeaf[_]) check(r *Runtime, this Value, args []Value) bool {
 		return false
 	}
 	// The subject: a primitive's string, all ASCII but for a string's.
-	ascii := true
+	ascii, str := true, false
 	if len(args) > 0 {
 		switch a := args[0]; {
 		case a.IsString():
-			ascii = a.String().ascii
+			ascii, str = a.String().ascii, true
 		case a.IsNumber(), a.IsBool(), a.IsUndefined(), a.IsNull():
 		default:
 			return false
 		}
 	}
 	// lastIndex, which ToLength converts, a number.
-	if !re.NeverFails(ascii) || len(o.vals) == 0 || o.shape == nil || len(o.shape.keys) == 0 || o.shape.keys[0].key != atomLastIndex || !o.vals[0].IsNumber() {
+	if !str && !re.NeverFails(ascii) || len(o.vals) == 0 || o.shape == nil || len(o.shape.keys) == 0 || o.shape.keys[0].key != atomLastIndex || !o.vals[0].IsNumber() {
 		return false
 	}
 	// test's call of exec is the built-in's (execIsBuiltin).

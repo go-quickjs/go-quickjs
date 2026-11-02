@@ -8762,6 +8762,9 @@ func (fb *jitFeedback) Leaf(pc int) (uintptr, bool) {
 			return uintptr(unsafe.Pointer(x.obj)), true
 		}
 	}
+	if o := jitRegExpLeafGuess[struct{}](fb.r, fb.cl, fb.program(), pc); o != nil {
+		return uintptr(unsafe.Pointer(o)), true
+	}
 	return 0, false
 }
 
