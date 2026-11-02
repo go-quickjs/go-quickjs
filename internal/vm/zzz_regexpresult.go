@@ -47,6 +47,12 @@ func newMatchBlock[E, S any](proto *Object, n, k int) (*Object, []String) {
 	b.vals = b.fields[:0]
 	b.ext = &b.side
 	b.side.elems = unsafe.Slice((*Value)(unsafe.Pointer(&b.inline)), n)
+	if k == 0 {
+		// S is then [0]String, the block's last field, whose address is the
+		// allocation's end: a slice of it, though empty, is a pointer past
+		// the block, which checkptr refuses.
+		return &b.Object, nil
+	}
 	return &b.Object, unsafe.Slice((*String)(unsafe.Pointer(&b.strs)), k)
 }
 
