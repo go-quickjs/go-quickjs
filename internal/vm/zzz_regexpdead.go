@@ -341,6 +341,15 @@ func (l *replaceDead[_]) call(r *Runtime, this Value, args []Value) (Value, erro
 			}
 		}
 	}
+	// A string's replace by a template without a $, both ASCII, made in
+	// one pass (replaceFlat).
+	if len(args) >= 2 && this.IsString() && args[1].IsString() && args[0].IsObject() && r.meter == nil {
+		if s, tv := this.String(), args[1].String(); s.ascii && tv.ascii && strings.IndexByte(tv.Go(), '$') < 0 {
+			if fl, ok := r.replaceDirect(args[0]); ok {
+				return replaceFlat[struct{}](r, args[0], s, tv, fl)
+			}
+		}
+	}
 	return l.slow(r, this, args)
 }
 
