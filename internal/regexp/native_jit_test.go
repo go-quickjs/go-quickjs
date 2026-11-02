@@ -371,6 +371,76 @@ func TestNativeReleased(t *testing.T) {
 	}
 }
 
+// Native code goes back to Go for the check, every nativePoll steps and to
+// grow its stack, and what it runs over stays where it was meanwhile: the
+// collector runs, garbage is made and the goroutine's stack grows in the
+// check, the subject held by nothing but the match, and every match is the
+// matcher's.
+func TestNativeCollectsInReturns(t *testing.T) {
+	grow := func(n int) int {
+		var pad [64]byte
+		if n == 0 {
+			return int(pad[0])
+		}
+		return n + len(pad) - 64
+	}
+	var deep func(n int) int
+	deep = func(n int) int {
+		if n == 0 {
+			return grow(0)
+		}
+		return deep(n-1) + 1
+	}
+	none := func() error { return nil }
+	checks := 0
+	check := func() error {
+		if checks++; checks%8 == 0 {
+			runtime.GC()
+		}
+		_ = make([]byte, 1<<10)
+		if deep(2000) != 2000 {
+			return errors.New("deep")
+		}
+		return nil
+	}
+	for _, tc := range []struct{ pattern, flags, s string }{
+		{`(a+)+b`, "", strings.Repeat("a", 18)},
+		{`(a|b)*c`, "", strings.Repeat("ab", 20000) + "c"},
+		{`((a)|(b))*$`, "u", strings.Repeat("ab", 20000)},
+		{`(\p{L}+)+\d`, "u", strings.Repeat("é", 18)},
+		{`(?:a|b)*?c`, "", strings.Repeat("ab", 20000) + "c"},
+	} {
+		plain, _ := Compile(tc.pattern, tc.flags)
+		re, _ := Compile(tc.pattern, tc.flags)
+		re.UseNative(testHost())
+		for range 3 {
+			// A subject made anew for each match, which only the match
+			// holds.
+			s := strings.Clone(tc.s)
+			units := wtf8ToUnits(s)
+			want, werr := plain.MatchCheckedInto(nil, wtf8ToUnits(s), 0, none)
+			got, gerr := re.MatchCheckedInto(nil, units, 0, check)
+			units = nil
+			if !slices.Equal(got, want) || werr != nil || gerr != nil {
+				t.Fatalf("/%s/%s over UTF-16: %v %v, want %v %v", tc.pattern, tc.flags, got, gerr, want, werr)
+			}
+			if isASCII(s) {
+				want, werr := plain.MatchASCIICheckedInto(nil, s, 0, none)
+				got, gerr := re.MatchASCIICheckedInto(nil, strings.Clone(s), 0, check)
+				if !slices.Equal(got, want) || werr != nil || gerr != nil {
+					t.Fatalf("/%s/%s over bytes: %v %v, want %v %v", tc.pattern, tc.flags, got, gerr, want, werr)
+				}
+			}
+		}
+		if !re.HasNativeUTF16() || isASCII(tc.s) && !re.HasNative() {
+			t.Errorf("/%s/%s: no native code", tc.pattern, tc.flags)
+		}
+	}
+	if checks < 100 {
+		t.Fatalf("%d checks, want the matches long enough to ask many", checks)
+	}
+}
+
 // runtimeGC collects, and gives the cleanups time to run.
 func runtimeGC() {
 	runtime.GC()

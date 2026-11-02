@@ -5,6 +5,7 @@ package vm
 import (
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"weak"
@@ -135,4 +136,79 @@ func TestJITRegExpNativeRuntimeCollected(t *testing.T) {
 		}
 	}
 	t.Fatal("a closed runtime with native patterns is never collected")
+}
+
+// JIT runtimes on goroutines of their own run one compiled script -- the
+// same literals, the same sources of the patterns it builds -- while the
+// collector runs and gives closed runtimes' code back: each compiles its own
+// patterns, and so its own code, in its own arena, and gets what a runtime
+// without the JIT gets. A pattern's native state is its runtime's: the
+// regexp cache is the runtime's, and a pattern goroutines share (Concurrent)
+// has none. Run under -race.
+func TestJITRegExpNativeConcurrentRuntimes(t *testing.T) {
+	fn := compileForTest(t, regexpNativeSetup+`
+var acc = [];
+for (var i = 0; i < 40; i++) {
+  var re = new RegExp("([a-z0-9]+)@([a-z]+)[.]com", i % 2 ? "i" : "im");
+  acc.push(re.exec("mail bob" + (i % 7) + "@Example.com now")[2]);
+  for (var k = 0; k < 10; k++) new RegExp("x" + k + "y+").test("x" + k + "yyy");
+}
+acc.join() + run(3) + wide(3)`)
+	plain := New(Config{})
+	want, err := plain.Run(fn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantS := want.String().Go()
+	plain.Close()
+	stop := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				runtime.GC()
+			}
+		}
+	}()
+	var wg sync.WaitGroup
+	errs := make(chan string, 16)
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for round := 0; round < 3; round++ {
+				r := New(Config{JIT: true})
+				for k := 0; k < 3; k++ {
+					v, err := r.Run(fn)
+					if err != nil {
+						errs <- err.Error()
+						return
+					}
+					if got := v.String().Go(); got != wantS {
+						errs <- "differs: " + got
+						return
+					}
+				}
+				native := 0
+				for _, re := range r.regexpCache {
+					if re.HasNative() || re.HasNativeUTF16() {
+						native++
+					}
+				}
+				if native < 8 {
+					errs <- "too few native patterns"
+				}
+				r.Close()
+				r.ReleaseClosed()
+			}
+		}()
+	}
+	wg.Wait()
+	close(stop)
+	close(errs)
+	for e := range errs {
+		t.Error(e)
+	}
 }
