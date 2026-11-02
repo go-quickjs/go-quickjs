@@ -216,7 +216,7 @@ func (l *regexpLeaf[_]) match(r *Runtime, this Value, args []Value) (Value, erro
 	if dead == o {
 		return Obj(l.dummyOf(r)), nil
 	}
-	return Obj(r.buildMatchResult(re, caps, s)), nil
+	return Obj(matchResultOf[struct{}](r, re, caps, s)), nil
 }
 
 // dummyOf is what exec gives back for its result where nothing reads it
@@ -289,7 +289,7 @@ func (l *regexpLeaf[_]) stateful(r *Runtime, o *Object, d *regexpData, s *String
 	if dead {
 		return Obj(l.dummyOf(r)), nil
 	}
-	return Obj(r.buildMatchResult(re, caps, s)), nil
+	return Obj(matchResultOf[struct{}](r, re, caps, s)), nil
 }
 
 // framed reports whether exec's or test's call has a frame of its own, the
