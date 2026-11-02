@@ -58,6 +58,11 @@ func opHook[_ any](b *tbuilder, pc int, code []bytecode.Instr, more bool) (int, 
 		if literalField[struct{}](b, pc, in) {
 			return 0, true
 		}
+	case bytecode.OpBinLocal:
+		// "" + x of a local, and its store (zzz_emptyadd.go).
+		if skip, ok, handled := emptyAddOp[struct{}](b, pc, code, more); handled {
+			return skip, ok
+		}
 	}
 	return b.op(pc, in, code, more)
 }
