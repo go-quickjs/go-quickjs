@@ -3053,6 +3053,16 @@ first, as the rest of the plan is.
   `runtime.AddCleanup`, `Validate` accepting Opaque, String and
   Uninitialized literals, layout asserts at compile time, `qjs --jit`
   falling back silently in builds without the tag (*unchecked*).
+- `push`: growing the array (`growslice`) is half the time, and the
+  native push re-checks the prototypes on every iteration. V8 hoists
+  those checks out of the loop, and our JIT doesn't do that kind of
+  hoisting yet. Found on `array_push_large` (8,192 pushes onto `[]`) at
+  `fb40baf`: 20.5 ns a push with the JIT, Node 4.1. The growth is reached
+  through the host exit into `pureElemOp`, its time memclr of large
+  blocks, heap-profile sampling and copy barriers; the native push is
+  about 100 instructions an iteration, re-checking Array.prototype and
+  Object.prototype, counting the call and storing to the keep cell
+  (2026-11-01).
 
 **The JIT, the collector and allocation**
 
