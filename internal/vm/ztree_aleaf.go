@@ -45,6 +45,16 @@ var leafOps [elemNativeFirst]leafFunc
 // jitPlainCall -- as the memory meter allows: a function of leafOps' that
 // did, with the runtime's list of the functions, had cost a string's at()
 // in the interpreter 10% more than its frame, in the four calls between.
+//
+// A leaf may be applied and then made again: where its function returns
+// an error, each of those calls makes the call again with a frame, and a
+// pure body that gives up after it is evaluated again from its start
+// (pureCallAt). A leaf that writes -- a DataView's setter -- therefore
+// fails only before it writes, and pureInvoke applies it only where the
+// body may store (mayStore), as pureElemOp's stores; one that only reads,
+// or whose effects are the same made twice (a RegExp's exec or test,
+// neither global nor sticky: a fresh result, the legacy statics set to the
+// same match, lastIndex read and not written), may be applied anywhere.
 var leafChecks [elemLeafEnd]func(r *Runtime, this Value, args []Value) bool
 
 // setElemOp gives the built-in function o the frameless application op

@@ -823,8 +823,11 @@ func (r *Runtime) pureInvoke(callee, this Value, args []Value, depth int, maySto
 		}
 	}
 	if op := fd.elemOp; op >= elemNativeFirst {
-		// Its own function, where its check passes (leafChecks).
-		if r.meter != nil || !leafChecks[op](r, this, args) {
+		// Its own function, where its check passes (leafChecks) -- but a
+		// DataView's setter, which writes, only where the body may store:
+		// a body that gave up after it is evaluated again with a frame,
+		// and would write again.
+		if r.meter != nil || !mayStore && op >= elemViewSet1 && op <= elemViewSetBig || !leafChecks[op](r, this, args) {
 			return Undefined, false
 		}
 		v, err := fd.native(r, this, args)
