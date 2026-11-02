@@ -175,6 +175,11 @@ func (re *Regexp) MatchCheckedInto(dst []int, units []uint16, start int, check f
 	if start > len(units) {
 		return nil, nil
 	}
+	if re.prog.classOnly {
+		if m, ok := re.classMatch(dst, units, start, re.flags&FlagSticky != 0); ok {
+			return m, nil
+		}
+	}
 	return re.exec(dst, units, start, check, re.flags&FlagSticky != 0)
 }
 
@@ -187,6 +192,11 @@ func (re *Regexp) SearchCheckedInto(dst []int, units []uint16, start int, check 
 	}
 	if start > len(units) {
 		return nil, nil
+	}
+	if re.prog.classOnly {
+		if m, ok := re.classMatch(dst, units, start, false); ok {
+			return m, nil
+		}
 	}
 	return re.exec(dst, units, start, check, false)
 }

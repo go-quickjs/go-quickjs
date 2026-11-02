@@ -104,7 +104,12 @@ type program struct {
 	// no group, no class, no case folding, no unicode flag -- so that a match
 	// is where they are found, which a search answers without the matcher.
 	litOnly *literal
-	classes []*charSet
+	// classOnly is set where the pattern is one character class and
+	// nothing else, classes[0], so that a match is the first unit the
+	// class takes in, which a search answers without the matcher (see
+	// classonly.go).
+	classOnly bool
+	classes   []*charSet
 	// folds holds the characters each opCharFold matches.
 	folds []foldSet
 	// runs holds the code units each opString matches.
@@ -184,6 +189,7 @@ func compileNodeFor(n node, flags Flags, utf8 bool) *program {
 	for i, s := range c.prog.classes {
 		c.prog.asciiClasses[i] = s.asciiMembers(c.prog.unicodeFold)
 	}
+	c.prog.classOnly = !utf8 && classOnlyOf(n, c.prog.code)
 	return c.prog
 }
 

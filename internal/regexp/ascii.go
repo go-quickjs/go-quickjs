@@ -29,7 +29,11 @@ func (re *Regexp) MatchASCIIInto(dst []int, s string, start int, check func() er
 	if start > len(s) {
 		return nil, nil
 	}
-	return re.execASCII(dst, unsafe.Slice(unsafe.StringData(s), len(s)), start, check, re.flags&FlagSticky != 0)
+	b := unsafe.Slice(unsafe.StringData(s), len(s))
+	if re.prog.classOnly {
+		return re.classMatchASCII(dst, b, start, re.flags&FlagSticky != 0), nil
+	}
+	return re.execASCII(dst, b, start, check, re.flags&FlagSticky != 0)
 }
 
 // MatchASCIICheckedInto is MatchCheckedInto for a subject every byte of which
@@ -43,7 +47,11 @@ func (re *Regexp) MatchASCIICheckedInto(dst []int, s string, start int, check fu
 	if start > len(s) {
 		return nil, nil
 	}
-	return re.execASCIILent(dst, unsafe.Slice(unsafe.StringData(s), len(s)), start, check, re.flags&FlagSticky != 0)
+	b := unsafe.Slice(unsafe.StringData(s), len(s))
+	if re.prog.classOnly {
+		return re.classMatchASCII(dst, b, start, re.flags&FlagSticky != 0), nil
+	}
+	return re.execASCIILent(dst, b, start, check, re.flags&FlagSticky != 0)
 }
 
 // SearchASCIICheckedInto is SearchCheckedInto for an ASCII subject, as
@@ -55,7 +63,11 @@ func (re *Regexp) SearchASCIICheckedInto(dst []int, s string, start int, check f
 	if start > len(s) {
 		return nil, nil
 	}
-	return re.execASCIILent(dst, unsafe.Slice(unsafe.StringData(s), len(s)), start, check, false)
+	b := unsafe.Slice(unsafe.StringData(s), len(s))
+	if re.prog.classOnly {
+		return re.classMatchASCII(dst, b, start, false), nil
+	}
+	return re.execASCIILent(dst, b, start, check, false)
 }
 
 // execASCIILent is execASCII with the matcher exec would borrow: its
