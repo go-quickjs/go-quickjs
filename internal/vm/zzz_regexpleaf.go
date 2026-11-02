@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"errors"
 	"sync"
 
 	"github.com/go-quickjs/go-quickjs/internal/regexp"
@@ -63,11 +64,13 @@ var regexpLeafOnce sync.Once
 func regexpLeaves[_ any](r *Runtime, p *Object, search NativeFunc) {
 	r.defMethod(p, "search", 1, search)
 	regexpLeafOnce.Do(regexpLeafChecks[struct{}])
-	if fd := r.regexpExecFn.fn(); fd != nil {
-		fd.elemOp = elemRegExpExec
+	if fd := r.regexpExecFn.fn(); fd != nil && fd.native != nil {
+		l := &regexpLeaf[struct{}]{slow: fd.native}
+		fd.native, fd.elemOp = l.match, elemRegExpExec
 	}
-	if fd := r.regexpTestFn.fn(); fd != nil {
-		fd.elemOp = elemRegExpTest
+	if fd := r.regexpTestFn.fn(); fd != nil && fd.native != nil {
+		l := &regexpLeaf[struct{}]{test: true, slow: fd.native}
+		fd.native, fd.elemOp = l.match, elemRegExpTest
 	}
 }
 
@@ -77,11 +80,114 @@ func regexpLeafChecks[_ any]() {
 	leafChecks[elemRegExpExec], leafChecks[elemRegExpTest] = exec.check, test.check
 }
 
-// regexpLeaf is exec's leaf, or test's where test is set. Its method is
-// what would be a closure: a generic function's closures are laid out
-// ahead of every generic instantiation there was.
+// regexpLeaf is exec's leaf, or test's where test is set, and the
+// built-in's own function, slow. Its methods are what would be closures: a
+// generic function's closures are laid out ahead of every generic
+// instantiation there was.
 type regexpLeaf[_ any] struct {
+	slow NativeFunc
 	test bool
+}
+
+// match is exec's or test's function (funcData.native): the built-in's
+// own, slow, for anything but a string matched by a RegExp whose lastIndex
+// is a number -- and, for test, whose exec is the built-in -- which it
+// matches in one pass, as the built-in does: regexpMatch's steps, without
+// what the built-in asks first of a value that may be anything -- its
+// receiver's data, its argument's conversion, lastIndex's -- and without
+// the calls between. lastIndex, a number, converts calling nothing, and
+// matters only to a global or a sticky pattern (stateful). A match is
+// asked the check regexpMatch would ask (a deadline's, an abort's) and its
+// errors are regexpMatch's, the step budget's SyntaxError among them, and
+// so is a write of lastIndex that cannot be: a leaf's call meets none, its
+// RegExp neither global nor sticky, its pattern one no matcher matches
+// (regexp's NeverFails). Every tier calls it, the leaf's check passed or
+// not: the interpreter, the tree tier and native code's leaf routine.
+func (l *regexpLeaf[_]) match(r *Runtime, this Value, args []Value) (Value, error) {
+	if len(args) == 0 || !args[0].IsString() || !this.IsObject() {
+		return l.slow(r, this, args)
+	}
+	o := this.Object()
+	d, ok := o.dataOf().(*regexpData)
+	if !ok || o.class != ClassRegExp || len(o.vals) == 0 || !o.vals[0].IsNumber() || l.test && !r.execIsBuiltin(this) {
+		return l.slow(r, this, args)
+	}
+	re, s := d.re, args[0].String()
+	if re.Flags()&(regexp.FlagGlobal|regexp.FlagSticky) != 0 {
+		return l.stateful(r, o, d, s)
+	}
+	var check func() error
+	if (r.abort != nil || r.ctx != nil && r.ctx.Done() != nil) && !re.NeverFails(s.ascii) {
+		check = r.checkInterruptNow
+	}
+	j := subjectOf(s)
+	caps, err := j.match(re, r.legacyRegExp.spare(), 0, check)
+	if err != nil {
+		return l.failed(r, err)
+	}
+	if caps == nil {
+		if l.test {
+			return False, nil
+		}
+		return Null, nil
+	}
+	r.takeLegacyMatch(d.legacy(), s, caps)
+	if l.test {
+		return True, nil
+	}
+	return Obj(r.buildMatchResult(re, caps, s)), nil
+}
+
+// stateful is match's of s by o, d's RegExp, global or sticky: from where
+// lastIndex, a number, says, and written back, as regexpMatch's
+// stateful branch matches.
+func (l *regexpLeaf[_]) stateful(r *Runtime, o *Object, d *regexpData, s *String) (Value, error) {
+	re := d.re
+	li, err := r.toLength(o.vals[0])
+	if err != nil {
+		return Undefined, err
+	}
+	start := int(min(li, maxStringLength+1))
+	j := subjectOf(s)
+	var caps []int
+	if start <= j.len() {
+		if re.Flags()&(regexp.FlagUnicode|regexp.FlagUnicodeSets) != 0 && j.inPair(start) {
+			start--
+		}
+		var check func() error
+		if (r.abort != nil || r.ctx != nil && r.ctx.Done() != nil) && !re.NeverFails(s.ascii) {
+			check = r.checkInterruptNow
+		}
+		if caps, err = j.match(re, r.legacyRegExp.spare(), start, check); err != nil {
+			return l.failed(r, err)
+		}
+	}
+	if caps == nil {
+		if err := r.setLastIndex(o, Int(0)); err != nil {
+			return Undefined, err
+		}
+		if l.test {
+			return False, nil
+		}
+		return Null, nil
+	}
+	if err := r.setLastIndex(o, Int(caps[1])); err != nil {
+		return Undefined, err
+	}
+	r.takeLegacyMatch(d.legacy(), s, caps)
+	if l.test {
+		return True, nil
+	}
+	return Obj(r.buildMatchResult(re, caps, s)), nil
+}
+
+// failed is match's error where the matcher's match failed, as
+// regexpMatch makes it: the step budget's SyntaxError, or the check's.
+func (l *regexpLeaf[_]) failed(r *Runtime, err error) (Value, error) {
+	if errors.Is(err, regexp.ErrComplexity) {
+		return Undefined, r.throwError(errSyntax, "%s", err.Error())
+	}
+	return Undefined, err
 }
 
 // check is the leaf's check (leafChecks). A global or a sticky pattern,
