@@ -1272,8 +1272,13 @@ func (r *Runtime) snapshotProps(o *Object, names ...string) []builtinProp {
 	return out
 }
 
-// propsIntact reports whether o's properties are still those recorded.
+// propsIntact reports whether o's properties are still those recorded: o is
+// RegExp.prototype or RegExp, and want one of the lists its realm recorded
+// of it, every one of which a pristine object still has (armPristine).
 func propsIntact(o *Object, want []builtinProp) bool {
+	if s := o.shape; s != nil && s.pristine {
+		return true
+	}
 	keys, vals := o.keys(), o.vals
 	for k := range want {
 		e := &want[k]

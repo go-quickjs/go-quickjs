@@ -60,6 +60,9 @@ func (r *Runtime) initRealm() {
 	// and a realm is built once.
 	r.funcSlab, r.building = nil, false
 	r.shapes.building = false
+	// RegExp.prototype and RegExp as the RegExp methods' fast paths want
+	// them, until a script changes them.
+	armRealm(r)
 	// What a RegExp literal's call of the built-in exec or test asks of
 	// RegExp.prototype, from native code (jitRegExpLitPool).
 	r.regexpProtoShape = r.proto.regexp.shape

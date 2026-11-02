@@ -359,6 +359,7 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 			// it has for it.
 			if obj.shape.keys[i].flags&(propPrivate|propAccessor|propUninit|propWritable) == propWritable {
 				obj.vals[i] = val
+				obj.shape.written()
 				return true, nil
 			}
 		} else if obj.flags&objExtensible != 0 && (key.IsIndex() && len(obj.elemsOf()) == 0 && noneIndexed(obj.proto) ||
@@ -412,17 +413,20 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 		// which is what makes `f.name = "x"` silently do nothing. An ordinary
 		// object synthesizes nothing, which is the common case and worth not
 		// asking about.
-		if o.class == ClassFunction && (key == atomName || key == atomLength) {
-			if fd := o.fn(); fd != nil && !fd.propsMaterialized {
-				return false, r.assignFailed(key, strict,
-					"cannot assign to read-only property %q")
+		if o.class == ClassFunction {
+			if key == atomName || key == atomLength {
+				if fd := o.fn(); fd != nil && !fd.propsMaterialized {
+					return false, r.assignFailed(key, strict,
+						"cannot assign to read-only property %q")
+				}
 			}
-		}
-		// A .prototype not built yet is an own property all the same, so it is
-		// built before the walk looks for one: assigning to it must overwrite
-		// that property rather than create a fresh, enumerable one.
-		if o.class == ClassFunction && key == atomPrototype {
-			r.materializeFunctionProto(o)
+			// A .prototype not built yet is an own property all the same, so
+			// it is built before the walk looks for one: assigning to it must
+			// overwrite that property rather than create a fresh, enumerable
+			// one.
+			if key == atomPrototype {
+				r.materializeFunctionProto(o)
+			}
 		}
 		// The other synthesized own properties -- an array's length, a string
 		// wrapper's characters, a typed array's elements -- are own properties

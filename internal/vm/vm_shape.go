@@ -88,6 +88,24 @@ type shape struct {
 	// checks against the table; the object makes an index of its own when it
 	// adds a key.
 	borrowed bool
+	// pristine says, on the layout of RegExp.prototype or of RegExp, that
+	// no property of the object has been written or defined since the
+	// realm built it (armPristine): what the RegExp methods' fast paths
+	// ask of it (propsIntact) is then so without comparing a property, as
+	// V8's protectors answer. Only such an object's own layout, unique and
+	// remembered, is ever pristine, and it stays so only until a value of
+	// its table is written in place or an accessor's pair changed -- every
+	// write but through a cache's entry clears it (written): an assignment's
+	// to an ordinary object's (setProp, setPropCached, jitStoreProp), a
+	// definition's (setFlagsAt, before setOwnRaw's and defineAccessor's) --
+	// or its layout changes, which gives the object another, as it does any
+	// remembered unique layout (layoutChanged, shapeAdded). No cache's entry
+	// writes through it: an entry for a write of a property the object has
+	// is made after the first such write, which cleared it, and native
+	// code's megamorphic writes find no entry of it they may write through
+	// (megaFill). RegExp, a function, whose assignments the walk makes, is
+	// armed only for an accessor, which no assignment writes.
+	pristine bool
 	// n is how many properties the layout has.
 	n int32
 	// next and nextEdge are the first transition out of the shape, which is
@@ -506,6 +524,15 @@ func (root *shape) noteBuilt(n int) {
 	if root.built++; root.built >= slackTracking {
 		root.tracked = true
 		root.slack = root.used
+	}
+}
+
+// written is called as a value of the table of an object of layout s is
+// written in place, other than through a cache's entry: the object, if
+// pristine, is no longer.
+func (s *shape) written() {
+	if s.pristine {
+		s.pristine = false
 	}
 }
 
@@ -1509,6 +1536,7 @@ func (r *Runtime) setPropCached(c *propCache, o *Object, key Atom, v Value, stri
 		// An entry for dictionary objects: a plain writable property the
 		// object has, written in its table (dictShape).
 		if i := o.findOwn(key); i >= 0 && o.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted|propUninit|propWritable) == propWritable {
+			o.shape.written()
 			o.vals[i] = v
 			return nil
 		}
@@ -1520,6 +1548,7 @@ func (r *Runtime) setPropCached(c *propCache, o *Object, key Atom, v Value, stri
 		// ast.type = null over Typescript's AST nodes of every class, which
 		// had been setProp's whole walk.
 		if i := o.findOwn(key); i >= 0 && o.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted|propUninit|propWritable) == propWritable {
+			o.shape.written()
 			o.vals[i] = v
 			return nil
 		}

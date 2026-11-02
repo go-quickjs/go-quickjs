@@ -730,7 +730,9 @@ func (s *jitState) megaFill(o *Object, key Atom) {
 		return
 	}
 	idx := uint32(i)
-	if flags&propWritable != 0 {
+	if flags&propWritable != 0 && !sh.pristine {
+		// Not a pristine object's, whose writes are left to Go, which
+		// tells it it is no longer (shape's pristine).
 		idx |= abi.MegaWritable
 	}
 	// Remembered, so that it never changes, as any cache's shape.

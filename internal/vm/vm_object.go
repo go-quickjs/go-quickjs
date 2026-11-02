@@ -1065,6 +1065,9 @@ func (o *Object) propAt(i int32) Property {
 // the object's layout.
 func (o *Object) setFlagsAt(i int32, flags propFlags) {
 	if o.shape.keys[i].flags == flags {
+		// What its callers change in place next -- the value (setOwnRaw),
+		// an accessor's pair (defineAccessor) -- its layout does not show.
+		o.shape.written()
 		return
 	}
 	if t := o.shape.reconfigured(i, flags); t != nil {
