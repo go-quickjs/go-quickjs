@@ -566,6 +566,10 @@ type Realm struct {
 	// (regexpLeaves), is told that nothing reads the result of the call
 	// about to be made (regexpLeaf's dead).
 	regexpExecDead **Object
+	// strReplaceDead is where String.prototype.replace, the function
+	// strReplaceFn holds, is told so of the call about to be made, of its
+	// RegExp (replaceDead's dead).
+	strReplaceDead **Object
 	jitRealmFields
 	genNextFn *Object
 }

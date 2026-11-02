@@ -79,6 +79,7 @@ func regexpLeaves[_ any](r *Runtime, p *Object, search NativeFunc) {
 		l := &regexpLeaf[struct{}]{test: true, slow: fd.native}
 		fd.native, fd.elemOp = l.match, elemRegExpTest
 	}
+	replaceDeadOf[struct{}](r)
 }
 
 // regexpLeafChecks gives the leaves their checks.
