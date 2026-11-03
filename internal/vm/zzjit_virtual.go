@@ -56,8 +56,9 @@ func (fb *jitFeedback) VirtualRoot(pool uintptr) (uintptr, uintptr, bool) {
 // prototype, its properties' values, words of others among them -- one for
 // each home, which every slot naming it shares, as the code would have
 // made one: as V8's deoptimizer materializes the objects escape analysis
-// removed. The homes are cleared after.
-func (r *Runtime) jitMaterializeObjects(f *frame, e *jitEntry) {
+// removed. The homes are cleared after. The frame's slots end at the VM
+// stack's limit, where a native callee's frame begins (jitMaterializeBelow).
+func (r *Runtime) jitMaterializeObjects(f *frame, e *jitEntry, limit int) {
 	type made struct {
 		home, fields int
 		o            *Object
@@ -96,7 +97,7 @@ func (r *Runtime) jitMaterializeObjects(f *frame, e *jitEntry) {
 	for i := range f.locals {
 		fix(&f.locals[i])
 	}
-	end := min(len(r.stack), f.base+max(f.cl.fn.MaxStack, e.loopSlots, e.ssaHomes))
+	end := min(len(r.stack), limit, f.base+max(f.cl.fn.MaxStack, e.loopSlots, e.ssaHomes))
 	for i := f.base; i < end; i++ {
 		fix(&r.stack[i])
 	}

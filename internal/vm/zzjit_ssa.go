@@ -8143,11 +8143,23 @@ func (r *Runtime) jitPushLoopFrame(f *frame, loop uint64, written bool) {
 // nothing of the frame before: the exit has written it, its records and
 // cells.
 func (r *Runtime) jitMaterialize(f *frame, e *jitEntry) {
+	r.jitMaterializeBelow(f, e, len(r.stack))
+}
+
+// jitMaterializeBelow is jitMaterialize for a frame whose slots end at the
+// VM stack's limit: a native caller's level (jitUnwindNative), whose
+// callee's frame begins where its operands end. Past them, its homes and
+// its loops' slots are its callee's slots -- words naming the callee's
+// objects not made, by the callee's homes -- which, read as the caller's,
+// had been made of the caller's homes: objects of a shape that was another
+// object's field, which the callee then read (RayTrace's Color.addScalar
+// under the JIT's stress).
+func (r *Runtime) jitMaterializeBelow(f *frame, e *jitEntry, limit int) {
 	if e == nil || f.cl == nil {
 		return
 	}
 	if e.ssaHomes != 0 {
-		r.jitMaterializeObjects(f, e)
+		r.jitMaterializeObjects(f, e, limit)
 	}
 	if len(e.ssaMade) == 0 {
 		return
@@ -8157,7 +8169,7 @@ func (r *Runtime) jitMaterialize(f *frame, e *jitEntry) {
 	s := r.jit
 	clear(s.made)
 	s.made = s.made[:0]
-	r.jitMaterializeIn(f, f, e, max(f.cl.fn.MaxStack, e.loopSlots))
+	r.jitMaterializeIn(f, f, e, min(max(f.cl.fn.MaxStack, e.loopSlots), limit-f.base))
 }
 
 // jitMade is a closure Go made at an exit in place of its template, on the
@@ -12176,9 +12188,18 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure, made bool
 				jitReopenCells(f, c)
 			}
 			if !l.inline {
-				// The closures its code did not make, where its frame names
-				// them.
-				r.jitMaterialize(f, r.jitEntryOf(l.cl))
+				// The closures and objects its code did not make, where its
+				// frame names them: its slots, up to its native callee's
+				// frame -- an inlined callee's slots, past its operands,
+				// are its code's, which name its homes.
+				limit := len(r.stack)
+				for j := k + 1; j < n; j++ {
+					if !s.unwinding[start+j].inline {
+						limit = s.unwinding[start+j].base
+						break
+					}
+				}
+				r.jitMaterializeBelow(f, r.jitEntryOf(l.cl), limit)
 			} else if l.owner != nil && len(l.owner.ssaMade) != 0 {
 				// Those the code that inlined it did not make, given it --
 				// a closure the root made and passed to a callee calling it
