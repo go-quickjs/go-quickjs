@@ -2497,6 +2497,11 @@ The rounds that followed, each measured as above. The commit says more.
   - Go's memory profiler at its default rate unwinds the interpreter's
     deep stack at each sample, 3.6% of `regexp_ascii`'s samples; v8bench
     leaves `runtime.MemProfileRate` as it is.
+  - An exec's cost before its matcher runs: after `62929009`..`2a3ccebc`
+    (2026-11-03), `/(a)?/.test` takes 203 ns against Node's 136 ns
+    (`--jitless`), and Octane's RegExp without the JIT is 310 ms against
+    Node `--jitless`'s 302 (283 with the JIT). Each call of a leaf's exec
+    pays that cost however little the match does.
 - **Found by the round of 2026-10-21** (`04e358b`..`e1f5608`), not done:
   - `in`: a top-level `in` runs the interpreter's own case, which only a
     change to `executeAt` would give the tree's answer; symbol keys and
