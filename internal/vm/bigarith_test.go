@@ -66,5 +66,14 @@ func TestBigArithKeepsSmallResultsApart(t *testing.T) {
 	}
 }
 
-// heapOf is b as a Value as it is: a BigInt of its own, whatever its value.
-func heapOf(b *BigInt) Value { return heapBig(b) }
+// heapOf is b as a Value as it is: a BigInt of its own, whatever its value
+// -- but zero, which no BigInt on the heap is, and is held in its Value.
+// The arithmetic's operands read a heap BigInt's words past its header
+// (heapParts), which for zero, of none, would point past its allocation:
+// checkptr=2 stopped the package's tests there.
+func heapOf(b *BigInt) Value {
+	if b.digits() == 0 {
+		return Big(b)
+	}
+	return heapBig(b)
+}
