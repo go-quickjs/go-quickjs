@@ -139,7 +139,7 @@ rounds:
 			}
 		}
 		if replaced {
-			rewrite(f, find)
+			rewriteChain(f, subst)
 		}
 		// Another round is for what this one's replacements may simplify
 		// further: a phi its back edge's operand, replaced after the phi
@@ -1028,6 +1028,58 @@ func trivialPhi(phi *Value) bool {
 		same = a
 	}
 	return true
+}
+
+// rewriteChain is rewrite of what subst says, by value ID, each value is
+// replaced with, followed to its end: its walk with the look-up in line,
+// at every value, operand and slot, where a call of a function's value,
+// which cannot be, had been a third of the walk's time.
+func rewriteChain(f *Func, subst []*Value) {
+	find := func(v *Value) *Value {
+		for v.ID < len(subst) && subst[v.ID] != nil {
+			v = subst[v.ID]
+		}
+		return v
+	}
+	state := func(s *FrameState) {
+		if s == nil {
+			return
+		}
+		for i, v := range s.Slots {
+			if v != nil && v.ID < len(subst) && subst[v.ID] != nil {
+				s.Slots[i] = find(v)
+			}
+		}
+	}
+	for _, b := range f.Blocks {
+		kept := b.Values[:0]
+		// The guards of an instruction share its state, rewritten once.
+		var last *FrameState
+		for _, v := range b.Values {
+			if v.ID < len(subst) && subst[v.ID] != nil {
+				continue
+			}
+			for i, a := range v.Args {
+				if a != nil && a.ID < len(subst) && subst[a.ID] != nil {
+					v.Args[i] = find(a)
+				}
+			}
+			if v.Op == OpLoadCell || v.Op == OpKept {
+				v.Shadow = v.Args[0]
+			}
+			if v.State != last {
+				state(v.State)
+				last = v.State
+			}
+			kept = append(kept, v)
+		}
+		b.Values = kept
+		if b.Control != nil {
+			b.Control = find(b.Control)
+		}
+		state(b.State)
+		state(b.Header)
+	}
 }
 
 // rewrite replaces every use of a value with find's answer for it.

@@ -249,12 +249,7 @@ func dropRekeeps(f *Func) {
 			}
 		}
 	}
-	rewrite(f, func(v *Value) *Value {
-		for v.ID < len(subst) && subst[v.ID] != nil {
-			v = subst[v.ID]
-		}
-		return v
-	})
+	rewriteChain(f, subst)
 }
 
 // isRekeep reports whether k, a keep, takes a copy an earlier keep of its
