@@ -31,8 +31,8 @@ import (
 // It counts no call of Go (ssaStats' goCalls): what such a call costs is
 // a native operation's, which the code's profit (jitSSAProfit) counts as
 // its work. None of these calls is one the JIT learns a native form of at
-// its call of Go (jitCallSeen): push and pop, Math.random and the searches
-// are not taken here.
+// its call of Go (jitCallSeen): push of one value and pop, Math.random and
+// the searches are not taken here.
 func (r *Runtime) jitGoCallPlain(ctx *abi.Context) bool {
 	// Asked first, of the operation's kind and its function's identity
 	// alone: most calls of Go are of none of these, which jitGoCall makes.
@@ -142,9 +142,13 @@ func (r *Runtime) jitGoInlined(ctx *abi.Context, cl *closure, addr uintptr) *clo
 // nothing: a leaf's (jitLeafOp), applied as every tier applies it without
 // a frame (pureElemOp) -- a collection's lookup, addition or deletion on
 // its own kind of collection, a weak one's, Date.now, String(x) of a
-// primitive. The function is one of jitPlainSet's (jitGoCallPlain has
-// asked jitPlainFn), a built-in of this realm. It reports false for any
-// other call, which the built-in, called with its frame, is left to make.
+// primitive, hasOwnProperty, a push of other than one value, whose native
+// form native code learns for one alone (jitSeedBuiltin). A method call of
+// the realm's Function.prototype.call, G.call(recv, ...args), is G's call
+// of recv, as V8 reduces it: hasOwnProperty.call(o, k). The function is
+// one of jitPlainSet's (jitGoCallPlain has asked jitPlainFn), a built-in
+// of this realm. It reports false for any other call, which the built-in,
+// called with its frame, is left to make.
 func (r *Runtime) jitPlainCall(ctx *abi.Context, in bytecode.Instr, n int) (Value, bool) {
 	argc := int(in.A)
 	first := 1
@@ -159,8 +163,15 @@ func (r *Runtime) jitPlainCall(ctx *abi.Context, in bytecode.Instr, n int) (Valu
 	if !callee.IsObject() {
 		return Undefined, false
 	}
+	if callee.Object() == r.callFn && in.Op == bytecode.OpCallMethod && argc != 0 {
+		// G.call(recv, ...args): G the receiver, recv the first argument.
+		callee, this, first, argc = this, jitGoArg(ctx, first), first+1, argc-1
+		if !callee.IsObject() {
+			return Undefined, false
+		}
+	}
 	fd := callee.Object().fn()
-	if fd == nil || !jitLeafOp(fd.elemOp) || fd.realm != nil && fd.realm != r.Realm {
+	if fd == nil || !jitLeafOp(fd.elemOp) && (fd.elemOp != elemPush || argc == 1) || fd.realm != nil && fd.realm != r.Realm {
 		return Undefined, false
 	}
 	// The arguments where native code put them, each a Value's words
@@ -182,6 +193,11 @@ func (r *Runtime) jitPlainCall(ctx *abi.Context, in bytecode.Instr, n int) (Valu
 		return v, err == nil
 	case op > elemRandom:
 		return leafOps[op](r, this, args, true)
+	case op == elemPush:
+		if r.meter != nil {
+			return Undefined, false
+		}
+		return r.pureElemOp(op, this, args, true)
 	}
 	return r.collectionOp(fd.elemOp, this, args, true)
 }
@@ -357,6 +373,11 @@ func (r *Runtime) jitLeafSeen(ctx *abi.Context, in bytecode.Instr) {
 		return
 	}
 	o := callee.Object()
+	if o.fn() == nil || o.fn().elemOp == 0 {
+		// Function.prototype.call's of a leaf (jitPlainCall), which a
+		// leaf's call of Go of its own does not make.
+		return
+	}
 	for _, x := range jitTargets(e) {
 		if int(x.pc) == pc && x.leaf {
 			return

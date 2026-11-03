@@ -275,10 +275,15 @@ func (r *Runtime) recordJITSubstrings() {
 	}
 	r.jitPlainSet = [4]uint64{}
 	for _, o := range r.leafFns {
-		if fd := o.fn(); fd != nil && jitLeafOp(fd.elemOp) {
+		if fd := o.fn(); fd != nil && (jitLeafOp(fd.elemOp) || fd.elemOp == elemPush) {
 			s := jitPlainSlot(uintptr(unsafe.Pointer(o)))
 			r.jitPlainSet[s>>6] |= 1 << (s & 63)
 		}
+	}
+	if r.callFn != nil {
+		// G.call(recv, ...) of a leaf G (jitPlainCall).
+		s := jitPlainSlot(uintptr(unsafe.Pointer(r.callFn)))
+		r.jitPlainSet[s>>6] |= 1 << (s & 63)
 	}
 	for k, p := range [2]*Object{r.proto.mapIter, r.proto.setIter} {
 		r.jitMapNexts[k] = nil

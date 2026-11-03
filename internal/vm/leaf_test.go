@@ -9,15 +9,18 @@ import "testing"
 // again. Each leaf is asked of every receiver and up to two arguments of a
 // set of values of every kind -- numbers about every edge and every count's
 // bounds, strings of every kind, booleans, undefined, null, a BigInt,
-// symbols, objects and a String object -- with no memory meter, as the
-// leaves are called.
+// symbols, objects and a String object, typed arrays, one detached,
+// arguments objects, a function and the global object -- with no memory
+// meter, as the leaves are called.
 func TestNativeLeafChecksExact(t *testing.T) {
 	r := New(Config{})
 	defer func() { r.Close(); r.ReleaseClosed() }()
 	v, err := r.Run(compileForTest(t, `[0, 1, -1, 2, 3.7, -0, NaN, Infinity, -Infinity, 1e9, 2 ** 31, 0x10FFFF, 0x110000,
 		1.9, 36.5, 37, 100.9, 101, -0.5, 1e300, "", "a", "abc", "1", "-2", "1e9", "NFC", "NFKD", "NFX", "  x  ", "\uD83D\uDE00", "\uD800", "xy".repeat(300),
 		true, false, undefined, null, 5n, Symbol("s"), Symbol.for("r"), {}, [1], new String("w"), { valueOf() { return 2 } },
-		/["'&<>]/, /ab/, /[a-c]/iu, /a+b/, /x/g, /y/y, Object.freeze(/z/), new (class extends RegExp {})("[w]")]`))
+		/["'&<>]/, /ab/, /[a-c]/iu, /a+b/, /x/g, /y/y, Object.freeze(/z/), new (class extends RegExp {})("[w]"),
+		new Uint8Array(4), (() => { const b = new ArrayBuffer(8), t = new Float64Array(b); b.transfer(); return t })(),
+		(function () { return arguments })(1, 2), (function () { 'use strict'; return arguments })(1), function f(a, b) {}, globalThis]`))
 	if err != nil {
 		t.Fatal(err)
 	}

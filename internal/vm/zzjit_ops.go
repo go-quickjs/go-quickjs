@@ -474,6 +474,12 @@ func (r *Runtime) jitLeafApply(fd *funcData, this Value, args []Value) (Value, b
 		return v, err == nil
 	case op > elemRandom:
 		return leafOps[op](r, this, args, true)
+	case op == elemPush:
+		// Of other than one value (jitPlainCall).
+		if r.meter != nil {
+			return Undefined, false
+		}
+		return r.pureElemOp(op, this, args, true)
 	}
 	return r.collectionOp(fd.elemOp, this, args, true)
 }

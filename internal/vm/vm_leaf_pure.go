@@ -628,6 +628,9 @@ const (
 	elemViewSet4
 	elemViewSet8
 	elemViewSetBig
+	// Object.prototype.hasOwnProperty, on an object no proxy nor module
+	// namespace, of a key no object (zzz_hasownleaf.go).
+	elemObjHasOwn
 	// Native leaves a construction applies too, where new.target is the
 	// built-in itself (constructWithTarget): its call and its construction
 	// are the same, as Array's are. Array(...) and new Array(...).

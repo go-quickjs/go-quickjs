@@ -66,7 +66,8 @@ var regexpLeafOnce sync.Once
 
 // regexpLeaves is initStringRegExpMethods' last call: String.prototype's
 // search defined on p, as it was, and then the realm's exec and test given
-// their leaves' ops.
+// their leaves' ops, and Object.prototype's hasOwnProperty its own
+// (objectLeaves).
 func regexpLeaves[_ any](r *Runtime, p *Object, search NativeFunc) {
 	r.defMethod(p, "search", 1, search)
 	regexpLeafOnce.Do(regexpLeafChecks[struct{}])
@@ -80,6 +81,7 @@ func regexpLeaves[_ any](r *Runtime, p *Object, search NativeFunc) {
 		fd.native, fd.elemOp = l.match, elemRegExpTest
 	}
 	replaceDeadOf[struct{}](r)
+	objectLeaves[struct{}](r)
 }
 
 // regexpLeafChecks gives the leaves their checks.

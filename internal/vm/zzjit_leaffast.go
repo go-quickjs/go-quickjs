@@ -274,6 +274,9 @@ func (r *Runtime) jitLeafFormOf(st *abi.GoCallState) *jitLeafForm {
 	case op > elemRandom:
 		f := leafOps[op]
 		form.apply = func(r *Runtime, this Value, args []Value) (Value, bool) { return f(r, this, args, true) }
+	case op == elemPush:
+		// Of other than one value (jitPlainCall), as jitLeafApply makes it.
+		form.apply = func(r *Runtime, this Value, args []Value) (Value, bool) { return r.jitLeafApply(fd, this, args) }
 	default:
 		form.apply = func(r *Runtime, this Value, args []Value) (Value, bool) { return r.collectionOp(op, this, args, true) }
 	}
