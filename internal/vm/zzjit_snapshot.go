@@ -4,6 +4,7 @@ package vm
 
 import (
 	"fmt"
+	"math/bits"
 	"slices"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
@@ -322,9 +323,66 @@ func (s *jitSnapshot) ask(fb *jitFeedback, p *ir.Program) {
 	for pc := range p.Code {
 		op := p.Code[pc].Op
 		s.ops[pc] = op
+		asks := jitSnapAsks[op] &^ jitSnapSparse
 		for m := jitSnapMethod(0); int(m) < len(jitSnapAskers); m++ {
-			if jitSnapAsks[op]&(1<<m) != 0 {
+			if asks&(1<<m) != 0 {
 				jitSnapAskers[m](s, fb, pc)
+			}
+		}
+	}
+	s.askSparse(fb)
+}
+
+// jitSnapSparse are the methods asked at every PC (jitSnapAsks) whose
+// answer is false but at the few PCs a list of the function's entry, or
+// the tree tier's marks, name: Generic, EntryGeneric and Resumed. They are
+// asked at those alone (askSparse), each other PC answering its zero value
+// as a PC asked that answered nothing does. Asked at every PC, they were
+// half the questions a snapshot asked, three answering in 10,000 in the
+// SSR benchmark's first render.
+const jitSnapSparse = 1<<snapGeneric | 1<<snapEntryGeneric | 1<<snapResumed
+
+// askSparse asks fb the methods of jitSnapSparse at the PCs where they may
+// answer true: Generic where its own entry's guards failed (failed) or the
+// tree tier saw arithmetic meet a BigInt on the heap; EntryGeneric where
+// its entries failed; Resumed where Go has gone on (resumed), or after a
+// call of the function itself.
+func (s *jitSnapshot) askSparse(fb *jitFeedback) {
+	ask := func(m jitSnapMethod, pc int) {
+		if pc >= 0 && pc < s.codeLen && jitSnapAsks[s.ops[pc]]&(1<<m) != 0 {
+			if _, ok := s.answers[jitSnapKey{m, int64(pc)}]; !ok {
+				jitSnapAskers[m](s, fb, pc)
+			}
+		}
+	}
+	if own := fb.ownEntry(); own != nil {
+		for _, pc := range own.failed {
+			ask(snapGeneric, int(pc))
+		}
+	}
+	if t := jitTreeBigs(fb.fn, 0); t != nil {
+		for w := range t.heap {
+			for word := t.heap[w].Load(); word != 0; word &= word - 1 {
+				ask(snapGeneric, w<<5+bits.TrailingZeros32(word))
+			}
+		}
+	}
+	if fb.e != nil {
+		for _, pc := range fb.e.failedEntries {
+			ask(snapEntryGeneric, int(pc))
+		}
+	}
+	e := fb.e
+	if e == nil {
+		e = fb.r.jit.entryFor(fb.fn)
+	}
+	if e != nil {
+		for _, pc := range e.resumed {
+			ask(snapResumed, int(pc))
+		}
+		for _, x := range jitTargets(e) {
+			if x.cl != nil && x.cl.fn == fb.fn {
+				ask(snapResumed, int(x.pc)+1)
 			}
 		}
 	}
