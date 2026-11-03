@@ -645,7 +645,7 @@ deleted, which throws, Go refuses, having changed nothing: the code
 leaves for Go to make it there, and goes on after it. The call clears the
 deleted property's cell, so the analyses take it for a store of any key
 (`ssa`'s allocOnly): a value read from that property and used after it is
-kept first (`keepAcrossStores`), as across a call of a function; and every
+kept where it is read (`keepAcrossStores`), as across a call of a function; and every
 property operation after it checks the object's shape again.
 
 **Destructuring.** Destructuring from an iterator takes a cursor, as a

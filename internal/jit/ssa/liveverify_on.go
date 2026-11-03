@@ -2,6 +2,8 @@
 
 package ssa
 
+import "fmt"
+
 // verifyLiveness is set by the quickjs_verify build tag: each liveAcross
 // is checked against liveAcrossRef, the per-value liveness it replaced.
 const verifyLiveness = true
@@ -23,8 +25,16 @@ func liveAcrossRef(f *Func) ([]*Value, [][]*Value) {
 			}
 		}
 	}
+	return stores, liveAfterRef(f, stores, cands, nil)
+}
+
+// liveAfterRef is, for each of points, the candidates live after it: used
+// after it, where reads, if not nil, says an operand's use reads its value
+// (an operand of user, its i'th).
+func liveAfterRef(f *Func, points, cands []*Value, reads func(user *Value, i int) bool) [][]*Value {
+	stores := points
 	if len(stores) == 0 || len(cands) == 0 {
-		return stores, make([][]*Value, len(stores))
+		return make([][]*Value, len(stores))
 	}
 	nb := 0
 	for _, b := range f.Blocks {
@@ -70,8 +80,10 @@ func liveAcrossRef(f *Func) ([]*Value, [][]*Value) {
 				}
 				continue
 			}
-			for _, a := range v.Args {
-				use(a, b, i)
+			for j, a := range v.Args {
+				if reads == nil || reads(v, j) {
+					use(a, b, i)
+				}
 			}
 			if v.State != nil {
 				for _, s := range v.State.Slots {
@@ -131,5 +143,54 @@ func liveAcrossRef(f *Func) ([]*Value, [][]*Value) {
 			live[i] = append(live[i], c)
 		}
 	}
-	return stores, live
+	return live
+}
+
+// checkKeeps panics where a keep writes a keep cell that a value used
+// after it may hold its pointer word in, through its shadow: a phi of a
+// kept value, carried round a loop to the value's keep, not kept itself
+// (keepPhis). A keep's own value, read by its ref before, and a copy's,
+// whose number word alone it takes, are no reads of the pointer word.
+func checkKeeps(f *Func) {
+	var keeps, cands []*Value
+	for _, b := range f.Blocks {
+		for _, v := range b.Values {
+			switch {
+			case v.Op == OpKeep:
+				keeps = append(keeps, v)
+			case v.Type == Tagged && v.Shadow != nil:
+				cands = append(cands, v)
+			}
+		}
+	}
+	reads := func(user *Value, i int) bool {
+		return !(user.Op == OpKept && i == 1 || user.Op == OpKeep && i == 0 && len(user.Args) == 2)
+	}
+	live := liveAfterRef(f, keeps, cands, reads)
+	for i, k := range keeps {
+		for _, c := range live[i] {
+			seen := map[*Value]bool{}
+			var holds func(s *Value) bool
+			holds = func(s *Value) bool {
+				if s == nil || seen[s] {
+					return false
+				}
+				seen[s] = true
+				switch s.Op {
+				case OpKeep:
+					return s.Index == k.Index
+				case OpPhi:
+					for _, a := range s.Args {
+						if holds(a) {
+							return true
+						}
+					}
+				}
+				return false
+			}
+			if holds(c.Shadow) {
+				panic(fmt.Sprintf("ssa: %v keeps into cell %d, where %v, used after it, may hold its pointer word", k, k.Index, c))
+			}
+		}
+	}
 }

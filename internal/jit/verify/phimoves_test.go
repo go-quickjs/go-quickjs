@@ -127,8 +127,12 @@ func TestMirPhisCoalesced(t *testing.T) {
 	// 37 values spilled; with them, 150, 123, 37. With the lowering for
 	// native callers taking try statements and cursors (8a5c0ab..6a76211),
 	// three functions more have a callee's program, each as the same
-	// function's own, which the bounds above check: 156, 128, 37.
-	if total > 161 || loops > 130 || spills > 37 {
-		t.Errorf("%d edge moves, %d into loop headers, %d values spilled: want at most 161, 130, 37", total, loops, spills)
+	// function's own, which the bounds above check: 156, 128, 37. With
+	// values kept where they are made (ssa's keepAcrossStores), not before
+	// each store, the keep corpus's loops spill 9 values in all where they
+	// had 37, at two moves more on one loop's edges -- a phi kept, as
+	// well as the value it carries: 160, 132, 9.
+	if total > 161 || loops > 132 || spills > 9 {
+		t.Errorf("%d edge moves, %d into loop headers, %d values spilled: want at most 161, 132, 9", total, loops, spills)
 	}
 }

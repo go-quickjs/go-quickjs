@@ -194,6 +194,9 @@ rounds:
 	sc.subst = subst[:0]
 	f.shadowed, f.originsKept = true, true
 	fuseKeepRefs(f)
+	if verifyLiveness {
+		checkKeeps(f)
+	}
 	recount(f)
 	knownShapes(f)
 }

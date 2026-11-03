@@ -1233,9 +1233,6 @@ type scratch struct {
 	states []*FrameState
 	// aliases is the store passes' answers (newAliases).
 	aliases aliases
-	// reaching is reconstruct's: the definition of each kept value that
-	// reaches a block's start, by value and block, for those it has met.
-	reaching map[int]*Value
 	// shapes, shapeHeld, shapeEnds, shapeStarts and blockPos are
 	// knownShapes': the shape known of each value, the values known, what
 	// each block ends knowing, where in it, and each block's place.

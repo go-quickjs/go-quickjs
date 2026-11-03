@@ -73,12 +73,12 @@ func spillAccess(in x86asm.Inst) bool {
 	return false
 }
 
-// The keeps a store makes (ssa's OpKeep) are cheap (mir's keep): a run of
-// them tests the write-barrier flag once, at its first; each stores its
-// value's two words and makes its cell's address, no word moved through an
-// SSE register; and the pointer word read before (OpKeepRef) is a load
-// where it comes from a cell. A keep had taken thirteen instructions, a
-// keepref six.
+// Keeps (ssa's OpKeep) are cheap (mir's keep): a run of them -- a loop
+// header's phis', kept together -- tests the write-barrier flag once, at
+// its first; each stores its value's two words and makes its cell's
+// address, no word moved through an SSE register; and the pointer word
+// read before (OpKeepRef) is a load where it comes from a cell. A keep had
+// taken thirteen instructions, a keepref six.
 func TestMirKeepsCheap(t *testing.T) {
 	enc := abi.Encoding{ValueSize: 16, NumOffset: 0, RefOffset: 8,
 		Undefined: 0xFFF8000000000001, Null: 0xFFF8000000000002, True: 0xFFF8000000000103,
@@ -87,7 +87,7 @@ func TestMirKeepsCheap(t *testing.T) {
 	defer func() { mir.Annotate = false }()
 	mir.Annotate = true
 	keeps, runs, refs, fused := 0, 0, 0, 0
-	for _, src := range keepCorpus {
+	for _, src := range append(append([]string(nil), keepCorpus...), keepSwapCorpus...) {
 		for i, p := range lowered(t, src) {
 			f, err := ssa.BuildWith(p, props{p: p})
 			if err != nil {
@@ -182,10 +182,12 @@ func TestMirKeepsCheap(t *testing.T) {
 	t.Logf("%d keeps in %d runs, %d reading their pointer words, %d keeprefs", keeps, runs, fused, refs)
 }
 
-// keepRenameCorpus keeps values at stores in several blocks of one
-// function, each value kept again at each store while it is still used:
-// a use, an operand's or a frame state's slot, takes the copy kept last
-// before it in its block (ssa's reconstruct), or what reaches the block.
+// keepRenameCorpus keeps values used after stores in several blocks of
+// one function: each is kept once, where it is made, and every use of it,
+// an operand's or a frame state's slot, takes the copy (ssa's
+// keepAcrossStores). Kept at each store instead, as values had been, a
+// use took the copy kept last before it in its block, or what reached
+// the block.
 var keepRenameCorpus = []string{
 	`function f(o,n){let s=0;for(let i=0;i<n;i++){const p=o.a,q=o.b;o.a=q;s+=p.v;if(i&1){o.b=p;s+=q.v}else{o.c=q;s+=p.w}o.d=p;s+=p.v+q.v}return s}`,
 	`function f(o,g){const a=o.x,b=o.y;o.x=b;g(a);o.y=a;if(a.k){o.z=b;g(b)}o.w=a;return a.z+b.z}`,
