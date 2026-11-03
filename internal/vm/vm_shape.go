@@ -55,12 +55,28 @@ import (
 type shape struct {
 	tree   *shapeTree
 	parent *shape
+	// proto is the prototype of the layout's objects, which is so a part
+	// of it, as of V8's map, that an object holds no pointer to its own: an
+	// object with one has a shape, and one with none and no properties
+	// none (Object.proto). A shape a cache remembers says the object's
+	// prototype with its layout, and a new prototype is a new layout
+	// (setProto).
+	proto *Object
+	// roots are, on the layout of an object that is another's prototype,
+	// the empty layouts its objects start from, one for each class
+	// (rootFor), as V8's prototype info keeps Object.create's map.
+	roots  []*shape
 	keys   []propKey
 	key    Atom
 	flags  propFlags
 	unique bool
 	// loose says no cache may remember the shape: see the kinds above.
 	loose bool
+	// generic says, on a root, that it is rootFor's: a class's for a
+	// prototype, which sizes no object (outgrowProps), rather than a
+	// literal's or a constructor's. rootClass is the class.
+	generic   bool
+	rootClass Class
 	// extended says, on a shared shape, that a child has extended its keys'
 	// array in place: the next child's are a copy.
 	extended bool
@@ -203,7 +219,7 @@ func (r *Runtime) chainCell(p *Object) *protoCell {
 		if !shapeClass(p.class) || r.shapes.building {
 			return nil
 		}
-		p.shape = newUniqueShape(r.shapes, nil, nil)
+		p.shape = newUniqueShape(r.shapes, nil, nil, nil)
 	case s.loose:
 		if r.ensureProtoShape(p); p.shape.loose {
 			return nil
@@ -212,17 +228,17 @@ func (r *Runtime) chainCell(p *Object) *protoCell {
 		p.layoutChanged()
 	}
 	s = p.shape
-	if s.info == nil || s.info.up != p.proto {
-		if r.chainCell(p.proto) == nil {
+	if s.info == nil || s.info.up != p.proto() {
+		if r.chainCell(p.proto()) == nil {
 			return nil
 		}
 		if s.info == nil {
 			s.info = &protoInfo{cell: &protoCell{valid: true}}
 		}
-		if q := p.proto; q != nil {
+		if q := p.proto(); q != nil {
 			q.shape.info.users = append(q.shape.info.users, weak.Make(p))
 		}
-		s.info.up = p.proto
+		s.info.up = p.proto()
 	}
 	return s.info.cell
 }
@@ -335,12 +351,12 @@ func (r *Runtime) dictRead(c *propCache, o *Object, key Atom) (Value, bool) {
 		}
 		return o.vals()[i], true
 	}
-	if i >= 0 || o.proto != c.p1 || c.p1.shape != c.s1 {
+	if i >= 0 || o.proto() != c.p1 || c.p1.shape != c.s1 {
 		return Undefined, false
 	}
 	h := c.p1
 	if c.p2 != nil {
-		if h.proto != c.p2 || c.p2.shape != c.s2 {
+		if h.proto() != c.p2 || c.p2.shape != c.s2 {
 			return Undefined, false
 		}
 		h = c.p2
@@ -379,7 +395,7 @@ func (r *Runtime) fillDictCache(c *propCache, o *Object, key Atom) {
 	var up [2]*Object
 	h := o
 	for depth := 0; depth < 2; depth++ {
-		if h = h.proto; h == nil {
+		if h = h.proto(); h == nil {
 			return
 		}
 		r.ensureProtoShape(h)
@@ -422,29 +438,158 @@ func shapeClass(c Class) bool {
 	return true
 }
 
-// root is the empty layout of a class.
+// root is the empty layout of a class whose objects have no prototype, as
+// a cache meets one (ensureShape).
 func (t *shapeTree) root(c Class) *shape {
 	s := t.roots[c]
 	if s == nil {
-		s = &shape{tree: t}
+		s = &shape{tree: t, generic: true, rootClass: c}
 		t.roots[c] = s
 		t.count++
 	}
 	return s
 }
 
+// proto is o's prototype, its layout's: nil for an object with neither
+// properties nor a prototype, which has no layout.
+func (o *Object) proto() *Object {
+	if s := o.shape; s != nil {
+		return s.proto
+	}
+	return nil
+}
+
+// rootFor is the layout an object of class c with prototype p starts from,
+// with no properties: nil for no prototype. Objects of a class and a
+// prototype share it, kept on the prototype's own layout (roots) -- a node
+// of its tree, or, for a class whose objects join none or a prototype in
+// no tree, a loose template its objects leave as they are given a property
+// (shapeAdded). While the realm is being made, or once the tree is full,
+// each object gets one of its own. A prototype whose layout is in no tree --
+// a dictionary's, which a cache may remember and no tree made -- has its
+// objects join the tree of the chain above it, its runtime's, or a cache's
+// (rootIn).
+func rootFor(c Class, p *Object) *shape {
+	// The first root a prototype's layout keeps, a tree's, is most often
+	// the one: small enough to be made where an object is.
+	if p != nil && p.shape != nil {
+		if rs := p.shape.roots; len(rs) != 0 && rs[0].rootClass == c && rs[0].tree != nil {
+			return rs[0]
+		}
+	}
+	return rootIn(nil, c, p)
+}
+
+// rootIn is rootFor with tree, where the prototype's chain has none: the
+// runtime's, as a cache meets an object (ensureShape).
+func rootIn(tree *shapeTree, c Class, p *Object) *shape {
+	if p == nil {
+		return nil
+	}
+	ps := p.ownLayout()
+	t := ps.tree
+	for q := p.proto(); t == nil && !ps.loose && q != nil; q = q.proto() {
+		t = q.cacheTree()
+	}
+	if t == nil && !ps.loose {
+		t = tree
+	}
+	at := -1
+	for i, s := range ps.roots {
+		if s.rootClass == c {
+			if s.tree == nil && t != nil && shapeClass(c) && !t.building {
+				// A template made while p's layout was in no tree, which
+				// it has since joined (ensureProtoShape): its objects join
+				// it as well.
+				at = i
+				break
+			}
+			return s
+		}
+	}
+	var s *shape
+	switch {
+	case t != nil && t.building:
+		return newUniqueShape(t, p, nil, nil)
+	case t != nil && shapeClass(c) && t.count < maxShapes:
+		s = &shape{tree: t, proto: p, generic: true, rootClass: c}
+		t.count++
+	case t != nil && shapeClass(c):
+		return newUniqueShape(t, p, nil, nil)
+	default:
+		s = &shape{proto: p, loose: true, generic: true, rootClass: c}
+	}
+	if at >= 0 {
+		ps.roots[at] = s
+	} else {
+		ps.roots = append(ps.roots, s)
+	}
+	return s
+}
+
+// ownLayout is o's layout, made its own first if it is shared -- a node of
+// a tree, a loose template -- or if o has none: what keeps the roots of
+// the objects o is the prototype of, as V8 gives a prototype a map of its
+// own (OptimizeAsPrototype).
+func (o *Object) ownLayout() *shape {
+	s := o.shape
+	switch {
+	case s == nil:
+		s = newLooseShape(nil, nil)
+		o.shape = s
+	case !s.unique:
+		o.layoutChanged()
+		s = o.shape
+	}
+	return s
+}
+
+// setProto makes p o's prototype, which is its layout's: an object with no
+// properties takes the root its class's objects with that prototype share,
+// and one with properties a layout of its own, changed in place if no
+// cache has remembered it and a new one otherwise (layoutChanged), so
+// that no cache takes the object for what it was. The caller has done what
+// a prototype's change asks of the chains through o (setProtoOf).
+func (o *Object) setProto(p *Object) {
+	s := o.shape
+	switch {
+	case s == nil && p == nil || s != nil && s.proto == p:
+	case o.valn == 0 && (s == nil || !s.unique):
+		o.shape = rootFor(o.class, p)
+	default:
+		// Its table is as it was: what was pristine of it still is.
+		pristine := s.pristine
+		o.layoutChanged()
+		o.shape.proto, o.shape.pristine = p, pristine
+	}
+}
+
+// orRoot is s, or, where s is nil -- a literal's or a constructor's root
+// that cannot be had (siteRoot, ctorRoot) -- the root of class c and
+// prototype p.
+func (s *shape) orRoot(c Class, p *Object) *shape {
+	if s != nil {
+		return s
+	}
+	return rootFor(c, p)
+}
+
 // siteRoot is the empty shape the objects an object literal makes start from,
 // kept in the literal's cache. Objects made at different sites mostly have
 // different properties, and a root of their own saves each of them a search
 // among the others' transitions out of their class's root. It is nil once the
-// tree is full, or while the realm is being made.
-func (t *shapeTree) siteRoot(c *propCache) *shape {
+// tree is full, while the realm is being made, and for a prototype other than
+// the one the literal's objects have had, proto (orRoot).
+func (t *shapeTree) siteRoot(c *propCache, proto *Object) *shape {
 	if s := c.shape; s != noShape {
+		if s != nil && s.proto != proto {
+			return nil
+		}
 		return s
 	}
 	var s *shape
 	if !t.building && t.count < maxShapes {
-		s = &shape{tree: t}
+		s = &shape{tree: t, proto: proto}
 		t.count++
 	}
 	c.shape = s
@@ -454,15 +599,16 @@ func (t *shapeTree) siteRoot(c *propCache) *shape {
 // ctorRoot is siteRoot for a constructor, whose objects start from a shape of
 // the function's own: functions made from the same code are often different
 // classes -- a library's class maker returns one -- whose objects have
-// different properties.
-func (t *shapeTree) ctorRoot(fd *funcData) *shape {
-	if s := fd.ctorShape; s != nil {
+// different properties. A constructor given a new prototype object gets a
+// new root, which learns its objects' room anew.
+func (t *shapeTree) ctorRoot(fd *funcData, proto *Object) *shape {
+	if s := fd.ctorShape; s != nil && s.proto == proto {
 		return s
 	}
 	if t.building || t.count >= maxShapes {
 		return nil
 	}
-	s := &shape{tree: t}
+	s := &shape{tree: t, proto: proto}
 	t.count++
 	fd.ctorShape = s
 	return s
@@ -552,14 +698,14 @@ func remember(s *shape) *shape {
 
 // newUniqueShape makes a shape of its own for an object of the given keys,
 // keeping its index.
-func newUniqueShape(t *shapeTree, keys []propKey, index *propIndex) *shape {
-	return &shape{tree: t, unique: true, n: int32(len(keys)), keys: keys, index: index}
+func newUniqueShape(t *shapeTree, proto *Object, keys []propKey, index *propIndex) *shape {
+	return &shape{tree: t, proto: proto, unique: true, n: int32(len(keys)), keys: keys, index: index}
 }
 
 // newLooseShape makes a loose shape of its own for an object of the given
 // keys.
-func newLooseShape(keys []propKey) *shape {
-	return &shape{unique: true, loose: true, n: int32(len(keys)), keys: keys}
+func newLooseShape(proto *Object, keys []propKey) *shape {
+	return &shape{proto: proto, unique: true, loose: true, n: int32(len(keys)), keys: keys}
 }
 
 // extendKeys is s's keys with k after them: in s's array, if no child has
@@ -608,7 +754,7 @@ func (s *shape) child(e shapeEdge) *shape {
 		return nil
 	}
 	inPlace := !s.extended
-	c := &shape{tree: t, parent: s, key: e.key, flags: e.flags, n: s.n + 1, keys: s.extendKeys(propKey(e))}
+	c := &shape{tree: t, parent: s, proto: s.proto, key: e.key, flags: e.flags, n: s.n + 1, keys: s.extendKeys(propKey(e))}
 	if inPlace && s.index != nil {
 		// Its keys extend s's in place, and its index s's, as V8's maps
 		// along a transition chain share one descriptor array, each the
@@ -670,27 +816,10 @@ func (o *Object) shapeAdded(k propKey) {
 	s := o.shape
 	n := int(o.valn)
 	if s == nil {
-		// A first property: an object whose prototype has a tree joins it,
-		// at the root for its class -- or, while the realm is being made,
-		// gets a layout of its own, being one of a kind. A prototype's own
-		// layout is in no tree where it is one a cache may remember and yet
-		// of no tree's making: a dictionary grown past the keys a table
-		// scans (below). There is then no tree to join.
-		if n == 1 && shapeClass(o.class) && o.proto != nil && o.proto.cacheTree() != nil {
-			t := o.proto.shape.tree
-			if t.building {
-				o.shape = newUniqueShape(t, []propKey{k}, nil)
-				return
-			}
-			if c := t.root(o.class).child(shapeEdge(k)); c != nil {
-				o.shape = c
-				return
-			}
-			o.shape = newUniqueShape(t, []propKey{k}, nil)
-			return
-		}
-		// No tree to join: a layout no cache will see holds the keys.
-		o.shape = newLooseShape(append(make([]propKey, 0, max(n, 2)), k))
+		// A first property of an object with no prototype, which has no
+		// layout until it has one (rootFor): no tree to join, and a layout
+		// no cache will see holds the keys.
+		o.shape = newLooseShape(nil, append(make([]propKey, 0, max(n, 2)), k))
 		if n > linearScanLimit {
 			o.buildIndex()
 		}
@@ -699,7 +828,7 @@ func (o *Object) shapeAdded(k propKey) {
 	if s.loose {
 		if !s.unique {
 			// A template: the object's own copy, then its key.
-			s = newLooseShape(append(s.keys[:s.n:s.n], k))
+			s = newLooseShape(s.proto, append(s.keys[:s.n:s.n], k))
 			o.shape = s
 		} else {
 			s.keys = append(s.keys[:s.n], k)
@@ -719,8 +848,8 @@ func (o *Object) shapeAdded(k propKey) {
 		s.protoChanged()
 		if s.seen && (s.tree == nil || !s.tree.building) {
 			// A new identity, so that what was cached of the old one misses.
-			ns := newUniqueShape(s.tree, s.keys[:s.n], s.index)
-			ns.borrowed, ns.info = s.borrowed, s.info
+			ns := newUniqueShape(s.tree, s.proto, s.keys[:s.n], s.index)
+			ns.borrowed, ns.info, ns.roots = s.borrowed, s.info, s.roots
 			s = ns
 			o.shape = s
 		}
@@ -739,7 +868,7 @@ func (o *Object) shapeAdded(k propKey) {
 		// A keyed store's past the soft limit: a dictionary, as V8's
 		// TooManyFastProperties has it, rather than a chain of layouts
 		// for each set of keys a program makes up.
-		o.shape = newUniqueShape(s.tree, append(s.keys[:s.n:s.n], k), nil)
+		o.shape = newUniqueShape(s.tree, s.proto, append(s.keys[:s.n:s.n], k), nil)
 		o.buildIndex()
 		return
 	}
@@ -752,7 +881,7 @@ func (o *Object) shapeAdded(k propKey) {
 		}
 		return
 	}
-	o.shape = newUniqueShape(s.tree, append(s.keys[:s.n:s.n], k), nil)
+	o.shape = newUniqueShape(s.tree, s.proto, append(s.keys[:s.n:s.n], k), nil)
 	if n > linearScanLimit {
 		o.buildIndex()
 	}
@@ -797,7 +926,7 @@ func (o *Object) layoutChanged() {
 	s.protoChanged()
 	if s.loose {
 		if !s.unique {
-			o.shape = newLooseShape(slices.Clone(s.keys[:s.n]))
+			o.shape = newLooseShape(s.proto, slices.Clone(s.keys[:s.n]))
 			o.shape.index = s.index
 			o.shape.borrowed = s.index != nil
 		}
@@ -817,14 +946,15 @@ func (o *Object) layoutChanged() {
 		// A shared layout's keys are not the object's to change.
 		keys = slices.Clone(keys)
 	}
-	ns := newUniqueShape(s.tree, keys, index)
+	ns := newUniqueShape(s.tree, s.proto, keys, index)
 	// A shared index is the layout's, which this object is leaving: it
 	// borrows it rather than copying it, its table's positions being the
 	// layout's until it adds a key (see borrowed).
 	ns.borrowed = s.borrowed || !s.unique && index != nil
 	if s.unique {
-		// A prototype's cell and users go with its layout.
-		ns.info = s.info
+		// A prototype's cell and users go with its layout, and so do the
+		// roots of the objects it is the prototype of.
+		ns.info, ns.roots = s.info, s.roots
 	}
 	o.shape = ns
 	if index == nil && int(o.valn) > linearScanLimit {
@@ -1180,26 +1310,29 @@ func (c *propCache) holder(o *Object) *Object {
 	if o.shape != c.shape {
 		return nil
 	}
-	p := c.p1
+	// o's layout says its prototype, p1, and each holder's the next: a
+	// layout a cache remembers is given a new identity for a new prototype
+	// (setProto), and a shared one never has another.
 	if c.cell != nil {
 		// Past two prototypes, or nowhere (absentHolder): the chain from o's
 		// prototype up as it was (protoCell).
-		if o.proto != p || !c.cell.valid {
+		if !c.cell.valid {
 			return nil
 		}
 		return c.p2
 	}
+	p := c.p1
 	if p == nil {
 		return o
 	}
-	if o.proto != p || p.shape != c.s1 {
+	if p.shape != c.s1 {
 		return nil
 	}
 	q := c.p2
 	if q == nil {
 		return p
 	}
-	if p.proto != q || q.shape != c.s2 {
+	if q.shape != c.s2 {
 		return nil
 	}
 	return q
@@ -1233,24 +1366,26 @@ type sharedEntry struct {
 
 // holder is propCache.holder of the entry's fields, for o of its shape.
 func (e *sharedEntry) holder(o *Object) *Object {
-	p := e.p1
+	// The caller has found o of the entry's layout, which says its
+	// prototype, as propCache.holder's does.
 	if e.cell != nil {
-		if o.proto != p || !e.cell.valid {
+		if !e.cell.valid {
 			return nil
 		}
 		return e.p2
 	}
+	p := e.p1
 	if p == nil {
 		return o
 	}
-	if o.proto != p || p.shape != e.s1 {
+	if p.shape != e.s1 {
 		return nil
 	}
 	q := e.p2
 	if q == nil {
 		return p
 	}
-	if p.proto != q || q.shape != e.s2 {
+	if q.shape != e.s2 {
 		return nil
 	}
 	return q
@@ -1338,12 +1473,12 @@ func (r *Runtime) deepStore(o *Object, key Atom, v Value) bool {
 	if e.key != key || e.from != s || o.flags&objExtensible == 0 {
 		return false
 	}
-	p := o.proto
+	p := o.proto()
 	for i := range int(e.n) {
 		if p != e.up[i] || p.shape != e.shapes[i] {
 			return false
 		}
-		p = p.proto
+		p = p.proto()
 	}
 	if p != nil {
 		return false
@@ -1367,7 +1502,7 @@ func (r *Runtime) fillDeepStore(o *Object, before *shape, key Atom) {
 		return
 	}
 	var e deepAdd
-	for p := o.proto; p != nil; p = p.proto {
+	for p := o.proto(); p != nil; p = p.proto() {
 		if e.n == deepAddDepth {
 			return
 		}
@@ -1451,18 +1586,18 @@ func (r *Runtime) fillPropCache(c *propCache, o *Object, key Atom, accessors boo
 			c.refill(n, jitBuilt && r.jitOn())
 			return
 		}
-		if depth == 2 || h.proto == nil {
+		if depth == 2 || h.proto() == nil {
 			// The chain's cell first, which gives each prototype on it a
 			// layout of its own, so that the JIT notes the layouts the
 			// chain keeps.
 			r.fillChainCache(c, o, h, depth, key)
-			if depth == 2 && h.proto != nil && jitBuilt && r.jitOn() {
+			if depth == 2 && h.proto() != nil && jitBuilt && r.jitOn() {
 				// Deeper than the cache holds: noted for the JIT's code.
 				r.jitNoteDeepRead(c, o, key)
 			}
 			return
 		}
-		h = h.proto
+		h = h.proto()
 		r.ensureProtoShape(h)
 		up[depth] = h
 	}
@@ -1485,11 +1620,11 @@ func (r *Runtime) fillChainCache(c *propCache, o *Object, h *Object, depth int, 
 	}
 	holder := absentHolder
 	idx := int32(0)
-	for h.proto != nil {
+	for h.proto() != nil {
 		if depth++; depth > maxChainDepth {
 			return
 		}
-		h = h.proto
+		h = h.proto()
 		r.ensureProtoShape(h)
 		if h.cacheShape() == nil || !shapeClass(h.class) || synthesized(h.class, key) {
 			return
@@ -1508,11 +1643,11 @@ func (r *Runtime) fillChainCache(c *propCache, o *Object, h *Object, depth int, 
 		// and a monomorphic one would trade them at each.
 		return
 	}
-	cell := r.chainCell(o.proto)
+	cell := r.chainCell(o.proto())
 	if cell == nil {
 		return
 	}
-	n := propCache{shape: remember(o.shape), idx: idx, fills: c.fills + 1, p1: o.proto, p2: holder, cell: cell}
+	n := propCache{shape: remember(o.shape), idx: idx, fills: c.fills + 1, p1: o.proto(), p2: holder, cell: cell}
 	c.refill(n, false)
 	if jitBuilt && r.jitOn() {
 		r.jitNoteChainRead(o, key)
@@ -1563,7 +1698,7 @@ func (r *Runtime) setPropCached(c *propCache, o *Object, key Atom, v Value, stri
 		return nil
 	}
 	before := o.shape
-	if before == nil && !gaveUp {
+	if !gaveUp && (before == nil || before.loose && before.generic) {
 		before = r.ensureShape(o)
 	}
 	if _, err := r.setProp(o, key, v, Obj(o), strict); err != nil {
@@ -1611,8 +1746,8 @@ func (r *Runtime) storeCached(c *propCache, o *Object, key Atom, v Value) (bool,
 	}
 	// adds's test, an entry of a chain longer than an entry holds
 	// (fillChainStore) answered by the chain's cell.
-	if o.flags&objExtensible != 0 && o.proto == c.p1 && (c.p1 == nil || c.p1.shape == c.s1 && c.p1.proto == c.p2 || c.cell != nil && c.cell.valid) &&
-		(c.p2 == nil || c.p2.shape == c.s2 && c.p2.proto == nil) {
+	if o.flags&objExtensible != 0 && (c.p1 == nil || c.p1.shape == c.s1 || c.cell != nil && c.cell.valid) &&
+		(c.p2 == nil || c.p2.shape == c.s2) {
 		if verifyShapes {
 			r.verifyStoreCache(c, o, key)
 		}
@@ -1625,10 +1760,10 @@ func (r *Runtime) storeCached(c *propCache, o *Object, key Atom, v Value) (bool,
 // adds reports whether the property a write cache says is added may be
 // added to o, which has the shape the cache remembers: o is extensible, and
 // its prototype chain is the one found to have no setter or read-only
-// property of the name to intercept the write.
+// property of the name to intercept the write. The layouts say the chain:
+// o's its prototype, p1, p1's p2, and p2's none (propCache.holder).
 func (c *propCache) adds(o *Object) bool {
-	return o.flags&objExtensible != 0 && o.proto == c.p1 && (c.p1 == nil || c.p1.shape == c.s1 && c.p1.proto == c.p2) &&
-		(c.p2 == nil || c.p2.shape == c.s2 && c.p2.proto == nil)
+	return o.flags&objExtensible != 0 && (c.p1 == nil || c.p1.shape == c.s1) && (c.p2 == nil || c.p2.shape == c.s2)
 }
 
 // verifyStoreCache checks a write the cache answers for o, of key, in a build
@@ -1642,7 +1777,7 @@ func (r *Runtime) verifyStoreCache(c *propCache, o *Object, key Atom) {
 		}
 		return
 	}
-	for p := o.proto; p != nil; p = p.proto {
+	for p := o.proto(); p != nil; p = p.proto() {
 		checkShape(p)
 		if !passesWrite(p, key) {
 			panic("write cache adds " + r.atoms.name(key) + " past a prototype that intercepts it")
@@ -1688,11 +1823,19 @@ func (r *Runtime) cachedData(c *propCache, o *Object, key Atom) (Value, bool) {
 // added, which is what gives an object a shape otherwise. It returns the
 // object's shape, or nil.
 func (r *Runtime) ensureShape(o *Object) *shape {
-	if s := o.shape; s != nil || !shapeClass(o.class) || r.shapes.building {
+	s := o.shape
+	if !shapeClass(o.class) || r.shapes.building {
 		return o.cacheShape()
 	}
-	o.shape = r.shapes.root(o.class)
-	return o.shape
+	switch {
+	case s == nil:
+		o.shape = r.shapes.root(o.class)
+	case s.loose && s.generic && o.valn == 0:
+		// The template of a prototype in no tree, whose objects join the
+		// runtime's once a cache meets one (rootIn).
+		o.shape = rootIn(r.shapes, o.class, s.proto)
+	}
+	return o.cacheShape()
 }
 
 // ensureProtoShape is ensureShape for an object a cache meets as a prototype.
@@ -1709,8 +1852,11 @@ func (r *Runtime) ensureProtoShape(o *Object) *shape {
 		if !s.unique {
 			keys = slices.Clone(keys)
 		}
-		ns := newUniqueShape(r.shapes, keys, s.index)
+		ns := newUniqueShape(r.shapes, s.proto, keys, s.index)
 		ns.borrowed = s.borrowed || !s.unique && s.index != nil
+		if s.unique {
+			ns.roots = s.roots
+		}
 		o.shape = ns
 		return ns
 	}
@@ -1743,12 +1889,12 @@ func (r *Runtime) fillStoreCache(c *propCache, o *Object, before *shape, key Ato
 		return
 	}
 	var up [2]*Object
-	p := o.proto
+	p := o.proto()
 	for depth := 0; p != nil; depth++ {
 		if depth == 2 {
 			if jitBuilt && r.jitOn() {
 				// Deeper than the cache holds: noted for the JIT's code.
-				jitNoteDeepAdd(c, before, next, o.proto)
+				jitNoteDeepAdd(c, before, next, o.proto())
 			}
 			return
 		}
@@ -1756,7 +1902,7 @@ func (r *Runtime) fillStoreCache(c *propCache, o *Object, before *shape, key Ato
 			return
 		}
 		up[depth] = p
-		p = p.proto
+		p = p.proto()
 	}
 	n := propCache{shape: remember(before), next: next, fills: c.fills + 1, p1: up[0], p2: up[1]}
 	if up[0] != nil {

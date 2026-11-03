@@ -269,7 +269,7 @@ func (r *Runtime) EnqueueJob(fn func()) { r.enqueueJob(fn) }
 // the sequence early. Once it has ended, at its end, by an error or by
 // return, stop has been called and next answers done.
 func (r *Runtime) NewHostIterator(next func() (Value, bool, error), stop func()) Value {
-	o := newObject(r.hostIterProto(), ClassObject)
+	o := newObjectExt(r.hostIterProto(), ClassObject, objExtensible)
 	o.extOf().data = &hostIter{next: next, stop: stop}
 	return Obj(o)
 }

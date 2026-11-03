@@ -519,7 +519,7 @@ func TestMirEmitted(t *testing.T) {
 	spreadEnc.WriteBarrier, spreadEnc.Object, spreadEnc.ShapeNext, spreadEnc.ShapeNextKey, spreadEnc.ShapeNextFlags = 0x71000, 0xFFFC000000000000, 40, 48, 52
 	spreadEnc.ShapeIndex, spreadEnc.LinearScan, spreadEnc.PropDefault, spreadEnc.ObjectShape, spreadEnc.ObjectProps = 56, 8, 7, 8, 16
 	spreadEnc.ObjectPropsLen, spreadEnc.ObjectPropsCap = 24, 28
-	spreadEnc.ObjectElems, spreadEnc.ObjectClass, spreadEnc.ObjectFlags, spreadEnc.ObjectProto, spreadEnc.ClassArray = 64, 1, 2, 40, 1
+	spreadEnc.ObjectElems, spreadEnc.ObjectClass, spreadEnc.ObjectFlags, spreadEnc.ShapeProto, spreadEnc.ClassArray = 64, 1, 2, 40, 1
 	spreadEnc.FlagSparse, spreadEnc.FlagExtensible = 4, 1
 	natives := map[string]int{}
 	for _, src := range spreadCorpus {
@@ -717,7 +717,7 @@ func TestMirEmitted(t *testing.T) {
 	}
 	cursors := 0
 	roomEnc := makeEnc
-	roomEnc.ObjectProto, roomEnc.GenRoom, roomEnc.GenRoomCursor = 24, 94, 152
+	roomEnc.ShapeProto, roomEnc.GenRoom, roomEnc.GenRoomCursor = 24, 94, 152
 	roomEnc.GenIterFrom, roomEnc.GenIterCell, roomEnc.GenIterNextObj, roomEnc.GenIterNextIdx, roomEnc.GenIterIterObj, roomEnc.GenIterIterIdx = 0, 8, 16, 24, 32, 40
 	for i, p := range lowered(t, `function f(G,n){let s=0;for(let j=0;j<n;j++)for(const v of G(j))s+=v;return s}`) {
 		f, err := ssa.BuildWith(p, genForOfs{})

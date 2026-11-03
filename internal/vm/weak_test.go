@@ -62,7 +62,7 @@ func TestWeakMapValueRefersToKey(t *testing.T) {
 	var symRef weak.Pointer[Symbol]
 	func() {
 		key := newObject(nil, ClassObject)
-		value := newObject(nil, ClassObject)
+		value := newObjectExt(nil, ClassObject, objExtensible)
 		value.extOf().data = key
 		objRef = weak.Make(key)
 		m.set(r, Obj(key), Obj(value))
@@ -134,7 +134,7 @@ func TestWeakMapValueRefersToMapKeepsIt(t *testing.T) {
 	var mapRef weak.Pointer[weakMap]
 	func() {
 		m := newWeakMap()
-		value := newObject(nil, ClassObject)
+		value := newObjectExt(nil, ClassObject, objExtensible)
 		value.extOf().data = m
 		mapRef = weak.Make(m)
 		m.set(r, key, Obj(value))
@@ -485,33 +485,42 @@ func TestWeakSetAddressReuse(t *testing.T) {
 // Where a key keeps its values in the WeakMaps it is a key of depends on
 // its kind: an array keeps them in its own side fields, which never move,
 // since native code reads its elements at a fixed offset from it; an object
-// of another kind that has side fields in its allocation moves them to a
-// keyedExt, its data with them; an ordinary object makes
-// one. Each goes on as it was.
+// of any other kind, with side fields or without, in a private property
+// under atomWeakMapRefs, which nothing a script does can see or name. Each
+// goes on as it was.
 func TestWeakMapKeySideFields(t *testing.T) {
 	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		var a = [1, 2, 3], f = function (x) { return x * 2 }, o = {}, d = new Date(5)
+		var frozen = Object.freeze({x: 1})
 		f[0] = "e"
-		var m = new WeakMap([[a, "a"], [f, "f"], [o, "o"], [d, "d"]])
+		var m = new WeakMap([[a, "a"], [f, "f"], [o, "o"], [d, "d"], [frozen, "z"]])
 		a.push(4)
-		;[m.get(a), m.get(f), m.get(o), m.get(d), a.join(), a.length, f(21), f[0], d.getTime(), Array.isArray(a)].join(" ")`))
+		o["[[WeakMapRefs]]"] = 7
+		;[m.get(a), m.get(f), m.get(o), m.get(d), m.get(frozen), a.join(), a.length, f(21), f[0], d.getTime(), Array.isArray(a),
+			Reflect.ownKeys(o).join(), Reflect.ownKeys(f).join(), Reflect.ownKeys(frozen).join(), JSON.stringify(o),
+			JSON.stringify({...o}), Object.isFrozen(frozen), Object.getOwnPropertySymbols(o).length, o["[[WeakMapRefs]]"],
+			Object.keys(Object.assign({}, frozen)).join()].join(" ")`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := v.String().Go(), "a f o d 1,2,3,4 4 42 e 5 true"; got != want {
+	want := `a f o d z 1,2,3,4 4 42 e 5 true [[WeakMapRefs]] 0,length,name,prototype x {"[[WeakMapRefs]]":7} {"[[WeakMapRefs]]":7} true 0 7 x`
+	if got := v.String().Go(); got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 	get := func(name string) *Object { return r.global.getOwn(r.atoms.intern(name)).value().Object() }
 	a, f, o, d := get("a"), get("f"), get("o"), get("d")
-	if !a.extEmbedded() || a.weakMapRefsOf() == nil || a.dataOf() != a.weakMapRefsOf() {
-		t.Error("the array's side fields are not its own, holding its WeakMaps")
+	if a.ext() == nil || a.weakMapRefsOf() == nil || a.dataOf() != a.weakMapRefsOf() {
+		t.Error("the array's side fields do not hold its WeakMaps")
 	}
 	for name, x := range map[string]*Object{"function": f, "object": o, "Date": d} {
-		if x.ext == nil || x.extEmbedded() || x.weakMapRefsOf() == nil {
-			t.Errorf("the %s's WeakMaps are not in a keyedExt", name)
+		if p := x.getOwn(atomWeakMapRefs); !p.ok() || p.flags()&propPrivate == 0 || x.weakMapRefsOf() == nil {
+			t.Errorf("the %s's WeakMaps are not in its private property", name)
 		}
+	}
+	if o.ext() != nil {
+		t.Error("an ordinary object was given side fields")
 	}
 	if f.fn() == nil {
 		t.Error("the function's data did not move with its side fields")

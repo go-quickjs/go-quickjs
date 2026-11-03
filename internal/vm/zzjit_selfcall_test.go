@@ -48,7 +48,7 @@ func TestJITRecursiveCallsSeeded(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	trace := r.global.getOwn(r.atoms.intern("w")).value().Object().proto.getOwn(r.atoms.intern("walk")).value().Object().fn().closure
+	trace := r.global.getOwn(r.atoms.intern("w")).value().Object().proto().getOwn(r.atoms.intern("walk")).value().Object().fn().closure
 	if len(trace.fn.Code) <= ssa.MaxInline {
 		t.Fatalf("walk is %d instructions, short enough to inline", len(trace.fn.Code))
 	}

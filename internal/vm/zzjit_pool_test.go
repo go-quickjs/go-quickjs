@@ -15,7 +15,7 @@ import (
 // inline-property capacities and growth into separate property storage.
 func TestJITObjectPoolLayouts(t *testing.T) {
 	proto := newObject(nil, ClassObject)
-	root := &shape{}
+	root := &shape{proto: proto}
 	for n := 0; n <= 16; n++ {
 		pool := &abi.ObjectPool{Size: abi.PoolSize}
 		jitFillObjectPool(pool, proto, root, n)
@@ -25,7 +25,7 @@ func TestJITObjectPoolLayouts(t *testing.T) {
 		}
 		for i := range int(pool.Count) {
 			o := (*Object)(pool.Objects[i])
-			if o.proto != proto || o.shape != root || o.class != want.class || o.flags != want.flags || o.valn != 0 || int(o.valc) != int(want.valc) {
+			if o.proto() != proto || o.shape != root || o.class != want.class || o.flags != want.flags || o.valn != 0 || int(o.valc) != int(want.valc) {
 				t.Fatalf("size %d, object %d: wrong initial layout", n, i)
 			}
 			o.shape = nil

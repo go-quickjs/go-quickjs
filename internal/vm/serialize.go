@@ -67,14 +67,26 @@ func (r *Runtime) SetCloneBrand(v Value, b CloneBrand) bool {
 		return false
 	}
 	o := v.Object()
-	if o.class != ClassObject || o.dataOf() != nil && !isBrand(o.dataOf()) {
+	if o.class != ClassObject || o.dataOf() != nil {
 		return false
 	}
-	o.extOf().data = b
+	// The brand is a private property, as a WeakMap's entries are: an
+	// ordinary object made without side fields has nowhere else for it,
+	// and no script sees one.
+	o.setOwnRaw(atomCloneBrand, Int(int(b)), propPrivate)
 	return true
 }
 
-func isBrand(d any) bool { _, ok := d.(CloneBrand); return ok }
+// cloneBrand is the brand SetCloneBrand gave o, if it gave one.
+func (o *Object) cloneBrand() (CloneBrand, bool) {
+	if o.valn == 0 {
+		return 0, false
+	}
+	if p := o.getOwn(atomCloneBrand); p.ok() {
+		return CloneBrand(p.value().Number()), true
+	}
+	return 0, false
+}
 
 func (e *DataCloneError) Error() string { return e.Message }
 
@@ -272,7 +284,7 @@ func (s *serializer) value(v Value) (int, error) {
 	}
 	// A host object is branded with how it clones, which its prototype --
 	// that a script may change -- cannot say.
-	brand, branded := o.dataOf().(CloneBrand)
+	brand, branded := o.cloneBrand()
 	if branded && o.class == ClassObject {
 		switch brand {
 		case CloneUnsupported:
@@ -287,7 +299,7 @@ func (s *serializer) value(v Value) (int, error) {
 		}
 	}
 	if s.codec != nil && s.codec.Serialize != nil && (branded ||
-		o.class == ClassError || o.class == ClassObject && o.proto != s.r.proto.object && o.proto != nil) {
+		o.class == ClassError || o.class == ClassObject && o.proto() != s.r.proto.object && o.proto() != nil) {
 		token, ok, err := s.codec.Serialize(v)
 		if err != nil {
 			return 0, err
@@ -463,7 +475,7 @@ func (s *serializer) uncloneable(o *Object) error {
 // Generator]" -- in both cases reading data properties only.
 func (r *Runtime) describeReceiver(o *Object) string {
 	data := func(key Atom) Value {
-		for p := o; p != nil; p = p.proto {
+		for p := o; p != nil; p = p.proto() {
 			if proxyOf(p) != nil {
 				return Undefined
 			}

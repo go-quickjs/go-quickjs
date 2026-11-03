@@ -962,7 +962,7 @@ func TestJITInlinedLiterals(t *testing.T) {
 		run(`each(64)`)
 	}
 	e := jitNativeForTest(t, r, "each")
-	reset := r.global.getOwn(r.atoms.intern("s")).value().Object().proto.getOwn(r.atoms.intern("reset")).value().Object().fn().closure
+	reset := r.global.getOwn(r.atoms.intern("s")).value().Object().proto().getOwn(r.atoms.intern("reset")).value().Object().fn().closure
 	if !slices.Contains(e.ssaInlined, reset) {
 		t.Fatal("each does not inline reset: no test of an inlined callee's literals")
 	}

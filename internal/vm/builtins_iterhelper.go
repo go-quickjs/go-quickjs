@@ -117,7 +117,7 @@ func (r *Runtime) stepIterator(iter, next Value) (Value, bool, error) {
 // allocation, with h as the state.
 func (r *Runtime) newHelper(h iterHelperData) *Object {
 	ho := &helperObject{h: h}
-	ho.Object = Object{proto: r.helperProto, class: ClassIteratorHelper, flags: objExtensible}
+	ho.Object = Object{shape: rootFor(ClassIteratorHelper, r.helperProto), class: ClassIteratorHelper, flags: objExtensible}
 	ho.embedExt(&ho.side)
 	ho.side.data = &ho.h
 	return &ho.Object
@@ -972,7 +972,7 @@ func (r *Runtime) inheritsFrom(v Value, target *Object) bool {
 	if !v.IsObject() {
 		return false
 	}
-	for p := v.Object().proto; p != nil; p = p.proto {
+	for p := v.Object().proto(); p != nil; p = p.proto() {
 		if p == target {
 			return true
 		}

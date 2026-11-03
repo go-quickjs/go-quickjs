@@ -115,22 +115,28 @@ const testCharCodeAt = 6
 var testStringShape = &testShape{keys: []testKey{{key: 15}}}
 
 // testObject is an object's layout as far as native code reads it: its
-// side fields are its own, which ext points to when it has them, as an
+// side fields are right after it, which testFlagExt says it has, as an
 // array always does.
 type testObject struct {
-	class    uint8
-	flags    uint8
-	arrayLen uint32
-	ext      *testObjectExt
-	shape    *testShape
+	class uint8
+	flags uint8
+	shape *testShape
 	// valp holds the properties' values as an Object does: valn of them,
 	// in room for valc, a pointer and two 32-bit counts rather than a
 	// slice, so that native code reading a count as a word would read the
 	// other count with it.
 	valp       *testValue
 	valn, valc uint32
-	proto      *testObject
 	testObjectExt
+}
+
+// proto is the object's prototype, its shape's, as an Object's is: nil for
+// one with no shape.
+func (o *testObject) proto() *testObject {
+	if o.shape != nil {
+		return o.shape.proto
+	}
+	return nil
 }
 
 // vals is the object's property values as a slice.
@@ -151,6 +157,9 @@ func (o *testObject) shapeID() uintptr { return uintptr(unsafe.Pointer(o.shape))
 // its own, which none do.
 type testShape struct {
 	keys []testKey
+	// proto is the prototype of the shape's objects, which a shape
+	// settles, as the VM's does (abi.Encoding's ShapeProto).
+	proto *testObject
 }
 
 // testKey is a property's key and flags.
@@ -170,7 +179,8 @@ func newTestShape(keys []uint32, flags []uint8) *testShape {
 
 // testObjectExt is an object's side fields (abi.Encoding's ObjectExt).
 type testObjectExt struct {
-	elems []testValue
+	elems    []testValue
+	arrayLen uint32
 }
 
 // testHolders are the prototypes test objects may have, which property
@@ -180,7 +190,8 @@ type testObjectExt struct {
 // every heap.
 var testHolders = func() *[2]testObject {
 	h := new([2]testObject)
-	h[0] = testObject{shape: newTestShape([]uint32{12, 13}, []uint8{testWritable, 0}), proto: &h[1]}
+	h[0] = testObject{shape: newTestShape([]uint32{12, 13}, []uint8{testWritable, 0})}
+	h[0].shape.proto = &h[1]
 	h[0].setVals([]testValue{{num: math.Float64bits(7)}, {num: testEncoding.True}})
 	h[1] = testObject{shape: newTestShape([]uint32{11, testAccessorKey}, []uint8{testWritable, testAccessor})}
 	h[1].setVals([]testValue{{num: math.Float64bits(-2)}, {num: testTagBase | 9, ref: unsafe.Pointer(&testPair)}})
@@ -303,7 +314,17 @@ var testShapes = func() []testShapeSpec {
 		{keys: []uint32{12, 10}, flags: []uint8{testWritable, testAccessor}},
 	}
 	for i := range specs {
-		specs[i].s = newTestShape(specs[i].keys, specs[i].flags)
+		// One for each prototype a heap's object may have, none or one of
+		// testHolders, as the VM's shapes are: the one sites name is the
+		// first holder's, which a site found on a prototype has receivers
+		// inherit from (testHolderSite).
+		for j := range specs[i].byProto {
+			specs[i].byProto[j] = newTestShape(specs[i].keys, specs[i].flags)
+			if j > 0 {
+				specs[i].byProto[j].proto = &testHolders[j-1]
+			}
+		}
+		specs[i].s = specs[i].byProto[1]
 		specs[i].shape = uintptr(unsafe.Pointer(specs[i].s))
 	}
 	return specs
@@ -314,6 +335,9 @@ type testShapeSpec struct {
 	shape uintptr
 	keys  []uint32
 	flags []uint8
+	// byProto is the spec's shape for an object of no prototype and for
+	// one of each of testHolders; s is the first holder's.
+	byProto [1 + len(testHolders)]*testShape
 }
 
 // testBarrier is the harness's write-barrier flag (abi.Encoding's
@@ -323,6 +347,9 @@ var testBarrier uint8
 
 // testFlagHTMLDDA is the flags byte's [[IsHTMLDDA]] bit.
 const testFlagHTMLDDA = 0x40
+
+// testFlagExt is the flags' bit for an object with side fields.
+const testFlagExt = 0x10
 
 const (
 	testClassObject = 0
@@ -349,17 +376,17 @@ var testEncoding = abi.Encoding{
 	Uninitialized: testTagBase | 8, CanonicalNaN: 0x7FF8000000000000,
 	Object:      testTagBase | 7,
 	ObjectClass: int32(unsafe.Offsetof(testObject{}.class)), ObjectFlags: int32(unsafe.Offsetof(testObject{}.flags)),
-	ObjectExt: int32(unsafe.Offsetof(testObject{}.ext)), ExtElems: int32(unsafe.Offsetof(testObjectExt{}.elems)),
-	ObjectArrayLen: int32(unsafe.Offsetof(testObject{}.arrayLen)),
+	ObjectExt: int32(unsafe.Offsetof(testObject{}.testObjectExt)), ExtElems: int32(unsafe.Offsetof(testObjectExt{}.elems)),
+	ObjectArrayLen: int32(unsafe.Offsetof(testObject{}.testObjectExt) + unsafe.Offsetof(testObjectExt{}.arrayLen)),
 	ObjectElems:    int32(unsafe.Offsetof(testObject{}.testObjectExt) + unsafe.Offsetof(testObjectExt{}.elems)),
-	ClassArray:     testClassArray, FlagSparse: testFlagSparse, FlagHTMLDDA: testFlagHTMLDDA,
+	ClassArray:     testClassArray, FlagSparse: testFlagSparse, FlagHTMLDDA: testFlagHTMLDDA, FlagExt: testFlagExt,
 	UpvalueSlot: int32(unsafe.Offsetof(testUpvalue{}.slot)),
 	String:      testTagBase | 4, StringData: int32(unsafe.Offsetof(testString{}.s)),
 	StringLeft: int32(unsafe.Offsetof(testString{}.left)), StringLength: int32(unsafe.Offsetof(testString{}.length)),
 	StringASCII: int32(unsafe.Offsetof(testString{}.ascii)), StringU16: int32(unsafe.Offsetof(testString{}.u16)),
 	ObjectShape: int32(unsafe.Offsetof(testObject{}.shape)), ObjectProps: int32(unsafe.Offsetof(testObject{}.valp)),
 	ObjectPropsLen: int32(unsafe.Offsetof(testObject{}.valn)), ObjectPropsCap: int32(unsafe.Offsetof(testObject{}.valc)),
-	ObjectProto:  int32(unsafe.Offsetof(testObject{}.proto)),
+	ShapeProto:   int32(unsafe.Offsetof(testShape{}.proto)),
 	WriteBarrier: uint64(uintptr(unsafe.Pointer(&testBarrier))),
 	StoreRef:     StoreRef(),
 	ShapeKeys:    int32(unsafe.Offsetof(testShape{}.keys)), KeySize: int32(unsafe.Sizeof(testKey{})),
@@ -601,21 +628,23 @@ func (h testHeap) native() *nativeHeap {
 			o.flags, o.arrayLen = testFlagSparse, uint32(a.length)
 		}
 		if a.array || len(a.cells) > 0 || o.flags&testFlagSparse != 0 {
-			o.ext = &o.testObjectExt
+			o.flags |= testFlagExt
 		}
 		if a.htmldda {
 			o.flags |= testFlagHTMLDDA
 		}
 		if a.shape >= 0 && slices.Equal(testShapes[a.shape].keys, a.keys) && slices.Equal(testShapes[a.shape].flags, a.flags) {
-			o.shape = testShapes[a.shape].s
-		} else if len(a.props) > 0 {
+			// Of its prototype: a site's shape where that is the first
+			// holder.
+			o.shape = testShapes[a.shape].byProto[max(a.proto, -1)+1]
+		} else if len(a.props) > 0 || a.proto >= 0 {
 			// A layout of its own, which no site names: a shapeless
 			// object's, or one a test says is of another shape than its
-			// keys are.
+			// keys are. An object with a prototype has one, which says it.
 			o.shape = newTestShape(a.keys, a.flags)
-		}
-		if a.proto >= 0 {
-			o.proto = &testHolders[a.proto]
+			if a.proto >= 0 {
+				o.shape.proto = &testHolders[a.proto]
+			}
 		}
 		o.setVals(make([]testValue, len(a.props)))
 		for j, v := range a.props {
@@ -669,7 +698,7 @@ func (n *nativeHeap) heap() ssa.Heap {
 	h.Accessors = map[*ir.Value]ssa.Accessor{}
 	for i := range testHolders {
 		o := &testHolders[i]
-		m := &ssa.Object{Shape: o.shapeID(), Proto: uintptr(unsafe.Pointer(o.proto)), Props: slices.Clone(testHolderValues[i])}
+		m := &ssa.Object{Shape: o.shapeID(), Proto: uintptr(unsafe.Pointer(o.proto())), Props: slices.Clone(testHolderValues[i])}
 		h.Holders[uintptr(unsafe.Pointer(o))] = m
 		for j, k := range o.shape.keys {
 			if k.flags&testAccessor != 0 {
@@ -680,7 +709,7 @@ func (n *nativeHeap) heap() ssa.Heap {
 	for i := range n.objects {
 		o := &n.objects[i]
 		e := ssa.Object{Shape: o.shapeID(), Ordinary: o.class == testClassObject, Props: n.evaluated[i], HTMLDDA: o.flags&testFlagHTMLDDA != 0,
-			Proto: uintptr(unsafe.Pointer(o.proto))}
+			Proto: uintptr(unsafe.Pointer(o.proto()))}
 		var keys []testKey
 		if o.shape != nil {
 			keys = o.shape.keys[:len(o.vals())]
@@ -2071,7 +2100,7 @@ func TestSSANativeStores(t *testing.T) {
 					heap := randomTestHeap(rand.New(rand.NewPCG(3, 4)))
 					for _, i := range []int{0, 2} {
 						sh := testShapes[0]
-						heap[i].shape, heap[i].proto = 0, -1
+						heap[i].shape, heap[i].proto = 0, 0
 						heap[i].keys, heap[i].flags = sh.keys, sh.flags
 						heap[i].props = []ir.Value{old, ir.Float(1), ir.Float(2)}
 					}
@@ -2157,7 +2186,7 @@ func TestSSANativeStoresPastTheKeeps(t *testing.T) {
 			heap := randomTestHeap(rand.New(rand.NewPCG(5, 6)))
 			for _, i := range []int{0, 2} {
 				sh := testShapes[0]
-				heap[i].shape, heap[i].proto = 0, -1
+				heap[i].shape, heap[i].proto = 0, 0
 				heap[i].keys, heap[i].flags = sh.keys, sh.flags
 				heap[i].props = []ir.Value{old, ir.Float(1), ir.Float(2)}
 			}
@@ -2213,7 +2242,7 @@ func TestSSAKeepsManyValues(t *testing.T) {
 			heap := randomTestHeap(rand.New(rand.NewPCG(7, 8)))
 			for _, i := range []int{0, 2} {
 				sh := testShapes[0]
-				heap[i].shape, heap[i].proto = 0, -1
+				heap[i].shape, heap[i].proto = 0, 0
 				heap[i].keys, heap[i].flags = sh.keys, sh.flags
 				heap[i].props = []ir.Value{{Kind: ir.Opaque, Bits: 3}, ir.Float(1), ir.Float(2)}
 			}

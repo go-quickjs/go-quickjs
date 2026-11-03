@@ -169,7 +169,7 @@ func (r *Runtime) jitRegExpLitDone(l *jitLiteral, v Value) {
 		return
 	}
 	o := v.Object()
-	if o.proto != (*Object)(pool.Proto) || o.class != ClassRegExp || !o.extEmbedded() || int(o.valn) != 1 {
+	if o.proto() != (*Object)(pool.Proto) || o.class != ClassRegExp || int(o.valn) != 1 {
 		return
 	}
 	ro := (*regexpObject)(unsafe.Pointer(o))

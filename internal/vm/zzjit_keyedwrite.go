@@ -94,7 +94,7 @@ func (r *Runtime) jitStoreProp(obj *Object, key Atom, v Value, store, keyed bool
 	if obj.flags&objExtensible == 0 {
 		return false
 	}
-	for p := obj.proto; p != nil; p = p.proto {
+	for p := obj.proto(); p != nil; p = p.proto() {
 		if p.class != ClassObject && p.class != ClassArray {
 			return false
 		}

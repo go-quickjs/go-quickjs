@@ -43,7 +43,7 @@ func (r *Runtime) v8Describe(v Value) string {
 	if o := v.Object(); o != nil {
 		// A Temporal value, whose tag names it, V8 prints as
 		// Object.prototype.toString would: "[object Temporal.PlainDate]".
-		for p := o.proto; p != nil; p = p.proto {
+		for p := o.proto(); p != nil; p = p.proto() {
 			if t := p.getOwnVisible(r.atoms.internSymbol(r.wellKnown.toStringTag)); t.ok() {
 				if !t.isAccessor() && t.value().IsString() && strings.HasPrefix(t.value().String().Go(), "Temporal.") {
 					return "[object " + t.value().String().Go() + "]"
@@ -54,7 +54,7 @@ func (r *Runtime) v8Describe(v Value) string {
 		name := "Object"
 		// The constructor named by the nearest prototype that has one, read
 		// as data only, so that no getter runs.
-		for p := o.proto; p != nil; p = p.proto {
+		for p := o.proto(); p != nil; p = p.proto() {
 			c := p.getOwnVisible(r.atoms.intern("constructor"))
 			if !c.ok() {
 				continue

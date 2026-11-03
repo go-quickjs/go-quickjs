@@ -293,11 +293,10 @@ func stringBytes(s *String) int {
 
 // Sizes of the engine's own structures, as the walk counts them.
 var (
-	objectSize   = int64(unsafe.Sizeof(Object{}))
-	extSize      = int64(unsafe.Sizeof(objectExt{}))
-	keyedExtSize = int64(unsafe.Sizeof(keyedExt{}))
-	propKeySize  = int64(unsafe.Sizeof(propKey{}))
-	shapeSize    = int64(unsafe.Sizeof(shape{}))
+	objectSize  = int64(unsafe.Sizeof(Object{}))
+	extSize     = int64(unsafe.Sizeof(objectExt{}))
+	propKeySize = int64(unsafe.Sizeof(propKey{}))
+	shapeSize   = int64(unsafe.Sizeof(shape{}))
 	// propIndexSize is an index's own struct and its map's header.
 	propIndexSize = int64(unsafe.Sizeof(propIndex{})) + 48
 	valueSize     = int64(unsafe.Sizeof(Value{}))
@@ -434,12 +433,8 @@ func (m *memoryMeter) addString(s *String) {
 // object counts an object and what it refers to.
 func (m *memoryMeter) object(o *Object) {
 	m.total += objectSize + int64(int(o.valc))*valueSize
-	switch {
-	case o.ext == nil:
-	case o.extEmbedded():
+	if o.flags&objHasExt != 0 {
 		m.total += extSize
-	default:
-		m.total += keyedExtSize
 	}
 	// A shared layout's index is the layout's, not the object's, and so is
 	// one an object borrows from it.
@@ -451,7 +446,7 @@ func (m *memoryMeter) object(o *Object) {
 	if s := o.shape; s != nil && s.unique {
 		m.total += shapeSize + int64(cap(s.keys))*propKeySize
 	}
-	m.addObject(o.proto)
+	m.addObject(o.proto())
 	for _, v := range o.vals() {
 		if v.ref != nil {
 			m.value(v)

@@ -63,7 +63,7 @@ func (r *Runtime) initDurationFormat(intlObj *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		out := newObject(made, ClassObject)
+		out := newObjectExt(made, ClassObject, objExtensible)
 		out.extOf().data = o
 		return Obj(out), nil
 	})

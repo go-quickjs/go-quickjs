@@ -138,14 +138,14 @@ func dataViewBytes[_ any](this Value, args []Value, size int) (*arrayBufferData,
 		return nil, 0, false
 	}
 	o := this.Object()
-	if o.class != ClassDataView || o.ext == nil {
+	if o.class != ClassDataView {
 		return nil, 0, false
 	}
-	d, ok := o.ext.data.(*dataViewData)
-	if !ok || d.buffer == nil || d.buffer.ext == nil {
+	d, ok := o.extAt().data.(*dataViewData)
+	if !ok || d.buffer == nil {
 		return nil, 0, false
 	}
-	b, ok := d.buffer.ext.data.(*arrayBufferData)
+	b, ok := d.buffer.dataOf().(*arrayBufferData)
 	if !ok || b.detached || b.block != nil {
 		return nil, 0, false
 	}

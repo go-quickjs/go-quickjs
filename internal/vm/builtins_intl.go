@@ -328,7 +328,7 @@ func (r *Runtime) legacyFormatter(this Value, made *Object) Value {
 		return Obj(made)
 	}
 	target := this.Object()
-	if !r.inheritsFrom(this, made.proto) {
+	if !r.inheritsFrom(this, made.proto()) {
 		return Obj(made)
 	}
 	target.setOwnRaw(r.atoms.internSymbol(r.intlFallback), Obj(made), 0)
@@ -545,7 +545,7 @@ func (r *Runtime) initNumberFormat(intlObj *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		out := newObject(made, ClassObject)
+		out := newObjectExt(made, ClassObject, objExtensible)
 		out.extOf().data = o
 		return rt.legacyFormatter(this, out), nil
 	})
@@ -977,7 +977,7 @@ func (r *Runtime) initDateTimeFormat(namespace *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		out := newObject(made, ClassObject)
+		out := newObjectExt(made, ClassObject, objExtensible)
 		out.extOf().data = d
 		return rt.legacyFormatter(this, out), nil
 	})

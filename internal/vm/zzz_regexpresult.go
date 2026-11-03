@@ -42,10 +42,9 @@ const matchBlockMax = 16
 // Strings, which its E and S have room for.
 func newMatchBlock[E, S any](proto *Object, n, k int) (*Object, []String) {
 	b := new(matchBlock[E, S])
-	b.proto, b.class = proto, ClassArray
-	b.flags = objExtensible | objArrayLengthWritable | objInlineProps
+	b.shape, b.class = rootFor(ClassArray, proto), ClassArray
+	b.flags = objExtensible | objArrayLengthWritable | objInlineProps | objHasExt
 	b.setRoom(&b.fields[0], len(b.fields))
-	b.ext = &b.side
 	b.side.elems = unsafe.Slice((*Value)(unsafe.Pointer(&b.inline)), n)
 	if k == 0 {
 		// S is then [0]String, the block's last field, whose address is the
@@ -108,7 +107,7 @@ func matchBlockOf[_ any](proto *Object, n, k int) (*Object, []String) {
 func matchResultOf[_ any](r *Runtime, re *regexp.Regexp, caps []int, input *String) *Object {
 	n := len(caps) / 2
 	t := r.matchLayout
-	if t == nil || n > matchBlockMax || re.Flags()&regexp.FlagHasIndices != 0 {
+	if t == nil || t.shape.proto != r.proto.array || n > matchBlockMax || re.Flags()&regexp.FlagHasIndices != 0 {
 		return r.buildMatchResult(re, caps, input)
 	}
 	k := 0
@@ -118,7 +117,7 @@ func matchResultOf[_ any](r *Runtime, re *regexp.Regexp, caps []int, input *Stri
 		}
 	}
 	arr, strs := matchBlockOf[struct{}](r.proto.array, n, k)
-	elems := arr.ext.elems
+	elems := arr.extAt().elems
 	for i := range elems {
 		lo, hi := caps[2*i], caps[2*i+1]
 		switch {

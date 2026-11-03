@@ -1110,14 +1110,16 @@ type Encoding struct {
 	// ObjectArrayLen when that is larger. ObjectElems is an array's dense
 	// elements' slice: a pointer to the first value, then the count.
 	//
-	// What only some objects have is in side fields the pointer at
-	// ObjectExt points to, or nil: an ordinary object most often has none.
-	// ExtElems is the elements' slice there, and ObjectData the data. An
-	// array has its own, in its allocation, for as long as it lives, which
-	// is how ObjectElems is an offset from the array itself.
+	// What only some objects have is in side fields at ObjectExt from the
+	// object, in its allocation, which the flags byte's FlagExt says it
+	// has: an ordinary object most often has none, and an array and a
+	// function always have.
+	// ExtElems is the elements' slice there, and ObjectData the data;
+	// ObjectElems and ObjectArrayLen are offsets from the object through
+	// them.
 	ObjectClass, ObjectFlags, ObjectArrayLen, ObjectElems int32
 	ObjectExt, ExtElems                                   int32
-	ClassArray, FlagSparse                                uint8
+	ClassArray, FlagSparse, FlagExt                       uint8
 	// ObjectData is the offset of an object's data in its side fields, an
 	// interface.
 	//
@@ -1311,11 +1313,13 @@ type Encoding struct {
 	// and their keys and attributes are its: the slice at ShapeKeys, an
 	// entry of KeySize bytes each, at the values' positions, with the key,
 	// a uint32 atom, at PropertyKey and a flags byte at PropertyFlags.
-	// ObjectProto is the offset of its prototype's pointer, which the shape
-	// does not settle.
+	// An object's prototype is its shape's too, the pointer at ShapeProto,
+	// so that a shape settles it: an object with a prototype has a shape,
+	// and one with none and no properties has none, a nil pointer at
+	// ObjectShape.
 	ObjectShape, ObjectProps, ShapeKeys, KeySize, PropertyKey, PropertyFlags int32
 	ObjectPropsLen, ObjectPropsCap                                           int32
-	ObjectProto                                                              int32
+	ShapeProto                                                               int32
 	// A shared shape's first transition: the pointer at ShapeNext, the
 	// shape a property added makes -- nil for none -- of the key, the
 	// uint32 at ShapeNextKey, and the attributes, the byte at

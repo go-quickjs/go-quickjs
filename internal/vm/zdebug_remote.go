@@ -388,7 +388,7 @@ func (r *Runtime) className(o *Object) string {
 	if o.class == ClassProxy {
 		return "Proxy"
 	}
-	for p := o; p != nil; p = p.proto {
+	for p := o; p != nil; p = p.proto() {
 		if proxyOf(p) != nil {
 			break
 		}
@@ -551,8 +551,8 @@ func (r *Runtime) DebugProperties(o *Object) ([]DebugProperty, []DebugInternal) 
 		}
 	}
 	proto := Null
-	if o.proto != nil {
-		proto = Obj(o.proto)
+	if o.proto() != nil {
+		proto = Obj(o.proto())
 	}
 	internal = append(internal, DebugInternal{"[[Prototype]]", proto})
 	return props, internal

@@ -32,11 +32,25 @@ func (r *Runtime) jitAccessorCaseOf(o *Object, sh *shape, key Atom, write bool) 
 	if key.IsIndex() || sh == nil || sh == noShape || sh.loose || !shapeClass(o.class) || synthesized(o.class, key) || o.findOwn(key) >= 0 {
 		return jitAccessorCase{}, false
 	}
-	a := jitAccessorCase{shape: sh}
-	for p := o.proto; p != nil; p = p.proto {
-		if len(a.up) == jitAddDepth || r.ensureProtoShape(p) == nil || p.cacheShape() == nil || !shapeClass(p.class) || synthesized(p.class, key) {
+	// The holder found first, the prototypes only kept for one that has
+	// the accessor: a read of a property nothing has -- React's
+	// children.$$typeof of an array, at every call Go made of it -- had
+	// made the two slices each time.
+	depth := 0
+	for p := o.proto(); ; p = p.proto() {
+		if p == nil || depth == jitAddDepth || r.ensureProtoShape(p) == nil || p.cacheShape() == nil || !shapeClass(p.class) || synthesized(p.class, key) {
 			return jitAccessorCase{}, false
 		}
+		depth++
+		if i := p.findOwn(key); i >= 0 {
+			if p.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted|propUninit) != propAccessor {
+				return jitAccessorCase{}, false
+			}
+			break
+		}
+	}
+	a := jitAccessorCase{shape: sh, up: make([]*Object, 0, depth), shapes: make([]*shape, 0, depth)}
+	for p := o.proto(); p != nil; p = p.proto() {
 		a.up, a.shapes = append(a.up, p), append(a.shapes, p.shape)
 		i := p.findOwn(key)
 		if i < 0 {
@@ -382,7 +396,7 @@ func (r *Runtime) jitLevelCallee(caller *bytecode.Function, pc int, this Value) 
 		return nil
 	}
 	key := r.atoms.intern(caller.Names[in.A])
-	for o := this.Object(); o != nil; o = o.proto {
+	for o := this.Object(); o != nil; o = o.proto() {
 		i := o.findOwn(key)
 		if i < 0 {
 			continue

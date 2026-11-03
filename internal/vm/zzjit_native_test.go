@@ -1088,12 +1088,19 @@ func jitSSACellsUnderGC(t *testing.T, table bool) {
 // loads them with (jitEncoding).
 func TestJITObjectLayout(t *testing.T) {
 	var o Object
-	if unsafe.Sizeof(o.class) != 1 || unsafe.Sizeof(o.flags) != 1 || unsafe.Sizeof(o.arrayLen) != 4 ||
+	var e objectExt
+	if unsafe.Sizeof(o.class) != 1 || unsafe.Sizeof(e.arrayLen) != 4 ||
 		unsafe.Sizeof(o.elemsOf()) != 3*unsafe.Sizeof(uintptr(0)) || unsafe.Sizeof(Value{}) != 16 {
 		t.Fatal("an Object field native code reads changed its width; update jitEncoding and mir")
 	}
-	if int(ClassArray) > 255 || int(objHasSparseElements) > 255 {
-		t.Fatal("a class or flag native code tests is out of a byte")
+	// Native code reads the flags' low byte, on a little-endian machine.
+	for _, f := range []objFlags{objHasSparseElements, objHTMLDDA, objExtensible, objArrayLengthWritable, objHasExt} {
+		if f > 255 {
+			t.Fatal("a flag native code tests is out of the flags' low byte")
+		}
+	}
+	if int(ClassArray) > 255 {
+		t.Fatal("a class native code tests is out of a byte")
 	}
 	// A loop's cursor, which a step reads in place (mir's iterStep): its
 	// class a byte, its state in its allocation, the state's done a byte,
@@ -9892,7 +9899,7 @@ func TestJITSSAReadsWhatIsNotANumber(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	sp := r.global.getOwn(r.atoms.intern("eng")).value().Object().proto.getOwn(r.atoms.intern("sp")).value().Object().fn().closure
+	sp := r.global.getOwn(r.atoms.intern("eng")).value().Object().proto().getOwn(r.atoms.intern("sp")).value().Object().fn().closure
 	rounds := []string{`String(run(500))`, `String(run(500))`, `String(run(500))`, `String(run(500))`, `String(run(500))`,
 		`eng.canvas={};String(run(500))`, `String(run(500))`}
 	for i, src := range rounds {

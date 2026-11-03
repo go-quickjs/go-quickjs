@@ -246,7 +246,7 @@ func TestObjectRoomLearnedFromGrowth(t *testing.T) {
 		t.Errorf("the table literal's root notes room for %d: its keyed stores taught it", root.slack)
 	}
 	pl := globalObject(r, "pl")
-	if root := pl.shape.root(); root != r.shapes.roots[ClassObject] || root.slack > maxSlack+1 {
+	if root := pl.shape.root(); !root.generic || root.slack > maxSlack+1 {
 		t.Errorf("objects of no site taught their class's root room for %d", root.slack)
 	}
 }

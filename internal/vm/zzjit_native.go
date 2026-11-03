@@ -391,7 +391,7 @@ func (r *Runtime) jitLoopTyped(v Value) *typedArrayData {
 		return nil
 	}
 	t, ok := v.Object().dataOf().(*typedArrayData)
-	if !ok || t.tracking || int(t.kind) >= len(r.typedArrayProtos) || v.Object().proto != r.typedArrayProtos[t.kind] {
+	if !ok || t.tracking || int(t.kind) >= len(r.typedArrayProtos) || v.Object().proto() != r.typedArrayProtos[t.kind] {
 		return nil
 	}
 	if t.st == nil && t.fixedStorage() == nil {
@@ -3557,9 +3557,8 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 			v, err = r.newRegExpLiteral(&f.cl.fn.Constants[in.A])
 		case bytecode.OpNewObject:
 			// As the interpreter makes a literal's object.
-			o := newLiteralObject(r.proto.object, ClassObject, int(in.A))
-			o.shape = r.shapes.siteRoot(&f.cl.ic[in.B])
-			v = Obj(o)
+			root := r.shapes.siteRoot(&f.cl.ic[in.B], r.proto.object)
+			v = Obj(newShapedLiteral(root.orRoot(ClassObject, r.proto.object), ClassObject, int(in.A)))
 		case bytecode.OpDefineField:
 			sp--
 			val, obj := stack[sp], stack[sp-1]
@@ -4118,7 +4117,7 @@ func (r *Runtime) jitUsing(f *frame, in bytecode.Instr, sp int) (int, Value, boo
 	}
 	switch in.Op {
 	case bytecode.OpNewDisposeCapability:
-		o := newObject(nil, ClassObject)
+		o := newObjectExt(nil, ClassObject, objExtensible)
 		o.extOf().data = &disposeCapability{}
 		return sp, Obj(o), true, nil
 	case bytecode.OpAddDisposable:

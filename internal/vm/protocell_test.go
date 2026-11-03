@@ -40,7 +40,7 @@ func TestProtoCellDeepReads(t *testing.T) {
 		function call(o) { return o.m() }
 		for (var i = 0; i < 5; i++) call(d)`)
 	e := siteEntry(r, "call")
-	if e == nil || e.p2 != globalObject(r, "d").proto.proto.proto.proto || !e.cell.valid {
+	if e == nil || e.p2 != globalObject(r, "d").proto().proto().proto().proto() || !e.cell.valid {
 		t.Fatalf("the method four prototypes up is not remembered by the chain's cell: %+v", e)
 	}
 	cell := e.cell

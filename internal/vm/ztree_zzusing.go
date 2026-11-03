@@ -65,7 +65,7 @@ func init() {
 		switch in.Op {
 		case bytecode.OpNewDisposeCapability:
 			b.push(func(*tctx) Value {
-				o := newObject(nil, ClassObject)
+				o := newObjectExt(nil, ClassObject, objExtensible)
 				o.extOf().data = &disposeCapability{}
 				return Obj(o)
 			})

@@ -62,7 +62,7 @@ func init() {
 			return
 		}
 		depth := 0
-		for p := o.proto; p != nil; p = p.proto {
+		for p := o.proto(); p != nil; p = p.proto() {
 			if depth++; depth > maxChainDepth {
 				return
 			}
@@ -75,10 +75,10 @@ func init() {
 			// something of its own.
 			return
 		}
-		cell := r.chainCell(o.proto)
+		cell := r.chainCell(o.proto())
 		if cell == nil {
 			return
 		}
-		c.refill(propCache{shape: remember(before), next: next, fills: c.fills + 1, p1: o.proto, cell: cell}, jitBuilt && r.jitOn())
+		c.refill(propCache{shape: remember(before), next: next, fills: c.fills + 1, p1: o.proto(), cell: cell}, jitBuilt && r.jitOn())
 	}
 }

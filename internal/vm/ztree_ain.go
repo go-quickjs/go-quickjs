@@ -94,7 +94,7 @@ func init() {
 		}
 		set := (uint64(uintptr(key.ref))>>4 ^ uint64(uintptr(unsafe.Pointer(sh)))>>4) * hasCacheMul >> (64 - hasCacheBits + 1)
 		for i := set * 2; i < set*2+2; i++ {
-			if e := &c[i]; e.key == key.ref && e.shape == sh && e.proto == o.proto && e.cell.valid {
+			if e := &c[i]; e.key == key.ref && e.shape == sh && e.proto == o.proto() && e.cell.valid {
 				return e.has, true
 			}
 		}
@@ -107,7 +107,7 @@ func init() {
 		if sh == nil || r.shapes.building {
 			return
 		}
-		cell := r.chainCell(o.proto)
+		cell := r.chainCell(o.proto())
 		if cell == nil {
 			return
 		}
@@ -116,15 +116,15 @@ func init() {
 		}
 		set := (uint64(uintptr(key.ref))>>4 ^ uint64(uintptr(unsafe.Pointer(sh)))>>4) * hasCacheMul >> (64 - hasCacheBits + 1)
 		ways := r.shapes.has[set*2 : set*2+2]
-		if e := &ways[0]; e.key != key.ref || e.shape != sh || e.proto != o.proto {
+		if e := &ways[0]; e.key != key.ref || e.shape != sh || e.proto != o.proto() {
 			// The newer is now the older, unless it is this one's, which
 			// its new cell replaces.
 			ways[1] = ways[0]
 		}
-		ways[0] = hasEntry{key: key.ref, shape: remember(sh), proto: o.proto, cell: cell, has: has}
+		ways[0] = hasEntry{key: key.ref, shape: remember(sh), proto: o.proto(), cell: cell, has: has}
 	}
 	hasIndexQuick = func(o *Object, i uint32) (bool, bool) {
-		for p := o; p != nil; p = p.proto {
+		for p := o; p != nil; p = p.proto() {
 			if p.class > ClassArray {
 				return false, false
 			}
@@ -168,7 +168,7 @@ func init() {
 				if e.atom != r.atoms.next() {
 					return false, false
 				}
-				for p := o; p != nil; p = p.proto {
+				for p := o; p != nil; p = p.proto() {
 					if p.class > ClassArray {
 						return false, false
 					}
@@ -183,7 +183,7 @@ func init() {
 		if a.IsIndex() {
 			return hasIndexQuick(o, a.Index())
 		}
-		for p := o; p != nil; p = p.proto {
+		for p := o; p != nil; p = p.proto() {
 			if p.class > ClassArray {
 				return false, false
 			}

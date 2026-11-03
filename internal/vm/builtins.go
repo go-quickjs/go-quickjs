@@ -2515,7 +2515,7 @@ func (r *Runtime) initErrorBuiltins() {
 
 		// The native error constructors inherit from Error itself.
 		if k != errError {
-			ctor.proto = r.proto.errorCtors[errError]
+			ctor.setProto(r.proto.errorCtors[errError])
 		}
 	}
 
@@ -3128,7 +3128,7 @@ func (r *Runtime) plainArray(this Value) *Object {
 		return nil
 	}
 	o := this.Object()
-	if o.class != ClassArray || o.flags&objHasSparseElements != 0 || o.proto != r.proto.array {
+	if o.class != ClassArray || o.flags&objHasSparseElements != 0 || o.proto() != r.proto.array {
 		return nil
 	}
 	return o
@@ -3138,9 +3138,9 @@ func (r *Runtime) plainArray(this Value) *Object {
 // own two, as they came, with no element or indexed property that an
 // assignment to one of the array's indices would have to consult.
 func (r *Runtime) noInheritedIndices(o *Object) bool {
-	ap := o.proto
-	op := ap.proto
-	if op != r.proto.object || op.proto != nil {
+	ap := o.proto()
+	op := ap.proto()
+	if op != r.proto.object || op.proto() != nil {
 		return false
 	}
 	for _, p := range [2]*Object{ap, op} {
@@ -3294,11 +3294,11 @@ func lastElem(e []Value, target Value) int64 {
 // element at a time, AWFY's Sieve spent half its time filling a new
 // Array(5000).
 func (r *Runtime) fillArray(o *Object, start, end int64, v Value) (int64, error) {
-	if o.class != ClassArray || o.proto != r.proto.array || !r.noInheritedIndices(o) || o.flags&objExtensible == 0 {
+	if o.class != ClassArray || o.proto() != r.proto.array || !r.noInheritedIndices(o) || o.flags&objExtensible == 0 {
 		return start, nil
 	}
 	sparse := o.flags&objHasSparseElements != 0
-	if sparse && (o.arrayLen >= 1<<31 || !o.noIndexKeys()) {
+	if sparse && (o.extAt().arrayLen >= 1<<31 || !o.noIndexKeys()) {
 		// An index past what an atom carries is a key noIndexKeys does
 		// not look for.
 		return start, nil
@@ -3315,14 +3315,14 @@ func (r *Runtime) fillArray(o *Object, start, end int64, v Value) (int64, error)
 	}
 	// Grown once, to what is filled: appended one at a time, a slice grows
 	// and is copied a dozen times on its way to thousands of elements.
-	o.extOf().elems = slices.Grow(elems, int(min(end, int64(o.arrayLen))-start))
-	for ; start < end && start < int64(o.arrayLen); start++ {
+	o.extOf().elems = slices.Grow(elems, int(min(end, int64(o.extAt().arrayLen))-start))
+	for ; start < end && start < int64(o.extAt().arrayLen); start++ {
 		if err := r.tick(); err != nil {
 			return start, err
 		}
 		o.extOf().elems = append(o.elemsOf(), v)
 	}
-	if uint32(len(o.elemsOf())) == o.arrayLen {
+	if uint32(len(o.elemsOf())) == o.extAt().arrayLen {
 		o.flags &^= objHasSparseElements
 	}
 	return start, nil

@@ -140,9 +140,9 @@ func (r *Runtime) jitOpFrameless(f *frame, cl *closure, in bytecode.Instr, args 
 		if obj.IsObject() {
 			switch {
 			case val.IsObject():
-				obj.Object().proto = val.Object()
+				obj.Object().setProto(val.Object())
 			case val.IsNull():
-				obj.Object().proto = nil
+				obj.Object().setProto(nil)
 			}
 		}
 		return obj, true
@@ -274,7 +274,7 @@ func (r *Runtime) jitDenseElems(src Value) ([]Value, bool) {
 		return nil, false
 	}
 	o := src.Object()
-	if o.class != ClassArray || o.proto != r.proto.array || o.valn != 0 || o.flags&objHasSparseElements != 0 || !r.jitArrayIterates() {
+	if o.class != ClassArray || o.proto() != r.proto.array || o.valn != 0 || o.flags&objHasSparseElements != 0 || !r.jitArrayIterates() {
 		return r.plainDenseElems(src)
 	}
 	els := o.elemsOf()
@@ -595,9 +595,9 @@ func (r *Runtime) jitOpMade(f *frame, in bytecode.Instr, args []Value) (Value, e
 		if obj.IsObject() {
 			switch {
 			case val.IsObject():
-				obj.Object().proto = val.Object()
+				obj.Object().setProto(val.Object())
 			case val.IsNull():
-				obj.Object().proto = nil
+				obj.Object().setProto(nil)
 			}
 		}
 		return obj, nil

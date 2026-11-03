@@ -30,7 +30,7 @@ func (r *Runtime) initShadowRealm() {
 		if err != nil {
 			return Undefined, err
 		}
-		o := newObject(p, ClassObject)
+		o := newObjectExt(p, ClassObject, objExtensible)
 		re := rt.NewRealm()
 		re.shadow = true
 		o.extOf().data = &shadowRealmData{realm: re}
@@ -112,7 +112,7 @@ func (r *Runtime) safeString(v Value) (string, error) {
 	if v.IsObject() {
 		o := v.Object()
 		var name, msg string
-		for p := o; p != nil; p = p.proto {
+		for p := o; p != nil; p = p.proto() {
 			if name == "" {
 				if n := p.getOwn(atomName); n.ok() && !n.isAccessor() && n.value().IsString() {
 					name = n.value().String().Go()

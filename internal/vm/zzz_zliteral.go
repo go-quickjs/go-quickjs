@@ -136,13 +136,12 @@ type litNodeOf[_ any] litOf
 func (l *litNodeOf[_]) make(c *tctx) Value {
 	lit := (*litOf)(l)
 	ic := &c.ic[lit.site]
-	root := c.r.shapes.siteRoot(ic)
+	root := c.r.shapes.siteRoot(ic, c.r.proto.object)
 	m := lit.n
 	if root != nil && int(root.slack) > m {
 		m = int(root.slack)
 	}
-	o := newLiteralObject(c.r.proto.object, ClassObject, m)
-	o.shape = root
+	o := newShapedLiteral(root.orRoot(ClassObject, c.r.proto.object), ClassObject, m)
 	fs := lit.fields
 	if len(fs) == 0 {
 		return Obj(o)

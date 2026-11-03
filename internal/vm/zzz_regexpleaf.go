@@ -397,7 +397,7 @@ func (l *regexpLeaf[_]) check(r *Runtime, this Value, args []Value) bool {
 		return false
 	}
 	// test's call of exec is the built-in's (execIsBuiltin).
-	return !l.test || o.proto == r.proto.regexp && int(o.valn) == 1 && propsIntact(o.proto, r.regexpExecProps)
+	return !l.test || o.proto() == r.proto.regexp && int(o.valn) == 1 && propsIntact(o.proto(), r.regexpExecProps)
 }
 
 // statefulCheck is check where the call is made once (regexpNativeChecks):
@@ -422,5 +422,5 @@ func (l *regexpLeaf[_]) statefulCheck(r *Runtime, this Value, args []Value) bool
 		o.shape.keys[0].key != atomLastIndex || o.shape.keys[0].flags&propWritable == 0 || !o.vals()[0].IsNumber() {
 		return false
 	}
-	return !l.test || o.proto == r.proto.regexp && int(o.valn) == 1 && propsIntact(o.proto, r.regexpExecProps)
+	return !l.test || o.proto() == r.proto.regexp && int(o.valn) == 1 && propsIntact(o.proto(), r.regexpExecProps)
 }

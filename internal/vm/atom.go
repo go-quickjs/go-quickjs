@@ -78,6 +78,14 @@ const (
 	atomThen
 	atomDefault
 	atomExec
+	// atomWeakMapRefs is the private key under which an object keeps its
+	// values in the WeakMaps it is a key of (newWeakMapRefs). It has a name
+	// for printing, but no table maps the name to it: nothing a script or
+	// a host spells is ever this atom.
+	atomWeakMapRefs
+	// atomCloneBrand is, as atomWeakMapRefs, a private key no name maps to:
+	// the one under which an object keeps the brand SetCloneBrand gave it.
+	atomCloneBrand
 	atomStaticAtomCount
 )
 
@@ -89,8 +97,12 @@ var staticAtomNames = [...]string{
 	"string", "boolean", "symbol", "bigint", "arguments", "caller", "callee",
 	"message", "stack", "__proto__", "next", "done", "return", "throw", "raw",
 	"index", "input", "groups", "lastIndex", "source", "flags", "global",
-	"toJSON", "then", "default", "exec",
+	"toJSON", "then", "default", "exec", "[[WeakMapRefs]]", "[[CloneBrand]]",
 }
+
+// hiddenAtom reports whether a is one of the static atoms no name maps to,
+// the keys of the VM's own private properties.
+func hiddenAtom(a Atom) bool { return a == atomWeakMapRefs || a == atomCloneBrand }
 
 // atomEntry is one interned key: either a string or a symbol.
 type atomEntry struct {
@@ -138,9 +150,11 @@ func newAtomTable() *atomTable {
 		byName:   make(map[string]Atom, len(staticAtomNames)+64),
 		bySymbol: make(map[*Symbol]Atom),
 	}
-	for _, name := range staticAtomNames {
+	for i, name := range staticAtomNames {
 		t.entries = append(t.entries, atomEntry{name: name})
-		t.byName[name] = Atom(len(t.entries) - 1)
+		if !hiddenAtom(Atom(i)) {
+			t.byName[name] = Atom(i)
+		}
 	}
 	return t
 }
@@ -155,7 +169,9 @@ func (t *atomTable) publish() {
 	b := &atomBase{byName: make(map[string]Atom, len(t.entries))}
 	for _, e := range t.entries {
 		if e.sym == nil {
-			b.byName[e.name] = Atom(len(b.entries))
+			if a := Atom(len(b.entries)); !hiddenAtom(a) {
+				b.byName[e.name] = a
+			}
 			b.entries = append(b.entries, e)
 		}
 	}

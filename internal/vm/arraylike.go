@@ -153,7 +153,7 @@ func (r *Runtime) knownIndexKey(o *Object, i int64) (Atom, bool) {
 	if a, ok := r.atoms.lookup(name); ok {
 		return a, true
 	}
-	for p := o; p != nil; p = p.proto {
+	for p := o; p != nil; p = p.proto() {
 		if p.class != ClassObject && p.class != ClassArray || p.class == ClassObject && p.dataOf() != nil {
 			return r.atoms.intern(name), true
 		}
@@ -303,7 +303,7 @@ func (a *arrayLike) holeAbsent(i int64) bool {
 		o.flags&(objHasSparseElements|objMappedArguments) != 0 || !o.noIndexKeys() {
 		return false
 	}
-	for p := o.proto; p != nil; p = p.proto {
+	for p := o.proto(); p != nil; p = p.proto() {
 		if p.class != ClassObject && p.class != ClassArray || len(p.elemsOf()) != 0 || !p.noIndexKeys() {
 			return false
 		}

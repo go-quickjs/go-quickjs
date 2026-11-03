@@ -12,7 +12,7 @@ package vm
 // object being searched when a getter is inherited, which is what lets a
 // prototype accessor read the properties of the instance it was called on.
 func (r *Runtime) getProp(obj *Object, key Atom, receiver Value) (Value, error) {
-	for o := obj; o != nil; o = o.proto {
+	for o := obj; o != nil; o = o.proto() {
 		// A proxy intercepts the operation before anything else happens,
 		// including the rest of the prototype walk, since the trap decides
 		// what the chain even is. That holds wherever in the chain it is
@@ -362,8 +362,8 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 				obj.shape.written()
 				return true, nil
 			}
-		} else if obj.flags&objExtensible != 0 && (key.IsIndex() && len(obj.elemsOf()) == 0 && noneIndexed(obj.proto) ||
-			!key.IsIndex() && noneHas(obj.proto, key)) {
+		} else if obj.flags&objExtensible != 0 && (key.IsIndex() && len(obj.elemsOf()) == 0 && noneIndexed(obj.proto()) ||
+			!key.IsIndex() && noneHas(obj.proto(), key)) {
 			// Creating one is the other thing most assignments are -- a
 			// constructor filling in its object, an object filled in as a
 			// table of indices -- and where nothing up the chain has the
@@ -378,7 +378,7 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 	// Walk the chain looking for an accessor or a non-writable data property,
 	// either of which changes what a plain assignment does. A proxy anywhere
 	// along it decides the rest for itself.
-	for o := obj; o != nil; o = o.proto {
+	for o := obj; o != nil; o = o.proto() {
 		if o != obj && key.IsIndex() && (o.class == ClassObject || o.class == ClassArray) &&
 			len(o.elemsOf()) == 0 && o.noIndexKeys() {
 			// A prototype with no element and no index in its table, as
@@ -508,7 +508,7 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 // noneHas reports whether no object of a chain has a property named key, all
 // of them being ordinary objects, which have no property they do not store.
 func noneHas(o *Object, key Atom) bool {
-	for ; o != nil; o = o.proto {
+	for ; o != nil; o = o.proto() {
 		if o.class != ClassObject || o.findOwn(key) >= 0 {
 			return false
 		}
@@ -521,7 +521,7 @@ func noneHas(o *Object, key Atom) bool {
 // no element they do not store: none has a setter for an index, nor one
 // not to be written.
 func noneIndexed(o *Object) bool {
-	for ; o != nil; o = o.proto {
+	for ; o != nil; o = o.proto() {
 		if o.class != ClassObject && o.class != ClassArray || len(o.elemsOf()) != 0 || !o.noIndexKeys() {
 			return false
 		}
@@ -760,7 +760,7 @@ func (r *Runtime) hasPropErr(o *Object, key Atom) (bool, error) {
 			return ix.valid, nil
 		}
 	}
-	for ; o != nil; o = o.proto {
+	for ; o != nil; o = o.proto() {
 		if p := proxyOf(o); p != nil {
 			return r.proxyHas(p, key)
 		}

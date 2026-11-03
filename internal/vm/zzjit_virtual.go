@@ -112,9 +112,12 @@ func (r *Runtime) jitMaterializeObjects(f *frame, e *jitEntry, limit int) {
 				return m.o
 			}
 		}
-		sw, pw := math.Float64bits(at(home).num), math.Float64bits(at(home+1).num)
-		o := newLiteralObject(*(**Object)(unsafe.Pointer(&pw)), ClassObject, fields)
-		o.shape = *(**shape)(unsafe.Pointer(&sw))
+		// Of the layout the code had made it to, which says its prototype
+		// too: made of its class's root for that prototype instead, it had
+		// given the prototype a layout of its own (rootFor), and the code
+		// its every chain check through it failed.
+		sw := math.Float64bits(at(home).num)
+		o := newShapedLiteral(*(**shape)(unsafe.Pointer(&sw)), ClassObject, fields)
 		objs = append(objs, made{home, fields, o})
 		// Its properties, the words of others among them made too.
 		for k := range fields {

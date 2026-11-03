@@ -75,7 +75,7 @@ type dateObject struct {
 
 // newDateObject is a Date object of prototype proto, and its date, to be set.
 func newDateObject(proto *Object) (*Object, *date.Date) {
-	x := &dateObject{Object: Object{proto: proto, class: ClassDate, flags: objExtensible}}
+	x := &dateObject{Object: Object{shape: rootFor(ClassDate, proto), class: ClassDate, flags: objExtensible}}
 	x.embedExt(&x.side)
 	x.side.data = &x.d
 	return &x.Object, &x.d

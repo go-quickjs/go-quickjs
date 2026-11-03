@@ -1504,14 +1504,12 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			// The site's objects are made with the room they came to need,
 			// as a constructor's are, where the literal says less: an
 			// object built as {} and then filled in is the common case.
-			root := c.r.shapes.siteRoot(&c.ic[site])
+			root := c.r.shapes.siteRoot(&c.ic[site], c.r.proto.object)
 			m := n
 			if root != nil && int(root.slack) > m {
 				m = int(root.slack)
 			}
-			o := newLiteralObject(c.r.proto.object, ClassObject, m)
-			o.shape = root
-			return Obj(o)
+			return Obj(newShapedLiteral(root.orRoot(ClassObject, c.r.proto.object), ClassObject, m))
 		})
 	case bytecode.OpDefineField:
 		// The object stays where it is, beneath the value: it is defined on

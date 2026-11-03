@@ -47,11 +47,11 @@ func TestJITMaterializeStopsAtCalleeFrame(t *testing.T) {
 	// The frame's home, at slot n+20, of an object of no property: its
 	// shape and its prototype.
 	home := n + 20
-	r.stack[base+20], r.stack[base+21] = ptr(unsafe.Pointer(model.shape)), ptr(unsafe.Pointer(model.proto))
+	r.stack[base+20], r.stack[base+21] = ptr(unsafe.Pointer(model.shape)), ptr(unsafe.Pointer(model.proto()))
 	w := abi.VirtualWord(home, 0)
 	r.stack[base+1], r.stack[base+30] = word(w), word(w)
 	r.jitMaterializeBelow(f, e, base+25)
-	if in := r.stack[base+1]; !in.IsObject() || in.Object().shape != model.shape || in.Object().proto != model.proto {
+	if in := r.stack[base+1]; !in.IsObject() || in.Object().shape != model.shape || in.Object().proto() != model.proto() {
 		t.Errorf("the frame's word was not made of its home: %#v", in)
 	}
 	if out := r.stack[base+30]; out.ref != nil || math.Float64bits(out.num) != w {

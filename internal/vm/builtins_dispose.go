@@ -310,7 +310,7 @@ func (r *Runtime) initDisposableStack(async bool) {
 		if err != nil {
 			return Undefined, err
 		}
-		o := newObject(p, ClassObject)
+		o := newObjectExt(p, ClassObject, objExtensible)
 		o.extOf().data = &disposableStackData{async: async, cap: &disposeCapability{}}
 		return Obj(o), nil
 	})
@@ -446,7 +446,7 @@ func (r *Runtime) initDisposableStack(async bool) {
 		if err != nil {
 			return Undefined, err
 		}
-		o := newObject(proto, ClassObject)
+		o := newObjectExt(proto, ClassObject, objExtensible)
 		o.extOf().data = &disposableStackData{async: async, cap: d.cap}
 		d.cap = &disposeCapability{}
 		d.disposed = true

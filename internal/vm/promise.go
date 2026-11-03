@@ -143,7 +143,7 @@ func (r *Runtime) newPromise() *Object {
 	// The promise and its state are one allocation: neither outlives the
 	// other, and a program that awaits makes a great many of them.
 	po := &promiseObject{
-		Object: Object{proto: r.proto.promise, class: ClassPromise, flags: objExtensible},
+		Object: Object{shape: rootFor(ClassPromise, r.proto.promise), class: ClassPromise, flags: objExtensible},
 	}
 	po.embedExt(&po.side)
 	po.side.data = &po.state
@@ -1072,8 +1072,8 @@ func (r *Runtime) toPromiseErr(v Value) (*Object, error) {
 		// promise of this realm's with no constructor of its own, whose
 		// prototype's is the intrinsic as a data property -- is read where
 		// it is: nothing could see it read.
-		if o := v.Object(); o.proto == r.proto.promise && !o.getOwn(atomConstructor).ok() {
-			if p := o.proto.getOwn(atomConstructor); p.ok() && p.flags()&(propAccessor|propPrivate) == 0 &&
+		if o := v.Object(); o.proto() == r.proto.promise && !o.getOwn(atomConstructor).ok() {
+			if p := o.proto().getOwn(atomConstructor); p.ok() && p.flags()&(propAccessor|propPrivate) == 0 &&
 				p.value().IsObject() && p.value().Object() == r.promiseCtor {
 				return o, nil
 			}

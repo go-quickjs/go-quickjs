@@ -110,7 +110,7 @@ func (r *Runtime) initJSONBuiltins() {
 		if p.pos != len(text) {
 			return Undefined, rt.throwSyntaxError("unexpected trailing content in JSON at position %d", p.pos)
 		}
-		o := newObject(nil, ClassObject)
+		o := newObjectExt(nil, ClassObject, objExtensible)
 		o.extOf().data = rawJSON{}
 		o.setOwnRaw(rt.atoms.intern("rawJSON"), Str(s), propEnumerable)
 		o.flags &^= objExtensible
@@ -586,7 +586,7 @@ func (e *jsonEncoder) encode(buf []byte, v Value, prefix string) ([]byte, bool, 
 	if !e.hasAllowed {
 		// Small ordinary objects can snapshot their keys on the stack. Keep
 		// the snapshot even for getters: one may change the keys still to come.
-		plain := o.class == ClassObject && o.ext == nil && int(o.valn) <= len(localKeys)
+		plain := o.class == ClassObject && o.flags&objHasExt == 0 && int(o.valn) <= len(localKeys)
 		if plain {
 			keys = localKeys[:0]
 			for _, p := range o.keys() {

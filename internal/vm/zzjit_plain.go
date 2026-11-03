@@ -242,7 +242,7 @@ func (r *Runtime) jitForInPlain(ctx *abi.Context) bool {
 		return false
 	}
 	if v.IsObject() {
-		for o := v.Object(); o != nil; o = o.proto {
+		for o := v.Object(); o != nil; o = o.proto() {
 			if proxyOf(o) != nil || o.class == ClassModuleNamespace {
 				return false
 			}

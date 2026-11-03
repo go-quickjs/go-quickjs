@@ -90,7 +90,7 @@ type privateMethod struct {
 // newPrivateMethods returns an empty list, wrapped so that it can live in a
 // binding like any other value. Nothing a script can write reaches it.
 func (r *Runtime) newPrivateMethods() Value {
-	o := newObject(nil, ClassObject)
+	o := newObjectExt(nil, ClassObject, objExtensible)
 	o.extOf().data = &privateMethods{}
 	return Obj(o)
 }

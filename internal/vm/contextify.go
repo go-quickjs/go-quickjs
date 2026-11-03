@@ -55,10 +55,10 @@ func (r *Runtime) isGlobalScope(env *Object) bool {
 // this is asked; an imported one, an accessor with no setter, is refused
 // whatever the receiver.
 func (r *Runtime) globalReceiver(env *Object) Value {
-	if r.isGlobalScope(env) || env.proto == nil {
+	if r.isGlobalScope(env) || env.proto() == nil {
 		return Obj(env)
 	}
-	return Obj(env.proto)
+	return Obj(env.proto())
 }
 
 // sandboxGet reads a name through a context's global: the sandbox's, if it

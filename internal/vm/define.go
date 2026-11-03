@@ -443,7 +443,7 @@ func (r *Runtime) setProtoOfChecked(o *Object, proto Value) bool {
 		return proto.SameValue(protoValue(o))
 	}
 	if proto.IsObject() {
-		for p := proto.Object(); p != nil; p = p.proto {
+		for p := proto.Object(); p != nil; p = p.proto() {
 			if p == o {
 				return false
 			}

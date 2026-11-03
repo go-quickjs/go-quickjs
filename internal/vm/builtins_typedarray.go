@@ -879,7 +879,7 @@ func (r *Runtime) initTypedArrayBuiltins() {
 		})
 		r.typedArrayCtors[kind] = ctor
 		// The concrete constructors inherit the statics from %TypedArray%.
-		ctor.proto = abstract
+		ctor.setProto(abstract)
 		r.defConst(ctor, "BYTES_PER_ELEMENT", Int(info.size))
 		r.defConst(proto, "BYTES_PER_ELEMENT", Int(info.size))
 

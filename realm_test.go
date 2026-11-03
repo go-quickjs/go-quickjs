@@ -252,3 +252,36 @@ func TestTemporalProtoFromConstructorRealm(t *testing.T) {
 		t.Errorf("Intl = %v, %v", v, err)
 	}
 }
+
+// An arguments object's @@iterator and prototype are those of the realm the
+// function runs in, when one compiled program runs in two: the runtime keeps
+// a template of each kind and reuses it only for its own realm's prototype.
+// An unmapped arguments object made in a second realm had had the first
+// realm's Array.prototype.values.
+func TestRealmArgumentsOfOwnRealm(t *testing.T) {
+	p, err := quickjs.Compile("args.js", `function strict() { 'use strict'; return arguments }
+function sloppy(a) { return arguments }
+var ok = 0
+for (var i = 0; i < 2000; i++) {
+	var s = strict(1), m = sloppy(1)
+	if (s[Symbol.iterator] === Array.prototype.values && m[Symbol.iterator] === Array.prototype.values &&
+		Object.getPrototypeOf(s) === Object.prototype && Object.getPrototypeOf(m) === Object.prototype) ok++
+}
+ok`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := quickjs.New()
+	defer rt.Close()
+	other, err := rt.NewRealm()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for round := 0; round < 2; round++ {
+		for name, run := range map[string]func(*quickjs.Program) (quickjs.Value, error){"runtime": rt.RunProgram, "realm": other.RunProgram} {
+			if v, err := run(p); err != nil || v.String() != "2000" {
+				t.Errorf("round %d, %s's realm: %v of 2000 arguments objects its own, %v", round, name, v, err)
+			}
+		}
+	}
+}

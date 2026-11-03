@@ -57,7 +57,7 @@ func (r *Runtime) withFound(scopes []*Object, name Atom, limit int) (*Object, bo
 // chainHasProxy reports whether a proxy is on an object's prototype chain,
 // which can observe what is asked of it and in what order.
 func chainHasProxy(o *Object) bool {
-	for ; o != nil; o = o.proto {
+	for ; o != nil; o = o.proto() {
 		if proxyOf(o) != nil {
 			return true
 		}

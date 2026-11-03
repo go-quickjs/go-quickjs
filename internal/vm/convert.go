@@ -453,7 +453,7 @@ func (r *Runtime) keyFor(o *Object, n propertyName) (Atom, bool) {
 	if ok {
 		return a, true
 	}
-	for p := o; p != nil; p = p.proto {
+	for p := o; p != nil; p = p.proto() {
 		if proxyOf(p) != nil || p.class == ClassModuleNamespace {
 			if n.sym != nil {
 				return r.atoms.internSymbol(n.sym), true

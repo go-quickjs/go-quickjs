@@ -78,7 +78,7 @@ func (r *Runtime) initSegmenter(intlObj *Object) {
 			kept.Keywords = []intl.Keyword{{Key: "va", Value: va}}
 		}
 		o.locale = kept.String()
-		out := newObject(proto, ClassObject)
+		out := newObjectExt(proto, ClassObject, objExtensible)
 		out.extOf().data = o
 		return Obj(out), nil
 	})
@@ -101,7 +101,7 @@ func (r *Runtime) initSegmenter(intlObj *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		out := newObject(segments, ClassObject)
+		out := newObjectExt(segments, ClassObject, objExtensible)
 		out.extOf().data = o.breakUp(s)
 		return Obj(out), nil
 	})
@@ -170,7 +170,7 @@ func (r *Runtime) newSegmentsProto() *Object {
 			if err != nil {
 				return Undefined, err
 			}
-			out := newObject(rt.intlProtoOf("SegmentIterator"), ClassObject)
+			out := newObjectExt(rt.intlProtoOf("SegmentIterator"), ClassObject, objExtensible)
 			out.extOf().data = &segmentIterData{segments: d}
 			return Obj(out), nil
 		})

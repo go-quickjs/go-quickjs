@@ -183,7 +183,7 @@ func (r *Runtime) setTrace(o *Object, st stackTrace) {
 		t.trace = st
 		return
 	}
-	holder := newObject(nil, ClassObject)
+	holder := newObjectExt(nil, ClassObject, objExtensible)
 	holder.extOf().data = &st
 	o.setOwnRaw(r.stackSlot, Obj(holder), propPrivate)
 }
@@ -485,7 +485,7 @@ func (r *Runtime) typeName(fr *stackFrame) string {
 		}
 	}
 	tag := r.atoms.internSymbol(r.wellKnown.toStringTag)
-	for p := o; p != nil; p = p.proto {
+	for p := o; p != nil; p = p.proto() {
 		if t := p.getOwn(tag); t.ok() && !t.isAccessor() && t.value().IsString() {
 			return t.value().String().Go()
 		}
@@ -528,7 +528,7 @@ func (r *Runtime) methodName(fr *stackFrame) string {
 	}
 	if name := fr.functionName(); name != "" {
 		key := r.atoms.intern(name)
-		for o := fr.this.Object(); o != nil; o = o.proto {
+		for o := fr.this.Object(); o != nil; o = o.proto() {
 			if p := o.getOwn(key); p.ok() {
 				if holds(o.propAt(p.i)) {
 					return name
@@ -538,7 +538,7 @@ func (r *Runtime) methodName(fr *stackFrame) string {
 		}
 	}
 	found := ""
-	for o := fr.this.Object(); o != nil; o = o.proto {
+	for o := fr.this.Object(); o != nil; o = o.proto() {
 		for i, p := range o.keys() {
 			if p.flags&propDeleted != 0 || r.atoms.IsSymbol(p.key) || !holds(o.propAt(int32(i))) {
 				continue

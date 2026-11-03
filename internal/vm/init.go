@@ -206,7 +206,7 @@ func (r *Runtime) initIntrinsics() {
 	r.proto.object = newObject(nil, ClassObject)
 	// The root of every ordinary chain has the first shape of the runtime's
 	// tree, which every object inheriting from it joins.
-	r.proto.object.shape = newUniqueShape(r.shapes, nil, nil)
+	r.proto.object.shape = newUniqueShape(r.shapes, nil, nil, nil)
 	// Every ordinary chain ends here, so giving this object a prototype would
 	// put whatever it was given above everything in the realm. It is refused
 	// however extensible the object is.
@@ -286,11 +286,11 @@ func (r *Runtime) newNativeFunc(name string, length int, fn NativeFunc) *Object 
 func (r *Runtime) newNativeFuncPair(len1, len2 int, fn1, fn2 NativeFunc) (*Object, *Object) {
 	pair := new(struct{ a, b funcObject })
 	proto := r.proto.function
-	pair.a.Object = Object{proto: proto, class: ClassFunction, flags: objExtensible}
+	pair.a.Object = Object{shape: rootFor(ClassFunction, proto), class: ClassFunction, flags: objExtensible}
 	pair.a.embedExt(&pair.a.side)
 	pair.a.side.data = &pair.a.fn
 	pair.a.fn = funcData{native: fn1, length: int32(len1), ctorKind: ctorNone, realm: r.Realm}
-	pair.b.Object = Object{proto: proto, class: ClassFunction, flags: objExtensible}
+	pair.b.Object = Object{shape: rootFor(ClassFunction, proto), class: ClassFunction, flags: objExtensible}
 	pair.b.embedExt(&pair.b.side)
 	pair.b.side.data = &pair.b.fn
 	pair.b.fn = funcData{native: fn2, length: int32(len2), ctorKind: ctorNone, realm: r.Realm}

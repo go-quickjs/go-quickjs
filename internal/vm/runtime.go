@@ -892,8 +892,8 @@ func (t *Thrown) Error() string {
 			name := "Error"
 			if np := o.getOwn(atomName); np.ok() && !np.isAccessor() && np.value().IsString() {
 				name = np.value().String().Go()
-			} else if o.proto != nil {
-				if np := o.proto.getOwn(atomName); np.ok() && !np.isAccessor() && np.value().IsString() {
+			} else if o.proto() != nil {
+				if np := o.proto().getOwn(atomName); np.ok() && !np.isAccessor() && np.value().IsString() {
 					name = np.value().String().Go()
 				}
 			}

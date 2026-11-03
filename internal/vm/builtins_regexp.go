@@ -185,7 +185,7 @@ func (r *Runtime) regexpArgCall(f *Object, recv Value, args []Value) bool {
 // one RegExp rather than one each time round.
 func (r *Runtime) regexpLiteralDone(c *bytecode.Constant, o *Object) {
 	i := regexpLitSlot(c)
-	if r.regexpLits[i].c != c || r.regexpSpares[i].c != nil || o.class != ClassRegExp || !o.extEmbedded() || int(o.valn) != 1 {
+	if r.regexpLits[i].c != c || r.regexpSpares[i].c != nil || o.class != ClassRegExp || int(o.valn) != 1 {
 		return
 	}
 	ro := (*regexpObject)(unsafe.Pointer(o))
@@ -200,7 +200,7 @@ func (r *Runtime) regexpLiteralDone(c *bytecode.Constant, o *Object) {
 func (r *Runtime) newRegExpObject(re *regexp.Regexp) Value {
 	// The object, its data, its clone of the pattern and its table are one
 	// allocation: a literal in a loop is a new RegExp each time round.
-	ro := &regexpObject{Object: Object{proto: r.proto.regexp, class: ClassRegExp, flags: objExtensible | objInlineProps}}
+	ro := &regexpObject{Object: Object{shape: rootFor(ClassRegExp, r.proto.regexp), class: ClassRegExp, flags: objExtensible | objInlineProps}}
 	ro.setRoom(&ro.inline[0], len(ro.inline))
 	re.CloneInto(&ro.re)
 	ro.rd = regexpData{re: &ro.re, realm: r.Realm}
@@ -624,8 +624,8 @@ func (r *Runtime) setLastIndex(o *Object, v Value) error {
 // does to what builtinExec answers for.
 func (r *Runtime) execIsBuiltin(rx Value) bool {
 	o := rx.Object()
-	return o.class == ClassRegExp && o.proto == r.proto.regexp && int(o.valn) == 1 &&
-		o.shape.keys[0].key == atomLastIndex && propsIntact(o.proto, r.regexpExecProps)
+	return o.class == ClassRegExp && o.proto() == r.proto.regexp && int(o.valn) == 1 &&
+		o.shape.keys[0].key == atomLastIndex && propsIntact(o.proto(), r.regexpExecProps)
 }
 
 // builtinExec reports whether exec, called on rx, would be the built-in:
@@ -921,7 +921,7 @@ func (r *Runtime) buildMatchResult(re *regexp.Regexp, caps []int, input *String)
 	// it with values of its own.
 	gl := r.groupsLayoutOf(re)
 	groups := r.groupsObject(gl, elems)
-	if t := r.matchLayout; t != nil && !hasIndices {
+	if t := r.matchLayout; t != nil && !hasIndices && t.shape.proto == arr.proto() {
 		arr.setVals(append(arr.vals(), t.vals[:]...))
 		arr.shape = t.shape
 		arr.vals()[0] = Int(caps[0])
@@ -1074,7 +1074,7 @@ func (r *Runtime) groupsObject(g *groupsLayout, vals []Value) Value {
 	if !g.made {
 		g.made = true
 		if s := o.shape; s != nil && s.loose && s.index == nil && int(s.n) == len(g.names) {
-			g.shape = &shape{loose: true, n: s.n, keys: slices.Clone(s.keys[:s.n])}
+			g.shape = &shape{proto: s.proto, loose: true, n: s.n, keys: slices.Clone(s.keys[:s.n])}
 		}
 	}
 	return Obj(o)
@@ -1307,9 +1307,9 @@ func (r *Runtime) builtinFlagBits(rx Value) (regexp.Flags, bool) {
 		return 0, false
 	}
 	o := rx.Object()
-	if o.class != ClassRegExp || o.proto == nil || o.proto != r.proto.regexp ||
+	if o.class != ClassRegExp || o.proto() == nil || o.proto() != r.proto.regexp ||
 		int(o.valn) != 1 || o.shape.keys[0].key != atomLastIndex ||
-		!propsIntact(o.proto, r.regexpFlagProps) {
+		!propsIntact(o.proto(), r.regexpFlagProps) {
 		return 0, false
 	}
 	d, ok := o.dataOf().(*regexpData)

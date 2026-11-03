@@ -115,7 +115,7 @@ type execReuseTable struct {
 // defining an accessor does.
 func execReuseChain[_ any](r *Runtime) *protoCell {
 	ap, op := r.proto.array, r.proto.object
-	if ap == nil || op == nil || ap.proto != op || op.proto != nil {
+	if ap == nil || op == nil || ap.proto() != op || op.proto() != nil {
 		return nil
 	}
 	for _, o := range [2]*Object{ap, op} {
@@ -202,7 +202,7 @@ func slotGone[_ any](r *Runtime, p *Value) bool {
 func matchResultReused[_ any](r *Runtime, tbp **execReuseTable, rc execReuseCall, re *regexp.Regexp, caps []int, input *String) *Object {
 	n := len(caps) / 2
 	t, site := r.matchLayout, rc.site
-	if t == nil || n > matchBlockMax || re.Flags()&regexp.FlagHasIndices != 0 || site.l >= len(rc.locals) || site.s >= len(rc.locals) ||
+	if t == nil || t.shape.proto != r.proto.array || n > matchBlockMax || re.Flags()&regexp.FlagHasIndices != 0 || site.l >= len(rc.locals) || site.s >= len(rc.locals) ||
 		!site.strs && n <= 4 {
 		return matchResultOf[struct{}](r, re, caps, input)
 	}
@@ -229,7 +229,7 @@ func matchResultReused[_ any](r *Runtime, tbp **execReuseTable, rc execReuseCall
 	if site.s >= 0 {
 		sHeld = &rc.locals[site.s]
 	}
-	if e.site != site || e.n != n || e.cell != cell || e.arr.proto != r.proto.array || e.held != held && heldBy[struct{}](r, e.held, e.arr) || site.strs && piecesIn[struct{}](r, e.sHeld, e.strs) {
+	if e.site != site || e.n != n || e.cell != cell || e.arr.proto() != r.proto.array || e.held != held && heldBy[struct{}](r, e.held, e.arr) || site.strs && piecesIn[struct{}](r, e.sHeld, e.strs) {
 		// A new array, with room for a String for each element where the
 		// pieces are made again.
 		var strs []String
@@ -255,7 +255,7 @@ func matchResultReused[_ any](r *Runtime, tbp **execReuseTable, rc execReuseCall
 		}
 		strs = make([]String, k)
 	}
-	elems := arr.ext.elems
+	elems := arr.extAt().elems
 	for i := range elems {
 		lo, hi := caps[2*i], caps[2*i+1]
 		switch {

@@ -402,7 +402,7 @@ func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Ob
 			proto = custom.Object()
 		}
 	}
-	gobj.proto = proto
+	gobj.setProto(proto)
 	return &gobj.Object, nil
 }
 
@@ -985,12 +985,12 @@ func (r *Runtime) initGeneratorBuiltins() {
 // same two, so after the first the rest copy its shape rather than finding
 // each property's place: one allocation where there were three.
 func (r *Runtime) iterResult(v Value, done bool) *Object {
-	o := newLiteralObject(r.proto.object, ClassObject, 2)
-	if s := r.iterResultShape; s != nil {
+	if s := r.iterResultShape; s != nil && s.proto == r.proto.object {
+		o := newShapedLiteral(s, ClassObject, 2)
 		o.setVals(append(o.vals(), v, Bool(done)))
-		o.shape = s
 		return o
 	}
+	o := newLiteralObject(r.proto.object, ClassObject, 2)
 	o.setOwnRaw(atomValue, v, propDefault)
 	o.setOwnRaw(atomDone, Bool(done), propDefault)
 	if s := o.shape; s != nil && !s.unique && s.n == 2 {

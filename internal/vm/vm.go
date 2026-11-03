@@ -1081,9 +1081,9 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			if obj.IsObject() {
 				switch {
 				case val.IsObject():
-					obj.Object().proto = val.Object()
+					obj.Object().setProto(val.Object())
 				case val.IsNull():
-					obj.Object().proto = nil
+					obj.Object().setProto(nil)
 				}
 			}
 
@@ -1753,8 +1753,8 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// the object's own allocation.
 			// Its objects start from a shape of the literal's own, so that the
 			// properties it writes take the one transition out of each.
-			o := newLiteralObject(r.proto.object, ClassObject, int(in.A))
-			o.shape = r.shapes.siteRoot(&cl.ic[in.B])
+			root := r.shapes.siteRoot(&cl.ic[in.B], r.proto.object)
+			o := newShapedLiteral(root.orRoot(ClassObject, r.proto.object), ClassObject, int(in.A))
 			sp = pushAt(stack, sp, Obj(o))
 		case bytecode.OpNewArray:
 			n := int(in.A)
@@ -2070,7 +2070,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			goto onError
 
 		case bytecode.OpNewDisposeCapability:
-			o := newObject(nil, ClassObject)
+			o := newObjectExt(nil, ClassObject, objExtensible)
 			o.extOf().data = &disposeCapability{}
 			sp = pushAt(stack, sp, Obj(o))
 		case bytecode.OpAddDisposable:
@@ -3083,7 +3083,7 @@ func (r *Runtime) moduleLexProp(env *Object, name Atom) ownProp {
 // deleteEvalVar removes a binding a direct eval declared, reporting whether
 // there was one.
 func deleteEvalVar(o *Object, name Atom) bool {
-	for ; o != nil; o = o.proto {
+	for ; o != nil; o = o.proto() {
 		if o.getOwn(name).ok() {
 			o.deleteOwn(name)
 			return true
@@ -3097,7 +3097,7 @@ func deleteEvalVar(o *Object, name Atom) bool {
 // The objects are chained by prototype, innermost first, so one lookup covers
 // every function between here and the one that declared the name.
 func evalVarProp(o *Object, name Atom) ownProp {
-	for ; o != nil; o = o.proto {
+	for ; o != nil; o = o.proto() {
 		if p := o.getOwn(name); p.ok() {
 			return p
 		}
@@ -3576,7 +3576,7 @@ func (r *Runtime) stringKeyRead(o *Object, s *String) (Value, bool) {
 		}
 		return Undefined, false
 	}
-	for p := o; p != nil; p = p.proto {
+	for p := o; p != nil; p = p.proto() {
 		if p.class != ClassObject {
 			return Undefined, false
 		}
@@ -3705,7 +3705,7 @@ func appendElem(o *Object, n float64, v Value) bool {
 		o.flags&(want|objHasSparseElements|objMappedArguments) != want || !o.noIndexKeys() {
 		return false
 	}
-	for p := o.proto; p != nil; p = p.proto {
+	for p := o.proto(); p != nil; p = p.proto() {
 		if p.class != ClassObject && p.class != ClassArray || len(p.elemsOf()) != 0 || !p.noIndexKeys() {
 			return false
 		}
@@ -3728,7 +3728,7 @@ func fillHole(o *Object, n float64, v Value) bool {
 		o.flags&(want|objHasSparseElements|objMappedArguments) != want || !o.noIndexKeys() {
 		return false
 	}
-	for p := o.proto; p != nil; p = p.proto {
+	for p := o.proto(); p != nil; p = p.proto() {
 		if p.class != ClassObject && p.class != ClassArray || len(p.elemsOf()) != 0 || !p.noIndexKeys() {
 			return false
 		}
@@ -3760,7 +3760,7 @@ func setOrdinaryIndex(o *Object, n float64, v Value) bool {
 		o.vals()[j] = v
 		return true
 	}
-	if o.flags&objExtensible == 0 || !noneIndexed(o.proto) {
+	if o.flags&objExtensible == 0 || !noneIndexed(o.proto()) {
 		return false
 	}
 	o.appendProp(Property{key: key, flags: propDefault, value: v})
@@ -3864,11 +3864,10 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 	props := 0
 	var root *shape
 	if fd.closure != nil {
-		root = r.shapes.ctorRoot(fd)
+		root = r.shapes.ctorRoot(fd, proto)
 		props = root.roomFor(int(fd.closure.fn.ThisProps))
 	}
-	obj := newLiteralObject(proto, ClassObject, props)
-	obj.shape = root
+	obj := newShapedLiteral(root.orRoot(ClassObject, proto), ClassObject, props)
 	this := Obj(obj)
 
 	// A base class gives the instance its private methods and fields before the
@@ -3967,7 +3966,7 @@ func (r *Runtime) constructNative(o *Object, args []Value, newTarget Value, deri
 		return Undefined, err
 	}
 	if protoVal.IsObject() {
-		res.Object().proto = protoVal.Object()
+		res.Object().setProto(protoVal.Object())
 		return res, nil
 	}
 	// The constructor chose its own realm's prototype; new.target's realm
@@ -3980,7 +3979,7 @@ func (r *Runtime) constructNative(o *Object, args []Value, newTarget Value, deri
 	if err != nil {
 		return Undefined, err
 	}
-	res.Object().proto = r.counterpart(from, to, res.Object().proto)
+	res.Object().setProto(r.counterpart(from, to, res.Object().proto()))
 	return res, nil
 }
 
@@ -4043,7 +4042,7 @@ func ordinaryHasInstance(c *Object, v Value) (yes, ok bool) {
 		if proxyOf(o) != nil {
 			return false, false
 		}
-		if o = o.proto; o == nil {
+		if o = o.proto(); o == nil {
 			return false, true
 		}
 		if o == target {
@@ -4518,7 +4517,7 @@ func (r *Runtime) linkClass(ctorVal, parent Value) error {
 	// prototype, which is legal.
 	if parent.IsNull() {
 		if p, err := r.getProp(ctor, atomPrototype, ctorVal); err == nil && p.IsObject() {
-			p.Object().proto = nil
+			p.Object().setProto(nil)
 		}
 		fd.ctorKind = ctorDerived
 		return nil
@@ -4545,13 +4544,13 @@ func (r *Runtime) linkClass(ctorVal, parent Value) error {
 	}
 	if protoVal.IsObject() {
 		if parentProtoVal.IsObject() {
-			protoVal.Object().proto = parentProtoVal.Object()
+			protoVal.Object().setProto(parentProtoVal.Object())
 		} else {
-			protoVal.Object().proto = nil
+			protoVal.Object().setProto(nil)
 		}
 	}
 	// Static inheritance.
-	ctor.proto = parentObj
+	ctor.setProto(parentObj)
 
 	fd.ctorKind = ctorDerived
 	fd.superCtor = ctor
@@ -4617,7 +4616,7 @@ func (r *Runtime) superCall(f *frame, args []Value) error {
 	// R extends P, P's constructor returning {}, makes no R.
 	if res.IsObject() && (!f.this.IsObject() || res.Object() != f.this.Object()) {
 		if pfd := parent.fn(); f.this.IsObject() && (pfd == nil || pfd.closure == nil || pfd.bound) {
-			res.Object().proto = f.this.Object().proto
+			res.Object().setProto(f.this.Object().proto())
 			// Fields the derived constructor set before super() would be lost,
 			// but writing to `this` before super() is already an error, so
 			// there is nothing to carry over.
@@ -4667,12 +4666,12 @@ func (r *Runtime) parentConstructorOf(f *frame) *Object {
 	if fd.superCtor != nil {
 		// GetSuperConstructor reads the running class's prototype now rather
 		// than remembering what it extended.
-		return fd.superCtor.proto
+		return fd.superCtor.proto()
 	}
 	// A method reaches the parent through its home object rather than through
 	// a stored link.
-	if fd.homeObject != nil && fd.homeObject.proto != nil {
-		if ctor := fd.homeObject.proto.getOwn(atomConstructor); ctor.ok() &&
+	if fd.homeObject != nil && fd.homeObject.proto() != nil {
+		if ctor := fd.homeObject.proto().getOwn(atomConstructor); ctor.ok() &&
 			ctor.value().IsObject() {
 			return ctor.value().Object()
 		}
@@ -4730,7 +4729,7 @@ func (r *Runtime) superRef(f *frame) (*Object, Value, error) {
 		return nil, Undefined, r.throwError(errReference,
 			"\"this\" is not bound until super() has been called")
 	}
-	return fd.homeObject.proto, this, nil
+	return fd.homeObject.proto(), this, nil
 }
 
 // superSet writes through a super reference.

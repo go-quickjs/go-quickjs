@@ -33,7 +33,7 @@ func (r *Runtime) initCollator(intlObj *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		out := newObject(proto, ClassObject)
+		out := newObjectExt(proto, ClassObject, objExtensible)
 		out.extOf().data = o
 		return Obj(out), nil
 	})
@@ -239,7 +239,7 @@ func (r *Runtime) initPluralRules(intlObj *Object) {
 		if o.rules, err = intl.NewPluralRulesFrom(rt.intlSource(), loc, opts); err != nil {
 			return Undefined, rt.intlInternal()
 		}
-		out := newObject(proto, ClassObject)
+		out := newObjectExt(proto, ClassObject, objExtensible)
 		out.extOf().data = o
 		return Obj(out), nil
 	})
@@ -402,7 +402,7 @@ func (r *Runtime) initDisplayNames(intlObj *Object) {
 		if o.names, err = intl.NewDisplayNamesFrom(rt.intlSource(), loc, opts); err != nil {
 			return Undefined, rt.intlInternal()
 		}
-		out := newObject(proto, ClassObject)
+		out := newObjectExt(proto, ClassObject, objExtensible)
 		out.extOf().data = o
 		return Obj(out), nil
 	})
@@ -574,7 +574,7 @@ func (r *Runtime) initListFormat(intlObj *Object) {
 		if o.format, err = intl.NewListFormatFrom(rt.intlSource(), loc, opts); err != nil {
 			return Undefined, rt.intlInternal()
 		}
-		out := newObject(proto, ClassObject)
+		out := newObjectExt(proto, ClassObject, objExtensible)
 		out.extOf().data = o
 		return Obj(out), nil
 	})
@@ -708,7 +708,7 @@ func (r *Runtime) initRelativeTimeFormat(intlObj *Object) {
 		if o.format, err = intl.NewRelativeTimeFormatFrom(rt.intlSource(), loc, opts); err != nil {
 			return Undefined, rt.intlInternal()
 		}
-		out := newObject(proto, ClassObject)
+		out := newObjectExt(proto, ClassObject, objExtensible)
 		out.extOf().data = o
 		return Obj(out), nil
 	})

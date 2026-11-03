@@ -67,7 +67,7 @@ var jitEncoding = abi.Encoding{
 	ObjectProps:      int32(unsafe.Offsetof(Object{}.valp)),
 	ObjectPropsLen:   int32(unsafe.Offsetof(Object{}.valn)),
 	ObjectPropsCap:   int32(unsafe.Offsetof(Object{}.valc)),
-	ObjectProto:      int32(unsafe.Offsetof(Object{}.proto)),
+	ShapeProto:       int32(unsafe.Offsetof(shape{}.proto)),
 	WriteBarrier:     jit.WriteBarrier(),
 	CallGo:           jit.CallGo(),
 	BigFast:          uint64(jitBigFastAddr()),
@@ -109,8 +109,8 @@ var jitEncoding = abi.Encoding{
 
 	ObjectClass:        int32(unsafe.Offsetof(Object{}.class)),
 	ObjectFlags:        int32(unsafe.Offsetof(Object{}.flags)),
-	ObjectExt:          int32(unsafe.Offsetof(Object{}.ext)),
-	ObjectArrayLen:     int32(unsafe.Offsetof(Object{}.arrayLen)),
+	ObjectExt:          int32(unsafe.Sizeof(Object{})),
+	ObjectArrayLen:     int32(unsafe.Sizeof(Object{}) + unsafe.Offsetof(objectExt{}.arrayLen)),
 	ObjectElems:        int32(unsafe.Sizeof(Object{}) + unsafe.Offsetof(objectExt{}.elems)),
 	ExtElems:           int32(unsafe.Offsetof(objectExt{}.elems)),
 	ObjectData:         int32(unsafe.Offsetof(objectExt{}.data)),
@@ -208,6 +208,7 @@ var jitEncoding = abi.Encoding{
 	BufferBytes:        int32(unsafe.Offsetof(arrayBufferData{}.bytes)),
 	BufferImmutable:    int32(unsafe.Offsetof(arrayBufferData{}.immutable)),
 	FlagSparse:         uint8(objHasSparseElements),
+	FlagExt:            uint8(objHasExt),
 	FlagHTMLDDA:        uint8(objHTMLDDA),
 	FlagExtensible:     uint8(objExtensible),
 	LengthKey:          uint32(atomLength),
@@ -300,7 +301,7 @@ const jitAddDepth = 6
 // prototypes up to jitAddDepth that none intercepts, as fillStoreCache
 // requires of a cache's -- or false.
 func (r *Runtime) jitDeepAddOf(o *Object, before *shape, key Atom) (jitDeepAdd, bool) {
-	return r.jitDeepAddFrom(before, o.shape, o.proto, key)
+	return r.jitDeepAddFrom(before, o.shape, o.proto(), key)
 }
 
 // jitDeepAddFrom is jitDeepAddOf's addition of key, from shape before to
@@ -312,7 +313,7 @@ func (r *Runtime) jitDeepAddFrom(before, next *shape, proto *Object, key Atom) (
 		return jitDeepAdd{}, false
 	}
 	a := jitDeepAdd{from: before, next: next}
-	for p := proto; p != nil; p = p.proto {
+	for p := proto; p != nil; p = p.proto() {
 		if len(a.up) == jitAddDepth || r.ensureProtoShape(p) == nil || !shapeClass(p.class) || synthesized(p.class, key) || !passesWrite(p, key) {
 			return jitDeepAdd{}, false
 		}
@@ -824,7 +825,7 @@ func (r *Runtime) jitMegaFillProto(o *Object, key Atom) (absent bool) {
 	}
 	chain := new(abi.MegaChain)
 	n := 0
-	for p := o.proto; p != nil; p = p.proto {
+	for p := o.proto(); p != nil; p = p.proto() {
 		if n == abi.MegaDepth || r.ensureProtoShape(p) == nil || p.cacheShape() == nil || !shapeClass(p.class) || synthesized(p.class, key) {
 			return false
 		}
@@ -1079,7 +1080,7 @@ func (r *Runtime) jitDeepReadOf(o *Object, key Atom) (jitDeepRead, bool) {
 		return jitDeepRead{}, false
 	}
 	d := jitDeepRead{shape: o.shape}
-	for p := o.proto; p != nil; p = p.proto {
+	for p := o.proto(); p != nil; p = p.proto() {
 		if len(d.up) == jitAddDepth || r.ensureProtoShape(p) == nil || !shapeClass(p.class) || synthesized(p.class, key) {
 			return jitDeepRead{}, false
 		}
@@ -1366,7 +1367,7 @@ func (r *Runtime) jitLiteralAt(e *jitEntry, cl *closure, pc int) *jitLiteral {
 	if in.Op != bytecode.OpNewObject || int(in.B) >= len(cl.ic) {
 		return nil
 	}
-	root := r.shapes.siteRoot(&cl.ic[in.B])
+	root := r.shapes.siteRoot(&cl.ic[in.B], r.proto.object)
 	if root == nil {
 		return nil
 	}
@@ -3353,7 +3354,7 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 			// it. Object.prototype's had been taken as it was, a setter
 			// for an index there included, which native code then passed.
 			ap, op := fb.r.proto.array, fb.r.proto.object
-			if ap.shape == nil || op.shape == nil || ap.proto != op || op.proto != nil ||
+			if ap.shape == nil || op.shape == nil || ap.proto() != op || op.proto() != nil ||
 				!ap.noIndexKeys() || !op.noIndexKeys() {
 				continue
 			}
@@ -5714,7 +5715,7 @@ func jitStoreElem(o *Object, n float64, v Value) bool {
 	if o.class != ClassArray || o.flags&(want|objHasSparseElements) != want || !o.noIndexKeys() {
 		return false
 	}
-	for p := o.proto; p != nil; p = p.proto {
+	for p := o.proto(); p != nil; p = p.proto() {
 		if p.class != ClassObject && p.class != ClassArray || len(p.elemsOf()) != 0 || !p.noIndexKeys() {
 			return false
 		}
@@ -5774,7 +5775,7 @@ func jitElemAbsent(o *Object, n float64) bool {
 	if uint(i) < uint(len(o.elemsOf())) && !isHole(o.elemsOf()[i]) {
 		return false
 	}
-	for p := o; p != nil; p = p.proto {
+	for p := o; p != nil; p = p.proto() {
 		if p.class != ClassObject && p.class != ClassArray || p.flags&(objHasSparseElements|objMappedArguments) != 0 || !p.noIndexKeys() {
 			return false
 		}
@@ -5803,7 +5804,7 @@ func (r *Runtime) jitStringAbsent(s *String, n float64) bool {
 	if p == nil || p.flags&(objHasSparseElements|objMappedArguments) != 0 || len(p.elemsOf()) != 0 || !p.noIndexKeys() {
 		return false
 	}
-	return p.proto == nil || jitElemAbsent(p.proto, n)
+	return p.proto() == nil || jitElemAbsent(p.proto(), n)
 }
 
 // jitCloseRetired closes the retired code no call of Go is suspended in.
@@ -6045,7 +6046,7 @@ func (fb *jitFeedback) KeepLimit() int { return fb.keepLimit }
 // which native code's checks of their shapes stand for).
 func (fb *jitFeedback) ArrayProtos() ([2]ssa.Holder, bool) {
 	ap, op := fb.r.proto.array, fb.r.proto.object
-	if ap.shape == nil || op.shape == nil || ap.shape.loose || op.shape.loose || ap.proto != op || op.proto != nil ||
+	if ap.shape == nil || op.shape == nil || ap.shape.loose || op.shape.loose || ap.proto() != op || op.proto() != nil ||
 		!ap.noIndexKeys() || !op.noIndexKeys() {
 		return [2]ssa.Holder{}, false
 	}
@@ -7561,7 +7562,7 @@ func (r *Runtime) jitKeyedRead(o, k Value) (Value, bool) {
 // store (noneIndexed). The global object, whose bindings Go keeps beside
 // its table, is not read so. It reports false for any other.
 func (r *Runtime) jitTableRead(o *Object, a Atom) (Value, bool) {
-	for h, depth := o, 0; h != nil; h, depth = h.proto, depth+1 {
+	for h, depth := o, 0; h != nil; h, depth = h.proto(), depth+1 {
 		if depth > maxChainDepth || !shapeClass(h.class) || h == r.global || r.ensureShape(h) == nil {
 			return Undefined, false
 		}
@@ -7601,7 +7602,7 @@ func (r *Runtime) jitHas(key, obj Value) (has, ok bool) {
 		// Plain objects and arrays, which hold what they have.
 		return has, true
 	}
-	for p, depth := o, 0; p != nil; p, depth = p.proto, depth+1 {
+	for p, depth := o, 0; p != nil; p, depth = p.proto(), depth+1 {
 		if depth > maxChainDepth || p.class == ClassProxy || p.class == ClassModuleNamespace {
 			return false, false
 		}
@@ -7678,7 +7679,7 @@ func (r *Runtime) jitDelete(obj, key Value, strict bool) (gone, ok bool) {
 // chain's validity cell. Dictionary objects, as such tables become, are
 // searched as any are (findOwn).
 func jitAbsentKey(o *Object, a Atom, named bool) bool {
-	for h, depth := o, 0; h != nil; h, depth = h.proto, depth+1 {
+	for h, depth := o, 0; h != nil; h, depth = h.proto(), depth+1 {
 		if depth > maxChainDepth || !shapeClass(h.class) || named && (synthesized(h.class, a) || h.findOwn(a) >= 0) {
 			return false
 		}
@@ -8030,7 +8031,7 @@ func (r *Runtime) jitNativeTarget(pc int32, cl *closure, o *Object, in bytecode.
 		if fd := o.fn(); fd != nil && fd.closure != cl {
 			// A derived class's, constructed with its parent's code
 			// (jitDerivedBase).
-			x.parent = o.proto
+			x.parent = o.proto()
 		}
 	}
 	return x
@@ -8053,7 +8054,7 @@ func (r *Runtime) jitDerivedBase(o *Object) *Object {
 		fd.closure.realm != r.Realm || o.class != ClassFunction || o.findOwn(atomPrototype) < 0 || !jitForwardsSuper(fd.closure.fn) {
 		return nil
 	}
-	if p := o.proto; p != nil && (r.jitConstructs(p) || r.jitConstructsDerived(p)) {
+	if p := o.proto(); p != nil && (r.jitConstructs(p) || r.jitConstructsDerived(p)) {
 		return p
 	}
 	return nil
@@ -8184,7 +8185,7 @@ func (r *Runtime) jitForEaches(sp int, in bytecode.Instr) (*Object, *closure, *O
 			// loop does not: Go's.
 			return nil, nil, nil, nil
 		}
-		proto = recv.Object().proto
+		proto = recv.Object().proto()
 	case r.plainArray(recv) == nil:
 		return nil, nil, nil, nil
 	}
@@ -8932,15 +8933,15 @@ func (r *Runtime) jitNewTypedResult(form int, recv, n Value) (Value, bool) {
 // Symbol.species is %TypedArray%'s accessor as it was made -- as
 // plainSpecies asks of an array.
 func (r *Runtime) jitPlainTypedSpecies(o *Object, t *typedArrayData) bool {
-	if o.findOwn(atomConstructor) >= 0 || o.proto == nil {
+	if o.findOwn(atomConstructor) >= 0 || o.proto() == nil {
 		return false
 	}
 	ctor := r.typedArrayCtorFor(t.kind)
-	if c := o.proto.getOwn(atomConstructor); !c.ok() || c.flags()&propAccessor != 0 || !c.value().IsObject() || c.value().Object() != ctor {
+	if c := o.proto().getOwn(atomConstructor); !c.ok() || c.flags()&propAccessor != 0 || !c.value().IsObject() || c.value().Object() != ctor {
 		return false
 	}
 	species := r.atoms.internSymbol(r.wellKnown.species)
-	if ctor.findOwn(species) >= 0 || ctor.proto != r.typedArrayCtor || r.jitTypedSpecies == nil {
+	if ctor.findOwn(species) >= 0 || ctor.proto() != r.typedArrayCtor || r.jitTypedSpecies == nil {
 		return false
 	}
 	sp := r.typedArrayCtor.getOwn(species)
@@ -9472,9 +9473,10 @@ func (r *Runtime) jitConstructLayout(o *Object) (proto *Object, root *shape, pro
 	if !p.ok() || p.flags()&propAccessor != 0 || !p.value().IsObject() || fd == nil || fd.closure == nil {
 		return nil, nil, 0, false
 	}
-	root = r.shapes.ctorRoot(fd)
+	proto = p.value().Object()
+	root = r.shapes.ctorRoot(fd, proto)
 	props = root.roomFor(int(fd.closure.fn.ThisProps))
-	return p.value().Object(), root, props, true
+	return proto, root, props, true
 }
 
 // jitFillObjectPool fills pool with objects of proto, of shape root, each
@@ -9482,6 +9484,9 @@ func (r *Runtime) jitConstructLayout(o *Object) (proto *Object, root *shape, pro
 // chosen once for the refill, not for each object. Each is an allocation
 // of its own, so that keeping one keeps none of the others.
 func jitFillObjectPool(pool *abi.ObjectPool, proto *Object, root *shape, n int) {
+	// The layout says the prototype: a constructor's or a literal's root,
+	// or, where there is none, the class's for proto.
+	root = root.orRoot(ClassObject, proto)
 	switch n {
 	case 1:
 		jitFillSmallObjects[literalObject1](pool, proto, root)
@@ -9503,9 +9508,7 @@ func jitFillObjectPool(pool *abi.ObjectPool, proto *Object, root *shape, n int) 
 		jitFillSmallObjects[largeLiteralObject[[8]Value]](pool, proto, root)
 	default:
 		for i := range int(pool.Size) {
-			o := newLiteralObject(proto, ClassObject, n)
-			o.shape = root
-			pool.Objects[i] = unsafe.Pointer(o)
+			pool.Objects[i] = unsafe.Pointer(newShapedLiteral(root, ClassObject, n))
 		}
 	}
 	pool.Count, pool.Proto = pool.Size, unsafe.Pointer(proto)
@@ -9540,7 +9543,7 @@ func (lo *largeLiteralObject[A]) jitObject() *Object {
 func jitFillSmallObjects[L any, P jitInlineObject[L]](pool *abi.ObjectPool, proto *Object, root *shape) {
 	for i := range int(pool.Size) {
 		o := P(new(L)).jitObject()
-		o.proto, o.shape = proto, root
+		o.shape = root
 		o.class, o.flags = ClassObject, objExtensible|objInlineProps
 		pool.Objects[i] = unsafe.Pointer(o)
 	}
@@ -9621,9 +9624,7 @@ func (r *Runtime) jitPoolObject(o *Object) *Object {
 	if !ok {
 		return nil
 	}
-	obj := newLiteralObject(proto, ClassObject, props)
-	obj.shape = root
-	return obj
+	return newShapedLiteral(root.orRoot(ClassObject, proto), ClassObject, props)
 }
 
 // jitRefillPools fills, at a construction that left native code at pc,
@@ -10511,7 +10512,7 @@ func (fb *jitFeedback) moduleGlobal(name Atom, env *Object, in bytecode.Instr, w
 		}
 		holder, name = h, key
 	case i < 0:
-		g := env.proto
+		g := env.proto()
 		if write || check || g == nil || fb.r.lexShadows(name) || proxyOf(g) != nil {
 			return ssa.GlobalSite{}, false
 		}
@@ -13034,14 +13035,14 @@ func (r *Runtime) jitSuperTarget(d *Object) (p, skip *Object, cl *closure) {
 		}
 		return nil
 	}
-	if p = d.proto; p == nil {
+	if p = d.proto(); p == nil {
 		return nil, nil, nil
 	}
 	if cl = code(p); cl == nil {
 		return nil, nil, nil
 	}
 	if cl.fn.Kind == bytecode.KindDerivedConstructor && jitForwardsSuper(cl.fn) {
-		if q := p.proto; q != nil {
+		if q := p.proto(); q != nil {
 			if qc := code(q); qc != nil && !(qc.fn.Kind == bytecode.KindDerivedConstructor && jitForwardsSuper(qc.fn)) {
 				return p, q, qc
 			}

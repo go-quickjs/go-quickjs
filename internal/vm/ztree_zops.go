@@ -649,9 +649,9 @@ func init() {
 					if obj.IsObject() {
 						switch {
 						case v.IsObject():
-							obj.Object().proto = v.Object()
+							obj.Object().setProto(v.Object())
 						case v.IsNull():
-							obj.Object().proto = nil
+							obj.Object().setProto(nil)
 						}
 					}
 				case bytecode.OpSetFieldInit:

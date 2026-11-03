@@ -20,7 +20,7 @@ import (
 //
 // What only for-in reads is kept apart, in a forInState of its own, so that
 // a for-of's cursor -- every for-of's, spread's and array destructuring's
-// -- with its object, fits 112 bytes. The object has no ext: its class,
+// -- with its object, fits 96 bytes. The object has no ext: its class,
 // ClassCursor, says where the state is (cursorOf).
 type iterState struct {
 	// iter and next drive the for-of protocol.
@@ -168,7 +168,7 @@ func (r *Runtime) startForIn(v Value) (Value, error) {
 	// further up adds. When that is the object itself, its own keys are
 	// distinct and none needs remembering.
 	last := o
-	for cur := o.proto; cur != nil; cur = cur.proto {
+	for cur := o.proto(); cur != nil; cur = cur.proto() {
 		if !noEnumerableKeys(cur) {
 			last = cur
 		}
@@ -206,7 +206,7 @@ func (r *Runtime) startForIn(v Value) (Value, error) {
 	if last != o {
 		seen = make(map[Atom]bool)
 	}
-	for cur := o; ; cur = cur.proto {
+	for cur := o; ; cur = cur.proto() {
 		keys, err := r.ownKeysOf(cur, false)
 		if err != nil {
 			return Undefined, err
@@ -751,7 +751,7 @@ func (r *Runtime) usesIntrinsicArrayIterator(o *Object) bool {
 		return false
 	}
 	key := r.atoms.internSymbol(r.wellKnown.iterator)
-	for cur := o; cur != nil; cur = cur.proto {
+	for cur := o; cur != nil; cur = cur.proto() {
 		if p := cur.getOwn(key); p.ok() {
 			return !p.isAccessor() && p.value().IsObject() &&
 				p.value().Object() == r.arrayValuesFn
@@ -769,12 +769,12 @@ func (r *Runtime) generatorIteration(o *Object) *Object {
 	if r.genNextFn == nil {
 		return nil
 	}
-	if c := &r.genIteration; c.from != nil && o.shape == nil && emptyPrototype(o.proto) && o.proto.proto == c.from && c.holds(r) {
+	if c := &r.genIteration; c.from != nil && o.valn == 0 && emptyPrototype(o.proto()) && o.proto().proto() == c.from && c.holds(r) {
 		return r.genNextFn
 	}
 	iterKey := r.atoms.internSymbol(r.wellKnown.iterator)
 	iter, next := ownProp{i: -1}, ownProp{i: -1}
-	for cur := o; cur != nil && (!iter.ok() || !next.ok()); cur = cur.proto {
+	for cur := o; cur != nil && (!iter.ok() || !next.ok()); cur = cur.proto() {
 		if cur.class != ClassObject && cur.class != ClassGenerator {
 			return nil
 		}
@@ -791,7 +791,7 @@ func (r *Runtime) generatorIteration(o *Object) *Object {
 		!next.value().IsObject() || next.value().Object() != r.genNextFn {
 		return nil
 	}
-	if o.shape == nil && emptyPrototype(o.proto) && o.proto.proto != nil {
+	if o.valn == 0 && emptyPrototype(o.proto()) && o.proto().proto() != nil {
 		// A generator with no property of its own, whose prototype -- its
 		// function's prototype property, one for every function -- has none
 		// either, finds what any such generator whose prototype's is the
@@ -799,8 +799,8 @@ func (r *Runtime) generatorIteration(o *Object) *Object {
 		// layout (chainCell) and the two properties their values. The cell
 		// is that object's, %GeneratorPrototype%'s, made once, not one for
 		// each function's prototype, which would register each with it.
-		if cell := r.chainCell(o.proto.proto); cell != nil {
-			r.genIteration = genIterationCache{from: o.proto.proto, cell: cell, next: next, iter: iter}
+		if cell := r.chainCell(o.proto().proto()); cell != nil {
+			r.genIteration = genIterationCache{from: o.proto().proto(), cell: cell, next: next, iter: iter}
 		}
 	}
 	return r.genNextFn
@@ -1015,7 +1015,7 @@ func (r *Runtime) newArgumentsObject(f *frame) *Object {
 	if mapped {
 		kind = 1
 	}
-	if t := r.argsLayouts[kind]; t != nil && (!mapped || f.callee != nil) {
+	if t := r.argsLayouts[kind]; t != nil && t.shape.proto == o.proto() && (!mapped || f.callee != nil) {
 		// Every arguments object of the kind has the same three properties
 		// in the same layout as the first, so they are copied from it, with
 		// the values that are this one's own.
@@ -1058,7 +1058,7 @@ func (r *Runtime) newArgumentsObject(f *frame) *Object {
 
 // argumentsObject is an arguments object with room for its three
 // properties and its first few elements in its own allocation. Each room
-// fills one of Go's size classes on a 64-bit platform, but for 8 bytes.
+// fills one of Go's size classes on a 64-bit platform.
 type argumentsObject[A [2]Value | [4]Value | [7]Value] struct {
 	argumentsObject0
 	room A
@@ -1073,7 +1073,7 @@ type argumentsObject0 struct {
 }
 
 func newArgumentsObject0(proto *Object) *Object {
-	ao := &argumentsObject0{Object: Object{proto: proto, class: ClassArguments, flags: objExtensible | objInlineProps}}
+	ao := &argumentsObject0{Object: Object{shape: rootFor(ClassArguments, proto), class: ClassArguments, flags: objExtensible | objInlineProps}}
 	ao.setRoom(&ao.inline[0], len(ao.inline))
 	ao.embedExt(&ao.side)
 	return &ao.Object
@@ -1081,7 +1081,7 @@ func newArgumentsObject0(proto *Object) *Object {
 
 func newArgumentsObjectOf[A [2]Value | [4]Value | [7]Value](proto *Object) *Object {
 	ao := &argumentsObject[A]{}
-	ao.Object = Object{proto: proto, class: ClassArguments, flags: objExtensible | objInlineProps}
+	ao.Object = Object{shape: rootFor(ClassArguments, proto), class: ClassArguments, flags: objExtensible | objInlineProps}
 	ao.setRoom(&ao.inline[0], len(ao.inline))
 	ao.embedExt(&ao.side)
 	ao.side.elems = unsafe.Slice(&ao.room[0], len(ao.room))[:0]
@@ -1122,7 +1122,7 @@ func layoutOf(o *Object) *argsLayout {
 		return nil
 	}
 	if s.loose {
-		s = &shape{loose: true, n: 3, keys: slices.Clone(s.keys[:3])}
+		s = &shape{proto: s.proto, loose: true, n: 3, keys: slices.Clone(s.keys[:3])}
 	}
 	t := &argsLayout{shape: s}
 	copy(t.vals[:], o.vals())
@@ -1500,7 +1500,7 @@ func (r *Runtime) arrayIterNoReturn() bool {
 		return true
 	}
 	r.arrayIterCell = nil
-	for o := r.proto.arrayIter; o != nil; o = o.proto {
+	for o := r.proto.arrayIter; o != nil; o = o.proto() {
 		if !shapeClass(o.class) || synthesized(o.class, atomReturn) || o.findOwn(atomReturn) >= 0 {
 			return false
 		}
