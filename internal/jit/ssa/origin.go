@@ -790,9 +790,13 @@ func liveAcrossSets(f *Func, how int) ([]*Value, [][]*Value) {
 	}
 	// Bitsets over the candidates for every block cost their words, five
 	// tables of them, cleared and walked to a fixed point; the walks from
-	// each use cost the uses: the bitsets where their words are fewer than
-	// the values, which is most functions', the walks where not.
-	if how == liveByBits || how == liveByCost && 5*nb*((len(cands)+63)/64) <= values {
+	// each use cost the uses, each a block's and its predecessors' lists
+	// followed, far more than a word's or-ing: the bitsets where their
+	// words are no more than sixteen a value -- some 128 bytes, about what
+	// each value takes itself -- the walks past that. At a word a value,
+	// the walks had been taken for Typescript's larger functions, whose
+	// optimize took 3% longer for them.
+	if how == liveByBits || how == liveByCost && 5*nb*((len(cands)+63)/64) <= 16*values {
 		liveBits(f, sc, stores, cands, live)
 	} else {
 		liveWalks(f, sc, nb, stores, cands, live)
