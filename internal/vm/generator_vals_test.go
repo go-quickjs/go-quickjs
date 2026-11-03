@@ -139,8 +139,8 @@ func TestGeneratorLoopRoom(t *testing.T) {
 }
 
 // TestGeneratorSavedPart pins the generator's size and what its saved
-// part holds: a generator with two values or fewer is 176 bytes, a size
-// class, with no ext, and the 88 of its state; one that
+// part holds: a generator with two values or fewer is 168 bytes, in the
+// size class of 176, with no ext, and the 88 of its state; one that
 // suspends with nothing beneath the value, in no try statement and with
 // nothing captured has no saved part however often it suspends, one
 // that leaves operands, handlers or captures makes it once, and a
@@ -151,14 +151,14 @@ func TestGeneratorSavedPart(t *testing.T) {
 	if unsafe.Sizeof(uintptr(0)) != 8 {
 		t.Skip("sizes of a 64-bit build")
 	}
-	if n := unsafe.Sizeof(generatorVals[[2]Value]{}); n != 176 {
-		t.Errorf("a generator of two values is %d bytes, want 176", n)
+	if n := unsafe.Sizeof(generatorVals[[2]Value]{}); n != 168 {
+		t.Errorf("a generator of two values is %d bytes, want 168", n)
 	}
 	if n := unsafe.Sizeof(generator{}); n != 88 {
 		t.Errorf("a generator's state is %d bytes, want 88", n)
 	}
-	if n := unsafe.Sizeof(generatorLoopVals[[2]Value]{}); n != 288 {
-		t.Errorf("a generator of two values with its loop's cursor is %d bytes, want 288", n)
+	if n := unsafe.Sizeof(generatorLoopVals[[2]Value]{}); n != 272 {
+		t.Errorf("a generator of two values with its loop's cursor is %d bytes, want 272", n)
 	}
 	for _, tt := range []struct {
 		src string

@@ -72,7 +72,7 @@ func (l *jitReplaceLeaf[_]) check(r *Runtime, this Value, args []Value) bool {
 		return false
 	}
 	fl, ok := r.replaceDirect(args[0])
-	if !ok || fl&regexp.FlagGlobal == 0 && !args[0].Object().vals[0].IsNumber() {
+	if !ok || fl&regexp.FlagGlobal == 0 && !args[0].Object().vals()[0].IsNumber() {
 		return false
 	}
 	n, tv := int64(this.String().length), args[1].String()
@@ -182,7 +182,7 @@ func jitReplaceMatches[_ any](r *Runtime, o *Object, d *regexpData, s *String, s
 // written.
 func jitReplaceMatch[_ any](r *Runtime, o *Object, d *regexpData, s *String, spans []int, check func() error) ([]int, error) {
 	re := d.re
-	li, err := r.toLength(o.vals[0])
+	li, err := r.toLength(o.vals()[0])
 	if err != nil {
 		return spans, err
 	}

@@ -87,7 +87,7 @@ func (r *Runtime) jitStoreProp(obj *Object, key Atom, v Value, store, keyed bool
 		}
 		if store {
 			obj.shape.written()
-			obj.vals[i] = v
+			obj.vals()[i] = v
 		}
 		return true
 	}

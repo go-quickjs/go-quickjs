@@ -35,7 +35,7 @@ func TestSlackOutgrown(t *testing.T) {
 				t.Fatal(err)
 			}
 			o := v.Object()
-			if room, inline := cap(o.vals), o.flags&objInlineProps != 0; room != tt.room || inline != tt.inline {
+			if room, inline := int(o.valc), o.flags&objInlineProps != 0; room != tt.room || inline != tt.inline {
 				t.Errorf("made with room for %d (inline %v), want %d (inline %v)", room, inline, tt.room, tt.inline)
 			}
 		})
@@ -70,7 +70,7 @@ func TestSlackTracking(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return cap(v.Object().vals)
+		return int(v.Object().valc)
 	}
 	if _, err := r.Run(compileForTest(t, big.String()+"; "+sw.String())); err != nil {
 		t.Fatal(err)

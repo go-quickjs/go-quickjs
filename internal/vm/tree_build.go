@@ -1597,8 +1597,8 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			// which holds the name there or a tombstone (see propCache).
 			s := &c.ic[site]
 			if env := s.p1; env != nil && c.f.evalVars == nil {
-				if r := c.r; len(r.globalLex.vals) == 0 || !r.lexShadows(c.names[name]) {
-					if i := uint(s.idx); i < uint(len(env.vals)) {
+				if r := c.r; r.globalLex.valn == 0 || !r.lexShadows(c.names[name]) {
+					if i := uint(s.idx); i < uint(int(env.valn)) {
 						// The layout the site last read the slot in, which it
 						// remembers, so that a change of an attribute gives the
 						// object another (noteGlobalShape): the slot's is as it
@@ -1606,11 +1606,11 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 						// keys, of thousands in Mandreel's.
 						sh := env.shape
 						if sh == s.shape {
-							return env.vals[i]
+							return env.vals()[i]
 						}
 						if p := sh.keys[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
 							noteGlobalShape(s, sh)
-							return env.vals[i]
+							return env.vals()[i]
 						}
 					}
 				}
@@ -1631,10 +1631,10 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			value := v(c)
 			s := &c.ic[site]
 			if env := s.p1; env != nil && c.f.evalVars == nil {
-				if r := c.r; len(r.globalLex.vals) == 0 || !r.lexShadows(c.names[name]) {
-					if i := uint(s.idx); i < uint(len(env.vals)) {
+				if r := c.r; r.globalLex.valn == 0 || !r.lexShadows(c.names[name]) {
+					if i := uint(s.idx); i < uint(int(env.valn)) {
 						if p := env.shape.keys[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit|propWritable) == propWritable {
-							env.vals[i] = value
+							env.vals()[i] = value
 							return
 						}
 					}
@@ -1658,10 +1658,10 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			// to its error.
 			s := &c.ic[site]
 			if env := s.p1; env != nil && c.f.evalVars == nil {
-				if r := c.r; len(r.globalLex.vals) == 0 || !r.lexShadows(c.names[name]) {
-					if i := uint(s.idx); i < uint(len(env.vals)) {
+				if r := c.r; r.globalLex.valn == 0 || !r.lexShadows(c.names[name]) {
+					if i := uint(s.idx); i < uint(int(env.valn)) {
 						if p := env.shape.keys[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit|propWritable) == propWritable {
-							env.vals[i] = value
+							env.vals()[i] = value
 							return
 						}
 					}

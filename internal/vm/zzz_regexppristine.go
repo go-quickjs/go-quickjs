@@ -26,7 +26,7 @@ func armPristine[_ any](r *Runtime) {
 // armObject makes o's layout pristine, if o is as its realm recorded it in
 // lists, every one of them.
 func armObject[_ any](r *Runtime, o *Object, lists ...[]builtinProp) {
-	if o == nil || len(o.vals) <= pristineMinProps || r.shapes.building {
+	if o == nil || int(o.valn) <= pristineMinProps || r.shapes.building {
 		return
 	}
 	r.ensureProtoShape(o)

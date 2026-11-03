@@ -125,7 +125,7 @@ func measuredFrameless[_ any](r *Runtime, this Value, args []Value) (int, bool) 
 	s, tv, o := this.String(), args[1].String(), args[0].Object()
 	p := r.proto.regexp
 	if !s.ascii || !tv.ascii || o.class != ClassRegExp || o.proto != p || p == nil || p.shape == nil || !p.shape.pristine ||
-		len(o.vals) != 1 || o.shape.keys[0].key != atomLastIndex || o.shape.keys[0].flags&propWritable == 0 {
+		int(o.valn) != 1 || o.shape.keys[0].key != atomLastIndex || o.shape.keys[0].flags&propWritable == 0 {
 		return 0, false
 	}
 	d, ok := o.dataOf().(*regexpData)
@@ -138,7 +138,7 @@ func measuredFrameless[_ any](r *Runtime, this Value, args []Value) (int, bool) 
 	if err := r.tick(); err != nil {
 		return 0, false
 	}
-	o.vals[0] = Int(0)
+	o.vals()[0] = Int(0)
 	var check func() error
 	if r.abort != nil || r.ctx != nil && r.ctx.Done() != nil {
 		check = r.checkInterruptNow
@@ -152,7 +152,7 @@ func measuredFrameless[_ any](r *Runtime, this Value, args []Value) (int, bool) 
 	if next < 0 {
 		next = 0
 	}
-	o.vals[0] = Int(next)
+	o.vals()[0] = Int(next)
 	width := 2 * (d.re.GroupCount() + 1)
 	length := s.length
 	for k := 0; k+1 < len(spans); k += width {

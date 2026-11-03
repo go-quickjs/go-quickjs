@@ -395,7 +395,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 			// The script-level lexical bindings are asked first, and only
 			// when there are any: most scripts declare none.
-			if len(r.globalLex.vals) != 0 {
+			if r.globalLex.valn != 0 {
 				if p := r.globalLexProp(env, name); p.ok() {
 					if p.value().IsUninitialized() {
 						vmErr = r.throwReferenceError(
@@ -414,19 +414,19 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// name is the property still being there. Then the lookup cache,
 			// without the call findOwn is.
 			site := &cl.ic[in.B]
-			if i := uint(site.idx); i < uint(len(env.vals)) {
+			if i := uint(site.idx); i < uint(int(env.valn)) {
 				if p := env.shape.keys[i]; p.key == name &&
 					p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
-					sp = pushAt(stack, sp, env.vals[i])
+					sp = pushAt(stack, sp, env.vals()[i])
 					break
 				}
 			}
 			if x := env.shapeIndex(); x != nil {
-				if c := &x.recent[name&15]; c.key == name && c.idx >= 0 && int(c.idx) < len(env.vals) {
+				if c := &x.recent[name&15]; c.key == name && c.idx >= 0 && int(c.idx) < int(env.valn) {
 					if p := env.shape.keys[c.idx]; p.key == name &&
 						p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
 						site.idx = c.idx
-						sp = pushAt(stack, sp, env.vals[c.idx])
+						sp = pushAt(stack, sp, env.vals()[c.idx])
 						break
 					}
 				}
@@ -434,7 +434,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			if i := env.findOwn(name); i >= 0 {
 				if p := env.shape.keys[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
 					site.idx = i
-					sp = pushAt(stack, sp, env.vals[i])
+					sp = pushAt(stack, sp, env.vals()[i])
 					break
 				}
 			}
@@ -589,7 +589,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// A script's let, const or class shadows the global object, and
 			// is asked for only where there is one.
 			lex := ownProp{i: -1}
-			if len(r.globalLex.vals) != 0 {
+			if r.globalLex.valn != 0 {
 				lex = r.globalLexProp(env, name)
 			}
 			if p := lex; p.ok() {
@@ -639,7 +639,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				if p := env.shape.keys[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 &&
 					p.flags&propWritable != 0 {
 					sp--
-					env.vals[i] = stack[sp]
+					env.vals()[i] = stack[sp]
 					break
 				}
 			}
@@ -3402,7 +3402,7 @@ func (r *Runtime) materializeFunctionProto(o *Object) {
 	// before anything a script has added since. An ownKeys walk reports the
 	// table's order, so building it late may not reorder it.
 	at := 0
-	for at < len(o.vals) &&
+	for at < int(o.valn) &&
 		(o.shape.keys[at].key == atomLength || o.shape.keys[at].key == atomName) {
 		at++
 	}
@@ -3584,7 +3584,7 @@ func (r *Runtime) stringKeyRead(o *Object, s *String) (Value, bool) {
 			if p.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted|propUninit) != 0 {
 				return Undefined, false
 			}
-			return p.vals[i], true
+			return p.vals()[i], true
 		}
 	}
 	return Undefined, true
@@ -3757,7 +3757,7 @@ func setOrdinaryIndex(o *Object, n float64, v Value) bool {
 		if o.shape.keys[j].flags&(propPrivate|propAccessor|propUninit|propWritable) != propWritable {
 			return false
 		}
-		o.vals[j] = v
+		o.vals()[j] = v
 		return true
 	}
 	if o.flags&objExtensible == 0 || !noneIndexed(o.proto) {
@@ -3916,7 +3916,7 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 	if fd.ctorKind != ctorDerived {
 		// What the object came to have, for the room the constructor's
 		// next ones are made with.
-		root.noteBuilt(len(obj.vals))
+		root.noteBuilt(int(obj.valn))
 	}
 	// A constructor that returns an object overrides the newly created one;
 	// any other return value is ignored -- except in a derived constructor,
@@ -4883,7 +4883,7 @@ func (r *Runtime) freezeArray(o *Object) *Object {
 	// flag rather than a property attribute.
 	o.flags &^= objExtensible | objArrayLengthWritable
 	o.layoutChanged()
-	for i := range o.vals {
+	for i := range o.vals() {
 		o.shape.keys[i].flags &^= propWritable | propConfigurable
 	}
 	return o

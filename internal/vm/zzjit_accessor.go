@@ -42,10 +42,10 @@ func (r *Runtime) jitAccessorCaseOf(o *Object, sh *shape, key Atom, write bool) 
 		if i < 0 {
 			continue
 		}
-		if p.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted|propUninit) != propAccessor || int(i) >= len(p.vals) {
+		if p.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted|propUninit) != propAccessor || int(i) >= int(p.valn) {
 			return jitAccessorCase{}, false
 		}
-		pair := p.vals[i].accessorPair()
+		pair := p.vals()[i].accessorPair()
 		if pair == nil {
 			return jitAccessorCase{}, false
 		}
@@ -87,10 +87,10 @@ func jitCacheAccessor(c *propCache, write bool) (jitAccessorCase, bool) {
 		a.up, a.shapes = append(a.up, c.p2), append(a.shapes, c.s2)
 	}
 	holder := a.up[len(a.up)-1]
-	if int(c.idx) >= len(holder.vals) {
+	if int(c.idx) >= int(holder.valn) {
 		return jitAccessorCase{}, false
 	}
-	pair := holder.vals[c.idx].accessorPair()
+	pair := holder.vals()[c.idx].accessorPair()
 	if pair == nil {
 		return jitAccessorCase{}, false
 	}
@@ -110,10 +110,10 @@ func jitAccessorLive(a *jitAccessorCase, write bool) bool {
 		}
 	}
 	holder := a.up[len(a.up)-1]
-	if int(a.idx) >= len(holder.vals) {
+	if int(a.idx) >= int(holder.valn) {
 		return false
 	}
-	pair := holder.vals[a.idx].accessorPair()
+	pair := holder.vals()[a.idx].accessorPair()
 	if pair == nil {
 		return false
 	}
@@ -387,10 +387,10 @@ func (r *Runtime) jitLevelCallee(caller *bytecode.Function, pc int, this Value) 
 		if i < 0 {
 			continue
 		}
-		if int(i) >= len(o.vals) {
+		if int(i) >= int(o.valn) {
 			return nil
 		}
-		pair := o.vals[i].accessorPair()
+		pair := o.vals()[i].accessorPair()
 		switch {
 		case pair == nil:
 			return nil

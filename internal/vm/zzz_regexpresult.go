@@ -44,7 +44,7 @@ func newMatchBlock[E, S any](proto *Object, n, k int) (*Object, []String) {
 	b := new(matchBlock[E, S])
 	b.proto, b.class = proto, ClassArray
 	b.flags = objExtensible | objArrayLengthWritable | objInlineProps
-	b.vals = b.fields[:0]
+	b.setRoom(&b.fields[0], len(b.fields))
 	b.ext = &b.side
 	b.side.elems = unsafe.Slice((*Value)(unsafe.Pointer(&b.inline)), n)
 	if k == 0 {
@@ -134,10 +134,10 @@ func matchResultOf[_ any](r *Runtime, re *regexp.Regexp, caps []int, input *Stri
 		}
 	}
 	groups := r.groupsObject(r.groupsLayoutOf(re), elems)
-	arr.vals = arr.vals[:3]
+	arr.setVals(arr.vals()[:3])
 	arr.shape = t.shape
-	arr.vals[0] = Int(caps[0])
-	arr.vals[1] = Str(input)
-	arr.vals[2] = groups
+	arr.vals()[0] = Int(caps[0])
+	arr.vals()[1] = Str(input)
+	arr.vals()[2] = groups
 	return arr
 }

@@ -262,33 +262,33 @@ func TestRegExpLeaves(t *testing.T) {
 			// Each call from the receiver's own lastIndex, which a global
 			// or sticky pattern's match moves.
 			var li Value
-			if recv.IsObject() && len(recv.Object().vals) > 0 {
-				li = recv.Object().vals[0]
+			if recv.IsObject() && int(recv.Object().valn) > 0 {
+				li = recv.Object().vals()[0]
 			}
 			for _, a := range subjects.Object().elemsOf() {
 				for _, args := range [][]Value{{a}, nil, {a, a}} {
-					if recv.IsObject() && len(recv.Object().vals) > 0 {
-						recv.Object().vals[0] = li
+					if recv.IsObject() && int(recv.Object().valn) > 0 {
+						recv.Object().vals()[0] = li
 					}
 					if _, err := r.Run(reset); err != nil {
 						t.Fatal(err)
 					}
 					want := describe(slow(r, recv, args))
 					ws := describe(r.Run(statics))
-					if recv.IsObject() && len(recv.Object().vals) > 0 {
+					if recv.IsObject() && int(recv.Object().valn) > 0 {
 						// And lastIndex after it.
-						ws += " " + r.describe(recv.Object().vals[0])
+						ws += " " + r.describe(recv.Object().vals()[0])
 					}
-					if recv.IsObject() && len(recv.Object().vals) > 0 {
-						recv.Object().vals[0] = li
+					if recv.IsObject() && int(recv.Object().valn) > 0 {
+						recv.Object().vals()[0] = li
 					}
 					if _, err := r.Run(reset); err != nil {
 						t.Fatal(err)
 					}
 					got := describe(fast(r, recv, args))
 					gs := describe(r.Run(statics))
-					if recv.IsObject() && len(recv.Object().vals) > 0 {
-						gs += " " + r.describe(recv.Object().vals[0])
+					if recv.IsObject() && int(recv.Object().valn) > 0 {
+						gs += " " + r.describe(recv.Object().vals()[0])
 					}
 					if got != want || ws != gs {
 						t.Errorf("op %d on %s of %d arguments: %s, statics %s; the built-in's %s, statics %s",

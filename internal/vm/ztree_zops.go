@@ -895,11 +895,11 @@ func init() {
 			// (poly) answer as its first does: a base class's members read
 			// from its subclasses' objects.
 			if e, h := c.ic[site].polyEntry(ob); h == ob && ob.shape.keys[e.idx].key == key {
-				return ob.vals[e.idx]
+				return ob.vals()[e.idx]
 			}
 			if i := ob.findOwn(key); i >= 0 && ob.shape.keys[i].flags&(propAccessor|propDeleted|propUninit) == 0 {
 				c.ic[site].noteOwn(ob, i)
-				return ob.vals[i]
+				return ob.vals()[i]
 			}
 		}
 		v, err := c.r.getPrivate(ob, key, c.names[a])
@@ -917,13 +917,13 @@ func init() {
 		ob, key := o.Object(), privateKey(c.f, c.cl, k)
 		if site != 0 {
 			if e, h := c.ic[site].polyEntry(ob); h == ob && ob.shape.keys[e.idx].key == key {
-				ob.vals[e.idx] = v
+				ob.vals()[e.idx] = v
 				return
 			}
 			if i := ob.findOwn(key); i >= 0 &&
 				ob.shape.keys[i].flags&(propAccessor|propDeleted|propUninit|propWritable) == propWritable {
 				c.ic[site].noteOwn(ob, i)
-				ob.vals[i] = v
+				ob.vals()[i] = v
 				return
 			}
 		}
@@ -978,7 +978,7 @@ func init() {
 								key = c.cl.upvalues[k>>1].get()
 							}
 							if s := key.Symbol(); s != nil && s.atoms == c.r.atoms && ob.shape.keys[e.idx].key == s.atom {
-								return ob.vals[e.idx]
+								return ob.vals()[e.idx]
 							}
 						}
 					}
@@ -999,7 +999,7 @@ func init() {
 							key = c.cl.upvalues[k>>1].get()
 						}
 						if s := key.Symbol(); s != nil && s.atoms == c.r.atoms && ob.shape.keys[e.idx].key == s.atom {
-							return ob.vals[e.idx]
+							return ob.vals()[e.idx]
 						}
 					}
 				}
@@ -1027,7 +1027,7 @@ func init() {
 								key = c.cl.upvalues[k>>1].get()
 							}
 							if s := key.Symbol(); s != nil && s.atoms == c.r.atoms && ob.shape.keys[e.idx].key == s.atom {
-								ob.vals[e.idx] = v
+								ob.vals()[e.idx] = v
 								return
 							}
 						}
@@ -1049,7 +1049,7 @@ func init() {
 							key = c.cl.upvalues[k>>1].get()
 						}
 						if s := key.Symbol(); s != nil && s.atoms == c.r.atoms && ob.shape.keys[e.idx].key == s.atom {
-							ob.vals[e.idx] = v
+							ob.vals()[e.idx] = v
 							return
 						}
 					}

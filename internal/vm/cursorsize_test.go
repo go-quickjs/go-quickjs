@@ -6,15 +6,16 @@ import (
 )
 
 // A for-of's cursor and its object -- every for-of's, spread's and array
-// destructuring's -- are 112 bytes, a size class: the object has no ext,
-// its class saying where the state is, and what only for-in walks is kept
-// apart in its own cursor's allocation, which fits 192 bytes.
+// destructuring's -- are 104 bytes, in the size class of 112: the object
+// has no ext, its class saying where the state is, and what only for-in
+// walks is kept apart in its own cursor's allocation, which fits 192
+// bytes.
 func TestCursorSizes(t *testing.T) {
 	if unsafe.Sizeof(uintptr(0)) != 8 {
 		t.Skip("sizes of a 64-bit build")
 	}
-	if size := unsafe.Sizeof(iterObject{}); size != 112 {
-		t.Errorf("iterObject is %d bytes, want 112", size)
+	if size := unsafe.Sizeof(iterObject{}); size != 104 {
+		t.Errorf("iterObject is %d bytes, want 104", size)
 	}
 	if size := unsafe.Sizeof(forInObject{}); size > 192 {
 		t.Errorf("forInObject is %d bytes, want at most 192", size)

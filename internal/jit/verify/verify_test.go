@@ -518,6 +518,7 @@ func TestMirEmitted(t *testing.T) {
 	spreadEnc := enc
 	spreadEnc.WriteBarrier, spreadEnc.Object, spreadEnc.ShapeNext, spreadEnc.ShapeNextKey, spreadEnc.ShapeNextFlags = 0x71000, 0xFFFC000000000000, 40, 48, 52
 	spreadEnc.ShapeIndex, spreadEnc.LinearScan, spreadEnc.PropDefault, spreadEnc.ObjectShape, spreadEnc.ObjectProps = 56, 8, 7, 8, 16
+	spreadEnc.ObjectPropsLen, spreadEnc.ObjectPropsCap = 24, 28
 	spreadEnc.ObjectElems, spreadEnc.ObjectClass, spreadEnc.ObjectFlags, spreadEnc.ObjectProto, spreadEnc.ClassArray = 64, 1, 2, 40, 1
 	spreadEnc.FlagSparse, spreadEnc.FlagExtensible = 4, 1
 	natives := map[string]int{}
@@ -588,6 +589,7 @@ func TestMirEmitted(t *testing.T) {
 	genEnc := enc
 	genEnc.IterState, genEnc.ClassCursor, genEnc.IterDone, genEnc.IterArr, genEnc.IterIdx, genEnc.IterIter, genEnc.IterNext = 56, 30, 8, 16, 24, 32, 48
 	genEnc.ObjectExt, genEnc.ObjectData, genEnc.ObjectElems, genEnc.ObjectProps = 40, 8, 64, 16
+	genEnc.ObjectPropsLen, genEnc.ObjectPropsCap = 24, 28
 	genEnc.GenObject, genEnc.ClassGenerator, genEnc.GenClosure, genEnc.GenThis, genEnc.GenVals, genEnc.GenArgs = 56, 21, 0, 8, 24, 48
 	genEnc.GenPC, genEnc.GenSaved, genEnc.GenRare, genEnc.SavedStack, genEnc.SavedHandlers = 52, 56, 64, 0, 24
 	genEnc.GenState, genEnc.GenStarted, genEnc.GenDelegating = 88, 89, 90

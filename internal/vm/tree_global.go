@@ -24,28 +24,28 @@ func (r *Runtime) getGlobalAt(c *tctx, in bytecode.Instr, pc int) (Value, error)
 		}
 	}
 	site := &cl.ic[in.B]
-	if i := uint(site.idx); i < uint(len(env.vals)) {
+	if i := uint(site.idx); i < uint(int(env.valn)) {
 		if p := env.shape.keys[i]; p.key == name &&
 			p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
 			if site.p1 != env {
 				site.p1 = env
 			}
-			return env.vals[i], nil
+			return env.vals()[i], nil
 		}
 	}
 	if x := env.shapeIndex(); x != nil {
-		if e := &x.recent[name&15]; e.key == name && e.idx >= 0 && int(e.idx) < len(env.vals) {
+		if e := &x.recent[name&15]; e.key == name && e.idx >= 0 && int(e.idx) < int(env.valn) {
 			if p := env.shape.keys[e.idx]; p.key == name &&
 				p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
 				noteGlobalSlot(site, env, e.idx)
-				return env.vals[e.idx], nil
+				return env.vals()[e.idx], nil
 			}
 		}
 	}
 	if i := env.findOwn(name); i >= 0 {
 		if p := env.shape.keys[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
 			noteGlobalSlot(site, env, i)
-			return env.vals[i], nil
+			return env.vals()[i], nil
 		}
 	}
 	c.at(pc)
@@ -98,7 +98,7 @@ func (r *Runtime) setGlobalIn(f *frame, cl *closure, in bytecode.Instr, v Value)
 		}
 	}
 	lex := ownProp{i: -1}
-	if len(r.globalLex.vals) != 0 {
+	if r.globalLex.valn != 0 {
 		lex = r.globalLexProp(env, name)
 	}
 	if p := lex; p.ok() {
@@ -133,7 +133,7 @@ func (r *Runtime) setGlobalIn(f *frame, cl *closure, in bytecode.Instr, v Value)
 		}
 		if p := env.shape.keys[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 &&
 			p.flags&propWritable != 0 {
-			env.vals[i] = v
+			env.vals()[i] = v
 			return nil
 		}
 	}

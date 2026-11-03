@@ -185,14 +185,14 @@ func (r *Runtime) regexpArgCall(f *Object, recv Value, args []Value) bool {
 // one RegExp rather than one each time round.
 func (r *Runtime) regexpLiteralDone(c *bytecode.Constant, o *Object) {
 	i := regexpLitSlot(c)
-	if r.regexpLits[i].c != c || r.regexpSpares[i].c != nil || o.class != ClassRegExp || !o.extEmbedded() || len(o.vals) != 1 {
+	if r.regexpLits[i].c != c || r.regexpSpares[i].c != nil || o.class != ClassRegExp || !o.extEmbedded() || int(o.valn) != 1 {
 		return
 	}
 	ro := (*regexpObject)(unsafe.Pointer(o))
 	if ro.rd.re != &ro.re || ro.rd.realm != r.Realm || ro.side.data != any(&ro.rd) {
 		return
 	}
-	o.vals[0] = Int(0)
+	o.vals()[0] = Int(0)
 	r.regexpSpares[i] = regexpSpare{c: c, ro: ro}
 }
 
@@ -201,7 +201,7 @@ func (r *Runtime) newRegExpObject(re *regexp.Regexp) Value {
 	// The object, its data, its clone of the pattern and its table are one
 	// allocation: a literal in a loop is a new RegExp each time round.
 	ro := &regexpObject{Object: Object{proto: r.proto.regexp, class: ClassRegExp, flags: objExtensible | objInlineProps}}
-	ro.vals = ro.inline[:0]
+	ro.setRoom(&ro.inline[0], len(ro.inline))
 	re.CloneInto(&ro.re)
 	ro.rd = regexpData{re: &ro.re, realm: r.Realm}
 	ro.embedExt(&ro.side)
@@ -540,7 +540,7 @@ func (r *Runtime) regexpMatch(this Value, s *String) ([]int, *regexp.Regexp, err
 	// lastIndex is read whatever the flags say -- its valueOf runs either
 	// way -- but it only decides where the search starts, and is only written
 	// back, when the pattern is global or sticky.
-	li, err := r.toLength(o.vals[0])
+	li, err := r.toLength(o.vals()[0])
 	if err != nil {
 		return nil, nil, err
 	}
@@ -609,7 +609,7 @@ func (r *Runtime) regexpMatch(this Value, s *String) ([]int, *regexp.Regexp, err
 // point of lastIndex being an ordinary property.
 func (r *Runtime) setLastIndex(o *Object, v Value) error {
 	if o.shape.keys[0].flags&propWritable != 0 {
-		o.vals[0] = v
+		o.vals()[0] = v
 		return nil
 	}
 	_, err := r.setProp(o, atomLastIndex, v, Obj(o), true)
@@ -624,7 +624,7 @@ func (r *Runtime) setLastIndex(o *Object, v Value) error {
 // does to what builtinExec answers for.
 func (r *Runtime) execIsBuiltin(rx Value) bool {
 	o := rx.Object()
-	return o.class == ClassRegExp && o.proto == r.proto.regexp && len(o.vals) == 1 &&
+	return o.class == ClassRegExp && o.proto == r.proto.regexp && int(o.valn) == 1 &&
 		o.shape.keys[0].key == atomLastIndex && propsIntact(o.proto, r.regexpExecProps)
 }
 
@@ -922,11 +922,11 @@ func (r *Runtime) buildMatchResult(re *regexp.Regexp, caps []int, input *String)
 	gl := r.groupsLayoutOf(re)
 	groups := r.groupsObject(gl, elems)
 	if t := r.matchLayout; t != nil && !hasIndices {
-		arr.vals = append(arr.vals, t.vals[:]...)
+		arr.setVals(append(arr.vals(), t.vals[:]...))
 		arr.shape = t.shape
-		arr.vals[0] = Int(caps[0])
-		arr.vals[1] = Str(input)
-		arr.vals[2] = groups
+		arr.vals()[0] = Int(caps[0])
+		arr.vals()[1] = Str(input)
+		arr.vals()[2] = groups
 		return arr
 	}
 	arr.setOwnRaw(atomIndex, Int(caps[0]), propDefault)
@@ -1063,7 +1063,7 @@ func (r *Runtime) groupsObject(g *groupsLayout, vals []Value) Value {
 	o := newLiteralObject(nil, ClassObject, len(g.names))
 	if g.shape != nil {
 		for _, gs := range g.groups {
-			o.vals = append(o.vals, groupValue(gs, vals))
+			o.appendVal(groupValue(gs, vals))
 		}
 		o.shape = g.shape
 		return Obj(o)
@@ -1279,7 +1279,7 @@ func propsIntact(o *Object, want []builtinProp) bool {
 	if s := o.shape; s != nil && s.pristine {
 		return true
 	}
-	keys, vals := o.keys(), o.vals
+	keys, vals := o.keys(), o.vals()
 	for k := range want {
 		e := &want[k]
 		// The value is compared by its bits: a boxed value's number is a
@@ -1308,7 +1308,7 @@ func (r *Runtime) builtinFlagBits(rx Value) (regexp.Flags, bool) {
 	}
 	o := rx.Object()
 	if o.class != ClassRegExp || o.proto == nil || o.proto != r.proto.regexp ||
-		len(o.vals) != 1 || o.shape.keys[0].key != atomLastIndex ||
+		int(o.valn) != 1 || o.shape.keys[0].key != atomLastIndex ||
 		!propsIntact(o.proto, r.regexpFlagProps) {
 		return 0, false
 	}

@@ -107,7 +107,7 @@ func jitRegExpLeafGuess[_ any](r *Runtime, cl *closure, p *ir.Program, pc int) *
 		return jitReplaceLeafGuess[struct{}](r, cl, p, pc, q)
 	}
 	recv, ok := r.jitChainReceiver(cl, p, q, jitChainReads)
-	if !ok || recv.class != ClassRegExp || recv.proto != r.proto.regexp || len(recv.vals) != 1 {
+	if !ok || recv.class != ClassRegExp || recv.proto != r.proto.regexp || int(recv.valn) != 1 {
 		return nil
 	}
 	var f *Object

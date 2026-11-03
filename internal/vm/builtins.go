@@ -184,7 +184,7 @@ func (r *Runtime) initObjectBuiltins() {
 			if c := rt.shapeKeys(so); c != nil && c.copyable {
 				s, i := so.shape, 0
 				for ; i < len(c.atoms) && so.shape == s; i++ {
-					if _, err := rt.setProp(target, c.atoms[i], so.vals[c.slots[i]], Obj(target), true); err != nil {
+					if _, err := rt.setProp(target, c.atoms[i], so.vals()[c.slots[i]], Obj(target), true); err != nil {
 						return Undefined, err
 					}
 				}

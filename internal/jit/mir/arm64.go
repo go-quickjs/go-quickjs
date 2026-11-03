@@ -2850,8 +2850,8 @@ func (c *a64Compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss arm64.La
 		}
 		c.a.Cbnz(a64B, miss, true)
 	}
-	c.a.Load(a64B, o, c.enc.ObjectProps+8)
-	c.a.Load(a64C, o, c.enc.ObjectProps+16)
+	c.a.LoadU32(a64B, o, c.enc.ObjectPropsLen)
+	c.a.LoadU32(a64C, o, c.enc.ObjectPropsCap)
 	c.a.Cmp(a64B, a64C, true)
 	c.a.BCond(arm64.HS, miss)
 	// As amd64's: while the collector marks, Go adds it. Not D, which may
@@ -2865,7 +2865,7 @@ func (c *a64Compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss arm64.La
 		c.addAlongMarking(v, add, done)
 	})
 	c.a.AddImm(a64C, a64B, 1, true)
-	c.a.Store(o, c.enc.ObjectProps+8, a64C)
+	c.a.Store32(o, c.enc.ObjectPropsLen, a64C)
 	c.movImm(a64C, uint64(add.Next))
 	c.a.Store(o, c.enc.ObjectShape, a64C)
 	// The value's address: the old length times 16, past the table's
@@ -2885,7 +2885,7 @@ func (c *a64Compiler) addAlongMarking(v *ssa.Value, add *ssa.PropertyAdd, done a
 	x := v.Args[1]
 	o := c.gpr(v.Args[0], a64D)
 	c.a.AddImm(a64C, a64B, 1, true)
-	c.a.Store(o, c.enc.ObjectProps+8, a64C)
+	c.a.Store32(o, c.enc.ObjectPropsLen, a64C)
 	c.a.ShiftImm(arm64.Lsl, a64B, a64B, 4, true)
 	c.a.Load(a64C, o, c.enc.ObjectProps)
 	c.a.Op(arm64.Add, a64C, a64C, a64B, true)
@@ -2967,7 +2967,7 @@ func (c *a64Compiler) scan(v *ssa.Value, guard func(arm64.Cond), found, mega arm
 		guard(arm64.NE)
 		c.a.Bind(object)
 	}
-	c.a.Load(a64B, p, c.enc.ObjectProps+8)
+	c.a.LoadU32(a64B, p, c.enc.ObjectPropsLen)
 	c.a.CmpImm(a64B, abi.MaxScan, true)
 	if c.enc.Mega && mega == 0 && v.Megamorphic() {
 		mega = c.a.NewLabel()
@@ -3021,7 +3021,7 @@ func (c *a64Compiler) scan(v *ssa.Value, guard func(arm64.Cond), found, mega arm
 	guard(arm64.NE)
 	// As amd64's: the value at the key's position.
 	p = c.gpr(v.Args[0], a64C)
-	c.a.Load(a64C, p, c.enc.ObjectProps+8)
+	c.a.LoadU32(a64C, p, c.enc.ObjectPropsLen)
 	c.a.Op(arm64.Sub, a64C, a64C, a64B, true)
 	c.a.ShiftImm(arm64.Lsl, a64C, a64C, 4, true)
 	p = c.gpr(v.Args[0], a64A)
@@ -3033,7 +3033,7 @@ func (c *a64Compiler) scan(v *ssa.Value, guard func(arm64.Cond), found, mega arm
 // keyAt is amd64's: the object in A has a property at v's index, of v's
 // key, its shape's keys left in B. It uses C.
 func (c *a64Compiler) keyAt(v *ssa.Value, guard func(arm64.Cond)) {
-	c.a.Load(a64B, a64A, c.enc.ObjectProps+8)
+	c.a.LoadU32(a64B, a64A, c.enc.ObjectPropsLen)
 	c.a.CmpImm(a64B, int64(v.Index), true)
 	guard(arm64.LS)
 	c.a.Load(a64B, a64A, c.enc.ObjectShape)
@@ -4503,7 +4503,7 @@ func (c *a64Compiler) constructGuards(t *ssa.CallSite, guard func(arm64.Cond)) {
 	if t.Alloc {
 		return
 	}
-	c.a.Load(a64B, a64C, c.enc.ObjectProps+8)
+	c.a.LoadU32(a64B, a64C, c.enc.ObjectPropsLen)
 	c.a.CmpImm(a64B, int64(t.ProtoIndex), true)
 	guard(arm64.LS)
 	c.a.Load(a64B, a64C, c.enc.ObjectShape)
@@ -5236,7 +5236,7 @@ func (c *a64Compiler) genForOf(v *ssa.Value, slow, done arm64.Label) {
 	c.a.LoadU8(a64A, a64C, c.enc.ObjectClass)
 	c.a.CmpImm(a64A, int64(c.enc.ClassObject), false)
 	fail(arm64.NE)
-	c.a.Load(a64A, a64C, c.enc.ObjectProps+8)
+	c.a.LoadU32(a64A, a64C, c.enc.ObjectPropsLen)
 	c.a.Cbnz(a64A, slow, true)
 	c.a.Load(a64C, a64C, c.enc.ObjectProto)
 	c.a.Cbz(a64C, slow, true)
@@ -5256,7 +5256,7 @@ func (c *a64Compiler) genForOf(v *ssa.Value, slow, done arm64.Label) {
 		c.a.Load(a64C, a64A, k.obj)
 		c.a.Cbz(a64C, slow, true)
 		c.a.LoadU32(a64A, a64A, k.idx)
-		c.a.Load(a64B, a64C, c.enc.ObjectProps+8)
+		c.a.LoadU32(a64B, a64C, c.enc.ObjectPropsLen)
 		c.a.Cmp(a64A, a64B, true)
 		fail(arm64.HS)
 		c.a.Load(a64B, a64C, c.enc.ObjectProps)
@@ -5323,7 +5323,7 @@ func (c *a64Compiler) genMake(v *ssa.Value, slow, done arm64.Label) {
 	c.a.Cmp(a64B, a64C, true)
 	fail(arm64.NE)
 	// As amd64's: its prototype the pool's, a generator in the pool.
-	c.a.Load(a64A, a64B, c.enc.ObjectProps+8)
+	c.a.LoadU32(a64A, a64B, c.enc.ObjectPropsLen)
 	c.a.CmpImm(a64A, int64(site.ProtoIndex), true)
 	fail(arm64.LS)
 	c.a.Load(a64A, a64B, c.enc.ObjectShape)
@@ -6039,9 +6039,9 @@ func (c *a64Compiler) copyProps(v *ssa.Value, site *ssa.CallSite, slow arm64.Lab
 	c.a.Store(a64Ctx, entry, a64B)
 	// Room: the target's length and the values', its capacity or less.
 	c.a.Load(a64D, a64B, abi.CopySlots+8)
-	c.a.Load(a64B, a64A, c.enc.ObjectProps+8)
+	c.a.LoadU32(a64B, a64A, c.enc.ObjectPropsLen)
 	c.a.Op(arm64.Add, a64C, a64D, a64B, true)
-	c.a.Load(a64A, a64A, c.enc.ObjectProps+16)
+	c.a.LoadU32(a64A, a64A, c.enc.ObjectPropsCap)
 	c.a.Cmp(a64C, a64A, true)
 	c.a.BCond(arm64.HI, slow)
 	c.a.Store(a64Ctx, length, a64C)
@@ -6086,7 +6086,7 @@ func (c *a64Compiler) copyProps(v *ssa.Value, site *ssa.CallSite, slow arm64.Lab
 	c.a.Bind(done)
 	c.a.Load(a64A, a64Ctx, tgt+c.enc.RefOffset)
 	c.a.Load(a64C, a64Ctx, length)
-	c.a.Store(a64A, c.enc.ObjectProps+8, a64C)
+	c.a.Store32(a64A, c.enc.ObjectPropsLen, a64C)
 	c.a.Load(a64B, a64Ctx, entry)
 	c.a.Load(a64C, a64B, abi.CopyTo)
 	c.a.AddImm(a64A, a64A, int64(c.enc.ObjectShape), true)
@@ -6123,8 +6123,8 @@ func (c *a64Compiler) defineNext(v *ssa.Value, site *ssa.CallSite, slow arm64.La
 	c.a.LoadU8(a64C, a64B, c.enc.ShapeNextFlags)
 	c.a.CmpImm(a64C, int64(c.enc.PropDefault), false)
 	c.a.BCond(arm64.NE, slow)
-	c.a.Load(a64B, a64A, c.enc.ObjectProps+8)
-	c.a.Load(a64C, a64A, c.enc.ObjectProps+16)
+	c.a.LoadU32(a64B, a64A, c.enc.ObjectPropsLen)
+	c.a.LoadU32(a64C, a64A, c.enc.ObjectPropsCap)
 	c.a.Cmp(a64B, a64C, true)
 	c.a.BCond(arm64.HS, slow)
 	indexed := c.a.NewLabel()
@@ -6143,9 +6143,9 @@ func (c *a64Compiler) defineNext(v *ssa.Value, site *ssa.CallSite, slow arm64.La
 	c.a.Load(a64C, a64Ctx, val+c.enc.RefOffset)
 	c.ptrStore(marking)
 	c.a.Load(a64A, a64Ctx, obj+c.enc.RefOffset)
-	c.a.Load(a64B, a64A, c.enc.ObjectProps+8)
+	c.a.LoadU32(a64B, a64A, c.enc.ObjectPropsLen)
 	c.a.AddImm(a64B, a64B, 1, true)
-	c.a.Store(a64A, c.enc.ObjectProps+8, a64B)
+	c.a.Store32(a64A, c.enc.ObjectPropsLen, a64B)
 	c.a.Load(a64C, a64Ctx, next)
 	c.a.AddImm(a64A, a64A, int64(c.enc.ObjectShape), true)
 	c.ptrStore(marking)
@@ -6182,7 +6182,7 @@ func (c *a64Compiler) spreadElems(v *ssa.Value, site *ssa.CallSite, slow arm64.L
 	from, left, cur, dst, length := at(0), at(1), at(2), at(3), at(4)
 	c.arrayOperand(src, slow)
 	c.a.Store(a64Ctx, from, a64B)
-	c.a.Load(a64A, a64B, c.enc.ObjectProps+8)
+	c.a.LoadU32(a64A, a64B, c.enc.ObjectPropsLen)
 	c.a.Cbnz(a64A, slow, true)
 	c.movImm(a64C, uint64(site.ArrayIter))
 	c.a.Load(a64A, a64B, c.enc.ObjectProto)
@@ -6459,7 +6459,7 @@ func (c *a64Compiler) lengthWrite(v *ssa.Value, slow arm64.Label) {
 	c.a.Op(arm64.And, a64C, a64C, a64D, false)
 	c.a.CmpImm(a64C, int64(c.enc.FlagLengthWritable), false)
 	fail(arm64.NE)
-	c.a.Load(a64C, a64B, c.enc.ObjectProps+8)
+	c.a.LoadU32(a64C, a64B, c.enc.ObjectPropsLen)
 	c.a.Cbnz(a64C, slow, true)
 	c.a.FMovFromF(a64A, a64F2)
 	c.a.Load(a64C, a64B, c.enc.ObjectElems+8)
@@ -8647,7 +8647,7 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		if p != a64C {
 			c.a.MovRR(a64C, p)
 		}
-		c.a.Load(a64B, a64C, c.enc.ObjectProps+8)
+		c.a.LoadU32(a64B, a64C, c.enc.ObjectPropsLen)
 		c.a.CmpImm(a64B, int64(v.Index), true)
 		guard(arm64.LS)
 		c.a.Load(a64B, a64C, c.enc.ObjectShape)

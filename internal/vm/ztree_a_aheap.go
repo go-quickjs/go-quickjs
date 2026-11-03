@@ -174,15 +174,15 @@ func init() {
 		return func(c *tctx) Value {
 			s := &c.ic[site]
 			if env := s.p1; env != nil && c.f.evalVars == nil {
-				if r := c.r; len(r.globalLex.vals) == 0 || !r.lexShadows(c.names[name]) {
-					if i := uint(s.idx); i < uint(len(env.vals)) {
+				if r := c.r; r.globalLex.valn == 0 || !r.lexShadows(c.names[name]) {
+					if i := uint(s.idx); i < uint(int(env.valn)) {
 						sh := env.shape
 						if sh == s.shape {
-							return env.vals[i]
+							return env.vals()[i]
 						}
 						if p := sh.keys[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
 							noteGlobalShape(s, sh)
-							return env.vals[i]
+							return env.vals()[i]
 						}
 					}
 				}
@@ -202,9 +202,9 @@ func init() {
 		case op == 0 && !key.add:
 			return func(c *tctx) {
 				var o Value
-				if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint(s.idx) < uint(len(s.p1.vals)) && s.p1.shape == s.shape &&
-					(len(c.r.globalLex.vals) == 0 || !c.r.lexShadows(c.names[name])) {
-					o = s.p1.vals[s.idx]
+				if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint32(s.idx) < s.p1.valn && s.p1.shape == s.shape &&
+					(c.r.globalLex.valn == 0 || !c.r.lexShadows(c.names[name])) {
+					o = s.p1.vals()[s.idx]
 				} else {
 					o = read(c)
 				}
@@ -216,9 +216,9 @@ func init() {
 			add := arithEntries(bytecode.OpAdd, localEntry(l), numberEntry(Int32(int32(n))), key.apc)
 			return func(c *tctx) {
 				var o Value
-				if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint(s.idx) < uint(len(s.p1.vals)) && s.p1.shape == s.shape &&
-					(len(c.r.globalLex.vals) == 0 || !c.r.lexShadows(c.names[name])) {
-					o = s.p1.vals[s.idx]
+				if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint32(s.idx) < s.p1.valn && s.p1.shape == s.shape &&
+					(c.r.globalLex.valn == 0 || !c.r.lexShadows(c.names[name])) {
+					o = s.p1.vals()[s.idx]
 				} else {
 					o = read(c)
 				}
@@ -235,9 +235,9 @@ func init() {
 			kv, bpc := Int32(k), key.bpc
 			return func(c *tctx) {
 				var o Value
-				if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint(s.idx) < uint(len(s.p1.vals)) && s.p1.shape == s.shape &&
-					(len(c.r.globalLex.vals) == 0 || !c.r.lexShadows(c.names[name])) {
-					o = s.p1.vals[s.idx]
+				if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint32(s.idx) < s.p1.valn && s.p1.shape == s.shape &&
+					(c.r.globalLex.valn == 0 || !c.r.lexShadows(c.names[name])) {
+					o = s.p1.vals()[s.idx]
 				} else {
 					o = read(c)
 				}
@@ -255,9 +255,9 @@ func init() {
 		ss := &i32SumSite{aop: bytecode.OpAdd, apc: key.apc, op: op, k: k, kv: Int32(k), bpc: key.bpc}
 		return func(c *tctx) {
 			var o Value
-			if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint(s.idx) < uint(len(s.p1.vals)) && s.p1.shape == s.shape &&
-				(len(c.r.globalLex.vals) == 0 || !c.r.lexShadows(c.names[name])) {
-				o = s.p1.vals[s.idx]
+			if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint32(s.idx) < s.p1.valn && s.p1.shape == s.shape &&
+				(c.r.globalLex.valn == 0 || !c.r.lexShadows(c.names[name])) {
+				o = s.p1.vals()[s.idx]
 			} else {
 				o = read(c)
 			}
@@ -279,9 +279,9 @@ func init() {
 		case op == 0 && !key.add:
 			return func(c *tctx) Value {
 				var o Value
-				if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint(s.idx) < uint(len(s.p1.vals)) && s.p1.shape == s.shape &&
-					(len(c.r.globalLex.vals) == 0 || !c.r.lexShadows(c.names[name])) {
-					o = s.p1.vals[s.idx]
+				if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint32(s.idx) < s.p1.valn && s.p1.shape == s.shape &&
+					(c.r.globalLex.valn == 0 || !c.r.lexShadows(c.names[name])) {
+					o = s.p1.vals()[s.idx]
 				} else {
 					o = read(c)
 				}
@@ -293,9 +293,9 @@ func init() {
 			add := arithEntries(bytecode.OpAdd, localEntry(l), numberEntry(Int32(int32(n))), key.apc)
 			return func(c *tctx) Value {
 				var o Value
-				if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint(s.idx) < uint(len(s.p1.vals)) && s.p1.shape == s.shape &&
-					(len(c.r.globalLex.vals) == 0 || !c.r.lexShadows(c.names[name])) {
-					o = s.p1.vals[s.idx]
+				if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint32(s.idx) < s.p1.valn && s.p1.shape == s.shape &&
+					(c.r.globalLex.valn == 0 || !c.r.lexShadows(c.names[name])) {
+					o = s.p1.vals()[s.idx]
 				} else {
 					o = read(c)
 				}
@@ -312,9 +312,9 @@ func init() {
 			kv, bpc := Int32(k), key.bpc
 			return func(c *tctx) Value {
 				var o Value
-				if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint(s.idx) < uint(len(s.p1.vals)) && s.p1.shape == s.shape &&
-					(len(c.r.globalLex.vals) == 0 || !c.r.lexShadows(c.names[name])) {
-					o = s.p1.vals[s.idx]
+				if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint32(s.idx) < s.p1.valn && s.p1.shape == s.shape &&
+					(c.r.globalLex.valn == 0 || !c.r.lexShadows(c.names[name])) {
+					o = s.p1.vals()[s.idx]
 				} else {
 					o = read(c)
 				}
@@ -332,9 +332,9 @@ func init() {
 		ss := &i32SumSite{aop: bytecode.OpAdd, apc: key.apc, op: op, k: k, kv: Int32(k), bpc: key.bpc}
 		return func(c *tctx) Value {
 			var o Value
-			if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint(s.idx) < uint(len(s.p1.vals)) && s.p1.shape == s.shape &&
-				(len(c.r.globalLex.vals) == 0 || !c.r.lexShadows(c.names[name])) {
-				o = s.p1.vals[s.idx]
+			if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint32(s.idx) < s.p1.valn && s.p1.shape == s.shape &&
+				(c.r.globalLex.valn == 0 || !c.r.lexShadows(c.names[name])) {
+				o = s.p1.vals()[s.idx]
 			} else {
 				o = read(c)
 			}
@@ -356,9 +356,9 @@ func init() {
 		case op == 0 && !key.add:
 			return func(c *tctx) {
 				var o Value
-				if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint(s.idx) < uint(len(s.p1.vals)) && s.p1.shape == s.shape &&
-					(len(c.r.globalLex.vals) == 0 || !c.r.lexShadows(c.names[name])) {
-					o = s.p1.vals[s.idx]
+				if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint32(s.idx) < s.p1.valn && s.p1.shape == s.shape &&
+					(c.r.globalLex.valn == 0 || !c.r.lexShadows(c.names[name])) {
+					o = s.p1.vals()[s.idx]
 				} else {
 					o = read(c)
 				}
@@ -379,9 +379,9 @@ func init() {
 			add := arithEntries(bytecode.OpAdd, localEntry(l), numberEntry(Int32(int32(n))), key.apc)
 			return func(c *tctx) {
 				var o Value
-				if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint(s.idx) < uint(len(s.p1.vals)) && s.p1.shape == s.shape &&
-					(len(c.r.globalLex.vals) == 0 || !c.r.lexShadows(c.names[name])) {
-					o = s.p1.vals[s.idx]
+				if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint32(s.idx) < s.p1.valn && s.p1.shape == s.shape &&
+					(c.r.globalLex.valn == 0 || !c.r.lexShadows(c.names[name])) {
+					o = s.p1.vals()[s.idx]
 				} else {
 					o = read(c)
 				}
@@ -407,9 +407,9 @@ func init() {
 			kv, bpc := Int32(k), key.bpc
 			return func(c *tctx) {
 				var o Value
-				if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint(s.idx) < uint(len(s.p1.vals)) && s.p1.shape == s.shape &&
-					(len(c.r.globalLex.vals) == 0 || !c.r.lexShadows(c.names[name])) {
-					o = s.p1.vals[s.idx]
+				if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint32(s.idx) < s.p1.valn && s.p1.shape == s.shape &&
+					(c.r.globalLex.valn == 0 || !c.r.lexShadows(c.names[name])) {
+					o = s.p1.vals()[s.idx]
 				} else {
 					o = read(c)
 				}
@@ -432,9 +432,9 @@ func init() {
 		ss := &i32SumSite{aop: bytecode.OpAdd, apc: key.apc, op: op, k: k, kv: Int32(k), bpc: key.bpc}
 		return func(c *tctx) {
 			var o Value
-			if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint(s.idx) < uint(len(s.p1.vals)) && s.p1.shape == s.shape &&
-				(len(c.r.globalLex.vals) == 0 || !c.r.lexShadows(c.names[name])) {
-				o = s.p1.vals[s.idx]
+			if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint32(s.idx) < s.p1.valn && s.p1.shape == s.shape &&
+				(c.r.globalLex.valn == 0 || !c.r.lexShadows(c.names[name])) {
+				o = s.p1.vals()[s.idx]
 			} else {
 				o = read(c)
 			}

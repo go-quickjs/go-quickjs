@@ -64,7 +64,9 @@ var jitEncoding = abi.Encoding{
 	RandomCount:      int32(unsafe.Offsetof(mathRandom{}.count)),
 	RandomNumbers:    int32(unsafe.Offsetof(mathRandom{}.numbers)),
 	ObjectShape:      int32(unsafe.Offsetof(Object{}.shape)),
-	ObjectProps:      int32(unsafe.Offsetof(Object{}.vals)),
+	ObjectProps:      int32(unsafe.Offsetof(Object{}.valp)),
+	ObjectPropsLen:   int32(unsafe.Offsetof(Object{}.valn)),
+	ObjectPropsCap:   int32(unsafe.Offsetof(Object{}.valc)),
 	ObjectProto:      int32(unsafe.Offsetof(Object{}.proto)),
 	WriteBarrier:     jit.WriteBarrier(),
 	CallGo:           jit.CallGo(),
@@ -481,7 +483,7 @@ func (r *Runtime) jitPolySeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 	} else if c.p1 != nil {
 		holder = c.p1
 	}
-	if c.idx < int32(len(holder.vals)) && !holder.vals[c.idx].IsNumber() {
+	if c.idx < int32(holder.valn) && !holder.vals()[c.idx].IsNumber() {
 		jitNumberMissed(e, pc)
 	}
 	// A shape it was not compiled for: at a megamorphic site, the
@@ -737,7 +739,7 @@ func (r *Runtime) jitDeoptSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.In
 	} else if c.p1 != nil {
 		holder = c.p1
 	}
-	if c.idx < int32(len(holder.vals)) && !holder.vals[c.idx].IsNumber() {
+	if c.idx < int32(holder.valn) && !holder.vals()[c.idx].IsNumber() {
 		jitNumberMissed(e, pc)
 	}
 }
@@ -750,11 +752,11 @@ func (r *Runtime) jitDeoptSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.In
 // and write at such sites left to Go.
 func (s *jitState) megaFill(o *Object, key Atom) {
 	sh := o.shape
-	if s.mega == nil || sh == nil || sh.loose || o.class != ClassObject && o.class != ClassFunction || len(o.vals) <= abi.MaxScan {
+	if s.mega == nil || sh == nil || sh.loose || o.class != ClassObject && o.class != ClassFunction || int(o.valn) <= abi.MaxScan {
 		return
 	}
 	i := o.findOwn(key)
-	if i < 0 || int(i) >= len(sh.keys) || int(i) >= len(o.vals) {
+	if i < 0 || int(i) >= len(sh.keys) || int(i) >= int(o.valn) {
 		return
 	}
 	flags := sh.keys[i].flags
@@ -832,7 +834,7 @@ func (r *Runtime) jitMegaFillProto(o *Object, key Atom) (absent bool) {
 		if i < 0 {
 			continue
 		}
-		if i >= p.shape.n || int(i) >= len(p.vals) || p.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted|propUninit) != 0 {
+		if i >= p.shape.n || int(i) >= int(p.valn) || p.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted|propUninit) != 0 {
 			return false
 		}
 		remember(sh)
@@ -873,12 +875,12 @@ func (r *Runtime) jitPrivateSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.
 	}
 	o := r.stack[at].Object()
 	sh, i := o.shape, o.findOwn(privateKey(f, f.cl, in.B))
-	if sh == nil || sh == noShape || sh.loose || i < 0 || i >= sh.n || int(i) >= len(o.vals) {
+	if sh == nil || sh == noShape || sh.loose || i < 0 || i >= sh.n || int(i) >= int(o.valn) {
 		return
 	}
 	if p := o.shape.keys[i]; p.isAccessor() || in.Op == bytecode.OpSetPrivate && p.flags&propWritable == 0 {
 		return
-	} else if in.Op == bytecode.OpGetPrivate && !o.vals[i].IsNumber() {
+	} else if in.Op == bytecode.OpGetPrivate && !o.vals()[i].IsNumber() {
 		// A read that met a value not a number reads it as a value.
 		jitNumberMissed(e, pc)
 	}
@@ -3172,7 +3174,7 @@ func (fb *jitFeedback) InstanceOf(pc int) (ssa.InstanceOfSite, bool) {
 	if hc.p2 != nil {
 		h = hc.p2
 	}
-	if hv := h.vals[hc.idx]; !hv.IsObject() || hv.Object() != r.hasInstanceFn {
+	if hv := h.vals()[hc.idx]; !hv.IsObject() || hv.Object() != r.hasInstanceFn {
 		return ssa.InstanceOfSite{}, false
 	}
 	k := fb.keep()
@@ -6800,7 +6802,7 @@ func (r *Runtime) jitSeenCallees(cl *closure, p *ir.Program, pc int, o *Object) 
 		if c.p2 != nil {
 			h = c.p2
 		}
-		if c.shape == nil || c.shape == noShape || c.shape == dictShape || c.getter || h == nil || c.idx < 0 || int(c.idx) >= len(h.vals) {
+		if c.shape == nil || c.shape == noShape || c.shape == dictShape || c.getter || h == nil || c.idx < 0 || int(c.idx) >= int(h.valn) {
 			return
 		}
 		prop := h.propAt(c.idx)
@@ -6917,13 +6919,13 @@ func (r *Runtime) jitCalleeObjectAt(cl *closure, p *ir.Program, pc int) (*Object
 		// at a time, every construction of DeltaBlue's. A script's
 		// lexical binding of the name, a class's say, is where the
 		// realm's global scope has it.
-		if h = cl.scope(); len(r.globalLex.vals) != 0 && r.lexShadows(cl.names[in.A]) {
+		if h = cl.scope(); r.globalLex.valn != 0 && r.lexShadows(cl.names[in.A]) {
 			if !r.isGlobalScope(h) {
 				return nil, -1
 			}
 			h, idx = r.globalLex, -1
 		}
-		if h != nil && (idx < 0 || int(idx) >= len(h.vals) || h.shape.keys[idx].key != cl.names[in.A]) {
+		if h != nil && (idx < 0 || int(idx) >= int(h.valn) || h.shape.keys[idx].key != cl.names[in.A]) {
 			idx = h.findOwn(cl.names[in.A])
 		}
 	} else {
@@ -6934,7 +6936,7 @@ func (r *Runtime) jitCalleeObjectAt(cl *closure, p *ir.Program, pc int) (*Object
 			h = c.p2
 		}
 	}
-	if h == nil || idx < 0 || int(idx) >= len(h.vals) {
+	if h == nil || idx < 0 || int(idx) >= int(h.valn) {
 		return nil, -1
 	}
 	prop := h.propAt(idx)
@@ -7006,7 +7008,7 @@ func (r *Runtime) jitChainValue(cl *closure, p *ir.Program, q, n int) (Value, bo
 		// scope -- looked up, not through the read's cache, which native
 		// code that reads it never fills.
 		h := cl.scope()
-		if h != nil && len(r.globalLex.vals) != 0 && r.lexShadows(cl.names[in.A]) {
+		if h != nil && r.globalLex.valn != 0 && r.lexShadows(cl.names[in.A]) {
 			if !r.isGlobalScope(h) {
 				return Undefined, false
 			}
@@ -7577,7 +7579,7 @@ func (r *Runtime) jitTableRead(o *Object, a Atom) (Value, bool) {
 			if h.shape.keys[j].flags&(propAccessor|propPrivate|propDeleted|propUninit) != 0 {
 				return Undefined, false
 			}
-			return h.vals[j], true
+			return h.vals()[j], true
 		}
 	}
 	return Undefined, true
@@ -9495,7 +9497,9 @@ func jitFillObjectPool(pool *abi.ObjectPool, proto *Object, root *shape, n int) 
 		jitFillSmallObjects[largeLiteralObject[[5]Value]](pool, proto, root)
 	case 6:
 		jitFillSmallObjects[largeLiteralObject[[6]Value]](pool, proto, root)
-	case 7, 8:
+	case 7:
+		jitFillSmallObjects[largeLiteralObject[[7]Value]](pool, proto, root)
+	case 8:
 		jitFillSmallObjects[largeLiteralObject[[8]Value]](pool, proto, root)
 	default:
 		for i := range int(pool.Size) {
@@ -9515,11 +9519,20 @@ type jitInlineObject[L any] interface {
 	jitObject() *Object
 }
 
-func (lo *literalObject1) jitObject() *Object { lo.vals = lo.inline[:0]; return &lo.Object }
-func (lo *literalObject2) jitObject() *Object { lo.vals = lo.inline[:0]; return &lo.Object }
-func (lo *literalObject) jitObject() *Object  { lo.vals = lo.inline[:0]; return &lo.Object }
+func (lo *literalObject1) jitObject() *Object {
+	lo.setRoom(&lo.inline[0], len(lo.inline))
+	return &lo.Object
+}
+func (lo *literalObject2) jitObject() *Object {
+	lo.setRoom(&lo.inline[0], len(lo.inline))
+	return &lo.Object
+}
+func (lo *literalObject) jitObject() *Object {
+	lo.setRoom(&lo.inline[0], len(lo.inline))
+	return &lo.Object
+}
 func (lo *largeLiteralObject[A]) jitObject() *Object {
-	lo.vals = unsafe.Slice(&lo.inline[0], len(lo.inline))[:0]
+	lo.setRoom(&lo.inline[0], len(lo.inline))
 	return &lo.Object
 }
 
@@ -10426,7 +10439,7 @@ func (fb *jitFeedback) Global(pc int) (ssa.GlobalSite, bool) {
 	if int(in.B) < len(fb.cl.ic) {
 		i = fb.cl.ic[in.B].idx
 	}
-	if i < 0 || int(i) >= len(env.vals) || env.shape.keys[i].key != name {
+	if i < 0 || int(i) >= int(env.valn) || env.shape.keys[i].key != name {
 		i = env.findOwn(name)
 	}
 	if i < 0 {
@@ -10449,13 +10462,13 @@ func (fb *jitFeedback) Global(pc int) (ssa.GlobalSite, bool) {
 		}
 		return site, true
 	}
-	site.Typed = !env.shape.keys[i].isAccessor() && jitTypedArray(env.vals[i])
+	site.Typed = !env.shape.keys[i].isAccessor() && jitTypedArray(env.vals()[i])
 	if p := env.shape.keys[i]; !p.isAccessor() && p.flags&(propWritable|propConfigurable) == 0 {
 		switch {
-		case env.vals[i].IsUndefined():
+		case env.vals()[i].IsUndefined():
 			site.Fixed, site.Constant = true, ir.Value{Kind: ir.Undefined}
-		case env.vals[i].IsNumber():
-			site.Fixed, site.Constant = true, ir.Float(env.vals[i].Number())
+		case env.vals()[i].IsNumber():
+			site.Fixed, site.Constant = true, ir.Float(env.vals()[i].Number())
 		}
 	}
 	return site, true
@@ -10478,7 +10491,7 @@ func (fb *jitFeedback) moduleGlobal(name Atom, env *Object, in bytecode.Instr, w
 	if int(in.B) < len(fb.cl.ic) {
 		i = fb.cl.ic[in.B].idx
 	}
-	if i < 0 || int(i) >= len(env.vals) || env.shape.keys[i].key != name {
+	if i < 0 || int(i) >= int(env.valn) || env.shape.keys[i].key != name {
 		i = env.findOwn(name)
 	}
 	holder := env
@@ -11088,7 +11101,7 @@ func (fb *jitFeedback) chainSite(pc int, site ssa.PropertySite) ssa.PropertySite
 		return site
 	}
 	i := recv.findOwn(fb.cl.names[in.A])
-	if i < 0 || i >= sh.n || int(i) >= len(recv.vals) || recv.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted|propUninit) != 0 {
+	if i < 0 || i >= sh.n || int(i) >= int(recv.valn) || recv.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted|propUninit) != 0 {
 		return site
 	}
 	k := fb.keep()

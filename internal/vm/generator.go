@@ -987,7 +987,7 @@ func (r *Runtime) initGeneratorBuiltins() {
 func (r *Runtime) iterResult(v Value, done bool) *Object {
 	o := newLiteralObject(r.proto.object, ClassObject, 2)
 	if s := r.iterResultShape; s != nil {
-		o.vals = append(o.vals, v, Bool(done))
+		o.setVals(append(o.vals(), v, Bool(done)))
 		o.shape = s
 		return o
 	}

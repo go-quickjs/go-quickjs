@@ -1431,7 +1431,7 @@ func jitPoolBytes(pool *abi.ObjectPool) int {
 	}
 	if c := pool.Count; c > 0 && c <= abi.PoolCapacity {
 		o := (*Object)(pool.Objects[c-1])
-		n += int(pool.Size) * (int(objectSize) + jitCapBytes(o.vals) + jitCapBytes(o.elemsOf()))
+		n += int(pool.Size) * (int(objectSize) + jitCapBytes(o.vals()) + jitCapBytes(o.elemsOf()))
 	}
 	return n
 }

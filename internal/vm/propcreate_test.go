@@ -227,7 +227,7 @@ func TestObjectRoomLearnedFromGrowth(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := globalObject(r, "rec")
-	if n, c := len(rec.vals), cap(rec.vals); n != 20 || c != 20 {
+	if n, c := int(rec.valn), int(rec.valc); n != 20 || c != 20 {
 		t.Errorf("a record's table: %d properties in room for %d, want 20 in 20", n, c)
 	}
 	if root := rec.shape.root(); root.slack != 20 {
@@ -235,11 +235,11 @@ func TestObjectRoomLearnedFromGrowth(t *testing.T) {
 	}
 	// The second object grows once, to what the first came to have along
 	// the transitions it follows; the third is made with it.
-	if third := globalObject(r, "firsts").elemsOf()[2].Object(); len(third.vals) != 20 || cap(third.vals) != 20 {
-		t.Errorf("a literal's third object: %d properties in room for %d, want 20 in 20", len(third.vals), cap(third.vals))
+	if third := globalObject(r, "firsts").elemsOf()[2].Object(); int(third.valn) != 20 || int(third.valc) != 20 {
+		t.Errorf("a literal's third object: %d properties in room for %d, want 20 in 20", int(third.valn), int(third.valc))
 	}
-	if tab := globalObject(r, "tab"); !tab.shape.unique || len(tab.vals) != 60 {
-		t.Errorf("a table of 60 names is not a dictionary: unique %v, %d properties", tab.shape.unique, len(tab.vals))
+	if tab := globalObject(r, "tab"); !tab.shape.unique || int(tab.valn) != 60 {
+		t.Errorf("a table of 60 names is not a dictionary: unique %v, %d properties", tab.shape.unique, int(tab.valn))
 	}
 	small := globalObject(r, "small")
 	if root := small.shape.root(); root.slack > maxSlack+1 {

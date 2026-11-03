@@ -433,7 +433,7 @@ func (m *memoryMeter) addString(s *String) {
 
 // object counts an object and what it refers to.
 func (m *memoryMeter) object(o *Object) {
-	m.total += objectSize + int64(cap(o.vals))*valueSize
+	m.total += objectSize + int64(int(o.valc))*valueSize
 	switch {
 	case o.ext == nil:
 	case o.extEmbedded():
@@ -452,7 +452,7 @@ func (m *memoryMeter) object(o *Object) {
 		m.total += shapeSize + int64(cap(s.keys))*propKeySize
 	}
 	m.addObject(o.proto)
-	for _, v := range o.vals {
+	for _, v := range o.vals() {
 		if v.ref != nil {
 			m.value(v)
 		}

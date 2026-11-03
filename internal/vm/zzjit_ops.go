@@ -110,7 +110,7 @@ func (r *Runtime) jitOpFrameless(f *frame, cl *closure, in bytecode.Instr, args 
 		if !jitCopyPlain(o) {
 			return Undefined, false
 		}
-		from, n := t.shape, len(t.vals)
+		from, n := t.shape, int(t.valn)
 		// Nothing such a copy does throws; were it to, the properties it
 		// defined are defined again, the same, with the frame.
 		if r.copyDataProps(t, src) != nil {
@@ -274,7 +274,7 @@ func (r *Runtime) jitDenseElems(src Value) ([]Value, bool) {
 		return nil, false
 	}
 	o := src.Object()
-	if o.class != ClassArray || o.proto != r.proto.array || len(o.vals) != 0 || o.flags&objHasSparseElements != 0 || !r.jitArrayIterates() {
+	if o.class != ClassArray || o.proto != r.proto.array || o.valn != 0 || o.flags&objHasSparseElements != 0 || !r.jitArrayIterates() {
 		return r.plainDenseElems(src)
 	}
 	els := o.elemsOf()
@@ -332,7 +332,7 @@ func (r *Runtime) jitArrayIterates() bool {
 		*c = jitArrayIter{array: array, iter: iter, values: values, next: next, valuesAt: ap, nexts: ip,
 			proto: ap, valuesFn: r.arrayValuesFn, nextFns: r.arrayIterNextFn}
 	}
-	return c.valuesAt.vals[c.values].ref == unsafe.Pointer(r.arrayValuesFn) && c.nexts.vals[c.next].ref == unsafe.Pointer(r.arrayIterNextFn)
+	return c.valuesAt.vals()[c.values].ref == unsafe.Pointer(r.arrayValuesFn) && c.nexts.vals()[c.next].ref == unsafe.Pointer(r.arrayIterNextFn)
 }
 
 // jitCopyEntries is how many object spreads the runtime remembers how to
@@ -378,18 +378,18 @@ func (r *Runtime) jitCopyFast(t, o *Object) bool {
 		return false
 	}
 	e := &c[jitCopySlot(s, from)]
-	if e.src != s || e.from != from || len(t.vals) != int(from.n) || len(o.vals) != int(s.n) {
+	if e.src != s || e.from != from || int(t.valn) != int(from.n) || int(o.valn) != int(s.n) {
 		return false
 	}
-	n := len(t.vals) + len(e.slots)
-	if cap(t.vals) < n {
+	n := int(t.valn) + len(e.slots)
+	if int(t.valc) < n {
 		t.reserveProps(n)
 	}
 	for _, i := range e.slots {
-		t.vals = append(t.vals, o.vals[i])
+		t.appendVal(o.vals()[i])
 	}
 	t.shape = e.to
-	if e.to.index == nil && len(t.vals) > linearScanLimit {
+	if e.to.index == nil && int(t.valn) > linearScanLimit {
 		t.buildIndex()
 	}
 	if verifyShapes {
@@ -408,7 +408,7 @@ func (r *Runtime) jitCopyLearn(t, o *Object, from *shape, n int) {
 	c := r.shapeKeys(o)
 	to := t.shape
 	if c == nil || !c.copyable || from == nil || to == nil || from.unique || from.loose || to.unique || to.loose ||
-		n != int(from.n) || len(t.vals) != n+len(c.slots) || len(o.vals) != int(o.shape.n) ||
+		n != int(from.n) || int(t.valn) != n+len(c.slots) || int(o.valn) != int(o.shape.n) ||
 		to.index == nil && int(to.n) > linearScanLimit {
 		// Native code makes it as remembered (abi.CopyBits), and builds no
 		// index: one the layout needs it has, made by this copy.
@@ -456,7 +456,7 @@ func (r *Runtime) jitRestFast(o *Object, excluded []Value) (*Object, bool) {
 			continue
 		}
 		// A key of its own, none before it the same.
-		out.appendProp(Property{key: k, flags: propDefault, value: o.vals[c.slots[i]]})
+		out.appendProp(Property{key: k, flags: propDefault, value: o.vals()[c.slots[i]]})
 	}
 	return out, true
 }

@@ -593,7 +593,7 @@ func storeSlot(s *propCache, o *Object) *Value {
 		if verifyShapes {
 			checkShape(o)
 		}
-		return &o.vals[s.idx]
+		return &o.vals()[s.idx]
 	}
 	return nil
 }
@@ -733,9 +733,9 @@ func globalUpdateStmt(u *rmw) tstmt {
 	return func(c *tctx) {
 		s := &c.ic[site]
 		if env := s.p1; env != nil && c.f.evalVars == nil {
-			if r := c.r; len(r.globalLex.vals) == 0 || !r.lexShadows(c.names[name]) {
-				if i := uint(s.idx); i < uint(len(env.vals)) {
-					if p := env.shape.keys[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit|propWritable) == propWritable && numberAt(&env.vals[i]) {
+			if r := c.r; r.globalLex.valn == 0 || !r.lexShadows(c.names[name]) {
+				if i := uint(s.idx); i < uint(int(env.valn)) {
+					if p := env.shape.keys[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit|propWritable) == propWritable && numberAt(&env.vals()[i]) {
 						b := y
 						if yl >= 0 {
 							if v := &c.locals[yl]; numberAt(v) {
@@ -745,7 +745,7 @@ func globalUpdateStmt(u *rmw) tstmt {
 								return
 							}
 						}
-						env.vals[i].num = Float(updateNum(op, env.vals[i].num, b)).num
+						env.vals()[i].num = Float(updateNum(op, env.vals()[i].num, b)).num
 						return
 					}
 				}
@@ -1000,8 +1000,8 @@ func (c *tctx) rmwSet(u *rmw, o, k, r Value) {
 func (c *tctx) globalSite(site, name uint32) ownProp {
 	s := &c.ic[site]
 	if env := s.p1; env != nil && c.f.evalVars == nil {
-		if r := c.r; len(r.globalLex.vals) == 0 || !r.lexShadows(c.names[name]) {
-			if i := uint(s.idx); i < uint(len(env.vals)) {
+		if r := c.r; r.globalLex.valn == 0 || !r.lexShadows(c.names[name]) {
+			if i := uint(s.idx); i < uint(int(env.valn)) {
 				return ownProp{env, int32(i)}
 			}
 		}

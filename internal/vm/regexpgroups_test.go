@@ -20,7 +20,7 @@ func TestGroupsLayoutShared(t *testing.T) {
 	if g1.shape != g2.shape || g1.shape.unique || !g1.shape.loose {
 		t.Fatalf("groups objects do not share a template: %p %p", g1.shape, g2.shape)
 	}
-	if g3.shape == g1.shape || g1.shape.n != 2 || len(g3.vals) != 3 {
+	if g3.shape == g1.shape || g1.shape.n != 2 || int(g3.valn) != 3 {
 		t.Fatalf("a groups object given a name changed the template: %d keys", g1.shape.n)
 	}
 	if h1, h2 := globalObject(r, "h1"), globalObject(r, "h2"); h1.shape == h2.shape || h2.shape.n != 9 {

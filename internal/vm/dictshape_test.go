@@ -23,8 +23,8 @@ func TestShapeDeleteLastRollsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	whole, abc, mid := globalObject(r, "whole"), globalObject(r, "abc"), globalObject(r, "mid")
-	if abc.shape != whole.shape.parent || abc.shape.unique || len(abc.vals) != 2 {
-		t.Fatalf("delete of the last key: shape %p unique %v, %d values; want the layout before c, %p", abc.shape, abc.shape.unique, len(abc.vals), whole.shape.parent)
+	if abc.shape != whole.shape.parent || abc.shape.unique || int(abc.valn) != 2 {
+		t.Fatalf("delete of the last key: shape %p unique %v, %d values; want the layout before c, %p", abc.shape, abc.shape.unique, int(abc.valn), whole.shape.parent)
 	}
 	if !mid.shape.unique || !r.dictObject(mid) {
 		t.Fatal("delete of a key before the last did not make a dictionary")
@@ -79,8 +79,8 @@ func TestShapeKeyedStoresPastSoftLimit(t *testing.T) {
 		var named = new N()`)); err != nil {
 		t.Fatal(err)
 	}
-	if k := globalObject(r, "keyed"); !k.shape.unique || len(k.vals) != 20 {
-		t.Fatalf("20 keyed adds: unique %v, %d values; want a dictionary", k.shape.unique, len(k.vals))
+	if k := globalObject(r, "keyed"); !k.shape.unique || int(k.valn) != 20 {
+		t.Fatalf("20 keyed adds: unique %v, %d values; want a dictionary", k.shape.unique, int(k.valn))
 	}
 	if f := globalObject(r, "few"); f.shape.unique {
 		t.Fatal("12 keyed adds made a dictionary")

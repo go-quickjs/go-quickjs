@@ -308,16 +308,16 @@ func (r *Runtime) primProp(p *Object, key Atom, v Value) (Value, error) {
 	if s := p.shape; e.key == key && e.proto == p && e.shape == s && s != nil {
 		if verifyShapes {
 			checkShape(p)
-			if want, err := r.getProp(p, key, v); err != nil || !want.sameBits(p.vals[e.idx]) {
+			if want, err := r.getProp(p, key, v); err != nil || !want.sameBits(p.vals()[e.idx]) {
 				panic("primitive property cache disagrees with lookup for " + r.atoms.name(key))
 			}
 		}
-		return p.vals[e.idx], nil
+		return p.vals()[e.idx], nil
 	}
 	if s := p.shape; s != nil && s.unique && !s.loose && !r.shapes.building && !key.IsIndex() && key != atomLength {
 		if i := p.findOwn(key); i >= 0 && p.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
 			*e = primEntry{key: key, idx: i, proto: p, shape: remember(s)}
-			return p.vals[i], nil
+			return p.vals()[i], nil
 		}
 	}
 	return r.getProp(p, key, v)
@@ -358,7 +358,7 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 			// not written here: the walk says what to do, with the message
 			// it has for it.
 			if obj.shape.keys[i].flags&(propPrivate|propAccessor|propUninit|propWritable) == propWritable {
-				obj.vals[i] = val
+				obj.vals()[i] = val
 				obj.shape.written()
 				return true, nil
 			}
@@ -780,7 +780,7 @@ func (r *Runtime) hasPropErr(o *Object, key Atom) (bool, error) {
 // table, or -1: where the site last found it, while the name is still there,
 // or else where findOwn finds it, which the site then remembers.
 func globalSlot(env *Object, site *propCache, name Atom) int32 {
-	if i := uint(site.idx); i < uint(len(env.vals)) {
+	if i := uint(site.idx); i < uint(int(env.valn)) {
 		if p := env.shape.keys[i]; p.key == name && p.flags&propDeleted == 0 {
 			return int32(i)
 		}
@@ -1054,11 +1054,11 @@ func plainOwnAt(o *Object, key Atom) (Value, int32, bool) {
 		if i < 0 {
 			return Undefined, 0, false
 		}
-		return o.vals[i], i, o.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted) == 0
+		return o.vals()[i], i, o.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted) == 0
 	}
 	for i, p := range o.keys() {
 		if p.key == key {
-			return o.vals[i], int32(i), p.flags&(propAccessor|propPrivate|propDeleted) == 0
+			return o.vals()[i], int32(i), p.flags&(propAccessor|propPrivate|propDeleted) == 0
 		}
 	}
 	return Undefined, 0, false
@@ -1070,7 +1070,7 @@ func plainOwn(o *Object, key Atom) (Value, bool) {
 	}
 	for i, p := range o.keys() {
 		if p.key == key {
-			return o.vals[i], p.flags&(propAccessor|propPrivate|propDeleted) == 0
+			return o.valAt(i), p.flags&(propAccessor|propPrivate|propDeleted) == 0
 		}
 	}
 	return Undefined, false

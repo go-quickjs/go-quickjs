@@ -2449,9 +2449,9 @@ func (c *compiler) copyProps(v *ssa.Value, site *ssa.CallSite, slow amd64.Label,
 	// Room: the target's length and the values', its capacity or less.
 	c.a.Load(scratchC, scratchB, abi.CopySlots+8)
 	c.a.Store(regCtx, left, scratchC)
-	c.a.Load(scratchB, scratchA, c.enc.ObjectProps+8)
+	c.a.LoadU32(scratchB, scratchA, c.enc.ObjectPropsLen)
 	c.a.Op(amd64.Add, scratchC, scratchB, true)
-	c.a.CmpMem(scratchC, scratchA, c.enc.ObjectProps+16, true)
+	c.a.CmpMem(scratchC, scratchA, c.enc.ObjectPropsCap, false)
 	c.a.Jcc(amd64.CondA, slow)
 	c.a.Store(regCtx, length, scratchC)
 	c.a.ShiftImm(amd64.Shl, scratchB, 4, true)
@@ -2492,7 +2492,7 @@ func (c *compiler) copyProps(v *ssa.Value, site *ssa.CallSite, slow amd64.Label,
 	// The length, then the shape, which has the keys.
 	c.a.Load(scratchA, regCtx, tgt+c.enc.RefOffset)
 	c.a.Load(scratchC, regCtx, length)
-	c.a.Store(scratchA, c.enc.ObjectProps+8, scratchC)
+	c.a.Store32(scratchA, c.enc.ObjectPropsLen, scratchC)
 	c.a.Load(scratchB, regCtx, entry)
 	c.a.Load(scratchC, scratchB, abi.CopyTo)
 	c.a.Lea(scratchA, scratchA, c.enc.ObjectShape)
@@ -2537,8 +2537,8 @@ func (c *compiler) defineNext(v *ssa.Value, site *ssa.CallSite, slow amd64.Label
 	c.a.OpImm(amd64.Cmp, scratchC, int32(c.enc.PropDefault), false)
 	c.a.Jcc(amd64.CondNE, slow)
 	// Room, and the next shape's index if its table needs one.
-	c.a.Load(scratchB, scratchA, c.enc.ObjectProps+8)
-	c.a.CmpMem(scratchB, scratchA, c.enc.ObjectProps+16, true)
+	c.a.LoadU32(scratchB, scratchA, c.enc.ObjectPropsLen)
+	c.a.CmpMem(scratchB, scratchA, c.enc.ObjectPropsCap, false)
 	c.a.Jcc(amd64.CondAE, slow)
 	indexed := c.a.NewLabel()
 	c.a.OpImm(amd64.Cmp, scratchB, c.enc.LinearScan, true)
@@ -2559,9 +2559,9 @@ func (c *compiler) defineNext(v *ssa.Value, site *ssa.CallSite, slow amd64.Label
 	c.a.Load(scratchC, regCtx, val+c.enc.RefOffset)
 	c.ptrStore(marking)
 	c.a.Load(scratchA, regCtx, obj+c.enc.RefOffset)
-	c.a.Load(scratchB, scratchA, c.enc.ObjectProps+8)
+	c.a.LoadU32(scratchB, scratchA, c.enc.ObjectPropsLen)
 	c.a.OpImm(amd64.Add, scratchB, 1, true)
-	c.a.Store(scratchA, c.enc.ObjectProps+8, scratchB)
+	c.a.Store32(scratchA, c.enc.ObjectPropsLen, scratchB)
 	c.a.Load(scratchC, regCtx, next)
 	c.a.Lea(scratchA, scratchA, c.enc.ObjectShape)
 	c.ptrStore(marking)
@@ -2606,7 +2606,7 @@ func (c *compiler) spreadElems(v *ssa.Value, site *ssa.CallSite, slow amd64.Labe
 	from, left, cur, dst, length := at(0), at(1), at(2), at(3), at(4)
 	c.arrayOperand(src, slow)
 	c.a.Store(regCtx, from, scratchB)
-	c.a.Load(scratchA, scratchB, c.enc.ObjectProps+8)
+	c.a.LoadU32(scratchA, scratchB, c.enc.ObjectPropsLen)
 	c.a.Op(amd64.Test, scratchA, scratchA, true)
 	c.a.Jcc(amd64.CondNE, slow)
 	c.movImm(scratchC, uint64(site.ArrayIter))
@@ -3570,7 +3570,7 @@ func (c *compiler) genForOf(v *ssa.Value, slow, done amd64.Label) {
 	c.a.LoadU8(scratchA, scratchC, c.enc.ObjectClass)
 	c.a.OpImm(amd64.Cmp, scratchA, int32(c.enc.ClassObject), false)
 	fail(amd64.CondNE)
-	c.a.Load(scratchA, scratchC, c.enc.ObjectProps+8)
+	c.a.LoadU32(scratchA, scratchC, c.enc.ObjectPropsLen)
 	c.a.Op(amd64.Test, scratchA, scratchA, true)
 	fail(amd64.CondNE)
 	c.a.Load(scratchC, scratchC, c.enc.ObjectProto)
@@ -3597,7 +3597,7 @@ func (c *compiler) genForOf(v *ssa.Value, slow, done amd64.Label) {
 		c.a.Op(amd64.Test, scratchC, scratchC, true)
 		fail(amd64.CondE)
 		c.a.LoadU32(scratchA, scratchA, k.idx)
-		c.a.Load(scratchB, scratchC, c.enc.ObjectProps+8)
+		c.a.LoadU32(scratchB, scratchC, c.enc.ObjectPropsLen)
 		c.a.Op(amd64.Cmp, scratchA, scratchB, true)
 		fail(amd64.CondAE)
 		c.a.Load(scratchB, scratchC, c.enc.ObjectProps)
@@ -3678,7 +3678,7 @@ func (c *compiler) genMake(v *ssa.Value, slow, done amd64.Label) {
 	// Its prototype the pool's, as a construction's is checked
 	// (constructGuards), and a generator in the pool: one run out, Go's
 	// call fills again (the VM's jitGoCall).
-	c.a.Load(scratchA, scratchB, c.enc.ObjectProps+8)
+	c.a.LoadU32(scratchA, scratchB, c.enc.ObjectPropsLen)
 	c.a.OpImm(amd64.Cmp, scratchA, int32(site.ProtoIndex), true)
 	fail(amd64.CondBE)
 	c.a.Load(scratchA, scratchB, c.enc.ObjectShape)
@@ -4132,7 +4132,7 @@ func (c *compiler) lengthWrite(v *ssa.Value, slow amd64.Label) {
 	c.a.OpImm(amd64.And, scratchC, int32(c.enc.FlagLengthWritable|c.enc.FlagSparse), false)
 	c.a.OpImm(amd64.Cmp, scratchC, int32(c.enc.FlagLengthWritable), false)
 	fail(amd64.CondNE)
-	c.a.Load(scratchC, scratchB, c.enc.ObjectProps+8)
+	c.a.LoadU32(scratchC, scratchB, c.enc.ObjectPropsLen)
 	c.a.Op(amd64.Test, scratchC, scratchC, true)
 	fail(amd64.CondNE)
 	// The length, no more than the array's, which becomes it; the
@@ -5524,7 +5524,7 @@ func (c *compiler) constructGuards(t *ssa.CallSite, guard func(amd64.Cond)) {
 		// A built-in's, whose prototype the realm fixed.
 		return
 	}
-	c.a.Load(scratchB, scratchC, c.enc.ObjectProps+8)
+	c.a.LoadU32(scratchB, scratchC, c.enc.ObjectPropsLen)
 	c.a.OpImm(amd64.Cmp, scratchB, int32(t.ProtoIndex), true)
 	guard(amd64.CondBE)
 	c.a.Load(scratchB, scratchC, c.enc.ObjectShape)
@@ -7296,8 +7296,8 @@ func (c *compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss amd64.Label
 		c.a.Jcc(amd64.CondNE, miss)
 	}
 	// Room: the table's length below its capacity.
-	c.a.Load(scratchB, o, c.enc.ObjectProps+8)
-	c.a.Load(scratchC, o, c.enc.ObjectProps+16)
+	c.a.LoadU32(scratchB, o, c.enc.ObjectPropsLen)
+	c.a.LoadU32(scratchC, o, c.enc.ObjectPropsCap)
 	c.a.Op(amd64.Cmp, scratchB, scratchC, true)
 	c.a.Jcc(amd64.CondAE, miss)
 	// The collector not marking; while it marks, Go adds it.
@@ -7314,7 +7314,7 @@ func (c *compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss amd64.Label
 	// the old length times a value's size, 16.
 	c.a.MovRR(scratchC, scratchB)
 	c.a.OpImm(amd64.Add, scratchB, 1, true)
-	c.a.Store(o, c.enc.ObjectProps+8, scratchB)
+	c.a.Store32(o, c.enc.ObjectPropsLen, scratchB)
 	c.storeImm(o, c.enc.ObjectShape, uint64(add.Next), scratchB)
 	c.a.ShiftImm(amd64.Shl, scratchC, 4, true)
 	c.a.Load(scratchB, o, c.enc.ObjectProps)
@@ -7339,7 +7339,7 @@ func (c *compiler) addAlongMarking(v *ssa.Value, add *ssa.PropertyAdd, done amd6
 	o := c.gpr(v.Args[0], scratchA)
 	c.a.MovRR(scratchC, scratchB)
 	c.a.OpImm(amd64.Add, scratchB, 1, true)
-	c.a.Store(o, c.enc.ObjectProps+8, scratchB)
+	c.a.Store32(o, c.enc.ObjectPropsLen, scratchB)
 	c.a.ShiftImm(amd64.Shl, scratchC, 4, true)
 	c.a.Load(scratchB, o, c.enc.ObjectProps)
 	c.a.Op(amd64.Add, scratchC, scratchB, true)
@@ -7442,7 +7442,7 @@ func (c *compiler) scan(v *ssa.Value, guard func(amd64.Cond), found, mega amd64.
 		guard(amd64.CondNE)
 		c.a.Bind(object)
 	}
-	c.a.Load(scratchB, p, c.enc.ObjectProps+8)
+	c.a.LoadU32(scratchB, p, c.enc.ObjectPropsLen)
 	c.a.OpImm(amd64.Cmp, scratchB, abi.MaxScan, true)
 	if c.enc.Mega && mega == 0 && v.Megamorphic() {
 		mega = c.a.NewLabel()
@@ -7502,7 +7502,7 @@ func (c *compiler) scan(v *ssa.Value, guard func(amd64.Cond), found, mega amd64.
 	// The value at the key's position: the table's length less the keys
 	// that were left, the one found among them.
 	p = c.gpr(v.Args[0], scratchC)
-	c.a.Load(scratchC, p, c.enc.ObjectProps+8)
+	c.a.LoadU32(scratchC, p, c.enc.ObjectPropsLen)
 	c.a.Op(amd64.Sub, scratchC, scratchB, true)
 	c.a.ShiftImm(amd64.Shl, scratchC, 4, true)
 	p = c.gpr(v.Args[0], scratchA)
@@ -7654,7 +7654,7 @@ func (c *compiler) megaProbe(write bool) {
 // (ssa.Value's Index), of v's key, leaving its shape's keys in scratchB for
 // the attributes there. It uses scratchC.
 func (c *compiler) keyAt(v *ssa.Value, guard func(amd64.Cond)) {
-	c.a.Load(scratchB, scratchA, c.enc.ObjectProps+8)
+	c.a.LoadU32(scratchB, scratchA, c.enc.ObjectPropsLen)
 	c.a.OpImm(amd64.Cmp, scratchB, int32(v.Index), true)
 	guard(amd64.CondBE)
 	c.a.Load(scratchB, scratchA, c.enc.ObjectShape)
@@ -9525,7 +9525,7 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		if p != scratchC {
 			c.a.MovRR(scratchC, p)
 		}
-		c.a.Load(scratchB, scratchC, c.enc.ObjectProps+8)
+		c.a.LoadU32(scratchB, scratchC, c.enc.ObjectPropsLen)
 		c.a.OpImm(amd64.Cmp, scratchB, int32(v.Index), true)
 		guard(amd64.CondBE)
 		c.a.Load(scratchB, scratchC, c.enc.ObjectShape)

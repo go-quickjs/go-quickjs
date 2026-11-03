@@ -116,9 +116,9 @@ func init() {
 					// The global read in place, where its site's slot holds it,
 					// as its get_global's node reads it (OpGetGlobal).
 					var o Value
-					if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint(s.idx) < uint(len(s.p1.vals)) && s.p1.shape == s.shape &&
-						(len(c.r.globalLex.vals) == 0 || !c.r.lexShadows(c.names[name])) {
-						o = s.p1.vals[s.idx]
+					if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint32(s.idx) < s.p1.valn && s.p1.shape == s.shape &&
+						(c.r.globalLex.valn == 0 || !c.r.lexShadows(c.names[name])) {
+						o = s.p1.vals()[s.idx]
 					} else {
 						o = read(c)
 					}
@@ -157,9 +157,9 @@ func init() {
 					// The global read in place, where its site's slot holds it,
 					// as its get_global's node reads it (OpGetGlobal).
 					var o Value
-					if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint(s.idx) < uint(len(s.p1.vals)) && s.p1.shape == s.shape &&
-						(len(c.r.globalLex.vals) == 0 || !c.r.lexShadows(c.names[name])) {
-						o = s.p1.vals[s.idx]
+					if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint32(s.idx) < s.p1.valn && s.p1.shape == s.shape &&
+						(c.r.globalLex.valn == 0 || !c.r.lexShadows(c.names[name])) {
+						o = s.p1.vals()[s.idx]
 					} else {
 						o = read(c)
 					}
@@ -200,9 +200,9 @@ func init() {
 				// The global read in place, where its site's slot holds it,
 				// as its get_global's node reads it (OpGetGlobal).
 				var o Value
-				if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint(s.idx) < uint(len(s.p1.vals)) && s.p1.shape == s.shape &&
-					(len(c.r.globalLex.vals) == 0 || !c.r.lexShadows(c.names[name])) {
-					o = s.p1.vals[s.idx]
+				if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint32(s.idx) < s.p1.valn && s.p1.shape == s.shape &&
+					(c.r.globalLex.valn == 0 || !c.r.lexShadows(c.names[name])) {
+					o = s.p1.vals()[s.idx]
 				} else {
 					o = read(c)
 				}
@@ -385,9 +385,9 @@ func init() {
 				// The global read in place, where its site's slot holds it,
 				// as its get_global's node reads it (OpGetGlobal).
 				var o Value
-				if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint(s.idx) < uint(len(s.p1.vals)) && s.p1.shape == s.shape &&
-					(len(c.r.globalLex.vals) == 0 || !c.r.lexShadows(c.names[name])) {
-					o = s.p1.vals[s.idx]
+				if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint32(s.idx) < s.p1.valn && s.p1.shape == s.shape &&
+					(c.r.globalLex.valn == 0 || !c.r.lexShadows(c.names[name])) {
+					o = s.p1.vals()[s.idx]
 				} else {
 					o = read(c)
 				}
@@ -503,9 +503,9 @@ func init() {
 				// The global read in place, where its site's slot holds it,
 				// as its get_global's node reads it (OpGetGlobal).
 				var o Value
-				if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint(s.idx) < uint(len(s.p1.vals)) && s.p1.shape == s.shape &&
-					(len(c.r.globalLex.vals) == 0 || !c.r.lexShadows(c.names[name])) {
-					o = s.p1.vals[s.idx]
+				if s := &c.ic[site]; s.p1 != nil && c.f.evalVars == nil && uint32(s.idx) < s.p1.valn && s.p1.shape == s.shape &&
+					(c.r.globalLex.valn == 0 || !c.r.lexShadows(c.names[name])) {
+					o = s.p1.vals()[s.idx]
 				} else {
 					o = read(c)
 				}

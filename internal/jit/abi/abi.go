@@ -1305,13 +1305,16 @@ type Encoding struct {
 
 	// An object's properties: ObjectShape is the offset of its shape
 	// pointer, which says where each property is and what it is, and
-	// ObjectProps of the slice of their values, a value each, in order. An
-	// object with properties has a shape, and their keys and attributes
-	// are its: the slice at ShapeKeys, an entry of KeySize bytes each, at
-	// the values' positions, with the key, a uint32 atom, at PropertyKey
-	// and a flags byte at PropertyFlags. ObjectProto is the offset of its
-	// prototype's pointer, which the shape does not settle.
+	// ObjectProps of the pointer to their values, a value each, in order:
+	// as many as the uint32 at ObjectPropsLen says, in room for as many as
+	// the uint32 at ObjectPropsCap. An object with properties has a shape,
+	// and their keys and attributes are its: the slice at ShapeKeys, an
+	// entry of KeySize bytes each, at the values' positions, with the key,
+	// a uint32 atom, at PropertyKey and a flags byte at PropertyFlags.
+	// ObjectProto is the offset of its prototype's pointer, which the shape
+	// does not settle.
 	ObjectShape, ObjectProps, ShapeKeys, KeySize, PropertyKey, PropertyFlags int32
+	ObjectPropsLen, ObjectPropsCap                                           int32
 	ObjectProto                                                              int32
 	// A shared shape's first transition: the pointer at ShapeNext, the
 	// shape a property added makes -- nil for none -- of the key, the

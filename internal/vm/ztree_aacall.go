@@ -162,7 +162,7 @@ func init() {
 			if verifyShapes {
 				checkShape(p)
 			}
-			return p.vals[e.idx], true
+			return p.vals()[e.idx], true
 		}
 		return Undefined, false
 	}

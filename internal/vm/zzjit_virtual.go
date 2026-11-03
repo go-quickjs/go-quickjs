@@ -120,7 +120,7 @@ func (r *Runtime) jitMaterializeObjects(f *frame, e *jitEntry, limit int) {
 		for k := range fields {
 			v := *at(home + abi.VirtualFields + k)
 			fix(&v)
-			o.vals = append(o.vals, v)
+			o.appendVal(v)
 		}
 		return o
 	}

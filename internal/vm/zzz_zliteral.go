@@ -147,10 +147,10 @@ func (l *litNodeOf[_]) make(c *tctx) Value {
 	if len(fs) == 0 {
 		return Obj(o)
 	}
-	if final := ic.next; final != nil && root != nil && ic.s1 == root && len(fs) <= cap(o.vals) {
+	if final := ic.next; final != nil && root != nil && ic.s1 == root && len(fs) <= int(o.valc) {
 		// The shape its fields lead to from the root: the values in
 		// place.
-		vals := o.vals[:len(fs)]
+		vals := o.vals()[:len(fs)]
 		for i := range fs {
 			f := &fs[i]
 			switch f.kind {
@@ -162,7 +162,8 @@ func (l *litNodeOf[_]) make(c *tctx) Value {
 				vals[i] = f.v(c)
 			}
 		}
-		o.vals, o.shape = vals, final
+		o.setVals(vals)
+		o.shape = final
 		if verifyShapes {
 			checkShape(o)
 		}
@@ -201,7 +202,7 @@ func literalDefine[_ any](c *tctx, o *Object, root *shape, ic *propCache, fs []l
 			c.throw(err)
 		}
 	}
-	if s := o.shape; along && s != nil && !s.unique && !s.loose && int(s.n) == len(fs) && len(o.vals) == len(fs) &&
+	if s := o.shape; along && s != nil && !s.unique && !s.loose && int(s.n) == len(fs) && int(o.valn) == len(fs) &&
 		(s.index != nil || len(fs) <= linearScanLimit) {
 		ic.next, ic.s1 = s, root
 	}

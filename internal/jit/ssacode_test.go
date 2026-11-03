@@ -123,9 +123,22 @@ type testObject struct {
 	arrayLen uint32
 	ext      *testObjectExt
 	shape    *testShape
-	vals     []testValue
-	proto    *testObject
+	// valp holds the properties' values as an Object does: valn of them,
+	// in room for valc, a pointer and two 32-bit counts rather than a
+	// slice, so that native code reading a count as a word would read the
+	// other count with it.
+	valp       *testValue
+	valn, valc uint32
+	proto      *testObject
 	testObjectExt
+}
+
+// vals is the object's property values as a slice.
+func (o *testObject) vals() []testValue { return unsafe.Slice(o.valp, o.valc)[:o.valn] }
+
+// setVals makes s the object's property values.
+func (o *testObject) setVals(s []testValue) {
+	o.valp, o.valn, o.valc = unsafe.SliceData(s), uint32(len(s)), uint32(cap(s))
 }
 
 // shapeID is the object's shape's address, which native code compares with
@@ -167,10 +180,10 @@ type testObjectExt struct {
 // every heap.
 var testHolders = func() *[2]testObject {
 	h := new([2]testObject)
-	h[0] = testObject{shape: newTestShape([]uint32{12, 13}, []uint8{testWritable, 0}), proto: &h[1],
-		vals: []testValue{{num: math.Float64bits(7)}, {num: testEncoding.True}}}
-	h[1] = testObject{shape: newTestShape([]uint32{11, testAccessorKey}, []uint8{testWritable, testAccessor}),
-		vals: []testValue{{num: math.Float64bits(-2)}, {num: testTagBase | 9, ref: unsafe.Pointer(&testPair)}}}
+	h[0] = testObject{shape: newTestShape([]uint32{12, 13}, []uint8{testWritable, 0}), proto: &h[1]}
+	h[0].setVals([]testValue{{num: math.Float64bits(7)}, {num: testEncoding.True}})
+	h[1] = testObject{shape: newTestShape([]uint32{11, testAccessorKey}, []uint8{testWritable, testAccessor})}
+	h[1].setVals([]testValue{{num: math.Float64bits(-2)}, {num: testTagBase | 9, ref: unsafe.Pointer(&testPair)}})
 	return h
 }()
 
@@ -251,7 +264,7 @@ func testHolderSite(r *rand.Rand) site {
 	h0 := ssa.Holder{Object: uintptr(unsafe.Pointer(&testHolders[0])), Shape: testHolders[0].shapeID()}
 	h1 := ssa.Holder{Object: uintptr(unsafe.Pointer(&testHolders[1])), Shape: testHolders[1].shapeID()}
 	if r.IntN(2) == 0 {
-		i := r.IntN(len(testHolders[0].vals))
+		i := r.IntN(len(testHolders[0].vals()))
 		s.Key, s.Index, s.Holders = testHolders[0].shape.keys[i].key, int32(i), [2]ssa.Holder{h0}
 	} else {
 		s.Key, s.Index, s.Holders = testHolders[1].shape.keys[0].key, 0, [2]ssa.Holder{h0, h1}
@@ -344,7 +357,8 @@ var testEncoding = abi.Encoding{
 	String:      testTagBase | 4, StringData: int32(unsafe.Offsetof(testString{}.s)),
 	StringLeft: int32(unsafe.Offsetof(testString{}.left)), StringLength: int32(unsafe.Offsetof(testString{}.length)),
 	StringASCII: int32(unsafe.Offsetof(testString{}.ascii)), StringU16: int32(unsafe.Offsetof(testString{}.u16)),
-	ObjectShape: int32(unsafe.Offsetof(testObject{}.shape)), ObjectProps: int32(unsafe.Offsetof(testObject{}.vals)),
+	ObjectShape: int32(unsafe.Offsetof(testObject{}.shape)), ObjectProps: int32(unsafe.Offsetof(testObject{}.valp)),
+	ObjectPropsLen: int32(unsafe.Offsetof(testObject{}.valn)), ObjectPropsCap: int32(unsafe.Offsetof(testObject{}.valc)),
 	ObjectProto:  int32(unsafe.Offsetof(testObject{}.proto)),
 	WriteBarrier: uint64(uintptr(unsafe.Pointer(&testBarrier))),
 	StoreRef:     StoreRef(),
@@ -603,9 +617,9 @@ func (h testHeap) native() *nativeHeap {
 		if a.proto >= 0 {
 			o.proto = &testHolders[a.proto]
 		}
-		o.vals = make([]testValue, len(a.props))
+		o.setVals(make([]testValue, len(a.props)))
 		for j, v := range a.props {
-			o.vals[j] = n.word(v)
+			o.vals()[j] = n.word(v)
 		}
 		n.evaluated = append(n.evaluated, slices.Clone(a.props))
 	}
@@ -641,7 +655,8 @@ func (h testHeap) native() *nativeHeap {
 		}
 		if h[4].intrinsic {
 			n.intrinsic = n.word(ir.Value{Kind: ir.Opaque, Bits: testCharCodeAt})
-			n.strProto = testObject{shape: testStringShape, vals: []testValue{n.intrinsic}}
+			n.strProto = testObject{shape: testStringShape}
+			n.strProto.setVals([]testValue{n.intrinsic})
 		}
 	}
 	return n
@@ -668,7 +683,7 @@ func (n *nativeHeap) heap() ssa.Heap {
 			Proto: uintptr(unsafe.Pointer(o.proto))}
 		var keys []testKey
 		if o.shape != nil {
-			keys = o.shape.keys[:len(o.vals)]
+			keys = o.shape.keys[:len(o.vals())]
 		}
 		for _, p := range keys {
 			e.Keys = append(e.Keys, p.key)
@@ -727,7 +742,7 @@ func (n *nativeHeap) same(m *nativeHeap) bool {
 		if !slices.Equal(n.objects[i].elems, m.objects[i].elems) {
 			return false
 		}
-		for j, v := range n.objects[i].vals {
+		for j, v := range n.objects[i].vals() {
 			if v != n.word(m.evaluated[i][j]) {
 				return false
 			}

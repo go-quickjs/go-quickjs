@@ -169,14 +169,14 @@ func (r *Runtime) jitRegExpLitDone(l *jitLiteral, v Value) {
 		return
 	}
 	o := v.Object()
-	if o.proto != (*Object)(pool.Proto) || o.class != ClassRegExp || !o.extEmbedded() || len(o.vals) != 1 {
+	if o.proto != (*Object)(pool.Proto) || o.class != ClassRegExp || !o.extEmbedded() || int(o.valn) != 1 {
 		return
 	}
 	ro := (*regexpObject)(unsafe.Pointer(o))
 	if ro.rd.re != &ro.re || ro.rd.realm != r.Realm || ro.side.data != any(&ro.rd) || ro.re.Source() != l.lit.Str {
 		return
 	}
-	o.vals[0] = Int(0)
+	o.vals()[0] = Int(0)
 	pool.Objects[pool.Count] = unsafe.Pointer(o)
 	pool.Count++
 }

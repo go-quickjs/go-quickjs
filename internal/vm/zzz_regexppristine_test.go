@@ -199,8 +199,8 @@ func TestRegExpPristineRealms(t *testing.T) {
 		t.Fatalf("RegExp.prototype pristine %v (seen %v, unique %v), RegExp pristine %v",
 			p.shape.pristine, p.shape.seen, p.shape.unique, ctor.shape.pristine)
 	}
-	if len(p.vals) <= pristineMinProps || len(ctor.vals) <= pristineMinProps {
-		t.Fatalf("RegExp.prototype has %d properties, RegExp %d: no more than native code searches", len(p.vals), len(ctor.vals))
+	if int(p.valn) <= pristineMinProps || int(ctor.valn) <= pristineMinProps {
+		t.Fatalf("RegExp.prototype has %d properties, RegExp %d: no more than native code searches", int(p.valn), int(ctor.valn))
 	}
 	re := r.NewRealm()
 	var other *Object

@@ -128,13 +128,13 @@ type ownProp struct {
 }
 
 func (p ownProp) ok() bool                { return p.i >= 0 }
-func (p ownProp) value() Value            { return p.o.vals[p.i] }
+func (p ownProp) value() Value            { return p.o.vals()[p.i] }
 func (p ownProp) flags() propFlags        { return p.o.shape.keys[p.i].flags }
 func (p ownProp) isAccessor() bool        { return p.flags()&propAccessor != 0 }
 func (p ownProp) getterSetter() *accessor { return p.value().accessorPair() }
 
 // setValue changes the property's value, which its layout does not settle.
-func (p ownProp) setValue(v Value) { p.o.vals[p.i] = v }
+func (p ownProp) setValue(v Value) { p.o.vals()[p.i] = v }
 
 // setFlags changes the property's attributes, and so its object's layout.
 func (p ownProp) setFlags(flags propFlags) { p.o.setFlagsAt(p.i, flags) }
@@ -189,9 +189,16 @@ const linearScanLimit = 8
 type Object struct {
 	proto *Object
 
-	// vals holds the values of the named and symbol-keyed properties in
-	// insertion order, which is the order enumeration must report them in.
-	vals []Value
+	// valp holds the values of the named and symbol-keyed properties in
+	// insertion order, which is the order enumeration must report them in:
+	// valn of them, in room for valc, which vals makes a slice of and
+	// setVals sets. A pointer and two 32-bit counts, rather than a slice's
+	// three words, keep an Object at 48 bytes: a pair of properties is then
+	// 80, a size class below the 96 it took, and most objects' allocations
+	// are a size class smaller. A table never comes near 2^32 values, which
+	// would be 64 GiB of them.
+	valp       *Value
+	valn, valc uint32
 	// shape is the table's layout: its keys and their attributes, at the
 	// values' positions; an identity a property cache can remember, unless it
 	// is loose; and the table's lookup index. See vm_shape.go. An object with
@@ -257,6 +264,54 @@ type keyedExt struct {
 	// made when it first becomes one (see weakmap.go).
 	weakMapRefs *weakMapRefs
 }
+
+// valsHeader is a slice's header, which vals assembles from an object's
+// pointer and counts.
+type valsHeader struct {
+	p    *Value
+	n, c int
+}
+
+// vals is the object's property values, a slice of the room valp points to.
+// It is the slice the object held before its counts were 32 bits: made in
+// registers, with no check beyond what indexing it makes.
+func (o *Object) vals() []Value {
+	return *(*[]Value)(unsafe.Pointer(&valsHeader{o.valp, int(o.valn), int(o.valc)}))
+}
+
+// setVals makes s the object's property values.
+func (o *Object) setVals(s []Value) {
+	o.valp, o.valn, o.valc = unsafe.SliceData(s), uint32(len(s)), uint32(cap(s))
+}
+
+// setRoom makes the object's property values none, in room for c of them
+// at p: the room its allocation keeps for them beside it.
+func (o *Object) setRoom(p *Value, c int) { o.valp, o.valn, o.valc = p, 0, uint32(c) }
+
+// valAt is the object's i-th property value, for an i its caller knows is
+// below valn -- an index of its keys, which are as many -- and so reads it
+// with no check, which costs an inlined caller less than indexing vals.
+func (o *Object) valAt(i int) Value {
+	return *(*Value)(unsafe.Add(unsafe.Pointer(o.valp), uintptr(i)*unsafe.Sizeof(Value{})))
+}
+
+// appendVal appends v to the object's property values. Where they have
+// room for it, which adding a property makes sure of first, it is a store
+// and a count, as append of a slice in place is: the pointer is not written
+// again, and so has no write barrier.
+func (o *Object) appendVal(v Value) {
+	if n := o.valn; n < o.valc {
+		*(*Value)(unsafe.Add(unsafe.Pointer(o.valp), uintptr(n)*unsafe.Sizeof(Value{}))) = v
+		o.valn = n + 1
+		return
+	}
+	o.growVals(v)
+}
+
+// growVals appends v to property values that have no room left for it.
+//
+//go:noinline
+func (o *Object) growVals(v Value) { o.setVals(append(o.vals(), v)) }
 
 // embedExt gives o the ext its allocation carries, which must be right
 // after it: that is how weakMapRefsOf tells one from a keyedExt.
@@ -392,7 +447,7 @@ type literalObject struct {
 
 // literalObject1 and literalObject2 are literalObject for an object that says
 // it will have one property or two. Each is the next size class down: a pair's
-// two fields, the commonest of all, fit in 96 bytes rather than 112.
+// two fields, the commonest of all, fit in 80 bytes rather than 96.
 type literalObject1 struct {
 	Object
 	inline [1]Value
@@ -404,16 +459,16 @@ type literalObject2 struct {
 }
 
 // largeLiteralObject is literalObject for an object that says it will have
-// four to eight properties, each in the size class its count needs; seven
-// takes the room for eight, a size class of its own being no smaller.
-type largeLiteralObject[A [4]Value | [5]Value | [6]Value | [8]Value] struct {
+// four to eight properties, each in the size class its count needs: 112 to
+// 176 bytes, a class of 16 for each.
+type largeLiteralObject[A [4]Value | [5]Value | [6]Value | [7]Value | [8]Value] struct {
 	Object
 	inline A
 }
 
-func newLargeLiteralObject[A [4]Value | [5]Value | [6]Value | [8]Value](o Object) *Object {
+func newLargeLiteralObject[A [4]Value | [5]Value | [6]Value | [7]Value | [8]Value](o Object) *Object {
 	lo := &largeLiteralObject[A]{Object: o}
-	lo.vals = unsafe.Slice(&lo.inline[0], len(lo.inline))[:0]
+	lo.setRoom(&lo.inline[0], len(lo.inline))
 	return &lo.Object
 }
 
@@ -425,11 +480,11 @@ func newLiteralObject(proto *Object, class Class, n int) *Object {
 	switch n {
 	case 1:
 		lo := &literalObject1{Object: o}
-		lo.vals = lo.inline[:0]
+		lo.setRoom(&lo.inline[0], len(lo.inline))
 		return &lo.Object
 	case 2:
 		lo := &literalObject2{Object: o}
-		lo.vals = lo.inline[:0]
+		lo.setRoom(&lo.inline[0], len(lo.inline))
 		return &lo.Object
 	case 4:
 		return newLargeLiteralObject[[4]Value](o)
@@ -437,16 +492,18 @@ func newLiteralObject(proto *Object, class Class, n int) *Object {
 		return newLargeLiteralObject[[5]Value](o)
 	case 6:
 		return newLargeLiteralObject[[6]Value](o)
-	case 7, 8:
+	case 7:
+		return newLargeLiteralObject[[7]Value](o)
+	case 8:
 		return newLargeLiteralObject[[8]Value](o)
 	}
 	if n > len(literalObject{}.inline) {
 		o := &Object{proto: proto, class: class, flags: objExtensible}
-		o.vals = make([]Value, 0, n)
+		o.setVals(make([]Value, 0, n))
 		return o
 	}
 	lo := &literalObject{Object: o}
-	lo.vals = lo.inline[:0]
+	lo.setRoom(&lo.inline[0], len(lo.inline))
 	return &lo.Object
 }
 
@@ -464,7 +521,7 @@ func newErrorObject(proto *Object) *Object {
 	eo := &errorObject{
 		Object: Object{proto: proto, class: ClassError, flags: objExtensible | objInlineProps},
 	}
-	eo.vals = eo.inline[:0]
+	eo.setRoom(&eo.inline[0], len(eo.inline))
 	eo.embedExt(&eo.side)
 	eo.side.data = &eo.thrown
 	return &eo.Object
@@ -626,37 +683,37 @@ func newMatchResult(proto *Object, n int, indices bool) (*Object, *String) {
 		switch n {
 		case 1:
 			mo := &matchResult1Object{Object: o}
-			mo.vals = mo.fields[:0]
+			mo.setRoom(&mo.fields[0], len(mo.fields))
 			mo.embedExt(&mo.side)
 			mo.side.elems = mo.inline[:]
 			return &mo.Object, &mo.str
 		case 2:
 			mo := &matchResult2Object{Object: o}
-			mo.vals = mo.fields[:0]
+			mo.setRoom(&mo.fields[0], len(mo.fields))
 			mo.embedExt(&mo.side)
 			mo.side.elems = mo.inline[:]
 			return &mo.Object, &mo.str
 		case 3:
 			mo := &matchResult3Object{Object: o}
-			mo.vals = mo.fields[:0]
+			mo.setRoom(&mo.fields[0], len(mo.fields))
 			mo.embedExt(&mo.side)
 			mo.side.elems = mo.inline[:]
 			return &mo.Object, &mo.str
 		case 4:
 			mo := &matchResult4Object{Object: o}
-			mo.vals = mo.fields[:0]
+			mo.setRoom(&mo.fields[0], len(mo.fields))
 			mo.embedExt(&mo.side)
 			mo.side.elems = mo.inline[:]
 			return &mo.Object, &mo.str
 		}
 		mo := &matchResultNObject{Object: o}
-		mo.vals = mo.fields[:0]
+		mo.setRoom(&mo.fields[0], len(mo.fields))
 		mo.embedExt(&mo.side)
 		mo.side.elems = make([]Value, n)
 		return &mo.Object, &mo.str
 	}
 	mo := &matchResultObject{Object: o}
-	mo.vals = mo.fields[:0]
+	mo.setRoom(&mo.fields[0], len(mo.fields))
 	mo.embedExt(&mo.side)
 	if n <= len(mo.inline) {
 		mo.side.elems = mo.inline[:n]
@@ -1049,16 +1106,16 @@ func (o *Object) noIndexKeys() bool {
 // keys is the keys and attributes of the object's properties, by position:
 // its shape's, as many as it has values.
 func (o *Object) keys() []propKey {
-	if len(o.vals) == 0 {
+	if o.valn == 0 {
 		return nil
 	}
-	return o.shape.keys[:len(o.vals)]
+	return o.shape.keys[:int(o.valn)]
 }
 
 // propAt is the property at position i of the table.
 func (o *Object) propAt(i int32) Property {
 	k := o.shape.keys[i]
-	return Property{key: k.key, flags: k.flags, value: o.vals[i]}
+	return Property{key: k.key, flags: k.flags, value: o.vals()[i]}
 }
 
 // setFlagsAt changes the attributes of the property at position i, and so
@@ -1072,7 +1129,7 @@ func (o *Object) setFlagsAt(i int32, flags propFlags) {
 	}
 	if t := o.shape.reconfigured(i, flags); t != nil {
 		o.shape = t
-		if t.index == nil && len(o.vals) > linearScanLimit {
+		if t.index == nil && int(o.valn) > linearScanLimit {
 			o.buildIndex()
 		}
 		if verifyShapes {
@@ -1127,7 +1184,7 @@ func (o *Object) findOwn(key Atom) int32 {
 // buildIndex populates the lookup map once an object has enough properties for
 // it to pay off. The index is the shape's.
 func (o *Object) buildIndex() {
-	x := newPropIndex(len(o.vals) * 2)
+	x := newPropIndex(int(o.valn) * 2)
 	for i, k := range o.keys() {
 		if k.flags&propDeleted == 0 {
 			x.add(k.key, int32(i))
@@ -1162,17 +1219,17 @@ func (o *Object) getOwnVisible(key Atom) ownProp {
 // the object's own allocation too small for them leaves it, as
 // leaveInlineProps does.
 func (o *Object) reserveProps(n int) {
-	if cap(o.vals) >= n {
+	if int(o.valc) >= n {
 		return
 	}
-	vals := make([]Value, len(o.vals), n)
-	copy(vals, o.vals)
+	vals := make([]Value, int(o.valn), n)
+	copy(vals, o.vals())
 	if o.flags&objInlineProps != 0 {
 		o.shape.noteGrowth(n)
-		clear(o.vals[:cap(o.vals)])
+		clear(o.vals()[:int(o.valc)])
 		o.flags &^= objInlineProps
 	}
-	o.vals = vals
+	o.setVals(vals)
 }
 
 // setOwnRaw installs a property, replacing any existing one, without consulting
@@ -1180,7 +1237,7 @@ func (o *Object) reserveProps(n int) {
 func (o *Object) setOwnRaw(key Atom, value Value, flags propFlags) {
 	if i := o.findOwn(key); i >= 0 {
 		o.setFlagsAt(i, flags)
-		o.vals[i] = value
+		o.vals()[i] = value
 		return
 	}
 	if o.class == ClassArray && key.IsIndex() {
@@ -1215,11 +1272,11 @@ func (o *Object) prependProps(ps []Property) {
 // for them, with room past them for more of them, and clears the room.
 func (o *Object) leaveInlineProps(more int) {
 	// Its constructor's next objects are given the room this one needed.
-	o.shape.noteGrowth(len(o.vals) + more)
-	old := o.vals[:cap(o.vals)]
-	vals := make([]Value, len(o.vals), 2*cap(o.vals)+more)
-	copy(vals, o.vals)
-	o.vals = vals
+	o.shape.noteGrowth(int(o.valn) + more)
+	old := o.vals()[:int(o.valc)]
+	vals := make([]Value, int(o.valn), 2*int(o.valc)+more)
+	copy(vals, o.vals())
+	o.setVals(vals)
 	clear(old)
 	o.flags &^= objInlineProps
 }
@@ -1232,28 +1289,28 @@ func (o *Object) insertProp(at int, p Property) {
 	if o.fn() == nil {
 		panic("insertProp on an object that is no function")
 	}
-	if at >= len(o.vals) {
+	if at >= int(o.valn) {
 		o.appendProp(p)
 		return
 	}
 	o.layoutChanged()
-	if o.flags&objInlineProps != 0 && len(o.vals) == cap(o.vals) {
+	if o.flags&objInlineProps != 0 && int(o.valn) == int(o.valc) {
 		o.leaveInlineProps(1)
 	}
 	s := o.shape
-	o.vals = slices.Insert(o.vals, at, p.value)
+	o.setVals(slices.Insert(o.vals(), at, p.value))
 	s.keys = slices.Insert(s.keys[:s.n], at, propKey{p.key, p.flags})
-	s.n = int32(len(o.vals))
-	if o.shapeIndex() != nil || len(o.vals) > linearScanLimit {
+	s.n = int32(o.valn)
+	if o.shapeIndex() != nil || int(o.valn) > linearScanLimit {
 		o.buildIndex()
 	}
 }
 
 func (o *Object) appendProp(p Property) {
-	if len(o.vals) == cap(o.vals) {
+	if int(o.valn) == int(o.valc) {
 		o.outgrowProps()
 	}
-	o.vals = append(o.vals, p.value)
+	o.appendVal(p.value)
 	o.shapeAdded(propKey{p.key, p.flags})
 }
 
@@ -1288,7 +1345,7 @@ func (o *Object) outgrowProps() {
 	if root == s.tree.roots[o.class] {
 		return
 	}
-	n := len(o.vals) + 1
+	n := int(o.valn) + 1
 	for c := s.next; c != nil && n < maxRoom; c = c.next {
 		n = int(c.n)
 	}
@@ -1311,8 +1368,8 @@ func (o *Object) deleteOwn(key Atom) bool {
 		// The key last added to a shared layout: the object goes back to
 		// the layout it had before, as V8 rolls a map back along its
 		// transition, rather than to one of its own.
-		o.vals[i] = Value{}
-		o.vals = o.vals[:i]
+		o.vals()[i] = Value{}
+		o.setVals(o.vals()[:i])
 		o.shape = s.parent
 		if verifyShapes {
 			checkShape(o)
@@ -1330,7 +1387,7 @@ func (o *Object) tombstone(i int32) {
 	key := o.shape.keys[i].key
 	o.layoutChanged()
 	o.shape.keys[i] = propKey{key: atomEmpty, flags: propDeleted}
-	o.vals[i] = Value{}
+	o.vals()[i] = Value{}
 	if x := o.shapeIndex(); x != nil && !o.shape.borrowed {
 		x.slots.del(key)
 	}
@@ -1340,7 +1397,7 @@ func (o *Object) tombstone(i int32) {
 // integer indices in ascending numeric order, then string keys in insertion
 // order, then symbol keys in insertion order.
 func (o *Object) ownKeys(includeSymbols bool, atoms *atomTable) []Atom {
-	keys := make([]Atom, 0, len(o.elemsOf())+len(o.vals)+2)
+	keys := make([]Atom, 0, len(o.elemsOf())+int(o.valn)+2)
 
 	// A typed array's elements are backed by a buffer rather than by the
 	// property table, but they are own properties and must be listed.

@@ -809,7 +809,7 @@ func (r *Runtime) generatorIteration(o *Object) *Object {
 // emptyPrototype reports whether p is an ordinary object with no property
 // of its own, which a walk up a chain for one passes through.
 func emptyPrototype(p *Object) bool {
-	return p != nil && p.class == ClassObject && len(p.vals) == 0
+	return p != nil && p.class == ClassObject && p.valn == 0
 }
 
 // genIterationCache is what generatorIteration found the intrinsic next
@@ -830,8 +830,8 @@ func (c *genIterationCache) holds(r *Runtime) bool {
 		return false
 	}
 	n, i := c.next, c.iter
-	return int(n.i) < len(n.o.vals) && int(i.i) < len(i.o.vals) &&
-		n.o.vals[n.i].ref == unsafe.Pointer(r.genNextFn) && i.o.vals[i.i].ref == unsafe.Pointer(r.genIterFn)
+	return uint32(n.i) < n.o.valn && uint32(i.i) < i.o.valn &&
+		n.o.valAt(int(n.i)).ref == unsafe.Pointer(r.genNextFn) && i.o.valAt(int(i.i)).ref == unsafe.Pointer(r.genIterFn)
 }
 
 // spreadToStack collects an iterable's elements for a call's argument list.
@@ -885,10 +885,10 @@ func (r *Runtime) copyDataProps(target *Object, src Value) error {
 	if c := r.shapeKeys(o); c != nil && c.copyable {
 		if target.class == ClassObject && len(c.atoms) > 1 {
 			// The table grows once rather than at every doubling.
-			target.reserveProps(len(target.vals) + len(c.atoms))
+			target.reserveProps(int(target.valn) + len(c.atoms))
 		}
 		for i, k := range c.atoms {
-			if err := r.defineOwnProp(target, k, o.vals[c.slots[i]], propDefault); err != nil {
+			if err := r.defineOwnProp(target, k, o.vals()[c.slots[i]], propDefault); err != nil {
 				return err
 			}
 		}
@@ -898,14 +898,14 @@ func (r *Runtime) copyDataProps(target *Object, src Value) error {
 		// A dictionary object's table, in order: with no index keys and no
 		// symbols, its order is the keys' order, and with no accessors
 		// nothing a getter could see is read.
-		if target.class == ClassObject && len(o.vals) > 1 {
-			target.reserveProps(len(target.vals) + len(o.vals))
+		if target.class == ClassObject && int(o.valn) > 1 {
+			target.reserveProps(int(target.valn) + int(o.valn))
 		}
 		for i, k := range o.keys() {
 			if k.flags&propDeleted != 0 || k.flags&propEnumerable == 0 {
 				continue
 			}
-			if err := r.defineOwnProp(target, k.key, o.vals[i], propDefault); err != nil {
+			if err := r.defineOwnProp(target, k.key, o.vals()[i], propDefault); err != nil {
 				return err
 			}
 		}
@@ -917,7 +917,7 @@ func (r *Runtime) copyDataProps(target *Object, src Value) error {
 	}
 	if target.class == ClassObject && len(keys) > 1 {
 		// The table grows once rather than at every doubling.
-		target.reserveProps(len(target.vals) + len(keys))
+		target.reserveProps(int(target.valn) + len(keys))
 	}
 	for _, k := range keys {
 		enumerable, err := r.isEnumerable(o, k)
@@ -1019,19 +1019,19 @@ func (r *Runtime) newArgumentsObject(f *frame) *Object {
 		// Every arguments object of the kind has the same three properties
 		// in the same layout as the first, so they are copied from it, with
 		// the values that are this one's own.
-		o.vals = append(o.vals, t.vals[:]...)
+		o.setVals(append(o.vals(), t.vals[:]...))
 		o.shape = t.shape
-		o.vals[0] = Int(len(f.args))
+		o.vals()[0] = Int(len(f.args))
 		// An unmapped one's callee is its realm's accessor pair, shared:
 		// it can never be changed, being non-configurable, and nothing
 		// writes an accessor pair in place but the definitions of an object
 		// or class literal. The layout is the runtime's, shared by its
 		// realms, so the pair is set for each object.
 		if mapped {
-			o.vals[1] = Obj(f.callee)
+			o.vals()[1] = Obj(f.callee)
 			r.mapArguments(o, f)
 		} else {
-			o.vals[1] = r.throwTypeErrorPair
+			o.vals()[1] = r.throwTypeErrorPair
 		}
 		return o
 	}
@@ -1074,7 +1074,7 @@ type argumentsObject0 struct {
 
 func newArgumentsObject0(proto *Object) *Object {
 	ao := &argumentsObject0{Object: Object{proto: proto, class: ClassArguments, flags: objExtensible | objInlineProps}}
-	ao.vals = ao.inline[:0]
+	ao.setRoom(&ao.inline[0], len(ao.inline))
 	ao.embedExt(&ao.side)
 	return &ao.Object
 }
@@ -1082,7 +1082,7 @@ func newArgumentsObject0(proto *Object) *Object {
 func newArgumentsObjectOf[A [2]Value | [4]Value | [7]Value](proto *Object) *Object {
 	ao := &argumentsObject[A]{}
 	ao.Object = Object{proto: proto, class: ClassArguments, flags: objExtensible | objInlineProps}
-	ao.vals = ao.inline[:0]
+	ao.setRoom(&ao.inline[0], len(ao.inline))
 	ao.embedExt(&ao.side)
 	ao.side.elems = unsafe.Slice(&ao.room[0], len(ao.room))[:0]
 	return &ao.Object
@@ -1118,14 +1118,14 @@ type argsLayout struct {
 // whose keys the rest share, as a template, until one of them changes them.
 func layoutOf(o *Object) *argsLayout {
 	s := o.shape
-	if len(o.vals) != 3 || s.n != 3 || s.unique && !s.loose || s.index != nil {
+	if int(o.valn) != 3 || s.n != 3 || s.unique && !s.loose || s.index != nil {
 		return nil
 	}
 	if s.loose {
 		s = &shape{loose: true, n: 3, keys: slices.Clone(s.keys[:3])}
 	}
 	t := &argsLayout{shape: s}
-	copy(t.vals[:], o.vals)
+	copy(t.vals[:], o.vals())
 	return t
 }
 

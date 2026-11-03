@@ -89,7 +89,7 @@ func (r *Runtime) leafStores(cl *closure, o *Object, args []Value) bool {
 			r.verifyStoreCache(c, o, cl.names[in.A])
 		}
 		if c.next == nil {
-			o.vals[c.idx] = v
+			o.vals()[c.idx] = v
 		} else {
 			o.appendTransition(v, c.next)
 		}

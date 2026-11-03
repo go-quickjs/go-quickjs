@@ -26,7 +26,7 @@ func (r *Runtime) cachedSetter(c *propCache, o *Object, key Atom, v Value) (bool
 			panic("write cache's accessor is not where it was for " + r.atoms.name(key))
 		}
 	}
-	a := h.vals[c.idx].accessorPair()
+	a := h.vals()[c.idx].accessorPair()
 	if a == nil || a.setter == nil {
 		return false, nil
 	}

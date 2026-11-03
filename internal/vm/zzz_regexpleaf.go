@@ -200,7 +200,7 @@ func (l *regexpLeaf[_]) matchOf(r *Runtime, this Value, args []Value, dead *Obje
 	}
 	o := this.Object()
 	d, ok := o.dataOf().(*regexpData)
-	if !ok || o.class != ClassRegExp || len(o.vals) == 0 || !o.vals[0].IsNumber() || l.test && !r.execIsBuiltin(this) ||
+	if !ok || o.class != ClassRegExp || o.valn == 0 || !o.vals()[0].IsNumber() || l.test && !r.execIsBuiltin(this) ||
 		once && (o.shape == nil || len(o.shape.keys) == 0 || o.shape.keys[0].key != atomLastIndex ||
 			d.re.Flags()&(regexp.FlagGlobal|regexp.FlagSticky) != 0 && o.shape.keys[0].flags&propWritable == 0) {
 		if once {
@@ -280,7 +280,7 @@ func (l *regexpLeaf[_]) dummyOf(r *Runtime) *Object {
 // (see match).
 func (l *regexpLeaf[_]) stateful(r *Runtime, o *Object, d *regexpData, s *String, dead bool, reuse execReuseCall) (Value, error) {
 	re := d.re
-	li, err := r.toLength(o.vals[0])
+	li, err := r.toLength(o.vals()[0])
 	if err != nil {
 		return Undefined, err
 	}
@@ -393,11 +393,11 @@ func (l *regexpLeaf[_]) check(r *Runtime, this Value, args []Value) bool {
 		}
 	}
 	// lastIndex, which ToLength converts, a number.
-	if !str && !re.NeverFails(ascii) || len(o.vals) == 0 || o.shape == nil || len(o.shape.keys) == 0 || o.shape.keys[0].key != atomLastIndex || !o.vals[0].IsNumber() {
+	if !str && !re.NeverFails(ascii) || o.valn == 0 || o.shape == nil || len(o.shape.keys) == 0 || o.shape.keys[0].key != atomLastIndex || !o.vals()[0].IsNumber() {
 		return false
 	}
 	// test's call of exec is the built-in's (execIsBuiltin).
-	return !l.test || o.proto == r.proto.regexp && len(o.vals) == 1 && propsIntact(o.proto, r.regexpExecProps)
+	return !l.test || o.proto == r.proto.regexp && int(o.valn) == 1 && propsIntact(o.proto, r.regexpExecProps)
 }
 
 // statefulCheck is check where the call is made once (regexpNativeChecks):
@@ -418,9 +418,9 @@ func (l *regexpLeaf[_]) statefulCheck(r *Runtime, this Value, args []Value) bool
 	if !ok || d.re.Flags()&(regexp.FlagGlobal|regexp.FlagSticky) == 0 {
 		return l.check(r, this, args)
 	}
-	if len(args) == 0 || !args[0].IsString() || len(o.vals) == 0 || o.shape == nil || len(o.shape.keys) == 0 ||
-		o.shape.keys[0].key != atomLastIndex || o.shape.keys[0].flags&propWritable == 0 || !o.vals[0].IsNumber() {
+	if len(args) == 0 || !args[0].IsString() || o.valn == 0 || o.shape == nil || len(o.shape.keys) == 0 ||
+		o.shape.keys[0].key != atomLastIndex || o.shape.keys[0].flags&propWritable == 0 || !o.vals()[0].IsNumber() {
 		return false
 	}
-	return !l.test || o.proto == r.proto.regexp && len(o.vals) == 1 && propsIntact(o.proto, r.regexpExecProps)
+	return !l.test || o.proto == r.proto.regexp && int(o.valn) == 1 && propsIntact(o.proto, r.regexpExecProps)
 }

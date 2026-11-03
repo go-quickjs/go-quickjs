@@ -150,8 +150,14 @@ var nullChain = &protoCell{valid: true}
 // absentHolder holds what an entry for a property found nowhere on the
 // chain answers: a read of it is undefined. Its one key is a tombstone, so
 // that what reads an entry's holder for the key finds it is not there.
+//
+// It is made statically, as a literal, as main made it, rather than by a
+// function at the package's initialization: a variable so made goes to the
+// binary's initialized data rather than to its zeroed data, and moving its
+// 8 bytes from one to the other had moved the Go runtime's hot variables
+// (runtime.writeBarrier, gcController) in their cache lines.
 var absentHolder = &Object{
-	vals:  []Value{Undefined},
+	valp: &[]Value{Undefined}[0], valn: 1, valc: 1,
 	shape: &shape{unique: true, n: 1, keys: []propKey{{key: atomEmpty, flags: propDeleted}}},
 }
 
@@ -327,7 +333,7 @@ func (r *Runtime) dictRead(c *propCache, o *Object, key Atom) (Value, bool) {
 		if i < 0 || o.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted|propUninit) != 0 {
 			return Undefined, false
 		}
-		return o.vals[i], true
+		return o.vals()[i], true
 	}
 	if i >= 0 || o.proto != c.p1 || c.p1.shape != c.s1 {
 		return Undefined, false
@@ -339,7 +345,7 @@ func (r *Runtime) dictRead(c *propCache, o *Object, key Atom) (Value, bool) {
 		}
 		h = c.p2
 	}
-	return h.vals[c.idx], true
+	return h.vals()[c.idx], true
 }
 
 // dictSite reports whether a site's cache c, meeting dictionary object o,
@@ -662,7 +668,7 @@ func (o *Object) shapeIndex() *propIndex {
 // table, whose value is the last of vals.
 func (o *Object) shapeAdded(k propKey) {
 	s := o.shape
-	n := len(o.vals)
+	n := int(o.valn)
 	if s == nil {
 		// A first property: an object whose prototype has a tree joins it,
 		// at the root for its class -- or, while the realm is being made,
@@ -766,12 +772,12 @@ func (o *Object) transition(key Atom, flags propFlags) *shape {
 // appendTransition appends the value of a property the object is known not
 // to have, giving it the shape transition found for it, which has its key.
 func (o *Object) appendTransition(v Value, next *shape) {
-	if len(o.vals) == cap(o.vals) {
+	if int(o.valn) == int(o.valc) {
 		o.outgrowProps()
 	}
-	o.vals = append(o.vals, v)
+	o.appendVal(v)
 	o.shape = next
-	if next.index == nil && len(o.vals) > linearScanLimit {
+	if next.index == nil && int(o.valn) > linearScanLimit {
 		o.buildIndex()
 	}
 	if verifyShapes {
@@ -800,7 +806,7 @@ func (o *Object) layoutChanged() {
 	if s.unique && !s.seen {
 		// No cache has remembered the layout, so none can take it for what
 		// it was: it changes in place.
-		if s.index == nil && len(o.vals) > linearScanLimit {
+		if s.index == nil && int(o.valn) > linearScanLimit {
 			o.buildIndex()
 		}
 		return
@@ -821,7 +827,7 @@ func (o *Object) layoutChanged() {
 		ns.info = s.info
 	}
 	o.shape = ns
-	if index == nil && len(o.vals) > linearScanLimit {
+	if index == nil && int(o.valn) > linearScanLimit {
 		o.buildIndex()
 	}
 }
@@ -1007,7 +1013,7 @@ func (r *Runtime) cachedProp(c *propCache, o *Object, key Atom) (Value, bool) {
 		if verifyShapes {
 			r.verifyPropCache(o, h, c, key)
 		}
-		return h.vals[c.idx], true
+		return h.vals()[c.idx], true
 	}
 	if c.shape == dictShape {
 		if v, ok := r.dictRead(c, o, key); ok {
@@ -1021,7 +1027,7 @@ func (r *Runtime) cachedProp(c *propCache, o *Object, key Atom) (Value, bool) {
 		if verifyShapes {
 			r.verifyPropCache(o, h, e, key)
 		}
-		return h.vals[e.idx], true
+		return h.vals()[e.idx], true
 	}
 	r.fillPropCache(c, o, key, false)
 	return Undefined, false
@@ -1034,7 +1040,7 @@ func (r *Runtime) cachedProp(c *propCache, o *Object, key Atom) (Value, bool) {
 // getValueProp, and an error only with true.
 func (r *Runtime) cachedGet(c *propCache, o *Object, key Atom) (Value, bool, error) {
 	if h := c.holder(o); h != nil {
-		v := h.vals[c.idx]
+		v := h.vals()[c.idx]
 		if !c.getter {
 			if verifyShapes {
 				r.verifyPropCache(o, h, c, key)
@@ -1067,7 +1073,7 @@ func (r *Runtime) cachedGet(c *propCache, o *Object, key Atom) (Value, bool, err
 		return v, ok, nil
 	}
 	if e, h := c.polyEntry(o); e != nil {
-		v := h.vals[e.idx]
+		v := h.vals()[e.idx]
 		if !e.getter {
 			if verifyShapes {
 				r.verifyPropCache(o, h, e, key)
@@ -1092,7 +1098,7 @@ func (r *Runtime) cachedGet(c *propCache, o *Object, key Atom) (Value, bool, err
 // less than scanning even a small table.
 func (c *propCache) own(o *Object) (Value, bool) {
 	if o.shape == c.ownShape {
-		return o.vals[c.idx], true
+		return o.vals()[c.idx], true
 	}
 	return Undefined, false
 }
@@ -1107,7 +1113,7 @@ func (c *propCache) storeOwn(o *Object, v Value) bool {
 		if verifyShapes {
 			checkShape(o)
 		}
-		o.vals[c.idx] = v
+		o.vals()[c.idx] = v
 		return true
 	}
 	return false
@@ -1151,12 +1157,12 @@ func ownScan(c *propCache, o *Object, key Atom) (Value, bool) {
 	if p := c.poly; p != nil {
 		if c.fills < maxCacheFills {
 			if e, h := c.polyEntry(o); h == o && !e.getter {
-				return o.vals[e.idx], true
+				return o.vals()[e.idx], true
 			}
 		} else if m := p.mega; m != nil {
 			if s := o.shape; s != nil {
 				if e := &m[megaSlot(s)]; e.shape == s && o.class == ClassObject {
-					return o.vals[e.idx], true
+					return o.vals()[e.idx], true
 				}
 			}
 		}
@@ -1269,13 +1275,13 @@ func (r *Runtime) sharedProp(o *Object, key Atom) (Value, bool) {
 	e := &t.shared[i]
 	if e.shape == s && e.key == key {
 		if h := e.holder(o); h != nil {
-			return h.vals[e.idx], true
+			return h.vals()[e.idx], true
 		}
 	}
 	f := &t.shared[i+1]
 	if f.shape == s && f.key == key {
 		if h := f.holder(o); h != nil {
-			return h.vals[f.idx], true
+			return h.vals()[f.idx], true
 		}
 	}
 	var c propCache
@@ -1292,7 +1298,7 @@ func (r *Runtime) sharedProp(o *Object, key Atom) (Value, bool) {
 		e = f
 	}
 	*e = sharedEntry{shape: c.shape, p1: c.p1, p2: c.p2, s1: c.s1, s2: c.s2, cell: c.cell, key: key, idx: c.idx}
-	return h.vals[c.idx], true
+	return h.vals()[c.idx], true
 }
 
 // deepAdd is an addition of key along the shared transition from from to
@@ -1537,7 +1543,7 @@ func (r *Runtime) setPropCached(c *propCache, o *Object, key Atom, v Value, stri
 		// object has, written in its table (dictShape).
 		if i := o.findOwn(key); i >= 0 && o.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted|propUninit|propWritable) == propWritable {
 			o.shape.written()
-			o.vals[i] = v
+			o.vals()[i] = v
 			return nil
 		}
 	}
@@ -1549,7 +1555,7 @@ func (r *Runtime) setPropCached(c *propCache, o *Object, key Atom, v Value, stri
 		// had been setProp's whole walk.
 		if i := o.findOwn(key); i >= 0 && o.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted|propUninit|propWritable) == propWritable {
 			o.shape.written()
-			o.vals[i] = v
+			o.vals()[i] = v
 			return nil
 		}
 	}
@@ -1597,7 +1603,7 @@ func (r *Runtime) storeCached(c *propCache, o *Object, key Atom, v Value) (bool,
 		if verifyShapes {
 			checkShape(o)
 		}
-		o.vals[c.idx] = v
+		o.vals()[c.idx] = v
 		return true, nil
 	}
 	if c.next == setterNext {
@@ -1657,7 +1663,7 @@ func (r *Runtime) cachedData(c *propCache, o *Object, key Atom) (Value, bool) {
 		if verifyShapes {
 			r.verifyPropCache(o, h, c, key)
 		}
-		return h.vals[c.idx], true
+		return h.vals()[c.idx], true
 	}
 	if c.shape == dictShape {
 		if v, ok := r.dictRead(c, o, key); ok {
@@ -1668,7 +1674,7 @@ func (r *Runtime) cachedData(c *propCache, o *Object, key Atom) (Value, bool) {
 		if verifyShapes {
 			r.verifyPropCache(o, h, e, key)
 		}
-		return h.vals[e.idx], true
+		return h.vals()[e.idx], true
 	}
 	if c.fills >= maxCacheFills {
 		return r.sharedProp(o, key)
@@ -1772,7 +1778,7 @@ func (r *Runtime) verifyPropCache(o, h *Object, c *propCache, key Atom) {
 		checkShape(h)
 	}
 	want, err := r.getValueProp(Obj(o), key)
-	got := h.vals[c.idx]
+	got := h.vals()[c.idx]
 	if err != nil || !want.sameBits(got) {
 		panic("property cache disagrees with lookup for " + r.atoms.name(key))
 	}
@@ -1783,12 +1789,12 @@ func (r *Runtime) verifyPropCache(o, h *Object, c *propCache, key Atom) {
 func checkShape(o *Object) {
 	s := o.shape
 	if s == nil {
-		if len(o.vals) != 0 {
+		if o.valn != 0 {
 			panic("properties without a shape")
 		}
 		return
 	}
-	if int(s.n) != len(o.vals) || len(s.keys) < len(o.vals) {
+	if int(s.n) != int(o.valn) || len(s.keys) < int(o.valn) {
 		panic("shape size disagrees with table")
 	}
 	if x := s.index; x != nil {
@@ -1810,7 +1816,7 @@ func checkShape(o *Object) {
 	if s.unique || s.loose {
 		return
 	}
-	for i := len(o.vals) - 1; i >= 0; i-- {
+	for i := int(o.valn) - 1; i >= 0; i-- {
 		if s == nil || s.keys[i] != (propKey{s.key, s.flags}) {
 			panic("shape disagrees with table")
 		}

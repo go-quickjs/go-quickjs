@@ -345,7 +345,7 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 				if verifyShapes {
 					checkShape(ob)
 				}
-				ob.vals[c.idx] = stack[sp-1]
+				ob.vals()[c.idx] = stack[sp-1]
 			} else if c.adds(ob) {
 				if verifyShapes {
 					r.verifyStoreCache(c, ob, cl.names[in.A])
@@ -522,7 +522,7 @@ func (r *Runtime) pureConstruct(callee Value, args []Value) (Value, bool) {
 	if !r.leafStores(fd.closure, obj, args) {
 		return Undefined, false
 	}
-	root.noteBuilt(len(obj.vals))
+	root.noteBuilt(int(obj.valn))
 	return Obj(obj), true
 }
 
@@ -701,10 +701,10 @@ func (r *Runtime) pureGlobal(cl *closure, in bytecode.Instr) (Value, bool) {
 	site := &cl.ic[in.B]
 	// The environment the site found the name in, as the tree tier's read
 	// takes it (see propCache): no scope to ask for, no key to compare.
-	if env := site.p1; env != nil && (len(r.globalLex.vals) == 0 || !r.lexShadows(cl.names[in.A])) {
-		if i := uint(site.idx); i < uint(len(env.vals)) {
+	if env := site.p1; env != nil && (r.globalLex.valn == 0 || !r.lexShadows(cl.names[in.A])) {
+		if i := uint(site.idx); i < uint(int(env.valn)) {
 			if p := env.shape.keys[i]; p.flags&plain == 0 {
-				return env.vals[i], true
+				return env.vals()[i], true
 			}
 		}
 	}
@@ -716,7 +716,7 @@ func (r *Runtime) pureGlobalSlow(cl *closure, site *propCache, in bytecode.Instr
 	const plain = propAccessor | propPrivate | propDeleted | propUninit
 	name := cl.names[in.A]
 	env := cl.scope()
-	if len(r.globalLex.vals) != 0 {
+	if r.globalLex.valn != 0 {
 		if p := r.globalLexProp(env, name); p.ok() {
 			if p.value().IsUninitialized() {
 				return Undefined, false
@@ -724,18 +724,18 @@ func (r *Runtime) pureGlobalSlow(cl *closure, site *propCache, in bytecode.Instr
 			return p.value(), true
 		}
 	}
-	if i := uint(site.idx); i < uint(len(env.vals)) {
+	if i := uint(site.idx); i < uint(int(env.valn)) {
 		if p := env.shape.keys[i]; p.key == name && p.flags&plain == 0 {
 			if site.p1 != env {
 				site.p1 = env
 			}
-			return env.vals[i], true
+			return env.vals()[i], true
 		}
 	}
 	if i := env.findOwn(name); i >= 0 {
 		if p := env.shape.keys[i]; p.flags&plain == 0 {
 			noteGlobalSlot(site, env, i)
-			return env.vals[i], true
+			return env.vals()[i], true
 		}
 	}
 	return Undefined, false

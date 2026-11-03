@@ -25,11 +25,11 @@ func TestJITObjectPoolLayouts(t *testing.T) {
 		}
 		for i := range int(pool.Count) {
 			o := (*Object)(pool.Objects[i])
-			if o.proto != proto || o.shape != root || o.class != want.class || o.flags != want.flags || len(o.vals) != 0 || cap(o.vals) != cap(want.vals) {
+			if o.proto != proto || o.shape != root || o.class != want.class || o.flags != want.flags || o.valn != 0 || int(o.valc) != int(want.valc) {
 				t.Fatalf("size %d, object %d: wrong initial layout", n, i)
 			}
 			o.shape = nil
-			for j := 0; j <= cap(want.vals); j++ {
+			for j := 0; j <= int(want.valc); j++ {
 				o.appendProp(Property{key: Atom(100 + j), value: Int(i + j)})
 			}
 			if o.flags&objInlineProps != 0 {
@@ -37,7 +37,7 @@ func TestJITObjectPoolLayouts(t *testing.T) {
 			}
 		}
 		for i := range int(pool.Count) {
-			if got := (*Object)(pool.Objects[i]).vals[0]; got != Int(i) {
+			if got := (*Object)(pool.Objects[i]).vals()[0]; got != Int(i) {
 				t.Fatalf("size %d, object %d: property storage shared", n, i)
 			}
 		}
