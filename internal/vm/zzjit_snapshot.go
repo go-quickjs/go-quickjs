@@ -62,8 +62,12 @@ type jitSnapLists struct {
 	pools                         []*abi.ObjectPool
 }
 
-func jitSnapListsOf(f *jitFeedback) jitSnapLists {
-	return jitSnapLists{f.shapes, f.holders, f.cells, f.links, f.inlined, f.made, f.wanted, f.linked, f.pools}
+// jitSnapLens are the lengths of a feedback's lists (jitSnapLists), all a
+// question's effect is found by: most questions append nothing.
+type jitSnapLens [9]int
+
+func jitSnapLensOf(f *jitFeedback) jitSnapLens {
+	return jitSnapLens{len(f.shapes), len(f.holders), len(f.cells), len(f.links), len(f.inlined), len(f.made), len(f.wanted), len(f.linked), len(f.pools)}
 }
 
 // jitSnapEffect is what a question appended to the asked feedback's lists
@@ -156,16 +160,28 @@ func (s *jitSnapshot) put(m jitSnapMethod, arg int64, results ...any) {
 
 // begin is the lengths of the lists of fb and of its keep, before a
 // question, which end compares with.
-func (s *jitSnapshot) begin(fb *jitFeedback) [2]jitSnapLists {
-	return [2]jitSnapLists{jitSnapListsOf(fb), jitSnapListsOf(fb.keep())}
+func (s *jitSnapshot) begin(fb *jitFeedback) [2]jitSnapLens {
+	return [2]jitSnapLens{jitSnapLensOf(fb), jitSnapLensOf(fb.keep())}
 }
 
 // end takes back what the question key appended to fb's lists and its
-// keep's since begin, keeping it as the question's effect.
-func (s *jitSnapshot) end(fb *jitFeedback, before [2]jitSnapLists, m jitSnapMethod, arg int64) {
-	own := jitSnapTake(fb, before[0], &s.root.bad)
-	var kept jitSnapLists
-	if k := fb.keep(); k != fb {
+// keep's since begin, keeping it as the question's effect. A question that
+// changed no length -- most of them -- has none, and its lists are left as
+// they are: their slices written back, each a pointer stored through the
+// collector's write barrier, the capture had cost two fifths of the
+// snapshot's time.
+func (s *jitSnapshot) end(fb *jitFeedback, before [2]jitSnapLens, m jitSnapMethod, arg int64) {
+	k := fb.keep()
+	ownMoved := jitSnapLensOf(fb) != before[0]
+	keptMoved := k != fb && jitSnapLensOf(k) != before[1]
+	if !ownMoved && !keptMoved {
+		return
+	}
+	var own, kept jitSnapLists
+	if ownMoved {
+		own = jitSnapTake(fb, before[0], &s.root.bad)
+	}
+	if keptMoved {
 		kept = jitSnapTake(k, before[1], &s.root.bad)
 	}
 	if own.empty() && kept.empty() {
@@ -174,33 +190,33 @@ func (s *jitSnapshot) end(fb *jitFeedback, before [2]jitSnapLists, m jitSnapMeth
 	s.effects[jitSnapKey{m, arg}] = &jitSnapEffect{own: own, kept: kept}
 }
 
-// jitSnapTake is what f's lists gained past before, copied, and f's lists
-// as they were before; a list shorter than it was sets bad.
-func jitSnapTake(f *jitFeedback, before jitSnapLists, bad *bool) jitSnapLists {
+// jitSnapTake is what f's lists gained past the lengths before, copied, and
+// f's lists cut back to them; a list shorter than it was sets bad.
+func jitSnapTake(f *jitFeedback, before jitSnapLens, bad *bool) jitSnapLists {
 	var d jitSnapLists
-	d.shapes, f.shapes = jitSnapGained(f.shapes, before.shapes, bad)
-	d.holders, f.holders = jitSnapGained(f.holders, before.holders, bad)
-	d.cells, f.cells = jitSnapGained(f.cells, before.cells, bad)
-	d.links, f.links = jitSnapGained(f.links, before.links, bad)
-	d.inlined, f.inlined = jitSnapGained(f.inlined, before.inlined, bad)
-	d.made, f.made = jitSnapGained(f.made, before.made, bad)
-	d.wanted, f.wanted = jitSnapGained(f.wanted, before.wanted, bad)
-	d.linked, f.linked = jitSnapGained(f.linked, before.linked, bad)
-	d.pools, f.pools = jitSnapGained(f.pools, before.pools, bad)
+	d.shapes, f.shapes = jitSnapGained(f.shapes, before[0], bad)
+	d.holders, f.holders = jitSnapGained(f.holders, before[1], bad)
+	d.cells, f.cells = jitSnapGained(f.cells, before[2], bad)
+	d.links, f.links = jitSnapGained(f.links, before[3], bad)
+	d.inlined, f.inlined = jitSnapGained(f.inlined, before[4], bad)
+	d.made, f.made = jitSnapGained(f.made, before[5], bad)
+	d.wanted, f.wanted = jitSnapGained(f.wanted, before[6], bad)
+	d.linked, f.linked = jitSnapGained(f.linked, before[7], bad)
+	d.pools, f.pools = jitSnapGained(f.pools, before[8], bad)
 	return d
 }
 
-// jitSnapGained is what now has past before, copied, and now cut back to
-// before's length.
-func jitSnapGained[T any](now, before []T, bad *bool) (gained, back []T) {
-	if len(now) < len(before) {
+// jitSnapGained is what now has past its first n, copied, and now cut back
+// to n.
+func jitSnapGained[T any](now []T, n int, bad *bool) (gained, back []T) {
+	if len(now) < n {
 		*bad = true
 		return nil, now
 	}
-	if len(now) == len(before) {
+	if len(now) == n {
 		return nil, now
 	}
-	return slices.Clone(now[len(before):]), now[:len(before)]
+	return slices.Clone(now[n:]), now[:n]
 }
 
 func (l *jitSnapLists) empty() bool {
