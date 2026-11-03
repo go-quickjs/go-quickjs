@@ -108,6 +108,13 @@ Do not manually edit generated files or their binary companions:
   by `internal/vm/internal/treegen`. After changing the generator, run
   `go generate ./internal/vm`; `TestTreeOperandsGenerated` fails while the
   file is out of date.
+- `internal/vm/zzjit_snapshot_gen.go` and `zzjit_asked_gen_test.go`, the
+  JIT's snapshot of a build's feedback -- its answer to and its asker of
+  each of `jitFeedback`'s methods -- written by
+  `internal/vm/internal/snapgen` from those methods, which it reads from
+  the package's `zzjit_*.go` files only. After changing a method of
+  `jitFeedback`, run `go generate ./internal/vm`; `TestSnapshotGenerated`
+  fails while either file is out of date.
 
 go-intl's data is generated in go-intl, and changes there; a new go-intl is
 taken with `go get` and `go mod tidy`, never by copying its files here.

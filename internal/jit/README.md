@@ -199,8 +199,9 @@ description's address.
 
 **Built-ins.** As V8 reduces calls of built-ins it knows, some are made
 by the code itself, each call checking it calls the realm's function:
-`Math`'s functions of numbers and `Math.random` (`ssa.Intrinsic`), a
-string's `charCodeAt`, `String.fromCharCode`, a one-character `substring`,
+`Math`'s functions of numbers and `Math.random` (`ssa.Intrinsic`), called
+as methods or kept in a global's or a closure's binding and called
+plainly (`P = Math.clz32; P(x)`), a string's `charCodeAt`, `String.fromCharCode`, a one-character `substring`,
 `slice`, `substr` or `charAt`, `parseInt` of a number, an array's `push`
 and `pop` on their fast paths, and `new Array()` or `new Array(n)` from a
 pool. Strings' and arrays' `indexOf`, `lastIndexOf` and `includes` are a
@@ -208,7 +209,9 @@ call of Go of their own (`ssa.GoIndexOf`), which answers where the
 built-in runs nothing. Anything else such a call meets is Go's.
 
 **Leaves.** A built-in that runs no script where its check passes -- a
-leaf: String's methods, Number's, a Map's or a Set's operations, `Date.now`
+leaf: String's methods, Number's, a Map's or a Set's operations, `Date.now`,
+`Object.prototype.hasOwnProperty` and `Array.isArray` of what is neither a
+proxy nor a module namespace, an array's `push` of any number of values
 -- that a call has been seen to call is a call of Go of its own
 (`ssa.GoLeaf`), checked to call that function, as V8's code calls a fast
 API function: native code jumps to the VM's routine for leaves
@@ -222,7 +225,10 @@ call reducer reduces the builtins it knows (`ssa.LeafKind`): `codePointAt`
 and `at` of a flat string's code units (`ssa.OpStringCodePointOr`,
 `OpStringAtOr`), the leaf's call made on a branch of its own where native
 code says nothing, and Number's `isNaN`, `isFinite`, `isInteger` and
-`isSafeInteger` with no call at all (`OpNumberIs`). Every other call of Go
+`isSafeInteger` with no call at all (`OpNumberIs`). A method call of the
+realm's `Function.prototype.call` of a leaf, `G.call(recv, ...args)`, is
+G's call of recv (`jitPlainCall`), as V8 reduces `Function.prototype.call`:
+`hasOwnProperty.call(o, k)` is the leaf's. Every other call of Go
 whose site saves its live registers goes through the VM's routine for calls
 of Go (`GoFast`), which calls the VM's dispatch of them directly, Math's
 functions Go computes (`ssa.OpMathCall`) among them, saving what lives
@@ -398,8 +404,11 @@ for...in over the keys of its object's layout or over an array's indices
 -- each the VM's string of its index, which an element read by it finds
 again (mir's `forInIndex`, `keyedRead`); any other step is a call of Go,
 which answers the next value or, done, the uninitialized value native code
-branches on. A step's iterator is closed
-however the loop is left, as the interpreter closes it. `yield*`, an
+branches on. A for...in's cursor is made by a call of Go without the
+frames of the levels it is called from where its making runs no script
+(`jitForInPlain`): of null, undefined, or an object none up whose chain is
+a proxy, whose traps would run, or a module namespace. A step's iterator
+is closed however the loop is left, as the interpreter closes it. `yield*`, an
 `await using` scope's disposal steps, `import()` and `import.meta` leave
 for Go and go on past it.
 
@@ -607,7 +616,12 @@ see the call on its branch alone. A read of an object there is so too,
 its two ways each making a value (`split`): its cell none where it finds
 no property (`OpCellNone`), the value loaded from the cell on one branch
 and Go's on the other, which a phi takes, the call filling the
-megamorphic cache as an exit would (`jitPolySeen`). In an inlined
+megamorphic cache as an exit would (`jitPolySeen`). A receiver that is no
+object -- a string, a number, a boolean, a BigInt, which the site met
+(`ssa.PropertySite`'s `Primitives`) -- is read so too, not left for: its
+object is none (`OpObjectOf`'s `ObjectOfTry`), and Go reads the property
+of the primitive on the call's branch, a getter called with it as this;
+a read of undefined or null, which throws, still leaves. In an inlined
 callee, whose frame Go cannot make, either leaves.
 
 **Private members.** A private member is a property under a key each
@@ -1090,6 +1104,15 @@ TEST262_DIR=/path/to/test262 go test -tags quickjs_jit ./conformance \
   window between build and install, the same in every run. The
   differential tests run so among their settings, and the background
   tests under `-race` (`-run 'Background|Differential'`).
+- `QJS_JIT_SNAPCHECK=1` checks every build of the VM's tests against its
+  snapshot (`jitSnapOracle`): it asks a copy of the feedback ahead, builds
+  from that as a worker would, and fails the run where the SSA, but for
+  addresses, or the feedback's lists after the replay differ, or the build
+  missed. `QJS_JIT_SNAPOPS=file` writes the methods each op's builds ask
+  (`TestJITAskedInventory`). The snapshot's answers and askers are
+  generated from `jitFeedback`'s methods in the VM's `zzjit_*.go` files
+  (`internal/vm/internal/snapgen`, `go generate ./internal/vm`), which
+  `TestSnapshotGenerated` checks.
 
 `disasm -jit` reports a function's eligibility and IR without native support:
 
