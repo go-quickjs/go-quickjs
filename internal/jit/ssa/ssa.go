@@ -872,6 +872,57 @@ type FrameState struct {
 	Virtual int
 	// id numbers the function's states, for tables by state (newState).
 	id int
+	// present is the indexes of the slots that are not nil, in order,
+	// made the first time a pass asks (Func.Present), nil until then.
+	present []int32
+}
+
+// noSlots is the present slots of a state with none: not nil, which is
+// not yet made.
+var noSlots = make([]int32, 0)
+
+// Present is the indexes of s's slots that are not nil, in order: what a
+// pass that reads a state's values walks, rather than Slots, which is
+// dense over the frame -- its dead locals, its captured bindings, the
+// slots between a caller's and an inlined callee's, all nil -- and so
+// some two thirds nil: Typescript's states had 5.7 slots for each value
+// and 2 of them set. A slot is set or left nil when its state is made,
+// and a pass after that only replaces a value with another (rewrite,
+// reconstruct), so the list, made once, holds for the state's life.
+func (f *Func) Present(s *FrameState) []int32 {
+	if s.present != nil {
+		return s.present
+	}
+	return f.makePresent(s)
+}
+
+// makePresent makes s's present slots (Present).
+func (f *Func) makePresent(s *FrameState) []int32 {
+	n := 0
+	for _, x := range s.Slots {
+		if x != nil {
+			n++
+		}
+	}
+	if n == 0 {
+		s.present = noSlots
+		return noSlots
+	}
+	var p []int32
+	if f.ws != nil {
+		p = f.ws.present.Make(n)
+	} else {
+		p = make([]int32, n)
+	}
+	k := 0
+	for i, x := range s.Slots {
+		if x != nil {
+			p[k] = int32(i)
+			k++
+		}
+	}
+	s.present = p
+	return p
 }
 
 // Own is how many of s's slots are its frame's own -- the caller's and an
@@ -1216,7 +1267,8 @@ func (f *Func) scr() *scratch {
 
 // newState returns a new frame state like s, from a slab.
 func (f *Func) newState(s FrameState) *FrameState {
-	s.id = f.nextState
+	// A copy's slots may not be its original's (Present).
+	s.id, s.present = f.nextState, nil
 	f.nextState++
 	if f.ws != nil {
 		p := &f.ws.states.Make(1)[0]

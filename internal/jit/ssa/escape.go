@@ -442,8 +442,8 @@ func (e *escaper) state(s *FrameState, header bool) {
 	if s == nil {
 		return
 	}
-	for _, x := range s.Slots {
-		if r, o := e.roleOf(x); r != roleNone {
+	for _, i := range e.f.Present(s) {
+		if r, o := e.roleOf(s.Slots[i]); r != roleNone {
 			if r != roleObj || header || s.Args != 0 || s.Virtual != 0 {
 				e.escape(o)
 			}
@@ -835,8 +835,8 @@ func (e *escaper) record(v *Value, b *Block, s *FrameState, cur []*vstate) {
 			}
 		}
 	}
-	for _, x := range s.Slots {
-		if r, o := e.roleOf(x); r == roleObj && !o.escaped {
+	for _, i := range e.f.Present(s) {
+		if r, o := e.roleOf(s.Slots[i]); r == roleObj && !o.escaped {
 			add(o)
 		}
 	}

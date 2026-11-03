@@ -6103,12 +6103,12 @@ func (b *builder) state(blk *Block, pc int) *FrameState {
 		// caller's state at it, a copy, as states are not shared.
 		call := fr.call
 		s := b.f.newState(FrameState{PC: call.PC, Depth: call.Depth, Site: call.Site, Slots: b.f.refsOf(len(call.Slots)), Inline: call.Inline, Args: call.Args})
-		for i, v := range call.Slots {
-			if v != nil {
-				s.Slots[i] = v
-				v.Uses++
-			}
+		for _, i := range b.f.Present(call) {
+			v := call.Slots[i]
+			s.Slots[i] = v
+			v.Uses++
 		}
+		s.present = call.present
 		return s
 	}
 	return b.frameState(blk, pc)
@@ -6120,11 +6120,10 @@ func (b *builder) frameState(blk *Block, pc int) *FrameState {
 	if fr := b.cur; fr != b.root {
 		call, depth := fr.call, b.p.Maps[pc].Depth
 		s := b.f.newState(FrameState{PC: call.PC, Depth: call.Depth, Site: call.Site, Slots: b.f.refsOf(fr.base + b.p.Locals + depth)})
-		for i, v := range call.Slots {
-			if v != nil {
-				s.Slots[i] = v
-				v.Uses++
-			}
+		for _, i := range b.f.Present(call) {
+			v := call.Slots[i]
+			s.Slots[i] = v
+			v.Uses++
 		}
 		for i := fr.base; i < len(s.Slots); i++ {
 			if !b.p.LiveAt(pc, i-fr.base) {
@@ -6182,7 +6181,7 @@ func (b *builder) prologueArgs(s *FrameState, fr *frame, pc int) {
 		slots[at+i] = v
 		v.Uses++
 	}
-	s.Slots, s.Args = slots, n
+	s.Slots, s.Args, s.present = slots, n, nil
 }
 
 func (b *builder) fill(blk *Block) {

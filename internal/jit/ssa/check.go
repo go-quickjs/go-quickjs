@@ -33,6 +33,22 @@ func Check(f *Func) error {
 				return err
 			}
 		}
+		if s.present != nil {
+			// The slots set are those they were when the list was made.
+			k := 0
+			for i, v := range s.Slots {
+				if v == nil {
+					continue
+				}
+				if k >= len(s.present) || s.present[k] != int32(i) {
+					return fmt.Errorf("ssa: %s's state has slot %d set, not in its present slots %v", where, i, s.present)
+				}
+				k++
+			}
+			if k != len(s.present) {
+				return fmt.Errorf("ssa: %s's state's present slots %v name a nil slot", where, s.present)
+			}
+		}
 		return nil
 	}
 	for _, b := range f.Blocks {

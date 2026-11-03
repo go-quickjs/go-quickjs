@@ -576,8 +576,9 @@ func (c *a64Compiler) exitThen(s *ssa.FrameState, kind uint64, then *arm64.Label
 	}
 	c.recorded = false
 	c.a.Store(a64Ctx, abi.OffRecords, arm64.ZR)
-	for i, v := range s.Slots {
-		if v == nil || v.Op == ssa.OpLoadSlot && v.Aux == i || c.captured(i) {
+	for _, ix := range c.f.Present(s) {
+		i, v := int(ix), s.Slots[ix]
+		if v.Op == ssa.OpLoadSlot && v.Aux == i || c.captured(i) {
 			continue
 		}
 		if bigKept(v) != nil {

@@ -18,6 +18,7 @@ type Workspace struct {
 	values    arena.Arena[Value]
 	refs      arena.Arena[*Value]
 	states    arena.Arena[FrameState]
+	present   arena.Arena[int32] // the states' present slots (Func.Present)
 	blocks    arena.Arena[Block]
 	blockRefs arena.Arena[*Block]
 	refLists  arena.Arena[[]*Value]
@@ -40,6 +41,7 @@ func (w *Workspace) init() {
 	w.values.KeepBig()
 	w.refs.KeepBig()
 	w.states.KeepBig()
+	w.present.KeepBig()
 	w.blocks.KeepBig()
 	w.blockRefs.KeepBig()
 	w.refLists.KeepBig()
@@ -57,7 +59,7 @@ func (w *Workspace) Bytes() int { return w.arenaBytes() + w.scratchBytes() }
 
 // arenaBytes is what the workspace's arenas keep.
 func (w *Workspace) arenaBytes() int {
-	return w.values.Bytes() + w.refs.Bytes() + w.states.Bytes() + w.blocks.Bytes() + w.blockRefs.Bytes() +
+	return w.values.Bytes() + w.refs.Bytes() + w.states.Bytes() + w.present.Bytes() + w.blocks.Bytes() + w.blockRefs.Bytes() +
 		w.refLists.Bytes() + w.bools.Bytes() + w.bytes.Bytes() + w.ints.Bytes() + w.caches.Bytes() + w.accessors.Bytes() +
 		w.answers.Bytes()
 }
@@ -89,6 +91,7 @@ func (w *Workspace) Rewind() {
 	w.values.Rewind()
 	w.refs.Rewind()
 	w.states.Rewind()
+	w.present.Rewind()
 	w.blocks.Rewind()
 	w.blockRefs.Rewind()
 	w.refLists.Rewind()

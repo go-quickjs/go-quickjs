@@ -575,8 +575,8 @@ func reconstruct(f *Func, order []*Value, kept [][]*Value) {
 		}
 		if !kin[2*s.id] {
 			kin[2*s.id] = true
-			for _, x := range s.Slots {
-				if candOf(x) != 0 {
+			for _, i := range f.Present(s) {
+				if candOf(s.Slots[i]) != 0 {
 					kin[2*s.id+1] = true
 					break
 				}
@@ -590,7 +590,8 @@ func reconstruct(f *Func, order []*Value, kept [][]*Value) {
 		}
 		out := s
 		copied := false
-		for i, x := range s.Slots {
+		for _, i := range f.Present(s) {
+			x := s.Slots[i]
 			if candOf(x) == 0 {
 				continue
 			}
@@ -601,7 +602,7 @@ func reconstruct(f *Func, order []*Value, kept [][]*Value) {
 			if !copied && s.id < len(users) && users[s.id] > 1 {
 				users[s.id]--
 				out = f.newState(*s)
-				out.Slots = f.refsOf(len(s.Slots))
+				out.Slots, out.present = f.refsOf(len(s.Slots)), s.present
 				copy(out.Slots, s.Slots)
 			}
 			copied = true
@@ -662,8 +663,8 @@ func reconstruct(f *Func, order []*Value, kept [][]*Value) {
 		b.State = state(b.State, b, len(b.Values))
 		if b.Header != nil && b.PC >= 0 {
 			// A loop header's state is after its phis.
-			for i, x := range b.Header.Slots {
-				if k := candOf(x); k != 0 {
+			for _, i := range f.Present(b.Header) {
+				if k := candOf(b.Header.Slots[i]); k != 0 {
 					b.Header.Slots[i] = reach(k-1, b, lead)
 				}
 			}
@@ -693,10 +694,8 @@ func reconstruct(f *Func, order []*Value, kept [][]*Value) {
 				}
 				done[s.id] = true
 			}
-			for i, x := range s.Slots {
-				if x != nil {
-					s.Slots[i] = resolve(x)
-				}
+			for _, i := range f.Present(s) {
+				s.Slots[i] = resolve(s.Slots[i])
 			}
 		}
 	}

@@ -1045,8 +1045,8 @@ func rewriteChain(f *Func, subst []*Value) {
 		if s == nil {
 			return
 		}
-		for i, v := range s.Slots {
-			if v != nil && v.ID < len(subst) && subst[v.ID] != nil {
+		for _, i := range f.Present(s) {
+			if v := s.Slots[i]; v.ID < len(subst) && subst[v.ID] != nil {
 				s.Slots[i] = find(v)
 			}
 		}
@@ -1088,10 +1088,8 @@ func rewrite(f *Func, find func(*Value) *Value) {
 		if s == nil {
 			return
 		}
-		for i, v := range s.Slots {
-			if v != nil {
-				s.Slots[i] = find(v)
-			}
+		for _, i := range f.Present(s) {
+			s.Slots[i] = find(s.Slots[i])
 		}
 	}
 	for _, b := range f.Blocks {
@@ -1142,10 +1140,8 @@ func removeDead(f *Func) bool {
 			if s.id < len(marked) {
 				marked[s.id] = true
 			}
-			for _, v := range s.Slots {
-				if v != nil {
-					mark(v)
-				}
+			for _, i := range f.Present(s) {
+				mark(s.Slots[i])
 			}
 		}
 	}
@@ -1214,8 +1210,8 @@ func recount(f *Func) {
 			}
 			return
 		}
-		for _, v := range s.Slots {
-			use(v)
+		for _, i := range f.Present(s) {
+			s.Slots[i].Uses++
 		}
 	}
 	for _, b := range f.Blocks {
@@ -1231,10 +1227,8 @@ func recount(f *Func) {
 	}
 	for _, s := range states {
 		k := refs[s.id]
-		for _, v := range s.Slots {
-			if v != nil {
-				v.Uses += k
-			}
+		for _, i := range f.Present(s) {
+			s.Slots[i].Uses += k
 		}
 	}
 	clear(states)

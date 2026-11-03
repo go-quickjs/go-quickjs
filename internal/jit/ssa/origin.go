@@ -834,8 +834,8 @@ func liveBits(f *Func, sc *scratch, stores, cands []*Value, live [][]*Value) {
 	}
 	states := func(s []uint64, st *FrameState) {
 		if st != nil {
-			for _, x := range st.Slots {
-				add(s, x)
+			for _, i := range f.Present(st) {
+				add(s, st.Slots[i])
 			}
 		}
 	}
@@ -962,8 +962,8 @@ func liveWalks(f *Func, sc *scratch, nb int, stores, cands []*Value, live [][]*V
 	uses := sc.liveUses[:0]
 	for _, b := range f.Blocks {
 		if st := b.Header; st != nil {
-			for _, x := range st.Slots {
-				if x != nil && x.ID < len(cand) && cand[x.ID] != 0 {
+			for _, i := range f.Present(st) {
+				if x := st.Slots[i]; x.ID < len(cand) && cand[x.ID] != 0 {
 					k := cand[x.ID] - 1
 					uses = append(uses, liveUse{b, at[k], false})
 					at[k] = int32(len(uses))
@@ -992,8 +992,8 @@ func liveWalks(f *Func, sc *scratch, nb int, stores, cands []*Value, live [][]*V
 			// The guards of an instruction share its state, met once.
 			if st := v.State; st != last && st != nil {
 				last = st
-				for _, x := range st.Slots {
-					if x != nil && x.ID < len(cand) && cand[x.ID] != 0 {
+				for _, i := range f.Present(st) {
+					if x := st.Slots[i]; x.ID < len(cand) && cand[x.ID] != 0 {
 						k := cand[x.ID] - 1
 						uses = append(uses, liveUse{b, at[k], false})
 						at[k] = int32(len(uses))
@@ -1007,8 +1007,8 @@ func liveWalks(f *Func, sc *scratch, nb int, stores, cands []*Value, live [][]*V
 			at[k] = int32(len(uses))
 		}
 		if st := b.State; st != nil {
-			for _, x := range st.Slots {
-				if x != nil && x.ID < len(cand) && cand[x.ID] != 0 {
+			for _, i := range f.Present(st) {
+				if x := st.Slots[i]; x.ID < len(cand) && cand[x.ID] != 0 {
 					k := cand[x.ID] - 1
 					uses = append(uses, liveUse{b, at[k], false})
 					at[k] = int32(len(uses))
@@ -1111,8 +1111,8 @@ func liveWalks(f *Func, sc *scratch, nb int, stores, cands []*Value, live [][]*V
 		}
 		add(b.Control)
 		if st := b.State; st != nil {
-			for _, x := range st.Slots {
-				add(x)
+			for _, i := range f.Present(st) {
+				add(st.Slots[i])
 			}
 		}
 		next := k - 1
@@ -1141,8 +1141,8 @@ func liveWalks(f *Func, sc *scratch, nb int, stores, cands []*Value, live [][]*V
 					add(a)
 				}
 				if st := v.State; st != nil {
-					for _, x := range st.Slots {
-						add(x)
+					for _, i := range f.Present(st) {
+						add(st.Slots[i])
 					}
 				}
 			}

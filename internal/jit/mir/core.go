@@ -742,12 +742,11 @@ func (c *core) findLazy() error {
 	}
 	for _, s := range states {
 		k := refs[s.ID()]
-		for i, v := range s.Slots {
-			if v != nil {
-				uses[v.ID] += k
-				if !(v.Op == ssa.OpLoadSlot && v.Aux == i) {
-					elsewhere[v.ID] = true
-				}
+		for _, i := range c.f.Present(s) {
+			v := s.Slots[i]
+			uses[v.ID] += k
+			if !(v.Op == ssa.OpLoadSlot && v.Aux == int(i)) {
+				elsewhere[v.ID] = true
 			}
 		}
 	}
@@ -1044,10 +1043,8 @@ func (c *core) allocate() error {
 				use(x, at)
 			}
 		}
-		for _, v := range s.Slots {
-			if v == nil {
-				continue
-			}
+		for _, i := range c.f.Present(s) {
+			v := s.Slots[i]
 			if moved == nil && rec[v.ID].slot == 0 {
 				// Neither a BigInt's box, nor made where needed, nor with
 				// a shadow: the value itself.
@@ -2677,7 +2674,8 @@ func (c *core) exitDescriptor(s *ssa.FrameState, kind uint64, localsReg, stackRe
 	}
 	direct := true
 	writes := func(i int32) bool { return int(i) < len(s.Slots) && written(int(i), s.Slots[i]) }
-	for i, v := range s.Slots {
+	for _, ix := range c.f.Present(s) {
+		i, v := int(ix), s.Slots[ix]
 		if !written(i, v) {
 			continue
 		}
@@ -2859,8 +2857,9 @@ func (c *core) callState(v *ssa.Value, s *ssa.FrameState, skip func(int) bool, o
 	st := &abi.CallState{PC: uint32(s.PC), Depth: uint32(s.Depth), Site: int32(s.Site), Frame: c.exitLayout()}
 	var refs, rest []callRecord
 	var refRecs, restRecs []abi.CallRecord
-	for i, x := range s.Slots {
-		if x == nil || x.Op == ssa.OpLoadSlot && x.Aux == i || c.captured(i) || skip(i) {
+	for _, ix := range c.f.Present(s) {
+		i, x := int(ix), s.Slots[ix]
+		if x.Op == ssa.OpLoadSlot && x.Aux == i || c.captured(i) || skip(i) {
 			continue
 		}
 		rec, r := abi.CallRecord{Slot: int32(i), Origin: -1}, callRecord{slot: i, x: x}

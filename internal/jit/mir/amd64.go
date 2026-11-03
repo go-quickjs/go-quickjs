@@ -5638,8 +5638,9 @@ func (c *compiler) exitThen(s *ssa.FrameState, kind uint64, then *amd64.Label) {
 	c.recorded = false
 	c.movImm(scratchC, 0)
 	c.a.Store(regCtx, abi.OffRecords, scratchC)
-	for i, v := range s.Slots {
-		if v == nil || v.Op == ssa.OpLoadSlot && v.Aux == i || c.captured(i) {
+	for _, ix := range c.f.Present(s) {
+		i, v := int(ix), s.Slots[ix]
+		if v.Op == ssa.OpLoadSlot && v.Aux == i || c.captured(i) {
 			// Unchanged: a captured binding's own value (capturedUnchanged);
 			// or between a caller's slots and an inlined callee's.
 			continue

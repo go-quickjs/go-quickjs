@@ -246,10 +246,8 @@ func (c *builderCheck) appendsLast(f *Func, inWeb []bool, appends []*Value, inde
 	}
 	state := func(b *Block, s *FrameState, i int) {
 		if s != nil {
-			for _, x := range s.Slots {
-				if x != nil {
-					add(b, x, i)
-				}
+			for _, k := range f.Present(s) {
+				add(b, s.Slots[k], i)
 			}
 		}
 	}
