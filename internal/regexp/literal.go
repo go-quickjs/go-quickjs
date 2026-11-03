@@ -49,6 +49,9 @@ type literal struct {
 	// ascii is the units as bytes when isASCII is set.
 	ascii   string
 	isASCII bool
+	// rare is the index of the unit a search over code units looks for
+	// (rareUnit): the literal is tried only where it is.
+	rare int
 }
 
 // newLiteral is the literal of units.
@@ -58,8 +61,49 @@ func newLiteral(units []uint16) *literal {
 	return l
 }
 
-// setASCII sets ascii and isASCII from the units.
+// unitFrequency is how often each ASCII unit is found in text, on a log
+// scale of 0 to 255: the bytes of test262's tests, 40 MB of script --
+// code, its strings and its comments. A unit past ASCII counts as
+// pastASCIIFrequency.
+var unitFrequency = [128]uint8{
+	32, 0, 0, 0, 0, 0, 0, 0, 0, 83, 231, 26, 26, 88, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	255, 153, 215, 144, 161, 154, 123, 193, 214, 214, 185, 169, 226, 211, 223, 212,
+	222, 215, 210, 199, 196, 192, 193, 188, 185, 191, 208, 206, 145, 198, 171, 164,
+	131, 198, 187, 200, 197, 201, 190, 161, 173, 194, 141, 146, 188, 186, 184, 186,
+	191, 104, 182, 198, 205, 172, 185, 159, 116, 165, 162, 202, 181, 202, 138, 182,
+	169, 236, 207, 224, 223, 245, 216, 212, 218, 233, 189, 180, 227, 218, 235, 235,
+	221, 150, 238, 234, 240, 222, 203, 200, 200, 215, 164, 197, 162, 197, 106, 0,
+}
+
+// pastASCIIFrequency is the frequency rareUnit gives a unit past ASCII:
+// rarer than a lowercase letter, but not than most capitals, as a
+// subject that has one has others.
+const pastASCIIFrequency = 160
+
+// rareUnit is the index of the unit of units the least frequent in text
+// (unitFrequency), the first of them: the one a search looks for, which a
+// subject has the fewest of that are not the literal's. A literal's first
+// unit had been, which in JSON is often a quotation mark -- Octane's
+// search for "\/Qngr( stopped at every one of a subject's 358, where it
+// has 31 Q.
+func rareUnit(units []uint16) int {
+	best, rare := 256, 0
+	for i, u := range units {
+		f := pastASCIIFrequency
+		if u < 128 {
+			f = int(unitFrequency[u])
+		}
+		if f < best {
+			best, rare = f, i
+		}
+	}
+	return rare
+}
+
+// setASCII sets ascii and isASCII from the units, and rare.
 func (l *literal) setASCII() {
+	l.rare = rareUnit(l.units)
 	b := make([]byte, len(l.units))
 	for i, u := range l.units {
 		if u >= 0x80 {
@@ -224,22 +268,26 @@ func hasUnits(s []uint16, l *literal, pos int) bool {
 }
 
 // indexUnits is the first position at or after from where lit occurs in s, or
-// -1.
+// -1. Its rare unit (rareUnit) is looked for, four units at a time, where
+// it would be in an occurrence from each position on, and the literal
+// compared where it is found.
 func indexUnits(s []uint16, l *literal, from int) int {
 	lit := l.units
-	first, rest := lit[0], lit[1:]
-	for i := from; i <= len(s)-len(lit); i++ {
-		// The first unit is looked for four at a time.
-		if i = indexUnit(s, i, first); i > len(s)-len(lit) {
+	k, last := l.rare, len(s)-len(lit)
+	u := lit[k]
+	for i := from; i <= last; {
+		p := indexUnit(s, i+k, u) - k
+		if p > last {
 			return -1
 		}
 		j := 0
-		for j < len(rest) && s[i+1+j] == rest[j] {
+		for j < len(lit) && s[p+j] == lit[j] {
 			j++
 		}
-		if j == len(rest) {
-			return i
+		if j == len(lit) {
+			return p
 		}
+		i = p + 1
 	}
 	return -1
 }
