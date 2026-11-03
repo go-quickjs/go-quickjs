@@ -135,7 +135,7 @@ func init() {
 		fn := fd.closure.fn
 		newTarget := Undefined
 		if fd.arrow {
-			this, newTarget = fd.extra.lexThis, fd.extra.lexNewTarget
+			this, newTarget = fd.extra.lexThis, fd.extra.newTarget()
 		}
 		if fd.treeRest && !(fn.CoerceThis && !this.IsObject()) {
 			v, err := r.callTreeWith(o, fd, (*tree)(atomic.LoadPointer(&fn.VMCode)), this, args, newTarget, true)

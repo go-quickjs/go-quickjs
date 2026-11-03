@@ -79,16 +79,16 @@ func (r *Runtime) evalIn(caller *frame, fn *bytecode.Function) (Value, error) {
 		name:    "eval",
 		arrow:   true,
 		extra: &funcExtra{
-			lexThis:      caller.this,
-			lexThisRef:   caller.thisRef,
-			lexNewTarget: caller.newTarget,
-			rare:         scopesOf(caller.withScopes, caller.evalVars),
+			lexThis:    caller.this,
+			lexThisRef: caller.thisRef,
+			rare:       scopesOf(caller.withScopes, caller.evalVars),
 		},
 	}
+	// The evaluated code can read new.target however it is written.
+	fd.extra.setNewTarget(caller.newTarget)
 	if caller.callee != nil {
 		if outer := caller.callee.fn(); outer != nil {
-			fd.homeObject = outer.homeObject
-			fd.superCtor = outer.superCtor
+			fd.cls = outer.cls
 		}
 	}
 	callee.extOf().data = fd

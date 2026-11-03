@@ -9,12 +9,15 @@ import (
 // and, for an arrow, what it captured of its maker's frame -- and the
 // programs DeltaBlue and Havlak are make one for each forEach and each loop
 // over a set, so its size is most of what they allocate. On a 64-bit
-// platform, an arrow with up to one binding of its maker's fits Go's
-// 320-byte size class and one with two the 352-byte class: they had been
-// 456 to 472 bytes, the 480-byte class, before the parts of funcExtra few
-// functions have went behind funcExtra.rare, funcData's length beside its
-// flags, and what a template's closures share behind closureCode. A field
-// added to any of them that moves an arrow into the next class fails here.
+// platform, an arrow with none of its maker's bindings fits Go's 256-byte
+// size class and one with one or two the 288-byte class, a function of
+// one or two the 240-byte class: they had been 456 to 472 bytes, the 480-byte
+// class, before the parts of funcExtra few functions have went behind
+// funcExtra.rare, funcData's length beside its flags, and what a template's
+// closures share behind closureCode; and 320 to 352, before a method's and
+// a constructor's fields went behind funcData.cls and an arrow's
+// new.target into its rare part. A field added to any of them that moves a
+// closure into the next class fails here.
 func TestClosureSizes(t *testing.T) {
 	if unsafe.Sizeof(uintptr(0)) != 8 {
 		t.Skip("the sizes are a 64-bit platform's")
@@ -23,17 +26,38 @@ func TestClosureSizes(t *testing.T) {
 		name      string
 		size, max uintptr
 	}{
-		{"funcExtra", unsafe.Sizeof(funcExtra{}), 48},
-		{"funcData", unsafe.Sizeof(funcData{}), 104},
-		{"closure", unsafe.Sizeof(closure{}), 64},
-		{"arrowFuncObject", unsafe.Sizeof(arrowFuncObject{}), 320},
-		{"arrowFuncObject1", unsafe.Sizeof(arrowFuncObject1{}), 320},
-		{"arrowFuncObject2", unsafe.Sizeof(arrowFuncObject2{}), 352},
-		{"scriptFuncObject1", unsafe.Sizeof(scriptFuncObject1{}), 288},
+		{"funcExtra", unsafe.Sizeof(funcExtra{}), 32},
+		{"funcData", unsafe.Sizeof(funcData{}), 88},
+		{"closure", unsafe.Sizeof(closure{}), 56},
+		{"arrowFuncObject", unsafe.Sizeof(arrowFuncObject{}), 256},
+		{"arrowFuncObject1", unsafe.Sizeof(arrowFuncObject1{}), 288},
+		{"arrowFuncObject2", unsafe.Sizeof(arrowFuncObject2{}), 288},
+		{"scriptFuncObject", unsafe.Sizeof(scriptFuncObject{}), 224},
+		{"scriptFuncObject1", unsafe.Sizeof(scriptFuncObject1{}), 240},
+		{"scriptFuncObject2", unsafe.Sizeof(scriptFuncObject2{}), 240},
 	} {
 		if c.size > c.max {
 			t.Errorf("%s is %d bytes, past %d", c.name, c.size, c.max)
 		}
+	}
+}
+
+// An arrow made inside a method shares the method's class part, which
+// says its super, rather than making one at each (funcData's classPart).
+func TestArrowSharesClassPart(t *testing.T) {
+	r := New(Config{})
+	defer r.Close()
+	if _, err := r.Run(compileForTest(t, `class A { m() { return () => super.toString === Object.prototype.toString } }
+		var m = A.prototype.m, f = new A().m()`)); err != nil {
+		t.Fatal(err)
+	}
+	m := r.global.getOwn(r.atoms.intern("m")).value().Object().fn()
+	f := r.global.getOwn(r.atoms.intern("f")).value().Object().fn()
+	if m.cls == nil || f.cls != m.cls {
+		t.Error("an arrow made in a method has a class part of its own")
+	}
+	if v, err := r.Run(compileForTest(t, `f()`)); err != nil || !v.Truthy() {
+		t.Errorf("the arrow's super: %v, %v", v, err)
 	}
 }
 

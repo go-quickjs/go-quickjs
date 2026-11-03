@@ -3876,7 +3876,7 @@ func (r *Runtime) jitDefinition(f *frame, in bytecode.Instr, sp int) (int, Value
 	case bytecode.OpSetHomeObject:
 		if fnVal := stack[sp-1]; fnVal.IsObject() {
 			if home := stack[sp-1-int(in.A)]; fnVal.Object().fn() != nil && home.IsObject() {
-				fnVal.Object().fn().homeObject = home.Object()
+				fnVal.Object().fn().setHomeObject(home.Object())
 			}
 		}
 		return sp, Undefined, false, nil
@@ -3884,7 +3884,7 @@ func (r *Runtime) jitDefinition(f *frame, in bytecode.Instr, sp int) (int, Value
 		sp--
 		if ctor, init := stack[sp-1], stack[sp]; ctor.IsObject() && init.IsObject() {
 			if fd := ctor.Object().fn(); fd != nil {
-				fd.fieldInit = init.Object()
+				fd.setFieldInit(init.Object())
 			}
 		}
 		return sp, Undefined, false, nil

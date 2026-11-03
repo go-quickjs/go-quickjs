@@ -102,10 +102,10 @@ func init() {
 		// initInstanceElements, written out: a class without fields or
 		// private methods has no initializer, the common case.
 		fd := parent.fn()
-		if fd == nil || fd.fieldInit == nil {
+		if fd == nil || fd.fieldInit() == nil {
 			return nil
 		}
-		_, err := r.callObject(fd.fieldInit, f.this, nil, Undefined)
+		_, err := r.callObject(fd.fieldInit(), f.this, nil, Undefined)
 		return err
 	}
 

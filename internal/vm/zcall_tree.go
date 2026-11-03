@@ -249,7 +249,7 @@ func (r *Runtime) callRest(o *Object, fd *funcData, this Value, args []Value) (V
 			}
 			newTarget := Undefined
 			if fd.arrow {
-				this, newTarget = fd.extra.lexThis, fd.extra.lexNewTarget
+				this, newTarget = fd.extra.lexThis, fd.extra.newTarget()
 			}
 			if fd.treeRest && !(fn.CoerceThis && !this.IsObject()) {
 				// The tree planTreeCall has found it may be run on, as a

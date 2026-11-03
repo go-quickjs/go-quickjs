@@ -1454,7 +1454,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		b.body = append(b.body, func(c *tctx) {
 			if fnVal := c.stack[d-1]; fnVal.IsObject() {
 				if home := c.stack[d-1-below]; fnVal.Object().fn() != nil && home.IsObject() {
-					fnVal.Object().fn().homeObject = home.Object()
+					fnVal.Object().fn().setHomeObject(home.Object())
 				}
 			}
 		})

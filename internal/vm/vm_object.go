@@ -1745,12 +1745,15 @@ type funcData struct {
 	// calls it. A compiled function's is its closure's; a bound function has
 	// its target's.
 	realm *Realm
-	// homeObject is the object a method was defined on, which `super` resolves
-	// against.
-	homeObject *Object
-	// ctorShape is the empty shape the objects the function constructs start
-	// from, made when it first constructs one; see siteRoot.
-	ctorShape *shape
+	// cls is what only a method or a class has (funcClass), nil for any
+	// other function: most functions a program makes are closures and
+	// arrows, which had carried its three pointers too.
+	cls *funcClass
+	// ctorRoot is the empty shape the objects the function constructs
+	// start from, made when it first constructs one; see siteRoot. It is
+	// not in cls with the other constructor's fields: read at every
+	// construction, it cost RayTrace 2% there.
+	ctorRoot *shape
 	// length is the function's length, as its own length property, before
 	// one is made, says (propsMaterialized). It is an int32 beside the
 	// flags, in what their padding had been: a parameter list, or a
@@ -1810,7 +1813,14 @@ type funcData struct {
 	// treeCall is the tree a call of the function goes straight to through
 	// callTree, or nil; see planTreeCall.
 	treeCall *tree
+}
 
+// funcClass is the part of a function only a method or a class has
+// (funcData's cls), made when one of its fields is first set.
+type funcClass struct {
+	// home is the object a method was defined on, which `super` resolves
+	// against.
+	home *Object
 	// superCtor is the class constructor whose prototype super() reads.
 	//
 	// It is the function rather than the parent because the link is live:
@@ -1828,13 +1838,74 @@ type funcData struct {
 	fieldInit *Object
 }
 
+// homeObject is the object a method was defined on, or nil.
+func (fd *funcData) homeObject() *Object {
+	if c := fd.cls; c != nil {
+		return c.home
+	}
+	return nil
+}
+
+// ctorShape is the root of the objects the function constructs, or nil.
+func (fd *funcData) ctorShape() *shape { return fd.ctorRoot }
+
+// superCtor is the constructor a derived class's super() calls, or nil.
+func (fd *funcData) superCtor() *Object {
+	if c := fd.cls; c != nil {
+		return c.superCtor
+	}
+	return nil
+}
+
+// fieldInit is a class's instance initializer, or nil.
+func (fd *funcData) fieldInit() *Object {
+	if c := fd.cls; c != nil {
+		return c.fieldInit
+	}
+	return nil
+}
+
+// classPart is fd's funcClass, made if it has none. An arrow's, and a
+// direct eval's, is its maker's, shared, as what super means in it is the
+// maker's: one written to is first made its own.
+func (fd *funcData) classPart() *funcClass {
+	switch {
+	case fd.cls == nil:
+		fd.cls = &funcClass{}
+	case fd.arrow:
+		c := *fd.cls
+		fd.cls = &c
+	}
+	return fd.cls
+}
+
+func (fd *funcData) setHomeObject(o *Object) {
+	if o != nil || fd.cls != nil {
+		fd.classPart().home = o
+	}
+}
+
+func (fd *funcData) setCtorShape(s *shape) { fd.ctorRoot = s }
+
+func (fd *funcData) setSuperCtor(o *Object) {
+	if o != nil || fd.cls != nil {
+		fd.classPart().superCtor = o
+	}
+}
+
+func (fd *funcData) setFieldInit(o *Object) {
+	if o != nil || fd.cls != nil {
+		fd.classPart().fieldInit = o
+	}
+}
+
 // funcExtra is the part of a function's data that only some functions
 // have; see funcData.extra.
 type funcExtra struct {
-	// lexThis and lexNewTarget hold what an arrow captured from the frame
-	// that created it.
-	lexThis      Value
-	lexNewTarget Value
+	// lexThis holds what an arrow captured of this from the frame that
+	// created it; its new.target, which few arrows read, is in rare
+	// (newTarget).
+	lexThis Value
 	// lexThisRef is the binding an arrow captured when it was created inside a
 	// derived constructor, where `this` is not a value until super() runs.
 	lexThisRef *thisBinding
@@ -1847,6 +1918,26 @@ type funcExtra struct {
 	rare *funcRare
 }
 
+// newTarget is the new.target an arrow captured: undefined but for one
+// whose body can read it, made inside a construction (setNewTarget).
+func (e *funcExtra) newTarget() Value {
+	if r := e.rare; r != nil {
+		return r.lexNewTarget
+	}
+	return Undefined
+}
+
+// setNewTarget has the arrow capture v as its new.target.
+func (e *funcExtra) setNewTarget(v Value) {
+	if v.IsUndefined() && e.rare == nil {
+		return
+	}
+	if e.rare == nil {
+		e.rare = &funcRare{}
+	}
+	e.rare.lexNewTarget = v
+}
+
 // funcRare is the part of a funcExtra that only a few functions have.
 type funcRare struct {
 	// lexEvalVars is where a direct eval had put the bindings it declared in
@@ -1856,6 +1947,9 @@ type funcRare struct {
 	// Names in its body resolve against them, so they outlive the frame that
 	// pushed them.
 	lexWith []*Object
+	// lexNewTarget is an arrow's captured new.target (funcExtra's
+	// newTarget).
+	lexNewTarget Value
 
 	// boundTarget, boundThis and boundArgs are set for a function produced by
 	// Function.prototype.bind.

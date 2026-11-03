@@ -228,7 +228,7 @@ func (r *Runtime) callDirect(callee, this Value, args []Value) (Value, error) {
 				}
 				newTarget := Undefined
 				if fd.arrow {
-					this, newTarget = fd.extra.lexThis, fd.extra.lexNewTarget
+					this, newTarget = fd.extra.lexThis, fd.extra.newTarget()
 				}
 				v, err := directRest[struct{}](r, o, fd, this, args, newTarget)
 				if err == errNoSuper {
@@ -352,7 +352,7 @@ func (r *Runtime) callClosure(o *Object, fd *funcData, this Value, args []Value,
 	// An arrow ignores the this and new.target it was called with.
 	if fd.arrow {
 		this = fd.extra.lexThis
-		newTarget = fd.extra.lexNewTarget
+		newTarget = fd.extra.newTarget()
 	}
 
 	// A generator or async function does not run its body on call. A generator
@@ -697,7 +697,7 @@ func (r *Runtime) tailTarget(tc tailCall) (*closure, Value, []Value, *Object, bo
 		}
 		if fd.arrow {
 			this = fd.extra.lexThis
-			if !fd.extra.lexNewTarget.IsUndefined() {
+			if !fd.extra.newTarget().IsUndefined() {
 				// An arrow inside a constructor sees its new.target, which run
 				// would have to be given: the ordinary call path does that.
 				return nil, Undefined, nil, nil, false, nil

@@ -2753,7 +2753,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// a computed key was pushed in between.
 			if fnVal := stack[sp-1]; fnVal.IsObject() {
 				if home := stack[sp-1-int(in.A)]; fnVal.Object().fn() != nil && home.IsObject() {
-					fnVal.Object().fn().homeObject = home.Object()
+					fnVal.Object().fn().setHomeObject(home.Object())
 				}
 			}
 		case bytecode.OpSetFieldInit:
@@ -2761,7 +2761,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			init := stack[sp]
 			if ctor := stack[sp-1]; ctor.IsObject() && init.IsObject() {
 				if fd := ctor.Object().fn(); fd != nil {
-					fd.fieldInit = init.Object()
+					fd.setFieldInit(init.Object())
 				}
 			}
 		case bytecode.OpDefineMethod:
@@ -3327,12 +3327,15 @@ func (r *Runtime) newClosureIn(f *frame, c Value, cells []*upvalue) *Object {
 		fd.arrow = true
 		fd.extra.lexThis = f.this
 		fd.extra.lexThisRef = f.thisRef
-		fd.extra.lexNewTarget = f.newTarget
+		if fd.closure != nil && fd.closure.fn.UsesNewTarget {
+			fd.extra.setNewTarget(f.newTarget)
+		}
 		if f.callee != nil {
 			if outer := f.callee.fn(); outer != nil {
-				// super resolves against the enclosing method's home object.
-				fd.homeObject = outer.homeObject
-				fd.superCtor = outer.superCtor
+				// super resolves against the enclosing method's home object,
+				// and super() calls its constructor's parent: the arrow shares
+				// the part that says them (funcData's classPart).
+				fd.cls = outer.cls
 			}
 		}
 	}
@@ -3372,7 +3375,7 @@ func (r *Runtime) newClosureIn(f *frame, c Value, cells []*upvalue) *Object {
 		// makes `super.m()` inside a constructor find the parent's method.
 		// Nothing outside a class can name super, so setting it on every
 		// constructible function is harmless.
-		fd.homeObject = proto
+		fd.setHomeObject(proto)
 	}
 	return o
 }
@@ -3412,7 +3415,7 @@ func (r *Runtime) materializeFunctionProto(o *Object) {
 	// A constructible function's home object is its own prototype. Nothing
 	// outside a class can name super, so an ordinary function's is never read,
 	// but it costs nothing to keep it the same as an eagerly built one's.
-	fd.homeObject = proto
+	fd.setHomeObject(proto)
 }
 
 func ctorKindOf(fn *bytecode.Function) ctorKind {
@@ -4553,7 +4556,7 @@ func (r *Runtime) linkClass(ctorVal, parent Value) error {
 	classProto[struct{}](ctor, parentObj)
 
 	fd.ctorKind = ctorDerived
-	fd.superCtor = ctor
+	fd.setSuperCtor(ctor)
 	return nil
 }
 
@@ -4631,8 +4634,8 @@ func (r *Runtime) superCall(f *frame, args []Value) error {
 	// put on the instance now: after the parent has finished with it, before
 	// this constructor's body sees it.
 	ctor := f.callee
-	if fd := f.callee.fn(); fd != nil && fd.superCtor != nil {
-		ctor = fd.superCtor
+	if fd := f.callee.fn(); fd != nil && fd.superCtor() != nil {
+		ctor = fd.superCtor()
 	}
 	return r.initInstanceElements(ctor, f.this)
 }
@@ -4647,10 +4650,10 @@ func (r *Runtime) initInstanceElements(ctor *Object, this Value) error {
 		return nil
 	}
 	fd := ctor.fn()
-	if fd == nil || fd.fieldInit == nil {
+	if fd == nil || fd.fieldInit() == nil {
 		return nil
 	}
-	_, err := r.callObject(fd.fieldInit, this, nil, Undefined)
+	_, err := r.callObject(fd.fieldInit(), this, nil, Undefined)
 	return err
 }
 
@@ -4663,15 +4666,15 @@ func (r *Runtime) parentConstructorOf(f *frame) *Object {
 	if fd == nil {
 		return nil
 	}
-	if fd.superCtor != nil {
+	if fd.superCtor() != nil {
 		// GetSuperConstructor reads the running class's prototype now rather
 		// than remembering what it extended.
-		return fd.superCtor.proto()
+		return fd.superCtor().proto()
 	}
 	// A method reaches the parent through its home object rather than through
 	// a stored link.
-	if fd.homeObject != nil && fd.homeObject.proto() != nil {
-		if ctor := fd.homeObject.proto().getOwn(atomConstructor); ctor.ok() &&
+	if fd.homeObject() != nil && fd.homeObject().proto() != nil {
+		if ctor := fd.homeObject().proto().getOwn(atomConstructor); ctor.ok() &&
 			ctor.value().IsObject() {
 			return ctor.value().Object()
 		}
@@ -4721,7 +4724,7 @@ func (r *Runtime) superRef(f *frame) (*Object, Value, error) {
 		return nil, Undefined, r.throwTypeError("\"super\" is only valid inside a method")
 	}
 	fd := f.callee.fn()
-	if fd == nil || fd.homeObject == nil {
+	if fd == nil || fd.homeObject() == nil {
 		return nil, Undefined, r.throwTypeError("\"super\" is only valid inside a method")
 	}
 	this, bound := f.thisValue()
@@ -4729,7 +4732,7 @@ func (r *Runtime) superRef(f *frame) (*Object, Value, error) {
 		return nil, Undefined, r.throwError(errReference,
 			"\"this\" is not bound until super() has been called")
 	}
-	return fd.homeObject.proto(), this, nil
+	return fd.homeObject().proto(), this, nil
 }
 
 // superSet writes through a super reference.

@@ -507,7 +507,7 @@ func (r *Runtime) pureConstruct(callee Value, args []Value) (Value, bool) {
 	}
 	o := callee.Object()
 	fd := o.fn()
-	if fd == nil || fd.ctorKind != ctorBase || fd.bound || fd.native != nil || fd.fieldInit != nil ||
+	if fd == nil || fd.ctorKind != ctorBase || fd.bound || fd.native != nil || fd.fieldInit() != nil ||
 		fd.closure == nil || fd.closure.realm != r.Realm || fd.closure.fn.Leaf != bytecode.LeafSetThis ||
 		o.class != ClassFunction {
 		return Undefined, false

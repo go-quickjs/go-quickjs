@@ -633,14 +633,14 @@ func (t *shapeTree) siteRoot(c *propCache, proto *Object) *shape {
 // one (keptCtorRoot), so that a constructor alternating between prototypes
 // adds no shape to the tree after the first of each.
 func (t *shapeTree) ctorRoot(fd *funcData, proto *Object) *shape {
-	if s := fd.ctorShape; s != nil && s.proto == proto {
+	if s := fd.ctorShape(); s != nil && s.proto == proto {
 		return s
 	}
 	if t.building || t.count >= maxShapes {
 		return nil
 	}
 	s := &shape{tree: t, proto: proto, rootClass: ctorRootClass}
-	fd.ctorShape = s
+	fd.setCtorShape(s)
 	return s
 }
 

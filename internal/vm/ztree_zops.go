@@ -657,7 +657,7 @@ func init() {
 				case bytecode.OpSetFieldInit:
 					if obj.IsObject() && v.IsObject() {
 						if fd := obj.Object().fn(); fd != nil {
-							fd.fieldInit = v.Object()
+							fd.setFieldInit(v.Object())
 						}
 					}
 				case bytecode.OpDefineMethod:

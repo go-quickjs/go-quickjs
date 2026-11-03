@@ -8050,7 +8050,7 @@ func (r *Runtime) jitNativeTarget(pc int32, cl *closure, o *Object, in bytecode.
 // of its dictionaries: each had been a call of Go.
 func (r *Runtime) jitDerivedBase(o *Object) *Object {
 	fd := o.fn()
-	if fd == nil || fd.closure == nil || fd.native != nil || fd.bound || fd.ctorKind != ctorDerived || fd.fieldInit != nil ||
+	if fd == nil || fd.closure == nil || fd.native != nil || fd.bound || fd.ctorKind != ctorDerived || fd.fieldInit() != nil ||
 		fd.closure.realm != r.Realm || o.class != ClassFunction || o.findOwn(atomPrototype) < 0 || !jitForwardsSuper(fd.closure.fn) {
 		return nil
 	}
@@ -8071,7 +8071,7 @@ func (r *Runtime) jitDerivedBase(o *Object) *Object {
 // call's arguments, which the call writes to its context (jitFrameArgs).
 func (r *Runtime) jitConstructsDerived(o *Object) bool {
 	fd := o.fn()
-	return fd != nil && fd.closure != nil && fd.native == nil && !fd.bound && fd.ctorKind == ctorDerived && fd.superCtor == o &&
+	return fd != nil && fd.closure != nil && fd.native == nil && !fd.bound && fd.ctorKind == ctorDerived && fd.superCtor() == o &&
 		fd.closure.realm == r.Realm && o.class == ClassFunction && o.findOwn(atomPrototype) >= 0 &&
 		(!jitForwardsSuper(fd.closure.fn) || r.jitDerivedBase(o) == nil)
 }
@@ -9414,7 +9414,7 @@ func (r *Runtime) jitNewArrayPool(o *Object, room int) *abi.ObjectPool {
 // prototype its own data property.
 func (r *Runtime) jitConstructs(o *Object) bool {
 	fd := o.fn()
-	return fd != nil && fd.closure != nil && fd.native == nil && !fd.bound && fd.ctorKind == ctorBase && fd.fieldInit == nil &&
+	return fd != nil && fd.closure != nil && fd.native == nil && !fd.bound && fd.ctorKind == ctorBase && fd.fieldInit() == nil &&
 		fd.closure.realm == r.Realm && o.class == ClassFunction && o.findOwn(atomPrototype) >= 0
 }
 
@@ -12660,7 +12660,7 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure, made bool
 				// An arrow's new.target is the one it captured, as a call of
 				// it has it (callClosure), not its call's.
 				if fd := f.callee.fn(); fd != nil && fd.arrow {
-					f.newTarget = fd.extra.lexNewTarget
+					f.newTarget = fd.extra.newTarget()
 				}
 			}
 			f.openUpvalues, f.handlers = f.openUpvalues[:0], f.handlers[:0]
@@ -13016,20 +13016,20 @@ func jitSuperBound(f *frame, v Value) Value {
 // (FindNonDefaultConstructorOrConstruct). nil where there is none.
 func (r *Runtime) jitSuperTarget(d *Object) (p, skip *Object, cl *closure) {
 	dfd := d.fn()
-	if dfd == nil || dfd.closure == nil || dfd.ctorKind != ctorDerived || dfd.superCtor != d || dfd.fieldInit != nil || jitArrowBeforeSuper(dfd.closure.fn) {
+	if dfd == nil || dfd.closure == nil || dfd.ctorKind != ctorDerived || dfd.superCtor() != d || dfd.fieldInit() != nil || jitArrowBeforeSuper(dfd.closure.fn) {
 		return nil, nil, nil
 	}
 	code := func(o *Object) *closure {
 		fd := o.fn()
 		if fd == nil || fd.closure == nil || fd.native != nil || fd.bound || fd.closure.realm != r.Realm || o.class != ClassFunction ||
-			isGeneratorTemplate(fd.closure.fn) || fd.fieldInit != nil {
+			isGeneratorTemplate(fd.closure.fn) || fd.fieldInit() != nil {
 			return nil
 		}
 		switch fd.ctorKind {
 		case ctorBase:
 			return fd.closure
 		case ctorDerived:
-			if fd.superCtor == o {
+			if fd.superCtor() == o {
 				return fd.closure
 			}
 		}

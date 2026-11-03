@@ -108,7 +108,7 @@ func init() {
 		}
 		newTarget := Undefined
 		if fd.arrow {
-			this, newTarget = fd.extra.lexThis, fd.extra.lexNewTarget
+			this, newTarget = fd.extra.lexThis, fd.extra.newTarget()
 		}
 		if fn.CoerceThis && !this.IsObject() {
 			return Undefined, false
