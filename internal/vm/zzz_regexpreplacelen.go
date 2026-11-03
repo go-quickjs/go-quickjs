@@ -109,6 +109,62 @@ func measuredCall[_ any](r *Runtime, this Value, args []Value) (Value, bool, err
 	return Int(n), true, err
 }
 
+// measuredFrameless is a measured replace's call (measuredCall) made
+// without its frames -- replace's and the exec's its matches are made in --
+// as a leaf's call is, where its RegExp is global, a realm's as the realm
+// made it, its prototype pristine (armPristine) and its lastIndex
+// writable, and its subject and its template, which has no $, are ASCII:
+// then nothing it does runs a script. It ticks as the call would; it
+// reports false where a match or a tick fails, having written lastIndex 0
+// at most, as the call does first, and the call is made again with its
+// frames, which throws.
+func measuredFrameless[_ any](r *Runtime, this Value, args []Value) (int, bool) {
+	if len(args) < 2 || !this.IsString() || !args[1].IsString() || !args[0].IsObject() || r.meter != nil || r.debug != nil {
+		return 0, false
+	}
+	s, tv, o := this.String(), args[1].String(), args[0].Object()
+	p := r.proto.regexp
+	if !s.ascii || !tv.ascii || o.class != ClassRegExp || o.proto != p || p == nil || p.shape == nil || !p.shape.pristine ||
+		len(o.vals) != 1 || o.shape.keys[0].key != atomLastIndex || o.shape.keys[0].flags&propWritable == 0 {
+		return 0, false
+	}
+	d, ok := o.dataOf().(*regexpData)
+	if !ok || d.re.Flags()&regexp.FlagGlobal == 0 || strings.IndexByte(tv.Go(), '$') >= 0 {
+		return 0, false
+	}
+	if n := int64(s.length); n+(n+1)*int64(tv.length) > maxStringLength {
+		return 0, false
+	}
+	if err := r.tick(); err != nil {
+		return 0, false
+	}
+	o.vals[0] = Int(0)
+	var check func() error
+	if r.abort != nil || r.ctx != nil && r.ctx.Done() != nil {
+		check = r.checkInterruptNow
+	}
+	spans := r.takeSpans()
+	spans, next, err := regexp.MatchAllASCIIInto[struct{}](d.re, spans, s.Go(), check, r.tick)
+	if err != nil {
+		r.giveSpans(spans)
+		return 0, false
+	}
+	if next < 0 {
+		next = 0
+	}
+	o.vals[0] = Int(next)
+	width := 2 * (d.re.GroupCount() + 1)
+	length := s.length
+	for k := 0; k+1 < len(spans); k += width {
+		length += tv.length - (spans[k+1] - spans[k])
+	}
+	if len(spans) > 0 {
+		r.recordLegacyMatch(d.legacy(), s, spans[len(spans)-width:])
+	}
+	r.giveSpans(spans)
+	return length, true
+}
+
 // replaceLen is a node of a call of replace whose result is only measured,
 // and the get_length after it: deadExec's, its fields as deadExec's.
 type replaceLen[_ any] struct {
@@ -146,6 +202,12 @@ func (d *replaceLen[_]) node(c *tctx) Value {
 		o := fv.Object()
 		rx := as[0]
 		done := d.argLit && rx.IsObject() && r.regexpArgCall(o, recv, as)
+		if n, ok := measuredFrameless[struct{}](r, recv, as); ok {
+			if done {
+				r.regexpLiteralDone(&c.cl.fn.Constants[d.k], rx.Object())
+			}
+			return Int(n)
+		}
 		var err error
 		if rx.IsObject() && r.debug == nil {
 			l := replaceDeadOfRuntime[struct{}](r)

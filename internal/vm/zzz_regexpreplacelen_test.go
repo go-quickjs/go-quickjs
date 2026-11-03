@@ -1,10 +1,13 @@
 package vm
 
 import (
+	"context"
+	"errors"
 	"runtime"
 	"runtime/debug"
 	"strings"
 	"testing"
+	"time"
 )
 
 // regexpReplaceLenTestSrc measures replaces (zzz_regexpreplacelen.go) of
@@ -136,5 +139,58 @@ func TestRegExpReplaceLen(t *testing.T) {
 	}
 	if m, k := made("local"), made("kept"); m+900 > k {
 		t.Errorf("1000 measured replaces made %d objects, 1000 kept ones %d: want 900 fewer", m, k)
+	}
+}
+
+// A measured replace whose match fails -- past the step budget, past a
+// deadline -- throws as one whose string is kept does: its frameless try
+// (measuredFrameless) gives up having written lastIndex 0, and the call
+// is made again with its frames. Where RegExp.prototype is no longer as
+// the realm made it, the replace is the script's.
+func TestRegExpReplaceLenFails(t *testing.T) {
+	r := New(Config{})
+	defer r.Close()
+	src := `var gets = 0, limit = Error.stackTraceLimit;
+Object.defineProperty(Error, 'stackTraceLimit', { get() { gets++; return limit }, set(v) { limit = v }, configurable: true });
+function fail(re, e) { return [e.name, e.message, e.stack, gets, re.lastIndex].join(',') }
+function measured(re, s) { gets = 0; for (var k = 0; k < 1; k++) try { return s.replace(re, '').length } catch (e) { return fail(re, e) } }
+function kept(re, s) { gets = 0; for (var k = 0; k < 1; k++) try { var m = s.replace(re, ''); return m.length } catch (e) { return fail(re, e) } }
+function both(re, s) { re.lastIndex = 3; var a = measured(re, s); re.lastIndex = 3; var b = kept(re, s); return a === b ? '' + a : a + ' != ' + b }`
+	if _, err := r.Run(compileForTest(t, src)); err != nil {
+		t.Fatal(err)
+	}
+	if !testing.Short() {
+		v, err := r.Run(compileForTest(t, `both(/(a+)+b/g, 'a'.repeat(32) + 'cb') + ' ' + both(/x(a+)+b/g, 'x' + 'a'.repeat(32) + 'cb')`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := v.String().Go(); strings.Contains(got, "!=") || !strings.HasPrefix(got, "SyntaxError,") {
+			t.Errorf("past the budget: %s", got)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	r.SetContext(ctx)
+	if _, err := r.Run(compileForTest(t, `for (var i = 0; i < 2; i++) measured(/(a+)+b/g, 'a'.repeat(64) + 'cb')`)); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("%v, want the deadline", err)
+	}
+	r.SetContext(context.Background())
+	v, err := r.Run(compileForTest(t, `var re = /a/g, o = [measured(re, 'banana') + RegExp.leftContext + re.lastIndex];
+var x = RegExp.prototype[Symbol.replace];
+RegExp.prototype[Symbol.replace] = function (s, t) { return 'replaced' };
+o.push(measured(re, 'banana'));
+RegExp.prototype[Symbol.replace] = x;
+var e = RegExp.prototype.exec;
+RegExp.prototype.exec = function (s) { return null };
+o.push(measured(re, 'banana'));
+RegExp.prototype.exec = e;
+Object.defineProperty(RegExp.prototype, 'flags', { get() { return '' } });
+o.push(measured(re, 'banana') + RegExp.leftContext);
+o.join(' ')`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := v.String().Go(), "3banan0 8 6 5b"; got != want {
+		t.Errorf("got %s, want Node's %s", got, want)
 	}
 }
