@@ -176,19 +176,31 @@ func (l *regexpLeaf[_]) match(r *Runtime, this Value, args []Value) (Value, erro
 		reuse = l.reuse
 		l.reuse = execReuseCall{}
 	}
-	return l.matchOf(r, this, args, dead, reuse)
+	return l.matchOf(r, this, args, dead, reuse, false)
 }
 
 // matchOf is match's call, told of it by its caller rather than through
 // the leaf: dead, the RegExp of a call whose result nothing reads, and
-// reuse, of one whose array may be made again (see match).
-func (l *regexpLeaf[_]) matchOf(r *Runtime, this Value, args []Value, dead *Object, reuse execReuseCall) (Value, error) {
+// reuse, of one whose array may be made again (see match). Where once is
+// set, the call is made once and nothing has been asked of it: what
+// statefulCheck would refuse, or anything the built-in's own function
+// would match, errs with nothing made (errRegExpLeafAgain), to be made as
+// any other call is.
+func (l *regexpLeaf[_]) matchOf(r *Runtime, this Value, args []Value, dead *Object, reuse execReuseCall, once bool) (Value, error) {
 	if len(args) == 0 || !args[0].IsString() || !this.IsObject() {
+		if once {
+			return Undefined, errRegExpLeafAgain
+		}
 		return l.slow(r, this, args)
 	}
 	o := this.Object()
 	d, ok := o.dataOf().(*regexpData)
-	if !ok || o.class != ClassRegExp || len(o.vals) == 0 || !o.vals[0].IsNumber() || l.test && !r.execIsBuiltin(this) {
+	if !ok || o.class != ClassRegExp || len(o.vals) == 0 || !o.vals[0].IsNumber() || l.test && !r.execIsBuiltin(this) ||
+		once && (o.shape == nil || len(o.shape.keys) == 0 || o.shape.keys[0].key != atomLastIndex ||
+			d.re.Flags()&(regexp.FlagGlobal|regexp.FlagSticky) != 0 && o.shape.keys[0].flags&propWritable == 0) {
+		if once {
+			return Undefined, errRegExpLeafAgain
+		}
 		return l.slow(r, this, args)
 	}
 	re, s := d.re, args[0].String()

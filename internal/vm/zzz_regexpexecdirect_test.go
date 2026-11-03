@@ -10,9 +10,9 @@ import (
 // (zzz_regexpreuse.go), as Octane's Exec does: on global, sticky, global
 // and sticky, and unicode patterns from lastIndex at, which it writes
 // before, reads after, before and past the subject's end and between the
-// halves of a pair; on a frozen global RegExp, whose lastIndex cannot be
-// written; and on one whose lastIndex is an object, whose valueOf is
-// counted. regexpExecDirectTestWant is Node's answer (v26.10.0).
+// halves of a pair; given a number and undefined for the subject; on a
+// frozen global RegExp, whose lastIndex cannot be written; and on one
+// whose lastIndex is an object, whose valueOf is counted. regexpExecDirectTestWant is Node's answer (v26.10.0).
 const regexpExecDirectTestSrc = `function E(re, s, at) {
   re.lastIndex = at
   var a = re.exec(s)
@@ -41,7 +41,7 @@ function run() {
   for (var at of [0, 1, 2, 3, 4, 9]) o.push(E(y, 'abaab', at))
   for (var at of [0, 1, 2, 3]) o.push(E(gy, 'abab', at))
   for (var at of [0, 1, 2, 3]) o.push(E(gu, 'aé\u{1F600}é', at))
-  o.push(E(n, 'x12y', 5))
+  o.push(E(n, 'x12y', 5), E(/(\d)(\d)/, 12345, 0), E(/(\d)/g, 12345, 2), E(/u/g, undefined, 0))
   var fz = Object.freeze(/(x)/g)
   o.push(tryE(fz, 'axb', 0), tryF(fz, 'axb'), String(fz.lastIndex))
   var calls = 0, li = /(x)(y)/g
@@ -54,7 +54,7 @@ function run() {
 }
 run() + ' # ' + run()`
 
-const regexpExecDirectTestWant = "4:4,3,1, 4:2,1,1, 4:1,-,1, 7:-,-,-, 0:null 2:2,1,1, 0:null 3:1,1,-, 5:2,1,1, 0:null 0:null 1:1,-, 2:1,1, 3:1,-, 4:1,1, 2:2,1,1, 2:1,1,-, 5:3,2,1, 5:3,2,1, 5:2,2, TypeError TypeError 0 3:2,1,1, 1 3 400"
+const regexpExecDirectTestWant = "4:4,3,1, 4:2,1,1, 4:1,-,1, 7:-,-,-, 0:null 2:2,1,1, 0:null 3:1,1,-, 5:2,1,1, 0:null 0:null 1:1,-, 2:1,1, 3:1,-, 4:1,1, 2:2,1,1, 2:1,1,-, 5:3,2,1, 5:3,2,1, 5:2,2, 0:2,1,1, 3:1,1, 1:1, TypeError TypeError 0 3:2,1,1, 1 3 400"
 
 // A tree's call of exec whose array may be made again calls exec's leaf
 // itself (reuseCallRest), on a global or a sticky RegExp too: each answer
