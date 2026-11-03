@@ -609,6 +609,16 @@ func reconstruct(f *Func, order []*Value, kept [][]*Value) {
 		}
 		return out
 	}
+	// defBetween reports whether a kept value is defined in b from index lo
+	// up to hi.
+	defBetween := func(b *Block, lo, hi int) bool {
+		for _, d := range defs[start[b.ID]:start[b.ID+1]] {
+			if d.at >= lo && d.at < hi {
+				return true
+			}
+		}
+		return false
+	}
 	for _, b := range f.Blocks {
 		lead := 0
 		for _, v := range b.Values {
@@ -617,6 +627,12 @@ func reconstruct(f *Func, order []*Value, kept [][]*Value) {
 			}
 			lead++
 		}
+		// The state the last value had, what it was made, and where: the
+		// guards of an instruction share theirs, which reaches the same
+		// definitions at each where none is between them, and is made
+		// once for them, where it had been made again at each.
+		var lastIn, lastOut *FrameState
+		lastAt := 0
 		for _, v := range b.Values {
 			at := pos[v.ID]
 			if v.Op == OpPhi {
@@ -632,7 +648,13 @@ func reconstruct(f *Func, order []*Value, kept [][]*Value) {
 					v.Args[i] = reach(k-1, b, at)
 				}
 			}
+			if v.State != nil && v.State == lastIn && !defBetween(b, lastAt, at) {
+				v.State = lastOut
+				continue
+			}
+			lastIn, lastAt = v.State, at
 			v.State = state(v.State, b, at)
+			lastOut = v.State
 		}
 		if k := candOf(b.Control); k != 0 {
 			b.Control = reach(k-1, b, len(b.Values))
