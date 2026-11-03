@@ -36,10 +36,12 @@ func forInRounds() []string {
 }
 
 // A for...in's steps over the keys of its object's layout are native
-// code's (mir's forInStep), and its cursor a call of Go, not an exit: a
-// loop over objects of a shared layout makes about one call of Go a loop,
-// where it made one a key. Each answer is the interpreter's, for every
-// kind of cursor, the ones native code leaves to Go among them.
+// code's (mir's forInStep), and its cursor a call of Go, not an exit, made
+// without a frame where no proxy is up its object's chain (jitForInPlain):
+// a loop over objects of a shared layout makes no call of Go with a frame,
+// where it made one a key, and then one a loop. Each answer is the
+// interpreter's, for every kind of cursor, the ones native code leaves to
+// Go among them.
 func TestJITForIn(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -66,9 +68,9 @@ func jitForInChecked(t *testing.T) {
 	if err != nil || v.String().Go() != "3000" {
 		t.Fatalf("own(1000) = %v, %v", v, err)
 	}
-	// A thousand loops of three keys each: their cursors Go makes, their
-	// steps native code.
-	if n := r.jit.goCalls - before; n < 900 || n > 1500 {
-		t.Errorf("own(1000) made %d calls of Go; want about one a loop, 1000, not one a key and one a loop, 4000", n)
+	// A thousand loops of three keys each: their cursors Go makes without
+	// a frame, their steps native code.
+	if n := r.jit.goCalls - before; n > 10 {
+		t.Errorf("own(1000) made %d calls of Go with frames; want none, not one a loop, 1000, nor one a key and one a loop, 4000", n)
 	}
 }

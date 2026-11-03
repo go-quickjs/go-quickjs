@@ -20,7 +20,8 @@ import (
 // operations, Date.now, String(x) of a primitive; a write a site's cache
 // answers with a data property or an addition along its
 // transition, or an ordinary object's store it does not answer, or of an
-// array's length (jitPlainWrite). Each had cost a
+// array's length (jitPlainWrite); a for...in's cursor of an object no
+// proxy's (jitForInPlain). Each had cost a
 // call of Go its frame, its operands copied and cleared, its code pinned
 // and its learning asked, more than what the existing tiers spend on the
 // whole operation: microbench's map_set_int, map_set_string and
@@ -41,6 +42,9 @@ func (r *Runtime) jitGoCallPlain(ctx *abi.Context) bool {
 	case abi.GoCallOp:
 		// An operation Go makes (jitOpPlain).
 		return r.jitOpPlain(ctx)
+	case abi.GoCallForIn:
+		// A for...in's cursor (jitForInPlain).
+		return r.jitForInPlain(ctx)
 	case 0, abi.GoCallMethod:
 		at := 0
 		if ctx.GoOp>>abi.GoOpKindShift&0xff == abi.GoCallMethod {
@@ -222,14 +226,45 @@ func jitLeafOp(op uint8) bool {
 	return true
 }
 
+// jitForInPlain makes a for...in's cursor of the object native code passed
+// (abi.GoCallForIn) as the interpreter's for_in_start makes it
+// (startForIn), without a frame, where that runs no script and cannot
+// throw: of null or undefined, or of an object none up whose chain is a
+// proxy, whose traps would run, or a module namespace, whose bindings may
+// be uninitialized. React copies each element's props in a for...in,
+// whose start, made with the frames of the levels native code called it
+// from (jitGoCallNested), was the commonest call of Go in rendering the
+// SSR benchmark's page. It writes the cursor to the call's keep cell and
+// reports whether it made it.
+func (r *Runtime) jitForInPlain(ctx *abi.Context) bool {
+	v := jitGoArg(ctx, 0)
+	if !v.IsObject() && !v.IsNullish() {
+		return false
+	}
+	if v.IsObject() {
+		for o := v.Object(); o != nil; o = o.proto {
+			if proxyOf(o) != nil || o.class == ClassModuleNamespace {
+				return false
+			}
+		}
+	}
+	c, err := r.startForIn(v)
+	if err != nil {
+		return false
+	}
+	*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = c
+	return true
+}
+
 // jitMaybePlain reports, of a call of Go native code makes (ssa.GoCall),
 // in a few instructions, which inline where jitHostCall asks it, whether
-// jitGoCallPlain might make it: a property's write; or a call, or a method
-// call, whose function's address has its bit in jitPlainSet -- every leaf's,
-// and a few others', which jitGoCallPlain then refuses.
+// jitGoCallPlain might make it: a for...in's cursor; a property's write;
+// or a call, or a method call, whose function's address has its bit in
+// jitPlainSet -- every leaf's, and a few others', which jitGoCallPlain
+// then refuses.
 func (r *Runtime) jitMaybePlain(ctx *abi.Context) bool {
 	switch kind := ctx.GoOp >> abi.GoOpKindShift & 0xff; kind {
-	case abi.GoCallSet, abi.GoCallOp:
+	case abi.GoCallSet, abi.GoCallOp, abi.GoCallForIn:
 		return true
 	case 0, abi.GoCallMethod:
 		// The function, the call's first operand, or a method call's

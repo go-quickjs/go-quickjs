@@ -13,8 +13,9 @@ import (
 // pushes of three values, of none and of five, Array.isArray through a
 // binding (React's ba) and as a method. others calls the realm's
 // Function.prototype.call of what is no leaf: a closure, a built-in that
-// is none, a leaf on what it refuses; and pushes onto an array whose
-// prototype has an index setter, which push must call.
+// is none, a leaf on what it refuses; pushes onto an array whose
+// prototype has an index setter, which push must call; and a for...in of
+// an object whose prototype is a proxy, whose ownKeys trap must run.
 const hasOwnSetup = `
 const hop = Object.prototype.hasOwnProperty
 const RESERVED = {key: true, ref: true}
@@ -33,27 +34,29 @@ function run(n) {
 	}
 	return t + buf.join("").length
 }
-let sets = 0
+let sets = 0, traps = 0
+const under = Object.create(new Proxy({zz: 1}, {ownKeys(t) { traps++; return Reflect.ownKeys(t) }}))
 class Watched extends Array {}
 Object.defineProperty(Watched.prototype, 3, {set(v) { sets++ }, configurable: true})
 function others(n) {
 	let t = 0
-	sets = 0
+	sets = 0, traps = 0
 	const add = function (x) { return this.k + x }
 	for (let i = 0; i < n; i++) {
 		t += add.call({k: i}, 1) + Array.prototype.indexOf.call([1, 2, i], i) + hop.call(new Proxy({a: 1}, {}), "a")
 		const w = new Watched()
 		w.push(1, 2, 3)
 		t += w.push(4, 5) + w.length
+		for (const k in under) t += k.length
 	}
-	return t + "," + sets
+	return t + "," + sets + "," + traps
 }
 `
 
 // A call native code makes of hasOwnProperty, as a method or through
 // Function.prototype.call, of Array.isArray, or of push of other than one
-// value, is made
-// without a frame (jitPlainCall): warm, run leaves its code at none of
+// value, and a for...in's start, are made
+// without a frame (jitPlainCall, jitForInPlain): warm, run leaves its code at none of
 // them and makes no call of Go for them. The other calls of call and of
 // push are the built-ins'. Each answer is Node's (v26.12.1) and the
 // interpreter's.
@@ -63,7 +66,7 @@ func TestJITHasOwnAndPushCalls(t *testing.T) {
 	}
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	rounds := [][2]string{{"run(300)", "138348"}, {"others(300)", "49047,300"}}
+	rounds := [][2]string{{"run(300)", "138348"}, {"others(300)", "49647,300,300"}}
 	var srcs []string
 	for range 6 {
 		for _, rd := range rounds {
@@ -86,8 +89,8 @@ func TestJITHasOwnAndPushCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls, hosts, entries = e.ssaStats.goCalls-calls, e.ssaStats.hosts-hosts, e.ssaStats.entries-entries
-	// A call of Go with a frame for each for...in's start, and the join.
-	if entries == 0 || calls > 301 || hosts != 0 {
+	// A call of Go with a frame for the join alone.
+	if entries == 0 || calls > 1 || hosts != 0 {
 		t.Errorf("run ran natively %d times, made %d calls of Go with frames and left its code %d times", entries, calls, hosts)
 	}
 }
