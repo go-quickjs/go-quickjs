@@ -8477,6 +8477,18 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 	case ssa.OpIndexedOf:
 		c.indexedOf(v, c.guardFor(v))
 	case ssa.OpObjectOf:
+		if v.Index == ssa.ObjectOfTry {
+			// As amd64's: 0 where it is no object.
+			zero, done := c.a.NewLabel(), c.a.NewLabel()
+			if c.referenceTo(v, v.Args[0], c.enc.Object, func(cond arm64.Cond) { c.a.BCond(cond, zero) }, zero) {
+				c.a.B(done)
+			}
+			c.a.Bind(zero)
+			c.movImm(a64C, 0)
+			c.a.Bind(done)
+			c.setG(v, a64C)
+			break
+		}
 		if c.objectOf(v, c.guardFor(v)) {
 			c.setG(v, a64C)
 		}
@@ -8672,6 +8684,10 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		if v.Tries() {
 			// As amd64's: none where it finds no property.
 			none, found := c.a.NewLabel(), c.a.NewLabel()
+			if v.Args[0].Op == ssa.OpObjectOf && v.Args[0].Index == ssa.ObjectOfTry {
+				// No object: none.
+				c.a.Cbz(c.gpr(v.Args[0], a64A), none, true)
+			}
 			c.property(v, func(cond arm64.Cond) { c.a.BCond(cond, none) })
 			c.a.Bind(found)
 			c.setG(v, a64A)

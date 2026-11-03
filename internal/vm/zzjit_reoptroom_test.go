@@ -129,9 +129,11 @@ func TestJITEntriesAtStartAndLoopsOnly(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
+	// A number's property written, at a site megamorphic for it, is left
+	// to Go at an exit with no entry after it.
 	setup := `var obj={a:1,p1:1,p2:2,p3:3,p4:4,p5:5,p6:6,p7:7,p8:8,p9:9,p10:10,p11:11,p12:12};
-		function many(n){let t=0;for(let i=0;i<n;i++){const o=i&1?1:obj;
-			t=(t+(o.a|0)+obj.p1+obj.p2+obj.p3+obj.p4+obj.p5+obj.p6+obj.p7+obj.p8+obj.p9+obj.p10+obj.p11+obj.p12)|0}return t}`
+		function many(n){let t=0;for(let i=0;i<n;i++){const o=i&1?1:obj;o.a=1;
+			t=(t+(obj.a|0)+obj.p1+obj.p2+obj.p3+obj.p4+obj.p5+obj.p6+obj.p7+obj.p8+obj.p9+obj.p10+obj.p11+obj.p12)|0}return t}`
 	want := New(Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})

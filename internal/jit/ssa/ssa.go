@@ -641,6 +641,15 @@ const (
 	SubstrAt     = 2
 )
 
+// ObjectOfTry, an OpObjectOf's Index, has it give 0 where its operand is no
+// object, rather than exit: a megamorphic read's receiver (InlineCache's
+// Try), whose cell is then none, Go reading the property of whatever the
+// receiver is -- React's createElement reads a.defaultProps of an element
+// type that is a string as often as a function, and had left native code
+// at each. Two such guards, of the same operand, are one (repeated), but
+// never one and an OpObjectOf that exits.
+const ObjectOfTry = 1
+
 // isGuard reports whether an op exits when its operand is not what it needs.
 func (o Op) isGuard() bool {
 	switch o {

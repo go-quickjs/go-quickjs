@@ -11856,9 +11856,13 @@ func TestJITSSAGoesOnNatively(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
+	// A number's property written, at a site megamorphic for it, is left
+	// to Go at an exit, after which the code has no entry: the interpreter
+	// goes on to the loop's header. (A read of it is Go's from native
+	// code: ssa.ObjectOfTry.)
 	setup := `var obj={x:2};
-		function once(n){let t=0;for(let i=0;i<n;i++){const o=i===n>>1?1:obj;t=(t+(o.x|0))|0}return t}
-		function every(n){let t=0;for(let i=0;i<n;i++){const o=i&1?1:obj;t=(t+(o.x|0))|0}return t}`
+		function once(n){let t=0;for(let i=0;i<n;i++){const o=i===n>>1?1:obj;o.x=2;t=(t+(obj.x|0))|0}return t}
+		function every(n){let t=0;for(let i=0;i<n;i++){const o=i&1?1:obj;o.x=2;t=(t+(obj.x|0))|0}return t}`
 	want := New(Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})

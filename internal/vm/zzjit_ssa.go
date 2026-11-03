@@ -262,6 +262,11 @@ type jitPolySite struct {
 	// the code that did (jitEntry's ssaSerial).
 	mega   bool
 	missed []jitMissed
+	// prim marks a read that met a receiver that is a primitive, but not
+	// undefined or null, whose read throws: Go reads such a receiver's
+	// property on the read's branch of its own (ssa.PropertySite's
+	// Primitives), rather than at an exit.
+	prim bool
 }
 
 // jitMissed is a shape a property site deoptimized for, in the code of the
@@ -410,6 +415,16 @@ func (r *Runtime) jitPolySeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 		return
 	}
 	if !recv.IsObject() || int(in.A) >= len(f.cl.names) {
+		if !recv.IsObject() && !recv.IsNullish() && in.Op == bytecode.OpGetProp {
+			// A string's, a number's, a boolean's: Go reads it from
+			// native code once the code is compiled again (prim) -- an
+			// element type, React's createElement's a.defaultProps of
+			// "div" -- where it had left native code at each.
+			if p := jitPolySiteAt(e, pc); !p.prim {
+				p.prim = true
+				e.polyReopt = true
+			}
+		}
 		return
 	}
 	if in.Op == bytecode.OpGetPropThis && int(in.B) < len(f.cl.ic) && !slices.Contains(e.strSites, uint32(pc)) {
@@ -563,6 +578,17 @@ func (r *Runtime) jitSiteMegamorphic(cl *closure, e *jitEntry, pc int) bool {
 	return false
 }
 
+// jitPolyPrim reports whether e's read at pc met a primitive receiver
+// whose read does not throw (jitPolySite's prim).
+func jitPolyPrim(e *jitEntry, pc int) bool {
+	for i := range e.poly {
+		if p := &e.poly[i]; int(p.pc) == pc {
+			return p.prim
+		}
+	}
+	return false
+}
+
 // jitDeoptSeen notes in e what the property operation in at pc, which
 // deoptimized, meets that its site's cache cannot hold, its operands up to
 // sp, before the interpreter makes it: a string's method, read
@@ -638,6 +664,12 @@ func (r *Runtime) jitDeoptSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.In
 	}
 	if !recv.IsObject() || int(in.B) >= len(f.cl.ic) {
 		p.mega = true
+		if !recv.IsObject() && !recv.IsNullish() && in.Op == bytecode.OpGetProp {
+			// A primitive's read, Go's from native code in the code
+			// compiled again (jitPolySite's prim): one compile, not one to
+			// be megamorphic and another for the primitive.
+			p.prim = true
+		}
 		return
 	}
 	o := recv.Object()
@@ -10294,6 +10326,9 @@ func (fb *jitFeedback) Property(pc int) (ssa.PropertySite, bool) {
 		// megamorphic the code looks further, as V8's megamorphic loads and
 		// stores do, and leaves for Go only what it does not find.
 		site.Megamorphic = fb.megamorphic(pc, site)
+		if oe := fb.ownEntry(); oe != nil {
+			site.Primitives = jitPolyPrim(oe, pc)
+		}
 	}
 	if in := fb.fn.Code[pc]; ok && !site.Megamorphic && in.Op == bytecode.OpGetProp && int(in.B) < len(fb.cl.ic) && fb.cl.ic[in.B].fills == 0 {
 		// A read whose cache is empty, which the interpreter may have run

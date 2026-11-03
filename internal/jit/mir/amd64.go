@@ -9465,6 +9465,23 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 	case ssa.OpIndexedOf:
 		c.indexedOf(v, c.guardFor(v))
 	case ssa.OpObjectOf:
+		if v.Index == ssa.ObjectOfTry {
+			// A megamorphic read's receiver: 0 where it is no object,
+			// whose cell is then none (OpPropCell's Try).
+			zero, done := c.a.NewLabel(), c.a.NewLabel()
+			if a := v.Args[0]; a.Shadow != nil || c.origin.At(a) >= 0 {
+				jump := func(cond amd64.Cond) { c.a.Jcc(cond, zero) }
+				c.cmpWord(c.gpr(a, scratchA), c.enc.Object)
+				jump(amd64.CondNE)
+				c.sourceRef(a, jump)
+				c.a.Jmp(done)
+			}
+			c.a.Bind(zero)
+			c.movImm(scratchC, 0)
+			c.a.Bind(done)
+			c.setG(v, scratchC)
+			break
+		}
 		if c.objectOf(v, c.guardFor(v)) {
 			c.setG(v, scratchC)
 		}
@@ -9664,6 +9681,12 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 			// A megamorphic read's cell: none where it finds no
 			// property, for Go to read on a branch of its own.
 			none, found := c.a.NewLabel(), c.a.NewLabel()
+			if v.Args[0].Op == ssa.OpObjectOf && v.Args[0].Index == ssa.ObjectOfTry {
+				// No object: none.
+				r := c.gpr(v.Args[0], scratchA)
+				c.a.Op(amd64.Test, r, r, true)
+				c.a.Jcc(amd64.CondE, none)
+			}
 			c.property(v, func(cond amd64.Cond) { c.a.Jcc(cond, none) })
 			c.a.Bind(found)
 			c.setG(v, scratchA)

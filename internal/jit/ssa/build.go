@@ -2567,6 +2567,11 @@ type PropertySite struct {
 	// as V8's map checks do: the interpreter makes the operation, its cache
 	// learning the shape, and the code is compiled again for it.
 	Megamorphic bool
+	// Primitives, for a megamorphic site's read, says it has met receivers
+	// that are primitives -- strings, numbers, booleans -- whose reads Go
+	// makes on the read's branch of its own (ObjectOfTry), rather than
+	// at an exit; a read of undefined or null, which throws, exits still.
+	Primitives bool
 	// Scan, for a read whose cache is empty though it may have run -- the
 	// VM's interpreter reads a small table without filling it, which only
 	// its tree tier does -- has a receiver's own small table searched for
@@ -6973,6 +6978,11 @@ func (b *builder) instruction(blk *Block, pc int) {
 			// V8's megamorphic loads call the runtime on a miss rather
 			// than leave. A number's read is a value's so, which its uses
 			// unbox.
+			// Of a primitive too, where the site has met one: it has no
+			// cell, and Go reads its property (ObjectOfTry).
+			if site.Primitives {
+				object.Index = ObjectOfTry
+			}
 			cell := guard(OpPropCell, Source, kind, object)
 			cell.Const, cell.Index, cell.Key = ir.Value{Bits: uint64(site.Shape)}, int(site.Index), site.Key
 			f.setProperty(cell, holders, cases, nil, nil)

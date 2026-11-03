@@ -248,12 +248,14 @@ func TestJITRunOutOfCodeInInterpreter(t *testing.T) {
 		}
 		return Undefined, nil
 	}), propDefault)
+	// A proxy's property deleted is left to Go, at an exit.
 	const setup = `
+		var px = new Proxy({}, {})
 		function f(n, o, go) {
 			let t = 0
 			for (let i = 0; i < n; i++) {
 				if (i === 50) slow(go)
-				if (i === 100) t += o.x | 0
+				if (i === 100) delete px.y
 				if (i === 200) probe(go)
 				t += i
 			}
@@ -371,8 +373,10 @@ func TestJITNativeCalleeGoesOnAtLoops(t *testing.T) {
 	// of four on a CI runner.
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	// A number's property written, at a site megamorphic for it, is left
+	// to Go at an exit with no entry after it.
 	setup := `var obj={x:2};
-		function callee(n,k){let t=0;for(let i=0;i<n;i++){const o=i===k?1:obj;t=(t+(o.x|0))|0}return t}
+		function callee(n,k){let t=0;for(let i=0;i<n;i++){const o=i===k?1:obj;o.x=2;t=(t+(obj.x|0))|0}return t}
 		function caller(m){let s=0;for(let j=0;j<m;j++){s=(s+callee(100,j%5===0?j:-1))|0}return s}`
 	want := New(Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()

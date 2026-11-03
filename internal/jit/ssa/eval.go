@@ -812,6 +812,11 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 			case OpObjectOf:
 				t := a.t
 				if t.Kind != ir.Opaque || t.Bits >= uint64(len(heap.Objects)) {
+					if v.Index == ObjectOfTry {
+						// No object: none, for the cell that reads it.
+						vals[v.ID] = val{p: -1}
+						break
+					}
 					return exit(v.State, ir.ExitKind(v.Aux))
 				}
 				vals[v.ID] = val{p: int(t.Bits)}
