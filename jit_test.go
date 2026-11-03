@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/go-quickjs/go-quickjs"
 	"github.com/go-quickjs/go-quickjs/internal/hostaccess"
+	"github.com/go-quickjs/go-quickjs/internal/jit"
 	"github.com/go-quickjs/go-quickjs/internal/vm"
 )
 
@@ -115,6 +117,37 @@ func TestJITMemoryLimitOption(t *testing.T) {
 		if !errors.Is(err, quickjs.ErrMemoryLimit) {
 			t.Fatalf("over a script's limit, with %d options: %v", len(opts), err)
 		}
+	}
+}
+
+// WithJITBackground has the JIT compile in the background, and does
+// nothing without WithJIT or in a build without the JIT; the answers are
+// those of a runtime that waits for its compiles. QJS_JIT_STRESS's
+// background has every JIT runtime compile so.
+func TestJITBackgroundOption(t *testing.T) {
+	src := jitHotFunctions(50)
+	plain := quickjs.New()
+	defer plain.Close()
+	want := evalString(t, plain, src)
+	stressed := strings.Contains(os.Getenv("QJS_JIT_STRESS"), "background")
+	for _, tc := range []struct {
+		name       string
+		opts       []quickjs.Option
+		background bool
+	}{
+		{"jit in the background", []quickjs.Option{quickjs.WithJIT(), quickjs.WithJITBackground()}, jit.Supported()},
+		{"jit", []quickjs.Option{quickjs.WithJIT()}, jit.Supported() && stressed},
+		{"background without jit", []quickjs.Option{quickjs.WithJITBackground()}, false},
+		{"jit in the background, debugger", []quickjs.Option{quickjs.WithJIT(), quickjs.WithJITBackground(), quickjs.WithDebugger()}, false},
+	} {
+		r := quickjs.New(tc.opts...)
+		if got := hostaccess.VM(r).JITBackground(); got != tc.background {
+			t.Errorf("%s: compiles in the background %v, want %v", tc.name, got, tc.background)
+		}
+		if got := evalString(t, r, src); got != want {
+			t.Errorf("%s: %s, want %s", tc.name, got, want)
+		}
+		r.Close()
 	}
 }
 

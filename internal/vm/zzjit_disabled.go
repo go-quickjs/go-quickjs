@@ -40,6 +40,13 @@ func (*Runtime) JITStats() JITStats { return JITStats{} }
 // SetJITWarmUp does nothing: there is no JIT to warm up.
 func (*Runtime) SetJITWarmUp(int, int) {}
 
+// SetJITBackground does nothing: there is no JIT to compile in the
+// background.
+func (*Runtime) SetJITBackground(bool) {}
+
+// JITBackground is false: there is no JIT to compile in the background.
+func (*Runtime) JITBackground() bool { return false }
+
 func (*Runtime) initJIT(bool, int64)                                  {}
 func (*Runtime) tryJITFrame(*frame) (Value, error, bool)              { return Value{}, nil, false }
 func (*Runtime) jitCountPure()                                        {}

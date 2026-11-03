@@ -185,17 +185,24 @@ func (w *Workspace) arenaBytes() int {
 
 // CompileIn is Compile, in w.
 func CompileIn(w *Workspace, f *ssa.Func, enc abi.Encoding) (*Code, error) {
+	return CompileWith(w, f, enc, Settings())
+}
+
+// CompileWith is CompileIn, with the switches opts says, not the
+// package's variables: for a compile prepared on one goroutine and made on
+// another.
+func CompileWith(w *Workspace, f *ssa.Func, enc abi.Encoding, opts Options) (*Code, error) {
 	w.init()
 	if runtime.GOARCH == "arm64" {
-		c, err := compileARM64(w, f, enc)
-		if c != nil && Annotate {
+		c, err := compileARM64(w, f, enc, opts)
+		if c != nil && opts.Annotate {
 			// The SSA compiled, as amd64's code has it; arm64's code has
 			// no marks.
 			c.Listing = f.String()
 		}
 		return c, err
 	}
-	return compileAMD64(w, f, enc)
+	return compileAMD64(w, f, enc, opts)
 }
 
 // The core's tables, from its workspace if it has one.

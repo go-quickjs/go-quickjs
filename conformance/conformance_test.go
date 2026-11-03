@@ -38,6 +38,7 @@ import (
 
 var (
 	jitFlag    = flag.Bool("conformance.jit", false, "enable the optional native numeric tier")
+	jitBgFlag  = flag.Bool("conformance.jitbackground", false, "with -conformance.jit, compile in the background (WithJITBackground)")
 	reportPath = flag.String("conformance.report", "",
 		"write the list of failing tests to this file")
 	subdirFlag = flag.String("conformance.dir", "",
@@ -348,6 +349,9 @@ func runOne(suite *conformance.Suite, tc *conformance.Test,
 		}
 		if *jitFlag {
 			opts = append(opts, quickjs.WithJIT())
+			if *jitBgFlag {
+				opts = append(opts, quickjs.WithJITBackground())
+			}
 		}
 		return quickjs.New(opts...)
 	}

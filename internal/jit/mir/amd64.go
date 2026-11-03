@@ -169,7 +169,9 @@ type stub struct {
 }
 
 // CompileAMD64 compiles f for amd64, given the VM's value encoding.
-func CompileAMD64(f *ssa.Func, enc abi.Encoding) (*Code, error) { return compileAMD64(nil, f, enc) }
+func CompileAMD64(f *ssa.Func, enc abi.Encoding) (*Code, error) {
+	return compileAMD64(nil, f, enc, Settings())
+}
 
 // amd64GPRs and amd64XMMs are the registers amd64's allocator assigns,
 // never changed.
@@ -184,7 +186,7 @@ var (
 	}()
 )
 
-func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err error) {
+func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding, opts Options) (code *Code, err error) {
 	defer func() {
 		if v := recover(); v != nil {
 			if e, ok := v.(*AllocationError); ok {
@@ -193,12 +195,12 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 			code, err = nil, fmt.Errorf("%w: %v", ErrUnsupported, v)
 		}
 	}()
-	k, err := prepare(w, f, enc, amd64GPRs, amd64XMMs)
+	k, err := prepare(w, f, enc, opts, amd64GPRs, amd64XMMs)
 	if err != nil {
 		return nil, err
 	}
 	c := &compiler{core: k, consts: enc.ConstWords(), budget: -1}
-	if Annotate {
+	if opts.Annotate {
 		c.ann = &annotation{}
 	}
 	c.stubAt = k.ints(2 * f.NumStates())
@@ -395,7 +397,7 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 		c.a.Bind(k.label)
 		c.a.Quad(k.v)
 	}
-	lap(PhaseEmit)
+	c.lap(PhaseEmit)
 	bytes, err := c.a.Finish()
 	if err != nil {
 		return nil, err
@@ -419,9 +421,9 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 	}
 	c.finishExits()
 	marks, listing := c.finishMarks()
-	lap(PhaseEncode)
-	if Timing != nil {
-		Timing.Compiles++
+	c.lap(PhaseEncode)
+	if t := c.opts.Timing; t != nil {
+		t.Compiles++
 	}
 	return &Code{Bytes: bytes, Entries: entries, CallEntry: callAt, Resume: resumeAt, GenEntry: genAt, Text: c.a.Moved(text), Exits: c.exits,
 		Calls: c.calls, CallRefs: c.callRefs(), GoCalls: c.goCalls, Marks: marks, Listing: listing, core: c.core}, nil
@@ -5623,7 +5625,7 @@ func (c *compiler) exitTo(s *ssa.FrameState, kind uint64) {
 // returning to Go: the records are applied first (recordsTail), which a
 // caller of it makes sure they are, the collector not marking.
 func (c *compiler) exitThen(s *ssa.FrameState, kind uint64, then *amd64.Label) {
-	if then == nil && TableExits {
+	if then == nil && c.opts.TableExits {
 		// To Go, which writes the frame from the exit's description.
 		if d := c.exitDescriptor(s, kind, uint8(regLocals), uint8(regStack)); d != nil {
 			c.exits = append(c.exits, d)

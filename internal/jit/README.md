@@ -941,6 +941,40 @@ either (`loopSlow`), until Go retries it (`jitRetrySlow`).
 
 **Debugger.** Runtimes made `WithDebugger` never run native code.
 
+**Compiling in the background.** A compile is a job in three steps
+(`jitJob`, `zzjit_background.go`), as V8's concurrent compiles are:
+- the runtime's goroutine prepares it -- lowers, makes room, builds the SSA
+  from the feedback, which reads and changes the runtime's caches, and asks
+  escape analysis's questions of the VM there (`ssa.VirtualFeedback`);
+- a worker optimizes it and runs the backend, touching nothing of the
+  runtime's, a panic its refusal (`backendPanics`), nor any variable of
+  the process's: the encoding, `mir`'s switches (`mir.Options`) and the
+  hooks are as they were when the job was prepared;
+- the runtime's goroutine installs it -- `roomFor`, placing the code, and
+  what a compile does once placed -- so placing stays where nothing else of
+  the runtime's runs.
+
+A runtime made `WithJITBackground` hands the work to the process's
+workers, at most a quarter of `GOMAXPROCS`, each ending when none is
+queued, and up to `jitJobsMax` compiles of its own at once; otherwise it
+works each compile where it is made, as before. Meanwhile its entry is
+busy and pending: a first compile's function runs in the existing tiers,
+and code compiled again runs on unless invalidated. Finished compiles are
+installed at the next check -- a function's entry (`tryJITAt`), a loop's
+check (`tryJITLoop`) -- and thrown away if the entry went or the code
+deoptimized since the build. A nested tree whose function is pending keeps
+its recover (`jitTreeRecovery`): the code may arrive at the loop's check
+and be entered there. First compiles, compiles again, callees compiled
+for native callers (`jitNativeCallee`, which call them through their
+links meanwhile) and functions compiled once hot (`jitHotEntry`) go to the
+background, a first compile's lowering too (`jitLowerLater`), from a copy
+of its hints, thrown away if they change meanwhile (`jitLowering`'s
+serial); the compile it was lowered for is decided (`due`) and made at the
+check that finds it lowered. Top-level code, the callees a compile just
+installed wants (`jitWantedCallees`), which it is compiled again to call
+at once, and compiles timed or repeated (`mir.Timing`, `JITCompileRepeat`)
+are compiled where they are asked.
+
 ## Memory
 
 **Allocation.**
@@ -1044,6 +1078,11 @@ TEST262_DIR=/path/to/test262 go test -tags quickjs_jit ./conformance \
   tests reach native code. `QJS_JIT_STRESS=threshold,budget=3,deopt=7`
   compiles every function at its first call, polls every three back edges,
   and finishes every seventh poll's invocation in the interpreter.
+  `background=K` added compiles in the background, every JIT runtime, and
+  installs each compile exactly K checks after it was handed over: the
+  window between build and install, the same in every run. The
+  differential tests run so among their settings, and the background
+  tests under `-race` (`-run 'Background|Differential'`).
 
 `disasm -jit` reports a function's eligibility and IR without native support:
 

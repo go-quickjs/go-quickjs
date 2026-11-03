@@ -1745,7 +1745,7 @@ func (r *Runtime) jitRecompileLearned(cl *closure, e *jitEntry) {
 // ran out of compiles with two of its calls still made by Go, judged
 // slow, its recursion in the tree tier.
 func (r *Runtime) jitLearnedDue(cl *closure, e *jitEntry) bool {
-	if e.invalid || e.ssa == nil {
+	if e.invalid || e.ssa == nil || e.pending != nil {
 		return false
 	}
 	if !e.reoptPending() {
@@ -1917,6 +1917,11 @@ func (r *Runtime) jitICBudget(fn *bytecode.Function) int64 {
 // its sites meet settles where it is gathered, and one compile takes it
 // all. Past jitMaxDeopts it is compiled no more.
 func (r *Runtime) jitTierUp(cl *closure, e *jitEntry, work int64) bool {
+	if e.pending != nil {
+		// Compiled again in the background: the existing tiers run it
+		// until the code is installed (jitDrain).
+		return false
+	}
 	e.tierSpends++
 	if e.deopts > jitMaxDeopts {
 		return false
@@ -1928,7 +1933,14 @@ func (r *Runtime) jitTierUp(cl *closure, e *jitEntry, work int64) bool {
 		e.tierBudget, e.tierMark = max(e.tierBudget, r.jitICBudget(cl.fn)), m
 		return false
 	}
+	if r.jitInBackground(cl.fn) && r.jit.jobsFull() {
+		// Its budget spent: asked again at its next invocation.
+		return false
+	}
 	r.jitReoptimize(cl, e)
+	if e.pending != nil {
+		return false
+	}
 	if e.invalid {
 		// Not compiled again -- its code in use below, no room, a
 		// refusal: tried again once a budget more is spent.
@@ -2015,6 +2027,13 @@ func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
 		// once it has returned.
 		return
 	}
+	background := r.jitInBackground(cl.fn)
+	if e.pending != nil || background && r.jit.jobsFull() {
+		// Compiled again in the background already; or to be, once the
+		// runtime has fewer compiles there: asked again then, all it
+		// learned still to learn.
+		return
+	}
 	// The runs of its code Go is inside go on from their frames after the
 	// calls they are in, at entries of the new code: a recursion's outer
 	// runs, which would have the interpreter go on to their loops' headers,
@@ -2080,10 +2099,51 @@ func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
 	defer func() { e.busy-- }()
 	// The calls whose targets the existing tiers have met since.
 	r.jitSeedCalls(cl, e, p)
+	if background {
+		j, err := r.compileSSAPrepare(fn, cl, p, e)
+		if err != nil {
+			return
+		}
+		j.deopts, j.learned, j.install = e.deopts, learned, (*Runtime).jitReoptimized
+		r.jitSubmit(e, j)
+		return
+	}
 	code, fb, _ := r.compileSSA(fn, cl, p, e)
 	if code == nil {
 		return
 	}
+	r.jitReplaceCode(cl, e, code, fb, learned)
+}
+
+// jitReoptimized installs j, a compile again of j.e's code in the
+// background, as jitReoptimize does once it has compiled -- not if the
+// entry is no longer its function's, or its code deoptimized since j was
+// built, which it would again, at the same guard: compiled again on the
+// existing tiers' budget instead, as code that deoptimizes is. A native
+// call of the code that goes on in it later has the install wait.
+func (r *Runtime) jitReoptimized(j *jitJob) bool {
+	e := j.e
+	if !e.owned() || e.deopts != j.deopts {
+		r.jit.bgDiscarded++
+		return true
+	}
+	if r.jit.otherwiseInUse(e) {
+		return false
+	}
+	code, fb, _ := r.compileSSAFinish(j)
+	if code != nil {
+		r.jitReplaceCode(j.cl, e, code, fb, j.learned)
+	}
+	return true
+}
+
+// jitReplaceCode is jitReoptimize's end: code, compiled again for e with
+// fb, replaces e's, learned saying whether it has decided calls since its
+// last compile.
+func (r *Runtime) jitReplaceCode(cl *closure, e *jitEntry, code *jit.SSACode, fb *jitFeedback, learned bool) {
+	fn := cl.fn
+	e.busy++
+	defer func() { e.busy-- }()
 	defer r.jitWantedCallees(e, fb)
 	old := e.ssa
 	// What the old code holds, which a call of Go suspended in it needs.
@@ -2147,12 +2207,8 @@ func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
 // prototypes it compares receivers' with, to be kept alive, and the sites
 // whose caches were empty.
 func (r *Runtime) compileSSA(fn *bytecode.Function, cl *closure, p *ir.Program, e *jitEntry) (*jit.SSACode, *jitFeedback, error) {
-	this := 0
-	if p.This {
-		this = 1
-	}
-	if len(p.Globals) != 0 || p.Locals != fn.LocalCount+len(fn.Upvalues)+this {
-		return nil, nil, fmt.Errorf("%w: a program of globals, or of another frame", jitRefused)
+	if err := jitFrameProgram(fn, p); err != nil {
+		return nil, nil, err
 	}
 	if e != nil && cl != nil {
 		r.jitSeenFeedback(cl, e)
@@ -2176,6 +2232,46 @@ func (r *Runtime) compileSSA(fn *bytecode.Function, cl *closure, p *ir.Program, 
 			r.jitCompileAgain(fn, cl, p, e, keepLimit)
 		}
 		jitRepeatCycles.Add(jitGCCycles() - c0)
+	}
+	return code, fb, err
+}
+
+// jitFrameProgram refuses a program compileSSA does not compile.
+func jitFrameProgram(fn *bytecode.Function, p *ir.Program) error {
+	this := 0
+	if p.This {
+		this = 1
+	}
+	if len(p.Globals) != 0 || p.Locals != fn.LocalCount+len(fn.Upvalues)+this {
+		return fmt.Errorf("%w: a program of globals, or of another frame", jitRefused)
+	}
+	return nil
+}
+
+// compileSSAPrepare is compileSSA's first step, for a compile in the
+// background (jitSubmit): the job, built, or the refusal.
+func (r *Runtime) compileSSAPrepare(fn *bytecode.Function, cl *closure, p *ir.Program, e *jitEntry) (*jitJob, error) {
+	if err := jitFrameProgram(fn, p); err != nil {
+		return nil, err
+	}
+	if e != nil && cl != nil {
+		r.jitSeenFeedback(cl, e)
+	}
+	r.jit.compileBegin()
+	defer r.jit.compileEnd()
+	return r.jitPrepare(fn, cl, p, e, jitKeepLimit)
+}
+
+// compileSSAFinish is compileSSA's last step, for a compile in the
+// background, its work done: compileSSA's result. A function the backend
+// found to keep more cells live at once than the context has is built
+// again, and compiled here, with no more than that.
+func (r *Runtime) compileSSAFinish(j *jitJob) (*jit.SSACode, *jitFeedback, error) {
+	r.jit.compileBegin()
+	defer r.jit.compileEnd()
+	code, fb, err := r.jitInstall(j)
+	if errors.Is(err, mir.ErrKeeps) {
+		code, fb, err = r.compileSSAKeeping(j.fn, j.cl, j.p, j.e, abi.MaxKeeps)
 	}
 	return code, fb, err
 }
@@ -2206,17 +2302,45 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 // which takes what the work found into the feedback and places the code.
 type jitJob struct {
 	fn        *bytecode.Function
+	cl        *closure
 	p         *ir.Program
 	e         *jitEntry
 	fb        *jitFeedback
 	keepLimit int
 	// w is the compile's workspace, the process's, given back once its
-	// code is placed, and f the function built in it.
+	// code is placed (nil then), and f the function built in it.
 	w *jit.Workspace
 	f *ssa.Func
-	// mc is the backend's code, or err its refusal.
-	mc  *mir.Code
-	err error
+	// enc and opts are the encoding and the backend's switches the compile
+	// is made with, and timing and optimized the timing (mir.Timing) and the
+	// hook (jitSSAOptimized) it reports to, as they were when it was
+	// prepared: a worker reads no variable a test or a host may set
+	// meanwhile.
+	enc       abi.Encoding
+	opts      mir.Options
+	timing    *mir.Times
+	optimized func(*bytecode.Function, *ssa.Func)
+	// mc is the backend's code, or err its refusal; panicked marks a
+	// refusal a worker made of a panic (jitJob.run), and allocErr is the
+	// panic, where it was a failed check of the register allocation's.
+	mc       *mir.Code
+	err      error
+	panicked bool
+	allocErr *mir.AllocationError
+	// What a compile in the background (jitSubmit) needs besides: its
+	// state, which the worker and the runtime's goroutine hand it over by,
+	// and done, closed once the worker is finished with it; how many
+	// checks it has waited (jitDrain); what installs it on the runtime's
+	// goroutine, reporting false to be asked again at a later check
+	// (jitCompiled, jitReoptimized); and, for a compile again, the
+	// entry's deoptimizations when it was built and whether it has
+	// decided calls (jitReoptimize's learned).
+	state   atomic.Int32
+	done    chan struct{}
+	checks  int
+	install func(*Runtime, *jitJob) bool
+	deopts  uint16
+	learned bool
 }
 
 // jitPrepare is a compile's first step: p built from cl's caches, the
@@ -2233,7 +2357,8 @@ func (r *Runtime) jitPrepare(fn *bytecode.Function, cl *closure, p *ir.Program, 
 		jit.PutWorkspace(w)
 		return nil, fmt.Errorf("%w: %v", jitRefused, err)
 	}
-	return &jitJob{fn: fn, p: p, e: e, fb: fb, keepLimit: keepLimit, w: w, f: f}, nil
+	return &jitJob{fn: fn, cl: cl, p: p, e: e, fb: fb, keepLimit: keepLimit, w: w, f: f,
+		enc: jitEncoding, opts: mir.Settings(), timing: mir.Timing, optimized: jitSSAOptimized}, nil
 }
 
 // work is a compile's second step: the function optimized and compiled
@@ -2243,13 +2368,13 @@ func (r *Runtime) jitPrepare(fn *bytecode.Function, cl *closure, p *ir.Program, 
 // (ssa.VirtualFeedback) -- so that it may run on another goroutine.
 func (j *jitJob) work() {
 	ssa.Optimize(j.f)
-	if t := mir.Timing; t != nil {
+	if t := j.timing; t != nil {
 		t.Lap(mir.PhaseOptimize)
 	}
-	if jitSSAOptimized != nil {
-		jitSSAOptimized(j.fn, j.f)
+	if j.optimized != nil {
+		j.optimized(j.fn, j.f)
 	}
-	j.mc, j.err = mir.CompileIn(&j.w.MIR, j.f, jitEncoding)
+	j.mc, j.err = mir.CompileWith(&j.w.MIR, j.f, j.enc, j.opts)
 }
 
 // jitInstall is a compile's last step: what the work found taken into the
@@ -2257,9 +2382,23 @@ func (j *jitJob) work() {
 // is to hold then (roomFor), its code and what describes it included:
 // jit.ErrCodeBudget otherwise. It gives the job's workspace back.
 func (r *Runtime) jitInstall(j *jitJob) (*jit.SSACode, *jitFeedback, error) {
-	defer jit.PutWorkspace(j.w)
+	defer func() {
+		jit.PutWorkspace(j.w)
+		j.w = nil
+	}()
 	fn, p, e, fb, f, keepLimit := j.fn, j.p, j.e, j.fb, j.f, j.keepLimit
 	s := r.jit
+	if j.allocErr != nil {
+		// A failed check of the allocation's (mir.CheckAllocations, which
+		// tests set) ends the run as it does a compile on the spot.
+		panic(j.allocErr)
+	}
+	if j.panicked {
+		// A worker's refusal of a panic of the compiler's, whose function
+		// is as the panic left it: a bug, which the tests look for.
+		s.backendPanics++
+		return nil, nil, fmt.Errorf("%w: %v", jitRefused, j.err)
+	}
 	// The pools' roots and prototypes escape analysis took, which the
 	// objects it does not make are made with at an exit.
 	fb.keepVirtuals(f.VirtualAsked)
@@ -9453,11 +9592,14 @@ func (r *Runtime) jitNativeCallee(cl *closure) *jitEntry {
 		// it: it warms up as any function does (jitCalledOften).
 		return nil
 	}
-	e := r.jitFor(cl)
-	if e == nil || e.ssa != nil || e.deferred || e.calleeRefused {
+	background := r.jitInBackground(fn)
+	e := r.jitCompileForIn(fn, cl, jitLowerSSA, background)
+	if e == nil || e.ssa != nil || e.deferred || e.calleeRefused || e.pending != nil {
 		if e != nil && e.ssa != nil {
 			return e
 		}
+		// Compiled in the background (jitSubmit): its code is the
+		// callers' once installed, through its link.
 		return nil
 	}
 	p, err := r.jitLower(fn, jitLowerInline)
@@ -9478,7 +9620,54 @@ func (r *Runtime) jitNativeCallee(cl *closure) *jitEntry {
 		return nil
 	}
 	r.jitSeedCalls(cl, e, p)
+	if background {
+		if r.jit.jobsFull() {
+			// Asked again at a later call, once the runtime has fewer
+			// compiles in the background.
+			return nil
+		}
+		j, err := r.compileSSAPrepare(fn, cl, p, e)
+		if err != nil {
+			e.calleeRefused = true
+			return nil
+		}
+		// Its native callers call it through its link, which leaves for Go
+		// to run it until the code is installed (jitCalleeCompiled).
+		j.install = (*Runtime).jitCalleeCompiled
+		r.jitSubmit(e, j)
+		return e.calleeCode()
+	}
 	code, fb, err := r.compileSSA(fn, cl, p, e)
+	return r.jitCalleeCode(fn, p, e, code, fb, err)
+}
+
+// calleeCode is e, if it has code (a compile in the background installed
+// at once, QJS_JIT_STRESS's background=0), or nil.
+func (e *jitEntry) calleeCode() *jitEntry {
+	if e.ssa != nil {
+		return e
+	}
+	return nil
+}
+
+// jitCalleeCompiled installs j, a callee's compile for its native callers
+// in the background, as jitNativeCallee does once it has compiled -- not if
+// its entry is no longer its function's.
+func (r *Runtime) jitCalleeCompiled(j *jitJob) bool {
+	if !j.e.owned() {
+		r.jit.bgDiscarded++
+		return true
+	}
+	code, fb, err := r.compileSSAFinish(j)
+	r.jitCalleeCode(j.fn, j.p, j.e, code, fb, err)
+	return true
+}
+
+// jitCalleeCode is jitNativeCallee's end: e's compile of p for native
+// callers made code, with fb, or refused it, err saying why. It returns e,
+// or nil for a refusal.
+func (r *Runtime) jitCalleeCode(fn *bytecode.Function, p *ir.Program, e *jitEntry, code *jit.SSACode, fb *jitFeedback, err error) *jitEntry {
+	s := r.jit
 	if code == nil {
 		if errors.Is(err, jit.ErrCodeBudget) {
 			// It may fit once the cache has released code (jitForFunction).
@@ -9523,7 +9712,9 @@ func (r *Runtime) jitWantedCallees(e *jitEntry, fb *jitFeedback) {
 		return
 	}
 	for _, cl := range fb.wanted {
-		if r.jitNativeCallee(cl) != nil {
+		// Or compiled in the background: e is compiled again once it has
+		// spent a budget, by when the callee's code is likely installed.
+		if r.jitNativeCallee(cl) != nil || r.jit.jitPending(cl.fn) {
 			e.upgradeReopt = true
 		}
 	}
@@ -9582,6 +9773,9 @@ type jitLowering struct {
 	// (treeSeen) when they were last taken into hints.
 	hints    jitcompile.Hints
 	treeAdds int32
+	// serial counts its relowerings (relower): a lowering made in the
+	// background from hints a later relowering replaced is stale.
+	serial uint32
 	// startOnly is jitcompile.StartOnly's answer for the function, once
 	// asked by a call of it: 1 for no, 2 for yes.
 	startOnly uint8
@@ -9626,6 +9820,34 @@ func (r *Runtime) jitLower(fn *bytecode.Function, kind jitLowerKind) (*ir.Progra
 		// Before the runtime has any state, which no compile is.
 		s = &jitState{}
 	}
+	l := s.loweringFresh(fn)
+	if !l.done[kind] {
+		l.progs[kind], l.errs[kind] = jitLowerWith(fn, kind, l.hints)
+		l.done[kind] = true
+		n := l.progs[kind].Footprint()
+		l.bytes += n
+		s.lowerBytes += n
+	}
+	return l.progs[kind], l.errs[kind]
+}
+
+// jitLowerWith is fn's program lowered as kind says, with hints. It reads
+// only fn, which runtimes share, and hints: a worker may run it.
+func jitLowerWith(fn *bytecode.Function, kind jitLowerKind, hints jitcompile.Hints) (*ir.Program, error) {
+	switch kind {
+	case jitLowerInline:
+		return jitcompile.LowerSSAInlineWith(fn, hints)
+	case jitLowerForward:
+		return jitcompile.LowerSSAForwardWith(fn, hints)
+	case jitLowerHot:
+		return jitcompile.LowerSSAHotWith(fn, hints)
+	}
+	return jitcompile.LowerSSAWith(fn, hints)
+}
+
+// loweringFresh is fn's lowering (lowering), its hints taking in the
+// additions its tree has seen since it last looked.
+func (s *jitState) loweringFresh(fn *bytecode.Function) *jitLowering {
 	l := s.lowering(fn)
 	if t := (*tree)(atomic.LoadPointer(&fn.VMCode)); t != nil {
 		// The additions the tree tier has seen add strings, Go's from the
@@ -9649,23 +9871,7 @@ func (r *Runtime) jitLower(fn *bytecode.Function, kind jitLowerKind) (*ir.Progra
 			}
 		}
 	}
-	if !l.done[kind] {
-		switch kind {
-		case jitLowerSSA:
-			l.progs[kind], l.errs[kind] = jitcompile.LowerSSAWith(fn, l.hints)
-		case jitLowerInline:
-			l.progs[kind], l.errs[kind] = jitcompile.LowerSSAInlineWith(fn, l.hints)
-		case jitLowerForward:
-			l.progs[kind], l.errs[kind] = jitcompile.LowerSSAForwardWith(fn, l.hints)
-		case jitLowerHot:
-			l.progs[kind], l.errs[kind] = jitcompile.LowerSSAHotWith(fn, l.hints)
-		}
-		l.done[kind] = true
-		n := l.progs[kind].Footprint()
-		l.bytes += n
-		s.lowerBytes += n
-	}
-	return l.progs[kind], l.errs[kind]
+	return l
 }
 
 // jitStringAddSeen notes an exit at pc, an addition in e's code that met a
@@ -9712,6 +9918,7 @@ func (s *jitState) relower(l *jitLowering) {
 		l.done[k], l.progs[k], l.errs[k] = false, nil, nil
 	}
 	l.inlinable = 0
+	l.serial++
 }
 
 // jitOperand is the value of an operand of p's instruction in f's frame as

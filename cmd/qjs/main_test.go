@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"github.com/go-quickjs/go-quickjs/internal/hostaccess"
 	"github.com/go-quickjs/go-quickjs/internal/jit"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -771,6 +773,34 @@ func TestJITFlag(t *testing.T) {
 	warned := strings.Contains(errOut, "--jit has no effect")
 	if warned == jit.Supported() {
 		t.Fatalf("supported %v, warned %v: %q", jit.Supported(), warned, errOut)
+	}
+}
+
+// --jit compiles in the background, as the command line's default, and
+// --no-jit-background waits for each compile instead -- unless
+// QJS_JIT_STRESS's background has every JIT runtime compile so.
+func TestJITBackgroundFlag(t *testing.T) {
+	stressed := strings.Contains(os.Getenv("QJS_JIT_STRESS"), "background")
+	for _, tc := range []struct {
+		args       []string
+		background bool
+	}{
+		{[]string{"--jit", "-e", "1"}, jit.Supported()},
+		{[]string{"--jit", "--no-jit-background", "-e", "1"}, jit.Supported() && stressed},
+		{[]string{"--no-jit-background", "-e", "1"}, false},
+	} {
+		opts, err := parseArgs(tc.args, io.Discard)
+		if err != nil {
+			t.Fatalf("%q: %v", tc.args, err)
+		}
+		r, err := newRuntime(opts)
+		if err != nil {
+			t.Fatalf("%q: %v", tc.args, err)
+		}
+		if got := hostaccess.VM(r).JITBackground(); got != tc.background {
+			t.Errorf("%q: compiles in the background %v, want %v", tc.args, got, tc.background)
+		}
+		r.Close()
 	}
 }
 

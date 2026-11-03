@@ -135,7 +135,9 @@ type a64Stub struct {
 }
 
 // CompileARM64 compiles f for arm64, given the VM's value encoding.
-func CompileARM64(f *ssa.Func, enc abi.Encoding) (*Code, error) { return compileARM64(nil, f, enc) }
+func CompileARM64(f *ssa.Func, enc abi.Encoding) (*Code, error) {
+	return compileARM64(nil, f, enc, Settings())
+}
 
 // arm64GPRs and arm64FPRs are the registers arm64's allocator assigns,
 // never changed.
@@ -152,7 +154,7 @@ var arm64GPRs, arm64FPRs = func() (gprs, fprs []int) {
 	return gprs, fprs
 }()
 
-func compileARM64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err error) {
+func compileARM64(w *Workspace, f *ssa.Func, enc abi.Encoding, opts Options) (code *Code, err error) {
 	defer func() {
 		if v := recover(); v != nil {
 			if e, ok := v.(*AllocationError); ok {
@@ -161,7 +163,7 @@ func compileARM64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 			code, err = nil, fmt.Errorf("%w: %v", ErrUnsupported, v)
 		}
 	}()
-	k, err := prepare(w, f, enc, arm64GPRs, arm64FPRs)
+	k, err := prepare(w, f, enc, opts, arm64GPRs, arm64FPRs)
 	if err != nil {
 		return nil, err
 	}
@@ -314,15 +316,15 @@ func compileARM64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 	for _, g := range c.goFails {
 		g.st.Fail = int32(c.a.Offset(g.to) - c.a.Offset(g.back))
 	}
-	lap(PhaseEmit)
+	c.lap(PhaseEmit)
 	bytes, err := c.a.Finish()
 	if err != nil {
 		return nil, err
 	}
 	c.finishExits()
-	lap(PhaseEncode)
-	if Timing != nil {
-		Timing.Compiles++
+	c.lap(PhaseEncode)
+	if t := c.opts.Timing; t != nil {
+		t.Compiles++
 	}
 	return &Code{Bytes: bytes, Entries: entries, CallEntry: callAt, Resume: resumeAt, GenEntry: genAt, Text: len(bytes), Exits: c.exits,
 		Calls: c.calls, CallRefs: c.callRefs(), GoCalls: c.goCalls, core: c.core}, nil
@@ -563,7 +565,7 @@ func (c *a64Compiler) exitTo(s *ssa.FrameState, kind uint64) {
 // exitThen is exitTo, going on at then, if it is not nil, instead of
 // returning to Go, as amd64's does.
 func (c *a64Compiler) exitThen(s *ssa.FrameState, kind uint64, then *arm64.Label) {
-	if then == nil && TableExits {
+	if then == nil && c.opts.TableExits {
 		if d := c.exitDescriptor(s, kind, uint8(a64Locals), uint8(a64Stack)); d != nil {
 			c.exits = append(c.exits, d)
 			c.a.MovAddr(a64A, uint64(uintptr(unsafe.Pointer(d))))

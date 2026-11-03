@@ -73,10 +73,3 @@ func (t *Times) Lap(p Phase) {
 	t.Ticks[p] += now - t.last
 	t.last = now
 }
-
-// lap ends phase p of the compile being timed, if one is.
-func lap(p Phase) {
-	if t := Timing; t != nil {
-		t.Lap(p)
-	}
-}

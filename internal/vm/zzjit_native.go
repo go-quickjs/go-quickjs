@@ -70,6 +70,10 @@ const jitBuilt = true
 
 type jitFields struct {
 	jitEnabled bool
+	// jitBackground is SetJITBackground's: compiles made on the process's
+	// workers (jitSubmit), as under QJS_JIT_STRESS's background
+	// (jitInBackground).
+	jitBackground bool
 	// jitCallThreshold is how many invocations' worth of a function's
 	// budget the existing tiers spend before it is compiled, or compiled
 	// again (jitInvocationsForMaglev), and jitICThreshold what a change of
@@ -105,12 +109,19 @@ type jitFields struct {
 //	           exit, from wherever native code had got to
 //	check      have every compile check its register allocation, and panic
 //	           where it is wrong (mir.CheckAllocations)
+//	background=K
+//	           compile in the background (jitSubmit), WithJITBackground or
+//	           not, and install each compile exactly K checks after it was
+//	           handed over (jitDrain), waiting for it if need be: 0 at once
 //
 // It is read once, as QJS_NOTREE is, and each runtime takes a copy.
 type jitStressConfig struct {
-	threshold bool
-	budget    uint16
-	deopt     uint16
+	threshold  bool
+	background bool
+	budget     uint16
+	deopt      uint16
+	// checks is background's K.
+	checks uint16
 }
 
 var jitStressDefault = parseJITStress(os.Getenv("QJS_JIT_STRESS"))
@@ -127,6 +138,8 @@ func parseJITStress(spec string) jitStressConfig {
 			c.budget = uint16(n)
 		case "deopt":
 			c.deopt = uint16(n)
+		case "background":
+			c.background, c.checks = true, uint16(n)
 		case "check":
 			mir.CheckAllocations = true
 		}
@@ -148,6 +161,19 @@ func (r *Runtime) JITStats() JITStats {
 		Held: int64(s.held()), Budget: int64(r.jitBudget()), Evicted: s.evicted, Refused: s.refusedRoom,
 		Discarded: s.discarded, Reoptimized: s.reoptimized, Inlined: s.inlined, InlinedCode: s.inlinedCode,
 		Pooled: jit.PooledWorkspaceBytes()}
+}
+
+// SetJITBackground has the JIT compile on the process's workers, the
+// runtime's goroutine running on meanwhile, and install the code once it is
+// done; otherwise the runtime waits for each compile. It is set before the
+// runtime runs anything. It is not a field of Config: a field more there
+// changes New's code, and package vm's every function after it moves.
+func (r *Runtime) SetJITBackground(on bool) { r.jitBackground = on }
+
+// JITBackground reports whether this runtime runs the JIT and compiles in
+// the background (SetJITBackground, QJS_JIT_STRESS's background).
+func (r *Runtime) JITBackground() bool {
+	return r.jitEnabled && (r.jitBackground || r.jitStress.background)
 }
 
 // JITCacheCounts reports what the JIT's cache dropped in this runtime and
@@ -525,6 +551,15 @@ type jitEntry struct {
 	// meanwhile to make room (makeRoom).
 	bytes int
 	busy  uint8
+	// pending is the compile of its function in the background
+	// (jitSubmit), which holds it busy until it is installed or thrown
+	// away (jitDrain); nil for none. due marks an entry warming whose
+	// compile is decided, its budget spent, and waits for its lowering in
+	// the background (jitLowerLater): compiled at the check that finds it
+	// lowered, its budget and feedback not judged again, as a compile on
+	// the spot would have been made then.
+	pending *jitJob
+	due     bool
 	// ssa is the new pipeline's code, when it compiled the function, and
 	// ssaShapes the shapes its guards compare objects with, which it holds
 	// by address and this keeps alive.
@@ -1226,6 +1261,17 @@ type jitState struct {
 	clockFrom, compileFrom time.Time
 	compileTime            time.Duration
 	compiling              int
+	// jobs are the compiles handed to the process's workers (jitSubmit)
+	// and not yet installed or thrown away, in the order handed over;
+	// draining marks a drain under way (jitDrain). bgSubmitted counts the
+	// compiles handed over, bgDiscarded those thrown away at their install.
+	jobs                     []*jitJob
+	draining                 bool
+	bgSubmitted, bgDiscarded uint64
+	// lowerings are the lowerings handed to the workers for first compiles
+	// in the background (jitLowerLater), and bgLowered counts them.
+	lowerings []*jitLowerTask
+	bgLowered uint64
 }
 
 // Only selected own reference fields are prepared. The receiver bound keeps
@@ -1259,7 +1305,9 @@ func (r *Runtime) jitTreeRecovery(f *frame) bool {
 		return false
 	}
 	e := r.jit.hint(f.cl)
-	return e == nil || e.deferred || e.warming || e.ssa != nil
+	// One compiled in the background may have its code installed at any
+	// check, its loop's included, and enter it there (jitDrain).
+	return e == nil || e.deferred || e.warming || e.ssa != nil || e.pending != nil
 }
 
 // jitCodeBytes is the machine code the JIT's entries hold. What the JIT
@@ -1857,6 +1905,12 @@ func (s *jitState) admit(fn *bytecode.Function) bool {
 	return true
 }
 
+// admits reports whether admit would admit fn now, counting no ask.
+func (s *jitState) admits(fn *bytecode.Function) bool {
+	g, ok := s.ghosts[uintptr(unsafe.Pointer(fn))]
+	return !ok || g.asks+1 >= 1<<g.evictions
+}
+
 // settle has the JIT hold no more than its budget once a compile has
 // ended.
 func (s *jitState) settle() {
@@ -2278,6 +2332,7 @@ func (r *Runtime) releaseJIT() {
 	if r.jit == nil {
 		return
 	}
+	r.jit.abandonJobs()
 	for key, e := range r.jit.cache {
 		r.jit.dropEntry(key, e)
 	}
@@ -2342,6 +2397,13 @@ func (r *Runtime) jitForFunction(fn *bytecode.Function, cl *closure) *jitEntry {
 
 // jitCompileFor is jitForFunction, the program lowered as kind says.
 func (r *Runtime) jitCompileFor(fn *bytecode.Function, cl *closure, kind jitLowerKind) *jitEntry {
+	return r.jitCompileForIn(fn, cl, kind, false)
+}
+
+// jitCompileForIn is jitCompileFor, compiled in the background if
+// background says (jitSubmit): the entry returned then holds no code yet,
+// and its function runs in the existing tiers until it does.
+func (r *Runtime) jitCompileForIn(fn *bytecode.Function, cl *closure, kind jitLowerKind, background bool) *jitEntry {
 	if r.jit != nil && r.jit.unavailable {
 		return nil
 	}
@@ -2353,12 +2415,20 @@ func (r *Runtime) jitCompileFor(fn *bytecode.Function, cl *closure, kind jitLowe
 			if !e.warming && (!e.deferred || e.generation == r.jit.generation) {
 				return e
 			}
+			if background && r.jit.jobsFull() {
+				// Compiled in the background, once the runtime has fewer
+				// compiles there: asked again then.
+				return nil
+			}
 			invoked, calls = e.invoked, e.calls
 			// Deferred for a generation past, or warming up (jitWarmFor):
 			// compiled now, its budget spent or a native caller's call
 			// asking for it, as before it had an entry.
 			r.jit.forget(key, e)
 		}
+	}
+	if background && r.jit != nil && r.jit.jobsFull() {
+		return nil
 	}
 	if r.jit != nil && cl != nil && !r.jit.admit(fn) {
 		// Dropped to make room before: compiled once it has asked enough.
@@ -2409,43 +2479,92 @@ func (r *Runtime) jitCompileFor(fn *bytecode.Function, cl *closure, kind jitLowe
 				e.hostOnly = true
 			}
 		}
-	} else {
-		if cl != nil {
-			// The calls its caches have met.
-			r.jitSeedCalls(cl, e, p)
+		return r.jitRefusedEntry(key, fn, cl, e, false)
+	}
+	if cl != nil {
+		// The calls its caches have met.
+		r.jitSeedCalls(cl, e, p)
+	}
+	if background {
+		j, err := r.compileSSAPrepare(fn, cl, p, e)
+		if err != nil {
+			return r.jitFirstCode(key, fn, cl, p, e, nil, nil, err, false)
 		}
-		code, fb, err := r.compileSSA(fn, cl, p, e)
-		switch {
-		case code != nil:
-			e.setSSA(s, fn, p, code, fb)
-			s.compiled++
+		// Held while it compiles, as an entry whose code is to come, in
+		// the room made for it above: its function's calls find it, and
+		// run in the existing tiers until the code is installed.
+		s.remember(key, e)
+		j.install = (*Runtime).jitCompiled
+		r.jitSubmit(e, j)
+		return e
+	}
+	code, fb, err := r.compileSSA(fn, cl, p, e)
+	return r.jitFirstCode(key, fn, cl, p, e, code, fb, err, false)
+}
+
+// jitCompiled installs j, a first compile in the background, as
+// jitCompileForIn does once it has compiled -- not if its entry is no
+// longer the cache's.
+func (r *Runtime) jitCompiled(j *jitJob) bool {
+	key := weak.Make(j.fn)
+	if r.jit.cache[key] != j.e {
+		r.jit.bgDiscarded++
+		return true
+	}
+	code, fb, err := r.compileSSAFinish(j)
+	r.jitFirstCode(key, j.fn, j.cl, j.p, j.e, code, fb, err, true)
+	return true
+}
+
+// jitFirstCode is jitCompileForIn's end: e's compile of p made code, with
+// fb, or refused it, err saying why. held says the cache holds e already,
+// as it holds an entry compiled in the background.
+func (r *Runtime) jitFirstCode(key weak.Pointer[bytecode.Function], fn *bytecode.Function, cl *closure, p *ir.Program, e *jitEntry, code *jit.SSACode, fb *jitFeedback, err error, held bool) *jitEntry {
+	s := r.jit
+	switch {
+	case code != nil:
+		e.setSSA(s, fn, p, code, fb)
+		s.compiled++
+		if !held {
 			s.remember(key, e)
-			// Not dropped by the room its own code makes: it is what is
-			// returned, to be run.
-			e.busy++
-			s.settle()
-			e.busy--
-			r.jitWantedCallees(e, fb)
-			return e
-		case errors.Is(err, jit.ErrUnavailable):
-			s.unavailable = true
+		}
+		// Not dropped by the room its own code makes: it is what is
+		// returned, to be run.
+		e.busy++
+		s.settle()
+		e.busy--
+		r.jitWantedCallees(e, fb)
+		return e
+	case errors.Is(err, jit.ErrUnavailable):
+		s.unavailable = true
+		if held {
+			s.forget(key, e)
+		} else {
 			s.disown(e)
-			return nil
-		case err != nil && !errors.Is(err, jit.ErrCodeBudget):
-			e.refusal = err.Error()
-		case errors.Is(err, jit.ErrCodeBudget):
-			// It may fit once the cache has released code. Until then the
-			// cached refusal spares a compile at every warm-up, and holds
-			// no more than itself: the program lowered for it, which the
-			// retry lowers again, would take the room it is remembered in
-			// -- with the young code holding the rest, no refusal was
-			// remembered, and each warm-up compiled again.
-			e.deferred, e.generation = true, s.generation
-			if l := s.lowered[key]; l != nil {
-				s.dropLowering(key, l)
-			}
+		}
+		return nil
+	case err != nil && !errors.Is(err, jit.ErrCodeBudget):
+		e.refusal = err.Error()
+	case errors.Is(err, jit.ErrCodeBudget):
+		// It may fit once the cache has released code. Until then the
+		// cached refusal spares a compile at every warm-up, and holds
+		// no more than itself: the program lowered for it, which the
+		// retry lowers again, would take the room it is remembered in
+		// -- with the young code holding the rest, no refusal was
+		// remembered, and each warm-up compiled again.
+		e.deferred, e.generation = true, s.generation
+		if l := s.lowered[key]; l != nil {
+			s.dropLowering(key, l)
 		}
 	}
+	return r.jitRefusedEntry(key, fn, cl, e, held)
+}
+
+// jitRefusedEntry is jitCompileForIn's end for e, an entry with no code,
+// cl's function's, if cl is not nil: the refusal remembered, or nil. held
+// says the cache holds e already.
+func (r *Runtime) jitRefusedEntry(key weak.Pointer[bytecode.Function], fn *bytecode.Function, cl *closure, e *jitEntry, held bool) *jitEntry {
+	s := r.jit
 	if fn.TopLevel {
 		// Top-level code runs once: a refusal is its closure's, for good
 		// unless it is the budget's, not the cache's -- a loop evaluating
@@ -2458,17 +2577,25 @@ func (r *Runtime) jitCompileFor(fn *bytecode.Function, cl *closure, kind jitLowe
 		if l := s.lowered[key]; l != nil {
 			s.dropLowering(key, l)
 		}
-		s.disown(e)
+		if held {
+			s.forget(key, e)
+		} else {
+			s.disown(e)
+		}
 		s.settle()
 		return nil
 	}
-	if !s.makeRoom(jitEntryFixed + s.hintGrowth()) {
-		// No room to remember the refusal in, for now.
-		s.disown(e)
-		s.settle()
-		return nil
+	if held {
+		s.account(e)
+	} else {
+		if !s.makeRoom(jitEntryFixed + s.hintGrowth()) {
+			// No room to remember the refusal in, for now.
+			s.disown(e)
+			s.settle()
+			return nil
+		}
+		s.remember(key, e)
 	}
-	s.remember(key, e)
 	// Within the budget, as after a compile that places its code -- but
 	// for e.
 	e.busy++
@@ -2604,6 +2731,12 @@ func (s *jitState) backEdgeBudget() int {
 // The existing back-edge interrupt budget supplies coarse work feedback.
 // Promotion starts at the completed branch's target, never at function entry.
 func (r *Runtime) tryJITLoop(f *frame, pc uint32, sp int, fullBudget bool) (Value, error, bool) {
+	if s := r.jit; s != nil && s.inFlight() {
+		// The back-edge check, at which compiles in the background that
+		// are done are installed: a loop's, which it may enter now, and
+		// those of functions called again only natively.
+		r.jitDrain()
+	}
 	forced := false
 	if s := r.jit; s != nil && s.forcedCheck {
 		// The check jitGoOn made due at once: whatever frame's back edge
@@ -2640,6 +2773,11 @@ func (r *Runtime) tryJITLoop(f *frame, pc uint32, sp int, fullBudget bool) (Valu
 // V8's MaybeOptimizeFrame has it: "OSR kicks in only once we've
 // previously decided to tier up, but we are still in a lower-tier frame".
 func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, error, bool) {
+	if s := r.jit; s != nil && s.inFlight() {
+		// Compiles in the background that are done, installed: its own,
+		// if it is one of them.
+		r.jitDrain()
+	}
 	e := r.jit.hint(f.cl)
 	if e == nil || e.ssa != nil && e.ssa.Size() == 0 {
 		e = r.jitWarmFor(f.cl)
@@ -2649,14 +2787,33 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, err
 		if !osr {
 			e.invoked++
 		}
-		if !r.jitWarmUp(f.cl, e, r.jitTierWork(f.cl.fn, e, pc, osr, spent)) {
+		if !e.due && !r.jitWarmUp(f.cl, e, r.jitTierWork(f.cl.fn, e, pc, osr, spent)) {
 			if !osr {
 				jitCountRun(e, f.cl)
 			}
 			return Undefined, nil, false
 		}
-		e = r.jitFor(f.cl)
+		if !r.jitInBackground(f.cl.fn) {
+			e = r.jitFor(f.cl)
+		} else if r.jitLowerLater(f.cl.fn) || r.jit.jobsFull() {
+			// Its budget spent, compiled at a later invocation: once it is
+			// lowered, in the background too, and the runtime has fewer
+			// compiles there.
+			e.due = true
+			if !osr {
+				jitCountRun(e, f.cl)
+			}
+			return Undefined, nil, false
+		} else {
+			e = r.jitCompileForIn(f.cl.fn, f.cl, jitLowerSSA, true)
+		}
 		f.cl.setHint(hintFor(e))
+	}
+	if e != nil && e.pending != nil && e.ssa == nil {
+		// Its first code is compiled in the background: the existing
+		// tiers run it until it is installed. (Code compiled again there
+		// runs on meanwhile unless invalidated: jitTierUp.)
+		return Undefined, nil, false
 	}
 	if e != nil && e.ssa != nil {
 		if e.notNative {
@@ -2779,8 +2936,16 @@ func (r *Runtime) jitWarmFor(cl *closure) *jitEntry {
 		return r.jitFor(cl)
 	}
 	calls := int64(max(cl.jitCalls, 1))
-	if int64(r.jitCallThreshold) <= calls || s.unavailable {
-		return r.jitFor(cl)
+	now := int64(r.jitCallThreshold) <= calls
+	// Compiled at once in the background is lowered there first: an entry
+	// warming, its budget spent, which tryJITAt hands the lowering of.
+	// So is one the runtime has no room for in the background for now,
+	// which waits for room there.
+	lowerFirst := now && !s.unavailable && r.jitInBackground(fn) && (s.jobsFull() || !s.loweringFresh(fn).done[jitLowerSSA])
+	if (now || s.unavailable) && !lowerFirst {
+		// In the background, where the runtime compiles there (tryJITAt
+		// runs it in the existing tiers meanwhile).
+		return r.jitCompileForIn(fn, cl, jitLowerSSA, r.jitInBackground(fn))
 	}
 	s.budget = r.jitBudget()
 	s.age(s.epoch())
@@ -2795,6 +2960,9 @@ func (r *Runtime) jitWarmFor(cl *closure) *jitEntry {
 	e.calls = jitGhostCounts(g, ok, fn)
 	e.ssaLoop = jitLoopLength(fn)
 	e.tierBudget = r.jitTierBudget(fn, e) - (calls-1)*int64(max(len(fn.Code), 1))
+	if now {
+		e.tierBudget = 0
+	}
 	e.tierMark = jitFeedbackMark(cl)
 	s.linkFor(fn, e)
 	s.remember(weak.Make(fn), e)
@@ -2895,19 +3063,27 @@ func (r *Runtime) jitHotEntry(f *frame, e *jitEntry) *jitEntry {
 		e.coldWork = 0
 		return nil
 	}
+	background := r.jitInBackground(f.cl.fn)
+	if background && s.jobsFull() {
+		// Asked again at its next call, once the runtime has fewer
+		// compiles in the background.
+		return nil
+	}
 	key := weak.Make(f.cl.fn)
 	if s.entryFor(f.cl.fn) == e {
 		switch {
-		case e.ssa == nil:
+		case e.ssa == nil && e.busy == 0:
 			s.forget(key, e)
-		case s.inUse(e) || e.busy != 0 || !s.dropEntry(key, e):
+		case e.ssa == nil || s.inUse(e) || e.busy != 0 || !s.dropEntry(key, e):
 			// Its callers' code runs it now: asked again once hot again.
 			e.coldWork = 0
 			return nil
 		}
 	}
 	e.hostOnly = false
-	ne := r.jitCompileFor(f.cl.fn, f.cl, jitLowerHot)
+	// In the background, where the runtime compiles there: the existing
+	// tiers run it until the code is installed (tryJITAt).
+	ne := r.jitCompileForIn(f.cl.fn, f.cl, jitLowerHot, background)
 	f.cl.setHint(hintFor(ne))
 	if ne != nil && ne.ssa != nil {
 		return ne

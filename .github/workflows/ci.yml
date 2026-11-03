@@ -199,6 +199,13 @@ jobs:
       - name: Run the VM's tests
         run: go test -tags quickjs_jit -count=1 -timeout 20m ./internal/vm
 
+      # And compiling in the background, each compile installed at the
+      # third check after it was handed over (QJS_JIT_STRESS's background).
+      - name: Run the VM's tests, compiling in the background
+        env:
+          QJS_JIT_STRESS: threshold,budget=3,deopt=7,background=3
+        run: go test -tags quickjs_jit -count=1 -timeout 20m ./internal/vm .
+
   # The JIT's kernels and the tree tier's, on arm64 (macOS) and amd64
   # (Linux). A shared
   # runner's times are noisy, so the summary compares the tiers within one
@@ -316,3 +323,10 @@ jobs:
 
       - name: Test runtimes sharing go-intl's data
         run: go test -race -count=1 -run TestIntlConcurrentRuntimes .
+
+      # The JIT's compiles on the process's workers, which share a compile
+      # with the runtime's goroutine (WithJITBackground): its tests, and the
+      # differential tests that compile in the background among their
+      # settings.
+      - name: Test compiling in the background
+        run: go test -tags quickjs_jit -race -count=1 -timeout 15m -run 'Background|Differential' ./internal/vm .

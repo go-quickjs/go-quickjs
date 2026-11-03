@@ -176,10 +176,32 @@ func (g *jitProgram) source() string {
 	return b.String()
 }
 
-// jitDifferential runs src in the interpreter, the tree tier and the JIT
-// under several stress settings, and reports any difference. It returns the
-// JIT's counters summed over the stress runs.
+// jitDifferential runs src, a test's own program, in the interpreter, the
+// tree tier and the JIT under several stress settings, and reports any
+// difference. It returns the JIT's counters summed over the stress runs.
+// Each run may take jitTestWindow: a test's program finishes, and one the
+// interpreter takes longer over fails the test, where a generated one
+// (jitDifferentialGenerated) is passed over.
 func jitDifferential(t *testing.T, src string) JITStats {
+	t.Helper()
+	return jitDifferentialIn(t, src, false)
+}
+
+// jitDifferentialGenerated is jitDifferential of a generated program, its
+// runs given the fuzzer's windows (jitFuzzWindows): one the interpreter
+// does not finish in its window decides nothing, and is passed over.
+func jitDifferentialGenerated(t *testing.T, src string) JITStats {
+	t.Helper()
+	return jitDifferentialIn(t, src, true)
+}
+
+// jitTestWindow is how long each of jitDifferential's runs of a test's own
+// program may take: long past what any takes, even under checkptr on a
+// CI runner, where the fuzzer's windows, split over more settings, had
+// passed one over and the test found no native code.
+const jitTestWindow = time.Minute
+
+func jitDifferentialIn(t *testing.T, src string, generated bool) JITStats {
 	t.Helper()
 	run := func(tree, jit bool, c jitStressConfig, within time.Duration) (string, time.Duration, JITStats) {
 		previous := treeTier.Swap(tree)
@@ -208,10 +230,20 @@ func jitDifferential(t *testing.T, src string) JITStats {
 		// CI's test262 setting under stress (QJS_JIT_STRESS's
 		// threshold,budget=3,deopt=7).
 		{threshold: true, budget: 3, deopt: 7},
+		// Compiled in the background, each compile installed a check or
+		// four after it was handed over (QJS_JIT_STRESS's background).
+		{threshold: true, background: true, checks: 1},
+		{threshold: true, background: true, checks: 4, budget: 3, deopt: 7},
 	}
 	// The tree tier's run and the JIT's.
-	interp, within := jitFuzzWindows(1 + len(stress))
+	interp, within := jitTestWindow, jitTestWindow
+	if generated {
+		interp, within = jitFuzzWindows(1 + len(stress))
+	}
 	want, took, _ := run(false, false, jitStressConfig{}, interp)
+	if want == jitTimedOut && !generated {
+		t.Fatalf("the interpreter took past %v\n%s", interp, src)
+	}
 	if outOfMemory(want) || want == jitTimedOut {
 		return JITStats{}
 	}
@@ -410,7 +442,7 @@ func FuzzJITDifferential(f *testing.F) {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {
-		jitDifferential(t, (&jitProgram{data: data}).source())
+		jitDifferentialGenerated(t, (&jitProgram{data: data}).source())
 	})
 }
 
@@ -427,7 +459,7 @@ func TestJITDifferentialRandom(t *testing.T) {
 		for j := range data {
 			data[j] = byte(r.Uint32())
 		}
-		st := jitDifferential(t, (&jitProgram{data: data}).source())
+		st := jitDifferentialGenerated(t, (&jitProgram{data: data}).source())
 		if st.Entries != 0 {
 			native++
 		}

@@ -3,6 +3,7 @@
 package vm
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
@@ -19,8 +20,18 @@ import (
 //
 // Every compile checks its register allocation (mir.CheckAllocations),
 // but where a test or a benchmark times the compiles.
+//
+// A panic of the compiler's that a worker made a refusal of fails the run
+// (jitWorkerPanics), as it would a compile on the spot: the runtimes that
+// compile in the background are many more than the tests that look at
+// their backendPanics.
 func TestMain(m *testing.M) {
 	jitFlushNow = func() uint64 { return 0 }
 	mir.CheckAllocations = true
-	os.Exit(m.Run())
+	code := m.Run()
+	if n := jitWorkerPanics.Load(); n != 0 && code == 0 {
+		fmt.Fprintf(os.Stderr, "the JIT's workers made refusals of %d panics of the compiler's\n", n)
+		code = 1
+	}
+	os.Exit(code)
 }

@@ -389,6 +389,10 @@ func TestJITTypedGlobalsNative(t *testing.T) {
 		t.Skip("no SSA backend on this architecture")
 	}
 	r := New(Config{JIT: true})
+	// Compiled on the spot, as the counts below are written for, not in
+	// the background (QJS_JIT_STRESS's background), whose code comes
+	// checks later.
+	r.jitStress.background = false
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 	const setup = `
 		var heap32 = new Int32Array(256), heapU8 = new Uint8Array(heap32.buffer)

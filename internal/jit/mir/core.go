@@ -22,8 +22,10 @@ import (
 // core is a function's analysis and allocation, which code generators for
 // every architecture share.
 type core struct {
-	f     *ssa.Func
-	enc   abi.Encoding
+	f   *ssa.Func
+	enc abi.Encoding
+	// opts are the switches the compile runs with (Options).
+	opts  Options
 	order []*ssa.Block
 	// lazy values have no location: constants used only by frame states,
 	// and boxes used only by frame states and returns, which are
@@ -443,9 +445,9 @@ type schedule struct {
 
 // prepare checks that f is one the backends compile, and analyses and
 // allocates it, with the architecture's allocatable registers.
-func prepare(w *Workspace, f *ssa.Func, enc abi.Encoding, gprs, fprs []int) (*core, error) {
+func prepare(w *Workspace, f *ssa.Func, enc abi.Encoding, opts Options, gprs, fprs []int) (*core, error) {
 	f.Finish()
-	c := &core{f: f, enc: enc, gprs: gprs, fprs: fprs, ws: w}
+	c := &core{f: f, enc: enc, opts: opts, gprs: gprs, fprs: fprs, ws: w}
 	c.sched = &c.own
 	if w != nil {
 		c.sched = &w.sched
@@ -480,11 +482,11 @@ func prepare(w *Workspace, f *ssa.Func, enc abi.Encoding, gprs, fprs []int) (*co
 		return nil, err
 	}
 	c.findBudgets()
-	lap(PhasePrepare)
+	c.lap(PhasePrepare)
 	if err := c.allocate(); err != nil {
 		return nil, err
 	}
-	lap(PhaseSaves)
+	c.lap(PhaseSaves)
 	return c, nil
 }
 
@@ -1227,7 +1229,7 @@ func (c *core) allocate() error {
 		}
 	}
 	c.keepXuses(xuses)
-	lap(PhaseUses)
+	c.lap(PhaseUses)
 	// Block-level liveness, so that values live around a loop stay live for
 	// all of it: a value is live into each block from which a use of it in
 	// another block than its own is reached without passing its own, and
@@ -1280,7 +1282,7 @@ func (c *core) allocate() error {
 			floats++
 		}
 	}
-	lap(PhaseLiveness)
+	c.lap(PhaseLiveness)
 	// Each budget loop's register, from its header's start to the end of
 	// the last of its blocks laid out.
 	for _, bu := range c.budgets {
@@ -1306,7 +1308,7 @@ func (c *core) allocate() error {
 			first[it.start]++
 		}
 	}
-	lap(PhaseIntervals)
+	c.lap(PhaseIntervals)
 	// A phi and its arguments are given one register where they can be, as
 	// a linear scan's hints have it: the phi the register of an argument
 	// that is free when the phi begins, an argument the phi's if free when
@@ -1578,7 +1580,7 @@ func (c *core) allocate() error {
 		ord[at[k]], rootIn[at[k]] = it, root(it.v)
 		at[k]++
 	}
-	lap(PhaseHints)
+	c.lap(PhaseHints)
 	c.used, c.usedList = [2]uint64{}, [2][]int{}
 	c.locs, c.hasLoc = c.locList(nv), c.bools(nv)
 	// Spill slots are reused as registers are: a spilled interval's slot is
@@ -1826,7 +1828,7 @@ func (c *core) allocate() error {
 			}
 		}
 	}
-	lap(PhaseScan)
+	c.lap(PhaseScan)
 	scanSpills := spills
 
 	// What each native call saves: the values live across it in registers,
@@ -1915,7 +1917,7 @@ func (c *core) allocate() error {
 			c.saveAt[2*v.ID+1] = len(c.saves)
 		}
 	}
-	if CheckAllocations {
+	if c.opts.CheckAllocations {
 		c.checkAllocation(iv, scanSpills)
 	}
 	err := c.colorKeeps(iv, pos, kv)
@@ -2627,6 +2629,29 @@ func Compile(f *ssa.Func, enc abi.Encoding) (*Code, error) {
 		return CompileARM64(f, enc)
 	}
 	return CompileAMD64(f, enc)
+}
+
+// Options are the switches a compile runs with, the package's variables
+// (Annotate, CheckAllocations, TableExits, Timing) as Settings reads them: a host
+// compiling on another goroutine reads them where it prepares the compile,
+// so that what a test or a host sets meanwhile is not read as it changes.
+type Options struct {
+	Annotate, CheckAllocations, TableExits bool
+	// Timing is what the compile's phases are timed in (the package's
+	// Timing), or nil.
+	Timing *Times
+}
+
+// Settings are the switches the package's variables say now.
+func Settings() Options {
+	return Options{Annotate: Annotate, CheckAllocations: CheckAllocations, TableExits: TableExits, Timing: Timing}
+}
+
+// lap ends phase p of the compile, if it is timed (Options.Timing).
+func (c *core) lap(p Phase) {
+	if t := c.opts.Timing; t != nil {
+		t.Lap(p)
+	}
 }
 
 // TableExits has an exit that returns to Go leave its frame to Go to write

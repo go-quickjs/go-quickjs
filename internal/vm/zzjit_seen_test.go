@@ -174,6 +174,10 @@ func TestJITSSAUnwoundCompiledAgainOnlyForWhatItLearned(t *testing.T) {
 	want := New(Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := New(Config{JIT: true})
+	// Compiled on the spot, as the counts below are written for, not in
+	// the background (QJS_JIT_STRESS's background), whose code comes
+	// checks later.
+	r.jitStress.background = false
 	defer func() { r.Close(); r.ReleaseClosed() }()
 	for _, rt := range []*Runtime{want, r} {
 		if _, err := rt.Run(compileForTest(t, setup)); err != nil {
