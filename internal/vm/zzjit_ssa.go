@@ -2278,10 +2278,51 @@ func (r *Runtime) compileSSAFinish(j *jitJob) (*jit.SSACode, *jitFeedback, error
 		return r.compileSSAKeeping(j.fn, j.cl, j.p, j.e, j.keepLimit)
 	}
 	code, fb, err := r.jitInstall(j)
+	if errors.Is(err, errJITStaleLinks) {
+		// Its native calls are of links their functions have no more: a
+		// callee's entry dropped meanwhile -- compiled again once hot for
+		// Go to enter (jitHotEntry) -- whose link went with it, no code
+		// holding it, the callee's next entry given another. The code
+		// would call through the old one, which never has code again:
+		// built here, as a missed one is, from the feedback as it is now.
+		// Installed, Richards' Scheduler.schedule called
+		// TaskControlBlock.run through Go 392,195 times a run, in some
+		// runs and not others: four times as slow.
+		r.jit.bgStale++
+		return r.compileSSAKeeping(j.fn, j.cl, j.p, j.e, j.keepLimit)
+	}
 	if errors.Is(err, mir.ErrKeeps) {
 		code, fb, err = r.compileSSAKeeping(j.fn, j.cl, j.p, j.e, abi.MaxKeeps)
 	}
+	if code != nil && r.jit.staleLinks(fb) {
+		// A link let go as room was made for it (roomFor), once placed.
+		_ = code.Close()
+		r.jit.bgStale++
+		return r.compileSSAKeeping(j.fn, j.cl, j.p, j.e, j.keepLimit)
+	}
 	return code, fb, err
+}
+
+// errJITStaleLinks is jitInstall's refusal of a compile whose links are
+// stale (staleLinks), which compileSSAFinish builds again.
+var errJITStaleLinks = errors.New("jit: a link the compile calls through was let go")
+
+// staleLinks reports whether a link fb's code calls through (its links,
+// and its keep's) is not its function's any more: one the runtime let go
+// (unlink) while the code was compiled in the background.
+func (s *jitState) staleLinks(fb *jitFeedback) bool {
+	stale := func(links []*jitLink) bool {
+		for _, l := range links {
+			if s.links[l.key] != l {
+				return true
+			}
+		}
+		return false
+	}
+	if fb == nil {
+		return false
+	}
+	return stale(fb.links) || fb.keep() != fb && stale(fb.keep().links)
 }
 
 // jitFeedbackHook, where a test sets it, is the feedback a build asks in
@@ -2479,6 +2520,12 @@ func (r *Runtime) jitInstall(j *jitJob) (*jit.SSACode, *jitFeedback, error) {
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %v", jitRefused, err)
+	}
+	if s.staleLinks(fb) {
+		// Built in the background through a link let go meanwhile: built
+		// again (compileSSAFinish) before room is made for it and it is
+		// placed, to be thrown away.
+		return nil, fb, errJITStaleLinks
 	}
 	// The cells the backend gave the kept values (mir's keep cells).
 	fb.keeps = f.Keeps

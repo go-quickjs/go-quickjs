@@ -3,8 +3,10 @@
 package vm
 
 import (
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"testing"
 	"time"
+	"weak"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/mir"
 )
@@ -386,6 +388,61 @@ func TestJITBackgroundSnapshotMiss(t *testing.T) {
 			j.missed, r.jit.bgMissed, e.pending != nil, e.ssa == old)
 	}
 	jitCallForTest(t, r, `sum(100)`, 4950)
+}
+
+// A compile in the background whose code would call through a link its
+// callee's function let go meanwhile -- the callee's entry dropped, as
+// jitHotEntry drops it to compile it again for Go to enter, its link with
+// it, no installed code holding the link, and the callee's next entry
+// given another -- is built again on the runtime's goroutine at its
+// install (staleLinks): installed as it was, it called through the old
+// link, which never had code again, and made every call of the callee
+// through Go. Its native calls are then the callee's link's.
+func TestJITBackgroundStaleLink(t *testing.T) {
+	r := jitBackgroundForTest(t, 1)
+	if _, err := r.Run(compileForTest(t, `function half(x) { return x / 2 }
+		function loop(n) { let s = 0; for (let i = 0; i < n; i++) s += half(i); return s }`)); err != nil {
+		t.Fatal(err)
+	}
+	half, loop := jitGlobalClosureForTest(r, "half"), jitGlobalClosureForTest(r, "loop")
+	// Called, not inlined: through its link.
+	jitNoInline = func(fn *bytecode.Function) bool { return fn == half.fn }
+	t.Cleanup(func() { jitNoInline = nil })
+	// half's code for native callers, installed.
+	r.jitNativeCallee(half)
+	r.jitDrain()
+	he := r.jit.entryFor(half.fn)
+	if he == nil || he.ssa == nil {
+		t.Fatal("half has no code")
+	}
+	old := he.link
+	// loop's compile handed over, its call of half through half's link.
+	if e := r.jitCompileForIn(loop.fn, loop, jitLowerSSA, true); e == nil || e.pending == nil {
+		t.Fatal("loop's compile not pending")
+	}
+	// half's entry dropped meanwhile, and half compiled again: another
+	// link.
+	if !r.jit.dropEntry(weak.Make(half.fn), he) {
+		t.Fatal("half's entry not dropped")
+	}
+	r.jitNativeCallee(half)
+	r.jitDrain()
+	he = r.jit.entryFor(half.fn)
+	if he == nil || he.ssa == nil || he.link == old {
+		t.Fatalf("half compiled again: entry %v, a link of its own %v", he != nil && he.ssa != nil, he != nil && he.link != old)
+	}
+	le := r.jit.entryFor(loop.fn)
+	if le == nil || le.ssa == nil {
+		t.Fatal("loop's code not installed")
+	}
+	if r.jit.bgStale != 1 {
+		t.Errorf("%d compiles built again for stale links, want 1", r.jit.bgStale)
+	}
+	in := he.link.in
+	jitCallForTest(t, r, `loop(100)`, 2475)
+	if n := he.link.in - in; n < 100 {
+		t.Errorf("loop(100) called half natively %d times, want 100", n)
+	}
 }
 
 // jitBackgroundRuntime is jitRuntimeForTest's runtime with the JIT,

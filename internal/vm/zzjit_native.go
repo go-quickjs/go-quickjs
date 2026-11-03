@@ -1275,6 +1275,10 @@ type jitState struct {
 	// bgMissed counts the compiles built on the runtime's goroutine after
 	// all, their builds having asked what their snapshots were not.
 	bgMissed uint64
+	// bgStale counts the compiles built again on the runtime's goroutine
+	// at their install for calling through links their functions had let
+	// go meanwhile (staleLinks).
+	bgStale uint64
 }
 
 // Only selected own reference fields are prepared. The receiver bound keeps
