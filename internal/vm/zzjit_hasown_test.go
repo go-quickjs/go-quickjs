@@ -10,13 +10,15 @@ import (
 
 // hasOwnSetup's loop is a React element's props copied and its markup
 // written: for (k in props) hop.call(props, k), RESERVED.hasOwnProperty(k),
-// pushes of three values, of none and of five. others calls the realm's
+// pushes of three values, of none and of five, Array.isArray through a
+// binding (React's ba) and as a method. others calls the realm's
 // Function.prototype.call of what is no leaf: a closure, a built-in that
 // is none, a leaf on what it refuses; and pushes onto an array whose
 // prototype has an index setter, which push must call.
 const hasOwnSetup = `
 const hop = Object.prototype.hasOwnProperty
 const RESERVED = {key: true, ref: true}
+const isArr = Array.isArray
 function run(n) {
 	let t = 0
 	const buf = []
@@ -26,6 +28,7 @@ function run(n) {
 		buf.push("<", "x", ">")
 		buf.push()
 		t += buf.push(" ", i, "=\"", out.a + out.b, "\"")
+		t += isArr(buf) + Array.isArray(out) + isArr(i)
 		if (buf.length > 1000) buf.length = 0
 	}
 	return t + buf.join("").length
@@ -48,7 +51,8 @@ function others(n) {
 `
 
 // A call native code makes of hasOwnProperty, as a method or through
-// Function.prototype.call, or of push of other than one value, is made
+// Function.prototype.call, of Array.isArray, or of push of other than one
+// value, is made
 // without a frame (jitPlainCall): warm, run leaves its code at none of
 // them and makes no call of Go for them. The other calls of call and of
 // push are the built-ins'. Each answer is Node's (v26.12.1) and the
@@ -59,7 +63,7 @@ func TestJITHasOwnAndPushCalls(t *testing.T) {
 	}
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	rounds := [][2]string{{"run(300)", "138048"}, {"others(300)", "49047,300"}}
+	rounds := [][2]string{{"run(300)", "138348"}, {"others(300)", "49047,300"}}
 	var srcs []string
 	for range 6 {
 		for _, rd := range rounds {

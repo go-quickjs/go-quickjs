@@ -30,8 +30,9 @@ import "sync"
 var hasOwnLeafOnce sync.Once
 
 // objectLeaves gives the realm's Object.prototype.hasOwnProperty its
-// leaf's op.
+// leaf's op, and Array.isArray its own (isArrayLeaf).
 func objectLeaves[_ any](r *Runtime) {
+	isArrayLeaf[struct{}](r)
 	hasOwnLeafOnce.Do(hasOwnLeafCheck[struct{}])
 	m := r.proto.object.getOwn(r.atoms.intern("hasOwnProperty"))
 	if !m.ok() || !m.value().IsObject() {

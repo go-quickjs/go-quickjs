@@ -631,6 +631,8 @@ const (
 	// Object.prototype.hasOwnProperty, on an object no proxy nor module
 	// namespace, of a key no object (zzz_hasownleaf.go).
 	elemObjHasOwn
+	// Array.isArray, of anything but a proxy (zzz_isarrayleaf.go).
+	elemArrIsArray
 	// Native leaves a construction applies too, where new.target is the
 	// built-in itself (constructWithTarget): its call and its construction
 	// are the same, as Array's are. Array(...) and new Array(...).
