@@ -2631,7 +2631,10 @@ func (fb *jitFeedback) FromCharCode(pc int) (uintptr, bool) {
 // is one of the realm's Math functions, as its reads give it now
 // (jitChainValue) -- Math.sqrt(x), or Math.random() of no arguments --
 // which the code makes itself, as V8 reduces such a call; the call checks
-// it calls it.
+// it calls it. A plain call is of a global's or a captured binding's
+// function: BigInt(x), or one of Math's a module keeps in a binding of its
+// own, React's P = Math.clz32, called P(x), which none of them reads the
+// receiver of.
 func (fb *jitFeedback) Intrinsic(pc int) (ssa.Intrinsic, bool) {
 	fn := fb.fn
 	if fb.cl == nil || pc < 2 || pc >= len(fn.Code) || fn.Code[pc].A > jitMathArgs {
@@ -2641,7 +2644,6 @@ func (fb *jitFeedback) Intrinsic(pc int) (ssa.Intrinsic, bool) {
 	switch jitCallOp(fn.Code[pc].Op) {
 	case bytecode.OpCallMethod:
 	case bytecode.OpCall:
-		// BigInt(x) alone, a global's (jitBigIntIntrinsic).
 		plain = true
 	default:
 		return ssa.Intrinsic{}, false
@@ -2657,16 +2659,19 @@ func (fb *jitFeedback) Intrinsic(pc int) (ssa.Intrinsic, bool) {
 	if len(p.Maps) != len(fn.Code) {
 		return ssa.Intrinsic{}, false
 	}
-	// The function, read by the get_prop_this at its slot's depth, with
+	// The function, read by the get_prop_this at its slot's depth -- a
+	// plain call's by a global's or a captured binding's read -- with
 	// nothing after it but the arguments' instructions, above it.
 	slot, q := p.Maps[pc].Depth-int(fn.Code[pc].A)-1, -1
-	read := bytecode.OpGetPropThis
-	if plain {
-		read = bytecode.OpGetGlobal
+	reads := func(op bytecode.Op) bool {
+		if plain {
+			return op == bytecode.OpGetGlobal || op == bytecode.OpGetUpvalue || op == bytecode.OpGetUpvalueCheck
+		}
+		return op == bytecode.OpGetPropThis
 	}
 	for k := pc - 1; k >= 0; k-- {
 		d := p.Maps[k].Depth
-		if d == slot && fn.Code[k].Op == read {
+		if d == slot && reads(fn.Code[k].Op) {
 			q = k
 			break
 		}
@@ -2683,7 +2688,7 @@ func (fb *jitFeedback) Intrinsic(pc int) (ssa.Intrinsic, bool) {
 	}
 	o := v.Object()
 	k := ssa.Intrinsic{Callee: uintptr(unsafe.Pointer(o))}
-	if fd := o.fn(); fd != nil && fd.native != nil && (plain || fd.mathOp == mathAsIntN || fd.mathOp == mathAsUintN) {
+	if fd := o.fn(); fd != nil && fd.native != nil && (plain && fd.mathOp == mathBigInt || !plain && (fd.mathOp == mathAsIntN || fd.mathOp == mathAsUintN)) {
 		if !fb.jitBigIntIntrinsic(&k, fd, plain, pc, q) {
 			return ssa.Intrinsic{}, false
 		}
@@ -2691,9 +2696,7 @@ func (fb *jitFeedback) Intrinsic(pc int) (ssa.Intrinsic, bool) {
 		keep.holders = append(keep.holders, o)
 		return k, true
 	}
-	if plain {
-		return ssa.Intrinsic{}, false
-	}
+	k.Plain = plain
 	// The realm's Math functions of numbers, each made natively, as V8's
 	// code makes them: Math.pow where exact, and by Go called from there
 	// otherwise; Math.max and Math.min of any number of them; a rounding,

@@ -71,7 +71,8 @@ type Intrinsic struct {
 	// RandomNumbers).
 	Random uintptr
 	// Plain marks a call that is no method's, of no receiver: BigInt(x)'s
-	// (OpBigOfF64). BigInt.asUintN(n, x) and asIntN's are OpZextW's and
+	// (OpBigOfF64), or one of Math's functions kept in a binding, P(x) of
+	// P = Math.clz32. BigInt.asUintN(n, x) and asIntN's are OpZextW's and
 	// OpSextW's, of the width n, Fn, from 0 to 64, a constant the call
 	// is made with, and x (bigint.go).
 	Plain bool
