@@ -194,3 +194,49 @@ func checkKeeps(f *Func) {
 		}
 	}
 }
+
+// checkShadows panics unless every phi that needs a shadow has the one
+// shadowMerges would make it: of its operands' shadows, or of their slots
+// as constants in the predecessors they come from (mendShadows).
+func checkShadows(f *Func) {
+	origin := origins(f)
+	need := map[*Value]bool{}
+	var walk func(v *Value)
+	walk = func(v *Value) {
+		if v.Op != OpPhi || need[v] || origin.At(v) == OriginScalar {
+			return
+		}
+		need[v] = true
+		for _, a := range v.Args {
+			walk(a)
+		}
+	}
+	for _, b := range f.Blocks {
+		for _, v := range b.Values {
+			if v.Op == OpPhi && origin.At(v) == OriginAmbiguous {
+				walk(v)
+			}
+		}
+	}
+	for _, b := range f.Blocks {
+		for _, v := range b.Values {
+			if !need[v] {
+				continue
+			}
+			if v.Shadow == nil || v.Shadow.Op != OpPhi || len(v.Shadow.Args) != len(v.Args) {
+				panic(fmt.Sprintf("ssa: %v needs a shadow, has %v", v, v.Shadow))
+			}
+			for i, a := range v.Args {
+				s := v.Shadow.Args[i]
+				k := -1
+				if o := origin.At(a); o >= 0 {
+					k = o
+				}
+				ok := a.Shadow != nil && s == a.Shadow || a.Shadow == nil && s.Op == OpConstSource && s.Aux == k && s.Block == b.Preds[i]
+				if !ok {
+					panic(fmt.Sprintf("ssa: %v's shadow takes %v for %v, whose shadow is %v", v, s, a, a.Shadow))
+				}
+			}
+		}
+	}
+}

@@ -8,3 +8,5 @@ const verifyLiveness = false
 func liveAcrossRef(*Func) ([]*Value, [][]*Value) { panic("ssa: liveAcrossRef without quickjs_verify") }
 
 func checkKeeps(*Func) { panic("ssa: checkKeeps without quickjs_verify") }
+
+func checkShadows(*Func) { panic("ssa: checkShadows without quickjs_verify") }

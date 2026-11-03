@@ -175,9 +175,17 @@ rounds:
 	}
 	stringBuilders(f)
 	shadowMerges(f)
-	if kept, stores, live := keepAcrossStores(f); kept {
-		// The phis' shadows again, for the phis the keeps made; those
-		// made before, now unused, go.
+	if kept, stores, live := keepAcrossStores(f); kept && stores != nil {
+		// The phis' shadows mended (keepAcrossStores), and what was live
+		// across the stores live still.
+		storeChecksAt(f, stores, live)
+		if verifyLiveness {
+			checkShadows(f)
+			checkStoreChecks(f, true)
+		}
+	} else if kept {
+		// The phis' shadows again, for the origins the keeps changed;
+		// those made before, now unused, go.
 		clearShadows(f)
 		removeDead(f)
 		shadowMerges(f)
@@ -185,7 +193,7 @@ rounds:
 	} else {
 		storeChecksAt(f, stores, live)
 		if verifyLiveness {
-			checkStoreChecks(f)
+			checkStoreChecks(f, false)
 		}
 	}
 	clear(guards)

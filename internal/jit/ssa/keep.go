@@ -27,11 +27,14 @@ package ssa
 
 // keepAcrossStores keeps the values read from cells that are used after a
 // store that may write their cell (liveAcross, aliases), up to the build's
-// limit (keepLimit) in a function, and reports whether it kept any; their
-// phis' shadows are then to be made again (shadowMerges). If it kept none,
-// it returns what is live across the stores, as storeChecks would find it:
-// the function is as it was, but for calls it left to Go, which are stores
-// no longer and change nothing live across the others.
+// limit (keepLimit) in a function, and reports whether it kept any. If it
+// kept none, it returns what is live across the stores, as storeChecks
+// would find it: the function is as it was, but for calls it left to Go,
+// which are stores no longer and change nothing live across the others.
+// If it kept some and mended the phis' shadows (mendShadows), it returns
+// that too, the copies live where their values were; if it kept some and
+// could not, nil: the phis' shadows are to be made again (shadowMerges),
+// and the stores' checks from what is live then.
 //
 // A store whose values do not all fit in the cells left is not kept for:
 // a call is then made by Go, a property store checks its cell against
@@ -105,8 +108,60 @@ func keepAcrossStores(f *Func) (bool, []*Value, [][]*Value) {
 	if len(order) == 0 {
 		return false, stores, live
 	}
-	keepWhereMade(f, kept, order)
-	return true, nil, nil
+	// Where every phi kept was a merge of two sources (OriginAmbiguous) --
+	// a loaded value's origin is a cell's, as a copy's is -- no other
+	// value's origin changes, the phis that need shadows are those that
+	// had them, and only their operands kept take other shadows, their
+	// copies' keeps: the shadows are mended in place, and what was live
+	// across the stores still is, the copies in their values' places.
+	// Otherwise the shadows are made again (shadowMerges) and the stores'
+	// checks from what is live then.
+	mend := f.origins.of != nil
+	for _, c := range order {
+		mend = mend && (c.Op != OpPhi || f.origins.At(c) == OriginAmbiguous)
+	}
+	made := keepWhereMade(f, kept, order)
+	if !mend {
+		return true, nil, nil
+	}
+	mendShadows(f, kept, order, made)
+	return true, stores, live
+}
+
+// mendShadows gives the phis whose operands keepWhereMade kept their
+// copies' shadows, the keeps, and the origins the values kept and made
+// have: a copy's a cell's (OriginHeap), the value made the one the value
+// had.
+func mendShadows(f *Func, kept []bool, order, made []*Value) {
+	old := f.origins.of
+	of := f.ints(f.nextID)
+	copy(of, old)
+	for i := len(old); i < len(of); i++ {
+		of[i] = originAbsent
+	}
+	for _, c := range order {
+		of[made[c.ID].ID], of[c.ID] = of[c.ID], OriginHeap
+	}
+	f.origins = OriginMap{of}
+	for _, b := range f.Blocks {
+		for _, v := range b.Values {
+			if v.Op != OpPhi {
+				break
+			}
+			if v.Type != Tagged || v.Shadow == nil {
+				continue
+			}
+			for i, a := range v.Args {
+				if a.ID < len(kept) && kept[a.ID] {
+					if s := v.Shadow.Args[i]; s != a.Shadow {
+						s.Uses--
+						v.Shadow.Args[i] = a.Shadow
+						a.Shadow.Uses++
+					}
+				}
+			}
+		}
+	}
 }
 
 // keepPhis finds the phis that must be kept with the values kept where
@@ -183,12 +238,12 @@ func (p *keepPhis) add(f *Func, kept []bool, order []*Value, from int) []*Value 
 }
 
 // keepWhereMade keeps each value of order, each in a cell of its own, where
-// it is made: the value made becomes a new one, of its op, and the value
+// it is made, and returns, by each one's ID, the value made: the value made becomes a new one, of its op, and the value
 // itself the copy, after its keep (OpKeepRef, OpKeep, OpKept) -- a phi's
 // after its block's phis, where every phi kept there reads its pointer word
 // before any is kept, since one may be read from a cell another's keep
 // writes: a phi of a phi carried round a loop.
-func keepWhereMade(f *Func, kept []bool, order []*Value) {
+func keepWhereMade(f *Func, kept []bool, order []*Value) []*Value {
 	// made is, by the kept value's ID, the value made; its block's count
 	// of kept values, by block ID.
 	made := f.refsOf(f.nextID)
@@ -260,6 +315,7 @@ func keepWhereMade(f *Func, kept []bool, order []*Value) {
 			}
 		}
 	}
+	return made
 }
 
 // keepGroup appends to values the refs, the keeps and the copies of the
