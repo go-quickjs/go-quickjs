@@ -943,13 +943,18 @@ either (`loopSlow`), until Go retries it (`jitRetrySlow`).
 
 **Compiling in the background.** A compile is a job in three steps
 (`jitJob`, `zzjit_background.go`), as V8's concurrent compiles are:
-- the runtime's goroutine prepares it -- lowers, makes room, builds the SSA
-  from the feedback, which reads and changes the runtime's caches, and asks
-  escape analysis's questions of the VM there (`ssa.VirtualFeedback`);
-- a worker optimizes it and runs the backend, touching nothing of the
-  runtime's, a panic its refusal (`backendPanics`), nor any variable of
-  the process's: the encoding, `mir`'s switches (`mir.Options`) and the
-  hooks are as they were when the job was prepared;
+- the runtime's goroutine prepares it -- lowers, makes room, and asks the
+  feedback ahead (`jitSnapshotOf`): every question the build may ask, of
+  the function and of the callees it may inline, which reads and changes
+  the runtime's caches, escape analysis's questions included
+  (`ssa.VirtualFeedback`);
+- a worker builds the SSA from that snapshot (`jitBuildFrom`), optimizes
+  it and runs the backend, touching nothing of the runtime's, a panic its
+  refusal (`backendPanics`), nor any variable of the process's: the
+  encoding, `mir`'s switches (`mir.Options`) and the hooks are as they
+  were when the job was prepared. A question the snapshot was not asked
+  is a miss (`jitSnapMiss`): the compile is built on the runtime's
+  goroutine at its install instead;
 - the runtime's goroutine installs it -- `roomFor`, placing the code, and
   what a compile does once placed -- so placing stays where nothing else of
   the runtime's runs.
@@ -970,10 +975,12 @@ links meanwhile) and functions compiled once hot (`jitHotEntry`) go to the
 background, a first compile's lowering too (`jitLowerLater`), from a copy
 of its hints, thrown away if they change meanwhile (`jitLowering`'s
 serial); the compile it was lowered for is decided (`due`) and made at the
-check that finds it lowered. Top-level code, the callees a compile just
-installed wants (`jitWantedCallees`), which it is compiled again to call
-at once, and compiles timed or repeated (`mir.Timing`, `JITCompileRepeat`)
-are compiled where they are asked.
+check that finds it lowered. So are the callees a compile wants
+(`jitWantedCallees`), the caller compiled again once it has spent a
+budget, by when their code is likely installed. Top-level code, compiles
+asked inside another compile, and compiles timed or repeated
+(`mir.Timing`, `JITCompileRepeat`) are compiled where they are asked
+(`jitInBackground`).
 
 ## Memory
 

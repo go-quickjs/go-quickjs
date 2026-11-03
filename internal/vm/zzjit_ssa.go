@@ -2259,7 +2259,7 @@ func (r *Runtime) compileSSAPrepare(fn *bytecode.Function, cl *closure, p *ir.Pr
 	}
 	r.jit.compileBegin()
 	defer r.jit.compileEnd()
-	return r.jitPrepare(fn, cl, p, e, jitKeepLimit)
+	return r.jitPrepare(fn, cl, p, e, jitKeepLimit, true)
 }
 
 // compileSSAFinish is compileSSA's last step, for a compile in the
@@ -2269,12 +2269,24 @@ func (r *Runtime) compileSSAPrepare(fn *bytecode.Function, cl *closure, p *ir.Pr
 func (r *Runtime) compileSSAFinish(j *jitJob) (*jit.SSACode, *jitFeedback, error) {
 	r.jit.compileBegin()
 	defer r.jit.compileEnd()
+	if j.missed {
+		// Its build asked what its snapshot was not asked: built here, as
+		// it would have been prepared.
+		r.jit.bgMissed++
+		jit.PutWorkspace(j.w)
+		j.w = nil
+		return r.compileSSAKeeping(j.fn, j.cl, j.p, j.e, j.keepLimit)
+	}
 	code, fb, err := r.jitInstall(j)
 	if errors.Is(err, mir.ErrKeeps) {
 		code, fb, err = r.compileSSAKeeping(j.fn, j.cl, j.p, j.e, abi.MaxKeeps)
 	}
 	return code, fb, err
 }
+
+// jitFeedbackHook, where a test sets it, is the feedback a build asks in
+// place of fb's: a proxy of it, which notes what the build asks.
+var jitFeedbackHook func(fb *jitFeedback, p *ir.Program) ssa.Feedback
 
 // jitKeepLimit, where a test sets it, limits the keep cells of every
 // compile's build (ssa.KeepFeedback), as a compile again past the
@@ -2286,7 +2298,7 @@ var jitKeepLimit int
 // cells limited to keepLimit (ssa.KeepFeedback), or not, if 0: its three
 // steps (jitJob), one after the other.
 func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Program, e *jitEntry, keepLimit int) (*jit.SSACode, *jitFeedback, error) {
-	j, err := r.jitPrepare(fn, cl, p, e, keepLimit)
+	j, err := r.jitPrepare(fn, cl, p, e, keepLimit, false)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -2320,6 +2332,14 @@ type jitJob struct {
 	opts      mir.Options
 	timing    *mir.Times
 	optimized func(*bytecode.Function, *ssa.Func)
+	// snap is the compile's feedback asked ahead, which the worker builds
+	// from (work), or nil for a compile built as it was prepared; buildErr
+	// is that build's refusal, and missed marks a build that asked what
+	// snap was not asked (jitSnapMiss), built on the runtime's goroutine
+	// at its install instead.
+	snap     *jitSnapshot
+	buildErr error
+	missed   bool
 	// mc is the backend's code, or err its refusal; panicked marks a
 	// refusal a worker made of a panic (jitJob.run), and allocErr is the
 	// panic, where it was a failed check of the register allocation's.
@@ -2345,28 +2365,51 @@ type jitJob struct {
 
 // jitPrepare is a compile's first step: p built from cl's caches, the
 // build's keep cells limited to keepLimit, or not, if 0, or the build's
-// refusal.
-func (r *Runtime) jitPrepare(fn *bytecode.Function, cl *closure, p *ir.Program, e *jitEntry, keepLimit int) (*jitJob, error) {
+// refusal. For a compile in the background (snapshot), the caches are
+// asked ahead instead (jitSnapshot), and the worker builds from what they
+// answered (work).
+func (r *Runtime) jitPrepare(fn *bytecode.Function, cl *closure, p *ir.Program, e *jitEntry, keepLimit int, snapshot bool) (*jitJob, error) {
 	fb := &jitFeedback{r: r, fn: fn, cl: cl, e: e, keepLimit: keepLimit, prog: p, targets: jitTargetsOf(e)}
 	w := jit.GetWorkspace()
 	if t := mir.Timing; t != nil {
 		t.Start()
+	}
+	j := &jitJob{fn: fn, cl: cl, p: p, e: e, fb: fb, keepLimit: keepLimit, w: w,
+		enc: jitEncoding, opts: mir.Settings(), timing: mir.Timing, optimized: jitSSAOptimized}
+	if snapshot && jitSnapshots {
+		j.snap = jitSnapshotOf(fb, p)
+		return j, nil
 	}
 	f, err := r.jitBuildSSA(w, fn, p, fb)
 	if err != nil {
 		jit.PutWorkspace(w)
 		return nil, fmt.Errorf("%w: %v", jitRefused, err)
 	}
-	return &jitJob{fn: fn, cl: cl, p: p, e: e, fb: fb, keepLimit: keepLimit, w: w, f: f,
-		enc: jitEncoding, opts: mir.Settings(), timing: mir.Timing, optimized: jitSSAOptimized}, nil
+	j.f = f
+	return j, nil
 }
 
+// jitSnapshots has compiles in the background built on their workers, from
+// snapshots of their feedback (jitSnapshot); without it, on the runtime's
+// goroutine, as they are prepared. A switch for comparing the two.
+var jitSnapshots = true
+
 // work is a compile's second step: the function optimized and compiled
-// by the backend. It reads the job's function, its workspace and the
-// encoding, and writes the job: nothing of the runtime's, its feedback
-// included -- what escape analysis needs of it the build asked
-// (ssa.VirtualFeedback) -- so that it may run on another goroutine.
+// by the backend, built first from its snapshot where it has one. It
+// reads the job's function, its workspace and the encoding, and writes the
+// job -- the build from a snapshot the job's own feedback's frame sizes,
+// callbacks and unmade objects too (jitBuildFrom), which the runtime's
+// goroutine reads once the job is done -- and nothing of the runtime's:
+// what escape analysis needs of the feedback the build asked
+// (ssa.VirtualFeedback). So it may run on another goroutine.
 func (j *jitJob) work() {
+	if j.snap != nil {
+		f, err := j.buildFromSnapshot()
+		if err != nil {
+			return
+		}
+		j.f = f
+	}
 	ssa.Optimize(j.f)
 	if t := j.timing; t != nil {
 		t.Lap(mir.PhaseOptimize)
@@ -2398,6 +2441,15 @@ func (r *Runtime) jitInstall(j *jitJob) (*jit.SSACode, *jitFeedback, error) {
 		// is as the panic left it: a bug, which the tests look for.
 		s.backendPanics++
 		return nil, nil, fmt.Errorf("%w: %v", jitRefused, j.err)
+	}
+	if j.buildErr != nil {
+		// The worker's build refused it, as jitPrepare's would have.
+		return nil, nil, fmt.Errorf("%w: %v", jitRefused, j.buildErr)
+	}
+	if j.snap != nil {
+		// What the questions the worker's build asked appended to the
+		// feedback's lists, as the build from the feedback would have.
+		j.snap.replay()
 	}
 	// The pools' roots and prototypes escape analysis took, which the
 	// objects it does not make are made with at an exit.
@@ -2483,7 +2535,27 @@ func (r *Runtime) jitInstall(j *jitJob) (*jit.SSACode, *jitFeedback, error) {
 // jitBuildSSA is compileSSAKeeping's build of p, with fb, in w: the
 // function as ssa builds it, told what of fn the backend needs.
 func (r *Runtime) jitBuildSSA(w *jit.Workspace, fn *bytecode.Function, p *ir.Program, fb *jitFeedback) (*ssa.Func, error) {
-	f, err := ssa.BuildIn(&w.SSA, p, fb)
+	var feedback ssa.Feedback = fb
+	if jitFeedbackHook != nil {
+		feedback = jitFeedbackHook(fb, p)
+	}
+	f, err := jitBuildFrom(w, fn, p, fb, feedback, mir.Timing)
+	if jitBuiltHook != nil {
+		jitBuiltHook(fb, p, f, err)
+	}
+	return f, err
+}
+
+// jitBuiltHook, where a test sets it, is told each build on the runtime's
+// goroutine as it is made: the snapshot's oracle, which compares it with
+// the build from the snapshot its jitFeedbackHook asked.
+var jitBuiltHook func(fb *jitFeedback, p *ir.Program, f *ssa.Func, err error)
+
+// jitBuildFrom is jitBuildSSA's build of p, asking feedback, fb's or its
+// snapshot (jitSnapshot), and timed in timing, if not nil: a function of the
+// compile's alone, which a worker may run where feedback is a snapshot.
+func jitBuildFrom(w *jit.Workspace, fn *bytecode.Function, p *ir.Program, fb *jitFeedback, feedback ssa.Feedback, timing *mir.Times) (*ssa.Func, error) {
+	f, err := ssa.BuildIn(&w.SSA, p, feedback)
 	if err != nil {
 		return nil, err
 	}
@@ -2518,7 +2590,7 @@ func (r *Runtime) jitBuildSSA(w *jit.Workspace, fn *bytecode.Function, p *ir.Pro
 	if p.This {
 		f.ThisSlot = fn.LocalCount + len(fn.Upvalues)
 	}
-	if t := mir.Timing; t != nil {
+	if t := timing; t != nil {
 		t.Lap(mir.PhaseBuild)
 	}
 	return f, nil

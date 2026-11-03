@@ -1272,6 +1272,9 @@ type jitState struct {
 	// in the background (jitLowerLater), and bgLowered counts them.
 	lowerings []*jitLowerTask
 	bgLowered uint64
+	// bgMissed counts the compiles built on the runtime's goroutine after
+	// all, their builds having asked what their snapshots were not.
+	bgMissed uint64
 }
 
 // Only selected own reference fields are prepared. The receiver bound keeps

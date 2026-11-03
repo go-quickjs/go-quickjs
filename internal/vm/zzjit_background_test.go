@@ -181,8 +181,9 @@ func TestJITBackgroundWorkerPanic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A function the optimization cannot take.
-	j.f = nil
+	// A function the optimization cannot take, built as it was prepared,
+	// not from a snapshot.
+	j.f, j.snap = nil, nil
 	j.deopts, j.install = e.deopts, (*Runtime).jitReoptimized
 	r.jitSubmit(e, j)
 	if !j.panicked || r.jit.backendPanics != 1 || e.pending != nil || e.ssa != old {
@@ -334,6 +335,57 @@ func TestJITBackgroundSettingsAtPrepare(t *testing.T) {
 			t.Fatalf("Annotate %v when prepared: marks %v", at, marks)
 		}
 	}
+}
+
+// A compile in the background is built on its worker, from its feedback
+// asked ahead (jitSnapshot): prepared, it holds the snapshot and no
+// function yet; installed, its code runs, nothing missed.
+func TestJITBackgroundBuildsFromSnapshot(t *testing.T) {
+	r := jitBackgroundForTest(t, 100)
+	e, _ := jitPendingRecompileForTest(t, r)
+	j := e.pending
+	if j.snap == nil || j.missed {
+		t.Fatalf("snapshot %v, missed %v: want the compile prepared as a snapshot", j.snap != nil, j.missed)
+	}
+	<-j.done
+	if j.f == nil || j.missed || j.buildErr != nil {
+		t.Fatalf("built %v, missed %v, refused %v: want the worker to have built it", j.f != nil, j.missed, j.buildErr)
+	}
+	old := e.ssa
+	r.jitStress.checks = 1
+	jitCallForTest(t, r, `sum(10)`, 45)
+	if e.pending != nil || e.ssa == old || r.jit.bgMissed != 0 {
+		t.Fatalf("pending %v, same code %v, missed %d: want the code built from the snapshot installed", e.pending != nil, e.ssa == old, r.jit.bgMissed)
+	}
+}
+
+// A build that asks what its snapshot was not asked misses, and the compile
+// is built on the runtime's goroutine at its install instead, its code
+// installed as any other.
+func TestJITBackgroundSnapshotMiss(t *testing.T) {
+	r := jitBackgroundForTest(t, 0)
+	cl := jitGlobalClosureForTest(r, "sum")
+	stress := r.jitStress
+	r.jitBackground, r.jitStress = false, jitStressConfig{}
+	for range 2 {
+		jitCallForTest(t, r, `sum(10)`, 45)
+	}
+	r.jitBackground, r.jitStress = true, stress
+	e := jitEntryForTest(t, r, "sum")
+	old := e.ssa
+	j, err := r.compileSSAPrepare(cl.fn, cl, e.ssaProg, e)
+	if err != nil || j.snap == nil {
+		t.Fatalf("prepared %v, snapshot %v", err, j != nil && j.snap != nil)
+	}
+	// Every build asks it.
+	delete(j.snap.answers, jitSnapKey{snapKeepLimit, 0})
+	j.deopts, j.install = e.deopts, (*Runtime).jitReoptimized
+	r.jitSubmit(e, j)
+	if !j.missed || r.jit.bgMissed != 1 || e.pending != nil || e.ssa == old {
+		t.Fatalf("missed %v, counted %d, pending %v, same code %v: want it built on the runtime's goroutine and installed",
+			j.missed, r.jit.bgMissed, e.pending != nil, e.ssa == old)
+	}
+	jitCallForTest(t, r, `sum(100)`, 4950)
 }
 
 // jitBackgroundRuntime is jitRuntimeForTest's runtime with the JIT,

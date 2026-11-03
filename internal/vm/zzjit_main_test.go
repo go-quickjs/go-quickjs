@@ -7,6 +7,9 @@ import (
 	"os"
 	"testing"
 
+	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
+	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
+
 	"github.com/go-quickjs/go-quickjs/internal/jit/mir"
 )
 
@@ -25,12 +28,37 @@ import (
 // (jitWorkerPanics), as it would a compile on the spot: the runtimes that
 // compile in the background are many more than the tests that look at
 // their backendPanics.
+//
+// With QJS_JIT_SNAPCHECK set, every build is checked against its snapshot
+// (jitSnapOracle), and the run fails if any built otherwise.
 func TestMain(m *testing.M) {
 	jitFlushNow = func() uint64 { return 0 }
 	mir.CheckAllocations = true
+	if os.Getenv("QJS_JIT_SNAPCHECK") != "" {
+		jitFeedbackHook, jitBuiltHook = jitSnapOracle, jitSnapBuilt
+	}
+	// With QJS_JIT_SNAPOPS set to a file, every build asks a noting proxy
+	// (jitAsked), and the methods asked at each op are written there.
+	var opsLog *jitAskLog
+	if f := os.Getenv("QJS_JIT_SNAPOPS"); f != "" {
+		opsLog = newJITAskLog()
+		jitFeedbackHook = func(fb *jitFeedback, p *ir.Program) ssa.Feedback {
+			opsLog.builds++
+			return &jitAsked{fb: fb, p: p, log: opsLog}
+		}
+	}
 	code := m.Run()
 	if n := jitWorkerPanics.Load(); n != 0 && code == 0 {
 		fmt.Fprintf(os.Stderr, "the JIT's workers made refusals of %d panics of the compiler's\n", n)
+		code = 1
+	}
+	if f := os.Getenv("QJS_JIT_SNAPOPS"); f != "" {
+		if err := jitWriteOps(f, opsLog); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			code = 1
+		}
+	}
+	if os.Getenv("QJS_JIT_SNAPCHECK") != "" && jitSnapReport(os.Stderr) && code == 0 {
 		code = 1
 	}
 	os.Exit(code)

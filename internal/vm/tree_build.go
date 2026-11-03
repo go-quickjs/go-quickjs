@@ -197,6 +197,7 @@ func (b *tbuilder) takeBody() []tstmt {
 }
 
 //go:generate go run ./internal/treegen/cmd
+//go:generate go run ./internal/snapgen/cmd
 
 // buildTree builds a function's tree, or reports nil where the function has
 // an instruction the tier does not build, or code it cannot follow.
