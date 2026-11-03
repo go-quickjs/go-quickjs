@@ -1,7 +1,5 @@
 package vm
 
-import "sync"
-
 // Array.isArray as a native leaf (leafChecks): every tier calls it without
 // a frame where its argument is no proxy, as V8 reduces the call to a
 // check of the receiver's map. A module keeps it in a binding of its own
@@ -14,12 +12,8 @@ import "sync"
 // struct{} alone, and the check a method of a generic type used as a
 // method value (see zzz_hasownleaf.go); objectLeaves calls isArrayLeaf.
 
-// isArrayLeafOnce gives isArray its check.
-var isArrayLeafOnce sync.Once
-
 // isArrayLeaf gives the realm's Array.isArray its leaf's op.
 func isArrayLeaf[_ any](r *Runtime) {
-	isArrayLeafOnce.Do(isArrayLeafCheck[struct{}])
 	if r.proto.arrayCtor == nil {
 		return
 	}

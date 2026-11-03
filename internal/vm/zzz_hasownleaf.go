@@ -1,7 +1,5 @@
 package vm
 
-import "sync"
-
 // Object.prototype.hasOwnProperty as a native leaf (leafChecks): every tier
 // calls it without a frame where nothing it does can run the script's code
 // or throw, as V8 calls its builtin with no frame of JavaScript's. React
@@ -26,14 +24,10 @@ import "sync"
 // they move none of them (see zzz_regexpleaf.go). regexpLeaves, the
 // realm's last setup of its leaves, calls objectLeaves.
 
-// hasOwnLeafOnce gives hasOwnProperty its check.
-var hasOwnLeafOnce sync.Once
-
 // objectLeaves gives the realm's Object.prototype.hasOwnProperty its
 // leaf's op, and Array.isArray its own (isArrayLeaf).
 func objectLeaves[_ any](r *Runtime) {
 	isArrayLeaf[struct{}](r)
-	hasOwnLeafOnce.Do(hasOwnLeafCheck[struct{}])
 	m := r.proto.object.getOwn(r.atoms.intern("hasOwnProperty"))
 	if !m.ok() || !m.value().IsObject() {
 		return
