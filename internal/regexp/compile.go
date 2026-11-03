@@ -543,6 +543,14 @@ func (c *compiler) compileRepeat(t nodeRepeat) {
 		// The one iteration is guarded like any other: a body that matched
 		// nothing is not an iteration at all, so the captures it wrote are
 		// undone -- which is what makes `(?=(a))?` leave its group unset.
+		//
+		// Its groups are not unset as it begins, as a loop's are at each
+		// iteration (clearCapsFor): an atom is entered with its groups
+		// unset the first time it is entered -- nothing but the atom sets
+		// them, backtracking to before it puts back what it set, and a
+		// loop around it unsets them at each of its iterations -- and a ?
+		// enters its atom once. The instruction was a dispatch of every
+		// optional group, four of the twenty-five a URL's pattern runs.
 		split := c.emit(instr{op: opSplit})
 		c.setSplit(split, t.greedy, c.here(), 0)
 		c.quickRepeat(split, t)
@@ -552,7 +560,6 @@ func (c *compiler) compileRepeat(t nodeRepeat) {
 			c.prog.emptyChecks++
 			c.emit(instr{op: opEmptyCheck, arg: guard, arg2: 0})
 		}
-		c.clearCapsFor(t.item)
 		c.compile(t.item)
 		if guard >= 0 {
 			c.emit(instr{op: opEmptyCheck, arg: guard, arg2: 1})
