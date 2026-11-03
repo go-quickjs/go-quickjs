@@ -12042,6 +12042,25 @@ func TestJITCallResultStepDone(t *testing.T) {
 	}
 }
 
+// A destructuring's rest element whose array a call of Go made, while its
+// code was due to be compiled again, Go puts on the stack above the cursor,
+// which stays for the pattern's close (jitCallResult): it had replaced the
+// cursor, and the frame went on an operand short.
+func TestJITCallResultRest(t *testing.T) {
+	fn := jitFunctionForTest(t, `function f(a) { const [x, ...q] = a; return q }`)
+	pc := slices.IndexFunc(fn.Code, func(in bytecode.Instr) bool { return in.Op == bytecode.OpIterRest })
+	if pc < 0 {
+		t.Fatal("no rest element")
+	}
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	f := &frame{cl: &closure{fn: fn}}
+	cursor, rest := Str(NewString("cursor")), Float(7)
+	r.stack[0] = cursor
+	if sp, ok := r.jitCallResult(f, pc, 1, rest, nil); !ok || sp != 2 || f.pc != uint32(pc+1) || !r.stack[0].sameBits(cursor) || !r.stack[1].sameBits(rest) {
+		t.Fatalf("sp %d, ok %v, pc %d, stack %v %v; want 2, true, %d, the cursor then the array", sp, ok, f.pc, r.stack[0], r.stack[1], pc+1)
+	}
+}
+
 // jitFramedCallForTest gives rt framedCall(s, x), s's code unit at x as
 // codePointAt has it, and framedRepeat(s, n), s repeated n times, host
 // functions: calls of Go that native code makes with their frames, as no

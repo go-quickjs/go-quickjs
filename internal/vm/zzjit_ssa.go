@@ -13549,9 +13549,13 @@ func (r *Runtime) jitCallResult(f *frame, pc, depth int, v Value, err error) (in
 		return sp, ok
 	}
 	in := jitCallInstr(f.cl.fn.Code[pc])
-	if in.Op == bytecode.OpIterStep {
-		// A destructuring's step Go made (abi.GoCallFill): its cursor
-		// stays, and its value goes on top.
+	if in.Op == bytecode.OpIterStep || in.Op == bytecode.OpIterRest {
+		// A destructuring's step Go made (abi.GoCallFill), or its rest
+		// element's array (abi.GoCallRest): its cursor stays, and the value
+		// goes on top. The rest's array had taken the cursor's place, as a
+		// call's result takes its callee's, and every operand after it was
+		// one below its slot: r.join('') after const [a, ...q] = xs[i] met
+		// a string as its receiver, and undefined as its method.
 		sp := f.base + depth
 		f.pc = uint32(pc + 1)
 		if err != nil {
