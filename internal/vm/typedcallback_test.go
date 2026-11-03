@@ -589,7 +589,7 @@ func TestTypedArrayCallbacksAllocateOncePerLoop(t *testing.T) {
 				}
 			})
 		}
-		if a, b := allocs(short), allocs(long); a != b {
+		if a, b := allocs(short), allocs(long); a != b && allocsOrdinary() {
 			t.Errorf("%v allocations over one element, %v over 256", a, b)
 		}
 	}

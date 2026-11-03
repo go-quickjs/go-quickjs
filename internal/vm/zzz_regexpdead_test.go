@@ -208,6 +208,7 @@ func TestRegExpDeadExecKinds(t *testing.T) {
 		}
 	}
 	SetTreeTier(true)
+	skipUnlessAllocsOrdinary(t)
 
 	// What a loop of them makes: nothing for each call, where an array
 	// and two strings had been made.
@@ -462,7 +463,7 @@ func TestRegExpDeadReplaceKinds(t *testing.T) {
 			if got := v.String().Go(); got != c.want {
 				t.Errorf("tree tier %v: %s = %s, want Node's %s", tree, c.call, got, c.want)
 			}
-			if tree {
+			if tree && allocsOrdinary() {
 				if made := regexpDeadMallocs(t, r, c.many, 2000); made > 400 {
 					t.Errorf("%s: 2000 replaces whose results nothing reads made %d objects", c.many, made)
 				}

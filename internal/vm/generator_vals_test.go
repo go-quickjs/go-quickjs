@@ -82,7 +82,7 @@ func TestGeneratorOneAllocation(t *testing.T) {
 			if _, err := r.call(fn, Undefined, args); err != nil {
 				t.Fatal(err)
 			}
-		}); n != 1 {
+		}); n != 1 && allocsOrdinary() {
 			t.Errorf("%s: %v allocations, want 1", src, n)
 		}
 	}
@@ -114,7 +114,7 @@ func TestGeneratorLoopRoom(t *testing.T) {
 		if v, err := r.call(fn, Undefined, args); err != nil || v.Number() != 3 {
 			t.Fatalf("got %v, %v", v, err)
 		}
-	}); n != 1 {
+	}); n != 1 && allocsOrdinary() {
 		t.Errorf("a generator made and run by for-of: %v allocations, want 1", n)
 	}
 	for _, tt := range []struct{ src, want string }{

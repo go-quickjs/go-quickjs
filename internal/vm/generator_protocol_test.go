@@ -366,7 +366,7 @@ func TestHelperStepsAllocate(t *testing.T) {
 				t.Fatalf("%s: %v, %v", c.name, v, err)
 			}
 		})
-		if n > c.max {
+		if n > c.max && allocsOrdinary() {
 			t.Errorf("%s: %.0f allocations a call, past %.0f", c.name, n, c.max)
 		}
 	}
@@ -405,7 +405,7 @@ func TestGeneratorCloseAllocates(t *testing.T) {
 				t.Fatalf("%s: %v, %v", c.name, v, err)
 			}
 		})
-		if n > 2 {
+		if n > 2 && allocsOrdinary() {
 			t.Errorf("%s: %.0f allocations a call, past 2", c.name, n)
 		}
 	}

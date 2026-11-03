@@ -40,6 +40,7 @@ func TestCaptureRoom(t *testing.T) {
 // maker's bindings costs: the function object, and one allocation for the
 // three bindings.
 func TestCaptureRoomAllocs(t *testing.T) {
+	skipUnlessAllocsOrdinary(t)
 	defer SetTreeTier(true)
 	for _, on := range []bool{false, true} {
 		SetTreeTier(on)
@@ -103,6 +104,7 @@ func TestArgumentsRoom(t *testing.T) {
 // them and what holds the slice -- rather than one for each alias and a map
 // of the parameters' names.
 func TestArgumentsRoomAllocs(t *testing.T) {
+	skipUnlessAllocsOrdinary(t)
 	defer SetTreeTier(true)
 	for _, tt := range []struct {
 		src  string

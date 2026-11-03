@@ -62,7 +62,7 @@ func TestReusedClosureAnswers(t *testing.T) {
 	if err != nil || v.Number() != 49995000 {
 		t.Fatalf("= %v, %v", v, err)
 	}
-	if n := b.Mallocs - a.Mallocs; n > 1000 {
+	if n := b.Mallocs - a.Mallocs; n > 1000 && allocsOrdinary() {
 		t.Errorf("10,000 iterations made %d allocations", n)
 	}
 }

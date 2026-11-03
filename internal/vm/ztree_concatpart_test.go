@@ -67,7 +67,7 @@ func TestTreeConcatPartsAllocations(t *testing.T) {
 	// One string an iteration, with room for what the test's own call
 	// path allocates. Both parts converted through a string of their own
 	// had made 20,000.
-	if n := b.Mallocs - a.Mallocs; n > 12000 {
+	if n := b.Mallocs - a.Mallocs; n > 12000 && allocsOrdinary() {
 		t.Errorf("10,000 chains of a string, a number and a string made %d allocations, want about 10,000", n)
 	}
 }

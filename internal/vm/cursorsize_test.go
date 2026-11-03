@@ -36,7 +36,7 @@ func TestCursorOneAllocation(t *testing.T) {
 		if err != nil || cursorOf(cur) == nil || cursorOf(cur).arr == nil {
 			t.Fatal("no cursor over the array")
 		}
-	}); n != 1 {
+	}); n != 1 && allocsOrdinary() {
 		t.Errorf("a for-of's cursor over an array: %v allocations, want 1", n)
 	}
 	for _, tt := range []struct{ src, want string }{

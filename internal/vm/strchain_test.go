@@ -61,6 +61,7 @@ func TestStringChain(t *testing.T) {
 // TestStringChainAllocs pins what a chain of strings costs: the string it
 // makes, and no string between.
 func TestStringChainAllocs(t *testing.T) {
+	skipUnlessAllocsOrdinary(t)
 	defer SetTreeTier(true)
 	for _, on := range []bool{false, true} {
 		SetTreeTier(on)

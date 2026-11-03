@@ -133,7 +133,7 @@ func TestDerivedConstructionAllocations(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime.ReadMemStats(&after)
-	if per := float64(after.Mallocs-before.Mallocs) / n; per > 1.05 {
+	if per := float64(after.Mallocs-before.Mallocs) / n; per > 1.05 && allocsOrdinary() {
 		t.Errorf("%.2f allocations a derived construction, want 1", per)
 	}
 }
