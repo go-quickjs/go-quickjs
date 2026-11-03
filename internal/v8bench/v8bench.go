@@ -149,7 +149,10 @@ func Main(name string, e Engine) {
 	var rt Runtime
 	var before runtime.MemStats
 	runtime.ReadMemStats(&before)
-	start, cpu0 := clock(), processCPU()
+	// The CPU time is read first: its first reading measures the rate
+	// it is counted at (cycleRate, about 15 ms on Windows), which the
+	// wall time is not to include.
+	cpu0, start := processCPU(), clock()
 	switch *mode {
 	case "compile":
 		for i := 0; i < *n; i++ {
@@ -230,7 +233,7 @@ func runFixed(e Engine, s *suite, src map[string]string, n int, only string) Run
 		}
 		var m0, m1 runtime.MemStats
 		runtime.ReadMemStats(&m0)
-		t0, c0 := clock(), processCPU()
+		c0, t0 := processCPU(), clock()
 		var err error
 		pprof.Do(context.Background(), pprof.Labels("bench", name), func(context.Context) {
 			_, err = rt.EvalString(fmt.Sprintf(`(() => {
@@ -272,7 +275,7 @@ func runAWFY(e Engine, s *suite, src map[string]string, n int, only string) Runt
 		}
 		var m0, m1 runtime.MemStats
 		runtime.ReadMemStats(&m0)
-		t0, c0 := clock(), processCPU()
+		c0, t0 := processCPU(), clock()
 		var err error
 		pprof.Do(context.Background(), pprof.Labels("bench", w.name), func(context.Context) {
 			_, err = rt.EvalString(awfyRun(w.module, w.inner, n))

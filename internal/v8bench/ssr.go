@@ -122,7 +122,7 @@ func runSSR(e Engine, s *suite, src map[string]string, n int, only string) Runti
 func measure(name string, f func() error) {
 	var m0, m1 runtime.MemStats
 	runtime.ReadMemStats(&m0)
-	t0, c0 := clock(), processCPU()
+	c0, t0 := processCPU(), clock()
 	var err error
 	pprof.Do(context.Background(), pprof.Labels("bench", name), func(context.Context) { err = f() })
 	d, c := clock()-t0, processCPU()-c0
