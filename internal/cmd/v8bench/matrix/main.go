@@ -66,7 +66,7 @@ type engine struct {
 	suites []string
 }
 
-var allSuites = []string{"v8", "octane", "awfy", "micro", "score"}
+var allSuites = []string{"v8", "octane", "awfy", "ssr", "micro", "score"}
 
 func main() {
 	if err := run(); err != nil {
@@ -77,14 +77,16 @@ func main() {
 
 func run() error {
 	engines := flag.String("engines", "gq,gqjit,qjs,node-jitless,node,goja", "the engines, of gq, gqjit, qjs, node-jitless, node and goja")
-	suites := flag.String("suites", strings.Join(allSuites, ","), "the suites: v8, octane, awfy, micro, score")
+	suites := flag.String("suites", strings.Join(allSuites, ","), "the suites: v8, octane, awfy, ssr, micro, score")
 	gojaSuites := flag.String("goja-suites", "v8,score", "the suites goja runs")
 	runs := flag.Int("runs", 3, "fresh-process runs of each suite on each engine")
 	nV8 := flag.Int("n-v8", 3, "the V8 suite's runs of its fixed work in a run")
 	nLong := flag.Int("n", 1, "Octane's and Are We Fast Yet's runs of their fixed work in a run")
+	nSSR := flag.Int("n-ssr", 5, "the ssr suite's runs of its fixed work in a run: FirstRender's fresh runtimes, Render's runs of its renders")
 	v8Dir := flag.String("v8", filepath.Join(os.TempDir(), "v8-v7"), "the V8 suite's directory")
 	octaneDir := flag.String("octane", filepath.Join(os.TempDir(), "octane"), "Octane's directory")
 	awfyDir := flag.String("awfy", filepath.Join(os.TempDir(), "awfy"), "Are We Fast Yet's directory")
+	ssrDir := flag.String("ssr", filepath.Join(os.TempDir(), "ssr"), "the ssr suite's directory")
 	fetch := flag.Bool("fetch", false, "download the suites that are missing first")
 	qjs := flag.String("qjs", "", "C QuickJS's qjs, by default the PATH's")
 	node := flag.String("node", "", "node, by default the PATH's")
@@ -114,7 +116,7 @@ func run() error {
 	if err := os.MkdirAll(bin, 0o755); err != nil {
 		return err
 	}
-	dirs := map[string]string{"v8": *v8Dir, "octane": *octaneDir, "awfy": *awfyDir, "score": *v8Dir}
+	dirs := map[string]string{"v8": *v8Dir, "octane": *octaneDir, "awfy": *awfyDir, "ssr": *ssrDir, "score": *v8Dir}
 	exe := func(name string) string {
 		if runtime.GOOS == "windows" {
 			return name + ".exe"
@@ -187,7 +189,7 @@ func run() error {
 		usable = append(usable, e)
 	}
 	if *fetch {
-		for _, s := range []string{"v8", "octane", "awfy"} {
+		for _, s := range []string{"v8", "octane", "awfy", "ssr"} {
 			if !slices.Contains(wanted, s) && !(s == "v8" && slices.Contains(wanted, "score")) {
 				continue
 			}
@@ -252,7 +254,11 @@ func run() error {
 					if groups != nil {
 						g = groups[(j+rep)%2]
 					}
-					args := runArgs(e, s, dirs[s], *nV8, *nLong)
+					n := *nLong
+					if s == "ssr" {
+						n = *nSSR
+					}
+					args := runArgs(e, s, dirs[s], *nV8, n)
 					file := filepath.Join(*out, fmt.Sprintf("%s-%s-%d.txt", e.name, s, rep))
 					go func() {
 						errs[j] = runOne(filepath.Join(bin, e.runner), args, file, g)
@@ -464,7 +470,7 @@ func render(dir string, microRows int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	run := regexp.MustCompile(`^(.+)-(v8|octane|awfy|micro|score)-(\d+)\.txt$`)
+	run := regexp.MustCompile(`^(.+)-(v8|octane|awfy|ssr|micro|score)-(\d+)\.txt$`)
 	// res[suite][engine] is each run's figures; order the engines' and the
 	// benchmarks' order.
 	res := map[string]map[string][]map[string]float64{}
@@ -527,8 +533,9 @@ func render(dir string, microRows int) (string, error) {
 		}
 		return (xs[len(xs)/2-1] + xs[len(xs)/2]) / 2, true
 	}
-	suiteTitles := map[string]string{"v8": "V8 suite, version 7", "octane": "Octane 2.0", "awfy": "Are We Fast Yet"}
-	for _, s := range []string{"v8", "octane", "awfy"} {
+	suiteTitles := map[string]string{"v8": "V8 suite, version 7", "octane": "Octane 2.0", "awfy": "Are We Fast Yet",
+		"ssr": "Server rendering, React 18"}
+	for _, s := range []string{"v8", "octane", "awfy", "ssr"} {
 		if res[s] == nil {
 			continue
 		}

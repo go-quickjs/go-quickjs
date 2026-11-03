@@ -110,7 +110,7 @@ func MainExternal() {
 	kind := flag.String("engine", "qjs", "the kind of program: qjs or node")
 	command := flag.String("cmd", "", "the program, qjs or node by default")
 	dir := flag.String("dir", "", "the directory the suite is in")
-	which := flag.String("bench", "v8", "the suite: v8, octane or awfy")
+	which := flag.String("bench", "v8", "the suite: v8, octane, awfy or ssr")
 	fetch := flag.Bool("fetch", false, "download the suite into -dir first")
 	mode := flag.String("mode", "fixed", "score, fixed or micro")
 	n := flag.Int("n", 5, "runs of each benchmark (fixed, micro)")
@@ -201,6 +201,19 @@ func suiteDriver(s *suite, prelude, dir string, fetch bool, mode, only string, n
 		driver = fmt.Sprintf(awfyDriver, prelude, awfyModules(s, src), "["+strings.Join(work, ", ")+"]", only, n)
 	case s.awfy:
 		fail(fmt.Errorf("Are We Fast Yet has no scores: run it in the fixed mode"))
+	case s.ssr && mode == "fixed":
+		for _, f := range s.files {
+			b, err := os.ReadFile(filepath.Join(dir, f))
+			if err != nil {
+				fail(fmt.Errorf("%w (run with -fetch to download the suite)", err))
+			}
+			if err := checkPin(s, f, b); err != nil {
+				fail(err)
+			}
+		}
+		driver = ssrExternal(s, prelude, only, n)
+	case s.ssr:
+		fail(fmt.Errorf("ssr has no scores: run it in the fixed mode"))
 	case mode == "score":
 		driver = prelude + `load("run.js");` + "\n"
 	case mode == "fixed":

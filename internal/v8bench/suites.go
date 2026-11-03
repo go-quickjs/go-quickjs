@@ -1,6 +1,7 @@
 package v8bench
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"strconv"
 	"strings"
@@ -22,6 +23,8 @@ import (
 //     calls an engine's speed would be lost behind. Its JavaScript is
 //     CommonJS modules, which the runners load through a require of their
 //     own (awfyModules).
+//   - ssr is a page React 18 renders on the server (ssr.go): React's UMD
+//     builds, the page this repository's own.
 type suite struct {
 	name string
 	// url is where the files are fetched from.
@@ -34,7 +37,15 @@ type suite struct {
 	// awfy marks Are We Fast Yet's harness, rather than the V8 suite's
 	// BenchmarkSuite.
 	awfy bool
+	// pins are files fetched from URLs of their own, not url's, each read
+	// only if it has its SHA-256.
+	pins map[string]pin
+	// ssr marks the server-rendering suite (ssr.go).
+	ssr bool
 }
+
+// A pin is where a file is fetched from, and its SHA-256, in hex.
+type pin struct{ url, sha256 string }
 
 var suites = map[string]*suite{
 	"v8": {
@@ -61,13 +72,37 @@ var suites = map[string]*suite{
 			"sieve.js", "storage.js", "towers.js"},
 		awfy: true,
 	},
+	"ssr": {
+		name:  "ssr",
+		files: []string{"react.production.min.js", "react-dom-server-legacy.browser.production.min.js"},
+		pins: map[string]pin{
+			"react.production.min.js": {"https://unpkg.com/react@18.3.1/umd/react.production.min.js",
+				"d949f1c3687aedadcedac85261865f29b17cd273997e7f6b2bfc53b2f9d4c4dd"},
+			"react-dom-server-legacy.browser.production.min.js": {"https://unpkg.com/react-dom@18.3.1/umd/react-dom-server-legacy.browser.production.min.js",
+				"829b2f17da148d9bc5b635c329b67068e67e4bf7d6a5bb64e49e9e92483deee5"},
+		},
+		ssr: true,
+	},
+}
+
+// checkPin fails a file of s's whose SHA-256 is not its pin's: one fetched
+// from somewhere else, or changed since.
+func checkPin(s *suite, file string, b []byte) error {
+	p, ok := s.pins[file]
+	if !ok {
+		return nil
+	}
+	if sum := fmt.Sprintf("%x", sha256.Sum256(b)); sum != p.sha256 {
+		return fmt.Errorf("%s: SHA-256 %s, want %s (run with -fetch to download it again)", file, sum, p.sha256)
+	}
+	return nil
 }
 
 // suiteNamed is the suite -bench names.
 func suiteNamed(name string) *suite {
 	s, ok := suites[name]
 	if !ok {
-		fail(fmt.Errorf("unknown suite %q: v8, octane or awfy", name))
+		fail(fmt.Errorf("unknown suite %q: v8, octane, awfy or ssr", name))
 	}
 	return s
 }

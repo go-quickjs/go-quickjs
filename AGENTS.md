@@ -230,8 +230,12 @@ go run ./internal/cmd/v8bench -dir /tmp/v8-v7 -fetch -mode fixed -n 5
 own: `octane`, Octane 2.0 -- the V8 suite's benchmarks revised, and larger
 programs: TypeScript, pdf.js, a Game Boy emulator, Box2D, zlib, Mandreel --
 and `awfy`, Are We Fast Yet's fourteen benchmarks, written to compare
-language implementations alike; the goja and external runners below take
-`-bench` too. They reach far more of the JIT than the V8 suite does. With
+language implementations alike -- and `ssr`, a shop's page React 18
+renders on the server (`internal/v8bench/ssr.js`, React's UMD builds
+fetched, pinned by SHA-256): `FirstRender` is a fresh runtime's load and
+first render, what a host making a runtime for each request pays, and
+`Render` the steady state. The goja and external runners below take
+`-bench` too; an external engine runs `Render` alone. They reach far more of the JIT than the V8 suite does. With
 `-jit`, `-jitreport` prints after each benchmark what the
 JIT did: what it compiled, by how much each function ran natively, and what
 it refused or never tried, with why. The runner gives the JIT a 32 MiB

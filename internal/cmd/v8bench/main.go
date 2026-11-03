@@ -79,6 +79,10 @@ func (engine) NewRuntime(host v8bench.Host) (v8bench.Runtime, error) {
 
 type runtimeOf struct{ rt *quickjs.Runtime }
 
+// Close closes the runtime, as the ssr suite's FirstRender closes each
+// run's.
+func (r runtimeOf) Close() { r.rt.Close() }
+
 func (r runtimeOf) Run(name, src string) error {
 	return padded(stackPad, func() error {
 		_, err := r.rt.EvalFile(name, src)

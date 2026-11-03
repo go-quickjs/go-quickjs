@@ -95,7 +95,7 @@ type Reporter interface {
 // what it prints.
 func Main(name string, e Engine) {
 	dir := flag.String("dir", "", "the directory the suite is in")
-	which := flag.String("bench", "v8", "the suite: v8, octane or awfy")
+	which := flag.String("bench", "v8", "the suite: v8, octane, awfy or ssr")
 	fetch := flag.Bool("fetch", false, "download the suite into -dir first")
 	mode := flag.String("mode", "fixed", "score, fixed, compile or micro")
 	n := flag.Int("n", 5, "runs of each benchmark (fixed, micro), or compiles of the suite (compile)")
@@ -118,6 +118,9 @@ func Main(name string, e Engine) {
 			b, err := os.ReadFile(filepath.Join(*dir, f))
 			if err != nil {
 				fail(fmt.Errorf("%w (run with -fetch to download the suite)", err))
+			}
+			if err := checkPin(s, f, b); err != nil {
+				fail(err)
 			}
 			src[f] = string(b)
 		}
@@ -157,17 +160,20 @@ func Main(name string, e Engine) {
 			}
 		}
 	case "score":
-		if s.awfy {
-			fail(fmt.Errorf("Are We Fast Yet has no scores: run it in the fixed mode"))
+		if s.awfy || s.ssr {
+			fail(fmt.Errorf("%s has no scores: run it in the fixed mode", s.name))
 		}
 		rt = newRuntime(e, src)
 		if err := rt.Run("run.js", src["run.js"]); err != nil {
 			fail(err)
 		}
 	case "fixed":
-		if s.awfy {
+		switch {
+		case s.ssr:
+			rt = runSSR(e, s, src, *n, *only)
+		case s.awfy:
 			rt = runAWFY(e, s, src, *n, *only)
-		} else {
+		default:
 			rt = runFixed(e, s, src, *n, *only)
 		}
 	case "micro":
@@ -318,7 +324,11 @@ func download(s *suite, dir string) error {
 		return err
 	}
 	for _, f := range append(s.files, s.extra...) {
-		resp, err := http.Get(s.url + f)
+		url := s.url + f
+		if p, ok := s.pins[f]; ok {
+			url = p.url
+		}
+		resp, err := http.Get(url)
 		if err != nil {
 			return err
 		}
@@ -329,6 +339,9 @@ func download(s *suite, dir string) error {
 		}
 		if resp.StatusCode != http.StatusOK {
 			return fmt.Errorf("fetching %s: %s", f, resp.Status)
+		}
+		if err := checkPin(s, f, b); err != nil {
+			return err
 		}
 		if err := os.WriteFile(filepath.Join(dir, f), b, 0o644); err != nil {
 			return err
