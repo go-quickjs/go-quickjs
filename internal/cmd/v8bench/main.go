@@ -32,7 +32,7 @@ func main() { v8bench.Main("go-quickjs", engine{}) }
 type engine struct{}
 
 var (
-	jitFlag       = flag.Bool("jit", false, "enable the optional native numeric tier")
+	jitFlag       = flag.Bool("jit", false, "enable the optional JIT (WithJIT)")
 	jitReportFlag = flag.Bool("jitreport", false, "after each benchmark, print what the JIT compiled, refused and skipped (fixed and micro modes, with -jit)")
 	jitBgFlag     = flag.Bool("jitbackground", false, "with -jit, compile in the background (WithJITBackground), as qjs --jit does; compiles timed by -jitcompile stay on the runtime's goroutine")
 	jitMemFlag    = flag.Int("jitmem", 32, "the JIT's memory budget in MiB, with -jit; 0 for the runtime's default (8 MiB)")

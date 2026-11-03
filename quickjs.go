@@ -133,8 +133,10 @@ type config struct {
 	sourceMapLoader  SourceMapLoader
 }
 
-// WithJIT enables the experimental native numeric tier. It requires a build
-// with the quickjs_jit tag on linux/amd64, windows/amd64, or darwin/arm64.
+// WithJIT enables the experimental JIT: hot functions are compiled to native
+// code, and regular expressions' patterns to machine code after their first
+// match over a kind of subject. It requires a build with the quickjs_jit tag
+// on linux/amd64, windows/amd64, or darwin/arm64.
 // Unsupported builds, denied executable memory, and unsupported functions
 // use the existing execution tiers. Native code is owned by this Runtime;
 // what the JIT holds is bounded by WithJITMemoryLimit, never by

@@ -1416,7 +1416,7 @@ bounds:
       --memory-limit N    stop the script at N bytes (64m, 1g)
       --stack-size N      value slots for all call frames
       --timeout D         stop after a duration such as 5s
-      --jit               enable the optional native numeric tier (quickjs_jit build),
+      --jit               enable the optional JIT (quickjs_jit build),
                           compiling in the background
       --no-jit-background with --jit, wait for each compile instead
       --no-code-generation   remove eval and the Function constructor

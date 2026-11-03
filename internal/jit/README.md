@@ -33,6 +33,8 @@ This file states the design and the contracts the code keeps.
 | `internal/vm/zzjit_native.go` | The VM's side: selection, the code cache, budgets, host exits. |
 | `internal/vm/zzjit_ssa.go` | Feedback for the builder, entering and resuming code, the calls of Go, native calls and their frames. |
 | `internal/vm/zzjit_disabled.go` | The stubs for builds without the tier. |
+| `internal/regexp/native_*.go` | Regular expressions' machine code: the generator (`native_gen.go`), its macro assembler for both machines (`native_masm.go`), character sets (`native_sets.go`), and entering and placing it (`native_jit.go`); `native_off.go` without the tag. See [Regular expressions](#regular-expressions). |
+| `internal/vm/zzjit_regexpnative.go` | The VM's host for them: the arena and the budget. |
 
 The VM files are named `zzjit_` so that they sort after `ztree_*.go`.
 Package vm's code is laid out in file-name order, so this placement moves
@@ -996,6 +998,69 @@ asked inside another compile, and compiles timed or repeated
 (`mir.Timing`, `JITCompileRepeat`) are compiled where they are asked
 (`jitInBackground`).
 
+## Regular expressions
+
+A runtime made `WithJIT` compiles a regular expression's pattern to
+machine code, on amd64 and arm64, as V8's Irregexp compiles one: the
+first match over a kind of subject is the matcher's, and the second makes
+the code (`nativeAfter`, V8's tier-up). The kinds are an ASCII string's
+bytes and a string's UTF-16 code units, each with its own count, its own
+code and its own refusal. Under `QJS_JIT_STRESS`'s threshold the first
+match makes it.
+
+**The code** (`internal/regexp/native_gen.go`) is the whole search, not
+one attempt: it resets the captures, counters and marks, passes over the
+positions no match can begin at -- the pattern's first units a word at a
+time, a class's a unit at a time -- and under each attempt pushes the
+position and the address of the attempt's failure. Each of the
+program's instructions is made as the matcher's run does it, in
+registers: the position a pointer into the subject, a backtracking stack
+of its own whose choice points are the addresses of the code that resumes
+them, and whose capture, counter and mark writes push the code that
+undoes them, as V8's code does, rather than a trail. A required literal
+is still found by Go (`strings.Index`): the code returns when the search
+has passed where it was, and Go finds the next and enters where the code
+left off. What a character matches is worked out as runs of code points
+when the code is made (`native_sets.go`), from the matcher's own tests:
+a few runs by comparisons, ASCII by a 128-byte table, the rest of the BMP
+by a two-level bit table or a compare tree. One generator writes both
+machines' code through a macro assembler (`native_masm.go`), as
+Irregexp's writes through its `RegExpMacroAssembler`, so every
+instruction's code changes on both at once.
+
+**The same work as the matcher.** Steps are counted exactly as the
+matcher counts them, so the 100M-step budget fails at the same
+instruction and the interrupt check is asked at the same step. The code
+returns to Go to grow its stack, for a check or the budget, and every
+`nativePoll` (65,536) steps, since it is never at a safe point. A pattern
+the code does not do -- a lookaround, an instruction that reads leftwards,
+a backreference under the `i` flag over UTF-16 -- is refused for that kind
+of subject, and matched by the matcher.
+
+**Placing it.** The VM gives the regexp package a host
+(`regexp.NativeHost`, `internal/vm/zzjit_regexpnative.go`), so that
+`regexp` imports nothing of the JIT's: `Place` puts the code in the
+runtime's arena and `Room` counts it against the JIT's budget, making
+room as a function's compile does. Code the budget had no room for is
+remembered by its size, and asked for again every `nativeRetry` (64)
+matches before it is made again. A pattern's code is given back by a
+cleanup whose argument holds only the code and the host's count: one that
+held the host reached the runtime, and so the pattern, and kept every JIT
+runtime alive.
+
+**Calling it from native code.** `RegExp.prototype.exec` and `test` are
+leaves (see **Leaves** under [Design](#design)): native code calls them
+without a frame, for any pattern, global and sticky ones included, given
+a string and a writable `lastIndex`; so is a string's `replace` by a
+RegExp that is no literal's. A match that would fail -- its step budget
+spent, the check's interrupt met -- errs with nothing written
+(`errRegExpLeafAgain`), and the call is made again with a frame, which
+throws; the match already found past the budget is remembered
+(`regexpLeaf.spent`), so it is not made twice. The leaves' checks ask
+whether `RegExp.prototype` and `RegExp` are as the realm made them
+(`propsIntact`), which a pristine layout answers at once, as V8's
+protectors do, and every way of changing a watched property clears.
+
 ## Memory
 
 **Allocation.**
@@ -1063,6 +1128,9 @@ Runtime construction allocates nothing for the JIT.
 **Without the tag.**
 - `jitBuilt` is false, and every hook in the interpreter and the tree tier is
   either an empty stub or inside `if jitBuilt`, so it is compiled out.
+- In `internal/regexp`, `nativeBuilt` is false (`native_off.go`), and the
+  search's hand-off to native code is a branch on that constant, compiled
+  out with it.
 - `internal/cmd/hotdiff` checks the result. Compare an untagged `cmd/qjs` at
   main with one at the change: `executeAt`, `runTree`, `runTreeNested`,
   `callObject`, `callTree`, `runFD` and `backEdgeCheck` must be the same,

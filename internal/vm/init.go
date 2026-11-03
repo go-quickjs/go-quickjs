@@ -10,7 +10,7 @@ import (
 
 // Config configures a new Runtime.
 type Config struct {
-	// JIT enables the optional native numeric tier when built with quickjs_jit.
+	// JIT enables the optional JIT when built with quickjs_jit.
 	JIT bool
 	// JITMemoryLimit bounds what the JIT holds for the runtime -- its code
 	// and all that describes it, what it has learned, the programs it

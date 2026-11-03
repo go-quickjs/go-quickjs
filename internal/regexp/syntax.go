@@ -10,6 +10,14 @@
 // Matching operates on UTF-16 code units, which is what JavaScript strings are.
 // Under the `u` flag the unit stream is decoded to code points instead, so that
 // a surrogate pair is one character and a quantifier applies to the whole of it.
+//
+// In a build with the quickjs_jit tag, a pattern whose host gives it a
+// NativeHost -- the VM's, for a runtime with the JIT -- is compiled to machine
+// code for amd64 and arm64 after its first match over a kind of subject, as
+// V8's Irregexp compiles one (native_gen.go, native_masm.go, native_sets.go,
+// native_jit.go): the same search, the same results and the same step counts
+// as the matcher's, which matches what the code refuses. Without the tag,
+// native_off.go leaves the matcher alone. internal/jit/README.md describes it.
 package regexp
 
 import (

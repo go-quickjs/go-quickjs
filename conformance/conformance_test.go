@@ -37,7 +37,7 @@ import (
 // example, -conformance.force-feature=Temporal.
 
 var (
-	jitFlag    = flag.Bool("conformance.jit", false, "enable the optional native numeric tier")
+	jitFlag    = flag.Bool("conformance.jit", false, "enable the optional JIT (WithJIT)")
 	jitBgFlag  = flag.Bool("conformance.jitbackground", false, "with -conformance.jit, compile in the background (WithJITBackground)")
 	reportPath = flag.String("conformance.report", "",
 		"write the list of failing tests to this file")
