@@ -176,6 +176,13 @@ func (l *regexpLeaf[_]) match(r *Runtime, this Value, args []Value) (Value, erro
 		reuse = l.reuse
 		l.reuse = execReuseCall{}
 	}
+	return l.matchOf(r, this, args, dead, reuse)
+}
+
+// matchOf is match's call, told of it by its caller rather than through
+// the leaf: dead, the RegExp of a call whose result nothing reads, and
+// reuse, of one whose array may be made again (see match).
+func (l *regexpLeaf[_]) matchOf(r *Runtime, this Value, args []Value, dead *Object, reuse execReuseCall) (Value, error) {
 	if len(args) == 0 || !args[0].IsString() || !this.IsObject() {
 		return l.slow(r, this, args)
 	}

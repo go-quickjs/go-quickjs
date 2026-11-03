@@ -145,7 +145,18 @@ func reuseCallRest[_ any](r *Runtime, site *execReuseSite, locals []Value, o *Ob
 		return r.callRest(o, fd, recv, args)
 	}
 	l := execReuseLeaf[struct{}](r)
-	l.reuse = execReuseCall{site: site, recv: recv.Object(), locals: locals}
+	rc := execReuseCall{site: site, recv: recv.Object(), locals: locals}
+	if fd != nil && !fd.bound && (fd.realm == nil || fd.realm == r.Realm) && l.statefulCheck(r, recv, args) {
+		// The leaf's match made here, as callRest would make it, told of
+		// the site as it is called -- and of a global or a sticky
+		// RegExp's too, the call made once (statefulCheck). One that errs
+		// has made nothing, and is made again by callRest's path, which
+		// throws its error with a frame.
+		if v, err := l.matchOf(r, recv, args, nil, rc); err == nil {
+			return v, nil
+		}
+	}
+	l.reuse = rc
 	v, err := r.callRest(o, fd, recv, args)
 	if l.reuse.site != nil {
 		l.reuse = execReuseCall{}
