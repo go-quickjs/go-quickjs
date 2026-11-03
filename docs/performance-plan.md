@@ -551,7 +551,7 @@ What V8 does instead, from its source (`src/objects`, `src/execution`):
 | D5 | JIT entries at a function's start and its loops' headers only; a deopt leaves the rest of the invocation to the interpreter and the tree tier, which go on natively by OSR at a loop. Replaces `allEntries` and the learned entries | Done (`2919ad8`); a frame Go finishes for a native call goes on at a loop's header too |
 | D6 | A shape native code was not compiled for deopts, as V8's map checks do; a read is megamorphic in native code only where its cache is | Done (`ac60a85`); a read whose cache is empty scans the receiver's own small table (`Scan`), and a read remembered by a chain's cell or as dictionaries is megamorphic (`0430bf0`) |
 | D7 | Compiled again on the lower tiers' budget, reset when a cache's feedback changes, as V8's tier-up; replaces the settling on exits, the ticks of Go's work and the profit check's stretches | Done (`09301d0`, `dd6bb7b`, `e2d731e`, `3979bad`): only an eager deopt invalidates; first compile and compile again on V8's budgets, 400 invocations times the bytecode's length, 500 after a cache changes; the profit check kept, code it judges slow still entered by OSR at a long loop (`dddc1d4`) |
-| D8 | Compiling in the background, as V8's concurrent recompilation: the optimization and the backend on a worker, the build and the placing on the runtime's goroutine; opt-in for a runtime, on in `qjs --jit` | Phases 1 to 4 done, measuring; see [D8](#d8-compiling-in-the-background) |
+| D8 | Compiling in the background, as V8's concurrent recompilation: the optimization and the backend on a worker, the build and the placing on the runtime's goroutine; opt-in for a runtime, on in `qjs --jit` | Phases 1 to 5 done; see [D8](#d8-compiling-in-the-background) |
 
 The order is D1 and D2 first: they remove the churn of feedback at its
 source and help the interpreter and the tree tier as much as the JIT. Then
@@ -640,9 +640,9 @@ deterministically.
 | 0 | Baseline: F5's first and second renders, Octane, AWFY and the V8 suite with `-jit`, wall and CPU, peak RSS, at `GOMAXPROCS=1` too | First render measured (below), with `v8bench -bench ssr` (`c2b1d40`), the suites to come |
 | 1 | The three steps (`jitJob`: `jitPrepare`, `work`, `jitInstall`), still run one after the other where the compile is made, and `VirtualRoot` asked at the build of every pool escape analysis may take, the answers it takes kept with the code as before (`Func.VirtualAsked`, `keepVirtuals`). No change in behaviour | Done: AWFY's 424 compiles the same code, length, marks, spills and SSA, but for heap addresses; the work reads the job's function and workspace alone, so the feedback needs no type of its own |
 | 2 | `WithJITBackground`, the workers, the install points and the rules for throwing a compile away, for first compiles and compiles again; the qjs flags, the runners' flags and the stress mode. A worker recovers a panic into a refusal counted as the backend's (`backendPanics`), as the runtime's goroutine leaves `ssa`'s panics loud; compiles timed (`mir.Timing`, `-jitcompile`) or repeated (`JITCompileRepeat`) stay synchronous | Done (`zzjit_background.go`). Found by the differential tests run in the background: a nested tree run without its recover, its function's compile pending, whose code arrived at the loop's check and was entered there, unwound to the script's tree, which returned the loop's result (`jitTreeRecovery`, `TestJITBackgroundInstallAtNestedLoop`). The stress's background is read where it is used, so a test that sets its own stress compiles on the spot, as it does without the stress's budgets; three tests counting what a compile on the spot does pin it |
-| 3 | Callees' compiles in the background: a native caller calls through the callee's link, or Go runs the callee, until its code is installed; each caller deciding by whether code exists reviewed | Done: `jitNativeCallee`'s compiles and `jitHotEntry`'s; the callers decide by the entry they are given, nil while pending, as for a refusal for now. The callees a compile just installed wants (`jitWantedCallees`) are compiled on the spot, the caller compiled again at once to call them |
+| 3 | Callees' compiles in the background: a native caller calls through the callee's link, or Go runs the callee, until its code is installed; each caller deciding by whether code exists reviewed | Done: `jitNativeCallee`'s compiles and `jitHotEntry`'s; the callers decide by the entry they are given, nil while pending, as for a refusal for now. The callees a compile wants (`jitWantedCallees`) were compiled on the spot at first, the caller compiled again at once to call them; they go to the background now, the caller compiled again once it has spent a budget |
 | 4 | Lowering on a worker too, its hints copied, before the build | Done (`jitLowerLater`): for first compiles, after the compile's own refusals and the room for it, as a compile on the spot lowers only once it has the room -- lowered for no compile, the 300 functions of `TestJITMemoryLimitOption` held 44 KB past a 1 MB budget; the compile decided (`due`) and made at the check that finds it lowered |
-| 5 | The build on a worker, from a snapshot of the feedback taken first (V8's `JSHeapBroker`), only if phase 2 shows the build is what is left | Not yet: the build is a fifth of what is left (below) |
+| 5 | The build on a worker, from a snapshot of the feedback taken first (V8's `JSHeapBroker`), only if phase 2 shows the build is what is left | Done (`zzjit_snapshot.go`, its answers and askers generated by `internal/vm/internal/snapgen`): a question the snapshot was not asked is a miss, built on the runtime's goroutine at install; `QJS_JIT_SNAPCHECK=1` checks every build against its snapshot. First render 39.2 -> 35.5 ms, five runtimes 159.5 -> 152.2 (median of nine), then the snapshot's capture and its sparse questions, -4.8% and -2.3% |
 
 **The first render** (`v8bench -bench ssr -suite FirstRender`, fresh
 processes on the Ryzen, the median of seven; each process renders in one
@@ -670,6 +670,38 @@ of Go (`jitGoCall`, 0.96 s), the exits unwinding its frames
 (`jitUnwindNative`, 0.81 s), and the collector's marking of what it
 allocates. Moving the build to a worker (phase 5) would take at most that
 fifth; the larger part is which young code is worth entering.
+
+**Open after the review of phases 1 to 5** (2026-11-03; none changes a
+result, none was found to race or crash):
+
+- The snapshot asks every question at every PC, and some write the
+  feedback beyond the lists it captures and replays: `lexThis`, `loops`,
+  the keep's strings, `definesUnfed`; it also lowers callees, marks shapes
+  seen and makes links the build may not use. An entry built in the
+  background can carry what its build never asked. The oracle
+  (`QJS_JIT_SNAPCHECK`) compares the SSA and the nine lists only.
+- A compile again that finds its code still called natively waits
+  (`jitReoptimized`, `otherwiseInUse`), asked again at each check: under
+  an outer loop that never returns, it holds one of the runtime's
+  `jitJobsMax` slots, its workspace and its code for good. On the spot it
+  is not made at all then.
+- A link a compile in flight calls through can be let go (`unlink`); the
+  compile is then built again on the runtime's goroutine (`bgStale`, 1 to 4%
+  of compiles in the V8 suite). Holding the snapshot's links (`refs`)
+  while the compile is in flight would keep it.
+- What compiles in flight hold -- up to four workspaces, their code and
+  snapshots a runtime -- is the process's, outside `WithJITMemoryLimit`,
+  and a runtime that does not run keeps its finished ones until it runs
+  or closes.
+- In a background runtime `jitWarmFor` (an entry past its generation) and
+  the unwinding (`jitFor`) still compile on the spot; a loop's check
+  drains before it looks for a stop, so a halted script may still build a
+  missed or stale compile first.
+- A value kept from where it is made, not from the store on (`481b3864`),
+  may hold a keep cell longer: how often mir now runs out of its 256
+  (`ErrKeeps`) is not measured. With 100 values live across 100 stores
+  the build still makes about 21,000 phis (51,000 before): each store's
+  slow path joins every live value.
 
 ### Found while doing D5 to D7, left for later
 
