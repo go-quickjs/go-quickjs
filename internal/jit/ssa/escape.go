@@ -42,9 +42,63 @@ import (
 // start, and their prototype -- an object literal's, the realm's
 // Object.prototype; a construction's receiver's, the prototype the pool's
 // objects were made with, which the code checks the constructor has
-// (OpProtoIs) -- each kept alive by the VM; false if Go cannot make one so.
+// (OpProtoIs) -- each held alive by the VM, and kept with the code where
+// escape analysis takes them (Func's VirtualAsked); false if Go cannot make
+// one so. The build asks it of every pool whose take escape analysis may
+// leave unmade (poolTake), once each (askVirtualRoots), so that the
+// optimization asks the VM nothing.
 type VirtualFeedback interface {
 	VirtualRoot(pool uintptr) (shape, proto uintptr, ok bool)
+}
+
+// virtualRoot is VirtualFeedback's answer for a pool.
+type virtualRoot struct {
+	shape, proto uintptr
+	ok           bool
+}
+
+// askVirtualRoots asks fb, if it is VirtualFeedback, how Go makes the
+// objects of every pool whose take f's escape analysis may leave unmade.
+func askVirtualRoots(f *Func, fb Feedback) {
+	vf, ok := fb.(VirtualFeedback)
+	if !ok {
+		return
+	}
+	for _, b := range f.Blocks {
+		for _, v := range b.Values {
+			site := poolTake(v)
+			if site == nil {
+				continue
+			}
+			if _, asked := f.virtual[site.Pool]; asked {
+				continue
+			}
+			if f.virtual == nil {
+				f.virtual = map[uintptr]virtualRoot{}
+			}
+			shape, proto, ok := vf.VirtualRoot(site.Pool)
+			f.virtual[site.Pool] = virtualRoot{shape: shape, proto: proto, ok: ok}
+		}
+	}
+}
+
+// poolTake is v's call, if v takes an object from a pool that escape
+// analysis may leave unmade: an object literal's, or a construction's
+// receiver whose constructor the code inlines. Its operands are not looked
+// at, which candidates' tests add, so that what the build asks of covers
+// every take the optimization finds.
+func poolTake(v *Value) *CallSite {
+	if v.Op != OpCall || len(v.Calls()) != 1 {
+		return nil
+	}
+	site := v.Calls()[0]
+	if site.Pool == 0 {
+		return nil
+	}
+	if site.Literal && site.Alloc && site.Argc == 0 || site.Receiver && !site.Derived && site.Parent == 0 && site.Via == 0 {
+		return site
+	}
+	return nil
 }
 
 // virtual is an object the code may not make: the pool's take (OpCall), its
@@ -187,12 +241,12 @@ func (e *escaper) candidates() bool {
 	f := e.f
 	for _, b := range f.Blocks {
 		for _, v := range b.Values {
-			if v.Op != OpCall || len(v.Calls()) != 1 {
+			site := poolTake(v)
+			if site == nil {
 				continue
 			}
-			site := v.Calls()[0]
-			literal := site.Literal && site.Alloc && site.Argc == 0 && site.Pool != 0 && len(v.Args) == 0
-			receiver := site.Receiver && site.Pool != 0 && !site.Derived && site.Parent == 0 && site.Via == 0 && len(v.Args) >= 1
+			literal := site.Literal && site.Alloc && site.Argc == 0 && len(v.Args) == 0
+			receiver := site.Receiver && !site.Derived && site.Parent == 0 && site.Via == 0 && len(v.Args) >= 1
 			if !literal && !receiver {
 				continue
 			}
@@ -458,7 +512,13 @@ func (e *escaper) propagate() {
 		changed = false
 		for _, o := range e.objs {
 			if !o.escaped && o.shape == 0 {
-				shape, proto, ok := e.f.virtual.VirtualRoot(o.site.Pool)
+				a := e.f.virtual[o.site.Pool]
+				shape, proto, ok := a.shape, a.proto, a.ok
+				if ok {
+					// Kept alive with the code by the VM, as its answer
+					// was when asked here.
+					e.f.VirtualAsked = append(e.f.VirtualAsked, o.site.Pool)
+				}
 				if !ok || shape == 0 || proto == 0 {
 					o.escaped, changed = true, true
 					continue

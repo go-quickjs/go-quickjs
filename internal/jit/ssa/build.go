@@ -2700,7 +2700,19 @@ func BuildWith(p *ir.Program, fb Feedback) (*Func, error) { return build(nil, p,
 // SOM's Vector.forEach, called in its loop). Such a first build is never
 // the code: where nothing was found, or the second build is refused
 // (unmadeAlone), the function is built again without them.
+//
+// The build that stands is asked escape analysis's questions
+// (askVirtualRoots): what the optimization needs of the VM is asked here.
 func build(w *Workspace, p *ir.Program, fb Feedback) (*Func, error) {
+	f, err := buildChosen(w, p, fb)
+	if err == nil {
+		askVirtualRoots(f, fb)
+	}
+	return f, err
+}
+
+// buildChosen is build's choice of builds (above).
+func buildChosen(w *Workspace, p *ir.Program, fb Feedback) (*Func, error) {
 	f, plan, provisional, err := buildCalls(w, p, fb, nil)
 	if err != nil {
 		return f, err
@@ -2776,9 +2788,6 @@ func buildCalls(w *Workspace, p *ir.Program, fb Feedback, plan *calledPlan) (*Fu
 	b.translate()
 	bigLeafSites(f)
 	f.slotCount = b.nslots
-	if vf, ok := fb.(VirtualFeedback); ok {
-		f.virtual = vf
-	}
 	if len(b.inlined) != 0 {
 		for _, pc := range sortedKeys(b.inlined) {
 			if fr := b.inlined[pc]; !fr.given && p.Code[pc].Op == ir.Host {

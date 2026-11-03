@@ -551,6 +551,7 @@ What V8 does instead, from its source (`src/objects`, `src/execution`):
 | D5 | JIT entries at a function's start and its loops' headers only; a deopt leaves the rest of the invocation to the interpreter and the tree tier, which go on natively by OSR at a loop. Replaces `allEntries` and the learned entries | Done (`2919ad8`); a frame Go finishes for a native call goes on at a loop's header too |
 | D6 | A shape native code was not compiled for deopts, as V8's map checks do; a read is megamorphic in native code only where its cache is | Done (`ac60a85`); a read whose cache is empty scans the receiver's own small table (`Scan`), and a read remembered by a chain's cell or as dictionaries is megamorphic (`0430bf0`) |
 | D7 | Compiled again on the lower tiers' budget, reset when a cache's feedback changes, as V8's tier-up; replaces the settling on exits, the ticks of Go's work and the profit check's stretches | Done (`09301d0`, `dd6bb7b`, `e2d731e`, `3979bad`): only an eager deopt invalidates; first compile and compile again on V8's budgets, 400 invocations times the bytecode's length, 500 after a cache changes; the profit check kept, code it judges slow still entered by OSR at a long loop (`dddc1d4`) |
+| D8 | Compiling in the background, as V8's concurrent recompilation: the optimization and the backend on a worker, the build and the placing on the runtime's goroutine; opt-in for a runtime, on in `qjs --jit` | Phase 1 done, phase 2 under way; see [D8](#d8-compiling-in-the-background) |
 
 The order is D1 and D2 first: they remove the churn of feedback at its
 source and help the interpreter and the tree tier as much as the JIT. Then
@@ -570,6 +571,78 @@ RegExp -17.7%, Splay -7.4%, Typescript -2.7%; Box2D +14.2%, RayTrace
 +5.3%, Sieve +5.3%, Storage +2.2%), V8 +0.1% (DeltaBlue +21.7%, 1.8 ms
 to 2.1). Two runs a benchmark, warm-up included, had had Box2D 22%
 faster: its loss is its steady state's.
+
+### D8. Compiling in the background
+
+Every compile runs on the runtime's goroutine, and the script waits for it:
+a first compile (`jitCompileFor`), a compile again in place
+(`jitReoptimize`, 40 to 65% of all compile time), and a callee's for its
+native callers (`jitNativeCallee`), whose callers decide by whether it has
+code at once. F5's first render spends 32.6 ms so -- lowering 4.3, the
+build 8.6, the optimization 8.4, the backend 8.3 -- and runs in 66 ms
+against the interpreter's 22. V8 compiles on other threads while the lower
+tiers go on, and installs the code when it is done.
+
+**What may leave the runtime's goroutine.**
+
+- The build may not: some 45 feedback interfaces read the caches, and many
+  change the runtime -- a pool made, a shape remembered, a link, a callee
+  lowered, the typeof and has caches made.
+- The optimization and the backend may: they read the `Func`, a workspace
+  (pooled already, under a lock) and `jitEncoding`, as they do today in
+  runtimes compiling on goroutines of their own. The one exception is
+  escape analysis's `VirtualRoot`, which reads a constructor's layout and
+  remembers its root shape: answered at the build instead, the remembering
+  left to the code's install.
+- The placing may not: it makes arena pages writable, which is sound
+  because nothing else of the runtime's runs then.
+- Code installed later is no less sound than code run later: what it
+  speculates on its guards check, and the addresses it holds live as long
+  as the runtime or are kept alive by its entry. What may have changed by
+  then is that the function deoptimized, or its entry went: such a compile
+  is thrown away.
+- `ssa` recovers no panic of its own (`mir` and `compile` do): a worker
+  must, or a compiler bug kills the process.
+
+**The design.** A compile is three steps.
+
+1. Prepare, on the runtime's goroutine: lower, seed the calls, make room,
+   build, answer escape analysis's questions.
+2. Work, anywhere: `ssa.Optimize` and `mir.CompileIn`, touching nothing of
+   the runtime's; on a worker, any panic a refusal.
+3. Install, on the runtime's goroutine: `roomFor`, `jit.NewSSACode`, and
+   what a compile does once placed today.
+
+A runtime that compiles in the background hands step 2 to the process's
+workers, `max(1, GOMAXPROCS/4)` of them, a few compiles of each runtime
+in flight at once. Meanwhile its entry is busy: a first compile's function
+runs in the existing tiers, and code compiled again runs on unless it was
+invalidated. The runtime installs finished compiles at the function's next
+entry (`tryJITAt`), at the back-edge check, which also picks up loops for
+on-stack replacement and functions only native callers call, and where Go
+makes a native callee's frame. A compile is thrown away if the function
+deoptimized since its build -- the code would fail the same guard and count
+again towards `jitMaxDeopts` -- if its entry was dropped, if the runtime was
+released, or if installing finds no room.
+
+Tiering is reproducible today, which the differential fuzzer, the
+placements and the tests counting compiles need, so the runtime keeps
+compiling synchronously unless it asks: `WithJITBackground()`, with
+`WithJIT()`. `qjs --jit` asks, and `--no-jit-background` stops it. The
+conformance runner and v8bench stay synchronous unless given
+`-conformance.jitbackground` or `-jitbackground`, and `QJS_JIT_STRESS`'s
+`background=K` installs a compile exactly K checks after it was handed
+over, waiting for it if need be: the window between build and install,
+deterministically.
+
+| Phase | Step | Status |
+|---|---|---|
+| 0 | Baseline: F5's first and second renders, Octane, AWFY and the V8 suite with `-jit`, wall and CPU, peak RSS, at `GOMAXPROCS=1` too | Open |
+| 1 | The three steps (`jitJob`: `jitPrepare`, `work`, `jitInstall`), still run one after the other where the compile is made, and `VirtualRoot` asked at the build of every pool escape analysis may take, the answers it takes kept with the code as before (`Func.VirtualAsked`, `keepVirtuals`). No change in behaviour | Done: AWFY's 424 compiles the same code, length, marks, spills and SSA, but for heap addresses; the work reads the job's function and workspace alone, so the feedback needs no type of its own |
+| 2 | `WithJITBackground`, the workers, the install points and the rules for throwing a compile away, for first compiles and compiles again; the qjs flags, the runners' flags and the stress mode. A worker recovers a panic into a refusal counted as the backend's (`backendPanics`), as the runtime's goroutine leaves `ssa`'s panics loud; compiles timed (`mir.Timing`, `-jitcompile`) or repeated (`JITCompileRepeat`) stay synchronous | Open |
+| 3 | Callees' compiles in the background: a native caller calls through the callee's link, or Go runs the callee, until its code is installed; each caller deciding by whether code exists reviewed | Open |
+| 4 | Lowering on a worker too, its hints copied, before the build | Open |
+| 5 | The build on a worker, from a snapshot of the feedback taken first (V8's `JSHeapBroker`), only if phase 2 shows the build is what is left | Open |
 
 ### Found while doing D5 to D7, left for later
 
@@ -1908,7 +1981,7 @@ to remove:
 | F2 | A `for...in` cursor from a free list | 8.5% of a render's allocation | Medium | Open |
 | F3 | An array's old elements reused when it grows | up to 14% of a render's allocation | High | Open |
 | F4 | The JIT slower than the interpreter here | 1.20x the interpreter | Medium | Done |
-| F5 | A fresh runtime's first render and its memory, with the JIT | first render 66 ms against 22, live heap 26.2 MiB against 7.3 | Medium | Memory done; first render measured, to be fixed by compiling in the background (D's last step) |
+| F5 | A fresh runtime's first render and its memory, with the JIT | first render 66 ms against 22, live heap 26.2 MiB against 7.3 | Medium | Memory done; first render measured, to be fixed by compiling in the background ([D8](#d8-compiling-in-the-background)) |
 
 - **F1.** `s += x` makes a rope node an iteration, 48 bytes, and the JIT
   already avoids it: a loop whose appends are the only readers of the

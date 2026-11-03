@@ -2187,25 +2187,82 @@ func (r *Runtime) compileSSA(fn *bytecode.Function, cl *closure, p *ir.Program, 
 var jitKeepLimit int
 
 // compileSSAKeeping is compileSSA's build and compile, the build's keep
-// cells limited to keepLimit (ssa.KeepFeedback), or not, if 0. The code is
-// placed only if the JIT has the room for all its entry is to hold then
-// (roomFor), its code and what describes it included: jit.ErrCodeBudget
-// otherwise.
+// cells limited to keepLimit (ssa.KeepFeedback), or not, if 0: its three
+// steps (jitJob), one after the other.
 func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Program, e *jitEntry, keepLimit int) (*jit.SSACode, *jitFeedback, error) {
+	j, err := r.jitPrepare(fn, cl, p, e, keepLimit)
+	if err != nil {
+		return nil, nil, err
+	}
+	j.work()
+	return r.jitInstall(j)
+}
+
+// jitJob is a compile in its three steps, as V8's concurrent compiles
+// are: prepared on the runtime's goroutine (jitPrepare), which builds the
+// function from what the runtime knows; worked (work), the optimization
+// and the backend, which read and write the job and nothing of the
+// runtime's; installed on the runtime's goroutine again (jitInstall),
+// which takes what the work found into the feedback and places the code.
+type jitJob struct {
+	fn        *bytecode.Function
+	p         *ir.Program
+	e         *jitEntry
+	fb        *jitFeedback
+	keepLimit int
+	// w is the compile's workspace, the process's, given back once its
+	// code is placed, and f the function built in it.
+	w *jit.Workspace
+	f *ssa.Func
+	// mc is the backend's code, or err its refusal.
+	mc  *mir.Code
+	err error
+}
+
+// jitPrepare is a compile's first step: p built from cl's caches, the
+// build's keep cells limited to keepLimit, or not, if 0, or the build's
+// refusal.
+func (r *Runtime) jitPrepare(fn *bytecode.Function, cl *closure, p *ir.Program, e *jitEntry, keepLimit int) (*jitJob, error) {
 	fb := &jitFeedback{r: r, fn: fn, cl: cl, e: e, keepLimit: keepLimit, prog: p, targets: jitTargetsOf(e)}
-	// The compile's memory comes from a workspace of the process's, given
-	// back once its code is placed.
-	s := r.jit
 	w := jit.GetWorkspace()
-	defer jit.PutWorkspace(w)
 	if t := mir.Timing; t != nil {
 		t.Start()
 	}
 	f, err := r.jitBuildSSA(w, fn, p, fb)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: %v", jitRefused, err)
+		jit.PutWorkspace(w)
+		return nil, fmt.Errorf("%w: %v", jitRefused, err)
 	}
-	ssa.Optimize(f)
+	return &jitJob{fn: fn, p: p, e: e, fb: fb, keepLimit: keepLimit, w: w, f: f}, nil
+}
+
+// work is a compile's second step: the function optimized and compiled
+// by the backend. It reads the job's function, its workspace and the
+// encoding, and writes the job: nothing of the runtime's, its feedback
+// included -- what escape analysis needs of it the build asked
+// (ssa.VirtualFeedback) -- so that it may run on another goroutine.
+func (j *jitJob) work() {
+	ssa.Optimize(j.f)
+	if t := mir.Timing; t != nil {
+		t.Lap(mir.PhaseOptimize)
+	}
+	if jitSSAOptimized != nil {
+		jitSSAOptimized(j.fn, j.f)
+	}
+	j.mc, j.err = mir.CompileIn(&j.w.MIR, j.f, jitEncoding)
+}
+
+// jitInstall is a compile's last step: what the work found taken into the
+// feedback, and the code placed, if the JIT has the room for all its entry
+// is to hold then (roomFor), its code and what describes it included:
+// jit.ErrCodeBudget otherwise. It gives the job's workspace back.
+func (r *Runtime) jitInstall(j *jitJob) (*jit.SSACode, *jitFeedback, error) {
+	defer jit.PutWorkspace(j.w)
+	fn, p, e, fb, f, keepLimit := j.fn, j.p, j.e, j.fb, j.f, j.keepLimit
+	s := r.jit
+	// The pools' roots and prototypes escape analysis took, which the
+	// objects it does not make are made with at an exit.
+	fb.keepVirtuals(f.VirtualAsked)
 	fb.virtuals, fb.called = f.Virtuals, f.Called
 	// The calls it inlines, of those whose inlining it asked (Inline).
 	fb.inlinedN = len(f.Inlined)
@@ -2220,13 +2277,7 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 		fb.homes = f.HomesEnd - p.Locals
 		fb.loopSlots = max(fb.loopSlots, fb.homes)
 	}
-	if t := mir.Timing; t != nil {
-		t.Lap(mir.PhaseOptimize)
-	}
-	if jitSSAOptimized != nil {
-		jitSSAOptimized(fn, f)
-	}
-	mc, err := mir.CompileIn(&w.MIR, f, jitEncoding)
+	mc, err := j.mc, j.err
 	if err != nil && strings.Contains(err.Error(), "runtime error") {
 		// A refusal the backend's own panic made: a bug, which the tests
 		// look for (backendPanics).
@@ -2469,6 +2520,9 @@ type jitFeedback struct {
 	// once Resumed asks (selfKnown).
 	selfCalls []int32
 	selfKnown bool
+	// virtualRoots are VirtualRoot's answers, by pool, held until the
+	// compile keeps those escape analysis took (keepVirtuals).
+	virtualRoots map[uintptr]jitVirtualRoot
 }
 
 // CharCode is ssa.CharCodeFeedback's: whether the method call of one

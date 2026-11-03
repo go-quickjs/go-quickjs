@@ -1145,8 +1145,12 @@ type Func struct {
 	// homes are (escape.go).
 	slotCount int
 	// virtual is what the VM says of the objects the code may not make
-	// (VirtualFeedback), or nil: none is left unmade.
-	virtual VirtualFeedback
+	// (VirtualFeedback), by pool, asked at the build (askVirtualRoots), or
+	// nil: none is left unmade. VirtualAsked are the pools whose answers
+	// escape analysis took, as often and in the order it took them, which
+	// the VM keeps alive with the code.
+	virtual      map[uintptr]virtualRoot
+	VirtualAsked []uintptr
 	// HasCache is the address of the VM's cache of the in operator's
 	// answers (abi.HasCacheBits), which native code looks a key string in
 	// before it calls Go for one (GoHas); 0 for none (HasCacheFeedback).
