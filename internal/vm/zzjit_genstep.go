@@ -375,6 +375,11 @@ func (r *Runtime) jitGenMakeSeen(e *jitEntry, cl *closure, pc int, callee Value)
 		return
 	}
 	o := callee.Object()
+	if fd := o.fn(); fd == nil || fd.closure == nil || !fd.closure.fn.Generator {
+		// No generator function's, which every call of Go of any other
+		// had asked, its scope compared, before anything else.
+		return
+	}
 	for _, x := range e.genMakes {
 		if int(x.pc) == pc && x.obj == o {
 			if x.pool != nil && x.pool.Count == 0 {

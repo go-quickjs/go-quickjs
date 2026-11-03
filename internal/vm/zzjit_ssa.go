@@ -3540,6 +3540,9 @@ func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 			e.callSites[pc] = jitCallsHot - 1
 		}
 	}
+	if r.jitKnownTargetSeen(f, e, pc, sp, in) {
+		return
+	}
 	was := r.jit.deciding
 	r.jit.deciding = e
 	defer func() { r.jit.deciding = was }()
@@ -6803,6 +6806,49 @@ func (r *Runtime) jitCalled(f *frame, sp int, in bytecode.Instr) (*Object, *clos
 		return nil, nil
 	}
 	return o, o.fn().closure
+}
+
+// jitKnownTargetSeen is jitCallSeen's at a call decided native
+// (jitCallNative), with no inlining pending, of a function it calls
+// natively already, which has code: jitCallTarget's answers to such a call
+// learn nothing -- no new target, no closure of a known function to call by
+// its code, no callee to compile -- but count the calls of a callee native
+// callers do not call for now (notNative) toward its being called natively
+// again (jitRetryNative). It gives that answer, in jitCallTarget's order,
+// and reports whether it did; any other call is jitCallSeen's to learn
+// from. Such calls are what native code leaves for at each call of a
+// callee it calls through Go while the callee is notNative, or whose code
+// leaves at its start: asked jitCallSeen's every question, each had cost
+// Go a third again of what it costs without them.
+func (r *Runtime) jitKnownTargetSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Instr) bool {
+	if in.Op == bytecode.OpNew || e.inlinePending || uint(pc) >= uint(len(e.callSites)) || e.callSites[pc] != jitCallNative {
+		return false
+	}
+	o, cl := r.jitCalled(f, sp, in)
+	if cl == nil {
+		return false
+	}
+	for i := range e.nativeCalls {
+		x := &e.nativeCalls[i]
+		if int(x.pc) != pc {
+			continue
+		}
+		if x.cl != nil && x.obj != o && !x.byCode && jitSameCode(x.cl, cl) {
+			// Another closure of a function it calls: jitCallTarget's to
+			// call by its code.
+			return false
+		}
+		if x.obj == o || x.cl == nil || x.byCode && jitSameCode(x.cl, cl) {
+			ce := r.jit.entryFor(cl.fn)
+			if (x.obj == o || x.byCode) && ce != nil && ce.notNative {
+				jitRetryNative(ce)
+				return true
+			}
+			// One with no code is jitCallTarget's to compile.
+			return x.cl == nil || ce != nil && ce.ssa != nil
+		}
+	}
+	return false
 }
 
 // jitCallTarget notes a call made natively that left for Go at pc: a

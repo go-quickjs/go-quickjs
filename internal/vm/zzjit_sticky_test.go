@@ -296,3 +296,65 @@ func TestJITInlinedConcat(t *testing.T) {
 		r.Close()
 	}
 }
+
+// A native call of a function its code calls natively, which native
+// callers no longer call (notNative), is Go's, and teaches the caller
+// nothing: no target to learn, no code to compile again (jitKnownTargetSeen
+// answers it, as jitCallTarget would). It counts toward the callee's being
+// called natively again (jitRetryNative), which it is after jitNativeRetry
+// such calls. Each answer is the interpreter's.
+func TestJITKnownNotNativeCalleeCounted(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	jitNoInlineForTest(t, "leaf")
+	const setup = `
+		function leaf(x) { return String(x).length + x }
+		function mid(x) { let s = 0; for (let j = 0; j < 2; j++) s = (s + leaf(x + j)) | 0; return s }
+		function outer(n) { let s = 0; for (let i = 0; i < n; i++) s = (s + mid(i)) | 0; return s }`
+	want := New(Config{})
+	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	for _, rt := range []*Runtime{want, r} {
+		if _, err := rt.Run(compileForTest(t, setup+`; outer(300); outer(300)`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fnOf := func(name string) *closure {
+		return r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
+	}
+	leaf, mid := r.jit.cache[weak.Make(fnOf("leaf").fn)], r.jit.cache[weak.Make(fnOf("mid").fn)]
+	if leaf == nil || leaf.ssa == nil || mid == nil || mid.ssa == nil || mid.link.in == 0 ||
+		!slices.ContainsFunc(mid.nativeCalls, func(x jitInline) bool { return x.cl == fnOf("leaf") }) {
+		t.Skipf("mid not called natively, or not calling leaf so: %+v %+v", mid, leaf)
+	}
+	leaf.notNative, leaf.nativeRetry, leaf.nativeBackoff = true, 0, 2
+	leaf.link.clearCode()
+	code, targets := mid.ssa, len(mid.nativeCalls)
+	wv, err := want.Run(compileForTest(t, `outer(300)`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func() {
+		t.Helper()
+		gv, err := r.Run(compileForTest(t, `outer(300)`))
+		if err != nil || gv.Number() != wv.Number() {
+			t.Fatalf("outer(300) = %v, %v; interpreter %v", gv, err, wv)
+		}
+	}
+	run()
+	if !leaf.notNative || leaf.nativeRetry == 0 {
+		t.Fatalf("leaf's 600 calls: notNative %v, counted %d", leaf.notNative, leaf.nativeRetry)
+	}
+	if mid.ssa != code || len(mid.nativeCalls) != targets || mid.inlineReopt || mid.reopt {
+		t.Fatalf("mid learned from calls of a known target: code kept %v, targets %d -> %d, inlineReopt %v, reopt %v",
+			mid.ssa == code, targets, len(mid.nativeCalls), mid.inlineReopt, mid.reopt)
+	}
+	for i := 0; leaf.notNative; i++ {
+		if i == 10 {
+			t.Fatalf("leaf not called natively again after 6,600 calls: counted %d", leaf.nativeRetry)
+		}
+		run()
+	}
+}
