@@ -91,7 +91,7 @@ rounds:
 			}
 			return v
 		}
-		changed := unboxed
+		changed, rewritten := unboxed, false
 		for _, b := range f.Blocks {
 			for _, v := range b.Values {
 				if subst[v.ID] != nil {
@@ -100,11 +100,15 @@ rounds:
 				for i, a := range v.Args {
 					v.Args[i] = find(a)
 				}
+				op := v.Op
 				if w := simplify(f, v); w != nil {
 					subst[v.ID], replaced = w, true
 					changed = true
 					continue
 				}
+				// Rewritten in place, as simplify rewrites a value: another
+				// op, whose operands may be left unused.
+				rewritten = rewritten || v.Op != op
 				// A value a dominating guard found initialized -- or an object, a
 				// number or an array, which an uninitialized binding is not --
 				// is initialized still: its check is none.
@@ -144,8 +148,14 @@ rounds:
 		// later in the walk, or a guard that cannot fail, which nothing
 		// uses -- simplify nothing more: a value's simplification asks
 		// only what its operands are, and a phi's only which, so a round
-		// that only did those is the last.
-		removeDead(f)
+		// that only did those is the last. A round that did none of them
+		// -- most functions' last, which finds the rounds done -- leaves
+		// nothing the sweep before did not take: the sweep is the first
+		// round's, for what the build or escape analysis left dead, and
+		// any round's that replaced or rewrote a value.
+		if changed || rewritten || round == 0 {
+			removeDead(f)
+		}
 		f.rounds = round + 1
 		if !changed {
 			break
