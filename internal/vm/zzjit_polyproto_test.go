@@ -104,3 +104,43 @@ func TestJITPolyProto(t *testing.T) {
 		t.Errorf("isF(xs, 6400) left native code %d times", left)
 	}
 }
+
+// The in operator asked in a loop of an object made by Object.create of a
+// prototype made for it, which keeps the prototype in its table, is
+// answered natively after its first turns: the Go call native code makes
+// for an answer its probe of hasCache does not find (jitHas) gives such an
+// object a layout of its own when asked again, as the tree's in node does,
+// and the entry then made for it is native code's. It had called Go at
+// every turn, each run of the loop making the object anew (prop_in, five
+// times main's time over ten runs).
+func TestJITPolyProtoIn(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	if _, err := r.Run(compileForTest(t, `function probe(n) {
+			var proto = {inherited: 1}, obj = Object.create(proto), s = 0
+			obj.a = 1
+			for (var j = 0; j < n; j++) {
+				if ("a" in obj) s++
+				if ("z" in obj) s += 10
+				if ("inherited" in obj) s += 100
+				if ("toString" in obj) s += 1000
+			}
+			return s
+		}`)); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 4; i++ {
+		if v, err := r.Run(compileForTest(t, `probe(2000)`)); err != nil || v.Number() != 2000*1101 {
+			t.Fatal(v, err)
+		}
+	}
+	v, calls := jitCountGoCalls(t, r, `probe(20000)`)
+	if v.Number() != 20000*1101 {
+		t.Fatalf("probe(20000) = %v", v)
+	}
+	if calls > 100 {
+		t.Errorf("probe(20000) called Go %d times", calls)
+	}
+}

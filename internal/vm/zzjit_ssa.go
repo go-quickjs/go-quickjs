@@ -7599,6 +7599,18 @@ func (r *Runtime) jitHas(key, obj Value) (has, ok bool) {
 		return false, false
 	}
 	o := obj.Object()
+	if o.flags&objPolyProto != 0 {
+		// An object that keeps its prototype in its table, whose layout
+		// says none, matches no entry native code's probe of hasCache
+		// reads (mir's keyedHas reads the layout's prototype): asked again
+		// by a key hasCache has, it is given a layout of its own holding
+		// its prototype, as the tree's in node gives it (hasCached), which
+		// the entry hasNote then makes for it matches. Without this a loop
+		// asking of such an object called here at every turn.
+		if has, ok := hasCached(r, key, o); ok {
+			return has, true
+		}
+	}
 	if has, ok := hasQuick(r, key, o); ok {
 		// Plain objects and arrays, which hold what they have.
 		return has, true
