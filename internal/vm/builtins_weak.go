@@ -67,7 +67,7 @@ func (r *Runtime) initWeakRefBuiltins() {
 			return Undefined, rt.throwTypeError("a WeakRef target must be an object or an unregistered symbol")
 		}
 		o := newObject(wrProto, ClassWeakRef)
-		o.extOf().data = &weakRefData{target: makeWeak(target)}
+		o.setData(&weakRefData{target: makeWeak(target)})
 		// A target is kept alive for the rest of the turn it was registered
 		// in, so that a reference cannot be created and found empty in the
 		// same breath.
@@ -105,7 +105,7 @@ func (r *Runtime) initWeakRefBuiltins() {
 			return Undefined, rt.throwTypeError("a FinalizationRegistry requires a cleanup callback")
 		}
 		o := newObject(frProto, ClassFinalizationRegistry)
-		o.extOf().data = &finalizationData{cleanup: cleanup, ctx: rt.asyncCtx}
+		o.setData(&finalizationData{cleanup: cleanup, ctx: rt.asyncCtx})
 		rt.registries = append(rt.registries, makeWeak(Obj(o)))
 		return Obj(o), nil
 	})

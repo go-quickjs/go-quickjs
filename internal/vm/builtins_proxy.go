@@ -819,7 +819,7 @@ func (r *Runtime) initProxyBuiltins() {
 			return nil, rt.throwTypeError("Proxy requires an object target and handler")
 		}
 		o := newObject(proxyProto, ClassProxy)
-		o.extOf().data = &proxyData{target: target.Object(), handler: handler.Object(),
+		*o.dataSlot() = &proxyData{target: target.Object(), handler: handler.Object(),
 			callable: target.Object().IsCallable(), constructor: isConstructor(target)}
 		// A proxy whose target is callable is itself callable, which is what
 		// makes the apply and construct traps reachable.

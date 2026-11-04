@@ -380,6 +380,7 @@ var testEncoding = abi.Encoding{
 	ObjectArrayLen: int32(unsafe.Offsetof(testObject{}.testObjectExt) + unsafe.Offsetof(testObjectExt{}.arrayLen)),
 	ObjectElems:    int32(unsafe.Offsetof(testObject{}.testObjectExt) + unsafe.Offsetof(testObjectExt{}.elems)),
 	ClassArray:     testClassArray, FlagSparse: testFlagSparse, FlagHTMLDDA: testFlagHTMLDDA, FlagExt: testFlagExt,
+	FlagData:    testFlagExt,
 	UpvalueSlot: int32(unsafe.Offsetof(testUpvalue{}.slot)),
 	String:      testTagBase | 4, StringData: int32(unsafe.Offsetof(testString{}.s)),
 	StringLeft: int32(unsafe.Offsetof(testString{}.left)), StringLength: int32(unsafe.Offsetof(testString{}.length)),

@@ -33,7 +33,7 @@ func (r *Runtime) initShadowRealm() {
 		o := newObjectExt(p, ClassObject, objExtensible)
 		re := rt.NewRealm()
 		re.shadow = true
-		o.extOf().data = &shadowRealmData{realm: re}
+		o.setData(&shadowRealmData{realm: re})
 		return Obj(o), nil
 	})
 

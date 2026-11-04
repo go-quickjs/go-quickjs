@@ -277,7 +277,7 @@ func (r *Runtime) installEval() {
 	}
 	_ = fnProto
 	ctor := ctorVal.Object()
-	ctor.extOf().data = &funcData{
+	*ctor.dataSlot() = &funcData{
 		realm:    r.Realm,
 		name:     "Function",
 		length:   1,
@@ -338,7 +338,7 @@ func (r *Runtime) defDerivedFunctionCtor(name string, proto *Object, base *Objec
 		return
 	}
 	c := newObject(base, ClassFunction)
-	c.extOf().data = &funcData{
+	*c.dataSlot() = &funcData{
 		name: name, length: 1, ctorKind: ctorBase, realm: r.Realm,
 		native: func(rt *Runtime, this Value, args []Value) (Value, error) {
 			if rt.evaluator == nil {

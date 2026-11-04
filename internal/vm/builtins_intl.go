@@ -546,7 +546,7 @@ func (r *Runtime) initNumberFormat(intlObj *Object) {
 			return Undefined, err
 		}
 		out := newObjectExt(made, ClassObject, objExtensible)
-		out.extOf().data = o
+		out.setData(o)
 		return rt.legacyFormatter(this, out), nil
 	})
 	r.defValue(intlObj, "NumberFormat", Obj(ctor))
@@ -978,7 +978,7 @@ func (r *Runtime) initDateTimeFormat(namespace *Object) {
 			return Undefined, err
 		}
 		out := newObjectExt(made, ClassObject, objExtensible)
-		out.extOf().data = d
+		out.setData(d)
 		return rt.legacyFormatter(this, out), nil
 	})
 	r.defValue(namespace, "DateTimeFormat", Obj(ctor))

@@ -79,7 +79,7 @@ func (r *Runtime) initSegmenter(intlObj *Object) {
 		}
 		o.locale = kept.String()
 		out := newObjectExt(proto, ClassObject, objExtensible)
-		out.extOf().data = o
+		out.setData(o)
 		return Obj(out), nil
 	})
 	r.defValue(intlObj, "Segmenter", Obj(ctor))
@@ -102,7 +102,7 @@ func (r *Runtime) initSegmenter(intlObj *Object) {
 			return Undefined, err
 		}
 		out := newObjectExt(segments, ClassObject, objExtensible)
-		out.extOf().data = o.breakUp(s)
+		out.setData(o.breakUp(s))
 		return Obj(out), nil
 	})
 	r.defMethod(proto, "resolvedOptions", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -171,7 +171,7 @@ func (r *Runtime) newSegmentsProto() *Object {
 				return Undefined, err
 			}
 			out := newObjectExt(rt.intlProtoOf("SegmentIterator"), ClassObject, objExtensible)
-			out.extOf().data = &segmentIterData{segments: d}
+			out.setData(&segmentIterData{segments: d})
 			return Obj(out), nil
 		})
 	return p

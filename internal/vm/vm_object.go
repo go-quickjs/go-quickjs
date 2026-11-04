@@ -141,7 +141,8 @@ func (p ownProp) setFlags(flags propFlags) { p.o.setFlagsAt(p.i, flags) }
 
 // objFlags holds per-object booleans. Native code reads the low byte's
 // (abi.Encoding's FlagSparse, FlagHTMLDDA, FlagExtensible,
-// FlagLengthWritable and FlagExt); the high byte's are the VM's alone.
+// FlagLengthWritable, FlagExt and FlagData); the high byte's are the VM's
+// alone.
 type objFlags uint16
 
 const (
@@ -160,11 +161,10 @@ const (
 	// after it (ext): an array, a function, any exotic object, and an
 	// ordinary one made with the room for internal slots (newObjectExt).
 	objHasExt
-	// objImmutableProto marks an object whose prototype can never be changed,
-	// however extensible it is. Object.prototype is one: the root of every
-	// ordinary chain cannot be given a parent without making the chain cyclic
-	// for the whole realm at once.
-	objImmutableProto
+	// objHasData marks an object whose side fields have internal slots
+	// (objectExt's data): any with side fields but an array, whose own
+	// (arrayExt) have none.
+	objHasData
 	// objHTMLDDA is Annex B's [[IsHTMLDDA]] slot, which the web's document.all
 	// has: typeof says "undefined", ToBoolean says false, and == says it
 	// equals null and undefined. Everything else sees an ordinary object.
@@ -180,6 +180,11 @@ const (
 	// in a frame. It sits on the scope chain like a `with` object, but it is
 	// not one a script can reach: a call through it has no receiver.
 	objEvalVars
+	// objImmutableProto marks an object whose prototype can never be changed,
+	// however extensible it is. Object.prototype is one: the root of every
+	// ordinary chain cannot be given a parent without making the chain cyclic
+	// for the whole realm at once.
+	objImmutableProto
 	// objProtoMet marks an object that has been the prototype of one made
 	// with it (rootIn, firstRoot): the objects made after that start from
 	// the roots kept on its own layout.
@@ -248,9 +253,18 @@ type objectExt struct {
 
 	// data carries the internal slots of an exotic object: *funcData for a
 	// function, *dateData for a Date, and so on. It is nil for an ordinary
-	// object. An array has none, and keeps its weakMapRefs here instead
-	// (newWeakMapRefs).
+	// object. An array's side fields have none (arrayExt).
 	data any
+}
+
+// arrayExt is an array's side fields: its elements where objectExt has
+// them, and, where objectExt has its data, which an array has none of, its
+// length once sparse -- 16 bytes fewer, which makes an array of four
+// elements in its own allocation 128 bytes, a size class below the 144 it
+// took. objHasData is clear on an array: nothing reads the data its side
+// fields do not have (dataOf, setData).
+type arrayExt struct {
+	elems []Value
 
 	// arrayLen is an array's length once it stops being dense. It cannot be
 	// derived from the keys present at that point, because a length may be far
@@ -313,11 +327,44 @@ func (o *Object) embedExt(e *objectExt) {
 	if uintptr(unsafe.Pointer(e)) != uintptr(unsafe.Pointer(o))+unsafe.Sizeof(Object{}) {
 		panic("vm: an embedded ext not right after its object")
 	}
+	o.flags |= objHasExt | objHasData
+}
+
+// embedArrayExt is embedExt for an array's side fields, which have no data.
+func (o *Object) embedArrayExt(e *arrayExt) {
+	if uintptr(unsafe.Pointer(e)) != uintptr(unsafe.Pointer(o))+unsafe.Sizeof(Object{}) {
+		panic("vm: an embedded ext not right after its object")
+	}
 	o.flags |= objHasExt
 }
 
+// arrayExt is the side fields of o, an array.
+func (o *Object) arrayExt() *arrayExt {
+	return (*arrayExt)(unsafe.Add(unsafe.Pointer(o), unsafe.Sizeof(Object{})))
+}
+
+// setData sets o's internal slots, which its side fields must have room
+// for: not an array's, nor an ordinary object's made without side fields.
+func (o *Object) setData(d any) { *o.dataSlot() = d }
+
+// dataSlot is where o's internal slots are, which it must have.
+func (o *Object) dataSlot() *any {
+	if o.flags&objHasData == 0 {
+		panic("vm: internal slots given an object with no room for them")
+	}
+	return &o.dataExtAt().data
+}
+
+// extElems is the part every object's side fields begin with, an array's
+// (arrayExt) and the others' (objectExt) alike: what is read through it is
+// there in either, where an objectExt laid over an array's would reach past
+// the end of its allocation.
+type extElems struct {
+	elems []Value
+}
+
 // ext is o's side fields, or nil if its allocation has none.
-func (o *Object) ext() *objectExt {
+func (o *Object) ext() *extElems {
 	if o.flags&objHasExt == 0 {
 		return nil
 	}
@@ -326,14 +373,20 @@ func (o *Object) ext() *objectExt {
 
 // extAt is the side fields of o, which has them: an array's, a function's,
 // those of an object of any class but ClassObject.
-func (o *Object) extAt() *objectExt {
+func (o *Object) extAt() *extElems {
+	return (*extElems)(unsafe.Add(unsafe.Pointer(o), unsafe.Sizeof(Object{})))
+}
+
+// dataExtAt is the side fields of o, which has internal slots in them
+// (objHasData): any but an array's.
+func (o *Object) dataExtAt() *objectExt {
 	return (*objectExt)(unsafe.Add(unsafe.Pointer(o), unsafe.Sizeof(Object{})))
 }
 
 // extOf is o's ext, which it must have: an object of any class but
 // ClassObject has one from the start, and an ordinary object one only if it
 // was made with it (newObjectExt).
-func (o *Object) extOf() *objectExt {
+func (o *Object) extOf() *extElems {
 	if o.flags&objHasExt == 0 {
 		panic("vm: an object made without the side fields it is given")
 	}
@@ -348,11 +401,10 @@ func (o *Object) elemsOf() []Value {
 	return nil
 }
 
-// dataOf is o's internal slots: nil without an ext. An array's is its
-// weakMapRefs, if it has been a key.
+// dataOf is o's internal slots: nil without them, an array's included.
 func (o *Object) dataOf() any {
-	if o.flags&objHasExt != 0 {
-		return o.extAt().data
+	if o.flags&objHasData != 0 {
+		return o.dataExtAt().data
 	}
 	return nil
 }
@@ -360,10 +412,6 @@ func (o *Object) dataOf() any {
 // weakMapRefsOf is o's values in the WeakMaps it is a key of: nil if it has
 // never been one.
 func (o *Object) weakMapRefsOf() *weakMapRefs {
-	if o.class == ClassArray {
-		refs, _ := o.extAt().data.(*weakMapRefs)
-		return refs
-	}
 	if o.valn == 0 {
 		return nil
 	}
@@ -373,7 +421,7 @@ func (o *Object) weakMapRefsOf() *weakMapRefs {
 	return nil
 }
 
-// weakRefsHolder is what an object other than an array keeps its values in
+// weakRefsHolder is what an object keeps its values in
 // the WeakMaps it is a key of in: an internal object, the value of a private
 // property under atomWeakMapRefs, which no script can name and no
 // reflective operation reports. A key's entries cannot be in its ext, which
@@ -386,15 +434,10 @@ type weakRefsHolder struct {
 }
 
 // newWeakMapRefs gives o, which has none, its values in the WeakMaps it is
-// a key of, empty. An array keeps them as its data; any other object in a
-// private property (weakRefsHolder), which an object closed to new
-// properties is given as well: being a key is not a property of it.
+// a key of, empty, in a private property (weakRefsHolder), which an object
+// closed to new properties is given as well: being a key is not a property
+// of it.
 func (o *Object) newWeakMapRefs() *weakMapRefs {
-	if o.class == ClassArray {
-		refs := &weakMapRefs{}
-		o.extAt().data = refs
-		return refs
-	}
 	h := &weakRefsHolder{Object: Object{class: ClassObject}}
 	o.setOwnRaw(atomWeakMapRefs, Obj(&h.Object), propPrivate)
 	return &h.refs
@@ -423,9 +466,20 @@ func newObject(proto *Object, class Class) *Object {
 // class but ClassObject has and an ordinary object only when it will carry
 // internal slots.
 func newObjectExt(proto *Object, class Class, flags objFlags) *Object {
+	if class == ClassArray {
+		x := &arrayExtObject{Object: Object{shape: rootFor(class, proto), class: class, flags: flags}}
+		x.embedArrayExt(&x.side)
+		return &x.Object
+	}
 	x := &extObject{Object: Object{shape: rootFor(class, proto), class: class, flags: flags}}
 	x.embedExt(&x.side)
 	return &x.Object
+}
+
+// arrayExtObject is extObject for an array.
+type arrayExtObject struct {
+	Object
+	side arrayExt
 }
 
 // extObject is an object of a kind that always has an ext, with it in the
@@ -544,7 +598,7 @@ func newErrorObject(proto *Object) *Object {
 // own, sized exactly.
 type arrayObject struct {
 	Object
-	side   objectExt
+	side   arrayExt
 	inline [4]Value
 }
 
@@ -571,47 +625,47 @@ func newArrayStorage(n int) (*Object, []Value) {
 	switch {
 	case n <= len(arrayObject{}.inline):
 		ao := new(arrayObject)
-		ao.embedExt(&ao.side)
+		ao.embedArrayExt(&ao.side)
 		return &ao.Object, ao.inline[:]
 	case n <= 6:
 		x := new(struct {
 			Object
-			side   objectExt
+			side   arrayExt
 			inline [6]Value
 		})
-		x.embedExt(&x.side)
+		x.embedArrayExt(&x.side)
 		return &x.Object, x.inline[:]
 	case n <= 8:
 		x := new(struct {
 			Object
-			side   objectExt
+			side   arrayExt
 			inline [8]Value
 		})
-		x.embedExt(&x.side)
+		x.embedArrayExt(&x.side)
 		return &x.Object, x.inline[:]
 	case n <= 10:
 		x := new(struct {
 			Object
-			side   objectExt
+			side   arrayExt
 			inline [10]Value
 		})
-		x.embedExt(&x.side)
+		x.embedArrayExt(&x.side)
 		return &x.Object, x.inline[:]
 	case n <= 12:
 		x := new(struct {
 			Object
-			side   objectExt
+			side   arrayExt
 			inline [12]Value
 		})
-		x.embedExt(&x.side)
+		x.embedArrayExt(&x.side)
 		return &x.Object, x.inline[:]
 	case n <= 16:
 		x := new(struct {
 			Object
-			side   objectExt
+			side   arrayExt
 			inline [16]Value
 		})
-		x.embedExt(&x.side)
+		x.embedArrayExt(&x.side)
 		return &x.Object, x.inline[:]
 	}
 	return nil, nil
@@ -626,7 +680,7 @@ func newArrayStorage(n int) (*Object, []Value) {
 // rest).
 type matchResultObject struct {
 	Object
-	side   objectExt
+	side   arrayExt
 	fields [4]Value
 	inline [4]Value
 	str    String
@@ -637,7 +691,7 @@ type matchResultObject struct {
 // groups.
 type matchResult1Object struct {
 	Object
-	side   objectExt
+	side   arrayExt
 	fields [3]Value
 	inline [1]Value
 	str    String
@@ -649,7 +703,7 @@ type matchResult1Object struct {
 // 208, 224 and 240 bytes -- a matchResultObject is 256.
 type matchResult2Object struct {
 	Object
-	side   objectExt
+	side   arrayExt
 	fields [3]Value
 	inline [2]Value
 	str    String
@@ -657,7 +711,7 @@ type matchResult2Object struct {
 
 type matchResult3Object struct {
 	Object
-	side   objectExt
+	side   arrayExt
 	fields [3]Value
 	inline [3]Value
 	str    String
@@ -665,7 +719,7 @@ type matchResult3Object struct {
 
 type matchResult4Object struct {
 	Object
-	side   objectExt
+	side   arrayExt
 	fields [3]Value
 	inline [4]Value
 	str    String
@@ -675,7 +729,7 @@ type matchResult4Object struct {
 // d flag, whose elements are a slice of their own.
 type matchResultNObject struct {
 	Object
-	side   objectExt
+	side   arrayExt
 	fields [3]Value
 	str    String
 }
@@ -693,37 +747,37 @@ func newMatchResult(proto *Object, n int, indices bool) (*Object, *String) {
 		case 1:
 			mo := &matchResult1Object{Object: o}
 			mo.setRoom(&mo.fields[0], len(mo.fields))
-			mo.embedExt(&mo.side)
+			mo.embedArrayExt(&mo.side)
 			mo.side.elems = mo.inline[:]
 			return &mo.Object, &mo.str
 		case 2:
 			mo := &matchResult2Object{Object: o}
 			mo.setRoom(&mo.fields[0], len(mo.fields))
-			mo.embedExt(&mo.side)
+			mo.embedArrayExt(&mo.side)
 			mo.side.elems = mo.inline[:]
 			return &mo.Object, &mo.str
 		case 3:
 			mo := &matchResult3Object{Object: o}
 			mo.setRoom(&mo.fields[0], len(mo.fields))
-			mo.embedExt(&mo.side)
+			mo.embedArrayExt(&mo.side)
 			mo.side.elems = mo.inline[:]
 			return &mo.Object, &mo.str
 		case 4:
 			mo := &matchResult4Object{Object: o}
 			mo.setRoom(&mo.fields[0], len(mo.fields))
-			mo.embedExt(&mo.side)
+			mo.embedArrayExt(&mo.side)
 			mo.side.elems = mo.inline[:]
 			return &mo.Object, &mo.str
 		}
 		mo := &matchResultNObject{Object: o}
 		mo.setRoom(&mo.fields[0], len(mo.fields))
-		mo.embedExt(&mo.side)
+		mo.embedArrayExt(&mo.side)
 		mo.side.elems = make([]Value, n)
 		return &mo.Object, &mo.str
 	}
 	mo := &matchResultObject{Object: o}
 	mo.setRoom(&mo.fields[0], len(mo.fields))
-	mo.embedExt(&mo.side)
+	mo.embedArrayExt(&mo.side)
 	if n <= len(mo.inline) {
 		mo.side.elems = mo.inline[:n]
 	} else {
@@ -1642,8 +1696,8 @@ func (o *Object) setElem(i uint32, v Value) bool {
 // any higher index properties stored sparsely.
 func (o *Object) arrayLength() uint32 {
 	n := uint32(len(o.elemsOf()))
-	if o.flags&objHasSparseElements != 0 && o.extAt().arrayLen > n {
-		return o.extAt().arrayLen
+	if o.flags&objHasSparseElements != 0 && o.arrayExt().arrayLen > n {
+		return o.arrayExt().arrayLen
 	}
 	return n
 }
@@ -1658,7 +1712,11 @@ func (o *Object) arrayLength() uint32 {
 // It must be called before the dense elements are moved or dropped.
 func (o *Object) markSparse() {
 	if o.flags&objHasSparseElements == 0 {
-		o.extAt().arrayLen = uint32(len(o.elemsOf()))
+		// Only an array has a length to record: another object's side
+		// fields hold its data where an array's hold the length.
+		if o.class == ClassArray {
+			o.arrayExt().arrayLen = uint32(len(o.elemsOf()))
+		}
 		o.flags |= objHasSparseElements
 	}
 }
@@ -1667,8 +1725,8 @@ func (o *Object) markSparse() {
 // dense elements.
 func (o *Object) noteArrayIndex(i uint32) {
 	o.markSparse()
-	if i+1 > o.extAt().arrayLen {
-		o.extAt().arrayLen = i + 1
+	if i+1 > o.arrayExt().arrayLen {
+		o.arrayExt().arrayLen = i + 1
 	}
 }
 
@@ -1686,7 +1744,7 @@ func (o *Object) setArrayLength(n uint32) {
 		}
 		o.extOf().elems = o.elemsOf()[:n]
 		if o.flags&objHasSparseElements != 0 {
-			o.extAt().arrayLen = n
+			o.arrayExt().arrayLen = n
 		}
 	case uint(n) > uint(len(o.elemsOf())):
 		// Extending an array only makes it longer; the new slots are holes.
@@ -1709,11 +1767,11 @@ func (o *Object) setArrayLength(n uint32) {
 			o.extOf().elems = e
 		} else {
 			o.markSparse()
-			o.extAt().arrayLen = n
+			o.arrayExt().arrayLen = n
 		}
 	default:
 		if o.flags&objHasSparseElements != 0 {
-			o.extAt().arrayLen = n
+			o.arrayExt().arrayLen = n
 		}
 	}
 	if o.flags&objHasSparseElements != 0 {

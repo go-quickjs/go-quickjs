@@ -64,7 +64,7 @@ func (r *Runtime) initDurationFormat(intlObj *Object) {
 			return Undefined, err
 		}
 		out := newObjectExt(made, ClassObject, objExtensible)
-		out.extOf().data = o
+		out.setData(o)
 		return Obj(out), nil
 	})
 	r.defValue(intlObj, "DurationFormat", Obj(ctor))

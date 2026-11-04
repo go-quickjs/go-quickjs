@@ -91,7 +91,7 @@ func (r *Runtime) evalIn(caller *frame, fn *bytecode.Function) (Value, error) {
 			fd.cls = outer.cls
 		}
 	}
-	callee.extOf().data = fd
+	callee.setData(fd)
 	return r.run(cl, caller.this, caller.args, caller.newTarget, callee)
 }
 

@@ -1088,13 +1088,13 @@ func jitSSACellsUnderGC(t *testing.T, table bool) {
 // loads them with (jitEncoding).
 func TestJITObjectLayout(t *testing.T) {
 	var o Object
-	var e objectExt
+	var e arrayExt
 	if unsafe.Sizeof(o.class) != 1 || unsafe.Sizeof(e.arrayLen) != 4 ||
 		unsafe.Sizeof(o.elemsOf()) != 3*unsafe.Sizeof(uintptr(0)) || unsafe.Sizeof(Value{}) != 16 {
 		t.Fatal("an Object field native code reads changed its width; update jitEncoding and mir")
 	}
 	// Native code reads the flags' low byte, on a little-endian machine.
-	for _, f := range []objFlags{objHasSparseElements, objHTMLDDA, objExtensible, objArrayLengthWritable, objHasExt} {
+	for _, f := range []objFlags{objHasSparseElements, objHTMLDDA, objExtensible, objArrayLengthWritable, objHasExt, objHasData} {
 		if f > 255 {
 			t.Fatal("a flag native code tests is out of the flags' low byte")
 		}

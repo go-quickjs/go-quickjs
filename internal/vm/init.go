@@ -214,7 +214,7 @@ func (r *Runtime) initIntrinsics() {
 
 	// Function.prototype is itself callable and returns undefined.
 	r.proto.function = newObject(r.proto.object, ClassFunction)
-	r.proto.function.extOf().data = &funcData{
+	*r.proto.function.dataSlot() = &funcData{
 		name:  "",
 		realm: r.Realm,
 		native: func(*Runtime, Value, []Value) (Value, error) {
@@ -240,11 +240,11 @@ func (r *Runtime) initIntrinsics() {
 
 	r.proto.array = newObject(r.proto.object, ClassArray)
 	r.proto.str = newObject(r.proto.object, ClassStringWrapper)
-	r.proto.str.extOf().data = emptyString
+	r.proto.str.setData(emptyString)
 	r.proto.number = newObject(r.proto.object, ClassNumberWrapper)
-	r.proto.number.extOf().data = float64(0)
+	r.proto.number.setData(float64(0))
 	r.proto.boolean = newObject(r.proto.object, ClassBooleanWrapper)
-	r.proto.boolean.extOf().data = false
+	r.proto.boolean.setData(false)
 	r.proto.symbol = newObject(r.proto.object, ClassObject)
 	r.proto.bigint = newObject(r.proto.object, ClassObject)
 	r.proto.iterator = newObject(r.proto.object, ClassObject)

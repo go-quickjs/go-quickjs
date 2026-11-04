@@ -20,7 +20,7 @@ func (r *Runtime) newCallSite(fr stackFrame) Value {
 		r.initCallSite()
 	}
 	o := newObjectExt(r.proto.callSite, ClassObject, objExtensible)
-	o.extOf().data = &callSite{frame: fr}
+	o.setData(&callSite{frame: fr})
 	return Obj(o)
 }
 

@@ -29,7 +29,7 @@ func (r *Runtime) initLocale(namespace *Object) {
 			return Undefined, err
 		}
 		out := newObjectExt(made, ClassObject, objExtensible)
-		out.extOf().data = &localeOptions{loc: loc}
+		out.setData(&localeOptions{loc: loc})
 		return Obj(out), nil
 	})
 	r.defValue(namespace, "Locale", Obj(ctor))
@@ -228,7 +228,7 @@ func (r *Runtime) localeOf(this Value, method string) (*localeOptions, error) {
 
 func (r *Runtime) newLocale(loc intl.Locale) *Object {
 	o := newObjectExt(r.intlProtoOf("Locale"), ClassObject, objExtensible)
-	o.extOf().data = &localeOptions{loc: loc}
+	o.setData(&localeOptions{loc: loc})
 	return o
 }
 

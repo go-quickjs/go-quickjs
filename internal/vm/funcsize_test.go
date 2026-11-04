@@ -9,14 +9,15 @@ import (
 // and, for an arrow, what it captured of its maker's frame -- and the
 // programs DeltaBlue and Havlak are make one for each forEach and each loop
 // over a set, so its size is most of what they allocate. On a 64-bit
-// platform, an arrow with none of its maker's bindings fits Go's 256-byte
-// size class and one with one or two the 288-byte class, a function of
-// one or two the 240-byte class: they had been 456 to 472 bytes, the 480-byte
+// platform, an arrow with up to one of its maker's bindings fits Go's
+// 256-byte size class and one with two the 288-byte class, a function of
+// one the 224-byte class and of two the 240-byte: they had been 456 to 472 bytes, the 480-byte
 // class, before the parts of funcExtra few functions have went behind
 // funcExtra.rare, funcData's length beside its flags, and what a template's
 // closures share behind closureCode; and 320 to 352, before a method's and
-// a constructor's fields went behind funcData.cls and an arrow's
-// new.target into its rare part. A field added to any of them that moves a
+// a class's fields went behind funcData.cls, an arrow's new.target into
+// its rare part, and an array's length out of every other object's side
+// fields (arrayExt). A field added to any of them that moves a
 // closure into the next class fails here.
 func TestClosureSizes(t *testing.T) {
 	if unsafe.Sizeof(uintptr(0)) != 8 {
@@ -27,13 +28,14 @@ func TestClosureSizes(t *testing.T) {
 		size, max uintptr
 	}{
 		{"funcExtra", unsafe.Sizeof(funcExtra{}), 32},
+		{"objectExt", unsafe.Sizeof(objectExt{}), 40},
 		{"funcData", unsafe.Sizeof(funcData{}), 88},
 		{"closure", unsafe.Sizeof(closure{}), 56},
 		{"arrowFuncObject", unsafe.Sizeof(arrowFuncObject{}), 256},
-		{"arrowFuncObject1", unsafe.Sizeof(arrowFuncObject1{}), 288},
+		{"arrowFuncObject1", unsafe.Sizeof(arrowFuncObject1{}), 256},
 		{"arrowFuncObject2", unsafe.Sizeof(arrowFuncObject2{}), 288},
 		{"scriptFuncObject", unsafe.Sizeof(scriptFuncObject{}), 224},
-		{"scriptFuncObject1", unsafe.Sizeof(scriptFuncObject1{}), 240},
+		{"scriptFuncObject1", unsafe.Sizeof(scriptFuncObject1{}), 224},
 		{"scriptFuncObject2", unsafe.Sizeof(scriptFuncObject2{}), 240},
 	} {
 		if c.size > c.max {

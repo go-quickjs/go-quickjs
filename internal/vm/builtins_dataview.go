@@ -168,7 +168,7 @@ func (r *Runtime) initDataViewBuiltins() {
 			return Undefined, rt.throwRangeError("the view extends past the end of the buffer")
 		}
 		o := newObject(viewProto, ClassDataView)
-		o.extOf().data = &dataViewData{buffer: buf, byteOffset: int(off), byteLength: int(length), tracking: tracking}
+		o.setData(&dataViewData{buffer: buf, byteOffset: int(off), byteLength: int(length), tracking: tracking})
 		return Obj(o), nil
 	})
 

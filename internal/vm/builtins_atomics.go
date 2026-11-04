@@ -74,7 +74,7 @@ func (r *Runtime) initSharedArrayBufferBuiltins() {
 		if max >= 0 {
 			b.resizable, b.maxByteLength = true, max
 		}
-		o.extOf().data = b
+		o.setData(b)
 		return Obj(o), nil
 	})
 	r.defSpecies(ctor)

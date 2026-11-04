@@ -188,7 +188,7 @@ func (r *Runtime) newSetFrom(vals []Value) *Object {
 		m.set(r, v, v)
 	}
 	o := newObject(r.proto.setProto, ClassSet)
-	o.extOf().data = m
+	o.setData(m)
 	return o
 }
 

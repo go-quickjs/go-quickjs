@@ -4118,7 +4118,7 @@ func (r *Runtime) jitUsing(f *frame, in bytecode.Instr, sp int) (int, Value, boo
 	switch in.Op {
 	case bytecode.OpNewDisposeCapability:
 		o := newObjectExt(nil, ClassObject, objExtensible)
-		o.extOf().data = &disposeCapability{}
+		o.setData(&disposeCapability{})
 		return sp, Obj(o), true, nil
 	case bytecode.OpAddDisposable:
 		sp--

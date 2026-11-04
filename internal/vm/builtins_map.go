@@ -409,7 +409,7 @@ func (r *Runtime) initMapBuiltins() {
 			return Undefined, err
 		}
 		o := newObject(proto, ClassMap)
-		o.extOf().data = newJSMap()
+		o.setData(newJSMap())
 		// An iterable argument seeds the map with its [key, value] pairs,
 		// through the object's own set method: a subclass that overrides it
 		// sees every entry go by.
@@ -451,7 +451,7 @@ func (r *Runtime) initMapBuiltins() {
 			return Undefined, err
 		}
 		o := newObject(rt.proto.mapProto, ClassMap)
-		o.extOf().data = m
+		o.setData(m)
 		return Obj(o), nil
 	})
 	_ = ctor
@@ -581,7 +581,7 @@ func (r *Runtime) initSetBuiltins() {
 			return Undefined, err
 		}
 		o := newObject(proto, ClassSet)
-		o.extOf().data = newJSMap()
+		o.setData(newJSMap())
 		if err := rt.seedFromValues(o, arg(args, 0), "add"); err != nil {
 			return Undefined, err
 		}
@@ -678,7 +678,7 @@ func (r *Runtime) initWeakCollections() {
 			return Undefined, err
 		}
 		o := newObject(proto, ClassWeakMap)
-		o.extOf().data = newWeakMap()
+		o.setData(newWeakMap())
 		// An iterable of [key, value] pairs populates it, exactly as for Map.
 		if err := rt.seedFromEntries(o, arg(args, 0), "set"); err != nil {
 			return Undefined, err
@@ -772,7 +772,7 @@ func (r *Runtime) initWeakCollections() {
 			return Undefined, err
 		}
 		o := newObject(proto, ClassWeakSet)
-		o.extOf().data = newWeakSet()
+		o.setData(newWeakSet())
 		if err := rt.seedFromValues(o, arg(args, 0), "add"); err != nil {
 			return Undefined, err
 		}
@@ -860,7 +860,7 @@ type mapIterData struct {
 // and which is what makes the prototype worth having.
 func (r *Runtime) newMapIterator(m *jsMap, kind mapIterKind, proto *Object) Value {
 	iter := newObject(proto, ClassIterator)
-	iter.extOf().data = &mapIterData{m: m, kind: kind}
+	iter.setData(&mapIterData{m: m, kind: kind})
 	return Obj(iter)
 }
 

@@ -1167,7 +1167,7 @@ func (r *Runtime) mapArguments(o *Object, f *frame) {
 		}
 		mapped[i] = u
 	}
-	o.extOf().data = &argumentsData{mapped: mapped}
+	o.setData(&argumentsData{mapped: mapped})
 	o.flags |= objMappedArguments
 }
 
@@ -1470,7 +1470,7 @@ func (r *Runtime) iterReturn(ret, iter Value) (bool, error) {
 // its return method, or a delegation's throw or return.
 func (r *Runtime) unwalk(st *iterState) {
 	iter := newObject(r.proto.arrayIter, ClassIterator)
-	iter.extOf().data = &arrayIterData{a: arrayLike{o: st.arr}, kind: iterValues, i: int64(st.idx)}
+	iter.setData(&arrayIterData{a: arrayLike{o: st.arr}, kind: iterValues, i: int64(st.idx)})
 	st.iter, st.next, st.arr = Obj(iter), Obj(r.arrayIterNextFn), nil
 }
 

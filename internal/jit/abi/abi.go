@@ -1114,12 +1114,13 @@ type Encoding struct {
 	// object, in its allocation, which the flags byte's FlagExt says it
 	// has: an ordinary object most often has none, and an array and a
 	// function always have.
-	// ExtElems is the elements' slice there, and ObjectData the data;
-	// ObjectElems and ObjectArrayLen are offsets from the object through
-	// them.
+	// ExtElems is the elements' slice there, and ObjectData the data, which
+	// the flags byte's FlagData says the side fields have -- an array's have
+	// none, and its length past the elements' slice, ObjectArrayLen, an
+	// offset from the array through them, as ObjectElems is.
 	ObjectClass, ObjectFlags, ObjectArrayLen, ObjectElems int32
 	ObjectExt, ExtElems                                   int32
-	ClassArray, FlagSparse, FlagExt                       uint8
+	ClassArray, FlagSparse, FlagExt, FlagData             uint8
 	// ObjectData is the offset of an object's data in its side fields, an
 	// interface.
 	//

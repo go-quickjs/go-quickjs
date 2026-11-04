@@ -649,7 +649,7 @@ func (d *deserializer) value(i int) (Value, error) {
 		if bytes == nil {
 			bytes = []byte{}
 		}
-		o.extOf().data = &arrayBufferData{bytes: bytes, resizable: n.resizable, maxByteLength: n.max}
+		o.setData(&arrayBufferData{bytes: bytes, resizable: n.resizable, maxByteLength: n.max})
 		// Moved bytes belong to this buffer now, and nothing else.
 		n.bytes = nil
 	case snSharedArrayBuffer:
@@ -672,10 +672,10 @@ func (d *deserializer) value(i int) (Value, error) {
 		buf := bv.Object()
 		if n.dataView {
 			o = newObject(r.intrinsicNamed("DataView"), ClassDataView)
-			o.extOf().data = &dataViewData{buffer: buf, byteOffset: n.offset, byteLength: n.count, tracking: n.tracking}
+			o.setData(&dataViewData{buffer: buf, byteOffset: n.offset, byteLength: n.count, tracking: n.tracking})
 		} else {
 			o = newObject(r.typedArrayProtos[n.elem], ClassTypedArray)
-			o.extOf().data = &typedArrayData{buffer: buf, kind: n.elem, byteOffset: n.offset, fixedLength: n.count, tracking: n.tracking}
+			o.setData(&typedArrayData{buffer: buf, kind: n.elem, byteOffset: n.offset, fixedLength: n.count, tracking: n.tracking})
 		}
 	case snError:
 		o = newErrorObject(r.proto.nativeErrors[n.errKind])
@@ -687,10 +687,10 @@ func (d *deserializer) value(i int) (Value, error) {
 		}
 	case snMap:
 		o = newObject(r.proto.mapProto, ClassMap)
-		o.extOf().data = newJSMap()
+		o.setData(newJSMap())
 	case snSet:
 		o = newObject(r.proto.setProto, ClassSet)
-		o.extOf().data = newJSMap()
+		o.setData(newJSMap())
 	case snArray:
 		o = r.newArrayOfLength(0)
 	default:

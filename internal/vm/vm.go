@@ -2071,7 +2071,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 
 		case bytecode.OpNewDisposeCapability:
 			o := newObjectExt(nil, ClassObject, objExtensible)
-			o.extOf().data = &disposeCapability{}
+			o.setData(&disposeCapability{})
 			sp = pushAt(stack, sp, Obj(o))
 		case bytecode.OpAddDisposable:
 			sp--

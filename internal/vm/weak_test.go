@@ -63,7 +63,7 @@ func TestWeakMapValueRefersToKey(t *testing.T) {
 	func() {
 		key := newObject(nil, ClassObject)
 		value := newObjectExt(nil, ClassObject, objExtensible)
-		value.extOf().data = key
+		value.setData(key)
 		objRef = weak.Make(key)
 		m.set(r, Obj(key), Obj(value))
 
@@ -135,7 +135,7 @@ func TestWeakMapValueRefersToMapKeepsIt(t *testing.T) {
 	func() {
 		m := newWeakMap()
 		value := newObjectExt(nil, ClassObject, objExtensible)
-		value.extOf().data = m
+		value.setData(m)
 		mapRef = weak.Make(m)
 		m.set(r, key, Obj(value))
 	}()
@@ -482,12 +482,10 @@ func TestWeakSetAddressReuse(t *testing.T) {
 	runtime.KeepAlive(held)
 }
 
-// Where a key keeps its values in the WeakMaps it is a key of depends on
-// its kind: an array keeps them in its own side fields, which never move,
-// since native code reads its elements at a fixed offset from it; an object
-// of any other kind, with side fields or without, in a private property
-// under atomWeakMapRefs, which nothing a script does can see or name. Each
-// goes on as it was.
+// A key keeps its values in the WeakMaps it is a key of in a private
+// property under atomWeakMapRefs, which nothing a script does can see or
+// name, whatever its kind: an array's side fields have no room for them
+// (arrayExt), and an ordinary object may have none. Each goes on as it was.
 func TestWeakMapKeySideFields(t *testing.T) {
 	r := New(Config{})
 	defer r.Close()
@@ -511,10 +509,10 @@ func TestWeakMapKeySideFields(t *testing.T) {
 	}
 	get := func(name string) *Object { return r.global.getOwn(r.atoms.intern(name)).value().Object() }
 	a, f, o, d := get("a"), get("f"), get("o"), get("d")
-	if a.ext() == nil || a.weakMapRefsOf() == nil || a.dataOf() != a.weakMapRefsOf() {
-		t.Error("the array's side fields do not hold its WeakMaps")
+	if a.ext() == nil || a.dataOf() != nil {
+		t.Error("the array's side fields have data")
 	}
-	for name, x := range map[string]*Object{"function": f, "object": o, "Date": d} {
+	for name, x := range map[string]*Object{"array": a, "function": f, "object": o, "Date": d} {
 		if p := x.getOwn(atomWeakMapRefs); !p.ok() || p.flags()&propPrivate == 0 || x.weakMapRefsOf() == nil {
 			t.Errorf("the %s's WeakMaps are not in its private property", name)
 		}

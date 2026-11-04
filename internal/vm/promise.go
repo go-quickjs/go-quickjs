@@ -640,7 +640,7 @@ func (r *Runtime) initPromiseBuiltins() {
 			return Undefined, err
 		}
 		o := newObject(proto, ClassPromise)
-		o.extOf().data = &promiseData{}
+		o.setData(&promiseData{})
 		// The pair the executor is handed are anonymous, which a script can
 		// check.
 		resolveFn, rejectFn := rt.resolvingFunctions(o)

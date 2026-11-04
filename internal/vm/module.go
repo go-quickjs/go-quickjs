@@ -1122,9 +1122,9 @@ func (r *Runtime) makeTypedModule(specifier, typ, source, resolved string) (*Mod
 		v = Str(NewString(source))
 	case "bytes":
 		buf := newObject(r.arrayBufferProto, ClassArrayBuffer)
-		buf.extOf().data = &arrayBufferData{bytes: []byte(source), immutable: true}
+		buf.setData(&arrayBufferData{bytes: []byte(source), immutable: true})
 		o := newObject(r.typedArrayProtoFor(elemUint8), ClassTypedArray)
-		o.extOf().data = &typedArrayData{buffer: buf, kind: elemUint8, fixedLength: len(source)}
+		o.setData(&typedArrayData{buffer: buf, kind: elemUint8, fixedLength: len(source)})
 		v = Obj(o)
 	}
 	m := r.newModule(key, nil)

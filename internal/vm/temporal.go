@@ -57,7 +57,7 @@ func temporalThis[T any](r *Runtime, this Value, method string) (T, error) {
 // temporalObject is a new object of a Temporal type holding a value.
 func temporalObject(proto *Object, v any) Value {
 	o := newObjectExt(proto, ClassObject, objExtensible)
-	o.extOf().data = v
+	o.setData(v)
 	return Obj(o)
 }
 

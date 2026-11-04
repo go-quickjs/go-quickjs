@@ -496,7 +496,7 @@ func (r *Runtime) initArrayBufferBuiltins() {
 		if max >= 0 {
 			b.resizable, b.maxByteLength = true, max
 		}
-		o.extOf().data = b
+		o.setData(b)
 		return Obj(o), nil
 	})
 	r.defSpecies(ctor)
@@ -647,7 +647,7 @@ func (r *Runtime) initArrayBufferBuiltins() {
 		if resizable {
 			nb.resizable, nb.maxByteLength = true, max
 		}
-		o.extOf().data = nb
+		o.setData(nb)
 		return Obj(o), nil
 	}
 	r.defMethod(abProto, "transfer", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -700,7 +700,7 @@ func (r *Runtime) initArrayBufferBuiltins() {
 		out := make([]byte, max(end-start, 0))
 		copy(out, b.bytes[start:max(start, end)])
 		o := newObject(abProto, ClassArrayBuffer)
-		o.extOf().data = &arrayBufferData{bytes: out, immutable: true}
+		o.setData(&arrayBufferData{bytes: out, immutable: true})
 		return Obj(o), nil
 	})
 
@@ -822,7 +822,7 @@ func (r *Runtime) initTypedArrayBuiltins() {
 	// to be the prototype of the nine concrete constructors, never to be
 	// called.
 	abstract := newObject(r.proto.function, ClassFunction)
-	abstract.extOf().data = &funcData{
+	*abstract.dataSlot() = &funcData{
 		name: "TypedArray", length: 0, ctorKind: ctorBase, realm: r.Realm,
 		native: func(rt *Runtime, this Value, args []Value) (Value, error) {
 			return Undefined, rt.throwTypeError("TypedArray is abstract and cannot be constructed")
@@ -934,7 +934,7 @@ func (r *Runtime) constructTypedArray(kind elemType, proto *Object, args []Value
 		if explicit < 0 && b.resizable {
 			// No length of its own over a buffer that can change length: the
 			// view covers whatever the buffer holds past its offset.
-			o.extOf().data = &typedArrayData{buffer: buf, kind: kind, byteOffset: int(off), tracking: true}
+			o.setData(&typedArrayData{buffer: buf, kind: kind, byteOffset: int(off), tracking: true})
 			return Obj(o), nil
 		}
 		if explicit < 0 && len(b.bytes)%info.size != 0 {
@@ -956,7 +956,7 @@ func (r *Runtime) constructTypedArray(kind elemType, proto *Object, args []Value
 		// and a view only ever read, as PDF.js's subarrays are, had had
 		// every read of its length leave native code.
 		t.fixedStorage()
-		o.extOf().data = t
+		o.setData(t)
 		return Obj(o), nil
 
 	case first.IsObject() && first.Object().class == ClassTypedArray:
@@ -1081,11 +1081,11 @@ func (r *Runtime) allocTypedArrayChecked(o *Object, kind elemType, n int64) (*ty
 // allocTypedArray gives a view its own freshly allocated buffer.
 func (r *Runtime) allocTypedArray(o *Object, kind elemType, length int) *typedArrayData {
 	buf := newObject(r.arrayBufferProto, ClassArrayBuffer)
-	buf.extOf().data = &arrayBufferData{bytes: make([]byte, length*elemInfos[kind].size)}
+	buf.setData(&arrayBufferData{bytes: make([]byte, length*elemInfos[kind].size)})
 	t := &typedArrayData{buffer: buf, kind: kind, fixedLength: length}
 	// Its storage at once (constructTypedArray).
 	t.fixedStorage()
-	o.extOf().data = t
+	o.setData(t)
 	return t
 }
 

@@ -66,7 +66,7 @@ func init() {
 		case bytecode.OpNewDisposeCapability:
 			b.push(func(*tctx) Value {
 				o := newObjectExt(nil, ClassObject, objExtensible)
-				o.extOf().data = &disposeCapability{}
+				o.setData(&disposeCapability{})
 				return Obj(o)
 			})
 		case bytecode.OpAddDisposable:

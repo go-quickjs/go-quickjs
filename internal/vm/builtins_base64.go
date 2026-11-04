@@ -283,9 +283,9 @@ func (r *Runtime) uint8ArrayWritable(this Value, name string) error {
 // newUint8ArrayFrom wraps bytes in a fresh Uint8Array.
 func (r *Runtime) newUint8ArrayFrom(b []byte) *Object {
 	buf := newObject(r.arrayBufferProto, ClassArrayBuffer)
-	buf.extOf().data = &arrayBufferData{bytes: b}
+	buf.setData(&arrayBufferData{bytes: b})
 	o := newObject(r.uint8Proto, ClassTypedArray)
-	o.extOf().data = &typedArrayData{buffer: buf, kind: elemUint8, fixedLength: len(b)}
+	o.setData(&typedArrayData{buffer: buf, kind: elemUint8, fixedLength: len(b)})
 	return o
 }
 

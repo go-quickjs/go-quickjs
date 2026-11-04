@@ -184,7 +184,7 @@ func (r *Runtime) setTrace(o *Object, st stackTrace) {
 		return
 	}
 	holder := newObjectExt(nil, ClassObject, objExtensible)
-	holder.extOf().data = &st
+	holder.setData(&st)
 	o.setOwnRaw(r.stackSlot, Obj(holder), propPrivate)
 }
 

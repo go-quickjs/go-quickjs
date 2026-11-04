@@ -34,7 +34,7 @@ func (r *Runtime) initCollator(intlObj *Object) {
 			return Undefined, err
 		}
 		out := newObjectExt(proto, ClassObject, objExtensible)
-		out.extOf().data = o
+		out.setData(o)
 		return Obj(out), nil
 	})
 	r.defValue(intlObj, "Collator", Obj(ctor))
@@ -240,7 +240,7 @@ func (r *Runtime) initPluralRules(intlObj *Object) {
 			return Undefined, rt.intlInternal()
 		}
 		out := newObjectExt(proto, ClassObject, objExtensible)
-		out.extOf().data = o
+		out.setData(o)
 		return Obj(out), nil
 	})
 	r.defValue(intlObj, "PluralRules", Obj(ctor))
@@ -403,7 +403,7 @@ func (r *Runtime) initDisplayNames(intlObj *Object) {
 			return Undefined, rt.intlInternal()
 		}
 		out := newObjectExt(proto, ClassObject, objExtensible)
-		out.extOf().data = o
+		out.setData(o)
 		return Obj(out), nil
 	})
 	r.defValue(intlObj, "DisplayNames", Obj(ctor))
@@ -575,7 +575,7 @@ func (r *Runtime) initListFormat(intlObj *Object) {
 			return Undefined, rt.intlInternal()
 		}
 		out := newObjectExt(proto, ClassObject, objExtensible)
-		out.extOf().data = o
+		out.setData(o)
 		return Obj(out), nil
 	})
 	r.defValue(intlObj, "ListFormat", Obj(ctor))
@@ -709,7 +709,7 @@ func (r *Runtime) initRelativeTimeFormat(intlObj *Object) {
 			return Undefined, rt.intlInternal()
 		}
 		out := newObjectExt(proto, ClassObject, objExtensible)
-		out.extOf().data = o
+		out.setData(o)
 		return Obj(out), nil
 	})
 	r.defValue(intlObj, "RelativeTimeFormat", Obj(ctor))

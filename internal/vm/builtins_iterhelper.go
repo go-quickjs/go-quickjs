@@ -963,7 +963,7 @@ func (r *Runtime) iteratorFrom(v Value) (Value, error) {
 		return iter, nil
 	}
 	o := newObject(r.wrapProto, ClassIteratorWrap)
-	o.extOf().data = &wrapData{iter: iter, next: next}
+	o.setData(&wrapData{iter: iter, next: next})
 	return Obj(o), nil
 }
 

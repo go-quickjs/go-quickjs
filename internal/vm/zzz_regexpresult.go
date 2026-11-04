@@ -28,7 +28,7 @@ import (
 // an array of Strings.
 type matchBlock[E, S any] struct {
 	Object
-	side   objectExt
+	side   arrayExt
 	fields [3]Value
 	inline E
 	strs   S

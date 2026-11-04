@@ -33,7 +33,7 @@ func (r *Runtime) initStringBuiltins() {
 			return Str(s), nil
 		}
 		o := newObject(rt.proto.str, ClassStringWrapper)
-		o.extOf().data = s
+		o.setData(s)
 		return Obj(o), nil
 	})
 	// Called, of a primitive, applied without a frame, by every tier; a
@@ -1037,7 +1037,7 @@ func (r *Runtime) replacementFor(replVal Value, replText string, matched *String
 // newStringIterator iterates a string by code point.
 func (r *Runtime) newStringIterator(s *String) (Value, error) {
 	iter := newObject(r.proto.stringIter, ClassIterator)
-	iter.extOf().data = &stringIterData{s: s}
+	iter.setData(&stringIterData{s: s})
 	return Obj(iter), nil
 }
 

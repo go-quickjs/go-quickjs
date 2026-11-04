@@ -111,7 +111,7 @@ func (r *Runtime) initJSONBuiltins() {
 			return Undefined, rt.throwSyntaxError("unexpected trailing content in JSON at position %d", p.pos)
 		}
 		o := newObjectExt(nil, ClassObject, objExtensible)
-		o.extOf().data = rawJSON{}
+		o.setData(rawJSON{})
 		o.setOwnRaw(rt.atoms.intern("rawJSON"), Str(s), propEnumerable)
 		o.flags &^= objExtensible
 		return Obj(o), nil

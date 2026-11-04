@@ -1128,7 +1128,7 @@ func (r *Runtime) regExpSymbolMatchAll(rx Value, args []Value) (Value, error) {
 // matchAll be used on a long string without materializing every result.
 func (r *Runtime) newRegExpStringIterator(matcher Value, s *String, global, fullUnicode bool) Value {
 	iter := newObject(r.proto.regexpStringIter, ClassIterator)
-	iter.extOf().data = &regExpStringIterData{
+	*iter.dataSlot() = &regExpStringIterData{
 		matcher: matcher, s: s, j: subjectOf(s),
 		global: global, fullUnicode: fullUnicode,
 	}

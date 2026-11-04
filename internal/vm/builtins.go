@@ -753,7 +753,7 @@ func (r *Runtime) initFunctionBuiltins() {
 		o := newObject(rt.proto.function, ClassFunction)
 		be := &boundExtra{r: funcRare{boundTarget: target, boundThis: arg(args, 0), boundArgs: bound}}
 		be.rare = &be.r
-		o.extOf().data = &funcData{
+		*o.dataSlot() = &funcData{
 			bound:    true,
 			extra:    &be.funcExtra,
 			name:     boundName.prefix(maxShownName),
@@ -2029,7 +2029,7 @@ func (r *Runtime) newArrayIteratorKind(target Value, kind arrayIterKind) (Value,
 		return Undefined, err
 	}
 	iter := newObject(r.proto.arrayIter, ClassIterator)
-	iter.extOf().data = &arrayIterData{a: arrayLike{o: o}, kind: kind}
+	iter.setData(&arrayIterData{a: arrayLike{o: o}, kind: kind})
 	return Obj(iter), nil
 }
 
@@ -2146,7 +2146,7 @@ func (r *Runtime) initNumberBuiltins() {
 			return Float(n), nil
 		}
 		o := newObject(rt.proto.number, ClassNumberWrapper)
-		o.extOf().data = n
+		o.setData(n)
 		return Obj(o), nil
 	})
 
@@ -2266,7 +2266,7 @@ func (r *Runtime) initBooleanBuiltins() {
 		// Called with new, the result is a wrapper object whose valueOf gives
 		// the primitive back.
 		o := newObject(rt.proto.boolean, ClassBooleanWrapper)
-		o.extOf().data = b
+		o.setData(b)
 		return Obj(o), nil
 	})
 	setElemOp(r, boolCtor, elemBooleanOf)
@@ -3298,7 +3298,7 @@ func (r *Runtime) fillArray(o *Object, start, end int64, v Value) (int64, error)
 		return start, nil
 	}
 	sparse := o.flags&objHasSparseElements != 0
-	if sparse && (o.extAt().arrayLen >= 1<<31 || !o.noIndexKeys()) {
+	if sparse && (o.arrayExt().arrayLen >= 1<<31 || !o.noIndexKeys()) {
 		// An index past what an atom carries is a key noIndexKeys does
 		// not look for.
 		return start, nil
@@ -3315,14 +3315,14 @@ func (r *Runtime) fillArray(o *Object, start, end int64, v Value) (int64, error)
 	}
 	// Grown once, to what is filled: appended one at a time, a slice grows
 	// and is copied a dozen times on its way to thousands of elements.
-	o.extOf().elems = slices.Grow(elems, int(min(end, int64(o.extAt().arrayLen))-start))
-	for ; start < end && start < int64(o.extAt().arrayLen); start++ {
+	o.extOf().elems = slices.Grow(elems, int(min(end, int64(o.arrayExt().arrayLen))-start))
+	for ; start < end && start < int64(o.arrayExt().arrayLen); start++ {
 		if err := r.tick(); err != nil {
 			return start, err
 		}
 		o.extOf().elems = append(o.elemsOf(), v)
 	}
-	if uint32(len(o.elemsOf())) == o.extAt().arrayLen {
+	if uint32(len(o.elemsOf())) == o.arrayExt().arrayLen {
 		o.flags &^= objHasSparseElements
 	}
 	return start, nil

@@ -177,7 +177,7 @@ func (r *Runtime) NewSharedArrayBuffer(m *SharedMemory) Value {
 	if m.max >= 0 {
 		b.resizable, b.maxByteLength = true, m.max
 	}
-	o.extOf().data = b
+	o.setData(b)
 	return Obj(o)
 }
 

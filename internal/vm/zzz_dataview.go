@@ -141,7 +141,7 @@ func dataViewBytes[_ any](this Value, args []Value, size int) (*arrayBufferData,
 	if o.class != ClassDataView {
 		return nil, 0, false
 	}
-	d, ok := o.extAt().data.(*dataViewData)
+	d, ok := o.dataExtAt().data.(*dataViewData)
 	if !ok || d.buffer == nil {
 		return nil, 0, false
 	}

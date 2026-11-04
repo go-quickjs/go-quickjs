@@ -2793,7 +2793,7 @@ func (c *a64Compiler) loadProto(dst, obj arm64.Reg) {
 func (c *a64Compiler) objectData(dst, obj, t arm64.Reg, typ uint64, fail func(arm64.Cond)) {
 	c.a.AddImm(dst, obj, int64(c.enc.ObjectExt), true)
 	c.a.LoadU8(t, dst, c.enc.ObjectFlags-c.enc.ObjectExt)
-	c.movImm(a64A, uint64(c.enc.FlagExt))
+	c.movImm(a64A, uint64(c.enc.FlagData))
 	c.a.Tst(t, a64A, false)
 	fail(arm64.EQ)
 	c.a.Load(t, dst, c.enc.ObjectData)
