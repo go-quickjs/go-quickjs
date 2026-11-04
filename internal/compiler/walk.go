@@ -69,7 +69,10 @@ type argumentsScanner struct {
 // CodeLoad, which compiles what it loads.
 type functionFacts struct {
 	usesThis, usesArguments, argumentsInParams, directEval bool
-	thisProps                                              []string
+	// usesNewTarget is whether new.target is read in the body or an arrow
+	// in it, or may be, by an eval or a super() call.
+	usesNewTarget bool
+	thisProps     []string
 	// propsDone stops the collection of thisProps where the body first
 	// mentions arguments or eval, as thisPropertyCount's walk stopped there,
 	// its scanner's default search having found what it looks for.
@@ -334,7 +337,7 @@ func (w *argumentsScanner) expr(e ast.Expr) {
 			// A direct eval can read both this and arguments.
 			switch n.Name {
 			case "eval":
-				f.usesThis, f.usesArguments = true, true
+				f.usesThis, f.usesArguments, f.usesNewTarget = true, true, true
 				f.argumentsInParams = f.argumentsInParams || w.inParams
 				f.propsDone = f.propsDone || !w.inParams
 			case "arguments":
@@ -370,6 +373,10 @@ func (w *argumentsScanner) expr(e ast.Expr) {
 		case !w.seekThis && n.Name == "arguments":
 			w.found = true
 		}
+	case *ast.NewTarget:
+		if w.scanning {
+			w.facts.usesNewTarget = true
+		}
 	case *ast.This:
 		if w.scanning {
 			w.facts.usesThis = true
@@ -379,7 +386,9 @@ func (w *argumentsScanner) expr(e ast.Expr) {
 		}
 	case *ast.Super:
 		if w.scanning {
-			w.facts.usesThis = true
+			// super() constructs the parent with this function's new.target,
+			// which an arrow calling it captured.
+			w.facts.usesThis, w.facts.usesNewTarget = true, true
 		}
 		if w.seekThis {
 			w.found = true

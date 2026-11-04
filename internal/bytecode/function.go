@@ -335,6 +335,11 @@ type Function struct {
 	// sloppy-mode call skip substituting the global object when nothing would
 	// see the difference.
 	UsesThis bool
+	// UsesNewTarget records whether the body, or an arrow in it, can read
+	// new.target -- by name, by a direct eval, or by a super() call, which
+	// constructs the parent with it. A function without it, and the arrows
+	// it makes, never need its new.target.
+	UsesNewTarget bool
 	// CoerceThis says a call must make this an object, as a sloppy function
 	// that can see it requires and an arrow, which has none of its own, does
 	// not: UsesThis, not Strict, and no arrow.

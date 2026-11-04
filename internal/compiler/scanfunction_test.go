@@ -141,7 +141,8 @@ func TestScanFunctionMatchesTheWalks(t *testing.T) {
 				directEval:        containsDirectEval(fn.Body) || containsDirectEvalInParams(fn.Params),
 			}
 			n := thisPropertyCount(fn.Body)
-			got.thisProps, got.propsDone = nil, false
+			// usesNewTarget has no walk of its own (TestScanFunctionNewTarget).
+			got.thisProps, got.propsDone, got.usesNewTarget = nil, false, false
 			if !reflect.DeepEqual(got, want) || len(scanFunction(fn, true).thisProps) != n {
 				t.Fatalf("function at %d of %.80q: one walk found %+v (%d this properties), the walks %+v (%d)",
 					fn.Start, src, got, len(scanFunction(fn, true).thisProps), want, n)
@@ -205,4 +206,30 @@ func funcLits(prog *ast.Program) []*ast.FuncLit {
 	}
 	walk(reflect.ValueOf(prog))
 	return out
+}
+
+// usesNewTarget says whether the body, or an arrow in it, can read
+// new.target: by name, by a direct eval, or by a super() call, which
+// constructs with it. A function written inside has its own.
+func TestScanFunctionNewTarget(t *testing.T) {
+	for _, tc := range []struct {
+		src  string
+		want bool
+	}{
+		{`function f() { return new.target }`, true},
+		{`function f() { return () => () => new.target }`, true},
+		{`function f() { return () => eval("x") }`, true},
+		{`class A extends Object { constructor() { (() => super())() } }`, true},
+		{`function f() { return () => this.x + 1 }`, false},
+		{`function f() { return function () { return new.target } }`, false},
+	} {
+		prog, err := parser.Parse(tc.src, parser.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		fn := funcLits(prog)[0]
+		if got := scanFunction(fn, true).usesNewTarget; got != tc.want {
+			t.Errorf("%s: usesNewTarget %v, want %v", tc.src, got, tc.want)
+		}
+	}
 }

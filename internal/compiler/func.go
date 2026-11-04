@@ -105,6 +105,7 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 	// arguments into those slots positionally. Nothing may be declared before
 	// them.
 	c.fn.UsesThis = facts.usesThis
+	c.fn.UsesNewTarget = facts.usesNewTarget
 
 	// A direct eval in the body may declare a var here, and it would belong to
 	// this function. The answer is needed before anything is compiled: a frame
