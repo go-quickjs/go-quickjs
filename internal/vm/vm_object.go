@@ -444,9 +444,11 @@ type weakRefsHolder struct {
 // newWeakMapRefs gives o, which has none, its values in the WeakMaps it is
 // a key of, empty, in a private property (weakRefsHolder), which an object
 // closed to new properties is given as well: being a key is not a property
-// of it.
+// of it. The maps' weak reference to the key is to the holder, which
+// nothing but the key reaches and so goes when it does (weakmap.go).
 func (o *Object) newWeakMapRefs() *weakMapRefs {
 	h := &weakRefsHolder{Object: Object{class: ClassObject}}
+	h.refs.key = makeWeakKey(unsafe.Pointer(h))
 	o.setOwnRaw(atomWeakMapRefs, Obj(&h.Object), propPrivate)
 	return &h.refs
 }

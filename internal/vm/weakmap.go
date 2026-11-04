@@ -47,12 +47,17 @@ import (
 // the map's weak reference to it names nothing from then on, which the map
 // drops the next time it prunes its keys.
 //
-// The weak references are to the keys themselves, not to their weakMapRefs:
-// the collector keeps a record on each object a weak pointer is made to, in a
-// list per span of memory that it searches whenever it adds one, and a span
-// of objects, most of which are not keys, has a shorter list than one of
-// weakMapRefs, every one of which would be. A key that a WeakRef or a WeakSet
-// refers to as well shares the one record.
+// An object's weak reference is to the holder of its weakMapRefs
+// (weakRefsHolder), which only the key reaches, so that it goes when the key
+// does, and a symbol's to the symbol. The collector keeps a record on each
+// object a weak pointer is made to, in a list per span of memory that it
+// searches, from the start, whenever it adds one: a holder is 80 bytes, a
+// span holds about a hundred, where it holds up to 170 of the 48-byte
+// objects most keys are, and a program that makes its keys one after
+// another, each one a key at once, made the lists of the keys' spans
+// longer, and the search the most of its time. Releasing a key then needs
+// no lookup of its holder either. A key that a WeakRef or a WeakSet refers
+// to as well has a record of its own for that.
 //
 // What remains of the gap is the other direction: a value that refers to its
 // map keeps the map alive for as long as the key lives, where an ephemeron
@@ -324,7 +329,6 @@ func weakRefsOf(k Value, create bool) *weakMapRefs {
 		refs := o.weakMapRefsOf()
 		if refs == nil && create {
 			refs = o.newWeakMapRefs()
-			refs.key = makeWeakKey(k.ref)
 		}
 		return refs
 	case k.IsSymbol():
@@ -432,7 +436,7 @@ func (s *weakMapState) releaseKey(k weakKey, sym bool, q *weakMapRegistry) {
 	if sym {
 		refs = (*Symbol)(unsafe.Pointer(p)).weakMapRefs
 	} else {
-		refs = (*Object)(unsafe.Pointer(p)).weakMapRefsOf()
+		refs = &(*weakRefsHolder)(unsafe.Pointer(p)).refs
 	}
 	if refs != nil {
 		refs.remove(s, q)
