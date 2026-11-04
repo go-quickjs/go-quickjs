@@ -3184,3 +3184,120 @@ function method_closure(n)
     global_res = h.n;
     return n;
 }
+
+/* an object made on a prototype of its own each time, as code that makes
+   one-off objects with Object.create does: the prototype dropped with it */
+function object_create_fresh(n)
+{
+    var j, s = 0, o;
+    for (j = 0; j < n; j++) {
+        o = Object.create({ x: j });
+        o.y = 1;
+        s += o.x + o.y;
+    }
+    global_res = s;
+    return n;
+}
+
+/* objects made on one prototype they share, the common case beside it */
+function object_create_shared(n)
+{
+    var proto = { x: 1 }, j, s = 0, o;
+    for (j = 0; j < n; j++) {
+        o = Object.create(proto);
+        o.y = j;
+        s += o.x + o.y;
+    }
+    global_res = s;
+    return n;
+}
+
+/* a literal whose prototype is an object made with it: { __proto__: p } */
+function proto_literal_fresh(n)
+{
+    var j, s = 0, o;
+    for (j = 0; j < n; j++) {
+        o = { __proto__: { z: j }, w: 1 };
+        s += o.z + o.w;
+    }
+    global_res = s;
+    return n;
+}
+
+/* an object given a prototype of its own after it is made */
+function set_proto_fresh(n)
+{
+    var j, s = 0, o;
+    for (j = 0; j < n; j++) {
+        o = Object.setPrototypeOf({}, { k: j });
+        o.v = 1;
+        s += o.k + o.v;
+    }
+    global_res = s;
+    return n;
+}
+
+/* a class made by each call, as a factory of mixins makes one, and an
+   instance of it */
+function class_factory(n)
+{
+    var j, s = 0, C, o;
+    for (j = 0; j < n; j++) {
+        C = class { constructor(a) { this.a = a; } get() { return this.a; } };
+        o = new C(j);
+        s += o.get();
+    }
+    global_res = s;
+    return n;
+}
+
+/* a subclass of one base made by each call, and an instance of it */
+function subclass_fresh(n)
+{
+    class Base { constructor(a) { this.a = a; } }
+    var j, s = 0, D, o;
+    for (j = 0; j < n; j++) {
+        D = class extends Base { constructor(a) { super(a); this.b = 1; } };
+        o = new D(j);
+        s += o.a + o.b;
+    }
+    global_res = s;
+    return n;
+}
+
+/* scopes made as objects, each on the one it encloses, as an interpreter
+   written in JavaScript makes them: a frame on a fresh parent, and one on
+   the frame */
+function scope_chain(n)
+{
+    var j, s = 0, a, b;
+    for (j = 0; j < n; j++) {
+        a = Object.create({ base: j });
+        a.i = j;
+        b = Object.create(a);
+        b.v = 1;
+        s += b.base + b.i + b.v;
+    }
+    global_res = s;
+    return n;
+}
+
+/* one constructor made for alternating new.targets, as Babel's
+   _createSuper makes subclasses' instances: Reflect.construct(Base, args,
+   NewTarget) */
+function construct_new_target(n)
+{
+    function A(x) { this.x = x; this.y = 1; }
+    function B() {}
+    function C() {}
+    B.prototype = Object.create(A.prototype);
+    C.prototype = Object.create(A.prototype);
+    var j, s = 0, o, args = [0];
+    for (j = 0; j < n; j++) {
+        args[0] = j;
+        o = Reflect.construct(A, args, (j & 1) ? B : C);
+        s += o.x + o.y;
+    }
+    global_res = s;
+    return n;
+}

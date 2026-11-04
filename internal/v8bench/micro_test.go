@@ -140,3 +140,35 @@ func TestHasOwnAndPushMicrobenchmarks(t *testing.T) {
 		})
 	}
 }
+
+// Objects made on prototypes made and dropped with them, on one they share,
+// classes and subclasses made by each call, scopes as objects, and one
+// constructor for alternating new.targets: each test's sum, as Node gives it.
+func TestPrototypeMicrobenchmarks(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	if _, err := rt.Eval("var global_res;\n" + microbenchExtra); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		sum  int
+	}{
+		{"object_create_fresh", 45},
+		{"object_create_shared", 45},
+		{"proto_literal_fresh", 45},
+		{"set_proto_fresh", 45},
+		{"class_factory", 36},
+		{"subclass_fresh", 45},
+		{"scope_chain", 81},
+		{"construct_new_target", 45},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v, err := rt.Eval(fmt.Sprintf("%s(9) + ':' + global_res", tc.name))
+			want := fmt.Sprintf("9:%d", tc.sum)
+			if err != nil || v.String() != want {
+				t.Fatalf("got %v, %v; want %q", v, err, want)
+			}
+		})
+	}
+}

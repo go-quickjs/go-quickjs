@@ -152,6 +152,9 @@ var microWork = []struct {
 	{"regexp_match_g", 65536}, {"regexp_named", 262144}, {"regexp_unicode", 262144},
 	{"regexp_fresh", 262144}, {"regexp_property", 131072}, {"regexp_search_i", 8192}, {"regexp_search_utf16", 8192},
 	{"list_walk", 4194304}, {"method_moves", 2097152}, {"method_forEach", 2097152}, {"method_closure", 262144},
+	{"object_create_fresh", 524288}, {"object_create_shared", 1048576}, {"proto_literal_fresh", 524288},
+	{"set_proto_fresh", 524288}, {"class_factory", 131072}, {"subclass_fresh", 131072},
+	{"scope_chain", 524288}, {"construct_new_target", 524288},
 }
 
 // microLoop is the driver's loop: each test of __work whose name begins with
