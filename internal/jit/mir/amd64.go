@@ -5108,7 +5108,7 @@ func (c *compiler) pushGuards(t *ssa.CallSite, recv *ssa.Value, guard func(amd64
 // protos only where neither has an index in its table). It uses every
 // scratch register.
 func (c *compiler) protoGuards(protos [2]ssa.Holder, guard func(amd64.Cond)) {
-	for i, h := range protos {
+	for _, h := range protos {
 		c.movImm(scratchA, uint64(h.Object))
 		c.a.Load(scratchB, scratchA, c.enc.ObjectShape)
 		c.cmpWord(scratchB, uint64(h.Shape))
@@ -5126,14 +5126,7 @@ func (c *compiler) protoGuards(protos [2]ssa.Holder, guard func(amd64.Cond)) {
 		c.a.LoadU8(scratchB, scratchA, c.enc.ObjectFlags)
 		c.a.OpImm(amd64.And, scratchB, int32(c.enc.FlagSparse), false)
 		guard(amd64.CondNE)
-		// Its prototype: the next, or none.
-		c.loadProtoPlain(scratchB, scratchA)
-		if i == 0 {
-			c.cmpWord(scratchB, uint64(protos[1].Object))
-		} else {
-			c.a.Op(amd64.Test, scratchB, scratchB, true)
-		}
-		guard(amd64.CondNE)
+		// Its prototype, the next or none, its layout says (holder).
 	}
 }
 
@@ -7278,27 +7271,17 @@ func (c *compiler) savingCall() {
 
 // protoChain checks the prototypes chain is, a receiver's the code does not
 // make (ssa's escape.go), whose prototype is the first, as holder and
-// addAlong check those of one it has: each has its shape, and each after
-// the first is the prototype of the one before -- and, if null, the last
-// has none. It leaves the last in scratchA. It uses every scratch register.
+// addAlong check those of one it has: each has its shape, which says its
+// prototype, so that each after the first is the prototype of the one
+// before -- and, if null, the last has none. It leaves the last in
+// scratchA. It uses every scratch register.
 func (c *compiler) protoChain(chain []ssa.Holder, guard func(amd64.Cond), null bool) {
-	for i, h := range chain {
+	// Each object's layout, which says its prototype, the next or, for
+	// the last where null is set, none (holder).
+	for _, h := range chain {
 		c.movImm(scratchA, uint64(h.Object))
-		if i > 0 {
-			c.a.Op(amd64.Cmp, scratchB, scratchA, true)
-			guard(amd64.CondNE)
-		}
 		c.a.Load(scratchB, scratchA, c.enc.ObjectShape)
 		c.cmpWord(scratchB, uint64(h.Shape))
-		guard(amd64.CondNE)
-		if null && i == len(chain)-1 {
-			c.loadProto(scratchB, scratchA)
-		} else {
-			c.loadProtoPlain(scratchB, scratchA)
-		}
-	}
-	if null {
-		c.a.Op(amd64.Test, scratchB, scratchB, true)
 		guard(amd64.CondNE)
 	}
 }
@@ -7325,31 +7308,17 @@ func (c *compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss amd64.Label
 	c.a.LoadU8(scratchB, o, c.enc.ObjectFlags)
 	c.a.OpImm(amd64.And, scratchB, int32(c.enc.FlagExtensible), false)
 	c.a.Jcc(amd64.CondE, miss)
-	// The prototype chain the cache found, object by object, then none;
-	// none for a literal's field, which its prototypes do not intercept.
-	chain := add.Chain()
-	if !add.Define && len(chain) == 0 {
-		c.loadProto(scratchB, o)
-	} else {
-		c.loadProtoPlain(scratchB, o)
-	}
+	// The prototype chain the cache found, as the VM's propCache.adds
+	// checks it: each prototype's layout, which says the next, as From says
+	// the first, and the last's none (holder); none for a literal's field,
+	// which its prototypes do not intercept.
 	if !add.Define {
-		for j, h := range chain {
+		for _, h := range add.Chain() {
 			c.movImm(scratchC, uint64(h.Object))
-			c.a.Op(amd64.Cmp, scratchB, scratchC, true)
-			c.a.Jcc(amd64.CondNE, miss)
 			c.a.Load(scratchB, scratchC, c.enc.ObjectShape)
 			c.cmpWord(scratchB, uint64(h.Shape))
 			c.a.Jcc(amd64.CondNE, miss)
-			c.movImm(scratchC, uint64(h.Object))
-			if j == len(chain)-1 {
-				c.loadProto(scratchB, scratchC)
-			} else {
-				c.loadProtoPlain(scratchB, scratchC)
-			}
 		}
-		c.a.Op(amd64.Test, scratchB, scratchB, true)
-		c.a.Jcc(amd64.CondNE, miss)
 	}
 	// Room: the table's length below its capacity.
 	c.a.LoadU32(scratchB, o, c.enc.ObjectPropsLen)

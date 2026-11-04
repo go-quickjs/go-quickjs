@@ -3355,8 +3355,11 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 			// it. Object.prototype's had been taken as it was, a setter
 			// for an index there included, which native code then passed.
 			ap, op := fb.r.proto.array, fb.r.proto.object
-			if ap.shape == nil || op.shape == nil || ap.proto() != op || op.proto() != nil ||
+			if ap.shape == nil || op.shape == nil || ap.shape.loose || op.shape.loose || ap.proto() != op || op.proto() != nil ||
 				!ap.noIndexKeys() || !op.noIndexKeys() {
+				// Or a layout that may change in place (layoutChanged),
+				// which native code's checks of the layouts, saying each
+				// one's prototype, could not stand for (ArrayProtos).
 				continue
 			}
 			k := fb.keep()

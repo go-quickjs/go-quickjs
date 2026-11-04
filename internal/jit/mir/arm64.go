@@ -2871,29 +2871,16 @@ func (c *a64Compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss arm64.La
 	c.movImm(a64C, uint64(c.enc.FlagExtensible))
 	c.a.Tst(a64B, a64C, false)
 	c.a.BCond(arm64.EQ, miss)
-	chain := add.Chain()
-	if !add.Define && len(chain) == 0 {
-		c.loadProto(a64B, o)
-	} else {
-		c.loadProtoPlain(a64B, o)
-	}
+	// Each prototype's layout, as amd64's addAlong checks them.
 	if !add.Define {
-		for j, h := range chain {
+		for _, h := range add.Chain() {
 			c.movImm(a64C, uint64(h.Object))
-			c.a.Cmp(a64B, a64C, true)
-			c.a.BCond(arm64.NE, miss)
 			// Not D, which may be the object's (o).
 			c.a.Load(a64B, a64C, c.enc.ObjectShape)
 			c.movImm(a64A, uint64(h.Shape))
 			c.a.Cmp(a64B, a64A, true)
 			c.a.BCond(arm64.NE, miss)
-			if j == len(chain)-1 {
-				c.loadProto(a64B, a64C)
-			} else {
-				c.loadProtoPlain(a64B, a64C)
-			}
 		}
-		c.a.Cbnz(a64B, miss, true)
 	}
 	c.a.LoadU32(a64B, o, c.enc.ObjectPropsLen)
 	c.a.LoadU32(a64C, o, c.enc.ObjectPropsCap)
@@ -4265,7 +4252,7 @@ func (c *a64Compiler) pushGuards(t *ssa.CallSite, recv *ssa.Value, guard func(ar
 // protoGuards checks an array's prototypes are as they were, as amd64's
 // does. It uses A, B and C.
 func (c *a64Compiler) protoGuards(protos [2]ssa.Holder, guard func(arm64.Cond)) {
-	for i, h := range protos {
+	for _, h := range protos {
 		c.movImm(a64A, uint64(h.Object))
 		c.a.Load(a64B, a64A, c.enc.ObjectShape)
 		c.movImm(a64C, uint64(h.Shape))
@@ -4286,14 +4273,7 @@ func (c *a64Compiler) protoGuards(protos [2]ssa.Holder, guard func(arm64.Cond)) 
 		c.movImm(a64C, uint64(c.enc.FlagSparse))
 		c.a.Tst(a64B, a64C, false)
 		guard(arm64.NE)
-		c.loadProtoPlain(a64B, a64A)
-		if i == 0 {
-			c.movImm(a64C, uint64(protos[1].Object))
-			c.a.Cmp(a64B, a64C, true)
-		} else {
-			c.a.CmpImm(a64B, 0, true)
-		}
-		guard(arm64.NE)
+		// Its prototype, its layout says, as amd64's.
 	}
 }
 
@@ -7216,24 +7196,12 @@ func (c *a64Compiler) holder(v *ssa.Value, guard func(arm64.Cond)) {
 // protoChain checks the prototypes chain is, as amd64's does, the last left
 // in A. It uses A, B and C.
 func (c *a64Compiler) protoChain(chain []ssa.Holder, guard func(arm64.Cond), null bool) {
-	for i, h := range chain {
+	// Each object's layout, which says its prototype, as amd64's.
+	for _, h := range chain {
 		c.movImm(a64A, uint64(h.Object))
-		if i > 0 {
-			c.a.Cmp(a64B, a64A, true)
-			guard(arm64.NE)
-		}
 		c.a.Load(a64B, a64A, c.enc.ObjectShape)
 		c.movImm(a64C, uint64(h.Shape))
 		c.a.Cmp(a64B, a64C, true)
-		guard(arm64.NE)
-		if null && i == len(chain)-1 {
-			c.loadProto(a64B, a64A)
-		} else {
-			c.loadProtoPlain(a64B, a64A)
-		}
-	}
-	if null {
-		c.a.CmpImm(a64B, 0, true)
 		guard(arm64.NE)
 	}
 }
