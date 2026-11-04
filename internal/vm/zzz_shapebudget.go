@@ -36,13 +36,10 @@ import (
 // (keptCtorRoot), as V8's prototype info keeps Object.create's map -- the
 // first made, most often the only one, then the rest -- and the slot of the
 // budget the shapes made with the object as their prototype are counted
-// against. It is three words, as the slice of roots it replaced was, so that
-// no field of a shape after it moved.
-type protoRoots struct {
-	first  *shape
-	rest   *[]*shape
-	budget *budgetSlot
-}
+// against. The first root and the budget are the layout's (shape.protoRoot,
+// shape.budget), which is what most prototypes have; the rest of the roots
+// are on its side (shapeSide.roots), which a prototype's layout has only
+// once a second is kept.
 
 // shapeBudget is the count of the shapes a tree holds with the prototypes
 // of a budgetChunk's slots as theirs: n, which the chunk's cleanup adds to
@@ -73,30 +70,32 @@ type budgetSlot struct{ b *shapeBudget }
 // same layout is taken for it (rootFor, rootIn).
 const ctorRootClass = ClassCursor + 1
 
-// rootAt is the root at position i of rs, or nil past the last.
-func rootAt[_ any](rs *protoRoots, i int) *shape {
-	switch {
-	case i == 0:
-		return rs.first
-	case rs.rest == nil || i > len(*rs.rest):
+// rootAt is the root at position i of the roots ps keeps, or nil past the
+// last.
+func rootAt[_ any](ps *shape, i int) *shape {
+	if i == 0 {
+		return ps.protoRoot
+	}
+	if ps.side == nil || i > len(ps.side.roots) {
 		return nil
 	}
-	return (*rs.rest)[i-1]
+	return ps.side.roots[i-1]
 }
 
-// setRoot makes s the root at position at of rs, or, for at -1, adds it.
+// setRoot makes s the root at position at of the roots ps keeps, or, for
+// at -1, adds it.
 //
 //go:noinline
-func setRoot[_ any](rs *protoRoots, at int, s *shape) {
+func setRoot[_ any](ps *shape, at int, s *shape) {
 	switch {
-	case at == 0 || at < 0 && rs.first == nil:
-		rs.first = s
+	case at == 0 || at < 0 && ps.protoRoot == nil:
+		ps.protoRoot = s
 	case at > 0:
-		(*rs.rest)[at-1] = s
-	case rs.rest == nil:
-		rs.rest = &[]*shape{s}
+		ps.side.roots[at-1] = s
+	case ps.side == nil:
+		ps.side = &shapeSide{roots: append(make([]*shape, 0, 2), s)}
 	default:
-		*rs.rest = append(*rs.rest, s)
+		ps.side.roots = append(ps.side.roots, s)
 	}
 }
 
@@ -117,11 +116,11 @@ func chargeShape[_ any](t *shapeTree, p *Object) {
 		return
 	}
 	p.flags |= objProtoMet
-	rs := &p.ownLayout().roots
-	if rs.budget == nil {
-		rs.budget = budgetSlotOf[struct{}](t)
+	ps := p.ownLayout()
+	if ps.budget == nil {
+		ps.budget = budgetSlotOf[struct{}](t)
 	}
-	rs.budget.b.n.Add(1)
+	ps.budget.b.n.Add(1)
 }
 
 // budgetSlotOf is the next slot of t's budgets, for a prototype's layout.
@@ -220,7 +219,7 @@ func reclaimShapes[_ any](t *shapeTree) bool {
 func keptCtorRoot[_ any](s *shape) *shape {
 	t, ps := s.tree, s.proto.ownLayout()
 	for i := 0; ; i++ {
-		k := rootAt[struct{}](&ps.roots, i)
+		k := rootAt[struct{}](ps, i)
 		if k == nil {
 			break
 		}
@@ -229,7 +228,7 @@ func keptCtorRoot[_ any](s *shape) *shape {
 		}
 	}
 	if takeShape[struct{}](t, s.proto) {
-		setRoot[struct{}](&ps.roots, -1, s)
+		setRoot[struct{}](ps, -1, s)
 	}
 	// Else no room to keep it, and its objects' layouts are their own
 	// (child).
@@ -290,4 +289,51 @@ func classProto[_ any](ctor, parent *Object) {
 	if verifyShapes {
 		checkShape(ctor)
 	}
+}
+
+// infoOf is the protoInfo of s, nil if s is nil or has none.
+func infoOf[_ any](s *shape) *protoInfo {
+	if s == nil || s.side == nil {
+		return nil
+	}
+	return s.side.info
+}
+
+// sideOf is the side of s, made if it has none.
+func sideOf[_ any](s *shape) *shapeSide {
+	if s.side == nil {
+		s.side = &shapeSide{}
+	}
+	return s.side
+}
+
+// keepForIn keeps c, the keys a for-in loop visits on an object of
+// layout s, on s's side (shapeKeys).
+//
+//go:noinline
+func keepForIn[_ any](s *shape, c *forInKeys) {
+	sideOf[struct{}](s).forIn = c
+}
+
+// newProtoInfo is a protoInfo, of a new valid cell, kept on s's side for
+// the object of layout s, a prototype (chainCell).
+//
+//go:noinline
+func newProtoInfo[_ any](s *shape) *protoInfo {
+	info := &protoInfo{cell: &protoCell{valid: true}}
+	sideOf[struct{}](s).info = info
+	return info
+}
+
+// passSide gives ns, a new identity for the layout of a prototype whose
+// layout was s, what goes with the layout: the roots of the objects it is
+// the prototype of, their budget, and its side, which holds the rest of
+// the roots and the prototype's cell and users. s is no object's layout
+// after it, and its side is ns's alone: what a cache keeps of s is only
+// compared, never asked for its side.
+//
+//go:noinline
+func passSide[_ any](ns, s *shape) {
+	ns.protoRoot, ns.budget = s.protoRoot, s.budget
+	ns.side, s.side = s.side, nil
 }

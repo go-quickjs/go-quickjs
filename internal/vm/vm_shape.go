@@ -63,10 +63,14 @@ type shape struct {
 	// prototype with its layout, and a new prototype is a new layout
 	// (setProto).
 	proto *Object
-	// roots are, on the layout of an object that is another's prototype,
-	// the empty layouts its objects start from and the budget of the
-	// shapes made with it (protoRoots).
-	roots  protoRoots
+	// protoRoot and budget are, on the layout of an object that is
+	// another's prototype, the first of the empty layouts its objects start
+	// from and the budget of the shapes made with it, of its roots
+	// (protoRoots); the rest are on its side.
+	protoRoot *shape
+	budget    *budgetSlot
+	// side is what few layouts have, nil on the rest (shapeSide).
+	side   *shapeSide
 	keys   []propKey
 	key    Atom
 	flags  propFlags
@@ -131,14 +135,26 @@ type shape struct {
 	nextEdge shapeEdge
 	more     map[shapeEdge]*shape
 	index    *propIndex
-	// forIn is what a for-in loop visits on an object of a shared shape,
-	// made the first time one is walked; see startForIn.
-	forIn *forInKeys
+}
+
+// shapeSide is what a shape keeps that few shapes have, read off the paths
+// that read a layout: a prototype's roots past the first and its cell, a
+// for-in loop's keys. A shape that has none of them has no side, and is 128
+// bytes, not 144, which an object made on a prototype of its own pays for
+// its layout (firstRoot). A side is its shape's alone: a new identity for
+// a prototype's layout takes it over (passSide).
+type shapeSide struct {
+	// roots are, on the layout of an object that is another's prototype,
+	// the roots its objects start from past the first (protoRoots).
+	roots []*shape
 	// info is, on the layout of an object a cache has found a property
 	// past as a prototype, its validity cell and the prototypes below it
 	// (protoInfo); such an object's layout is its own, as V8 gives a
 	// prototype a map of its own (OptimizeAsPrototype).
 	info *protoInfo
+	// forIn is what a for-in loop visits on an object of a shared shape,
+	// made the first time one is walked; see startForIn.
+	forIn *forInKeys
 }
 
 // protoCell is a prototype chain's validity cell, as V8's: valid while no
@@ -191,8 +207,8 @@ func (info *protoInfo) invalidate() {
 			continue
 		}
 		users = append(users, w)
-		if us := u.shape; us != nil && us.info != nil {
-			us.info.invalidate()
+		if ui := infoOf[struct{}](u.shape); ui != nil {
+			ui.invalidate()
 		}
 	}
 	clear(info.users[len(users):])
@@ -202,8 +218,8 @@ func (info *protoInfo) invalidate() {
 // protoChanged is called before o's layout or prototype changes: the cells
 // of the chains through o, if any, are invalid.
 func (s *shape) protoChanged() {
-	if s != nil && s.info != nil {
-		s.info.invalidate()
+	if s != nil && s.side != nil && s.side.info != nil {
+		s.side.info.invalidate()
 	}
 }
 
@@ -229,19 +245,19 @@ func (r *Runtime) chainCell(p *Object) *protoCell {
 		p.layoutChanged()
 	}
 	s = p.shape
-	if s.info == nil || s.info.up != p.proto() {
+	if info := infoOf[struct{}](s); info == nil || info.up != p.proto() {
 		if r.chainCell(p.proto()) == nil {
 			return nil
 		}
-		if s.info == nil {
-			s.info = &protoInfo{cell: &protoCell{valid: true}}
+		if info == nil {
+			info = newProtoInfo[struct{}](s)
 		}
 		if q := p.proto(); q != nil {
-			q.shape.info.users = append(q.shape.info.users, weak.Make(p))
+			q.shape.side.info.users = append(q.shape.side.info.users, weak.Make(p))
 		}
-		s.info.up = p.proto()
+		info.up = p.proto()
 	}
-	return s.info.cell
+	return infoOf[struct{}](s).cell
 }
 
 // forInKeys is the keys a for-in loop visits, as the strings it hands out
@@ -482,7 +498,7 @@ func rootFor(c Class, p *Object) *shape {
 	// The first root a prototype's layout keeps, a tree's, is most often
 	// the one: small enough to be made where an object is.
 	if p != nil && p.shape != nil {
-		if s := p.shape.roots.first; s != nil && s.rootClass == c && s.tree != nil {
+		if s := p.shape.protoRoot; s != nil && s.rootClass == c && s.tree != nil {
 			return s
 		}
 	}
@@ -508,7 +524,7 @@ func rootIn(tree *shapeTree, c Class, p *Object) *shape {
 	}
 	at := -1
 	for i := 0; ; i++ {
-		s := rootAt[struct{}](&ps.roots, i)
+		s := rootAt[struct{}](ps, i)
 		if s == nil {
 			break
 		}
@@ -534,7 +550,7 @@ func rootIn(tree *shapeTree, c Class, p *Object) *shape {
 	default:
 		s = &shape{proto: p, loose: true, generic: true, rootClass: c}
 	}
-	setRoot[struct{}](&ps.roots, at, s)
+	setRoot[struct{}](ps, at, s)
 	return s
 }
 
@@ -868,7 +884,9 @@ func (o *Object) shapeAdded(k propKey) {
 		if s.seen && (s.tree == nil || !s.tree.building) {
 			// A new identity, so that what was cached of the old one misses.
 			ns := newUniqueShape(s.tree, s.proto, s.keys[:s.n], s.index)
-			ns.borrowed, ns.info, ns.roots = s.borrowed, s.info, s.roots
+			// The prototype's roots and side go with its layout (passSide).
+			ns.borrowed, ns.protoRoot, ns.budget = s.borrowed, s.protoRoot, s.budget
+			ns.side, s.side = s.side, nil
 			s = ns
 			o.shape = s
 		}
@@ -973,7 +991,7 @@ func (o *Object) layoutChanged() {
 	if s.unique {
 		// A prototype's cell and users go with its layout, and so do the
 		// roots of the objects it is the prototype of.
-		ns.info, ns.roots = s.info, s.roots
+		passSide[struct{}](ns, s)
 	}
 	o.shape = ns
 	if index == nil && int(o.valn) > linearScanLimit {
@@ -1874,7 +1892,8 @@ func (r *Runtime) ensureProtoShape(o *Object) *shape {
 		ns := newUniqueShape(r.shapes, s.proto, keys, s.index)
 		ns.borrowed = s.borrowed || !s.unique && s.index != nil
 		if s.unique {
-			ns.roots = s.roots
+			// As passSide; s, loose, is in no cache, and is garbage.
+			ns.protoRoot, ns.budget, ns.side = s.protoRoot, s.budget, s.side
 		}
 		o.shape = ns
 		return ns

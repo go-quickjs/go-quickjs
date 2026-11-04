@@ -270,7 +270,7 @@ func (r *Runtime) shapeKeys(o *Object) *forInKeys {
 	if o.class != ClassObject || len(o.elemsOf()) != 0 || s == nil || s.unique {
 		return nil
 	}
-	if s.forIn == nil {
+	if sd := s.side; sd == nil || sd.forIn == nil {
 		c := &forInKeys{copyable: true}
 		for _, k := range o.ownKeys(false, r.atoms) {
 			if i := o.findOwn(k); i >= 0 && o.shape.keys[i].flags&(propEnumerable|propPrivate|propDeleted) == propEnumerable {
@@ -287,9 +287,9 @@ func (r *Runtime) shapeKeys(o *Object) *forInKeys {
 				c.copyable = false
 			}
 		}
-		s.forIn = c
+		keepForIn[struct{}](s, c)
 	}
-	return s.forIn
+	return s.side.forIn
 }
 
 // elemKeysOnly reports whether an array's keys are its dense elements and
