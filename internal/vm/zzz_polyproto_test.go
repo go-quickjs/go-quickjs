@@ -155,36 +155,28 @@ func TestPolyProtoSemantics(t *testing.T) {
 // The first object made on a prototype keeps it in its table, the slot a
 // private property under atomProtoSlot at its first position, and its
 // layout one of the runtime's for such objects, which says no prototype;
-// a cache remembers it for the object's own properties, and for nothing
-// found past it. A second object made on the prototype makes it one of its
-// own layout, with the prototype in it, its slot cleared; so does a cache
-// finding a property past it, and the layout of an object of another kind
-// taking it as its prototype.
+// a cache remembers it for the object's own properties, and nothing found
+// past it by its layout. A second object made on the prototype makes it one
+// of its own layout, with the prototype in it, its slot cleared; so does a
+// cache finding a property past it for an object of another layout; and so
+// does a second read past it at one site, which a singleton made on a
+// prototype of its own, read in a loop, makes: the site then remembers its
+// layout as any object's.
 func TestPolyProtoLayout(t *testing.T) {
 	r := New(Config{})
 	defer r.Close()
-	v, err := r.Run(compileForTest(t, `
+	if _, err := r.Run(compileForTest(t, `
 		var p = {k: 1}, q = {k: 2}
 		var a = Object.create(p), b = Object.create(q)
 		a.x = 1; b.x = 2
-		function own(o) { return o.x }
-		function up(o) { return o.k }
-		var sum = 0
-		for (var i = 0; i < 20; i++) sum += own(a) + own(b) + up(a) + up(b)
 		var lit = {__proto__: {k: 3}, w: 1}
 		var sp = Object.setPrototypeOf({}, {k: 4})
 		var shared = {k: 5}, s1 = Object.create(shared), s2 = Object.create(shared)
 		var mid = Object.create({k: 6}), deep = Object.create(mid), deep2 = Object.create(mid)
 		function G() {}
 		G.prototype = Object.create({k: 7})
-		var g = new G()
-		for (var i = 0; i < 4; i++) sum += up(deep) + up(g)
-		String(sum)`))
-	if err != nil {
+		var g = new G()`)); err != nil {
 		t.Fatal(err)
-	}
-	if got := v.String().Go(); got != "172" {
-		t.Fatalf("sum %s, want 172", got)
 	}
 	a, b := globalObject(r, "a"), globalObject(r, "b")
 	for _, n := range []string{"a", "b", "lit", "sp", "s1", "deep"} {
@@ -196,18 +188,35 @@ func TestPolyProtoLayout(t *testing.T) {
 	if l := globalObject(r, "lit"); l.shape.proto != nil || l.shape.parent.proto != nil {
 		t.Errorf("lit's layout says a prototype: %p", l.shape.proto)
 	}
-	if a.shape != b.shape || a.shape.unique || a.shape.loose || a.shape.proto != nil || !a.shape.seen {
-		t.Errorf("a and b: shapes %p and %p; want one shared layout, of no prototype, a cache remembers", a.shape, b.shape)
-	}
-	for _, fn := range []string{"own", "up"} {
-		for i, c := range globalObject(r, fn).fn().closure.ic {
-			if c.shape == a.shape && (c.p1 != nil || c.p2 != nil || c.cell != nil) {
-				t.Errorf("%s's site %d remembers prototypes of objects whose layout says none: %+v", fn, i, c)
-			}
-		}
+	if a.shape != b.shape || a.shape.unique || a.shape.loose || a.shape.proto != nil {
+		t.Errorf("a and b: shapes %p and %p; want one shared layout, of no prototype", a.shape, b.shape)
 	}
 	if s2 := globalObject(r, "s2"); s2.flags&objPolyProto != 0 || s2.proto() != globalObject(r, "shared") {
 		t.Errorf("s2, the second object of its prototype: poly %v", s2.flags&objPolyProto != 0)
+	}
+	// Reads of objects each the first of their prototype, one after the
+	// other at each site: each misses what the site found for the one before.
+	v, err := r.Run(compileForTest(t, `
+		function own(o) { return o.x }
+		function up(o) { return o.k }
+		var sum = 0
+		for (var i = 0; i < 20; i++) sum += own(a) + own(b) + up(lit) + up(sp) + up(deep) + up(g)
+		String(sum)`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String().Go(); got != "460" {
+		t.Fatalf("sum %s, want 460", got)
+	}
+	if !a.shape.seen || a.flags&objPolyProto == 0 {
+		t.Errorf("a: seen %v, poly %v; want its layout remembered for its own property", a.shape.seen, a.flags&objPolyProto != 0)
+	}
+	for _, fn := range []string{"own", "up"} {
+		for i, c := range globalObject(r, fn).fn().closure.ic {
+			if c.shape != nil && c.shape != noShape && c.shape != dictShape && c.shape.proto == nil && (c.p1 != nil || c.p2 != nil || c.cell != nil) {
+				t.Errorf("%s's site %d remembers prototypes by a layout that says none: %+v", fn, i, c)
+			}
+		}
 	}
 	// mid, the first of {k: 6}'s, is deep2's prototype, the second made on
 	// it, and G.prototype, the first of {k: 7}'s, is read past by up's cache
@@ -218,8 +227,26 @@ func TestPolyProtoLayout(t *testing.T) {
 			t.Errorf("a prototype: poly %v, unique %v; want a layout of its own holding its prototype, its slot cleared", o.flags&objPolyProto != 0, o.shape.unique)
 		}
 	}
-	if d := globalObject(r, "deep"); d.flags&objPolyProto == 0 || d.proto() != globalObject(r, "mid") {
-		t.Errorf("deep: poly %v; want its prototype still in its slot", d.flags&objPolyProto != 0)
+	if d := globalObject(r, "deep"); d.proto() != globalObject(r, "mid") {
+		t.Errorf("deep's prototype is not mid")
+	}
+	// A singleton read past at one site again and again: the second read
+	// makes its layout its own, which the site then remembers.
+	if v, err := r.Run(compileForTest(t, `function upA(o) { return o.k }
+		var s = 0; for (var i = 0; i < 10; i++) s += upA(a); String(s)`)); err != nil || v.String().Go() != "10" {
+		t.Fatalf("upA: %v, %v", v, err)
+	}
+	if a.flags&objPolyProto != 0 || !a.shape.unique || a.shape.proto != globalObject(r, "p") {
+		t.Errorf("a read again and again: poly %v, unique %v; want a layout of its own of prototype p", a.flags&objPolyProto != 0, a.shape.unique)
+	}
+	found := false
+	for _, c := range globalObject(r, "upA").fn().closure.ic {
+		if c.shape == a.shape && c.p1 == globalObject(r, "p") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("upA's site does not remember a's layout")
 	}
 }
 

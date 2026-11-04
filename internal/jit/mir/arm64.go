@@ -2335,7 +2335,7 @@ func (c *a64Compiler) arrayGuards(p arm64.Reg, protos [2]ssa.Holder, fail func(a
 	c.a.Op(arm64.And, a64B, a64B, a64A, false)
 	c.a.CmpImm(a64B, int64(want), false)
 	fail(arm64.NE)
-	c.loadProto(a64B, p)
+	c.loadProtoPlain(a64B, p)
 	c.movImm(a64A, uint64(protos[0].Object))
 	c.a.Cmp(a64B, a64A, true)
 	fail(arm64.NE)
@@ -2496,12 +2496,12 @@ func (c *a64Compiler) superGuards(t *ssa.CallSite, x *ssa.Value, guard func(arm6
 	c.movImm(a64B, uint64(t.Active))
 	c.a.Cmp(a64A, a64B, true)
 	guard(arm64.NE)
-	c.loadProto(a64A, a64A)
+	c.loadProtoPlain(a64A, a64A)
 	c.movImm(a64B, uint64(t.Callee))
 	c.a.Cmp(a64A, a64B, true)
 	guard(arm64.NE)
 	if t.Parent != 0 {
-		c.loadProto(a64A, a64A)
+		c.loadProtoPlain(a64A, a64A)
 		c.movImm(a64B, uint64(t.Parent))
 		c.a.Cmp(a64A, a64B, true)
 		guard(arm64.NE)
@@ -2776,6 +2776,15 @@ func (c *a64Compiler) objectPart(dst, obj, t arm64.Reg, cls uint8, off int32, fa
 	c.a.AddImm(dst, obj, int64(off), true)
 }
 
+// loadProtoPlain is amd64's: loadProto without the test of FlagPoly.
+func (c *a64Compiler) loadProtoPlain(dst, obj arm64.Reg) {
+	none := c.a.NewLabel()
+	c.a.Load(dst, obj, c.enc.ObjectShape)
+	c.a.Cbz(dst, none, true)
+	c.a.Load(dst, dst, c.enc.ShapeProto)
+	c.a.Bind(none)
+}
+
 // loadProto is amd64's: dst the prototype of the object in obj, which may
 // be dst, nil for one with no shape, or, for one that keeps it in its first
 // property (FlagPoly), that value's pointer word: the flag's bit isolated
@@ -2862,9 +2871,14 @@ func (c *a64Compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss arm64.La
 	c.movImm(a64C, uint64(c.enc.FlagExtensible))
 	c.a.Tst(a64B, a64C, false)
 	c.a.BCond(arm64.EQ, miss)
-	c.loadProto(a64B, o)
+	chain := add.Chain()
+	if !add.Define && len(chain) == 0 {
+		c.loadProto(a64B, o)
+	} else {
+		c.loadProtoPlain(a64B, o)
+	}
 	if !add.Define {
-		for _, h := range add.Chain() {
+		for j, h := range chain {
 			c.movImm(a64C, uint64(h.Object))
 			c.a.Cmp(a64B, a64C, true)
 			c.a.BCond(arm64.NE, miss)
@@ -2873,7 +2887,11 @@ func (c *a64Compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss arm64.La
 			c.movImm(a64A, uint64(h.Shape))
 			c.a.Cmp(a64B, a64A, true)
 			c.a.BCond(arm64.NE, miss)
-			c.loadProto(a64B, a64C)
+			if j == len(chain)-1 {
+				c.loadProto(a64B, a64C)
+			} else {
+				c.loadProtoPlain(a64B, a64C)
+			}
 		}
 		c.a.Cbnz(a64B, miss, true)
 	}
@@ -3745,7 +3763,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 		guard(arm64.HI)
 		if t.Parent != 0 {
 			// As amd64's: the callee's prototype still the parent.
-			c.loadProto(a64B, a64C)
+			c.loadProtoPlain(a64B, a64C)
 			c.movImm(a64A, uint64(t.Parent))
 			c.a.Cmp(a64B, a64A, true)
 			guard(arm64.NE)
@@ -4237,7 +4255,7 @@ func (c *a64Compiler) pushGuards(t *ssa.CallSite, recv *ssa.Value, guard func(ar
 	c.a.Load(a64A, a64C, c.enc.ObjectElems+16)
 	c.a.Cmp(a64B, a64A, true)
 	guard(arm64.HS)
-	c.loadProto(a64B, a64C)
+	c.loadProtoPlain(a64B, a64C)
 	c.movImm(a64A, uint64(t.Protos[0].Object))
 	c.a.Cmp(a64B, a64A, true)
 	guard(arm64.NE)
@@ -4268,7 +4286,7 @@ func (c *a64Compiler) protoGuards(protos [2]ssa.Holder, guard func(arm64.Cond)) 
 		c.movImm(a64C, uint64(c.enc.FlagSparse))
 		c.a.Tst(a64B, a64C, false)
 		guard(arm64.NE)
-		c.loadProto(a64B, a64A)
+		c.loadProtoPlain(a64B, a64A)
 		if i == 0 {
 			c.movImm(a64C, uint64(protos[1].Object))
 			c.a.Cmp(a64B, a64C, true)
@@ -4299,7 +4317,7 @@ func (c *a64Compiler) popGuards(t *ssa.CallSite, recv *ssa.Value, guard func(arm
 	c.a.Op(arm64.And, a64B, a64B, a64A, false)
 	c.a.CmpImm(a64B, int64(c.enc.FlagLengthWritable), false)
 	guard(arm64.NE)
-	c.loadProto(a64B, a64C)
+	c.loadProtoPlain(a64B, a64C)
 	c.movImm(a64A, uint64(t.Protos[0].Object))
 	c.a.Cmp(a64B, a64A, true)
 	guard(arm64.NE)
@@ -5258,14 +5276,14 @@ func (c *a64Compiler) genForOf(v *ssa.Value, slow, done arm64.Label) {
 	c.a.Cbz(a64A, slow, false)
 	c.a.LoadU32(a64A, a64D, c.enc.ObjectPropsLen)
 	c.a.Cbnz(a64A, slow, false)
-	c.loadProto(a64C, a64D)
+	c.loadProtoPlain(a64C, a64D)
 	c.a.Cbz(a64C, slow, true)
 	c.a.LoadU8(a64A, a64C, c.enc.ObjectClass)
 	c.a.CmpImm(a64A, int64(c.enc.ClassObject), false)
 	fail(arm64.NE)
 	c.a.LoadU32(a64A, a64C, c.enc.ObjectPropsLen)
 	c.a.Cbnz(a64A, slow, true)
-	c.loadProto(a64C, a64C)
+	c.loadProtoPlain(a64C, a64C)
 	c.a.Cbz(a64C, slow, true)
 	c.movImm(a64A, uint64(site.GenIter))
 	c.a.Load(a64B, a64A, c.enc.GenIterFrom)
@@ -6212,7 +6230,7 @@ func (c *a64Compiler) spreadElems(v *ssa.Value, site *ssa.CallSite, slow arm64.L
 	c.a.LoadU32(a64A, a64B, c.enc.ObjectPropsLen)
 	c.a.Cbnz(a64A, slow, true)
 	c.movImm(a64C, uint64(site.ArrayIter))
-	c.loadProto(a64A, a64B)
+	c.loadProtoPlain(a64A, a64B)
 	c.a.Load(a64D, a64C, abi.IterProto)
 	c.a.Cmp(a64A, a64D, true)
 	c.a.BCond(arm64.NE, slow)
@@ -6376,7 +6394,7 @@ func (c *a64Compiler) keyedHas(v *ssa.Value, slow arm64.Label) {
 		c.movImm(a64C, uint64(c.enc.FlagSparse))
 		c.a.Tst(a64B, a64C, false)
 		fail(arm64.NE)
-		c.loadProto(a64B, a64D)
+		c.loadProtoPlain(a64B, a64D)
 		c.movImm(a64C, uint64(protos[0].Object))
 		c.a.Cmp(a64B, a64C, true)
 		fail(arm64.NE)
@@ -6428,7 +6446,7 @@ func (c *a64Compiler) keyedHas(v *ssa.Value, slow arm64.Label) {
 			c.a.Cmp(a64D, a64C, true)
 			c.a.BCond(arm64.NE, next)
 			c.a.FMovFromF(a64B, a64F1)
-			c.loadProto(a64B, a64B)
+			c.loadProtoPlain(a64B, a64B)
 			c.a.Load(a64D, a64A, abi.HasEntryProto)
 			c.a.Cmp(a64B, a64D, true)
 			c.a.BCond(arm64.NE, next)
@@ -7167,7 +7185,7 @@ func (c *a64Compiler) holder(v *ssa.Value, guard func(arm64.Cond)) {
 		if p != a64A {
 			c.a.MovRR(a64A, p)
 		}
-		c.loadProto(a64B, a64A)
+		c.loadProtoPlain(a64B, a64A)
 		for j := 0; j < len(k.Holders)+len(k.More); j++ {
 			var h ssa.Holder
 			if j < len(k.Holders) {
@@ -7185,7 +7203,7 @@ func (c *a64Compiler) holder(v *ssa.Value, guard func(arm64.Cond)) {
 			c.movImm(a64C, uint64(h.Shape))
 			c.a.Cmp(a64B, a64C, true)
 			miss(stale)
-			c.loadProto(a64B, a64A)
+			c.loadProtoPlain(a64B, a64A)
 		}
 		c.a.Load(a64A, a64A, c.enc.ObjectProps)
 		c.a.AddImm(a64A, a64A, int64(k.Index*c.enc.ValueSize), true)
@@ -7210,7 +7228,11 @@ func (c *a64Compiler) protoChain(chain []ssa.Holder, guard func(arm64.Cond), nul
 		c.movImm(a64C, uint64(h.Shape))
 		c.a.Cmp(a64B, a64C, true)
 		guard(arm64.NE)
-		c.loadProto(a64B, a64A)
+		if null && i == len(chain)-1 {
+			c.loadProto(a64B, a64A)
+		} else {
+			c.loadProtoPlain(a64B, a64A)
+		}
 	}
 	if null {
 		c.a.CmpImm(a64B, 0, true)
@@ -8650,7 +8672,7 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 			c.a.LoadU8(a64B, p, c.enc.ObjectClass)
 			c.a.CmpImm(a64B, int64(c.enc.ClassTypedArray), false)
 			guard(arm64.NE)
-			c.loadProto(a64B, p)
+			c.loadProtoPlain(a64B, p)
 			c.movImm(a64C, v.Const.Bits)
 			c.a.Cmp(a64B, a64C, true)
 			guard(arm64.NE)

@@ -1558,7 +1558,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		if t.Parent != 0 {
 			// A derived class's, made with its parent's code: the parent
 			// super() would read, the callee's prototype, still that one.
-			c.loadProto(scratchB, scratchC)
+			c.loadProtoPlain(scratchB, scratchC)
 			c.cmpWord(scratchB, uint64(t.Parent))
 			guard(amd64.CondNE)
 		}
@@ -2610,7 +2610,7 @@ func (c *compiler) spreadElems(v *ssa.Value, site *ssa.CallSite, slow amd64.Labe
 	c.a.Op(amd64.Test, scratchA, scratchA, true)
 	c.a.Jcc(amd64.CondNE, slow)
 	c.movImm(scratchC, uint64(site.ArrayIter))
-	c.loadProto(scratchA, scratchB)
+	c.loadProtoPlain(scratchA, scratchB)
 	c.a.CmpMem(scratchA, scratchC, abi.IterProto, true)
 	c.a.Jcc(amd64.CondNE, slow)
 	for _, cell := range []int32{abi.IterCellArray, abi.IterCellIter} {
@@ -2716,11 +2716,11 @@ func (c *compiler) superGuards(t *ssa.CallSite, x *ssa.Value, guard func(amd64.C
 	c.a.Load(scratchA, regCtx, abi.OffFunction)
 	c.cmpWord(scratchA, uint64(t.Active))
 	guard(amd64.CondNE)
-	c.loadProto(scratchB, scratchA)
+	c.loadProtoPlain(scratchB, scratchA)
 	c.cmpWord(scratchB, uint64(t.Callee))
 	guard(amd64.CondNE)
 	if t.Parent != 0 {
-		c.loadProto(scratchB, scratchB)
+		c.loadProtoPlain(scratchB, scratchB)
 		c.cmpWord(scratchB, uint64(t.Parent))
 		guard(amd64.CondNE)
 	}
@@ -3562,7 +3562,7 @@ func (c *compiler) genForOf(v *ssa.Value, slow, done amd64.Label) {
 	fail(amd64.CondNE)
 	// Its prototype an ordinary object with none, the chain up from that
 	// the cache's, valid.
-	c.loadProto(scratchC, scratchB)
+	c.loadProtoPlain(scratchC, scratchB)
 	c.a.Op(amd64.Test, scratchC, scratchC, true)
 	fail(amd64.CondE)
 	c.a.LoadU8(scratchA, scratchC, c.enc.ObjectClass)
@@ -3571,7 +3571,7 @@ func (c *compiler) genForOf(v *ssa.Value, slow, done amd64.Label) {
 	c.a.LoadU32(scratchA, scratchC, c.enc.ObjectPropsLen)
 	c.a.Op(amd64.Test, scratchA, scratchA, true)
 	fail(amd64.CondNE)
-	c.loadProto(scratchC, scratchC)
+	c.loadProtoPlain(scratchC, scratchC)
 	c.a.Op(amd64.Test, scratchC, scratchC, true)
 	fail(amd64.CondE)
 	c.movImm(scratchA, uint64(site.GenIter))
@@ -4364,7 +4364,7 @@ func (c *compiler) keyedHas(v *ssa.Value, slow amd64.Label) {
 		c.a.LoadU8(scratchB, scratchC, c.enc.ObjectFlags)
 		c.a.OpImm(amd64.And, scratchB, int32(c.enc.FlagSparse), false)
 		fail(amd64.CondNE)
-		c.loadProto(scratchB, scratchC)
+		c.loadProtoPlain(scratchB, scratchC)
 		c.cmpWord(scratchB, uint64(protos[0].Object))
 		fail(amd64.CondNE)
 		c.protoGuards(protos, fail)
@@ -4416,7 +4416,10 @@ func (c *compiler) keyedHas(v *ssa.Value, slow amd64.Label) {
 			c.a.CmpMem(scratchC, scratchA, abi.HasEntryShape, true)
 			c.a.Jcc(amd64.CondNE, next)
 			c.a.MovQFromX(scratchB, xScratch1)
-			c.loadProto(scratchB, scratchB)
+			// An object that keeps its prototype in its table (FlagPoly)
+			// is read as of none, which matches no entry: the VM keeps none
+			// for such an object of no prototype, and answers it.
+			c.loadProtoPlain(scratchB, scratchB)
 			c.a.CmpMem(scratchB, scratchA, abi.HasEntryProto, true)
 			c.a.Jcc(amd64.CondNE, next)
 			if way == 0 {
@@ -4927,6 +4930,24 @@ func (c *compiler) objectPart(dst, obj, t amd64.Reg, cls uint8, off int32, fail 
 	c.a.Lea(dst, obj, off)
 }
 
+// loadProtoPlain is loadProto without the test of FlagPoly, for an object
+// whose prototype the code then compares with an object, or can know is
+// in its shape: one its shape was found to be a shape that says it, or one
+// of a class that keeps none in its table, which only an ordinary object
+// does. An object that does keep it there has a shape whose prototype is
+// nil, so that compared with an object it matches none, and the code
+// leaves; what tests for no prototype, or walks a chain it knows nothing
+// of -- instanceof, a megamorphic probe, the end of a chain checked for
+// none -- reads loadProto's.
+func (c *compiler) loadProtoPlain(dst, obj amd64.Reg) {
+	none := c.a.NewLabel()
+	c.a.Load(dst, obj, c.enc.ObjectShape)
+	c.a.Op(amd64.Test, dst, dst, true)
+	c.a.Jcc(amd64.CondE, none)
+	c.a.Load(dst, dst, c.enc.ShapeProto)
+	c.a.Bind(none)
+}
+
 // loadProto has dst be the prototype of the object in obj, which may be
 // dst: its shape's (abi.Encoding's ShapeProto), nil for an object with no
 // shape, which has none; or, for an object that keeps it in its first
@@ -5074,7 +5095,7 @@ func (c *compiler) pushGuards(t *ssa.CallSite, recv *ssa.Value, guard func(amd64
 	c.a.Load(scratchA, scratchC, c.enc.ObjectElems+16)
 	c.a.Op(amd64.Cmp, scratchB, scratchA, true)
 	guard(amd64.CondAE)
-	c.loadProto(scratchB, scratchC)
+	c.loadProtoPlain(scratchB, scratchC)
 	c.cmpWord(scratchB, uint64(t.Protos[0].Object))
 	guard(amd64.CondNE)
 	c.protoGuards(t.Protos, guard)
@@ -5106,7 +5127,7 @@ func (c *compiler) protoGuards(protos [2]ssa.Holder, guard func(amd64.Cond)) {
 		c.a.OpImm(amd64.And, scratchB, int32(c.enc.FlagSparse), false)
 		guard(amd64.CondNE)
 		// Its prototype: the next, or none.
-		c.loadProto(scratchB, scratchA)
+		c.loadProtoPlain(scratchB, scratchA)
 		if i == 0 {
 			c.cmpWord(scratchB, uint64(protos[1].Object))
 		} else {
@@ -5137,7 +5158,7 @@ func (c *compiler) popGuards(t *ssa.CallSite, recv *ssa.Value, guard func(amd64.
 	c.a.OpImm(amd64.And, scratchB, int32(c.enc.FlagLengthWritable|c.enc.FlagSparse), false)
 	c.a.OpImm(amd64.Cmp, scratchB, int32(c.enc.FlagLengthWritable), false)
 	guard(amd64.CondNE)
-	c.loadProto(scratchB, scratchC)
+	c.loadProtoPlain(scratchB, scratchC)
 	c.cmpWord(scratchB, uint64(t.Protos[0].Object))
 	guard(amd64.CondNE)
 	// Not empty, and its last element no hole.
@@ -7085,7 +7106,7 @@ func (c *compiler) arrayGuards(p amd64.Reg, protos [2]ssa.Holder, fail func(amd6
 	c.a.OpImm(amd64.And, scratchB, int32(want|c.enc.FlagSparse), false)
 	c.a.OpImm(amd64.Cmp, scratchB, int32(want), false)
 	fail(amd64.CondNE)
-	c.loadProto(scratchB, p)
+	c.loadProtoPlain(scratchB, p)
 	c.cmpWord(scratchB, uint64(protos[0].Object))
 	fail(amd64.CondNE)
 	c.protoGuards(protos, fail)
@@ -7270,7 +7291,11 @@ func (c *compiler) protoChain(chain []ssa.Holder, guard func(amd64.Cond), null b
 		c.a.Load(scratchB, scratchA, c.enc.ObjectShape)
 		c.cmpWord(scratchB, uint64(h.Shape))
 		guard(amd64.CondNE)
-		c.loadProto(scratchB, scratchA)
+		if null && i == len(chain)-1 {
+			c.loadProto(scratchB, scratchA)
+		} else {
+			c.loadProtoPlain(scratchB, scratchA)
+		}
 	}
 	if null {
 		c.a.Op(amd64.Test, scratchB, scratchB, true)
@@ -7302,9 +7327,14 @@ func (c *compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss amd64.Label
 	c.a.Jcc(amd64.CondE, miss)
 	// The prototype chain the cache found, object by object, then none;
 	// none for a literal's field, which its prototypes do not intercept.
-	c.loadProto(scratchB, o)
+	chain := add.Chain()
+	if !add.Define && len(chain) == 0 {
+		c.loadProto(scratchB, o)
+	} else {
+		c.loadProtoPlain(scratchB, o)
+	}
 	if !add.Define {
-		for _, h := range add.Chain() {
+		for j, h := range chain {
 			c.movImm(scratchC, uint64(h.Object))
 			c.a.Op(amd64.Cmp, scratchB, scratchC, true)
 			c.a.Jcc(amd64.CondNE, miss)
@@ -7312,7 +7342,11 @@ func (c *compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss amd64.Label
 			c.cmpWord(scratchB, uint64(h.Shape))
 			c.a.Jcc(amd64.CondNE, miss)
 			c.movImm(scratchC, uint64(h.Object))
-			c.loadProto(scratchB, scratchC)
+			if j == len(chain)-1 {
+				c.loadProto(scratchB, scratchC)
+			} else {
+				c.loadProtoPlain(scratchB, scratchC)
+			}
 		}
 		c.a.Op(amd64.Test, scratchB, scratchB, true)
 		c.a.Jcc(amd64.CondNE, miss)
@@ -7968,7 +8002,7 @@ func (c *compiler) holder(v *ssa.Value, guard func(amd64.Cond)) {
 		if p != scratchA {
 			c.a.MovRR(scratchA, p)
 		}
-		c.loadProto(scratchB, scratchA)
+		c.loadProtoPlain(scratchB, scratchA)
 		// The holders, the prototypes from the receiver's on: those a cache
 		// holds, then those past them (More).
 		for j := 0; j < len(k.Holders)+len(k.More); j++ {
@@ -7987,7 +8021,7 @@ func (c *compiler) holder(v *ssa.Value, guard func(amd64.Cond)) {
 			c.a.Load(scratchB, scratchA, c.enc.ObjectShape)
 			c.cmpWord(scratchB, uint64(h.Shape))
 			miss(stale)
-			c.loadProto(scratchB, scratchA)
+			c.loadProtoPlain(scratchB, scratchA)
 		}
 		c.a.Load(scratchA, scratchA, c.enc.ObjectProps)
 		c.a.OpImm(amd64.Add, scratchA, k.Index*c.enc.ValueSize, true)
@@ -9521,7 +9555,7 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 			c.a.LoadU8(scratchB, p, c.enc.ObjectClass)
 			c.a.OpImm(amd64.Cmp, scratchB, int32(c.enc.ClassTypedArray), false)
 			guard(amd64.CondNE)
-			c.loadProto(scratchB, p)
+			c.loadProtoPlain(scratchB, p)
 			c.cmpWord(scratchB, v.Const.Bits)
 			guard(amd64.CondNE)
 			break

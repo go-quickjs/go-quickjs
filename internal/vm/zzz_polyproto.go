@@ -156,6 +156,22 @@ func polySetProto[_ any](o, p *Object) bool {
 	return true
 }
 
+// polyReread is called as a read of a property up the chain of o, which
+// keeps its prototype in its table, is answered by the entry of c that names
+// the prototype (dictRead): the second such read of o at the site -- no
+// other object has o's prototype in its table -- which proves o read in a
+// loop, a singleton's. o is given a layout of its own holding its prototype
+// (depoly), and the site forgets the entry, so that its next fill remembers
+// that layout as any object's, which native code is compiled for: a read
+// through the entry was a search of o's table each time, and native code
+// left at it.
+//
+//go:noinline
+func polyReread[_ any](c *propCache, o *Object) {
+	depoly[struct{}](o)
+	*c = propCache{shape: noShape, ownShape: noShape, fills: c.fills, poly: c.poly}
+}
+
 // depoly gives o, whose prototype is in its table, a layout of its own that
 // holds it, as any prototype's does (ownLayout), its prototype first given
 // one the same way if it needs it, and clears the slot, which stays a

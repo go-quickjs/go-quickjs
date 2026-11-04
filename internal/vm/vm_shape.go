@@ -396,7 +396,7 @@ func (r *Runtime) dictObject(o *Object) bool {
 // table; or, where the entry names prototypes, the property it found on
 // them, o having none of the name.
 func (r *Runtime) dictRead(c *propCache, o *Object, key Atom) (Value, bool) {
-	if !r.dictObject(o) {
+	if !r.dictObject(o) && o.flags&objPolyProto == 0 {
 		return Undefined, false
 	}
 	i := o.findOwn(key)
@@ -416,7 +416,11 @@ func (r *Runtime) dictRead(c *propCache, o *Object, key Atom) (Value, bool) {
 		}
 		h = c.p2
 	}
-	return h.vals()[c.idx], true
+	v := h.vals()[c.idx]
+	if o.flags&objPolyProto != 0 {
+		polyReread[struct{}](c, o)
+	}
+	return v, true
 }
 
 // dictSite reports whether a site's cache c, meeting dictionary object o,
@@ -1685,7 +1689,21 @@ func (r *Runtime) fillPropCache(c *propCache, o *Object, key Atom, accessors boo
 			return
 		}
 		if depth == 0 && o.flags&objPolyProto != 0 {
-			// o's layout does not say its prototype (zzz_polyproto.go).
+			// o's layout does not say its prototype (zzz_polyproto.go): an
+			// entry for objects of no layout's, which names the prototype
+			// and checks it, as a dictionary's does (dictRead) -- a
+			// singleton made on a prototype of its own, read in a loop, is
+			// read through it; one made on a fresh prototype each time
+			// misses it as it missed every entry on main. Only a site's
+			// first such entry is made, and counts as no fill: a site
+			// meeting a fresh prototype each time keeps its first rather
+			// than making one for each. A cache of no site's (the
+			// runtime's shared one, the JIT's) keeps none.
+			if c.shape != nil && c.shape != dictShape {
+				fills := c.fills
+				r.fillDictCache(c, o, key)
+				c.fills = fills
+			}
 			return
 		}
 		if depth == 2 || h.proto() == nil {

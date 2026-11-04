@@ -95,6 +95,13 @@ func init() {
 		set := (uint64(uintptr(key.ref))>>4 ^ uint64(uintptr(unsafe.Pointer(sh)))>>4) * hasCacheMul >> (64 - hasCacheBits + 1)
 		for i := set * 2; i < set*2+2; i++ {
 			if e := &c[i]; e.key == key.ref && e.shape == sh && e.proto == o.proto() && e.cell.valid {
+				if o.flags&objPolyProto != 0 {
+					// Asked again of a singleton made on a prototype of its
+					// own: its layout its own, holding the prototype, as a
+					// second read past it makes it (polyReread), for the
+					// next answer to be remembered by that layout.
+					depoly[struct{}](o)
+				}
 				return e.has, true
 			}
 		}
@@ -104,7 +111,10 @@ func init() {
 		// An object with no properties is given its class's first layout,
 		// as a read's cache gives it (fillPropCache).
 		sh := r.ensureShape(o)
-		if sh == nil || r.shapes.building {
+		if sh == nil || r.shapes.building || o.flags&objPolyProto != 0 && o.proto() == nil {
+			// Or o keeps a prototype of none in its table, which native code
+			// would read as its layout's, none, for an object of the layout
+			// with another (mir's keyedHas).
 			return
 		}
 		cell := r.chainCell(o.proto())
