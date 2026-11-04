@@ -49,12 +49,18 @@ import (
 // it, since their layouts are the same, and a unique shape's is the object's.
 //
 // So do the keys: a shared shape's are never changed, and are a prefix of an
-// array its first child extends in place (extended), each child after it
+// array its first child extends in place (extendKeys), each child after it
 // having a copy of its own; a unique shape's are its object's, which the
 // object changes in place, and which a new identity for the object takes
 // over (layoutChanged), the old one being no object's shape.
 type shape struct {
-	tree   *shapeTree
+	tree *shapeTree
+	// parent is, on a shared shape, the layout it grew from by its last key,
+	// nil on a root. A unique shape grew from none, and the field holds
+	// instead, on the layout of an object that is another's prototype --
+	// which is unique (ownLayout) -- the first of the empty layouts its
+	// objects start from (protoRoot), the rest being on its side
+	// (protoRoots). What reads a parent asks for a shared shape's.
 	parent *shape
 	// proto is the prototype of the layout's objects, which is so a part
 	// of it, as of V8's map, that an object holds no pointer to its own: an
@@ -63,12 +69,11 @@ type shape struct {
 	// prototype with its layout, and a new prototype is a new layout
 	// (setProto).
 	proto *Object
-	// protoRoot and budget are, on the layout of an object that is
-	// another's prototype, the first of the empty layouts its objects start
-	// from and the budget of the shapes made with it, of its roots
-	// (protoRoots); the rest are on its side.
-	protoRoot *shape
-	budget    *budgetSlot
+	// more is the transitions out of the shape past the first (next).
+	more map[shapeEdge]*shape
+	// budget is, on the layout of an object that is another's prototype,
+	// the budget of the shapes made with it (protoRoots).
+	budget *budgetSlot
 	// side is what few layouts have, nil on the rest (shapeSide).
 	side   *shapeSide
 	keys   []propKey
@@ -82,9 +87,9 @@ type shape struct {
 	// literal's or a constructor's. rootClass is the class.
 	generic   bool
 	rootClass Class
-	// extended says, on a shared shape, that a child has extended its keys'
-	// array in place: the next child's are a copy.
-	extended bool
+	// nextFlags and nextKey are the edge of next (nextEdge), kept apart from
+	// it where they leave no padding.
+	nextFlags propFlags
 	// seen says a cache has remembered the shape: a unique shape that is
 	// seen is replaced, rather than changed, when its object's layout
 	// changes. Each place that keeps a shape sets it, by remember.
@@ -98,10 +103,9 @@ type shape struct {
 	slack uint8
 	// used and built are, on a constructor's root, the most properties its
 	// objects built so far have had and how many were built, up to
-	// slackTracking of them (noteBuilt); tracked says the room is then
-	// what they used.
+	// slackTracking of them (noteBuilt), after which the room is what they
+	// used (tracked).
 	used, built uint8
-	tracked     bool
 	// borrowed says, on a unique shape, that its index is a shared layout's,
 	// which its object left by deleting a key or changing an attribute: the
 	// keys it still has are where that layout has them. The index is only
@@ -128,21 +132,39 @@ type shape struct {
 	// armed only for an accessor, which no assignment writes.
 	pristine bool
 	// n is how many properties the layout has.
-	n int32
-	// next and nextEdge are the first transition out of the shape, which is
-	// the only one most shapes ever have; more holds the rest.
-	next     *shape
-	nextEdge shapeEdge
-	more     map[shapeEdge]*shape
-	index    *propIndex
+	n       int32
+	nextKey Atom
+	// next is the first transition out of the shape, which is the only one
+	// most shapes ever have, by the edge nextKey and nextFlags say; more
+	// holds the rest. A shared shape's first child is the one whose keys
+	// extend its array in place (extendKeys): the next child's are a copy.
+	next  *shape
+	index *propIndex
+}
+
+// protoRoot is the first root kept on ps, the own layout of an object that
+// is another's prototype (protoRoots), which its parent field holds: a
+// unique shape has no parent.
+func (ps *shape) protoRoot() *shape {
+	return ps.parent
+}
+
+// nextEdge is the edge of s's first transition, next.
+func (s *shape) nextEdge() shapeEdge {
+	return shapeEdge{s.nextKey, s.nextFlags}
+}
+
+// setNext makes c, by e, s's first transition.
+func (s *shape) setNext(c *shape, e shapeEdge) {
+	s.next, s.nextKey, s.nextFlags = c, e.key, e.flags
 }
 
 // shapeSide is what a shape keeps that few shapes have, read off the paths
 // that read a layout: a prototype's roots past the first and its cell, a
-// for-in loop's keys. A shape that has none of them has no side, and is 128
+// for-in loop's keys. A shape that has none of them has no side, and is 112
 // bytes, not 144, which an object made on a prototype of its own pays for
-// its layout (firstRoot). A side is its shape's alone: a new identity for
-// a prototype's layout takes it over (passSide).
+// its layout (firstRoot). A side is its shape's alone: a new identity for a
+// prototype's layout takes it over (passSide).
 type shapeSide struct {
 	// roots are, on the layout of an object that is another's prototype,
 	// the roots its objects start from past the first (protoRoots).
@@ -497,8 +519,8 @@ func (o *Object) proto() *Object {
 func rootFor(c Class, p *Object) *shape {
 	// The first root a prototype's layout keeps, a tree's, is most often
 	// the one: small enough to be made where an object is.
-	if p != nil && p.shape != nil {
-		if s := p.shape.protoRoot; s != nil && s.rootClass == c && s.tree != nil {
+	if p != nil && p.shape != nil && p.shape.unique {
+		if s := p.shape.protoRoot(); s != nil && s.rootClass == c && s.tree != nil {
 			return s
 		}
 	}
@@ -687,7 +709,7 @@ func (root *shape) roomFor(thisProps int) int {
 	if root == nil {
 		return thisProps
 	}
-	if root.tracked {
+	if root.tracked() {
 		return int(root.slack)
 	}
 	return max(thisProps, int(root.slack))
@@ -699,14 +721,19 @@ func (root *shape) roomFor(thisProps int) int {
 // property in each branch of a switch -- would otherwise have given every
 // object.
 func (root *shape) noteBuilt(n int) {
-	if root == nil || root.tracked {
+	if root == nil || root.tracked() {
 		return
 	}
 	root.used = uint8(max(int(root.used), min(n, maxRoom)))
-	if root.built++; root.built >= slackTracking {
-		root.tracked = true
+	if root.built++; root.tracked() {
 		root.slack = root.used
 	}
+}
+
+// tracked says, on a constructor's root, that slackTracking of its objects
+// have been built: its objects' room is what they used (noteBuilt).
+func (root *shape) tracked() bool {
+	return root.built >= slackTracking
 }
 
 // written is called as a value of the table of an object of layout s is
@@ -738,12 +765,11 @@ func newLooseShape(proto *Object, keys []propKey) *shape {
 	return &shape{proto: proto, unique: true, loose: true, n: int32(len(keys)), keys: keys}
 }
 
-// extendKeys is s's keys with k after them: in s's array, if no child has
-// extended it yet, or in a copy.
+// extendKeys is s's keys with k after them, for a child of s: in s's array
+// if it is s's first (next), or in a copy.
 func (s *shape) extendKeys(k propKey) []propKey {
 	keys := s.keys[:s.n:s.n]
-	if !s.extended && !s.unique {
-		s.extended = true
+	if s.next == nil && !s.unique {
 		keys = s.keys[:s.n]
 	}
 	return append(keys, k)
@@ -772,7 +798,7 @@ func (o *Object) cacheTree() *shapeTree {
 // hold it.
 func (s *shape) child(e shapeEdge) *shape {
 	if s.next != nil {
-		if s.nextEdge == e {
+		if s.nextEdge() == e {
 			return s.next
 		}
 		if c := s.more[e]; c != nil {
@@ -788,7 +814,9 @@ func (s *shape) child(e shapeEdge) *shape {
 	if s.n >= maxShapeDepth || t.count >= maxShapes && !reclaimShapes[struct{}](t) || len(s.more) >= maxShapeFanout {
 		return nil
 	}
-	inPlace := !s.extended
+	// A constructor's root may have a first transition that is no child of
+	// its own (ctorChild), but has no keys to extend.
+	inPlace := s.next == nil
 	c := &shape{tree: t, parent: s, proto: s.proto, key: e.key, flags: e.flags, n: s.n + 1, keys: s.extendKeys(propKey(e))}
 	if inPlace && s.index != nil {
 		// Its keys extend s's in place, and its index s's, as V8's maps
@@ -802,7 +830,7 @@ func (s *shape) child(e shapeEdge) *shape {
 	}
 	chargeShape[struct{}](t, s.proto)
 	if s.next == nil {
-		s.next, s.nextEdge = c, e
+		s.setNext(c, e)
 	} else {
 		if s.more == nil {
 			s.more = map[shapeEdge]*shape{}
@@ -885,7 +913,7 @@ func (o *Object) shapeAdded(k propKey) {
 			// A new identity, so that what was cached of the old one misses.
 			ns := newUniqueShape(s.tree, s.proto, s.keys[:s.n], s.index)
 			// The prototype's roots and side go with its layout (passSide).
-			ns.borrowed, ns.protoRoot, ns.budget = s.borrowed, s.protoRoot, s.budget
+			ns.borrowed, ns.parent, ns.budget = s.borrowed, s.protoRoot(), s.budget
 			ns.side, s.side = s.side, nil
 			s = ns
 			o.shape = s
@@ -929,7 +957,7 @@ func (o *Object) shapeAdded(k propKey) {
 // common case of objects built alike -- or nil. A transition out of a layout
 // is for a key the layout does not have, so the object does not have it.
 func (o *Object) transition(key Atom, flags propFlags) *shape {
-	if s := o.shape; s != nil && s.next != nil && s.nextEdge == (shapeEdge{key, flags}) {
+	if s := o.shape; s != nil && s.next != nil && s.nextEdge() == (shapeEdge{key, flags}) {
 		return s.next
 	}
 	return nil
@@ -1893,7 +1921,7 @@ func (r *Runtime) ensureProtoShape(o *Object) *shape {
 		ns.borrowed = s.borrowed || !s.unique && s.index != nil
 		if s.unique {
 			// As passSide; s, loose, is in no cache, and is garbage.
-			ns.protoRoot, ns.budget, ns.side = s.protoRoot, s.budget, s.side
+			ns.parent, ns.budget, ns.side = s.protoRoot(), s.budget, s.side
 		}
 		o.shape = ns
 		return ns

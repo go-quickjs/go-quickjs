@@ -77,8 +77,8 @@ var jitEncoding = abi.Encoding{
 	Round:            runtime.GOARCH == "arm64" || cpu.X86.HasSSE41,
 	ShapeKeys:        int32(unsafe.Offsetof(shape{}.keys)),
 	ShapeNext:        int32(unsafe.Offsetof(shape{}.next)),
-	ShapeNextKey:     int32(unsafe.Offsetof(shape{}.nextEdge) + unsafe.Offsetof(shapeEdge{}.key)),
-	ShapeNextFlags:   int32(unsafe.Offsetof(shape{}.nextEdge) + unsafe.Offsetof(shapeEdge{}.flags)),
+	ShapeNextKey:     int32(unsafe.Offsetof(shape{}.nextKey)),
+	ShapeNextFlags:   int32(unsafe.Offsetof(shape{}.nextFlags)),
 	ShapeIndex:       int32(unsafe.Offsetof(shape{}.index)),
 	LinearScan:       linearScanLimit,
 	PropDefault:      uint8(propDefault),
@@ -1014,14 +1014,13 @@ func jitAddReadCase(p *jitPolySite, c propCache, now *shape) bool {
 }
 
 // jitSuperseded reports whether t came from s by adding properties: s is
-// one of t's ancestors along the shapes' transitions. A nil t has none.
+// one of t's ancestors along the shapes' transitions. A nil t has none, and
+// neither has a unique one, whose parent field is a prototype's root
+// (protoRoot).
 func jitSuperseded(s, t *shape) bool {
-	if t == nil {
-		return false
-	}
-	for a := t.parent; a != nil; a = a.parent {
-		if a == s {
-			return true
+	for a := t; a != nil && !a.unique; {
+		if a = a.parent; a == s {
+			return a != nil
 		}
 	}
 	return false
@@ -1686,13 +1685,13 @@ func (fb *jitFeedback) Define(pc int) (*ssa.PropertyAdd, bool) {
 	s := l.root
 	slices.Reverse(keys)
 	for _, key := range keys {
-		if s.next == nil || s.nextEdge != (shapeEdge{key, propDefault}) {
+		if s.next == nil || s.nextEdge() != (shapeEdge{key, propDefault}) {
 			return nil, false
 		}
 		s = s.next
 	}
 	key := fb.cl.names[fn.Code[pc].A]
-	if s.next == nil || s.nextEdge != (shapeEdge{key, propDefault}) {
+	if s.next == nil || s.nextEdge() != (shapeEdge{key, propDefault}) {
 		if s.next == nil {
 			// Not made yet: Go makes it at the code's exit there, and the
 			// code is compiled again for it (jitDefineSeen).

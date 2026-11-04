@@ -37,9 +37,9 @@ import (
 // first made, most often the only one, then the rest -- and the slot of the
 // budget the shapes made with the object as their prototype are counted
 // against. The first root and the budget are the layout's (shape.protoRoot,
-// shape.budget), which is what most prototypes have; the rest of the roots
-// are on its side (shapeSide.roots), which a prototype's layout has only
-// once a second is kept.
+// which its parent field holds, and shape.budget), which is what most
+// prototypes have; the rest of the roots are on its side (shapeSide.roots),
+// which a prototype's layout has only once a second is kept.
 
 // shapeBudget is the count of the shapes a tree holds with the prototypes
 // of a budgetChunk's slots as theirs: n, which the chunk's cleanup adds to
@@ -74,7 +74,7 @@ const ctorRootClass = ClassCursor + 1
 // last.
 func rootAt[_ any](ps *shape, i int) *shape {
 	if i == 0 {
-		return ps.protoRoot
+		return ps.protoRoot()
 	}
 	if ps.side == nil || i > len(ps.side.roots) {
 		return nil
@@ -88,8 +88,8 @@ func rootAt[_ any](ps *shape, i int) *shape {
 //go:noinline
 func setRoot[_ any](ps *shape, at int, s *shape) {
 	switch {
-	case at == 0 || at < 0 && ps.protoRoot == nil:
-		ps.protoRoot = s
+	case at == 0 || at < 0 && ps.protoRoot() == nil:
+		ps.parent = s // protoRoot
 	case at > 0:
 		ps.side.roots[at-1] = s
 	case ps.side == nil:
@@ -249,7 +249,7 @@ func ctorChild[_ any](s *shape, e shapeEdge) (*shape, bool) {
 	}
 	c := k.child(e)
 	if c != nil && s.next == nil {
-		s.next, s.nextEdge = c, e
+		s.setNext(c, e)
 	}
 	return c, true
 }
@@ -334,6 +334,6 @@ func newProtoInfo[_ any](s *shape) *protoInfo {
 //
 //go:noinline
 func passSide[_ any](ns, s *shape) {
-	ns.protoRoot, ns.budget = s.protoRoot, s.budget
+	ns.parent, ns.budget = s.protoRoot(), s.budget
 	ns.side, s.side = s.side, nil
 }
