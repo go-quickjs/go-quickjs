@@ -321,14 +321,15 @@ func (refs *weakMapRefs) remove(p *weakMapState, q *weakMapRegistry) bool {
 
 // weakRefsOf is the weakMapRefs of a key, made if create is set and there is
 // none yet, or nil: for a value that is not an object or a symbol, and for
-// one that has never been a key, when create is not set.
-func weakRefsOf(k Value, create bool) *weakMapRefs {
+// one that has never been a key, when create is not set. q is the
+// registry an object's holder is taken from, where create is set.
+func weakRefsOf(k Value, create bool, q *weakMapRegistry) *weakMapRefs {
 	switch {
 	case k.IsObject():
 		o := k.object()
 		refs := o.weakMapRefsOf()
 		if refs == nil && create {
-			refs = o.newWeakMapRefs()
+			refs = o.newWeakMapRefs(q.takeHolder())
 		}
 		return refs
 	case k.IsSymbol():
@@ -347,7 +348,7 @@ func (m *weakMap) get(_ *Runtime, k Value) (Value, bool) {
 	if m.state == nil {
 		return Undefined, false
 	}
-	refs := weakRefsOf(k, false)
+	refs := weakRefsOf(k, false, nil)
 	if refs == nil {
 		return Undefined, false
 	}
@@ -368,7 +369,7 @@ func (m *weakMap) set(r *Runtime, k, v Value) {
 		reg.live[s] = struct{}{}
 		runtime.AddCleanup(m, reportWeakMapDeath, weakMapDeath{reg, s})
 	}
-	refs := weakRefsOf(k, true)
+	refs := weakRefsOf(k, true, r.weakMaps)
 	if refs.set(s, v, r.weakMaps) {
 		s.track(refs.key, k.IsSymbol())
 	}
@@ -380,7 +381,7 @@ func (m *weakMap) delete(k Value) bool {
 	if s == nil {
 		return false
 	}
-	refs := weakRefsOf(k, false)
+	refs := weakRefsOf(k, false, nil)
 	return refs != nil && refs.delete(s)
 }
 
@@ -468,6 +469,40 @@ type weakMapRegistry struct {
 	// time, they had been more than half of what the script allocated.
 	spare      []*weakMapMore
 	spareEpoch uint32
+
+	// holders are the holders of keys' entries made ahead (takeHolder),
+	// to be given out last first.
+	holders []*weakRefsHolder
+}
+
+// takeHolder is a holder for the entries of an object about to be a key
+// of its first map, its weak reference made. The collector keeps a span's
+// weak references in a list by address, which it searches from the start
+// for each one it adds (runtime's specialFindSplicePoint): objects made
+// one by one, each made a key at once, are each past every one before, a
+// search of all of them, which had taken a fifth of weak_map_delete's
+// time. Holders are made ahead, sixteen at first, twice as many each time
+// up to 128 (as native code's object pools are filled, abi.PoolSize and
+// PoolCapacity), each its own allocation, so that it goes with its key,
+// and given out from the last made, the highest: each reference is then
+// added before those of its batch already made.
+func (q *weakMapRegistry) takeHolder() *weakRefsHolder {
+	n := len(q.holders)
+	if n == 0 {
+		n = min(max(2*cap(q.holders), 16), 128)
+		if cap(q.holders) < n {
+			q.holders = make([]*weakRefsHolder, n)
+		}
+		q.holders = q.holders[:n]
+		for i := range q.holders {
+			q.holders[i] = &weakRefsHolder{Object: Object{class: ClassObject}}
+		}
+	}
+	h := q.holders[n-1]
+	q.holders[n-1] = nil
+	q.holders = q.holders[:n-1]
+	h.refs.key = makeWeakKey(unsafe.Pointer(h))
+	return h
 }
 
 // keepSpare keeps more, emptied, as a spare, if q is not nil.

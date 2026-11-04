@@ -309,7 +309,7 @@ func TestWeakMapReleasesValuesOfSymbolKeys(t *testing.T) {
 		}
 	}
 	for _, k := range []Value{sym, obj} {
-		refs := weakRefsOf(k, false)
+		refs := weakRefsOf(k, false, nil)
 		if refs.more != nil || refs.first.m != live.state {
 			t.Errorf("%v keeps entries of maps that have gone", k)
 		}

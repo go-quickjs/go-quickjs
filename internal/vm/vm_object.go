@@ -428,7 +428,12 @@ func (o *Object) weakMapRefsOf() *weakMapRefs {
 
 // heldWeakMapRefs is weakMapRefsOf of an object with properties, apart so
 // that weakMapRefsOf, which an object of none answers at once, is inlined.
+// The holder is most often the last property, an object being given fewer
+// properties once it is a key than it was before: that one is asked first.
 func (o *Object) heldWeakMapRefs() *weakMapRefs {
+	if n := int(o.valn) - 1; o.shape.keys[n].key == atomWeakMapRefs {
+		return &(*weakRefsHolder)(unsafe.Pointer(o.valAt(n).object())).refs
+	}
 	if p := o.getOwn(atomWeakMapRefs); p.ok() {
 		return &(*weakRefsHolder)(unsafe.Pointer(p.value().object())).refs
 	}
@@ -448,13 +453,11 @@ type weakRefsHolder struct {
 }
 
 // newWeakMapRefs gives o, which has none, its values in the WeakMaps it is
-// a key of, empty, in a private property (weakRefsHolder), which an object
+// a key of, empty, in a private property, h (takeHolder), which an object
 // closed to new properties is given as well: being a key is not a property
 // of it. The maps' weak reference to the key is to the holder, which
 // nothing but the key reaches and so goes when it does (weakmap.go).
-func (o *Object) newWeakMapRefs() *weakMapRefs {
-	h := &weakRefsHolder{Object: Object{class: ClassObject}}
-	h.refs.key = makeWeakKey(unsafe.Pointer(h))
+func (o *Object) newWeakMapRefs(h *weakRefsHolder) *weakMapRefs {
 	o.setOwnRaw(atomWeakMapRefs, Obj(&h.Object), propPrivate)
 	return &h.refs
 }
