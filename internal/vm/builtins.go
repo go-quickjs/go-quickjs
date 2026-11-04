@@ -3,7 +3,6 @@ package vm
 import (
 	"github.com/go-quickjs/go-quickjs/internal/fdlibm"
 	"math"
-	"math/bits"
 	"math/rand/v2"
 	"slices"
 	"strconv"
@@ -3495,7 +3494,7 @@ var unaryMath = func() []func(float64) float64 {
 	for _, name := range unaryMathNames {
 		fns = append(fns, unaryMathFuncs[name])
 	}
-	return append(fns, func(f float64) float64 { return float64(bits.LeadingZeros32(jsnum.ToUint32(f))) })
+	return append(fns, mathClz32Of)
 }()
 
 // mathClz32 is funcData.mathOp for Math.clz32, a function of one number the
