@@ -8002,9 +8002,13 @@ func (c *compiler) holder(v *ssa.Value, guard func(amd64.Cond)) {
 		if p != scratchA {
 			c.a.MovRR(scratchA, p)
 		}
-		c.loadProtoPlain(scratchB, scratchA)
 		// The holders, the prototypes from the receiver's on: those a cache
-		// holds, then those past them (More).
+		// holds, then those past them (More). A layout says its object's
+		// prototype, and one a cache remembers is given a new identity for
+		// a new prototype (the VM's setProto), so that the receiver's
+		// layout says the first holder, and each holder's the next: only
+		// the holders' layouts are compared, as the VM's propCache.holder
+		// compares them, not each prototype read through its object's.
 		for j := 0; j < len(k.Holders)+len(k.More); j++ {
 			var h ssa.Holder
 			if j < len(k.Holders) {
@@ -8016,12 +8020,9 @@ func (c *compiler) holder(v *ssa.Value, guard func(amd64.Cond)) {
 				break
 			}
 			c.movImm(scratchA, uint64(h.Object))
-			c.a.Op(amd64.Cmp, scratchB, scratchA, true)
-			miss(stale)
 			c.a.Load(scratchB, scratchA, c.enc.ObjectShape)
 			c.cmpWord(scratchB, uint64(h.Shape))
 			miss(stale)
-			c.loadProtoPlain(scratchB, scratchA)
 		}
 		c.a.Load(scratchA, scratchA, c.enc.ObjectProps)
 		c.a.OpImm(amd64.Add, scratchA, k.Index*c.enc.ValueSize, true)

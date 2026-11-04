@@ -175,3 +175,43 @@ func TestJITPolyProtoIn(t *testing.T) {
 		t.Fatalf("%d writes, want 3", writes)
 	}
 }
+
+// Native code's read of a property up the chain compares only the
+// receiver's and the holders' layouts (mir's holder), each of which says
+// the next object's prototype: a receiver given another prototype, or a
+// holder given another, has another layout, and the read finds what the
+// interpreter does, before and after.
+func TestJITHolderLayoutSaysPrototype(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `var A = {m() { return 1 }}, B = {m() { return 2 }}, C = {m() { return 3 }}
+		var mid = Object.create(A), o = Object.create(mid)
+		o.x = 1
+		function sum(o, n) { var s = 0; for (var i = 0; i < n; i++) s += o.m(); return s }`
+	cases := []string{`sum(o, 3000)`, `sum(o, 3000)`, `(Object.setPrototypeOf(o, B), sum(o, 3000))`,
+		`(Object.setPrototypeOf(o, mid), sum(o, 3000))`, `(Object.setPrototypeOf(mid, C), sum(o, 3000))`,
+		`(mid.m = function () { return 4 }, sum(o, 3000))`, `(delete mid.m, sum(o, 3000))`}
+	want := New(Config{})
+	defer func() { want.Close(); want.ReleaseClosed() }()
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	for _, rt := range []*Runtime{want, r} {
+		if _, err := rt.Run(compileForTest(t, setup)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range cases {
+		wv, werr := want.Run(compileForTest(t, "String("+c+")"))
+		gv, gerr := r.Run(compileForTest(t, "String("+c+")"))
+		if werr != nil || gerr != nil {
+			t.Fatalf("%s: %v, interpreter's %v", c, gerr, werr)
+		}
+		if got, w := gv.String().Go(), wv.String().Go(); got != w {
+			t.Fatalf("%s: got %s, interpreter %s", c, got, w)
+		}
+	}
+	fn := r.global.getOwn(r.atoms.intern("sum")).value().Object().fn().closure
+	if e := r.jit.hint(fn); e == nil || e.ssa == nil {
+		t.Fatalf("sum was not compiled: %+v", e)
+	}
+}

@@ -7185,7 +7185,8 @@ func (c *a64Compiler) holder(v *ssa.Value, guard func(arm64.Cond)) {
 		if p != a64A {
 			c.a.MovRR(a64A, p)
 		}
-		c.loadProtoPlain(a64B, a64A)
+		// Only the holders' layouts, each saying the next's prototype, as
+		// amd64's holder compares them.
 		for j := 0; j < len(k.Holders)+len(k.More); j++ {
 			var h ssa.Holder
 			if j < len(k.Holders) {
@@ -7197,13 +7198,10 @@ func (c *a64Compiler) holder(v *ssa.Value, guard func(arm64.Cond)) {
 				break
 			}
 			c.movImm(a64A, uint64(h.Object))
-			c.a.Cmp(a64B, a64A, true)
-			miss(stale)
 			c.a.Load(a64B, a64A, c.enc.ObjectShape)
 			c.movImm(a64C, uint64(h.Shape))
 			c.a.Cmp(a64B, a64C, true)
 			miss(stale)
-			c.loadProtoPlain(a64B, a64A)
 		}
 		c.a.Load(a64A, a64A, c.enc.ObjectProps)
 		c.a.AddImm(a64A, a64A, int64(k.Index*c.enc.ValueSize), true)
