@@ -2,7 +2,11 @@
 
 package vm
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+)
 
 // Native code reads the prototype of an object that keeps it in its table
 // (zzz_polyproto.go) there, not in its layout (mir's loadProto): instanceof,
@@ -112,7 +116,8 @@ func TestJITPolyProto(t *testing.T) {
 // object a layout of its own when asked again, as the tree's in node does,
 // and the entry then made for it is native code's. It had called Go at
 // every turn, each run of the loop making the object anew (prop_in, five
-// times main's time over ten runs).
+// times main's time over ten runs); and the additions it makes to the
+// object before the loop are compiled to write, not to deoptimize.
 func TestJITPolyProtoIn(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -121,6 +126,8 @@ func TestJITPolyProtoIn(t *testing.T) {
 	if _, err := r.Run(compileForTest(t, `function probe(n) {
 			var proto = {inherited: 1}, obj = Object.create(proto), s = 0
 			obj.a = 1
+			obj.b = 2
+			obj.c = 3
 			for (var j = 0; j < n; j++) {
 				if ("a" in obj) s++
 				if ("z" in obj) s += 10
@@ -142,5 +149,29 @@ func TestJITPolyProtoIn(t *testing.T) {
 	}
 	if calls > 100 {
 		t.Errorf("probe(20000) called Go %d times", calls)
+	}
+	// Nor are its writes before the loop, additions to such an object,
+	// which no cache remembers, sites that know nothing, which the code
+	// deoptimizes at (ssa's unfedSite) -- each run, the loop then run on from
+	// the interpreter -- but megamorphic ones (jitFeedback.megamorphic),
+	// which Go makes from native code.
+	fn := r.global.getOwn(r.atoms.intern("probe")).value().Object().fn().closure
+	e := r.jit.hint(fn)
+	if e == nil || e.ssa == nil {
+		t.Fatalf("probe was not compiled: %+v", e)
+	}
+	fb := &jitFeedback{r: r, fn: fn.fn, cl: fn, e: e}
+	writes := 0
+	for pc, in := range fn.fn.Code {
+		if in.Op != bytecode.OpSetProp {
+			continue
+		}
+		writes++
+		if site, ok := fb.Property(pc); !ok || !site.Megamorphic {
+			t.Errorf("write at %d: %+v, ok %v; want a megamorphic site", pc, site, ok)
+		}
+	}
+	if writes != 3 {
+		t.Fatalf("%d writes, want 3", writes)
 	}
 }

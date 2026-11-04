@@ -288,6 +288,19 @@ func (fb *jitFeedback) megamorphic(pc int, site ssa.PropertySite) bool {
 		return true
 	}
 	if in := fb.fn.Code[pc]; int(in.B) < len(fb.cl.ic) {
+		if c := &fb.cl.ic[in.B]; in.Op == bytecode.OpSetProp && (c.shape == nil || c.shape == noShape) && c.fills != 0 && len(site.Cases)+len(site.Adds) == 0 {
+			// A write its cache counted and remembered nothing of: an
+			// addition to an object that keeps its prototype in its table,
+			// whose layout says none (fillStoreCache refuses it), as
+			// Object.create of a prototype made for it makes one. It is
+			// not unfed, which would deoptimize at it each time the code
+			// ran -- prop_in's three such writes before its loop left the
+			// code each run, and its loop ran on from the interpreter --
+			// but megamorphic: Go makes what the receiver's table and the
+			// megamorphic cache do not, from native code, as main's code
+			// did for the fresh prototypes' layouts such writes then met.
+			return true
+		}
 		if c := &fb.cl.ic[in.B]; c.shape == dictShape || c.cell != nil {
 			// A cache of dictionary objects (dictShape), or of a chain's
 			// cell (protoCell) -- a property up a long chain, or one
