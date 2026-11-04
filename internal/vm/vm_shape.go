@@ -1004,7 +1004,7 @@ func (o *Object) appendTransition(v Value, next *shape) {
 	if int(o.valn) == int(o.valc) {
 		o.outgrowProps()
 	}
-	o.appendVal(v)
+	o.putVal(v)
 	o.shape = next
 	if next.index == nil && int(o.valn) > linearScanLimit {
 		o.buildIndex()

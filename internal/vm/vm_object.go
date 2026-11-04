@@ -1386,14 +1386,25 @@ func (o *Object) appendProp(p Property) {
 	if int(o.valn) == int(o.valc) {
 		o.outgrowProps()
 	}
-	o.appendVal(p.value)
+	o.putVal(p.value)
 	o.shapeAdded(propKey{p.key, p.flags})
 }
 
+// putVal appends v to the object's property values, which have room for it
+// (outgrowProps): a store and a count. It is appendVal without the call to
+// grow the table, which kept that one from being inlined (a cost of 88)
+// into appendProp and appendTransition, where it was a call for every
+// property an object is given.
+func (o *Object) putVal(v Value) {
+	n := o.valn
+	*(*Value)(unsafe.Add(unsafe.Pointer(o.valp), uintptr(n)*unsafe.Sizeof(Value{}))) = v
+	o.valn = n + 1
+}
+
 // outgrowProps is called as the object's table, full, is given one more
-// property. Properties in the room its allocation carries leave it
-// (leaveInlineProps); a table of its own is grown by the append, and the
-// root of its layout, if it is an object literal's or a constructor's,
+// property, and leaves it room for it. Properties in the room its
+// allocation carries leave it (leaveInlineProps); a table of its own is
+// grown as an append would grow it, and the root of its layout, if it is an object literal's or a constructor's,
 // notes the room its objects come to need, so that the next are made
 // with it (tbuilder's OpNewObject, roomFor), as V8's slack tracking sizes
 // a constructor's objects by what its first ones came to have: this
@@ -1413,6 +1424,7 @@ func (o *Object) outgrowProps() {
 		o.leaveInlineProps(1)
 		return
 	}
+	o.setVals(slices.Grow(o.vals(), 1))
 	s := o.shape
 	if s == nil || s.unique || s.loose || s.tree.keyed == o {
 		return

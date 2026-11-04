@@ -64,6 +64,9 @@ var intendedInlining = []string{
 	"(*arrayLike).dense",
 	"protoValue",
 	"chainHasProxy",
+	// A property's value appended where a property is added (appendProp,
+	// appendTransition).
+	"(*Object).putVal",
 }
 
 // TestIntendedInlining builds the package with -gcflags=-m, plain and with
