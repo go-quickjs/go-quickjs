@@ -346,6 +346,17 @@ it, to see that its groups measure alike.
 go run ./internal/cmd/v8bench/placements compare -parallel -k 4 -bench octane -dir /tmp/octane base change
 ```
 
+`-micro` compares the micro-benchmarks the same way, in parallel too:
+each placement's binary in micro mode, each test's best round, and beside
+each test at how many placements the second label is more than 2% slower,
+then the tests 3% or more slower at every placement. A micro-benchmark
+moves with code placement more than a suite does; one slower at some
+placements and level at others is placement.
+
+```sh
+go run ./internal/cmd/v8bench/placements compare -parallel -k 4 -micro base change
+```
+
 `internal/cmd/v8bench/goja` runs the same suite the same way on goja, for
 comparing the two engines. It is a module of its own, run from its
 directory, so that go-quickjs never depends on goja; `TestNoGojaDependency`

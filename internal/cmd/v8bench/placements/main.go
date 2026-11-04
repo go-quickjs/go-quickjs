@@ -64,6 +64,16 @@
 // compare a label with itself so, first, to see that the groups measure
 // alike on the machine.
 //
+// -micro runs v8bench's micro mode instead of a suite: QuickJS's
+// micro-benchmarks and ours, each test the same work every run, -suite
+// naming tests by the start of their names. It reads each test's time of
+// one operation, in nanoseconds, takes each placement's best round, and
+// prints, beside each label's mean over the placements, at how many the
+// second label was more than 2% slower; then the geometric mean over the
+// tests, and those 3% or more slower at every placement. Micro-benchmarks
+// move with where the code lands more than suites do, so a test is slower
+// only where it is slower at every placement.
+//
 // Build both sides in the same directory, one after the other: the same
 // source built in another checkout has measured differently.
 //
@@ -78,6 +88,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"os/exec"
@@ -116,6 +127,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
   placements build -label NAME [-k 8|4] [-out DIR]
   placements compare -dir SUITE [-bench NAME] [-k 8|4] [-rounds 3] [-suite NAMES] [-jit]
+  placements compare -micro [-k 8|4] [-rounds 3] [-suite TESTS] [-jit]
                      [-parallel] [-cpus auto|halves|LIST;LIST] [-v] [-out DIR] A B`)
 	os.Exit(2)
 }
@@ -338,6 +350,19 @@ func padFile(p, m, tests int) []byte {
 
 var timeLine = regexp.MustCompile(`(?m)^(\w+)\s+([\d.]+) ms`)
 
+// microLine is a line of v8bench's micro mode: a test, its count and the
+// time of one operation, in nanoseconds.
+var microLine = regexp.MustCompile(`(?m)^(\w+)\s+\d+\s+([\d.]+)\s*$`)
+
+// microSlower is how much slower a placement of the second label must be
+// than the same placement of the first to count as slower at it, and
+// microReport how much slower a test must be at every placement to be
+// listed after the table.
+const (
+	microSlower = 0.02
+	microReport = 0.03
+)
+
 func compareCmd(args []string) error {
 	fs := flag.NewFlagSet("compare", flag.ExitOnError)
 	dir := fs.String("dir", "", "the directory the suite is in")
@@ -350,8 +375,9 @@ func compareCmd(args []string) error {
 	cpus := fs.String("cpus", "auto", "the groups of CPUs -parallel runs on: auto, halves, or lists separated by ';' (0-5;6-11)")
 	verbose := fs.Bool("v", false, "print each placement's figure")
 	out := fs.String("out", defaultOut(), "where the builds are")
+	micro := fs.Bool("micro", false, "run v8bench's micro mode, QuickJS's micro-benchmarks and ours, rather than a suite: -suite names tests by the start of their names, and -dir is not needed")
 	fs.Parse(args)
-	if *dir == "" || fs.NArg() != 2 {
+	if (*dir == "" && !*micro) || fs.NArg() != 2 {
 		usage()
 	}
 	labels := [2]string{fs.Arg(0), fs.Arg(1)}
@@ -400,7 +426,7 @@ func compareCmd(args []string) error {
 		for i, n := range ns {
 			if !*parallel {
 				for l := range labels {
-					got, err := runPlacement(exePath(*out, labels[l], n), *dir, *bench, *suite, n, *jitEnabled, nil, &reps)
+					got, err := runPlacement(exePath(*out, labels[l], n), *dir, *bench, *suite, n, *jitEnabled, *micro, nil, &reps)
 					if err != nil {
 						return err
 					}
@@ -416,7 +442,7 @@ func compareCmd(args []string) error {
 			for l := range labels {
 				g := groups[(l+i+round)%2]
 				go func() {
-					got[l], errs[l] = runPlacement(exePath(*out, labels[l], n), *dir, *bench, *suite, n, *jitEnabled, g, &reps)
+					got[l], errs[l] = runPlacement(exePath(*out, labels[l], n), *dir, *bench, *suite, n, *jitEnabled, *micro, g, &reps)
 					done <- struct{}{}
 				}()
 			}
@@ -429,6 +455,10 @@ func compareCmd(args []string) error {
 				add(l, i, got[l])
 			}
 		}
+	}
+	if *micro {
+		reportMicro(os.Stdout, labels, names, res, len(ns), *verbose)
+		return nil
 	}
 	fmt.Printf("%-14s%12s%12s   change  (spread of %s over placements; ms a run)\n", "", labels[0], labels[1], labels[1])
 	for _, name := range names {
@@ -512,11 +542,17 @@ func (t *repsTable) of(name string, ms float64) int {
 // runPlacement runs one build and reads its times, in milliseconds a run,
 // in the order it printed them, then the total of theirs: every benchmark
 // once, then those reps says are short again, in a process for each of
-// repeats that one needs. On cpus, if any, with GOMAXPROCS as many.
-func runPlacement(exe, dir, bench, suite string, n int, jitEnabled bool, cpus cpuset.Set, reps *repsTable) ([]named, error) {
+// repeats that one needs. With micro, it runs v8bench's micro mode once,
+// whose tests each do the same work every run, and reads each test's time
+// of one operation, in nanoseconds, with no total. On cpus, if any, with
+// GOMAXPROCS as many.
+func runPlacement(exe, dir, bench, suite string, n int, jitEnabled, micro bool, cpus cpuset.Set, reps *repsTable) ([]named, error) {
 	run := func(reps int, only string) ([]named, error) {
 		args := []string{"-dir", dir, "-n", strconv.Itoa(reps)}
-		if bench != "" {
+		if micro {
+			args = []string{"-mode", "micro", "-n", "1"}
+		}
+		if bench != "" && !micro {
 			args = append(args, "-bench", bench)
 		}
 		if jitEnabled {
@@ -541,6 +577,9 @@ func runPlacement(exe, dir, bench, suite string, n int, jitEnabled bool, cpus cp
 			return nil, fmt.Errorf("%s: %w", exe, err)
 		}
 		var got []named
+		if micro {
+			return parseMicro(outb.String()), nil
+		}
 		for _, m := range timeLine.FindAllStringSubmatch(outb.String(), -1) {
 			if m[1] == "TOTAL" {
 				continue
@@ -551,8 +590,8 @@ func runPlacement(exe, dir, bench, suite string, n int, jitEnabled bool, cpus cp
 		return got, nil
 	}
 	got, err := run(1, suite)
-	if err != nil {
-		return nil, err
+	if err != nil || micro {
+		return got, err
 	}
 	// The short ones again, grouped by the runs each needs.
 	byReps := map[int][]string{}
@@ -607,4 +646,98 @@ func mean(xs []float64) float64 {
 		return math.NaN()
 	}
 	return s / float64(len(xs))
+}
+
+// parseMicro reads v8bench's micro mode's output: each test's time of one
+// operation, in nanoseconds, in the order it printed them.
+func parseMicro(out string) []named {
+	var got []named
+	for _, m := range microLine.FindAllStringSubmatch(out, -1) {
+		v, err := strconv.ParseFloat(m[2], 64)
+		if err == nil {
+			got = append(got, named{m[1], v})
+		}
+	}
+	return got
+}
+
+// microRow is a test's figures over the placements: each label's mean of
+// its placements' best rounds, and at how many placements the second label
+// was slower than the first by more than microSlower.
+type microRow struct {
+	name   string
+	a, b   float64
+	per    [2][]float64
+	slower int
+}
+
+// microRows is each test's row, in names' order: res[label][i][test] is
+// each round's time of placement i, of which the best is taken.
+func microRows(names []string, res [2][]map[string][]float64, placements int) []microRow {
+	var rows []microRow
+	for _, name := range names {
+		row := microRow{name: name}
+		complete := true
+		for l := range 2 {
+			for i := range placements {
+				times := res[l][i][name]
+				if len(times) == 0 {
+					complete = false
+					break
+				}
+				row.per[l] = append(row.per[l], slices.Min(times))
+			}
+		}
+		if !complete {
+			continue
+		}
+		row.a, row.b = mean(row.per[0]), mean(row.per[1])
+		for i := range placements {
+			if row.per[1][i] > row.per[0][i]*(1+microSlower) {
+				row.slower++
+			}
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+// reportMicro prints each test's mean time of one operation for both
+// labels, the change, the second label's spread over the placements and at
+// how many it was slower; then the geometric mean of the changes, and the
+// tests slower by microReport or more at every placement.
+func reportMicro(w io.Writer, labels [2]string, names []string, res [2][]map[string][]float64, placements int, verbose bool) {
+	rows := microRows(names, res, placements)
+	fmt.Fprintf(w, "%-28s%12s%12s   change  slower at  (spread of %s over placements; ns an operation)\n", "", labels[0], labels[1], labels[1])
+	logs := 0.0
+	for _, r := range rows {
+		fmt.Fprintf(w, "%-28s%12.2f%12.2f  %+6.1f%%  %4d/%-4d  %.2f..%.2f\n", r.name, r.a, r.b, 100*(r.b-r.a)/r.a,
+			r.slower, placements, slices.Min(r.per[1]), slices.Max(r.per[1]))
+		if verbose {
+			for l := range labels {
+				fmt.Fprintf(w, "    %s:", labels[l])
+				for _, v := range r.per[l] {
+					fmt.Fprintf(w, " %.2f", v)
+				}
+				fmt.Fprintln(w)
+			}
+		}
+		logs += math.Log(r.b / r.a)
+	}
+	if len(rows) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "%d tests, %s / %s %.3f by the geometric mean\n", len(rows), labels[1], labels[0], math.Exp(logs/float64(len(rows))))
+	fmt.Fprintf(w, "slower by %.0f%% or more at every placement:\n", 100*microReport)
+	for _, r := range rows {
+		every := true
+		for i := range placements {
+			if r.per[1][i] < r.per[0][i]*(1+microReport) {
+				every = false
+			}
+		}
+		if every {
+			fmt.Fprintf(w, "  %-28s %+6.1f%%\n", r.name, 100*(r.b-r.a)/r.a)
+		}
+	}
 }
