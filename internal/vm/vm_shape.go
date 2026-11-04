@@ -2,6 +2,7 @@ package vm
 
 import (
 	"slices"
+	"sync/atomic"
 	"unsafe"
 	"weak"
 )
@@ -63,9 +64,9 @@ type shape struct {
 	// (setProto).
 	proto *Object
 	// roots are, on the layout of an object that is another's prototype,
-	// the empty layouts its objects start from, one for each class
-	// (rootFor), as V8's prototype info keeps Object.create's map.
-	roots  []*shape
+	// the empty layouts its objects start from and the budget of the
+	// shapes made with it (protoRoots).
+	roots  protoRoots
 	keys   []propKey
 	key    Atom
 	flags  propFlags
@@ -269,7 +270,8 @@ type shapeTree struct {
 	// count bounds the tree: past maxShapes, an object that would have
 	// needed a new shape is given a unique one instead, so that a program
 	// making objects with keys of its own invention cannot grow the tree
-	// without end.
+	// without end. The shapes of a prototype since collected are taken
+	// back from it, from freed, once it is spent (shapeBudget).
 	count int
 	// building says the runtime is making a realm: what is made then is one
 	// of a kind, and gets a unique shape.
@@ -289,6 +291,13 @@ type shapeTree struct {
 	// has is the cache of the in operator's answers (see ztree_ain.go),
 	// made when one is first remembered.
 	has *hasCache
+	// freed is how many shapes the cleanups of collected prototypes have
+	// given back since count last took them (reclaimShapes), made with the
+	// first prototype's budget; chunk is the budget prototypes are given
+	// slots of, chunkUsed of its slots given (budgetSlotOf).
+	freed     *atomic.Int64
+	chunk     *budgetChunk
+	chunkUsed int
 }
 
 const (
@@ -473,8 +482,8 @@ func rootFor(c Class, p *Object) *shape {
 	// The first root a prototype's layout keeps, a tree's, is most often
 	// the one: small enough to be made where an object is.
 	if p != nil && p.shape != nil {
-		if rs := p.shape.roots; len(rs) != 0 && rs[0].rootClass == c && rs[0].tree != nil {
-			return rs[0]
+		if s := p.shape.roots.first; s != nil && s.rootClass == c && s.tree != nil {
+			return s
 		}
 	}
 	return rootIn(nil, c, p)
@@ -495,7 +504,11 @@ func rootIn(tree *shapeTree, c Class, p *Object) *shape {
 		t = tree
 	}
 	at := -1
-	for i, s := range ps.roots {
+	for i := 0; ; i++ {
+		s := rootAt[struct{}](&ps.roots, i)
+		if s == nil {
+			break
+		}
 		if s.rootClass == c {
 			if s.tree == nil && t != nil && shapeClass(c) && !t.building {
 				// A template made while p's layout was in no tree, which
@@ -511,19 +524,14 @@ func rootIn(tree *shapeTree, c Class, p *Object) *shape {
 	switch {
 	case t != nil && t.building:
 		return newUniqueShape(t, p, nil, nil)
-	case t != nil && shapeClass(c) && t.count < maxShapes:
+	case t != nil && shapeClass(c) && takeShape[struct{}](t, p):
 		s = &shape{tree: t, proto: p, generic: true, rootClass: c}
-		t.count++
 	case t != nil && shapeClass(c):
 		return newUniqueShape(t, p, nil, nil)
 	default:
 		s = &shape{proto: p, loose: true, generic: true, rootClass: c}
 	}
-	if at >= 0 {
-		ps.roots[at] = s
-	} else {
-		ps.roots = append(ps.roots, s)
-	}
+	setRoot[struct{}](&ps.roots, at, s)
 	return s
 }
 
@@ -596,11 +604,15 @@ func (t *shapeTree) siteRoot(c *propCache, proto *Object) *shape {
 	return s
 }
 
-// ctorRoot is siteRoot for a constructor, whose objects start from a shape of
-// the function's own: functions made from the same code are often different
-// classes -- a library's class maker returns one -- whose objects have
-// different properties. A constructor given a new prototype object gets a
-// new root, which learns its objects' room anew.
+// ctorRoot is siteRoot for a constructor, whose objects start from a shape
+// other than their class's: functions made from the same code are often
+// different classes -- a library's class maker returns one -- whose objects
+// have different properties. A constructor given a new prototype object, or
+// constructing for a new.target of another prototype, gets a new root, which
+// learns its objects' room anew: the first given a property is kept on the
+// prototype's own layout, and the objects of any other then grow from that
+// one (keptCtorRoot), so that a constructor alternating between prototypes
+// adds no shape to the tree after the first of each.
 func (t *shapeTree) ctorRoot(fd *funcData, proto *Object) *shape {
 	if s := fd.ctorShape; s != nil && s.proto == proto {
 		return s
@@ -608,8 +620,7 @@ func (t *shapeTree) ctorRoot(fd *funcData, proto *Object) *shape {
 	if t.building || t.count >= maxShapes {
 		return nil
 	}
-	s := &shape{tree: t, proto: proto}
-	t.count++
+	s := &shape{tree: t, proto: proto, rootClass: ctorRootClass}
 	fd.ctorShape = s
 	return s
 }
@@ -749,8 +760,13 @@ func (s *shape) child(e shapeEdge) *shape {
 			return c
 		}
 	}
+	if s.parent == nil && s.rootClass == ctorRootClass {
+		if k := keptCtorRoot[struct{}](s); k != s {
+			return redirectRoot[struct{}](s, k, e)
+		}
+	}
 	t := s.tree
-	if s.n >= maxShapeDepth || t.count >= maxShapes || len(s.more) >= maxShapeFanout {
+	if s.n >= maxShapeDepth || t.count >= maxShapes && !reclaimShapes[struct{}](t) || len(s.more) >= maxShapeFanout {
 		return nil
 	}
 	inPlace := !s.extended
@@ -765,7 +781,7 @@ func (s *shape) child(e shapeEdge) *shape {
 		c.index = s.index
 		c.index.add(e.key, s.n)
 	}
-	t.count++
+	chargeShape[struct{}](t, s.proto)
 	if s.next == nil {
 		s.next, s.nextEdge = c, e
 	} else {
