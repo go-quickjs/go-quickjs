@@ -1000,20 +1000,21 @@ func (c *a64Compiler) returnFast(x *ssa.Value) {
 }
 
 // cellsBack is amd64's: the cells a native call's frame took back to
-// their pool as it returns natively. It keeps A, B and C, the result and
+// their pool as it returns natively, while the collector marks with Go's
+// write barrier (cellsBackMarking). It keeps A, B and C, the result and
 // where it returns to, using allocatable registers, none live at a return.
 func (c *a64Compiler) cellsBack() {
 	block, pool, count, cell, word, at := arm64.Reg(3), arm64.Reg(4), arm64.Reg(5), arm64.Reg(6), arm64.Reg(7), arm64.Reg(8)
-	skip := c.a.NewLabel()
+	skip, marking := c.a.NewLabel(), c.a.NewLabel()
 	c.a.Load(block, a64Ctx, abi.OffCells)
 	c.a.Cbz(block, skip, true)
-	c.movImm(word, c.enc.WriteBarrier)
-	c.a.LoadU8(word, word, 0)
-	c.a.Cbnz(word, skip, false)
 	c.movImm(pool, uint64(c.f.CellsPool))
 	c.a.Load(count, pool, abi.OffPoolCount)
 	c.a.CmpImm(count, abi.PoolCapacity, true)
 	c.a.BCond(arm64.HS, skip)
+	c.movImm(word, c.enc.WriteBarrier)
+	c.a.LoadU8(word, word, 0)
+	c.a.Cbnz(word, marking, false)
 	c.movImm(word, c.enc.Undefined)
 	n := int32(c.f.CellsCount)
 	for k := range n {
@@ -1030,7 +1031,53 @@ func (c *a64Compiler) cellsBack() {
 	c.a.AddImm(count, count, 1, true)
 	c.a.Store(pool, abi.OffPoolCount, count)
 	c.a.Store(a64Ctx, abi.OffCells, arm64.ZR)
+	c.a.B(skip)
+	c.a.Bind(marking)
+	c.cellsBackMarking()
 	c.a.Bind(skip)
+}
+
+// cellsBackMarking is amd64's: A, B and C, the result and where the call
+// returns to, kept in the context's GoArgs while refStore uses them.
+func (c *a64Compiler) cellsBackMarking() {
+	ret, link := abi.OffGoArgs, abi.OffGoArgs+c.enc.ValueSize
+	c.a.Store(a64Ctx, ret+c.enc.NumOffset, a64RetNum)
+	c.a.Store(a64Ctx, ret+c.enc.RefOffset, a64RetRef)
+	c.a.Store(a64Ctx, link+c.enc.NumOffset, a64CallLink)
+	n := int32(c.f.CellsCount)
+	for k := range n {
+		cell := 8*n + k*c.enc.UpvalueSize
+		c.a.Load(a64A, a64Ctx, abi.OffCells)
+		c.a.AddImm(a64C, a64A, int64(cell), true)
+		c.a.AddImm(a64A, a64A, int64(k*8), true)
+		c.refStore()
+		c.a.Load(a64A, a64Ctx, abi.OffCells)
+		c.a.AddImm(a64C, a64A, int64(cell+c.enc.UpvalueClosed), true)
+		c.a.AddImm(a64A, a64A, int64(cell+c.enc.UpvalueSlot), true)
+		c.refStore()
+		c.a.Load(a64A, a64Ctx, abi.OffCells)
+		c.movImm(a64C, c.enc.Undefined)
+		c.a.Store(a64A, cell+c.enc.UpvalueClosed+c.enc.NumOffset, a64C)
+		c.a.AddImm(a64A, a64A, int64(cell+c.enc.UpvalueClosed+c.enc.RefOffset), true)
+		c.movImm(a64C, 0)
+		c.refStore()
+	}
+	c.movImm(a64B, uint64(c.f.CellsPool))
+	c.a.Load(a64A, a64B, abi.OffPoolCount)
+	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 3, true)
+	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	c.a.AddImm(a64A, a64A, int64(abi.OffPoolObjects), true)
+	c.a.Load(a64C, a64Ctx, abi.OffCells)
+	c.refStore()
+	c.movImm(a64B, uint64(c.f.CellsPool))
+	c.a.Load(a64A, a64B, abi.OffPoolCount)
+	c.a.AddImm(a64A, a64A, 1, true)
+	c.a.Store(a64B, abi.OffPoolCount, a64A)
+	c.a.Store(a64Ctx, abi.OffCells, arm64.ZR)
+	c.a.Load(a64RetNum, a64Ctx, ret+c.enc.NumOffset)
+	c.a.Load(a64RetRef, a64Ctx, ret+c.enc.RefOffset)
+	c.a.Load(a64CallLink, a64Ctx, link+c.enc.NumOffset)
+	c.a.Store(a64Ctx, ret+c.enc.RefOffset, arm64.ZR)
 }
 
 // budgetStore and budgetLoad are amd64's. Each uses B.

@@ -62,6 +62,15 @@ func TestJITPoolsWhileMarking(t *testing.T) {
 				e = x
 			}
 		}
+		if name == "bump" {
+			// Its arrow is inlined and never made, so its cells go back to
+			// their pool as each call returns, the collector marking too
+			// (mir's cellsBackMarking): the pool as full as it was.
+			if e == nil || e.ssaCalled == 0 || e.cellsPool == nil || e.cellsPool.Count != e.cellsPool.Size {
+				t.Errorf("%s's cells did not go back to their pool while the collector marked: %+v", name, e)
+			}
+			continue
+		}
 		if e == nil || e.cellsPool == nil || e.cellsPool.Count == e.cellsPool.Size {
 			t.Errorf("%s's cells were not taken from their pool while the collector marked: %+v", name, e)
 		}

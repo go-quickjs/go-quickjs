@@ -86,4 +86,16 @@ func TestJITCellsBack(t *testing.T) {
 			t.Errorf("2,000 calls of %s: %d allocations", f, n)
 		}
 	}
+	// And while the collector marks, the cells go back with Go's write
+	// barrier (mir's cellsBackMarking): no more blocks, and the same
+	// answers.
+	jitMarkingForTest(t)
+	r = jitAgreesForTestWith(t, jitStressConfig{}, cellsBackSetup, rounds[:7]...)
+	for _, f := range []string{"scale(i, -1)", "turns(i)", "deep(4, i)"} {
+		src := `(() => { let r = 0; for (let i = 0; i < 2000; i++) r += ` + f + `; return r })()`
+		jitCallbackMallocs(t, r, src)
+		if n := jitCallbackMallocs(t, r, src); n > 600 {
+			t.Errorf("while marking, 2,000 calls of %s: %d allocations", f, n)
+		}
+	}
 }

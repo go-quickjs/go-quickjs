@@ -869,25 +869,26 @@ func (c *compiler) returnFast(x *ssa.Value) {
 
 // cellsBack gives the cells a native call's frame took (ssa.Func's
 // CellsBack), its context's, back to their pool as it returns natively,
-// where the collector does not mark and the pool has room: each cell its
-// block's again, holding undefined, its slot pointing there, as Go makes
-// them (the VM's jitFillCells), and the block the pool's next. Nothing
-// else holds them: no closure took them. It keeps retNum, retRef and
-// callLink, using the allocatable registers, none live at a return.
+// where the pool has room: each cell its block's again, holding undefined,
+// its slot pointing there, as Go makes them (the VM's jitFillCells), and
+// the block the pool's next -- while the collector marks, with Go's write
+// barrier (cellsBackMarking). Nothing else holds them: no closure took
+// them. It keeps retNum, retRef and callLink, using the allocatable
+// registers, none live at a return.
 func (c *compiler) cellsBack() {
 	const block, pool, count, cell, word, at = amd64.R8, amd64.R9, amd64.R10, amd64.R12, amd64.R13, amd64.R15
-	skip := c.a.NewLabel()
+	skip, marking := c.a.NewLabel(), c.a.NewLabel()
 	c.a.Load(block, regCtx, abi.OffCells)
 	c.a.Op(amd64.Test, block, block, true)
 	c.a.Jcc(amd64.CondE, skip)
-	c.movImm(word, c.enc.WriteBarrier)
-	c.a.LoadU8(word, word, 0)
-	c.a.Op(amd64.Test, word, word, false)
-	c.a.Jcc(amd64.CondNE, skip)
 	c.movImm(pool, uint64(c.f.CellsPool))
 	c.a.Load(count, pool, abi.OffPoolCount)
 	c.a.OpImm(amd64.Cmp, count, abi.PoolCapacity, true)
 	c.a.Jcc(amd64.CondAE, skip)
+	c.movImm(word, c.enc.WriteBarrier)
+	c.a.LoadU8(word, word, 0)
+	c.a.Op(amd64.Test, word, word, false)
+	c.a.Jcc(amd64.CondNE, marking)
 	c.movImm(word, c.enc.Undefined)
 	n := int32(c.f.CellsCount)
 	for k := range n {
@@ -905,7 +906,58 @@ func (c *compiler) cellsBack() {
 	c.a.OpImm(amd64.Add, count, 1, true)
 	c.a.Store(pool, abi.OffPoolCount, count)
 	c.a.StoreImm(regCtx, abi.OffCells, 0)
+	c.a.Jmp(skip)
+	c.a.Bind(marking)
+	c.cellsBackMarking()
 	c.a.Bind(skip)
+}
+
+// cellsBackMarking is cellsBack while the collector marks, the pool known
+// to have room: each pointer word written -- the block's cells, each
+// cell's slot and the pointer word of what it holds, the pool's next --
+// with Go's write barrier (refStore), which uses the scratch registers
+// retNum, retRef and callLink are: those are kept in the context's GoArgs
+// while it runs, and the block is read again from the context's Cells
+// after each store.
+func (c *compiler) cellsBackMarking() {
+	ret, link := abi.OffGoArgs, abi.OffGoArgs+c.enc.ValueSize
+	c.a.Store(regCtx, ret+c.enc.NumOffset, retNum)
+	c.a.Store(regCtx, ret+c.enc.RefOffset, retRef)
+	c.a.Store(regCtx, link+c.enc.NumOffset, callLink)
+	n := int32(c.f.CellsCount)
+	for k := range n {
+		cell := 8*n + k*c.enc.UpvalueSize
+		c.a.Load(scratchA, regCtx, abi.OffCells)
+		c.a.Lea(scratchC, scratchA, cell)
+		c.a.Lea(scratchA, scratchA, k*8)
+		c.refStore()
+		c.a.Load(scratchA, regCtx, abi.OffCells)
+		c.a.Lea(scratchC, scratchA, cell+c.enc.UpvalueClosed)
+		c.a.Lea(scratchA, scratchA, cell+c.enc.UpvalueSlot)
+		c.refStore()
+		c.a.Load(scratchA, regCtx, abi.OffCells)
+		c.movImm(scratchC, c.enc.Undefined)
+		c.a.Store(scratchA, cell+c.enc.UpvalueClosed+c.enc.NumOffset, scratchC)
+		c.a.Lea(scratchA, scratchA, cell+c.enc.UpvalueClosed+c.enc.RefOffset)
+		c.movImm(scratchC, 0)
+		c.refStore()
+	}
+	c.movImm(scratchB, uint64(c.f.CellsPool))
+	c.a.Load(scratchA, scratchB, abi.OffPoolCount)
+	c.a.ShiftImm(amd64.Shl, scratchA, 3, true)
+	c.a.Op(amd64.Add, scratchA, scratchB, true)
+	c.a.OpImm(amd64.Add, scratchA, abi.OffPoolObjects, true)
+	c.a.Load(scratchC, regCtx, abi.OffCells)
+	c.refStore()
+	c.movImm(scratchB, uint64(c.f.CellsPool))
+	c.a.Load(scratchA, scratchB, abi.OffPoolCount)
+	c.a.OpImm(amd64.Add, scratchA, 1, true)
+	c.a.Store(scratchB, abi.OffPoolCount, scratchA)
+	c.a.StoreImm(regCtx, abi.OffCells, 0)
+	c.a.Load(retNum, regCtx, ret+c.enc.NumOffset)
+	c.a.Load(retRef, regCtx, ret+c.enc.RefOffset)
+	c.a.Load(callLink, regCtx, link+c.enc.NumOffset)
+	c.a.StoreImm(regCtx, ret+c.enc.RefOffset, 0)
 }
 
 // returnTail ends a native call, from the callee's context, the result in
