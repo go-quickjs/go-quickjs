@@ -3870,7 +3870,7 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 		root = r.shapes.ctorRoot(fd, proto)
 		props = root.roomFor(int(fd.closure.fn.ThisProps))
 	}
-	obj := newOrdinary[struct{}](root, proto, props)
+	obj := newOrdinary[struct{}](fd, root, proto, props)
 	this := Obj(obj)
 
 	// A base class gives the instance its private methods and fields before the

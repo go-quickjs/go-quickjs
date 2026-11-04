@@ -212,9 +212,8 @@ const linearScanLimit = 8
 // It is four words, 32 bytes: its prototype is its layout's (shape.proto),
 // or, for the first ordinary object made on a prototype, its table's first
 // value (objPolyProto), and what only some objects have is after it in their
-// allocation
-// (objectExt), so that an object of two properties in its own allocation
-// is 64 bytes, a size class below the 80 it took. The class, flags and
+// allocation (objectExt), so that an object of two properties in its own
+// allocation is 64 bytes, a size class below the 80 it took. The class, flags and
 // mark come first: native code takes a field at offset 0 for one the
 // encoding does not have (abi.Encoding), and the property values' pointer
 // and the shape must not be at it.

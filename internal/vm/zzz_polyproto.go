@@ -16,7 +16,8 @@ package vm
 // atomProtoSlot, a private key no name maps to, which no enumeration
 // reports. objPolyProto says so, and Object.proto reads it there. Its
 // layout is a node of the tree the runtime keeps for such objects, from one
-// root whatever their prototypes are (shapeTree.poly), whose proto is nil:
+// root whatever their prototypes are (shapeTree.poly), or of a literal's
+// root grown by the slot, and its proto is nil:
 // their own properties are remembered by caches as any shared layout's, and
 // a loop making them makes no shape after the first of each.
 //
@@ -82,34 +83,26 @@ func newPolyObject[_ any](p *Object, n int) *Object {
 	return o
 }
 
-// freshCtor reports whether fd's objects made on proto are made with it in
-// their table: proto has been no object's prototype, and another closure of
-// fd's code has met such a prototype before, as a class a factory makes
-// anew at each call, or a base class each such subclass's super() calls,
-// does. The first is made of a root of its own, as any constructor's
-// objects are: a class made once has its objects' layouts from the first.
-//
-//go:noinline
-func freshCtor[_ any](fd *funcData, proto *Object) bool {
-	if fd.closure == nil || !polyable[struct{}](proto) {
-		return false
-	}
-	if cc := fd.closure.closureCode; !cc.freshProtos {
-		cc.freshProtos = true
-		return false
-	}
-	return true
-}
-
-// newOrdinary is the object a construction makes, of prototype proto, with
-// room for n properties: of root, its constructor's root (ctorRoot), or,
+// newOrdinary is the object a construction with fd makes, of prototype
+// proto, with room for n properties: of root, fd's root (ctorRoot), or,
 // where there is none, made as newObject makes one -- with proto in its
 // table if no object has had it as its prototype.
 //
+// ctorRoot gives none for a prototype no object has had where another
+// closure of fd's code has met such a prototype before (freshProtos), as a
+// class a factory makes anew at each call, or a subclass each call makes,
+// does. The first is made of a root of its own, as any constructor's
+// objects are -- a class made once has its objects' layouts from the first
+// -- and marks the code here.
+//
 //go:noinline
-func newOrdinary[_ any](root *shape, proto *Object, n int) *Object {
-	if root == nil && polyable[struct{}](proto) {
-		return newPolyObject[struct{}](proto, n)
+func newOrdinary[_ any](fd *funcData, root *shape, proto *Object, n int) *Object {
+	if root == nil {
+		if polyable[struct{}](proto) {
+			return newPolyObject[struct{}](proto, n)
+		}
+	} else if proto.flags&objProtoMet == 0 && fd.closure != nil {
+		fd.closure.freshProtos = true
 	}
 	return newShapedLiteral(root.orRoot(ClassObject, proto), ClassObject, n)
 }
@@ -132,7 +125,11 @@ func polySetProto[_ any](o, p *Object) bool {
 			// the objects of a site keep their own transitions, which the
 			// properties it then defines take (transition), rather than
 			// those of every such object.
-			root = s.child(shapeEdge{key: atomProtoSlot, flags: propPrivate})
+			// Its proto, s's, is nil, as every such layout's is, so that
+			// Object.proto reads the slot: the layouts grown from it copy it.
+			if root = s.child(shapeEdge{key: atomProtoSlot, flags: propPrivate}); root != nil {
+				root.proto = nil
+			}
 		}
 		if root == nil {
 			if root = polyRoot[struct{}](p.shape.tree); root == nil {

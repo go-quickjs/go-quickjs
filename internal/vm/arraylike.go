@@ -281,10 +281,18 @@ func (a *arrayLike) setLength(r *Runtime, n int64) error {
 // accessor has already been moved out of dense storage, so anything still here
 // is a plain data property that shadows whatever the prototype holds.
 func (a *arrayLike) dense(i int64) (Value, bool) {
-	if a.o.class != ClassArray || i < 0 || i >= int64(len(a.o.elemsOf())) {
+	if a.o.class != ClassArray {
 		return Undefined, false
 	}
-	v := a.o.elemsOf()[i]
+	// An array's side fields are always there (objHasExt), so their
+	// elements are read without asking elemsOf, which costs an inlined
+	// caller its flag's test twice: so small, the read is inlined where an
+	// array method steps through its receiver, as it was.
+	e := a.o.extAt().elems
+	if i < 0 || i >= int64(len(e)) {
+		return Undefined, false
+	}
+	v := e[i]
 	if isHole(v) {
 		return Undefined, false
 	}

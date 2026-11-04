@@ -732,10 +732,11 @@ func (r *Runtime) protoOf(o *Object) (Value, error) {
 
 // protoValue renders an object's prototype as the null-or-object a trap sees.
 func protoValue(o *Object) Value {
-	if o.proto() == nil {
+	p := o.proto()
+	if p == nil {
 		return Null
 	}
-	return Obj(o.proto())
+	return Obj(p)
 }
 
 // setProtoOf assigns a prototype, refusing when the object is sealed against it.

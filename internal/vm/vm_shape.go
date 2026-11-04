@@ -507,11 +507,23 @@ func (t *shapeTree) root(c Class) *shape {
 
 // proto is o's prototype, its layout's: nil for an object with neither
 // properties nor a prototype, which has no layout. The first object made on
-// a prototype keeps it as its table's first value (objPolyProto).
+// a prototype keeps it as its table's first value (objPolyProto), its
+// layout's being nil.
 func (o *Object) proto() *Object {
 	if o.flags&objPolyProto != 0 {
 		return (*Object)(o.valp.ref)
 	}
+	if s := o.shape; s != nil {
+		return s.proto
+	}
+	return nil
+}
+
+// layoutProto is proto for an object that cannot keep its prototype in its
+// table, which only an ordinary object does (objPolyProto): its layout's.
+// It is smaller where it is inlined -- plainArray, which its callers then
+// inline.
+func (o *Object) layoutProto() *Object {
 	if s := o.shape; s != nil {
 		return s.proto
 	}
@@ -674,9 +686,10 @@ func (t *shapeTree) ctorRoot(fd *funcData, proto *Object) *shape {
 	if s := fd.ctorShape(); s != nil && s.proto == proto {
 		return s
 	}
-	if t.building || t.count >= maxShapes || freshCtor[struct{}](fd, proto) {
+	if t.building || t.count >= maxShapes || proto.flags&objProtoMet == 0 && fd.closure != nil && fd.closure.freshProtos {
 		// None, and the object is made of its class's root, or, on a
-		// prototype no object has had, with it in its table (newOrdinary).
+		// prototype no object has had, of a class a factory makes, with the
+		// prototype in its table (newOrdinary).
 		return nil
 	}
 	s := &shape{tree: t, proto: proto, rootClass: ctorRootClass}
@@ -2036,6 +2049,9 @@ func checkShape(o *Object) {
 	}
 	if int(s.n) != int(o.valn) || len(s.keys) < int(o.valn) {
 		panic("shape size disagrees with table")
+	}
+	if o.flags&objPolyProto != 0 && (s.proto != nil || s.n == 0 || s.keys[0].key != atomProtoSlot) {
+		panic("an object that keeps its prototype in its table has a layout that says another")
 	}
 	if x := s.index; x != nil {
 		// An index may be shared along a chain of layouts, or borrowed from

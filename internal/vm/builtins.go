@@ -3128,7 +3128,7 @@ func (r *Runtime) plainArray(this Value) *Object {
 		return nil
 	}
 	o := this.Object()
-	if o.class != ClassArray || o.flags&objHasSparseElements != 0 || o.proto() != r.proto.array {
+	if o.class != ClassArray || o.flags&objHasSparseElements != 0 || o.layoutProto() != r.proto.array {
 		return nil
 	}
 	return o

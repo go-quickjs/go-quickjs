@@ -58,7 +58,9 @@ func (r *Runtime) withFound(scopes []*Object, name Atom, limit int) (*Object, bo
 // which can observe what is asked of it and in what order.
 func chainHasProxy(o *Object) bool {
 	for ; o != nil; o = o.proto() {
-		if proxyOf(o) != nil {
+		// Every object of the class is a proxy, which proxyOf would ask of
+		// its data too: so small, the walk stays inlinable.
+		if o.class == ClassProxy {
 			return true
 		}
 	}

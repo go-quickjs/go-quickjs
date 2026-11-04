@@ -193,6 +193,9 @@ func TestPolyProtoLayout(t *testing.T) {
 			t.Errorf("%s, the first object of its prototype: poly %v; want its prototype in its first slot", n, o.flags&objPolyProto != 0)
 		}
 	}
+	if l := globalObject(r, "lit"); l.shape.proto != nil || l.shape.parent.proto != nil {
+		t.Errorf("lit's layout says a prototype: %p", l.shape.proto)
+	}
 	if a.shape != b.shape || a.shape.unique || a.shape.loose || a.shape.proto != nil || !a.shape.seen {
 		t.Errorf("a and b: shapes %p and %p; want one shared layout, of no prototype, a cache remembers", a.shape, b.shape)
 	}

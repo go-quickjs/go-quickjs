@@ -674,7 +674,7 @@ type closureCode struct {
 	// freshProtos says a closure of the template has constructed an object
 	// on a prototype no object had: a second that does is a class a
 	// factory makes for each call, and its objects keep their prototype in
-	// their table (ctorRoot, zzz_polyproto.go).
+	// their table (ctorRoot, newOrdinary).
 	freshProtos bool
 }
 
