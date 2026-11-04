@@ -14,7 +14,7 @@ import (
 func TestPadFunctionsOccupy32Bytes(t *testing.T) {
 	dir := t.TempDir()
 	for p := range 4 {
-		body := strings.Replace(string(padFile(p, 4, 0)), "package vm", "package main", 1)
+		body := strings.Replace(string(padFile(p, 4, 0, 0)), "package vm", "package main", 1)
 		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("pad%d.go", p)), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}

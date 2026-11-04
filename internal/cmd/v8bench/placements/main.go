@@ -183,6 +183,24 @@ func design(n int) [4]int {
 // padSlots is the most functions a pad has: 2*31 and one.
 const padSlots = 64
 
+// dataPhase is how many bytes placement n adds to the initialized data,
+// which moves the zeroed data after it -- the Go runtime's hot variables
+// among it, runtime.writeBarrier and gcController -- within their cache
+// lines: 0 or 32, half the placements each, as the code's phases are
+// balanced. Builds of two revisions differ in their data as well as their
+// code -- a few package variables, the build's own information (a tree
+// with changes records it, 32 bytes more) -- which no placement had
+// varied: where a variable fell in its cache line had shown, for a
+// collector-bound benchmark, as a difference at every placement.
+func dataPhase(n int) int {
+	d := design(n)
+	return 32 * (d[0] ^ d[1])
+}
+
+// padDataBase is padData's size at a phase of 0: big enough to be laid
+// out on a 32-byte boundary at either size.
+const padDataBase = 64
+
 // padCounts is how many one-slot functions each pad needs for placement
 // n, given where the targets are with the pads empty. Each pad moves its
 // target and everything after it, and the targets come in this order, so
@@ -258,12 +276,12 @@ func buildCmd(args []string) error {
 
 	for _, n := range placementsOf(*k) {
 		exe := exePath(*out, *label, n)
-		ref, err := buildAt(src, [4]int{}, inner*n, exe)
+		ref, err := buildAt(src, [4]int{}, inner*n, dataPhase(n), exe)
 		if err != nil {
 			return err
 		}
 		counts := padCounts(ref, n)
-		got, err := buildAt(src, counts, inner*n, exe)
+		got, err := buildAt(src, counts, inner*n, dataPhase(n), exe)
 		if err != nil {
 			return err
 		}
@@ -279,7 +297,7 @@ func buildCmd(args []string) error {
 
 // buildAt writes the pads and the tests, builds v8bench to exe, and says
 // where the targets are in it.
-func buildAt(src []byte, counts [4]int, tests int, exe string) ([4]uint64, error) {
+func buildAt(src []byte, counts [4]int, tests, data int, exe string) ([4]uint64, error) {
 	var addrs [4]uint64
 	var body strings.Builder
 	for i := range tests {
@@ -290,7 +308,7 @@ func buildAt(src []byte, counts [4]int, tests int, exe string) ([4]uint64, error
 		return addrs, err
 	}
 	for p, m := range counts {
-		if err := os.WriteFile(pads[p], padFile(p, m, tests), 0o644); err != nil {
+		if err := os.WriteFile(pads[p], padFile(p, m, tests, data), 0o644); err != nil {
 			return addrs, err
 		}
 	}
@@ -331,12 +349,16 @@ func buildAt(src []byte, counts [4]int, tests int, exe string) ([4]uint64, error
 // padFile is pad p with m functions. The first holds the one init, which
 // keeps every pad's functions reachable, and the tests' keys: it is before
 // the first target, where its size is the same in every placement.
-func padFile(p, m, tests int) []byte {
+func padFile(p, m, tests, data int) []byte {
 	var b strings.Builder
 	b.WriteString("package vm\n\n")
 	if p == 0 {
 		fmt.Fprintf(&b, "var padSink int\n\nvar padKeys = [%d]uint32{}\n\n", max(tests, 1))
+		// The data's phase: the initialized data, which the zeroed data
+		// follows, data bytes more (dataPhase).
+		fmt.Fprintf(&b, "var padData = [%d]byte{1}\n\n", padDataBase+data)
 		b.WriteString("func init() {\n\tfor i := range padKeys {\n\t\tpadKeys[i] = ^uint32(i)\n\t}\n" +
+			"\tpadSink += int(padData[len(padData)-1])\n" +
 			"\tfor _, fs := range [][]func() int{padFuncs0[:], padFuncs1[:], padFuncs2[:], padFuncs3[:]} {\n" +
 			"\t\tfor _, f := range fs {\n\t\t\tif f != nil {\n\t\t\t\tpadSink += f()\n\t\t\t}\n\t\t}\n\t}\n}\n\n")
 	}
