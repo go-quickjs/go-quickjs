@@ -24,7 +24,7 @@ func TestShapeSide(t *testing.T) {
 	if _, err := r.Run(compileForTest(t, `
 		var p = {m: 1}
 		var a = Object.create(p), b = Object.create(p)
-		var q = Object.create(p), c = Object.create(q)
+		var q = Object.create(p), c0 = Object.create(q), c = Object.create(q)
 		function rd(o) { return o.m }
 		function absent(o) { return o.nothing }
 		var got = 0

@@ -738,6 +738,15 @@ func (a *Asm) StoreImm(base Reg, disp int32, imm int32) {
 	a.imm32(imm)
 }
 
+// TestMem8 sets the flags by the byte at [base + disp] and imm, as TEST
+// does: Z where they have no bit in common.
+func (a *Asm) TestMem8(base Reg, disp int32, imm uint8) {
+	a.rex(false, 0, byte(base), false)
+	a.emit(0xF6)
+	a.modrmMem(0, base, disp)
+	a.emit(imm)
+}
+
 // IncMem increments the 64-bit integer at [base + disp].
 func (a *Asm) IncMem(base Reg, disp int32) {
 	a.rex(true, 0, byte(base), false)

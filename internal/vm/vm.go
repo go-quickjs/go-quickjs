@@ -3870,7 +3870,7 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 		root = r.shapes.ctorRoot(fd, proto)
 		props = root.roomFor(int(fd.closure.fn.ThisProps))
 	}
-	obj := newShapedLiteral(root.orRoot(ClassObject, proto), ClassObject, props)
+	obj := newOrdinary[struct{}](root, proto, props)
 	this := Obj(obj)
 
 	// A base class gives the instance its private methods and fields before the
@@ -4547,7 +4547,9 @@ func (r *Runtime) linkClass(ctorVal, parent Value) error {
 	}
 	if protoVal.IsObject() {
 		if parentProtoVal.IsObject() {
-			protoVal.Object().setProto(parentProtoVal.Object())
+			// The prototype, as the constructor below, takes the layout
+			// the others made so share, rather than one of its own.
+			classProto[struct{}](protoVal.Object(), parentProtoVal.Object())
 		} else {
 			protoVal.Object().setProto(nil)
 		}

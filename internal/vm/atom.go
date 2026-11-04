@@ -86,6 +86,10 @@ const (
 	// atomCloneBrand is, as atomWeakMapRefs, a private key no name maps to:
 	// the one under which an object keeps the brand SetCloneBrand gave it.
 	atomCloneBrand
+	// atomProtoSlot is, as atomWeakMapRefs, a private key no name maps to:
+	// the one an object whose prototype is not its layout's keeps it under,
+	// as its table's first property (objPolyProto).
+	atomProtoSlot
 	atomStaticAtomCount
 )
 
@@ -98,11 +102,14 @@ var staticAtomNames = [...]string{
 	"message", "stack", "__proto__", "next", "done", "return", "throw", "raw",
 	"index", "input", "groups", "lastIndex", "source", "flags", "global",
 	"toJSON", "then", "default", "exec", "[[WeakMapRefs]]", "[[CloneBrand]]",
+	"[[Prototype]]",
 }
 
 // hiddenAtom reports whether a is one of the static atoms no name maps to,
 // the keys of the VM's own private properties.
-func hiddenAtom(a Atom) bool { return a == atomWeakMapRefs || a == atomCloneBrand }
+func hiddenAtom(a Atom) bool {
+	return a == atomWeakMapRefs || a == atomCloneBrand || a == atomProtoSlot
+}
 
 // atomEntry is one interned key: either a string or a symbol.
 type atomEntry struct {

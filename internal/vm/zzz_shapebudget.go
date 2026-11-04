@@ -22,9 +22,11 @@ import (
 // of its own, and every layout after it was of its own, which every cache
 // met anew.
 //
-// The first ordinary object made on a prototype joins no tree: its layout
-// is its own (firstRoot), most prototypes made and dropped being of one
-// object each. A constructor's root is counted as its first object is given
+// The first ordinary object made on a prototype keeps it in its table, of a
+// layout of the runtime's for such objects (zzz_polyproto.go), most
+// prototypes made and dropped being of one object each; where it cannot --
+// a prototype of a layout of its own, or in no tree -- it joins no tree: its
+// layout is its own (firstRoot). A constructor's root is counted as its first object is given
 // a property, and kept on the prototype's own layout (keptCtorRoot). A
 // literal site's root is counted for good, as it was: its prototype is the
 // realm's Object.prototype, and the shapes grown from it are counted against
@@ -262,13 +264,17 @@ func ctorChild[_ any](s *shape, e shapeEdge) (*shape, bool) {
 // for functions by the keys ctor has, as V8's prototype transitions give a
 // map's objects one map for each new prototype: a subclass made by each call
 // of a mixin or a factory, which had had a layout of its own made for each,
-// a shape and a copy of its keys, shares one with the others.
+// a shape and a copy of its keys, shares one with the others. linkClass so
+// gives the class's prototype object its parent's prototype too: a
+// subclass made by each call had had a layout of its own made for its
+// prototype, on which an object then made could not keep the prototype in
+// its table (zzz_polyproto.go), as on a prototype of a layout no other has.
 //
 //go:noinline
 func classProto[_ any](ctor, parent *Object) {
 	s := ctor.shape
 	if s == nil || s.unique || s.loose || s.tree == nil || s.tree.building || s.proto == parent ||
-		parent.flags&objProtoMet == 0 || !shapeClass(ctor.class) {
+		parent.flags&objProtoMet == 0 || !shapeClass(ctor.class) || ctor.flags&objPolyProto != 0 {
 		parent.flags |= objProtoMet
 		ctor.setProto(parent)
 		return

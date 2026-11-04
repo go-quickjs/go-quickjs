@@ -189,6 +189,13 @@ const (
 	// with it (rootIn, firstRoot): the objects made after that start from
 	// the roots kept on its own layout.
 	objProtoMet
+	// objPolyProto marks an object whose prototype is in its table's first
+	// value, under the hidden key atomProtoSlot, rather than in its layout:
+	// the first ordinary object made on a prototype, which shares the
+	// runtime's layouts of such objects whatever its prototype is
+	// (zzz_polyproto.go). Native code reads it too (abi.Encoding's
+	// FlagPoly).
+	objPolyProto
 )
 
 // linearScanLimit is the property count below which lookup scans the keys
@@ -202,8 +209,10 @@ const linearScanLimit = 8
 
 // Object is a JavaScript object.
 //
-// It is four words, 32 bytes: its prototype is its layout's (shape.proto)
-// and what only some objects have is after it in their allocation
+// It is four words, 32 bytes: its prototype is its layout's (shape.proto),
+// or, for the first ordinary object made on a prototype, its table's first
+// value (objPolyProto), and what only some objects have is after it in their
+// allocation
 // (objectExt), so that an object of two properties in its own allocation
 // is 64 bytes, a size class below the 80 it took. The class, flags and
 // mark come first: native code takes a field at offset 0 for one the
@@ -457,6 +466,9 @@ func newObject(proto *Object, class Class) *Object {
 		flags |= objArrayLengthWritable
 	}
 	if class == ClassObject {
+		if polyable[struct{}](proto) {
+			return newPolyObject[struct{}](proto, 1)
+		}
 		return &Object{shape: rootFor(class, proto), class: class, flags: flags}
 	}
 	return newObjectExt(proto, class, flags)

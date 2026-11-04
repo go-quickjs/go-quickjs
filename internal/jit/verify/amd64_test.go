@@ -173,6 +173,13 @@ func TestAMD64Moves(t *testing.T) {
 		for _, disp := range disps {
 			expect(t, "DecMem", encode(func(a *amd64.Asm) { a.DecMem(d, disp) }), x86asm.DEC, mem{r64(d), int64(disp)})
 			expect(t, "IncMem", encode(func(a *amd64.Asm) { a.IncMem(d, disp) }), x86asm.INC, mem{r64(d), int64(disp)})
+			for _, imm := range []uint8{1, 8, 0x80, 0xff} {
+				code := encode(func(a *amd64.Asm) { a.TestMem8(d, disp, imm) })
+				expect(t, "TestMem8", code, x86asm.TEST, mem{r64(d), int64(disp)}, int64(imm))
+				if inst := decodeOne(t, "TestMem8", code); inst.MemBytes != 1 {
+					t.Fatalf("TestMem8 r%d, %d, %#x: % x tests %d bytes", d, disp, imm, code, inst.MemBytes)
+				}
+			}
 			for _, imm := range []int32{0, 1, -1, 0x7fffffff, -0x80000000} {
 				expect(t, "StoreImm", encode(func(a *amd64.Asm) { a.StoreImm(d, disp, imm) }), x86asm.MOV, mem{r64(d), int64(disp)}, int64(imm))
 			}

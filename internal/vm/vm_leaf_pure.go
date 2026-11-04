@@ -518,7 +518,7 @@ func (r *Runtime) pureConstruct(callee Value, args []Value) (Value, bool) {
 	}
 	proto := p.value().Object()
 	root := r.shapes.ctorRoot(fd, proto)
-	obj := newShapedLiteral(root.orRoot(ClassObject, proto), ClassObject, root.roomFor(int(fd.closure.fn.ThisProps)))
+	obj := newOrdinary[struct{}](root, proto, root.roomFor(int(fd.closure.fn.ThisProps)))
 	if !r.leafStores(fd.closure, obj, args) {
 		return Undefined, false
 	}

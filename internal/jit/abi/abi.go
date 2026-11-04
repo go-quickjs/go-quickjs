@@ -1121,6 +1121,11 @@ type Encoding struct {
 	ObjectClass, ObjectFlags, ObjectArrayLen, ObjectElems int32
 	ObjectExt, ExtElems                                   int32
 	ClassArray, FlagSparse, FlagExt, FlagData             uint8
+	// FlagPoly is the bit, in the byte after the flags byte, of an object
+	// whose prototype is not its shape's but the pointer word of its first
+	// property's value: the first ordinary object made on a prototype (the
+	// VM's objPolyProto). 0 for an encoding with no such objects.
+	FlagPoly uint8
 	// ObjectData is the offset of an object's data in its side fields, an
 	// interface.
 	//

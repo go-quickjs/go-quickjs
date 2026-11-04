@@ -64,24 +64,27 @@ func TestShapeBudgetChurn(t *testing.T) {
 		var last
 	`
 	// want is the shapes the tree holds after the pattern's 20,000
-	// iterations, and after 20,000 more: its own few, the realm's, and
-	// those of the first prototypes it made, whose budgets share a chunk
-	// with prototypes that live (budgetChunk).
+	// iterations, and after 20,000 more: its own few, the realm's, those of
+	// the first prototypes it made, whose budgets share a chunk with
+	// prototypes that live (budgetChunk), and those of the objects whose
+	// prototype is in their table, the first made on each prototype
+	// (zzz_polyproto.go) -- which, past the first, are all a class made by
+	// a factory makes.
 	patterns := []struct {
 		name, body string
 		want       int
 	}{
-		{"Object.create", `var p = Object.create({x: i}); p.y = 1`, 16},
-		{"Object.create twice", `var q = {x: i}, p = Object.create(q), p2 = Object.create(q); p.y = 1; p2.y = 2`, 72},
-		{"__proto__ literal", `var o = {__proto__: {z: i}, w: 1}`, 17},
-		{"setPrototypeOf", `var o = Object.setPrototypeOf({}, {k: i}); o.v = 1`, 17},
-		{"scope chain", `var a = frame(scope, i); var b = frame(a, i)`, 17},
-		{"Reflect.construct alternating", `var o = Reflect.construct(F, [], i & 1 ? G : H)`, 21},
-		{"prototype reassigned", `R.prototype = i & 1 ? P1 : P2; var o = new R()`, 18},
-		{"Babel _createSuper", `var o = i & 1 ? Reflect.construct(A, [i], B) : new A(i)`, 21},
-		{"subclasses alternating", `var o = i & 1 ? new Sub1() : new Sub2()`, 20},
-		{"class factory", `var K = class { constructor() { this.q = i; this.t = 1 } }; var o = new K()`, 98},
-		{"subclass churn", `var D = class extends Base { constructor() { super(); this.d = i } }; var o = new D()`, 98},
+		{"Object.create", `var p = Object.create({x: i}); p.y = 1`, 21},
+		{"Object.create twice", `var q = {x: i}, p = Object.create(q), p2 = Object.create(q); p.y = 1; p2.y = 2`, 75},
+		{"__proto__ literal", `var o = {__proto__: {z: i}, w: 1}`, 23},
+		{"setPrototypeOf", `var o = Object.setPrototypeOf({}, {k: i}); o.v = 1`, 23},
+		{"scope chain", `var a = frame(scope, i); var b = frame(a, i)`, 23},
+		{"Reflect.construct alternating", `var o = Reflect.construct(F, [], i & 1 ? G : H)`, 25},
+		{"prototype reassigned", `R.prototype = i & 1 ? P1 : P2; var o = new R()`, 23},
+		{"Babel _createSuper", `var o = i & 1 ? Reflect.construct(A, [i], B) : new A(i)`, 25},
+		{"subclasses alternating", `var o = i & 1 ? new Sub1() : new Sub2()`, 24},
+		{"class factory", `var K = class { constructor() { this.q = i; this.t = 1 } }; var o = new K()`, 23},
+		{"subclass churn", `var D = class extends Base { constructor() { super(); this.d = i } }; var o = new D()`, 23},
 	}
 	for _, p := range patterns {
 		t.Run(p.name, func(t *testing.T) {
@@ -114,24 +117,27 @@ func TestShapeBudgetAfterChurn(t *testing.T) {
 		for (var i = 0; i < 65536; i++) { var q = {x: i}, p = Object.create(q), p2 = Object.create(q); p.y = 1; p.z = 2 }`)); err != nil {
 		t.Fatal(err)
 	}
-	if got := liveShapes(r); got != 18 {
-		t.Fatalf("after the churn the tree holds %d shapes, want 18", got)
+	if got := liveShapes(r); got != 22 {
+		t.Fatalf("after the churn the tree holds %d shapes, want 22", got)
 	}
 	v, err := r.Run(compileForTest(t, `
 		function Q(a) { this.a = a; this.b = a + 1 }
 		function make(a) { return new Q(a) }
 		function lit(a) { return {u: a, v: 2} }
+		// The first object made on a prototype keeps it in its table
+		// (zzz_polyproto.go): the ones compared are made after it.
+		make(0)
 		var q1 = make(1), q2 = make(2), l1 = lit(1), l2 = lit(2)
 		function A(v) { this.x = v; this.y = v + 1 }
 		function B() {}
 		B.prototype = Object.create(A.prototype)
-		for (var i = 0; i < 2000; i++) { var o = i & 1 ? Reflect.construct(A, [i], B) : new A(i); if (i == 1) var b1 = o; if (i == 1999) var b2 = o }
+		for (var i = 0; i < 2000; i++) { var o = i & 1 ? Reflect.construct(A, [i], B) : new A(i); if (i == 3) var b1 = o; if (i == 1999) var b2 = o }
 		String(q1.a + q2.b + l1.u + l2.v + b1.x + b2.y)`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := v.String().Go(); got != "2008" {
-		t.Fatalf("got %s, want 2008", got)
+	if got := v.String().Go(); got != "2010" {
+		t.Fatalf("got %s, want 2010", got)
 	}
 	for _, pair := range [][2]string{{"q1", "q2"}, {"l1", "l2"}, {"b1", "b2"}} {
 		a, b := globalObject(r, pair[0]), globalObject(r, pair[1])
@@ -141,40 +147,62 @@ func TestShapeBudgetAfterChurn(t *testing.T) {
 	}
 }
 
-// The first ordinary object made on a prototype has a layout of its own,
-// in no tree, which a cache may remember; the objects after it start from
-// the root the prototype's layout keeps. Objects of other classes start from
-// the prototype's root from the first.
+// The first ordinary object made on a prototype keeps it in its table, of
+// a layout in the tree the runtime keeps for such objects, which a cache
+// may remember, whatever their prototypes (zzz_polyproto.go); the objects
+// after it start from the root the prototype's layout keeps, and so does
+// the first once a cache finds a property past it. Objects of other classes
+// start from the prototype's root from the first.
 func TestShapeFirstObjectOfPrototype(t *testing.T) {
 	r := New(Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `
-		var p = {m: 1}
-		var a = Object.create(p), b = Object.create(p)
+		var p = {m: 1}, p2 = {m: 2}
+		var a = Object.create(p), b = Object.create(p), a2 = Object.create(p2)
 		var ap = []
 		var arr1 = Object.setPrototypeOf([], ap), arr2 = Object.setPrototypeOf([], ap)`)); err != nil {
 		t.Fatal(err)
 	}
-	a, b := globalObject(r, "a"), globalObject(r, "b")
-	if !a.shape.unique || a.shape.loose || a.shape.parent != nil || a.proto() != globalObject(r, "p") {
-		t.Errorf("first object: unique %v, loose %v; want a layout of its own of prototype p", a.shape.unique, a.shape.loose)
+	a, b, a2 := globalObject(r, "a"), globalObject(r, "b"), globalObject(r, "a2")
+	if a.flags&objPolyProto == 0 || a.shape.unique || a.shape.loose || a.shape != a2.shape || a.proto() != globalObject(r, "p") || a2.proto() != globalObject(r, "p2") {
+		t.Errorf("first objects of p and p2: poly %v, unique %v, loose %v, shapes %p and %p; want one layout of their prototypes' tables",
+			a.flags&objPolyProto != 0, a.shape.unique, a.shape.loose, a.shape, a2.shape)
 	}
-	if b.shape.unique || b.shape.loose || b.shape.tree != r.shapes || b.proto() != globalObject(r, "p") {
+	if b.flags&objPolyProto != 0 || b.shape.unique || b.shape.loose || b.shape.tree != r.shapes || b.proto() != globalObject(r, "p") {
 		t.Errorf("second object: unique %v, loose %v, tree %p; want the prototype's root", b.shape.unique, b.shape.loose, b.shape.tree)
 	}
 	if arr1, arr2 := globalObject(r, "arr1"), globalObject(r, "arr2"); arr1.shape != arr2.shape || arr1.shape.loose {
 		t.Errorf("arrays on a fresh prototype: shapes %p and %p, loose %v; want one root", arr1.shape, arr2.shape, arr1.shape.loose)
 	}
-	if _, err := r.Run(compileForTest(t, `
+	v, err := r.Run(compileForTest(t, `
 		function set(o, v) { o.x = v; o.y = v }
-		set(a, 1); set(b, 2)`)); err != nil {
+		set(a, 1); set(b, 2); set(a2, 3)
+		var keys = Object.keys(a).join() + ";" + Reflect.ownKeys(a2).join() + ";" + JSON.stringify(a)
+		Object.setPrototypeOf(a2, p)
+		keys + ";" + a.m + a2.m + (Object.getPrototypeOf(a2) === p)`))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if !a.shape.unique || a.shape.loose || a.shape.n != 2 {
-		t.Errorf("first object given x and y: unique %v, loose %v, %d keys; want a layout of its own", a.shape.unique, a.shape.loose, a.shape.n)
+	if got, want := v.String().Go(), `x,y;x,y;{"x":1,"y":1};11true`; got != want {
+		t.Errorf("got %s, want %s", got, want)
+	}
+	if a.flags&objPolyProto == 0 || a.shape.unique || a.shape != a2.shape || a.shape.n != 3 {
+		t.Errorf("first objects given x and y: poly %v, unique %v, %d keys; want one layout, of the slot and two keys", a.flags&objPolyProto != 0, a.shape.unique, a.shape.n)
 	}
 	if b.shape.unique || b.shape.loose || b.shape.parent == nil {
 		t.Errorf("second object given x and y: unique %v, loose %v; want a layout in the tree", b.shape.unique, b.shape.loose)
+	}
+	if _, err := r.Run(compileForTest(t, `var c = Object.create(a2); function rd(o) { return o.m } rd(c) + rd(c)`)); err != nil {
+		t.Fatal(err)
+	}
+	// c is the first made on a2, and a read of it finds nothing past it;
+	// a2 becomes a prototype of its own layout once one made after c is
+	// read through a cache.
+	if _, err := r.Run(compileForTest(t, `var d = Object.create(a2); rd(d) + rd(d)`)); err != nil {
+		t.Fatal(err)
+	}
+	if a2.flags&objPolyProto != 0 || !a2.shape.unique || a2.shape.proto != globalObject(r, "p") || !a2.vals()[0].IsUndefined() {
+		t.Errorf("a2 as a prototype: poly %v, unique %v; want a layout of its own of prototype p, its slot cleared", a2.flags&objPolyProto != 0, a2.shape.unique)
 	}
 }
 

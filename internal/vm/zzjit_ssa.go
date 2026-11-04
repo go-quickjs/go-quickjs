@@ -210,6 +210,7 @@ var jitEncoding = abi.Encoding{
 	FlagSparse:         uint8(objHasSparseElements),
 	FlagExt:            uint8(objHasExt),
 	FlagData:           uint8(objHasData),
+	FlagPoly:           uint8(objPolyProto >> 8),
 	FlagHTMLDDA:        uint8(objHTMLDDA),
 	FlagExtensible:     uint8(objExtensible),
 	LengthKey:          uint32(atomLength),
@@ -9475,6 +9476,11 @@ func (r *Runtime) jitConstructLayout(o *Object) (proto *Object, root *shape, pro
 	}
 	proto = p.value().Object()
 	root = r.shapes.ctorRoot(fd, proto)
+	if root == nil && polyable[struct{}](proto) {
+		// Its object is made with proto in its table (newOrdinary), which
+		// no pool's is.
+		return nil, nil, 0, false
+	}
 	props = root.roomFor(int(fd.closure.fn.ThisProps))
 	return proto, root, props, true
 }

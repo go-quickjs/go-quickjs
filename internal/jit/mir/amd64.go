@@ -4929,9 +4929,20 @@ func (c *compiler) objectPart(dst, obj, t amd64.Reg, cls uint8, off int32, fail 
 
 // loadProto has dst be the prototype of the object in obj, which may be
 // dst: its shape's (abi.Encoding's ShapeProto), nil for an object with no
-// shape, which has none.
+// shape, which has none; or, for an object that keeps it in its first
+// property (FlagPoly), that value's pointer word. Some of its callers emit
+// code they may not keep, so it appends no cold path.
 func (c *compiler) loadProto(dst, obj amd64.Reg) {
 	none := c.a.NewLabel()
+	if c.enc.FlagPoly != 0 {
+		shaped := c.a.NewLabel()
+		c.a.TestMem8(obj, c.enc.ObjectFlags+1, c.enc.FlagPoly)
+		c.a.Jcc(amd64.CondE, shaped)
+		c.a.Load(dst, obj, c.enc.ObjectProps)
+		c.a.Load(dst, dst, c.enc.RefOffset)
+		c.a.Jmp(none)
+		c.a.Bind(shaped)
+	}
 	c.a.Load(dst, obj, c.enc.ObjectShape)
 	c.a.Op(amd64.Test, dst, dst, true)
 	c.a.Jcc(amd64.CondE, none)

@@ -574,8 +574,10 @@ start:
 		// that eval may declare. It goes on the scope chain, inside whatever
 		// the enclosing functions put there: a name the evaluated code
 		// declares is found the way a `with` object's properties are.
-		f.evalVars = newObject(nil, ClassObject)
-		f.evalVars.flags |= objEvalVars
+		// An ordinary object of no prototype, newObject's, made here: a call
+		// of newObject, which no longer inlines, had grown runFD's code
+		// and moved what follows it.
+		f.evalVars = &Object{class: ClassObject, flags: objExtensible | objEvalVars}
 		f.withScopes = append(f.withScopes[:len(f.withScopes):len(f.withScopes)], f.evalVars)
 	}
 	if len(f.handlers) != 0 {

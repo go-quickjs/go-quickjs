@@ -67,7 +67,9 @@ type shape struct {
 	// object with one has a shape, and one with none and no properties
 	// none (Object.proto). A shape a cache remembers says the object's
 	// prototype with its layout, and a new prototype is a new layout
-	// (setProto).
+	// (setProto) -- but for the layouts of the objects that keep their
+	// prototype in their table instead, which say none (objPolyProto,
+	// zzz_polyproto.go).
 	proto *Object
 	// more is the transitions out of the shape past the first (next).
 	more map[shapeEdge]*shape
@@ -252,6 +254,9 @@ func (r *Runtime) chainCell(p *Object) *protoCell {
 	if p == nil {
 		return nullChain
 	}
+	if p.flags&objPolyProto != 0 {
+		depoly[struct{}](p)
+	}
 	s := p.shape
 	switch {
 	case s == nil:
@@ -321,6 +326,9 @@ type shapeTree struct {
 	// deep is the cache of the additions made at the sites that have given
 	// up their own (deepStore), made when one first is.
 	deep *deepAdds
+	// poly is the root of the layouts of the objects whose prototype is in
+	// their table (polyRoot), made when one first is.
+	poly *shape
 	// keyed is the object a keyed store -- o[k] = v -- is adding to, for
 	// the store's length (setIndexed): past fastPropertiesSoftLimit of
 	// them beyond its layout's room, the object is a dictionary
@@ -498,8 +506,12 @@ func (t *shapeTree) root(c Class) *shape {
 }
 
 // proto is o's prototype, its layout's: nil for an object with neither
-// properties nor a prototype, which has no layout.
+// properties nor a prototype, which has no layout. The first object made on
+// a prototype keeps it as its table's first value (objPolyProto).
 func (o *Object) proto() *Object {
+	if o.flags&objPolyProto != 0 {
+		return (*Object)(o.valp.ref)
+	}
 	if s := o.shape; s != nil {
 		return s.proto
 	}
@@ -581,6 +593,9 @@ func rootIn(tree *shapeTree, c Class, p *Object) *shape {
 // the objects o is the prototype of, as V8 gives a prototype a map of its
 // own (OptimizeAsPrototype).
 func (o *Object) ownLayout() *shape {
+	if o.flags&objPolyProto != 0 {
+		depoly[struct{}](o)
+	}
 	s := o.shape
 	switch {
 	case s == nil:
@@ -602,6 +617,7 @@ func (o *Object) ownLayout() *shape {
 func (o *Object) setProto(p *Object) {
 	s := o.shape
 	switch {
+	case (o.flags&objPolyProto != 0 || o.valn == 0) && polySetProto[struct{}](o, p):
 	case s == nil && p == nil || s != nil && s.proto == p:
 	case o.valn == 0 && (s == nil || !s.unique):
 		o.shape = rootFor(o.class, p)
@@ -658,7 +674,9 @@ func (t *shapeTree) ctorRoot(fd *funcData, proto *Object) *shape {
 	if s := fd.ctorShape(); s != nil && s.proto == proto {
 		return s
 	}
-	if t.building || t.count >= maxShapes {
+	if t.building || t.count >= maxShapes || freshCtor[struct{}](fd, proto) {
+		// None, and the object is made of its class's root, or, on a
+		// prototype no object has had, with it in its table (newOrdinary).
 		return nil
 	}
 	s := &shape{tree: t, proto: proto, rootClass: ctorRootClass}
@@ -1563,7 +1581,9 @@ func (r *Runtime) fillDeepStore(o *Object, before *shape, key Atom) {
 	const plain = propAccessor | propPrivate | propDeleted | propUninit
 	next := o.shape
 	if before.unique || next == nil || next == before || next.unique || next.loose || next.parent != before ||
-		next.key != key || next.flags&(plain|propWritable) != propWritable {
+		next.key != key || next.flags&(plain|propWritable) != propWritable || o.flags&objPolyProto != 0 {
+		// Or o's prototype is in its table: one no other object has had,
+		// which no entry would meet again (zzz_polyproto.go).
 		return
 	}
 	var e deepAdd
@@ -1649,6 +1669,10 @@ func (r *Runtime) fillPropCache(c *propCache, o *Object, key Atom, accessors boo
 				n.p2, n.s2 = up[1], remember(up[1].shape)
 			}
 			c.refill(n, jitBuilt && r.jitOn())
+			return
+		}
+		if depth == 0 && o.flags&objPolyProto != 0 {
+			// o's layout does not say its prototype (zzz_polyproto.go).
 			return
 		}
 		if depth == 2 || h.proto() == nil {
@@ -1912,6 +1936,9 @@ func (r *Runtime) ensureShape(o *Object) *shape {
 // as one with a null prototype used as a dictionary, would then pay for a new
 // layout at every key added to it.
 func (r *Runtime) ensureProtoShape(o *Object) *shape {
+	if o.flags&objPolyProto != 0 {
+		depoly[struct{}](o)
+	}
 	if s := o.shape; s != nil && s.loose && shapeClass(o.class) && !r.shapes.building {
 		keys := s.keys[:s.n]
 		if !s.unique {
@@ -1951,7 +1978,8 @@ func (r *Runtime) fillStoreCache(c *propCache, o *Object, before *shape, key Ato
 	}
 	next := o.shape
 	if before.unique || next == nil || next.unique || next.loose || next.parent != before || next.key != key ||
-		next.flags&(plain|propWritable) != propWritable {
+		next.flags&(plain|propWritable) != propWritable || o.flags&objPolyProto != 0 {
+		// Or o's layout does not say its prototype (zzz_polyproto.go).
 		return
 	}
 	var up [2]*Object

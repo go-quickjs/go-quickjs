@@ -55,7 +55,8 @@ func init() {
 		const plain = propAccessor | propPrivate | propDeleted | propUninit
 		next := o.shape
 		if c.shape == nil || before.unique || next == nil || next == before || next.unique || next.loose ||
-			next.parent != before || next.key != key || next.flags&(plain|propWritable) != propWritable {
+			next.parent != before || next.key != key || next.flags&(plain|propWritable) != propWritable ||
+			o.flags&objPolyProto != 0 {
 			// A cache of no site's, which the JIT fills to learn o's
 			// layout, or a write fillStoreCache refuses for its
 			// transition.

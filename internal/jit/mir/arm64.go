@@ -3,6 +3,7 @@ package mir
 import (
 	"fmt"
 	"math"
+	"math/bits"
 	"slices"
 	"unsafe"
 
@@ -2776,9 +2777,23 @@ func (c *a64Compiler) objectPart(dst, obj, t arm64.Reg, cls uint8, off int32, fa
 }
 
 // loadProto is amd64's: dst the prototype of the object in obj, which may
-// be dst, nil for one with no shape.
+// be dst, nil for one with no shape, or, for one that keeps it in its first
+// property (FlagPoly), that value's pointer word: the flag's bit isolated
+// in the encoder's temporary, which no caller keeps a value in, by two
+// shifts of its byte. As amd64's, it appends no cold path.
 func (c *a64Compiler) loadProto(dst, obj arm64.Reg) {
 	none := c.a.NewLabel()
+	if c.enc.FlagPoly != 0 {
+		shaped := c.a.NewLabel()
+		c.a.LoadU8(arm64.X27, obj, c.enc.ObjectFlags+1)
+		c.a.ShiftImm(arm64.Lsr, arm64.X27, arm64.X27, uint8(bits.TrailingZeros8(c.enc.FlagPoly)), false)
+		c.a.ShiftImm(arm64.Lsl, arm64.X27, arm64.X27, 31, false)
+		c.a.Cbz(arm64.X27, shaped, false)
+		c.a.Load(dst, obj, c.enc.ObjectProps)
+		c.a.Load(dst, dst, c.enc.RefOffset)
+		c.a.B(none)
+		c.a.Bind(shaped)
+	}
 	c.a.Load(dst, obj, c.enc.ObjectShape)
 	c.a.Cbz(dst, none, true)
 	c.a.Load(dst, dst, c.enc.ShapeProto)
