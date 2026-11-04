@@ -972,12 +972,15 @@ func (r *Runtime) inheritsFrom(v Value, target *Object) bool {
 	if !v.IsObject() {
 		return false
 	}
-	for p := v.Object().proto(); p != nil; p = p.proto() {
+	// One call of proto in the loop, not two, keeps this inlined.
+	for p := v.Object(); ; {
+		if p = p.proto(); p == nil {
+			return false
+		}
 		if p == target {
 			return true
 		}
 	}
-	return false
 }
 
 // initWrapPrototype defines %WrapForValidIteratorPrototype%, which forwards to

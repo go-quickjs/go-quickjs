@@ -67,6 +67,9 @@ var intendedInlining = []string{
 	// A property's value appended where a property is added (appendProp,
 	// appendTransition).
 	"(*Object).putVal",
+	// A WeakMap's key's entries, and an iterator's chain (Iterator.from).
+	"(*Object).weakMapRefsOf",
+	"(*Runtime).inheritsFrom",
 }
 
 // TestIntendedInlining builds the package with -gcflags=-m, plain and with

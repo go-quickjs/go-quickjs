@@ -423,6 +423,12 @@ func (o *Object) weakMapRefsOf() *weakMapRefs {
 	if o.valn == 0 {
 		return nil
 	}
+	return o.heldWeakMapRefs()
+}
+
+// heldWeakMapRefs is weakMapRefsOf of an object with properties, apart so
+// that weakMapRefsOf, which an object of none answers at once, is inlined.
+func (o *Object) heldWeakMapRefs() *weakMapRefs {
 	if p := o.getOwn(atomWeakMapRefs); p.ok() {
 		return &(*weakRefsHolder)(unsafe.Pointer(p.value().object())).refs
 	}
