@@ -495,6 +495,9 @@ func rootIn(tree *shapeTree, c Class, p *Object) *shape {
 	if p == nil {
 		return nil
 	}
+	if p.flags&objProtoMet == 0 && c == ClassObject {
+		return firstRoot[struct{}](c, p)
+	}
 	ps := p.ownLayout()
 	t := ps.tree
 	for q := p.proto(); t == nil && !ps.loose && q != nil; q = q.proto() {
@@ -761,8 +764,8 @@ func (s *shape) child(e shapeEdge) *shape {
 		}
 	}
 	if s.parent == nil && s.rootClass == ctorRootClass {
-		if k := keptCtorRoot[struct{}](s); k != s {
-			return redirectRoot[struct{}](s, k, e)
+		if c, ok := ctorChild[struct{}](s, e); ok {
+			return c
 		}
 	}
 	t := s.tree

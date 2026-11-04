@@ -180,6 +180,10 @@ const (
 	// in a frame. It sits on the scope chain like a `with` object, but it is
 	// not one a script can reach: a call through it has no receiver.
 	objEvalVars
+	// objProtoMet marks an object that has been the prototype of one made
+	// with it (rootIn, firstRoot): the objects made after that start from
+	// the roots kept on its own layout.
+	objProtoMet
 )
 
 // linearScanLimit is the property count below which lookup scans the keys

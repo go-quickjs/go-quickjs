@@ -22,10 +22,13 @@ import (
 // of its own, and every layout after it was of its own, which every cache
 // met anew.
 //
-// A constructor's root is counted as its first object is given a property,
-// and kept on the prototype's own layout (keptCtorRoot). A literal site's root is counted for good, as it was: its
-// prototype is the realm's Object.prototype, and the shapes grown from it
-// are counted against that one's budget.
+// The first ordinary object made on a prototype joins no tree: its layout
+// is its own (firstRoot), most prototypes made and dropped being of one
+// object each. A constructor's root is counted as its first object is given
+// a property, and kept on the prototype's own layout (keptCtorRoot). A
+// literal site's root is counted for good, as it was: its prototype is the
+// realm's Object.prototype, and the shapes grown from it are counted against
+// that one's budget.
 
 // protoRoots is what the own layout of an object that is another's prototype
 // keeps of the objects it is the prototype of: the roots they start from,
@@ -113,6 +116,7 @@ func chargeShape[_ any](t *shapeTree, p *Object) {
 	if p == nil {
 		return
 	}
+	p.flags |= objProtoMet
 	rs := &p.ownLayout().roots
 	if rs.budget == nil {
 		rs.budget = budgetSlotOf[struct{}](t)
@@ -138,6 +142,38 @@ func budgetSlotOf[_ any](t *shapeTree) *budgetSlot {
 	}
 	t.chunkUsed++
 	return &t.chunk[t.chunkUsed-1]
+}
+
+// firstRoot is rootIn's for the first ordinary object made with p as its
+// prototype, which marks p as met: a layout of the object's own (unique), in
+// no tree, which a cache may remember, changed in place as the object is
+// given properties until one does, as any layout of an object's own is. An
+// object used as the prototype of one object alone -- a scope's in a chain
+// of Object.create's, the __proto__ of an object literal, a fresh object
+// given to setPrototypeOf -- had had its layout made its own, a root and a
+// shape for each property its one object was given, three to five
+// allocations where main made none, and as many shapes counted until it was
+// collected; now its object makes one. It had been a loose template, which
+// the object copied as it was given its first property, two allocations, and
+// whose layout no cache could remember: a read of such an object, a
+// singleton made on a prototype of its own, was a dictionary's, a lookup in
+// its table each time, and code compiled for the read left native code at
+// it -- four to fifteen times main's time with the JIT, twice without.
+// While the realm is being made, each object's layout is its own too, and p
+// is not marked. An object of another class -- the first closure a runtime
+// makes on Function.prototype, an array -- starts from the prototype's root
+// from the first: rootIn asks firstRoot only for an ordinary object.
+//
+//go:noinline
+func firstRoot[_ any](_ Class, p *Object) *shape {
+	var t *shapeTree
+	if s := p.shape; s != nil {
+		t = s.tree
+	}
+	if t == nil || !t.building {
+		p.flags |= objProtoMet
+	}
+	return newUniqueShape(t, p, nil, nil)
 }
 
 // takeShape reports whether t has room for one more shape, of prototype p,
@@ -200,16 +236,21 @@ func keptCtorRoot[_ any](s *shape) *shape {
 	return s
 }
 
-// redirectRoot is child for s, a constructor's root that is not its
-// prototype's kept one, k: k's child for e, which s's objects take, as its
-// first transition, so that the next of them follow it as they would s's own.
-// Its parent is k: the layouts are alike, s's having no keys.
+// ctorChild is child for s, a constructor's root: where s is not its
+// prototype's kept one (keptCtorRoot), the kept one's child for e, which
+// s's objects take, as its first transition, so that the next of them
+// follow it as they would s's own, and true. Its parent is the kept root:
+// the layouts are alike, s's having no keys.
 //
 //go:noinline
-func redirectRoot[_ any](s, k *shape, e shapeEdge) *shape {
+func ctorChild[_ any](s *shape, e shapeEdge) (*shape, bool) {
+	k := keptCtorRoot[struct{}](s)
+	if k == s {
+		return nil, false
+	}
 	c := k.child(e)
 	if c != nil && s.next == nil {
 		s.next, s.nextEdge = c, e
 	}
-	return c
+	return c, true
 }

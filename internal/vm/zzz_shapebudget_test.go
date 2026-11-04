@@ -37,9 +37,10 @@ func liveShapes(r *Runtime) int {
 
 // Objects made on prototypes made and dropped, or alternating between
 // prototypes, leave the tree no bigger than they found it: a prototype's
-// shapes are given back to the budget once it is collected, and a
-// constructor meeting a prototype it has met before grows its objects from
-// the root it did then.
+// shapes are given back to the budget once it is collected, the first
+// ordinary object made on a prototype joins no tree, and a constructor
+// meeting a prototype it has met before grows its objects from the root it
+// did then.
 // With the prototype in the layout, every prototype had roots of its own,
 // which counted against the tree for good, and a constructor alternating
 // between two made a new root each time: each pattern below made two or
@@ -70,17 +71,17 @@ func TestShapeBudgetChurn(t *testing.T) {
 		name, body string
 		want       int
 	}{
-		{"Object.create", `var p = Object.create({x: i}); p.y = 1`, 71},
-		{"Object.create twice", `var q = {x: i}, p = Object.create(q), p2 = Object.create(q); p.y = 1; p2.y = 2`, 71},
-		{"__proto__ literal", `var o = {__proto__: {z: i}, w: 1}`, 40},
-		{"setPrototypeOf", `var o = Object.setPrototypeOf({}, {k: i}); o.v = 1`, 72},
-		{"scope chain", `var a = frame(scope, i); var b = frame(a, i)`, 97},
-		{"Reflect.construct alternating", `var o = Reflect.construct(F, [], i & 1 ? G : H)`, 20},
-		{"prototype reassigned", `R.prototype = i & 1 ? P1 : P2; var o = new R()`, 17},
-		{"Babel _createSuper", `var o = i & 1 ? Reflect.construct(A, [i], B) : new A(i)`, 20},
-		{"subclasses alternating", `var o = i & 1 ? new Sub1() : new Sub2()`, 19},
-		{"class factory", `var K = class { constructor() { this.q = i; this.t = 1 } }; var o = new K()`, 97},
-		{"subclass churn", `var D = class extends Base { constructor() { super(); this.d = i } }; var o = new D()`, 97},
+		{"Object.create", `var p = Object.create({x: i}); p.y = 1`, 14},
+		{"Object.create twice", `var q = {x: i}, p = Object.create(q), p2 = Object.create(q); p.y = 1; p2.y = 2`, 72},
+		{"__proto__ literal", `var o = {__proto__: {z: i}, w: 1}`, 15},
+		{"setPrototypeOf", `var o = Object.setPrototypeOf({}, {k: i}); o.v = 1`, 15},
+		{"scope chain", `var a = frame(scope, i); var b = frame(a, i)`, 15},
+		{"Reflect.construct alternating", `var o = Reflect.construct(F, [], i & 1 ? G : H)`, 19},
+		{"prototype reassigned", `R.prototype = i & 1 ? P1 : P2; var o = new R()`, 16},
+		{"Babel _createSuper", `var o = i & 1 ? Reflect.construct(A, [i], B) : new A(i)`, 19},
+		{"subclasses alternating", `var o = i & 1 ? new Sub1() : new Sub2()`, 18},
+		{"class factory", `var K = class { constructor() { this.q = i; this.t = 1 } }; var o = new K()`, 99},
+		{"subclass churn", `var D = class extends Base { constructor() { super(); this.d = i } }; var o = new D()`, 99},
 	}
 	for _, p := range patterns {
 		t.Run(p.name, func(t *testing.T) {
@@ -113,8 +114,8 @@ func TestShapeBudgetAfterChurn(t *testing.T) {
 		for (var i = 0; i < 65536; i++) { var q = {x: i}, p = Object.create(q), p2 = Object.create(q); p.y = 1; p.z = 2 }`)); err != nil {
 		t.Fatal(err)
 	}
-	if got := liveShapes(r); got != 50 {
-		t.Fatalf("after the churn the tree holds %d shapes, want 50", got)
+	if got := liveShapes(r); got != 18 {
+		t.Fatalf("after the churn the tree holds %d shapes, want 18", got)
 	}
 	v, err := r.Run(compileForTest(t, `
 		function Q(a) { this.a = a; this.b = a + 1 }
@@ -136,6 +137,75 @@ func TestShapeBudgetAfterChurn(t *testing.T) {
 		a, b := globalObject(r, pair[0]), globalObject(r, pair[1])
 		if a.shape != b.shape || a.shape.unique || a.shape.loose {
 			t.Errorf("%s and %s: shapes %p and %p, unique %v; want one shared layout", pair[0], pair[1], a.shape, b.shape, a.shape.unique)
+		}
+	}
+}
+
+// The first ordinary object made on a prototype has a layout of its own,
+// in no tree, which a cache may remember; the objects after it start from
+// the root the prototype's layout keeps. Objects of other classes start from
+// the prototype's root from the first.
+func TestShapeFirstObjectOfPrototype(t *testing.T) {
+	r := New(Config{})
+	defer r.Close()
+	if _, err := r.Run(compileForTest(t, `
+		var p = {m: 1}
+		var a = Object.create(p), b = Object.create(p)
+		var ap = []
+		var arr1 = Object.setPrototypeOf([], ap), arr2 = Object.setPrototypeOf([], ap)`)); err != nil {
+		t.Fatal(err)
+	}
+	a, b := globalObject(r, "a"), globalObject(r, "b")
+	if !a.shape.unique || a.shape.loose || a.shape.parent != nil || a.proto() != globalObject(r, "p") {
+		t.Errorf("first object: unique %v, loose %v; want a layout of its own of prototype p", a.shape.unique, a.shape.loose)
+	}
+	if b.shape.unique || b.shape.loose || b.shape.tree != r.shapes || b.proto() != globalObject(r, "p") {
+		t.Errorf("second object: unique %v, loose %v, tree %p; want the prototype's root", b.shape.unique, b.shape.loose, b.shape.tree)
+	}
+	if arr1, arr2 := globalObject(r, "arr1"), globalObject(r, "arr2"); arr1.shape != arr2.shape || arr1.shape.loose {
+		t.Errorf("arrays on a fresh prototype: shapes %p and %p, loose %v; want one root", arr1.shape, arr2.shape, arr1.shape.loose)
+	}
+	if _, err := r.Run(compileForTest(t, `
+		function set(o, v) { o.x = v; o.y = v }
+		set(a, 1); set(b, 2)`)); err != nil {
+		t.Fatal(err)
+	}
+	if !a.shape.unique || a.shape.loose || a.shape.n != 2 {
+		t.Errorf("first object given x and y: unique %v, loose %v, %d keys; want a layout of its own", a.shape.unique, a.shape.loose, a.shape.n)
+	}
+	if b.shape.unique || b.shape.loose || b.shape.parent == nil {
+		t.Errorf("second object given x and y: unique %v, loose %v; want a layout in the tree", b.shape.unique, b.shape.loose)
+	}
+}
+
+// A singleton made on a prototype of its own -- by Object.create, a
+// literal's __proto__, setPrototypeOf -- is read through a cache that
+// remembers its layout, as any object's: the first object made on a
+// prototype had had a loose layout, which no cache remembers, and each read
+// of it was a lookup in its table.
+func TestShapeSingletonOnOwnPrototype(t *testing.T) {
+	r := New(Config{})
+	defer r.Close()
+	v, err := r.Run(compileForTest(t, `
+		var c = Object.create({k: 1}); c.a = 1; c.b = 2
+		var l = {__proto__: {k: 2}, a: 1, b: 2}
+		var s = Object.setPrototypeOf({a: 1, b: 2}, {k: 3})
+		function readC(o) { return o.a + o.b + o.k }
+		function readL(o) { return o.a + o.b + o.k }
+		function readS(o) { return o.a + o.b + o.k }
+		var sum = 0
+		for (var i = 0; i < 100; i++) sum += readC(c) + readL(l) + readS(s)
+		String(sum)`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String().Go(); got != "1500" {
+		t.Fatalf("sum %s, want 1500", got)
+	}
+	for _, n := range []string{"c", "l", "s"} {
+		o := globalObject(r, n)
+		if o.shape.loose || !o.shape.seen {
+			t.Errorf("%s: loose %v, seen %v; want a layout a cache remembers", n, o.shape.loose, o.shape.seen)
 		}
 	}
 }

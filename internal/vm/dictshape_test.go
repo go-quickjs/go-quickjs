@@ -148,19 +148,22 @@ func TestShapeDictionarySites(t *testing.T) {
 // its prototype's layout does not have. Its first property added by a
 // define -- Object.defineProperty, Object.defineProperties and the
 // descriptors of Object.create, which the tifa shop's blog pages reach
-// through React's jsx-runtime -- had dereferenced that tree.
+// through React's jsx-runtime -- had dereferenced that tree. Each object
+// here is the second made on its prototype: the first has a layout of its
+// own (firstRoot).
 func TestShapeDictionaryPrototypeNoTree(t *testing.T) {
 	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		function dict() { var d = Object.create(null); for (var i = 0; i < 12; i++) d["k" + i] = i; return d }
-		var proto = dict()
+		function second(p) { Object.create(p); return p }
+		var proto = second(dict())
 		var one = Object.create(proto)
 		Object.defineProperty(one, "x", {value: 1, writable: true, enumerable: true, configurable: true})
-		var many = Object.create(dict())
+		var many = Object.create(second(dict()))
 		Object.defineProperties(many, {y: {value: 2, enumerable: true}, z: {value: 3}})
-		var made = Object.create(dict(), {w: {value: 4, enumerable: true}})
-		var stored = Object.create(dict())
+		var made = Object.create(second(dict()), {w: {value: 4, enumerable: true}})
+		var stored = Object.create(second(dict()))
 		stored.v = 5
 		function read(o) { return o.k3 }
 		var sum = 0
