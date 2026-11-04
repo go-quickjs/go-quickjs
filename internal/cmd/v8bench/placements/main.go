@@ -180,6 +180,9 @@ func design(n int) [4]int {
 	return [4]int{b0, b1, b2, b0 ^ b1 ^ b2}
 }
 
+// padSlots is the most functions a pad has: 2*31 and one.
+const padSlots = 64
+
 // padCounts is how many one-slot functions each pad needs for placement
 // n, given where the targets are with the pads empty. Each pad moves its
 // target and everything after it, and the targets come in this order, so
@@ -334,8 +337,8 @@ func padFile(p, m, tests int) []byte {
 	if p == 0 {
 		fmt.Fprintf(&b, "var padSink int\n\nvar padKeys = [%d]uint32{}\n\n", max(tests, 1))
 		b.WriteString("func init() {\n\tfor i := range padKeys {\n\t\tpadKeys[i] = ^uint32(i)\n\t}\n" +
-			"\tfor _, fs := range [][]func() int{padFuncs0, padFuncs1, padFuncs2, padFuncs3} {\n" +
-			"\t\tfor _, f := range fs {\n\t\t\tpadSink += f()\n\t\t}\n\t}\n}\n\n")
+			"\tfor _, fs := range [][]func() int{padFuncs0[:], padFuncs1[:], padFuncs2[:], padFuncs3[:]} {\n" +
+			"\t\tfor _, f := range fs {\n\t\t\tif f != nil {\n\t\t\t\tpadSink += f()\n\t\t\t}\n\t\t}\n\t}\n}\n\n")
 	}
 	names := make([]string, m)
 	for i := range m {
@@ -344,7 +347,13 @@ func padFile(p, m, tests int) []byte {
 		// global and computing from it fills a 32-byte slot on both CPUs.
 		fmt.Fprintf(&b, "//go:noinline\nfunc %s() int { return padSink*3 + %d }\n\n", names[i], i+1)
 	}
-	fmt.Fprintf(&b, "var padFuncs%d = []func() int{%s}\n", p, strings.Join(names, ", "))
+	// An array of padSlots whatever m is, so that the pads' data is the
+	// same size in every placement and in both labels' builds and only
+	// the code moves: a slice of m had moved the data after it by 8*m
+	// bytes, the Go runtime's hot variables (runtime.writeBarrier,
+	// gcController) among them, differently for each label, whose pads
+	// differ.
+	fmt.Fprintf(&b, "var padFuncs%d = [%d]func() int{%s}\n", p, padSlots, strings.Join(names, ", "))
 	return []byte(b.String())
 }
 
