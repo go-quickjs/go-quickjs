@@ -94,7 +94,9 @@ func init() {
 		}
 		set := (uint64(uintptr(key.ref))>>4 ^ uint64(uintptr(unsafe.Pointer(sh)))>>4) * hasCacheMul >> (64 - hasCacheBits + 1)
 		for i := set * 2; i < set*2+2; i++ {
-			if e := &c[i]; e.key == key.ref && e.shape == sh && e.proto == o.proto() && e.cell.valid {
+			// The layout says the prototype, but for an object that keeps
+			// it in its table (objPolyProto): only that one is compared.
+			if e := &c[i]; e.key == key.ref && e.shape == sh && e.cell.valid && (o.flags&objPolyProto == 0 && e.proto == sh.proto || o.flags&objPolyProto != 0 && e.proto == (*Object)(o.valp.ref)) {
 				if o.flags&objPolyProto != 0 {
 					// Asked again of a singleton made on a prototype of its
 					// own: its layout its own, holding the prototype, as a
