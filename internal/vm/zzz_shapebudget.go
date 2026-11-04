@@ -254,3 +254,40 @@ func ctorChild[_ any](s *shape, e shapeEdge) (*shape, bool) {
 	}
 	return c, true
 }
+
+// classProto gives ctor, a class constructor made a moment ago and so of a
+// shared layout of Function.prototype's, parent as its prototype (static
+// inheritance; linkClass). The first class made to extend parent is given a
+// layout of its own (setProto), and parent is marked as met; those made
+// after it take the layout reached from the root kept on parent's own layout
+// for functions by the keys ctor has, as V8's prototype transitions give a
+// map's objects one map for each new prototype: a subclass made by each call
+// of a mixin or a factory, which had had a layout of its own made for each,
+// a shape and a copy of its keys, shares one with the others.
+//
+//go:noinline
+func classProto[_ any](ctor, parent *Object) {
+	s := ctor.shape
+	if s == nil || s.unique || s.loose || s.tree == nil || s.tree.building || s.proto == parent ||
+		parent.flags&objProtoMet == 0 || !shapeClass(ctor.class) {
+		parent.flags |= objProtoMet
+		ctor.setProto(parent)
+		return
+	}
+	c := rootIn(nil, ctor.class, parent)
+	for i := int32(0); c != nil && !c.unique && !c.loose && c.tree != nil && i < s.n; i++ {
+		c = c.child(shapeEdge(s.keys[i]))
+	}
+	if c == nil || c.unique || c.loose || c.tree == nil || c.n != s.n {
+		ctor.setProto(parent)
+		return
+	}
+	s.protoChanged()
+	ctor.shape = c
+	if c.index == nil && int(ctor.valn) > linearScanLimit {
+		ctor.buildIndex()
+	}
+	if verifyShapes {
+		checkShape(ctor)
+	}
+}

@@ -71,17 +71,17 @@ func TestShapeBudgetChurn(t *testing.T) {
 		name, body string
 		want       int
 	}{
-		{"Object.create", `var p = Object.create({x: i}); p.y = 1`, 14},
+		{"Object.create", `var p = Object.create({x: i}); p.y = 1`, 16},
 		{"Object.create twice", `var q = {x: i}, p = Object.create(q), p2 = Object.create(q); p.y = 1; p2.y = 2`, 72},
-		{"__proto__ literal", `var o = {__proto__: {z: i}, w: 1}`, 15},
-		{"setPrototypeOf", `var o = Object.setPrototypeOf({}, {k: i}); o.v = 1`, 15},
-		{"scope chain", `var a = frame(scope, i); var b = frame(a, i)`, 15},
-		{"Reflect.construct alternating", `var o = Reflect.construct(F, [], i & 1 ? G : H)`, 19},
-		{"prototype reassigned", `R.prototype = i & 1 ? P1 : P2; var o = new R()`, 16},
-		{"Babel _createSuper", `var o = i & 1 ? Reflect.construct(A, [i], B) : new A(i)`, 19},
-		{"subclasses alternating", `var o = i & 1 ? new Sub1() : new Sub2()`, 18},
-		{"class factory", `var K = class { constructor() { this.q = i; this.t = 1 } }; var o = new K()`, 99},
-		{"subclass churn", `var D = class extends Base { constructor() { super(); this.d = i } }; var o = new D()`, 99},
+		{"__proto__ literal", `var o = {__proto__: {z: i}, w: 1}`, 17},
+		{"setPrototypeOf", `var o = Object.setPrototypeOf({}, {k: i}); o.v = 1`, 17},
+		{"scope chain", `var a = frame(scope, i); var b = frame(a, i)`, 17},
+		{"Reflect.construct alternating", `var o = Reflect.construct(F, [], i & 1 ? G : H)`, 21},
+		{"prototype reassigned", `R.prototype = i & 1 ? P1 : P2; var o = new R()`, 18},
+		{"Babel _createSuper", `var o = i & 1 ? Reflect.construct(A, [i], B) : new A(i)`, 21},
+		{"subclasses alternating", `var o = i & 1 ? new Sub1() : new Sub2()`, 20},
+		{"class factory", `var K = class { constructor() { this.q = i; this.t = 1 } }; var o = new K()`, 98},
+		{"subclass churn", `var D = class extends Base { constructor() { super(); this.d = i } }; var o = new D()`, 98},
 	}
 	for _, p := range patterns {
 		t.Run(p.name, func(t *testing.T) {
@@ -207,5 +207,38 @@ func TestShapeSingletonOnOwnPrototype(t *testing.T) {
 		if o.shape.loose || !o.shape.seen {
 			t.Errorf("%s: loose %v, seen %v; want a layout a cache remembers", n, o.shape.loose, o.shape.seen)
 		}
+	}
+}
+
+// Classes made to extend one base, as a mixin or a factory makes one for
+// each call, share a layout of the base's after the first, whose own it is:
+// each had had a layout of its own made as it was given its prototype.
+// Static inheritance reads through it as through any.
+func TestShapeSubclassesShareLayout(t *testing.T) {
+	r := New(Config{})
+	defer r.Close()
+	v, err := r.Run(compileForTest(t, `
+		class Base { static make() { return new this() } static get kind() { return "base" } }
+		Base.tag = 7
+		var B = Base, made = []
+		for (var i = 0; i < 4; i++) made.push(class extends Base { static extra() { return i } })
+		var d1 = made[1], d3 = made[3]
+		var first = made[0]
+		var sum = 0
+		for (var i = 0; i < 4; i++) sum += made[i].tag + (made[i].make() instanceof made[i] ? 1 : 0) + made[i].extra()
+		Base.tag = 1
+		;[sum, d3.tag, d3.kind, Object.getPrototypeOf(d3) === Base, d1.hasOwnProperty("tag")].join()`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := v.String().Go(), "38,1,base,true,false"; got != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
+	d1, d3, first := globalObject(r, "d1"), globalObject(r, "d3"), globalObject(r, "first")
+	if d1.shape != d3.shape || d1.shape.unique || d1.shape.loose || d1.proto() != globalObject(r, "B") {
+		t.Errorf("second and fourth subclass: shapes %p and %p, unique %v; want one layout of Base's", d1.shape, d3.shape, d1.shape.unique)
+	}
+	if !first.shape.unique || first.proto() != globalObject(r, "B") {
+		t.Errorf("first subclass: unique %v; want a layout of its own", first.shape.unique)
 	}
 }

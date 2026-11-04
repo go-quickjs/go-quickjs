@@ -4550,7 +4550,7 @@ func (r *Runtime) linkClass(ctorVal, parent Value) error {
 		}
 	}
 	// Static inheritance.
-	ctor.setProto(parentObj)
+	classProto[struct{}](ctor, parentObj)
 
 	fd.ctorKind = ctorDerived
 	fd.superCtor = ctor
