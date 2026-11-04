@@ -84,6 +84,13 @@ func (r *Runtime) JITReport() []JITFunction {
 		f.Native, f.Declined = e.starts+st.entries+e.link.in, e.slowCalls
 		f.Hosts, f.Guards, f.Ended = st.hosts, st.guards, st.ended
 		f.GoCalls, f.Work, f.Reopts = st.goCalls, st.work, int(e.reopts)
+		if oe := e.osr; oe != nil {
+			// Its code for on-stack replacement ran the function too.
+			st := &oe.ssaStats
+			f.Native += oe.starts + st.entries
+			f.Hosts, f.Guards, f.Ended = f.Hosts+st.hosts, f.Guards+st.guards, f.Ended+st.ended
+			f.GoCalls, f.Work, f.Reopts = f.GoCalls+st.goCalls, f.Work+st.work, f.Reopts+int(oe.reopts)
+		}
 		out = append(out, f)
 	}
 	for k, why := range s.skipped {

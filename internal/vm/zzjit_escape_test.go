@@ -288,8 +288,8 @@ const mergeSetup = `
 // where native code leaves while one is live, Go makes it: each answer is
 // the interpreter's, under every setting of the boundary's stress. A loop
 // that runs long in a frame Go cannot enter, its header's entry dropped
-// for the object it carries (ssa.Entry's OSR), has the code compiled again
-// with the entry, and goes on natively.
+// for the object it carries (ssa.Entry's OSR), has code compiled with the
+// entry, and goes on natively there.
 func TestJITEscapeMerges(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -313,9 +313,10 @@ func TestJITEscapeMerges(t *testing.T) {
 		}
 	}
 	// One long run, entered at its loop's header, where the code had no
-	// entry: learned, the run goes on natively.
+	// entry: learned, the run goes on natively, in code of its own
+	// (TestJITOSRCodeApart).
 	r = jitAgreesForTestWith(t, jitStressConfig{}, mergeSetup, `longLoop(3000000)`)
-	if e := jitCallbackEntry(r, "longLoop"); e == nil || e.ssa == nil || len(e.resumed) == 0 || e.ssaStats.entries == 0 {
+	if e := jitCallbackEntry(r, "longLoop"); e == nil || e.osr == nil || e.osr.ssa == nil || e.osr.ssaStats.entries == 0 {
 		t.Errorf("longLoop's loop was not learned: %+v", e)
 	}
 }
@@ -346,7 +347,7 @@ func TestJITEscapeMadeAnyway(t *testing.T) {
 	if e == nil || e.ssa == nil {
 		t.Fatalf("madeAnyway was not compiled: %+v", e)
 	}
-	if e.ssaVirtuals != 0 || len(e.ssaUnresumed) != 0 {
-		t.Errorf("%d objects unmade, entries dropped at %v", e.ssaVirtuals, e.ssaUnresumed)
+	if e.ssaVirtuals != 0 || len(e.ssaUnresumed) != 0 || len(e.ssaUnentered) != 0 {
+		t.Errorf("%d objects unmade, entries dropped at %v and %v", e.ssaVirtuals, e.ssaUnresumed, e.ssaUnentered)
 	}
 }

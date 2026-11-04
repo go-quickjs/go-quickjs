@@ -374,12 +374,16 @@ A phi merging it with the slot an entry loads, at an entry there only for
 Go to go on at after an instruction it ran (`ssa.Entry`'s `Resume`), or a
 loop's header's Go has never needed (`OSR`), is the object: the entry is
 dropped, Go going on in the interpreter there instead -- for a loop, until
-two checks of one frame in a row find no entry there, when the code is
-compiled again with it (the VM's `jitLearnLoopEntry`), as V8 compiles code
-for OSR. V8 keeps that code apart; here a function has one code, so from
-then on the loop's objects are made every turn, on every call, as if the
-object had escaped. An entry stays dropped only for an object left unmade
-in the end (`syncEntries`). Where the code
+two checks of one frame in a row find no entry there, when code is compiled
+with it for that frame (the VM's `jitLearnLoopEntry`), kept apart from the
+function's, as V8 keeps code for OSR. Native callers go on calling the
+function's code and later invocations entering it, its objects unmade: one
+long first run costs them nothing. That code is a `jitEntry` of its own, its
+function's `osr`, sharing what the function learned (`jitLearned`), with a
+link no native code calls through; it is a function's code in every other
+way, entered only at a loop's back edge. It goes when the function's code
+is compiled again or dropped (`zzjit_osr.go`). An entry stays dropped only
+for an object left unmade in the end (`syncEntries`). Where the code
 exits, as V8's deoptimization data names a materialized object, the frame
 state names it by a word no value has (`abi.VirtualBase`), with the first
 slot of its home past the frame's slots, where the state holds its shape

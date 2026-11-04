@@ -630,23 +630,13 @@ type jitEntry struct {
 	// native stretch did is estimated with (jitSSAProfit).
 	ssaStats jitSSAStats
 	ssaLoop  uint32
-	// failed and failedEntries are the sites, by slot IR PC, and the
-	// entries, by PC, whose speculation failed in the code; reopt marks
-	// code to be compiled again, with them generic, at its next entry, and
-	// reopts counts the times it was (jitDeoptimized).
-	failed        []int32
-	failedEntries []uint32
-	// loopPC and loopLen are the loop loopAt last measured.
+	// loopPC and loopLen are the loop loopAt last measured; reopt marks
+	// code to be compiled again, with what failed in it generic (jitLearned's
+	// failed), at its next entry, and reopts counts the times it was
+	// (jitDeoptimized).
 	loopPC, loopLen int32
 	reopt           bool
 	reopts          uint8
-	// bigints are the sites, by slot IR PC, of arithmetic and comparisons
-	// whose guard failed at BigInts in the int64 range: the code compiled
-	// again makes them on those natively (jitBigIntSeen), until that
-	// speculation fails, and the site is generic (failed). bigwide are
-	// those of them whose guard failed at BigInts from 0 to 2^64-1, some
-	// past the int64 range: made natively as those (ssa's BigIntWide).
-	bigints, bigwide []int32
 	// ssaInlinedAt are the calls the code inlines, by pc: a call decided
 	// for inlining since leaves from code compiled before, which is not
 	// the callee's leaving (jitCallSeen).
@@ -656,18 +646,27 @@ type jitEntry struct {
 	// been seen to make is one seldom made (jitInlineExit).
 	ssaHostsLeft []int32
 	// ssaUnresumed are the PCs after the calls the code makes or inlines
-	// that it has no entry after (ssa.Func's Unresumed), and the loops'
-	// headers whose entries escape analysis dropped (ssa.Entry's OSR);
-	// resumed those of them Go has gone on at (jitGoOn, jitLearnLoopEntry),
-	// which the next compile has entries at (ssa.ResumeFeedback), and
-	// resumeReopt marks code to be compiled again for one. osrMiss and
-	// osrMissPC are the frame, by its address, and the header a loop's
-	// check last found no entry at (jitLearnLoopEntry).
+	// that it has no entry after (ssa.Func's Unresumed), and resumeReopt
+	// marks code to be compiled again with an entry at one Go has gone on
+	// at (jitGoOn; jitLearned's resumed). ssaUnentered are the loops'
+	// headers whose entries escape analysis dropped (ssa.Func's Unentered),
+	// and osrMiss and osrMissPC the frame, by its address, and the header
+	// a loop's check last found no entry at (jitLearnLoopEntry).
 	ssaUnresumed []int32
-	resumed      []uint32
+	ssaUnentered []int32
 	resumeReopt  bool
 	osrMiss      uintptr
 	osrMissPC    uint32
+	// osr is the code a frame in a loop this code has no entry at goes on
+	// in, kept apart from this (zzjit_osr.go); osrOf, in that entry, is the
+	// function's, and osrLoops the headers its code is compiled for, which
+	// osrDue says it has yet to be. osrSpent marks one to go once no run is
+	// in it, its function's code having been compiled again.
+	osr      *jitEntry
+	osrOf    *jitEntry
+	osrLoops []uint32
+	osrDue   bool
+	osrSpent bool
 	// holds says a compile seeding its calls may be held for its callees'
 	// (jitAwaits), and awaited are those it waits for, or held for now.
 	holds   bool
@@ -709,63 +708,22 @@ type jitEntry struct {
 	// before Go entered its code at one of them (jitTierWork), which its
 	// budget for what it learned counts as an invocation's (jitLearnedSpent).
 	osrWork int64
-	// literals are the object literals the code makes natively, each with
-	// its pool, kept across compiles (jitFeedback.Literal); definesUnfed
-	// the literals' fields compiled before their transitions were made,
-	// which the code leaves at (jitDefineSeen).
-	literals []jitLiteral
-	// regexpLitCalls says, of each call of Go the code has made that
-	// jitRegExpLitPool has asked about, the pc of the RegExp literal it
-	// calls exec or test of, or -1.
-	regexpLitCalls map[int32]int32
-	definesUnfed   []int32
-	// cellsPool is the pool the code takes its captured locals' cells
-	// from at its entries, kept across compiles (jitFeedback.CellsPool).
-	cellsPool *abi.ObjectPool
+	// jitLearned is what the function's code has learned, which outlives
+	// its compiles, and which its code for on-stack replacement shares.
+	*jitLearned
+	// definesUnfed are the literals' fields compiled before their
+	// transitions were made, which the code leaves at (jitDefineSeen).
+	definesUnfed []int32
 	// ssaCells are the cells the code reads string constants from
 	// (jitFeedback.StringCell).
 	ssaCells []*Value
-	// poly are the property sites' cases and accessors the code met that
-	// their caches cannot hold, and whether each is megamorphic, which it
-	// is compiled again for (jitDeoptSeen, jitPolySeen); polyReopt marks
-	// that it is to be, and polyReopts counts the times it was.
-	poly []jitPolySite
-	// typedReads are the element reads, by PC, whose result no native
-	// operation takes as a number, whose receivers have been typed arrays
-	// (ssa.ElementFeedback), stringReads those whose receivers have been
-	// strings (ssa.StringElementFeedback), and keyedReads those Go makes,
-	// whose receivers have been objects read by a name (ssa.KeyedFeedback);
-	// keyedWrites are the element writes Go makes, whose receivers have
-	// been objects native code does not store to (ssa.KeyedWriteFeedback).
-	typedReads  []int32
-	stringReads []int32
-	keyedReads  []int32
-	keyedWrites []int32
-	// genSteps are the loops' steps that have met generators the code may
-	// resume natively (ssa.GenStepFeedback), with the generators' closures,
-	// which keep alive what the code compares their closures with; and
-	// genLearned marks one learned since the code was compiled
-	// (jitGenStepSeen).
-	genSteps   []jitGenStep
+	// genLearned marks a generator's step learned since the code was
+	// compiled (jitGenStepSeen).
 	genLearned bool
-	// genResults are the pools of the calls of next the code makes
-	// natively (jitGenResultPool); genMakes the calls of generator
-	// functions whose generators it makes natively (jitGenMakeSeen).
-	genResults []jitGenResult
-	genMakes   []jitGenMake
+	// polyReopt marks code to be compiled again for its property sites
+	// (jitLearned's poly), and polyReopts counts the times it was.
 	polyReopt  bool
 	polyReopts uint8
-	// strSites are the method reads that met a string receiver, which the
-	// code reads off String.prototype once compiled again
-	// (jitFeedback.StringProperty).
-	strSites []uint32
-	// bigSites are those that met a BigInt receiver, which the code reads
-	// off BigInt.prototype (jitFeedback's StringProperty); numSites and
-	// boolSites those that met a number or a boolean, off Number.prototype
-	// or Boolean.prototype, which had the method (jitPrimitiveSeen).
-	bigSites  []uint32
-	numSites  []uint32
-	boolSites []uint32
 	// link is where native callers call the function's code (jitLink):
 	// its entry, and the count of their calls since the code was last
 	// compiled (in). nativeOut counts those that left native code
@@ -825,15 +783,6 @@ type jitEntry struct {
 	// from that callee in that run finds it pinned without a search.
 	pinCode   *jit.SSACode
 	pinSerial uint64
-	// nativeCalls are the calls the code makes natively, or will when
-	// compiled again, each with the function it was seen to call.
-	nativeCalls []jitInline
-	// inlines are the calls the code inlines, or will when compiled again,
-	// each with the function it was seen to call (jitCallSeen); notInline
-	// are those that stopped being: what the callee does kept leaving
-	// native code.
-	inlines   []jitInline
-	notInline []int32
 	// ssaTargets are the targets of the calls the code makes natively or
 	// inlines, by pc, as nativeCalls and inlines had them when it was
 	// compiled: a target learned since, at a call's exit, the code meets at
@@ -844,19 +793,10 @@ type jitEntry struct {
 	// up to jitNativeCallers: when this code is compiled again to inline
 	// more, they are too, to inline it with its calls (jitInlineNativeCalls).
 	nativeCallers []*jitEntry
-	// callSites is what jitCallSeen knows of each call, by PC: how often it has
-	// left native code, up to jitCallsToInline, then jitCallDone or
-	// jitCallInlined; nil until a call does. inlinePending marks calls
-	// found to inline since the code was compiled, which it is compiled
-	// again for once the calls around them have been seen.
-	callSites     []uint8
+	// inlinePending marks calls found to inline since the code was
+	// compiled (jitLearned's callSites), which it is compiled again for
+	// once the calls around them have been seen.
 	inlinePending bool
-	// settling are the functions each call met at its exits before it was
-	// decided (callSites' count), by PC, one of each code: as V8's call
-	// feedback holds every target a call met before its function is
-	// optimized, one that met more than one function is polymorphic, made
-	// natively to each, not inlined for the one it met last (jitCallSeen).
-	settling []jitInline
 	// inlineReopt marks code to be compiled again for the calls found to
 	// inline, and inlineReopts counts the times it was, apart from reopts.
 	inlineReopt  bool
@@ -921,12 +861,6 @@ type jitEntry struct {
 	// frequency is not made of (jitCalledOften). Its code keeps it
 	// (jitCompileFor). See invocations.
 	invoked int64
-	// calls are what the existing tiers counted of the function's calls,
-	// and of its invocations, since it was first given an entry
-	// (jitCallCounts): its code, and the entries made for it after this
-	// one, keep them (jitCompileFor, jitGhost); nil until it is invoked
-	// with this entry.
-	calls *jitCallCounts
 	// slowSince is slowCalls when Go last stopped entering the code, and
 	// slowBackoff how many times it has: Go enters it again after
 	// jitNativeRetry<<slowBackoff calls, judging it afresh (jitRetrySlow).
@@ -951,7 +885,13 @@ type jitEntry struct {
 // tiers' calls that do not enter it. Compiling it again counts some of it
 // afresh: it changes all the same.
 func (e *jitEntry) uses() uint64 {
-	return e.starts + e.ssaStats.entries + e.link.in + e.slowCalls
+	n := e.starts + e.ssaStats.entries + e.link.in + e.slowCalls
+	if e.osr != nil {
+		// A frame's run of its code for on-stack replacement uses the
+		// function: a long one had it flushed under the frame.
+		n += e.osr.ssaStats.entries
+	}
+	return n
 }
 
 // invocations is about how many times the function has been invoked: in
@@ -1199,11 +1139,12 @@ type jitState struct {
 	heldJobs []*jitJob
 	bgHeld   uint64
 	// goOn is the frame the interpreter runs for jitGoOn, until a loop's
-	// header Go goes on natively at, goOnPC with goOnDepth operands;
-	// wentOn counts the times it did. forcedCheck marks the back-edge
-	// check jitGoOn made due at once, which is no budget the existing
-	// tiers spent (tryJITAt).
+	// header Go goes on natively at, goOnPC with goOnDepth operands, in
+	// goOnEntry's code, whose run it left; wentOn counts the times it did.
+	// forcedCheck marks the back-edge check jitGoOn made due at once, which
+	// is no budget the existing tiers spent (tryJITAt).
 	goOn              *frame
+	goOnEntry         *jitEntry
 	goOnPC, goOnDepth int
 	// goOnTree is the frame the interpreter runs only to its next loop
 	// header, where its tree goes on with it, at goOnPC with goOnDepth
@@ -1222,6 +1163,9 @@ type jitState struct {
 	// slowResumes counts the looks at code judged slow that resumptions
 	// made, each for the next jitSSAProbe too (jitResume).
 	slowResumes uint64
+	// osrLearned counts the loops' entries compiled apart from their
+	// functions' code (jitLearnLoopEntry).
+	osrLearned uint64
 	// treeGoneOn counts the invocations a tree went on with so.
 	treeGoneOn  uint64
 	wentOn      uint64
@@ -1398,6 +1342,9 @@ func (r *Runtime) jitCodeBytes() int64 {
 	if r.jit != nil {
 		for _, e := range r.jit.cache {
 			n += int64(e.ssa.Size())
+			if e.osr != nil {
+				n += int64(e.osr.ssa.Size())
+			}
 		}
 	}
 	return n
@@ -1421,7 +1368,7 @@ const jitMapSlot = 64
 // holds: an entry with its hint slot (jitEntryFixed), a link, a lowering,
 // an object pool, a context.
 var (
-	jitEntryFixed    = int(unsafe.Sizeof(jitEntry{})) + int(unsafe.Sizeof(jitHintSlot{})) + 2*jitMapSlot
+	jitEntryFixed    = int(unsafe.Sizeof(jitEntry{})) + int(unsafe.Sizeof(jitLearned{})) + int(unsafe.Sizeof(jitHintSlot{})) + 2*jitMapSlot
 	jitLinkFixed     = int(unsafe.Sizeof(jitLink{})) + jitMapSlot
 	jitLoweringFixed = int(unsafe.Sizeof(jitLowering{})) + jitMapSlot
 	jitPoolFixed     = int(unsafe.Sizeof(abi.ObjectPool{})) + int(unsafe.Sizeof(jitPoolSource{}))
@@ -1444,19 +1391,19 @@ func jitCapBytes[T any](s []T) int {
 // its function's lowering, which the runtime's lowerings hold (jitLower),
 // nor its link (sharedBytes).
 func (e *jitEntry) measure() int {
-	return jitEntryFixed + e.ssa.Footprint() + e.compiledBytes() + e.learnedBytes()
+	return jitEntryFixed + e.ssa.Footprint() + e.compiledBytes() + e.learnedBytes() + e.osrBytes()
 }
 
 // compiledBytes is what e holds that its code was compiled with: the
 // slices a compile gives it (setSSA), which jitCompiledBytes measures.
 func (e *jitEntry) compiledBytes() int {
-	return jitCompiledBytes(e.ssaShapes, e.ssaHolders, e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaInlined, e.ssaPools, e.ssaLinks) + jitCapBytes(e.ssaHostsLeft) + jitCapBytes(e.ssaUnresumed) + jitCapBytes(e.ssaInlinedLearned)
+	return jitCompiledBytes(e.ssaShapes, e.ssaHolders, e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaInlined, e.ssaPools, e.ssaLinks) + jitCapBytes(e.ssaHostsLeft) + jitCapBytes(e.ssaUnresumed) + jitCapBytes(e.ssaUnentered) + jitCapBytes(e.ssaInlinedLearned)
 }
 
 // compiledBytes is what fb's code would have its entry hold, in place of
 // what the entry's code was compiled with (jitEntry.compiledBytes).
 func (fb *jitFeedback) compiledBytes() int {
-	return jitCompiledBytes(fb.shapes, fb.holders, fb.inlinedAt, fb.definesUnfed, fb.cells, fb.inlined, fb.pools, fb.links) + jitCapBytes(fb.hostsLeft) + jitCapBytes(fb.unresumed)
+	return jitCompiledBytes(fb.shapes, fb.holders, fb.inlinedAt, fb.definesUnfed, fb.cells, fb.inlined, fb.pools, fb.links) + jitCapBytes(fb.hostsLeft) + jitCapBytes(fb.unresumed) + jitCapBytes(fb.unentered)
 }
 
 func jitCompiledBytes(shapes []*shape, holders []*Object, inlinedAt, definesUnfed []int32,
@@ -1547,6 +1494,10 @@ func (s *jitState) sharedBytes() int {
 
 // account counts what e holds now, if the cache holds it.
 func (s *jitState) account(e *jitEntry) {
+	if e.osrOf != nil {
+		// Counted in its function's entry's (osrBytes).
+		e = e.osrOf
+	}
 	if e.hint == 0 {
 		return
 	}
@@ -1567,6 +1518,9 @@ func (e *jitEntry) owned() bool {
 // dropEntry closes e's code and removes it from the cache, reporting false if
 // the OS would not release the code, which leaves e owned for a retry.
 func (s *jitState) dropEntry(key jitKey, e *jitEntry) bool {
+	if e.osr != nil && !s.dropOSR(e) {
+		return false
+	}
 	held := e.ssa.Size() != 0
 	e.link.clearCode()
 	if s.closeSSA(e.ssa, e) != nil {
@@ -1595,7 +1549,7 @@ func (s *jitState) dropEntry(key jitKey, e *jitEntry) bool {
 // frame is in: the run would find its code gone, and the call return into
 // code that is not there.
 func (s *jitState) inUse(e *jitEntry) bool {
-	return e.ssaRuns != 0 || s.called(e)
+	return e.ssaRuns != 0 || s.called(e) || e.osrInUse()
 }
 
 // called reports whether a native call of e's code has not returned: a
@@ -2534,7 +2488,7 @@ func (r *Runtime) jitCompileForIn(fn *bytecode.Function, cl *closure, kind jitLo
 		return nil
 	}
 	s.serial++
-	e := &jitEntry{used: s.epoch(), serial: s.serial, hot: kind == jitLowerHot, invoked: invoked, calls: calls}
+	e := &jitEntry{jitLearned: &jitLearned{calls: calls}, used: s.epoch(), serial: s.serial, hot: kind == jitLowerHot, invoked: invoked}
 	g, ok := s.ghosts[uintptr(unsafe.Pointer(fn))]
 	if e.calls == nil {
 		// The calls the existing tiers counted for its entry warming, or
@@ -2849,8 +2803,11 @@ func (r *Runtime) tryJITLoop(f *frame, pc uint32, sp int, fullBudget bool) (Valu
 	f.cl.jitCalls = r.jitFeedbackCalls()
 	if s := r.jit; s != nil && s.goOn == f {
 		// The frame whose native code Go goes on in, at an entry it has:
-		// in that run, not a run of its own (jitGoOn).
-		if e := s.hint(f.cl); e != nil && e.ssa != nil && !e.entrySlow && !e.invalid && e.ssa.HasEntry(int(pc)) {
+		// in that run, not a run of its own (jitGoOn) -- which is the run's
+		// entry, not the function's: its code for on-stack replacement may
+		// have an entry the function's does not. Unless the cache dropped
+		// it meanwhile: its code is closed.
+		if e := s.goOnEntry; e != nil && e.owned() && e.ssa != nil && !e.entrySlow && !e.invalid && e.ssa.HasEntry(int(pc)) {
 			s.goOnPC, s.goOnDepth = int(pc), sp-f.base
 			return Undefined, errGoOnNatively, true
 		}
@@ -2862,26 +2819,40 @@ func (r *Runtime) tryJITLoop(f *frame, pc uint32, sp int, fullBudget bool) (Valu
 }
 
 // jitLearnLoopEntry learns the loop's header at pc, whose entry escape
-// analysis dropped (ssa.Entry's OSR), where a frame needs it: one running
-// the loop on in the interpreter, two checks in a row each after a full
-// budget of back edges finding it there with no entry -- not a short
+// analysis dropped (ssa.Func's Unentered), where a frame needs it: one
+// running the loop on in the interpreter, two checks in a row each after a
+// full budget of back edges finding it there with no entry -- not a short
 // loop's frame Go went on in after an exit (jitGoOn), which the
-// interpreter finishes, as a deoptimized invocation is. The code is
-// compiled again with the entry, as V8 compiles code to enter a loop by
-// on-stack replacement where a frame needs it.
-func (r *Runtime) jitLearnLoopEntry(f *frame, e *jitEntry, pc int) {
-	if e.invalid || !slices.Contains(e.ssaUnresumed, int32(pc)) || slices.Contains(e.resumed, uint32(pc)) {
-		return
+// interpreter finishes, as a deoptimized invocation is. Code is compiled
+// with the entry, apart from e's (zzjit_osr.go), as V8 compiles code to
+// enter a loop by on-stack replacement where a frame needs it; and it
+// returns the entry whose code the frame is to go on in, which is e if
+// there is none yet.
+func (r *Runtime) jitLearnLoopEntry(f *frame, e *jitEntry, pc int) *jitEntry {
+	if e.invalid || !slices.Contains(e.ssaUnentered, int32(pc)) {
+		return e
 	}
 	if at := uintptr(unsafe.Pointer(f)); e.osrMiss != at || e.osrMissPC != uint32(pc) {
 		e.osrMiss, e.osrMissPC = at, uint32(pc)
-		return
+		return e
 	}
 	e.osrMiss = 0
-	e.resumed = append(e.resumed, uint32(pc))
-	e.resumeReopt = true
+	oe := r.jit.osrEntry(e)
+	switch {
+	case !slices.Contains(oe.osrLoops, uint32(pc)):
+		oe.osrLoops = append(oe.osrLoops, uint32(pc))
+		oe.osrDue = true
+		r.jit.osrLearned++
+	case !oe.osrDue && oe.reoptRoom == 0:
+		// Compiled for the loop, which has no entry there all the same.
+		return e
+	}
 	r.jit.account(e)
-	r.jitReoptimize(f.cl, e)
+	r.jitReoptimize(f.cl, oe)
+	if oe.ssa != nil && oe.ssa.HasEntry(pc) {
+		return oe
+	}
+	return e
 }
 
 // tryJITAt enters f's code at pc, with depth operands, compiling it if it
@@ -2940,6 +2911,13 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, err
 		return Undefined, nil, false
 	}
 	if e != nil && e.ssa != nil {
+		if osr && !e.ssa.HasEntry(pc) {
+			// A loop the function's code has no entry at: the code kept
+			// for frames there, if it has one. All below is that code's.
+			if oe := e.osr; oe != nil && oe.ssa != nil && oe.ssa.HasEntry(pc) {
+				e = oe
+			}
+		}
 		if e.notNative {
 			jitRetryNative(e)
 		}
@@ -2987,7 +2965,7 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, err
 			return Undefined, nil, false
 		}
 		if osr && spent && !e.ssa.HasEntry(pc) {
-			r.jitLearnLoopEntry(f, e, pc)
+			e = r.jitLearnLoopEntry(f, e, pc)
 		}
 		// A run begun at a loop is judged as such (jitSSAProfit's osr,
 		// jitRunGoProfit).
@@ -3083,7 +3061,7 @@ func (r *Runtime) jitWarmFor(cl *closure) *jitEntry {
 		return nil
 	}
 	s.serial++
-	e := &jitEntry{used: s.epoch(), serial: s.serial, warming: true, invoked: calls}
+	e := &jitEntry{jitLearned: &jitLearned{}, used: s.epoch(), serial: s.serial, warming: true, invoked: calls}
 	// Its calls counted while it warms, from what they counted for an
 	// entry the cache dropped, if any (jitGhost).
 	g, ok := s.ghosts[uintptr(unsafe.Pointer(fn))]
@@ -4445,6 +4423,9 @@ func (r *Runtime) jitDeoptBlocks(f *frame) bool {
 		return false
 	}
 	e := r.jit.hint(f.cl)
+	if e != nil && r.jitDeoptCode != nil && e.osr != nil && e.osr.ssa == r.jitDeoptCode {
+		e = e.osr
+	}
 	return e == nil || e.ssa == nil || r.jitDeoptCode != nil && e.ssa == r.jitDeoptCode && !e.invalid
 }
 

@@ -619,7 +619,7 @@ func (r *Runtime) jitDeoptSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.In
 	}
 	if e == nil {
 		// Nothing to note in: the cache learns what it can.
-		e = &jitEntry{}
+		e = &jitEntry{jitLearned: &jitLearned{}}
 	}
 	key := f.cl.names[in.A]
 	write := in.Op == bytecode.OpSetProp
@@ -2075,7 +2075,10 @@ func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
 	// method calling one with a loop that calls a closure its callers give
 	// it (ssa.InlineCallsGiven).
 	learned := e.inlineReopt
+	// Told first: its compile is the last word of what it learned.
+	e.osrTell()
 	e.reopt, e.inlineReopt, e.polyReopt, e.upgradeReopt, e.unwindReopt, e.resumeReopt = false, false, false, false, false, false
+	e.osrDue = false
 	if e.reoptRoom > 0 && !r.jit.roomFor(e, nil, e.bytes+e.reoptRoom) {
 		// Its last compile was refused the room its code needed, the
 		// budget full of code too young to drop: not compiled again until
@@ -2130,6 +2133,8 @@ func (r *Runtime) jitReoptimized(j *jitJob) bool {
 	e := j.e
 	if !e.owned() || e.deopts != j.deopts {
 		r.jit.bgDiscarded++
+		// Its loops are still to compile for (jitLearnLoopEntry).
+		e.osrDue = e.osrOf != nil
 		return true
 	}
 	if r.jit.otherwiseInUse(e) {
@@ -2172,8 +2177,16 @@ func (r *Runtime) jitReplaceCode(cl *closure, e *jitEntry, code *jit.SSACode, fb
 	// clear the loops' word, as the new code has them.
 	e.lexThis, e.loops = fb.lexThis, fb.loops
 	e.setLoopSlots(fn, fb.loopSlots)
-	e.ssaSerial++
+	if m := e.osrOf; m != nil {
+		// A site's shape missed by this code or by the function's is not
+		// one the code compiled again since cannot use (jitDeoptSeen): the
+		// function's goes by on the same feedback, unaware of the other's.
+		e.ssaSerial = m.ssaSerial
+	} else {
+		e.ssaSerial++
+	}
 	e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaHostsLeft, e.ssaUnresumed = fb.inlinedAt, fb.definesUnfed, fb.cells, fb.hostsLeft, fb.unresumed
+	e.ssaUnentered = fb.unentered
 	e.ssaTargets = fb.targets
 	e.ssaStrings, e.ssaInlined, e.ssaPools, e.ssaMade = e.ssaStrings || fb.strings, fb.inlined, fb.pools, fb.made
 	e.ssaInlinedLearned = r.jit.jitInlinedLearned(fb.inlined, e.ssaInlinedLearned[:0])
@@ -2196,6 +2209,7 @@ func (r *Runtime) jitReplaceCode(cl *closure, e *jitEntry, code *jit.SSACode, fb
 	r.jit.callRefs = max(r.jit.callRefs, uint64(code.CallRefs()))
 	r.jit.closeSSA(old, oldKeep)
 	r.jit.reoptimized++
+	r.jit.osrReplaced(e)
 	// Compiled for what it does now: young again.
 	e.used = r.jit.epoch()
 	r.jit.account(e)
@@ -2543,12 +2557,15 @@ func (r *Runtime) jitInstall(j *jitJob) (*jit.SSACode, *jitFeedback, error) {
 	}
 	// The cells the backend gave the kept values (mir's keep cells).
 	fb.keeps = f.Keeps
-	fb.hostsLeft, fb.unresumed = nil, nil
+	fb.hostsLeft, fb.unresumed, fb.unentered = nil, nil, nil
 	for _, pc := range f.HostsLeft {
 		fb.hostsLeft = append(fb.hostsLeft, int32(pc))
 	}
 	for _, pc := range f.Unresumed {
 		fb.unresumed = append(fb.unresumed, int32(pc))
+	}
+	for _, pc := range f.Unentered {
+		fb.unentered = append(fb.unentered, int32(pc))
 	}
 	s.ssaKeeps = max(s.ssaKeeps, f.Keeps)
 	need := jitEntryFixed + jit.CodeFootprint(mc) + fb.compiledBytes()
@@ -2735,6 +2752,9 @@ type jitFeedback struct {
 	// and unresumed the PCs after its calls it has no entry after (ssa.Func's
 	// Unresumed).
 	inlinedAt, hostsLeft, unresumed []int32
+	// unentered are the loops' headers whose entries escape analysis
+	// dropped (ssa.Func's Unentered).
+	unentered []int32
 	// root is the function's feedback for an inlined callee's, which keeps
 	// what the callee's sites hold for the code; nil for the function's
 	// own. strings marks an inlined callee that calls charCodeAt. links
@@ -10019,6 +10039,7 @@ func (e *jitEntry) setSSA(s *jitState, fn *bytecode.Function, p *ir.Program, cod
 	e.ssaSerial++
 	e.ssaProg = p
 	e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaHostsLeft, e.ssaUnresumed = fb.inlinedAt, fb.definesUnfed, fb.cells, fb.hostsLeft, fb.unresumed
+	e.ssaUnentered = fb.unentered
 	e.ssaTargets = fb.targets
 	e.ssaStrings, e.ssaInlined, e.ssaPools, e.ssaMade = fb.strings, fb.inlined, fb.pools, fb.made
 	e.ssaInlinedLearned = s.jitInlinedLearned(fb.inlined, e.ssaInlinedLearned[:0])
@@ -10548,7 +10569,7 @@ func (fb *jitFeedback) Resumed(pc int) bool {
 	if e == nil {
 		return false
 	}
-	if slices.Contains(e.resumed, uint32(pc)) {
+	if slices.Contains(e.resumed, uint32(pc)) || slices.Contains(e.osrLoops, uint32(pc)) {
 		return true
 	}
 	// After a call of the function itself, which its recursion's outer runs
@@ -11770,8 +11791,8 @@ func (r *Runtime) jitGoOn(f *frame, e *jitEntry, pc, sp int, run bool) (v Value,
 	}
 	s := r.jit
 	s.interpreted++
-	defer func(f *frame) { s.goOn = f }(s.goOn)
-	s.goOn = f
+	defer func(f *frame, e *jitEntry) { s.goOn, s.goOnEntry = f, e }(s.goOn, s.goOnEntry)
+	s.goOn, s.goOnEntry = f, e
 	// The interpreter's check, due at the next back edge, which is no
 	// budget the existing tiers spent (forcedCheck).
 	r.backEdges, s.forcedCheck = 1, true
@@ -11849,6 +11870,9 @@ func (r *Runtime) jitRunDone(e *jitEntry, idx, top int) {
 	}
 	c := s.ssaCtxs[idx]
 	clear(c.Keep[:e.ssaKeeps])
+	if e.osrOf != nil {
+		s.osrRunDone(e)
+	}
 	c.This, c.Upvalues, c.Instance = abi.Slot{}, nil, abi.Slot{}
 	// The frames made for the native levels of this run's calls of Go
 	// (jitLevels), which only its calls share: their closures and

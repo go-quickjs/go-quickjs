@@ -380,6 +380,9 @@ func (s *jitSnapshot) askSparse(fb *jitFeedback) {
 		for _, pc := range e.resumed {
 			ask(snapResumed, int(pc))
 		}
+		for _, pc := range e.osrLoops {
+			ask(snapResumed, int(pc))
+		}
 		for _, x := range jitTargets(e) {
 			if x.cl != nil && x.cl.fn == fb.fn {
 				ask(snapResumed, int(x.pc)+1)

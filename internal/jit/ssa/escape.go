@@ -42,10 +42,11 @@ import (
 // Go to go on at after an instruction it ran (Entry's Resume), or a loop's
 // header's Go has never needed (Entry's OSR), is the object: the entry is
 // dropped, Go going on in the interpreter there instead, to the next loop
-// header, as after a guard's exit -- and the code compiled again with a
-// loop's entry where a frame runs that loop long (the VM's
-// jitLearnLoopEntry). An entry stays dropped only for objects left unmade
-// in the end (syncEntries).
+// header, as after a guard's exit -- and, where a frame runs a loop long,
+// on in code of its own compiled with the loop's entry (the VM's
+// jitLearnLoopEntry), this code keeping the object unmade for every other
+// invocation. An entry stays dropped only for objects left unmade in the
+// end (syncEntries).
 //
 // Its stores into it may change its shape only along the shapes its sites'
 // caches know, from the shape its pool's objects have, the same shape on
@@ -879,16 +880,16 @@ func (e *escaper) syncEntries() bool {
 	e.cuts = e.cuts[:0]
 	f.Entries = append(f.Entries[:0], e.entries...)
 	f.Unresumed = append(f.Unresumed[:0], e.unresumed...)
+	f.Unentered = f.Unentered[:0]
 	entries := f.Entries[:0]
 	for _, en := range f.Entries {
 		if !slices.Contains(want, en.Block) {
 			entries = append(entries, en)
 			continue
 		}
-		if pc := int(en.Block.Header.PC); en.OSR && !slices.Contains(f.Unresumed, pc) {
-			// Learned where a frame needs it (Unresumed): its loop's
-			// header, the interpreter's PC.
-			f.Unresumed = append(f.Unresumed, pc)
+		if pc := int(en.Block.Header.PC); en.OSR && !slices.Contains(f.Unentered, pc) {
+			// Its loop's header, the interpreter's PC.
+			f.Unentered = append(f.Unentered, pc)
 		}
 		for _, s := range en.Block.Succs {
 			if j := slices.Index(s.Preds, en.Block); j >= 0 {

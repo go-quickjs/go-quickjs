@@ -2938,7 +2938,7 @@ func TestJITCacheDropsLeastRecentlyUsed(t *testing.T) {
 	if _, err := r.jitLower(copyOf(), jitLowerSSA); err != nil {
 		t.Fatal(err)
 	}
-	refusal := &jitEntry{link: &jitLink{}, used: epoch, serial: 1 << 40}
+	refusal := &jitEntry{jitLearned: &jitLearned{}, link: &jitLink{}, used: epoch, serial: 1 << 40}
 	r.jit.remember(r.jitKeyOf(copyOf()), refusal)
 	var code []*jitEntry
 	for _, e := range r.jit.cache {
@@ -4377,7 +4377,7 @@ func TestJITTreeRecoveryNarrow(t *testing.T) {
 		{"compiled", func(cl *closure) { cl.setHint(compiled.hint) }, true},
 		{"refused", func(cl *closure) { cl.jitRefused = true }, false},
 		{"refusal cached", func(cl *closure) {
-			e := &jitEntry{link: &jitLink{}}
+			e := &jitEntry{jitLearned: &jitLearned{}, link: &jitLink{}}
 			cl.fn = jitFunctionForTest(t, `function g() {}`)
 			r.jit.remember(r.jitKeyOf(cl.fn), e)
 			cl.setHint(e.hint)
@@ -11509,8 +11509,8 @@ func TestJITPoolLookupsAllocateNothing(t *testing.T) {
 		t.Fatal("no construction")
 	}
 	pool := new(abi.ObjectPool)
-	e := &jitEntry{inlines: []jitInline{{pc: int32(pc), cl: ctor.fn().closure, obj: ctor, pool: pool}},
-		nativeCalls: []jitInline{{pc: int32(pc) + 1}}, link: &jitLink{}}
+	e := &jitEntry{jitLearned: &jitLearned{inlines: []jitInline{{pc: int32(pc), cl: ctor.fn().closure, obj: ctor, pool: pool}},
+		nativeCalls: []jitInline{{pc: int32(pc) + 1}}}, link: &jitLink{}}
 	// In place of the entry f's call compiled, as the cache replaces one.
 	key := r.jitKeyOf(cl.fn)
 	if old := r.jit.cache[key]; old != nil {
@@ -11710,7 +11710,7 @@ func TestJITSSAUnwoundCompilesAgainFirst(t *testing.T) {
 		t.Fatal("g has no code")
 	}
 	// An entry of its own, with code, as a callee's.
-	e := &jitEntry{ssa: g.ssa, link: &jitLink{}}
+	e := &jitEntry{jitLearned: &jitLearned{}, ssa: g.ssa, link: &jitLink{}}
 	leave := func() {
 		// One call in two leaves, its exits having learned a call to
 		// inline (jitLearning; TestJITSSAUnwoundCompiledAgainOnlyForWhatItLearned

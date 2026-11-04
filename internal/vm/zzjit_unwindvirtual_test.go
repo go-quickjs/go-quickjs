@@ -41,7 +41,7 @@ func TestJITMaterializeStopsAtCalleeFrame(t *testing.T) {
 		t.Skip("VM stack too short")
 	}
 	f := &frame{cl: cl, base: base, locals: r.stack[base-n : base : base]}
-	e := &jitEntry{ssaHomes: 40}
+	e := &jitEntry{jitLearned: &jitLearned{}, ssaHomes: 40}
 	word := func(w uint64) Value { return Value{num: math.Float64frombits(w)} }
 	ptr := func(p unsafe.Pointer) Value { return word(uint64(uintptr(p))) }
 	// The frame's home, at slot n+20, of an object of no property: its

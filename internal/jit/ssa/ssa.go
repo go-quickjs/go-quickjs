@@ -1022,8 +1022,9 @@ type Entry struct {
 	// replacement, where Go has not gone on in this function's code before
 	// (ResumeFeedback): escape analysis may drop it too, where it merges an
 	// object the code carries round the loop unmade with the slot it loads,
-	// and list it in Unresumed -- the code is compiled again with it where
-	// a frame running the loop long needs it, as V8 compiles code for OSR.
+	// and list it in Unentered -- code is compiled with it, apart from this
+	// code, where a frame running the loop long needs it, as V8 compiles
+	// code for OSR.
 	OSR bool
 }
 
@@ -1123,6 +1124,12 @@ type Func struct {
 	// there (ResumeFeedback): where Go goes on, the interpreter runs to the
 	// next loop header, and the code is to be compiled again with the entry.
 	Unresumed []int
+	// Unentered are the loops' headers, the interpreter's PCs, whose entries
+	// escape analysis dropped (Entry's OSR). This code keeps those objects
+	// unmade for every invocation, so a frame that is in such a loop long
+	// goes on in code of its own, compiled with the entry
+	// (ResumeFeedback), not in this code compiled again.
+	Unentered []int
 	// Unsafe, where not empty, says why the code may not be compiled: a
 	// BigInt's box a value read from its cell was not kept from, the keep
 	// cells run out (keepAcrossStores).

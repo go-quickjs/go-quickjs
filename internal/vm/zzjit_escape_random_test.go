@@ -233,7 +233,7 @@ func TestJITEscapeRandom(t *testing.T) {
 		programs, _ = strconv.ParseUint(s, 10, 64)
 	}
 	rounds := escapeRandomRounds()
-	virtuals, materialized := 0, uint64(0)
+	virtuals, materialized, learned := 0, uint64(0), uint64(0)
 	for seed := first; seed < first+programs; seed++ {
 		prog := escapeProgram(seed)
 		ok := t.Run(strconv.FormatUint(seed, 10), func(t *testing.T) {
@@ -243,6 +243,7 @@ func TestJITEscapeRandom(t *testing.T) {
 					virtuals += e.ssaVirtuals
 				}
 				materialized += r.jit.materialized
+				learned += r.jit.osrLearned
 			}
 			// Native code does the same work while the collector marks,
 			// and compiled in the background.
@@ -254,9 +255,9 @@ func TestJITEscapeRandom(t *testing.T) {
 			t.Fatalf("seed %d:\n%s", seed, prog)
 		}
 	}
-	t.Logf("%d objects left unmade, %d made by Go", virtuals, materialized)
-	if programs >= 60 && (virtuals == 0 || materialized == 0) {
-		t.Errorf("the programs no longer reach escape analysis: %d objects left unmade, %d made by Go", virtuals, materialized)
+	t.Logf("%d objects left unmade, %d made by Go, %d loops' entries compiled apart", virtuals, materialized, learned)
+	if programs >= 60 && (virtuals == 0 || materialized == 0 || learned == 0) {
+		t.Errorf("the programs no longer reach escape analysis: %d objects left unmade, %d made by Go, %d loops' entries compiled apart", virtuals, materialized, learned)
 	}
 }
 

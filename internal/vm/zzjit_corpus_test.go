@@ -158,7 +158,7 @@ func TestJITCompileCorpus(t *testing.T) {
 			if err != nil {
 				continue
 			}
-			e := &jitEntry{ssaCallee: kind == jitLowerInline}
+			e := &jitEntry{jitLearned: &jitLearned{}, ssaCallee: kind == jitLowerInline}
 			r.jit.linkFor(fn, e)
 			r.jitSeedCalls(cl, e, p)
 			items = append(items, item{name + "/" + strconv.Itoa(int(kind)), cl, p, e})
