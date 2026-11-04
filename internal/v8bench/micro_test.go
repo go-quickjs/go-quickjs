@@ -53,6 +53,10 @@ func TestAllocationMicrobenchmarks(t *testing.T) {
 		{`object_literal_fixed(9) + ':' + JSON.stringify(global_res)`, `9:{"a":8,"b":9,"c":"key","d":true,"e":null,"f":8,"g":false,"h":"end"}`},
 		{`array_push_large(1) + ':' + global_res`, "8192:16383"},
 		{`upvalue_string_append(1025) + ':' + global_res`, "2048:12282"},
+		{`escape_accumulate(3) + ':' + global_res`, "300:15876"},
+		{`escape_accumulate_long(3) + ':' + global_res`, "300:15876"},
+		{`escape_join(9) + ':' + global_res`, "9:36"},
+		{`escape_rare(1025) + ':' + global_res`, "1025:529408"},
 	} {
 		v, err := rt.Eval(tc.src)
 		if err != nil || v.String() != tc.want {

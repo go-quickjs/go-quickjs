@@ -3301,3 +3301,72 @@ function construct_new_target(n)
     global_res = s;
     return n;
 }
+
+/* Objects no code outside a function sees but at a join, round a loop or
+   on a rare path: what partial escape analysis leaves unmade. */
+function ExtraVec2(x, y)
+{
+    this.x = x;
+    this.y = y;
+}
+ExtraVec2.prototype.add = function (o) { return new ExtraVec2(this.x + o.x, this.y + o.y); };
+
+var extra_vecs = [];
+for (var extra_i = 0; extra_i < 100; extra_i++)
+    extra_vecs.push(new ExtraVec2(extra_i, extra_i & 7));
+
+function extra_vec_sum(a, m)
+{
+    var i, s = new ExtraVec2(0, 0);
+    for (i = 0; i < m; i++)
+        s = s.add(a[i % a.length]);
+    return s.x + s.y;
+}
+
+/* an accumulator a loop replaces each turn through a method, sum =
+   sum.add(v), 100 turns a call */
+function escape_accumulate(n)
+{
+    var j, r = 0;
+    for (j = 0; j < n; j++)
+        r += extra_vec_sum(extra_vecs, 100);
+    global_res = r;
+    return n * 100;
+}
+
+/* the same, one long call: the first run reaches the loop in the
+   interpreter, where native code is entered at the loop */
+function escape_accumulate_long(n)
+{
+    global_res = extra_vec_sum(extra_vecs, n * 100);
+    return n * 100;
+}
+
+/* objects made on either branch and merged at the join */
+function escape_join(n)
+{
+    var j, p, s = 0;
+    for (j = 0; j < n; j++) {
+        if (j & 1)
+            p = new ExtraVec2(j, 1);
+        else
+            p = new ExtraVec2(1, j & 15);
+        s += p.x * p.y;
+    }
+    global_res = s;
+    return n;
+}
+
+/* an object that leaves the function on one turn in 1024 */
+function escape_rare(n)
+{
+    var j, o, s = 0, kept = null;
+    for (j = 0; j < n; j++) {
+        o = { k: j, v: j & 7 };
+        if ((j & 1023) == 0)
+            kept = o;
+        s += o.k + o.v;
+    }
+    global_res = s + kept.k;
+    return n;
+}
