@@ -5821,7 +5821,8 @@ func (b *builder) plan() error {
 		e.Generic = b.fb != nil && b.fb.EntryGeneric(int(p.Maps[pc].PC))
 		b.edge(e, b.blockAt[pc])
 		resume := pc != 0 && !looped[pc] && !suspends && !slices.Contains(p.Entries, pc)
-		b.f.Entries = append(b.f.Entries, Entry{PC: pc, Depth: p.Maps[pc].Depth, Block: e, Resume: resume})
+		osr := pc != 0 && looped[pc] && !suspends && !slices.Contains(p.Entries, pc) && !b.resumed(pc)
+		b.f.Entries = append(b.f.Entries, Entry{PC: pc, Depth: p.Maps[pc].Depth, Block: e, Resume: resume, OSR: osr})
 	}
 	// A loop header is reached by an edge from a block at or after it, in
 	// one frame: a callee's blocks have their own PCs, and its loops their

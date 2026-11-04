@@ -656,13 +656,18 @@ type jitEntry struct {
 	// been seen to make is one seldom made (jitInlineExit).
 	ssaHostsLeft []int32
 	// ssaUnresumed are the PCs after the calls the code makes or inlines
-	// that it has no entry after (ssa.Func's Unresumed); resumed those of
-	// them Go has gone on at (jitGoOn), which the next compile has entries
-	// at (ssa.ResumeFeedback), and resumeReopt marks code to be compiled
-	// again for one.
+	// that it has no entry after (ssa.Func's Unresumed), and the loops'
+	// headers whose entries escape analysis dropped (ssa.Entry's OSR);
+	// resumed those of them Go has gone on at (jitGoOn, jitLearnLoopEntry),
+	// which the next compile has entries at (ssa.ResumeFeedback), and
+	// resumeReopt marks code to be compiled again for one. osrMiss and
+	// osrMissPC are the frame, by its address, and the header a loop's
+	// check last found no entry at (jitLearnLoopEntry).
 	ssaUnresumed []int32
 	resumed      []uint32
 	resumeReopt  bool
+	osrMiss      uintptr
+	osrMissPC    uint32
 	// holds says a compile seeding its calls may be held for its callees'
 	// (jitAwaits), and awaited are those it waits for, or held for now.
 	holds   bool
@@ -2856,6 +2861,29 @@ func (r *Runtime) tryJITLoop(f *frame, pc uint32, sp int, fullBudget bool) (Valu
 	return v, err, done
 }
 
+// jitLearnLoopEntry learns the loop's header at pc, whose entry escape
+// analysis dropped (ssa.Entry's OSR), where a frame needs it: one running
+// the loop on in the interpreter, two checks in a row each after a full
+// budget of back edges finding it there with no entry -- not a short
+// loop's frame Go went on in after an exit (jitGoOn), which the
+// interpreter finishes, as a deoptimized invocation is. The code is
+// compiled again with the entry, as V8 compiles code to enter a loop by
+// on-stack replacement where a frame needs it.
+func (r *Runtime) jitLearnLoopEntry(f *frame, e *jitEntry, pc int) {
+	if e.invalid || !slices.Contains(e.ssaUnresumed, int32(pc)) || slices.Contains(e.resumed, uint32(pc)) {
+		return
+	}
+	if at := uintptr(unsafe.Pointer(f)); e.osrMiss != at || e.osrMissPC != uint32(pc) {
+		e.osrMiss, e.osrMissPC = at, uint32(pc)
+		return
+	}
+	e.osrMiss = 0
+	e.resumed = append(e.resumed, uint32(pc))
+	e.resumeReopt = true
+	r.jit.account(e)
+	r.jitReoptimize(f.cl, e)
+}
+
 // tryJITAt enters f's code at pc, with depth operands, compiling it if it
 // has none once the existing tiers have spent its budget (jitWarmUp): at
 // the function's start, or, osr, at a loop's header, the existing tiers
@@ -2957,6 +2985,9 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, err
 			// as V8's does: the judgement is of Go's entries at the start,
 			// whose stretches are the short calls.
 			return Undefined, nil, false
+		}
+		if osr && spent && !e.ssa.HasEntry(pc) {
+			r.jitLearnLoopEntry(f, e, pc)
 		}
 		// A run begun at a loop is judged as such (jitSSAProfit's osr,
 		// jitRunGoProfit).

@@ -1018,6 +1018,13 @@ type Entry struct {
 	// drops one where it merges an object the code does not make with the
 	// slot it loads (escape.go).
 	Resume bool
+	// OSR marks a loop header's entry, there for Go to go on at by on-stack
+	// replacement, where Go has not gone on in this function's code before
+	// (ResumeFeedback): escape analysis may drop it too, where it merges an
+	// object the code carries round the loop unmade with the slot it loads,
+	// and list it in Unresumed -- the code is compiled again with it where
+	// a frame running the loop long needs it, as V8 compiles code for OSR.
+	OSR bool
 }
 
 // GenResume is where a generator's resumption goes on (Func's GenEntry):

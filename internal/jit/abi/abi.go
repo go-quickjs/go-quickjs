@@ -25,16 +25,16 @@ const MaxKeeps = 256
 // first slot of the object's home -- past the frame's own -- shifted
 // VirtualHomeShift bits, and how many properties the object has there in
 // the bits below. At its home, the first slot's number word is the
-// address of the object's shape, the next one's that of its prototype,
-// and its properties' values follow, VirtualFields on, in its table's
-// order. Go makes the object of them where the exit wrote them, one for
+// address of the object's shape, which says its prototype, and its
+// properties' values follow, VirtualFields on, in its table's order.
+// Go makes the object of them where the exit wrote them, one for
 // each home, which every slot naming it is given (the VM's
 // jitMaterialize), as V8's deoptimizer materializes an object escape
 // analysis removed.
 const (
 	VirtualBase      = 0xFFF9000000000000
 	VirtualHomeShift = 16
-	VirtualFields    = 2
+	VirtualFields    = 1
 )
 
 // VirtualWord is the word naming the object at home with fields

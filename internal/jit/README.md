@@ -352,19 +352,38 @@ its operations made of the heap: the constructor's prototype
 (`ssa.OpProtoIs`, which deoptimizes once it is replaced), an addition's
 prototypes intercepting nothing (`OpChainCheck`), a method's holders on
 the object's prototypes (`OpHolderCell`). An object escapes, and is made
-as before, where anything else may see it: a store into an object that is
-made, a call's operand, a return, a phi merging it with anything but
-itself, a loop's header (none is left unmade across one), and any
+as before, where anything else may see it and the code cannot make it
+there: a phi merging it with anything but objects not made, and any
 operation whose shape escape analysis cannot follow -- its stores change
 its shape along the transitions its sites' caches know, the same on every
-path to a merge, where phis merge its properties. A phi merging it with
-the slot an entry loads, at an entry there only for Go to go on at after
-an instruction it ran (`ssa.Entry`'s `Resume`), is the object: the entry
-is dropped, Go going on in the interpreter there instead. Where the code
+path to a merge, where phis merge its properties.
+
+Beyond TurboFan's, as Graal's partial escape analysis has it, a phi merging
+objects not made of one shape at the merge, none of them used past it, is
+an object not made of its own, at a loop's header too, its properties
+phis: an accumulator a loop replaces each turn (`sum = sum.add(v)`) is its
+properties alone. A use that needs an object made -- a call's operand, a
+store into an object that is made, a return -- has the code make it there,
+from its pool, its properties defined along the additions that made its
+state, and it is that object past there. An object made on every path
+anyway is made where it is taken: left unmade it would save nothing, and
+its compile pays for each. It is decided before the walk of the function
+(`pruneMade`), so that such an object costs what one that escapes does.
+
+A phi merging it with the slot an entry loads, at an entry there only for
+Go to go on at after an instruction it ran (`ssa.Entry`'s `Resume`), or a
+loop's header's Go has never needed (`OSR`), is the object: the entry is
+dropped, Go going on in the interpreter there instead -- for a loop, until
+two checks of one frame in a row find no entry there, when the code is
+compiled again with it (the VM's `jitLearnLoopEntry`), as V8 compiles code
+for OSR. V8 keeps that code apart; here a function has one code, so from
+then on the loop's objects are made every turn, on every call, as if the
+object had escaped. An entry stays dropped only for an object left unmade
+in the end (`syncEntries`). Where the code
 exits, as V8's deoptimization data names a materialized object, the frame
 state names it by a word no value has (`abi.VirtualBase`), with the first
-slot of its home past the frame's slots, where the state holds its shape,
-its prototype and its properties' values (`ssa.FrameState`'s `Virtual`):
+slot of its home past the frame's slots, where the state holds its shape
+and its properties' values (`ssa.FrameState`'s `Virtual`):
 Go makes the object of them (the VM's `jitMaterializeObjects`), one for
 each home, which every slot naming it is given, the words of others among
 its properties made too, as V8's deoptimizer materializes them. The frame

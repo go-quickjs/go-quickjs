@@ -83,10 +83,10 @@ func (fb *jitFeedback) keepVirtuals(pools []uintptr) {
 // left, the objects the code did not make (ssa's escape.go): a slot that
 // holds the word of one (abi.VirtualWord) gets the object, made of its
 // home, which the exit wrote past the frame's slots -- its shape, its
-// prototype, its properties' values, words of others among them -- one for
-// each home, which every slot naming it shares, as the code would have
-// made one: as V8's deoptimizer materializes the objects escape analysis
-// removed. The homes are cleared after. The frame's slots end at the VM
+// properties' values, words of others among them -- one for each home,
+// which every slot naming it shares, as the code would have made one: as
+// V8's deoptimizer materializes the objects escape analysis removed. The
+// homes are cleared after. The frame's slots end at the VM
 // stack's limit, where a native callee's frame begins (jitMaterializeBelow).
 func (r *Runtime) jitMaterializeObjects(f *frame, e *jitEntry, limit int) {
 	type made struct {

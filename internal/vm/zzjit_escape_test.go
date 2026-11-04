@@ -239,3 +239,114 @@ func TestJITEscapeCollector(t *testing.T) {
 		t.Error("no call of Go")
 	}
 }
+
+// mergeSetup's functions each merge objects their code does not make: at
+// a join, where a phi merges the objects its branches made, and round a
+// loop, where the object a loop's body makes becomes the one the next
+// turn starts with -- an accumulator -- each such merge an object not
+// made of its own, its properties phis (escape.go's mergeAt). Then each
+// meets what leaves native code while one is live, where Go makes it of
+// its home: a property read as a number that is no number. aliased keeps
+// a merged object live past its merge, which must be made: its write is
+// seen through the other name.
+const mergeSetup = `
+	function P(v, w) { this.v = v; this.w = w }
+	var odd = 'x'
+	function joins(n, at) {
+		let s = 0
+		for (let i = 0; i < n; i++) { let o = new P(i, 1); if (i & 1) o = new P(i === at ? odd : -i, 2); s += o.v * o.w }
+		return s
+	}
+	function aliased(n) {
+		let s = 0
+		for (let i = 0; i < n; i++) { let a = new P(i, 1); const b = a; if (i & 1) a = new P(-i, 2); a.v = 7; s += b.v + a.v }
+		return s
+	}
+	function carried(n, at) {
+		let c = new P(0, 1)
+		for (let i = 0; i < n; i++) { if (i & 1) c = new P(c.v + (i === at ? odd : i), c.w * 2 % 7) }
+		return c.v + ':' + c.w
+	}
+	function cycle(n, at) {
+		let c = new P(1, 2)
+		for (let i = 0; i < n; i++) { if (i % 3) c = new P(c.w, c.v + i); if (i === at) c.w = odd }
+		return c.v + ',' + c.w
+	}
+	function nestedLoops(n) {
+		let c = new P(0, 0)
+		for (let i = 0; i < n; i++) for (let j = 0; j < 3; j++) c = new P(c.v + j, c.w + i)
+		return c.v + c.w
+	}
+	function longLoop(n) {
+		let c = new P(0, 0)
+		for (let i = 0; i < n; i++) c = new P(c.v + i, c.w + 1)
+		return c.v + c.w
+	}
+`
+
+// Objects merged at a join or round a loop are not made natively, and
+// where native code leaves while one is live, Go makes it: each answer is
+// the interpreter's, under every setting of the boundary's stress. A loop
+// that runs long in a frame Go cannot enter, its header's entry dropped
+// for the object it carries (ssa.Entry's OSR), has the code compiled again
+// with the entry, and goes on natively.
+func TestJITEscapeMerges(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	var rounds []string
+	for i := range 8 {
+		at := []string{"-1", "17"}[i/5]
+		rounds = append(rounds, `joins(40, `+at+`)`, `aliased(40)`, `carried(40, `+at+`)`, `cycle(40, `+at+`)`, `nestedLoops(20)`, `longLoop(40)`)
+	}
+	r := jitAgreesForTestWith(t, jitStressConfig{}, mergeSetup, rounds[:5*6]...)
+	for _, name := range []string{"joins", "carried", "cycle", "nestedLoops", "longLoop"} {
+		if e := jitCallbackEntry(r, name); e == nil || e.ssa == nil || e.ssaVirtuals == 0 {
+			t.Errorf("%s makes every object it makes: %+v", name, e)
+		}
+	}
+	for _, c := range []jitStressConfig{{}, {threshold: true, budget: 3}, {threshold: true, budget: 3, deopt: 7}, {threshold: true, budget: 1, deopt: 2}} {
+		r := jitAgreesForTestWith(t, c, mergeSetup, rounds...)
+		t.Logf("%+v: %d materialized", c, r.jit.materialized)
+		if r.jit.materialized == 0 {
+			t.Errorf("%+v: Go made no object the code did not make", c)
+		}
+	}
+	// One long run, entered at its loop's header, where the code had no
+	// entry: learned, the run goes on natively.
+	r = jitAgreesForTestWith(t, jitStressConfig{}, mergeSetup, `longLoop(3000000)`)
+	if e := jitCallbackEntry(r, "longLoop"); e == nil || e.ssa == nil || len(e.resumed) == 0 || e.ssaStats.entries == 0 {
+		t.Errorf("longLoop's loop was not learned: %+v", e)
+	}
+}
+
+// An object made on every path, here at its return, is made where it is
+// taken: left unmade it saves nothing, and its loop keeps the entry a
+// loop-carried object's would have dropped (ssa.Entry's OSR).
+func TestJITEscapeMadeAnyway(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		function P(v, w) { this.v = v; this.w = w }
+		function madeAnyway(n) {
+			const o = new P(1, 2)
+			let s = 0
+			for (let i = 0; i < n; i++) s += o.v + i
+			o.w = s
+			return o
+		}
+		function run(n) { let s = 0; for (let i = 0; i < n; i++) s += madeAnyway(8).w; return s }`
+	var rounds []string
+	for range 8 {
+		rounds = append(rounds, `run(40)`)
+	}
+	r := jitAgreesForTestWith(t, jitStressConfig{}, setup, rounds...)
+	e := jitCallbackEntry(r, "madeAnyway")
+	if e == nil || e.ssa == nil {
+		t.Fatalf("madeAnyway was not compiled: %+v", e)
+	}
+	if e.ssaVirtuals != 0 || len(e.ssaUnresumed) != 0 {
+		t.Errorf("%d objects unmade, entries dropped at %v", e.ssaVirtuals, e.ssaUnresumed)
+	}
+}
