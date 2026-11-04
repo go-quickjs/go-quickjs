@@ -2785,6 +2785,10 @@ type jitFeedback struct {
 	// virtualRoots are VirtualRoot's answers, by pool, held until the
 	// compile keeps those escape analysis took (keepVirtuals).
 	virtualRoots map[uintptr]jitVirtualRoot
+	// seeded marks a closure's feedback, inlined where the function makes
+	// it (closureInline): its own calls are those the existing tiers met
+	// where it has no code (jitCalleeInline).
+	seeded bool
 }
 
 // CharCode is ssa.CharCodeFeedback's: whether the method call of one
@@ -3216,8 +3220,9 @@ func (fb *jitFeedback) Inline(pc int) (ssa.InlineSite, bool) {
 	var targets []jitInline
 	if fb.root != nil {
 		// An inlined callee's calls, inlined in it as its own code calls
-		// them (jitInlineSite).
-		if in, ok := fb.r.jitInlineSite(fb.fn, pc, jitInlineDepth-1); ok {
+		// them (jitInlineSite), or as the existing tiers met them where it
+		// has no code (jitCalleeInline).
+		if in, ok := fb.r.jitCalleeInline(fb.fn, fb.cl, pc, jitInlineDepth-1, fb.seeded); ok {
 			targets = []jitInline{in}
 		}
 	} else if fb.e != nil && !slices.Contains(fb.e.notInline, int32(pc)) {
@@ -6347,6 +6352,14 @@ const jitInlineDepth = 3
 // function that may be inlined, with its calls if depth allows. cl is one
 // of its closures.
 func (r *Runtime) jitInlinesCalls(cl *closure, depth int) bool {
+	return r.jitInlinesCallsOf(cl, depth, false)
+}
+
+// jitInlinesCallsOf is jitInlinesCalls, its calls, if seeded, as the
+// existing tiers met them where cl's function has no code
+// (jitCalleeInline): a closure inlined where the function makes it
+// (closureInline).
+func (r *Runtime) jitInlinesCallsOf(cl *closure, depth int, seeded bool) bool {
 	fn := cl.fn
 	if jitNoInline != nil && jitNoInline(fn) || fn.TopLevel || fn.IsModule || jitFrameArgs(fn) || jitFrameCallee(fn) || fn.HasDirectEval || isGeneratorTemplate(fn) {
 		return false
@@ -6369,7 +6382,6 @@ func (r *Runtime) jitInlinesCalls(cl *closure, depth int) bool {
 		return false
 	}
 	fb := &jitFeedback{r: r, fn: fn, cl: cl, prog: p}
-	var e *jitEntry
 	for _, pc := range calls {
 		// What the code makes itself, at any depth: no call.
 		if _, ok := fb.Intrinsic(pc); ok {
@@ -6392,16 +6404,50 @@ func (r *Runtime) jitInlinesCalls(cl *closure, depth int) bool {
 		if depth <= 0 {
 			return false
 		}
-		if e == nil {
-			if e = r.jit.entryFor(fn); e == nil || e.callSites == nil {
-				return false
-			}
-		}
-		if _, ok := r.jitInlineSite(fn, pc, depth); !ok {
+		if _, ok := r.jitCalleeInline(fn, cl, pc, depth, seeded); !ok {
 			return false
 		}
 	}
 	return true
+}
+
+// jitCalleeInline is jitInlineSite's for fn's call at pc, fn's closure cl:
+// where fn has code whose calls are decided, or seeded is not set, the one
+// it inlines or calls there; where it has none -- a closure its maker
+// inlines (closureInline), which a loop of native code had called through
+// its call path, never compiled itself -- the function the existing tiers
+// met the call calling (jitCalleeAt), of one class of receiver
+// (jitSeenCallees), a call and no construction, of no calls of its own
+// (jitInlinable): as V8 inlines a function's calls by the
+// feedback its own interpreted runs gathered, whether or not it was ever
+// optimized itself. The call checks its callee.
+func (r *Runtime) jitCalleeInline(fn *bytecode.Function, cl *closure, pc, depth int, seeded bool) (jitInline, bool) {
+	if e := r.jit.entryFor(fn); !seeded || e != nil && e.callSites != nil || cl == nil || cl.fn != fn || pc >= len(fn.Code) {
+		return r.jitInlineSite(fn, pc, depth)
+	}
+	in := jitCallInstr(fn.Code[pc])
+	if in.Op != bytecode.OpCall && in.Op != bytecode.OpCallMethod {
+		return jitInline{}, false
+	}
+	p, err := r.jitLower(fn, jitLowerInline)
+	if err != nil || len(p.Maps) != len(fn.Code) {
+		return jitInline{}, false
+	}
+	obj, _ := r.jitCalleeObjectAt(cl, p, pc)
+	if obj == nil {
+		return jitInline{}, false
+	}
+	o, callee := r.jitClosureFor(cl, obj, false)
+	if callee == nil || callee.fn == fn || jitNoInline != nil && jitNoInline(callee.fn) || len(r.jitSeenCallees(cl, p, pc, o)) != 0 {
+		return jitInline{}, false
+	}
+	if !r.jitInlinable(callee.fn) {
+		// A callee with calls of its own: what to make of them is its own
+		// code's to learn, which a guess here would go ahead of -- a throw
+		// it makes taken for one it never makes, its frame left at each.
+		return jitInline{}, false
+	}
+	return jitInline{pc: int32(pc), cl: callee, obj: o}, true
 }
 
 // jitInlineSite is the function fn's call at pc is inlined with, inside a
@@ -8330,7 +8376,7 @@ func (fb *jitFeedback) callbackInline(x *jitInline, argc int) (ssa.InlineSite, b
 	if x.cbLeft {
 		return ssa.InlineSite{}, false
 	}
-	site, ok := fb.closureInline(x.cb, argc)
+	site, ok := fb.closureInline(x.cb, argc, false)
 	if !ok {
 		return ssa.InlineSite{}, false
 	}
@@ -8350,11 +8396,19 @@ func (fb *jitFeedback) callbackInline(x *jitInline, argc int) (ssa.InlineSite, b
 // or a closure the function makes and only calls (CalledClosure), whose
 // call the builder makes one of no receiver -- under the rules any
 // callee's inlining follows (jitInlinable, jitInlinesCalls), with no
-// closure object: the builder's to check, or to know.
-func (fb *jitFeedback) closureInline(cl *closure, argc int) (ssa.InlineSite, bool) {
+// closure object: the builder's to check, or to know. made marks a
+// closure the function makes itself (CalledClosure): an arrow that reads
+// its this, the one it captured, is inlined only so, its this the
+// function's own (lexThisSlot); and its calls, where it has no code of its
+// own, are those the existing tiers met (jitCalleeInline).
+func (fb *jitFeedback) closureInline(cl *closure, argc int, made bool) (ssa.InlineSite, bool) {
 	r := fb.r
+	seeded, lexThis := made, -1
+	if made {
+		lexThis = fb.lexThisSlot()
+	}
 	if cl == nil || cl.fn == fb.fn || jitNoInline != nil && jitNoInline(cl.fn) ||
-		!r.jitInlinable(cl.fn) && !r.jitInlinesCalls(cl, jitInlineDepth-1) {
+		!r.jitInlinable(cl.fn) && !r.jitInlinesCallsOf(cl, jitInlineDepth-1, seeded) {
 		return ssa.InlineSite{}, false
 	}
 	reads := jitReadsArguments(cl.fn)
@@ -8363,7 +8417,8 @@ func (fb *jitFeedback) closureInline(cl *closure, argc int) (ssa.InlineSite, boo
 		kind = jitLowerForward
 	}
 	p, err := r.jitLower(cl.fn, kind)
-	if err != nil || cl.fn.Kind == bytecode.KindArrow && p.This {
+	arrowThis := err == nil && cl.fn.Kind == bytecode.KindArrow && p.This
+	if err != nil || arrowThis && lexThis < 0 {
 		// An arrow's this is the one it captured, not the loop's.
 		return ssa.InlineSite{}, false
 	}
@@ -8376,11 +8431,25 @@ func (fb *jitFeedback) closureInline(cl *closure, argc int) (ssa.InlineSite, boo
 		k.strings = k.strings || in.Op == ir.StringMethod || in.Op == ir.StringCode
 	}
 	site := ssa.InlineSite{
-		Program: p, Feedback: &jitFeedback{r: r, fn: cl.fn, cl: cl, root: k},
+		Program: p, Feedback: &jitFeedback{r: r, fn: cl.fn, cl: cl, root: k, seeded: seeded},
 		Closure: uintptr(unsafe.Pointer(cl)), Argc: argc, Method: true,
 		Params: cl.fn.ParamCount, ThisSlot: this, Coerce: cl.fn.CoerceThis, ReadsArguments: reads,
 	}
+	if arrowThis {
+		site.LexThis, site.LexThisSlot = true, lexThis
+	}
 	return site, true
+}
+
+// lexThisSlot is the slot of the frame of fb's function its receiver is
+// in, which an arrow it makes captures as its this (closureInline), or -1
+// where its code has none (ir.Program's This) or it may not be bound yet:
+// a derived constructor's before super().
+func (fb *jitFeedback) lexThisSlot() int {
+	if fb.prog == nil || !fb.prog.This || fb.fn.Kind == bytecode.KindDerivedConstructor {
+		return -1
+	}
+	return fb.fn.LocalCount + len(fb.fn.Upvalues)
 }
 
 // CalledClosure is ssa.CalledClosureFeedback's: the closure fb's function
@@ -8400,7 +8469,7 @@ func (fb *jitFeedback) CalledClosure(pc int) (ssa.MadeCallback, ssa.InlineSite, 
 	if t == nil || jitNeedsMaker(*c) {
 		return ssa.MadeCallback{}, ssa.InlineSite{}, false
 	}
-	site, ok := fb.closureInline(t, 0)
+	site, ok := fb.closureInline(t, 0, true)
 	if !ok {
 		return ssa.MadeCallback{}, ssa.InlineSite{}, false
 	}

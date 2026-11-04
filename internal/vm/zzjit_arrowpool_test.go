@@ -54,11 +54,13 @@ func TestJITPooledArrowsWithoutCells(t *testing.T) {
 			t.Errorf("%s has no code with its captured locals in its frame: %+v", name, e)
 			continue
 		}
-		if name == "inner" {
+		if name == "inner" || name == "sloppy" {
 			// The arrow it calls where it makes it, which its code inlines
-			// and does not make (ssa's called.go).
+			// and does not make (ssa's called.go) -- sloppy's reading its
+			// this, the function's own, the global object (ssa.InlineSite's
+			// LexThis).
 			if e.ssaCalled == 0 {
-				t.Errorf("inner makes the arrow it only calls")
+				t.Errorf("%s makes the arrow it only calls", name)
 			}
 			continue
 		}

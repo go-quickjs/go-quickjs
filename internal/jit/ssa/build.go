@@ -2247,7 +2247,11 @@ func allocOnly(v *Value) bool {
 // Captured, for a callback its caller makes and never does (ForEachSite's
 // Made), are the caller's slots its captured bindings are, by index: its
 // reads and assignments of them are the caller's own, in place, as V8's
-// inlined code reads a context escape analysis removed.
+// inlined code reads a context escape analysis removed. LexThis marks an
+// arrow the root makes that reads its this (CalledClosureFeedback), which
+// is the root's own: its receiver's slot, LexThisSlot of the root's frame,
+// is the callee's this, whoever calls it -- as V8 inlines an arrow, whose
+// this is a context slot of its maker's.
 type InlineSite struct {
 	Program         *ir.Program
 	Feedback        Feedback
@@ -2268,6 +2272,8 @@ type InlineSite struct {
 	Upvalues        uintptr
 	ReadsArguments  bool
 	Captured        []int
+	LexThis         bool
+	LexThisSlot     int
 }
 
 // Inlining's bounds, by size alone, as V8's JSInliningHeuristic has them:
@@ -3586,7 +3592,10 @@ func (b *builder) inlineSiteAt(pc int, total *int, known *inlineAsked) (*frame, 
 			return nil, false
 		}
 	}
-	if !isAccessor && (depth < callee || after != depth-callee+1 || site.ThisSlot >= 0 && !site.Method && !site.Construct && !site.Forward) {
+	if site.LexThis && (isAccessor || site.Construct || site.Forward || site.Coerce || site.ThisSlot < 0) {
+		return nil, false
+	}
+	if !isAccessor && (depth < callee || after != depth-callee+1 || site.ThisSlot >= 0 && !site.Method && !site.Construct && !site.Forward && !site.LexThis) {
 		return nil, false
 	}
 	if site.Construct {
@@ -4267,7 +4276,10 @@ func (b *builder) inlineCallback(body *Block, fr *frame, ops []*Value, argSlot i
 	for i := 0; i < site.Params && i < len(fr.args); i++ {
 		fr.init[i] = fr.args[i]
 	}
-	if site.ThisSlot >= 0 {
+	if site.ThisSlot >= 0 && site.LexThis {
+		// An arrow the root makes: the root's own this, not the loop's.
+		fr.init[site.ThisSlot] = b.read(b.root.base+site.LexThisSlot, body)
+	} else if site.ThisSlot >= 0 {
 		fr.init[site.ThisSlot] = ops[0]
 	}
 	// The body ends at the call; the rest of it goes on in after, which
@@ -4416,9 +4428,13 @@ func (b *builder) inlineCall(blk *Block, pc int, fr *frame, guard func(Op, Type,
 	for i := 0; i < site.Params && i < site.Argc; i++ {
 		fr.init[i] = fr.args[i]
 	}
-	if site.ThisSlot >= 0 && site.Construct {
+	switch {
+	case site.ThisSlot >= 0 && site.Construct:
 		fr.init[site.ThisSlot] = fr.receiver
-	} else if site.ThisSlot >= 0 {
+	case site.ThisSlot >= 0 && site.LexThis:
+		// An arrow the root makes: the root's own this, not a receiver.
+		fr.init[site.ThisSlot] = b.read(b.root.base+site.LexThisSlot, blk)
+	case site.ThisSlot >= 0:
 		fr.init[site.ThisSlot] = b.read(sp-site.Argc-2, blk)
 	}
 }

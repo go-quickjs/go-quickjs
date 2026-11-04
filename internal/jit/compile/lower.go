@@ -432,8 +432,10 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			in.Op == bytecode.OpNewDisposeCapability || in.Op == bytecode.OpAddDisposable || in.Op == bytecode.OpDispose || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpIn || in.Op == bytecode.OpDeleteProp || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpApplyArguments || in.Op == bytecode.OpNew || in.Op == bytecode.OpSuperCall || in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict || in.Op == bytecode.OpCheckGlobalRef || in.Op == bytecode.OpNewObject || in.Op == bytecode.OpNewRegExp || in.Op == bytecode.OpDefineField || in.Op == bytecode.OpPushEmptyString || in.Op == bytecode.OpConcat || in.Op == bytecode.OpToString || in.Op == bytecode.OpNewArray || in.Op == bytecode.OpCall || in.Op == bytecode.OpCallMethod || in.Op == bytecode.OpTailCall || in.Op == bytecode.OpTailCallMethod || in.Op == bytecode.OpGetGlobal || in.Op == bytecode.OpGetGlobalOpt || in.Op == bytecode.OpGetPropThis || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		property = property || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		// A derived constructor's this slot is what it returns, bound by
-		// its super() (ir.Program's DerivedConstructor).
-		this = this || in.Op == bytecode.OpPushThis || fn.Kind == bytecode.KindDerivedConstructor
+		// its super() (ir.Program's DerivedConstructor). An arrow the
+		// function makes that reads its this, the function's own, reads it
+		// there where it is inlined (ssa.InlineSite's LexThis).
+		this = this || in.Op == bytecode.OpPushThis || fn.Kind == bytecode.KindDerivedConstructor || makesArrowThis(fn, in)
 		raw := uint32(in.Op)
 		switch in.Op {
 		case bytecode.OpBinLocal, bytecode.OpBinImm:
@@ -2629,4 +2631,14 @@ func markBools(p *ir.Program) {
 			}
 		}
 	}
+}
+
+// makesArrowThis reports whether in, an instruction of fn's, makes an
+// arrow that reads its this, which is fn's own.
+func makesArrowThis(fn *bytecode.Function, in bytecode.Instr) bool {
+	if in.Op != bytecode.OpClosure || uint64(in.A) >= uint64(len(fn.Constants)) {
+		return false
+	}
+	t := fn.Constants[in.A].Fn
+	return t != nil && t.Kind == bytecode.KindArrow && t.UsesThis
 }
