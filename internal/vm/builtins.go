@@ -2446,6 +2446,15 @@ func (r *Runtime) initErrorBuiltins() {
 			// cause, before anything else sees it: the table is made with room
 			// for them rather than grown twice on the way.
 			o := newErrorObject(rt.proto.nativeErrors[kind])
+			// The stack first, then the message and the rest, as V8 lists an
+			// error's own keys. The trace leaves out the constructor itself,
+			// and a subclass's constructors too: everything up to and
+			// including new.target's.
+			var until *Object
+			if f := rt.topFrame(); f != nil && f.newTarget.IsObject() && f.newTarget.Object() != f.callee {
+				until = f.newTarget.Object()
+			}
+			rt.attachStack(o, rt.captureTrace(until, true))
 			// AggregateError takes the list of causes first, so its message is
 			// the second argument rather than the first.
 			msgArg, optsArg := arg(args, 0), arg(args, 1)
@@ -2500,13 +2509,6 @@ func (r *Runtime) initErrorBuiltins() {
 				o.setOwnRaw(rt.atoms.intern("errors"), Obj(rt.newArrayFrom(errs)),
 					propWritable|propConfigurable)
 			}
-			// The trace leaves out the constructor itself, and a subclass's
-			// constructors too: everything up to and including new.target's.
-			var until *Object
-			if f := rt.topFrame(); f != nil && f.newTarget.IsObject() && f.newTarget.Object() != f.callee {
-				until = f.newTarget.Object()
-			}
-			rt.attachStack(o, rt.captureTrace(until, true))
 			return Obj(o), nil
 		})
 		r.proto.errorCtors[k] = ctor

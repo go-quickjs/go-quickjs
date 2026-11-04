@@ -359,3 +359,27 @@ func TestEvalFileContext(t *testing.T) {
 		t.Errorf("cancelled run: err = %v, want context.Canceled", err)
 	}
 }
+
+// An error's own keys come in V8's order: the stack first, then the
+// message, a cause and what the kind adds (Node 26's answers). The stack
+// is not the standard's, which leaves its place to the engine; QuickJS has
+// it last.
+func TestErrorOwnKeysOrder(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	for _, tc := range []struct{ src, want string }{
+		{`Object.getOwnPropertyNames(new Error("x")).join()`, "stack,message"},
+		{`Object.getOwnPropertyNames(new TypeError("x")).join()`, "stack,message"},
+		{`Object.getOwnPropertyNames(new Error()).join()`, "stack"},
+		{`Reflect.ownKeys(new Error("x", { cause: 1 })).join()`, "stack,message,cause"},
+		{`Object.getOwnPropertyNames(new AggregateError([], "x")).join()`, "stack,message,errors"},
+		{`(() => { try { null.x } catch (e) { return Object.getOwnPropertyNames(e).join() } })()`, "stack,message"},
+		{`class MyErr extends Error { constructor(m) { super(m); this.extra = 1 } }
+		  Object.getOwnPropertyNames(new MyErr("q")).join()`, "stack,message,extra"},
+	} {
+		v, err := rt.Eval(tc.src)
+		if err != nil || v.String() != tc.want {
+			t.Errorf("%s = %v, %v; want Node's %q", tc.src, v, err, tc.want)
+		}
+	}
+}

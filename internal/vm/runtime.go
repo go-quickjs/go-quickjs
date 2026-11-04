@@ -965,13 +965,13 @@ func (r *Runtime) throwURIError(format string, args ...any) error {
 
 // newError builds an error object of the given kind.
 func (r *Runtime) newError(kind errorKind, msg string) *Object {
-	// The message and the stack, and room for a cause: an error is built all
-	// at once, so the table is made with it rather than grown twice on the way.
+	// The stack and the message, in V8's order, and room for a cause: an
+	// error is built all at once, so the table is made with it rather than
+	// grown twice on the way. The frames are captured now, because they are
+	// unwound by the time anything reads the stack.
 	o := newErrorObject(r.proto.nativeErrors[kind])
-	o.setOwnRaw(atomMessage, Str(NewString(msg)), propWritable|propConfigurable)
-	// The frames are captured now, because they are unwound by the time
-	// anything reads the stack.
 	r.attachStack(o, r.captureTrace(nil, false))
+	o.setOwnRaw(atomMessage, Str(NewString(msg)), propWritable|propConfigurable)
 	return o
 }
 
