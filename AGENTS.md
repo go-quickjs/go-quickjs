@@ -58,6 +58,22 @@ concurrently.
   closure. Code the tree tier adds is therefore written in a `ztree_*.go`
   file as package variables, each assigned a closure in the file's `init`,
   which is laid out after every closure there was.
+- The small functions the hot paths call are worth what the inliner makes
+  of them: Go inlines a function of cost 80 or less, and a change that
+  grows one past it -- or grows what it inlines -- turns a few instructions
+  into a call in every caller, which no test fails and the benchmarks show
+  as a few per cent across unrelated tests. Moving the prototype into the
+  shape made `Object.proto` bigger, and `plainArray`, `chainHasProxy`,
+  `protoValue` and `ctorRoot` went over; the side fields moving after the
+  object did it to `arrayLike.dense` (array_reduce up to 1.5x main's).
+  `TestIntendedInlining` (internal/vm/inline_test.go, skipped under
+  `-short`) builds the package with `-gcflags=-m`, plain and with the JIT,
+  and fails when a function of its list is no longer inlinable; add what a
+  new hot path relies on. To see what a change lost, diff the sorted
+  `can inline` lines of
+  `go build -gcflags=github.com/go-quickjs/go-quickjs/internal/vm=-m ./internal/vm`
+  between the two builds; `-m=2`, which prints each cost, runs the go
+  command out of memory on this package.
 - What a newer Go adds -- generic methods, in Go 1.27 -- may be offered in a
   file built only with it, `//go:build go1.27`, which gives that file the
   newer language whatever go.mod says, as long as what it offers is there for
