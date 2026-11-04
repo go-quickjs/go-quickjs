@@ -4941,10 +4941,10 @@ func (c *compiler) loadProto(dst, obj amd64.Reg) {
 
 // objectData has dst be the pointer word of the data (abi.Encoding's
 // ObjectData) of the object in obj, failing unless it has its side fields
-// (FlagExt, at ObjectExt) and its data's type word is typ. It uses t, which
-// may be obj, and scratchA; dst, which may be obj too, must be neither.
-// What it reads after the first instruction it reads through dst, the
-// side fields' address, which obj may no longer hold.
+// (FlagExt, at ObjectExt) and its data's type word is typ. It uses t and
+// scratchA, which dst must be neither of; dst and t may each be obj, which
+// only the first instruction reads: what it reads after that it reads
+// through dst, the side fields' address.
 func (c *compiler) objectData(dst, obj, t amd64.Reg, typ uint64, fail func(amd64.Cond)) {
 	c.a.Lea(dst, obj, c.enc.ObjectExt)
 	c.a.LoadU8(t, dst, c.enc.ObjectFlags-c.enc.ObjectExt)

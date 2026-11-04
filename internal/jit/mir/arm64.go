@@ -2786,9 +2786,10 @@ func (c *a64Compiler) loadProto(dst, obj arm64.Reg) {
 }
 
 // objectData is amd64's: dst the pointer word of the data of the object in
-// obj, which has its side fields and data of type typ. It uses t, which
-// may be obj, and A; dst, which may be obj too, must be neither. As
-// amd64's, it reads through dst once it has the side fields' address.
+// obj, which has its side fields and data of type typ. It uses t and A,
+// which dst must be neither of; dst and t may each be obj, which, as in
+// amd64's, only the first instruction reads: after it, it reads through
+// dst, the side fields' address.
 func (c *a64Compiler) objectData(dst, obj, t arm64.Reg, typ uint64, fail func(arm64.Cond)) {
 	c.a.AddImm(dst, obj, int64(c.enc.ObjectExt), true)
 	c.a.LoadU8(t, dst, c.enc.ObjectFlags-c.enc.ObjectExt)
