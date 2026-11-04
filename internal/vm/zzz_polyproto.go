@@ -93,7 +93,9 @@ func newPolyObject[_ any](p *Object, n int) *Object {
 // class a factory makes anew at each call, or a subclass each call makes,
 // does. The first is made of a root of its own, as any constructor's
 // objects are -- a class made once has its objects' layouts from the first
-// -- and marks the code here.
+// -- and marks the code here; a second object made on a prototype the code
+// met marks it as one whose classes are kept (sharedProtos), which no
+// object of keeps its prototype in its table from then on.
 //
 //go:noinline
 func newOrdinary[_ any](fd *funcData, root *shape, proto *Object, n int) *Object {
@@ -101,8 +103,24 @@ func newOrdinary[_ any](fd *funcData, root *shape, proto *Object, n int) *Object
 		if polyable[struct{}](proto) {
 			return newPolyObject[struct{}](proto, n)
 		}
-	} else if proto.flags&objProtoMet == 0 && fd.closure != nil {
-		fd.closure.freshProtos = true
+	} else if c := fd.closure; c != nil && !c.sharedProtos {
+		if proto.flags&objProtoMet == 0 {
+			// The first object made on proto: it has been met.
+			c.freshProtos = true
+			proto.flags |= objProtoMet
+		} else if c.freshProtos {
+			// A second on a prototype a closure of the code met: the code's
+			// classes are kept and used, as Prototype.js's Class.create
+			// makes each of RayTrace's, not made for each call, and its
+			// objects are made of roots of their own from then on. With
+			// the first object of each class but the first keeping its
+			// prototype in its table, each class's objects had had a
+			// layout more, which the caches of the functions reading them
+			// learned late: RayTrace with the JIT compiled 12 functions in
+			// its first run where main compiled 20, and took 1.2 times as
+			// long in three.
+			c.freshProtos, c.sharedProtos = false, true
+		}
 	}
 	return newShapedLiteral(root.orRoot(ClassObject, proto), ClassObject, n)
 }

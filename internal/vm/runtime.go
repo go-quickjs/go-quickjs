@@ -674,8 +674,10 @@ type closureCode struct {
 	// freshProtos says a closure of the template has constructed an object
 	// on a prototype no object had: a second that does is a class a
 	// factory makes for each call, and its objects keep their prototype in
-	// their table (ctorRoot, newOrdinary).
-	freshProtos bool
+	// their table (ctorRoot, newOrdinary). sharedProtos says one has
+	// constructed a second object on such a prototype: its classes are
+	// kept, and freshProtos is not set again.
+	freshProtos, sharedProtos bool
 }
 
 // closure is a function template paired with the upvalues it captured.

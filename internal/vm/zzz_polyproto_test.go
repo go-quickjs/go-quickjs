@@ -278,3 +278,38 @@ func TestPolyProtoNoShapes(t *testing.T) {
 		r.Close()
 	}
 }
+
+// A constructor whose code makes the classes of a library once each, as
+// Prototype.js's Class.create makes RayTrace's, is told from a factory of a
+// class for each call: once a closure of the code makes a second object on
+// a prototype, the code's classes are kept (sharedProtos), and the first
+// object of each class after that has a root of its own, as main's had,
+// not the prototype in its table. A factory's classes each make one
+// object, and the code keeps making first objects so.
+func TestPolyProtoSharedClasses(t *testing.T) {
+	r := New(Config{})
+	defer r.Close()
+	src := `var Class = { create: function () { return function () { this.initialize.apply(this, arguments) } } }
+		var A = Class.create(); A.prototype = { initialize: function (x) { this.x = x } }
+		var B = Class.create(); B.prototype = { initialize: function (y) { this.y = y } }
+		var C = Class.create(); C.prototype = { initialize: function (z) { this.z = z } }
+		var a1 = new A(1), b1 = new B(2), a2 = new A(3), c1 = new C(4)
+		function factory(i) { var K = class { constructor(v) { this.v = v } }; return new K(i) }
+		var f1 = factory(1), f2 = factory(2), f3 = factory(3)`
+	if _, err := r.Run(compileForTest(t, src)); err != nil {
+		t.Fatal(err)
+	}
+	poly := func(name string) bool {
+		return r.global.getOwn(r.atoms.intern(name)).value().Object().flags&objPolyProto != 0
+	}
+	// b1, made before any class had a second object, keeps its
+	// prototype in its table; c1, made after a2, does not.
+	for name, want := range map[string]bool{"a1": false, "b1": true, "a2": false, "c1": false, "f1": false, "f2": true, "f3": true} {
+		if got := poly(name); got != want {
+			t.Errorf("%s keeps its prototype in its table: %v, want %v", name, got, want)
+		}
+	}
+	if v, err := r.Run(compileForTest(t, `[a1.x, b1.y, a2.x, c1.z, f1.v, f2.v, f3.v].join()`)); err != nil || v.String().Go() != "1,2,3,4,1,2,3" {
+		t.Fatalf("got %v, %v", v, err)
+	}
+}
