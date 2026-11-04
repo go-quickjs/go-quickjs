@@ -200,6 +200,11 @@ func (c *compiler) allowSuperProp() bool {
 		}
 		return c.parent.allowSuperProp()
 	}
+	if c.parent == nil {
+		// The top level of eval code has what its call site had: an eval
+		// inside one inside a method may use super as the method may.
+		return c.rootOpts().AllowSuperProp
+	}
 	return false
 }
 
@@ -256,6 +261,10 @@ func (c *compiler) allowSuperCall() bool {
 			return c.rootOpts().AllowSuperCall
 		}
 		return c.parent.allowSuperCall()
+	}
+	if c.parent == nil {
+		// The top level of eval code, as for super.x.
+		return c.rootOpts().AllowSuperCall
 	}
 	return false
 }

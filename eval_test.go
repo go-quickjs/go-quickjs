@@ -140,6 +140,15 @@ func TestDirectEvalInheritsTheCallSiteContext(t *testing.T) {
 		{`var executed = false; var A = class {};
 		  var C = class extends A { x = eval("executed = true; () => super()[0]") };
 		  try { new C() } catch (e) {} String(executed)`, "false"},
+		// An eval inside an eval inherits the outer eval's call site, the
+		// method or constructor, as the outer one does: super.x and super()
+		// at the top level of eval code are the call site's (Node's answers).
+		{`class A { m() { return 2 } } class B extends A { m() { return eval("eval('super.m()')") + 1 } }
+		  String(new B().m())`, "3"},
+		{`class A { constructor() { this.p = 1 } } class B extends A { constructor() { eval("eval('super()')") } }
+		  String(new B().p)`, "1"},
+		{`class A { m() { return 2 } } class B extends A { m() { return eval("(() => eval('super.m()'))()") } }
+		  String(new B().m())`, "2"},
 	}
 
 	for _, tc := range cases {
@@ -159,6 +168,12 @@ func TestDirectEvalInheritsTheCallSiteContext(t *testing.T) {
 		// And outside a class there is no super at all.
 		{`function f() { return eval("super.x") } f()`, "SyntaxError"},
 		{`eval("super.x")`, "SyntaxError"},
+		// Nested evals take only what their call site had: a function inside
+		// the outer eval has no super, a method no super(), a script neither.
+		{`class A { m() {} } class B extends A { m() { return eval("(function () { return eval('super.m()') })()") } } new B().m()`, "SyntaxError"},
+		{`class A {} class B extends A { m() { return eval("eval('super()')") } } new B().m()`, "SyntaxError"},
+		{`eval("eval('super.x')")`, "SyntaxError"},
+		{`eval("eval('super()')")`, "SyntaxError"},
 		{`function f() { return eval("new.target") } "ok"; eval("new.target")`, "SyntaxError"},
 	}
 	for _, tc := range bad {
