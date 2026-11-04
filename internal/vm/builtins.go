@@ -3135,11 +3135,17 @@ func (r *Runtime) plainArray(this Value) *Object {
 
 // noInheritedIndices reports whether an array's prototypes are the realm's
 // own two, as they came, with no element or indexed property that an
-// assignment to one of the array's indices would have to consult.
+// assignment to one of the array's indices would have to consult. Every
+// caller has found o's prototype the realm's Array.prototype (plainArray),
+// which is not read again; Array.prototype, an array, and Object.prototype,
+// whose prototype cannot change, have theirs in their layouts
+// (layoutProto). Each read through proto had been three loads and a test,
+// one after the other, where main's was a load of a field: a chain six
+// loads long before the first comparison.
 func (r *Runtime) noInheritedIndices(o *Object) bool {
-	ap := o.proto()
-	op := ap.proto()
-	if op != r.proto.object || op.proto() != nil {
+	ap := r.proto.array
+	op := ap.layoutProto()
+	if op != r.proto.object || op.layoutProto() != nil {
 		return false
 	}
 	for _, p := range [2]*Object{ap, op} {
