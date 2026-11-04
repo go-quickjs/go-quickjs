@@ -5188,6 +5188,11 @@ func jitNeedsMaker(c Value) bool {
 	if t == nil || t.fn.Kind != bytecode.KindArrow {
 		return false
 	}
+	if t.fn.UsesNewTarget {
+		// It, or an arrow in it, reads new.target or super, or has a direct
+		// eval, which may read either: the walk below misses the eval.
+		return true
+	}
 	var reads func(fn *bytecode.Function) bool
 	reads = func(fn *bytecode.Function) bool {
 		for _, in := range fn.Code {
@@ -12637,6 +12642,13 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure, made bool
 			if l.construct && l.newTarget.IsObject() {
 				f.newTarget = l.newTarget
 			}
+			if fn.Kind == bytecode.KindArrow && f.callee != nil {
+				// An arrow's new.target is the one it captured, as a call of
+				// it has it (callClosure), not its call's.
+				if fd := f.callee.fn(); fd != nil && fd.arrow {
+					f.newTarget = fd.extra.lexNewTarget
+				}
+			}
 			f.openUpvalues, f.handlers = f.openUpvalues[:0], f.handlers[:0]
 			if c := s.ssaCtxs[l.ctx]; !l.inline && c.Open != 0 && l.ctx < len(s.calleeOpen) {
 				// What its closures captured, which its context kept, the
@@ -13953,6 +13965,13 @@ func jitFrameArgs(fn *bytecode.Function) bool {
 // abi.Context's Function), where Go finds it for the frames it makes of
 // the callee's level, as V8's frame has its function.
 func jitFrameCallee(fn *bytecode.Function) bool {
+	if fn.Kind == bytecode.KindArrow && fn.UsesNewTarget {
+		// An arrow whose code, or an arrow it makes, reads new.target or
+		// super, or has a direct eval: its frame's new.target is the one the
+		// arrow captured, and the arrows it makes take the home object from
+		// it, both found through its function object (callClosure).
+		return true
+	}
 	return fn.MappedArguments || slices.ContainsFunc(fn.Code, func(in bytecode.Instr) bool {
 		switch in.Op {
 		case bytecode.OpGetSuperProp, bytecode.OpGetSuperIndex, bytecode.OpSetSuperProp, bytecode.OpSetSuperIndex, bytecode.OpSuperBase,

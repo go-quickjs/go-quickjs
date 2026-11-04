@@ -722,3 +722,36 @@ func TestJITCapturedLocals(t *testing.T) {
 		})
 	}
 }
+
+// An arrow that native code makes, or calls, keeps what its maker gives
+// it -- the home object super reads, the new.target it captured -- where it
+// reads them through a direct eval or through an arrow it makes in turn.
+// The JIT had made the first from a pool, which has neither, and the frames
+// Go made for the second's level had no function object and an undefined
+// new.target: super threw a TypeError, and new.target was undefined at the
+// calls Go made. The answers are Node's, with the JIT and without.
+func TestJITArrowKeepsItsMakersContext(t *testing.T) {
+	const src = `class P { m() { return 1 } }
+class H extends P {
+	viaEval() { let s = 0; for (let i = 0; i < 2000; i++) s += (() => eval("super.m()"))(); return s }
+	viaNested() { const k = () => () => super.m(); let s = 0; for (let i = 0; i < 2000; i++) s += k()(); return s }
+}
+function F() {
+	let e = 0, n = 0
+	for (let i = 0; i < 2000; i++) if ((() => eval("new.target"))() === F) e++
+	const k = () => () => new.target
+	for (let i = 0; i < 2000; i++) if (k()() === F) n++
+	this.e = e; this.n = n
+}
+const h = new H(), f = new F();
+[h.viaEval(), h.viaNested(), f.e, f.n].join()`
+	r := quickjs.New(quickjs.WithJIT())
+	defer r.Close()
+	hostaccess.VM(r).SetJITWarmUp(8, 8)
+	if got, want := evalString(t, r, src), "2000,2000,2000,2000"; got != want {
+		t.Errorf("super and new.target through arrows = %s, want Node's %s", got, want)
+	}
+	if st := hostaccess.VM(r).JITStats(); st.Budget != 0 && st.Entries == 0 {
+		t.Errorf("native code never ran: %+v", st)
+	}
+}
