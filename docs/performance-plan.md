@@ -2588,6 +2588,7 @@ The rounds that followed, each measured as above. The commit says more.
 | 2026-10-20 | `262fb78`..`b5ee46c` | JIT: calls of Go that run nothing made without a frame; keyed writes, a Map's or a Set's iterator's step and an array's length natively | `prop_create` 201 to 65 ns, `map_for_of` 66 to 14, `array_length_decr` 85 to 18, `map_set_bigint` 405 to 171 (the interpreter's 224) |
 | 2026-10-20 | `e49c1d9`, `26eb754` | JIT: loops whose calls of Go or exits do not pay go back to the tree tier, at the loop that entered native code | `date_now` 69 to 50 ns (the interpreter's 49), `generator_create` 979 to 690 (687) |
 | 2026-10-21 | `a02e9d1`..`3141a88` | Built-ins that run no script called as leaves by every tier; RegExp's literal runs, byte searches and a literal's RegExp given back; String's methods written in place; generators, tail calls and finally clauses in the tree tier; in the JIT a longer substring, concatenation, shapes known, destructuring and parameter prologues | without the JIT V8 -1.6% (RegExp -6.1%), AWFY -1.8%; with it V8 -2.0% |
+| 2026-11-04 | `fece0478`..`6c58742a` | An object 56 to 32 bytes: its values a pointer and two counts, its prototype in its shape, its side fields after it; the first object made on a prototype keeps it in its table, as JavaScriptCore's poly-proto structures; shapes counted against their prototypes and given back with them | bytes: V8 -20%, AWFY -17%; without the JIT V8 -5.2%, AWFY -1.0%, micro-benchmarks -1.9%; with it V8 -3.4%, AWFY -4.3%, micro-benchmarks -1.4% |
 
 ### What is open
 
@@ -3288,8 +3289,7 @@ first, as the rest of the plan is.
   site for `obj[i] = v` on plain objects (`setIndexed` 32% of
   `prop_create`'s profile), which wants a keyed store cache of several
   entries (2026-10-12).
-- An Object of 48 bytes, its values a pointer and two 32-bit lengths
-  (stage 3 of 2026-10-13); a closure's blocks inside its function object,
+- A closure's blocks inside its function object,
   about 4.9K allocations fewer in EarleyBoyer, at the cost of many size
   combinations (2026-10-12).
 
@@ -3322,7 +3322,36 @@ first, as the rest of the plan is.
   `regexp_search_utf16`, 7% or more (2026-10-27).
 - `async_call`, `async_chain` and `async_generator` 2-6% (2026-10-20).
 
+**Objects of 32 bytes** (2026-11-04, left when the change landed, each
+3% or more slower than main at every placement or most of them, with what
+was ruled out in the commits and in [optimizing.md](optimizing.md))
+
+- `global_func_call` with the JIT, 1.11-1.15 times main's: the same native
+  code but for displacements and constants, no exits or calls of Go; the
+  extra samples sit on the dependent loads of the global's shape, its keys
+  and the lexical names. Heap pads in every size class, the lexical names'
+  data moved, `JITPAD`, seeds, `GOMAXPROCS` and `GOGC=off` move nothing;
+  level in a script of its own. Untried: the frame-room loads, L1 way
+  prediction, hardware counters.
+- `generator_objects` without the JIT, 1.02-1.17: `stepGenTree`, the same
+  5,440 bytes, takes 35% longer, at either 64-byte phase; the generator's
+  fields sit elsewhere now that the object is smaller (unproven).
+- `math_pow` without the JIT, 0.97-1.14: five pad variants a side barely
+  overlap (main 72.9-80.9 ns, this 79.8-85.9).
+- `executeAt` is 1,376 bytes smaller, its cases reading the new layout;
+  `noneHas` and the allocation helpers no longer inline, each calling
+  `rootFor` or `findOwn`.
+- `class_factory` and `subclass_fresh` slower in a full micro run only:
+  main's shape tree fills there and stops making constructors' layouts.
+
 **Measurement and tooling**
+
+- Placements varying read-only data: two builds of the same code, their
+  type descriptors 32 bytes apart, take 211 and 192 ms on
+  `string_template` (2026-11-04).
+- The JIT's placements varying distances inside a function: main with one
+  `xorpd` before each `cvtsi2sd` is as slow as the 32-byte objects on
+  `typed_u8c_forEach` and `typed_i8_forEach` (2026-11-04).
 
 - Placements varying where package vm sits against the packages before
   it, as a pad in mir would.

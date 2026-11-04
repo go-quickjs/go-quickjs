@@ -239,6 +239,12 @@ operations in one warmed process. Report bundle size, first-use latency,
 allocations, and peak RSS. Distinguish work moved from package startup to first
 feature use.
 
+An optimization follows [docs/optimizing.md](docs/optimizing.md): what it
+must show before it lands -- a measured net gain, no test much slower at
+every placement, totals as well as minimums -- the order of work, and how
+to tell a slower test's cost from where the linker put code and data. Read
+it before measuring, not after.
+
 `internal/cmd/v8bench` runs the V8 v7 suite: `-mode fixed` does the same
 work on every run, which is what compares two builds (build each to a binary
 and alternate them), `-mode compile` is the parser and compiler alone, and
