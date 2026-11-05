@@ -10047,6 +10047,13 @@ func (s *jitState) lowering(fn *bytecode.Function) *jitLowering {
 	return l
 }
 
+// loweredSSA reports whether fn is lowered for a compile, and makes no
+// lowering to say so: one holds room, which only a compile has made
+// (jitLowerLater).
+func (s *jitState) loweredSSA(fn *bytecode.Function) bool {
+	return s.lowered[weak.Make(fn)] != nil && s.loweringFresh(fn).done[jitLowerSSA]
+}
+
 // jitLower is fn's program, lowered as kind says, from the runtime's
 // programs (jitLowering).
 func (r *Runtime) jitLower(fn *bytecode.Function, kind jitLowerKind) (*ir.Program, error) {
@@ -12361,6 +12368,14 @@ const (
 	jitContextsMax = 96
 )
 
+// jitGrowTo is s with room for n elements, its length as it is.
+func jitGrowTo[T any](s []T, n int) []T {
+	if cap(s) >= n {
+		return s
+	}
+	return append(make([]T, 0, n), s...)
+}
+
 // jitGrowContexts adds contexts, linked to the last -- jitContexts, or as
 // many as there are -- if there are fewer than jitContextsMax and the
 // JIT's budget has the room, and reports whether it did. The others stay
@@ -12375,9 +12390,15 @@ func (r *Runtime) jitGrowContexts() bool {
 		return false
 	}
 	s.budget = r.jitBudget()
-	if !s.makeRoom(add * jitContextBytes) {
+	if !s.makeRoom(add * jitContextShare) {
 		return false
 	}
+	// Each context's places in what is kept by context, made here in the
+	// room made for them: grown as runs reach them, they took room no one
+	// had made.
+	s.ssaCtxs = jitGrowTo(s.ssaCtxs, old+add)
+	s.goRuns = jitGrowTo(s.goRuns, old+add)
+	s.calleeOpen = jitGrowTo(s.calleeOpen, old+add)
 	chunk := make([]abi.Context, add)
 	if s.charStrings == nil {
 		s.charStrings = new([256]Value)

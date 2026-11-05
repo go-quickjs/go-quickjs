@@ -307,8 +307,7 @@ func (r *Runtime) jitLowerLater(fn *bytecode.Function) bool {
 	if s.unavailable || s.jobsFull() || !s.admits(fn) || !jitCompiles(fn, r.jitBudget()) {
 		return false
 	}
-	l := s.loweringFresh(fn)
-	if l.done[jitLowerSSA] {
+	if s.loweredSSA(fn) {
 		return false
 	}
 	s.budget = r.jitBudget()
@@ -316,6 +315,8 @@ func (r *Runtime) jitLowerLater(fn *bytecode.Function) bool {
 	if !s.makeRoom(len(fn.Code)*s.perInstr + s.hintRoom(nil)) {
 		return false
 	}
+	// Made in the room, and past what making it may reclaim.
+	l := s.loweringFresh(fn)
 	h := l.hints
 	t := &jitLowerTask{fn: fn, kind: jitLowerSSA, l: l, serial: l.serial, done: make(chan struct{}),
 		hints: jitcompile.Hints{StringAdds: slices.Clone(h.StringAdds), ElementReads: slices.Clone(h.ElementReads), StringReads: slices.Clone(h.StringReads)}}

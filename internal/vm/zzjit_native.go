@@ -1353,6 +1353,9 @@ var (
 	jitLoweringFixed = int(unsafe.Sizeof(jitLowering{})) + jitMapSlot
 	jitPoolFixed     = int(unsafe.Sizeof(abi.ObjectPool{})) + int(unsafe.Sizeof(jitPoolSource{}))
 	jitContextBytes  = int(unsafe.Sizeof(abi.Context{}))
+	// jitContextShare is what a context holds, with its places in what is
+	// kept by context (sharedBytes).
+	jitContextShare = jitContextBytes + int(unsafe.Sizeof((*abi.Context)(nil))) + int(unsafe.Sizeof(jitGoRun{})) + int(unsafe.Sizeof([]*upvalue(nil)))
 )
 
 // jitCapBytes is the memory s's backing array holds.
@@ -2948,7 +2951,7 @@ func (r *Runtime) jitWarmFor(cl *closure) *jitEntry {
 	// warming, its budget spent, which tryJITAt hands the lowering of.
 	// So is one the runtime has no room for in the background for now,
 	// which waits for room there.
-	lowerFirst := now && !s.unavailable && r.jitInBackground(fn) && (s.jobsFull() || !s.loweringFresh(fn).done[jitLowerSSA])
+	lowerFirst := now && !s.unavailable && r.jitInBackground(fn) && (s.jobsFull() || !s.loweredSSA(fn))
 	if (now || s.unavailable) && !lowerFirst {
 		// In the background, where the runtime compiles there (tryJITAt
 		// runs it in the existing tiers meanwhile).
