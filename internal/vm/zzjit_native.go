@@ -928,6 +928,8 @@ type jitEntry struct {
 	// compiled again from LowerSSAHot's program too.
 	hostOnly, hot bool
 	coldWork      uint64
+	// flushInvoked is invoked at the cache's last look (jitFlushRealms).
+	flushInvoked int64
 }
 
 // uses is how often e's code, or what e knows, was used: Go's entries,
@@ -1022,6 +1024,9 @@ type jitState struct {
 	byFn map[jitFnAddr]jitFnEntry
 	// links are the functions' links (jitLink), by the same keys.
 	links map[jitKey]*jitLink
+	// manyRealms says a look of the cache's has found code kept for
+	// another realm than the current one's (jitFlushRealms).
+	manyRealms bool
 	// callRefs bounds the pointer words any code's native calls write
 	// themselves to their contexts' RecordRef (jit.SSACode's CallRefs),
 	// which a run's end clears (jitRunDone).
@@ -1940,6 +1945,7 @@ func (s *jitState) flush() {
 		}
 		s.flushed++
 	}
+	jitFlushRealms[struct{}](s, used)
 }
 
 // admit reports whether fn, which the cache holds no entry of, is to be

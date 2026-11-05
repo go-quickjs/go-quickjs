@@ -4,6 +4,7 @@ package vm
 
 import (
 	"testing"
+	"weak"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
@@ -208,5 +209,192 @@ func TestJITRealmsWithinTheBudget(t *testing.T) {
 		}
 		r.Close()
 		r.ReleaseClosed()
+	}
+}
+
+// jitRealmFlushed has the cache look for code to flush, its clock moved
+// past the last look each time, a turn in the current realm between looks,
+// until it holds no entry of a realm that is not current or a look finds
+// nothing more to drop.
+func jitRealmFlushed(t *testing.T, r *Runtime, setEpoch func(uint64), keep map[weak.Pointer[Realm]]bool) int {
+	t.Helper()
+	cur := r.jitRealmKey()
+	idle := compileForTest(t, `0`)
+	left := 0
+	for i := uint64(1); i <= 8; i++ {
+		setEpoch(1000 + i*jitFlushAge)
+		if _, err := r.Run(idle); err != nil {
+			t.Fatal(err)
+		}
+		r.jit.flush()
+		left = 0
+		for key := range r.jit.cache {
+			if key.realm != cur && !keep[key.realm] {
+				left++
+			}
+		}
+		if left == 0 && i >= 2 {
+			break
+		}
+	}
+	return left
+}
+
+// Entries of realms a host has dropped leave the cache, and the realms with
+// them. An entry's key holds its realm weakly, but its code's pools hold the
+// realm's objects, and its feedback the closures it saw, so that a key was
+// never gone: the cache lets go of a realm none of whose entries has run
+// between two of its looks, its entries with no code as well, and of what it
+// keeps of the realm it last ran code of, which had kept the last realm and,
+// through the megamorphic cache, more. One that has only gone quiet runs on,
+// compiling again, and the runtime's first realm runs on as it was.
+func TestJITDroppedRealmsLeaveTheCache(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setEpoch := jitFlushForTest(t)
+	fn := compileForTest(t, jitRealmProgram+"check(1000);")
+	for _, c := range []jitStressConfig{{}, {threshold: true, budget: 3, deopt: 7}, {background: true, checks: 2}} {
+		setEpoch(1000)
+		r := jitRuntimeForTest(t, Config{JIT: true})
+		r.jitStress = c
+		r.global.setOwnRaw(r.atoms.intern("__tag"), Int(-1), propDefault)
+		quiet := jitRealmsForTest(t, r, 1)[0]
+		jitRealmCheck(t, r, quiet, fn, 1000, "the quiet realm")
+		var refs []weak.Pointer[Realm]
+		for i, re := range jitRealmsForTest(t, r, 3) {
+			refs = append(refs, weak.Make(re))
+			for round := range 3 {
+				jitRealmCheck(t, r, re, fn, 1000, jitRealmSay(c, round, i))
+			}
+		}
+		s := r.jit
+		native := 0
+		for key, e := range s.cache {
+			if key.realm.Value() != nil && e.ssa != nil && e.ssaStats.entries != 0 {
+				native++
+			}
+		}
+		if native == 0 {
+			t.Fatalf("%+v: no realm ran native code", c)
+		}
+		if n := jitRealmFlushed(t, r, setEpoch, nil); n != 0 {
+			t.Errorf("%+v: %d entries of dropped realms left", c, n)
+		}
+		if err := jitLinksHeld(s); err != nil {
+			t.Error(err)
+		}
+		if err := jitEntriesFound(s); err != nil {
+			t.Error(err)
+		}
+		if n := realmsAlive(r, refs); n != 0 {
+			t.Errorf("%+v: %d of %d realms alive with %d entries in the cache", c, n, len(refs), len(s.cache))
+		}
+		for round := range 3 {
+			jitRealmCheck(t, r, quiet, fn, 1000, jitRealmSay(c, round, 9))
+		}
+		if v, err := r.Run(compileForTest(t, jitRealmProgram+"check(1000);")); err != nil || v.String().Go() != "" {
+			t.Errorf("%+v: in the first realm: %v, %v", c, v, err)
+		}
+		if t.Failed() {
+			return
+		}
+	}
+}
+
+// What a realm dropped has run, each program of realmPrograms made hot, is
+// no reason to keep it: what native code made and met -- suspended
+// generators' frames in the contexts, the megamorphic cache's shapes, the
+// closures an entry warming has seen -- is let go of with its entries.
+func TestJITDroppedRealmsAreCollected(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setEpoch := jitFlushForTest(t)
+	for _, p := range realmPrograms {
+		t.Run(p.name, func(t *testing.T) {
+			setEpoch(1000)
+			r := jitRuntimeForTest(t, Config{JIT: true})
+			r.SetJITWarmUp(8, 8)
+			fn := compileForTest(t, "function hot() { "+p.src+" }\nfor (var i_ = 0; i_ < 20; i_++) hot();")
+			var refs []weak.Pointer[Realm]
+			for range 4 {
+				re := r.NewRealm()
+				refs = append(refs, weak.Make(re))
+				for range 3 {
+					if _, err := r.RunIn(re, fn); err != nil {
+						t.Fatal(err)
+					}
+					if err := r.DrainJobs(); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if r.jit == nil {
+				return
+			}
+			if n := jitRealmFlushed(t, r, setEpoch, nil); n != 0 {
+				t.Errorf("%d entries of dropped realms left", n)
+			}
+			if n := realmsAlive(r, refs); n != 0 {
+				t.Errorf("%d of %d realms alive", n, len(refs))
+			}
+		})
+	}
+}
+
+// The entries of the realm that runs stay, those warming up as well as those
+// with code, while another's go: warming, an entry's uses are not counted,
+// and what it is compiled for needs the invocations it has.
+func TestJITFlushKeepsTheRunningRealm(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setEpoch := jitFlushForTest(t)
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	r.SetJITWarmUp(1<<15, 1<<15)
+	fn := compileForTest(t, "{"+jitHotProgram(4)+"}")
+	re := r.NewRealm()
+	for range 3 {
+		if _, err := r.Run(fn); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.RunIn(re, fn); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := r.jit
+	count := func() (own, other, warming int) {
+		cur := r.jitRealmKey()
+		for key, e := range s.cache {
+			if key.realm == cur {
+				own++
+				if !e.holdsCode() {
+					warming++
+				}
+			} else {
+				other++
+			}
+		}
+		return
+	}
+	own, other, warming := count()
+	if own == 0 || other == 0 || warming == 0 {
+		t.Fatalf("%d entries of the first realm, %d warming, %d of the other", own, warming, other)
+	}
+	setEpoch(1000 + jitFlushAge)
+	s.flush()
+	setEpoch(1000 + 2*jitFlushAge)
+	s.flush()
+	own2, other2, warming2 := count()
+	if own2 != own || warming2 != warming {
+		t.Errorf("the running realm's entries: %d, %d warming, of %d, %d", own2, warming2, own, warming)
+	}
+	if other2 != 0 {
+		t.Errorf("%d entries of %d left of a realm with none used", other2, other)
+	}
+	// The other realm lives, and warms up again.
+	if _, err := r.RunIn(re, fn); err != nil {
+		t.Fatal(err)
 	}
 }
