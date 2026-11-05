@@ -2561,6 +2561,23 @@ again.
 - Holding an outgrown creation site's objects in a table sized to its
   largest object, up to 32 properties: one large outlier makes every small
   object take 1.6 times the memory.
+- JIT partial escape analysis, Graal's: objects left unmade across merges
+  and loop headers, made where they escape, with code for on-stack
+  replacement kept apart, as V8 keeps it (2026-11-04, `b15940e2`, correct
+  and tested). Over four placements
+  against the code it would land on, Are We Fast Yet +0.1%, V8 +0.5%,
+  Octane -0.4%, the micro-benchmarks outside its own level (1.0006), and
+  compiles about 1.5% longer; first runs of short callback loops 10-18%
+  slower (`array_forEach`, `typed_f64_every`, `array_sort`), and of its own
+  worst cases up to 2.2 times (`carried_phases`). Its own micro-benchmarks
+  gain 74-85%. Real programs give it little: of Octane's 392 candidate
+  objects it leaves 18 unmade, of Are We Fast Yet's 71 eleven, the rest
+  returned or stored, held by objects that escape, or array and template
+  literals it does not model; RayTrace's temporaries are returned by
+  callees past the inlining budget, and a budget of 400 cut its
+  allocations 6% at no gain in time. What paid in its round was inlining an
+  arrow that reads `this` where its maker makes it (`ad3e6091`, Havlak
+  -4%), which needed none of it.
 
 ## After the review
 

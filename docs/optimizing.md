@@ -188,7 +188,11 @@ about where it and its data are.
   belongs to another layer -- a compiler analysis a VM change needs --
   goes in a commit of its own.
 - **Tool fixes land by themselves too**, so that both sides of every later
-  comparison measure the same way.
+  comparison measure the same way. That includes the benchmarks' own
+  sources: a base without a change's new micro-benchmarks runs different
+  code. Their extra globals changed a constant in every loop's global-cell
+  code, two bytes longer, and made `array_some` and others look 16% slower
+  on the change's side.
 - **Rebase when main moves**, and measure against the base the change will
   land on.
 - **Fold fix-ups into the commits they fix** before the merge; each commit
