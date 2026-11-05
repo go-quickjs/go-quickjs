@@ -131,27 +131,31 @@ func chargeShape[_ any](t *shapeTree, p *Object) {
 	ps.budget.b.n.Add(1)
 }
 
-// chargeChild is chargeShape for a shape just grown from s. One grown from a
-// literal's root is counted against the root's slot of a budget, taken with
-// the first, as a prototype's own layout has one. What it asks is the root's
-// because a shape does not say: a layout grown by a prototype's slot says no
-// prototype (polySetProto).
+// chargeChild is chargeShape for c, a shape just grown from s. One grown from
+// a literal's root is counted against the root's slot of a budget, taken with
+// the first, as a prototype's own layout has one, and which each shape grown
+// from it takes from its parent: asked of the root, by a walk up the chain,
+// each of a literal's shapes would pay for its depth, up to maxShapeDepth, and
+// the shapes of one object the square of it. A shape with no slot is so of
+// none grown from a root that has one. The root is what decides, a shape not
+// saying: a layout grown by a prototype's slot says no prototype
+// (polySetProto).
 //
 //go:noinline
-func chargeChild[_ any](s *shape) {
-	s = s.root()
-	p := s.proto
-	if p != nil && !s.generic && s.rootClass == ClassObject {
-		b := s.budget
-		if b == nil {
-			p.flags |= objProtoMet
-			b = budgetSlotOf[struct{}](s.tree)
-			s.budget = b
-		}
-		b.b.n.Add(1)
-		p = nil
+func chargeChild[_ any](s, c *shape) {
+	b := s.budget
+	if p := s.proto; b == nil && s.parent == nil && p != nil && !s.generic && s.rootClass == ClassObject {
+		p.flags |= objProtoMet
+		b = budgetSlotOf[struct{}](s.tree)
+		s.budget = b
 	}
-	chargeShape[struct{}](s.tree, p)
+	if b != nil {
+		c.budget = b
+		b.b.n.Add(1)
+		chargeShape[struct{}](s.tree, nil)
+		return
+	}
+	chargeShape[struct{}](s.tree, s.proto)
 }
 
 // budgetSlotOf is the next slot of t's budgets, for a prototype's layout or

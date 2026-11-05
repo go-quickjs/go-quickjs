@@ -3,6 +3,7 @@ package vm
 import (
 	"fmt"
 	"runtime"
+	"strings"
 	"testing"
 	"weak"
 
@@ -400,5 +401,36 @@ func TestProgramRerunsMakingUpKeys(t *testing.T) {
 	}
 	if r.shapes.count >= maxShapes {
 		t.Error("the tree is full")
+	}
+}
+
+// A shape takes its budget from its parent, which is what a literal's root
+// took at its first child: nothing it costs grows with its depth. Asked of
+// the root, the shapes of an object of a thousand properties had walked half
+// a million parents, and each new shape of any kind paid for its own.
+func TestShapeChargedFromItsParent(t *testing.T) {
+	r := New(Config{})
+	var b strings.Builder
+	b.WriteString("var o = {")
+	for i := range 1000 {
+		fmt.Fprintf(&b, "k%d: %d,", i, i)
+	}
+	b.WriteString("}; o")
+	v, err := r.Run(compileForTest(t, b.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := v.Object().shape
+	if s == nil || s.unique || s.n != 1000 {
+		t.Fatalf("no shared layout of a thousand keys: %+v", s)
+	}
+	root := s.root()
+	if root.budget == nil {
+		t.Fatal("the literal's root has no budget")
+	}
+	for c := s; c != root; c = c.parent {
+		if c.budget != root.budget {
+			t.Fatalf("the shape of %d keys has not its root's budget", c.n)
+		}
 	}
 }

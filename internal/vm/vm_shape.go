@@ -872,7 +872,7 @@ func (s *shape) child(e shapeEdge) *shape {
 		c.index = s.index
 		c.index.add(e.key, s.n)
 	}
-	chargeChild[struct{}](s)
+	chargeChild[struct{}](s, c)
 	if s.next == nil {
 		s.setNext(c, e)
 	} else {
