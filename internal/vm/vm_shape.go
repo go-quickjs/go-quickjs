@@ -179,6 +179,9 @@ type shapeSide struct {
 	// forIn is what a for-in loop visits on an object of a shared shape,
 	// made the first time one is walked; see startForIn.
 	forIn *forInKeys
+	// programs is, on the layout of a realm's Object.prototype, the roots
+	// of the literals of the Programs the realm runs (zzz_rerun.go).
+	programs *programTable
 }
 
 // protoCell is a prototype chain's validity cell, as V8's: valid while no

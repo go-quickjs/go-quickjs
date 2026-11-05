@@ -581,15 +581,25 @@ func (r *Runtime) evalIn(ctx context.Context, re *vm.Realm, name, src string) (r
 // runIn runs compiled code in a realm, or in the runtime's own when re is
 // nil, and then the jobs it queued.
 func (r *Runtime) runIn(ctx context.Context, re *vm.Realm, fn *bytecodeFunc) (result Value, err error) {
+	return r.runCode(ctx, re, fn, false)
+}
+
+// runCode is runIn for fn, as a program a host may run again, if program.
+func (r *Runtime) runCode(ctx context.Context, re *vm.Realm, fn *bytecodeFunc, program bool) (result Value, err error) {
 	rt := r.rt
 	outer := rt.Context()
 	nested, leave := r.enter(ctx)
 	defer leave()
 
 	var v vm.Value
-	if re == nil {
+	switch {
+	case program && re == nil:
+		v, err = vm.RunProgram[struct{}](rt, fn)
+	case program:
+		rt.InRealm(re, func() { v, err = vm.RunProgram[struct{}](rt, fn) })
+	case re == nil:
 		v, err = rt.Run(fn)
-	} else {
+	default:
 		v, err = rt.RunIn(re, fn)
 	}
 	if r.closed {

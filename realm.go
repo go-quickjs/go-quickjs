@@ -82,7 +82,7 @@ func (re *Realm) RunProgramContext(ctx context.Context, p *Program) (result Valu
 	if err != nil {
 		return Value{}, err
 	}
-	return r.runIn(ctx, re.realm, fn)
+	return r.runCode(ctx, re.realm, fn, !r.debug)
 }
 
 // Global returns the realm's global object.

@@ -3455,6 +3455,17 @@ was ruled out in the commits and in [optimizing.md](optimizing.md))
   the time in closures whose size did not change, 970 of the package's
   closures 32 bytes earlier. Pads moved them 64 bytes, not 32, so that the
   proof is not made: it is the closure block's place, unproven.
+- A `Program` run again keeps its literals' roots (KI-66, `zzz_rerun.go`) and
+  nothing else: each run still interns its names, makes its constants and
+  fills every cache anew, which is most of what a run of a large program pays
+  before it does anything. Keeping a function's caches from run to run was
+  weighed and not built: a class a run defines is a new prototype, and so a new
+  layout, at each run, so that the sites reading its objects would go
+  megamorphic and stay so, where each run's own caches are monomorphic. Worth
+  measuring as a host's load, a `Program` on a kept runtime, before deciding.
+- `Eval` of one source for each request compiles anew and makes its literals'
+  shapes anew: correct, the tree flat, but nothing learned carries over. A
+  cache of compiled source would, and no host has asked for one.
 
 **Measurement and tooling**
 

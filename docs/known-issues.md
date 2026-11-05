@@ -383,10 +383,10 @@ Paths are relative to this repository; `go-intl:` paths are in
   a program filled the tree in some tens of thousands of runs.
 - **Status:** fixed. What caches what a realm's code found is the realm's, and
   goes with it; a cleanup holds its cell weakly, and a registry is kept by the
-  realm of its callback; a realm's literals' roots are counted against its
-  `Object.prototype` (`settleSites`); the JIT's cache lets go of a realm none
-  of whose entries ran between two of its looks, a second of the program's
-  time apart (`jitFlushRealms`), and it is compiled again if it runs again.
+  realm of its callback; a realm's literals' roots no longer stay in the tree's
+  count (KI-66); the JIT's cache lets go of a realm none of whose entries ran
+  between two of its looks, a second of the program's time apart
+  (`jitFlushRealms`), and it is compiled again if it runs again.
   `TestDroppedRealmsAreCollected`, `TestRealmsPerRequestAreCollected`,
   `TestJITDroppedRealmsLeaveTheCache` and `TestShapeBudgetRealms` pin it. What
   remains is by design, as V8 holds what its caches hold weakly and this
@@ -410,10 +410,33 @@ Paths are relative to this repository; `go-intl:` paths are in
   run in one realm, reached 40,004 shapes at 10,000 runs and the 65,536 of
   `maxShapes` by 20,000. From then on no object is given a shared layout: each
   has a layout of its own, which no cache can remember, whatever it runs. A host
-  that runs one `Program` for each request in one realm gets there; a realm for
-  each request does not, its `Object.prototype` giving its shapes back
-  (KI-65).
-- **Status:** open.
+  that runs one `Program` for each request in one realm gets there, and so does
+  one that calls `Eval` for each, with new bytecode each time; a realm for each
+  request does not, its `Object.prototype` giving its shapes back (KI-65).
+- **Status:** fixed. A literal's root and the shapes grown from it hold one
+  another, and are garbage together, so they are counted against a budget the
+  root holds (`chargeChild`), not against their prototype, and a root is out
+  of the count once the code that made it stops running (`settleSites`):
+  there is one for each literal of the code that lives, which is no growth
+  the count is there to stop. So the two-literal script holds 32 shapes at
+  2,000 runs, where it held 12,000, and at any number after. On top of that a
+  `Program` makes no shape for a run after its first: a realm keeps a root for
+  each of its literals, as the layout of its `Object.prototype` keeps the roots
+  of other objects made on it, and each run's caches start from them
+  (`zzz_rerun.go`), so that a run's objects have the layouts the last run's had
+  and code compiled in one run holds for the next. The two-literal script's
+  allocations fall from 17 to 7 a run. `TestShapeReruns`,
+  `TestShapeRerunsAlternating`, `TestShapeFreshCodeRuns`,
+  `TestShapeAfterReruns`, `TestProgramRerunsMakeNoShapes`,
+  `TestProgramRerunsLetGo` and `TestJITProgramRerunsKeepLayouts` pin it. What
+  remains:
+  - Shapes are given back by a cleanup, after a collection. A host with a heap
+    so large that it allocates 65,536 shapes between two collections, running
+    new code for each request, finds the tree full until the next one, as
+    prototypes made and dropped always could.
+  - One object kept of a run holds the budget of the sixteen roots its root
+    shares one with; one kept of a `Program`'s roots let go holds the whole
+    program's, up to a quarter of the tree.
 
 ## P2: wrong results
 

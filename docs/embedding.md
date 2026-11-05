@@ -293,6 +293,11 @@ func serve(req Request) (string, error) {
 - A program runs as a script, like `Eval`. Running it twice on one runtime
   redeclares its top-level `class`, `let` and `const`, which is a SyntaxError,
   as evaluating the same source twice would be.
+- A program run again in a realm starts from what its last run learned of its
+  object literals: its objects have the same layouts, which it makes once, and
+  code compiled in one run holds for the next. A runtime kept for many requests
+  gets this from `RunProgram`, and not from `Eval` of the same source, which
+  compiles it anew. A realm keeps this for as long as the program lives.
 - `quickjs.WithOffset(line, column)` places the source within a larger file,
   such as a script in an HTML page, so that stack traces and syntax errors
   give positions in the whole file.

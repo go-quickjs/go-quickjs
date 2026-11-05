@@ -121,7 +121,9 @@ func (p *Program) code(r *Runtime) (*bytecodeFunc, error) {
 }
 
 // RunProgram runs a compiled program, as Eval runs source, and returns its
-// completion value.
+// completion value. A program run again in a realm finds what its last run
+// learned of its object literals' layouts, and makes none of them anew, where
+// Eval of the same source, which compiles it again, does.
 func (r *Runtime) RunProgram(p *Program) (Value, error) {
 	return r.RunProgramContext(context.Background(), p)
 }
@@ -140,5 +142,5 @@ func (r *Runtime) RunProgramContext(ctx context.Context, p *Program) (result Val
 	if err != nil {
 		return Value{}, err
 	}
-	return r.runIn(ctx, nil, fn)
+	return r.runCode(ctx, nil, fn, !r.debug)
 }
