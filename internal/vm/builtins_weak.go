@@ -20,10 +20,12 @@ type weakRefData struct {
 // is the whole shape of the thing: a registration must not be what keeps its
 // target alive, and the held value has to survive to be handed to the callback.
 type finalizationCell struct {
-	target weakTarget
-	held   Value
-	token  weakTarget
-	hasTok bool
+	// registry is the registry the cell is in.
+	registry *Object
+	target   weakTarget
+	held     Value
+	token    weakTarget
+	hasTok   bool
 	// unregistered and done retire a cell. A cleanup may already be queued when
 	// unregister is called, and the target may be collected twice over if the
 	// program registers it twice, so the cell rather than the queue decides

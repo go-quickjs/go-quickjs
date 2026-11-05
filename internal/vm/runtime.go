@@ -570,6 +570,13 @@ type Realm struct {
 	// strReplaceFn holds, is told so of the call about to be made, of its
 	// RegExp (replaceDead's dead).
 	strReplaceDead **Object
+	// finalizing are the FinalizationRegistry objects with this realm's
+	// callbacks that have had cells, which keeps one a script has let go
+	// of for its targets' sake, and finalizingAt how many of them there
+	// are to be before they are looked through for those with no cell
+	// left (keepRegistry).
+	finalizing   map[*Object]struct{}
+	finalizingAt int
 	jitRealmFields
 	genNextFn *Object
 }

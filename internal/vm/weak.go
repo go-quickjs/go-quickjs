@@ -196,18 +196,20 @@ func (r *Runtime) reportUncaught(err error) {
 // watchForCollection arranges for a registration's held value to be queued once
 // its target is collected.
 //
-// The cleanup closure must not be able to reach the target, or the target would
-// never be collected and the cleanup would never run. It captures the registry,
-// the held value and the cell -- none of which the target is reachable from,
-// unless the program arranged it, which is its own affair.
+// What a cleanup holds the collector holds, whatever else is alive, so the
+// cleanup must not be able to reach the target, or the target would never be
+// collected and the cleanup would never run. It holds the cell weakly: a
+// registry's callback reaches its realm, and a realm the rest of what it made,
+// the target and the realm itself among them, so that a registration of a
+// target of a realm had kept the realm for good. What keeps the cell is its
+// registry, and what keeps a registry a script has let go of is the realm of
+// its callback (keepRegistry), which takes them with it when it goes, there
+// being no callback left to call.
 func (r *Runtime) watchForCollection(reg *Object, cell *finalizationCell, v Value) {
-	// Everything the cleanup needs is captured now rather than read from the
-	// cell later: the cleanup runs on another goroutine, and the only field it
-	// would be reading is one this one is free to change.
-	q, held := r.cleanups, cell.held
-	done := func() {
-		q.push(pendingCleanup{registry: reg, held: held, cell: cell})
-	}
+	cell.registry = reg
+	keepRegistry[struct{}](r, reg)
+	q, w := r.cleanups, weak.Make(cell)
+	done := func() { cellCollected[struct{}](q, w) }
 	switch {
 	case v.IsObject():
 		runtime.AddCleanup(v.Object(), func(struct{}) { done() }, struct{}{})
