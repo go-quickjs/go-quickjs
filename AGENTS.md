@@ -205,7 +205,9 @@ from a uint32 or an int64 only once it is known to fit.
 Go 1.27's loop invariant pass moves an `unsafe.Add` sum out of the branch
 that guards it, to the loop's preheader, where a nil base leaves nil+32 in
 a pointer slot live across the loop's calls: a collection then throws
-"invalid pointer found on stack". Reach memory past an object as a field's
+"invalid pointer found on stack" (golang/go#82865; once a Go release
+fixes it and go.mod's Go has the fix, the check can go). Reach memory past
+an object as a field's
 address where the code allows it (`arrayExt`); `extAt`, `dataExtAt` and a
 BigInt's words are still sums, called only where their object exists
 wherever the loop is entered. For a change that adds or moves such
@@ -215,6 +217,14 @@ ten minutes, the standard library rebuilt):
 ```sh
 go run ./internal/cmd/hoistcheck
 ```
+
+A test that turns the collector off restores it in its cleanup, as
+`gc := debug.SetGCPercent(-1); t.Cleanup(func() { debug.SetGCPercent(gc) })`.
+`defer debug.SetGCPercent(debug.SetGCPercent(-1))` is right in a defer,
+whose arguments are evaluated at once, but wrapped in a closure for
+`t.Cleanup` it turns the collector off again at the end: every JIT test after
+one such cleanup ran without a collection, which kept the crash above out of
+CI for as long as it was there.
 
 For Intl changes, also run the exact golden tests:
 

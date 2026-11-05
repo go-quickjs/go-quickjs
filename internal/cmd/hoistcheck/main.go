@@ -20,7 +20,9 @@
 // allocation -- an object's side fields (extAt, dataExtAt) when it has none
 // -- the sum is then a bad pointer in a slot live across the loop's calls,
 // and a stack's copy or a collection throws ("invalid pointer found on
-// stack"). jitSortCopy's a.extAt() was one, with a nil a.
+// stack"). jitSortCopy's a.extAt() was one, with a nil a. It is reported as
+// golang/go#82865: once a Go release fixes it, and go.mod requires that Go,
+// hoistcheck and its CI job can go.
 //
 // No Go reports what the pass moves, so hoistcheck builds one that does:
 // the toolchain's own compiler, with licm.go given, through -overlay, a
