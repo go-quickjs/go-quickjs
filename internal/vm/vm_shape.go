@@ -344,7 +344,9 @@ type shapeTree struct {
 	freed     *atomic.Int64
 	chunk     *budgetChunk
 	chunkUsed int
-	// settled is how much of count has a budget to go with (settleSites).
+	// settled is how much of count is of shapes a budget counts, or the
+	// tree's for good (settleSites): what count is past it is the literals'
+	// roots made since it last was, which are not kept in the count.
 	settled int
 }
 
@@ -662,7 +664,9 @@ func (s *shape) orRoot(c Class, p *Object) *shape {
 // different properties, and a root of their own saves each of them a search
 // among the others' transitions out of their class's root. It is nil once the
 // tree is full, while the realm is being made, and for a prototype other than
-// the one the literal's objects have had, proto (orRoot).
+// the one the literal's objects have had, proto (orRoot). A root is counted
+// only until the code stops running (settleSites), and the shapes grown from
+// it against a budget of its own (chargeChild).
 func (t *shapeTree) siteRoot(c *propCache, proto *Object) *shape {
 	if s := c.shape; s != noShape {
 		if s != nil && s.proto != proto {
@@ -865,7 +869,7 @@ func (s *shape) child(e shapeEdge) *shape {
 		c.index = s.index
 		c.index.add(e.key, s.n)
 	}
-	chargeShape[struct{}](t, s.proto)
+	chargeChild[struct{}](s)
 	if s.next == nil {
 		s.setNext(c, e)
 	} else {

@@ -28,11 +28,14 @@ import (
 // a prototype of a layout of its own, or in no tree -- it joins no tree: its
 // layout is its own (firstRoot). A constructor's root is counted as its first object is given
 // a property, and kept on the prototype's own layout (keptCtorRoot). A
-// literal site's root is counted in the tree alone as its site makes it, in
-// a few instructions of the interpreter's loop, and against its prototype,
-// the realm's Object.prototype, as code of the realm stops running
-// (settleSites); the shapes grown from it are counted against that one's
-// budget from the first.
+// literal site's root, made in a few instructions of the interpreter's loop,
+// is counted only until code stops running (settleSites): what it holds is
+// no shape but those grown from it, and it lives no longer than the code it
+// is of, or an object made from it. Those shapes are held by the root, which
+// they hold, and so are garbage with it, whatever their prototype: they are
+// counted against a budget the root takes a slot of (chargeChild). Counted
+// against the realm's Object.prototype, as their prototype is, they outlived
+// the code in a realm that outlives it.
 
 // protoRoots is what the own layout of an object that is another's prototype
 // keeps of the objects it is the prototype of: the roots they start from,
@@ -106,7 +109,7 @@ func setRoot[_ any](ps *shape, at int, s *shape) {
 // chargeShape counts a shape just made in t with prototype p, against the
 // tree's budget and, for a prototype, against p's own (shapeBudget). p's
 // layout is its own already: a shape of prototype p grows from a root kept on
-// it, or from a literal's root, whose prototype is the realm's.
+// it. One grown from a literal's root is chargeChild's.
 //
 //go:noinline
 func chargeShape[_ any](t *shapeTree, p *Object) {
@@ -128,7 +131,31 @@ func chargeShape[_ any](t *shapeTree, p *Object) {
 	ps.budget.b.n.Add(1)
 }
 
-// budgetSlotOf is the next slot of t's budgets, for a prototype's layout.
+// chargeChild is chargeShape for a shape just grown from s. One grown from a
+// literal's root is counted against the root's slot of a budget, taken with
+// the first, as a prototype's own layout has one. What it asks is the root's
+// because a shape does not say: a layout grown by a prototype's slot says no
+// prototype (polySetProto).
+//
+//go:noinline
+func chargeChild[_ any](s *shape) {
+	s = s.root()
+	p := s.proto
+	if p != nil && !s.generic && s.rootClass == ClassObject {
+		b := s.budget
+		if b == nil {
+			p.flags |= objProtoMet
+			b = budgetSlotOf[struct{}](s.tree)
+			s.budget = b
+		}
+		b.b.n.Add(1)
+		p = nil
+	}
+	chargeShape[struct{}](s.tree, p)
+}
+
+// budgetSlotOf is the next slot of t's budgets, for a prototype's layout or
+// a literal's root.
 //
 //go:noinline
 func budgetSlotOf[_ any](t *shapeTree) *budgetSlot {
@@ -211,28 +238,19 @@ func reclaimShapes[_ any](t *shapeTree) bool {
 	return t.count < maxShapes
 }
 
-// settleSites counts what the tree has counted since it last did, but for
-// no prototype -- the literals' roots of the code that ran -- against the
-// current realm's Object.prototype, so that they are given back with it.
-// Each run of a program in a realm has its literals' roots anew: a host with
-// a realm for each request had filled the tree with those of realms long
-// gone, each counted for good, in some tens of thousands of requests.
+// settleSites takes the literals' roots made since it last did, which the
+// tree's count alone can say a site made, back out of the count. The count
+// bounds what keys a program makes up can grow, where nothing but the tree
+// holds it. A root is no such thing: there is one for each literal of the
+// code that lives, which holds it, or for each object made from it. Each run
+// of a program has its literals' roots anew: counted for good, or against
+// the realm's Object.prototype, they filled the tree in some tens of
+// thousands of runs, and the shapes after them had no room.
 //
 //go:noinline
 func settleSites[_ any](r *Runtime) {
 	t := r.shapes
-	n := t.count - t.settled
-	if n == 0 {
-		return
-	}
-	t.settled = t.count
-	if p := r.proto.object; p != nil {
-		ps := p.ownLayout()
-		if ps.budget == nil {
-			ps.budget = budgetSlotOf[struct{}](t)
-		}
-		ps.budget.b.n.Add(int64(n))
-	}
+	t.count = t.settled
 }
 
 // keptCtorRoot is the root kept on the own layout of the prototype of s, a

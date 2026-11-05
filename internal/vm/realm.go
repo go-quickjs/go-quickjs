@@ -33,9 +33,9 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 //   - The JIT's entries, whose code holds its realm's objects: the cache lets
 //     go of a realm none of whose entries has run for a second of the
 //     program's time (zzz_jitrealm.go).
-//   - The shape tree's count, which a literal's site adds to as code runs:
-//     settleSites counts those against the realm's Object.prototype, so that
-//     the tree has them back with it.
+//   - The shape tree's count: what a realm's prototypes and its literals' roots
+//     grew is counted against budgets they hold, so that the tree has it back
+//     with them (shapeBudget, chargeChild).
 
 // namedIntrinsic is an intrinsic prototype and the name it is known by in
 // every realm.

@@ -65,26 +65,26 @@ func TestShapeBudgetChurn(t *testing.T) {
 	`
 	// want is the shapes the tree holds after the pattern's 20,000
 	// iterations, and after 20,000 more: its own few, the realm's, those of
-	// the first prototypes it made, whose budgets share a chunk with
-	// prototypes that live (budgetChunk), and those of the objects whose
-	// prototype is in their table, the first made on each prototype
-	// (zzz_polyproto.go) -- which, past the first, are all a class made by
-	// a factory makes.
+	// the first prototypes it made and the first literals, whose budgets
+	// share a chunk with prototypes that live (budgetChunk), and those of
+	// the objects whose prototype is in their table, the first made on each
+	// prototype (zzz_polyproto.go) -- which, past the first, are all a class
+	// made by a factory makes. No literal's root is among them (settleSites).
 	patterns := []struct {
 		name, body string
 		want       int
 	}{
-		{"Object.create", `var p = Object.create({x: i}); p.y = 1`, 21},
-		{"Object.create twice", `var q = {x: i}, p = Object.create(q), p2 = Object.create(q); p.y = 1; p2.y = 2`, 75},
-		{"__proto__ literal", `var o = {__proto__: {z: i}, w: 1}`, 23},
-		{"setPrototypeOf", `var o = Object.setPrototypeOf({}, {k: i}); o.v = 1`, 23},
-		{"scope chain", `var a = frame(scope, i); var b = frame(a, i)`, 23},
-		{"Reflect.construct alternating", `var o = Reflect.construct(F, [], i & 1 ? G : H)`, 25},
-		{"prototype reassigned", `R.prototype = i & 1 ? P1 : P2; var o = new R()`, 23},
-		{"Babel _createSuper", `var o = i & 1 ? Reflect.construct(A, [i], B) : new A(i)`, 25},
-		{"subclasses alternating", `var o = i & 1 ? new Sub1() : new Sub2()`, 24},
-		{"class factory", `var K = class { constructor() { this.q = i; this.t = 1 } }; var o = new K()`, 23},
-		{"subclass churn", `var D = class extends Base { constructor() { super(); this.d = i } }; var o = new D()`, 23},
+		{"Object.create", `var p = Object.create({x: i}); p.y = 1`, 16},
+		{"Object.create twice", `var q = {x: i}, p = Object.create(q), p2 = Object.create(q); p.y = 1; p2.y = 2`, 62},
+		{"__proto__ literal", `var o = {__proto__: {z: i}, w: 1}`, 17},
+		{"setPrototypeOf", `var o = Object.setPrototypeOf({}, {k: i}); o.v = 1`, 17},
+		{"scope chain", `var a = frame(scope, i); var b = frame(a, i)`, 19},
+		{"Reflect.construct alternating", `var o = Reflect.construct(F, [], i & 1 ? G : H)`, 21},
+		{"prototype reassigned", `R.prototype = i & 1 ? P1 : P2; var o = new R()`, 19},
+		{"Babel _createSuper", `var o = i & 1 ? Reflect.construct(A, [i], B) : new A(i)`, 21},
+		{"subclasses alternating", `var o = i & 1 ? new Sub1() : new Sub2()`, 20},
+		{"class factory", `var K = class { constructor() { this.q = i; this.t = 1 } }; var o = new K()`, 19},
+		{"subclass churn", `var D = class extends Base { constructor() { super(); this.d = i } }; var o = new D()`, 19},
 	}
 	for _, p := range patterns {
 		t.Run(p.name, func(t *testing.T) {
@@ -117,8 +117,8 @@ func TestShapeBudgetAfterChurn(t *testing.T) {
 		for (var i = 0; i < 65536; i++) { var q = {x: i}, p = Object.create(q), p2 = Object.create(q); p.y = 1; p.z = 2 }`)); err != nil {
 		t.Fatal(err)
 	}
-	if got := liveShapes(r); got != 22 {
-		t.Fatalf("after the churn the tree holds %d shapes, want 22", got)
+	if got := liveShapes(r); got != 4 {
+		t.Fatalf("after the churn the tree holds %d shapes, want 4", got)
 	}
 	v, err := r.Run(compileForTest(t, `
 		function Q(a) { this.a = a; this.b = a + 1 }
