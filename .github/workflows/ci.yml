@@ -93,6 +93,29 @@ jobs:
       - name: Run tests
         run: go test -count=1 ./...
 
+  # Go 1.27's loop invariant pass moves unsafe.Add's sums out of the branch
+  # that guards them, which with a nil base leaves nil+32 in a pointer slot
+  # live across calls (jitSortCopy's a.extAt()). hoistcheck builds the
+  # toolchain's compiler with a report of each sum the pass moves, builds
+  # every package and test binary with it, with and without the JIT and
+  # checkptr, and fails for a sum it does not know to be safe.
+  loop-hoists:
+    name: Loop-invariant pointer sums (Go 1.27)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache: true
+
+      - name: Check the sums the compiler moves
+        run: go run ./internal/cmd/hoistcheck
+
   native-boundary:
     name: Native boundary (${{ matrix.os }}, Go ${{ matrix.go }})
     runs-on: ${{ matrix.os }}

@@ -202,6 +202,20 @@ GOARCH=386 go test . -run TestLengthsPastAnInt32
 An int is 32 bits on 386 and arm: convert an index, a length or an offset
 from a uint32 or an int64 only once it is known to fit.
 
+Go 1.27's loop invariant pass moves an `unsafe.Add` sum out of the branch
+that guards it, to the loop's preheader, where a nil base leaves nil+32 in
+a pointer slot live across the loop's calls: a collection then throws
+"invalid pointer found on stack". Reach memory past an object as a field's
+address where the code allows it (`arrayExt`); `extAt`, `dataExtAt` and a
+BigInt's words are still sums, called only where their object exists
+wherever the loop is entered. For a change that adds or moves such
+arithmetic, or a loop around it, run the check CI runs, with Go 1.27 (about
+ten minutes, the standard library rebuilt):
+
+```sh
+go run ./internal/cmd/hoistcheck
+```
+
 For Intl changes, also run the exact golden tests:
 
 ```sh
