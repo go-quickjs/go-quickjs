@@ -138,10 +138,11 @@ about where it and its data are.
   different speeds, diff the rodata symbols' starts.
 - **A degraded base.** A test faster on the base in a full run than when
   run alone hints at a cache or budget filling up on the base and
-  switching it into a cheaper, worse mode. Main's shape tree fills during
-  `class_factory` in a full micro run, after which main makes no layouts
-  for constructors; the change, which gives collected prototypes' shapes
-  back, never fills it, and looks slower there for being right.
+  switching it into a cheaper, worse mode. The 32-byte objects' base had
+  its shape tree fill during `class_factory` in a full micro run, after
+  which it made no layouts for constructors; the change, which gives
+  collected prototypes' shapes back (`17b21643`), never filled it, and
+  looked slower there for being right.
 
 ## Proving a cause
 

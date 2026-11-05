@@ -311,6 +311,12 @@ Go's, the closures Go makes on its cells with it, and returns through Go.
 loop calls a closure its caller makes and gives it -- SOM's
 `Vector.forEach(fn)` and `hasSome(fn)`, given `(e) => e === obj` --
 that closure inlined at the call and not made (`ssa.InlineCallsGiven`).
+Such an arrow that reads `this` -- SOM's `nodeList.forEach((iter) =>
+iter.union(this.parent))` -- reads its maker's receiver where it is
+inlined (`ssa.InlineSite`'s `LexThis`), as V8's inlined arrow reads a
+context slot of its maker's; a built-in loop's callback, which may come
+from any frame, and an arrow in a derived constructor, whose this may not
+be bound yet, are not taken so.
 Elsewhere a call of a loop is made once for all its turns, so inlining it
 saves that call spread over them, against the code it adds to its caller
 (Crypto's `am3`: its callers' code 60% larger, Crypto 25% slower); what
@@ -937,8 +943,8 @@ cache's hint table (not a pointer), which holds the entry and its
 function's address. The hint finds the entry only for a closure of that
 function, so a stale hint misses however often its slot was reused. The
 hint lives in what a template's closures share (`closureCode`), so the
-closure stays 64 bytes; the table grows to the most entries the cache has
-held at once, its free slots reused.
+closure, 56 bytes, holds nothing of the JIT's; the table grows to the most
+entries the cache has held at once, its free slots reused.
 
 **Refusals.**
 - Permanent: lowering or the backend refused it. These are cached, and the
@@ -1137,7 +1143,9 @@ Runtime construction allocates nothing for the JIT.
   instruction by instruction.
 
 **With the tag, JIT off.**
-- The JIT's fields fit existing padding: `closure` stays 64 bytes.
+- The JIT's fields are in what a template's closures share
+  (`closureCode`'s `jitCodeFields`, empty without the tag): `closure` is
+  56 bytes in both builds (`TestClosureSizes`).
 - `Runtime`'s and `Realm`'s JIT fields sit at the end of their structs, so no
   offset the interpreter reads moves. `TestJITFieldLayout` checks both builds.
 - Measure the remaining flag tests with `placements`.

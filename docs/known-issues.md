@@ -633,7 +633,7 @@ Paths are relative to this repository; `go-intl:` paths are in
   - `HostJobsReady` signals only while jobs wait. Attaching a loop and
     running the jobs both clear it.
   - `TestWaitForAges` had relied on the stale signal.
-  - Tests: `TestNotifyDeliversUnlocked`, `TestHostJobsReadyAfterAttach`.
+  - Tests: `TestNotifyDeliversUnlocked`, `TestHostJobsReadyAfterRun`.
 
 ### KI-61 A value doubled in a short loop escapes the memory limit
 - **Where:** `internal/vm/memory.go`; the template literal's join in
