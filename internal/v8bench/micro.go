@@ -156,6 +156,7 @@ var microWork = []struct {
 	{"set_proto_fresh", 524288}, {"class_factory", 131072}, {"subclass_fresh", 131072},
 	{"scope_chain", 524288}, {"construct_new_target", 524288},
 	{"escape_accumulate", 16384}, {"escape_accumulate_long", 16384}, {"escape_join", 2097152}, {"escape_rare", 2097152},
+	{"literal_sites_read", 2097152}, {"literal_sites_branch", 2097152}, {"literal_sites_spill", 1048576},
 }
 
 // microLoop is the driver's loop: each test of __work whose name begins with

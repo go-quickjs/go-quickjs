@@ -166,6 +166,9 @@ func TestPrototypeMicrobenchmarks(t *testing.T) {
 		{"subclass_fresh", 45},
 		{"scope_chain", 81},
 		{"construct_new_target", 45},
+		{"literal_sites_read", 36},
+		{"literal_sites_branch", 36},
+		{"literal_sites_spill", 36},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			v, err := rt.Eval(fmt.Sprintf("%s(9) + ':' + global_res", tc.name))

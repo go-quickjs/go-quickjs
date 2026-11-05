@@ -94,6 +94,27 @@ func (r runtimeOf) Run(name, src string) error {
 	})
 }
 
+// Program compiles src once, for run to run it on the runtime as often as it
+// is called.
+func (r runtimeOf) Program(name, src string) (run func() (string, error), err error) {
+	p, err := r.rt.Compile(name, src)
+	if err != nil {
+		return nil, err
+	}
+	return func() (string, error) {
+		var v quickjs.Value
+		err := padded(stackPad, func() error {
+			var err error
+			v, err = r.rt.RunProgram(p)
+			return err
+		})
+		if err != nil {
+			return "", err
+		}
+		return v.String(), nil
+	}, nil
+}
+
 func (r runtimeOf) EvalString(src string) (string, error) {
 	var v quickjs.Value
 	err := padded(stackPad, func() error {

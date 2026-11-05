@@ -287,8 +287,13 @@ language implementations alike -- and `ssr`, a shop's page React 18
 renders on the server (`internal/v8bench/ssr.js`, React's UMD builds
 fetched, pinned by SHA-256): `FirstRender` is a fresh runtime's load and
 first render, what a host making a runtime for each request pays, and
-`Render` the steady state. The goja and external runners below take
-`-bench` too; an external engine runs `Render` alone. They reach far more of the JIT than the V8 suite does. With
+`Render` the steady state -- and `fresh`, the same files as code run on a
+kept runtime (`internal/v8bench/fresh.go`): a bundle run again as a Program
+and evaluated anew, a request's data as a script of literals over code the
+runtime keeps, and a small script run thousands of times, each new and as
+one Program. The goja and external runners below take `-bench` too; an
+external engine runs `Render` alone, and `fresh` needs a runtime kept from
+Go. They reach far more of the JIT than the V8 suite does. With
 `-jit`, `-jitreport` prints after each benchmark what the
 JIT did: what it compiled, by how much each function ran natively, and what
 it refused or never tried, with why. The runner gives the JIT a 32 MiB

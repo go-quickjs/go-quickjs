@@ -95,7 +95,7 @@ type Reporter interface {
 // what it prints.
 func Main(name string, e Engine) {
 	dir := flag.String("dir", "", "the directory the suite is in")
-	which := flag.String("bench", "v8", "the suite: v8, octane, awfy or ssr")
+	which := flag.String("bench", "v8", "the suite: v8, octane, awfy, ssr or fresh")
 	fetch := flag.Bool("fetch", false, "download the suite into -dir first")
 	mode := flag.String("mode", "fixed", "score, fixed, compile or micro")
 	n := flag.Int("n", 5, "runs of each benchmark (fixed, micro), or compiles of the suite (compile)")
@@ -163,7 +163,7 @@ func Main(name string, e Engine) {
 			}
 		}
 	case "score":
-		if s.awfy || s.ssr {
+		if s.awfy || s.ssr || s.fresh {
 			fail(fmt.Errorf("%s has no scores: run it in the fixed mode", s.name))
 		}
 		rt = newRuntime(e, src)
@@ -174,6 +174,8 @@ func Main(name string, e Engine) {
 		switch {
 		case s.ssr:
 			rt = runSSR(e, s, src, *n, *only)
+		case s.fresh:
+			rt = runFresh(e, s, src, *n, *only)
 		case s.awfy:
 			rt = runAWFY(e, s, src, *n, *only)
 		default:

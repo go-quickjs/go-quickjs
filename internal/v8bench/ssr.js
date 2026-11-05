@@ -91,4 +91,10 @@
 	globalThis.__ssrRender = function (n) {
 		return ReactDOMServer.renderToString(h(Page, { data: makeData(n) }));
 	};
+
+	// __ssrRenderData renders a page of data made elsewhere: the fresh suite's
+	// requests.
+	globalThis.__ssrRenderData = function (data) {
+		return ReactDOMServer.renderToString(h(Page, { data: data }));
+	};
 })();

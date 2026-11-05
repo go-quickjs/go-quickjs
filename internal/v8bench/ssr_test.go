@@ -111,3 +111,36 @@ func TestSSRReact(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// The fresh suite's scripts answer as its benchmarks check, and a request's
+// data has the same length whichever the request.
+func TestFreshScripts(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	if _, err := rt.Eval(`globalThis.__ssrRenderData = d => JSON.stringify(d.products.map(p => p.reviews.length))`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.Eval(freshKept); err != nil {
+		t.Fatal(err)
+	}
+	if a, b := freshData(1), freshData(999); len(a) != len(b) {
+		t.Errorf("requests' scripts are %d and %d bytes", len(a), len(b))
+	}
+	v, err := rt.Eval(freshData(7))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := strconv.Itoa(2*freshProducts + 1); v.String() != want {
+		t.Errorf("the data's script answered %q, want %q", v.String(), want)
+	}
+	if got, err := rt.Eval(freshSmall); err != nil || got.String() != freshSmallWant {
+		t.Errorf("the small script: %v, %v, want %s", got, err, freshSmallWant)
+	}
+	check := freshCheck("t", "")
+	if err := check("10"); err != nil {
+		t.Error(err)
+	}
+	if err := check("11"); err == nil {
+		t.Error("a different answer passed")
+	}
+}

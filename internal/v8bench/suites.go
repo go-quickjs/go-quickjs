@@ -25,6 +25,8 @@ import (
 //     own (awfyModules).
 //   - ssr is a page React 18 renders on the server (ssr.go): React's UMD
 //     builds, the page this repository's own.
+//   - fresh is code run again and new code run on a kept runtime (fresh.go):
+//     ssr's files, as a bundle and a request's script.
 type suite struct {
 	name string
 	// url is where the files are fetched from.
@@ -42,6 +44,8 @@ type suite struct {
 	pins map[string]pin
 	// ssr marks the server-rendering suite (ssr.go).
 	ssr bool
+	// fresh marks the suite of code run on a kept runtime (fresh.go).
+	fresh bool
 }
 
 // A pin is where a file is fetched from, and its SHA-256, in hex.
@@ -85,6 +89,11 @@ var suites = map[string]*suite{
 	},
 }
 
+func init() {
+	ssr := suites["ssr"]
+	suites["fresh"] = &suite{name: "fresh", files: ssr.files, pins: ssr.pins, fresh: true}
+}
+
 // checkPin fails a file of s's whose SHA-256 is not its pin's: one fetched
 // from somewhere else, or changed since.
 func checkPin(s *suite, file string, b []byte) error {
@@ -102,7 +111,7 @@ func checkPin(s *suite, file string, b []byte) error {
 func suiteNamed(name string) *suite {
 	s, ok := suites[name]
 	if !ok {
-		fail(fmt.Errorf("unknown suite %q: v8, octane, awfy or ssr", name))
+		fail(fmt.Errorf("unknown suite %q: v8, octane, awfy, ssr or fresh", name))
 	}
 	return s
 }

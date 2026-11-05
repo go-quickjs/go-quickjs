@@ -3370,3 +3370,64 @@ function escape_rare(n)
     global_res = s + kept.k;
     return n;
 }
+
+/* the same keys from eight literals, read at one site */
+var extra_lit_same = [
+    function (j) { return { x: j, y: 1 }; }, function (j) { return { x: j, y: 2 }; },
+    function (j) { return { x: j, y: 3 }; }, function (j) { return { x: j, y: 4 }; },
+    function (j) { return { x: j, y: 5 }; }, function (j) { return { x: j, y: 6 }; },
+    function (j) { return { x: j, y: 7 }; }, function (j) { return { x: j, y: 8 }; }
+];
+
+function extra_lit_x(o)
+{
+    return o.x;
+}
+
+function literal_sites_read(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++)
+        s += extra_lit_x(extra_lit_same[j & 7](j));
+    global_res = s;
+    return n;
+}
+
+/* literals of one first key and eight second ones */
+var extra_lit_branch = [
+    function (j) { return { x: j, a: 1 }; }, function (j) { return { x: j, b: 1 }; },
+    function (j) { return { x: j, c: 1 }; }, function (j) { return { x: j, d: 1 }; },
+    function (j) { return { x: j, e: 1 }; }, function (j) { return { x: j, f: 1 }; },
+    function (j) { return { x: j, g: 1 }; }, function (j) { return { x: j, h: 1 }; }
+];
+
+function literal_sites_branch(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++)
+        s += extra_lit_x(extra_lit_branch[j & 7](j));
+    global_res = s;
+    return n;
+}
+
+/* the same, each value a call, so that each key is defined by itself */
+function extra_lit_id(v)
+{
+    return v;
+}
+
+var extra_lit_spill = [
+    function (j) { return { x: extra_lit_id(j), a: extra_lit_id(1) }; },
+    function (j) { return { x: extra_lit_id(j), b: extra_lit_id(1) }; },
+    function (j) { return { x: extra_lit_id(j), c: extra_lit_id(1) }; },
+    function (j) { return { x: extra_lit_id(j), d: extra_lit_id(1) }; }
+];
+
+function literal_sites_spill(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++)
+        s += extra_lit_x(extra_lit_spill[j & 3](j));
+    global_res = s;
+    return n;
+}

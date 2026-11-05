@@ -110,7 +110,7 @@ func MainExternal() {
 	kind := flag.String("engine", "qjs", "the kind of program: qjs or node")
 	command := flag.String("cmd", "", "the program, qjs or node by default")
 	dir := flag.String("dir", "", "the directory the suite is in")
-	which := flag.String("bench", "v8", "the suite: v8, octane, awfy or ssr")
+	which := flag.String("bench", "v8", "the suite: v8, octane, awfy or ssr; fresh is the Go runners' alone")
 	fetch := flag.Bool("fetch", false, "download the suite into -dir first")
 	mode := flag.String("mode", "fixed", "score, fixed or micro")
 	n := flag.Int("n", 5, "runs of each benchmark (fixed, micro)")
@@ -201,6 +201,8 @@ func suiteDriver(s *suite, prelude, dir string, fetch bool, mode, only string, n
 		driver = fmt.Sprintf(awfyDriver, prelude, awfyModules(s, src), "["+strings.Join(work, ", ")+"]", only, n)
 	case s.awfy:
 		fail(fmt.Errorf("Are We Fast Yet has no scores: run it in the fixed mode"))
+	case s.fresh:
+		fail(fmt.Errorf("fresh needs a runtime kept from Go: run it in the Go runners"))
 	case s.ssr && mode == "fixed":
 		for _, f := range s.files {
 			b, err := os.ReadFile(filepath.Join(dir, f))
