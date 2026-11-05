@@ -347,8 +347,26 @@ func (o *Object) embedArrayExt(e *arrayExt) {
 }
 
 // arrayExt is the side fields of o, an array.
+//
+// It is the address of a field of the struct o's allocation is, not
+// unsafe.Add(o, 32): a field's address is a *T to the compiler, which Go
+// 1.27's loop invariant pass leaves where the program computes it, as it
+// must for any &p.f under an if p != nil. unsafe.Add's sum is an
+// unsafe.Pointer, which the pass takes for a scalar and moves out of an
+// innermost loop, out of the branch that guards it, wherever its operands
+// are defined outside the loop and the sum is used as an address -- passed
+// to a call or, under -d=checkptr, to checkptr's check -- rather than
+// folded into a load: on the path where o is nil, or has no side fields,
+// the slot it is spilled to then holds nil+32, or a pointer past o's
+// allocation, live across the loop's calls, and a stack's copy or a
+// collection throws (invalid pointer found on stack). extAt and dataExtAt
+// are still unsafe.Add, because their field's address, the same
+// instructions once compiled, schedules executeAt's and allocates its
+// registers otherwise; internal/cmd/hoistcheck finds each sum the pass
+// moves, theirs included, and fails for one it does not know to have its
+// object wherever the loop is entered.
 func (o *Object) arrayExt() *arrayExt {
-	return (*arrayExt)(unsafe.Add(unsafe.Pointer(o), unsafe.Sizeof(Object{})))
+	return &(*arrayExtObject)(unsafe.Pointer(o)).side
 }
 
 // setData sets o's internal slots, which its side fields must have room
@@ -380,13 +398,16 @@ func (o *Object) ext() *extElems {
 }
 
 // extAt is the side fields of o, which has them: an array's, a function's,
-// those of an object of any class but ClassObject.
+// those of an object of any class but ClassObject. Go 1.27 can compute its
+// sum before the branch that guards it (arrayExt says when): call it only
+// where o has side fields wherever the innermost loop around the call is
+// entered, or read what it reaches before the loop.
 func (o *Object) extAt() *extElems {
 	return (*extElems)(unsafe.Add(unsafe.Pointer(o), unsafe.Sizeof(Object{})))
 }
 
 // dataExtAt is the side fields of o, which has internal slots in them
-// (objHasData): any but an array's.
+// (objHasData): any but an array's. What extAt says of loops holds for it.
 func (o *Object) dataExtAt() *objectExt {
 	return (*objectExt)(unsafe.Add(unsafe.Pointer(o), unsafe.Sizeof(Object{})))
 }

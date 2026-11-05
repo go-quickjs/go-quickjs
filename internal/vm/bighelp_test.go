@@ -23,8 +23,12 @@ func bigIntOf(b *BigInt) *big.Int {
 func blockOf(z *big.Int) *BigInt {
 	w := z.Bits()
 	b := newBigWords(len(w), z.Sign() < 0)
+	// The words are read once, before the loop: Go 1.27 moves b.words()'s
+	// sum, b plus a word, out of the loop and its guard, which for zero
+	// would be past b's allocation (internal/cmd/hoistcheck).
+	ws := b.words()
 	for i, d := range w {
-		b.words()[i] = uint(d)
+		ws[i] = uint(d)
 	}
 	return b
 }
