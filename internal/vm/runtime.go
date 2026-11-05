@@ -486,6 +486,10 @@ type Realm struct {
 	// it, which is not as long as the realm.
 	funcSlab []funcObject
 	building bool
+	// templatesAt is how many entries templateCache is to have before it is
+	// looked through for code since collected (newTemplateSites). In the
+	// padding after building, so that no field the interpreter reads moves.
+	templatesAt int32
 	// evalFn is the intrinsic eval, which a call site compares its callee
 	// against: a direct eval is one that actually reaches this function, and a
 	// name that resolves to anything else is an ordinary call.
@@ -507,8 +511,9 @@ type Realm struct {
 	typedArrayProto *Object
 	// templateCache keeps the object identity that tagged templates require:
 	// the same template site must hand the same strings array to its tag on
-	// every evaluation.
-	templateCache map[*bytecode.Function][]*Object
+	// every evaluation. It is by the address of the site's function, which
+	// it holds weakly, so that code nothing can run goes (templateSites).
+	templateCache map[uintptr]*templateSites
 	// genIterFn and genNextFn are %IteratorPrototype%[Symbol.iterator] and
 	// %GeneratorPrototype%.next, which a for-of loop over a generator need
 	// not look up while they are what the generator inherits; see

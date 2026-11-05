@@ -63,7 +63,7 @@ func (r *Runtime) NewRealm() *Realm {
 func newRealm(r *Runtime) *Realm {
 	return &Realm{
 		agent:         r,
-		templateCache: make(map[*bytecode.Function][]*Object),
+		templateCache: make(map[uintptr]*templateSites),
 		// Room for every intrinsic prototype a realm names, so that recording
 		// them is one allocation rather than one per doubling.
 		names: make([]namedIntrinsic, 0, 128),

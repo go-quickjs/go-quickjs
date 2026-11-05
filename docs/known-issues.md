@@ -438,6 +438,44 @@ Paths are relative to this repository; `go-intl:` paths are in
     shares one with; one kept of a `Program`'s roots let go holds the whole
     program's, up to a quarter of the tree.
 
+### KI-68 Code run once stays for what it left in a realm's tables
+- **Where:** `internal/vm/vm.go` (`templateObject`), `vm_shape.go` (`chainCell`)
+  and `zsourcemap.go`.
+- **Effect:** a host that runs new code for each request -- `Eval`, a `Program`
+  of its own, a direct eval or `new Function` in a loop -- grew until it closed
+  the runtime, in what a table kept of each request's code:
+  - A realm's template objects were by the function, held strongly, so that
+    code with a tagged template was never collected, nor its script and
+    source: 3 KB a run for a line of code, 61 MB in 20,000 runs, and 22,000 of
+    22,000 functions alive.
+  - A runtime with a source map loader kept each script that named a map and
+    wrote a stack, with the map: 500 B a run with a map that failed to load,
+    and all of a parsed map with one that loaded.
+  - An object's list of the prototypes whose chains go through it was cut down
+    only when the object changed, which `Object.prototype` does not: 25 B for
+    each class new code made and read through.
+- **Status:** fixed. A site's template object is the same for as long as its
+  code can run, as every closure holds its function, and goes with it: the
+  realm's table is by the function's address and holds it weakly
+  (`templateSites`), so that a site evaluated again pays a lookup and a weak
+  read, 7 ns a site more, and no `weak.Make`. The source maps' table holds its
+  scripts weakly, and both tables and the list are looked through as they
+  double, so that what is dead is dropped for what is added. So 20,000 runs of
+  each add nothing to the heap. `TestTemplatesLeaveWithTheirCode`,
+  `TestTemplateObjectsLastAsLongAsTheirCode`, `TestTemplateObjectsByRealm`,
+  `TestTemplateEntryOfACollectedFunction`, `TestProtoUsersOfGoneCode` and
+  `TestSourceMapsLeaveWithTheirScripts` pin it. What remains:
+  - A private name, as a symbol used as a key, has an atom for the runtime's
+    life (KI-07): a class with `#p` evaluated for each request costs 117 B
+    each, whatever made it.
+  - Each `delete` of a global leaves a tombstone in the global object's table,
+    29 B, which stays: a site of a global keeps its slot for good, and a name
+    added again goes last, as the standard's order has it.
+  - A module stays in its realm's module map for as long as the realm, as the
+    standard has it, so `EvalModule` with a new name for each request grows, by
+    3 KB for a line.
+  - A debugger lists every script it has seen, for as long as the runtime.
+
 ## P2: wrong results
 
 ### KI-29 Generator and async frames skip part of a call's setup

@@ -283,7 +283,8 @@ func (r *Runtime) chainCell(p *Object) *protoCell {
 			info = newProtoInfo[struct{}](s)
 		}
 		if q := p.proto(); q != nil {
-			q.shape.side.info.users = append(q.shape.side.info.users, weak.Make(p))
+			u := protoUser[struct{}](q, p)
+			q.shape.side.info.users = append(q.shape.side.info.users, u)
 		}
 		info.up = p.proto()
 	}

@@ -4842,11 +4842,12 @@ func (r *Runtime) getPrivate(o *Object, key, name Atom) (Value, error) {
 // off the object and to compare it against one from a later call -- which is
 // the usual way a tag caches whatever it derived from the text.
 func (r *Runtime) templateObject(fn *bytecode.Function, idx int) *Object {
-	cache := r.templateCache[fn]
-	if cache == nil {
-		cache = make([]*Object, len(fn.Templates))
-		r.templateCache[fn] = cache
+	table := r.templateCache
+	sites := table[uintptr(unsafe.Pointer(fn))]
+	if sites == nil || sites.fn.Value() != fn {
+		sites = newTemplateSites[struct{}](r.Realm, table, fn, make([]*Object, len(fn.Templates)))
 	}
+	cache := sites.objects
 	if o := cache[idx]; o != nil {
 		return o
 	}

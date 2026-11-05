@@ -3,6 +3,7 @@ package vm
 import (
 	"strconv"
 	"strings"
+	"weak"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/sourcemap"
@@ -28,7 +29,11 @@ type SourceMapLoader func(script, url string) (data []byte, base string, ok bool
 // script's could not be read.
 type sourceMaps struct {
 	load SourceMapLoader
-	maps map[*bytecode.Script]*sourcemap.Map
+	// maps' keys are weak: a script a host has let go of goes, with its map.
+	maps map[weak.Pointer[bytecode.Script]]*sourcemap.Map
+	// at is how many entries maps is to have before it is looked through for
+	// scripts since collected.
+	at int
 }
 
 // SetSourceMapLoader has stack traces mapped through the source maps load
@@ -38,7 +43,7 @@ func (r *Runtime) SetSourceMapLoader(load SourceMapLoader) {
 		r.sourceMaps = nil
 		return
 	}
-	r.sourceMaps = &sourceMaps{load: load, maps: map[*bytecode.Script]*sourcemap.Map{}}
+	r.sourceMaps = &sourceMaps{load: load, maps: map[weak.Pointer[bytecode.Script]]*sourcemap.Map{}, at: 32}
 }
 
 // sourceMapOf is the map of the script a frame's code is in, or nil.
@@ -51,14 +56,17 @@ func (r *Runtime) sourceMapOf(fr *stackFrame) *sourcemap.Map {
 		return nil
 	}
 	sm := r.sourceMaps
-	if m, seen := sm.maps[s]; seen {
+	if m, seen := sourceMapSeen[struct{}](sm, s); seen {
 		return m
 	}
 	var m *sourcemap.Map
 	if data, base, ok := sm.load(s.Name, s.SourceMapURL()); ok {
 		m, _ = sourcemap.Parse(data, base)
 	}
-	sm.maps[s] = m
+	if r.sourceMaps == sm {
+		// A loader may set another.
+		keepSourceMap[struct{}](sm, s, m)
+	}
 	return m
 }
 
