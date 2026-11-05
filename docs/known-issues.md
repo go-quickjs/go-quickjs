@@ -342,6 +342,17 @@ Paths are relative to this repository; `go-intl:` paths are in
   length of 2^31 take long, but V8 runs out of memory on the first and grows
   without bound on the second.
 
+### KI-65 A realm lives as long as its runtime
+- **Where:** `internal/vm/realm.go`, what the runtime keeps of a realm.
+- **Effect:** a realm a host has dropped is not collected, with the JIT or
+  without it: of twenty realms made with `NewRealm`, each running one
+  script, twenty are alive after two collections. A host that makes a realm
+  for each request grows until it closes the runtime. What holds them is
+  not known yet. The JIT's entries for those realms are bounded by its
+  budget (`TestJITRealmsWithinTheBudget`) and go with a collected realm
+  once one is (`jitKey`).
+- **Status:** open.
+
 ## P2: wrong results
 
 ### KI-29 Generator and async frames skip part of a call's setup
@@ -567,6 +578,17 @@ Paths are relative to this repository; `go-intl:` paths are in
   `temporal-objects-no-time-clip` tests have it, formats them, as the engine
   did; V8 refuses a plain date whose midnight, or a plain date-time, is past
   the instants a Date can hold. `WithNodeQuirks` now refuses them too.
+
+### KI-64 Native code of one realm ran in another
+- **Where:** `internal/vm/zzjit_native.go`. The JIT's cache was keyed by the
+  bytecode function alone.
+- **Effect:** a compiled program run in two realms `WithJIT` ran the code of
+  the realm that made it hot first. Objects, arrays, functions, arrows,
+  regular expressions and inlined callees' objects came with that realm's
+  prototypes: `Object.getPrototypeOf({}) === Object.prototype` was false.
+- **Status:** fixed. Code is keyed by function and realm, as V8 keeps
+  optimized code by native context, and a realm compiles its own.
+  - Test: `TestJITRealmsHaveTheirOwnCode`, `TestJITCallsAcrossRealms`.
 
 ## P3: small divergences
 

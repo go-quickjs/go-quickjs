@@ -88,7 +88,7 @@ func (r *Runtime) JITReport() []JITFunction {
 	}
 	for k, why := range s.skipped {
 		fn := k.Value()
-		if fn == nil || s.cache[k] != nil {
+		if fn == nil || s.cache[jitKey{k, s.rt.jitRealmKey()}] != nil {
 			continue
 		}
 		f := jitFunctionOf(fn)

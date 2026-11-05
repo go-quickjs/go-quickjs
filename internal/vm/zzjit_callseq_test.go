@@ -9,7 +9,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-	"weak"
 )
 
 // jitCallsSource is AWFY's List and Towers, and calls like theirs: values
@@ -99,7 +98,7 @@ func jitCallsCheck(t *testing.T, r *Runtime, rounds int) {
 			t.Fatalf("%s.%s: %v, %v", m.class, m.method, class, err)
 		}
 		fn := class.Object().fn().closure.fn
-		if e := r.jit.cache[weak.Make(fn)]; e == nil || e.ssa == nil || e.link.in == 0 {
+		if e := r.jit.cache[r.jitKeyOf(fn)]; e == nil || e.ssa == nil || e.link.in == 0 {
 			t.Fatalf("%s.%s is not called natively: %+v", m.class, m.method, e)
 		}
 	}
@@ -184,7 +183,7 @@ func TestJITCallsReadBackFromFrame(t *testing.T) {
 			if err != nil || !class.IsObject() {
 				t.Fatal(class, err)
 			}
-			if e := r.jit.cache[weak.Make(class.Object().fn().closure.fn)]; e == nil || e.ssa == nil {
+			if e := r.jit.cache[r.jitKeyOf(class.Object().fn().closure.fn)]; e == nil || e.ssa == nil {
 				t.Fatalf("C.prototype.h has no native code: %+v", e)
 			}
 		})

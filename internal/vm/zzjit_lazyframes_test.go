@@ -4,7 +4,6 @@ package vm
 
 import (
 	"testing"
-	"weak"
 )
 
 // lazyFramesSetup recurses natively, each level a native call, and at the
@@ -69,7 +68,7 @@ func jitLazyFramesAgree(t *testing.T) *Runtime {
 					return Int(0), nil
 				}
 				cl := rt.global.getOwn(rt.atoms.intern("helper")).value().Object().fn().closure
-				if e := rt.jit.cache[weak.Make(cl.fn)]; e != nil && e.ssa != nil {
+				if e := rt.jit.cache[rt.jitKeyOf(cl.fn)]; e != nil && e.ssa != nil {
 					e.reopt = true
 					rt.jitReoptimize(cl, e)
 				}

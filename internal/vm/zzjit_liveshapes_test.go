@@ -6,7 +6,6 @@ import (
 	"runtime"
 	"runtime/debug"
 	"testing"
-	"weak"
 )
 
 // Objects of a shape, and objects of one made from it by adding a
@@ -68,7 +67,7 @@ func TestJITSSAReadsKeepLiveAncestorShapes(t *testing.T) {
 		}
 		deopts, compiles = append(deopts, r.jit.shapeDeopts-d), append(compiles, r.jit.reoptimized-c)
 	}
-	e := r.jit.cache[weak.Make(cl.fn)]
+	e := r.jit.cache[r.jitKeyOf(cl.fn)]
 	if e == nil || e.ssa == nil || e.entrySlow || e.invalid {
 		t.Fatalf("f did not run natively: %+v", e)
 	}

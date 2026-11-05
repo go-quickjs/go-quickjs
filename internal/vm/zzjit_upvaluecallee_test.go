@@ -6,7 +6,6 @@ import (
 	"runtime"
 	"runtime/debug"
 	"testing"
-	"weak"
 )
 
 // A call of a closure read from a captured binding -- a module's
@@ -58,7 +57,7 @@ func TestJITCapturedCalleeSeeded(t *testing.T) {
 			t.Fatalf("round %d: got %v, interpreter %v", i, got, want)
 		}
 	}
-	e := r.jit.cache[weak.Make(cl.fn)]
+	e := r.jit.cache[r.jitKeyOf(cl.fn)]
 	if e == nil || e.ssa == nil || e.entrySlow || e.invalid {
 		t.Fatalf("run did not run natively: %+v", e)
 	}

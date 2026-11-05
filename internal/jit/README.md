@@ -934,9 +934,17 @@ made natively, or inlined. A callee whose code Go never enters on its own is
 compiled for native callers only.
 
 **The cache.** Each runtime keeps its own cache, weakly keyed by the shared
-bytecode function. Shared bytecode carries no JIT state. It holds as many
-functions' code as the JIT's budget has room for (see [Memory](#memory)):
-no count of entries bounds it.
+bytecode function and the realm the code is for. Shared bytecode carries no
+JIT state. It holds as many functions' code as the JIT's budget has room for
+(see [Memory](#memory)): no count of entries bounds it.
+
+**Realms.** Code is its realm's, as V8's optimized code is its native
+context's (`jitKey`): its pools hold that realm's objects, and it is compiled
+against that realm's prototypes and functions. A program run in two realms
+warms up and compiles twice, sharing only its lowering, which is no more the
+realm's than its bytecode is, and a call of another realm's function leaves
+native code for Go to switch the realm. Code never meets a realm it was not
+compiled for, so that nothing in it checks.
 
 **Closure hints.** A closure remembers its code by a hint, a slot in the
 cache's hint table (not a pointer), which holds the entry and its

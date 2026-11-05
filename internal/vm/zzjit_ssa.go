@@ -2358,8 +2358,11 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 // runtime's; installed on the runtime's goroutine again (jitInstall),
 // which takes what the work found into the feedback and places the code.
 type jitJob struct {
-	fn        *bytecode.Function
-	cl        *closure
+	fn *bytecode.Function
+	cl *closure
+	// realm is the realm the compile is for, the current one where it was
+	// handed over, which its install runs in (jitDrain).
+	realm     *Realm
 	p         *ir.Program
 	e         *jitEntry
 	fb        *jitFeedback
@@ -2419,7 +2422,7 @@ func (r *Runtime) jitPrepare(fn *bytecode.Function, cl *closure, p *ir.Program, 
 	if t := mir.Timing; t != nil {
 		t.Start()
 	}
-	j := &jitJob{fn: fn, cl: cl, p: p, e: e, fb: fb, keepLimit: keepLimit, w: w,
+	j := &jitJob{fn: fn, cl: cl, realm: r.Realm, p: p, e: e, fb: fb, keepLimit: keepLimit, w: w,
 		enc: jitEncoding, opts: mir.Settings(), timing: mir.Timing, optimized: jitSSAOptimized}
 	if snapshot && jitSnapshots {
 		j.snap = jitSnapshotOf(fb, p)

@@ -5,7 +5,6 @@ package vm
 import (
 	"fmt"
 	"testing"
-	"weak"
 )
 
 // A loop that calls nothing counts its back-edge budget in a register
@@ -56,7 +55,7 @@ func TestJITBudgetInRegisterCounted(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				e := r.jit.cache[weak.Make(r.global.getOwn(r.atoms.intern(tc.name)).value().Object().fn().closure.fn)]
+				e := r.jit.cache[r.jitKeyOf(r.global.getOwn(r.atoms.intern(tc.name)).value().Object().fn().closure.fn)]
 				if e == nil || e.ssa == nil {
 					t.Fatalf("%s has no native code", tc.name)
 				}
@@ -110,7 +109,7 @@ func TestJITBudgetAcrossManyFunctions(t *testing.T) {
 				t.Fatalf("after %s: %d back edges to go, past any budget Go gives", name, r.backEdges)
 			}
 		}
-		e := r.jit.cache[weak.Make(r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure.fn)]
+		e := r.jit.cache[r.jitKeyOf(r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure.fn)]
 		if e == nil || e.ssa == nil {
 			t.Errorf("%s was never compiled", name)
 		}

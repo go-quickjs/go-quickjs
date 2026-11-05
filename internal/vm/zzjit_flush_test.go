@@ -72,7 +72,7 @@ func TestJITFlushesUnusedCode(t *testing.T) {
 	}
 	fl := jitGlobalClosure(r, "f")
 	s := r.jit
-	if e := s.cache[weak.Make(fl.fn)]; e == nil || e.ssa == nil || len(e.nativeCalls) == 0 {
+	if e := s.cache[s.rt.jitKeyOf(fl.fn)]; e == nil || e.ssa == nil || len(e.nativeCalls) == 0 {
 		t.Fatalf("f's code does not call g natively: %+v", e)
 	}
 	probe := weak.Make(r.global.getOwn(r.atoms.intern("probe")).value().Object())
@@ -85,7 +85,7 @@ func TestJITFlushesUnusedCode(t *testing.T) {
 	s.flush()
 	setEpoch(1000 + 2*jitFlushAge)
 	s.flush()
-	if e := s.cache[weak.Make(fl.fn)]; e != nil {
+	if e := s.cache[s.rt.jitKeyOf(fl.fn)]; e != nil {
 		t.Fatalf("f's unused code was not flushed: %+v", e)
 	}
 	if err := jitLinksHeld(s); err != nil {
@@ -106,7 +106,7 @@ func TestJITFlushesUnusedCode(t *testing.T) {
 			t.Fatalf("after the flush, round %d: %v, %v", i, v, err)
 		}
 	}
-	if e := s.cache[weak.Make(fl.fn)]; e == nil || e.ssa == nil {
+	if e := s.cache[s.rt.jitKeyOf(fl.fn)]; e == nil || e.ssa == nil {
 		t.Fatalf("f was not compiled again once hot again: %+v", e)
 	}
 	// What the report counts (JITCacheCounts): the code flushed -- f's,
@@ -141,11 +141,11 @@ func TestJITFlushKeepsCodeInUse(t *testing.T) {
 	run()
 	fl := jitGlobalClosure(r, "f")
 	s := r.jit
-	e := s.cache[weak.Make(fl.fn)]
+	e := s.cache[s.rt.jitKeyOf(fl.fn)]
 	if e == nil || e.ssa == nil {
 		t.Fatalf("f was not compiled: %+v", e)
 	}
-	ew := s.cache[weak.Make(jitGlobalClosure(r, "w").fn)]
+	ew := s.cache[s.rt.jitKeyOf(jitGlobalClosure(r, "w").fn)]
 	if ew == nil || ew.holdsCode() {
 		t.Fatalf("w is not an entry with no code: %+v", ew)
 	}
@@ -154,10 +154,10 @@ func TestJITFlushKeepsCodeInUse(t *testing.T) {
 		s.flush()
 		run()
 	}
-	if s.cache[weak.Make(fl.fn)] != e {
+	if s.cache[s.rt.jitKeyOf(fl.fn)] != e {
 		t.Fatal("f's code, run between the looks, was flushed")
 	}
-	if s.cache[weak.Make(jitGlobalClosure(r, "w").fn)] != ew {
+	if s.cache[s.rt.jitKeyOf(jitGlobalClosure(r, "w").fn)] != ew {
 		t.Fatal("w's entry, which has no code and ran between the looks, was flushed")
 	}
 }
@@ -183,8 +183,8 @@ func TestJITDroppedCallerLeavesCallees(t *testing.T) {
 		}
 	}
 	s := r.jit
-	ea := s.cache[weak.Make(jitGlobalClosure(r, "a").fn)]
-	eh := s.cache[weak.Make(jitGlobalClosure(r, "h").fn)]
+	ea := s.cache[s.rt.jitKeyOf(jitGlobalClosure(r, "a").fn)]
+	eh := s.cache[s.rt.jitKeyOf(jitGlobalClosure(r, "h").fn)]
 	if ea == nil || ea.ssa == nil || eh == nil || !slices.Contains(eh.nativeCallers, ea) {
 		t.Fatalf("a's code does not call h's natively: %+v, %+v", ea, eh)
 	}
@@ -198,7 +198,7 @@ func TestJITDroppedCallerLeavesCallees(t *testing.T) {
 			}
 		}
 	}
-	if s.cache[weak.Make(jitGlobalClosure(r, "a").fn)] != nil {
+	if s.cache[s.rt.jitKeyOf(jitGlobalClosure(r, "a").fn)] != nil {
 		t.Fatal("a's unused code was not flushed")
 	}
 	for _, e := range s.cache {
@@ -262,8 +262,8 @@ func TestJITFlushKeepsInlinedCallees(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := r.jit
-	ef := s.cache[weak.Make(jitGlobalClosure(r, "f").fn)]
-	eg := s.cache[weak.Make(jitGlobalClosure(r, "g").fn)]
+	ef := s.cache[s.rt.jitKeyOf(jitGlobalClosure(r, "f").fn)]
+	eg := s.cache[s.rt.jitKeyOf(jitGlobalClosure(r, "g").fn)]
 	if ef == nil || ef.ssa == nil || eg == nil || eg.ssa == nil {
 		t.Fatalf("f or g has no code: %+v, %+v", ef, eg)
 	}
@@ -277,10 +277,10 @@ func TestJITFlushKeepsInlinedCallees(t *testing.T) {
 			}
 		}
 	}
-	if s.cache[weak.Make(jitGlobalClosure(r, "f").fn)] != ef {
+	if s.cache[s.rt.jitKeyOf(jitGlobalClosure(r, "f").fn)] != ef {
 		t.Fatal("f's code, run between the looks, was flushed")
 	}
-	if s.cache[weak.Make(jitGlobalClosure(r, "g").fn)] != eg {
+	if s.cache[s.rt.jitKeyOf(jitGlobalClosure(r, "g").fn)] != eg {
 		t.Fatal("g, inlined in f's code, which ran, was flushed")
 	}
 }
@@ -301,7 +301,7 @@ func TestJITFlushByTimeNotCollections(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := r.jit
-	e := s.cache[weak.Make(jitGlobalClosure(r, "f").fn)]
+	e := s.cache[s.rt.jitKeyOf(jitGlobalClosure(r, "f").fn)]
 	if e == nil || e.ssa == nil {
 		t.Fatalf("f has no code: %+v", e)
 	}
@@ -312,7 +312,7 @@ func TestJITFlushByTimeNotCollections(t *testing.T) {
 		setEpoch(1000 + k*100*jitFlushAge)
 		s.flush()
 	}
-	if s.cache[weak.Make(jitGlobalClosure(r, "f").fn)] != e {
+	if s.cache[s.rt.jitKeyOf(jitGlobalClosure(r, "f").fn)] != e {
 		t.Fatal("f's code was flushed by the collector's cycles alone")
 	}
 }
@@ -349,7 +349,7 @@ func TestJITClocksLeaveOutCompiles(t *testing.T) {
 	// they ran is within it, to the nanosecond.
 	ran := s.running() - from
 	wall := time.Since(start)
-	if e := s.cache[weak.Make(jitGlobalClosure(r, "g").fn)]; e == nil || e.ssa == nil {
+	if e := s.cache[s.rt.jitKeyOf(jitGlobalClosure(r, "g").fn)]; e == nil || e.ssa == nil {
 		t.Fatalf("g has no code: %+v", e)
 	}
 	if got := v.Number(); got != 6000 {

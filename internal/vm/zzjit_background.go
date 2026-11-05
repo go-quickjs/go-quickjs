@@ -141,7 +141,13 @@ func (r *Runtime) jitDrain() {
 			i++
 			continue
 		}
-		if !j.install(r, j) {
+		// A compile's install fills its pools and makes its entry's links
+		// for the realm it was compiled for, whichever is running now.
+		prev := r.Realm
+		r.Realm = j.realm
+		installed := j.install(r, j)
+		r.Realm = prev
+		if !installed {
 			i++
 			continue
 		}

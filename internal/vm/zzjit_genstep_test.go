@@ -6,7 +6,6 @@ import (
 	"runtime"
 	"runtime/debug"
 	"testing"
-	"weak"
 )
 
 // jitGenInForTest is how many times loops' steps have resumed generators of
@@ -18,7 +17,7 @@ func jitGenInForTest(r *Runtime, name string) uint64 {
 	if r.jit == nil {
 		return 0
 	}
-	if l := r.jit.links[weak.Make(cl.fn)]; l != nil {
+	if l := r.jit.links[r.jitKeyOf(cl.fn)]; l != nil {
 		return l.in
 	}
 	return 0

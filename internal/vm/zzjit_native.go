@@ -198,6 +198,9 @@ func (r *Runtime) jitStressDeopt(s *jitState) bool {
 }
 
 type jitRealmFields struct {
+	// jitSelf is the realm's half of its code's keys in the cache (jitKey),
+	// made once: weak.Make searches its span's specials at each call.
+	jitSelf                        weak.Pointer[Realm]
 	jitCharCodeAt, jitFromCharCode Value
 	// jitSubstring, jitSlice, jitSubstr and jitCharAt are
 	// String.prototype's substring, slice, substr and charAt, whose
@@ -512,20 +515,58 @@ func (s *jitState) hint(cl *closure) *jitEntry {
 // span's specials -- which unwinding native calls made at every level,
 // a fifth of Are We Fast Yet's Towers.
 func (s *jitState) entryFor(fn *bytecode.Function) *jitEntry {
-	if s == nil {
+	if s == nil || s.rt == nil {
 		return nil
 	}
-	if x, ok := s.byFn[uintptr(unsafe.Pointer(fn))]; ok && x.key.Value() == fn {
+	if x, ok := s.byFn[jitFnAddr{uintptr(unsafe.Pointer(fn)), s.rt.jitRealmKey()}]; ok && x.key.Value() == fn {
 		return x.e
 	}
 	return nil
 }
 
-// jitFnEntry is the entry the cache holds for a function, by its address
-// (jitState.byFn), and its key.
+// jitKey is what the cache keeps code by: a function and the realm the code
+// is for, as V8 keeps optimized code by native context. Code is compiled for
+// its realm -- its literals' pools, the prototypes and the functions it
+// checks against, what it calls natively -- and a realm that runs the same
+// bytecode, a compiled program run in two, warms up and compiles its own.
+// A function's lowering is the realm's no more than its bytecode is, and
+// is shared (jitState.lowered). Both halves are weak: a realm a host has
+// let go, as a function collected, takes its entries with it (age).
+type jitKey struct {
+	weak.Pointer[bytecode.Function]
+	realm weak.Pointer[Realm]
+}
+
+// gone reports whether k's function or its realm has been collected.
+func (k jitKey) gone() bool { return k.Value() == nil || k.realm.Value() == nil }
+
+// jitRealmKey is the current realm's half of a jitKey. Native code runs in
+// the realm it was compiled for, and a call of a function of another
+// switches r.Realm before it gets here, so that is the running function's.
+func (r *Runtime) jitRealmKey() weak.Pointer[Realm] {
+	re := r.Realm
+	if re.jitSelf == (weak.Pointer[Realm]{}) {
+		re.jitSelf = weak.Make(re)
+	}
+	return re.jitSelf
+}
+
+// jitKeyOf is the key of fn's code for the current realm.
+func (r *Runtime) jitKeyOf(fn *bytecode.Function) jitKey {
+	return jitKey{weak.Make(fn), r.jitRealmKey()}
+}
+
+// jitFnAddr is byFn's key: a jitKey by its function's address.
+type jitFnAddr struct {
+	fn    uintptr
+	realm weak.Pointer[Realm]
+}
+
+// jitFnEntry is the entry the cache holds for a function in a realm, by its
+// address (jitState.byFn), and its key.
 type jitFnEntry struct {
 	e   *jitEntry
-	key weak.Pointer[bytecode.Function]
+	key jitKey
 }
 
 // entryOf is the program cached for cl's function, as cl's hint names it.
@@ -935,7 +976,7 @@ type jitLink struct {
 	in    uint64
 	owner *jitEntry
 	refs  int
-	key   weak.Pointer[bytecode.Function]
+	key   jitKey
 	// The function's frame and flags (abi.LinkCoerce...), for a generic
 	// call (abi.Encoding's Link fields).
 	params, locals, frame, flags uint64
@@ -972,12 +1013,15 @@ type jitState struct {
 	// reporting marks a runtime whose JIT notes the functions it does not
 	// try to compile, in skipped, for JITReport (SetJITReport).
 	reporting bool
-	skipped   map[weak.Pointer[bytecode.Function]]string
-	cache     map[weak.Pointer[bytecode.Function]]*jitEntry
+	// rt is the runtime s is the state of, whose current realm is the
+	// realm of the entries it asks for (jitKey).
+	rt      *Runtime
+	skipped map[weak.Pointer[bytecode.Function]]string
+	cache   map[jitKey]*jitEntry
 	// byFn is cache by its functions' addresses (entryFor).
-	byFn map[uintptr]jitFnEntry
+	byFn map[jitFnAddr]jitFnEntry
 	// links are the functions' links (jitLink), by the same keys.
-	links map[weak.Pointer[bytecode.Function]]*jitLink
+	links map[jitKey]*jitLink
 	// callRefs bounds the pointer words any code's native calls write
 	// themselves to their contexts' RecordRef (jit.SSACode's CallRefs),
 	// which a run's end clears (jitRunDone).
@@ -1493,7 +1537,7 @@ func (e *jitEntry) owned() bool {
 
 // dropEntry closes e's code and removes it from the cache, reporting false if
 // the OS would not release the code, which leaves e owned for a retry.
-func (s *jitState) dropEntry(key weak.Pointer[bytecode.Function], e *jitEntry) bool {
+func (s *jitState) dropEntry(key jitKey, e *jitEntry) bool {
 	held := e.ssa.Size() != 0
 	e.link.clearCode()
 	if s.closeSSA(e.ssa, e) != nil {
@@ -1568,7 +1612,7 @@ func (e *jitEntry) makesLoops() bool { return e != nil && e.loops }
 // jitVictim is what the cache may reclaim to make room (makeRoom): a
 // lowering or an entry, by its class.
 type jitVictim struct {
-	key          weak.Pointer[bytecode.Function]
+	key          jitKey
 	e            *jitEntry
 	l            *jitLowering
 	class        uint8
@@ -1654,8 +1698,8 @@ func (s *jitState) listVictims(now uint64, need int) bool {
 	clear(s.victims)
 	v, reclaimable := s.victims[:0], 0
 	for key, l := range s.lowered {
-		if k := s.links[key]; k == nil || k.owner == nil {
-			v = append(v, jitVictim{key: key, l: l, class: jitVictimLowering, used: l.used, bytes: l.bytes})
+		if k := s.links[jitKey{key, s.rt.jitRealmKey()}]; k == nil || k.owner == nil {
+			v = append(v, jitVictim{key: jitKey{Pointer: key}, l: l, class: jitVictimLowering, used: l.used, bytes: l.bytes})
 		}
 	}
 	for key, e := range s.cache {
@@ -1673,7 +1717,7 @@ func (s *jitState) listVictims(now uint64, need int) bool {
 		// newcomer's room counts its own (learn), and an old entry's
 		// had made too little for it.
 		n := e.bytes
-		if l := s.lowered[key]; l != nil {
+		if l := s.lowered[key.Pointer]; l != nil {
 			n += l.bytes
 		}
 		v = append(v, jitVictim{key: key, e: e, class: class, used: e.used, serial: e.serial, bytes: n})
@@ -1710,9 +1754,9 @@ func (s *jitState) listVictims(now uint64, need int) bool {
 func (s *jitState) reclaim(x *jitVictim, now uint64) bool {
 	switch x.class {
 	case jitVictimLowering:
-		if l := s.lowered[x.key]; l == x.l {
-			if k := s.links[x.key]; k == nil || k.owner == nil {
-				s.dropLowering(x.key, x.l)
+		if l := s.lowered[x.key.Pointer]; l == x.l {
+			if k := s.links[jitKey{x.key.Pointer, s.rt.jitRealmKey()}]; k == nil || k.owner == nil {
+				s.dropLowering(x.key.Pointer, x.l)
 			}
 		}
 	default:
@@ -1728,9 +1772,9 @@ func (s *jitState) reclaim(x *jitVictim, now uint64) bool {
 		if holds {
 			s.ghost(e.fnAddr, e)
 		}
-		if l := s.lowered[x.key]; l != nil {
+		if l := s.lowered[x.key.Pointer]; l != nil {
 			if k := s.links[x.key]; k == nil || k.owner == nil {
-				s.dropLowering(x.key, l)
+				s.dropLowering(x.key.Pointer, l)
 			}
 		}
 		s.evicted++
@@ -1889,9 +1933,9 @@ func (s *jitState) flush() {
 			continue
 		}
 		s.rememberFlushed(e.fnAddr, e)
-		if l := s.lowered[key]; l != nil {
+		if l := s.lowered[key.Pointer]; l != nil {
 			if k := s.links[key]; k == nil || k.owner == nil {
-				s.dropLowering(key, l)
+				s.dropLowering(key.Pointer, l)
 			}
 		}
 		s.flushed++
@@ -1990,7 +2034,7 @@ func (s *jitState) age(now uint64) {
 	s.agedAt = now + 1
 	s.flush()
 	for key, e := range s.cache {
-		if key.Value() == nil {
+		if key.gone() {
 			s.dropEntry(key, e)
 			continue
 		}
@@ -2005,7 +2049,7 @@ func (s *jitState) age(now uint64) {
 		}
 	}
 	for key, l := range s.links {
-		if l.owner == nil && (l.refs == 0 || key.Value() == nil) {
+		if l.owner == nil && (l.refs == 0 || key.gone()) {
 			delete(s.links, key)
 		}
 	}
@@ -2114,10 +2158,11 @@ func (e *jitEntry) holdsCode() bool {
 
 // forget removes e from the cache and frees its hint slot; its link is
 // no longer its.
-func (s *jitState) forget(key weak.Pointer[bytecode.Function], e *jitEntry) {
+func (s *jitState) forget(key jitKey, e *jitEntry) {
 	delete(s.cache, key)
-	if fn := s.byFn[e.fnAddr]; fn.e == e {
-		delete(s.byFn, e.fnAddr)
+	addr := jitFnAddr{e.fnAddr, key.realm}
+	if fn := s.byFn[addr]; fn.e == e {
+		delete(s.byFn, addr)
 	}
 	if e.hint != 0 {
 		s.hints[e.hint] = jitHintSlot{}
@@ -2146,11 +2191,11 @@ func (s *jitState) disown(e *jitEntry) {
 // code calls through if any does: e's code, once compiled, is what they
 // call (setSSA).
 func (s *jitState) linkFor(fn *bytecode.Function, e *jitEntry) {
-	key := weak.Make(fn)
+	key := s.rt.jitKeyOf(fn)
 	l := s.links[key]
 	if l == nil {
 		if s.links == nil {
-			s.links = map[weak.Pointer[bytecode.Function]]*jitLink{}
+			s.links = map[jitKey]*jitLink{}
 		}
 		l = &jitLink{key: key, params: uint64(fn.ParamCount), locals: uint64(fn.LocalCount),
 			frame: uint64(fn.LocalCount + fn.MaxStack), flags: jitLinkFlags(fn)}
@@ -2164,12 +2209,12 @@ func (s *jitState) linkFor(fn *bytecode.Function, e *jitEntry) {
 // linkOf is fn's link, made, with no entry, if it has none: what a caller's
 // code calls fn through before fn has code (ExitEnter until then).
 func (s *jitState) linkOf(fn *bytecode.Function) *jitLink {
-	key := weak.Make(fn)
+	key := s.rt.jitKeyOf(fn)
 	if l := s.links[key]; l != nil {
 		return l
 	}
 	if s.links == nil {
-		s.links = map[weak.Pointer[bytecode.Function]]*jitLink{}
+		s.links = map[jitKey]*jitLink{}
 	}
 	l := &jitLink{key: key, params: uint64(fn.ParamCount), locals: uint64(fn.LocalCount),
 		frame: uint64(fn.LocalCount + fn.MaxStack), flags: jitLinkFlags(fn)}
@@ -2277,13 +2322,13 @@ func (s *jitState) unlink(l *jitLink) {
 
 // remember caches e for key, in a free hint slot, or a new one, and counts
 // what it holds.
-func (s *jitState) remember(key weak.Pointer[bytecode.Function], e *jitEntry) {
+func (s *jitState) remember(key jitKey, e *jitEntry) {
 	s.cache[key] = e
 	if s.byFn == nil {
-		s.byFn = map[uintptr]jitFnEntry{}
+		s.byFn = map[jitFnAddr]jitFnEntry{}
 	}
 	e.fnAddr = uintptr(unsafe.Pointer(key.Value()))
-	s.byFn[e.fnAddr] = jitFnEntry{e, key}
+	s.byFn[jitFnAddr{e.fnAddr, key.realm}] = jitFnEntry{e, key}
 	var i uint32
 	if n := len(s.hintFree); n != 0 {
 		i, s.hintFree = s.hintFree[n-1], s.hintFree[:n-1]
@@ -2385,7 +2430,7 @@ func jitCompiles(fn *bytecode.Function, budget int) bool {
 // jitState is the runtime's JIT state, made at its first use.
 func (r *Runtime) jitState() *jitState {
 	if r.jit == nil {
-		r.jit = &jitState{cache: make(map[weak.Pointer[bytecode.Function]]*jitEntry), arena: jit.NewArena(), stressBudget: int(r.jitStress.budget)}
+		r.jit = &jitState{rt: r, cache: make(map[jitKey]*jitEntry), arena: jit.NewArena(), stressBudget: int(r.jitStress.budget)}
 		jitEpochOnce.Do(jitArmEpoch)
 	}
 	return r.jit
@@ -2417,7 +2462,7 @@ func (r *Runtime) jitCompileForIn(fn *bytecode.Function, cl *closure, kind jitLo
 	if r.jit != nil && r.jit.unavailable {
 		return nil
 	}
-	key := weak.Make(fn)
+	key := r.jitKeyOf(fn)
 	var invoked int64
 	var calls *jitCallCounts
 	if r.jit != nil {
@@ -2516,7 +2561,7 @@ func (r *Runtime) jitCompileForIn(fn *bytecode.Function, cl *closure, kind jitLo
 // jitCompileForIn does once it has compiled -- not if its entry is no
 // longer the cache's.
 func (r *Runtime) jitCompiled(j *jitJob) bool {
-	key := weak.Make(j.fn)
+	key := r.jitKeyOf(j.fn)
 	if r.jit.cache[key] != j.e {
 		r.jit.bgDiscarded++
 		return true
@@ -2529,7 +2574,7 @@ func (r *Runtime) jitCompiled(j *jitJob) bool {
 // jitFirstCode is jitCompileForIn's end: e's compile of p made code, with
 // fb, or refused it, err saying why. held says the cache holds e already,
 // as it holds an entry compiled in the background.
-func (r *Runtime) jitFirstCode(key weak.Pointer[bytecode.Function], fn *bytecode.Function, cl *closure, p *ir.Program, e *jitEntry, code *jit.SSACode, fb *jitFeedback, err error, held bool) *jitEntry {
+func (r *Runtime) jitFirstCode(key jitKey, fn *bytecode.Function, cl *closure, p *ir.Program, e *jitEntry, code *jit.SSACode, fb *jitFeedback, err error, held bool) *jitEntry {
 	s := r.jit
 	switch {
 	case code != nil:
@@ -2563,8 +2608,8 @@ func (r *Runtime) jitFirstCode(key weak.Pointer[bytecode.Function], fn *bytecode
 		// -- with the young code holding the rest, no refusal was
 		// remembered, and each warm-up compiled again.
 		e.deferred, e.generation = true, s.generation
-		if l := s.lowered[key]; l != nil {
-			s.dropLowering(key, l)
+		if l := s.lowered[key.Pointer]; l != nil {
+			s.dropLowering(key.Pointer, l)
 		}
 	}
 	return r.jitRefusedEntry(key, fn, cl, e, held)
@@ -2573,7 +2618,7 @@ func (r *Runtime) jitFirstCode(key weak.Pointer[bytecode.Function], fn *bytecode
 // jitRefusedEntry is jitCompileForIn's end for e, an entry with no code,
 // cl's function's, if cl is not nil: the refusal remembered, or nil. held
 // says the cache holds e already.
-func (r *Runtime) jitRefusedEntry(key weak.Pointer[bytecode.Function], fn *bytecode.Function, cl *closure, e *jitEntry, held bool) *jitEntry {
+func (r *Runtime) jitRefusedEntry(key jitKey, fn *bytecode.Function, cl *closure, e *jitEntry, held bool) *jitEntry {
 	s := r.jit
 	if fn.TopLevel {
 		// Top-level code runs once: a refusal is its closure's, for good
@@ -2584,8 +2629,8 @@ func (r *Runtime) jitRefusedEntry(key weak.Pointer[bytecode.Function], fn *bytec
 		if cl != nil && !e.deferred {
 			cl.jitRefused = true
 		}
-		if l := s.lowered[key]; l != nil {
-			s.dropLowering(key, l)
+		if l := s.lowered[key.Pointer]; l != nil {
+			s.dropLowering(key.Pointer, l)
 		}
 		if held {
 			s.forget(key, e)
@@ -2783,6 +2828,11 @@ func (r *Runtime) tryJITLoop(f *frame, pc uint32, sp int, fullBudget bool) (Valu
 // V8's MaybeOptimizeFrame has it: "OSR kicks in only once we've
 // previously decided to tier up, but we are still in a lower-tier frame".
 func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, error, bool) {
+	if f.cl.realm != r.Realm {
+		// Every way into a function of another realm switches it first, and
+		// what compiles and runs code asks for the current realm's.
+		return Undefined, nil, false
+	}
 	if s := r.jit; s != nil && s.inFlight() {
 		// Compiles in the background that are done, installed: its own,
 		// if it is one of them.
@@ -2975,7 +3025,7 @@ func (r *Runtime) jitWarmFor(cl *closure) *jitEntry {
 	}
 	e.tierMark = jitFeedbackMark(cl)
 	s.linkFor(fn, e)
-	s.remember(weak.Make(fn), e)
+	s.remember(r.jitKeyOf(fn), e)
 	e.busy++
 	s.settle()
 	e.busy--
@@ -3079,7 +3129,7 @@ func (r *Runtime) jitHotEntry(f *frame, e *jitEntry) *jitEntry {
 		// compiles in the background.
 		return nil
 	}
-	key := weak.Make(f.cl.fn)
+	key := r.jitKeyOf(f.cl.fn)
 	if s.entryFor(f.cl.fn) == e {
 		switch {
 		case e.ssa == nil && e.busy == 0:

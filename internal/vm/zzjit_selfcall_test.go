@@ -6,7 +6,6 @@ import (
 	"runtime"
 	"runtime/debug"
 	"testing"
-	"weak"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
@@ -75,7 +74,7 @@ func TestJITRecursiveCallsSeeded(t *testing.T) {
 		}
 		compiles = append(compiles, c)
 	}
-	e := r.jit.cache[weak.Make(trace.fn)]
+	e := r.jit.cache[r.jitKeyOf(trace.fn)]
 	if e == nil || e.ssa == nil || e.entrySlow || e.invalid {
 		t.Fatalf("walk did not run natively: %+v", e)
 	}

@@ -5,7 +5,6 @@ package vm
 import (
 	"runtime/debug"
 	"testing"
-	"weak"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	jitcompile "github.com/go-quickjs/go-quickjs/internal/jit/compile"
@@ -72,7 +71,7 @@ func TestJITCallEntryClearsLocals(t *testing.T) {
 		{"String(run16(300))", "f16", true},
 	} {
 		fn := fnOf(tc.callee)
-		e := r.jit.cache[weak.Make(fn)]
+		e := r.jit.cache[r.jitKeyOf(fn)]
 		if e == nil || e.ssa == nil || e.link.in == 0 {
 			t.Fatalf("%s is not called natively: %+v", tc.callee, e)
 		}
@@ -148,7 +147,7 @@ func TestJITCallStateRebuildsTheFrame(t *testing.T) {
 	fnOf := func(name string) *bytecode.Function {
 		return r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure.fn
 	}
-	ce, te := r.jit.cache[weak.Make(fnOf("caller"))], r.jit.cache[weak.Make(fnOf("thrower"))]
+	ce, te := r.jit.cache[r.jitKeyOf(fnOf("caller"))], r.jit.cache[r.jitKeyOf(fnOf("thrower"))]
 	if ce == nil || ce.ssa == nil || te == nil || te.ssa == nil {
 		t.Fatalf("not compiled: caller %+v, thrower %+v", ce, te)
 	}

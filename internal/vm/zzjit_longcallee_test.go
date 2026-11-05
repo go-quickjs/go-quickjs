@@ -6,7 +6,6 @@ import (
 	"runtime"
 	"runtime/debug"
 	"testing"
-	"weak"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
@@ -64,7 +63,7 @@ func TestJITLongCalleeCalledThroughLink(t *testing.T) {
 			t.Fatalf("round %d: got %v, interpreter %v", i, got, want)
 		}
 	}
-	ce, le := r.jit.cache[weak.Make(caller.fn)], r.jit.cache[weak.Make(long.fn)]
+	ce, le := r.jit.cache[r.jitKeyOf(caller.fn)], r.jit.cache[r.jitKeyOf(long.fn)]
 	if ce == nil || ce.ssa == nil || le == nil || le.ssa == nil || le.link == nil {
 		t.Fatalf("caller or long has no code: %v, %v", ce, le)
 	}

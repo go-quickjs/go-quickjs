@@ -293,7 +293,7 @@ func jitOldStaysUncounted(r *Runtime, old []*jitEntry) *jitEntry {
 			continue
 		}
 		n := e.bytes
-		if l := r.jit.lowered[e.link.key]; l != nil {
+		if l := r.jit.lowered[e.link.key.Pointer]; l != nil {
 			n += l.bytes
 		}
 		if int64(r.jit.floor) > jitHeldButScratch(r)-int64(n) {

@@ -6,7 +6,6 @@ import (
 	"runtime"
 	"runtime/debug"
 	"testing"
-	"weak"
 )
 
 // A call that left native code for a target its code was not compiled
@@ -63,7 +62,7 @@ func TestJITCallRepeatsInvalidate(t *testing.T) {
 		}
 		hosts = append(hosts, h)
 	}
-	e := r.jit.cache[weak.Make(runCl.fn)]
+	e := r.jit.cache[r.jitKeyOf(runCl.fn)]
 	if e == nil || e.ssa == nil || e.invalid {
 		t.Fatalf("run has no code: %+v", e)
 	}

@@ -6,7 +6,6 @@ import (
 	"runtime/debug"
 	"slices"
 	"testing"
-	"weak"
 )
 
 // Code judged not to pay on its first stretches (entrySlow) -- here
@@ -171,8 +170,8 @@ func TestJITCallsOfNotNativeCalleesAreGos(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	leaf := r.jit.cache[weak.Make(r.global.getOwn(r.atoms.intern("leaf")).value().Object().fn().closure.fn)]
-	mid := r.jit.cache[weak.Make(r.global.getOwn(r.atoms.intern("mid")).value().Object().fn().closure.fn)]
+	leaf := r.jit.cache[r.jitKeyOf(r.global.getOwn(r.atoms.intern("leaf")).value().Object().fn().closure.fn)]
+	mid := r.jit.cache[r.jitKeyOf(r.global.getOwn(r.atoms.intern("mid")).value().Object().fn().closure.fn)]
 	if leaf == nil || leaf.ssa == nil || mid == nil || mid.ssa == nil || mid.link.in == 0 {
 		t.Skipf("mid not called natively, or leaf without code: %+v %+v", mid, leaf)
 	}
@@ -324,7 +323,7 @@ func TestJITKnownNotNativeCalleeCounted(t *testing.T) {
 	fnOf := func(name string) *closure {
 		return r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 	}
-	leaf, mid := r.jit.cache[weak.Make(fnOf("leaf").fn)], r.jit.cache[weak.Make(fnOf("mid").fn)]
+	leaf, mid := r.jit.cache[r.jitKeyOf(fnOf("leaf").fn)], r.jit.cache[r.jitKeyOf(fnOf("mid").fn)]
 	if leaf == nil || leaf.ssa == nil || mid == nil || mid.ssa == nil || mid.link.in == 0 ||
 		!slices.ContainsFunc(mid.nativeCalls, func(x jitInline) bool { return x.cl == fnOf("leaf") }) {
 		t.Skipf("mid not called natively, or not calling leaf so: %+v %+v", mid, leaf)

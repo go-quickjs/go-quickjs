@@ -6,7 +6,6 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"testing"
 	"time"
-	"weak"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/mir"
 )
@@ -422,7 +421,7 @@ func TestJITBackgroundStaleLink(t *testing.T) {
 	}
 	// half's entry dropped meanwhile, and half compiled again: another
 	// link.
-	if !r.jit.dropEntry(weak.Make(half.fn), he) {
+	if !r.jit.dropEntry(r.jitKeyOf(half.fn), he) {
 		t.Fatal("half's entry not dropped")
 	}
 	r.jitNativeCallee(half)

@@ -7,7 +7,6 @@ import (
 	"runtime/debug"
 	"slices"
 	"testing"
-	"weak"
 )
 
 // A write that adds its property, and a read that finds its property, along
@@ -65,7 +64,7 @@ func TestJITSSADeepChainsSeenByTheInterpreter(t *testing.T) {
 		if got, want := gv.String().Go(), wv.String().Go(); got != want {
 			t.Fatalf("round %d: got %s, interpreter %s", i, got, want)
 		}
-		e := r.jit.cache[weak.Make(cl.fn)]
+		e := r.jit.cache[r.jitKeyOf(cl.fn)]
 		if e == nil || e.ssa == nil || e.entrySlow {
 			t.Fatalf("round %d: deep did not run natively", i)
 		}
@@ -128,7 +127,7 @@ func TestJITSSASeedsBuiltinsAndCalleesCalls(t *testing.T) {
 			t.Fatalf("round %d: got %s, interpreter %s", i, got, want)
 		}
 	}
-	e := r.jit.cache[weak.Make(work.fn)]
+	e := r.jit.cache[r.jitKeyOf(work.fn)]
 	if e == nil || e.ssa == nil {
 		t.Fatal("work has no code")
 	}
@@ -146,7 +145,7 @@ func TestJITSSASeedsBuiltinsAndCalleesCalls(t *testing.T) {
 			t.Fatalf("work does not make %s natively", k.name)
 		}
 	}
-	he := r.jit.cache[weak.Make(h.fn)]
+	he := r.jit.cache[r.jitKeyOf(h.fn)]
 	if he == nil || !slices.ContainsFunc(slices.Concat(he.nativeCalls, he.inlines), func(x jitInline) bool { return x.via }) {
 		t.Fatal("H's call of G is not decided")
 	}
@@ -198,7 +197,7 @@ func TestJITSSAUnwoundCompiledAgainOnlyForWhatItLearned(t *testing.T) {
 		}
 	}
 	w := r.global.getOwn(r.atoms.intern("w")).value().Object().fn().closure
-	e := r.jit.cache[weak.Make(w.fn)]
+	e := r.jit.cache[r.jitKeyOf(w.fn)]
 	if e == nil || e.ssa == nil {
 		t.Fatal("w has no code")
 	}
