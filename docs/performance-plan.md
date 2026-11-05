@@ -11,9 +11,9 @@ and what is still open, are in [After the review](#after-the-review).
 
 When the review was written, go-quickjs was level with C QuickJS over the V8
 suite and took about 1.4 times its time over QuickJS's own micro-benchmarks.
-At v0.27.0 it takes 0.60 times QuickJS's time over the V8 suite, 0.93 times
-by the geometric mean of the micro-benchmarks and 0.97 times over
-`microbench_extra.js`; see
+At v0.33.0 it takes 0.54 times QuickJS's time over the V8 suite, 0.85 times
+by the geometric mean of the micro-benchmarks and 0.86 times over
+`microbench_extra.js`, and with the JIT 0.27, 0.32 and 0.35 times; see
 [benchmarks.md](benchmarks.md#compared-with-c-quickjs). The figures in an
 item are from the runs of its time unless it says otherwise.
 
