@@ -7,7 +7,7 @@ package vm
 // class's prototype, its parent's and Object.prototype -- has three: each
 // property a constructor added to one had been made the long way, the
 // chain asked for setters at every write, until the site gave up after
-// maxCacheFills and went to the runtime's table of additions (deepStore),
+// maxCacheFills and went to the realm's table of additions (deepStore),
 // a hash lookup and a walk of the chain each. As V8's transitioning
 // stores check the receiver's map and its prototype chain's validity cell,
 // such an entry is the receiver's shape, its prototype, and the cell of

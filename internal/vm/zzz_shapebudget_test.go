@@ -14,7 +14,7 @@ func liveShapes(r *Runtime) int {
 	// The runtime's caches of megamorphic sites hold a bounded number of
 	// shapes, as many as their entries, which hashes of their addresses
 	// pick: made again when next needed.
-	t.shared, t.deep, t.has = nil, nil, nil
+	r.shared, r.deep, r.has = nil, nil, nil
 	// The chunk of budgets being given out is the tree's, which holds it.
 	t.chunk = nil
 	freed := int64(-1)

@@ -61,7 +61,7 @@ var (
 	restCall func(c *tctx, o *Object, fd *funcData, this Value, as []Value) (Value, bool)
 
 	// primMethod is the method key of o, a string or a number, where the
-	// runtime's table of what the primitives' prototypes hold (primProps)
+	// realm's table of what the primitives' prototypes hold (primProps)
 	// has it, as primProp reads it; it reports false for anything else,
 	// which methodMiss reads.
 	primMethod func(r *Runtime, o Value, key Atom) (Value, bool)
@@ -679,7 +679,7 @@ func init() {
 }
 
 // A method read off a string or a number -- s.indexOf(c), n.toFixed(2) --
-// is answered by methodCallN's nodes from the runtime's table of what the
+// is answered by methodCallN's nodes from the realm's table of what the
 // primitives' prototypes hold (primProps), as primProp answers it, by one
 // call (primMethod) that calls nothing: each such call had gone to
 // methodMiss, getValueProp and primProp. An entry is of a plain data property the prototype has

@@ -38,3 +38,10 @@ func keepRegistry[_ any](r *Runtime, reg *Object) {
 	}
 	re.finalizing[reg] = struct{}{}
 }
+
+// setMathFns records the realm's Math.pow, atan2 and hypot.
+//
+//go:noinline
+func setMathFns[_ any](re *Realm, pow, atan2, hypot *Object) {
+	re.powFn, re.atan2Fn, re.hypotFn = pow, atan2, hypot
+}

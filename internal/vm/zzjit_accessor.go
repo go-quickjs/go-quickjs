@@ -262,7 +262,7 @@ func (fb *jitFeedback) Accessor(pc int) (ssa.AccessorSite, bool) {
 // megamorphic reports whether the property site at pc, compiled for site,
 // is megamorphic: it has met more than its cases hold -- as many shapes as
 // they hold, read or written, or so many its cache gave up (maxCacheFills,
-// after which the VM reads and writes through the runtime's shared caches)
+// after which the VM reads and writes through the realm's shared caches)
 // -- or what no case can hold (jitPolySite's mega), which the code's
 // deoptimizations there found (jitPropertyDeopt). Native code then looks
 // in the receiver's own table and the megamorphic cache for any other

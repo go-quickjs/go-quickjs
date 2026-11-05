@@ -7,7 +7,7 @@ import "testing"
 // prototype's, a getter's and a setter's at either step, a primitive and
 // null at the first -- whose read throws a TypeError -- a string's length
 // at the second, and objects of more shapes than a site's cache holds, so
-// that the sites give up their caches and the runtime's shared cache
+// that the sites give up their caches and the realm's shared cache
 // answers them (ownScan, cachedProp). A write to a frozen object is
 // ignored in sloppy code and throws in strict code. Each answer is the
 // interpreter's, and Node's.

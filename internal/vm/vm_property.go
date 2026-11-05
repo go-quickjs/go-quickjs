@@ -1047,7 +1047,7 @@ func plainOwnAt(o *Object, key Atom) (Value, int32, bool) {
 	}
 	if o.shapeIndex() != nil {
 		// A large table's index, which its layout has: what a read whose
-		// cache has given up asks before the runtime's shared cache, as
+		// cache has given up asks before the realm's shared cache, as
 		// the layout is in the processor's cache already and the shared
 		// one's entries seldom are.
 		i := o.findOwn(key)

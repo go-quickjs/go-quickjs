@@ -6069,14 +6069,14 @@ func (fb *jitFeedback) ArrayProtos() ([2]ssa.Holder, bool) {
 		{Object: uintptr(unsafe.Pointer(op)), Shape: uintptr(unsafe.Pointer(op.shape))}}, true
 }
 
-// HasCache is ssa.HasCacheFeedback's: the runtime's hasCache, made if it has
+// HasCache is ssa.HasCacheFeedback's: the realm's hasCache, made if it has
 // none, which it keeps for as long as it lives, and so for as long as any
 // code of its does.
 func (fb *jitFeedback) HasCache() uintptr {
-	if fb.r.shapes.has == nil {
-		fb.r.shapes.has = new(hasCache)
+	if fb.r.has == nil {
+		fb.r.has = new(hasCache)
 	}
-	return uintptr(unsafe.Pointer(fb.r.shapes.has))
+	return uintptr(unsafe.Pointer(fb.r.has))
 }
 
 // KeyAtoms is ssa.KeyAtomsFeedback's: the runtime's keyAtoms, and its
@@ -7536,7 +7536,7 @@ func (fb *jitFeedback) ownEntry() *jitEntry {
 }
 
 // jitKeyedRead is o[k] where reading it runs nothing (ssa.GoIndex): an
-// object's data property by a string key, which the runtime's shared
+// object's data property by a string key, which the realm's shared
 // property cache finds -- no getter, no proxy, no class that answers keys
 // itself -- or a dense array's element, or a typed array's, by an
 // integer, or an index an ordinary object's table holds or nothing up its

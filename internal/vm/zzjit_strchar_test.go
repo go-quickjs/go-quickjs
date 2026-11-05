@@ -318,7 +318,7 @@ func TestJITLocalTypedReadsLearned(t *testing.T) {
 // An object's property read by its name's string, obj[name], is made by Go
 // from native code once the read has met one (ssa.GoIndex, jitKeyedRead):
 // where reading it runs nothing -- a data property, own or inherited, found
-// by the runtime's shared property cache -- and otherwise after an exit,
+// by the realm's shared property cache -- and otherwise after an exit,
 // native code going on after it: a getter, a proxy, a key that is an
 // index, a missing property, a number key of an array. It had left native
 // code at every invocation, the rest of each by the interpreter: PDF.js's

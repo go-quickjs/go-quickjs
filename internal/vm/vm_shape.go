@@ -319,13 +319,14 @@ type shapeTree struct {
 	// building says the runtime is making a realm: what is made then is one
 	// of a kind, and gets a unique shape.
 	building bool
-	// shared is the cache of the reads that have given up their own, made
-	// when one first does.
-	shared     *sharedCache
+	// The room of the realm's shared, which was the tree's, so that no field
+	// the interpreter reads moves.
+	_ uintptr
+	// sharedTurn says which of a pair of a shared cache's entries a fill
+	// replaces next (sharedProp).
 	sharedTurn bool
-	// deep is the cache of the additions made at the sites that have given
-	// up their own (deepStore), made when one first is.
-	deep *deepAdds
+	// The room of the realm's deep, which was the tree's.
+	_ uintptr
 	// poly is the root of the layouts of the objects whose prototype is in
 	// their table (polyRoot), made when one first is.
 	poly *shape
@@ -334,9 +335,8 @@ type shapeTree struct {
 	// them beyond its layout's room, the object is a dictionary
 	// (shapeAdded).
 	keyed *Object
-	// has is the cache of the in operator's answers (see ztree_ain.go),
-	// made when one is first remembered.
-	has *hasCache
+	// The room of the realm's has, which was the tree's.
+	_ uintptr
 	// freed is how many shapes the cleanups of collected prototypes have
 	// given back since count last took them (reclaimShapes), made with the
 	// first prototype's budget; chunk is the budget prototypes are given
@@ -1106,7 +1106,7 @@ type propCache struct {
 	getter bool
 	// fills counts the times the entry has been filled. A site that keeps
 	// meeting new shapes stops trying: filling costs a lookup of its own. A
-	// read then uses the runtime's shared cache.
+	// read then uses the realm's shared cache.
 	fills uint8
 	// ownShape is shape where the entry is of a plain data property the
 	// object has itself and keeps -- not a prototype's, not an accessor, not
@@ -1438,13 +1438,13 @@ func (c *propCache) holder(o *Object) *Object {
 	return q
 }
 
-// sharedCache is a runtime's cache for the reads whose own caches have given
+// sharedCache is a realm's cache for the reads whose own caches have given
 // up, which meet objects of many shapes: one read of a method every class
 // calls, say. It is what V8 calls the megamorphic stub cache: an entry is
 // found by the shape and the key together, so it serves every such read.
 type sharedCache [sharedCacheSize]sharedEntry
 
-// sharedCacheSize is the entries of a runtime's shared cache, in pairs: a
+// sharedCacheSize is the entries of a realm's shared cache, in pairs: a
 // key is looked for in the two of its pair, the one found last first.
 const (
 	sharedCacheBits = 10
@@ -1492,28 +1492,28 @@ func (e *sharedEntry) holder(o *Object) *Object {
 }
 
 // sharedProp is cachedProp for a read whose own cache has given up, answered
-// by the runtime's shared cache, and filling it.
+// by the realm's shared cache, and filling it.
 func (r *Runtime) sharedProp(o *Object, key Atom) (Value, bool) {
 	s := r.ensureShape(o)
 	if s == nil || key.IsIndex() {
 		return Undefined, false
 	}
 	t := r.shapes
-	if t.shared == nil {
-		t.shared = new(sharedCache)
+	if r.shared == nil {
+		r.shared = new(sharedCache)
 	}
 	// The shape and the key mixed by a multiplication, whose top bits are
 	// the index: the shapes of a hierarchy are allocated near each other,
 	// and their low bits, with a key's, collided in a cache of pairs.
 	mix := (uint64(uintptr(unsafe.Pointer(s)))>>4 ^ uint64(key)<<24) * 0x9e3779b97f4a7c15
 	i := uintptr(mix>>(64-sharedCacheBits)) &^ 1
-	e := &t.shared[i]
+	e := &r.shared[i]
 	if e.shape == s && e.key == key {
 		if h := e.holder(o); h != nil {
 			return h.vals()[e.idx], true
 		}
 	}
-	f := &t.shared[i+1]
+	f := &r.shared[i+1]
 	if f.shape == s && f.key == key {
 		if h := f.holder(o); h != nil {
 			return h.vals()[f.idx], true
@@ -1552,12 +1552,12 @@ type deepAdd struct {
 // deepAddDepth is how deep a prototype chain deepAdds holds additions past.
 const deepAddDepth = 8
 
-// deepAdds is a runtime's cache of additions, by the shape added to and the
+// deepAdds is a realm's cache of additions, by the shape added to and the
 // key, as sharedCache is of reads.
 type deepAdds [sharedCacheSize]deepAdd
 
 // deepStore is an addition of v as o's key at a site whose cache has given
-// up, made as the runtime's cache of additions says (deepAdds), or false
+// up, made as the realm's cache of additions says (deepAdds), or false
 // where it says nothing of o's shape and key, or o's prototypes are not
 // the ones it says. An object of a class of a hierarchy three to seven
 // deep -- each of Typescript's syntax tree's nodes -- had been given each
@@ -1565,7 +1565,7 @@ type deepAdds [sharedCacheSize]deepAdd
 // prototypes asked again by the site's cache, which could not hold the
 // chain.
 func (r *Runtime) deepStore(o *Object, key Atom, v Value) bool {
-	s, t := o.shape, r.shapes.deep
+	s, t := o.shape, r.deep
 	if s == nil || t == nil {
 		return false
 	}
@@ -1590,7 +1590,7 @@ func (r *Runtime) deepStore(o *Object, key Atom, v Value) bool {
 	return true
 }
 
-// fillDeepStore remembers in the runtime's cache of additions the addition
+// fillDeepStore remembers in the realm's cache of additions the addition
 // of key a write just made to o, of shape before then, if it took a shared
 // transition along a chain of up to deepAddDepth prototypes none of which
 // intercepts it -- what fillStoreCache requires of a site's.
@@ -1615,11 +1615,10 @@ func (r *Runtime) fillDeepStore(o *Object, before *shape, key Atom) {
 		e.n++
 	}
 	e.key, e.from, e.next = key, remember(before), next
-	t := r.shapes
-	if t.deep == nil {
-		t.deep = new(deepAdds)
+	if r.deep == nil {
+		r.deep = new(deepAdds)
 	}
-	t.deep[(uintptr(unsafe.Pointer(before))>>4^uintptr(key)*0x9e3779b1)%sharedCacheSize] = e
+	r.deep[(uintptr(unsafe.Pointer(before))>>4^uintptr(key)*0x9e3779b1)%sharedCacheSize] = e
 }
 
 // maxCacheFills is how many times a cache is filled before it gives up.
@@ -1698,7 +1697,7 @@ func (r *Runtime) fillPropCache(c *propCache, o *Object, key Atom, accessors boo
 			// first such entry is made, and counts as no fill: a site
 			// meeting a fresh prototype each time keeps its first rather
 			// than making one for each. A cache of no site's (the
-			// runtime's shared one, the JIT's) keeps none.
+			// realm's shared one, the JIT's) keeps none.
 			if c.shape != nil && c.shape != dictShape {
 				fills := c.fills
 				r.fillDictCache(c, o, key)
@@ -1908,7 +1907,7 @@ func (r *Runtime) verifyStoreCache(c *propCache, o *Object, key Atom) {
 // cachedData is a read of o's key that its cache answers with a plain data
 // property, for a read that may not call a getter: an accessor's entry,
 // which cachedGet keeps, is no answer. A cache that has given up leaves the
-// read to the runtime's shared cache, as cachedGet's does. It reports false
+// read to the realm's shared cache, as cachedGet's does. It reports false
 // for anything else, and fills nothing of the site's.
 func (r *Runtime) cachedData(c *propCache, o *Object, key Atom) (Value, bool) {
 	if h := c.holder(o); h != nil {

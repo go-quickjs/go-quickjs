@@ -144,15 +144,9 @@ type Runtime struct {
 	backEdges int
 	// regexpFlagAtoms are the names of regExpFlagNames' getters.
 	regexpFlagAtoms [len(regExpFlagNames)]Atom
-	// argsLayouts are the layouts of an unmapped and a mapped arguments
-	// object, from the first of each made.
-	argsLayouts [2]*argsLayout
-	// matchLayout is the layout of a match result made by a regexp without
-	// the d flag, from the first one made.
-	matchLayout *argsLayout
-	// iterResultShape is the shape of a { value, done } result, from the
-	// first one made.
-	iterResultShape *shape
+	// The room of the realm's argsLayouts, matchLayout and iterResultShape,
+	// which were the runtime's, so that no field the interpreter reads moves.
+	_ [4]uintptr
 	// comma is ",", join's separator when it is given none.
 	comma *String
 	// splitBuf is where split collects its pieces before the array is made
@@ -266,9 +260,10 @@ type Runtime struct {
 	// so that the fields the interpreter reads on every call and step stay
 	// together at the front, a few cache lines apart rather than kilobytes.
 
-	// primProps remembers where methods of primitives were found on their
-	// prototypes; see primProp.
-	primProps [64]primEntry
+	// The room of the realm's primProps, 64 entries of 24 bytes, which was
+	// the runtime's: what follows stays where it was within its cache
+	// lines and pages.
+	_ [192]uintptr
 	// keyAtoms remembers the atoms of key strings the runtime handed out;
 	// see keyString.
 	keyAtoms [256]keyAtom
@@ -285,12 +280,9 @@ type Runtime struct {
 	// debug is the debugger of a runtime made for one, and nil for any
 	// other; see zdebug.go.
 	debug *debugState
-	// powFn is Math.pow, which the native tier computes itself where its
-	// answer is exact (jitFeedback.Intrinsic).
-	powFn *Object
-	// atan2Fn and hypotFn are Math.atan2 and Math.hypot, which native code
-	// has Go compute.
-	atan2Fn, hypotFn *Object
+	// The room of the realm's powFn, atan2Fn and hypotFn, which were the
+	// runtime's, so that no field the interpreter reads moves.
+	_ [3]uintptr
 	// sourceMaps maps stack traces through scripts' source maps, once a
 	// host gives a loader; see zsourcemap.go.
 	sourceMaps *sourceMaps
@@ -306,18 +298,13 @@ type Runtime struct {
 	// arguments out of its frame's window, for a callee that reads them
 	// only as it starts (tailArgsOf).
 	tailArgs []Value
-	// randomFn is Math.random, which native code makes itself (a native
-	// tier's intrinsic): at the end, so that no field the interpreter reads
-	// moves.
-	randomFn *Object
+	// The room of the realm's randomFn, which was the runtime's.
+	_ uintptr
 	// bigFree is the BigInts the tree tier has given back, for bigInPlace
 	// to make results in (bigRelease); nil until one is.
 	bigFree *bigFreeList
-	// leafFns are the built-ins with a frameless application past
-	// elemRandom (setElemOp), of every realm the runtime has made, for the
-	// JIT to know them by (jitPlainSet). At the end, so that no field the
-	// interpreter reads moves.
-	leafFns []*Object
+	// The room of the realm's leafFns, which was the runtime's.
+	_ [3]uintptr
 	// thisCells hold the this bindings of derived constructors' frames
 	// that no closure or eval can capture, by the frame's depth
 	// (constructTree): each construction of such a class had allocated
@@ -570,6 +557,44 @@ type Realm struct {
 	// strReplaceFn holds, is told so of the call about to be made, of its
 	// RegExp (replaceDead's dead).
 	strReplaceDead **Object
+	genNextFn      *Object
+
+	// What follows had been the runtime's, each once for all its realms, but
+	// each holds what a realm's own code made or found -- its built-ins, a
+	// layout of one of its prototypes -- and nothing of the runtime's may
+	// hold a realm (see realm.go). At the end, so that no field the
+	// interpreter reads moves.
+
+	// powFn is Math.pow, which the native tier computes itself where its
+	// answer is exact (jitFeedback.Intrinsic).
+	powFn *Object
+	// atan2Fn and hypotFn are Math.atan2 and Math.hypot, which native code
+	// has Go compute.
+	atan2Fn, hypotFn *Object
+	// randomFn is Math.random, which native code makes itself (a native
+	// tier's intrinsic).
+	randomFn *Object
+	// leafFns are the built-ins with a frameless application past
+	// elemRandom (setElemOp), for the JIT to know them by (jitPlainSet).
+	leafFns []*Object
+	// argsLayouts are the layouts of an unmapped and a mapped arguments
+	// object, from the first of each made.
+	argsLayouts [2]*argsLayout
+	// matchLayout is the layout of a match result made by a regexp without
+	// the d flag, from the first one made.
+	matchLayout *argsLayout
+	// iterResultShape is the shape of a { value, done } result, from the
+	// first one made.
+	iterResultShape *shape
+	// shared is the cache of the reads that have given up their own, made
+	// when one first does.
+	shared *sharedCache
+	// deep is the cache of the additions made at the sites that have given
+	// up their own (deepStore), made when one first is.
+	deep *deepAdds
+	// has is the cache of the in operator's answers (see ztree_ain.go),
+	// made when one is first remembered.
+	has *hasCache
 	// finalizing are the FinalizationRegistry objects with this realm's
 	// callbacks that have had cells, which keeps one a script has let go
 	// of for its targets' sake, and finalizingAt how many of them there
@@ -578,7 +603,10 @@ type Realm struct {
 	finalizing   map[*Object]struct{}
 	finalizingAt int
 	jitRealmFields
-	genNextFn *Object
+	// primProps remembers where methods of primitives were found on their
+	// prototypes; see primProp. Last, being kilobytes long, and after the
+	// JIT's fields, so that an empty one adds no padding.
+	primProps [64]primEntry
 }
 
 // intrinsics holds the built-in prototypes and constructors.

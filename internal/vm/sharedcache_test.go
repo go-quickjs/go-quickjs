@@ -2,7 +2,7 @@ package vm
 
 import "testing"
 
-// A read whose own cache has given up is answered by the runtime's shared
+// A read whose own cache has given up is answered by the realm's shared
 // cache (sharedProp), of entries in pairs: reads of own properties and of
 // prototypes' at one and two levels, across forty layouts, stay right as
 // a prototype's method is replaced, a property is added to a prototype in

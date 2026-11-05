@@ -101,7 +101,7 @@ func matchBlockOf[_ any](proto *Object, n, k int) (*Object, []String) {
 // matchResultOf is buildMatchResult's array, with its strings made with it
 // (matchBlockOf): the array of a match of a pattern without the d flag, of
 // fewer than matchBlockMax groups, once the first match has given the
-// runtime the layout of its index, input and groups (matchLayout), which it
+// realm the layout of its index, input and groups (matchLayout), which it
 // is made with as buildMatchResult makes it. exec's leaf (regexpLeaf's
 // match), which every tier calls, makes its arrays here.
 func matchResultOf[_ any](r *Runtime, re *regexp.Regexp, caps []int, input *String) *Object {

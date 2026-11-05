@@ -2562,7 +2562,7 @@ func (r *Runtime) initMathBuiltins() {
 		fo.fn().mathOp = uint8(i + 1)
 	}
 
-	r.powFn = r.defMethod(m, "pow", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	pow := r.defMethod(m, "pow", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		a, err := rt.toNumber(arg(args, 0))
 		if err != nil {
 			return Undefined, err
@@ -2574,7 +2574,7 @@ func (r *Runtime) initMathBuiltins() {
 		return Float(jsPow(a, b)), nil
 	})
 
-	r.atan2Fn = r.defMethod(m, "atan2", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	atan2 := r.defMethod(m, "atan2", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		a, err := rt.toNumber(arg(args, 0))
 		if err != nil {
 			return Undefined, err
@@ -2593,7 +2593,7 @@ func (r *Runtime) initMathBuiltins() {
 		return rt.mathExtremum(args, false)
 	}).fn().mathOp = mathMin
 
-	r.hypotFn = r.defMethod(m, "hypot", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	hypot := r.defMethod(m, "hypot", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		nums, err := rt.coerceAll(args)
 		if err != nil {
 			return Undefined, err
@@ -2601,7 +2601,7 @@ func (r *Runtime) initMathBuiltins() {
 		return Float(jsHypot(nums)), nil
 	})
 
-	r.powFn.fn().mathOp, r.atan2Fn.fn().mathOp, r.hypotFn.fn().mathOp = mathPow, mathAtan2, mathHypot
+	pow.fn().mathOp, atan2.fn().mathOp, hypot.fn().mathOp = mathPow, mathAtan2, mathHypot
 
 	r.randomFn = r.defMethod(m, "random", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		return Float(rt.random()), nil
@@ -2609,6 +2609,7 @@ func (r *Runtime) initMathBuiltins() {
 	// It calls nothing and cannot throw: a call applies it without a frame
 	// (collectionOp).
 	setElemOp(r, r.randomFn, elemRandom)
+	setMathFns[struct{}](r.Realm, pow, atan2, hypot)
 }
 
 // coerceAll converts every argument to a number, in the order they were

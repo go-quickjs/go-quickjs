@@ -9,7 +9,7 @@ import "unsafe"
 // typed array's index, a module namespace, an exotic object's own keys.
 //
 // The answers hasQuick finds for a key string that names no index are
-// remembered in the runtime's hasCache, by the string, the object's layout
+// remembered in the realm's hasCache, by the string, the object's layout
 // and its prototype, as V8's megamorphic stub cache remembers a load's: the
 // tree tier's node looks there first, and so does native code, before it
 // calls Go (mir's keyedHas).
@@ -19,7 +19,7 @@ import "unsafe"
 // other closure (see ztree_zkself.go): code added here moves nothing the
 // tree tier or the interpreter runs.
 
-// hasCache is a runtime's cache of the in operator's answers for key
+// hasCache is a realm's cache of the in operator's answers for key
 // strings that name no index, made when one is first remembered. An entry
 // answers key in o -- has -- where key's string is the entry's, o's layout
 // is shape and its prototype proto, and cell, the validity cell of the
@@ -73,10 +73,10 @@ var (
 	// hasIndexQuick is hasQuick of the index i, below atomIndexTag.
 	hasIndexQuick func(o *Object, i uint32) (has, ok bool)
 
-	// hasCached is key in o where the runtime's hasCache remembers it.
+	// hasCached is key in o where the realm's hasCache remembers it.
 	hasCached func(r *Runtime, key Value, o *Object) (has, ok bool)
 
-	// hasNote remembers in the runtime's hasCache that key, a string that
+	// hasNote remembers in the realm's hasCache that key, a string that
 	// names no index, is in o where has says, as hasQuick found it, where
 	// o's layout and its chain's cell can be kept.
 	hasNote func(r *Runtime, key Value, o *Object, has bool)
@@ -88,7 +88,7 @@ var (
 
 func init() {
 	hasCached = func(r *Runtime, key Value, o *Object) (bool, bool) {
-		c, sh := r.shapes.has, o.shape
+		c, sh := r.has, o.shape
 		if c == nil || !key.IsString() || sh == nil {
 			return false, false
 		}
@@ -123,11 +123,11 @@ func init() {
 		if cell == nil {
 			return
 		}
-		if r.shapes.has == nil {
-			r.shapes.has = new(hasCache)
+		if r.has == nil {
+			r.has = new(hasCache)
 		}
 		set := (uint64(uintptr(key.ref))>>4 ^ uint64(uintptr(unsafe.Pointer(sh)))>>4) * hasCacheMul >> (64 - hasCacheBits + 1)
-		ways := r.shapes.has[set*2 : set*2+2]
+		ways := r.has[set*2 : set*2+2]
 		if e := &ways[0]; e.key != key.ref || e.shape != sh || e.proto != o.proto() {
 			// The newer is now the older, unless it is this one's, which
 			// its new cell replaces.

@@ -60,9 +60,9 @@ func TestDeepStoreFollowsTheChain(t *testing.T) {
 		r := New(Config{})
 		v, err := r.Run(compileForTest(t, src))
 		var counts string
-		if err == nil && r.shapes.deep != nil {
+		if err == nil && r.deep != nil {
 			n := 0
-			for _, e := range r.shapes.deep {
+			for _, e := range r.deep {
 				if e.n > 2 {
 					n++
 				}

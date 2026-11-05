@@ -1025,8 +1025,7 @@ func (r *Runtime) newArgumentsObject(f *frame) *Object {
 		// An unmapped one's callee is its realm's accessor pair, shared:
 		// it can never be changed, being non-configurable, and nothing
 		// writes an accessor pair in place but the definitions of an object
-		// or class literal. The layout is the runtime's, shared by its
-		// realms, so the pair is set for each object.
+		// or class literal.
 		if mapped {
 			o.vals()[1] = Obj(f.callee)
 			r.mapArguments(o, f)

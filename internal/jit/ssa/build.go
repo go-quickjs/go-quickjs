@@ -1959,7 +1959,7 @@ type GoOp uint8
 // any receiver and key, the first operand and the second, as V8's code
 // calls its generic keyed load: Go reads an object's property by a string
 // key, or its element by an integer, where that runs nothing -- a data
-// property, found by the runtime's shared property cache, or a dense
+// property, found by the realm's shared property cache, or a dense
 // array's or a typed array's element -- and refuses any other, which
 // leaves for Go to read after an exit, native code going on after it.
 //
