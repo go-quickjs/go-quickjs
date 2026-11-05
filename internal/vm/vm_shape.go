@@ -344,6 +344,8 @@ type shapeTree struct {
 	freed     *atomic.Int64
 	chunk     *budgetChunk
 	chunkUsed int
+	// settled is how much of count has a budget to go with (settleSites).
+	settled int
 }
 
 const (

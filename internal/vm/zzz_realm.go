@@ -45,3 +45,20 @@ func keepRegistry[_ any](r *Runtime, reg *Object) {
 func setMathFns[_ any](re *Realm, pow, atan2, hypot *Object) {
 	re.powFn, re.atan2Fn, re.hypotFn = pow, atan2, hypot
 }
+
+// turnLeftovers lets go of what the runtime's buffers keep of the code that
+// ran, at the end of a turn and at the checks a running script makes for
+// interrupts: the objects joined last, past the joins under way, and the
+// arguments of the last call in tail position, which only a frame running
+// reads. Each holds a realm's objects, and so the realm, past its last run.
+// It settles the shapes the code counted too.
+//
+//go:noinline
+func turnLeftovers[_ any](r *Runtime) {
+	settleSites[struct{}](r)
+	clear(r.joining[len(r.joining):cap(r.joining)])
+	if r.frameDepth == 0 {
+		clear(r.tailArgs)
+		r.tailArgs = r.tailArgs[:0]
+	}
+}

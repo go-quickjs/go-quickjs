@@ -28,9 +28,11 @@ import (
 // a prototype of a layout of its own, or in no tree -- it joins no tree: its
 // layout is its own (firstRoot). A constructor's root is counted as its first object is given
 // a property, and kept on the prototype's own layout (keptCtorRoot). A
-// literal site's root is counted for good, as it was: its prototype is the
-// realm's Object.prototype, and the shapes grown from it are counted against
-// that one's budget.
+// literal site's root is counted in the tree alone as its site makes it, in
+// a few instructions of the interpreter's loop, and against its prototype,
+// the realm's Object.prototype, as code of the realm stops running
+// (settleSites); the shapes grown from it are counted against that one's
+// budget from the first.
 
 // protoRoots is what the own layout of an object that is another's prototype
 // keeps of the objects it is the prototype of: the roots they start from,
@@ -114,6 +116,7 @@ func chargeShape[_ any](t *shapeTree, p *Object) {
 		reclaimShapes[struct{}](t)
 	}
 	t.count++
+	t.settled++
 	if p == nil {
 		return
 	}
@@ -201,9 +204,35 @@ func releaseShapes[_ any](b *shapeBudget) {
 //go:noinline
 func reclaimShapes[_ any](t *shapeTree) bool {
 	if t.freed != nil {
-		t.count -= int(t.freed.Swap(0))
+		n := int(t.freed.Swap(0))
+		t.count -= n
+		t.settled -= n
 	}
 	return t.count < maxShapes
+}
+
+// settleSites counts what the tree has counted since it last did, but for
+// no prototype -- the literals' roots of the code that ran -- against the
+// current realm's Object.prototype, so that they are given back with it.
+// Each run of a program in a realm has its literals' roots anew: a host with
+// a realm for each request had filled the tree with those of realms long
+// gone, each counted for good, in some tens of thousands of requests.
+//
+//go:noinline
+func settleSites[_ any](r *Runtime) {
+	t := r.shapes
+	n := t.count - t.settled
+	if n == 0 {
+		return
+	}
+	t.settled = t.count
+	if p := r.proto.object; p != nil {
+		ps := p.ownLayout()
+		if ps.budget == nil {
+			ps.budget = budgetSlotOf[struct{}](t)
+		}
+		ps.budget.b.n.Add(int64(n))
+	}
 }
 
 // keptCtorRoot is the root kept on the own layout of the prototype of s, a

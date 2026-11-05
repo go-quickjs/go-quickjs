@@ -573,6 +573,7 @@ func (r *Runtime) weakMapRegistry() *weakMapRegistry {
 // slowed by them -- a script that makes a WeakMap after another over the
 // same keys leaves each key an entry for every map not yet released.
 func (r *Runtime) releaseDeadWeakMaps() {
+	turnLeftovers[struct{}](r)
 	q := r.weakMaps
 	if q == nil || !q.pending.Load() {
 		return

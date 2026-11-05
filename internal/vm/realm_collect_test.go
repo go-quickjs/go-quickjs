@@ -84,6 +84,13 @@ var realmPrograms = []struct{ name, src string }{
 	// The math functions the engine knew by name, the runtime's last's.
 	{"math", `Math.pow(2, 3); Math.atan2(1, 2); Math.hypot(1, 2); Math.random(); new Date(0).toISOString(); Date.now();`},
 	{"lazy", `new Intl.NumberFormat("en").format(1); "a".localeCompare("b"); Temporal.PlainDate.from("2020-01-01").toString();`},
+	// What a join, a call in tail position and a derived constructor last
+	// left in the runtime's buffers.
+	{"join", `[[1, {}], [new Array(2)]].join(); [{toLocaleString() { return "x"; }}].toLocaleString();`},
+	{"tail", `(function () { "use strict"; function g(o, p) { return p; } function f(o) { return g(o, {o}); }
+		for (var i = 0; i < 100; i++) f({}); function r(n, o) { return n ? r(n - 1, o) : 0; } r(20000, {}); })();`},
+	{"derived", `{ class A { constructor() { this.a = 1; } } class B extends A { constructor() { super(); this.b = () => this; } }
+		class C extends A { constructor() { super(); } } for (var i = 0; i < 100; i++) { new B(); new C(); } }`},
 	{"recursion", `function d(n) { return n ? d(n - 1) + 1 : 0; } d(5000); try { (function f() { f(); })(); } catch (e) {}`},
 }
 
@@ -365,5 +372,41 @@ func TestFinalizationRegistryKeptByItsRealm(t *testing.T) {
 	}
 	if n := len(r.finalizing); n > 32 {
 		t.Errorf("%d registries of no cells kept", n)
+	}
+}
+
+// Realms made and dropped give the shape tree back what they took: the
+// shapes on their prototypes, and the roots of their literals, which code
+// counts as it runs, had filled it after some tens of thousands of runs of
+// a program, a realm for each, and every layout after that was of its own.
+func TestShapeBudgetRealms(t *testing.T) {
+	r := New(Config{})
+	defer r.Close()
+	fn := compileForTest(t, `
+		var o = {a: 1, b: 2}, e = {};
+		function f() { return {c: 1, d: 2}; } f();
+		class K { constructor() { this.x = 1; } } new K();
+		var n = new (function N() { this.q = 1; })();
+		[1, 2].map(x => ({v: x}));
+		Promise.resolve().then(() => ({w: 1}));`)
+	const realms = 500
+	var refs []weak.Pointer[Realm]
+	for range realms {
+		re := r.NewRealm()
+		refs = append(refs, weak.Make(re))
+		if _, err := r.RunIn(re, fn); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.DrainJobs(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := realmsAlive(r, refs); n != 0 {
+		t.Fatalf("%d realms alive", n)
+	}
+	// What is left is the tree's own roots and a chunk of budgets' realms,
+	// which the tree holds until the next (liveShapes).
+	if n := liveShapes(r); n > 2*budgetSlots*8 {
+		t.Errorf("%d shapes left of %d realms'", n, realms)
 	}
 }

@@ -406,6 +406,7 @@ func (r *Runtime) runJob(j job) {
 	r.Realm = j.realm
 	defer func() { r.Realm, r.asyncCtx = prev, prevCtx }()
 	j.call(r)
+	settleSites[struct{}](r)
 }
 
 // DrainJobs runs queued microtasks until none remain.
