@@ -344,14 +344,47 @@ Paths are relative to this repository; `go-intl:` paths are in
 
 ### KI-65 A realm lives as long as its runtime
 - **Where:** `internal/vm/realm.go`, what the runtime keeps of a realm.
-- **Effect:** a realm a host has dropped is not collected, with the JIT or
-  without it: of twenty realms made with `NewRealm`, each running one
-  script, twenty are alive after two collections. A host that makes a realm
-  for each request grows until it closes the runtime. What holds them is
-  not known yet. The JIT's entries for those realms are bounded by its
-  budget (`TestJITRealmsWithinTheBudget`) and go with a collected realm
-  once one is (`jitKey`).
-- **Status:** open.
+- **Effect:** a realm a host had dropped was not collected, with the JIT or
+  without it: of twenty realms made with `NewRealm`, each running one script,
+  twenty were alive after two collections, and a host that made a realm for
+  each request grew until it closed the runtime. A heap dump's paths named
+  what held them:
+  - the runtime's list of every realm's leaf built-ins (`leafFns`), which
+    held each realm from the moment it was made;
+  - the last realm's Math functions (`powFn`, `atan2Fn`, `hypotFn`,
+    `randomFn`), which also left the JIT no intrinsics in the realms before
+    it;
+  - the layouts the runtime kept of iterator results, regexp results and
+    arguments objects, and its table of the primitives' methods, each
+    holding the last realm to use it, or the first;
+  - its megamorphic caches, of reads, additions and the in operator, up to
+    an entry's worth of realms each;
+  - a registration's cleanup, which the collector holds whatever else is
+    alive, and which held the registry, its callback, the callback's realm,
+    and so the target that had to die for it to run;
+  - with the JIT, entries' pools and feedback, the megamorphic cache and
+    what its contexts last ran with.
+
+  Shapes went on counting against the tree too: a literal's root, counted as
+  its site first ran, was never given back, and a realm made for each run of
+  a program filled the tree in some tens of thousands of runs.
+- **Status:** fixed. What caches what a realm's code found is the realm's, and
+  goes with it; a cleanup holds its cell weakly, and a registry is kept by the
+  realm of its callback; a realm's literals' roots are counted against its
+  `Object.prototype` (`settleSites`); the JIT's cache lets go of a realm none
+  of whose entries ran between two of its looks, a second of the program's
+  time apart (`jitFlushRealms`), and it is compiled again if it runs again.
+  `TestDroppedRealmsAreCollected`, `TestRealmsPerRequestAreCollected`,
+  `TestJITDroppedRealmsLeaveTheCache` and `TestShapeBudgetRealms` pin it. What
+  remains is by design, as V8 holds what its caches hold weakly and this
+  engine's caches cannot:
+  - Code of another realm that has read a dropped realm's objects holds their
+    layouts, and so the realm, in its sites' caches until they are filled
+    again, one realm for each entry at most.
+  - With the JIT, a dropped realm stays until the runtime next looks, which it
+    does as it runs: a host whose runtime has gone idle keeps the last realms
+    it ran, and a host making realms at a thousand a second keeps a second's
+    worth.
 
 ## P2: wrong results
 

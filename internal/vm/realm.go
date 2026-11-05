@@ -15,6 +15,27 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 // The runtime embeds the current realm, so r.proto and r.global are always the
 // running code's. A call that stays in one realm, which is almost every call,
 // pays one comparison for that.
+//
+// A realm lives for as long as something reachable needs it: what it has made
+// reaches it, through a function's closure or funcData and through any
+// object's prototypes, and a host or another realm may hold that. Nothing of
+// the runtime's holds a realm, or a host that makes one for each request would
+// grow until it closed the runtime: what caches what a realm's code found --
+// the layouts of its prototypes' objects, the megamorphic reads and additions,
+// the in operator's answers, the primitives' methods -- and its built-ins the
+// engine knows by name are the realm's fields, so that they go with it, and
+// another realm's code, which meets none of its layouts, loses nothing by
+// that. What does not go with a realm by itself:
+//
+//   - Code of another realm that has read its objects: a cache of that code
+//     holds their layouts, and so their prototypes, until something replaces
+//     them, as a site's holds any layout.
+//   - The JIT's entries, whose code holds its realm's objects: the cache lets
+//     go of a realm none of whose entries has run for a second of the
+//     program's time (zzz_jitrealm.go).
+//   - The shape tree's count, which a literal's site adds to as code runs:
+//     settleSites counts those against the realm's Object.prototype, so that
+//     the tree has them back with it.
 
 // namedIntrinsic is an intrinsic prototype and the name it is known by in
 // every realm.

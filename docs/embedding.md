@@ -454,6 +454,13 @@ run alone: it returns an error wrapping the context's, and the script that made
 the call runs on. `Value.CallContext` and `EvalContext` behave the same.
 `node:vm`, in the standard library, is built on these.
 
+A realm needs no closing: it is collected once the host has dropped it and
+nothing reachable needs it, as a function or an object it made that the host
+or another realm still holds does. A host may make one for each request. With
+the JIT, what is compiled for a realm holds it until the runtime finds it has
+not run for a second of the runtime's own running time, and code of another
+realm that has read its objects holds their layouts until it reads others.
+
 ## Modules
 
 Imports are resolved through a loader the host supplies. A runtime without one
