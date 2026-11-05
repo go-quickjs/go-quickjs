@@ -362,7 +362,9 @@ shifts, hashing, comparisons, powers, modular exponentiation, digits of
 pi and decimal strings, regular expressions as programs use them --
 validating, tokenizing with a global and a sticky pattern, replacing by a
 template and by a function, splitting, matching every number, named
-groups, the u and i flags, a subject made just before --
+groups, the u and i flags, a subject made just before, objects a loop
+carries from turn to turn and what keeping them out of the heap may cost --
+functions run once, loops left early or on most turns --
 written as
 its tests are: each test is given
 the same work every run -- what QuickJS takes about 150 ms for, the work

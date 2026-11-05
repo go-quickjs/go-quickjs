@@ -68,7 +68,9 @@ var jitMarkingBreaches = map[string]string{}
 
 // jitMarkingCorpus is the micro-benchmarks' source, without microbench.js's
 // own driver, and the names of their tests: each function of one argument,
-// n, but the async ones, whose work runs in jobs after their call returns.
+// n, but the async ones, whose work runs in jobs after their call returns,
+// and those that compile functions anew, with the Function constructor this
+// package leaves to its host: carried_short's loop is the code they run.
 func jitMarkingCorpus(t *testing.T) (string, []string) {
 	t.Helper()
 	read := func(p string) string {
@@ -86,7 +88,7 @@ func jitMarkingCorpus(t *testing.T) (string, []string) {
 	seen := map[string]bool{}
 	var names []string
 	for _, m := range regexp.MustCompile(`(?m)^function (\w+)\s*\(n\)`).FindAllStringSubmatch(src, -1) {
-		if name := m[1]; !seen[name] && !strings.HasPrefix(name, "async_") {
+		if name := m[1]; !seen[name] && !strings.HasPrefix(name, "async_") && !strings.HasPrefix(name, "carried_fresh") {
 			seen[name] = true
 			names = append(names, name)
 		}

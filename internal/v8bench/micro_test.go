@@ -199,3 +199,40 @@ func TestPrototypeMicrobenchmarks(t *testing.T) {
 		})
 	}
 }
+
+func TestCarriedMicrobenchmarks(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	if _, err := rt.Eval("var global_res;\n" + microbenchExtra); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		n    int
+		ops  int
+		sum  int
+	}{
+		{"carried_short", 3, 300, 900},
+		{"carried_long", 1, 20000, 60000},
+		{"carried_fresh", 3, 60000, 180000},
+		{"carried_exit_3000", 3, 9000, 27000},
+		{"carried_exit_500", 3, 1500, 4500},
+		{"carried_exit_100", 3, 300, 900},
+		{"carried_exit_20", 3, 60, 180},
+		{"carried_exit_7", 3, 21, 63},
+		{"carried_exit_mixed", 3, 1500, 4500},
+		{"carried_exit_loops", 3, 14400, 15228},
+		{"carried_every_2", 3, 3000, 9000},
+		{"carried_every_8", 3, 3000, 9000},
+		{"carried_phases", 3, 15000, 30000},
+		{"carried_stored", 3, 3000, 3000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v, err := rt.Eval(fmt.Sprintf("%s(%d) + ':' + global_res", tc.name, tc.n))
+			want := fmt.Sprintf("%d:%d", tc.ops, tc.sum)
+			if err != nil || v.String() != want {
+				t.Fatalf("got %v, %v; want %q", v, err, want)
+			}
+		})
+	}
+}

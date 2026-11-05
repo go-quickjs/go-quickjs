@@ -28,8 +28,9 @@ import (
 // spread calls, the callbacks built-ins call for each element, typed
 // arrays of every element type and DataViews, BigInts beyond microbench.js's sums and products,
 // regular expressions as programs use them -- validating, tokenizing,
-// replacing, splitting, named groups, the u flag --
-// written as its tests are. A test of
+// replacing, splitting, named groups, the u flag -- objects a loop carries
+// from turn to turn, and the ways keeping those out of the heap may not pay
+// -- written as its tests are. A test of
 // async functions returns a promise of its count, which the loop awaits, so
 // its time takes in the jobs it queued; every runner runs a script's jobs
 // before it is done with it.
@@ -164,6 +165,10 @@ var microWork = []struct {
 	{"scope_chain", 524288}, {"construct_new_target", 524288},
 	{"escape_accumulate", 16384}, {"escape_accumulate_long", 16384}, {"escape_join", 2097152}, {"escape_rare", 2097152},
 	{"literal_sites_read", 2097152}, {"literal_sites_branch", 2097152}, {"literal_sites_spill", 1048576},
+	{"carried_short", 8192}, {"carried_long", 32}, {"carried_fresh", 64}, {"carried_fresh_long", 1},
+	{"carried_exit_3000", 256}, {"carried_exit_500", 2048}, {"carried_exit_100", 8192}, {"carried_exit_20", 32768},
+	{"carried_exit_7", 131072}, {"carried_exit_mixed", 2048}, {"carried_exit_loops", 256},
+	{"carried_every_2", 1024}, {"carried_every_8", 1024}, {"carried_phases", 256}, {"carried_stored", 1024},
 }
 
 // microLoop is the driver's loop: each test of __work whose name begins with

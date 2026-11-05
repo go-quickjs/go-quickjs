@@ -3770,3 +3770,359 @@ function literal_sites_spill(n)
     global_res = s;
     return n;
 }
+
+/* Objects a loop carries from turn to turn, each turn's replacing the
+   last, which an engine may keep out of the heap where nothing else sees
+   them. carried_short and carried_long are what that is for; the rest are
+   what it may cost where it does not pay: functions that run once, a loop
+   left early, a loop left on most turns, shapes that keep changing. */
+
+function ExtraVec(x, y)
+{
+    this.x = x;
+    this.y = y;
+}
+
+ExtraVec.prototype.add = function (o)
+{
+    return new ExtraVec(this.x + o.x, this.y + o.y);
+};
+
+/* where a function made by new Function finds it, whether this file runs as
+   a script or as node's module */
+globalThis.ExtraVec = ExtraVec;
+
+var extra_carried_obj = { a: 1 };
+var extra_carried_id = 0;
+
+function extra_carried_short(turns)
+{
+    let s = new ExtraVec(0, 0);
+    const d = new ExtraVec(1, 2);
+    for (let i = 0; i < turns; i++)
+        s = s.add(d);
+    return s.x + s.y;
+}
+
+/* short loops, nothing leaving them */
+function carried_short(n)
+{
+    var j, t = 0;
+    for (j = 0; j < n; j++)
+        t += extra_carried_short(100);
+    global_res = t;
+    return n * 100;
+}
+
+function extra_carried_long(turns)
+{
+    let s = new ExtraVec(0, 0);
+    const d = new ExtraVec(1, 2);
+    for (let i = 0; i < turns; i++)
+        s = s.add(d);
+    return s.x + s.y;
+}
+
+/* long loops, the first of them a frame that has to enter compiled code at
+   its loop */
+function carried_long(n)
+{
+    var j, t = 0;
+    for (j = 0; j < n; j++)
+        t += extra_carried_long(20000);
+    global_res = t;
+    return n * 20000;
+}
+
+/* a function of its own, compiled anew, called once, for turns turns */
+function extra_carried_fresh(turns)
+{
+    var id = extra_carried_id++;
+    var f = new Function("n",
+                         "let s = new ExtraVec(" + id + ", 0); const d = new ExtraVec(1, 2);" +
+                         "for (let i = 0; i < n; i++) s = s.add(d);" +
+                         "return s.x + s.y;");
+    return f(turns) - id;
+}
+
+/* functions each called once, for long enough to be worth compiling */
+function carried_fresh(n)
+{
+    var j, t = 0;
+    for (j = 0; j < n; j++)
+        t += extra_carried_fresh(20000);
+    global_res = t;
+    return n * 20000;
+}
+
+/* functions each called once, for long */
+function carried_fresh_long(n)
+{
+    var j, t = 0;
+    for (j = 0; j < n; j++)
+        t += extra_carried_fresh(2000000);
+    global_res = t;
+    return n * 2000000;
+}
+
+/* a loop each call leaves native code in at its sixth turn, at a write of
+   a number's property, as long as each name says: all its turns but five
+   past that */
+function extra_carried_exit_3000(n, k)
+{
+    let s = new ExtraVec(0, 0);
+    const d = new ExtraVec(1, 2);
+    for (let i = 0; i < n; i++) {
+        const o = i === k ? 1 : extra_carried_obj;
+        o.a = 1;
+        s = s.add(d);
+    }
+    return s.x + s.y;
+}
+
+function carried_exit_3000(n)
+{
+    var j, t = 0;
+    for (j = 0; j < n; j++)
+        t += extra_carried_exit_3000(3000, 5);
+    global_res = t;
+    return n * 3000;
+}
+
+function extra_carried_exit_500(n, k)
+{
+    let s = new ExtraVec(0, 0);
+    const d = new ExtraVec(1, 2);
+    for (let i = 0; i < n; i++) {
+        const o = i === k ? 1 : extra_carried_obj;
+        o.a = 1;
+        s = s.add(d);
+    }
+    return s.x + s.y;
+}
+
+function carried_exit_500(n)
+{
+    var j, t = 0;
+    for (j = 0; j < n; j++)
+        t += extra_carried_exit_500(500, 5);
+    global_res = t;
+    return n * 500;
+}
+
+function extra_carried_exit_100(n, k)
+{
+    let s = new ExtraVec(0, 0);
+    const d = new ExtraVec(1, 2);
+    for (let i = 0; i < n; i++) {
+        const o = i === k ? 1 : extra_carried_obj;
+        o.a = 1;
+        s = s.add(d);
+    }
+    return s.x + s.y;
+}
+
+function carried_exit_100(n)
+{
+    var j, t = 0;
+    for (j = 0; j < n; j++)
+        t += extra_carried_exit_100(100, 5);
+    global_res = t;
+    return n * 100;
+}
+
+function extra_carried_exit_20(n, k)
+{
+    let s = new ExtraVec(0, 0);
+    const d = new ExtraVec(1, 2);
+    for (let i = 0; i < n; i++) {
+        const o = i === k ? 1 : extra_carried_obj;
+        o.a = 1;
+        s = s.add(d);
+    }
+    return s.x + s.y;
+}
+
+function carried_exit_20(n)
+{
+    var j, t = 0;
+    for (j = 0; j < n; j++)
+        t += extra_carried_exit_20(20, 5);
+    global_res = t;
+    return n * 20;
+}
+
+function extra_carried_exit_7(n, k)
+{
+    let s = new ExtraVec(0, 0);
+    const d = new ExtraVec(1, 2);
+    for (let i = 0; i < n; i++) {
+        const o = i === k ? 1 : extra_carried_obj;
+        o.a = 1;
+        s = s.add(d);
+    }
+    return s.x + s.y;
+}
+
+function carried_exit_7(n)
+{
+    var j, t = 0;
+    for (j = 0; j < n; j++)
+        t += extra_carried_exit_7(7, 5);
+    global_res = t;
+    return n * 7;
+}
+
+function extra_carried_mixed(n, k)
+{
+    let s = new ExtraVec(0, 0);
+    const d = new ExtraVec(1, 2);
+    for (let i = 0; i < n; i++) {
+        const o = i === k ? 1 : extra_carried_obj;
+        o.a = 1;
+        s = s.add(d);
+    }
+    return s.x + s.y;
+}
+
+/* every other call leaves, the others run their loop through */
+function carried_exit_mixed(n)
+{
+    var j, t = 0;
+    for (j = 0; j < n; j++)
+        t += extra_carried_mixed(500, j % 2 === 0 ? 5 : -1);
+    global_res = t;
+    return n * 500;
+}
+
+function extra_carried_loops(n, k)
+{
+    const d = new ExtraVec(1, 2);
+    let t = 0;
+    { let s = new ExtraVec(0, 0); for (let i = 0; i < n; i++) { const o = i === k ? 1 : extra_carried_obj; o.a = 1; s = s.add(d); } t += s.x; }
+    { let s = new ExtraVec(1, 0); for (let i = 0; i < n; i++) { const o = i === k ? 1 : extra_carried_obj; o.a = 1; s = s.add(d); } t += s.x; }
+    { let s = new ExtraVec(2, 0); for (let i = 0; i < n; i++) { const o = i === k ? 1 : extra_carried_obj; o.a = 1; s = s.add(d); } t += s.x; }
+    { let s = new ExtraVec(3, 0); for (let i = 0; i < n; i++) { const o = i === k ? 1 : extra_carried_obj; o.a = 1; s = s.add(d); } t += s.x; }
+    { let s = new ExtraVec(4, 0); for (let i = 0; i < n; i++) { const o = i === k ? 1 : extra_carried_obj; o.a = 1; s = s.add(d); } t += s.x; }
+    { let s = new ExtraVec(5, 0); for (let i = 0; i < n; i++) { const o = i === k ? 1 : extra_carried_obj; o.a = 1; s = s.add(d); } t += s.x; }
+    { let s = new ExtraVec(6, 0); for (let i = 0; i < n; i++) { const o = i === k ? 1 : extra_carried_obj; o.a = 1; s = s.add(d); } t += s.x; }
+    { let s = new ExtraVec(7, 0); for (let i = 0; i < n; i++) { const o = i === k ? 1 : extra_carried_obj; o.a = 1; s = s.add(d); } t += s.x; }
+    { let s = new ExtraVec(8, 0); for (let i = 0; i < n; i++) { const o = i === k ? 1 : extra_carried_obj; o.a = 1; s = s.add(d); } t += s.x; }
+    { let s = new ExtraVec(9, 0); for (let i = 0; i < n; i++) { const o = i === k ? 1 : extra_carried_obj; o.a = 1; s = s.add(d); } t += s.x; }
+    { let s = new ExtraVec(10, 0); for (let i = 0; i < n; i++) { const o = i === k ? 1 : extra_carried_obj; o.a = 1; s = s.add(d); } t += s.x; }
+    { let s = new ExtraVec(11, 0); for (let i = 0; i < n; i++) { const o = i === k ? 1 : extra_carried_obj; o.a = 1; s = s.add(d); } t += s.x; }
+    { let s = new ExtraVec(12, 0); for (let i = 0; i < n; i++) { const o = i === k ? 1 : extra_carried_obj; o.a = 1; s = s.add(d); } t += s.x; }
+    { let s = new ExtraVec(13, 0); for (let i = 0; i < n; i++) { const o = i === k ? 1 : extra_carried_obj; o.a = 1; s = s.add(d); } t += s.x; }
+    { let s = new ExtraVec(14, 0); for (let i = 0; i < n; i++) { const o = i === k ? 1 : extra_carried_obj; o.a = 1; s = s.add(d); } t += s.x; }
+    { let s = new ExtraVec(15, 0); for (let i = 0; i < n; i++) { const o = i === k ? 1 : extra_carried_obj; o.a = 1; s = s.add(d); } t += s.x; }
+    { let s = new ExtraVec(16, 0); for (let i = 0; i < n; i++) { const o = i === k ? 1 : extra_carried_obj; o.a = 1; s = s.add(d); } t += s.x; }
+    { let s = new ExtraVec(17, 0); for (let i = 0; i < n; i++) { const o = i === k ? 1 : extra_carried_obj; o.a = 1; s = s.add(d); } t += s.x; }
+    { let s = new ExtraVec(18, 0); for (let i = 0; i < n; i++) { const o = i === k ? 1 : extra_carried_obj; o.a = 1; s = s.add(d); } t += s.x; }
+    { let s = new ExtraVec(19, 0); for (let i = 0; i < n; i++) { const o = i === k ? 1 : extra_carried_obj; o.a = 1; s = s.add(d); } t += s.x; }
+    { let s = new ExtraVec(20, 0); for (let i = 0; i < n; i++) { const o = i === k ? 1 : extra_carried_obj; o.a = 1; s = s.add(d); } t += s.x; }
+    { let s = new ExtraVec(21, 0); for (let i = 0; i < n; i++) { const o = i === k ? 1 : extra_carried_obj; o.a = 1; s = s.add(d); } t += s.x; }
+    { let s = new ExtraVec(22, 0); for (let i = 0; i < n; i++) { const o = i === k ? 1 : extra_carried_obj; o.a = 1; s = s.add(d); } t += s.x; }
+    { let s = new ExtraVec(23, 0); for (let i = 0; i < n; i++) { const o = i === k ? 1 : extra_carried_obj; o.a = 1; s = s.add(d); } t += s.x; }
+    return t;
+}
+
+/* a function of two dozen such loops, each left early */
+function carried_exit_loops(n)
+{
+    var j, t = 0;
+    for (j = 0; j < n; j++)
+        t += extra_carried_loops(200, 5);
+    global_res = t;
+    return n * 200 * 24;
+}
+
+/* left on one turn of each two and of each eight, an object live at each */
+function extra_carried_every_2(turns)
+{
+    let s = new ExtraVec(0, 0);
+    const d = new ExtraVec(1, 2);
+    for (let i = 0; i < turns; i++) {
+        const o = i % 2 === 0 ? 1 : extra_carried_obj;
+        o.a = 1;
+        s = s.add(d);
+    }
+    return s.x + s.y;
+}
+
+function carried_every_2(n)
+{
+    var j, t = 0;
+    for (j = 0; j < n; j++)
+        t += extra_carried_every_2(1000);
+    global_res = t;
+    return n * 1000;
+}
+
+function extra_carried_every_8(turns)
+{
+    let s = new ExtraVec(0, 0);
+    const d = new ExtraVec(1, 2);
+    for (let i = 0; i < turns; i++) {
+        const o = i % 8 === 0 ? 1 : extra_carried_obj;
+        o.a = 1;
+        s = s.add(d);
+    }
+    return s.x + s.y;
+}
+
+function carried_every_8(n)
+{
+    var j, t = 0;
+    for (j = 0; j < n; j++)
+        t += extra_carried_every_8(1000);
+    global_res = t;
+    return n * 1000;
+}
+
+function extra_carried_phase(o, n)
+{
+    let s = new ExtraVec(0, 0);
+    for (let i = 0; i < n; i++)
+        s = new ExtraVec(s.x + o.k, s.y + 1);
+    return s.x + s.y;
+}
+
+/* a loop reading objects of a new shape each round, its code compiled
+   again for them */
+function carried_phases(n)
+{
+    var j, k, o, t = 0;
+    for (j = 0; j < n; j++) {
+        o = {};
+        for (k = 0; k <= j % 12; k++)
+            o["p" + k] = k;
+        o.k = j;
+        t += extra_carried_phase(o, 5000);
+    }
+    global_res = t;
+    return n * 5000;
+}
+
+var extra_carried_box = [];
+
+function extra_carried_stored(turns)
+{
+    let s = new ExtraVec(0, 0);
+    const d = new ExtraVec(1, 2);
+    for (let i = 0; i < turns; i++) {
+        s = s.add(d);
+        extra_carried_box[0] = s;
+    }
+    return s.x;
+}
+
+/* each turn's object stored where it is seen: none can stay out of the
+   heap */
+function carried_stored(n)
+{
+    var j, t = 0;
+    for (j = 0; j < n; j++)
+        t += extra_carried_stored(1000);
+    global_res = t;
+    return n * 1000;
+}
