@@ -386,6 +386,22 @@ Paths are relative to this repository; `go-intl:` paths are in
     it ran, and a host making realms at a thousand a second keeps a second's
     worth.
 
+### KI-66 Running one program again and again fills the shape tree
+- **Where:** `internal/vm/vm_shape.go` (`siteRoot`, `shape.child`) and
+  `internal/vm/zzz_shapebudget.go`.
+- **Effect:** each run of a compiled program prepares its code anew
+  (`prepare`), so each object literal has a new root and new shapes grown from
+  it. Those are garbage once the run's closures are, but the tree's count keeps
+  them, against the realm's `Object.prototype`, which in a runtime's only realm
+  is never collected and so never gives them back. A script of two literals,
+  run in one realm, reached 40,004 shapes at 10,000 runs and the 65,536 of
+  `maxShapes` by 20,000. From then on no object is given a shared layout: each
+  has a layout of its own, which no cache can remember, whatever it runs. A host
+  that runs one `Program` for each request in one realm gets there; a realm for
+  each request does not, its `Object.prototype` giving its shapes back
+  (KI-65).
+- **Status:** open.
+
 ## P2: wrong results
 
 ### KI-29 Generator and async frames skip part of a call's setup
