@@ -104,9 +104,9 @@ type jitLearned struct {
 // A function's code has no entry at a loop where escape analysis carries
 // an object round it unmade (ssa.Func's Unentered): the entry would have
 // the loop's objects made every turn, on every call, for a frame that
-// needs it once. So a frame that does -- one that has stayed in the loop in
-// the existing tiers (jitLearnLoopEntry) -- goes on in code compiled for
-// it and kept apart, as V8 keeps code for on-stack replacement: the same
+// needs it once. So a frame that does -- one found in the loop by two
+// checks in a row (jitLearnLoopEntry) -- goes on in code compiled for it
+// and kept apart, as V8 keeps code for on-stack replacement: the same
 // function, with the loop's entry, that Go enters only at such a loop.
 // Native callers go on calling the function's code, and later invocations
 // enter it, its objects unmade.

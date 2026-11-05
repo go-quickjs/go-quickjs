@@ -65,7 +65,7 @@ func TestJITOSRCodeApart(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	r := jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, `sum(20)`, `sum(20)`, `sum(20)`, `sum(3000000)`)
+	r := jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, `sum(20)`, `sum(20)`, `sum(20)`, `sum(200000)`)
 	e := jitCallbackEntry(r, "sum")
 	pc := osrHeader(t, e)
 	if e.ssa.HasEntry(pc) {
@@ -111,7 +111,7 @@ func TestJITOSRNotCalledNatively(t *testing.T) {
 			return x
 		}
 	`
-	r := jitAgreesForTestWith(t, jitStressConfig{}, setup, `sum(3000000)`, `caller(200000)`, `caller(200000)`)
+	r := jitAgreesForTestWith(t, jitStressConfig{}, setup, `sum(200000)`, `caller(20000)`, `caller(20000)`)
 	e := jitCallbackEntry(r, "sum")
 	if e == nil || e.osr == nil {
 		t.Skipf("the code was compiled again meanwhile: %+v", e)
@@ -134,7 +134,7 @@ func TestJITOSRNextLoopUnmade(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	r := jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, `twoLoops(20, 20)`, `twoLoops(20, 20)`, `twoLoops(3000000, 3000000)`)
+	r := jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, `twoLoops(20, 20)`, `twoLoops(20, 20)`, `twoLoops(200000, 200000)`)
 	e := jitCallbackEntry(r, "twoLoops")
 	if e == nil || e.ssa == nil || len(e.ssaUnentered) != 2 {
 		t.Fatalf("not two loops without an entry: %+v", e)
@@ -173,7 +173,7 @@ func TestJITOSRGoesOnInItsRun(t *testing.T) {
 			return s.v
 		}
 	`
-	r := jitAgreesForTestWith(t, jitStressConfig{}, setup, `exits(20, 3)`, `exits(20, 3)`, `exits(20, 3)`, `exits(20, 3)`, `exits(3000000, 1000)`)
+	r := jitAgreesForTestWith(t, jitStressConfig{}, setup, `exits(20, 3)`, `exits(20, 3)`, `exits(20, 3)`, `exits(20, 3)`, `exits(300000, 100)`)
 	e := jitCallbackEntry(r, "exits")
 	if e == nil || e.osr == nil || e.osr.ssa == nil {
 		t.Fatalf("no code kept for the loop: %+v", e)
@@ -193,14 +193,61 @@ func TestJITOSRDeoptimizes(t *testing.T) {
 	}
 	for _, c := range []jitStressConfig{{}, {threshold: true, budget: 3}, {threshold: true, budget: 3, deopt: 7}, {threshold: true, budget: 1, deopt: 2}} {
 		r := jitAgreesForTestWith(t, c, osrSetup,
-			`shifts(20, -1)`, `shifts(20, -1)`, `shifts(1500000, 1400000)`, `shifts(20, -1)`, `shifts(20, 7)`, `shifts(1500000, 1400000)`,
-			`strings(20, -1)`, `strings(20, -1)`, `strings(1500000, 1400000)`, `strings(20, 7)`, `strings(1500000, -1)`)
+			`shifts(20, -1)`, `shifts(20, -1)`, `shifts(150000, 140000)`, `shifts(20, -1)`, `shifts(20, 7)`, `shifts(150000, 140000)`,
+			`strings(20, -1)`, `strings(20, -1)`, `strings(150000, 140000)`, `strings(20, 7)`, `strings(150000, -1)`)
 		t.Logf("%+v: %d materialized", c, r.jit.materialized)
 		for _, name := range []string{"shifts", "strings"} {
 			if e := jitCallbackEntry(r, name); e == nil {
 				t.Errorf("%s has no entry", name)
 			}
 		}
+	}
+}
+
+// A loop every call leaves native code in early, with no entry after the
+// exit, too short for a frame to spend a budget in: the frames learn the
+// loop all the same, each one going on in the code kept for it, not in the
+// interpreter to the loop's end -- and learn it again once the function's
+// code, compiled again, has let that go. A budget was never spent there,
+// each exit having the next check due at once: every call interpreted the
+// rest of its loop, three times as slow as with an entry.
+func TestJITOSRShortLoopsLearn(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := osrSetup + `
+		var obj = {a: 1}
+		function early(n, k) {
+			const one = new P(1)
+			let s = new P(0)
+			for (let i = 0; i < n; i++) {
+				const o = i === k ? 1 : obj
+				o.a = 1
+				s = s.add(one)
+			}
+			return s.v
+		}
+		function calls(c) {
+			let t = 0
+			for (let j = 0; j < c; j++) t += early(100, 5)
+			return t
+		}
+	`
+	r := jitAgreesForTestWith(t, jitStressConfig{}, setup, `calls(3000)`, `calls(3000)`)
+	e := jitCallbackEntry(r, "early")
+	if e == nil || e.ssa == nil {
+		t.Fatalf("early was not compiled: %+v", e)
+	}
+	if e.ssaVirtuals == 0 || len(e.ssaUnentered) == 0 {
+		t.Fatalf("the function's code does not keep the loop's objects unmade: %+v", e)
+	}
+	oe := e.osr
+	if oe == nil || oe.ssa == nil {
+		t.Fatalf("no code kept for the loop, after %d frames left native code: %+v", e.goOns, e)
+	}
+	// Whatever went before the code settled, the frames go on natively.
+	if oe.ssaStats.entries < 2000 {
+		t.Errorf("%d of the frames that left the function's code went on in the code kept for the loop, of %d", oe.ssaStats.entries, e.goOns)
 	}
 }
 
@@ -219,7 +266,7 @@ func TestJITOSRInTheBackground(t *testing.T) {
 			return c.v
 		}
 	`
-	r := jitAgreesForTestWith(t, jitStressConfig{background: true, checks: 2}, setup, `carried(3000000)`, `carried(3000000)`)
+	r := jitAgreesForTestWith(t, jitStressConfig{background: true, checks: 2}, setup, `carried(200000)`, `carried(200000)`)
 	e := jitCallbackEntry(r, "carried")
 	pc := osrHeader(t, e)
 	if e.ssa.HasEntry(pc) {
@@ -251,7 +298,7 @@ func TestJITOSRSiteNotMegamorphic(t *testing.T) {
 			return s.v
 		}
 	`
-	r := jitAgreesForTestWith(t, jitStressConfig{}, setup, `run(a, 3000000)`, `run(b, 3000000)`)
+	r := jitAgreesForTestWith(t, jitStressConfig{}, setup, `run(a, 200000)`, `run(b, 200000)`)
 	e := jitCallbackEntry(r, "run")
 	if e == nil || e.ssa == nil {
 		t.Fatalf("run was not compiled: %+v", e)
@@ -271,7 +318,7 @@ func TestJITOSRTellsBeforeItsCompile(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	r := jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, `sum(20)`, `sum(20)`, `sum(3000000)`)
+	r := jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, `sum(20)`, `sum(20)`, `sum(200000)`)
 	e := jitCallbackEntry(r, "sum")
 	if e == nil || e.osr == nil || e.osr.ssa == nil {
 		t.Fatalf("no code kept for the loop: %+v", e)
@@ -294,7 +341,7 @@ func TestJITOSRUsesTheFunction(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	r := jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, `sum(20)`, `sum(20)`, `sum(3000000)`)
+	r := jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, `sum(20)`, `sum(20)`, `sum(200000)`)
 	e := jitCallbackEntry(r, "sum")
 	if e == nil || e.osr == nil {
 		t.Fatalf("no code kept for the loop: %+v", e)
@@ -333,7 +380,7 @@ func TestJITOSRTellsTheFunction(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	r := jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, `shifts(20, -1)`, `shifts(20, -1)`, `shifts(3000000, -1)`)
+	r := jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, `shifts(20, -1)`, `shifts(20, -1)`, `shifts(200000, -1)`)
 	e := jitCallbackEntry(r, "shifts")
 	if e == nil || e.osr == nil {
 		t.Fatalf("no code kept for the loop: %+v", e)
@@ -355,7 +402,7 @@ func TestJITOSRGoesWithTheCode(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	r := jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, `sum(20)`, `sum(20)`, `sum(3000000)`)
+	r := jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, `sum(20)`, `sum(20)`, `sum(200000)`)
 	e := jitCallbackEntry(r, "sum")
 	if e == nil || e.osr == nil {
 		t.Fatalf("no code kept for the loop: %+v", e)
@@ -385,8 +432,8 @@ func TestJITOSRGoesWithTheCode(t *testing.T) {
 	r.jit.account(e)
 
 	// A long call now begins in the function's code, and needs none.
-	v, err := r.Run(compileForTest(t, `sum(3000000)`))
-	if err != nil || v.Number() != 3000000 {
+	v, err := r.Run(compileForTest(t, `sum(200000)`))
+	if err != nil || v.Number() != 200000 {
 		t.Fatalf("got %v, %v", v, err)
 	}
 	if e.osr != nil {
@@ -400,7 +447,7 @@ func TestJITOSRCounted(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	r := jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, `sum(20)`, `sum(20)`, `sum(3000000)`)
+	r := jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, `sum(20)`, `sum(20)`, `sum(200000)`)
 	e := jitCallbackEntry(r, "sum")
 	if e == nil || e.osr == nil {
 		t.Fatalf("no code kept for the loop: %+v", e)

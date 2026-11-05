@@ -2819,15 +2819,21 @@ func (r *Runtime) tryJITLoop(f *frame, pc uint32, sp int, fullBudget bool) (Valu
 }
 
 // jitLearnLoopEntry learns the loop's header at pc, whose entry escape
-// analysis dropped (ssa.Func's Unentered), where a frame needs it: one
-// running the loop on in the interpreter, two checks in a row each after a
-// full budget of back edges finding it there with no entry -- not a short
-// loop's frame Go went on in after an exit (jitGoOn), which the
-// interpreter finishes, as a deoptimized invocation is. Code is compiled
-// with the entry, apart from e's (zzjit_osr.go), as V8 compiles code to
-// enter a loop by on-stack replacement where a frame needs it; and it
-// returns the entry whose code the frame is to go on in, which is e if
+// analysis dropped (ssa.Func's Unentered), where a frame needs it: two
+// checks in a row finding a frame there with no entry, each after a full
+// budget of back edges or at the check jitGoOn makes due at once. Code is
+// compiled with the entry, apart from e's (zzjit_osr.go), as V8 compiles
+// code to enter a loop by on-stack replacement where a frame needs it; and
+// it returns the entry whose code the frame is to go on in, which is e if
 // there is none yet.
+//
+// The frames of a short loop that an exit left count as much as a long
+// one's: learned, they cost a compile, and nothing of e's code. Kept out,
+// every call of a loop of 500 turns that left native code at its fifth
+// went on in the interpreter to its end, its code for the loop let go
+// when e's was compiled again and never learned back: a budget is never
+// spent, each exit having the next check due at once, and three times as
+// slow as code with an entry at the loop.
 func (r *Runtime) jitLearnLoopEntry(f *frame, e *jitEntry, pc int) *jitEntry {
 	if e.invalid || !slices.Contains(e.ssaUnentered, int32(pc)) {
 		return e
@@ -2964,7 +2970,7 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, err
 			// whose stretches are the short calls.
 			return Undefined, nil, false
 		}
-		if osr && spent && !e.ssa.HasEntry(pc) {
+		if osr && !e.ssa.HasEntry(pc) {
 			e = r.jitLearnLoopEntry(f, e, pc)
 		}
 		// A run begun at a loop is judged as such (jitSSAProfit's osr,
