@@ -3447,6 +3447,15 @@ was ruled out in the commits and in [optimizing.md](optimizing.md))
 - `class_factory` and `subclass_fresh` slower in a full micro run only:
   main's shape tree fills there and stops making constructors' layouts.
 
+**Realms of their own** (2026-11-05, left when the realm work landed)
+
+- `typeof_test` without the JIT, 8.5% slower than `7e15cdcb` at every
+  placement, 21.5 to 23.3 ns, level with it: the same instructions (the
+  closures it runs, 348 lines, differ in their relative addresses alone),
+  the time in closures whose size did not change, 970 of the package's
+  closures 32 bytes earlier. Pads moved them 64 bytes, not 32, so that the
+  proof is not made: it is the closure block's place, unproven.
+
 **Measurement and tooling**
 
 - Placements varying read-only data: two builds of the same code, their

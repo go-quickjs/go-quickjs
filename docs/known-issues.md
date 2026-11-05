@@ -173,6 +173,19 @@ Paths are relative to this repository; `go-intl:` paths are in
   receiver. Building `Intl` also stopped defining its constructors,
   `NumberFormat` and the rest, as globals.
 
+### KI-67 Native code read a closure's template from a run since collected
+- **Where:** `internal/vm/zzjit_ssa.go`. A closure native code does not
+  make stood in a frame state as the address of its template in the
+  constants of the closure the code was compiled from, one run of the
+  program; the entry kept neither.
+- **Effect:** a use after free, with the JIT, in any program run more than
+  once, in one realm or several. Once the compiling run was collected, an
+  exit read freed memory into the frame: `TypeError: 7.04892706e-316 is not
+  a function`, or `fatal error: invalid pointer found on stack`.
+- **Status:** fixed. The code keeps the template in a cell of its own, as it
+  keeps string constants (`jitTemplateCell`).
+  - Test: `TestJITMadeTemplateOutlivesItsRun`.
+
 ## P1: limits, hangs, leaks
 
 ### KI-14 Interrupts are turned into values
