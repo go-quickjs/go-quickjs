@@ -2166,7 +2166,16 @@ func (r *Runtime) jitReplaceCode(cl *closure, e *jitEntry, code *jit.SSACode, fb
 		r.jitCallersReopt(e, jitInlineDepth)
 	}
 	e.ssaInlinedN = fb.inlinedN
-	e.ssa, e.ssaShapes, e.ssaHolders, e.ssaStats = code, fb.shapes, fb.holders, jitSSAStats{}
+	// What it did is what it is judged by (jitSSAProfit), but that code
+	// compiled again only to give up entries (jitKeptGone) does as it did:
+	// counted afresh, the calls of Go of a cache still filling, seen alone,
+	// had it judged slow just before they stopped, and a tree ran it.
+	stats := jitSSAStats{}
+	if e.keptGone {
+		stats = e.ssaStats
+	}
+	e.keptGone = false
+	e.ssa, e.ssaShapes, e.ssaHolders, e.ssaStats = code, fb.shapes, fb.holders, stats
 	if e.genLearned {
 		// Its loops' steps over generators resume them natively now, which
 		// each had been a call of Go: the loops it was judged slow for are
@@ -2186,7 +2195,7 @@ func (r *Runtime) jitReplaceCode(cl *closure, e *jitEntry, code *jit.SSACode, fb
 		e.ssaSerial++
 	}
 	e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaHostsLeft, e.ssaUnresumed = fb.inlinedAt, fb.definesUnfed, fb.cells, fb.hostsLeft, fb.unresumed
-	e.ssaUnentered = fb.unentered
+	e.ssaUnentered, e.ssaKept, e.keptAt = fb.unentered, fb.kept, e.starts
 	e.ssaTargets = fb.targets
 	e.ssaStrings, e.ssaInlined, e.ssaPools, e.ssaMade = e.ssaStrings || fb.strings, fb.inlined, fb.pools, fb.made
 	e.ssaInlinedLearned = r.jit.jitInlinedLearned(fb.inlined, e.ssaInlinedLearned[:0])
@@ -2412,10 +2421,11 @@ type jitJob struct {
 	allocErr *mir.AllocationError
 	// held marks a compile held for its callees' (jitHold), which is no
 	// job's yet and will be another's: holdRound is how many times it has
-	// been, and nativeCallee marks a compile for native callers
-	// (jitNativeCallee).
+	// been, nativeCallee marks a compile for native callers (jitNativeCallee),
+	// and frameAt is what a frame waits at for it (jitFrameAt).
 	held, nativeCallee bool
 	holdRound          int
+	frameAt            int
 	// What a compile in the background (jitSubmit) needs besides: its
 	// state, which the worker and the runtime's goroutine hand it over by,
 	// and done, closed once the worker is finished with it; how many
@@ -2438,7 +2448,7 @@ type jitJob struct {
 // asked ahead instead (jitSnapshot), and the worker builds from what they
 // answered (work).
 func (r *Runtime) jitPrepare(fn *bytecode.Function, cl *closure, p *ir.Program, e *jitEntry, keepLimit int, snapshot bool) (*jitJob, error) {
-	fb := &jitFeedback{r: r, fn: fn, cl: cl, e: e, keepLimit: keepLimit, prog: p, targets: jitTargetsOf(e)}
+	fb := &jitFeedback{r: r, fn: fn, cl: cl, e: e, keepLimit: keepLimit, prog: p, targets: jitTargetsOf(e), frameAt: r.jitFrameAt(fn, e)}
 	w := jit.GetWorkspace()
 	if t := mir.Timing; t != nil {
 		t.Start()
@@ -2557,7 +2567,7 @@ func (r *Runtime) jitInstall(j *jitJob) (*jit.SSACode, *jitFeedback, error) {
 	}
 	// The cells the backend gave the kept values (mir's keep cells).
 	fb.keeps = f.Keeps
-	fb.hostsLeft, fb.unresumed, fb.unentered = nil, nil, nil
+	fb.hostsLeft, fb.unresumed, fb.unentered, fb.kept = nil, nil, nil, nil
 	for _, pc := range f.HostsLeft {
 		fb.hostsLeft = append(fb.hostsLeft, int32(pc))
 	}
@@ -2566,6 +2576,9 @@ func (r *Runtime) jitInstall(j *jitJob) (*jit.SSACode, *jitFeedback, error) {
 	}
 	for _, pc := range f.Unentered {
 		fb.unentered = append(fb.unentered, int32(pc))
+	}
+	for _, pc := range f.EntryKept {
+		fb.kept = append(fb.kept, int32(pc))
 	}
 	s.ssaKeeps = max(s.ssaKeeps, f.Keeps)
 	need := jitEntryFixed + jit.CodeFootprint(mc) + fb.compiledBytes()
@@ -2637,6 +2650,7 @@ func jitBuildFrom(w *jit.Workspace, fn *bytecode.Function, p *ir.Program, fb *ji
 	if err != nil {
 		return nil, err
 	}
+	f.FrameAt = fb.frameAt
 	if f.Loops {
 		fb.loopSlots = f.LoopsEnd - p.Locals
 	}
@@ -2700,7 +2714,7 @@ func (r *Runtime) jitCompileAgain(fn *bytecode.Function, cl *closure, p *ir.Prog
 	if t := mir.Timing; t != nil {
 		t.Start()
 	}
-	fb := &jitFeedback{r: r, fn: fn, cl: cl, e: e, keepLimit: keepLimit, prog: p}
+	fb := &jitFeedback{r: r, fn: fn, cl: cl, e: e, keepLimit: keepLimit, prog: p, frameAt: r.jitFrameAt(fn, e)}
 	f, err := r.jitBuildSSA(w, fn, p, fb)
 	if err != nil {
 		return
@@ -2753,8 +2767,10 @@ type jitFeedback struct {
 	// Unresumed).
 	inlinedAt, hostsLeft, unresumed []int32
 	// unentered are the loops' headers whose entries escape analysis
-	// dropped (ssa.Func's Unentered).
-	unentered []int32
+	// dropped (ssa.Func's Unentered); kept those it kept for the frame
+	// waiting at frameAt (ssa.Func's FrameAt, EntryKept).
+	unentered, kept []int32
+	frameAt         int
 	// root is the function's feedback for an inlined callee's, which keeps
 	// what the callee's sites hold for the code; nil for the function's
 	// own. strings marks an inlined callee that calls charCodeAt. links
@@ -10001,11 +10017,15 @@ func (r *Runtime) jitCalleeCode(fn *bytecode.Function, p *ir.Program, e *jitEntr
 // budget for upgrades (jitInlineReoptimizations). Not inside another
 // compile, whose workspaces a compile would share, nor a compile of these.
 func (r *Runtime) jitWantedCallees(e *jitEntry, fb *jitFeedback) {
-	if len(fb.wanted) == 0 && len(fb.linked) == 0 || r.jit.seeding != 0 {
+	if r.jit.seeding != 0 {
 		return
 	}
 	r.jit.seeding = jitSeedDepth
 	defer func() { r.jit.seeding = 0 }()
+	r.jitCalleesKeptNoEntries(e)
+	if len(fb.wanted) == 0 && len(fb.linked) == 0 {
+		return
+	}
 	for _, cl := range fb.linked {
 		// Called through its link: native from its first compile on, which
 		// is now, as for a callee wanted, but with no compile of the
@@ -10039,7 +10059,7 @@ func (e *jitEntry) setSSA(s *jitState, fn *bytecode.Function, p *ir.Program, cod
 	e.ssaSerial++
 	e.ssaProg = p
 	e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaHostsLeft, e.ssaUnresumed = fb.inlinedAt, fb.definesUnfed, fb.cells, fb.hostsLeft, fb.unresumed
-	e.ssaUnentered = fb.unentered
+	e.ssaUnentered, e.ssaKept, e.keptAt = fb.unentered, fb.kept, e.starts
 	e.ssaTargets = fb.targets
 	e.ssaStrings, e.ssaInlined, e.ssaPools, e.ssaMade = fb.strings, fb.inlined, fb.pools, fb.made
 	e.ssaInlinedLearned = s.jitInlinedLearned(fb.inlined, e.ssaInlinedLearned[:0])

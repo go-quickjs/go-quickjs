@@ -5,6 +5,7 @@ package vm
 import (
 	"slices"
 
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 )
 
@@ -121,6 +122,47 @@ type jitLearned struct {
 // which goes with it (dropEntry). Its link is its own, never in the
 // runtime's: nothing calls through it, so that compiling it changes what
 // no native caller calls.
+
+// jitKeptStarts is how many times Go enters a function's code by its start
+// before it gives up the entries kept for a frame (jitEntry's ssaKept): a
+// function called at all more than that is one its objects' staying unmade
+// pays in. One would not do: where each call meets something new -- a loop
+// reading a new shape at each -- each would compile twice.
+const jitKeptStarts = 4
+
+// jitFrameAt is the loop's header a frame waits at for this compile of fn,
+// e's code (ssa.Func's FrameAt), or 0: there is none, or the compile is of
+// another function, one a run of the frame's got to, or native callers
+// call e's code, whose calls would then make objects it could leave
+// unmade, with no check of Go's to find out that they do.
+func (r *Runtime) jitFrameAt(fn *bytecode.Function, e *jitEntry) int {
+	if r.jitFrameFn != fn || e == nil || e.link != nil && e.link.refs != 0 {
+		return 0
+	}
+	return r.jitFramePC
+}
+
+// jitCalleesKeptNoEntries has the functions e's code calls natively,
+// compiled with entries for a frame that was running when they were
+// (jitEntry's ssaKept), compiled again without them: they are called again
+// now, and Go will not see it, native code calling them.
+func (r *Runtime) jitCalleesKeptNoEntries(e *jitEntry) {
+	for _, x := range e.nativeCalls {
+		if x.cl == nil {
+			continue
+		}
+		if ce := r.jit.entryFor(x.cl.fn); ce != nil && ce != e && len(ce.ssaKept) != 0 && !ce.invalid {
+			r.jitKeptGone(x.cl, ce)
+		}
+	}
+}
+
+// jitKeptGone compiles e's code again, cl's function's, without the
+// entries it has for a frame (jitEntry's ssaKept).
+func (r *Runtime) jitKeptGone(cl *closure, e *jitEntry) {
+	e.keptGone = true
+	r.jitReoptimize(cl, e)
+}
 
 // osrEntry is e's entry for on-stack replacement, made if need be.
 func (s *jitState) osrEntry(e *jitEntry) *jitEntry {

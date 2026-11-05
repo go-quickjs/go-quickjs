@@ -378,7 +378,13 @@ two checks of one frame in a row find no entry there, when code is compiled
 with it for that frame (the VM's `jitLearnLoopEntry`), kept apart from the
 function's, as V8 keeps code for OSR. Native callers go on calling the
 function's code and later invocations entering it, its objects unmade: one
-long first run costs them nothing. That code is a `jitEntry` of its own, its
+long first run costs them nothing. A compile asked for at a loop's check has
+a frame waiting at that loop, so it keeps that entry, and makes the objects
+it would have been dropped for (`ssa.Func`'s `FrameAt`, `EntryKept`): the
+frame goes on at once, and a function called once is compiled once. Called
+again a few times (`jitKeptStarts`), or linked by a native caller, the
+function is compiled again without it, judged by what it had done so far.
+That code is a `jitEntry` of its own, its
 function's `osr`, sharing what the function learned (`jitLearned`), with a
 link no native code calls through; it is a function's code in every other
 way, entered only at a loop's back edge. It goes when the function's code

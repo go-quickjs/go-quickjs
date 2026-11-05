@@ -340,6 +340,10 @@ func scalarReplace(f *Func) bool {
 			e.propagate()
 			continue
 		}
+		if e.keepFrameEntry() {
+			e.propagate()
+			continue
+		}
 		if !e.homes() {
 			e.propagate()
 			continue
@@ -348,6 +352,36 @@ func scalarReplace(f *Func) bool {
 	}
 	e.transform()
 	return true
+}
+
+// keepFrameEntry has the objects made for which the entry of the loop a
+// frame waits at (Func's FrameAt) would be dropped, and reports whether
+// there were any. Asked once the walk has settled, so that only an entry
+// that would stay dropped counts: the next round puts it back.
+func (e *escaper) keepFrameEntry() bool {
+	f := e.f
+	if f.FrameAt == 0 {
+		return false
+	}
+	for _, b := range e.dropped {
+		if int(b.Header.PC) != f.FrameAt {
+			continue
+		}
+		kept := false
+		for _, o := range e.objs {
+			if !o.escaped && slices.Contains(o.entries, b) {
+				e.escape(o)
+				kept = true
+			}
+		}
+		if kept {
+			if !slices.Contains(f.EntryKept, f.FrameAt) {
+				f.EntryKept = append(f.EntryKept, f.FrameAt)
+			}
+			return true
+		}
+	}
+	return false
 }
 
 // candidates finds the pools' takes the code may not make.

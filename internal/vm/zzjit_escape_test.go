@@ -312,12 +312,11 @@ func TestJITEscapeMerges(t *testing.T) {
 			t.Errorf("%+v: Go made no object the code did not make", c)
 		}
 	}
-	// One long run, entered at its loop's header, where the code had no
-	// entry: learned, the run goes on natively, in code of its own
-	// (TestJITOSRCodeApart).
+	// One long run, whose compile was asked for at its loop: the frame
+	// goes on natively, by the entry kept for it (TestJITFrameKeepsItsLoop).
 	r = jitAgreesForTestWith(t, jitStressConfig{}, mergeSetup, `longLoop(3000000)`)
-	if e := jitCallbackEntry(r, "longLoop"); e == nil || e.osr == nil || e.osr.ssa == nil || e.osr.ssaStats.entries == 0 {
-		t.Errorf("longLoop's loop was not learned: %+v", e)
+	if e := jitCallbackEntry(r, "longLoop"); e == nil || e.ssa == nil || r.jit.ssaEntries == 0 {
+		t.Errorf("longLoop did not go on natively: %+v", e)
 	}
 }
 

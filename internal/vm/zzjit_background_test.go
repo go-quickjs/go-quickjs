@@ -535,7 +535,7 @@ func TestJITBackgroundHotCodeIsEntered(t *testing.T) {
 // A first compile that meets a small callee being compiled waits for its
 // code, as a compile on the spot finds it there, and inlines it: called
 // natively in its place, nothing would ever teach the code to, no call of
-// such a callee leaving native code.
+// such a callee leaving native code. carried_short gains nothing without it.
 func TestJITBackgroundCompileWaitsForItsCallee(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -563,8 +563,8 @@ func TestJITBackgroundCompileWaitsForItsCallee(t *testing.T) {
 		t.Fatalf("%d compiles still held", len(r.jit.heldJobs))
 	}
 	e := jitCallbackEntry(r, "once")
-	if e == nil || e.ssa == nil || len(e.ssaInlined) == 0 {
-		t.Fatalf("once does not inline add: %+v", e)
+	if e == nil || e.ssa == nil || len(e.ssaInlined) == 0 || e.ssaVirtuals == 0 {
+		t.Fatalf("once does not inline add, whose objects it would leave unmade: %+v", e)
 	}
 }
 

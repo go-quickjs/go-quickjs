@@ -90,7 +90,7 @@ type jitFields struct {
 	jit          *jitState
 	// jitFrameFn and jitFramePC are the function and the loop's header a
 	// back edge's check is under way at, whose frame waits there for what
-	// the check compiles (jitFrameLeft).
+	// the check compiles (jitFrameLeft, jitFrameAt).
 	jitFrameFn *bytecode.Function
 	jitFramePC int
 	// jitMemoryLimit is Config's JITMemoryLimit: the JIT's budget, if more
@@ -671,6 +671,14 @@ type jitEntry struct {
 	// (jitAwaits), and awaited are those it waits for, or held for now.
 	holds   bool
 	awaited []*bytecode.Function
+	// ssaKept are the loops' headers the code has entries at only for the
+	// frame its compile was asked for at, whose objects it makes for them
+	// (ssa.Func's EntryKept); keptAt is starts then: called again
+	// jitKeptStarts times, or linked by a native caller, the function is
+	// compiled again without them, as keptGone says it is being.
+	ssaKept  []int32
+	keptAt   uint64
+	keptGone bool
 	// invalid marks code an eager deoptimization invalidated: Go enters it no
 	// more, nor do native callers call it (its link), and the existing
 	// tiers run the function until they have spent a fresh budget,
@@ -1397,13 +1405,13 @@ func (e *jitEntry) measure() int {
 // compiledBytes is what e holds that its code was compiled with: the
 // slices a compile gives it (setSSA), which jitCompiledBytes measures.
 func (e *jitEntry) compiledBytes() int {
-	return jitCompiledBytes(e.ssaShapes, e.ssaHolders, e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaInlined, e.ssaPools, e.ssaLinks) + jitCapBytes(e.ssaHostsLeft) + jitCapBytes(e.ssaUnresumed) + jitCapBytes(e.ssaUnentered) + jitCapBytes(e.ssaInlinedLearned)
+	return jitCompiledBytes(e.ssaShapes, e.ssaHolders, e.ssaInlinedAt, e.definesUnfed, e.ssaCells, e.ssaInlined, e.ssaPools, e.ssaLinks) + jitCapBytes(e.ssaHostsLeft) + jitCapBytes(e.ssaUnresumed) + jitCapBytes(e.ssaUnentered) + jitCapBytes(e.ssaKept) + jitCapBytes(e.ssaInlinedLearned)
 }
 
 // compiledBytes is what fb's code would have its entry hold, in place of
 // what the entry's code was compiled with (jitEntry.compiledBytes).
 func (fb *jitFeedback) compiledBytes() int {
-	return jitCompiledBytes(fb.shapes, fb.holders, fb.inlinedAt, fb.definesUnfed, fb.cells, fb.inlined, fb.pools, fb.links) + jitCapBytes(fb.hostsLeft) + jitCapBytes(fb.unresumed) + jitCapBytes(fb.unentered)
+	return jitCompiledBytes(fb.shapes, fb.holders, fb.inlinedAt, fb.definesUnfed, fb.cells, fb.inlined, fb.pools, fb.links) + jitCapBytes(fb.hostsLeft) + jitCapBytes(fb.unresumed) + jitCapBytes(fb.unentered) + jitCapBytes(fb.kept)
 }
 
 func jitCompiledBytes(shapes []*shape, holders []*Object, inlinedAt, definesUnfed []int32,
@@ -2920,8 +2928,17 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, err
 		if osr && !e.ssa.HasEntry(pc) {
 			// A loop the function's code has no entry at: the code kept
 			// for frames there, if it has one. All below is that code's.
+			// Invalidated, the function's code spends the work too, and
+			// compiled again it has the entry, for this frame: left to
+			// its invocations, it and the code kept each waited out a
+			// budget of their own, the frame in the existing tiers.
 			if oe := e.osr; oe != nil && oe.ssa != nil && oe.ssa.HasEntry(pc) {
-				e = oe
+				if e.invalid {
+					r.jitTierUp(f.cl, e, r.jitTierWork(f.cl.fn, e, pc, osr, spent))
+				}
+				if oe := e.osr; oe != nil && !e.ssa.HasEntry(pc) {
+					e = oe
+				}
 			}
 		}
 		if e.notNative {
@@ -2932,6 +2949,11 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, err
 		}
 		if !osr {
 			e.starts++
+			if len(e.ssaKept) != 0 && !e.invalid && e.starts-e.keptAt >= jitKeptStarts {
+				// Called again and again: objects unmade pay now.
+				e.keptAt = e.starts
+				r.jitKeptGone(f.cl, e)
+			}
 		} else {
 			r.jit.osrs++
 			e.osrWork += r.jitTierWork(f.cl.fn, e, pc, osr, spent)
@@ -2976,6 +2998,7 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, err
 		// A run begun at a loop is judged as such (jitSSAProfit's osr,
 		// jitRunGoProfit).
 		r.jit.osrRun = osr
+		r.jitFrameFn = nil
 		v, err, native := r.runSSA(f, e, pc, depth)
 		r.jit.osrRun = false
 		return v, err, native

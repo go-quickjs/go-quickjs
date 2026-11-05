@@ -1130,6 +1130,16 @@ type Func struct {
 	// goes on in code of its own, compiled with the entry
 	// (ResumeFeedback), not in this code compiled again.
 	Unentered []int
+	// FrameAt, where it is not 0, is the header, the interpreter's PC, of
+	// the loop a frame waits at for this code: the compile was asked for
+	// there. Escape analysis keeps that loop's entry, for the frame to go on
+	// at now, and has the objects it would have dropped it for made;
+	// EntryKept lists it then, the code to be compiled again without it if
+	// the function is called again. A function called once is compiled
+	// once, its loop entered at once, as its objects' being left unmade
+	// would have it wait and compile twice.
+	FrameAt   int
+	EntryKept []int
 	// Unsafe, where not empty, says why the code may not be compiled: a
 	// BigInt's box a value read from its cell was not kept from, the keep
 	// cells run out (keepAcrossStores).
