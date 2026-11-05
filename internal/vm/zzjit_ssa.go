@@ -8979,7 +8979,12 @@ func (r *Runtime) jitPlainTypedSpecies(o *Object, t *typedArrayData) bool {
 // else is refused, before anything has run, for Go to make the call.
 func (r *Runtime) jitSortCopy(form int, recv, x Value) (Value, bool) {
 	var t *typedArrayData
-	var a *Object
+	// An array's elements are read once, here, not through the array in the
+	// loops below: Go 1.27 hoists a.extAt(), an addition to a, out of the
+	// loops and their branches, and with a nil -- a typed array's -- that
+	// left 0x20 in a pointer's slot, live across the calls, which a
+	// collection scanning the stack throws for.
+	var elems []Value
 	n := 0
 	if form&ssa.NewArrayTyped != 0 {
 		if t = r.jitLoopTyped(recv); t == nil || t.info().big || t.outOfBounds() || t.storage().immutable {
@@ -8987,10 +8992,12 @@ func (r *Runtime) jitSortCopy(form int, recv, x Value) (Value, bool) {
 		}
 		n = t.count()
 	} else {
-		if a = r.jitSortArray(recv); a == nil {
+		a := r.jitSortArray(recv)
+		if a == nil {
 			return Undefined, false
 		}
-		n = len(a.elemsOf())
+		elems = a.elemsOf()
+		n = len(elems)
 	}
 	if form&ssa.NewArrayFill == 0 {
 		o := newObject(r.typedArrayProtoFor(elemFloat64), ClassTypedArray)
@@ -9004,7 +9011,7 @@ func (r *Runtime) jitSortCopy(form int, recv, x Value) (Value, bool) {
 			if t != nil {
 				v = t.getElem(i)
 			} else {
-				v = a.elemsOf()[i]
+				v = elems[i]
 			}
 			binary.LittleEndian.PutUint64(b[i<<3:], math.Float64bits(v.num))
 		}
@@ -9029,7 +9036,7 @@ func (r *Runtime) jitSortCopy(form int, recv, x Value) (Value, bool) {
 				panic("jit: a sorted element not stored back")
 			}
 		} else {
-			a.extOf().elems[i] = v
+			elems[i] = v
 		}
 	}
 	return recv, true
