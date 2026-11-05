@@ -15,8 +15,8 @@ import (
 func jitFreqBothForTest(t *testing.T, setup string) jitBoth {
 	t.Helper()
 	runtime.GC()
-	t.Cleanup(func() { debug.SetGCPercent(debug.SetGCPercent(-1)) })
-	debug.SetGCPercent(-1)
+	gc := debug.SetGCPercent(-1)
+	t.Cleanup(func() { debug.SetGCPercent(gc) })
 	jitNoInlineForTest(t, "pick")
 	both := jitBothForTest(t, setup)
 	jitDefaultsForTest(both.jit)
