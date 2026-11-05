@@ -8467,7 +8467,7 @@ func (fb *jitFeedback) CalledClosure(pc int) (ssa.MadeCallback, ssa.InlineSite, 
 		int(fb.fn.Code[pc].A) >= len(fb.cl.consts) {
 		return ssa.MadeCallback{}, ssa.InlineSite{}, false
 	}
-	c := &fb.cl.consts[fb.fn.Code[pc].A]
+	c := jitTemplateCell[struct{}](fb, &fb.cl.consts[fb.fn.Code[pc].A])
 	t := c.template()
 	if t == nil || jitNeedsMaker(*c) {
 		return ssa.MadeCallback{}, ssa.InlineSite{}, false
@@ -8537,7 +8537,7 @@ func (fb *jitFeedback) madeCallback(pc int, cl *closure) *ssa.MadeCallback {
 		if in.Op != bytecode.OpClosure || int(in.A) >= len(fb.cl.consts) {
 			continue
 		}
-		c := &fb.cl.consts[in.A]
+		c := jitTemplateCell[struct{}](fb, &fb.cl.consts[in.A])
 		t := c.template()
 		if t == nil || t.fn != cl.fn || jitNeedsMaker(*c) {
 			return nil
