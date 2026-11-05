@@ -110,6 +110,7 @@ array grown by assigning past its end among them. See [Compared with C QuickJS](
 | [Benchmarks](docs/benchmarks.md) | Go benchmarks, and the V8 suite and micro-benchmarks against goja and C QuickJS, with the JIT and without |
 | [The JIT](internal/jit/README.md) | the experimental native tier: how it compiles, speculates and deoptimizes, and the contracts its code keeps |
 | [Performance plan](docs/performance-plan.md) | the optimizations still to make, how each is measured, and what was tried and rejected |
+| [Optimizing](docs/optimizing.md) | what an optimization must show before it lands, and how to tell its cost from where code and data were placed |
 | [jsregexp](jsregexp/README.md) | the engine's regular expressions as a Go package, against Go's `regexp` |
 
 ## License
