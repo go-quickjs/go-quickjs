@@ -411,6 +411,10 @@ then the tests 3% or more slower at every placement. A micro-benchmark
 moves with code placement more than a suite does; one slower at some
 placements and level at others is placement.
 
+With `-jit`, `-jitbackground` runs the code the way `qjs --jit` does, its
+compiles in the background; a change to how a compile is asked for is
+compared both ways.
+
 ```sh
 go run ./internal/cmd/v8bench/placements compare -parallel -k 4 -micro base change
 ```

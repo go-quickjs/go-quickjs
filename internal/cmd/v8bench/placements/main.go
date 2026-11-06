@@ -402,6 +402,7 @@ func compareCmd(args []string) error {
 	suite := fs.String("suite", "", "comma-separated suites to run, all by default")
 	bench := fs.String("bench", "", "the benchmark collection, as v8bench's -bench: v8 by default, octane, awfy, ssr, fresh")
 	jitEnabled := fs.Bool("jit", false, "enable the optional native tier in both tagged builds")
+	jitBackground := fs.Bool("jitbackground", false, "with -jit, compile in the background, as qjs --jit does")
 	parallel := fs.Bool("parallel", false, "run both labels at once, each on a group of CPUs (-cpus)")
 	cpus := fs.String("cpus", "auto", "the groups of CPUs -parallel runs on: auto, halves, or lists separated by ';' (0-5;6-11)")
 	verbose := fs.Bool("v", false, "print each placement's figure")
@@ -457,7 +458,7 @@ func compareCmd(args []string) error {
 		for i, n := range ns {
 			if !*parallel {
 				for l := range labels {
-					got, err := runPlacement(exePath(*out, labels[l], n), *dir, *bench, *suite, n, *jitEnabled, *micro, nil, &reps)
+					got, err := runPlacement(exePath(*out, labels[l], n), *dir, *bench, *suite, n, *jitEnabled, *jitBackground, *micro, nil, &reps)
 					if err != nil {
 						return err
 					}
@@ -473,7 +474,7 @@ func compareCmd(args []string) error {
 			for l := range labels {
 				g := groups[(l+i+round)%2]
 				go func() {
-					got[l], errs[l] = runPlacement(exePath(*out, labels[l], n), *dir, *bench, *suite, n, *jitEnabled, *micro, g, &reps)
+					got[l], errs[l] = runPlacement(exePath(*out, labels[l], n), *dir, *bench, *suite, n, *jitEnabled, *jitBackground, *micro, g, &reps)
 					done <- struct{}{}
 				}()
 			}
@@ -577,7 +578,7 @@ func (t *repsTable) of(name string, ms float64) int {
 // whose tests each do the same work every run, and reads each test's time
 // of one operation, in nanoseconds, with no total. On cpus, if any, with
 // GOMAXPROCS as many.
-func runPlacement(exe, dir, bench, suite string, n int, jitEnabled, micro bool, cpus cpuset.Set, reps *repsTable) ([]named, error) {
+func runPlacement(exe, dir, bench, suite string, n int, jitEnabled, jitBackground, micro bool, cpus cpuset.Set, reps *repsTable) ([]named, error) {
 	run := func(reps int, only string) ([]named, error) {
 		args := []string{"-dir", dir, "-n", strconv.Itoa(reps)}
 		if micro {
@@ -588,6 +589,9 @@ func runPlacement(exe, dir, bench, suite string, n int, jitEnabled, micro bool, 
 		}
 		if jitEnabled {
 			args = append(args, "-jit")
+		}
+		if jitEnabled && jitBackground {
+			args = append(args, "-jitbackground")
 		}
 		if only != "" {
 			args = append(args, "-suite", only)
