@@ -69,7 +69,8 @@ func (r *Runtime) sweepStaleSlots(sp int) {
 // that the next call at its depth reuses its slices, and so it still holds
 // the call's receiver, callee, closure and captured bindings -- a method's
 // receiver, a whole data structure, for as long as nothing calls that deep
-// again. The slices keep their room; only what they point to goes.
+// again. The slices keep their room; only what they point to goes. The last
+// for...in's cursor goes too, and what it walked (forInCursor).
 func (r *Runtime) clearReturnedFrames() {
 	for i := r.frameDepth; i < r.frameHigh; i++ {
 		f := r.frameAt(i)
@@ -83,4 +84,5 @@ func (r *Runtime) clearReturnedFrames() {
 		f.openUpvalues = f.openUpvalues[:0]
 	}
 	r.frameHigh = r.frameDepth
+	forInLetGo[struct{}](r)
 }

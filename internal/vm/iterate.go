@@ -91,12 +91,16 @@ type iterObject struct {
 
 // newForInObject is newIterObject for a for-in's cursor over in, done
 // where there is nothing to walk: the object, the cursor and the snapshot
-// are one allocation.
+// are one allocation, or the last loop's, which has finished (forInCursor).
 //
 //go:noinline
 func (r *Runtime) newForInObject(in *forInState, done bool) Value {
-	fo := &forInObject{iterObject: iterObject{Object: Object{class: ClassCursor},
-		st: iterState{forIn: true, done: done}}, in: *in}
+	fo := r.forInLast
+	if fo == nil || !fo.st.done || done {
+		return forInCursor[struct{}](r, in, done)
+	}
+	fo.st.done, fo.st.idx = false, 0
+	forInAgain[struct{}](fo, in)
 	return Obj(&fo.Object)
 }
 

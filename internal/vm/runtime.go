@@ -315,6 +315,10 @@ type Runtime struct {
 	// each loop over a dictionary's keys had made each of them anew. At the
 	// end, so that no field the interpreter reads moves.
 	keyStrings []*String
+	// forInLast is the last for...in's cursor made, which the next takes if
+	// its loop has finished (forInCursor), and clearReturnedFrames lets go.
+	// Here, so that no field the interpreter reads moves.
+	forInLast *forInObject
 	// jitFields is the optional native tier's state, empty in builds
 	// without it. It comes after everything the interpreter reads, so that
 	// a build with the tier moves none of their offsets, and before the last
