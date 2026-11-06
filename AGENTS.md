@@ -455,7 +455,13 @@ process spent on it (`cpu`), the collector's on other threads included,
 and the external runner its engine's whole: on a machine with cores to
 spare the time does not show what collecting costs, which an embedder
 running a runtime on each core pays. A change that moves what is
-allocated is compared by both.
+allocated is compared by both, and at `GOMAXPROCS=1` too: there the
+collector shares the thread, a cycle marks eight times as long, and the
+script runs under the write barrier for much of it. An item worth 3.7% of a
+render on 32 cores was worth 10.5% at one thread, and a literal the JIT made
+in 39 ns took 95, slower than the interpreter's 69, which no run with cores
+to spare showed. QuickJS has no helper threads, so one thread is the fair
+comparison with it.
 
 `internal/cmd/disasm` prints the bytecode a script or module compiles to,
 each function's instructions under the source lines they come from; `-tree`

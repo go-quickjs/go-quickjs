@@ -76,6 +76,62 @@ where a host releases what it holds for the script. `Close` is never for
 another goroutine: that one closes the channel given to `AbortOn`, and the
 runtime's own goroutine closes it.
 
+## A runtime on a CPU of its own
+
+Go's collector marks while the program runs. With cores to spare, that work
+runs on them and a script hardly notices it. A host that gives each runtime one
+CPU -- a prefork server of single-threaded processes, or a container with one
+-- has none to spare: marking shares the thread with the script, and a cycle's
+marking took 12 ms rather than 1.5, so that the script runs under the write
+barrier for much of its time. Rendering a React page, the collector is marking
+for 42% of a render at `GOMAXPROCS=1` and 10% on 32 cores. Two settings change
+that, and neither needs anything of the engine.
+
+Collect between requests, which is the better of the two: turn the collector's
+pacing off, collect when no request is waiting, and keep a memory limit, so
+that a request that outgrows it is still collected.
+
+```go
+debug.SetGCPercent(-1)
+debug.SetMemoryLimit(512 << 20)
+
+for served := 1; ; served++ {
+    handle(<-requests, rt)
+    if served%4 == 0 {
+        runtime.GC()
+    }
+}
+```
+
+Or, with no change to the host's code, make every collection stop the world,
+by `GODEBUG=gcstoptheworld=1` in the process's environment: a script is paused
+while the collector marks, and never runs under the barrier.
+
+One process, `GOMAXPROCS=1`, 800 renders of a 107 KB page by React 18:
+
+| | With the JIT: a second | median | 99th percentile | Without: a second | median | 99th percentile |
+|---|---|---|---|---|---|---|
+| Go's default | 94 | 10.4 ms | 21.8 ms | 64 | 15.8 ms | 24.8 ms |
+| `gcstoptheworld=1` | 107 | 9.6 ms | 18.3 ms | 75 | 13.2 ms | 21.3 ms |
+| `runtime.GC()` after each | 98 | 8.5 ms | 16.3 ms | 74 | 12.0 ms | 20.6 ms |
+| `runtime.GC()` after every fourth | 111 | 8.6 ms | 16.3 ms | 80 | 12.0 ms | 20.7 ms |
+
+How often is the host's to choose: fewer collections take less time and more
+memory. On this page, which allocates 5 MB a render, collecting after every
+fourth took a heap of 33 MB against the default's 23 without the JIT, and the
+same 47 MB with it. A collection after each request is the simplest, and the
+heap the smallest, at the price of a whole cycle for each.
+
+Neither is for a process with more than one CPU, or more than one runtime:
+
+- Stopping the world on 32 cores took 3% longer than Go's default.
+- A collection is the process's, so stopping the world stops every runtime in
+  it. Thirty-two runtimes on one CPU, in test262's runner, kept taking each
+  other's turns: a test that finishes in moments had waited 30 seconds.
+
+`GOGC` trades in the same way, more plainly: `GOGC=400` took 20% off fifty
+renders at one thread, and the peak heap went from 60 MB to 136.
+
 ## Moving values between runtimes
 
 `Serialize` and `Deserialize` are structured cloning, what `structuredClone`
