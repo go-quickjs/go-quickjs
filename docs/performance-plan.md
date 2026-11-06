@@ -2060,9 +2060,9 @@ to remove:
 
 | ID | Item | Targets | Risk | Status |
 |---|---|---|---|---|
-| F1 | A string builder in the tree tier | 21% of a render's allocation, string building 1.13x C | High | Open |
-| F2 | A `for...in` cursor from a free list | 8.5% of a render's allocation | Medium | Open |
-| F3 | An array's old elements reused when it grows | up to 14% of a render's allocation | High | Open |
+| F1 | A string builder in the tree tier | 21% of a render's allocation, string building 1.13x C | High | Done, in every tier: 59% of a render's allocations |
+| F2 | A `for...in` cursor from a free list | 8.5% of a render's allocation | Medium | Done, by one cursor kept: 27% of its bytes |
+| F3 | An array's old elements reused when it grows | up to 14% of a render's allocation | High | Room learned at the literal: 37% of its bytes; reuse open |
 | F4 | The JIT slower than the interpreter here | 1.20x the interpreter | Medium | Done |
 | F5 | A fresh runtime's first render and its memory, with the JIT | first render 66 ms against 22, live heap 26.2 MiB against 7.3 | Medium | Memory done; first render 48.5 to 38.2 ms compiling in the background ([D8](#d8-compiling-in-the-background), phases 1 to 4; 35.5 with phase 5), the interpreter's 21.9 |
 
@@ -2076,6 +2076,55 @@ to remove:
   It is the largest single item here and the one that can go wrong
   silently, since a string that is mutated after something else has seen
   it is a wrong answer, not a crash.
+
+  **Done** (`compiler/strappend.go`, `vm/zzz_strappend.go`), for a closure's
+  appends, which no loop's analysis sees, and for a local's. The compiler
+  sees every read of a binding, if not at once: it notes that a read has
+  been compiled, an addition may own the string only if none has, and every
+  read compiled after that is followed by a `str_freeze`. So each read comes
+  before the append, and there is no owned append, or after it, and freezes
+  what it read. The string is an ordinary rope at every moment, so a tier that
+  knows nothing of this makes a rope over it and is right. A local has the
+  rest, whatever its right side runs, if no function or class mentions it and
+  it has been given a string the source can see, so that `sum += f(x)` pays
+  nothing. An append makes the rope any addition would and marks it, and the
+  fourth in a row gives it a tail with room, as a tail costs about three
+  ropes. A right side past 1,024 bytes stays a rope.
+
+  What each mechanism is worth to a render (AMD Ryzen 5 3600, Windows, Go
+  1.27.3, 2026-11-06), each turned off alone. One thread, one process over 80
+  pages, two placements; "six threads" is four placements, three rounds:
+
+  | Without | Time, tree tier | Time, JIT | Six threads | Bytes | Allocations |
+  |---|---:|---:|---:|---:|---:|
+  | a closure's appends | +5.2% | +9.1% | +3.7%, +3.9% | +46% | +144% |
+  | a tail, those appends kept | +7.9% | +13.5% | not measured | +46% | +144% |
+  | the `for...in` cursor | +6.4% | +4.3% | +2.8%, +5.4% | +38% | +29% |
+  | an empty literal's room | +7.0% | +7.7% | not measured | +58% | none |
+  | a local's appends | level | level | level | none | none |
+
+  So the tail is the whole of what a closure's appends are worth: marks without
+  it are a cost. A local's appends are for what a render does not do:
+  `string_build_large1` 56.7 to 34.0 ns, `local_append_read` 62.7 to 42.8,
+  `template_numbers` 138 to 102, and `upvalue_string_append`, a closure's, 126
+  to 95 in the tree tier and -41% with the JIT.
+
+  Tried and not kept. An append followed by a read of its binding made a plain
+  addition, to give back what the mark costs: every read micro-benchmark was
+  level without it, and `local_append_keep` 17.4% slower with it at all four
+  placements, so it went. Doubling a tail from 1,024 bytes gained 1.9% of a
+  render and left `template_list` and `append_read_each` 6.1% and 16.6% slower.
+  Not taken: `out = out + x`, as Pug writes it; a template's `with`, as
+  lodash's; a right side that runs code on a closure's append, which could
+  append to the binding between the read and the addition.
+
+  What kept `executeAt` as it was is in AGENTS.md: `str_freeze` is an
+  `OpArgumentsIndex` of a slot no function has, and a local's mark a B that the
+  interpreter does not read. `jitDifferential`'s runtimes have a memory limit,
+  under which nothing is owned and no room is learned, so its fuzzers cannot
+  reach any of this: `TestStrAppendRandom` and its kin compare with code
+  compiled for a debugger, and found KI-70, KI-71 and KI-72, all older than
+  this work.
 - **F2.** A cursor is one allocation of the object, the cursor and the
   snapshot together (`newForInObject`), and nothing outside the VM can
   reach one: a cursor the step reports done could go on a free list of
@@ -2083,6 +2132,14 @@ to remove:
   is that the step reporting done is the last read of it -- a loop left by
   `break`, an exception or a suspended generator must not return a cursor
   to the list.
+
+  **Done**, with one cursor rather than a list (`vm/zzz_forincursor.go`): the
+  runtime keeps the last made, and the next loop takes it if its `done` is
+  set, which needs no release in any tier. It holds what it walked, so
+  `clearReturnedFrames` lets it go, once a collection and at each turn's end.
+  `object_for_in` 36.1 to 28.0 ns, `for_in_nested` 59.7 to 44.7 in the tree
+  tier. `for_in_break`, which never reuses one, is level there, and +4.8% with
+  the JIT, of which KI-71's fix is 4.1.
 - **F3.** Go's `append` allocates a new block and copies, so about half
   the bytes a growing array allocates are the blocks it has outgrown,
   dead the moment they are copied. A free list of element blocks by size
@@ -2093,6 +2150,51 @@ to remove:
   tried first and is not the answer: the growth here is in large arrays,
   and floors of 4, 8 and 16 elements left the render's allocation count
   unchanged to the object (2026-10-30).
+
+  Reuse is still open, but two things took most of the bytes. An empty
+  literal learns the length its arrays grow to (`vm/zzz_arrayroom.go`), the
+  smaller of the last two, from 256 to 65,536 elements, and native code
+  inherits what a turn's end confirmed: without that, from about the 700th
+  page, when the literal's function goes native, 2,000 pages take 4.4% longer
+  and 35% more bytes. Sampling a literal's first execution kept what code
+  loaded once had made, and Octane's CodeLoad took 16% longer; clearing a sample
+  at a collection, rather than making it weak, lost most of what is learned.
+  Inheriting within a turn left several callbacks 7 to 18% slower, and learning
+  large lengths in native pools alone left `array_reduce_upvalue` 47.6% slower.
+  A large array grows by half and 16 from 16,384 elements (`vm/zzz_growelems.go`),
+  as V8's does at any length: `array_push_1m` -19% and, with the JIT, -39%. From
+  1,024 it made `array_push_large` 3 to 16% slower, and doubling cost
+  `array_push_28k` its fit, 7.4% more bytes.
+
+  All of F1, F2 and F3 against the commit before them, with the same
+  benchmark sources, 2026-11-06 (AMD Ryzen 5 3600, Windows, Go 1.27.3):
+
+  | SSR, ms for ten pages, eight placements | Before | After | |
+  |---|---:|---:|---:|
+  | Render, one thread, tree tier | 457.3 | 374.8 | -18.0% |
+  | Render, one thread, JIT | 322.0 | 267.1 | -17.0% |
+  | Render, six threads, tree tier | 342.8 | 315.5 | -8.0% |
+  | Render, six threads, JIT | 244.2 | 215.3 | -11.9% |
+  | FirstRender, one thread, tree tier | 54.6 | 51.2 | -6.1% |
+  | FirstRender, one thread, JIT | 99.4 | 99.1 | -0.3% |
+
+  Median of three fresh processes, one thread, 200 pages:
+
+  | | Tree tier before | After | JIT before | After |
+  |---|---:|---:|---:|---:|
+  | Time and CPU, ms | 8,295 | 7,059 | 6,137 | 4,783 |
+  | Allocated, MB | 1,455 | 575 | 1,483 | 603 |
+  | Allocations, millions | 13.5 | 4.9 | 14.5 | 5.9 |
+  | Peak RSS, MB | 38.0 | 31.2 | 66.4 | 49.8 |
+
+  Four placements, tree tier and JIT: V8 suite -1.6% and +0.4%, Octane +0.0%
+  and +0.7%, AWFY -0.1% and -0.2%, the fresh suite -1.7% and -2.5%; the 305
+  micro-benchmarks' geometric means 0.983 and 0.995. In the tree tier none is 3%
+  slower at every placement. With the JIT `for_in_break`, `array_literal_empty`,
+  `array_reduce` and `typed_i64_map` were, the last three under 3% when run
+  again alone. `regexp_fresh` in the tree tier is +4.4% with no code of it
+  changed: `execASCIILent` moved 128 bytes, and padding the base by those alone
+  costs 2.2 to 2.5%. The binary grows 47,616 bytes, and 62,976 with the tag.
 - **F4.** The JIT is 1.20 times the interpreter's wall time on this
   workload, which is mostly short polymorphic calls and string building
   rather than loops, and a JIT runtime holds 18.7 MiB against the
@@ -3294,7 +3396,7 @@ first, as the rest of the plan is.
   `runtime.AddCleanup`, `Validate` accepting Opaque, String and
   Uninitialized literals, layout asserts at compile time (*unchecked*).
   `qjs --jit` in a build without the tag says it has no effect.
-- `push`: growing the array (`growslice`) is half the time, and the
+- `push`: growing the array (`growslice`) is half the time, F3's, and the
   native push re-checks the prototypes on every iteration (each a
   compare of its layout since `657b50f2`). V8 hoists
   those checks out of the loop, and our JIT doesn't do that kind of
