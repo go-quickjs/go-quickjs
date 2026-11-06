@@ -3715,7 +3715,15 @@ func appendElem(o *Object, n float64, v Value) bool {
 	}
 	// What setElem would do for an index at the length of an array that
 	// is not an arguments object.
-	o.extOf().elems = append(o.elemsOf(), v)
+	els := o.elemsOf()
+	end := len(els)
+	if end == cap(els) {
+		appendGrown[struct{}](o, v)
+		return true
+	}
+	els = els[:end+1]
+	els[end] = v
+	o.extOf().elems = els
 	return true
 }
 

@@ -673,11 +673,15 @@ func (r *Runtime) pureElemOp(op uint8, this Value, args []Value, mayStore bool) 
 		// Each element stored where it goes: a slice appended is a call
 		// of the runtime's copy, made for any length, where most pushes
 		// are of one.
-		e := o.extOf()
-		for _, v := range args {
-			els = append(els, v)
+		end := len(els)
+		if end+len(args) > cap(els) {
+			els = growElems[struct{}](els, len(args))
 		}
-		e.elems = els
+		els = els[:end+len(args)]
+		for i, v := range args {
+			els[end+i] = v
+		}
+		o.extOf().elems = els
 		return Float(float64(len(els))), true
 	case elemPop:
 		els := o.elemsOf()
