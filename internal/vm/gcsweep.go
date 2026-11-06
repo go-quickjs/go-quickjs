@@ -84,5 +84,5 @@ func (r *Runtime) clearReturnedFrames() {
 		f.openUpvalues = f.openUpvalues[:0]
 	}
 	r.frameHigh = r.frameDepth
-	forInLetGo[struct{}](r)
+	arraySamplesLetGo[struct{}](r)
 }

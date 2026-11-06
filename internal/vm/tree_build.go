@@ -170,6 +170,8 @@ type tbuilder struct {
 	// not looked at as updates of their own (see tbuilder.update).
 	noUpdate bool
 	soleDone bool
+	// arraySites counts the empty array literals built (arrayEmptyNode).
+	arraySites int
 }
 
 // target records a way from the block being built to the one at pc, whose

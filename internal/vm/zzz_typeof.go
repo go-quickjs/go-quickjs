@@ -46,6 +46,21 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 func opHook[_ any](b *tbuilder, pc int, code []bytecode.Instr, more bool) (int, bool) {
 	in := code[pc]
 	switch in.Op {
+	case bytecode.OpNewArray:
+		if in.A == 0 {
+			return 0, arrayEmptyOp[struct{}](b, pc)
+		}
+	case bytecode.OpArgumentsIndex:
+		if in.StrFreeze() {
+			b.push(strFreezeNode[struct{}](b.pop().tree()))
+			return 0, true
+		}
+	case bytecode.OpAdd:
+		if in.B == bytecode.AddOwned {
+			y := b.pop().tree()
+			b.push(strAppendNode[struct{}](b.pop().tree(), y, pc))
+			return 0, true
+		}
 	case bytecode.OpGetPropThis:
 		// exec's read, which a call whose result nothing reads may take
 		// (zzz_regexpdead.go).
