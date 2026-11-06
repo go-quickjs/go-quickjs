@@ -741,7 +741,16 @@ is to the Go runtime a function the code's Go caller called, and calls
 `storeRefGo`, a nosplit Go function that stores the word, so that the
 compiler's barrier shades the pointer it overwrites and the one it writes.
 A routine each code shares saves the registers the code allocates and
-restores them after; `storeRef` keeps only the context's register. The
+restores them after; `storeRef` keeps only the context's register. A nil over
+a nil, a primitive's over a primitive's, has nothing to write or to shade, and
+the routine goes straight back from it, nothing saved: that is a fifth of a
+render's stores and a third of a literal's. Most of what is left of the stores'
+time is the shading, which the interpreter's compiled barrier pays alike,
+10% of a render's samples at one thread in either tier, and most of that is
+marking the collector would do anyway. Native code's own part, the routine and
+the call, is about 3%. Some 77% of the pointers stored repeat a recent one, but
+shading is skipped only for what is known to be shaded in this cycle, and Go
+tells native code nothing of that: a stale answer frees a live object. The
 flag cannot change between the test and the write: Go sets it only with
 the world stopped, which native code, never a preemption point, is not.
 Emulating the barrier's buffer in native code was rejected: its contents

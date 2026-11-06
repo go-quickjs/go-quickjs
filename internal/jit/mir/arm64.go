@@ -2245,11 +2245,15 @@ func (c *a64Compiler) refStore() {
 	c.a.Bind(back)
 }
 
-// refStoringCall is amd64's: every allocatable register saved, storeRef
-// called, which comes back where B says, with the link register; the
-// frame's registers read again, every allocatable one restored, and back
-// to the site.
+// refStoringCall is amd64's: back to the site at once for a nil over a nil; or
+// every allocatable register saved, storeRef called, which comes back where B
+// says, with the link register; the frame's registers read again, every
+// allocatable one restored, and back to the site.
 func (c *a64Compiler) refStoringCall() {
+	none := c.a.NewLabel()
+	c.a.Load(a64B, a64A, 0)
+	c.a.Op(arm64.Orr, a64B, a64B, a64C, true)
+	c.a.Cbz(a64B, none, true)
 	for _, r := range c.usedRegs(c.gprs, false) {
 		c.a.Store(a64Ctx, abi.OffRegs+int32(r)*8, arm64.Reg(r))
 	}
@@ -2270,6 +2274,7 @@ func (c *a64Compiler) refStoringCall() {
 	for _, r := range c.usedRegs(c.fprs, true) {
 		c.a.LoadF(arm64.FReg(r), a64Ctx, abi.OffXRegs+int32(r)*8)
 	}
+	c.a.Bind(none)
 	c.a.Load(a64A, a64Ctx, abi.OffGoSite)
 	c.a.Br(a64A)
 }
@@ -6051,12 +6056,7 @@ func (c *a64Compiler) ptrStore(marking bool) {
 		c.a.Store(a64A, 0, a64C)
 		return
 	}
-	none := c.a.NewLabel()
-	c.a.Load(a64B, a64A, 0)
-	c.a.Op(arm64.Orr, a64B, a64B, a64C, true)
-	c.a.Cbz(a64B, none, true)
 	c.refStore()
-	c.a.Bind(none)
 }
 
 // keepObject is amd64's: the object whose pointer word is at the
