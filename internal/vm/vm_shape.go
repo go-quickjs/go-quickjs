@@ -31,10 +31,11 @@ import (
 //   - Shared: the object's layout is a node in its runtime's tree of shapes,
 //     reached from a root by one transition per property added, in the order
 //     they were added. Objects built the same way share the node. An object
-//     literal's objects start from a root of the literal's own, a
-//     constructor's from one of the function's, and any other object from
-//     its class's -- when it is given its first property, or when a cache
-//     first meets it with none.
+//     literal's objects start from its realm's root for the literal's keys,
+//     or a root of the literal's own where the compiler says none
+//     (zzz_literalkeys.go), a constructor's from one of the function's, and
+//     any other object from its class's -- when it is given its first
+//     property, or when a cache first meets it with none.
 //   - Unique: the object has a shape of its own. It is what an object gets
 //     whose layout changes other than by adding a property -- a delete, an
 //     attribute changed, a table grown past what the tree holds -- and what a
@@ -180,7 +181,8 @@ type shapeSide struct {
 	// made the first time one is walked; see startForIn.
 	forIn *forInKeys
 	// programs is, on the layout of a realm's Object.prototype, the roots
-	// of the literals of the Programs the realm runs (zzz_rerun.go).
+	// of the literals of the Programs the realm runs (zzz_rerun.go) and of
+	// the literals of its code by their keys (zzz_literalkeys.go).
 	programs *programTable
 }
 
@@ -666,7 +668,9 @@ func (s *shape) orRoot(c Class, p *Object) *shape {
 // siteRoot is the empty shape the objects an object literal makes start from,
 // kept in the literal's cache. Objects made at different sites mostly have
 // different properties, and a root of their own saves each of them a search
-// among the others' transitions out of their class's root. It is nil once the
+// among the others' transitions out of their class's root. What a literal
+// whose keys are known starts from is had before it asks, its cache then
+// holding the realm's root for them (zzz_literalkeys.go). It is nil once the
 // tree is full, while the realm is being made, and for a prototype other than
 // the one the literal's objects have had, proto (orRoot). A root is counted
 // only until the code stops running (settleSites), and the shapes grown from

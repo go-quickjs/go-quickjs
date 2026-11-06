@@ -2570,6 +2570,15 @@ again.
   `o.m()` in the frameless evaluator; constant `objectBits`; `isTag` as one
   compare; equality fast paths at the top of `StrictEquals`. (The tree tier
   later called `o.m()` on a local or `this` in one node, `a5813af`.)
+- A realm's root for each count of a literal's keys, V8's
+  `ObjectLiteralMapFromCache`, a site's root taking its first transition from
+  it: the engine's fast paths follow a layout's first
+  transition, which a shared root has for one literal's next key alone, and
+  native spreads and clones are compiled along it. Over 4 placements,
+  `object_spread` +174%, `prop_clone` +192%, `prop_delete` +29%,
+  `object_getter_spread` +36%, `object_computed` +13% with the JIT, geomean
+  1.014, for what a root for each set of keys gains without them
+  (`zzz_literalkeys.go`).
 - A `.length` node in the tree tier: its code's placement cost Crypto 2.5%.
   A fused `obj.k op=` read, which cost NavierStokes 8% as a node of its own,
   was done later as one node for every update of a place (`055a53f`).
@@ -3463,9 +3472,12 @@ was ruled out in the commits and in [optimizing.md](optimizing.md))
   layout, at each run, so that the sites reading its objects would go
   megamorphic and stay so, where each run's own caches are monomorphic. Worth
   measuring as a host's load, a `Program` on a kept runtime, before deciding.
-- `Eval` of one source for each request compiles anew and makes its literals'
-  shapes anew: correct, the tree flat, but nothing learned carries over. A
-  cache of compiled source would, and no host has asked for one.
+- `Eval` of one source for each request compiles anew. A literal that names
+  its keys shares a layout with any other of them in the realm
+  (`zzz_literalkeys.go`), and what reads it keeps what it learned; `{}` filled
+  in after, a spread and the rest make their shapes anew, and the compile is
+  most of what such a run costs. A cache of compiled source would help, and no
+  host has asked for one.
 
 **Measurement and tooling**
 

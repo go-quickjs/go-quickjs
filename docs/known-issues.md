@@ -428,8 +428,11 @@ Paths are relative to this repository; `go-intl:` paths are in
   allocations fall from 17 to 7 a run. `TestShapeReruns`,
   `TestShapeRerunsAlternating`, `TestShapeFreshCodeRuns`,
   `TestShapeAfterReruns`, `TestProgramRerunsMakeNoShapes`,
-  `TestProgramRerunsLetGo` and `TestJITProgramRerunsKeepLayouts` pin it. What
-  remains:
+  `TestProgramRerunsLetGo` and `TestJITProgramRerunsKeepLayouts` pin it. A
+  literal that names its keys goes further, in any code: a realm keeps a root
+  for those keys, and new code makes none of its shapes
+  (`zzz_literalkeys.go`), past a quarter of the tree starting again
+  (`TestFreshCodeMakesNoLiteralShapes`, `TestLiteralKeysMadeUp`). What remains:
   - Shapes are given back by a cleanup, after a collection. A host with a heap
     so large that it allocates 65,536 shapes between two collections, running
     new code for each request, finds the tree full until the next one, as
@@ -437,6 +440,8 @@ Paths are relative to this repository; `go-intl:` paths are in
   - One object kept of a run holds the budget of the sixteen roots its root
     shares one with; one kept of a `Program`'s roots let go holds the whole
     program's, up to a quarter of the tree.
+  - A realm's roots for literals' keys stay for as long as the realm, up to a
+    quarter of the tree, what grew from them with them.
 
 ### KI-68 Code run once stays for what it left in a realm's tables
 - **Where:** `internal/vm/vm.go` (`templateObject`), `vm_shape.go` (`chainCell`)

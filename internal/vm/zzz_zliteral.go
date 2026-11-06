@@ -45,6 +45,9 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 // when it was made, and the fields. closed says it takes no more.
 type litOf struct {
 	fields []litField
+	// keys is the hash of the literal's keys (LiteralKeys), 0 where its
+	// function does not say them.
+	keys   uint64
 	n      int
 	body   int
 	site   uint32
@@ -79,7 +82,7 @@ const maxLitFields = 64
 //
 //go:noinline
 func literalNew[_ any](b *tbuilder, in bytecode.Instr) {
-	lit := &litOf{n: int(in.A), site: in.B, body: len(b.body)}
+	lit := &litOf{n: int(in.A), site: in.B, body: len(b.body), keys: keysOf[struct{}](b.fn, in.B)}
 	b.pushEntry(tentry{v: literalNode[struct{}](lit), slot: -1, rare: &tentryRare{lit: lit}})
 }
 
@@ -136,6 +139,11 @@ type litNodeOf[_ any] litOf
 func (l *litNodeOf[_]) make(c *tctx) Value {
 	lit := (*litOf)(l)
 	ic := &c.ic[lit.site]
+	if lit.keys != 0 {
+		if s := ic.shape; s != nil && s.next == nil {
+			literalRoot[struct{}](c, lit, ic)
+		}
+	}
 	root := c.r.shapes.siteRoot(ic, c.r.proto.object)
 	m := lit.n
 	if root != nil && int(root.slack) > m {

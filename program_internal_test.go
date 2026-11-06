@@ -8,7 +8,8 @@ import (
 // A program run again finds its literals' layouts: its runs make none of
 // them, which is six shapes a run of this one, each an allocation, and keys
 // beside them, in a runtime's realm or any other. The same bytecode run
-// otherwise makes them each time.
+// otherwise makes them each time, for literals of no keys of their own: those
+// with keys are the realm's, whatever runs them (zzz_literalkeys.go).
 func TestProgramRerunsMakeNoLayouts(t *testing.T) {
 	r := New()
 	defer r.Close()
@@ -16,7 +17,7 @@ func TestProgramRerunsMakeNoLayouts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := Compile("rerun.js", `var o = {a: 1, b: 2}, q = {c: 3, d: 4}; o.a + q.d`)
+	p, err := Compile("rerun.js", `var o = {}, q = {}; o.a = 1; o.b = 2; q.c = 3; q.d = 4; o.a + q.d`)
 	if err != nil {
 		t.Fatal(err)
 	}

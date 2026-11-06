@@ -1368,6 +1368,7 @@ func (r *Runtime) jitLiteralAt(e *jitEntry, cl *closure, pc int) *jitLiteral {
 	if in.Op != bytecode.OpNewObject || int(in.B) >= len(cl.ic) {
 		return nil
 	}
+	keySite[struct{}](r, cl, in.B)
 	root := r.shapes.siteRoot(&cl.ic[in.B], r.proto.object)
 	if root == nil {
 		return nil
