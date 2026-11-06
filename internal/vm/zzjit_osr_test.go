@@ -342,11 +342,11 @@ func TestJITOSRShortLoopsLearn(t *testing.T) {
 		}
 		function calls(c) {
 			let t = 0
-			for (let j = 0; j < c; j++) t += early(100, 5)
+			for (let j = 0; j < c; j++) t += early(100, j % 2 === 0 ? 5 : -1)
 			return t
 		}
 	`
-	r := jitAgreesForTestWith(t, jitStressConfig{}, setup, `calls(3000)`, `calls(3000)`)
+	r := jitAgreesForTestWith(t, jitStressConfig{}, setup, `calls(6000)`, `calls(6000)`)
 	e := jitCallbackEntry(r, "early")
 	if e == nil || e.ssa == nil {
 		t.Fatalf("early was not compiled: %+v", e)
@@ -361,6 +361,133 @@ func TestJITOSRShortLoopsLearn(t *testing.T) {
 	// Whatever went before the code settled, the frames go on natively.
 	if oe.ssaStats.entries < 2000 {
 		t.Errorf("%d of the frames that left the function's code went on in the code kept for the loop, of %d", oe.ssaStats.entries, e.goOns)
+	}
+}
+
+// Where three calls in four leave a loop, what its objects' staying unmade
+// gains the rest does not pay what each of those costs: the function's code
+// takes the loop's entry, its objects made, the code kept goes with what it
+// took, and an exit no longer looks for objects none of its code leaves
+// unmade. Where one call in two leaves (TestJITOSRShortLoopsLearn), it does
+// not, whatever the calls' turns or loops: a call that leaves again goes on
+// in that run.
+func TestJITFramesLeave(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := osrSetup + `
+		function leaves(n, k) {
+			const one = new P(1)
+			let s = new P(0)
+			for (let i = 0; i < n; i++) {
+				const o = i === k || i % 2 === k ? 1 : obj
+				o.a = 1
+				s = s.add(one)
+			}
+			return s.v
+		}
+		function calls(c, k) {
+			let t = 0
+			for (let j = 0; j < c; j++) t += leaves(100, k)
+			return t
+		}
+		function several(n, k) {
+			const one = new P(1)
+			let s = new P(0), t = new P(0), u = new P(0), v = new P(0)
+			for (let i = 0; i < n; i++) { const o = i === k ? 1 : obj; o.a = 1; s = s.add(one) }
+			for (let i = 0; i < n; i++) { const o = i === k ? 1 : obj; o.a = 1; t = t.add(one) }
+			for (let i = 0; i < n; i++) { const o = i === k ? 1 : obj; o.a = 1; u = u.add(one) }
+			for (let i = 0; i < n; i++) { const o = i === k ? 1 : obj; o.a = 1; v = v.add(one) }
+			return s.v + t.v + u.v + v.v
+		}
+		function some(c) {
+			let t = 0
+			for (let j = 0; j < c; j++) t += several(100, j % 2 === 0 ? 5 : -1)
+			return t
+		}
+	`
+	for _, c := range []struct{ name, args string }{{"at one turn", "5"}, {"at every other turn", "1"}} {
+		t.Run(c.name, func(t *testing.T) {
+			run := "calls(3000, " + c.args + ")"
+			r := jitAgreesForTestWith(t, jitStressConfig{}, setup, run, run)
+			e := jitCallbackEntry(r, "leaves")
+			if e == nil || e.ssa == nil {
+				t.Fatalf("leaves was not compiled: %+v", e)
+			}
+			if len(e.ssaUnentered) != 0 || e.osr != nil || e.ssaVirtuals != 0 {
+				t.Fatalf("every call left and the code goes on leaving its objects unmade: unentered %v, osr %v, virtuals %d", e.ssaUnentered, e.osr != nil, e.ssaVirtuals)
+			}
+			if e.ssaHomes != 0 {
+				t.Fatalf("code with no object unmade has exits look for them: %d homes", e.ssaHomes)
+			}
+		})
+	}
+	r := jitAgreesForTestWith(t, jitStressConfig{}, setup, `some(6000)`, `some(6000)`)
+	e := jitCallbackEntry(r, "several")
+	if e == nil || e.ssaVirtuals == 0 || len(e.ssaUnentered) != 4 || e.osr == nil {
+		t.Fatalf("calls that run their loops through gave up what they gain: %+v", e)
+	}
+}
+
+// An exit looks for objects not made in the homes of the code that may still
+// exit: the new code's once no run of the code it replaced is left, however
+// that ends.
+func TestJITHomesComeDown(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	r := jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, `once(200000)`)
+	e, s := jitCallbackEntry(r, "once"), r.jit
+	if e == nil {
+		t.Fatal("once was not compiled")
+	}
+	e.setHomes(s, 40)
+	if e.ssaHomes != 40 {
+		t.Fatalf("no run of the code: its homes %d, not 40", e.ssaHomes)
+	}
+	e.ssaRuns++
+	s.runEntries = append(s.runEntries, e)
+	e.setHomes(s, 0)
+	if e.ssaHomes != 40 {
+		t.Fatalf("a run of the code it replaced lost its homes: %d", e.ssaHomes)
+	}
+	r.jitRunDone(e, 0, s.ctxTop)
+	if e.ssaHomes != 0 {
+		t.Fatalf("its last run ended, and it holds %d homes", e.ssaHomes)
+	}
+}
+
+// A compile asked for in a run, for what the code learned at its exits, has
+// a frame in a function hardly called yet: the frame goes on in the code it
+// asks for, at the loop's entry the compile keeps, with no code of its own.
+func TestJITCompileInARunKeepsItsLoop(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		function run(n) {
+			var i, j, s, sum = 0
+			var sink = { push: function (x) { return x !== null && (s += x), true } }
+			for (j = 0; j < n; j += 1024) {
+				s = ""
+				for (i = 0; i < 1024; i++) sink.push("<x>")
+				sum += s.length + s.lastIndexOf("<x>")
+			}
+			return j + sum
+		}
+	`
+	run := `run(40000000)`
+	if !allocsOrdinary() {
+		// Under checkptr, where it took 40 s of CI's native boundary.
+		run = `run(4000000)`
+	}
+	r := jitAgreesForTestWith(t, jitStressConfig{}, setup, run)
+	e := jitCallbackEntry(r, "run")
+	if e == nil || e.ssa == nil || r.jit.ssaEntries == 0 {
+		t.Fatalf("run never ran natively: %+v", e)
+	}
+	if r.jit.osrLearned != 0 || e.osr != nil {
+		t.Fatalf("a frame in a function called once asked for %d loops' code of its own", r.jit.osrLearned)
 	}
 }
 

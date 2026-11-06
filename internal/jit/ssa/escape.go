@@ -334,13 +334,13 @@ func scalarReplace(f *Func) bool {
 		if e.again {
 			continue
 		}
-		e.syncEntries()
-		e.flow()
-		if e.again {
+		if e.keepFrameEntry() {
 			e.propagate()
 			continue
 		}
-		if e.keepFrameEntry() {
+		e.syncEntries()
+		e.flow()
+		if e.again {
 			e.propagate()
 			continue
 		}
@@ -354,34 +354,36 @@ func scalarReplace(f *Func) bool {
 	return true
 }
 
-// keepFrameEntry has the objects made for which the entry of the loop a
-// frame waits at (Func's FrameAt) would be dropped, and reports whether
-// there were any. Asked once the walk has settled, so that only an entry
-// that would stay dropped counts: the next round puts it back.
+// keepFrameEntry has the objects made that would have the entry of the
+// loop a frame waits at (Func's FrameAt) dropped, and reports whether there
+// were any. Asked before the walk, whose work on a compile that a frame
+// waits for would go for nothing: a function called once, each of its
+// objects made here, comes to its first compile's end in two classifications
+// and no walk. An object the walk would have found made anyway has the entry
+// listed all the same, which at worst compiles a function called again once
+// more for no gain.
 func (e *escaper) keepFrameEntry() bool {
 	f := e.f
 	if f.FrameAt == 0 {
 		return false
 	}
-	for _, b := range e.dropped {
-		if int(b.Header.PC) != f.FrameAt {
+	kept := false
+	for _, o := range e.objs {
+		if o.escaped {
 			continue
 		}
-		kept := false
-		for _, o := range e.objs {
-			if !o.escaped && slices.Contains(o.entries, b) {
+		for _, b := range o.entries {
+			if b.Header != nil && int(b.Header.PC) == f.FrameAt {
 				e.escape(o)
 				kept = true
+				break
 			}
-		}
-		if kept {
-			if !slices.Contains(f.EntryKept, f.FrameAt) {
-				f.EntryKept = append(f.EntryKept, f.FrameAt)
-			}
-			return true
 		}
 	}
-	return false
+	if kept && !slices.Contains(f.EntryKept, f.FrameAt) {
+		f.EntryKept = append(f.EntryKept, f.FrameAt)
+	}
+	return kept
 }
 
 // candidates finds the pools' takes the code may not make.

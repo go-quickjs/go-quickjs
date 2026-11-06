@@ -79,6 +79,22 @@ func (fb *jitFeedback) keepVirtuals(pools []uintptr) {
 	}
 }
 
+// isVirtualWord reports whether v is a word naming an object the code did
+// not make (abi.VirtualWord).
+func isVirtualWord(v *Value) bool {
+	return v.ref == nil && math.Float64bits(v.num)&^(1<<(2*abi.VirtualHomeShift)-1) == abi.VirtualBase
+}
+
+// namesVirtual reports whether a slot of vs is such a word.
+func namesVirtual(vs []Value) bool {
+	for i := range vs {
+		if isVirtualWord(&vs[i]) {
+			return true
+		}
+	}
+	return false
+}
+
 // jitMaterializeObjects makes, in f, the frame of e's code that an exit
 // left, the objects the code did not make (ssa's escape.go): a slot that
 // holds the word of one (abi.VirtualWord) gets the object, made of its
@@ -89,6 +105,12 @@ func (fb *jitFeedback) keepVirtuals(pools []uintptr) {
 // homes are cleared after. The frame's slots end at the VM
 // stack's limit, where a native callee's frame begins (jitMaterializeBelow).
 func (r *Runtime) jitMaterializeObjects(f *frame, e *jitEntry, limit int) {
+	// An exit of code with homes, most of which name nothing: first found
+	// without what making an object takes, which every such exit had paid.
+	end := min(len(r.stack), limit, f.base+max(f.cl.fn.MaxStack, e.loopSlots, e.ssaHomes))
+	if !namesVirtual(f.locals) && (f.base >= end || !namesVirtual(r.stack[f.base:end])) {
+		return
+	}
 	type made struct {
 		home, fields int
 		o            *Object
@@ -98,11 +120,8 @@ func (r *Runtime) jitMaterializeObjects(f *frame, e *jitEntry, limit int) {
 	at := func(slot int) *Value { return r.jitSlot(f, e.this, slot) }
 	var get func(w uint64) *Object
 	fix := func(v *Value) {
-		if v.ref != nil {
-			return
-		}
-		if w := math.Float64bits(v.num); w&^(1<<(2*abi.VirtualHomeShift)-1) == abi.VirtualBase {
-			*v = Obj(get(w))
+		if isVirtualWord(v) {
+			*v = Obj(get(math.Float64bits(v.num)))
 		}
 	}
 	get = func(w uint64) *Object {
@@ -130,7 +149,6 @@ func (r *Runtime) jitMaterializeObjects(f *frame, e *jitEntry, limit int) {
 	for i := range f.locals {
 		fix(&f.locals[i])
 	}
-	end := min(len(r.stack), limit, f.base+max(f.cl.fn.MaxStack, e.loopSlots, e.ssaHomes))
 	for i := f.base; i < end; i++ {
 		fix(&r.stack[i])
 	}

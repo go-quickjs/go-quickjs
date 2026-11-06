@@ -657,6 +657,11 @@ type jitEntry struct {
 	resumeReopt  bool
 	osrMiss      uintptr
 	osrMissPC    uint32
+	// osrFrames counts the calls that went on in the code kept for a loop,
+	// up to jitFramesLeaving, and osrCalls is the function's calls when the
+	// count began (jitFramesLeave).
+	osrFrames uint32
+	osrCalls  uint64
 	// osr is the code a frame in a loop this code has no entry at goes on
 	// in, kept apart from this (zzjit_osr.go); osrOf, in that entry, is the
 	// function's, and osrLoops the headers its code is compiled for, which
@@ -762,11 +767,13 @@ type jitEntry struct {
 	// (jitMaterialize).
 	ssaMade []*closure
 	// ssaHomes is how many slots past its frame's operands' first the
-	// homes of the objects any code of the entry's does not make end at
-	// (ssa.Func's HomesEnd), which Go makes where an exit's frame names them
-	// (jitMaterialize): 0 for none. It only grows, as code an earlier
-	// compile made may exit after a later one.
-	ssaHomes int
+	// homes of the objects any code of the entry's that may yet exit does
+	// not make end at (ssa.Func's HomesEnd), which Go makes where an exit's
+	// frame names them (jitMaterialize): 0 for none. ssaHomesNow is what
+	// they are for the code it has now, which it comes down to when no run
+	// of an earlier compile's is left (setHomes).
+	ssaHomes    int
+	ssaHomesNow int
 	// ssaVirtuals is how many objects its code does not make (ssa.Func's
 	// Virtuals).
 	ssaVirtuals int
@@ -2936,7 +2943,7 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, err
 				if e.invalid {
 					r.jitTierUp(f.cl, e, r.jitTierWork(f.cl.fn, e, pc, osr, spent))
 				}
-				if oe := e.osr; oe != nil && !e.ssa.HasEntry(pc) {
+				if oe := e.osr; oe != nil && !e.ssa.HasEntry(pc) && !r.jitFramesLeave(f.cl, e, pc) {
 					e = oe
 				}
 			}
