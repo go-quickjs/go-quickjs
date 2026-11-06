@@ -1318,8 +1318,8 @@ type jitLiteral struct {
 	env  *Object
 }
 
-// jitLiteralRoom bounds the room an array literal's arrays learn to be
-// made with (jitLiteral's room).
+// jitLiteralRoom bounds the room learned from one array result. Larger
+// buffers inherit the tree tier's confirmed length (jitLiteralArrayRoom).
 const jitLiteralRoom = 64
 
 // jitLiteralAt is e's literal at pc of cl's function -- e's, or a callee's
@@ -1335,7 +1335,7 @@ func (r *Runtime) jitLiteralAt(e *jitEntry, cl *closure, pc int) *jitLiteral {
 	if in.Op == bytecode.OpNewArray && in.A <= ir.MaxArrayLiteral {
 		e.literals = append(e.literals, jitLiteral{pc: int32(pc), pool: new(abi.ObjectPool), array: true, n: int(in.A), fn: cl.fn})
 		l := &e.literals[len(e.literals)-1]
-		l.pool.Source = unsafe.Pointer(&jitPoolSource{array: true, n: l.n})
+		l.pool.Source = unsafe.Pointer(jitLiteralArraySource[struct{}](r, cl, l.pool, pc, l.n))
 		r.jitFillLiteral(l)
 		return l
 	}
@@ -1426,7 +1426,7 @@ func (r *Runtime) jitFillLiteral(l *jitLiteral) {
 			// code spreads into them.
 			src.room = max(src.room, min(len(s.elemsOf()), jitLiteralRoom))
 		}
-		n = max(n, src.room)
+		n = jitLiteralArrayRoom[struct{}](pool, n)
 	}
 	for i := range int(pool.Size) {
 		a := newArrayObject(r.proto.array, n)

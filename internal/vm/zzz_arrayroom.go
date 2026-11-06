@@ -117,6 +117,7 @@ func arraySamplesLetGo[_ any](r *Runtime) {
 	}
 	clear(r.arraySamples[len(keep):])
 	r.arraySamples = keep
+	jitLiteralArraysLetGo[struct{}](r)
 }
 
 // arrayEmptyOp builds new_array of no elements at pc, or reports that it

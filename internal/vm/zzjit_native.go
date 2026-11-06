@@ -1328,6 +1328,9 @@ type jitState struct {
 	// at their install for calling through links their functions had let
 	// go meanwhile (staleLinks).
 	bgStale uint64
+	// arrayRooms are pools with large inherited hints. The weak list
+	// releases completed samples without keeping discarded code's pools.
+	arrayRooms []weak.Pointer[abi.ObjectPool]
 }
 
 // Only selected own reference fields are prepared. The receiver bound keeps
@@ -1511,7 +1514,7 @@ func (s *jitState) sharedBytes() int {
 	n := int(unsafe.Sizeof(*s)) + len(s.ssaCtxs)*jitContextBytes + jitCapBytes(s.ssaCtxs) + jitCapBytes(s.hints) +
 		jitCapBytes(s.hintFree) + len(s.links)*jitLinkFixed + jitCapBytes(s.victims) + jitCapBytes(s.goRuns) +
 		jitCapBytes(s.goPinned) + jitCapBytes(s.retired) + jitCapBytes(s.calleeOpen) + jitCapBytes(s.unwinding) + jitCapBytes(s.unwindingFrames) +
-		jitCapBytes(s.seedingFns)
+		jitCapBytes(s.seedingFns) + jitCapBytes(s.arrayRooms)
 	for _, x := range s.retired {
 		n += x.code.Footprint()
 	}
