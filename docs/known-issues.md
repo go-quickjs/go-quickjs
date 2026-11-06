@@ -718,6 +718,34 @@ Paths are relative to this repository; `go-intl:` paths are in
   optimized code by native context, and a realm compiles its own.
   - Test: `TestJITRealmsHaveTheirOwnCode`, `TestJITCallsAcrossRealms`.
 
+### KI-69 A function called through `.call` got itself as its `this`
+- **Where:** `internal/jit/mir/amd64.go` and `arm64.go`, the native call's
+  `setup`. A callee that reads its arguments past its parameters
+  (`ssa.CallSite`'s `FrameArgs`) is not given its operands straight, and the
+  receiver was read from the slot under the call's callee, where a method
+  call has it. Through `Function.prototype.call` that slot holds the function;
+  the receiver is the first argument.
+- **Effect:** with the JIT, `G.call(recv, ...args)` of a `G` that reads
+  `this` and `arguments` ran with `this` being `G`, with no error of its own.
+  Once the loop below ran natively it gave `function0`, not `number0`:
+
+  ```js
+  function strict() { 'use strict'; return typeof this + arguments.length }
+  function run(n) { let s; for (let i = 0; i < n; i++) s = strict.call(i); return s }
+  ```
+
+  A `this instanceof G` in `G` was false, and a sum over `this.k` went from
+  73350 to 73255. A `G` that does not read `this` had none, so a stack frame
+  said `named`, not `Shape.named`. A `G` that uses `arguments` is called so
+  only if it has native code when the call site is decided, which happens
+  once (`jitLinkable`), so a program could meet the bug in one run and not the
+  next.
+- **Status:** fixed. The receiver is read from the slot the call already
+  worked out, the first argument for a call through `.call`.
+  - Test: `TestJITCallThroughCallFrameArguments`, and
+    `TestJITApplyFrameArguments` for `.apply`, which takes another path and
+    never had the bug.
+
 ## P3: small divergences
 
 ### KI-56 Intl details

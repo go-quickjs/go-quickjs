@@ -3947,7 +3947,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 			c.a.Store(locals, at+c.enc.NumOffset, top)
 			c.a.Store(locals, at+c.enc.RefOffset, arm64.ZR)
 		}
-		if t.Tail || t.Pool != 0 || t.Super || t.ArrowThis || t.PlainThis || t.FrameArgs || t.Function || (t.ThisSlot >= 0 || site.Method && site.Via == 0) && !direct || !receiver {
+		if t.Tail || t.Pool != 0 || t.Super || t.ArrowThis || t.PlainThis || t.FrameArgs || t.Function || (t.ThisSlot >= 0 || site.Method) && !direct || !receiver {
 			c.a.Load(calleeCtx, a64Ctx, abi.OffNext)
 		}
 		if t.Function && !t.Derived && !t.Super {
@@ -4043,8 +4043,8 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 			c.movImm(top, c.enc.Undefined)
 			c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, top)
 			c.a.Store(calleeCtx, abi.OffThis+c.enc.RefOffset, arm64.ZR)
-		} else if (t.ThisSlot >= 0 || site.Method && site.Via == 0) && !direct {
-			nb, nd, rb, rd := words(calleeSlot - 1)
+		} else if (t.ThisSlot >= 0 || site.Method) && !direct {
+			nb, nd, rb, rd := words(this)
 			c.a.Load(top, nb, nd)
 			c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, top)
 			c.a.Load(top, rb, rd)
