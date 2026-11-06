@@ -190,6 +190,9 @@ const (
 	// make, called from native code (ssa.GoAdd), and leaves to Go
 	// otherwise.
 	StringAdd
+	// StringFreeze is str_freeze: Left, if it is a string appends own, is
+	// not any more. It stays where it is.
+	StringFreeze
 	// StringConcat is concat: the Extra operands from Dest on, each
 	// converted to a string and joined, at Dest, which the new pipeline
 	// has Go make, called from native code (ssa.GoConcat) a call's
@@ -412,6 +415,9 @@ type Instruction struct {
 	// Extra is its arguments' count; When marks a method's call, whose
 	// receiver is below the function.
 	Tail bool
+	// Owned is, on a StringAdd, that its result is the binding's alone and
+	// may be grown in place (compiler's ownedAppend, the VM's strAppend).
+	Owned bool
 	// Private marks a PropertyRead or PropertyWrite of a private member,
 	// whose key -- a symbol each evaluation of its class mints -- is in
 	// the binding Third names: the read or write is native where the key

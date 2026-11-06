@@ -20,6 +20,11 @@ type argumentsScanner struct {
 	// seekName looks for one particular identifier, and descends into every
 	// function rather than stopping at the ones with bindings of their own.
 	seekName string
+	// nestedOnly narrows that to what is inside a function or a class: what
+	// another function could read or write. inClass is how deep in classes
+	// the walk is.
+	nestedOnly bool
+	inClass    int
 	// seekDirectEval looks for a call to `eval` written as that name, and
 	// stops at every function: what such a call declares belongs to the
 	// function it appears in, and a nested one has a variable scope of its own.
@@ -234,10 +239,7 @@ func (w *argumentsScanner) stmt(s ast.Stmt) {
 		// A nested function declaration has its own arguments object, but a
 		// name search still descends into it.
 		if w.seekName != "" {
-			for _, p := range n.Fn.Params {
-				w.expr(p)
-			}
-			w.stmts(n.Fn.Body)
+			w.expr(n.Fn)
 		}
 	case *ast.ClassDecl:
 		if w.seekClosure {
@@ -351,7 +353,7 @@ func (w *argumentsScanner) expr(e ast.Expr) {
 			return
 		}
 		if w.seekName != "" {
-			if n.Name == w.seekName || n.Name == "eval" {
+			if (n.Name == w.seekName || n.Name == "eval") && (!w.nestedOnly || w.inArrow > 0 || w.inClass > 0) {
 				w.found = true
 			}
 			return
@@ -516,7 +518,14 @@ func (w *argumentsScanner) class(cls *ast.ClassLit) {
 	if cls == nil {
 		return
 	}
+	w.inClass++
+	defer func() { w.inClass-- }()
 	w.expr(cls.Extends)
+	if w.seekName != "" {
+		for _, b := range cls.StaticBlocks {
+			w.stmts(b.Body)
+		}
+	}
 	for _, m := range cls.Members {
 		if m.Computed {
 			w.expr(m.Key)

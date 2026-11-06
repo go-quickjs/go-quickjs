@@ -16,6 +16,7 @@ func (c *compiler) compileFunctionLiteral(fn *ast.FuncLit, inferredName string) 
 	trace := c.traceName
 	c.traceName = ""
 	sub := newCompiler(c, c.opts)
+	sub.lit = fn
 	sub.fn.Strict = fn.Strict || c.fn.Strict
 	sub.fn.Async = fn.Async
 	sub.fn.Generator = fn.Generator

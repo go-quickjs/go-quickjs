@@ -29,7 +29,7 @@ const catchCalleeSetup = `
 		for (let i = 0; i < n; i++) {
 			s += parse(i % 3 ? '{"v":' + i + '}' : '{') + safe(i) + guarded(i) + fin(i, log) + nested(i)
 			try { s += rethrow(i) } catch (e) { errs++ }
-			if (i === 3 || i === n - 4) stacks += traced(i)
+			if (i === 3 || i === n - 4) stacks = stacks + traced(i)
 		}
 		return [s, errs, log.n, log.f, stacks].join()
 	}`

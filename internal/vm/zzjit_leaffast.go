@@ -137,6 +137,12 @@ func (r *Runtime) jitGoAppend(ctx *abi.Context) bool {
 // otherwise.
 func (r *Runtime) jitGoAdd(ctx *abi.Context) bool {
 	a, b := jitGoArg(ctx, 0), jitGoArg(ctx, 1)
+	// The compiler's mark says the string may grow; what the operands are,
+	// only here. A left side that is no string, or a right side a conversion
+	// would run code for, is the plain addition below, which is always right.
+	if ctx.GoOp&abi.GoOpOwned != 0 && a.IsString() && (b.IsString() || b.IsNumber()) {
+		return jitStrAppend[struct{}](r, ctx, a, b)
+	}
 	if r.meter == nil {
 		if v, ok := r.jitConcatAdd(a, b); ok {
 			*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
@@ -300,4 +306,31 @@ func (r *Runtime) jitLeafOf(ctx *abi.Context, op uint64, fn *Object) (Value, boo
 		return Undefined, false
 	}
 	return r.jitLeafApply(fd, this, unsafe.Slice((*Value)(unsafe.Pointer(&ctx.GoArgs[first])), argc))
+}
+
+// jitStrAppend is an addition the compiler marked, of a string and a string
+// or a number, its result to the call's keep cell. What would throw it leaves
+// for Go to make after an exit (false): a string past the longest or a
+// meter's refusal, neither of which grows a, so that the exit's addition
+// starts from what this one did, as a plain addition: the interpreter's and
+// native code's exits read no mark. It is strAppendOp's answer with one call
+// fewer between native code and strAppend: a read after each append makes
+// this a rope each time, for what jitConcatAdd costs.
+func jitStrAppend[_ any](r *Runtime, ctx *abi.Context, a, b Value) bool {
+	s := a.String()
+	var t *String
+	if b.IsString() {
+		t = b.String()
+	} else {
+		t = r.numberString(b.num)
+	}
+	if s.length+t.length > maxStringLength {
+		return false
+	}
+	v, err := strAppend[struct{}](r, s, t)
+	if err != nil {
+		return false
+	}
+	*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = Str(v)
+	return true
 }

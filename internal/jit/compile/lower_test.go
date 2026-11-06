@@ -836,3 +836,25 @@ func TestGoOperationLowering(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// An append native code is told owns its string is a string's addition from
+// the start, with no recompile to learn that it meets strings.
+func TestStringAppendLowering(t *testing.T) {
+	const src = `function f(g, h) { var out = ""; for (var i = 0; i < 3; i++) { out += h; if (g) i++ } return out }`
+	p, err := LowerSSA(compiledFunction(t, src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	adds := 0
+	for _, in := range p.Code {
+		if in.Op == ir.StringAdd {
+			adds++
+			if !in.Owned {
+				t.Error("the append is not owned")
+			}
+		}
+	}
+	if adds != 1 {
+		t.Errorf("%d string additions, want 1", adds)
+	}
+}

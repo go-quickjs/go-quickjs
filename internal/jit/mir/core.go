@@ -3254,6 +3254,9 @@ func goOpWord(site *ssa.CallSite) uint64 {
 		// What of its operands' BigInts it may give back.
 		op |= uint64(site.Release) << abi.GoOpKindShift
 	}
+	if site.Owned {
+		op |= abi.GoOpOwned
+	}
 	if site.Go == ssa.GoClosure || site.Go == ssa.GoClose || site.Go == ssa.GoCompare || site.Go == ssa.GoNewArray || site.Go == ssa.GoIndexOf || site.Go == ssa.GoArith ||
 		site.Go == ssa.GoBigString {
 		// The template's constant, the first local closed, the operator

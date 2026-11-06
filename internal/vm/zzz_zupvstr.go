@@ -70,7 +70,13 @@ func (a *upvalueAdd[_]) node(c *tctx) Value {
 		if jitBuilt {
 			treeStringAdd(c, u.opPC)
 		}
-		s, err := c.r.concat(old.String(), y.String())
+		var s *String
+		var err error
+		if u.setIn.B != 0 {
+			s, err = strAppend[struct{}](c.r, old.String(), y.String())
+		} else {
+			s, err = c.r.concat(old.String(), y.String())
+		}
 		if err != nil {
 			c.throw(err)
 		}

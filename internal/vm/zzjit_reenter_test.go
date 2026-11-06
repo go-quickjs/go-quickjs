@@ -89,7 +89,7 @@ func TestJITStringReadLearnedAtDeopt(t *testing.T) {
 			let token = '', n = 0
 			for (let i = 0; i < s.length; i++) {
 				const c = s[i]
-				if (c === ' ') { n += token.length; token = '' } else token += c
+				if (c === ' ') { n += token.length; token = '' } else token = token + c
 			}
 			return n + token.length
 		}
@@ -101,6 +101,36 @@ func TestJITStringReadLearnedAtDeopt(t *testing.T) {
 	// Read natively once learned; read by Go, paced by the code's profit,
 	// the loop had run mostly in the interpreter.
 	if st.Guards > 4 || st.Hosts > 8 {
+		t.Errorf("tokenizing 100,000 characters deoptimized %d times and left for Go %d", st.Guards, st.Hosts)
+	}
+}
+
+// An element read an append takes is read as it is from the first compile,
+// so it meets a string at a host exit, not a guard, and is compiled for one
+// on the budget of what code learns there (jitLearnedDue): a few hundred
+// exits, however long the string, about what a guard's failure and the compile
+// it asks for cost.
+func TestJITStringReadLearnedAtHostExit(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	got, st := jitLongRunForTest(t, `
+		function tokens(bytes) {
+			let s = ''
+			for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i])
+			let token = '', n = 0
+			for (let i = 0; i < s.length; i++) {
+				const c = s[i]
+				if (c === ' ') { n += token.length; token = '' } else token += c
+			}
+			return n + token.length
+		}
+		const bytes = []
+		for (let i = 0; i < 100000; i++) bytes.push(i % 7 ? 160 + i % 90 : 32)`, `0`, `tokens(bytes)`)
+	if got != "85714" {
+		t.Fatalf("= %s", got)
+	}
+	if st.Guards > 4 || st.Hosts > 1000 {
 		t.Errorf("tokenizing 100,000 characters deoptimized %d times and left for Go %d", st.Guards, st.Hosts)
 	}
 }

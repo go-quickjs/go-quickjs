@@ -15,6 +15,9 @@ type Instr struct {
 	B  uint32
 }
 
+// StrFreeze reports whether in is str_freeze (StrFreezeA).
+func (in Instr) StrFreeze() bool { return in.Op == OpArgumentsIndex && in.A == StrFreezeA }
+
 // ConstKind tags the entries of a function's constant pool.
 //
 // The pool deliberately holds only representations the compiler can produce
@@ -512,8 +515,11 @@ func (f *Function) disassembleTo(sb *strings.Builder, indent string) {
 // operation, its operands, and what an operand names -- a constant, a name, a
 // local or an upvalue -- after a semicolon.
 func (f *Function) FormatInstr(pc int) string {
-	var sb strings.Builder
 	in := f.Code[pc]
+	if in.StrFreeze() {
+		return "str_freeze"
+	}
+	var sb strings.Builder
 	fmt.Fprintf(&sb, "%-20s", in.Op)
 	switch in.Op {
 	case OpPushConst, OpClosure, OpNewRegExp:

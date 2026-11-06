@@ -92,7 +92,7 @@ func (p *Program) Validate() error {
 			third = in.Third.Slot >= 0
 		case ObjectLiteral, StringConst, BigIntConst, Closure:
 			write = true
-		case IterClose, Coercible:
+		case IterClose, Coercible, StringFreeze:
 			left = true
 		case ParamsDead:
 			if int(in.Key) > p.Locals {

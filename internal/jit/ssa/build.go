@@ -1711,6 +1711,9 @@ type CallSite struct {
 	// of its operands' blocks Go may give back once it has made its result
 	// (ReleaseLeft, bigRelease in bigint.go).
 	Release uint8
+	// Owned, for an addition (GoAdd), says its result may be grown in place
+	// (ir's Instruction.Owned).
+	Owned bool
 	// Big marks a BigInt's addition, subtraction, product, division or
 	// remainder Go makes (GoArith; GoAdd at a site that met BigInts), which
 	// the VM's leaf makes without Go's call where it can (abi.Encoding's
@@ -4499,7 +4502,7 @@ func (b *builder) goAdd(blk *Block, in ir.Instruction, operand func(ir.Operand) 
 	if b.f.Keeps < b.f.keepLimit() {
 		fb := b.bigFeedback()
 		big := fb != nil && b.cur == b.root && fb.BigInt(b.herePC)
-		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoAdd, ThisSlot: -1, Release: release, Big: big}}, b.f.Keeps
+		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoAdd, ThisSlot: -1, Release: release, Big: big, Owned: in.Owned}}, b.f.Keeps
 		b.f.Keeps++
 	}
 	cell := b.f.newValue(blk, OpCallCell, Source, call)
@@ -5554,7 +5557,7 @@ func (b *builder) plan() error {
 				entries[pc+1] = true
 			}
 		case ir.Nop, ir.Copy, ir.CopyPair, ir.StoreLoad, ir.Swap, ir.Insert2, ir.Insert3,
-			ir.Return, ir.ArrayKey:
+			ir.Return, ir.ArrayKey, ir.StringFreeze:
 		case ir.UpvalueRead:
 			// The function's own captured binding is read natively, its
 			// check deoptimizing; an inlined callee's leaves at its call.
@@ -7150,6 +7153,13 @@ func (b *builder) instruction(blk *Block, pc int) {
 			break
 		}
 		b.iterStep(blk, pc, in, operand, guard)
+	case ir.StringFreeze:
+		// A string only: what is known to be anything else has nothing to
+		// freeze. It is a store, so that removeDead keeps it, and exits to
+		// nothing, so that plan need make no entry after it.
+		if x := operand(in.Left); x.Type == Tagged {
+			b.f.newValue(blk, OpFreeze, None, x)
+		}
 	case ir.IterClose:
 		// A cursor closed as a destructuring or a loop ends: nothing to do
 		// for one done, or for an array walked in place while nothing up

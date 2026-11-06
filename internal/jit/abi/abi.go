@@ -1472,9 +1472,12 @@ func IsNumber(word uint64) bool { return word < NumberLimit }
 // closes, and a comparison's (ssa.GoCompare) or a BigInt operator's
 // (ssa.GoArith) its ir.Operator, in the high half.
 const (
-	GoOpArgcShift    = 8
-	GoOpKindShift    = 16
-	GoOpIndexShift   = 32
+	GoOpArgcShift  = 8
+	GoOpKindShift  = 16
+	GoOpIndexShift = 32
+	// GoOpOwned is the bit in an addition's word (ssa.GoAdd) that says its
+	// result may be grown in place (ssa.CallSite's Owned).
+	GoOpOwned        = 1 << GoOpIndexShift
 	GoCallMethod     = 1
 	GoCallNew        = 2
 	GoCallStep       = 3

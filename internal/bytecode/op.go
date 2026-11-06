@@ -596,6 +596,25 @@ const (
 )
 
 // opNames gives each opcode a readable name for disassembly and panics.
+// StrFreezeA is, as an OpArgumentsIndex's A, str_freeze: the instruction that
+// follows a read of a binding appends may grow in place (compiler's
+// ownedAppend and localAppend). What is read is no longer the binding's alone,
+// so if it is a string, appends stop growing it. It leaves the value where it
+// is, as an OpArgumentsIndex replaces the top of the stack.
+//
+// It is not an opcode of its own so that the interpreter's switch is as it
+// was (AGENTS.md: executeAt's code stays as it is): a new case moved what
+// follows it by 448 bytes, and a new label on an old case still reordered that
+// case's registers. OpArgumentsIndex's case calls a function out of line with
+// A, and no function has that many locals. Instr.StrFreeze says which it is.
+const StrFreezeA = ^uint32(0)
+
+// AddOwned is an OpAdd's B where the addition is to a string a local alone
+// holds, which may grow it in place (compiler's localAppend, the VM's
+// strAppend). The interpreter does not read it: a plain addition is always
+// right.
+const AddOwned uint32 = 1
+
 var opNames = [opCount]string{
 	OpNop: "nop", OpPushConst: "push_const", OpPushUndef: "push_undef",
 	OpPushNull: "push_null", OpPushTrue: "push_true", OpPushFalse: "push_false",

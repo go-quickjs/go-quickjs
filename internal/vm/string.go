@@ -53,13 +53,21 @@ type String struct {
 	// comparing them by bytes would say they differ. Both are always valid,
 	// rope or not, so the check costs nothing on the ordinary path.
 	endsHigh, startsLow bool
-	// building marks a string an append makes (GoAppend, jitAppend), which
-	// appends grow in place while nothing else can see it: native code's
-	// loop that builds it, until it freezes it (OpFreeze), or Go does, at
-	// any exit from native code (jitFreezeBuilders).
+	// building marks a string an append makes, which appends grow in place
+	// while nothing else can see it. There are two kinds, told apart by
+	// tailed and by jitBuilder's list. One is native code's loop's (GoAppend,
+	// jitAppend) until it freezes it (OpFreeze), or Go does, at any exit
+	// from native code (jitFreezeBuilders). The other is a binding's
+	// (strAppend) until a read of the binding freezes it (strFreeze).
 	building bool
 	// mark is the memory meter's, which it sets on a string it has counted.
 	mark uint16
+	// tailed says a string's right side is a strTail, which appends grow
+	// while it is building, and which stays when it is read; ropes is how
+	// many appends in a row have made a rope (strAppend). They fill the
+	// struct to the 48 bytes aux's comment is about.
+	tailed bool
+	ropes  uint8
 }
 
 // rightSide is a rope's right side.

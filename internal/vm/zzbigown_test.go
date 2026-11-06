@@ -41,10 +41,11 @@ func TestSoleLocals(t *testing.T) {
 		function tried(n) { var k = 1n; try { for (var i = 0; i < n; i++) k = k * 3n } catch (e) {} }
 		function* gen(n) { var k = 1n; for (var i = 0; i < n; i++) k = k * 3n; yield 1 }
 		function update(n) { var k = 1n, s = 0n; for (var i = 0; i < n; i++) s = s + k++ }
-		function pending(n) { var s = 1n, m = 7n; for (var i = 0; i < n; i++) s = s * (s = s * 3n % m, 5n) % m }`)
+		function pending(n) { var s = 1n, m = 7n; for (var i = 0; i < n; i++) s = s * (s = s * 3n % m, 5n) % m }
+		function appending(n) { var k = 1n, s = ""; for (var i = 0; i < n; i++) { k = k * 3n; s += k; g = s } }`)
 	want := map[string]string{
 		"alone": "sum a q r t c i", "copied": "i", "pushed": "i", "global": "i", "method": "i",
-		"jump": "i", "returned": "i", "captured": "", "args": "", "tried": "", "gen": "", "update": "", "pending": "m i",
+		"jump": "i", "returned": "i", "captured": "", "args": "", "tried": "", "gen": "", "update": "", "appending": "k i", "pending": "m i",
 	}
 	var walk func(fn *bytecode.Function)
 	seen := 0

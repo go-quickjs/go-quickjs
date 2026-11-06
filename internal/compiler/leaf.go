@@ -112,6 +112,10 @@ func pureBody(fn *bytecode.Function) bool {
 			if pc+1 < tail {
 				return false
 			}
+		case bytecode.OpArgumentsIndex:
+			if !in.StrFreeze() {
+				return false
+			}
 		case bytecode.OpGetLocal:
 			if !param(in.A) {
 				return false

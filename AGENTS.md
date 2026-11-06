@@ -57,7 +57,11 @@ concurrently.
   every closure, so a function added even in the last file moves every
   closure. Code the tree tier adds is therefore written in a `ztree_*.go`
   file as package variables, each assigned a closure in the file's `init`,
-  which is laid out after every closure there was.
+  which is laid out after every closure there was. An opcode `executeAt` must run is a case, which moves
+  all that follows, and even a label added to a case it has reorders that
+  case's registers: what the interpreter can do without is a mark on an
+  instruction it has (`bytecode.AddOwned`), and what it cannot, an operand
+  of one that calls out of line (`bytecode.StrFreezeA`).
 - The small functions the hot paths call are worth what the inliner makes
   of them: Go inlines a function of cost 80 or less, and a change that
   grows one past it -- or grows what it inlines -- turns a few instructions

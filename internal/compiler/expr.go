@@ -56,7 +56,50 @@ func (c *compiler) compileExprForEffect(e ast.Expr) {
 			}
 		}
 
+	case *ast.Sequence:
+		// The last of them too, where nothing wants the whole's value:
+		// a += x, b += y makes each an append.
+		for _, x := range n.Exprs {
+			c.compileExprForEffect(x)
+		}
+		return
+
+	case *ast.Logical:
+		// A short circuit around an append whose value nothing uses: the
+		// append stores, and leaves nothing for a drop.
+		if n.Op != "??" && c.ownedAppend(n.Right) {
+			c.compileExpr(n.Left)
+			op := bytecode.OpJumpIfFalse
+			if n.Op == "||" {
+				op = bytecode.OpJumpIfTrue
+			}
+			skip := c.emitJump(op)
+			c.compileOwnedAppend(n.Right.(*ast.Assign))
+			c.patchJump(skip)
+			return
+		}
+		if n.Op != "??" && c.localAppend(n.Right) {
+			c.compileExpr(n.Left)
+			op := bytecode.OpJumpIfFalse
+			if n.Op == "||" {
+				op = bytecode.OpJumpIfTrue
+			}
+			skip := c.emitJump(op)
+			c.compileLocalAppend(n.Right.(*ast.Assign))
+			c.patchJump(skip)
+			return
+		}
+
 	case *ast.Assign:
+		c.noteString(n)
+		if c.ownedAppend(n) {
+			c.compileOwnedAppend(n)
+			return
+		}
+		if c.localAppend(n) {
+			c.compileLocalAppend(n)
+			return
+		}
 		// A store to a property carries its value out the same way, by copying
 		// it below what the store consumes.
 		if m, ok := n.Target.(*ast.Member); ok {
@@ -436,6 +479,7 @@ func (c *compiler) compileIdentReadStatic(n *ast.Ident) {
 		} else {
 			c.emit(bytecode.OpGetLocalCheck, l.slot, 0)
 		}
+		c.compiledRead(l)
 		return
 	}
 	if idx, ok := c.resolveUpvalue(n.Name); ok {
@@ -443,6 +487,9 @@ func (c *compiler) compileIdentReadStatic(n *ast.Ident) {
 			c.emit(bytecode.OpGetUpvalueCheck, idx, 0)
 		} else {
 			c.emit(bytecode.OpGetUpvalue, idx, 0)
+		}
+		if l, _ := c.enclosingBinding(n.Name); l != nil {
+			c.compiledRead(l)
 		}
 		return
 	}
@@ -1456,7 +1503,10 @@ func (c *compiler) compileMemberRead(n *ast.Member) {
 			return
 		}
 	}
+	_, named := n.Object.(*ast.Ident)
+	c.lengthRead = named && !n.Computed && propKeyName(n.Property) == "length"
 	c.compileExpr(n.Object)
+	c.lengthRead = false
 	// A failed read is reported where the property is named, as V8 reports
 	// it: `a.b.c` on a line of its own says which link broke.
 	if n.Computed {

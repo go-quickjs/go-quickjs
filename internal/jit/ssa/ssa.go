@@ -198,10 +198,11 @@ const (
 	// a forEach made a loop of natively is under way from here, its slots
 	// those the bits say; 0 once it is done.
 	OpLoopMark // -> none
-	// OpFreeze ends a string builder's appends (GoAppend) to its operand,
-	// any value: a string whose building flag is set has it cleared, so
-	// that nothing appends to it in place after this, where a loop's
-	// builder is used outside the loop (stringBuilders). It writes no cell.
+	// OpFreeze ends appends to its operand, any value: a string whose
+	// building flag is set has it cleared, so that nothing appends to it in
+	// place after this, where a loop's builder is used outside the loop
+	// (stringBuilders) or a binding appends grow has been read (ir's
+	// StringFreeze, the VM's strFreeze). It writes no cell.
 	OpFreeze // tagged -> none
 	// OpOddballF64 is OpUnboxF64 that converts undefined, null and the
 	// booleans too, as ToNumber does -- NaN, 0, 0 and 1 -- and exits for

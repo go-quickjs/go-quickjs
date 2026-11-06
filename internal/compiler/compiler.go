@@ -136,6 +136,16 @@ type localVar struct {
 	withDepth int
 	// captured marks a local that an inner function closes over.
 	captured bool
+	// read says a read of the binding has been compiled, and appended that
+	// an addition to it may grow what it holds in place, so that every read
+	// compiled from then on is followed by a str_freeze (ownedAppend,
+	// localAppend). copied says each iteration of a loop has a copy of the
+	// binding, which holds the same string.
+	read, appended, copied bool
+	// stringy says the binding has been given a string by what the source
+	// shows (stringly): what a local must have been to be appended to in
+	// place, which spares a sum its str_freezes.
+	stringy bool
 	// paramScoped marks a binding that belongs to the parameter scope rather
 	// than to the body. A function with parameter expressions has two, and its
 	// body may declare a name the parameter scope already binds: the arguments
@@ -262,6 +272,16 @@ type compiler struct {
 	fn     *bytecode.Function
 	parent *compiler
 	opts   Options
+	// lit is the function being compiled, where it has one, and
+	// mentionsEval whether it or anything in it mentions eval, once asked:
+	// 0 not yet, 1 no, 2 yes.
+	lit          *ast.FuncLit
+	mentionsEval uint8
+	// lengthRead says the name being compiled is x of x.length (compiledRead).
+	lengthRead bool
+	// mentioned is, of the names asked about, whether a function or a
+	// class inside this one mentions them.
+	mentioned map[string]bool
 
 	// traceName is the name V8's inferrer would hand the next function or
 	// class literal compiled (tracename.go), and traceIn the one the

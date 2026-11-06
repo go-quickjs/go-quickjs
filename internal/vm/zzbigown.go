@@ -186,6 +186,12 @@ func soleLocals(fn *bytecode.Function) uint64 {
 		case bytecode.OpReturn:
 			escape(pop())
 			settle()
+		case bytecode.OpArgumentsIndex:
+			// str_freeze, after a read of a string's binding, leaves the
+			// value where it is; a function with arguments is out above.
+			if !in.StrFreeze() {
+				return 0
+			}
 		default:
 			return 0
 		}

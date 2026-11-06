@@ -3676,7 +3676,12 @@ func (r *Runtime) setIndexed(obj, key, val Value, strict bool) error {
 // the arguments as they were passed, so an index of them is read from them --
 // unless the object would be mapped and the index name a parameter, whose
 // value the object would give. Anything else makes the object and reads it.
+// A slot of bytecode.StrFreezeA is str_freeze: key is what was read.
 func (r *Runtime) argumentsIndex(f *frame, slot uint32, key Value) (Value, error) {
+	if slot == bytecode.StrFreezeA {
+		strFreeze[struct{}](key)
+		return key, nil
+	}
 	if !f.locals[slot].IsObject() {
 		if i := uint32(key.num); key.IsNumber() && float64(i) == key.num && uint(i) < uint(len(f.args)) &&
 			!(f.cl.fn.MappedArguments && uint(i) < uint(f.cl.fn.ParamCount)) {
@@ -4159,6 +4164,10 @@ func (r *Runtime) add(a, b Value) (Value, error) {
 			return Undefined, err
 		}
 		return Str(s), nil
+	}
+	// What converts an object b may append to the binding a was read from.
+	if b.IsObject() {
+		strFreeze[struct{}](a)
 	}
 	pa, err := r.toPrimitive(a, hintDefault)
 	if err != nil {

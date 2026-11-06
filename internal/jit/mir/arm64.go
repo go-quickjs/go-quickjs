@@ -7899,6 +7899,8 @@ func (c *a64Compiler) freeze(v *ssa.Value) {
 	c.a.BCond(arm64.NE, done)
 	c.pointerWord(x, w)
 	c.a.Cbz(a64B, done, true)
+	c.a.LoadU8(a64C, a64B, c.enc.StringBuilding)
+	c.a.Cbz(a64C, done, true)
 	c.movImm(a64C, 0)
 	c.a.Store8(a64B, c.enc.StringBuilding, a64C)
 	c.a.Bind(done)

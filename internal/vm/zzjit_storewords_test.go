@@ -58,7 +58,7 @@ func TestJITStoreWords(t *testing.T) {
 				t.Fatal(err)
 			}
 			if got := v.String().Go(); got != want {
-				t.Errorf("%s", got)
+				t.Errorf("%s", firstDifference(got, want))
 			}
 			if r.JITStats().SSAEntries == 0 {
 				t.Errorf("no native entry")

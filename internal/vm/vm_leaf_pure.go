@@ -91,6 +91,7 @@ const (
 	pcSetUpvalue
 	pcReturn
 	pcReturnUndef
+	pcStrFreeze
 )
 
 // pureCases gives each instruction pureCallAt evaluates its case, and every
@@ -160,6 +161,7 @@ var pureCases = func() (t [256]uint8) {
 	t[bytecode.OpSetUpvalue] = pcSetUpvalue
 	t[bytecode.OpReturn] = pcReturn
 	t[bytecode.OpReturnUndef] = pcReturnUndef
+	t[bytecode.OpArgumentsIndex] = pcStrFreeze // the only one a pure body has
 	return
 }()
 
@@ -487,6 +489,12 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 			return stack[sp-1], true
 		case pcReturnUndef:
 			return Undefined, true
+		case pcStrFreeze:
+			if v := stack[sp-1]; v.IsString() {
+				if s := v.String(); s.building {
+					s.building = false
+				}
+			}
 		default:
 			return miss()
 		}
