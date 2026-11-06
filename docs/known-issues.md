@@ -792,6 +792,22 @@ Paths are relative to this repository; `go-intl:` paths are in
   in the check of its intervals. Found by `TestJITStrAppendRandom`.
   - Test: `TestJITBoxOperandAtGoCall`.
 
+### KI-72 A template's part that was an addition stayed a number
+- **Where:** `internal/jit/compile/lower.go`, `stringConcats`. A template's
+  part is converted to a string (a concat of one), which is dropped for what
+  is one already. Every `ir.StringAdd` was taken for that, but an addition
+  that has met a string once becomes one by that alone (`hintedStringAdds`),
+  and may be given two numbers afterwards.
+- **Effect:** with the JIT, a template's value was the number itself:
+  `` function f(a, b) { return `${a + b}` } `` called with strings until it
+  was compiled, and then `f(1, 2)` gave the number 3, whose `typeof` was
+  `number` and whose `.length` was `undefined`.
+- **Status:** fixed. A conversion is dropped only for what cannot be anything
+  but a string, an addition with such a string on a side; what is only taken
+  for one still decides who makes an addition, where being wrong costs nothing.
+  Found by `TestJITStrAppendRandomMarking`.
+  - Test: `TestJITTemplateOfAnAddition`.
+
 ## P3: small divergences
 
 ### KI-56 Intl details

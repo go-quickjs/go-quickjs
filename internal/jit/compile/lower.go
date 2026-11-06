@@ -1222,7 +1222,12 @@ func concatReads(p *ir.Program, targets []bool, pc, d int) bool {
 // followed forward through straight code: a jump's target, a host
 // operation's results and anything else written forget it.
 func stringConcats(p *ir.Program, reads []int32) {
+	// str is what is taken for a string, which decides who makes an addition
+	// and is right if it is wrong; sure what cannot be anything else, which
+	// is what a conversion may be dropped for: an addition that has met a
+	// string once (hintedStringAdds) may be given two numbers now.
 	str := make([]bool, p.Locals+p.StackSize)
+	sure := make([]bool, p.Locals+p.StackSize)
 	targets := make([]bool, len(p.Code)+1)
 	for _, in := range p.Code {
 		if in.Op == ir.Jump || in.Op == ir.Branch {
@@ -1230,14 +1235,25 @@ func stringConcats(p *ir.Program, reads []int32) {
 		}
 	}
 	slot := func(o ir.Operand) bool { return o.Slot >= 0 && o.Slot < len(str) && str[o.Slot] }
+	proven := func(o ir.Operand) bool { return o.Slot >= 0 && o.Slot < len(sure) && sure[o.Slot] }
 	set := func(i int, v bool) {
 		if i >= 0 && i < len(str) {
-			str[i] = v
+			str[i], sure[i] = v, v
+		}
+	}
+	// madeBy is set for the result at i of an addition of l and r.
+	madeBy := func(i int, l, r ir.Operand) {
+		// Before the write: i is the left operand's slot, as often as not.
+		known := proven(l) || proven(r)
+		set(i, true)
+		if i >= 0 && i < len(sure) {
+			sure[i] = known
 		}
 	}
 	for pc, in := range p.Code {
 		if targets[pc] {
 			clear(str)
+			clear(sure)
 		}
 		if p.Maps[pc].Depth < 0 {
 			continue
@@ -1246,23 +1262,27 @@ func stringConcats(p *ir.Program, reads []int32) {
 		case ir.StringConst:
 			set(in.Dest, true)
 		case ir.Copy:
-			set(in.Dest, slot(in.Left))
+			taken, known := slot(in.Left), proven(in.Left)
+			set(in.Dest, taken)
+			if in.Dest >= 0 && in.Dest < len(sure) {
+				sure[in.Dest] = known
+			}
 		case ir.Binary:
 			if in.Operator == ir.Add && (slot(in.Left) || slot(in.Right)) {
 				p.Code[pc] = ir.Instruction{Op: ir.StringAdd, Left: in.Left, Right: in.Right, Dest: in.Dest}
-				set(in.Dest, true)
+				madeBy(in.Dest, in.Left, in.Right)
 				continue
 			}
 			set(in.Dest, false)
 		case ir.StringConcat:
-			if in.Extra == 1 && slot(ir.Slot(in.Dest)) {
+			if in.Extra == 1 && proven(ir.Slot(in.Dest)) {
 				// A string's conversion, which leaves it as it is.
 				p.Code[pc] = ir.Instruction{Op: ir.Nop}
 				continue
 			}
 			set(in.Dest, true)
 		case ir.StringAdd:
-			set(in.Dest, true)
+			madeBy(in.Dest, in.Left, in.Right)
 		case ir.ParamInit, ir.ParamDefault:
 			set(in.Dest, false)
 		case ir.ParamsDead:
@@ -1275,8 +1295,10 @@ func stringConcats(p *ir.Program, reads []int32) {
 			// Its results, past what it leaves below them.
 			if pc+1 < len(p.Maps) && p.Maps[pc+1].Depth > 0 {
 				clear(str[min(len(str), p.Locals+p.Maps[pc+1].Depth-1):])
+				clear(sure[min(len(sure), p.Locals+p.Maps[pc+1].Depth-1):])
 			} else {
 				clear(str[p.Locals:])
+				clear(sure[p.Locals:])
 			}
 		case ir.Swap, ir.CopyPair, ir.StoreLoad, ir.Insert2, ir.Insert3, ir.Update, ir.ArrayUpdate:
 			set(in.Dest, false)
