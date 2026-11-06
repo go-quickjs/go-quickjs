@@ -1036,6 +1036,12 @@ func (f *flow) loopShape(body []fseg, head int) (tests []wtest, k *fseg, ok bool
 				w.on, w.exits = head, s.arms
 			}
 		}
+		// A test that goes back to head by itself where it goes on by
+		// another way, as a continue before a later test does: the loop
+		// would take that for leaving, and what runs it for its exit.
+		if w.on != head && has(s.raw, head) {
+			return nil, nil, false
+		}
 		// What leaves through an arm must leave the loop.
 		for _, e := range w.exits {
 			if has(e.res, w.on) || has(e.res, head) {

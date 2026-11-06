@@ -746,6 +746,38 @@ Paths are relative to this repository; `go-intl:` paths are in
     `TestJITApplyFrameArguments` for `.apply`, which takes another path and
     never had the bug.
 
+### KI-70 A nested loop stopped at a continue before a later test
+- **Where:** `internal/vm/ztree_flow.go`, `flow.loopShape`. A loop whose body
+  is tests runs as one Go loop, each test going on or leaving the loop. A
+  test that went back to the loop's head by itself, where it went on to a
+  later test by another way, was taken for a way out. `if (a) continue;
+  if (b) break;` is that shape in a `while`, a `for...in` and a `for...of`,
+  where `continue` goes to the head; a `for` loop's goes to its update.
+- **Effect:** in the tree tier, with no error of its own, a loop nested in
+  another stopped at its first `continue`, and the code after it ran as if it
+  had finished: the outer loop has one thing to go on to from it, and asks for
+  no result. A loop alone in its function went on from `runTree`, and where the
+  whole function was one structure, whose blocks are dropped, it gave back
+  `undefined` or a number left on the stack, or panicked with an internal
+  error. This gave `e,e`, where Node gives `2,3,e,2,3,e`:
+
+  ```js
+  function f(o) {
+    const log = []
+    for (let i = 0; i < 2; i++) {
+      for (const y of o) { if (y === 1) continue; if (y === 9) break; log.push(y) }
+      log.push('e')
+    }
+    return log.join()
+  }
+  f([1, 2, 3])
+  ```
+
+  Native code was right, so a program's answer could change as it warmed.
+- **Status:** fixed. `loopShape` leaves such a body to the blocks, which go
+  from one to the next as ever. Found by `TestStrAppendRandom`.
+  - Test: `TestLoopContinueBeforeALaterTest`.
+
 ## P3: small divergences
 
 ### KI-56 Intl details
