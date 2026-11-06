@@ -4881,6 +4881,16 @@ func (r *Runtime) jitPropertySeen(f *frame, e *jitEntry, pc, sp int) {
 		// filled for the receiver's shape, which the next such read
 		// finds natively, as V8's miss handler fills its stub cache.
 		r.jitPolySeen(f, e, pc, sp, in)
+	case in.Op == bytecode.OpGetProp:
+		// Native code did not find it, whatever the interpreter's cache
+		// holds: where that holds the shapes the code's cases do not, the
+		// read hits it, nothing fills, the site never gives up, and each
+		// of those shapes is a call of Go at every read. A loop over
+		// objects of a dozen shapes made 20,000 such calls a cycle, for
+		// as long as it ran.
+		if recv := r.stack[sp-1]; recv.IsObject() && int(in.A) < len(f.cl.names) {
+			r.jit.megaFill(recv.Object(), f.cl.names[in.A])
+		}
 	}
 }
 
