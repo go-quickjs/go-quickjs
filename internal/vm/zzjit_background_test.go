@@ -4,6 +4,7 @@ package vm
 
 import (
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"strings"
 	"testing"
 	"time"
 
@@ -451,4 +452,49 @@ func jitBackgroundRuntime(t *testing.T) *Runtime {
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	r.SetJITBackground(true)
 	return r
+}
+
+// A call decided while its target is compiled in the background waits for
+// its code: where no link may take the call till then, an arrow's that reads
+// this, the answer "not now" had left it Go's for good, Go entering the
+// target at each call, however soon it was compiled -- AWFY's Richards at
+// five times its time -- and so too where the compile had not begun, the
+// runtime having as many in the background as it may (jitCalleeAwaited).
+func TestJITBackgroundCallWaitsForItsTarget(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	jitNoInline = func(fn *bytecode.Function) bool { return fn.Name != "drive" }
+	t.Cleanup(func() { jitNoInline = nil })
+	var setup strings.Builder
+	setup.WriteString(`
+		class Task {
+			constructor(k) {
+				this.n = k
+				this.f = k === 0 ? (x) => this.n + x : k === 1 ? (x) => this.n - x : k === 2 ? (x) => this.n * x :
+					k === 3 ? (x) => this.n | x : k === 4 ? (x) => this.n & x : k === 5 ? (x) => this.n ^ x : (x) => this.n % (x + 1)
+			}
+			run(x) { return this.f(x) }
+		}
+		const tasks = [0, 1, 2, 3, 4, 5, 6].map((k) => new Task(k))
+		function drive(n) {
+			let s = 0
+			for (let i = 0; i < n; i++) s = (s + tasks[i % 7].run(i)) | 0
+			return s
+		}
+	`)
+	r := jitAgreesForTestWith(t, jitStressConfig{background: true, checks: 40}, setup.String(), `drive(20000)`, `drive(200000)`)
+	e := jitCallbackEntry(r, "run")
+	if e == nil || e.ssa == nil {
+		t.Fatalf("run was not compiled: %+v", e)
+	}
+	targets := 0
+	for _, x := range e.nativeCalls {
+		if x.cl != nil {
+			targets++
+		}
+	}
+	if targets == 0 {
+		t.Fatalf("no call of a task's arrow is native: sites %v", e.callSites)
+	}
 }

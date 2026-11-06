@@ -3860,7 +3860,7 @@ func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 		// it is the one called and warms. Decided at every call, Go's call
 		// of such a callee for native code had cost five times the tree
 		// tier's of it, a third of it the inlining check of the callee.
-		if _, cl := r.jitCalled(f, sp, in); cl != nil && len(cl.fn.Code) > ssa.MaxInline && r.jitLongWarming(cl) && !r.jitCalledOftenBy(cl, e) {
+		if _, cl := r.jitCalled(f, sp, in); cl != nil && (r.jitCalleeAwaited(cl) || len(cl.fn.Code) > ssa.MaxInline && r.jitLongWarming(cl) && !r.jitCalledOftenBy(cl, e)) {
 			return
 		}
 		e.callSites[pc] = jitCallsToInline - 1
@@ -4084,6 +4084,14 @@ func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 		e.nativeCalls = append(e.nativeCalls, r.jitNativeTarget(int32(pc), cl, o, in))
 		e.callSites[pc] = jitCallNative
 		e.inlinePending = true
+	} else if r.jitCalleeAwaited(cl) {
+		// No link it may be called through till it has code, an arrow's
+		// that reads this: decided once it has. Left here, the call was
+		// Go's for good, its target compiled and never called natively, no
+		// later call asking: AWFY's Richards, whose tasks are such arrows,
+		// at 5 times its time.
+		e.callSites[pc] = jitCallWaiting
+		return
 	}
 	for _, x := range met {
 		if e.callSites[pc] != jitCallNative || jitCountAt(e.nativeCalls, pc) >= jitCallTargets {
@@ -7308,6 +7316,21 @@ func (r *Runtime) jitCallTarget(f *frame, e *jitEntry, pc, sp int, in bytecode.I
 		e.inlineReopt = true
 		r.jitSeenTargets(f, e, pc, o, in)
 	}
+}
+
+// jitCalleeAwaited reports whether cl's function has no code for native
+// callers only for now: it is being compiled in the background, or would be
+// but for the compiles there already (jitNativeCallee), which is no answer
+// to whether a call may be native.
+func (r *Runtime) jitCalleeAwaited(cl *closure) bool {
+	s := r.jit
+	if s.jitPending(cl.fn) {
+		return true
+	}
+	if ce := s.entryFor(cl.fn); ce != nil && (ce.ssa != nil || ce.calleeRefused) {
+		return false
+	}
+	return r.jitInBackground(cl.fn) && s.jobsFull()
 }
 
 // jitNativeOrLinked compiles cl's function for native callers, or reports
