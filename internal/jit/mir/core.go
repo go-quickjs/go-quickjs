@@ -1167,6 +1167,14 @@ func (c *core) allocate() error {
 			}
 			for _, a := range v.Args {
 				use(a, p)
+				if a.Op == ssa.OpBoxF64 || a.Op == ssa.OpBoxBool {
+					// An operation may make a box again of its operand
+					// (remat) rather than read its word. A frame state naming
+					// the box keeps the operand too, but a captured local's
+					// value is in no state, and its register had gone to
+					// another's: a Go call's argument was what that held.
+					use(a.Args[0], p)
+				}
 				if r := &rec[a.ID]; r.slot&slotShadow != 0 || r.def == 0 && a.Shadow != nil {
 					// It may read where its operand came from: a keep
 					// (mir's keep), or an operation that finds an object's

@@ -175,6 +175,9 @@ func (c *core) refIntervals() []interval {
 			}
 			for _, a := range v.Args {
 				uses = append(uses, use{a, p})
+				if a.Op == ssa.OpBoxF64 || a.Op == ssa.OpBoxBool {
+					uses = append(uses, use{a.Args[0], p})
+				}
 				if a.Shadow != nil {
 					uses = append(uses, use{a.Shadow, p})
 				}

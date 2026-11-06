@@ -778,6 +778,20 @@ Paths are relative to this repository; `go-intl:` paths are in
   from one to the next as ever. Found by `TestStrAppendRandom`.
   - Test: `TestLoopContinueBeforeALaterTest`.
 
+### KI-71 A Go call in native code was given what had taken a box's register
+- **Where:** `internal/jit/mir/core.go`, `allocate`. A box's word need not be
+  kept: about fifteen places in each backend make it again of what it boxes
+  (`remat`). What keeps that operand alive to them is a frame state naming the
+  box, and a captured local's value is in no state, its slot being its cell.
+- **Effect:** with the JIT, a number just stored in a captured binding reached
+  a call of Go as whatever had taken the operand's register: `'' + s` gave
+  `"0"` and `"1"`, a loop counter's low bit, for `NaN`, with no error of its
+  own. A meter sends that call to an exit, which reads the cell, so
+  `jitDifferential`, whose runtimes have one, could not see it.
+- **Status:** fixed. A use of a box is a use of its operand, in `allocate` and
+  in the check of its intervals. Found by `TestJITStrAppendRandom`.
+  - Test: `TestJITBoxOperandAtGoCall`.
+
 ## P3: small divergences
 
 ### KI-56 Intl details
