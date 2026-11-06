@@ -840,6 +840,25 @@ Paths are relative to this repository; `go-intl:` paths are in
   - Test: `TestJITLevelResumesWithItsSlots`,
     `TestJITLevelKeepsWhatItsCalleeAssigned`.
 
+### KI-74 A compile in the background taken for a refusal
+- **Where:** `internal/vm/zzjit_ssa.go`, `jitCallSeen`, and `zzjit_native.go`,
+  `tryJITAt`. Each asks a compile for code, which on the spot it has on return.
+  In the background the same call returns nothing yet, which both took for
+  no. A call whose target was an arrow reading `this`, which no empty link may
+  take, was left to Go for good, and so was any such call while the runtime
+  had `jitJobsMax` compiles in the background. A function compiled once hot
+  had its closure refused, and no call entered the code it got.
+- **Effect:** under `WithJITBackground`, which `qjs --jit` uses, right answers
+  taking longer, by how the compiles fell. AWFY's Richards made 39 million
+  calls of Go, at five times its time, in some runs and not others; Towers'
+  recursion stayed in the tree tier, a first run of 700 ms for 100. AWFY as a
+  whole took 8.4 s for 5.0 s in the foreground.
+- **Status:** fixed. The call waits and is decided once its target has code
+  (`jitCalleeAwaited`), and a closure is refused only for a refusal. AWFY in
+  the background takes 5.2 s.
+  - Test: `TestJITBackgroundCallWaitsForItsTarget`,
+    `TestJITBackgroundHotCodeIsEntered`.
+
 ## P3: small divergences
 
 ### KI-56 Intl details

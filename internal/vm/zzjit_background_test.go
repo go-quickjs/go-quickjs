@@ -498,3 +498,35 @@ func TestJITBackgroundCallWaitsForItsTarget(t *testing.T) {
 		t.Fatalf("no call of a task's arrow is native: sites %v", e.callSites)
 	}
 }
+
+// A function with no loop, compiled once hot, in the background: its calls
+// enter the code once it is installed. Refused for the compile's being under
+// way, Go never asked again, and the recursion stayed in the tree tier.
+func TestJITBackgroundHotCodeIsEntered(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		var moves = 0
+		function move(a, b) { moves += a < b ? 1 : 2 }
+		function hanoi(n, a, b) {
+			if (n === 1) { move(a, b); return }
+			const c = 3 - a - b
+			hanoi(n - 1, a, c)
+			move(a, b)
+			hanoi(n - 1, c, b)
+		}
+	`
+	rounds := []string{}
+	for range 8 {
+		rounds = append(rounds, `hanoi(12, 0, 1), moves`)
+	}
+	r := jitAgreesForTestWith(t, jitStressConfig{background: true, checks: 3}, setup, rounds...)
+	e := jitCallbackEntry(r, "hanoi")
+	if e == nil || e.ssa == nil {
+		t.Fatalf("hanoi has no code: %+v", e)
+	}
+	if e.starts == 0 {
+		t.Fatalf("no call of hanoi entered its code: %+v", e)
+	}
+}

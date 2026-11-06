@@ -2960,8 +2960,11 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, err
 		if ne := r.jitHotEntry(f, e); ne != nil {
 			return r.runSSA(f, ne, pc, depth)
 		}
-		if e.hostOnly {
-			// Not hot yet.
+		if e.hostOnly || r.jit.jitPending(f.cl.fn) {
+			// Not hot yet; or its compile for it is in the background, and
+			// refused now, no call would enter the code it makes: AWFY's
+			// Towers' recursion stayed in the tree tier until a native
+			// caller called it, a first run of 700 ms for 100.
 			return Undefined, nil, false
 		}
 	}
