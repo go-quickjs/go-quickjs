@@ -81,3 +81,33 @@ func TestGrouped(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderJITBackground(t *testing.T) {
+	dir := t.TempDir()
+	for name, output := range map[string]string{
+		"gq-score-0.txt":      "Richards: 100\nScore (version 7): 200\n",
+		"gqjit-score-0.txt":   "Richards: 300\nScore (version 7): 400\n",
+		"gqjitbg-score-0.txt": "Richards: 500\nScore (version 7): 600\n",
+		"gqjitbg-v8-0.txt":    "Richards  20.0 ms\nTOTAL  20.0 ms\n",
+		"qjs-v8-0.txt":        "Richards  40.0 ms\nTOTAL  40.0 ms\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(output), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := render(dir, 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"| Benchmark | go-quickjs | go-quickjs JIT | go-quickjs JIT background |",
+		"| Richards | 100 | 300 | 500 |",
+		"| **Composite** | 200 | 400 | 600 |",
+		"| Benchmark | go-quickjs JIT background | QuickJS | go-quickjs JIT background / QuickJS |",
+		"| Richards | 20.0 | 40.0 | 0.50x |",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("no %q in\n%s", want, out)
+		}
+	}
+}

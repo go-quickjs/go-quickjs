@@ -76,7 +76,7 @@ func main() {
 }
 
 func run() error {
-	engines := flag.String("engines", "gq,gqjit,qjs,node-jitless,node,goja", "the engines, of gq, gqjit, qjs, node-jitless, node and goja")
+	engines := flag.String("engines", "gq,gqjit,qjs,node-jitless,node,goja", "the engines, of gq, gqjit, gqjitbg (JIT with background compilation), qjs, node-jitless, node and goja")
 	suites := flag.String("suites", strings.Join(allSuites, ","), "the suites: v8, octane, awfy, ssr, micro, score")
 	gojaSuites := flag.String("goja-suites", "v8,score", "the suites goja runs")
 	runs := flag.Int("runs", 3, "fresh-process runs of each suite on each engine")
@@ -134,6 +134,7 @@ func run() error {
 	known := map[string]engine{
 		"gq":           {name: "gq", title: "go-quickjs", runner: exe("gq"), suites: allSuites},
 		"gqjit":        {name: "gqjit", title: "go-quickjs JIT", runner: exe("gqjit"), args: []string{"-jit"}, suites: allSuites},
+		"gqjitbg":      {name: "gqjitbg", title: "go-quickjs JIT background", runner: exe("gqjit"), args: []string{"-jit", "-jitbackground"}, suites: allSuites},
 		"qjs":          {name: "qjs", title: "QuickJS", runner: exe("external"), args: []string{"-engine", "qjs", "-cmd", *qjs}, suites: allSuites},
 		"node-jitless": {name: "node-jitless", title: "Node --jitless", runner: exe("external"), args: []string{"-engine", "node", "-cmd", *node, "-arg", "--jitless"}, suites: allSuites},
 		"node":         {name: "node", title: "Node", runner: exe("external"), args: []string{"-engine", "node", "-cmd", *node}, suites: allSuites},
@@ -506,9 +507,9 @@ func render(dir string, microRows int) (string, error) {
 	if len(res) == 0 {
 		return "", fmt.Errorf("%s: no runs' outputs", dir)
 	}
-	titles := map[string]string{"gq": "go-quickjs", "gqjit": "go-quickjs JIT", "qjs": "QuickJS",
+	titles := map[string]string{"gq": "go-quickjs", "gqjit": "go-quickjs JIT", "gqjitbg": "go-quickjs JIT background", "qjs": "QuickJS",
 		"node-jitless": "Node --jitless", "node": "Node", "goja": "goja"}
-	engineOrder := []string{"gq", "gqjit", "qjs", "node-jitless", "node", "goja"}
+	engineOrder := []string{"gq", "gqjit", "gqjitbg", "qjs", "node-jitless", "node", "goja"}
 	sort.SliceStable(enginesSeen, func(i, j int) bool {
 		return slices.Index(engineOrder, enginesSeen[i]) < slices.Index(engineOrder, enginesSeen[j])
 	})
@@ -553,7 +554,7 @@ func render(dir string, microRows int) (string, error) {
 		vsQJS := res[s]["qjs"] != nil
 		var ratios []string
 		if vsQJS {
-			for _, e := range []string{"gq", "gqjit"} {
+			for _, e := range []string{"gq", "gqjit", "gqjitbg"} {
 				if res[s][e] != nil {
 					ratios = append(ratios, e)
 					fmt.Fprintf(&b, " %s / QuickJS |", titles[e])
