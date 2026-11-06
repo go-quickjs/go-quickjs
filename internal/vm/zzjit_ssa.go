@@ -2396,6 +2396,12 @@ type jitJob struct {
 	err      error
 	panicked bool
 	allocErr *mir.AllocationError
+	// held marks a compile held for its callees' (jitHold), which is no
+	// job's yet and will be another's: holdRound is how many times it has
+	// been, and nativeCallee marks a compile for native callers
+	// (jitNativeCallee).
+	held, nativeCallee bool
+	holdRound          int
 	// What a compile in the background (jitSubmit) needs besides: its
 	// state, which the worker and the runtime's goroutine hand it over by,
 	// and done, closed once the worker is finished with it; how many
@@ -6618,6 +6624,10 @@ func (r *Runtime) jitSeedCalls(cl *closure, e *jitEntry, p *ir.Program) {
 			// (jitSeedCallee). How often it was called is not known: the
 			// tree tier may run a call without one (closure.jitCalls).
 			if ce = r.jitSeedCallee(callee); ce == nil {
+				if r.jitAwaits(e, fn, pc, callee) {
+					// Decided once it has its code (jitHold).
+					continue
+				}
 				if r.jitLinkable(callee) && (len(cf.Code) <= ssa.MaxInline || !r.jitLongWarming(callee) || jitGoCallFits(in)) {
 					// Called through its link, which has no code yet: the
 					// call is Go's from native code till the callee is
@@ -9891,8 +9901,15 @@ func (r *Runtime) jitNativeCallee(cl *closure) *jitEntry {
 	if !s.makeRoom(len(fn.Code)*s.perInstr + s.hintRoom(e)) {
 		return nil
 	}
+	e.holds = background
 	r.jitSeedCalls(cl, e, p)
+	e.holds = false
 	if background {
+		if len(e.awaited) != 0 {
+			r.jitHold(e, fn, cl, p, (*Runtime).jitCalleeCompiled)
+			e.pending.nativeCallee = true
+			return nil
+		}
 		if r.jit.jobsFull() {
 			// Asked again at a later call, once the runtime has fewer
 			// compiles in the background.

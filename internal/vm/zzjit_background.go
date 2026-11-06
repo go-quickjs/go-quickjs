@@ -15,6 +15,7 @@ import (
 	jitcompile "github.com/go-quickjs/go-quickjs/internal/jit/compile"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/mir"
+	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
 // Compiling in the background, as V8's concurrent recompilation does
@@ -78,7 +79,9 @@ func (s *jitState) jobsFull() bool { return len(s.jobs)+len(s.lowerings) >= jitJ
 
 // inFlight reports whether the runtime has compiles or lowerings in the
 // background, which a check installs (jitDrain).
-func (s *jitState) inFlight() bool { return len(s.jobs) != 0 || len(s.lowerings) != 0 }
+func (s *jitState) inFlight() bool {
+	return len(s.jobs) != 0 || len(s.lowerings) != 0 || len(s.heldJobs) != 0
+}
 
 // jitSubmit hands j, e's compile prepared, to the process's workers. e is
 // busy until j is installed or thrown away, so that the cache does not drop
@@ -94,6 +97,151 @@ func (r *Runtime) jitSubmit(e *jitEntry, j *jitJob) {
 	if r.jitStress.background && r.jitStress.checks == 0 {
 		r.jitDrain()
 	}
+}
+
+// A compile on the spot finds its callees' code there, a callee's compile
+// being made within its caller's, and inlines those it may; in the
+// background it would find them being compiled, call them natively, and
+// be compiled again only for what an exit teaches it, which a call
+// made natively, from a caller made natively, never does. So a function's
+// first compile that met a callee small enough to inline, being compiled,
+// is held (jitHold): it asks nothing yet, the function running in the
+// existing tiers, as it does while it compiles, and is prepared once its
+// callees have their code (jitDrain), its calls decided then as a compile on
+// the spot decides them. A held compile holds no place in the background
+// (jitJobsMax) and no workspace.
+//
+// Compiles may wait for each other, of functions calling each other: one
+// that would wait for a compile that waits for it, however many others are
+// between them, does not (jitCompileWaits), so that those held wait for no
+// cycle and each is prepared in the end. jitHoldRounds bounds how often one
+// is held, its callees' callees each new to it.
+//
+// A compile a frame waits for at a loop does not wait for a call the frame
+// has left behind (jitFrameLeft): the wait would be the loop's, in the
+// existing tiers, for a call it does not make.
+const jitHoldRounds = 3
+
+// jitAwaits has e's compile, held if any call has it wait (jitHold), wait for
+// cl's function's, if that is what the decision of fn's call at pc hangs on,
+// and reports whether it does: a callee being compiled, or to be, short
+// enough to be inlined once it is, which does not wait for e's function in
+// turn.
+func (r *Runtime) jitAwaits(e *jitEntry, fn *bytecode.Function, pc int, cl *closure) bool {
+	if !e.holds || len(cl.fn.Code) > ssa.MaxInline || r.jitFrameLeft(fn, pc) || !r.jitCalleeAwaited(cl) || r.jit.jitCompileWaits(cl.fn, fn) {
+		return false
+	}
+	if !slices.Contains(e.awaited, cl.fn) {
+		e.awaited = append(e.awaited, cl.fn)
+	}
+	return true
+}
+
+// jitFrameLeft reports whether fn's compile is asked for by a frame waiting
+// at one of its loops, and the call at pc is behind that frame for good:
+// before the loop, in no loop around both. A function run once for its loop,
+// as each of microbench's is, had that loop wait in the existing tiers for
+// the compile of what set it up.
+func (r *Runtime) jitFrameLeft(fn *bytecode.Function, pc int) bool {
+	return r.jitFrameFn == fn && pc < r.jitFramePC && jitLoopAround(fn, pc) == 0
+}
+
+// jitLoopAround is the header of the innermost of fn's loops pc is in: where
+// the first backward jump from pc on to pc or before it goes. 0 if there is
+// none, which no compile takes for a header.
+func jitLoopAround(fn *bytecode.Function, pc int) int {
+	for q := pc; q < len(fn.Code); q++ {
+		switch in := fn.Code[q]; in.Op {
+		case bytecode.OpJump, bytecode.OpJumpIfFalse, bytecode.OpJumpIfTrue, bytecode.OpJumpIfCmpFalse:
+			if int(in.A) <= pc {
+				return int(in.A)
+			}
+		}
+	}
+	return 0
+}
+
+// jitCompileWaits reports whether fn is target, or fn's compile is held for
+// target's, through those it waits for, whatever the number between them:
+// left out, those past it would wait in a cycle for good, their functions
+// compiled never.
+func (s *jitState) jitCompileWaits(fn, target *bytecode.Function) bool {
+	seen := []*bytecode.Function{fn}
+	for i := 0; i < len(seen); i++ {
+		if seen[i] == target {
+			return true
+		}
+		if e := s.entryFor(seen[i]); e != nil && e.pending != nil && e.pending.held {
+			for _, a := range e.awaited {
+				if !slices.Contains(seen, a) {
+					seen = append(seen, a)
+				}
+			}
+		}
+	}
+	return false
+}
+
+// jitHold holds e's compile of fn's program p, for its closure cl, until the
+// compiles in e.awaited are done: busy and pending as a compile handed over
+// is (jitSubmit), installed by install once it is.
+func (r *Runtime) jitHold(e *jitEntry, fn *bytecode.Function, cl *closure, p *ir.Program, install func(*Runtime, *jitJob) bool) {
+	s := r.jit
+	h := &jitJob{fn: fn, cl: cl, p: p, e: e, realm: r.Realm, install: install, held: true, holdRound: 1}
+	e.pending = h
+	e.busy++
+	s.heldJobs = append(s.heldJobs, h)
+	s.bgHeld++
+}
+
+// jitHeldReady reports whether h's compile may be prepared: the compiles it
+// waited for are done, and there is a place for it.
+func (r *Runtime) jitHeldReady(h *jitJob) bool {
+	s := r.jit
+	if s.jobsFull() {
+		return false
+	}
+	for _, fn := range h.e.awaited {
+		if s.jitPending(fn) {
+			return false
+		}
+	}
+	return true
+}
+
+// jitReleaseHeld prepares h's compile (jitHold), held no longer, or holds
+// it again for callees of those it waited for: calls it left undecided are
+// decided now, and those decided stand.
+func (r *Runtime) jitReleaseHeld(h *jitJob) {
+	s, e := r.jit, h.e
+	defer func() { e.busy-- }()
+	e.pending, e.awaited = nil, nil
+	key := r.jitKeyOf(h.fn)
+	if s.cache[key] != e {
+		s.bgDiscarded++
+		return
+	}
+	e.holds = h.holdRound < jitHoldRounds
+	r.jitSeedCalls(h.cl, e, h.p)
+	e.holds = false
+	if len(e.awaited) != 0 {
+		h.holdRound++
+		e.pending = h
+		e.busy++
+		s.heldJobs = append(s.heldJobs, h)
+		return
+	}
+	j, err := r.compileSSAPrepare(h.fn, h.cl, h.p, e)
+	if err != nil {
+		if h.nativeCallee {
+			e.calleeRefused = true
+		} else {
+			r.jitFirstCode(key, h.fn, h.cl, h.p, e, nil, nil, err, true)
+		}
+		return
+	}
+	j.install = h.install
+	r.jitSubmit(e, j)
 }
 
 // jitDrain installs the compiles in the background that are done, in the
@@ -161,6 +309,22 @@ func (r *Runtime) jitDrain() {
 		x := slices.Index(s.jobs, j)
 		s.jobs = slices.Delete(s.jobs, x, x+1)
 	}
+	// Those held for them, whose compiles begin here: one that had others
+	// wait for it, they wait for it as they would for any compile.
+	for i := 0; i < len(s.heldJobs); {
+		h := s.heldJobs[i]
+		// Of the realm it is for, whichever is running now: what it waits
+		// for, and its entry, are that realm's.
+		prev := r.Realm
+		r.Realm = h.realm
+		if r.jitHeldReady(h) {
+			s.heldJobs = slices.Delete(s.heldJobs, i, i+1)
+			r.jitReleaseHeld(h)
+		} else {
+			i++
+		}
+		r.Realm = prev
+	}
 }
 
 // abandonJobs lets the runtime's compiles in the background go, as it
@@ -184,6 +348,11 @@ func (s *jitState) abandonJobs() {
 		j.e.busy--
 	}
 	s.jobs = nil
+	for _, h := range s.heldJobs {
+		h.e.pending, h.e.awaited = nil, nil
+		h.e.busy--
+	}
+	s.heldJobs = nil
 	for _, t := range s.lowerings {
 		t.state.Store(jitJobAbandoned)
 	}

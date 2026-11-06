@@ -998,6 +998,21 @@ either (`loopSlow`), until Go retries it (`jitRetrySlow`).
   what a compile does once placed -- so placing stays where nothing else of
   the runtime's runs.
 
+A compile on the spot finds its callees' code there, a callee's compile
+being made within its caller's, so that it may inline them. In the
+background it would find them being compiled, and call them natively, for
+good: a call made natively leaves no exit to learn from. So a first compile
+that meets a callee small enough to inline, being compiled, is held
+(`jitHold`), holding no place and asking nothing, and is prepared once that
+callee has its code, its calls decided then. Two functions calling each
+other are not held for each other (`jitCompileWaits`), and a compile a frame
+waits for at a loop is not held for a call the frame has left behind
+(`jitFrameLeft`).
+
+The answer of a compile in the background is "not now", never "no": a call
+whose target has no code yet waits for it (`jitCalleeAwaited`), and a closure
+is not refused for a compile under way (KI-74).
+
 A runtime made `WithJITBackground` hands the work to the process's
 workers, at most a quarter of `GOMAXPROCS`, each ending when none is
 queued, and up to `jitJobsMax` compiles of its own at once; otherwise it

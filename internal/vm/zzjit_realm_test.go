@@ -226,6 +226,8 @@ func jitRealmFlushed(t *testing.T, r *Runtime, setEpoch func(uint64), keep map[w
 		if _, err := r.Run(idle); err != nil {
 			t.Fatal(err)
 		}
+		// A look is at a check, which installs what is done first.
+		r.jitDrain()
 		r.jit.flush()
 		left = 0
 		for key := range r.jit.cache {
