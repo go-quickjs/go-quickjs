@@ -344,9 +344,12 @@ object and array spread, object rest, computed keys and spread calls,
 Array.prototype.forEach, reduce, map, filter and some, and their callbacks
 varied -- made once or anew, a function expression or an arrow, reading
 this, writing what they captured, called by a loop of the script's own --
-a typed array's callback methods and its element reads and writes over
-every element type, a DataView's getters and setters, Map's and Set's
-forEach,
+a closure's appends to a string it captures and what growing one in place
+does worst -- reads between them, reads that keep the string, a few to a new
+binding -- a template's render into a local, with escaping and numbers, for-in
+loops the last cursor cannot serve, arrays past 16,384 elements, a typed
+array's callback methods and its element reads and writes over every element
+type, a DataView's getters and setters, Map's and Set's forEach,
 String.prototype.indexOf and Array.prototype.indexOf, String's methods that
 run no script -- at, codePointAt, toUpperCase, trim, startsWith, padStart,
 repeat, slice, concat, String.fromCodePoint -- Math.imul, clz32, pow, atan2

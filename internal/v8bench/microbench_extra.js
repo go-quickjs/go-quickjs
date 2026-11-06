@@ -449,6 +449,345 @@ function upvalue_string_append(n)
     return j;
 }
 
+/* growth by half: the length it does worst at against growth by a
+   quarter, and a long array. n is pushes, so that a small n is a small
+   test, as TestJITSameWorkWhileMarking runs each with the collector off */
+function array_push_28k(n)
+{
+    var i, j, a, len = n < 27668 ? n : 27668;
+    for (j = 0; j < n; j += len) {
+        a = [];
+        for (i = 0; i < len; i++)
+            a.push(i);
+    }
+    global_res = a.length;
+    return j;
+}
+
+function array_push_1m(n)
+{
+    var i, j, a, len = n < 1000000 ? n : 1000000;
+    for (j = 0; j < n; j += len) {
+        a = [];
+        for (i = 0; i < len; i++)
+            a.push(i);
+    }
+    global_res = a.length;
+    return j;
+}
+
+/* An allocation site whose arrays are mostly short, with an occasional
+   larger result. A capacity hint must give the spare room back. */
+function extra_array_fill(n)
+{
+    var a = [];
+    for (var i = 0; i < n; i++)
+        a.push(i);
+    return a;
+}
+
+function array_push_varying(n)
+{
+    var j, a, count = 0;
+    for (j = 0; j < n; j++) {
+        a = extra_array_fill((j & 31) === 0 ? Math.min(n, 32768) : 4);
+        count += a.length;
+    }
+    global_res = a.length + a[0];
+    return count;
+}
+
+function array_literal_empty(n)
+{
+    var j, a;
+    for (j = 0; j < n; j++)
+        a = [];
+    global_res = a.length;
+    return n;
+}
+
+/* repeated growth by an assignment at the array's length */
+function array_index_append(n)
+{
+    var i, j, a, s = 0;
+    for (j = 0; j < n; j++) {
+        a = [];
+        for (i = 0; i < 8192; i++)
+            a[a.length] = i;
+        s += a.length;
+    }
+    global_res = s;
+    return n * 8192;
+}
+
+/* for-in loops that the last loop's cursor cannot serve: left at their
+   first key, so none finishes */
+function for_in_break(n)
+{
+    var j, k, c = 0, o = { a: 1, b: 2, c: 3, d: 4 };
+    for (j = 0; j < n; j++) {
+        for (k in o) {
+            c++;
+            break;
+        }
+    }
+    global_res = c;
+    return n;
+}
+
+/* a loop in each key of a loop: the outer's cursor is never the last */
+function for_in_nested(n)
+{
+    var j, k, l, c = 0, o = { a: 1, b: 2, c: 3, d: 4 };
+    for (j = 0; j < n; j++) {
+        for (k in o) {
+            for (l in o)
+                c++;
+        }
+    }
+    global_res = c;
+    return n * 16;
+}
+
+/* what growing a captured string in place does worst: a read after each
+   append, a read after each two, an append or two to each new binding, and
+   a captured number added to the same way */
+function append_read_each(n)
+{
+    var i, j, s, c = 0;
+    var sink = { push: function (x) { s += x; },
+                 len: function () { return s.length; } };
+    for (j = 0; j < n; j += 1024) {
+        s = "";
+        for (i = 0; i < 1024; i++) {
+            sink.push("<x>");
+            c += sink.len();
+        }
+    }
+    global_res = c;
+    return j;
+}
+
+function append_pair_read(n)
+{
+    var i, j, s, c = 0;
+    var sink = { push: function (x) { s += x; },
+                 len: function () { return s.length; } };
+    for (j = 0; j < n; j += 2048) {
+        s = "";
+        for (i = 0; i < 1024; i++) {
+            sink.push("<x>");
+            sink.push("<y>");
+            c += sink.len();
+        }
+    }
+    global_res = c;
+    return j;
+}
+
+/* the same with a read that keeps the string, as x.length does not */
+function append_keep_each(n)
+{
+    var i, j, s, c = 0;
+    var sink = { push: function (x) { s += x; },
+                 get: function () { return s; } };
+    for (j = 0; j < n; j += 1024) {
+        s = "";
+        for (i = 0; i < 1024; i++) {
+            sink.push("<x>");
+            c += sink.get().length;
+        }
+    }
+    global_res = c;
+    return j;
+}
+
+function append_keep_pair(n)
+{
+    var i, j, s, c = 0;
+    var sink = { push: function (x) { s += x; },
+                 get: function () { return s; } };
+    for (j = 0; j < n; j += 2048) {
+        s = "";
+        for (i = 0; i < 1024; i++) {
+            sink.push("<x>");
+            sink.push("<y>");
+            c += sink.get().length;
+        }
+    }
+    global_res = c;
+    return j;
+}
+
+function extra_append_once(a, x)
+{
+    var s = a;
+    var add = function (y) { s += y; };
+    add(x);
+    return s;
+}
+
+function extra_append_twice(a, x)
+{
+    var s = a;
+    var add = function (y) { s += y; };
+    add(x);
+    add(x);
+    return s;
+}
+
+function upvalue_short_append(n)
+{
+    var j, c = 0, a = "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnop";
+    for (j = 0; j < n; j++)
+        c += extra_append_once(a, "<x>").length;
+    global_res = c;
+    return n;
+}
+
+function upvalue_two_appends(n)
+{
+    var j, c = 0, a = "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnop";
+    for (j = 0; j < n; j++)
+        c += extra_append_twice(a, "<x>").length;
+    global_res = c;
+    return n;
+}
+
+function upvalue_sum(n)
+{
+    var j, t = 0;
+    var add = function (x) { t += x; };
+    for (j = 0; j < n; j++)
+        add(j & 7);
+    global_res = t;
+    return n;
+}
+
+/* a template's render, as a compiled template is written: a local a string
+   is built in, its pieces and what an escape function returned, with no loop
+   and in one; numbers among the pieces; and what it does worst, one append
+   to a local and a read after each */
+function extra_esc(s)
+{
+    return s.indexOf("<") < 0 ? s : s.replace(/</g, "&lt;");
+}
+
+function extra_row(a, b, c)
+{
+    var out = "<tr><td>";
+    out += extra_esc(a);
+    out += "</td><td>";
+    out += extra_esc(b);
+    out += "</td><td>";
+    out += extra_esc(c);
+    out += "</td></tr>";
+    return out;
+}
+
+function template_row(n)
+{
+    var j, c = 0;
+    for (j = 0; j < n; j++)
+        c += extra_row("alpha", "beta<gamma", "delta").length;
+    global_res = c;
+    return n;
+}
+
+function extra_list(xs)
+{
+    var i, out = "<ul>";
+    for (i = 0; i < xs.length; i++) {
+        out += "<li class=\"item\">";
+        out += extra_esc(xs[i]);
+        out += "</li>";
+    }
+    out += "</ul>";
+    return out;
+}
+
+function template_list(n)
+{
+    var j, c = 0, xs = [];
+    for (j = 0; j < 64; j++)
+        xs.push("item number " + j);
+    for (j = 0; j < n; j += 64)
+        c += extra_list(xs).length;
+    global_res = c;
+    return j;
+}
+
+function template_escaped(n)
+{
+    var j, c = 0, xs = [];
+    for (j = 0; j < 64; j++)
+        xs.push("item <b>" + j + "</b>");
+    for (j = 0; j < n; j += 64)
+        c += extra_list(xs).length;
+    global_res = c;
+    return j;
+}
+
+function template_numbers(n)
+{
+    var i, j, out, c = 0;
+    for (j = 0; j < n; j += 64) {
+        out = "";
+        for (i = 0; i < 64; i++) {
+            out += i;
+            out += ",";
+        }
+        c += out.length;
+    }
+    global_res = c;
+    return j;
+}
+
+function extra_once(a, x)
+{
+    var out = "<" + a;
+    out += x;
+    return out;
+}
+
+function local_append_once(n)
+{
+    var j, c = 0, a = "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnop";
+    for (j = 0; j < n; j++)
+        c += extra_once(a, "<x>").length;
+    global_res = c;
+    return n;
+}
+
+function local_append_read(n)
+{
+    var i, j, out, c = 0;
+    for (j = 0; j < n; j += 1024) {
+        out = "";
+        for (i = 0; i < 1024; i++) {
+            out += "<x>";
+            c += out.length;
+        }
+    }
+    global_res = c;
+    return j;
+}
+
+function local_append_keep(n)
+{
+    var i, j, out, held, c = 0;
+    for (j = 0; j < n; j += 1024) {
+        out = "";
+        for (i = 0; i < 1024; i++) {
+            out += "<x>";
+            held = out;
+            c += held.length;
+        }
+    }
+    global_res = c;
+    return j;
+}
+
 /* a for-in loop over a dictionary: an object a key was deleted from,
    not the last added */
 function dict_for_in(n)

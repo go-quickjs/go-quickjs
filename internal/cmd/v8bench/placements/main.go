@@ -506,7 +506,7 @@ func compareCmd(args []string) error {
 			for l := range labels {
 				fmt.Printf("    %s:", labels[l])
 				for _, v := range per[l] {
-					fmt.Printf(" %.0f", v)
+					fmt.Printf(" %.2f", v)
 				}
 				fmt.Println()
 			}
