@@ -2019,6 +2019,62 @@ We Fast Yet's DeltaBlue (1.29) and Havlak (1.23), Mandreel (1.24),
 Typescript and CodeLoad (1.20) -- calls, allocation and the compiler's
 own speed. It is a track of its own beside the JIT's.
 
+### Partial escape analysis
+
+Graal's, in `ssa/escape.go` (`41575a42`..`557ad428`): an object is left
+unmade across merges and loop headers and made only where it escapes, and
+a frame in such a loop goes on in code compiled for it and kept apart, as
+V8 keeps it. It was held back on 2026-11-04 (`b15940e2`) for being level on
+the suites, and for first runs of short callback loops 10-18% slower and
+its worst cases up to 2.2 times. Those costs are gone: a compile keeps the
+entry its frame waits at, a function run once is compiled once, and calls
+that leave a loop keep that entry.
+
+Against v0.35.0, with the JIT, on an AMD Ryzen 5 3600 under Windows:
+
+| | Foreground | Background | One thread |
+|---|---:|---:|---:|
+| SSR (8 placements) | +0.2% | -0.2% | -1.2% |
+| The fresh suite (4) | +0.1% | +0.3% | +0.4% |
+| AWFY (4) | +0.4% | 0.0% | +0.2% |
+| Octane (4) | -0.6% | -0.1% | |
+| V8 (4) | -0.2% | -0.5% | |
+| 320 micro-benchmarks | 0.969 | 0.969 | 0.957 |
+
+The micro-benchmarks are over eight placements, four at one thread. None is
+3% slower at every placement at eight; `typed_some`, +6.1% at four at one
+thread, is +0.1% at eight, and SSR's Render at one thread went from +7.2%
+at four to -2.0%: one thread needs eight placements, its base alone spanning
+12%. DeltaBlue in the background is -0.1% at eight, two speeds on both sides.
+What compiling costs, by `-jitcompile 5`: AWFY +1.8%, SSR +4.0%, its
+optimization phase +7.6%; Octane's two sides make different compiles.
+
+It lands for code the suites do not have. Bytes and allocations are level
+on all five suites (under 1%): of Octane's 392 candidate objects it leaves 18
+unmade, of AWFY's 71 eleven, the rest returned or stored, held by objects
+that escape, or array and template literals it does not model; RayTrace's
+temporaries are returned by callees past the inlining budget, and a budget of
+400 cut its allocations 6% at no gain in time. The measure does see what it
+removes: `escape_join` takes 3 collections for 23 and 7.3 ns for 48,
+`carried_short` 3 for 11 and 10 ns for 66. An accumulator a loop replaces each
+turn gains that (`escape_accumulate` -74%, `carried_phases` -75%), and so does
+an object merged at a join (`escape_join` -85%). Code without one pays the
+compile, and two kinds of loop pay or gain otherwise:
+
+- A loop whose calls leave it early, or whose iterations call what leaves
+  native code, makes its objects at each exit: `carried_exit_100`,
+  `carried_exit_20`, `carried_every_2` are +3.1% to +3.3%, more than 2% slower
+  at six to eight placements of eight. Where one call in two runs its loop
+  through, `carried_exit_mixed` is -34%.
+- An object a rare path keeps in a local gains nothing: the frame state names
+  it, so it is made (`escape_rare` -0.7%). So does an object stored where
+  others see it (`carried_stored` -0.8%).
+
+Open: array and template literals, the largest group of Octane's candidates
+it leaves made; a phi merging an unmade object with a made one, which Graal
+makes at the edge; a callee past the budget whose result is a temporary,
+RayTrace's; and the rare path's local, which a state could name unmade.
+
 ## F. Server-side rendering and the collector
 
 A React 18 server-rendering bundle of 117 KB, rendering one page per call,
@@ -2708,23 +2764,6 @@ again.
 - Holding an outgrown creation site's objects in a table sized to its
   largest object, up to 32 properties: one large outlier makes every small
   object take 1.6 times the memory.
-- JIT partial escape analysis, Graal's: objects left unmade across merges
-  and loop headers, made where they escape, with code for on-stack
-  replacement kept apart, as V8 keeps it (2026-11-04, `b15940e2`, correct
-  and tested). Over four placements
-  against the code it would land on, Are We Fast Yet +0.1%, V8 +0.5%,
-  Octane -0.4%, the micro-benchmarks outside its own level (1.0006), and
-  compiles about 1.5% longer; first runs of short callback loops 10-18%
-  slower (`array_forEach`, `typed_f64_every`, `array_sort`), and of its own
-  worst cases up to 2.2 times (`carried_phases`). Its own micro-benchmarks
-  gain 74-85%. Real programs give it little: of Octane's 392 candidate
-  objects it leaves 18 unmade, of Are We Fast Yet's 71 eleven, the rest
-  returned or stored, held by objects that escape, or array and template
-  literals it does not model; RayTrace's temporaries are returned by
-  callees past the inlining budget, and a budget of 400 cut its
-  allocations 6% at no gain in time. What paid in its round was inlining an
-  arrow that reads `this` where its maker makes it (`ad3e6091`, Havlak
-  -4%), which needed none of it.
 
 ## After the review
 
