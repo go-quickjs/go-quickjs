@@ -1173,6 +1173,9 @@ type jitState struct {
 	// runs inside: reused, not allocated each time.
 	unwinding       []jitNativeLevel
 	unwindingFrames []*frame
+	// levelSlots are what those levels' records wrote over (jitKeepSlots),
+	// by level, past those of the unwinds it runs inside.
+	levelSlots []jitLevelSlot
 	// lowered are the functions' programs (jitLower), and whether each may
 	// be inlined (jitInlinable).
 	lowered     map[weak.Pointer[bytecode.Function]]*jitLowering

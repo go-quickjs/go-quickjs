@@ -11449,6 +11449,49 @@ func (r *Runtime) jitApplyRecords(f *frame, this bool, ctx *abi.Context) {
 	}
 }
 
+// jitLevelSlot is a slot of a level's frame and the word it held before the
+// level's records wrote over it (jitKeepSlots).
+type jitLevelSlot struct {
+	at  *Value
+	old Value
+}
+
+// jitKeepSlots keeps what the records of c, l's context, are to write over
+// in f, l's frame, for its code to find if it goes on after its call
+// (jitRestoreSlots). Native code writes a frame only at an exit, and a value
+// it took from a slot goes on reading its pointer word there, whatever the
+// local has been assigned since: the slot is that value's until it dies, and
+// may be all that keeps its object alive, which what is kept here does in
+// its place. Records give the slot the local's value, for what reads the
+// frame while Go finishes the call. A local of the function's closures, in
+// a cell the frame holds open, code does not read in the slot, and what the
+// callee assigned it stays assigned; a captured binding's cell is no slot of
+// the frame's.
+func (r *Runtime) jitKeepSlots(l *jitNativeLevel, f *frame, this bool, c *abi.Context) {
+	s := r.jit
+	l.slotsFrom = len(s.levelSlots)
+	const flags = abi.RecordScalar | abi.RecordMaybe | abi.RecordDirect
+	fn := f.cl.fn
+	for _, rec := range c.Record[:c.Records] {
+		slot := int(rec.Slot &^ flags)
+		if slot < len(fn.Locals) && fn.Locals[slot].Captured || slot >= fn.LocalCount && slot < fn.LocalCount+len(f.cl.upvalues) {
+			continue
+		}
+		at := r.jitSlot(f, this, slot)
+		s.levelSlots = append(s.levelSlots, jitLevelSlot{at, *at})
+	}
+	l.slotsTo = len(s.levelSlots)
+}
+
+// jitRestoreSlots gives l's frame back what its code left there
+// (jitKeepSlots), last first, as l goes on natively after its call.
+func (r *Runtime) jitRestoreSlots(l *jitNativeLevel) {
+	slots := r.jit.levelSlots[l.slotsFrom:l.slotsTo]
+	for i := len(slots) - 1; i >= 0; i-- {
+		*slots[i].at = slots[i].old
+	}
+}
+
 // jitRecordValue is the value a record writes, read from the frame as the
 // exit left it.
 func (r *Runtime) jitRecordValue(f *frame, this bool, ctx *abi.Context, i int) Value {
@@ -12495,6 +12538,9 @@ type jitNativeLevel struct {
 	// (jitPushLoopFrame), its callee's caller.
 	loop      uint64
 	loopFrame bool
+	// slotsFrom and slotsTo are the words its records wrote over, in
+	// jitState's levelSlots (jitKeepSlots).
+	slotsFrom, slotsTo int
 	// gen, for a generator a loop's step resumed natively (jitGenLevel),
 	// is the generator, and cursor the step's cursor; fill marks a
 	// destructuring's step, whose done is undefined (jitGenDone).
@@ -12530,7 +12576,7 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure, made bool
 	// Its levels go past those of the unwinds it runs inside, which hold
 	// theirs until they finish: they are reached by index, the slices
 	// growing as the unwinds it runs need.
-	start := len(s.unwinding)
+	start, kept := len(s.unwinding), len(s.levelSlots)
 	var left *jitEntry
 	leftPC := 0
 	for i := idx + 1; i < len(s.ssaCtxs) && s.ssaCtxs[i].Live != 0; i++ {
@@ -12649,7 +12695,8 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure, made bool
 	defer func() {
 		clear(s.unwinding[start:])
 		clear(s.unwindingFrames[start:])
-		s.unwinding, s.unwindingFrames = s.unwinding[:start], s.unwindingFrames[:start]
+		clear(s.levelSlots[kept:])
+		s.unwinding, s.unwindingFrames, s.levelSlots = s.unwinding[:start], s.unwindingFrames[:start], s.levelSlots[:kept]
 		// The closures the exit made, the frames' now.
 		clear(s.made)
 		s.made = s.made[:0]
@@ -12737,6 +12784,7 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure, made bool
 					f.cl, f.locals, f.base = l.cl, r.stack[l.base:l.base+fn.LocalCount:l.base+fn.LocalCount], l.base+fn.LocalCount
 					saved := s.ssaCtx
 					s.ssaCtx = c
+					r.jitKeepSlots(l, f, e.this, c)
 					r.jitApplyRecords(f, e.this, c)
 					s.ssaCtx = saved
 					l.this = *(*Value)(unsafe.Pointer(&c.This))
@@ -12888,6 +12936,7 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure, made bool
 			*(*Value)(unsafe.Pointer(&c.RetValue)) = v
 			s.resumed++
 			s.resumedLevels++
+			r.jitRestoreSlots(&l)
 			var native bool
 			if v, err, native = r.runSSAIn(f, e, int(l.pc), int(l.depth), l.ctx, next.returnTo); !native {
 				v, err, _ = r.jitInterpret(f, f.base+int(l.depth), nil)

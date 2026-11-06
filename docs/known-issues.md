@@ -808,6 +808,38 @@ Paths are relative to this repository; `go-intl:` paths are in
   Found by `TestJITStrAppendRandomMarking`.
   - Test: `TestJITTemplateOfAnAddition`.
 
+### KI-73 A native caller Go resumed read another local's object
+- **Where:** `internal/vm/zzjit_ssa.go`, `jitUnwindNative`, and
+  `zzjit_genstep.go`, `jitGenFrame`. A value native code took from a frame
+  slot reads its pointer word through the slot's address for as long as it
+  lives, whatever the local has been assigned since, because native code
+  writes its frame only at an exit. A native caller whose callee left native
+  code had the records of its call applied to its frame, for what reads the
+  frame while Go finishes the call, and then went on natively after the call.
+- **Effect:** with the JIT, plain JavaScript computed with the wrong object,
+  with no error of its own, two native calls deep. This gave 22 for 12 once
+  the call in `swap` left native code; the first run of the loop below gave
+  240010 for 240000:
+
+  ```js
+  var obj = {a: 1}, A = {v: 1}, B = {v: 2}
+  function inner(x, k) { const o = x === k ? 1 : obj; o.a = 1; return 0 }
+  function swap(a, b, i, k) { var t = a; a = b; b = t; inner(i, k); return t.v * 10 + a.v }
+  function run(n, k) { let s = 0; for (let i = 0; i < n; i++) s += swap(A, B, i, k); return s }
+  ```
+
+  Both functions must stay calls, not be inlined. Under `WithJITBackground`,
+  which `qjs --jit` uses, more calls stay calls: Octane's Box2D stopped with
+  `TypeError: cannot read property of undefined`, `t=e;e=f;f=r` in
+  `CollidePolygons` taking a transform for a polygon. The run's own level was
+  not affected: its records are applied only if it does not go on. Found in
+  v0.34.2.
+- **Status:** fixed. The words the records write over are kept and given back
+  as the level goes on natively (`jitKeepSlots`, `jitRestoreSlots`), which also
+  keeps alive objects that slot may have been the only reference to.
+  - Test: `TestJITLevelResumesWithItsSlots`,
+    `TestJITLevelKeepsWhatItsCalleeAssigned`.
+
 ## P3: small divergences
 
 ### KI-56 Intl details

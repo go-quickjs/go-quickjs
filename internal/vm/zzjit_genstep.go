@@ -261,6 +261,7 @@ func (r *Runtime) jitGenFrame(l *jitNativeLevel, c *abi.Context, past bool) *fra
 	if e != nil && c.Records != 0 {
 		saved := s.ssaCtx
 		s.ssaCtx = c
+		r.jitKeepSlots(l, f, e.this, c)
 		r.jitApplyRecords(f, e.this, c)
 		s.ssaCtx = saved
 	}
