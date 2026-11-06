@@ -684,6 +684,10 @@ type jitEntry struct {
 	ssaKept  []int32
 	keptAt   uint64
 	keptGone bool
+	// keptLeft counts, of the calls since the code was compiled or keptAt,
+	// those that left it (jitGoOn), and keptCall is the call last counted,
+	// by the function's calls, Go's and native callers'.
+	keptLeft, keptCall uint64
 	// invalid marks code an eager deoptimization invalidated: Go enters it no
 	// more, nor do native callers call it (its link), and the existing
 	// tiers run the function until they have spent a fresh budget,
@@ -2957,9 +2961,13 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, err
 		if !osr {
 			e.starts++
 			if len(e.ssaKept) != 0 && !e.invalid && e.starts-e.keptAt >= jitKeptStarts {
-				// Called again and again: objects unmade pay now.
-				e.keptAt = e.starts
-				r.jitKeptGone(f.cl, e)
+				// Called again and again: objects unmade pay now, unless
+				// its calls leave the loop anyway.
+				leaving := e.keptCallsLeave()
+				e.keptAt, e.keptLeft = e.starts, 0
+				if !leaving {
+					r.jitKeptGone(f.cl, e)
+				}
 			}
 		} else {
 			r.jit.osrs++

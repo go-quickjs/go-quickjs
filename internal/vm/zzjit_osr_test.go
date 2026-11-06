@@ -67,13 +67,14 @@ const osrSetup = `
 
 // osrRounds is the rounds that bring name's frame to code kept for its loop:
 // calls enough for its code to give up the entries kept for a frame
-// (jitKeptStarts), each leaving at the turn at, and a long one that leaves
-// early, the frame then staying in the loop. args are what comes between
-// the turns and that.
+// (jitKeptStarts): a long one its code is compiled in, short ones, one in
+// two leaving, which teaches the code that path and no more leave than may
+// (keptCallsLeave), then a long one that leaves early, the frame staying in
+// the loop. args are what comes between the turns and that.
 func osrRounds(name, args string) []string {
-	var rounds []string
-	for range 2*jitKeptStarts + 2 {
-		rounds = append(rounds, name+"(20, "+args+"3)")
+	rounds := []string{name + "(200000, " + args + "-1)"}
+	for i := range 2*jitKeptStarts + 2 {
+		rounds = append(rounds, name+"(20, "+args+map[bool]string{true: "3", false: "-1"}[i%2 == 0]+")")
 	}
 	return append(rounds, name+"(200000, "+args+"5)")
 }
@@ -212,6 +213,36 @@ func TestJITKeptEntryGoes(t *testing.T) {
 	}
 }
 
+// Calls that leave the loop anyway do not give up the entry kept for a
+// frame: they gain nothing from its objects' staying unmade, and would ask
+// for it back. carried_exit_3000 made two compiles more than main for that.
+func TestJITKeptEntryStaysForCallsThatLeave(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	rounds := []string{`sum(200000, -1)`}
+	for range 6 * jitKeptStarts {
+		rounds = append(rounds, `sum(100, 5)`)
+	}
+	r := jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, rounds...)
+	e := jitCallbackEntry(r, "sum")
+	if e == nil || e.ssa == nil {
+		t.Fatalf("sum was not compiled: %+v", e)
+	}
+	if len(e.ssaKept) == 0 || e.osr != nil || r.jit.osrLearned != 0 {
+		t.Fatalf("calls that left gave up the entry: kept %v, code apart %v, %d learned", e.ssaKept, e.osr != nil, r.jit.osrLearned)
+	}
+	// And one in two leaving does.
+	rounds = []string{`sum(200000, -1)`}
+	for i := range 6 * jitKeptStarts {
+		rounds = append(rounds, map[bool]string{true: `sum(100, 5)`, false: `sum(100, -1)`}[i%2 == 0])
+	}
+	r = jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, rounds...)
+	if e := jitCallbackEntry(r, "sum"); e == nil || len(e.ssaKept) != 0 || e.ssaVirtuals == 0 {
+		t.Fatalf("calls that ran their loop through kept the entry: %+v", e)
+	}
+}
+
 // Code compiled again only to give up an entry does as it did, and is
 // judged by all it did: with its record gone, a cache's calls of Go alone
 // were what it was judged by, and code a moment from running natively, a
@@ -243,9 +274,9 @@ func TestJITOSRNextLoopUnmade(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	var rounds []string
-	for range 2*jitKeptStarts + 2 {
-		rounds = append(rounds, `twoLoops(20, 20, 3)`)
+	rounds := []string{`twoLoops(200000, 200000, -1)`}
+	for i := range 2*jitKeptStarts + 2 {
+		rounds = append(rounds, map[bool]string{true: `twoLoops(20, 20, 3)`, false: `twoLoops(20, 20, -1)`}[i%2 == 0])
 	}
 	r := jitAgreesForTestWith(t, jitStressConfig{}, osrSetup, append(rounds, `twoLoops(200000, 200000, 5)`)...)
 	e := jitCallbackEntry(r, "twoLoops")

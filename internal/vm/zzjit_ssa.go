@@ -11796,6 +11796,12 @@ func jitLoopLength(fn *bytecode.Function) uint32 {
 func (r *Runtime) jitGoOn(f *frame, e *jitEntry, pc, sp int, run bool) (v Value, err error, done, again bool) {
 	f.pc = uint32(pc)
 	e.goOns++
+	if calls := e.starts + e.link.in; e.keptCall != calls {
+		// A call that left, once however often: code kept for a frame goes
+		// by it (keptCallsLeave).
+		e.keptCall = calls
+		e.keptLeft++
+	}
 	if !e.invalid && (!run || !e.entrySlow) && slices.Contains(e.ssaUnresumed, int32(pc)) && !slices.Contains(e.resumed, uint32(pc)) {
 		// After a call the code made or inlined, built with no entry until
 		// Go went on there (ssa.Func's Unresumed), where Go would have gone

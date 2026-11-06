@@ -126,8 +126,13 @@ type jitLearned struct {
 // jitKeptStarts is how many times Go enters a function's code by its start
 // before it gives up the entries kept for a frame (jitEntry's ssaKept): a
 // function called at all more than that is one its objects' staying unmade
-// pays in. One would not do: where each call meets something new -- a loop
-// reading a new shape at each -- each would compile twice.
+// pays in -- unless three of those calls in four left the code: an object
+// left unmade for them is made at their exit, and they would ask for those
+// entries back, in code of their own (jitLearnLoopEntry): a compile to give
+// them up and one to have them again, for code that gains nothing.
+// carried_exit_3000's 254 calls took 4% longer for those two compiles. One
+// call would not do: where each call meets something new -- a loop reading a
+// new shape at each -- each would compile twice.
 const jitKeptStarts = 4
 
 // setHomes has e's code's homes be homes (jitEntry's ssaHomes), once no run
@@ -148,6 +153,17 @@ func (e *jitEntry) setHomes(s *jitState, homes int) {
 // for its loops before it is asked whether most of its calls do
 // (jitFramesLeave): past a compile's worth of what leaving costs.
 const jitFramesLeaving = 256
+
+// keptCallsLeave reports whether three in four of e's calls since it last
+// looked left its code (jitKeptStarts), and enough of them to tell: one call
+// that left is no pattern.
+func (e *jitEntry) keptCallsLeave() bool {
+	calls := e.starts - e.keptAt
+	if e.link != nil {
+		calls += e.link.in
+	}
+	return e.keptLeft >= jitKeptStarts*3/4 && e.keptLeft*4 >= calls*3
+}
 
 // jitFrameAt is the loop's header a frame waits at for this compile of fn,
 // e's code (ssa.Func's FrameAt), or 0: there is none, or the compile is of
@@ -170,7 +186,7 @@ func (r *Runtime) jitCalleesKeptNoEntries(e *jitEntry) {
 		if x.cl == nil {
 			continue
 		}
-		if ce := r.jit.entryFor(x.cl.fn); ce != nil && ce != e && len(ce.ssaKept) != 0 && !ce.invalid {
+		if ce := r.jit.entryFor(x.cl.fn); ce != nil && ce != e && len(ce.ssaKept) != 0 && !ce.invalid && !ce.keptCallsLeave() {
 			r.jitKeptGone(x.cl, ce)
 		}
 	}
