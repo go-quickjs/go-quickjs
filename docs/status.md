@@ -103,7 +103,8 @@ Known semantic gap, covered by a test that documents it:
 
 The engine is tested against test262. The suite is not vendored; point the
 runner at a checkout -- of the commit the counts below were measured at, to
-reproduce them:
+reproduce them. CI pins this same revision; check an existing checkout's
+revision before comparing its results with these counts:
 
 ```
 git clone https://github.com/tc39/test262 /tmp/test262
