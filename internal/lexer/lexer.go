@@ -53,7 +53,21 @@ type Lexer struct {
 	// magic is the magic comments read so far, nil until there is one,
 	// which few sources have.
 	magic *magicComments
+	// cooked is where the value of a literal that differs from its text
+	// is built, kept from literal to literal: a value then costs one
+	// allocation of its own size, not a builder's doublings.
+	cooked cookedBuf
 }
+
+// cookedBuf is what an escape's value is written to, over a buffer that
+// outlives the value made from it.
+type cookedBuf struct{ b []byte }
+
+func (c *cookedBuf) reset()               { c.b = c.b[:0] }
+func (c *cookedBuf) writeByte(x byte)     { c.b = append(c.b, x) }
+func (c *cookedBuf) writeString(s string) { c.b = append(c.b, s...) }
+func (c *cookedBuf) writeRune(r rune)     { c.b = utf8.AppendRune(c.b, r) }
+func (c *cookedBuf) String() string       { return string(c.b) }
 
 // magicComments are a source's //# sourceURL= and //# sourceMappingURL=
 // comments, each the last one in the source, and where it was, so that a
@@ -433,6 +447,28 @@ func (l *Lexer) NextInto(tok *Token) error {
 	return l.errf(tok.Pos, "unexpected character %q", r)
 }
 
+// Ahead is the source from where the next token starts, for a parser
+// deciding between two readings of the current token: looking at a byte or
+// two of it costs far less than lexing the token, and rewinding to lex it
+// again. It is empty where that start is not known so cheaply -- a comment,
+// or what may be one, or whitespace past ASCII, comes first -- and at the
+// end of the source. It leaves the lexer as it is.
+func (l *Lexer) Ahead() string {
+	for p := l.pos; p < len(l.src); p++ {
+		switch c := l.src[p]; c {
+		case ' ', '\t', '\v', '\f', '\n', '\r':
+		default:
+			rest := l.src[p:]
+			if c >= utf8.RuneSelf || strings.HasPrefix(rest, "//") || strings.HasPrefix(rest, "/*") ||
+				strings.HasPrefix(rest, "<!--") || strings.HasPrefix(rest, "-->") {
+				return ""
+			}
+			return rest
+		}
+	}
+	return ""
+}
+
 // ScanRegExp rescans from the start of a token known to begin a regular
 // expression literal. The parser calls this when it has just seen '/' in a
 // position where an expression may start.
@@ -506,7 +542,12 @@ func (l *Lexer) ScanTemplateTail(brace Token) (Token, error) {
 func (l *Lexer) scanTemplate(tok *Token, head bool) error {
 	start := l.pos
 	l.pos++ // consume '`' or '}'
-	var cooked strings.Builder
+	begin := l.pos
+	// A part with no escape, carriage return or ill-formed text is its own
+	// value, sliced rather than copied, as a string literal's is; cooked
+	// holds a value only once one of those makes it differ.
+	cooked := &l.cooked
+	differs := false
 	// A template part whose cooked value is invalid is still legal in a tagged
 	// template, where it surfaces as undefined; we record that rather than fail.
 	valid := true
@@ -521,6 +562,10 @@ func (l *Lexer) scanTemplate(tok *Token, head bool) error {
 			// The literal ends here, so this part is either a complete
 			// no-substitution template or the tail of one.
 			raw := l.src[start+1 : l.pos]
+			value := raw
+			if differs {
+				value = cooked.String()
+			}
 			l.pos++
 			if head {
 				tok.Kind = Template
@@ -530,13 +575,17 @@ func (l *Lexer) scanTemplate(tok *Token, head bool) error {
 			tok.Raw = normalizeTemplateRaw(raw)
 			tok.TemplateValid = valid
 			if valid {
-				tok.Value = cooked.String()
+				tok.Value = value
 			}
 			return nil
 		case '$':
 			if l.peekByte(1) == '{' {
 				// A substitution follows, so this part is a head or a middle.
 				raw := l.src[start+1 : l.pos]
+				value := raw
+				if differs {
+					value = cooked.String()
+				}
 				l.pos += 2
 				if head {
 					tok.Kind = TemplateHead
@@ -546,36 +595,58 @@ func (l *Lexer) scanTemplate(tok *Token, head bool) error {
 				tok.Raw = normalizeTemplateRaw(raw)
 				tok.TemplateValid = valid
 				if valid {
-					tok.Value = cooked.String()
+					tok.Value = value
 				}
 				return nil
 			}
-			cooked.WriteByte('$')
+			if differs {
+				cooked.writeByte('$')
+			}
 			l.pos++
 		case '\\':
-			if err := l.scanEscapeIn(&cooked, true); err != nil {
+			differs = l.startCooked(differs, begin)
+			if err := l.scanEscapeIn(cooked, true); err != nil {
 				// Defer the error: it is only fatal for untagged templates,
 				// which the parser decides.
 				valid = false
 			}
 		case '\r':
 			// Line terminators are normalized to \n in both raw and cooked.
+			differs = l.startCooked(differs, begin)
 			l.pos++
 			if l.peekByte(0) == '\n' {
 				l.pos++
 			}
-			cooked.WriteByte('\n')
+			cooked.writeByte('\n')
 			l.newline()
 		case '\n':
 			l.pos++
-			cooked.WriteByte('\n')
+			if differs {
+				cooked.writeByte('\n')
+			}
 			l.newline()
 		default:
 			r, size := l.peekRune()
-			cooked.WriteRune(r)
+			if r == utf8.RuneError && size == 1 {
+				// Ill-formed text, which the value has U+FFFD for.
+				differs = l.startCooked(differs, begin)
+			}
+			if differs {
+				cooked.writeRune(r)
+			}
 			l.pos += size
 		}
 	}
+}
+
+// startCooked has cooked hold the literal's text from begin to here, if it
+// does not hold a value already (started), and reports that it does now.
+func (l *Lexer) startCooked(started bool, begin int) bool {
+	if !started {
+		l.cooked.reset()
+		l.cooked.writeString(l.src[begin:l.pos])
+	}
+	return true
 }
 
 // normalizeTemplateRaw applies the spec's line-terminator normalization to the
@@ -595,7 +666,7 @@ func (l *Lexer) scanString(tok *Token, quote byte) error {
 	// A literal with no escape is the text between its quotes, which is
 	// sliced rather than copied; the value is only built once an escape
 	// makes it differ.
-	var sb strings.Builder
+	sb := &l.cooked
 	escaped := false
 	for {
 		if l.atEnd() {
@@ -614,11 +685,8 @@ func (l *Lexer) scanString(tok *Token, quote byte) error {
 		}
 		switch c {
 		case '\\':
-			if !escaped {
-				sb.WriteString(l.src[start+1 : l.pos])
-				escaped = true
-			}
-			if err := l.scanEscape(&sb); err != nil {
+			escaped = l.startCooked(escaped, start+1)
+			if err := l.scanEscape(sb); err != nil {
 				return err
 			}
 		case '\n', '\r':
@@ -634,18 +702,18 @@ func (l *Lexer) scanString(tok *Token, quote byte) error {
 			// Lone surrogates may appear via \u escapes; preserve them by
 			// writing the replacement-free raw bytes when decoding fails.
 			if r == utf8.RuneError && size == 1 {
-				sb.WriteByte(c)
+				sb.writeByte(c)
 				l.pos++
 				continue
 			}
-			sb.WriteRune(r)
+			sb.writeRune(r)
 			l.pos += size
 		}
 	}
 }
 
 // scanEscape consumes a backslash escape sequence and appends its value.
-func (l *Lexer) scanEscape(sb *strings.Builder) error {
+func (l *Lexer) scanEscape(sb *cookedBuf) error {
 	return l.scanEscapeIn(sb, false)
 }
 
@@ -655,7 +723,7 @@ func (l *Lexer) scanEscape(sb *strings.Builder) error {
 // A template has no sloppy mode to fall back on -- it was introduced after the
 // octal escapes were already a mistake -- so \1 there is not a character but a
 // part with no cooked value at all, which a tag may still read the raw text of.
-func (l *Lexer) scanEscapeIn(sb *strings.Builder, inTemplate bool) error {
+func (l *Lexer) scanEscapeIn(sb *cookedBuf, inTemplate bool) error {
 	start := l.pos
 	l.pos++ // consume '\'
 	if l.atEnd() {
@@ -665,22 +733,22 @@ func (l *Lexer) scanEscapeIn(sb *strings.Builder, inTemplate bool) error {
 	l.pos++
 	switch c {
 	case 'n':
-		sb.WriteByte('\n')
+		sb.writeByte('\n')
 	case 't':
-		sb.WriteByte('\t')
+		sb.writeByte('\t')
 	case 'r':
-		sb.WriteByte('\r')
+		sb.writeByte('\r')
 	case 'b':
-		sb.WriteByte('\b')
+		sb.writeByte('\b')
 	case 'f':
-		sb.WriteByte('\f')
+		sb.writeByte('\f')
 	case 'v':
-		sb.WriteByte('\v')
+		sb.writeByte('\v')
 	case '0', '1', '2', '3', '4', '5', '6', '7':
 		// Legacy octal escapes. \0 not followed by a digit is NUL and is legal
 		// even in strict mode.
 		if c == '0' && !isDigit(l.peekByte(0)) {
-			sb.WriteByte(0)
+			sb.writeByte(0)
 			return nil
 		}
 		if inTemplate {
@@ -701,7 +769,7 @@ func (l *Lexer) scanEscapeIn(sb *strings.Builder, inTemplate bool) error {
 			v = v*8 + int(d-'0')
 			l.pos++
 		}
-		sb.WriteRune(rune(v))
+		sb.writeRune(rune(v))
 	case 'x':
 		if l.pos+2 > len(l.src) {
 			return l.errf(start, "invalid hexadecimal escape sequence")
@@ -711,7 +779,7 @@ func (l *Lexer) scanEscapeIn(sb *strings.Builder, inTemplate bool) error {
 			return l.errf(start, "invalid hexadecimal escape sequence")
 		}
 		l.pos += 2
-		sb.WriteRune(rune(v))
+		sb.writeRune(rune(v))
 	case 'u':
 		r, err := l.scanUnicodeEscape(start)
 		if err != nil {
@@ -737,7 +805,7 @@ func (l *Lexer) scanEscapeIn(sb *strings.Builder, inTemplate bool) error {
 			return l.errf(start, "\\%c is not an escape sequence", c)
 		}
 		l.legacyEscape = true
-		sb.WriteByte(c)
+		sb.writeByte(c)
 	default:
 		if c >= utf8.RuneSelf {
 			l.pos--
@@ -747,10 +815,10 @@ func (l *Lexer) scanEscapeIn(sb *strings.Builder, inTemplate bool) error {
 				l.newline()
 				return nil
 			}
-			sb.WriteRune(r)
+			sb.writeRune(r)
 			return nil
 		}
-		sb.WriteByte(c)
+		sb.writeByte(c)
 	}
 	return nil
 }
@@ -950,12 +1018,53 @@ done:
 	}
 	tok.Raw = raw
 	tok.Value = raw
+	if !seenExp {
+		if n, ok := shortDecimal(raw); ok {
+			tok.Num = n
+			return nil
+		}
+	}
 	n, err := parseFloatLiteral(strings.ReplaceAll(raw, "_", ""))
 	if err != nil {
 		return l.errf(start, "invalid number")
 	}
 	tok.Num = n
 	return nil
+}
+
+// pow10 are the powers of ten shortDecimal divides by, each exact in a
+// float64.
+var pow10 = [...]float64{1, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15}
+
+// shortDecimal is the value of a literal of digits and at most one point
+// with no more than 15 digits, without strconv: those digits are an integer
+// a float64 holds exactly, and a power of ten up to 1e15 is exact too, so
+// their quotient is one IEEE division, rounded correctly. It reports false
+// for any other literal.
+func shortDecimal(s string) (float64, bool) {
+	if len(s) > 16 {
+		return 0, false
+	}
+	var v uint64
+	digits, point := 0, -1
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case isDigit(c):
+			v = v*10 + uint64(c-'0')
+			digits++
+		case c == '.' && point < 0:
+			point = digits
+		default:
+			return 0, false
+		}
+	}
+	if digits > 15 {
+		return 0, false
+	}
+	if point < 0 {
+		return float64(v), true
+	}
+	return float64(v) / pow10[digits-point], true
 }
 
 // maxBigIntLiteral is the most characters a BigInt literal's digits may
@@ -1028,13 +1137,12 @@ func parseFloatLiteral(s string) (float64, error) {
 // strings.Builder.WriteRune substitutes U+FFFD for a surrogate, because a
 // surrogate is not a Unicode scalar value. JavaScript strings may contain one,
 // so the encoding is done by hand.
-func writeCodePoint(sb *strings.Builder, r rune) {
+func writeCodePoint(sb *cookedBuf, r rune) {
 	if wtf8.IsSurrogate(r) {
-		var buf [3]byte
-		sb.Write(wtf8.AppendRune(buf[:0], r))
+		sb.b = wtf8.AppendRune(sb.b, r)
 		return
 	}
-	sb.WriteRune(r)
+	sb.writeRune(r)
 }
 
 func isDigit(c byte) bool    { return c >= '0' && c <= '9' }

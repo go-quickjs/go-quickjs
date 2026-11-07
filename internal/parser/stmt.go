@@ -127,7 +127,7 @@ func (p *parser) parseStatement() ast.Stmt {
 	}
 
 	// A labelled statement is an identifier followed by a colon.
-	if p.tok.Kind == lexer.Ident {
+	if p.tok.Kind == lexer.Ident && p.colonMayFollow() {
 		m := p.mark()
 		tok := p.tok
 		name := tok.Value
@@ -145,6 +145,13 @@ func (p *parser) parseStatement() ast.Stmt {
 	expr := p.parseExpr()
 	p.semicolon()
 	return p.exprStatement(expr, start)
+}
+
+// colonMayFollow reports whether the next token may be a colon, which most
+// statements that begin with an identifier settle without lexing it.
+func (p *parser) colonMayFollow() bool {
+	next := p.lex.Ahead()
+	return next == "" || next[0] == ':'
 }
 
 // letStartsDeclaration reports whether a `let` token begins a declaration

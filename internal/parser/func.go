@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"strings"
+
 	"github.com/go-quickjs/go-quickjs/internal/ast"
 	"github.com/go-quickjs/go-quickjs/internal/lexer"
 )
@@ -281,6 +283,11 @@ func (p *parser) parseMethodBody(kind ast.FuncKind, async, generator bool, start
 // expression. It costs a single token of lookahead.
 func (p *parser) tryParseSingleParamArrow() ast.Expr {
 	if p.tok.Kind != lexer.Ident {
+		return nil
+	}
+	// Nearly every identifier here is not a parameter: most of them are
+	// settled by what follows without lexing it.
+	if next := p.lex.Ahead(); next != "" && !strings.HasPrefix(next, "=>") {
 		return nil
 	}
 	m := p.mark()

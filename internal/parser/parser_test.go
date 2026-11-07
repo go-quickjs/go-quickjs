@@ -534,3 +534,34 @@ func BenchmarkParseExpressionHeavy(b *testing.B) {
 		}
 	}
 }
+
+// The lookaheads for an arrow and for a label settle most identifiers from
+// the bytes that follow; what they cannot see past is lexed as before.
+func TestArrowAndLabelLookahead(t *testing.T) {
+	for _, src := range []string{
+		"x => 1",
+		"x /* c */ => 1",
+		"x // c\n",
+		"y = x /* c\n */\n+ 1",
+		"l: for (;;) break l",
+		"l /* c */ : for (;;) break l",
+		"l // c\n: for (;;) break l",
+		"l <!-- c\n: for (;;) break l",
+		"l\n--> c\n: for (;;) break l",
+		"l : for (;;) break l",
+		"l\n\t: 1",
+		"x\n/2/g",
+		"x - y",
+		"x --\ny",
+		"x < y",
+		"x = 1",
+		"x == 1",
+	} {
+		parseOK(t, src)
+	}
+	// An arrow's line break is an error wherever the lookahead stops.
+	checkError(t, "x\n=> 1", "")
+	checkError(t, "x /* c\n */ => 1", "")
+	checkError(t, "x /* c */ @", "")
+	checkError(t, "x 'unterminated", "unterminated")
+}

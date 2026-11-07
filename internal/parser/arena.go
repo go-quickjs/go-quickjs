@@ -42,9 +42,10 @@ func (s *slab[T]) alloc() *T {
 		// pointer already handed out stays valid.
 		s.buf = make([]T, 0, s.nextCap)
 	}
-	var zero T
-	s.buf = append(s.buf, zero)
-	return &s.buf[len(s.buf)-1]
+	// A block is zero from its make to its capacity.
+	n := len(s.buf)
+	s.buf = s.buf[:n+1]
+	return &s.buf[n]
 }
 
 // lists builds the lists of a syntax tree -- arguments, statements,
