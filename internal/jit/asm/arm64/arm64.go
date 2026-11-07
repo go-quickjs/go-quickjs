@@ -339,6 +339,12 @@ func (a *Asm) Op(op ALU, dst, n, m Reg, wide bool) {
 	a.emit(uint32(op) | sf(wide) | uint32(m)<<16 | uint32(n)<<5 | uint32(dst))
 }
 
+// AddLsl is dst = n + m<<s, 64 bits (ADD, shifted register): an index
+// scaled and added in one.
+func (a *Asm) AddLsl(dst, n, m Reg, s uint8) {
+	a.emit(uint32(Add) | sf(true) | uint32(m)<<16 | uint32(s&63)<<10 | uint32(n)<<5 | uint32(dst))
+}
+
 // Cmp sets the flags for n - m.
 func (a *Asm) Cmp(n, m Reg, wide bool) { a.Op(Subs, ZR, n, m, wide) }
 

@@ -700,13 +700,11 @@ func (c *a64Compiler) enterExit() {
 	c.a.BCond(arm64.LS, same)
 	c.a.Store(at, 0, top)
 	c.a.Bind(same)
-	c.a.ShiftImm(arm64.Lsl, base, base, 4, true)
 	c.a.Load(at, a64Ctx, abi.OffStackBase)
-	c.a.Op(arm64.Add, base, base, at, true)
+	c.a.AddLsl(base, at, base, 4)
 	c.a.Store(a64Ctx, abi.OffLocals, base)
 	c.a.Load(at, a64CallLink, c.enc.LinkLocals)
-	c.a.ShiftImm(arm64.Lsl, at, at, 4, true)
-	c.a.Op(arm64.Add, at, at, base, true)
+	c.a.AddLsl(at, base, at, 4)
 	c.a.Store(a64Ctx, abi.OffStack, at)
 	c.a.Store(a64Ctx, abi.OffOpen, arm64.ZR)
 	c.a.Store(a64Ctx, abi.OffCells, arm64.ZR)
@@ -1202,9 +1200,8 @@ func (c *a64Compiler) callEntry() {
 		c.a.B(same)
 	})
 	c.a.Bind(same)
-	c.a.ShiftImm(arm64.Lsl, base, base, 4, true)
 	c.a.Load(at, a64Ctx, abi.OffStackBase)
-	c.a.Op(arm64.Add, base, base, at, true)
+	c.a.AddLsl(base, at, base, 4)
 	c.a.Store(a64Ctx, abi.OffLocals, base)
 	c.a.AddImm(a64Stack, base, int64(c.f.FrameLocals)*int64(vs), true)
 	c.a.Store(a64Ctx, abi.OffStack, a64Stack)
@@ -2097,8 +2094,7 @@ func (c *a64Compiler) sourceAddr() {
 	c.a.BCond(arm64.HS, found)
 	c.a.CmpImm(a64C, int64(c.f.FrameLocals), true)
 	c.a.BCond(arm64.HS, captured)
-	c.a.ShiftImm(arm64.Lsl, a64C, a64C, 4, true)
-	c.a.Op(arm64.Add, a64C, a64C, a64Locals, true)
+	c.a.AddLsl(a64C, a64Locals, a64C, 4)
 	c.a.B(found)
 	c.a.Bind(captured)
 	c.a.CmpImm(a64C, int64(c.f.Locals), true)
@@ -2120,8 +2116,7 @@ func (c *a64Compiler) sourceAddr() {
 	c.a.B(found)
 	c.a.Bind(stack)
 	c.a.AddImm(a64C, a64C, -int64(c.f.Locals), true)
-	c.a.ShiftImm(arm64.Lsl, a64C, a64C, 4, true)
-	c.a.Op(arm64.Add, a64C, a64C, a64Stack, true)
+	c.a.AddLsl(a64C, a64Stack, a64C, 4)
 	c.a.Bind(found)
 }
 
@@ -2378,8 +2373,7 @@ func (c *a64Compiler) appendingCall() {
 	// As amd64's: a key below the length, a hole the number fills.
 	c.a.Bind(hole)
 	c.a.Load(a64B, a64C, c.enc.ObjectElems)
-	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
-	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	c.a.AddLsl(a64A, a64B, a64A, 4)
 	c.a.Load(a64B, a64A, c.enc.NumOffset)
 	c.movImm(a64D, c.enc.Uninitialized)
 	c.a.Cmp(a64B, a64D, true)
@@ -3458,9 +3452,8 @@ func (c *a64Compiler) genFrame(gr ssa.GenResume, blk *ssa.Block) {
 	c.a.Store(next, abi.OffStack, t)
 	// Its locals, the generator's, past its arguments.
 	c.a.LoadU32(u, g, c.enc.GenArgs)
-	c.a.ShiftImm(arm64.Lsl, u, u, 4, true)
 	c.a.Load(a64A, g, c.enc.GenVals)
-	c.a.Op(arm64.Add, u, u, a64A, true)
+	c.a.AddLsl(u, a64A, u, 4)
 	c.a.Store(next, abi.OffLocals, u)
 	c.a.Store(next, abi.OffOpen, arm64.ZR)
 	c.a.Store(next, abi.OffCells, arm64.ZR)
@@ -3752,6 +3745,16 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 	// As amd64's: past its sites, any other function (genericCheck).
 	gen := generic && site.Generic && site.Via == 0 && site.Pool == 0 && !site.Push && !site.Pop && !site.Alloc && !site.Receiver &&
 		!site.Literal && vs == 16 && c.enc.HintSlotSize == 32
+	// As amd64's: a call of one function writes its operands where the
+	// callee has them, unrecorded.
+	direct, ops := len(sites) == 1 && !gen && !site.ArrowThis && !site.FrameArgs && (site.ThisSlot < 0 || site.Method || site.Pool != 0 || site.Super || site.PlainThis), calleeSlot
+	if site.Method {
+		ops--
+	}
+	direct = direct && c.operandsLive(s, ops)
+	// As amd64's: such a call's room check leaves the VM's stack's top in
+	// D, where nothing after it reads the callee.
+	keepTop := direct && site.Parent == 0 && site.Pool == 0
 	for k, t := range sites {
 		// As amd64's: the last function's checks fail straight to the stub.
 		last := k == len(sites)-1 && !gen
@@ -3819,9 +3822,15 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 			c.a.Cmp(c.gpr(recv, a64A), a64B, true)
 			guard.jump(arm64.NE)
 		}
-		c.a.Load(a64B, a64Ctx, abi.OffStackTop)
-		c.a.Load(a64B, a64B, 0)
-		c.a.AddImm(a64B, a64B, int64(t.LocalCount+t.MaxStack), true)
+		if keepTop {
+			c.a.Load(a64D, a64Ctx, abi.OffStackTop)
+			c.a.Load(a64D, a64D, 0)
+			c.a.AddImm(a64B, a64D, int64(t.LocalCount+t.MaxStack), true)
+		} else {
+			c.a.Load(a64B, a64Ctx, abi.OffStackTop)
+			c.a.Load(a64B, a64B, 0)
+			c.a.AddImm(a64B, a64B, int64(t.LocalCount+t.MaxStack), true)
+		}
 		c.a.Load(a64A, a64Ctx, abi.OffStackEnd)
 		c.a.Cmp(a64B, a64A, true)
 		guard.jump(arm64.HI)
@@ -3866,13 +3875,6 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 		}
 		return
 	}
-	// As amd64's: a call of one function writes its operands where the
-	// callee has them, unrecorded.
-	direct, ops := len(sites) == 1 && !gen && !site.ArrowThis && !site.FrameArgs && (site.ThisSlot < 0 || site.Method || site.Pool != 0 || site.Super || site.PlainThis), calleeSlot
-	if site.Method {
-		ops--
-	}
-	direct = direct && c.operandsLive(s, ops)
 	// As amd64's: the state, described (callState), the call writing only
 	// what the caller's code keeps nowhere else.
 	operands := -1
@@ -3894,12 +3896,14 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 	receiver := direct && site.Pool == 0 && !site.Super && !site.PlainThis && (site.ThisSlot >= 0 || site.Method && this < sp)
 	if direct {
 		// The callee's frame's address, in D, which pointerWord does not
-		// use.
-		c.a.Load(a64D, a64Ctx, abi.OffStackTop)
-		c.a.Load(a64D, a64D, 0)
-		c.a.ShiftImm(arm64.Lsl, a64D, a64D, 4, true)
+		// use: made of the stack's top the room check left there, if no
+		// record was written since (callRecords).
+		if !keepTop || len(recs) != 0 {
+			c.a.Load(a64D, a64Ctx, abi.OffStackTop)
+			c.a.Load(a64D, a64D, 0)
+		}
 		c.a.Load(a64B, a64Ctx, abi.OffStackBase)
-		c.a.Op(arm64.Add, a64D, a64D, a64B, true)
+		c.a.AddLsl(a64D, a64B, a64D, 4)
 		// From the call's state, as its records are (exitView).
 		back := c.viewExits()
 		for i := 0; i < site.Params && args+i < sp && i < site.LocalCount; i++ {
@@ -3951,9 +3955,8 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 	frame := func() {
 		c.a.Load(locals, a64Ctx, abi.OffStackTop)
 		c.a.Load(locals, locals, 0)
-		c.a.ShiftImm(arm64.Lsl, locals, locals, 4, true)
 		c.a.Load(tmp, a64Ctx, abi.OffStackBase)
-		c.a.Op(arm64.Add, locals, locals, tmp, true)
+		c.a.AddLsl(locals, tmp, locals, 4)
 	}
 	// setup is amd64's: it keeps a64CallLink and a64D, the callee's entry.
 	setup := func(t *ssa.CallSite) {
@@ -5789,8 +5792,7 @@ func (c *a64Compiler) iterStep(v *ssa.Value, slow arm64.Label) {
 	c.a.Cmp(a64A, a64B, true)
 	c.a.BCond(arm64.HS, slow)
 	c.a.Load(a64B, a64C, c.enc.ObjectElems)
-	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
-	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	c.a.AddLsl(a64A, a64B, a64A, 4)
 	c.a.Load(a64B, a64A, c.enc.NumOffset)
 	c.movImm(a64C, c.enc.Uninitialized)
 	c.a.Cmp(a64B, a64C, true)
@@ -5839,8 +5841,7 @@ func (c *a64Compiler) forInStep(v *ssa.Value, notForIn, slow, done arm64.Label) 
 	c.a.Cmp(a64B, a64C, true)
 	fail.jump(arm64.NE)
 	c.a.Load(a64C, a64D, in+c.enc.ForInKeys)
-	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
-	c.a.Op(arm64.Add, a64A, a64A, a64C, true)
+	c.a.AddLsl(a64A, a64C, a64A, 4)
 	c.a.Load(a64B, a64A, c.enc.NumOffset)
 	c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64B)
 	c.a.Load(a64C, a64A, c.enc.RefOffset)
@@ -5988,8 +5989,7 @@ func (c *a64Compiler) keyedRead(v *ssa.Value, slow arm64.Label) {
 	c.a.Cmp(a64A, a64C, true)
 	fail.jump(arm64.HS)
 	c.a.Load(a64B, a64B, c.enc.ObjectElems)
-	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
-	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	c.a.AddLsl(a64A, a64B, a64A, 4)
 	c.a.Load(a64C, a64A, c.enc.NumOffset)
 	c.movImm(a64D, c.enc.Uninitialized)
 	c.a.Cmp(a64C, a64D, true)
@@ -6045,8 +6045,7 @@ func (c *a64Compiler) keyedStore(v *ssa.Value, slow arm64.Label) {
 	c.a.Cmp(a64A, a64C, true)
 	fail.jump(arm64.HS)
 	c.a.Load(a64B, a64B, c.enc.ObjectElems)
-	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
-	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	c.a.AddLsl(a64A, a64B, a64A, 4)
 	c.a.Load(a64C, a64A, c.enc.NumOffset)
 	c.movImm(a64D, c.enc.Uninitialized)
 	c.a.Cmp(a64C, a64D, true)
@@ -6154,9 +6153,8 @@ func (c *a64Compiler) copyProps(v *ssa.Value, site *ssa.CallSite, slow arm64.Lab
 	c.a.BCond(arm64.HI, slow)
 	c.a.Store(a64Ctx, length, a64C)
 	c.a.Load(a64A, a64Ctx, tgt+c.enc.RefOffset)
-	c.a.ShiftImm(arm64.Lsl, a64B, a64B, 4, true)
 	c.a.Load(a64C, a64A, c.enc.ObjectProps)
-	c.a.Op(arm64.Add, a64B, a64B, a64C, true)
+	c.a.AddLsl(a64B, a64C, a64B, 4)
 	c.a.Store(a64Ctx, dst, a64B)
 	c.a.Load(a64A, a64Ctx, src+c.enc.RefOffset)
 	c.a.Load(a64A, a64A, c.enc.ObjectProps)
@@ -6171,9 +6169,8 @@ func (c *a64Compiler) copyProps(v *ssa.Value, site *ssa.CallSite, slow arm64.Lab
 	c.a.LoadU32(a64B, a64A, 0)
 	c.a.AddImm(a64A, a64A, 4, true)
 	c.a.Store(a64Ctx, next, a64A)
-	c.a.ShiftImm(arm64.Lsl, a64B, a64B, 4, true)
 	c.a.Load(a64A, a64Ctx, vals)
-	c.a.Op(arm64.Add, a64B, a64B, a64A, true)
+	c.a.AddLsl(a64B, a64A, a64B, 4)
 	c.a.Load(a64A, a64B, c.enc.NumOffset)
 	c.a.Load(a64C, a64B, c.enc.RefOffset)
 	c.a.Load(a64B, a64Ctx, dst)
@@ -6328,8 +6325,7 @@ func (c *a64Compiler) spreadElems(v *ssa.Value, site *ssa.CallSite, slow arm64.L
 	c.a.BCond(arm64.HI, slow)
 	c.a.Load(a64A, a64Ctx, tgt+c.enc.RefOffset)
 	c.a.Load(a64A, a64A, c.enc.ObjectElems)
-	c.a.ShiftImm(arm64.Lsl, a64C, a64C, 4, true)
-	c.a.Op(arm64.Add, a64C, a64C, a64A, true)
+	c.a.AddLsl(a64C, a64A, a64C, 4)
 	c.a.Store(a64Ctx, dst, a64C)
 	loop, done := c.a.NewLabel(), c.a.NewLabel()
 	c.a.Cbz(a64D, done, true)
@@ -6427,8 +6423,7 @@ func (c *a64Compiler) keyedHas(v *ssa.Value, slow arm64.Label) {
 	c.a.Cmp(a64A, a64C, true)
 	c.a.BCond(arm64.HS, absent)
 	c.a.Load(a64B, a64B, c.enc.ObjectElems)
-	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
-	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	c.a.AddLsl(a64A, a64B, a64A, 4)
 	c.a.Load(a64C, a64A, c.enc.NumOffset)
 	c.movImm(a64D, c.enc.Uninitialized)
 	c.a.Cmp(a64C, a64D, true)
@@ -7725,8 +7720,7 @@ func (c *a64Compiler) stringAtOr(v *ssa.Value) {
 	c.a.BCond(arm64.HS, none)
 	c.a.Load(a64B, a64Ctx, abi.OffCharStrings)
 	c.a.Cbz(a64B, none, true)
-	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
-	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	c.a.AddLsl(a64A, a64B, a64A, 4)
 	c.a.B(done)
 	c.a.Bind(none)
 	c.movImm(a64A, 0)
@@ -7860,8 +7854,7 @@ func (c *a64Compiler) codeCharOr(v *ssa.Value) {
 	fail.jump(arm64.HS)
 	c.a.Load(a64B, a64Ctx, abi.OffCharStrings)
 	c.a.Cbz(a64B, none, true)
-	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
-	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	c.a.AddLsl(a64A, a64B, a64A, 4)
 	c.a.B(done)
 	c.a.Bind(none)
 	c.movImm(a64A, 0)
@@ -7955,8 +7948,7 @@ func (c *a64Compiler) charAddr(v *ssa.Value, guard a64Guard) {
 	guard.jump(arm64.HS)
 	c.a.Load(a64B, a64Ctx, abi.OffCharStrings)
 	c.a.Cbz(a64B, c.stubLabel(v.State, exitKind(v.Aux)), true)
-	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
-	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	c.a.AddLsl(a64A, a64B, a64A, 4)
 }
 
 // stringUnit reads the code unit at index key of str, a flat string, into
@@ -8030,8 +8022,7 @@ func (c *a64Compiler) substringChar(v *ssa.Value) {
 	fail.jump(arm64.HS)
 	c.a.Load(a64B, a64Ctx, abi.OffCharStrings)
 	c.a.Cbz(a64B, none, true)
-	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
-	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	c.a.AddLsl(a64A, a64B, a64A, 4)
 	c.a.B(done)
 	c.a.Bind(none)
 	c.movImm(a64A, 0)
@@ -8061,8 +8052,7 @@ func (c *a64Compiler) element(array *ssa.Value, guard a64Guard) {
 	c.a.Cmp(a64A, a64B, true)
 	guard.jump(arm64.HS)
 	c.a.Load(a64B, p, c.enc.ObjectElems)
-	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
-	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	c.a.AddLsl(a64A, a64B, a64A, 4)
 	c.a.Load(a64B, a64A, c.enc.NumOffset)
 	c.movImm(a64C, abi.NumberLimit)
 	c.a.Cmp(a64B, a64C, true)
@@ -8359,8 +8349,7 @@ func (c *a64Compiler) elementCell(array *ssa.Value, guard a64Guard) {
 	c.a.Cmp(a64A, a64B, true)
 	guard.jump(arm64.HS)
 	c.a.Load(a64B, p, c.enc.ObjectElems)
-	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
-	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	c.a.AddLsl(a64A, a64B, a64A, 4)
 	c.a.Load(a64B, a64A, c.enc.NumOffset)
 	c.movImm(a64C, c.enc.Uninitialized)
 	c.a.Cmp(a64B, a64C, true)
@@ -8394,8 +8383,7 @@ func (c *a64Compiler) storageFree(array *ssa.Value, checks []*ssa.Value, stub ar
 	c.a.BCond(arm64.NE, free)
 	c.a.Load(a64A, p, c.enc.ObjectElems)
 	c.a.Load(a64B, p, c.enc.ObjectElems+16)
-	c.a.ShiftImm(arm64.Lsl, a64B, a64B, 4, true)
-	c.a.Op(arm64.Add, a64B, a64B, a64A, true)
+	c.a.AddLsl(a64B, a64A, a64B, 4)
 	for _, s := range checks {
 		next := c.a.NewLabel()
 		r := c.gpr(s, a64C)
@@ -8446,8 +8434,7 @@ func (c *a64Compiler) storeCell(array *ssa.Value, checks []*ssa.Value, stub arm6
 			// The cell first, which the checks compare, the index kept in
 			// F1.
 			c.a.Load(a64B, p, c.enc.ObjectElems)
-			c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
-			c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+			c.a.AddLsl(a64A, a64B, a64A, 4)
 			c.cellChecks(checks, stub)
 			c.a.FMovFromF(a64B, a64F1)
 			c.a.AddImm(a64B, a64B, 1, true)
@@ -8458,13 +8445,11 @@ func (c *a64Compiler) storeCell(array *ssa.Value, checks []*ssa.Value, stub arm6
 		c.a.AddImm(a64B, a64A, 1, true)
 		c.a.Store(p, c.enc.ObjectElems+8, a64B)
 		c.a.Load(a64B, p, c.enc.ObjectElems)
-		c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
-		c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+		c.a.AddLsl(a64A, a64B, a64A, 4)
 		c.a.B(found)
 	})
 	c.a.Load(a64B, p, c.enc.ObjectElems)
-	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
-	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	c.a.AddLsl(a64A, a64B, a64A, 4)
 	c.a.Load(a64B, a64A, c.enc.NumOffset)
 	c.movImm(a64C, c.enc.Uninitialized)
 	c.a.Cmp(a64B, a64C, true)
@@ -8493,8 +8478,7 @@ func (c *a64Compiler) freshCell(array *ssa.Value, fail a64Guard) {
 	c.a.AddImm(a64B, a64A, 1, true)
 	c.a.Store(p, c.enc.ObjectElems+8, a64B)
 	c.a.Load(a64B, p, c.enc.ObjectElems)
-	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
-	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	c.a.AddLsl(a64A, a64B, a64A, 4)
 }
 
 // numberCell checks the word at A's cell is a number, into B.

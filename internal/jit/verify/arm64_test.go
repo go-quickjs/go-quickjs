@@ -103,6 +103,8 @@ func TestARM64Integer(t *testing.T) {
 		expectA64(t, tc.name+" x3, x4, x5", func(a *arm64.Asm) { a.Op(tc.op, 3, 4, 5, true) })
 		expectA64(t, tc.name+" w3, w4, w5", func(a *arm64.Asm) { a.Op(tc.op, 3, 4, 5, false) })
 	}
+	expectA64(t, "add x3, x4, x5, lsl #4", func(a *arm64.Asm) { a.AddLsl(3, 4, 5, 4) })
+	expectA64(t, "add x9, x9, x10", func(a *arm64.Asm) { a.AddLsl(9, 9, 10, 0) })
 	expectA64(t, "cmp x4, x5", func(a *arm64.Asm) { a.Cmp(4, 5, true) })
 	expectA64(t, "tst w4, w5", func(a *arm64.Asm) { a.Tst(4, 5, false) })
 	expectA64(t, "add x3, x4, #0x10", func(a *arm64.Asm) { a.AddImm(3, 4, 16, true) })
