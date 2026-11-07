@@ -925,7 +925,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			if obj.IsObject() && key.IsNumber() {
 				o := obj.Object()
 				if i := uint32(key.Number()); float64(i) == key.Number() &&
-					uint(i) < uint(len(o.elemsOf())) && o.flags&objMappedArguments == 0 && !isHole(o.elemsOf()[i]) {
+					uint(i) < uint(len(o.elemsOf())) && o.flags&(objMappedArguments|objSharedElems) == 0 && !isHole(o.elemsOf()[i]) {
 					o.extOf().elems[i] = val
 					break
 				}
@@ -3710,7 +3710,7 @@ func appendElem(o *Object, n float64, v Value) bool {
 	const want = objExtensible | objArrayLengthWritable
 	i := uint32(n)
 	if o.class != ClassArray || float64(i) != n || uint(i) != uint(len(o.elemsOf())) ||
-		o.flags&(want|objHasSparseElements|objMappedArguments) != want || !o.noIndexKeys() {
+		o.flags&(want|objHasSparseElements|objMappedArguments|objSharedElems) != want || !o.noIndexKeys() {
 		return false
 	}
 	for p := o.proto(); p != nil; p = p.proto() {

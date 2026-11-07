@@ -673,6 +673,7 @@ func (r *Runtime) pureElemOp(op uint8, this Value, args []Value, mayStore bool) 
 	}
 	switch op {
 	case elemPush:
+		o.ownElems()
 		els := o.elemsOf()
 		if !r.noInheritedIndices(o) || o.flags&(objExtensible|objArrayLengthWritable) != objExtensible|objArrayLengthWritable ||
 			int64(len(els))+int64(len(args)) > maxArrayLength {
@@ -698,6 +699,7 @@ func (r *Runtime) pureElemOp(op uint8, this Value, args []Value, mayStore bool) 
 			return Undefined, false
 		}
 		v := els[n]
+		o.ownElems()
 		o.extOf().elems[n] = Undefined
 		o.extOf().elems = o.elemsOf()[:n]
 		return v, true

@@ -771,6 +771,29 @@ func (c *compiler) templateIdx(q *ast.TemplateLit) uint32 {
 	return uint32(len(c.fn.Templates) - 1)
 }
 
+// constantElems reports whether the code from start is n instructions, each
+// the push of a constant an array literal's arrays may share: a number, a
+// string, true, false, null or undefined -- not a BigInt, nor a hole.
+func (c *compiler) constantElems(start, n int) bool {
+	code := c.fn.Code[start:]
+	if n == 0 || len(code) != n {
+		return false
+	}
+	for _, in := range code {
+		switch in.Op {
+		case bytecode.OpPushInt, bytecode.OpPushTrue, bytecode.OpPushFalse, bytecode.OpPushNull,
+			bytecode.OpPushUndef, bytecode.OpPushEmptyString:
+		case bytecode.OpPushConst:
+			if k := c.fn.Constants[in.A].Kind; k != bytecode.ConstNumber && k != bytecode.ConstString {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func (c *compiler) compileArrayLit(n *ast.ArrayLit) {
 	trace := c.traceIn
 	// Without spread the whole literal is built in one instruction from
@@ -788,6 +811,7 @@ func (c *compiler) compileArrayLit(n *ast.ArrayLit) {
 		}
 	}
 	if simple {
+		start := len(c.fn.Code)
 		for _, el := range n.Elements {
 			if el == nil {
 				c.emit(bytecode.OpPushUninitialized, 0, 0)
@@ -796,7 +820,15 @@ func (c *compiler) compileArrayLit(n *ast.ArrayLit) {
 			c.traceName = trace
 			c.compileExpr(el)
 		}
-		c.emit(bytecode.OpNewArray, uint32(len(n.Elements)), 0)
+		// A literal of constants has a cache site, where the VM keeps the
+		// constants that its arrays share until one is written (the VM's
+		// objSharedElems).
+		var site uint32
+		if c.constantElems(start, len(n.Elements)) {
+			c.fn.PropSites++
+			site = c.fn.PropSites
+		}
+		c.emit(bytecode.OpNewArray, uint32(len(n.Elements)), site)
 		return
 	}
 

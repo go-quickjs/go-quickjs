@@ -1490,6 +1490,11 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			return Int32(^i)
 		})
 	case bytecode.OpNewArray:
+		if in.B != 0 && sharedArrayNode(b, in) {
+			// A literal of constants, whose arrays share them
+			// (ztree_a0shared.go).
+			break
+		}
 		// The elements go to their slots, from which the array is made.
 		if !b.spill() {
 			return 0, false

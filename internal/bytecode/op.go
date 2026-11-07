@@ -283,7 +283,7 @@ const (
 	// --- Function and object construction ---------------------------------
 	OpClosure // build a closure from function template Constants[A]
 	OpNewObject
-	OpNewArray     // A = element count, taken from the stack
+	OpNewArray     // A = element count, taken from the stack; B, if not 0, the cache site of a literal of constants
 	OpNewArrayFrom // build from an iterator result already on the stack
 	OpArrayPush    // append to the array beneath the top
 	OpArraySpread  // spread an iterable into the array beneath

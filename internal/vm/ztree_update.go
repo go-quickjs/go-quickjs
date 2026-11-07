@@ -458,7 +458,7 @@ func elemValueUpdate(u *rmw) tval {
 	return func(c *tctx) Value {
 		ov, kv := c.locals[o], c.locals[k]
 		if a := objectAt(&ov); a != nil {
-			if i := uint32(kv.num); float64(i) == kv.num && uint(i) < uint(len(a.elemsOf())) && a.flags&objMappedArguments == 0 {
+			if i := uint32(kv.num); float64(i) == kv.num && uint(i) < uint(len(a.elemsOf())) && a.flags&(objMappedArguments|objSharedElems) == 0 {
 				if p := &a.extOf().elems[i]; numberAt(p) {
 					b := y
 					if yl >= 0 {
@@ -668,7 +668,7 @@ func elemLocalUpdate(u *rmw) tstmt {
 	if yl >= 0 {
 		return func(c *tctx) {
 			if a, k := objectAt(&c.locals[o]), c.locals[k]; a != nil {
-				if i := uint32(k.num); float64(i) == k.num && uint(i) < uint(len(a.elemsOf())) && a.flags&objMappedArguments == 0 {
+				if i := uint32(k.num); float64(i) == k.num && uint(i) < uint(len(a.elemsOf())) && a.flags&(objMappedArguments|objSharedElems) == 0 {
 					if p, b := &a.extOf().elems[i], &c.locals[yl]; numberAt(p) {
 						if numberAt(b) {
 							p.num = Float(updateNum(op, p.num, b.num)).num
@@ -682,7 +682,7 @@ func elemLocalUpdate(u *rmw) tstmt {
 	}
 	return func(c *tctx) {
 		if a, k := objectAt(&c.locals[o]), c.locals[k]; a != nil {
-			if i := uint32(k.num); float64(i) == k.num && uint(i) < uint(len(a.elemsOf())) && a.flags&objMappedArguments == 0 {
+			if i := uint32(k.num); float64(i) == k.num && uint(i) < uint(len(a.elemsOf())) && a.flags&(objMappedArguments|objSharedElems) == 0 {
 				if p := &a.extOf().elems[i]; numberAt(p) {
 					p.num = Float(updateNum(op, p.num, y)).num
 					return
@@ -701,7 +701,7 @@ func elemIndexUpdate(u *rmw) tstmt {
 	o, i, op, y, yl := u.obj.k, uint32(u.key.n.num), u.op, u.y.n.num, u.yLocal
 	if yl >= 0 {
 		return func(c *tctx) {
-			if a := objectAt(&c.locals[o]); a != nil && uint(i) < uint(len(a.elemsOf())) && a.flags&objMappedArguments == 0 {
+			if a := objectAt(&c.locals[o]); a != nil && uint(i) < uint(len(a.elemsOf())) && a.flags&(objMappedArguments|objSharedElems) == 0 {
 				if p, b := &a.extOf().elems[i], &c.locals[yl]; numberAt(p) {
 					if numberAt(b) {
 						p.num = Float(updateNum(op, p.num, b.num)).num
@@ -713,7 +713,7 @@ func elemIndexUpdate(u *rmw) tstmt {
 		}
 	}
 	return func(c *tctx) {
-		if a := objectAt(&c.locals[o]); a != nil && uint(i) < uint(len(a.elemsOf())) && a.flags&objMappedArguments == 0 {
+		if a := objectAt(&c.locals[o]); a != nil && uint(i) < uint(len(a.elemsOf())) && a.flags&(objMappedArguments|objSharedElems) == 0 {
 			if p := &a.extOf().elems[i]; numberAt(p) {
 				p.num = Float(updateNum(op, p.num, y)).num
 				return
@@ -827,7 +827,7 @@ func elemTreeUpdate(u *rmw) tstmt {
 			k = c.locals[kk]
 		}
 		if a := objectAt(&ov); a != nil {
-			if i := uint32(k.num); float64(i) == k.num && uint(i) < uint(len(a.elemsOf())) && a.flags&objMappedArguments == 0 {
+			if i := uint32(k.num); float64(i) == k.num && uint(i) < uint(len(a.elemsOf())) && a.flags&(objMappedArguments|objSharedElems) == 0 {
 				if p := &a.extOf().elems[i]; numberAt(p) {
 					old := *p
 					var y Value

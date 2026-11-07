@@ -1270,6 +1270,11 @@ type Encoding struct {
 	// FlagHTMLDDA is the flags byte's bit for Annex B's [[IsHTMLDDA]],
 	// which makes an object == null and == undefined.
 	FlagHTMLDDA uint8
+	// FlagShared is its bit for an array whose elements an array literal's
+	// arrays share, which no store writes in place: a store, push, pop or
+	// length's write tests it with FlagSparse, and leaves to Go, which
+	// gives the array a copy of its own.
+	FlagShared uint8
 	// FlagExtensible is its bit for an object properties may be added to,
 	// FlagLengthWritable an array's whose length may change.
 	FlagExtensible, FlagLengthWritable uint8

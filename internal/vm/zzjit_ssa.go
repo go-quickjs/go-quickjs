@@ -212,6 +212,7 @@ var jitEncoding = abi.Encoding{
 	FlagData:           uint8(objHasData),
 	FlagPoly:           uint8(objPolyProto >> 8),
 	FlagHTMLDDA:        uint8(objHTMLDDA),
+	FlagShared:         uint8(objSharedElems),
 	FlagExtensible:     uint8(objExtensible),
 	LengthKey:          uint32(atomLength),
 	FlagLengthWritable: uint8(objArrayLengthWritable),
@@ -5823,6 +5824,7 @@ func jitStoreElem(o *Object, n float64, v Value) bool {
 		return typedWrite(o, i, v)
 	}
 	if uint(i) < uint(len(o.elemsOf())) && !isHole(o.elemsOf()[i]) {
+		o.ownElems()
 		o.extOf().elems[i] = v
 		return true
 	}
@@ -9190,6 +9192,7 @@ func (r *Runtime) jitSortCopy(form int, recv, x Value) (Value, bool) {
 		if a == nil {
 			return Undefined, false
 		}
+		a.ownElems()
 		elems = a.elemsOf()
 		n = len(elems)
 	}

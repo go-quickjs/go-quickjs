@@ -336,7 +336,7 @@ func setElem(o, k, v Value) bool {
 	}
 	a := o.object()
 	i, e := uint32(k.num), a.elemsOf()
-	if float64(i) != k.num || uint(i) >= uint(len(e)) || a.flags&objMappedArguments != 0 {
+	if float64(i) != k.num || uint(i) >= uint(len(e)) || a.flags&(objMappedArguments|objSharedElems) != 0 {
 		if a.class != ClassTypedArray || float64(i) != k.num || !v.IsNumber() {
 			return false
 		}

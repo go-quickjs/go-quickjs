@@ -1107,6 +1107,7 @@ func (r *Runtime) initArrayBuiltins() {
 			// writable, whose prototypes have no element a setter could be
 			// asked about: each value is an element added at the end, and the
 			// length is how many there are.
+			o.ownElems()
 			o.extOf().elems = append(o.elemsOf(), args...)
 			return Float(float64(len(o.elemsOf()))), nil
 		}
@@ -1136,6 +1137,7 @@ func (r *Runtime) initArrayBuiltins() {
 			// which the prototypes answer for.
 			n := len(o.elemsOf()) - 1
 			if v := o.elemsOf()[n]; !isHole(v) {
+				o.ownElems()
 				o.extOf().elems[n] = Undefined
 				o.extOf().elems = o.elemsOf()[:n]
 				return v, nil
@@ -3322,6 +3324,7 @@ func (r *Runtime) fillArray(o *Object, start, end int64, v Value) (int64, error)
 		// not look for.
 		return start, nil
 	}
+	o.ownElems()
 	elems := o.elemsOf()
 	for ; start < end && start < int64(len(elems)); start++ {
 		if err := r.tick(); err != nil {

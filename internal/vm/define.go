@@ -416,6 +416,7 @@ func (r *Runtime) installProperty(o *Object, key Atom, d *propDesc, cur *propDes
 	if merged.hasGet || merged.hasSet {
 		// Vacate any dense slot, which cannot hold an accessor.
 		if key.IsIndex() && uint(key.Index()) < uint(len(o.elemsOf())) {
+			o.ownElems()
 			o.markSparse()
 			o.extOf().elems[key.Index()] = elemHole
 		}
@@ -697,6 +698,7 @@ func (r *Runtime) preventExtensionsOf(o *Object) (bool, error) {
 			}
 		}
 		o.markSparse()
+		o.flags &^= objSharedElems
 		o.extOf().elems = nil
 	}
 	o.flags &^= objExtensible

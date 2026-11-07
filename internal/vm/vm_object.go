@@ -169,13 +169,14 @@ const (
 	// has: typeof says "undefined", ToBoolean says false, and == says it
 	// equals null and undefined. Everything else sees an ordinary object.
 	objHTMLDDA
-	// objInlineProps marks an object whose properties are still in the room
-	// its own allocation carries for its first few. Grown past it, they move
-	// to a slice of their own, and the room is cleared as they leave: it is
-	// part of the object, and what it still held would stay reachable for as
-	// long as the object is -- a node's old links, and through them every
-	// node a linked structure has let go of since.
-	objInlineProps
+	// objSharedElems marks an array whose dense elements are an array
+	// literal's constants, which every array the literal made shares
+	// (sharedLiteral): what writes an element, or the storage in place,
+	// first gives the array a copy of its own (ownElems). Reading needs no
+	// test, which is why the flag is in the low byte with the ones native
+	// code tests, beside objMappedArguments, which the same writes test:
+	// one mask for both (abi.Encoding's FlagShared).
+	objSharedElems
 	// objEvalVars marks the object holding the bindings a direct eval declared
 	// in a frame. It sits on the scope chain like a `with` object, but it is
 	// not one a script can reach: a call through it has no receiver.
@@ -196,6 +197,13 @@ const (
 	// (zzz_polyproto.go). Native code reads it too (abi.Encoding's
 	// FlagPoly).
 	objPolyProto
+	// objInlineProps marks an object whose properties are still in the room
+	// its own allocation carries for its first few. Grown past it, they move
+	// to a slice of their own, and the room is cleared as they leave: it is
+	// part of the object, and what it still held would stay reachable for as
+	// long as the object is -- a node's old links, and through them every
+	// node a linked structure has let go of since.
+	objInlineProps
 )
 
 // linearScanLimit is the property count below which lookup scans the keys
@@ -1726,6 +1734,7 @@ func (o *Object) setElem(i uint32, v Value) bool {
 			return true
 		}
 	}
+	o.ownElems()
 	switch {
 	case uint(i) < uint(len(o.elemsOf())):
 		o.extOf().elems[i] = v
@@ -1787,6 +1796,7 @@ func (o *Object) noteArrayIndex(i uint32) {
 
 // setArrayLength truncates or extends an array.
 func (o *Object) setArrayLength(n uint32) {
+	o.ownElems()
 	switch {
 	case uint(n) < uint(len(o.elemsOf())):
 		// Truncating releases the discarded values for collection. One

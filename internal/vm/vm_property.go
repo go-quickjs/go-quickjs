@@ -911,6 +911,7 @@ func (r *Runtime) deleteProp(o *Object, key Atom, strict bool) (bool, error) {
 			// Deleting leaves a hole wherever it happens, including at the
 			// end: an array's length is a number rather than a count of what
 			// is present, so `delete a[a.length - 1]` does not shorten it.
+			o.ownElems()
 			o.extOf().elems[i] = elemHole
 			// A deleted index no longer names a parameter.
 			o.unmapArgument(i)
@@ -961,6 +962,7 @@ func (r *Runtime) defineOwnProp(o *Object, key Atom, val Value, flags propFlags)
 	// of dense storage, which cannot express attributes.
 	if key.IsIndex() && uint(key.Index()) < uint(len(o.elemsOf())) && flags != propDefault {
 		i := key.Index()
+		o.ownElems()
 		o.markSparse()
 		o.extOf().elems[i] = elemHole
 	}

@@ -2389,7 +2389,7 @@ func (c *a64Compiler) arrayGuards(p arm64.Reg, protos [2]ssa.Holder, fail a64Gua
 	fail.jump(arm64.NE)
 	c.a.LoadU8(a64B, p, c.enc.ObjectFlags)
 	want := c.enc.FlagExtensible | c.enc.FlagLengthWritable
-	c.movImm(a64A, uint64(want|c.enc.FlagSparse))
+	c.movImm(a64A, uint64(want|c.enc.FlagSparse|c.enc.FlagShared))
 	c.a.Op(arm64.And, a64B, a64B, a64A, false)
 	c.a.CmpImm(a64B, int64(want), false)
 	fail.jump(arm64.NE)
@@ -4291,7 +4291,7 @@ func (c *a64Compiler) pushGuards(t *ssa.CallSite, recv *ssa.Value, guard a64Guar
 	guard.jump(arm64.NE)
 	c.a.LoadU8(a64B, a64C, c.enc.ObjectFlags)
 	want := c.enc.FlagExtensible | c.enc.FlagLengthWritable
-	c.movImm(a64A, uint64(want|c.enc.FlagSparse))
+	c.movImm(a64A, uint64(want|c.enc.FlagSparse|c.enc.FlagShared))
 	c.a.Op(arm64.And, a64B, a64B, a64A, false)
 	c.a.CmpImm(a64B, int64(want), false)
 	guard.jump(arm64.NE)
@@ -4350,7 +4350,7 @@ func (c *a64Compiler) popGuards(t *ssa.CallSite, recv *ssa.Value, guard a64Guard
 	c.a.CmpImm(a64B, int64(c.enc.ClassArray), false)
 	guard.jump(arm64.NE)
 	c.a.LoadU8(a64B, a64C, c.enc.ObjectFlags)
-	c.movImm(a64A, uint64(c.enc.FlagLengthWritable|c.enc.FlagSparse))
+	c.movImm(a64A, uint64(c.enc.FlagLengthWritable|c.enc.FlagSparse|c.enc.FlagShared))
 	c.a.Op(arm64.And, a64B, a64B, a64A, false)
 	c.a.CmpImm(a64B, int64(c.enc.FlagLengthWritable), false)
 	guard.jump(arm64.NE)
@@ -6006,6 +6006,11 @@ func (c *a64Compiler) keyedStore(v *ssa.Value, slow arm64.Label) {
 	c.a.LoadU8(a64C, a64B, c.enc.ObjectClass)
 	c.a.CmpImm(a64C, int64(c.enc.ClassArray), false)
 	fail.jump(arm64.NE)
+	// Elements an array literal's arrays share are Go's to copy first.
+	c.a.LoadU8(a64C, a64B, c.enc.ObjectFlags)
+	c.movImm(a64D, uint64(c.enc.FlagShared))
+	c.a.Tst(a64C, a64D, false)
+	fail.jump(arm64.NE)
 	c.movImm(a64C, c.enc.WriteBarrier)
 	c.a.LoadU8(a64C, a64C, 0)
 	c.a.Cbnz(a64C, slow, false)
@@ -6532,7 +6537,7 @@ func (c *a64Compiler) lengthWrite(v *ssa.Value, slow arm64.Label) {
 	c.a.CmpImm(a64C, int64(c.enc.ClassArray), false)
 	fail.jump(arm64.NE)
 	c.a.LoadU8(a64C, a64B, c.enc.ObjectFlags)
-	c.movImm(a64D, uint64(c.enc.FlagLengthWritable|c.enc.FlagSparse))
+	c.movImm(a64D, uint64(c.enc.FlagLengthWritable|c.enc.FlagSparse|c.enc.FlagShared))
 	c.a.Op(arm64.And, a64C, a64C, a64D, false)
 	c.a.CmpImm(a64C, int64(c.enc.FlagLengthWritable), false)
 	fail.jump(arm64.NE)
@@ -8383,6 +8388,14 @@ func (c *a64Compiler) storageFree(array *ssa.Value, checks []*ssa.Value, stub ar
 // (cellChecks) -- the cell's address in A at found. It keeps D, the
 // value's pointer word.
 func (c *a64Compiler) storeCell(array *ssa.Value, checks []*ssa.Value, stub arm64.Label, fail a64Guard, found arm64.Label) {
+	// Elements an array literal's arrays share (FlagShared) are written
+	// by none of them: Go gives the array a copy of its own first. The
+	// mask goes in C, not D, which holds the value's pointer word; C is
+	// the array's again below.
+	c.a.LoadU8(a64B, c.gpr(array, a64C), c.enc.ObjectFlags)
+	c.movImm(a64C, uint64(c.enc.FlagShared))
+	c.a.Tst(a64B, a64C, false)
+	fail.jump(arm64.NE)
 	protos := c.f.ArrayProtos
 	if protos[0].Object == 0 || c.enc.ValueSize != 16 {
 		c.elementCell(array, fail)
@@ -8997,6 +9010,11 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		})
 		c.typedArray(arg(0), typed)
 		c.index(arg(1), fail)
+		// Shared elements (FlagShared) are Go's to copy before the store.
+		c.a.LoadU8(a64B, c.gpr(arg(0), a64C), c.enc.ObjectFlags)
+		c.movImm(a64C, uint64(c.enc.FlagShared))
+		c.a.Tst(a64B, a64C, false)
+		fail.jump(arm64.NE)
 		c.element(arg(0), fail)
 		c.boxF64(c.fpr(arg(2), a64F0), a64B)
 		c.a.Store(a64A, c.enc.NumOffset, a64B)
