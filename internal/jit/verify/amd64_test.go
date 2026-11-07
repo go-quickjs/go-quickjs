@@ -344,4 +344,23 @@ func TestAMD64IndirectJumps(t *testing.T) {
 			}
 		}
 	}
+	// LoadSDLabel loads the double at a label, RIP-relative, into every
+	// SSE register: nine bytes with a REX prefix, eight without.
+	for _, x := range xregs {
+		n := 9
+		if x < 8 {
+			n = 8
+		}
+		code := encode(func(a *amd64.Asm) {
+			l := a.NewLabel()
+			a.LoadSDLabel(x, l)
+			a.Ret()
+			a.Bind(l)
+		})
+		inst := decodeOne(t, "LoadSDLabel", code[:n])
+		m, ok := inst.Args[1].(x86asm.Mem)
+		if inst.Op != x86asm.MOVSD_XMM || inst.Args[0] != xr(x) || !ok || m.Base != x86asm.RIP || m.Disp != 1 {
+			t.Fatalf("LoadSDLabel %v: % x is %v", x, code, inst)
+		}
+	}
 }

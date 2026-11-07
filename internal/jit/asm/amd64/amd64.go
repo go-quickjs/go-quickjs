@@ -545,6 +545,20 @@ func (a *Asm) LoadLabel(dst Reg, l Label) {
 	a.imm32(0)
 }
 
+// LoadSDLabel is dst = the double at the address l is bound at,
+// RIP-relative (movsd dst, [l]): a constant of the code's own, loaded
+// into the SSE register that wants it, where a load into a general
+// register and a move from it had taken two.
+func (a *Asm) LoadSDLabel(dst XReg, l Label) {
+	a.emit(0xF2)
+	if dst >= 8 {
+		a.emit(0x44)
+	}
+	a.emit3(0x0F, 0x10, byte(dst&7)<<3|5)
+	a.fix(l, fixLea, 0)
+	a.imm32(0)
+}
+
 // CmpLabel compares r with the word at the address l is bound at,
 // RIP-relative (cmp r, [l]): the flags are r's less the word's.
 func (a *Asm) CmpLabel(r Reg, l Label) {

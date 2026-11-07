@@ -457,6 +457,22 @@ func (c *compiler) movImm(dst amd64.Reg, v uint64) {
 	c.a.MovImm(dst, v)
 }
 
+// constF64 makes the double whose bits are v in d: 0 by xorpd, any other
+// loaded from the context's constants or the code's own (movImm).
+func (c *compiler) constF64(d amd64.XReg, v uint64) {
+	if v == 0 {
+		c.a.SSEOp(amd64.XorPD, d, d)
+		return
+	}
+	for i, w := range c.consts {
+		if w == v {
+			c.a.LoadSD(d, regCtx, abi.OffConsts+int32(i)*8)
+			return
+		}
+	}
+	c.a.LoadSDLabel(d, c.poolLabel(v))
+}
+
 // poolLabel is where the code's own constant v is (movImm), made if it is
 // not one yet.
 func (c *compiler) poolLabel(v uint64) amd64.Label {
@@ -9583,9 +9599,16 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.Load(d, d, c.enc.UpvalueSlot)
 		c.setG(v, d)
 	case ssa.OpConstF64:
-		c.movImm(scratchA, v.Const.Bits)
-		c.a.MovQToX(xScratch0, scratchA)
-		c.setX(v, xScratch0)
+		// Made in its own register: 0 by xorpd, any other loaded from the
+		// constants, where it had been loaded into a general register,
+		// moved to an SSE one and copied to its own -- a tenth of a
+		// recursion's instructions, which compares and subtracts constants.
+		d := xScratch0
+		if l := c.locAt(v); l.reg >= 0 {
+			d = amd64.XReg(l.reg)
+		}
+		c.constF64(d, v.Const.Bits)
+		c.setX(v, d)
 	case ssa.OpUnboxF64:
 		r := c.gpr(arg(0), scratchB)
 		c.a.MovRR(scratchA, r)
