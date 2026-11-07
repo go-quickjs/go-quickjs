@@ -910,6 +910,43 @@ function tail_mutual(n)
     return n;
 }
 
+/* calls nothing inlines: a function calling itself twice, fib(10)'s 177
+   calls a turn, timed a call */
+function call_fib_rec(k)
+{
+    return k < 2 ? k : call_fib_rec(k - 1) + call_fib_rec(k - 2);
+}
+
+function call_fib(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j += 177)
+        s = (s + call_fib_rec(10)) | 0;
+    global_res = s;
+    return n;
+}
+
+/* two functions that call each other, not in tail position, 64 deep: what
+   EarleyBoyer's rewrite_nboyer and rewrite_args_nboyer make, timed a call */
+function call_even(k)
+{
+    return k === 0 ? 1 : call_odd(k - 1) + 1;
+}
+
+function call_odd(k)
+{
+    return k === 0 ? 0 : call_even(k - 1) + 1;
+}
+
+function call_mutual(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j += 65)
+        s = (s + call_even(64)) | 0;
+    global_res = s;
+    return n;
+}
+
 /* a method whose body has a loop, which it does not enter, so that it is
    called with a frame of its own, and a method that only returns its
    argument. The loop makes a call, so that the JIT does not inline the
