@@ -24,14 +24,17 @@ func (r *Runtime) initJSONBuiltins() {
 	r.defToStringTag(j, "JSON")
 
 	r.defMethod(j, "stringify", 3, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		enc := &jsonEncoder{rt: rt, meter: heldMeter{r: rt}, seen: map[*Object]bool{}}
+		// In this order, which a script can see: a replacer's proxy or
+		// getters, then the valueOf of a Number object given as the space.
+		if err := enc.setReplacer(arg(args, 1)); err != nil {
+			return Undefined, err
+		}
 		indent, err := rt.jsonIndent(arg(args, 2))
 		if err != nil {
 			return Undefined, err
 		}
-		enc := &jsonEncoder{rt: rt, indent: indent, meter: heldMeter{r: rt}, seen: map[*Object]bool{}}
-		if err := enc.setReplacer(arg(args, 1)); err != nil {
-			return Undefined, err
-		}
+		enc.indent = indent
 		// The value is presented to the replacer as a property of a wrapper
 		// object under the empty key, which is what gives the top-level call a
 		// holder to pass along. Nothing else can observe that object, so it is

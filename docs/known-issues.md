@@ -1009,3 +1009,13 @@ Paths are relative to this repository; `go-intl:` paths are in
   undefined; `WithNodeQuirks` answers `"true"`, ICU's `"yes"` in the lists,
   and `"ltr"`, as Node does. The `firstDayOfWeek` keyword of KI-56 now goes
   by the same divergence. Test: `TestIntlLocaleStandard`.
+
+### KI-76 JSON.stringify read the space before the replacer
+- **Where:** `internal/vm/builtins_json.go`, `stringify`.
+- **Effect:** the standard reads the replacer, which for an array means its
+  length and elements, and then the space, whose `valueOf` is the script's if
+  it is a Number object. A proxy or a getter there and a `valueOf` saw each
+  other's effects in the wrong order, and a revoked proxy as the replacer
+  threw after the space's `valueOf` had run, not before. Node has the
+  standard's order.
+- **Status:** fixed. Test: `TestJSONStringifyReadsReplacerFirst`.

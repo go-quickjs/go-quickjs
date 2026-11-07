@@ -433,3 +433,32 @@ func TestJSONParseJoinsSurrogatePairs(t *testing.T) {
 		}
 	}
 }
+
+// The replacer is read before the space is: each can run the script
+// (KI-76).
+func TestJSONStringifyReadsReplacerFirst(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	v, err := rt.Eval(`var log = [];
+		var replacer = new Proxy(["a"], {get(t, k, r) { log.push("replacer " + String(k)); return Reflect.get(t, k, r); }});
+		var space = new Number(1);
+		space.valueOf = function () { log.push("space"); return 2; };
+		JSON.stringify({a: 1}, replacer, space) + log.join()`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "{\n  \"a\": 1\n}replacer length,replacer 0,space"
+	if got := v.String(); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	// An error of the replacer's comes first, too.
+	v, err = rt.Eval(`var r = Proxy.revocable([], {}); r.revoke();
+		var hit = false, n = new Number(1); n.valueOf = function () { hit = true; return 1; };
+		try { JSON.stringify(1, r.proxy, n); "no error" } catch (e) { e.name + "," + hit }`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String(); got != "TypeError,false" {
+		t.Errorf("got %q", got)
+	}
+}
