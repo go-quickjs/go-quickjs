@@ -37,7 +37,10 @@ What the limit counts is what the script holds: the objects, strings, arrays
 and buffers it can still reach, each counted once, at the sizes the engine
 lays them out in. It is not what the script has allocated over its life --
 a script that makes and drops far more than its limit runs to its end -- and
-it is not what the process takes from the system:
+it is not what the process takes from the system. A string cut from another
+shares its bytes only while it is at least half of them, so that it holds at
+most twice what it is counted at; a shorter one is copied, which is why a
+runtime with a limit makes a cut a little more slowly:
 
 - Garbage is not counted. Memory the script has let go of is free as far as
   the limit is concerned, though Go has not yet collected it.

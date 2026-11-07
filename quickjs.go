@@ -233,8 +233,10 @@ func WithJITMemoryLimit(bytes int64) Option {
 //
 // It is an estimate, within 15% of Go's live heap for each kind of value a
 // script can hold: what a host holds for the script, and what Go closures
-// inside the engine capture, is not counted. A runtime with a limit is a
-// little slower to allocate.
+// inside the engine capture, is not counted. A string cut from another shares
+// its bytes only while it is at least half of them, so that it holds at most
+// twice what it is counted at; a shorter one is copied. A runtime with a limit
+// is a little slower to allocate.
 func WithMemoryLimit(bytes int64) Option {
 	return func(c *config) { c.memoryLimit = bytes }
 }

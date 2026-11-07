@@ -483,19 +483,55 @@ Paths are relative to this repository; `go-intl:` paths are in
 
 ### KI-77 A substring is counted without the string it holds
 - **Where:** `internal/vm/memory.go`, `string`, and what cuts a string out of
-  another: `String.Substring`, and `JSON.parse`, whose strings with no escape
-  are slices of the document.
+  another: `String.Substring`, `JSON.parse`, whose strings with no escape are
+  slices of the document, and eval, whose strings and names are slices of its
+  source.
 - **Effect:** the walk counts a string at its own length, and an ASCII string
   cut out of another shares its bytes and keeps all of them alive. Sixty 11 MB
   strings each cut down to two characters, under a 32 MB limit, leave 715 MB
   of live heap and no error. Node's sliced strings hold their parents too,
   but are counted with them and are not made below 13 characters.
-- **Status:** open. Nothing but the parent says how much a slice holds, and
-  a String has no word free for it (`TestStringSharesItsLastWord`'s 48 bytes), so that the
-  fix is a copy of a slice much shorter than what it is cut from, here and in
-  JSON.parse, which has to be measured against what sharing the bytes saves.
-  Older than JSON.parse's batches, which `TestJSONBatchesAreBounded` holds to
-  the size of the document again.
+- **Status:** fixed, for a runtime with a memory limit; any other cuts as it
+  did. A cut shares its parent's bytes only if it is at least half the size of
+  its root, the string whose bytes they are, and a shorter one is copied, then
+  counts exactly and is a root itself (`keptCut`, `zzz_strcut.go`).
+  - The bound: a shared cut holds at most twice what it is counted at, a
+    factor of 2 stated against the root's length; a root a builder made
+    holds the slack of its buffer past that, as it did. A cut and its parent
+    both live are counted apart, as they were, so that a script holding many
+    long cuts of one string is stopped early, not late.
+  - A shared cut records its root's size, rounded up to a power of two, as a
+    log2 in `String.ropes`, so that a chain of halvings cannot creep past the
+    rule. The byte is free there: `strAppend` reads it only on a string it made,
+    with `building` set, which no cut has. There is no room for a pointer to
+    the parent, as V8 has: `aux` can hold a shared slice's code units.
+  - `s = s.slice(1)` stays linear: it shares until it is below half, copies
+    once and shares again, and copies at most twice the string in all.
+  - KI-77's sixty strings cut to two characters now leave nothing live, so
+    that there is no error to give; cuts past half of each share, are
+    counted, and end in `ErrMemoryLimit`.
+  - `JSON.parse` under a limit keeps to the same rule, and gives every string
+    its own allocation: a string of a batch held the rest of the batch (4 KB
+    of text and 32 Strings) at no count. So does a regexp's match: a String
+    in the room of a match array held the array and its input.
+  - Other ways a string came to hold more than it said: eval's and Function's
+    constants, names, templates and regexps were slices of their source, and
+    outlived the code (`ownCode`); `Function.prototype.toString`, a reviver's
+    `context.source`; and text that came back from Go with no mark, a Symbol's
+    description, a RegExp's source, `normalize` of ASCII (`ownText`). The
+    walk's own lists held what it last saw (`TestMemoryWalkKeepsNothing`).
+  - Native code makes no cut: its substring, slice, substr and charAt make a
+    one-character string of the runtime's or call the built-in, and its leaves
+    and native regexps are refused under a limit.
+  - Tests: `TestStringCutsUnderALimit`, of every built-in that returns a cut,
+    `TestStringCutChains`, `TestStringCutBound`, `TestStringCutLoopStaysLinear`,
+    `TestStringCutsOfKI77`, `TestStringCutsOfAProgramRunAgain`,
+    `TestStringCutMarkIsNoAppendCount`, `TestStringCutLeavesItsRoom`,
+    `TestJITCutsUnderALimit`.
+  - What remains: live code is not counted, so that a function made by eval or
+    Function holds its source at no count, as it did (KI-62's rule for what is
+    the program's). A host function that cuts a Go string it was given and
+    returns the piece holds the whole, as anything a host holds does.
 
 ## P2: wrong results
 
