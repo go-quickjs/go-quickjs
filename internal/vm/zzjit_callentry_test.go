@@ -19,6 +19,7 @@ import (
 // frame where the call before wrote its third argument, the same slot,
 // past the VM's stack's top: left as it was, it reads 777.
 func TestJITCallEntryClearsLocals(t *testing.T) {
+	jitNoLoopInlineForTest(t)
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

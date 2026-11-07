@@ -1875,11 +1875,26 @@ Open from it:
   Typescript and the V8 suite's short runs slower, an inlined copy
   having no feedback of its own and a call from it that leaves native
   code sending its caller to the interpreter.
-- Callees with loops are not inlined: inlining Crypto's `am3` made its
-  callers' code 60% larger and Crypto 25% slower. A rule that inlines a
-  loop only where the call's cost is not spread over the loop's turns is
-  wanted first. (Where the loop calls a closure the caller gives, the
-  round of 2026-10-28, above.)
+- Callees with loops are not inlined but for small ones: inlining
+  Crypto's `am3` made its callers' code 60% larger and Crypto 25%
+  slower. A callee of at most 24 instructions that leaves nothing to Go
+  is (`maxInlineLoop`): a search of a short list, EarleyBoyer's
+  `sc_assq`, costs about what its call does, made two million times a
+  run of forty. Over four JIT placements on a 9950X3D2, AWFY's List
+  -16% and EarleyBoyer -2%; on a Ryzen 5 3600 (Zen 2) EarleyBoyer -1.3%
+  and -2.3% (V8, Octane) but List +2.8% at every placement: inlined in
+  `tail`, `isShorterThan`'s loop keeps one of its property cells'
+  addresses in a spill slot, stored and loaded back each turn -- 152 of
+  tail's 351 samples on the load and the read through it -- where its
+  own code keeps it in a register: Zen 2 waits on the store's
+  forwarding, which Zen 5's memory renaming hides. The allocator spills
+  the interval that ends last, wherever it is used; a choice by next use
+  or by loop depth would serve every loop. The micro-benchmark
+  `method_call`, a call of a method whose loop runs no turns, kept out of
+  line by it, is now inlined (-67%) and no longer times a call with a
+  frame. A wider rule, inlining a loop only where the call's cost is not
+  spread over its turns, is still wanted. (Where the loop calls a
+  closure the caller gives, the round of 2026-10-28, above.)
 - A call is still an indirect jump each way: native code runs on the
   goroutine's stack and never moves SP, so that Go's unwinder, stack scan
   and growth meet no return address of its, and a return is not

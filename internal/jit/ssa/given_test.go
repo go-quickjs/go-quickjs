@@ -50,3 +50,32 @@ func TestInlineCallsGiven(t *testing.T) {
 		}
 	}
 }
+
+// A small callee whose loop calls nothing is inlined (maxInlineLoop):
+// EarleyBoyer's sc_assq, a search of a short list at millions of calls.
+// One that calls in its loop, or a large one, is not. InlineCallsGiven,
+// which a build that inlines what callees are given asks instead, answers
+// the same for each.
+func TestInlineCallsSmallLoop(t *testing.T) {
+	for _, c := range []struct {
+		src string
+		ok  bool
+	}{
+		{`function sc_assq(o, al) { while (al !== null) { if (al.car.car === o) return al.car; al = al.cdr; } return false; }`, true},
+		{`function count(l) { var n = 0; while (l !== null) { n++; l = l.next; } return n; }`, true},
+		{`function calls(l) { while (l !== null) { l.f(); l = l.next; } return 0; }`, false},
+		{`function big(a) { var s = 0; for (var i = 0; i < a.length; i++) { s += a[i] * 3 + (a[i] >> 2) - (a[i] & 7) + (a[i] | 1) + (a[i] ^ 5) + (a[i] << 1) + (a[i] % 9); } return s; }`, false},
+	} {
+		fn := compiledFunctionForTest(t, c.src)
+		p, err := jitcompile.LowerSSAInline(fn)
+		if err != nil {
+			t.Fatalf("%s: %v", c.src, err)
+		}
+		if _, ok := InlineCalls(p); ok != c.ok || !looping(p) {
+			t.Errorf("%s: %d instructions, loops %v, inlinable %v; want %v", c.src, len(p.Code), looping(p), ok, c.ok)
+		}
+		if _, _, ok := InlineCallsGiven(p, func(int) (int, bool) { return 0, false }); ok != c.ok {
+			t.Errorf("%s: InlineCallsGiven %v; want %v", c.src, ok, c.ok)
+		}
+	}
+}

@@ -16,6 +16,7 @@ import (
 // entry from the first compile: one leaving deep in the recursion has Go go
 // on after the call in every outer run. Each answer is the interpreter's.
 func TestJITResumeEntriesOnDemand(t *testing.T) {
+	jitNoLoopInlineForTest(t)
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

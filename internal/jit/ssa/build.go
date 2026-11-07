@@ -2328,19 +2328,42 @@ const (
 )
 
 // Inlinable reports whether a callee may be inlined: a small program that
-// reads and writes properties and elements, computes, branches forward
-// and returns, which native code can do all of, with no operation it
-// leaves to Go, which would have Go finish the call every time. An exit
-// inside it makes its frame (InlineState), so that what it did before is
-// not done again.
+// reads and writes properties and elements, computes, branches forward --
+// or back, in a loop smaller still (maxInlineLoop) -- and returns, which
+// native code can do all of, with no operation it leaves to Go, which
+// would have Go finish the call every time. An exit inside it makes its
+// frame (InlineState), so that what it did before is not done again.
 func Inlinable(p *ir.Program) bool {
 	calls, ok := InlineCalls(p)
 	return ok && len(calls) == 0
 }
 
+// maxInlineLoop is the most instructions a callee with a loop may have and
+// be inlined, and then only if it leaves nothing to Go (smallLoop). Such a
+// callee is a search of a short list, EarleyBoyer's sc_assq -- three
+// property reads and a compare a turn, a few turns a call, two million
+// calls in forty runs -- whose call, some 75 instructions of native call
+// sequence and entry, costs about what its loop does, and which adds
+// little code where it is inlined. A larger loop runs more turns a call,
+// over which the call's cost is spread, and inlining it saves that one
+// call against the code it adds: inlining Crypto's am3, a loop of a few
+// dozen turns a call, made its callers' code 60% larger and Crypto 25%
+// slower.
+const maxInlineLoop = 24
+
+// smallLoop reports whether p, a callee with a loop that leaves n
+// operations to Go, may be inlined: it is small (maxInlineLoop) and n is
+// 0. A call it leaves to Go in its loop would be made, or its callee
+// inlined, at each turn; one outside the loop is refused too, the rule
+// kept to what was measured.
+func smallLoop(p *ir.Program, n int) bool {
+	return n == 0 && len(p.Code) <= maxInlineLoop
+}
+
 // InlineCalls reports whether a callee may be inlined if the operations it
 // leaves to Go, which it returns by PC, are calls inlined in it too: it is
-// Inlinable but for those.
+// Inlinable but for those. A callee with a loop is taken only if it is
+// small and leaves nothing to Go (smallLoop).
 func InlineCalls(p *ir.Program) ([]int, bool) {
 	if p == nil || p.Validate() != nil || len(p.Code) > maxInline || len(p.Globals) != 0 || p.Captured != nil || p.DerivedConstructor || len(p.Handlers) != 0 {
 		// A callee whose locals closures capture: an inlined frame's
@@ -2351,6 +2374,7 @@ func InlineCalls(p *ir.Program) ([]int, bool) {
 		return nil, false
 	}
 	var calls []int
+	loops := false
 	for pc, in := range p.Code {
 		if !reachable(p, pc) {
 			continue
@@ -2364,9 +2388,12 @@ func InlineCalls(p *ir.Program) ([]int, bool) {
 			calls = append(calls, pc)
 		case ir.Jump, ir.Branch:
 			if in.Target <= pc {
-				return nil, false
+				loops = true
 			}
 		}
+	}
+	if loops && !smallLoop(p, len(calls)) {
+		return nil, false
 	}
 	return calls, true
 }
@@ -2384,7 +2411,9 @@ func InlineCalls(p *ir.Program) ([]int, bool) {
 // and inlining it saves only that call's cost, spread over them, against
 // the code it adds to its caller: inlining Crypto's am3, a loop of a few
 // dozen turns a call, made its callers' code 60% larger and Crypto 25%
-// slower. A callee whose loops call none of what it is given is refused.
+// slower. A callee whose loops call none of what it is given is refused,
+// but for one InlineCalls takes, small and leaving nothing to Go
+// (smallLoop).
 func InlineCallsGiven(p *ir.Program, argc func(pc int) (int, bool)) (calls, given []int, ok bool) {
 	if p == nil || p.Validate() != nil || len(p.Code) > maxInline || len(p.Globals) != 0 || p.Captured != nil || p.DerivedConstructor || len(p.Handlers) != 0 {
 		return nil, nil, false
@@ -2421,7 +2450,7 @@ func InlineCallsGiven(p *ir.Program, argc func(pc int) (int, bool)) (calls, give
 			looped = looped || l.from <= pc && pc <= l.to
 		}
 	}
-	if !looped {
+	if !looped && !smallLoop(p, len(calls)+len(given)) {
 		return nil, nil, false
 	}
 	return calls, given, true

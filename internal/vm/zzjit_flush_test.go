@@ -166,6 +166,7 @@ func TestJITFlushKeepsCodeInUse(t *testing.T) {
 // one kept there, its entry gone, kept what it had learned and compiled
 // for alive with it, through a callee whose own code stayed in use.
 func TestJITDroppedCallerLeavesCallees(t *testing.T) {
+	jitNoLoopInlineForTest(t)
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

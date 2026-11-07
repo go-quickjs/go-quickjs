@@ -6591,6 +6591,7 @@ func TestJITSSAPolymorphicReadsSettle(t *testing.T) {
 // learned as before: what takes the place of get later is called as it
 // is.
 func TestJITSSASeedsMethodCalls(t *testing.T) {
+	jitNoLoopInlineForTest(t)
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -7592,6 +7593,7 @@ func TestJITSSAContextsGrow(t *testing.T) {
 // its frame and its callers' made by Go (jitUnwindNative), which finishes
 // them. Each answer is the interpreter's.
 func TestJITSSANativeCalls(t *testing.T) {
+	jitNoLoopInlineForTest(t)
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -7674,6 +7676,7 @@ func TestJITSSANativeCalls(t *testing.T) {
 // natively, marking or not. Nothing is lost or freed early; run with
 // GODEBUG=gccheckmark=1 too.
 func TestJITSSANativeCallsUnderGC(t *testing.T) {
+	jitNoLoopInlineForTest(t)
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -7723,6 +7726,7 @@ func TestJITSSANativeCallsUnderGC(t *testing.T) {
 // (jit.StoreRefClobber). None leaves native code, nor is a call of Go.
 // Go had made each (abi.GoOpMarking).
 func TestJITSSANativeCallsWhileMarking(t *testing.T) {
+	jitNoLoopInlineForTest(t)
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -7816,6 +7820,7 @@ func TestJITSSAMarkingCallThrows(t *testing.T) {
 // constructs a P: mid counts its 600 calls of parseInt alone. The answer is
 // the interpreter's.
 func TestJITSSAMarkingBeginsInNativeCallee(t *testing.T) {
+	jitNoLoopInlineForTest(t)
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -8147,6 +8152,7 @@ func TestJITSSANativeCallTargets(t *testing.T) {
 // runs. While the function has no code, a call has Go run it. A link
 // outlives its entries only while code calls through it.
 func TestJITSSANativeCallsSurviveEviction(t *testing.T) {
+	jitNoLoopInlineForTest(t)
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -10597,6 +10603,7 @@ func TestJITSSAGoCallPinsALevelsNewCode(t *testing.T) {
 // the context cancelled by a Go function mid calls -- still stops the
 // script there, within a budget. Each answer is the interpreter's.
 func TestJITSSAPollsAsCallsOfGo(t *testing.T) {
+	jitNoLoopInlineForTest(t)
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}

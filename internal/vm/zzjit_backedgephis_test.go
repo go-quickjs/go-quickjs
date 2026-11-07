@@ -5,6 +5,7 @@ package vm
 import (
 	"fmt"
 	"runtime"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -62,8 +63,10 @@ func jitListWant(rounds int) string {
 // cell address went to a spill slot, stored and loaded back each time
 // round. The loop's code is now spilled nowhere; and the values polls read
 // at the back edge -- every back edge, under a budget of one, each an exit
-// -- are the loop's next ones, collector running or not.
+// -- are the loop's next ones, collector running or not, the loop in its
+// own code or inlined in its caller's.
 func TestJITBackEdgePhisNotSpilled(t *testing.T) {
+	jitNoLoopInlineForTest(t)
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -92,35 +95,50 @@ func TestJITBackEdgePhisNotSpilled(t *testing.T) {
 		t.Errorf("isShorterThan's values spilled: %s", last)
 	}
 	for _, budget := range []uint16{1, 2, 3} {
-		for _, gc := range []bool{false, true} {
-			t.Run(fmt.Sprintf("budget %d gc %v", budget, gc), func(t *testing.T) {
-				if gc {
-					// The collector marks now and then, native code running.
-					var stop atomic.Bool
-					done := make(chan struct{})
-					go func() {
-						defer close(done)
-						for !stop.Load() {
-							runtime.GC()
-						}
-					}()
-					defer func() { stop.Store(true); <-done }()
-				}
-				r := jitRuntimeForTest(t, Config{JIT: true})
-				r.jitStress = jitStressConfig{threshold: true, budget: budget}
-				if _, err := r.Run(compileForTest(t, jitListSource)); err != nil {
-					t.Fatal(err)
-				}
-				for range 3 {
-					v, err := r.Run(compileForTest(t, `run(4)`))
-					if err != nil || !v.IsString() || v.String().Go() != jitListWant(4) {
-						t.Fatalf("run(4) = %v, %v", v, err)
+		for _, inlined := range []bool{false, true} {
+			for _, gc := range []bool{false, true} {
+				t.Run(fmt.Sprintf("budget %d inlined %v gc %v", budget, inlined, gc), func(t *testing.T) {
+					if inlined {
+						// isShorterThan inlined in run (ssa's maxInlineLoop):
+						// its loop's back edges exit from run's code, inside
+						// the inlined frame.
+						saved := jitNoInline
+						jitNoInline = nil
+						defer func() { jitNoInline = saved }()
 					}
-				}
-				if st := r.JITStats(); st.Budgets == 0 {
-					t.Fatalf("no loop left native code at its budget's end: %+v", st)
-				}
-			})
+					if gc {
+						// The collector marks now and then, native code running.
+						var stop atomic.Bool
+						done := make(chan struct{})
+						go func() {
+							defer close(done)
+							for !stop.Load() {
+								runtime.GC()
+							}
+						}()
+						defer func() { stop.Store(true); <-done }()
+					}
+					r := jitRuntimeForTest(t, Config{JIT: true})
+					r.jitStress = jitStressConfig{threshold: true, budget: budget}
+					if _, err := r.Run(compileForTest(t, jitListSource)); err != nil {
+						t.Fatal(err)
+					}
+					for range 3 {
+						v, err := r.Run(compileForTest(t, `run(4)`))
+						if err != nil || !v.IsString() || v.String().Go() != jitListWant(4) {
+							t.Fatalf("run(4) = %v, %v", v, err)
+						}
+					}
+					if st := r.JITStats(); st.Budgets == 0 {
+						t.Fatalf("no loop left native code at its budget's end: %+v", st)
+					}
+					// Inlined, until its exits made the call one native code
+					// makes (jitInlineExits).
+					if e := r.jit.hint(jitGlobalClosureForTest(r, "run")); inlined && (e == nil || len(e.notInline) == 0 && !slices.Contains(e.ssaInlined, jitGlobalClosureForTest(r, "isShorterThan"))) {
+						t.Fatal("run's code never inlined isShorterThan")
+					}
+				})
+			}
 		}
 	}
 }
