@@ -912,7 +912,8 @@ function tail_mutual(n)
 
 /* a method whose body has a loop, which it does not enter, so that it is
    called with a frame of its own, and a method that only returns its
-   argument */
+   argument. The loop makes a call, so that the JIT does not inline the
+   method either, as it does one whose loop calls nothing. */
 function ExtraPoint(x)
 {
     this.x = x;
@@ -922,7 +923,7 @@ ExtraPoint.prototype.sum = function (k)
 {
     var j, s = 0;
     for (j = 0; j < k; j++)
-        s += this.x;
+        s += this.same(this.x);
     return s;
 };
 

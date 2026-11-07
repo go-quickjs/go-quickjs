@@ -1906,8 +1906,10 @@ Open from it:
   allocator does not do, would serve it and every value like it. The
   micro-benchmark
   `method_call`, a call of a method whose loop runs no turns, kept out of
-  line by it, is now inlined (-67%) and no longer times a call with a
-  frame. A wider rule, inlining a loop only where the call's cost is not
+  line by it, was then inlined (-67%) and no longer timed a call with a
+  frame; its loop now makes a call, which keeps the method out of line
+  (the interpreter's 68 ns as before, the JIT's 3.0 ns back to 11.4).
+  A wider rule, inlining a loop only where the call's cost is not
   spread over its turns, is still wanted. (Where the loop calls a
   closure the caller gives, the round of 2026-10-28, above.)
 - A call is still an indirect jump each way: native code runs on the
