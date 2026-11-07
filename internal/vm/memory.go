@@ -328,7 +328,6 @@ func (m *memoryMeter) walk(r *Runtime) int64 {
 		m.epoch = 1
 	}
 	m.total = 0
-	clear(m.seen)
 
 	// The live part of the stack and of the call stack. What lies past them
 	// is stale, and is not the script's.
@@ -365,6 +364,12 @@ func (m *memoryMeter) walk(r *Runtime) int64 {
 			m.generic(v)
 		}
 	}
+	// What the walk saw and its lists, empty and kept, last held must not
+	// stay alive by it, uncounted.
+	clear(m.seen)
+	clear(m.objects[:cap(m.objects)])
+	clear(m.strings[:cap(m.strings)])
+	clear(m.values[:cap(m.values)])
 	return m.total
 }
 
