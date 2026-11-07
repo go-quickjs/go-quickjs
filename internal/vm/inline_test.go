@@ -61,6 +61,8 @@ var intendedInlining = []string{
 	// The array methods' receiver and element reads, Object.getPrototypeOf,
 	// a global's read past a with or a proxy.
 	"(*Runtime).plainArray",
+	"(*Runtime).kept",
+	"(*Runtime).ownText",
 	"(*arrayLike).dense",
 	"protoValue",
 	"chainHasProxy",

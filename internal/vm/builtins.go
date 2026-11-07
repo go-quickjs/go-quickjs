@@ -779,7 +779,7 @@ func (r *Runtime) initFunctionBuiltins() {
 			return Str(NewString("function () { [native code] }")), nil
 		}
 		if fd.closure != nil && fd.closure.fn.Text != "" {
-			return Str(NewString(fd.closure.fn.Text)), nil
+			return Str(ownString[struct{}](rt, fd.closure.fn.Text)), nil
 		}
 		return Str(NewString("function " + nativeFunctionName(fd.nameOr("")) + "() { [native code] }")), nil
 	})
@@ -2327,14 +2327,14 @@ func (r *Runtime) initSymbolBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		return Sym(NewSymbol(s.Go(), true)), nil
+		return Sym(NewSymbol(ownGo[struct{}](rt, s), true)), nil
 	})
 	r.defMethod(ctor, "for", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		s, err := rt.toString(arg(args, 0))
 		if err != nil {
 			return Undefined, err
 		}
-		key := s.Go()
+		key := ownGo[struct{}](rt, s)
 		if sym, ok := rt.symbolRegistry[key]; ok {
 			return Sym(sym), nil
 		}

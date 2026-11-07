@@ -626,11 +626,11 @@ func (d *deserializer) value(i int) (Value, error) {
 	var o *Object
 	switch n.kind {
 	case snPrimitive:
-		v := primitiveValue(n)
+		v := primitiveValue(r, n)
 		d.made[i], d.done[i] = v, true
 		return v, nil
 	case snBooleanObject, snNumberObject, snStringObject, snBigIntObject:
-		w, err := r.toObject(primitiveValue(n))
+		w, err := r.toObject(primitiveValue(r, n))
 		if err != nil {
 			return Undefined, err
 		}
@@ -683,7 +683,7 @@ func (d *deserializer) value(i int) (Value, error) {
 			o.setOwnRaw(atomStack, Str(NewString(n.stack)), propWritable|propConfigurable)
 		}
 		if n.hasMessage {
-			o.setOwnRaw(atomMessage, Str(NewString(n.str)), propWritable|propConfigurable)
+			o.setOwnRaw(atomMessage, Str(NewString(r.ownText(n.str))), propWritable|propConfigurable)
 		}
 	case snMap:
 		o = newObject(r.proto.mapProto, ClassMap)
@@ -748,7 +748,7 @@ func (d *deserializer) value(i int) (Value, error) {
 }
 
 // primitiveValue is the primitive a node holds.
-func primitiveValue(n *snode) Value {
+func primitiveValue(r *Runtime, n *snode) Value {
 	switch n.prim {
 	case KindUndefined:
 		return Undefined
@@ -759,7 +759,7 @@ func primitiveValue(n *snode) Value {
 	case KindNumber:
 		return Float(n.num)
 	case KindString:
-		return Str(NewString(n.str))
+		return Str(NewString(r.ownText(n.str)))
 	case KindBigInt:
 		return Big(n.big)
 	}

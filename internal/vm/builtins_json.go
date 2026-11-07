@@ -49,7 +49,7 @@ func (r *Runtime) initJSONBuiltins() {
 		// A reviver is told the source text of each primitive it is handed,
 		// so the parse keeps a record of it; without one there is nothing to
 		// keep.
-		v, rec, err := rt.parseJSON(s.Go(), isCallable(reviver))
+		v, rec, err := parseJSONOf[struct{}](rt, s, isCallable(reviver))
 		if err != nil || !isCallable(reviver) {
 			return v, err
 		}
@@ -448,7 +448,7 @@ func (r *Runtime) reviveJSONAt(holder *Object, k Atom, key Value, reviver Value,
 	if rec == nil || !rec.value.SameValue(val) {
 		rec = nil
 	} else if !val.IsObject() {
-		context.setOwnRaw(atomSource, Str(NewString(rec.source)), propDefault)
+		context.setOwnRaw(atomSource, Str(NewString(r.ownText(rec.source))), propDefault)
 	}
 	if val.IsObject() {
 		o := val.Object()
@@ -1360,6 +1360,11 @@ type jsonParser struct {
 	records    bool
 	last       *jsonRecord
 	recScratch []*jsonRecord
+
+	// doc is the document, in a runtime with a memory limit, and nil
+	// otherwise: its strings then go by the rule of kept, and none shares
+	// an allocation with another (jsonKept).
+	doc *String
 }
 
 // jsonHintBits sizes jsonHints, and jsonKeyBits jsonState.keys. A
@@ -1414,9 +1419,9 @@ func (r *Runtime) jsonCaches() *jsonState {
 }
 
 // parseJSON parses the whole of src.
-func (r *Runtime) parseJSON(src string, records bool) (Value, *jsonRecord, error) {
+func (r *Runtime) parseJSON(src string, records bool, doc *String) (Value, *jsonRecord, error) {
 	st := r.jsonCaches()
-	p := jsonParser{rt: r, src: src, st: st, records: records, scratch: st.values, strRoom: len(src)}
+	p := jsonParser{rt: r, src: src, st: st, records: records, scratch: st.values, strRoom: len(src), doc: doc}
 	st.values = nil
 	if !records {
 		if root := rootFor(ClassObject, r.proto.object); root != nil && !root.unique && !root.loose && root.tree != nil {
@@ -2057,7 +2062,7 @@ const jsonTextBatch = 1 << 12
 // a string that outlives the rest holds: no more than jsonTextBatch, and no
 // more than is left of the document it would otherwise be a slice of.
 func (p *jsonParser) keepText(b []byte) string {
-	if len(b) > jsonTextBatch/8 {
+	if len(b) > jsonTextBatch/8 || p.doc != nil {
 		return string(b)
 	}
 	if cap(p.text)-len(p.text) < len(b) {
@@ -2076,6 +2081,9 @@ func (p *jsonParser) parseStringValue() (Value, error) {
 	}
 	if s == "" {
 		return Str(emptyString), nil
+	}
+	if p.doc != nil {
+		return jsonKept[struct{}](p, s), nil
 	}
 	if !ascii {
 		// WTF-8 joined from an escape's pairs is what NewString reads, as it

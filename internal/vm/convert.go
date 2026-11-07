@@ -277,7 +277,7 @@ func (r *Runtime) unitString(s *String, i int) *String {
 	case u < 256:
 		return r.latin1CharString(byte(u))
 	}
-	return s.Substring(i, i+1)
+	return r.kept(s, s.Substring(i, i+1))
 }
 
 // asciiCharString is the runtime's string of one ASCII character.

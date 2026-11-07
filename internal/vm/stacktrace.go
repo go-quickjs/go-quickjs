@@ -355,9 +355,9 @@ func (r *Runtime) errorToString(o *Object) (string, error) {
 	}
 	switch {
 	case msg == "":
-		return name, nil
+		return r.ownText(name), nil
 	case name == "":
-		return msg, nil
+		return r.ownText(msg), nil
 	}
 	return name + ": " + msg, nil
 }

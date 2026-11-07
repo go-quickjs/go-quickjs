@@ -107,7 +107,8 @@ func matchBlockOf[_ any](proto *Object, n, k int) (*Object, []String) {
 func matchResultOf[_ any](r *Runtime, re *regexp.Regexp, caps []int, input *String) *Object {
 	n := len(caps) / 2
 	t := r.matchLayout
-	if t == nil || t.shape.proto != r.proto.array || n > matchBlockMax || re.Flags()&regexp.FlagHasIndices != 0 {
+	// Under a memory limit buildMatchResult cuts by its rule (kept).
+	if t == nil || t.shape.proto != r.proto.array || n > matchBlockMax || re.Flags()&regexp.FlagHasIndices != 0 || r.meter != nil {
 		return r.buildMatchResult(re, caps, input)
 	}
 	k := 0

@@ -1109,7 +1109,11 @@ func (r *Runtime) makeTypedModule(specifier, typ, source, resolved string) (*Mod
 	var v Value
 	switch typ {
 	case "json":
-		if v, _, err = r.parseJSON(source, false); err != nil {
+		var doc *String
+		if r.meter != nil {
+			doc = NewString(source)
+		}
+		if v, _, err = r.parseJSON(source, false, doc); err != nil {
 			return nil, err
 		}
 	case "text":

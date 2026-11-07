@@ -241,6 +241,8 @@ func (r *Runtime) compileRegExp(source, flags string) (*regexp.Regexp, error) {
 	if re, ok := r.regexpCache[key]; ok {
 		return re, nil
 	}
+	source, flags = r.ownText(source), r.ownText(flags)
+	key = regexpKey{source, flags}
 	re, err := regexp.Compile(source, flags)
 	if err != nil {
 		return nil, err
@@ -807,10 +809,10 @@ func (r *Runtime) splitBuiltin(splitter Value, d *regexpData, j *subject, limit 
 			case lo < 0:
 				elems[k] = Undefined
 			case strs != nil && ownPiece(s, lo, hi):
-				elems[k] = Str(s.substringInto(&strs[0], lo, hi))
+				elems[k] = Str(r.kept(s, s.substringInto(&strs[0], lo, hi)))
 				strs = strs[1:]
 			default:
-				elems[k] = Str(s.Substring(lo, hi))
+				elems[k] = Str(r.kept(s, s.Substring(lo, hi)))
 			}
 		}
 		r.giveSpans(spans)
@@ -896,7 +898,7 @@ func (r *Runtime) buildMatchResult(re *regexp.Regexp, caps []int, input *String)
 	elems := arr.elemsOf()
 	// What matched is always there, and is written in the room the array
 	// has for it.
-	elems[0] = Str(input.substringInto(room, caps[0], caps[1]))
+	elems[0] = Str(r.kept(input, input.substringInto(room, caps[0], caps[1])))
 	// The groups' Strings, where two or more need one, are one allocation.
 	strs := newPieces(input, caps[2:], 2)
 	for i := 1; i < n; i++ {
@@ -908,11 +910,11 @@ func (r *Runtime) buildMatchResult(re *regexp.Regexp, caps []int, input *String)
 			continue
 		}
 		if strs != nil && ownPiece(input, lo, hi) {
-			elems[i] = Str(input.substringInto(&strs[0], lo, hi))
+			elems[i] = Str(r.kept(input, input.substringInto(&strs[0], lo, hi)))
 			strs = strs[1:]
 			continue
 		}
-		elems[i] = Str(input.Substring(lo, hi))
+		elems[i] = Str(r.kept(input, input.Substring(lo, hi)))
 	}
 
 	// index, input and groups, and where the d flag asks for them the indices

@@ -81,7 +81,7 @@ func (r *Runtime) takeLegacyMatch(legacy bool, input *String, caps []int) {
 }
 
 // piece cuts one of the statics from the last match.
-func (st *legacyRegExpStatics) piece(which string) *String {
+func (st *legacyRegExpStatics) piece(r *Runtime, which string) *String {
 	if which == "input" && st.input != nil {
 		return st.input
 	}
@@ -93,7 +93,7 @@ func (st *legacyRegExpStatics) piece(which string) *String {
 		if 2*i+1 >= len(caps) || caps[2*i] < 0 || caps[2*i+1] < 0 {
 			return emptyString
 		}
-		return s.Substring(caps[2*i], caps[2*i+1])
+		return r.kept(s, s.Substring(caps[2*i], caps[2*i+1]))
 	}
 	switch which {
 	case "input":
@@ -106,9 +106,9 @@ func (st *legacyRegExpStatics) piece(which string) *String {
 		}
 		return emptyString
 	case "leftContext":
-		return s.Substring(0, caps[0])
+		return r.kept(s, s.Substring(0, caps[0]))
 	case "rightContext":
-		return s.Substring(caps[1], s.Len())
+		return r.kept(s, s.Substring(caps[1], s.Len()))
 	}
 	// $1 to $9.
 	return group(int(which[1] - '0'))
@@ -124,7 +124,7 @@ func (r *Runtime) initRegExpLegacyStatics(ctor *Object) {
 			if rt.legacyRegExp.invalid {
 				return Undefined, rt.throwTypeError("RegExp.%s is not available after a subclass's match", prop)
 			}
-			return Str(rt.legacyRegExp.piece(which)), nil
+			return Str(rt.legacyRegExp.piece(rt, which)), nil
 		})
 	}
 	define := func(prop, which string, settable bool) {

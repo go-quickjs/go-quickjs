@@ -735,7 +735,7 @@ func (r *Runtime) initStringExtras() {
 		if length == 1 {
 			return Str(rt.unitString(s, start)), nil
 		}
-		return Str(s.Substring(start, start+length)), nil
+		return Str(rt.kept(s, s.Substring(start, start+length))), nil
 	})
 
 	// trimLeft and trimRight are the older names, kept as aliases.
@@ -771,7 +771,11 @@ func (r *Runtime) initStringExtras() {
 		if normalizedTooLong(n, s, form) {
 			return Undefined, rt.throwStringLength()
 		}
-		return rt.builtString(normalizeString(n, s.Go(), form))
+		v, err := rt.builtString(normalizeString(n, s.Go(), form))
+		if err != nil {
+			return v, err
+		}
+		return Str(rt.kept(s, v.String())), nil
 	})
 
 	r.defMethod(p, "localeCompare", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {

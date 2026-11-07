@@ -241,11 +241,11 @@ func (r *Runtime) regExpSymbolMatch(rx Value, args []Value) (Value, error) {
 		for i := range elems {
 			lo, hi := spans[i*width], spans[i*width+1]
 			if strs != nil && ownPiece(s, lo, hi) {
-				elems[i] = Str(s.substringInto(&strs[0], lo, hi))
+				elems[i] = Str(r.kept(s, s.substringInto(&strs[0], lo, hi)))
 				strs = strs[1:]
 				continue
 			}
-			elems[i] = Str(s.Substring(lo, hi))
+			elems[i] = Str(r.kept(s, s.Substring(lo, hi)))
 		}
 		return Obj(arr), nil
 	}
@@ -406,7 +406,7 @@ func (r *Runtime) regExpSymbolSplit(rx Value, args []Value) (Value, error) {
 
 	// A piece is cut from the subject rather than encoded again from its code
 	// units, which for text that is all ASCII shares the bytes.
-	piece := func(lo, hi int) Value { return Str(s.Substring(lo, hi)) }
+	piece := func(lo, hi int) Value { return Str(r.kept(s, s.Substring(lo, hi))) }
 	if r.builtinExec(splitter) {
 		return r.splitBuiltin(splitter, splitter.Object().dataOf().(*regexpData), &j, limit, fullUnicode)
 	}
@@ -698,11 +698,11 @@ func (r *Runtime) regExpReplaceIn(rx Value, args []Value, fl regexp.Flags, direc
 			position, matchLen = caps[0], caps[1]-caps[0]
 		} else if fast {
 			caps := spans[k*width : (k+1)*width]
-			matched, position = s.Substring(caps[0], caps[1]), caps[0]
+			matched, position = r.kept(s, s.Substring(caps[0], caps[1])), caps[0]
 			for i := 2; i < width; i += 2 {
 				c := Undefined
 				if caps[i] >= 0 && caps[i+1] >= 0 {
-					c = Str(s.Substring(caps[i], caps[i+1]))
+					c = Str(r.kept(s, s.Substring(caps[i], caps[i+1])))
 				}
 				captures = append(captures, c)
 			}

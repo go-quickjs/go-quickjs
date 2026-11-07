@@ -248,6 +248,9 @@ func (r *Runtime) newTarget() Value {
 // SetEvaluator installs eval and the Function constructor.
 func (r *Runtime) SetEvaluator(fn Evaluator) {
 	r.evaluator = fn
+	if r.meter != nil {
+		r.evaluator = ownEvaluator[struct{}](fn)
+	}
 	r.installEval()
 }
 

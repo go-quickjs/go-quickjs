@@ -134,7 +134,7 @@ func (o *segmenterOptions) breakUp(s *String) *segmentsData {
 // rather than a space or a mark.
 func (r *Runtime) dataObject(d *segmentsData, seg intl.Segment) Value {
 	out := newObject(r.proto.object, ClassObject)
-	piece := d.input.Substring(seg.Index, seg.End)
+	piece := r.kept(d.input, d.input.Substring(seg.Index, seg.End))
 	out.setOwnRaw(r.atoms.intern("segment"), Str(piece), propDefault)
 	out.setOwnRaw(r.atoms.intern("index"), Int(seg.Index), propDefault)
 	out.setOwnRaw(r.atoms.intern("input"), Str(d.input), propDefault)

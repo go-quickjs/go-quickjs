@@ -64,8 +64,10 @@ type String struct {
 	mark uint16
 	// tailed says a string's right side is a strTail, which appends grow
 	// while it is building, and which stays when it is read; ropes is how
-	// many appends in a row have made a rope (strAppend). They fill the
-	// struct to the 48 bytes aux's comment is about.
+	// many appends in a row have made a rope (strAppend) or, past strRooted,
+	// the size of the root of a cut under a memory limit (keptCut), which is
+	// never building, so that the two never meet. They fill the struct to
+	// the 48 bytes aux's comment is about.
 	tailed bool
 	ropes  uint8
 }

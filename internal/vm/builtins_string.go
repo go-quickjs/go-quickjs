@@ -355,7 +355,7 @@ func (r *Runtime) initStringBuiltins() {
 		if end-start == 1 {
 			return Str(rt.unitString(s, start)), nil
 		}
-		return Str(s.Substring(start, end)), nil
+		return Str(rt.kept(s, s.Substring(start, end))), nil
 	})
 
 	r.defMethod(p, "substring", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -382,7 +382,7 @@ func (r *Runtime) initStringBuiltins() {
 		if end-start == 1 {
 			return Str(rt.unitString(s, start)), nil
 		}
-		return Str(s.Substring(start, end)), nil
+		return Str(rt.kept(s, s.Substring(start, end))), nil
 	})
 
 	r.defMethod(p, "toUpperCase", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -411,21 +411,21 @@ func (r *Runtime) initStringBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(trimString(s, true, true)), nil
+		return Str(rt.kept(s, trimString(s, true, true))), nil
 	})
 	r.defMethod(p, "trimStart", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		s, err := thisStr(rt, this)
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(trimString(s, true, false)), nil
+		return Str(rt.kept(s, trimString(s, true, false))), nil
 	})
 	r.defMethod(p, "trimEnd", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		s, err := thisStr(rt, this)
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(trimString(s, false, true)), nil
+		return Str(rt.kept(s, trimString(s, false, true))), nil
 	})
 
 	r.defMethod(p, "concat", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -616,10 +616,10 @@ func (r *Runtime) initStringBuiltins() {
 			}
 			i := s.IndexOf(sep, pos)
 			if i < 0 {
-				out = append(out, Str(s.Substring(pos, s.Len())))
+				out = append(out, Str(rt.kept(s, s.Substring(pos, s.Len()))))
 				break
 			}
-			out = append(out, Str(s.Substring(pos, i)))
+			out = append(out, Str(rt.kept(s, s.Substring(pos, i))))
 			pos = i + sep.Len()
 		}
 		return Obj(rt.splitArray(out)), nil
@@ -837,7 +837,8 @@ func (r *Runtime) padString(thisStr thisStrFunc, this Value, args []Value, atSta
 	for i, copies := 0, need/pad.Len()+1; i < copies; i++ {
 		sb.WriteString(pad.Go())
 	}
-	filler := NewString(sb.String()).Substring(0, need)
+	all := NewString(sb.String())
+	filler := r.kept(all, all.Substring(0, need))
 	if atStart {
 		return Str(filler.Concat(s)), nil
 	}
@@ -967,7 +968,7 @@ func (r *Runtime) stringReplace(thisStr thisStrFunc, this Value, args []Value, a
 		if err != nil {
 			return Undefined, err
 		}
-		out, err := r.concat(NewString(repl), s)
+		out, err := r.concat(NewString(r.ownText(repl)), s)
 		if err != nil {
 			return Undefined, err
 		}
@@ -1068,7 +1069,7 @@ func (r *Runtime) initStringIteratorProto() {
 		if cp := d.s.CodePointAt(d.i); cp > 0xFFFF {
 			width = 2
 		}
-		v := d.s.Substring(d.i, d.i+width)
+		v := rt.kept(d.s, d.s.Substring(d.i, d.i+width))
 		d.i += width
 		return Obj(rt.iterResult(Str(v), false)), nil
 	})

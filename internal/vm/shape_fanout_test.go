@@ -13,7 +13,7 @@ func TestShapeFanout(t *testing.T) {
 	defer r.Close()
 	parsed := func(text string) *Object {
 		t.Helper()
-		v, _, err := r.parseJSON(text, false)
+		v, _, err := r.parseJSON(text, false, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
