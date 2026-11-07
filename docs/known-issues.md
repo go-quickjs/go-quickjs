@@ -859,6 +859,21 @@ Paths are relative to this repository; `go-intl:` paths are in
   - Test: `TestJITBackgroundCallWaitsForItsTarget`,
     `TestJITBackgroundHotCodeIsEntered`.
 
+### KI-75 JSON.parse left a surrogate pair split between an escape and text
+- **Where:** `internal/vm/builtins_json.go`, `parseEscaped`. A string with an
+  escape is built up from its pieces, and text and escapes went in as they
+  came. Two escapes that make a pair were joined; an escape and text that
+  make one, a high surrogate escaped before a low one written as it is or the
+  other way round, were not. A document can only have such text if a script
+  put a lone surrogate into it, by concatenation, say.
+- **Effect:** a string with the right code units and two spellings of its
+  character, three bytes each where WTF-8 has one way to write it, which
+  compared unequal to the same string made any other way. As a key it was a
+  property no read of the pair found. Node joins them.
+- **Status:** fixed. An escape of a low surrogate and text that begins with
+  one go in by `wtf8.AppendJoin`, as a builder's pieces do.
+  - Test: `TestJSONParseJoinsSurrogatePairs`, `TestJSONDifferential`.
+
 ## P3: small divergences
 
 ### KI-56 Intl details

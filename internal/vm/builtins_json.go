@@ -991,8 +991,7 @@ func (p *jsonParser) parseString() (string, error) {
 	}
 
 	// From the first escape on, the string has to be built.
-	var sb strings.Builder
-	sb.WriteString(p.src[start:i])
+	buf := append([]byte(nil), p.src[start:i]...)
 	p.pos = i
 	for {
 		if p.pos >= len(p.src) {
@@ -1002,7 +1001,7 @@ func (p *jsonParser) parseString() (string, error) {
 		switch c {
 		case '"':
 			p.pos++
-			return sb.String(), nil
+			return string(buf), nil
 		case '\\':
 			p.pos++
 			if p.pos >= len(p.src) {
@@ -1010,29 +1009,34 @@ func (p *jsonParser) parseString() (string, error) {
 			}
 			switch p.src[p.pos] {
 			case '"':
-				sb.WriteByte('"')
+				buf = append(buf, '"')
 			case '\\':
-				sb.WriteByte('\\')
+				buf = append(buf, '\\')
 			case '/':
-				sb.WriteByte('/')
+				buf = append(buf, '/')
 			case 'n':
-				sb.WriteByte('\n')
+				buf = append(buf, '\n')
 			case 'r':
-				sb.WriteByte('\r')
+				buf = append(buf, '\r')
 			case 't':
-				sb.WriteByte('\t')
+				buf = append(buf, '\t')
 			case 'b':
-				sb.WriteByte('\b')
+				buf = append(buf, '\b')
 			case 'f':
-				sb.WriteByte('\f')
+				buf = append(buf, '\f')
 			case 'u':
 				r, err := p.parseUnicodeEscape()
 				if err != nil {
 					return "", err
 				}
+				if r >= 0xDC00 && r <= 0xDFFF {
+					// Text can end in a high surrogate just as an escape
+					// can, and the two are then one character (AppendJoin).
+					buf = wtf8.AppendJoin(buf, string(wtf8.AppendRune(nil, r)))
+					continue
+				}
 				// A lone surrogate is preserved rather than replaced.
-				var buf [4]byte
-				sb.Write(wtf8.AppendRune(buf[:0], r))
+				buf = wtf8.AppendRune(buf, r)
 				continue
 			default:
 				return "", p.rt.throwSyntaxError(
@@ -1044,7 +1048,13 @@ func (p *jsonParser) parseString() (string, error) {
 				return "", p.rt.throwSyntaxError(
 					"a control character is not allowed in a JSON string at position %d", p.pos)
 			}
-			sb.WriteByte(c)
+			if c == 0xED && p.pos+3 <= len(p.src) {
+				// May be a low surrogate, after an escape of a high one.
+				buf = wtf8.AppendJoin(buf, p.src[p.pos:p.pos+3])
+				p.pos += 3
+				continue
+			}
+			buf = append(buf, c)
 			p.pos++
 		}
 	}

@@ -401,3 +401,35 @@ func TestJSONRawAndSource(t *testing.T) {
 		{`[JSON.rawJSON.length, JSON.isRawJSON.length].join()`, "1,1"},
 	})
 }
+
+// A surrogate pair is one character however the text spells its halves: as
+// two escapes, as text, or one of each, which took the two halves for two
+// characters of three bytes each (KI-75) -- a string with the code units of
+// the pair that compared unequal to it, and a key no read found.
+func TestJSONParseJoinsSurrogatePairs(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	for _, tc := range []struct{ src, want string }{
+		{`var bs = String.fromCharCode(92), hi = String.fromCharCode(0xD83D), lo = String.fromCharCode(0xDE00), pair = hi + lo;
+		  var a = JSON.parse('"' + bs + 'ud83d' + lo + '"'), b = JSON.parse('"' + hi + bs + 'ude00"');
+		  [a === pair, b === pair, a.length, b.length, a.codePointAt(0), a.isWellFormed()].join()`, "true,true,2,2,128512,true"},
+		// The same as a key, and in the middle of text.
+		{`var a = JSON.parse('{"' + bs + 'ud83d' + lo + '":1}'), b = JSON.parse('{"' + hi + bs + 'ude00":2}');
+		  [a[pair], b[pair], Object.keys(a)[0] === pair, Object.keys(b)[0] === Object.keys(a)[0]].join()`, "1,2,true,true"},
+		{`var c = JSON.parse('"é' + bs + 'n' + hi + bs + 'ude00中' + bs + 'ud83d' + lo + 'x"');
+		  [c === "é\n" + pair + "中" + pair + "x", c.length].join()`, "true,8"},
+		// Halves with something between them stay lone.
+		{`var d = JSON.parse('"' + bs + 'ud83d' + bs + 'n' + lo + '"'), e = JSON.parse('"' + hi + bs + 'u0041"');
+		  [d.length, d.charCodeAt(0), d.charCodeAt(2), e.length, e.charCodeAt(0)].join()`, "3,55357,56832,2,55357"},
+		// Two high surrogates and then a low one: the second pairs.
+		{`var f = JSON.parse('"' + bs + 'ud83d' + hi + lo + '"'), g = JSON.parse('"' + hi + hi + bs + 'ude00"');
+		  [f === hi + pair, g === hi + pair].join()`, "true,true"},
+	} {
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+	}
+}
