@@ -473,6 +473,17 @@ func (c *compiler) constF64(d amd64.XReg, v uint64) {
 	c.a.LoadSDLabel(d, c.poolLabel(v))
 }
 
+// markingLoaded sets the flags for the collector's marking flag, the byte
+// at r's address, loading it into r: a store's test of it, where calls
+// and frames test the byte where it is (TestMem8). On Zen 2 the test of
+// the byte in memory before each of a loop's global stores had the loop
+// 6% slower (the micro-benchmark global_write, 2.54 -> 2.70 ns), where
+// it made calls a few per cent faster.
+func (c *compiler) markingLoaded(r amd64.Reg) {
+	c.a.LoadU8(r, r, 0)
+	c.a.Op(amd64.Test, r, r, false)
+}
+
 // poolLabel is where the code's own constant v is (movImm), made if it is
 // not one yet.
 func (c *compiler) poolLabel(v uint64) amd64.Label {
@@ -908,8 +919,7 @@ func (c *compiler) cellsBack() {
 	c.a.OpImm(amd64.Cmp, count, abi.PoolCapacity, true)
 	c.a.Jcc(amd64.CondAE, skip)
 	c.movImm(word, c.enc.WriteBarrier)
-	c.a.LoadU8(word, word, 0)
-	c.a.Op(amd64.Test, word, word, false)
+	c.a.TestMem8(word, 0, 0xFF)
 	c.a.Jcc(amd64.CondNE, marking)
 	c.movImm(word, c.enc.Undefined)
 	n := int32(c.f.CellsCount)
@@ -1061,8 +1071,7 @@ func (c *compiler) callEntry() {
 	})
 	c.a.Bind(same)
 	c.a.ShiftImm(amd64.Shl, base, 4, true)
-	c.a.Load(at, regCtx, abi.OffStackBase)
-	c.a.Op(amd64.Add, base, at, true)
+	c.a.AddMem(base, regCtx, abi.OffStackBase)
 	c.a.Store(regCtx, abi.OffLocals, base)
 	c.a.Lea(regStack, base, int32(c.f.FrameLocals)*vs)
 	c.a.Store(regCtx, abi.OffStack, regStack)
@@ -1176,8 +1185,7 @@ func (c *compiler) genFrame(gr ssa.GenResume, blk *ssa.Block) {
 	c.a.Store(u, 0, scratchA)
 	c.a.Bind(same)
 	c.a.ShiftImm(amd64.Shl, t, 4, true)
-	c.a.Load(u, regCtx, abi.OffStackBase)
-	c.a.Op(amd64.Add, t, u, true)
+	c.a.AddMem(t, regCtx, abi.OffStackBase)
 	c.a.Store(next, abi.OffStack, t)
 	// Its locals, the generator's, past its arguments.
 	c.a.LoadU32(u, g, c.enc.GenArgs)
@@ -1276,8 +1284,7 @@ func (c *compiler) yieldExit(b *ssa.Block) {
 		c.a.Jcc(amd64.CondB, toGo)
 		marked, copied := c.a.NewLabel(), c.a.NewLabel()
 		c.movImm(scratchC, c.enc.WriteBarrier)
-		c.a.LoadU8(scratchC, scratchC, 0)
-		c.a.Op(amd64.Test, scratchC, scratchC, false)
+		c.a.TestMem8(scratchC, 0, 0xFF)
 		c.a.Jcc(amd64.CondNE, marked)
 		c.a.Load(scratchC, scratchB, c.enc.SavedStack)
 		for i := range saved {
@@ -1557,6 +1564,23 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 	// (genericCheck).
 	gen := generic && site.Generic && site.Via == 0 && site.Pool == 0 && !site.Push && !site.Pop && !site.Alloc && !site.Receiver &&
 		!site.Literal && vs == 16 && c.enc.HintSlotSize == 32
+	// A call of one function has its operands -- the function, the
+	// receiver, the arguments -- written straight where the callee has
+	// them (directOperand), not recorded: Go never reads them, as a callee
+	// that leaves native code is finished from its own frame, and its
+	// result replaces them (the VM's jitCallResult).
+	// But a callee that reads its arguments past its parameters is given
+	// all of them in its context (FrameArgs), copied from where the state
+	// keeps them.
+	direct, ops := len(sites) == 1 && !gen && !site.ArrowThis && !site.FrameArgs && (site.ThisSlot < 0 || site.Method || site.Pool != 0 || site.Super || site.PlainThis), calleeSlot
+	if site.Method {
+		ops--
+	}
+	direct = direct && c.operandsLive(s, ops)
+	// The room check of such a call leaves the VM's stack's top in
+	// scratchC, where nothing after it reads the callee, for the callee's
+	// frame's address to be made of (topInC).
+	keepTop := direct && site.Parent == 0 && site.Pool == 0
 	var stub amd64.Label
 	if !gen {
 		stub = c.stubLabel(s, exitKind(v.Aux))
@@ -1636,9 +1660,15 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 			guard.jump(amd64.CondNE)
 		}
 		// Room in the VM's stack.
-		c.a.Load(scratchB, regCtx, abi.OffStackTop)
-		c.a.Load(scratchB, scratchB, 0)
-		c.a.OpImm(amd64.Add, scratchB, int32(t.LocalCount+t.MaxStack), true)
+		if keepTop {
+			c.a.Load(scratchC, regCtx, abi.OffStackTop)
+			c.a.Load(scratchC, scratchC, 0)
+			c.a.Lea(scratchB, scratchC, int32(t.LocalCount+t.MaxStack))
+		} else {
+			c.a.Load(scratchB, regCtx, abi.OffStackTop)
+			c.a.Load(scratchB, scratchB, 0)
+			c.a.OpImm(amd64.Add, scratchB, int32(t.LocalCount+t.MaxStack), true)
+		}
 		c.a.CmpMem(scratchB, regCtx, abi.OffStackEnd, true)
 		guard.jump(amd64.CondA)
 		if t.Parent != 0 {
@@ -1692,19 +1722,6 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 		}
 		return
 	}
-	// A call of one function has its operands -- the function, the
-	// receiver, the arguments -- written straight where the callee has
-	// them (directOperand), not recorded: Go never reads them, as a callee
-	// that leaves native code is finished from its own frame, and its
-	// result replaces them (the VM's jitCallResult).
-	// But a callee that reads its arguments past its parameters is given
-	// all of them in its context (FrameArgs), copied from where the state
-	// keeps them.
-	direct, ops := len(sites) == 1 && !gen && !site.ArrowThis && !site.FrameArgs && (site.ThisSlot < 0 || site.Method || site.Pool != 0 || site.Super || site.PlainThis), calleeSlot
-	if site.Method {
-		ops--
-	}
-	direct = direct && c.operandsLive(s, ops)
 	// The state, described (callState): every slot the frame does not hold
 	// as it is, for Go to make the frame from if the callee leaves; the
 	// call writes only the words of its records the caller's code keeps
@@ -1730,22 +1747,42 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 	// a frame Go makes for it (jitGoCallNested, jitUnwindNative) shows it
 	// in a stack trace, as the interpreter's does.
 	receiver := direct && site.Pool == 0 && !site.Super && !site.PlainThis && (site.ThisSlot >= 0 || site.Method && this < sp)
+	// Whether xScratch2 keeps the callee's frame's address (below).
+	framed := false
 	if direct {
-		// The callee's frame, past the VM's stack's top: xScratch2 holds
-		// its address, which pointerWord does not use.
-		c.a.Load(scratchA, regCtx, abi.OffStackTop)
-		c.a.Load(scratchA, scratchA, 0)
-		c.a.ShiftImm(amd64.Shl, scratchA, 4, true)
-		c.a.Load(scratchB, regCtx, abi.OffStackBase)
-		c.a.Op(amd64.Add, scratchA, scratchB, true)
-		c.a.MovQToX(xScratch2, scratchA)
+		// The callee's frame, past the VM's stack's top, in scratchC, which
+		// the operands are written through; kept in xScratch2 as well,
+		// which pointerWord does not use, where an operand's pointer word
+		// is read (directOperand) or the arguments it is not given are
+		// written (frame). A call of numbers had moved it there and back.
+		argc := site.Argc
+		if site.Via != 0 {
+			argc--
+		}
+		for i := 0; i < site.Params && i < site.LocalCount; i++ {
+			if i >= argc || !c.scalar(s.Slots[args+i]) {
+				framed = true
+			}
+		}
+		// The stack's top the room check left, if no record was written
+		// since (callRecords uses scratchC).
+		if !keepTop || len(recs) != 0 {
+			c.a.Load(scratchC, regCtx, abi.OffStackTop)
+			c.a.Load(scratchC, scratchC, 0)
+		}
+		c.a.ShiftImm(amd64.Shl, scratchC, 4, true)
+		c.a.AddMem(scratchC, regCtx, abi.OffStackBase)
+		if framed {
+			c.a.MovQToX(xScratch2, scratchC)
+		}
+		inC := true
 		// From the call's state, as its records are (exitView).
 		back := c.viewExits()
 		for i := 0; i < site.Params && args+i < sp && i < site.LocalCount; i++ {
-			c.directOperand(v, s.Slots[args+i], true, int32(i)*vs)
+			c.directOperand(v, s.Slots[args+i], true, int32(i)*vs, &inC)
 		}
 		if receiver {
-			c.directOperand(v, s.Slots[this], false, abi.OffThis)
+			c.directOperand(v, s.Slots[this], false, abi.OffThis, &inC)
 		}
 		back()
 	}
@@ -1798,15 +1835,14 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 	// frame has locals be the callee's frame's address, past the VM's
 	// stack's top.
 	frame := func() {
-		if direct {
+		if framed {
 			c.a.MovQFromX(locals, xScratch2)
 			return
 		}
 		c.a.Load(locals, regCtx, abi.OffStackTop)
 		c.a.Load(locals, locals, 0)
 		c.a.ShiftImm(amd64.Shl, locals, 4, true)
-		c.a.Load(tmp, regCtx, abi.OffStackBase)
-		c.a.Op(amd64.Add, locals, tmp, true)
+		c.a.AddMem(locals, regCtx, abi.OffStackBase)
 	}
 	// setup writes what the call of t knows of its callee's frame and
 	// context. It keeps callLink, the callee's link.
@@ -2107,8 +2143,7 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 	// native call overwrites with none.
 	marked, stored := c.a.NewLabel(), c.a.NewLabel()
 	c.movImm(scratchB, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchB, scratchB, 0)
-	c.a.Op(amd64.Test, scratchB, scratchB, false)
+	c.a.TestMem8(scratchB, 0, 0xFF)
 	c.a.Jcc(amd64.CondNE, marked)
 	if site.Super {
 		// The this it binds, the context's This, which an exit does not
@@ -2445,8 +2480,7 @@ func (c *compiler) leafCall(v *ssa.Value, site *ssa.CallSite) {
 func (c *compiler) byMarking(join amd64.Label, made func(marking bool)) {
 	marked := c.a.NewLabel()
 	c.movImm(scratchA, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchA, scratchA, 0)
-	c.a.Op(amd64.Test, scratchA, scratchA, false)
+	c.a.TestMem8(scratchA, 0, 0xFF)
 	c.a.Jcc(amd64.CondNE, marked)
 	made(false)
 	c.a.Jmp(join)
@@ -2829,8 +2863,7 @@ func (c *compiler) superGuards(t *ssa.CallSite, x *ssa.Value, guard guardTo) {
 func (c *compiler) closureTake(v *ssa.Value, site *ssa.CallSite, slow amd64.Label) {
 	marked, done := c.a.NewLabel(), c.a.NewLabel()
 	c.movImm(scratchA, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchA, scratchA, 0)
-	c.a.Op(amd64.Test, scratchA, scratchA, false)
+	c.a.TestMem8(scratchA, 0, 0xFF)
 	c.a.Jcc(amd64.CondNE, marked)
 	c.movImm(scratchA, uint64(site.Pool))
 	c.a.Load(scratchB, scratchA, abi.OffPoolCount)
@@ -2879,8 +2912,7 @@ func (c *compiler) closureTake(v *ssa.Value, site *ssa.CallSite, slow amd64.Labe
 func (c *compiler) cellsTake(site *ssa.CallSite, slow amd64.Label) {
 	marked, done := c.a.NewLabel(), c.a.NewLabel()
 	c.movImm(scratchA, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchA, scratchA, 0)
-	c.a.Op(amd64.Test, scratchA, scratchA, false)
+	c.a.TestMem8(scratchA, 0, 0xFF)
 	c.a.Jcc(amd64.CondNE, marked)
 	c.cold = append(c.cold, func() {
 		c.a.Bind(marked)
@@ -2934,8 +2966,7 @@ func (c *compiler) cellsTake(site *ssa.CallSite, slow amd64.Label) {
 func (c *compiler) cellsClose(site *ssa.CallSite, slow amd64.Label) {
 	marked, done := c.a.NewLabel(), c.a.NewLabel()
 	c.movImm(scratchA, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchA, scratchA, 0)
-	c.a.Op(amd64.Test, scratchA, scratchA, false)
+	c.a.TestMem8(scratchA, 0, 0xFF)
 	c.a.Jcc(amd64.CondNE, marked)
 	c.cold = append(c.cold, func() {
 		c.a.Bind(marked)
@@ -3593,8 +3624,7 @@ func (c *compiler) genCall(v *ssa.Value, t ssa.GenStep, slow, done amd64.Label) 
 	at := abi.OffKeep + int32(v.Index)*vs
 	marked, stored := c.a.NewLabel(), c.a.NewLabel()
 	c.movImm(scratchB, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchB, scratchB, 0)
-	c.a.Op(amd64.Test, scratchB, scratchB, false)
+	c.a.TestMem8(scratchB, 0, 0xFF)
 	c.a.Jcc(amd64.CondNE, marked)
 	c.a.Store(regCtx, at+c.enc.RefOffset, retRef)
 	c.a.Store(regCtx, at+c.enc.NumOffset, retNum)
@@ -3710,8 +3740,7 @@ func (c *compiler) genForOf(v *ssa.Value, slow, done amd64.Label) {
 	// scratch register: the cursor is read again from the keep cell.
 	marked := c.a.NewLabel()
 	c.movImm(scratchA, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchA, scratchA, 0)
-	c.a.Op(amd64.Test, scratchA, scratchA, false)
+	c.a.TestMem8(scratchA, 0, 0xFF)
 	c.a.Jcc(amd64.CondNE, marked)
 	c.a.Store(scratchC, st+c.enc.IterIter+c.enc.RefOffset, scratchB)
 	c.movImm(scratchA, uint64(site.GenNext))
@@ -3781,8 +3810,7 @@ func (c *compiler) genMake(v *ssa.Value, slow, done amd64.Label) {
 	fail.jump(amd64.CondE)
 	marked := c.a.NewLabel()
 	c.movImm(scratchC, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchC, scratchC, 0)
-	c.a.Op(amd64.Test, scratchC, scratchC, false)
+	c.a.TestMem8(scratchC, 0, 0xFF)
 	c.a.Jcc(amd64.CondNE, marked)
 	// The pool's next generator, its cell cleared: nothing has seen it.
 	c.a.OpImm(amd64.Sub, scratchB, 1, true)
@@ -3993,8 +4021,7 @@ func (c *compiler) genNextCall(v *ssa.Value, t ssa.GenStep, slow, done amd64.Lab
 	at := abi.OffKeep + int32(v.Index)*vs
 	marked, stored := c.a.NewLabel(), c.a.NewLabel()
 	c.movImm(scratchB, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchB, scratchB, 0)
-	c.a.Op(amd64.Test, scratchB, scratchB, false)
+	c.a.TestMem8(scratchB, 0, 0xFF)
 	c.a.Jcc(amd64.CondNE, marked)
 	c.a.Store(regCtx, at+c.enc.RefOffset, retRef)
 	c.a.Store(regCtx, at+c.enc.NumOffset, retNum)
@@ -4023,8 +4050,7 @@ func (c *compiler) genNextCall(v *ssa.Value, t ssa.GenStep, slow, done amd64.Lab
 	c.a.Op(amd64.Test, scratchB, scratchB, true)
 	c.a.Jcc(amd64.CondE, goMake)
 	c.movImm(scratchC, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchC, scratchC, 0)
-	c.a.Op(amd64.Test, scratchC, scratchC, false)
+	c.a.TestMem8(scratchC, 0, 0xFF)
 	c.a.Jcc(amd64.CondNE, marking)
 	c.a.OpImm(amd64.Sub, scratchB, 1, true)
 	c.a.Store(scratchA, abi.OffPoolCount, scratchB)
@@ -4234,8 +4260,7 @@ func (c *compiler) lengthWrite(v *ssa.Value, slow amd64.Label) {
 	c.a.Op(amd64.Add, scratchC, scratchB, true)
 	loop, cleared, marked := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
 	c.movImm(scratchB, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchB, scratchB, 0)
-	c.a.Op(amd64.Test, scratchB, scratchB, false)
+	c.markingLoaded(scratchB)
 	c.a.Jcc(amd64.CondNE, marked)
 	c.cold = append(c.cold, func() {
 		c.a.Bind(marked)
@@ -4290,8 +4315,7 @@ func (c *compiler) lengthClear() {
 func (c *compiler) storeByFlag() {
 	marked, done := c.a.NewLabel(), c.a.NewLabel()
 	c.movImm(scratchB, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchB, scratchB, 0)
-	c.a.Op(amd64.Test, scratchB, scratchB, false)
+	c.markingLoaded(scratchB)
 	c.a.Jcc(amd64.CondNE, marked)
 	c.ptrStore(false)
 	c.a.Bind(done)
@@ -4345,8 +4369,7 @@ func (c *compiler) keyedStore(v *ssa.Value, slow amd64.Label) {
 	c.a.TestMem8(scratchB, c.enc.ObjectFlags, c.enc.FlagShared)
 	fail.jump(amd64.CondNE)
 	c.movImm(scratchC, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchC, scratchC, 0)
-	c.a.Op(amd64.Test, scratchC, scratchC, false)
+	c.markingLoaded(scratchC)
 	fail.jump(amd64.CondNE)
 	// The element, within the dense ones and no hole: a writable data
 	// property's.
@@ -4665,8 +4688,7 @@ func (c *compiler) tailSelf(v *ssa.Value, guard guardTo) {
 	}
 	marked, shaded := c.a.NewLabel(), c.a.NewLabel()
 	c.movImm(scratchB, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchB, scratchB, 0)
-	c.a.Op(amd64.Test, scratchB, scratchB, false)
+	c.a.TestMem8(scratchB, 0, 0xFF)
 	c.a.Jcc(amd64.CondNE, marked)
 	c.a.Bind(shaded)
 	staged := len(args)
@@ -5116,8 +5138,7 @@ func (c *compiler) callGo(v *ssa.Value, op uint64, keep int) {
 // label returned, which the caller binds after its take.
 func (c *compiler) markingTake(v *ssa.Value, site *ssa.CallSite) amd64.Label {
 	c.movImm(scratchB, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchB, scratchB, 0)
-	c.a.Op(amd64.Test, scratchB, scratchB, false)
+	c.a.TestMem8(scratchB, 0, 0xFF)
 	marked, join := c.a.NewLabel(), c.a.NewLabel()
 	c.a.Jcc(amd64.CondNE, marked)
 	c.cold = append(c.cold, func() {
@@ -5283,8 +5304,7 @@ func (c *compiler) pop(v *ssa.Value) {
 	// what it has not.
 	marked, done := c.a.NewLabel(), c.a.NewLabel()
 	c.movImm(scratchC, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchC, scratchC, 0)
-	c.a.Op(amd64.Test, scratchC, scratchC, false)
+	c.a.TestMem8(scratchC, 0, 0xFF)
 	c.a.Jcc(amd64.CondNE, marked)
 	c.storeImm(scratchA, c.enc.RefOffset, 0, scratchC)
 	c.a.Bind(done)
@@ -5356,8 +5376,7 @@ func (c *compiler) push(v *ssa.Value) {
 	// outlives where the value came from.
 	marked, done := c.a.NewLabel(), c.a.NewLabel()
 	c.movImm(scratchB, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchB, scratchB, 0)
-	c.a.Op(amd64.Test, scratchB, scratchB, false)
+	c.markingLoaded(scratchB)
 	c.a.Jcc(amd64.CondNE, marked)
 	c.a.Bind(done)
 	c.cold = append(c.cold, func() {
@@ -5523,8 +5542,7 @@ func (c *compiler) poolShade(sites []*ssa.CallSite) {
 	}
 	marked, back := c.a.NewLabel(), c.a.NewLabel()
 	c.movImm(scratchB, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchB, scratchB, 0)
-	c.a.Op(amd64.Test, scratchB, scratchB, false)
+	c.a.TestMem8(scratchB, 0, 0xFF)
 	c.a.Jcc(amd64.CondNE, marked)
 	c.a.Bind(back)
 	c.cold = append(c.cold, func() {
@@ -5665,16 +5683,22 @@ func (c *compiler) constructGuards(t *ssa.CallSite, guard guardTo) {
 }
 
 // directOperand writes call v's operand x, both words, where its callee
-// has it: at disp in the callee's frame, whose address is in xScratch2, if
-// local, and otherwise at disp from the context. It uses every scratch
-// register.
-func (c *compiler) directOperand(v, x *ssa.Value, local bool, disp int32) {
+// has it: at disp in the callee's frame, if local, and otherwise at disp
+// from the context. The frame's address is in scratchC where *inC says
+// so, and otherwise in xScratch2 (call's framed): a scalar's write keeps
+// scratchC -- materialize makes a value in its own register, its operand
+// read into scratchB or xScratch1 -- and a pointer word's read does not.
+// It uses every scratch register.
+func (c *compiler) directOperand(v, x *ssa.Value, local bool, disp int32, inC *bool) {
 	const base = scratchC
 	at := func() {
-		if local {
-			c.a.MovQFromX(scratchC, xScratch2)
-		} else {
+		switch {
+		case !local:
 			c.a.Load(scratchC, regCtx, abi.OffNext)
+			*inC = false
+		case !*inC:
+			c.a.MovQFromX(scratchC, xScratch2)
+			*inC = true
 		}
 	}
 	var w amd64.Reg
@@ -5692,6 +5716,7 @@ func (c *compiler) directOperand(v, x *ssa.Value, local bool, disp int32) {
 		return
 	}
 	// The pointer word first, which uses scratchC: the address once.
+	*inC = false
 	c.pointerWord(x, w)
 	at()
 	c.a.Store(base, disp+c.enc.NumOffset, w)
@@ -5912,8 +5937,7 @@ func (c *compiler) enterExit() {
 	c.a.Store(at, 0, top)
 	c.a.Bind(same)
 	c.a.ShiftImm(amd64.Shl, base, 4, true)
-	c.a.Load(at, regCtx, abi.OffStackBase)
-	c.a.Op(amd64.Add, base, at, true)
+	c.a.AddMem(base, regCtx, abi.OffStackBase)
 	c.a.Store(regCtx, abi.OffLocals, base)
 	c.a.Load(at, callLink, c.enc.LinkLocals)
 	c.a.ShiftImm(amd64.Shl, at, 4, true)
@@ -6025,8 +6049,7 @@ func (c *compiler) recordsTail() {
 	ret, write := c.a.NewLabel(), c.a.NewLabel()
 	c.tailMarked, c.tailRet = c.a.NewLabel(), ret
 	c.movImm(scratchB, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchB, scratchB, 0)
-	c.a.Op(amd64.Test, scratchB, scratchB, false)
+	c.a.TestMem8(scratchB, 0, 0xFF)
 	c.a.Jcc(amd64.CondNE, c.tailMarked)
 	c.a.Load(scratchA, regCtx, abi.OffRecords)
 	c.a.Op(amd64.Test, scratchA, scratchA, true)
@@ -6982,8 +7005,7 @@ func (c *compiler) propStore(v *ssa.Value, guard guardTo) {
 	// with Go's write barrier (valueStore).
 	c.a.MovQToX(xScratch0, c.gpr(x, scratchB))
 	c.movImm(scratchB, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchB, scratchB, 0)
-	c.a.Op(amd64.Test, scratchB, scratchB, false)
+	c.markingLoaded(scratchB)
 	c.a.Jcc(amd64.CondNE, viaGo)
 	c.a.Bind(scalar)
 	c.a.Store(scratchA, c.enc.NumOffset, c.gpr(x, scratchB))
@@ -7434,8 +7456,7 @@ func (c *compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss amd64.Label
 	c.a.Jcc(amd64.CondAE, miss)
 	// The collector not marking; while it marks, Go adds it.
 	c.movImm(scratchC, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchC, scratchC, 0)
-	c.a.Op(amd64.Test, scratchC, scratchC, false)
+	c.markingLoaded(scratchC)
 	marked, done := c.a.NewLabel(), c.a.NewLabel()
 	c.a.Jcc(amd64.CondNE, marked)
 	c.cold = append(c.cold, func() {
@@ -7896,8 +7917,7 @@ func (c *compiler) keep(v *ssa.Value) {
 	if run&keepFirst != 0 {
 		c.keepCold, c.keeping = c.a.NewLabel(), c.keeping[:0]
 		c.movImm(scratchB, c.enc.WriteBarrier)
-		c.a.LoadU8(scratchB, scratchB, 0)
-		c.a.Op(amd64.Test, scratchB, scratchB, false)
+		c.a.TestMem8(scratchB, 0, 0xFF)
 		c.a.Jcc(amd64.CondNE, c.keepCold)
 	}
 	c.keeping = append(c.keeping, v)
@@ -7999,8 +8019,7 @@ func (c *compiler) bigBox(v *ssa.Value) {
 	c.bigBoxWords(v)
 	c.a.MovQToX(xScratch0, scratchA)
 	c.movImm(scratchB, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchB, scratchB, 0)
-	c.a.Op(amd64.Test, scratchB, scratchB, false)
+	c.a.TestMem8(scratchB, 0, 0xFF)
 	c.a.Jcc(amd64.CondNE, viaGo)
 	c.a.Store(regCtx, at+c.enc.RefOffset, scratchC)
 	c.a.Store(regCtx, at+c.enc.NumOffset, scratchA)
@@ -9181,8 +9200,7 @@ func (c *compiler) elemStore(v *ssa.Value) {
 	// with Go's write barrier (valueStore).
 	c.a.MovQToX(xScratch0, c.gpr(x, scratchB))
 	c.movImm(scratchB, c.enc.WriteBarrier)
-	c.a.LoadU8(scratchB, scratchB, 0)
-	c.a.Op(amd64.Test, scratchB, scratchB, false)
+	c.markingLoaded(scratchB)
 	c.a.Jcc(amd64.CondNE, viaGo)
 	c.a.Bind(scalar)
 	c.a.Store(scratchA, c.enc.NumOffset, c.gpr(x, scratchB))
@@ -9615,8 +9633,11 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.ShiftImm(amd64.Shr, scratchA, 51, true)
 		c.a.OpImm(amd64.Cmp, scratchA, 0x1FFF, false)
 		guard.jump(amd64.CondE)
-		c.a.MovQToX(xScratch0, r)
-		c.setX(v, xScratch0)
+		if l := c.locAt(v); l.reg < 0 {
+			c.a.Store(regCtx, c.spillDisp(l.spill), r)
+		} else {
+			c.a.MovQToX(amd64.XReg(l.reg), r)
+		}
 	case ssa.OpOddballF64:
 		c.oddball(v, guard)
 	case ssa.OpCheckInit:

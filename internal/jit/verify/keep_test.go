@@ -120,7 +120,7 @@ func TestMirKeepsCheap(t *testing.T) {
 						if in.Op == x86asm.MOVQ {
 							t.Errorf("%s (%d): %s moves a word through an SSE register: %v", src, i, m.Tag, in)
 						}
-						if in.Op == x86asm.MOVZX {
+						if barrierFlag(in) {
 							// The barrier flag's byte.
 							flags++
 						}

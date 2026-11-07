@@ -737,6 +737,14 @@ func (a *Asm) CmpMem(r, base Reg, disp int32, wide bool) {
 	a.modrmMem(byte(r), base, disp)
 }
 
+// AddMem is r += [base + disp], 64 bits: an address's part added where it
+// is, without a register to load it into.
+func (a *Asm) AddMem(r, base Reg, disp int32) {
+	a.rex(true, byte(r), byte(base), false)
+	a.emit(0x03)
+	a.modrmMem(byte(r), base, disp)
+}
+
 // Store is [base + disp] = src, 64 bits.
 func (a *Asm) Store(base Reg, disp int32, src Reg) {
 	a.rex(true, byte(src), byte(base), false)

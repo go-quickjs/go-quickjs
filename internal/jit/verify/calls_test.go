@@ -60,6 +60,17 @@ func ctxMem(in x86asm.Inst, i int, disp int32) bool {
 	return ok && m.Base == x86asm.RDI && m.Disp == int64(disp)
 }
 
+// barrierFlag reports an instruction that tests the write-barrier flag's
+// byte where it is (test byte ptr [r], 0xff).
+func barrierFlag(in x86asm.Inst) bool {
+	if in.Op != x86asm.TEST || in.MemBytes != 1 {
+		return false
+	}
+	m, ok := in.Args[0].(x86asm.Mem)
+	imm, isImm := in.Args[1].(x86asm.Imm)
+	return ok && m.Disp == 0 && isImm && imm == 0xFF
+}
+
 // A native call is made in fewer instructions (mir's call): a result
 // nothing uses is stored nowhere and tests no write-barrier flag; a number
 // boxed before the call is read where it is, not boxed again; the stack's
@@ -135,7 +146,7 @@ func TestMirCallsLean(t *testing.T) {
 					flags, keeps, ucomis, rooms := 0, 0, 0, 0
 					for _, in := range ins {
 						switch {
-						case in.Op == x86asm.MOVZX:
+						case barrierFlag(in):
 							flags++
 						case in.Op == x86asm.UCOMISD:
 							ucomis++
