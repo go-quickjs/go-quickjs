@@ -1024,11 +1024,25 @@ func (c *compiler) callEntry() {
 	c.a.Store(regCtx, abi.OffBase, base)
 	c.a.Lea(top, base, int32(c.frameSize()))
 	c.a.Store(at, 0, top)
-	same := c.a.NewLabel()
-	c.a.Load(at, regCtx, abi.OffStackHigh)
-	c.a.CmpMem(top, at, 0, true)
-	c.a.Jcc(amd64.CondBE, same)
-	c.a.Store(at, 0, top)
+	// The high water, raised past the frame where it was lower, as the
+	// context last found it (abi.Context's HighSeen): a frame no higher
+	// leaves it as it is, with no load of it. Its check had been a tenth
+	// of a recursive call's cycles.
+	same, raise := c.a.NewLabel(), c.a.NewLabel()
+	c.a.CmpMem(top, regCtx, abi.OffHighSeen, true)
+	c.a.Jcc(amd64.CondA, raise)
+	c.cold = append(c.cold, func() {
+		c.a.Bind(raise)
+		kept := c.a.NewLabel()
+		c.a.Load(at, regCtx, abi.OffStackHigh)
+		c.a.CmpMem(top, at, 0, true)
+		c.a.Jcc(amd64.CondBE, kept)
+		c.a.Store(at, 0, top)
+		c.a.Bind(kept)
+		c.a.Load(scratchA, at, 0)
+		c.a.Store(regCtx, abi.OffHighSeen, scratchA)
+		c.a.Jmp(same)
+	})
 	c.a.Bind(same)
 	c.a.ShiftImm(amd64.Shl, base, 4, true)
 	c.a.Load(at, regCtx, abi.OffStackBase)

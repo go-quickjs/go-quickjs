@@ -185,11 +185,14 @@ next one, and its code is entered through a link (`jitLink`) that holds the
 function's current code, so callers keep working when the callee is
 compiled again or its code is dropped. As V8's callee builds its own
 frame, the callee's code makes its frame and context at its call entry
-(`mir`'s `Code.CallEntry`), once for all its callers: a call writes only
-what it knows -- the arguments, the receiver -- and jumps there with where
-it returns to, the callee's closure and its link in registers, and the
-callee's return hands the result back in registers (`abi.Context`'s
-`ReturnTo`). Small callees are inlined, with
+(`mir`'s `Code.CallEntry`), once for all its callers -- the VM stack's
+high water raised past the frame only where the context last found it
+lower (`abi.Context`'s `HighSeen`, which Go zeroes wherever it lowers the
+high water), its check a tenth of a recursive call's cycles: a call
+writes only what it knows -- the arguments, the receiver -- and jumps
+there with where it returns to, the callee's closure and its link in
+registers, and the callee's return hands the result back in registers
+(`abi.Context`'s `ReturnTo`). Small callees are inlined, with
 their own frames made at an exit, and with the globals they read, read
 from their own sites, and the speculations their own code learned failed
 built generic. What a function inlines is bounded by size alone, as V8's

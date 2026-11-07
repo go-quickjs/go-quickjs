@@ -4275,7 +4275,10 @@ func (r *Runtime) jitNativeCallsInline(e *jitEntry, inline func(int)) bool {
 	return found
 }
 
-func init() { jit.HostCall = jitHostCall }
+func init() {
+	jit.HostCall = jitHostCall
+	jitStackHighLowered = jitForgetHighSeen
+}
 
 // jitHostCall is Go's side of a call of Go from native code (jit.HostCall,
 // ssa.CallSite's Go) by the runtime the context belongs to: it does what
@@ -14517,4 +14520,18 @@ const (
 
 func jitTypeWord(x any) uint64 {
 	return uint64((*[2]uintptr)(unsafe.Pointer(&x))[0])
+}
+
+// jitForgetHighSeen is jitStackHighLowered: Go has lowered the VM stack's
+// high water, and each context forgets what it last found it at
+// (abi.Context's HighSeen), which a call entry trusts never to be above
+// it; their next call entries raise it again where their frames reach
+// past it.
+func jitForgetHighSeen(r *Runtime) {
+	if r.jit == nil {
+		return
+	}
+	for _, c := range r.jit.ssaCtxs {
+		c.HighSeen = 0
+	}
 }

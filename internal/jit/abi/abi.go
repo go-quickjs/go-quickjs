@@ -538,6 +538,12 @@ type Context struct {
 	// of those left to shade or to write is kept here. At the end, as
 	// GoLast.
 	RecordAt uint64
+	// HighSeen is the VM stack's high water (StackHigh's) as a call entry
+	// in this context last found it, never above it: a call entry whose
+	// frame's top is no higher leaves the high water as it is, with no
+	// load of it; a higher one raises it and this. Go zeroes it in every
+	// context where it lowers the high water.
+	HighSeen uint64
 }
 
 // GoArg is an operand of a call of Go: a slot's two words, its pointer word
@@ -916,6 +922,7 @@ var (
 	OffStackEnd   = int32(unsafe.Offsetof(Context{}.StackEnd))
 	OffStackTop   = int32(unsafe.Offsetof(Context{}.StackTop))
 	OffStackHigh  = int32(unsafe.Offsetof(Context{}.StackHigh))
+	OffHighSeen   = int32(unsafe.Offsetof(Context{}.HighSeen))
 	OffTailReturn = int32(unsafe.Offsetof(Context{}.TailReturn))
 	OffNext       = int32(unsafe.Offsetof(Context{}.Next))
 	OffPrev       = int32(unsafe.Offsetof(Context{}.Prev))

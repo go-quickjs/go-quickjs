@@ -60,9 +60,17 @@ func (r *Runtime) sweepStaleSlots(sp int) {
 	if r.stackHigh > r.stackTop {
 		clear(r.stack[r.stackTop:r.stackHigh])
 		r.stackHigh = r.stackTop
+		if jitStackHighLowered != nil {
+			jitStackHighLowered(r)
+		}
 	}
 	r.clearReturnedFrames()
 }
+
+// jitStackHighLowered, in a build with the JIT, has native code's contexts
+// forget the high water they last found (abi.Context's HighSeen), which
+// must never be above it, where Go has lowered it.
+var jitStackHighLowered func(r *Runtime)
 
 // clearReturnedFrames lets go of what the frames of the calls that have
 // returned still hold. A frame is left as it was when its call returns, so

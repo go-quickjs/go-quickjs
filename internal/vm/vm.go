@@ -4923,6 +4923,9 @@ func (r *Runtime) endTurn() {
 	if r.stackHigh > r.stackTop {
 		clear(r.stack[r.stackTop:r.stackHigh])
 		r.stackHigh = r.stackTop
+		if jitStackHighLowered != nil {
+			jitStackHighLowered(r)
+		}
 	}
 	r.clearReturnedFrames()
 	r.releaseKeptValues()
