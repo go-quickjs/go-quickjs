@@ -20,10 +20,10 @@ func (c *a64Compiler) bigHighBits() uint8 { return 64 - c.enc.ShortBigLowBits }
 // bigSourceWord puts the pointer word of x, a tagged value, in B, read
 // where it came from (keepSource), exiting where it has no source. It
 // takes A and C.
-func (c *a64Compiler) bigSourceWord(x *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) bigSourceWord(x *ssa.Value, guard a64Guard) {
 	c.keepSource(x)
 	c.a.CmpImm(a64C, 0, true)
-	guard(arm64.EQ)
+	guard.jump(arm64.EQ)
 	c.a.Load(a64B, a64C, c.enc.RefOffset)
 }
 
@@ -49,7 +49,7 @@ func (c *a64Compiler) bigTagIs(tag uint64) {
 }
 
 // bigUnboxU64 is amd64's.
-func (c *a64Compiler) bigUnboxU64(v *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) bigUnboxU64(v *ssa.Value, guard a64Guard) {
 	x := v.Args[0]
 	wide, join := c.a.NewLabel(), c.a.NewLabel()
 	c.bigSourceWord(x, guard)
@@ -59,22 +59,22 @@ func (c *a64Compiler) bigUnboxU64(v *ssa.Value, guard func(arm64.Cond)) {
 	c.movImm(a64A, c.enc.ShortBigHigh)
 	c.a.Op(arm64.Sub, a64B, a64B, a64A, true)
 	c.a.CmpImm(a64B, 1<<(c.bigHighBits()-1), true)
-	guard(arm64.HS)
+	guard.jump(arm64.HS)
 	c.a.B(join)
 	c.a.Bind(wide)
 	c.bigTagIs(c.enc.ShortBigWideTag)
-	guard(arm64.NE)
+	guard.jump(arm64.NE)
 	c.movImm(a64A, c.enc.ShortBigWideHigh)
 	c.a.Op(arm64.Sub, a64B, a64B, a64A, true)
 	c.a.CmpImm(a64B, 1<<c.bigHighBits(), true)
-	guard(arm64.HS)
+	guard.jump(arm64.HS)
 	c.a.Bind(join)
 	c.bigJoin(x)
 	c.setG(v, a64B)
 }
 
 // bigLow is amd64's.
-func (c *a64Compiler) bigLow(v *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) bigLow(v *ssa.Value, guard a64Guard) {
 	x := v.Args[0]
 	wide, heap, join, done := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
 	c.bigSourceWord(x, guard)
@@ -97,7 +97,7 @@ func (c *a64Compiler) bigLow(v *ssa.Value, guard func(arm64.Cond)) {
 		c.a.Bind(heap)
 		c.movImm(a64C, c.enc.HeapBigTag)
 		c.a.Cmp(c.gpr(x, a64A), a64C, true)
-		guard(arm64.NE)
+		guard.jump(arm64.NE)
 		// Every BigInt on the heap is past 64 bits: two digits at least.
 		c.a.Load(a64A, a64B, 0)
 		c.a.Load(a64B, a64B, c.enc.BigDigits)
@@ -135,7 +135,7 @@ func (c *a64Compiler) bigBoxWords(v *ssa.Value) {
 }
 
 // bigWord is amd64's.
-func (c *a64Compiler) bigWord(v *ssa.Value, guard func(arm64.Cond)) bool {
+func (c *a64Compiler) bigWord(v *ssa.Value, guard a64Guard) bool {
 	arg := func(i int) *ssa.Value { return v.Args[i] }
 	switch v.Op {
 	case ssa.OpBigUnboxU64:
@@ -145,7 +145,7 @@ func (c *a64Compiler) bigWord(v *ssa.Value, guard func(arm64.Cond)) bool {
 	case ssa.OpBigSign:
 		x := c.gpr(arg(0), a64A)
 		c.a.CmpImm(x, 0, true)
-		guard(arm64.MI)
+		guard.jump(arm64.MI)
 		c.setG(v, x)
 	case ssa.OpAddW, ssa.OpSubW, ssa.OpAndW, ssa.OpOrW, ssa.OpXorW, ssa.OpAddU64, ssa.OpSubU64:
 		op := map[ssa.Op]arm64.ALU{ssa.OpAddW: arm64.Add, ssa.OpSubW: arm64.Sub, ssa.OpAndW: arm64.And, ssa.OpOrW: arm64.Orr,
@@ -154,10 +154,10 @@ func (c *a64Compiler) bigWord(v *ssa.Value, guard func(arm64.Cond)) bool {
 		switch v.Op {
 		case ssa.OpAddU64:
 			// A carry: past 2^64-1.
-			guard(arm64.HS)
+			guard.jump(arm64.HS)
 		case ssa.OpSubU64:
 			// A borrow: below 0.
-			guard(arm64.LO)
+			guard.jump(arm64.LO)
 		}
 		c.setG(v, a64A)
 	case ssa.OpMulW:
@@ -168,7 +168,7 @@ func (c *a64Compiler) bigWord(v *ssa.Value, guard func(arm64.Cond)) bool {
 		c.a.Umulh(a64C, x, y)
 		c.a.Mul(a64A, x, y)
 		c.a.CmpImm(a64C, 0, true)
-		guard(arm64.NE)
+		guard.jump(arm64.NE)
 		c.setG(v, a64A)
 	case ssa.OpShlW, ssa.OpShrW, ssa.OpSarW:
 		x := c.gpr(arg(0), a64A)
@@ -200,7 +200,7 @@ func (c *a64Compiler) bigWord(v *ssa.Value, guard func(arm64.Cond)) bool {
 			c.a.ShiftImm(arm64.Lsl, a64A, x, n, true)
 			c.a.ShiftImm(back, a64B, a64A, n, true)
 			c.a.Cmp(a64B, x, true)
-			guard(arm64.NE)
+			guard.jump(arm64.NE)
 			x = a64A
 		}
 		c.setG(v, x)
@@ -213,13 +213,13 @@ func (c *a64Compiler) bigWord(v *ssa.Value, guard func(arm64.Cond)) bool {
 		c.a.Fcvtzs(a64A, x)
 		c.a.Scvtf(a64F2, a64A, true)
 		c.a.FCmp(a64F2, x)
-		guard(arm64.NE)
-		guard(arm64.VS)
+		guard.jump(arm64.NE)
+		guard.jump(arm64.VS)
 		// 2^63 and past saturate to the largest int64, whose double is
 		// 2^63: no double is that int64.
 		c.movImm(a64B, math.MaxInt64)
 		c.a.Cmp(a64A, a64B, true)
-		guard(arm64.EQ)
+		guard.jump(arm64.EQ)
 		c.setG(v, a64A)
 	default:
 		return false
@@ -229,12 +229,12 @@ func (c *a64Compiler) bigWord(v *ssa.Value, guard func(arm64.Cond)) bool {
 
 // bigDivide is amd64's. SDIV and UDIV fault at nothing: a zero divisor is
 // guarded, and the most negative int64 over -1 is too, for a division.
-func (c *a64Compiler) bigDivide(v *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) bigDivide(v *ssa.Value, guard a64Guard) {
 	signed := v.Op == ssa.OpDivI64 || v.Op == ssa.OpModI64
 	mod := v.Op == ssa.OpModI64 || v.Op == ssa.OpModU64
 	x, y := c.gpr(v.Args[0], a64C), c.gpr(v.Args[1], a64B)
 	c.a.CmpImm(y, 0, true)
-	guard(arm64.EQ)
+	guard.jump(arm64.EQ)
 	minus, done := c.a.NewLabel(), c.a.NewLabel()
 	if signed {
 		c.a.CmpImm(y, -1, true)
@@ -254,7 +254,7 @@ func (c *a64Compiler) bigDivide(v *ssa.Value, guard func(arm64.Cond)) {
 		} else {
 			// -x, which only the most negative int64 overflows.
 			c.a.Op(arm64.Subs, a64A, arm64.ZR, x, true)
-			guard(arm64.VS)
+			guard.jump(arm64.VS)
 		}
 		c.a.Bind(done)
 	}
@@ -263,12 +263,12 @@ func (c *a64Compiler) bigDivide(v *ssa.Value, guard func(arm64.Cond)) {
 
 // bigPower is amd64's, a product's range checked as OpMulI64's is: the
 // power in A, the base in B, the exponent in C, D the scratch.
-func (c *a64Compiler) bigPower(v *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) bigPower(v *ssa.Value, guard a64Guard) {
 	if y := c.gpr(v.Args[1], a64C); y != a64C {
 		c.a.MovRR(a64C, y)
 	}
 	c.a.CmpImm(a64C, 0, true)
-	guard(arm64.LT)
+	guard.jump(arm64.LT)
 	if x := c.gpr(v.Args[0], a64B); x != a64B {
 		c.a.MovRR(a64B, x)
 	}
@@ -280,7 +280,7 @@ func (c *a64Compiler) bigPower(v *ssa.Value, guard func(arm64.Cond)) {
 		c.a.Mul(n, n, m)
 		c.a.ShiftImm(arm64.Asr, tmpBig, n, 63, true)
 		c.a.Cmp(a64D, tmpBig, true)
-		guard(arm64.NE)
+		guard.jump(arm64.NE)
 	}
 	c.a.Bind(loop)
 	c.movImm(a64D, 1)
@@ -345,14 +345,14 @@ func (c *a64Compiler) bigRebox(v *ssa.Value) arm64.Reg {
 
 // bigElemRead reads a BigInt64Array's or a BigUint64Array's element, as
 // amd64's.
-func (c *a64Compiler) bigElemRead(v *ssa.Value, fail func(arm64.Cond)) {
+func (c *a64Compiler) bigElemRead(v *ssa.Value, fail a64Guard) {
 	c.typedElement(v.Args[0], v.Args[1], false, fail)
 	kind := int64(abi.ElemBigInt64)
 	if v.Type == ssa.Uint64 {
 		kind = abi.ElemBigUint64
 	}
 	c.a.CmpImm(a64C, kind, false)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 3, true)
 	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
 	d := c.gdst(v)
@@ -362,14 +362,14 @@ func (c *a64Compiler) bigElemRead(v *ssa.Value, fail func(arm64.Cond)) {
 
 // bigElemWrite stores a BigInt's low 64 bits in a BigInt typed array's
 // element, as amd64's.
-func (c *a64Compiler) bigElemWrite(v *ssa.Value, fail func(arm64.Cond)) {
+func (c *a64Compiler) bigElemWrite(v *ssa.Value, fail a64Guard) {
 	c.typedElement(v.Args[0], v.Args[1], true, fail)
 	kind := int64(abi.ElemBigInt64)
 	if v.Index == 1 {
 		kind = abi.ElemBigUint64
 	}
 	c.a.CmpImm(a64C, kind, false)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 3, true)
 	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
 	c.a.Store(a64A, 0, c.gpr(v.Args[2], a64B))

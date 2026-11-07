@@ -168,7 +168,13 @@ func compileARM64(w *Workspace, f *ssa.Func, enc abi.Encoding, opts Options) (co
 	if err != nil {
 		return nil, err
 	}
-	c := &a64Compiler{core: k, consts: enc.ConstWords(), budget: -1}
+	var c *a64Compiler
+	if w != nil {
+		c = &w.arm64.c
+	} else {
+		c = new(a64Compiler)
+	}
+	*c = a64Compiler{core: k, consts: enc.ConstWords(), budget: -1}
 	c.stubAt = k.ints(2 * f.NumStates())
 	if w != nil {
 		g := &w.arm64
@@ -1618,7 +1624,7 @@ func (c *a64Compiler) setBool(v *ssa.Value, to *a64Target, t a64Target, yes uint
 
 // looseNullish is x == null, as amd64's: null's or undefined's word, or an
 // object with [[IsHTMLDDA]].
-func (c *a64Compiler) looseNullish(v *ssa.Value, guard func(arm64.Cond), to *a64Target) {
+func (c *a64Compiler) looseNullish(v *ssa.Value, guard a64Guard, to *a64Target) {
 	a := v.Args[0]
 	t := c.tests(to, false)
 	w := c.gpr(a, a64B)
@@ -1641,7 +1647,7 @@ func (c *a64Compiler) looseNullish(v *ssa.Value, guard func(arm64.Cond), to *a64
 
 // strictConst is amd64's (x === k of a constant k's word, or of an ASCII
 // string constant's bytes). It uses A, B, C and D.
-func (c *a64Compiler) strictConst(v *ssa.Value, guard func(arm64.Cond), to *a64Target) bool {
+func (c *a64Compiler) strictConst(v *ssa.Value, guard a64Guard, to *a64Target) bool {
 	if x, k, ok := eqConstOf(v); ok {
 		t := c.tests(to, true)
 		w := c.gpr(x, a64A)
@@ -1734,7 +1740,7 @@ func (c *a64Compiler) strictConst(v *ssa.Value, guard func(arm64.Cond), to *a64T
 }
 
 // eqTagged is OpEqTagged, as amd64's.
-func (c *a64Compiler) eqTagged(v *ssa.Value, guard func(arm64.Cond), to *a64Target) {
+func (c *a64Compiler) eqTagged(v *ssa.Value, guard a64Guard, to *a64Target) {
 	if v.Index == 1 && c.strictConst(v, guard, to) {
 		return
 	}
@@ -1872,20 +1878,20 @@ func (c *a64Compiler) eqTagged(v *ssa.Value, guard func(arm64.Cond), to *a64Targ
 }
 
 // arrayOf finds the array a value is and checks its class.
-func (c *a64Compiler) arrayOf(v *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) arrayOf(v *ssa.Value, guard a64Guard) {
 	if !c.objectOf(v, guard) {
 		return
 	}
 	c.a.LoadU8(a64B, a64C, c.enc.ObjectClass)
 	c.a.CmpImm(a64B, int64(c.enc.ClassArray), false)
-	guard(arm64.NE)
+	guard.jump(arm64.NE)
 	c.setG(v, a64C)
 }
 
 // objectOf finds the object a value is, into C.
 // instanceOf is amd64's: whether its value has the object its second
 // argument is among its prototypes (OpInstanceOf). It uses A, B and C.
-func (c *a64Compiler) instanceOf(v *ssa.Value, guard func(arm64.Cond), to *a64Target) {
+func (c *a64Compiler) instanceOf(v *ssa.Value, guard a64Guard, to *a64Target) {
 	a := v.Args[0]
 	if a.Shadow == nil && c.origin.At(a) < 0 {
 		if to != nil {
@@ -1906,12 +1912,12 @@ func (c *a64Compiler) instanceOf(v *ssa.Value, guard func(arm64.Cond), to *a64Ta
 	c.a.BCond(arm64.NE, no)
 	c.sourceRef(a, guard)
 	c.a.CmpImm(a64C, 0, true)
-	guard(arm64.EQ)
+	guard.jump(arm64.EQ)
 	p := c.gpr(v.Args[1], a64A)
 	c.a.Bind(loop)
 	c.a.LoadU8(a64B, a64C, c.enc.ObjectClass)
 	c.a.CmpImm(a64B, int64(c.enc.ClassProxy), false)
-	guard(arm64.EQ)
+	guard.jump(arm64.EQ)
 	c.loadProto(a64C, a64C)
 	c.a.Cbz(a64C, no, true)
 	c.a.Cmp(a64C, p, true)
@@ -1930,7 +1936,7 @@ func (c *a64Compiler) instanceOf(v *ssa.Value, guard func(arm64.Cond), to *a64Ta
 }
 
 // primitive is amd64's (OpPrimitive). It uses A and B.
-func (c *a64Compiler) primitive(v *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) primitive(v *ssa.Value, guard a64Guard) {
 	ok := c.a.NewLabel()
 	w := c.gpr(v.Args[0], a64B)
 	c.movImm(a64A, abi.NumberLimit)
@@ -1943,12 +1949,12 @@ func (c *a64Compiler) primitive(v *ssa.Value, guard func(arm64.Cond)) {
 	}
 	c.movImm(a64A, c.enc.Undefined)
 	c.a.Cmp(w, a64A, true)
-	guard(arm64.NE)
+	guard.jump(arm64.NE)
 	c.a.Bind(ok)
 }
 
 // typeIs is amd64's (OpTypeIs). It uses A, B and C.
-func (c *a64Compiler) typeIs(v *ssa.Value, guard func(arm64.Cond), to *a64Target) {
+func (c *a64Compiler) typeIs(v *ssa.Value, guard a64Guard, to *a64Target) {
 	a := v.Args[0]
 	t := c.tests(to, false)
 	// it is the type's, as amd64's.
@@ -2010,7 +2016,7 @@ func (c *a64Compiler) typeIs(v *ssa.Value, guard func(arm64.Cond), to *a64Target
 				c.a.CmpImm(a64A, int64(c.enc.ClassFunction), false)
 				c.a.BCond(arm64.EQ, fn)
 				c.a.CmpImm(a64A, int64(c.enc.ClassProxy), false)
-				guard(arm64.EQ)
+				guard.jump(arm64.EQ)
 				c.jumpTo(it, obj)
 			}
 		}
@@ -2018,18 +2024,18 @@ func (c *a64Compiler) typeIs(v *ssa.Value, guard func(arm64.Cond), to *a64Target
 	c.setBool(v, to, t, v.Const.Bits^1)
 }
 
-func (c *a64Compiler) objectOf(v *ssa.Value, guard func(arm64.Cond)) bool {
+func (c *a64Compiler) objectOf(v *ssa.Value, guard a64Guard) bool {
 	return c.reference(v, v.Args[0], c.enc.Object, guard)
 }
 
 // reference finds the reference a is, of the kind whose word is word, into
 // C, as amd64's does. It uses A and B.
-func (c *a64Compiler) reference(v, a *ssa.Value, word uint64, guard func(arm64.Cond)) bool {
+func (c *a64Compiler) reference(v, a *ssa.Value, word uint64, guard a64Guard) bool {
 	return c.referenceTo(v, a, word, guard, c.stubLabel(v.State, exitKind(v.Aux)))
 }
 
 // referenceTo is reference failing at fail, as guard does.
-func (c *a64Compiler) referenceTo(v, a *ssa.Value, word uint64, guard func(arm64.Cond), fail arm64.Label) bool {
+func (c *a64Compiler) referenceTo(v, a *ssa.Value, word uint64, guard a64Guard, fail arm64.Label) bool {
 	o := c.origin.At(a)
 	if a.Shadow == nil && o < 0 {
 		c.a.B(fail)
@@ -2038,7 +2044,7 @@ func (c *a64Compiler) referenceTo(v, a *ssa.Value, word uint64, guard func(arm64
 	w := c.gpr(a, a64A)
 	c.movImm(a64B, word)
 	c.a.Cmp(w, a64B, true)
-	guard(arm64.NE)
+	guard.jump(arm64.NE)
 	c.sourceRef(a, guard)
 	c.a.Cbz(a64C, fail, true)
 	return true
@@ -2046,14 +2052,14 @@ func (c *a64Compiler) referenceTo(v, a *ssa.Value, word uint64, guard func(arm64
 
 // sourceRef loads the pointer word of a, a value with a source, into C, as
 // amd64's does. It uses A and B.
-func (c *a64Compiler) sourceRef(a *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) sourceRef(a *ssa.Value, guard a64Guard) {
 	o := c.origin.At(a)
 	if s := a.Shadow; s != nil && cellSource(s) {
 		c.a.Load(a64C, c.gpr(s, a64C), c.enc.RefOffset)
 	} else if s != nil {
 		r := c.gpr(s, a64C)
 		c.a.CmpImm(r, 0, true)
-		guard(arm64.EQ)
+		guard.jump(arm64.EQ)
 		c.a.Load(a64C, r, c.enc.RefOffset)
 	} else {
 		base, disp := c.slotAddr(o, true, a64C)
@@ -2099,7 +2105,7 @@ func (c *a64Compiler) sourceAddr() {
 
 // propStore stores a value in a property, as amd64's does. It uses every
 // scratch register and F1.
-func (c *a64Compiler) propStore(v *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) propStore(v *ssa.Value, guard a64Guard) {
 	x := v.Args[1]
 	var w arm64.Reg
 	if remat(x) {
@@ -2170,11 +2176,11 @@ func (c *a64Compiler) propStore(v *ssa.Value, guard func(arm64.Cond)) {
 		c.movImm(a64C, uint64(c.enc.PropNotWritable))
 		c.a.Op(arm64.And, a64B, a64B, a64C, false)
 		c.a.CmpImm(a64B, int64(c.enc.PropWritable), false)
-		guard(arm64.NE)
+		guard.jump(arm64.NE)
 	} else if v.Type == ssa.Bool {
 		// As amd64's: a megamorphic site's write whose misses Go makes.
 		miss = c.a.NewLabel()
-		c.property(v, func(cond arm64.Cond) { c.a.BCond(cond, miss) })
+		c.property(v, a64GuardLabel(c, miss))
 	} else {
 		c.property(v, guard)
 	}
@@ -2309,7 +2315,7 @@ func (c *a64Compiler) appendingCall() {
 	size := int32(unsafe.Sizeof(abi.GoArg{}))
 	protos := c.f.ArrayProtos
 	toGo := c.a.NewLabel()
-	fail := func(cond arm64.Cond) { c.a.BCond(cond, toGo) }
+	fail := a64GuardLabel(c, toGo)
 	// The key, an index in [0, 2**32), as index makes it, and the array's
 	// length.
 	c.a.Load(a64A, a64Ctx, abi.OffGoArgs+size+c.enc.NumOffset)
@@ -2317,19 +2323,19 @@ func (c *a64Compiler) appendingCall() {
 	c.a.Fcvtzs(a64A, a64F0)
 	c.a.Scvtf(a64F1, a64A, true)
 	c.a.FCmp(a64F1, a64F0)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.ShiftImm(arm64.Lsr, a64B, a64A, 32, true)
 	c.a.CmpImm(a64B, 0, true)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.Load(a64C, a64Ctx, abi.OffGoArgs+c.enc.RefOffset)
 	c.a.Load(a64B, a64C, c.enc.ObjectElems+8)
 	c.a.Cmp(a64A, a64B, true)
 	hole := c.a.NewLabel()
 	c.a.BCond(arm64.LO, hole)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.Load(a64B, a64C, c.enc.ObjectElems+16)
 	c.a.Cmp(a64A, a64B, true)
-	fail(arm64.HS)
+	fail.jump(arm64.HS)
 	c.arrayGuards(a64C, protos, fail)
 	// The element at the length, then the length one more.
 	c.a.Load(a64C, a64Ctx, abi.OffGoArgs+c.enc.RefOffset)
@@ -2355,7 +2361,7 @@ func (c *a64Compiler) appendingCall() {
 	c.a.Load(a64B, a64A, c.enc.NumOffset)
 	c.movImm(a64D, c.enc.Uninitialized)
 	c.a.Cmp(a64B, a64D, true)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.MovRR(a64D, a64A)
 	c.arrayGuards(a64C, protos, fail)
 	c.a.Load(a64B, a64Ctx, abi.OffGoArgs+2*size+c.enc.NumOffset)
@@ -2377,20 +2383,20 @@ func (c *a64Compiler) appendingCall() {
 
 // arrayGuards is amd64's: array p may take an element where it has none.
 // It uses A, B and C.
-func (c *a64Compiler) arrayGuards(p arm64.Reg, protos [2]ssa.Holder, fail func(arm64.Cond)) {
+func (c *a64Compiler) arrayGuards(p arm64.Reg, protos [2]ssa.Holder, fail a64Guard) {
 	c.a.LoadU8(a64B, p, c.enc.ObjectClass)
 	c.a.CmpImm(a64B, int64(c.enc.ClassArray), false)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.LoadU8(a64B, p, c.enc.ObjectFlags)
 	want := c.enc.FlagExtensible | c.enc.FlagLengthWritable
 	c.movImm(a64A, uint64(want|c.enc.FlagSparse))
 	c.a.Op(arm64.And, a64B, a64B, a64A, false)
 	c.a.CmpImm(a64B, int64(want), false)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.loadProtoPlain(a64B, p)
 	c.movImm(a64A, uint64(protos[0].Object))
 	c.a.Cmp(a64B, a64A, true)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.protoGuards(protos, fail)
 }
 
@@ -2517,7 +2523,7 @@ func (c *a64Compiler) byCode(t *ssa.CallSite, next arm64.Label) {
 	// A miss has the callee in C again, for the next site to check.
 	miss, done := c.a.NewLabel(), c.a.NewLabel()
 	c.a.Store(a64Ctx, abi.OffCallCallee, a64C)
-	c.objectData(a64B, a64C, a64C, c.enc.FuncData, func(cond arm64.Cond) { c.a.BCond(cond, miss) })
+	c.objectData(a64B, a64C, a64C, c.enc.FuncData, a64GuardLabel(c, miss))
 	c.a.Load(a64B, a64B, c.enc.FuncClosure)
 	c.a.Cbz(a64B, miss, true)
 	for _, f := range [...]struct {
@@ -2543,20 +2549,20 @@ func (c *a64Compiler) byCode(t *ssa.CallSite, next arm64.Label) {
 // callee in C unless t checks its function, or next, the callee in C again.
 // superGuards is amd64's: the function running and its prototype as the
 // code was compiled for, the this unbound. It uses A and B.
-func (c *a64Compiler) superGuards(t *ssa.CallSite, x *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) superGuards(t *ssa.CallSite, x *ssa.Value, guard a64Guard) {
 	c.a.Load(a64A, a64Ctx, abi.OffFunction)
 	c.movImm(a64B, uint64(t.Active))
 	c.a.Cmp(a64A, a64B, true)
-	guard(arm64.NE)
+	guard.jump(arm64.NE)
 	c.loadProtoPlain(a64A, a64A)
 	c.movImm(a64B, uint64(t.Callee))
 	c.a.Cmp(a64A, a64B, true)
-	guard(arm64.NE)
+	guard.jump(arm64.NE)
 	if t.Parent != 0 {
 		c.loadProtoPlain(a64A, a64A)
 		c.movImm(a64B, uint64(t.Parent))
 		c.a.Cmp(a64A, a64B, true)
-		guard(arm64.NE)
+		guard.jump(arm64.NE)
 	}
 	w := a64A
 	if remat(x) {
@@ -2566,7 +2572,7 @@ func (c *a64Compiler) superGuards(t *ssa.CallSite, x *ssa.Value, guard func(arm6
 	}
 	c.movImm(a64B, c.enc.Uninitialized)
 	c.a.Cmp(w, a64B, true)
-	guard(arm64.NE)
+	guard.jump(arm64.NE)
 }
 
 // arrowBound is amd64's.
@@ -2603,7 +2609,7 @@ func (c *a64Compiler) arrowThis(t *ssa.CallSite, next arm64.Label) {
 
 // mega is amd64's: v's property looked up by the probe the code's sites
 // share (megaProbe), its value's address in A, or a failure.
-func (c *a64Compiler) mega(v *ssa.Value, guard func(arm64.Cond), found arm64.Label) {
+func (c *a64Compiler) mega(v *ssa.Value, guard a64Guard, found arm64.Label) {
 	write := b2i(v.Op == ssa.OpPropWrite)
 	if !c.probeUsed[write] {
 		c.probe[write], c.probeUsed[write] = c.a.NewLabel(), true
@@ -2625,7 +2631,7 @@ func (c *a64Compiler) mega(v *ssa.Value, guard func(arm64.Cond), found arm64.Lab
 	c.a.B(c.probe[write])
 	c.a.Bind(back)
 	c.a.CmpImm(a64A, 0, true)
-	guard(arm64.EQ)
+	guard.jump(arm64.EQ)
 	c.a.B(found)
 }
 
@@ -2741,7 +2747,7 @@ func (c *a64Compiler) megaProbe(write bool) {
 // callee in C, made through the function's link, or miss.
 func (c *a64Compiler) genericCheck(v *ssa.Value, site *ssa.CallSite, target int, checked, miss arm64.Label) {
 	c.a.Store(a64Ctx, abi.OffCallCallee, a64C)
-	c.objectData(a64B, a64C, a64C, c.enc.FuncData, func(cond arm64.Cond) { c.a.BCond(cond, miss) })
+	c.objectData(a64B, a64C, a64C, c.enc.FuncData, a64GuardLabel(c, miss))
 	c.a.Load(a64B, a64B, c.enc.FuncClosure)
 	c.a.Cbz(a64B, miss, true)
 	for _, f := range [...]struct {
@@ -2818,13 +2824,13 @@ func (c *a64Compiler) genericCheck(v *ssa.Value, site *ssa.CallSite, target int,
 // objectPart is amd64's: what an object of class cls keeps off bytes
 // past it, into dst. It uses t too, which must not be obj: the class read
 // into it had made obj the class's number, and dst a field of address 21.
-func (c *a64Compiler) objectPart(dst, obj, t arm64.Reg, cls uint8, off int32, fail func(arm64.Cond)) {
+func (c *a64Compiler) objectPart(dst, obj, t arm64.Reg, cls uint8, off int32, fail a64Guard) {
 	if t == obj {
 		panic("mir: objectPart's scratch register is its object's")
 	}
 	c.a.LoadU8(t, obj, c.enc.ObjectClass)
 	c.a.CmpImm(t, int64(cls), false)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.AddImm(dst, obj, int64(off), true)
 }
 
@@ -2866,16 +2872,16 @@ func (c *a64Compiler) loadProto(dst, obj arm64.Reg) {
 // which dst must be neither of; dst and t may each be obj, which, as in
 // amd64's, only the first instruction reads: after it, it reads through
 // dst, the side fields' address.
-func (c *a64Compiler) objectData(dst, obj, t arm64.Reg, typ uint64, fail func(arm64.Cond)) {
+func (c *a64Compiler) objectData(dst, obj, t arm64.Reg, typ uint64, fail a64Guard) {
 	c.a.AddImm(dst, obj, int64(c.enc.ObjectExt), true)
 	c.a.LoadU8(t, dst, c.enc.ObjectFlags-c.enc.ObjectExt)
 	c.movImm(a64A, uint64(c.enc.FlagData))
 	c.a.Tst(t, a64A, false)
-	fail(arm64.EQ)
+	fail.jump(arm64.EQ)
 	c.a.Load(t, dst, c.enc.ObjectData)
 	c.movImm(a64A, typ)
 	c.a.Cmp(t, a64A, true)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.Load(dst, dst, c.enc.ObjectData+8)
 }
 
@@ -2991,7 +2997,7 @@ func (c *a64Compiler) addAlongMarking(v *ssa.Value, add *ssa.PropertyAdd, done a
 // property finds the property a property operation names and leaves the
 // address of its value in A, as amd64's does: any other shape searched at
 // a megamorphic site, failing at any other. It uses B, C and D.
-func (c *a64Compiler) property(v *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) property(v *ssa.Value, guard a64Guard) {
 	if v.Holders() != nil || v.Cases() != nil {
 		c.holder(v, guard)
 		return
@@ -3008,7 +3014,7 @@ func (c *a64Compiler) property(v *ssa.Value, guard func(arm64.Cond)) {
 			c.movImm(a64C, v.Const.Bits)
 			c.a.Cmp(a64B, a64C, true)
 			if !v.Megamorphic() {
-				guard(arm64.NE)
+				guard.jump(arm64.NE)
 			} else {
 				c.a.BCond(arm64.NE, scan)
 				c.cold = append(c.cold, func() {
@@ -3027,7 +3033,7 @@ func (c *a64Compiler) property(v *ssa.Value, guard func(arm64.Cond)) {
 	if !v.Megamorphic() && !v.Scans() {
 		// As amd64's: every receiver fails.
 		c.a.Cmp(a64B, a64B, true)
-		guard(arm64.EQ)
+		guard.jump(arm64.EQ)
 		c.a.Bind(found)
 		return
 	}
@@ -3037,18 +3043,18 @@ func (c *a64Compiler) property(v *ssa.Value, guard func(arm64.Cond)) {
 
 // scan searches an object's small table for the key a property operation
 // names, as amd64's does, going to found with the value's address in A.
-func (c *a64Compiler) scan(v *ssa.Value, guard func(arm64.Cond), found, mega arm64.Label) {
+func (c *a64Compiler) scan(v *ssa.Value, guard a64Guard, found, mega arm64.Label) {
 	p := c.gpr(v.Args[0], a64A)
 	c.a.LoadU8(a64B, p, c.enc.ObjectClass)
 	c.a.CmpImm(a64B, int64(c.enc.ClassObject), false)
 	if v.Op == ssa.OpPropWrite {
-		guard(arm64.NE)
+		guard.jump(arm64.NE)
 	} else {
 		// As amd64's: a read searches a function's table too.
 		object := c.a.NewLabel()
 		c.a.BCond(arm64.EQ, object)
 		c.a.CmpImm(a64B, int64(c.enc.ClassFunction), false)
-		guard(arm64.NE)
+		guard.jump(arm64.NE)
 		c.a.Bind(object)
 	}
 	c.a.LoadU32(a64B, p, c.enc.ObjectPropsLen)
@@ -3064,7 +3070,7 @@ func (c *a64Compiler) scan(v *ssa.Value, guard func(arm64.Cond), found, mega arm
 		// As amd64's: too large to search, the megamorphic cache's.
 		c.a.BCond(arm64.HI, mega)
 	} else {
-		guard(arm64.HI)
+		guard.jump(arm64.HI)
 	}
 	// No properties, no shape -- but for a read the megamorphic cache's,
 	// as amd64's.
@@ -3072,7 +3078,7 @@ func (c *a64Compiler) scan(v *ssa.Value, guard func(arm64.Cond), found, mega arm
 	if mega != 0 && v.Op != ssa.OpPropWrite && v.Megamorphic() {
 		c.a.BCond(arm64.EQ, mega)
 	} else {
-		guard(arm64.EQ)
+		guard.jump(arm64.EQ)
 	}
 	c.a.Load(a64A, p, c.enc.ObjectShape)
 	c.a.Load(a64A, a64A, c.enc.ShapeKeys)
@@ -3090,7 +3096,7 @@ func (c *a64Compiler) scan(v *ssa.Value, guard func(arm64.Cond), found, mega arm
 		// cache may have.
 		c.a.BCond(arm64.EQ, mega)
 	} else {
-		guard(arm64.EQ)
+		guard.jump(arm64.EQ)
 	}
 	c.a.LoadU32(a64C, a64A, c.enc.PropertyKey)
 	c.a.CmpImm(a64C, int64(v.Key), false)
@@ -3102,7 +3108,7 @@ func (c *a64Compiler) scan(v *ssa.Value, guard func(arm64.Cond), found, mega arm
 	c.a.LoadU8(a64C, a64A, c.enc.PropertyFlags)
 	c.a.Op(arm64.And, a64C, a64C, a64D, false)
 	c.a.CmpImm(a64C, want, false)
-	guard(arm64.NE)
+	guard.jump(arm64.NE)
 	// As amd64's: the value at the key's position.
 	p = c.gpr(v.Args[0], a64C)
 	c.a.LoadU32(a64C, p, c.enc.ObjectPropsLen)
@@ -3116,15 +3122,15 @@ func (c *a64Compiler) scan(v *ssa.Value, guard func(arm64.Cond), found, mega arm
 
 // keyAt is amd64's: the object in A has a property at v's index, of v's
 // key, its shape's keys left in B. It uses C.
-func (c *a64Compiler) keyAt(v *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) keyAt(v *ssa.Value, guard a64Guard) {
 	c.a.LoadU32(a64B, a64A, c.enc.ObjectPropsLen)
 	c.a.CmpImm(a64B, int64(v.Index), true)
-	guard(arm64.LS)
+	guard.jump(arm64.LS)
 	c.a.Load(a64B, a64A, c.enc.ObjectShape)
 	c.a.Load(a64B, a64B, c.enc.ShapeKeys)
 	c.a.LoadU32(a64C, a64B, int32(v.Index)*c.enc.KeySize+c.enc.PropertyKey)
 	c.a.CmpImm(a64C, int64(v.Key), false)
-	guard(arm64.NE)
+	guard.jump(arm64.NE)
 }
 
 // stringBytes compares two strings of one length by their bytes, as
@@ -3321,13 +3327,10 @@ func (c *a64Compiler) poolShade(sites []*ssa.CallSite) {
 	})
 }
 
-// callRecords is amd64's: a native call's records written, each slot's
-// record's index returned.
-func (c *a64Compiler) callRecords(v *ssa.Value, recs []callRecord) map[int]int32 {
-	record := map[int]int32{}
+// callRecords is amd64's: a native call's records written.
+func (c *a64Compiler) callRecords(v *ssa.Value, recs []callRecord) {
 	for k, r := range recs {
 		at := abi.OffRecord + int32(k)*32
-		record[r.slot] = int32(k)
 		if r.big {
 			// A BigInt's box's words, made of the BigInt.
 			c.bigBoxWords(r.x.Args[1])
@@ -3351,7 +3354,6 @@ func (c *a64Compiler) callRecords(v *ssa.Value, recs []callRecord) map[int]int32
 			c.a.Store(a64Ctx, abi.OffRecordRef+int32(k)*8, a64B)
 		}
 	}
-	return record
 }
 
 // genEntry is the code's generator entry, as amd64's: the step's context
@@ -3627,7 +3629,7 @@ func (c *a64Compiler) genFinish() {
 	c.returnTail()
 }
 
-func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 	sites, s := v.Calls(), v.State
 	stub := c.stubLabel(s, exitKind(v.Aux))
 	if len(sites) == 0 {
@@ -3709,7 +3711,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 		// As amd64's: none past the deepest context, the call Go's.
 		c.a.BCond(arm64.HS, goCall())
 	} else {
-		guard(arm64.HS)
+		guard.jump(arm64.HS)
 	}
 	if callee == nil {
 		c.movImm(a64C, uint64(site.Callee))
@@ -3720,7 +3722,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 		}
 		c.movImm(a64B, c.enc.Object)
 		c.a.Cmp(c.gpr(callee, a64A), a64B, true)
-		guard(arm64.NE)
+		guard.jump(arm64.NE)
 		c.sourceRef(callee, guard)
 	}
 	checked := c.a.NewLabel()
@@ -3792,20 +3794,20 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 			}
 			c.movImm(a64B, c.enc.Object)
 			c.a.Cmp(c.gpr(recv, a64A), a64B, true)
-			guard(arm64.NE)
+			guard.jump(arm64.NE)
 		}
 		c.a.Load(a64B, a64Ctx, abi.OffStackTop)
 		c.a.Load(a64B, a64B, 0)
 		c.a.AddImm(a64B, a64B, int64(t.LocalCount+t.MaxStack), true)
 		c.a.Load(a64A, a64Ctx, abi.OffStackEnd)
 		c.a.Cmp(a64B, a64A, true)
-		guard(arm64.HI)
+		guard.jump(arm64.HI)
 		if t.Parent != 0 {
 			// As amd64's: the callee's prototype still the parent.
 			c.loadProtoPlain(a64B, a64C)
 			c.movImm(a64A, uint64(t.Parent))
 			c.a.Cmp(a64B, a64A, true)
-			guard(arm64.NE)
+			guard.jump(arm64.NE)
 		}
 		if t.Pool != 0 {
 			c.constructGuards(t, guard)
@@ -3855,7 +3857,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 		operands = calleeSlot - 1
 	}
 	st, recs := c.callState(v, s, func(i int) bool { return direct && i >= ops && i < sp }, operands)
-	record := c.callRecords(v, recs)
+	c.callRecords(v, recs)
 	c.movImm(a64A, uint64(uintptr(unsafe.Pointer(st))))
 	c.a.Store(a64Ctx, abi.OffCallState, a64A)
 	args, this := sp-site.Argc, calleeSlot-1
@@ -3885,8 +3887,11 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 		}
 	}
 	words := func(slot int) (nb arm64.Reg, nd int32, rb arm64.Reg, rd int32) {
-		if k, ok := record[slot]; ok {
-			return a64Ctx, abi.OffRecord + k*32 + 16, a64Ctx, abi.OffRecordRef + k*8
+		for i := range st.Records {
+			if int(st.Records[i].Slot) == slot {
+				k := int32(i)
+				return a64Ctx, abi.OffRecord + k*32 + 16, a64Ctx, abi.OffRecordRef + k*8
+			}
 		}
 		nb, nd = c.slotAddr(slot, false, a64C)
 		rb, rd = c.slotAddr(slot, true, a64C)
@@ -4271,45 +4276,45 @@ func (c *a64Compiler) restoreSavesOf(v *ssa.Value, refused bool) {
 
 // pushGuards checks a call of Array.prototype.push may append, as amd64's
 // does. It uses A, B and C.
-func (c *a64Compiler) pushGuards(t *ssa.CallSite, recv *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) pushGuards(t *ssa.CallSite, recv *ssa.Value, guard a64Guard) {
 	if recv.Shadow == nil && c.origin.At(recv) < 0 {
 		c.a.CmpImm(a64C, 0, true)
-		guard(arm64.NE)
+		guard.jump(arm64.NE)
 		return
 	}
 	c.movImm(a64B, c.enc.Object)
 	c.a.Cmp(c.gpr(recv, a64A), a64B, true)
-	guard(arm64.NE)
+	guard.jump(arm64.NE)
 	c.sourceRef(recv, guard)
 	c.a.LoadU8(a64B, a64C, c.enc.ObjectClass)
 	c.a.CmpImm(a64B, int64(c.enc.ClassArray), false)
-	guard(arm64.NE)
+	guard.jump(arm64.NE)
 	c.a.LoadU8(a64B, a64C, c.enc.ObjectFlags)
 	want := c.enc.FlagExtensible | c.enc.FlagLengthWritable
 	c.movImm(a64A, uint64(want|c.enc.FlagSparse))
 	c.a.Op(arm64.And, a64B, a64B, a64A, false)
 	c.a.CmpImm(a64B, int64(want), false)
-	guard(arm64.NE)
+	guard.jump(arm64.NE)
 	c.a.Load(a64B, a64C, c.enc.ObjectElems+8)
 	c.a.Load(a64A, a64C, c.enc.ObjectElems+16)
 	c.a.Cmp(a64B, a64A, true)
-	guard(arm64.HS)
+	guard.jump(arm64.HS)
 	c.loadProtoPlain(a64B, a64C)
 	c.movImm(a64A, uint64(t.Protos[0].Object))
 	c.a.Cmp(a64B, a64A, true)
-	guard(arm64.NE)
+	guard.jump(arm64.NE)
 	c.protoGuards(t.Protos, guard)
 }
 
 // protoGuards checks an array's prototypes are as they were, as amd64's
 // does. It uses A, B and C.
-func (c *a64Compiler) protoGuards(protos [2]ssa.Holder, guard func(arm64.Cond)) {
+func (c *a64Compiler) protoGuards(protos [2]ssa.Holder, guard a64Guard) {
 	for _, h := range protos {
 		c.movImm(a64A, uint64(h.Object))
 		c.a.Load(a64B, a64A, c.enc.ObjectShape)
 		c.movImm(a64C, uint64(h.Shape))
 		c.a.Cmp(a64B, a64C, true)
-		guard(arm64.NE)
+		guard.jump(arm64.NE)
 		// No elements: no side fields, or none there. It need not be an
 		// array.
 		none := c.a.NewLabel()
@@ -4319,43 +4324,43 @@ func (c *a64Compiler) protoGuards(protos [2]ssa.Holder, guard func(arm64.Cond)) 
 		c.a.BCond(arm64.EQ, none)
 		c.a.Load(a64B, a64A, c.enc.ObjectExt+c.enc.ExtElems+8)
 		c.a.CmpImm(a64B, 0, true)
-		guard(arm64.NE)
+		guard.jump(arm64.NE)
 		c.a.Bind(none)
 		c.a.LoadU8(a64B, a64A, c.enc.ObjectFlags)
 		c.movImm(a64C, uint64(c.enc.FlagSparse))
 		c.a.Tst(a64B, a64C, false)
-		guard(arm64.NE)
+		guard.jump(arm64.NE)
 		// Its prototype, its layout says, as amd64's.
 	}
 }
 
 // popGuards checks a call of Array.prototype.pop may pop, as amd64's
 // does. It uses A, B and C.
-func (c *a64Compiler) popGuards(t *ssa.CallSite, recv *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) popGuards(t *ssa.CallSite, recv *ssa.Value, guard a64Guard) {
 	if recv.Shadow == nil && c.origin.At(recv) < 0 {
 		c.a.CmpImm(a64C, 0, true)
-		guard(arm64.NE)
+		guard.jump(arm64.NE)
 		return
 	}
 	c.movImm(a64B, c.enc.Object)
 	c.a.Cmp(c.gpr(recv, a64A), a64B, true)
-	guard(arm64.NE)
+	guard.jump(arm64.NE)
 	c.sourceRef(recv, guard)
 	c.a.LoadU8(a64B, a64C, c.enc.ObjectClass)
 	c.a.CmpImm(a64B, int64(c.enc.ClassArray), false)
-	guard(arm64.NE)
+	guard.jump(arm64.NE)
 	c.a.LoadU8(a64B, a64C, c.enc.ObjectFlags)
 	c.movImm(a64A, uint64(c.enc.FlagLengthWritable|c.enc.FlagSparse))
 	c.a.Op(arm64.And, a64B, a64B, a64A, false)
 	c.a.CmpImm(a64B, int64(c.enc.FlagLengthWritable), false)
-	guard(arm64.NE)
+	guard.jump(arm64.NE)
 	c.loadProtoPlain(a64B, a64C)
 	c.movImm(a64A, uint64(t.Protos[0].Object))
 	c.a.Cmp(a64B, a64A, true)
-	guard(arm64.NE)
+	guard.jump(arm64.NE)
 	c.a.Load(a64B, a64C, c.enc.ObjectElems+8)
 	c.a.CmpImm(a64B, 0, true)
-	guard(arm64.EQ)
+	guard.jump(arm64.EQ)
 	c.a.AddImm(a64B, a64B, -1, true)
 	c.a.ShiftImm(arm64.Lsl, a64B, a64B, 4, true)
 	c.a.Load(a64A, a64C, c.enc.ObjectElems)
@@ -4363,7 +4368,7 @@ func (c *a64Compiler) popGuards(t *ssa.CallSite, recv *ssa.Value, guard func(arm
 	c.a.Load(a64B, a64A, c.enc.NumOffset)
 	c.movImm(a64C, c.enc.Uninitialized)
 	c.a.Cmp(a64B, a64C, true)
-	guard(arm64.EQ)
+	guard.jump(arm64.EQ)
 }
 
 // pop pops a call of Array.prototype.pop's receiver's last element, as
@@ -4372,7 +4377,7 @@ func (c *a64Compiler) pop(v *ssa.Value) {
 	if c.enc.ValueSize != 16 {
 		panic("mir: a value that is not 16 bytes")
 	}
-	c.sourceRef(v.Args[0], func(arm64.Cond) {})
+	c.sourceRef(v.Args[0], a64Guard{})
 	c.a.Load(a64B, a64C, c.enc.ObjectElems+8)
 	c.a.AddImm(a64B, a64B, -1, true)
 	c.a.Store(a64C, c.enc.ObjectElems+8, a64B)
@@ -4433,7 +4438,7 @@ func (c *a64Compiler) push(v *ssa.Value) {
 	c.movImm(a64B, 0)
 	c.a.Bind(have)
 	c.a.FMovToF(a64F1, a64B)
-	c.sourceRef(recv, func(arm64.Cond) {})
+	c.sourceRef(recv, a64Guard{})
 	c.a.Load(a64B, a64C, c.enc.ObjectElems+8)
 	c.a.AddImm(a64B, a64B, 1, true)
 	c.a.Store(a64C, c.enc.ObjectElems+8, a64B)
@@ -4471,26 +4476,26 @@ func (c *a64Compiler) push(v *ssa.Value) {
 
 // viaGuards checks a call through Function.prototype.call calls its
 // function, as amd64's does. It uses A, B and C.
-func (c *a64Compiler) viaGuards(t *ssa.CallSite, recv *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) viaGuards(t *ssa.CallSite, recv *ssa.Value, guard a64Guard) {
 	if recv.Shadow == nil && c.origin.At(recv) < 0 {
 		c.a.CmpImm(a64C, 0, true)
-		guard(arm64.NE)
+		guard.jump(arm64.NE)
 		return
 	}
 	c.movImm(a64B, c.enc.Object)
 	c.a.Cmp(c.gpr(recv, a64A), a64B, true)
-	guard(arm64.NE)
+	guard.jump(arm64.NE)
 	c.sourceRef(recv, guard)
 	c.movImm(a64B, uint64(t.Callee))
 	c.a.Cmp(a64C, a64B, true)
-	guard(arm64.NE)
+	guard.jump(arm64.NE)
 }
 
 // lengthGuards checks a `new Array(n)` can take its array from its pool,
 // as amd64's does: n, x, an integer in [0, the pool's Room], or up to
 // abi.PoolRoomLimit once Go has filled the pool again with arrays of more
 // room. It uses A, B, C, F0 and F1.
-func (c *a64Compiler) lengthGuards(t *ssa.CallSite, x *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) lengthGuards(t *ssa.CallSite, x *ssa.Value, guard a64Guard) {
 	var w arm64.Reg
 	if remat(x) {
 		c.materialize(x, a64A)
@@ -4501,13 +4506,13 @@ func (c *a64Compiler) lengthGuards(t *ssa.CallSite, x *ssa.Value, guard func(arm
 	if x.Shadow != nil || c.origin.At(x) >= 0 {
 		c.movImm(a64B, abi.NumberLimit)
 		c.a.Cmp(w, a64B, true)
-		guard(arm64.HS)
+		guard.jump(arm64.HS)
 	}
 	c.a.FMovToF(a64F0, w)
 	c.a.Fcvtzs(a64A, a64F0)
 	c.a.Scvtf(a64F1, a64A, true)
 	c.a.FCmp(a64F1, a64F0)
-	guard(arm64.NE)
+	guard.jump(arm64.NE)
 	c.movImm(a64B, uint64(t.Pool))
 	c.a.Load(a64C, a64B, abi.OffPoolRoom)
 	c.a.Cmp(a64A, a64C, true)
@@ -4525,13 +4530,13 @@ func (c *a64Compiler) lengthGuards(t *ssa.CallSite, x *ssa.Value, guard func(arm
 			c.a.B(done)
 		})
 	} else {
-		guard(arm64.HI)
+		guard.jump(arm64.HI)
 	}
 	v, top := c.callV, c.callTop
 	if v == nil {
 		// No call to make again: Go makes it. n is at most the limit, as
 		// the flags still say.
-		guard(arm64.LS)
+		guard.jump(arm64.LS)
 	} else {
 		grow := c.a.NewLabel()
 		c.a.B(grow)
@@ -4570,33 +4575,33 @@ func (c *a64Compiler) allocLength(v, x *ssa.Value) {
 // constructGuards checks a construction can take its receiver from its
 // pool, as amd64's does; the function's pointer is in C. It uses A, B and
 // C.
-func (c *a64Compiler) constructGuards(t *ssa.CallSite, guard func(arm64.Cond)) {
+func (c *a64Compiler) constructGuards(t *ssa.CallSite, guard a64Guard) {
 	c.movImm(a64A, uint64(t.Pool))
 	c.a.Load(a64B, a64A, abi.OffPoolCount)
 	if c.callV != nil {
 		c.refillOnEmpty(t.Pool, c.stubLabel(c.callV.State, exitKind(c.callV.Aux)))
 	} else {
 		c.a.CmpImm(a64B, 0, true)
-		guard(arm64.EQ)
+		guard.jump(arm64.EQ)
 	}
 	if t.Alloc {
 		return
 	}
 	c.a.LoadU32(a64B, a64C, c.enc.ObjectPropsLen)
 	c.a.CmpImm(a64B, int64(t.ProtoIndex), true)
-	guard(arm64.LS)
+	guard.jump(arm64.LS)
 	c.a.Load(a64B, a64C, c.enc.ObjectShape)
 	c.a.Load(a64B, a64B, c.enc.ShapeKeys)
 	c.a.LoadU32(a64B, a64B, int32(t.ProtoIndex)*c.enc.KeySize+c.enc.PropertyKey)
 	c.movImm(a64A, uint64(t.ProtoKey))
 	c.a.Cmp(a64B, a64A, false)
-	guard(arm64.NE)
+	guard.jump(arm64.NE)
 	c.a.Load(a64B, a64C, c.enc.ObjectProps)
 	c.a.Load(a64C, a64B, int32(t.ProtoIndex)*c.enc.ValueSize+c.enc.RefOffset)
 	c.movImm(a64A, uint64(t.Pool))
 	c.a.Load(a64B, a64A, abi.OffPoolProto)
 	c.a.Cmp(a64C, a64B, true)
-	guard(arm64.NE)
+	guard.jump(arm64.NE)
 }
 
 // directOperand writes a call's operand x, both words, at disp from base
@@ -4651,7 +4656,7 @@ func (c *a64Compiler) pointerWord(x *ssa.Value, w arm64.Reg) {
 }
 
 // goCall calls Go, as amd64's does.
-func (c *a64Compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(arm64.Cond)) {
+func (c *a64Compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard a64Guard) {
 	if (site.Copies != 0 || site.DefineNext || site.ArrayIter != 0 || site.Append) && len(v.Args) == 2 && c.enc.ValueSize == 16 && c.enc.WriteBarrier != 0 && c.enc.ShapeNext != 0 {
 		// As amd64's: an object spread by the layouts where the VM has
 		// made one so, a literal's field along its shape's first
@@ -5143,7 +5148,7 @@ func (c *a64Compiler) closureTake(v *ssa.Value, site *ssa.CallSite, slow arm64.L
 // call.
 func (c *a64Compiler) genStep(v *ssa.Value, notGen, slow, done arm64.Label) {
 	site := v.Calls()[0]
-	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+	fail := a64GuardLabel(c, slow)
 	c.a.Load(a64B, a64D, c.enc.IterNext+c.enc.RefOffset)
 	c.movImm(a64C, uint64(site.GenNext))
 	c.a.Cmp(a64B, a64C, true)
@@ -5151,12 +5156,12 @@ func (c *a64Compiler) genStep(v *ssa.Value, notGen, slow, done arm64.Label) {
 	c.a.Load(a64C, a64D, c.enc.IterIter+c.enc.NumOffset)
 	c.movImm(a64B, c.enc.Object)
 	c.a.Cmp(a64C, a64B, true)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.Load(a64C, a64D, c.enc.IterIter+c.enc.RefOffset)
 	c.objectPart(a64B, a64C, a64A, c.enc.ClassGenerator, c.enc.GenObject, fail)
 	c.a.LoadU8(a64C, a64B, c.enc.GenState)
 	c.a.CmpImm(a64C, int64(c.enc.GenSuspendedYield), false)
-	fail(arm64.HI)
+	fail.jump(arm64.HI)
 	c.a.LoadU8(a64C, a64B, c.enc.GenDelegating)
 	c.a.Cbnz(a64C, slow, false)
 	c.a.Load(a64C, a64B, c.enc.GenRare)
@@ -5167,7 +5172,7 @@ func (c *a64Compiler) genStep(v *ssa.Value, notGen, slow, done arm64.Label) {
 	c.a.Load(a64A, a64Ctx, abi.OffBounds)
 	c.a.Load(a64A, a64A, abi.OffBoundsLevelLimit)
 	c.a.Cmp(a64C, a64A, true)
-	fail(arm64.HS)
+	fail.jump(arm64.HS)
 	// The generator and the cursor, where the generator's code reads them
 	// (genEntry): the next context's, which no call runs in yet. There is
 	// one only below the level limit, so they are stored after its check,
@@ -5193,7 +5198,7 @@ func (c *a64Compiler) genStep(v *ssa.Value, notGen, slow, done arm64.Label) {
 			c.a.Load(a64C, a64D, f.off)
 			c.movImm(a64A, uint64(f.want))
 			c.a.Cmp(a64C, a64A, true)
-			fail(arm64.NE)
+			fail.jump(arm64.NE)
 		}
 		c.genCall(v, t, slow, done)
 		c.a.Bind(next)
@@ -5292,18 +5297,18 @@ func (c *a64Compiler) genCall(v *ssa.Value, t ssa.GenStep, slow, done arm64.Labe
 // room. It uses A, B, C and D.
 func (c *a64Compiler) genForOf(v *ssa.Value, slow, done arm64.Label) {
 	site := v.Calls()[0]
-	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+	fail := a64GuardLabel(c, slow)
 	x := v.Args[0]
 	r := c.gpr(x, a64A)
 	c.movImm(a64C, c.enc.Object)
 	c.a.Cmp(r, a64C, true)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.pointerWord(x, r)
 	c.a.Cbz(a64B, slow, true)
 	c.a.MovRR(a64D, a64B)
 	c.a.LoadU8(a64A, a64D, c.enc.ObjectClass)
 	c.a.CmpImm(a64A, int64(c.enc.ClassGenerator), false)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.LoadU8(a64A, a64D, c.enc.GenObject+c.enc.GenRoom)
 	c.a.Cbz(a64A, slow, false)
 	c.a.LoadU32(a64A, a64D, c.enc.ObjectPropsLen)
@@ -5312,7 +5317,7 @@ func (c *a64Compiler) genForOf(v *ssa.Value, slow, done arm64.Label) {
 	c.a.Cbz(a64C, slow, true)
 	c.a.LoadU8(a64A, a64C, c.enc.ObjectClass)
 	c.a.CmpImm(a64A, int64(c.enc.ClassObject), false)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.LoadU32(a64A, a64C, c.enc.ObjectPropsLen)
 	c.a.Cbnz(a64A, slow, true)
 	c.loadProtoPlain(a64C, a64C)
@@ -5320,7 +5325,7 @@ func (c *a64Compiler) genForOf(v *ssa.Value, slow, done arm64.Label) {
 	c.movImm(a64A, uint64(site.GenIter))
 	c.a.Load(a64B, a64A, c.enc.GenIterFrom)
 	c.a.Cmp(a64C, a64B, true)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.Load(a64C, a64A, c.enc.GenIterCell)
 	c.a.Cbz(a64C, slow, true)
 	c.a.LoadU8(a64C, a64C, 0)
@@ -5335,14 +5340,14 @@ func (c *a64Compiler) genForOf(v *ssa.Value, slow, done arm64.Label) {
 		c.a.LoadU32(a64A, a64A, k.idx)
 		c.a.LoadU32(a64B, a64C, c.enc.ObjectPropsLen)
 		c.a.Cmp(a64A, a64B, true)
-		fail(arm64.HS)
+		fail.jump(arm64.HS)
 		c.a.Load(a64B, a64C, c.enc.ObjectProps)
 		c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
 		c.a.Op(arm64.Add, a64B, a64B, a64A, true)
 		c.a.Load(a64B, a64B, c.enc.RefOffset)
 		c.movImm(a64A, uint64(k.want))
 		c.a.Cmp(a64B, a64A, true)
-		fail(arm64.NE)
+		fail.jump(arm64.NE)
 	}
 	c.a.AddImm(a64C, a64D, int64(c.enc.GenRoomCursor), true)
 	c.a.MovImm(a64A, uint64(c.enc.ClassCursor))
@@ -5389,7 +5394,7 @@ func (c *a64Compiler) genForOf(v *ssa.Value, slow, done arm64.Label) {
 func (c *a64Compiler) genMake(v *ssa.Value, slow, done arm64.Label) {
 	site := v.Calls()[0]
 	vs := int32(c.enc.ValueSize)
-	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+	fail := a64GuardLabel(c, slow)
 	at := 0
 	if site.Method {
 		at = 1
@@ -5398,23 +5403,23 @@ func (c *a64Compiler) genMake(v *ssa.Value, slow, done arm64.Label) {
 	c.pointerWord(callee, c.gpr(callee, a64A))
 	c.movImm(a64C, uint64(site.GenMake))
 	c.a.Cmp(a64B, a64C, true)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	// As amd64's: its prototype the pool's, a generator in the pool.
 	c.a.LoadU32(a64A, a64B, c.enc.ObjectPropsLen)
 	c.a.CmpImm(a64A, int64(site.ProtoIndex), true)
-	fail(arm64.LS)
+	fail.jump(arm64.LS)
 	c.a.Load(a64A, a64B, c.enc.ObjectShape)
 	c.a.Load(a64A, a64A, c.enc.ShapeKeys)
 	c.a.LoadU32(a64A, a64A, int32(site.ProtoIndex)*c.enc.KeySize+c.enc.PropertyKey)
 	c.movImm(a64C, uint64(site.ProtoKey))
 	c.a.Cmp(a64A, a64C, false)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.Load(a64A, a64B, c.enc.ObjectProps)
 	c.a.Load(a64C, a64A, int32(site.ProtoIndex)*c.enc.ValueSize+c.enc.RefOffset)
 	c.movImm(a64A, uint64(site.Pool))
 	c.a.Load(a64B, a64A, abi.OffPoolProto)
 	c.a.Cmp(a64C, a64B, true)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.Load(a64B, a64A, abi.OffPoolCount)
 	c.a.Cbz(a64B, slow, true)
 	marked := c.a.NewLabel()
@@ -5489,7 +5494,7 @@ func (c *a64Compiler) genMakeMarking(v *ssa.Value) {
 // to box it (materialize).
 func (c *a64Compiler) genNext(v *ssa.Value, slow, done arm64.Label) {
 	site := v.Calls()[0]
-	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+	fail := a64GuardLabel(c, slow)
 	recv, callee := v.Args[0], v.Args[1]
 	if site.Argc == 1 {
 		x := v.Args[2]
@@ -5506,18 +5511,18 @@ func (c *a64Compiler) genNext(v *ssa.Value, slow, done arm64.Label) {
 	c.pointerWord(callee, c.gpr(callee, a64A))
 	c.movImm(a64C, uint64(site.GenNext))
 	c.a.Cmp(a64B, a64C, true)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	// The receiver, a generator.
 	r := c.gpr(recv, a64A)
 	c.movImm(a64C, c.enc.Object)
 	c.a.Cmp(r, a64C, true)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.pointerWord(recv, r)
 	c.a.Cbz(a64B, slow, true)
 	c.objectPart(a64B, a64B, a64C, c.enc.ClassGenerator, c.enc.GenObject, fail)
 	c.a.LoadU8(a64C, a64B, c.enc.GenState)
 	c.a.CmpImm(a64C, int64(c.enc.GenSuspendedYield), false)
-	fail(arm64.HI)
+	fail.jump(arm64.HI)
 	c.a.LoadU8(a64C, a64B, c.enc.GenDelegating)
 	c.a.Cbnz(a64C, slow, false)
 	c.a.Load(a64C, a64B, c.enc.GenRare)
@@ -5528,7 +5533,7 @@ func (c *a64Compiler) genNext(v *ssa.Value, slow, done arm64.Label) {
 	c.a.Load(a64A, a64Ctx, abi.OffBounds)
 	c.a.Load(a64A, a64A, abi.OffBoundsLevelLimit)
 	c.a.Cmp(a64C, a64A, true)
-	fail(arm64.HS)
+	fail.jump(arm64.HS)
 	// The generator, no cursor and the value sent in, where the
 	// generator's code reads them (genEntry): the next context's, there
 	// below the level limit.
@@ -5559,7 +5564,7 @@ func (c *a64Compiler) genNext(v *ssa.Value, slow, done arm64.Label) {
 			c.a.Load(a64C, a64D, f.off)
 			c.movImm(a64A, uint64(f.want))
 			c.a.Cmp(a64C, a64A, true)
-			fail(arm64.NE)
+			fail.jump(arm64.NE)
 		}
 		c.genNextCall(v, t, slow, done)
 		c.a.Bind(next)
@@ -5710,7 +5715,7 @@ func (c *a64Compiler) iterStep(v *ssa.Value, slow arm64.Label) {
 	x := v.Args[0]
 	c.pointerWord(x, c.gpr(x, a64A))
 	c.a.Cbz(a64B, slow, true)
-	c.objectPart(a64D, a64B, a64C, c.enc.ClassCursor, c.enc.IterState, func(cond arm64.Cond) { c.a.BCond(cond, slow) })
+	c.objectPart(a64D, a64B, a64C, c.enc.ClassCursor, c.enc.IterState, a64GuardLabel(c, slow))
 	c.a.LoadU8(a64C, a64D, c.enc.IterDone)
 	c.a.Cbnz(a64C, slow, false)
 	c.a.Load(a64A, a64D, c.enc.IterIdx)
@@ -5777,7 +5782,7 @@ func (c *a64Compiler) iterStep(v *ssa.Value, slow arm64.Label) {
 // layout or over an array's indices (forInIndex), the cursor's state in D,
 // or on to notForIn for another cursor. It uses A, B, C and D, and F0.
 func (c *a64Compiler) forInStep(v *ssa.Value, notForIn, slow, done arm64.Label) {
-	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+	fail := a64GuardLabel(c, slow)
 	in := c.enc.ForInState
 	c.a.LoadU8(a64C, a64D, c.enc.IterForIn)
 	c.a.Cbz(a64C, notForIn, false)
@@ -5806,7 +5811,7 @@ func (c *a64Compiler) forInStep(v *ssa.Value, notForIn, slow, done arm64.Label) 
 	c.a.Load(a64B, a64D, in+c.enc.ForInObj)
 	c.a.Load(a64B, a64B, c.enc.ObjectShape)
 	c.a.Cmp(a64B, a64C, true)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.Load(a64C, a64D, in+c.enc.ForInKeys)
 	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
 	c.a.Op(arm64.Add, a64A, a64A, a64C, true)
@@ -5835,27 +5840,27 @@ func (c *a64Compiler) forInStep(v *ssa.Value, notForIn, slow, done arm64.Label) 
 // through the write barrier while the collector marks. It uses A, B, C and
 // D, and F0.
 func (c *a64Compiler) forInIndex(v *ssa.Value, slow, done arm64.Label) {
-	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+	fail := a64GuardLabel(c, slow)
 	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
 	// The element, an array's dense one, no hole.
 	c.a.Load(a64C, a64D, c.enc.ForInState+c.enc.ForInObj)
 	c.a.Cbz(a64C, slow, true)
 	c.a.LoadU8(a64B, a64C, c.enc.ObjectClass)
 	c.a.CmpImm(a64B, int64(c.enc.ClassArray), false)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.Load(a64B, a64C, c.enc.ObjectElems+8)
 	c.a.Cmp(a64A, a64B, true)
-	fail(arm64.HS)
+	fail.jump(arm64.HS)
 	c.a.Load(a64C, a64C, c.enc.ObjectElems)
 	c.a.ShiftImm(arm64.Lsl, a64B, a64A, 4, true)
 	c.a.Op(arm64.Add, a64C, a64C, a64B, true)
 	c.a.Load(a64C, a64C, c.enc.NumOffset)
 	c.movImm(a64B, c.enc.Uninitialized)
 	c.a.Cmp(a64C, a64B, true)
-	fail(arm64.EQ)
+	fail.jump(arm64.EQ)
 	// Its string, made already.
 	c.a.CmpImm(a64A, abi.IntStrings, true)
-	fail(arm64.HS)
+	fail.jump(arm64.HS)
 	c.movImm(a64C, uint64(c.f.IntStrings))
 	c.a.ShiftImm(arm64.Lsl, a64B, a64A, 3, true)
 	c.a.Op(arm64.Add, a64C, a64C, a64B, true)
@@ -5902,7 +5907,7 @@ func (c *a64Compiler) forInIndex(v *ssa.Value, slow, done arm64.Label) {
 // whose reads Go makes for other receivers and keys. It uses A, B, C, D
 // and F2, and no other.
 func (c *a64Compiler) keyedRead(v *ssa.Value, slow arm64.Label) {
-	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+	fail := a64GuardLabel(c, slow)
 	recv, key := v.Args[0], v.Args[1]
 	named, have := c.a.NewLabel(), c.a.NewLabel()
 	if w := c.gpr(key, a64A); w != a64A {
@@ -5916,13 +5921,13 @@ func (c *a64Compiler) keyedRead(v *ssa.Value, slow arm64.Label) {
 	c.a.Scvtf(a64F2, a64B, true)
 	c.a.FMovFromF(a64C, a64F2)
 	c.a.Cmp(a64C, a64A, true)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.FMovToF(a64F2, a64B)
 	c.a.B(have)
 	c.a.Bind(named)
 	c.movImm(a64B, c.enc.String)
 	c.a.Cmp(a64A, a64B, true)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.pointerWord(key, a64A)
 	c.a.Cbz(a64B, slow, true)
 	c.movImm(a64C, abi.KeyAtomsMul)
@@ -5933,7 +5938,7 @@ func (c *a64Compiler) keyedRead(v *ssa.Value, slow arm64.Label) {
 	c.a.Op(arm64.Add, a64A, a64A, a64C, true)
 	c.a.Load(a64C, a64A, abi.KeyAtomString)
 	c.a.Cmp(a64C, a64B, true)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.LoadU8(a64C, a64A, abi.KeyAtomNone)
 	c.a.Cbnz(a64C, slow, false)
 	c.a.LoadU32(a64B, a64A, abi.KeyAtomAtom)
@@ -5946,23 +5951,23 @@ func (c *a64Compiler) keyedRead(v *ssa.Value, slow arm64.Label) {
 	w := c.gpr(recv, a64A)
 	c.movImm(a64C, c.enc.Object)
 	c.a.Cmp(w, a64C, true)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.pointerWord(recv, w)
 	c.a.Cbz(a64B, slow, true)
 	c.a.LoadU8(a64C, a64B, c.enc.ObjectClass)
 	c.a.CmpImm(a64C, int64(c.enc.ClassArray), false)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.FMovFromF(a64A, a64F2)
 	c.a.Load(a64C, a64B, c.enc.ObjectElems+8)
 	c.a.Cmp(a64A, a64C, true)
-	fail(arm64.HS)
+	fail.jump(arm64.HS)
 	c.a.Load(a64B, a64B, c.enc.ObjectElems)
 	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
 	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
 	c.a.Load(a64C, a64A, c.enc.NumOffset)
 	c.movImm(a64D, c.enc.Uninitialized)
 	c.a.Cmp(a64C, a64D, true)
-	fail(arm64.EQ)
+	fail.jump(arm64.EQ)
 	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
 	c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64C)
 	c.a.Load(a64C, a64A, c.enc.RefOffset)
@@ -5973,7 +5978,7 @@ func (c *a64Compiler) keyedRead(v *ssa.Value, slow arm64.Label) {
 // site whose stores Go makes for other receivers. It uses A, B, C, D, F0,
 // F1 and F2, and no other.
 func (c *a64Compiler) keyedStore(v *ssa.Value, slow arm64.Label) {
-	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+	fail := a64GuardLabel(c, slow)
 	recv, key, x := v.Args[0], v.Args[1], v.Args[2]
 	w := c.gpr(x, a64A)
 	c.a.FMovToF(a64F0, w)
@@ -5984,37 +5989,37 @@ func (c *a64Compiler) keyedStore(v *ssa.Value, slow arm64.Label) {
 	}
 	c.movImm(a64B, abi.NumberLimit)
 	c.a.Cmp(a64A, a64B, true)
-	fail(arm64.HS)
+	fail.jump(arm64.HS)
 	c.a.FMovToF(a64F2, a64A)
 	c.a.Fcvtzs(a64B, a64F2)
 	c.a.Scvtf(a64F2, a64B, true)
 	c.a.FMovFromF(a64C, a64F2)
 	c.a.Cmp(a64C, a64A, true)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.FMovToF(a64F2, a64B)
 	w = c.gpr(recv, a64A)
 	c.movImm(a64C, c.enc.Object)
 	c.a.Cmp(w, a64C, true)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.pointerWord(recv, w)
 	c.a.Cbz(a64B, slow, true)
 	c.a.LoadU8(a64C, a64B, c.enc.ObjectClass)
 	c.a.CmpImm(a64C, int64(c.enc.ClassArray), false)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.movImm(a64C, c.enc.WriteBarrier)
 	c.a.LoadU8(a64C, a64C, 0)
 	c.a.Cbnz(a64C, slow, false)
 	c.a.FMovFromF(a64A, a64F2)
 	c.a.Load(a64C, a64B, c.enc.ObjectElems+8)
 	c.a.Cmp(a64A, a64C, true)
-	fail(arm64.HS)
+	fail.jump(arm64.HS)
 	c.a.Load(a64B, a64B, c.enc.ObjectElems)
 	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
 	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
 	c.a.Load(a64C, a64A, c.enc.NumOffset)
 	c.movImm(a64D, c.enc.Uninitialized)
 	c.a.Cmp(a64C, a64D, true)
-	fail(arm64.EQ)
+	fail.jump(arm64.EQ)
 	c.a.FMovFromF(a64C, a64F0)
 	c.a.Store(a64A, c.enc.NumOffset, a64C)
 	c.a.FMovFromF(a64C, a64F1)
@@ -6353,7 +6358,7 @@ func (c *a64Compiler) appendElem(v *ssa.Value, slow arm64.Label, marking bool) {
 }
 
 func (c *a64Compiler) keyedHas(v *ssa.Value, slow arm64.Label) {
-	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+	fail := a64GuardLabel(c, slow)
 	key, recv := v.Args[0], v.Args[1]
 	protos := c.f.ArrayProtos
 	absent, named := slow, slow
@@ -6374,17 +6379,17 @@ func (c *a64Compiler) keyedHas(v *ssa.Value, slow arm64.Label) {
 	c.a.Scvtf(a64F2, a64B, true)
 	c.a.FMovFromF(a64C, a64F2)
 	c.a.Cmp(a64C, a64A, true)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.FMovToF(a64F2, a64B)
 	w := c.gpr(recv, a64A)
 	c.movImm(a64C, c.enc.Object)
 	c.a.Cmp(w, a64C, true)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.pointerWord(recv, w)
 	c.a.Cbz(a64B, slow, true)
 	c.a.LoadU8(a64C, a64B, c.enc.ObjectClass)
 	c.a.CmpImm(a64C, int64(c.enc.ClassArray), false)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.FMovToF(a64F1, a64B)
 	c.a.FMovFromF(a64A, a64F2)
 	c.a.Load(a64C, a64B, c.enc.ObjectElems+8)
@@ -6420,11 +6425,11 @@ func (c *a64Compiler) keyedHas(v *ssa.Value, slow arm64.Label) {
 		c.a.LoadU8(a64B, a64D, c.enc.ObjectFlags)
 		c.movImm(a64C, uint64(c.enc.FlagSparse))
 		c.a.Tst(a64B, a64C, false)
-		fail(arm64.NE)
+		fail.jump(arm64.NE)
 		c.loadProtoPlain(a64B, a64D)
 		c.movImm(a64C, uint64(protos[0].Object))
 		c.a.Cmp(a64B, a64C, true)
-		fail(arm64.NE)
+		fail.jump(arm64.NE)
 		c.protoGuards(protos, fail)
 		answer(false)
 	}
@@ -6436,14 +6441,14 @@ func (c *a64Compiler) keyedHas(v *ssa.Value, slow arm64.Label) {
 		c.a.Bind(named)
 		c.movImm(a64B, c.enc.String)
 		c.a.Cmp(a64A, a64B, true)
-		fail(arm64.NE)
+		fail.jump(arm64.NE)
 		c.pointerWord(key, a64A)
 		c.a.Cbz(a64B, slow, true)
 		c.a.FMovToF(a64F2, a64B)
 		w := c.gpr(recv, a64A)
 		c.movImm(a64C, c.enc.Object)
 		c.a.Cmp(w, a64C, true)
-		fail(arm64.NE)
+		fail.jump(arm64.NE)
 		c.pointerWord(recv, w)
 		c.a.Cbz(a64B, slow, true)
 		c.a.FMovToF(a64F1, a64B)
@@ -6502,41 +6507,41 @@ func (c *a64Compiler) keyedHas(v *ssa.Value, slow arm64.Label) {
 // shortens a dense array or leaves it as it is. It uses A, B, C, D, F1 and
 // F2, and no other.
 func (c *a64Compiler) lengthWrite(v *ssa.Value, slow arm64.Label) {
-	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+	fail := a64GuardLabel(c, slow)
 	recv, x := v.Args[0], v.Args[1]
 	if w := c.gpr(x, a64A); w != a64A {
 		c.a.MovRR(a64A, w)
 	}
 	c.movImm(a64B, abi.NumberLimit)
 	c.a.Cmp(a64A, a64B, true)
-	fail(arm64.HS)
+	fail.jump(arm64.HS)
 	c.a.FMovToF(a64F1, a64A)
 	c.a.Fcvtzs(a64B, a64F1)
 	c.a.Scvtf(a64F1, a64B, true)
 	c.a.FMovFromF(a64C, a64F1)
 	c.a.Cmp(a64C, a64A, true)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.FMovToF(a64F2, a64B)
 	w := c.gpr(recv, a64A)
 	c.movImm(a64C, c.enc.Object)
 	c.a.Cmp(w, a64C, true)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.pointerWord(recv, w)
 	c.a.Cbz(a64B, slow, true)
 	c.a.LoadU8(a64C, a64B, c.enc.ObjectClass)
 	c.a.CmpImm(a64C, int64(c.enc.ClassArray), false)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.LoadU8(a64C, a64B, c.enc.ObjectFlags)
 	c.movImm(a64D, uint64(c.enc.FlagLengthWritable|c.enc.FlagSparse))
 	c.a.Op(arm64.And, a64C, a64C, a64D, false)
 	c.a.CmpImm(a64C, int64(c.enc.FlagLengthWritable), false)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.LoadU32(a64C, a64B, c.enc.ObjectPropsLen)
 	c.a.Cbnz(a64C, slow, true)
 	c.a.FMovFromF(a64A, a64F2)
 	c.a.Load(a64C, a64B, c.enc.ObjectElems+8)
 	c.a.Cmp(a64A, a64C, true)
-	fail(arm64.HI)
+	fail.jump(arm64.HI)
 	c.a.Store(a64B, c.enc.ObjectElems+8, a64A)
 	c.a.Load(a64B, a64B, c.enc.ObjectElems)
 	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
@@ -6613,7 +6618,7 @@ func (c *a64Compiler) storeByFlag() {
 // mapStep is amd64's: a for...of's step of a Map's or a Set's iterator,
 // the cursor's state in D. It uses A, B, C, D and F1, and no other.
 func (c *a64Compiler) mapStep(v *ssa.Value, nexts [2]uintptr, slow arm64.Label) {
-	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+	fail := a64GuardLabel(c, slow)
 	have := c.a.NewLabel()
 	c.a.Load(a64B, a64D, c.enc.IterNext+c.enc.RefOffset)
 	for _, n := range nexts {
@@ -6628,7 +6633,7 @@ func (c *a64Compiler) mapStep(v *ssa.Value, nexts [2]uintptr, slow arm64.Label) 
 	c.a.Load(a64C, a64D, c.enc.IterIter+c.enc.NumOffset)
 	c.movImm(a64B, c.enc.Object)
 	c.a.Cmp(a64C, a64B, true)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.Load(a64B, a64D, c.enc.IterIter+c.enc.RefOffset)
 	c.objectData(a64D, a64B, a64C, c.enc.MapIterData, fail)
 	c.a.LoadU8(a64C, a64D, c.enc.MapIterDone)
@@ -6638,18 +6643,18 @@ func (c *a64Compiler) mapStep(v *ssa.Value, nexts [2]uintptr, slow arm64.Label) 
 	c.a.CmpImm(a64C, int64(c.enc.MapKeys), false)
 	c.a.BCond(arm64.EQ, kind)
 	c.a.CmpImm(a64C, int64(c.enc.MapValues), false)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.Bind(kind)
 	c.a.Load(a64A, a64D, c.enc.MapIterMap)
 	c.a.Cbz(a64A, slow, true)
 	c.a.LoadU32(a64B, a64D, c.enc.MapIterGen)
 	c.a.LoadU32(a64C, a64A, c.enc.MapGen)
 	c.a.Cmp(a64B, a64C, false)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.Load(a64B, a64D, c.enc.MapIterAt)
 	c.a.Load(a64C, a64A, c.enc.MapEntries+8)
 	c.a.Cmp(a64B, a64C, true)
-	fail(arm64.HS)
+	fail.jump(arm64.HS)
 	c.a.Load(a64A, a64A, c.enc.MapEntries)
 	c.movImm(a64C, uint64(c.enc.MapEntrySize))
 	c.a.Mul(a64C, a64C, a64B)
@@ -6658,7 +6663,7 @@ func (c *a64Compiler) mapStep(v *ssa.Value, nexts [2]uintptr, slow arm64.Label) 
 	c.a.Load(a64C, a64A, c.enc.NumOffset)
 	c.movImm(a64B, c.enc.MapDeleted)
 	c.a.Cmp(a64C, a64B, true)
-	fail(arm64.EQ)
+	fail.jump(arm64.EQ)
 	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
 	values, stored := c.a.NewLabel(), c.a.NewLabel()
 	c.a.LoadU8(a64C, a64D, c.enc.MapIterKind)
@@ -6672,7 +6677,7 @@ func (c *a64Compiler) mapStep(v *ssa.Value, nexts [2]uintptr, slow arm64.Label) 
 		c.a.Load(a64C, a64A, at+c.enc.NumOffset)
 		c.movImm(a64B, c.enc.Uninitialized)
 		c.a.Cmp(a64C, a64B, true)
-		fail(arm64.EQ)
+		fail.jump(arm64.EQ)
 		c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64C)
 		c.a.Load(a64C, a64A, at+c.enc.RefOffset)
 		c.a.Store(a64Ctx, keep+c.enc.RefOffset, a64C)
@@ -6717,7 +6722,7 @@ func (c *a64Compiler) goArg(at int32, x *ssa.Value) {
 // function the call has, a jump to its code, its frame in this one's
 // place (tailJump). While the collector marks, each operand's pointer is
 // shaded first.
-func (c *a64Compiler) tailSelf(v *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) tailSelf(v *ssa.Value, guard a64Guard) {
 	shallow := c.a.NewLabel()
 	c.a.Load(a64A, a64Ctx, abi.OffLevel)
 	c.a.Load(a64B, a64Ctx, abi.OffBounds)
@@ -6756,7 +6761,7 @@ func (c *a64Compiler) tailSelf(v *ssa.Value, guard func(arm64.Cond)) {
 	c.a.Bind(polled)
 	c.a.Load(a64A, a64Ctx, abi.OffTailFrame)
 	c.a.CmpImm(a64A, 0, true)
-	guard(arm64.EQ)
+	guard.jump(arm64.EQ)
 	if !c.reference(v, v.Args[0], c.enc.Object, guard) {
 		return
 	}
@@ -6854,17 +6859,17 @@ func (c *a64Compiler) tailSelf(v *ssa.Value, guard func(arm64.Cond)) {
 }
 
 // tailJump is tailSelf's call of t, as amd64's.
-func (c *a64Compiler) tailJump(t *ssa.CallSite, n int, this bool, guard func(arm64.Cond)) {
+func (c *a64Compiler) tailJump(t *ssa.CallSite, n int, this bool, guard a64Guard) {
 	vs, size := int32(c.enc.ValueSize), int32(unsafe.Sizeof(abi.GoArg{}))
 	c.movImm(a64A, uint64(t.Entry))
 	c.a.Load(a64A, a64A, 0)
 	c.a.CmpImm(a64A, 0, true)
-	guard(arm64.EQ)
+	guard.jump(arm64.EQ)
 	c.a.Load(a64B, a64Ctx, abi.OffBase)
 	c.a.AddImm(a64B, a64B, int64(t.LocalCount+t.MaxStack), true)
 	c.a.Load(a64A, a64Ctx, abi.OffStackEnd)
 	c.a.Cmp(a64B, a64A, true)
-	guard(arm64.HI)
+	guard.jump(arm64.HI)
 	for i := 0; i < t.LocalCount; i++ {
 		at := int32(i) * vs
 		if i < t.Params && i < n {
@@ -7116,16 +7121,16 @@ func (c *a64Compiler) cellAddr(v *ssa.Value, at int32) {
 }
 
 // bigUnbox is the BigInt a tagged value is, as amd64's.
-func (c *a64Compiler) bigUnbox(v *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) bigUnbox(v *ssa.Value, guard a64Guard) {
 	x := v.Args[0]
 	low := 64 - c.enc.ShortBigLowBits
 	c.a.ShiftImm(arm64.Lsr, a64A, c.gpr(x, a64B), c.enc.ShortBigLowBits, true)
 	c.movImm(a64B, c.enc.ShortBigTag>>c.enc.ShortBigLowBits)
 	c.a.Cmp(a64A, a64B, true)
-	guard(arm64.NE)
+	guard.jump(arm64.NE)
 	c.keepSource(x)
 	c.a.CmpImm(a64C, 0, true)
-	guard(arm64.EQ)
+	guard.jump(arm64.EQ)
 	c.a.Load(a64A, a64C, c.enc.RefOffset)
 	c.movImm(a64B, c.enc.ShortBigHigh)
 	c.a.Op(arm64.Sub, a64A, a64A, a64B, true)
@@ -7163,7 +7168,7 @@ func (c *a64Compiler) bigBox(v *ssa.Value) {
 // holder finds the property a read whose receiver's shape it knows names,
 // for whichever of the shapes it met the receiver's is, into A, as amd64's
 // does.
-func (c *a64Compiler) holder(v *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) holder(v *ssa.Value, guard a64Guard) {
 	var first ssa.HolderChain
 	if v.Holders() != nil {
 		first = *v.Holders()
@@ -7195,7 +7200,7 @@ func (c *a64Compiler) holder(v *ssa.Value, guard func(arm64.Cond)) {
 		if wide {
 			c.a.BCond(arm64.NE, to)
 		} else {
-			guard(arm64.NE)
+			guard.jump(arm64.NE)
 		}
 	}
 	for i, k := range cases {
@@ -7242,14 +7247,14 @@ func (c *a64Compiler) holder(v *ssa.Value, guard func(arm64.Cond)) {
 
 // protoChain checks the prototypes chain is, as amd64's does, the last left
 // in A. It uses A, B and C.
-func (c *a64Compiler) protoChain(chain []ssa.Holder, guard func(arm64.Cond), null bool) {
+func (c *a64Compiler) protoChain(chain []ssa.Holder, guard a64Guard, null bool) {
 	// Each object's layout, which says its prototype, as amd64's.
 	for _, h := range chain {
 		c.movImm(a64A, uint64(h.Object))
 		c.a.Load(a64B, a64A, c.enc.ObjectShape)
 		c.movImm(a64C, uint64(h.Shape))
 		c.a.Cmp(a64B, a64C, true)
-		guard(arm64.NE)
+		guard.jump(arm64.NE)
 	}
 }
 
@@ -7257,20 +7262,20 @@ func (c *a64Compiler) protoChain(chain []ssa.Holder, guard func(arm64.Cond), nul
 // one an int64 holds exactly: FCVTZS saturates, so a result of 2**63-1,
 // which no double converts to exactly, means x is 2**63 or more. It uses
 // D and F2.
-func (c *a64Compiler) integer(r arm64.Reg, x arm64.FReg, guard func(arm64.Cond)) {
+func (c *a64Compiler) integer(r arm64.Reg, x arm64.FReg, guard a64Guard) {
 	c.a.Fcvtzs(r, x)
 	c.a.Scvtf(a64F2, r, true)
 	c.a.FCmp(a64F2, x)
-	guard(arm64.NE)
+	guard.jump(arm64.NE)
 	c.movImm(a64D, math.MaxInt64)
 	c.a.Cmp(r, a64D, true)
-	guard(arm64.EQ)
+	guard.jump(arm64.EQ)
 }
 
 // remainder is JavaScript's % of two integers, as amd64's is. SDIV never
 // faults -- -2**63 / -1 is -2**63, whose MSUB remainder is 0 -- so no
 // divisor needs a case of its own.
-func (c *a64Compiler) remainder(v *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) remainder(v *ssa.Value, guard a64Guard) {
 	x, y := c.fpr(v.Args[0], a64F0), c.fpr(v.Args[1], a64F1)
 	zero, done := c.a.NewLabel(), c.a.NewLabel()
 	divisor := c.stubLabel(v.State, exitKind(v.Aux))
@@ -7280,7 +7285,7 @@ func (c *a64Compiler) remainder(v *ssa.Value, guard func(arm64.Cond)) {
 		// they are.
 		size := int32(unsafe.Sizeof(abi.GoArg{}))
 		slow, stub := c.a.NewLabel(), divisor
-		guard, divisor = func(cond arm64.Cond) { c.a.BCond(cond, slow) }, slow
+		guard, divisor = a64GuardLabel(c, slow), slow
 		c.cold = append(c.cold, func() {
 			c.a.Bind(slow)
 			c.a.FMovFromF(a64A, x)
@@ -7420,7 +7425,7 @@ func (c *a64Compiler) random(v *ssa.Value) {
 }
 
 // power is Math.pow(x, y) where its answer is exact, as amd64's is.
-func (c *a64Compiler) power(v *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) power(v *ssa.Value, guard a64Guard) {
 	if x := c.fpr(v.Args[0], a64F0); x != a64F0 {
 		c.a.FMov(a64F0, x)
 	}
@@ -7442,7 +7447,7 @@ func (c *a64Compiler) power(v *ssa.Value, guard func(arm64.Cond)) {
 		c.a.FMovFromF(a64A, a64F1)
 		c.a.Store(a64Ctx, abi.OffGoArgs+size+c.enc.NumOffset, a64A)
 		slow, stub := c.a.NewLabel(), c.stubLabel(v.State, exitKind(v.Aux))
-		guard = func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+		guard = a64GuardLabel(c, slow)
 		c.cold = append(c.cold, func() {
 			c.a.Bind(slow)
 			c.goSaving(uint64(ssa.GoPow), &stub)
@@ -7453,7 +7458,7 @@ func (c *a64Compiler) power(v *ssa.Value, guard func(arm64.Cond)) {
 	// y an integer from 0 to 64 (unsigned, so none below), x an integer.
 	c.integer(a64C, a64F1, guard)
 	c.a.CmpImm(a64C, 64, true)
-	guard(arm64.HI)
+	guard.jump(arm64.HI)
 	c.integer(a64A, a64F0, guard)
 	// The result in F2, x's powers in F0.
 	c.constF64(a64F2, math.Float64bits(1))
@@ -7474,14 +7479,14 @@ func (c *a64Compiler) power(v *ssa.Value, guard func(arm64.Cond)) {
 	c.a.FMovFromF(a64A, a64F1)
 	c.movImm(a64B, math.Float64bits(1<<53))
 	c.a.Cmp(a64A, a64B, true)
-	guard(arm64.HI)
+	guard.jump(arm64.HI)
 	c.a.FMov(a64F0, a64F2)
 	c.a.Bind(done)
 	c.setF(v, a64F0)
 }
 
 // length is x.length, as amd64's is.
-func (c *a64Compiler) length(v *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) length(v *ssa.Value, guard a64Guard) {
 	a := v.Args[0]
 	if a.Shadow == nil && c.origin.At(a) < 0 {
 		c.a.B(c.stubLabel(v.State, exitKind(v.Aux)))
@@ -7504,15 +7509,15 @@ func (c *a64Compiler) length(v *ssa.Value, guard func(arm64.Cond)) {
 		// A typed array's, as amd64's.
 		c.a.Bind(typed)
 		c.a.CmpImm(a64B, int64(c.enc.ClassTypedArray), false)
-		guard(arm64.NE)
+		guard.jump(arm64.NE)
 		c.objectData(a64C, a64C, a64B, c.enc.TypedData, guard)
 		c.a.Load(a64B, a64C, c.enc.TypedStorage)
 		c.a.CmpImm(a64B, 0, true)
-		guard(arm64.EQ)
+		guard.jump(arm64.EQ)
 		c.a.Load(a64A, a64C, c.enc.TypedEnd)
 		c.a.Load(a64D, a64B, c.enc.BufferBytes+8)
 		c.a.Cmp(a64A, a64D, true)
-		guard(arm64.HI)
+		guard.jump(arm64.HI)
 		c.a.Load(a64C, a64C, c.enc.TypedLength)
 		c.a.B(have)
 	})
@@ -7533,13 +7538,13 @@ func (c *a64Compiler) length(v *ssa.Value, guard func(arm64.Cond)) {
 }
 
 // stringCode is charCodeAt called on a string, as amd64's is.
-func (c *a64Compiler) stringCode(v *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) stringCode(v *ssa.Value, guard a64Guard) {
 	if !c.reference(v, v.Args[0], c.enc.Object, guard) {
 		return
 	}
 	c.a.Load(a64B, a64Ctx, abi.OffCharCode+c.enc.RefOffset)
 	c.a.Cmp(a64C, a64B, true)
-	guard(arm64.NE)
+	guard.jump(arm64.NE)
 	if !c.stringUnit(v, v.Args[1], v.Args[2], guard) {
 		return
 	}
@@ -7549,13 +7554,13 @@ func (c *a64Compiler) stringCode(v *ssa.Value, guard func(arm64.Cond)) {
 
 // stringChar is s[i] (ssa.OpStringChar), as amd64's: past the string's
 // end, the undefined cell where Go says so (ssa.GoStringAbsent).
-func (c *a64Compiler) stringChar(v *ssa.Value, guard func(arm64.Cond)) {
-	var past func(arm64.Cond)
+func (c *a64Compiler) stringChar(v *ssa.Value, guard a64Guard) {
+	var past a64Guard
 	done := arm64.Label(0)
 	if c.enc.CallGo != 0 && c.enc.UndefinedCell != 0 {
 		slow, stub := c.a.NewLabel(), c.stubLabel(v.State, exitKind(v.Aux))
 		done = c.a.NewLabel()
-		past = func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+		past = a64GuardLabel(c, slow)
 		c.cold = append(c.cold, func() {
 			// The string in C, its index in A (stringUnitAt).
 			c.a.Bind(slow)
@@ -7581,7 +7586,7 @@ func (c *a64Compiler) stringChar(v *ssa.Value, guard func(arm64.Cond)) {
 }
 
 // codeChar is String.fromCharCode(c) (ssa.OpCodeChar), as amd64's.
-func (c *a64Compiler) codeChar(v *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) codeChar(v *ssa.Value, guard a64Guard) {
 	c.index(v.Args[0], guard)
 	c.charCell(v, guard)
 }
@@ -7590,7 +7595,7 @@ func (c *a64Compiler) codeChar(v *ssa.Value, guard func(arm64.Cond)) {
 // the unit in A, the units left from it in C where units. It uses A, B, C,
 // F0 and F1.
 func (c *a64Compiler) stringKeyUnit(v *ssa.Value, rel, units bool, none arm64.Label) {
-	fail := func(cond arm64.Cond) { c.a.BCond(cond, none) }
+	fail := a64GuardLabel(c, none)
 	s, key := v.Args[0], v.Args[1]
 	if s.Shadow == nil && c.origin.At(s) < 0 {
 		c.a.B(none)
@@ -7610,7 +7615,7 @@ func (c *a64Compiler) stringKeyUnit(v *ssa.Value, rel, units bool, none arm64.La
 		}
 		c.movImm(a64B, abi.NumberLimit)
 		c.a.Cmp(w, a64B, true)
-		fail(arm64.HS)
+		fail.jump(arm64.HS)
 		c.a.FMovToF(a64F0, w)
 	}
 	c.referenceTo(v, s, c.enc.String, fail, none)
@@ -7620,7 +7625,7 @@ func (c *a64Compiler) stringKeyUnit(v *ssa.Value, rel, units bool, none arm64.La
 	c.a.Fcvtzs(a64A, a64F0)
 	c.a.Scvtf(a64F1, a64A, true)
 	c.a.FCmp(a64F1, a64F0)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.Load(a64B, a64C, c.enc.StringLength)
 	if rel {
 		nonNegative := c.a.NewLabel()
@@ -7630,7 +7635,7 @@ func (c *a64Compiler) stringKeyUnit(v *ssa.Value, rel, units bool, none arm64.La
 		c.a.Bind(nonNegative)
 	}
 	c.a.Cmp(a64A, a64B, true)
-	fail(arm64.HS)
+	fail.jump(arm64.HS)
 	ascii, done := c.a.NewLabel(), c.a.NewLabel()
 	c.a.LoadU8(a64B, a64C, c.enc.StringASCII)
 	c.a.Cbnz(a64B, ascii, false)
@@ -7732,7 +7737,7 @@ func (c *a64Compiler) typeofCell(v *ssa.Value) {
 		// A primitive, never an object's reference.
 		c.a.B(none)
 	} else {
-		fail := func(cond arm64.Cond) { c.a.BCond(cond, none) }
+		fail := a64GuardLabel(c, none)
 		c.sourceRef(a, fail)
 		c.a.Cbz(a64C, none, true)
 		c.a.LoadU8(a64A, a64C, c.enc.ObjectFlags)
@@ -7818,10 +7823,10 @@ func (c *a64Compiler) numberIs(v *ssa.Value) {
 // codeCharOr is ssa.OpCodeCharOr, as amd64's. It uses A, B, F0 and F1.
 func (c *a64Compiler) codeCharOr(v *ssa.Value) {
 	none, done := c.a.NewLabel(), c.a.NewLabel()
-	fail := func(cond arm64.Cond) { c.a.BCond(cond, none) }
+	fail := a64GuardLabel(c, none)
 	c.index(v.Args[0], fail)
 	c.a.CmpImm(a64A, 256, true)
-	fail(arm64.HS)
+	fail.jump(arm64.HS)
 	c.a.Load(a64B, a64Ctx, abi.OffCharStrings)
 	c.a.Cbz(a64B, none, true)
 	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
@@ -7834,7 +7839,7 @@ func (c *a64Compiler) codeCharOr(v *ssa.Value) {
 }
 
 // oddball is ssa.OpOddballF64, as amd64's. It uses A.
-func (c *a64Compiler) oddball(v *ssa.Value, fail func(arm64.Cond)) {
+func (c *a64Compiler) oddball(v *ssa.Value, fail a64Guard) {
 	r := c.gpr(v.Args[0], a64B)
 	d := c.fdst(v)
 	done, tagged, zero := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
@@ -7874,7 +7879,7 @@ func (c *a64Compiler) oddball(v *ssa.Value, fail func(arm64.Cond)) {
 			c.a.B(done)
 		})
 	} else {
-		fail(arm64.NE)
+		fail.jump(arm64.NE)
 	}
 	c.a.Bind(zero)
 	c.movImm(a64A, 0)
@@ -7908,15 +7913,15 @@ func (c *a64Compiler) freeze(v *ssa.Value) {
 
 // charCell is the cell of the runtime's string of the code unit in A,
 // below 256, as amd64's.
-func (c *a64Compiler) charCell(v *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) charCell(v *ssa.Value, guard a64Guard) {
 	c.charAddr(v, guard)
 	c.setG(v, a64A)
 }
 
 // charAddr is charCell's cell, in A.
-func (c *a64Compiler) charAddr(v *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) charAddr(v *ssa.Value, guard a64Guard) {
 	c.a.CmpImm(a64A, 256, true)
-	guard(arm64.HS)
+	guard.jump(arm64.HS)
 	c.a.Load(a64B, a64Ctx, abi.OffCharStrings)
 	c.a.Cbz(a64B, c.stubLabel(v.State, exitKind(v.Aux)), true)
 	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
@@ -7925,7 +7930,7 @@ func (c *a64Compiler) charAddr(v *ssa.Value, guard func(arm64.Cond)) {
 
 // stringUnit reads the code unit at index key of str, a flat string, into
 // A, as amd64's, and reports whether the code goes on. It uses B and C.
-func (c *a64Compiler) stringUnit(v, str, key *ssa.Value, guard func(arm64.Cond)) bool {
+func (c *a64Compiler) stringUnit(v, str, key *ssa.Value, guard a64Guard) bool {
 	if !c.reference(v, str, c.enc.String, guard) {
 		return false
 	}
@@ -7935,14 +7940,14 @@ func (c *a64Compiler) stringUnit(v, str, key *ssa.Value, guard func(arm64.Cond))
 
 // stringUnitAt is stringUnit once the string is in C, failing at fail, as
 // guard does.
-func (c *a64Compiler) stringUnitAt(key *ssa.Value, guard func(arm64.Cond), fail arm64.Label) {
-	c.stringUnitPast(key, guard, nil, fail)
+func (c *a64Compiler) stringUnitAt(key *ssa.Value, guard a64Guard, fail arm64.Label) {
+	c.stringUnitPast(key, guard, a64Guard{}, fail)
 }
 
 // stringUnitPast is stringUnitAt, an index past the string's end going to
 // past, if not nil, the string in C and the index in A.
-func (c *a64Compiler) stringUnitPast(key *ssa.Value, guard, past func(arm64.Cond), fail arm64.Label) {
-	if past == nil {
+func (c *a64Compiler) stringUnitPast(key *ssa.Value, guard, past a64Guard, fail arm64.Label) {
+	if past.c == nil {
 		past = guard
 	}
 	c.a.Load(a64B, a64C, c.enc.StringLeft)
@@ -7950,7 +7955,7 @@ func (c *a64Compiler) stringUnitPast(key *ssa.Value, guard, past func(arm64.Cond
 	c.index(key, guard)
 	c.a.Load(a64B, a64C, c.enc.StringLength)
 	c.a.Cmp(a64A, a64B, true)
-	past(arm64.HS)
+	past.jump(arm64.HS)
 	units, done := c.a.NewLabel(), c.a.NewLabel()
 	c.a.LoadU8(a64B, a64C, c.enc.StringASCII)
 	c.a.Cbz(a64B, units, false)
@@ -7972,7 +7977,7 @@ func (c *a64Compiler) stringUnitPast(key *ssa.Value, guard, past func(arm64.Cond
 // F1 and F2.
 func (c *a64Compiler) substringChar(v *ssa.Value) {
 	none, done := c.a.NewLabel(), c.a.NewLabel()
-	fail := func(cond arm64.Cond) { c.a.BCond(cond, none) }
+	fail := a64GuardLabel(c, none)
 	if v.Aux != ssa.SubstrAt {
 		c.movImm(a64D, math.Float64bits(1))
 		c.a.FMovToF(a64F2, a64D)
@@ -7982,7 +7987,7 @@ func (c *a64Compiler) substringChar(v *ssa.Value) {
 			c.a.FArith(arm64.FAdd, a64F2, a64F2, c.fpr(v.Args[1], a64F0))
 			c.a.FCmp(a64F2, c.fpr(v.Args[2], a64F1))
 		}
-		fail(arm64.NE)
+		fail.jump(arm64.NE)
 	}
 	if s := v.Args[0]; s.Shadow == nil && c.origin.At(s) < 0 {
 		c.a.B(none)
@@ -7991,7 +7996,7 @@ func (c *a64Compiler) substringChar(v *ssa.Value) {
 		c.stringUnitAt(v.Args[1], fail, none)
 	}
 	c.a.CmpImm(a64A, 256, true)
-	fail(arm64.HS)
+	fail.jump(arm64.HS)
 	c.a.Load(a64B, a64Ctx, abi.OffCharStrings)
 	c.a.Cbz(a64B, none, true)
 	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
@@ -8006,35 +8011,35 @@ func (c *a64Compiler) substringChar(v *ssa.Value) {
 // index converts an element's key to an index in A, failing unless it is an
 // integer in [0, 2**32). FCVTZS saturates, so a key of 2**63 or more gives
 // 2**63-1, whose top half is not clear. It uses B and F1.
-func (c *a64Compiler) index(key *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) index(key *ssa.Value, guard a64Guard) {
 	k := c.fpr(key, a64F0)
 	c.a.Fcvtzs(a64A, k)
 	c.a.Scvtf(a64F1, a64A, true)
 	c.a.FCmp(a64F1, k)
-	guard(arm64.NE)
+	guard.jump(arm64.NE)
 	c.a.ShiftImm(arm64.Lsr, a64B, a64A, 32, true)
 	c.a.CmpImm(a64B, 0, true)
-	guard(arm64.NE)
+	guard.jump(arm64.NE)
 }
 
 // element turns the index in A into the address of an array's element in
 // A, and its number word in B, as amd64's does. It uses C.
-func (c *a64Compiler) element(array *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) element(array *ssa.Value, guard a64Guard) {
 	p := c.gpr(array, a64C)
 	c.a.Load(a64B, p, c.enc.ObjectElems+8)
 	c.a.Cmp(a64A, a64B, true)
-	guard(arm64.HS)
+	guard.jump(arm64.HS)
 	c.a.Load(a64B, p, c.enc.ObjectElems)
 	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
 	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
 	c.a.Load(a64B, a64A, c.enc.NumOffset)
 	c.movImm(a64C, abi.NumberLimit)
 	c.a.Cmp(a64B, a64C, true)
-	guard(arm64.HS)
+	guard.jump(arm64.HS)
 }
 
 // indexedOf finds an array or a typed array (OpIndexedOf), as amd64's.
-func (c *a64Compiler) indexedOf(v *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) indexedOf(v *ssa.Value, guard a64Guard) {
 	if !c.objectOf(v, guard) {
 		return
 	}
@@ -8043,7 +8048,7 @@ func (c *a64Compiler) indexedOf(v *ssa.Value, guard func(arm64.Cond)) {
 	c.a.CmpImm(a64B, int64(c.enc.ClassArray), false)
 	c.a.BCond(arm64.EQ, ok)
 	c.a.CmpImm(a64B, int64(c.enc.ClassTypedArray), false)
-	guard(arm64.NE)
+	guard.jump(arm64.NE)
 	c.a.Bind(ok)
 	c.setG(v, a64C)
 }
@@ -8058,19 +8063,19 @@ func (c *a64Compiler) typedArray(array *ssa.Value, typed arm64.Label) {
 
 // typedElement finds a typed array's element, as amd64's: its address in
 // A, the view's element type in C. It uses A, B, C, D and F1.
-func (c *a64Compiler) typedElement(array, key *ssa.Value, store bool, fail func(arm64.Cond)) {
+func (c *a64Compiler) typedElement(array, key *ssa.Value, store bool, fail a64Guard) {
 	c.objectData(a64C, c.gpr(array, a64C), a64B, c.enc.TypedData, fail)
 	c.a.Load(a64B, a64C, c.enc.TypedStorage)
 	c.a.CmpImm(a64B, 0, true)
-	fail(arm64.EQ)
+	fail.jump(arm64.EQ)
 	c.a.Load(a64A, a64C, c.enc.TypedEnd)
 	c.a.Load(a64D, a64B, c.enc.BufferBytes+8)
 	c.a.Cmp(a64A, a64D, true)
-	fail(arm64.HI)
+	fail.jump(arm64.HI)
 	if store {
 		c.a.LoadU8(a64A, a64B, c.enc.BufferImmutable)
 		c.a.CmpImm(a64A, 0, false)
-		fail(arm64.NE)
+		fail.jump(arm64.NE)
 	}
 	c.a.Load(a64B, a64B, c.enc.BufferBytes)
 	c.a.Load(a64A, a64C, c.enc.TypedOffset)
@@ -8081,10 +8086,10 @@ func (c *a64Compiler) typedElement(array, key *ssa.Value, store bool, fail func(
 	c.a.Fcvtzs(a64A, k)
 	c.a.Scvtf(a64F1, a64A, true)
 	c.a.FCmp(a64F1, k)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.Load(a64D, a64C, c.enc.TypedLength)
 	c.a.Cmp(a64A, a64D, true)
-	fail(arm64.HS)
+	fail.jump(arm64.HS)
 	c.a.LoadU8(a64C, a64C, c.enc.TypedKind)
 }
 
@@ -8116,7 +8121,7 @@ func (c *a64Compiler) elemStore(v *ssa.Value) {
 	if c.enc.CallGo == 0 || checked && c.enc.ValueSize != 16 {
 		slow = stub
 	}
-	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+	fail := a64GuardLabel(c, slow)
 	typed := c.a.NewLabel()
 	fresh := v.Index == ssa.StoreFresh && c.enc.ValueSize == 16
 	if !fresh {
@@ -8216,7 +8221,7 @@ func (c *a64Compiler) typedRead(v *ssa.Value, done arm64.Label) {
 	if c.enc.CallGo != 0 {
 		slow = c.a.NewLabel()
 	}
-	c.typedElement(v.Args[0], v.Args[1], false, func(cond arm64.Cond) { c.a.BCond(cond, slow) })
+	c.typedElement(v.Args[0], v.Args[1], false, a64GuardLabel(c, slow))
 	c.typedCases(slow, func(kind int32) {
 		switch kind {
 		case abi.ElemInt8:
@@ -8260,7 +8265,7 @@ func (c *a64Compiler) typedRead(v *ssa.Value, done arm64.Label) {
 // typedWrite stores a number in a typed array's element, as amd64's.
 // The value is in the register value gives, a double.
 func (c *a64Compiler) typedWrite(v *ssa.Value, done, slow arm64.Label, value func() arm64.FReg) {
-	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+	fail := a64GuardLabel(c, slow)
 	c.typedElement(v.Args[0], v.Args[1], true, fail)
 	c.typedCases(slow, func(kind int32) {
 		x := value()
@@ -8297,10 +8302,10 @@ func (c *a64Compiler) typedWrite(v *ssa.Value, done, slow arm64.Label, value fun
 			c.a.Fcvtzs(a64B, x)
 			c.movImm(a64C, math.MaxInt64)
 			c.a.Cmp(a64B, a64C, true)
-			fail(arm64.EQ)
+			fail.jump(arm64.EQ)
 			c.movImm(a64C, 1<<63)
 			c.a.Cmp(a64B, a64C, true)
-			fail(arm64.EQ)
+			fail.jump(arm64.EQ)
 			switch kind {
 			case abi.ElemInt8, abi.ElemUint8:
 				c.a.Store8(a64A, 0, a64B)
@@ -8317,18 +8322,18 @@ func (c *a64Compiler) typedWrite(v *ssa.Value, done, slow arm64.Label, value fun
 // elementCell turns the index in A into the address of an array's element
 // there, in A, failing unless it is within the dense elements and not a
 // hole, as amd64's does. It uses B and C.
-func (c *a64Compiler) elementCell(array *ssa.Value, guard func(arm64.Cond)) {
+func (c *a64Compiler) elementCell(array *ssa.Value, guard a64Guard) {
 	p := c.gpr(array, a64C)
 	c.a.Load(a64B, p, c.enc.ObjectElems+8)
 	c.a.Cmp(a64A, a64B, true)
-	guard(arm64.HS)
+	guard.jump(arm64.HS)
 	c.a.Load(a64B, p, c.enc.ObjectElems)
 	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
 	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
 	c.a.Load(a64B, a64A, c.enc.NumOffset)
 	c.movImm(a64C, c.enc.Uninitialized)
 	c.a.Cmp(a64B, a64C, true)
-	guard(arm64.EQ)
+	guard.jump(arm64.EQ)
 }
 
 // cellChecks is amd64's, of the cell in A: only a pointer word there is
@@ -8377,7 +8382,7 @@ func (c *a64Compiler) storageFree(array *ssa.Value, checks []*ssa.Value, stub ar
 // appended -- the checks made on the cell before the length grows
 // (cellChecks) -- the cell's address in A at found. It keeps D, the
 // value's pointer word.
-func (c *a64Compiler) storeCell(array *ssa.Value, checks []*ssa.Value, stub arm64.Label, fail func(arm64.Cond), found arm64.Label) {
+func (c *a64Compiler) storeCell(array *ssa.Value, checks []*ssa.Value, stub arm64.Label, fail a64Guard, found arm64.Label) {
 	protos := c.f.ArrayProtos
 	if protos[0].Object == 0 || c.enc.ValueSize != 16 {
 		c.elementCell(array, fail)
@@ -8390,10 +8395,10 @@ func (c *a64Compiler) storeCell(array *ssa.Value, checks []*ssa.Value, stub arm6
 	c.a.BCond(arm64.HS, end)
 	c.cold = append(c.cold, func() {
 		c.a.Bind(end)
-		fail(arm64.NE)
+		fail.jump(arm64.NE)
 		c.a.Load(a64B, c.gpr(array, a64C), c.enc.ObjectElems+16)
 		c.a.Cmp(a64A, a64B, true)
-		fail(arm64.HS)
+		fail.jump(arm64.HS)
 		c.a.FMovToF(a64F1, a64A)
 		c.arrayGuards(c.gpr(array, a64C), protos, fail)
 		c.a.FMovFromF(a64A, a64F1)
@@ -8438,14 +8443,14 @@ func (c *a64Compiler) storeCell(array *ssa.Value, checks []*ssa.Value, stub arm6
 // freshCell is amd64's: storeCell for a store into an array a loop made
 // (ssa.StoreFresh), at its length where it has room, the cell's address in
 // A. It keeps D.
-func (c *a64Compiler) freshCell(array *ssa.Value, fail func(arm64.Cond)) {
+func (c *a64Compiler) freshCell(array *ssa.Value, fail a64Guard) {
 	p := c.gpr(array, a64C)
 	c.a.Load(a64B, p, c.enc.ObjectElems+8)
 	c.a.Cmp(a64A, a64B, true)
-	fail(arm64.NE)
+	fail.jump(arm64.NE)
 	c.a.Load(a64B, p, c.enc.ObjectElems+16)
 	c.a.Cmp(a64A, a64B, true)
-	fail(arm64.HS)
+	fail.jump(arm64.HS)
 	c.a.AddImm(a64B, a64A, 1, true)
 	c.a.Store(p, c.enc.ObjectElems+8, a64B)
 	c.a.Load(a64B, p, c.enc.ObjectElems)
@@ -8454,18 +8459,35 @@ func (c *a64Compiler) freshCell(array *ssa.Value, fail func(arm64.Cond)) {
 }
 
 // numberCell checks the word at A's cell is a number, into B.
-func (c *a64Compiler) numberCell(guard func(arm64.Cond)) {
+func (c *a64Compiler) numberCell(guard a64Guard) {
 	c.a.Load(a64B, a64A, c.enc.NumOffset)
 	c.movImm(a64C, abi.NumberLimit)
 	c.a.Cmp(a64B, a64C, true)
-	guard(arm64.HS)
+	guard.jump(arm64.HS)
 }
 
 // guardFor is a guard of v's for code that may keep it: a jump to the stub
 // that exits to v's state.
-func (c *a64Compiler) guardFor(v *ssa.Value) func(arm64.Cond) {
-	return func(cond arm64.Cond) {
-		c.a.BCond(cond, c.stubLabel(v.State, exitKind(v.Aux)))
+func (c *a64Compiler) guardFor(v *ssa.Value) a64Guard { return a64Guard{c: c, v: v} }
+
+// a64Guard is where a guard that fails goes: v's exit (guardFor), a label
+// (a64GuardLabel), or, the zero value, nowhere, as on amd64.
+type a64Guard struct {
+	c  *a64Compiler
+	v  *ssa.Value
+	to arm64.Label
+}
+
+// a64GuardLabel is a guard that jumps to l.
+func a64GuardLabel(c *a64Compiler, l arm64.Label) a64Guard { return a64Guard{c: c, to: l} }
+
+// jump emits the guard's jump, taken on cond.
+func (g a64Guard) jump(cond arm64.Cond) {
+	switch {
+	case g.v != nil:
+		g.c.a.BCond(cond, g.c.stubLabel(g.v.State, exitKind(g.v.Aux)))
+	case g.c != nil:
+		g.c.a.BCond(cond, g.to)
 	}
 }
 
@@ -8475,9 +8497,7 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 	// guard is for the guards emitted here; one passed on, which may be
 	// kept for cold code, is made only for the values that pass one
 	// (guardFor), not for every value.
-	guard := func(cond arm64.Cond) {
-		c.a.BCond(cond, c.stubLabel(v.State, exitKind(v.Aux)))
-	}
+	guard := c.guardFor(v)
 	switch v.Op {
 	case ssa.OpLoadSlot:
 		d := c.gdst(v)
@@ -8521,7 +8541,7 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		r := c.gpr(arg(0), a64B)
 		c.a.ShiftImm(arm64.Lsr, a64A, r, 51, true)
 		c.a.CmpImm(a64A, 0x1FFF, false)
-		guard(arm64.EQ)
+		guard.jump(arm64.EQ)
 		d := c.fdst(v)
 		c.a.FMovToF(d, r)
 		c.setF(v, d)
@@ -8531,12 +8551,12 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		r := c.gpr(arg(0), a64B)
 		c.movImm(a64A, c.enc.Uninitialized)
 		c.a.Cmp(r, a64A, true)
-		guard(arm64.EQ)
+		guard.jump(arm64.EQ)
 	case ssa.OpCheckTrue:
 		r := c.gpr(arg(0), a64B)
 		c.movImm(a64A, c.enc.True)
 		c.a.Cmp(r, a64A, true)
-		guard(arm64.NE)
+		guard.jump(arm64.NE)
 	case ssa.OpTruth:
 		c.truth(v, c.guardFor(v), nil)
 	case ssa.OpArrayOf:
@@ -8547,7 +8567,7 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		if v.Index == ssa.ObjectOfTry {
 			// As amd64's: 0 where it is no object.
 			zero, done := c.a.NewLabel(), c.a.NewLabel()
-			if c.referenceTo(v, v.Args[0], c.enc.Object, func(cond arm64.Cond) { c.a.BCond(cond, zero) }, zero) {
+			if c.referenceTo(v, v.Args[0], c.enc.Object, a64GuardLabel(c, zero), zero) {
 				c.a.B(done)
 			}
 			c.a.Bind(zero)
@@ -8596,7 +8616,7 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		}
 		c.a.Op(op, a64A, c.gpr(arg(0), a64A), c.gpr(arg(1), a64B), true)
 		// Outside the int64 range: a BigInt on the heap, Go's.
-		guard(arm64.VS)
+		guard.jump(arm64.VS)
 		c.setG(v, a64A)
 	case ssa.OpMulI64:
 		// The product's high word is its low word's sign unless it is
@@ -8606,7 +8626,7 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.Smulh(a64B, x, y)
 		c.a.ShiftImm(arm64.Asr, a64A, a64C, 63, true)
 		c.a.Cmp(a64B, a64A, true)
-		guard(arm64.NE)
+		guard.jump(arm64.NE)
 		c.setG(v, a64C)
 	case ssa.OpCmpI64:
 		c.a.Cmp(c.gpr(arg(0), a64A), c.gpr(arg(1), a64B), true)
@@ -8621,7 +8641,7 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.AddImm(a64A, a64A, int64(v.Index), true)
 		c.a.Load(a64B, a64Ctx, abi.OffStackEnd)
 		c.a.Cmp(a64A, a64B, true)
-		guard(arm64.HI)
+		guard.jump(arm64.HI)
 		if v.Key == 1 {
 			// Room for homes alone, as amd64's.
 			break
@@ -8631,7 +8651,7 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.Load(a64B, a64Ctx, abi.OffBounds)
 		c.a.Load(a64B, a64B, abi.OffBoundsLevelLimit)
 		c.a.Cmp(a64A, a64B, true)
-		guard(arm64.HS)
+		guard.jump(arm64.HS)
 	case ssa.OpTailSelf:
 		c.tailSelf(v, guard)
 	case ssa.OpIterClosed:
@@ -8643,13 +8663,13 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		}
 		c.pointerWord(x, c.gpr(x, a64A))
 		c.a.CmpImm(a64B, 0, true)
-		guard(arm64.EQ)
+		guard.jump(arm64.EQ)
 		c.objectPart(a64B, a64B, a64C, c.enc.ClassCursor, c.enc.IterState, guard)
 		c.a.LoadU8(a64C, a64B, c.enc.IterDone)
 		c.a.Cbnz(a64C, ok, false)
 		c.a.Load(a64C, a64B, c.enc.IterArr)
 		c.a.CmpImm(a64C, 0, true)
-		guard(arm64.EQ)
+		guard.jump(arm64.EQ)
 		if v.Const.Bits == 0 {
 			// No cell: a done cursor's alone, which jumps to ok.
 			c.a.B(c.stubLabel(v.State, exitKind(v.Aux)))
@@ -8659,16 +8679,16 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.movImm(a64C, v.Const.Bits)
 		c.a.Load(a64C, a64C, 0)
 		c.a.CmpImm(a64C, 0, true)
-		guard(arm64.EQ)
+		guard.jump(arm64.EQ)
 		c.a.LoadU8(a64C, a64C, 0)
 		c.a.CmpImm(a64C, 0, false)
-		guard(arm64.EQ)
+		guard.jump(arm64.EQ)
 		c.a.Bind(ok)
 	case ssa.OpSameSymbol:
 		if c.reference(v, v.Args[0], c.enc.Symbol, guard) {
 			c.movImm(a64B, v.Const.Bits)
 			c.a.Cmp(a64C, a64B, true)
-			guard(arm64.NE)
+			guard.jump(arm64.NE)
 		}
 	case ssa.OpTailRoom:
 		c.a.Load(a64A, a64Ctx, abi.OffLevel)
@@ -8679,23 +8699,23 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.Load(a64B, a64Ctx, abi.OffBounds)
 		c.a.Load(a64B, a64B, abi.OffBoundsTailLevel)
 		c.a.Cmp(a64A, a64B, true)
-		guard(arm64.HS)
+		guard.jump(arm64.HS)
 	case ssa.OpSameObject:
 		if v.Index == 1 {
 			// A typed array of the prototype at Const.Bits, as amd64's.
 			p := c.gpr(arg(0), a64A)
 			c.a.LoadU8(a64B, p, c.enc.ObjectClass)
 			c.a.CmpImm(a64B, int64(c.enc.ClassTypedArray), false)
-			guard(arm64.NE)
+			guard.jump(arm64.NE)
 			c.loadProtoPlain(a64B, p)
 			c.movImm(a64C, v.Const.Bits)
 			c.a.Cmp(a64B, a64C, true)
-			guard(arm64.NE)
+			guard.jump(arm64.NE)
 			break
 		}
 		c.movImm(a64B, v.Const.Bits)
 		c.a.Cmp(c.gpr(arg(0), a64A), a64B, true)
-		guard(arm64.NE)
+		guard.jump(arm64.NE)
 	case ssa.OpHolderCell:
 		// As amd64's: the chain from the prototype on, then the last one's
 		// table.
@@ -8713,18 +8733,18 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		}
 		c.a.LoadU32(a64B, a64C, c.enc.ObjectPropsLen)
 		c.a.CmpImm(a64B, int64(v.Index), true)
-		guard(arm64.LS)
+		guard.jump(arm64.LS)
 		c.a.Load(a64B, a64C, c.enc.ObjectShape)
 		c.a.Load(a64B, a64B, c.enc.ShapeKeys)
 		c.a.LoadU32(a64B, a64B, int32(v.Index)*c.enc.KeySize+c.enc.PropertyKey)
 		c.movImm(a64A, uint64(v.Key))
 		c.a.Cmp(a64B, a64A, false)
-		guard(arm64.NE)
+		guard.jump(arm64.NE)
 		c.a.Load(a64B, a64C, c.enc.ObjectProps)
 		c.a.Load(a64C, a64B, int32(v.Index)*c.enc.ValueSize+c.enc.RefOffset)
 		c.movImm(a64A, v.Const.Bits)
 		c.a.Cmp(a64C, a64A, true)
-		guard(arm64.NE)
+		guard.jump(arm64.NE)
 	case ssa.OpAccessorIs:
 		// The cell's accessor pair, and its getter's or its setter's
 		// function.
@@ -8732,7 +8752,7 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.Load(a64C, p, c.enc.NumOffset)
 		c.movImm(a64B, c.enc.Accessor)
 		c.a.Cmp(a64C, a64B, true)
-		guard(arm64.NE)
+		guard.jump(arm64.NE)
 		c.a.Load(a64C, p, c.enc.RefOffset)
 		at := c.enc.AccessorGetter
 		if v.Index == 1 {
@@ -8741,7 +8761,7 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.Load(a64C, a64C, at)
 		c.movImm(a64B, v.Const.Bits)
 		c.a.Cmp(a64C, a64B, true)
-		guard(arm64.NE)
+		guard.jump(arm64.NE)
 	case ssa.OpPropRead:
 		c.property(v, c.guardFor(v))
 		c.numberCell(guard)
@@ -8755,7 +8775,7 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 				// No object: none.
 				c.a.Cbz(c.gpr(v.Args[0], a64A), none, true)
 			}
-			c.property(v, func(cond arm64.Cond) { c.a.BCond(cond, none) })
+			c.property(v, a64GuardLabel(c, none))
 			c.a.Bind(found)
 			c.setG(v, a64A)
 			c.cold = append(c.cold, func() {
@@ -8785,7 +8805,7 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 			c.a.Load(a64B, a64B, int32(word*8))
 			c.movImm(a64A, 1<<(v.Key&63))
 			c.a.Tst(a64B, a64A, true)
-			guard(arm64.NE)
+			guard.jump(arm64.NE)
 			c.a.Bind(unshadowed)
 		}
 		if v.Op == ssa.OpBindingCell {
@@ -8798,7 +8818,7 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.LoadU8(a64B, a64B, int32(v.Index)*c.enc.KeySize+c.enc.PropertyFlags)
 		c.movImm(a64C, uint64(c.enc.PropNotData|c.enc.PropUninit))
 		c.a.Tst(a64B, a64C, false)
-		guard(arm64.NE)
+		guard.jump(arm64.NE)
 		c.a.Load(a64A, a64A, c.enc.ObjectProps)
 		c.a.AddImm(a64A, a64A, int64(int32(v.Index)*c.enc.ValueSize), true)
 		c.setG(v, a64A)
@@ -8813,19 +8833,19 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.Load(a64B, a64A, c.enc.NumOffset)
 		c.movImm(a64C, c.enc.Uninitialized)
 		c.a.Cmp(a64B, a64C, true)
-		guard(arm64.EQ)
+		guard.jump(arm64.EQ)
 		c.setG(v, a64A)
 	case ssa.OpStringMethod:
 		// As amd64's: where String.prototype has it now, its shape checked.
 		c.movImm(a64B, c.enc.String)
 		c.a.Cmp(c.gpr(arg(0), a64A), a64B, true)
-		guard(arm64.NE)
+		guard.jump(arm64.NE)
 		c.a.Load(a64A, a64Ctx, abi.OffStringProto)
 		c.a.Cbz(a64A, c.stubLabel(v.State, exitKind(v.Aux)), true)
 		c.a.Load(a64B, a64A, c.enc.ObjectShape)
 		c.a.Load(a64C, a64Ctx, abi.OffStringShape)
 		c.a.Cmp(a64B, a64C, true)
-		guard(arm64.NE)
+		guard.jump(arm64.NE)
 		c.a.Load(a64A, a64A, c.enc.ObjectProps)
 		c.a.Load(a64B, a64Ctx, abi.OffCharCodeAtOffset)
 		c.a.Op(arm64.Add, a64A, a64A, a64B, true)
@@ -8838,11 +8858,11 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		case ssa.PrimitiveBigInt:
 			c.movImm(a64B, c.enc.HeapBigTag)
 			c.a.Cmp(w, a64B, true)
-			guard(arm64.LO)
+			guard.jump(arm64.LO)
 		case ssa.PrimitiveNumber:
 			c.movImm(a64B, abi.NumberLimit)
 			c.a.Cmp(w, a64B, true)
-			guard(arm64.HS)
+			guard.jump(arm64.HS)
 		case ssa.PrimitiveBoolean:
 			yes := c.a.NewLabel()
 			c.movImm(a64B, c.enc.True)
@@ -8850,12 +8870,12 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 			c.a.BCond(arm64.EQ, yes)
 			c.movImm(a64B, c.enc.False)
 			c.a.Cmp(w, a64B, true)
-			guard(arm64.NE)
+			guard.jump(arm64.NE)
 			c.a.Bind(yes)
 		default:
 			c.movImm(a64B, c.enc.String)
 			c.a.Cmp(w, a64B, true)
-			guard(arm64.NE)
+			guard.jump(arm64.NE)
 			c.a.Load(a64A, a64Ctx, abi.OffStringMethods)
 			c.a.Cbz(a64A, c.stubLabel(v.State, exitKind(v.Aux)), true)
 		}
@@ -8865,12 +8885,12 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.Load(a64B, a64A, c.enc.ObjectShape)
 		c.movImm(a64C, v.Const.Bits)
 		c.a.Cmp(a64B, a64C, true)
-		guard(arm64.NE)
+		guard.jump(arm64.NE)
 		c.a.Load(a64B, a64A, c.enc.ObjectShape)
 		c.a.Load(a64B, a64B, c.enc.ShapeKeys)
 		c.a.LoadU32(a64B, a64B, int32(v.Index)*c.enc.KeySize+c.enc.PropertyKey)
 		c.a.CmpImm(a64B, int64(v.Key), false)
-		guard(arm64.NE)
+		guard.jump(arm64.NE)
 		c.a.Load(a64A, a64A, c.enc.ObjectProps)
 		c.a.AddImm(a64A, a64A, int64(int32(v.Index)*c.enc.ValueSize), true)
 		c.setG(v, a64A)
@@ -8926,7 +8946,7 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 			// An element it does not find Go says is undefined, where it
 			// can (ssa.GoElemCell), but for a loop's (ssa.ElemPresent).
 			slow, stub := c.a.NewLabel(), c.stubLabel(v.State, exitKind(v.Aux))
-			fail = func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+			fail = a64GuardLabel(c, slow)
 			c.cold = append(c.cold, func() {
 				c.a.Bind(slow)
 				size := int32(unsafe.Sizeof(abi.GoArg{}))
@@ -8970,7 +8990,7 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 				c.a.B(done)
 			})
 		}
-		fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+		fail := a64GuardLabel(c, slow)
 		c.cold = append(c.cold, func() {
 			c.a.Bind(typed)
 			c.typedWrite(v, done, slow, func() arm64.FReg { return c.fpr(v.Args[2], a64F0) })
@@ -9125,7 +9145,7 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 
 // truth computes JavaScript truthiness for the kinds the slot IR decides it
 // for, exiting for the rest.
-func (c *a64Compiler) truth(v *ssa.Value, guard func(arm64.Cond), to *a64Target) {
+func (c *a64Compiler) truth(v *ssa.Value, guard a64Guard, to *a64Target) {
 	r := c.gpr(v.Args[0], a64B)
 	t := c.tests(to, false)
 	number, yes, no := c.a.NewLabel(), t.yes, t.no
@@ -9176,7 +9196,7 @@ func (c *a64Compiler) truth(v *ssa.Value, guard func(arm64.Cond), to *a64Target)
 	}
 	c.movImm(a64A, c.enc.String)
 	c.a.Cmp(r, a64A, true)
-	guard(arm64.NE)
+	guard.jump(arm64.NE)
 	if c.reference(v, v.Args[0], c.enc.String, guard) {
 		c.a.Load(a64A, a64C, c.enc.StringLength)
 		c.a.Cbnz(a64A, yes, true)

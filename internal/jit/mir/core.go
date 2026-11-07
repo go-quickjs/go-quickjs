@@ -85,8 +85,12 @@ type core struct {
 	// calls are the descriptions of the native calls' states (callState),
 	// which the code keeps (Code.Calls); goCalls its calls of Go's
 	// (goState).
-	calls   []*abi.CallState
-	goCalls []*abi.GoCallState
+	calls []*abi.CallState
+	// callSlab is where the calls' states are carved from, as exitDescs,
+	// and cs what their records are built with.
+	callSlab []abi.CallState
+	cs       *callScratch
+	goCalls  []*abi.GoCallState
 	// keepRuns marks, by value ID, the first (keepFirst) and the last
 	// (keepLast) of each run of keeps (ssa's OpKeep) one after another in
 	// a block: the keeps a store or a call makes (ssa's keepAcrossStores),
@@ -447,10 +451,14 @@ type schedule struct {
 // allocates it, with the architecture's allocatable registers.
 func prepare(w *Workspace, f *ssa.Func, enc abi.Encoding, opts Options, gprs, fprs []int) (*core, error) {
 	f.Finish()
-	c := &core{f: f, enc: enc, opts: opts, gprs: gprs, fprs: fprs, ws: w}
-	c.sched = &c.own
+	var c *core
 	if w != nil {
-		c.sched = &w.sched
+		c = &w.core
+		*c = core{f: f, enc: enc, opts: opts, gprs: gprs, fprs: fprs, ws: w, sched: &w.sched, cs: &w.calls}
+		c.cs.records = c.cs.records[:0]
+	} else {
+		c = &core{f: f, enc: enc, opts: opts, gprs: gprs, fprs: fprs, cs: new(callScratch)}
+		c.sched = &c.own
 	}
 	if enc.ValueSize != 16 {
 		// Slots and elements are found by shifting an index by four.
@@ -2887,9 +2895,13 @@ type callRecord struct {
 // come first.
 func (c *core) callState(v *ssa.Value, s *ssa.FrameState, skip func(int) bool, operands int) (*abi.CallState, []callRecord) {
 	saves := c.savesOf(v)
-	st := &abi.CallState{PC: uint32(s.PC), Depth: uint32(s.Depth), Site: int32(s.Site), Frame: c.exitLayout()}
-	var refs, rest []callRecord
-	var refRecs, restRecs []abi.CallRecord
+	if len(c.callSlab) == cap(c.callSlab) {
+		c.callSlab = make([]abi.CallState, 0, max(min(2*cap(c.callSlab), 32), 4))
+	}
+	c.callSlab = append(c.callSlab, abi.CallState{PC: uint32(s.PC), Depth: uint32(s.Depth), Site: int32(s.Site), Frame: c.exitLayout()})
+	st := &c.callSlab[len(c.callSlab)-1]
+	cs := c.cs
+	refs, rest, refRecs, restRecs := cs.refs[:0], cs.rest[:0], cs.refRecs[:0], cs.restRecs[:0]
 	for _, ix := range c.f.Present(s) {
 		i, x := int(ix), s.Slots[ix]
 		if x.Op == ssa.OpLoadSlot && x.Aux == i || c.captured(i) || skip(i) {
@@ -2923,9 +2935,26 @@ func (c *core) callState(v *ssa.Value, s *ssa.FrameState, skip func(int) bool, o
 			rest, restRecs = append(rest, r), append(restRecs, rec)
 		}
 	}
-	st.Records = append(refRecs, restRecs...)
+	cs.refs, cs.rest, cs.refRecs, cs.restRecs = refs, rest, refRecs, restRecs
+	start := len(cs.records)
+	cs.records = append(append(cs.records, refRecs...), restRecs...)
+	st.Records = cs.records[start:len(cs.records):len(cs.records)]
 	c.calls = append(c.calls, st)
-	return st, append(refs, rest...)
+	cs.out = append(append(cs.out[:0], refs...), rest...)
+	return st, cs.out
+}
+
+// finishCalls gives the code's calls' records an array of their own, as
+// long as all they hold: they are built in the workspace, as a call's
+// state's address is in the code but not its records'.
+func (c *core) finishCalls() {
+	all := make([]abi.CallRecord, len(c.cs.records))
+	off := 0
+	for _, st := range c.calls {
+		n := copy(all[off:], st.Records)
+		st.Records = all[off : off+n : off+n]
+		off += n
+	}
 }
 
 // goState describes a call of Go, op, with Go's result to keep cell keep
@@ -3114,6 +3143,7 @@ func (c *core) stableSlot(o int) bool {
 // of their own, as long as what they hold: grown by doubling, they could
 // hold twice that, for as long as the code lives.
 func (c *core) finishExits() {
+	c.finishCalls()
 	if f := c.exitFrame; f != nil {
 		if w := c.ws; w != nil {
 			// Its buffers, for the next compile.

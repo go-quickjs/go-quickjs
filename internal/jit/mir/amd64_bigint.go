@@ -19,10 +19,10 @@ func (c *compiler) bigHighBits() uint8 { return 64 - c.enc.ShortBigLowBits }
 // bigSourceWord puts the pointer word of x, a tagged value, in scratchB,
 // read where it came from (keepSource), exiting where it has no source.
 // It takes scratchA and scratchC.
-func (c *compiler) bigSourceWord(x *ssa.Value, guard func(amd64.Cond)) {
+func (c *compiler) bigSourceWord(x *ssa.Value, guard guardTo) {
 	c.keepSource(x)
 	c.a.Op(amd64.Test, scratchC, scratchC, true)
-	guard(amd64.CondE)
+	guard.jump(amd64.CondE)
 	c.a.Load(scratchB, scratchC, c.enc.RefOffset)
 }
 
@@ -52,7 +52,7 @@ func (c *compiler) bigJoin(x *ssa.Value) {
 // OpBigUnboxU64), which it guards: held in the value in the int64 range,
 // its high bits below 2^14, its sign clear; or past it, its 16 high bits
 // below 2^15, the 65th, the sign's, clear.
-func (c *compiler) bigUnboxU64(v *ssa.Value, guard func(amd64.Cond)) {
+func (c *compiler) bigUnboxU64(v *ssa.Value, guard guardTo) {
 	x := v.Args[0]
 	wide, join := c.a.NewLabel(), c.a.NewLabel()
 	c.bigSourceWord(x, guard)
@@ -62,15 +62,15 @@ func (c *compiler) bigUnboxU64(v *ssa.Value, guard func(amd64.Cond)) {
 	c.movImm(scratchA, c.enc.ShortBigHigh)
 	c.a.Op(amd64.Sub, scratchB, scratchA, true)
 	c.a.OpImm(amd64.Cmp, scratchB, 1<<(c.bigHighBits()-1), true)
-	guard(amd64.CondAE)
+	guard.jump(amd64.CondAE)
 	c.a.Jmp(join)
 	c.a.Bind(wide)
 	c.a.OpImm(amd64.Cmp, scratchA, int32(c.enc.ShortBigWideTag>>c.enc.ShortBigLowBits), true)
-	guard(amd64.CondNE)
+	guard.jump(amd64.CondNE)
 	c.movImm(scratchA, c.enc.ShortBigWideHigh)
 	c.a.Op(amd64.Sub, scratchB, scratchA, true)
 	c.a.OpImm(amd64.Cmp, scratchB, 1<<c.bigHighBits(), true)
-	guard(amd64.CondAE)
+	guard.jump(amd64.CondAE)
 	c.a.Bind(join)
 	c.bigJoin(x)
 	c.setG(v, scratchB)
@@ -80,7 +80,7 @@ func (c *compiler) bigUnboxU64(v *ssa.Value, guard func(amd64.Cond)) {
 // OpBigLow), which it guards to be one: held in the value, either way --
 // its 64 or 65 bits' low 64 -- or, out of line, on the heap, its first
 // digit's word, negated if it is below zero.
-func (c *compiler) bigLow(v *ssa.Value, guard func(amd64.Cond)) {
+func (c *compiler) bigLow(v *ssa.Value, guard guardTo) {
 	x := v.Args[0]
 	wide, heap, join, done := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
 	c.bigSourceWord(x, guard)
@@ -102,7 +102,7 @@ func (c *compiler) bigLow(v *ssa.Value, guard func(amd64.Cond)) {
 	c.cold = append(c.cold, func() {
 		c.a.Bind(heap)
 		c.cmpWord(c.gpr(x, scratchA), c.enc.HeapBigTag)
-		guard(amd64.CondNE)
+		guard.jump(amd64.CondNE)
 		// Every BigInt on the heap is past 64 bits: two digits at least.
 		c.a.Load(scratchA, scratchB, 0)
 		c.a.Load(scratchB, scratchB, c.enc.BigDigits)
@@ -152,7 +152,7 @@ func (c *compiler) bigBoxWords(v *ssa.Value) {
 
 // bigWord makes the words' operators of ssa's bigint.go, which exit
 // nowhere, and the checked ones, which do; and reports whether v is one.
-func (c *compiler) bigWord(v *ssa.Value, guard func(amd64.Cond)) bool {
+func (c *compiler) bigWord(v *ssa.Value, guard guardTo) bool {
 	arg := func(i int) *ssa.Value { return v.Args[i] }
 	into := func(x *ssa.Value) {
 		if r := c.gpr(x, scratchA); r != scratchA {
@@ -167,7 +167,7 @@ func (c *compiler) bigWord(v *ssa.Value, guard func(amd64.Cond)) bool {
 	case ssa.OpBigSign:
 		x := c.gpr(arg(0), scratchA)
 		c.a.Op(amd64.Test, x, x, true)
-		guard(amd64.CondS)
+		guard.jump(amd64.CondS)
 		c.setG(v, x)
 	case ssa.OpAddW, ssa.OpSubW, ssa.OpAndW, ssa.OpOrW, ssa.OpXorW, ssa.OpAddU64, ssa.OpSubU64:
 		into(arg(0))
@@ -177,7 +177,7 @@ func (c *compiler) bigWord(v *ssa.Value, guard func(amd64.Cond)) bool {
 		c.a.Op(op, scratchA, y, true)
 		if v.Op == ssa.OpAddU64 || v.Op == ssa.OpSubU64 {
 			// A carry or a borrow: past 0 to 2^64-1.
-			guard(amd64.CondB)
+			guard.jump(amd64.CondB)
 		}
 		c.setG(v, scratchA)
 	case ssa.OpMulW:
@@ -191,7 +191,7 @@ func (c *compiler) bigWord(v *ssa.Value, guard func(amd64.Cond)) bool {
 		c.a.MovRR(scratchC, regStack)
 		c.a.Load(regStack, regCtx, abi.OffStack)
 		c.a.Op(amd64.Test, scratchC, scratchC, true)
-		guard(amd64.CondNE)
+		guard.jump(amd64.CondNE)
 		c.setG(v, scratchA)
 	case ssa.OpShlW, ssa.OpShrW, ssa.OpSarW:
 		into(arg(0))
@@ -223,7 +223,7 @@ func (c *compiler) bigWord(v *ssa.Value, guard func(amd64.Cond)) bool {
 			c.a.MovRR(scratchB, scratchA)
 			c.a.ShiftImm(back, scratchB, n, true)
 			c.a.Op(amd64.Cmp, scratchB, c.gpr(arg(0), scratchC), true)
-			guard(amd64.CondNE)
+			guard.jump(amd64.CondNE)
 		}
 		c.setG(v, scratchA)
 	case ssa.OpDivI64, ssa.OpModI64, ssa.OpDivU64, ssa.OpModU64:
@@ -235,8 +235,8 @@ func (c *compiler) bigWord(v *ssa.Value, guard func(amd64.Cond)) bool {
 		c.a.Cvttsd2si(scratchA, x)
 		c.a.Cvtsi2sd(xScratch2, scratchA, true)
 		c.a.SSEOp(amd64.UcomiSD, xScratch2, x)
-		guard(amd64.CondNE)
-		guard(amd64.CondP)
+		guard.jump(amd64.CondNE)
+		guard.jump(amd64.CondP)
 		c.setG(v, scratchA)
 	default:
 		return false
@@ -249,14 +249,14 @@ func (c *compiler) bigWord(v *ssa.Value, guard func(amd64.Cond)) bool {
 // most negative int64 over -1: the remainder of anything over -1 is 0,
 // which IDIV would fault at. IDIV and DIV take RDX, the operands' base,
 // which is read again after them.
-func (c *compiler) bigDivide(v *ssa.Value, guard func(amd64.Cond)) {
+func (c *compiler) bigDivide(v *ssa.Value, guard guardTo) {
 	signed := v.Op == ssa.OpDivI64 || v.Op == ssa.OpModI64
 	mod := v.Op == ssa.OpModI64 || v.Op == ssa.OpModU64
 	if y := c.gpr(v.Args[1], scratchC); y != scratchC {
 		c.a.MovRR(scratchC, y)
 	}
 	c.a.Op(amd64.Test, scratchC, scratchC, true)
-	guard(amd64.CondE)
+	guard.jump(amd64.CondE)
 	if r := c.gpr(v.Args[0], scratchA); r != scratchA {
 		c.a.MovRR(scratchA, r)
 	}
@@ -283,7 +283,7 @@ func (c *compiler) bigDivide(v *ssa.Value, guard func(amd64.Cond)) {
 			// -x, which only the most negative int64 overflows.
 			c.a.Op(amd64.Xor, scratchB, scratchB, false)
 			c.a.Op(amd64.Sub, scratchB, scratchA, true)
-			guard(amd64.CondO)
+			guard.jump(amd64.CondO)
 			c.a.MovRR(scratchA, scratchB)
 		}
 		c.a.Bind(done)
@@ -297,12 +297,12 @@ func (c *compiler) bigDivide(v *ssa.Value, guard func(amd64.Cond)) {
 // bit above makes, whose power is past it too, but for a base of -1, 0 or
 // 1, whose squares are 1 and 0. The power in scratchA, the base in
 // scratchB, the exponent in scratchC.
-func (c *compiler) bigPower(v *ssa.Value, guard func(amd64.Cond)) {
+func (c *compiler) bigPower(v *ssa.Value, guard guardTo) {
 	if y := c.gpr(v.Args[1], scratchC); y != scratchC {
 		c.a.MovRR(scratchC, y)
 	}
 	c.a.Op(amd64.Test, scratchC, scratchC, true)
-	guard(amd64.CondS)
+	guard.jump(amd64.CondS)
 	if x := c.gpr(v.Args[0], scratchB); x != scratchB {
 		c.a.MovRR(scratchB, x)
 	}
@@ -314,7 +314,7 @@ func (c *compiler) bigPower(v *ssa.Value, guard func(amd64.Cond)) {
 	c.a.ShiftImm(amd64.Shr, scratchC, 1, true)
 	c.a.Jcc(amd64.CondAE, skip)
 	c.a.Imul(scratchA, scratchB)
-	guard(amd64.CondO)
+	guard.jump(amd64.CondO)
 	c.a.Op(amd64.Test, scratchC, scratchC, true)
 	c.a.Jcc(amd64.CondE, done)
 	c.a.Jmp(square)
@@ -322,7 +322,7 @@ func (c *compiler) bigPower(v *ssa.Value, guard func(amd64.Cond)) {
 	c.a.Jcc(amd64.CondE, done)
 	c.a.Bind(square)
 	c.a.Imul(scratchB, scratchB)
-	guard(amd64.CondO)
+	guard.jump(amd64.CondO)
 	c.a.Jmp(loop)
 	c.a.Bind(done)
 	c.setG(v, scratchA)
@@ -385,14 +385,14 @@ func (c *compiler) bigRebox(v *ssa.Value) amd64.Reg {
 // (ssa.OpBigElemRead), its Type's word: the view in its buffer, the key
 // an integer below its length, as typedElement finds them, and the view's
 // element type the one its Type reads; anything else fails.
-func (c *compiler) bigElemRead(v *ssa.Value, fail func(amd64.Cond)) {
+func (c *compiler) bigElemRead(v *ssa.Value, fail guardTo) {
 	c.typedElement(v.Args[0], v.Args[1], false, fail)
 	kind := int32(abi.ElemBigInt64)
 	if v.Type == ssa.Uint64 {
 		kind = abi.ElemBigUint64
 	}
 	c.a.OpImm(amd64.Cmp, scratchC, kind, false)
-	fail(amd64.CondNE)
+	fail.jump(amd64.CondNE)
 	c.a.ShiftImm(amd64.Shl, scratchA, 3, true)
 	c.a.Op(amd64.Add, scratchA, scratchB, true)
 	d := c.gdst(v)
@@ -405,14 +405,14 @@ func (c *compiler) bigElemRead(v *ssa.Value, fail func(amd64.Cond)) {
 // its bytes writable, the key an integer below its length, as
 // typedElement finds them, and the view's element type the one Index
 // names; anything else fails.
-func (c *compiler) bigElemWrite(v *ssa.Value, fail func(amd64.Cond)) {
+func (c *compiler) bigElemWrite(v *ssa.Value, fail guardTo) {
 	c.typedElement(v.Args[0], v.Args[1], true, fail)
 	kind := int32(abi.ElemBigInt64)
 	if v.Index == 1 {
 		kind = abi.ElemBigUint64
 	}
 	c.a.OpImm(amd64.Cmp, scratchC, kind, false)
-	fail(amd64.CondNE)
+	fail.jump(amd64.CondNE)
 	c.a.ShiftImm(amd64.Shl, scratchA, 3, true)
 	c.a.Op(amd64.Add, scratchA, scratchB, true)
 	c.a.Store(scratchA, 0, c.gpr(v.Args[2], scratchB))

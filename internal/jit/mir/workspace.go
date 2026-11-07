@@ -31,6 +31,10 @@ type Workspace struct {
 	locs      arena.Arena[loc]
 	saved     arena.Arena[saved]
 	sched     schedule
+	// core is the compile's analysis, here for the size of it, and calls
+	// the lists its calls' states are built from.
+	core  core
+	calls callScratch
 	// xuses is allocate's list of uses in other blocks, kept from compile
 	// to compile, and gpool its room for the phis' groups' members; of
 	// each, what the last compile used.
@@ -57,6 +61,7 @@ type Workspace struct {
 	// CompileIn are the assembler's: they hold until the workspace's next
 	// compile.
 	amd64 struct {
+		c          compiler
 		a          amd64.Asm
 		labels     []amd64.Label
 		stubs      map[stubKey]amd64.Label
@@ -67,6 +72,7 @@ type Workspace struct {
 		poolTab    []int32
 	}
 	arm64 struct {
+		c          a64Compiler
 		a          arm64.Asm
 		labels     []arm64.Label
 		stubs      map[stubKey]arm64.Label
@@ -79,6 +85,14 @@ type Workspace struct {
 	budgetStack []*ssa.Block
 	budgets     []budget
 	budgetVals  []ssa.Value
+}
+
+// callScratch is what the states of a compile's calls are built with: the
+// records of one call as callState sorts them, and all of them so far
+// (core's finishCalls).
+type callScratch struct {
+	refs, rest, out            []callRecord
+	refRecs, restRecs, records []abi.CallRecord
 }
 
 // clearFuncs empties fs, dropping the closures it held, for reuse.
@@ -114,6 +128,7 @@ func (w *Workspace) init() {
 func (w *Workspace) Bytes() int {
 	n := w.bools.Bytes() + w.ints.Bytes() + w.int32s.Bytes() + w.words.Bytes() + w.sets.Bytes() + w.values.Bytes() + w.blocks.Bytes() +
 		w.intervals.Bytes() + w.recs.Bytes() + w.gms.Bytes() + w.ivRefs.Bytes() + w.locs.Bytes() + w.saved.Bytes()
+	n += capBytes(w.calls.refs) + capBytes(w.calls.rest) + capBytes(w.calls.out) + capBytes(w.calls.refRecs) + capBytes(w.calls.restRecs) + capBytes(w.calls.records)
 	n += capBytes(w.sched.moves) + capBytes(w.sched.steps) + capBytes(w.sched.parked) + capBytes(w.sched.readers) + capBytes(w.xuses) + capBytes(w.states) + capBytes(w.kv) + capBytes(w.gpool)
 	n += w.amd64.a.Bytes() + capBytes(w.amd64.labels) + capBytes(w.amd64.stubFor) + capBytes(w.amd64.cold) + capBytes(w.amd64.pool) + capBytes(w.amd64.poolTab)
 	n += w.arm64.a.Bytes() + capBytes(w.arm64.labels) + capBytes(w.arm64.stubFor) + capBytes(w.arm64.cold)
@@ -145,6 +160,7 @@ func (w *Workspace) Rewind() {
 	w.ivRefs.Rewind()
 	w.locs.Rewind()
 	w.saved.Rewind()
+	w.core, w.amd64.c, w.arm64.c = core{}, compiler{}, a64Compiler{}
 	// The scratch tables -- the move schedule's, the uses', the groups',
 	// the exit descriptions' and the assemblers' -- go once they hold more
 	// than twice what any of the recent compiles used of them, as the
@@ -159,6 +175,7 @@ func (w *Workspace) Rewind() {
 	w.needs[w.next], w.next, w.known = used, (w.next+1)%len(w.needs), min(w.known+1, len(w.needs))
 	if w.Bytes()-w.arenaBytes() > 2*keep {
 		w.sched, w.xuses, w.states, w.kv, w.gpool, w.xusesUsed, w.gpoolUsed = schedule{}, nil, nil, nil, nil, 0, 0
+		w.calls = callScratch{}
 		w.exitWords = nil
 		w.exitSlotsBuf, w.exitIndexBuf, w.exitWordsBuf, w.exitHeadBuf, w.exitNextBuf = nil, nil, nil, nil, nil
 		w.amd64.a, w.amd64.labels, w.amd64.stubs, w.amd64.stubFor, w.amd64.cold, w.amd64.pool, w.amd64.poolTab = amd64.Asm{}, nil, nil, nil, nil, nil, nil
