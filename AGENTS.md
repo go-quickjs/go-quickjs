@@ -488,6 +488,24 @@ runs as.
 go run ./internal/cmd/disasm -tree -func global_read bench.js
 ```
 
+`internal/cmd/compilediff` compares what the front end makes at two
+revisions, for every `.js` file of the directories it is given, as a script,
+strict, a module, for a debugger, with Node's quirks and as an eval's code:
+every field of every function, its constants, each instruction's position,
+the line table's answers, and a rejected program's exact error. `-mutants N`
+adds N mutations of each file. It prints the first difference by file, mode,
+function and line. The same output means a change to the lexer, the parser or
+the compiler changes nothing a program that compiles does, nor what the JIT is
+given, so it needs only what the comparison cannot see, not all of the above:
+the packages' tests and a plain test262 run for programs that must be rejected
+and that its directories do not have, and the race detector for what is made
+lazily, as the line table is. It says nothing of concurrency, of what the
+output keeps alive, or of time.
+
+```sh
+go run ./internal/cmd/compilediff -base origin/main -mutants 8 /tmp/octane /tmp/test262/test
+```
+
 A change that keeps memory longer shows in neither: compare the conformance
 run's peak memory as well, which is how a cache that outlived its objects was
 caught.
