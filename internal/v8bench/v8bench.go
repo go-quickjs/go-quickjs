@@ -125,6 +125,12 @@ func Main(name string, e Engine) {
 			src[f] = string(b)
 		}
 	}
+	// A binary that can write a memory profile samples allocations from its
+	// start, each sample walking the stack, the interpreter's deep one here:
+	// a 65 KB string stringified had paid 3.5 of its 10.5 microseconds for
+	// that, which no program that embeds the engine does. Only -memprofile
+	// asks for them.
+	runtime.MemProfileRate = 0
 	if *mem != "" {
 		runtime.MemProfileRate = 64 * 1024
 	}
