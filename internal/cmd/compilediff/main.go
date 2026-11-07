@@ -27,6 +27,23 @@
 //
 // Each function is written out after the next compile has been made, so that
 // a value left sharing a buffer the next compile reuses shows as a difference.
+//
+// native compares two runs of v8bench's -jitcode, made with -jitheld, which
+// holds the JIT's clocks and turns the collector off so that a program makes
+// the same compiles on two builds, and adds to each compile what arm64's
+// backend makes of it, which is not run. Code that is the same but for
+// addresses, its marks, its SSA, spills, and its exits' and calls'
+// descriptions are compared, and the first compile that differs is printed:
+//
+//	go build -tags quickjs_jit -o base.exe ./internal/cmd/v8bench    # at the base
+//	go build -tags quickjs_jit -o change.exe ./internal/cmd/v8bench  # at the change
+//	base.exe -jit -jitheld -jitcode base.jsonl -bench awfy -dir /tmp/awfy -mode fixed -n 1
+//	change.exe -jit -jitheld -jitcode change.jsonl -bench awfy -dir /tmp/awfy -mode fixed -n 1
+//	go run ./internal/cmd/compilediff native base.jsonl change.jsonl
+//
+// Math.random is seeded anew for each run, so a program it steers, as Octane's
+// Crypto and Typescript are, does not compile the same from one run to the
+// next. native -any compares such runs function by function, in no order.
 package main
 
 import (
@@ -48,7 +65,7 @@ func main() {
 	cmd := ""
 	if len(args) > 0 {
 		switch args[0] {
-		case "dump", "diff", "show":
+		case "dump", "diff", "show", "native":
 			cmd, args = args[0], args[1:]
 		}
 	}
@@ -61,6 +78,16 @@ func main() {
 			break
 		}
 		same, err = diffFiles(args[0], args[1], os.Stdout)
+	case "native":
+		compare := compareNative
+		if len(args) > 0 && args[0] == "-any" {
+			compare, args = compareNativeAnyOrder, args[1:]
+		}
+		if len(args) != 2 {
+			err = errors.New("native takes two -jitcode files")
+			break
+		}
+		same, err = compare(args[0], args[1], os.Stdout)
 	default:
 		same, err = run(cmd, args)
 	}

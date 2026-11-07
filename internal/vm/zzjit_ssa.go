@@ -2756,6 +2756,11 @@ func (r *Runtime) jitCompileAgain(fn *bytecode.Function, cl *closure, p *ir.Prog
 	if t := mir.Timing; t != nil {
 		t.Lap(mir.PhaseOptimize)
 	}
+	if JITCrossHook != nil {
+		code, err := mir.CompileARM64(f, jitEncoding)
+		JITCrossHook(jitFunctionOf(fn), code, err)
+		return
+	}
 	mir.CompileIn(&w.MIR, f, jitEncoding)
 }
 

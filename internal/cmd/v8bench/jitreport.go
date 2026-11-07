@@ -4,16 +4,21 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"cmp"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"os"
+	"regexp"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/hostaccess"
 	"github.com/go-quickjs/go-quickjs/internal/jit"
+	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 	"github.com/go-quickjs/go-quickjs/internal/jit/mir"
 	"github.com/go-quickjs/go-quickjs/internal/v8bench"
 	"github.com/go-quickjs/go-quickjs/internal/vm"
@@ -43,6 +48,12 @@ func reportStart(r runtimeOf) {
 	}
 	if *jitCodeFlag != "" && vm.JITCodeHook == nil {
 		startCodeDump(*jitCodeFlag)
+	}
+	if *jitHeldFlag && vm.JITCompileRepeat == 0 {
+		// Held for the first runtime: the arm64 compiles are its repeats.
+		debug.SetGCPercent(-1)
+		vm.JITHoldClocks()
+		vm.JITCompileRepeat = 1
 	}
 	if *jitTimeFlag > 0 && mir.Timing == nil {
 		mir.Timing = &mir.Times{Clock: func() int64 { return int64(v8bench.Clock()) }}
@@ -88,7 +99,40 @@ type jitCode struct {
 	// Spills counts the values the allocation spilled (mir.Code's
 	// Spilled).
 	Spills int
+	// Arch is arm64 for what -jitheld's repeated compile made for arm64
+	// (vm.JITCrossHook), which has no Marks, and otherwise empty. States
+	// hashes what the code's calls and exits are described by, and its
+	// entries, with addresses left out (codeStates).
+	Arch   string `json:",omitempty"`
+	States string
 }
+
+// codeStates is a hash of what c's code is described by. Numbers that may
+// be addresses are left out, and an empty list is a nil one.
+func codeStates(c *mir.Code) string {
+	b, err := json.Marshal(struct {
+		Entries                     map[int]int
+		CallEntry, Resume, GenEntry int
+		CallRefs                    int
+		Calls                       []*abi.CallState
+		GoCalls                     []*abi.GoCallState
+		Exits                       []*abi.ExitDescriptor
+	}{c.Entries, c.CallEntry, c.Resume, c.GenEntry, c.CallRefs, c.Calls, c.GoCalls, c.Exits})
+	if err != nil {
+		return err.Error()
+	}
+	s := addressLike.ReplaceAllFunc(b, func(n []byte) []byte {
+		if v, err := strconv.ParseUint(string(n), 10, 64); err == nil && v >= 1<<32 && v < 1<<47 {
+			return []byte("0")
+		}
+		return n
+	})
+	h := fnv.New64a()
+	h.Write(bytes.ReplaceAll(s, []byte("null"), []byte("[]")))
+	return strconv.FormatUint(h.Sum64(), 16)
+}
+
+var addressLike = regexp.MustCompile(`[0-9]{10,15}`)
 
 // startCodeDump has the JIT write every function's code to path as it is
 // compiled, a JSON line each, until the process exits.
@@ -105,6 +149,9 @@ func startCodeDump(path string) {
 	vm.JITCodeHook = func(fn vm.JITFunction, text []byte, c *mir.Code) {
 		seq++
 		rec := jitCode{Seq: seq, Name: fn.Name, Script: fn.Script, Line: fn.Line, Text: c.Text, Bytes: text, Marks: c.Marks, Listing: c.Listing, Spills: c.Spilled()}
+		if *jitHeldFlag {
+			rec.States = codeStates(c)
+		}
 		if len(text) > 0 {
 			rec.Addr = uint64(uintptr(unsafe.Pointer(&text[0])))
 		}
@@ -115,6 +162,22 @@ func startCodeDump(path string) {
 		// Flushed at each, so that what a run that ends by os.Exit wrote
 		// is all there.
 		w.Flush()
+	}
+	if *jitHeldFlag {
+		vm.JITCrossHook = func(fn vm.JITFunction, c *mir.Code, err error) {
+			seq++
+			rec := jitCode{Seq: seq, Name: fn.Name, Script: fn.Script, Line: fn.Line, Arch: "arm64"}
+			if err != nil {
+				rec.Listing = err.Error()
+			} else {
+				rec.Text, rec.Bytes, rec.States = c.Text, c.Bytes, codeStates(c)
+			}
+			if err := enc.Encode(rec); err != nil {
+				fmt.Fprintln(os.Stderr, "v8bench: -jitcode:", err)
+				os.Exit(1)
+			}
+			w.Flush()
+		}
 	}
 }
 

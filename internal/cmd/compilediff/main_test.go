@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/binary"
 	"io"
 	"math/rand/v2"
 	"os"
@@ -109,5 +110,51 @@ func TestFirstDifference(t *testing.T) {
 	}
 	if got := firstDifference(a, a); got != "no difference\n" {
 		t.Errorf("firstDifference(a, a) = %q", got)
+	}
+}
+
+// TestNativeCompare pins what native takes for the same: code that differs
+// in addresses alone, in amd64's words and arm64's movz and movk.
+func TestNativeCompare(t *testing.T) {
+	addr := func(v uint64) []byte { return binary.LittleEndian.AppendUint64([]byte{0x48, 0xb8}, v) }
+	inst := func(vs ...uint32) []byte {
+		var b []byte
+		for _, v := range vs {
+			b = binary.LittleEndian.AppendUint32(b, v)
+		}
+		return b
+	}
+	arm := func(vs ...uint32) nativeRecord {
+		b := inst(vs...)
+		return nativeRecord{Arch: "arm64", Bytes: b, Text: len(b)}
+	}
+	const movz, movk, high = 0xD2800000, 0xF2A00000, 0xF2C00000
+	for _, tc := range []struct {
+		name string
+		p, q nativeRecord
+		same bool
+	}{
+		{"address", nativeRecord{Bytes: addr(0xc000123456), Text: 10}, nativeRecord{Bytes: addr(0xc000654321), Text: 10}, true},
+		{"constant", nativeRecord{Bytes: addr(7), Text: 10}, nativeRecord{Bytes: addr(8), Text: 10}, false},
+		{"not a movabs", nativeRecord{Bytes: append([]byte{0x90, 0x90}, addr(0xc000123456)[2:]...), Text: 10},
+			nativeRecord{Bytes: append([]byte{0x90, 0x90}, addr(0xc000654321)[2:]...), Text: 10}, false},
+		{"length", nativeRecord{Bytes: []byte{1}}, nativeRecord{Bytes: []byte{1, 2}}, false},
+		{"listing", nativeRecord{Listing: "v1 = 0x123456 + 1"}, nativeRecord{Listing: "v1 = 0x654321 + 2"}, false},
+		{"listing's address", nativeRecord{Listing: "v1 = 0x123456"}, nativeRecord{Listing: "v1 = 0x654321"}, true},
+		{"states", nativeRecord{States: "a"}, nativeRecord{States: "b"}, false},
+		{"another compile", nativeRecord{Name: "f"}, nativeRecord{Name: "g"}, false},
+		{"arm64 address", arm(movz|5<<5|1, movk|6<<5|1, high|1<<5|1), arm(movz|5<<5|1, high|1<<5|1, 0x91000421), false},
+		{"arm64 address's halves", arm(movz|5<<5|1, movk|6<<5|1, high|1<<5|1), arm(movz|7<<5|1, movk|8<<5|1, high|1<<5|1), true},
+		{"arm64 address's length", arm(0x14000004, movz|5<<5|1, movk|6<<5|1, high|1<<5|1, 0x91000421), arm(0x14000003, 0xD2A00000|6<<5|1, high|1<<5|1, 0x91000421), true},
+		{"arm64 register", arm(movz | 5<<5 | 1), arm(movz | 5<<5 | 2), false},
+		{"arm64 constant", arm(movz | 5<<5 | 1), arm(movz | 6<<5 | 1), false},
+		{"a compare's constant", nativeRecord{Bytes: []byte{0x41, 0x81, 0xfb, 0x94, 0, 0, 0}, Text: 7}, nativeRecord{Bytes: []byte{0x41, 0x81, 0xfb, 0x9f, 0, 0, 0}, Text: 7}, false},
+		{"arm64 compare's constant", arm(0x7102521F), arm(0x71027E1F), false},
+		{"arm64 instruction", arm(0x91000421), arm(0x91000821), false},
+		{"arm64 branch", arm(0x14000002, 0x91000421, 0x91000821), arm(0x14000001, 0x91000421, 0x91000821), false},
+	} {
+		if got := differs(&tc.p, &tc.q); (got == "") != tc.same {
+			t.Errorf("%s: differs = %q", tc.name, got)
+		}
 	}
 }

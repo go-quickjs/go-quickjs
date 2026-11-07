@@ -45,6 +45,21 @@ type JITFunction struct {
 // it is called on the runtime's goroutine.
 var JITCodeHook func(f JITFunction, text []byte, code *mir.Code)
 
+// JITCrossHook, if set, is called for each compile JITCompileRepeat
+// repeats with what compiling it for arm64 made, on any machine: the code
+// is not run, which is how a change to arm64's backend is compared where
+// it cannot run. Set it before any runtime compiles.
+var JITCrossHook func(f JITFunction, code *mir.Code, err error)
+
+// JITHoldClocks stops the clocks the JIT's cache ages code by: what a run
+// compiles, and with what, then depends on the run alone if the collector
+// is off, which ends weak references' part in it, and two builds' code
+// can be compared compile by compile. Call it before any runtime compiles.
+func JITHoldClocks() {
+	jitEpochNow = func() uint64 { return 0 }
+	jitFlushNow = func() uint64 { return 0 }
+}
+
 // SetJITReport has the JIT note, for JITReport, the functions it does not
 // try to compile: too long, or too large for its memory. What it compiles
 // or refuses it keeps anyway.

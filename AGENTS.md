@@ -508,6 +508,29 @@ output keeps alive, or of time.
 go run ./internal/cmd/compilediff -base origin/main -mutants 8 /tmp/octane /tmp/test262/test
 ```
 
+`compilediff native` does the same for the JIT, over two builds' runs of a
+suite with `-jitheld`, which makes a program's compiles the same from one
+build to the next: it holds the clocks the JIT's cache ages code by and turns
+the collector off, and without it some 20 of 1,300 compiles differ between two
+runs of one build. Each compile's code is compared but for addresses, with
+its marks, SSA listing, spills and the descriptions of its calls and exits;
+and what arm64's backend makes of each compile, on any machine, not run. The
+same code means a change to the JIT's compile path changes nothing a program
+does with the JIT, so it needs that package's tests and test262's JIT mode, not
+the benchmarks; it says nothing of what the compile keeps alive, or of
+compiling in the background. Math.random is seeded anew for each run and a
+program's clock is the machine's, so a program they steer -- Octane's Crypto
+and Typescript, the micro-benchmarks -- need `native -any`, which compares
+function by function in no order, and a control of the base against itself.
+
+```sh
+go build -tags quickjs_jit -o /tmp/base ./internal/cmd/v8bench    # at the base
+go build -tags quickjs_jit -o /tmp/change ./internal/cmd/v8bench  # at the change
+/tmp/base -jit -jitheld -jitcode /tmp/base.jsonl -bench awfy -dir /tmp/awfy -mode fixed -n 1
+/tmp/change -jit -jitheld -jitcode /tmp/change.jsonl -bench awfy -dir /tmp/awfy -mode fixed -n 1
+go run ./internal/cmd/compilediff native /tmp/base.jsonl /tmp/change.jsonl
+```
+
 A change that keeps memory longer shows in neither: compare the conformance
 run's peak memory as well, which is how a cache that outlived its objects was
 caught.
