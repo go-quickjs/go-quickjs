@@ -363,9 +363,18 @@ const (
 	// 215 of Octane's Gameboy emulator -- had a shape of its own each time,
 	// and every cache met a new shape with each.
 	maxShapeDepth = 1020
-	// maxShapeFanout is the most transitions out of one shape. More means
-	// keys chosen at run time, which a cache would not keep up with.
+	// maxShapeFanout is the most transitions out of a shape past its root.
+	// More means keys chosen at run time, which a cache would not keep up
+	// with.
 	maxShapeFanout = 64
+	// maxRootFanout is the most out of a root, V8's for any map
+	// (kMaxNumberOfTransitions). Objects of many kinds start from one root,
+	// JSON.parse's and new Object()'s from the same one, so that its first
+	// keys are the kinds of object a program has met: at 64 a program that
+	// had met 65 made no shared layout for any new one. Further along, the
+	// same limit kept the shapes of objects that are tables of keys, and
+	// the collector marked them: 650 ns to parse a new key where 64 took 586.
+	maxRootFanout = 1536
 	// maxShapes is the most shapes a tree holds.
 	maxShapes = 1 << 16
 	// fastPropertiesSoftLimit is how many properties a keyed store adds
@@ -860,7 +869,8 @@ func (s *shape) child(e shapeEdge) *shape {
 		}
 	}
 	t := s.tree
-	if s.n >= maxShapeDepth || t.count >= maxShapes && !reclaimShapes[struct{}](t) || len(s.more) >= maxShapeFanout {
+	if s.n >= maxShapeDepth || t.count >= maxShapes && !reclaimShapes[struct{}](t) ||
+		len(s.more) >= maxShapeFanout && (s.parent != nil || len(s.more) >= maxRootFanout) {
 		return nil
 	}
 	// A constructor's root may have a first transition that is no child of
