@@ -364,7 +364,9 @@ validating, tokenizing with a global and a sticky pattern, replacing by a
 template and by a function, splitting, matching every number, named
 groups, the u and i flags, a subject made just before, objects a loop
 carries from turn to turn and what keeping them out of the heap may cost --
-functions run once, loops left early or on most turns --
+functions run once, loops left early or on most turns -- JSON.parse and
+JSON.stringify, over records, numbers, strings, dictionaries, layouts
+that vary, with a reviver, a replacer and toJSON --
 written as
 its tests are: each test is given
 the same work every run -- what QuickJS takes about 150 ms for, the work

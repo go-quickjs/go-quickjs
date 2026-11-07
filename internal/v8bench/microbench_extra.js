@@ -4126,3 +4126,359 @@ function carried_stored(n)
     global_res = t;
     return n * 1000;
 }
+
+/* JSON.parse and JSON.stringify. Each document is made once, deterministically,
+   and a test's operation is an element of it: a record, a number, a string.
+   The first are what APIs send, an array of objects of one layout; the rest
+   are what a fast path can lose on: floats that take every digit, objects
+   used as dictionaries, layouts that change from one element to the next,
+   keys that are indices, a replacer or a toJSON for each value. */
+
+function extra_json_record(i)
+{
+    return { id: i, name: "item " + i, price: i * 1.25, active: (i & 1) == 0,
+             tags: ["a", "bb", "ccc"],
+             size: { width: i % 100, height: 20.5, depth: null } };
+}
+
+function extra_json_list(m, f)
+{
+    var i, a = [];
+    for (i = 0; i < m; i++)
+        a.push(f(i));
+    return a;
+}
+
+var extra_json_records = extra_json_list(100, extra_json_record);
+var extra_json_records_text = JSON.stringify(extra_json_records);
+
+var extra_json_small = { id: 7, name: "x", ok: true, list: [1, 2, 3] };
+var extra_json_small_text = JSON.stringify(extra_json_small);
+
+var extra_json_ints = extra_json_list(1000, function (i) { return i * 37; });
+var extra_json_ints_text = JSON.stringify(extra_json_ints);
+
+/* numbers of a few digits, as prices and coordinates are */
+var extra_json_decimals = extra_json_list(1000, function (i) { return i * 0.25 + 0.5; });
+var extra_json_decimals_text = JSON.stringify(extra_json_decimals);
+
+/* doubles that take all of their 17 digits */
+var extra_json_floats = extra_json_list(1000, function (i) { return Math.sqrt(i + 2) * 1e-3; });
+var extra_json_floats_text = JSON.stringify(extra_json_floats);
+
+var extra_json_strings = extra_json_list(1000, function (i) { return "a plain string " + i; });
+var extra_json_strings_text = JSON.stringify(extra_json_strings);
+
+/* strings where a third of the characters want an escape */
+var extra_json_escapes = extra_json_list(1000, function (i) { return "a\n\"b\"\tc\\" + i; });
+var extra_json_escapes_text = JSON.stringify(extra_json_escapes);
+
+var extra_json_unicode = extra_json_list(1000, function (i) {
+    return String.fromCharCode(0x4e2d, 0x6587, 0x5b57, 0x7b26, 0x20, 0xe9, 0x20) + i;
+});
+var extra_json_unicode_text = JSON.stringify(extra_json_unicode);
+
+var extra_json_long = (function () {
+    var i, s = "";
+    for (i = 0; i < 6554; i++)
+        s += "ten chars.";
+    return s;
+})();
+var extra_json_long_text = JSON.stringify(extra_json_long);
+
+/* one object of 1000 keys no other object has */
+var extra_json_dict = (function () {
+    var i, o = {};
+    for (i = 0; i < 1000; i++)
+        o["key" + (i * 7919)] = i;
+    return o;
+})();
+var extra_json_dict_text = JSON.stringify(extra_json_dict);
+
+/* many small objects, each with keys of its own */
+var extra_json_unique = extra_json_list(100, function (i) {
+    var o = {};
+    o["a" + i] = 1;
+    o["b" + i] = 2;
+    o["c" + i] = 3;
+    return o;
+});
+var extra_json_unique_text = JSON.stringify(extra_json_unique);
+
+/* objects of four layouts in turn, so that no object is laid out as the
+   one before it */
+var extra_json_varied = extra_json_list(100, function (i) {
+    switch (i & 3) {
+    case 0: return { id: i, name: "x" };
+    case 1: return { name: "x", id: i };
+    case 2: return { id: i, name: "x", extra: true };
+    default: return { kind: 1, id: i, name: "x" };
+    }
+});
+var extra_json_varied_text = JSON.stringify(extra_json_varied);
+
+/* objects laid out alike but for the key of their last property */
+var extra_json_last_differs = extra_json_list(100, function (i) {
+    var o = { id: i, name: "x", active: true };
+    o["k" + (i & 7)] = i;
+    return o;
+});
+var extra_json_last_differs_text = JSON.stringify(extra_json_last_differs);
+
+var extra_json_index_keys = extra_json_list(100, function (i) {
+    return { 3: i, 1: "x", 2: true };
+});
+var extra_json_index_keys_text = JSON.stringify(extra_json_index_keys);
+
+var extra_json_deep = (function () {
+    var i, v = 1;
+    for (i = 0; i < 64; i++)
+        v = i & 1 ? [v] : { v: v };
+    return v;
+})();
+var extra_json_deep_text = JSON.stringify(extra_json_deep);
+
+function ExtraJSONPoint(x, y)
+{
+    this.x = x;
+    this.y = y;
+}
+ExtraJSONPoint.prototype.norm = function () { return this.x + this.y; };
+
+/* instances of a class, whose methods stringify walks past */
+var extra_json_instances = extra_json_list(100, function (i) {
+    return new ExtraJSONPoint(i, i + 1);
+});
+
+function ExtraJSONStamp(t)
+{
+    this.t = t;
+}
+ExtraJSONStamp.prototype.toJSON = function () { return this.t; };
+
+var extra_json_stamps = extra_json_list(100, function (i) {
+    return new ExtraJSONStamp(i);
+});
+
+var extra_json_getters = extra_json_list(100, function (i) {
+    return { get id() { return i; }, name: "x" };
+});
+
+function extra_json_parse_test(n, text, each)
+{
+    var j, v;
+    for (j = 0; j < n; j++)
+        v = JSON.parse(text);
+    global_res = v;
+    return n * each;
+}
+
+function extra_json_stringify_test(n, v, each)
+{
+    var j, s;
+    for (j = 0; j < n; j++)
+        s = JSON.stringify(v);
+    global_res = s;
+    return n * each;
+}
+
+function json_parse_records(n) { return extra_json_parse_test(n, extra_json_records_text, 100); }
+function json_parse_small(n) { return extra_json_parse_test(n, extra_json_small_text, 1); }
+function json_parse_ints(n) { return extra_json_parse_test(n, extra_json_ints_text, 1000); }
+function json_parse_decimals(n) { return extra_json_parse_test(n, extra_json_decimals_text, 1000); }
+function json_parse_floats(n) { return extra_json_parse_test(n, extra_json_floats_text, 1000); }
+function json_parse_strings(n) { return extra_json_parse_test(n, extra_json_strings_text, 1000); }
+function json_parse_escapes(n) { return extra_json_parse_test(n, extra_json_escapes_text, 1000); }
+function json_parse_unicode(n) { return extra_json_parse_test(n, extra_json_unicode_text, 1000); }
+function json_parse_long(n) { return extra_json_parse_test(n, extra_json_long_text, 1); }
+function json_parse_dict(n) { return extra_json_parse_test(n, extra_json_dict_text, 1000); }
+function json_parse_unique(n) { return extra_json_parse_test(n, extra_json_unique_text, 100); }
+function json_parse_varied(n) { return extra_json_parse_test(n, extra_json_varied_text, 100); }
+function json_parse_last_differs(n) { return extra_json_parse_test(n, extra_json_last_differs_text, 100); }
+function json_parse_index_keys(n) { return extra_json_parse_test(n, extra_json_index_keys_text, 100); }
+function json_parse_deep(n) { return extra_json_parse_test(n, extra_json_deep_text, 64); }
+
+/* a key given twice, of which the last wins */
+function json_parse_duplicates(n)
+{
+    return extra_json_parse_test(n, '{"a":1,"b":2,"a":3,"c":4,"b":5}', 1);
+}
+
+/* a reviver's call for each value of a record */
+function json_parse_reviver(n)
+{
+    var j, v;
+    function keep(k, v) { return v; }
+    for (j = 0; j < n; j++)
+        v = JSON.parse(extra_json_records_text, keep);
+    global_res = v;
+    return n * 100;
+}
+
+/* each document made just before it is parsed, as one read from a socket is */
+function json_parse_fresh(n)
+{
+    var j, v;
+    for (j = 0; j < n; j++)
+        v = JSON.parse('{"id":' + j + ',"name":"x"}');
+    global_res = v;
+    return n;
+}
+
+function json_stringify_records(n) { return extra_json_stringify_test(n, extra_json_records, 100); }
+function json_stringify_small(n) { return extra_json_stringify_test(n, extra_json_small, 1); }
+function json_stringify_ints(n) { return extra_json_stringify_test(n, extra_json_ints, 1000); }
+function json_stringify_decimals(n) { return extra_json_stringify_test(n, extra_json_decimals, 1000); }
+function json_stringify_floats(n) { return extra_json_stringify_test(n, extra_json_floats, 1000); }
+function json_stringify_strings(n) { return extra_json_stringify_test(n, extra_json_strings, 1000); }
+function json_stringify_escapes(n) { return extra_json_stringify_test(n, extra_json_escapes, 1000); }
+function json_stringify_unicode(n) { return extra_json_stringify_test(n, extra_json_unicode, 1000); }
+function json_stringify_long(n) { return extra_json_stringify_test(n, extra_json_long, 1); }
+function json_stringify_dict(n) { return extra_json_stringify_test(n, extra_json_dict, 1000); }
+function json_stringify_unique(n) { return extra_json_stringify_test(n, extra_json_unique, 100); }
+function json_stringify_varied(n) { return extra_json_stringify_test(n, extra_json_varied, 100); }
+function json_stringify_last_differs(n) { return extra_json_stringify_test(n, extra_json_last_differs, 100); }
+function json_stringify_index_keys(n) { return extra_json_stringify_test(n, extra_json_index_keys, 100); }
+function json_stringify_deep(n) { return extra_json_stringify_test(n, extra_json_deep, 64); }
+function json_stringify_instances(n) { return extra_json_stringify_test(n, extra_json_instances, 100); }
+function json_stringify_tojson(n) { return extra_json_stringify_test(n, extra_json_stamps, 100); }
+function json_stringify_getters(n) { return extra_json_stringify_test(n, extra_json_getters, 100); }
+
+/* a Date's toJSON for each element */
+function json_stringify_dates(n)
+{
+    var j, s, a = [new Date(0), new Date(1e12)];
+    for (j = 0; j < n; j++)
+        s = JSON.stringify(a);
+    global_res = s;
+    return n * 2;
+}
+
+function json_stringify_indent(n)
+{
+    var j, s;
+    for (j = 0; j < n; j++)
+        s = JSON.stringify(extra_json_records, null, 2);
+    global_res = s;
+    return n * 100;
+}
+
+function json_stringify_replacer(n)
+{
+    var j, s;
+    function keep(k, v) { return v; }
+    for (j = 0; j < n; j++)
+        s = JSON.stringify(extra_json_records, keep);
+    global_res = s;
+    return n * 100;
+}
+
+function json_stringify_allow(n)
+{
+    var j, s, keys = ["id", "name"];
+    for (j = 0; j < n; j++)
+        s = JSON.stringify(extra_json_records, keys);
+    global_res = s;
+    return n * 100;
+}
+
+/* a deep copy by a round trip */
+function json_round_trip(n)
+{
+    var j, v;
+    for (j = 0; j < n; j++)
+        v = JSON.parse(JSON.stringify(extra_json_small));
+    global_res = v;
+    return n;
+}
+
+/* a document as a person reads it, with its indentation */
+var extra_json_pretty_text = JSON.stringify(extra_json_records, null, 2);
+
+function json_parse_pretty(n) { return extra_json_parse_test(n, extra_json_pretty_text, 100); }
+
+/* numbers with an exponent, as a program in another language writes floats */
+var extra_json_exponents_text = JSON.stringify(extra_json_list(1000, function (i) {
+    return (i + 1) * 1.5e-9;
+}));
+
+function json_parse_exponents(n) { return extra_json_parse_test(n, extra_json_exponents_text, 1000); }
+
+/* each object given a property after it is parsed, past the room it was made
+   with */
+function json_parse_add(n)
+{
+    var j, i, a, s = 0;
+    for (j = 0; j < n; j++) {
+        a = JSON.parse(extra_json_records_text);
+        for (i = 0; i < a.length; i++)
+            a[i].seen = true;
+    }
+    global_res = a;
+    return n * 100;
+}
+
+/* each record read after it is parsed */
+function json_parse_read(n)
+{
+    var j, i, a, s = 0;
+    for (j = 0; j < n; j++) {
+        a = JSON.parse(extra_json_records_text);
+        for (i = 0; i < a.length; i++)
+            s += a[i].id + a[i].size.width;
+    }
+    global_res = s;
+    return n * 100;
+}
+
+/* a key no document had: a layout made for one object, and not met again */
+function json_parse_new_layout(n)
+{
+    var j, v;
+    for (j = 0; j < n; j++)
+        v = JSON.parse('{"a":1,"k' + (j % 1000) + '":2,"x' + j + '":3}');
+    global_res = v;
+    return n;
+}
+
+/* a layout written once and not again */
+function json_stringify_new_layout(n)
+{
+    var j, o, s;
+    for (j = 0; j < n; j++) {
+        o = { a: 1 };
+        o["k" + (j % 1000)] = 2;
+        o["x" + j] = 3;
+        s = JSON.stringify(o);
+    }
+    global_res = s;
+    return n;
+}
+
+/* a prototype that changes between writes, so that what was found on the
+   chain has to be found again */
+function json_stringify_proto_changes(n)
+{
+    var j, s, o = new ExtraJSONPoint(1, 2);
+    for (j = 0; j < n; j++) {
+        ExtraJSONPoint.prototype["m" + (j & 1)] = j;
+        delete ExtraJSONPoint.prototype["m" + ((j & 1) ^ 1)];
+        s = JSON.stringify(o);
+    }
+    global_res = s;
+    return n;
+}
+
+/* a string that a loop has just joined, not yet flat */
+function json_stringify_built(n)
+{
+    var j, i, s, r;
+    for (j = 0; j < n; j++) {
+        s = "";
+        for (i = 0; i < 16; i++)
+            s += "chunk";
+        r = JSON.stringify(s);
+    }
+    global_res = r;
+    return n;
+}

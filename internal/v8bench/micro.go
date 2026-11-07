@@ -29,8 +29,9 @@ import (
 // arrays of every element type and DataViews, BigInts beyond microbench.js's sums and products,
 // regular expressions as programs use them -- validating, tokenizing,
 // replacing, splitting, named groups, the u flag -- objects a loop carries
-// from turn to turn, and the ways keeping those out of the heap may not pay
-// -- written as its tests are. A test of
+// from turn to turn, and the ways keeping those out of the heap may not pay,
+// JSON's documents of every kind, parsed and written --
+// written as its tests are. A test of
 // async functions returns a promise of its count, which the loop awaits, so
 // its time takes in the jobs it queued; every runner runs a script's jobs
 // before it is done with it.
@@ -169,6 +170,27 @@ var microWork = []struct {
 	{"carried_exit_3000", 256}, {"carried_exit_500", 2048}, {"carried_exit_100", 8192}, {"carried_exit_20", 32768},
 	{"carried_exit_7", 131072}, {"carried_exit_mixed", 2048}, {"carried_exit_loops", 256},
 	{"carried_every_2", 1024}, {"carried_every_8", 1024}, {"carried_phases", 256}, {"carried_stored", 1024},
+	{"json_parse_records", 2048}, {"json_parse_small", 262144}, {"json_parse_ints", 4096},
+	{"json_parse_decimals", 4096}, {"json_parse_floats", 2048}, {"json_parse_strings", 4096},
+	{"json_parse_escapes", 4096}, {"json_parse_unicode", 2048}, {"json_parse_long", 4096},
+	{"json_parse_dict", 2048}, {"json_parse_unique", 8192}, {"json_parse_varied", 8192},
+	{"json_parse_last_differs", 4096}, {"json_parse_index_keys", 8192},
+	{"json_parse_deep", 65536}, {"json_parse_duplicates", 524288}, {"json_parse_reviver", 512},
+	{"json_parse_fresh", 524288}, {"json_stringify_records", 1024},
+	{"json_stringify_small", 262144}, {"json_stringify_ints", 4096},
+	{"json_stringify_decimals", 1024}, {"json_stringify_floats", 1024},
+	{"json_stringify_strings", 2048}, {"json_stringify_escapes", 2048},
+	{"json_stringify_unicode", 4096}, {"json_stringify_long", 2048},
+	{"json_stringify_dict", 2048}, {"json_stringify_unique", 4096},
+	{"json_stringify_varied", 4096}, {"json_stringify_last_differs", 4096},
+	{"json_stringify_index_keys", 4096}, {"json_stringify_deep", 8192},
+	{"json_stringify_instances", 4096}, {"json_stringify_tojson", 16384},
+	{"json_stringify_getters", 4096}, {"json_stringify_dates", 131072},
+	{"json_stringify_indent", 1024}, {"json_stringify_replacer", 1024},
+	{"json_stringify_allow", 8192}, {"json_round_trip", 131072}, {"json_parse_pretty", 2048},
+	{"json_parse_exponents", 2048}, {"json_parse_add", 2048}, {"json_parse_read", 2048},
+	{"json_parse_new_layout", 262144}, {"json_stringify_new_layout", 262144},
+	{"json_stringify_proto_changes", 262144}, {"json_stringify_built", 262144},
 }
 
 // microLoop is the driver's loop: each test of __work whose name begins with
