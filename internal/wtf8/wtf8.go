@@ -21,6 +21,7 @@
 package wtf8
 
 import (
+	"math/bits"
 	"strings"
 	"unicode/utf16"
 	"unicode/utf8"
@@ -211,6 +212,11 @@ func appendUTF16(buf []byte, u []uint16, ascii bool) []byte {
 
 // Count returns the number of UTF-16 code units a WTF-8 string encodes, which
 // is what JavaScript reports as its length.
+//
+// The characters most text is made of are told from their bytes here. A first
+// byte with its range's limits on the second -- 0xE0, 0xED, 0xF0, 0xF4 -- and
+// anything malformed are left to the decoder below, which alone says what
+// such a byte counts for.
 func Count(s string) int {
 	n := 0
 	for i := 0; i < len(s); {
@@ -219,6 +225,26 @@ func Count(s string) int {
 			n++
 			i++
 			continue
+		}
+		switch {
+		case c >= 0xC2 && c < 0xE0:
+			if i+1 < len(s) && s[i+1]&0xC0 == 0x80 {
+				n++
+				i += 2
+				continue
+			}
+		case c > 0xE0 && c < 0xF0 && c != 0xED:
+			if i+2 < len(s) && s[i+1]&0xC0 == 0x80 && s[i+2]&0xC0 == 0x80 {
+				n++
+				i += 3
+				continue
+			}
+		case c > 0xF0 && c < 0xF4:
+			if i+3 < len(s) && s[i+1]&0xC0 == 0x80 && s[i+2]&0xC0 == 0x80 && s[i+3]&0xC0 == 0x80 {
+				n += 2
+				i += 4
+				continue
+			}
 		}
 		if _, ok := decodeSurrogateAt(s, i); ok {
 			// An encoded surrogate is one code unit despite being three bytes.
@@ -241,12 +267,36 @@ func Count(s string) int {
 // IsASCII reports whether every byte is below 0x80, in which case byte offsets
 // and code-unit offsets coincide and indexing needs no conversion.
 func IsASCII(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] >= utf8.RuneSelf {
-			return false
+	return ASCIIPrefix(s) == len(s)
+}
+
+// ASCIIPrefix is the length of the longest prefix of s that is ASCII, found a
+// word at a time.
+func ASCIIPrefix(s string) int {
+	i := 0
+	for ; i+8 <= len(s); i += 8 {
+		if w := Load64(s, i) & highBits; w != 0 {
+			return i + bits.TrailingZeros64(w)>>3
 		}
 	}
-	return true
+	for ; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			break
+		}
+	}
+	return i
+}
+
+// highBits is the top bit of each byte of a word.
+const highBits = 0x8080808080808080
+
+// Load64 is the eight bytes of s from i as a word, the first the lowest,
+// whatever the machine's order: the compiler makes it one load where the
+// machine can load a word at any address.
+func Load64(s string, i int) uint64 {
+	b := s[i : i+8]
+	return uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 |
+		uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56
 }
 
 // WellFormed reports whether s contains no lone surrogate, which is what

@@ -125,42 +125,12 @@ func NewString(s string) *String {
 // scanString reports whether s is pure ASCII and how many UTF-16 code units it
 // encodes. The two are computed together because both need one pass.
 func scanString(s string) (ascii bool, length int) {
-	// The common case is all-ASCII, so check that first with a tight loop.
-	i := 0
-	for ; i < len(s); i++ {
-		if s[i] >= utf8.RuneSelf {
-			break
-		}
-	}
+	// The common case is all-ASCII, so that is checked first.
+	i := wtf8.ASCIIPrefix(s)
 	if i == len(s) {
 		return true, len(s)
 	}
-	// Non-ASCII: count code units, remembering that a rune outside the basic
-	// multilingual plane occupies two of them, and that a WTF-8 encoded lone
-	// surrogate occupies exactly one despite being three bytes.
-	length = i
-	for i < len(s) {
-		if s[i] < utf8.RuneSelf {
-			length++
-			i++
-			continue
-		}
-		if _, ok := wtf8.DecodeSurrogateAt(s, i); ok {
-			// An encoded lone surrogate is one code unit despite being three
-			// bytes.
-			length++
-			i += 3
-			continue
-		}
-		r, size := utf8.DecodeRuneInString(s[i:])
-		if r > 0xFFFF {
-			length += 2
-		} else {
-			length++
-		}
-		i += size
-	}
-	return false, length
+	return false, i + wtf8.Count(s[i:])
 }
 
 // Len returns the length in UTF-16 code units.

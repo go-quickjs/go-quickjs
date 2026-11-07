@@ -247,11 +247,21 @@ func (t *atomTable) lookup(name string) (Atom, bool) {
 // this way is copied rather than left pinning what it was cut from. The copy is
 // made only when the name is new: a document's keys repeat, and the second
 // occurrence of one finds the first.
+//
+// An array index is encoded and holds no name, so it is copied for nothing.
 func (t *atomTable) internCopy(name string) Atom {
+	if idx, ok := arrayIndexOf(name); ok && idx < atomIndexTag {
+		return Atom(atomIndexTag | idx)
+	}
 	if a, ok := t.find(name); ok {
 		return a
 	}
-	return t.intern(strings.Clone(name))
+	// What the two lines above found out, intern would ask both tables again.
+	name = strings.Clone(name)
+	a := t.next()
+	t.entries = append(t.entries, atomEntry{name: name})
+	t.byName[name] = a
+	return a
 }
 
 // internSymbol returns the atom for a symbol key.
@@ -309,6 +319,16 @@ func (t *atomTable) name(a Atom) string {
 		return e.sym.String()
 	}
 	return e.name
+}
+
+// names reports whether a is the atom of the string key name.
+func (t *atomTable) names(a Atom, name string) bool {
+	if a.IsIndex() {
+		idx, ok := arrayIndexOf(name)
+		return ok && idx == a.Index()
+	}
+	e := t.entry(a)
+	return e.sym == nil && e.name == name
 }
 
 // symbol returns the symbol an atom denotes, or nil for a string key.

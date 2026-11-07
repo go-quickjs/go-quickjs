@@ -318,3 +318,60 @@ func TestWellFormedMatchesDecoding(t *testing.T) {
 		}
 	}
 }
+
+// oldCount is Count without the characters it tells from their bytes: what
+// the decoder says of each.
+func oldCount(s string) int {
+	n := 0
+	for i := 0; i < len(s); {
+		if _, ok := decodeSurrogateAt(s, i); ok {
+			n++
+			i += 3
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r > 0xFFFF {
+			n += 2
+		} else {
+			n++
+		}
+		i += size
+	}
+	return n
+}
+
+// Count reads bytes that are not WTF-8 as the decoder does, whichever they
+// are, as what it tells from their bytes must not change what a string a host
+// made counts for.
+func TestCountAgreesWithTheDecoder(t *testing.T) {
+	bytes := []byte{0, 'a', 0x7F, 0x80, 0x90, 0x9F, 0xA0, 0xBF, 0xC0, 0xC1, 0xC2, 0xDF, 0xE0, 0xE1, 0xEC, 0xED, 0xEE, 0xEF, 0xF0, 0xF1, 0xF3, 0xF4, 0xF5, 0xFF}
+	r := rand.New(rand.NewSource(1))
+	b := make([]byte, 0, 12)
+	for range 2000000 {
+		b = b[:0]
+		for range r.Intn(12) {
+			b = append(b, bytes[r.Intn(len(bytes))])
+		}
+		if got, want := Count(string(b)), oldCount(string(b)); got != want {
+			t.Fatalf("Count(%x) = %d, want %d", b, got, want)
+		}
+	}
+}
+
+func TestASCIIPrefix(t *testing.T) {
+	for n := range 40 {
+		s := []byte(strings.Repeat("a", 40))
+		if got := ASCIIPrefix(string(s[:n])); got != n {
+			t.Errorf("ASCIIPrefix of %d ASCII bytes = %d", n, got)
+		}
+		for _, c := range []byte{0x80, 0xC3, 0xFF} {
+			s[n] = c
+			if got := ASCIIPrefix(string(s)); got != n {
+				t.Errorf("ASCIIPrefix with %x at %d = %d", c, n, got)
+			}
+			if IsASCII(string(s)) {
+				t.Errorf("IsASCII with %x at %d", c, n)
+			}
+		}
+	}
+}
