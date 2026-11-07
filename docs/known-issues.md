@@ -481,6 +481,22 @@ Paths are relative to this repository; `go-intl:` paths are in
     3 KB for a line.
   - A debugger lists every script it has seen, for as long as the runtime.
 
+### KI-77 A substring is counted without the string it holds
+- **Where:** `internal/vm/memory.go`, `string`, and what cuts a string out of
+  another: `String.Substring`, and `JSON.parse`, whose strings with no escape
+  are slices of the document.
+- **Effect:** the walk counts a string at its own length, and an ASCII string
+  cut out of another shares its bytes and keeps all of them alive. Sixty 11 MB
+  strings each cut down to two characters, under a 32 MB limit, leave 715 MB
+  of live heap and no error. Node's sliced strings hold their parents too,
+  but are counted with them and are not made below 13 characters.
+- **Status:** open. Nothing but the parent says how much a slice holds, and
+  a String has no word free for it (`TestStringSharesItsLastWord`'s 48 bytes), so that the
+  fix is a copy of a slice much shorter than what it is cut from, here and in
+  JSON.parse, which has to be measured against what sharing the bytes saves.
+  Older than JSON.parse's batches, which `TestJSONBatchesAreBounded` holds to
+  the size of the document again.
+
 ## P2: wrong results
 
 ### KI-29 Generator and async frames skip part of a call's setup

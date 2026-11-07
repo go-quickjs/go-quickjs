@@ -14,6 +14,8 @@ The main areas are:
   behavior tests.
 - `internal/lexer`, `internal/parser`, `internal/ast`: source processing.
 - `internal/compiler`, `internal/bytecode`: compilation and VM instructions.
+- `internal/jsonscan`: the scan of long JSON strings, AVX2 on amd64 and NEON on
+  arm64, nothing needing it on the rest.
 - `internal/vm`: JavaScript runtime semantics and built-ins. `Intl`, `Date`'s
   local time and `Temporal` are bindings over
   [go-intl](https://github.com/go-quickjs/go-intl), which holds the locale

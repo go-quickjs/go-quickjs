@@ -3555,8 +3555,19 @@ first, as the rest of the plan is.
   fixed mode, to check again (2026-10-22).
 - `date_parse`'s 12 allocations left, which want go-intl's formatting to
   append (2026-10-12).
-- JSON.parse defines each key by the generic `defineOwnProp`; no gap
-  points at it (2026-10-04).
+- JSON: 0.41 of its time, 1.10 of Node's. Left:
+  a batch of objects, as strings have, which a dead object in it would keep
+  what it holds alive; a String's flag for text known to need
+  no escape, for which it has no byte free; short strings' values shared by
+  their text, as V8 internalizes them, which a document of different ones
+  pays for; 17-digit doubles written, which are strconv's (2026-11-06).
+- Tried from simdjson and sonic for JSON.parse, and dropped (2026-11-06, one
+  thread, three alternating runs): a fraction's digits eight at a time,
+  floats -6% but decimals +8% and exponents +5%, most numbers being short;
+  spaces a word at a time, pretty-printed text +4%, most runs being short.
+  simdjson's index of a document's structure was not built: scanning is 10 to
+  25% of a parse, against the collector's 24 to 50% and allocation's 9, and
+  what makes it fast there is not building what a script must be given.
 - Strings appended in place, as C QuickJS reallocates; Splay's
   `String(key)`, 24K allocations (2026-10-12).
 - `mayTie` counting digits by a loop, not `FormatUint` (2026-10-04,
