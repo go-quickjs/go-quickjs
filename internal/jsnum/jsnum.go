@@ -35,14 +35,14 @@ func AppendFloat(dst []byte, v float64) []byte {
 	const maxExactInt = 1 << 53
 	if v > -maxExactInt && v < maxExactInt {
 		if i := int64(v); float64(i) == v {
-			return strconv.AppendInt(dst, i, 10)
+			return appendInt(dst, i)
 		}
 	}
 	if math.IsNaN(v) || math.IsInf(v, 0) {
 		return append(dst, FormatFloat(v)...)
 	}
 	if a := math.Abs(v); a >= 1e-6 && a < 1e21 {
-		return strconv.AppendFloat(dst, v, 'f', -1, 64)
+		return appendDecimal(dst, v, a)
 	}
 	// strconv writes the same shortest digits, but pads an exponent below
 	// ten with a zero. JavaScript's exponential form has no such padding.
