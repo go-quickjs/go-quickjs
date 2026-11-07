@@ -13,8 +13,9 @@ import (
 // text: the frames are gone by the time anything reads it, but most errors are
 // caught and dropped without anyone doing so, and formatting a trace nobody
 // reads is the whole cost of a throw. The text is made the first time the
-// stack is read, by an accessor every error shares -- which is also when
-// Error.prepareStackTrace, if a script has set one, is asked for it, and when
+// stack is read, by an accessor on Error.prototype (on each error under
+// WithNodeQuirks) -- which is also when Error.prepareStackTrace, if a script
+// has set one, is asked for it, and when
 // the header takes the error's name and message, so that a subclass that names
 // itself in its constructor is named in its trace.
 //
@@ -169,10 +170,15 @@ func (r *Runtime) isFrameless(fn *Object) bool {
 	return false
 }
 
-// attachStack gives an object its stack: the frames, and the accessor that
-// makes them text when they are read.
+// attachStack gives an error its frames, and under WithNodeQuirks an own
+// accessor. Standards mode inherits the accessor from Error.prototype.
 func (r *Runtime) attachStack(o *Object, st stackTrace) {
-	o.setOwnRaw(atomStack, r.stackAccessor, propAccessor|propConfigurable)
+	if r.nodeQuirks {
+		o.setOwnRaw(atomStack, r.stackAccessor, propAccessor|propConfigurable)
+	} else if st.done && st.value.IsUndefined() {
+		// Disabling frame capture still leaves the standard getter a string.
+		st.value = Str(emptyString)
+	}
 	r.setTrace(o, st)
 }
 
@@ -217,9 +223,9 @@ func (r *Runtime) initStackTraces() {
 		}
 	}
 
-	// The getter and the setter are shared by every error, and are
-	// anonymous, as V8's are.
-	get := r.newNativeFunc("", 0, func(rt *Runtime, this Value, _ []Value) (Value, error) {
+	// V8's anonymous getter and setter serve Error.captureStackTrace and,
+	// under WithNodeQuirks, every error instance.
+	read := func(rt *Runtime, this Value, _ []Value) (Value, error) {
 		if !this.IsObject() {
 			return Undefined, nil
 		}
@@ -237,7 +243,8 @@ func (r *Runtime) initStackTraces() {
 			st.done, st.value, st.frames = true, v, nil
 		}
 		return st.value, nil
-	})
+	}
+	get := r.newNativeFunc("", 0, read)
 	set := r.newNativeFunc("", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if !this.IsObject() {
 			return Undefined, nil
@@ -249,6 +256,44 @@ func (r *Runtime) initStackTraces() {
 	})
 	r.stackAccessor = accessorValue(&accessor{getter: get, setter: set})
 	r.stackGetter, r.stackSetter = get, set
+	if !r.nodeQuirks {
+		proto := r.proto.err
+		get := r.newNativeFunc("get stack", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+			if !this.IsObject() {
+				return Undefined, rt.throwTypeError("Error.prototype.stack getter called on non-object")
+			}
+			if this.Object().class != ClassError {
+				return Undefined, nil
+			}
+			if rt.traceOf(this.Object()) == nil {
+				return Str(emptyString), nil
+			}
+			return read(rt, this, args)
+		})
+		set := r.newNativeFunc("set stack", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+			if !this.IsObject() {
+				return Undefined, rt.throwTypeError("Error.prototype.stack setter called on non-object")
+			}
+			v := arg(args, 0)
+			if !v.IsString() {
+				return Undefined, rt.throwTypeError("Error.prototype.stack must be a string")
+			}
+			o := this.Object()
+			if o == proto {
+				return Undefined, rt.throwTypeError("cannot assign to a property of Error.prototype")
+			}
+			d, err := rt.ownPropDesc(o, atomStack)
+			if err != nil {
+				return Undefined, err
+			}
+			if d == nil {
+				return Undefined, rt.createDataProperty(o, atomStack, v, propDefault)
+			}
+			_, err = rt.setProp(o, atomStack, v, this, true)
+			return Undefined, err
+		})
+		r.defineAccessor(proto, atomStack, get, set, propConfigurable)
+	}
 
 	errorCtor := r.proto.errorCtors[errError]
 	defBuiltin(errorCtor, r.atoms.intern("stackTraceLimit"), Float(10),

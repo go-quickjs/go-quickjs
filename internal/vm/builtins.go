@@ -2458,8 +2458,8 @@ func (r *Runtime) initErrorBuiltins() {
 			// cause, before anything else sees it: the table is made with room
 			// for them rather than grown twice on the way.
 			o := newErrorObject(rt.proto.nativeErrors[kind])
-			// The stack first, then the message and the rest, as V8 lists an
-			// error's own keys. The trace leaves out the constructor itself,
+			// Under WithNodeQuirks the own stack comes first, as V8 lists an
+			// error's keys. The trace leaves out the constructor itself,
 			// and a subclass's constructors too: everything up to and
 			// including new.target's.
 			var until *Object

@@ -105,10 +105,11 @@ type Runtime struct {
 	// TypedArray is under way on; see joinOnce.
 	joining []*Object
 
-	// stackAccessor is the stack property every error has, whose getter and
-	// setter are stackGetter and stackSetter, and stackSlot is the key an
-	// object that is not an error keeps its frames under, which no script can
-	// name. preparingStack is set while Error.prepareStackTrace runs.
+	// stackAccessor is the own stack property under WithNodeQuirks and for
+	// Error.captureStackTrace, whose getter and setter are stackGetter and
+	// stackSetter. stackSlot is the key an object that is not an error keeps
+	// its frames under, which no script can name. preparingStack is set while
+	// Error.prepareStackTrace runs.
 	stackSlot      Atom
 	preparingStack bool
 
@@ -1027,7 +1028,7 @@ func (r *Runtime) throwURIError(format string, args ...any) error {
 
 // newError builds an error object of the given kind.
 func (r *Runtime) newError(kind errorKind, msg string) *Object {
-	// The stack and the message, in V8's order, and room for a cause: an
+	// Room for the message, a cause and, under WithNodeQuirks, the own stack: an
 	// error is built all at once, so the table is made with it rather than
 	// grown twice on the way. The frames are captured now, because they are
 	// unwound by the time anything reads the stack.

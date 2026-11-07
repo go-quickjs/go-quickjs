@@ -308,6 +308,9 @@ func WithLocale(tag string) Option {
 // engine's accessors on Function.prototype do, where the standard has its
 // %ThrowTypeError%, which throws; and Date.prototype.setYear reads the date's
 // time value after converting the year, where the standard reads it first.
+// Error instances have an own stack accessor accepting any assigned value,
+// where the standard inherits Error.prototype.stack and its setter requires
+// a string and creates an own data property.
 // Intl.DateTimeFormat
 // refuses, with V8's RangeError, a Temporal plain date whose midnight, or a
 // plain date-time, is past the instants a Date can hold, which the standard

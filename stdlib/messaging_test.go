@@ -54,7 +54,7 @@ func TestStructuredCloneMatchesNode(t *testing.T) {
 		t("DOMException shape", () => { const e = new DOMException("m", "DataCloneError"); return [e instanceof Error, Object.getOwnPropertyNames(e).join("|"), DOMException.DATA_CLONE_ERR, e.code, typeof e.stack, Object.prototype.toString.call(e)].join() });
 		t("Object.prototype tag spoof", () => { const o = { [Symbol.toStringTag]: "Date" }; return JSON.stringify(c(o)) });
 		t("boxed with props", () => { const n = Object(1); n.x = 1; return JSON.stringify(Object.keys(c(n))) });
-	`)
+	`, quickjs.WithNodeQuirks())
 	want := `
 prims 1,s,10,null,undefined,true,true,NaN
 symbol THROWS DOMException DataCloneError 25 "Symbol() could not be cloned."
@@ -280,7 +280,7 @@ func TestDOMException(t *testing.T) {
 		const o = new DOMException("x", {name: "DataCloneError", cause: 1});
 		console.log(o.name, o.code, o.cause, new DOMException("y", "Custom").code)
 		try { DOMException.prototype.name } catch (err) { console.log(err.name, err.message) }
-	`)
+	`, quickjs.WithNodeQuirks())
 	want := strings.Join([]string{
 		"true AbortError m 20 stack [object DOMException] AbortError: m",
 		`Error "" 0 20 25`,
@@ -289,6 +289,28 @@ func TestDOMException(t *testing.T) {
 	}, "\n")
 	if out != want {
 		t.Errorf("got\n%s\nwant\n%s", out, want)
+	}
+}
+
+// DOMException inherits the runtime's Error stack behavior in each mode.
+func TestDOMExceptionStackModes(t *testing.T) {
+	for _, tc := range []struct {
+		opts []quickjs.Option
+		want string
+	}{
+		{nil, "string,false,true,DOMException: m"},
+		{[]quickjs.Option{quickjs.WithNodeQuirks()}, "string,true,false,DOMException: m"},
+	} {
+		rt := quickjs.New(tc.opts...)
+		if err := stdlib.WebAPIs(rt, nil); err != nil {
+			t.Fatal(err)
+		}
+		v, err := rt.Eval(`var e = new DOMException("m", "DOMException");
+[typeof e.stack, Object.hasOwn(e, "stack"), Object.hasOwn(Error.prototype, "stack"), e.stack.split("\n")[0]].join()`)
+		if err != nil || v.String() != tc.want {
+			t.Errorf("quirks=%v: stack = %v, %v; want %q", len(tc.opts) > 0, v, err, tc.want)
+		}
+		rt.Close()
 	}
 }
 

@@ -25,9 +25,9 @@ import (
 
 // run evaluates source in a runtime with the given configuration and returns
 // what it produced, having let the loop finish.
-func run(t *testing.T, cfg stdlib.Config, src string) (string, string) {
+func run(t *testing.T, cfg stdlib.Config, src string, opts ...quickjs.Option) (string, string) {
 	t.Helper()
-	rt := quickjs.New()
+	rt := quickjs.New(opts...)
 	defer rt.Close()
 
 	var out, errOut bytes.Buffer

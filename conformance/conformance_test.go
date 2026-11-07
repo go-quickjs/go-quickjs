@@ -79,7 +79,6 @@ const (
 var unsupportedFeatures = map[string]string{
 	"source-phase-imports-module-source": "JavaScript modules have no source",
 	"decorators":                         "decorators are not implemented",
-	"error-stack-accessor":               "Error stack is an own accessor, as in V8",
 	"caller":                             "no legacy caller access",
 }
 

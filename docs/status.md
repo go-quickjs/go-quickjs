@@ -28,6 +28,12 @@
 | Eval | Direct `eval` runs in the caller's scope — its variables, `this`, `new.target` and `super`; indirect `eval` runs in global scope |
 | Go interop | Function binding, marshalling, `context.Context` cancellation |
 
+Standards mode inherits the `stack` accessor from `Error.prototype`. Its
+setter accepts only strings and creates an own data property. With
+`WithNodeQuirks`, each error instead has V8's own accessor, which accepts
+any assigned value. Both modes format the captured trace when it is first
+read and support V8's stack-trace APIs.
+
 ## Internationalization
 
 Every `Intl` API and its locale data are built in, from [go-intl], and so is
@@ -76,15 +82,9 @@ settled on its own goroutine, by the host's event loop when it has one.
 test262's multi-agent tests run that way; a host has no API to share memory
 yet.
 
-Two things are left out on purpose, as QuickJS-NG leaves them out or as Node
-behaves:
-
-- A sloppy-mode function has no `caller`, and its `arguments` are not
-  reachable from outside it: reading either throws, as the standard's
-  `Function.prototype` accessors do.
-- An error's `stack` is an own accessor, as in V8, whose text is made when it
-  is first read, rather than the accessor on `Error.prototype` that a proposal
-  describes.
+A sloppy-mode function's `caller` and `arguments` are not reachable from
+outside it in standards mode: reading either throws, as the standard's
+`Function.prototype` accessors do. `WithNodeQuirks` exposes them as V8 does.
 
 In the standard library: node's own streams (the web's are here instead, and
 everything that takes a stream takes those), brotli, and BYOB readers. A
@@ -122,10 +122,8 @@ holds proposals too early to claim, and `harness` tests the suite's own helpers.
 
 Measured coverage, as of the most recent run, on test262 commit
 [`e4fbf57745c6aae3d1f12f181ecef78b1665d812`](https://github.com/tc39/test262/commit/e4fbf57745c6aae3d1f12f181ecef78b1665d812)
-of November 6, 2026: 99,977 variants pass and none fail. The other 342 are
-skipped rather than counted: a test tagged with a feature the engine does not
-implement, or one that asks the host for a second realm or an agent, is
-testing something that was never claimed.
+of November 6, 2026: 100,047 variants pass and none fail. The other 272 are
+skipped because they require an unsupported feature or host facility.
 
 Where test262 and current engines disagree, the engine follows the standard
 and a test records the difference. Two of Annex B's block-function rules are

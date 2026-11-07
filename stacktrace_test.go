@@ -196,10 +196,10 @@ var e = make(); e.stack.split("\n")[0] + " | " + frames(e)`, "AppError: m | at m
 	})
 }
 
-// TestStackTraceAccessor pins that stack is an own accessor every error
-// shares, as V8 has it, and that setting it replaces what it reads.
+// TestStackTraceAccessor pins the standard's inherited accessor and V8's own
+// accessor under WithNodeQuirks.
 func TestStackTraceAccessor(t *testing.T) {
-	evalCases(t, []struct{ src, want string }{
+	nodeCases := []struct{ src, want string }{
 		{`var a = Object.getOwnPropertyDescriptor(new Error(), "stack"), b = Object.getOwnPropertyDescriptor(new TypeError(), "stack");
 [typeof a.get, typeof a.set, a.get === b.get, a.set === b.set, a.enumerable, a.configurable, a.get.name, a.get.length, a.set.length,
  Object.prototype.hasOwnProperty.call(Error.prototype, "stack")].join()`, "function,function,true,true,false,true,,0,1,false"},
@@ -207,11 +207,77 @@ func TestStackTraceAccessor(t *testing.T) {
 		{`var get = Object.getOwnPropertyDescriptor(new Error(), "stack").get; [get.call({}), get.call(1)].join()`, ","},
 		{`var e = new Error(); delete e.stack; [e.stack, "stack" in e].join()`, ",false"},
 		{`JSON.stringify(Object.keys(new Error("x")))`, "[]"},
-	})
+	}
+	standardCases := []struct{ src, want string }{
+		{`var d = Object.getOwnPropertyDescriptor(Error.prototype, "stack");
+[d.get.name, d.get.length, d.set.name, d.set.length, d.enumerable, d.configurable,
+ Object.hasOwn(new Error(), "stack"), Object.hasOwn(TypeError.prototype, "stack")].join()`,
+			"get stack,0,set stack,1,false,true,false,false"},
+		{`var d = Object.getOwnPropertyDescriptor(Error.prototype, "stack"), r = [];
+for (var v of [undefined, null, true, 1, "", Symbol(), 1n]) {
+ for (var f of [() => d.get.call(v), () => d.set.call(v, "x")]) {
+  try { f(); r.push("ok") } catch (e) { r.push(e.name) }
+ }
+} r.join()`, strings.TrimSuffix(strings.Repeat("TypeError,", 14), ",")},
+		{`var get = Object.getOwnPropertyDescriptor(Error.prototype, "stack").get;
+var e = new Error("x"), p = new Proxy(e, { getOwnPropertyDescriptor() { throw 1 } });
+[get.call({}), get.call(Error.prototype), get.call(Object.create(e)), get.call(p),
+ typeof get.call(e), typeof e.stack, Object.hasOwn(e, "stack")].join()`, ",,,,string,string,false"},
+		{`var e = new Error("x"), get = Object.getOwnPropertyDescriptor(Error.prototype, "stack").get;
+var original = e.stack; e.stack = "replacement";
+var d = Object.getOwnPropertyDescriptor(e, "stack");
+var r = [d.value, d.writable, d.enumerable, d.configurable, get.call(e) === original];
+delete e.stack; r.push(e.stack === original, Object.hasOwn(e, "stack")); r.join()`,
+			"replacement,true,true,true,true,true,false"},
+		{`var e = new Error(), r = [];
+for (var v of [undefined, null, true, 0, {}, new String("x"), Symbol(), 1n]) {
+ try { e.stack = v; r.push("ok") } catch (x) { r.push(x.name) }
+} r.push(typeof e.stack, Object.hasOwn(e, "stack")); r.join()`,
+			"TypeError,TypeError,TypeError,TypeError,TypeError,TypeError,TypeError,TypeError,string,false"},
+		{`var set = Object.getOwnPropertyDescriptor(Error.prototype, "stack").set, r = [];
+var plain = Object.create(null); r.push(set.call(plain, "plain"), plain.stack);
+for (var o of [Error.prototype, Object.preventExtensions({}), Object.freeze(new Error()),
+ Object.defineProperty({}, "stack", { value: "old" }), Object.defineProperty({}, "stack", { get() { return "old" } })]) {
+ try { set.call(o, "new"); r.push("ok") } catch (e) { r.push(e.name) }
+} var seen; set.call({ set stack(v) { seen = v } }, "setter"); r.push(seen); r.join()`,
+			",plain,TypeError,TypeError,TypeError,TypeError,TypeError,setter"},
+		{`var set = Object.getOwnPropertyDescriptor(Error.prototype, "stack").set, log = [];
+function proxy(target) { return new Proxy(target, {
+ getOwnPropertyDescriptor(t, k) { log.push("own"); return Reflect.getOwnPropertyDescriptor(t, k) },
+ defineProperty(t, k, d) { log.push(["define", d.value, d.writable, d.enumerable, d.configurable].join()); return Reflect.defineProperty(t, k, d) },
+ set(t, k, v) { log.push("set:" + v); return Reflect.set(t, k, v) }
+}) }
+set.call(proxy({}), "new"); set.call(proxy({ stack: "old" }), "updated"); log.join("|")`,
+			"own|define,new,true,true,true|own|set:updated"},
+		{`function Foreign() {} var e = Reflect.construct(Error, ["x"], Foreign);
+var get = Object.getOwnPropertyDescriptor(Error.prototype, "stack").get;
+[e.stack, typeof get.call(e), Object.hasOwn(e, "stack")].join()`, ",string,false"},
+		{`var e = new Error(); delete e.stack; [typeof e.stack, "stack" in e].join()`, "string,true"},
+		{`var o = {}; Error.captureStackTrace(o);
+var get = Object.getOwnPropertyDescriptor(Error.prototype, "stack").get;
+[typeof o.stack, get.call(o)].join()`, "string,"},
+	}
+	for _, mode := range []struct {
+		name  string
+		opts  []quickjs.Option
+		cases []struct{ src, want string }
+	}{{"standard", nil, standardCases}, {"node", []quickjs.Option{quickjs.WithNodeQuirks()}, nodeCases}} {
+		t.Run(mode.name, func(t *testing.T) {
+			for _, tc := range mode.cases {
+				rt := quickjs.New(mode.opts...)
+				v, err := rt.Eval(tc.src)
+				if err != nil || v.String() != tc.want {
+					t.Errorf("%s = %v, %v; want %q", tc.src, v, err, tc.want)
+				}
+				rt.Close()
+			}
+		})
+	}
 }
 
 // TestStackTraceLimit pins Error.stackTraceLimit: how many frames are kept,
-// none for zero or less, and no stack at all when it is not a number.
+// none for zero or less or a non-number. V8 returns undefined for a non-number;
+// the standard getter still returns a string.
 func TestStackTraceLimit(t *testing.T) {
 	evalCases(t, []struct{ src, want string }{
 		{`JSON.stringify(Object.getOwnPropertyDescriptor(Error, "stackTraceLimit"))`,
@@ -219,9 +285,33 @@ func TestStackTraceLimit(t *testing.T) {
 		{`function deep(n) { return n ? deep(n - 1) : new Error() } String(deep(30).stack.split("\n").length - 1)`, "10"},
 		{`Error.stackTraceLimit = 2.9; function deep(n) { return n ? deep(n - 1) : new Error() } String(deep(30).stack.split("\n").length - 1)`, "2"},
 		{`Error.stackTraceLimit = -1; new Error("z").stack`, "Error: z"},
-		{`Error.stackTraceLimit = "3"; var e = new Error(); [typeof e.stack, "stack" in e].join()`, "undefined,true"},
-		{`delete Error.stackTraceLimit; typeof new Error().stack`, "undefined"},
+		{`Error.stackTraceLimit = "3"; var e = new Error("x"); [typeof e.stack, e.stack, "stack" in e].join()`, "string,,true"},
+		{`delete Error.stackTraceLimit; JSON.stringify(new Error("x").stack)`, `""`},
 		{`Error.stackTraceLimit = Infinity; function deep(n) { return n ? deep(n - 1) : new Error() } String(deep(30).stack.split("\n").length - 1)`, "32"},
+	})
+	rt := quickjs.New(quickjs.WithNodeQuirks())
+	defer rt.Close()
+	if v, err := rt.Eval(`Error.stackTraceLimit = "3"; var e = new Error(); [typeof e.stack, "stack" in e].join()`); err != nil || v.String() != "undefined,true" {
+		t.Errorf("Node non-number limit = %v, %v; want undefined,true", v, err)
+	}
+	if v, err := rt.Eval(`delete Error.stackTraceLimit; typeof new Error().stack`); err != nil || v.String() != "undefined" {
+		t.Errorf("Node missing limit = %v, %v; want undefined", v, err)
+	}
+}
+
+func TestStackTraceAccessorRealms(t *testing.T) {
+	realmCases(t, []struct{ src, want string }{
+		{`var a = Object.getOwnPropertyDescriptor(Error.prototype, "stack"),
+b = Object.getOwnPropertyDescriptor(other.Error.prototype, "stack");
+var e = new other.Error("foreign");
+a.set.call(e, "assigned");
+[a.get === b.get, a.set === b.set, typeof a.get.call(e), e.stack,
+ typeof b.get.call(new Error()), a.get.call(other.Error.prototype)].join()`,
+			"false,false,string,assigned,string,"},
+		{`var a = Object.getOwnPropertyDescriptor(Error.prototype, "stack"), r = [];
+try { a.set.call(other.Error.prototype, "x") } catch (e) { r.push(e instanceof other.TypeError, e instanceof TypeError) }
+try { a.set.call(Error.prototype, "x") } catch (e) { r.push(e instanceof TypeError, e instanceof other.TypeError) }
+r.join()`, "true,false,true,false"},
 	})
 }
 
@@ -360,26 +450,34 @@ func TestEvalFileContext(t *testing.T) {
 	}
 }
 
-// An error's own keys come in V8's order: the stack first, then the
-// message, a cause and what the kind adds (Node 26's answers). The stack
-// is not the standard's, which leaves its place to the engine; QuickJS has
-// it last.
+// An error's own keys follow the standard's construction order. WithNodeQuirks
+// adds V8's own stack accessor before the message and the rest.
 func TestErrorOwnKeysOrder(t *testing.T) {
-	rt := quickjs.New()
-	defer rt.Close()
-	for _, tc := range []struct{ src, want string }{
-		{`Object.getOwnPropertyNames(new Error("x")).join()`, "stack,message"},
-		{`Object.getOwnPropertyNames(new TypeError("x")).join()`, "stack,message"},
-		{`Object.getOwnPropertyNames(new Error()).join()`, "stack"},
-		{`Reflect.ownKeys(new Error("x", { cause: 1 })).join()`, "stack,message,cause"},
-		{`Object.getOwnPropertyNames(new AggregateError([], "x")).join()`, "stack,message,errors"},
-		{`(() => { try { null.x } catch (e) { return Object.getOwnPropertyNames(e).join() } })()`, "stack,message"},
-		{`class MyErr extends Error { constructor(m) { super(m); this.extra = 1 } }
-		  Object.getOwnPropertyNames(new MyErr("q")).join()`, "stack,message,extra"},
-	} {
-		v, err := rt.Eval(tc.src)
-		if err != nil || v.String() != tc.want {
-			t.Errorf("%s = %v, %v; want Node's %q", tc.src, v, err, tc.want)
+	for _, node := range []bool{false, true} {
+		var opts []quickjs.Option
+		if node {
+			opts = append(opts, quickjs.WithNodeQuirks())
 		}
+		rt := quickjs.New(opts...)
+		for _, tc := range []struct{ src, standard, node string }{
+			{`Object.getOwnPropertyNames(new Error("x")).join()`, "message", "stack,message"},
+			{`Object.getOwnPropertyNames(new TypeError("x")).join()`, "message", "stack,message"},
+			{`Object.getOwnPropertyNames(new Error()).join()`, "", "stack"},
+			{`Reflect.ownKeys(new Error("x", { cause: 1 })).join()`, "message,cause", "stack,message,cause"},
+			{`Object.getOwnPropertyNames(new AggregateError([], "x")).join()`, "message,errors", "stack,message,errors"},
+			{`(() => { try { null.x } catch (e) { return Object.getOwnPropertyNames(e).join() } })()`, "message", "stack,message"},
+			{`class MyErr extends Error { constructor(m) { super(m); this.extra = 1 } }
+		  Object.getOwnPropertyNames(new MyErr("q")).join()`, "message,extra", "stack,message,extra"},
+		} {
+			want := tc.standard
+			if node {
+				want = tc.node
+			}
+			v, err := rt.Eval(tc.src)
+			if err != nil || v.String() != want {
+				t.Errorf("node=%v: %s = %v, %v; want %q", node, tc.src, v, err, want)
+			}
+		}
+		rt.Close()
 	}
 }
