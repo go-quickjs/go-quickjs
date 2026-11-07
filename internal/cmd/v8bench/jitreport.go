@@ -65,6 +65,9 @@ func reportTimes() {
 		total += t.Ticks[p]
 	}
 	fmt.Printf(" total %.2f\n", float64(total)/runs/1e6)
+	if n := runs - 1; n > 0 {
+		fmt.Printf("  jit compile, heap per run: %.2f MB, %.0f objects\n", float64(t.Bytes)/n/(1<<20), float64(t.Objects)/n)
+	}
 	*t = mir.Times{Clock: t.Clock}
 }
 

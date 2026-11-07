@@ -56,7 +56,11 @@ type Times struct {
 	// backend's compiles.
 	Ticks    [NumPhases]int64
 	Compiles int
-	last     int64
+	// Bytes and Objects are what the repeated compiles allocated on the
+	// heap, which the first compile of each, whose code is kept, is not
+	// part of: a compile's own garbage, apart from the program's.
+	Bytes, Objects int64
+	last           int64
 }
 
 // Timing, if not nil, is what every compile's phases are timed in. It is

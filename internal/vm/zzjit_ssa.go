@@ -2275,10 +2275,16 @@ func (r *Runtime) compileSSA(fn *bytecode.Function, cl *closure, p *ir.Program, 
 	}
 	if err == nil && JITCompileRepeat > 0 {
 		c0 := jitGCCycles()
+		bytes0, objects0 := jitAllocated()
 		for range JITCompileRepeat {
 			r.jitCompileAgain(fn, cl, p, e, keepLimit)
 		}
 		jitRepeatCycles.Add(jitGCCycles() - c0)
+		if t := mir.Timing; t != nil {
+			bytes1, objects1 := jitAllocated()
+			t.Bytes += int64(bytes1 - bytes0)
+			t.Objects += int64(objects1 - objects0)
+		}
 	}
 	return code, fb, err
 }
@@ -2722,6 +2728,14 @@ func jitGCCycles() uint64 {
 	s := []metrics.Sample{{Name: "/gc/cycles/total:gc-cycles"}}
 	metrics.Read(s)
 	return s[0].Value.Uint64()
+}
+
+// jitAllocated is what the heap has handed out so far, in bytes and
+// objects, for the compiles JITCompileRepeat repeats.
+func jitAllocated() (bytes, objects uint64) {
+	s := []metrics.Sample{{Name: "/gc/heap/allocs:bytes"}, {Name: "/gc/heap/allocs:objects"}}
+	metrics.Read(s)
+	return s[0].Value.Uint64(), s[1].Value.Uint64()
 }
 
 // jitCompileAgain is a compile of JITCompileRepeat's: p built with fresh
