@@ -3515,6 +3515,17 @@ first, as the rest of the plan is.
   `Token.IsPunct` chains and the name maps are each about 3% of a compile,
   the final tables are allocated one by one, and a string `Op` in a binary
   node is 16 bytes a kind would do in one, at most sites of the compiler.
+- The JIT's compile, the same round: bytes -26% and objects -43% on
+  Typescript alone, -26% and -28% on a first render, -24% and -28% on AWFY,
+  its time -7%, -4% and level, each side the same compiles, its native code
+  unchanged on both backends (`compilediff native`). What is left is
+  diffuse, as it was on 2026-11-03: `allocate` 14% of a compile, `plan` 15%
+  of which most is the feedback's answers, `Asm.Finish` 9%, already narrowed
+  to its candidates. The closures of `compiler.call` and the 65 kinds of cold code
+  are a sixth of the objects left: a change of the code generator's shape.
+  Tried and dropped: leaving `rematerializeUpvalues` early where it
+  replaces nothing, no gain on Typescript, whose phis are mostly of cells,
+  and a change to two of AWFY's listings.
 - NewRuntime: about 600 built-in functions made eagerly, its largest cost;
   made lazily they would change what scripts see of the global's
   descriptors, a decision for the API; a lazy property index for large
