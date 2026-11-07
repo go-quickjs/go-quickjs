@@ -1993,11 +1993,20 @@ func (r *Runtime) closeIteratorErr(iter Value) error {
 	if err != nil {
 		return err
 	}
-	if !isCallable(ret) {
+	if ret.IsUndefined() || ret.IsNull() {
 		return nil
 	}
-	_, err = r.iterReturn(ret, iter)
-	return err
+	if !isCallable(ret) {
+		return r.throwTypeError("the iterator's return is not a function")
+	}
+	ok, err := r.iterReturn(ret, iter)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return r.throwTypeError("the iterator's return did not give an object")
+	}
+	return nil
 }
 
 // arrayIterKind says what an array iterator yields.

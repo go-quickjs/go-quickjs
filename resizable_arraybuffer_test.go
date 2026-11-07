@@ -44,8 +44,8 @@ func TestResizableArrayBuffer(t *testing.T) {
 		{`var b = new ArrayBuffer(4, {maxByteLength: 8}); var v = new DataView(b), f = new DataView(b, 0, 4);
 		  b.resize(8); var r = [v.byteLength, f.byteLength]; b.resize(2);
 		  try { f.getUint8(0) } catch (e) { r.push(e.constructor.name) }
-		  try { f.byteLength } catch (e) { r.push(e.constructor.name) }
-		  r.push(v.byteLength); r.join()`, "8,4,TypeError,TypeError,2"},
+		  try { r.push(f.byteLength) } catch (e) { r.push(e.constructor.name) }
+		  r.push(v.byteLength); r.join()`, "8,4,TypeError,0,2"},
 		// An assignment's value is converted before its index is checked, so a
 		// valueOf that grows the buffer lands the write.
 		{`var b = new ArrayBuffer(0, {maxByteLength: 1}); var ta = new Int8Array(b);

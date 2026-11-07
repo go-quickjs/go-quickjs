@@ -221,9 +221,11 @@ func TestDataViewCheckOrder(t *testing.T) {
 		{`var b = new ArrayBuffer(8), d = new DataView(b);
 		  try { d.getInt16({valueOf: function () { b.transfer(); return 0 }}) }
 		  catch (e) { e.constructor.name }`, "TypeError"},
-		// The size getters still refuse a detached view outright.
+		// The size getters answer 0 for a detached view, as ECMA-262 has
+		// them since test262's e4fbf577 (TestDataViewOutOfBoundsGetters has
+		// V8's TypeError).
 		{`var b = new ArrayBuffer(8), d = new DataView(b); b.transfer();
-		  try { d.byteLength } catch (e) { e.constructor.name }`, "TypeError"},
+		  try { String(d.byteLength) } catch (e) { e.constructor.name }`, "0"},
 		// And the ordinary case is unaffected.
 		{`var d = new DataView(new ArrayBuffer(8)); d.setUint8(0, 5); String(d.getUint8(0))`,
 			"5"},

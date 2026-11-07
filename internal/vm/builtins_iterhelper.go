@@ -459,6 +459,9 @@ func (r *Runtime) helperStep(h *iterHelperData) (Value, bool, error) {
 			if h.hasInner {
 				v, ok, err := r.stepIterator(h.inner, h.innerNext)
 				if err != nil {
+					// An iterator that threw from next is finished, and only
+					// the one beneath it is closed.
+					h.hasInner = false
 					return Undefined, false, r.abandon(h, err)
 				}
 				if ok {

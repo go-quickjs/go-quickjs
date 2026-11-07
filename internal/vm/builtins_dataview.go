@@ -102,6 +102,21 @@ func (r *Runtime) dataViewLive(this Value, name string) (*dataViewData, error) {
 	return d, nil
 }
 
+// dataViewBounds recovers a view for byteLength and byteOffset, which answer
+// 0, reported by false, for one out of bounds of its buffer, where V8 throws
+// as the other methods do.
+func (r *Runtime) dataViewBounds(this Value, name string) (*dataViewData, bool, error) {
+	if r.nodeQuirks {
+		d, err := r.dataViewLive(this, name)
+		return d, err == nil, err
+	}
+	d, err := r.dataViewOf(this, name)
+	if err != nil {
+		return nil, false, err
+	}
+	return d, !d.outOfBounds(), nil
+}
+
 func (r *Runtime) initDataViewBuiltins() {
 	proto := newObject(r.proto.object, ClassObject)
 
@@ -186,17 +201,17 @@ func (r *Runtime) initDataViewBuiltins() {
 	})
 
 	r.defGetter(proto, "byteLength", func(rt *Runtime, this Value, args []Value) (Value, error) {
-		d, err := rt.dataViewLive(this, "DataView.prototype.byteLength")
-		if err != nil {
-			return Undefined, err
+		d, ok, err := rt.dataViewBounds(this, "DataView.prototype.byteLength")
+		if !ok || err != nil {
+			return Int(0), err
 		}
 		return Int(d.viewByteLength()), nil
 	})
 
 	r.defGetter(proto, "byteOffset", func(rt *Runtime, this Value, args []Value) (Value, error) {
-		d, err := rt.dataViewLive(this, "DataView.prototype.byteOffset")
-		if err != nil {
-			return Undefined, err
+		d, ok, err := rt.dataViewBounds(this, "DataView.prototype.byteOffset")
+		if !ok || err != nil {
+			return Int(0), err
 		}
 		return Int(d.byteOffset), nil
 	})
