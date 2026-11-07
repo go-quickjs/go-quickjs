@@ -356,6 +356,13 @@ type shapeTree struct {
 	// tree's for good (settleSites): what count is past it is the literals'
 	// roots made since it last was, which are not kept in the count.
 	settled int
+	// globalEpoch counts the changes to a global object's table other
+	// than an append (objGlobalBindings, layoutChanged) -- a binding
+	// deleted, its attributes changed -- and the script-level lexical
+	// bindings declared, which may shadow a global (declareGlobalLex).
+	// Native code reads a global's binding at its position while the count
+	// is what it was compiled with (abi.Context's GlobalEpoch).
+	globalEpoch uint64
 }
 
 const (
@@ -1056,6 +1063,9 @@ func (o *Object) layoutChanged() {
 	s := o.shape
 	if s == nil {
 		return
+	}
+	if o.flags&objGlobalBindings != 0 && s.tree != nil {
+		s.tree.globalEpoch++
 	}
 	s.protoChanged()
 	if s.loose {

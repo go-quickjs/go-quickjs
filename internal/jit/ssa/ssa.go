@@ -690,6 +690,9 @@ type Value struct {
 	// kind, as every guard's is.
 	Index int
 	Key   uint32
+	// Epoch, on an OpGlobalCell, is its site's (GlobalSite's Epoch), Const
+	// the global object: the cell is found by the count and the object.
+	Epoch uint32
 	// IC is what a property access's or a call's cache saw beyond Const's
 	// shape (InlineCache), or nil: most values are neither, and leave it
 	// out of their size.

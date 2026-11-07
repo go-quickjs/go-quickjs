@@ -9853,6 +9853,25 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.MovZX8(scratchA, scratchA)
 		c.setG(v, scratchA)
 	case ssa.OpGlobalCell, ssa.OpBindingCell:
+		if v.Op == ssa.OpGlobalCell && v.Epoch != 0 {
+			// The global object's bindings as they were, but for appends,
+			// and no lexical binding declared since (ssa.GlobalSite's
+			// Epoch); the scope's object the one compiled for, at
+			// Const's address: the binding is at its position. The count
+			// is compared whole: its low half comes back to the same value
+			// after 2**32 changes.
+			c.a.Load(scratchA, regCtx, abi.OffGlobalEpoch)
+			c.a.Load(scratchB, scratchA, 0)
+			c.a.OpImm(amd64.Cmp, scratchB, int32(v.Epoch-1), true)
+			guard.jump(amd64.CondNE)
+			c.movImm(scratchA, v.Const.Bits)
+			c.a.CmpMem(scratchA, regCtx, abi.OffGlobal, true)
+			guard.jump(amd64.CondNE)
+			c.a.Load(scratchA, scratchA, c.enc.ObjectProps)
+			c.a.OpImm(amd64.Add, scratchA, int32(v.Index)*c.enc.ValueSize, true)
+			c.setG(v, scratchA)
+			break
+		}
 		// No script-level lexical binding of the name, which would shadow
 		// it: its bit clear, or past the set's words. Then the binding
 		// where it was, the name's, and plain, initialized data: in the

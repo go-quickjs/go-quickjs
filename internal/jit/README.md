@@ -577,8 +577,19 @@ declarations, which come before its loops, are left to the interpreter,
 but for a `let`, `const` or `class` given its first value between two
 loops, which Go gives it and native code goes on. A script's globals and
 its top-level lexical bindings are read and assigned where they are, as a
-function reads them (`ssa.OpGlobalCell`, `OpLexCell`). A module's bindings
-are fixed once it is linked, so its code reads each one in the object that
+function reads them (`ssa.OpGlobalCell`, `OpLexCell`). A global's read
+finds its binding at the position in the global object's table it was
+compiled for while the runtime's count of changes to that table other
+than appends -- a binding deleted, its attributes changed -- and of
+script-level lexical bindings declared is what it was then
+(`abi.Context`'s `GlobalEpoch`, the VM's `objGlobalBindings`): a
+comparison of the whole count, whose low half comes round again, and of
+the object, where it had checked that no lexical binding shadowed the
+name, that the key at the position was the name's and that its binding
+was plain data, at every read. Past 64 such changes a read is compiled
+to check them again, so that a program that keeps deleting globals does
+not leave its code at each. A module's bindings are fixed once it is
+linked, so its code reads each one in the object that
 has it, at that object's address (`ssa.OpBindingCell`), as V8 reads a
 module's variables in its context and an import in its exporter's cell:
 its own bindings in its environment, an import where the binding it names

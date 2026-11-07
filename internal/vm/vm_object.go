@@ -204,6 +204,11 @@ const (
 	// long as the object is -- a node's old links, and through them every
 	// node a linked structure has let go of since.
 	objInlineProps
+	// objGlobalBindings marks a realm's global object, whose bindings
+	// native code reads at their positions in its table, trusting the
+	// shape tree's globalEpoch to say none has moved, changed its
+	// attributes or gone: layoutChanged counts each change of it there.
+	objGlobalBindings
 )
 
 // linearScanLimit is the property count below which lookup scans the keys

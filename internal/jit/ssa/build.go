@@ -2556,6 +2556,14 @@ func (b *builder) inlineExit(pc int) bool {
 // learned at each read's exit instead, in turn, a function was compiled
 // again for each, a dozen times, as each invocation of it came to one
 // more.
+//
+// Epoch, for a read of the global object's own binding, is one more than
+// the VM's count of changes to the global object's bindings other than
+// appends, and of the script-level lexical bindings declared, when the
+// code was compiled (abi.Context's GlobalEpoch), and Scope that object:
+// while the count is unchanged the binding is where it was, plain data,
+// unshadowed, and the read checks the count and the object rather than
+// each of those. 0 for none.
 type GlobalSite struct {
 	Key        uint32
 	Index      int32
@@ -2565,6 +2573,8 @@ type GlobalSite struct {
 	Holder     uintptr
 	Shadowable bool
 	Typed      bool
+	Epoch      uint32
+	Scope      uintptr
 }
 
 // PropertySite is a property site: its key, the VM's atom; and, if the
@@ -5406,6 +5416,8 @@ func (b *builder) globalCell(site GlobalSite, guard func(Op, Type, ir.ExitKind, 
 	cell.Index, cell.Key = int(site.Index), site.Key
 	if site.Holder != 0 {
 		cell.Const, cell.Global = ir.Value{Bits: uint64(site.Holder)}, site.Shadowable
+	} else if site.Epoch != 0 && cell.Op == OpGlobalCell {
+		cell.Const, cell.Epoch = ir.Value{Bits: uint64(site.Scope)}, site.Epoch
 	}
 	return cell
 }

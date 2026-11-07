@@ -8831,6 +8831,23 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.Cset(a64A, arm64.EQ)
 		c.setG(v, a64A)
 	case ssa.OpGlobalCell, ssa.OpBindingCell:
+		if v.Op == ssa.OpGlobalCell && v.Epoch != 0 {
+			// As amd64's: the count unchanged and the scope's object the
+			// one compiled for, the binding at its position; the count
+			// compared whole.
+			c.a.Load(a64A, a64Ctx, abi.OffGlobalEpoch)
+			c.a.Load(a64B, a64A, 0)
+			c.a.CmpImm(a64B, int64(v.Epoch-1), true)
+			guard.jump(arm64.NE)
+			c.movImm(a64A, v.Const.Bits)
+			c.a.Load(a64B, a64Ctx, abi.OffGlobal)
+			c.a.Cmp(a64A, a64B, true)
+			guard.jump(arm64.NE)
+			c.a.Load(a64A, a64A, c.enc.ObjectProps)
+			c.a.AddImm(a64A, a64A, int64(int32(v.Index)*c.enc.ValueSize), true)
+			c.setG(v, a64A)
+			break
+		}
 		// As amd64's: unshadowed, then the binding in the scope's object
 		// or the one at Const's address.
 		if v.Op == ssa.OpGlobalCell || v.Global {

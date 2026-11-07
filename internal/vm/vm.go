@@ -3109,6 +3109,8 @@ func evalVarProp(o *Object, name Atom) ownProp {
 // zone, and records that globalLex has one of the name.
 func (r *Runtime) declareGlobalLex(name Atom, flags propFlags) {
 	r.globalLex.setOwnRaw(name, uninitialized, flags)
+	// It may shadow a global native code reads by its position.
+	r.shapes.globalEpoch++
 	i := int(uint32(name) >> 6)
 	for len(r.lexNames) <= i {
 		r.lexNames = append(r.lexNames, 0)

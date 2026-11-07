@@ -8717,6 +8717,13 @@ func (e *jitEntry) setLoopSlots(fn *bytecode.Function, n int) {
 	}
 }
 
+// jitGlobalEpochs is the most changes of the global object's bindings
+// (shapeTree's globalEpoch) after which a global's read is still compiled
+// to check the count alone: a program that keeps deleting globals or
+// declaring lexical bindings has each such read check the binding itself,
+// rather than leave its code at every change.
+const jitGlobalEpochs = 64
+
 // jitLoopDone stands for an exit kind once Go has finished the loop it
 // left (jitFinishExit): the frame goes on after the call.
 const jitLoopDone = ^uint64(0)
@@ -10739,6 +10746,14 @@ func (fb *jitFeedback) Global(pc int) (ssa.GlobalSite, bool) {
 		}
 		return site, true
 	}
+	if s, p := env.shape, env.shape.keys[i]; env.flags&objGlobalBindings != 0 && s.unique && !s.loose && s.tree == fb.r.shapes &&
+		s.tree.globalEpoch < jitGlobalEpochs && !p.isAccessor() && p.flags&(propUninit|propPrivate|propDeleted) == 0 {
+		// Plain, initialized data at its position, unshadowed: so while no
+		// binding of the global object has changed but by appends, and no
+		// script-level lexical binding has been declared (globalEpoch),
+		// which the read checks rather than each of those.
+		site.Epoch, site.Scope = uint32(s.tree.globalEpoch)+1, uintptr(unsafe.Pointer(env))
+	}
 	site.Typed = !env.shape.keys[i].isAccessor() && jitTypedArray(env.vals()[i])
 	if p := env.shape.keys[i]; !p.isAccessor() && p.flags&(propWritable|propConfigurable) == 0 {
 		switch {
@@ -12568,7 +12583,7 @@ func (r *Runtime) jitShareContexts(idx int, f *frame) {
 		c := s.ssaCtxs[i]
 		c.StackBase, c.StackEnd = sh.stackBase, sh.stackEnd
 		c.StackTop, c.StackHigh = &r.stackTop, &r.stackHigh
-		c.BackEdges = &r.backEdges
+		c.BackEdges, c.GlobalEpoch = &r.backEdges, &r.shapes.globalEpoch
 		c.Global, c.LexNames, c.GlobalLex, c.StringMethods = sh.global, sh.lexNames, sh.globalLex, sh.strMethods
 		*(*Value)(unsafe.Pointer(&c.CharCodeAt)) = Value{}
 		if sh.charCodeAt != nil {
@@ -12660,6 +12675,7 @@ func (r *Runtime) jitGrowContexts() bool {
 	for _, c := range s.ssaCtxs[old:] {
 		c.StackBase, c.StackEnd, c.StackTop, c.StackHigh = last.StackBase, last.StackEnd, last.StackTop, last.StackHigh
 		c.BackEdges, c.Global, c.LexNames, c.GlobalLex = last.BackEdges, last.Global, last.LexNames, last.GlobalLex
+		c.GlobalEpoch = last.GlobalEpoch
 		c.StringMethods = last.StringMethods
 		c.CharCodeAt = last.CharCodeAt
 		c.StringProto, c.StringShape, c.CharCodeAtOffset = last.StringProto, last.StringShape, last.CharCodeAtOffset

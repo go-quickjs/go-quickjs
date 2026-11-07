@@ -538,6 +538,11 @@ type Context struct {
 	// of those left to shade or to write is kept here. At the end, as
 	// GoLast.
 	RecordAt uint64
+	// GlobalEpoch is the VM's count of changes to the global object's
+	// bindings other than appends, and of the script-level lexical
+	// bindings declared: a global's read compiled with it (ssa.GlobalSite's
+	// Epoch) finds the binding at its position while it is unchanged.
+	GlobalEpoch *uint64
 	// HighSeen is the VM stack's high water (StackHigh's) as a call entry
 	// in this context last found it, never above it: a call entry whose
 	// frame's top is no higher leaves the high water as it is, with no
@@ -909,23 +914,24 @@ var (
 	OffSpill            = int32(unsafe.Offsetof(Context{}.Spill))
 	OffKeep             = int32(unsafe.Offsetof(Context{}.Keep))
 
-	OffReturnTo   = int32(unsafe.Offsetof(Context{}.ReturnTo))
-	OffRetValue   = int32(unsafe.Offsetof(Context{}.RetValue))
-	OffLive       = int32(unsafe.Offsetof(Context{}.Live))
-	OffClosure    = int32(unsafe.Offsetof(Context{}.Closure))
-	OffBase       = int32(unsafe.Offsetof(Context{}.Base))
-	OffLevel      = int32(unsafe.Offsetof(Context{}.Level))
-	OffBounds     = int32(unsafe.Offsetof(Context{}.Bounds))
-	OffTailFrame  = int32(unsafe.Offsetof(Context{}.TailFrame))
-	OffFrameThis  = int32(unsafe.Offsetof(Context{}.FrameThis))
-	OffStackBase  = int32(unsafe.Offsetof(Context{}.StackBase))
-	OffStackEnd   = int32(unsafe.Offsetof(Context{}.StackEnd))
-	OffStackTop   = int32(unsafe.Offsetof(Context{}.StackTop))
-	OffStackHigh  = int32(unsafe.Offsetof(Context{}.StackHigh))
-	OffHighSeen   = int32(unsafe.Offsetof(Context{}.HighSeen))
-	OffTailReturn = int32(unsafe.Offsetof(Context{}.TailReturn))
-	OffNext       = int32(unsafe.Offsetof(Context{}.Next))
-	OffPrev       = int32(unsafe.Offsetof(Context{}.Prev))
+	OffReturnTo    = int32(unsafe.Offsetof(Context{}.ReturnTo))
+	OffRetValue    = int32(unsafe.Offsetof(Context{}.RetValue))
+	OffLive        = int32(unsafe.Offsetof(Context{}.Live))
+	OffClosure     = int32(unsafe.Offsetof(Context{}.Closure))
+	OffBase        = int32(unsafe.Offsetof(Context{}.Base))
+	OffLevel       = int32(unsafe.Offsetof(Context{}.Level))
+	OffBounds      = int32(unsafe.Offsetof(Context{}.Bounds))
+	OffTailFrame   = int32(unsafe.Offsetof(Context{}.TailFrame))
+	OffFrameThis   = int32(unsafe.Offsetof(Context{}.FrameThis))
+	OffStackBase   = int32(unsafe.Offsetof(Context{}.StackBase))
+	OffStackEnd    = int32(unsafe.Offsetof(Context{}.StackEnd))
+	OffStackTop    = int32(unsafe.Offsetof(Context{}.StackTop))
+	OffStackHigh   = int32(unsafe.Offsetof(Context{}.StackHigh))
+	OffHighSeen    = int32(unsafe.Offsetof(Context{}.HighSeen))
+	OffGlobalEpoch = int32(unsafe.Offsetof(Context{}.GlobalEpoch))
+	OffTailReturn  = int32(unsafe.Offsetof(Context{}.TailReturn))
+	OffNext        = int32(unsafe.Offsetof(Context{}.Next))
+	OffPrev        = int32(unsafe.Offsetof(Context{}.Prev))
 
 	OffExitDesc = int32(unsafe.Offsetof(Context{}.ExitDesc))
 	OffRegs     = int32(unsafe.Offsetof(Context{}.Regs))

@@ -394,6 +394,7 @@ func arg(args []Value, i int) Value {
 // initGlobals installs the global object and the standard library.
 func (r *Runtime) initGlobals() {
 	r.global = newObject(r.proto.object, ClassObject)
+	r.global.flags |= objGlobalBindings
 	r.globalLex = newObject(nil, ClassObject)
 	r.globalThis = Obj(r.global)
 
