@@ -1302,9 +1302,12 @@ type jitLiteral struct {
 	root *shape
 	pool *abi.ObjectPool
 	// array marks an array literal's (new_array), whose arrays have room
-	// for n elements and none yet.
-	array bool
-	n     int
+	// for n elements and none yet -- but for shared's, a literal of
+	// constants whose arrays are made whole, sharing them
+	// (sharedLiteralArray).
+	array  bool
+	shared bool
+	n      int
 	// lit is a regular expression literal's pattern (new_regexp), whose
 	// objects are its RegExps.
 	lit *bytecode.Constant
@@ -1336,7 +1339,15 @@ func (r *Runtime) jitLiteralAt(e *jitEntry, cl *closure, pc int) *jitLiteral {
 	if in.Op == bytecode.OpNewArray && in.A <= ir.MaxArrayLiteral {
 		e.literals = append(e.literals, jitLiteral{pc: int32(pc), pool: new(abi.ObjectPool), array: true, n: int(in.A), fn: cl.fn})
 		l := &e.literals[len(e.literals)-1]
-		l.pool.Source = unsafe.Pointer(jitLiteralArraySource[struct{}](r, cl, l.pool, pc, l.n))
+		if sharedLiteralSite(r, cl, pc) {
+			// A literal of constants its arrays share, whole as Go makes
+			// them: native code writes no element (ssa's LiteralSite's
+			// Shared).
+			l.shared = true
+			l.pool.Source = unsafe.Pointer(&jitPoolSource{array: true, n: l.n, sharedOf: cl, sharedPC: int32(pc)})
+		} else {
+			l.pool.Source = unsafe.Pointer(jitLiteralArraySource[struct{}](r, cl, l.pool, pc, l.n))
+		}
 		r.jitFillLiteral(l)
 		return l
 	}
@@ -1418,6 +1429,17 @@ func (r *Runtime) jitFillLiteral(l *jitLiteral) {
 	}
 	n := l.n
 	src := (*jitPoolSource)(pool.Source)
+	if src != nil && src.sharedOf != nil {
+		// A literal of constants: its arrays as the tree tier makes them,
+		// each whole (sharedLiteralArray).
+		for i := range int(pool.Size) {
+			a := sharedLiteralArray(r, src.sharedOf, int(src.sharedPC))
+			r.ensureShape(a)
+			pool.Objects[i] = unsafe.Pointer(a)
+		}
+		pool.Count, pool.Proto = pool.Size, unsafe.Pointer(r.proto.array)
+		return
+	}
 	if src != nil {
 		if s := src.sample; s != nil && len(s.elemsOf()) > n {
 			// The last array the pool gave grew past the literal's
@@ -1572,7 +1594,7 @@ func (fb *jitFeedback) Literal(pc int) (ssa.LiteralSite, bool) {
 	if l.root != nil {
 		k.shapes = append(k.shapes, remember(l.root))
 	}
-	return ssa.LiteralSite{Pool: uintptr(unsafe.Pointer(l.pool))}, true
+	return ssa.LiteralSite{Pool: uintptr(unsafe.Pointer(l.pool)), Shared: l.shared}, true
 }
 
 // Closure is ssa.ClosureFeedback's: the closure made at pc, natively from
@@ -9785,11 +9807,17 @@ func (r *Runtime) jitNewPool(o *Object) *abi.ObjectPool {
 // Source): a construction's function, or a literal's root shape and how
 // many fields or elements it has.
 type jitPoolSource struct {
-	ctor  *Object
-	root  *shape
-	n     int
-	array bool
-	lit   *bytecode.Constant
+	ctor *Object
+	root *shape
+	n    int
+	// array marks an array literal's pool; results, a call of next's pool
+	// of result objects (jitFillResults); sharedPC, with sharedOf, an
+	// array literal of constants whose arrays share them, made whole
+	// (sharedLiteralArray). The three share a word.
+	array    bool
+	results  bool
+	sharedPC int32
+	lit      *bytecode.Constant
 	// A closure's (jitFillClosures): its template, the function it is made
 	// in and that function's closures' environment.
 	tmpl Value
@@ -9800,11 +9828,11 @@ type jitPoolSource struct {
 	// pool's last filling (jitFillLiteral).
 	room   int
 	sample *Object
-	// results marks a call of next's pool of result objects
-	// (jitFillResults); gen is the generator function a call's pool of
-	// generators is of (jitFillGens).
-	results bool
-	gen     *Object
+	// gen is the generator function a call's pool of generators is of
+	// (jitFillGens).
+	gen *Object
+	// sharedOf is the closure of sharedPC's literal.
+	sharedOf *closure
 }
 
 // jitRefillPool fills pool again, run out, with more objects (ssa's

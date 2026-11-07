@@ -1405,6 +1405,10 @@ type BigIntConstFeedback interface {
 // which the VM keeps alive.
 type LiteralSite struct {
 	Pool uintptr
+	// Shared marks an array literal whose arrays the pool holds whole, its
+	// elements constants they share (the VM's objSharedElems): the take
+	// writes no element, and the literal's operands are not the code's.
+	Shared bool
 }
 
 // StringFeedback is Feedback that knows the property reads whose receivers
@@ -1643,8 +1647,10 @@ type CallSite struct {
 	ByCode, Env, Realm uintptr
 	// Literal marks an object literal's object (ir.ObjectLiteral), the
 	// pool's, with Alloc: no function, no operands; or an array literal's
-	// (ir.ArrayLiteral), whose Argc operands are its elements.
-	Literal bool
+	// (ir.ArrayLiteral), whose Argc operands are its elements -- none for
+	// Shared's, whose array the pool holds whole (LiteralSite's Shared):
+	// never left unmade (escape.go), which would make it empty.
+	Literal, Shared bool
 	// Fill, with Step, marks a destructuring's step (ir.IterStep's When),
 	// whose result is undefined once the iterator is done, not the
 	// uninitialized value a loop's step branches on.
@@ -7294,14 +7300,15 @@ func (b *builder) instruction(blk *Block, pc int) {
 			break
 		}
 		var elems []*Value
-		if in.Op == ir.ArrayLiteral {
+		if in.Op == ir.ArrayLiteral && !site.Shared {
 			elems = make([]*Value, in.Extra)
 			for i := range elems {
 				elems[i] = operand(ir.Slot(in.Dest + i))
 			}
 		}
 		call := guard(OpCall, Tagged, ir.HostExit, elems...)
-		b.f.cache(call).Calls = []*CallSite{{Pool: site.Pool, Alloc: true, Literal: true, Argc: len(elems), ThisSlot: -1}}
+		b.f.cache(call).Calls = []*CallSite{{Pool: site.Pool, Alloc: true, Literal: true, Argc: len(elems), ThisSlot: -1,
+			Shared: in.Op == ir.ArrayLiteral && site.Shared}}
 		call.Index = keep
 		cell := f.newValue(blk, OpCallCell, Source, call)
 		r := f.newValue(blk, OpKept, Tagged, cell, call)

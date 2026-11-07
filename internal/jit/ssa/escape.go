@@ -116,7 +116,7 @@ func poolTake(v *Value) *CallSite {
 	if site.Pool == 0 {
 		return nil
 	}
-	if site.Literal && site.Alloc && site.Argc == 0 || site.Receiver && !site.Derived && site.Parent == 0 && site.Via == 0 {
+	if site.Literal && site.Alloc && site.Argc == 0 && !site.Shared || site.Receiver && !site.Derived && site.Parent == 0 && site.Via == 0 {
 		return site
 	}
 	return nil
@@ -395,7 +395,7 @@ func (e *escaper) candidates() bool {
 			if site == nil {
 				continue
 			}
-			literal := site.Literal && site.Alloc && site.Argc == 0 && len(v.Args) == 0
+			literal := site.Literal && site.Alloc && site.Argc == 0 && !site.Shared && len(v.Args) == 0
 			receiver := site.Receiver && !site.Derived && site.Parent == 0 && site.Via == 0 && len(v.Args) >= 1
 			if !literal && !receiver {
 				continue
