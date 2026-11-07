@@ -2,6 +2,8 @@ package bytecode
 
 import (
 	"sort"
+	"strings"
+	"sync"
 	"unicode/utf8"
 )
 
@@ -26,7 +28,11 @@ type Script struct {
 	Comments *SourceComments
 
 	text string
-	// lineStarts holds the byte offset at which each line begins.
+	// lineStarts holds the byte offset at which each line begins, made by
+	// lineOnce when a position is first asked for: a compile needs none,
+	// and most scripts never report a position. Functions of a compiled
+	// Program may run in several runtimes at once.
+	lineOnce   sync.Once
 	lineStarts []int32
 	// lineOffset and columnOffset place the text within a larger file, as
 	// node:vm's options of those names do: every line is lineOffset further
@@ -69,16 +75,27 @@ func (s *Script) SetOffset(lineOffset, columnOffset int32) {
 
 // NewScript returns the script for a source text.
 func NewScript(name, text string) *Script {
-	s := &Script{Name: name, Referrer: name, text: text, lineStarts: make([]int32, 1, 64)}
+	s := &Script{Name: name, Referrer: name, text: text}
 	if name == "<eval>" {
 		s.Referrer = ""
 	}
-	for i := 0; i < len(text); i++ {
-		if text[i] == '\n' {
-			s.lineStarts = append(s.lineStarts, int32(i+1))
-		}
-	}
 	return s
+}
+
+// lines is the offset at which each line begins.
+func (s *Script) lines() []int32 {
+	s.lineOnce.Do(func() {
+		s.lineStarts = make([]int32, 1, 1+strings.Count(s.text, "\n"))
+		for p := 0; ; {
+			i := strings.IndexByte(s.text[p:], '\n')
+			if i < 0 {
+				return
+			}
+			p += i + 1
+			s.lineStarts = append(s.lineStarts, int32(p))
+		}
+	})
+	return s.lineStarts
 }
 
 // Offsets are where the script's text is placed within a larger file: how
@@ -118,9 +135,10 @@ func (s *Script) Position(pos int32) (line, col int32) {
 	if !s.HasText() || pos < 0 || int(pos) > len(s.text) {
 		return 0, 0
 	}
-	i := sort.Search(len(s.lineStarts), func(i int) bool { return s.lineStarts[i] > pos }) - 1
+	lines := s.lines()
+	i := sort.Search(len(lines), func(i int) bool { return lines[i] > pos }) - 1
 	col = 1
-	for p := int(s.lineStarts[i]); p < int(pos); {
+	for p := int(lines[i]); p < int(pos); {
 		r, size := utf8.DecodeRuneInString(s.text[p:])
 		if r > 0xFFFF {
 			col += 2
