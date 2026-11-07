@@ -124,7 +124,7 @@ func (b *builder) accessorOp(blk *Block, pc int, in ir.Instruction, a *AccessorS
 	site := a.Property
 	var holders *HolderChain
 	if site.Holders[0].Object != 0 {
-		holders = &HolderChain{Holders: site.Holders, More: site.More}
+		holders = b.f.holderChain(HolderChain{Holders: site.Holders, More: site.More})
 	}
 	cell := b.guardOf(blk, state, OpPropCell, Source, ir.HostExit, object)
 	cell.Const, cell.Index, cell.Key = ir.Value{Bits: uint64(site.Shape)}, int(site.Index), site.Key

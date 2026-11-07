@@ -86,9 +86,10 @@ type core struct {
 	// which the code keeps (Code.Calls); goCalls its calls of Go's
 	// (goState).
 	calls []*abi.CallState
-	// callSlab is where the calls' states are carved from, as exitDescs,
-	// and cs what their records are built with.
+	// callSlab and goSlab are where the calls' states are carved from, as
+	// exitDescs, and cs what their records are built with.
 	callSlab []abi.CallState
+	goSlab   []abi.GoCallState
 	cs       *callScratch
 	goCalls  []*abi.GoCallState
 	// keepRuns marks, by value ID, the first (keepFirst) and the last
@@ -2965,8 +2966,12 @@ func (c *core) finishCalls() {
 // operands the call writes itself: those a description cannot find.
 func (c *core) goState(op uint64, keep int, v *ssa.Value, args []*ssa.Value) (*abi.GoCallState, []bool) {
 	enc := c.enc
-	st := &abi.GoCallState{Op: op, Keep: uint64(keep), NumOffset: enc.NumOffset, RefOffset: enc.RefOffset,
-		UpvalueSlot: enc.UpvalueSlot, True: enc.True, False: enc.False, NaN: enc.CanonicalNaN}
+	if len(c.goSlab) == cap(c.goSlab) {
+		c.goSlab = make([]abi.GoCallState, 0, max(min(2*cap(c.goSlab), 32), 4))
+	}
+	c.goSlab = append(c.goSlab, abi.GoCallState{Op: op, Keep: uint64(keep), NumOffset: enc.NumOffset, RefOffset: enc.RefOffset,
+		UpvalueSlot: enc.UpvalueSlot, True: enc.True, False: enc.False, NaN: enc.CanonicalNaN})
+	st := &c.goSlab[len(c.goSlab)-1]
 	if v != nil && (ssa.GoOp(op&0xff) == ssa.GoCall || ssa.GoOp(op&0xff) == ssa.GoHost) {
 		// A call's, or an instruction's Go makes on the frame (GoHost):
 		// the instruction Go finds at the PC.

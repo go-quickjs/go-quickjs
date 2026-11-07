@@ -2783,7 +2783,8 @@ func buildCalls(w *Workspace, p *ir.Program, fb Feedback, plan *calledPlan) (*Fu
 	f.written = f.bools(p.Locals + p.StackSize)
 	f.assigned = p.Assigned
 	b := &builder{p: p, fb: fb, f: f, nslots: p.Locals + p.StackSize}
-	b.root = &frame{p: p, fb: fb, at: -1, givenPC0: -1}
+	b.root = f.newFrame()
+	*b.root = frame{p: p, fb: fb, at: -1, givenPC0: -1}
 	b.cur = b.root
 	if plan != nil {
 		b.called, b.given = plan.calls, plan.given
@@ -3941,7 +3942,8 @@ func (b *builder) inlineFrame(site InlineSite, calls, given []int, total *int, r
 	}
 	nslots, before, keeps := b.nslots, *total, b.f.Keeps
 	*total += len(site.Program.Code)
-	fr := &frame{p: q, fb: site.Feedback, site: site, result: result, base: b.nslots,
+	fr := b.f.newFrame()
+	*fr = frame{p: q, fb: site.Feedback, site: site, result: result, base: b.nslots,
 		parent: b.cur, depth: b.cur.depth + 1, nest: b.cur.nest + 1, keep: -1, at: at, givenPC0: -1}
 	if b.provisional || b.given != nil {
 		// Its path, which only a build inlining calls of what callees are
@@ -5169,7 +5171,7 @@ func (b *builder) instanceOfOp(blk *Block, pc int, k InstanceOfSite, guard func(
 		cell := guard(OpPropCell, Source, ir.HostExit, ctor)
 		cell.Const, cell.Index, cell.Key = ir.Value{Bits: uint64(site.Shape)}, int(site.Index), site.Key
 		if site.Holders[0].Object != 0 {
-			b.f.cache(cell).Holders = &HolderChain{Holders: site.Holders, More: site.More}
+			b.f.cache(cell).Holders = b.f.holderChain(HolderChain{Holders: site.Holders, More: site.More})
 		}
 		v := f.newValue(blk, OpLoadCell, Tagged, cell)
 		v.Shadow = cell
@@ -6163,8 +6165,8 @@ func (b *builder) frameState(blk *Block, pc int) *FrameState {
 			s.Slots[i] = b.read(i, blk)
 			s.Slots[i].Uses++
 		}
-		s.Inline = &InlineState{Parent: call.Inline, Closure: fr.site.Closure, Callee: fr.site.Callee, Base: fr.base, Locals: b.p.Locals, ThisSlot: fr.site.ThisSlot,
-			PC: b.p.Maps[pc].PC, Depth: depth, Site: pc}
+		s.Inline = b.f.inlineState(InlineState{Parent: call.Inline, Closure: fr.site.Closure, Callee: fr.site.Callee, Base: fr.base, Locals: b.p.Locals, ThisSlot: fr.site.ThisSlot,
+			PC: b.p.Maps[pc].PC, Depth: depth, Site: pc})
 		if fr.site.Arguments || fr.site.ReadsArguments {
 			s.Inline.Args = uint64(len(fr.args)+1)<<32 | uint64(fr.base-fr.argSlot)
 		}
@@ -6304,7 +6306,8 @@ func (b *builder) splitOn(blk *Block, cond *Value) (other, cont *Block) {
 // the value loaded from its cell where it finds one and Go's otherwise.
 func (b *builder) split(blk *Block, cond *Value, both bool) (yes, no, cont *Block) {
 	yes = b.blockAfter(blk)
-	made := []*Block{yes}
+	var room [3]*Block
+	made := append(room[:0], yes)
 	if both {
 		no = b.blockAfter(blk)
 		made = append(made, no)
@@ -6314,14 +6317,15 @@ func (b *builder) split(blk *Block, cond *Value, both bool) (yes, no, cont *Bloc
 	b.placeAfter(blk, made, cont)
 	blk.Kind, blk.Control, blk.State, blk.ExitKind = BlockIf, cond, nil, 0
 	cond.Uses++
-	yes.Kind, yes.Succs, yes.Preds, yes.Backedge = BlockPlain, []*Block{cont}, []*Block{blk}, []bool{false}
+	f := b.f
+	yes.Kind, yes.Succs, yes.Preds, yes.Backedge = BlockPlain, f.blocksOf(cont), f.blocksOf(blk), f.bools(1)
 	if both {
-		no.Kind, no.Succs, no.Preds, no.Backedge = BlockPlain, []*Block{cont}, []*Block{blk}, []bool{false}
-		blk.Succs = []*Block{yes, no}
-		cont.Preds, cont.Backedge = []*Block{yes, no}, []bool{false, false}
+		no.Kind, no.Succs, no.Preds, no.Backedge = BlockPlain, f.blocksOf(cont), f.blocksOf(blk), f.bools(1)
+		blk.Succs = f.blocksOf(yes, no)
+		cont.Preds, cont.Backedge = f.blocksOf(yes, no), f.bools(2)
 	} else {
-		blk.Succs = []*Block{yes, cont}
-		cont.Preds, cont.Backedge = []*Block{blk, yes}, []bool{false, false}
+		blk.Succs = f.blocksOf(yes, cont)
+		cont.Preds, cont.Backedge = f.blocksOf(blk, yes), f.bools(2)
 	}
 	for _, x := range made {
 		b.seal(x)
@@ -6372,16 +6376,17 @@ func (b *builder) blockAfter(blk *Block) *Block {
 // the rest of blk's instructions are cont's (b.next).
 func (b *builder) placeAfter(blk *Block, made []*Block, cont *Block) {
 	f := b.f
-	f.Blocks = f.Blocks[:len(f.Blocks)-len(made)]
+	// The new blocks are the list's last: they move to just after blk.
+	n := len(f.Blocks) - len(made)
 	at := 0
-	for i, x := range f.Blocks {
+	for i, x := range f.Blocks[:n] {
 		if x == blk {
 			at = i + 1
 			break
 		}
 	}
-	rest := append(made, f.Blocks[at:]...)
-	f.Blocks = append(f.Blocks[:at], rest...)
+	copy(f.Blocks[at+len(made):], f.Blocks[at:n])
+	copy(f.Blocks[at:], made)
 	cont.Kind, cont.Control, cont.Succs, cont.State, cont.ExitKind = blk.Kind, blk.Control, blk.Succs, blk.State, blk.ExitKind
 	cont.Yield, cont.YieldHandlers, blk.Yield, blk.YieldHandlers = blk.Yield, blk.YieldHandlers, false, nil
 	for _, s := range cont.Succs {
@@ -6926,7 +6931,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			cell.Const, cell.Index, cell.Key = ir.Value{Bits: uint64(s.Shape)}, int(s.Index), s.Key
 			if s.Primitive != PrimitiveString {
 				c := f.cache(cell)
-				c.Holders, c.Primitive = &HolderChain{Holders: s.Holders}, s.Primitive
+				c.Holders, c.Primitive = b.f.holderChain(HolderChain{Holders: s.Holders}), s.Primitive
 			}
 			v := f.newValue(blk, OpLoadCell, Tagged, cell)
 			v.Shadow = cell
@@ -6970,7 +6975,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 		// one.
 		var holders *HolderChain
 		if site.Holders[0].Object != 0 && site.Shape != 0 && in.Op != ir.PropertyWrite {
-			holders = &HolderChain{Holders: site.Holders, More: site.More}
+			holders = b.f.holderChain(HolderChain{Holders: site.Holders, More: site.More})
 		} else if site.Holders[0].Object != 0 {
 			site.Shape = 0
 		}

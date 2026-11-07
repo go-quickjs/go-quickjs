@@ -3407,6 +3407,10 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 		}
 	}
 	targets := fb.targetsBy[pc]
+	if len(targets) != 0 {
+		// A site is 464 bytes, each copied at every doubling of the list.
+		sites = make([]ssa.CallSite, 0, len(targets))
+	}
 	for _, x := range targets {
 		// The calls it makes natively, and those it inlines, which a
 		// compile past its budget for inlining (ssa's maxInlineTotal) calls

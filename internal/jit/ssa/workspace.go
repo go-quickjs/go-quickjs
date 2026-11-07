@@ -29,6 +29,9 @@ type Workspace struct {
 	accessors arena.Arena[AccessorSite]
 	answers   arena.Arena[siteAnswer]
 	callLists arena.Arena[[]*CallSite]
+	holders   arena.Arena[HolderChain]
+	inlines   arena.Arena[InlineState]
+	frames    arena.Arena[frame]
 	scratch   scratch
 	ready     bool
 }
@@ -53,6 +56,9 @@ func (w *Workspace) init() {
 	w.accessors.KeepBig()
 	w.answers.KeepBig()
 	w.callLists.KeepBig()
+	w.holders.KeepBig()
+	w.inlines.KeepBig()
+	w.frames.KeepBig()
 }
 
 // Bytes is the memory the workspace keeps between compiles: its arenas'
@@ -63,7 +69,7 @@ func (w *Workspace) Bytes() int { return w.arenaBytes() + w.scratchBytes() }
 func (w *Workspace) arenaBytes() int {
 	return w.values.Bytes() + w.refs.Bytes() + w.states.Bytes() + w.present.Bytes() + w.blocks.Bytes() + w.blockRefs.Bytes() +
 		w.refLists.Bytes() + w.bools.Bytes() + w.bytes.Bytes() + w.ints.Bytes() + w.caches.Bytes() + w.accessors.Bytes() +
-		w.answers.Bytes() + w.callLists.Bytes()
+		w.answers.Bytes() + w.callLists.Bytes() + w.holders.Bytes() + w.inlines.Bytes() + w.frames.Bytes()
 }
 
 // scratchBytes is what the passes' scratch tables keep.
@@ -106,6 +112,9 @@ func (w *Workspace) Rewind() {
 	w.accessors.Rewind()
 	w.answers.Rewind()
 	w.callLists.Rewind()
+	w.holders.Rewind()
+	w.inlines.Rewind()
+	w.frames.Rewind()
 	// The tables that hold what the compile's frames point to, which the
 	// workspace is not to keep alive.
 	clear(w.scratch.frameOf[:cap(w.scratch.frameOf)])
@@ -165,6 +174,42 @@ func (f *Func) callLists(n int) [][]*CallSite {
 		return f.ws.callLists.Make(n)
 	}
 	return make([][]*CallSite, n)
+}
+
+// holderChain is h in the workspace, if the Func has one.
+func (f *Func) holderChain(h HolderChain) *HolderChain {
+	if f.ws != nil {
+		p := &f.ws.holders.Make(1)[0]
+		*p = h
+		return p
+	}
+	return &h
+}
+
+// inlineState is s in the workspace, if the Func has one.
+func (f *Func) inlineState(s InlineState) *InlineState {
+	if f.ws != nil {
+		p := &f.ws.inlines.Make(1)[0]
+		*p = s
+		return p
+	}
+	return &s
+}
+
+// newFrame is a zero frame in the workspace, if the Func has one.
+func (f *Func) newFrame() *frame {
+	if f.ws != nil {
+		return &f.ws.frames.Make(1)[0]
+	}
+	return new(frame)
+}
+
+// blocksOf is a list of bs, of their number, in the workspace if the Func
+// has one.
+func (f *Func) blocksOf(bs ...*Block) []*Block {
+	l := f.blockList(len(bs))
+	copy(l, bs)
+	return l
 }
 
 // appendValue is append(s, v), growing s in the workspace if there is one.
