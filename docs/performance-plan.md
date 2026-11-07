@@ -1887,9 +1887,24 @@ Open from it:
   addresses in a spill slot, stored and loaded back each turn -- 152 of
   tail's 351 samples on the load and the read through it -- where its
   own code keeps it in a register: Zen 2 waits on the store's
-  forwarding, which Zen 5's memory renaming hides. The allocator spills
-  the interval that ends last, wherever it is used; a choice by next use
-  or by loop depth would serve every loop. The micro-benchmark
+  forwarding, which Zen 5's memory renaming hides. The allocator spilled
+  the interval that ends last, wherever it is used, and the cell address
+  ended at the back edge with the caller's values that only the loop's
+  exits read. It now spills the interval whose slot costs least for what
+  it frees -- its uses and definition, each weighed by the loops holding
+  it, over the rest of it, each position weighed as its block, a phi's
+  move to a slot its partner already has counted as none -- as LLVM's
+  linear scan weighed intervals. Over four JIT placements on the Ryzen
+  5 3600: List -13.7% against the inlining alone and -11.4% against the
+  base before it, AWFY -1.1%, Octane -1.0% (zlib -2.0%), V8 -0.2%,
+  micro geometric mean 0.997; compiles 1.3% slower (the scan 11.6 to
+  14.8 ms of 380 a run of Typescript's). Open: `bigint64_fnv1a` +5.7% at
+  every placement -- its loop's read of the `BigInt` global, which only
+  frame states read after its next instruction, is long and cheap and
+  now goes to a slot, stored and loaded straight back each turn. An
+  interval split after its last use in a register, which this
+  allocator does not do, would serve it and every value like it. The
+  micro-benchmark
   `method_call`, a call of a method whose loop runs no turns, kept out of
   line by it, is now inlined (-67%) and no longer times a call with a
   frame. A wider rule, inlining a loop only where the call's cost is not

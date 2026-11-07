@@ -1096,6 +1096,15 @@ func (c *core) allocate() error {
 		}
 		return edgeWeights[min(bits.OnesCount64(masks[b.ID]&masks[b.Preds[i].ID]), 3)]
 	}
+	// run is, by position plus 1, how often the positions up to it run
+	// (each its block's weight, bw below), from 0: the scan weighs what
+	// spilling an interval gives up by it.
+	run := c.words(count + 1)
+	// spend adds w to what x costs in a spill slot (useRec's cost).
+	spend := func(x *ssa.Value, w int32) {
+		r := &rec[x.ID]
+		r.cost = int32(min(int64(r.cost)+int64(w), math.MaxInt32))
+	}
 	mem, pairs := c.int32s(most)[:0], c.int32s(2 * most)[:0]
 	gm := c.groupMembers(most)
 	member := func(r *useRec, id int) int32 {
@@ -1114,6 +1123,15 @@ func (c *core) allocate() error {
 	kv := c.keepList()
 	for _, b := range c.order {
 		cur = b
+		if masks == nil {
+			masks = c.loopMasks()
+		}
+		// How often b runs, against the function's entry, as weight's edges;
+		// and so each of its positions, summed into run.
+		bw := int32(edgeWeights[min(bits.OnesCount64(masks[b.ID]), 3)])
+		for p := start[b.ID]; p <= end[b.ID]; p++ {
+			run[p+1] = run[p] + uint64(bw)
+		}
 		if len(b.Values) != 0 && b.Values[0].Op == ssa.OpPhi {
 			predEnd, predW = predEnd[:0], predW[:0]
 			for i, p := range b.Preds {
@@ -1136,6 +1154,13 @@ func (c *core) allocate() error {
 				if e := predEnd[i]; e >= 0 {
 					cur = b.Preds[i]
 					use(a, int(e))
+					if a != v {
+						// The edge's move reads the argument and writes
+						// the phi; a phi that is its own argument there,
+						// a value the loop does not change, moves nothing.
+						spend(a, predW[i])
+						spend(v, predW[i])
+					}
 				}
 				if a != v && phiOf[a.ID] == nil {
 					phiOf[a.ID] = v
@@ -1174,8 +1199,10 @@ func (c *core) allocate() error {
 			if fused {
 				p = end[b.ID]
 			}
+			spend(v, bw)
 			for _, a := range v.Args {
 				use(a, p)
+				spend(a, bw)
 				if a.Op == ssa.OpBoxF64 || a.Op == ssa.OpBoxBool {
 					// An operation may make a box again of its operand
 					// (remat) rather than read its word. A frame state naming
@@ -1183,6 +1210,7 @@ func (c *core) allocate() error {
 					// value is in no state, and its register had gone to
 					// another's: a Go call's argument was what that held.
 					use(a.Args[0], p)
+					spend(a.Args[0], bw)
 				}
 				if r := &rec[a.ID]; r.slot&slotShadow != 0 || r.def == 0 && a.Shadow != nil {
 					// It may read where its operand came from: a keep
@@ -1192,6 +1220,7 @@ func (c *core) allocate() error {
 					// captured local's is in no state (its slot is its
 					// cell), and the slot IR reads a local as an operand.
 					use(a.Shadow, p)
+					spend(a.Shadow, bw)
 				}
 			}
 			at := p
@@ -1217,9 +1246,11 @@ func (c *core) allocate() error {
 			if c.isLazy(b.Control) {
 				for _, a := range b.Control.Args {
 					use(a, end[b.ID])
+					spend(a, bw)
 				}
 			} else {
 				use(b.Control, end[b.ID])
+				spend(b.Control, bw)
 				if b.Control.Shadow != nil {
 					use(b.Control.Shadow, end[b.ID])
 				}
@@ -1648,14 +1679,16 @@ func (c *core) allocate() error {
 		// their ends, each shifted 32 bits, and indexes (soonest, then
 		// first spilled, first); those that end before an interval starts
 		// free their slots in the order spilled. The active intervals'
-		// ends and registers are beside them (aEnd, aReg), and budgets
-		// counts the budget loops' registers among them.
+		// ends, registers and costs in a slot are beside them (aEnd, aReg,
+		// aCost), and budgets counts the budget loops' registers among
+		// them.
 		cls, roots := ord[:n-floats], rootIn[:n-floats]
 		if float {
 			cls, roots = ord[n-floats:], rootIn[n-floats:]
 		}
 		active, spilled := c.intervalRefs(len(cls))[:0], c.intervalRefs(len(cls))[:0]
 		aEnd, aReg, done := c.ints(len(cls))[:0], c.ints(len(cls))[:0], c.ints(len(cls))[:0]
+		aCost := c.ints(len(cls))[:0]
 		ends := c.words(len(cls))[:0]
 		budgets := 0
 		nf := c.f.NumValues()
@@ -1725,6 +1758,42 @@ func (c *core) allocate() error {
 			spills++
 			return spills - 1, nil
 		}
+		// inSlot is what x costs in a slot (useRec's cost), less, where a
+		// phi it is an argument of, or an argument of it, is in a slot x
+		// may share (slot's related), twice their edge's weight: the
+		// edge's move, counted in cost as a slot's load or store, is none
+		// if x shares the slot, and one if x stays in a register. What x
+		// may share ended before x began, its place settled, so inSlot is
+		// found once for each interval, as it begins. Spilling by cost
+		// alone, Octane zlib's code read and wrote slots at its edges 5%
+		// more often than spilling by ends had (counted in its code), and
+		// ran 1.6% slower; so, 7% less often.
+		inSlot := func(x *ssa.Value) int {
+			// spilled reports whether y is in a slot that x may share: y's
+			// interval ends before x's begins.
+			spilled := func(y *ssa.Value) bool {
+				if !c.hasLoc[y.ID] {
+					return false
+				}
+				l := c.locAt(y)
+				return l.reg < 0 && l.spill >= 0 && iv[y.ID].end < iv[x.ID].start
+			}
+			w := int(rec[x.ID].cost)
+			if x.Op == ssa.OpPhi && x.ID < nf {
+				for i, a := range x.Args {
+					if a != x && inOrder[x.Block.Preds[i].ID] && spilled(a) {
+						w -= 2 * weight(x.Block, i)
+					}
+				}
+			} else if p := phiOf[x.ID]; p != nil && spilled(p) {
+				for i, a := range p.Args {
+					if a == x && inOrder[p.Block.Preds[i].ID] {
+						w -= 2 * weight(p.Block, i)
+					}
+				}
+			}
+			return w
+		}
 		// minEnd is at most the soonest an active interval ends: none
 		// ends before an interval that starts no later, and the active
 		// are looked at only once one may.
@@ -1740,12 +1809,12 @@ func (c *core) allocate() error {
 							budgets--
 						}
 					} else {
-						active[kept], aEnd[kept], aReg[kept] = a, e, aReg[i]
+						active[kept], aEnd[kept], aReg[kept], aCost[kept] = a, e, aReg[i], aCost[i]
 						kept++
 						minEnd = min(minEnd, e)
 					}
 				}
-				active, aEnd, aReg = active[:kept], aEnd[:kept], aReg[:kept]
+				active, aEnd, aReg, aCost = active[:kept], aEnd[:kept], aReg[:kept], aCost[:kept]
 			}
 			done = done[:0]
 			for len(ends) > 0 && int(ends[0]>>32) < it.start {
@@ -1785,6 +1854,7 @@ func (c *core) allocate() error {
 				c.used[k] |= 1 << reg
 				placed(k, reg, r)
 				active, aEnd, aReg = append(active, it), append(aEnd, it.end), append(aReg, reg)
+				aCost = append(aCost, inSlot(it.v))
 				if it.v.ID >= nf {
 					budgets++
 				}
@@ -1792,14 +1862,33 @@ func (c *core) allocate() error {
 				minEnd = min(minEnd, it.end)
 				continue
 			}
-			// Spill whichever interval ends last -- but a budget loop's
-			// register first, whose loop then counts in memory: the
-			// register costs no value of the loop a spill.
+			// Spill the interval whose slot costs least for the register it
+			// gives up -- but a budget loop's register first, whose loop
+			// then counts in memory: the register costs no value of the
+			// loop a spill. What an interval costs in a slot is its uses'
+			// and definition's weight (useRec's cost, inSlot), what it
+			// gives up is the rest of it, from here to its end, each
+			// position weighed as its block (run); the one of least cost
+			// for what it frees is spilled, and of those alike, the one
+			// ending last, as LLVM's linear scan weighed intervals, by their
+			// uses' frequency over their length. Spilling whichever ended
+			// last, as a linear scan of ends alone does, a value read every
+			// turn of an inner loop had gone to a slot, stored and loaded
+			// back each turn, beside values only exits and the code after
+			// the loop read: in AWFY List's tail, with isShorterThan's loop
+			// inlined, the second property read's cell address, which
+			// ended at the loop's back edge with the caller's values that
+			// only the loop's exits read, and lost the tie.
 			victim := it
 			vi := -1
+			// The ratios are compared as products, in floating point, which
+			// no function's weights overflow, each rounded (not fused).
+			itCost := inSlot(it.v)
+			vc, vr := float64(itCost), float64(run[it.end+1]-run[it.start])
 			for i, e := range aEnd {
-				if e > victim.end {
-					victim, vi = active[i], i
+				ac, ar := float64(aCost[i]), float64(run[e+1]-run[it.start])
+				if d := float64(ac*vr) - float64(vc*ar); d < 0 || d == 0 && e > victim.end {
+					victim, vi, vc, vr = active[i], i, ac, ar
 				}
 			}
 			if it.v.ID >= nf {
@@ -1829,7 +1918,7 @@ func (c *core) allocate() error {
 				reg = c.locAt(victim.v).reg
 				c.setLoc(it.v, loc{reg: reg, spill: -1})
 				c.setLoc(victim.v, loc{reg: -1, spill: s})
-				active[vi], aEnd[vi] = it, it.end
+				active[vi], aEnd[vi], aCost[vi] = it, it.end, itCost
 				if budget {
 					budgets--
 				}
@@ -2470,9 +2559,15 @@ func hasResult(v *ssa.Value) bool { return v.Type != ssa.None }
 //
 // hot is the last use's position but a call of Go's state's, which only its
 // refusal reads (saved's cold).
+//
+// cost is what keeping the value in a spill slot costs (allocate's spill
+// choice): its definition and each use that reads it -- an operand, a
+// branch's control, a phi's argument at its edge, not a frame state, which
+// only an exit reads -- each weighed by how often it runs, 16 to the power
+// of the loops holding it (edgeWeights), at most math.MaxInt32.
 type useRec struct {
-	end, def, xhead, mid, hot int32
-	slot                      uint8
+	end, def, xhead, mid, hot, cost int32
+	slot                            uint8
 }
 
 // useRec's slot: a value made where needed or a BigInt's box, whose state
