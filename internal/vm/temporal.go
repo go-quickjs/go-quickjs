@@ -234,7 +234,7 @@ func (r *Runtime) temporalSystemZone() (temporal.TimeZone, error) {
 	if err != nil {
 		return temporal.TimeZone{}, err
 	}
-	if tz, err := d.Zones.TimeZoneFromIdentifier([]byte(r.localZoneName())); err == nil {
+	if tz, err := d.Zones.TimeZoneFromIdentifier([]byte(r.localZoneName()), r.intlCompat()); err == nil {
 		return tz, nil
 	}
 	return d.Zones.UTC(), nil

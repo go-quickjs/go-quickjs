@@ -492,7 +492,7 @@ func (r *Runtime) temporalToCalendar(v Value) (*temporal.Calendar, error) {
 	if !v.IsString() {
 		return nil, r.temporalType("Calendar must be string or calendared Temporal object.")
 	}
-	id, ok := temporal.ParseCalendarString([]byte(temporalStdString(v.String())))
+	id, ok := temporal.ParseCalendarString([]byte(temporalStdString(v.String())), r.intlCompat())
 	if !ok {
 		return nil, r.temporalRange("Invalid calendar string")
 	}
@@ -551,7 +551,7 @@ func (r *Runtime) temporalToTimeZone(v Value) (temporal.TimeZone, error) {
 	if err != nil {
 		return temporal.TimeZone{}, err
 	}
-	tz, err := d.Zones.TimeZoneFromString([]byte(temporalStdString(v.String())))
+	tz, err := d.Zones.TimeZoneFromString([]byte(temporalStdString(v.String())), r.intlCompat())
 	return tz, r.temporalErr(err)
 }
 
@@ -784,6 +784,15 @@ func (r *Runtime) temporalPrepareFields(cal *temporal.Calendar, o *Object, which
 }
 
 func temporalClamp(f, lo, hi float64) float64 { return math.Max(lo, math.Min(hi, f)) }
+
+// monthDayYear reads the year of a PlainMonthDay's fields, before
+// temporalRegulateDate clamps it (temporal.MonthDayYear).
+func (rec *temporalRecord) monthDayYear(cal *temporal.Calendar, compat intl.Compat) {
+	if rec.year != nil {
+		y := temporal.MonthDayYear(*rec.year, cal, compat)
+		rec.year = &y
+	}
+}
 
 // temporalRegulateDate is DateRecord::Regulate, and temporal_capi's
 // conversion of the result.

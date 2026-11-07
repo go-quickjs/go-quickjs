@@ -202,7 +202,7 @@ func (r *Runtime) initTemporalZonedDateTime(ns *Object) {
 		if err != nil {
 			return temporal.ZonedDateTime{}, err
 		}
-		tz, err := d.Zones.TimeZoneFromIdentifier([]byte(temporalStdString(arg(args, 1).String())))
+		tz, err := d.Zones.TimeZoneFromIdentifier([]byte(temporalStdString(arg(args, 1).String())), rt.intlCompat())
 		if err != nil {
 			return temporal.ZonedDateTime{}, rt.temporalErr(err)
 		}

@@ -41,7 +41,7 @@ func (r *Runtime) toTemporalPlainTime(v, opts Value, method string) (temporal.Pl
 		if err != nil {
 			return temporal.PlainTime{}, err
 		}
-		t, err := temporal.ParsePlainTime(b)
+		t, err := temporal.ParsePlainTime(b, r.intlCompat())
 		if err != nil {
 			return temporal.PlainTime{}, r.temporalErr(err)
 		}
@@ -95,7 +95,7 @@ func (r *Runtime) toTemporalPlainDate(v, opts Value, method string) (temporal.Pl
 		if err != nil {
 			return temporal.PlainDate{}, err
 		}
-		p, err := temporal.ParseDate(b)
+		p, err := temporal.ParseDate(b, r.intlCompat())
 		if err != nil {
 			return temporal.PlainDate{}, r.temporalErr(err)
 		}
@@ -152,7 +152,7 @@ func (r *Runtime) toTemporalPlainDateTime(v, opts Value, method string) (tempora
 			if err != nil {
 				return temporal.PlainDateTime{}, err
 			}
-			p, err := temporal.ParseDateTime(b)
+			p, err := temporal.ParseDateTime(b, r.intlCompat())
 			if err != nil {
 				return temporal.PlainDateTime{}, r.temporalErr(err)
 			}
@@ -210,7 +210,7 @@ func (r *Runtime) toTemporalPlainYearMonth(v, opts Value, method string) (tempor
 		if err != nil {
 			return temporal.PlainYearMonth{}, err
 		}
-		p, err := temporal.ParseYearMonth(b)
+		p, err := temporal.ParseYearMonth(b, r.intlCompat())
 		if err != nil {
 			return temporal.PlainYearMonth{}, r.temporalErr(err)
 		}
@@ -256,7 +256,7 @@ func (r *Runtime) toTemporalPlainMonthDay(v, opts Value, method string) (tempora
 		if err != nil {
 			return temporal.PlainMonthDay{}, err
 		}
-		p, err := temporal.ParseMonthDay(b)
+		p, err := temporal.ParseMonthDay(b, r.intlCompat())
 		if err != nil {
 			return temporal.PlainMonthDay{}, r.temporalErr(err)
 		}
@@ -285,6 +285,7 @@ func (r *Runtime) toTemporalPlainMonthDay(v, opts Value, method string) (tempora
 	if err != nil {
 		return temporal.PlainMonthDay{}, err
 	}
+	rec.monthDayYear(cal, r.intlCompat())
 	f, err := r.temporalRegulateDate(rec, overflow)
 	if err != nil {
 		return temporal.PlainMonthDay{}, err
@@ -316,7 +317,7 @@ func (r *Runtime) toTemporalInstant(v Value) (temporal.Instant, error) {
 	if err != nil {
 		return temporal.Instant{}, err
 	}
-	i, err := temporal.ParseInstant(b)
+	i, err := temporal.ParseInstant(b, r.intlCompat())
 	return i, r.temporalErr(err)
 }
 
@@ -338,7 +339,7 @@ func (r *Runtime) toTemporalZonedDateTime(v, opts Value, method string, present 
 		if err != nil {
 			return temporal.ZonedDateTime{}, err
 		}
-		p, err := d.Zones.ParseZonedDateTime(b)
+		p, err := d.Zones.ParseZonedDateTime(b, r.intlCompat())
 		if err != nil {
 			return temporal.ZonedDateTime{}, r.temporalErr(err)
 		}
@@ -499,7 +500,7 @@ func (r *Runtime) temporalRelativeTo(o *Object) (temporal.RelativeTo, error) {
 		if err != nil {
 			return temporal.RelativeTo{}, err
 		}
-		rel, err := data.ParseRelativeTo(b)
+		rel, err := data.ParseRelativeTo(b, r.intlCompat())
 		return rel, r.temporalErr(err)
 	}
 	if !v.IsObject() {

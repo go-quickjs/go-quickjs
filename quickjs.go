@@ -347,6 +347,14 @@ func WithLocale(tag string) Option {
 // standard reports the year it writes. And Date's getTimezoneOffset counts
 // whole minutes, truncated: 16 for Abidjan's local mean time in 1900, 16
 // minutes and 8 seconds, where the standard answers 16.133333333333333.
+// Temporal reads a string's annotations a character ahead, as ixdtf before
+// 0.6.7 does: it refuses [a=b] and [u-ca=x], whose key and value are of one
+// character, and takes [aa=-b] and [Asia/Calcutta/], which the grammar does
+// not. It clamps the year of an ISO PlainMonthDay to an int32 as it does any
+// date's: {year: 1000000000000004, monthCode: "M02", day: 29} is 02-28 where
+// the standard, which uses that year only to apply overflow, answers 02-29.
+// And DataView's byteLength and byteOffset throw for a view out of bounds of
+// its buffer, where the standard answers 0.
 //
 // It is useful for hosts that prioritize Node compatibility over conformance.
 func WithNodeQuirks() Option {

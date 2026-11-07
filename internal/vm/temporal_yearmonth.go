@@ -241,6 +241,7 @@ func (r *Runtime) initTemporalPlainMonthDay(ns *Object) {
 		if err != nil {
 			return Undefined, err
 		}
+		rec.monthDayYear(md.Calendar(), rt.intlCompat())
 		f, err := rt.temporalRegulateDate(rec, ov)
 		if err != nil {
 			return Undefined, err

@@ -1288,12 +1288,14 @@ func TestIntlDoubleRangeIdentity(t *testing.T) {
 func TestIntlLaterDivergences(t *testing.T) {
 	const year = `String(new Intl.DateTimeFormat("te", {calendar: "buddhist", year: "numeric", month: "long", timeZone: "UTC"}).resolvedOptions().year)`
 	const offset = `String(new Date(-2208988800000).getTimezoneOffset())`
+	const annotated = `(function() { try { return String(Temporal.Instant.from("2020-06-15T12:00Z[a=b]")) } catch (e) { return e.name } })()`
+	const monthDay = `String(Temporal.PlainMonthDay.from({year: 1000000000000004, monthCode: "M02", day: 29}))`
 	for _, c := range []struct {
-		quirks       bool
-		year, offset string
+		quirks                            bool
+		year, offset, annotated, monthDay string
 	}{
-		{false, "numeric", "16.133333333333333"},
-		{true, "undefined", "16"},
+		{false, "numeric", "16.133333333333333", "2020-06-15T12:00:00Z", "02-29"},
+		{true, "undefined", "16", "RangeError", "02-28"},
 	} {
 		var opts []quickjs.Option
 		if c.quirks {
@@ -1306,6 +1308,12 @@ func TestIntlLaterDivergences(t *testing.T) {
 		}
 		if got := evalString(t, rt, offset); got != c.offset {
 			t.Errorf("quirks %v: offset %q, want %q", c.quirks, got, c.offset)
+		}
+		if got := evalString(t, rt, annotated); got != c.annotated {
+			t.Errorf("quirks %v: annotation %q, want %q", c.quirks, got, c.annotated)
+		}
+		if got := evalString(t, rt, monthDay); got != c.monthDay {
+			t.Errorf("quirks %v: month and day %q, want %q", c.quirks, got, c.monthDay)
 		}
 		rt.Close()
 	}
