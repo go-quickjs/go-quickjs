@@ -1,9 +1,13 @@
 name: CI
 
 # A change to documentation alone builds and tests nothing: CI runs when
-# anything else changes, with the documentation or without it.
+# anything else changes, with the documentation or without it. A tag runs
+# nothing either: GitHub applies no path filter to a tag, which would test
+# again a commit its branch has tested, so that a push names branches alone.
 on:
   push:
+    branches:
+      - "**"
     paths-ignore:
       - "**.md"
       - "LICENSE"
