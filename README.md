@@ -47,10 +47,10 @@ called in every language. It is held against a full ICU build:
 [7,948 of 7,949 cases match it exactly](intl_test.go), and the one that does
 not is named.
 
-Of the 99,979 test262 variants in the areas the engine claims -- the language,
-the built-ins, `Intl` and Annex B -- 99,637 pass, none fail, and 342 are
+Of the 100,319 test262 variants in the areas the engine claims -- the language,
+the built-ins, `Intl` and Annex B -- 99,977 pass, none fail, and 342 are
 skipped because they require an unsupported feature or host facility, on
-test262 commit [`2e0a5676`](https://github.com/tc39/test262/commit/2e0a56762801e275a9fdf96dc49d90ba0cddcf63). See [Conformance](docs/status.md#conformance) for the
+test262 commit [`e4fbf577`](https://github.com/tc39/test262/commit/e4fbf57745c6aae3d1f12f181ecef78b1665d812). See [Conformance](docs/status.md#conformance) for the
 measurement and [Not implemented](docs/status.md#not-implemented) for what is missing.
 
 ## Performance

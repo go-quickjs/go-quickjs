@@ -206,7 +206,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: tc39/test262
-          ref: 2e0a56762801e275a9fdf96dc49d90ba0cddcf63
+          ref: e4fbf57745c6aae3d1f12f181ecef78b1665d812
           path: test262
 
       - name: Set up Go
