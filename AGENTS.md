@@ -332,8 +332,10 @@ first thrown away, and after each benchmark the runner prints each
 phase's time per run of them all -- the SSA's build and optimization,
 the backend's analyses, its allocation's uses, liveness, intervals,
 hints and scan, the calls' saves, the instruction selection and the
-encoding (`mir.Times`). That is the compiler's own CPU, apart from the
-program's; with `-cpuprofile` the profile is mostly the compiler's.
+encoding (`mir.Times`) -- and what the repeated compiles allocated. That
+is the compiler's own CPU and garbage, apart from the program's; with
+`-cpuprofile` or `-memprofile` the profile is mostly the compiler's, and
+`pprof -focus=jitCompileAgain` is nothing else.
 
 ```sh
 go run -tags quickjs_jit ./internal/cmd/v8bench -jit -bench octane -dir /tmp/octane -suite Typescript -mode fixed -n 1 -jitcompile 10
