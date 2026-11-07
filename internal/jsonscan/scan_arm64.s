@@ -1,0 +1,206 @@
+//go:build !purego
+
+#include "textflag.h"
+
+// func asciiNEON(p *byte, n int) int
+TEXT ·asciiNEON(SB), NOSPLIT, $0-24
+	MOVD p+0(FP), R0
+	MOVD n+8(FP), R1
+	MOVD R0, R2
+	MOVD $0x22, R3
+	VDUP R3, V1.B16 // '"'
+	MOVD $0x5C, R3
+	VDUP R3, V2.B16 // '\\'
+	MOVD $0xE0, R3
+	VDUP R3, V3.B16 // what a control has none of
+	MOVD $0x80, R3
+	VDUP R3, V4.B16 // what a byte above ASCII has
+	VEOR V5.B16, V5.B16, V5.B16
+
+	// Reads 64 bytes while nothing stops it, and leaves finding the byte
+	// to the loop below. A byte's top four bits look up whether it is a
+	// control or above ASCII, which is one operation for what took four.
+	MOVD $0xFFFF, R3
+	VMOV R3, V23.D[0]
+	MOVD $-1, R3
+	VMOV R3, V23.D[1]
+
+asciiFast:
+	CMP  $64, R1
+	BLT  asciiLoop
+	VLD1 (R0), [V18.B16, V19.B16, V20.B16, V21.B16]
+	VUSHR $4, V18.B16, V24.B16
+	VTBL V24.B16, [V23.B16], V24.B16
+	VCMEQ V18.B16, V1.B16, V28.B16
+	VCMEQ V18.B16, V2.B16, V29.B16
+	VORR V28.B16, V29.B16, V28.B16
+	VORR V24.B16, V28.B16, V24.B16
+	VUSHR $4, V19.B16, V25.B16
+	VTBL V25.B16, [V23.B16], V25.B16
+	VCMEQ V19.B16, V1.B16, V28.B16
+	VCMEQ V19.B16, V2.B16, V29.B16
+	VORR V28.B16, V29.B16, V28.B16
+	VORR V25.B16, V28.B16, V25.B16
+	VUSHR $4, V20.B16, V26.B16
+	VTBL V26.B16, [V23.B16], V26.B16
+	VCMEQ V20.B16, V1.B16, V28.B16
+	VCMEQ V20.B16, V2.B16, V29.B16
+	VORR V28.B16, V29.B16, V28.B16
+	VORR V26.B16, V28.B16, V26.B16
+	VUSHR $4, V21.B16, V27.B16
+	VTBL V27.B16, [V23.B16], V27.B16
+	VCMEQ V21.B16, V1.B16, V28.B16
+	VCMEQ V21.B16, V2.B16, V29.B16
+	VORR V28.B16, V29.B16, V28.B16
+	VORR V27.B16, V28.B16, V27.B16
+	VORR V24.B16, V25.B16, V24.B16
+	VORR V26.B16, V27.B16, V26.B16
+	VORR V24.B16, V26.B16, V24.B16
+	// The sum of two masks of whole bytes is 0 only if both are.
+	VADDP V24.D2, V24.D2, V24.D2
+	VMOV V24.D[0], R3
+	CBNZ R3, asciiLoop
+	ADD  $64, R0
+	SUB  $64, R1
+	B    asciiFast
+
+asciiLoop:
+	CMP  $16, R1
+	BLT  asciiDone
+	VLD1 (R0), [V0.B16]
+	VCMEQ V0.B16, V1.B16, V6.B16
+	VCMEQ V0.B16, V2.B16, V7.B16
+	VAND V0.B16, V3.B16, V16.B16
+	VCMEQ V16.B16, V5.B16, V16.B16
+	VAND V0.B16, V4.B16, V17.B16
+	VCMEQ V17.B16, V4.B16, V17.B16
+	VORR V6.B16, V7.B16, V6.B16
+	VORR V16.B16, V17.B16, V16.B16
+	VORR V6.B16, V16.B16, V6.B16
+	VMOV V6.D[0], R3
+	VMOV V6.D[1], R4
+	ORR  R3, R4, R5
+	CBNZ R5, asciiFound
+	ADD  $16, R0
+	SUB  $16, R1
+	B    asciiLoop
+
+asciiFound:
+	CBNZ R3, asciiLow
+	MOVD R4, R3
+	ADD  $8, R0
+
+asciiLow:
+	RBIT R3, R3
+	CLZ  R3, R3
+	ADD  R3>>3, R0, R0
+
+asciiDone:
+	SUB  R2, R0, R0
+	MOVD R0, ret+16(FP)
+	RET
+
+// func wideNEON(p *byte, n int, other byte) int
+TEXT ·wideNEON(SB), NOSPLIT, $0-32
+	MOVD p+0(FP), R0
+	MOVD n+8(FP), R1
+	MOVBU other+16(FP), R3
+	MOVD R0, R2
+	VDUP R3, V4.B16 // what else to stop at
+	MOVD $0x22, R3
+	VDUP R3, V1.B16 // '"'
+	MOVD $0x5C, R3
+	VDUP R3, V2.B16 // '\\'
+	MOVD $0xE0, R3
+	VDUP R3, V3.B16 // what a control has none of
+	VEOR V5.B16, V5.B16, V5.B16
+
+	// Reads 64 bytes while nothing stops it, and leaves finding the byte
+	// to the loop below. A byte's top four bits look up whether it is a
+	// control, which is one operation for what took four.
+	MOVD $0xFFFF, R3
+	VMOV R3, V23.D[0]
+	MOVD $0, R3
+	VMOV R3, V23.D[1]
+
+wideFast:
+	CMP  $64, R1
+	BLT  wideLoop
+	VLD1 (R0), [V18.B16, V19.B16, V20.B16, V21.B16]
+	VUSHR $4, V18.B16, V24.B16
+	VTBL V24.B16, [V23.B16], V24.B16
+	VCMEQ V18.B16, V1.B16, V28.B16
+	VCMEQ V18.B16, V2.B16, V29.B16
+	VORR V28.B16, V29.B16, V28.B16
+	VORR V24.B16, V28.B16, V24.B16
+	VCMEQ V18.B16, V4.B16, V28.B16
+	VORR V24.B16, V28.B16, V24.B16
+	VUSHR $4, V19.B16, V25.B16
+	VTBL V25.B16, [V23.B16], V25.B16
+	VCMEQ V19.B16, V1.B16, V28.B16
+	VCMEQ V19.B16, V2.B16, V29.B16
+	VORR V28.B16, V29.B16, V28.B16
+	VORR V25.B16, V28.B16, V25.B16
+	VCMEQ V19.B16, V4.B16, V28.B16
+	VORR V25.B16, V28.B16, V25.B16
+	VUSHR $4, V20.B16, V26.B16
+	VTBL V26.B16, [V23.B16], V26.B16
+	VCMEQ V20.B16, V1.B16, V28.B16
+	VCMEQ V20.B16, V2.B16, V29.B16
+	VORR V28.B16, V29.B16, V28.B16
+	VORR V26.B16, V28.B16, V26.B16
+	VCMEQ V20.B16, V4.B16, V28.B16
+	VORR V26.B16, V28.B16, V26.B16
+	VUSHR $4, V21.B16, V27.B16
+	VTBL V27.B16, [V23.B16], V27.B16
+	VCMEQ V21.B16, V1.B16, V28.B16
+	VCMEQ V21.B16, V2.B16, V29.B16
+	VORR V28.B16, V29.B16, V28.B16
+	VORR V27.B16, V28.B16, V27.B16
+	VCMEQ V21.B16, V4.B16, V28.B16
+	VORR V27.B16, V28.B16, V27.B16
+	VORR V24.B16, V25.B16, V24.B16
+	VORR V26.B16, V27.B16, V26.B16
+	VORR V24.B16, V26.B16, V24.B16
+	// The sum of two masks of whole bytes is 0 only if both are.
+	VADDP V24.D2, V24.D2, V24.D2
+	VMOV V24.D[0], R3
+	CBNZ R3, wideLoop
+	ADD  $64, R0
+	SUB  $64, R1
+	B    wideFast
+
+wideLoop:
+	CMP  $16, R1
+	BLT  wideDone
+	VLD1 (R0), [V0.B16]
+	VCMEQ V0.B16, V1.B16, V6.B16
+	VCMEQ V0.B16, V2.B16, V7.B16
+	VCMEQ V0.B16, V4.B16, V17.B16
+	VAND V0.B16, V3.B16, V16.B16
+	VCMEQ V16.B16, V5.B16, V16.B16
+	VORR V6.B16, V7.B16, V6.B16
+	VORR V16.B16, V17.B16, V16.B16
+	VORR V6.B16, V16.B16, V6.B16
+	VMOV V6.D[0], R3
+	VMOV V6.D[1], R4
+	ORR  R3, R4, R5
+	CBNZ R5, wideFound
+	ADD  $16, R0
+	SUB  $16, R1
+	B    wideLoop
+
+wideFound:
+	CBNZ R3, wideLow
+	MOVD R4, R3
+	ADD  $8, R0
+
+wideLow:
+	RBIT R3, R3
+	CLZ  R3, R3
+	ADD  R3>>3, R0, R0
+
+wideDone:
+	SUB  R2, R0, R0
+	MOVD R0, ret+24(FP)
+	RET

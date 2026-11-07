@@ -1,3 +1,5 @@
+//go:build !purego
+
 #include "textflag.h"
 
 // func asciiAVX2(p *byte, n int) int

@@ -1,9 +1,10 @@
 // Package jsonscan finds where the plain text of a JSON string ends: the first
 // byte that is not simply itself. A long string is most of what a document
-// that has one costs, so where the machine can read 32 bytes at a time it
-// does; elsewhere the caller's own loop, which reads a word, goes on from the
-// start. Nothing here may be needed for an answer: each function says how far
-// the text is known to be plain, which may be nowhere.
+// that has one costs, so where the machine can read many bytes at a time, with
+// AVX2 on amd64 and NEON on arm64, it does; elsewhere the caller's own loop,
+// which reads a word, goes on from the start. Nothing here may be needed for an answer: each function says how far
+// the text is known to be plain, which may be nowhere. The purego build tag
+// leaves the scan out, which is how a machine compares the two.
 package jsonscan
 
 // MinLength is the length of text worth the call: below it the loops of the
