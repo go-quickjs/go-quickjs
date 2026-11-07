@@ -75,9 +75,9 @@ const (
 
 // unsupportedFeatures lists the test262 feature tags for things this engine
 // does not implement. A test tagged with one is skipped rather than counted as
-// a failure, because it is testing something that was never claimed.
+// a failure, except for source-import syntax tests that need no module source.
 var unsupportedFeatures = map[string]string{
-	"source-phase-imports-module-source": "JavaScript modules have no source",
+	"source-phase-imports-module-source": "test262's <module source> host module is not provided",
 	"decorators":                         "decorators are not implemented",
 	"caller":                             "no legacy caller access",
 }
@@ -311,6 +311,12 @@ func areaOf(path string) string {
 func runOne(suite *conformance.Suite, tc *conformance.Test,
 	forcedFeatures map[string]bool, jitStats *vm.JITStats) (result, string) {
 	for _, f := range tc.Meta.Features {
+		// These tests check the grammar without needing a successful source
+		// import. The tag also covers tests that need the host's source object.
+		if f == "source-phase-imports-module-source" &&
+			strings.HasPrefix(tc.Path, "language/expressions/dynamic-import/syntax/") {
+			continue
+		}
 		if reason, unsupported := unsupportedFeatures[f]; unsupported &&
 			reason != "" && !forcedFeatures[f] {
 			return resultSkip, reason
