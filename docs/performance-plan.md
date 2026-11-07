@@ -11,9 +11,9 @@ and what is still open, are in [After the review](#after-the-review).
 
 When the review was written, go-quickjs was level with C QuickJS over the V8
 suite and took about 1.4 times its time over QuickJS's own micro-benchmarks.
-At v0.33.0 it takes 0.54 times QuickJS's time over the V8 suite, 0.85 times
-by the geometric mean of the micro-benchmarks and 0.86 times over
-`microbench_extra.js`, and with the JIT 0.27, 0.32 and 0.35 times; see
+At v0.36.0 it takes 0.52 times QuickJS's time over the V8 suite, 0.81 times
+by the geometric mean of the micro-benchmarks and 0.71 times over
+`microbench_extra.js`, and with the JIT 0.25, 0.32 and 0.33 times; see
 [benchmarks.md](benchmarks.md#compared-with-c-quickjs). The figures in an
 item are from the runs of its time unless it says otherwise.
 
@@ -3509,8 +3509,8 @@ first, as the rest of the plan is.
   lookaheads no longer lex the next token, a script's line table is made
   when asked for, a function's tables are sized from its own source, and
   the hot nodes are smaller: Octane's compile at
-  one thread -24%, half its allocations and 70% of its bytes,
-  CodeLoad -18%. Bytecode, positions and errors are unchanged
+  one thread -24%, half its allocations and 70% of its bytes.
+  Bytecode, positions and errors are unchanged
   (`internal/cmd/compilediff`, the suites and test262). Left:
   `Token.IsPunct` chains and the name maps are each about 3% of a compile,
   the final tables are allocated one by one, and a string `Op` in a binary
