@@ -188,6 +188,9 @@ type keepPhis struct {
 func (p *keepPhis) add(f *Func, kept []bool, order []*Value, from int) []*Value {
 	if p.at == nil {
 		p.at, p.seen = f.ints(f.nextID), f.ints(f.nextID)
+		sc := f.scr()
+		p.users, p.next = sc.keepUsers[:0], sc.keepNext[:0]
+		defer func() { sc.keepUsers, sc.keepNext = p.users[:0], p.next[:0] }()
 		for _, b := range f.Blocks {
 			for _, v := range b.Values {
 				if v.Op != OpPhi {

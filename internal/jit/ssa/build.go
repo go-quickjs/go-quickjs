@@ -257,7 +257,7 @@ type forEachPlan struct {
 // this, reduce's initial value -- too. One that makes an array needs Go
 // to make it (GoNewArray).
 func (b *builder) forEachAt(pc int) (ForEachSite, bool) {
-	calls := b.calls[pc]
+	calls := b.callsAt(pc)
 	if b.fb == nil || b.cur != b.root || b.p.Code[pc].Op != ir.Host || len(calls) != 1 || calls[0].Go != GoCall || !calls[0].Method ||
 		calls[0].Argc != 1 && calls[0].Argc != 2 || b.fb.Generic(pc) || pc+1 >= len(b.p.Code) || !reachable(b.p, pc+1) {
 		return ForEachSite{}, false
@@ -369,7 +369,7 @@ func (b *builder) madeAt(pc int, made *MadeCallback) bool {
 	if b.cur != b.root || pc0 < 0 || pc0 >= pc || !reachable(p, pc0) || p.Code[pc0].Op != ir.Closure || b.host(pc0) || made.Template == 0 || made.Closure == 0 {
 		return false
 	}
-	slot := p.Locals + p.Maps[pc].Depth - b.calls[pc][0].Argc
+	slot := p.Locals + p.Maps[pc].Depth - b.callsAt(pc)[0].Argc
 	if p.Code[pc0].Dest != slot {
 		return false
 	}
@@ -423,7 +423,7 @@ func (b *builder) forEachCall(blk *Block, pc int, fp forEachPlan) {
 	mark, kind := fp.site.Kind, fp.site.Kind&abi.LoopKindMask
 	typed := mark&abi.LoopTyped != 0
 	reduce := kind == abi.LoopReduce
-	argc := b.calls[pc][0].Argc
+	argc := b.callsAt(pc)[0].Argc
 	sp := b.p.Locals + b.p.Maps[pc].Depth
 	dest := b.p.Locals + b.p.Maps[pc+1].Depth - 1
 	recv, fn, cb := b.read(sp-argc-2, blk), b.read(sp-argc-1, blk), b.read(sp-argc, blk)
@@ -774,7 +774,7 @@ func (b *builder) sortCall(blk *Block, pc int, fp forEachPlan) {
 	f := b.f
 	mark := fp.site.Kind
 	typed := mark&abi.LoopTyped != 0
-	argc := b.calls[pc][0].Argc
+	argc := b.callsAt(pc)[0].Argc
 	sp := b.p.Locals + b.p.Maps[pc].Depth
 	dest := b.p.Locals + b.p.Maps[pc+1].Depth - 1
 	recv, fn, cb := b.read(sp-argc-2, blk), b.read(sp-argc-1, blk), b.read(sp-argc, blk)
@@ -975,7 +975,7 @@ func (b *builder) indexOfAt(pc int) (fn uintptr, kind int, ok bool) {
 	if b.fb == nil || b.cur != b.root || b.p.Code[pc].Op != ir.Host || pc+1 >= len(b.p.Code) || !reachable(b.p, pc+1) || b.fb.Generic(pc) || !b.goCalls() {
 		return 0, 0, false
 	}
-	calls := b.calls[pc]
+	calls := b.callsAt(pc)
 	if len(calls) != 1 || calls[0].Go != GoCall || !calls[0].Method || calls[0].Argc != 1 && calls[0].Argc != 2 {
 		return 0, 0, false
 	}
@@ -997,7 +997,7 @@ func (b *builder) indexOfAt(pc int) (fn uintptr, kind int, ok bool) {
 // run anything for; those leave for Go to make the call after an exit.
 func (b *builder) indexOfCall(blk *Block, pc int, fn uintptr, kind int, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
 	f := b.f
-	argc := b.calls[pc][0].Argc
+	argc := b.callsAt(pc)[0].Argc
 	sp := b.p.Locals + b.p.Maps[pc].Depth
 	base := sp - argc - 2
 	recv, callee := b.read(base, blk), b.read(base+1, blk)
@@ -1013,7 +1013,7 @@ func (b *builder) indexOfCall(blk *Block, pc int, fn uintptr, kind int, guard fu
 		site.Argc |= IndexOfFrom
 	}
 	call := guard(OpCall, Tagged, ir.HostExit, args...)
-	f.cache(call).Calls, call.Index = []*CallSite{site}, b.callKeeps[pc]
+	f.cache(call).Calls, call.Index = []*CallSite{site}, b.callKeepAt(pc)
 	kept := f.newValue(blk, OpCallCell, Source, call)
 	r := f.newValue(blk, OpKept, Tagged, kept, call)
 	r.Shadow = kept
@@ -1064,7 +1064,7 @@ func (b *builder) leafAt(pc int) (uintptr, bool) {
 	if b.fb == nil || b.cur != b.root || b.p.Code[pc].Op != ir.Host || pc+1 >= len(b.p.Code) || !reachable(b.p, pc+1) || b.fb.Generic(pc) || !b.goCalls() {
 		return 0, false
 	}
-	calls := b.calls[pc]
+	calls := b.callsAt(pc)
 	if len(calls) != 1 || calls[0].Go != GoCall || calls[0].New || calls[0].Argc > abi.MaxGoArgs-2 {
 		return 0, false
 	}
@@ -1088,7 +1088,7 @@ func (b *builder) leafAt(pc int) (uintptr, bool) {
 // be.
 func (b *builder) leafCall(blk *Block, pc int, fn uintptr, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
 	f := b.f
-	c := b.calls[pc][0]
+	c := b.callsAt(pc)[0]
 	sp := b.p.Locals + b.p.Maps[pc].Depth
 	base := sp - c.Argc - 1
 	if c.Method {
@@ -1123,7 +1123,7 @@ func (b *builder) leafCall(blk *Block, pc int, fn uintptr, guard func(Op, Type, 
 		return
 	}
 	call := guard(OpCall, Tagged, ir.HostExit, args...)
-	f.cache(call).Calls, call.Index = []*CallSite{site}, b.callKeeps[pc]
+	f.cache(call).Calls, call.Index = []*CallSite{site}, b.callKeepAt(pc)
 	kept := f.newValue(blk, OpCallCell, Source, call)
 	r := f.newValue(blk, OpKept, Tagged, kept, call)
 	r.Shadow = kept
@@ -1202,7 +1202,7 @@ func (b *builder) leafNative(blk *Block, pc int, kind LeafKind, base int, args [
 	b.write(base, hit, made)
 	call := f.newValue(miss, OpCall, Tagged, args...)
 	f.cache(call).Calls = []*CallSite{site}
-	call.Aux, call.State, call.Index = int(ir.HostExit), st, b.callKeeps[pc]
+	call.Aux, call.State, call.Index = int(ir.HostExit), st, b.callKeepAt(pc)
 	st.addUse()
 	kept := f.newValue(miss, OpCallCell, Source, call)
 	r := f.newValue(miss, OpKept, Tagged, kept, call)
@@ -1225,7 +1225,7 @@ func (b *builder) bigStringAt(pc int) (uintptr, bool) {
 	if b.fb == nil || b.cur != b.root || b.p.Code[pc].Op != ir.Host || pc+1 >= len(b.p.Code) || !reachable(b.p, pc+1) || b.fb.Generic(pc) || !b.goCalls() {
 		return 0, false
 	}
-	calls := b.calls[pc]
+	calls := b.callsAt(pc)
 	if len(calls) != 1 || calls[0].Go != GoCall || !calls[0].Method || calls[0].Argc > 1 {
 		return 0, false
 	}
@@ -1245,7 +1245,7 @@ func (b *builder) bigStringAt(pc int) (uintptr, bool) {
 // result is the call's, kept where the call's would be.
 func (b *builder) bigStringCall(blk *Block, pc int, fn uintptr, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
 	f := b.f
-	argc := b.calls[pc][0].Argc
+	argc := b.callsAt(pc)[0].Argc
 	sp := b.p.Locals + b.p.Maps[pc].Depth
 	base := sp - argc - 2
 	recv, callee := b.read(base, blk), b.read(base+1, blk)
@@ -1257,7 +1257,7 @@ func (b *builder) bigStringCall(blk *Block, pc int, fn uintptr, guard func(Op, T
 		args = append(args, b.read(base+2+k, blk))
 	}
 	call := guard(OpCall, Tagged, ir.HostExit, args...)
-	f.cache(call).Calls, call.Index = []*CallSite{{Go: GoBigString, Argc: argc, ThisSlot: -1}}, b.callKeeps[pc]
+	f.cache(call).Calls, call.Index = []*CallSite{{Go: GoBigString, Argc: argc, ThisSlot: -1}}, b.callKeepAt(pc)
 	kept := f.newValue(blk, OpCallCell, Source, call)
 	r := f.newValue(blk, OpKept, Tagged, kept, call)
 	r.Shadow = kept
@@ -1278,7 +1278,7 @@ func (b *builder) parseIntAt(pc int) (uintptr, bool) {
 	if b.fb == nil || b.cur != b.root || b.p.Code[pc].Op != ir.Host || pc+1 >= len(b.p.Code) || !reachable(b.p, pc+1) || b.fb.Generic(pc) {
 		return 0, false
 	}
-	calls := b.calls[pc]
+	calls := b.callsAt(pc)
 	if len(calls) != 1 || calls[0].Go != GoCall || calls[0].Method || calls[0].New || calls[0].Argc != 1 ||
 		b.p.Maps[pc].Depth < 2 || b.p.Maps[pc+1].Depth != b.p.Maps[pc].Depth-1 {
 		return 0, false
@@ -2842,9 +2842,10 @@ type builder struct {
 	inlined   map[int]*frame
 	// calls are the calls made natively (OpCall), by PC: their blocks go
 	// on to the next instruction's.
-	calls map[int][]*CallSite
-	// callKeeps are, by PC, the keep cells of the calls' results (calls).
-	callKeeps map[int]int
+	calls [][]*CallSite
+	// callKeeps are, by PC, the keep cells of the calls' results (calls),
+	// plus one: 0 for a PC with none.
+	callKeeps []int
 	// closureKeeps are, by PC, the keep cells of the closures the root's
 	// code makes, or -1 for one Go makes (closureKeep).
 	closureKeeps map[int]int
@@ -3287,7 +3288,7 @@ func referenceReads(p *ir.Program, fb Feedback) *ir.Program {
 // native code, and nothing else (GoCall): native code goes on after it as
 // after any other value, in the same block, with no entry after it.
 func (b *builder) goesOn(pc int) bool {
-	calls := b.calls[pc]
+	calls := b.callsAt(pc)
 	return len(calls) == 1 && calls[0].Go == GoCall
 }
 
@@ -4915,7 +4916,7 @@ func (b *builder) fromCharCodeCall(blk *Block, pc int, fn uintptr, guard func(Op
 	same.Const = ir.Value{Bits: uint64(fn)}
 	x := b.read(sp-1, blk)
 	code := guard(OpUnboxF64, Float64, ir.HostExit, x)
-	keep, kept := b.callKeeps[pc]
+	keep, kept := b.callKept(pc)
 	if b.cur != b.root || !kept || !b.goCalls() {
 		cell := guard(OpCodeChar, Source, ir.HostExit, code)
 		v := b.f.newValue(blk, OpLoadCell, Tagged, cell)
@@ -4953,7 +4954,7 @@ func (b *builder) typeofAt(pc int) (uintptr, bool) {
 		b.p.Maps[pc].Depth < 1 || b.p.Maps[pc+1].Depth != b.p.Maps[pc].Depth || !b.goCalls() {
 		return 0, false
 	}
-	if calls := b.calls[pc]; len(calls) != 1 || calls[0].Go != GoCall || !calls[0].TypeOf {
+	if calls := b.callsAt(pc); len(calls) != 1 || calls[0].Go != GoCall || !calls[0].TypeOf {
 		return 0, false
 	}
 	f, ok := b.fb.(TypeofFeedback)
@@ -4983,8 +4984,8 @@ func (b *builder) typeofCall(blk *Block, pc int, cells uintptr) {
 	v.Shadow = cell
 	b.write(slot, hit, v)
 	call := f.newValue(miss, OpCall, Tagged, x)
-	f.cache(call).Calls = b.calls[pc]
-	call.Aux, call.State, call.Index = int(ir.HostExit), st, b.callKeeps[pc]
+	f.cache(call).Calls = b.callsAt(pc)
+	call.Aux, call.State, call.Index = int(ir.HostExit), st, b.callKeepAt(pc)
 	st.addUse()
 	kept := f.newValue(miss, OpCallCell, Source, call)
 	r := f.newValue(miss, OpKept, Tagged, kept, call)
@@ -5002,7 +5003,7 @@ func (b *builder) substring(pc int) (fn uintptr, kind int, ok bool) {
 		// known by its method's name, the call of another's.
 		return 0, 0, false
 	}
-	calls := b.calls[pc]
+	calls := b.callsAt(pc)
 	if len(calls) != 1 || calls[0].Go != GoCall || !calls[0].Method || calls[0].Argc != 1 && calls[0].Argc != 2 {
 		return 0, 0, false
 	}
@@ -5068,9 +5069,9 @@ func (b *builder) substringCall(blk *Block, pc int, fn uintptr, kind int, guard 
 		f.cache(call).Calls = []*CallSite{{Go: GoLeaf, Argc: argc, Method: true, ThisSlot: -1, Leaf: fn}}
 	} else {
 		call = f.newValue(miss, OpCall, Tagged, operands...)
-		f.cache(call).Calls = b.calls[pc]
+		f.cache(call).Calls = b.callsAt(pc)
 	}
-	call.Aux, call.State, call.Index = int(ir.HostExit), st, b.callKeeps[pc]
+	call.Aux, call.State, call.Index = int(ir.HostExit), st, b.callKeepAt(pc)
 	st.addUse()
 	kept := f.newValue(miss, OpCallCell, Source, call)
 	r := f.newValue(miss, OpKept, Tagged, kept, call)
@@ -5098,7 +5099,7 @@ func (b *builder) stringSelfCall(blk *Block, pc int, calls []*CallSite, slot int
 	_, other, _ := b.split(blk, is, true)
 	call := f.newValue(other, OpCall, Tagged, x)
 	f.cache(call).Calls = calls
-	call.Aux, call.State, call.Index = int(ir.HostExit), st, b.callKeeps[pc]
+	call.Aux, call.State, call.Index = int(ir.HostExit), st, b.callKeepAt(pc)
 	st.addUse()
 	kept := f.newValue(other, OpCallCell, Source, call)
 	r := f.newValue(other, OpKept, Tagged, kept, call)
@@ -5497,18 +5498,14 @@ func (b *builder) plan() error {
 			// String.fromCharCode's, which native code makes itself but for
 			// a code past Latin-1, a call of Go's (fromCharCodeCall): its
 			// result's keep cell.
-			if b.calls == nil {
-				b.calls, b.callKeeps = map[int][]*CallSite{}, map[int]int{}
-			}
-			b.callKeeps[pc] = b.f.Keeps
+			b.callTables()
+			b.callKeeps[pc] = b.f.Keeps + 1
 			b.f.Keeps++
 		}
 		if b.host(pc) && b.inlined[pc] == nil && b.f.Keeps < b.f.keepLimit() {
 			if calls := b.nativeCalls(pc); len(calls) != 0 {
-				if b.calls == nil {
-					b.calls, b.callKeeps = map[int][]*CallSite{}, map[int]int{}
-				}
-				b.calls[pc], b.callKeeps[pc] = calls, b.f.Keeps
+				b.callTables()
+				b.calls[pc], b.callKeeps[pc] = calls, b.f.Keeps+1
 				b.f.Keeps++
 				if site, ok := b.forEachAt(pc); ok && b.nslots+loopSlots(site.Kind) <= abi.MaxRecords && b.f.Keeps+loopKeeps(site.Kind) <= b.f.keepLimit() {
 					// A forEach made a loop of: its slots past every
@@ -5632,7 +5629,7 @@ func (b *builder) plan() error {
 				// again -- then the interpreter runs on to the next loop
 				// header, as from V8's deoptimizations.
 			case !resumes(pc):
-			case b.inlined[pc] == nil && functionCalls(b.calls[pc]) && !b.resumed(pc+1):
+			case b.inlined[pc] == nil && functionCalls(b.callsAt(pc)) && !b.resumed(pc+1):
 				// A call of a function native code makes returns to it: Go
 				// goes on after it only where the call left -- its callee
 				// not one the code checks for -- which seldom happens, and
@@ -5716,7 +5713,7 @@ func (b *builder) plan() error {
 	for _, pc := range starts {
 		b.blockAt[pc] = b.f.newBlock(pc)
 	}
-	b.endOf = make([]int, len(b.f.Blocks))
+	b.endOf = b.f.ints(blockRoom * len(b.f.Blocks))[:len(b.f.Blocks)]
 	for i, pc := range starts {
 		end := len(p.Code) - 1
 		if i+1 < len(starts) {
@@ -5784,7 +5781,7 @@ func (b *builder) plan() error {
 				b.edge(blk, b.blockAt[end+1])
 				break
 			}
-			if len(b.calls[end]) != 0 {
+			if len(b.callsAt(end)) != 0 {
 				blk.Kind = BlockPlain
 				b.edge(blk, b.blockAt[end+1])
 				break
@@ -5795,7 +5792,9 @@ func (b *builder) plan() error {
 			b.edge(blk, b.blockAt[end+1])
 		}
 	}
-	b.frameOf = make([]*frame, len(b.f.Blocks))
+	frames := b.f.scr()
+	b.frameOf = idTable(frames.frameOf, blockRoom*len(b.f.Blocks))[:len(b.f.Blocks)]
+	frames.frameOf = b.frameOf
 	for _, pc := range sortedKeys(b.inlined) {
 		b.planInline(b.inlined[pc], b.inlined[pc].callBlock, b.blockAt[pc+1])
 	}
@@ -5862,9 +5861,11 @@ func (b *builder) edge(from, to *Block) {
 func (b *builder) translate() {
 	n := len(b.f.Blocks)
 	b.nextBlock = n
-	b.defs = b.f.refLists(n)
-	b.sealed, b.filled = b.f.bools(n), b.f.bools(n)
-	b.incomplete = make([][]slotPhi, n)
+	b.defs = b.f.refLists(blockRoom * n)[:n]
+	b.sealed, b.filled = b.f.bools(blockRoom * n)[:n], b.f.bools(blockRoom * n)[:n]
+	sc := b.f.scr()
+	b.incomplete = idTable(sc.incomplete, blockRoom*n)[:n]
+	sc.incomplete = b.incomplete
 
 	// Reverse post-order from the entries, so that a block's forward
 	// predecessors are filled before it.
@@ -6329,6 +6330,11 @@ func (b *builder) split(blk *Block, cond *Value, both bool) (yes, no, cont *Bloc
 	b.next = cont
 	return yes, no, cont
 }
+
+// blockRoom is how many times the blocks of a program's plan its block
+// tables have room for: split and loop add them as the translation goes,
+// and each table copied at each would be most of what they cost.
+const blockRoom = 2
 
 // blockAfter is a new block of blk's PC and frame, for split and loop.
 func (b *builder) blockAfter(blk *Block) *Block {
@@ -7502,14 +7508,14 @@ func (b *builder) instruction(blk *Block, pc int) {
 		b.assign(in.Dest, blk, v)
 	case ir.FieldDefine:
 		add, ok := b.define(pc)
-		if calls := b.calls[pc]; !ok && len(calls) == 1 && calls[0].Instr != 0 && b.cur == b.root {
+		if calls := b.callsAt(pc); !ok && len(calls) == 1 && calls[0].Instr != 0 && b.cur == b.root {
 			// A field Go defines, called from native code (CallSite's
 			// Instr): one whose literal's layout Define does not plan --
 			// past a spread, a computed key or __proto__ -- as V8's code
 			// calls its DefineKeyedOwnIC's runtime. Each had left native
 			// code.
 			call := guard(OpCall, Tagged, ir.HostExit, operand(in.Left), operand(in.Right))
-			b.f.cache(call).Calls, call.Index = calls, b.callKeeps[pc]
+			b.f.cache(call).Calls, call.Index = calls, b.callKeepAt(pc)
 			cell := f.newValue(blk, OpCallCell, Source, call)
 			r := f.newValue(blk, OpKept, Tagged, cell, call)
 			r.Shadow = cell
@@ -7590,7 +7596,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 				if p.This {
 					v.Key |= 2
 				}
-				if calls := b.calls[pc]; len(calls) != 0 && calls[0].Go == 0 {
+				if calls := b.callsAt(pc); len(calls) != 0 && calls[0].Go == 0 {
 					b.f.cache(v).Calls = calls
 				}
 			} else {
@@ -7653,7 +7659,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			b.inlineCall(blk, pc, fr, guard, state)
 			break
 		}
-		if calls := b.calls[pc]; calls != nil && b.cur == b.root {
+		if calls := b.callsAt(pc); calls != nil && b.cur == b.root {
 			// The call's operands, from the receiver or the function on; its
 			// result is the slot below them, its pointer word kept.
 			n := calls[0].Argc + 1
@@ -7683,7 +7689,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 				args[0] = b.read(b.p.Locals-1, blk)
 			}
 			call := guard(OpCall, Tagged, ir.HostExit, args...)
-			b.f.cache(call).Calls, call.Index = calls, b.callKeeps[pc]
+			b.f.cache(call).Calls, call.Index = calls, b.callKeepAt(pc)
 			if calls[0].Go == GoCall {
 				// Go makes it, which counts it as an exit's would.
 				b.f.HostsLeft = append(b.f.HostsLeft, pc)
@@ -7748,6 +7754,37 @@ func (b *builder) handlersAt(pc int) ([]ir.Handler, bool) {
 	return out, true
 }
 
+// callTables makes the tables of the calls by PC, once one has a site.
+func (b *builder) callTables() {
+	if b.calls == nil {
+		n := len(b.p.Code)
+		b.calls, b.callKeeps = b.f.callLists(n), b.f.ints(n)
+	}
+}
+
+// callsAt is calls at pc, which is the function's, or an inlined callee's,
+// past the table's end: none.
+func (b *builder) callsAt(pc int) []*CallSite {
+	if pc < len(b.calls) {
+		return b.calls[pc]
+	}
+	return nil
+}
+
+// callKept is the keep cell of the call at pc, and whether it has one.
+func (b *builder) callKept(pc int) (int, bool) {
+	if pc < len(b.callKeeps) && b.callKeeps[pc] != 0 {
+		return b.callKeeps[pc] - 1, true
+	}
+	return 0, false
+}
+
+// callKeepAt is the keep cell of the call at pc, which has one.
+func (b *builder) callKeepAt(pc int) int {
+	keep, _ := b.callKept(pc)
+	return keep
+}
+
 // nativeCalls are the functions the call at pc may call natively, if any
 // (CallSite): those the VM has seen it call, if speculation has not given
 // up on it and there is an entry after it to go on at; or the call of Go
@@ -7761,7 +7798,11 @@ func (b *builder) nativeCalls(pc int) []*CallSite {
 	}
 	generic := b.fb.Generic(pc)
 	var calls []*CallSite
-	for _, site := range b.fb.NativeCalls(pc) {
+	// The feedback's answer is this call's own, so the sites are used where
+	// they are: each is 464 bytes.
+	sites := b.fb.NativeCalls(pc)
+	for i := range sites {
+		site := &sites[i]
 		if site.Go == GoCall && (!b.goCalls() || len(calls) != 0) || site.Go != GoCall && generic {
 			continue
 		}
@@ -7788,9 +7829,7 @@ func (b *builder) nativeCalls(pc int) []*CallSite {
 			// A receiver it never reads needs no coercing.
 			site.Coerce = false
 		}
-		c := new(CallSite)
-		*c = site
-		calls = append(calls, c)
+		calls = append(calls, site)
 	}
 	return calls
 }

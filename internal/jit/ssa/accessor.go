@@ -80,7 +80,7 @@ func (b *builder) accessorOp(blk *Block, pc int, in ir.Instruction, a *AccessorS
 	f := b.f
 	var calls []*CallSite
 	if b.cur == b.root {
-		calls = b.calls[pc]
+		calls = b.callsAt(pc)
 	}
 	fr := b.inlinedAt(pc)
 	recv := operand(in.Left)
@@ -110,7 +110,7 @@ func (b *builder) accessorOp(blk *Block, pc int, in ir.Instruction, a *AccessorS
 	if fr == nil && len(calls) == 1 && calls[0].Go == GoCall {
 		// Go reads or writes it as the interpreter would.
 		call := b.guardOf(blk, state, OpCall, Tagged, ir.HostExit, args...)
-		f.cache(call).Calls, call.Index = calls, b.callKeeps[pc]
+		f.cache(call).Calls, call.Index = calls, b.callKeepAt(pc)
 		result(call)
 		return
 	}
@@ -136,7 +136,7 @@ func (b *builder) accessorOp(blk *Block, pc int, in ir.Instruction, a *AccessorS
 		return
 	}
 	call := b.guardOf(blk, state, OpCall, Tagged, ir.HostExit, args...)
-	f.cache(call).Calls, call.Index = calls, b.callKeeps[pc]
+	f.cache(call).Calls, call.Index = calls, b.callKeepAt(pc)
 	result(call)
 }
 

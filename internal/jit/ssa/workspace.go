@@ -28,6 +28,7 @@ type Workspace struct {
 	caches    arena.Arena[InlineCache]
 	accessors arena.Arena[AccessorSite]
 	answers   arena.Arena[siteAnswer]
+	callLists arena.Arena[[]*CallSite]
 	scratch   scratch
 	ready     bool
 }
@@ -51,6 +52,7 @@ func (w *Workspace) init() {
 	w.caches.KeepBig()
 	w.accessors.KeepBig()
 	w.answers.KeepBig()
+	w.callLists.KeepBig()
 }
 
 // Bytes is the memory the workspace keeps between compiles: its arenas'
@@ -61,7 +63,7 @@ func (w *Workspace) Bytes() int { return w.arenaBytes() + w.scratchBytes() }
 func (w *Workspace) arenaBytes() int {
 	return w.values.Bytes() + w.refs.Bytes() + w.states.Bytes() + w.present.Bytes() + w.blocks.Bytes() + w.blockRefs.Bytes() +
 		w.refLists.Bytes() + w.bools.Bytes() + w.bytes.Bytes() + w.ints.Bytes() + w.caches.Bytes() + w.accessors.Bytes() +
-		w.answers.Bytes()
+		w.answers.Bytes() + w.callLists.Bytes()
 }
 
 // scratchBytes is what the passes' scratch tables keep.
@@ -73,7 +75,9 @@ func (w *Workspace) scratchBytes() int {
 		capBytes(s.live) + capBytes(s.liveFrom) + capBytes(s.liveWords) + capBytes(s.liveCand) + capBytes(s.liveAt) + capBytes(s.liveIn) + capBytes(s.liveOut) +
 		capBytes(s.liveHead) + capBytes(s.liveCur) + capBytes(s.liveListed) + capBytes(s.liveMembers) + capBytes(s.liveEmit) + capBytes(s.liveFlags) +
 		capBytes(s.liveUses) + capBytes(s.liveNodes) + capBytes(s.liveStack) + capBytes(s.subst) + capBytes(s.originPhis) + capBytes(s.states) + capBytes(s.asked) +
-		capBytes(s.phiIdx) + capBytes(s.phiFill) + capBytes(s.phiUsers)
+		capBytes(s.phiIdx) + capBytes(s.phiFill) + capBytes(s.phiUsers) +
+		capBytes(s.upvalueCand) + capBytes(s.upvalueSubst) + capBytes(s.keepUsers) + capBytes(s.keepNext) +
+		capBytes(s.incomplete) + capBytes(s.frameOf)
 	for _, l := range s.live {
 		n += capBytes(l)
 	}
@@ -101,6 +105,11 @@ func (w *Workspace) Rewind() {
 	w.caches.Rewind()
 	w.accessors.Rewind()
 	w.answers.Rewind()
+	w.callLists.Rewind()
+	// The tables that hold what the compile's frames point to, which the
+	// workspace is not to keep alive.
+	clear(w.scratch.frameOf[:cap(w.scratch.frameOf)])
+	clear(w.scratch.incomplete[:cap(w.scratch.incomplete)])
 	// The arenas keep what the recent compiles needed (arena's Rewind);
 	// the scratch tables, grown by value ID, the most any compile has. Once
 	// they hold more than the arenas, a compile bigger than the recent
@@ -147,6 +156,15 @@ func (f *Func) ints(n int) []int {
 		return f.ws.ints.Make(n)
 	}
 	return make([]int, n)
+}
+
+// callLists is n nil lists of a call's sites: from the workspace, if the
+// Func has one.
+func (f *Func) callLists(n int) [][]*CallSite {
+	if f.ws != nil {
+		return f.ws.callLists.Make(n)
+	}
+	return make([][]*CallSite, n)
 }
 
 // appendValue is append(s, v), growing s in the workspace if there is one.

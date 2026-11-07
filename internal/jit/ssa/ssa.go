@@ -1256,6 +1256,15 @@ type scratch struct {
 	phiUsers        []*Value
 	// subst is Optimize's replacements, by value ID.
 	subst []*Value
+	// upvalueCand and upvalueSubst are rematerializeUpvalues'.
+	upvalueCand  []int32
+	upvalueSubst []*Value
+	// keepUsers and keepNext are keepPhis' lists of each value's phis.
+	keepUsers []*Value
+	keepNext  []int
+	// incomplete and frameOf are the builder's, by block ID.
+	incomplete [][]slotPhi
+	frameOf    []*frame
 	// originPhis is Origins' list of the phis.
 	originPhis []*Value
 	// states is recount's list of the states it has met.

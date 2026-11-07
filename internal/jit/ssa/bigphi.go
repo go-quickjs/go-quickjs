@@ -18,15 +18,10 @@ import "github.com/go-quickjs/go-quickjs/internal/jit/ir"
 func unboxBigPhis(f *Func) bool {
 	// What unboxes each value, by value ID: 1 as an Int64, 2 as a Uint64,
 	// 4 its low bits, either.
-	var phis []*Value
 	var unboxes map[*Value]uint8
 	for _, b := range f.Blocks {
 		for _, v := range b.Values {
 			switch v.Op {
-			case OpPhi:
-				if v.Type == Tagged && !trivialPhi(v) {
-					phis = append(phis, v)
-				}
 			case OpBigUnbox, OpBigUnboxU64, OpBigLow:
 				if a := v.Args[0]; a.Op == OpPhi {
 					if unboxes == nil {
@@ -39,6 +34,14 @@ func unboxBigPhis(f *Func) bool {
 	}
 	if len(unboxes) == 0 {
 		return false
+	}
+	var phis []*Value
+	for _, b := range f.Blocks {
+		for _, v := range b.Values {
+			if v.Op == OpPhi && v.Type == Tagged && !trivialPhi(v) {
+				phis = append(phis, v)
+			}
+		}
 	}
 	cand := map[*Value]bool{}
 	for _, v := range phis {

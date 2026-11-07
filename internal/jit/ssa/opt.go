@@ -938,7 +938,9 @@ func rematerializeUpvalues(f *Func) bool {
 	if !loads || len(phis) == 0 {
 		return false
 	}
-	cand = make([]int32, f.nextID)
+	sc := f.scr()
+	cand = idTable(sc.upvalueCand, f.nextID)
+	sc.upvalueCand = cand
 	for _, v := range phis {
 		cand[v.ID] = pending
 	}
@@ -990,7 +992,8 @@ func rematerializeUpvalues(f *Func) bool {
 			}
 		}
 	}
-	subst := make([]*Value, f.nextID)
+	subst := idTable(sc.upvalueSubst, f.nextID)
+	sc.upvalueSubst = subst
 	for _, b := range f.Blocks {
 		var reads []*Value
 		for _, v := range b.Values {
