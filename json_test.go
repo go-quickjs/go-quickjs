@@ -402,6 +402,19 @@ func TestJSONRawAndSource(t *testing.T) {
 	})
 }
 
+// A runtime's objects stop sharing layouts only past what V8 lets them: a
+// program whose documents began with sixty-five different keys had a layout
+// for each object of every kind it met after that.
+func TestJSONManyFirstKeys(t *testing.T) {
+	checkEval(t, `var o;
+		for (var i = 0; i < 1000; i++) o = JSON.parse('{"first' + i + '":1}');
+		var a = JSON.parse('{"late":1,"more":2}'), b = JSON.parse('{"late":3,"more":4}');
+		function rd(p) { return p.late + p.more; }
+		var s = 0;
+		for (var i = 0; i < 3000; i++) s += rd(i & 1 ? a : b);
+		s`, "15000")
+}
+
 // A surrogate pair is one character however the text spells its halves: as
 // two escapes, as text, or one of each, which took the two halves for two
 // characters of three bytes each (KI-75) -- a string with the code units of
@@ -461,17 +474,4 @@ func TestJSONStringifyReadsReplacerFirst(t *testing.T) {
 	if got := v.String(); got != "TypeError,false" {
 		t.Errorf("got %q", got)
 	}
-}
-
-// A runtime's objects stop sharing layouts only past what V8 lets them: a
-// program whose documents began with sixty-five different keys had a layout
-// for each object of every kind it met after that.
-func TestJSONManyFirstKeys(t *testing.T) {
-	checkEval(t, `var o;
-		for (var i = 0; i < 1000; i++) o = JSON.parse('{"first' + i + '":1}');
-		var a = JSON.parse('{"late":1,"more":2}'), b = JSON.parse('{"late":3,"more":4}');
-		function rd(p) { return p.late + p.more; }
-		var s = 0;
-		for (var i = 0; i < 3000; i++) s += rd(i & 1 ? a : b);
-		s`, "15000")
 }

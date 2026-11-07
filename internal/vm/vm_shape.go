@@ -180,6 +180,8 @@ type shapeSide struct {
 	// forIn is what a for-in loop visits on an object of a shared shape,
 	// made the first time one is walked; see startForIn.
 	forIn *forInKeys
+	// json is what JSON.stringify keeps of the layout: see jsonLayout.
+	json *jsonLayout
 	// programs is, on the layout of a realm's Object.prototype, the roots
 	// of the literals of the Programs the realm runs (zzz_rerun.go) and of
 	// the literals of its code by their keys (zzz_literalkeys.go).
@@ -735,6 +737,14 @@ const maxRoom = 252
 // slackTracking is how many of a constructor's objects are built before
 // its objects' room is what they used, V8's kSlackTrackingCounterStart.
 const slackTracking = 7
+
+// ancestorAt is the shape, of those s grew from or s itself, of n properties.
+func (s *shape) ancestorAt(n int32) *shape {
+	for s.n > n {
+		s = s.parent
+	}
+	return s
+}
 
 // root is the shape the layout grew from.
 func (s *shape) root() *shape {

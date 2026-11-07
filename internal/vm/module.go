@@ -1109,14 +1109,8 @@ func (r *Runtime) makeTypedModule(specifier, typ, source, resolved string) (*Mod
 	var v Value
 	switch typ {
 	case "json":
-		p := &jsonParser{rt: r, src: source}
-		p.skipSpace()
-		if v, err = p.parseValue(); err != nil {
+		if v, _, err = r.parseJSON(source, false); err != nil {
 			return nil, err
-		}
-		p.skipSpace()
-		if p.pos != len(source) {
-			return nil, r.throwSyntaxError("unexpected trailing content in JSON at position %d", p.pos)
 		}
 	case "text":
 		v = Str(NewString(source))

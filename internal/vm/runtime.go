@@ -322,6 +322,8 @@ type Runtime struct {
 	// its loop has finished (forInCursor), and clearReturnedFrames lets go.
 	// Here, so that no field the interpreter reads moves.
 	forInLast *forInObject
+	// json is what JSON keeps from one call to the next.
+	json *jsonState
 	// jitFields is the optional native tier's state, empty in builds
 	// without it. It comes after everything the interpreter reads, so that
 	// a build with the tier moves none of their offsets, and before the last
@@ -614,6 +616,8 @@ type Realm struct {
 	// left (keepRegistry).
 	finalizing   map[*Object]struct{}
 	finalizingAt int
+	// jsonHints is what JSON.parse has seen of the realm's documents.
+	jsonHints *jsonHints
 	jitRealmFields
 	// primProps remembers where methods of primitives were found on their
 	// prototypes; see primProp. Last, being kilobytes long, and after the
