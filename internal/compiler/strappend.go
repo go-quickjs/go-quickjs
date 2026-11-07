@@ -239,7 +239,7 @@ func (c *compiler) compileLocalAppend(n *ast.Assign) {
 	c.compileExpr(n.Value)
 	// Not by emit, which would fuse it with a local or a constant before it,
 	// into an instruction with no room for the mark.
-	c.recordLine(n.Start)
+	c.recordLine(int(n.Start))
 	c.fn.Code = append(c.fn.Code, bytecode.Instr{Op: bytecode.OpAdd, B: bytecode.AddOwned})
 	c.adjustStack(bytecode.OpAdd, 0, bytecode.AddOwned)
 	c.emit(bytecode.OpSetLocal, l.slot, 0)
@@ -250,6 +250,6 @@ func (c *compiler) compileOwnedAppend(n *ast.Assign) {
 	idx, _ := c.resolveUpvalue(n.Target.(*ast.Ident).Name)
 	c.emit(bytecode.OpGetUpvalue, idx, 0)
 	c.compileExpr(n.Value)
-	c.emitAt(n.Start, compoundOpcode(n.Op), 0, 0)
+	c.emitAt(int(n.Start), compoundOpcode(n.Op), 0, 0)
 	c.emit(bytecode.OpSetUpvalue, idx, 1)
 }

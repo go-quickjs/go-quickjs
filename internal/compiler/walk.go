@@ -78,6 +78,9 @@ type functionFacts struct {
 	// in it, or may be, by an eval or a super() call.
 	usesNewTarget bool
 	thisProps     []string
+	// innerBytes is how much of the function's source is functions and
+	// classes written in it, whose code is their own.
+	innerBytes int
 	// propsDone stops the collection of thisProps where the body first
 	// mentions arguments or eval, as thisPropertyCount's walk stopped there,
 	// its scanner's default search having found what it looks for.
@@ -236,6 +239,9 @@ func (w *argumentsScanner) stmt(s ast.Stmt) {
 			w.found = true
 			return
 		}
+		if w.scanning && w.inArrow == 0 {
+			w.facts.innerBytes += n.Fn.End - n.Fn.Start
+		}
 		// A nested function declaration has its own arguments object, but a
 		// name search still descends into it.
 		if w.seekName != "" {
@@ -245,6 +251,9 @@ func (w *argumentsScanner) stmt(s ast.Stmt) {
 		if w.seekClosure {
 			w.found = true
 			return
+		}
+		if w.scanning && w.inArrow == 0 {
+			w.facts.innerBytes += n.Class.End - n.Class.Start
 		}
 		w.class(n.Class)
 	case *ast.ReturnStmt:
@@ -400,6 +409,9 @@ func (w *argumentsScanner) expr(e ast.Expr) {
 			w.found = true
 			return
 		}
+		if w.scanning && w.inArrow == 0 {
+			w.facts.innerBytes += n.End - n.Start
+		}
 		// Only an arrow shares the enclosing this and arguments; a search for
 		// a name descends into every function, since a name is in scope
 		// however deeply it is nested. A search for a direct eval stops at all
@@ -419,6 +431,9 @@ func (w *argumentsScanner) expr(e ast.Expr) {
 		if w.seekClosure {
 			w.found = true
 			return
+		}
+		if w.scanning && w.inArrow == 0 {
+			w.facts.innerBytes += n.End - n.Start
 		}
 		w.class(n)
 	case *ast.TemplateLit:

@@ -142,7 +142,7 @@ func TestScanFunctionMatchesTheWalks(t *testing.T) {
 			}
 			n := thisPropertyCount(fn.Body)
 			// usesNewTarget has no walk of its own (TestScanFunctionNewTarget).
-			got.thisProps, got.propsDone, got.usesNewTarget = nil, false, false
+			got.thisProps, got.propsDone, got.usesNewTarget, got.innerBytes = nil, false, false, 0
 			if !reflect.DeepEqual(got, want) || len(scanFunction(fn, true).thisProps) != n {
 				t.Fatalf("function at %d of %.80q: one walk found %+v (%d this properties), the walks %+v (%d)",
 					fn.Start, src, got, len(scanFunction(fn, true).thisProps), want, n)

@@ -14,6 +14,7 @@ package compiler
 
 import (
 	"fmt"
+	"slices"
 	"sync"
 
 	"github.com/go-quickjs/go-quickjs/internal/ast"
@@ -428,6 +429,14 @@ type compiler struct {
 	// says whether the instruction last emitted is the end of one path.
 	targets []bool
 
+	// localsUsed is the most locals has held when a scope left it: what
+	// release clears.
+	localsUsed int
+	// localNames has a bit for each name locals has held (nameBit): most
+	// lookups are of names a function does not bind, a global's or an
+	// enclosing function's, which it spares a scan of the list.
+	localNames uint64
+
 	// scratch is where the tables above, the code and the function's own
 	// tables are built, taken from pool and given back when the function is
 	// done.
@@ -528,8 +537,27 @@ type scratch struct {
 	localIndex map[string]int
 }
 
-// scratchPool holds the scratch no function being compiled has.
-type scratchPool struct{ free []*scratch }
+// scratchPool holds the scratch no function being compiled has, and the
+// lists of jumps no condition being compiled has.
+type scratchPool struct {
+	free  []*scratch
+	jumps [][]int
+}
+
+// jumpList is an empty list for a condition's jumps (emitTestJumps), which
+// putJumps gives back. It cannot be kept on a caller's stack: the compiler's
+// functions all call one another, and the escape analysis takes what any
+// of them does with a result as what all of them do.
+func (p *scratchPool) jumpList() []int {
+	if n := len(p.jumps); n > 0 {
+		s := p.jumps[n-1]
+		p.jumps = p.jumps[:n-1]
+		return s
+	}
+	return make([]int, 0, 4)
+}
+
+func (p *scratchPool) putJumps(s []int) { p.jumps = append(p.jumps, s[:0]) }
 
 // scratchPools keep a compile's scratch for the next, so that each script
 // does not grow its buffers from nothing. A compile takes a pool of its own:
@@ -604,6 +632,31 @@ func newCompiler(parent *compiler, opts Options) *compiler {
 	return c
 }
 
+// Source bytes a function takes for each instruction of its code, and for
+// each position it records, at the least the code a program has seen does.
+const (
+	bytesPerInstr = 4
+	bytesPerLine  = 8
+	// reserveMin is the source a function must span for its tables to be
+	// sized from it: a smaller one is served by the scratch as it is.
+	reserveMin = 1 << 10
+)
+
+// reserve gives the function's code and positions room for what n bytes of
+// its own source compile to, in the one step a large function would
+// otherwise grow to it in many, its whole code copied at each. A function
+// written inside it is no part of n: the wrapper of a bundle has the whole
+// bundle in its span and little code of its own.
+func (c *compiler) reserve(n int) {
+	if n < reserveMin {
+		return
+	}
+	c.fn.Code = slices.Grow(c.fn.Code, n/bytesPerInstr)
+	if c.script.HasText() {
+		c.fn.Lines = slices.Grow(c.fn.Lines, n/bytesPerLine)
+	}
+}
+
 // finish records the tables the interpreter needs.
 func (c *compiler) finish() {
 	c.fn.LocalCount = int(c.nextSlot)
@@ -631,23 +684,20 @@ func (c *compiler) release() *bytecode.Function {
 	pool := c.pool
 	s.code, fn.Code = fn.Code[:0], exact(fn.Code)
 	s.lines, fn.Lines = fn.Lines[:0], exact(fn.Lines)
-	s.names, fn.Names = fn.Names[:0], exact(fn.Names)
-	s.consts, fn.Constants = fn.Constants[:0], exact(fn.Constants)
-	s.upvalues, fn.Upvalues = fn.Upvalues[:0], exact(fn.Upvalues)
-	s.locals = c.locals[:0]
-	s.pending = c.pendingLocals[:0]
-	s.targets = c.targets[:0]
 	// What points into the script -- a name is a slice of its text, and a
 	// constant may hold a nested function -- is cleared, so that a pool kept
-	// for the next compile does not keep this one's script alive.
-	clear(s.names[:cap(s.names)])
-	clear(s.consts[:cap(s.consts)])
-	clear(s.upvalues[:cap(s.upvalues)])
-	clear(s.locals[:cap(s.locals)])
-	clear(s.pending[:cap(s.pending)])
-	clear(s.nameIndex)
-	clear(s.constIndex)
-	clear(s.localIndex)
+	// for the next compile does not keep this one's script alive: what this
+	// function wrote, not all a bigger function before it had room for,
+	// which each of its siblings would pay for again.
+	names, consts, upvalues := fn.Names, fn.Constants, fn.Upvalues
+	fn.Names, fn.Constants, fn.Upvalues = exact(names), exact(consts), exact(upvalues)
+	s.names, s.consts, s.upvalues = clearUsed(names), clearUsed(consts), clearUsed(upvalues)
+	s.locals = clearUsed(c.locals[:max(c.localsUsed, len(c.locals))])
+	s.pending = clearUsed(c.pendingLocals)
+	s.targets = c.targets[:0]
+	resetIndex(&s.nameIndex)
+	resetIndex(&s.constIndex)
+	resetIndex(&s.localIndex)
 	// The state is reused too; drop its source, enclosing compiler and all
 	// function-specific settings before making it available to a sibling.
 	*c = compiler{}
@@ -662,6 +712,26 @@ func (c *compiler) done() *bytecode.Function {
 	fn := c.release()
 	scratchPools.Put(pool)
 	return fn
+}
+
+// clearUsed is s emptied for reuse, its elements cleared.
+func clearUsed[T any](s []T) []T {
+	clear(s)
+	return s[:0]
+}
+
+// bigIndex is the most entries a function's map is kept with: clearing a
+// map takes the time of all the room it has, and a function that grew one
+// would have each of its siblings clear that.
+const bigIndex = 256
+
+// resetIndex empties a map for the next function.
+func resetIndex[K comparable, V any](m *map[K]V) {
+	if len(*m) > bigIndex {
+		*m = make(map[K]V, 8)
+		return
+	}
+	clear(*m)
 }
 
 // exact is a copy of s no larger than it, or nil for an empty s.
@@ -1003,6 +1073,7 @@ func (c *compiler) endScope() {
 	}
 	// Slots are not reclaimed: reusing them would let a closure created in one
 	// iteration of a loop observe a later iteration's value.
+	c.localsUsed = max(c.localsUsed, len(c.locals))
 	c.locals = c.locals[:i]
 }
 
@@ -1092,7 +1163,16 @@ func (c *compiler) markInitialized(name string) {
 // scan the whole enclosing function for each identifier in a nested function.
 const indexedLocals = 32
 
+// nameBit is a name's bit in a compiler's localNames.
+func nameBit(name string) uint64 {
+	if name == "" {
+		return 1
+	}
+	return 1 << ((uint(len(name))*37 + uint(name[0])*5 + uint(name[len(name)-1])) & 63)
+}
+
 func (c *compiler) addLocal(l localVar) {
+	c.localNames |= nameBit(l.name)
 	if c.localIndex != nil {
 		l.previous = c.localIndex[l.name]
 		c.localIndex[l.name] = len(c.locals) + 1
@@ -1161,6 +1241,9 @@ func (c *compiler) resolveLocal(name string) (*localVar, bool) {
 		if i := c.localIndex[name]; i != 0 {
 			return &c.locals[i-1], true
 		}
+		return nil, false
+	}
+	if c.localNames&nameBit(name) == 0 {
 		return nil, false
 	}
 	for i := len(c.locals) - 1; i >= 0; i-- {
@@ -1254,9 +1337,10 @@ func (c *compiler) checkGlobalLexicals(body []ast.Stmt) {
 			if n.Kind == ast.DeclVar {
 				continue
 			}
-			var names []string
+			var room [8]string
+			names := room[:0]
 			for _, d := range n.Decls {
-				collectPatternNames(d.Target, &names)
+				names = appendPatternNames(names, d.Target)
 			}
 			for _, name := range names {
 				c.emitAt(n.Start, bytecode.OpCheckGlobalLex, c.nameIdx(name), 0)
@@ -1544,7 +1628,7 @@ func (c *varCollector) stmt(s ast.Stmt) {
 			return
 		}
 		for _, d := range n.Decls {
-			collectPatternNames(d.Target, &c.out)
+			c.out = appendPatternNames(c.out, d.Target)
 		}
 
 	case *ast.FuncDecl:
@@ -1645,32 +1729,33 @@ func stmtOrNil(n ast.Node) ast.Stmt {
 	return nil
 }
 
-// collectPatternNames gathers the identifiers a binding pattern introduces.
-func collectPatternNames(target ast.Expr, out *[]string) {
+// appendPatternNames appends the identifiers a binding pattern introduces.
+func appendPatternNames(out []string, target ast.Expr) []string {
 	switch n := target.(type) {
 	case *ast.Ident:
-		*out = append(*out, n.Name)
+		out = append(out, n.Name)
 	case *ast.ArrayPattern:
 		for _, el := range n.Elements {
 			if el != nil {
-				collectPatternNames(el, out)
+				out = appendPatternNames(out, el)
 			}
 		}
 		if n.Rest != nil {
-			collectPatternNames(n.Rest, out)
+			out = appendPatternNames(out, n.Rest)
 		}
 	case *ast.ObjectPattern:
 		for _, p := range n.Props {
-			collectPatternNames(p.Value, out)
+			out = appendPatternNames(out, p.Value)
 		}
 		if n.Rest != nil {
-			collectPatternNames(n.Rest, out)
+			out = appendPatternNames(out, n.Rest)
 		}
 	case *ast.AssignPattern:
-		collectPatternNames(n.Target, out)
+		out = appendPatternNames(out, n.Target)
 	case *ast.RestElement:
-		collectPatternNames(n.Arg, out)
+		out = appendPatternNames(out, n.Arg)
 	}
+	return out
 }
 
 // stackEffect returns how much an opcode changes the operand stack depth.

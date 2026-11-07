@@ -56,7 +56,7 @@ func (p *Program) Pos() int { return p.Start }
 // Ident is an identifier reference or binding.
 type Ident struct {
 	Name  string
-	Start int
+	Start int32
 	// Paren records that the name was written in parentheses, which stops it
 	// being an IdentifierReference for the purpose of naming an anonymous
 	// function: `(f) = function () {}` leaves the function's name empty.
@@ -153,7 +153,7 @@ type ArrayLit struct {
 	// being read as a destructuring pattern: `[a] = b` assigns, `([a]) = b` is
 	// a syntax error.
 	Paren bool
-	Start int
+	Start int32
 }
 
 // PropKind distinguishes the forms an object literal or class member can take.
@@ -324,7 +324,7 @@ type Logical struct {
 	// kept only because mixing ?? with && or || is a syntax error unless
 	// parentheses make the grouping explicit.
 	Paren bool
-	Start int
+	Start int32
 }
 
 // Assign is an assignment, possibly compound. For a destructuring assignment
@@ -337,7 +337,7 @@ type Assign struct {
 	// only matters for deciding what may be assigned to: `(a = b) = c` is a
 	// syntax error, while the `a = b` inside `[a = b] = c` is a default value.
 	Paren bool
-	Start int
+	Start int32
 }
 
 // Conditional is `test ? cons : alt`.
@@ -351,9 +351,9 @@ type Call struct {
 	Callee   Expr
 	Args     []Expr
 	Optional bool
-	Start    int
+	Start    int32
 	// Open is where the argument list's parenthesis is.
-	Open int
+	Open int32
 	// Forward marks the super call of the constructor a derived class that
 	// declares none is given, which passes on the arguments it was called
 	// with, as they are, rather than spreading anything: Args is empty.
@@ -374,7 +374,7 @@ type Member struct {
 	Property Expr
 	Computed bool
 	Optional bool
-	Start    int
+	Start    int32
 }
 
 // OptionalChain wraps the outermost expression of an optional chain. It marks
@@ -662,7 +662,7 @@ type WithStmt struct {
 // Interface conformance
 // ---------------------------------------------------------------------------
 
-func (n *Ident) Pos() int          { return n.Start }
+func (n *Ident) Pos() int          { return int(n.Start) }
 func (n *PrivateName) Pos() int    { return n.Start }
 func (n *NumberLit) Pos() int      { return n.Start }
 func (n *StringLit) Pos() int      { return n.Start }
@@ -676,19 +676,19 @@ func (n *Super) Pos() int          { return n.Start }
 func (n *NewTarget) Pos() int      { return n.Start }
 func (n *TemplateLit) Pos() int    { return n.Start }
 func (n *TaggedTemplate) Pos() int { return n.Start }
-func (n *ArrayLit) Pos() int       { return n.Start }
+func (n *ArrayLit) Pos() int       { return int(n.Start) }
 func (n *ObjectLit) Pos() int      { return n.Start }
 func (n *FuncLit) Pos() int        { return n.Start }
 func (n *ClassLit) Pos() int       { return n.Start }
 func (n *Unary) Pos() int          { return n.Start }
 func (n *Update) Pos() int         { return n.Start }
 func (n *Binary) Pos() int         { return n.Start }
-func (n *Logical) Pos() int        { return n.Start }
-func (n *Assign) Pos() int         { return n.Start }
+func (n *Logical) Pos() int        { return int(n.Start) }
+func (n *Assign) Pos() int         { return int(n.Start) }
 func (n *Conditional) Pos() int    { return n.Start }
-func (n *Call) Pos() int           { return n.Start }
+func (n *Call) Pos() int           { return int(n.Start) }
 func (n *New) Pos() int            { return n.Start }
-func (n *Member) Pos() int         { return n.Start }
+func (n *Member) Pos() int         { return int(n.Start) }
 func (n *OptionalChain) Pos() int  { return n.Start }
 func (n *Sequence) Pos() int       { return n.Start }
 func (n *Spread) Pos() int         { return n.Start }

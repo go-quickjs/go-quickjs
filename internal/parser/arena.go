@@ -72,7 +72,19 @@ const (
 func (l *lists[T]) begin() int { return len(l.scratch) }
 
 // add appends an item to the list being built.
-func (l *lists[T]) add(x T) { l.scratch = append(l.scratch, x) }
+func (l *lists[T]) add(x T) {
+	if len(l.scratch) == cap(l.scratch) {
+		l.grow()
+	}
+	l.scratch = append(l.scratch, x)
+}
+
+// grow doubles the stack. append would grow a large one by a quarter, and
+// have copied it four or five times over by the time it is as long as a
+// generated program's longest function.
+func (l *lists[T]) grow() {
+	l.scratch = append(make([]T, 0, max(2*cap(l.scratch), listMin)), l.scratch...)
+}
 
 // finish ends the list begun at mark, and returns it; nil for none.
 func (l *lists[T]) finish(mark int) []T {
@@ -122,15 +134,22 @@ type arena struct {
 	news     slab[ast.New]
 	varDecls slab[ast.VarDecl]
 	returns  slab[ast.ReturnStmt]
+	blocks   slab[ast.BlockStmt]
+	ifs      slab[ast.IfStmt]
+	arrays   slab[ast.ArrayLit]
+	objects  slab[ast.ObjectLit]
+	thises   slab[ast.This]
+	bools    slab[ast.BoolLit]
 
 	exprs lists[ast.Expr]
 	stmts lists[ast.Stmt]
 	decls lists[ast.Declarator]
+	props lists[ast.Property]
 }
 
 func (a *arena) ident(name string, start int) *ast.Ident {
 	n := a.idents.alloc()
-	n.Name, n.Start = name, start
+	n.Name, n.Start = name, int32(start)
 	return n
 }
 
@@ -154,7 +173,7 @@ func (a *arena) binaryOp(op string, left, right ast.Expr) *ast.Binary {
 
 func (a *arena) logicalOp(op string, left, right ast.Expr) *ast.Logical {
 	n := a.logical.alloc()
-	n.Op, n.Left, n.Right, n.Start = op, left, right, left.Pos()
+	n.Op, n.Left, n.Right, n.Start = op, left, right, int32(left.Pos())
 	// Paren is reset explicitly because a recycled block may hold a stale value
 	// from a previous parse only if the arena were reused; it is not, but
 	// zeroing keeps the invariant local and obvious.
@@ -164,20 +183,20 @@ func (a *arena) logicalOp(op string, left, right ast.Expr) *ast.Logical {
 
 func (a *arena) assignOp(op string, target, value ast.Expr) *ast.Assign {
 	n := a.assign.alloc()
-	n.Op, n.Target, n.Value, n.Start = op, target, value, target.Pos()
+	n.Op, n.Target, n.Value, n.Start = op, target, value, int32(target.Pos())
 	return n
 }
 
 func (a *arena) memberOf(obj, prop ast.Expr, computed, optional bool) *ast.Member {
 	n := a.member.alloc()
 	n.Object, n.Property = obj, prop
-	n.Computed, n.Optional, n.Start = computed, optional, obj.Pos()
+	n.Computed, n.Optional, n.Start = computed, optional, int32(obj.Pos())
 	return n
 }
 
 func (a *arena) callOf(callee ast.Expr, args []ast.Expr, optional bool, open int) *ast.Call {
 	n := a.call.alloc()
-	n.Callee, n.Args, n.Optional, n.Start, n.Open = callee, args, optional, callee.Pos(), open
+	n.Callee, n.Args, n.Optional, n.Start, n.Open = callee, args, optional, int32(callee.Pos()), int32(open)
 	return n
 }
 

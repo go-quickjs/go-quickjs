@@ -230,7 +230,9 @@ func (p *parser) parseBlock() ast.Stmt {
 	p.expectPunct("{")
 	body := p.parseStatements(func() bool { return p.isPunct("}") })
 	p.expectPunct("}")
-	return &ast.BlockStmt{Body: body, Start: start}
+	n := p.nodes.blocks.alloc()
+	n.Body, n.Start = body, start
+	return n
 }
 
 // parseVarDecl parses a var, let or const declaration without its terminator,
@@ -297,7 +299,8 @@ func (p *parser) parseIf() ast.Stmt {
 	test := p.parseExpr()
 	p.expectPunct(")")
 
-	stmt := &ast.IfStmt{Test: test, Start: start}
+	stmt := p.nodes.ifs.alloc()
+	stmt.Test, stmt.Start = test, start
 	stmt.Cons = p.parseSubStatement(true)
 	if p.eatKeyword("else") {
 		stmt.Alt = p.parseSubStatement(true)

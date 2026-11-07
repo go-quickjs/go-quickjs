@@ -216,9 +216,10 @@ func (c *compiler) predeclareLexicalMarked(vd *ast.VarDecl, mark bool) {
 	if vd.Kind.IsConst() {
 		kind = bindConst
 	}
-	var names []string
+	var room [8]string
+	names := room[:0]
 	for _, d := range vd.Decls {
-		collectPatternNames(d.Target, &names)
+		names = appendPatternNames(names, d.Target)
 	}
 	for _, n := range names {
 		c.declareLexicalNameMarked(n, kind, vd.Start, mark)
@@ -441,7 +442,7 @@ func (c *compiler) compileStatement(s ast.Stmt) {
 		c.compileDispose(n)
 
 	case *ast.InstallPrivateMethods:
-		c.compileIdentRead(&ast.Ident{Name: n.Binding, Start: n.Start})
+		c.compileIdentRead(&ast.Ident{Name: n.Binding, Start: int32(n.Start)})
 		c.emitAt(n.Start, bytecode.OpInstallPrivateMethods, 0, 0)
 
 	case *ast.FieldInit:
@@ -649,12 +650,13 @@ func (c *compiler) compileIf(n *ast.IfStmt) {
 	// when the break has nothing to undo on its way: so is a continue.
 	if n.Alt == nil {
 		if i, cont := c.bareJumpTarget(n.Cons); i >= 0 {
-			jumps := c.emitTestJumps(n.Test, true, nil)
+			jumps := c.emitTestJumps(n.Test, true, c.pool.jumpList())
 			if cont {
 				c.loops[i].continues = append(c.loops[i].continues, jumps...)
 			} else {
 				c.loops[i].breaks = append(c.loops[i].breaks, jumps...)
 			}
+			c.pool.putJumps(jumps)
 			return
 		}
 	}
@@ -662,11 +664,11 @@ func (c *compiler) compileIf(n *ast.IfStmt) {
 	c.compileStatement(n.Cons)
 
 	if n.Alt == nil {
-		c.patchJumps(elseJumps)
+		c.patchTestJumps(elseJumps)
 		return
 	}
 	endJump := c.emitJump(bytecode.OpJump)
-	c.patchJumps(elseJumps)
+	c.patchTestJumps(elseJumps)
 	c.compileStatement(n.Alt)
 	c.patchJump(endJump)
 }
@@ -708,7 +710,7 @@ func (c *compiler) compileWhile(n *ast.WhileStmt) {
 	exits := c.emitTestJumpIfFalse(n.Test)
 	c.compileStatement(n.Body)
 	c.emit(bytecode.OpJump, uint32(start), 0)
-	c.patchJumps(exits)
+	c.patchTestJumps(exits)
 	c.popLoop(start)
 }
 
@@ -718,9 +720,11 @@ func (c *compiler) compileDoWhile(n *ast.DoWhileStmt) {
 	c.compileStatement(n.Body)
 	testAt := c.here()
 	c.debugExpr(n.Test)
-	for _, j := range c.emitTestJumps(n.Test, true, nil) {
+	back := c.emitTestJumps(n.Test, true, c.pool.jumpList())
+	for _, j := range back {
 		c.patchJumpTo(j, start)
 	}
+	c.pool.putJumps(back)
 	c.popLoop(testAt)
 }
 
@@ -806,7 +810,7 @@ func (c *compiler) compileForLoop(n *ast.ForStmt, firstSlot uint32, perIteration
 		c.compileExprForEffect(n.Update)
 	}
 	c.emit(bytecode.OpJump, uint32(start), 0)
-	c.patchJumps(exits)
+	c.patchTestJumps(exits)
 	// `continue` jumps to the update clause, not the test.
 	c.popLoop(updateAt)
 }
@@ -1249,7 +1253,7 @@ func (c *compiler) compileTryCatch(n *ast.TryStmt) {
 // bindCatchParam binds the caught value to the catch clause's parameter.
 func (c *compiler) bindCatchParam(param ast.Expr) {
 	if id, ok := param.(*ast.Ident); ok {
-		slot := c.declare(id.Name, bindCatch, id.Start)
+		slot := c.declare(id.Name, bindCatch, int(id.Start))
 		c.emit(bytecode.OpSetLocal, slot, 0)
 		// The store is what binds it, so the clause's body assigns to an
 		// ordinary mutable binding rather than one still in a dead zone.
@@ -1257,7 +1261,7 @@ func (c *compiler) bindCatchParam(param ast.Expr) {
 		return
 	}
 	var names []string
-	collectPatternNames(param, &names)
+	names = appendPatternNames(names, param)
 	for _, n := range names {
 		c.declare(n, bindCatch, param.Pos())
 	}

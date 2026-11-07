@@ -53,7 +53,7 @@ func (c *compiler) compileTailExpr(e ast.Expr) {
 		elseJumps := c.emitTestJumpIfFalse(n.Test)
 		c.compileTailExpr(n.Cons)
 		endJump := c.emitJump(bytecode.OpJump)
-		c.patchJumps(elseJumps)
+		c.patchTestJumps(elseJumps)
 		c.stackDepth--
 		c.compileTailExpr(n.Alt)
 		c.patchJump(endJump)

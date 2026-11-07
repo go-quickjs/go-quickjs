@@ -501,7 +501,7 @@ func (p *parser) parseMemberTailIn(expr ast.Expr, allowCall, inChain bool) ast.E
 			if p.tok.Kind == lexer.PrivateIdent {
 				name := &ast.PrivateName{Name: p.tok.Value, Start: p.tok.Pos}
 				p.next()
-				expr = &ast.Member{Object: expr, Property: name, Start: expr.Pos()}
+				expr = &ast.Member{Object: expr, Property: name, Start: int32(expr.Pos())}
 				continue
 			}
 			prop := p.parseIdentName()
@@ -696,11 +696,15 @@ func (p *parser) parsePrimary() ast.Expr {
 		switch p.tok.Value {
 		case "this":
 			p.next()
-			return &ast.This{Start: start}
+			n := p.nodes.thises.alloc()
+			n.Start = start
+			return n
 		case "true", "false":
 			v := p.tok.Value == "true"
 			p.next()
-			return &ast.BoolLit{Value: v, Start: start}
+			n := p.nodes.bools.alloc()
+			n.Value, n.Start = v, start
+			return n
 		case "null":
 			p.next()
 			return &ast.NullLit{Start: start}
@@ -847,9 +851,9 @@ func (p *parser) parseImportExpr() ast.Expr {
 		}
 	}
 	return &ast.Call{
-		Callee: &ast.Ident{Name: callee, Start: start},
+		Callee: &ast.Ident{Name: callee, Start: int32(start)},
 		Args:   args,
-		Start:  start,
+		Start:  int32(start),
 	}
 }
 
@@ -902,20 +906,23 @@ func (p *parser) parseArrayLiteral() ast.Expr {
 	p.noIn = false
 	defer func() { p.noIn = saved }()
 
-	lit := &ast.ArrayLit{Start: start}
+	lit := p.nodes.arrays.alloc()
+	lit.Start = int32(start)
+	elements := &p.nodes.exprs
+	first := elements.begin()
 	for !p.isPunct("]") {
 		if p.isPunct(",") {
 			// An elision leaves a nil element.
 			p.next()
-			lit.Elements = append(lit.Elements, nil)
+			elements.add(nil)
 			continue
 		}
 		if p.isPunct("...") {
 			spreadStart := p.tok.Pos
 			p.next()
-			lit.Elements = append(lit.Elements, &ast.Spread{Arg: p.parseAssign(), Start: spreadStart})
+			elements.add(&ast.Spread{Arg: p.parseAssign(), Start: spreadStart})
 		} else {
-			lit.Elements = append(lit.Elements, p.parseAssign())
+			elements.add(p.parseAssign())
 		}
 		if !p.isPunct("]") {
 			p.expectPunct(",")
@@ -923,6 +930,7 @@ func (p *parser) parseArrayLiteral() ast.Expr {
 		}
 	}
 	p.expectPunct("]")
+	lit.Elements = elements.finish(first)
 	return lit
 }
 
@@ -935,7 +943,10 @@ func (p *parser) parseObjectLiteral() ast.Expr {
 	p.noIn = false
 	defer func() { p.noIn = saved }()
 
-	lit := &ast.ObjectLit{Start: start}
+	lit := p.nodes.objects.alloc()
+	lit.Start = start
+	props := &p.nodes.props
+	first := props.begin()
 	sawProto := false
 	for !p.isPunct("}") {
 		prop := p.parseObjectProperty()
@@ -951,13 +962,14 @@ func (p *parser) parseObjectLiteral() ast.Expr {
 			}
 			sawProto = true
 		}
-		lit.Props = append(lit.Props, prop)
+		props.add(prop)
 		if !p.isPunct("}") {
 			p.expectPunct(",")
 			lit.TrailingComma = p.isPunct("}")
 		}
 	}
 	p.expectPunct("}")
+	lit.Props = props.finish(first)
 	return lit
 }
 

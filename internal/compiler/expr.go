@@ -122,7 +122,7 @@ func (c *compiler) compileExprForEffect(e ast.Expr) {
 			default:
 				c.compileMemberUpdate(m, n.Op, func() {
 					c.compileExpr(n.Value)
-				}, n.Start, false)
+				}, int(n.Start), false)
 				return
 			}
 		}
@@ -159,7 +159,7 @@ func (c *compiler) compileExprForEffect(e ast.Expr) {
 // is false, returning them for patching: control falls through when it is
 // true.
 func (c *compiler) emitTestJumpIfFalse(test ast.Expr) []int {
-	return c.emitTestJumps(test, false, nil)
+	return c.emitTestJumps(test, false, c.pool.jumpList())
 }
 
 // emitTestJumps compiles a condition for a branch, appending to jumps the
@@ -204,11 +204,9 @@ func (c *compiler) emitTestJumps(test ast.Expr, jumpIf bool, jumps []int) []int 
 			return c.emitTestJumps(n.Right, jumpIf, jumps)
 		}
 		if n.Op == "&&" || n.Op == "||" {
-			skip := c.emitTestJumps(n.Left, !jumpIf, nil)
+			skip := c.emitTestJumps(n.Left, !jumpIf, c.pool.jumpList())
 			jumps = c.emitTestJumps(n.Right, jumpIf, jumps)
-			for _, j := range skip {
-				c.patchJump(j)
-			}
+			c.patchTestJumps(skip)
 			return jumps
 		}
 	case *ast.Binary:
@@ -258,6 +256,13 @@ func (c *compiler) patchJumps(jumps []int) {
 	for _, j := range jumps {
 		c.patchJump(j)
 	}
+}
+
+// patchTestJumps is patchJumps of a condition's list, which it then gives
+// back (jumpList).
+func (c *compiler) patchTestJumps(jumps []int) {
+	c.patchJumps(jumps)
+	c.pool.putJumps(jumps)
 }
 
 // comparisonOpcode is the opcode of a comparison operator, and whether the
@@ -511,7 +516,7 @@ func (c *compiler) compileIdentReadStatic(n *ast.Ident) {
 	// A function that uses `arguments` binds it to a slot in its prologue, so
 	// the searches above will have found it. Reaching here means the reference
 	// is in a position with no arguments object at all, such as the top level.
-	c.emitAt(n.Start, bytecode.OpGetGlobal, c.nameIdx(n.Name), 0)
+	c.emitAt(int(n.Start), bytecode.OpGetGlobal, c.nameIdx(n.Name), 0)
 }
 
 func (c *compiler) compileTemplate(n *ast.TemplateLit) {
@@ -699,9 +704,9 @@ func (c *compiler) compileTaggedTemplate(n *ast.TaggedTemplate) {
 				if pn, private := m.Property.(*ast.PrivateName); private {
 					// The receiver stays beneath the method, as
 					// OpGetPropThis leaves it.
-					name, ref := c.privateName(pn, m.Start)
+					name, ref := c.privateName(pn, int(m.Start))
 					c.emit(bytecode.OpDup, 0, 0)
-					c.emitAt(m.Start, bytecode.OpGetPrivate, name, ref)
+					c.emitAt(int(m.Start), bytecode.OpGetPrivate, name, ref)
 					break
 				}
 				c.emit(bytecode.OpGetPropThis, c.nameIdx(propKeyName(m.Property)), 0)
@@ -1254,7 +1259,7 @@ func (c *compiler) compileUpdateKeep(n *ast.Update, keep bool) {
 		if pn, private := target.Property.(*ast.PrivateName); private {
 			// A private member is reached through its own accessors, which do
 			// not consult the prototype chain the way a property does.
-			name, ref := c.privateName(pn, target.Start)
+			name, ref := c.privateName(pn, int(target.Start))
 			c.emit(bytecode.OpDup, 0, 0)
 			c.emit(bytecode.OpGetPrivate, name, ref)
 			if !n.Prefix {
@@ -1270,7 +1275,7 @@ func (c *compiler) compileUpdateKeep(n *ast.Update, keep bool) {
 		}
 		if target.Computed {
 			c.compileIndexForUpdate(target)
-			c.emitAt(target.Start, bytecode.OpGetIndex, 0, 0)
+			c.emitAt(int(target.Start), bytecode.OpGetIndex, 0, 0)
 			// Postfix yields the old value, converted, so it is copied down
 			// before the increment; prefix yields the new one, so the copy
 			// comes after; for effect there is no copy.
@@ -1384,7 +1389,7 @@ func (c *compiler) foldGlobalCheck(check int, id *ast.Ident) bool {
 	c.fn.Lines = c.fn.Lines[:l]
 	c.lastPos = -1
 	c.emit(bytecode.OpDup, 0, 0)
-	c.emitAt(id.Start, bytecode.OpSetGlobalStrict, c.nameIdx(id.Name), site)
+	c.emitAt(int(id.Start), bytecode.OpSetGlobalStrict, c.nameIdx(id.Name), site)
 	return true
 }
 
@@ -1450,7 +1455,7 @@ func (c *compiler) compileConditional(n *ast.Conditional) {
 	c.traceName = trace
 	c.compileExpr(n.Cons)
 	endJump := c.emitJump(bytecode.OpJump)
-	c.patchJumps(elseJumps)
+	c.patchTestJumps(elseJumps)
 	// Both branches leave one value, so the depth tracked after the jump is
 	// one too high; correct it so MaxStack is not inflated.
 	c.stackDepth--
@@ -1485,9 +1490,9 @@ func (c *compiler) compileMemberRead(n *ast.Member) {
 		return
 	}
 	if pn, ok := n.Property.(*ast.PrivateName); ok {
-		name, ref := c.privateName(pn, n.Start)
+		name, ref := c.privateName(pn, int(n.Start))
 		c.compileExpr(n.Object)
-		c.emitAt(n.Start, bytecode.OpGetPrivate, name, ref)
+		c.emitAt(int(n.Start), bytecode.OpGetPrivate, name, ref)
 		return
 	}
 	if c.lazyArguments && !n.Optional && c.isLazyArguments(n.Object) {
@@ -1529,19 +1534,19 @@ func callPos(n *ast.Call) int {
 	switch c := n.Callee.(type) {
 	case *ast.Ident:
 		if !c.Paren {
-			return n.Start
+			return int(n.Start)
 		}
 	case *ast.Member:
 		if !c.Computed && c.Property != nil {
 			return c.Property.Pos()
 		}
 	case *ast.Super:
-		return n.Start
+		return int(n.Start)
 	}
 	if n.Open > 0 {
-		return n.Open
+		return int(n.Open)
 	}
-	return n.Start
+	return int(n.Start)
 }
 
 func (c *compiler) compileCall(n *ast.Call) {
@@ -1581,7 +1586,7 @@ func (c *compiler) compileCall(n *ast.Call) {
 	// receiver for `this`.
 	if m, ok := n.Callee.(*ast.Member); ok && !hasSpread(n.Args) {
 		if pn, isPrivate := m.Property.(*ast.PrivateName); isPrivate {
-			name, ref := c.privateName(pn, m.Start)
+			name, ref := c.privateName(pn, int(m.Start))
 			c.compileExpr(m.Object)
 			c.emit(bytecode.OpDup, 0, 0)
 			c.emit(bytecode.OpGetPrivate, name, ref)
@@ -1723,7 +1728,7 @@ func (c *compiler) compileNew(n *ast.New) {
 func (c *compiler) compileSpreadCall(n *ast.Call) {
 	if m, ok := n.Callee.(*ast.Member); ok && !m.Optional {
 		if pn, isPrivate := m.Property.(*ast.PrivateName); isPrivate {
-			name, ref := c.privateName(pn, m.Start)
+			name, ref := c.privateName(pn, int(m.Start))
 			c.compileExpr(m.Object)
 			c.emit(bytecode.OpDup, 0, 0)
 			c.emit(bytecode.OpGetPrivate, name, ref)
@@ -1859,9 +1864,9 @@ func (c *compiler) compileChainLinkThis(e ast.Expr, jumps *[]chainJump) {
 		c.emit(bytecode.OpGetIndexThis, 0, 0)
 	default:
 		if pn, private := m.Property.(*ast.PrivateName); private {
-			name, ref := c.privateName(pn, m.Start)
+			name, ref := c.privateName(pn, int(m.Start))
 			c.emit(bytecode.OpDup, 0, 0)
-			c.emitAt(m.Start, bytecode.OpGetPrivate, name, ref)
+			c.emitAt(int(m.Start), bytecode.OpGetPrivate, name, ref)
 			break
 		}
 		c.emit(bytecode.OpGetPropThis, c.nameIdx(propKeyName(m.Property)), 0)
@@ -1894,8 +1899,8 @@ func (c *compiler) compileChainLink(e ast.Expr, jumps *[]chainJump) {
 				// class's own accessors, which do not walk the prototype
 				// chain. `a?.b.#c` is written this way and is what the
 				// grammar allows -- `a?.#c` too.
-				name, ref := c.privateName(pn, n.Start)
-				c.emitAt(n.Start, bytecode.OpGetPrivate, name, ref)
+				name, ref := c.privateName(pn, int(n.Start))
+				c.emitAt(int(n.Start), bytecode.OpGetPrivate, name, ref)
 				break
 			}
 			c.emit(bytecode.OpGetProp, c.nameIdx(propKeyName(n.Property)), 0)
@@ -1949,9 +1954,9 @@ func (c *compiler) compileChainLink(e ast.Expr, jumps *[]chainJump) {
 				if pn, private := m.Property.(*ast.PrivateName); private {
 					// The receiver stays beneath the method, as
 					// OpGetPropThis leaves it.
-					name, ref := c.privateName(pn, m.Start)
+					name, ref := c.privateName(pn, int(m.Start))
 					c.emit(bytecode.OpDup, 0, 0)
-					c.emitAt(m.Start, bytecode.OpGetPrivate, name, ref)
+					c.emitAt(int(m.Start), bytecode.OpGetPrivate, name, ref)
 					break
 				}
 				c.emit(bytecode.OpGetPropThis, c.nameIdx(propKeyName(m.Property)), 0)
@@ -1974,7 +1979,7 @@ func (c *compiler) compileChainLink(e ast.Expr, jumps *[]chainJump) {
 			c.emit(bytecode.OpPushUndef, 0, 0)
 			c.emit(bytecode.OpSwap, 0, 0)
 			c.compileSpreadArguments(n.Args)
-			c.emitAt(n.Start, bytecode.OpCallSpread, 0, 0)
+			c.emitAt(int(n.Start), bytecode.OpCallSpread, 0, 0)
 			return
 		}
 		argc := c.compileArguments(n.Args)
@@ -2001,7 +2006,7 @@ func (c *compiler) compileAssign(n *ast.Assign) {
 	if call, ok := n.Target.(*ast.Call); ok {
 		// Sloppy code may assign to a call: the call is made, and the
 		// assignment is a ReferenceError before the value is evaluated.
-		c.compileCallTarget(call, n.Start)
+		c.compileCallTarget(call, int(n.Start))
 		return
 	}
 	switch n.Op {
@@ -2038,7 +2043,7 @@ func (c *compiler) compileAssign(n *ast.Assign) {
 			if c.foldGlobalCheck(check, id) {
 				return
 			}
-			c.emitAt(id.Start, bytecode.OpAssertResolved, c.nameIdx(id.Name), 0)
+			c.emitAt(int(id.Start), bytecode.OpAssertResolved, c.nameIdx(id.Name), 0)
 			c.assignTo(n.Target, false)
 			return
 		}
@@ -2049,7 +2054,7 @@ func (c *compiler) compileAssign(n *ast.Assign) {
 		if m, ok := n.Target.(*ast.Member); ok {
 			c.compileMemberUpdate(m, n.Op, func() {
 				value(nameOf(n.Target))
-			}, n.Start, true)
+			}, int(n.Start), true)
 			return
 		}
 		if id, ok := n.Target.(*ast.Ident); ok && c.withLimit(id.Name) > 0 {
@@ -2058,7 +2063,7 @@ func (c *compiler) compileAssign(n *ast.Assign) {
 			c.beginWithRef(id)
 			c.finishUpdate(n.Op, func() {
 				value(id.Name)
-			}, n.Start, 1, func() { c.endWithRef(id) })
+			}, int(n.Start), 1, func() { c.endWithRef(id) })
 			return
 		}
 		// A logical assignment only stores when the short circuit does not
@@ -2079,20 +2084,20 @@ func (c *compiler) compileAssign(n *ast.Assign) {
 
 	default:
 		if m, ok := n.Target.(*ast.Member); ok {
-			c.compileMemberUpdate(m, n.Op, func() { c.compileExpr(n.Value) }, n.Start, true)
+			c.compileMemberUpdate(m, n.Op, func() { c.compileExpr(n.Value) }, int(n.Start), true)
 			return
 		}
 		if id, ok := n.Target.(*ast.Ident); ok && c.withLimit(id.Name) > 0 {
 			c.beginWithRef(id)
 			c.compileExpr(n.Value)
-			c.emitAt(n.Start, compoundOpcode(n.Op), 0, 0)
+			c.emitAt(int(n.Start), compoundOpcode(n.Op), 0, 0)
 			c.endWithRef(id)
 			return
 		}
 		// A compound assignment reads, combines and writes back.
 		c.compileReadTarget(n.Target)
 		c.compileExpr(n.Value)
-		c.emitAt(n.Start, compoundOpcode(n.Op), 0, 0)
+		c.emitAt(int(n.Start), compoundOpcode(n.Op), 0, 0)
 		c.assignTo(n.Target, false)
 	}
 }
@@ -2117,12 +2122,12 @@ func (c *compiler) compileMemberUpdate(m *ast.Member, op string, emitValue func(
 			c.compileExpr(m.Property)
 			c.emit(bytecode.OpToPropertyKey, 0, 0)
 			c.emit(bytecode.OpDup2, 0, 0)
-			c.emitAt(m.Start, bytecode.OpGetSuperIndex, 0, 0)
+			c.emitAt(int(m.Start), bytecode.OpGetSuperIndex, 0, 0)
 			c.finishUpdate(op, emitValue, pos, 2, func() {
 				if keep {
 					c.emit(bytecode.OpInsert3, 0, 0)
 				}
-				c.emitAt(m.Start, bytecode.OpSetSuperIndex, 0, 0)
+				c.emitAt(int(m.Start), bytecode.OpSetSuperIndex, 0, 0)
 			})
 			return
 		}
@@ -2132,14 +2137,14 @@ func (c *compiler) compileMemberUpdate(m *ast.Member, op string, emitValue func(
 			if keep {
 				c.emit(bytecode.OpDup, 0, 0)
 			}
-			c.emitAt(m.Start, bytecode.OpSetSuperProp, name, 0)
+			c.emitAt(int(m.Start), bytecode.OpSetSuperProp, name, 0)
 		})
 		return
 	}
 	if pn, private := m.Property.(*ast.PrivateName); private {
 		// A private name is not an expression, so there is nothing to evaluate
 		// twice; only the object is kept.
-		name, ref := c.privateName(pn, m.Start)
+		name, ref := c.privateName(pn, int(m.Start))
 		c.compileExpr(m.Object)
 		c.emit(bytecode.OpDup, 0, 0)
 		c.emit(bytecode.OpGetPrivate, name, ref)
@@ -2155,23 +2160,23 @@ func (c *compiler) compileMemberUpdate(m *ast.Member, op string, emitValue func(
 	c.compileExpr(m.Object)
 	if m.Computed {
 		c.compileIndexForUpdate(m)
-		c.emitAt(m.Start, bytecode.OpGetIndex, 0, 0)
+		c.emitAt(int(m.Start), bytecode.OpGetIndex, 0, 0)
 		c.finishUpdate(op, emitValue, pos, 2, func() {
 			if keep {
 				c.emit(bytecode.OpInsert3, 0, 0)
 			}
-			c.emitAt(m.Start, bytecode.OpSetIndex, 0, 0)
+			c.emitAt(int(m.Start), bytecode.OpSetIndex, 0, 0)
 		})
 		return
 	}
 	name := c.nameIdx(propKeyName(m.Property))
 	c.dupObject()
-	c.emitAt(m.Start, bytecode.OpGetProp, name, 0)
+	c.emitAt(int(m.Start), bytecode.OpGetProp, name, 0)
 	c.finishUpdate(op, emitValue, pos, 1, func() {
 		if keep {
 			c.emit(bytecode.OpInsert2, 0, 0)
 		}
-		c.emitAt(m.Start, bytecode.OpSetProp, name, 0)
+		c.emitAt(int(m.Start), bytecode.OpSetProp, name, 0)
 	})
 }
 
@@ -2228,14 +2233,14 @@ func (c *compiler) assignToIdentStatic(t *ast.Ident, initializing bool) {
 			// assigning to it outside strict mode is quietly discarded rather
 			// than refused.
 			if c.fn.Strict {
-				c.emitAt(t.Start, bytecode.OpAssignConst, c.nameIdx(t.Name), 0)
+				c.emitAt(int(t.Start), bytecode.OpAssignConst, c.nameIdx(t.Name), 0)
 			}
 			return
 		}
 		if !initializing && l.kind == bindConst && l.initialized {
 			// A runtime error rather than an early one: the assignment may
 			// sit in a function that is never called.
-			c.emitAt(t.Start, bytecode.OpAssignConst, c.nameIdx(t.Name), 0)
+			c.emitAt(int(t.Start), bytecode.OpAssignConst, c.nameIdx(t.Name), 0)
 			return
 		}
 		if l.initialized || initializing {
@@ -2251,17 +2256,17 @@ func (c *compiler) assignToIdentStatic(t *ast.Ident, initializing bool) {
 			// The dead zone outranks constness: writing to a binding that
 			// does not exist yet is a ReferenceError whichever it is.
 			c.emit(bytecode.OpDup, 0, 0)
-			c.emitAt(t.Start, bytecode.OpSetUpvalueCheck, idx, 0)
+			c.emitAt(int(t.Start), bytecode.OpSetUpvalueCheck, idx, 0)
 			return
 		}
 		if c.fn.Upvalues[idx].FuncSelf && !initializing {
 			if c.fn.Strict {
-				c.emitAt(t.Start, bytecode.OpAssignConst, c.nameIdx(t.Name), 0)
+				c.emitAt(int(t.Start), bytecode.OpAssignConst, c.nameIdx(t.Name), 0)
 			}
 			return
 		}
 		if !c.fn.Upvalues[idx].Mutable && !initializing {
-			c.emitAt(t.Start, bytecode.OpAssignConst, c.nameIdx(t.Name), 0)
+			c.emitAt(int(t.Start), bytecode.OpAssignConst, c.nameIdx(t.Name), 0)
 			return
 		}
 		c.emit(bytecode.OpDup, 0, 0)
@@ -2272,7 +2277,7 @@ func (c *compiler) assignToIdentStatic(t *ast.Ident, initializing bool) {
 		// The name has no slot, so nothing nested refers to it: the assignment
 		// still has to be refused in strict mode and discarded otherwise.
 		if c.fn.Strict {
-			c.emitAt(t.Start, bytecode.OpAssignConst, c.nameIdx(t.Name), 0)
+			c.emitAt(int(t.Start), bytecode.OpAssignConst, c.nameIdx(t.Name), 0)
 		}
 		return
 	}
@@ -2308,7 +2313,7 @@ func (c *compiler) assignTo(target ast.Expr, initializing bool) {
 	switch t := target.(type) {
 	case *ast.Call:
 		// A for-in or for-of head that is a call.
-		c.compileCallTarget(t, t.Start)
+		c.compileCallTarget(t, int(t.Start))
 		c.emit(bytecode.OpDrop, 0, 0)
 		return
 	case *ast.Ident:
@@ -2442,25 +2447,25 @@ func (c *compiler) compileMemberStore(m *ast.Member, emitValue func(), keep bool
 			if keep {
 				c.emit(bytecode.OpInsert3, 0, 0)
 			}
-			c.emitAt(m.Start, bytecode.OpSetSuperIndex, 0, 0)
+			c.emitAt(int(m.Start), bytecode.OpSetSuperIndex, 0, 0)
 			return
 		}
 		emitValue()
 		if keep {
 			c.emit(bytecode.OpDup, 0, 0)
 		}
-		c.emitAt(m.Start, bytecode.OpSetSuperProp,
+		c.emitAt(int(m.Start), bytecode.OpSetSuperProp,
 			c.nameIdx(propKeyName(m.Property)), 0)
 		return
 	}
 	if pn, ok := m.Property.(*ast.PrivateName); ok {
-		name, ref := c.privateName(pn, m.Start)
+		name, ref := c.privateName(pn, int(m.Start))
 		c.compileExpr(m.Object)
 		emitValue()
 		if keep {
 			c.emit(bytecode.OpInsert2, 0, 0)
 		}
-		c.emitAt(m.Start, bytecode.OpSetPrivate, name, ref)
+		c.emitAt(int(m.Start), bytecode.OpSetPrivate, name, ref)
 		return
 	}
 	c.compileExpr(m.Object)
@@ -2475,7 +2480,7 @@ func (c *compiler) compileMemberStore(m *ast.Member, emitValue func(), keep bool
 		if keep {
 			c.emit(bytecode.OpInsert3, 0, 0)
 		}
-		c.emitAt(m.Start, bytecode.OpSetIndex, 0, 0)
+		c.emitAt(int(m.Start), bytecode.OpSetIndex, 0, 0)
 		return
 	}
 	emitValue()
@@ -2483,7 +2488,7 @@ func (c *compiler) compileMemberStore(m *ast.Member, emitValue func(), keep bool
 	if keep {
 		c.emit(bytecode.OpInsert2, 0, 0)
 	}
-	c.emitAt(m.Start, bytecode.OpSetProp, c.nameIdx(propKeyName(m.Property)), 0)
+	c.emitAt(int(m.Start), bytecode.OpSetProp, c.nameIdx(propKeyName(m.Property)), 0)
 }
 
 // compileMemberStoreFromValue stores a value that is already on the stack into
@@ -2499,16 +2504,16 @@ func (c *compiler) compileMemberStoreFromValue(m *ast.Member) {
 			c.compileExpr(m.Property)
 			c.emit(bytecode.OpSwap, 0, 0)
 			c.emit(bytecode.OpInsert3, 0, 0)
-			c.emitAt(m.Start, bytecode.OpSetSuperIndex, 0, 0)
+			c.emitAt(int(m.Start), bytecode.OpSetSuperIndex, 0, 0)
 			return
 		}
 		c.emit(bytecode.OpDup, 0, 0)
-		c.emitAt(m.Start, bytecode.OpSetSuperProp,
+		c.emitAt(int(m.Start), bytecode.OpSetSuperProp,
 			c.nameIdx(propKeyName(m.Property)), 0)
 		return
 	}
 	if pn, ok := m.Property.(*ast.PrivateName); ok {
-		name, ref := c.privateName(pn, m.Start)
+		name, ref := c.privateName(pn, int(m.Start))
 		c.compileExpr(m.Object)
 		c.emit(bytecode.OpSwap, 0, 0)
 		c.emit(bytecode.OpInsert2, 0, 0)

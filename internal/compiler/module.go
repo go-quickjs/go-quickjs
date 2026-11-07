@@ -196,7 +196,7 @@ func declaredNames(s ast.Stmt) []string {
 	switch n := s.(type) {
 	case *ast.VarDecl:
 		for _, d := range n.Decls {
-			collectPatternNames(d.Target, &out)
+			out = appendPatternNames(out, d.Target)
 		}
 	case *ast.FuncDecl:
 		if n.Fn.Name != nil {
@@ -350,7 +350,7 @@ func collectLexicalNames(s ast.Stmt, out *[]lexicalName) {
 		}
 		var names []string
 		for _, d := range n.Decls {
-			collectPatternNames(d.Target, &names)
+			names = appendPatternNames(names, d.Target)
 		}
 		for _, name := range names {
 			*out = append(*out, lexicalName{name, n.Kind})
@@ -423,7 +423,7 @@ func (c *compiler) checkModuleDeclarations(body []ast.Stmt) {
 		case *ast.VarDecl:
 			var names []string
 			for _, dd := range d.Decls {
-				collectPatternNames(dd.Target, &names)
+				names = appendPatternNames(names, dd.Target)
 			}
 			for _, n := range names {
 				declare(n, d.Kind != ast.DeclVar, pos)

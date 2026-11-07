@@ -163,7 +163,7 @@ type parserMark struct {
 	tok       lexer.Token
 	// exprs, stmts and decls are where the lists being built stood, which a
 	// rewind after an error abandons back to.
-	exprs, stmts, decls int
+	exprs, stmts, decls, props int
 }
 
 func (p *parser) mark() parserMark {
@@ -176,6 +176,7 @@ func (p *parser) mark() parserMark {
 		exprs:     p.nodes.exprs.begin(),
 		stmts:     p.nodes.stmts.begin(),
 		decls:     p.nodes.decls.begin(),
+		props:     p.nodes.props.begin(),
 	}
 }
 
@@ -186,6 +187,7 @@ func (p *parser) reset(m parserMark) {
 	p.nodes.exprs.truncate(m.exprs)
 	p.nodes.stmts.truncate(m.stmts)
 	p.nodes.decls.truncate(m.decls)
+	p.nodes.props.truncate(m.props)
 }
 
 // Parse parses src into a Program.

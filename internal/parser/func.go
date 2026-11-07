@@ -230,7 +230,12 @@ func (p *parser) parseFunctionBody(fn *ast.FuncLit) []ast.Stmt {
 			}
 		}
 	}
-	body = append(body, p.parseStatements(func() bool { return p.isPunct("}") })...)
+	rest := p.parseStatements(func() bool { return p.isPunct("}") })
+	if len(body) == 0 {
+		body = rest
+	} else {
+		body = append(body, rest...)
+	}
 	// The closing brace has not been consumed yet, so its position plus one is
 	// where the function ends.
 	fn.End = p.tok.Pos + 1
@@ -298,7 +303,7 @@ func (p *parser) tryParseSingleParamArrow() ast.Expr {
 		return nil
 	}
 	p.checkBindingName(nameTok.Value, nameTok)
-	params := []ast.Expr{&ast.Ident{Name: nameTok.Value, Start: nameTok.Pos}}
+	params := []ast.Expr{&ast.Ident{Name: nameTok.Value, Start: int32(nameTok.Pos)}}
 	return p.parseArrowBody(params, nameTok.Pos, false)
 }
 
@@ -479,7 +484,7 @@ func (p *parser) tryParseAsyncFunction() ast.Expr {
 			p.reset(m)
 			return nil
 		}
-		params := []ast.Expr{&ast.Ident{Name: nameTok.Value, Start: nameTok.Pos}}
+		params := []ast.Expr{&ast.Ident{Name: nameTok.Value, Start: int32(nameTok.Pos)}}
 		return p.parseArrowBody(params, start, true)
 
 	case p.isPunct("("):

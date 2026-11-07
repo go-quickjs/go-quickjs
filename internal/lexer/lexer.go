@@ -2,6 +2,7 @@ package lexer
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -430,8 +431,9 @@ func (l *Lexer) NextInto(tok *Token) error {
 	}
 
 	// c is ASCII here: anything else began an identifier.
+	// A punctuator of one byte is c, which is why it is in this list.
 	for _, p := range punctuatorsBy[c] {
-		if strings.HasPrefix(l.src[l.pos:], p) {
+		if len(p) == 1 || strings.HasPrefix(l.src[l.pos:], p) {
 			// `?.3` is a ternary followed by .3, not optional chaining.
 			if p == "?." && isDigit(l.peekByte(2)) {
 				continue
@@ -685,7 +687,15 @@ func (l *Lexer) scanString(tok *Token, quote byte) error {
 		}
 		switch c {
 		case '\\':
-			escaped = l.startCooked(escaped, start+1)
+			if !escaped {
+				escaped = l.startCooked(escaped, start+1)
+				// Room for all that is left, if no quote is escaped, which
+				// is no more than the rest takes cooked: a data table in a
+				// string is grown once, not a quarter at a time.
+				if rest := strings.IndexByte(l.src[l.pos:], quote); rest > 0 {
+					sb.b = slices.Grow(sb.b, rest)
+				}
+			}
 			if err := l.scanEscape(sb); err != nil {
 				return err
 			}

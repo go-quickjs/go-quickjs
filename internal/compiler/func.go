@@ -101,6 +101,7 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 		constructible = true
 	}
 	facts := scanFunction(fn, constructible)
+	c.reserve(fn.End - fn.Start - facts.innerBytes)
 
 	// Parameters must occupy slots 0..n-1, because the interpreter copies
 	// arguments into those slots positionally. Nothing may be declared before
@@ -317,7 +318,7 @@ func (c *compiler) bindParameters(fn *ast.FuncLit, materialize func(), wantArgs 
 	slots := make([]uint32, len(fn.Params))
 	names := make([]string, len(fn.Params))
 	declareParam := func(id *ast.Ident) uint32 {
-		slot := c.declare(id.Name, bindParam, id.Start)
+		slot := c.declare(id.Name, bindParam, int(id.Start))
 		if c.fn.ParamsAreLexical {
 			c.markUninitialized(id.Name)
 		}
@@ -362,9 +363,9 @@ func (c *compiler) bindParameters(fn *ast.FuncLit, materialize func(), wantArgs 
 	// which binds these names.
 	if !c.fn.Strict {
 		saved := c.paramScopeNames
-		c.paramScopeNames = append([]string(nil), names...)
+		c.paramScopeNames = names
 		if wantArgs {
-			c.paramScopeNames = append(c.paramScopeNames, "arguments")
+			c.paramScopeNames = append(names[:len(names):len(names)], "arguments")
 		}
 		defer func() { c.paramScopeNames = saved }()
 	}
@@ -448,8 +449,9 @@ func (c *compiler) anonymousParamSlot() uint32 {
 // declarePatternNames declares the bindings a parameter pattern introduces,
 // which the destructuring code then initializes.
 func (c *compiler) declarePatternNames(target ast.Expr) {
-	var names []string
-	collectPatternNames(target, &names)
+	var room [8]string
+	names := room[:0]
+	names = appendPatternNames(names, target)
 	for _, n := range names {
 		c.declare(n, bindLet, target.Pos())
 		c.markInitialized(n)
@@ -593,7 +595,7 @@ func (c *compiler) prepareRef(leaf ast.Expr, declaring bool, kind ast.DeclKind) 
 	}
 	ref.member = m
 	if pn, isPrivate := m.Property.(*ast.PrivateName); isPrivate {
-		c.checkPrivateName(pn, m.Start)
+		c.checkPrivateName(pn, int(m.Start))
 		c.compileExpr(m.Object)
 		ref.private, ref.slots = true, 1
 		return ref
@@ -616,12 +618,12 @@ func (c *compiler) storeRef(ref patternRef, kind ast.DeclKind, declaring bool) {
 		switch {
 		case ref.private:
 			pn := ref.member.Property.(*ast.PrivateName)
-			name, key := c.privateName(pn, ref.member.Start)
-			c.emitAt(ref.member.Start, bytecode.OpSetPrivate, name, key)
+			name, key := c.privateName(pn, int(ref.member.Start))
+			c.emitAt(int(ref.member.Start), bytecode.OpSetPrivate, name, key)
 		case ref.member.Computed:
-			c.emitAt(ref.member.Start, bytecode.OpSetIndex, 0, 0)
+			c.emitAt(int(ref.member.Start), bytecode.OpSetIndex, 0, 0)
 		default:
-			c.emitAt(ref.member.Start, bytecode.OpSetProp,
+			c.emitAt(int(ref.member.Start), bytecode.OpSetProp,
 				c.nameIdx(propKeyName(ref.member.Property)), 0)
 		}
 		return
@@ -932,12 +934,12 @@ func (c *compiler) compileStaticElements(cls *ast.ClassLit, keyNames []string) {
 		if computed {
 			// Read the key the class definition already computed rather than
 			// evaluating the expression a second time.
-			key = &ast.Ident{Name: keyNames[el.field], Start: f.Start}
+			key = &ast.Ident{Name: keyNames[el.field], Start: int32(f.Start)}
 		}
 		value := f.Value
 		if value == nil {
 			// A field with no initializer is still created, holding undefined.
-			value = &ast.Ident{Name: "undefined", Start: f.Start}
+			value = &ast.Ident{Name: "undefined", Start: int32(f.Start)}
 		}
 		c.compileFunctionLiteral(&ast.FuncLit{
 			Kind: ast.FuncMethod,
@@ -1066,7 +1068,7 @@ func (c *compiler) compilePrivateMethod(m ast.Property, fn *ast.FuncLit,
 	// the prototype is its home object even though it is not defined there.
 	c.emit(bytecode.OpDup, 0, 0)
 	c.emit(bytecode.OpGetProp, c.nameIdx("prototype"), 0)
-	c.compileIdentRead(&ast.Ident{Name: installName, Start: m.Start})
+	c.compileIdentRead(&ast.Ident{Name: installName, Start: int32(m.Start)})
 	c.compileMethodValue(fn, methodName)
 	c.emit(bytecode.OpSetHomeObject, 2, 0)
 	op := bytecode.OpAddPrivateMethod
@@ -1124,12 +1126,12 @@ func (c *compiler) instanceInitializer(cls *ast.ClassLit, keyNames []string,
 		if computed {
 			// Read the key the class definition already computed rather than
 			// evaluating the expression again for every instance.
-			key = &ast.Ident{Name: keyNames[i], Start: f.Start}
+			key = &ast.Ident{Name: keyNames[i], Start: int32(f.Start)}
 		}
 		value := f.Value
 		if value == nil {
 			// A field with no initializer is still created, holding undefined.
-			value = &ast.Ident{Name: "undefined", Start: f.Start}
+			value = &ast.Ident{Name: "undefined", Start: int32(f.Start)}
 		}
 		body = append(body, &ast.FieldInit{
 			Key:      key,
@@ -1199,7 +1201,7 @@ func implicitSuperCall(pos int) ast.Stmt {
 		X: &ast.Call{
 			Callee:  &ast.Super{Start: pos},
 			Forward: true,
-			Start:   pos,
+			Start:   int32(pos),
 		},
 		Start: pos,
 	}
@@ -1216,7 +1218,7 @@ func topLevelLexicalNames(body []ast.Stmt) []string {
 				continue
 			}
 			for _, d := range n.Decls {
-				collectPatternNames(d.Target, &out)
+				out = appendPatternNames(out, d.Target)
 			}
 		case *ast.ClassDecl:
 			if n.Class.Name != nil {
@@ -1252,9 +1254,10 @@ func simpleParams(params []ast.Expr) bool {
 // bindsArguments reports whether a parameter is named `arguments`, which leaves
 // no arguments object: the parameter is what the name means.
 func bindsArguments(params []ast.Expr) bool {
-	var names []string
+	var room [8]string
+	names := room[:0]
 	for _, p := range params {
-		collectPatternNames(p, &names)
+		names = appendPatternNames(names, p)
 	}
 	for _, n := range names {
 		if n == "arguments" {

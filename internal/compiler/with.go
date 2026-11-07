@@ -106,7 +106,7 @@ func (c *compiler) checkGlobalRef(n *ast.Ident) bool {
 	if c.globalLex[n.Name] || c.isModuleLex(n.Name) || c.withLimit(n.Name) > 0 {
 		return false
 	}
-	c.emitAt(n.Start, bytecode.OpCheckGlobalRef, c.nameIdx(n.Name), 0)
+	c.emitAt(int(n.Start), bytecode.OpCheckGlobalRef, c.nameIdx(n.Name), 0)
 	return true
 }
 

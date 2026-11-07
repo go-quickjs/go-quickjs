@@ -22,9 +22,10 @@ import "github.com/go-quickjs/go-quickjs/internal/ast"
 type scopeChecker struct {
 	c *compiler
 	// scopes is the stack of lexical scopes enclosing the current position,
-	// innermost last. It is reset at every function boundary, since a var never
-	// hoists past one.
+	// innermost last, and base where the current function's begin: a var
+	// never hoists past a function boundary.
 	scopes []lexScope
+	base   int
 }
 
 // lexScope is the set of names one scope binds lexically.
@@ -300,7 +301,7 @@ func (s *scopeChecker) checkVarPattern(target ast.Expr) {
 		pos = target.Pos()
 	}
 	walkPatternNames(target, func(name string) {
-		for i := len(s.scopes) - 1; i >= 0; i-- {
+		for i := len(s.scopes) - 1; i >= s.base; i-- {
 			if !s.scopes[i].has(name) {
 				continue
 			}
@@ -319,16 +320,15 @@ func (s *scopeChecker) function(fn *ast.FuncLit) {
 	if fn == nil {
 		return
 	}
-	// The function's scopes go on above the enclosing ones' end, which
-	// nothing reads while it is walked, so that each function does not grow
-	// a stack of its own.
-	saved := s.scopes
-	s.scopes = saved[len(saved):]
+	// The function's scopes go on above the enclosing ones, which nothing
+	// reads while it is walked, so that all share one stack.
+	saved := s.base
+	s.base = len(s.scopes)
 	for _, p := range fn.Params {
 		s.expr(paramExpr(p))
 	}
 	s.blockIn(fn.Body, nil, false)
-	s.scopes = saved
+	s.base = saved
 }
 
 // paramExpr unwraps a parameter to the expression a default value hangs off,
@@ -350,10 +350,10 @@ func (s *scopeChecker) class(cl *ast.ClassLit) {
 	}
 	for _, sb := range cl.StaticBlocks {
 		blk := sb.Body
-		saved := s.scopes
-		s.scopes = nil
+		saved := s.base
+		s.base = len(s.scopes)
 		s.block(blk, nil)
-		s.scopes = saved
+		s.base = saved
 	}
 }
 

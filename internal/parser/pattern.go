@@ -62,7 +62,7 @@ func (p *parser) toPattern(e ast.Expr, binding bool) ast.Expr {
 		return &ast.AssignPattern{
 			Target:  p.toPattern(n.Target, binding),
 			Default: n.Value,
-			Start:   n.Start,
+			Start:   int(n.Start),
 		}
 
 	case *ast.AssignPattern:
@@ -82,7 +82,7 @@ func (p *parser) toPattern(e ast.Expr, binding bool) ast.Expr {
 // arrayToPattern converts an array literal to an array pattern, moving a
 // trailing spread into the pattern's rest slot.
 func (p *parser) arrayToPattern(lit *ast.ArrayLit, binding bool) ast.Expr {
-	pat := &ast.ArrayPattern{Start: lit.Start}
+	pat := &ast.ArrayPattern{Start: int(lit.Start)}
 
 	for i, el := range lit.Elements {
 		if el == nil {
