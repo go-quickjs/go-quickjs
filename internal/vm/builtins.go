@@ -2320,20 +2320,6 @@ func (r *Runtime) initSymbolBuiltins() {
 		}
 		return Sym(NewSymbol(s.Go(), true)), nil
 	})
-	wk := map[string]*Symbol{
-		"iterator": r.wellKnown.iterator, "asyncIterator": r.wellKnown.asyncIterator,
-		"hasInstance": r.wellKnown.hasInstance, "toPrimitive": r.wellKnown.toPrimitive,
-		"toStringTag": r.wellKnown.toStringTag, "species": r.wellKnown.species,
-		"isConcatSpreadable": r.wellKnown.isConcatSpreadable,
-		"unscopables":        r.wellKnown.unscopables, "match": r.wellKnown.match,
-		"matchAll": r.wellKnown.matchAll, "replace": r.wellKnown.replace,
-		"search": r.wellKnown.search, "split": r.wellKnown.split,
-		"dispose": r.wellKnown.dispose, "asyncDispose": r.wellKnown.asyncDispose,
-	}
-	for name, sym := range wk {
-		r.defConst(ctor, name, Sym(sym))
-	}
-
 	r.defMethod(ctor, "for", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		s, err := rt.toString(arg(args, 0))
 		if err != nil {
@@ -2358,6 +2344,24 @@ func (r *Runtime) initSymbolBuiltins() {
 		}
 		return Undefined, nil
 	})
+
+	// In V8's order, which Object.getOwnPropertyNames(Symbol) shows; a map
+	// ranged over here made it, and the atoms' numbers, differ by the run.
+	wk := r.wellKnown
+	for _, s := range [...]struct {
+		name string
+		sym  *Symbol
+	}{
+		{"asyncIterator", wk.asyncIterator}, {"hasInstance", wk.hasInstance},
+		{"isConcatSpreadable", wk.isConcatSpreadable}, {"iterator", wk.iterator},
+		{"match", wk.match}, {"matchAll", wk.matchAll}, {"replace", wk.replace},
+		{"search", wk.search}, {"species", wk.species}, {"split", wk.split},
+		{"toPrimitive", wk.toPrimitive}, {"toStringTag", wk.toStringTag},
+		{"unscopables", wk.unscopables}, {"dispose", wk.dispose},
+		{"asyncDispose", wk.asyncDispose},
+	} {
+		r.defConst(ctor, s.name, Sym(s.sym))
+	}
 
 	r.defMethod(p, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		s, err := rt.thisSymbol(this)

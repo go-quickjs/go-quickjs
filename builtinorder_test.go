@@ -622,3 +622,12 @@ func TestFunctionOwnKeyOrder(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// Symbol's own properties are in the one order, V8's, from one process to
+// the next. A test that passed by the luck of a run's map order would
+// have 15! to 1 against it.
+func TestSymbolPropertyOrder(t *testing.T) {
+	checkEval(t, `Object.getOwnPropertyNames(Symbol).join()`,
+		"length,name,prototype,for,keyFor,asyncIterator,hasInstance,isConcatSpreadable,iterator,"+
+			"match,matchAll,replace,search,species,split,toPrimitive,toStringTag,unscopables,dispose,asyncDispose")
+}

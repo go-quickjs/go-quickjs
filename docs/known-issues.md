@@ -1035,3 +1035,13 @@ Paths are relative to this repository; `go-intl:` paths are in
   threw after the space's `valueOf` had run, not before. Node has the
   standard's order.
 - **Status:** fixed. Test: `TestJSONStringifyReadsReplacerFirst`.
+
+### KI-78 Symbol's own properties came in a different order each run
+- **Where:** `internal/vm/builtins.go`, `initSymbolBuiltins`.
+- **Effect:** the well-known symbols were defined by ranging over a Go map, so
+  that `Object.getOwnPropertyNames(Symbol)` and `Reflect.ownKeys(Symbol)` gave
+  another order in each process, and the atoms of those names, which the JIT
+  compares a key with, had other numbers. Node's order is the same every time.
+  `Symbol.for` and `Symbol.keyFor` came after them, too, where Node has them
+  first.
+- **Status:** fixed: Node's order. Test: `TestSymbolPropertyOrder`.
