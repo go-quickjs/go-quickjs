@@ -96,41 +96,41 @@ Choose `Babel` separately so that each fresh process loads just one bundle.
 On macOS, `time -l` reports peak process RSS; Linux's equivalent is `time -v`.
 
 On an Apple M5 Max, macOS/arm64, Go 1.27.3, `GOMAXPROCS=1`, `TZ=UTC`,
-with `CGO_ENABLED=0 -pgo=off -trimpath` and JIT disabled, the compiler
-changes compared with `925cf47c` give these medians. Compiler figures use
-five fresh processes with 500 ms per benchmark; load figures use twenty
-fresh processes per bundle, one load per process. Builds run sequentially
-in alternating order, with no concurrent builds or tests:
+with `CGO_ENABLED=0 -pgo=off -trimpath` and JIT disabled, go-quickjs
+`2d1ca1f7` gives these per-metric medians, measured on 2026-11-07. Compiler
+figures use five fresh processes, each running both bundles with 500 ms per
+benchmark. Load figures use twenty fresh processes per bundle, one load per
+process. One process runs at a time, with 30-second pauses between the five
+compiler rounds and between the twenty load rounds. Each load round runs
+both bundles in separate processes, alternating their order. AC power was
+used throughout, with no concurrent builds or tests. All samples are
+included, including the first.
 
-| Bundle | Compile before | Compile after | Load before | Load after |
-|---|---:|---:|---:|---:|
-| Three.js | 17.89 ms | 14.52 ms | 40.77 ms | 36.46 ms |
-| Babel | 156.07 ms | 43.12 ms | 303.38 ms | 198.66 ms |
+| Bundle | Compile | First load |
+|---|---:|---:|
+| Three.js | 11.04 ms | 27.78 ms |
+| Babel | 29.95 ms | 154.77 ms |
 
-Large functions now index local names from 32 bindings onward, restoring
-shadowed bindings on scope exit; smaller functions keep linear lookup.
-Compiler state and the buffers used to collect closure captures are reused
-with the existing scratch buffers. Returned functions own exact-size copies
-of their tables, and released compiler state is zeroed so the pool retains
-neither the source nor settings from a previous function. Work is not moved
-to later feature use.
+The first-load interval includes parsing, compilation and execution. It
+excludes runtime construction, source reads, host setup and the functional
+checks. The compiler-only interval starts after parsing and measures
+compilation of the existing AST; it does not include work deferred to
+executing the bundle.
 
-Before/after memory figures for the same runs are below. Allocations are
-total bytes allocated per operation, in decimal MB. Peak RSS is the whole
-test process, including its untimed setup and functional checks, in MiB:
+Memory figures for the same runs are below. Allocations are total bytes
+allocated per operation, in decimal MB. Peak load RSS is the whole test
+process, including its untimed setup and functional checks, in MiB. Each
+metric is the median of its own samples:
 
-| Bundle | Compiler MB before / after | Load MB before / after | Peak RSS MiB before / after |
+| Bundle | Compiler MB/op | Load MB/op | Peak load RSS MiB |
 |---|---:|---:|---:|
-| Three.js | 8.18 / 6.25 | 25.97 / 24.24 | 47.41 / 47.35 |
-| Babel | 26.07 / 16.62 | 115.37 / 109.44 | 112.08 / 116.68 |
+| Three.js | 5.50 | 21.69 | 45.43 |
+| Babel | 19.39 | 90.92 | 113.08 |
 
-Babel's peak RSS rises by 4.60 MiB despite the lower allocation totals.
-The language/Annex B conformance run's peak RSS changes from 546.19 to
-557.30 MiB in a separate single-process comparison. The `qjs` binary grows
-by 432 bytes, from 42,055,266 to 42,055,698 bytes. V8 fixed work (`-n 5`,
-three alternating fresh processes per build) stays level: 1160.2 versus
-1161.6 ms, with 9.0 MB live after GC in both builds. The hot VM functions
-have identical addresses in these builds.
+The `qjs` binary built without the JIT, using `CGO_ENABLED=0 go build
+-pgo=off -trimpath ./cmd/qjs`, is 42,606,722 bytes. The load test binary is
+40,790,114 bytes, and the compiler test binary is 8,179,986 bytes. The
+bundle sizes and SHA-256 checks are the pinned upstream files above.
 
 [three-bundle]: https://unpkg.com/three@0.160.0/build/three.js
 [three-license]: https://github.com/mrdoob/three.js/blob/r160/LICENSE
@@ -150,8 +150,8 @@ each: `-engine node -arg --jitless` runs Node without its JIT compilers.
 
 For a comparison with another pure-Go JavaScript engine, the Mozilla
 [AreWeFastYet V8 version 7 suite][v8-v7] was run against go-quickjs and
-[goja]. All three go-quickjs columns use revision `3ea976f4`, measured alongside
-goja on 2026-11-06. Each column is the median of three fresh-process runs
+[goja]. All three go-quickjs columns use revision `2d1ca1f7`, measured alongside
+goja on 2026-11-07. Each column is the median of three fresh-process runs
 on an Apple M5 Max with Go 1.27.3, with 30 seconds between runs and AC
 power throughout. One engine ran at a time, with the order rotated each
 round. JIT off was built without the `quickjs_jit` tag. JIT on compiles
@@ -164,15 +164,15 @@ go-quickjs score by goja's.
 
 | Workload | go-quickjs JIT off | go-quickjs JIT on | go-quickjs JIT background | goja | JIT off / goja | JIT on / goja | JIT background / goja |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| Richards | 2,588 | 12,931 | 12,585 | 524 | 4.94x | 24.68x | 24.02x |
-| DeltaBlue | 2,735 | 13,197 | 12,668 | 650 | 4.21x | 20.30x | 19.49x |
-| Crypto | 3,211 | 17,767 | 17,632 | 330 | 9.73x | 53.84x | 53.43x |
-| RayTrace | 6,142 | 25,134 | 31,080 | 786 | 7.81x | 31.98x | 39.54x |
-| EarleyBoyer | 7,441 | 12,525 | 12,349 | 1,447 | 5.14x | 8.66x | 8.53x |
-| RegExp | 8,654 | 9,910 | 10,294 | 572 | 15.13x | 17.33x | 18.00x |
-| Splay | 9,942 | 15,206 | 16,404 | 2,485 | 4.00x | 6.12x | 6.60x |
-| NavierStokes | 5,866 | 38,732 | 38,617 | 550 | 10.67x | 70.42x | 70.21x |
-| **Composite score** | **5,178** | **16,602** | **16,635** | **748** | **6.92x** | **22.20x** | **22.24x** |
+| Richards | 2,539 | 12,903 | 12,490 | 527 | 4.82x | 24.48x | 23.70x |
+| DeltaBlue | 2,711 | 13,680 | 13,065 | 638 | 4.25x | 21.44x | 20.48x |
+| Crypto | 3,216 | 17,989 | 18,020 | 334 | 9.63x | 53.86x | 53.95x |
+| RayTrace | 5,840 | 30,249 | 33,152 | 816 | 7.16x | 37.07x | 40.63x |
+| EarleyBoyer | 7,472 | 13,100 | 13,296 | 1,458 | 5.12x | 8.98x | 9.12x |
+| RegExp | 8,728 | 10,233 | 10,574 | 582 | 15.00x | 17.58x | 18.17x |
+| Splay | 10,113 | 16,649 | 17,578 | 2,662 | 3.80x | 6.25x | 6.60x |
+| NavierStokes | 5,883 | 38,842 | 38,881 | 565 | 10.41x | 68.75x | 68.82x |
+| **Composite score** | **5,221** | **17,448** | **17,360** | **766** | **6.82x** | **22.78x** | **22.66x** |
 
 The runner's timed suite interval includes runtime construction, parsing,
 compilation, the suite's warmups and its measured iterations, but excludes
@@ -182,9 +182,9 @@ go-quickjs and goja runs:
 
 | Metric | go-quickjs JIT off | go-quickjs JIT on | go-quickjs JIT background | goja | JIT off relative to goja |
 |---|---:|---:|---:|---:|---:|
-| Suite wall time | 22.28 s | 20.12 s | 20.12 s | 52.04 s | 2.34x faster |
-| Suite CPU time | 26.12 s | 25.80 s | 26.23 s | 73.61 s | 64.5% less |
-| Total allocation | 8.16 GiB | 14.93 GiB | 14.86 GiB | 33.98 GiB | 76.0% less |
+| Suite wall time | 22.28 s | 20.11 s | 20.11 s | 51.50 s | 2.31x faster |
+| Suite CPU time | 26.09 s | 25.84 s | 26.20 s | 72.58 s | 64.1% less |
+| Total allocation | 8.25 GiB | 16.02 GiB | 16.17 GiB | 34.09 GiB | 75.8% less |
 
 Score mode does different amounts of work as throughput changes, so the CPU
 and allocation totals are not equal-work efficiency measurements. The
@@ -194,7 +194,7 @@ composite calculated from the workload medians.
 The suite warms every workload for at least one second, then measures for at
 least another second and continues until it has 32 measured iterations. All
 engines evaluated the same benchmark sources and validation code.
-The measured revisions were go-quickjs `3ea976f4`, goja `a177d211bf60`, and
+The measured revisions were go-quickjs `2d1ca1f7`, goja `a177d211bf60`, and
 AreWeFastYet `0e21608`. The isolated goja runner pins
 `v0.0.0-20261102223426-a177d211bf60` for this comparison. These results
 characterize this older workload suite rather than every application;
@@ -206,22 +206,21 @@ The comparison used `internal/cmd/v8bench/matrix`, selecting `gq`, `gqjit`,
 sample, with 30-second pauses. The engine orders were `gq,gqjit,gqjitbg,goja`,
 `gqjit,gqjitbg,goja,gq` and `gqjitbg,goja,gq,gqjit`. `-report` combined the saved outputs
 into the median score table. Each engine's three binaries were
-byte-identical; both JIT modes used the same binary. The only tracked
-changes during measurement added matrix support for the background JIT
-selector and its report tests. The engine code matched the revision above.
+byte-identical; both JIT modes used the same binary. The tracked checkout
+matched the revision above throughout measurement.
 
 The composite samples were:
 
 | Mode | Run 1 | Run 2 | Run 3 |
 |---|---:|---:|---:|
-| JIT off | 5,359 | 5,034 | 5,178 |
-| JIT on | 17,247 | 16,167 | 16,602 |
-| JIT background | 16,635 | 16,329 | 17,166 |
-| goja | 743 | 750 | 748 |
+| JIT off | 5,230 | 5,221 | 5,110 |
+| JIT on | 16,864 | 17,448 | 17,609 |
+| JIT background | 17,729 | 17,085 | 17,360 |
+| goja | 741 | 766 | 770 |
 
 All samples were included. The table takes the median of each workload and
 of the printed composite scores independently. Background compilation's
-composite was 0.2% higher than synchronous compilation's, within the spread
+composite was 0.5% lower than synchronous compilation's, within the spread
 of these samples; this run does not establish an overall throughput gain.
 
 ## Compared with C QuickJS
