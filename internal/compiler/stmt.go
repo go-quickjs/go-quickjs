@@ -1036,7 +1036,7 @@ func (c *compiler) bareJumpTarget(s ast.Stmt) (int, bool) {
 	}
 	for i := len(c.loops) - 1; i >= 0; i-- {
 		l := &c.loops[i]
-		if cont && !l.isLoop {
+		if cont && !l.isLoop || label == "" && l.labelOnly {
 			continue
 		}
 		if label == "" || l.label == label {
@@ -1051,7 +1051,7 @@ func (c *compiler) bareJumpTarget(s ast.Stmt) (int, bool) {
 
 func (c *compiler) compileBreak(n *ast.BreakStmt) {
 	for i := len(c.loops) - 1; i >= 0; i-- {
-		if n.Label == "" || c.loops[i].label == n.Label {
+		if n.Label == "" && !c.loops[i].labelOnly || c.loops[i].label == n.Label {
 			c.unwindTo(&c.loops[i])
 			pc := c.emitJump(bytecode.OpJump)
 			c.loops[i].breaks = append(c.loops[i].breaks, pc)
@@ -1083,7 +1083,7 @@ func (c *compiler) compileLabeled(n *ast.LabeledStmt) {
 	case *ast.WhileStmt, *ast.DoWhileStmt, *ast.ForStmt, *ast.ForInStmt, *ast.ForOfStmt:
 		c.compileLabeledLoop(n.Label, body)
 	default:
-		c.pushLoop(n.Label, false)
+		c.pushLoop(n.Label, false).labelOnly = true
 		c.compileStatement(n.Body)
 		c.popLoop(c.here())
 	}

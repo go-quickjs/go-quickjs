@@ -200,6 +200,10 @@ type loopCtx struct {
 	// isLoop distinguishes a loop, which continue may target, from a labelled
 	// block or switch, which it may not.
 	isLoop bool
+	// labelOnly marks a labelled statement other than a loop -- a block, an
+	// if, a switch's label -- which only a break naming it may target: a
+	// break without a label goes to the innermost loop or switch, past it.
+	labelOnly bool
 	// breaks and continues hold the program counters of jumps awaiting a
 	// target, since the target is not known until the loop is fully compiled.
 	breaks    []int

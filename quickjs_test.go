@@ -189,6 +189,23 @@ func TestLabeledBreakAndContinue(t *testing.T) {
 			}
 		}
 		count`, "3")
+
+	// A break without a label leaves the innermost loop or switch, never a
+	// labelled block around it: dart2js writes a loop's body as `for (;;)
+	// $label0$0: { ... break $label0$0; ... break; }`, and Sass's parser
+	// looped for ever when the bare break ended the block alone. Each form
+	// of it -- the if's own jump and a statement of its own -- and Node's
+	// answers (v26.12.1).
+	checkEval(t, `
+		let n = 0, log = [];
+		for (;;) L: { n++; if (n > 5) throw new Error("looped"); if (n < 3) break L; log.push("n" + n); break; }
+		let m = 0;
+		for (;;) L2: { m++; if (m > 5) throw new Error("looped"); if (m === 2) break; }
+		let k = 0;
+		while (true) L3: { if (k > 9) throw new Error("looped"); k++; switch (k) { case 1: break; case 2: break L3; default: { break; } } if (k === 4) break; }
+		let s = "";
+		for (const c of "abc") B: { if (c === "b") break B; s += c; }
+		n + " " + m + " " + k + " " + s + " " + log.join()`, "3 2 4 ac n3")
 }
 
 func TestFunctions(t *testing.T) {
