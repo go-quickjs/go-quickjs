@@ -470,9 +470,20 @@ func unboxPhis(f *Func) bool {
 	// needs evidence, directly or through candidates. Removing one candidate
 	// can disqualify another, so both filters repeat. The result is the same
 	// in any order.
+	//
+	// The passes look at the candidates left (live, in the phis' order),
+	// not at every phi: most of a function's phis are dropped by the first,
+	// and Emscripten's functions have hundreds, met again at every round.
+	live := f.scr().phiLive[:0]
+	for _, v := range phis {
+		if cand[v.ID] {
+			live = append(live, v)
+		}
+	}
+	defer func() { f.scr().phiLive = live[:0] }()
 	for changed := true; changed; {
 		changed = false
-		for _, v := range phis {
+		for _, v := range live {
 			if !cand[v.ID] {
 				continue
 			}
@@ -489,9 +500,22 @@ func unboxPhis(f *Func) bool {
 		// a pass for each phi of a chain, and a function of hundreds of
 		// calls, a phi of its loop's counter at the entry after each, took
 		// hundreds of passes -- RegExp's runBlock11 a fifth of its compile.
-		clear(boxed)
+		k := 0
+		for _, v := range live {
+			if cand[v.ID] {
+				live[k] = v
+				k++
+			}
+		}
+		live = live[:k]
+		// boxed and anyBoxed are of candidates alone, which flow only
+		// through candidates; spec flows through each candidate's users as
+		// candUsers listed them, of every phi.
+		for _, v := range live {
+			boxed[v.ID] = false
+		}
 		stack := guarded[:0]
-		for _, v := range phis {
+		for _, v := range live {
 			if cand[v.ID] && unboxedUse[v.ID] {
 				boxed[v.ID] = true
 				stack = append(stack, v)
@@ -510,12 +534,16 @@ func unboxPhis(f *Func) bool {
 		// A reason that does not speculate -- any use that unboxes -- is
 		// asked for only where a candidate without the other has one.
 		weak := false
-		for _, v := range phis {
+		for _, v := range live {
 			weak = weak || cand[v.ID] && !boxed[v.ID] && anyUse[v.ID]
 		}
 		if weak {
-			clear(anyBoxed)
-			clear(spec)
+			for _, v := range live {
+				anyBoxed[v.ID] = false
+			}
+			for _, v := range phis {
+				spec[v.ID] = false
+			}
 		}
 		// The candidates that speculate: an entry's slot among their
 		// arguments, or a candidate that speculates, whose guard unboxing
@@ -524,7 +552,7 @@ func unboxPhis(f *Func) bool {
 		// (candUsers), as a pass over the phis until none grew took a pass
 		// for each phi of a chain.
 		seeds := false
-		for _, v := range phis {
+		for _, v := range live {
 			if !weak || !cand[v.ID] {
 				continue
 			}
@@ -539,7 +567,7 @@ func unboxPhis(f *Func) bool {
 		}
 		if seeds {
 			if idx == nil {
-				idx, list = candUsers(f, phis, cand, n)
+				idx, list = candUsers(f, live, cand, n)
 			}
 			for len(stack) != 0 {
 				v := stack[len(stack)-1]
@@ -553,7 +581,7 @@ func unboxPhis(f *Func) bool {
 			}
 		}
 		// It flows to the candidates that do not speculate either.
-		for _, v := range phis {
+		for _, v := range live {
 			if !weak {
 				break
 			}
@@ -574,7 +602,7 @@ func unboxPhis(f *Func) bool {
 		}
 		guarded = stack[:0]
 		f.scr().work = guarded
-		for _, v := range phis {
+		for _, v := range live {
 			if cand[v.ID] && !boxed[v.ID] && (!weak || !anyBoxed[v.ID]) {
 				cand[v.ID] = false
 				changed = true
@@ -585,7 +613,7 @@ func unboxPhis(f *Func) bool {
 	// must not vary from one compilation to the next.
 	fp := vals[:n:n]
 	ordered := f.scr().ordered[:0]
-	for _, v := range phis {
+	for _, v := range live {
 		if cand[v.ID] {
 			p := f.alloc(Value{Op: OpPhi, Type: Float64, Block: v.Block})
 			fp[v.ID] = p

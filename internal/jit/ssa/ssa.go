@@ -1294,6 +1294,8 @@ type scratch struct {
 	// candidate's users (candUsers).
 	phiIdx, phiFill []int32
 	phiUsers        []*Value
+	// phiLive are unboxPhis' candidates left.
+	phiLive []*Value
 	// subst is Optimize's replacements, by value ID.
 	subst []*Value
 	// upvalueCand and upvalueSubst are rematerializeUpvalues'.
