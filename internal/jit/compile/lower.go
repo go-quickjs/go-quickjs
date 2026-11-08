@@ -168,7 +168,8 @@ func LowerSSAForward(fn *bytecode.Function) (*ir.Program, error) {
 
 // closureAssigned is, by local, whether a closure fn makes, or one a
 // closure of it makes in turn, assigns the local it captured; or nil if
-// none does. A nested function with a direct eval may assign any.
+// none does. A nested function with a direct eval may assign any, strict
+// or not.
 func closureAssigned(fn *bytecode.Function) []bool {
 	var out []bool
 	var assigns func(t *bytecode.Function, up int) bool
@@ -182,6 +183,11 @@ func closureAssigned(fn *bytecode.Function) []bool {
 				if int(in.A) == up {
 					return true
 				}
+			case bytecode.OpDirectEval, bytecode.OpTailDirectEval:
+				// A strict function's eval, which HasDirectEval does
+				// not mark: it declares nothing in the function, but
+				// assigns what is in scope.
+				return true
 			}
 		}
 		for _, c := range t.Constants {
