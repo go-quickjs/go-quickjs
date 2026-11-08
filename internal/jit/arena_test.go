@@ -220,3 +220,53 @@ func TestArenaLayoutSeed(t *testing.T) {
 		t.Fatal("two seeds laid the code out alike")
 	}
 }
+
+// With a line offset, an arena places each function that many bytes into
+// its cache line (LineOffset), as placements has a benchmark do: every
+// function starts there, in one chunk after another and across pages,
+// runs wherever it is, its constants read where the code put them, and
+// releasing them all unmaps every chunk.
+func TestArenaLineOffset(t *testing.T) {
+	defer func(was int) { LineOffset = was }(LineOffset)
+	for _, off := range []int{0, 8, 37, 56, 63, 64 + 16} {
+		LineOffset = off
+		want := off % codeAlign
+		if runtime.GOARCH == "arm64" {
+			want &^= 3
+		}
+		a := NewArena()
+		var codes []*SSACode
+		for i := 0; i < 120; i++ {
+			n := 0
+			if i%40 == 20 {
+				n = chunkBytes / 2
+			}
+			c, err := NewSSACode(a, valueCode(t, float64(i)+0.5, n))
+			if err != nil {
+				t.Fatal(err)
+			}
+			codes = append(codes, c)
+			if at := int(uintptr(unsafe.Pointer(&c.code[0])) % codeAlign); at != want {
+				t.Fatalf("offset %d: function %d at %d in its line, want %d", off, i, at, want)
+			}
+		}
+		if a.Chunks() < 2 {
+			t.Fatalf("offset %d: %d chunks", off, a.Chunks())
+		}
+		for i, c := range codes {
+			var ctx abi.Context
+			ctx.SetConsts(&testEncoding)
+			if err := c.Run(0, &ctx); err != nil || ctx.ExitKind != abi.ExitReturn || ctx.Ret != math.Float64bits(float64(i)+0.5) {
+				t.Fatalf("offset %d: code %d returned %+v, %v", off, i, ctx.Ret, err)
+			}
+		}
+		for _, c := range codes {
+			if err := c.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if a.Chunks() != 0 {
+			t.Fatalf("offset %d: an emptied arena holds %d mappings", off, a.Chunks())
+		}
+	}
+}

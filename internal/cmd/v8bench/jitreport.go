@@ -25,11 +25,13 @@ import (
 )
 
 // V8BENCH_JITPAD is where the JIT places its first code in its arena
-// (jit.FirstOffset), and V8BENCH_JITSEED how it varies where it places the
-// rest (jit.LayoutSeed).
+// (jit.FirstOffset), V8BENCH_JITSEED how it varies where it places the
+// rest (jit.LayoutSeed), and V8BENCH_JITLINE how far into its cache line
+// each function's code starts (jit.LineOffset).
 func init() {
 	jit.FirstOffset, _ = strconv.Atoi(os.Getenv("V8BENCH_JITPAD"))
 	jit.LayoutSeed, _ = strconv.ParseUint(os.Getenv("V8BENCH_JITSEED"), 10, 64)
+	jit.LineOffset, _ = strconv.Atoi(os.Getenv("V8BENCH_JITLINE"))
 }
 
 // jitReport is the report's state: what the JIT had done when the last

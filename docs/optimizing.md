@@ -116,10 +116,16 @@ about where it and its data are.
   alignment flipped at every placement. Compare the test's hot functions'
   addresses mod 64 on both sides before calling it a cost.
 - **Native code's layout inside a function.** Moving a whole native
-  function changes nothing; changing distances inside it does, and the
-  JIT's placements (`JITPAD`, seeds) vary only the first. A change that
-  makes a function's native code longer moves its blocks. To tell that
-  from a cost, perturb the other side's code -- a few bytes inside the
+  function by lines changes little; moving code within its lines, or
+  changing distances inside it, does. The JIT's placements move code by
+  whole lines (`JITPAD`, seeds) and start each function's code at an
+  offset into its line (`V8BENCH_JITLINE`, 0 to 56 bytes by 8), which
+  moves its loops -- each at a line's start within its function -- and
+  branches within their lines and 32-byte fetch windows: a test slower at
+  some of those offsets and faster at others is placement, judged by its
+  mean over them. A change that makes a function's native code longer
+  moves its blocks against each other, which no offset varies. To tell
+  that from a cost, perturb the other side's code -- a few bytes inside the
   function -- and see whether it moves to the same figure: main with one
   `xorpd` before each `cvtsi2sd` went from 7.65 to 8.6 ns on
   `typed_u8c_forEach`, the branch's 8.4.

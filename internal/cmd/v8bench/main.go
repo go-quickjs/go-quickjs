@@ -12,8 +12,12 @@
 // place its first code n bytes into its arena (jit.FirstOffset), and
 // V8BENCH_JITSEED=s has it vary where the rest falls, each later chunk's
 // start and the gaps between functions (jit.LayoutSeed): together they
-// move where its code falls against the op cache's sets.
-// internal/cmd/v8bench/placements varies both from placement to placement.
+// move where its code falls against the op cache's sets. Both move code by
+// whole 64-byte lines; V8BENCH_JITLINE=b starts each function's code b
+// bytes into its line (jit.LineOffset), which moves its loops, branches
+// and 32-byte windows within their lines.
+// internal/cmd/v8bench/placements varies all three from placement to
+// placement.
 package main
 
 import (

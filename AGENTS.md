@@ -433,7 +433,16 @@ then the tests 3% or more slower at every placement. A micro-benchmark
 moves with code placement more than a suite does; one slower at some
 placements and level at others is placement.
 
-With `-jit`, `-jitbackground` runs the code the way `qjs --jit` does, its
+With `-jit`, each placement also moves the JIT's code: where its first
+code goes in its arena (`V8BENCH_JITPAD`), where its later chunks and
+functions go (`V8BENCH_JITSEED`), both by whole 64-byte lines, and how far
+into its line each function's code starts (`V8BENCH_JITLINE`, 0 to 56 bytes
+by 8, `-k 4`'s 0, 16, 32 and 48), which moves its loops, which the backend
+starts at a line, and its branches within their lines and 32-byte fetch
+windows. Each is 0, and production code unchanged, outside the tool. A JIT
+change that moves code within its lines is judged over those offsets: one
+slower at offset 0 alone, where every placement had put each loop, is
+placement. `-jitbackground` runs the code the way `qjs --jit` does, its
 compiles in the background; a change to how a compile is asked for is
 compared both ways.
 

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"sync"
 	"unsafe"
 )
@@ -78,6 +79,32 @@ var FirstOffset int
 // against each other. 0 packs code as it comes.
 var LayoutSeed uint64
 
+// LineOffset, when not 0, has an arena place each function's code that
+// many bytes into its cache line rather than at the line's start, the
+// bytes before it unused and a line more taken: a benchmark's knob
+// (v8bench's V8BENCH_JITLINE), as FirstOffset and LayoutSeed are. Those
+// move code by whole lines, and a loop's header starts a line within its
+// function (mir's loop alignment), so without it every placement has the
+// same code at the same offsets within its lines -- the same 32-byte
+// fetch windows, the same branches and fused pairs across line ends --
+// and a change that moves code within its lines is judged at one of the
+// 64 offsets. Taken mod codeAlign, and on arm64 rounded down to its
+// instructions' 4 bytes. The code is the same at every offset, its jumps
+// and its constants relative to it, and so is its slice (Text).
+var LineOffset int
+
+// lineShift is LineOffset as place applies it.
+func lineShift() int {
+	s := LineOffset % codeAlign
+	if s < 0 {
+		s += codeAlign
+	}
+	if runtime.GOARCH == "arm64" {
+		s &^= 3
+	}
+	return s
+}
+
 // layoutDraw is LayoutSeed's choice for the k-th thing of a kind (salt):
 // splitmix64 of the seed, the salt and k.
 func layoutDraw(salt, k uint64) uint64 {
@@ -127,7 +154,8 @@ func alignUp(n, to int) int { return (n + to - 1) / to * to }
 
 // place copies instructions into the arena and seals them executable. The
 // slice it returns is the code's whole allocation, codeAlign-rounded, which
-// release takes back.
+// release takes back; with a LineOffset, as long, from that offset into
+// an allocation a line longer.
 func (a *Arena) place(instructions []byte) ([]byte, error) {
 	if len(instructions) == 0 || len(instructions) > MaxCodeBytes {
 		return nil, fmt.Errorf("invalid native kernel size: %d", len(instructions))
@@ -137,7 +165,14 @@ func (a *Arena) place(instructions []byte) ([]byte, error) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	n := alignUp(len(instructions), codeAlign)
+	shift := 0
+	if LineOffset != 0 {
+		shift = lineShift()
+	}
+	// The code's slice is its instructions codeAlign-rounded at every
+	// offset, so that what a profiler reads of it (Text) is the same.
+	size := alignUp(len(instructions), codeAlign)
+	n := alignUp(shift+size, codeAlign)
 	gap := 0
 	if LayoutSeed != 0 {
 		a.placed++
@@ -166,7 +201,7 @@ func (a *Arena) place(instructions []byte) ([]byte, error) {
 	start := c.used + gap
 	page := os.Getpagesize()
 	pages := c.mem[start/page*page : min(alignUp(start+n, page), len(c.mem))]
-	code := c.mem[start : start+n : start+n]
+	code := c.mem[start+shift : start+shift+size : start+shift+size]
 	if err := a.write(c, pages, code, instructions); err != nil {
 		if c.live == 0 {
 			// A chunk mapped for this code, or emptied before it, holds
@@ -176,7 +211,7 @@ func (a *Arena) place(instructions []byte) ([]byte, error) {
 		return nil, err
 	}
 	c.used = start + n
-	c.live += n
+	c.live += len(code)
 	return code, nil
 }
 

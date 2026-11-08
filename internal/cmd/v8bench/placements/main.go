@@ -41,7 +41,10 @@
 // functions by seed n+1 (V8BENCH_JITSEED): code compiled late in a suite
 // had been where the code before it ended, at one place in every
 // placement, and a change that resized earlier code had looked like a
-// regression of a later benchmark at all eight. Each
+// regression of a later benchmark at all eight. Those move code by whole
+// 64-byte lines; placement n also starts each function's code jitLines[n]
+// bytes into its line (V8BENCH_JITLINE), where every placement had put
+// each JIT loop at the start of one. Each
 // benchmark runs once, and one whose run took less than a second runs
 // again in a process of its own as many times as fill about one -- 3, 10,
 // 30, 100 or 300 -- so that a long one, Octane's zlib, takes its run's
@@ -597,7 +600,7 @@ func runPlacement(exe, dir, bench, suite string, n int, jitEnabled, jitBackgroun
 			args = append(args, "-suite", only)
 		}
 		cmd := exec.Command(exe, args...)
-		cmd.Env = append(os.Environ(), "V8BENCH_STACKPAD="+strconv.Itoa(5*n), "V8BENCH_JITPAD="+strconv.Itoa(jitPads[n%len(jitPads)]), "V8BENCH_JITSEED="+strconv.Itoa(n+1))
+		cmd.Env = append(os.Environ(), "V8BENCH_STACKPAD="+strconv.Itoa(5*n), "V8BENCH_JITPAD="+strconv.Itoa(jitPads[n%len(jitPads)]), "V8BENCH_JITSEED="+strconv.Itoa(n+1), "V8BENCH_JITLINE="+strconv.Itoa(jitLines[n%len(jitLines)]))
 		var outb bytes.Buffer
 		cmd.Stdout = &outb
 		if cpus != nil {
@@ -671,6 +674,18 @@ func runPlacement(exe, dir, bench, suite string, n int, jitEnabled, jitBackgroun
 // is set at half of the eight, and at half of -k 4's (0, 3, 5, 6), and
 // bits 10 to 14 vary.
 var jitPads = [8]int{0, 44 << 10, 10 << 10, 33 << 10, 21 << 10, 50 << 10, 27 << 10, 37 << 10}
+
+// jitLines is how many bytes into its 64-byte line each placement starts
+// each JIT function's code (V8BENCH_JITLINE, jit.LineOffset). JITPAD and
+// the seeds move code by whole lines, and the backend starts each loop's
+// header a line, so every placement had had each loop at offset 0 of its
+// line, its branches and fused pairs where they fall from there, in the
+// same 32-byte fetch windows: a change that was 5% slower than its base on
+// bigint64_fnv1a at every placement was 10% faster at four of eight such
+// offsets and 3 to 5% slower at three, 0 among them. The eight are 0 to 56
+// by 8; -k 4's (0, 3, 5, 6) are 0, 16, 32 and 48, each half of a 32-byte
+// window twice; -k 2's are 0 and 40.
+var jitLines = [8]int{0, 40, 8, 16, 24, 32, 48, 56}
 
 func mean(xs []float64) float64 {
 	s := 0.0
