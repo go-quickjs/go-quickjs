@@ -270,6 +270,24 @@ func apply(op Op, aux int, a, b val) val {
 		return val{i: a.i + b.i}
 	case OpSubI32:
 		return val{i: a.i - b.i}
+	case OpCmpI32:
+		x, y := int64(int32(a.i)), int64(int32(b.i))
+		if aux&CmpUnsigned != 0 {
+			x, y = int64(a.i), int64(b.i)
+		}
+		switch ir.Operator(aux &^ CmpUnsigned) {
+		case ir.Lt:
+			return val{b: x < y}
+		case ir.Le:
+			return val{b: x <= y}
+		case ir.Gt:
+			return val{b: x > y}
+		case ir.Ge:
+			return val{b: x >= y}
+		case ir.Eq:
+			return val{b: x == y}
+		}
+		return val{b: x != y}
 	case OpClz32:
 		return val{i: uint32(bits.LeadingZeros32(a.i))}
 	case OpI32ToF64:

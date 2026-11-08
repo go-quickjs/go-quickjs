@@ -7,6 +7,7 @@ package arm64
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 	"unsafe"
 )
 
@@ -368,15 +369,25 @@ func (a *Asm) SubsImm(dst, n Reg, imm int64, wide bool) {
 // CmpImm sets the flags for n - imm.
 func (a *Asm) CmpImm(n Reg, imm int64, wide bool) { a.addImm(0x71000000, 0x31000000, ZR, n, imm, wide) }
 
-// addImm emits op with imm, or its negation with -imm.
+// addImm emits op with imm, or its negation with -imm. A 32-bit
+// operation's imm is taken modulo 2**32, as its operands are. The
+// negation's flags are op's -- the sum and the difference are the same
+// integer, and the carry out of n + -imm is the borrow's absence of
+// n - imm -- but for the width's least integer, whose negation is itself:
+// CMN W, #0x80000000 sets V for no operand, where CMP W, #0x80000000 sets
+// it for every one that is not negative, and a signed comparison with
+// -2**31 had gone the wrong way. That one is made in tmp.
 func (a *Asm) addImm(op, neg uint32, dst, n Reg, imm int64, wide bool) {
-	if imm < 0 {
+	if !wide {
+		imm = int64(int32(uint32(imm)))
+	}
+	if imm < 0 && imm != math.MinInt64 && (wide || imm != math.MinInt32) {
 		op, neg, imm = neg, op, -imm
 	}
 	switch {
-	case imm < 4096:
+	case imm >= 0 && imm < 4096:
 		a.emit(op | sf(wide) | uint32(imm)<<10 | uint32(n)<<5 | uint32(dst))
-	case imm&0xFFF == 0 && imm < 1<<24:
+	case imm >= 0 && imm&0xFFF == 0 && imm < 1<<24:
 		a.emit(op | sf(wide) | 1<<22 | uint32(imm>>12)<<10 | uint32(n)<<5 | uint32(dst))
 	default:
 		a.MovImm(tmp, uint64(imm))

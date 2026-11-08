@@ -846,7 +846,7 @@ func (c *core) findLazy() error {
 // changes nothing it reads, its operands kept live to the branch.
 func fusable(op ssa.Op) (ok, pure bool) {
 	switch op {
-	case ssa.OpNot, ssa.OpCmpF64, ssa.OpCmpI64, ssa.OpStrictNullish, ssa.OpCellNone:
+	case ssa.OpNot, ssa.OpCmpF64, ssa.OpCmpI64, ssa.OpCmpI32, ssa.OpStrictNullish, ssa.OpCellNone:
 		return true, true
 	case ssa.OpLooseNullish, ssa.OpEqTagged, ssa.OpTypeIs, ssa.OpInstanceOf, ssa.OpTruth:
 		// They read the objects and strings their operands are, through

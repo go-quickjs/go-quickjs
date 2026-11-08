@@ -6573,6 +6573,8 @@ func (c *compiler) test(v *ssa.Value, t target) {
 	case ssa.OpCmpI64:
 		c.a.Op(amd64.Cmp, c.gpr(arg(0), scratchA), c.gpr(arg(1), scratchB), true)
 		c.jumpIf(t, bigCmpCond(ir.Operator(v.Aux), arg(0).Type == ssa.Uint64))
+	case ssa.OpCmpI32:
+		c.jumpIf(t, c.cmpI32(v))
 	case ssa.OpStrictNullish:
 		w := c.gpr(arg(0), scratchB)
 		switch v.Aux {
@@ -9786,6 +9788,10 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		// Outside the int64 range: a BigInt on the heap, Go's.
 		c.guardFor(v).jump(amd64.CondO)
 		c.setG(v, scratchA)
+	case ssa.OpCmpI32:
+		c.a.Setcc(c.cmpI32(v), scratchA)
+		c.a.MovZX8(scratchA, scratchA)
+		c.setG(v, scratchA)
 	case ssa.OpCmpI64:
 		c.a.Op(amd64.Cmp, c.gpr(arg(0), scratchA), c.gpr(arg(1), scratchB), true)
 		cond := bigCmpCond(ir.Operator(v.Aux), arg(0).Type == ssa.Uint64)
@@ -10787,6 +10793,44 @@ func (c *compiler) toInt32(v *ssa.Value) {
 }
 
 // sseOp, aluOp and shiftOp are the instructions for SSA's arithmetic,
+// cmpI32 compares an OpCmpI32's operands, 32 bits, a constant as the
+// immediate -- the first swapped to the second, the operator mirrored --
+// and returns the condition the comparison holds at. It uses scratchA and
+// scratchB.
+func (c *compiler) cmpI32(v *ssa.Value) amd64.Cond {
+	op, x, y := ir.Operator(v.Aux&^ssa.CmpUnsigned), v.Args[0], v.Args[1]
+	if x.Op == ssa.OpConstI32 && y.Op != ssa.OpConstI32 {
+		x, y, op = y, x, mirrored(op)
+	}
+	if y.Op == ssa.OpConstI32 {
+		c.a.OpImm(amd64.Cmp, c.gpr(x, scratchA), int32(uint32(y.Const.Bits)), false)
+	} else {
+		c.a.Op(amd64.Cmp, c.gpr(x, scratchA), c.gpr(y, scratchB), false)
+	}
+	switch op {
+	case ir.Eq:
+		return amd64.CondE
+	case ir.Ne:
+		return amd64.CondNE
+	}
+	return bigCmpCond(op, v.Aux&ssa.CmpUnsigned != 0)
+}
+
+// mirrored is the comparison of y and x that op of x and y is.
+func mirrored(op ir.Operator) ir.Operator {
+	switch op {
+	case ir.Lt:
+		return ir.Gt
+	case ir.Le:
+		return ir.Ge
+	case ir.Gt:
+		return ir.Lt
+	case ir.Ge:
+		return ir.Le
+	}
+	return op
+}
+
 // bitwise and shift operations.
 func sseOp(op ssa.Op) amd64.SSE {
 	switch op {

@@ -73,7 +73,11 @@ immediate where it can, a shift's count or a mask. The ToInt32 of a sum,
 a difference, a negation or a product of int32s, uint32s and integer
 constants, exact as a double -- its magnitude's bound below 2^53
 (`exactInt`) -- is the int32 operation (`truncInts`), which wraps as the
-exact result's ToInt32 does: asm.js's `(a + b) | 0` is one add. Phis stay doubles.
+exact result's ToInt32 does: asm.js's `(a + b) | 0` is one add. A
+comparison of two such integers -- int32s' conversions, or one and an
+integer constant of the range -- compares int32s (`OpCmpI32`), and one of
+two uint32s' conversions, or of one and a constant of their range,
+compares them unsigned. Phis stay doubles.
 
 **Register allocation.** `mir`'s scan (`allocate`) gives each value an
 interval from its definition to its last use, stretched over every block

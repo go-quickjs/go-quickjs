@@ -10,8 +10,9 @@ import (
 
 // The ToInt32 of exact integer arithmetic -- asm.js's (a + b) | 0 -- is
 // made of int32 operations, which wrap as ToInt32 of the exact result
-// does (ssa's truncInts), and a constant's ToInt32 is an int32 constant,
-// shifts' counts immediates. Each answer is the interpreter's: at the
+// does (ssa's truncInts), a comparison of two int32s or two uint32s is
+// theirs, and a constant's ToInt32 is an int32 constant, shifts' counts
+// immediates. Each answer is the interpreter's: at the
 // edges where the int32 result wraps, for unsigned operands, for products
 // by constants, and where the doubles' result is not exact -- a product
 // or a sum past 2**53, which stays the doubles' -- or not an integer.
@@ -36,8 +37,25 @@ func TestJITTruncatedIntArithmetic(t *testing.T) {
 			for (; (i | 0) < 64; i = (i + 1) | 0) s = (s + i * 3 - (a | 0) + (b >>> 3)) | 0
 			return s | 0
 		}
+		function cmp(a, b) {
+			a = a | 0; b = b | 0
+			return (a < b) | ((a <= b) << 1) | ((a > b) << 2) | ((a >= b) << 3) | ((a == b) << 4) | ((a != b) << 5)
+		}
+		function cmpu(a, b) {
+			a = a >>> 0; b = b >>> 0
+			return (a < b) | ((a <= b) << 1) | ((a > b) << 2) | ((a >= b) << 3) | ((a === b) << 4) | ((a !== b) << 5)
+		}
+		function cmpk(a, b) {
+			a = a | 0
+			if (a < -5) return 1
+			if (3000000000 > (b >>> 0)) return 2
+			if (7 === a) return 3
+			if (-2147483648 >= a) return 5
+			return 4
+		}
+		function mixed(a, b) { return ((a | 0) < (b >>> 0)) | (((a >>> 0) >= (b | 0)) << 1) }
 		function run(f, a, b) { var r = 0; for (var k = 0; k < 400; k++) r = f(a, b); return r }`
-	fns := []string{"add", "sub", "neg", "mul", "mulLeft", "mulBig", "u32", "chain", "shifts", "frac", "big", "loop"}
+	fns := []string{"add", "sub", "neg", "mul", "mulLeft", "mulBig", "u32", "chain", "shifts", "frac", "big", "loop", "cmp", "cmpu", "cmpk", "mixed"}
 	args := []string{"0", "1", "-1", "2147483647", "-2147483648", "4294967295", "2147483648", "1.5", "-0", "NaN", "Infinity", "-7", "1e300"}
 	want := New(Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()

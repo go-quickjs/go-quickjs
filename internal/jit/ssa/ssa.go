@@ -290,6 +290,11 @@ const (
 	// int32 one does (truncInts) -- asm.js's (a + b) | 0.
 	OpAddI32 // i32, i32 -> i32
 	OpSubI32 // i32, i32 -> i32
+	// OpCmpI32 compares two int32s as Aux, an ir comparison operator,
+	// says, unsigned with CmpUnsigned: a comparison of numbers that are
+	// both int32s' conversions, or both uint32s' (truncInts) -- asm.js's
+	// (i | 0) < (n | 0).
+	OpCmpI32 // i32, i32 -> bool
 
 	// OpSameObject guards that an object is the one at Const.Bits, an
 	// address the VM keeps alive: an inlined call's function (inline). With
@@ -605,7 +610,7 @@ var opNames = [...]string{
 	OpAddF64: "addf", OpSubF64: "subf", OpMulF64: "mulf", OpDivF64: "divf", OpModF64: "modf", OpNegF64: "negf", OpCmpF64: "cmpf",
 	OpNot: "not", OpStrictNullish: "strictnullish", OpLooseNullish: "loosenullish", OpEqTagged: "eqtagged", OpToInt32: "toi32", OpAndI32: "and", OpOrI32: "or", OpXorI32: "xor", OpShlI32: "shl",
 	OpSarI32: "sar", OpShrU32: "shr", OpNotI32: "noti", OpMulI32: "muli", OpPrimitive: "primitive", OpClz32: "clz32", OpI32ToF64: "i2f", OpU32ToF64: "u2f",
-	OpBoolToF64: "b2f", OpBoolToI32: "b2i", OpConstI32: "consti", OpAddI32: "addi", OpSubI32: "subi",
+	OpBoolToF64: "b2f", OpBoolToI32: "b2i", OpConstI32: "consti", OpAddI32: "addi", OpSubI32: "subi", OpCmpI32: "cmpi",
 	OpSameObject: "sameobject", OpFrameRoom: "frameroom", OpTailRoom: "tailroom", OpTailSelf: "tailself", OpSameSymbol: "samesymbol", OpIterClosed: "iterclosed", OpKeepRef: "keepref", OpKeep: "keep", OpKept: "kept",
 	OpCall: "call", OpCallCell: "callcell", OpSqrtF64: "sqrtf", OpAbsF64: "absf", OpInstanceOf: "instanceof", OpTypeIs: "typeis",
 	OpCheckTrue: "checktrue", OpConstCell: "constcell", OpUpvalueCell: "upvaluecell", OpUpvalueStale: "upvaluestale", OpLocalCell: "localcell", OpPowF64: "powf",
@@ -649,6 +654,10 @@ const (
 	SubstrLength = 1
 	SubstrAt     = 2
 )
+
+// CmpUnsigned, in an OpCmpI32's Aux beside its operator, compares its
+// operands as uint32s.
+const CmpUnsigned = 1 << 8
 
 // ObjectOfTry, an OpObjectOf's Index, has it give 0 where its operand is no
 // object, rather than exit: a megamorphic read's receiver (InlineCache's
@@ -1452,10 +1461,10 @@ func (f *Func) String() string {
 			for _, a := range v.Args {
 				fmt.Fprintf(&b, " %v", a)
 			}
-			if v.Op == OpConst || v.Op == OpConstF64 {
+			if v.Op == OpConst || v.Op == OpConstF64 || v.Op == OpConstI32 {
 				fmt.Fprintf(&b, " [%d:%#x]", v.Const.Kind, v.Const.Bits)
 			}
-			if v.Op == OpLoadSlot || v.Op == OpCmpF64 {
+			if v.Op == OpLoadSlot || v.Op == OpCmpF64 || v.Op == OpCmpI32 {
 				fmt.Fprintf(&b, " aux=%d", v.Aux)
 			}
 			if v.State != nil {

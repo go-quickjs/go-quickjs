@@ -6,8 +6,9 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 )
 
-// Integers as int32s where their uses truncate them: asm.js's
-// (a + b) | 0, as V8's representation selection computes it in Word32.
+// Integers as int32s where their uses truncate them, or compare them:
+// asm.js's (a + b) | 0 and (i | 0) < (n | 0), as V8's representation
+// selection computes them in Word32.
 //
 // The slot IR computes every number as a double, and a bitwise operator
 // takes its operands' ToInt32 (OpToInt32) and gives back a double
@@ -21,7 +22,9 @@ import (
 //   - the ToInt32 of a sum, a difference, a negation or a product by a
 //     constant of such integers, exact as a double, is the int32
 //     operation, which wraps as ToInt32 of the exact result does
-//     (truncInts).
+//     (truncInts);
+//   - a comparison of two int32s' conversions, or two uint32s', is the
+//     int32 comparison (OpCmpI32).
 //
 // Phis stay doubles: an int32 phi holds a general register, of which mir
 // has half as many as SSE registers, and Emscripten's functions, dozens of
@@ -92,6 +95,40 @@ func exactInt(e *Value, depth int) (float64, bool) {
 	return 0, false
 }
 
+// intCompare reports whether a comparison of x and y, doubles, is one of
+// int32s -- each an int32's conversion or an integer constant of the
+// range, not both constants -- or of uint32s (unsigned), which compare
+// as the doubles do: neither is NaN, and -0, a constant's, is 0's equal.
+func intCompare(x, y *Value) (unsigned, ok bool) {
+	kind := func(a *Value) (signed, unsigned bool) {
+		switch a.Op {
+		case OpI32ToF64:
+			return true, false
+		case OpU32ToF64:
+			return false, true
+		case OpConstF64:
+			c := math.Float64frombits(a.Const.Bits)
+			if math.Trunc(c) != c {
+				return false, false
+			}
+			return c >= math.MinInt32 && c <= math.MaxInt32, c >= 0 && c <= math.MaxUint32
+		}
+		return false, false
+	}
+	if x.Op == OpConstF64 && y.Op == OpConstF64 {
+		return false, false
+	}
+	xs, xu := kind(x)
+	ys, yu := kind(y)
+	switch {
+	case xs && ys:
+		return false, true
+	case xu && yu:
+		return true, true
+	}
+	return false, false
+}
+
 // truncatedArith reports an operation truncInts makes an int32 one of.
 func truncatedArith(op Op) bool {
 	return op == OpAddF64 || op == OpSubF64 || op == OpNegF64 || op == OpMulF64
@@ -108,13 +145,17 @@ func truncInts(f *Func) bool {
 	for _, b := range f.Blocks {
 		for i := 0; i < len(b.Values); i++ {
 			v := b.Values[i]
-			if v.Op != OpToInt32 || !truncatedArith(v.Args[0].Op) {
+			unsigned, cmp := false, v.Op == OpCmpF64
+			if cmp {
+				if unsigned, cmp = intCompare(v.Args[0], v.Args[1]); !cmp {
+					continue
+				}
+			} else if v.Op != OpToInt32 || !truncatedArith(v.Args[0].Op) {
+				continue
+			} else if _, ok := exactInt(v.Args[0], 8); !ok {
 				continue
 			}
 			e := v.Args[0]
-			if _, ok := exactInt(e, 8); !ok {
-				continue
-			}
 			// place puts x before v, which moves along.
 			place := func(x *Value) *Value {
 				b.Values = f.appendValue(b.Values, nil)
@@ -155,6 +196,17 @@ func truncInts(f *Func) bool {
 				x := f.alloc(Value{Block: b})
 				arith(x, e)
 				return place(x)
+			}
+			if cmp {
+				// The comparison's operands, as int32s.
+				x, y := build(v.Args[0]), build(v.Args[1])
+				if unsigned {
+					v.Aux |= CmpUnsigned
+				}
+				v.Op, v.Args = OpCmpI32, f.refsOf(2)
+				v.Args[0], v.Args[1] = x, y
+				changed = true
+				continue
 			}
 			arith(v, e)
 			changed = true

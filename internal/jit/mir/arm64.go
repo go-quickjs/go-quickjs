@@ -1450,6 +1450,27 @@ func a64Compare(op ir.Operator) arm64.Cond {
 	return arm64.NE
 }
 
+// cmpI32 is amd64's: the W registers compared, a constant the
+// immediate, and the condition returned. It uses A and B.
+func (c *a64Compiler) cmpI32(v *ssa.Value) arm64.Cond {
+	op, x, y := ir.Operator(v.Aux&^ssa.CmpUnsigned), v.Args[0], v.Args[1]
+	if x.Op == ssa.OpConstI32 && y.Op != ssa.OpConstI32 {
+		x, y, op = y, x, mirrored(op)
+	}
+	if y.Op == ssa.OpConstI32 {
+		c.a.CmpImm(c.gpr(x, a64A), int64(int32(uint32(y.Const.Bits))), false)
+	} else {
+		c.a.Cmp(c.gpr(x, a64A), c.gpr(y, a64B), false)
+	}
+	switch op {
+	case ir.Eq:
+		return arm64.EQ
+	case ir.Ne:
+		return arm64.NE
+	}
+	return a64CmpCond(op, v.Aux&ssa.CmpUnsigned != 0)
+}
+
 // a64Target is where a branch's test goes, as amd64's target: to yes
 // where its value is true, to no where it is false; fall is the label
 // bound right after the test's code, or a64NoLabel.
@@ -1571,6 +1592,8 @@ func (c *a64Compiler) test(v *ssa.Value, t a64Target) {
 	case ssa.OpCmpI64:
 		c.a.Cmp(c.gpr(arg(0), a64A), c.gpr(arg(1), a64B), true)
 		c.jumpIf(t, a64CmpCond(ir.Operator(v.Aux), arg(0).Type == ssa.Uint64))
+	case ssa.OpCmpI32:
+		c.jumpIf(t, c.cmpI32(v))
 	case ssa.OpStrictNullish:
 		w := c.gpr(arg(0), a64B)
 		word := c.enc.Null
@@ -8656,6 +8679,9 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 	case ssa.OpCmpI64:
 		c.a.Cmp(c.gpr(arg(0), a64A), c.gpr(arg(1), a64B), true)
 		c.a.Cset(a64A, a64CmpCond(ir.Operator(v.Aux), arg(0).Type == ssa.Uint64))
+		c.setG(v, a64A)
+	case ssa.OpCmpI32:
+		c.a.Cset(a64A, c.cmpI32(v))
 		c.setG(v, a64A)
 	case ssa.OpKept:
 		c.setG(v, c.gpr(arg(1), a64A))
