@@ -3680,7 +3680,17 @@ type siteAnswer struct {
 func (b *builder) answer(pc int) *siteAnswer {
 	fr := b.cur
 	if fr.answerAt == nil {
+		// Room for an answer at each property site, made once: an entry
+		// is 312 bytes, and a list grown by doubling had left each
+		// doubling's room behind in the workspace, half again as much.
 		fr.answerAt = b.f.ints(len(b.p.Code))
+		n := 0
+		for _, in := range b.p.Code {
+			if in.Op == ir.PropertyRead || in.Op == ir.PropertyWrite || in.Op == ir.ReferenceRead {
+				n++
+			}
+		}
+		fr.answers = b.f.makeAnswers(n)
 	}
 	if k := fr.answerAt[pc]; k != 0 {
 		return &fr.answers[k-1]

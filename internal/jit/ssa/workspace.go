@@ -135,6 +135,15 @@ func BuildIn(w *Workspace, p *ir.Program, fb Feedback) (*Func, error) {
 	return build(w, p, fb)
 }
 
+// makeAnswers is an empty list of room n, in the workspace if there is
+// one.
+func (f *Func) makeAnswers(n int) []siteAnswer {
+	if f.ws != nil {
+		return f.ws.answers.Make(n)[:0]
+	}
+	return make([]siteAnswer, 0, n)
+}
+
 // appendAnswer is append(s, a), growing s in the workspace if there is one.
 func (f *Func) appendAnswer(s []siteAnswer, a siteAnswer) []siteAnswer {
 	if f.ws != nil {
