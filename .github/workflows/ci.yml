@@ -157,19 +157,17 @@ jobs:
       - name: Check native code and assembly
         run: go vet -tags quickjs_jit ./internal/jit/... ./internal/vm
 
-      - name: Exercise native execution
+      # Native execution; the compiler's cross-checks -- liveness against
+      # its reference, the origins and stores' checks it keeps against
+      # those made afresh -- and native pointer lifetimes, at once: run one
+      # after another they made this job 20 minutes on Go 1.27.
+      - name: Exercise native execution, cross-check the compiler and native pointer lifetimes
+        shell: bash
         run: |
-          go test -tags quickjs_jit -count=1 -timeout=5m ./internal/jit/...
-          go test -tags quickjs_jit -count=1 -timeout=5m ./internal/regexp -run Native
-          go test -tags quickjs_jit -count=1 -timeout=10m ./internal/vm . -run 'JIT|Native'
-
-      # The compiler's cross-checks: liveness against its reference, the
-      # origins and stores' checks it keeps against those made afresh.
-      - name: Check the compiler against its references
-        run: go test -tags quickjs_jit,quickjs_verify -count=1 -timeout=10m ./internal/jit/... ./internal/vm -run 'JIT|Native|SSA|Optimize|Build|Live'
-
-      - name: Check native pointer lifetimes
-        run: go test -tags quickjs_jit -gcflags=all=-d=checkptr=2 -count=1 -timeout=10m ./internal/jit/... ./internal/regexp ./internal/vm . -run 'JIT|Native|Program|Validate|Lower'
+          bash .github/together.sh \
+            "Exercise native execution" "go test -tags quickjs_jit -count=1 -timeout=10m ./internal/jit/... && go test -tags quickjs_jit -count=1 -timeout=10m ./internal/regexp -run Native && go test -tags quickjs_jit -count=1 -timeout=20m ./internal/vm . -run 'JIT|Native'" \
+            "Check the compiler against its references" "go test -tags quickjs_jit,quickjs_verify -count=1 -timeout=20m ./internal/jit/... ./internal/vm -run 'JIT|Native|SSA|Optimize|Build|Live'" \
+            "Check native pointer lifetimes" "go test -tags quickjs_jit -gcflags=all=-d=checkptr=2 -count=1 -timeout=20m ./internal/jit/... ./internal/regexp ./internal/vm . -run 'JIT|Native|Program|Validate|Lower'"
 
       # Both emitters' code, for every target, against golang.org/x/arch's
       # disassemblers: a module of its own, so go-quickjs never depends on it.
@@ -222,16 +220,16 @@ jobs:
 
       # The VM's own tests under the same stress: those that count native
       # calls, exits and compiles take the JIT's own thresholds
-      # (jitRuntimeForTest, jitDefaultsForTest); the rest run stressed.
-      - name: Run the VM's tests
-        run: go test -tags quickjs_jit -count=1 -timeout 20m ./internal/vm
-
-      # And compiling in the background, each compile installed at the
-      # third check after it was handed over (QJS_JIT_STRESS's background).
-      - name: Run the VM's tests, compiling in the background
-        env:
-          QJS_JIT_STRESS: threshold,budget=3,deopt=7,background=3
-        run: go test -tags quickjs_jit -count=1 -timeout 20m ./internal/vm .
+      # (jitRuntimeForTest, jitDefaultsForTest); the rest run stressed. And
+      # beside them compiling in the background, each compile installed at
+      # the third check after it was handed over (QJS_JIT_STRESS's
+      # background): one after the other they made this job 24 minutes.
+      - name: Run the VM's tests, and compiling in the background
+        shell: bash
+        run: |
+          bash .github/together.sh \
+            "Run the VM's tests" "go test -tags quickjs_jit -count=1 -timeout 30m ./internal/vm" \
+            "Run the VM's tests, compiling in the background" "QJS_JIT_STRESS=threshold,budget=3,deopt=7,background=3 go test -tags quickjs_jit -count=1 -timeout 30m ./internal/vm ."
 
   # The JIT's kernels and the tree tier's, on arm64 (macOS) and amd64
   # (Linux). A shared
