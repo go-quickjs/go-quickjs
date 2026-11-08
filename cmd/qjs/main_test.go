@@ -433,6 +433,11 @@ func TestLooksLikeModule(t *testing.T) {
 		{`const s = "import x from y"`, false},
 		{`console.log("export const")`, false},
 		{`import("dynamic")`, false},
+		// A line of a template or a comment that starts with export or import
+		// is not a declaration: the source parses as a script, which node
+		// runs as CommonJS.
+		{"const ts = `interface P {}\nexport class C {}`", false},
+		{"/*\nimport x from 'y'\n*/ module.exports = 1", false},
 	} {
 		if got := looksLikeModule(tc.src); got != tc.want {
 			t.Errorf("looksLikeModule(%q) = %v, want %v", tc.src, got, tc.want)
