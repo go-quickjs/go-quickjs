@@ -12,7 +12,9 @@ import (
 // made of int32 operations, which wrap as ToInt32 of the exact result
 // does (ssa's truncInts), a comparison of two int32s or two uint32s is
 // theirs, and a constant's ToInt32 is an int32 constant, shifts' counts
-// immediates. Each answer is the interpreter's: at the
+// immediates. A loop's phi of integers entered with a number past the
+// truncation's range -- 2**63 + 2**11, whose ToInt32 is 2048 -- is
+// converted as ToInt32 has it. Each answer is the interpreter's: at the
 // edges where the int32 result wraps, for unsigned operands, for products
 // by constants, and where the doubles' result is not exact -- a product
 // or a sum past 2**53, which stays the doubles' -- or not an integer.
@@ -54,9 +56,14 @@ func TestJITTruncatedIntArithmetic(t *testing.T) {
 			return 4
 		}
 		function mixed(a, b) { return ((a | 0) < (b >>> 0)) | (((a >>> 0) >= (b | 0)) << 1) }
+		function bounded(a, b) {
+			var x = a, s = 0
+			for (var i = 0; i < 50; i = (i + 1) | 0) { s = (s + (x | 0) + (x >> 3)) | 0; x = (x + b) | 0 }
+			return s
+		}
 		function run(f, a, b) { var r = 0; for (var k = 0; k < 400; k++) r = f(a, b); return r }`
-	fns := []string{"add", "sub", "neg", "mul", "mulLeft", "mulBig", "u32", "chain", "shifts", "frac", "big", "loop", "cmp", "cmpu", "cmpk", "mixed"}
-	args := []string{"0", "1", "-1", "2147483647", "-2147483648", "4294967295", "2147483648", "1.5", "-0", "NaN", "Infinity", "-7", "1e300"}
+	fns := []string{"add", "sub", "neg", "mul", "mulLeft", "mulBig", "u32", "chain", "shifts", "frac", "big", "loop", "cmp", "cmpu", "cmpk", "mixed", "bounded"}
+	args := []string{"0", "1", "-1", "2147483647", "-2147483648", "4294967295", "2147483648", "1.5", "-0", "NaN", "Infinity", "-7", "1e300", "9223372036854777856", "-Infinity"}
 	want := New(Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
