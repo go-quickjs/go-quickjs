@@ -157,6 +157,34 @@ func TestKeepBigTrims(t *testing.T) {
 	}
 }
 
+// TestKeepBigKeepsReach pins that what a trim keeps holds a recent job
+// again, the rest of the chunks its requests did not fit in included: kept
+// down to the slots it used, a job like it cut its last request from a new
+// chunk after every trim.
+func TestKeepBigKeepsReach(t *testing.T) {
+	usual := func(a *Arena[int]) {
+		// The second request does not fit in the first chunk, nor the third
+		// in the second, which the second fills.
+		a.Make(10)
+		a.Make(100)
+		a.Make(10)
+		a.Rewind()
+	}
+	var a Arena[int]
+	a.KeepBig()
+	usual(&a)
+	reach := a.Cap()
+	a.Make(10)
+	a.Make(1 << 20)
+	a.Rewind()
+	// What the usual job reached is kept, so that it allocates nothing
+	// again (AllocsPerRun's first run, not counted, would hide the one
+	// chunk it made).
+	if a.Cap() != reach {
+		t.Fatalf("a big job's trim kept %d slots, the usual job's chunks hold %d", a.Cap(), reach)
+	}
+}
+
 // TestRewindSkippedTail pins that a rewind clears what was cut from a chunk
 // a later request did not fit in, and that slots past it, never handed out,
 // come out zeroed in the next job too: Rewind clears only what was cut.
