@@ -7571,16 +7571,26 @@ func (c *a64Compiler) length(v *ssa.Value, guard a64Guard) {
 		c.a.Bind(typed)
 		c.a.CmpImm(a64B, int64(c.enc.ClassTypedArray), false)
 		guard.jump(arm64.NE)
-		c.objectData(a64C, a64C, a64B, c.enc.TypedData, guard)
-		c.a.Load(a64B, a64C, c.enc.TypedStorage)
-		c.a.CmpImm(a64B, 0, true)
-		guard.jump(arm64.EQ)
-		c.a.Load(a64A, a64C, c.enc.TypedEnd)
-		c.a.Load(a64D, a64B, c.enc.BufferBytes+8)
-		c.a.Cmp(a64A, a64D, true)
-		guard.jump(arm64.HI)
-		c.a.Load(a64C, a64C, c.enc.TypedLength)
+		if c.enc.TypedEpoch == 0 {
+			guard.jump(arm64.EQ)
+			return
+		}
+		retry, stale := c.a.NewLabel(), c.a.NewLabel()
+		c.a.Bind(retry)
+		c.a.Load(a64B, a64C, c.enc.ObjectExt+c.enc.ObjectData+8)
+		c.typedView(a64B, a64A, a64D, stale, guard)
+		// Where the copy's is no length to give, Go's.
+		c.a.LoadU8(a64A, a64B, c.enc.TypedKind+2)
+		c.a.CmpImm(a64A, 0, false)
+		guard.jump(arm64.NE)
+		c.a.Load(a64C, a64B, c.enc.TypedLength)
 		c.a.B(have)
+		c.typedStale(stale, retry, guard, func() {
+			c.a.Store(a64Ctx, abi.OffGoArgs+c.enc.RefOffset, a64C)
+		}, func() {
+			// The typed array again, which Go leaves where it was.
+			c.a.Load(a64C, a64Ctx, abi.OffGoArgs+c.enc.RefOffset)
+		})
 	})
 	p := a64A
 	c.a.MovRR(p, a64C)
@@ -8142,25 +8152,37 @@ func (c *a64Compiler) arrayClass(of *ssa.Value, array arm64.Label) {
 	c.a.BCond(arm64.EQ, array)
 }
 
+// typedClass fails unless the object array, from OpIndexedOf, is a typed
+// array, as amd64's. It uses B.
+func (c *a64Compiler) typedClass(array *ssa.Value, fail a64Guard) {
+	c.a.LoadU8(a64B, c.gpr(array, a64B), c.enc.ObjectClass)
+	c.a.CmpImm(a64B, int64(c.enc.ClassTypedArray), false)
+	fail.jump(arm64.NE)
+}
+
 // typedElement finds a typed array's element, as amd64's: its address in
-// A, the view's element type in C. It uses A, B, C, D and F1.
-func (c *a64Compiler) typedElement(array, key *ssa.Value, store bool, fail a64Guard) {
-	c.objectData(a64C, c.gpr(array, a64C), a64B, c.enc.TypedData, fail)
-	c.a.Load(a64B, a64C, c.enc.TypedStorage)
-	c.a.CmpImm(a64B, 0, true)
-	fail.jump(arm64.EQ)
-	c.a.Load(a64A, a64C, c.enc.TypedEnd)
-	c.a.Load(a64D, a64B, c.enc.BufferBytes+8)
-	c.a.Cmp(a64A, a64D, true)
-	fail.jump(arm64.HI)
-	if store {
-		c.a.LoadU8(a64A, a64B, c.enc.BufferImmutable)
-		c.a.CmpImm(a64A, 0, false)
-		fail.jump(arm64.NE)
+// A, the first element's in B, the view's element type in C -- for a
+// store, with the byte after it. It uses A, B, C, D and F1. Once Go has
+// made the view's copy anew, it starts again at again, if not nil, as
+// amd64's.
+func (c *a64Compiler) typedElement(array, key *ssa.Value, store bool, fail a64Guard, again *arm64.Label) {
+	if c.enc.TypedEpoch == 0 {
+		// An encoding with no typed arrays.
+		if to, ok := fail.label(); ok {
+			c.a.B(to)
+		}
+		return
 	}
-	c.a.Load(a64B, a64B, c.enc.BufferBytes)
-	c.a.Load(a64A, a64C, c.enc.TypedOffset)
-	c.a.Op(arm64.Add, a64B, a64B, a64A, true)
+	stale := c.a.NewLabel()
+	var retry arm64.Label
+	if again != nil {
+		retry = *again
+	} else {
+		retry = c.a.NewLabel()
+		c.a.Bind(retry)
+	}
+	c.a.Load(a64C, c.gpr(array, a64C), c.enc.ObjectExt+c.enc.ObjectData+8)
+	c.typedView(a64C, a64B, a64D, stale, fail)
 	// The key an integer -- FCMP of NaN is unordered, not equal -- below
 	// the length, compared unsigned.
 	if key.Type == ssa.Int32 {
@@ -8175,7 +8197,54 @@ func (c *a64Compiler) typedElement(array, key *ssa.Value, store bool, fail a64Gu
 	c.a.Load(a64D, a64C, c.enc.TypedLength)
 	c.a.Cmp(a64A, a64D, true)
 	fail.jump(arm64.HS)
-	c.a.LoadU8(a64C, a64C, c.enc.TypedKind)
+	c.a.Load(a64B, a64C, c.enc.TypedElems)
+	if store {
+		c.a.LoadU16(a64C, a64C, c.enc.TypedKind)
+	} else {
+		c.a.LoadU8(a64C, a64C, c.enc.TypedKind)
+	}
+	c.typedStale(stale, retry, fail, func() {
+		c.a.Store(a64Ctx, abi.OffGoArgs+c.enc.RefOffset, c.gpr(array, a64C))
+	}, nil)
+}
+
+// typedView jumps to stale unless the view whose pointer is in view has
+// its copy as of the context's epoch, as amd64's. It uses t and u.
+func (c *a64Compiler) typedView(view, t, u arm64.Reg, stale arm64.Label, fail a64Guard) {
+	c.a.Load(t, a64Ctx, abi.OffTypedEpoch)
+	c.a.Load(t, t, 0)
+	c.a.Load(u, view, c.enc.TypedEpoch)
+	c.a.Cmp(t, u, true)
+	if c.enc.CallGo == 0 {
+		fail.jump(arm64.NE)
+		return
+	}
+	c.a.BCond(arm64.NE, stale)
+}
+
+// typedStale is amd64's: out of line, Go makes the view's copy anew, and
+// the code goes back to retry.
+func (c *a64Compiler) typedStale(stale, retry arm64.Label, fail a64Guard, arg, after func()) {
+	if c.enc.CallGo == 0 {
+		return
+	}
+	budget := c.budget
+	c.cold = append(c.cold, func() {
+		saved := c.budget
+		c.budget = budget
+		c.a.Bind(stale)
+		arg()
+		if to, ok := fail.label(); ok {
+			c.goSaving(uint64(ssa.GoTypedView), &to)
+		} else {
+			c.goSaving(uint64(ssa.GoTypedView), nil)
+		}
+		if after != nil {
+			after()
+		}
+		c.a.B(retry)
+		c.budget = saved
+	})
 }
 
 // typedCases is amd64's: for each element type native code makes, a case
@@ -8344,7 +8413,7 @@ func (c *a64Compiler) typedRead(v *ssa.Value, done arm64.Label, hot bool) {
 	}
 	again := c.a.NewLabel()
 	c.a.Bind(again)
-	c.typedElement(v.Args[0], v.Args[1], false, a64GuardLabel(c, slow))
+	c.typedElement(v.Args[0], v.Args[1], false, a64GuardLabel(c, slow), &again)
 	read := func(kind int32) {
 		switch kind {
 		case abi.ElemInt8:
@@ -8414,7 +8483,7 @@ func (c *a64Compiler) typedRead(v *ssa.Value, done arm64.Label, hot bool) {
 // store may start again.
 func (c *a64Compiler) typedWrite(v *ssa.Value, done, slow, again arm64.Label, value func() arm64.FReg, hot bool) {
 	fail := a64GuardLabel(c, slow)
-	c.typedElement(v.Args[0], v.Args[1], true, fail)
+	c.typedElement(v.Args[0], v.Args[1], true, fail, &again)
 	write := func(kind int32) {
 		x := value()
 		switch kind {
@@ -8656,6 +8725,17 @@ type a64Guard struct {
 
 // a64GuardLabel is a guard that jumps to l.
 func a64GuardLabel(c *a64Compiler, l arm64.Label) a64Guard { return a64Guard{c: c, to: l} }
+
+// label is where the guard jumps, and false for one that never does.
+func (g a64Guard) label() (arm64.Label, bool) {
+	switch {
+	case g.v != nil:
+		return g.c.stubLabel(g.v.State, exitKind(g.v.Aux)), true
+	case g.c != nil:
+		return g.to, true
+	}
+	return 0, false
+}
 
 // jump emits the guard's jump, taken on cond.
 func (g a64Guard) jump(cond arm64.Cond) {

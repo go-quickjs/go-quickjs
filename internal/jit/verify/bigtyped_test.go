@@ -44,8 +44,8 @@ func TestMirBigTypedRead(t *testing.T) {
 		ShortBigTag: 0xFFFA000000000000, ShortBigLowBits: 48, ShortBigHigh: 0x100000000,
 		ShortBigWideTag: 0xFFF9000000000000, ShortBigWideHigh: 0x200000000,
 		HeapBigTag: 0xFFF8800000000000, ObjectFlags: 2, ObjectClass: 1, ClassArray: 3,
-		TypedData: 0x91000, TypedKind: 40, TypedStorage: 8, TypedEnd: 16, TypedOffset: 24, TypedLength: 32,
-		BufferBytes: 0, UndefinedCell: 0x60000, StoreRef: 0x70000, CallGo: 0x72000}
+		TypedElems: 0, TypedLength: 8, TypedEpoch: 16, TypedKind: 24,
+		UndefinedCell: 0x60000, StoreRef: 0x70000, CallGo: 0x72000}
 	reads := map[ssa.Type]int{}
 	for i, src := range bigTypedCorpus {
 		prog, err := parser.Parse(src, parser.Options{})

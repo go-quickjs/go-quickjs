@@ -369,10 +369,26 @@ gives back as the call would, and leaves what would throw to the call.
 **Typed arrays' element types.** An element read or write of a number
 whose site has met typed arrays of one element type is compiled for that
 type, as V8's keyed loads and stores follow their feedback's elements
-kind: the receiver's class checked to be a typed array's, its view found
-in its buffer and the key below its length, the type's byte compared with
-the one expected, and the element loaded or stored at its width -- inline,
-an Array's element out of line (`ssa.TypedKindOf`). A site that has met
+kind: the receiver's class checked to be a typed array's, the key below
+its view's length, the type's byte compared with the one expected, and the
+element loaded or stored at its width -- inline, an Array's element out of
+line (`ssa.TypedKindOf`). As V8's JSTypedArray holds its data pointer and
+its length, a view holds where its first element is and how many it has
+(`abi.Encoding`'s `TypedElems` and `TypedLength`), a copy of its buffer's
+that holds while its epoch is the runtime's (`abi.Context`'s
+`TypedEpoch`): a detach, a resize, a growth -- whatever moves a buffer's
+bytes or changes their length -- advances that, and code that finds a
+view's copy of an epoch before has Go make it anew (`ssa.GoTypedView`),
+then reads it again. A view detached, or out of its buffer, has none, so
+that every key fails the bounds check and Go decides. The byte after the
+type's is set for an immutable buffer's view, which native code reads with
+it for a store, so that no type matches; the one after that where the
+copy's length is no length to give -- a view detached or out of its
+buffer, whose methods throw, or tracking a growable shared buffer's
+length, which another agent may grow under it -- which native code then
+leaves to Go. The element,
+the view, its copy's three words: two loads before the element's, none of
+the buffer's. A site that has met
 none, or several, tells them apart as it runs, a case for each type, out
 of line. The existing tiers keep nothing of a site's types, so native
 code learns them, as V8's baseline code fills a feedback vector: each

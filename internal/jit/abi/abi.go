@@ -549,6 +549,11 @@ type Context struct {
 	// load of it; a higher one raises it and this. Go zeroes it in every
 	// context where it lowers the high water.
 	HighSeen uint64
+	// TypedEpoch is the VM's count of changes to where its buffers' bytes
+	// are and how long they are: a typed array's copy of them (Encoding's
+	// TypedElems and TypedLength) holds while its epoch is this. At the
+	// end, as GoLast.
+	TypedEpoch *uint64
 }
 
 // GoArg is an operand of a call of Go: a slot's two words, its pointer word
@@ -934,6 +939,7 @@ var (
 	OffStackTop    = int32(unsafe.Offsetof(Context{}.StackTop))
 	OffStackHigh   = int32(unsafe.Offsetof(Context{}.StackHigh))
 	OffHighSeen    = int32(unsafe.Offsetof(Context{}.HighSeen))
+	OffTypedEpoch  = int32(unsafe.Offsetof(Context{}.TypedEpoch))
 	OffGlobalEpoch = int32(unsafe.Offsetof(Context{}.GlobalEpoch))
 	OffTailReturn  = int32(unsafe.Offsetof(Context{}.TailReturn))
 	OffNext        = int32(unsafe.Offsetof(Context{}.Next))
@@ -1237,21 +1243,23 @@ type Encoding struct {
 	// HandlerPC where it goes on, the int at HandlerDepth the operands
 	// beneath it, and the byte at HandlerFinally set for a finally clause's.
 	HandlerSize, HandlerPC, HandlerDepth, HandlerFinally int32
-	// A typed array is an object of class ClassTypedArray whose data's
-	// type word is TypedData: a view, whose element type's byte is at
-	// TypedKind (the Elem constants), its first byte's offset in its
-	// buffer at TypedOffset and its length in elements at TypedLength, as
-	// ints. The pointer at TypedStorage is its buffer's storage, nil until
-	// Go has looked -- and for a view that tracks a resizable buffer's
-	// length, always -- and the int at TypedEnd the byte past its last
-	// element there: the view is in its buffer while that is no more than
-	// the length of the storage's bytes, a slice at BufferBytes, which a
-	// detached buffer's are not. BufferImmutable is the storage's byte that
-	// is set when the bytes may not be written.
-	ClassTypedArray                                             uint8
-	TypedData                                                   uint64
-	TypedKind, TypedOffset, TypedLength, TypedStorage, TypedEnd int32
-	BufferBytes, BufferImmutable                                int32
+	// A typed array is an object of class ClassTypedArray, whose data --
+	// which every one has, from before any code sees it -- is its view, the
+	// data's pointer word: as V8's JSTypedArray holds its data pointer and
+	// its length, the address of its first element is the pointer at
+	// TypedElems and how many elements are there the int at TypedLength,
+	// both of which hold while the uint64 at TypedEpoch is the one the
+	// context's TypedEpoch points to. A view detached, or out of its
+	// buffer, has 0 elements there (TypedElems nil). Its element type's
+	// byte is at TypedKind (the Elem constants), and the byte after it is
+	// set when its bytes may not be written, so that the 16-bit word at
+	// TypedKind is the element type only for a view that may be written;
+	// the byte after that is set when TypedLength is no length to give: a
+	// view detached or out of its buffer, whose methods throw, and one that
+	// tracks a shared buffer's length, which another agent may grow under
+	// it. TypedEpoch is 0 for an encoding with no typed arrays.
+	ClassTypedArray                                uint8
+	TypedKind, TypedElems, TypedLength, TypedEpoch int32
 	// A function object made from script is one whose data's type word is
 	// FuncData: the pointer at FuncClosure, in the data, is its closure,
 	// whose function's address is at ClosureFn, its captured bindings'

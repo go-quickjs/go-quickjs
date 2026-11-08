@@ -135,6 +135,7 @@ func (r *Runtime) initSharedArrayBufferBuiltins() {
 			return Undefined, rt.throwRangeError("a SharedArrayBuffer cannot shrink")
 		}
 		b.sharedMemory()
+		rt.bufferChanged()
 		return Undefined, nil
 	})
 

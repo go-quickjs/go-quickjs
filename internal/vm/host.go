@@ -130,7 +130,7 @@ func (r *Runtime) NewUint8ArrayOf(b []byte) Value {
 	storage := make([]byte, len(b))
 	copy(storage, b)
 	buf.setData(&arrayBufferData{bytes: storage})
-	o.setData(&typedArrayData{buffer: buf, kind: elemUint8, fixedLength: len(b)})
+	o.setData(r.cacheView(&typedArrayData{buffer: buf, kind: elemUint8, fixedLength: len(b)}))
 	return Obj(o)
 }
 
@@ -170,7 +170,7 @@ func (r *Runtime) NewTypedArrayOf(kind string, buffer Value) (Value, error) {
 		return Undefined, fmt.Errorf("a %s over %d bytes would end part-way through an element", kind, len(b.bytes))
 	}
 	o := newObject(r.typedArrayProtoFor(elemType(k)), ClassTypedArray)
-	o.setData(&typedArrayData{buffer: buffer.Object(), kind: elemType(k), fixedLength: len(b.bytes) / size})
+	o.setData(r.cacheView(&typedArrayData{buffer: buffer.Object(), kind: elemType(k), fixedLength: len(b.bytes) / size}))
 	return Obj(o), nil
 }
 

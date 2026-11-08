@@ -68,7 +68,8 @@ func changesShapes(v *Value) bool {
 func shapeSafeGo(op GoOp) bool {
 	switch op {
 	case GoAdd, GoRefill, GoPow, GoMath, GoAtan2, GoHypot, GoMod, GoTypedRead, GoElemCell, GoStringAbsent, GoConcat, GoIndex, GoAppend,
-		GoCompare, GoRandom, GoNumber, GoEqual, GoCells, GoHas, GoClosure, GoIndexOf, GoNewArray, GoArith, GoBigString, GoArgument:
+		GoCompare, GoRandom, GoNumber, GoEqual, GoCells, GoHas, GoClosure, GoIndexOf, GoNewArray, GoArith, GoBigString, GoArgument,
+		GoTypedView:
 		return true
 	}
 	return false

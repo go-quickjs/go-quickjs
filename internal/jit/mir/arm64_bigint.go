@@ -346,7 +346,8 @@ func (c *a64Compiler) bigRebox(v *ssa.Value) arm64.Reg {
 // bigElemRead reads a BigInt64Array's or a BigUint64Array's element, as
 // amd64's.
 func (c *a64Compiler) bigElemRead(v *ssa.Value, fail a64Guard) {
-	c.typedElement(v.Args[0], v.Args[1], false, fail)
+	c.typedClass(v.Args[0], fail)
+	c.typedElement(v.Args[0], v.Args[1], false, fail, nil)
 	kind := int64(abi.ElemBigInt64)
 	if v.Type == ssa.Uint64 {
 		kind = abi.ElemBigUint64
@@ -363,7 +364,8 @@ func (c *a64Compiler) bigElemRead(v *ssa.Value, fail a64Guard) {
 // bigElemWrite stores a BigInt's low 64 bits in a BigInt typed array's
 // element, as amd64's.
 func (c *a64Compiler) bigElemWrite(v *ssa.Value, fail a64Guard) {
-	c.typedElement(v.Args[0], v.Args[1], true, fail)
+	c.typedClass(v.Args[0], fail)
+	c.typedElement(v.Args[0], v.Args[1], true, fail, nil)
 	kind := int64(abi.ElemBigInt64)
 	if v.Index == 1 {
 		kind = abi.ElemBigUint64

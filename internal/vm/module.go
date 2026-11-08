@@ -1122,7 +1122,7 @@ func (r *Runtime) makeTypedModule(specifier, typ, source, resolved string) (*Mod
 		buf := newObject(r.arrayBufferProto, ClassArrayBuffer)
 		buf.setData(&arrayBufferData{bytes: []byte(source), immutable: true})
 		o := newObject(r.typedArrayProtoFor(elemUint8), ClassTypedArray)
-		o.setData(&typedArrayData{buffer: buf, kind: elemUint8, fixedLength: len(source)})
+		o.setData(r.cacheView(&typedArrayData{buffer: buf, kind: elemUint8, fixedLength: len(source)}))
 		v = Obj(o)
 	}
 	m := r.newModule(key, nil)

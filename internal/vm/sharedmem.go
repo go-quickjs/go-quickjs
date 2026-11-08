@@ -165,7 +165,9 @@ func (r *Runtime) SharedMemoryOf(v Value) (*SharedMemory, bool, error) {
 	if err := b.block.pin(); err != nil {
 		return nil, true, err
 	}
+	// Pinning may have moved the memory, which only this runtime saw.
 	b.sharedMemory()
+	r.bufferChanged()
 	return b.block, true, nil
 }
 

@@ -67,6 +67,7 @@ func New(cfg Config) *Runtime {
 		cleanups:         &cleanupQueue{},
 		hostJobs:         hostQueue{ready: make(chan struct{}, 1)},
 		asyncCtx:         Undefined,
+		typedEpoch:       1,
 	}
 	if cfg.Debug {
 		r.debug = newDebugState()

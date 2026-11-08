@@ -325,6 +325,14 @@ type Runtime struct {
 	forInLast *forInObject
 	// json is what JSON keeps from one call to the next.
 	json *jsonState
+	// typedEpoch counts the changes to where any of the runtime's buffers'
+	// bytes are and how long they are: a detach, a resize, a growth. A
+	// view's copy of where its elements are and how many it has
+	// (typedArrayData's data and length), which native code reads, holds
+	// while its epoch is this one. It starts at 1, so that a view never
+	// filled in, whose epoch is 0, holds nothing. After everything the
+	// interpreter reads, so that none of it moves.
+	typedEpoch uint64
 	// jitFields is the optional native tier's state, empty in builds
 	// without it. It comes after everything the interpreter reads, so that
 	// a build with the tier moves none of their offsets, and before the last

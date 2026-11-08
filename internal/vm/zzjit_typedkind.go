@@ -76,6 +76,32 @@ func (r *Runtime) jitTypedSeen(ctx *abi.Context) bool {
 	return true
 }
 
+// jitTypedView is ssa.GoTypedView: the typed array in the first operand,
+// whose view's copy of where its elements are and how many (cacheView) is
+// of an epoch before the runtime's -- a buffer's bytes moved or changed
+// length since, or Go never made it. It makes the copy anew, for native
+// code to read it again, and leaves the operand as it is. It refuses only
+// what is no typed array, which native code never asks.
+func (r *Runtime) jitTypedView(ctx *abi.Context) bool {
+	o := *(**Object)(unsafe.Pointer(&ctx.GoArgs[0].Ref))
+	if o == nil || o.class != ClassTypedArray {
+		return false
+	}
+	t, ok := o.dataOf().(*typedArrayData)
+	if !ok {
+		return false
+	}
+	r.cacheView(t)
+	if jitTypedViewMade != nil {
+		jitTypedViewMade()
+	}
+	return true
+}
+
+// jitTypedViewMade, if set, is called at each view's copy jitTypedView
+// makes: tests count them.
+var jitTypedViewMade func()
+
 // jitRunEntry is the entry of the code a call of Go was made from, with
 // ctx: the run's, at its own level, which may be a loop's (osrOf), or
 // else, at a native callee's level, its function's.

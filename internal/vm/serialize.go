@@ -232,6 +232,7 @@ func (r *Runtime) Serialize(v Value, transfer []Value, codec *Codec) (*Serialize
 		n := &s.out.nodes[s.memory[o]]
 		n.bytes, n.resizable, n.max = b.bytes, b.resizable, b.maxByteLength
 		b.bytes, b.detached = nil, true
+		s.r.bufferChanged()
 	}
 	return s.out, nil
 }
@@ -675,7 +676,7 @@ func (d *deserializer) value(i int) (Value, error) {
 			o.setData(&dataViewData{buffer: buf, byteOffset: n.offset, byteLength: n.count, tracking: n.tracking})
 		} else {
 			o = newObject(r.typedArrayProtos[n.elem], ClassTypedArray)
-			o.setData(&typedArrayData{buffer: buf, kind: n.elem, byteOffset: n.offset, fixedLength: n.count, tracking: n.tracking})
+			o.setData(r.cacheView(&typedArrayData{buffer: buf, kind: n.elem, byteOffset: n.offset, fixedLength: n.count, tracking: n.tracking}))
 		}
 	case snError:
 		o = newErrorObject(r.proto.nativeErrors[n.errKind])

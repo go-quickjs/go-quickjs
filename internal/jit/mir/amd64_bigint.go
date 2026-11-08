@@ -386,7 +386,8 @@ func (c *compiler) bigRebox(v *ssa.Value) amd64.Reg {
 // an integer below its length, as typedElement finds them, and the view's
 // element type the one its Type reads; anything else fails.
 func (c *compiler) bigElemRead(v *ssa.Value, fail guardTo) {
-	c.typedElement(v.Args[0], v.Args[1], false, fail)
+	c.typedClass(v.Args[0], fail)
+	c.typedElement(v.Args[0], v.Args[1], false, fail, nil)
 	kind := int32(abi.ElemBigInt64)
 	if v.Type == ssa.Uint64 {
 		kind = abi.ElemBigUint64
@@ -406,7 +407,8 @@ func (c *compiler) bigElemRead(v *ssa.Value, fail guardTo) {
 // typedElement finds them, and the view's element type the one Index
 // names; anything else fails.
 func (c *compiler) bigElemWrite(v *ssa.Value, fail guardTo) {
-	c.typedElement(v.Args[0], v.Args[1], true, fail)
+	c.typedClass(v.Args[0], fail)
+	c.typedElement(v.Args[0], v.Args[1], true, fail, nil)
 	kind := int32(abi.ElemBigInt64)
 	if v.Index == 1 {
 		kind = abi.ElemBigUint64

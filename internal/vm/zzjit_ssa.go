@@ -199,14 +199,10 @@ var jitEncoding = abi.Encoding{
 	LinkGen:            int32(unsafe.Offsetof(jitLink{}.gen)),
 	ClassArray:         uint8(ClassArray),
 	ClassTypedArray:    uint8(ClassTypedArray),
-	TypedData:          jitTypeWord((*typedArrayData)(nil)),
 	TypedKind:          int32(unsafe.Offsetof(typedArrayData{}.kind)),
-	TypedOffset:        int32(unsafe.Offsetof(typedArrayData{}.byteOffset)),
-	TypedLength:        int32(unsafe.Offsetof(typedArrayData{}.fixedLength)),
-	TypedStorage:       int32(unsafe.Offsetof(typedArrayData{}.st)),
-	TypedEnd:           int32(unsafe.Offsetof(typedArrayData{}.end)),
-	BufferBytes:        int32(unsafe.Offsetof(arrayBufferData{}.bytes)),
-	BufferImmutable:    int32(unsafe.Offsetof(arrayBufferData{}.immutable)),
+	TypedElems:         int32(unsafe.Offsetof(typedArrayData{}.data)),
+	TypedLength:        int32(unsafe.Offsetof(typedArrayData{}.length)),
+	TypedEpoch:         int32(unsafe.Offsetof(typedArrayData{}.epoch)),
 	FlagSparse:         uint8(objHasSparseElements),
 	FlagExt:            uint8(objHasExt),
 	FlagData:           uint8(objHasData),
@@ -4606,6 +4602,8 @@ func jitHostCall(ctx *abi.Context) bool {
 		return true
 	case ssa.GoTypedSeen:
 		return r.jitTypedSeen(ctx)
+	case ssa.GoTypedView:
+		return r.jitTypedView(ctx)
 	case ssa.GoTypedRead:
 		o := *(**Object)(unsafe.Pointer(&ctx.GoArgs[0].Ref))
 		v, ok := jitTypedRead(o, math.Float64frombits(ctx.GoArgs[1].Num))
@@ -5882,16 +5880,13 @@ func jitAppendFresh(o *Object, n float64, v Value) bool {
 }
 
 // jitTypedRead reads element n of the typed array o where native code did
-// not (ssa.GoTypedRead): before the view's storage was looked at, which it
-// looks at here, for native code's next read; a Float16 element. An
-// element that is not a number -- a BigInt, an index the view does not
-// have -- it leaves for an exit.
+// not (ssa.GoTypedRead): a Float16 element, or one past what the view's
+// copy of its length has where another agent has grown its shared
+// buffer. An element that is not a number -- a BigInt, an index the view
+// does not have -- it leaves for an exit.
 func jitTypedRead(o *Object, n float64) (float64, bool) {
 	t, i, ok := typedElemIndex(o, n)
-	if !ok || t.tracking {
-		return 0, false
-	}
-	if t.st == nil && t.fixedStorage() == nil {
+	if !ok {
 		return 0, false
 	}
 	v := t.getElem(i)
@@ -12604,7 +12599,7 @@ func (r *Runtime) jitShareContexts(idx int, f *frame) {
 		c := s.ssaCtxs[i]
 		c.StackBase, c.StackEnd = sh.stackBase, sh.stackEnd
 		c.StackTop, c.StackHigh = &r.stackTop, &r.stackHigh
-		c.BackEdges, c.GlobalEpoch = &r.backEdges, &r.shapes.globalEpoch
+		c.BackEdges, c.GlobalEpoch, c.TypedEpoch = &r.backEdges, &r.shapes.globalEpoch, &r.typedEpoch
 		c.Global, c.LexNames, c.GlobalLex, c.StringMethods = sh.global, sh.lexNames, sh.globalLex, sh.strMethods
 		*(*Value)(unsafe.Pointer(&c.CharCodeAt)) = Value{}
 		if sh.charCodeAt != nil {
@@ -12696,7 +12691,7 @@ func (r *Runtime) jitGrowContexts() bool {
 	for _, c := range s.ssaCtxs[old:] {
 		c.StackBase, c.StackEnd, c.StackTop, c.StackHigh = last.StackBase, last.StackEnd, last.StackTop, last.StackHigh
 		c.BackEdges, c.Global, c.LexNames, c.GlobalLex = last.BackEdges, last.Global, last.LexNames, last.GlobalLex
-		c.GlobalEpoch = last.GlobalEpoch
+		c.GlobalEpoch, c.TypedEpoch = last.GlobalEpoch, last.TypedEpoch
 		c.StringMethods = last.StringMethods
 		c.CharCodeAt = last.CharCodeAt
 		c.StringProto, c.StringShape, c.CharCodeAtOffset = last.StringProto, last.StringShape, last.CharCodeAtOffset

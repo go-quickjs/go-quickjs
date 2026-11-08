@@ -2195,6 +2195,13 @@ type GoOp uint8
 // the cell, and has the code compiled again, for that type, once it has
 // spent its budget, as V8's baseline code records a keyed access's
 // elements kind in its feedback. It never refuses.
+//
+// GoTypedView is a typed array, the first operand's pointer word, whose
+// copy of where its elements are and how many (abi.Encoding's TypedElems
+// and TypedLength) is of an epoch before the context's TypedEpoch: a
+// buffer's bytes have moved or changed length, or been detached, since.
+// Go copies them anew, as of the epoch now, for native code to read them
+// again; it refuses only what is no typed array.
 const (
 	GoAdd GoOp = 1 + iota
 	GoRefill
@@ -2233,6 +2240,7 @@ const (
 	GoStringAbsent
 	GoIterResult
 	GoTypedSeen
+	GoTypedView
 )
 
 // GoNewArray's flags, in its CallSite's Argc. With NewArraySort, the

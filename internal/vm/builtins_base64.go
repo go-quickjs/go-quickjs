@@ -285,7 +285,7 @@ func (r *Runtime) newUint8ArrayFrom(b []byte) *Object {
 	buf := newObject(r.arrayBufferProto, ClassArrayBuffer)
 	buf.setData(&arrayBufferData{bytes: b})
 	o := newObject(r.uint8Proto, ClassTypedArray)
-	o.setData(&typedArrayData{buffer: buf, kind: elemUint8, fixedLength: len(b)})
+	o.setData(r.cacheView(&typedArrayData{buffer: buf, kind: elemUint8, fixedLength: len(b)}))
 	return o
 }
 

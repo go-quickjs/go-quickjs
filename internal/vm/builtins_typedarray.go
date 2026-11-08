@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"math"
 	"slices"
+	"unsafe"
 )
 
 // ArrayBuffer, typed arrays and DataView.
@@ -117,9 +118,39 @@ var elemInfos = [...]elemInfo{
 }
 
 // typedArrayData is a view over a buffer.
+//
+// Its first fields are what native code reads of it to reach an element,
+// as V8's JSTypedArray keeps its data pointer and its length in the object:
+// the address of its first element and how many elements it has, copied
+// from its buffer by cacheView. The copy holds while epoch is the
+// runtime's typedEpoch, which everything that moves a buffer's bytes or
+// changes its length advances (bufferChanged): native code compares the
+// two, then the index with length, and loads the element at data, with no
+// load of the buffer's. A view detached or out of its buffer has length 0,
+// so that every index fails its bounds check and Go decides.
 type typedArrayData struct {
+	// data is the address of the first element, in the buffer's bytes, or
+	// nil where length is 0. It keeps those bytes alive: native code reads
+	// through it, and a buffer may have let go of them.
+	data unsafe.Pointer
+	// length is how many elements there are at data: the view's count, as
+	// of epoch.
+	length int
+	epoch  uint64
+	kind   elemType
+	// readonly is set, as of epoch, where the buffer is immutable: native
+	// code reads kind and readonly as one 16-bit word, the kind's alone
+	// where it may store.
+	readonly bool
+	// noLength is set, as of epoch, where length is no length to give:
+	// for a view detached or out of its buffer, whose length Go gives and
+	// whose methods throw, and for one that tracks the length of a shared
+	// buffer, which another agent may grow at any moment, so that length
+	// is no more than its count. Native code then reads elements up to
+	// length, but leaves the view's length to Go.
+	noLength bool
+
 	buffer     *Object
-	kind       elemType
 	byteOffset int
 	// fixedLength is the view's length in elements, unless tracking is set:
 	// a view made over a resizable buffer with no length of its own covers
@@ -585,6 +616,7 @@ func (r *Runtime) initArrayBufferBuiltins() {
 			return Undefined, err
 		}
 		b.resize(int(n))
+		rt.bufferChanged()
 		return Undefined, nil
 	})
 
@@ -641,6 +673,7 @@ func (r *Runtime) initArrayBufferBuiltins() {
 		copy(out, b.bytes)
 		max := b.maxByteLength
 		b.detached, b.bytes = true, nil
+		rt.bufferChanged()
 
 		o := newObject(abProto, ClassArrayBuffer)
 		nb := &arrayBufferData{bytes: out, immutable: immutable}
@@ -793,6 +826,7 @@ func (r *Runtime) DetachArrayBuffer(v Value) error {
 	}
 	b.detached = true
 	b.bytes = nil
+	r.bufferChanged()
 	return nil
 }
 
@@ -934,7 +968,7 @@ func (r *Runtime) constructTypedArray(kind elemType, proto *Object, args []Value
 		if explicit < 0 && b.resizable {
 			// No length of its own over a buffer that can change length: the
 			// view covers whatever the buffer holds past its offset.
-			o.setData(&typedArrayData{buffer: buf, kind: kind, byteOffset: int(off), tracking: true})
+			o.setData(r.cacheView(&typedArrayData{buffer: buf, kind: kind, byteOffset: int(off), tracking: true}))
 			return Obj(o), nil
 		}
 		if explicit < 0 && len(b.bytes)%info.size != 0 {
@@ -951,12 +985,12 @@ func (r *Runtime) constructTypedArray(kind elemType, proto *Object, args []Value
 			length = int(explicit)
 		}
 		t := &typedArrayData{buffer: buf, kind: kind, byteOffset: int(off), fixedLength: length}
-		// Its storage at once, as Go's first access would fill it in: the
-		// JIT's native code reads a view's length and elements through it,
-		// and a view only ever read, as PDF.js's subarrays are, had had
-		// every read of its length leave native code.
+		// Its storage at once, as Go's first access would fill it in, and
+		// the copy native code reads (cacheView): a view only ever read, as
+		// PDF.js's subarrays are, had had every read of its length leave
+		// native code before Go had looked at it.
 		t.fixedStorage()
-		o.setData(t)
+		o.setData(r.cacheView(t))
 		return Obj(o), nil
 
 	case first.IsObject() && first.Object().class == ClassTypedArray:
@@ -1085,7 +1119,7 @@ func (r *Runtime) allocTypedArray(o *Object, kind elemType, length int) *typedAr
 	t := &typedArrayData{buffer: buf, kind: kind, fixedLength: length}
 	// Its storage at once (constructTypedArray).
 	t.fixedStorage()
-	o.setData(t)
+	o.setData(r.cacheView(t))
 	return t
 }
 

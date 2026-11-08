@@ -8479,15 +8479,26 @@ func (c *compiler) length(v *ssa.Value, guard guardTo) {
 		c.a.Bind(typed)
 		c.a.OpImm(amd64.Cmp, scratchB, int32(c.enc.ClassTypedArray), false)
 		guard.jump(amd64.CondNE)
-		c.objectData(scratchC, scratchC, scratchB, c.enc.TypedData, guard)
-		c.a.Load(scratchB, scratchC, c.enc.TypedStorage)
-		c.a.Op(amd64.Test, scratchB, scratchB, true)
-		guard.jump(amd64.CondE)
-		c.a.Load(scratchA, scratchC, c.enc.TypedEnd)
-		c.a.CmpMem(scratchA, scratchB, c.enc.BufferBytes+8, true)
-		guard.jump(amd64.CondA)
-		c.a.Load(scratchC, scratchC, c.enc.TypedLength)
+		if c.enc.TypedEpoch == 0 {
+			guard.jump(amd64.CondE)
+			return
+		}
+		retry, stale := c.a.NewLabel(), c.a.NewLabel()
+		c.a.Bind(retry)
+		c.a.Load(scratchB, scratchC, c.enc.ObjectExt+c.enc.ObjectData+8)
+		c.typedView(scratchB, scratchA, stale, guard)
+		// Where the copy's is no length to give -- a view detached or out
+		// of its buffer, one another agent may grow -- Go's.
+		c.a.TestMem8(scratchB, c.enc.TypedKind+2, 1)
+		guard.jump(amd64.CondNE)
+		c.a.Load(scratchC, scratchB, c.enc.TypedLength)
 		c.a.Jmp(have)
+		c.typedStale(stale, retry, guard, func() {
+			c.a.Store(regCtx, abi.OffGoArgs+c.enc.RefOffset, scratchC)
+		}, func() {
+			// The typed array again, which Go leaves where it was.
+			c.a.Load(scratchC, regCtx, abi.OffGoArgs+c.enc.RefOffset)
+		})
 	})
 	p := scratchA
 	c.a.MovRR(p, scratchC)
@@ -9114,29 +9125,46 @@ func (c *compiler) arrayClass(of *ssa.Value, array amd64.Label) {
 	c.a.Jcc(amd64.CondE, array)
 }
 
+// typedClass fails unless the object array, from OpIndexedOf, is a typed
+// array. It uses scratchB.
+func (c *compiler) typedClass(array *ssa.Value, fail guardTo) {
+	c.a.LoadU8(scratchB, c.gpr(array, scratchB), c.enc.ObjectClass)
+	c.a.OpImm(amd64.Cmp, scratchB, int32(c.enc.ClassTypedArray), false)
+	fail.jump(amd64.CondNE)
+}
+
 // typedElement finds the element of the typed array array that key's
-// number names, as the VM's typedWrite does, failing unless the view is in
-// its buffer -- Go has looked at it, it does not track a resizable
-// buffer's length, its buffer is not detached and has not shrunk past it
-// -- and, for a store, its bytes may be written, and the key is an integer
-// below its length: the element's address in scratchA, and the view's
-// element type in scratchC. It uses every scratch register.
-func (c *compiler) typedElement(array, key *ssa.Value, store bool, fail guardTo) {
-	c.objectData(scratchC, c.gpr(array, scratchC), scratchB, c.enc.TypedData, fail)
-	c.a.Load(scratchB, scratchC, c.enc.TypedStorage)
-	c.a.Op(amd64.Test, scratchB, scratchB, true)
-	fail.jump(amd64.CondE)
-	c.a.Load(scratchA, scratchC, c.enc.TypedEnd)
-	c.a.CmpMem(scratchA, scratchB, c.enc.BufferBytes+8, true)
-	fail.jump(amd64.CondA)
-	if store {
-		c.a.LoadU8(scratchA, scratchB, c.enc.BufferImmutable)
-		c.a.Op(amd64.Test, scratchA, scratchA, false)
-		fail.jump(amd64.CondNE)
+// number names, as V8's keyed access finds a JSTypedArray's: its view
+// (abi.Encoding's TypedElems), which every typed array has, read from the
+// object; the view's copy of where its elements are and how many checked
+// to be current (typedView); the key an integer below that many, which a
+// view detached or out of its buffer has none of: the element's address
+// in scratchA, the first element's in scratchB, and the view's element
+// type in scratchC -- for a store, with the byte after it, set where the
+// bytes may not be written, which no type's case then matches. It uses
+// every scratch register. array is an Array or a typed array
+// (OpIndexedOf), which the caller has found is no Array. Once Go has made
+// the view's copy anew, the code starts again at again, if not nil -- where
+// the caller makes what it holds in scratch registers, as for typedSeen --
+// and else at the first of typedElement's own instructions.
+func (c *compiler) typedElement(array, key *ssa.Value, store bool, fail guardTo, again *amd64.Label) {
+	if c.enc.TypedEpoch == 0 {
+		// An encoding with no typed arrays.
+		if to, ok := fail.label(); ok {
+			c.a.Jmp(to)
+		}
+		return
 	}
-	c.a.Load(scratchB, scratchB, c.enc.BufferBytes)
-	c.a.Load(scratchA, scratchC, c.enc.TypedOffset)
-	c.a.Op(amd64.Add, scratchB, scratchA, true)
+	stale := c.a.NewLabel()
+	var retry amd64.Label
+	if again != nil {
+		retry = *again
+	} else {
+		retry = c.a.NewLabel()
+		c.a.Bind(retry)
+	}
+	c.a.Load(scratchC, c.gpr(array, scratchC), c.enc.ObjectExt+c.enc.ObjectData+8)
+	c.typedView(scratchC, scratchB, stale, fail)
 	// The key an integer -- not NaN, which converts to 1<<63 -- below the
 	// length, compared unsigned: a negative one is past it. An int32 key
 	// is one if not negative.
@@ -9152,10 +9180,63 @@ func (c *compiler) typedElement(array, key *ssa.Value, store bool, fail guardTo)
 	}
 	c.a.CmpMem(scratchA, scratchC, c.enc.TypedLength, true)
 	fail.jump(amd64.CondAE)
-	c.a.LoadU8(scratchC, scratchC, c.enc.TypedKind)
+	c.a.Load(scratchB, scratchC, c.enc.TypedElems)
+	if store {
+		c.a.LoadU16(scratchC, scratchC, c.enc.TypedKind)
+	} else {
+		c.a.LoadU8(scratchC, scratchC, c.enc.TypedKind)
+	}
 	// The address of the element, which the element type's size scales:
 	// its shift is the type's (elemShift), the shifted index added to the
 	// first element's address, in scratchB, at each type's case.
+	c.typedStale(stale, retry, fail, func() {
+		c.a.Store(regCtx, abi.OffGoArgs+c.enc.RefOffset, c.gpr(array, scratchC))
+	}, nil)
+}
+
+// typedView jumps to stale unless the typed array's view whose pointer is
+// in view has its copy of where its elements are and how many as of the
+// context's epoch (abi.Context's TypedEpoch): no buffer's bytes have moved
+// or changed length since Go made it. Without calls of Go, which would
+// make it anew, it fails instead. It uses t.
+func (c *compiler) typedView(view, t amd64.Reg, stale amd64.Label, fail guardTo) {
+	c.a.Load(t, regCtx, abi.OffTypedEpoch)
+	c.a.Load(t, t, 0)
+	c.a.CmpMem(t, view, c.enc.TypedEpoch, true)
+	if c.enc.CallGo == 0 {
+		fail.jump(amd64.CondNE)
+		return
+	}
+	c.a.Jcc(amd64.CondNE, stale)
+}
+
+// typedStale emits, out of line, stale, where a typed array's view's copy
+// is not current (typedView): arg stores the typed array in the first of
+// the context's GoArgs, Go makes the copy anew (ssa.GoTypedView), and the
+// code goes back to retry, where it reads the view again; what Go refuses
+// goes to fail. after, if not nil, emits what retry needs that the call
+// wrote over. Without calls of Go it emits nothing.
+func (c *compiler) typedStale(stale, retry amd64.Label, fail guardTo, arg, after func()) {
+	if c.enc.CallGo == 0 {
+		return
+	}
+	budget := c.budget
+	c.cold = append(c.cold, func() {
+		saved := c.budget
+		c.budget = budget
+		c.a.Bind(stale)
+		arg()
+		if to, ok := fail.label(); ok {
+			c.goSaving(uint64(ssa.GoTypedView), &to)
+		} else {
+			c.goSaving(uint64(ssa.GoTypedView), nil)
+		}
+		if after != nil {
+			after()
+		}
+		c.a.Jmp(retry)
+		c.budget = saved
+	})
 }
 
 // typedKinds are the element types native code reads and writes, the most
@@ -9385,7 +9466,7 @@ func (c *compiler) typedRead(v *ssa.Value, done amd64.Label, hot bool) {
 	}
 	again := c.a.NewLabel()
 	c.a.Bind(again)
-	c.typedElement(v.Args[0], v.Args[1], false, guardLabel(c, slow))
+	c.typedElement(v.Args[0], v.Args[1], false, guardLabel(c, slow), &again)
 	read := func(kind int32) {
 		switch kind {
 		case abi.ElemInt8:
@@ -9461,7 +9542,7 @@ func (c *compiler) typedRead(v *ssa.Value, done amd64.Label, hot bool) {
 // done.
 func (c *compiler) typedWrite(v *ssa.Value, done, slow, again amd64.Label, value func() amd64.XReg, hot bool) {
 	fail := guardLabel(c, slow)
-	c.typedElement(v.Args[0], v.Args[1], true, fail)
+	c.typedElement(v.Args[0], v.Args[1], true, fail, &again)
 	write := func(kind int32) {
 		x := value()
 		switch kind {
@@ -9725,6 +9806,17 @@ type guardTo struct {
 
 // guardLabel is a guard that jumps to l.
 func guardLabel(c *compiler, l amd64.Label) guardTo { return guardTo{c: c, to: l} }
+
+// label is where the guard jumps, and false for one that never does.
+func (g guardTo) label() (amd64.Label, bool) {
+	switch {
+	case g.v != nil:
+		return g.c.stubLabel(g.v.State, exitKind(g.v.Aux)), true
+	case g.c != nil:
+		return g.to, true
+	}
+	return 0, false
+}
 
 // jump emits the guard's jump, taken on cond.
 func (g guardTo) jump(cond amd64.Cond) {
