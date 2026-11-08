@@ -1,8 +1,10 @@
 package quickjs_test
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -35,18 +37,23 @@ func loopContext(t *testing.T) context.Context {
 
 // A timer built on AsyncWork runs its callback on the runtime's goroutine, and
 // the loop ends when nothing is left.
+//
+// The timers are completed by one goroutine, in the order of their deadlines,
+// as a host's timer loop completes them. A time.AfterFunc for each would
+// complete each on a goroutine of its own, and under load the earlier timer's
+// could be scheduled after the later one's had already posted: the order
+// would then be the scheduler's, not the deadlines'.
 func TestAsyncWorkTimer(t *testing.T) {
 	rt := quickjs.New()
 	defer rt.Close()
+	type timer struct {
+		at time.Duration
+		w  *quickjs.AsyncWork
+		cb quickjs.Value
+	}
+	var timers []timer
 	rt.Set("setTimeout", func(cb quickjs.Value, ms int) {
-		w := rt.StartAsyncWork()
-		time.AfterFunc(time.Duration(ms)*time.Millisecond, func() {
-			w.Complete(func(err error) {
-				if err == nil {
-					cb.Call()
-				}
-			})
-		})
+		timers = append(timers, timer{time.Duration(ms) * time.Millisecond, rt.StartAsyncWork(), cb})
 	})
 	if _, err := rt.Eval(`
 		var out = []
@@ -58,6 +65,18 @@ func TestAsyncWorkTimer(t *testing.T) {
 	if !rt.Busy() {
 		t.Fatal("not busy with two timers outstanding")
 	}
+	slices.SortStableFunc(timers, func(a, b timer) int { return cmp.Compare(a.at, b.at) })
+	start := time.Now()
+	go func() {
+		for _, tm := range timers {
+			time.Sleep(time.Until(start.Add(tm.at)))
+			tm.w.Complete(func(err error) {
+				if err == nil {
+					tm.cb.Call()
+				}
+			})
+		}
+	}()
 	if err := runLoop(loopContext(t), rt); err != nil {
 		t.Fatal(err)
 	}
