@@ -1930,6 +1930,16 @@ Open from it:
   A wider rule, inlining a loop only where the call's cost is not
   spread over its turns, is still wanted. (Where the loop calls a
   closure the caller gives, the round of 2026-10-28, above.)
+- Open: `array_length_read` takes 5.2% longer with the JIT since
+  `a97e929e`, which loads an entry's slot where its unboxing reads it,
+  at every one of four placements and at every offset of its code across
+  4 KB (1.32 to 1.36 ns against 1.26 to 1.28 on a Ryzen 5 3600), about
+  0.07 ns a read. Its loop's instructions are main's but for which
+  registers they use, so it is neither placement nor more work, and its
+  cause is not known. Over the same round, without a cause shown at
+  every placement: CodeLoad with the JIT +2.8% (+2.4 to +3.5% by
+  placement), one compile and none of the round's new paths in its
+  profile, and DeltaBlue without it +2% (+0.7 to +3.1%).
 - A call is still an indirect jump each way: native code runs on the
   goroutine's stack and never moves SP, so that Go's unwinder, stack scan
   and growth meet no return address of its, and a return is not
