@@ -381,6 +381,13 @@ func (q *jitAsked) TypedKind(pc int) (ssa.TypedSite, bool) {
 	return r0, r1
 }
 
+func (q *jitAsked) UpvalueTyped(pc int) (uint8, bool) {
+	before := q.counts()
+	r0, r1 := q.fb.UpvalueTyped(pc)
+	q.note("UpvalueTyped", before, int64(pc), r0, r1)
+	return r0, r1
+}
+
 func (q *jitAsked) VirtualRoot(pool uintptr) (uintptr, uintptr, bool) {
 	before := q.counts()
 	r0, r1, r2 := q.fb.VirtualRoot(pool)

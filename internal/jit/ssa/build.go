@@ -1564,9 +1564,9 @@ func (b *builder) typedSite(pc int, v *Value) {
 	}
 	v.Const = ir.Value{Kind: ir.Opaque, Bits: uint64(s.Cell)}
 	if s.Kinds == 0 {
-		// A site that has learned nothing, of what a global read found
-		// holding a typed array: compiled for its type, which is the one
-		// to learn if the site meets another.
+		// A site that has learned nothing, of what a global read, or a
+		// captured binding's, found holding a typed array: compiled for
+		// its type, which is the one to learn if the site meets another.
 		if g := b.typedArrays[v.Args[0].Args[0]]; g != 0 && g != typedAny {
 			s.Kinds = 1 << (g - 1)
 		}
@@ -1581,6 +1581,41 @@ func (b *builder) typedSite(pc int, v *Value) {
 // typedAny is a builder's typedArrays' mark of a typed array whose element
 // type the global read's site did not say.
 const typedAny = 0xFF
+
+// UpvalueTypedFeedback is Feedback that knows, for a read of a captured
+// binding at a PC (ir.UpvalueRead), whether the binding holds a typed
+// array as the code is compiled, and its element type plus one, or 0 where
+// it is not one native code makes: an element read or write of what the
+// read found is compiled as one of what a global read found holding a
+// typed array is (GlobalSite's Typed and TypedKind). Emscripten's asm.js
+// modules hold their heap's views in bindings their functions capture,
+// which they read at every branch: learned as native code ran, site by
+// site (TypedKindFeedback), each such function was compiled once more for
+// it, and some more than once.
+type UpvalueTypedFeedback interface {
+	UpvalueTyped(pc int) (kind uint8, typed bool)
+}
+
+// typedUpvalue marks v, what the read of a captured binding at pc found,
+// as a typed array where the binding holds one (UpvalueTypedFeedback), as
+// what a global read found is marked.
+func (b *builder) typedUpvalue(pc int, v *Value) {
+	f, ok := b.fb.(UpvalueTypedFeedback)
+	if !ok {
+		return
+	}
+	kind, typed := f.UpvalueTyped(pc)
+	if !typed {
+		return
+	}
+	if kind == 0 {
+		kind = typedAny
+	}
+	if b.typedArrays == nil {
+		b.typedArrays = map[*Value]uint8{}
+	}
+	b.typedArrays[v] = kind
+}
 
 // nativeTyped reports whether native code reads and writes elements of
 // type kind (abi's Elem constants) as numbers: every type but Float16's
@@ -3010,7 +3045,8 @@ type builder struct {
 	madeCalls map[int]*MadeCallback
 	// typedArrays are the global reads whose bindings held typed arrays,
 	// each the element type plus one (GlobalSite's TypedKind), or typedAny
-	// (GlobalSite's Typed), which element reads of them read as such.
+	// (GlobalSite's Typed), and the reads of captured bindings that did
+	// (UpvalueTypedFeedback), which element reads of them read as such.
 	typedArrays map[*Value]uint8
 	frameOf     []*frame
 	// stale are the captured bindings' and captured locals' markers
@@ -7590,6 +7626,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 					guard(OpCheckInit, None, ir.GuardExit, v)
 				}
 				if in.Op == ir.UpvalueRead {
+					b.typedUpvalue(pc, v)
 					b.assign(in.Dest, blk, v)
 					break
 				}
@@ -7615,6 +7652,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			if in.Check {
 				guard(OpCheckInit, None, ir.GuardExit, v)
 			}
+			b.typedUpvalue(pc, v)
 			b.assign(in.Dest, blk, v)
 			break
 		}

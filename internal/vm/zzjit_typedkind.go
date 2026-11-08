@@ -6,6 +6,7 @@ import (
 	"math"
 	"unsafe"
 
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
@@ -49,6 +50,25 @@ func (fb *jitFeedback) TypedKind(pc int) (ssa.TypedSite, bool) {
 	k := fb.keep()
 	k.cells = append(k.cells, cell)
 	return ssa.TypedSite{Kinds: uint16(math.Float64bits(cell.num)), Cell: uintptr(unsafe.Pointer(cell))}, true
+}
+
+// UpvalueTyped is ssa.UpvalueTypedFeedback's: whether the captured binding
+// the instruction at pc reads holds a typed array, in fb's closure as the
+// code is compiled, and its element type plus one -- as a global's site
+// says of its binding (ssa.GlobalSite's Typed and TypedKind).
+func (fb *jitFeedback) UpvalueTyped(pc int) (uint8, bool) {
+	if fb.cl == nil || pc < 0 || pc >= len(fb.fn.Code) {
+		return 0, false
+	}
+	in := fb.fn.Code[pc]
+	if in.Op != bytecode.OpGetUpvalue && in.Op != bytecode.OpGetUpvalueCheck || int(in.A) >= len(fb.cl.upvalues) || fb.cl.upvalues[in.A] == nil {
+		return 0, false
+	}
+	v := fb.cl.upvalues[in.A].get()
+	if !jitTypedArray(v) {
+		return 0, false
+	}
+	return jitTypedKind(true, v), true
 }
 
 // jitTypedSeen is ssa.GoTypedSeen: the typed array in the first operand,

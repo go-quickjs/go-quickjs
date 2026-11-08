@@ -191,3 +191,78 @@ func TestJITTypedKindsWant(t *testing.T) {
 		t.Fatal("want has a sum for each type")
 	}
 }
+
+// An element read or write of what a captured binding holding a typed
+// array was found to hold is compiled for that array's type from the first
+// (ssa.UpvalueTypedFeedback), as one of a global's typed array is: an
+// asm.js module's functions read its heap's views, bindings of the module
+// they capture, at every branch, and had been compiled again for each
+// branch's sites as native code came to them and learned their types.
+// Replaced by a view of another type, the binding's sites tell it apart,
+// every answer the interpreter's.
+func TestJITTypedUpvalues(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const setup = `
+		function Module(buffer) {
+			var H32 = new Int32Array(buffer), HU8 = new Uint8Array(buffer), HF64 = new Float64Array(buffer)
+			function branches(k, n) {
+				var s = 0
+				for (var i = 0; i < n; i++) {
+					switch (k) {
+					case 0: if (H32[i & 255] !== 0) s++; break
+					case 1: H32[(i * 3) & 255] = i & 3; s += H32[(i * 7) & 255]; break
+					case 2: if (HU8[i & 1023] === 1) s++; break
+					case 3: HF64[i & 127] = i * 0.5; s += HF64[(i + 1) & 127]; break
+					case 4: HU8[(i * 5) & 1023] = i; s += HU8[i & 1023]; break
+					case 5: if (H32[(i >> 1) & 255] === 1) s++; break
+					}
+				}
+				return s
+			}
+			function swap() { H32 = new Float32Array(buffer); HU8 = new Int16Array(buffer) }
+			for (var i = 0; i < 256; i++) H32[i] = i & 3
+			return { branches: branches, swap: swap }
+		}
+		var m = Module(new ArrayBuffer(1024)), branches = m.branches`
+	rounds := []string{}
+	for k := range 6 {
+		rounds = append(rounds, fmt.Sprintf("branches(%d, 1000)", k))
+	}
+	r := jitAgreesForTest(t, setup, append(append(rounds, "m.swap()"), rounds...)...)
+	if kinds, _ := typedKindCells(t, r, "branches"); kinds == 0 {
+		t.Error("branches' sites learned no type once its bindings held views of others")
+	}
+
+	r = New(Config{JIT: true})
+	// Compiled on the spot, as the counts below are written for, not in
+	// the background (QJS_JIT_STRESS's background).
+	r.jitStress.background = false
+	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	if _, err := r.Run(compileForTest(t, setup)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Run(compileForTest(t, `branches(0, 1000)`)); err != nil {
+		t.Fatal(err)
+	}
+	e := jitNativeForTest(t, r, "branches")
+	reopts, hosts := e.reopts, e.ssaStats.hosts
+	for k := 1; k < 6; k++ {
+		if _, err := r.Run(compileForTest(t, fmt.Sprintf(`branches(%d, 1000)`, k))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if e != jitNativeForTest(t, r, "branches") {
+		t.Fatal("branches' entry was made again")
+	}
+	if n := e.reopts - reopts; n != 0 {
+		t.Errorf("branches was compiled again %d times for its branches' reads and writes", n)
+	}
+	if n := e.ssaStats.hosts - hosts; n > 2 {
+		t.Errorf("branches left native code %d times in 5,000 iterations", n)
+	}
+	if kinds, sites := typedKindCells(t, r, "branches"); kinds != 0 {
+		t.Errorf("branches' %d sites learned element types %#x, compiled for their bindings' types", sites, kinds)
+	}
+}

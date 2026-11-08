@@ -398,9 +398,11 @@ element of a type it was not compiled for; where the cell has no bit of
 it, a call of Go sets it (`ssa.GoTypedSeen`) and marks the code to be
 compiled again once it has spent its budget, as for what an exit taught
 it. A site that has learned nothing, of what a global read found holding a
-typed array (`ssa.GlobalSite`'s `TypedKind`), is compiled for that array's
-type from the first -- Emscripten's heaps, read at every branch, would
-otherwise teach a compile each.
+typed array (`ssa.GlobalSite`'s `TypedKind`), or the read of a captured
+binding holding one as the code is compiled (`ssa.UpvalueTypedFeedback`),
+is compiled for that array's type from the first -- Emscripten's heaps,
+globals or an asm.js module's bindings its functions capture, read at
+every branch, would otherwise teach a compile each.
 
 **Array loops.** A call of `Array.prototype`'s `forEach`, `reduce`,
 `map`, `filter`, `some`, `every`, `find` or `findIndex`, or a typed array's
