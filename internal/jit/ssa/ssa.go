@@ -282,6 +282,14 @@ const (
 	// had left native code at the operator, its operand's unbox failing.
 	OpBoolToF64 // bool -> f64
 	OpBoolToI32 // bool -> i32
+	// OpConstI32 is an int32, Const.Bits its bits: a constant's ToInt32
+	// -- a shift's count, a mask -- or an integer of truncInts'.
+	OpConstI32 // -> i32
+	// OpAddI32 and OpSubI32 are a sum's and a difference's low 32 bits:
+	// the ToInt32 of integers' sum, exact as a double, which wraps as the
+	// int32 one does (truncInts) -- asm.js's (a + b) | 0.
+	OpAddI32 // i32, i32 -> i32
+	OpSubI32 // i32, i32 -> i32
 
 	// OpSameObject guards that an object is the one at Const.Bits, an
 	// address the VM keeps alive: an inlined call's function (inline). With
@@ -597,7 +605,7 @@ var opNames = [...]string{
 	OpAddF64: "addf", OpSubF64: "subf", OpMulF64: "mulf", OpDivF64: "divf", OpModF64: "modf", OpNegF64: "negf", OpCmpF64: "cmpf",
 	OpNot: "not", OpStrictNullish: "strictnullish", OpLooseNullish: "loosenullish", OpEqTagged: "eqtagged", OpToInt32: "toi32", OpAndI32: "and", OpOrI32: "or", OpXorI32: "xor", OpShlI32: "shl",
 	OpSarI32: "sar", OpShrU32: "shr", OpNotI32: "noti", OpMulI32: "muli", OpPrimitive: "primitive", OpClz32: "clz32", OpI32ToF64: "i2f", OpU32ToF64: "u2f",
-	OpBoolToF64: "b2f", OpBoolToI32: "b2i",
+	OpBoolToF64: "b2f", OpBoolToI32: "b2i", OpConstI32: "consti", OpAddI32: "addi", OpSubI32: "subi",
 	OpSameObject: "sameobject", OpFrameRoom: "frameroom", OpTailRoom: "tailroom", OpTailSelf: "tailself", OpSameSymbol: "samesymbol", OpIterClosed: "iterclosed", OpKeepRef: "keepref", OpKeep: "keep", OpKept: "kept",
 	OpCall: "call", OpCallCell: "callcell", OpSqrtF64: "sqrtf", OpAbsF64: "absf", OpInstanceOf: "instanceof", OpTypeIs: "typeis",
 	OpCheckTrue: "checktrue", OpConstCell: "constcell", OpUpvalueCell: "upvaluecell", OpUpvalueStale: "upvaluestale", OpLocalCell: "localcell", OpPowF64: "powf",

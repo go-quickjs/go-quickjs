@@ -81,6 +81,10 @@ rounds:
 		if unboxBigPhis(f) {
 			unboxed = true
 		}
+		// Then the truncated arithmetic of exact integers (ints.go).
+		if truncInts(f) {
+			unboxed = true
+		}
 		first, last, guards = idTable(sc.first, f.nextID), idTable(sc.last, f.nextID), guards[:0]
 		sc.first, sc.last = first, last
 		subst = idTable(subst, f.nextID)
@@ -315,7 +319,28 @@ func simplify(f *Func, v *Value) *Value {
 			b := a.Args[0]
 			v.Op, v.Args = OpBoolToI32, f.refsOf(1)
 			v.Args[0] = b
+		} else if a.Op == OpConstF64 {
+			// A constant's: a shift's count, a mask.
+			v.Op, v.Const, v.Args = OpConstI32, ir.Value{Bits: uint64(ir.ToUint32(math.Float64frombits(a.Const.Bits)))}, nil
 		}
+	case OpI32ToF64, OpU32ToF64:
+		if a := arg(0); a.Op == OpConstI32 {
+			r := apply(v.Op, 0, val{i: uint32(a.Const.Bits)}, val{})
+			v.Op, v.Const, v.Args = OpConstF64, ir.Value{Kind: ir.Number, Bits: math.Float64bits(r.f)}, nil
+		}
+	case OpAndI32, OpOrI32, OpXorI32, OpShlI32, OpSarI32, OpShrU32, OpNotI32, OpMulI32, OpAddI32, OpSubI32:
+		for _, a := range v.Args {
+			if a.Op != OpConstI32 {
+				return nil
+			}
+		}
+		var x, y val
+		x.i = uint32(arg(0).Const.Bits)
+		if len(v.Args) > 1 {
+			y.i = uint32(arg(1).Const.Bits)
+		}
+		r := apply(v.Op, 0, x, y)
+		v.Op, v.Const, v.Args = OpConstI32, ir.Value{Bits: uint64(r.i)}, nil
 	case OpNot:
 		if a := arg(0); a.Op == OpNot {
 			return a.Args[0]

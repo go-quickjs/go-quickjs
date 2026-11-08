@@ -744,7 +744,8 @@ func (c *core) layout() {
 func (c *core) findLazy() error {
 	f := c.f
 	n := f.NumValues()
-	used := c.bools(n) // by an argument, a control or a phi
+	used := c.bools(n)  // by an argument, a control or a phi
+	byPhi := c.bools(n) // by a phi
 	// A slot loaded at an entry and named only by frame states for that same
 	// slot needs no register: an exit leaves that slot as it is.
 	elsewhere := c.bools(n)
@@ -768,6 +769,9 @@ func (c *core) findLazy() error {
 			for _, a := range v.Args {
 				used[a.ID] = true
 				uses[a.ID]++
+				if v.Op == ssa.OpPhi {
+					byPhi[a.ID] = true
+				}
 				if a.Op == ssa.OpLoadSlot {
 					elsewhere[a.ID] = true
 				}
@@ -808,6 +812,13 @@ func (c *core) findLazy() error {
 				c.lazy[v.ID] = true
 			case ssa.OpConst, ssa.OpBoxF64, ssa.OpBoxBool:
 				if !used[v.ID] {
+					c.lazy[v.ID] = true
+				}
+			case ssa.OpConstI32:
+				// Made where it is used, as an immediate where it can be
+				// (truncInts' constants, shifts' counts); a phi's needs
+				// its location.
+				if !byPhi[v.ID] {
 					c.lazy[v.ID] = true
 				}
 			case ssa.OpLoadSlot:

@@ -63,6 +63,18 @@ representation selection takes a phi of Float64 inputs -- its box made
 where a use outside the loop needs it, or by an exit (`unboxPhis`,
 `sinkLoopBoxes`).
 
+**Integers.** The slot IR computes every number as a double, a bitwise
+operator's ToInt32 of its operands and the conversion of its result back
+included; where the uses truncate, the SSA computes in int32s, as V8's
+representation selection computes in Word32 (`ssa/ints.go`). A constant's
+ToInt32 is an int32 constant (`OpConstI32`), which no instruction makes
+unless a phi takes it: an instruction that reads one has it as an
+immediate where it can, a shift's count or a mask. The ToInt32 of a sum,
+a difference, a negation or a product of int32s, uint32s and integer
+constants, exact as a double -- its magnitude's bound below 2^53
+(`exactInt`) -- is the int32 operation (`truncInts`), which wraps as the
+exact result's ToInt32 does: asm.js's `(a + b) | 0` is one add. Phis stay doubles.
+
 **Register allocation.** `mir`'s scan (`allocate`) gives each value an
 interval from its definition to its last use, stretched over every block
 it is live in or out of. A frame state's slot is a use, which keeps the

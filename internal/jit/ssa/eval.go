@@ -266,6 +266,10 @@ func apply(op Op, aux int, a, b val) val {
 		return val{i: ^a.i}
 	case OpMulI32:
 		return val{i: a.i * b.i}
+	case OpAddI32:
+		return val{i: a.i + b.i}
+	case OpSubI32:
+		return val{i: a.i - b.i}
 	case OpClz32:
 		return val{i: uint32(bits.LeadingZeros32(a.i))}
 	case OpI32ToF64:
@@ -658,6 +662,8 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 				vals[v.ID] = val{t: v.Const}
 			case OpConstF64:
 				vals[v.ID] = val{f: math.Float64frombits(v.Const.Bits)}
+			case OpConstI32:
+				vals[v.ID] = val{i: uint32(v.Const.Bits)}
 			case OpConstSource:
 				vals[v.ID] = val{i: uint32(int32(v.Aux))}
 			case OpPrimitive:

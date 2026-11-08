@@ -481,6 +481,8 @@ func (c *a64Compiler) materialize(v *ssa.Value, dst arm64.Reg) {
 		c.boxF64(c.fpr(v.Args[0], a64F1), dst)
 	case ssa.OpBoxBool:
 		c.boxBool(c.gpr(v.Args[0], a64B), dst)
+	case ssa.OpConstI32:
+		c.movImm(dst, v.Const.Bits)
 	default:
 		panic("materialize " + v.Op.String())
 	}
@@ -9150,10 +9152,36 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.Op(a64ALU(v.Op), d, c.gpr(arg(0), a64A), c.gpr(arg(1), a64B), false)
 		c.setG(v, d)
 	case ssa.OpShlI32, ssa.OpSarI32, ssa.OpShrU32:
-		// The W forms take the count modulo 32, as JavaScript does.
+		// The W forms take the count modulo 32, as JavaScript does; a
+		// constant count is the instruction's.
 		d := c.gdst(v)
-		c.a.ShiftReg(a64Shift(v.Op), d, c.gpr(arg(0), a64A), c.gpr(arg(1), a64C), false)
+		if k := arg(1); k.Op == ssa.OpConstI32 {
+			c.a.ShiftImm(a64Shift(v.Op), d, c.gpr(arg(0), a64A), uint8(k.Const.Bits&31), false)
+		} else {
+			c.a.ShiftReg(a64Shift(v.Op), d, c.gpr(arg(0), a64A), c.gpr(k, a64C), false)
+		}
 		c.setG(v, d)
+	case ssa.OpAddI32, ssa.OpSubI32:
+		// As amd64's: the low 32 bits, a constant operand the immediate.
+		d := c.gdst(v)
+		x := c.gpr(arg(0), a64A)
+		k := arg(1)
+		switch {
+		case k.Op == ssa.OpConstI32 && v.Op == ssa.OpAddI32:
+			c.a.AddImm(d, x, int64(int32(uint32(k.Const.Bits))), false)
+		case k.Op == ssa.OpConstI32:
+			c.a.AddImm(d, x, -int64(int32(uint32(k.Const.Bits))), false)
+		case v.Op == ssa.OpAddI32:
+			c.a.Op(arm64.Add, d, x, c.gpr(k, a64B), false)
+		default:
+			c.a.Op(arm64.Sub, d, x, c.gpr(k, a64B), false)
+		}
+		c.setG(v, d)
+	case ssa.OpConstI32:
+		d := c.gdst(v)
+		c.movImm(d, v.Const.Bits)
+		c.setG(v, d)
+
 	case ssa.OpNotI32:
 		c.a.Mvn(a64A, c.gpr(arg(0), a64A), false)
 		c.setG(v, a64A)

@@ -686,6 +686,8 @@ func (c *compiler) materialize(v *ssa.Value, dst amd64.Reg) {
 		c.boxF64(c.xmm(v.Args[0], xScratch1), dst)
 	case ssa.OpBoxBool:
 		c.boxBool(c.gpr(v.Args[0], scratchB), dst)
+	case ssa.OpConstI32:
+		c.movImm(dst, v.Const.Bits)
 	default:
 		panic("materialize " + v.Op.String())
 	}
@@ -10237,13 +10239,35 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.setG(v, scratchA)
 	case ssa.OpToInt32:
 		c.toInt32(v)
-	case ssa.OpAndI32, ssa.OpOrI32, ssa.OpXorI32:
+	case ssa.OpAndI32, ssa.OpOrI32, ssa.OpXorI32, ssa.OpAddI32, ssa.OpSubI32:
+		// A constant operand is the instruction's immediate: the first,
+		// of an operation but a difference, swapped to the second.
 		op := aluOp(v.Op)
-		c.a.MovRR32(scratchA, c.gpr(arg(0), scratchA))
-		c.a.Op(op, scratchA, c.gpr(arg(1), scratchB), false)
+		x, k := arg(0), arg(1)
+		if x.Op == ssa.OpConstI32 && k.Op != ssa.OpConstI32 && v.Op != ssa.OpSubI32 {
+			x, k = k, x
+		}
+		c.a.MovRR32(scratchA, c.gpr(x, scratchA))
+		if k.Op == ssa.OpConstI32 {
+			c.a.OpImm(op, scratchA, int32(uint32(k.Const.Bits)), false)
+		} else {
+			c.a.Op(op, scratchA, c.gpr(k, scratchB), false)
+		}
 		c.setG(v, scratchA)
+	case ssa.OpConstI32:
+		d := c.gdst(v)
+		c.movImm(d, v.Const.Bits)
+		c.setG(v, d)
 	case ssa.OpShlI32, ssa.OpSarI32, ssa.OpShrU32:
 		op := shiftOp(v.Op)
+		if k := arg(1); k.Op == ssa.OpConstI32 {
+			// A constant count, the instruction's: modulo 32, as
+			// JavaScript's.
+			c.a.MovRR32(scratchA, c.gpr(arg(0), scratchA))
+			c.a.ShiftImm(op, scratchA, uint8(k.Const.Bits&31), false)
+			c.setG(v, scratchA)
+			break
+		}
 		c.a.MovRR32(scratchC, c.gpr(arg(1), scratchC))
 		c.a.MovRR32(scratchA, c.gpr(arg(0), scratchA))
 		c.a.ShiftCL(op, scratchA, false)
@@ -10782,6 +10806,10 @@ func aluOp(op ssa.Op) amd64.ALU {
 		return amd64.And
 	case ssa.OpOrI32:
 		return amd64.Or
+	case ssa.OpAddI32:
+		return amd64.Add
+	case ssa.OpSubI32:
+		return amd64.Sub
 	}
 	return amd64.Xor
 }
