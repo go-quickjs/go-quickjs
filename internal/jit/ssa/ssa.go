@@ -953,6 +953,19 @@ func (f *Func) makePresent(s *FrameState) []int32 {
 	return p
 }
 
+// presentOf is a state's present slots l, copied into the workspace if
+// there is one (builder's stateSlots).
+func (f *Func) presentOf(l []int32) []int32 {
+	var p []int32
+	if f.ws != nil {
+		p = f.ws.present.Make(len(l))
+	} else {
+		p = make([]int32, len(l))
+	}
+	copy(p, l)
+	return p
+}
+
 // Own is how many of s's slots are its frame's own -- the caller's and an
 // inlined callee's, the operands, a prologue's arguments -- not the homes
 // past them (Virtual).

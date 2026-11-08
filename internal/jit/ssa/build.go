@@ -3016,6 +3016,8 @@ type builder struct {
 	fb     Feedback
 	f      *Func
 	nslots int
+	// named is where stateSlots lists a state's slots.
+	named []int32
 
 	// root is the function's own frame, cur the one translated now;
 	// inlined are the callees, by the PC of their call; frameOf is each
@@ -6321,6 +6323,47 @@ func (b *builder) nullish(blk *Block, in ir.Instruction, operand func(ir.Operand
 	return c
 }
 
+// stateSlots are the slots, base plus each of the first n of p's frame,
+// that a state at pc names, in order: those live there (ir.Program's
+// LiveAt) and, for the function's own frame (own), not a captured
+// binding's nor a captured local's, which are in their cells -- after
+// those of before, the slots below base the state names already. They
+// are its present slots (Func.Present), made in the workspace. Found from
+// the liveness's words, bit by bit: a state's slots are some three times
+// as many as it names, each tested for each state where it is dead.
+func (b *builder) stateSlots(p *ir.Program, pc, n, base int, own bool, before []int32) []int32 {
+	l := append(b.named[:0], before...)
+	excluded := func(i int) bool {
+		return own && (i >= p.UpvalueBase && i < p.UpvalueBase+p.Upvalues || p.IsCaptured(i))
+	}
+	liveEnd := 0
+	if p.Live != nil {
+		liveEnd = min(n, p.LiveLocals)
+		row := p.Live[pc*p.LiveWords:]
+		for w := 0; w*64 < liveEnd; w++ {
+			word := row[w]
+			if left := liveEnd - w*64; left < 64 {
+				word &= 1<<left - 1
+			}
+			for ; word != 0; word &= word - 1 {
+				if i := w*64 + bits.TrailingZeros64(word); !excluded(i) {
+					l = append(l, int32(base+i))
+				}
+			}
+		}
+	}
+	for i := liveEnd; i < n; i++ {
+		if !excluded(i) {
+			l = append(l, int32(base+i))
+		}
+	}
+	b.named = l[:0]
+	if len(l) == 0 {
+		return noSlots
+	}
+	return b.f.presentOf(l)
+}
+
 // state captures the frame at a PC: every live slot's current value. Inside
 // an inlined callee it is the caller's at the call and the callee's
 // (InlineState).
@@ -6347,17 +6390,16 @@ func (b *builder) frameState(blk *Block, pc int) *FrameState {
 	if fr := b.cur; fr != b.root {
 		call, depth := fr.call, b.p.Maps[pc].Depth
 		s := b.f.newState(FrameState{PC: call.PC, Depth: call.Depth, Site: call.Site, Slots: b.f.refsOf(fr.base + b.p.Locals + depth)})
-		for _, i := range b.f.Present(call) {
+		callSlots := b.f.Present(call)
+		for _, i := range callSlots {
 			v := call.Slots[i]
 			s.Slots[i] = v
 			v.Uses++
 		}
-		for i := fr.base; i < len(s.Slots); i++ {
-			if !b.p.LiveAt(pc, i-fr.base) {
-				// The callee's local, dead there, as the caller's below.
-				continue
-			}
-			s.Slots[i] = b.read(i, blk)
+		// The callee's locals live there, as the caller's below.
+		s.present = b.stateSlots(b.p, pc, b.p.Locals+depth, fr.base, false, callSlots)
+		for _, i := range s.present[len(callSlots):] {
+			s.Slots[i] = b.read(int(i), blk)
 			s.Slots[i].Uses++
 		}
 		s.Inline = b.f.inlineState(InlineState{Parent: call.Inline, Closure: fr.site.Closure, Callee: fr.site.Callee, Base: fr.base, Locals: b.p.Locals, ThisSlot: fr.site.ThisSlot,
@@ -6371,14 +6413,12 @@ func (b *builder) frameState(blk *Block, pc int) *FrameState {
 	depth := b.p.Maps[pc].Depth
 	s := b.f.newState(FrameState{PC: b.p.Maps[pc].PC, Depth: depth, Slots: b.f.refsOf(b.p.Locals + depth), Site: pc})
 	defer b.prologueArgs(s, b.root, pc)
-	for i := range s.Slots {
-		if !b.p.LiveAt(pc, i) || i >= b.p.UpvalueBase && i < b.p.UpvalueBase+b.p.Upvalues || b.p.IsCaptured(i) {
-			// A local the interpreter writes before it reads from here:
-			// not written, nor kept alive for the exit, as V8 leaves dead
-			// registers out of a frame state. Nor is a captured binding,
-			// which is in its cell.
-			continue
-		}
+	// Not a local the interpreter writes before it reads from here: not
+	// written, nor kept alive for the exit, as V8 leaves dead registers out
+	// of a frame state. Nor a captured binding, which is in its cell.
+	s.present = b.stateSlots(b.p, pc, len(s.Slots), 0, true, nil)
+	for _, ix := range s.present {
+		i := int(ix)
 		s.Slots[i] = b.read(i, blk)
 		s.Slots[i].Uses++
 		if b.words != nil && b.words[s.Slots[i]] != nil {
@@ -6422,21 +6462,19 @@ func (b *builder) fill(blk *Block) {
 	if blk.PC < 0 {
 		e, _ := f.entryForBlock(blk)
 		blk.Header = f.newState(FrameState{PC: b.p.Maps[e.PC].PC, Depth: e.Depth, Slots: f.refsOf(b.p.Locals + e.Depth), Site: -1})
-		for i := range blk.Header.Slots {
-			if !b.p.LiveAt(e.PC, i) || i >= b.p.UpvalueBase && i < b.p.UpvalueBase+b.p.Upvalues || b.p.IsCaptured(i) {
-				// A local the interpreter writes before it reads from
-				// here is not loaded, as frame states leave it out: an
-				// entry's state names a slot's own load, which an exit
-				// leaves as it is, and the load had been dead but for
-				// that. Read anyway, it is loaded then (read). Nor is a
-				// captured binding's slot, as frame states leave it out: the
-				// binding is in its cell, read there where it is read
-				// (reloadUpvalues), and the VM's frame has no slot for it.
-				// Loaded at every entry, a function of many bindings and
-				// many calls made a load of each at each, that the entry's
-				// state alone kept: RegExp's runBlock11, 34,767 of them.
-				continue
-			}
+		// A local the interpreter writes before it reads from here is not
+		// loaded, as frame states leave it out: an entry's state names a
+		// slot's own load, which an exit leaves as it is, and the load had
+		// been dead but for that. Read anyway, it is loaded then (read).
+		// Nor is a captured binding's slot, as frame states leave it out:
+		// the binding is in its cell, read there where it is read
+		// (reloadUpvalues), and the VM's frame has no slot for it. Loaded
+		// at every entry, a function of many bindings and many calls made
+		// a load of each at each, that the entry's state alone kept:
+		// RegExp's runBlock11, 34,767 of them.
+		blk.Header.present = b.stateSlots(b.p, e.PC, len(blk.Header.Slots), 0, true, nil)
+		for _, ix := range blk.Header.present {
+			i := int(ix)
 			v := f.newValue(blk, OpLoadSlot, Tagged)
 			v.Aux = i
 			b.write(i, blk, v)
