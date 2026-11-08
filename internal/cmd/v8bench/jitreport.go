@@ -148,6 +148,34 @@ func exitViews(exits []*abi.ExitDescriptor) []exitView {
 	return views
 }
 
+// goCallView is what a call of Go's state says of the call: not the
+// VM's own (LeafForm, which the VM makes at the call's first, and which
+// JSON has no form for: every code with a call of Go had hashed to the
+// error's text), nor the encoding's constants, which every call shares.
+type goCallView struct {
+	Op, Keep  uint64
+	PC, Depth uint32
+	SetsPC    bool
+	Fail      int32
+	Args      []abi.GoCallArg
+	BigScore  int32
+	BigOff    bool
+	LeafSeen  bool
+	Inline    uintptr
+	InlinePC  uint32
+	Leaf      uintptr
+	Unused    bool
+}
+
+// goCallViews are c's calls of Go as goCallViews.
+func goCallViews(calls []*abi.GoCallState) []goCallView {
+	views := make([]goCallView, len(calls))
+	for i, st := range calls {
+		views[i] = goCallView{st.Op, st.Keep, st.PC, st.Depth, st.SetsPC, st.Fail, st.Args, st.BigScore, st.BigOff, st.LeafSeen, st.Inline, st.InlinePC, st.Leaf, st.Unused}
+	}
+	return views
+}
+
 // codeStates is a hash of what c's code is described by. Numbers that may
 // be addresses are left out, and an empty list is a nil one.
 func codeStates(c *mir.Code) string {
@@ -156,9 +184,9 @@ func codeStates(c *mir.Code) string {
 		CallEntry, Resume, GenEntry int
 		CallRefs                    int
 		Calls                       []*abi.CallState
-		GoCalls                     []*abi.GoCallState
+		GoCalls                     []goCallView
 		Exits                       []exitView
-	}{c.Entries, c.CallEntry, c.Resume, c.GenEntry, c.CallRefs, c.Calls, c.GoCalls, exitViews(c.Exits)})
+	}{c.Entries, c.CallEntry, c.Resume, c.GenEntry, c.CallRefs, c.Calls, goCallViews(c.GoCalls), exitViews(c.Exits)})
 	if err != nil {
 		return err.Error()
 	}
