@@ -147,8 +147,10 @@ func differs(p, q *nativeRecord) string {
 	}
 	if p.Arch == "arm64" {
 		// A different length, and every offset the description has, can
-		// be the addresses' doing (a64Parse).
-		if p.Text == q.Text && p.States != q.States {
+		// be the addresses' doing (a64Parse): the descriptions are compared
+		// where each item is as long in both, whatever the code's length
+		// -- loads of different lengths can add up to the same.
+		if p.States != q.States && a64SameLayout(p.Bytes, q.Bytes, p.Text, q.Text) {
 			return "what its calls and exits are described by differs"
 		}
 		if p.Listing != q.Listing {
@@ -206,6 +208,24 @@ next:
 	return ""
 }
 
+// a64SameLayout reports whether a's and b's instructions are items of the
+// same lengths, one by one, so that every offset into them is the same.
+func a64SameLayout(a, b []byte, text, textB int) bool {
+	if text != textB || text > len(a) || textB > len(b) {
+		return false
+	}
+	x, y := a64Parse(a[:text]), a64Parse(b[:textB])
+	if len(x) != len(y) {
+		return false
+	}
+	for i := range x {
+		if x[i].size != y[i].size {
+			return false
+		}
+	}
+	return true
+}
+
 // a64Item is an instruction of arm64's code, with a load of a constant, a
 // movz or a movn and the movks after it, one item.
 type a64Item struct {
@@ -214,6 +234,7 @@ type a64Item struct {
 	load  bool
 	refer bool // to is where it refers
 	to    int  // a branch's target, by item, or past the code, by offset
+	size  int  // the bytes it takes
 }
 
 // a64Parse splits arm64's instructions into items. A load takes as many
@@ -227,10 +248,11 @@ func a64Parse(code []byte) []a64Item {
 	for i := 0; i+4 <= len(code); {
 		w := binary.LittleEndian.Uint32(code[i:])
 		at[i] = len(items)
-		it := a64Item{word: w}
+		it := a64Item{word: w, size: 4}
 		if op := w >> 23 & 0xFF; op == 0xA5 || op == 0x25 { // movz, movn
 			it.load, it.word = true, w&^0x1FFFE0&^(3<<21)
 			it.imm = uint64(w>>5&0xFFFF) << (16 * (w >> 21 & 3))
+			from := i
 			for i += 4; i+4 <= len(code); i += 4 {
 				k := binary.LittleEndian.Uint32(code[i:])
 				if k>>23 != 0x1E5 || k&31 != w&31 {
@@ -238,6 +260,7 @@ func a64Parse(code []byte) []a64Item {
 				}
 				it.imm |= uint64(k>>5&0xFFFF) << (16 * (k >> 21 & 3))
 			}
+			it.size = i - from
 			items, target = append(items, it), append(target, -1)
 			continue
 		}
