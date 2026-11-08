@@ -104,6 +104,15 @@ func index(x float64) (uint64, bool) {
 	return uint64(x), true
 }
 
+// keyOf is the number an element access v's key, b, is: an int32 key's
+// (truncInts) as much as a double's.
+func keyOf(v *Value, b val) float64 {
+	if v.Args[1].Type == Int32 {
+		return float64(int32(b.i))
+	}
+	return b.f
+}
+
 // element is the cell for key in an array view, if it holds a number.
 func element(view ir.ArrayView, key float64) (*uint64, bool) {
 	i, ok := index(key)
@@ -764,12 +773,7 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 				// typed array's element is one of them.
 				return exit(v.State, ir.ExitKind(v.Aux))
 			case OpElemRead, OpElemWrite:
-				key := b.f
-				if v.Args[1].Type == Int32 {
-					// An int32 key (truncInts).
-					key = float64(int32(b.i))
-				}
-				cell, ok := element(arrays[a.p], key)
+				cell, ok := element(arrays[a.p], keyOf(v, b))
 				if !ok {
 					return exit(v.State, ir.ExitKind(v.Aux))
 				}
@@ -787,7 +791,7 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 				// over one is modelled, a reference stored or overwritten
 				// is not, which native code stores.
 				view := arrays[a.p]
-				i, ok := index(b.f)
+				i, ok := index(keyOf(v, b))
 				if !ok || i >= view.DenseLength || view.Data == nil {
 					return exit(v.State, ir.ExitKind(v.Aux))
 				}
@@ -803,7 +807,7 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 				*cell = bits
 			case OpElemCell:
 				view := arrays[a.p]
-				i, ok := index(b.f)
+				i, ok := index(keyOf(v, b))
 				if !ok || i >= view.DenseLength || view.Data == nil {
 					return exit(v.State, ir.ExitKind(v.Aux))
 				}

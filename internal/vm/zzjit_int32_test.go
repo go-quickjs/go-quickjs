@@ -12,8 +12,9 @@ import (
 // made of int32 operations, which wrap as ToInt32 of the exact result
 // does (ssa's truncInts), a comparison of two int32s or two uint32s is
 // theirs, and a constant's ToInt32 is an int32 constant, shifts' counts
-// immediates, and an element read or write whose key is an int32 takes
-// it as it is -- negative, no index. A loop's phi of integers entered with a number past the
+// immediates, and an element access whose key is an int32 -- a read or a
+// write of numbers, a read of any value, a store of any value, a BigInt
+// typed array's -- takes it as it is: negative, no index. A loop's phi of integers entered with a number past the
 // truncation's range -- 2**63 + 2**11, whose ToInt32 is 2048 -- is
 // converted as ToInt32 has it. Each answer is the interpreter's: at the
 // edges where the int32 result wraps, for unsigned operands, for products
@@ -89,6 +90,32 @@ func TestJITTruncatedIntArithmetic(t *testing.T) {
 			grown[((grown.length | 0) + 1) | 0] = b
 			return grown.length * 1000 + Object.keys(grown).length
 		}
+		// Elements read as references, stored whatever they are, and a
+		// BigInt typed array's, by int32 keys: a binary search's
+		// (lo + hi) >> 1, negative, past the length, holes.
+		var objs = [], bigs = new BigInt64Array(16), words = [], sparse = ["a", , "c"]
+		for (var q = 0; q < 16; q++) { objs[q] = { v: q * 7 }; bigs[q] = BigInt(q) * 7919n; words[q] = "w" + q }
+		function keyObject(a, b) {
+			a = a | 0; b = b | 0
+			var o = objs[(a & 15) >> 1], p = objs[(a - b) | 0], s = sparse[(b & 3) | 0], w = words[(a >> 28) | 0]
+			return o.v + (p === undefined ? -1 : p.v) * 100 + (s === undefined ? 5 : s.length) * 10000 + (w === undefined ? 3 : w.length) * 1000000
+		}
+		function keySearch(a, b) {
+			var k = BigInt((a | 0) & 15) * 7919n, lo = 0, hi = 16
+			while (lo < hi) { var mid = (lo + hi) >> 1; if (bigs[mid] < k) lo = mid + 1; else hi = mid }
+			return lo + Number(bigs[((b | 0) & 15) >> 1]) + (bigs[(a | 0) >> 2] === undefined ? 7 : 0)
+		}
+		function keyStore(a, b) {
+			a = a | 0; b = b | 0
+			var t = [{}, "x", 1n, null]
+			t[(a & 3) | 0] = "s" + a
+			t[(b - a) | 0] = t
+			words[(b & 15) >> 1] = { w: a }
+			bigs[(a & 15) >> 1] = BigInt(b)
+			bigs[(b - 2147483647) | 0] = 5n
+			sparse[(a & 1) | 0] = b
+			return t.length * 100 + (typeof t[a & 3]).length + Number(bigs[(a & 15) >> 1]) + (typeof words[(b & 15) >> 1]).length * 1000 + (sparse[1] === undefined ? 7 : 1)
+		}
 		var holes = [1, 2, 3]
 		function keyHole(a, b) {
 			delete holes[1]
@@ -108,7 +135,7 @@ func TestJITTruncatedIntArithmetic(t *testing.T) {
 		function shk(a, b) { a = a | 0; return (a << 32) + (a >> 33) * 3 + (a >>> 63) * 5 + (a >>> 32) }
 		function ushr(a, b) { a = a | 0; return (a >>> 0) + ((a >>> 1) | 0) - (a >>> 31) }
 		function run(f, a, b) { var r = 0; for (var k = 0; k < 400; k++) r = f(a, b); return r }`
-	fns := []string{"add", "sub", "neg", "mul", "mulLeft", "mulBig", "u32", "chain", "shifts", "frac", "big", "loop", "cmp", "cmpu", "cmpk", "mixed", "bounded", "keyArray", "keyHeap", "keyWrite", "keyAppend", "keyGrow", "keyHole", "div", "mod", "modk", "negz", "mulz", "shv", "shk", "ushr"}
+	fns := []string{"add", "sub", "neg", "mul", "mulLeft", "mulBig", "u32", "chain", "shifts", "frac", "big", "loop", "cmp", "cmpu", "cmpk", "mixed", "bounded", "keyArray", "keyHeap", "keyWrite", "keyAppend", "keyGrow", "keyHole", "keyObject", "keySearch", "keyStore", "div", "mod", "modk", "negz", "mulz", "shv", "shk", "ushr"}
 	args := []string{"0", "1", "-1", "2147483647", "-2147483648", "4294967295", "2147483648", "1.5", "-0", "NaN", "Infinity", "-7", "1e300", "9223372036854777856", "-Infinity"}
 	want := New(Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()

@@ -78,8 +78,10 @@ comparison of two such integers -- int32s' conversions, or one and an
 integer constant of the range -- compares int32s (`OpCmpI32`), and one of
 two uint32s' conversions, or of one and a constant of their range,
 compares them unsigned. An element's key that is an int32's conversion is
-the int32: the access reads it sign-extended, an index where it is not
-negative, and a call of Go its double.
+the int32 -- for a read or a write of numbers, a read of any value as a
+reference, a store of any value and a BigInt typed array's read or write:
+the access reads it sign-extended, an index where it is not negative, and
+a call of Go its double.
 
 A loop's phi of doubles that only ever merges int32s -- their
 conversions, integer constants of the range, other such phis, and numbers

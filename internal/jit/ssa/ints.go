@@ -25,11 +25,26 @@ import (
 //     operation, which wraps as ToInt32 of the exact result does
 //     (truncInts);
 //   - a comparison of two int32s' conversions, or two uint32s', is the
-//     int32 comparison (OpCmpI32), and an element read or write of
-//     numbers whose key is an int32's conversion takes the int32;
+//     int32 comparison (OpCmpI32), and an element access whose key is an
+//     int32's conversion takes the int32 (intKeyed);
 //   - a phi of doubles that only ever merges int32s is an int32 phi
 //     (intPhis), as many as a loop's budget of general registers allows
 //     (intPhiBudgets): mir has half as many of those as SSE registers.
+
+// intKeyed reports whether an element access of op takes an int32 key,
+// an int32's conversion: a read or a write of numbers, HEAP32[p >> 2],
+// and as much an element read as a reference, a store of any value and a
+// BigInt typed array's, a[(lo + hi) >> 1] -- each converted the int32 to
+// a double, and the double back to an index, checking it was one. mir's
+// index and typedElement read it sign-extended, an index where it is not
+// negative; a call of Go is given its double (keyBits).
+func intKeyed(op Op) bool {
+	switch op {
+	case OpElemRead, OpElemWrite, OpElemCell, OpElemStore, OpBigElemRead, OpBigElemWrite:
+		return true
+	}
+	return false
+}
 
 // maxExact is the largest magnitude below which every integer is a
 // double: a sum of integers whose magnitudes add up to no more is exact.
@@ -146,7 +161,7 @@ func truncInts(f *Func) bool {
 	for _, b := range f.Blocks {
 		for i := 0; i < len(b.Values); i++ {
 			v := b.Values[i]
-			if k := v.Args; (v.Op == OpElemRead || v.Op == OpElemWrite) && k[1].Op == OpI32ToF64 {
+			if k := v.Args; intKeyed(v.Op) && k[1].Op == OpI32ToF64 {
 				// An element's key that is an int32's conversion: the
 				// int32, an index where it is not negative (mir's index).
 				k[1] = k[1].Args[0]
