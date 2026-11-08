@@ -9071,6 +9071,16 @@ func (c *compiler) typedArray(array *ssa.Value, typed amd64.Label) {
 	c.a.Jcc(amd64.CondNE, typed)
 }
 
+// arrayClass jumps to array if the object of an element read or write of
+// a number compiled for a typed array's element type (ssa.TypedKindOf),
+// from OpIndexedOf, is an Array, whose element it makes out of line. It
+// uses scratchB.
+func (c *compiler) arrayClass(of *ssa.Value, array amd64.Label) {
+	c.a.LoadU8(scratchB, c.gpr(of, scratchB), c.enc.ObjectClass)
+	c.a.OpImm(amd64.Cmp, scratchB, int32(c.enc.ClassArray), false)
+	c.a.Jcc(amd64.CondE, array)
+}
+
 // typedElement finds the element of the typed array array that key's
 // number names, as the VM's typedWrite does, failing unless the view is in
 // its buffer -- Go has looked at it, it does not track a resizable
@@ -9121,6 +9131,17 @@ var typedKinds = [...]struct {
 	{abi.ElemUint8Clamped, 0},
 }
 
+// typedShift is the shift of the size of kind, an element type native
+// code makes (typedKinds).
+func typedShift(kind int32) uint8 {
+	for _, t := range typedKinds {
+		if t.kind == kind {
+			return t.shift
+		}
+	}
+	panic(fmt.Sprintf("mir: no element type %d", kind))
+}
+
 // typedCases emits, for each element type native code makes, a case of
 // the type in scratchC: the element's address into scratchA, then each's
 // own code, which ends where it goes on. Another type jumps to other.
@@ -9137,6 +9158,46 @@ func (c *compiler) typedCases(other amd64.Label, each func(kind int32)) {
 		c.a.Bind(next)
 	}
 	c.a.Jmp(other)
+}
+
+// typedAt turns the index in scratchA into the address of the element of
+// type kind whose view's first element is at scratchB, as typedCases does
+// at kind's case.
+func (c *compiler) typedAt(kind int32) {
+	if shift := typedShift(kind); shift != 0 {
+		c.a.ShiftImm(amd64.Shl, scratchA, shift, true)
+	}
+	c.a.Op(amd64.Add, scratchA, scratchB, true)
+}
+
+// typedSeen has v, an element read or write of a number whose site learns
+// the element types of its typed arrays (ssa.TypedCellOf), learn the one in
+// scratchC, which typedElement found, where the site's cell has no bit of
+// it yet: Go sets the bit (ssa.GoTypedSeen), for the code to be compiled
+// again for it, and the read or write starts again at again, every
+// scratch register written. What it learned it skips at once after, the
+// bit tested in the cell. It keeps scratchA, scratchB and scratchC, and
+// uses xScratch1.
+func (c *compiler) typedSeen(v *ssa.Value, again amd64.Label) {
+	cell := ssa.TypedCellOf(v)
+	if cell == 0 || c.enc.CallGo == 0 {
+		return
+	}
+	known := c.a.NewLabel()
+	c.a.MovQToX(xScratch1, scratchA)
+	c.movImm(scratchA, uint64(cell))
+	c.a.Load(scratchA, scratchA, c.enc.NumOffset)
+	c.a.Bt(scratchA, scratchC)
+	c.a.MovQFromX(scratchA, xScratch1)
+	c.a.Jcc(amd64.CondB, known)
+	size := int32(unsafe.Sizeof(abi.GoArg{}))
+	c.a.Store(regCtx, abi.OffGoArgs+c.enc.RefOffset, c.gpr(v.Args[0], scratchC))
+	c.movImm(scratchA, uint64(cell))
+	c.a.Store(regCtx, abi.OffGoArgs+size+c.enc.RefOffset, scratchA)
+	stub := c.stubLabel(v.State, exitKind(v.Aux))
+	c.goSaving(uint64(ssa.GoTypedSeen), &stub)
+	c.a.Jmp(again)
+	c.a.Bind(known)
 }
 
 // elemStore stores any value in an Array's element (OpElemStore), as
@@ -9215,6 +9276,8 @@ func (c *compiler) elemStore(v *ssa.Value) {
 			// A typed array's element: a number stored natively, converted
 			// to its type, as OpElemWrite stores one.
 			c.a.Bind(typed)
+			again := c.a.NewLabel()
+			c.a.Bind(again)
 			var tw amd64.Reg
 			if remat(x) {
 				c.materialize(x, scratchA)
@@ -9225,7 +9288,7 @@ func (c *compiler) elemStore(v *ssa.Value) {
 			c.cmpWord(tw, abi.NumberLimit)
 			c.a.Jcc(amd64.CondAE, slow)
 			c.a.MovQToX(xScratch2, tw)
-			c.typedWrite(v, done, slow, func() amd64.XReg { return xScratch2 })
+			c.typedWrite(v, done, slow, again, func() amd64.XReg { return xScratch2 }, false)
 		})
 	}
 	c.cold = append(c.cold, func() {
@@ -9270,16 +9333,22 @@ func (c *compiler) elemStore(v *ssa.Value) {
 }
 
 // typedRead reads a typed array's element (OpElemRead) into xScratch0,
-// then jumps to done; Go reads one native code does not (ssa.GoTypedRead),
-// which, if it refuses, exits to v's state.
-func (c *compiler) typedRead(v *ssa.Value, done amd64.Label) {
+// then goes on at done; Go reads one native code does not (ssa.GoTypedRead),
+// which, if it refuses, exits to v's state. A site compiled for one
+// element type (ssa.TypedKindOf) reads it with no other's case, the type
+// checked; any other type it reads as one that met none or several does,
+// the type's case found, out of line if hot -- a read made where the code
+// goes on, which falls through to done -- and after it otherwise.
+func (c *compiler) typedRead(v *ssa.Value, done amd64.Label, hot bool) {
 	stub := c.stubLabel(v.State, exitKind(v.Aux))
 	slow := stub
 	if c.enc.CallGo != 0 {
 		slow = c.a.NewLabel()
 	}
+	again := c.a.NewLabel()
+	c.a.Bind(again)
 	c.typedElement(v.Args[0], v.Args[1], false, guardLabel(c, slow))
-	c.typedCases(slow, func(kind int32) {
+	read := func(kind int32) {
 		switch kind {
 		case abi.ElemInt8:
 			c.a.LoadS8(scratchA, scratchA, 0)
@@ -9297,38 +9366,65 @@ func (c *compiler) typedRead(v *ssa.Value, done amd64.Label) {
 			c.a.LoadU32(scratchA, scratchA, 0)
 			c.a.MovQToX(xScratch0, scratchA)
 			c.a.Cvtss2sd(xScratch0, xScratch0)
-			c.a.Jmp(done)
 			return
 		case abi.ElemFloat64:
 			c.a.LoadSD(xScratch0, scratchA, 0)
-			c.a.Jmp(done)
 			return
 		}
 		c.a.Cvtsi2sd(xScratch0, scratchA, true)
+	}
+	generic := func() {
+		c.typedSeen(v, again)
+		c.typedCases(slow, func(kind int32) {
+			read(kind)
+			c.a.Jmp(done)
+		})
+		if c.enc.CallGo == 0 {
+			return
+		}
+		c.a.Bind(slow)
+		size := int32(unsafe.Sizeof(abi.GoArg{}))
+		c.a.Store(regCtx, abi.OffGoArgs+c.enc.RefOffset, c.gpr(v.Args[0], scratchC))
+		c.a.MovQFromX(scratchA, c.xmm(v.Args[1], xScratch0))
+		c.a.Store(regCtx, abi.OffGoArgs+size+c.enc.NumOffset, scratchA)
+		c.goSaving(uint64(ssa.GoTypedRead), &stub)
+		c.a.LoadSD(xScratch0, regCtx, abi.OffGoArgs+c.enc.NumOffset)
 		c.a.Jmp(done)
-	})
-	if c.enc.CallGo == 0 {
+	}
+	kind := ssa.TypedKindOf(v)
+	if kind < 0 {
+		generic()
 		return
 	}
-	c.a.Bind(slow)
-	size := int32(unsafe.Sizeof(abi.GoArg{}))
-	c.a.Store(regCtx, abi.OffGoArgs+c.enc.RefOffset, c.gpr(v.Args[0], scratchC))
-	c.a.MovQFromX(scratchA, c.xmm(v.Args[1], xScratch0))
-	c.a.Store(regCtx, abi.OffGoArgs+size+c.enc.NumOffset, scratchA)
-	c.goSaving(uint64(ssa.GoTypedRead), &stub)
-	c.a.LoadSD(xScratch0, regCtx, abi.OffGoArgs+c.enc.NumOffset)
+	other := c.a.NewLabel()
+	c.a.OpImm(amd64.Cmp, scratchC, kind, false)
+	c.a.Jcc(amd64.CondNE, other)
+	c.typedAt(kind)
+	read(kind)
+	if hot {
+		c.cold = append(c.cold, func() {
+			c.a.Bind(other)
+			generic()
+		})
+		return
+	}
 	c.a.Jmp(done)
+	c.a.Bind(other)
+	generic()
 }
 
 // typedWrite stores a number in a typed array's element (OpElemWrite),
-// converted to its type, then jumps to done; what it does not store --
+// converted to its type, then goes on at done; what it does not store --
 // a conversion it does not make, a view it does not find in its buffer --
-// goes to slow.
-// The value is in the register value gives, a double.
-func (c *compiler) typedWrite(v *ssa.Value, done, slow amd64.Label, value func() amd64.XReg) {
+// goes to slow. The value is in the register value gives, a double; again
+// is where the store may start again, which it does once it has learned
+// an element type (typedSeen). A site compiled for one element type
+// stores it as typedRead reads one: inline if hot, falling through to
+// done.
+func (c *compiler) typedWrite(v *ssa.Value, done, slow, again amd64.Label, value func() amd64.XReg, hot bool) {
 	fail := guardLabel(c, slow)
 	c.typedElement(v.Args[0], v.Args[1], true, fail)
-	c.typedCases(slow, func(kind int32) {
+	write := func(kind int32) {
 		x := value()
 		switch kind {
 		case abi.ElemFloat64:
@@ -9379,8 +9475,34 @@ func (c *compiler) typedWrite(v *ssa.Value, done, slow amd64.Label, value func()
 				c.a.Store32(scratchA, 0, scratchB)
 			}
 		}
-		c.a.Jmp(done)
-	})
+	}
+	generic := func() {
+		c.typedSeen(v, again)
+		c.typedCases(slow, func(kind int32) {
+			write(kind)
+			c.a.Jmp(done)
+		})
+	}
+	kind := ssa.TypedKindOf(v)
+	if kind < 0 {
+		generic()
+		return
+	}
+	other := c.a.NewLabel()
+	c.a.OpImm(amd64.Cmp, scratchC, kind, false)
+	c.a.Jcc(amd64.CondNE, other)
+	c.typedAt(kind)
+	write(kind)
+	if hot {
+		c.cold = append(c.cold, func() {
+			c.a.Bind(other)
+			generic()
+		})
+		return
+	}
+	c.a.Jmp(done)
+	c.a.Bind(other)
+	generic()
 }
 
 // elementCell turns the index in scratchA into the address of an array's
@@ -10066,6 +10188,23 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.index(arg(0), c.guardFor(v))
 	case ssa.OpElemRead:
 		typed, done := c.a.NewLabel(), c.a.NewLabel()
+		if ssa.TypedKindOf(v) >= 0 {
+			// A site that met typed arrays of one element type: theirs
+			// inline, an Array's out of line.
+			guard := c.guardFor(v)
+			c.arrayClass(arg(0), typed)
+			c.typedRead(v, done, true)
+			c.a.Bind(done)
+			c.cold = append(c.cold, func() {
+				c.a.Bind(typed)
+				c.index(v.Args[1], guard)
+				c.element(v.Args[0], guard)
+				c.a.MovQToX(xScratch0, scratchB)
+				c.a.Jmp(done)
+			})
+			c.setX(v, xScratch0)
+			break
+		}
 		c.typedArray(arg(0), typed)
 		c.index(arg(1), c.guardFor(v))
 		c.element(arg(0), c.guardFor(v))
@@ -10073,7 +10212,7 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.Bind(done)
 		c.cold = append(c.cold, func() {
 			c.a.Bind(typed)
-			c.typedRead(v, done)
+			c.typedRead(v, done, false)
 		})
 		c.setX(v, xScratch0)
 	case ssa.OpElemCell:
@@ -10132,9 +10271,32 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 			})
 		}
 		fail := guardLabel(c, slow)
+		value := func() amd64.XReg { return c.xmm(v.Args[2], xScratch0) }
+		if ssa.TypedKindOf(v) >= 0 {
+			// A site that met typed arrays of one element type: theirs
+			// inline, an Array's out of line.
+			again := c.a.NewLabel()
+			c.arrayClass(arg(0), typed)
+			c.a.Bind(again)
+			c.typedWrite(v, done, slow, again, value, true)
+			c.cold = append(c.cold, func() {
+				c.a.Bind(typed)
+				c.index(v.Args[1], fail)
+				c.a.TestMem8(c.gpr(v.Args[0], scratchC), c.enc.ObjectFlags, c.enc.FlagShared)
+				fail.jump(amd64.CondNE)
+				c.element(v.Args[0], fail)
+				c.boxF64(c.xmm(v.Args[2], xScratch0), scratchB)
+				c.a.Store(scratchA, c.enc.NumOffset, scratchB)
+				c.a.Jmp(done)
+			})
+			c.a.Bind(done)
+			break
+		}
 		c.cold = append(c.cold, func() {
 			c.a.Bind(typed)
-			c.typedWrite(v, done, slow, func() amd64.XReg { return c.xmm(v.Args[2], xScratch0) })
+			again := c.a.NewLabel()
+			c.a.Bind(again)
+			c.typedWrite(v, done, slow, again, value, false)
 		})
 		c.typedArray(arg(0), typed)
 		c.index(arg(1), fail)

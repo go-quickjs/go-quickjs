@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/bits"
 	"slices"
 	"strconv"
 	"strings"
@@ -1515,7 +1516,7 @@ func (b *builder) stringReceiver(pc int) bool {
 // (typedRead), or one of what a global read found holding a typed array
 // (GlobalSite's Typed).
 func (b *builder) typedReceiver(pc int, recv *Value) bool {
-	return b.typedArrays[recv] || b.typedRead(pc)
+	return b.typedArrays[recv] != 0 || b.typedRead(pc)
 }
 
 // typedRead reports whether the element read at pc has met typed arrays
@@ -1523,6 +1524,86 @@ func (b *builder) typedReceiver(pc int, recv *Value) bool {
 func (b *builder) typedRead(pc int) bool {
 	f, ok := b.fb.(ElementFeedback)
 	return ok && f.TypedRead(pc)
+}
+
+// TypedKindFeedback is Feedback that knows, for an element read or write
+// of a number at a PC, the element types of the typed arrays it has met
+// (TypedSite): one that met a single type native code reads and writes
+// is compiled for it, inline, the type checked, an Array's element out of
+// line -- as V8's keyed loads and stores follow their feedback's elements
+// kind -- and one that met none, or several, tells them apart as it runs.
+type TypedKindFeedback interface {
+	TypedKind(pc int) (TypedSite, bool)
+}
+
+// TypedSite is what an element read or write of a number has met of typed
+// arrays: Kinds has bit 1<<k for each element type k (abi's Elem
+// constants) it met. Cell is the address of a word, the VM's, that native
+// code reads Kinds from as it runs and that Go sets another bit of
+// (GoTypedSeen), which the code is compiled again for: a site's kinds are
+// learned as its code runs, native code being the first to see most of
+// them.
+type TypedSite struct {
+	Kinds uint16
+	Cell  uintptr
+}
+
+// typedSite gives v, an element read or write of a number at pc (OpElemRead,
+// OpElemWrite, OpElemStore), what its site has met of typed arrays
+// (TypedKindFeedback): its Const the site's cell, as an Opaque constant,
+// and its Key the element type plus one where that is a single type native
+// code makes (TypedKindOf).
+func (b *builder) typedSite(pc int, v *Value) {
+	f, ok := b.fb.(TypedKindFeedback)
+	if !ok {
+		return
+	}
+	s, ok := f.TypedKind(pc)
+	if !ok || s.Cell == 0 {
+		return
+	}
+	v.Const = ir.Value{Kind: ir.Opaque, Bits: uint64(s.Cell)}
+	if s.Kinds == 0 {
+		// A site that has learned nothing, of what a global read found
+		// holding a typed array: compiled for its type, which is the one
+		// to learn if the site meets another.
+		if g := b.typedArrays[v.Args[0].Args[0]]; g != 0 && g != typedAny {
+			s.Kinds = 1 << (g - 1)
+		}
+	}
+	if k := s.Kinds; k != 0 && k&(k-1) == 0 {
+		if kind := uint32(bits.TrailingZeros16(k)); nativeTyped(kind) {
+			v.Key = kind + 1
+		}
+	}
+}
+
+// typedAny is a builder's typedArrays' mark of a typed array whose element
+// type the global read's site did not say.
+const typedAny = 0xFF
+
+// nativeTyped reports whether native code reads and writes elements of
+// type kind (abi's Elem constants) as numbers: every type but Float16's
+// and the BigInt ones.
+func nativeTyped(kind uint32) bool {
+	return kind <= abi.ElemFloat64 && kind != abi.ElemFloat16
+}
+
+// TypedKindOf is the element type an element read or write of a number
+// (OpElemRead, OpElemWrite, OpElemStore) is compiled for (typedSite), or
+// -1 for any: the type its site has met alone.
+func TypedKindOf(v *Value) int32 {
+	return int32(v.Key) - 1
+}
+
+// TypedCellOf is the address of the cell an element read or write of a
+// number learns the element types of its typed arrays in (TypedSite's
+// Cell), or 0 for one that learns none.
+func TypedCellOf(v *Value) uintptr {
+	if v.Const.Kind != ir.Opaque {
+		return 0
+	}
+	return uintptr(v.Const.Bits)
 }
 
 // keyedRead reports whether the element read at pc is made by Go from
@@ -2106,6 +2187,14 @@ type GoOp uint8
 // code calls a fast API function with no frame of JavaScript's, and
 // writes its result to the call's keep cell; what it refuses leaves for Go
 // to make the call after an exit.
+//
+// GoTypedSeen is an element read or write of a number (OpElemRead,
+// OpElemWrite, OpElemStore) that met a typed array of an element type its
+// site's cell (TypedSite's Cell), the second operand's pointer word, has
+// no bit of, the typed array the first operand: Go sets the type's bit in
+// the cell, and has the code compiled again, for that type, once it has
+// spent its budget, as V8's baseline code records a keyed access's
+// elements kind in its feedback. It never refuses.
 const (
 	GoAdd GoOp = 1 + iota
 	GoRefill
@@ -2143,6 +2232,7 @@ const (
 	GoHost
 	GoStringAbsent
 	GoIterResult
+	GoTypedSeen
 )
 
 // GoNewArray's flags, in its CallSite's Argc. With NewArraySort, the
@@ -2555,7 +2645,9 @@ func (b *builder) inlineExit(pc int) bool {
 // Emscripten's code reads its heap through such globals, at every branch:
 // learned at each read's exit instead, in turn, a function was compiled
 // again for each, a dozen times, as each invocation of it came to one
-// more.
+// more. TypedKind is that typed array's element type plus one: an element
+// read or write of a number of what the read found, at a site that has
+// learned no type of its own (TypedKindFeedback), is compiled for it.
 //
 // Epoch, for a read of the global object's own binding, is one more than
 // the VM's count of changes to the global object's bindings other than
@@ -2573,6 +2665,7 @@ type GlobalSite struct {
 	Holder     uintptr
 	Shadowable bool
 	Typed      bool
+	TypedKind  uint8
 	Epoch      uint32
 	Scope      uintptr
 }
@@ -2907,9 +3000,10 @@ type builder struct {
 	// closure; madeCalls the closures their inlining leaves unmade.
 	called    map[int]int
 	madeCalls map[int]*MadeCallback
-	// typedArrays are the global reads whose bindings held typed arrays
+	// typedArrays are the global reads whose bindings held typed arrays,
+	// each the element type plus one (GlobalSite's TypedKind), or typedAny
 	// (GlobalSite's Typed), which element reads of them read as such.
-	typedArrays map[*Value]bool
+	typedArrays map[*Value]uint8
 	frameOf     []*frame
 	// stale are the captured bindings' and captured locals' markers
 	// (OpUpvalueStale), by slot; here is the block of the instruction
@@ -6844,7 +6938,9 @@ func (b *builder) instruction(blk *Block, pc int) {
 			// A typed array's number; Go reads any other's.
 			array := guard(OpIndexedOf, Ptr, ir.HostExit, operand(in.Left))
 			key, _ := keyOf(ir.HostExit)
-			b.assign(in.Dest, blk, boxF(guard(OpElemRead, Float64, ir.HostExit, array, key)))
+			elem := guard(OpElemRead, Float64, ir.HostExit, array, key)
+			b.typedSite(pc, elem)
+			b.assign(in.Dest, blk, boxF(elem))
 			break
 		}
 		if in.Reference && in.Op == ir.ArrayRead && b.keyedRead(pc) {
@@ -6875,6 +6971,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 		array := guard(OpIndexedOf, Ptr, ir.GuardExit, operand(in.Left))
 		key, updated := keyOf(ir.GuardExit)
 		elem := guard(OpElemRead, Float64, ir.GuardExit, array, key)
+		b.typedSite(pc, elem)
 		if updated != nil {
 			b.assign(in.Extra, blk, boxF(updated))
 		}
@@ -6923,10 +7020,10 @@ func (b *builder) instruction(blk *Block, pc int) {
 		array := guard(OpIndexedOf, Ptr, ir.HostExit, operand(in.Left))
 		key := number(in.Right, ir.HostExit)
 		if o := in.Third; o.Slot < 0 && o.Literal.Kind == ir.Number {
-			guard(OpElemWrite, None, ir.HostExit, array, key, number(o, ir.HostExit))
+			b.typedSite(pc, guard(OpElemWrite, None, ir.HostExit, array, key, number(o, ir.HostExit)))
 			break
 		}
-		guard(OpElemStore, None, ir.HostExit, array, key, operand(in.Third))
+		b.typedSite(pc, guard(OpElemStore, None, ir.HostExit, array, key, operand(in.Third)))
 	case ir.StringMethod:
 		cell := guard(OpStringMethod, Source, ir.HostExit, operand(in.Left))
 		v := f.newValue(blk, OpLoadCell, Tagged, cell)
@@ -6958,9 +7055,12 @@ func (b *builder) instruction(blk *Block, pc int) {
 		v.Shadow = cell
 		if site.Typed {
 			if b.typedArrays == nil {
-				b.typedArrays = map[*Value]bool{}
+				b.typedArrays = map[*Value]uint8{}
 			}
-			b.typedArrays[v] = true
+			b.typedArrays[v] = site.TypedKind
+			if site.TypedKind == 0 {
+				b.typedArrays[v] = typedAny
+			}
 		}
 		b.assign(in.Dest, blk, v)
 	case ir.PropertyRead, ir.PropertyWrite, ir.ReferenceRead:

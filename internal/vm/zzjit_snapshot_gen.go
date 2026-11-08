@@ -60,14 +60,15 @@ const (
 	snapGlobal
 	snapStringProperty
 	snapProperty
+	snapTypedKind
 	snapVirtualRoot
 )
 
 // jitSnapAtPC says which methods' argument is a PC.
-var jitSnapAtPC = [...]bool{true, true, true, true, false, true, true, false, false, true, true, false, true, true, true, true, true, true, true, true, true, true, true, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true, false, true, true, true, true, true, false, true, true, true, true, true, true, false}
+var jitSnapAtPC = [...]bool{true, true, true, true, false, true, true, false, false, true, true, false, true, true, true, true, true, true, true, true, true, true, true, false, false, false, false, false, false, false, true, true, true, true, true, true, true, true, false, true, true, true, true, true, false, true, true, true, true, true, true, true, false}
 
 // jitSnapNames are the methods' names, by jitSnapMethod.
-var jitSnapNames = [...]string{"Accessor", "TypedBigRead", "Frequency", "GenSteps", "GenNext", "InlineExit", "KeyedWrite", "MapNexts", "PureBody", "StringCell", "StringContent", "TypeofCells", "BigIntCell", "Literal", "Closure", "Define", "CharCode", "Substring", "FromCharCode", "Intrinsic", "InstanceOf", "Inline", "NativeCalls", "CellsPool", "KeepLimit", "ArrayProtos", "HasCache", "KeyAtoms", "GoCalls", "WalkedCloseCell", "StringRead", "TypedRead", "KeyedRead", "ForEach", "CalledClosure", "CallShape", "IndexOf", "Leaf", "LeafKind", "BigString", "ParseInt", "BigInt", "BigIntWide", "BigIntFailed", "BigIntSole", "Generic", "EntryGeneric", "Resumed", "Global", "StringProperty", "Property", "VirtualRoot"}
+var jitSnapNames = [...]string{"Accessor", "TypedBigRead", "Frequency", "GenSteps", "GenNext", "InlineExit", "KeyedWrite", "MapNexts", "PureBody", "StringCell", "StringContent", "TypeofCells", "BigIntCell", "Literal", "Closure", "Define", "CharCode", "Substring", "FromCharCode", "Intrinsic", "InstanceOf", "Inline", "NativeCalls", "CellsPool", "KeepLimit", "ArrayProtos", "HasCache", "KeyAtoms", "GoCalls", "WalkedCloseCell", "StringRead", "TypedRead", "KeyedRead", "ForEach", "CalledClosure", "CallShape", "IndexOf", "Leaf", "LeafKind", "BigString", "ParseInt", "BigInt", "BigIntWide", "BigIntFailed", "BigIntSole", "Generic", "EntryGeneric", "Resumed", "Global", "StringProperty", "Property", "TypedKind", "VirtualRoot"}
 
 func (s *jitSnapshot) Accessor(pc int) (r0 ssa.AccessorSite, r1 bool) {
 	a := s.get(snapAccessor, int64(pc))
@@ -567,6 +568,16 @@ func (s *jitSnapshot) Property(pc int) (r0 ssa.PropertySite, r1 bool) {
 	return r0, r1
 }
 
+func (s *jitSnapshot) TypedKind(pc int) (r0 ssa.TypedSite, r1 bool) {
+	a := s.get(snapTypedKind, int64(pc))
+	if a == nil {
+		return
+	}
+	r0, _ = a[0].(ssa.TypedSite)
+	r1, _ = a[1].(bool)
+	return r0, r1
+}
+
 func (s *jitSnapshot) VirtualRoot(pool uintptr) (r0 uintptr, r1 uintptr, r2 bool) {
 	a := s.get(snapVirtualRoot, int64(pool))
 	if a == nil {
@@ -1009,6 +1020,15 @@ func jitSnapAskProperty(s *jitSnapshot, fb *jitFeedback, pc int) {
 	}
 }
 
+func jitSnapAskTypedKind(s *jitSnapshot, fb *jitFeedback, pc int) {
+	before := s.begin(fb)
+	r0, r1 := fb.TypedKind(pc)
+	s.end(fb, before, snapTypedKind, int64(pc))
+	if jitSnapAnswered(r1) {
+		s.put(snapTypedKind, int64(pc), r0, r1)
+	}
+}
+
 // jitSnapAskers are the askers by method, nil for one of another argument.
 var jitSnapAskers [len(jitSnapNames)]func(s *jitSnapshot, fb *jitFeedback, pc int)
 
@@ -1053,5 +1073,6 @@ func init() {
 		snapGlobal:         jitSnapAskGlobal,
 		snapStringProperty: jitSnapAskStringProperty,
 		snapProperty:       jitSnapAskProperty,
+		snapTypedKind:      jitSnapAskTypedKind,
 	}
 }

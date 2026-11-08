@@ -8107,6 +8107,15 @@ func (c *a64Compiler) typedArray(array *ssa.Value, typed arm64.Label) {
 	c.a.BCond(arm64.NE, typed)
 }
 
+// arrayClass jumps to array if the object of an element read or write of
+// a number compiled for a typed array's element type, from OpIndexedOf,
+// is an Array, as amd64's. It uses B.
+func (c *a64Compiler) arrayClass(of *ssa.Value, array arm64.Label) {
+	c.a.LoadU8(a64B, c.gpr(of, a64B), c.enc.ObjectClass)
+	c.a.CmpImm(a64B, int64(c.enc.ClassArray), false)
+	c.a.BCond(arm64.EQ, array)
+}
+
 // typedElement finds a typed array's element, as amd64's: its address in
 // A, the view's element type in C. It uses A, B, C, D and F1.
 func (c *a64Compiler) typedElement(array, key *ssa.Value, store bool, fail a64Guard) {
@@ -8154,6 +8163,39 @@ func (c *a64Compiler) typedCases(other arm64.Label, each func(kind int32)) {
 		c.a.Bind(next)
 	}
 	c.a.B(other)
+}
+
+// typedAt turns the index in A into the address of the element of type
+// kind whose view's first element is at B, as amd64's.
+func (c *a64Compiler) typedAt(kind int32) {
+	if shift := typedShift(kind); shift != 0 {
+		c.a.ShiftImm(arm64.Lsl, a64A, a64A, shift, true)
+	}
+	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+}
+
+// typedSeen has v learn the element type in C where its site's cell has
+// no bit of it yet, as amd64's, starting again at again once Go has set
+// it. It keeps A, B and C, and uses D.
+func (c *a64Compiler) typedSeen(v *ssa.Value, again arm64.Label) {
+	cell := ssa.TypedCellOf(v)
+	if cell == 0 || c.enc.CallGo == 0 {
+		return
+	}
+	known := c.a.NewLabel()
+	c.movImm(a64D, uint64(cell))
+	c.a.Load(a64D, a64D, c.enc.NumOffset)
+	c.a.ShiftReg(arm64.Lsr, a64D, a64D, a64C, true)
+	c.a.ShiftImm(arm64.Lsl, a64D, a64D, 63, true)
+	c.a.Cbnz(a64D, known, true)
+	size := int32(unsafe.Sizeof(abi.GoArg{}))
+	c.a.Store(a64Ctx, abi.OffGoArgs+c.enc.RefOffset, c.gpr(v.Args[0], a64C))
+	c.movImm(a64A, uint64(cell))
+	c.a.Store(a64Ctx, abi.OffGoArgs+size+c.enc.RefOffset, a64A)
+	stub := c.stubLabel(v.State, exitKind(v.Aux))
+	c.goSaving(uint64(ssa.GoTypedSeen), &stub)
+	c.a.B(again)
+	c.a.Bind(known)
 }
 
 // elemStore stores any value in an Array's element, as amd64's, the
@@ -8222,6 +8264,8 @@ func (c *a64Compiler) elemStore(v *ssa.Value) {
 		c.cold = append(c.cold, func() {
 			// A typed array's element: a number stored natively, as amd64's.
 			c.a.Bind(typed)
+			again := c.a.NewLabel()
+			c.a.Bind(again)
 			var tw arm64.Reg
 			if remat(x) {
 				c.materialize(x, a64A)
@@ -8233,7 +8277,7 @@ func (c *a64Compiler) elemStore(v *ssa.Value) {
 			c.a.Cmp(tw, a64B, true)
 			c.a.BCond(arm64.HS, slow)
 			c.a.FMovToF(a64F2, tw)
-			c.typedWrite(v, done, slow, func() arm64.FReg { return a64F2 })
+			c.typedWrite(v, done, slow, again, func() arm64.FReg { return a64F2 }, false)
 		})
 	}
 	c.cold = append(c.cold, func() {
@@ -8260,15 +8304,18 @@ func (c *a64Compiler) elemStore(v *ssa.Value) {
 	})
 }
 
-// typedRead reads a typed array's element into F0, as amd64's.
-func (c *a64Compiler) typedRead(v *ssa.Value, done arm64.Label) {
+// typedRead reads a typed array's element into F0, as amd64's: inline
+// for the one element type its site met, if hot.
+func (c *a64Compiler) typedRead(v *ssa.Value, done arm64.Label, hot bool) {
 	stub := c.stubLabel(v.State, exitKind(v.Aux))
 	slow := stub
 	if c.enc.CallGo != 0 {
 		slow = c.a.NewLabel()
 	}
+	again := c.a.NewLabel()
+	c.a.Bind(again)
 	c.typedElement(v.Args[0], v.Args[1], false, a64GuardLabel(c, slow))
-	c.typedCases(slow, func(kind int32) {
+	read := func(kind int32) {
 		switch kind {
 		case abi.ElemInt8:
 			c.a.LoadS8(a64A, a64A, 0)
@@ -8285,35 +8332,60 @@ func (c *a64Compiler) typedRead(v *ssa.Value, done arm64.Label) {
 		case abi.ElemFloat32:
 			c.a.LoadS(a64F0, a64A, 0)
 			c.a.FCvtFromSingle(a64F0, a64F0)
-			c.a.B(done)
 			return
 		case abi.ElemFloat64:
 			c.a.LoadF(a64F0, a64A, 0)
-			c.a.B(done)
 			return
 		}
 		c.a.Scvtf(a64F0, a64A, true)
+	}
+	generic := func() {
+		c.typedSeen(v, again)
+		c.typedCases(slow, func(kind int32) {
+			read(kind)
+			c.a.B(done)
+		})
+		if c.enc.CallGo == 0 {
+			return
+		}
+		c.a.Bind(slow)
+		size := int32(unsafe.Sizeof(abi.GoArg{}))
+		c.a.Store(a64Ctx, abi.OffGoArgs+c.enc.RefOffset, c.gpr(v.Args[0], a64C))
+		c.a.FMovFromF(a64A, c.fpr(v.Args[1], a64F0))
+		c.a.Store(a64Ctx, abi.OffGoArgs+size+c.enc.NumOffset, a64A)
+		c.goSaving(uint64(ssa.GoTypedRead), &stub)
+		c.a.LoadF(a64F0, a64Ctx, abi.OffGoArgs+c.enc.NumOffset)
 		c.a.B(done)
-	})
-	if c.enc.CallGo == 0 {
+	}
+	kind := ssa.TypedKindOf(v)
+	if kind < 0 {
+		generic()
 		return
 	}
-	c.a.Bind(slow)
-	size := int32(unsafe.Sizeof(abi.GoArg{}))
-	c.a.Store(a64Ctx, abi.OffGoArgs+c.enc.RefOffset, c.gpr(v.Args[0], a64C))
-	c.a.FMovFromF(a64A, c.fpr(v.Args[1], a64F0))
-	c.a.Store(a64Ctx, abi.OffGoArgs+size+c.enc.NumOffset, a64A)
-	c.goSaving(uint64(ssa.GoTypedRead), &stub)
-	c.a.LoadF(a64F0, a64Ctx, abi.OffGoArgs+c.enc.NumOffset)
+	other := c.a.NewLabel()
+	c.a.CmpImm(a64C, int64(kind), false)
+	c.a.BCond(arm64.NE, other)
+	c.typedAt(kind)
+	read(kind)
+	if hot {
+		c.cold = append(c.cold, func() {
+			c.a.Bind(other)
+			generic()
+		})
+		return
+	}
 	c.a.B(done)
+	c.a.Bind(other)
+	generic()
 }
 
 // typedWrite stores a number in a typed array's element, as amd64's.
-// The value is in the register value gives, a double.
-func (c *a64Compiler) typedWrite(v *ssa.Value, done, slow arm64.Label, value func() arm64.FReg) {
+// The value is in the register value gives, a double; again is where the
+// store may start again.
+func (c *a64Compiler) typedWrite(v *ssa.Value, done, slow, again arm64.Label, value func() arm64.FReg, hot bool) {
 	fail := a64GuardLabel(c, slow)
 	c.typedElement(v.Args[0], v.Args[1], true, fail)
-	c.typedCases(slow, func(kind int32) {
+	write := func(kind int32) {
 		x := value()
 		switch kind {
 		case abi.ElemFloat64:
@@ -8361,8 +8433,34 @@ func (c *a64Compiler) typedWrite(v *ssa.Value, done, slow arm64.Label, value fun
 				c.a.Store32(a64A, 0, a64B)
 			}
 		}
-		c.a.B(done)
-	})
+	}
+	generic := func() {
+		c.typedSeen(v, again)
+		c.typedCases(slow, func(kind int32) {
+			write(kind)
+			c.a.B(done)
+		})
+	}
+	kind := ssa.TypedKindOf(v)
+	if kind < 0 {
+		generic()
+		return
+	}
+	other := c.a.NewLabel()
+	c.a.CmpImm(a64C, int64(kind), false)
+	c.a.BCond(arm64.NE, other)
+	c.typedAt(kind)
+	write(kind)
+	if hot {
+		c.cold = append(c.cold, func() {
+			c.a.Bind(other)
+			generic()
+		})
+		return
+	}
+	c.a.B(done)
+	c.a.Bind(other)
+	generic()
 }
 
 // elementCell turns the index in A into the address of an array's element
@@ -8998,6 +9096,23 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.index(arg(0), c.guardFor(v))
 	case ssa.OpElemRead:
 		typed, done := c.a.NewLabel(), c.a.NewLabel()
+		if ssa.TypedKindOf(v) >= 0 {
+			// A site that met typed arrays of one element type: theirs
+			// inline, an Array's out of line.
+			guard := c.guardFor(v)
+			c.arrayClass(arg(0), typed)
+			c.typedRead(v, done, true)
+			c.a.Bind(done)
+			c.cold = append(c.cold, func() {
+				c.a.Bind(typed)
+				c.index(v.Args[1], guard)
+				c.element(v.Args[0], guard)
+				c.a.FMovToF(a64F0, a64B)
+				c.a.B(done)
+			})
+			c.setF(v, a64F0)
+			break
+		}
 		c.typedArray(arg(0), typed)
 		c.index(arg(1), c.guardFor(v))
 		c.element(arg(0), c.guardFor(v))
@@ -9005,7 +9120,7 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.Bind(done)
 		c.cold = append(c.cold, func() {
 			c.a.Bind(typed)
-			c.typedRead(v, done)
+			c.typedRead(v, done, false)
 		})
 		c.setF(v, a64F0)
 	case ssa.OpElemCell:
@@ -9059,9 +9174,34 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 			})
 		}
 		fail := a64GuardLabel(c, slow)
+		value := func() arm64.FReg { return c.fpr(v.Args[2], a64F0) }
+		if ssa.TypedKindOf(v) >= 0 {
+			// A site that met typed arrays of one element type: theirs
+			// inline, an Array's out of line.
+			again := c.a.NewLabel()
+			c.arrayClass(arg(0), typed)
+			c.a.Bind(again)
+			c.typedWrite(v, done, slow, again, value, true)
+			c.cold = append(c.cold, func() {
+				c.a.Bind(typed)
+				c.index(v.Args[1], fail)
+				c.a.LoadU8(a64B, c.gpr(v.Args[0], a64C), c.enc.ObjectFlags)
+				c.movImm(a64C, uint64(c.enc.FlagShared))
+				c.a.Tst(a64B, a64C, false)
+				fail.jump(arm64.NE)
+				c.element(v.Args[0], fail)
+				c.boxF64(c.fpr(v.Args[2], a64F0), a64B)
+				c.a.Store(a64A, c.enc.NumOffset, a64B)
+				c.a.B(done)
+			})
+			c.a.Bind(done)
+			break
+		}
 		c.cold = append(c.cold, func() {
 			c.a.Bind(typed)
-			c.typedWrite(v, done, slow, func() arm64.FReg { return c.fpr(v.Args[2], a64F0) })
+			again := c.a.NewLabel()
+			c.a.Bind(again)
+			c.typedWrite(v, done, slow, again, value, false)
 		})
 		c.typedArray(arg(0), typed)
 		c.index(arg(1), fail)

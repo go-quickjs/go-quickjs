@@ -374,6 +374,13 @@ func (q *jitAsked) Property(pc int) (ssa.PropertySite, bool) {
 	return r0, r1
 }
 
+func (q *jitAsked) TypedKind(pc int) (ssa.TypedSite, bool) {
+	before := q.counts()
+	r0, r1 := q.fb.TypedKind(pc)
+	q.note("TypedKind", before, int64(pc), r0, r1)
+	return r0, r1
+}
+
 func (q *jitAsked) VirtualRoot(pool uintptr) (uintptr, uintptr, bool) {
 	before := q.counts()
 	r0, r1, r2 := q.fb.VirtualRoot(pool)

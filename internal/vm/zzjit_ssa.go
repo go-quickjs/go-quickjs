@@ -4604,6 +4604,8 @@ func jitHostCall(ctx *abi.Context) bool {
 		}
 		ctx.GoArgs[0].Num = math.Float64bits(n)
 		return true
+	case ssa.GoTypedSeen:
+		return r.jitTypedSeen(ctx)
 	case ssa.GoTypedRead:
 		o := *(**Object)(unsafe.Pointer(&ctx.GoArgs[0].Ref))
 		v, ok := jitTypedRead(o, math.Float64frombits(ctx.GoArgs[1].Num))
@@ -10193,6 +10195,10 @@ type jitLowering struct {
 	// startOnly is jitcompile.StartOnly's answer for the function, once
 	// asked by a call of it: 1 for no, 2 for yes.
 	startOnly uint8
+	// typedCells are the cells of its element reads and writes of numbers,
+	// by PC, that learn the element types of their typed arrays
+	// (zzjit_typedkind.go).
+	typedCells map[int32]*Value
 }
 
 // jitLowerKind is how a program is lowered: for a function's own code
@@ -10755,6 +10761,7 @@ func (fb *jitFeedback) Global(pc int) (ssa.GlobalSite, bool) {
 		site.Epoch, site.Scope = uint32(s.tree.globalEpoch)+1, uintptr(unsafe.Pointer(env))
 	}
 	site.Typed = !env.shape.keys[i].isAccessor() && jitTypedArray(env.vals()[i])
+	site.TypedKind = jitTypedKind(site.Typed, env.vals()[i])
 	if p := env.shape.keys[i]; !p.isAccessor() && p.flags&(propWritable|propConfigurable) == 0 {
 		switch {
 		case env.vals()[i].IsUndefined():
@@ -10818,6 +10825,7 @@ func (fb *jitFeedback) moduleGlobal(name Atom, env *Object, in bytecode.Instr, w
 	}
 	site := ssa.GlobalSite{Key: uint32(name), Index: i, Holder: uintptr(unsafe.Pointer(holder)), Shadowable: shadowable}
 	site.Typed = !write && !check && jitTypedArray(p.value)
+	site.TypedKind = jitTypedKind(site.Typed, p.value)
 	if !write && !check && p.flags&(propWritable|propConfigurable) == 0 {
 		// A const, or an import of one, once it has its value; or a
 		// global that never changes, undefined, NaN or Infinity.
@@ -10835,6 +10843,18 @@ func (fb *jitFeedback) moduleGlobal(name Atom, env *Object, in bytecode.Instr, w
 // Typed).
 func jitTypedArray(v Value) bool {
 	return v.IsObject() && v.Object().class == ClassTypedArray
+}
+
+// jitTypedKind is the element type plus one of v, a typed array if typed
+// (ssa.GlobalSite's TypedKind), or 0.
+func jitTypedKind(typed bool, v Value) uint8 {
+	if !typed {
+		return 0
+	}
+	if t, ok := v.Object().dataOf().(*typedArrayData); ok {
+		return uint8(t.kind) + 1
+	}
+	return 0
 }
 
 // jitImportedBinding is where the import name binds in a module's
@@ -10928,6 +10948,7 @@ func (fb *jitFeedback) lexGlobal(name Atom, env *Object, write bool) (ssa.Global
 		return ssa.GlobalSite{}, false
 	}
 	site := ssa.GlobalSite{Key: uint32(name), Index: i, Lexical: true, Typed: !write && jitTypedArray(p.value)}
+	site.TypedKind = jitTypedKind(site.Typed, p.value)
 	if !write && p.flags&propWritable == 0 && p.value.IsNumber() {
 		site.Fixed, site.Constant = true, ir.Float(p.value.Number())
 	}

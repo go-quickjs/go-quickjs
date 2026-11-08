@@ -433,6 +433,7 @@ var jitSnapOps = map[jitSnapMethod][]ir.Op{
 	snapBigIntCell:     {ir.BigIntConst},
 	snapStringRead:     {ir.ArrayRead},
 	snapTypedRead:      {ir.ArrayRead},
+	snapTypedKind:      {ir.ArrayRead, ir.ArrayUpdate, ir.ArrayWrite},
 }
 
 // jitSnapAsks is jitSnapOps by op: a bit for each method asked there.

@@ -93,7 +93,10 @@ const (
 	// of either class, which they tell apart as they run. A typed array's
 	// element is in its buffer, below its length; one of a type native
 	// code does not make -- Float16, a BigInt -- or a view out of its
-	// buffer, is the guard's failure, or the store's call of Go.
+	// buffer, is the guard's failure, or the store's call of Go. Their Key,
+	// and OpElemStore's, is the element type plus one their site has met
+	// alone (TypedKindOf), whose element they make inline, or 0; their
+	// Const, an Opaque one, the site's cell (TypedCellOf), or none.
 	OpIndexedOf // tagged -> ptr, if an array or a typed array
 	// OpBigElemRead is the element of a BigInt64Array (Type Int64) or a
 	// BigUint64Array (Type Uint64) at the index Args[1], an integer below

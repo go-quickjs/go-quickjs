@@ -333,6 +333,26 @@ decodes the call itself, makes the result in a block given back, the
 value before's, or a new one -- as V8's code allocates a BigInt inline --
 gives back as the call would, and leaves what would throw to the call.
 
+**Typed arrays' element types.** An element read or write of a number
+whose site has met typed arrays of one element type is compiled for that
+type, as V8's keyed loads and stores follow their feedback's elements
+kind: the receiver's class checked to be a typed array's, its view found
+in its buffer and the key below its length, the type's byte compared with
+the one expected, and the element loaded or stored at its width -- inline,
+an Array's element out of line (`ssa.TypedKindOf`). A site that has met
+none, or several, tells them apart as it runs, a case for each type, out
+of line. The existing tiers keep nothing of a site's types, so native
+code learns them, as V8's baseline code fills a feedback vector: each
+site has a cell, its function's lowering's (the VM's `typedCells`), with a
+bit for each type it met, which code reads when it reads or writes an
+element of a type it was not compiled for; where the cell has no bit of
+it, a call of Go sets it (`ssa.GoTypedSeen`) and marks the code to be
+compiled again once it has spent its budget, as for what an exit taught
+it. A site that has learned nothing, of what a global read found holding a
+typed array (`ssa.GlobalSite`'s `TypedKind`), is compiled for that array's
+type from the first -- Emscripten's heaps, read at every branch, would
+otherwise teach a compile each.
+
 **Array loops.** A call of `Array.prototype`'s `forEach`, `reduce`,
 `map`, `filter`, `some`, `every`, `find` or `findIndex`, or a typed array's
 method of those names, is made a loop of the code's own, as V8's
