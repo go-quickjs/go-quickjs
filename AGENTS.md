@@ -95,6 +95,10 @@ concurrently.
   difference; its list of known breaches only shrinks. Test a native path
   under `jitMarkingForTest` too; holding the collector off in a test hides a
   breach.
+- internal/jit/README.md is the JIT's design. A change to that design -- what
+  the inliner takes, how registers are allocated and spilled, what a frame
+  state or an exit holds, a new kind of native path -- updates it in the same
+  commit, saying how the JIT works now rather than how it came to.
 - Add a regression test for every semantic bug. Prefer an exact result and
   error type over a broad smoke test.
 - Do not weaken conformance expectations, add skips, or change expected
