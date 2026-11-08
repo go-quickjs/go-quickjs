@@ -119,6 +119,14 @@ next instruction and then only by the frame states up to a call -- a
 global's cell and the function read from it, whose method the call is --
 costs a store, not a store and a load straight after it.
 
+An entry block loads each slot the code reads (`OpLoadSlot`) and unboxes
+the numbers among them, each unboxing a guard. A load whose only use but
+frame states' -- which leave its slot as it is -- is an unboxing in its
+own block is made by none (`findLazy`): the unboxing reads the slot,
+which nothing in an entry block writes, so that an entry at a loop's
+header, which loads every local, holds no general register for the loads
+across its guards.
+
 What lives across a native call in a register is saved to a slot of its
 own and restored after (a split value is never live there in its
 register). `CheckAllocations` has every compile check its allocation

@@ -772,7 +772,11 @@ func (c *core) findLazy() error {
 				if v.Op == ssa.OpPhi {
 					byPhi[a.ID] = true
 				}
-				if a.Op == ssa.OpLoadSlot {
+				if a.Op == ssa.OpLoadSlot && !(v.Op == ssa.OpUnboxF64 && v.Block == a.Block) {
+					// But its unboxing in its entry block, which reads the
+					// slot itself (materialize), nothing having written it
+					// since: an entry of a loop of many locals had held each
+					// in a register to its last guard, as many as it loads.
 					elsewhere[a.ID] = true
 				}
 			}

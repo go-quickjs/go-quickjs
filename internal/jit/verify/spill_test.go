@@ -372,3 +372,69 @@ func TestMirSplitsWhatOnlyStatesRead(t *testing.T) {
 		}
 	}
 }
+
+// An entry's load of a slot that only its unboxing there reads, and frame
+// states, holds no register (mir's findLazy): the unboxing reads the slot
+// itself. An entry of a loop of many locals had held each loaded number
+// in a register to its last guard, as many as it loads -- the four sums'
+// loop, entered at its header, eleven, which spilled four.
+func TestMirEntryLoadsUnboxed(t *testing.T) {
+	enc := abi.Encoding{ValueSize: 16, NumOffset: 0, RefOffset: 8,
+		Undefined: 0xFFF8000000000001, Null: 0xFFF8000000000002, True: 0xFFF8000000000103,
+		False: 0xFFF8000000000003, Uninitialized: 0xFFF8000000000008, CanonicalNaN: 0x7FF8000000000000,
+		Object: 0xFFF8000000000007, Mega: true, UndefinedCell: 0x60000, StoreRef: 0x70000, WriteBarrier: 0x71000}
+	src := `function f(a,b,c,d,n){let s0=0,s1=0,s2=0,s3=0;for(let i=0;i<n;i++){s0=(s0+i)|0;s1=(s1+s0)|0;s2=(s2^s1)|0;s3=(s3+s2)|0}return(a+b+c+d+s0+s1+s2+s3)|0}`
+	checked := 0
+	for i, p := range lowered(t, src) {
+		f, err := ssa.BuildWith(p, globals{})
+		if err != nil {
+			t.Fatalf("%s (%d): %v", src, i, err)
+		}
+		ssa.Optimize(f)
+		mc, err := mir.CompileAMD64(f, enc)
+		if err != nil {
+			t.Fatalf("%s (%d): %v", src, i, err)
+		}
+		locs := " " + mc.Locations()
+		for _, b := range f.Blocks {
+			if b.PC >= 0 {
+				continue
+			}
+			for _, v := range b.Values {
+				if v.Op != ssa.OpLoadSlot || !onlyUnboxedIn(f, v, b) {
+					continue
+				}
+				checked++
+				if !strings.Contains(locs, fmt.Sprintf(" %v:lazy", v)) {
+					t.Errorf("%s (%d): %v, which only its unboxing reads, has a location:\n%s\n%s", src, i, v, f, locs)
+				}
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatalf("%s: no entry's load only its unboxing reads", src)
+	}
+}
+
+// onlyUnboxedIn reports whether v's only operation, of every block's, is
+// an unboxing in b, and some is.
+func onlyUnboxedIn(f *ssa.Func, v *ssa.Value, b *ssa.Block) bool {
+	n := 0
+	for _, c := range f.Blocks {
+		for _, u := range c.Values {
+			for _, a := range u.Args {
+				if a != v {
+					continue
+				}
+				if u.Op != ssa.OpUnboxF64 || c != b {
+					return false
+				}
+				n++
+			}
+		}
+		if c.Control == v {
+			return false
+		}
+	}
+	return n != 0
+}

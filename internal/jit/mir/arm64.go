@@ -483,6 +483,10 @@ func (c *a64Compiler) materialize(v *ssa.Value, dst arm64.Reg) {
 		c.boxBool(c.gpr(v.Args[0], a64B), dst)
 	case ssa.OpConstI32:
 		c.movImm(dst, v.Const.Bits)
+	case ssa.OpLoadSlot:
+		// As amd64's: a slot an entry loads for its unboxing alone.
+		base, disp := c.slotAddr(v.Aux, false, dst)
+		c.a.Load(dst, base, disp)
 	default:
 		panic("materialize " + v.Op.String())
 	}
