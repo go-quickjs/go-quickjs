@@ -240,6 +240,9 @@ func intPhis(f *Func) bool {
 	// an int32's conversion among its arguments -- most functions, and
 	// every round but the first in most of the rest -- is done with no
 	// table made.
+	// A phi an earlier round dropped (intNo) is no candidate, and so gives
+	// no reason: a round whose conversions are all among those -- most
+	// rounds after the first that made int32 phis -- is done too.
 	sc := f.scr()
 	phis, any := sc.intPhis[:0], false
 	for _, b := range f.Blocks {
@@ -249,8 +252,10 @@ func intPhis(f *Func) bool {
 			}
 			if v.Type == Float64 && !trivialPhi(v) {
 				phis = append(phis, v)
-				for _, a := range v.Args {
-					any = any || a.Op == OpI32ToF64
+				if !any && (v.ID >= len(sc.intNo) || !sc.intNo[v.ID]) {
+					for _, a := range v.Args {
+						any = any || a.Op == OpI32ToF64
+					}
 				}
 			}
 		}
