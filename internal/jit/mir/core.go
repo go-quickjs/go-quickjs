@@ -79,6 +79,8 @@ type core struct {
 	// compared with all its slot's: four million comparisons in a run of
 	// Typescript's compiles.
 	exitFrame *abi.ExitFrame
+	// encp is the encoding the code keeps (encoding).
+	encp *abi.Encoding
 	// exitInlineLast is where the last description's run of the frame's
 	// inlined callees starts (ExitFrame's Inlines), or -1.
 	exitInlineLast int
@@ -3194,8 +3196,7 @@ func (c *core) exitRehash(n int) {
 // at the first.
 func (c *core) exitLayout() *abi.ExitFrame {
 	if c.exitFrame == nil {
-		enc := c.enc
-		c.exitFrame = &abi.ExitFrame{FrameLocals: int32(c.f.FrameLocals), ThisSlot: int32(c.f.ThisSlot), Locals: int32(c.f.Locals), Enc: &enc}
+		c.exitFrame = &abi.ExitFrame{FrameLocals: int32(c.f.FrameLocals), ThisSlot: int32(c.f.ThisSlot), Locals: int32(c.f.Locals), Enc: c.encoding()}
 		c.exitInlineLast = -1
 		if w := c.ws; w != nil {
 			// The workspace's, kept from compile to compile.
@@ -3212,6 +3213,16 @@ func (c *core) exitLayout() *abi.ExitFrame {
 		}
 	}
 	return c.exitFrame
+}
+
+// encoding is the code's encoding, made once for what the code keeps --
+// its exits' frame, its calls of Go -- to share.
+func (c *core) encoding() *abi.Encoding {
+	if c.encp == nil {
+		e := c.enc
+		c.encp = &e
+	}
+	return c.encp
 }
 
 // exitWord is the index of word w among the descriptions' constants
@@ -3325,12 +3336,10 @@ func (c *core) finishCalls() {
 // the call's routine saves (goSaving) among them. It reports which
 // operands the call writes itself: those a description cannot find.
 func (c *core) goState(op uint64, keep int, v *ssa.Value, args []*ssa.Value) (*abi.GoCallState, []bool) {
-	enc := c.enc
 	if len(c.goSlab) == cap(c.goSlab) {
 		c.goSlab = make([]abi.GoCallState, 0, max(min(2*cap(c.goSlab), 32), 4))
 	}
-	c.goSlab = append(c.goSlab, abi.GoCallState{Op: op, Keep: uint64(keep), NumOffset: enc.NumOffset, RefOffset: enc.RefOffset,
-		UpvalueSlot: enc.UpvalueSlot, True: enc.True, False: enc.False, NaN: enc.CanonicalNaN})
+	c.goSlab = append(c.goSlab, abi.GoCallState{Op: op, Keep: uint64(keep), Enc: c.encoding()})
 	st := &c.goSlab[len(c.goSlab)-1]
 	if v != nil && (ssa.GoOp(op&0xff) == ssa.GoCall || ssa.GoOp(op&0xff) == ssa.GoHost) {
 		// A call's, or an instruction's Go makes on the frame (GoHost):

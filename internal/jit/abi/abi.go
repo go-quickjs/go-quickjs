@@ -582,13 +582,16 @@ const MaxGoArgs = 16
 // True, False and NaN its words for booleans and the canonical NaN, for
 // Go to read the operands with no more than the description.
 type GoCallState struct {
-	Op, Keep                          uint64
-	PC, Depth                         uint32
-	SetsPC                            bool
-	Fail                              int32
-	NumOffset, RefOffset, UpvalueSlot int32
-	True, False, NaN                  uint64
-	Args                              []GoCallArg
+	Op, Keep  uint64
+	PC, Depth uint32
+	SetsPC    bool
+	Fail      int32
+	// Enc is the encoding the code was compiled for, shared by its calls
+	// and exits (ExitFrame's Enc): Go reads the operands' words by it. A
+	// call's state had kept its offsets and constant words, 36 of its 144
+	// bytes.
+	Enc  *Encoding
+	Args []GoCallArg
 	// BigScore is, for a BigInt's operator (Encoding's BigFast), the VM's
 	// leaf's account of what it made and what it left to Go's call, which
 	// costs more for having been tried; BigOff, set once the leaf has
@@ -600,6 +603,12 @@ type GoCallState struct {
 	// and noted for the code's next compile (ssa.LeafFeedback), which
 	// makes it a call of its own (ssa.GoLeaf): once a call.
 	LeafSeen bool
+	// Unused, for a leaf's call (Leaf), says that nothing reads its result
+	// but, at most, whether it is truthy (ssa.CallSite's Unused): the leaf
+	// may give back, for an object it would make, another that nothing
+	// else reaches. It is beside the flags above, with which it takes a
+	// word, where it had taken one of its own.
+	Unused bool
 	// Inline, for a call (GoCall) inside an inlined callee (ssa's
 	// InlineState), is the callee's closure's address, and InlinePC the PC
 	// in it of the instruction the call makes, whose names and caches are
@@ -618,11 +627,6 @@ type GoCallState struct {
 	// the calls after.
 	Leaf     uintptr
 	LeafForm unsafe.Pointer
-	// Unused, for a leaf's call, says that nothing reads its result but,
-	// at most, whether it is truthy (ssa.CallSite's Unused): the leaf may
-	// give back, for an object it would make, another that nothing else
-	// reaches.
-	Unused bool
 }
 
 // GoCallArg is a GoCallState's operand, the i'th, laid out for Go to read
