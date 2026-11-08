@@ -2879,8 +2879,9 @@ type jitFeedback struct {
 	// Intrinsic reads, made on first use.
 	prog *ir.Program
 	// targetsBy are the calls e's code learned (jitTargets), by PC, once
-	// NativeCalls asks.
+	// asked (targetsAt), and targetsOf its lists as they were then.
 	targetsBy map[int][]*jitInline
+	targetsOf [2][]jitInline
 	// selfCalls are the PCs of the function's calls of itself among them,
 	// once Resumed asks (selfKnown).
 	selfCalls []int32
@@ -2916,7 +2917,7 @@ func (fb *jitFeedback) CharCode(pc int) bool {
 		e = r.jit.entryFor(fn)
 	}
 	if e != nil {
-		for _, x := range jitTargets(e) {
+		for _, x := range fb.targetsIn(e, pc) {
 			if int(x.pc) == pc && x.charCode {
 				return true
 			}
@@ -2983,7 +2984,7 @@ func (fb *jitFeedback) Substring(pc int) (uintptr, int, bool) {
 		return 0, 0, false
 	}
 	argc := int(fn.Code[pc].A)
-	for _, x := range jitTargets(e) {
+	for _, x := range fb.targetsIn(e, pc) {
 		if int(x.pc) == pc && x.substring && r.jitIsSubstring(x.obj, argc) {
 			kind, _ := r.jitSubstringOf(x.obj)
 			return uintptr(unsafe.Pointer(x.obj)), kind, true
@@ -3025,7 +3026,7 @@ func (fb *jitFeedback) FromCharCode(pc int) (uintptr, bool) {
 		e = r.jit.entryFor(fn)
 	}
 	if e != nil {
-		for _, x := range jitTargets(e) {
+		for _, x := range fb.targetsIn(e, pc) {
 			if int(x.pc) == pc && x.fromChar {
 				return addr, true
 			}
@@ -3408,6 +3409,48 @@ func (fb *jitFeedback) Inline(pc int) (ssa.InlineSite, bool) {
 	return ssa.InlineSite{}, false
 }
 
+// targetsAt is the calls fb.e's code learned at pc (jitTargets), in their
+// order there: found from a table by PC made once. Each site's question --
+// its native calls, its built-ins' intrinsics, its loop -- had looked
+// through every site's targets, a compile's questions as many as its calls
+// times its targets.
+func (fb *jitFeedback) targetsAt(pc int) []*jitInline {
+	if fb.targetsBy == nil {
+		fb.targetsBy = map[int][]*jitInline{}
+		for _, x := range jitTargets(fb.e) {
+			fb.targetsBy[int(x.pc)] = append(fb.targetsBy[int(x.pc)], x)
+		}
+		fb.targetsOf = [2][]jitInline{fb.e.nativeCalls, fb.e.inlines}
+	}
+	return fb.targetsBy[pc]
+}
+
+// sameList reports whether a and b are one list: the same elements of the
+// same array.
+func sameList(a, b []jitInline) bool {
+	return len(a) == len(b) && (len(a) == 0 || &a[0] == &b[0])
+}
+
+// targetsIn is e's targets at pc, in their order: fb.e's from its table
+// (targetsAt) while its lists are as they were when the table was made,
+// and otherwise -- another entry's, an inlined callee's, or fb.e's since
+// learned -- as jitTargets walks them.
+func (fb *jitFeedback) targetsIn(e *jitEntry, pc int) []*jitInline {
+	if e == fb.e {
+		t := fb.targetsAt(pc)
+		if sameList(fb.targetsOf[0], e.nativeCalls) && sameList(fb.targetsOf[1], e.inlines) {
+			return t
+		}
+	}
+	var t []*jitInline
+	for _, x := range jitTargets(e) {
+		if int(x.pc) == pc {
+			t = append(t, x)
+		}
+	}
+	return t
+}
+
 // NativeCalls is ssa.Feedback's: the functions jitCallSeen has seen a call
 // call whose native code a caller's may call -- compiled, and not reading
 // what a frame made natively does not have: captured bindings,
@@ -3417,15 +3460,7 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 		return nil
 	}
 	var sites []ssa.CallSite
-	// The calls its code learned, by PC, found once: each call had looked
-	// through them all, a call site's every target among every site's.
-	if fb.targetsBy == nil {
-		fb.targetsBy = map[int][]*jitInline{}
-		for _, x := range jitTargets(fb.e) {
-			fb.targetsBy[int(x.pc)] = append(fb.targetsBy[int(x.pc)], x)
-		}
-	}
-	targets := fb.targetsBy[pc]
+	targets := fb.targetsAt(pc)
 	if len(targets) != 0 {
 		// A site is 464 bytes, each copied at every doubling of the list.
 		sites = make([]ssa.CallSite, 0, len(targets))
@@ -8468,9 +8503,12 @@ func (fb *jitFeedback) ForEach(pc int) (ssa.ForEachSite, bool) {
 	if e == nil || fb.root != nil || fb.fwd != nil || fb.cl == nil || pc >= len(fb.fn.Code) || jitCallOp(fb.fn.Code[pc].Op) != bytecode.OpCallMethod {
 		return ssa.ForEachSite{}, false
 	}
-	for _, x := range jitTargets(e) {
+	for _, x := range fb.targetsIn(e, pc) {
+		if int(x.pc) != pc || !x.forEach || x.cb == nil {
+			continue
+		}
 		kind := fb.r.jitLoopKind(x.obj)
-		if int(x.pc) != pc || !x.forEach || x.cb == nil || kind == 0 {
+		if kind == 0 {
 			continue
 		}
 		var proto uintptr
@@ -9396,7 +9434,7 @@ func (fb *jitFeedback) IndexOf(pc int) (uintptr, int, bool) {
 	if e == nil || fb.root != nil || pc >= len(fb.fn.Code) || jitCallOp(fb.fn.Code[pc].Op) != bytecode.OpCallMethod {
 		return 0, 0, false
 	}
-	for _, x := range jitTargets(e) {
+	for _, x := range fb.targetsIn(e, pc) {
 		if int(x.pc) != pc || !x.indexOf {
 			continue
 		}
@@ -9418,7 +9456,7 @@ func (fb *jitFeedback) Leaf(pc int) (uintptr, bool) {
 	if op := jitCallOp(fb.fn.Code[pc].Op); op != bytecode.OpCall && op != bytecode.OpCallMethod || fb.fn.Code[pc].Op != op {
 		return 0, false
 	}
-	for _, x := range jitTargets(e) {
+	for _, x := range fb.targetsIn(e, pc) {
 		if int(x.pc) != pc || !x.leaf || x.obj == nil {
 			continue
 		}
@@ -9529,7 +9567,7 @@ func (fb *jitFeedback) BigString(pc int) (uintptr, bool) {
 	if e == nil || fb.root != nil || pc >= len(fb.fn.Code) || jitCallOp(fb.fn.Code[pc].Op) != bytecode.OpCallMethod {
 		return 0, false
 	}
-	for _, x := range jitTargets(e) {
+	for _, x := range fb.targetsIn(e, pc) {
 		if int(x.pc) == pc && x.bigString && x.obj != nil && x.obj == fb.r.jitBigToString {
 			return uintptr(unsafe.Pointer(x.obj)), true
 		}
@@ -9568,7 +9606,7 @@ func (fb *jitFeedback) ParseInt(pc int) (uintptr, bool) {
 	if e == nil || fb.root != nil || pc >= len(fb.fn.Code) || jitCallOp(fb.fn.Code[pc].Op) != bytecode.OpCall {
 		return 0, false
 	}
-	for _, x := range jitTargets(e) {
+	for _, x := range fb.targetsIn(e, pc) {
 		if int(x.pc) == pc && x.parseInt && x.obj != nil && x.obj == fb.r.jitParseInt {
 			return uintptr(unsafe.Pointer(x.obj)), true
 		}
