@@ -508,9 +508,17 @@ func (p *parser) tryParseAsyncParenArrow(start int) ast.Expr {
 	// Parsing the list can fail for input that is a valid call but not a valid
 	// parameter list, such as `async(1 + 2)`. Recover and let the caller retry
 	// as a call.
+	//
+	// The list is parsed as an async arrow's parameters are, [+Await]: an
+	// await expression or an `await` named in it is an error there, which
+	// fails the parse, and the parentheses are retried as a call's
+	// arguments, where `async(await)` is a call in a script.
 	var items []ast.Expr
 	ok := func() (ok bool) {
+		savedAwait, savedParams := p.allowAwait, p.inParams
+		p.allowAwait, p.inParams = true, true
 		defer func() {
+			p.allowAwait, p.inParams = savedAwait, savedParams
 			if r := recover(); r != nil {
 				if _, isSyntax := r.(*Error); isSyntax {
 					ok = false

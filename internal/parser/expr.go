@@ -654,8 +654,10 @@ func (p *parser) parsePrimary() ast.Expr {
 
 	case lexer.Ident:
 		// `async function` and `async x =>` start an async function; a bare
-		// `async` is an ordinary identifier.
-		if p.isContextual("async") && !p.tok.NewlineBefore {
+		// `async` is an ordinary identifier. Only a line break after `async`
+		// matters, which tryParseAsyncFunction looks for: one before it, where
+		// an operand is expected, ends nothing (`[a,\nasync function () {}]`).
+		if p.isContextual("async") {
 			if fn := p.tryParseAsyncFunction(); fn != nil {
 				return fn
 			}

@@ -223,6 +223,14 @@ func TestGeneratorsAndAsync(t *testing.T) {
 	checkParse(t, "yield", "yield")
 	// `await` outside an async function is likewise an identifier.
 	checkParse(t, "await", "await")
+	// A line break before `async`, where an operand is expected, does not
+	// stop it starting an async function or arrow (jsonpath-plus lists
+	// `async function () {}.constructor` on a line of its own); one after it
+	// still does.
+	checkParse(t, "[a,\nasync function () {}]", "(array a (async function () ()))")
+	checkParse(t, "f(1,\nasync x => x)", "(call f 1 (async arrow (x) ((return x))))")
+	checkParse(t, "x = \nasync (y) => y", "(= x (async arrow (y) ((return y))))")
+	checkError(t, "[a,\nasync\nfunction () {}]", "expected")
 }
 
 func TestClasses(t *testing.T) {
