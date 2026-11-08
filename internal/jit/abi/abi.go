@@ -847,6 +847,12 @@ const (
 	ExitI64Spill
 	ExitU64Reg
 	ExitU64Spill
+	// ExitI32Reg and ExitI32Spill are an int32 in a register or a spill
+	// slot, its low 32 bits, boxed as the number it is: a number an int32
+	// phi carries (ssa's intPhis), which a loop header's state names before
+	// its conversion is made, or where it is not made at all.
+	ExitI32Reg
+	ExitI32Spill
 )
 
 // ExitInline is an inlined callee's frame an exit describes in a context

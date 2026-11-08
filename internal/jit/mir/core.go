@@ -809,6 +809,9 @@ func (c *core) findLazy() error {
 	}
 	c.keepStates(states)
 	c.lazy = c.bools(n)
+	// An int32's conversion only lazy boxes use is made by none (i32Boxed):
+	// boxUses counts such uses.
+	boxUses := c.int32s(n)
 	for _, b := range f.Blocks {
 		for _, v := range b.Values {
 			switch v.Op {
@@ -836,6 +839,20 @@ func (c *core) findLazy() error {
 				if box, cell := v.Args[1], v.Args[0]; box.Op == ssa.OpBigBox && !used[v.ID] && box.Uses == 2 && cell.Uses == 1 {
 					c.lazy[v.ID], c.lazy[box.ID], c.lazy[cell.ID] = true, true, true
 				}
+			}
+		}
+	}
+	for _, b := range f.Blocks {
+		for _, v := range b.Values {
+			if x := v.Args; v.Op == ssa.OpBoxF64 && c.lazy[v.ID] && x[0].Op == ssa.OpI32ToF64 {
+				boxUses[x[0].ID]++
+			}
+		}
+	}
+	for _, b := range f.Blocks {
+		for _, v := range b.Values {
+			if v.Op == ssa.OpI32ToF64 && boxUses[v.ID] != 0 && boxUses[v.ID] == uses[v.ID] {
+				c.lazy[v.ID] = true
 			}
 		}
 	}
@@ -1156,6 +1173,11 @@ func (c *core) allocate() error {
 				}
 			}
 			if c.isLazy(v) || remat(v) {
+				if x := i32Boxed(v); x != nil {
+					// A box of an int32's conversion, made of the int32.
+					add(x)
+					continue
+				}
 				for _, a := range v.Args {
 					add(a)
 				}
@@ -1305,6 +1327,12 @@ func (c *core) allocate() error {
 					// another's: a Go call's argument was what that held.
 					use(a.Args[0], p)
 					spend(a.Args[0], bw)
+					if x := i32Boxed(a); x != nil {
+						// A box of an int32's conversion is made of the
+						// int32 (materialize).
+						use(x, p)
+						spend(x, bw)
+					}
 				}
 				if r := &rec[a.ID]; r.slot&slotShadow != 0 || r.def == 0 && a.Shadow != nil {
 					// It may read where its operand came from: a keep
@@ -1345,6 +1373,11 @@ func (c *core) allocate() error {
 				for _, a := range b.Control.Args {
 					use(a, end[b.ID])
 					spend(a, bw)
+				}
+				if x := i32Boxed(b.Control); x != nil {
+					// A return of an int32's number, made of the int32.
+					use(x, end[b.ID])
+					spend(x, bw)
 				}
 			} else {
 				use(b.Control, end[b.ID])
@@ -1945,6 +1978,23 @@ func (c *core) allocate() error {
 				freeSlot(c.locs[a.v.ID].spill, a.end)
 			}
 			r := roots[j]
+			if takesOperand(it.v) {
+				// An operand whose interval ends here gives its register
+				// to the result: the operation reads its operands before
+				// it writes it (takesOperand). An int32 phi's sum had
+				// needed a register of its own, beside the phi's, which
+				// its back edge moved it into.
+				kept := 0
+				for i, a := range active {
+					if aEnd[i] == it.start && a.v.ID < nf && reads(it.v, a.v) {
+						free = append(free, aReg[i])
+						continue
+					}
+					active[kept], aEnd[kept], aReg[kept], aCost[kept] = a, aEnd[i], aReg[i], aCost[i]
+					kept++
+				}
+				active, aEnd, aReg, aCost = active[:kept], aEnd[:kept], aReg[:kept], aCost[:kept]
+			}
 			if len(free) > 0 {
 				i := hinted(it, k, r, free)
 				if i < 0 {
@@ -2649,6 +2699,32 @@ func savingCall(v *ssa.Value) bool {
 // and before the header runs again, so a box the header computed of a phi
 // would still hold the last iteration's value; its operand, the phi, holds
 // this one's.
+// i32Boxed is the int32 a box of its conversion boxes, or nil: what an
+// exit, and a box made again in code (materialize), make it of -- a loop
+// header's state names it before the conversion is made (ssa's intPhis),
+// and one only boxes use is made by none (findLazy).
+func i32Boxed(v *ssa.Value) *ssa.Value {
+	if v.Op == ssa.OpBoxF64 && v.Args[0].Op == ssa.OpI32ToF64 {
+		return v.Args[0].Args[0]
+	}
+	return nil
+}
+
+// takesOperand reports an operation whose result may take the register of
+// an operand whose interval ends at it (allocate's scan): each backend's
+// code for it reads its operands -- into scratch registers, or in its one
+// instruction -- before it writes its result.
+func takesOperand(v *ssa.Value) bool {
+	switch v.Op {
+	case ssa.OpAddI32, ssa.OpSubI32, ssa.OpAndI32, ssa.OpOrI32, ssa.OpXorI32, ssa.OpShlI32, ssa.OpSarI32, ssa.OpShrU32, ssa.OpMulI32, ssa.OpNotI32:
+		return true
+	}
+	return false
+}
+
+// reads reports whether a is an operand of v.
+func reads(v, a *ssa.Value) bool { return slices.Contains(v.Args, a) }
+
 func remat(v *ssa.Value) bool {
 	return v.Op == ssa.OpBoxF64 || v.Op == ssa.OpBoxBool || v.Op == ssa.OpConst
 }
@@ -3381,7 +3457,7 @@ func (c *core) callWord(x *ssa.Value, saves []saved) (abi.ExitLoc, bool) {
 	case abi.ExitConst:
 		l.N = c.exitWord(c.constWord(x.Const))
 		return l, true
-	case abi.ExitSpill, abi.ExitF64Spill, abi.ExitBoolSpill:
+	case abi.ExitSpill, abi.ExitF64Spill, abi.ExitBoolSpill, abi.ExitI32Spill:
 		return l, true
 	}
 	float, kind := l.Kind == abi.ExitF64Reg, abi.ExitSpill
@@ -3390,12 +3466,17 @@ func (c *core) callWord(x *ssa.Value, saves []saved) (abi.ExitLoc, bool) {
 		kind = abi.ExitF64Spill
 	case abi.ExitBoolReg:
 		kind = abi.ExitBoolSpill
+	case abi.ExitI32Reg:
+		kind = abi.ExitI32Spill
 	}
 	// The value whose register exitValue found: x, or the operand a box is
 	// made of.
 	in := x
 	if remat(x) {
 		in = x.Args[0]
+		if y := i32Boxed(x); y != nil {
+			in = y
+		}
 	}
 	for _, sv := range saves {
 		if sv.id == in.ID && sv.reg == int(l.N) && sv.float == float && sv.frame == 0 {
@@ -3453,6 +3534,12 @@ func (c *core) exitValue(v *ssa.Value) (abi.ExitLoc, bool) {
 		// Its word is the description's (exitDescriptor).
 		return abi.ExitLoc{Kind: abi.ExitConst}, true
 	case ssa.OpBoxF64:
+		if x := i32Boxed(v); x != nil {
+			// The number of an int32: from the int32, where a loop
+			// header's state names it before its conversion is made, or
+			// where it is never made (findLazy).
+			return at(x, abi.ExitI32Reg, abi.ExitI32Spill)
+		}
 		return at(v.Args[0], abi.ExitF64Reg, abi.ExitF64Spill)
 	case ssa.OpBoxBool:
 		return at(v.Args[0], abi.ExitBoolReg, abi.ExitBoolSpill)

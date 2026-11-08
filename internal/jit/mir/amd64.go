@@ -683,6 +683,12 @@ func (c *compiler) materialize(v *ssa.Value, dst amd64.Reg) {
 			c.slotSource(v.Aux, dst)
 		}
 	case ssa.OpBoxF64:
+		if x := i32Boxed(v); x != nil {
+			// An int32's number, made of the int32 (core's i32Boxed).
+			c.a.Cvtsi2sd(xScratch1, c.gpr(x, dst), false)
+			c.boxF64(xScratch1, dst)
+			break
+		}
 		c.boxF64(c.xmm(v.Args[0], xScratch1), dst)
 	case ssa.OpBoxBool:
 		c.boxBool(c.gpr(v.Args[0], scratchB), dst)
@@ -10458,6 +10464,19 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		d := c.gdst(v)
 		c.movImm(d, v.Const.Bits)
 		c.setG(v, d)
+	case ssa.OpCheckI32:
+		// An int32: the double converted, its low 32 bits converted back,
+		// the same -- not NaN, which is unordered -- and not -0.
+		x := c.xmm(arg(0), xScratch0)
+		c.a.Cvttsd2si(scratchA, x)
+		c.a.Cvtsi2sd(xScratch1, scratchA, false)
+		c.a.SSEOp(amd64.UcomiSD, xScratch1, x)
+		guard.jump(amd64.CondNE)
+		guard.jump(amd64.CondP)
+		c.a.MovQFromX(scratchB, x)
+		c.cmpWord(scratchB, 1<<63)
+		guard.jump(amd64.CondE)
+		c.setG(v, scratchA)
 	case ssa.OpShlI32, ssa.OpSarI32, ssa.OpShrU32:
 		op := shiftOp(v.Op)
 		if k := arg(1); k.Op == ssa.OpConstI32 {

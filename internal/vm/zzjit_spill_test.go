@@ -108,10 +108,10 @@ const awfyListSource = `
 		}
 	}
 	const list = new List();
-	function sums(a, b, c, d, n) {
+	function sums(a, b, c, d, e, g, h, k, n) {
 		let s0 = 0, s1 = 0, s2 = 0, s3 = 0;
 		for (let i = 0; i < n; i++) { s0 = (s0 + i) | 0; s1 = (s1 + s0) | 0; s2 = (s2 ^ s1) | 0; s3 = (s3 + s2) | 0; }
-		return (a + b + c + d + s0 + s1 + s2 + s3) | 0;
+		return (a + b + c + d + e + g + h + k + s0 + s1 + s2 + s3) | 0;
 	}`
 
 // The allocation spills the interval whose slot costs least for what it
@@ -120,9 +120,11 @@ const awfyListSource = `
 // address in a spill slot, stored and loaded back every turn, beside the
 // caller's values that only the loop's exits read, which ended at the same
 // back edge; sums had two of its sums in slots, as they live to the
-// return, past the parameters it reads once there. No value of either's
-// loop is in a slot now, and each answer is the interpreter's, with the
-// collector idle and marking.
+// return, past the parameters it reads once there -- eight of them, so
+// that, two of its sums int32 phis in general registers (ssa's intPhis),
+// the rest still vie for the SSE registers. No value of either's loop is
+// in a slot now, and each answer is the interpreter's, with the collector
+// idle and marking.
 func TestJITSpillsWhatTheLoopDoesNotRead(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -144,12 +146,12 @@ func TestJITSpillsWhatTheLoopDoesNotRead(t *testing.T) {
 			clear(listings)
 			both := jitBothForTest(t, awfyListSource)
 			for range 30 {
-				both.agree(t, `list.benchmark()`, `sums(1, 2, 3, 4, 1000)`, `sums(0x7fffffff, 1, -1, 2, 70000)`)
+				both.agree(t, `list.benchmark()`, `sums(1, 2, 3, 4, 5, 6, 7, 8, 1000)`, `sums(0x7fffffff, 1, -1, 2, 3, 4, 5, 6, 70000)`)
 			}
-			for _, src := range []string{`list.benchmark()`, `sums(1, 2, 3, 4, 1000)`, `sums(0x7fffffff, 1, -1, 2, 70000)`} {
+			for _, src := range []string{`list.benchmark()`, `sums(1, 2, 3, 4, 5, 6, 7, 8, 1000)`, `sums(0x7fffffff, 1, -1, 2, 3, 4, 5, 6, 70000)`} {
 				v, err := both.jit.Run(compileForTest(t, src))
-				want := map[string]float64{`list.benchmark()`: 10, `sums(1, 2, 3, 4, 1000)`: jitSumsWant(1+2+3+4, 1000),
-					`sums(0x7fffffff, 1, -1, 2, 70000)`: jitSumsWant(0x7fffffff+1-1+2, 70000)}[src]
+				want := map[string]float64{`list.benchmark()`: 10, `sums(1, 2, 3, 4, 5, 6, 7, 8, 1000)`: jitSumsWant(1+2+3+4+5+6+7+8, 1000),
+					`sums(0x7fffffff, 1, -1, 2, 3, 4, 5, 6, 70000)`: jitSumsWant(0x7fffffff+1-1+2+3+4+5+6, 70000)}[src]
 				if err != nil || !v.IsNumber() || v.Number() != want {
 					t.Fatalf("%s = %v, %v; want %v", src, v, err, want)
 				}

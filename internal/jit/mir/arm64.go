@@ -478,6 +478,12 @@ func (c *a64Compiler) materialize(v *ssa.Value, dst arm64.Reg) {
 			c.slotSource(v.Aux, dst)
 		}
 	case ssa.OpBoxF64:
+		if x := i32Boxed(v); x != nil {
+			// As amd64's: an int32's number, made of the int32.
+			c.a.Scvtf(a64F1, c.gpr(x, dst), false)
+			c.boxF64(a64F1, dst)
+			break
+		}
 		c.boxF64(c.fpr(v.Args[0], a64F1), dst)
 	case ssa.OpBoxBool:
 		c.boxBool(c.gpr(v.Args[0], a64B), dst)
@@ -9371,6 +9377,19 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		d := c.gdst(v)
 		c.movImm(d, v.Const.Bits)
 		c.setG(v, d)
+	case ssa.OpCheckI32:
+		// As amd64's: converted, its low 32 bits converted back, the same
+		// -- NaN, unordered, is not equal -- and not -0.
+		x := c.fpr(arg(0), a64F0)
+		c.a.Fcvtzs(a64A, x)
+		c.a.Scvtf(a64F1, a64A, false)
+		c.a.FCmp(a64F1, x)
+		guard.jump(arm64.NE)
+		c.a.FMovFromF(a64B, x)
+		c.movImm(a64C, 1<<63)
+		c.a.Cmp(a64B, a64C, true)
+		guard.jump(arm64.EQ)
+		c.setG(v, a64A)
 
 	case ssa.OpNotI32:
 		c.a.Mvn(a64A, c.gpr(arg(0), a64A), false)

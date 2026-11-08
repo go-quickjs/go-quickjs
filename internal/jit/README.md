@@ -79,7 +79,26 @@ integer constant of the range -- compares int32s (`OpCmpI32`), and one of
 two uint32s' conversions, or of one and a constant of their range,
 compares them unsigned. An element's key that is an int32's conversion is
 the int32: the access reads it sign-extended, an index where it is not
-negative, and a call of Go its double. Phis stay doubles.
+negative, and a call of Go its double.
+
+A loop's phi of doubles that only ever merges int32s -- their
+conversions, integer constants of the range, other such phis, and numbers
+an entry unboxed, which a guard there checks are int32s and not -0
+(`OpCheckI32`), the entry's state speculating nothing there once one
+fails -- is an int32 phi where that pays (`intPhis`): an int32's
+conversion reaches it, its uses want an int32 -- a ToInt32, a comparison,
+an element's key, truncated arithmetic -- and none in its loop wants a
+double (`intPhiUses`), and its loop's budget of five general registers
+holds it, a phi read after its loop counting two, its interval having no
+holes (`intPhiBudgets`): amd64's code has seven general registers for
+values against thirteen SSE ones. A box of an int32's conversion, which a
+loop header's state names before the conversion is made, is made of the
+int32: an exit reads the int32 and makes its number (`abi.ExitI32Reg`,
+`ExitI32Spill`), and liveness keeps the int32 live wherever such a box is
+used (mir's `i32Boxed`). A conversion only such boxes use is made by none,
+and one in a loop's header that only uses after the loop read is made
+after it, as a phi's box is, and so is the box of one a value after the
+loop takes -- a sum stored or returned (`sinkLoopBoxes`).
 
 **Register allocation.** `mir`'s scan (`allocate`) gives each value an
 interval from its definition to its last use, stretched over every block
@@ -126,6 +145,10 @@ own block is made by none (`findLazy`): the unboxing reads the slot,
 which nothing in an entry block writes, so that an entry at a loop's
 header, which loads every local, holds no general register for the loads
 across its guards.
+
+An int32 operation's result takes the register of an operand whose
+interval ends at it (`takesOperand`): each backend reads the operands
+before it writes the result.
 
 What lives across a native call in a register is saved to a slot of its
 own and restored after (a split value is never live there in its

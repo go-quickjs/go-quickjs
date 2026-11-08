@@ -298,6 +298,10 @@ const (
 	// both int32s' conversions, or both uint32s' (truncInts) -- asm.js's
 	// (i | 0) < (n | 0).
 	OpCmpI32 // i32, i32 -> bool
+	// OpCheckI32 guards that a number is an int32, not -0: an entry's
+	// number an int32 phi merges (intPhis), which exits to the entry's
+	// state otherwise, as an unboxing does.
+	OpCheckI32 // f64 -> i32
 
 	// OpSameObject guards that an object is the one at Const.Bits, an
 	// address the VM keeps alive: an inlined call's function (inline). With
@@ -613,7 +617,7 @@ var opNames = [...]string{
 	OpAddF64: "addf", OpSubF64: "subf", OpMulF64: "mulf", OpDivF64: "divf", OpModF64: "modf", OpNegF64: "negf", OpCmpF64: "cmpf",
 	OpNot: "not", OpStrictNullish: "strictnullish", OpLooseNullish: "loosenullish", OpEqTagged: "eqtagged", OpToInt32: "toi32", OpAndI32: "and", OpOrI32: "or", OpXorI32: "xor", OpShlI32: "shl",
 	OpSarI32: "sar", OpShrU32: "shr", OpNotI32: "noti", OpMulI32: "muli", OpPrimitive: "primitive", OpClz32: "clz32", OpI32ToF64: "i2f", OpU32ToF64: "u2f",
-	OpBoolToF64: "b2f", OpBoolToI32: "b2i", OpConstI32: "consti", OpAddI32: "addi", OpSubI32: "subi", OpCmpI32: "cmpi",
+	OpBoolToF64: "b2f", OpBoolToI32: "b2i", OpConstI32: "consti", OpAddI32: "addi", OpSubI32: "subi", OpCmpI32: "cmpi", OpCheckI32: "checki",
 	OpSameObject: "sameobject", OpFrameRoom: "frameroom", OpTailRoom: "tailroom", OpTailSelf: "tailself", OpSameSymbol: "samesymbol", OpIterClosed: "iterclosed", OpKeepRef: "keepref", OpKeep: "keep", OpKept: "kept",
 	OpCall: "call", OpCallCell: "callcell", OpSqrtF64: "sqrtf", OpAbsF64: "absf", OpInstanceOf: "instanceof", OpTypeIs: "typeis",
 	OpCheckTrue: "checktrue", OpConstCell: "constcell", OpUpvalueCell: "upvaluecell", OpUpvalueStale: "upvaluestale", OpLocalCell: "localcell", OpPowF64: "powf",
@@ -679,7 +683,7 @@ func (o Op) isGuard() bool {
 		OpSameObject, OpSameSymbol, OpIterClosed, OpFrameRoom, OpTailRoom, OpTailSelf, OpCall, OpInstanceOf, OpTypeIs, OpCheckTrue, OpPowF64, OpAccessorIs, OpPrimitive,
 		OpBigUnbox, OpAddI64, OpSubI64, OpMulI64,
 		OpBigUnboxU64, OpBigLow, OpBigSign, OpAddU64, OpSubU64, OpMulU64, OpShlI64, OpShlU64, OpDivI64, OpModI64, OpDivU64, OpModU64, OpBigOfF64, OpPowI64,
-		OpHolderCell, OpChainCheck, OpProtoIs:
+		OpHolderCell, OpChainCheck, OpProtoIs, OpCheckI32:
 		return true
 	}
 	return false
@@ -1249,6 +1253,19 @@ type Func struct {
 type scratch struct {
 	flags                                         []bool
 	vals, phis, ordered, front, boxes, rest, work []*Value
+	// intPhis is intPhis' list of phis of doubles; intNo, by value ID, the
+	// phis a round's budget dropped (intPhiBudgets), which the rounds after
+	// do not take again: cleared at each Optimize.
+	intPhis []*Value
+	intNo   []bool
+	// intCand, intReason, intTrunc, intWants and intAgainst are intPhis'
+	// and intPhiUses' flags by value ID, intRoot their groups and intOf
+	// their aliases: grown as IDs grow, never cleared whole -- each clears
+	// what it set, every round of a function of thousands of values had
+	// made and zeroed tables of them all.
+	intCand, intReason, intTrunc, intWants, intAgainst []bool
+	intRoot                                            []int
+	intOf                                              []*Value
 	// first and last are, by operand ID, Optimize's guards of it: the
 	// indexes past their first and last in guards, 0 for none.
 	first, last []int32

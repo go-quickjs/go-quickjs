@@ -142,3 +142,103 @@ func TestJITTruncatedIntArithmetic(t *testing.T) {
 		}
 	}
 }
+
+// A loop's phi of doubles that only ever merges int32s is an int32 phi
+// (ssa's intPhis): its entries' numbers guarded to be int32s, not -0
+// (OpCheckI32), its number boxed of the int32 where a state names it
+// (mir's exitValue, ExitI32Reg), as many in general registers as a loop's
+// budget allows (intPhiBudgets). Each answer is the interpreter's: loops
+// entered with an int32, a fraction, -0, NaN, a number past 2**31 and a
+// string; a loop of three variables rotating; eight sums read after their
+// loop, past the budget; with no budget, and with the code's budget of
+// back edges at 3, so that its loops leave at their headers' polls, each
+// writing the frame's numbers of its int32 phis.
+func TestJITInt32Phis(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	src := `
+		function sum(a, n) {
+			var s = a, i = 0
+			for (; (i | 0) < (n | 0); i = (i + 1) | 0) s = (s + i) | 0
+			return 1 / s + s
+		}
+		function rot(a, n) {
+			var x = a | 0, y = 1, z = 2, i = 0
+			for (; (i | 0) < (n | 0); i = (i + 1) | 0) { var t = x; x = y; y = z; z = (t + y) | 0 }
+			return x * 3 + y * 5 + z
+		}
+		function many(a, n) {
+			var s0 = 0, s1 = 1, s2 = 2, s3 = 3, s4 = 4, s5 = 5, s6 = 6, s7 = 7, i = 0
+			for (; (i | 0) < (n | 0); i = (i + 1) | 0) {
+				s0 = (s0 + i) | 0; s1 = (s1 ^ s0) | 0; s2 = (s2 + s1) | 0; s3 = (s3 - s2) | 0
+				s4 = (s4 + (s3 >> 2)) | 0; s5 = (s5 ^ s4) | 0; s6 = (s6 + s5) | 0; s7 = (s7 + (s6 & a)) | 0
+			}
+			return s0 + s1 + s2 + s3 + s4 + s5 + s6 + s7
+		}
+		function shifted(a, n) {
+			var h = a, i = 0
+			for (; (i | 0) < (n | 0); i = (i + 1) | 0) h = ((h << 5) - h + i) | 0
+			return h
+		}
+		// A phi entered with the constant -0 is no int32 phi: 1 / s is
+		// -Infinity where the loop does not run.
+		function negzero(a, n) {
+			var s = -0, i = 0
+			for (; (i | 0) < (n | 0); i = (i + 1) | 0) s = (s + i) | 0
+			return 1 / s
+		}
+		// A uint32's, past 2**31, is no int32 phi either.
+		function uphi(a, n) {
+			var h = a >>> 0, i = 0
+			for (; (i | 0) < (n | 0); i = (i + 1) | 0) h = (h * 31 + i) >>> 0
+			return h + (h > 2147483647 ? 0.5 : 0)
+		}
+		// Compared with a constant at each turn, NaN at the first where
+		// it enters so, which the entry's guard leaves to the doubles.
+		function cmpnan(a, n) {
+			var x = a, c = 0, i = 0
+			for (; (i | 0) < (n | 0); i = (i + 1) | 0) { if (x < 5) c = (c + 1) | 0; if (x >= -3) c = (c + 7) | 0; x = (x + 1) | 0 }
+			return c * 1000 + x
+		}
+		function run(f, a, n) { var r = 0; for (var k = 0; k < 60; k++) r = f(a, n); return r }`
+	for _, budget := range []uint16{0, 3} {
+		want := New(Config{})
+		r := jitRuntimeForTest(t, Config{JIT: true})
+		jitDefaultsForTest(r)
+		if budget != 0 {
+			r.jitStress = jitStressConfig{threshold: true, budget: budget}
+		}
+		for _, rt := range []*Runtime{want, r} {
+			if _, err := rt.Run(compileForTest(t, src)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, fn := range []string{"sum", "rot", "many", "shifted", "negzero", "uphi", "cmpnan"} {
+			// -0 before the others an int32 phi's guard fails for: a guard
+			// that failed has the entry compiled again with none.
+			for _, a := range []string{"0", "5", "-3", "-0", "0.5", "NaN", "2147483648", "4294967295", "-2147483649", "9007199254740993", "Infinity", "'7'"} {
+				for _, n := range []string{"0", "1", "40", "300"} {
+					call := fmt.Sprintf("run(%s, %s, %s)", fn, a, n)
+					wv, err := want.Run(compileForTest(t, call))
+					if err != nil {
+						t.Fatal(err)
+					}
+					gv, err := r.Run(compileForTest(t, call))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if got, want := gv.Number(), wv.Number(); !(got == want || got != got && want != want) || math.Signbit(got) != math.Signbit(want) {
+						t.Fatalf("budget %d, %s: got %v, interpreter %v", budget, call, got, want)
+					}
+				}
+			}
+			cl := r.global.getOwn(r.atoms.intern(fn)).value().Object().fn().closure
+			if e := r.jit.cache[r.jitKeyOf(cl.fn)]; e == nil || e.ssa == nil {
+				t.Fatalf("budget %d: %s did not run natively: %+v", budget, fn, e)
+			}
+		}
+		want.Close()
+		want.ReleaseClosed()
+	}
+}

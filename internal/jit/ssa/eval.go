@@ -597,6 +597,11 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 		case OpConst:
 			return v.Const
 		case OpBoxF64, OpBoxBool:
+			if x := v.Args[0]; x.Op == OpI32ToF64 {
+				// An int32's number, from the int32: a loop header's state
+				// names it before its conversion is made (intPhis).
+				return apply(v.Op, v.Aux, apply(OpI32ToF64, 0, vals[x.Args[0].ID], val{}), val{}).t
+			}
 			return apply(v.Op, v.Aux, vals[v.Args[0].ID], val{}).t
 		}
 		return vals[v.ID].t
@@ -682,6 +687,11 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 				vals[v.ID] = val{f: math.Float64frombits(v.Const.Bits)}
 			case OpConstI32:
 				vals[v.ID] = val{i: uint32(v.Const.Bits)}
+			case OpCheckI32:
+				if x := a.f; !(x >= -1<<31 && x < 1<<31 && math.Trunc(x) == x) || x == 0 && math.Signbit(x) {
+					return exit(v.State, ir.ExitKind(v.Aux))
+				}
+				vals[v.ID] = val{i: uint32(int32(a.f))}
 			case OpConstSource:
 				vals[v.ID] = val{i: uint32(int32(v.Aux))}
 			case OpPrimitive:

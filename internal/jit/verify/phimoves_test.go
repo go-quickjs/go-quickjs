@@ -131,8 +131,14 @@ func TestMirPhisCoalesced(t *testing.T) {
 	// values kept where they are made (ssa's keepAcrossStores), not before
 	// each store, the keep corpus's loops spill 9 values in all where they
 	// had 37, at two moves more on one loop's edges -- a phi kept, as
-	// well as the value it carries: 160, 132, 9.
-	if total > 161 || loops > 132 || spills > 9 {
-		t.Errorf("%d edge moves, %d into loop headers, %d values spilled: want at most 161, 132, 9", total, loops, spills)
+	// well as the value it carries: 160, 132, 9. With int32 phis (ssa's
+	// intPhis), the loop that rotates three variables, a = b, b = c,
+	// c = (t + b) | 0, carries them in general registers, one move more
+	// at its back edge in each of its three lowerings, where each turn had
+	// converted c to an int32 and back, five instructions and a branch
+	// (the entries' loads read for their unboxings alone, mir's findLazy,
+	// had taken the total to 156, 130 into headers): 159, 133, 9.
+	if total > 161 || loops > 133 || spills > 9 {
+		t.Errorf("%d edge moves, %d into loop headers, %d values spilled: want at most 161, 133, 9", total, loops, spills)
 	}
 }

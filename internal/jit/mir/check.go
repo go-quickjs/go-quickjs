@@ -83,7 +83,7 @@ func (c *core) checkAllocation(iv []interval, rec []useRec, spillCount int) {
 	for key, spans := range byLoc {
 		sort.Slice(spans, func(i, j int) bool { return spans[i].start < spans[j].start })
 		for i := 1; i < len(spans); i++ {
-			if a, b := spans[i-1], spans[i]; b.start <= a.end {
+			if a, b := spans[i-1], spans[i]; b.start <= a.end && !(b.start == a.end && key[0] == 0 && takesOperand(iv[b.id].v) && reads(iv[b.id].v, iv[a.id].v)) {
 				fail("v%d (%d..%d) and v%d (%d..%d) share location %v", a.id, a.start, a.end, b.id, b.start, b.end, key)
 			}
 		}
@@ -180,6 +180,10 @@ func (c *core) refIntervals() ([]interval, []realUse) {
 				}
 			}
 			if c.isLazy(v) || remat(v) {
+				if x := i32Boxed(v); x != nil {
+					add(x)
+					continue
+				}
 				for _, a := range v.Args {
 					add(a)
 				}
@@ -209,6 +213,9 @@ func (c *core) refIntervals() ([]interval, []realUse) {
 				uses = append(uses, use{v: a, pos: p, again: again})
 				if a.Op == ssa.OpBoxF64 || a.Op == ssa.OpBoxBool {
 					uses = append(uses, use{v: a.Args[0], pos: p, again: again})
+					if x := i32Boxed(a); x != nil {
+						uses = append(uses, use{v: x, pos: p, again: again})
+					}
 				}
 				if a.Shadow != nil {
 					uses = append(uses, use{v: a.Shadow, pos: p, again: again})
@@ -229,6 +236,9 @@ func (c *core) refIntervals() ([]interval, []realUse) {
 			if c.isLazy(b.Control) {
 				for _, a := range b.Control.Args {
 					uses = append(uses, use{v: a, pos: end[b.ID]})
+				}
+				if x := i32Boxed(b.Control); x != nil {
+					uses = append(uses, use{v: x, pos: end[b.ID]})
 				}
 			} else {
 				uses = append(uses, use{v: b.Control, pos: end[b.ID]})

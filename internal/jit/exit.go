@@ -153,6 +153,12 @@ func (f *exitFrame) word(l abi.ExitLoc) uint64 {
 			return enc.CanonicalNaN
 		}
 		return bits
+	case abi.ExitI32Reg, abi.ExitI32Spill:
+		w := ctx.Regs[l.N&31]
+		if l.Kind == abi.ExitI32Spill {
+			w = ctx.Spill[l.N]
+		}
+		return math.Float64bits(float64(int32(uint32(w))))
 	case abi.ExitBoolReg, abi.ExitBoolSpill:
 		b := ctx.Regs[l.N&31]
 		if l.Kind == abi.ExitBoolSpill {

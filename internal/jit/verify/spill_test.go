@@ -78,8 +78,8 @@ func TestMirSpillsWhatTheLoopDoesNotRead(t *testing.T) {
 	defer func() { mir.Annotate = false }()
 	mir.Annotate = true
 	for _, src := range []string{
-		`function f(a,b,c,d,n){let s0=0,s1=0,s2=0,s3=0;for(let i=0;i<n;i++){s0=(s0+i)|0;s1=(s1+s0)|0;s2=(s2^s1)|0;s3=(s3+s2)|0}const t=(a|0)+(b|0)+(c|0)+(d|0);return(t+s0+s1+s2+s3)|0}`,
-		`function f(a,b,c,d,n){let s0=0,s1=0,s2=0,s3=0;for(let i=0;i<n;i++){s0=(s0+i)|0;s1=(s1+s0)|0;s2=(s2^s1)|0;s3=(s3+s2)|0}return(a+b+c+d+s0+s1+s2+s3)|0}`,
+		`function f(a,b,c,d,e,g,h,k,n){let s0=0,s1=0,s2=0,s3=0;for(let i=0;i<n;i++){s0=(s0+i)|0;s1=(s1+s0)|0;s2=(s2^s1)|0;s3=(s3+s2)|0}const t=(a|0)+(b|0)+(c|0)+(d|0)+(e|0)+(g|0)+(h|0)+(k|0);return(t+s0+s1+s2+s3)|0}`,
+		`function f(a,b,c,d,e,g,h,k,n){let s0=0,s1=0,s2=0,s3=0;for(let i=0;i<n;i++){s0=(s0+i)|0;s1=(s1+s0)|0;s2=(s2^s1)|0;s3=(s3+s2)|0}return(a+b+c+d+e+g+h+k+s0+s1+s2+s3)|0}`,
 	} {
 		ps := lowered(t, src)
 		if len(ps) == 0 {
