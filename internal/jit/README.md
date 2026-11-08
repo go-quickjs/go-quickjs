@@ -63,6 +63,51 @@ representation selection takes a phi of Float64 inputs -- its box made
 where a use outside the loop needs it, or by an exit (`unboxPhis`,
 `sinkLoopBoxes`).
 
+**Register allocation.** `mir`'s scan (`allocate`) gives each value an
+interval from its definition to its last use, stretched over every block
+it is live in or out of. A frame state's slot is a use, which keeps the
+value live for the exits that read it, but not a read the code makes: a
+value's cost in a spill slot counts only its definition and the uses that
+read it -- an operand, a branch's control, a phi's argument at its edge,
+whose move reads the argument and writes the phi, where a phi that is its
+own argument moves nothing -- each weighed by how often it runs, 16 to the
+power of the loops holding it (at most three). A phi and its arguments are
+hinted to one register, and joined into a group where their intervals do
+not meet, so that a value carried round a loop keeps one. Where no
+register is free, the scan spills the interval whose cost in a slot is
+least for what spilling it frees -- the rest of it, from the new
+interval's start, each position weighed as its block -- as LLVM's linear
+scan weighed intervals by their uses' frequency over their length; of
+those alike, the one that ends last. A budget loop's register goes first,
+its loop then counting in memory. A phi's edge move to a slot its phi or
+argument already holds, and may share, costs nothing, and so is taken off
+the cost of that value in a slot (`inSlot`): spilled together, the two
+share the slot and the edge moves nothing. Spilled, an interval is in its
+slot whole: stored where it is made, loaded at each use.
+
+An interval whose uses but frame states' are all behind the new interval's
+start, each in its own block, none past a call that saves the registers
+nor by a call that reads its operands again after Go had the registers
+(`callsAgain`), is split instead when that costs less: it keeps its
+register from its definition to its last such use, and the code stores it
+to its slot as it is made; its register is the new interval's from there.
+Its cost is that store, its uses reading the register. Every frame state
+reads a split value from its slot, wherever it is -- an exit's
+description and its code, a native call's state and records, the
+arguments a call copies from its state -- as the backend reads locations
+there through the slot (`core`'s `exitView`); the rest of the code reads
+the register, which its uses all come before. So a value read once by the
+next instruction and then only by the frame states up to a call -- a
+global's cell and the function read from it, whose method the call is --
+costs a store, not a store and a load straight after it.
+
+What lives across a native call in a register is saved to a slot of its
+own and restored after (a split value is never live there in its
+register). `CheckAllocations` has every compile check its allocation
+against liveness computed again by block sets and its uses listed: no two
+intervals meeting in a register or a slot, a split value's register only
+to its last use but a frame state's.
+
 **Speculation and deoptimization.** A guard checks what the code was
 compiled for -- a number, a shape, a callee -- and exits to the interpreter
 at the guard's bytecode PC if it fails. The failure is noted, and the code,
@@ -307,7 +352,17 @@ fresh: nothing else can hold them, as V8's escape analysis leaves a
 context only such closures read unmade. A frame that leaves native code is
 Go's, the closures Go makes on its cells with it, and returns through Go.
 
-**Callees with loops.** A callee with a loop is inlined only where the
+**Callees with loops.** A callee with a loop is inlined where it is small
+-- at most 24 instructions (`ssa`'s `maxInlineLoop`) -- and leaves nothing
+to Go anywhere (`smallLoop`): a search of a short list, EarleyBoyer's
+`sc_assq`, three property reads and a compare a turn, a few turns a call,
+costs about what a native call's sequence and entry do, and adds little
+code where it is inlined. That holds for every frame an inlined callee
+may be -- a call, a getter or setter, a construction, a forwarding
+constructor's method, a callee reading its arguments by index, a closure
+the caller makes, a loop's callback -- and for the build that inlines what
+callees are given (`ssa.InlineCalls`, `InlineCallsGiven`). A larger loop, or
+one with a call, is inlined only where the
 loop calls a closure its caller makes and gives it -- SOM's
 `Vector.forEach(fn)` and `hasSome(fn)`, given `(e) => e === obj` --
 that closure inlined at the call and not made (`ssa.InlineCallsGiven`).
@@ -317,8 +372,8 @@ inlined (`ssa.InlineSite`'s `LexThis`), as V8's inlined arrow reads a
 context slot of its maker's; a built-in loop's callback, which may come
 from any frame, and an arrow in a derived constructor, whose this may not
 be bound yet, are not taken so.
-Elsewhere a call of a loop is made once for all its turns, so inlining it
-saves that call spread over them, against the code it adds to its caller
+Elsewhere a larger loop's call is made once for all its turns, so inlining
+it saves that call spread over them, against the code it adds to its caller
 (Crypto's `am3`: its callers' code 60% larger, Crypto 25% slower); what
 inlining a loop can save at every turn is what the caller makes known to
 it, the call of the closure it gives, and the closure, made at every call.

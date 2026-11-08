@@ -572,6 +572,7 @@ func (c *a64Compiler) exitTo(s *ssa.FrameState, kind uint64) {
 // exitThen is exitTo, going on at then, if it is not nil, instead of
 // returning to Go, as amd64's does.
 func (c *a64Compiler) exitThen(s *ssa.FrameState, kind uint64, then *arm64.Label) {
+	defer c.viewExits()()
 	if then == nil && c.opts.TableExits {
 		if d := c.exitDescriptor(s, kind, uint8(a64Locals), uint8(a64Stack)); d != nil {
 			c.exits = append(c.exits, d)
@@ -1241,6 +1242,14 @@ func (c *a64Compiler) block(b *ssa.Block, next *ssa.Block) {
 			continue
 		}
 		c.value(v, b)
+		if reg, slot, split := c.split(v); split {
+			// Its slot, which the frame states read (core's split).
+			if isFloat(v) {
+				c.a.StoreF(a64Ctx, c.spillDisp(slot), arm64.FReg(reg))
+			} else {
+				c.a.Store(a64Ctx, c.spillDisp(slot), arm64.Reg(reg))
+			}
+		}
 	}
 	switch b.Kind {
 	case ssa.BlockPlain:
@@ -3329,6 +3338,7 @@ func (c *a64Compiler) poolShade(sites []*ssa.CallSite) {
 
 // callRecords is amd64's: a native call's records written.
 func (c *a64Compiler) callRecords(v *ssa.Value, recs []callRecord) {
+	defer c.viewExits()()
 	for k, r := range recs {
 		at := abi.OffRecord + int32(k)*32
 		if r.big {
@@ -3877,6 +3887,8 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 		c.a.ShiftImm(arm64.Lsl, a64D, a64D, 4, true)
 		c.a.Load(a64B, a64Ctx, abi.OffStackBase)
 		c.a.Op(arm64.Add, a64D, a64D, a64B, true)
+		// From the call's state, as its records are (exitView).
+		back := c.viewExits()
 		for i := 0; i < site.Params && args+i < sp && i < site.LocalCount; i++ {
 			c.directOperand(v, s.Slots[args+i], a64D, int32(i)*vs)
 		}
@@ -3885,6 +3897,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 			c.a.Load(a64D, a64Ctx, abi.OffNext)
 			c.directOperand(v, s.Slots[this], a64D, abi.OffThis)
 		}
+		back()
 	}
 	words := func(slot int) (nb arm64.Reg, nd int32, rb arm64.Reg, rd int32) {
 		for i := range st.Records {

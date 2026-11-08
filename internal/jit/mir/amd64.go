@@ -1365,6 +1365,7 @@ func (c *compiler) genFinish() {
 // described them: the words of each slot's value the code keeps nowhere
 // else.
 func (c *compiler) callRecords(v *ssa.Value, recs []callRecord) {
+	defer c.viewExits()()
 	for k, r := range recs {
 		at := abi.OffRecord + int32(k)*32
 		if r.big {
@@ -1708,12 +1709,15 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 		c.a.Load(scratchB, regCtx, abi.OffStackBase)
 		c.a.Op(amd64.Add, scratchA, scratchB, true)
 		c.a.MovQToX(xScratch2, scratchA)
+		// From the call's state, as its records are (exitView).
+		back := c.viewExits()
 		for i := 0; i < site.Params && args+i < sp && i < site.LocalCount; i++ {
 			c.directOperand(v, s.Slots[args+i], true, int32(i)*vs)
 		}
 		if receiver {
 			c.directOperand(v, s.Slots[this], false, abi.OffThis)
 		}
+		back()
 	}
 	// A slot's words: its record's, or the frame's, which holds it still.
 	words := func(slot int) (nb amd64.Reg, nd int32, rb amd64.Reg, rd int32) {
@@ -5716,6 +5720,7 @@ func (c *compiler) exitTo(s *ssa.FrameState, kind uint64) {
 // returning to Go: the records are applied first (recordsTail), which a
 // caller of it makes sure they are, the collector not marking.
 func (c *compiler) exitThen(s *ssa.FrameState, kind uint64, then *amd64.Label) {
+	defer c.viewExits()()
 	if then == nil && c.opts.TableExits {
 		// To Go, which writes the frame from the exit's description.
 		if d := c.exitDescriptor(s, kind, uint8(regLocals), uint8(regStack)); d != nil {
@@ -6164,6 +6169,14 @@ func (c *compiler) block(b *ssa.Block, next *ssa.Block) {
 		}
 		c.markValue(v)
 		c.value(v, b)
+		if reg, slot, split := c.split(v); split {
+			// Its slot, which the frame states read (core's split).
+			if isFloat(v) {
+				c.a.StoreSD(regCtx, c.spillDisp(slot), amd64.XReg(reg))
+			} else {
+				c.a.Store(regCtx, c.spillDisp(slot), amd64.Reg(reg))
+			}
+		}
 		c.tagCold()
 	}
 	if c.ann != nil {

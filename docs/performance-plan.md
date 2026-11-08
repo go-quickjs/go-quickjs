@@ -1898,13 +1898,31 @@ Open from it:
   5 3600: List -13.7% against the inlining alone and -11.4% against the
   base before it, AWFY -1.1%, Octane -1.0% (zlib -2.0%), V8 -0.2%,
   micro geometric mean 0.997; compiles 1.3% slower (the scan 11.6 to
-  14.8 ms of 380 a run of Typescript's). Open: `bigint64_fnv1a` +5.7% at
-  every placement -- its loop's read of the `BigInt` global, which only
-  frame states read after its next instruction, is long and cheap and
-  now goes to a slot, stored and loaded straight back each turn. An
-  interval split after its last use in a register, which this
-  allocator does not do, would serve it and every value like it. The
-  micro-benchmark
+  14.8 ms of 380 a run of Typescript's). `bigint64_fnv1a` was +5.7% at
+  every placement: its loop's read of the `BigInt` global, which only
+  frame states read after its next instruction, long and cheap, went to
+  a slot, stored and loaded straight back each turn. The scan now splits
+  such an interval rather than spilling it: it keeps its register to its
+  last use but a frame state's and is stored as it is made, the frame
+  states reading the slot (internal/jit/README.md, Register
+  allocation). Against the inlining alone, over four JIT placements:
+  AWFY -2.0% (List -17.1%, Towers -6.4%), against the base -1.9% (List
+  -15.0%), Octane -0.2% (zlib -0.9%; zlib +0.4% and Mandreel +0.7%
+  against spilling whole), V8 -0.3%, micro geometric mean 0.995
+  (`bigint64_xorshift` -22%); compiles 3% slower than the inlining
+  alone (the uses 21.4 to 26.5 ms and the scan 11.7 to 16.7 ms of about
+  390). Still +5.0% at every placement, `bigint64_fnv1a`'s loop runs
+  3.9% faster than the inlining alone's on the mean of eight offsets of
+  its loops within their 64-byte lines -- about 10% faster at four, 3
+  to 5% slower at three, offset 0 among them, where every placement puts
+  it: placements vary which sets of the op cache the lines take, not
+  where code falls within them; `typed_f64_reduce`, +6.3% at every
+  placement, is level (+0.3%) over the eight. Open, to revisit: both
+  are taken as layout on that evidence alone. The placements tool
+  should vary where a JIT loop starts within its 64-byte line, as
+  `V8BENCH_JITPAD` varies the chunk, and both be judged over those
+  offsets; until then a JIT change that moves code within lines is
+  judged at offset 0 only. The micro-benchmark
   `method_call`, a call of a method whose loop runs no turns, kept out of
   line by it, was then inlined (-67%) and no longer timed a call with a
   frame; its loop now makes a call, which keeps the method out of line

@@ -25,13 +25,15 @@ func (e *AllocationError) Error() string { return "mir: allocation check: " + e.
 // found by other means: the intervals against liveness computed by block
 // sets over every value, iterated until none grows, the uses listed
 // (refIntervals); no two values whose intervals meet given one register of
-// a class, or one spill slot; and the slots a native call saves its
-// registers in its own.
-func (c *core) checkAllocation(iv []interval, spillCount int) {
+// a class, or one spill slot -- a split value's register only to its last
+// use but a frame state's, found again here, where no call that saves the
+// registers comes between, and in its own block -- and the slots a native
+// call saves its registers in its own.
+func (c *core) checkAllocation(iv []interval, rec []useRec, spillCount int) {
 	fail := func(format string, args ...any) {
 		panic(&AllocationError{fmt.Sprintf(format, args...)})
 	}
-	ref := c.refIntervals()
+	ref, real := c.refIntervals()
 	nf := c.f.NumValues()
 	for id := range nf {
 		a, b := iv[id], ref[id]
@@ -51,6 +53,18 @@ func (c *core) checkAllocation(iv []interval, spillCount int) {
 		l, ok := c.loc(it.v)
 		if !ok {
 			fail("%v has an interval and no location", it.v)
+		}
+		if reg, slot, split := c.split(it.v); split {
+			u := real[id]
+			if u.far || u.end != int(rec[id].real) {
+				fail("%v split: its last use but a frame state's at %d, far %t, want %d", it.v, int(rec[id].real), u.far, u.end)
+			}
+			if slot >= spillCount {
+				fail("%v: spill slot %d of %d", it.v, slot, spillCount)
+			}
+			byLoc[[2]int{2, slot}] = append(byLoc[[2]int{2, slot}], span{it.start, it.end, id})
+			byLoc[[2]int{b2i(isFloat(it.v)), reg}] = append(byLoc[[2]int{b2i(isFloat(it.v)), reg}], span{it.start, u.end, id})
+			continue
 		}
 		key := [2]int{0, l.reg}
 		switch {
@@ -109,7 +123,12 @@ func (c *core) valueOf(iv, ref []interval, id int) string {
 // every use listed, block-level sets of the values used outside the block
 // defining them, iterated backwards over the blocks until none grows, and
 // each value's interval stretched over each block it is live in or out of.
-func (c *core) refIntervals() []interval {
+// Of each value it also finds its last use but a frame state's, and
+// whether one is in another block than its own, or after a call in its
+// block that saves the registers (savingCall), or by a call that may read
+// it again (callsAgain), or whether its own instruction's state reads it
+// (far): what a split value must not be.
+func (c *core) refIntervals() ([]interval, []realUse) {
 	nv, nb := c.f.NumValues(), numBlocks(c.f)
 	pos := make([]int, nv)
 	for i := range pos {
@@ -128,18 +147,26 @@ func (c *core) refIntervals() []interval {
 		at = append(at, b)
 	}
 	type use struct {
-		v   *ssa.Value
-		pos int
+		v     *ssa.Value
+		pos   int
+		state bool
+		// again marks an operand of a call that may read it after Go
+		// has had the registers (callsAgain).
+		again bool
+		// own is, for an instruction's state, the position of the first
+		// of its values, which share it, or 0.
+		own int
 	}
 	var uses []use
 	need := func(v *ssa.Value) bool { return hasResult(v) && !c.isLazy(v) }
+	own := 0
 	useState := func(s *ssa.FrameState, at int, moved *ssa.Block) {
 		if s == nil {
 			return
 		}
 		add := func(x *ssa.Value) {
 			if moved == nil || x.Op != ssa.OpPhi || x.Block != moved {
-				uses = append(uses, use{x, at})
+				uses = append(uses, use{v: x, pos: at, state: true, own: own})
 			}
 		}
 		for _, v := range s.Slots {
@@ -165,41 +192,48 @@ func (c *core) refIntervals() []interval {
 		}
 	}
 	for _, b := range c.order {
+		first := 0
 		for i, v := range b.Values {
 			if v.Op == ssa.OpPhi {
 				continue
 			}
 			p, fused := pos[v.ID], c.isFused(v)
+			if first == 0 {
+				first = p
+			}
 			if fused {
 				p = end[b.ID]
 			}
+			again := callsAgain(v)
 			for _, a := range v.Args {
-				uses = append(uses, use{a, p})
+				uses = append(uses, use{v: a, pos: p, again: again})
 				if a.Op == ssa.OpBoxF64 || a.Op == ssa.OpBoxBool {
-					uses = append(uses, use{a.Args[0], p})
+					uses = append(uses, use{v: a.Args[0], pos: p, again: again})
 				}
 				if a.Shadow != nil {
-					uses = append(uses, use{a.Shadow, p})
+					uses = append(uses, use{v: a.Shadow, pos: p, again: again})
 				}
 			}
 			at := p
-			if v.Op == ssa.OpCall && len(v.Calls()) != 0 && (v.Calls()[0].Go != 0 || ssa.RefillsPools(v)) {
+			if again {
 				at++
 			}
 			if !fused && i+1 < len(b.Values) && b.Values[i+1].State == v.State {
 				continue
 			}
+			own = first
 			useState(v.State, at, nil)
+			own, first = 0, 0
 		}
 		if b.Control != nil {
 			if c.isLazy(b.Control) {
 				for _, a := range b.Control.Args {
-					uses = append(uses, use{a, end[b.ID]})
+					uses = append(uses, use{v: a, pos: end[b.ID]})
 				}
 			} else {
-				uses = append(uses, use{b.Control, end[b.ID]})
+				uses = append(uses, use{v: b.Control, pos: end[b.ID]})
 				if b.Control.Shadow != nil {
-					uses = append(uses, use{b.Control.Shadow, end[b.ID]})
+					uses = append(uses, use{v: b.Control.Shadow, pos: end[b.ID]})
 				}
 			}
 		}
@@ -216,7 +250,7 @@ func (c *core) refIntervals() []interval {
 					if phi.Op != ssa.OpPhi {
 						break
 					}
-					uses = append(uses, use{phi.Args[i], end[b.ID]})
+					uses = append(uses, use{v: phi.Args[i], pos: end[b.ID]})
 				}
 				if s.LoopHeader && s.Backedge[i] {
 					useState(s.Header, end[b.ID], s)
@@ -322,5 +356,51 @@ func (c *core) refIntervals() []interval {
 			})
 		}
 	}
-	return iv
+	// The calls that save the registers, by position: at[p] is their
+	// block.
+	calls := make([]bool, len(at))
+	for _, b := range c.order {
+		for _, v := range b.Values {
+			if savingCall(v) {
+				calls[pos[v.ID]] = true
+			}
+		}
+	}
+	real := make([]realUse, nv)
+	for _, b := range c.order {
+		for _, v := range b.Values {
+			if need(v) {
+				real[v.ID].end = pos[v.ID]
+			}
+		}
+	}
+	for _, u := range uses {
+		if !need(u.v) {
+			continue
+		}
+		r, def := &real[u.v.ID], pos[u.v.ID]
+		if u.v.Op == ssa.OpPhi {
+			def = start[u.v.Block.ID]
+		}
+		if u.state {
+			r.far = r.far || u.own > 0 && def >= u.own
+			continue
+		}
+		r.end = max(r.end, u.pos)
+		if defBlock[u.v.ID] != at[u.pos] || u.again {
+			r.far = true
+			continue
+		}
+		for p := def + 1; p < u.pos; p++ {
+			r.far = r.far || calls[p]
+		}
+	}
+	return iv, real
+}
+
+// realUse is what refIntervals finds of a value's uses but frame states':
+// the last's position, and whether the value may not be split (far).
+type realUse struct {
+	end int
+	far bool
 }

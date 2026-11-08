@@ -37,6 +37,11 @@ type core struct {
 	fused  []bool
 	locs   []loc
 	hasLoc []bool
+	// exitView has loc give a split value's slot (loc's split), as what
+	// reads a frame state does -- an exit, its description, a call's
+	// records and the callee's arguments it copies from its state --
+	// where the rest of the code is given its register.
+	exitView bool
 	// origin is each tagged value's (ssa.Origins): the slot an exit looks
 	// in for the reference the value may be.
 	origin ssa.OriginMap
@@ -582,16 +587,40 @@ func (c *Code) Spilled() int {
 		for _, v := range b.Values {
 			if l, ok := k.loc(v); ok && !k.isLazy(v) && l.reg < 0 {
 				n++
+			} else if _, _, split := k.split(v); split {
+				n++
 			}
 		}
 	}
 	return n
 }
 
-// loc is where a value lives: a register of its class, or a spill slot.
+// loc is where a value lives: a register of its class, or a spill slot;
+// or, split (allocate's split), both: the register from its definition to
+// its last use but a frame state's, and the slot, which the code stores it
+// to as it is made (the emitters' block) and every frame state reads
+// (exitView).
 type loc struct {
 	reg   int // register number, or -1
 	spill int // spill slot, or -1
+}
+
+// split is the register and the slot of v if it is split (loc), and
+// whether it is.
+func (c *core) split(v *ssa.Value) (reg, slot int, ok bool) {
+	if v.ID >= len(c.locs) || !c.hasLoc[v.ID] {
+		return 0, 0, false
+	}
+	l := c.locs[v.ID]
+	return l.reg, l.spill, l.reg >= 0 && l.spill >= 0
+}
+
+// viewExits sets exitView, for what reads a frame state, and returns what
+// sets it back: c.viewExits()() in a defer.
+func (c *core) viewExits() func() {
+	was := c.exitView
+	c.exitView = true
+	return func() { c.exitView = was }
 }
 
 // isLazy reports whether v has no location of its own (core.lazy).
@@ -600,12 +629,21 @@ func (c *core) isLazy(v *ssa.Value) bool { return v.ID < len(c.lazy) && c.lazy[v
 // isFused reports whether v is computed by its block's branch (core.fused).
 func (c *core) isFused(v *ssa.Value) bool { return v.ID < len(c.fused) && c.fused[v.ID] }
 
-// loc is v's location, and whether it has one.
+// loc is v's location, and whether it has one: of a split value, its slot
+// if exitView is set, else its register.
 func (c *core) loc(v *ssa.Value) (loc, bool) {
 	if v.ID >= len(c.locs) || !c.hasLoc[v.ID] {
 		return loc{}, false
 	}
-	return c.locs[v.ID], true
+	l := c.locs[v.ID]
+	if l.reg >= 0 && l.spill >= 0 {
+		if c.exitView {
+			l.reg = -1
+		} else {
+			l.spill = -1
+		}
+	}
+	return l, true
 }
 
 // locAt is v's location, or the zero location if it has none.
@@ -958,6 +996,10 @@ func (c *core) allocate() error {
 		pos[i] = -1
 	}
 	start, end := c.ints(nb), c.ints(nb)
+	// callIn is, by block ID, the position of the last call in it that
+	// saves the registers it keeps (savingCall), or -1: a value read after
+	// one is not split.
+	callIn := c.ints(nb)
 	// Intervals, by value ID (v nil until made): each from its definition
 	// -- a phi's from its block's start -- to its last use, stretched over
 	// every block where the value is live in or out. The uses are met once,
@@ -980,11 +1022,15 @@ func (c *core) allocate() error {
 	for _, b := range c.order {
 		inOrder[b.ID] = true
 		start[b.ID] = count
+		callIn[b.ID] = -1
 		count++
 		for _, v := range b.Values {
 			p := count
 			pos[v.ID] = p
 			count++
+			if savingCall(v) {
+				callIn[b.ID] = p
+			}
 			if v.Op == ssa.OpPhi {
 				most += 1 + len(v.Args)
 				p = start[v.Block.ID]
@@ -993,7 +1039,7 @@ func (c *core) allocate() error {
 			r.def = -1
 			if need(v) {
 				iv[v.ID] = interval{v: v, start: p, end: p}
-				r.end, r.def = int32(p), int32(b.ID)+1
+				r.end, r.def, r.real = int32(p), int32(b.ID)+1, int32(p)
 			}
 			if bigKept(v) != nil || c.isLazy(v) || remat(v) {
 				r.slot = slotMade
@@ -1015,7 +1061,14 @@ func (c *core) allocate() error {
 	var cur *ssa.Block
 	// refused says the uses being met are a call of Go's state's, which
 	// only its refusal reads (below): they leave a record's hot as it is.
-	refused := false
+	// inState says they are a frame state's, which leave its real as it is
+	// (useRec's); lastCall is the position of the last call in cur met
+	// that saves the registers it keeps, or -1; again says they are a
+	// call's that may read them again after Go has had the registers
+	// (callsAgain), as its state's are; own is the position of the first
+	// of the values whose state they are, the guards of one instruction,
+	// or -1.
+	refused, inState, again, lastCall, own := false, false, false, -1, -1
 	use := func(x *ssa.Value, p int) {
 		r := &rec[x.ID]
 		if r.def <= 0 {
@@ -1028,6 +1081,23 @@ func (c *core) allocate() error {
 		r.end = max(r.end, int32(p))
 		if !refused {
 			r.hot = max(r.hot, int32(p))
+		}
+		if inState {
+			if r.def == int32(cur.ID)+1 && own >= 0 && iv[x.ID].start >= own {
+				// Its own instruction's state, read as it is made.
+				r.slot |= slotFar
+			}
+		} else {
+			r.real = max(r.real, int32(p))
+			// The call before p: before the value at p, or any in cur
+			// for its end's -- a branch's, an edge's.
+			lc := lastCall
+			if p == end[cur.ID] {
+				lc = callIn[cur.ID]
+			}
+			if r.def != int32(cur.ID)+1 || again || lc >= 0 && lc > iv[x.ID].start {
+				r.slot |= slotFar
+			}
 		}
 		if r.def != int32(cur.ID)+1 {
 			if h := r.xhead; h == 0 || xuses[h-1].b != cur {
@@ -1049,6 +1119,7 @@ func (c *core) allocate() error {
 		if s == nil {
 			return
 		}
+		inState = true
 		add := func(x *ssa.Value) {
 			if moved == nil || x.Op != ssa.OpPhi || x.Block != moved {
 				use(x, at)
@@ -1080,6 +1151,7 @@ func (c *core) allocate() error {
 				add(v.Shadow)
 			}
 		}
+		inState = false
 	}
 	// A phi's arguments are used at its block's predecessors' ends, as its
 	// block is met: the phis are walked in order, each argument read once,
@@ -1182,7 +1254,10 @@ func (c *core) allocate() error {
 				}
 			}
 		}
-		cur = b
+		cur, lastCall = b, -1
+		// first is the position of the first value of the instruction
+		// whose guards are being met, which share its state.
+		first := -1
 		for i, v := range b.Values {
 			switch v.Op {
 			case ssa.OpPhi:
@@ -1196,10 +1271,14 @@ func (c *core) allocate() error {
 			// A fused value is computed at its block's branch (findFused):
 			// what it reads is used there.
 			p, fused := pos[v.ID], c.isFused(v)
+			if first < 0 {
+				first = p
+			}
 			if fused {
 				p = end[b.ID]
 			}
 			spend(v, bw)
+			again = callsAgain(v)
 			for _, a := range v.Args {
 				use(a, p)
 				spend(a, bw)
@@ -1223,8 +1302,12 @@ func (c *core) allocate() error {
 					spend(a.Shadow, bw)
 				}
 			}
+			again = false
+			if savingCall(v) {
+				lastCall = p
+			}
 			at := p
-			if v.Op == ssa.OpCall && len(v.Calls()) != 0 && (v.Calls()[0].Go != 0 || ssa.RefillsPools(v)) {
+			if callsAgain(v) {
 				// A call of Go that Go refuses exits after it, Go having
 				// taken the registers: what its state reads lives across
 				// it, saved and restored (saves). So does a call whose
@@ -1238,9 +1321,9 @@ func (c *core) allocate() error {
 				// others, as they are in one block.
 				continue
 			}
-			refused = at != p && v.Calls()[0].Go != 0
+			refused, own = at != p && v.Calls()[0].Go != 0, first
 			useState(v.State, at, nil)
-			refused = false
+			refused, own, first = false, -1, -1
 		}
 		if b.Control != nil {
 			if c.isLazy(b.Control) {
@@ -1794,6 +1877,23 @@ func (c *core) allocate() error {
 			}
 			return w
 		}
+		// splitCost is what splitting x at position at costs (below): its
+		// slot's store where it is made, weighed as its block; and whether
+		// it may be split there -- a value that is no phi, nor a call's
+		// result or a keep's, made in a register by its own operation,
+		// whose uses but frame states' are all in its block and before at
+		// (useRec's real and slotFar).
+		splitCost := func(x *ssa.Value, at int) (int, bool) {
+			r := &rec[x.ID]
+			if x.ID >= nf || x.Op == ssa.OpPhi || r.slot&(slotMade|slotFar) != 0 || int(r.real) >= at || c.isFused(x) {
+				return 0, false
+			}
+			switch x.Op {
+			case ssa.OpCall, ssa.OpMathCall, ssa.OpKeep, ssa.OpKept, ssa.OpBigBox, ssa.OpCallCell, ssa.OpBigCell:
+				return 0, false
+			}
+			return edgeWeights[min(bits.OnesCount64(masks[r.def-1]), 3)], true
+		}
 		// minEnd is at most the soonest an active interval ends: none
 		// ends before an interval that starts no later, and the active
 		// are looked at only once one may.
@@ -1827,7 +1927,7 @@ func (c *core) allocate() error {
 			}
 			for _, k := range done {
 				a := spilled[k]
-				freeSlot(c.locAt(a.v).spill, a.end)
+				freeSlot(c.locs[a.v.ID].spill, a.end)
 			}
 			r := roots[j]
 			if len(free) > 0 {
@@ -1879,7 +1979,21 @@ func (c *core) allocate() error {
 			// inlined, the second property read's cell address, which
 			// ended at the loop's back edge with the caller's values that
 			// only the loop's exits read, and lost the tie.
-			victim := it
+			//
+			// An active interval whose uses but frame states' are all
+			// behind -- each in its own block, no call between that saves
+			// the registers -- is split rather than spilled, as a linear
+			// scan that splits an interval at a use (Wimmer's) or gives it
+			// a second chance does: it keeps its register from its
+			// definition to its last such use, and its slot, written as it
+			// is made, holds it for the frame states, which alone read it
+			// after (exitView). It costs the slot's store, not its uses'
+			// loads. Spilled whole, a value made in a loop's turn, read by
+			// the next instruction and then by the turn's frame states
+			// alone, long and cheap, had been stored and loaded straight
+			// back each turn: in a BigInt's hash (microbench's
+			// bigint64_fnv1a), the loop's read of the BigInt global.
+			victim, split := it, false
 			vi := -1
 			// The ratios are compared as products, in floating point, which
 			// no function's weights overflow, each rounded (not fused).
@@ -1887,17 +2001,23 @@ func (c *core) allocate() error {
 			vc, vr := float64(itCost), float64(run[it.end+1]-run[it.start])
 			for i, e := range aEnd {
 				ac, ar := float64(aCost[i]), float64(run[e+1]-run[it.start])
+				// Split or spilled, whichever costs less: spilled, a phi's
+				// argument may share its phi's slot (inSlot).
+				w, sp := splitCost(active[i].v, it.start)
+				if sp = sp && w < aCost[i]; sp {
+					ac = float64(w)
+				}
 				if d := float64(ac*vr) - float64(vc*ar); d < 0 || d == 0 && e > victim.end {
-					victim, vi, vc, vr = active[i], i, ac, ar
+					victim, vi, vc, vr, split = active[i], i, ac, ar, sp
 				}
 			}
 			if it.v.ID >= nf {
-				victim, vi = it, -1
+				victim, vi, split = it, -1, false
 			}
 			if budgets > 0 {
 				for i, a := range active {
 					if a.v.ID >= nf {
-						victim, vi = a, i
+						victim, vi, split = a, i, false
 					}
 				}
 			}
@@ -1917,7 +2037,11 @@ func (c *core) allocate() error {
 			} else {
 				reg = c.locAt(victim.v).reg
 				c.setLoc(it.v, loc{reg: reg, spill: -1})
-				c.setLoc(victim.v, loc{reg: -1, spill: s})
+				if split {
+					c.setLoc(victim.v, loc{reg: reg, spill: s})
+				} else {
+					c.setLoc(victim.v, loc{reg: -1, spill: s})
+				}
 				active[vi], aEnd[vi], aCost[vi] = it, it.end, itCost
 				if budget {
 					budgets--
@@ -1949,7 +2073,7 @@ func (c *core) allocate() error {
 	open, next := c.intervalRefs(len(all))[:0], 0
 	{
 		for _, v := range kv {
-			if (v.Op != ssa.OpCall || v.Calls() == nil) && v.Op != ssa.OpMathCall {
+			if !savingCall(v) {
 				// A call, native or Go's; or a Math function's call of
 				// Go, which saves what lives across it too (mir's
 				// mathCall).
@@ -1972,7 +2096,9 @@ func (c *core) allocate() error {
 			for ; next < len(all) && all[next].start < p; next++ {
 				// Only what is in a register is saved; nor is a budget
 				// loop's, whose loop calls nothing.
-				if it := all[next]; c.locs[it.v.ID].reg >= 0 && it.v.ID < c.f.NumValues() {
+				// Nor a split value's, which no such call follows before
+				// its last use but a frame state's (useRec's slotFar).
+				if it := all[next]; c.locs[it.v.ID].reg >= 0 && c.locs[it.v.ID].spill < 0 && it.v.ID < c.f.NumValues() {
 					open = append(open, it)
 				}
 			}
@@ -2024,7 +2150,7 @@ func (c *core) allocate() error {
 		}
 	}
 	if c.opts.CheckAllocations {
-		c.checkAllocation(iv, scanSpills)
+		c.checkAllocation(iv, rec, scanSpills)
 	}
 	err := c.colorKeeps(iv, pos, kv)
 	c.keepKeepList(kv)
@@ -2487,6 +2613,22 @@ func (c *core) frameSize() int {
 	return n
 }
 
+// callsAgain reports a call that may read its operands, and its state's
+// values, after Go has had the registers: a call of Go, which Go may
+// refuse, the call exiting after it; or a call whose pool Go fills, made
+// again from its start (ssa.RefillsPools). What it reads lives across it,
+// saved and restored (allocate's saves).
+func callsAgain(v *ssa.Value) bool {
+	return v.Op == ssa.OpCall && len(v.Calls()) != 0 && (v.Calls()[0].Go != 0 || ssa.RefillsPools(v))
+}
+
+// savingCall reports a call that saves the registers live across it, and
+// restores them after (allocate's saves): a native call, or a Math
+// function's call of Go.
+func savingCall(v *ssa.Value) bool {
+	return v.Op == ssa.OpCall && v.Calls() != nil || v.Op == ssa.OpMathCall
+}
+
 // remat reports a value an exit recomputes from its operands rather than
 // reads from its location. A poll exits on a back-edge, after the phi moves
 // and before the header runs again, so a box the header computed of a phi
@@ -2529,10 +2671,15 @@ func (c *core) describe() string {
 	for _, b := range c.order {
 		for _, v := range b.Values {
 			l, ok := c.loc(v)
+			if r, sl, split := c.split(v); split {
+				l = loc{reg: r, spill: sl}
+			}
 			switch {
 			case c.isLazy(v):
 				out += fmt.Sprintf("%v:lazy ", v)
 			case !ok:
+			case l.reg >= 0 && l.spill >= 0:
+				out += fmt.Sprintf("%v:%s%d+spill%d ", v, map[bool]string{false: "r", true: "x"}[isFloat(v)], l.reg, l.spill)
 			case l.reg >= 0 && isFloat(v):
 				out += fmt.Sprintf("%v:x%d ", v, l.reg)
 			case l.reg >= 0:
@@ -2565,9 +2712,12 @@ func hasResult(v *ssa.Value) bool { return v.Type != ssa.None }
 // branch's control, a phi's argument at its edge, not a frame state, which
 // only an exit reads -- each weighed by how often it runs, 16 to the power
 // of the loops holding it (edgeWeights), at most math.MaxInt32.
+//
+// real is the last use's position but a frame state's: where the value's
+// register may end if its slot is written as it is made (allocate's split).
 type useRec struct {
-	end, def, xhead, mid, hot, cost int32
-	slot                            uint8
+	end, def, xhead, mid, hot, cost, real int32
+	slot                                  uint8
 }
 
 // useRec's slot: a value made where needed or a BigInt's box, whose state
@@ -2578,6 +2728,12 @@ const (
 	// slotFloat is no use's but the value's class: a floating-point
 	// value's.
 	slotFloat
+	// slotFar marks a value that cannot be split (allocate's split): one
+	// that a use but a frame state's reads in another block than its own,
+	// or past a call after it that saves the registers (savingCall), or as
+	// an operand of a call that may read it again (callsAgain); or that
+	// its own state reads.
+	slotFar
 )
 
 // gmember is a member of allocate's phis' groups: of the member, group, 1
@@ -2777,6 +2933,7 @@ var TableExits = true
 // exitThen's code writes it; or nil where a value is where a description
 // cannot say, and the exit's code writes the frame itself.
 func (c *core) exitDescriptor(s *ssa.FrameState, kind uint64, localsReg, stackReg uint8) *abi.ExitDescriptor {
+	defer c.viewExits()()
 	f := c.exitLayout()
 	d := abi.ExitDescriptor{Kind: uint32(kind), PC: uint32(s.PC), Depth: uint32(s.Depth), Site: int32(s.Site),
 		Frame: f, Start: uint32(len(f.Index)), LocalsReg: localsReg, StackReg: stackReg}
@@ -2990,6 +3147,7 @@ type callRecord struct {
 // reads its callee's arguments from. Those whose pointer words it writes
 // come first.
 func (c *core) callState(v *ssa.Value, s *ssa.FrameState, skip func(int) bool, operands int) (*abi.CallState, []callRecord) {
+	defer c.viewExits()()
 	saves := c.savesOf(v)
 	if len(c.callSlab) == cap(c.callSlab) {
 		c.callSlab = make([]abi.CallState, 0, max(min(2*cap(c.callSlab), 32), 4))
