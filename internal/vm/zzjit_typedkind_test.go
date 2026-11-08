@@ -318,3 +318,56 @@ func TestJITTypedSiteMeetsAnotherNatively(t *testing.T) {
 		}
 	}
 }
+
+// A captured binding's typed array has its reads compiled as a typed
+// array's (ssa.UpvalueTypedFeedback), as a global's has: once the binding
+// holds an Array instead, a read of any value from it -- returned, made a
+// typed array's read, Go's for anything else -- settles in native code
+// again, compiled for what it met. Each answer is the interpreter's.
+func TestJITTypedUpvalueBecomesArray(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const setup = `
+		function make() {
+			var buf = new Int32Array(64)
+			for (var i = 0; i < 64; i++) buf[i] = i * 3
+			function get(i) { return buf[i & 63] }
+			function swap() { buf = Array.from({ length: 64 }, (_, i) => 'e' + i) }
+			return { get: get, swap: swap }
+		}
+		var m = make(), get = m.get
+		function run(n) { const out = []; for (let i = 0; i < n; i++) out.push(get(i)); return out.slice(-3).join() }`
+	jitNoInlineForTest(t, "get")
+	jitAgreesForTest(t, setup, "run(500)", "run(500)", "run(500)", "(m.swap(), run(500))", "run(500)", "run(500)")
+
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	r.jitStress.background = false
+	if _, err := r.Run(compileForTest(t, setup)); err != nil {
+		t.Fatal(err)
+	}
+	prog := compileForTest(t, "get(7)")
+	calls := func() {
+		t.Helper()
+		for range 2000 {
+			if _, err := r.Run(prog); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	calls()
+	jitNativeForTest(t, r, "get")
+	if _, err := r.Run(compileForTest(t, "m.swap()")); err != nil {
+		t.Fatal(err)
+	}
+	calls()
+	e := jitNativeForTest(t, r, "get")
+	hosts := e.ssaStats.hosts
+	calls()
+	if e != jitNativeForTest(t, r, "get") {
+		t.Fatal("get compiled again after it had settled")
+	}
+	if n := e.ssaStats.hosts - hosts; n > 2 {
+		t.Errorf("get left native code %d times in 2,000 reads of an Array", n)
+	}
+}
