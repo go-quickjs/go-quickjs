@@ -69,6 +69,15 @@ type UpvalueDesc struct {
 	// immutable but whose assignment outside strict mode is discarded rather
 	// than refused.
 	FuncSelf bool
+	// ByValue marks a local of the enclosing function that holds its final
+	// value when the closure is made and is never assigned after: a const
+	// initialized by then, or a strict function's simple parameter that
+	// nothing stores to (WrittenLocals, UpvalueAssigned). The closure may
+	// then take a copy of the value rather than share the binding with
+	// the frame, as Java's lambdas and Go's closures copy what is
+	// effectively final. Only with FromParent; never in code compiled for
+	// a debugger, which may set a binding.
+	ByValue bool
 }
 
 // EvalScope is what a direct `eval` call site can see.
@@ -339,6 +348,11 @@ type Function struct {
 	// name, which says how large the object a constructor builds will be. It is
 	// a hint: the table grows as usual if the body adds more.
 	ThisProps uint8
+	// CapturesByValue is whether any of Upvalues is ByValue, which a
+	// closure made of the function must know before it is allocated. In
+	// what was padding before PropSites, so that no field moves, and in the
+	// line Kind is in, which making a closure reads already.
+	CapturesByValue bool
 	// PropSites is how many property reads and writes, object literals,
 	// instanceof operators and global reads the code has that keep a cache --
 	// of where a read or a write last found its property, or of the shape a

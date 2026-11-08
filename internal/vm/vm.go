@@ -3264,6 +3264,13 @@ func (r *Runtime) newClosure(f *frame, c Value) *Object { return r.newClosureIn(
 // Cells, the JIT's GoCells), not open on f's slots.
 func (r *Runtime) newClosureIn(f *frame, c Value, cells []*upvalue) *Object {
 	tmpl := c.template()
+	if tmpl.fn.CapturesByValue && cells == nil {
+		// What it takes by value it copies, into cells of its own, which no
+		// frame keeps open (newClosureByValue). Native code's locals in cells
+		// of their own are shared all the same: what never changes is the
+		// same either way.
+		return newClosureByValue[struct{}](r, f, tmpl)
+	}
 
 	// The object, its function data, its closure and the bindings that closure
 	// captures are one allocation: a closure made in a loop is as common as

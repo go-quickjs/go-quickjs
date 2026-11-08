@@ -11,7 +11,7 @@ import "testing"
 // their values from the call's arguments, and so are given a frame each),
 // fewer arguments than parameters and more, a method calling itself on
 // another object, a binding a closure keeps open (given a frame each, the
-// closures seeing their own), two closures of one function (not each
+// closures seeing their own) and one it takes the value of, two closures of one function (not each
 // other's self), a ternary's tail call -- and a recursion a million deep
 // runs in its frame. Node, which makes no tail call, is asked 5,000 deep.
 // On the trees and in the interpreter, three rounds alike.
@@ -25,6 +25,7 @@ func TestSelfTailCalls(t *testing.T) {
 		function many(n, a) { let _k = 0; if (n === 0) return a; return many(n - 1, a + 1, 'extra', 'more') }
 		class Node2 { constructor(v, next) { this.v = v; this.next = next } sum(acc) { let _k = 0; if (this.next === null) return acc + this.v; return this.next.sum(acc + this.v) } }
 		function captured(n, fs) { let _k = 0; if (n === 0) return fs.map(f => f()).join(); fs.push(() => n); return captured(n - 1, fs) }
+		function open(n, fs) { let _k = 0; if (n === 0) return fs.map(f => f()).join(); fs.push(() => (n += 0)); return open(n - 1, fs) }
 		function maker() { return function self(n, acc) { let _k = 0; if (n === 0) return acc; return self(n - 1, acc + 1) } }
 		const s1 = maker(), s2 = maker()
 		function cross(n, acc) { let _k = 0; if (n === 0) return acc; return (n % 2 ? s1 : s2)(n - 1, acc + 1) }
@@ -34,11 +35,11 @@ func TestSelfTailCalls(t *testing.T) {
 			const s = []
 			let list = null
 			for (let i = 1; i <= 50; i++) list = new Node2(i, list)
-			s.push(count(100, 0), defaults(200), few(100, 'a', 'b'), many(100, 0), list.sum(0), captured(100, []), cross(100, 0), s1(50, 0), deep(1e6), tern(1000, 0))
+			s.push(count(100, 0), defaults(200), few(100, 'a', 'b'), many(100, 0), list.sum(0), captured(100, []), open(100, []), cross(100, 0), s1(50, 0), deep(1e6), tern(1000, 0))
 			r.push(s.join(' '))
 		}
 		r[0] + ' | ' + (r[0] === r[1] && r[1] === r[2])`
-	const want = "101 10100 a/undefined 100 1275 100,99,98,97,96,95,94,93,92,91,90,89,88,87,86,85,84,83,82,81,80,79,78,77,76,75,74,73,72,71,70,69,68,67,66,65,64,63,62,61,60,59,58,57,56,55,54,53,52,51,50,49,48,47,46,45,44,43,42,41,40,39,38,37,36,35,34,33,32,31,30,29,28,27,26,25,24,23,22,21,20,19,18,17,16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1 100 50 done 2000 | true"
+	const want = "101 10100 a/undefined 100 1275 100,99,98,97,96,95,94,93,92,91,90,89,88,87,86,85,84,83,82,81,80,79,78,77,76,75,74,73,72,71,70,69,68,67,66,65,64,63,62,61,60,59,58,57,56,55,54,53,52,51,50,49,48,47,46,45,44,43,42,41,40,39,38,37,36,35,34,33,32,31,30,29,28,27,26,25,24,23,22,21,20,19,18,17,16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1 100,99,98,97,96,95,94,93,92,91,90,89,88,87,86,85,84,83,82,81,80,79,78,77,76,75,74,73,72,71,70,69,68,67,66,65,64,63,62,61,60,59,58,57,56,55,54,53,52,51,50,49,48,47,46,45,44,43,42,41,40,39,38,37,36,35,34,33,32,31,30,29,28,27,26,25,24,23,22,21,20,19,18,17,16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1 100 50 done 2000 | true"
 	for _, tree := range []bool{true, false} {
 		SetTreeTier(tree)
 		r := New(Config{})
@@ -60,7 +61,9 @@ func TestSelfTailCalls(t *testing.T) {
 // function's are tailCallDepth deep started again,
 // and none of a recursion that may not be (a binding a closure keeps open,
 // another closure of the function, a sloppy function), nor in the
-// interpreter, which leaves every such call to the trampoline.
+// interpreter, which leaves every such call to the trampoline. A closure
+// that only reads a parameter takes its value (bytecode.UpvalueDesc's
+// ByValue) and keeps nothing open: its maker is started again.
 func TestSelfTailRestarts(t *testing.T) {
 	old := selfRestart
 	defer func() { selfRestart = old }()
@@ -78,7 +81,8 @@ func TestSelfTailRestarts(t *testing.T) {
 	}{
 		{`"use strict"; function deep(n) { let _k = 0; if (n === 0) return 'done'; return deep(n - 1) }; deep(1000)`, 1000 + 2 - tailCallDepth},
 		{`"use strict"; function tern(n, acc) { let _k = 0; return n === 0 ? acc : tern(n - 1, acc + 2) }; tern(1000, 0)`, 1000 + 2 - tailCallDepth},
-		{`"use strict"; function captured(n, fs) { let _k = 0; if (n === 0) return fs.length; fs.push(() => n); return captured(n - 1, fs) }; captured(1000, [])`, 0},
+		{`"use strict"; function captured(n, fs) { let _k = 0; if (n === 0) return fs.length; fs.push(() => n); return captured(n - 1, fs) }; captured(1000, [])`, 1000 + 2 - tailCallDepth},
+		{`"use strict"; function open(n, fs) { let _k = 0; if (n === 0) return fs.length; fs.push(() => n++); return open(n - 1, fs) }; open(1000, [])`, 0},
 		{`"use strict"; function maker() { return function self(n) { let _k = 0; if (n === 0) return 0; return (n % 2 ? s1 : s2)(n - 1) } }; const s1 = maker(), s2 = maker(); s1(1000)`, 0},
 		{`function sloppy(n) { let _k = 0; if (n === 0) return 0; return sloppy(n - 1) }; sloppy(1000)`, 0},
 	}

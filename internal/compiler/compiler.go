@@ -297,6 +297,10 @@ type compiler struct {
 	locals     []localVar
 	localIndex map[string]int
 	nextSlot   uint32
+	// paramCaptures are the closures' captures of this function's
+	// parameters that may take the value (UpvalueDesc's ByValue), which
+	// finish settles once every store to them is compiled.
+	paramCaptures []paramCapture
 	// hiddenCount names the compiler-generated bindings, which are spelled
 	// with a character no identifier may contain so that nothing a script
 	// writes can collide with one.
@@ -532,6 +536,7 @@ type scratch struct {
 	locals     []localVar
 	pending    []bytecode.LocalDesc
 	targets    []bool
+	captures   []paramCapture
 	nameIndex  map[string]uint32
 	constIndex map[constKey]uint32
 	localIndex map[string]int
@@ -603,6 +608,7 @@ func newCompiler(parent *compiler, opts Options) *compiler {
 		locals:        s.locals[:0],
 		pendingLocals: s.pending[:0],
 		targets:       s.targets[:0],
+		paramCaptures: s.captures[:0],
 		nameIndex:     s.nameIndex,
 		constIndex:    s.constIndex,
 		scratch:       s,
@@ -673,6 +679,88 @@ func (c *compiler) finish() {
 			c.fn.PrivateSites++
 		}
 	}
+	if len(c.paramCaptures) != 0 {
+		c.settleParamCaptures()
+	}
+}
+
+// paramCapture is a closure's capture of a parameter of the function
+// that makes it: fn's upvalue up, of the parameter in slot.
+type paramCapture struct {
+	fn   *bytecode.Function
+	up   uint32
+	slot uint32
+}
+
+// settleParamCaptures marks by value (UpvalueDesc's ByValue) each of the
+// function's paramCaptures whose parameter nothing assigns: no instruction
+// of the function's stores to its slot -- a parameter list with a
+// default, a pattern or a rest binds every slot in its prologue, so none
+// of its parameters is -- and none of its closures assigns it, nor one a
+// closure makes (bytecode.UpvalueAssigned), the one capturing it by value
+// or any other. A direct eval in the function, strict or not, may assign
+// any; one in a closure assigns what it captures, as every name in scope
+// at the eval is (evalScope). Only a function some closure of which
+// captures a parameter is looked at, once its code is all compiled, its
+// closures' with it; its code once, for the first 64 parameters, which
+// are all a closure's captures are taken from.
+func (c *compiler) settleParamCaptures() {
+	if c.fn.HasDirectEval {
+		return
+	}
+	// The parameters' slots, which are the first, that the code stores to.
+	var written uint64
+	for _, in := range c.fn.Code {
+		if in.Op == bytecode.OpDirectEval || in.Op == bytecode.OpTailDirectEval {
+			return
+		}
+		if lo, hi := bytecode.WrittenLocals(in); lo < 64 {
+			for s := lo; s < hi && s < 64; s++ {
+				written |= 1 << s
+			}
+		}
+	}
+	// And those a closure assigns, asked of each closure once at most.
+	var closures, asked uint64
+	for _, p := range c.paramCaptures {
+		s := p.slot
+		if s >= 64 || written&(1<<s) != 0 {
+			continue
+		}
+		if asked&(1<<s) == 0 {
+			asked |= 1 << s
+			if c.closureAssigns(s) {
+				closures |= 1 << s
+			}
+		}
+		if closures&(1<<s) == 0 {
+			markByValue(p.fn, p.up)
+		}
+	}
+}
+
+// markByValue marks fn's upvalue up as taken by value, which a closure of
+// fn then knows before it is allocated (bytecode.Function's
+// CapturesByValue).
+func markByValue(fn *bytecode.Function, up uint32) {
+	fn.Upvalues[up].ByValue = true
+	fn.CapturesByValue = true
+}
+
+// closureAssigns reports whether a closure the function makes, or one it
+// makes in turn, may assign the function's local slot.
+func (c *compiler) closureAssigns(slot uint32) bool {
+	for _, k := range c.fn.Constants {
+		if k.Kind != bytecode.ConstFunction || k.Fn == nil {
+			continue
+		}
+		for j, d := range k.Fn.Upvalues {
+			if d.FromParent && d.Index == slot && bytecode.UpvalueAssigned(k.Fn, j) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // release copies the function's tables out of the scratch they were built
@@ -695,6 +783,7 @@ func (c *compiler) release() *bytecode.Function {
 	s.locals = clearUsed(c.locals[:max(c.localsUsed, len(c.locals))])
 	s.pending = clearUsed(c.pendingLocals)
 	s.targets = c.targets[:0]
+	s.captures = clearUsed(c.paramCaptures)
 	resetIndex(&s.nameIndex)
 	resetIndex(&s.constIndex)
 	resetIndex(&s.localIndex)
@@ -1282,6 +1371,20 @@ func (c *compiler) resolveUpvalue(name string) (uint32, bool) {
 		idx := c.addUpvalue(name, l.slot, true, !immutable,
 			(l.kind == bindLet || l.kind == bindConst) && !l.initialized, l.withDepth)
 		c.fn.Upvalues[idx].FuncSelf = l.kind == bindFuncSelf
+		if !c.opts.Debug {
+			switch {
+			case l.kind == bindConst && l.initialized:
+				// A const no assignment can change -- one through a with
+				// or an eval throws as any does -- that holds its value
+				// already, as the closure is made where it is compiled.
+				markByValue(c.fn, idx)
+			case l.kind == bindParam && c.parent.fn.Strict:
+				// A strict function's parameter, which no arguments object
+				// aliases: by value if nothing stores to it, which only the
+				// end of its function's compile can say.
+				c.parent.paramCaptures = append(c.parent.paramCaptures, paramCapture{c.fn, idx, l.slot})
+			}
+		}
 		return idx, true
 	}
 	// Not a local of the parent, so look further out and forward the result.

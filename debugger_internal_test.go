@@ -553,3 +553,49 @@ func TestDebuggerPauseLoopClose(t *testing.T) {
 		t.Errorf("Eval: %v, want ErrClosed", err)
 	}
 }
+
+// TestDebuggerAssignsCaptured pins that a debugger's assignment of a
+// binding a closure captures is the closure's too: code compiled for a
+// debugger takes nothing by value (bytecode.UpvalueDesc's ByValue), so a
+// strict function's parameters, assigned by an evaluation in its frame and
+// by SetVariable, are what its closure reads after, and a parameter the
+// closure's own frame assigns is what its maker reads. With the JIT too.
+func TestDebuggerAssignsCaptured(t *testing.T) {
+	for _, jit := range []bool{false, true} {
+		opts := []Option{WithDebugger()}
+		if jit {
+			opts = append(opts, WithJIT())
+		}
+		r := New(opts...)
+		h := &recorder{t: t, r: r}
+		r.rt.SetDebugHandler(h)
+		h.then = func(p *vm.DebugPause) vm.StepAction {
+			f := p.Frames[0]
+			var err error
+			switch f.FunctionName() {
+			case "f":
+				if _, err = f.Evaluate("x = 5"); err == nil {
+					err = f.SetVariable("y", vm.Int(7))
+				}
+			case "k":
+				_, err = f.Evaluate("z = 9")
+			default:
+				t.Errorf("paused in %q", f.FunctionName())
+			}
+			if err != nil {
+				t.Error(err)
+			}
+			return vm.Continue
+		}
+		v, err := r.Eval(`'use strict'
+			function f(x, y) { const g = () => x + ',' + y; debugger; return g() }
+			function h(z) { const k = () => { debugger; return z }; k(); return z }
+			const out = []
+			for (let i = 0; i < 20; i++) out.push(f(1, 2) + '|' + h(3))
+			out.every(s => s === out[0]) ? out[0] : out.join(' ')`)
+		if err != nil || v.String() != "5,7|9" {
+			t.Errorf("jit %v: %s, %v; want 5,7|9", jit, v.String(), err)
+		}
+		r.Close()
+	}
+}

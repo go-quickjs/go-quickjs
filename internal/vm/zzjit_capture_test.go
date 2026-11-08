@@ -54,3 +54,43 @@ func TestJITStrictEvalAssigns(t *testing.T) {
 		})
 	}
 }
+
+// TestJITCaptureByValue runs captureCases with the JIT, each function
+// compiled at its first call, its answers each Node's: idle, while the
+// collector marks, and under the stress of small budgets and forced
+// deoptimizations -- closures made natively, by Go for native code
+// (GoClosure) and from its pools, over bindings taken by value and shared.
+// Its cases of a strict closure's eval are TestJITStrictEvalAssigns's.
+func TestJITCaptureByValue(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	for _, mode := range []string{"idle", "marking", "stress"} {
+		t.Run(mode, func(t *testing.T) {
+			if mode == "marking" {
+				jitMarkingForTest(t)
+			}
+			native := 0
+			for _, c := range captureCases {
+				r := jitRuntimeForTest(t, Config{JIT: true})
+				if mode == "stress" {
+					r.jitStress = jitStressConfig{threshold: true, budget: 3, deopt: 7}
+				}
+				r.SetEvaluator(captureEvaluator)
+				if got := runCaptureCase(t, r, c, 30); got != c.want {
+					t.Errorf("%s: got %s, want %s", c.name, got, c.want)
+				}
+				for _, e := range r.jit.cache {
+					if e.ssa != nil {
+						native++
+						break
+					}
+				}
+			}
+			// Nearly every case's maker or closures run natively.
+			if native < len(captureCases)*3/4 {
+				t.Errorf("native code in %d of %d cases", native, len(captureCases))
+			}
+		})
+	}
+}
