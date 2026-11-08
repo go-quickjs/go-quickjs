@@ -266,3 +266,55 @@ func TestJITTypedUpvalues(t *testing.T) {
 		t.Errorf("branches' %d sites learned element types %#x, compiled for their bindings' types", sites, kinds)
 	}
 }
+
+// A site compiled for one element type that meets another, in a function
+// native callers alone call, goes on natively: its out-of-line cases read
+// and write every type. Nothing compiles such a function again for what
+// its sites learn -- it is never entered by Go, which would -- so a site
+// that left every other type to Go, its cases dropped to save compile
+// time, had called Go at each of its 40,000 stores a round, for good.
+func TestJITTypedSiteMeetsAnotherNatively(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	runtime.GC()
+	gc := debug.SetGCPercent(-1)
+	t.Cleanup(func() { debug.SetGCPercent(gc) })
+	jitNoInlineForTest(t, "put")
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	r.jitStress.background = false
+	if _, err := r.Run(compileForTest(t, `
+		const h = new Int32Array(64), u = new Uint8Array(64), d = new Float64Array(64)
+		function put(a, i, x) { for (let j = 0; j < 20; j++) a[(i + j) & 63] = x }
+		function fill(n) { for (let i = 0; i < n; i++) { put(h, i & 63, i * 3); put(u, i & 63, i); put(d, i & 63, i / 4) } return h[5] + u[7] + d[9] }`)); err != nil {
+		t.Fatal(err)
+	}
+	// Called by Go, put's site learns Int32Arrays' type and is compiled
+	// for it.
+	prog := compileForTest(t, `put(h, 3, 7)`)
+	for range 3000 {
+		if _, err := r.Run(prog); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e := jitNativeForTest(t, r, "put")
+	if kinds, _ := typedKindCells(t, r, "put"); kinds != 1<<abi.ElemInt32 || e.reopts == 0 {
+		t.Fatalf("put learned element types %#x, compiled again %d times: want Int32's, and compiled for it", kinds, e.reopts)
+	}
+	calls := 0
+	jitGoCallWork = func() { calls++ }
+	t.Cleanup(func() { jitGoCallWork = nil })
+	for k := range 3 {
+		calls = 0
+		v, err := r.Run(compileForTest(t, `fill(1000)`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := v.Number(); got != 2895+199+242.25 {
+			t.Fatalf("fill gave %v, want 3336.25", got)
+		}
+		if k > 0 && calls > 1000 {
+			t.Errorf("round %d: Go was called %d times for 60,000 stores", k, calls)
+		}
+	}
+}

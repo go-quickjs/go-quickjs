@@ -386,11 +386,12 @@ it for a store, so that no type matches; the one after that where the
 copy's length is no length to give -- a view detached or out of its
 buffer, whose methods throw, or tracking a growable shared buffer's
 length, which another agent may grow under it -- which native code then
-leaves to Go. The element,
-the view, its copy's three words: two loads before the element's, none of
-the buffer's. A site that has met
-none, or several, tells them apart as it runs, a case for each type, out
-of line. The existing tiers keep nothing of a site's types, so native
+leaves to Go. The element, the view, its copy's three words: two loads
+before the element's, none of the buffer's. A site that has met none, or
+several, tells them apart as it runs, a case for each type, out of line;
+so does a site compiled for one type that meets another, which keeps
+native code that only native callers run from leaving for Go at every
+access until it is compiled again. The existing tiers keep nothing of a site's types, so native
 code learns them, as V8's baseline code fills a feedback vector: each
 site has a cell, its function's lowering's (the VM's `typedCells`), with a
 bit for each type it met, which code reads when it reads or writes an
