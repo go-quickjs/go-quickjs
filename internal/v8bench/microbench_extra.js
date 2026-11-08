@@ -1041,6 +1041,20 @@ function loop_props(n)
     return n;
 }
 
+/* Emscripten's integers: each value an int32 by | 0, its counter's
+   comparison and its arithmetic the int32s' */
+function loop_int32(n)
+{
+    var j = 0, a = 1, b = 2, s = 0;
+    for (j = 0; (j | 0) < (n | 0); j = (j + 1) | 0) {
+        a = (a * 1103 + b) | 0;
+        b = (b ^ (a >>> 7)) | 0;
+        s = (s + (a & 255) - (b >> 29)) | 0;
+    }
+    global_res = s;
+    return n;
+}
+
 /* long string switches: early hits, late hits, misses and mixed keys */
 function extra_string_switch(n, keys)
 {

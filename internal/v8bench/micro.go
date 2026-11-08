@@ -84,7 +84,7 @@ var microWork = []struct {
 	{"call_fib", 4194304}, {"call_mutual", 4194304},
 	{"method_call", 2097152}, {"method_call_leaf", 4194304}, {"loop_sum", 8388608},
 	{"loop_arith", 2097152}, {"loop_locals", 4194304}, {"loop_elements", 8388608},
-	{"loop_props", 8388608},
+	{"loop_props", 8388608}, {"loop_int32", 2097152},
 	{"string_switch_first", 4194304}, {"string_switch_last", 1048576},
 	{"string_switch_miss", 1048576}, {"string_switch_mixed", 2097152},
 	{"string_switch_built", 1048576}, {"string_switch_small", 4194304},
