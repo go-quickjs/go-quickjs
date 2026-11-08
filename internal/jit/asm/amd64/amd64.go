@@ -72,7 +72,6 @@ type Asm struct {
 	// short says which fixups' jumps Finish shortened, and removed how many
 	// bytes the fixups before each, and it, removed (Moved).
 	short   []bool
-	never   []bool
 	removed []int
 	past    []int32
 	// bound are the labels in the order they were bound, which is their
@@ -147,7 +146,7 @@ func (a *Asm) Len() int { return len(a.buf) }
 // Reset empties the assembler for the next function, keeping its memory.
 func (a *Asm) Reset() {
 	a.buf, a.labels, a.fixups = a.buf[:0], a.labels[:0], a.fixups[:0]
-	a.short, a.never, a.removed, a.past, a.bound, a.at = a.short[:0], a.never[:0], a.removed[:0], a.past[:0], a.bound[:0], a.at[:0]
+	a.short, a.removed, a.past, a.bound, a.at = a.short[:0], a.removed[:0], a.past[:0], a.bound[:0], a.at[:0]
 	a.open, a.openQ, a.candPast, a.sums = a.open[:0], a.openQ[:0], a.candPast[:0], a.sums[:0]
 	a.aligned = false
 }
@@ -155,14 +154,14 @@ func (a *Asm) Reset() {
 // Bytes is the memory the assembler keeps for the next function.
 func (a *Asm) Bytes() int {
 	return cap(a.buf)*int(unsafe.Sizeof(a.buf[:1][0])) + cap(a.labels)*int(unsafe.Sizeof(0)) + cap(a.fixups)*int(unsafe.Sizeof(fixup{})) +
-		cap(a.short) + cap(a.never) + cap(a.removed)*int(unsafe.Sizeof(0)) + cap(a.past)*4 + cap(a.bound)*int(unsafe.Sizeof(Label(0))) + cap(a.at)*4 +
+		cap(a.short) + cap(a.removed)*int(unsafe.Sizeof(0)) + cap(a.past)*4 + cap(a.bound)*int(unsafe.Sizeof(Label(0))) + cap(a.at)*4 +
 		(cap(a.open)+cap(a.openQ)+cap(a.candPast)+cap(a.sums))*4
 }
 
 // Used is what of Bytes the last function used: its tables' lengths.
 func (a *Asm) Used() int {
 	return len(a.buf)*int(unsafe.Sizeof(a.buf[:1][0])) + len(a.labels)*int(unsafe.Sizeof(0)) + len(a.fixups)*int(unsafe.Sizeof(fixup{})) +
-		len(a.short) + len(a.never) + len(a.removed)*int(unsafe.Sizeof(0)) + len(a.past)*4 + len(a.bound)*int(unsafe.Sizeof(Label(0))) + len(a.at)*4 +
+		len(a.short) + len(a.removed)*int(unsafe.Sizeof(0)) + len(a.past)*4 + len(a.bound)*int(unsafe.Sizeof(Label(0))) + len(a.at)*4 +
 		(len(a.open)+len(a.openQ)+len(a.candPast)+len(a.sums))*4
 }
 
@@ -242,42 +241,37 @@ func (a *Asm) Finish() ([]byte, error) {
 		}
 		a.at[l] = int32(k)
 	}
-	a.past = grow(a.past, n)
-	for i, f := range a.fixups {
-		if a.labels[f.label] < 0 {
-			return nil, fmt.Errorf("amd64: label %d never bound", f.label)
-		}
-		a.past[i] = a.at[f.label]
-	}
-	// A jump too far for a byte's displacement even were every jump
-	// between it and its label shortened never is: it is passed over from
-	// the first round on, as most -- a guard's to its stub, past the
-	// function's blocks -- are.
-	a.never = grow(a.never, n)
-	for i, f := range a.fixups {
-		if f.kind == fixLea || f.kind == fixAlign {
-			a.never[i] = true
-			continue
-		}
-		start := int(f.start)
-		d, between := a.labels[f.label]-(start+2), int(a.past[i])-i-1
-		if d < 0 {
-			d, between = -d, i-int(a.past[i])
-		}
-		a.never[i] = d-4*max(between, 0)-4 > 127
-	}
-	// The rounds look at the jumps that may be shortened (cand, by fixup),
-	// those still open each until it is shortened. Only they remove bytes:
-	// what is removed before a fixup is what those before it remove, a sum
-	// over them alone (sums, by place in cand, made again each round), and
-	// candPast is, by place in cand, how many of them are before its
+	// Each fixup's label's index of the first fixup at or past it (past);
+	// whether its jump may be shortened, in one walk with that: a jump too
+	// far for a byte's displacement even were every jump between it and
+	// its label shortened never is, and is passed over from the first round
+	// on, as most -- a guard's to its stub, past the function's blocks --
+	// are. The rounds look at the jumps that may be shortened (cand, by
+	// fixup), those still open each until it is shortened. Only they remove
+	// bytes: what is removed before a fixup is what those before it remove,
+	// a sum over them alone (sums, by place in cand, made again each round),
+	// and candPast is, by place in cand, how many of them are before its
 	// label's fixup (past). A round shortens what fits as the round before
 	// left them; the last shortens none.
-	cand := a.open[:0]
+	a.past = grow(a.past, n)
 	a.candPast = grow(a.candPast, n+1)
-	for i := range a.fixups {
+	cand := a.open[:0]
+	for i, f := range a.fixups {
+		at := a.labels[f.label]
+		if at < 0 {
+			return nil, fmt.Errorf("amd64: label %d never bound", f.label)
+		}
+		past := a.at[f.label]
+		a.past[i] = past
 		a.candPast[i] = int32(len(cand))
-		if !a.never[i] {
+		if f.kind == fixLea || f.kind == fixAlign {
+			continue
+		}
+		d, between := at-(int(f.start)+2), int(past)-i-1
+		if d < 0 {
+			d, between = -d, i-int(past)
+		}
+		if d-4*max(between, 0)-4 <= 127 {
 			cand = append(cand, int32(i))
 		}
 	}
