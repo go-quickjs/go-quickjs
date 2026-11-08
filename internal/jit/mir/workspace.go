@@ -57,6 +57,9 @@ type Workspace struct {
 	exitSlotsBuf []abi.ExitSlot
 	exitIndexBuf []uint16
 	exitWordsBuf []uint64
+	// exitInlinesBuf is the frame's inlined callees' (abi.ExitFrame's
+	// Inlines).
+	exitInlinesBuf []abi.ExitInline
 	// Each code generator's assembler and tables. A Code's Bytes from
 	// CompileIn are the assembler's: they hold until the workspace's next
 	// compile.
@@ -135,7 +138,7 @@ func (w *Workspace) Bytes() int {
 	// A map's entries, as their keys and values, at least.
 	n += (len(w.amd64.stubs) + len(w.arm64.stubs)) * int(unsafe.Sizeof(stubKey{})+unsafe.Sizeof(amd64.Label(0)))
 	n += len(w.exitWords) * 12
-	n += capBytes(w.exitSlotsBuf) + capBytes(w.exitIndexBuf) + capBytes(w.exitWordsBuf) + capBytes(w.exitHeadBuf) + capBytes(w.exitNextBuf)
+	n += capBytes(w.exitSlotsBuf) + capBytes(w.exitIndexBuf) + capBytes(w.exitWordsBuf) + capBytes(w.exitHeadBuf) + capBytes(w.exitNextBuf) + capBytes(w.exitInlinesBuf)
 	return n
 }
 
@@ -178,6 +181,7 @@ func (w *Workspace) Rewind() {
 		w.calls = callScratch{}
 		w.exitWords = nil
 		w.exitSlotsBuf, w.exitIndexBuf, w.exitWordsBuf, w.exitHeadBuf, w.exitNextBuf = nil, nil, nil, nil, nil
+		w.exitInlinesBuf = nil
 		w.amd64.a, w.amd64.labels, w.amd64.stubs, w.amd64.stubFor, w.amd64.cold, w.amd64.pool, w.amd64.poolTab = amd64.Asm{}, nil, nil, nil, nil, nil, nil
 		w.arm64.a, w.arm64.labels, w.arm64.stubs, w.arm64.stubFor, w.arm64.cold = arm64.Asm{}, nil, nil, nil, nil
 	}

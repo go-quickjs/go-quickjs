@@ -70,11 +70,11 @@ func (s *ExitScratch) Apply(ctx *abi.Context) (refs int) {
 		clear(writes)
 		s.writes = writes[:0]
 	}
-	if len(d.Inline) != 0 {
+	if d.InlineN != 0 {
 		// The callers' frames' first slot, in the VM's stack.
 		first := int64((uintptr(f.stack)-uintptr(ctx.StackBase))/uintptr(f.enc.ValueSize)) - int64(d.Frame.Locals)
 		next := ctx
-		for _, in := range d.Inline {
+		for _, in := range d.Inlines() {
 			next = (*abi.Context)(next.Next)
 			next.InlineClosure, next.InlineLocals, next.InlineThis, next.InlineCallee, next.InlineArgs = in.Closure, in.Locals, in.ThisSlot, in.Callee, in.Args
 			next.ExitKind, next.ExitPC, next.ExitDepth, next.ExitSite = in.Kind, in.PC, in.Depth, uint64(in.Site)

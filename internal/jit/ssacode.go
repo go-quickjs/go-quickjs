@@ -207,11 +207,12 @@ func footprint(code, entries int, c *mir.Code) int {
 		if f != frame {
 			// One for the code's descriptions (mir's exitDescriptor).
 			frame = f
-			n += int(unsafe.Sizeof(*f)) + cap(f.Slots)*int(unsafe.Sizeof(abi.ExitSlot{})) + cap(f.Index)*2 + cap(f.Words)*8
+			n += int(unsafe.Sizeof(*f)) + cap(f.Slots)*int(unsafe.Sizeof(abi.ExitSlot{})) + cap(f.Index)*2 + cap(f.Words)*8 +
+				cap(f.Inlines)*int(unsafe.Sizeof(abi.ExitInline{}))
 		}
 	}
 	for _, x := range exits {
-		n += int(unsafe.Sizeof(*x)) + cap(x.Inline)*int(unsafe.Sizeof(abi.ExitInline{}))
+		n += int(unsafe.Sizeof(*x))
 		frameOf(x.Frame)
 	}
 	for _, st := range calls {

@@ -107,6 +107,47 @@ type jitCode struct {
 	States string
 }
 
+// exitView is what an exit description says, however it is kept: its
+// inlined callees' frames listed in it, as they are written, not where
+// the frame the descriptions share keeps them (abi.ExitDescriptor's
+// Inlines).
+type exitView struct {
+	Kind, PC, Depth     uint32
+	Site                int32
+	Frame               *exitFrameView
+	Start               uint32
+	Count               uint16
+	LocalsReg, StackReg uint8
+	Direct              bool
+	Inline              []abi.ExitInline
+}
+
+// exitFrameView is the frame an exitView's slots are of, without the
+// inlined callees' frames, which each view lists.
+type exitFrameView struct {
+	FrameLocals, ThisSlot, Locals int32
+	Enc                           *abi.Encoding
+	Slots                         []abi.ExitSlot
+	Index                         []uint16
+	Words                         []uint64
+}
+
+// exitViews are c's exit descriptions as exitViews.
+func exitViews(exits []*abi.ExitDescriptor) []exitView {
+	views := make([]exitView, len(exits))
+	frames := map[*abi.ExitFrame]*exitFrameView{}
+	for i, d := range exits {
+		fv := frames[d.Frame]
+		if fv == nil && d.Frame != nil {
+			f := d.Frame
+			fv = &exitFrameView{f.FrameLocals, f.ThisSlot, f.Locals, f.Enc, f.Slots, f.Index, f.Words}
+			frames[d.Frame] = fv
+		}
+		views[i] = exitView{d.Kind, d.PC, d.Depth, d.Site, fv, d.Start, d.Count, d.LocalsReg, d.StackReg, d.Direct, d.Inlines()}
+	}
+	return views
+}
+
 // codeStates is a hash of what c's code is described by. Numbers that may
 // be addresses are left out, and an empty list is a nil one.
 func codeStates(c *mir.Code) string {
@@ -116,8 +157,8 @@ func codeStates(c *mir.Code) string {
 		CallRefs                    int
 		Calls                       []*abi.CallState
 		GoCalls                     []*abi.GoCallState
-		Exits                       []*abi.ExitDescriptor
-	}{c.Entries, c.CallEntry, c.Resume, c.GenEntry, c.CallRefs, c.Calls, c.GoCalls, c.Exits})
+		Exits                       []exitView
+	}{c.Entries, c.CallEntry, c.Resume, c.GenEntry, c.CallRefs, c.Calls, c.GoCalls, exitViews(c.Exits)})
 	if err != nil {
 		return err.Error()
 	}

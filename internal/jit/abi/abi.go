@@ -711,9 +711,22 @@ type ExitDescriptor struct {
 	// none takes a reference from another it writes, by its origin or a
 	// source that may be one's address.
 	Direct bool
-	// Inline are the inlined callees' frames, the outermost first, each in
-	// a context of its own past the code's.
-	Inline []ExitInline
+	// InlineN of Frame.Inlines from InlineAt on are the inlined callees'
+	// frames, the outermost first, each in a context of its own past the
+	// code's (Inlines): kept in the frame, which the descriptions share,
+	// a description is 40 bytes, where a list of its own had made it 64,
+	// and each exit inside a callee had made its list.
+	InlineN  uint16
+	InlineAt uint32
+}
+
+// Inlines are the inlined callees' frames the description writes, the
+// outermost first.
+func (d *ExitDescriptor) Inlines() []ExitInline {
+	if d.InlineN == 0 {
+		return nil
+	}
+	return d.Frame.Inlines[d.InlineAt : d.InlineAt+uint32(d.InlineN)]
 }
 
 // Slot is the description's i'th slot.
@@ -737,6 +750,11 @@ type ExitFrame struct {
 	Slots                         []ExitSlot
 	Index                         []uint16
 	Words                         []uint64
+	// Inlines are the inlined callees' frames the descriptions write, a
+	// run for each (ExitDescriptor's Inlines), which descriptions alike
+	// share. Left out of the frame's JSON, as a dump of the code's
+	// descriptions lists each one's (v8bench's -jitcode).
+	Inlines []ExitInline `json:"-"`
 }
 
 // ExitSlot is a slot an exit writes: its value's number word, from Value;

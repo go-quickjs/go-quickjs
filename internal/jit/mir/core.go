@@ -79,8 +79,11 @@ type core struct {
 	// compared with all its slot's: four million comparisons in a run of
 	// Typescript's compiles.
 	exitFrame *abi.ExitFrame
-	exitHead  []int32
-	exitNext  []int32
+	// exitInlineLast is where the last description's run of the frame's
+	// inlined callees starts (ExitFrame's Inlines), or -1.
+	exitInlineLast int
+	exitHead       []int32
+	exitNext       []int32
 	// exitLastV and exitLastK are, by slot, the value the last exit to
 	// write it found there and 1 plus its entry's index.
 	exitLastV []*ssa.Value
@@ -3136,15 +3139,26 @@ func (c *core) exitDescriptor(s *ssa.FrameState, kind uint64, localsReg, stackRe
 	}
 	d.Count, d.Direct = uint16(len(f.Index)-index), direct
 	if s.Inline != nil {
+		// The callees' frames, appended to the frame's, or the run the
+		// description before that wrote them made, if alike: the guards
+		// of an instruction, and those of a callee's stretch, exit to one
+		// state, and so to the same frames.
+		at := len(f.Inlines)
 		for _, in := range inlineLevels(s) {
 			k := uint64(abi.ExitHost)
 			if in == s.Inline {
 				k = kind
 			}
-			d.Inline = append(d.Inline, abi.ExitInline{Closure: uint64(in.Closure), Callee: uint64(in.Callee), Locals: uint64(in.Locals), Args: in.Args,
+			f.Inlines = append(f.Inlines, abi.ExitInline{Closure: uint64(in.Closure), Callee: uint64(in.Callee), Locals: uint64(in.Locals), Args: in.Args,
 				ThisSlot: uint64(in.ThisSlot + 1), Kind: k, PC: uint64(in.PC), Depth: uint64(in.Depth),
 				Site: int64(in.Site), Base: int64(in.Base)})
 		}
+		n := len(f.Inlines) - at
+		if l := c.exitInlineLast; l >= 0 && l+n == at && slices.Equal(f.Inlines[l:at], f.Inlines[at:]) {
+			f.Inlines, at = f.Inlines[:at], l
+		}
+		c.exitInlineLast = at
+		d.InlineAt, d.InlineN = uint32(at), uint16(n)
 		d.Kind = uint32(abi.ExitHost)
 	}
 	if len(c.exitDescs) == cap(c.exitDescs) {
@@ -3182,6 +3196,7 @@ func (c *core) exitLayout() *abi.ExitFrame {
 	if c.exitFrame == nil {
 		enc := c.enc
 		c.exitFrame = &abi.ExitFrame{FrameLocals: int32(c.f.FrameLocals), ThisSlot: int32(c.f.ThisSlot), Locals: int32(c.f.Locals), Enc: &enc}
+		c.exitInlineLast = -1
 		if w := c.ws; w != nil {
 			// The workspace's, kept from compile to compile.
 			if w.exitWords == nil {
@@ -3191,6 +3206,7 @@ func (c *core) exitLayout() *abi.ExitFrame {
 			c.exitWords = w.exitWords
 			c.exitHead, c.exitNext = w.exitHeadBuf[:0], w.exitNextBuf[:0]
 			c.exitFrame.Slots, c.exitFrame.Index, c.exitFrame.Words = w.exitSlotsBuf[:0], w.exitIndexBuf[:0], w.exitWordsBuf[:0]
+			c.exitFrame.Inlines = w.exitInlinesBuf[:0]
 		} else {
 			c.exitWords = map[uint64]int32{}
 		}
@@ -3503,8 +3519,9 @@ func (c *core) finishExits() {
 			// Its buffers, for the next compile.
 			w.exitSlotsBuf, w.exitIndexBuf, w.exitWordsBuf = f.Slots[:0], f.Index[:0], f.Words[:0]
 			w.exitHeadBuf, w.exitNextBuf = c.exitHead[:0], c.exitNext[:0]
+			w.exitInlinesBuf = f.Inlines[:0]
 		}
-		f.Slots, f.Index, f.Words = exact(f.Slots), exact(f.Index), exact(f.Words)
+		f.Slots, f.Index, f.Words, f.Inlines = exact(f.Slots), exact(f.Index), exact(f.Words), exact(f.Inlines)
 	}
 }
 
