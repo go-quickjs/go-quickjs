@@ -29,8 +29,9 @@
 // a value left sharing a buffer the next compile reuses shows as a difference.
 //
 // native compares two runs of v8bench's -jitcode, made with -jitheld, which
-// holds the JIT's clocks and turns the collector off so that a program makes
-// the same compiles on two builds, and adds to each compile what arm64's
+// holds the JIT's clocks and turns the collector off, but at a memory limit
+// of 3 GiB unless GOMEMLIMIT gives one, so that a program makes the same
+// compiles on two builds, and adds to each compile what arm64's
 // backend makes of it, which is not run. Code that is the same but for
 // addresses, its marks, its SSA, spills, and its exits' and calls'
 // descriptions are compared, and the first compile that differs is printed:

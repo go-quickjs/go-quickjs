@@ -535,7 +535,10 @@ go run ./internal/cmd/compilediff -base origin/main -mutants 8 /tmp/octane /tmp/
 suite with `-jitheld`, which makes a program's compiles the same from one
 build to the next: it holds the clocks the JIT's cache ages code by and turns
 the collector off, and without it some 20 of 1,300 compiles differ between two
-runs of one build. Each compile's code is compared but for addresses, with
+runs of one build. The collector off, a heap grows without bound -- Octane's
+Game Boy to 6.75 GB, 159 MB of it live -- so it runs at a memory limit of 3
+GiB, where the collector does run, unless `GOMEMLIMIT` gives one; two runs of
+one build still make the same compiles. Each compile's code is compared but for addresses, with
 its marks, SSA listing, spills and the descriptions of its calls and exits;
 and what arm64's backend makes of each compile, on any machine, not run. The
 same code means a change to the JIT's compile path changes nothing a program

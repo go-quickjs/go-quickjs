@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"math"
 	"os"
 	"regexp"
 	"runtime/debug"
@@ -34,6 +35,12 @@ func init() {
 	jit.LineOffset, _ = strconv.Atoi(os.Getenv("V8BENCH_JITLINE"))
 }
 
+// jitHeldLimit is the memory limit -jitheld runs at where GOMEMLIMIT sets
+// none: the collector off, a heap grows without bound, and at the limit
+// it collects. Two runs of one build at 3 GiB make the same compiles,
+// Octane's and Are We Fast Yet's, which pass it.
+const jitHeldLimit = 3 << 30
+
 // jitReport is the report's state: what the JIT had done when the last
 // benchmark ended, the counters and each function's.
 var jitReport struct {
@@ -54,6 +61,12 @@ func reportStart(r runtimeOf) {
 	if *jitHeldFlag && vm.JITCompileRepeat == 0 {
 		// Held for the first runtime: the arm64 compiles are its repeats.
 		debug.SetGCPercent(-1)
+		if debug.SetMemoryLimit(-1) == math.MaxInt64 {
+			// GOMEMLIMIT sets none: the collector off held Octane's Game
+			// Boy at a 6.75 GB heap, 159 MB of it live, where a limit
+			// collects only near it.
+			debug.SetMemoryLimit(jitHeldLimit)
+		}
 		vm.JITHoldClocks()
 		vm.JITCompileRepeat = 1
 	}
