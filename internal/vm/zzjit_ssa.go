@@ -14393,29 +14393,14 @@ func jitFrameArgs(fn *bytecode.Function) bool {
 		})
 }
 
-// jitFrameCallee reports whether fn's code reads its frame's function
-// object -- a super reference's home object, push_callee's, a mapped
-// arguments object's callee (ir.Program's FrameCallee) -- which a native
-// call of it writes to its callee's context (ssa.CallSite's Function,
-// abi.Context's Function), where Go finds it for the frames it makes of
-// the callee's level, as V8's frame has its function.
-func jitFrameCallee(fn *bytecode.Function) bool {
-	if fn.Kind == bytecode.KindArrow && fn.UsesNewTarget {
-		// An arrow whose code, or an arrow it makes, reads new.target or
-		// super, or has a direct eval: its frame's new.target is the one the
-		// arrow captured, and the arrows it makes take the home object from
-		// it, both found through its function object (callClosure).
-		return true
-	}
-	return fn.MappedArguments || slices.ContainsFunc(fn.Code, func(in bytecode.Instr) bool {
-		switch in.Op {
-		case bytecode.OpGetSuperProp, bytecode.OpGetSuperIndex, bytecode.OpSetSuperProp, bytecode.OpSetSuperIndex, bytecode.OpSuperBase,
-			bytecode.OpPushCallee:
-			return true
-		}
-		return false
-	})
-}
+// jitFrameCallee reports whether fn's frame must have its function object
+// (jitcompile.FrameCallee): its code reads it -- a super reference's home
+// object, push_callee's, a mapped arguments object's callee -- or an arrow
+// it makes takes the home object or new.target from it. A native call of
+// it writes the object to its callee's context (ssa.CallSite's Function,
+// abi.Context's Function), where Go finds it for the frames it makes of the
+// callee's level, as V8's frame has its function.
+func jitFrameCallee(fn *bytecode.Function) bool { return jitcompile.FrameCallee(fn) }
 
 // jitCallArgs is a copy of the arguments a native call of fn wrote to its
 // callee's context, c (abi.Context's Args), for a frame Go makes of the

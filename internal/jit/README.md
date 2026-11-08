@@ -744,8 +744,10 @@ rest parameter's array, the arguments object (see Parameter lists for a
 native callee's) -- Go makes from native code on that frame (`ir.Instruction`'s `Frame`, `ssa.GoHost`, the VM's
 `jitGoHost`), as V8's code calls the runtime, native code going on after
 it. Code that reads its function object -- a super reference's home
-object, `push_callee`'s, a mapped arguments object's callee
-(`ir.Program`'s `FrameCallee`) -- has a call entry all the same: a native
+object, `push_callee`'s, a mapped arguments object's callee -- or makes
+an arrow that does, through any arrows between, which takes the home
+object from its maker's function object as it is made (`compile`'s
+`FrameCallee`, `ir.Program`'s) -- has a call entry all the same: a native
 call of it writes the object to its callee's context (`ssa.CallSite`'s
 `Function`, `abi.Context`'s `Function`), as a derived construction's
 does, and Go gives it to the frames it makes of the callee's level, on

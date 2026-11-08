@@ -753,10 +753,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			// super(...) of the call's arguments, which it hands on.
 			p.FrameArgs = p.FrameArgs || in.Op == bytecode.OpSuperCall && in.B == bytecode.SuperForward
 		}
-		p.FrameCallee = fn.MappedArguments
-		for _, in := range fn.Code {
-			p.FrameCallee = p.FrameCallee || superRef(in.Op) || in.Op == bytecode.OpPushCallee
-		}
+		p.FrameCallee = FrameCallee(fn)
 		if !prologueArgs(p) && m.callee {
 			// A native callee's frame, and an inlined one's, has the call's
 			// arguments nowhere but where the prologue's states keep them.
@@ -804,6 +801,50 @@ func frameDefinition(in bytecode.Instr) bool {
 
 // superRef reports whether op is a super reference's: a read or a write
 // of a property of the home object's prototype, or that base.
+// FrameCallee reports whether fn's frame must have its function object
+// (ir.Program's FrameCallee): its code reads it -- a super reference's home
+// object, push_callee's, a mapped arguments object's callee -- or an arrow
+// it makes takes from it what the arrow reads of its maker. An arrow's
+// super reads the home object of the method it is in, which the arrow
+// takes from its maker's function object as it is made (the VM's
+// newClosureIn), through every arrow between: a frame Go made of a native
+// callee without its function object had made such an arrow without a
+// home object, whose super then threw. An arrow that, or an arrow in
+// which, reads new.target or calls super() has its frame's through its
+// own function object too.
+func FrameCallee(fn *bytecode.Function) bool {
+	if fn.MappedArguments || fn.Kind == bytecode.KindArrow && fn.UsesNewTarget {
+		return true
+	}
+	for _, in := range fn.Code {
+		if superRef(in.Op) || in.Op == bytecode.OpPushCallee {
+			return true
+		}
+	}
+	return makesMakerArrow(fn)
+}
+
+// makesMakerArrow reports whether fn makes an arrow that reads, or makes
+// one that reads, its maker's home object or new.target: a super
+// reference or call, new.target, or a direct eval, which may read either
+// (UsesNewTarget).
+func makesMakerArrow(fn *bytecode.Function) bool {
+	for _, k := range fn.Constants {
+		if k.Kind != bytecode.ConstFunction || k.Fn == nil || k.Fn.Kind != bytecode.KindArrow {
+			continue
+		}
+		if k.Fn.UsesNewTarget || makesMakerArrow(k.Fn) {
+			return true
+		}
+		for _, in := range k.Fn.Code {
+			if superRef(in.Op) || in.Op == bytecode.OpSuperCall || in.Op == bytecode.OpNewTarget {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func superRef(op bytecode.Op) bool {
 	switch op {
 	case bytecode.OpGetSuperProp, bytecode.OpGetSuperIndex, bytecode.OpSetSuperProp, bytecode.OpSetSuperIndex, bytecode.OpSuperBase:
