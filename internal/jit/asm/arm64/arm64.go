@@ -346,6 +346,11 @@ func (a *Asm) AddLsl(dst, n, m Reg, s uint8) {
 	a.emit(uint32(Add) | sf(true) | uint32(m)<<16 | uint32(s&63)<<10 | uint32(n)<<5 | uint32(dst))
 }
 
+// Sxtw is dst = n's low 32 bits, sign-extended to 64 (SBFM #0, #31).
+func (a *Asm) Sxtw(dst, n Reg) {
+	a.emit(0x93407C00 | uint32(n)<<5 | uint32(dst))
+}
+
 // Cmp sets the flags for n - m.
 func (a *Asm) Cmp(n, m Reg, wide bool) { a.Op(Subs, ZR, n, m, wide) }
 

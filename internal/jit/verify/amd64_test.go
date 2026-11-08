@@ -153,6 +153,7 @@ func TestAMD64Moves(t *testing.T) {
 				expectBytes(t, "AddMem "+name, encode(func(a *amd64.Asm) { a.AddMem(d, s, disp) }), x86asm.ADD, 8, r64(d), mem{r64(s), int64(disp)})
 			}
 			expect(t, "MovZX8 "+name, encode(func(a *amd64.Asm) { a.MovZX8(d, s) }), x86asm.MOVZX, r32(d), r8(s))
+			expect(t, "Movsxd "+name, encode(func(a *amd64.Asm) { a.Movsxd(d, s) }), x86asm.MOVSXD, r64(d), r32(s))
 		}
 		for _, v := range []uint64{0, 1, 0x7fffffff, 0xffffffff, ^uint64(0), 1 << 63, 0x7ff8000000000000, 0xfff8000000000008} {
 			code := encode(func(a *amd64.Asm) { a.MovImm(d, v) })

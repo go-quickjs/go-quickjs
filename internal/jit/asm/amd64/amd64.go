@@ -701,6 +701,12 @@ func (a *Asm) LoadS16(dst, base Reg, disp int32) {
 	a.modrmMem(byte(dst), base, disp)
 }
 
+// Movsxd is dst = src's low 32 bits, sign-extended to 64.
+func (a *Asm) Movsxd(dst, src Reg) {
+	a.rex(true, byte(dst), byte(src), false)
+	a.emit2(0x63, 0xC0|byte(dst&7)<<3|byte(src&7))
+}
+
 func (a *Asm) LoadS32(dst, base Reg, disp int32) {
 	a.rex(true, byte(dst), byte(base), false)
 	a.emit(0x63)

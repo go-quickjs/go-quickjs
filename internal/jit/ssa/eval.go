@@ -754,7 +754,12 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 				// typed array's element is one of them.
 				return exit(v.State, ir.ExitKind(v.Aux))
 			case OpElemRead, OpElemWrite:
-				cell, ok := element(arrays[a.p], b.f)
+				key := b.f
+				if v.Args[1].Type == Int32 {
+					// An int32 key (truncInts).
+					key = float64(int32(b.i))
+				}
+				cell, ok := element(arrays[a.p], key)
 				if !ok {
 					return exit(v.State, ir.ExitKind(v.Aux))
 				}

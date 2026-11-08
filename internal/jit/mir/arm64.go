@@ -8059,6 +8059,12 @@ func (c *a64Compiler) substringChar(v *ssa.Value) {
 // integer in [0, 2**32). FCVTZS saturates, so a key of 2**63 or more gives
 // 2**63-1, whose top half is not clear. It uses B and F1.
 func (c *a64Compiler) index(key *ssa.Value, guard a64Guard) {
+	if key.Type == ssa.Int32 {
+		// As amd64's: an int32 sign-extended, a negative one past any
+		// length (element's unsigned comparison).
+		c.a.Sxtw(a64A, c.gpr(key, a64A))
+		return
+	}
 	k := c.fpr(key, a64F0)
 	c.a.Fcvtzs(a64A, k)
 	c.a.Scvtf(a64F1, a64A, true)
@@ -8067,6 +8073,16 @@ func (c *a64Compiler) index(key *ssa.Value, guard a64Guard) {
 	c.a.ShiftImm(arm64.Lsr, a64B, a64A, 32, true)
 	c.a.CmpImm(a64B, 0, true)
 	guard.jump(arm64.NE)
+}
+
+// keyBits is amd64's: the key's double's bits in A. It uses F0.
+func (c *a64Compiler) keyBits(key *ssa.Value) {
+	if key.Type == ssa.Int32 {
+		c.a.Scvtf(a64F0, c.gpr(key, a64A), false)
+		c.a.FMovFromF(a64A, a64F0)
+		return
+	}
+	c.a.FMovFromF(a64A, c.fpr(key, a64F0))
 }
 
 // element turns the index in A into the address of an array's element in
@@ -8137,11 +8153,15 @@ func (c *a64Compiler) typedElement(array, key *ssa.Value, store bool, fail a64Gu
 	c.a.Op(arm64.Add, a64B, a64B, a64A, true)
 	// The key an integer -- FCMP of NaN is unordered, not equal -- below
 	// the length, compared unsigned.
-	k := c.fpr(key, a64F0)
-	c.a.Fcvtzs(a64A, k)
-	c.a.Scvtf(a64F1, a64A, true)
-	c.a.FCmp(a64F1, k)
-	fail.jump(arm64.NE)
+	if key.Type == ssa.Int32 {
+		c.a.Sxtw(a64A, c.gpr(key, a64A))
+	} else {
+		k := c.fpr(key, a64F0)
+		c.a.Fcvtzs(a64A, k)
+		c.a.Scvtf(a64F1, a64A, true)
+		c.a.FCmp(a64F1, k)
+		fail.jump(arm64.NE)
+	}
 	c.a.Load(a64D, a64C, c.enc.TypedLength)
 	c.a.Cmp(a64A, a64D, true)
 	fail.jump(arm64.HS)
@@ -8294,7 +8314,7 @@ func (c *a64Compiler) elemStore(v *ssa.Value) {
 		c.storageFree(v.Args[0], v.Args[3:], stub)
 		size := int32(unsafe.Sizeof(abi.GoArg{}))
 		c.a.Store(a64Ctx, abi.OffGoArgs+c.enc.RefOffset, c.gpr(v.Args[0], a64C))
-		c.a.FMovFromF(a64A, c.fpr(v.Args[1], a64F0))
+		c.keyBits(v.Args[1])
 		c.a.Store(a64Ctx, abi.OffGoArgs+size+c.enc.NumOffset, a64A)
 		words()
 		c.a.Store(a64Ctx, abi.OffGoArgs+2*size+c.enc.RefOffset, a64B)
@@ -8351,7 +8371,7 @@ func (c *a64Compiler) typedRead(v *ssa.Value, done arm64.Label, hot bool) {
 		c.a.Bind(slow)
 		size := int32(unsafe.Sizeof(abi.GoArg{}))
 		c.a.Store(a64Ctx, abi.OffGoArgs+c.enc.RefOffset, c.gpr(v.Args[0], a64C))
-		c.a.FMovFromF(a64A, c.fpr(v.Args[1], a64F0))
+		c.keyBits(v.Args[1])
 		c.a.Store(a64Ctx, abi.OffGoArgs+size+c.enc.NumOffset, a64A)
 		c.goSaving(uint64(ssa.GoTypedRead), &stub)
 		c.a.LoadF(a64F0, a64Ctx, abi.OffGoArgs+c.enc.NumOffset)
@@ -9134,7 +9154,7 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 				c.a.Bind(slow)
 				size := int32(unsafe.Sizeof(abi.GoArg{}))
 				c.a.Store(a64Ctx, abi.OffGoArgs+c.enc.RefOffset, c.gpr(v.Args[0], a64C))
-				c.a.FMovFromF(a64A, c.fpr(v.Args[1], a64F0))
+				c.keyBits(v.Args[1])
 				c.a.Store(a64Ctx, abi.OffGoArgs+size+c.enc.NumOffset, a64A)
 				c.goSaving(uint64(ssa.GoElemCell), &stub)
 				c.movImm(a64A, c.enc.UndefinedCell)
@@ -9161,7 +9181,7 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 				c.storageFree(v.Args[0], v.Args[3:], stub)
 				size := int32(unsafe.Sizeof(abi.GoArg{}))
 				c.a.Store(a64Ctx, abi.OffGoArgs+c.enc.RefOffset, c.gpr(v.Args[0], a64C))
-				c.a.FMovFromF(a64A, c.fpr(v.Args[1], a64F0))
+				c.keyBits(v.Args[1])
 				c.a.Store(a64Ctx, abi.OffGoArgs+size+c.enc.NumOffset, a64A)
 				c.a.FMovFromF(a64A, c.fpr(v.Args[2], a64F0))
 				c.a.Store(a64Ctx, abi.OffGoArgs+2*size+c.enc.NumOffset, a64A)

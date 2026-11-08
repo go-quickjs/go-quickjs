@@ -24,7 +24,11 @@ import (
 //     operation, which wraps as ToInt32 of the exact result does
 //     (truncInts);
 //   - a comparison of two int32s' conversions, or two uint32s', is the
-//     int32 comparison (OpCmpI32).
+//     int32 comparison (OpCmpI32);
+//   - an element read or write of numbers (OpElemRead, OpElemWrite) whose
+//     key is an int32's conversion takes the int32: HEAP32[p >> 2] had
+//     converted p >> 2 to a double, and the double back to an index,
+//     checking it was one -- nearly half of a typed array's read.
 //
 // Phis stay doubles: an int32 phi holds a general register, of which mir
 // has half as many as SSE registers, and Emscripten's functions, dozens of
@@ -145,6 +149,13 @@ func truncInts(f *Func) bool {
 	for _, b := range f.Blocks {
 		for i := 0; i < len(b.Values); i++ {
 			v := b.Values[i]
+			if k := v.Args; (v.Op == OpElemRead || v.Op == OpElemWrite) && k[1].Op == OpI32ToF64 {
+				// An element's key that is an int32's conversion: the
+				// int32, an index where it is not negative (mir's index).
+				k[1] = k[1].Args[0]
+				changed = true
+				continue
+			}
 			unsigned, cmp := false, v.Op == OpCmpF64
 			if cmp {
 				if unsigned, cmp = intCompare(v.Args[0], v.Args[1]); !cmp {

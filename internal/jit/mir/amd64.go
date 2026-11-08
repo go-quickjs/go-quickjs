@@ -9019,6 +9019,11 @@ func (c *compiler) stringUnitPast(v, str, key *ssa.Value, guard, past guardTo) b
 // give the key (NaN and anything past 2**63 do not), and the top half must
 // be clear. Negative zero is index 0. It uses scratchB and xScratch1.
 func (c *compiler) index(key *ssa.Value, fail guardTo) {
+	if key.Type == ssa.Int32 {
+		// An int32 (ssa's truncInts): an index unless negative.
+		c.intIndex(key)
+		return
+	}
 	k := c.xmm(key, xScratch0)
 	c.a.Cvttsd2si(scratchA, k)
 	c.a.Cvtsi2sd(xScratch1, scratchA, true)
@@ -9028,6 +9033,24 @@ func (c *compiler) index(key *ssa.Value, fail guardTo) {
 	c.a.MovRR(scratchB, scratchA)
 	c.a.ShiftImm(amd64.Shr, scratchB, 32, true)
 	fail.jump(amd64.CondNE)
+}
+
+// intIndex is index's for an int32 key: sign-extended into scratchA, so
+// that a negative one is past any length, which the unsigned comparison
+// with it after fails -- no test of its own.
+func (c *compiler) intIndex(key *ssa.Value) {
+	c.a.Movsxd(scratchA, c.gpr(key, scratchA))
+}
+
+// keyBits puts an element's key in scratchA as the double's bits Go reads
+// it as: an int32 key (ssa's truncInts) converted. It uses xScratch0.
+func (c *compiler) keyBits(key *ssa.Value) {
+	if key.Type == ssa.Int32 {
+		c.a.Cvtsi2sd(xScratch0, c.gpr(key, scratchA), false)
+		c.a.MovQFromX(scratchA, xScratch0)
+		return
+	}
+	c.a.MovQFromX(scratchA, c.xmm(key, xScratch0))
 }
 
 // element turns the index in scratchA into the address of an array's
@@ -9105,13 +9128,18 @@ func (c *compiler) typedElement(array, key *ssa.Value, store bool, fail guardTo)
 	c.a.Load(scratchA, scratchC, c.enc.TypedOffset)
 	c.a.Op(amd64.Add, scratchB, scratchA, true)
 	// The key an integer -- not NaN, which converts to 1<<63 -- below the
-	// length, compared unsigned: a negative one is past it.
-	k := c.xmm(key, xScratch0)
-	c.a.Cvttsd2si(scratchA, k)
-	c.a.Cvtsi2sd(xScratch1, scratchA, true)
-	c.a.SSEOp(amd64.UcomiSD, xScratch1, k)
-	fail.jump(amd64.CondNE)
-	fail.jump(amd64.CondP)
+	// length, compared unsigned: a negative one is past it. An int32 key
+	// is one if not negative.
+	if key.Type == ssa.Int32 {
+		c.intIndex(key)
+	} else {
+		k := c.xmm(key, xScratch0)
+		c.a.Cvttsd2si(scratchA, k)
+		c.a.Cvtsi2sd(xScratch1, scratchA, true)
+		c.a.SSEOp(amd64.UcomiSD, xScratch1, k)
+		fail.jump(amd64.CondNE)
+		fail.jump(amd64.CondP)
+	}
 	c.a.CmpMem(scratchA, scratchC, c.enc.TypedLength, true)
 	fail.jump(amd64.CondAE)
 	c.a.LoadU8(scratchC, scratchC, c.enc.TypedKind)
@@ -9306,7 +9334,7 @@ func (c *compiler) elemStore(v *ssa.Value) {
 		c.storageFree(v.Args[0], v.Args[3:], stub)
 		size := int32(unsafe.Sizeof(abi.GoArg{}))
 		c.a.Store(regCtx, abi.OffGoArgs+c.enc.RefOffset, c.gpr(v.Args[0], scratchC))
-		c.a.MovQFromX(scratchA, c.xmm(v.Args[1], xScratch0))
+		c.keyBits(v.Args[1])
 		c.a.Store(regCtx, abi.OffGoArgs+size+c.enc.NumOffset, scratchA)
 		var w amd64.Reg
 		if remat(x) {
@@ -9385,7 +9413,7 @@ func (c *compiler) typedRead(v *ssa.Value, done amd64.Label, hot bool) {
 		c.a.Bind(slow)
 		size := int32(unsafe.Sizeof(abi.GoArg{}))
 		c.a.Store(regCtx, abi.OffGoArgs+c.enc.RefOffset, c.gpr(v.Args[0], scratchC))
-		c.a.MovQFromX(scratchA, c.xmm(v.Args[1], xScratch0))
+		c.keyBits(v.Args[1])
 		c.a.Store(regCtx, abi.OffGoArgs+size+c.enc.NumOffset, scratchA)
 		c.goSaving(uint64(ssa.GoTypedRead), &stub)
 		c.a.LoadSD(xScratch0, regCtx, abi.OffGoArgs+c.enc.NumOffset)
@@ -10227,7 +10255,7 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 				c.a.Bind(slow)
 				size := int32(unsafe.Sizeof(abi.GoArg{}))
 				c.a.Store(regCtx, abi.OffGoArgs+c.enc.RefOffset, c.gpr(v.Args[0], scratchC))
-				c.a.MovQFromX(scratchA, c.xmm(v.Args[1], xScratch0))
+				c.keyBits(v.Args[1])
 				c.a.Store(regCtx, abi.OffGoArgs+size+c.enc.NumOffset, scratchA)
 				c.goSaving(uint64(ssa.GoElemCell), &stub)
 				c.movImm(scratchA, c.enc.UndefinedCell)
@@ -10258,7 +10286,7 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 				c.storageFree(v.Args[0], v.Args[3:], stub)
 				size := int32(unsafe.Sizeof(abi.GoArg{}))
 				c.a.Store(regCtx, abi.OffGoArgs+c.enc.RefOffset, c.gpr(v.Args[0], scratchC))
-				c.a.MovQFromX(scratchA, c.xmm(v.Args[1], xScratch0))
+				c.keyBits(v.Args[1])
 				c.a.Store(regCtx, abi.OffGoArgs+size+c.enc.NumOffset, scratchA)
 				c.a.MovQFromX(scratchA, c.xmm(v.Args[2], xScratch0))
 				c.a.Store(regCtx, abi.OffGoArgs+2*size+c.enc.NumOffset, scratchA)

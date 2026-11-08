@@ -77,7 +77,9 @@ exact result's ToInt32 does: asm.js's `(a + b) | 0` is one add. A
 comparison of two such integers -- int32s' conversions, or one and an
 integer constant of the range -- compares int32s (`OpCmpI32`), and one of
 two uint32s' conversions, or of one and a constant of their range,
-compares them unsigned. Phis stay doubles.
+compares them unsigned. An element's key that is an int32's conversion is
+the int32: the access reads it sign-extended, an index where it is not
+negative, and a call of Go its double. Phis stay doubles.
 
 **Register allocation.** `mir`'s scan (`allocate`) gives each value an
 interval from its definition to its last use, stretched over every block
