@@ -319,11 +319,12 @@ func (a *Asm) Finish() ([]byte, error) {
 		open = kept
 	}
 	a.open, a.openQ = cand[:0], open[:0]
-	a.count()
-	// The jumps shortened with every alignment's padding whole, each keeps
-	// what the code after it, moved, needs: no shortened jump's
-	// displacement grows.
-	if a.aligned {
+	if !a.aligned {
+		a.count()
+	} else {
+		// The jumps shortened with every alignment's padding whole, each
+		// keeps what the code after it, moved, needs: no shortened jump's
+		// displacement grows. This walk is count's, with the paddings.
 		sum := 0
 		for i, f := range a.fixups {
 			switch {
@@ -339,10 +340,16 @@ func (a *Asm) Finish() ([]byte, error) {
 	// The code is the buffer, moved down over what the shortened jumps
 	// remove: what is written never passes what is still to be read, and
 	// a jump's own bytes are read before they are written over.
+	// Until the first jump shortened or padding cut, the code is where it
+	// was, and is not copied onto itself.
 	buf, w, last := a.buf, 0, 0
 	for i, f := range a.fixups {
 		start := int(f.start)
-		w += copy(buf[w:], buf[last:start])
+		if w != last {
+			w += copy(buf[w:], buf[last:start])
+		} else {
+			w = start
+		}
 		if f.kind == fixAlign {
 			n := int(f.n)
 			k := (n - w%n) % n
@@ -360,13 +367,27 @@ func (a *Asm) Finish() ([]byte, error) {
 			buf[w], buf[w+1] = 0x70|cc, byte(int8(to-(w+2)))
 			w += 2
 		default:
-			w += copy(buf[w:], buf[start:f.at])
+			// The instruction's bytes before its displacement, one to
+			// three (opLen), moved one by one rather than by a copy's call.
+			switch f.kind {
+			case fixJmp:
+				buf[w] = buf[start]
+			case fixJcc:
+				buf[w], buf[w+1] = buf[start], buf[start+1]
+			default:
+				buf[w], buf[w+1], buf[w+2] = buf[start], buf[start+1], buf[start+2]
+			}
+			w += opLen(f.kind)
 			binary.LittleEndian.PutUint32(buf[w:], uint32(int32(to-(w+4))))
 			w += 4
 		}
 		last = int(f.at) + 4
 	}
-	w += copy(buf[w:], buf[last:])
+	if w != last {
+		w += copy(buf[w:], buf[last:])
+	} else {
+		w = len(buf)
+	}
 	for _, l := range a.bound {
 		a.labels[l] = a.movedPast(a.labels[l], int(a.at[l]))
 	}
