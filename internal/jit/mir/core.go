@@ -1071,7 +1071,7 @@ func (c *core) allocate() error {
 			r.def = -1
 			if need(v) {
 				iv[v.ID] = interval{v: v, start: p, end: p}
-				r.end, r.def, r.real = int32(p), int32(b.ID)+1, int32(p)
+				r.end, r.def, r.real, r.start = int32(p), int32(b.ID)+1, int32(p), int32(p)
 			}
 			if bigKept(v) != nil || c.isLazy(v) || remat(v) {
 				r.slot = slotMade
@@ -1115,7 +1115,7 @@ func (c *core) allocate() error {
 			r.hot = max(r.hot, int32(p))
 		}
 		if inState {
-			if r.def == int32(cur.ID)+1 && own >= 0 && iv[x.ID].start >= own {
+			if r.def == int32(cur.ID)+1 && own >= 0 && int(r.start) >= own {
 				// Its own instruction's state, read as it is made.
 				r.slot |= slotFar
 			}
@@ -1127,7 +1127,7 @@ func (c *core) allocate() error {
 			if p == end[cur.ID] {
 				lc = callIn[cur.ID]
 			}
-			if r.def != int32(cur.ID)+1 || again || lc >= 0 && lc > iv[x.ID].start {
+			if r.def != int32(cur.ID)+1 || again || lc >= 0 && lc > int(r.start) {
 				r.slot |= slotFar
 			}
 		}
@@ -2807,8 +2807,8 @@ func hasResult(v *ssa.Value) bool { return v.Type != ssa.None }
 // real is the last use's position but a frame state's: where the value's
 // register may end if its slot is written as it is made (allocate's split).
 type useRec struct {
-	end, def, xhead, mid, hot, cost, real int32
-	slot                                  uint8
+	end, def, xhead, mid, hot, cost, real, start int32
+	slot                                         uint8
 }
 
 // useRec's slot: a value made where needed or a BigInt's box, whose state
