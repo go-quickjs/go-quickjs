@@ -1086,40 +1086,43 @@ func rematerializeUpvalues(f *Func) bool {
 			}
 		}
 	}
-	subst := idTable(sc.upvalueSubst, f.nextID)
-	sc.upvalueSubst = subst
+	// Each phi of a cell's loads becomes a load of the cell itself, after
+	// the block's phis, its users its own still: a load made beside it,
+	// and every use rewritten, had walked every value and state of the
+	// function for a few phis. It is numbered, and its uses counted, as
+	// that load was -- after its cell, none until recount -- which the
+	// passes after it read.
 	for _, b := range f.Blocks {
 		var reads []*Value
-		for _, v := range b.Values {
-			if v.Op != OpPhi || cand[v.ID] <= 0 {
+		at := 0
+		for at < len(b.Values) && b.Values[at].Op == OpPhi {
+			v := b.Values[at]
+			at++
+			if cand[v.ID] <= 0 {
 				continue
 			}
 			k := int(cand[v.ID] - 1)
 			cell := f.alloc(Value{Op: OpUpvalueCell, Type: Source, Index: k / 2, Aux: k % 2, Block: b})
-			r := f.alloc(Value{Op: OpLoadCell, Type: Tagged, Args: f.refsOf(1), Block: b})
-			r.Args[0], r.Shadow = cell, cell
-			reads = append(reads, cell, r)
-			subst[v.ID] = r
+			v.Op, v.Args, v.Shadow, v.ID, v.Uses = OpLoadCell, f.refsOf(1), cell, f.nextID, 0
+			f.nextID++
+			v.Args[0] = cell
+			reads = append(reads, cell, v)
 		}
 		if len(reads) == 0 {
 			continue
 		}
-		// After the block's phis.
-		at := 0
-		for at < len(b.Values) && b.Values[at].Op == OpPhi {
-			at++
+		// The phis left, then the loads, then the rest.
+		values := f.refsOf(len(b.Values) + len(reads)/2)[:0]
+		for _, v := range b.Values[:at] {
+			if v.Op == OpPhi {
+				values = append(values, v)
+			}
 		}
-		values := f.refsOf(len(b.Values) + len(reads))[:0]
-		values = append(values, b.Values[:at]...)
 		values = append(values, reads...)
 		b.Values = append(values, b.Values[at:]...)
 	}
-	rewrite(f, func(v *Value) *Value {
-		if v.ID < len(subst) && subst[v.ID] != nil {
-			return subst[v.ID]
-		}
-		return v
-	})
+	// Swept after (Optimize) whether or not a phi was: what the rounds left
+	// dead goes too, as it went after the rewrite.
 	return true
 }
 

@@ -1311,9 +1311,8 @@ type scratch struct {
 	phiLive []*Value
 	// subst is Optimize's replacements, by value ID.
 	subst []*Value
-	// upvalueCand and upvalueSubst are rematerializeUpvalues'.
-	upvalueCand  []int32
-	upvalueSubst []*Value
+	// upvalueCand is rematerializeUpvalues'.
+	upvalueCand []int32
 	// keepUsers and keepNext are keepPhis' lists of each value's phis.
 	keepUsers []*Value
 	keepNext  []int

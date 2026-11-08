@@ -82,7 +82,7 @@ func (w *Workspace) scratchBytes() int {
 		capBytes(s.liveHead) + capBytes(s.liveCur) + capBytes(s.liveListed) + capBytes(s.liveMembers) + capBytes(s.liveEmit) + capBytes(s.liveFlags) +
 		capBytes(s.liveUses) + capBytes(s.liveNodes) + capBytes(s.liveStack) + capBytes(s.subst) + capBytes(s.originPhis) + capBytes(s.states) + capBytes(s.asked) +
 		capBytes(s.phiIdx) + capBytes(s.phiFill) + capBytes(s.phiUsers) +
-		capBytes(s.upvalueCand) + capBytes(s.upvalueSubst) + capBytes(s.keepUsers) + capBytes(s.keepNext) +
+		capBytes(s.upvalueCand) + capBytes(s.keepUsers) + capBytes(s.keepNext) +
 		capBytes(s.incomplete) + capBytes(s.frameOf)
 	for _, l := range s.live {
 		n += capBytes(l)
