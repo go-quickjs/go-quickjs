@@ -852,12 +852,12 @@ func argumentsOwn(fn *bytecode.Function) bool {
 		switch in.Op {
 		case bytecode.OpGetArguments, bytecode.OpLazyArguments, bytecode.OpApplyArguments:
 			return false
-		case bytecode.OpSetLocal, bytecode.OpInitLocal, bytecode.OpPutLocal, bytecode.OpClearLocal, bytecode.OpSetLocalGet,
-			bytecode.OpSetLocalCheck, bytecode.OpIncLocal, bytecode.OpDecLocal, bytecode.OpUpdateLocal, bytecode.OpGetLocalIndexUpdate,
-			bytecode.OpInitParam:
-			if int(in.A) < fn.ParamCount {
-				return false
-			}
+		}
+		// A store to a parameter, by every instruction that stores to a
+		// local (WrittenLocals): a[++i]'s update is to its key's slot, in
+		// B, not to A, its object's.
+		if lo, hi := bytecode.WrittenLocals(in); lo < hi && lo < fn.ParamCount {
+			return false
 		}
 	}
 	return true

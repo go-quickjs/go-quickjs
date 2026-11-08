@@ -858,3 +858,27 @@ func TestStringAppendLowering(t *testing.T) {
 		t.Errorf("%d string additions, want 1", adds)
 	}
 }
+
+// A mapped arguments object aliases the parameters, so argumentsOwn refuses
+// a function that stores to one by any instruction: a[++i] updates the
+// key's slot, its B, where its A is the object's, which is only read: a
+// local's object and a parameter's key had been taken for no store.
+func TestArgumentsOwnSeesEveryParameterStore(t *testing.T) {
+	for _, c := range []struct {
+		src string
+		own bool
+	}{
+		{`function f(a, i) { var x = a[i]; return arguments.length + arguments[1] + x; }`, true},
+		{`function f(a, i) { var x = a[++i]; return arguments.length + arguments[1] + x; }`, false},
+		{`function f(i) { let a = g; var x = a[++i]; return arguments.length + arguments[0] + x; }`, false},
+		{`function f(a, i) { var x = a[i--]; return arguments.length + arguments[1] + x; }`, false},
+		{`function f(a, i) { i++; return arguments.length + arguments[1]; }`, false},
+		{`function f(a, i) { var j = 0; var x = a[++j]; return arguments.length + arguments[1] + x; }`, true},
+		{`function f(a, i) { "use strict"; var x = a[++i]; return arguments.length + arguments[1] + x; }`, true},
+	} {
+		fn := compiledFunction(t, c.src)
+		if got := argumentsOwn(fn); got != c.own {
+			t.Errorf("%s: argumentsOwn %v, want %v", c.src, got, c.own)
+		}
+	}
+}

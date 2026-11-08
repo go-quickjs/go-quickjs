@@ -152,3 +152,30 @@ func TestJITGeneratorParameters(t *testing.T) {
 		}
 	}
 }
+
+// A sloppy function's mapped arguments object aliases its parameters, so
+// its own code reads arguments[k] from the frame only if it never stores
+// to one (compile's argumentsOwn). a[++i] stores to its key's slot: with a
+// local's object and a parameter's key it had been taken for no store, and
+// native code read arguments[0] as the value the call gave, 1, where the
+// parameter held 2.
+func TestJITMappedArgumentsSeeIndexUpdate(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	gc := debug.SetGCPercent(-1)
+	t.Cleanup(func() { debug.SetGCPercent(gc) })
+	for _, marking := range []bool{false, true} {
+		if marking {
+			jitMarkingForTest(t)
+		}
+		both := jitBothForTest(t, `
+			var g = [10, 20, 30, 40];
+			function f(i) { let a = g; var x = a[++i]; return arguments.length + ":" + arguments[0] + ":" + x; }
+			function h(i) { let a = g; var x = a[i--]; return arguments[0] + ":" + x; }
+			function run(n) { var o = ""; for (var k = 0; k < n; k++) o = f(1) + "|" + h(2); return o; }`)
+		for range 6 {
+			both.agree(t, `run(400)`)
+		}
+	}
+}
