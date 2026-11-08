@@ -95,15 +95,27 @@ type fixup struct {
 	// the fixup sixteen bytes, where 24 had been.
 	start, at int32
 	label     int32
-	kind      uint8
-	n         uint8 // an alignment's
+	// kn is the fixup's kind and, past its low byte, an alignment's n
+	// (kind, align): four fields, which the compiler keeps in registers
+	// as it makes a fixup -- of five, it made it on the stack, a store
+	// for each field, and copied it out by one load of all sixteen
+	// bytes, which the processor could not take from the stores it
+	// waited on: each jump's emission stalled on it, and fix was the
+	// costliest line of the code's emission.
+	kn uint16
 }
+
+// kind is the fixup's kind.
+func (f fixup) kind() uint8 { return uint8(f.kn) }
+
+// align is an alignment's n.
+func (f fixup) align() uint8 { return uint8(f.kn >> 8) }
 
 // fix notes a fixup of kind to l, its rel32 or padding at the end of the
 // code so far.
 func (a *Asm) fix(l Label, kind, n uint8) {
 	at := len(a.buf)
-	a.fixups = append(a.fixups, fixup{start: int32(at - opLen(kind)), at: int32(at), label: int32(l), kind: kind, n: n})
+	a.fixups = append(a.fixups, fixup{start: int32(at - int(opLens[kind&3])), at: int32(at), label: int32(l), kn: uint16(kind) | uint16(n)<<8})
 }
 
 // The fixups' kinds: a lea's displacement, which stays 32 bits, and a
@@ -127,6 +139,11 @@ func shortened(k uint8) int {
 	}
 	return 0
 }
+
+// opLens are opLen's, by kind, for fix, in which a table costs the
+// inliner less than opLen's switch: a jump's emission, which calls fix, is
+// inlined where it is emitted.
+var opLens = [4]uint8{fixLea: 3, fixJmp: 1, fixJcc: 2, fixAlign: 0}
 
 func opLen(k uint8) int {
 	switch k {
@@ -264,7 +281,7 @@ func (a *Asm) Finish() ([]byte, error) {
 		past := a.at[f.label]
 		a.past[i] = past
 		a.candPast[i] = int32(len(cand))
-		if f.kind == fixLea || f.kind == fixAlign {
+		if f.kind() == fixLea || f.kind() == fixAlign {
 			continue
 		}
 		d, between := at-(int(f.start)+2), int(past)-i-1
@@ -295,7 +312,7 @@ func (a *Asm) Finish() ([]byte, error) {
 		for q, j := range cand {
 			a.sums[q] = sum
 			if a.short[j] {
-				sum += int32(shortened(a.fixups[j].kind))
+				sum += int32(shortened(a.fixups[j].kind()))
 			}
 		}
 		a.sums[m] = sum
@@ -308,7 +325,7 @@ func (a *Asm) Finish() ([]byte, error) {
 			d := a.labels[f.label] - int(a.sums[a.candPast[q]]) - from
 			if a.labels[f.label] > start {
 				// A label past it comes nearer by what it loses itself.
-				d -= shortened(f.kind)
+				d -= shortened(f.kind())
 			}
 			if d >= -128 && d <= 127 {
 				a.short[i], changed = true, true
@@ -328,11 +345,11 @@ func (a *Asm) Finish() ([]byte, error) {
 		sum := 0
 		for i, f := range a.fixups {
 			switch {
-			case f.kind == fixAlign:
-				n := int(f.n)
+			case f.kind() == fixAlign:
+				n := int(f.align())
 				sum += n - 1 - (n-(int(f.at)-sum)%n)%n
 			case a.short[i]:
-				sum += shortened(f.kind)
+				sum += shortened(f.kind())
 			}
 			a.removed[i] = sum
 		}
@@ -350,8 +367,8 @@ func (a *Asm) Finish() ([]byte, error) {
 		} else {
 			w = start
 		}
-		if f.kind == fixAlign {
-			n := int(f.n)
+		if f.kind() == fixAlign {
+			n := int(f.align())
 			k := (n - w%n) % n
 			pad(buf[w : w+k])
 			w, last = w+k, int(f.at)+n-1
@@ -359,7 +376,7 @@ func (a *Asm) Finish() ([]byte, error) {
 		}
 		to := a.movedPast(a.labels[f.label], int(a.past[i]))
 		switch {
-		case a.short[i] && f.kind == fixJmp:
+		case a.short[i] && f.kind() == fixJmp:
 			buf[w], buf[w+1] = 0xEB, byte(int8(to-(w+2)))
 			w += 2
 		case a.short[i]:
@@ -369,7 +386,7 @@ func (a *Asm) Finish() ([]byte, error) {
 		default:
 			// The instruction's bytes before its displacement, one to
 			// three (opLen), moved one by one rather than by a copy's call.
-			switch f.kind {
+			switch f.kind() {
 			case fixJmp:
 				buf[w] = buf[start]
 			case fixJcc:
@@ -377,7 +394,7 @@ func (a *Asm) Finish() ([]byte, error) {
 			default:
 				buf[w], buf[w+1], buf[w+2] = buf[start], buf[start+1], buf[start+2]
 			}
-			w += opLen(f.kind)
+			w += opLen(f.kind())
 			binary.LittleEndian.PutUint32(buf[w:], uint32(int32(to-(w+4))))
 			w += 4
 		}
@@ -419,7 +436,7 @@ func (a *Asm) count() {
 	sum := 0
 	for i, f := range a.fixups {
 		if a.short[i] {
-			sum += shortened(f.kind)
+			sum += shortened(f.kind())
 		}
 		a.removed[i] = sum
 	}
