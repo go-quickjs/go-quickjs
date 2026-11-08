@@ -194,6 +194,16 @@ go test ./...
 git diff --check
 ```
 
+The long checks run once, on the final code: the full suite with and without
+the JIT's tag, test262's modes and the timing across suites. While a change
+is iterated, test the packages it touches and time only the benchmarks it is
+for, at two placements (`compare -k 2 -suite List`, `-micro -suite
+bigint64_fnv1a`); `placements build -k N` makes only the placements a `-k N`
+compare runs. Before timing a change that touches few functions,
+`compilediff native` says which compiles changed, and a benchmark whose code
+is the same need not be timed. A branch whose code is final goes to CI before
+it is timed, so that the two run at once.
+
 For concurrency or shared-cache changes:
 
 ```sh
