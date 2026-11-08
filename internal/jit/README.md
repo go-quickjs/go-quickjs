@@ -719,10 +719,11 @@ the arguments within the frame's operand slots is Go's to enter only
 (`PrologueFrameOnly`). A rest parameter's array, and the arguments
 object's operations -- an unmapped object's, or a mapped one's where the
 function never assigns a parameter nor lets the object out
-(`compile`'s `argumentsOwn`) -- are Go's, from the frame of the VM's the
-code was entered with, but `arguments[k]` and `arguments.length`, which
-Go reads from native code while the object is not made
-(`ssa.GoArgument`). A native call of such code, or of a constructor's
+(`compile`'s `argumentsOwn`, from what the compiler records of the code:
+`bytecode.Function`'s `AssignsParams` and `MakesArguments`) -- are Go's,
+from the frame of the VM's the code was entered with, but `arguments[k]`
+and `arguments.length`, which Go reads from native code while the object
+is not made (`ssa.GoArgument`). A native call of such code, or of a constructor's
 `super(...)` of its call's arguments, writes all of its arguments and
 their count to its callee's context (`ssa.CallSite`'s `FrameArgs`,
 `abi.Context`'s `Args`), as V8's call pushes them all: Go makes the array
@@ -746,8 +747,10 @@ native callee's) -- Go makes from native code on that frame (`ir.Instruction`'s 
 it. Code that reads its function object -- a super reference's home
 object, `push_callee`'s, a mapped arguments object's callee -- or makes
 an arrow that does, through any arrows between, which takes the home
-object from its maker's function object as it is made (`compile`'s
-`FrameCallee`, `ir.Program`'s) -- has a call entry all the same: a native
+object from its maker's function object as it is made
+(`bytecode.Function`'s `FrameCallee`, which the compiler records as the
+function's compile ends, its arrows' `ReadsMaker` before it;
+`ir.Program`'s) -- has a call entry all the same: a native
 call of it writes the object to its callee's context (`ssa.CallSite`'s
 `Function`, `abi.Context`'s `Function`), as a derived construction's
 does, and Go gives it to the frames it makes of the callee's level, on

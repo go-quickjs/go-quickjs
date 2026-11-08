@@ -39,22 +39,18 @@ const hostOnly = "host operations without native loop or array work"
 
 // GeneratorResumable reports whether a loop's step may resume a generator
 // of fn by a native call of its code (the VM's jitGenCallable, ssa.Func's
-// GenEntry): a synchronous generator whose body has no yield*, whose locals
-// no closure captures -- its frame's locals are then the generator's
-// alone, which no cell holds -- and no call in tail position, which a
-// generator's frame does not give up.
+// GenEntry): a synchronous generator whose body has no yield*
+// (bytecode.Function's HasYieldStar, which the compiler records) and so
+// no await, which only an async function's has, whose locals no closure
+// captures -- its frame's locals are then the generator's alone, which no
+// cell holds -- and no call in tail position, which a generator's frame
+// does not give up.
 func GeneratorResumable(fn *bytecode.Function) bool {
-	if fn == nil || !fn.Generator || fn.Async || fn.HasTailCall || fn.HasDirectEval {
+	if fn == nil || !fn.Generator || fn.Async || fn.HasTailCall || fn.HasDirectEval || fn.HasYieldStar {
 		return false
 	}
 	for _, l := range fn.Locals {
 		if l.Captured {
-			return false
-		}
-	}
-	for _, in := range fn.Code {
-		switch in.Op {
-		case bytecode.OpYieldStar, bytecode.OpAwait:
 			return false
 		}
 	}
@@ -168,16 +164,17 @@ func LowerSSAForward(fn *bytecode.Function) (*ir.Program, error) {
 
 // closureAssigned is, by local, whether a closure fn makes, or one a
 // closure of it makes in turn, assigns the local it captured; or nil if
-// none does. A nested function with a direct eval may assign any, strict
-// or not (bytecode.UpvalueAssigned).
+// none does: the compiler records it of each upvalue of each closure
+// (bytecode.UpvalueDesc's Assigned). A nested function with a direct eval
+// may assign any, strict or not.
 func closureAssigned(fn *bytecode.Function) []bool {
 	var out []bool
 	for _, c := range fn.Constants {
 		if c.Kind != bytecode.ConstFunction || c.Fn == nil {
 			continue
 		}
-		for j, d := range c.Fn.Upvalues {
-			if d.FromParent && int(d.Index) < fn.LocalCount && bytecode.UpvalueAssigned(c.Fn, j) {
+		for _, d := range c.Fn.Upvalues {
+			if d.FromParent && d.Assigned && int(d.Index) < fn.LocalCount {
 				if out == nil {
 					out = make([]bool, fn.LocalCount)
 				}
@@ -718,12 +715,9 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		stringParts(p, fn)
 		markBools(p)
 		p.UpvalueBase, p.Upvalues, p.Params = fn.LocalCount, len(fn.Upvalues), fn.ParamCount
-		p.FrameArgs = fn.HasRest || fn.UsesArguments || fn.MappedArguments || fn.ParamsAreLexical
-		for _, in := range fn.Code {
-			// super(...) of the call's arguments, which it hands on.
-			p.FrameArgs = p.FrameArgs || in.Op == bytecode.OpSuperCall && in.B == bytecode.SuperForward
-		}
-		p.FrameCallee = FrameCallee(fn)
+		// A super(...) of the call's arguments hands them on.
+		p.FrameArgs = fn.HasRest || fn.UsesArguments || fn.MappedArguments || fn.ParamsAreLexical || fn.SuperForwards
+		p.FrameCallee = fn.FrameCallee
 		if !prologueArgs(p) && m.callee {
 			// A native callee's frame, and an inlined one's, has the call's
 			// arguments nowhere but where the prologue's states keep them.
@@ -771,50 +765,6 @@ func frameDefinition(in bytecode.Instr) bool {
 
 // superRef reports whether op is a super reference's: a read or a write
 // of a property of the home object's prototype, or that base.
-// FrameCallee reports whether fn's frame must have its function object
-// (ir.Program's FrameCallee): its code reads it -- a super reference's home
-// object, push_callee's, a mapped arguments object's callee -- or an arrow
-// it makes takes from it what the arrow reads of its maker. An arrow's
-// super reads the home object of the method it is in, which the arrow
-// takes from its maker's function object as it is made (the VM's
-// newClosureIn), through every arrow between: a frame Go made of a native
-// callee without its function object had made such an arrow without a
-// home object, whose super then threw. An arrow that, or an arrow in
-// which, reads new.target or calls super() has its frame's through its
-// own function object too.
-func FrameCallee(fn *bytecode.Function) bool {
-	if fn.MappedArguments || fn.Kind == bytecode.KindArrow && fn.UsesNewTarget {
-		return true
-	}
-	for _, in := range fn.Code {
-		if superRef(in.Op) || in.Op == bytecode.OpPushCallee {
-			return true
-		}
-	}
-	return makesMakerArrow(fn)
-}
-
-// makesMakerArrow reports whether fn makes an arrow that reads, or makes
-// one that reads, its maker's home object or new.target: a super
-// reference or call, new.target, or a direct eval, which may read either
-// (UsesNewTarget).
-func makesMakerArrow(fn *bytecode.Function) bool {
-	for _, k := range fn.Constants {
-		if k.Kind != bytecode.ConstFunction || k.Fn == nil || k.Fn.Kind != bytecode.KindArrow {
-			continue
-		}
-		if k.Fn.UsesNewTarget || makesMakerArrow(k.Fn) {
-			return true
-		}
-		for _, in := range k.Fn.Code {
-			if superRef(in.Op) || in.Op == bytecode.OpSuperCall || in.Op == bytecode.OpNewTarget {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func superRef(op bytecode.Op) bool {
 	switch op {
 	case bytecode.OpGetSuperProp, bytecode.OpGetSuperIndex, bytecode.OpSetSuperProp, bytecode.OpSetSuperIndex, bytecode.OpSuperBase:
@@ -842,21 +792,16 @@ func argumentsOwn(fn *bytecode.Function) bool {
 	if !fn.MappedArguments || fn.ParamCount == 0 {
 		return true
 	}
+	if fn.MakesArguments || fn.AssignsParams {
+		// The object let out, or a store to a parameter, by any
+		// instruction that stores to a local (bytecode.WrittenLocals):
+		// a[++i]'s update is to its key's slot, in B, not to A, its
+		// object's. The compiler records both of the code.
+		return false
+	}
 	for i := 0; i < fn.ParamCount && i < len(fn.Locals); i++ {
 		if fn.Locals[i].Captured {
 			// A closure's assignment of it, which the object would see.
-			return false
-		}
-	}
-	for _, in := range fn.Code {
-		switch in.Op {
-		case bytecode.OpGetArguments, bytecode.OpLazyArguments, bytecode.OpApplyArguments:
-			return false
-		}
-		// A store to a parameter, by every instruction that stores to a
-		// local (WrittenLocals): a[++i]'s update is to its key's slot, in
-		// B, not to A, its object's.
-		if lo, hi := bytecode.WrittenLocals(in); lo < hi && lo < fn.ParamCount {
 			return false
 		}
 	}

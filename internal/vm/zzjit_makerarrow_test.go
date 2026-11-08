@@ -15,9 +15,9 @@ import (
 // native code -- had no home object, and its super threw "super is only
 // valid inside a method": a method's, an object literal's, a static one's,
 // one through an arrow between, after a few calls with the JIT's default
-// thresholds too (jitcompile.FrameCallee). Each answer Node's, compiled at
-// the first call and at the second, idle and while the collector marks,
-// and under forced deoptimizations.
+// thresholds too (bytecode.Function's FrameCallee). Each answer Node's,
+// compiled at the first call and at the second, idle and while the
+// collector marks, and under forced deoptimizations.
 func TestJITArrowSuperOfNativeCallee(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")

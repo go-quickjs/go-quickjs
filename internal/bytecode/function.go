@@ -72,12 +72,21 @@ type UpvalueDesc struct {
 	// ByValue marks a local of the enclosing function that holds its final
 	// value when the closure is made and is never assigned after: a const
 	// initialized by then, or a strict function's simple parameter that
-	// nothing stores to (WrittenLocals, UpvalueAssigned). The closure may
-	// then take a copy of the value rather than share the binding with
-	// the frame, as Java's lambdas and Go's closures copy what is
-	// effectively final. Only with FromParent; never in code compiled for
-	// a debugger, which may set a binding.
+	// nothing stores to (WrittenLocals, Assigned). The closure may then
+	// take a copy of the value rather than share the binding with the
+	// frame, as Java's lambdas and Go's closures copy what is effectively
+	// final. Only with FromParent; never in code compiled for a debugger,
+	// which may set a binding.
 	ByValue bool
+	// Assigned says the closure, or one it makes, or one that closure
+	// makes in turn, may assign the binding: an instruction of the
+	// closure's stores to it (OpSetUpvalue, OpSetUpvalueCheck,
+	// OpInitUpvalue), a nested function's upvalue forwarding it is
+	// Assigned, or the closure has a direct eval, which may assign any, a
+	// strict one's too. The compiler records it as the closure's compile
+	// ends, its nested functions' before. In what was padding after
+	// ByValue, so that no field moves.
+	Assigned bool
 }
 
 // EvalScope is what a direct `eval` call site can see.
@@ -424,6 +433,20 @@ type Function struct {
 	// Anonymous marks a function the Function constructor made, which a
 	// stack trace does not call by the name its name property has.
 	Anonymous bool
+	// AssignsParams says an instruction of the code stores to a
+	// parameter's slot (WrittenLocals): an assignment, an update, a
+	// prologue's binding, a[++i]'s update of its key's slot. Recorded as
+	// FrameCallee is, as are the two below.
+	AssignsParams bool
+	// MakesArguments says the code makes the arguments object, or hands
+	// the call's arguments on to apply: an OpGetArguments, an
+	// OpLazyArguments or an OpApplyArguments. Reads by index and the count
+	// alone (OpArgumentsIndex, OpArgumentsLength) make none.
+	MakesArguments bool
+	// SuperForwards says the code has a super(...) of the call's own
+	// arguments (OpSuperCall's SuperForward), as a derived class's default
+	// constructor has, which hands them on.
+	SuperForwards bool
 	// Script is the source text the function was compiled from, which its
 	// Lines are positions in, and Start is where in it the function begins.
 	Script *Script
@@ -462,6 +485,28 @@ type Function struct {
 	// arrow's this in place, as a method's. After TraceName, so that the
 	// fields a call reads stay where they were.
 	ArrowThisValue bool
+	// FrameCallee says a frame of the function must have its function
+	// object: its code reads it -- a super reference's home object, an
+	// OpPushCallee's, a mapped arguments object's callee -- or an arrow it
+	// makes takes from it what the arrow reads of its maker (ReadsMaker),
+	// or it is an arrow that reads new.target or calls super(), whose
+	// frame's it reads through its own function object (UsesNewTarget).
+	// An arrow's super reads the home object of the method it is in, which
+	// the arrow takes from its maker's function object as it is made,
+	// through every arrow between. The compiler records it, as it does
+	// the facts below and AssignsParams', for the JIT and the VM's native
+	// calls, which had asked them of the code at each lowering and each
+	// call: as a function's compile ends, a nested function's before its
+	// maker's, which reads them. In what was padding after ArrowThisValue
+	// and Anonymous, so that no field moves.
+	FrameCallee bool
+	// ReadsMaker says an arrow, or an arrow it makes, reads what an arrow
+	// takes from its maker's function object as it is made: a super
+	// reference or call, new.target, or a direct eval, which may read
+	// either (UsesNewTarget). False for any other function.
+	ReadsMaker bool
+	// HasYieldStar says the code has a yield* (OpYieldStar).
+	HasYieldStar bool
 }
 
 // LineAt returns the source line of the instruction at pc, or 0 if unknown.

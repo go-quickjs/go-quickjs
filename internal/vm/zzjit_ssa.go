@@ -5360,35 +5360,13 @@ func jitReopenRunCells(f *frame, ctx *abi.Context) {
 }
 
 // jitNeedsMaker reports whether the function template c makes is an arrow
-// that reads, or whose arrows read, its maker's new.target or super,
-// which a native callee's context does not have (jitCalleeFrame).
+// that reads, or whose arrows read, its maker's new.target or super, or
+// has a direct eval, which may read either (bytecode.Function's
+// ReadsMaker), which a native callee's context does not have
+// (jitCalleeFrame).
 func jitNeedsMaker(c Value) bool {
 	t := c.template()
-	if t == nil || t.fn.Kind != bytecode.KindArrow {
-		return false
-	}
-	if t.fn.UsesNewTarget {
-		// It, or an arrow in it, reads new.target or super, or has a direct
-		// eval, which may read either: the walk below misses the eval.
-		return true
-	}
-	var reads func(fn *bytecode.Function) bool
-	reads = func(fn *bytecode.Function) bool {
-		for _, in := range fn.Code {
-			switch in.Op {
-			case bytecode.OpNewTarget, bytecode.OpSuperCall, bytecode.OpGetSuperProp, bytecode.OpGetSuperIndex,
-				bytecode.OpSetSuperProp, bytecode.OpSetSuperIndex, bytecode.OpSuperBase:
-				return true
-			}
-		}
-		for _, k := range fn.Constants {
-			if k.Kind == bytecode.ConstFunction && k.Fn != nil && k.Fn.Kind == bytecode.KindArrow && reads(k.Fn) {
-				return true
-			}
-		}
-		return false
-	}
-	return reads(t.fn)
+	return t != nil && t.fn.ReadsMaker
 }
 
 // jitCalleeMakes reports whether Go may make the closure c on f, the
@@ -14381,26 +14359,25 @@ func (r *Runtime) jitLevelPrologue(cl *closure, pc, depth int, f *frame) []Value
 
 // jitFrameArgs reports whether fn's code reads its call's arguments past
 // its parameters, from the frame of the VM's: a rest parameter's, the
-// arguments object's, a super() of them (bytecode.SuperForward). A native
+// arguments object's, a super() of them (bytecode.Function's
+// SuperForwards). A native
 // call of it writes them all to its callee's context (ssa.CallSite's
 // FrameArgs, abi.Context's Args), where Go finds them for the frames it
 // makes of the callee's level, as V8's call pushes all of a call's
 // arguments, its callee reading them past its parameters.
 func jitFrameArgs(fn *bytecode.Function) bool {
-	return fn.HasRest || fn.UsesArguments || fn.MappedArguments ||
-		fn.Kind == bytecode.KindDerivedConstructor && slices.ContainsFunc(fn.Code, func(in bytecode.Instr) bool {
-			return in.Op == bytecode.OpSuperCall && in.B == bytecode.SuperForward
-		})
+	return fn.HasRest || fn.UsesArguments || fn.MappedArguments || fn.Kind == bytecode.KindDerivedConstructor && fn.SuperForwards
 }
 
 // jitFrameCallee reports whether fn's frame must have its function object
-// (jitcompile.FrameCallee): its code reads it -- a super reference's home
+// (bytecode.Function's FrameCallee, which the compiler records): its code
+// reads it -- a super reference's home
 // object, push_callee's, a mapped arguments object's callee -- or an arrow
 // it makes takes the home object or new.target from it. A native call of
 // it writes the object to its callee's context (ssa.CallSite's Function,
 // abi.Context's Function), where Go finds it for the frames it makes of the
 // callee's level, as V8's frame has its function.
-func jitFrameCallee(fn *bytecode.Function) bool { return jitcompile.FrameCallee(fn) }
+func jitFrameCallee(fn *bytecode.Function) bool { return fn.FrameCallee }
 
 // jitCallArgs is a copy of the arguments a native call of fn wrote to its
 // callee's context, c (abi.Context's Args), for a frame Go makes of the

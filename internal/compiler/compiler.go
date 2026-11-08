@@ -663,7 +663,8 @@ func (c *compiler) reserve(n int) {
 	}
 }
 
-// finish records the tables the interpreter needs.
+// finish records the tables the interpreter needs, and what the JIT and
+// the VM's native calls ask of the code (recordFacts).
 func (c *compiler) finish() {
 	c.fn.LocalCount = int(c.nextSlot)
 	c.fn.MaxStack = c.maxStack + 4 // headroom for the interpreter's own pushes
@@ -672,16 +673,173 @@ func (c *compiler) finish() {
 		c.recordLocal(l)
 	}
 	copy(c.fn.Locals, c.pendingLocals)
-	// Each read and write of a private member has a cache of its own, as a
-	// property's has, counted here, in the finished code.
-	for _, in := range c.fn.Code {
-		if in.Op == bytecode.OpGetPrivate || in.Op == bytecode.OpSetPrivate {
-			c.fn.PrivateSites++
+	facts := c.recordFacts()
+	if len(c.paramCaptures) != 0 && !facts.eval {
+		c.settleParamCaptures(facts)
+	}
+}
+
+// codeFacts is what recordFacts found of a function's finished code that
+// settleParamCaptures asks: the slots of its first 64 locals an
+// instruction stores to (bytecode.WrittenLocals), those a closure it makes
+// may assign (UpvalueDesc's Assigned), and whether it has a direct eval.
+type codeFacts struct {
+	written, closures uint64
+	eval              bool
+}
+
+// What recordFacts notes of an instruction, by its opcode (opFacts): one
+// of these, and, for an opcode whose instruction stores to a local
+// (bytecode.WrittenLocals), factStoresA, for a store to the slot in A
+// alone, or factStores.
+const (
+	factPrivate    = 1 + iota // a private member's read or write, which has a cache
+	factSuperRef              // a super reference, through the home object
+	factPushCallee            // the function object pushed
+	factSuperCall             // super(), which constructs with new.target
+	factNewTarget             // new.target
+	factSetUpvalue            // a store to an upvalue
+	factEval                  // a direct eval
+	factArguments             // the arguments object made, or handed to apply
+	factYieldStar             // a yield*
+
+	factStores  = 0x40
+	factStoresA = 0x80
+)
+
+// opFacts is what recordFacts notes of an instruction of each opcode, 0
+// for nothing, as most are, for which a load is all the walk costs: a
+// switch of each instruction's opcode, and WrittenLocals' of each, had
+// made compiling Three.js's and Babel's bundles 2.2% and 3.6% slower.
+var opFacts = [256]uint8{
+	bytecode.OpGetPrivate:      factPrivate,
+	bytecode.OpSetPrivate:      factPrivate,
+	bytecode.OpGetSuperProp:    factSuperRef,
+	bytecode.OpGetSuperIndex:   factSuperRef,
+	bytecode.OpSetSuperProp:    factSuperRef,
+	bytecode.OpSetSuperIndex:   factSuperRef,
+	bytecode.OpSuperBase:       factSuperRef,
+	bytecode.OpPushCallee:      factPushCallee,
+	bytecode.OpSuperCall:       factSuperCall,
+	bytecode.OpNewTarget:       factNewTarget,
+	bytecode.OpSetUpvalue:      factSetUpvalue,
+	bytecode.OpSetUpvalueCheck: factSetUpvalue,
+	bytecode.OpInitUpvalue:     factSetUpvalue,
+	bytecode.OpDirectEval:      factEval,
+	bytecode.OpTailDirectEval:  factEval,
+	bytecode.OpGetArguments:    factArguments,
+	bytecode.OpLazyArguments:   factArguments | factStoresA,
+	bytecode.OpApplyArguments:  factArguments | factStoresA,
+	bytecode.OpYieldStar:       factYieldStar,
+
+	bytecode.OpSetLocal:            factStoresA,
+	bytecode.OpPutLocal:            factStoresA,
+	bytecode.OpSetLocalCheck:       factStoresA,
+	bytecode.OpInitLocal:           factStoresA,
+	bytecode.OpClearLocal:          factStoresA,
+	bytecode.OpSetLocalGet:         factStoresA,
+	bytecode.OpIncLocal:            factStoresA,
+	bytecode.OpDecLocal:            factStoresA,
+	bytecode.OpUpdateLocal:         factStoresA,
+	bytecode.OpInitParam:           factStoresA,
+	bytecode.OpArgumentsIndex:      factStoresA,
+	bytecode.OpGetLocalIndexUpdate: factStores,
+	bytecode.OpParamsToDeadZone:    factStores,
+}
+
+// recordFacts records, in one walk of the function's finished code and
+// one of its closures', what the JIT and the VM's native calls ask of it
+// (bytecode.Function's FrameCallee, ReadsMaker, AssignsParams,
+// MakesArguments, SuperForwards and HasYieldStar, and its upvalues'
+// Assigned), and counts its private members' caches: each read and write
+// of one has a cache of its own, as a property's has. Its closures' were
+// recorded as their compiles ended, before its own.
+func (c *compiler) recordFacts() (f codeFacts) {
+	fn := c.fn
+	arrow := fn.Kind == bytecode.KindArrow
+	callee := fn.MappedArguments || arrow && fn.UsesNewTarget
+	reads := fn.UsesNewTarget
+	// No parameter for a store to be to, and no closure's capture of one
+	// to settle: what the code stores to is not asked.
+	stores := fn.ParamCount != 0 || len(c.paramCaptures) != 0
+	params, written := uint32(fn.ParamCount), uint64(0)
+	assigns := false
+	for _, in := range fn.Code {
+		k := opFacts[in.Op]
+		if k == 0 {
+			continue
+		}
+		switch {
+		case !stores:
+		case k&factStoresA != 0:
+			assigns = assigns || in.A < params
+			written |= 1 << in.A // none for a slot past 63
+		case k&factStores != 0:
+			lo, hi := bytecode.WrittenLocals(in)
+			assigns = assigns || lo < hi && lo < fn.ParamCount
+			for s := lo; s < hi && s < 64; s++ {
+				written |= 1 << s
+			}
+		}
+		switch k &^ (factStores | factStoresA) {
+		case factPrivate:
+			fn.PrivateSites++
+		case factSuperRef:
+			callee, reads = true, true
+		case factPushCallee:
+			callee = true
+		case factSuperCall:
+			reads = true
+			fn.SuperForwards = fn.SuperForwards || in.B == bytecode.SuperForward
+		case factNewTarget:
+			reads = true
+		case factSetUpvalue:
+			if int(in.A) < len(fn.Upvalues) {
+				fn.Upvalues[in.A].Assigned = true
+			}
+		case factEval:
+			f.eval = true
+		case factArguments:
+			fn.MakesArguments = true
+		case factYieldStar:
+			fn.HasYieldStar = true
 		}
 	}
-	if len(c.paramCaptures) != 0 {
-		c.settleParamCaptures()
+	fn.AssignsParams, f.written = assigns, written
+	if f.eval || fn.HasDirectEval {
+		// A direct eval may assign any binding in scope, a strict one's
+		// too, which declares nothing in it but assigns what is there.
+		for i := range fn.Upvalues {
+			fn.Upvalues[i].Assigned = true
+		}
 	}
+	// What the closures it makes take of it: an arrow's reads of its
+	// maker's function object, through every arrow between, and the
+	// bindings each may assign, its own locals' and those it forwards of
+	// the function's upvalues.
+	makes := false
+	for i := range fn.Constants {
+		k := &fn.Constants[i]
+		if k.Kind != bytecode.ConstFunction || k.Fn == nil {
+			continue
+		}
+		makes = makes || k.Fn.ReadsMaker
+		ups := k.Fn.Upvalues
+		for j := range ups {
+			switch d := &ups[j]; {
+			case !d.Assigned:
+			case d.FromParent:
+				if d.Index < 64 {
+					f.closures |= 1 << d.Index
+				}
+			case int(d.Index) < len(fn.Upvalues):
+				fn.Upvalues[d.Index].Assigned = true
+			}
+		}
+	}
+	fn.FrameCallee = callee || makes
+	fn.ReadsMaker = arrow && (reads || makes)
+	return f
 }
 
 // paramCapture is a closure's capture of a parameter of the function
@@ -697,43 +855,20 @@ type paramCapture struct {
 // of the function's stores to its slot -- a parameter list with a
 // default, a pattern or a rest binds every slot in its prologue, so none
 // of its parameters is -- and none of its closures assigns it, nor one a
-// closure makes (bytecode.UpvalueAssigned), the one capturing it by value
+// closure makes (UpvalueDesc's Assigned), the one capturing it by value
 // or any other. A direct eval in the function, strict or not, may assign
-// any; one in a closure assigns what it captures, as every name in scope
-// at the eval is (evalScope). Only a function some closure of which
-// captures a parameter is looked at, once its code is all compiled, its
-// closures' with it; its code once, for the first 64 parameters, which
-// are all a closure's captures are taken from.
-func (c *compiler) settleParamCaptures() {
+// any, and it is not asked; one in a closure assigns what it captures, as
+// every name in scope at the eval is (evalScope). Only a function some
+// closure of which captures a parameter is looked at, once its code is all
+// compiled, its closures' with it, from what recordFacts found of them,
+// for the first 64 parameters, which are all a closure's captures are
+// taken from.
+func (c *compiler) settleParamCaptures(f codeFacts) {
 	if c.fn.HasDirectEval {
 		return
 	}
-	// The parameters' slots, which are the first, that the code stores to.
-	var written uint64
-	for _, in := range c.fn.Code {
-		if in.Op == bytecode.OpDirectEval || in.Op == bytecode.OpTailDirectEval {
-			return
-		}
-		if lo, hi := bytecode.WrittenLocals(in); lo < 64 {
-			for s := lo; s < hi && s < 64; s++ {
-				written |= 1 << s
-			}
-		}
-	}
-	// And those a closure assigns, asked of each closure once at most.
-	var closures, asked uint64
 	for _, p := range c.paramCaptures {
-		s := p.slot
-		if s >= 64 || written&(1<<s) != 0 {
-			continue
-		}
-		if asked&(1<<s) == 0 {
-			asked |= 1 << s
-			if c.closureAssigns(s) {
-				closures |= 1 << s
-			}
-		}
-		if closures&(1<<s) == 0 {
+		if s := p.slot; s < 64 && (f.written|f.closures)&(1<<s) == 0 {
 			markByValue(p.fn, p.up)
 		}
 	}
@@ -745,22 +880,6 @@ func (c *compiler) settleParamCaptures() {
 func markByValue(fn *bytecode.Function, up uint32) {
 	fn.Upvalues[up].ByValue = true
 	fn.CapturesByValue = true
-}
-
-// closureAssigns reports whether a closure the function makes, or one it
-// makes in turn, may assign the function's local slot.
-func (c *compiler) closureAssigns(slot uint32) bool {
-	for _, k := range c.fn.Constants {
-		if k.Kind != bytecode.ConstFunction || k.Fn == nil {
-			continue
-		}
-		for j, d := range k.Fn.Upvalues {
-			if d.FromParent && d.Index == slot && bytecode.UpvalueAssigned(k.Fn, j) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // release copies the function's tables out of the scratch they were built

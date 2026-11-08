@@ -21,35 +21,3 @@ func WrittenLocals(in Instr) (lo, hi int) {
 	}
 	return 0, 0
 }
-
-// UpvalueAssigned reports whether t, or a closure t makes, or one that
-// closure makes in turn, may assign t's upvalue up: an instruction of t's
-// stores to it, or a nested function's upvalue forwarding it is assigned.
-// A function with a direct eval may assign any: a strict one's too, which
-// declares nothing in it (HasDirectEval) but assigns what is in scope.
-func UpvalueAssigned(t *Function, up int) bool {
-	if t.HasDirectEval {
-		return true
-	}
-	for _, in := range t.Code {
-		switch in.Op {
-		case OpSetUpvalue, OpSetUpvalueCheck, OpInitUpvalue:
-			if int(in.A) == up {
-				return true
-			}
-		case OpDirectEval, OpTailDirectEval:
-			return true
-		}
-	}
-	for _, c := range t.Constants {
-		if c.Kind != ConstFunction || c.Fn == nil {
-			continue
-		}
-		for j, d := range c.Fn.Upvalues {
-			if !d.FromParent && int(d.Index) == up && UpvalueAssigned(c.Fn, j) {
-				return true
-			}
-		}
-	}
-	return false
-}
