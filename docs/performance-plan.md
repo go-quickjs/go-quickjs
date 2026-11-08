@@ -53,8 +53,11 @@ item are from the runs of its time unless it says otherwise.
   out its later chunks and the gaps between its functions by a seed of
   each placement's (`V8BENCH_JITSEED`, `07c5890d`), where code compiled
   late in a suite had landed where the code before it ended, at the same
-  place in every placement; the JIT's Go side is not moved, nor distances
-  inside a function. A change that resizes earlier code can still look
+  place in every placement; both move code by whole lines, and each
+  placement also starts every function's code 0 to 56 bytes into its line
+  (`V8BENCH_JITLINE`), where every placement had put each JIT loop at a
+  line's start. The JIT's Go side is not moved, nor distances inside a
+  function. A change that resizes earlier code can still look
   like an eight-placement regression of a later benchmark. Before calling
   one real, compare its native code's bytes per
   operation, its exits and compiles, run it alone (`-suite`) over the
@@ -1911,18 +1914,16 @@ Open from it:
   against spilling whole), V8 -0.3%, micro geometric mean 0.995
   (`bigint64_xorshift` -22%); compiles 3% slower than the inlining
   alone (the uses 21.4 to 26.5 ms and the scan 11.7 to 16.7 ms of about
-  390). Still +5.0% at every placement, `bigint64_fnv1a`'s loop runs
-  3.9% faster than the inlining alone's on the mean of eight offsets of
-  its loops within their 64-byte lines -- about 10% faster at four, 3
-  to 5% slower at three, offset 0 among them, where every placement puts
-  it: placements vary which sets of the op cache the lines take, not
-  where code falls within them; `typed_f64_reduce`, +6.3% at every
-  placement, is level (+0.3%) over the eight. Open, to revisit: both
-  are taken as layout on that evidence alone. The placements tool
-  should vary where a JIT loop starts within its 64-byte line, as
-  `V8BENCH_JITPAD` varies the chunk, and both be judged over those
-  offsets; until then a JIT change that moves code within lines is
-  judged at offset 0 only. The micro-benchmark
+  390). Still +5.0% at every placement, `bigint64_fnv1a` and
+  `typed_f64_reduce` (+6.3%) were placement within the line: every
+  placement then put each JIT loop at offset 0 of its line. Over the
+  eight offsets `V8BENCH_JITLINE` now gives, one build each, the split
+  against the inlining alone is `bigint64_fnv1a` 11.79 -> 11.36 ns on the
+  mean (-3.7%: 10.3 to 10.6 at four offsets against 11.7 to 11.8, 12.1
+  to 12.3 against 11.8 at the other four) and `typed_f64_reduce` 4.96 ->
+  5.00 (+0.9%, faster or slower by offset); over eight placements that
+  vary the offset, main at `42845bad` against the inlining alone is
+  -20.6% and -8.0% on them, faster at all eight. The micro-benchmark
   `method_call`, a call of a method whose loop runs no turns, kept out of
   line by it, was then inlined (-67%) and no longer timed a call with a
   frame; its loop now makes a call, which keeps the method out of line
@@ -1930,16 +1931,58 @@ Open from it:
   A wider rule, inlining a loop only where the call's cost is not
   spread over its turns, is still wanted. (Where the loop calls a
   closure the caller gives, the round of 2026-10-28, above.)
-- Open: `array_length_read` takes 5.2% longer with the JIT since
-  `a97e929e`, which loads an entry's slot where its unboxing reads it,
-  at every one of four placements and at every offset of its code across
-  4 KB (1.32 to 1.36 ns against 1.26 to 1.28 on a Ryzen 5 3600), about
-  0.07 ns a read. Its loop's instructions are main's but for which
-  registers they use, so it is neither placement nor more work, and its
-  cause is not known. Over the same round, without a cause shown at
-  every placement: CodeLoad with the JIT +2.8% (+2.4 to +3.5% by
-  placement), one compile and none of the round's new paths in its
-  profile, and DeltaBlue without it +2% (+0.7 to +3.1%).
+- `array_length_read`, 5.2% slower with the JIT since `a97e929e` at
+  every placement and at every offset of its code across 4 KB, is
+  placement within the 64-byte line: those offsets moved it by whole
+  lines, its loop at offset 0 of one. Over eight offsets within the
+  line, one build each, main is level with `067f8269` (1.283 against
+  1.279 ns on the mean): +5.0% at offset 0, +0.3 to +1.3% at 8 to 32,
+  -5.1% at 40, -3.9% at 48, +3.4% at 56; over eight placements varying
+  the offset, -0.1%, more than 2% slower at two. The loop, 111
+  instructions a turn and five taken branches, is the same but for its
+  registers: main keeps `tab` in R13, whose `[r13+8]` is a byte shorter
+  than `[r12+8]`, which takes an SIB byte, so each read's code is 2
+  bytes shorter and the branches and their targets fall elsewhere in
+  their lines and 32-byte windows.
+- Over the same round, CodeLoad with the JIT (+2.8%) is level at main
+  (`42845bad` against `3dd10022`, four placements: -0.1%). DeltaBlue
+  without the JIT (+2%; +3.2% at main, slower at all four) is where
+  package vm's code lies: main's vm is 960 bytes longer (typed arrays'
+  views, the global object's count of changes), which moves `executeAt`
+  352 bytes on, the call path 384 and the closures 960, against the op
+  cache's 4 KB of sets, its hot functions the same instruction for
+  instruction (`hotdiff`) and at the same phases. The base padded so
+  that every hot function and closure is at main's address -- pads
+  before vm.go, after it, after vm_shape.go and before zzbigint.go -- is
+  0.9% faster than main, where unpadded it was 3.2%.
+- `dataview_read` and `dataview_write` with the JIT, about 5% slower at
+  three of four placements after the round that made compiles cheaper
+  (`a4275949`..`e7e79f4a`), are placement: over eight placements varying
+  the offset within the line, main against `f34b94c5` is +0.6% and
+  +1.9% on the mean, more than 2% slower at four and two of the eight,
+  faster at others (70 to 82 ns and 78 to 88 by placement).
+- `bigint64_search` with the JIT, +4.9% against the build before
+  `86ce8a19` over eight placements varying the offset (slower at four),
+  was `50909d69`'s: over eight offsets, one build each, 9.85 ns at
+  `a97e929e` and 11.52 after it on the mean, 9.5 at two offsets and 12.0
+  to 12.3 at six. Its loop's instructions are the same but for registers
+  and one byte, a `cvtsi2sd xmm0, ebx` where it had converted `r10d`,
+  which takes a REX prefix; the same commit with an empty REX prefix on
+  that instruction runs 9.84 ns, 9.6 to 10.0 at every offset: where code
+  falls inside the function, which no placement varies. The loop's own
+  cost was its key: `a[mid]` read its element as a reference, the int32
+  `(lo + hi) >> 1` converted to a double and back and checked, 37% of
+  its samples. Every element access now takes an int32 key, as reads
+  and writes of numbers did (ssa's `intKeyed`): 8.45 ns on the mean of
+  the eight offsets, 8.2 to 8.7 at each. Over four JIT placements it
+  takes `typeof_test` (`values[j & 7]`) 27% faster, `string_switch_*` 8
+  to 26%, `prop_in_keyed` 15% and `number_switch` 13%; the suites are
+  level. `typed_forEach` (+11%), `typed_find` and `append_pair_read`,
+  their code the same, were slower at every placement for package vm
+  sitting 384 bytes on, the JIT's packages before it longer: against
+  main padded to those addresses they are level, and `typed_findIndex`,
+  `typed_u8_reduce`, `typed_u8_find` and `typed_i64_find`, the same code
+  too, 6 to 8% slower at every placement instead.
 - A call is still an indirect jump each way: native code runs on the
   goroutine's stack and never moves SP, so that Go's unwinder, stack scan
   and growth meet no return address of its, and a return is not
@@ -3719,7 +3762,13 @@ was ruled out in the commits and in [optimizing.md](optimizing.md))
   `string_template` (2026-11-04).
 - The JIT's placements varying distances inside a function: main with one
   `xorpd` before each `cvtsi2sd` is as slow as the 32-byte objects on
-  `typed_u8c_forEach` and `typed_i8_forEach` (2026-11-04).
+  `typed_u8c_forEach` and `typed_i8_forEach` (2026-11-04);
+  `bigint64_search` 25% slower at six of eight offsets in the line for
+  one byte more inside its function (2026-11-08). Where a function's code
+  starts within its line is varied (`V8BENCH_JITLINE`, 2026-11-08).
+- `-jitheld` holds the collector off, and grew Game Boy's heap to 6.75
+  GB; it runs at a memory limit of 3 GiB unless `GOMEMLIMIT` gives one,
+  two runs of one build the same 882 compiles (2026-11-08).
 - Placements varying where package vm sits against the packages before
   it, as a pad in mir would.
 - Data's layout: a build of the same bytes 14% slower at one placement,
