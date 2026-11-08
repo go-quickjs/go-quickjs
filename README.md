@@ -78,8 +78,8 @@ guaranteed: a few operations that are mostly a built-in's work run slower
 with it, so measure a workload with it on and off. See
 [its design notes](internal/jit/README.md).
 
-Its V8 version 7 composite score is 6.93 times goja's with the JIT off,
-23.30 times with synchronous JIT compilation, and 23.36 times with background
+Its V8 version 7 composite score is 7.14 times goja's with the JIT off,
+24.82 times with synchronous JIT compilation, and 24.95 times with background
 JIT compilation, on an Apple M5 Max with Go 1.27.3. This older
 workload suite does not represent every application; see the
 [goja comparison](docs/benchmarks.md#v8-version-7-benchmark-suite) for the

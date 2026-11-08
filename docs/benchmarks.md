@@ -150,8 +150,8 @@ each: `-engine node -arg --jitless` runs Node without its JIT compilers.
 
 For a comparison with another pure-Go JavaScript engine, the Mozilla
 [AreWeFastYet V8 version 7 suite][v8-v7] was run against go-quickjs and
-[goja]. All three go-quickjs columns use revision `ea0703f7`, measured alongside
-goja on 2026-11-07. Each column is the median of three fresh-process runs
+[goja]. All three go-quickjs columns use revision `229e19b3`, measured alongside
+goja on 2026-11-08. Each column is the median of three fresh-process runs
 on an Apple M5 Max with Go 1.27.3, with 30 seconds between runs and AC
 power throughout. One engine ran at a time, with the order rotated each
 round. JIT off was built without the `quickjs_jit` tag. JIT on compiles
@@ -164,15 +164,15 @@ go-quickjs score by goja's.
 
 | Workload | go-quickjs JIT off | go-quickjs JIT on | go-quickjs JIT background | goja | JIT off / goja | JIT on / goja | JIT background / goja |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| Richards | 2,641 | 13,295 | 12,921 | 543 | 4.86x | 24.48x | 23.80x |
-| DeltaBlue | 2,784 | 13,951 | 13,336 | 661 | 4.21x | 21.11x | 20.18x |
-| Crypto | 3,286 | 18,216 | 18,272 | 344 | 9.55x | 52.95x | 53.12x |
-| RayTrace | 6,265 | 32,716 | 34,819 | 842 | 7.44x | 38.86x | 41.35x |
-| EarleyBoyer | 7,668 | 13,452 | 13,428 | 1,514 | 5.06x | 8.89x | 8.87x |
-| RegExp | 8,983 | 10,686 | 10,776 | 594 | 15.12x | 17.99x | 18.14x |
-| Splay | 12,778 | 21,383 | 21,620 | 2,727 | 4.69x | 7.84x | 7.93x |
-| NavierStokes | 5,983 | 38,732 | 38,469 | 571 | 10.48x | 67.83x | 67.37x |
-| **Composite score** | **5,452** | **18,338** | **18,383** | **787** | **6.93x** | **23.30x** | **23.36x** |
+| Richards | 2,552 | 14,393 | 14,848 | 529 | 4.82x | 27.21x | 28.07x |
+| DeltaBlue | 2,728 | 13,726 | 13,323 | 634 | 4.30x | 21.65x | 21.01x |
+| Crypto | 3,252 | 20,382 | 20,434 | 335 | 9.71x | 60.84x | 61.00x |
+| RayTrace | 6,185 | 32,749 | 34,853 | 813 | 7.61x | 40.28x | 42.87x |
+| EarleyBoyer | 7,587 | 13,454 | 13,536 | 1,454 | 5.22x | 9.25x | 9.31x |
+| RegExp | 8,938 | 10,344 | 10,365 | 567 | 15.76x | 18.24x | 18.28x |
+| Splay | 12,908 | 20,487 | 21,261 | 2,486 | 5.19x | 8.24x | 8.55x |
+| NavierStokes | 6,006 | 38,842 | 39,138 | 559 | 10.74x | 69.48x | 70.01x |
+| **Composite score** | **5,387** | **18,714** | **18,811** | **754** | **7.14x** | **24.82x** | **24.95x** |
 
 The runner's timed suite interval includes runtime construction, parsing,
 compilation, the suite's warmups and its measured iterations, but excludes
@@ -182,9 +182,9 @@ go-quickjs and goja runs:
 
 | Metric | go-quickjs JIT off | go-quickjs JIT on | go-quickjs JIT background | goja | JIT off relative to goja |
 |---|---:|---:|---:|---:|---:|
-| Suite wall time | 22.26 s | 20.11 s | 20.10 s | 51.33 s | 2.31x faster |
-| Suite CPU time | 26.10 s | 26.00 s | 26.23 s | 72.44 s | 64.0% less |
-| Total allocation | 7.87 GiB | 15.92 GiB | 16.03 GiB | 35.21 GiB | 77.6% less |
+| Suite wall time | 22.23 s | 20.11 s | 20.10 s | 51.35 s | 2.31x faster |
+| Suite CPU time | 25.80 s | 26.15 s | 26.34 s | 72.64 s | 64.5% less |
+| Total allocation | 7.80 GiB | 15.93 GiB | 16.03 GiB | 33.75 GiB | 76.9% less |
 
 Score mode does different amounts of work as throughput changes, so the CPU
 and allocation totals are not equal-work efficiency measurements. The
@@ -194,7 +194,7 @@ composite calculated from the workload medians.
 The suite warms every workload for at least one second, then measures for at
 least another second and continues until it has 32 measured iterations. All
 engines evaluated the same benchmark sources and validation code.
-The measured revisions were go-quickjs `ea0703f7`, goja `a177d211bf60`, and
+The measured revisions were go-quickjs `229e19b3`, goja `a177d211bf60`, and
 AreWeFastYet `0e21608`. The isolated goja runner pins
 `v0.0.0-20261102223426-a177d211bf60` for this comparison. These results
 characterize this older workload suite rather than every application;
@@ -213,14 +213,14 @@ The composite samples were:
 
 | Mode | Run 1 | Run 2 | Run 3 |
 |---|---:|---:|---:|
-| JIT off | 5,582 | 5,452 | 5,449 |
-| JIT on | 18,573 | 18,338 | 18,262 |
-| JIT background | 18,369 | 18,438 | 18,383 |
-| goja | 787 | 787 | 777 |
+| JIT off | 5,581 | 5,365 | 5,387 |
+| JIT on | 18,714 | 17,781 | 19,033 |
+| JIT background | 18,961 | 18,584 | 18,811 |
+| goja | 754 | 754 | 748 |
 
 All samples were included. The table takes the median of each workload and
 of the printed composite scores independently. Background compilation's
-composite was 0.25% higher than synchronous compilation's, within the spread
+composite was 0.52% higher than synchronous compilation's, within the spread
 of these samples; this run does not establish an overall throughput gain.
 
 ## Compared with C QuickJS
