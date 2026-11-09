@@ -3796,7 +3796,10 @@ was ruled out in the commits and in [optimizing.md](optimizing.md))
   among them, `IsNumber` not), not where a caller calls one it could
   inline.
 - arm64: the JIT runs only on darwin/arm64, not linux/arm64, and was
-  never timed beyond small kernels.
+  profiled for compilation on Typescript on an M5 Max: reusing the
+  assembler's output buffer cuts compilation allocation by 25-30%
+  (2026-11-08). Broad native execution
+  timing remains open.
 - test262 under JIT stress 10-50% slower since `45d15dc` (*unchecked*).
 
 **Semantics**

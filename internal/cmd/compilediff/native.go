@@ -153,8 +153,8 @@ func differs(p, q *nativeRecord) string {
 		if p.States != q.States && a64SameLayout(p.Bytes, q.Bytes, p.Text, q.Text) {
 			return "what its calls and exits are described by differs"
 		}
-		if p.Listing != q.Listing {
-			return "the error differs"
+		if x, y := hexNumber.ReplaceAllString(p.Listing, "0x"), hexNumber.ReplaceAllString(q.Listing, "0x"); x != y {
+			return "the SSA listing or error differs"
 		}
 		return differsARM64(p.Bytes, q.Bytes, p.Text, q.Text)
 	}

@@ -12,6 +12,7 @@ import (
 	"math"
 	"os"
 	"regexp"
+	"runtime"
 	"runtime/debug"
 	"slices"
 	"strconv"
@@ -114,8 +115,8 @@ type jitCode struct {
 	// Spills counts the values the allocation spilled (mir.Code's
 	// Spilled).
 	Spills int
-	// Arch is arm64 for what -jitheld's repeated compile made for arm64
-	// (vm.JITCrossHook), which has no Marks, and otherwise empty. States
+	// Arch is arm64 for native arm64 code and what -jitheld's repeated
+	// compile made for arm64 (vm.JITCrossHook), and otherwise empty. States
 	// hashes what the code's calls and exits are described by, and its
 	// entries, with addresses left out (codeStates).
 	Arch   string `json:",omitempty"`
@@ -233,6 +234,12 @@ func startCodeDump(path string) {
 	vm.JITCodeHook = func(fn vm.JITFunction, text []byte, c *mir.Code) {
 		seq++
 		rec := jitCode{Seq: seq, Name: fn.Name, Script: fn.Script, Line: fn.Line, Text: c.Text, Bytes: text, Marks: c.Marks, Listing: c.Listing, Spills: c.Spilled()}
+		if runtime.GOARCH == "arm64" {
+			rec.Arch = "arm64"
+			// arm64 has no constant pool after Text. Arena alignment is
+			// not code, and may differ with the addresses in the code.
+			rec.Bytes = text[:c.Text]
+		}
 		if *jitHeldFlag {
 			rec.States = codeStates(c)
 		}

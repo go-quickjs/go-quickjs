@@ -63,6 +63,14 @@ representation selection takes a phi of Float64 inputs -- its box made
 where a use outside the loop needs it, or by an exit (`unboxPhis`,
 `sinkLoopBoxes`).
 
+Compiles reuse their workspace's analysis tables and assembler storage.
+On arm64, that includes the byte buffer the assembler's instruction words
+are encoded into (`FinishInto`). A workspace compile's bytes hold until
+its next compile; placing the code copies them into the executable arena
+before the workspace is returned. The buffer counts toward the workspace's
+memory and is trimmed with its other scratch storage when recent compiles
+need less. Compiling without a workspace returns independent bytes.
+
 **Integers.** The slot IR computes every number as a double, a bitwise
 operator's ToInt32 of its operands and the conversion of its result back
 included; where the uses truncate, the SSA computes in int32s, as V8's

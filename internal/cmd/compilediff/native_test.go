@@ -33,3 +33,15 @@ func TestA64SameLayout(t *testing.T) {
 		t.Error("loads of one and two moves, and of two and one, are one layout")
 	}
 }
+
+func TestARM64NativeListing(t *testing.T) {
+	a := nativeRecord{Arch: "arm64", Listing: "v0 = ptr aux=0xc000123400"}
+	b := nativeRecord{Arch: "arm64", Listing: "v0 = ptr aux=0xc000567800"}
+	if why := differs(&a, &b); why != "" {
+		t.Fatalf("only an address differs: %s", why)
+	}
+	b.Listing = "v0 = ptr aux=1"
+	if why := differs(&a, &b); why == "" {
+		t.Fatal("a different listing compares equal")
+	}
+}

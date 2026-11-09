@@ -324,9 +324,16 @@ func compileARM64(w *Workspace, f *ssa.Func, enc abi.Encoding, opts Options) (co
 		g.st.Fail = int32(c.a.Offset(g.to) - c.a.Offset(g.back))
 	}
 	c.lap(PhaseEmit)
-	bytes, err := c.a.Finish()
+	var dst []byte
+	if w != nil {
+		dst = w.arm64.code
+	}
+	bytes, err := c.a.FinishInto(dst)
 	if err != nil {
 		return nil, err
+	}
+	if w != nil {
+		w.arm64.code = bytes
 	}
 	c.finishExits()
 	c.lap(PhaseEncode)

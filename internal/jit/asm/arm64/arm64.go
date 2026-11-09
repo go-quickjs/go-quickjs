@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"slices"
 	"unsafe"
 )
 
@@ -111,6 +112,12 @@ func (a *Asm) Offset(l Label) int { return 4 * a.labels[l] }
 
 // Finish resolves the labels and returns the code.
 func (a *Asm) Finish() ([]byte, error) {
+	return a.FinishInto(nil)
+}
+
+// FinishInto is Finish using dst's backing array when it has room. The
+// returned code belongs to the caller and is overwritten if dst is reused.
+func (a *Asm) FinishInto(dst []byte) ([]byte, error) {
 	for _, f := range a.fixups {
 		to := a.labels[f.label]
 		if to < 0 {
@@ -136,7 +143,7 @@ func (a *Asm) Finish() ([]byte, error) {
 			a.buf[f.at] |= (uint32(d) & (1<<19 - 1)) << 5
 		}
 	}
-	out := make([]byte, 4*len(a.buf))
+	out := slices.Grow(dst[:0], 4*len(a.buf))[:4*len(a.buf)]
 	for i, w := range a.buf {
 		binary.LittleEndian.PutUint32(out[4*i:], w)
 	}
