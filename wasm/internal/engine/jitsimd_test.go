@@ -449,3 +449,96 @@ func showVals(args []Val) string {
 	}
 	return b.String()
 }
+
+// v128 values natively where the register cache runs out -- many live at
+// once, spilled and loaded back -- in locals' homes across native calls and
+// exits, as arguments and results of calls, in globals, through select,
+// blocks, br_table and a loop's parameters, give the interpreter's bits.
+func TestJITSIMDValues(t *testing.T) {
+	var deep strings.Builder
+	// Twenty vectors live at once, then summed in pairs.
+	for i := range 20 {
+		fmt.Fprintf(&deep, "(i32x4.add (local.get %d) (v128.const i32x4 %d %d %d %d))\n", i%6, i, -i, i*7, 1<<i)
+	}
+	for range 19 {
+		deep.WriteString("(i8x16.add)\n")
+	}
+	src := `(module
+  (global $g (mut v128) (v128.const i64x2 0x1122334455667788 0x99aabbccddeeff00))
+  (func $mix (param v128 v128 i32 v128) (result v128 v128)
+    (i64x2.add (local.get 0) (local.get 3))
+    (select (local.get 1) (local.get 0) (local.get 2)))
+  (func (export "deep") (param v128 v128 v128 v128 v128 v128) (result v128)
+    ` + deep.String() + `)
+  (func (export "calls") (param v128 v128 i32) (result v128) (local v128 v128 v128 v128 v128 v128 f64 f32)
+    (local.set 3 (i16x8.mul (local.get 0) (local.get 1)))
+    (local.set 4 (i32x4.sub (local.get 1) (local.get 0)))
+    (local.set 5 (v128.xor (local.get 3) (local.get 4)))
+    (local.set 9 (f64.const 2.5))
+    (call $mix (local.get 3) (local.get 4) (local.get 2) (local.get 5))
+    (local.set 6)
+    (local.set 7)
+    (global.set $g (i8x16.sub (global.get $g) (local.get 6)))
+    (local.set 8 (i32x4.splat (memory.size)))
+    (i64x2.add (local.get 7) (local.get 6))
+    (v128.or (global.get $g))
+    (i32x4.add (local.get 8))
+    (f64x2.replace_lane 1 (local.get 9))
+    (v128.xor (local.get 3))
+    (v128.and (local.get 4))
+    (v128.or (local.get 5)))
+  (func (export "flow") (param v128 i32) (result v128) (local v128)
+    (local.set 2 (local.get 0))
+    (block (result v128)
+      (block (result v128)
+        (block (result v128)
+          (local.get 0)
+          (br_table 0 1 2 (local.get 1)))
+        (i32x4.add (v128.const i32x4 1 2 3 4))
+        (br 1))
+      (i8x16.neg))
+    (loop (param v128) (result v128)
+      (i32x4.add (local.get 2))
+      (local.set 2 (i8x16.shl (local.get 2) (i32.const 1)))
+      (local.tee 1 (i32.sub (local.get 1) (i32.const 1)))
+      (i32.const 0)
+      (i32.gt_s)
+      (br_if 0)))
+  (func (export "global") (result v128) (global.get $g))
+  (memory 1))`
+	interp := interpretedInstance(t, src)
+	native := nativeInstance(t, src)
+	r := rand.New(rand.NewPCG(5, 6))
+	vec := func() Val { return Val{N: r.Uint64(), Hi: r.Uint64()} }
+	for i := range 200 {
+		cases := []struct {
+			name string
+			args []Val
+		}{
+			{"deep", []Val{vec(), vec(), vec(), vec(), vec(), vec()}},
+			{"calls", []Val{vec(), vec(), {N: uint64(i % 2)}}},
+			{"flow", []Val{vec(), {N: uint64(i % 7)}}},
+			{"global", nil},
+		}
+		for _, cs := range cases {
+			ei, _ := interp.Export(cs.name)
+			en, _ := native.Export(cs.name)
+			want, err := Invoke(context.Background(), ei.Func, slices.Clone(cs.args))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := Invoke(context.Background(), en.Func, slices.Clone(cs.args))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got[0].N != want[0].N || got[0].Hi != want[0].Hi {
+				t.Fatalf("%s%s = %#x %#x natively, %#x %#x interpreted", cs.name, showVals(cs.args), got[0].N, got[0].Hi, want[0].N, want[0].Hi)
+			}
+		}
+	}
+	for _, name := range []string{"deep", "calls", "flow", "global"} {
+		if !nativeRan(native, name) {
+			t.Fatalf("%s has no native code", name)
+		}
+	}
+}

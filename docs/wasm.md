@@ -462,8 +462,9 @@ read-modify-write is the processor's own locked or exclusive instruction.
 
 A v128 lives in an XMM or a V register, or in two of the frame's slots, as
 the interpreter keeps it. Native code compiles v128.const, the SIMD loads
-and stores of every memory, splat, extract_lane, replace_lane and the
-bitwise instructions; every other SIMD instruction returns to Go, which runs
+and stores of every memory, splat, extract_lane, replace_lane, the
+bitwise instructions and every integer lane instruction, shuffle and
+swizzle included; every other SIMD instruction returns to Go, which runs
 the interpreter's own code for it, so that its result is the interpreter's
 bit for bit, and resumes.
 

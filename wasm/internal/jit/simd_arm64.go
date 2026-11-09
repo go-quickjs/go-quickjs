@@ -271,7 +271,7 @@ func (c *compiler) simdNative(op opcode.Opcode, at uint32) bool {
 		a.Cset(r, arm64.NE)
 		c.pushReg(i32, uint8(r))
 	default:
-		return false
+		return c.simdInt(op)
 	}
 	return true
 }

@@ -494,8 +494,25 @@ result is the interpreter's by construction. The backends compile natively:
 | v128.const, the loads and stores | all |
 | splat, extract_lane, replace_lane | all |
 | bitwise | not, and, andnot, or, xor, bitselect, any_true |
+| integer lanes | add, sub, saturating add and sub, mul, neg, abs, min, max, avgr_u, popcnt, all_true, bitmask, shl, shr_s, shr_u, the comparisons, narrow, extend, extmul, extadd_pairwise, dot_i16x8_s, q15mulr_sat_s, swizzle, shuffle |
 
-and leave the rest to the exit. `TestJITSIMDBits` (engine) runs every SIMD
+and leave the rest to the exit.
+
+Where the instruction sets have no one instruction for an operation, the
+code composes it. On amd64: i64x2.mul from PMULUDQ's products of 32-bit
+halves; the byte shifts as 16-bit shifts masked, or, by a count not known,
+the bytes widened to 16-bit lanes, shifted and narrowed; i64x2.shr_s as
+`(x >>u n ^ m) - m`, m the sign bit shifted alike; i64x2.abs by the sign
+spread through each lane; the unsigned comparisons by PMAXU/PMINU and
+equality; ne, le and ge by complementing the other comparison; popcnt by
+PSHUFB from a table of each nibble's count; q15mulr_sat_s as PMULHRSW with
+its one result past the range, 0x8000, complemented; swizzle by PSHUFB of
+the indexes saturated past 15 to ones with their top bit set; shuffle as
+PSHUFB of each operand, the other's lanes selecting 0, ORed. On arm64:
+i64x2.mul lane by lane in general registers; shifts by SSHL and USHL of
+the count, negated to shift right; bitmask by each negative lane's bit,
+summed; shuffle by TBL of a two-register table, the operands copied into
+V30 and V31. `TestJITSIMDBits` (engine) runs every SIMD
 instruction that is not a load, a store or a constant, relaxed ones
 included, on the edges of each lane shape and on random bits, interpreted
 and natively, requires the same bits, and logs the instructions that went
