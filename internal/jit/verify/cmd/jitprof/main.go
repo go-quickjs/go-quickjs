@@ -1,8 +1,8 @@
 // Command jitprof attributes a CPU profile's samples in the JIT's native
 // code to the code's instructions and to what the backend emitted them for.
 //
-// Go's profiler records the address of every sample, native code's
-// included, where it has no symbol for it. v8bench's -jitcode writes each
+// Where Go's profiler preserves native PCs, it records their addresses
+// without symbols. v8bench's -jitcode writes each
 // function's code as it is placed -- its address, its bytes and the marks
 // the backend left at each stretch (mir.Mark: a block, a value and its
 // operation, an edge's moves and poll, a cold path, an exit, a shared
@@ -14,7 +14,9 @@
 //		-mode fixed -n 10 -jitcode /tmp/towers.jsonl -cpuprofile /tmp/towers.cpu
 //	cd internal/jit/verify && go run ./cmd/jitprof -code /tmp/towers.jsonl /tmp/towers.cpu
 //
-// amd64 only: the marks are amd64's, the disassembler x86asm.
+// Both amd64 and arm64 code can be disassembled. Operation marks are
+// currently amd64's only. Go on darwin/arm64 collapses native PCs to
+// runtime._ExternalCode, which cannot be attributed to JIT instructions.
 package main
 
 import (
@@ -30,6 +32,7 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/arch/arm64/arm64asm"
 	"golang.org/x/arch/x86/x86asm"
 )
 
@@ -37,6 +40,7 @@ import (
 type code struct {
 	Seq          int
 	Name, Script string
+	Arch         string
 	Line         int
 	Addr         uint64
 	Text         int
@@ -56,6 +60,9 @@ func (c *code) label() string { return fmt.Sprintf("%s:%d %s #%d", c.Script, c.L
 
 // tagAt is the mark whose stretch holds off.
 func (c *code) tagAt(off int) string {
+	if c.Arch == "arm64" && len(c.Marks) == 0 {
+		return "unannotated"
+	}
 	i, found := slices.BinarySearchFunc(c.Marks, off, func(m struct {
 		Off int
 		Tag string
@@ -124,9 +131,12 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	all, native, unmapped := 0, 0, 0
+	all, native, unmapped, external := 0, 0, 0, 0
 	for _, s := range samples {
 		all += s.count
+		if s.external {
+			external += s.count
+		}
 		if !s.unknown {
 			continue
 		}
@@ -144,6 +154,9 @@ func main() {
 		c.total += s.count
 	}
 	fmt.Printf("%d samples: %d in native code (%.1f%%), %d at addresses no code has\n\n", all, native, pct(native, all), unmapped)
+	if external > 0 {
+		fmt.Printf("%d samples (%.1f%%) collapsed to runtime._ExternalCode; their native PCs were not preserved and cannot be attributed.\n\n", external, pct(external, all))
+	}
 	if native == 0 {
 		return
 	}
@@ -205,7 +218,7 @@ func printCode(c *code, native, hot int, listing, full bool) {
 		}
 		last := ""
 		for _, in := range insts {
-			if in.inst.Len == 0 {
+			if in.size == 0 {
 				continue
 			}
 			tag := c.tagAt(in.off)
@@ -218,7 +231,7 @@ func printCode(c *code, native, hot int, listing, full bool) {
 			if byInst[in.off] > 0 {
 				n = strconv.Itoa(byInst[in.off])
 			}
-			fmt.Printf("  %6s  %5x  %-48s %s\n", n, in.off, x86asm.IntelSyntax(in.inst, c.Addr+uint64(in.off), nil), tag)
+			fmt.Printf("  %6s  %5x  %-48s %s\n", n, in.off, in.text, tag)
 		}
 		if listing {
 			fmt.Println(c.Listing)
@@ -240,7 +253,7 @@ func printCode(c *code, native, hot int, listing, full bool) {
 		in, ok := instAt(insts, off)
 		text := "?"
 		if ok {
-			text = x86asm.IntelSyntax(in.inst, c.Addr+uint64(in.off), nil)
+			text = in.text
 		}
 		tag := c.tagAt(off)
 		if tag == last {
@@ -256,21 +269,31 @@ func printCode(c *code, native, hot int, listing, full bool) {
 }
 
 type inst struct {
-	off  int
-	inst x86asm.Inst
+	off, size int
+	text      string
 }
 
 func decode(c *code) []inst {
 	var out []inst
 	end := min(c.Text, len(c.Bytes))
 	for off := 0; off < end; {
+		if c.Arch == "arm64" {
+			in, err := arm64asm.Decode(c.Bytes[off:end])
+			if err != nil {
+				out = append(out, inst{off: off})
+			} else {
+				out = append(out, inst{off: off, size: 4, text: arm64asm.GNUSyntax(in)})
+			}
+			off += 4
+			continue
+		}
 		in, err := x86asm.Decode(c.Bytes[off:end], 64)
 		if err != nil || in.Len == 0 {
 			out = append(out, inst{off: off})
 			off++
 			continue
 		}
-		out = append(out, inst{off: off, inst: in})
+		out = append(out, inst{off: off, size: in.Len, text: x86asm.IntelSyntax(in, c.Addr+uint64(off), nil)})
 		off += in.Len
 	}
 	return out
@@ -282,7 +305,7 @@ func instAt(insts []inst, off int) (inst, bool) {
 	if !found {
 		i--
 	}
-	if i < 0 || insts[i].inst.Len == 0 {
+	if i < 0 || off >= insts[i].off+insts[i].size {
 		return inst{}, false
 	}
 	return insts[i], true
@@ -351,9 +374,10 @@ func find(codes []*code, addr uint64) *code {
 // sample is a profile's sample: its count, its leaf's address, and whether
 // the profile knows no function there.
 type sample struct {
-	count   int
-	addr    uint64
-	unknown bool
+	count    int
+	addr     uint64
+	unknown  bool
+	external bool
 }
 
 var (
@@ -368,9 +392,14 @@ func readSamples(path string) ([]sample, error) {
 	if err != nil {
 		return nil, fmt.Errorf("go tool pprof -raw: %w", err)
 	}
+	return parseSamples(string(out)), nil
+}
+
+func parseSamples(raw string) []sample {
 	type loc struct {
-		addr    uint64
-		unknown bool
+		addr     uint64
+		unknown  bool
+		external bool
 	}
 	locs := map[string]loc{}
 	var leaves []struct {
@@ -378,7 +407,7 @@ func readSamples(path string) ([]sample, error) {
 		id    string
 	}
 	section := ""
-	for _, line := range strings.Split(string(out), "\n") {
+	for _, line := range strings.Split(raw, "\n") {
 		switch strings.TrimSpace(line) {
 		case "Samples:", "Locations", "Mappings":
 			section = strings.TrimSpace(line)
@@ -397,16 +426,16 @@ func readSamples(path string) ([]sample, error) {
 			if m := locationLine.FindStringSubmatch(line); m != nil {
 				a, _ := strconv.ParseUint(m[2], 16, 64)
 				// A location of no mapping and no function: ":0:0 s=0".
-				locs[m[1]] = loc{addr: a, unknown: !strings.Contains(m[3], "M=")}
+				locs[m[1]] = loc{addr: a, unknown: !strings.Contains(m[3], "M="), external: strings.Contains(m[3], "runtime._ExternalCode ")}
 			}
 		}
 	}
 	samples := make([]sample, 0, len(leaves))
 	for _, l := range leaves {
 		lc := locs[l.id]
-		samples = append(samples, sample{count: l.count, addr: lc.addr, unknown: lc.unknown})
+		samples = append(samples, sample{count: l.count, addr: lc.addr, unknown: lc.unknown, external: lc.external})
 	}
-	return samples, nil
+	return samples
 }
 
 func fail(err error) {

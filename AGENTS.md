@@ -360,8 +360,11 @@ and its operation, a block's end, an edge, a cold path, an exit), and
 `jitprof`, in the encoder verifier's module, joins it with a CPU
 profile: the native samples by operation, by function, and the hottest
 functions' instructions, disassembled (`-full` for all of them,
-`-listing` for their SSA). amd64 only. Profile runs of ten seconds or
-more: the profiler takes a hundred samples a second.
+`-listing` for their SSA). It decodes amd64 and arm64; operation marks are
+amd64's only. This needs a profile preserving native PCs: Go on darwin/arm64
+collapses them to `runtime._ExternalCode`, losing instruction attribution.
+Profile runs of ten seconds or more: the profiler takes a hundred samples
+a second.
 
 ```sh
 go run -tags quickjs_jit ./internal/cmd/v8bench -jit -bench awfy -dir /tmp/awfy -suite List -mode fixed -n 40 \
