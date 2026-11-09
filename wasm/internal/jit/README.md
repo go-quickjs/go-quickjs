@@ -210,8 +210,9 @@ memory are exits.
 ## Polls
 
 Every loop back edge decrements the poll counter and exits when it runs out
-(`ExitPoll`), as the interpreter's loops do, and so does every native call,
-for recursion without a loop. Native code is not a safe point: the polls
+(`ExitPoll`), as the interpreter's loops do, and so does every native call
+and tail call, for recursion without a loop; Go counts the tail calls it
+makes for native code, as the interpreter's `tailChain` counts its own. Native code is not a safe point: the polls
 bound how long a goroutine in it delays preemption and a stop-the-world
 pause.
 

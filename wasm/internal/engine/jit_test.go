@@ -270,3 +270,42 @@ func TestJITCancel(t *testing.T) {
 		t.Fatalf("spin = %v, want the context's deadline", err)
 	}
 }
+
+// An endless chain of tail calls ends with its context, interpreted and
+// native, direct and through a table.
+func TestTailCallsPoll(t *testing.T) {
+	src := `(module
+  (type $t (func (param i32) (result i32)))
+  (table funcref (elem $ind))
+  (func $direct (export "direct") (param i32) (result i32)
+    (return_call $direct (i32.add (local.get 0) (i32.const 1))))
+  (func $ind (export "indirect") (param i32) (result i32)
+    (return_call_indirect (type $t) (i32.add (local.get 0) (i32.const 1)) (i32.const 0))))`
+	b, err := wat.Compile([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, native := range []bool{false, true} {
+		m, derr := decoder.Decode(b, decoder.CoreLimits())
+		if derr != nil {
+			t.Fatal(derr)
+		}
+		code := NewCode(m)
+		if native && !code.EnableJIT(0) {
+			continue
+		}
+		inst, err := Instantiate(context.Background(), code, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"direct", "indirect"} {
+			ext, _ := inst.Export(name)
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			_, err := Invoke(ctx, ext.Func, []Val{{N: 0}})
+			cancel()
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Errorf("%s (native %v) = %v, want the context's deadline", name, native, err)
+			}
+		}
+	}
+}

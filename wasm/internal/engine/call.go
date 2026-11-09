@@ -55,6 +55,11 @@ func (x *exec) run(fn *Function, code *compiled, l []uint64, r []Ref, nc, nsp, r
 func (x *exec) tailChain(f *frame, code *compiled, l []uint64, r []Ref, nc, nsp, rc, rsp int) {
 	results := code.results
 	for {
+		// A tail call is a call: it counts toward the poll, so that an
+		// endless chain of them ends with its context.
+		if x.poll--; x.poll <= 0 {
+			x.pollContext()
+		}
 		fn := x.tail
 		x.tail = nil
 		x.calls[len(x.calls)-1] = callSite{fn: fn}

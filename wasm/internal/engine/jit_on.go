@@ -462,6 +462,11 @@ func (x *exec) jitCall(lv *jitLevel, fn *Function, ft *module.FuncType, frame []
 func (x *exec) jitTail(lv *jitLevel, fn *Function, ft *module.FuncType, frame []uint64, slot, top int, at uint32) (*ijit.RawCode, int, bool) {
 	ctx := &lv.ctx
 	args := lv.jitArgs(ft, frame, slot)
+	// A tail call is a call: it counts toward the poll, as the
+	// interpreter's do.
+	if x.poll--; x.poll <= 0 {
+		x.pollContext()
+	}
 	if fn.Inst == lv.inst && fn.Host == nil {
 		cd := lv.inst.Code.get(fn.Index)
 		start := top - len(frame)
