@@ -1653,15 +1653,7 @@ type indexedAtom struct {
 }
 
 func sortIndexedAtoms(a []indexedAtom) {
-	for i := 1; i < len(a); i++ {
-		v := a[i]
-		j := i - 1
-		for j >= 0 && a[j].index > v.index {
-			a[j+1] = a[j]
-			j--
-		}
-		a[j+1] = v
-	}
+	sortIndexed[struct{}](a)
 }
 
 // ---------------------------------------------------------------------------
