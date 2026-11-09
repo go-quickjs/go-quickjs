@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // verdict returns what compiling b gives: "OK", or the CompileError's
@@ -22,9 +23,23 @@ func verdict(b []byte) string {
 		err = ValidateFunctions(m, l)
 	}
 	if err != nil {
-		return "WebAssembly.Module(): " + err.Error()
+		return "WebAssembly.Module(): " + jsString(err.Error())
 	}
 	return "OK"
+}
+
+// jsString returns s as a JavaScript string made from its bytes reads it:
+// each byte that is not part of a valid UTF-8 sequence becomes U+FFFD. A
+// function name cut at 50 bytes can end in part of a character.
+func jsString(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+	var b strings.Builder
+	for _, r := range s {
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 const nodeScript = `

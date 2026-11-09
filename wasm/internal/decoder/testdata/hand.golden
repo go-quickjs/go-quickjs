@@ -221,6 +221,64 @@ hand/name-second-section	WebAssembly.Module(): Compiling function #1 failed: not
 hand/name-module-first	WebAssembly.Module(): Compiling function #1:"after" failed: not enough arguments on the stack for i32.add (need 2, got 0) @+27
 hand/name-truncated	WebAssembly.Module(): Compiling function #1 failed: not enough arguments on the stack for i32.add (need 2, got 0) @+27
 hand/ref-func-not-declared	WebAssembly.Module(): Compiling function #0 failed: undeclared reference to function #0 @+138
+hand/reach-plain	OK
+hand/reach-catch-all-no-throw	WebAssembly.Module(): Compiling function #0 failed: struct.get[0] expected type (ref null 10), found br_on_cast_fail of type (ref struct) @+147
+hand/reach-catch-all-throw	OK
+hand/reach-catch-no-throw	WebAssembly.Module(): Compiling function #0 failed: struct.get[0] expected type (ref null 10), found br_on_cast_fail of type (ref struct) @+148
+hand/reach-catch-throw	OK
+hand/reach-catch-rethrow-nested	OK
+hand/reach-delegate-throw	OK
+hand/reach-delegate-no-throw	WebAssembly.Module(): Compiling function #0 failed: struct.get[0] expected type (ref null 10), found br_on_cast_fail of type (ref struct) @+152
+hand/reach-try-end-throw	OK
+hand/reach-try-table-catch-reached	OK
+hand/reach-try-table-catch-unreached	WebAssembly.Module(): Compiling function #0 failed: struct.get[0] expected type (ref null 10), found br_on_cast_fail of type (ref struct) @+155
+hand/reach-try-table-no-catch-all	WebAssembly.Module(): Compiling function #0 failed: module uses a mix of legacy and new exception handling instructions @+139
+hand/reach-oob-load	WebAssembly.Module(): Compiling function #0 failed: struct.get[0] expected type (ref null 10), found br_on_cast_fail of type (ref struct) @+154
+hand/reach-oob-store	WebAssembly.Module(): Compiling function #0 failed: struct.get[0] expected type (ref null 10), found br_on_cast_fail of type (ref struct) @+155
+hand/reach-in-bounds-load	OK
+hand/reach-cast-fails	WebAssembly.Module(): Compiling function #0 failed: struct.get[0] expected type (ref null 10), found br_on_cast_fail of type (ref struct) @+150
+hand/reach-cast-null-fails	OK
+hand/reach-cast-none	WebAssembly.Module(): Compiling function #0 failed: struct.get[0] expected type (ref null 10), found br_on_cast_fail of type (ref struct) @+150
+hand/reach-cast-succeeds	OK
+hand/reach-block-dead-end	WebAssembly.Module(): Compiling function #0 failed: struct.get[0] expected type (ref null 10), found br_on_cast_fail of type (ref struct) @+148
+hand/reach-block-br	OK
+hand/reach-block-br-if	OK
+hand/reach-block-br-table	OK
+hand/reach-block-return	WebAssembly.Module(): Compiling function #0 failed: struct.get[0] expected type (ref null 10), found br_on_cast_fail of type (ref struct) @+148
+hand/reach-loop-dead-end	WebAssembly.Module(): Compiling function #0 failed: struct.get[0] expected type (ref null 10), found br_on_cast_fail of type (ref struct) @+148
+hand/reach-loop-br	WebAssembly.Module(): Compiling function #0 failed: struct.get[0] expected type (ref null 10), found br_on_cast_fail of type (ref struct) @+149
+hand/reach-if-one-armed-dead	OK
+hand/reach-if-else-dead	WebAssembly.Module(): Compiling function #0 failed: struct.get[0] expected type (ref null 10), found br_on_cast_fail of type (ref struct) @+152
+hand/reach-if-else-half	OK
+hand/reach-br-on-null-nonnull	WebAssembly.Module(): Compiling function #0 failed: struct.get[0] expected type (ref null 10), found br_on_cast_fail of type (ref struct) @+153
+hand/reach-br-on-null-null	OK
+hand/reach-br-on-non-null-nonnull	OK
+hand/reach-br-on-non-null-after	WebAssembly.Module(): Compiling function #0 failed: struct.get[0] expected type (ref null 10), found br_on_cast_fail of type (ref struct) @+148
+hand/reach-br-on-cast-always	OK
+hand/reach-br-on-cast-always-after	WebAssembly.Module(): Compiling function #0 failed: struct.get[0] expected type (ref null 10), found br_on_cast_fail of type (ref struct) @+157
+hand/reach-br-on-cast-fail-never	WebAssembly.Module(): Compiling function #0 failed: struct.get[0] expected type (ref null 10), found br_on_cast_fail of type (ref struct) @+154
+hand/reach-br-on-cast-fail-nullable	WebAssembly.Module(): Compiling function #0 failed: struct.get[0] expected type (ref null 10), found br_on_cast_fail of type (ref struct) @+141
+hand/reach-dead-then-block	WebAssembly.Module(): Compiling function #0 failed: struct.get[0] expected type (ref null 10), found br_on_cast_fail of type (ref struct) @+148
+hand/reach-dead-then-block-br	WebAssembly.Module(): Compiling function #0 failed: struct.get[0] expected type (ref null 10), found br_on_cast_fail of type (ref struct) @+150
+hand/dead-br-if-type	WebAssembly.Module(): Compiling function #0 failed: i64.eqz[0] expected type i64, found br_if of type i32 @+140
+hand/dead-br-if-ok	OK
+hand/dead-block-param	WebAssembly.Module(): Compiling function #0 failed: i64.eqz[0] expected type i64, found block of type i32 @+138
+hand/dead-block-param-extra	WebAssembly.Module(): Compiling function #0 failed: block[0] expected type i32, found i64.const of type i64 @+138
+hand/dead-select-one	OK
+hand/dead-select-typed	WebAssembly.Module(): Compiling function #0 failed: i32.eqz[0] expected type i32, found select of type i64 @+142
+hand/dead-br-table-arity	WebAssembly.Module(): Compiling function #0 failed: br_table: label arity inconsistent with previous arity 0 @+145
+hand/dead-br-table-type	WebAssembly.Module(): Compiling function #0 failed: br_table[0] expected type i32, found i64.const of type i64 @+140
+hand/dead-return-type	WebAssembly.Module(): Compiling function #0 failed: return[0] expected type i32, found i64.const of type i64 @+138
+hand/dead-end-extra	WebAssembly.Module(): Compiling function #0 failed: expected 1 elements on the stack for fallthru, found 2 @+142
+hand/dead-ref-eq	OK
+hand/dead-call-ref	OK
+hand/dead-br-on-null	OK
+hand/dead-struct-get	WebAssembly.Module(): Compiling function #0 failed: i64.eqz[0] expected type i64, found struct.get of type i32 @+138
+hand/dead-locals-rollback	WebAssembly.Module(): Compiling function #0 failed: uninitialized non-defaultable local: 0 @+149
+hand/dead-locals-catch	WebAssembly.Module(): Compiling function #0 failed: uninitialized non-defaultable local: 0 @+147
+hand/call-indirect-nofunc	OK
+hand/call-indirect-typed	OK
+hand/name-utf8-cut	WebAssembly.Module(): Compiling function #0:"ééééééééééééééééééééééé�..." failed: not enough arguments on the stack for i32.add (need 2, got 0) @+23
 hand/mod-sections-valid	OK
 hand/mod-magic	WebAssembly.Module(): expected magic word 00 61 73 6d, found 00 61 73 6e @+0
 hand/mod-version	WebAssembly.Module(): expected version 01 00 00 00, found 02 00 00 00 @+4
