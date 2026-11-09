@@ -36,6 +36,18 @@ type testsuiteSpec struct {
 //
 //	git clone -b prod/testsuite-base https://github.com/WebAssembly/wasi-testsuite
 //	WASI_TESTSUITE_DIR=$PWD/wasi-testsuite/tests go test ./wasm/wasi -run TestWASITestsuite -v
+//
+// needSymlinks are the tests that make symbolic links, which Windows lets
+// only a process with the privilege to, or in developer mode: elsewhere
+// path_symlink fails with EPERM, as the host does.
+var needSymlinks = map[string]bool{
+	"nofollow_errors.wasm":  true,
+	"path_exists.wasm":      true,
+	"readlink.wasm":         true,
+	"symlink_create.wasm":   true,
+	"symlink_filestat.wasm": true,
+}
+
 func TestWASITestsuite(t *testing.T) {
 	root := os.Getenv("WASI_TESTSUITE_DIR")
 	if root == "" {
@@ -62,6 +74,8 @@ func TestWASITestsuite(t *testing.T) {
 	r := wasm.NewRuntime(ctx)
 	defer r.Close(ctx)
 	wasi.MustInstantiate(ctx, r)
+	probe := t.TempDir()
+	canSymlink := os.Symlink("target", filepath.Join(probe, "link")) == nil
 	passed, skipped := 0, 0
 	for _, path := range tests {
 		rel, _ := filepath.Rel(root, path)
@@ -75,6 +89,10 @@ func TestWASITestsuite(t *testing.T) {
 			if spec.Operations != nil {
 				skipped++
 				t.Skip("an operation-based specification")
+			}
+			if !canSymlink && needSymlinks[filepath.Base(path)] {
+				skipped++
+				t.Skip("this process cannot make symbolic links")
 			}
 			bin, err := os.ReadFile(path)
 			if err != nil {

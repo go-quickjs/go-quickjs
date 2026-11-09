@@ -12,8 +12,9 @@ import (
 // either direction; jit_on.go enters the code and handles its exits.
 //
 // WASM_JIT, read when a Code is made, turns it on for tests: "eager"
-// compiles each function at its first call, "on" at the default threshold,
-// a number at that many calls, "off" or nothing leaves it to EnableJIT.
+// compiles each function at its first call, "on" or "1" at the default
+// threshold, another number at that many calls, and "off", "0" or nothing
+// leaves it to EnableJIT.
 
 // DefaultJITThreshold is the number of calls after which a function is
 // compiled, unless EnableJIT is given another.

@@ -115,7 +115,7 @@ func NewRuntimeConfigInterpreter() RuntimeConfig { return defaultRuntimeConfig.c
 // NewRuntimeConfigCompiler returns a configuration that compiles a module's
 // functions to native code once each has been called a few times, in a
 // build with the quickjs_jit tag on a platform the compiler supports (amd64
-// on Linux and Windows). Elsewhere, and for a function the compiler does not
+// on Linux and Windows, arm64 on Linux and macOS). Elsewhere, and for a function the compiler does not
 // handle, the interpreter runs the code, as NewRuntimeConfigInterpreter's
 // does.
 func NewRuntimeConfigCompiler() RuntimeConfig {

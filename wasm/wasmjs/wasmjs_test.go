@@ -12,6 +12,7 @@ import (
 	"time"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
+	"github.com/go-quickjs/go-quickjs/internal/vm"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/engine"
 	"github.com/go-quickjs/go-quickjs/wasm/wasmjs"
 )
@@ -257,6 +258,11 @@ func TestPromisingSuspends(t *testing.T) {
 func TestJITRuntimeCompilesWasm(t *testing.T) {
 	if !engine.JITAvailable() {
 		t.Skip("no native code in this build")
+	}
+	if vm.HostJITEnabled == nil {
+		// linux/arm64 compiles wasm but has no JavaScript JIT, whose
+		// WithJIT the bridge follows.
+		t.Skip("no JavaScript JIT in this build")
 	}
 	rt := newRuntime(t, quickjs.WithJIT())
 	before := engine.ReadJITStats().Compiled
