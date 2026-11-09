@@ -44,6 +44,14 @@ func (c *RawCode) Enter(ctx unsafe.Pointer) {
 	runtime.KeepAlive(c)
 }
 
+// EnterAt runs the code from offset off with ctx, as Enter runs it from its
+// start: to resume code that returned to Go part way through, at the place
+// it said to go on from.
+func (c *RawCode) EnterAt(off int, ctx unsafe.Pointer) {
+	enterRaw(&c.code[off], ctx)
+	runtime.KeepAlive(c)
+}
+
 // Close gives the memory back to the arena; it is idempotent.
 func (c *RawCode) Close() error {
 	if c == nil || len(c.code) == 0 {

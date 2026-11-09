@@ -20,5 +20,8 @@ func (c *RawCode) Size() int { return 0 }
 // Enter is never called: PlaceRaw places nothing.
 func (c *RawCode) Enter(unsafe.Pointer) { panic("jit: no native code in this build") }
 
+// EnterAt is never called: PlaceRaw places nothing.
+func (c *RawCode) EnterAt(int, unsafe.Pointer) { panic("jit: no native code in this build") }
+
 // Close does nothing.
 func (c *RawCode) Close() error { return nil }
