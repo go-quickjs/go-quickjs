@@ -122,8 +122,15 @@ func (r *Runtime) jitLevelFrameFill(f *frame, c *abi.Context, lcl *closure, e *j
 	// write: this runs for every call of Go a native callee makes, and each
 	// level's lookup had cost AWFY's Json 2%.
 	if pc := int(prevPC); pc < len(callerFn.Code) {
-		if op := callerFn.Code[pc].Op; op == bytecode.OpGetProp || op == bytecode.OpSetProp {
+		switch op := callerFn.Code[pc].Op; {
+		case op == bytecode.OpGetProp || op == bytecode.OpSetProp:
 			f.callee = r.jitLevelCallee(callerFn, pc, f.this)
+		case (op == bytecode.OpNew || op == bytecode.OpSuperCall && c.Function != 0) && c.NewTarget != 0 && g == nil:
+			// A construction's, or a super()'s parent's: its new.target,
+			// which the call wrote (abi.Context's NewTarget), as
+			// jitUnwindNative's levels have it -- a stack trace names the
+			// frame "new F" by it.
+			f.newTarget = Obj(*(**Object)(unsafe.Pointer(&c.NewTarget)))
 		}
 	}
 	if c.Function != 0 && lcl.fn.Kind != bytecode.KindDerivedConstructor && e != nil && e.ssaProg != nil && e.ssaProg.FrameCallee {
