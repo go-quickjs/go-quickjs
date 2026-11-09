@@ -74,6 +74,9 @@ type web struct {
 	cur     int
 	// dense is its density, once known.
 	dense float64
+	// owned says ranges is its own, not a register's, and may grow in
+	// place.
+	owned bool
 }
 
 func (w *web) start() int32 { return w.ranges[0].from }
@@ -99,51 +102,103 @@ type clobber struct {
 // Allocate allocates f's virtual registers.
 func Allocate(f *Func, cfg *Config) (*Result, error) {
 	n := len(f.Class)
-	words := (n + 63) / 64
 	nb := len(f.Blocks)
 	alloc := func(v VReg) bool { return v >= 0 && f.Class[v] != NoClass }
 
-	// Liveness: the registers live into and out of each block, over the
-	// blocks backwards until nothing changes. A successor's phis read
-	// their arguments on the edge, at the predecessor's end.
-	liveIn := make([][]uint64, nb)
-	liveOut := make([][]uint64, nb)
-	gen := make([][]uint64, nb)
-	kill := make([][]uint64, nb)
-	for i := range f.Blocks {
-		b := &f.Blocks[i]
-		liveIn[i] = make([]uint64, words)
-		liveOut[i] = make([]uint64, words)
-		g := make([]uint64, words)
-		k := make([]uint64, words)
-		for j := len(b.Insts) - 1; j >= 0; j-- {
-			in := &b.Insts[j]
-			for _, d := range in.Defs {
-				if alloc(d) {
-					k[d/64] |= 1 << (d % 64)
-					g[d/64] &^= 1 << (d % 64)
-				}
-			}
-			for _, u := range in.Uses {
-				if alloc(u) {
-					g[u/64] |= 1 << (u % 64)
-				}
-			}
-		}
-		for _, p := range b.Phis {
-			if alloc(p.Def) {
-				k[p.Def/64] |= 1 << (p.Def % 64)
-				g[p.Def/64] &^= 1 << (p.Def % 64)
-			}
-		}
-		gen[i], kill[i] = g, k
-	}
 	// predIdx is, for each block's successor k, the block's index among
 	// that successor's predecessors.
 	predIdx := make([][]int, nb)
 	for i := range f.Blocks {
 		for _, s := range f.Blocks[i].Succs {
 			predIdx[i] = append(predIdx[i], slices.Index(f.Blocks[s].Preds, i))
+		}
+	}
+
+	// Liveness, of the registers that may be live across a block's
+	// boundary -- a phi's, a phi's argument, one used in a block other
+	// than its definition's -- numbered densely (global): the registers
+	// live into and out of each block, over the blocks backwards until
+	// nothing changes. A successor's phis read their arguments on the
+	// edge, at the predecessor's end. The others are live within their
+	// blocks alone, which the ranges' walk finds.
+	defBlock := make([]int32, n)
+	for i := range defBlock {
+		defBlock[i] = -1
+	}
+	global := make([]int32, n)
+	var globals []VReg
+	mark := func(v VReg) {
+		if alloc(v) && global[v] == 0 {
+			globals = append(globals, v)
+			global[v] = int32(len(globals))
+		}
+	}
+	for i := range f.Blocks {
+		b := &f.Blocks[i]
+		for _, p := range b.Phis {
+			if alloc(p.Def) {
+				defBlock[p.Def] = int32(i)
+				mark(p.Def)
+			}
+			for _, a := range p.Args {
+				mark(a)
+			}
+		}
+		for j := range b.Insts {
+			for _, d := range b.Insts[j].Defs {
+				if alloc(d) {
+					defBlock[d] = int32(i)
+				}
+			}
+		}
+	}
+	for i := range f.Blocks {
+		b := &f.Blocks[i]
+		for j := range b.Insts {
+			for _, u := range b.Insts[j].Uses {
+				if alloc(u) && defBlock[u] != int32(i) {
+					mark(u)
+				}
+			}
+		}
+	}
+	// gi is v's global number, or -1.
+	gi := func(v VReg) int { return int(global[v]) - 1 }
+	words := (len(globals) + 63) / 64
+	slab := make([]uint64, 4*nb*words)
+	liveIn := make([][]uint64, nb)
+	liveOut := make([][]uint64, nb)
+	gen := make([][]uint64, nb)
+	kill := make([][]uint64, nb)
+	for i := range f.Blocks {
+		b := &f.Blocks[i]
+		s := slab[4*i*words : 4*(i+1)*words]
+		liveIn[i], liveOut[i], gen[i], kill[i] = s[:words], s[words:2*words], s[2*words:3*words], s[3*words:]
+		g, k := gen[i], kill[i]
+		for j := len(b.Insts) - 1; j >= 0; j-- {
+			in := &b.Insts[j]
+			for _, d := range in.Defs {
+				if alloc(d) {
+					if x := gi(d); x >= 0 {
+						k[x/64] |= 1 << (x % 64)
+						g[x/64] &^= 1 << (x % 64)
+					}
+				}
+			}
+			for _, u := range in.Uses {
+				if alloc(u) {
+					if x := gi(u); x >= 0 {
+						g[x/64] |= 1 << (x % 64)
+					}
+				}
+			}
+		}
+		for _, p := range b.Phis {
+			if alloc(p.Def) {
+				x := gi(p.Def)
+				k[x/64] |= 1 << (x % 64)
+				g[x/64] &^= 1 << (x % 64)
+			}
 		}
 	}
 	for changed := true; changed; {
@@ -161,9 +216,12 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 				}
 				pi := predIdx[i][k]
 				for _, p := range f.Blocks[s].Phis {
-					if a := p.Args[pi]; alloc(a) && out[a/64]&(1<<(a%64)) == 0 {
-						out[a/64] |= 1 << (a % 64)
-						changed = true
+					if a := p.Args[pi]; alloc(a) {
+						x := gi(a)
+						if out[x/64]&(1<<(x%64)) == 0 {
+							out[x/64] |= 1 << (x % 64)
+							changed = true
+						}
 					}
 				}
 			}
@@ -217,7 +275,7 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 		opened = opened[:0]
 		for wi, word := range liveOut[i] {
 			for word != 0 {
-				v := VReg(wi*64 + bits.TrailingZeros64(word))
+				v := globals[wi*64+bits.TrailingZeros64(word)]
 				word &= word - 1
 				ranges[v] = append(ranges[v], rng{start, end + 1})
 				open[v] = int32(len(ranges[v]))
@@ -356,7 +414,10 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 			x, y = y, x
 		}
 		x.members = append(x.members, y.members...)
-		x.ranges = union(x.ranges, y.ranges)
+		if !x.owned {
+			x.ranges, x.owned = slices.Clone(x.ranges), true
+		}
+		x.ranges = unionInto(x.ranges, y.ranges)
 		x.weight += y.weight
 		x.callWeight += y.callWeight
 		x.calls = x.calls || y.calls
@@ -566,7 +627,7 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 		for int(s) >= len(slots) {
 			slots = append(slots, nil)
 		}
-		slots[s] = union(slots[s], rs)
+		slots[s] = unionInto(slots[s], rs)
 	}
 	for _, w := range list {
 		if w.fixed < 0 {
@@ -658,4 +719,33 @@ func (w *web) density() float64 {
 		w.dense = w.weight / float64(n)
 	}
 	return w.dense
+}
+
+// unionInto merges b into a, both sorted, joining ranges that meet, in a's
+// array where it has room.
+func unionInto(a, b []rng) []rng {
+	if len(b) == 0 {
+		return a
+	}
+	n := len(a)
+	a = slices.Grow(a, len(b))[:n+len(b)]
+	i, j := n-1, len(b)-1
+	for k := len(a) - 1; j >= 0; k-- {
+		if i >= 0 && a[i].from > b[j].from {
+			a[k] = a[i]
+			i--
+		} else {
+			a[k] = b[j]
+			j--
+		}
+	}
+	out := a[:1]
+	for _, r := range a[1:] {
+		if l := &out[len(out)-1]; r.from <= l.to {
+			l.to = max(l.to, r.to)
+		} else {
+			out = append(out, r)
+		}
+	}
+	return out
 }
