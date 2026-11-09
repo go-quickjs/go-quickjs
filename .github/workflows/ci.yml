@@ -257,6 +257,53 @@ jobs:
   # few back edges and finish in the interpreter from wherever it got to
   # (QJS_JIT_STRESS, internal/vm). The runner fails a run in which no
   # test ran native code.
+  wasm-spec:
+    name: WebAssembly spec tests (${{ matrix.os }}, ${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-15]
+        arch: [native]
+        include:
+          - os: ubuntu-latest
+            arch: "386"
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - name: Keep line endings
+        run: git config --global core.autocrlf false
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check out the WebAssembly spec
+        uses: actions/checkout@v4
+        with:
+          repository: WebAssembly/spec
+          ref: f3268fa9dcb7d3a60d09546e743e7281e75cddb0
+          path: wasm-spec
+
+      - name: Check out the threads proposal
+        uses: actions/checkout@v4
+        with:
+          repository: WebAssembly/threads
+          ref: cc535ada1aa21cfaa3cabf3ac73b89acef78a0a0
+          path: wasm-threads
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache: true
+
+      - name: Run the spec scripts
+        shell: bash
+        run: |
+          if [ "${{ matrix.arch }}" = "386" ]; then export GOARCH=386; fi
+          WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" WASM_THREADS_DIR="$GITHUB_WORKSPACE/wasm-threads" go test ./wasm/internal/spectest ./wasm/internal/wast -count=1 -v 2>&1 | tee spec.log | grep -E "spec:|scripts parsed|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
+
   jit-conformance:
     name: JIT test262 under stress (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
