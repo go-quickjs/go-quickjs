@@ -185,7 +185,8 @@ func (c *compiler) condition() arm64.Cond {
 func (c *compiler) brTable() {
 	a := c.a
 	n := c.r.u32()
-	depths := make([]int, n+1)
+	depths := grow(c.depths, int(n)+1)
+	c.depths = depths
 	for i := range depths {
 		depths[i] = int(c.r.u32())
 	}
@@ -203,19 +204,19 @@ func (c *compiler) brTable() {
 	a.Br(rTmp)
 	c.freeG(idx)
 	a.Bind(table)
-	stubs := map[int]arm64.Label{}
-	var order []int
+	stubs := grow(c.stubs, len(c.ctrl))
+	order := c.stubOrder[:0]
 	for _, d := range depths {
-		l, ok := stubs[d]
-		if !ok {
-			l = a.NewLabel()
-			stubs[d] = l
+		if stubs[d] == 0 {
+			stubs[d] = a.NewLabel() + 1
 			order = append(order, d)
 		}
+		l := stubs[d] - 1
 		a.B(l)
 	}
+	c.stubs, c.stubOrder = stubs, order
 	for _, d := range order {
-		a.Bind(stubs[d])
+		a.Bind(stubs[d] - 1)
 		t := c.ctrl[len(c.ctrl)-1-d]
 		if d == len(c.ctrl)-1 {
 			for i, rt := range c.sig.Results {
@@ -412,7 +413,7 @@ func (c *compiler) call(idx uint32, at uint32) {
 	}
 	a.Bind(after)
 	slotIdx := c.slotIndex(base)
-	c.ool = append(c.ool, func() {
+	c.later(func() {
 		a.Bind(poll)
 		r1 := a.NewLabel()
 		c.exit(ExitPoll, r1)
@@ -505,7 +506,7 @@ func (c *compiler) returnCall(idx uint32, at uint32) {
 	a.MovImm(rTmp, uint64(idx))
 	a.Store32(rRS, -4, rTmp)
 	a.Br(entry)
-	c.ool = append(c.ool, func() {
+	c.later(func() {
 		a.Bind(poll)
 		r1 := a.NewLabel()
 		c.exit(ExitPoll, r1)

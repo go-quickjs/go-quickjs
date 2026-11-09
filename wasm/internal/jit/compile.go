@@ -5,6 +5,7 @@ package jit
 import (
 	"cmp"
 	"slices"
+	"sync"
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
@@ -186,9 +187,50 @@ func (t *ctl) labelTypes() []module.ValueType {
 	return t.results
 }
 
-type trapKey struct {
+// trapSite is a trap's site: its code, the offset of its instruction,
+// and its stub's label.
+type trapSite struct {
 	code uint64
 	at   uint32
+	l    asmLabel
+}
+
+// oolItem is a stretch of code emitted after the body, in the order they
+// were asked for: a closure's, or a trap's -- a site's stub, or a trap
+// code's common stub -- kept as data, as most memory accesses have one.
+type oolItem struct {
+	f     func()
+	kind  uint8
+	at    uint32
+	code  uint64
+	l, to asmLabel
+}
+
+// The kinds of oolItem.
+const (
+	oolFunc = iota
+	oolTrapStub
+	oolTrapSite
+)
+
+// later has f emit its code after the body.
+func (c *compiler) later(f func()) { c.ool = append(c.ool, oolItem{f: f}) }
+
+// emitOOL emits the code asked for after the body, and what that asks
+// for in turn.
+func (c *compiler) emitOOL() {
+	for i := 0; i < len(c.ool); i++ {
+		switch it := c.ool[i]; it.kind {
+		case oolFunc:
+			it.f()
+		case oolTrapStub:
+			c.a.Bind(it.to)
+			c.trapStub(it.code)
+		case oolTrapSite:
+			c.a.Bind(it.l)
+			c.trapSite(it.at, it.to)
+		}
+	}
 }
 
 type compiler struct {
@@ -232,15 +274,85 @@ type compiler struct {
 	xused regMask
 
 	retL asmLabel
-	ool  []func()
+	ool  []oolItem
 	// loops are the loop entries made so far, by the loop's offset.
-	loops  map[uint32]asmLabel
-	traps  map[trapKey]asmLabel
-	trapTo map[uint64]asmLabel
+	loops map[uint32]asmLabel
+	// traps are the trap sites made so far, in order; trapTo is each trap
+	// code's common stub, trapToSet which codes have one.
+	traps     []trapSite
+	trapTo    [32]asmLabel
+	trapToSet uint32
 	// vconsts are the v128 constants the code loads, by their bits, in the
 	// order first used.
 	vconsts     map[[2]uint64]asmLabel
 	vconstOrder [][2]uint64
+
+	// ws is the workspace the compiler is in; order is chooseHomes' list
+	// and pos argsTo's and resultsFrom's, kept for the next compile.
+	ws    *workspace
+	order []int
+	pos   []slotPos
+	// depths, stubs and stubOrder are brTable's: its targets' depths, each
+	// depth's stub's label plus one (0 for none), and the depths with
+	// stubs in their order.
+	depths, stubOrder []int
+	stubs             []asmLabel
+}
+
+// A workspace holds what a compile allocates that the next compile can use
+// again: the assembler's buffers, the compiler's lists and tables, and its
+// constructs. Compile takes one from workspaces and gives it back.
+type workspace struct {
+	a asm
+	c compiler
+	// ctls are the constructs made so far, nctl of them by this compile;
+	// a compile makes new ones of the old, none twice, as an out of line
+	// stretch may read a construct ended before it.
+	ctls []*ctl
+	nctl int
+}
+
+var workspaces = sync.Pool{New: func() any { return new(workspace) }}
+
+// compiler returns the workspace's compiler, ready for req: its lists
+// emptied and its tables cleared, their memory kept.
+func (ws *workspace) compiler(req *Request) *compiler {
+	ws.a.Reset()
+	old := &ws.c
+	// What the last compile left that holds pointers is dropped, so that
+	// the workspace keeps no module, closure or construct alive.
+	clear(old.ool)
+	clear(old.ctrl)
+	clear(old.handlers)
+	for _, t := range ws.ctls[:ws.nctl] {
+		*t = ctl{}
+	}
+	ws.nctl = 0
+	if old.loops == nil || len(old.loops) > 64 {
+		// A map is cleared in time of its size: a large one is not kept.
+		old.loops = map[uint32]asmLabel{}
+	}
+	clear(old.loops)
+	clear(old.vconsts)
+	ws.c = compiler{
+		a: &ws.a, req: req, m: req.Module, fn: req.Func, sig: req.Module.FuncType(req.Func), frameSlots: req.FrameSlots,
+		locals: old.locals[:0], use: old.use, home: old.home[:0], slots: old.slots[:0], results: old.results[:0],
+		handlers: old.handlers[:0], stack: old.stack[:0], ctrl: old.ctrl[:0], ool: old.ool[:0],
+		traps: old.traps[:0], loops: old.loops, vconsts: old.vconsts, vconstOrder: old.vconstOrder[:0],
+		ws: ws, order: old.order[:0], pos: old.pos[:0], depths: old.depths[:0], stubs: old.stubs[:0], stubOrder: old.stubOrder[:0],
+	}
+	return &ws.c
+}
+
+// newCtl returns a construct of the workspace's, to be filled.
+func (c *compiler) newCtl() *ctl {
+	ws := c.ws
+	if ws.nctl == len(ws.ctls) {
+		ws.ctls = append(ws.ctls, new(ctl))
+	}
+	t := ws.ctls[ws.nctl]
+	ws.nctl++
+	return t
 }
 
 // Compile compiles function fn of a validated module, or refuses it with
@@ -256,9 +368,10 @@ func Compile(req *Request) (code *Code, err error) {
 		}
 	}()
 	m := req.Module
-	c := &compiler{a: &asm{}, req: req, m: m, fn: req.Func, sig: m.FuncType(req.Func),
-		frameSlots: req.FrameSlots, traps: map[trapKey]asmLabel{}, trapTo: map[uint64]asmLabel{}, loops: map[uint32]asmLabel{}}
-	c.locals, c.use = scan(m, req.Func, CPU)
+	ws := workspaces.Get().(*workspace)
+	defer workspaces.Put(ws)
+	c := ws.compiler(req)
+	c.locals, c.use = scan(m, req.Func, CPU, c.locals, c.use)
 	c.layout()
 	if c.nlocals != req.FrameLocals || c.rlocals != req.FrameRefLocals {
 		panic("wasm jit: the frame's locals are not the engine's")
@@ -279,14 +392,14 @@ func Compile(req *Request) (code *Code, err error) {
 	c.prologue()
 
 	c.retL = a.NewLabel()
-	c.ctrl = append(c.ctrl, &ctl{op: opcode.Block, results: c.sig.Results, label: c.retL})
+	fnCtl := c.newCtl()
+	*fnCtl = ctl{op: opcode.Block, results: c.sig.Results, label: c.retL}
+	c.ctrl = append(c.ctrl, fnCtl)
 	for c.r.pc < end && len(c.ctrl) > 0 {
 		c.instr()
 	}
 	c.returnSequence()
-	for i := 0; i < len(c.ool); i++ {
-		c.ool[i]()
-	}
+	c.emitOOL()
 	c.emitVConsts()
 	if 2*c.maxHeight+c.nlocals > c.frameSlots {
 		refuse(RefuseFrame, "%d stack positions and %d locals in a frame of %d slots", c.maxHeight, c.nlocals, c.frameSlots)
@@ -305,7 +418,8 @@ func Compile(req *Request) (code *Code, err error) {
 	if req.MaxCodeBytes > 0 && len(out) > req.MaxCodeBytes {
 		refuse(RefuseSize, "%d bytes of code", len(out))
 	}
-	code = &Code{Bytes: out, GoEntry: a.Offset(goEntry), Entry: a.Offset(entry), ReturnStub: retStub, Handlers: c.handlersOut()}
+	// The assembler's buffer is the workspace's: the code is a copy.
+	code = &Code{Bytes: slices.Clone(out), GoEntry: a.Offset(goEntry), Entry: a.Offset(entry), ReturnStub: retStub, Handlers: c.handlersOut()}
 	if len(c.loops) > 0 {
 		code.Loops = make(map[uint32]int, len(c.loops))
 		for at, l := range c.loops {
@@ -319,8 +433,9 @@ func Compile(req *Request) (code *Code, err error) {
 // whole function: the integers' general registers, the floats' float ones.
 // A home is taken from the cache.
 func (c *compiler) chooseHomes() {
-	c.home = make([]int8, len(c.locals))
-	order := make([]int, 0, len(c.locals))
+	c.home = grow(c.home, len(c.locals))
+	order := c.order[:0]
+	defer func() { c.order = order }()
 	for k := range c.locals {
 		c.home[k] = -1
 		if c.use.weight[k] > 0 {
@@ -388,26 +503,25 @@ func (c *compiler) prologue() {
 
 // trap returns a label that traps with code, at the instruction at offset
 // at: a site's stub stores the offset, then the code's common stub the rest.
+// An instruction's requests for one code share a site; they are made
+// while it is compiled, so its sites are the last ones made.
 func (c *compiler) trap(code uint64, at uint32) asmLabel {
-	k := trapKey{code, at}
-	if l, ok := c.traps[k]; ok {
-		return l
+	for i := len(c.traps) - 1; i >= 0 && c.traps[i].at == at; i-- {
+		if c.traps[i].code == code {
+			return c.traps[i].l
+		}
 	}
 	l := c.a.NewLabel()
-	c.traps[k] = l
-	to, ok := c.trapTo[code]
-	if !ok {
-		to = c.a.NewLabel()
-		c.trapTo[code] = to
-		c.ool = append(c.ool, func() {
-			c.a.Bind(to)
-			c.trapStub(code)
-		})
+	c.traps = append(c.traps, trapSite{code: code, at: at, l: l})
+	if code >= uint64(len(c.trapTo)) {
+		panic("wasm jit: trap code out of range")
 	}
-	c.ool = append(c.ool, func() {
-		c.a.Bind(l)
-		c.trapSite(at, to)
-	})
+	if c.trapToSet&(1<<code) == 0 {
+		c.trapToSet |= 1 << code
+		c.trapTo[code] = c.a.NewLabel()
+		c.ool = append(c.ool, oolItem{kind: oolTrapStub, code: code, to: c.trapTo[code]})
+	}
+	c.ool = append(c.ool, oolItem{kind: oolTrapSite, at: at, l: l, to: c.trapTo[code]})
 	return l
 }
 
@@ -417,7 +531,8 @@ func (c *compiler) top() *ctl { return c.ctrl[len(c.ctrl)-1] }
 // stored in its slot.
 func (c *compiler) enter(op opcode.Opcode, params, results []module.ValueType) *ctl {
 	c.spillAll()
-	t := &ctl{op: op, base: len(c.stack) - len(params), params: params, results: results, label: c.a.NewLabel()}
+	t := c.newCtl()
+	*t = ctl{op: op, base: len(c.stack) - len(params), params: params, results: results, label: c.a.NewLabel()}
 	c.ctrl = append(c.ctrl, t)
 	return t
 }
@@ -482,7 +597,7 @@ func (c *compiler) jumpTo(t *ctl) {
 		t.hasPoll = true
 		t.poll = c.a.NewLabel()
 		head, poll := t.label, t.poll
-		c.ool = append(c.ool, func() {
+		c.later(func() {
 			c.a.Bind(poll)
 			resume := c.a.NewLabel()
 			c.exit(ExitPoll, resume)
@@ -500,7 +615,7 @@ func (c *compiler) jumpTo(t *ctl) {
 func (c *compiler) loopEntry(at uint32, head asmLabel) {
 	l := c.a.NewLabel()
 	c.loops[at] = l
-	c.ool = append(c.ool, func() {
+	c.later(func() {
 		c.resumeAt(l)
 		c.jmp(head)
 	})

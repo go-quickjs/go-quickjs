@@ -88,7 +88,7 @@ func (c *compiler) refPut(dst mem, p, i word) {
 	a.Store(dst.base, dst.off, c.wordIn(p, rTmp))
 	a.Bind(resume)
 	wb := c.wbRoutine()
-	c.ool = append(c.ool, func() {
+	c.later(func() {
 		a.Bind(slow)
 		a.Store(rCtx, offWBPtr, c.wordIn(p, rTmp))
 		a.AddImm(rTmp, dst.base, int64(dst.off), true)
@@ -168,7 +168,7 @@ func (c *compiler) clearRefs(from, to int) {
 	}
 	a.Bind(done)
 	wb := c.wbRoutine()
-	c.ool = append(c.ool, func() {
+	c.later(func() {
 		a.Bind(slow)
 		a.AddImm(rCall0, rR, int64(16*from), true)
 		a.MovImm(rCall1, uint64(n))

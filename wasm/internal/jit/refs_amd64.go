@@ -96,7 +96,7 @@ func (c *compiler) refPut(dst mem, p, i word) {
 	}
 	a.Bind(resume)
 	wb := c.wbRoutine()
-	c.ool = append(c.ool, func() {
+	c.later(func() {
 		a.Bind(slow)
 		switch p.k {
 		case wImm:
@@ -184,7 +184,7 @@ func (c *compiler) clearRefs(from, to int) {
 	}
 	a.Bind(done)
 	wb := c.wbRoutine()
-	c.ool = append(c.ool, func() {
+	c.later(func() {
 		a.Bind(slow)
 		a.Lea(amd64.RCX, rR, int32(16*from))
 		a.MovImm(amd64.RDX, uint64(n))

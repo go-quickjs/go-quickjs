@@ -678,6 +678,31 @@ call and at an exit, so a pad finds the frame as the label wants it. The
 engine's frame of a function with legacy trys has a reference slot past
 the interpreter's for each depth of them (`Request.CaughtSlot`).
 
+## Compile cost
+
+A compile takes a workspace from a pool (`workspace`, compile.go): the
+assembler's buffers, the compiler's lists and tables, and its constructs,
+kept from one compile to the next, so that a compile allocates little but
+its code's copy, its handlers and its loops' entries. What is emitted after
+the body -- the slow paths of calls, polls and barriers, the trap sites'
+stubs and each trap code's common stub -- is a list of items in the order
+they were asked for, a trap's kept as data rather than a closure, as most
+memory accesses have one.
+
+`TestCompileCost` (engine) times what a module costs before its code runs,
+phase by phase, over a corpus of .wasm files and the spec's modules
+(`WASM_COMPILE_COST`), and `WASM_COMPILE_HASHES` writes a hash of each
+function's baseline code; a change meant to make compiles cheaper leaves
+the code as it was, which two builds' files show. `TestFirstRun` (wasi)
+breaks a WASI program's first run down by phase.
+
+```sh
+WASM_SPEC_DIR=/path/to/spec WASM_COMPILE_COST=prog.wasm,spec WASM_COMPILE_HASHES=/tmp/a.txt \
+  go test -tags quickjs_jit ./wasm/internal/engine -run TestCompileCost -count=1 -v
+WASM_FIRSTRUN=prog.wasm WASM_FIRSTRUN_ARGS="json 200" \
+  go test -tags quickjs_jit ./wasm/wasi -run TestFirstRun -count=1 -v
+```
+
 ## Concurrency and memory
 
 A Code's native code is shared by its instances and the goroutines running

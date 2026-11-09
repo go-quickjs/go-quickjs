@@ -101,7 +101,7 @@ func (c *compiler) closeTry(at uint32) {
 		cl := &h.clauses[i]
 		cl.pad = c.a.NewLabel()
 		pad, target, ret := cl.pad, cl.target, cl.ret
-		c.ool = append(c.ool, func() {
+		c.later(func() {
 			c.resumeAt(pad)
 			if ret {
 				for i, rt := range c.sig.Results {
@@ -200,7 +200,7 @@ func (c *compiler) closeLegacy(at uint32) {
 	h := handlerCtl{start: t.start, end: t.tryEnd, index: t.index, clauses: t.clauses}
 	for _, cl := range h.clauses {
 		pad, body := cl.pad, cl.body
-		c.ool = append(c.ool, func() {
+		c.later(func() {
 			c.resumeAt(pad)
 			c.jmp(body)
 		})

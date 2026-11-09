@@ -52,6 +52,16 @@ func checkTypes(ts []module.ValueType, what string, feat Features) {
 	}
 }
 
+// checkBlockTypes checks a construct's parameters and results, naming
+// what it refuses only where it refuses one.
+func checkBlockTypes(op opcode.Opcode, params, results []module.ValueType, feat Features) {
+	if feat.SIMD {
+		return
+	}
+	checkTypes(params, op.Name()+" parameter", feat)
+	checkTypes(results, op.Name()+" result", feat)
+}
+
 // Features are the CPU's optional instructions the code may use, and the
 // relaxed SIMD results the interpreter gives on it.
 type Features struct {
@@ -72,19 +82,22 @@ type Features struct {
 type localUse struct {
 	weight  []uint64
 	written []bool
+	// loops is scan's stack of constructs, kept for the next scan.
+	loops []bool
 }
 
 // scan reads function fn's body, past its locals, and refuses it if any
 // instruction is one the compiler does not compile. It returns the body's
-// local types, the parameters first, and their uses.
-func scan(m *module.Module, fn uint32, feat Features) (locals []module.ValueType, use localUse) {
+// local types, the parameters first, and their uses, in the memory of
+// locals and use where it has room.
+func scan(m *module.Module, fn uint32, feat Features, locals []module.ValueType, use localUse) ([]module.ValueType, localUse) {
 	f := &m.Functions[fn]
 	sig := m.Types[f.TypeIndex].Func
 	checkTypes(sig.Params, "parameter", feat)
 	checkTypes(sig.Results, "result", feat)
 	r := reader{b: m.Bytes, pc: int(f.Code.Offset)}
 	end := int(f.Code.End())
-	locals = append(locals, sig.Params...)
+	locals = append(locals[:0], sig.Params...)
 	for n := r.u32(); n > 0; n-- {
 		count := r.u32()
 		t := r.valueType()
@@ -93,10 +106,11 @@ func scan(m *module.Module, fn uint32, feat Features) (locals []module.ValueType
 			locals = append(locals, t)
 		}
 	}
-	use.weight = make([]uint64, len(locals))
-	use.written = make([]bool, len(locals))
+	use.weight = grow(use.weight, len(locals))
+	use.written = grow(use.written, len(locals))
 	// loops says, for each construct open, whether it is a loop.
-	loops := []bool{false}
+	loops := append(use.loops[:0], false)
+	defer func() { use.loops = loops }()
 	depth := 0
 	for r.pc < end {
 		op := r.opcode()
@@ -134,8 +148,7 @@ func scan(m *module.Module, fn uint32, feat Features) (locals []module.ValueType
 			refuse(RefuseF16, "%s", op.Name())
 		case opcode.Block, opcode.Loop, opcode.If, opcode.Try:
 			params, results := r.blockType(m)
-			checkTypes(params, op.Name()+" parameter", feat)
-			checkTypes(results, op.Name()+" result", feat)
+			checkBlockTypes(op, params, results, feat)
 			loops = append(loops, op == opcode.Loop)
 			if op == opcode.Loop {
 				depth++
@@ -143,8 +156,7 @@ func scan(m *module.Module, fn uint32, feat Features) (locals []module.ValueType
 			continue
 		case opcode.TryTable:
 			params, results := r.blockType(m)
-			checkTypes(params, op.Name()+" parameter", feat)
-			checkTypes(results, op.Name()+" result", feat)
+			checkBlockTypes(op, params, results, feat)
 			for n := r.u32(); n > 0; n-- {
 				if kind := r.byte(); kind < 2 {
 					r.u32()
@@ -201,4 +213,14 @@ func scan(m *module.Module, fn uint32, feat Features) (locals []module.ValueType
 		r.skipImmediates(op)
 	}
 	return locals, use
+}
+
+// grow is s with n elements, cleared, from its memory where it has room.
+func grow[T any](s []T, n int) []T {
+	if cap(s) < n {
+		return make([]T, n)
+	}
+	s = s[:n]
+	clear(s)
+	return s
 }

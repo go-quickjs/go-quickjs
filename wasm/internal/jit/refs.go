@@ -28,8 +28,8 @@ type slotPos struct {
 // layoutOf returns where values of types ts go as a function's parameters,
 // locals or results, and the numeric and reference slots they take: a
 // v128 takes two numeric slots, its low half first.
-func layoutOf(ts []module.ValueType) (pos []slotPos, nnum, nref int) {
-	pos = make([]slotPos, len(ts))
+func layoutOf(ts []module.ValueType, pos []slotPos) (_ []slotPos, nnum, nref int) {
+	pos = grow(pos, len(ts))
 	for i, t := range ts {
 		if t.IsRef() {
 			pos[i] = slotPos{ref: true, i: nref}
@@ -45,14 +45,30 @@ func layoutOf(ts []module.ValueType) (pos []slotPos, nnum, nref int) {
 	return pos, nnum, nref
 }
 
+// numSlots returns the numeric and reference slots values of types ts
+// take, as layoutOf counts them.
+func numSlots(ts []module.ValueType) (nnum, nref int) {
+	for _, t := range ts {
+		switch {
+		case t.IsRef():
+			nref++
+		case t.Kind == module.KindV128:
+			nnum += 2
+		default:
+			nnum++
+		}
+	}
+	return nnum, nref
+}
+
 // layout places the function's locals and results in its frame, as the
 // engine does.
 func (c *compiler) layout() {
 	var nref int
-	c.slots, c.numLocals, nref = layoutOf(c.locals)
-	_, c.numParams, c.refParams = layoutOf(c.sig.Params)
+	c.slots, c.numLocals, nref = layoutOf(c.locals, c.slots)
+	c.numParams, c.refParams = numSlots(c.sig.Params)
 	var rn, rr int
-	c.results, rn, rr = layoutOf(c.sig.Results)
+	c.results, rn, rr = layoutOf(c.sig.Results, c.results)
 	c.nlocals = max(c.numLocals, rn)
 	c.rlocals = max(nref, rr)
 	c.refs = c.req.FrameRefSlots > 0
@@ -164,7 +180,8 @@ func (c *compiler) copyPosResult(t module.Kind, from, i int) {
 // from base into the parameters of a frame whose slots are at L plus num
 // and R plus ref bytes.
 func (c *compiler) argsTo(ts []module.ValueType, base int, num, ref int32) {
-	pos, _, _ := layoutOf(ts)
+	c.pos, _, _ = layoutOf(ts, c.pos)
+	pos := c.pos
 	for i, p := range pos {
 		if p.ref {
 			c.refCopy(mem{rR, ref + int32(16*p.i)}, c.refPos(base+i))
@@ -181,7 +198,8 @@ func (c *compiler) argsTo(ts []module.ValueType, base int, num, ref int32) {
 // whose slots are at L plus num and R plus ref bytes into the stack
 // positions from base.
 func (c *compiler) resultsFrom(ts []module.ValueType, base int, num, ref int32) {
-	pos, _, _ := layoutOf(ts)
+	c.pos, _, _ = layoutOf(ts, c.pos)
+	pos := c.pos
 	for i, p := range pos {
 		if p.ref {
 			c.refCopy(c.refPos(base+i), mem{rR, ref + int32(16*p.i)})
@@ -376,7 +394,7 @@ func (c *compiler) wbRoutine() asmLabel {
 		c.hasWB = true
 		c.wb = c.a.NewLabel()
 		l := c.wb
-		c.ool = append(c.ool, func() { c.emitWBRoutine(l) })
+		c.later(func() { c.emitWBRoutine(l) })
 	}
 	return c.wb
 }
