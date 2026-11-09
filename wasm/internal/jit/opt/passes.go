@@ -21,13 +21,18 @@ func Optimize(f *Func, check func(pass string)) {
 	run("copyelim", copyelim)
 	run("fold", fold)
 	run("copyelim", copyelim)
+	run("thread", thread)
+	run("copyelim", copyelim)
 	run("gvn", gvn)
 	run("copyelim", copyelim)
 	run("licm", licm)
 	run("dce", dce)
 	run("bce", bce)
 	run("split", splitCriticalEdges)
-	run("loops", func(f *Func) { findLoops(f, dominators(f)) })
+	run("loops", func(f *Func) {
+		findLoops(f, dominators(f))
+		loopDepths(f)
+	})
 	computeUses(f)
 }
 
@@ -785,8 +790,17 @@ func licm(f *Func) {
 		return false
 	}
 	for _, h := range headers {
-		pre := h.Preds[0]
-		if inLoop(pre, h) || len(pre.Succs) != 1 || callsIn(f, h, inLoop) {
+		// The preheader: the one predecessor outside the loop. A loop
+		// threading made has others too: its values stay.
+		var pre *Block
+		outside := 0
+		for _, p := range h.Preds {
+			if !inLoop(p, h) {
+				pre = p
+				outside++
+			}
+		}
+		if outside != 1 || len(pre.Succs) != 1 || callsIn(f, h, inLoop) {
 			continue
 		}
 		for _, b := range f.Blocks {

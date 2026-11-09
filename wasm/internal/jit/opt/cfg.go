@@ -252,3 +252,132 @@ func computeUses(f *Func) {
 		}
 	}
 }
+
+// loopDepths sets each block's depth to the number of loops it is in, by
+// a loop nesting forest as Steensgaard's: a loop is a strongly connected
+// component of the control flow graph, its entries the blocks of it that
+// an edge from outside reaches, and the loops within it those of the
+// component without its edges to the entries. Unlike natural loops it
+// counts the loops of an irreducible graph, which jump threading makes of
+// a dispatch loop; the allocator weighs a use by its block's depth.
+//
+// The edges of a switch of more than two targets enter a loop only where
+// nothing else does: a dispatch loop's switch, threaded past, enters each
+// case, and a loop of cases is entered too from the cases before it.
+func loopDepths(f *Func) {
+	for _, b := range f.Blocks {
+		b.Depth = 0
+	}
+	type edge struct{ from, to int32 }
+	cut := map[edge]bool{}
+	member := make([]int32, f.nextBlock)
+	gen := int32(0)
+	var nest func(blocks []*Block)
+	nest = func(blocks []*Block) {
+		gen++
+		for _, b := range blocks {
+			member[b.ID] = gen
+		}
+		g := gen
+		in := func(from, to *Block) bool {
+			return member[to.ID] == g && !cut[edge{from.ID, to.ID}]
+		}
+		for _, scc := range components(blocks, in) {
+			if len(scc) == 1 && !slices.ContainsFunc(scc[0].Succs, func(s *Block) bool { return s == scc[0] && in(s, s) }) {
+				continue
+			}
+			inSCC := make(map[*Block]bool, len(scc))
+			for _, b := range scc {
+				inSCC[b] = true
+				b.Depth++
+			}
+			var entries, switched []*Block
+			for _, b := range scc {
+				plain, sw := false, false
+				for _, p := range b.Preds {
+					switch {
+					case inSCC[p]:
+					case fromSwitch(p):
+						sw = true
+					default:
+						plain = true
+					}
+				}
+				if plain {
+					entries = append(entries, b)
+				} else if sw {
+					switched = append(switched, b)
+				}
+			}
+			if len(entries) == 0 {
+				entries = switched
+			}
+			for _, b := range entries {
+				for _, p := range b.Preds {
+					if inSCC[p] {
+						cut[edge{p.ID, b.ID}] = true
+					}
+				}
+			}
+			nest(scc)
+		}
+	}
+	nest(f.Blocks)
+}
+
+// fromSwitch reports whether an edge from p is a switch's of more than two
+// targets: p is the switch, or the block an edge of it was split by.
+func fromSwitch(p *Block) bool {
+	if p.Kind == BPlain && len(p.Preds) == 1 && len(p.Values) == 0 && len(p.Phis) == 0 {
+		p = p.Preds[0]
+	}
+	return p.Kind == BSwitch && len(p.Succs) > 2
+}
+
+// components are the strongly connected components of the graph of blocks
+// and the edges in allows, by Tarjan's algorithm.
+func components(blocks []*Block, in func(from, to *Block) bool) [][]*Block {
+	index := map[*Block]int{}
+	low := map[*Block]int{}
+	onStack := map[*Block]bool{}
+	var stack []*Block
+	var out [][]*Block
+	next := 0
+	var visit func(b *Block)
+	visit = func(b *Block) {
+		index[b], low[b] = next, next
+		next++
+		stack = append(stack, b)
+		onStack[b] = true
+		for _, s := range b.Succs {
+			if !in(b, s) {
+				continue
+			}
+			if _, seen := index[s]; !seen {
+				visit(s)
+				low[b] = min(low[b], low[s])
+			} else if onStack[s] {
+				low[b] = min(low[b], index[s])
+			}
+		}
+		if low[b] == index[b] {
+			var scc []*Block
+			for {
+				w := stack[len(stack)-1]
+				stack = stack[:len(stack)-1]
+				onStack[w] = false
+				scc = append(scc, w)
+				if w == b {
+					break
+				}
+			}
+			out = append(out, scc)
+		}
+	}
+	for _, b := range blocks {
+		if _, seen := index[b]; !seen {
+			visit(b)
+		}
+	}
+	return out
+}

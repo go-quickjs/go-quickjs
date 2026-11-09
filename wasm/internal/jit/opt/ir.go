@@ -459,6 +459,8 @@ func (f *Func) String() string {
 		}
 		if b.Loop != nil {
 			fmt.Fprintf(&sb, " (loop %v depth %d)", b.Loop, b.Depth)
+		} else if b.Depth > 0 {
+			fmt.Fprintf(&sb, " (depth %d)", b.Depth)
 		}
 		sb.WriteByte('\n')
 		for _, v := range b.Phis {

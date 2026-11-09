@@ -7,6 +7,8 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"math/rand/v2"
+	"strings"
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
@@ -311,4 +313,109 @@ func TestOptBulkMemory(t *testing.T) {
 	if !optimized(inst, "copy") || !optimized(inst, "fill") || !optimized(inst, "both") {
 		t.Fatal("not optimized")
 	}
+}
+
+// Jump threading takes each back edge of a dispatch loop -- a loop whose
+// header switches on a local its back edges set to constants, as Go's code
+// for WebAssembly has -- to its case, and looks the locals up again. Random
+// such loops, with locals copied into each other, cases that fall into the
+// next, conditional and computed dispatch, compute what the interpreter
+// computes.
+func TestOptThreadDispatch(t *testing.T) {
+	rng := rand.New(rand.NewPCG(1, 2))
+	opt := 0
+	for iter := range 1500 {
+		src := dispatchLoop(rng)
+		interp := interpretedInstance(t, src)
+		inst := tierInstance(t, src, 0)
+		for _, n := range []uint64{0, 1, 5, 40, 300} {
+			s := rng.Uint64()
+			want, werr := call(t, interp, "run", n, s)
+			got, gerr := call(t, inst, "run", n, s)
+			if fmt.Sprint(werr) != fmt.Sprint(gerr) || (werr == nil && got[0].N != want[0].N) {
+				t.Fatalf("iteration %d, run(%d, %#x) = %v, %v; want %v, %v\n%s", iter, n, s, got, gerr, want, werr, src)
+			}
+		}
+		if optimized(inst, "run") {
+			opt++
+		}
+	}
+	// The tier refuses a function whose spills need more slots than its
+	// frame has.
+	if opt < 1400 {
+		t.Fatalf("%d of 1,500 optimized", opt)
+	}
+}
+
+// dispatchLoop is a random function of a dispatch loop over i64 locals.
+func dispatchLoop(rng *rand.Rand) string {
+	nv := 2 + rng.IntN(4)
+	nc := 2 + rng.IntN(5)
+	var sb strings.Builder
+	sb.WriteString("(module (func (export \"run\") (param $n i32) (param $s i64) (result i64)\n (local $pc i32) (local $t i64)")
+	for v := range nv {
+		fmt.Fprintf(&sb, " (local $v%d i64)", v)
+	}
+	sb.WriteString("\n")
+	for v := range nv {
+		fmt.Fprintf(&sb, " (local.set $v%d (i64.add (local.get $s) (i64.const %d)))\n", v, rng.IntN(100))
+	}
+	sb.WriteString(" (loop $L\n  (block $exit\n")
+	for c := nc - 1; c >= 0; c-- {
+		fmt.Fprintf(&sb, "  (block $c%d\n", c)
+	}
+	sb.WriteString("   (br_table")
+	for c := range nc {
+		fmt.Fprintf(&sb, " $c%d", c)
+	}
+	sb.WriteString(" $exit (local.get $pc)))\n")
+	v := func() string { return fmt.Sprintf("$v%d", rng.IntN(nv)) }
+	stmt := func() string {
+		switch rng.IntN(7) {
+		case 0:
+			return fmt.Sprintf("(local.set %s (local.get %s))", v(), v())
+		case 1:
+			return fmt.Sprintf("(local.set %s (i64.add (local.get %s) (i64.const %d)))", v(), v(), rng.IntN(9))
+		case 2:
+			return fmt.Sprintf("(local.set %s (i64.xor (local.get %s) (i64.rotl (local.get %s) (i64.const %d))))", v(), v(), v(), 1+rng.IntN(60))
+		case 3:
+			return fmt.Sprintf("(if (i64.lt_u (local.get %s) (local.get %s)) (then (local.set %s (i64.mul (local.get %s) (i64.const 3)))))", v(), v(), v(), v())
+		case 4:
+			a, b := v(), v()
+			return fmt.Sprintf("(local.set $t (local.get %s)) (local.set %s (local.get %s)) (local.set %s (local.get $t))", a, a, b, b)
+		case 5:
+			return fmt.Sprintf("(local.set $pc (i32.wrap_i64 (i64.rem_u (local.get %s) (i64.const %d))))", v(), nc+1)
+		}
+		return fmt.Sprintf("(local.set %s (i64.sub (local.get %s) (local.get %s)))", v(), v(), v())
+	}
+	for c := range nc {
+		sb.WriteString("   (br_if $exit (i32.eqz (local.get $n)))\n   (local.set $n (i32.sub (local.get $n) (i32.const 1)))\n")
+		for k := rng.IntN(4); k > 0; k-- {
+			sb.WriteString("   " + stmt() + "\n")
+		}
+		if rng.IntN(2) == 0 {
+			fmt.Fprintf(&sb, "   (if (i64.gt_u (local.get %s) (local.get %s)) (then (local.set $pc (i32.const %d)) (br $L)))\n", v(), v(), rng.IntN(nc))
+		}
+		for k := rng.IntN(2); k > 0; k-- {
+			sb.WriteString("   " + stmt() + "\n")
+		}
+		switch rng.IntN(5) {
+		case 0:
+			// Into the next case.
+		case 2:
+			fmt.Fprintf(&sb, "   (local.set $pc (i32.const %d)) (br_table $L $exit $L (i32.wrap_i64 (i64.and (local.get %s) (i64.const 3))))\n", rng.IntN(nc+1), v())
+		case 1:
+			fmt.Fprintf(&sb, "   (local.set $pc (i32.const %d)) (br_if $L (i64.lt_s (local.get %s) (i64.const 0)))\n", rng.IntN(nc+1), v())
+		default:
+			fmt.Fprintf(&sb, "   (local.set $pc (i32.const %d)) (br $L)\n", rng.IntN(nc+1))
+		}
+		fmt.Fprintf(&sb, "  ) ;; the end of case %d\n", c)
+	}
+	sb.WriteString("  ) ;; the loop\n")
+	res := "(local.get $v0)"
+	for v := 1; v < nv; v++ {
+		res = fmt.Sprintf("(i64.add (i64.mul %s (i64.const 31)) (local.get $v%d))", res, v)
+	}
+	sb.WriteString(" " + res + "))\n")
+	return sb.String()
 }

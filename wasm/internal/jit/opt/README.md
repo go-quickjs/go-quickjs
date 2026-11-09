@@ -16,8 +16,9 @@ asked for (see Tier-up).
 |---|---|
 | `ir.go` | the IR: types, operations, values, blocks |
 | `build.go` | what the tier refuses, and the SSA builder |
-| `cfg.go` | the control flow graph: reachability, order, critical edges, dominators, loops |
+| `cfg.go` | the control flow graph: reachability, order, critical edges, dominators, natural loops, loop depths |
 | `passes.go` | the optimizations |
+| `thread.go` | jump threading, and the lookups that repair SSA after it |
 | `verify.go` | the IR's verifier, and what lowering requires of it |
 | `compile.go` | `Compile`: build, optimize, lower |
 | `lower_amd64.go` | the lowering: the allocator's view of the function, the code |
@@ -97,11 +98,43 @@ or the phi itself -- are removed by the first pass.
 | `copyelim` | copy propagation: each use of a copy, and of a trivial phi, becomes the value copied |
 | `gvn` | global value numbering: a pure value a dominating one computes the same way -- operation, type, arguments (commutative ones in order), immediates -- becomes a copy of it, by a walk of the dominator tree |
 | `fold` | constant folding and identities (x+0, x*1, x&-1, x-x, x==x ...), the comparisons' inversion under eqz, `i32.wrap_i64` of a 64-bit operation of extended i32s and constants narrowed to the 32-bit operation, select on a constant or of one value, and the branches and switches on constants, whose dead blocks go |
+| `thread` | jump threading (below), then `copyelim` |
 | `gvn` again, `copyelim` | |
-| `licm` | the pure values of a loop that makes no call whose arguments are defined outside it go to its preheader, inner loops first; a value hoisted out of a loop that calls would live across the calls, kept in a slot, where computing it again costs less |
+| `licm` | the pure values of a loop that makes no call whose arguments are defined outside it go to its preheader -- its header's one predecessor outside it; a loop threading made has others, and keeps its values -- inner loops first; a value hoisted out of a loop that calls would live across the calls, kept in a slot, where computing it again costs less |
 | `dce` | values without uses or effects, and phis only themselves use |
 | `bce` | bounds-check elimination: an access is in bounds if a dominating access of the same address value checked an end as far; a memory never shrinks, so the check holds across calls and grows |
 | `split` | every critical edge gets a block, where its phis' moves go |
+| `loops` | natural loops, and each block's depth (below) |
+
+### Jump threading
+
+Go's code for WebAssembly runs every loop of a function through one loop
+whose header switches (br_table) on a local -- the block to run next --
+that each of its back edges sets to a constant. `thread` takes such edges
+straight to their cases: where a block H ends with an if or a switch on a
+value its phis decide -- a phi, or H's pure values of its phis, which
+nothing outside H uses -- and the arguments an edge from a predecessor p
+brings make it a constant, p's edge goes to the successor H would go to.
+The target's phis read on the new edge what they read on H's.
+
+H's phis then no longer hold on every path to the blocks H dominated.
+Each is a variable, defined by H and on each threaded edge by the
+argument p brought there (another of H's phis being that variable's value
+at p's end; p's other edges define nothing), and every use of it is
+looked up again as the builder looks up a local: a use's value at its
+block's start, a phi's argument on its edge, a phi made where
+predecessors bring different values, and one that turns out trivial
+forwarded to the value it is (`repairPhis`). Nothing is copied: no block
+is duplicated, and the code does not grow.
+
+The cases' loops are loops after it, but irreducible ones -- the switch
+still enters every case, for the calls that resume one -- which natural
+loops do not see. A block's depth, which the allocator weighs its uses by,
+is the number of loops of a nesting forest as Steensgaard's it is in
+(`loopDepths`): a loop is a strongly connected component, its entries the
+blocks an edge from outside reaches -- but a switch's of more than two
+targets, which enters a loop only where nothing else does -- and the loops
+within it those of the component without its edges to the entries.
 
 Folding is exact: integers as WebAssembly defines them, a division only
 where it cannot trap; floats only where no NaN is involved (add, sub,
