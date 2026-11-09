@@ -258,11 +258,13 @@ func goroutines() {
 	}
 	fmt.Println("order", strings.Join(order, " "))
 
+	// Three ticks, however coarse the host's timers: the timeout only
+	// catches a ticker that never fires.
 	ticker := time.NewTicker(5 * time.Millisecond)
 	ticks := 0
-	timeout := time.After(40 * time.Millisecond)
+	timeout := time.After(5 * time.Second)
 loop:
-	for {
+	for ticks < 3 {
 		select {
 		case <-ticker.C:
 			ticks++
@@ -272,5 +274,7 @@ loop:
 	}
 	ticker.Stop()
 	fmt.Println("ticked", ticks >= 3)
-	fmt.Println("elapsed", time.Since(start) >= 90*time.Millisecond)
+	// The longest sleep, 50 ms, then three ticks of 5: timers fire late,
+	// never early.
+	fmt.Println("elapsed", time.Since(start) >= 65*time.Millisecond)
 }
