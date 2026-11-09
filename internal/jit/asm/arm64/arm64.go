@@ -1,5 +1,6 @@
 // Package arm64 encodes the A64 instructions the new pipeline's arm64 code
-// generator (internal/jit/mir) emits: each a 32-bit word, little-endian.
+// generator (internal/jit/mir) and the WebAssembly baseline compiler
+// (wasm/internal/jit) emit: each a 32-bit word, little-endian.
 // Golden tests in internal/jit/verify check every encoding against the
 // arm64asm disassembler.
 package arm64
@@ -727,8 +728,13 @@ func (a *Asm) ShiftReg(op Shift, dst, n, m Reg, wide bool) {
 	a.emit(uint32(op) | sf(wide) | uint32(m)<<16 | uint32(n)<<5 | uint32(dst))
 }
 
-// ShiftImm is dst = n shifted by a constant count, below the width.
+// ShiftImm is dst = n shifted, or rotated (Ror), by a constant count, below
+// the width.
 func (a *Asm) ShiftImm(op Shift, dst, n Reg, count uint8, wide bool) {
+	if op == Ror {
+		a.rorImm(dst, n, count, wide)
+		return
+	}
 	bits := uint32(32)
 	base := uint32(0x53000000) // UBFM W
 	if op == Asr {
