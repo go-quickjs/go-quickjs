@@ -70,6 +70,8 @@ its next compile; placing the code copies them into the executable arena
 before the workspace is returned. The buffer counts toward the workspace's
 memory and is trimmed with its other scratch storage when recent compiles
 need less. Compiling without a workspace returns independent bytes.
+The arm64 table used to patch Go calls' failure branches is scratch too;
+it drops its pointers to the calls' descriptions when the compile ends.
 
 **Integers.** The slot IR computes every number as a double, a bitwise
 operator's ToInt32 of its operands and the conversion of its result back

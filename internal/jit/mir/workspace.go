@@ -83,6 +83,7 @@ type Workspace struct {
 		stubFor    []a64Stub
 		cold       []func()
 		coldBudget []int
+		goFails    []a64GoFail
 	}
 	// findBudgets' tables, kept from compile to compile: its walk's stack,
 	// the loops it finds and the values their registers are given.
@@ -136,6 +137,7 @@ func (w *Workspace) Bytes() int {
 	n += capBytes(w.sched.moves) + capBytes(w.sched.steps) + capBytes(w.sched.parked) + capBytes(w.sched.readers) + capBytes(w.xuses) + capBytes(w.states) + capBytes(w.kv) + capBytes(w.gpool)
 	n += w.amd64.a.Bytes() + capBytes(w.amd64.labels) + capBytes(w.amd64.stubFor) + capBytes(w.amd64.cold) + capBytes(w.amd64.pool) + capBytes(w.amd64.poolTab)
 	n += w.arm64.a.Bytes() + capBytes(w.arm64.code) + capBytes(w.arm64.labels) + capBytes(w.arm64.stubFor) + capBytes(w.arm64.cold)
+	n += capBytes(w.arm64.goFails)
 	// A map's entries, as their keys and values, at least.
 	n += (len(w.amd64.stubs) + len(w.arm64.stubs)) * int(unsafe.Sizeof(stubKey{})+unsafe.Sizeof(amd64.Label(0)))
 	n += len(w.exitWords) * 12
@@ -186,6 +188,7 @@ func (w *Workspace) Rewind() {
 		w.amd64.a, w.amd64.labels, w.amd64.stubs, w.amd64.stubFor, w.amd64.cold, w.amd64.pool, w.amd64.poolTab = amd64.Asm{}, nil, nil, nil, nil, nil, nil
 		w.arm64.a, w.arm64.labels, w.arm64.stubs, w.arm64.stubFor, w.arm64.cold = arm64.Asm{}, nil, nil, nil, nil
 		w.arm64.code = nil
+		w.arm64.goFails = nil
 	}
 }
 
@@ -197,6 +200,8 @@ func (w *Workspace) scratchUsed() int {
 	n -= w.amd64.a.Bytes() + w.arm64.a.Bytes() + capBytes(w.arm64.code) + capBytes(w.xuses) + capBytes(w.gpool)
 	n += w.amd64.a.Used() + w.arm64.a.Used() + len(w.arm64.code)
 	n += w.xusesUsed*int(unsafe.Sizeof(xuse{})) + w.gpoolUsed*8
+	n -= capBytes(w.arm64.goFails)
+	n += len(w.arm64.goFails) * int(unsafe.Sizeof(a64GoFail{}))
 	return n
 }
 

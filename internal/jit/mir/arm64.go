@@ -185,9 +185,12 @@ func compileARM64(w *Workspace, f *ssa.Func, enc abi.Encoding, opts Options) (co
 		clear(g.stubs)
 		c.a, c.stubs, c.stubFor, c.cold = &g.a, g.stubs, g.stubFor[:0], g.cold[:0]
 		c.coldBudget = g.coldBudget[:0]
+		c.goFails = g.goFails[:0]
 		c.labels = slices.Grow(g.labels[:0], numBlocks(f))[:numBlocks(f)]
 		defer func() {
 			g.labels, g.stubFor, g.cold, g.coldBudget = c.labels[:0], c.stubFor[:0], clearFuncs(c.cold), c.coldBudget[:0]
+			clear(c.goFails)
+			g.goFails = c.goFails
 		}()
 	} else {
 		c.a, c.stubs = &arm64.Asm{}, map[stubKey]arm64.Label{}
@@ -7331,7 +7334,7 @@ func (c *a64Compiler) holder(v *ssa.Value, guard a64Guard) {
 	if v.Holders() != nil {
 		first = *v.Holders()
 	}
-	cases := append([]ssa.PropertyCase{{Shape: uintptr(v.Const.Bits), Index: int32(v.Index), Holders: first.Holders, More: first.More}}, v.Cases()...)
+	cases := v.Cases()
 	// As amd64's: at a megamorphic site, a receiver of a shape not among
 	// the cases has its own table searched, and so does one whose
 	// prototypes are no longer the case's; at any other, either fails.
@@ -7361,13 +7364,17 @@ func (c *a64Compiler) holder(v *ssa.Value, guard a64Guard) {
 			guard.jump(arm64.NE)
 		}
 	}
-	for i, k := range cases {
+	for i := 0; i <= len(cases); i++ {
+		k := ssa.PropertyCase{Shape: uintptr(v.Const.Bits), Index: int32(v.Index), Holders: first.Holders, More: first.More}
+		if i > 0 {
+			k = cases[i-1]
+		}
 		next := c.a.NewLabel()
 		p := c.gpr(v.Args[0], a64A)
 		c.a.Load(a64B, p, c.enc.ObjectShape)
 		c.movImm(a64C, uint64(k.Shape))
 		c.a.Cmp(a64B, a64C, true)
-		if i == len(cases)-1 {
+		if i == len(cases) {
 			miss(scan)
 		} else {
 			c.a.BCond(arm64.NE, next)
@@ -7395,7 +7402,7 @@ func (c *a64Compiler) holder(v *ssa.Value, guard a64Guard) {
 		}
 		c.a.Load(a64A, a64A, c.enc.ObjectProps)
 		c.a.AddImm(a64A, a64A, int64(k.Index*c.enc.ValueSize), true)
-		if i < len(cases)-1 {
+		if i < len(cases) {
 			c.a.B(done)
 			c.a.Bind(next)
 		}
