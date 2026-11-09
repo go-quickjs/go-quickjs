@@ -205,3 +205,34 @@ func TestInterruptWasm(t *testing.T) {
 		}
 	}
 }
+
+// TestPromisingSuspends pins a promising call's life: an ordinary import
+// and a suspending one, called from the call's goroutine, run on the
+// runtime's; the call returns its promise at the suspension, resumes when
+// the promise settles, and grows a memory whose buffer script holds, which
+// is detached.
+func TestPromisingSuspends(t *testing.T) {
+	rt := newRuntime(t)
+	got := eval(t, rt, `
+		const log = [];
+		const bytes = new Uint8Array([0,97,115,109,1,0,0,0,1,16,3,96,1,127,1,127,96,1,127,1,127,96,1,127,1,127,2,13,2,1,109,
+			1,102,0,0,1,109,1,103,0,1,3,2,1,2,5,4,1,1,1,2,7,13,2,3,109,101,109,2,0,3,114,117,110,0,2,10,17,1,15,0,32,0,16,1,16,0,
+			16,1,65,1,64,0,26,11]);
+		const e = new WebAssembly.Instance(new WebAssembly.Module(bytes), {m: {
+			f: new WebAssembly.Suspending(x => { log.push("f" + x); return new Promise(r => queueMicrotask(() => r(x * 10))) }),
+			g: x => { log.push("g" + x); return x + 1 },
+		}}).exports;
+		const buffer = e.mem.buffer;
+		const run = WebAssembly.promising(e.run);
+		const results = [];
+		for (let i = 0; i < 3; i++) run(i).then(v => results.push(v));
+		log.push("returned");
+		var out;
+		Promise.resolve().then(() => Promise.resolve()).then(() => new Promise(r => setTimeoutish(r))).then(() => {
+			out = [results.join(), log.join(), buffer.detached, e.mem.buffer.byteLength].join(" ");
+		});
+		function setTimeoutish(r) { let n = 20; (function tick() { n-- ? queueMicrotask(tick) : r() })() }`)
+	if want := "11,21,31 g0,f1,g1,f2,g2,f3,returned,g10,g20,g30 true 131072"; got != want {
+		t.Fatalf("got  %s\nwant %s", got, want)
+	}
+}
