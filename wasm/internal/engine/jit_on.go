@@ -1,4 +1,4 @@
-//go:build quickjs_jit && amd64 && (linux || windows) && !android && !ios
+//go:build quickjs_jit && !android && !ios && ((amd64 && (linux || windows)) || (arm64 && (darwin || linux)))
 
 package engine
 
@@ -19,7 +19,7 @@ import (
 
 const jitBuilt = true
 
-func jitAvailable() bool { return ijit.Supported() }
+func jitAvailable() bool { return ijit.RawSupported() }
 
 // codeJIT is a Code's native code: its functions' code in an arena of its
 // own, and the link table native calls go through.
@@ -108,7 +108,7 @@ func (c *Code) jitFromEnv() {
 }
 
 func (c *Code) enableJIT(threshold int) bool {
-	if !ijit.Supported() {
+	if !ijit.RawSupported() {
 		return false
 	}
 	if threshold < 0 {

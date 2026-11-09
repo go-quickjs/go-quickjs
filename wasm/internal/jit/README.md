@@ -1,18 +1,21 @@
 # WebAssembly JIT
 
 Native code for WebAssembly functions, built only with the `quickjs_jit` tag
-on amd64 (linux and windows) and used only for code that asks for it
-(`engine.Code.EnableJIT`, or `WASM_JIT` in tests). Elsewhere -- without the
-tag, on 386, on darwin/arm64 until its backend exists -- the engine's
+on amd64 (linux and windows) and arm64 (darwin and linux) and used only for
+code that asks for it (`engine.Code.EnableJIT`, or `WASM_JIT` in tests). On
+linux/arm64 it is the only native code: the JavaScript JIT is not built
+there, and the engine checks `internal/jit.RawSupported`, not `Supported`.
+Elsewhere -- without the tag, on 386, on other systems -- the engine's
 `jit_off.go` makes every hook a constant or an empty type, and the
 closure-tree interpreter (`wasm/internal/engine`) runs everything.
 
 The JavaScript and WebAssembly JITs share the lowest layer and nothing else:
-the instruction encoders (`internal/jit/asm/amd64`, checked against
-`golang.org/x/arch` by `internal/jit/verify`), the executable memory
+the instruction encoders (`internal/jit/asm/amd64` and `asm/arm64`, checked
+against `golang.org/x/arch` by `internal/jit/verify`), the executable memory
 (`internal/jit.Arena`, `PlaceRaw`, `RawCode.EnterAt`) and the rules of the
 execution boundary (`internal/jit/README.md`, "The execution boundary"):
-native code never moves SP, never touches BP or R14 (g), never executes a
+native code never moves SP, never writes the registers Go keeps (BP and R14,
+g, on amd64; FP X29, LR X30, X18 and X28, g, on arm64), never executes a
 call instruction, and is never a safe point. Each JIT has its own front end,
 tiers and Go entry points.
 
@@ -25,9 +28,9 @@ This package compiles; the engine places, enters and handles exits:
 | `reader.go` | the interpreter's body reader, which this package cannot import |
 | `compile.go` | the front end every backend shares: constructs, branches, locals, calls through the engine |
 | `stack.go` | the operand stack's entries and its register cache |
-| `compile_amd64.go` | the backend's entries, exits, traps, branches, native calls |
-| `stack_amd64.go` | its registers, and the moves between registers, slots and constants |
-| `ops_amd64.go` | the numeric and memory instructions |
+| `compile_GOARCH.go` | a backend's entries, exits, traps, branches, native calls |
+| `stack_GOARCH.go` | its registers, and the moves between registers, slots and constants |
+| `ops_GOARCH.go` | its numeric and memory instructions |
 | `engine/jit_on.go` | tiering, placement, entry, the exits' handling |
 
 ## Tiers
@@ -64,23 +67,26 @@ Every i32 and f32 in a slot or a general register has its upper half clear,
 as the interpreter leaves them, so a slot is read as the interpreter reads
 it and copied whole.
 
-Native code addresses the frame through BX (`L`).
+Native code addresses the frame through a register of its own (`L`: BX on
+amd64, X19 on arm64).
 
 **Locals.** The most used locals live in registers of their own for the
-whole function -- three integers in general registers, four floats in SSE
-ones, chosen by their uses, a use in a loop counting eight times one out of
-it -- and the rest in their slots. A local's home is the same at every
-point of the function, so control merges need nothing of it. A local.get
-copies the home into a register of the operand stack's, so that a later
-local.set does not change an entry. Before a call and an exit, the homes of
+whole function -- on amd64 three integers in general registers and four
+floats in SSE ones, on arm64 six and eight -- chosen by their uses, a use
+in a loop counting eight times one out of it -- and the rest in their
+slots. A local's home is the same at every point of the function, so
+control merges need nothing of it. A local.get copies the home into a
+register of the operand stack's, so that a later local.set does not change
+an entry. Before a call and an exit, the homes of
 the locals the function ever writes are stored into their slots (the
 others' slots hold their values already: a parameter's the caller's, a
 declared local's the prologue's zero), and after them every home is
 loaded again; the prologue loads them first.
 
 **The operand stack** is a list of entries, each a constant, a register
--- general for integers, SSE for floats -- or its position's slot, or the
-flags of a comparison that the very next br_if or if consumes. An
+-- general for integers, SSE or FP for floats -- or its position's slot, or
+the flags of a comparison that the very next br_if or if consumes: an
+integer comparison's on both, a float comparison's too on arm64. An
 instruction pops its operands, owning their registers, and pushes its
 result; when no register is free, the lowest entry holding one is stored
 into its slot. Every entry is stored into its slot when control merges --
@@ -89,6 +95,8 @@ at a call and an exit, so that at a label the whole stack is in slots, as
 in the interpreter, and no register is live.
 
 ## Registers
+
+On amd64:
 
 | Register | |
 |---|---|
@@ -104,35 +112,65 @@ in the interpreter, and no register is live.
 | X0-X14 | the cache's SSE registers |
 | SP, BP, R14 | never written |
 
-R15, R12 and R10 hold the same thing in every native frame of a level: a
-native call leaves them as they are, and an exit stores R12 and R10 into
-the context and the resumption loads all three again.
+On arm64:
+
+| Register | |
+|---|---|
+| X0 | the context, where `RawCode.EnterAt` leaves it |
+| X19 | L, the frame's slots |
+| X20 | memory 0's base |
+| X21 | memory 0's size |
+| X22 | the poll counter |
+| X23 | the return stack's next entry |
+| X16, X17, D30, D31 | scratch, never cached |
+| X27 | the encoder's temporary, for offsets and immediates an instruction cannot hold |
+| X26, X25, X24, X15, X14, X13 | homes of integer locals, else the cache's |
+| D29-D22 | homes of float locals, else the cache's |
+| X1-X15, X24-X26 | the cache's general registers, the homes last; at a call every entry is in its slot, and the call sequence uses X1 and X2 |
+| D0-D29 | the cache's FP registers |
+| SP, X29, X30, X18, X28 | never written |
+
+The registers of memory 0, the poll counter and the return stack hold the
+same thing in every native frame of a level: a native call leaves them as
+they are, and an exit stores the poll counter and the return stack's entry
+into the context and the resumption loads them all again. On arm64 memory
+0's size is one of them, as only Go grows a memory and native code
+resumes after it; a shared memory's is still read at each access.
+
+The code enters and leaves Go with a plain jump and return: on arm64 LR
+holds the return to `RawCode.EnterAt` for the whole of a level, every exit
+returns through it, and native calls jump through registers (BR) with
+return addresses made by ADR, never BL.
 
 ## The context
 
 `Ctx` is a Go struct of words, none a Go pointer, one for each level of
-native code an exec has entered (`jitLevel`), its address in DI:
+native code an exec has entered (`jitLevel`), its address in DI on amd64
+and X0 on arm64:
 
 - `L`: the running frame's slots, set before entry and stored at every exit.
 - `Links`: the Code's link table, each function index's native entry or 0.
 - `MemBase`, `MemSize`: memory 0's first byte and size, set before every
   entry; a shared memory's size is read through `MemSizePtr` at each
   access, as other threads grow it. Only Go grows a memory, so the code
-  reloads R15 after every exit and reads the size from the context.
+  reloads the base after every exit and reads the size from the context
+  (amd64) or reloads it with the base (arm64).
 - `Globals`: the instance's table of its globals' addresses.
 - `ChunkEnd`: the end of the stack chunk the frames are in.
 - `RSP`, `RSEnd`: the native return stack, shared by an exec's levels: its
-  next entry, which R10 holds in native code and an exit stores, and its
-  end -- or, if that is before, the entry at which a call would pass
-  `MaxCallDepth`.
-- `Poll`: the poll counter, the exec's, which R12 holds in native code:
-  copied in at entry and out at every exit.
+  next entry, which a register holds in native code and an exit stores,
+  and its end -- or, if that is before, the entry at which a call would
+  pass `MaxCallDepth`.
+- `Poll`: the poll counter, the exec's, which a register holds in native
+  code: copied in at entry and out at every exit.
 - The exit record: `Exit`, `Arg0`-`Arg4`, `ExitFn`, `ExitAddr`.
 
 ## Entry, exits and resumption
 
 Go enters a function through `RawCode.EnterAt` at its Go entry, which loads
-BX, R15, R12 and R10 from the context; native callers jump to its entry, past that.
+L, memory 0's base (and size, on arm64), the poll counter and the return
+stack's entry from the context; native callers jump to its entry, past
+that.
 Each function's code starts with its return stub, which stores `ExitReturn`
 and returns. Before entering, Go pushes a return stack entry whose return
 address is that stub: the function returns as every frame does, and its
@@ -143,7 +181,7 @@ stores L, the exit's kind and arguments, its own function index and the
 address to resume at, and returns to `enterNative`'s loop, which does the
 work and enters the code again at that address, as an offset in the
 function's code (`RawCode.EnterAt`). At the resume address the code reloads
-BX, R15, R12, R10 and the locals' homes. Every entry that lives past an exit
+the registers it keeps and the locals' homes. Every entry that lives past an exit
 is in its slot.
 
 | Exit | Go |
@@ -205,7 +243,8 @@ Calls through a table, of imports and of host functions are exits.
 A load or a store of memory 0 checks the effective address -- the i32
 address, zero-extended, plus the offset, plus the access's size, computed in
 64 bits -- against the memory's size, and goes to a trap stub past it. The
-access is `[R15 + address + offset]`. Loads and stores of memories other
+access is `[R15 + address + offset]` on amd64; on arm64 the offset is added
+to the address first, in 64 bits, and the access is `[X20 + that]`. Loads and stores of memories other
 than 0, and of 64-bit memories, are refused; the bulk instructions of any
 memory are exits.
 
@@ -221,7 +260,12 @@ pause.
 ## Floats
 
 The numerics are the interpreter's, bit for bit where the spec fixes the
-bits:
+bits, on each architecture: the interpreter's operators compile to its own
+instructions, whose NaNs differ from the other's (an arm64 operation with a
+signaling NaN operand returns that NaN quieted, ahead of a quiet one; x86's
+returns its first operand's).
+
+On amd64:
 - add, sub, mul, div, sqrt, and the conversions between f32 and f64: the
   SSE instruction Go compiles the interpreter's operator to.
 - ceil, floor, trunc, nearest: ROUNDSS and ROUNDSD, which quiet a NaN as the
@@ -239,6 +283,35 @@ bits:
 
 clz and ctz are BSR and BSF with a CMOV for 0; popcnt is POPCNT, checked.
 
+On arm64, with the FPCR Go leaves (no default NaN, no flush to zero, no
+alternate handling):
+- add, sub, mul, div, sqrt and the conversions between f32 and f64: the
+  FP instruction Go compiles the interpreter's operator to.
+- ceil, floor, trunc, nearest: FRINTP, FRINTM, FRINTZ and FRINTN, which
+  quiet a NaN as `a + a` does.
+- min, max: FMIN and FMAX. Their NaN is the one FADD of the same operands
+  gives -- both process NaNs alike, a signaling NaN ahead of a quiet one,
+  the first operand ahead of the second -- which is the interpreter's
+  `a + b`; and they order -0 below +0, as the interpreter's OR and AND of
+  equal operands' bits do.
+- abs, neg, copysign: AND, EOR and ORR of the sign bit in a general
+  register, never FABS or FNEG.
+- The trapping truncations compare with the interpreter's bounds in the
+  operand's own type, in which each is exact, trapping on NaN with the
+  conditions an unordered comparison makes true (LT, LE), then FCVTZS or
+  FCVTZU, exact in range.
+- The saturating truncations are FCVTZS and FCVTZU alone: they clamp to the
+  result's range and give 0 for NaN, as the interpreter's do.
+- The conversions of integers are SCVTF and UCVTF, one rounding, the 64-bit
+  unsigned ones included.
+- A float comparison leaves its flags, as an integer one does, for a br_if
+  or if: MI (lt), LS (le), GT, GE and EQ are false when unordered, NE true.
+
+clz is CLZ, ctz CLZ of the bits reversed (RBIT), popcnt the sum of each
+byte's CNT (CNT, ADDV). An f32 in an FP register has the rest of the
+register clear, as every instruction that writes its S view leaves it, so it
+is stored and loaded as a word, as an integer is.
+
 ## Refusals
 
 A function is refused whole when it has:
@@ -254,7 +327,7 @@ A function is refused whole when it has:
 | `multi-memory` | a load or a store of a memory other than 0 |
 | `asmjs` | V8's asm.js opcodes |
 | `f16` | f32.load_f16, f32.store_f16 |
-| `cpu` | popcnt without POPCNT, rounding without SSE4.1 |
+| `cpu` | popcnt without POPCNT, rounding without SSE4.1 (amd64) |
 | `frame` | an operand stack deeper than the interpreter's frame for it |
 | `size` | code past `MaxCodeBytes`, a megabyte |
 | `internal` | a panic of the compiler's |
@@ -289,7 +362,7 @@ WASM_SPEC_DIR=/path/to/spec WASM_THREADS_DIR=/path/to/threads WASM_JIT=eager \
   go test -tags quickjs_jit ./wasm/internal/spectest -count=1 -run TestSpec -v
 WASM_SPEC_DIR=/path/to/spec go test -tags quickjs_jit ./wasm/internal/spectest -run TestJITDifferential -v
 go test -tags quickjs_jit ./wasm/internal/engine -run JIT
-(cd internal/jit/verify && go test -tags quickjs_jit -run TestAMD64 .)
+(cd internal/jit/verify && go test -run 'TestAMD64|TestARM64' -tags quickjs_jit .)
 ```
 
 `TestJITDifferential` runs every spec module that links with the spectest

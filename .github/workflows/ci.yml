@@ -264,7 +264,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-15]
+        os: [ubuntu-latest, windows-latest, macos-15, ubuntu-24.04-arm]
         arch: [native]
         include:
           - os: ubuntu-latest
@@ -305,10 +305,10 @@ jobs:
           WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" WASM_THREADS_DIR="$GITHUB_WORKSPACE/wasm-threads" go test ./wasm/internal/spectest ./wasm/internal/wast -count=1 -v 2>&1 | tee spec.log | grep -E "spec:|scripts parsed|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
 
       # Every function compiled at its first call, where the wasm JIT runs
-      # (amd64 on Linux and Windows), and the JIT checked against the
-      # interpreter call by call.
+      # (amd64 on Linux and Windows, arm64 on macOS and Linux), and the JIT
+      # checked against the interpreter call by call.
       - name: Run the spec scripts under the JIT
-        if: matrix.arch == 'native' && matrix.os != 'macos-15'
+        if: matrix.arch == 'native'
         shell: bash
         run: |
           WASM_JIT=eager WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" WASM_THREADS_DIR="$GITHUB_WORKSPACE/wasm-threads" go test -tags quickjs_jit ./wasm/internal/spectest ./wasm/internal/engine -count=1 -v 2>&1 | tee jit.log | grep -E "spec:|jit:|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
