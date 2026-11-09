@@ -494,6 +494,8 @@ result is the interpreter's by construction. The backends compile natively:
 | v128.const, the loads and stores | all |
 | splat, extract_lane, replace_lane | all |
 | bitwise | not, and, andnot, or, xor, bitselect, any_true |
+| float lanes | add, sub, mul, div, sqrt, abs, neg, min, max, pmin, pmax, ceil, floor, trunc, nearest, the comparisons |
+| conversions | convert, trunc_sat, demote, promote |
 | integer lanes | add, sub, saturating add and sub, mul, neg, abs, min, max, avgr_u, popcnt, all_true, bitmask, shl, shr_s, shr_u, the comparisons, narrow, extend, extmul, extadd_pairwise, dot_i16x8_s, q15mulr_sat_s, swizzle, shuffle |
 
 and leave the rest to the exit.
@@ -512,7 +514,26 @@ PSHUFB of each operand, the other's lanes selecting 0, ORed. On arm64:
 i64x2.mul lane by lane in general registers; shifts by SSHL and USHL of
 the count, negated to shift right; bitmask by each negative lane's bit,
 summed; shuffle by TBL of a two-register table, the operands copied into
-V30 and V31. `TestJITSIMDBits` (engine) runs every SIMD
+V30 and V31.
+
+The float lanes are the scalar operations' lane by lane (see Floats): the
+interpreter's operators on each lane compile to the scalar forms of the
+same instructions, whose NaNs and zeros the packed forms give in each
+lane. abs and neg are masks of the sign bits. On amd64 min and max are
+MINPS and MAXPS both ways round, ORed (min) or ANDed (max) so that -0 is
+below +0, and the lanes' sum, the interpreter's `a + b`, where a NaN is;
+pmin and pmax are MINPS and MAXPS of the second operand and the first;
+the roundings ROUNDPS and ROUNDPD. The unsigned conversion of i32 lanes
+to f32 converts the high 16 bits, scaled exactly, and the low 16, and
+rounds their sum once; to f64, each lane is the low word of 2**52 + u, less
+2**52. trunc_sat of f32 lanes makes NaN 0 and complements CVTTPS2DQ's
+0x80000000 where a lane is at or past 2**31; unsigned, the lanes at or past
+2**31 are converted less 2**31 with the top bit set after, those at or past
+2**32 all ones; of f64 lanes, clamped first, the unsigned ones by the low
+word of 2**52 plus the truncated lane. On arm64 every float lane
+instruction is ASIMD's own -- FMIN and FMAX for min and max, FCVTZS and
+FCVTZU, narrowed by SQXTN and UQXTN, for trunc_sat -- but pmin and pmax,
+an FCMGT mask selecting with BSL. `TestJITSIMDBits` (engine) runs every SIMD
 instruction that is not a load, a store or a constant, relaxed ones
 included, on the edges of each lane shape and on random bits, interpreted
 and natively, requires the same bits, and logs the instructions that went

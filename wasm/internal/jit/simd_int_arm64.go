@@ -225,7 +225,7 @@ func (c *compiler) simdInt(op opcode.Opcode) bool {
 		c.r.pc += 16
 		c.shuffle(lanes)
 	default:
-		return false
+		return c.simdFloat(op)
 	}
 	return true
 }
