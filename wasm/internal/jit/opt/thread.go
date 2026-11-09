@@ -19,12 +19,21 @@ import "slices"
 // definitions meet (repairPhis).
 func thread(f *Func) {
 	ws := f.ws
-	computeUses(f)
 	changed := false
+	// The uses are counted where a block may be threadable, again after a
+	// block is threaded.
+	counted := false
 	// The blocks do not change while threading: repairPhis makes values
 	// only.
 	for _, h := range f.Blocks {
-		if h.dead || (h.Kind != BIf && h.Kind != BSwitch) || len(h.Phis) == 0 || !threadable(f, h) {
+		if h.dead || (h.Kind != BIf && h.Kind != BSwitch) || len(h.Phis) == 0 || !allPure(h) {
+			continue
+		}
+		if !counted {
+			computeUses(f)
+			counted = true
+		}
+		if !threadable(f, h) {
 			continue
 		}
 		// count is how many times each block is H's predecessor; gone the
@@ -72,7 +81,7 @@ func thread(f *Func) {
 		removePreds(h, gone)
 		changed = true
 		repairPhis(f, h, ends)
-		computeUses(f)
+		counted = false
 	}
 	if changed {
 		removeUnreachable(f)
@@ -122,15 +131,20 @@ func removePreds(b *Block, gone []int32) {
 	}
 }
 
-// threadable reports whether h's values are pure and used by h alone: its
-// other values and its branch.
-func threadable(f *Func, h *Block) bool {
-	ws := f.ws
+// allPure reports whether h's values are pure.
+func allPure(h *Block) bool {
 	for _, v := range h.Values {
 		if !v.Pure() {
 			return false
 		}
 	}
+	return true
+}
+
+// threadable reports whether h's values, which are pure, are used by h
+// alone: its other values and its branch. The uses are counted.
+func threadable(f *Func, h *Block) bool {
+	ws := f.ws
 	// local counts the uses within h of h's values, by value ID: those of
 	// this call are marked with its stamp.
 	ws.stamp++

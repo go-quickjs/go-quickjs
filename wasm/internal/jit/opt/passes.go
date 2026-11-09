@@ -33,7 +33,6 @@ func Optimize(f *Func, check func(pass string)) {
 	run("loops", PhaseLoops, func(f *Func) {
 		findLoops(f, dominators(f))
 		loopDepths(f)
-		computeUses(f)
 	})
 }
 
@@ -49,9 +48,11 @@ func resolve(v *Value) *Value {
 // trivial phi -- one whose arguments are all one value, or itself -- by
 // that value, removing them.
 func copyelim(f *Func) {
+	copies := false
 	for changed := true; changed; {
 		changed = false
 		for _, b := range f.Blocks {
+			made := false
 			for _, p := range b.Phis {
 				var same *Value
 				trivial := true
@@ -68,10 +69,11 @@ func copyelim(f *Func) {
 				}
 				if trivial && same != nil {
 					p.setCopy(same)
-					changed = true
+					made = true
 				}
 			}
-			if len(b.Phis) > 0 {
+			if made {
+				changed, copies = true, true
 				// A phi made a copy leaves the phis: its uses are
 				// rewritten below, and it is in no list.
 				keep := b.Phis[:0]
@@ -84,6 +86,23 @@ func copyelim(f *Func) {
 				b.Phis = keep
 			}
 		}
+	}
+	// Without a copy among the values or the phis there is nothing to
+	// rewrite: a value refers to a copy only while the copy is in its
+	// block's values, or is a phi this pass made one.
+	for _, b := range f.Blocks {
+		if copies {
+			break
+		}
+		for _, v := range b.Values {
+			if v.Op == OpCopy {
+				copies = true
+				break
+			}
+		}
+	}
+	if !copies {
+		return
 	}
 	for _, b := range f.Blocks {
 		for _, v := range b.Phis {
@@ -153,6 +172,7 @@ func dce(f *Func) {
 	f.ws.dceWork = work
 	// A phi that only phis that are dead use, its own self included, was
 	// counted as used: those in cycles of phis are found next.
+	cycles := false
 	for _, b := range f.Blocks {
 		for _, v := range b.Phis {
 			if dead[v.ID] || v.Uses == 0 {
@@ -167,6 +187,7 @@ func dce(f *Func) {
 			if self == v.Uses {
 				dead[v.ID] = true
 				ndead++
+				cycles = true
 			}
 		}
 	}
@@ -179,7 +200,11 @@ func dce(f *Func) {
 		b.Phis = slices.DeleteFunc(b.Phis, isDead)
 		b.Values = slices.DeleteFunc(b.Values, isDead)
 	}
-	computeUses(f)
+	// The values the work list removed took their uses with them; the
+	// phis only themselves used did not.
+	if cycles {
+		computeUses(f)
+	}
 }
 
 // fold folds constants, simplifies identities, and branches on constants,
