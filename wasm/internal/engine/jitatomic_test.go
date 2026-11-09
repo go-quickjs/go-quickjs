@@ -259,10 +259,12 @@ func atomicWorkSrc(mem1 bool) string {
   (func (export "afterGrow") (result i32)
     (loop $spin (br_if $spin (i32.eqz (i32.atomic.load %[2]s %[14]s))))
     (i32.atomic.rmw.add %[2]s %[15]s (i32.const 5)))
+  ;; The word past the old end is read before the flag lets the waiter
+  ;; add to it.
   (func (export "grow") (result i32)
     (drop (memory.grow %[2]s %[16]s))
-    (i32.atomic.store %[2]s %[14]s (i32.const 1))
-    (i32.atomic.load %[2]s %[15]s)))`, imports, m, a(0), a(8), a(17), a(18), a(20), a(24), a(32), a(40), a(48), a(52), a(56), a(64), a(65536+8), a(1))
+    (i32.atomic.load %[2]s %[15]s)
+    (i32.atomic.store %[2]s %[14]s (i32.const 1))))`, imports, m, a(0), a(8), a(17), a(18), a(20), a(24), a(32), a(40), a(48), a(52), a(56), a(64), a(65536+8), a(1))
 }
 
 // Goroutines running native code on one shared memory, each in an instance
