@@ -415,10 +415,13 @@ closures: each expression a tree of typed nodes, each statement returning
 whether to go on, branch or return. The baseline JIT (`wasm/internal/jit`)
 compiles a function to native code in one pass over its validated body, with
 a register cache of the operand stack over the interpreter's own frames, so a
-call crosses between the tiers in either direction. On amd64 the optimizing
-tier (`wasm/internal/jit/opt`) recompiles a function whose baseline code
-was called 30,000 times, or whose loops ran long, from SSA with a register
-allocator, in the baseline code's place. Their designs are in
+call crosses between the tiers in either direction. On amd64 an optimizing
+tier (`wasm/internal/jit/opt`), off by default for now, recompiles a
+function whose baseline code was called 30,000 times, or whose loops ran
+long, from SSA with a register allocator, in the baseline code's place:
+`WASM_JIT_OPT=on` turns it on. It roughly halves the time of the Go-built
+programs in steady state, but its compiles still make a short program's
+first run slower, which it waits on cheaper compiles to change. Their designs are in
 [the JIT's README](../wasm/internal/jit/README.md) and
 [the optimizing tier's](../wasm/internal/jit/opt/README.md).
 

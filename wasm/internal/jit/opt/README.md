@@ -313,7 +313,10 @@ those calls natively. The frames that began in the baseline code run on in it: t
 replaced code stays placed (`nativeFn.prev`), and an exit resumes in the
 code that holds its address.
 
-The count is `DefaultOptThreshold`, 30,000 calls, by default;
+The tier is off by default: its compiles still make a short program's first
+run slower (json's 135 ms to 161, interp's 57 to 67) before they pay, and
+it waits for cheaper compiles. Turned on (`WASM_JIT_OPT=on`), the count is
+`DefaultOptThreshold`, 30,000 calls;
 `Code.SetOptThreshold(n)` sets another: 0 compiles every function the
 tier accepts with it at once, the baseline only those it refuses, and a
 negative n turns the tier off. `WASM_JIT_OPT` sets it for tests and
