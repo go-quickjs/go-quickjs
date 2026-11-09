@@ -253,10 +253,9 @@ jobs:
         working-directory: internal/jit/verify
         run: go test -tags quickjs_jit -count=1 ./...
 
-  # test262 with the JIT made to compile on the first call, poll Go every
-  # few back edges and finish in the interpreter from wherever it got to
-  # (QJS_JIT_STRESS, internal/vm). The runner fails a run in which no
-  # test ran native code.
+  # The WebAssembly spec and threads suites, interpreted and with every
+  # function compiled at its first call, and the interpreter and the JIT
+  # compared over every spec module's exports.
   wasm-spec:
     name: WebAssembly spec tests (${{ matrix.os }}, ${{ matrix.arch }})
     runs-on: ${{ matrix.os }}
@@ -314,6 +313,10 @@ jobs:
           WASM_JIT=eager WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" WASM_THREADS_DIR="$GITHUB_WORKSPACE/wasm-threads" go test -tags quickjs_jit ./wasm/internal/spectest ./wasm/internal/engine -count=1 -v 2>&1 | tee jit.log | grep -E "spec:|jit:|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
           WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" go test -tags quickjs_jit ./wasm/internal/spectest -run TestJITDifferential -count=1 -v 2>&1 | tee diff.log | grep -E "modules|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
 
+  # test262 with the JIT made to compile on the first call, poll Go every
+  # few back edges and finish in the interpreter from wherever it got to
+  # (QJS_JIT_STRESS, internal/vm). The runner fails a run in which no
+  # test ran native code.
   jit-conformance:
     name: JIT test262 under stress (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
