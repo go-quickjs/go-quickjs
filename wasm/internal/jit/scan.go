@@ -101,7 +101,18 @@ func scan(m *module.Module, fn uint32, feat Features) (locals []module.ValueType
 				refuse(RefuseAtomics, "%s", op.Name())
 			}
 		case opcode.PrefixGC:
-			refuse(RefuseGC, "%s", op.Name())
+			if op < opcode.StructNew || op > opcode.I31GetU {
+				refuse(RefuseGC, "%s", op.Name())
+			}
+			switch op {
+			case opcode.StructGet, opcode.StructGetS, opcode.StructGetU, opcode.StructSet:
+				ti := r.u32()
+				checkType(m.Types[ti].Struct.Fields[r.u32()].Type, "field")
+				continue
+			case opcode.ArrayGet, opcode.ArrayGetS, opcode.ArrayGetU, opcode.ArraySet:
+				checkType(m.Types[r.u32()].Array.Elem.Type, "element")
+				continue
+			}
 		case opcode.PrefixAsmJS:
 			refuse(RefuseAsmJS, "%s", op.Name())
 		}

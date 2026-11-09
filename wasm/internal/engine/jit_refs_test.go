@@ -111,16 +111,16 @@ func sameRef(a, b Ref) bool {
 // every run.
 var refHost1, refHost2 = HostRef("one"), HostRef("two")
 
-// refCases are refsWAT's calls, with their arguments.
-func refCases() []struct {
+// jitCase is a call of an export, with its arguments.
+type jitCase struct {
 	name string
 	args []Val
-} {
+}
+
+// refCases are refsWAT's calls.
+func refCases() []jitCase {
 	h1, h2 := refHost1, refHost2
-	return []struct {
-		name string
-		args []Val
-	}{
+	return []jitCase{
 		{"apply", []Val{{N: 1}, {N: 10}}}, {"apply", []Val{{N: 0}, {N: 10}}},
 		{"tail", []Val{{N: 1}, {N: 5}}}, {"tail", []Val{{N: 0}, {N: 5}}},
 		{"loop", []Val{{N: 1000}}},
@@ -138,10 +138,9 @@ func refCases() []struct {
 	}
 }
 
-// runRefCases runs refCases on inst, returning each call's results and
-// error.
-func runRefCases(t *testing.T, inst *Instance) (out [][]Val, errs []error) {
-	for _, c := range refCases() {
+// runCases runs cases on inst, returning each call's results and error.
+func runCases(t *testing.T, inst *Instance, cases []jitCase) (out [][]Val, errs []error) {
+	for _, c := range cases {
 		res, err := refCall(t, inst, c.name, c.args...)
 		out = append(out, res)
 		errs = append(errs, err)
@@ -149,9 +148,8 @@ func runRefCases(t *testing.T, inst *Instance) (out [][]Val, errs []error) {
 	return out, errs
 }
 
-func sameOutcomes(t *testing.T, what string, ri [][]Val, ei []error, rj [][]Val, ej []error) {
+func sameOutcomes(t *testing.T, what string, cases []jitCase, ri [][]Val, ei []error, rj [][]Val, ej []error) {
 	t.Helper()
-	cases := refCases()
 	for i := range ri {
 		var ti, tj *Trap
 		if errors.As(ei[i], &ti) != errors.As(ej[i], &tj) || (ti != nil && ti.Code != tj.Code) || (ei[i] == nil) != (ej[i] == nil) {
@@ -167,10 +165,10 @@ func sameOutcomes(t *testing.T, what string, ri [][]Val, ei []error, rj [][]Val,
 
 // Native code that holds references computes what the interpreter does.
 func TestJITReferences(t *testing.T) {
-	want, werr := runRefCases(t, interpretedInstance(t, refsWAT))
+	want, werr := runCases(t, interpretedInstance(t, refsWAT), refCases())
 	inst := nativeInstance(t, refsWAT)
-	got, gerr := runRefCases(t, inst)
-	sameOutcomes(t, "native", want, werr, got, gerr)
+	got, gerr := runCases(t, inst, refCases())
+	sameOutcomes(t, "native", refCases(), want, werr, got, gerr)
 	for _, name := range []string{"apply", "tail", "loop", "isnull", "brnull", "brnonnull", "asnonnull", "eq", "swap", "grow", "fill", "get", "shuffle"} {
 		if !nativeRan(inst, name) {
 			t.Errorf("%s has no native code", name)
@@ -210,20 +208,25 @@ func countExits(f func()) int64 {
 // marks, which neither leaves native code nor calls Go for the marking's
 // sake, and its results are the same.
 func TestJITSameWorkWhileMarking(t *testing.T) {
-	var idle [][]Val
-	var idleErr []error
-	idleExits := countExits(func() { idle, idleErr = runRefCases(t, nativeInstance(t, refsWAT)) })
-	for _, clobber := range []bool{false, true} {
-		t.Run(map[bool]string{false: "marking", true: "clobbered"}[clobber], func(t *testing.T) {
-			jitMarkingForTest(t, clobber)
-			var got [][]Val
-			var gotErr []error
-			exits := countExits(func() { got, gotErr = runRefCases(t, nativeInstance(t, refsWAT)) })
-			sameOutcomes(t, "marking", idle, idleErr, got, gotErr)
-			if exits != idleExits {
-				t.Fatalf("%d exits while marking, %d idle", exits, idleExits)
-			}
-		})
+	for _, mod := range []struct {
+		name, src string
+		cases     func() []jitCase
+	}{{"refs", refsWAT, refCases}, {"gc", gcWAT, gcCases}} {
+		var idle [][]Val
+		var idleErr []error
+		idleExits := countExits(func() { idle, idleErr = runCases(t, nativeInstance(t, mod.src), mod.cases()) })
+		for _, clobber := range []bool{false, true} {
+			t.Run(mod.name+map[bool]string{false: "/marking", true: "/clobbered"}[clobber], func(t *testing.T) {
+				jitMarkingForTest(t, clobber)
+				var got [][]Val
+				var gotErr []error
+				exits := countExits(func() { got, gotErr = runCases(t, nativeInstance(t, mod.src), mod.cases()) })
+				sameOutcomes(t, "marking", mod.cases(), idle, idleErr, got, gotErr)
+				if exits != idleExits {
+					t.Fatalf("%d exits while marking, %d idle", exits, idleExits)
+				}
+			})
+		}
 	}
 }
 

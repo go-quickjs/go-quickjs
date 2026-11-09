@@ -59,6 +59,21 @@ type Request struct {
 type Layout struct {
 	// TableElems is a table's elements: their address, then their number.
 	TableElems int32
+	// I31Mark is the pointer word of every i31.
+	I31Mark uint64
+	// An object begins with a header: Kind is its kind's byte, KindStruct
+	// and KindArray the values that say a struct and an array; RTT the
+	// pointer to its type's runtime information, nil for an object of no
+	// defined type, whose Supers are the canonical indices, 4 bytes each,
+	// of the type's supertypes by depth, its own last: their address, then
+	// their number.
+	Kind                  int32
+	KindStruct, KindArray uint8
+	RTT, Supers           int32
+	// An array's ArrayLen is its length, a word; ArrayBytes the address
+	// of its number elements, packed; ArrayRefs its reference elements:
+	// their address, then their number.
+	ArrayLen, ArrayBytes, ArrayRefs int32
 }
 
 // Code is a function's native code. Its offsets are from its start.
@@ -633,7 +648,7 @@ func (c *compiler) instr() {
 	case opcode.DataDrop, opcode.ElemDrop, opcode.MemoryFill, opcode.TableSize, opcode.TableGrow, opcode.TableFill:
 		c.goOp(op, at, uint64(c.r.u32()), 0)
 	default:
-		if c.numeric(op, at) || c.memoryOp(op, at) || c.atomicOp(op, at) || c.refOp(op, at) {
+		if c.numeric(op, at) || c.memoryOp(op, at) || c.atomicOp(op, at) || c.refOp(op, at) || c.gcOp(op, at) {
 			return
 		}
 		refuse(RefuseOther, "%s", op.Name())
@@ -725,6 +740,20 @@ func (c *compiler) goOp(op opcode.Opcode, at uint32, x, y uint64) {
 		nargs, result = 2, idx(tab64(uint32(x)))
 	case opcode.TableFill:
 		nargs = 3
+	case opcode.StructNew:
+		nargs, result = len(c.m.Types[x].Struct.Fields), module.KindRef
+	case opcode.StructNewDefault:
+		result = module.KindRef
+	case opcode.ArrayNew, opcode.ArrayNewData, opcode.ArrayNewElem:
+		nargs, result = 2, module.KindRef
+	case opcode.ArrayNewDefault:
+		nargs, result = 1, module.KindRef
+	case opcode.ArrayNewFixed:
+		nargs, result = int(y), module.KindRef
+	case opcode.ArrayFill, opcode.ArrayInitData, opcode.ArrayInitElem:
+		nargs = 4
+	case opcode.ArrayCopy:
+		nargs = 5
 	}
 	c.spillAll()
 	base := len(c.stack) - nargs

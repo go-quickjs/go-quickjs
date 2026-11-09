@@ -32,7 +32,10 @@ This package compiles; the engine places, enters and handles exits:
 | `stack_GOARCH.go` | its registers, and the moves between registers, slots and constants |
 | `ops_GOARCH.go` | its numeric and memory instructions |
 | `atomic.go`, `atomic_GOARCH.go` | the atomic instructions: what they are, and a backend's code for them |
+| `refs.go`, `refs_GOARCH.go` | references: frames' reference slots, the reference instructions, the stores of pointer words and the barrier routine |
+| `gc.go`, `gc_GOARCH.go` | the GC instructions: fields, elements, i31s, tests and casts |
 | `engine/jit_on.go` | tiering, placement, entry, the exits' handling |
+| `engine/jit_gc.go` | the GC instructions Go runs for native code |
 
 ## Tiers
 
@@ -277,7 +280,7 @@ is in its slot.
 | `ExitPoll` | `pollContext`, the context's cancellation |
 | `ExitCallRef` | call_ref: finds the function, trapping on null, and calls it |
 | `ExitTailRef` | return_call_ref, as `ExitTailIndirect` |
-| `ExitOp` | memory.size, memory.grow, memory.init, memory.copy, memory.fill, data.drop, table.size, table.grow, table.fill, table.init, table.copy, elem.drop, memory.atomic.wait32, memory.atomic.wait64, memory.atomic.notify, on the frame's slots; an atomic instruction's offset is the 64-bit `Arg2` |
+| `ExitOp` | memory.size, memory.grow, memory.init, memory.copy, memory.fill, data.drop, table.size, table.grow, table.fill, table.init, table.copy, elem.drop, struct.new, struct.new_default, the array.new instructions, array.fill, array.copy, array.init_data, array.init_elem, memory.atomic.wait32, memory.atomic.wait64, memory.atomic.notify, on the frame's slots; an atomic instruction's offset is the 64-bit `Arg2` |
 
 A trap's site stores its offset and jumps to the function's stub for the
 trap's code; there is no resumption.
@@ -458,8 +461,8 @@ A function is refused whole when it has:
 
 | Reason | What |
 |---|---|
-| `simd` | a v128 value anywhere -- local, parameter, result, block type, callee's signature, global -- or any SIMD instruction |
-| `gc` | any GC instruction |
+| `simd` | a v128 value anywhere -- local, parameter, result, block type, callee's signature, global, a field or element read or written -- or any SIMD instruction |
+| `gc` | a GC instruction past the GC proposal's: custom descriptors, strings, ref.i31_shared |
 | `exceptions` | try_table, throw, throw_ref, and the legacy try, catch, catch_all, delegate, rethrow |
 | `atomics` | the struct and array atomic instructions |
 | `asmjs` | V8's asm.js opcodes |
@@ -472,6 +475,36 @@ A function is refused whole when it has:
 
 `engine.ReadJITStats` counts compiles and refusals by reason; `TestSpec`
 logs them when `WASM_JIT` is set.
+
+## GC objects
+
+The engine's objects (`engine/gc.go`) are read in place, at the offsets
+the engine gives (`Layout`): a struct is cells of two words, its header
+first, a field's number in its cell's second word, zero-extended, a
+reference the whole cell; an array is a header, its length, and its
+elements in memory of their own, numbers packed, references two words
+each. struct.get, struct.set, array.get, array.set and array.len are
+native: the reference's pointer word tested for null (a trap), an array's
+index against its length (a trap), the field or element loaded or stored
+as its storage type, a reference through the barrier. ref.i31 stores the
+i31 mark's address and the value's low 31 bits; i31.get reads the
+payload. any.convert_extern and extern.convert_any are nothing.
+
+ref.test, ref.cast, br_on_cast and br_on_cast_fail are native too: null
+matches a nullable type; a top type (any, extern, func, exn) any
+reference; a bottom type none; i31 the mark; eq an i31, a struct or an
+array, and struct and array the header's kind byte; a defined type an
+object whose header's runtime information has, at the type's depth among
+its supertypes, the type's canonical index -- the depth and the index
+known when the code is compiled.
+
+What allocates -- struct.new, struct.new_default, array.new,
+array.new_default, array.new_fixed, array.new_data, array.new_elem -- and
+array.fill, array.copy, array.init_data and array.init_elem run in Go
+(`ExitOp`): the engine's routines make the objects, charging the
+instance's budget as the interpreter's do, with the native frames'
+reference slots counted among what is live, and leave the result in its
+stack position's reference slot.
 
 ## Concurrency and memory
 

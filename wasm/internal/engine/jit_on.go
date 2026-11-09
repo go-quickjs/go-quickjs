@@ -91,7 +91,19 @@ type jitLevel struct {
 // jitLayout is where the engine's objects keep what native code reads.
 var jitLayout = &wjit.Layout{
 	TableElems: int32(unsafe.Offsetof(Table{}.Elems)),
+	I31Mark:    uint64(uintptr(unsafe.Pointer(&i31Mark))),
+	Kind:       int32(unsafe.Offsetof(header{}.kind)),
+	KindStruct: uint8(ObjStruct),
+	KindArray:  uint8(ObjArray),
+	RTT:        int32(unsafe.Offsetof(header{}.rtt)),
+	Supers:     int32(unsafe.Offsetof(rtt{}.supers)),
+	ArrayLen:   int32(unsafe.Offsetof(Array{}.n)),
+	ArrayBytes: int32(unsafe.Offsetof(Array{}.b)),
+	ArrayRefs:  int32(unsafe.Offsetof(Array{}.r)),
 }
+
+// A type's supertypes are 4 bytes each, as native code reads them.
+var _ [unsafe.Sizeof(module.CanonicalIndex(0)) - 4]struct{}
 
 // jitWriteBarrier and jitStoreRef are the write barrier's flag and store
 // native code is compiled with: the runtime's (internal/jit), or a test's.
@@ -926,7 +938,9 @@ func (x *exec) jitOp(inst *Instance, op opcode.Opcode, a uint32, imm uint64, f *
 			s[i] = val
 		}
 	default:
-		panic("wasm jit: no Go operation " + op.Name())
+		if !x.jitGCOp(inst, op, a, b, f, slot) {
+			panic("wasm jit: no Go operation " + op.Name())
+		}
 	}
 }
 
