@@ -326,8 +326,9 @@ func computeUses(f *Func) {
 	}
 }
 
-// cutEdge is an edge loopDepths has cut.
-type cutEdge struct{ from, to int32 }
+// cutKey is the key of the edge from one block to another among the edges
+// loopDepths has cut.
+func cutKey(from, to *Block) uint64 { return uint64(uint32(from.ID))<<32 | uint64(uint32(to.ID)) }
 
 // loopDepths sets each block's depth to the number of loops it is in, by
 // a loop nesting forest as Steensgaard's: a loop is a strongly connected
@@ -345,11 +346,8 @@ func loopDepths(f *Func) {
 	for _, b := range f.Blocks {
 		b.Depth = 0
 	}
-	if ws.cut == nil {
-		ws.cut = map[cutEdge]bool{}
-	}
-	cut := ws.cut
-	clear(cut)
+	cut := &ws.cut
+	cut.reset(16)
 	// member marks the blocks of the component being nested; inSCC those
 	// of a component found within it.
 	member := ws.blockMarks(f)
@@ -367,7 +365,7 @@ func loopDepths(f *Func) {
 		}
 		g := gen
 		in := func(from, to *Block) bool {
-			return member[to.ID] == g && (len(cut) == 0 || !cut[cutEdge{from.ID, to.ID}])
+			return member[to.ID] == g && (cut.n == 0 || !cut.at(cutKey(from, to)))
 		}
 		for _, scc := range sc.components(blocks, in) {
 			if len(scc) == 1 && !slices.ContainsFunc(scc[0].Succs, func(s *Block) bool { return s == scc[0] && in(s, s) }) {
@@ -402,7 +400,7 @@ func loopDepths(f *Func) {
 			for _, b := range entries {
 				for _, p := range b.Preds {
 					if inSCC[p.ID] == sccGen {
-						cut[cutEdge{p.ID, b.ID}] = true
+						cut.set(cutKey(p, b), true)
 					}
 				}
 			}

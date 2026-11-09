@@ -21,7 +21,7 @@ type workspace struct {
 	// incomplete are the blocks' incomplete phis.
 	incomplete arena[incompletePhi]
 	// defs are the locals' values at the blocks' ends, by defKey.
-	defs map[uint64]*Value
+	defs u64map[*Value]
 
 	// The control flow graph's: marks by block ID (blockMarks), a work
 	// list, a walk's frames, the dominator tree, the natural loops, and
@@ -31,7 +31,7 @@ type workspace struct {
 	frames   []orderFrame
 	dom      domTree
 	loops    []natLoop
-	cut      map[cutEdge]bool
+	cut      u64map[bool]
 	inSCC    []int32
 	scc      sccs
 	sccLists arena[[]*Block]
@@ -50,7 +50,7 @@ type workspace struct {
 	localMark []uint32
 	localUses []int32
 	vars      []int32
-	start     map[uint64]*Value
+	start     u64map[*Value]
 	made      []madePhi
 
 	gen genScratch
@@ -71,11 +71,6 @@ func (ws *workspace) reset() {
 	ws.types.reset()
 	ws.incomplete.reset()
 	ws.sccLists.reset()
-	if ws.defs == nil {
-		ws.defs = map[uint64]*Value{}
-	} else {
-		clear(ws.defs)
-	}
 }
 
 // blockMarks returns a mark for each of f's blocks, by ID, all 0. Its

@@ -192,6 +192,8 @@ func build(ws *workspace, m *module.Module, fn uint32) *Func {
 	bd := &ws.bd
 	bd.ws, bd.m, bd.f = ws, m, &ws.f
 	bd.f.ws = ws
+	// About an entry for every two bytes of the body.
+	ws.defs.reset(int(m.Functions[fn].Code.Len) / 2)
 	f := bd.build(fn)
 	lap(PhaseBuild)
 	return f
@@ -247,11 +249,11 @@ func (bd *builder) build(fn uint32) *Func {
 func defKey(k int32, b *Block) uint64 { return uint64(b.ID)<<32 | uint64(uint32(k)) }
 
 func (bd *builder) writeVar(k int32, b *Block, v *Value) {
-	bd.ws.defs[defKey(k, b)] = v
+	bd.ws.defs.set(defKey(k, b), v)
 }
 
 func (bd *builder) readVar(k int32, b *Block) *Value {
-	if v, ok := bd.ws.defs[defKey(k, b)]; ok {
+	if v, ok := bd.ws.defs.get(defKey(k, b)); ok {
 		return v
 	}
 	var v *Value

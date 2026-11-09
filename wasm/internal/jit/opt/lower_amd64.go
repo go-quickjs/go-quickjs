@@ -79,10 +79,8 @@ var (
 	offExitAddr  = int32(unsafe.Offsetof(wjit.Ctx{}.ExitAddr))
 )
 
-type trapKey struct {
-	code uint64
-	at   uint32
-}
+// trapKey is a trap stub's key: its code and its offset.
+func trapKey(code uint64, at uint32) uint64 { return code<<32 | uint64(at) }
 
 // genScratch is the lowering's part of a workspace: the lowering's state,
 // the allocator, its description of the function, and the assembler.
@@ -116,10 +114,12 @@ type gen struct {
 	// call through Go finds its arguments and leaves its results.
 	argBase int
 	ool     []func()
-	traps   map[trapKey]amd64.Label
-	trapTo  map[uint64]amd64.Label
-	polls   map[int]amd64.Label
-	byID    []*Value
+	// traps are the trap stubs by code and offset (trapKey), trapTo the
+	// code that traps by code, polls the poll exits by block index.
+	traps  u64map[amd64.Label]
+	trapTo u64map[amd64.Label]
+	polls  u64map[amd64.Label]
+	byID   []*Value
 	// moves and pending are the parallel moves' lists.
 	moves, pending []pmove
 	// marks are what each stretch of the code was emitted for, where the
@@ -133,13 +133,9 @@ type gen struct {
 func (g *gen) reset(ws *genScratch, f *Func, req *wjit.Request) {
 	clear(g.ool[:cap(g.ool)])
 	clear(g.byID)
-	if g.traps == nil {
-		g.traps, g.trapTo, g.polls = map[trapKey]amd64.Label{}, map[uint64]amd64.Label{}, map[int]amd64.Label{}
-	} else {
-		clear(g.traps)
-		clear(g.trapTo)
-		clear(g.polls)
-	}
+	g.traps.reset(64)
+	g.trapTo.reset(8)
+	g.polls.reset(8)
 	n := f.NumValues()
 	*g = gen{ws: ws, a: &ws.asm, f: f, req: req, fn: req.Func, index: grown(g.index, int(f.nextBlock)), labels: g.labels[:0],
 		inst: grown(g.inst, n), fused: grown(g.fused, n), ool: g.ool[:0], traps: g.traps, trapTo: g.trapTo, polls: g.polls,
@@ -695,17 +691,17 @@ func imm32(c uint64, wide bool) (int32, bool) {
 
 // trap returns a label that traps with code at offset at.
 func (g *gen) trap(code uint64, at uint32) amd64.Label {
-	k := trapKey{code, at}
-	if l, ok := g.traps[k]; ok {
+	k := trapKey(code, at)
+	if l, ok := g.traps.get(k); ok {
 		return l
 	}
 	a := g.a
 	l := a.NewLabel()
-	g.traps[k] = l
-	to, ok := g.trapTo[code]
+	g.traps.set(k, l)
+	to, ok := g.trapTo.get(code)
 	if !ok {
 		to = a.NewLabel()
-		g.trapTo[code] = to
+		g.trapTo.set(code, to)
 		g.ool = append(g.ool, func() {
 			a.Bind(to)
 			g.mark("cold trap")
@@ -804,10 +800,10 @@ func (g *gen) jump(i int, s *Block) {
 		}
 		return
 	}
-	l, ok := g.polls[j]
+	l, ok := g.polls.get(uint64(j))
 	if !ok {
 		l = g.pollExit(g.labels[j])
-		g.polls[j] = l
+		g.polls.set(uint64(j), l)
 	}
 	g.mark("poll %v", s)
 	a.OpImm(amd64.Sub, rPoll, 1, true)

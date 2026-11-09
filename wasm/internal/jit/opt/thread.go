@@ -245,11 +245,8 @@ func repairPhis(f *Func, h *Block, ends *threadEnds) {
 	}
 	// start is each variable's value at a block's start, by variable and
 	// block ID.
-	if ws.start == nil {
-		ws.start = map[uint64]*Value{}
-	}
-	start := ws.start
-	clear(start)
+	start := &ws.start
+	start.reset(len(h.Phis) * 8)
 	startKey := func(i int, b *Block) uint64 { return uint64(i)<<32 | uint64(uint32(b.ID)) }
 	// The phis made, from ID n0 on: each one's variable, the phis made
 	// that use it, and the value it is forwarded to once found trivial.
@@ -286,8 +283,8 @@ func repairPhis(f *Func, h *Block, ends *threadEnds) {
 		vi := info(v)
 		vi.fwd = same
 		forwarded++
-		if k := startKey(vi.v, v.Block); start[k] == v {
-			start[k] = same
+		if k := startKey(vi.v, v.Block); start.at(k) == v {
+			start.set(k, same)
 		}
 		for _, u := range vi.users {
 			if info(u).fwd == nil && u != v {
@@ -312,7 +309,7 @@ func repairPhis(f *Func, h *Block, ends *threadEnds) {
 			return h.Phis[i]
 		}
 		k := startKey(i, b)
-		if v := start[k]; v != nil {
+		if v := start.at(k); v != nil {
 			return follow(v)
 		}
 		switch len(b.Preds) {
@@ -320,11 +317,11 @@ func repairPhis(f *Func, h *Block, ends *threadEnds) {
 			panic("wasm opt: a phi threaded past the entry")
 		case 1:
 			v := atEnd(i, b.Preds[0], b)
-			start[k] = v
+			start.set(k, v)
 			return v
 		}
 		v := f.newValue(b, OpPhi, h.Phis[i].Type)
-		start[k] = v
+		start.set(k, v)
 		made = append(made, madePhi{v: i})
 		v.Args = ws.vals.take(len(b.Preds))
 		for _, p := range b.Preds {
