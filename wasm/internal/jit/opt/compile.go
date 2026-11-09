@@ -35,5 +35,7 @@ func Compile(req *wjit.Request) (code *wjit.Code, err error) {
 	if err := checkLowerable(f); err != nil {
 		panic(err)
 	}
-	return lower(f, req), nil
+	ws := workspaces.Get().(*workspace)
+	defer workspaces.Put(ws)
+	return lower(f, req, ws), nil
 }

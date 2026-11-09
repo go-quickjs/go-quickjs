@@ -8,4 +8,4 @@ import wjit "github.com/go-quickjs/go-quickjs/wasm/internal/jit"
 // only amd64 does, and elsewhere every function keeps its baseline code.
 const Available = false
 
-func lower(*Func, *wjit.Request) *wjit.Code { panic("unreachable") }
+func lower(*Func, *wjit.Request, *workspace) *wjit.Code { panic("unreachable") }

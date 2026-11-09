@@ -15,6 +15,9 @@ import (
 func TestAllocateRandom(t *testing.T) {
 	rng := rand.New(rand.NewPCG(7, 11))
 	cfg := &Config{Classes: [][]int{{3, 1, 0, 2}, {0, 1, 2}}, NumSlots: 1000}
+	// An allocator kept from one function to the next allocates as a new
+	// one does.
+	var al Allocator
 	for iter := 0; iter < 10000; iter++ {
 		f := randomFunc(rng)
 		res, err := Allocate(f, cfg)
@@ -22,6 +25,20 @@ func TestAllocateRandom(t *testing.T) {
 			t.Fatalf("iteration %d: %v", iter, err)
 		}
 		checkAllocation(t, iter, f, cfg, res)
+		again, err := al.Allocate(f, cfg)
+		if err != nil {
+			t.Fatalf("iteration %d: %v from a kept allocator", iter, err)
+		}
+		if !slices.Equal(res.Reg, again.Reg) || !slices.Equal(res.Slot, again.Slot) || res.NumSlots != again.NumSlots {
+			t.Fatalf("iteration %d: a kept allocator's result differs", iter)
+		}
+		for i := range f.Blocks {
+			for j := range f.Blocks[i].Insts {
+				if !slices.Equal(res.Across(i, j), again.Across(i, j)) {
+					t.Fatalf("iteration %d: a kept allocator's reloads at b%d.%d differ", iter, i, j)
+				}
+			}
+		}
 	}
 }
 
@@ -243,7 +260,7 @@ func checkAllocation(t *testing.T, iter int, f *Func, cfg *Config, res *Result) 
 					if res.Slot[v] < 0 {
 						t.Fatalf("iteration %d: v%d is in a register across a call without a slot", iter, v)
 					}
-					if !slices.Contains(res.Across[[2]int32{int32(i), int32(j)}], v) {
+					if !slices.Contains(res.Across(i, j), v) {
 						t.Fatalf("iteration %d: v%d is not reloaded after a call it lives across", iter, v)
 					}
 				}

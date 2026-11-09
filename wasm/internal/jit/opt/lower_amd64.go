@@ -73,8 +73,14 @@ type trapKey struct {
 	at   uint32
 }
 
+// genScratch is the lowering's part of a workspace: the allocator.
+type genScratch struct {
+	al lsra.Allocator
+}
+
 // gen lowers an optimized function to amd64 code.
 type gen struct {
+	ws  *genScratch
 	a   *amd64.Asm
 	f   *Func
 	req *wjit.Request
@@ -137,8 +143,8 @@ func classOf(t Type) int8 {
 }
 
 // lower lowers f, optimized, to native code for req's function.
-func lower(f *Func, req *wjit.Request) *wjit.Code {
-	g := &gen{a: &amd64.Asm{}, f: f, req: req, fn: req.Func, index: map[*Block]int{}, inst: map[int32][2]int32{},
+func lower(f *Func, req *wjit.Request, ws *workspace) *wjit.Code {
+	g := &gen{ws: &ws.gen, a: &amd64.Asm{}, f: f, req: req, fn: req.Func, index: map[*Block]int{}, inst: map[int32][2]int32{},
 		fused: map[*Value]bool{}, traps: map[trapKey]amd64.Label{}, trapTo: map[uint64]amd64.Label{}, polls: map[int]amd64.Label{},
 		marking: req.Marks}
 	for i, b := range f.Blocks {
@@ -375,7 +381,7 @@ func (g *gen) allocate() {
 	if Timing != nil {
 		cfg.Lap = lsraLap
 	}
-	ra, err := lsra.Allocate(lf, cfg)
+	ra, err := g.ws.al.Allocate(lf, cfg)
 	if err != nil {
 		refuse(RefuseFrame, "%v: %d slots", err, g.argBase)
 	}
@@ -1793,10 +1799,11 @@ func (g *gen) reload(v *Value) {
 	if !ok {
 		return
 	}
-	if g.marking && len(g.ra.Across[key]) > 0 {
+	across := g.ra.Across(int(key[0]), int(key[1]))
+	if g.marking && len(across) > 0 {
 		g.mark("%v reload", v)
 	}
-	for _, r := range g.ra.Across[key] {
+	for _, r := range across {
 		w := g.valueByID(int32(r))
 		g.move(g.locOf(w), loc{kind: lSlot, slot: g.ra.Slot[r]}, w.Type)
 	}

@@ -115,11 +115,16 @@ func TestOptCompileCorpus(t *testing.T) {
 		h.Write(w[:])
 		hashes[f.key] = hex.EncodeToString(h.Sum(nil)[:12])
 	}
-	body := 0
+	body, values, blocks := 0, 0, 0
 	for _, f := range ok {
 		body += f.body
+		if sf, err := wopt.Build(f.code.Module, f.idx); err == nil {
+			values += sf.NumValues()
+			blocks += len(sf.Blocks)
+		}
 	}
-	t.Logf("%d functions compiled (%d bytes of body, %d of code), %d refused: %v", len(ok), body, codeBytes, len(fns)-len(ok), refused)
+	t.Logf("%d functions compiled (%d bytes of body, %d values and %d blocks as built, %d bytes of code), %d refused: %v",
+		len(ok), body, values, blocks, codeBytes, len(fns)-len(ok), refused)
 
 	if out := os.Getenv("WASM_OPT_HASHES"); out != "" {
 		keys := make([]string, 0, len(hashes))
@@ -173,13 +178,16 @@ func TestOptCompileCorpus(t *testing.T) {
 	var m0, m1 runtime.MemStats
 	runtime.ReadMemStats(&m0)
 	wopt.Timing = times
+	each := make([]int64, len(ok))
 	t0 := v8bench.Clock()
 	for range reps - 1 {
-		for _, f := range ok {
+		for i, f := range ok {
+			c0 := v8bench.Clock()
 			if _, err := wopt.Compile(f.req); err != nil {
 				wopt.Timing = nil
 				t.Fatalf("%s: %v on a compile again", f.key, err)
 			}
+			each[i] += int64(v8bench.Clock() - c0)
 		}
 	}
 	elapsed := v8bench.Clock() - t0
@@ -198,6 +206,18 @@ func TestOptCompileCorpus(t *testing.T) {
 	for p := wopt.Phase(0); p < wopt.NumPhases; p++ {
 		tk := times.Ticks[p]
 		fmt.Fprintf(&sb, "  %-9s %8.2f µs %5.1f%%\n", p, float64(tk)/n/1e3, 100*float64(tk)/float64(sum))
+	}
+	// The functions that took longest, against their size: a cost that
+	// grows faster than a function does shows here first.
+	order := make([]int, len(ok))
+	for i := range order {
+		order[i] = i
+	}
+	sort.Slice(order, func(i, j int) bool { return each[order[i]] > each[order[j]] })
+	for _, i := range order[:min(10, len(order))] {
+		f := ok[i]
+		fmt.Fprintf(&sb, "  %-24s %8.1f µs, %6d bytes of body, %5.0f ns a byte\n", f.key,
+			float64(each[i])/float64(reps-1)/1e3, f.body, float64(each[i])/float64(reps-1)/float64(f.body))
 	}
 	t.Log("\n" + sb.String())
 }

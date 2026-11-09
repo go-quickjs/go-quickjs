@@ -25,7 +25,10 @@
 // with a parameter keeping the slot it arrives in.
 package lsra
 
-import "errors"
+import (
+	"errors"
+	"slices"
+)
 
 // VReg is a virtual register: an index into Func's per-register slices.
 type VReg int32
@@ -128,12 +131,31 @@ type Result struct {
 	// Slot is each virtual register's slot: a spilled one's home, or one
 	// in a register live across a call, its copy there; else -1.
 	Slot []int32
-	// Across is, for each call by block and instruction index, the
-	// virtual registers in registers live across it, which it must load
-	// again from their slots.
-	Across map[[2]int32][]VReg
 	// NumSlots is the number of slots used: those below it.
 	NumSlots int
+	// The registers each clobber reloads (Across): acrossKey is each
+	// clobber's block and instruction, in order, and acrossV from
+	// acrossOff[k] to acrossOff[k+1] clobber k's registers.
+	acrossKey [][2]int32
+	acrossOff []int32
+	acrossV   []VReg
+}
+
+// Across is, for the call that is instruction inst of block b, the
+// virtual registers in registers live across it, which it must load again
+// from their slots.
+func (r *Result) Across(b, inst int) []VReg {
+	key := [2]int32{int32(b), int32(inst)}
+	k, ok := slices.BinarySearchFunc(r.acrossKey, key, func(x, y [2]int32) int {
+		if x[0] != y[0] {
+			return int(x[0] - y[0])
+		}
+		return int(x[1] - y[1])
+	})
+	if !ok {
+		return nil
+	}
+	return r.acrossV[r.acrossOff[k]:r.acrossOff[k+1]]
 }
 
 // ErrSlots is the error of a function whose spills need more slots than

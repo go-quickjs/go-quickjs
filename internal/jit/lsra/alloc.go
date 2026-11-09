@@ -25,29 +25,6 @@ func overlap(a, b []rng) bool {
 	return false
 }
 
-// union merges two sorted lists of ranges, joining those that meet.
-func union(a, b []rng) []rng {
-	out := make([]rng, 0, len(a)+len(b))
-	add := func(r rng) {
-		if l := len(out) - 1; l >= 0 && r.from <= out[l].to {
-			out[l].to = max(out[l].to, r.to)
-			return
-		}
-		out = append(out, r)
-	}
-	i, j := 0, 0
-	for i < len(a) || j < len(b) {
-		if j == len(b) || (i < len(a) && a[i].from < b[j].from) {
-			add(a[i])
-			i++
-		} else {
-			add(b[j])
-			j++
-		}
-	}
-	return out
-}
-
 // web is coalesced virtual registers, which share a location.
 type web struct {
 	members []VReg
@@ -99,8 +76,75 @@ type clobber struct {
 	weight float64
 }
 
+// pair is a phi and an argument to coalesce, weighed by their edge's
+// depth.
+type pair struct {
+	a, b   VReg
+	weight float64
+}
+
+// An Allocator allocates the registers of one function after another,
+// keeping what it allocates for the next: its result, and the lists and
+// tables an allocation works in. It is not safe for concurrent use.
+type Allocator struct {
+	res Result
+
+	predIdx  []int32
+	predOff  []int32
+	defBlock []int32
+	global   []int32
+	globals  []VReg
+	live     []uint64
+	ranges   [][]rng
+	weight   []float64
+	defAt    []int32
+	open     []int32
+	opened   []VReg
+	starts   []int32
+	ends     []int32
+	clobbers []clobber
+	webs     []*web
+	pairs    []pair
+	list     []*web
+	active   []*web
+	inactive []*web
+	back     []*web
+	queue    webQueue
+	slots    [][]rng
+	across   []acrossEntry
+	parts    []*web
+	next     []int32
+
+	rngs  arena[rng]
+	vregs arena[VReg]
+	hints arena[*web]
+	pool  chunks[web]
+}
+
+// acrossEntry is a register a call, by its index among the clobbers,
+// reloads.
+type acrossEntry struct {
+	call int32
+	v    VReg
+}
+
 // Allocate allocates f's virtual registers.
 func Allocate(f *Func, cfg *Config) (*Result, error) {
+	return new(Allocator).Allocate(f, cfg)
+}
+
+// grown returns s with length n, its contents not kept, reusing its array
+// where it is large enough.
+func grown[T any](s []T, n int) []T {
+	if cap(s) < n {
+		return make([]T, n, n+n/4)
+	}
+	return s[:n]
+}
+
+// Allocate allocates f's virtual registers. The result is the
+// Allocator's, valid until its next allocation.
+func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	n := len(f.Class)
 	nb := len(f.Blocks)
 	alloc := func(v VReg) bool { return v >= 0 && f.Class[v] != NoClass }
@@ -109,15 +153,24 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 			cfg.Lap(p)
 		}
 	}
+	al.rngs.reset()
+	al.vregs.reset()
+	al.hints.reset()
+	al.pool.reset()
 
 	// predIdx is, for each block's successor k, the block's index among
-	// that successor's predecessors.
-	predIdx := make([][]int, nb)
+	// that successor's predecessors: predIdx[predOff[i]+k].
+	al.predOff = grown(al.predOff, nb+1)
+	predIdx := al.predIdx[:0]
 	for i := range f.Blocks {
+		al.predOff[i] = int32(len(predIdx))
 		for _, s := range f.Blocks[i].Succs {
-			predIdx[i] = append(predIdx[i], slices.Index(f.Blocks[s].Preds, i))
+			predIdx = append(predIdx, int32(slices.Index(f.Blocks[s].Preds, i)))
 		}
 	}
+	al.predOff[nb] = int32(len(predIdx))
+	al.predIdx = predIdx
+	predOff := al.predOff
 
 	// Liveness, of the registers that may be live across a block's
 	// boundary -- a phi's, a phi's argument, one used in a block other
@@ -126,12 +179,14 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 	// nothing changes. A successor's phis read their arguments on the
 	// edge, at the predecessor's end. The others are live within their
 	// blocks alone, which the ranges' walk finds.
-	defBlock := make([]int32, n)
+	defBlock := grown(al.defBlock, n)
+	global := grown(al.global, n)
 	for i := range defBlock {
 		defBlock[i] = -1
 	}
-	global := make([]int32, n)
-	var globals []VReg
+	clear(global)
+	al.defBlock, al.global = defBlock, global
+	globals := al.globals[:0]
 	mark := func(v VReg) {
 		if alloc(v) && global[v] == 0 {
 			globals = append(globals, v)
@@ -167,19 +222,19 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 			}
 		}
 	}
+	al.globals = globals
 	// gi is v's global number, or -1.
 	gi := func(v VReg) int { return int(global[v]) - 1 }
 	words := (len(globals) + 63) / 64
-	slab := make([]uint64, 4*nb*words)
-	liveIn := make([][]uint64, nb)
-	liveOut := make([][]uint64, nb)
-	gen := make([][]uint64, nb)
-	kill := make([][]uint64, nb)
+	// Each block's sets: live in, live out, gen and kill, words each.
+	live := grown(al.live, 4*nb*words)
+	clear(live)
+	al.live = live
+	liveIn := func(i int) []uint64 { return live[4*i*words : (4*i+1)*words] }
+	liveOut := func(i int) []uint64 { return live[(4*i+1)*words : (4*i+2)*words] }
 	for i := range f.Blocks {
 		b := &f.Blocks[i]
-		s := slab[4*i*words : 4*(i+1)*words]
-		liveIn[i], liveOut[i], gen[i], kill[i] = s[:words], s[words:2*words], s[2*words:3*words], s[3*words:]
-		g, k := gen[i], kill[i]
+		g, k := live[(4*i+2)*words:(4*i+3)*words], live[(4*i+3)*words:(4*i+4)*words]
 		for j := len(b.Insts) - 1; j >= 0; j-- {
 			in := &b.Insts[j]
 			for _, d := range in.Defs {
@@ -210,16 +265,17 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 		changed = false
 		for i := nb - 1; i >= 0; i-- {
 			b := &f.Blocks[i]
-			out := liveOut[i]
+			out := liveOut(i)
 			for k, s := range b.Succs {
+				sin := liveIn(s)
 				for w := range out {
-					nw := out[w] | liveIn[s][w]
+					nw := out[w] | sin[w]
 					if nw != out[w] {
 						out[w] = nw
 						changed = true
 					}
 				}
-				pi := predIdx[i][k]
+				pi := predIdx[int(predOff[i])+k]
 				for _, p := range f.Blocks[s].Phis {
 					if a := p.Args[pi]; alloc(a) {
 						x := gi(a)
@@ -230,9 +286,10 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 					}
 				}
 			}
-			in := liveIn[i]
+			in := liveIn(i)
+			g, k := live[(4*i+2)*words:(4*i+3)*words], live[(4*i+3)*words:(4*i+4)*words]
 			for w := range in {
-				nw := gen[i][w] | out[w]&^kill[i][w]
+				nw := g[w] | out[w]&^k[w]
 				if nw != in[w] {
 					in[w] = nw
 					changed = true
@@ -240,7 +297,6 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 			}
 		}
 	}
-
 	lap(PhaseLiveness)
 
 	// The ranges, over positions: a block's phis are defined at its start;
@@ -250,12 +306,19 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 	// block: what is live out, from the block's start to its end, cut at
 	// its definition; what is used and not live after, from the start to
 	// the use, cut likewise.
-	ranges := make([][]rng, n)
-	weight := make([]float64, n)
-	defAt := make([]int32, n)
-	var clobbers []clobber
-	starts := make([]int32, nb)
-	ends := make([]int32, nb)
+	ranges := grown(al.ranges, n)
+	clear(ranges)
+	al.ranges = ranges
+	weight := grown(al.weight, n)
+	clear(weight)
+	al.weight = weight
+	defAt := grown(al.defAt, n)
+	clear(defAt)
+	al.defAt = defAt
+	clobbers := al.clobbers[:0]
+	starts := grown(al.starts, nb)
+	ends := grown(al.ends, nb)
+	al.starts, al.ends = starts, ends
 	pos := int32(0)
 	for i := range f.Blocks {
 		starts[i] = pos
@@ -264,14 +327,17 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 	}
 	// open is, for a register live in the block being walked, the index
 	// of its range there plus one.
-	open := make([]int32, n)
-	var opened []VReg
+	open := grown(al.open, n)
+	clear(open)
+	al.open = open
+	opened := al.opened[:0]
+	rngs := &al.rngs
 	def := func(d VReg, at int32) {
 		if o := open[d]; o > 0 {
 			ranges[d][o-1].from = at
 			open[d] = 0
 		} else {
-			ranges[d] = append(ranges[d], rng{at, at + 1})
+			ranges[d] = appendA(rngs, ranges[d], rng{at, at + 1})
 		}
 		defAt[d] = at
 	}
@@ -280,17 +346,17 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 		start, end := starts[i], ends[i]
 		w := depthWeight(b.Depth)
 		opened = opened[:0]
-		for wi, word := range liveOut[i] {
+		for wi, word := range liveOut(i) {
 			for word != 0 {
 				v := globals[wi*64+bits.TrailingZeros64(word)]
 				word &= word - 1
-				ranges[v] = append(ranges[v], rng{start, end + 1})
+				ranges[v] = appendA(rngs, ranges[v], rng{start, end + 1})
 				open[v] = int32(len(ranges[v]))
 				opened = append(opened, v)
 			}
 		}
 		for k, s := range b.Succs {
-			pi := predIdx[i][k]
+			pi := predIdx[int(predOff[i])+k]
 			for _, p := range f.Blocks[s].Phis {
 				if a := p.Args[pi]; alloc(a) {
 					weight[a] += w
@@ -312,7 +378,7 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 				}
 				weight[v] += w
 				if open[v] == 0 {
-					ranges[v] = append(ranges[v], rng{start, u + 1})
+					ranges[v] = appendA(rngs, ranges[v], rng{start, u + 1})
 					open[v] = int32(len(ranges[v]))
 					opened = append(opened, v)
 				}
@@ -331,12 +397,17 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 			open[v] = 0
 		}
 	}
-	slices.SortFunc(clobbers, func(a, b clobber) int { return int(a.at - b.at) })
+	al.opened = opened
+	// The clobbers were found backwards: their positions are distinct.
+	slices.Reverse(clobbers)
+	al.clobbers = clobbers
 	for v, r := range ranges {
 		if len(r) < 2 {
 			continue
 		}
-		slices.SortFunc(r, func(a, b rng) int { return int(a.from - b.from) })
+		// Found backwards, a range a block, a register's ranges are in
+		// the reverse of their order.
+		slices.Reverse(r)
 		out := r[:1]
 		for _, x := range r[1:] {
 			if l := &out[len(out)-1]; x.from <= l.to {
@@ -349,26 +420,29 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 	}
 	// crossed visits the clobbers a list of ranges lives across: those at
 	// a position p where it is live at p and p+1.
-	crossed := func(rs []rng, visit func(c *clobber)) {
+	crossed := func(rs []rng, visit func(k int)) {
 		for _, r := range rs {
 			k, _ := slices.BinarySearchFunc(clobbers, r.from, func(c clobber, p int32) int { return int(c.at - p) })
 			for ; k < len(clobbers) && clobbers[k].at < r.to-1; k++ {
-				visit(&clobbers[k])
+				visit(k)
 			}
 		}
 	}
+	lap(PhaseRanges)
 
 	// Webs: each register its own, then a phi's and an argument's joined
 	// where their lifetimes do not meet and their parameters' slots allow,
 	// the edges of the deepest blocks first.
 	// single is v's web of its own.
 	single := func(v VReg) *web {
-		w := &web{members: []VReg{v}, cls: f.Class[v], ranges: ranges[v], weight: weight[v], fixed: -1, reg: -1, slot: -1}
+		w := al.pool.new()
+		*w = web{members: append(al.vregs.take(1), v), cls: f.Class[v], ranges: ranges[v], weight: weight[v], fixed: -1, reg: -1, slot: -1}
 		if f.FixedSlot[v] >= 0 {
 			w.fixed, w.arrive = f.FixedSlot[v], defAt[v]
 		}
 		cls := w.cls
-		crossed(w.ranges, func(c *clobber) {
+		crossed(w.ranges, func(k int) {
+			c := &clobbers[k]
 			if c.call {
 				w.calls = true
 				w.callWeight += c.weight
@@ -379,18 +453,15 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 		})
 		return w
 	}
-	lap(PhaseRanges)
-	webs := make([]*web, n)
+	webs := grown(al.webs, n)
+	clear(webs)
+	al.webs = webs
 	for v := range n {
 		if alloc(VReg(v)) && len(ranges[v]) > 0 {
 			webs[v] = single(VReg(v))
 		}
 	}
-	type pair struct {
-		a, b   VReg
-		weight float64
-	}
-	var pairs []pair
+	pairs := al.pairs[:0]
 	for i := range f.Blocks {
 		b := &f.Blocks[i]
 		for _, p := range b.Phis {
@@ -413,6 +484,7 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 		}
 		return 0
 	})
+	al.pairs = pairs
 	for _, pr := range pairs {
 		x, y := webs[pr.a], webs[pr.b]
 		if x == y || (x.fixed >= 0 && y.fixed >= 0) || overlap(x.ranges, y.ranges) {
@@ -421,11 +493,11 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 		if len(y.members) > len(x.members) {
 			x, y = y, x
 		}
-		x.members = append(x.members, y.members...)
+		x.members = appendA(&al.vregs, x.members, y.members...)
 		if !x.owned {
-			x.ranges, x.owned = slices.Clone(x.ranges), true
+			x.ranges, x.owned = appendA(rngs, rngs.take(len(x.ranges)), x.ranges...), true
 		}
-		x.ranges = unionInto(x.ranges, y.ranges)
+		x.ranges = unionInto(rngs, x.ranges, y.ranges)
 		x.weight += y.weight
 		x.callWeight += y.callWeight
 		x.calls = x.calls || y.calls
@@ -450,8 +522,8 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 		for _, p := range b.Phis {
 			for _, a := range p.Args {
 				if x, y := webOf(p.Def), webOf(a); x != nil && y != nil && x != y && x.cls == y.cls {
-					x.hints = append(x.hints, y)
-					y.hints = append(y.hints, x)
+					x.hints = appendA(&al.hints, x.hints, y)
+					y.hints = appendA(&al.hints, y.hints, x)
 				}
 			}
 		}
@@ -461,23 +533,17 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 				continue
 			}
 			if x, y := webOf(in.Defs[0]), webOf(in.Hint); x != nil && y != nil && x != y && x.cls == y.cls {
-				x.hints = append(x.hints, y)
+				x.hints = appendA(&al.hints, x.hints, y)
 			}
 		}
 	}
-	var list []*web
+	list := al.list[:0]
 	for v, w := range webs {
 		if w != nil && w.members[0] == VReg(v) {
 			list = append(list, w)
 		}
 	}
-	slices.SortFunc(list, func(a, b *web) int {
-		if a.start() != b.start() {
-			return int(a.start() - b.start())
-		}
-		return int(a.members[0] - b.members[0])
-	})
-
+	slices.SortFunc(list, byStart)
 	lap(PhaseWebs)
 
 	// Registers: a linear scan of each class's webs, in order of their
@@ -488,8 +554,8 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 	// instead, its registers scanned again each on its own, each hinted to
 	// the others' registers: they may find registers in its holes.
 	for cls, regs := range cfg.Classes {
-		var active, inactive []*web
-		var queue webQueue
+		active, inactive := al.active[:0], al.inactive[:0]
+		queue := al.queue[:0]
 		for _, w := range list {
 			if int(w.cls) == cls {
 				queue = append(queue, w)
@@ -500,15 +566,18 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 			if len(w.members) < 2 {
 				return false
 			}
-			parts := make([]*web, len(w.members))
-			for i, m := range w.members {
-				parts[i] = single(m)
-				webs[m] = parts[i]
+			parts := al.parts[:0]
+			for _, m := range w.members {
+				p := single(m)
+				webs[m] = p
+				parts = append(parts, p)
 			}
 			for _, p := range parts {
-				p.hints = append(slices.Clone(w.hints), parts...)
+				p.hints = append(append(al.hints.take(len(w.hints)+len(parts)), w.hints...), parts...)
 				heap.Push(&queue, p)
 			}
+			clear(parts)
+			al.parts = parts[:0]
 			return true
 		}
 		for queue.Len() > 0 {
@@ -522,7 +591,7 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 				continue
 			}
 			p := cur.start()
-			var back []*web
+			back := al.back[:0]
 			keep := active[:0]
 			for _, a := range active {
 				switch {
@@ -545,6 +614,7 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 				}
 			}
 			inactive = append(keepIn, back...)
+			al.back = back
 			used := cur.avoid
 			for _, a := range active {
 				used |= 1 << a.reg
@@ -613,8 +683,10 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 			cur.reg = reg
 			active = append(active, cur)
 		}
+		clear(active)
+		clear(inactive)
+		al.active, al.inactive, al.queue = active[:0], inactive[:0], queue[:0]
 	}
-
 	lap(PhaseScan)
 
 	// The webs as the scan left them, some taken apart.
@@ -624,30 +696,26 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 			list = append(list, w)
 		}
 	}
-	slices.SortFunc(list, func(a, b *web) int {
-		if a.start() != b.start() {
-			return int(a.start() - b.start())
-		}
-		return int(a.members[0] - b.members[0])
-	})
+	slices.SortFunc(list, byStart)
+	al.list = list
 
 	// Slots: for the webs spilled, and those in registers that live across
 	// a call. A web with a parameter has the slot the parameter arrives in,
 	// which holds nothing else from the function's start until then.
-	var slots [][]rng
+	slots := al.slots[:0]
 	take := func(s int32, rs []rng) {
 		for int(s) >= len(slots) {
 			slots = append(slots, nil)
 		}
-		slots[s] = unionInto(slots[s], rs)
+		slots[s] = unionInto(rngs, slots[s], rs)
 	}
 	for _, w := range list {
 		if w.fixed < 0 {
 			continue
 		}
-		rs := []rng{{0, w.arrive + 1}}
+		rs := append(rngs.take(1), rng{0, w.arrive + 1})
 		if w.spilled || w.calls {
-			rs = union(rs, w.ranges)
+			rs = unionInto(rngs, rs, w.ranges)
 			w.slot = w.fixed
 		}
 		take(w.fixed, rs)
@@ -661,17 +729,26 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 			s++
 		}
 		if int(s) >= cfg.NumSlots {
+			clear(slots)
+			al.slots = slots[:0]
 			return nil, ErrSlots
 		}
 		w.slot = s
 		take(s, w.ranges)
 	}
+	nslots := len(slots)
+	clear(slots)
+	al.slots = slots[:0]
 
-	res := &Result{Reg: make([]int16, n), Slot: make([]int32, n), Across: map[[2]int32][]VReg{}, NumSlots: len(slots)}
+	res := &al.res
+	res.Reg = grown(res.Reg, n)
+	res.Slot = grown(res.Slot, n)
+	res.NumSlots = nslots
 	for i := range res.Reg {
 		res.Reg[i] = -1
 		res.Slot[i] = -1
 	}
+	across := al.across[:0]
 	for _, w := range list {
 		for _, m := range w.members {
 			res.Reg[m] = int16(w.reg)
@@ -682,15 +759,51 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 		}
 		// The calls each of its registers lives across, which reload it.
 		for _, m := range w.members {
-			crossed(ranges[m], func(c *clobber) {
-				if c.call {
-					res.Across[c.key] = append(res.Across[c.key], m)
+			crossed(ranges[m], func(k int) {
+				if clobbers[k].call {
+					across = append(across, acrossEntry{int32(k), m})
 				}
 			})
 		}
 	}
+	al.across = across
+	// Each call's registers, in the order found, by the call's index
+	// among the clobbers.
+	res.acrossOff = grown(res.acrossOff, len(clobbers)+1)
+	clear(res.acrossOff)
+	for _, e := range across {
+		res.acrossOff[e.call+1]++
+	}
+	for k := range clobbers {
+		res.acrossOff[k+1] += res.acrossOff[k]
+	}
+	res.acrossV = grown(res.acrossV, len(across))
+	next := al.next[:0]
+	for k := range clobbers {
+		next = append(next, res.acrossOff[k])
+	}
+	for _, e := range across {
+		res.acrossV[next[e.call]] = e.v
+		next[e.call]++
+	}
+	al.next = next[:0]
+	res.acrossKey = res.acrossKey[:0]
+	for k := range clobbers {
+		res.acrossKey = append(res.acrossKey, clobbers[k].key)
+	}
+	clear(webs)
+	clear(list)
+	al.list = list[:0]
 	lap(PhaseSlots)
 	return res, nil
+}
+
+// byStart orders webs by their starts, then their first members.
+func byStart(a, b *web) int {
+	if a.start() != b.start() {
+		return int(a.start() - b.start())
+	}
+	return int(a.members[0] - b.members[0])
 }
 
 // depthWeight is the weight of a use at loop depth d.
@@ -735,13 +848,16 @@ func (w *web) density() float64 {
 }
 
 // unionInto merges b into a, both sorted, joining ranges that meet, in a's
-// array where it has room.
-func unionInto(a, b []rng) []rng {
+// array where it has room, else in one of the arena's.
+func unionInto(ar *arena[rng], a, b []rng) []rng {
 	if len(b) == 0 {
 		return a
 	}
 	n := len(a)
-	a = slices.Grow(a, len(b))[:n+len(b)]
+	if n+len(b) > cap(a) {
+		a = append(ar.take(max(2*cap(a), n+len(b))), a...)
+	}
+	a = a[:n+len(b)]
 	i, j := n-1, len(b)-1
 	for k := len(a) - 1; j >= 0; k-- {
 		if i >= 0 && a[i].from > b[j].from {
