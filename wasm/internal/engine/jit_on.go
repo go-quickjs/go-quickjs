@@ -369,9 +369,10 @@ func (c *Code) enableJIT(threshold int) bool {
 	}
 	n := max(len(c.Module.Functions), 1)
 	cj := &codeJIT{threshold: int32(threshold), arena: ijit.NewArena(), links: make([]uintptr, n), frames: make([]uint64, n), counters: make([]int64, n)}
-	// The optimizing tier is off unless asked for: its compiles still cost
-	// a short program's first run more than they save it.
 	cj.optThreshold.Store(-1)
+	if wopt.Available {
+		cj.optThreshold.Store(DefaultOptThreshold)
+	}
 	if optEnv >= -1 && wopt.Available {
 		cj.optThreshold.Store(int32(optEnv))
 	}

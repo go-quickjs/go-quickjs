@@ -318,11 +318,13 @@ those calls natively. The frames that began in the baseline code run on in it: t
 replaced code stays placed (`nativeFn.prev`), and an exit resumes in the
 code that holds its address.
 
-The tier is off by default: its compiles still make a short program's first
-run slower (json's 132 ms to 145, interp's 50 to 52, where before the
-compile's cost was worked on they made them 135 to 161 and 57 to 67)
-before they pay. Turned on (`WASM_JIT_OPT=on`), the count is
-`DefaultOptThreshold`, 30,000 calls;
+The tier is on by default, at `DefaultOptThreshold`, 30,000 calls. Its
+compiles, once the cost of both tiers' compiles was worked on, leave a short
+program's first run faster than the baseline alone for four of the six Go
+programs (regexp 98 ms to 62, gzip 83 to 69, sha256 158 to 144, sort 221 to
+209) and slower for two (json 89 to 98, interp 37 to 39), and every later
+run about twice as fast (json 57 to 47, gzip 59 to 29); before that work
+they made json's first run 135 to 161 ms.
 `Code.SetOptThreshold(n)` sets another: 0 compiles every function the
 tier accepts with it at once, the baseline only those it refuses, and a
 negative n turns the tier off. `WASM_JIT_OPT` sets it for tests and
