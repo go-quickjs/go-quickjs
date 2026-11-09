@@ -291,6 +291,16 @@ function's code (`RawCode.EnterAt`). At the resume address the code reloads
 the registers it keeps and the locals' homes. Every entry that lives past an exit
 is in its slot.
 
+The exits most sites have -- each loop's and each call's poll, and each
+call's `ExitCall` -- are a function's own, shared by its sites: a site
+stores the exit's arguments, leaves where it goes on in the scratch
+register and jumps to the function's exit of that kind, which stores it
+in the context (`Ctx.Resume`) and exits to resume at the function's shared
+resumption; that reloads the registers and the homes and jumps to
+`Ctx.Resume`. A site so takes some 12 bytes for a poll and 45 for a call's
+exit, where its own exit and resumption took about a hundred each, a sixth
+of a Go program's code.
+
 | Exit | Go |
 |---|---|
 | `ExitReturn` | the frame Go entered -- at its start or at a loop's head -- returned |

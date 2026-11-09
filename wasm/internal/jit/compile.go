@@ -148,6 +148,7 @@ var (
 	offArg0       = int32(unsafe.Offsetof(Ctx{}.Arg0))
 	offExitFn     = int32(unsafe.Offsetof(Ctx{}.ExitFn))
 	offExitAddr   = int32(unsafe.Offsetof(Ctx{}.ExitAddr))
+	offResume     = int32(unsafe.Offsetof(Ctx{}.Resume))
 )
 
 // Available reports whether this build compiles native code.
@@ -213,6 +214,49 @@ const (
 	oolTrapSite
 )
 
+// sharedKinds are the exits a function's sites share (sharedExit): most
+// calls and loops have a site of each of the first two.
+var sharedKinds = [...]uint64{ExitPoll, ExitCall}
+
+// sharedStub returns the label of the function's exit of kind, which its
+// sites share, its code emitted after the body: the site leaves where to
+// go on in rTmp, the exit stores it in the context (Ctx.Resume) and exits
+// for kind, its arguments stored by the site, to resume at the function's
+// shared resumption, which reloads what an exit loses and goes on there.
+func (c *compiler) sharedStub(kind uint64) asmLabel {
+	i := 0
+	for sharedKinds[i] != kind {
+		i++
+	}
+	if !c.hasExit[i] {
+		c.hasExit[i] = true
+		c.exits[i] = c.a.NewLabel()
+		l := c.exits[i]
+		c.later(func() {
+			c.a.Bind(l)
+			c.a.Store(rCtx, offResume, rTmp)
+			c.exit(kind, c.sharedResume())
+		})
+	}
+	return c.exits[i]
+}
+
+// sharedResume returns the label of the function's shared resumption
+// (sharedStub), its code emitted after the body.
+func (c *compiler) sharedResume() asmLabel {
+	if !c.hasResume {
+		c.hasResume = true
+		c.resume = c.a.NewLabel()
+		l := c.resume
+		c.later(func() {
+			c.resumeAt(l)
+			c.a.Load(rTmp, rCtx, offResume)
+			c.jumpReg(rTmp)
+		})
+	}
+	return c.resume
+}
+
 // later has f emit its code after the body.
 func (c *compiler) later(f func()) { c.ool = append(c.ool, oolItem{f: f}) }
 
@@ -267,6 +311,13 @@ type compiler struct {
 	// pointer word (wbRoutine).
 	wb    asmLabel
 	hasWB bool
+	// exits are the function's exits its poll and call sites share, by
+	// sharedKinds, and resume their resumption, each made with its first
+	// use (sharedExit).
+	exits     [len(sharedKinds)]asmLabel
+	hasExit   [len(sharedKinds)]bool
+	resume    asmLabel
+	hasResume bool
 
 	stack []value
 	ctrl  []*ctl
@@ -599,10 +650,7 @@ func (c *compiler) jumpTo(t *ctl) {
 		head, poll := t.label, t.poll
 		c.later(func() {
 			c.a.Bind(poll)
-			resume := c.a.NewLabel()
-			c.exit(ExitPoll, resume)
-			c.resumeAt(resume)
-			c.jmp(head)
+			c.sharedExit(ExitPoll, head)
 		})
 	}
 	c.pollBranch(t.label, t.poll)

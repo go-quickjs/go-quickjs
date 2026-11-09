@@ -78,6 +78,10 @@ type Ctx struct {
 	Arg4       uint64
 	ExitFn     uint64
 	ExitAddr   uintptr
+	// Resume is where the code goes on after an exit its sites share --
+	// a poll's, a call's through the engine -- whose resumption is shared
+	// too: the site's own code, which the site leaves here.
+	Resume uintptr
 }
 
 // SaveWords is the size of the context's register save area.

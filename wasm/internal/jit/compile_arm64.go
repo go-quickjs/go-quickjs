@@ -91,6 +91,15 @@ func (c *compiler) returnSequence() {
 
 func (c *compiler) jmp(l arm64.Label) { c.a.B(l) }
 
+func (c *compiler) jumpReg(r reg) { c.a.Br(r) }
+
+// sharedExit exits for kind through the function's exit its sites share
+// (sharedStub), to go on at resume; the exit's arguments are stored.
+func (c *compiler) sharedExit(kind uint64, resume arm64.Label) {
+	c.a.Adr(rTmp, resume)
+	c.a.B(c.sharedStub(kind))
+}
+
 func (c *compiler) jcc(cond arm64.Cond, l arm64.Label) { c.a.BCond(cond, l) }
 
 // pollBranch is a loop's back edge to head: the poll counter counted down,
@@ -415,15 +424,12 @@ func (c *compiler) call(idx uint32, at uint32) {
 	slotIdx := c.slotIndex(base)
 	c.later(func() {
 		a.Bind(poll)
-		r1 := a.NewLabel()
-		c.exit(ExitPoll, r1)
-		c.resumeAt(r1)
-		a.B(start)
+		c.sharedExit(ExitPoll, start)
 		a.Bind(slow)
-		r2 := a.NewLabel()
-		c.exit(ExitCall, r2, uint64(idx), slotIdx, uint64(at))
-		c.resumeAt(r2)
-		a.B(after)
+		c.storeCtx(offArg0, uint64(idx))
+		c.storeCtx(offArg0+8, slotIdx)
+		c.storeCtx(offArg0+16, uint64(at))
+		c.sharedExit(ExitCall, after)
 	})
 	c.pushResults(ft.Results)
 }
@@ -508,10 +514,7 @@ func (c *compiler) returnCall(idx uint32, at uint32) {
 	a.Br(entry)
 	c.later(func() {
 		a.Bind(poll)
-		r1 := a.NewLabel()
-		c.exit(ExitPoll, r1)
-		c.resumeAt(r1)
-		a.B(start)
+		c.sharedExit(ExitPoll, start)
 		a.Bind(slow)
 		c.exit(ExitTailCall, retResume, uint64(idx), slotIdx, uint64(at))
 		c.resumeAt(retResume)
