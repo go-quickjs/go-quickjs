@@ -545,7 +545,7 @@ WASM_JIT=osr WASM_SPEC_DIR=/tmp/wasm-spec WASM_THREADS_DIR=/tmp/wasm-threads \
   go test -tags quickjs_jit ./wasm/internal/spectest ./wasm/internal/engine -count=1 -v
 
 # Every spec module's exports called interpreted and native, and compared
-WASM_SPEC_DIR=/tmp/wasm-spec go test -tags quickjs_jit ./wasm/internal/spectest -run TestJITDifferential -count=1 -v
+WASM_SPEC_DIR=/tmp/wasm-spec WASM_THREADS_DIR=/tmp/wasm-threads go test -tags quickjs_jit ./wasm/internal/spectest -run TestJITDifferential -count=1 -v
 
 # The JavaScript API tests
 WASM_SPEC_DIR=/tmp/wasm-spec go test ./wasm/wasmjs -run TestWasmSpecJSAPI -count=1 -v
