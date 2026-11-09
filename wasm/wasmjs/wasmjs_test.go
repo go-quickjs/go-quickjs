@@ -1,7 +1,9 @@
 package wasmjs_test
 
 import (
+	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os/exec"
 	"runtime"
@@ -180,5 +182,26 @@ func TestPromisingStackEnds(t *testing.T) {
 		}
 		runtime.GC()
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestInterruptWasm pins that a context ending stops wasm as it stops
+// script: an infinite wasm loop, called directly and from a promising call,
+// is interrupted.
+func TestInterruptWasm(t *testing.T) {
+	const setup = `
+		const spin = new WebAssembly.Instance(new WebAssembly.Module(new Uint8Array([0,97,115,109,1,0,0,0,1,4,1,96,0,0,
+			3,2,1,0,7,8,1,4,115,112,105,110,0,0,10,9,1,7,0,3,64,12,0,11,11]))).exports.spin;`
+	for _, src := range []string{`spin()`, `WebAssembly.promising(spin)()`} {
+		rt := newRuntime(t)
+		if _, err := rt.Eval(setup); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		_, err := rt.EvalContext(ctx, src)
+		cancel()
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("%s: %v, want the deadline", src, err)
+		}
 	}
 }

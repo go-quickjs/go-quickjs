@@ -2,6 +2,7 @@ package wasmjs
 
 import (
 	"math"
+	"runtime"
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/vm"
@@ -161,8 +162,12 @@ func (a *api) memoryObject(mem *engine.Memory, proto *vm.Object) *vm.Object {
 	o := vm.HostObject(proto, d)
 	if !mem.Shared {
 		// Growing the memory, from script or from wasm, refreshes its
-		// buffer.
-		mem.OnGrow = func(oldBytes, newBytes uint64) { a.refreshBuffer(d) }
+		// buffer. The memory keeps its WebAssembly.Memory, so that the buffer
+		// refreshed is the one script has, however long ago it took it.
+		mem.OnGrow = func(oldBytes, newBytes uint64) {
+			a.refreshBuffer(d)
+			runtime.KeepAlive(o)
+		}
 	}
 	a.wrappers.put(unsafe.Pointer(mem), o)
 	return o
