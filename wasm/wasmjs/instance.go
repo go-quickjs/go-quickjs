@@ -169,16 +169,7 @@ func (a *api) link(t thrower, md *moduleData, i int, iv importValue) (engine.Ext
 		ext.Tag = d.tag
 	}
 	if err := engine.CheckImport(m, i, ext); err != nil {
-		msg := err.Error()
-		if imp.Kind == module.ExternMemory && !ext.Memory.HasMax {
-			// The maximum the message names is the import's, which it has
-			// none of: -1 as an unsigned 32-bit number.
-			decl := m.Memories[imp.Index].Limits
-			if msg == fmt.Sprintf("%s: memory import has no maximum limit, expected at most %d", importName(m, i), decl.Max) {
-				msg = fmt.Sprintf("%s: memory import has no maximum limit, expected at most %d", importName(m, i), uint32(math.MaxUint32))
-			}
-		}
-		return ext, t.linkError("%s", msg)
+		return ext, t.linkError("%s", err.Error())
 	}
 	return ext, nil
 }
@@ -272,18 +263,8 @@ func (a *api) instantiateModule(t thrower, md *moduleData, ffi vm.Value) (*engin
 	return inst, nil
 }
 
-// runInstantiate runs engine.Instantiate, turning a trap of evaluating a
-// constant expression into the error it returns.
-func (a *api) runInstantiate(md *moduleData, externs []engine.Extern) (inst *engine.Instance, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			trap, ok := r.(*engine.Trap)
-			if !ok {
-				panic(r)
-			}
-			inst, err = nil, trap
-		}
-	}()
+// runInstantiate runs engine.Instantiate in the runtime's context.
+func (a *api) runInstantiate(md *moduleData, externs []engine.Extern) (*engine.Instance, error) {
 	return engine.Instantiate(runtimeContext{a.rt}, md.code, externs)
 }
 

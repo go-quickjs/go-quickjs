@@ -151,6 +151,11 @@ func (m *Memory) Grow(delta uint64) int64 {
 		return -1
 	}
 	if delta == 0 {
+		// A grow by nothing still tells a host keeping views: memory.grow
+		// refreshes them whatever it adds.
+		if m.OnGrow != nil {
+			m.OnGrow(old*PageSize, old*PageSize)
+		}
 		return int64(old)
 	}
 	newPages := old + delta

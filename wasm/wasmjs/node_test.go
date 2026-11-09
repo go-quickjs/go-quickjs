@@ -99,7 +99,6 @@ func TestCompareNode(t *testing.T) {
 // is known to differ from Node, and why. None is the WebAssembly namespace's
 // own: each is a message of the runtime's, or of the wasm engine's.
 var nodeKnownDifferences = map[string]string{
-	"runtime.js: nullcall":                  "the engine traps a call_indirect of a null funcref as null function",
 	"runtime.js: new exported":              "the runtime names the callee by its name, not by the expression",
 	"runtime.js: exported toString":         "the runtime writes a name that is not an identifier as a computed key",
 	"runtime.js: deep recursion through JS": "the runtime's own stack overflow message",

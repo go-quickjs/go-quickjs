@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"math"
 
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/opcode"
@@ -89,7 +90,9 @@ func checkImport(m *module.Module, i int, ext Extern) error {
 		}
 		if decl.Limits.HasMax {
 			if !mem.HasMax {
-				return &LinkError{fmt.Sprintf("%s: memory import has no maximum limit, expected at most %d", name, decl.Limits.Max)}
+				// The maximum named is the imported memory's, which it lacks:
+				// -1 as an unsigned 32-bit number.
+				return &LinkError{fmt.Sprintf("%s: memory import has no maximum limit, expected at most %d", name, uint32(math.MaxUint32))}
 			}
 			if mem.Max > decl.Limits.Max {
 				return &LinkError{fmt.Sprintf("%s: memory import has a larger maximum size %d than the module's declared maximum %d", name, mem.Max, decl.Limits.Max)}
@@ -133,7 +136,22 @@ func addrType(is64 bool) string {
 // module's imports in order, and runs its start function. An instance whose
 // segments do not fit, or whose start function traps, is returned with the
 // error, as what it already initialized is visible through its imports.
-func Instantiate(ctx context.Context, code *Code, imports []Extern) (*Instance, error) {
+func Instantiate(ctx context.Context, code *Code, imports []Extern) (inst *Instance, err error) {
+	// Evaluating a constant expression may trap -- an array too large --
+	// before any instance is made.
+	defer func() {
+		if r := recover(); r != nil {
+			tr, ok := r.(*Trap)
+			if !ok {
+				panic(r)
+			}
+			inst, err = nil, tr
+		}
+	}()
+	return instantiate(ctx, code, imports)
+}
+
+func instantiate(ctx context.Context, code *Code, imports []Extern) (*Instance, error) {
 	m := code.Module
 	inst := &Instance{Module: m, Code: code}
 	// Memories are linked first, then the other imports in order.

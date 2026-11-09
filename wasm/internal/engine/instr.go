@@ -511,7 +511,7 @@ func storeVal(f *frame, t module.ValueType, s int, v Val) {
 // callIndirect compiles call_indirect and return_call_indirect.
 func (c *compiler) callIndirect(typeIndex, table uint32, at uint32, tail bool) {
 	sig := c.m.Types[typeIndex].Func
-	want := c.m.Canonical[typeIndex]
+	checked := indirectChecksType(c.m, typeIndex, table)
 	index := c.pop()
 	is64 := c.m.Tables[table].Limits.Is64
 	var idx func(*frame) uint64
@@ -522,20 +522,7 @@ func (c *compiler) callIndirect(typeIndex, table uint32, at uint32, tail bool) {
 		idx = func(f *frame) uint64 { return uint64(v(f)) }
 	}
 	target := func(f *frame) *Function {
-		i := idx(f)
-		t := f.inst.Tables[table]
-		if i >= uint64(len(t.Elems)) {
-			trap(TrapTableOutOfBounds)
-		}
-		e := t.Elems[i]
-		if e.IsNull() {
-			trap(TrapNullFunc)
-		}
-		fn := e.Func()
-		if fn.Type != want && !module.IsCanonicalSubtype(fn.Type, want) {
-			trap(TrapFuncSigMismatch)
-		}
-		return fn
+		return indirectCallee(f.inst, typeIndex, table, idx(f), checked)
 	}
 	c.callTarget(sig, target, at, tail)
 }

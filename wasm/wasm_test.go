@@ -528,7 +528,7 @@ func TestTraps(t *testing.T) {
 		"overflow":    "divide result unrepresentable",
 		"trunc":       "float unrepresentable in integer range",
 		"oob":         "memory access out of bounds",
-		"null":        "null function",
+		"null":        "function signature mismatch",
 		"table":       "table index is out of bounds",
 		"recurse":     "Maximum call stack size exceeded",
 	} {

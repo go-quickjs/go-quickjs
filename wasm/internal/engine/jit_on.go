@@ -508,20 +508,7 @@ func indirectTarget(inst *Instance, typeIndex, table uint32, i uint64) *Function
 	if !inst.Module.Tables[table].Limits.Is64 {
 		i = uint64(uint32(i))
 	}
-	want := inst.Module.Canonical[typeIndex]
-	t := inst.Tables[table]
-	if i >= uint64(len(t.Elems)) {
-		trap(TrapTableOutOfBounds)
-	}
-	e := t.Elems[i]
-	if e.IsNull() {
-		trap(TrapNullFunc)
-	}
-	fn := e.Func()
-	if fn.Type != want && !module.IsCanonicalSubtype(fn.Type, want) {
-		trap(TrapFuncSigMismatch)
-	}
-	return fn
+	return indirectCallee(inst, typeIndex, table, i, indirectChecksType(inst.Module, typeIndex, table))
 }
 
 // jitOp runs instruction op for native code, with immediates x and y, its
