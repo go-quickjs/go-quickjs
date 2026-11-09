@@ -55,6 +55,12 @@ type Ctx struct {
 	// for a native call; one that holds none leaves it as its caller set
 	// it.
 	R, RChunkEnd uintptr
+	// Inst is the address of the instance the code runs for, which a
+	// function a table holds is compared with: the instance that defined
+	// it (Layout.FuncInst). Frames is the Code's table of each function's
+	// frame, in bytes, past which a native call's callee's must fit: for a
+	// call through a table, whose callee is known only when it is made.
+	Inst, Frames uintptr
 
 	// The store of a pointer word while the collector marks: native code
 	// leaves the word's address in WBSlot and the pointer in WBPtr and

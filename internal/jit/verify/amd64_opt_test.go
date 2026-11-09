@@ -44,3 +44,29 @@ func TestAMD64WasmOpt(t *testing.T) {
 		}
 	}
 }
+
+// TestAMD64WasmOptStrings checks the string instructions the optimizing
+// tier's memory.copy and memory.fill run: REP MOVSB and REP STOSB, bytes
+// upward from RSI to RDI, RCX of them.
+func TestAMD64WasmOptStrings(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		code []byte
+		op   x86asm.Op
+	}{
+		{"RepMovsb", encode(func(a *amd64.Asm) { a.RepMovsb() }), x86asm.MOVSB},
+		{"RepStosb", encode(func(a *amd64.Asm) { a.RepStosb() }), x86asm.STOSB},
+	} {
+		inst := decodeOne(t, c.name, c.code)
+		rep := false
+		for _, p := range inst.Prefix {
+			if p&0xFF == x86asm.PrefixREP {
+				rep = true
+			}
+		}
+		dst, _ := inst.Args[0].(x86asm.Mem)
+		if inst.Op != c.op || !rep || dst.Base != x86asm.RDI {
+			t.Fatalf("%s: % x is %v, want REP %v to [RDI]", c.name, c.code, inst, c.op)
+		}
+	}
+}

@@ -47,7 +47,12 @@ type codeJIT struct {
 	// links holds each function's native entry, or 0; native code reads
 	// it, so it is written atomically and never moves.
 	links []uintptr
-	raws  []*ijit.RawCode
+	// frames holds each function's frame in bytes once it has native code,
+	// which a native call through a table checks its room by (Ctx.Frames);
+	// a function that holds references has one no call through a table
+	// makes natively. It is written atomically, before the link.
+	frames []uint64
+	raws   []*ijit.RawCode
 	// simd holds the code of each SIMD instruction native code leaves to
 	// Go, by its offset in the module (simdExitFn).
 	simd sync.Map
@@ -155,6 +160,9 @@ var jitLayout = &wjit.Layout{
 	ArrayLen:   int32(unsafe.Offsetof(Array{}.n)),
 	ArrayBytes: int32(unsafe.Offsetof(Array{}.b)),
 	ArrayRefs:  int32(unsafe.Offsetof(Array{}.r)),
+	FuncType:   int32(unsafe.Offsetof(Function{}.Type)),
+	FuncInst:   int32(unsafe.Offsetof(Function{}.Inst)),
+	FuncIndex:  int32(unsafe.Offsetof(Function{}.Index)),
 }
 
 // A type's supertypes are 4 bytes each, as native code reads them.
@@ -360,7 +368,7 @@ func (c *Code) enableJIT(threshold int) bool {
 		return true
 	}
 	n := max(len(c.Module.Functions), 1)
-	cj := &codeJIT{threshold: int32(threshold), arena: ijit.NewArena(), links: make([]uintptr, n), counters: make([]int64, n)}
+	cj := &codeJIT{threshold: int32(threshold), arena: ijit.NewArena(), links: make([]uintptr, n), frames: make([]uint64, n), counters: make([]int64, n)}
 	cj.optThreshold.Store(-1)
 	if optEnv >= -1 && wopt.Available {
 		cj.optThreshold.Store(int32(optEnv))
@@ -447,6 +455,7 @@ func (cj *codeJIT) compile(c *Code, idx uint32, cd *compiled) (nat *nativeFn) {
 		cj.catches.Store(true)
 	}
 	cd.native.Store(nat)
+	cj.setFrame(idx, cd)
 	atomic.StoreUintptr(&cj.links[idx], nat.base+uintptr(code.Entry))
 	countCompiled()
 	return nat
@@ -483,9 +492,21 @@ func (cj *codeJIT) compileOpt(c *Code, idx uint32, cd *compiled, prev *nativeFn)
 	jitCode.log(idx, "opt", raw, code)
 	nat := &nativeFn{raw: raw, base: raw.Base(), goEntry: code.GoEntry, retStub: raw.Base() + uintptr(code.ReturnStub), nslots: cd.nslots, opt: true, prev: prev}
 	cd.native.Store(nat)
+	cj.setFrame(idx, cd)
 	atomic.StoreUintptr(&cj.links[idx], nat.base+uintptr(code.Entry))
 	countOptimized()
 	return nat
+}
+
+// setFrame records function idx's frame for native calls through a table
+// (codeJIT.frames), before its link is stored.
+func (cj *codeJIT) setFrame(idx uint32, cd *compiled) {
+	b := uint64(8 * cd.nslots)
+	if cd.nativeRefSlots() > 0 {
+		// Past any chunk's end: such a call goes through Go.
+		b = math.MaxUint32
+	}
+	atomic.StoreUint64(&cj.frames[idx], b)
 }
 
 // tierUp has function idx, whose baseline code counted enough calls,
@@ -789,6 +810,8 @@ func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64,
 		ChunkEnd:  lv.chunkBase + uintptr(len(chunk))*8,
 		R:         uintptr(unsafe.Pointer(&r[0])),
 		RChunkEnd: lv.rchunkBase + uintptr(len(rchunk))*16,
+		Inst:      uintptr(unsafe.Pointer(inst)),
+		Frames:    uintptr(unsafe.Pointer(&cj.frames[0])),
 	}
 	lv.r0 = ctx.R
 	if ctx.R < lv.rchunkBase || ctx.R >= ctx.RChunkEnd {

@@ -45,3 +45,12 @@ func (a *Asm) StoreSS(base Reg, disp int32, src XReg) {
 	a.emit2(0x0F, 0x11)
 	a.modrmMem(byte(src), base, disp)
 }
+
+// RepMovsb copies RCX bytes from [RSI] to [RDI], upward, leaving RSI and
+// RDI past them and RCX 0 (REP MOVSB; the direction flag is clear, as Go
+// leaves it).
+func (a *Asm) RepMovsb() { a.emit2(0xF3, 0xA4) }
+
+// RepStosb stores AL into RCX bytes from [RDI], upward, leaving RDI past
+// them and RCX 0 (REP STOSB).
+func (a *Asm) RepStosb() { a.emit2(0xF3, 0xAA) }

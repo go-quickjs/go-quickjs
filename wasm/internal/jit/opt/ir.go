@@ -6,6 +6,8 @@ package opt
 import (
 	"fmt"
 	"strings"
+
+	"github.com/go-quickjs/go-quickjs/wasm/internal/opcode"
 )
 
 // Type is an SSA value's type: the four numeric types, a call's tuple of
@@ -327,7 +329,17 @@ func (v *Value) HasEffect() bool {
 
 // IsCall reports whether v clobbers every register: a call, or work done
 // in Go.
-func (v *Value) IsCall() bool { return opInfos[v.Op].flags&fCall != 0 }
+func (v *Value) IsCall() bool { return opInfos[v.Op].flags&fCall != 0 && !v.BulkInCode() }
+
+// BulkInCode reports whether v is a memory.copy or a memory.fill of memory
+// 0, which the code does itself rather than Go.
+func (v *Value) BulkInCode() bool {
+	if v.Op != OpGoOp || v.Aux2 != 0 {
+		return false
+	}
+	op := opcode.Opcode(v.Aux)
+	return op == opcode.MemoryCopy || op == opcode.MemoryFill
+}
 
 // Commutes reports whether v's two arguments commute.
 func (v *Value) Commutes() bool { return opInfos[v.Op].flags&fComm != 0 }

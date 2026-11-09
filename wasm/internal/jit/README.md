@@ -256,6 +256,10 @@ and X0 on arm64:
 - `WBSlot`, `WBPtr`, `WBRet`, `Save`: the barrier routine's arguments and
   register save area (see References and the collector).
 - `ChunkEnd`: the end of the stack chunk the frames are in.
+- `Inst`, `Frames`: the address of the instance the code runs for, and the
+  Code's table of each function's frame in bytes, set when its native
+  code is placed: what the optimizing tier's native `call_indirect` checks
+  its callee by (`opt/README.md`).
 - `RSP`, `RSEnd`: the native return stack, shared by an exec's levels: its
   next entry, which a register holds in native code and an exit stores,
   and its end -- or, if that is before, the entry at which a call would
@@ -350,7 +354,9 @@ and resumes the frame at its return. `return_call_indirect` always exits,
 to the same handling. The interpreter's `tailChain` enters native code too,
 so a chain of tail calls across the tiers does not grow the stack.
 
-Calls through a table, of imports and of host functions are exits.
+Calls through a table, of imports and of host functions are exits; the
+optimizing tier makes a call through a table natively where its callee is
+one of the instance's with native code (`opt/README.md`).
 
 ## Memory
 

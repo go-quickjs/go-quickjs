@@ -92,6 +92,10 @@ type Layout struct {
 	// of its number elements, packed; ArrayRefs its reference elements:
 	// their address, then their number.
 	ArrayLen, ArrayBytes, ArrayRefs int32
+	// A function's FuncType is its canonical type index, 4 bytes; FuncInst
+	// the address of the instance that defined it, a word, 0 for a host
+	// function's; FuncIndex its index in that instance, 4 bytes.
+	FuncType, FuncInst, FuncIndex int32
 }
 
 // Code is a function's native code. Its offsets are from its start.

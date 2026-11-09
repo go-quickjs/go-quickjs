@@ -42,7 +42,9 @@ the address of a global's value, made once in the entry block, which
 `global.get` and `global.set` read and write through -- calls of a
 function of the module (`call`) and through a table (`call_indirect`),
 whose results `result` values read, and `goop`, an instruction Go runs
-(memory.size, memory.grow, memory.copy, memory.fill).
+(memory.size, memory.grow, memory.copy, memory.fill) -- but memory.copy
+and memory.fill of memory 0, which the code does itself and which are
+not calls (`BulkInCode`).
 
 An operation is pure -- no effect, no trap, so shared, moved and removed
 at will -- or not: a division may trap unless its divisor is a constant
@@ -126,10 +128,10 @@ the points where something else reads them:
   frame's end (`L + 8*nslots`), one slot each, and reads the results
   there; the return stack entry is the baseline's.
 - A call through Go -- of an import, of a callee with no native code or no
-  room, `call_indirect` -- and an instruction Go runs find their operands,
-  two slots apart, in the call area at the frame's top (from `argBase`,
-  `nslots` less twice the most arguments or results of any of them) and
-  leave their results there.
+  room, a `call_indirect` not made natively -- and an instruction Go runs
+  find their operands, two slots apart, in the call area at the frame's
+  top (from `argBase`, `nslots` less twice the most arguments or results
+  of any of them) and leave their results there.
 - A poll's exit keeps every register in the context's save area
   (`Ctx.Save`): nothing in the level runs while Go polls.
 - A trap reads nothing of the frame.
@@ -153,7 +155,7 @@ The optimized code holds no reference: a function with one is refused.
 | R10 | the return stack's next entry where it arrives and leaves; in the code, `Ctx.RSP` holds it |
 | R11, R10 | general scratch registers |
 | X15, X14 | float scratch registers |
-| SI, R8, R9, R13, AX, CX, DX | the allocator's general registers, AX, CX and DX last (division's and shifts') |
+| SI, R8, R9, R13, AX, CX, DX | the allocator's general registers, AX, CX and DX last (division's and shifts'; memory.copy and memory.fill take AX, CX and SI) |
 | X0-X13 | the allocator's float registers |
 | SP, BP, R14 | never written |
 
@@ -216,6 +218,29 @@ when it runs out. A call counts it down too, then checks, as the baseline
 does, that the callee has native code, that its frame and reference slots
 fit their chunks, and that the return stack has room, else calls through
 Go (`ExitCall`), out of line.
+
+A `call_indirect` counts it down and calls natively too where the
+table's element -- within the table, not null -- is a function of the
+call's type exactly (its canonical index, `Layout.FuncType`), defined by
+the instance the code runs for (`Layout.FuncInst` against `Ctx.Inst`),
+with native code (the link table at its index, `Layout.FuncIndex`) and
+room for its frame, which the engine's table of each function's frame
+says (`Ctx.Frames`: a function that holds references has one past any
+chunk's end). Anything else -- null, past the table, another type or a
+subtype, a host function, another instance's, no native code or no room
+-- goes through Go (`ExitCallIndirect`), which finds the callee or traps
+as the interpreter does. The callee's index waits in X15 while the
+arguments are moved, as s0 is the moves'.
+
+memory.copy and memory.fill of memory 0 are the code's own: the operands
+into AX, CX and SI, which the allocator keeps free of intervals live
+across them, both ends checked against the memory's size before a byte
+is written, then REP MOVSB or REP STOSB with DI the destination's
+address, the context kept in R11 meanwhile; a copy to a higher address
+that overlaps its source goes from its end down, words then bytes, each
+read before the bytes above it are written. They make no exit and no
+poll: the count is bounded by the memory, as Go's copy of it in the
+engine is.
 
 ## Tier-up
 
@@ -361,7 +386,9 @@ baseline's 2,926 took 10.6 ms, 3.6 µs. On a Go program (json) it compiled
   block, repairing SSA, so that Go's loops are loops; and live ranges
   with holes, splitting and coalescing in the allocator, so that a phi and
   its arguments share a location.
-- Inlining of small callees; call_indirect natively; tail calls.
+- Inlining of small callees; tail calls; call_indirect and memory.copy
+  natively in the baseline too, whose Go programs spend a third of their
+  time in those exits.
 - Bounds checks: hoisting a loop's checks of an induction variable, and a
   block's checks of one base at its widest where nothing between can be
   observed.

@@ -52,6 +52,9 @@ var (
 	offMemBase   = int32(unsafe.Offsetof(wjit.Ctx{}.MemBase))
 	offMemSize   = int32(unsafe.Offsetof(wjit.Ctx{}.MemSize))
 	offGlobals   = int32(unsafe.Offsetof(wjit.Ctx{}.Globals))
+	offTables    = int32(unsafe.Offsetof(wjit.Ctx{}.Tables))
+	offInst      = int32(unsafe.Offsetof(wjit.Ctx{}.Inst))
+	offFrames    = int32(unsafe.Offsetof(wjit.Ctx{}.Frames))
 	offChunkEnd  = int32(unsafe.Offsetof(wjit.Ctx{}.ChunkEnd))
 	offRSP       = int32(unsafe.Offsetof(wjit.Ctx{}.RSP))
 	offRSEnd     = int32(unsafe.Offsetof(wjit.Ctx{}.RSEnd))
@@ -306,7 +309,14 @@ func (g *gen) allocate() {
 			switch v.Op {
 			case OpParam:
 				lf.FixedSlot[v.ID] = int32(v.Aux)
-			case OpCall, OpCallIndirect, OpGoOp:
+			case OpGoOp:
+				if v.BulkInCode() {
+					// The code copies or fills in AX, CX and SI.
+					in.Clobber = []uint64{1<<amd64.RAX | 1<<amd64.RCX | 1<<amd64.RSI}
+					break
+				}
+				fallthrough
+			case OpCall, OpCallIndirect:
 				in.Call = true
 				for k := j + 1; k < len(b.Values) && b.Values[k].Op == OpResult && b.Values[k].Args[0] == v; k++ {
 					in.Defs = append(in.Defs, lsra.VReg(b.Values[k].ID))
@@ -1089,8 +1099,14 @@ func (g *gen) value(v *Value, rest []*Value) {
 		}
 	case OpCall:
 		g.call(v, rest)
-	case OpCallIndirect, OpGoOp:
-		g.callGo(v, rest)
+	case OpCallIndirect:
+		g.callIndirect(v, rest)
+	case OpGoOp:
+		if v.BulkInCode() {
+			g.bulk(v)
+		} else {
+			g.callGo(v, rest)
+		}
 	default:
 		panic("wasm opt: no lowering of " + v.Op.String())
 	}
@@ -1889,4 +1905,167 @@ func (g *gen) callGo(v *Value, rest []*Value) {
 		}
 	}
 	g.reload(v)
+}
+
+// callIndirect lowers call_indirect: natively where the table's element is
+// a function of the call's type exactly, defined by the instance the code
+// runs for, with native code and room for its frame; else through Go,
+// which finds the callee, or traps, as the interpreter does.
+func (g *gen) callIndirect(v *Value, rest []*Value) {
+	m := g.req.Module
+	typeIndex, table := uint32(v.Aux), uint32(v.Aux2)
+	lay := g.req.Layout
+	if lay == nil || int(typeIndex) >= len(m.Canonical) || v.At > math.MaxInt32 || m.Tables[table].Limits.Is64 {
+		g.callGo(v, rest)
+		return
+	}
+	a := g.a
+	res := results(v, rest)
+	args, index := v.Args[:len(v.Args)-1], v.Args[len(v.Args)-1]
+	start, slow, poll, after := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+	frame := int32(8 * g.req.FrameSlots)
+	a.Bind(start)
+	a.OpImm(amd64.Sub, rPoll, 1, true)
+	a.Jcc(amd64.CondLE, poll)
+	// The element, within the table and not null: a function.
+	g.movG(s0, index)
+	a.Load(s1, rCtx, offTables)
+	a.Load(s1, s1, int32(8*table))
+	a.CmpMem(s0, s1, lay.TableElems+8, true)
+	a.Jcc(amd64.CondAE, slow)
+	a.Load(s1, s1, lay.TableElems)
+	a.ShiftImm(amd64.Shl, s0, 4, true)
+	a.LoadIdx(s1, s1, s0, 1, 0)
+	a.Op(amd64.Test, s1, s1, true)
+	a.Jcc(amd64.CondE, slow)
+	// Of the call's type, defined by this instance: its index is the
+	// module's.
+	a.LoadU32(s0, s1, lay.FuncType)
+	a.OpImm(amd64.Cmp, s0, int32(m.Canonical[typeIndex]), false)
+	a.Jcc(amd64.CondNE, slow)
+	a.Load(s0, s1, lay.FuncInst)
+	a.CmpMem(s0, rCtx, offInst, true)
+	a.Jcc(amd64.CondNE, slow)
+	a.LoadU32(s0, s1, lay.FuncIndex)
+	// Its native entry, its frame's room past this one's, and an entry of
+	// the return stack.
+	a.Load(s1, rCtx, offLinks)
+	a.LoadIdxScaled(s1, s1, s0, 3, 0)
+	a.Op(amd64.Test, s1, s1, true)
+	a.Jcc(amd64.CondE, slow)
+	a.Load(s1, rCtx, offFrames)
+	a.LoadIdxScaled(s1, s1, s0, 3, 0)
+	a.Op(amd64.Add, s1, rL, true)
+	a.OpImm(amd64.Add, s1, frame, true)
+	a.CmpMem(s1, rCtx, offChunkEnd, true)
+	a.Jcc(amd64.CondA, slow)
+	a.Load(rRS, rCtx, offRSP)
+	a.CmpMem(rRS, rCtx, offRSEnd, true)
+	a.Jcc(amd64.CondAE, slow)
+	// The callee's index waits in x0 while the arguments go into its
+	// parameters, one slot each, the moves taking s0.
+	a.MovQToX(x0, s0)
+	for i, x := range args {
+		g.move(loc{kind: lSlot, slot: int32(g.req.FrameSlots + i)}, g.locOf(x), x.Type)
+	}
+	ret := a.NewLabel()
+	a.LeaLabel(s0, ret)
+	a.Store(rRS, 0, s0)
+	a.Store(rRS, 8, rL)
+	a.MovQFromX(s0, x0)
+	a.ShiftImm(amd64.Shl, s0, 32, true)
+	a.OpImm(amd64.Or, s0, int32(v.At), true)
+	a.Store(rRS, 16, s0)
+	a.OpImm(amd64.Add, rRS, wjit.RSEntryWords*8, true)
+	a.OpImm(amd64.Add, rL, frame, true)
+	a.MovQFromX(s0, x0)
+	a.ShiftImm(amd64.Shl, s0, 3, true)
+	a.AddMem(s0, rCtx, offLinks)
+	a.Load(s0, s0, 0)
+	a.JmpReg(s0)
+	a.Bind(ret)
+	a.Store(rCtx, offRSP, rRS)
+	g.takeResults(res, int32(g.req.FrameSlots))
+	a.Bind(after)
+	g.reload(v)
+	g.ool = append(g.ool, func() {
+		a.Bind(poll)
+		g.mark("cold call")
+		g.saveAll()
+		g.exit(wjit.ExitPoll, a.NewLabel())
+		g.restoreAll()
+		a.Jmp(start)
+		a.Bind(slow)
+		g.stage(v.Args, g.argBase)
+		g.exit(wjit.ExitCallIndirect, a.NewLabel(), v.Aux, v.Aux2, uint64(g.argBase), uint64(v.At))
+		g.takeResults(res, int32(g.argBase))
+		a.Jmp(after)
+	})
+}
+
+// bulk lowers memory.copy and memory.fill of memory 0 (BulkInCode): the
+// operands into AX, CX and SI, which the allocator keeps free across, the
+// ends checked against the memory's size, then REP MOVSB or REP STOSB to
+// DI, the context kept in s0 meanwhile -- or, for a copy to a higher
+// address that overlaps its source, a copy from the end down, words then
+// bytes. Both ends are checked before a byte is written, as the
+// interpreter's are.
+func (g *gen) bulk(v *Value) {
+	a := g.a
+	const ax, cx, si = amd64.RAX, amd64.RCX, amd64.RSI
+	in := func(r amd64.Reg, x *Value) pmove {
+		return pmove{dst: loc{kind: lGPR, r: int(r)}, src: g.locOf(x), t: TI32}
+	}
+	oob := g.trap(wjit.TrapMemOutOfBounds, v.At)
+	check := func(base amd64.Reg) {
+		a.LeaIdx(s0, base, cx, 1, 0)
+		a.CmpMem(s0, rCtx, offMemSize, true)
+		a.Jcc(amd64.CondA, oob)
+	}
+	if opcode.Opcode(v.Aux) == opcode.MemoryFill {
+		// Destination, value, count.
+		g.parallel([]pmove{in(si, v.Args[0]), in(ax, v.Args[1]), in(cx, v.Args[2])})
+		check(si)
+		a.MovRR(s0, rCtx)
+		a.LeaIdx(rCtx, si, rMem, 1, 0)
+		a.RepStosb()
+		a.MovRR(rCtx, s0)
+		return
+	}
+	// Destination, source, count.
+	g.parallel([]pmove{in(ax, v.Args[0]), in(si, v.Args[1]), in(cx, v.Args[2])})
+	check(si)
+	check(ax)
+	up, done := a.NewLabel(), a.NewLabel()
+	a.Op(amd64.Cmp, ax, si, true)
+	a.Jcc(amd64.CondBE, up)
+	a.LeaIdx(s0, si, cx, 1, 0)
+	a.Op(amd64.Cmp, ax, s0, true)
+	a.Jcc(amd64.CondAE, up)
+	// Down from the end: each word, then each byte, read before the bytes
+	// above it are written.
+	a.Op(amd64.Add, si, rMem, true)
+	a.Op(amd64.Add, ax, rMem, true)
+	words, bytes := a.NewLabel(), a.NewLabel()
+	a.Bind(words)
+	a.OpImm(amd64.Cmp, cx, 8, true)
+	a.Jcc(amd64.CondB, bytes)
+	a.OpImm(amd64.Sub, cx, 8, true)
+	a.LoadIdx(s1, si, cx, 1, 0)
+	a.StoreIdx(ax, cx, 1, 0, s1)
+	a.Jmp(words)
+	a.Bind(bytes)
+	a.Op(amd64.Test, cx, cx, true)
+	a.Jcc(amd64.CondE, done)
+	a.OpImm(amd64.Sub, cx, 1, true)
+	a.LoadU8Idx(s1, si, cx, 0)
+	a.Store8Idx(ax, cx, 0, s1)
+	a.Jmp(bytes)
+	a.Bind(up)
+	a.Op(amd64.Add, si, rMem, true)
+	a.MovRR(s0, rCtx)
+	a.LeaIdx(rCtx, ax, rMem, 1, 0)
+	a.RepMovsb()
+	a.MovRR(rCtx, s0)
+	a.Bind(done)
 }
