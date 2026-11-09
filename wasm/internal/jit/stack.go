@@ -13,7 +13,8 @@ const (
 	// kReg: register r, a general one for an integer, a float one for a
 	// float. An i32 in a general register has its upper half clear.
 	kReg
-	// kSlot: the frame slot at off, the entry's own position's.
+	// kSlot: the frame slot at off, the entry's own position's: from L, or
+	// from R for a reference, which is never anywhere else.
 	kSlot
 	// kFlags: the flags, true where condition c holds; made only for the
 	// br_if or if that follows.
@@ -40,6 +41,20 @@ func (c *compiler) slotOff(h int) int32 { return int32((c.nlocals + 2*h) * 8) }
 // slotIndex is stack position h's slot.
 func (c *compiler) slotIndex(h int) uint64 { return uint64(c.nlocals + 2*h) }
 
+// refSlotOff is the byte offset of stack position h's reference slot from
+// R.
+func (c *compiler) refSlotOff(h int) int32 { return int32((c.rlocals + h) * 16) }
+
+// ownOff is the offset of the slot a value of type t at stack position h
+// is kept in: its reference slot's from R for a reference, else its slot's
+// from L.
+func (c *compiler) ownOff(t module.Kind, h int) int32 {
+	if t == module.KindRef {
+		return c.refSlotOff(h)
+	}
+	return c.slotOff(h)
+}
+
 func (c *compiler) push(v value) {
 	c.stack = append(c.stack, v)
 	if h := len(c.stack); h > c.maxHeight {
@@ -53,7 +68,7 @@ func (c *compiler) pushConst(t module.Kind, bits uint64) { c.push(value{t: t, k:
 
 // pushSlot pushes the value of type t in the slot of the position it takes.
 func (c *compiler) pushSlot(t module.Kind) {
-	c.push(value{t: t, k: kSlot, off: c.slotOff(len(c.stack))})
+	c.push(value{t: t, k: kSlot, off: c.ownOff(t, len(c.stack))})
 }
 
 // pop pops the top entry; a register it holds stays taken until the
@@ -127,9 +142,16 @@ func (c *compiler) allocX(avoid regMask) freg {
 	panic("wasm jit: no float register to spill")
 }
 
-// spill stores position h's entry into its slot.
+// spill stores position h's entry into its slot. A reference is always in
+// its own.
 func (c *compiler) spill(h int) {
 	v := c.stack[h]
+	if v.t == module.KindRef {
+		if v.k != kSlot || v.off != c.refSlotOff(h) {
+			panic("wasm jit: a reference out of its slot")
+		}
+		return
+	}
 	off := c.slotOff(h)
 	if v.k == kSlot && v.off == off {
 		return

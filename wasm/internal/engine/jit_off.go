@@ -31,7 +31,7 @@ func osrBudget(*Code, *compiled) int32 { return 0 }
 
 func (x *exec) osr(*frame, uint32, uint32) (int32, bool) { return 0, false }
 
-func (x *exec) runNative(*Function, *compiled, []uint64) (int32, bool) { return 0, false }
+func (x *exec) runNative(*Function, *compiled, []uint64, []Ref) (int32, bool) { return 0, false }
 
 func (x *exec) jitLevel() int { return 0 }
 

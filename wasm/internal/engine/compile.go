@@ -66,7 +66,12 @@ func NewCode(m *module.Module) *Code {
 // compiled is a function body ready to run.
 type compiled struct {
 	nslots, rslots int
-	body           []stmt
+	// nlocals and rlocals are the numeric and reference slots before the
+	// operand stack's; refs says the body holds a reference anywhere, and
+	// so reads or writes its reference slots.
+	nlocals, rlocals int
+	refs             bool
+	body             []stmt
 	// epi moves the results from their stack positions to where the caller
 	// finds them, after the body ends or branches to the function's label.
 	epi []stmt
@@ -194,6 +199,8 @@ type compiler struct {
 	stack []entry
 	ctrl  []*ctl
 	epi   []stmt
+	// refs says a reference was pushed.
+	refs bool
 }
 
 func compileFunction(code *Code, index uint32) *compiled {
@@ -230,6 +237,9 @@ func compileFunction(code *Code, index uint32) *compiled {
 	return &compiled{
 		nslots:  c.nlocals + 2*(c.maxHeight+1),
 		rslots:  c.rlocals + c.maxHeight + 1,
+		nlocals: c.nlocals,
+		rlocals: c.rlocals,
+		refs:    c.refs || c.rlocals > 0,
 		body:    fnCtl.body,
 		epi:     c.epi,
 		params:  params,
@@ -249,6 +259,9 @@ func (c *compiler) emit(s stmt) {
 }
 
 func (c *compiler) push(e entry) {
+	if e.t.IsRef() {
+		c.refs = true
+	}
 	c.stack = append(c.stack, e)
 	if h := len(c.stack); h > c.maxHeight {
 		c.maxHeight = h

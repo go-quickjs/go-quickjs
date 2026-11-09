@@ -107,20 +107,28 @@ a slot under a loop is read by native code after the loop's entry.
 ## Frames
 
 A frame is the interpreter's (see `engine/compile.go`): numeric slots on the
-exec's chunked stack, which never moves. With no references or vectors in
-compiled code, numeric local k is slot k, the parameters first; stack
-position h is slot `nlocals + 2h`, `nlocals` being the number of locals or
-of results, whichever is more; a function's results are left in slots 0 up.
-A frame has the slots the interpreter's compile of the function counted
-(`nslots`); the compiler refuses a function whose stack needs more
-(`frame`).
+exec's chunked stack, and reference slots of two words each on its chunked
+stack of references, which the collector scans; neither moves. Numeric
+local k is the numeric slot of its place among the numeric locals, the
+parameters first, and a reference local the reference slot of its place
+among the reference locals; stack position h is numeric slot `nlocals +
+2h` and reference slot `rlocals + h`, `nlocals` and `rlocals` being the
+numbers of numeric and reference locals or of results, whichever is more;
+a function's results are left in the slots its parameters would take if
+they were of the result types. A frame has the slots the interpreter's
+compile of the function counted (`nslots`, `rslots`); the compiler refuses
+a function whose stack needs more (`frame`).
 
 Every i32 and f32 in a slot or a general register has its upper half clear,
 as the interpreter leaves them, so a slot is read as the interpreter reads
 it and copied whole.
 
 Native code addresses the frame through a register of its own (`L`: BX on
-amd64, X19 on arm64).
+amd64, X19 on arm64), and a function that holds references its reference
+slots through another (`R`: SI on amd64, X12 on arm64), which the cache
+then never hands out. A function that holds none -- the engine's compile
+saw no reference among its locals, results and stack entries -- neither
+reads nor writes reference slots, and keeps no `R`.
 
 **Locals.** The most used locals live in registers of their own for the
 whole function -- on amd64 three integers in general registers and four
@@ -133,7 +141,9 @@ an entry. Before a call and an exit, the homes of
 the locals the function ever writes are stored into their slots (the
 others' slots hold their values already: a parameter's the caller's, a
 declared local's the prologue's zero), and after them every home is
-loaded again; the prologue loads them first.
+loaded again; the prologue loads them first. References never have homes,
+and in a function that holds references amd64 gives integer locals two
+homes, not three, `R` having taken one of the cache's registers.
 
 **The operand stack** is a list of entries, each a constant, a register
 -- general for integers, SSE or FP for floats -- or its position's slot, or
@@ -145,6 +155,12 @@ into its slot. Every entry is stored into its slot when control merges --
 entering a block, a loop or an if, and so at every branch's target -- and
 at a call and an exit, so that at a label the whole stack is in slots, as
 in the interpreter, and no register is live.
+
+A reference on the operand stack is always in its position's reference
+slot: what makes one -- ref.null, ref.func, local.get, global.get,
+table.get, a call -- stores it there at once, and what reads one reads the
+slot, so no reference is ever in a register past the instruction that
+moves it, nor at a call, an exit or a poll.
 
 ## Registers
 
@@ -158,6 +174,7 @@ On amd64:
 | R12 | the poll counter |
 | R10 | the return stack's next entry |
 | R11, X15 | scratch, never cached |
+| SI | `R`, the frame's reference slots, in a function that holds references; else the cache's |
 | R13, R9, R8 | homes of integer locals, else the cache's |
 | X14-X11 | homes of float locals, else the cache's |
 | SI, R8, R9, R13, AX, CX, DX | the cache's general registers, AX, CX and DX last (division and shifts take them, and LOCK CMPXCHG AX) |
@@ -176,6 +193,7 @@ On arm64:
 | X23 | the return stack's next entry |
 | X16, X17, D30, D31 | scratch, never cached |
 | X27 | the encoder's temporary, for offsets and immediates an instruction cannot hold |
+| X12 | `R`, the frame's reference slots, in a function that holds references; else the cache's |
 | X26, X25, X24, X15, X14, X13 | homes of integer locals, else the cache's |
 | D29-D22 | homes of float locals, else the cache's |
 | X1-X15, X24-X26 | the cache's general registers, the homes last; at a call every entry is in its slot, and the call sequence uses X1 and X2 |
@@ -210,7 +228,16 @@ and X0 on arm64:
 - `Mems`: the instance's table of its memories, three words each -- the
   first byte, the size, the address of the size -- filled before every
   entry when the instance has more than one memory (see Memory).
-- `Globals`: the instance's table of its globals' addresses.
+- `Globals`: the instance's table of its globals' addresses: a number's
+  word, or a reference global's `Ref`.
+- `Funcs`, `Tables`: the instance's tables of its functions' and its
+  tables' addresses, which ref.func and table.get and table.set read.
+- `R`, `RChunkEnd`: the running frame's reference slots and the end of the
+  chunk they are in. Go sets `R` at entry; a function that holds references
+  moves it past its frame for a native call and back after, and one that
+  holds none leaves it as it is.
+- `WBSlot`, `WBPtr`, `WBRet`, `Save`: the barrier routine's arguments and
+  register save area (see References and the collector).
 - `ChunkEnd`: the end of the stack chunk the frames are in.
 - `RSP`, `RSEnd`: the native return stack, shared by an exec's levels: its
   next entry, which a register holds in native code and an exit stores,
@@ -248,7 +275,9 @@ is in its slot.
 | `ExitCallIndirect` | finds the function as the interpreter does, its traps included, and calls it |
 | `ExitTailCall`, `ExitTailIndirect` | a tail call made otherwise than natively: see Calls |
 | `ExitPoll` | `pollContext`, the context's cancellation |
-| `ExitOp` | memory.size, memory.grow, memory.init, memory.copy, memory.fill, data.drop, table.size, table.init, table.copy, elem.drop, memory.atomic.wait32, memory.atomic.wait64, memory.atomic.notify, on the frame's slots; an atomic instruction's offset is the 64-bit `Arg2` |
+| `ExitCallRef` | call_ref: finds the function, trapping on null, and calls it |
+| `ExitTailRef` | return_call_ref, as `ExitTailIndirect` |
+| `ExitOp` | memory.size, memory.grow, memory.init, memory.copy, memory.fill, data.drop, table.size, table.grow, table.fill, table.init, table.copy, elem.drop, memory.atomic.wait32, memory.atomic.wait64, memory.atomic.notify, on the frame's slots; an atomic instruction's offset is the 64-bit `Arg2` |
 
 A trap's site stores its offset and jumps to the function's stub for the
 trap's code; there is no resumption.
@@ -277,6 +306,16 @@ address, its own L, the callee's index above the call's offset -- moves L
 and jumps through the link table. The callee's return sequence pops the
 entry, restores L and jumps back; the caller loads its locals' homes and
 copies the results from the callee's frame into its stack positions.
+
+A callee that holds references has its reference slots past its caller's
+too: a caller that holds references copies the reference arguments to
+`R + rslots`, moves the context's `R` there for the call and back after,
+and loads its `R` again; one that holds none leaves `R` where it is, its
+own reference slots unused. Before the call the caller checks that the
+callee's reference slots fit in `R`'s chunk, else the call is an
+`ExitCall`. A function that holds references makes every reference slot of
+its frame but its parameters' null when it begins, as the engine's frames
+are made, so that what the frames hold is what the interpreter's would.
 
 The return stack is Go memory, words, one for each exec, grown by Go (every
 level's pointers moved) when a native call finds it full and calls through
@@ -420,7 +459,6 @@ A function is refused whole when it has:
 | Reason | What |
 |---|---|
 | `simd` | a v128 value anywhere -- local, parameter, result, block type, callee's signature, global -- or any SIMD instruction |
-| `references` | a reference value anywhere, or ref.null, ref.is_null, ref.func, ref.as_non_null, ref.eq, br_on_null, br_on_non_null, call_ref, return_call_ref, table.get, table.set, table.grow, table.fill |
 | `gc` | any GC instruction |
 | `exceptions` | try_table, throw, throw_ref, and the legacy try, catch, catch_all, delegate, rethrow |
 | `atomics` | the struct and array atomic instructions |
@@ -447,12 +485,41 @@ and read by native code.
 
 ## References and the collector
 
-Compiled code holds no references. Native code reads and writes only words
-that are not Go pointers: slots, the context, the return stack, globals'
-numbers, linear memory. When references come to native code, they will be
-stored only through the write barrier's routine while the collector marks,
-as the JavaScript JIT stores them (`internal/jit/README.md`, "The write
-barrier").
+A reference is two words, a pointer and a payload (an i31's value), and
+native code keeps them only in Go memory the collector sees: frames'
+reference slots, globals' `Ref`s, tables' elements. Every store of a
+pointer word there -- a slot's, a table element's, a global's, null
+included -- tests the runtime's write-barrier flag (`internal/jit`'s
+`WriteBarrier`, the address compiled in): clear, it is a plain store; set,
+the collector marks, and the store goes to the function's barrier routine,
+out of line, the slot's address and the pointer in the context's `WBSlot`
+and `WBPtr` and where to go on in a scratch register. The payload word is
+always a plain store. The routine returns at once for a nil stored over a
+nil, which has nothing to write or to shade; else it saves every register
+the code may keep a value in into the context's `Save`, jumps to
+`internal/jit`'s `StoreRef` -- to the Go runtime a function the Go function
+that entered the code called, which stores with Go's barrier, shading the
+pointer it overwrites and the one it writes -- with the address in AX (X15)
+and the pointer in CX (X17), restores the registers and goes on. Native
+code so does the same work whether the collector marks or not: it never
+leaves for the marking's sake, never calls Go but through `StoreRef`, and
+its exits are the same. The flag cannot change between the test and the
+store: Go sets it only with the world stopped, which native code, never a
+safe point, does not let happen. No reference is in a register across an
+exit, a poll or a call; a pointer is in one only between its load from Go
+memory and its store into Go memory, within one instruction's code.
+
+`StoreRef` is built wherever the WebAssembly JIT is, with the JavaScript
+JIT.
+
+`WASM_JIT_BARRIER=marking`, read when the engine starts, compiles code
+that sees the collector always marking, so that every store takes the
+routine; `clobber` stores through `StoreRefClobber`, which first fills
+every register native code may keep with junk, so that a register the
+routine does not save goes wrong. `TestJITSameWorkWhileMarking` holds
+native code to the same results and the same exits idle and marking, and
+`TestJITReferencesUnderCollection` moves references while the collector
+runs, again under `GODEBUG=gccheckmark=1`.
 
 ## Validation
 
@@ -460,6 +527,8 @@ barrier").
 WASM_SPEC_DIR=/path/to/spec WASM_THREADS_DIR=/path/to/threads WASM_JIT=eager \
   go test -tags quickjs_jit ./wasm/internal/spectest -count=1 -run TestSpec -v
 WASM_SPEC_DIR=/path/to/spec WASM_THREADS_DIR=/path/to/threads WASM_JIT=osr \
+  go test -tags quickjs_jit ./wasm/internal/spectest -count=1 -run TestSpec -v
+WASM_SPEC_DIR=/path/to/spec WASM_THREADS_DIR=/path/to/threads WASM_JIT=eager WASM_JIT_BARRIER=clobber \
   go test -tags quickjs_jit ./wasm/internal/spectest -count=1 -run TestSpec -v
 WASM_SPEC_DIR=/path/to/spec WASM_THREADS_DIR=/path/to/threads go test -tags quickjs_jit ./wasm/internal/spectest -run TestJITDifferential -v
 go test -tags quickjs_jit ./wasm/internal/engine -run 'JIT|OSR'
@@ -469,9 +538,10 @@ go test -tags quickjs_jit ./wasm/internal/engine -run 'JIT|OSR'
 `TestJITDifferential` runs every spec module that links with the spectest
 module alone -- the threads proposal's too, with `WASM_THREADS_DIR` -- both
 interpreted and compiled at its first call, calls each
-numeric export with the scripts' constants, each type's edges and random
-values, and compares the results (any NaN for a NaN), the traps, and the
-memories and globals after every call; then again with every call of a
+export whose parameters are numbers or nullable references with the
+scripts' constants, each type's edges and random values, null and i31s,
+and compares the results (any NaN for a NaN, references by what they are),
+the traps, and the memories and globals after every call; then again with every call of a
 function with loops entering its native code at its first back edge
 (`osr`). The spec runs log how many calls went on natively from a loop
 (`ReadJITStats().OSR`).

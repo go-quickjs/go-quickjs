@@ -30,8 +30,13 @@ type Ctx struct {
 	// the instance has more than one memory: memories other than 0 are
 	// reached through it.
 	Mems uintptr
-	// Globals is a table of each global's address.
+	// Globals is a table of each global's address: its number's, or a
+	// reference global's Ref.
 	Globals uintptr
+	// Funcs and Tables are tables of the instance's functions' and tables'
+	// addresses, each an engine object's: what ref.func makes, and what
+	// table.get and table.set read the elements of.
+	Funcs, Tables uintptr
 	// ChunkEnd is the end of the stack chunk the frames are in: a callee's
 	// frame must end at or before it.
 	ChunkEnd uintptr
@@ -44,6 +49,20 @@ type Ctx struct {
 	// Poll counts down to the next poll; native code exits when it runs
 	// out.
 	Poll int64
+	// R is the running frame's reference slots, two words each, and
+	// RChunkEnd the end of the chunk they are in. A function that holds
+	// references keeps R in a register and moves it past its own frame
+	// for a native call; one that holds none leaves it as its caller set
+	// it.
+	R, RChunkEnd uintptr
+
+	// The store of a pointer word while the collector marks: native code
+	// leaves the word's address in WBSlot and the pointer in WBPtr and
+	// goes to its function's barrier routine, which keeps where to go on
+	// in WBRet and the registers the code keeps in Save around the
+	// runtime's store (internal/jit.StoreRef).
+	WBSlot, WBPtr, WBRet uintptr
+	Save                 [SaveWords]uint64
 
 	// The exit record: what the code exits for, its arguments, the
 	// function whose code exits and the address to resume at.
@@ -54,6 +73,9 @@ type Ctx struct {
 	ExitFn     uint64
 	ExitAddr   uintptr
 }
+
+// SaveWords is the size of the context's register save area.
+const SaveWords = 56
 
 // RSEntryWords is the number of words of a return stack entry.
 const RSEntryWords = 3
@@ -91,9 +113,17 @@ const (
 	// ExitPoll: the poll counter ran out.
 	ExitPoll
 	// ExitOp: run instruction Arg0 in Go, with immediates Arg1 and Arg2,
-	// its operands in the frame's slots from Arg3, two slots apart, where
-	// its result goes; Arg4 is its offset.
+	// its operands in the frame's slots from Arg3, two slots apart -- a
+	// reference in its stack position's reference slot -- where its result
+	// goes; Arg4 is its offset.
 	ExitOp
+	// ExitCallRef: call_ref of type Arg0, the arguments from slot Arg1 and
+	// the reference after them; Arg2 is the call's offset.
+	ExitCallRef
+	// ExitTailRef: return_call_ref of type Arg0, the arguments from slot
+	// Arg1 and the reference after them; Arg2 is the call's offset. To
+	// resume is to return.
+	ExitTailRef
 )
 
 // The trap codes an ExitTrap carries, the engine's TrapCode values.
@@ -105,4 +135,8 @@ const (
 	TrapDivUnrepresentable   = 5
 	TrapRemByZero            = 6
 	TrapFloatUnrepresentable = 7
+	TrapTableOutOfBounds     = 8
+	TrapNullDereference      = 13
+	TrapIllegalCast          = 14
+	TrapArrayOutOfBounds     = 15
 )

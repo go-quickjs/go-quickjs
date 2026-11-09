@@ -57,7 +57,7 @@ func (c *compiler) loadKept() {
 
 func (c *compiler) zeroLocals() {
 	a := c.a
-	from, to := len(c.sig.Params), len(c.locals)
+	from, to := c.numParams, c.numLocals
 	if from >= to {
 		return
 	}
@@ -134,6 +134,9 @@ func (c *compiler) exit(kind uint64, resume arm64.Label, args ...uint64) {
 func (c *compiler) resumeAt(l arm64.Label) {
 	c.a.Bind(l)
 	c.loadKept()
+	if c.refs {
+		c.loadR()
+	}
 	c.reloadHomes()
 }
 
@@ -214,18 +217,14 @@ func (c *compiler) brTable() {
 		a.Bind(stubs[d])
 		t := c.ctrl[len(c.ctrl)-1-d]
 		if d == len(c.ctrl)-1 {
-			for i := range c.sig.Results {
-				a.Load(rTmp, rL, c.slotOff(src+i))
-				a.Store(rL, int32(8*i), rTmp)
+			for i, rt := range c.sig.Results {
+				c.copyPosResult(rt.Kind, src+i, i)
 			}
 			a.B(c.retL)
 			continue
 		}
-		for i := range t.labelTypes() {
-			if from, to := c.slotOff(src+i), c.slotOff(t.base+i); from != to {
-				a.Load(rTmp, rL, from)
-				a.Store(rL, to, rTmp)
-			}
+		for i, lt := range t.labelTypes() {
+			c.copyPos(lt.Kind, src+i, t.base+i)
 		}
 		c.jumpTo(t)
 	}
@@ -341,12 +340,25 @@ func (c *compiler) call(idx uint32, at uint32) {
 	a.Bind(start)
 	a.SubsImm(rPoll, rPoll, 1, true)
 	a.BCond(arm64.LE, poll)
-	c.nativeCallChecks(idx, c.frameSlots, false, slow)
+	c.nativeCallChecks(idx, c.frameSlots, c.adv, false, slow)
 	// The arguments, into the callee's parameters.
 	frame := int32(8 * c.frameSlots)
-	for i := 0; i < n; i++ {
-		a.Load(rTmp, rL, c.slotOff(base+i))
-		a.Store(rL, frame+int32(8*i), rTmp)
+	entry := rTmp2
+	if c.refs {
+		// A reference's store uses rTmp2.
+		entry = rCall1
+		a.MovRR(entry, rTmp2)
+	}
+	if hasRef(ft.Params) {
+		c.argsTo(ft.Params, base, frame, c.adv)
+	} else {
+		for i := 0; i < n; i++ {
+			a.Load(rTmp, rL, c.slotOff(base+i))
+			a.Store(rL, frame+int32(8*i), rTmp)
+		}
+	}
+	if c.refs {
+		c.advanceR()
 	}
 	ret := a.NewLabel()
 	a.Adr(rTmp, ret)
@@ -356,13 +368,20 @@ func (c *compiler) call(idx uint32, at uint32) {
 	a.Store(rRS, 16, rTmp)
 	a.AddImm(rRS, rRS, RSEntryWords*8, true)
 	a.AddImm(rL, rL, int64(frame), true)
-	a.Br(rTmp2)
+	a.Br(entry)
 	a.Bind(ret)
+	if c.refs {
+		c.restoreR()
+	}
 	c.reloadHomes()
 	// The results, from the callee's frame.
-	for i := range ft.Results {
-		a.Load(rTmp, rL, frame+int32(8*i))
-		a.Store(rL, c.slotOff(base+i), rTmp)
+	if hasRef(ft.Results) {
+		c.resultsFrom(ft.Results, base, frame, c.adv)
+	} else {
+		for i := range ft.Results {
+			a.Load(rTmp, rL, frame+int32(8*i))
+			a.Store(rL, c.slotOff(base+i), rTmp)
+		}
 	}
 	a.Bind(after)
 	slotIdx := c.slotIndex(base)
@@ -383,10 +402,12 @@ func (c *compiler) call(idx uint32, at uint32) {
 
 // nativeCallChecks leaves the callee's entry in rTmp2, or goes to slow:
 // the callee has no native code, its frame no room in the chunk past
-// frameSlots of the caller's, or -- for a call, not a tail call -- the
-// return stack none for an entry, which it also has not where the call
-// would pass the depth limit, which the call through Go then traps for.
-func (c *compiler) nativeCallChecks(idx uint32, frameSlots int, tail bool, slow arm64.Label) {
+// frameSlots of the caller's -- nor, for one that holds references, room
+// for its reference slots past adv bytes of R -- or -- for a call, not a
+// tail call -- the return stack none for an entry, which it also has not
+// where the call would pass the depth limit, which the call through Go
+// then traps for.
+func (c *compiler) nativeCallChecks(idx uint32, frameSlots int, adv int32, tail bool, slow arm64.Label) {
 	a := c.a
 	a.Load(rTmp2, rCtx, offLinks)
 	a.Load(rTmp2, rTmp2, int32(8*idx))
@@ -395,6 +416,17 @@ func (c *compiler) nativeCallChecks(idx uint32, frameSlots int, tail bool, slow 
 	a.Load(rCall1, rCtx, offChunkEnd)
 	a.Cmp(rCall0, rCall1, true)
 	a.BCond(arm64.HI, slow)
+	if need := int32(16 * c.req.RefSlotsOf(idx)); need > 0 {
+		if c.refs {
+			a.AddImm(rCall0, rR, int64(adv+need), true)
+		} else {
+			a.Load(rCall0, rCtx, offR)
+			a.AddImm(rCall0, rCall0, int64(adv+need), true)
+		}
+		a.Load(rCall1, rCtx, offRChunkEnd)
+		a.Cmp(rCall0, rCall1, true)
+		a.BCond(arm64.HI, slow)
+	}
 	if tail {
 		return
 	}
@@ -426,18 +458,26 @@ func (c *compiler) returnCall(idx uint32, at uint32) {
 	a.Bind(start)
 	a.SubsImm(rPoll, rPoll, 1, true)
 	a.BCond(arm64.LE, poll)
-	c.nativeCallChecks(idx, 0, true, slow)
+	c.nativeCallChecks(idx, 0, 0, true, slow)
 	// The arguments, into the parameters: each slot read is past each
 	// written before it.
-	for i := 0; i < n; i++ {
-		a.Load(rTmp, rL, c.slotOff(base+i))
-		a.Store(rL, int32(8*i), rTmp)
+	entry := rTmp2
+	if hasRef(ft.Params) {
+		// A reference's store uses rTmp2.
+		entry = rCall1
+		a.MovRR(entry, rTmp2)
+		c.argsTo(ft.Params, base, 0, 0)
+	} else {
+		for i := 0; i < n; i++ {
+			a.Load(rTmp, rL, c.slotOff(base+i))
+			a.Store(rL, int32(8*i), rTmp)
+		}
 	}
 	// The frame's return stack entry names the callee now: the upper half
 	// of its third word.
 	a.MovImm(rTmp, uint64(idx))
 	a.Store32(rRS, -4, rTmp)
-	a.Br(rTmp2)
+	a.Br(entry)
 	c.ool = append(c.ool, func() {
 		a.Bind(poll)
 		r1 := a.NewLabel()

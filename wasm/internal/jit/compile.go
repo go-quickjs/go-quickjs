@@ -36,6 +36,29 @@ type Request struct {
 	FrameSlotsOf func(fn uint32) int
 	// MaxCodeBytes bounds the code; 0 is no bound.
 	MaxCodeBytes int
+	// FrameRefSlots is the number of reference slots of the function's
+	// frame native code uses: the engine's, or 0 for a function that holds
+	// no reference, whose code neither reads nor writes them. RefSlotsOf
+	// returns another function's.
+	FrameRefSlots int
+	RefSlotsOf    func(fn uint32) int
+	// FrameLocals and FrameRefLocals are the engine's numbers of numeric
+	// and reference slots before the operand stack's, which the compiler's
+	// must be.
+	FrameLocals, FrameRefLocals int
+	// WriteBarrier is the address of the byte that is not zero while the
+	// collector marks, and StoreRef where native code jumps to store a
+	// pointer word then (internal/jit's).
+	WriteBarrier, StoreRef uint64
+	// Layout is where the engine's objects keep what native code reads.
+	Layout *Layout
+}
+
+// Layout is where the engine's objects keep what native code reads of
+// them, by byte offset from the object's start.
+type Layout struct {
+	// TableElems is a table's elements: their address, then their number.
+	TableElems int32
 }
 
 // Code is a function's native code. Its offsets are from its start.
@@ -67,6 +90,14 @@ var (
 	offRSP        = int32(unsafe.Offsetof(Ctx{}.RSP))
 	offRSEnd      = int32(unsafe.Offsetof(Ctx{}.RSEnd))
 	offPoll       = int32(unsafe.Offsetof(Ctx{}.Poll))
+	offR          = int32(unsafe.Offsetof(Ctx{}.R))
+	offRChunkEnd  = int32(unsafe.Offsetof(Ctx{}.RChunkEnd))
+	offFuncs      = int32(unsafe.Offsetof(Ctx{}.Funcs))
+	offTables     = int32(unsafe.Offsetof(Ctx{}.Tables))
+	offWBSlot     = int32(unsafe.Offsetof(Ctx{}.WBSlot))
+	offWBPtr      = int32(unsafe.Offsetof(Ctx{}.WBPtr))
+	offWBRet      = int32(unsafe.Offsetof(Ctx{}.WBRet))
+	offSave       = int32(unsafe.Offsetof(Ctx{}.Save))
 	offExit       = int32(unsafe.Offsetof(Ctx{}.Exit))
 	offArg0       = int32(unsafe.Offsetof(Ctx{}.Arg0))
 	offExitFn     = int32(unsafe.Offsetof(Ctx{}.ExitFn))
@@ -117,10 +148,27 @@ type compiler struct {
 	locals []module.ValueType
 	use    localUse
 	// home is each local's register, or -1 for its slot.
-	home       []int8
-	nlocals    int
-	frameSlots int
-	maxHeight  int
+	home []int8
+	// slots is each local's slot, numeric or reference, and results each
+	// result's. nlocals and rlocals are the numeric and reference slots
+	// before the operand stack's; numParams and numLocals the numeric
+	// slots of the parameters and of every local; refParams the reference
+	// slots of the parameters.
+	slots, results       []slotPos
+	nlocals, rlocals     int
+	numParams, numLocals int
+	refParams            int
+	frameSlots           int
+	maxHeight            int
+	// refs says the function holds references: R, its reference slots, is
+	// in rR, which the cache never hands out, and a native call moves it
+	// past the frame, adv bytes.
+	refs bool
+	adv  int32
+	// wb is the function's barrier routine, made with its first store of a
+	// pointer word (wbRoutine).
+	wb    asmLabel
+	hasWB bool
 
 	stack []value
 	ctrl  []*ctl
@@ -151,7 +199,10 @@ func Compile(req *Request) (code *Code, err error) {
 	c := &compiler{a: &asm{}, req: req, m: m, fn: req.Func, sig: m.FuncType(req.Func),
 		frameSlots: req.FrameSlots, traps: map[trapKey]asmLabel{}, trapTo: map[uint64]asmLabel{}, loops: map[uint32]asmLabel{}}
 	c.locals, c.use = scan(m, req.Func, CPU)
-	c.nlocals = max(len(c.locals), len(c.sig.Results))
+	c.layout()
+	if c.nlocals != req.FrameLocals || c.rlocals != req.FrameRefLocals {
+		panic("wasm jit: the frame's locals are not the engine's")
+	}
 	c.chooseHomes()
 	f := &m.Functions[req.Func]
 	c.r = reader{b: m.Bytes, pc: int(f.Code.Offset)}
@@ -178,6 +229,9 @@ func Compile(req *Request) (code *Code, err error) {
 	}
 	if 2*c.maxHeight+c.nlocals > c.frameSlots {
 		refuse(RefuseFrame, "%d stack positions and %d locals in a frame of %d slots", c.maxHeight, c.nlocals, c.frameSlots)
+	}
+	if c.refs && c.maxHeight+c.rlocals > req.FrameRefSlots {
+		refuse(RefuseFrame, "%d stack positions and %d reference locals in a frame of %d reference slots", c.maxHeight, c.rlocals, req.FrameRefSlots)
 	}
 	out, ferr := a.Finish()
 	if ferr != nil {
@@ -215,13 +269,16 @@ func (c *compiler) chooseHomes() {
 	slices.SortStableFunc(order, func(x, y int) int { return cmp.Compare(c.use.weight[y], c.use.weight[x]) })
 	ng, nx := 0, 0
 	for _, k := range order {
+		if c.locals[k].IsRef() {
+			continue
+		}
 		if isFloat(c.locals[k].Kind) {
 			if nx < len(homeXRegs) {
 				c.home[k] = int8(homeXRegs[nx])
 				c.xused |= 1 << homeXRegs[nx]
 				nx++
 			}
-		} else if ng < len(homeGPRs) {
+		} else if ng < len(homeGPRs) && !(c.refs && ng >= refHomeGPRs) {
 			c.home[k] = int8(homeGPRs[ng])
 			c.gused |= 1 << homeGPRs[ng]
 			ng++
@@ -235,7 +292,7 @@ func (c *compiler) chooseHomes() {
 func (c *compiler) saveHomes() {
 	for k, h := range c.home {
 		if h >= 0 && c.use.written[k] {
-			c.store(value{t: c.locals[k].Kind, k: kReg, r: uint8(h)}, rL, int32(8*k))
+			c.store(value{t: c.locals[k].Kind, k: kReg, r: uint8(h)}, rL, c.localOff(k))
 		}
 	}
 }
@@ -246,7 +303,7 @@ func (c *compiler) reloadHomes() {
 		if h < 0 {
 			continue
 		}
-		v := value{t: c.locals[k].Kind, k: kSlot, off: int32(8 * k)}
+		v := value{t: c.locals[k].Kind, k: kSlot, off: c.localOff(k)}
 		if isFloat(v.t) {
 			c.loadX(freg(h), v)
 		} else {
@@ -256,8 +313,14 @@ func (c *compiler) reloadHomes() {
 }
 
 // prologue zeroes the declared locals, and loads the locals' homes; the
-// parameters are the caller's.
+// parameters are the caller's. A function that holds references loads R
+// and makes each of its reference slots but the parameters' null, as the
+// engine's frames are made.
 func (c *compiler) prologue() {
+	if c.refs {
+		c.loadR()
+		c.clearRefs(c.refParams, c.req.FrameRefSlots)
+	}
 	c.zeroLocals()
 	c.reloadHomes()
 }
@@ -313,7 +376,7 @@ func (c *compiler) markDead() {
 func (c *compiler) toSlots(n, base int) {
 	vals := c.stack[len(c.stack)-n:]
 	for i, v := range vals {
-		c.store(v, rL, c.slotOff(base+i))
+		c.storeAt(v, base+i)
 	}
 	c.truncate(len(c.stack) - n)
 }
@@ -323,7 +386,7 @@ func (c *compiler) toSlots(n, base int) {
 func (c *compiler) copyToSlots(n, base int) {
 	vals := c.stack[len(c.stack)-n:]
 	for i, v := range vals {
-		c.store(v, rL, c.slotOff(base+i))
+		c.storeAt(v, base+i)
 	}
 }
 
@@ -333,7 +396,7 @@ func (c *compiler) toResults() {
 	n := len(c.sig.Results)
 	vals := c.stack[len(c.stack)-n:]
 	for i, v := range vals {
-		c.store(v, rL, int32(8*i))
+		c.storeResult(v, i)
 	}
 	c.truncate(len(c.stack) - n)
 }
@@ -343,7 +406,7 @@ func (c *compiler) copyResults() {
 	n := len(c.sig.Results)
 	vals := c.stack[len(c.stack)-n:]
 	for i, v := range vals {
-		c.store(v, rL, int32(8*i))
+		c.storeResult(v, i)
 	}
 }
 
@@ -404,7 +467,7 @@ func (c *compiler) brIf(depth int) {
 	// A branch whose values are where its target wants them is one jump.
 	inPlace := !ret && t.op != opcode.Loop
 	for i, v := range c.stack[len(c.stack)-n:] {
-		if !(v.k == kSlot && v.off == c.slotOff(t.base+i)) {
+		if !(v.k == kSlot && v.off == c.ownOff(v.t, t.base+i)) {
 			inPlace = false
 		}
 	}
@@ -529,18 +592,31 @@ func (c *compiler) instr() {
 	case opcode.Select:
 		c.selectOp()
 	case opcode.SelectWithType:
+		var t module.ValueType
 		for n := c.r.u32(); n > 0; n-- {
-			c.r.valueType()
+			t = c.r.valueType()
 		}
-		c.selectOp()
+		if t.IsRef() {
+			c.selectRef()
+		} else {
+			c.selectOp()
+		}
 	case opcode.LocalGet:
 		c.localGet(int(c.r.u32()))
 	case opcode.LocalSet, opcode.LocalTee:
 		c.localSet(int(c.r.u32()), op == opcode.LocalTee)
 	case opcode.GlobalGet:
-		c.globalGet(c.r.u32())
+		if g := c.r.u32(); c.m.Globals[g].Type.IsRef() {
+			c.globalGetRef(g)
+		} else {
+			c.globalGet(g)
+		}
 	case opcode.GlobalSet:
-		c.globalSet(c.r.u32())
+		if g := c.r.u32(); c.m.Globals[g].Type.IsRef() {
+			c.globalSetRef(g)
+		} else {
+			c.globalSet(g)
+		}
 	case opcode.I32Const:
 		c.pushConst(module.KindI32, uint64(uint32(c.r.s32())))
 	case opcode.I64Const:
@@ -554,10 +630,10 @@ func (c *compiler) instr() {
 	case opcode.MemoryInit, opcode.MemoryCopy, opcode.TableInit, opcode.TableCopy:
 		x := uint64(c.r.u32())
 		c.goOp(op, at, x, uint64(c.r.u32()))
-	case opcode.DataDrop, opcode.ElemDrop, opcode.MemoryFill, opcode.TableSize:
+	case opcode.DataDrop, opcode.ElemDrop, opcode.MemoryFill, opcode.TableSize, opcode.TableGrow, opcode.TableFill:
 		c.goOp(op, at, uint64(c.r.u32()), 0)
 	default:
-		if c.numeric(op, at) || c.memoryOp(op, at) || c.atomicOp(op, at) {
+		if c.numeric(op, at) || c.memoryOp(op, at) || c.atomicOp(op, at) || c.refOp(op, at) {
 			return
 		}
 		refuse(RefuseOther, "%s", op.Name())
@@ -567,7 +643,11 @@ func (c *compiler) instr() {
 // localGet loads local k into a register.
 func (c *compiler) localGet(k int) {
 	t := c.locals[k].Kind
-	v := value{t: t, k: kSlot, off: int32(8 * k)}
+	if t == module.KindRef {
+		c.localGetRef(k)
+		return
+	}
+	v := value{t: t, k: kSlot, off: c.localOff(k)}
 	if h := c.home[k]; h >= 0 {
 		v = value{t: t, k: kReg, r: uint8(h)}
 	}
@@ -584,6 +664,10 @@ func (c *compiler) localGet(k int) {
 
 // localSet stores the top of the stack into local k; local.tee leaves it.
 func (c *compiler) localSet(k int, tee bool) {
+	if c.locals[k].IsRef() {
+		c.localSetRef(k, tee)
+		return
+	}
 	v := c.pop()
 	if v.k == kSlot && tee {
 		// Keep it in a register, as a local.get would have it.
@@ -602,7 +686,7 @@ func (c *compiler) localSet(k int, tee bool) {
 			c.loadG(reg(h), v)
 		}
 	} else {
-		c.store(v, rL, int32(8*k))
+		c.store(v, rL, c.localOff(k))
 	}
 	if tee {
 		c.push(v)
@@ -637,6 +721,10 @@ func (c *compiler) goOp(op opcode.Opcode, at uint32, x, y uint64) {
 		nargs, result = 2, module.KindI32
 	case opcode.I32AtomicWait, opcode.I64AtomicWait:
 		nargs, result = 3, module.KindI32
+	case opcode.TableGrow:
+		nargs, result = 2, idx(tab64(uint32(x)))
+	case opcode.TableFill:
+		nargs = 3
 	}
 	c.spillAll()
 	base := len(c.stack) - nargs

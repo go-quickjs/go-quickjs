@@ -42,7 +42,7 @@ func (c *compiler) entries() (retStub int, goEntry, entry amd64.Label) {
 
 func (c *compiler) zeroLocals() {
 	a := c.a
-	from, to := len(c.sig.Params), len(c.locals)
+	from, to := c.numParams, c.numLocals
 	if from >= to {
 		return
 	}
@@ -122,6 +122,9 @@ func (c *compiler) resumeAt(l amd64.Label) {
 	c.a.Load(rMem, rCtx, offMemBase)
 	c.a.Load(rPoll, rCtx, offPoll)
 	c.a.Load(rRS, rCtx, offRSP)
+	if c.refs {
+		c.loadR()
+	}
 	c.reloadHomes()
 }
 
@@ -201,18 +204,14 @@ func (c *compiler) brTable() {
 		a.Bind(stubs[d])
 		t := c.ctrl[len(c.ctrl)-1-d]
 		if d == len(c.ctrl)-1 {
-			for i := range c.sig.Results {
-				a.Load(rTmp, rL, c.slotOff(src+i))
-				a.Store(rL, int32(8*i), rTmp)
+			for i, rt := range c.sig.Results {
+				c.copyPosResult(rt.Kind, src+i, i)
 			}
 			a.Jmp(c.retL)
 			continue
 		}
-		for i := range t.labelTypes() {
-			if from, to := c.slotOff(src+i), c.slotOff(t.base+i); from != to {
-				a.Load(rTmp, rL, from)
-				a.Store(rL, to, rTmp)
-			}
+		for i, lt := range t.labelTypes() {
+			c.copyPos(lt.Kind, src+i, t.base+i)
 		}
 		c.jumpTo(t)
 	}
@@ -339,12 +338,19 @@ func (c *compiler) call(idx uint32, at uint32) {
 	a.Bind(start)
 	a.OpImm(amd64.Sub, rPoll, 1, true)
 	a.Jcc(amd64.CondLE, poll)
-	c.nativeCallChecks(idx, c.frameSlots, slow)
+	c.nativeCallChecks(idx, c.frameSlots, c.adv, slow)
 	// The arguments, into the callee's parameters.
 	frame := int32(8 * c.frameSlots)
-	for i := 0; i < n; i++ {
-		a.Load(amd64.RCX, rL, c.slotOff(base+i))
-		a.Store(rL, frame+int32(8*i), amd64.RCX)
+	if hasRef(ft.Params) {
+		c.argsTo(ft.Params, base, frame, c.adv)
+	} else {
+		for i := 0; i < n; i++ {
+			a.Load(amd64.RCX, rL, c.slotOff(base+i))
+			a.Store(rL, frame+int32(8*i), amd64.RCX)
+		}
+	}
+	if c.refs {
+		c.advanceR()
 	}
 	ret := a.NewLabel()
 	a.LeaLabel(amd64.RCX, ret)
@@ -356,11 +362,18 @@ func (c *compiler) call(idx uint32, at uint32) {
 	a.OpImm(amd64.Add, rL, frame, true)
 	a.JmpReg(amd64.RAX)
 	a.Bind(ret)
+	if c.refs {
+		c.restoreR()
+	}
 	c.reloadHomes()
 	// The results, from the callee's frame.
-	for i := range ft.Results {
-		a.Load(amd64.RCX, rL, frame+int32(8*i))
-		a.Store(rL, c.slotOff(base+i), amd64.RCX)
+	if hasRef(ft.Results) {
+		c.resultsFrom(ft.Results, base, frame, c.adv)
+	} else {
+		for i := range ft.Results {
+			a.Load(amd64.RCX, rL, frame+int32(8*i))
+			a.Store(rL, c.slotOff(base+i), amd64.RCX)
+		}
 	}
 	a.Bind(after)
 	slotIdx := c.slotIndex(base)
@@ -381,10 +394,11 @@ func (c *compiler) call(idx uint32, at uint32) {
 
 // nativeCallChecks leaves the callee's entry in AX, or goes to slow: the
 // callee has no native code, its frame no room in the chunk past the
-// caller's frameSlots, or the return stack none for an entry -- which it
-// also has not where the call would pass the depth limit, which the call
-// through Go then traps for.
-func (c *compiler) nativeCallChecks(idx uint32, frameSlots int, slow amd64.Label) {
+// caller's frameSlots -- nor, for one that holds references, room for its
+// reference slots past adv bytes of R -- or the return stack none for an
+// entry -- which it also has not where the call would pass the depth
+// limit, which the call through Go then traps for.
+func (c *compiler) nativeCallChecks(idx uint32, frameSlots int, adv int32, slow amd64.Label) {
 	a := c.a
 	a.Load(amd64.RAX, rCtx, offLinks)
 	a.Load(amd64.RAX, amd64.RAX, int32(8*idx))
@@ -393,8 +407,27 @@ func (c *compiler) nativeCallChecks(idx uint32, frameSlots int, slow amd64.Label
 	a.Lea(amd64.RCX, rL, int32(8*(frameSlots+c.req.FrameSlotsOf(idx))))
 	a.CmpMem(amd64.RCX, rCtx, offChunkEnd, true)
 	a.Jcc(amd64.CondA, slow)
+	c.refRoomCheck(idx, adv, slow)
 	a.CmpMem(rRS, rCtx, offRSEnd, true)
 	a.Jcc(amd64.CondAE, slow)
+}
+
+// refRoomCheck goes to slow unless function idx's reference slots, if it
+// holds references, fit in R's chunk past adv bytes of R.
+func (c *compiler) refRoomCheck(idx uint32, adv int32, slow amd64.Label) {
+	need := int32(16 * c.req.RefSlotsOf(idx))
+	if need == 0 {
+		return
+	}
+	a := c.a
+	if c.refs {
+		a.Lea(amd64.RCX, rR, adv+need)
+	} else {
+		a.Load(amd64.RCX, rCtx, offR)
+		a.OpImm(amd64.Add, amd64.RCX, adv+need, true)
+	}
+	a.CmpMem(amd64.RCX, rCtx, offRChunkEnd, true)
+	a.Jcc(amd64.CondA, slow)
 }
 
 // returnCall compiles return_call of function idx: in place of the
@@ -427,11 +460,16 @@ func (c *compiler) returnCall(idx uint32, at uint32) {
 	a.Lea(amd64.RCX, rL, int32(8*c.req.FrameSlotsOf(idx)))
 	a.CmpMem(amd64.RCX, rCtx, offChunkEnd, true)
 	a.Jcc(amd64.CondA, slow)
+	c.refRoomCheck(idx, 0, slow)
 	// The arguments, into the parameters: each slot read is past each
 	// written before it.
-	for i := 0; i < n; i++ {
-		a.Load(amd64.RCX, rL, c.slotOff(base+i))
-		a.Store(rL, int32(8*i), amd64.RCX)
+	if hasRef(ft.Params) {
+		c.argsTo(ft.Params, base, 0, 0)
+	} else {
+		for i := 0; i < n; i++ {
+			a.Load(amd64.RCX, rL, c.slotOff(base+i))
+			a.Store(rL, int32(8*i), amd64.RCX)
+		}
 	}
 	// The frame's return stack entry names the callee now.
 	a.Load(amd64.RCX, rRS, -8)

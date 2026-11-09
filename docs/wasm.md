@@ -41,14 +41,14 @@ records a set but turns nothing off.
 |---|---|---|
 | WebAssembly 1.0, mutable globals | yes | yes |
 | Sign extension, non-trapping float-to-int, multi-value, bulk memory | yes | yes; the bulk instructions run in Go |
-| Reference types | yes | refused |
+| Reference types | yes | yes; `table.grow` and `table.fill` in Go |
 | Fixed-width SIMD | yes | refused |
 | Tail calls | yes | yes; `return_call_indirect` through Go |
 | Extended constant expressions | yes | -- |
 | Multiple memories | yes | loads and stores of memory 0 only |
 | Memory64 and table64 | yes | refused for loads and stores of an i64 memory |
 | Exception handling (`exnref`), and the legacy `try` | yes | refused |
-| Typed function references | yes | refused |
+| Typed function references | yes | yes; `call_ref` and `return_call_ref` through Go |
 | Garbage collection: structs, arrays, i31, casts | yes | refused |
 | Relaxed SIMD | yes, with the host architecture's choice for each operator | refused |
 | Threads: shared memories, atomics, `wait` and `notify` | yes | refused for the atomics |
@@ -442,9 +442,15 @@ Native code computes what the interpreter does, bit for bit where the
 specification fixes the bits: NaN quieting, the minimum and maximum of zeros,
 trapping and saturating truncations, one rounding for unsigned 64-bit
 conversions. Calls between native functions of an instance are native;
-calls of imports, of host functions and through tables, the bulk memory
-and table instructions, and `memory.atomic.wait` and `notify` return to Go
-and resume. Loads and stores of every memory, i64 ones included, and the
+calls of imports, of host functions, through tables and through references,
+the bulk memory and table instructions, `table.grow`, and
+`memory.atomic.wait` and `notify` return to Go and resume. References are
+native -- locals, globals, tables' elements, the null tests and branches,
+`ref.func`, `ref.eq`, `select` -- and kept only where the collector sees
+them, in the frame's reference slots, never in a register across a return
+to Go; a store of a reference while the collector marks goes through the
+Go runtime's write barrier, as compiled Go's does, without leaving native
+code. Loads and stores of every memory, i64 ones included, and the
 atomic loads, stores and read-modify-writes are native; an atomic
 read-modify-write is the processor's own locked or exclusive instruction.
 
@@ -453,16 +459,15 @@ A function is refused whole, and stays in the interpreter, when it has:
 | Reason | What |
 |---|---|
 | `simd` | a v128 value or any SIMD instruction |
-| `references` | a reference value, or any reference or table-element instruction |
 | `gc` | any GC instruction |
 | `exceptions` | `try_table`, `throw`, `throw_ref`, or the legacy `try` and its clauses |
 | `atomics` | the struct and array atomic instructions |
 | `cpu` | on amd64, `popcnt` without POPCNT, rounding without SSE4.1 |
 | `frame`, `size` | an operand stack deeper than the interpreter's frame, or code past the JIT's size limit |
 
-With every function compiled at its first call, the spec suite compiles 4,844
-functions and refuses 1,998: 1,499 for SIMD, 361 for references, 89 for
-exceptions and 49 for GC.
+With every function compiled at its first call, the spec suite compiles 5,048
+functions and refuses 1,794: 1,499 for SIMD, 188 for GC and 107 for
+exceptions.
 
 On `BenchmarkFib25` and `BenchmarkLoop1M` (`wasm/internal/engine`), the
 interpreter takes 7.2 ms and 9.7 ms and native code 0.40 ms and 0.355 ms on
@@ -730,6 +735,6 @@ WASI:
   phase (`import source m from "./m.wasm"`).
 - `postMessage` and structured clone of a `Module`, and of a shared
   `Memory`, between workers.
-- Native code for what the JIT refuses -- references, SIMD, GC and
-  exceptions -- and an optimizing tier above the baseline one.
+- Native code for what the JIT refuses -- SIMD, GC and exceptions -- and an
+  optimizing tier above the baseline one.
 - `wasmbench`'s `jit` engine on arm64: the harness builds it on amd64 only.

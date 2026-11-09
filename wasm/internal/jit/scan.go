@@ -27,7 +27,6 @@ const (
 	RefuseAtomics    = "atomics"
 	RefuseGC         = "gc"
 	RefuseExceptions = "exceptions"
-	RefuseRefs       = "references"
 	RefuseAsmJS      = "asmjs"
 	RefuseF16        = "f16"
 	RefuseCPU        = "cpu"
@@ -40,13 +39,10 @@ func refuse(reason, format string, args ...any) {
 	panic(&Refusal{Reason: reason, Detail: fmt.Sprintf(format, args...)})
 }
 
-// checkType refuses a function with a value of type t: v1 code holds
-// numbers only.
+// checkType refuses a function with a value of type t: the code holds
+// numbers and references, no vectors.
 func checkType(t module.ValueType, what string) {
-	switch {
-	case t.IsRef():
-		refuse(RefuseRefs, "%s of type %s", what, t.Name())
-	case t.Kind == module.KindV128:
+	if t.Kind == module.KindV128 {
 		refuse(RefuseSIMD, "%s of type v128", what)
 	}
 }
@@ -113,10 +109,6 @@ func scan(m *module.Module, fn uint32, feat Features) (locals []module.ValueType
 		case opcode.Try, opcode.Catch, opcode.CatchAll, opcode.Throw, opcode.Rethrow,
 			opcode.TryTable, opcode.ThrowRef, opcode.Delegate:
 			refuse(RefuseExceptions, "%s", op.Name())
-		case opcode.RefNull, opcode.RefIsNull, opcode.RefFunc, opcode.RefAsNonNull, opcode.RefEq,
-			opcode.BrOnNull, opcode.BrOnNonNull, opcode.CallRef, opcode.ReturnCallRef,
-			opcode.TableGet, opcode.TableSet, opcode.TableGrow, opcode.TableFill:
-			refuse(RefuseRefs, "%s", op.Name())
 		case opcode.F32LoadMemF16, opcode.F32StoreMemF16:
 			refuse(RefuseF16, "%s", op.Name())
 		case opcode.Block, opcode.Loop, opcode.If:

@@ -392,13 +392,15 @@ design, which a change to that design updates in the same commit.
   results bit for bit where the specification fixes them, on each
   architecture: `TestJITFloatBits` holds every float operation to it, and
   `TestJITDifferential` every spec module's exports.
-- Native code holds no references yet. When it stores one, it stores it
-  through the write barrier's routine while the collector marks, as the
-  JavaScript JIT does (internal/jit/README.md, "The write barrier":
-  `jit.StoreRef`, the flag at `jit.WriteBarrier`), and never leaves native
-  code for the marking's sake. `StoreRef` is built only where the JavaScript
-  JIT is (`ssacode.go`): references in native code on linux/arm64 need it
-  built there first. Like the rest of
+- Native code keeps references only in Go memory the collector sees --
+  frames' reference slots, tables, globals -- never in a register across an
+  exit, and stores every pointer word through the write barrier's routine
+  while the collector marks, as the JavaScript JIT does
+  (internal/jit/README.md, "The write barrier": `jit.StoreRef`, the flag
+  at `jit.WriteBarrier`), never leaving native code for the marking's sake
+  (wasm/internal/jit/README.md, "References and the collector").
+  `StoreRef` is built with the JavaScript JIT. Run the spec with `WASM_JIT_BARRIER=clobber` after a change to what native code
+  stores. Like the rest of
   internal/jit's native code, the wasm JIT's never moves SP, never writes
   the registers Go keeps, never executes a call instruction, and is never a
   safe point: loops and calls count toward the poll.

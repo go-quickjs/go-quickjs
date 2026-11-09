@@ -22,10 +22,11 @@ import (
 // threads proposal's, where WASM_THREADS_DIR names them -- that links with
 // the spectest module alone twice -- interpreted, and with every function
 // compiled natively at its first call -- and calls each exported function
-// whose signature is numbers with the same arguments on both, the values
-// the scripts use, the edges of each type and random ones, comparing the
-// results, the traps, and every memory's bytes and global's value after
-// each call. It does it again with every call of a function with loops
+// whose parameters are numbers or nullable references with the same
+// arguments on both, the values the scripts use, the edges of each type and
+// random ones, null references and i31s, comparing the results, the traps,
+// and every memory's bytes and global's value after each call, references
+// by what they are (refAlike). It does it again with every call of a function with loops
 // that Go makes running in the interpreter until its first back edge and
 // going on natively from that loop's head (osr).
 func TestJITDifferential(t *testing.T) {
@@ -183,7 +184,7 @@ func (d *differ) module(c *wast.ModuleCommand) {
 		}
 		fi, _ := interp.Export(e.Name)
 		fj, _ := jit.Export(e.Name)
-		if fi.Func.Host != nil || !numeric(fi.Func.Sig) {
+		if fi.Func.Host != nil || !callable(fi.Func.Sig) {
 			continue
 		}
 		d.funcs++
@@ -210,15 +211,41 @@ func (d *differ) module(c *wast.ModuleCommand) {
 	}
 }
 
-func numeric(ft *module.FuncType) bool {
-	for _, ts := range [][]module.ValueType{ft.Params, ft.Results} {
-		for _, t := range ts {
-			if t.IsRef() || t.Kind == module.KindV128 {
-				return false
-			}
+// callable reports whether the test calls a function of type ft: its
+// parameters numbers or nullable references, which it is given null or
+// an i31, its results numbers or references, compared by refAlike.
+func callable(ft *module.FuncType) bool {
+	for _, t := range ft.Params {
+		if t.Kind == module.KindV128 || t.IsRef() && !t.Nullable {
+			return false
+		}
+	}
+	for _, t := range ft.Results {
+		if t.Kind == module.KindV128 {
+			return false
 		}
 	}
 	return true
+}
+
+// refAlike reports whether two references the two instances made are the
+// same: both null, i31s of one value, the same function of each instance,
+// the same host value, or objects of one kind.
+func refAlike(a, b engine.Ref) bool {
+	switch {
+	case a.IsNull() || b.IsNull():
+		return a.IsNull() && b.IsNull()
+	case a.IsI31() || b.IsI31():
+		return a == b
+	}
+	if fa, fb := a.Func(), b.Func(); fa != nil || fb != nil {
+		return fa != nil && fb != nil && fa.Index == fb.Index && (fa.Host == nil) == (fb.Host == nil)
+	}
+	if ha, ok := a.Host(); ok {
+		hb, ok := b.Host()
+		return ok && ha == hb
+	}
+	return a.Kind() == b.Kind()
 }
 
 func showArgs(args []engine.Val, ts []module.ValueType) []string {
@@ -245,6 +272,15 @@ func (d *differ) invoke(fn *engine.Function, args []engine.Val) ([]engine.Val, e
 func (d *differ) args(ts []module.ValueType) []engine.Val {
 	out := make([]engine.Val, len(ts))
 	for i, t := range ts {
+		if t.IsRef() {
+			switch t.Heap {
+			case module.HeapAny, module.HeapEq, module.HeapI31:
+				if d.rng.IntN(2) == 0 {
+					out[i] = engine.Val{R: engine.I31(uint32(d.value(module.KindI32)))}
+				}
+			}
+			continue
+		}
 		out[i] = engine.Val{N: d.value(t.Kind)}
 	}
 	return out
@@ -301,6 +337,12 @@ func sameOutcome(ts []module.ValueType, ri []engine.Val, ei error, rj []engine.V
 		return ei.Error() == ej.Error()
 	}
 	for i, t := range ts {
+		if t.IsRef() {
+			if !refAlike(ri[i].R, rj[i].R) {
+				return false
+			}
+			continue
+		}
 		a, b := ri[i].N, rj[i].N
 		switch t.Kind {
 		case module.KindI32:
@@ -324,7 +366,7 @@ func sameOutcome(ts []module.ValueType, ri []engine.Val, ei error, rj []engine.V
 	return true
 }
 
-// state compares the instances' memories and numeric globals.
+// state compares the instances' memories and globals.
 func (d *differ) state(line int, what string, a, b *engine.Instance) bool {
 	for i := range a.Memories {
 		if !bytes.Equal(a.Memories[i].Bytes(), b.Memories[i].Bytes()) {
@@ -333,10 +375,14 @@ func (d *differ) state(line int, what string, a, b *engine.Instance) bool {
 		}
 	}
 	for i, g := range a.Globals {
+		h := b.Globals[i]
 		if g.Type.IsRef() {
+			if !refAlike(g.Ref, h.Ref) {
+				d.fail("%s: global %d differs", what, i)
+				return false
+			}
 			continue
 		}
-		h := b.Globals[i]
 		if g.Num != h.Num || g.Hi != h.Hi {
 			if (g.Type.Kind == module.KindF32 || g.Type.Kind == module.KindF64) && isNaN(g) && isNaN(h) {
 				continue

@@ -420,9 +420,9 @@ func TestJITTailCalls(t *testing.T) {
   (func $even2 (export "even2") (param i32) (result i32)
     (if (result i32) (i32.eqz (local.get 0)) (then (i32.const 1))
       (else (return_call $odd_interp (i32.sub (local.get 0) (i32.const 1))))))
-  ;; A reference value keeps this one interpreted.
+  ;; A vector keeps this one interpreted.
   (func $odd_interp (param i32) (result i32)
-    (drop (ref.null func))
+    (drop (v128.const i64x2 0 0))
     (if (result i32) (i32.eqz (local.get 0)) (then (i32.const 0))
       (else (return_call $even2 (i32.sub (local.get 0) (i32.const 1)))))))`)
 	for _, name := range []string{"even", "even2"} {

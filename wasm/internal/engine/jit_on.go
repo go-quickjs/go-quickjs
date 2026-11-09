@@ -59,10 +59,10 @@ type nativeFn struct {
 	loops map[uint32]int
 }
 
-// jitInstance is what an instance's native code reads of it: each global's
-// address.
+// jitInstance is what an instance's native code reads of it: the
+// addresses of its globals, of its functions and of its tables.
 type jitInstance struct {
-	globals atomic.Pointer[[]uintptr]
+	globals, funcs, tables atomic.Pointer[[]uintptr]
 }
 
 // jitLevel is one entry of native code from Go, and the native calls it
@@ -76,16 +76,48 @@ type jitLevel struct {
 	// one for the frame Go entered; rsDepth is how many bytes of entries
 	// past it the depth limit allows.
 	rsBase, rsDepth uintptr
-	// nc and chunkBase are the stack chunk the frames are in.
-	nc        int
-	chunkBase uintptr
-	// depth, calls and nsp are the exec's when the level was entered.
-	depth, calls, nsp int
-	args, res         []Val
+	// nc and chunkBase are the stack chunk the frames are in, rc and
+	// rchunkBase the reference stack's.
+	nc, rc                int
+	chunkBase, rchunkBase uintptr
+	// depth, calls, nsp and rsp are the exec's when the level was entered.
+	depth, calls, nsp, rsp int
+	args, res              []Val
 	// mems is the table of the instance's memories native code reads
 	// (Ctx.Mems), filled before every entry.
 	mems []uint64
 }
+
+// jitLayout is where the engine's objects keep what native code reads.
+var jitLayout = &wjit.Layout{
+	TableElems: int32(unsafe.Offsetof(Table{}.Elems)),
+}
+
+// jitWriteBarrier and jitStoreRef are the write barrier's flag and store
+// native code is compiled with: the runtime's (internal/jit), or a test's.
+// WASM_JIT_BARRIER, for tests, has the code see the collector always
+// marking ("marking"), so that every store of a pointer word goes through
+// the runtime's barrier, and "clobber" has that store first fill every
+// register native code may keep with junk, so that code that keeps one
+// across the store without saving it goes wrong.
+var jitWriteBarrier, jitStoreRef = func() (uint64, uint64) {
+	switch os.Getenv("WASM_JIT_BARRIER") {
+	case "marking":
+		return uint64(uintptr(unsafe.Pointer(&jitAlwaysMarking))), ijit.StoreRef()
+	case "clobber":
+		return uint64(uintptr(unsafe.Pointer(&jitAlwaysMarking))), ijit.StoreRefClobber()
+	}
+	return ijit.WriteBarrier(), ijit.StoreRef()
+}()
+
+// jitAlwaysMarking is a write barrier's flag that is always set.
+var jitAlwaysMarking uint8 = 1
+
+// jitCountExits has jitExits count the exits native code takes, for tests.
+var (
+	jitCountExits bool
+	jitExits      atomic.Int64
+)
 
 // jitExec is an exec's native state: the levels entered, and the native
 // return stack they share.
@@ -268,18 +300,34 @@ func compileNative(c *Code, idx uint32, cd *compiled) (code *wjit.Code, err erro
 		}
 	}()
 	return wjit.Compile(&wjit.Request{
-		Module:       c.Module,
-		Func:         idx,
-		FrameSlots:   cd.nslots,
-		FrameSlotsOf: func(f uint32) int { return c.get(f).nslots },
-		MaxCodeBytes: wjit.MaxCodeBytes,
+		Module:         c.Module,
+		Func:           idx,
+		FrameSlots:     cd.nslots,
+		FrameSlotsOf:   func(f uint32) int { return c.get(f).nslots },
+		MaxCodeBytes:   wjit.MaxCodeBytes,
+		FrameRefSlots:  cd.nativeRefSlots(),
+		RefSlotsOf:     func(f uint32) int { return c.get(f).nativeRefSlots() },
+		FrameLocals:    cd.nlocals,
+		FrameRefLocals: cd.rlocals,
+		WriteBarrier:   jitWriteBarrier,
+		StoreRef:       jitStoreRef,
+		Layout:         jitLayout,
 	})
 }
 
-// runNative runs function fn in frame l natively, if it has native code or
-// is now compiled, returning the signal its body would: 0, or sigTail with
-// the exec's tail call set.
-func (x *exec) runNative(fn *Function, code *compiled, l []uint64) (int32, bool) {
+// nativeRefSlots is the number of reference slots of the function's frame
+// its native code uses: none where it holds no reference.
+func (cd *compiled) nativeRefSlots() int {
+	if !cd.refs {
+		return 0
+	}
+	return cd.rslots
+}
+
+// runNative runs function fn in frame l and r natively, if it has native
+// code or is now compiled, returning the signal its body would: 0, or
+// sigTail with the exec's tail call set.
+func (x *exec) runNative(fn *Function, code *compiled, l []uint64, r []Ref) (int32, bool) {
 	cj := fn.Inst.Code.jit.Load()
 	if cj == nil {
 		return 0, false
@@ -288,7 +336,7 @@ func (x *exec) runNative(fn *Function, code *compiled, l []uint64) (int32, bool)
 	if nat == nil {
 		return 0, false
 	}
-	return x.enterNative(cj, fn, nat, l, nat.goEntry), true
+	return x.enterNative(cj, fn, nat, l, r, nat.goEntry), true
 }
 
 // osrBudget is the number of back edges a call of the function whose body
@@ -335,28 +383,57 @@ func (x *exec) osr(f *frame, idx, at uint32) (int32, bool) {
 		return 0, false
 	}
 	jitStats.osr.Add(1)
-	if x.enterNative(cj, f.inst.Funcs[idx], nat, f.l, entry) == sigTail {
+	if x.enterNative(cj, f.inst.Funcs[idx], nat, f.l, f.r, entry) == sigTail {
 		return sigTail, true
 	}
 	return sigReturn, true
 }
 
 // globalsAddr returns the address of the table of the instance's globals'
-// addresses, which native code reads them through.
+// addresses, which native code reads them through: a number's, or a
+// reference's Ref.
 func (inst *Instance) globalsAddr() uintptr {
 	if len(inst.Globals) == 0 {
 		return 0
 	}
-	p := inst.jit.globals.Load()
-	if p == nil {
-		g := make([]uintptr, len(inst.Globals))
-		for i, gl := range inst.Globals {
-			g[i] = uintptr(unsafe.Pointer(&gl.Num))
+	return addrTable(&inst.jit.globals, len(inst.Globals), func(i int) uintptr {
+		if gl := inst.Globals[i]; gl.Type.IsRef() {
+			return uintptr(unsafe.Pointer(&gl.Ref))
 		}
-		inst.jit.globals.CompareAndSwap(nil, &g)
-		p = inst.jit.globals.Load()
+		return uintptr(unsafe.Pointer(&inst.Globals[i].Num))
+	})
+}
+
+// funcsAddr and tablesAddr return the addresses of the tables of the
+// instance's functions' and tables' addresses, which native code reads
+// them through.
+func (inst *Instance) funcsAddr() uintptr {
+	if len(inst.Funcs) == 0 {
+		return 0
 	}
-	return uintptr(unsafe.Pointer(&(*p)[0]))
+	return addrTable(&inst.jit.funcs, len(inst.Funcs), func(i int) uintptr { return uintptr(unsafe.Pointer(inst.Funcs[i])) })
+}
+
+func (inst *Instance) tablesAddr() uintptr {
+	if len(inst.Tables) == 0 {
+		return 0
+	}
+	return addrTable(&inst.jit.tables, len(inst.Tables), func(i int) uintptr { return uintptr(unsafe.Pointer(inst.Tables[i])) })
+}
+
+// addrTable returns the address of the first of the n addresses held in p,
+// made of addr the first time. What they address the instance keeps.
+func addrTable(p *atomic.Pointer[[]uintptr], n int, addr func(int) uintptr) uintptr {
+	t := p.Load()
+	if t == nil {
+		s := make([]uintptr, n)
+		for i := range s {
+			s[i] = addr(i)
+		}
+		p.CompareAndSwap(nil, &s)
+		t = p.Load()
+	}
+	return uintptr(unsafe.Pointer(&(*t)[0]))
 }
 
 const rsEntryBytes = wjit.RSEntryWords * 8
@@ -393,10 +470,10 @@ func (x *exec) jitRoom(from uintptr, n int) uintptr {
 	return from - old + start
 }
 
-// enterNative runs fn's native code in frame l, as a new level, from offset
-// entry -- its Go entry, or a loop's -- and handles its exits until the
-// frame returns.
-func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64, entry int) int32 {
+// enterNative runs fn's native code in frame l and r, as a new level, from
+// offset entry -- its Go entry, or a loop's -- and handles its exits until
+// the frame returns.
+func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64, r []Ref, entry int) int32 {
 	if x.jit.n == len(x.jit.levels) {
 		x.jit.levels = append(x.jit.levels, new(jitLevel))
 	}
@@ -414,13 +491,25 @@ func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64,
 	chunk := x.nchunks[x.nc]
 	lv.nc = x.nc
 	lv.chunkBase = uintptr(unsafe.Pointer(&chunk[0]))
-	lv.depth, lv.calls, lv.nsp = x.depth, len(x.calls), x.nsp
+	// The frame's reference slots are in the exec's current chunk, which
+	// the frames native code makes for its calls go on in.
+	rchunk := x.rchunks[x.rc]
+	lv.rc = x.rc
+	lv.rchunkBase = uintptr(unsafe.Pointer(&rchunk[0]))
+	lv.depth, lv.calls, lv.nsp, lv.rsp = x.depth, len(x.calls), x.nsp, x.rsp
 	ctx := &lv.ctx
 	*ctx = wjit.Ctx{
-		L:        uintptr(unsafe.Pointer(&l[0])),
-		Links:    uintptr(unsafe.Pointer(&cj.links[0])),
-		Globals:  inst.globalsAddr(),
-		ChunkEnd: lv.chunkBase + uintptr(len(chunk))*8,
+		L:         uintptr(unsafe.Pointer(&l[0])),
+		Links:     uintptr(unsafe.Pointer(&cj.links[0])),
+		Globals:   inst.globalsAddr(),
+		Funcs:     inst.funcsAddr(),
+		Tables:    inst.tablesAddr(),
+		ChunkEnd:  lv.chunkBase + uintptr(len(chunk))*8,
+		R:         uintptr(unsafe.Pointer(&r[0])),
+		RChunkEnd: lv.rchunkBase + uintptr(len(rchunk))*16,
+	}
+	if ctx.R < lv.rchunkBase || ctx.R >= ctx.RChunkEnd {
+		panic("wasm jit: a frame's references outside the exec's chunk")
 	}
 	// A native call at entry j of the level is at depth x.depth+j: the
 	// entries end where that would pass MaxCallDepth, and a call there
@@ -450,6 +539,9 @@ func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64,
 		raw.EnterAt(off, unsafe.Pointer(ctx))
 		cj.run.RUnlock()
 		x.poll = int32(ctx.Poll)
+		if jitCountExits && ctx.Exit != wjit.ExitReturn {
+			jitExits.Add(1)
+		}
 		switch ctx.Exit {
 		case wjit.ExitReturn:
 			x.jit.n--
@@ -461,45 +553,49 @@ func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64,
 			x.pollContext()
 		case wjit.ExitCall:
 			callee := inst.Funcs[ctx.Arg0]
-			frame, top := x.jitFrame(lv)
+			f := x.exitFrame(lv)
 			x.jitSync(lv, uint32(ctx.Arg2))
-			x.jitCall(lv, callee, callee.Sig, frame, int(ctx.Arg1), top)
+			x.jitCall(lv, callee, callee.Sig, &f, int(ctx.Arg1))
 			x.jitUnsync(lv)
-		case wjit.ExitCallIndirect:
-			ft := inst.Module.Types[ctx.Arg0].Func
-			slot := int(ctx.Arg2)
-			frame, top := x.jitFrame(lv)
-			x.jitSync(lv, uint32(ctx.Arg3))
-			callee := indirectTarget(inst, uint32(ctx.Arg0), uint32(ctx.Arg1), frame[slot+2*len(ft.Params)])
-			x.jitCall(lv, callee, ft, frame, slot, top)
+		case wjit.ExitCallIndirect, wjit.ExitCallRef:
+			f := x.exitFrame(lv)
+			ft, slot, at := inst.Module.Types[ctx.Arg0].Func, int(ctx.Arg2), uint32(ctx.Arg3)
+			if ctx.Exit == wjit.ExitCallRef {
+				slot, at = int(ctx.Arg1), uint32(ctx.Arg2)
+			}
+			x.jitSync(lv, at)
+			callee := x.jitCallee(lv, &f, ft, slot)
+			x.jitCall(lv, callee, ft, &f, slot)
 			x.jitUnsync(lv)
-		case wjit.ExitTailCall, wjit.ExitTailIndirect:
+		case wjit.ExitTailCall, wjit.ExitTailIndirect, wjit.ExitTailRef:
 			var callee *Function
 			var ft *module.FuncType
 			var slot int
 			var at uint32
-			frame, top := x.jitFrame(lv)
+			f := x.exitFrame(lv)
 			if ctx.Exit == wjit.ExitTailCall {
 				callee, slot, at = inst.Funcs[ctx.Arg0], int(ctx.Arg1), uint32(ctx.Arg2)
 				ft = callee.Sig
 			} else {
-				ft = inst.Module.Types[ctx.Arg0].Func
-				slot, at = int(ctx.Arg2), uint32(ctx.Arg3)
+				ft, slot, at = inst.Module.Types[ctx.Arg0].Func, int(ctx.Arg2), uint32(ctx.Arg3)
+				if ctx.Exit == wjit.ExitTailRef {
+					slot, at = int(ctx.Arg1), uint32(ctx.Arg2)
+				}
 				x.jitSync(lv, at)
-				callee = indirectTarget(inst, uint32(ctx.Arg0), uint32(ctx.Arg1), frame[slot+2*len(ft.Params)])
+				callee = x.jitCallee(lv, &f, ft, slot)
 				x.jitUnsync(lv)
 			}
-			if r, o, done := x.jitTail(lv, callee, ft, frame, slot, top, at); done {
+			if r, o, done := x.jitTail(lv, callee, ft, &f, slot, at); done {
 				return sigTail
 			} else if r != nil {
 				raw, off = r, o
 				continue
 			}
 		case wjit.ExitOp:
-			frame, top := x.jitFrame(lv)
+			f := x.exitFrame(lv)
 			x.jitSync(lv, uint32(ctx.Arg4))
-			x.nc, x.nsp = lv.nc, top
-			x.jitOp(inst, opcode.Opcode(ctx.Arg0), uint32(ctx.Arg1), ctx.Arg2, frame, int(ctx.Arg3))
+			x.takeFrom(lv, &f)
+			x.jitOp(inst, opcode.Opcode(ctx.Arg0), uint32(ctx.Arg1), ctx.Arg2, &f, int(ctx.Arg3))
 			x.jitUnsync(lv)
 		default:
 			panic(fmt.Sprintf("wasm jit: exit %d", ctx.Exit))
@@ -527,12 +623,58 @@ func (lv *jitLevel) memTable(mems []*Memory) uintptr {
 	return uintptr(unsafe.Pointer(&t[0]))
 }
 
-// jitFrame returns the slots of the frame that exited, and the position
-// past it in the chunk, where a frame made for a call goes.
-func (x *exec) jitFrame(lv *jitLevel) ([]uint64, int) {
-	nslots := lv.inst.Code.get(uint32(lv.ctx.ExitFn)).nslots
+// exitFrame is the frame that exited: its slots and reference slots, and
+// the positions in the chunks past them, where frames made for its calls
+// go. A function that holds no reference has no reference slots of its
+// own.
+type exitFrame struct {
+	cd        *compiled
+	l         []uint64
+	r         []Ref
+	top, rtop int
+}
+
+func (x *exec) exitFrame(lv *jitLevel) exitFrame {
+	cd := lv.inst.Code.get(uint32(lv.ctx.ExitFn))
 	i := int((lv.ctx.L - lv.chunkBase) / 8)
-	return x.nchunks[lv.nc][i : i+nslots : i+nslots], i + nslots
+	j := int((lv.ctx.R - lv.rchunkBase) / 16)
+	n := cd.nativeRefSlots()
+	return exitFrame{
+		cd:   cd,
+		l:    x.nchunks[lv.nc][i : i+cd.nslots : i+cd.nslots],
+		r:    x.rchunks[lv.rc][j : j+n : j+n],
+		top:  i + cd.nslots,
+		rtop: j + n,
+	}
+}
+
+// rslot is the reference slot of the stack position whose numeric slot is
+// slot.
+func (f *exitFrame) rslot(slot int) int { return f.cd.rlocals + (slot-f.cd.nlocals)/2 }
+
+// get returns the value of type t at the stack position whose numeric
+// slot is slot.
+func (f *exitFrame) get(t module.ValueType, slot int) Val {
+	if t.IsRef() {
+		return Val{R: f.r[f.rslot(slot)]}
+	}
+	return Val{N: f.l[slot]}
+}
+
+// put stores v, of type t, at the stack position whose numeric slot is
+// slot.
+func (f *exitFrame) put(t module.ValueType, slot int, v Val) {
+	if t.IsRef() {
+		f.r[f.rslot(slot)] = v.R
+		return
+	}
+	f.l[slot] = narrow(v.N, t)
+}
+
+// takeFrom has frames the exec takes for Go's work go past the frame that
+// exited.
+func (x *exec) takeFrom(lv *jitLevel, f *exitFrame) {
+	x.nc, x.nsp, x.rc, x.rsp = lv.nc, f.top, lv.rc, f.rtop
 }
 
 // jitSync makes the exec's call stack and depth say what the level's
@@ -560,40 +702,59 @@ func (x *exec) jitSync(lv *jitLevel, offset uint32) {
 func (x *exec) jitUnsync(lv *jitLevel) {
 	x.calls = x.calls[:lv.calls]
 	x.depth = lv.depth
-	x.nc, x.nsp = lv.nc, lv.nsp
+	x.nc, x.nsp, x.rc, x.rsp = lv.nc, lv.nsp, lv.rc, lv.rsp
 }
 
-// jitArgs reads a call's arguments of signature ft from the frame's slots
-// from slot.
-func (lv *jitLevel) jitArgs(ft *module.FuncType, frame []uint64, slot int) []Val {
+// jitArgs reads a call's arguments of signature ft from the stack
+// positions from the one whose numeric slot is slot.
+func (lv *jitLevel) jitArgs(ft *module.FuncType, f *exitFrame, slot int) []Val {
 	n := len(ft.Params)
 	if cap(lv.args) < n {
 		lv.args = make([]Val, n)
 	}
 	args := lv.args[:n]
-	for i := range args {
-		args[i] = Val{N: frame[slot+2*i]}
+	for i, t := range ft.Params {
+		args[i] = f.get(t, slot+2*i)
 	}
 	return args
 }
 
+// jitCallee returns the function a call_indirect or a call_ref of type ft
+// calls, its arguments from the stack position whose numeric slot is slot
+// and the table's index or the reference after them, trapping as the
+// interpreter does.
+func (x *exec) jitCallee(lv *jitLevel, f *exitFrame, ft *module.FuncType, slot int) *Function {
+	ctx := &lv.ctx
+	at := slot + 2*len(ft.Params)
+	if ctx.Exit == wjit.ExitCallRef || ctx.Exit == wjit.ExitTailRef {
+		r := f.r[f.rslot(at)]
+		if r.IsNull() {
+			trap(TrapNullDereference)
+		}
+		return r.Func()
+	}
+	return indirectTarget(lv.inst, uint32(ctx.Arg0), uint32(ctx.Arg1), f.l[at])
+}
+
 // jitCall calls fn, of signature ft, for native code: its arguments in the
-// frame's slots from slot, two apart, where its results go. A frame it
-// makes goes at position top of the level's chunk.
-func (x *exec) jitCall(lv *jitLevel, fn *Function, ft *module.FuncType, frame []uint64, slot, top int) {
-	args := lv.jitArgs(ft, frame, slot)
+// stack positions from the one whose numeric slot is slot, where its
+// results go. The frames it makes go past the frame that exited.
+func (x *exec) jitCall(lv *jitLevel, fn *Function, ft *module.FuncType, f *exitFrame, slot int) {
+	args := lv.jitArgs(ft, f, slot)
 	m := len(ft.Results)
 	if cap(lv.res) < m {
 		lv.res = make([]Val, m)
 	}
 	res := lv.res[:m]
-	x.nc, x.nsp = lv.nc, top
+	x.takeFrom(lv, f)
 	// A native call finding the return stack full came here: make it room.
 	x.jitRoom(lv.ctx.RSP, 64)
 	x.callGeneric(fn, args, res)
 	for i, t := range ft.Results {
-		frame[slot+2*i] = narrow(res[i].N, t)
+		f.put(t, slot+2*i, res[i])
 	}
+	clear(res)
+	clear(args)
 }
 
 // jitTail makes a tail call of fn for the frame that exited: natively in
@@ -601,9 +762,10 @@ func (x *exec) jitCall(lv *jitLevel, fn *Function, ft *module.FuncType, frame []
 // as the interpreter's tail call (done) if the frame is the one Go entered;
 // else by calling fn and returning its results, the frame's code resumed
 // at its return.
-func (x *exec) jitTail(lv *jitLevel, fn *Function, ft *module.FuncType, frame []uint64, slot, top int, at uint32) (*ijit.RawCode, int, bool) {
+func (x *exec) jitTail(lv *jitLevel, fn *Function, ft *module.FuncType, f *exitFrame, slot int, at uint32) (*ijit.RawCode, int, bool) {
 	ctx := &lv.ctx
-	args := lv.jitArgs(ft, frame, slot)
+	args := lv.jitArgs(ft, f, slot)
+	defer clear(args)
 	// A tail call is a call: it counts toward the poll, as the
 	// interpreter's do.
 	if x.poll--; x.poll <= 0 {
@@ -611,12 +773,11 @@ func (x *exec) jitTail(lv *jitLevel, fn *Function, ft *module.FuncType, frame []
 	}
 	if fn.Inst == lv.inst && fn.Host == nil {
 		cd := lv.inst.Code.get(fn.Index)
-		start := top - len(frame)
-		if nat := lv.cj.native(lv.inst.Code, fn.Index, cd); nat != nil && start+cd.nslots <= len(x.nchunks[lv.nc]) {
-			callee := x.nchunks[lv.nc][start : start+cd.nslots]
-			for i, a := range args {
-				callee[i] = a.N
-			}
+		start, rstart := f.top-len(f.l), f.rtop-len(f.r)
+		nchunk, rchunk := x.nchunks[lv.nc], x.rchunks[lv.rc]
+		if nat := lv.cj.native(lv.inst.Code, fn.Index, cd); nat != nil && start+cd.nslots <= len(nchunk) && rstart+cd.nativeRefSlots() <= len(rchunk) {
+			n := cd.nativeRefSlots()
+			putVals(nchunk[start:start+cd.nslots], rchunk[rstart:rstart+n], cd.params, args)
 			e := x.rsIndex(ctx.RSP) - wjit.RSEntryWords
 			x.jit.rs[e+2] = wjit.Site(fn.Index, uint32(x.jit.rs[e+2]))
 			return nat.raw, nat.goEntry, false
@@ -635,11 +796,17 @@ func (x *exec) jitTail(lv *jitLevel, fn *Function, ft *module.FuncType, frame []
 		lv.res = make([]Val, m)
 	}
 	res := lv.res[:m]
-	x.nc, x.nsp = lv.nc, top
+	x.takeFrom(lv, f)
 	x.callGeneric(fn, args, res)
+	results, _, _ := layout(ft.Results)
 	for i, t := range ft.Results {
-		frame[i] = narrow(res[i].N, t)
+		if s := results[i]; s.ref {
+			f.r[s.i] = res[i].R
+		} else {
+			f.l[s.i] = narrow(res[i].N, t)
+		}
 	}
+	clear(res)
 	x.jitUnsync(lv)
 	return nil, 0, false
 }
@@ -654,18 +821,21 @@ func indirectTarget(inst *Instance, typeIndex, table uint32, i uint64) *Function
 }
 
 // jitOp runs instruction op for native code, with immediates a and imm, its
-// operands in the frame's slots from slot, two apart, its result left in
-// the first. imm is an atomic instruction's offset, 64 bits; any other
-// instruction's second immediate is 32.
-func (x *exec) jitOp(inst *Instance, op opcode.Opcode, a uint32, imm uint64, frame []uint64, slot int) {
+// operands in the stack positions of the exited frame from the one whose
+// numeric slot is slot, its result left in the first. imm is an atomic
+// instruction's offset, 64 bits; any other instruction's second immediate
+// is 32.
+func (x *exec) jitOp(inst *Instance, op opcode.Opcode, a uint32, imm uint64, f *exitFrame, slot int) {
 	b := uint32(imm)
 	m := inst.Module
+	frame := f.l
 	arg := func(i int, is64 bool) uint64 {
 		if is64 {
 			return frame[slot+2*i]
 		}
 		return uint64(uint32(frame[slot+2*i]))
 	}
+	ref := func(i int) Ref { return f.r[f.rslot(slot+2*i)] }
 	mem64 := func(i uint32) bool { return m.Memories[i].Limits.Is64 }
 	tab64 := func(i uint32) bool { return m.Tables[i].Limits.Is64 }
 	put := func(v uint64, is64 bool) {
@@ -743,6 +913,18 @@ func (x *exec) jitOp(inst *Instance, op opcode.Opcode, a uint32, imm uint64, fra
 			trap(TrapAtomicsWaitNotAllowed)
 		}
 		put(uint64(wait(x, mm, atomicSpan(mm, ea, width), ea, width, want, timeout)), false)
+	case opcode.TableGrow:
+		init := ref(0)
+		put(uint64(inst.Tables[a].Grow(arg(1, tab64(a)), init)), tab64(a))
+	case opcode.TableFill:
+		is64 := tab64(a)
+		dst, val, cnt := arg(0, is64), ref(1), arg(2, is64)
+		e := inst.Tables[a].Elems
+		checkRange(dst, cnt, uint64(len(e)), TrapTableOutOfBounds)
+		s := e[dst : dst+cnt]
+		for i := range s {
+			s[i] = val
+		}
 	default:
 		panic("wasm jit: no Go operation " + op.Name())
 	}

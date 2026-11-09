@@ -28,7 +28,7 @@ func (x *exec) run(fn *Function, code *compiled, l []uint64, r []Ref, nc, nsp, r
 	}
 	x.calls = append(x.calls, callSite{fn: fn})
 	if jitBuilt {
-		if c, ok := x.runNative(fn, code, l); ok {
+		if c, ok := x.runNative(fn, code, l, r); ok {
 			if c == sigTail {
 				f := x.frameAt(x.depth)
 				f.l, f.r, f.inst = l, r, fn.Inst
@@ -81,7 +81,7 @@ func (x *exec) tailChain(f *frame, code *compiled, l []uint64, r []Ref, nc, nsp,
 		putVals(nl, nr, callee.params, x.tailArgs)
 		f.l, f.r, f.inst = nl, nr, fn.Inst
 		if jitBuilt {
-			if c, ok := x.runNative(fn, callee, nl); ok {
+			if c, ok := x.runNative(fn, callee, nl, nr); ok {
 				if c == sigTail {
 					continue
 				}
