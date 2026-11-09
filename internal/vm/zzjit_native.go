@@ -2422,12 +2422,20 @@ func (r *Runtime) jitBudget() int {
 
 // jitCompiles reports whether a compile of fn could fit the budget at all:
 // the compiler's transient work -- analysis tables over every slot for each
-// instruction, and the code it emits -- must. It costs a few comparisons
-// and never measures the heap, so a refusal can be cheaply repeated. It is
-// what bounds how long a function is compiled: 4,080 instructions at the
-// default budget, 16,368 at 32 MiB.
+// instruction, and the code it emits -- must (jitCompileBytes). It costs a
+// few comparisons and never measures the heap, so a refusal can be cheaply
+// repeated. It is what bounds how large a function is compiled: 4,080
+// instructions of up to 256 slots at the default budget, 16,368 at 32 MiB,
+// and fewer of more.
 func jitCompiles(fn *bytecode.Function, budget int) bool {
-	return len(fn.Code)*ir.MaxSlots*8+32<<10 <= budget
+	return jitCompileBytes(fn) <= int64(budget)
+}
+
+// jitCompileBytes is what a compile of fn may need: a word for each slot
+// at each instruction, its slots counted as no fewer than 256 -- what every
+// function's were, before the lowering took functions of more -- and 32 KiB.
+func jitCompileBytes(fn *bytecode.Function) int64 {
+	return int64(len(fn.Code))*int64(max(fn.LocalCount+fn.MaxStack+len(fn.Upvalues), 256))*8 + 32<<10
 }
 
 // jitState is the runtime's JIT state, made at its first use.

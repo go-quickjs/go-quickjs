@@ -311,7 +311,11 @@ type escaper struct {
 // scalarReplace is escape analysis (above): it reports whether it left any
 // object unmade.
 func scalarReplace(f *Func) bool {
-	if f.virtual == nil {
+	if f.virtual == nil || f.Locals+f.StackSize > abi.MaxRecords {
+		// A function of more slots than an exit's records name has room
+		// for no home past them (homes): every object escapes, which the
+		// rounds below found one object a round, the analysis of a
+		// function of a thousand slots taking seconds.
 		return false
 	}
 	e := &escaper{f: f}

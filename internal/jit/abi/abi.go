@@ -11,12 +11,24 @@ import "unsafe"
 // keep in registers live there, 8 bytes each.
 const SpillSlots = 256
 
-// MaxRecords bounds an exit's records, one per slot at most, and so the
-// slots of a function the JIT compiles.
+// MaxRecords bounds an exit's records, one per slot at most: the room the
+// context has for them. A function of more slots is compiled where each
+// of its states needs no more (mir's recordRoom, callState); inlining,
+// native loops of Array.prototype's methods and escape analysis keep
+// every slot's number below it, and so take no part in such a function.
 const MaxRecords = 256
 
 // MaxKeeps is how many references a function's code keeps (Context.Keep).
 const MaxKeeps = 256
+
+// MaxSlot bounds the slots native code names, by number: a function's, an
+// inlined callee's, and the homes of the objects escape analysis leaves
+// unmade (VirtualWord). A record's or a run-time source's word below it is a
+// slot, and one at or above it an address (mir's sourceAddr): no Go heap
+// address is below 64 KiB. And a VirtualWord's home has VirtualHomeShift
+// bits. How many records one exit writes is MaxRecords' bound, not the
+// slots': each state's are counted where the code is made.
+const MaxSlot = 1 << VirtualHomeShift
 
 // An object native code does not make (ssa's escape.go), as V8's escape
 // analysis leaves one unmade, is named in a slot an exit writes by a word

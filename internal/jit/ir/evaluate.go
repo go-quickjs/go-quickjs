@@ -19,9 +19,6 @@ func (p *Program) Evaluate(slots []Value, pc int, budget uint64) (Exit, error) {
 
 // EvaluateArrays is the correctness oracle for borrowed dense array storage.
 func (p *Program) EvaluateArrays(slots []Value, arrays []ArrayView, pc int, budget uint64) (Exit, error) {
-	if len(arrays) != 0 && len(arrays) != MaxSlots {
-		return Exit{}, ErrState
-	}
 	if p == nil || len(slots) != p.Locals+p.StackSize || pc < 0 || pc >= len(p.Code) ||
 		len(p.Maps) != len(p.Code) || p.Maps[pc].Depth < 0 {
 		return Exit{}, ErrState
@@ -117,7 +114,7 @@ func (p *Program) EvaluateArrays(slots []Value, arrays []ArrayView, pc int, budg
 					continue
 				}
 				cell := ref.Cell
-				if cell == nil || cell.Key != in.Key || cell.Flags&^uint8(7) != 0 || cell.Bits != ref.Bits || cell.Reference != ref.Reference || ref.Handle >= MaxSlots {
+				if cell == nil || cell.Key != in.Key || cell.Flags&^uint8(7) != 0 || cell.Bits != ref.Bits || cell.Reference != ref.Reference || ref.Handle >= uint64(len(arrays)) {
 					return exit, nil
 				}
 				slots[in.Dest] = Value{Kind: Opaque, Bits: ref.Handle}

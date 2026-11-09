@@ -70,8 +70,6 @@ var knownRefusals = []struct {
 	{"arguments forwarded",
 		`function f() { return g.apply(this, arguments) }`,
 		"entry: arguments object"},
-	// 246: locals, operand stack and upvalues past ir.MaxSlots together.
-	{"slot budget", manyLocals(300), "entry: slot budget"},
 	// 9.
 	{"for await",
 		`async function f(x) { let s = 0; for await (const v of x) s += v; return s }`,

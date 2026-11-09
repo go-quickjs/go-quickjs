@@ -2381,7 +2381,7 @@ func TestJITBudgetRefusalWaitsForRelease(t *testing.T) {
 	// each compile of it adds.
 	refused := copyOf()
 	grows := 0
-	for held() < len(refused.Code)*ir.MaxSlots*8+32<<10 {
+	for int64(held()) < jitCompileBytes(refused) {
 		before := held()
 		if e := r.jitForFunction(copyOf(), nil); e == nil || e.ssa == nil {
 			t.Fatal("native compilation refused")

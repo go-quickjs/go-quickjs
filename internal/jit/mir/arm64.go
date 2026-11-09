@@ -603,6 +603,7 @@ func (c *a64Compiler) exitThen(s *ssa.FrameState, kind uint64, then *arm64.Label
 			return
 		}
 	}
+	c.recordRoom(s)
 	c.recorded = false
 	c.a.Store(a64Ctx, abi.OffRecords, arm64.ZR)
 	for _, ix := range c.f.Present(s) {
@@ -2132,7 +2133,7 @@ func (c *a64Compiler) sourceRef(a *ssa.Value, guard a64Guard) {
 // value, as amd64's does. It uses B.
 func (c *a64Compiler) sourceAddr() {
 	captured, stack, found := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
-	c.a.CmpImm(a64C, abi.MaxRecords, true)
+	c.a.CmpImm(a64C, int64(c.slotsEnd()), true)
 	c.a.BCond(arm64.HS, found)
 	c.a.CmpImm(a64C, int64(c.f.FrameLocals), true)
 	c.a.BCond(arm64.HS, captured)

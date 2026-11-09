@@ -10,7 +10,6 @@ import (
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
-	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 )
 
 // jitLinksHeld reports a function's link whose entry -- what native callers
@@ -104,7 +103,7 @@ func TestJITForKeepsWhatItCompiled(t *testing.T) {
 	t.Cleanup(func() { jitEpochNow = now })
 	// As little as compiling it takes: placed, it leaves the JIT past its
 	// budget, and the room the compile then makes may only be its own.
-	r.jitMemoryLimit = int64(len(cl.fn.Code)*ir.MaxSlots*8 + 32<<10)
+	r.jitMemoryLimit = jitCompileBytes(cl.fn)
 	e := r.jitFor(cl)
 	if e == nil || e.ssa == nil {
 		t.Fatalf("not compiled in the budget: %+v", e)

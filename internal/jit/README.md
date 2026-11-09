@@ -1130,6 +1130,22 @@ into the frame.
 - Work already committed, earlier loop iterations included, is never
   replayed.
 
+**How many slots.** Nothing bounds a function's slots -- its locals, its
+operand stack and its captured bindings -- but what names a slot by its
+number: a record's or a run-time source's word below the code's slots is a
+slot, and one past them an address, and an unmade object's home is 16
+bits of a word (`abi.MaxSlot`, 65,536). The context has room for
+`abi.MaxRecords` records (256), which every state of a function of up to
+that many slots fits: inlined callees' frames, native loops' slots and
+the homes of objects escape analysis leaves unmade all stay below it. A
+function of more takes none of those, and each of its exits and native
+calls is counted where its code is made (mir's `recordRoom`, `callState`),
+the code refused if one would write more. What a compile of so many slots
+costs, the VM weighs before it asks for one (`jitCompileBytes`: a word a
+slot an instruction, its slots counted as at least 256), and its spills
+still have the context's 256 (`abi.SpillSlots`). Code of 300, 1,000 and
+5,000 locals runs natively (`TestJITManySlots`).
+
 ## Selection and the code cache
 
 **Function entry.** A closure counts framed calls. The eighth gives its

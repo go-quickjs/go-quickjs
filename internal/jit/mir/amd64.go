@@ -5800,6 +5800,7 @@ func (c *compiler) exitThen(s *ssa.FrameState, kind uint64, then *amd64.Label) {
 			return
 		}
 	}
+	c.recordRoom(s)
 	c.recorded = false
 	c.movImm(scratchC, 0)
 	c.a.Store(regCtx, abi.OffRecords, scratchC)
@@ -6873,10 +6874,10 @@ func (c *compiler) sourceRef(a *ssa.Value, guard guardTo) {
 
 // sourceAddr turns the slot in scratchC, a record's, into the address of
 // its value (slotSource); a heap cell's address, at or above
-// abi.MaxRecords, it leaves as it is. It uses scratchB.
+// the code's slots (slotsEnd), it leaves as it is. It uses scratchB.
 func (c *compiler) sourceAddr() {
 	captured, stack, found := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
-	c.a.OpImm(amd64.Cmp, scratchC, abi.MaxRecords, true)
+	c.a.OpImm(amd64.Cmp, scratchC, c.slotsEnd(), true)
 	c.a.Jcc(amd64.CondAE, found)
 	c.a.OpImm(amd64.Cmp, scratchC, int32(c.f.FrameLocals), false)
 	c.a.Jcc(amd64.CondGE, captured)

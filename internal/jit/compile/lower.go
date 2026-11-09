@@ -7,15 +7,16 @@ import (
 	"slices"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 )
 
-// Compiler work and scratch size are bounded even for permanently refused
-// functions. Runtime code/metadata ownership is handled by the optional VM tier.
-const (
-	// MaxSlots bounds the locals and operand scratch storage together.
-	MaxSlots = ir.MaxSlots
-)
+// maxSlots bounds a program's slots -- its locals, the receiver's and the
+// globals' cells among them, and its operands -- by what names a slot in
+// native code's records and exits (abi.MaxSlot). It is no budget: a
+// compile's work grows with the slots and the instructions together, which
+// the VM bounds before it asks for one (its jitCompiles).
+const maxSlots = abi.MaxSlot
 
 // Refusal identifies the first unsupported construct or invalid state map.
 // PC is -1 for a function-wide refusal.
@@ -260,7 +261,8 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		return nil, refuse(-1, "non-simple parameters")
 	case len(fn.Code) == 0:
 		return nil, refuse(-1, "no instructions")
-	case fn.LocalCount < 0 || fn.MaxStack < 0 || fn.LocalCount > MaxSlots || fn.MaxStack > MaxSlots || len(fn.Upvalues) > MaxSlots || fn.LocalCount+fn.MaxStack+len(fn.Upvalues) > MaxSlots:
+	case fn.LocalCount < 0 || fn.MaxStack < 0 || fn.LocalCount > maxSlots || fn.MaxStack > maxSlots || len(fn.Upvalues) > maxSlots || fn.LocalCount+fn.MaxStack+len(fn.Upvalues) > maxSlots:
+		// Past what native code's records and exits name (maxSlots).
 		return nil, refuse(-1, "slot budget")
 	case fn.ParamCount < 0 || fn.ParamCount > fn.LocalCount || len(fn.Locals) != fn.LocalCount:
 		return nil, refuse(-1, "invalid local layout")
@@ -555,7 +557,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		}
 	}
 	if this {
-		if p.Locals+p.StackSize == MaxSlots {
+		if p.Locals+p.StackSize == maxSlots {
 			if p.DerivedConstructor {
 				return nil, refuse(-1, "no slot for a derived constructor's this")
 			}
@@ -862,7 +864,7 @@ func selectGlobalSlots(fn *bytecode.Function, p *ir.Program, codes []bool) {
 			i++
 		}
 		if i == len(p.Globals) {
-			if base+p.StackSize+len(p.Globals) == MaxSlots {
+			if base+p.StackSize+len(p.Globals) == maxSlots {
 				p.Code[pc] = ir.Instruction{Op: ir.Host}
 				continue
 			}
@@ -966,7 +968,12 @@ func selectPropertyLoops(fn *bytecode.Function, p *ir.Program, calls, callee boo
 // a reference, rather than add an exit.
 func selectNumericProperties(p *ir.Program, cells bool) {
 	const number, reference uint8 = 1, 2
-	var needed [MaxSlots]uint8
+	// On the stack for a function of up to 256 slots, as nearly all are.
+	var room [256]uint8
+	needed := room[:]
+	if n := p.Locals + p.StackSize; n > len(room) {
+		needed = make([]uint8, n)
+	}
 	read := func(o ir.Operand, kind uint8) {
 		if o.Slot >= 0 {
 			needed[o.Slot] |= kind
@@ -1515,13 +1522,13 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 	}
 	switch in.Op {
 	case bytecode.OpNewArray:
-		if in.A > MaxSlots {
+		if in.A > uint32(fn.MaxStack) {
 			return bad("array literal budget")
 		}
 		return effect{need: int(in.A), delta: 1 - int(in.A)}, nil
 	case bytecode.OpConcat:
 		// The parts of a template or of a string chain, joined into one.
-		if in.A == 0 || in.A > MaxSlots {
+		if in.A == 0 || in.A > uint32(fn.MaxStack) {
 			return bad("concat part count")
 		}
 		return effect{need: int(in.A), delta: 1 - int(in.A)}, nil
@@ -1550,7 +1557,7 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 	case bytecode.OpInsert3:
 		return effect{need: 3, delta: 1}, nil
 	case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew, bytecode.OpTailCall, bytecode.OpTailCallMethod:
-		if in.A > MaxSlots {
+		if in.A > uint32(fn.MaxStack) {
 			return bad("argument budget")
 		}
 		n := int(in.A) + 1
@@ -1605,7 +1612,7 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 		return effect{need: 2, delta: -1}, nil
 	case bytecode.OpSetHomeObject:
 		// The method, its home object A slots below it.
-		if in.A > MaxSlots {
+		if in.A > uint32(fn.MaxStack) {
 			return bad("invalid home object")
 		}
 		return effect{need: int(in.A) + 1}, nil
@@ -1632,7 +1639,7 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 		return effect{need: 2, delta: -1}, nil
 	case bytecode.OpObjectRest:
 		// The source and the A keys above it, for the rest object.
-		if in.A >= MaxSlots {
+		if in.A >= uint32(fn.MaxStack) {
 			return bad("invalid object rest")
 		}
 		return effect{need: int(in.A) + 1, delta: -int(in.A)}, nil
@@ -1676,13 +1683,13 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 		return effect{delta: 1}, nil
 	case bytecode.OpGetPropUnder:
 		// An object pattern's read of its source, B beneath the top.
-		if uint64(in.A) >= uint64(len(fn.Names)) || in.B > MaxSlots {
+		if uint64(in.A) >= uint64(len(fn.Names)) || in.B > uint32(fn.MaxStack) {
 			return bad("invalid property read")
 		}
 		return effect{need: int(in.B) + 1, delta: 1}, nil
 	case bytecode.OpGetIndexUnder:
 		// Its computed key's, A beneath the top, the source below it.
-		if in.A > MaxSlots {
+		if in.A > uint32(fn.MaxStack) {
 			return bad("invalid element read")
 		}
 		return effect{need: int(in.A) + 2, delta: 1}, nil
@@ -1843,7 +1850,7 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 	case bytecode.OpIterStep, bytecode.OpIterRest:
 		// A destructuring's: the cursor, A below the top, kept; its next
 		// value, or what is left, pushed.
-		if in.A > MaxSlots {
+		if in.A > uint32(fn.MaxStack) {
 			return bad("invalid cursor")
 		}
 		return effect{need: int(in.A) + 1, delta: 1}, nil
@@ -1889,7 +1896,7 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 		return effect{need: int(in.B), delta: 1 - int(in.B)}, nil
 	case bytecode.OpNipUnder:
 		// The top stays; the A beneath it go.
-		if in.A > MaxSlots {
+		if in.A > uint32(fn.MaxStack) {
 			return bad("invalid nip")
 		}
 		return effect{need: int(in.A) + 1, delta: -int(in.A)}, nil

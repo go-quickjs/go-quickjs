@@ -2,18 +2,13 @@ package ir
 
 import "fmt"
 
-const (
-	// MaxSlots bounds pointer-free scratch storage, including locals.
-	MaxSlots = 256
-)
-
 // Validate checks all memory operands and control-flow destinations before
 // native emission. Unreachable instructions are never emitted or entered.
 func (p *Program) Validate() error {
 	if p == nil || len(p.Code) == 0 || len(p.Code) != len(p.Maps) {
 		return fmt.Errorf("jit IR: invalid instruction layout")
 	}
-	if p.Locals < 0 || p.StackSize < 0 || p.Locals > MaxSlots || p.StackSize > MaxSlots || p.Locals+p.StackSize > MaxSlots || len(p.Globals) > p.Locals || p.This && p.Locals <= len(p.Globals) {
+	if p.Locals < 0 || p.StackSize < 0 || len(p.Globals) > p.Locals || p.This && p.Locals <= len(p.Globals) {
 		return fmt.Errorf("jit IR: invalid slot layout")
 	}
 	for pc, state := range p.Maps {
@@ -131,7 +126,7 @@ func (p *Program) Validate() error {
 		case Call:
 			if calls == MaxCallSites || in.Key != calls || in.Left.Slot < 0 ||
 				in.Right.Slot < 0 && in.Right != Literal(Value{}) ||
-				in.Third.Slot < 0 || in.Extra < 0 || in.Extra > MaxSlots || in.Third.Slot > active-in.Extra {
+				in.Third.Slot < 0 || in.Extra < 0 || in.Third.Slot > active-in.Extra {
 				return bad("invalid native call")
 			}
 			calls++

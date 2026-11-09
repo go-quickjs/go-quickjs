@@ -56,7 +56,7 @@ type PropertyCell struct {
 
 // ReferenceCell grants a read of one selected own field. Cell borrows
 // the live property; Bits and Reference must still match before Handle is used.
-// Handle equal to MaxSlots denies a reference read. Numeric reads and writes
+// A Handle past the views' table denies a reference read. Numeric reads and writes
 // use Cell's live value. Native code never writes or publishes the Go pointers.
 type ReferenceCell struct {
 	Key       uint32

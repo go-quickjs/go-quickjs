@@ -58,7 +58,7 @@ type heapInstance struct {
 }
 
 func (h testHeap) instance() heapInstance {
-	in := heapInstance{views: make([]ir.ArrayView, ir.MaxSlots)}
+	in := heapInstance{views: make([]ir.ArrayView, 256)}
 	for i, a := range h {
 		mem := make([]uint64, 2*len(a.cells))
 		for j, c := range a.cells {

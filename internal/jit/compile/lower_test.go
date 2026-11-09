@@ -245,10 +245,10 @@ func TestGlobalSlotBudget(t *testing.T) {
 	fn := fixture(bytecode.Instr{Op: bytecode.OpGetGlobal, B: 1}, bytecode.Instr{Op: bytecode.OpPushInt, A: 2}, bytecode.Instr{Op: bytecode.OpMul}, bytecode.Instr{Op: bytecode.OpDrop}, bytecode.Instr{Op: bytecode.OpJump})
 	fn.Names = []string{"scale"}
 	fn.PropSites = 1
-	fn.LocalCount, fn.MaxStack = MaxSlots-2, 2
+	fn.LocalCount, fn.MaxStack = maxSlots-2, 2
 	fn.Locals = make([]bytecode.LocalDesc, fn.LocalCount)
 	p, err := Lower(fn)
-	if err != nil || len(p.Globals) != 0 || p.Code[0].Op != ir.Host || p.Locals+p.StackSize != MaxSlots {
+	if err != nil || len(p.Globals) != 0 || p.Code[0].Op != ir.Host || p.Locals+p.StackSize != maxSlots {
 		t.Fatalf("binding view exceeded scratch capacity: %+v, %v", p, err)
 	}
 }
@@ -273,10 +273,10 @@ func TestReceiverSlot(t *testing.T) {
 
 func TestReceiverSlotBudget(t *testing.T) {
 	fn := fixture(bytecode.Instr{Op: bytecode.OpPushThis}, bytecode.Instr{Op: bytecode.OpDrop}, bytecode.Instr{Op: bytecode.OpPushInt}, bytecode.Instr{Op: bytecode.OpBitNot}, bytecode.Instr{Op: bytecode.OpDrop}, bytecode.Instr{Op: bytecode.OpJump})
-	fn.LocalCount, fn.MaxStack = MaxSlots-1, 1
+	fn.LocalCount, fn.MaxStack = maxSlots-1, 1
 	fn.Locals = make([]bytecode.LocalDesc, fn.LocalCount)
 	p, err := Lower(fn)
-	if err != nil || p.This || p.Locals+p.StackSize != MaxSlots || p.Code[0].Op != ir.Host {
+	if err != nil || p.This || p.Locals+p.StackSize != maxSlots || p.Code[0].Op != ir.Host {
 		t.Fatalf("receiver exceeded scratch storage instead of taking the host path: %+v, %v", p, err)
 	}
 }
@@ -507,10 +507,10 @@ func TestCompilerBudgets(t *testing.T) {
 		name string
 		edit func(*bytecode.Function)
 	}{
-		{"slots", func(f *bytecode.Function) { f.MaxStack = MaxSlots }},
+		{"slots", func(f *bytecode.Function) { f.MaxStack = maxSlots }},
 		{"negative", func(f *bytecode.Function) { f.LocalCount = -1 }},
 		{"layout", func(f *bytecode.Function) { f.Locals = nil }},
-		{"upvalues", func(f *bytecode.Function) { f.Upvalues = make([]bytecode.UpvalueDesc, MaxSlots) }},
+		{"upvalues", func(f *bytecode.Function) { f.Upvalues = make([]bytecode.UpvalueDesc, maxSlots) }},
 		{"mapped arguments", func(f *bytecode.Function) { f.MappedArguments = true }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

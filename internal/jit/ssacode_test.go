@@ -745,7 +745,7 @@ func (n *nativeHeap) heap() ssa.Heap {
 
 // views are the slot IR's views of the objects, as the VM grants them.
 func (n *nativeHeap) views() []ir.ArrayView {
-	vs := make([]ir.ArrayView, ir.MaxSlots)
+	vs := make([]ir.ArrayView, 256)
 	for i := range n.objects {
 		o := &n.objects[i]
 		v := ir.ArrayView{DenseLength: uint64(len(o.elems)), Length: uint64(len(o.elems))}

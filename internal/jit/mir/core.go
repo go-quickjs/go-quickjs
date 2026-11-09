@@ -480,7 +480,7 @@ func prepare(w *Workspace, f *ssa.Func, enc abi.Encoding, opts Options, gprs, fp
 		// through Go's write barrier there.
 		return nil, fmt.Errorf("%w: no StoreRef", ErrUnsupported)
 	}
-	if n := f.Locals + f.StackSize; n > abi.MaxRecords {
+	if n := f.Locals + f.StackSize; n > abi.MaxSlot {
 		return nil, fmt.Errorf("%w: %d slots", ErrUnsupported, n)
 	}
 	if f.FrameLocals < 0 || f.FrameLocals > f.Locals {
@@ -3238,6 +3238,37 @@ func (c *core) exitWord(w uint64) int32 {
 	return k
 }
 
+// slotsEnd is past every slot the code names by number -- a record's or a
+// run-time source's word below it is a slot, one at or above it an
+// address (abi.MaxSlot) -- for a function of up to abi.MaxRecords slots,
+// the room inlined callees' frames, the homes of objects left unmade and
+// native loops' slots fit in; for one of more, which takes none of them,
+// its own slots.
+func (c *core) slotsEnd() int32 {
+	return int32(max(abi.MaxRecords, c.f.Locals+c.f.StackSize))
+}
+
+// recordRoom panics, refusing the code, if an exit to state s may write
+// more records than the context has room for (abi.MaxRecords): one for
+// each slot it names that the frame does not hold as it is, which only a
+// state of more slots than that, a function's that nothing else bounds,
+// may have.
+func (c *core) recordRoom(s *ssa.FrameState) {
+	if len(s.Slots) <= abi.MaxRecords {
+		return
+	}
+	n := 0
+	for _, ix := range c.f.Present(s) {
+		i, v := int(ix), s.Slots[ix]
+		if !(v.Op == ssa.OpLoadSlot && v.Aux == i || c.captured(i)) {
+			n++
+		}
+	}
+	if n > abi.MaxRecords {
+		panic(fmt.Sprintf("mir: an exit of %d records", n))
+	}
+}
+
 // callRecord is how call v records a slot of its state (callState): the
 // slot, its value x, and whether the call writes its number word (num) and
 // its pointer word (ref) -- what a description cannot find where the
@@ -3308,6 +3339,12 @@ func (c *core) callState(v *ssa.Value, s *ssa.FrameState, skip func(int) bool, o
 		}
 	}
 	cs.refs, cs.rest, cs.refRecs, cs.restRecs = refs, rest, refRecs, restRecs
+	if len(refRecs)+len(restRecs) > abi.MaxRecords {
+		// Past the context's room for them (abi.MaxRecords): only a
+		// function of more slots than that, which nothing else bounds,
+		// has such a state.
+		panic(fmt.Sprintf("mir: a call's state of %d records", len(refRecs)+len(restRecs)))
+	}
 	start := len(cs.records)
 	cs.records = append(append(cs.records, refRecs...), restRecs...)
 	st.Records = cs.records[start:len(cs.records):len(cs.records)]
