@@ -23,8 +23,10 @@ This package compiles; the engine places, enters and handles exits:
 | `ctx.go` | the context block and the exits: the contract between the two |
 | `scan.go` | the refusals: what the compiler leaves to the interpreter |
 | `reader.go` | the interpreter's body reader, which this package cannot import |
-| `compile_amd64.go` | control flow, calls, exits, traps |
-| `stack_amd64.go` | the operand stack and its register cache |
+| `compile.go` | the front end every backend shares: constructs, branches, locals, calls through the engine |
+| `stack.go` | the operand stack's entries and its register cache |
+| `compile_amd64.go` | the backend's entries, exits, traps, branches, native calls |
+| `stack_amd64.go` | its registers, and the moves between registers, slots and constants |
 | `ops_amd64.go` | the numeric and memory instructions |
 | `engine/jit_on.go` | tiering, placement, entry, the exits' handling |
 
