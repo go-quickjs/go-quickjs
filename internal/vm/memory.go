@@ -505,7 +505,7 @@ func (m *memoryMeter) data(o *Object) {
 	case ClassArray:
 	default:
 		if d := o.dataOf(); d != nil {
-			m.values = append(m.values, reflect.ValueOf(d))
+			meterData(m, d)
 		}
 	}
 }

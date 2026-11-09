@@ -146,7 +146,7 @@ func (a *api) newMemory(rt *vm.Runtime, this vm.Value, args []vm.Value) (vm.Valu
 		return vm.Undefined, t.typeError("If shared is true, maximum property should be defined.")
 	}
 	mem := engine.NewMemory(initial, maximum, hasMax, is64, shared)
-	if mem == nil {
+	if mem == nil || !mem.SetBudget(a.budget) {
 		return vm.Undefined, t.rangeError("could not allocate memory")
 	}
 	return vm.Obj(a.memoryObject(mem, proto)), nil
@@ -204,8 +204,10 @@ func (a *api) buffer(d *memoryData) vm.Value {
 	if mem.Shared {
 		size := mem.Size()
 		if d.buf.IsUndefined() || d.bufLen != size {
-			span := mem.Span()
-			d.buf = vm.HostSharedArrayBuffer(a.rt, span, int(size), mem, -1, nil)
+			// The buffer is of the memory's size now, and made anew when
+			// the memory has grown: it spans that much, which the runtime's
+			// memory limit counts, not the reservation.
+			d.buf = vm.HostSharedArrayBuffer(a.rt, mem.Bytes(), int(size), mem, -1, nil)
 			// A shared memory's buffer is frozen.
 			vm.HostPreventExtensions(d.buf.Object())
 			d.bufLen = size

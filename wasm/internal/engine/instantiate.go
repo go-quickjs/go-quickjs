@@ -266,7 +266,7 @@ func instantiate(ctx context.Context, code *Code, imports []Extern, b *Budget) (
 		}
 		inst.Tables[i] = NewTable(t.Type, m, l.Initial, l.Max, l.HasMax, l.Is64, init)
 		if !inst.Tables[i].SetBudget(b) {
-			return nil, ErrMemoryLimit
+			return nil, b.exceeded()
 		}
 	}
 	inst.elems = make([][]Ref, len(m.Elems))

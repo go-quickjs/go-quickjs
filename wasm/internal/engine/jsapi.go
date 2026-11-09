@@ -46,7 +46,3 @@ func ArrayNumbers(r Ref) (b []byte, n int, ok bool) {
 	}
 	return a.b, a.n, true
 }
-
-// Span returns all of a shared memory's bytes, to its maximum, which never
-// move; an unshared memory's are its current bytes.
-func (m *Memory) Span() []byte { return m.buf }

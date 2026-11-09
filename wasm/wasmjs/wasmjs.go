@@ -117,6 +117,10 @@ type api struct {
 	// streamBytes and streamThen are the functions streamingJS makes.
 	qrt                     any
 	streamBytes, streamThen vm.Value
+
+	// budget charges what wasm holds to the runtime's memory limit, nil for
+	// a runtime without one (see memlimit.go).
+	budget *engine.Budget
 }
 
 // newAPI builds the WebAssembly namespace of r.
@@ -132,6 +136,9 @@ func newAPI(r *vm.Runtime, qrt any, c config, proxy vm.Value, objectProto *vm.Ob
 		a.jspi = &jspiState{}
 	}
 	a.wrappers.m = map[uintptr]wrapperEntry{}
+	if vm.HostMemoryLimited(r) {
+		a.budget = engine.NewOuterBudget(jsMeter{r})
+	}
 	a.build()
 	return a
 }

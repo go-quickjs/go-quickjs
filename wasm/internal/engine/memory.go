@@ -132,11 +132,14 @@ const maxSlice = int(^uint(0) >> 1)
 // Bytes returns the memory's bytes at its current size. The slice of an
 // unshared memory is valid until the memory grows; a shared memory's is
 // valid as long as the memory, but other threads may grow the memory past it.
+// Its capacity is its length: what lies past is not the memory's yet, nor,
+// in a reservation, memory at all.
 func (m *Memory) Bytes() []byte {
 	if m.Shared {
-		return m.buf[:m.size.Load()]
+		n := m.size.Load()
+		return m.buf[:n:n]
 	}
-	return m.buf
+	return m.buf[:len(m.buf):len(m.buf)]
 }
 
 // Size returns the memory's size in bytes.

@@ -1,6 +1,10 @@
 package vm
 
-import "math/bits"
+import (
+	"math/bits"
+	"reflect"
+	"unsafe"
+)
 
 // What a package defining built-in objects of its own through the runtime
 // needs -- the WebAssembly namespace's classes, for one: constructors whose
@@ -105,7 +109,37 @@ var (
 	// HostToBigUint64 converts v to a BigInt as HostToBigInt64 does and
 	// returns its value modulo 2^64, and whether it was in u64's range.
 	HostToBigUint64 func(r *Runtime, v Value) (uint64, bool, error)
+
+	// HostMemoryLimited reports whether the runtime has a memory limit
+	// (Config.MemoryLimit), which what the host holds for it is charged to.
+	HostMemoryLimited func(r *Runtime) bool
+	// HostReserveMemory counts n more bytes the host is about to hold for
+	// the runtime, reporting false, and counting nothing, if they would take
+	// it past its limit even once its heap has been measured again.
+	HostReserveMemory func(r *Runtime, n int64) bool
+	// HostChargeMemory counts n bytes the host holds for the runtime,
+	// returning the error that stops it if they take it past its limit.
+	HostChargeMemory func(r *Runtime, n int64) error
+	// HostMemoryExceeded stops the runtime as one past its limit is, and
+	// returns the error it stops with.
+	HostMemoryExceeded func(r *Runtime) error
 )
+
+// HostSized is host data that says how much memory it holds, for a
+// runtime's memory limit: the walk that measures the runtime's heap asks
+// the data of an object HostObject or HostSetSlot made rather than looking
+// into it. The bytes of a buffer HostArrayBuffer or HostSharedArrayBuffer
+// made are counted by their capacity, so a host gives it no more than its
+// length. MemoryFootprint returns the bytes held and kept alive; has
+// reports whether the walk has counted p already, marking it counted, so
+// that what several objects share is counted once.
+type HostSized interface {
+	MemoryFootprint(has func(p unsafe.Pointer) bool) int64
+}
+
+// meterData visits an object's data d: it counts what host data that is
+// HostSized holds, and walks anything else.
+var meterData func(m *memoryMeter, d any)
 
 // hostSlotSymbol is the key of the data HostSetSlot attaches.
 var hostSlotSymbol = NewSymbol("host slot", true)
@@ -318,5 +352,39 @@ func init() {
 			return 0, true, nil
 		}
 		return bigLowUint64(b), !b.negative() && b.digits()*bits.UintSize <= 64, nil
+	}
+	HostMemoryLimited = func(r *Runtime) bool { return r.meter != nil }
+	HostReserveMemory = func(r *Runtime, n int64) bool {
+		m := r.meter
+		if m == nil || n <= 0 {
+			return true
+		}
+		if m.live+n > m.limit {
+			// What was counted may since have been let go of.
+			m.allocsAt = m.allocated()
+			m.live = max(0, m.walk(r)-m.baseline)
+			if m.live+n > m.limit {
+				return false
+			}
+		}
+		m.live += n
+		return true
+	}
+	HostChargeMemory = func(r *Runtime, n int64) error {
+		if r.meter == nil || n <= 0 {
+			return nil
+		}
+		if n > int64(^uint(0)>>1) {
+			return r.stop(ErrMemoryLimit)
+		}
+		return r.reserveMemory(int(n))
+	}
+	HostMemoryExceeded = func(r *Runtime) error { return r.stop(ErrMemoryLimit) }
+	meterData = func(m *memoryMeter, d any) {
+		if s, ok := d.(HostSized); ok {
+			m.total += s.MemoryFootprint(m.has)
+			return
+		}
+		m.values = append(m.values, reflect.ValueOf(d))
 	}
 }

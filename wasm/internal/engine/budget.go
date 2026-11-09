@@ -23,7 +23,9 @@ import (
 //
 // A budget may instead leave the counting to an outer meter -- a
 // JavaScript runtime's, which measures its whole heap, wasm's included --
-// and only charge it.
+// and only charge it. The meter's walk asks the wasm objects it reaches what
+// they hold (MemoryFootprint), and the budget itself for what the frames of
+// the calls running hold.
 
 // ErrMemoryLimit stops execution that needs more memory than its budget
 // allows.
@@ -37,7 +39,14 @@ type Outer interface {
 	// Charge counts n bytes of GC objects, returning the error that stops
 	// execution if they do not fit.
 	Charge(n int64) error
+	// Exceeded returns the error that stops execution when what was asked
+	// for does not fit.
+	Exceeded() error
 }
+
+// outerChunk is how much a budget charging an outer meter lets GC objects
+// take before it charges them.
+const outerChunk = 64 << 10
 
 // Budget bounds the memory a group of instances may hold.
 type Budget struct {
@@ -54,6 +63,9 @@ type Budget struct {
 	// globals, tables and segments are the roots of its GC objects. They are
 	// held weakly: an instance no longer used is no root.
 	insts []weak.Pointer[Instance]
+	// active are the execs running calls of the budget's instances, for a
+	// budget charging an outer meter: the roots of what their frames hold.
+	active []*exec
 }
 
 // NewBudget returns a budget of limit bytes that counts itself.
@@ -99,6 +111,15 @@ func (b *Budget) reserve(n int64) bool {
 	}
 }
 
+// exceeded returns the error that stops execution when what was asked for
+// does not fit.
+func (b *Budget) exceeded() error {
+	if b != nil && b.outer != nil {
+		return b.outer.Exceeded()
+	}
+	return ErrMemoryLimit
+}
+
 // release gives back n bytes of a memory or a table no longer held.
 func (b *Budget) release(n int64) {
 	if b != nil && b.outer == nil && n > 0 {
@@ -114,8 +135,11 @@ func (b *Budget) chargeGC(x *exec, n int64) {
 		return
 	}
 	if b.outer != nil {
-		if err := b.outer.Charge(n); err != nil {
-			panic(hostError{err})
+		if pending := b.gcNew.Add(n); pending >= outerChunk {
+			b.gcNew.Add(-pending)
+			if err := b.outer.Charge(pending); err != nil {
+				panic(hostError{err})
+			}
 		}
 		return
 	}
@@ -178,6 +202,28 @@ func (b *Budget) recount(x *exec, need int64) bool {
 	b.gcLive.Store(live)
 	b.gcNew.Store(0)
 	return b.fixed.Load()+live+need <= b.limit
+}
+
+// enter and leave bracket a call running on x, for a budget charging an
+// outer meter, so that what its frames hold is counted.
+func (b *Budget) enter(x *exec) {
+	b.mu.Lock()
+	b.active = append(b.active, x)
+	b.mu.Unlock()
+}
+
+func (b *Budget) leave(x *exec) {
+	b.mu.Lock()
+	for i := len(b.active) - 1; i >= 0; i-- {
+		if b.active[i] == x {
+			last := len(b.active) - 1
+			copy(b.active[i:], b.active[i+1:])
+			b.active[last] = nil
+			b.active = b.active[:last]
+			break
+		}
+	}
+	b.mu.Unlock()
 }
 
 // objectSize returns the bytes GC object r takes, visiting the references

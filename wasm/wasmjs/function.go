@@ -22,6 +22,10 @@ type funcSlot struct {
 	// promising marks a function WebAssembly.promising made, which runs fn
 	// on a stack of its own and returns a promise.
 	promising bool
+	// budget is the runtime's, whose running calls' frames the function's
+	// footprint counts: while script calls into wasm, the function it
+	// called is on its stack.
+	budget *engine.Budget
 }
 
 // exportedFunction returns the wasm function v is the exported function of,
@@ -44,7 +48,7 @@ func (a *api) functionObject(f *engine.Function) *vm.Object {
 		func(rt *vm.Runtime, this vm.Value, args []vm.Value) (vm.Value, error) {
 			return a.callExport(f, args)
 		})
-	vm.HostSetSlot(a.rt, fn, &funcSlot{fn: f})
+	vm.HostSetSlot(a.rt, fn, &funcSlot{fn: f, budget: a.budget})
 	a.wrappers.put(unsafe.Pointer(f), fn)
 	return fn
 }

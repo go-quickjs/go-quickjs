@@ -74,6 +74,9 @@ func (a *api) newTable(rt *vm.Runtime, this vm.Value, args []vm.Value) (vm.Value
 		init = ref
 	}
 	tab := engine.NewTable(typ, nil, initial, maximum, hasMax, is64, init)
+	if !tab.SetBudget(a.budget) {
+		return vm.Undefined, vm.HostMemoryExceeded(rt)
+	}
 	return vm.Obj(a.tableObject(tab, proto)), nil
 }
 

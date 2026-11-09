@@ -263,9 +263,10 @@ func (a *api) instantiateModule(t thrower, md *moduleData, ffi vm.Value) (*engin
 	return inst, nil
 }
 
-// runInstantiate runs engine.Instantiate in the runtime's context.
+// runInstantiate runs engine.Instantiate in the runtime's context, charging
+// the instance to the runtime's memory limit.
 func (a *api) runInstantiate(md *moduleData, externs []engine.Extern) (*engine.Instance, error) {
-	return engine.Instantiate(runtimeContext{a.rt}, md.code, externs)
+	return engine.InstantiateBudget(runtimeContext{a.rt}, md.code, externs, a.budget)
 }
 
 // instantiate is WebAssembly.instantiate(module or bytes, imports, options).

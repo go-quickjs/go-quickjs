@@ -145,10 +145,18 @@ func Invoke(ctx context.Context, fn *Function, args []Val) (results []Val, err e
 	x := execPool.Get().(*exec)
 	x.ctx = ctx
 	x.poll = pollEvery
+	var outer *Budget
+	if fn.Inst != nil && fn.Inst.budget != nil && fn.Inst.budget.outer != nil {
+		outer = fn.Inst.budget
+		outer.enter(x)
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			err = recovered(x, r)
 			results = nil
+		}
+		if outer != nil {
+			outer.leave(x)
 		}
 		x.depth = 0
 		x.calls = x.calls[:0]
