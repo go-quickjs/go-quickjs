@@ -4,15 +4,20 @@ package vm
 
 import (
 	"context"
+	"crypto/md5"
+	_ "embed"
 	"errors"
-	"os"
+	"fmt"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
-
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	"github.com/go-quickjs/go-quickjs/internal/compiler"
-	"github.com/go-quickjs/go-quickjs/internal/parser"
 )
+
+//go:embed testdata/md5.js
+var jitMD5Source string
+
+const jitMD5Setup = `var input='a'.repeat(1024);function hashes(){return md5(input)}`
 
 func TestJITStringPacking(t *testing.T) {
 	r := jitRuntimeForTest(t, Config{JIT: true})
@@ -133,29 +138,43 @@ func TestJITStringRealms(t *testing.T) {
 	}
 }
 
-// Use the external library unchanged and validate every complete hash.
+func TestJITMD5(t *testing.T) {
+	inputs := []string{
+		"", "a", "abc", "message digest", "abcdefghijklmnopqrstuvwxyz",
+		"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+		strings.Repeat("1234567890", 8),
+		strings.Repeat("\x00\x80\xff", 100),
+	}
+	for _, n := range []int{55, 56, 63, 64, 65, 119, 120, 127, 128, 129, 1024} {
+		inputs = append(inputs, strings.Repeat("a", n))
+	}
+	for _, mode := range []string{"existing", "native", "marking"} {
+		t.Run(mode, func(t *testing.T) {
+			if mode == "marking" {
+				jitMarkingForTest(t)
+			}
+			r := jitRuntimeForTest(t, Config{JIT: mode != "existing"})
+			if _, err := r.Run(compileForTest(t, jitMD5Source)); err != nil {
+				t.Fatal(err)
+			}
+			for _, input := range inputs {
+				want := fmt.Sprintf("%x", md5.Sum([]byte(input)))
+				v, err := r.Run(compileForTest(t, "md5("+strconv.Quote(input)+")"))
+				if err != nil || !v.IsString() || v.String().Go() != want {
+					t.Fatalf("MD5 of %d bytes: %v, %v; want %s", len(input), v, err, want)
+				}
+			}
+			if mode != "existing" && r.JITStats().SSAEntries == 0 {
+				t.Fatal("MD5 did not run native code")
+			}
+		})
+	}
+}
+
+// Validate every complete hash, including the compilation its first use triggers.
 func BenchmarkJITMD5FirstUse(b *testing.B) {
-	path := os.Getenv("QUICKJS_JIT_MD5_SOURCE")
-	if path == "" {
-		b.Skip("set QUICKJS_JIT_MD5_SOURCE to SparkMD5 3.0.2")
-	}
-	source, err := os.ReadFile(path)
-	if err != nil {
-		b.Fatal(err)
-	}
-	compile := func(source string) *bytecode.Function {
-		ast, err := parser.Parse(source, parser.Options{})
-		if err != nil {
-			b.Fatal(err)
-		}
-		fn, err := compiler.Compile(ast, compiler.Options{})
-		if err != nil {
-			b.Fatal(err)
-		}
-		return fn
-	}
-	setup := compile("var module={exports:{}},exports=module.exports;" + string(source) + `var spark=module.exports, input='a'.repeat(1024);function hashes(){return spark.hash(input)}`)
-	call := compile(`hashes()`)
+	setup := compileForTest(b, jitMD5Source+jitMD5Setup)
+	call := compileForTest(b, `hashes()`)
 	for _, mode := range []string{"existing", "native"} {
 		b.Run(mode, func(b *testing.B) {
 			b.ReportAllocs()
@@ -182,34 +201,12 @@ func BenchmarkJITMD5FirstUse(b *testing.B) {
 }
 
 func BenchmarkJITMD5(b *testing.B) {
-	path := os.Getenv("QUICKJS_JIT_MD5_SOURCE")
-	if path == "" {
-		b.Skip("set QUICKJS_JIT_MD5_SOURCE to SparkMD5 3.0.2")
-	}
-	source, err := os.ReadFile(path)
-	if err != nil {
-		b.Fatal(err)
-	}
+	setup := compileForTest(b, jitMD5Source+jitMD5Setup)
+	call := compileForTest(b, `hashes()`)
 	for _, mode := range []string{"interpreter", "existing", "native"} {
 		b.Run(mode, func(b *testing.B) {
 			previous := treeTier.Swap(mode != "interpreter")
 			defer treeTier.Store(previous)
-			ast, err := parser.Parse("var module={exports:{}},exports=module.exports;"+string(source)+`var spark=module.exports, input='a'.repeat(1024);function hashes(){return spark.hash(input)}`, parser.Options{})
-			if err != nil {
-				b.Fatal(err)
-			}
-			setup, err := compiler.Compile(ast, compiler.Options{})
-			if err != nil {
-				b.Fatal(err)
-			}
-			ast, err = parser.Parse(`hashes()`, parser.Options{})
-			if err != nil {
-				b.Fatal(err)
-			}
-			call, err := compiler.Compile(ast, compiler.Options{})
-			if err != nil {
-				b.Fatal(err)
-			}
 			r := New(Config{JIT: mode == "native"})
 			defer func() { r.Close(); r.ReleaseClosed() }()
 			if _, err := r.Run(setup); err != nil {
