@@ -366,7 +366,9 @@ V8's. The rest of the engine words its errors as V8 does too:
   `    at add (wasm://wasm/8c1f3e2a:wasm-function[1]:0x3a)`, the hash being
   V8's of the module's bytes and the name the module's and the function's;
   the innermost frame is at the instruction that trapped, in the interpreter
-  and in native code alike, and each frame below it at its call.
+  and in native code alike, and each frame below it at its call. A stack
+  overflow's innermost frame is the function that could not be entered, at
+  the start of its body.
 - In JavaScript the same texts come with the interface's prefixes, from
   `CompileError`, `LinkError` and `RuntimeError`. An error's `stack` shows
   the wasm frames of each exported function's call running, in the place of
@@ -395,7 +397,7 @@ The match is tested against Node, not assumed. With
   limits, which the test lists.
 - `wasm/wasmjs`'s `TestCompareNode` runs the scripts of
   `wasm/wasmjs/testdata/node` in both and compares, line by line, what each
-  operation returns or throws: 1,708 lines over 11 scripts, all equal but 26
+  operation returns or throws: 1,717 lines over 11 scripts, all equal but 26
   that the test lists with why, each a message of the JavaScript runtime's or
   a gap listed under [Known gaps](#known-gaps).
 - `wasm/internal/engine`'s `TestRelaxedMatchesNode` compares the relaxed SIMD

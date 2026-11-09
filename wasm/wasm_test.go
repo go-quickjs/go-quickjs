@@ -565,7 +565,10 @@ func TestTrapStack(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 	lines = strings.Split(re.Stack(), "\n")
-	if len(lines) != 10 || lines[1] != "    at wasm://wasm/91c08aaa:wasm-function[3]:0x4a" {
+	// The function that could not be entered, at the start of its body,
+	// then its callers at their calls, as in Node.
+	if len(lines) != 10 || lines[0] != "    at wasm://wasm/91c08aaa:wasm-function[3]:0x49" ||
+		lines[1] != "    at wasm://wasm/91c08aaa:wasm-function[3]:0x4a" {
 		t.Errorf("stack overflow's stack: %d lines\n%s", len(lines), re.Stack())
 	}
 

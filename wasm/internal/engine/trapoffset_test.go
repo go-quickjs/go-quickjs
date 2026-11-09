@@ -203,3 +203,34 @@ func TestTrapOffsetUnderCall(t *testing.T) {
 		t.Fatalf("frames %+v, want %+v", tr.Frames, want)
 	}
 }
+
+// TestStackOverflowFrames checks a stack overflow's frames, as Node 26
+// gives them: the function that could not be entered, at the start of its
+// body -- its locals' declaration -- then each caller at its call, one
+// frame for each call made.
+func TestStackOverflowFrames(t *testing.T) {
+	inst, err := instantiateWAT(t, `(module
+		(func $a (export "f") (call $b))
+		(func $b (local i32) i32.const 1 drop (call $a)))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = call(t, inst, "f")
+	var tr *Trap
+	if !errors.As(err, &tr) || tr.Code != TrapStackOverflow {
+		t.Fatalf("f() = %v, want a stack overflow", err)
+	}
+	if len(tr.Frames) != MaxCallDepth+1 {
+		t.Fatalf("%d frames, want %d", len(tr.Frames), MaxCallDepth+1)
+	}
+	// The call at the even depth MaxCallDepth is $b's, of $a.
+	want := []Frame{{Module: inst, Func: 0, Offset: 0x1e}, {Module: inst, Func: 1, Offset: 0x29}, {Module: inst, Func: 0, Offset: 0x1f}}
+	for i, w := range want {
+		if tr.Frames[i] != w {
+			t.Fatalf("frame %d is %+v, want %+v", i, tr.Frames[i], w)
+		}
+	}
+	if code := inst.Code.Module.Functions[0].Code; code.Offset != 0x1e {
+		t.Fatalf("$a's body is at %#x, not 0x1e", code.Offset)
+	}
+}

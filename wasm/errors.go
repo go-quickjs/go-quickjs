@@ -80,6 +80,8 @@ type StackFrame struct {
 	// Offset is the module offset of the instruction executing: for the
 	// frame that trapped, the instruction that trapped -- a prefixed
 	// instruction's prefix byte; for a frame that made a call, the call.
+	// A stack overflow's innermost frame is the function that could not be
+	// entered, at the start of its body.
 	Offset uint32
 }
 

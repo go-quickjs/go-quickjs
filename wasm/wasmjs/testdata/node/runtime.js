@@ -34,6 +34,8 @@ const e = b.instantiate().exports;
 for (const name of ["unreachable", "oob", "divz", "divov", "remz", "trunc", "nullcall", "tableoob", "recurse"]) {
   p(name, () => e[name]());
   p(name + " instance", () => { try { e[name]() } catch (x) { return [x instanceof W.RuntimeError, x instanceof Error, Object.prototype.toString.call(x), typeof x.stack].join() } });
+  // The innermost frames: the trapping instruction's, and the caller's call.
+  p(name + " frames", () => { try { e[name]() } catch (x) { return x.stack.split("\n").slice(1, 3).filter(l => l.includes("wasm://")).join(" | ") } });
 }
 p("add", () => e.add(1, 2));
 p("add strings", () => e.add("3", "4"));

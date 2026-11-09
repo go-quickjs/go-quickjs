@@ -20,8 +20,7 @@ func codeOf(fn *Function) *compiled { return fn.Inst.Code.get(fn.Index) }
 func (x *exec) run(fn *Function, code *compiled, l []uint64, r []Ref, nc, nsp, rc, rsp int) {
 	x.depth++
 	if x.depth > MaxCallDepth {
-		x.depth--
-		trap(TrapStackOverflow)
+		x.stackOverflow(fn)
 	}
 	if x.poll--; x.poll <= 0 {
 		x.pollContext()
@@ -52,6 +51,19 @@ func (x *exec) run(fn *Function, code *compiled, l []uint64, r []Ref, nc, nsp, r
 	}
 	x.calls = x.calls[:len(x.calls)-1]
 	x.depth--
+}
+
+// stackOverflow traps for a call of wasm function fn that would pass
+// MaxCallDepth: the call stack ran out as fn was entered, so the innermost
+// frame is fn's, at the start of its body, and its caller's is at the
+// call. Native code's calls that would pass the depth come here through Go.
+//
+//go:noinline
+func (x *exec) stackOverflow(fn *Function) {
+	x.depth--
+	at := fn.Inst.Code.Module.Functions[fn.Index].Code.Offset
+	x.calls = append(x.calls, callSite{fn: fn, offset: at})
+	trap(TrapStackOverflow)
 }
 
 // tailChain runs the calls a return_call asked for, each in place of the
