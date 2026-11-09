@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"runtime/pprof"
 	"strconv"
 )
 
@@ -37,6 +38,9 @@ type Request struct {
 	// Warmup runs come first and are not timed as runs; Reps follow.
 	Warmup int `json:"warmup"`
 	Reps   int `json:"reps"`
+	// CPUProfile, if set, is the file the timed runs' CPU profile is
+	// written to.
+	CPUProfile string `json:"cpu_profile,omitempty"`
 }
 
 // Result is what a worker measured. Times are in nanoseconds.
@@ -167,9 +171,27 @@ func Measure(e Engine, req Request) (res Result) {
 	}
 
 	var before, after runtime.MemStats
+	var profile *os.File
+	defer func() {
+		if profile != nil {
+			pprof.StopCPUProfile()
+			profile.Close()
+		}
+	}()
 	for i := range req.Warmup + req.Reps {
 		if i == req.Warmup {
 			runtime.ReadMemStats(&before)
+			if req.CPUProfile != "" {
+				f, err := os.Create(req.CPUProfile)
+				if err != nil {
+					return fail("profile", err)
+				}
+				if err := pprof.StartCPUProfile(f); err != nil {
+					f.Close()
+					return fail("profile", err)
+				}
+				profile = f
+			}
 		}
 		c0, t0 := processCPU(), clock()
 		err := run()

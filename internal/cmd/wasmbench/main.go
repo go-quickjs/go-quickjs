@@ -54,6 +54,9 @@ var (
 	cacheFlag   = flag.String("cache", "", "where the built modules are kept (default: go-quickjs-wasmbench in the user's cache directory)")
 	timeoutFlag = flag.Duration("timeout", 10*time.Minute, "the longest a worker process may take")
 	workerFlag  = flag.Bool("worker", false, "be a worker: read a request on standard input (used by wasmbench itself)")
+	// cpuProfileFlag has each Go worker profile its timed runs, into
+	// PREFIX.<suite-name>.<engine>.pprof.
+	cpuProfileFlag = flag.String("cpuprofile", "", "write a CPU profile of each Go engine's timed runs to `PREFIX`.<workload>.<engine>.pprof")
 )
 
 // An engine is a way to run a worker.

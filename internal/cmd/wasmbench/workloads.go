@@ -102,6 +102,9 @@ func (w workload) selected(filter string) bool {
 // request is the worker's request for w, its binary at bin.
 func (w workload) request(engine, bin string) worker.Request {
 	req := worker.Request{Engine: engine, Wasm: bin, Want: w.want, Warmup: *warmupFlag, Reps: *repsFlag}
+	if *cpuProfileFlag != "" {
+		req.CPUProfile = fmt.Sprintf("%s.%s.%s.pprof", *cpuProfileFlag, strings.ReplaceAll(w.fullName(), "/", "-"), engine)
+	}
 	if w.file != "" {
 		req.Kind, req.Export, req.Arg = "call", "run", w.arg
 	} else {
