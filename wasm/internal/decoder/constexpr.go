@@ -10,9 +10,8 @@ const (
 )
 
 // consumeInitExpr reads a constant expression whose value must be of type
-// expected, as V8's consume_init_expr does: the common single-instruction
-// forms directly, anything else through the function body decoder in its
-// constant expression mode.
+// expected: the common single-instruction forms directly, anything else
+// through the function body validator in its constant expression mode.
 func (md *moduleDecoder) consumeInitExpr(expected module.ValueType) module.ConstExpr {
 	m := md.m
 	if !md.more() {
@@ -58,7 +57,7 @@ func (md *moduleDecoder) consumeInitExpr(expected module.ValueType) module.Const
 			return module.ConstExpr{Kind: module.ConstRefFunc, Value: index}
 		}
 	case opRefNull:
-		h, length := readHeapType(&md.Decoder, md.pc+1, &md.det)
+		h, length := readHeapType(&md.Decoder, md.pc+1, &md.det, md.lim)
 		validateHeapType(&md.Decoder, md.pc, m, h)
 		if md.failed() {
 			return module.ConstExpr{}
@@ -72,7 +71,7 @@ func (md *moduleDecoder) consumeInitExpr(expected module.ValueType) module.Const
 		}
 	}
 	start := md.pc
-	stop, endFound, err := validateConstExpr(m, &md.det, md.b, start, md.end, expected)
+	stop, endFound, err := validateConstExpr(m, &md.det, md.b, start, md.end, expected, md.lim)
 	md.pc = stop
 	if err != nil {
 		md.errorAt(int(err.Offset), err.Msg)

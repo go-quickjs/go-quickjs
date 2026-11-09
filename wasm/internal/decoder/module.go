@@ -9,8 +9,8 @@ import (
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
 )
 
-// Section codes. The custom sections V8 knows by name get codes after the
-// standard ones, as V8 numbers them.
+// Section codes. The custom sections known by name get codes after the
+// standard ones.
 const (
 	secUnknown   = 0
 	secType      = 1
@@ -44,7 +44,7 @@ const (
 	lastKnownSection      = secStringRef
 )
 
-// sectionName returns V8's name for a section code.
+// sectionName returns the name of a section code, as messages print it.
 func sectionName(code int) string {
 	switch code {
 	case secUnknown:
@@ -99,7 +99,7 @@ func sectionName(code int) string {
 	return "<unknown>"
 }
 
-// customSectionCodes are the custom sections V8 identifies by name.
+// customSectionCodes are the custom sections identified by name.
 var customSectionCodes = map[string]int{
 	"name":                               secName,
 	"sourceMappingURL":                   secSourceMappingURL,
@@ -132,8 +132,8 @@ func consumeString(d *Decoder, utf8Required bool, name string) module.Range {
 	return module.Range{Offset: uint32(offset), Len: length}
 }
 
-// sectionIterator walks the sections of a module, as V8's
-// WasmSectionIterator does, on a decoder of its own.
+// sectionIterator walks the sections of a module on a decoder of its own,
+// checking that each section's payload was decoded exactly.
 type sectionIterator struct {
 	d                                  *Decoder
 	code                               int
@@ -212,8 +212,7 @@ func (it *sectionIterator) next() {
 	}
 }
 
-// moduleDecoder decodes a module's sections into a module.Module, as V8's
-// ModuleDecoderImpl does.
+// moduleDecoder decodes a module's sections into a module.Module.
 type moduleDecoder struct {
 	Decoder
 	m                    *module.Module
@@ -224,16 +223,17 @@ type moduleDecoder struct {
 	codeSeen             bool
 	numDeclaredData      uint32
 	customs              []module.CustomSection
+	lim                  *Limits
 }
 
 // Decode decodes the module in b and validates everything but its function
-// bodies, returning V8's first error if there is one. ValidateFunctions
-// validates the bodies.
-func Decode(b []byte) (*module.Module, *Error) {
-	if len(b) > maxModuleSize {
-		return nil, &Error{Offset: 0, Msg: fmt.Sprintf("size > maximum module size (%d): %d", maxModuleSize, len(b))}
+// bodies under limits l, returning the first error if there is one.
+// ValidateFunctions validates the bodies.
+func Decode(b []byte, l *Limits) (*module.Module, *Error) {
+	if uint64(len(b)) > l.ModuleSize {
+		return nil, &Error{Offset: 0, Msg: fmt.Sprintf("size > maximum module size (%d): %d", l.ModuleSize, len(b))}
 	}
-	md := &moduleDecoder{m: &module.Module{Bytes: b}}
+	md := &moduleDecoder{m: &module.Module{Bytes: b}, lim: l}
 	md.b = b
 	md.end = len(b)
 	md.stopOnError = true
@@ -362,7 +362,7 @@ func (md *moduleDecoder) decodeSection(code, start, end int) {
 	case secData:
 		md.decodeDataSection()
 	case secDataCount:
-		md.numDeclaredData = md.consumeCount("data segments count", maxDataSegments)
+		md.numDeclaredData = md.consumeCount("data segments count", md.lim.DataSegments)
 		md.m.DataCount = md.numDeclaredData
 		md.m.HasDataCount = true
 	case secTag:
@@ -372,7 +372,7 @@ func (md *moduleDecoder) decodeSection(code, start, end int) {
 	case secName:
 		md.decodeNameSection(start, end)
 	default:
-		// The other custom sections V8 knows are optional and lenient: their
+		// The other known custom sections are optional and lenient: their
 		// errors do not fail the module.
 		md.pc = end
 	}
@@ -385,10 +385,10 @@ func (md *moduleDecoder) decodeSection(code, start, end int) {
 	}
 }
 
-func (md *moduleDecoder) consumeCount(name string, maximum int) uint32 {
+func (md *moduleDecoder) consumeCount(name string, maximum uint32) uint32 {
 	p := md.pc
 	count := md.consumeU32v(name)
-	if uint64(count) > uint64(maximum) {
+	if count > maximum {
 		md.errorf(p, "%s of %d exceeds internal limit of %d", name, count, maximum)
 		return 0
 	}
@@ -405,7 +405,7 @@ func (md *moduleDecoder) consumeIndex(name string, size int) (uint32, bool) {
 	return index, true
 }
 
-// entries returns "entry" or "entries", as V8 says it after a count.
+// entries returns "entry" or "entries", as a message says it after a count.
 func entries(n int) string {
 	if n == 1 {
 		return "entry"
@@ -413,7 +413,7 @@ func entries(n int) string {
 	return "entries"
 }
 
-// memories returns "memory" or "memories", as V8 says it after a count.
+// memories returns "memory" or "memories", as a message says it after a count.
 func memories(n int) string {
 	if n == 1 {
 		return "memory"
@@ -422,14 +422,14 @@ func memories(n int) string {
 }
 
 func (md *moduleDecoder) consumeValueType() module.ValueType {
-	t, length := readValueType(&md.Decoder, md.pc, &md.det)
+	t, length := readValueType(&md.Decoder, md.pc, &md.det, md.lim)
 	validateValueType(&md.Decoder, md.pc, md.m, t)
 	md.consumeBytes(uint32(length))
 	return t
 }
 
 func (md *moduleDecoder) consumeHeapType() module.HeapType {
-	h, length := readHeapType(&md.Decoder, md.pc, &md.det)
+	h, length := readHeapType(&md.Decoder, md.pc, &md.det, md.lim)
 	validateHeapType(&md.Decoder, md.pc, md.m, h)
 	md.consumeBytes(uint32(length))
 	return h
@@ -456,12 +456,12 @@ func (md *moduleDecoder) consumeMutability() bool {
 }
 
 func (md *moduleDecoder) consumeSig() *module.FuncType {
-	paramCount := md.consumeCount("param count", maxFunctionParams)
+	paramCount := md.consumeCount("param count", md.lim.Params)
 	params := make([]module.ValueType, paramCount)
 	for i := range params {
 		params[i] = md.consumeValueType()
 	}
-	returnCount := md.consumeCount("return count", maxFunctionReturns)
+	returnCount := md.consumeCount("return count", md.lim.Returns)
 	results := make([]module.ValueType, returnCount)
 	for i := range results {
 		results[i] = md.consumeValueType()
@@ -470,7 +470,7 @@ func (md *moduleDecoder) consumeSig() *module.FuncType {
 }
 
 func (md *moduleDecoder) consumeStruct() *module.StructType {
-	count := md.consumeCount(", field count", maxStructFields)
+	count := md.consumeCount(", field count", md.lim.StructFields)
 	if md.failed() {
 		return nil
 	}
@@ -524,8 +524,8 @@ func (md *moduleDecoder) consumeBaseTypeDefinition() (module.TypeDef, bool) {
 }
 
 // consumeDescribingType reads the composite type after a sub clause; the
-// shared, describes and descriptor prefixes are features Node does not enable
-// by default, rejected as V8 rejects them.
+// shared, describes and descriptor prefixes are features that are not
+// enabled, rejected with the message that names the flag enabling them.
 func (md *moduleDecoder) consumeDescribingType() (module.TypeDef, bool) {
 	kind := md.readU8(md.pc, "type kind")
 	switch kind {
@@ -565,7 +565,7 @@ func (md *moduleDecoder) consumeSubtypeDefinition(current uint32) (module.TypeDe
 }
 
 func (md *moduleDecoder) decodeTypeSection() {
-	count := md.consumeCount("types count", maxTypes)
+	count := md.consumeCount("types count", md.lim.Types)
 	m := md.m
 	for i := uint32(0); md.ok() && i < count; i++ {
 		kind := md.readU8(md.pc, "type kind")
@@ -573,10 +573,10 @@ func (md *moduleDecoder) decodeTypeSection() {
 		groupSize := uint32(1)
 		if kind == codeRecGroup {
 			md.consumeBytes(1)
-			groupSize = md.consumeCount("recursive group size", maxTypes)
+			groupSize = md.consumeCount("recursive group size", md.lim.Types)
 		}
-		if uint64(initial)+uint64(groupSize) > maxTypes {
-			md.errorf(md.pc, "Type definition count exceeds maximum %d", maxTypes)
+		if uint64(initial)+uint64(groupSize) > uint64(md.lim.Types) {
+			md.errorf(md.pc, "Type definition count exceeds maximum %d", md.lim.Types)
 			return
 		}
 		// The group's types are visible to its definitions.
@@ -606,7 +606,7 @@ func (md *moduleDecoder) finalizeRecGroup(start, size uint32) {
 		}
 		depth := m.Types[t.Super].Depth + 1
 		t.Depth = depth
-		if depth > maxSubtypingDepth {
+		if depth > md.lim.SubtypingDepth {
 			md.errorf(md.pc, "type %d: subtyping depth is greater than allowed", i)
 			return
 		}
@@ -696,8 +696,8 @@ func (md *moduleDecoder) consumeResizableLimits(name, units string, maxInitial u
 		if maximum > maxMaximum {
 			md.errorf(pos, "maximum %s size (%d %s) is larger than implementation limit (%d %s)", name, maximum, units, maxMaximum, units)
 		}
-		if maximum < uint64(uint32(initial)) {
-			md.errorf(pos, "maximum %s size (%d %s) is less than initial (%d %s)", name, maximum, units, uint32(initial), units)
+		if maximum < initial {
+			md.errorf(pos, "maximum %s size (%d %s) is less than initial (%d %s)", name, maximum, units, initial, units)
 		}
 		l.Max = maximum
 	}
@@ -706,15 +706,19 @@ func (md *moduleDecoder) consumeResizableLimits(name, units string, maxInitial u
 
 func (md *moduleDecoder) consumeTableLimits(t module.ValueType) module.Limits {
 	flags := md.consumeLimitsByte(false)
-	return md.consumeResizableLimits("table", "elements", maxTableSize, flags&1 != 0, ^uint64(0), flags&4 != 0)
+	maxSize := md.lim.TableSize
+	if flags&4 != 0 {
+		maxSize = md.lim.Table64Size
+	}
+	return md.consumeResizableLimits("table", "elements", maxSize, flags&1 != 0, ^uint64(0), flags&4 != 0)
 }
 
 func (md *moduleDecoder) consumeMemory() module.Memory {
 	flags := md.consumeLimitsByte(true)
 	is64 := flags&4 != 0
-	maxPages := uint64(maxMemory32Pages)
+	maxPages := md.lim.Memory32Pages
 	if is64 {
-		maxPages = maxMemory64Pages
+		maxPages = md.lim.Memory64Pages
 	}
 	l := md.consumeResizableLimits("memory", "pages", maxPages, flags&1 != 0, maxPages, is64)
 	return module.Memory{Limits: l, Shared: flags&2 != 0}
@@ -731,7 +735,7 @@ func (md *moduleDecoder) consumeGlobalFlags() bool {
 
 func (md *moduleDecoder) decodeImportSection() {
 	m := md.m
-	count := md.consumeCount("imports count", maxImports)
+	count := md.consumeCount("imports count", md.lim.Imports)
 	for i := uint32(0); md.ok() && i < count; i++ {
 		pos := md.pc
 		modName := consumeString(&md.Decoder, true, "module name")
@@ -764,8 +768,8 @@ func (md *moduleDecoder) decodeImportSection() {
 			l := md.consumeTableLimits(t)
 			m.Tables = append(m.Tables, module.Table{Type: t, Limits: l, Imported: true})
 		case byte(module.ExternMemory):
-			if len(m.Memories) >= maxMemories-1 {
-				md.errorf(md.pc, "At most %d imported memories are supported", maxMemories)
+			if uint64(len(m.Memories)) >= uint64(md.lim.Memories)-1 {
+				md.errorf(md.pc, "At most %d imported memories are supported", md.lim.Memories)
 				break
 			}
 			imp.Index = uint32(len(m.Memories))
@@ -797,7 +801,7 @@ func (md *moduleDecoder) decodeImportSection() {
 
 func (md *moduleDecoder) decodeFunctionSection() {
 	m := md.m
-	count := md.consumeCount("functions count", maxDefinedFunctions)
+	count := md.consumeCount("functions count", md.lim.Functions)
 	md.numDeclaredFunctions = count
 	for i := uint32(0); i < count; i++ {
 		sig, _ := md.consumeSigIndex()
@@ -810,7 +814,7 @@ func (md *moduleDecoder) decodeFunctionSection() {
 
 func (md *moduleDecoder) decodeTableSection() {
 	m := md.m
-	count := md.consumeCount("table count", maxTables)
+	count := md.consumeCount("table count", md.lim.Tables)
 	for i := uint32(0); md.ok() && i < count; i++ {
 		typePos := md.pc
 		hasInit := false
@@ -847,10 +851,10 @@ func (md *moduleDecoder) decodeTableSection() {
 func (md *moduleDecoder) decodeMemorySection() {
 	m := md.m
 	countPos := md.pc
-	count := md.consumeCount("memory count", maxMemories)
+	count := md.consumeCount("memory count", md.lim.Memories)
 	imported := len(m.Memories)
-	if uint64(count) > uint64(maxMemories-imported) {
-		md.errorf(countPos, "Exceeding maximum number of memories (%d; declared %d, imported %d)", maxMemories, count, imported)
+	if uint64(count) > uint64(md.lim.Memories)-uint64(imported) {
+		md.errorf(countPos, "Exceeding maximum number of memories (%d; declared %d, imported %d)", md.lim.Memories, count, imported)
 	}
 	for i := uint32(0); md.ok() && i < count; i++ {
 		m.Memories = append(m.Memories, md.consumeMemory())
@@ -859,7 +863,7 @@ func (md *moduleDecoder) decodeMemorySection() {
 
 func (md *moduleDecoder) decodeGlobalSection() {
 	m := md.m
-	count := md.consumeCount("globals count", maxGlobals)
+	count := md.consumeCount("globals count", md.lim.Globals)
 	for i := uint32(0); md.ok() && i < count; i++ {
 		t := md.consumeValueType()
 		mut := md.consumeGlobalFlags()
@@ -873,7 +877,7 @@ func (md *moduleDecoder) decodeGlobalSection() {
 
 func (md *moduleDecoder) decodeExportSection() {
 	m := md.m
-	count := md.consumeCount("exports count", maxExports)
+	count := md.consumeCount("exports count", md.lim.Exports)
 	names := make([]module.Range, 0, count)
 	for i := uint32(0); md.ok() && i < count; i++ {
 		name := consumeString(&md.Decoder, true, "field name")
@@ -921,8 +925,8 @@ func (md *moduleDecoder) decodeExportSection() {
 	if md.failed() || len(m.Exports) < 2 {
 		return
 	}
-	// Report a duplicate at the later of the first equal pair, in V8's order:
-	// by length, then by bytes.
+	// Report a duplicate at the later of the first equal pair, with names
+	// ordered by length, then by bytes.
 	order := make([]int, len(m.Exports))
 	for i := range order {
 		order[i] = i
@@ -947,8 +951,8 @@ func (md *moduleDecoder) decodeExportSection() {
 	}
 }
 
-// truncated returns a name as V8's TruncatedUserString prints it: at most 50
-// bytes, the last three of a longer one replaced by "...".
+// truncated returns a name as a message prints it: at most 50 bytes, the
+// last three of a longer one replaced by "...".
 func truncated(b []byte) string {
 	const maxLen = 50
 	if len(b) <= maxLen {
@@ -973,7 +977,7 @@ func (md *moduleDecoder) decodeStartSection() {
 
 func (md *moduleDecoder) decodeElementSection() {
 	m := md.m
-	count := md.consumeCount("segment count", maxTableSize)
+	count := md.consumeCount("segment count", uint32(min(md.lim.TableSize, 1<<32-1)))
 	for i := uint32(0); i < count; i++ {
 		seg, n, exprs := md.consumeElementSegmentHeader()
 		if md.failed() {
@@ -1072,7 +1076,7 @@ func (md *moduleDecoder) consumeElementSegmentHeader() (module.ElemSegment, uint
 			seg.Type.Name(), seg.Table, tableType.Name())
 		return module.ElemSegment{}, 0, false
 	}
-	n := md.consumeCount(" number of elements", maxTableInitEntries)
+	n := md.consumeCount(" number of elements", md.lim.TableInitEntries)
 	return seg, n, exprs
 }
 
@@ -1104,8 +1108,8 @@ func (md *moduleDecoder) decodeCodeSection() {
 	for i := uint32(0); md.ok() && i < count; i++ {
 		pos := md.pc
 		size := md.consumeU32v("body size")
-		if size > maxFunctionSize {
-			md.errorf(pos, "size %d > maximum function size %d", size, maxFunctionSize)
+		if size > md.lim.FunctionSize {
+			md.errorf(pos, "size %d > maximum function size %d", size, md.lim.FunctionSize)
 			return
 		}
 		offset := md.pc
@@ -1128,7 +1132,7 @@ func (md *moduleDecoder) checkDataSegmentsCount(count uint32) bool {
 
 func (md *moduleDecoder) decodeDataSection() {
 	m := md.m
-	count := md.consumeCount("data segments count", maxDataSegments)
+	count := md.consumeCount("data segments count", md.lim.DataSegments)
 	if !md.checkDataSegmentsCount(count) {
 		return
 	}
@@ -1184,7 +1188,7 @@ func (md *moduleDecoder) consumeDataSegmentHeader() module.DataSegment {
 
 func (md *moduleDecoder) decodeTagSection() {
 	m := md.m
-	count := md.consumeCount("tag count", maxTags)
+	count := md.consumeCount("tag count", md.lim.Tags)
 	for i := uint32(0); md.ok() && i < count; i++ {
 		md.consumeExceptionAttribute()
 		sig := md.consumeTagSigIndex()

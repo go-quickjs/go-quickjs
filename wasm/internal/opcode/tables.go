@@ -1723,6 +1723,11 @@ var sigs00 = [256]sigIndex{
 	0xbd: sig_l_d,  // i64.reinterpret_f64
 	0xbe: sig_f_i,  // f32.reinterpret_i32
 	0xbf: sig_d_l,  // f64.reinterpret_i64
+	0xc0: sig_i_i,  // i32.extend8_s
+	0xc1: sig_i_i,  // i32.extend16_s
+	0xc2: sig_l_l,  // i64.extend8_s
+	0xc3: sig_l_l,  // i64.extend16_s
+	0xc4: sig_l_l,  // i64.extend32_s
 }
 
 var sigsFA = [256]sigIndex{

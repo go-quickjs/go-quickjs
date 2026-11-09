@@ -2,43 +2,17 @@ package decoder
 
 import "github.com/go-quickjs/go-quickjs/wasm/internal/module"
 
-// Limits V8 enforces (src/wasm/wasm-limits.h), for a 64-bit host. They are
-// part of validation: a module over one is rejected as V8 rejects it.
+// Exported limits other packages check at run time, with the same values
+// as V8Limits.
 const (
-	maxTypes            = 1_000_000
-	maxDefinedFunctions = 1_000_000
-	maxImports          = 1_000_000
-	maxExports          = 1_000_000
-	maxGlobals          = 1_000_000
-	maxTags             = 1_000_000
-	maxDataSegments     = 100_000
-	maxMemory32Pages    = 65_536
-	maxMemory64Pages    = 262_144
-	maxModuleSize       = 1 << 30
-	maxFunctionSize     = 7_654_321
-	maxFunctionLocals   = 50_000
-	maxFunctionParams   = 1_000
-	maxFunctionReturns  = 1_000
-	maxBrTableSize      = 65_520
-	maxTableSize        = 10_000_000
-	maxTableInitEntries = 10_000_000
-	maxTables           = 100_000
-	maxMemories         = 100_000
-	maxStructFields     = 10_000
-	maxSubtypingDepth   = 63
-	maxArrayNewFixedLen = 10_000
-)
-
-// Exported limits other packages check at run time with V8's messages.
-const (
-	// MaxTableSize is V8's limit on a table's size, in elements.
-	MaxTableSize = maxTableSize
-	// MaxMemory32Pages and MaxMemory64Pages are V8's limits on a memory's
-	// size, in pages.
-	MaxMemory32Pages = maxMemory32Pages
-	MaxMemory64Pages = maxMemory64Pages
-	// MaxArrayNewFixedLength is array.new_fixed's limit.
-	MaxArrayNewFixedLength = maxArrayNewFixedLen
+	// MaxTableSize is the largest size a table may grow to, in elements.
+	MaxTableSize = 10_000_000
+	// MaxMemory32Pages and MaxMemory64Pages are the largest sizes a memory
+	// may grow to, in pages.
+	MaxMemory32Pages = 65_536
+	MaxMemory64Pages = 262_144
+	// MaxArrayNewFixedLength is the most elements array.new_fixed takes.
+	MaxArrayNewFixedLength = 10_000
 )
 
 // Binary codes of value types and type definitions.
@@ -87,7 +61,7 @@ const (
 	exceptionAttrib = 0
 )
 
-// detected records the features a module has been seen to use, where V8's
+// detected records the features a module has been seen to use, where
 // validation depends on them: a module may not mix legacy exception handling
 // and exnref.
 type detected struct {
@@ -95,8 +69,8 @@ type detected struct {
 	exnref   bool
 }
 
-// disabledHeapName returns V8's name for a heap type code of a feature Node
-// does not enable by default.
+// disabledHeapName returns the name of a heap type code of a feature that is
+// not enabled.
 func disabledHeapName(code byte) string {
 	switch code {
 	case codeStringRef:
@@ -118,11 +92,11 @@ func disabledHeapName(code byte) string {
 // readHeapType reads a heap type at pos without consuming it, returning it
 // and its length. On an error it returns HeapBottom. A type index is not
 // checked against the module here; validateHeapType does that.
-func readHeapType(d *Decoder, pos int, det *detected) (module.HeapType, int) {
+func readHeapType(d *Decoder, pos int, det *detected, l *Limits) (module.HeapType, int) {
 	v, length := d.readI33v(pos, "heap type")
 	if v >= 0 {
-		if v >= maxTypes {
-			d.errorf(pos, "Type index %d is greater than the maximum number %d of type definitions supported by V8", v, maxTypes)
+		if v >= int64(l.Types) {
+			d.errorf(pos, "Type index %d is greater than the maximum number %d of type definitions supported by V8", v, l.Types)
 			return module.HeapBottom, length
 		}
 		return module.HeapType(v), length
@@ -164,7 +138,7 @@ func readHeapType(d *Decoder, pos int, det *detected) (module.HeapType, int) {
 
 // readValueType reads a value type at pos without consuming it, returning it
 // and its length. On an error it returns Bottom and 0.
-func readValueType(d *Decoder, pos int, det *detected) (module.ValueType, int) {
+func readValueType(d *Decoder, pos int, det *detected, l *Limits) (module.ValueType, int) {
 	val := d.readU8(pos, "value type opcode")
 	if d.failed() {
 		return module.Bottom, 0
@@ -199,7 +173,7 @@ func readValueType(d *Decoder, pos int, det *detected) (module.ValueType, int) {
 	case codeS128:
 		return module.V128, 1
 	case codeRef, codeRefNull:
-		h, length := readHeapType(d, pos+1, det)
+		h, length := readHeapType(d, pos+1, det, l)
 		if h == module.HeapBottom {
 			return module.Bottom, length + 1
 		}

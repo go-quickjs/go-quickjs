@@ -1,0 +1,355 @@
+package decoder
+
+import (
+	"bufio"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// envTypes are the types of the environment the hand-written function bodies
+// run in.
+var envTypes = [][]byte{
+	voidFn,                             // 0
+	functype(bs(tI32), bs(tI32)),       // 1
+	bs(0x5f, 2, tI32, 1, 0x78, 1),      // 2: struct (mut i32) (mut i8)
+	bs(0x5e, tI32, 1),                  // 3: array (mut i32)
+	functype(bs(tI32, tI32), bs(tI32)), // 4
+	bs(0x5e, 0x78, 0),                  // 5: array i8
+	functype(nil, bs(tI32, tI64)),      // 6
+	bs(0x5f, 1, tRef, 2, 0),            // 7: struct (ref 2)
+	functype(nil, bs(tI32)),            // 8
+	bs(0x50, 0, 0x5f, 1, tI32, 1),      // 9: sub struct (mut i32)
+	bs(0x4f, 1, 9, 0x5f, 1, tI32, 1),   // 10: sub final 9
+	functype(bs(tI64), nil),            // 11: tag (i64)
+	bs(0x5e, tFuncRef, 1),              // 12: array (mut funcref)
+	bs(0x5e, tRef, 0x70, 1),            // 13: array (mut (ref func))
+}
+
+// env is a module of envTypes, a memory, a table, globals, a tag, a data
+// segment and a declared function, with function 0 of type sig and the
+// given locals and code. More functions follow: 1 of type 1, 2 of type 8.
+func env(sig uint32, locals []byte, code ...any) []byte {
+	return modSpec{
+		types:     envTypes,
+		funcTypes: []uint32{sig, 1, 8},
+		tables:    [][]byte{bs(tFuncRef, 0, 1), bs(tExternRef, 0, 1)},
+		memories:  [][]byte{bs(0, 1)},
+		tags:      [][]byte{bs(0, 0), bs(0, 11)},
+		globals:   [][]byte{bs(tI32, 0, 0x41, 1, 0x0b), bs(tI64, 1, 0x42, 1, 0x0b)},
+		exports:   [][]byte{cat("f", 0, 1)},
+		elems:     [][]byte{cat(3, 0, vec(uleb(2)))},
+		dataCount: uleb(1),
+		bodies: [][]byte{body(locals, code...),
+			body(noLocals, 0x20, 0, 0x0b), body(noLocals, 0x41, 0, 0x0b)},
+		datas: [][]byte{cat(1, "abcd")},
+	}.bytes()
+}
+
+// fn is env with function 0 of type () -> () without locals.
+func fn(code ...any) []byte { return env(0, noLocals, code...) }
+
+// handCases are modules with one error each, or none, covering each kind of
+// error the validator reports.
+func handCases() []corpusCase {
+	var cs []corpusCase
+	add := func(name string, b []byte) { cs = append(cs, corpusCase{"hand/" + name, b}) }
+
+	// The environment itself.
+	add("env-valid", fn(0x0b))
+	add("env-i32", env(1, noLocals, 0x20, 0, 0x0b))
+
+	// Operand stack.
+	add("underflow-binary", fn(0x6a, 0x0b))
+	add("underflow-binary-one", fn(0x41, 1, 0x6a, 0x0b))
+	add("underflow-unary", fn(0x45, 0x0b))
+	add("underflow-drop", fn(0x1a, 0x0b))
+	add("underflow-call", fn(0x10, 1, 0x0b))
+	add("underflow-in-block", fn(0x41, 1, 0x02, 0x40, 0x1a, 0x0b, 0x0b))
+	add("type-mismatch-binary", fn(0x42, 1, 0x41, 1, 0x6a, 0x0b))
+	add("type-mismatch-second", fn(0x41, 1, 0x42, 1, 0x6a, 0x0b))
+	add("type-mismatch-local", env(1, noLocals, 0x42, 0, 0x21, 0, 0x20, 0, 0x0b))
+	add("type-mismatch-f32", fn(0x43, 0, 0, 0, 0, 0x45, 0x0b))
+	add("fallthru-extra", fn(0x41, 1, 0x0b))
+	add("fallthru-missing", env(8, noLocals, 0x0b))
+	add("fallthru-type", env(8, noLocals, 0x42, 0, 0x0b))
+	add("return-type", env(8, noLocals, 0x42, 0, 0x0f, 0x0b))
+	add("return-missing", env(8, noLocals, 0x0f, 0x0b))
+	add("unreachable-polymorphic", env(8, noLocals, 0x00, 0x6a, 0x0b))
+	add("unreachable-type", env(8, noLocals, 0x00, 0x42, 0, 0x6a, 0x0b))
+	add("unreachable-extra", fn(0x00, 0x41, 1, 0x0b))
+	add("select-ref", env(0, cat(1, 1, tFuncRef), 0x20, 0, 0x20, 0, 0x41, 1, 0x1b, 0x1a, 0x0b))
+	add("select-mismatch", fn(0x41, 1, 0x42, 1, 0x41, 1, 0x1b, 0x1a, 0x0b))
+	add("select-t-count", fn(0x41, 1, 0x41, 1, 0x41, 1, 0x1c, 2, tI32, tI32, 0x1a, 0x0b))
+	add("select-t-count-257", fn(0x41, 1, 0x41, 1, 0x41, 1, 0x1c, 0x81, 2, tI32, 0x1a, 0x0b))
+	add("select-t-type", fn(0x41, 1, 0x41, 1, 0x41, 1, 0x1c, 1, 0x7a, 0x1a, 0x0b))
+
+	// Branches and blocks.
+	add("br-depth", fn(0x0c, 1, 0x0b))
+	add("br-if-depth", fn(0x41, 0, 0x0d, 5, 0x0b))
+	add("br-table-depth", fn(0x41, 0, 0x0e, 1, 0, 3, 0x0b))
+	add("br-table-arity", fn(0x02, 0x7f, 0x41, 0, 0x41, 0, 0x0e, 1, 0, 1, 0x0b, 0x1a, 0x0b))
+	add("br-table-count", fn(0x41, 0, 0x0e, 0xff, 0xff, 0x0f, 0x0b))
+	add("br-table-fell-off", fn(0x41, 0, 0x0e, 0x40, 0, 0x0b))
+	add("br-type", fn(0x02, 0x7f, 0x42, 0, 0x0c, 0, 0x0b, 0x1a, 0x0b))
+	add("block-type-index", fn(0x02, 9, 0x0b, 0x0b))
+	add("block-type-invalid", fn(0x02, 0x7a, 0x0b, 0x0b))
+	add("block-type-negative", fn(0x02, 0x80, 0x7f, 0x0b, 0x0b))
+	add("block-type-oob", fn(0x02, 0x40+0x3f, 0x0b))
+	add("block-type-ref-oob", fn(0x02, tRefNull, 50, 0xd0, 50, 0x0b, 0x1a, 0x0b))
+	add("block-params", fn(0x02, 1, 0x0b, 0x0b))
+	add("block-multi-value", fn(0x02, 6, 0x41, 1, 0x42, 2, 0x0b, 0x1a, 0x1a, 0x0b))
+	add("else-no-if", fn(0x05, 0x0b))
+	add("else-twice", fn(0x41, 0, 0x04, 0x40, 0x05, 0x05, 0x0b, 0x0b))
+	add("if-arity", fn(0x41, 0, 0x04, 0x7f, 0x41, 1, 0x0b, 0x1a, 0x0b))
+	add("if-cond", fn(0x42, 0, 0x04, 0x40, 0x0b, 0x0b))
+	add("loop-br", fn(0x03, 0x7f, 0x41, 0, 0x0c, 0, 0x0b, 0x1a, 0x0b))
+	add("unterminated", fn(0x02, 0x40, 0x0b))
+	add("unterminated-nested", fn(0x02, 0x40, 0x03, 0x40, 0x01))
+	add("no-end", fn(0x01))
+	add("trailing", fn(0x0b, 0x01))
+	add("invalid-opcode", fn(0x17, 0x0b))
+	add("invalid-opcode-ff", fn(0xff, 0x0b))
+	add("nop-for-testing", fn(0x16, 0x0b))
+	add("wasmfx-opcode", fn(0xe0, 0, 0x0b))
+	add("empty-body", modSpec{types: [][]byte{voidFn}, bodies: [][]byte{bs(0)}}.bytes())
+	add("body-only-locals", modSpec{types: [][]byte{voidFn}, bodies: [][]byte{bs(1, 0)}}.bytes())
+
+	// Locals.
+	add("local-index", fn(0x20, 0, 0x1a, 0x0b))
+	add("local-count-large", env(0, cat(1, uleb(50_001), tI32), 0x0b))
+	add("local-count-sum", env(0, cat(2, uleb(30_000), tI32, uleb(30_000), tI32), 0x0b))
+	add("local-decls-count", env(0, bs(0x7f), 0x0b))
+	add("local-type", env(0, bs(1, 1, 0x7a), 0x0b))
+	add("local-type-oob", env(0, bs(1, 1, tRefNull, 99), 0x0b))
+	add("local-uninit", env(0, bs(1, 1, tRef, tFuncRef), 0x20, 0, 0x1a, 0x0b))
+	add("local-init-ok", env(0, bs(1, 1, tRef, tFuncRef), 0xd2, 2, 0x21, 0, 0x20, 0, 0x1a, 0x0b))
+	add("local-init-scoped", env(0, bs(1, 1, tRef, tFuncRef), 0x02, 0x40, 0xd2, 2, 0x21, 0, 0x0b, 0x20, 0, 0x1a, 0x0b))
+	add("local-set-type", env(0, bs(1, 1, tI64), 0x41, 0, 0x21, 0, 0x0b))
+
+	// Globals.
+	add("global-index", fn(0x23, 9, 0x1a, 0x0b))
+	add("global-immutable", fn(0x41, 0, 0x24, 0, 0x0b))
+	add("global-set-type", fn(0x41, 0, 0x24, 1, 0x0b))
+
+	// Calls.
+	add("call-index", fn(0x10, 9, 0x0b))
+	add("call-indirect-sig", fn(0x41, 0, 0x11, 30, 0, 0x0b))
+	add("call-indirect-table", fn(0x41, 0, 0x11, 0, 5, 0x0b))
+	add("call-indirect-not-func", fn(0x41, 0, 0x11, 0, 1, 0x0b))
+	add("call-indirect-struct-sig", fn(0x41, 0, 0x11, 2, 0, 0x0b))
+	add("return-call-type", fn(0x41, 0, 0x12, 1, 0x0b))
+	add("return-call-indirect-type", fn(0x41, 0, 0x41, 0, 0x13, 1, 0, 0x0b))
+	add("call-ref-type", fn(0xd2, 2, 0x14, 1, 0x0b))
+	add("return-call-ref-type", fn(0xd2, 2, 0x15, 8, 0x0b))
+	add("ref-func-undeclared", fn(0xd2, 1, 0x1a, 0x0b))
+	add("ref-func-index", fn(0xd2, 7, 0x1a, 0x0b))
+
+	// Memory.
+	add("load-align", fn(0x41, 0, 0x28, 3, 0, 0x1a, 0x0b))
+	add("load-align-big", fn(0x41, 0, 0x28, 0x1f, 0, 0x1a, 0x0b))
+	add("load-memory-index", fn(0x41, 0, 0x28, 0x42, 1, 0, 0x1a, 0x0b))
+	add("load-acquire-release", fn(0x41, 0, 0x28, 0x22, 0, 0, 0x1a, 0x0b))
+	add("load-offset-range", fn(0x41, 0, 0x28, 2, 0x80, 0x80, 0x80, 0x80, 0x10, 0x1a, 0x0b))
+	add("load-no-memory", oneFunc(voidFn, body(noLocals, 0x41, 0, 0x28, 2, 0, 0x1a, 0x0b)))
+	add("store-type", fn(0x41, 0, 0x42, 0, 0x36, 2, 0, 0x0b))
+	add("memory-size-index", fn(0x3f, 1, 0x1a, 0x0b))
+	add("memory-init-no-datacount", modSpec{types: [][]byte{voidFn}, memories: [][]byte{bs(0, 1)},
+		bodies: [][]byte{body(noLocals, 0x41, 0, 0x41, 0, 0x41, 0, 0xfc, 8, 0, 0, 0x0b)}}.bytes())
+	add("data-drop-index", fn(0xfc, 9, 1, 0x0b))
+	add("memory-copy-index", fn(0x41, 0, 0x41, 0, 0x41, 0, 0xfc, 0x0a, 0, 1, 0x0b))
+	add("memory-copy-dst-index", fn(0x41, 0, 0x41, 0, 0x41, 0, 0xfc, 0x0a, 1, 0, 0x0b))
+	add("simd-lane", fn(0xfd, 0x0c, make([]byte, 16), 0xfd, 0x15, 16, 0x1a, 0x0b))
+	add("simd-lane-i64", fn(0xfd, 0x0c, make([]byte, 16), 0xfd, 0x1d, 2, 0x1a, 0x0b))
+	add("simd-shuffle", fn(0xfd, 0x0c, make([]byte, 16), 0xfd, 0x0c, make([]byte, 16), 0xfd, 0x0d, make([]byte, 15), 32, 0x1a, 0x0b))
+	add("simd-invalid", fn(0xfd, 0x9a, 1, 0x0b))
+	add("simd-fp16", fn(0xfd, 0xa0, 0x02, 0x0b))
+	add("simd-big-index", fn(0xfd, 0x80, 0x20, 0x0b))
+	add("simd-index-overflow", fn(0xfd, 0x80, 0x80, 0x01, 0x0b))
+	add("atomic-align", fn(0x41, 0, 0xfe, 0x10, 1, 0, 0x1a, 0x0b))
+	add("atomic-invalid", fn(0xfe, 0x05, 0x0b))
+	add("atomic-fence", fn(0xfe, 0x03, 1, 0x0b))
+	add("atomic-shared-gc", fn(0xfe, 0x5c, 0x0b))
+	add("numeric-invalid", fn(0xfc, 0x12, 0x0b))
+	add("numeric-fp16", fn(0x41, 0, 0xfc, 0x30, 2, 0, 0x1a, 0x0b))
+	add("asmjs-prefix", fn(0xfa, 0x3c, 0x0b))
+
+	// Tables.
+	add("table-get-index", fn(0x41, 0, 0x25, 5, 0x1a, 0x0b))
+	add("table-init-type", fn(0x41, 0, 0x41, 0, 0x41, 0, 0xfc, 0x0c, 0, 1, 0x0b))
+	add("table-init-segment", fn(0x41, 0, 0x41, 0, 0x41, 0, 0xfc, 0x0c, 3, 0, 0x0b))
+	add("table-copy-type", fn(0x41, 0, 0x41, 0, 0x41, 0, 0xfc, 0x0e, 1, 0, 0x0b))
+	add("table-copy-src-index", fn(0x41, 0, 0x41, 0, 0x41, 0, 0xfc, 0x0e, 0, 4, 0x0b))
+	add("table-grow-type", fn(0xd0, tExternRef, 0x41, 1, 0xfc, 0x0f, 0, 0x1a, 0x0b))
+	add("elem-drop-index", fn(0xfc, 0x0d, 2, 0x0b))
+
+	// References and GC.
+	add("ref-null-index", fn(0xd0, 99, 0x1a, 0x0b))
+	add("ref-null-heap", fn(0xd0, 0x7f, 0x1a, 0x0b))
+	add("ref-is-null-type", fn(0x41, 0, 0xd1, 0x1a, 0x0b))
+	add("ref-as-non-null-type", fn(0x41, 0, 0xd4, 0x1a, 0x0b))
+	add("ref-eq-type", fn(0xd0, tFuncRef, 0xd0, tFuncRef, 0xd3, 0x1a, 0x0b))
+	add("ref-eq-second", fn(0xd0, tEqRef, 0xd0, tFuncRef, 0xd3, 0x1a, 0x0b))
+	add("br-on-null-type", fn(0x02, 0x40, 0x41, 0, 0xd5, 0, 0x1a, 0x0b, 0x0b))
+	add("br-on-non-null-type", fn(0x02, 0x40, 0x41, 0, 0xd6, 0, 0x0b, 0x0b))
+	add("br-on-non-null-arity", fn(0x02, 0x40, 0xd0, tFuncRef, 0xd6, 0, 0x0b, 0x0b))
+	add("struct-new-index", fn(0xfb, 0, 3, 0x1a, 0x0b))
+	add("struct-new-args", fn(0x41, 0, 0xfb, 0, 2, 0x1a, 0x0b))
+	add("struct-new-default", fn(0xfb, 1, 7, 0x1a, 0x0b))
+	add("struct-get-field", fn(0xd0, 2, 0xfb, 2, 2, 5, 0x1a, 0x0b))
+	add("struct-get-packed", fn(0xd0, 2, 0xfb, 2, 2, 1, 0x1a, 0x0b))
+	add("struct-get-s-unpacked", fn(0xd0, 2, 0xfb, 3, 2, 0, 0x1a, 0x0b))
+	add("struct-set-immutable", fn(0xd0, 7, 0xd0, 2, 0xfb, 5, 7, 0, 0x0b))
+	add("struct-get-type", fn(0xd0, 3, 0xfb, 2, 2, 0, 0x1a, 0x0b))
+	add("struct-new-desc", fn(0x41, 0, 0x41, 0, 0xfb, 0x20, 2, 0x1a, 0x0b))
+	add("array-new-index", fn(0x41, 0, 0x41, 0, 0xfb, 6, 2, 0x1a, 0x0b))
+	add("array-get-packed", fn(0xd0, 5, 0x41, 0, 0xfb, 0x0b, 5, 0x1a, 0x0b))
+	add("array-get-u-unpacked", fn(0xd0, 3, 0x41, 0, 0xfb, 0x0d, 3, 0x1a, 0x0b))
+	add("array-set-immutable", fn(0xd0, 5, 0x41, 0, 0x41, 0, 0xfb, 0x0e, 5, 0x0b))
+	add("array-new-fixed-large", fn(0xfb, 8, 3, uleb(10_001), 0x1a, 0x0b))
+	add("array-new-fixed-args", fn(0x41, 1, 0xfb, 8, 3, 2, 0x1a, 0x0b))
+	add("array-new-data-ref", fn(0x41, 0, 0x41, 0, 0xfb, 9, 12, 0, 0x1a, 0x0b))
+	add("array-new-data-segment", fn(0x41, 0, 0x41, 0, 0xfb, 9, 3, 4, 0x1a, 0x0b))
+	add("array-new-elem-numeric", fn(0x41, 0, 0x41, 0, 0xfb, 0x0a, 3, 0, 0x1a, 0x0b))
+	add("array-new-elem-type", fn(0x41, 0, 0x41, 0, 0xfb, 0x0a, 13, 0, 0x1a, 0x0b))
+	add("array-copy-immutable", fn(0xfb, 0x11, 5, 5, 0x0b))
+	add("array-copy-types", fn(0xfb, 0x11, 3, 12, 0x0b))
+	add("array-fill-immutable", fn(0xfb, 0x10, 5, 0x0b))
+	add("array-len-type", fn(0xd0, tAnyRef, 0xfb, 0x0f, 0x1a, 0x0b))
+	add("array-init-data-immutable", fn(0xfb, 0x12, 5, 0, 0x0b))
+	add("i31-get-type", fn(0xd0, tAnyRef, 0xfb, 0x1d, 0x1a, 0x0b))
+	add("ref-test-hierarchy", fn(0xd0, tFuncRef, 0xfb, 0x14, tAnyRef, 0x1a, 0x0b))
+	add("ref-cast-hierarchy", fn(0x41, 0, 0xfb, 0x16, tAnyRef, 0x1a, 0x0b))
+	add("ref-cast-index", fn(0xd0, tAnyRef, 0xfb, 0x16, 77, 0x1a, 0x0b))
+	add("ref-cast-nop", fn(0xd0, tAnyRef, 0xfb, 0x4c, tAnyRef, 0x1a, 0x0b))
+	add("ref-get-desc", fn(0xfb, 0x22, 2, 0x0b))
+	add("ref-i31-shared", fn(0x41, 0, 0xfb, 0x1f, 0x1a, 0x0b))
+	add("gc-invalid", fn(0xfb, 0x30, 0x0b))
+	add("gc-stringref", fn(0xfb, 0x80, 0x01, 0x0b))
+	add("br-on-cast-flags", fn(0x02, tAnyRef, 0xd0, tAnyRef, 0xfb, 0x18, 4, 0, tAnyRef, tEqRef, 0x0b, 0x1a, 0x0b))
+	add("br-on-cast-subtype", fn(0x02, tAnyRef, 0xd0, tAnyRef, 0xfb, 0x18, 0, 0, tEqRef, tAnyRef, 0x0b, 0x1a, 0x0b))
+	add("br-on-cast-arity", fn(0x02, 0x40, 0xd0, tAnyRef, 0xfb, 0x18, 0, 0, tAnyRef, tEqRef, 0x1a, 0x0b, 0x0b))
+	add("br-on-cast-depth", fn(0xd0, tAnyRef, 0xfb, 0x18, 0, 3, tAnyRef, tEqRef, 0x1a, 0x0b))
+	add("br-on-cast-fail-type", fn(0x02, tEqRef, 0xd0, tAnyRef, 0xfb, 0x19, 1, 0, tAnyRef, tEqRef, 0x0b, 0x1a, 0x0b))
+	// A cast that cannot fail leaves the operand's own type on the
+	// fallthrough: struct.get of type 10 then validates.
+	add("br-on-cast-fail-refines", fn(0x02, tStructRef, 0x41, 0, 0xfb, 0, 10, 0xfb, 0x19, 0, 0, tStructRef, tStructRef, 0xfb, 2, 10, 0, 0x1a, 0xd0, tStructRef, 0x0b, 0x1a, 0x0b))
+	add("br-on-cast-fail-refines-dead", fn(0x00, 0x02, tStructRef, 0x41, 0, 0xfb, 0, 10, 0xfb, 0x19, 0, 0, tStructRef, tStructRef, 0xfb, 2, 10, 0, 0x1a, 0xd0, tStructRef, 0x0b, 0x1a, 0x0b))
+	add("any-convert-type", fn(0xd0, tAnyRef, 0xfb, 0x1a, 0x1a, 0x0b))
+	add("any-convert-numeric", fn(0x41, 0, 0xfb, 0x1a, 0x1a, 0x0b))
+	add("extern-convert-numeric", fn(0x42, 0, 0xfb, 0x1b, 0x1a, 0x0b))
+	add("array-len-numeric", fn(0x41, 0, 0xfb, 0x0f, 0x1a, 0x0b))
+	add("i31-get-numeric", fn(0x44, make([]byte, 8), 0xfb, 0x1e, 0x1a, 0x0b))
+	add("array-len-empty", fn(0xfb, 0x0f, 0x1a, 0x0b))
+	add("array-len-unreachable", fn(0x00, 0xfb, 0x0f, 0x1a, 0x0b))
+
+	// Exception handling.
+	add("throw-tag", fn(0x08, 5, 0x0b))
+	add("throw-args", fn(0x08, 1, 0x0b))
+	add("catch-no-try", fn(0x07, 0, 0x0b))
+	add("catch-all-twice", fn(0x06, 0x40, 0x19, 0x19, 0x0b, 0x0b))
+	add("catch-after-catch-all", fn(0x06, 0x40, 0x19, 0x07, 0, 0x0b, 0x0b))
+	add("catch-tag", fn(0x06, 0x40, 0x07, 9, 0x0b, 0x0b))
+	add("rethrow-target", fn(0x06, 0x40, 0x09, 0, 0x0b, 0x0b))
+	add("rethrow-depth", fn(0x09, 3, 0x0b))
+	add("delegate-no-try", fn(0x02, 0x40, 0x18, 0, 0x0b))
+	add("delegate-depth", fn(0x06, 0x40, 0x18, 1, 0x0b))
+	add("catch-all-no-try", fn(0x19, 0x0b))
+	add("try-table-catch-kind", fn(0x1f, 0x40, 1, 4, 0, 0x0b, 0x0b))
+	add("try-table-tag", fn(0x1f, 0x40, 1, 0, 7, 0, 0x0b, 0x0b))
+	add("try-table-depth", fn(0x1f, 0x40, 1, 2, 3, 0x0b, 0x0b))
+	add("try-table-arity", fn(0x02, 0x40, 0x1f, 0x40, 1, 0, 1, 0, 0x0b, 0x0b, 0x0b))
+	add("try-table-arity-one", fn(0x02, 0x40, 0x1f, 0x40, 1, 3, 0, 0x0b, 0x0b, 0x0b))
+	add("try-table-type", fn(0x02, tI32, 0x1f, 0x40, 1, 0, 1, 0, 0x0b, 0x41, 0, 0x0b, 0x1a, 0x0b))
+	add("try-table-count", fn(0x1f, 0x40, 0x80, 0x80, 0x10, 0x0b))
+	add("throw-ref-type", fn(0x41, 0, 0x0a, 0x0b))
+	add("mix-legacy-then-new", fn(0x06, 0x40, 0x0b, 0x1f, 0x40, 0, 0x0b, 0x0b))
+	add("mix-new-then-legacy", fn(0x1f, 0x40, 0, 0x0b, 0x06, 0x40, 0x0b, 0x0b))
+	add("mix-legacy-then-exnref", fn(0x06, 0x40, 0x0b, 0xd0, tExnRef, 0x1a, 0x0b))
+	add("mix-across-functions", modSpec{types: [][]byte{voidFn}, bodies: [][]byte{
+		body(noLocals, 0x06, 0x40, 0x0b, 0x0b), body(noLocals, 0x1f, 0x40, 0, 0x0b, 0x0b)}}.bytes())
+
+	// Constant expressions.
+	add("const-not-allowed", modSpec{types: [][]byte{voidFn}, globals: [][]byte{bs(tI32, 0, 0x41, 1, 0x45, 0x0b)}}.bytes())
+	add("const-nop", modSpec{globals: [][]byte{bs(tI32, 0, 0x01, 0x41, 1, 0x0b)}}.bytes())
+	add("const-prefix", modSpec{globals: [][]byte{bs(tI32, 0, 0xfc, 0, 0x0b)}}.bytes())
+	add("const-simd", modSpec{globals: [][]byte{cat(tV128, 0, 0xfd, 0x0c, make([]byte, 16), 0xfd, 0x4d, 0x0b)}}.bytes())
+	add("const-gc-get", modSpec{types: [][]byte{bs(0x5f, 1, tI32, 0)}, globals: [][]byte{cat(tI32, 0, 0x41, 0, 0xfb, 0, 0, 0xfb, 2, 0, 0, 0x0b)}}.bytes())
+	add("const-type", modSpec{globals: [][]byte{bs(tI32, 0, 0x42, 1, 0x42, 1, 0x7c, 0x0b)}}.bytes())
+	add("const-count", modSpec{globals: [][]byte{bs(tI32, 0, 0x41, 1, 0x41, 1, 0x0b)}}.bytes())
+	add("const-missing-end", modSpec{globals: [][]byte{bs(tI32, 0, 0x41, 1, 0x41, 1, 0x6a)}}.bytes())
+	add("const-global-mutable", modSpec{globals: [][]byte{bs(tI32, 1, 0x41, 1, 0x0b), bs(tI32, 0, 0x23, 0, 0x41, 1, 0x6a, 0x0b)}}.bytes())
+	add("const-global-self", modSpec{globals: [][]byte{bs(tI32, 0, 0x23, 0, 0x41, 1, 0x6a, 0x0b)}}.bytes())
+	add("const-global-earlier", modSpec{globals: [][]byte{bs(tI32, 0, 0x41, 1, 0x0b), bs(tI32, 0, 0x23, 0, 0x41, 1, 0x6a, 0x0b)}}.bytes())
+	add("const-ref-func", modSpec{types: [][]byte{voidFn}, globals: [][]byte{bs(tFuncRef, 0, 0xd2, 0, 0xd0, tFuncRef, 0x1a, 0x0b)},
+		bodies: [][]byte{body(noLocals, 0xd2, 0, 0x1a, 0x0b)}}.bytes())
+	add("const-ref-func-index", modSpec{globals: [][]byte{bs(tFuncRef, 0, 0xd2, 3, 0xd0, tFuncRef, 0x1a, 0x0b)}}.bytes())
+	add("const-array-new-fixed", modSpec{types: [][]byte{bs(0x5e, tI32, 0)}, globals: [][]byte{cat(tRef, 0, 0, 0x41, 1, 0xfb, 8, 0, 2, 0x0b)}}.bytes())
+	add("const-struct-new-default", modSpec{types: [][]byte{bs(0x5f, 1, tRef, 0x70, 0)}, globals: [][]byte{cat(tRef, 0, 0, 0xfb, 1, 0, 0x0b)}}.bytes())
+	add("const-local-get", modSpec{globals: [][]byte{bs(tI32, 0, 0x20, 0, 0x0b)}}.bytes())
+	add("const-local-get-truncated", modSpec{globals: [][]byte{bs(tI32, 0, 0x20)}}.bytes())
+	add("const-invalid-opcode", modSpec{globals: [][]byte{bs(tI32, 0, 0x17, 0x0b)}}.bytes())
+	add("const-elem-expr", modSpec{types: [][]byte{voidFn}, elems: [][]byte{cat(5, tFuncRef, vec(bs(0xd2, 0, 0x01, 0x0b)))},
+		bodies: [][]byte{body(noLocals, 0x0b)}}.bytes())
+	add("const-data-offset", modSpec{memories: [][]byte{bs(0, 1)}, datas: [][]byte{cat(0, 0x42, 0, 0x0b, "x")}}.bytes())
+
+	// Function names in the prefix.
+	names := func(entries ...[]byte) []byte {
+		return cat("name", sec(1, vec(entries...)))
+	}
+	named := func(customs ...[]byte) []byte {
+		return modSpec{types: [][]byte{voidFn}, bodies: [][]byte{body(noLocals, 0x0b), body(noLocals, 0x6a, 0x0b)}, customs: customs}.bytes()
+	}
+	add("name-simple", named(names(cat(uleb(1), "fn_one"))))
+	add("name-other-index", named(names(cat(uleb(0), "zero"))))
+	add("name-empty", named(names(cat(uleb(1), ""))))
+	add("name-long", named(names(cat(uleb(1), strings.Repeat("abcdefghij", 6)))))
+	add("name-50", named(names(cat(uleb(1), strings.Repeat("x", 50)))))
+	add("name-51", named(names(cat(uleb(1), strings.Repeat("y", 51)))))
+	add("name-nul", named(names(cat(uleb(1), "a\x00b"))))
+	add("name-invalid-utf8", named(names(cat(uleb(1), "\xff"), cat(uleb(1), "second"))))
+	add("name-duplicate", named(names(cat(uleb(1), "first"), cat(uleb(1), "second"))))
+	add("name-second-section", named(names(cat(uleb(0), "a")), names(cat(uleb(1), "b"))))
+	add("name-module-first", named(cat("name", sec(0, cat("mod")), sec(1, vec(cat(uleb(1), "after"))))))
+	add("name-truncated", named(cat("name", 1, 10, 1, 1, 5, 'a')))
+	return cs
+}
+
+// TestHandCases checks each hand-written case against the verdict Node gave
+// for it, recorded in testdata/hand.golden.
+func TestHandCases(t *testing.T) {
+	f, err := os.Open(filepath.Join("testdata", "hand.golden"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	want := map[string]string{}
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		name, v, ok := strings.Cut(sc.Text(), "\t")
+		if ok {
+			want[name] = v
+		}
+	}
+	for _, c := range handCases() {
+		w, ok := want[c.name]
+		if !ok {
+			t.Errorf("%s: no golden verdict", c.name)
+			continue
+		}
+		if got := verdict(c.b); got != w {
+			t.Errorf("%s:\n  got  %s\n  want %s", c.name, got, w)
+		}
+	}
+}
+
+// TestSeedsValid checks that the modules the mutations start from are
+// valid, so that the mutations test what breaks them.
+func TestSeedsValid(t *testing.T) {
+	for _, s := range seeds() {
+		if got := verdict(s.b); got != "OK" {
+			t.Errorf("%s: %s", s.name, got)
+		}
+	}
+}

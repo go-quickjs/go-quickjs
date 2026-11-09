@@ -1,0 +1,222 @@
+hand/env-valid	OK
+hand/env-i32	OK
+hand/underflow-binary	WebAssembly.Module(): Compiling function #0 failed: not enough arguments on the stack for i32.add (need 2, got 0) @+137
+hand/underflow-binary-one	WebAssembly.Module(): Compiling function #0 failed: not enough arguments on the stack for i32.add (need 2, got 1) @+139
+hand/underflow-unary	WebAssembly.Module(): Compiling function #0 failed: not enough arguments on the stack for i32.eqz (need 1, got 0) @+137
+hand/underflow-drop	WebAssembly.Module(): Compiling function #0 failed: not enough arguments on the stack for drop (need 1, got 0) @+137
+hand/underflow-call	WebAssembly.Module(): Compiling function #0 failed: not enough arguments on the stack for call (need 1, got 0) @+137
+hand/underflow-in-block	WebAssembly.Module(): Compiling function #0 failed: not enough arguments on the stack for drop (need 1, got 0) @+141
+hand/type-mismatch-binary	WebAssembly.Module(): Compiling function #0 failed: i32.add[0] expected type i32, found i64.const of type i64 @+137
+hand/type-mismatch-second	WebAssembly.Module(): Compiling function #0 failed: i32.add[1] expected type i32, found i64.const of type i64 @+139
+hand/type-mismatch-local	WebAssembly.Module(): Compiling function #0 failed: local.set[0] expected type i32, found i64.const of type i64 @+137
+hand/type-mismatch-f32	WebAssembly.Module(): Compiling function #0 failed: i32.eqz[0] expected type i32, found f32.const of type f32 @+137
+hand/fallthru-extra	WebAssembly.Module(): Compiling function #0 failed: expected 0 elements on the stack for fallthru, found 1 @+139
+hand/fallthru-missing	WebAssembly.Module(): Compiling function #0 failed: expected 1 elements on the stack for fallthru, found 0 @+137
+hand/fallthru-type	WebAssembly.Module(): Compiling function #0 failed: type error in fallthru[0] (expected i32, got i64) @+139
+hand/return-type	WebAssembly.Module(): Compiling function #0 failed: type error in return[0] (expected i32, got i64) @+139
+hand/return-missing	WebAssembly.Module(): Compiling function #0 failed: expected 1 elements on the stack for return, found 0 @+137
+hand/unreachable-polymorphic	OK
+hand/unreachable-type	WebAssembly.Module(): Compiling function #0 failed: i32.add[1] expected type i32, found i64.const of type i64 @+138
+hand/unreachable-extra	WebAssembly.Module(): Compiling function #0 failed: expected 0 elements on the stack for fallthru, found 1 @+140
+hand/select-ref	WebAssembly.Module(): Compiling function #0 failed: select without type is only valid for value type inputs @+145
+hand/select-mismatch	WebAssembly.Module(): Compiling function #0 failed: select[1] expected type i32, found i64.const of type i64 @+139
+hand/select-t-count	WebAssembly.Module(): Compiling function #0 failed: Invalid number of types. Select accepts exactly one type @+144
+hand/select-t-count-257	OK
+hand/select-t-type	WebAssembly.Module(): Compiling function #0 failed: invalid value type 0x7a @+145
+hand/br-depth	WebAssembly.Module(): Compiling function #0 failed: invalid branch depth: 1 @+138
+hand/br-if-depth	WebAssembly.Module(): Compiling function #0 failed: invalid branch depth: 5 @+140
+hand/br-table-depth	WebAssembly.Module(): Compiling function #0 failed: invalid branch depth: 3 @+142
+hand/br-table-arity	WebAssembly.Module(): Compiling function #0 failed: br_table: label arity inconsistent with previous arity 1 @+146
+hand/br-table-count	WebAssembly.Module(): Compiling function #0 failed: invalid table count (> max br_table size): 262143 @+140
+hand/br-table-fell-off	WebAssembly.Module(): Compiling function #0 failed: expected 64 bytes, fell off end @+139
+hand/br-type	WebAssembly.Module(): Compiling function #0 failed: type error in branch[0] (expected i32, got i64) @+141
+hand/block-type-index	WebAssembly.Module(): Compiling function #0 failed: block type index 9 is not a signature definition @+138
+hand/block-type-invalid	WebAssembly.Module(): Compiling function #0 failed: invalid value type 0x7a @+138
+hand/block-type-negative	WebAssembly.Module(): Compiling function #0 failed: invalid block type -128 @+138
+hand/block-type-oob	WebAssembly.Module(): Compiling function #0 failed: expected 1 elements on the stack for fallthru, found 0 @+139
+hand/block-type-ref-oob	WebAssembly.Module(): Compiling function #0 failed: Type index 50 is out of bounds @+138
+hand/block-params	WebAssembly.Module(): Compiling function #0 failed: not enough arguments on the stack for block (need 1, got 0) @+137
+hand/block-multi-value	OK
+hand/else-no-if	WebAssembly.Module(): Compiling function #0 failed: else does not match an if @+137
+hand/else-twice	WebAssembly.Module(): Compiling function #0 failed: else already present for if @+142
+hand/if-arity	WebAssembly.Module(): Compiling function #0 failed: start-arity and end-arity of one-armed if must match @+139
+hand/if-cond	WebAssembly.Module(): Compiling function #0 failed: if[0] expected type i32, found i64.const of type i64 @+137
+hand/loop-br	OK
+hand/unterminated	WebAssembly.Module(): Compiling function #0 failed: function body must end with "end" opcode @+140
+hand/unterminated-nested	WebAssembly.Module(): Compiling function #0 failed: unterminated control structure @+139
+hand/no-end	WebAssembly.Module(): Compiling function #0 failed: function body must end with "end" opcode @+138
+hand/trailing	WebAssembly.Module(): Compiling function #0 failed: trailing code after function end @+138
+hand/invalid-opcode	WebAssembly.Module(): Compiling function #0 failed: Invalid opcode 0x17 @+137
+hand/invalid-opcode-ff	WebAssembly.Module(): Compiling function #0 failed: Invalid opcode 0xff @+137
+hand/nop-for-testing	WebAssembly.Module(): Compiling function #0 failed: Invalid opcode 0x16 @+137
+hand/wasmfx-opcode	WebAssembly.Module(): Compiling function #0 failed: Invalid opcode 0xe0 (enable with --experimental-wasm-wasmfx) @+137
+hand/empty-body	WebAssembly.Module(): Compiling function #0 failed: reached end while decoding local decls count @+22
+hand/body-only-locals	WebAssembly.Module(): Compiling function #0 failed: function body must end with "end" opcode @+23
+hand/local-index	WebAssembly.Module(): Compiling function #0 failed: invalid local index: 0 @+138
+hand/local-count-large	WebAssembly.Module(): Compiling function #0 failed: local count too large @+137
+hand/local-count-sum	WebAssembly.Module(): Compiling function #0 failed: local count too large @+141
+hand/local-decls-count	WebAssembly.Module(): Compiling function #0 failed: local decls count bigger than remaining function size @+136
+hand/local-type	WebAssembly.Module(): Compiling function #0 failed: invalid value type 0x7a @+138
+hand/local-type-oob	WebAssembly.Module(): Compiling function #0 failed: Unknown heap type -29 @+139
+hand/local-uninit	WebAssembly.Module(): Compiling function #0 failed: uninitialized non-defaultable local: 0 @+140
+hand/local-init-ok	OK
+hand/local-init-scoped	WebAssembly.Module(): Compiling function #0 failed: uninitialized non-defaultable local: 0 @+147
+hand/local-set-type	WebAssembly.Module(): Compiling function #0 failed: local.set[0] expected type i64, found i32.const of type i32 @+139
+hand/global-index	WebAssembly.Module(): Compiling function #0 failed: Invalid global index: 9 @+138
+hand/global-immutable	WebAssembly.Module(): Compiling function #0 failed: immutable global #0 cannot be assigned @+139
+hand/global-set-type	WebAssembly.Module(): Compiling function #0 failed: global.set[0] expected type i64, found i32.const of type i32 @+137
+hand/call-index	WebAssembly.Module(): Compiling function #0 failed: function index #9 is out of bounds @+138
+hand/call-indirect-sig	WebAssembly.Module(): Compiling function #0 failed: invalid signature index: 30 @+140
+hand/call-indirect-table	WebAssembly.Module(): Compiling function #0 failed: table index 5 exceeds number of tables (2) @+141
+hand/call-indirect-not-func	WebAssembly.Module(): Compiling function #0 failed: call_indirect: immediate table #1 is not of a function type @+140
+hand/call-indirect-struct-sig	WebAssembly.Module(): Compiling function #0 failed: invalid signature index: 2 @+140
+hand/return-call-type	WebAssembly.Module(): Compiling function #0 failed: return_call: tail call type error @+139
+hand/return-call-indirect-type	WebAssembly.Module(): Compiling function #0 failed: return_call_indirect: tail call return types mismatch @+141
+hand/call-ref-type	WebAssembly.Module(): Compiling function #0 failed: call_ref[0] expected type (ref null 1), found ref.func of type (ref 8) @+137
+hand/return-call-ref-type	WebAssembly.Module(): Compiling function #0 failed: return_call_ref: tail call return types mismatch @+139
+hand/ref-func-undeclared	OK
+hand/ref-func-index	WebAssembly.Module(): Compiling function #0 failed: function index #7 is out of bounds @+138
+hand/load-align	WebAssembly.Module(): Compiling function #0 failed: invalid alignment; expected maximum alignment is 2, actual alignment is 3 @+140
+hand/load-align-big	WebAssembly.Module(): Compiling function #0 failed: invalid alignment; expected maximum alignment is 2, actual alignment is 31 @+140
+hand/load-memory-index	WebAssembly.Module(): Compiling function #0 failed: memory index 1 exceeds number of declared memories (1) @+140
+hand/load-acquire-release	WebAssembly.Module(): Compiling function #0 failed: invalid memory ordering: acquire-release requires --experimental-wasm-acquire-release flag @+140
+hand/load-offset-range	WebAssembly.Module(): Compiling function #0 failed: memory offset outside 32-bit range: 4294967296 @+140
+hand/load-no-memory	WebAssembly.Module(): Compiling function #0 failed: memory index 0 exceeds number of declared memories (0) @+26
+hand/store-type	WebAssembly.Module(): Compiling function #0 failed: i32.store[1] expected type i32, found i64.const of type i64 @+139
+hand/memory-size-index	WebAssembly.Module(): Compiling function #0 failed: memory index 1 exceeds number of declared memories (1) @+138
+hand/memory-init-no-datacount	WebAssembly.Module(): Compiling function #0 failed: invalid data segment index: 0 @+36
+hand/data-drop-index	WebAssembly.Module(): Compiling function #0 failed: invalid data segment index: 1 @+139
+hand/memory-copy-index	WebAssembly.Module(): Compiling function #0 failed: memory index 1 exceeds number of declared memories (1) @+145
+hand/memory-copy-dst-index	WebAssembly.Module(): Compiling function #0 failed: memory index 1 exceeds number of declared memories (1) @+146
+hand/simd-lane	WebAssembly.Module(): Compiling function #0 failed: invalid lane index @+157
+hand/simd-lane-i64	WebAssembly.Module(): Compiling function #0 failed: invalid lane index @+157
+hand/simd-shuffle	WebAssembly.Module(): Compiling function #0 failed: invalid shuffle mask @+175
+hand/simd-invalid	WebAssembly.Module(): Compiling function #0 failed: invalid simd opcode @+137
+hand/simd-fp16	WebAssembly.Module(): Compiling function #0 failed: invalid simd opcode: 0xfd120, enable with --experimental-wasm-fp16 @+137
+hand/simd-big-index	WebAssembly.Module(): Compiling function #0 failed: Invalid prefixed opcode 4096 @+137
+hand/simd-index-overflow	WebAssembly.Module(): Compiling function #0 failed: Invalid prefixed opcode 16384 @+137
+hand/atomic-align	WebAssembly.Module(): Compiling function #0 failed: invalid alignment for atomic operation; expected alignment is 2, actual alignment is 1 @+139
+hand/atomic-invalid	WebAssembly.Module(): Compiling function #0 failed: invalid atomic opcode: 0xfe05 @+137
+hand/atomic-fence	WebAssembly.Module(): Compiling function #0 failed: invalid atomic operand @+139
+hand/atomic-shared-gc	WebAssembly.Module(): Compiling function #0 failed: Invalid opcode 0xfe5c (enable with --experimental-wasm-shared) @+137
+hand/numeric-invalid	WebAssembly.Module(): Compiling function #0 failed: invalid numeric opcode: 0xfc12 @+137
+hand/numeric-fp16	WebAssembly.Module(): Compiling function #0 failed: invalid numeric opcode: 0xfc30, enable with --experimental-wasm-fp16 @+139
+hand/asmjs-prefix	WebAssembly.Module(): Compiling function #0 failed: Invalid opcode: 0xfa3c @+137
+hand/table-get-index	WebAssembly.Module(): Compiling function #0 failed: table index 5 exceeds number of tables (2) @+140
+hand/table-init-type	WebAssembly.Module(): Compiling function #0 failed: table 1 is not a super-type of (ref func) @+145
+hand/table-init-segment	WebAssembly.Module(): Compiling function #0 failed: invalid element segment index: 3 @+145
+hand/table-copy-type	WebAssembly.Module(): Compiling function #0 failed: table 1 is not a super-type of funcref @+145
+hand/table-copy-src-index	WebAssembly.Module(): Compiling function #0 failed: table index 4 exceeds number of tables (2) @+145
+hand/table-grow-type	WebAssembly.Module(): Compiling function #0 failed: table.grow[0] expected type funcref, found ref.null of type externref @+137
+hand/elem-drop-index	WebAssembly.Module(): Compiling function #0 failed: invalid element segment index: 2 @+139
+hand/ref-null-index	WebAssembly.Module(): Compiling function #0 failed: Unknown heap type -29 @+138
+hand/ref-null-heap	WebAssembly.Module(): Compiling function #0 failed: Unknown heap type -1 @+138
+hand/ref-is-null-type	WebAssembly.Module(): Compiling function #0 failed: ref.is_null[0] expected reference type, found i32.const of type i32 @+137
+hand/ref-as-non-null-type	WebAssembly.Module(): Compiling function #0 failed: ref.as_non_null[0] expected reference type, found i32.const of type i32 @+137
+hand/ref-eq-type	WebAssembly.Module(): Compiling function #0 failed: ref.eq[0] expected either eqref or (ref null shared eq), found ref.null of type funcref @+141
+hand/ref-eq-second	WebAssembly.Module(): Compiling function #0 failed: ref.eq[1] expected either eqref or (ref null shared eq), found ref.null of type funcref @+141
+hand/br-on-null-type	WebAssembly.Module(): Compiling function #0 failed: br_on_null[0] expected object reference, found i32.const of type i32 @+139
+hand/br-on-non-null-type	WebAssembly.Module(): Compiling function #0 failed: br_on_non_null[0] expected subtype of ((ref null any), (ref null extern) or (ref null func)), found i32.const of type i32 @+139
+hand/br-on-non-null-arity	OK
+hand/struct-new-index	WebAssembly.Module(): Compiling function #0 failed: invalid struct index: 3 @+139
+hand/struct-new-args	WebAssembly.Module(): Compiling function #0 failed: not enough arguments on the stack for struct.new (need 2, got 1) @+139
+hand/struct-new-default	WebAssembly.Module(): Compiling function #0 failed: struct.new_default: struct type 7 has field 0 of non-defaultable type (ref 2) @+137
+hand/struct-get-field	WebAssembly.Module(): Compiling function #0 failed: invalid field index: 5 @+142
+hand/struct-get-packed	WebAssembly.Module(): Compiling function #0 failed: struct.get: Field 1 of type 2 has packed type i8. Use struct.get_s or struct.get_u instead. @+139
+hand/struct-get-s-unpacked	WebAssembly.Module(): Compiling function #0 failed: struct.get_s: Field 0 of type 2 has non-packed type i32. Use struct.get instead. @+139
+hand/struct-set-immutable	WebAssembly.Module(): Compiling function #0 failed: struct.set: Field 0 of type 7 is immutable. @+141
+hand/struct-get-type	WebAssembly.Module(): Compiling function #0 failed: struct.get[0] expected type (ref null 2), found ref.null of type (ref null 3) @+137
+hand/struct-new-desc	WebAssembly.Module(): Compiling function #0 failed: descriptor allocation used for type 2 without descriptor @+141
+hand/array-new-index	WebAssembly.Module(): Compiling function #0 failed: invalid array index: 2 @+143
+hand/array-get-packed	WebAssembly.Module(): Compiling function #0 failed: array.get: Array type 5 has packed type i8. Use array.get_s or array.get_u instead. @+141
+hand/array-get-u-unpacked	WebAssembly.Module(): Compiling function #0 failed: array.get_u: Array type 3 has non-packed type i32. Use array.get instead. @+141
+hand/array-set-immutable	WebAssembly.Module(): Compiling function #0 failed: array.set: Array type 5 is immutable @+143
+hand/array-new-fixed-large	WebAssembly.Module(): Compiling function #0 failed: Requested length 10001 for array.new_fixed too large, maximum is 10000 @+137
+hand/array-new-fixed-args	WebAssembly.Module(): Compiling function #0 failed: not enough arguments on the stack for array.new_fixed (need 2, got 1) @+139
+hand/array-new-data-ref	WebAssembly.Module(): Compiling function #0 failed: array.new_data can only be used with numeric-type arrays, found array type #12 instead @+141
+hand/array-new-data-segment	WebAssembly.Module(): Compiling function #0 failed: invalid data segment index: 4 @+144
+hand/array-new-elem-numeric	WebAssembly.Module(): Compiling function #0 failed: array.new_elem can only be used with reference-type arrays, found array type #3 instead @+141
+hand/array-new-elem-type	OK
+hand/array-copy-immutable	WebAssembly.Module(): Compiling function #0 failed: array.copy: immediate destination array type #5 is immutable @+137
+hand/array-copy-types	WebAssembly.Module(): Compiling function #0 failed: array.copy: source array's #12 element type is not a subtype of destination array's #3 element type @+137
+hand/array-fill-immutable	WebAssembly.Module(): Compiling function #0 failed: array.init: Array type #5 is immutable @+137
+hand/array-len-type	WebAssembly.Module(): Compiling function #0 failed: array.len[0] expected type arrayref, found ref.null of type anyref @+137
+hand/array-init-data-immutable	WebAssembly.Module(): Compiling function #0 failed: array.init_data can only be used with mutable arrays, found array type #5 instead @+137
+hand/i31-get-type	WebAssembly.Module(): Compiling function #0 failed: i31.get_s[0] expected type i31ref, found ref.null of type anyref @+137
+hand/ref-test-hierarchy	WebAssembly.Module(): Compiling function #0 failed: Invalid types for ref.test: ref.null of type funcref has to be in the same reference type hierarchy as (ref any) @+137
+hand/ref-cast-hierarchy	WebAssembly.Module(): Compiling function #0 failed: Invalid types for ref.cast: i32.const of type i32 has to be in the same reference type hierarchy as (ref any) @+137
+hand/ref-cast-index	WebAssembly.Module(): Compiling function #0 failed: Unknown heap type -51 @+141
+hand/ref-cast-nop	WebAssembly.Module(): Compiling function #0 failed: Invalid opcode 0xfb4c (enable with --experimental-wasm-ref-cast-nop) @+139
+hand/ref-get-desc	WebAssembly.Module(): Compiling function #0 failed: Invalid opcode 0xfb22 (enable with --experimental-wasm-custom_descriptors) @+137
+hand/ref-i31-shared	WebAssembly.Module(): Compiling function #0 failed: Invalid opcode 0xfb1f (enable with --experimental-wasm-shared) @+139
+hand/gc-invalid	WebAssembly.Module(): Compiling function #0 failed: invalid gc opcode: fb30 @+137
+hand/gc-stringref	WebAssembly.Module(): Compiling function #0 failed: Invalid opcode 0xfb (enable with --experimental-wasm-stringref) @+137
+hand/br-on-cast-flags	WebAssembly.Module(): Compiling function #0 failed: invalid br_on_cast flags 4 @+143
+hand/br-on-cast-subtype	WebAssembly.Module(): Compiling function #0 failed: invalid types for br_on_cast: (ref any) is not a subtype of (ref eq) @+141
+hand/br-on-cast-arity	WebAssembly.Module(): Compiling function #0 failed: br_on_cast[0] expected type (ref any), found ref.null of type anyref @+139
+hand/br-on-cast-depth	WebAssembly.Module(): Compiling function #0 failed: invalid branch depth: 3 @+142
+hand/br-on-cast-fail-type	WebAssembly.Module(): Compiling function #0 failed: type error in branch[0] (expected eqref, got anyref) @+141
+hand/br-on-cast-fail-refines	OK
+hand/br-on-cast-fail-refines-dead	WebAssembly.Module(): Compiling function #0 failed: struct.get[0] expected type (ref null 10), found br_on_cast_fail of type (ref struct) @+145
+hand/any-convert-type	WebAssembly.Module(): Compiling function #0 failed: any.convert_extern[0] expected type externref, found ref.null of type anyref @+137
+hand/any-convert-numeric	WebAssembly.Module(): Compiling function #0 failed: any.convert_extern[0] expected type shared externref, found i32.const of type i32 @+137
+hand/extern-convert-numeric	WebAssembly.Module(): Compiling function #0 failed: extern.convert_any[0] expected type shared anyref, found i64.const of type i64 @+137
+hand/array-len-numeric	WebAssembly.Module(): Compiling function #0 failed: array.len[0] expected type shared arrayref, found i32.const of type i32 @+137
+hand/i31-get-numeric	WebAssembly.Module(): Compiling function #0 failed: i31.get_u[0] expected type shared i31ref, found f64.const of type f64 @+137
+hand/array-len-empty	WebAssembly.Module(): Compiling function #0 failed: not enough arguments on the stack for array.len (need 1, got 0) @+137
+hand/array-len-unreachable	OK
+hand/throw-tag	WebAssembly.Module(): Compiling function #0 failed: Invalid tag index: 5 @+138
+hand/throw-args	WebAssembly.Module(): Compiling function #0 failed: not enough arguments on the stack for throw (need 1, got 0) @+137
+hand/catch-no-try	WebAssembly.Module(): Compiling function #0 failed: catch does not match a try @+137
+hand/catch-all-twice	WebAssembly.Module(): Compiling function #0 failed: catch-all already present for try @+140
+hand/catch-after-catch-all	WebAssembly.Module(): Compiling function #0 failed: catch after catch-all for try @+140
+hand/catch-tag	WebAssembly.Module(): Compiling function #0 failed: Invalid tag index: 9 @+140
+hand/rethrow-target	WebAssembly.Module(): Compiling function #0 failed: rethrow not targeting catch or catch-all @+139
+hand/rethrow-depth	WebAssembly.Module(): Compiling function #0 failed: invalid branch depth: 3 @+138
+hand/delegate-no-try	WebAssembly.Module(): Compiling function #0 failed: delegate does not match a try @+139
+hand/delegate-depth	WebAssembly.Module(): Compiling function #0 failed: invalid branch depth: 1 @+140
+hand/catch-all-no-try	WebAssembly.Module(): Compiling function #0 failed: catch-all does not match a try @+137
+hand/try-table-catch-kind	WebAssembly.Module(): Compiling function #0 failed: invalid catch kind in try table @+137
+hand/try-table-tag	WebAssembly.Module(): Compiling function #0 failed: Invalid tag index: 7 @+137
+hand/try-table-depth	WebAssembly.Module(): Compiling function #0 failed: invalid branch depth: 4 @+137
+hand/try-table-arity	WebAssembly.Module(): Compiling function #0 failed: catch kind generates 1 operand, target block expects 0 @+139
+hand/try-table-arity-one	WebAssembly.Module(): Compiling function #0 failed: catch kind generates 1 operand, target block expects 0 @+139
+hand/try-table-type	WebAssembly.Module(): Compiling function #0 failed: type error in branch[0] (expected i32, got i64) @+139
+hand/try-table-count	WebAssembly.Module(): Compiling function #0 failed: invalid table count (> max br_table size): 262144 @+139
+hand/throw-ref-type	WebAssembly.Module(): Compiling function #0 failed: throw_ref[0] expected type exnref, found i32.const of type i32 @+137
+hand/mix-legacy-then-new	WebAssembly.Module(): Compiling function #0 failed: module uses a mix of legacy and new exception handling instructions @+140
+hand/mix-new-then-legacy	WebAssembly.Module(): Compiling function #0 failed: module uses a mix of legacy and new exception handling instructions @+141
+hand/mix-legacy-then-exnref	WebAssembly.Module(): Compiling function #0 failed: module uses a mix of legacy and new exception handling instructions @+141
+hand/mix-across-functions	WebAssembly.Module(): Compiling function #1 failed: module uses a mix of legacy and new exception handling instructions @+30
+hand/const-not-allowed	WebAssembly.Module(): opcode i32.eqz is not allowed in constant expressions @+21
+hand/const-nop	WebAssembly.Module(): opcode nop is not allowed in constant expressions @+13
+hand/const-prefix	WebAssembly.Module(): opcode unknown is not allowed in constant expressions @+13
+hand/const-simd	WebAssembly.Module(): opcode v128.not is not allowed in constant expressions @+31
+hand/const-gc-get	WebAssembly.Module(): opcode struct.get is not allowed in constant expressions @+25
+hand/const-type	WebAssembly.Module(): type error in constant expression[0] (expected i32, got i64) @+18
+hand/const-count	WebAssembly.Module(): expected 1 elements on the stack for constant expression, found 2 @+17
+hand/const-missing-end	WebAssembly.Module(): constant expression is missing 'end' @+18
+hand/const-global-mutable	WebAssembly.Module(): mutable globals cannot be used in constant expressions @+19
+hand/const-global-self	WebAssembly.Module(): Invalid global index: 0 @+14
+hand/const-global-earlier	OK
+hand/const-ref-func	WebAssembly.Module(): opcode drop is not allowed in constant expressions @+27
+hand/const-ref-func-index	WebAssembly.Module(): function index #3 is out of bounds @+14
+hand/const-array-new-fixed	WebAssembly.Module(): not enough arguments on the stack for array.new_fixed (need 2, got 1) @+22
+hand/const-struct-new-default	WebAssembly.Module(): struct.new_default: struct type 0 has field 0 of non-defaultable type (ref func) @+22
+hand/const-local-get	WebAssembly.Module(): invalid local index: 0 @+14
+hand/const-local-get-truncated	WebAssembly.Module(): reached end while decoding local index @+14
+hand/const-invalid-opcode	WebAssembly.Module(): Invalid opcode 0x17 @+13
+hand/const-elem-expr	WebAssembly.Module(): opcode nop is not allowed in constant expressions @+26
+hand/const-data-offset	WebAssembly.Module(): type error in constant expression[0] (expected i32, got i64) @+19
+hand/name-simple	WebAssembly.Module(): Compiling function #1:"fn_one" failed: not enough arguments on the stack for i32.add (need 2, got 0) @+27
+hand/name-other-index	WebAssembly.Module(): Compiling function #1 failed: not enough arguments on the stack for i32.add (need 2, got 0) @+27
+hand/name-empty	WebAssembly.Module(): Compiling function #1:"" failed: not enough arguments on the stack for i32.add (need 2, got 0) @+27
+hand/name-long	WebAssembly.Module(): Compiling function #1:"abcdefghijabcdefghijabcdefghijabcdefghijabcdefg..." failed: not enough arguments on the stack for i32.add (need 2, got 0) @+27
+hand/name-50	WebAssembly.Module(): Compiling function #1:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" failed: not enough arguments on the stack for i32.add (need 2, got 0) @+27
+hand/name-51	WebAssembly.Module(): Compiling function #1:"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy..." failed: not enough arguments on the stack for i32.add (need 2, got 0) @+27
+hand/name-nul	WebAssembly.Module(): Compiling function #1:"a" failed: not enough arguments on the stack for i32.add (need 2, got 0) @+27
+hand/name-invalid-utf8	WebAssembly.Module(): Compiling function #1:"second" failed: not enough arguments on the stack for i32.add (need 2, got 0) @+27
+hand/name-duplicate	WebAssembly.Module(): Compiling function #1:"first" failed: not enough arguments on the stack for i32.add (need 2, got 0) @+27
+hand/name-second-section	WebAssembly.Module(): Compiling function #1 failed: not enough arguments on the stack for i32.add (need 2, got 0) @+27
+hand/name-module-first	WebAssembly.Module(): Compiling function #1:"after" failed: not enough arguments on the stack for i32.add (need 2, got 0) @+27
+hand/name-truncated	WebAssembly.Module(): Compiling function #1 failed: not enough arguments on the stack for i32.add (need 2, got 0) @+27

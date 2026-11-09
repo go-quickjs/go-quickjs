@@ -215,7 +215,7 @@ func main() {
 		}
 		b.WriteString("}\n\n")
 	}
-	sigTable("sigs00", []string{"FOREACH_SIMPLE_OPCODE", "FOREACH_SIMPLE_PROTOTYPE_OPCODE"}, false, 0)
+	sigTable("sigs00", []string{"FOREACH_SIMPLE_OPCODE", "FOREACH_SIMPLE_PROTOTYPE_OPCODE", "FOREACH_SIGN_EXTENSION_OPCODE"}, false, 0)
 	sigTable("sigsFA", []string{"FOREACH_ASMJS_COMPAT_OPCODE"}, false, 0)
 	sigTable("sigsFC", []string{"FOREACH_NUMERIC_OPCODE_WITH_SIG"}, false, 0)
 	sigTable("sigsFD", []string{"FOREACH_SIMD_MVP_0_OPERAND_OPCODE", "FOREACH_SIMD_MEM_OPCODE", "FOREACH_SIMD_MEM_1_OPERAND_OPCODE"}, false, 0)
