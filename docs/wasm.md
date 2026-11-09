@@ -111,6 +111,8 @@ modules.
   native code where the JIT runs (see [The JIT](#the-jit)).
 - `WithMemoryLimitPages` caps every memory; a module declaring more fails to
   compile.
+- `WithMemoryLimit(bytes)` bounds what the runtime's modules hold together:
+  see [Memory limits](#memory-limits).
 - `WithMemoryCapacityFromMax` allocates a memory's maximum up front where the
   OS cannot reserve it (32-bit platforms), so that it never moves.
 - `WithCompilationCache` shares compiled modules between runtimes, keyed by
@@ -313,6 +315,36 @@ What the engine can make bounds every preset:
   with "Maximum call stack size exceeded".
 - A GC array may be as large as 2^30-1 bytes with its header.
 
+### Memory limits
+
+`RuntimeConfig.WithMemoryLimit(bytes)` bounds the memory a runtime's modules
+hold together, and `quickjs.WithMemoryLimit` bounds a JavaScript runtime's
+heap with what its WebAssembly holds in it.
+
+- Linear memories and tables are counted exactly, as they are made and
+  grown. A `memory.grow` or `table.grow` past the limit returns -1, and
+  `Memory.prototype.grow` throws its RangeError, "Unable to grow instance
+  memory", as when the memory cannot be had. A module whose memories do not
+  fit fails to instantiate with "Out of memory: Cannot allocate Wasm memory
+  for new instance", which unwraps to `wasm.ErrMemoryLimit` in Go; a
+  `WebAssembly.Memory` that does not fit throws "could not allocate memory".
+- GC structs and arrays are counted as they are allocated. When the count
+  would pass the limit, what is still reachable is counted again -- from the
+  modules' globals, tables and segments and the running call's frames -- and
+  a program that still does not fit stops with `ErrMemoryLimit`, which no
+  wasm handler or JavaScript `try` catches. A program that lets go of what it
+  allocates runs on.
+- What a closed module held is given back once Go collects it.
+- Under `quickjs.WithMemoryLimit`, the runtime's measurement of its heap asks
+  each WebAssembly object it reaches what it holds, and a memory's buffer is
+  counted by the memory's size, not the address space reserved for it. A
+  `WebAssembly.Table` that does not fit stops the script, as an allocation of
+  a size the script chose does.
+
+The count of GC objects is an estimate: the Go API's may pass the limit by a
+sixteenth of it before it is found, and what only a call running on another
+goroutine holds is counted at that call's own next count.
+
 ## Error messages
 
 The decoder is a port of V8 14.6's, the V8 Node 26 ships, and keeps its order
@@ -455,7 +487,7 @@ whose goroutine and the runtime's take turns.
 | The spec scripts, parsed | 276 of 276 scripts; 5,321 text modules compiled and 1,240 malformed ones rejected | the same |
 | The JavaScript API tests (`test/js-api`) | 1,204 of 1,223 subtests; 18 of the others fail in Node 26 too, with the same messages, and the last is the lazy global's descriptor | WebAssembly/spec `f3268fa9` |
 | Validation against Node 26 (V8 14.6) | no difference over 345,311 modules, in three corpora | -- |
-| wasi-testsuite, `wasm32-wasip1` | 72 of 72 on Linux; 67 on Windows, where 5 need the privilege to make symbolic links | `prod/testsuite-base` |
+| wasi-testsuite, `wasm32-wasip1` | 72 of 72 on Linux; 67 on Windows, the 5 that make symbolic links skipped without the privilege to | `prod/testsuite-base` |
 
 CI's `wasm-spec` job runs the spec scripts on Linux, Windows and macOS (arm64),
 on GitHub's linux/arm64 runner, and for 386; where the JIT runs, it runs them

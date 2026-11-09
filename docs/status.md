@@ -169,7 +169,7 @@ and WebAssembly/threads
 | The spec's `test/core` and `test/legacy` scripts, and the threads proposal's `test/core/threads` | 65,824 of 65,824 assertions, interpreted and with every function compiled by the JIT at its first call, on amd64 and arm64; 65,824 interpreted on 386 |
 | The JavaScript API tests, `test/js-api` | 1,204 of 1,223 subtests; 18 of the others fail in Node 26 too, with the same messages, and the last is the global's descriptor, an accessor until first read |
 | Validation against Node 26 (V8 14.6), verdict and message | no difference over 345,311 modules: hand-written cases, seeds and their mutations |
-| [wasi-testsuite](https://github.com/WebAssembly/wasi-testsuite), `prod/testsuite-base`, `wasm32-wasip1` | 72 of 72 on Linux; 67 on Windows, where 5 need the privilege to make symbolic links |
+| [wasi-testsuite](https://github.com/WebAssembly/wasi-testsuite), `prod/testsuite-base`, `wasm32-wasip1` | 72 of 72 on Linux; 67 on Windows, the 5 that make symbolic links skipped without the privilege to |
 
 ```
 git clone https://github.com/WebAssembly/spec /tmp/wasm-spec
