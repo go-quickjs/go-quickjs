@@ -61,8 +61,9 @@ type jitLevel struct {
 	inst *Instance
 	cj   *codeJIT
 	// rsBase is the address of the level's first return stack entry, the
-	// one for the frame Go entered.
-	rsBase uintptr
+	// one for the frame Go entered; rsDepth is how many bytes of entries
+	// past it the depth limit allows.
+	rsBase, rsDepth uintptr
 	// nc and chunkBase are the stack chunk the frames are in.
 	nc        int
 	chunkBase uintptr
@@ -258,7 +259,7 @@ func (x *exec) jitRoom(from uintptr, n int) uintptr {
 	for _, lv := range x.jit.levels[:x.jit.n] {
 		lv.rsBase = lv.rsBase - old + start
 		lv.ctx.RSP = lv.ctx.RSP - old + start
-		lv.ctx.RSEnd = newEnd
+		lv.ctx.RSEnd = min(newEnd, lv.rsBase+lv.rsDepth)
 	}
 	return from - old + start
 }
@@ -290,11 +291,13 @@ func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64)
 		Links:    uintptr(unsafe.Pointer(&cj.links[0])),
 		Globals:  inst.globalsAddr(),
 		ChunkEnd: lv.chunkBase + uintptr(len(chunk))*8,
-		Depth:    int64(x.depth),
-		MaxDepth: int64(MaxCallDepth),
-		RSEnd:    x.rsStart() + uintptr(len(x.jit.rs))*8,
 	}
+	// A native call at entry j of the level is at depth x.depth+j: the
+	// entries end where that would pass MaxCallDepth, and a call there
+	// goes through Go, whose depth check traps.
 	lv.rsBase = from
+	lv.rsDepth = uintptr(max(MaxCallDepth-x.depth+1, 1)) * rsEntryBytes
+	ctx.RSEnd = min(x.rsStart()+uintptr(len(x.jit.rs))*8, from+lv.rsDepth)
 	i := x.rsIndex(from)
 	x.jit.rs[i] = uint64(nat.retStub)
 	x.jit.rs[i+1] = 0
@@ -399,7 +402,7 @@ func (x *exec) jitSync(lv *jitLevel, offset uint32) {
 		x.calls = append(x.calls, callSite{fn: callee})
 	}
 	x.calls[len(x.calls)-1].offset = offset
-	x.depth = int(lv.ctx.Depth)
+	x.depth = lv.depth + (last-first)/wjit.RSEntryWords - 1
 }
 
 // jitUnsync puts the exec's state back as the level found it.

@@ -62,8 +62,21 @@ Every i32 and f32 in a slot or a general register has its upper half clear,
 as the interpreter leaves them, so a slot is read as the interpreter reads
 it and copied whole.
 
-Native code addresses the frame through BX (`L`). Locals stay in their
-slots. The operand stack is a list of entries, each a constant, a register
+Native code addresses the frame through BX (`L`).
+
+**Locals.** The most used locals live in registers of their own for the
+whole function -- three integers in general registers, four floats in SSE
+ones, chosen by their uses, a use in a loop counting eight times one out of
+it -- and the rest in their slots. A local's home is the same at every
+point of the function, so control merges need nothing of it. A local.get
+copies the home into a register of the operand stack's, so that a later
+local.set does not change an entry. Before a call and an exit, the homes of
+the locals the function ever writes are stored into their slots (the
+others' slots hold their values already: a parameter's the caller's, a
+declared local's the prologue's zero), and after them every home is
+loaded again; the prologue loads them first.
+
+**The operand stack** is a list of entries, each a constant, a register
 -- general for integers, SSE for floats -- or its position's slot, or the
 flags of a comparison that the very next br_if or if consumes. An
 instruction pops its operands, owning their registers, and pushes its
@@ -80,10 +93,18 @@ in the interpreter, and no register is live.
 | DI | the context |
 | BX | L, the frame's slots |
 | R15 | memory 0's base |
+| R12 | the poll counter |
+| R10 | the return stack's next entry |
 | R11, X15 | scratch, never cached |
-| SI, R8, R9, R10, R12, R13, AX, CX, DX | the cache's general registers, AX, CX and DX last (division and shifts take them) |
+| R13, R9, R8 | homes of integer locals, else the cache's |
+| X14-X11 | homes of float locals, else the cache's |
+| SI, R8, R9, R13, AX, CX, DX | the cache's general registers, AX, CX and DX last (division and shifts take them) |
 | X0-X14 | the cache's SSE registers |
 | SP, BP, R14 | never written |
+
+R15, R12 and R10 hold the same thing in every native frame of a level: a
+native call leaves them as they are, and an exit stores R12 and R10 into
+the context and the resumption loads all three again.
 
 ## The context
 
@@ -98,15 +119,18 @@ native code an exec has entered (`jitLevel`), its address in DI:
   reloads R15 after every exit and reads the size from the context.
 - `Globals`: the instance's table of its globals' addresses.
 - `ChunkEnd`: the end of the stack chunk the frames are in.
-- `RSP`, `RSEnd`: the native return stack, shared by an exec's levels.
-- `Depth`, `MaxDepth`: the call depth and its limit (`MaxCallDepth`).
-- `Poll`: the poll counter, the exec's, copied in at entry and out at exit.
+- `RSP`, `RSEnd`: the native return stack, shared by an exec's levels: its
+  next entry, which R10 holds in native code and an exit stores, and its
+  end -- or, if that is before, the entry at which a call would pass
+  `MaxCallDepth`.
+- `Poll`: the poll counter, the exec's, which R12 holds in native code:
+  copied in at entry and out at every exit.
 - The exit record: `Exit`, `Arg0`-`Arg4`, `ExitFn`, `ExitAddr`.
 
 ## Entry, exits and resumption
 
 Go enters a function through `RawCode.EnterAt` at its Go entry, which loads
-BX and R15 from the context; native callers jump to its entry, past that.
+BX, R15, R12 and R10 from the context; native callers jump to its entry, past that.
 Each function's code starts with its return stub, which stores `ExitReturn`
 and returns. Before entering, Go pushes a return stack entry whose return
 address is that stub: the function returns as every frame does, and its
@@ -117,7 +141,8 @@ stores L, the exit's kind and arguments, its own function index and the
 address to resume at, and returns to `enterNative`'s loop, which does the
 work and enters the code again at that address, as an offset in the
 function's code (`RawCode.EnterAt`). At the resume address the code reloads
-BX and R15. Every entry that lives past an exit is in its slot.
+BX, R15, R12, R10 and the locals' homes. Every entry that lives past an exit
+is in its slot.
 
 | Exit | Go |
 |---|---|
@@ -145,15 +170,17 @@ with the rest.
 A call of a function defined in the module is made natively when the callee
 has native code (its link entry is not 0), its frame has room in the chunk,
 and the return stack has room for an entry; otherwise it is an `ExitCall`.
-A call past the depth limit traps. The call first counts down the poll
-counter, as the interpreter's `run` does. With every entry stored, the
-caller copies the arguments into the parameters of the callee's frame, at
-its own frame's end (`L + nslots`), pushes the return stack entry -- the
-return address, its own L, the callee's index above the call's offset --
-increments the depth, moves L and jumps through the link table. The
-callee's return sequence pops the entry, decrements the depth, restores L
-and jumps back; the caller copies the results from the callee's frame into
-its stack positions.
+Native code keeps no depth: the return stack ends, for it, where the next
+call would pass the limit, so that call goes through Go, whose depth check
+traps, and the depth Go sees is the level's at entry plus its entries. The
+call first counts down the poll counter, as the interpreter's `run` does.
+With every entry and the written locals' homes stored, the caller copies
+the arguments into the parameters of the callee's frame, at its own
+frame's end (`L + nslots`), pushes the return stack entry -- the return
+address, its own L, the callee's index above the call's offset -- moves L
+and jumps through the link table. The callee's return sequence pops the
+entry, restores L and jumps back; the caller loads its locals' homes and
+copies the results from the callee's frame into its stack positions.
 
 The return stack is Go memory, words, one for each exec, grown by Go (every
 level's pointers moved) when a native call finds it full and calls through

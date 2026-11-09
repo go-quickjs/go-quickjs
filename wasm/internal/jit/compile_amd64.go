@@ -1,6 +1,8 @@
 package jit
 
 import (
+	"cmp"
+	"slices"
 	"unsafe"
 
 	"golang.org/x/sys/cpu"
@@ -48,8 +50,6 @@ var (
 	offChunkEnd   = int32(unsafe.Offsetof(Ctx{}.ChunkEnd))
 	offRSP        = int32(unsafe.Offsetof(Ctx{}.RSP))
 	offRSEnd      = int32(unsafe.Offsetof(Ctx{}.RSEnd))
-	offDepth      = int32(unsafe.Offsetof(Ctx{}.Depth))
-	offMaxDepth   = int32(unsafe.Offsetof(Ctx{}.MaxDepth))
 	offPoll       = int32(unsafe.Offsetof(Ctx{}.Poll))
 	offExit       = int32(unsafe.Offsetof(Ctx{}.Exit))
 	offArg0       = int32(unsafe.Offsetof(Ctx{}.Arg0))
@@ -101,7 +101,10 @@ type compiler struct {
 	r   reader
 	sig *module.FuncType
 
-	locals     []module.ValueType
+	locals []module.ValueType
+	use    localUse
+	// home is each local's register, or -1 for its slot.
+	home       []int8
 	nlocals    int
 	frameSlots int
 	maxHeight  int
@@ -133,8 +136,9 @@ func Compile(req *Request) (code *Code, err error) {
 	m := req.Module
 	c := &compiler{a: &amd64.Asm{}, req: req, m: m, fn: req.Func, sig: m.FuncType(req.Func),
 		frameSlots: req.FrameSlots, traps: map[trapKey]amd64.Label{}, trapTo: map[uint64]amd64.Label{}}
-	c.locals = scan(m, req.Func, CPU)
+	c.locals, c.use = scan(m, req.Func, CPU)
 	c.nlocals = max(len(c.locals), len(c.sig.Results))
+	c.chooseHomes()
 	if len(m.Memories) > 0 {
 		c.shared = m.Memories[0].Shared
 	}
@@ -149,6 +153,8 @@ func Compile(req *Request) (code *Code, err error) {
 
 	// The return to the engine, at the start.
 	retStub := a.Len()
+	a.Store(rCtx, offPoll, rPoll)
+	a.Store(rCtx, offRSP, rRS)
 	a.StoreImm(rCtx, offExit, ExitReturn)
 	a.Ret()
 	// The engine's entry, then the natives'.
@@ -157,6 +163,8 @@ func Compile(req *Request) (code *Code, err error) {
 	a.Bind(goEntry)
 	a.Load(rL, rCtx, offL)
 	a.Load(rMem, rCtx, offMemBase)
+	a.Load(rPoll, rCtx, offPoll)
+	a.Load(rRS, rCtx, offRSP)
 	a.Bind(entry)
 	c.prologue()
 
@@ -182,8 +190,69 @@ func Compile(req *Request) (code *Code, err error) {
 	return &Code{Bytes: out, GoEntry: a.Offset(goEntry), Entry: a.Offset(entry), ReturnStub: retStub}, nil
 }
 
-// prologue zeroes the declared locals; the parameters are the caller's.
+// chooseHomes gives the most used locals registers of their own, for the
+// whole function: the integers' general registers, the floats' SSE ones.
+// A home is taken from the cache.
+func (c *compiler) chooseHomes() {
+	c.home = make([]int8, len(c.locals))
+	order := make([]int, 0, len(c.locals))
+	for k := range c.locals {
+		c.home[k] = -1
+		if c.use.weight[k] > 0 {
+			order = append(order, k)
+		}
+	}
+	slices.SortStableFunc(order, func(x, y int) int { return cmp.Compare(c.use.weight[y], c.use.weight[x]) })
+	ng, nx := 0, 0
+	for _, k := range order {
+		if isFloat(c.locals[k].Kind) {
+			if nx < len(homeXRegs) {
+				c.home[k] = int8(homeXRegs[nx])
+				c.xused |= 1 << homeXRegs[nx]
+				nx++
+			}
+		} else if ng < len(homeGPRs) {
+			c.home[k] = int8(homeGPRs[ng])
+			c.gused |= 1 << homeGPRs[ng]
+			ng++
+		}
+	}
+}
+
+// saveHomes stores the locals living in registers that the function ever
+// writes into their slots, before a call or an exit loses the registers;
+// the others' slots hold their values already.
+func (c *compiler) saveHomes() {
+	for k, h := range c.home {
+		if h >= 0 && c.use.written[k] {
+			c.store(value{t: c.locals[k].Kind, k: kReg, r: uint8(h)}, rL, int32(8*k))
+		}
+	}
+}
+
+// reloadHomes loads the locals living in registers from their slots.
+func (c *compiler) reloadHomes() {
+	for k, h := range c.home {
+		if h < 0 {
+			continue
+		}
+		v := value{t: c.locals[k].Kind, k: kSlot, off: int32(8 * k)}
+		if isFloat(v.t) {
+			c.loadX(amd64.XReg(h), v)
+		} else {
+			c.loadG(amd64.Reg(h), v)
+		}
+	}
+}
+
+// prologue zeroes the declared locals, and loads the locals' homes; the
+// parameters are the caller's.
 func (c *compiler) prologue() {
+	c.zeroLocals()
+	c.reloadHomes()
+}
+
+func (c *compiler) zeroLocals() {
 	a := c.a
 	from, to := len(c.sig.Params), len(c.locals)
 	if from >= to {
@@ -211,12 +280,9 @@ func (c *compiler) prologue() {
 func (c *compiler) returnSequence() {
 	a := c.a
 	a.Bind(c.retL)
-	a.Load(rTmp, rCtx, offRSP)
-	a.OpImm(amd64.Sub, rTmp, RSEntryWords*8, true)
-	a.Store(rCtx, offRSP, rTmp)
-	a.DecMem(rCtx, offDepth)
-	a.Load(rL, rTmp, 8)
-	a.JmpMem(rTmp, 0)
+	a.OpImm(amd64.Sub, rRS, RSEntryWords*8, true)
+	a.Load(rL, rRS, 8)
+	a.JmpMem(rRS, 0)
 }
 
 // storeCtx stores v into the context's word at off.
@@ -233,7 +299,10 @@ func (c *compiler) storeCtx(off int32, v uint64) {
 // registers are lost: whatever lives past it is in its slot.
 func (c *compiler) exit(kind uint64, resume amd64.Label, args ...uint64) {
 	a := c.a
+	c.saveHomes()
 	a.Store(rCtx, offL, rL)
+	a.Store(rCtx, offPoll, rPoll)
+	a.Store(rCtx, offRSP, rRS)
 	c.storeCtx(offExit, kind)
 	for i, v := range args {
 		c.storeCtx(offArg0+int32(8*i), v)
@@ -250,6 +319,9 @@ func (c *compiler) resumeAt(l amd64.Label) {
 	c.a.Bind(l)
 	c.a.Load(rL, rCtx, offL)
 	c.a.Load(rMem, rCtx, offMemBase)
+	c.a.Load(rPoll, rCtx, offPoll)
+	c.a.Load(rRS, rCtx, offRSP)
+	c.reloadHomes()
 }
 
 // trap returns a label that traps with code, at the instruction at offset
@@ -269,6 +341,7 @@ func (c *compiler) trap(code uint64, at uint32) amd64.Label {
 			a := c.a
 			a.Bind(to)
 			a.Store(rCtx, offL, rL)
+			a.Store(rCtx, offRSP, rRS)
 			c.storeCtx(offExit, ExitTrap)
 			c.storeCtx(offArg0, code)
 			c.storeCtx(offExitFn, uint64(c.fn))
@@ -363,7 +436,7 @@ func (c *compiler) jumpTo(t *ctl) {
 			c.a.Jmp(head)
 		})
 	}
-	a.DecMem(rCtx, offPoll)
+	a.OpImm(amd64.Sub, rPoll, 1, true)
 	a.Jcc(amd64.CondG, t.label)
 	a.Jmp(t.poll)
 }
@@ -629,6 +702,9 @@ func (c *compiler) instr() {
 func (c *compiler) localGet(k int) {
 	t := c.locals[k].Kind
 	v := value{t: t, k: kSlot, off: int32(8 * k)}
+	if h := c.home[k]; h >= 0 {
+		v = value{t: t, k: kReg, r: uint8(h)}
+	}
 	if isFloat(t) {
 		x := c.allocX(0)
 		c.loadX(x, v)
@@ -653,7 +729,15 @@ func (c *compiler) localSet(k int, tee bool) {
 			v = value{t: v.t, k: kReg, r: uint8(r)}
 		}
 	}
-	c.store(v, rL, int32(8*k))
+	if h := c.home[k]; h >= 0 {
+		if isFloat(v.t) {
+			c.loadX(amd64.XReg(h), v)
+		} else {
+			c.loadG(amd64.Reg(h), v)
+		}
+	} else {
+		c.store(v, rL, int32(8*k))
+	}
 	if tee {
 		c.push(v)
 		return
@@ -811,10 +895,11 @@ func (c *compiler) call(idx uint32, at uint32) {
 	start := a.NewLabel()
 	slow := a.NewLabel()
 	poll := a.NewLabel()
+	c.saveHomes()
 	a.Bind(start)
-	a.DecMem(rCtx, offPoll)
+	a.OpImm(amd64.Sub, rPoll, 1, true)
 	a.Jcc(amd64.CondLE, poll)
-	c.nativeCallChecks(idx, at, c.frameSlots, slow)
+	c.nativeCallChecks(idx, c.frameSlots, slow)
 	// The arguments, into the callee's parameters.
 	frame := int32(8 * c.frameSlots)
 	for i := 0; i < n; i++ {
@@ -823,16 +908,15 @@ func (c *compiler) call(idx uint32, at uint32) {
 	}
 	ret := a.NewLabel()
 	a.LeaLabel(amd64.RCX, ret)
-	a.Store(amd64.RDX, 0, amd64.RCX)
-	a.Store(amd64.RDX, 8, rL)
+	a.Store(rRS, 0, amd64.RCX)
+	a.Store(rRS, 8, rL)
 	a.MovImm(amd64.RCX, Site(idx, at))
-	a.Store(amd64.RDX, 16, amd64.RCX)
-	a.OpImm(amd64.Add, amd64.RDX, RSEntryWords*8, true)
-	a.Store(rCtx, offRSP, amd64.RDX)
-	a.IncMem(rCtx, offDepth)
+	a.Store(rRS, 16, amd64.RCX)
+	a.OpImm(amd64.Add, rRS, RSEntryWords*8, true)
 	a.OpImm(amd64.Add, rL, frame, true)
 	a.JmpReg(amd64.RAX)
 	a.Bind(ret)
+	c.reloadHomes()
 	// The results, from the callee's frame.
 	for i := range ft.Results {
 		a.Load(amd64.RCX, rL, frame+int32(8*i))
@@ -855,11 +939,12 @@ func (c *compiler) call(idx uint32, at uint32) {
 	c.pushResults(ft.Results)
 }
 
-// nativeCallChecks leaves the callee's entry in AX and the return stack's
-// next entry in DX, or goes to slow: the callee has no native code, its
-// frame no room in the chunk past the caller's frameSlots, or the return
-// stack none for an entry. A call past the depth limit traps.
-func (c *compiler) nativeCallChecks(idx, at uint32, frameSlots int, slow amd64.Label) {
+// nativeCallChecks leaves the callee's entry in AX, or goes to slow: the
+// callee has no native code, its frame no room in the chunk past the
+// caller's frameSlots, or the return stack none for an entry -- which it
+// also has not where the call would pass the depth limit, which the call
+// through Go then traps for.
+func (c *compiler) nativeCallChecks(idx uint32, frameSlots int, slow amd64.Label) {
 	a := c.a
 	a.Load(amd64.RAX, rCtx, offLinks)
 	a.Load(amd64.RAX, amd64.RAX, int32(8*idx))
@@ -868,11 +953,7 @@ func (c *compiler) nativeCallChecks(idx, at uint32, frameSlots int, slow amd64.L
 	a.Lea(amd64.RCX, rL, int32(8*(frameSlots+c.req.FrameSlotsOf(idx))))
 	a.CmpMem(amd64.RCX, rCtx, offChunkEnd, true)
 	a.Jcc(amd64.CondA, slow)
-	a.Load(amd64.RCX, rCtx, offDepth)
-	a.CmpMem(amd64.RCX, rCtx, offMaxDepth, true)
-	a.Jcc(amd64.CondGE, c.trap(TrapStackOverflow, at))
-	a.Load(amd64.RDX, rCtx, offRSP)
-	a.CmpMem(amd64.RDX, rCtx, offRSEnd, true)
+	a.CmpMem(rRS, rCtx, offRSEnd, true)
 	a.Jcc(amd64.CondAE, slow)
 }
 
@@ -905,7 +986,7 @@ func (c *compiler) returnCall(idx uint32, at uint32) {
 	slow := a.NewLabel()
 	poll := a.NewLabel()
 	a.Bind(start)
-	a.DecMem(rCtx, offPoll)
+	a.OpImm(amd64.Sub, rPoll, 1, true)
 	a.Jcc(amd64.CondLE, poll)
 	a.Load(amd64.RAX, rCtx, offLinks)
 	a.Load(amd64.RAX, amd64.RAX, int32(8*idx))
@@ -921,12 +1002,11 @@ func (c *compiler) returnCall(idx uint32, at uint32) {
 		a.Store(rL, int32(8*i), amd64.RCX)
 	}
 	// The frame's return stack entry names the callee now.
-	a.Load(amd64.RDX, rCtx, offRSP)
-	a.Load(amd64.RCX, amd64.RDX, -8)
+	a.Load(amd64.RCX, rRS, -8)
 	a.MovRR32(amd64.RCX, amd64.RCX)
 	a.MovImm(rTmp, uint64(idx)<<32)
 	a.Op(amd64.Or, amd64.RCX, rTmp, true)
-	a.Store(amd64.RDX, -8, amd64.RCX)
+	a.Store(rRS, -8, amd64.RCX)
 	a.JmpReg(amd64.RAX)
 	c.ool = append(c.ool, func() {
 		a.Bind(poll)

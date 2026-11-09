@@ -65,10 +65,18 @@ type Features struct {
 	Popcnt, Round bool
 }
 
+// localUse is what the body does with its locals: how much each is used,
+// a use in a loop counting eight times one outside it, and which are ever
+// written.
+type localUse struct {
+	weight  []uint64
+	written []bool
+}
+
 // scan reads function fn's body, past its locals, and refuses it if any
 // instruction is one the compiler does not compile. It returns the body's
-// local types, the parameters first.
-func scan(m *module.Module, fn uint32, feat Features) (locals []module.ValueType) {
+// local types, the parameters first, and their uses.
+func scan(m *module.Module, fn uint32, feat Features) (locals []module.ValueType, use localUse) {
 	f := &m.Functions[fn]
 	sig := m.Types[f.TypeIndex].Func
 	checkTypes(sig.Params, "parameter")
@@ -84,6 +92,11 @@ func scan(m *module.Module, fn uint32, feat Features) (locals []module.ValueType
 			locals = append(locals, t)
 		}
 	}
+	use.weight = make([]uint64, len(locals))
+	use.written = make([]bool, len(locals))
+	// loops says, for each construct open, whether it is a loop.
+	loops := []bool{false}
+	depth := 0
 	for r.pc < end {
 		op := r.opcode()
 		switch op.Prefix() {
@@ -110,6 +123,23 @@ func scan(m *module.Module, fn uint32, feat Features) (locals []module.ValueType
 			params, results := r.blockType(m)
 			checkTypes(params, op.Name()+" parameter")
 			checkTypes(results, op.Name()+" result")
+			loops = append(loops, op == opcode.Loop)
+			if op == opcode.Loop {
+				depth++
+			}
+			continue
+		case opcode.End:
+			if loops[len(loops)-1] {
+				depth--
+			}
+			loops = loops[:len(loops)-1]
+			continue
+		case opcode.LocalGet, opcode.LocalSet, opcode.LocalTee:
+			k := r.u32()
+			use.weight[k] += 1 << (3 * min(depth, 6))
+			if op != opcode.LocalGet {
+				use.written[k] = true
+			}
 			continue
 		case opcode.SelectWithType:
 			for n := r.u32(); n > 0; n-- {
@@ -152,5 +182,5 @@ func scan(m *module.Module, fn uint32, feat Features) (locals []module.ValueType
 		}
 		r.skipImmediates(op)
 	}
-	return locals
+	return locals, use
 }

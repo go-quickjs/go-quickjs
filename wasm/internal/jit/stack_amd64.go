@@ -7,21 +7,31 @@ import (
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
 )
 
-// The registers. DI holds the context, BX the frame's slots (L) and R15
-// memory 0's base; R11 and X15 are scratch, never cached. SP, BP and R14
-// (g) are never written.
+// The registers. DI holds the context, BX the frame's slots (L), R15
+// memory 0's base, R12 the poll counter and R10 the return stack's next
+// entry; R11 and X15 are scratch, never cached. SP, BP and R14 (g) are
+// never written.
 const (
-	rCtx = amd64.RDI
-	rL   = amd64.RBX
-	rMem = amd64.R15
-	rTmp = amd64.R11
-	xTmp = amd64.XReg(15)
+	rCtx  = amd64.RDI
+	rL    = amd64.RBX
+	rMem  = amd64.R15
+	rPoll = amd64.R12
+	rRS   = amd64.R10
+	rTmp  = amd64.R11
+	xTmp  = amd64.XReg(15)
 )
 
 // gprOrder is the order the cache hands general registers out in: those no
 // instruction needs for itself first, AX, CX and DX -- division's and
-// shifts' -- last.
-var gprOrder = [...]amd64.Reg{amd64.RSI, amd64.R8, amd64.R9, amd64.R10, amd64.R12, amd64.R13, amd64.RAX, amd64.RCX, amd64.RDX}
+// shifts' -- last. The homes of locals (homeGPRs) are taken out of it.
+var gprOrder = [...]amd64.Reg{amd64.RSI, amd64.R8, amd64.R9, amd64.R13, amd64.RAX, amd64.RCX, amd64.RDX}
+
+// homeGPRs and homeXRegs are the registers locals live in, the most used
+// local the first's.
+var (
+	homeGPRs  = [...]amd64.Reg{amd64.R13, amd64.R9, amd64.R8}
+	homeXRegs = [...]amd64.XReg{14, 13, 12, 11}
+)
 
 // numXRegs is the number of SSE registers the cache holds values in, X0
 // up.

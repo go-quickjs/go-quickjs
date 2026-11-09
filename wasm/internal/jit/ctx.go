@@ -29,13 +29,12 @@ type Ctx struct {
 	// ChunkEnd is the end of the stack chunk the frames are in: a callee's
 	// frame must end at or before it.
 	ChunkEnd uintptr
-	// RSP and RSEnd are the native return stack's next free entry and its
-	// end. An entry is three words: the address to return to, the caller's
-	// L, and the callee's function index above the call's offset in the
-	// caller (Site).
+	// RSP and RSEnd are the native return stack's next free entry, stored
+	// at every exit, and its end, or where the call depth would pass its
+	// limit if that is before. An entry is three words: the address to
+	// return to, the caller's L, and the callee's function index above the
+	// call's offset in the caller (Site).
 	RSP, RSEnd uintptr
-	// Depth is the wasm call depth, MaxDepth its limit.
-	Depth, MaxDepth int64
 	// Poll counts down to the next poll; native code exits when it runs
 	// out.
 	Poll int64
@@ -95,5 +94,4 @@ const (
 	TrapDivUnrepresentable   = 5
 	TrapRemByZero            = 6
 	TrapFloatUnrepresentable = 7
-	TrapStackOverflow        = 18
 )
