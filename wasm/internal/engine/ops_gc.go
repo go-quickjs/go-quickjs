@@ -161,11 +161,12 @@ func (c *compiler) gcOps(op opcode.Opcode, at uint32) bool {
 			types[i] = fl.Type
 		}
 		c.pushTree(t, tref(func(f *frame) Ref {
-			f.inst.budget.chargeGC(f.x, structSize(rt))
 			r := newStruct(rt)
 			for i, v := range vals {
 				valToCell(types[i], cellAt(r.p, rt.cells[i]), v(f))
 			}
+			// Charged once the operands, which run first, have run.
+			f.inst.budget.chargeGC(f.x, structSize(rt))
 			return r
 		}))
 	case opcode.StructGet, opcode.StructGetS, opcode.StructGetU:
@@ -221,10 +222,12 @@ func (c *compiler) gcOps(op opcode.Opcode, at uint32) bool {
 			vals[i] = c.val(e)
 		}
 		c.pushTree(module.Ref(module.HeapIndex(ti)), tref(func(f *frame) Ref {
-			a := newArray(rt, cnt, f.inst.budget, f.x)
+			a := newArray(rt, cnt, nil, nil)
 			for i, v := range vals {
 				arraySet(a, et, i, v(f))
 			}
+			// Charged once the operands, which run first, have run.
+			f.inst.budget.chargeGC(f.x, arraySize(rt, cnt))
 			return ArrayRef(a)
 		}))
 	case opcode.ArrayNewData, opcode.ArrayNewElem:

@@ -123,3 +123,37 @@ func TestBudgetGC(t *testing.T) {
 		t.Fatalf("hoard: got %v, want ErrMemoryLimit", err)
 	}
 }
+
+// TestBudgetOperandsFirst checks that an allocation's operands run before it
+// is charged, as they run before the instruction: with the budget full, a
+// struct.new or array.new_fixed whose operand traps fails with the trap,
+// not ErrMemoryLimit, interpreted and native alike.
+func TestBudgetOperandsFirst(t *testing.T) {
+	const src = `(module
+		(type $node (struct (field (ref null $node)) (field i64)))
+		(type $arr (array (mut i64)))
+		(global $keep (mut (ref null $node)) (ref.null $node))
+		(func (export "hoard") (param i32)
+			(loop $l
+				(global.set $keep (struct.new $node (global.get $keep) (i64.const 0)))
+				(br_if $l (local.tee 0 (i32.sub (local.get 0) (i32.const 1))))))
+		(func (export "struct") (param i64)
+			(drop (struct.new $node (ref.null $node) (i64.div_s (i64.const 1) (local.get 0)))))
+		(func (export "array") (param i64)
+			(drop (array.new_fixed $arr 2 (i64.const 1) (i64.div_s (i64.const 1) (local.get 0))))))`
+	b := NewBudget(512)
+	inst, err := budgetInstance(t, src, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := callExport(t, inst, "hoard", Val{N: 1000}); !errors.Is(err, ErrMemoryLimit) {
+		t.Fatalf("hoard: got %v, want ErrMemoryLimit", err)
+	}
+	for _, name := range []string{"struct", "array"} {
+		_, err := callExport(t, inst, name, Val{N: 0})
+		var trap *Trap
+		if !errors.As(err, &trap) || trap.Code != TrapDivByZero {
+			t.Errorf("%s: got %v, want the operand's divide by zero", name, err)
+		}
+	}
+}
