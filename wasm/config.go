@@ -90,17 +90,19 @@ type runtimeConfig struct {
 var defaultRuntimeConfig = &runtimeConfig{features: api.CoreFeaturesAll, debugInfo: true}
 
 // NewRuntimeConfig returns the default configuration, which runs modules in
-// the fastest engine there is for the platform: today, the interpreter.
+// the interpreter. Native code is opt-in: see NewRuntimeConfigCompiler.
 func NewRuntimeConfig() RuntimeConfig { return defaultRuntimeConfig.clone() }
 
 // NewRuntimeConfigInterpreter returns a configuration that runs modules in
 // the interpreter.
 func NewRuntimeConfigInterpreter() RuntimeConfig { return defaultRuntimeConfig.clone() }
 
-// NewRuntimeConfigCompiler returns a configuration that compiles modules to
-// native code. Until the engine has a compiler for WebAssembly, it runs them
-// in the interpreter, as NewRuntimeConfigInterpreter's does, on every
-// platform.
+// NewRuntimeConfigCompiler returns a configuration that compiles a module's
+// functions to native code once each has been called a few times, in a
+// build with the quickjs_jit tag on a platform the compiler supports (amd64
+// on Linux and Windows). Elsewhere, and for a function the compiler does not
+// handle, the interpreter runs the code, as NewRuntimeConfigInterpreter's
+// does.
 func NewRuntimeConfigCompiler() RuntimeConfig {
 	c := defaultRuntimeConfig.clone()
 	c.compiler = true
@@ -179,6 +181,9 @@ func NewCompilationCache() CompilationCache { return &cache{entries: map[cacheKe
 type cacheKey struct {
 	sum          [sha256.Size]byte
 	mem32, mem64 uint64
+	// compiler keeps code a compiler configuration compiles to native code
+	// apart from the interpreter's.
+	compiler bool
 }
 
 type cache struct {

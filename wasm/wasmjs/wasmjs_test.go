@@ -12,6 +12,7 @@ import (
 	"time"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
+	"github.com/go-quickjs/go-quickjs/wasm/internal/engine"
 	"github.com/go-quickjs/go-quickjs/wasm/wasmjs"
 )
 
@@ -234,5 +235,28 @@ func TestPromisingSuspends(t *testing.T) {
 		function setTimeoutish(r) { let n = 20; (function tick() { n-- ? queueMicrotask(tick) : r() })() }`)
 	if want := "11,21,31 g0,f1,g1,f2,g2,f3,returned,g10,g20,g30 true 131072"; got != want {
 		t.Fatalf("got  %s\nwant %s", got, want)
+	}
+}
+
+// TestJITRuntimeCompilesWasm checks that a runtime made WithJIT runs its
+// WebAssembly natively too, where the wasm JIT runs.
+func TestJITRuntimeCompilesWasm(t *testing.T) {
+	if !engine.JITAvailable() {
+		t.Skip("no native code in this build")
+	}
+	rt := newRuntime(t, quickjs.WithJIT())
+	before := engine.ReadJITStats().Compiled
+	_, err := rt.Eval(`
+		const bytes = new Uint8Array([0,97,115,109,1,0,0,0,1,6,1,96,1,127,1,127,3,2,1,0,7,7,1,3,105,110,99,0,0,10,9,1,7,0,32,0,65,1,106,11]);
+		const inc = new WebAssembly.Instance(new WebAssembly.Module(bytes)).exports.inc;
+		let n = 0;
+		for (let i = 0; i < 100; i++) n = inc(n);
+		if (n !== 100) throw new Error("inc gave " + n);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if engine.ReadJITStats().Compiled == before {
+		t.Fatal("no function was compiled to native code")
 	}
 }

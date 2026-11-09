@@ -54,6 +54,10 @@ var (
 	// length bytes of mem, memory owner keeps that never moves; growable up
 	// to max bytes by grow if max >= 0.
 	HostSharedArrayBuffer func(r *Runtime, mem []byte, length int, owner any, max int64, grow func(n int) error) Value
+	// HostJITEnabled reports whether the runtime runs native code it
+	// compiles (WithJIT), or is nil in a build without a JIT, which never
+	// does.
+	HostJITEnabled func(r *Runtime) bool
 	// HostDefineLazyGlobal defines the global name, made by build the first
 	// time it is read.
 	HostDefineLazyGlobal func(r *Runtime, name string, build func(*Runtime) *Object)

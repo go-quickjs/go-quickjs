@@ -158,7 +158,7 @@ func (r *runtime) CompileModule(ctx context.Context, binary []byte) (CompiledMod
 	mem32, mem64 := r.cfg.memoryLimits()
 	var key cacheKey
 	if r.cfg.cache != nil {
-		key = cacheKey{sum: sha256.Sum256(binary), mem32: mem32, mem64: mem64}
+		key = cacheKey{sum: sha256.Sum256(binary), mem32: mem32, mem64: mem64, compiler: r.cfg.compiler}
 		if cc := r.cfg.cache.get(key); cc != nil {
 			return &compiledModule{r: r, code: cc, custom: r.cfg.customSections}, nil
 		}
@@ -179,6 +179,9 @@ func (r *runtime) CompileModule(ctx context.Context, binary []byte) (CompiledMod
 	run := *m
 	run.HasStart = false
 	cc := &compiledCode{m: &run, code: engine.NewCode(&run), start: m.Start, hasStart: m.HasStart}
+	if r.cfg.compiler {
+		cc.code.EnableJIT(engine.DefaultJITThreshold)
+	}
 	if r.cfg.cache != nil {
 		cc = r.cfg.cache.put(key, cc)
 	}

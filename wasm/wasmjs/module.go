@@ -131,6 +131,11 @@ func (a *api) compile(t thrower, b []byte, ci compileImports, async bool) (*modu
 		}
 	}
 	md.code = engine.NewCode(m)
+	// A runtime that runs its JavaScript natively runs its WebAssembly
+	// natively too.
+	if vm.HostJITEnabled != nil && vm.HostJITEnabled(a.rt) {
+		md.code.EnableJIT(engine.DefaultJITThreshold)
+	}
 	md.resolveBuiltins()
 	return md, nil
 }
