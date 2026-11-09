@@ -443,6 +443,14 @@ func (r *Runtime) jitPolySeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 				e.polyReopt = true
 				return
 			}
+		} else if c.shape != nil && c.shape != noShape && c.shape == recv.Object().shape && r.proto.str != nil && r.proto.str.findOwn(f.cl.names[in.A]) >= 0 {
+			// So too where the interpreter filled the cache between the
+			// compile and this exit, with the receiver's shape: the code
+			// still takes the read for a string's, and had left at every
+			// read -- [i, 1].at(1), the interpreter running the rest of
+			// each iteration -- the exit learning nothing.
+			e.polyReopt = true
+			return
 		}
 	}
 	if in.Op == bytecode.OpGetProp {
