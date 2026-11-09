@@ -64,6 +64,23 @@ concurrently.
   case's registers: what the interpreter can do without is a mark on an
   instruction it has (`bytecode.AddOwned`), and what it cannot, an operand
   of one that calls out of line (`bytecode.StrFreezeA`).
+- The layout lock keeps the hot code where it measured best whatever a
+  change moves around it: generated pads, dead code and data, put the
+  anchors of `internal/vm/layoutlock.txt` -- the built-ins, the tree's
+  builder and slow paths, `executeAt`, the call path, `runTree`,
+  `callTree`, the JIT's leaf calls, the tree's closures and its generic
+  nodes, the DataView leaves, the method values, and the Go runtime's
+  `mheap_`, `writeBarrier` and `gcController` -- at fixed offsets modulo
+  4 KB and 64 bytes in a `v8bench` build. After a change to package
+  vm, run `go generate ./internal/vm` (or `go run ./internal/cmd/layoutpad`)
+  and commit the pads; `TestLayoutLock` (internal/vm/layoutlock_test.go,
+  skipped under `-short` and with another toolchain than the targets')
+  fails until then. What the lock cannot hold -- code between two of its
+  positions against each other, generics added among others, closures
+  against each other, read-only data -- docs/optimizing.md ("The layout
+  lock") lists, with how to add an anchor or a position for code that needs
+  one. A pad only grows, so a change that moves an anchor back costs up to
+  4 KB of pad.
 - The small functions the hot paths call are worth what the inliner makes
   of them: Go inlines a function of cost 80 or less, and a change that
   grows one past it -- or grows what it inlines -- turns a few instructions
@@ -141,6 +158,12 @@ Do not manually edit generated files or their binary companions:
   the package's `zzjit_*.go` files only. After changing a method of
   `jitFeedback`, run `go generate ./internal/vm`; `TestSnapshotGenerated`
   fails while either file is out of date.
+- `internal/vm/*_layoutpad.go` and `internal/vm/layoutpad_*.go`, the layout
+  lock's pads and the constants that size them for each configuration,
+  written by `internal/cmd/layoutpad` from `layoutlock.txt`'s targets.
+  `go generate ./internal/vm` runs it last, after the generators above,
+  since it measures what they write; `TestLayoutLock` fails while an anchor
+  is off its target.
 
 go-intl's data is generated in go-intl, and changes there; a new go-intl is
 taken with `go get` and `go mod tidy`, never by copying its files here.
@@ -203,6 +226,12 @@ compare runs. Before timing a change that touches few functions,
 `compilediff native` says which compiles changed, and a benchmark whose code
 is the same need not be timed. A branch whose code is final goes to CI before
 it is timed, so that the two run at once.
+
+Time a change to package vm with its layout lock regenerated
+(`go generate ./internal/vm`), so that it is compared at the base's layout
+rather than at wherever it moved the hot code. The placements tool builds as
+the lock measures, with `CGO_ENABLED=0` and `-buildvcs=false`, whose data
+does not move with a tree's changes; build both sides with the same tool.
 
 For concurrency or shared-cache changes:
 

@@ -3757,6 +3757,25 @@ was ruled out in the commits and in [optimizing.md](optimizing.md))
 
 **Measurement and tooling**
 
+- The layout lock (2026-11-09, docs/optimizing.md "The layout lock"): pads
+  put fourteen anchors of package vm and the runtime's `mheap_`,
+  `writeBarrier` and `gcController` at `db306c0e`'s addresses modulo 4 KB
+  and 64 bytes. Over four placements, micro-benchmarks, the locked
+  `ce98c3cf` against `db306c0e`: 0.990 by the geometric mean plain, 0.999
+  with the JIT, none 3% slower at every placement; against `ce98c3cf`
+  itself 1.001 and 1.000, `upvalue_string_append` -8.2%, `escape_rare`
+  -5.3%, `append_pair_read` -7.2%, `object_literal_fixed` -6.1%, with the
+  JIT `dataview_write` -8.4%. Left: `string_upper` +9.3% against
+  `ce98c3cf` plain (level with `db306c0e`, -0.0%, its hot code at
+  `db306c0e`'s addresses: `ce98c3cf`'s layout suited it), and
+  `array_push_varying` +6.3% with the JIT (-2.8% against `db306c0e`);
+  `typed_u8c_reduce` with the JIT +2.1% and +5.1% against `ce98c3cf` at
+  half the placements, -3.4% and -2.4% against `db306c0e`, not recovered
+  by the lock and not slower than the base. Not pinned: the generic groups
+  no lever reaches (`setRoot`..`firstRoot`, `newPolyObject`, `appendGrown`,
+  the constructors' `chargeChild`), closures against each other, the
+  read-only data. The suites were not compared.
+
 - Placements varying read-only data: two builds of the same code, their
   type descriptors 32 bytes apart, take 211 and 192 ms on
   `string_template` (2026-11-04).

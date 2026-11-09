@@ -62,9 +62,13 @@ when to use which and what their results mean.
 
 ## Reading a slower test
 
-Go down this list in order. The first five are about the code, the rest
-about where it and its data are.
+Go down this list in order. After the layout lock, the first five are
+about the code, the rest about where it and its data are.
 
+- **Is the layout lock current?** A change compared without its pads
+  regenerated (`go generate ./internal/vm`, see "The layout lock" below)
+  is compared at wherever it moved the hot code. With the lock current,
+  what is left of the list below is what the lock does not pin.
 - **Is it the code?** The profile says where the extra time is. If every
   function of the test got uniformly slower, suspect placement; if one
   did, read it.
@@ -167,6 +171,98 @@ about where it and its data are.
   that restores them.
 - **When nothing moves a gap**, list what was ruled out, with numbers, and
   say so. It is not layout until an experiment makes it level.
+
+## The layout lock
+
+Most of the "slower at every placement" findings above were where the
+linker put code and data, not the code. The layout lock takes that out of
+a comparison: generated padding, dead code and data, puts package vm's hot
+code at fixed addresses modulo 4 KB (the op cache's sets) and the Go
+runtime's hot variables at fixed offsets in their cache lines, whatever a
+change does around them. `internal/vm/layoutlock.txt` names each anchor
+and its target for each configuration -- windows/amd64 and linux/amd64,
+plain and with the JIT, for the toolchain the targets were measured with
+-- and `internal/cmd/layoutpad`, which `go generate ./internal/vm` runs,
+builds `internal/cmd/v8bench` as the targets were measured and sizes the
+pads until every anchor is at its target. `TestLayoutLock` fails when one
+has drifted.
+
+What it pins, and how. Each lever is a constant of
+`layoutpad_GOOS_GOARCH.go` or `layoutpad_jit_GOOS_GOARCH.go`; every pad is
+byte stores, 7 bytes of code each, so that it fills any whole number of
+32-byte slots.
+
+| Lever | The pad | Moves | Pins |
+|---|---|---|---|
+| A D R V B S T J Z | `layoutPadX`, a function in a file sorted where the gap opens | every function after it in file order, then the closures and the generics | `joinSize` (the built-ins), `descriptorObject` (`define.go` to the tree's builder), `buildTreeSkipping` (the tree's builder and slow paths, `arithSlow`), `executeAt`, `callObject`, `runTree`, `callTree`, `logicalJumps` or with the JIT `jitLeafGo`, and the closures at `binaryNode.func1` |
+| GV | a generic `layoutPadV` calls | the generics plain functions meet first, from `vm.go` back | `rmwStmtHook` and the tree's generic nodes after it: `strAppend`, `upvalueAdd`, `litNodeOf`, switch, typeof, the regexp leaves |
+| MA MV MS | a generic that a method at the position calls | the generics methods meet first, from that file back | the method values (`upvalueAdd.node-fm` ...), `dataViewLeaves` and the DataView leaves, `polyReread` and object creation's |
+| CZ | a closure in a generic the last file calls | the closures of generics | `strAppendNode.func1` and the generic tree nodes' closures |
+| DH DW DG | 8-byte pointer variables, 8- and 16-byte variables without | the zeroed data after them, which the linker sorts by size | `runtime.mheap_`, `runtime.writeBarrier`, `runtime.gcController` |
+
+What each lever cannot move:
+
+- **Function pads** move a whole range of files: between two positions the
+  code keeps its own layout, and a change inside a range moves what follows
+  it there. A position is a file name sorted where the gap must open
+  (`defg_layoutpad.go` between `deferred.go` and `define.go`), and every one
+  costs its pad. The built-ins before `define.go` are one range, pinned at
+  its start only.
+- **Closures** come after every function, in the compiler's order: the
+  named functions' closures roughly in file order, then the init
+  functions' in descending init order, then a group in reverse file order.
+  The Z pad moves the block whole, as the placements do; closures added
+  before `binaryNode.func1` are absorbed, but closures against each other
+  are not pinned.
+- **Generics** come last, by when Go first instantiates them: it reads the
+  bodies of a package's functions last first, then its methods', and
+  instantiates a generic where a body first meets it, then what that
+  generic's body meets. A pad a file's function calls is laid out between
+  the generics the files after it meet first and those of the files before
+  it, so the G and M levers pin a group at a time. A generic added inside a
+  group moves what follows it there (`sortIndexed`, `densify` and
+  `spreadShaped` in the round the lock was made for), and the generics
+  package-level variables' initializers or other types' methods meet first
+  are groups no lever reaches (shape budgets' `setRoot` and `firstRoot`,
+  `newPolyObject`, `appendGrown`, the constructors' `chargeChild`).
+- **Data**: the levers place the zeroed data. The initialized data and the
+  read-only data, among it the type descriptors `mallocgc` reads, are not
+  pinned. A build's data depends on its build information as well -- VCS
+  stamping, which a tree with changes makes longer, and cgo's settings --
+  so the targets are of `CGO_ENABLED=0 go build -buildvcs=false` builds,
+  and the placements tool builds so too. Built otherwise, the code is where
+  the lock puts it and the data up to 32 bytes off.
+- **Other packages and programs.** The lock pins package vm against the
+  runtime in `v8bench`. The packages before vm -- the regular expression
+  matcher, go-intl, the JIT's compiler -- are not pinned, and in another
+  program (`qjs`, an embedder's) vm starts elsewhere and only its layout
+  against itself holds.
+- **Native code**, which the JIT lays out at run time, is not affected; its
+  placements are the JIT's own (`V8BENCH_JITPAD`, `V8BENCH_JITLINE`).
+- **Another toolchain or platform** lays the runtime out anew: the targets
+  are one Go release's, the tool refuses another (and the test skips), and
+  other platforms build no pads (`layoutpad_other.go`). New targets are
+  recorded with `layoutpad -record -targets FILE` at the base chosen as the
+  measured-best layout, the tool built beforehand.
+
+The pads are never called and their variables never read: one init calls
+them behind a variable that is never true, which keeps the linker from
+dropping them, and every variable is the same size whatever the levers are
+but the data levers' own. They cost their size and only grow: an anchor a
+change moves back by 32 bytes takes a pad 4,064 bytes longer, and a pad's
+own function moves what follows it, so a position whose target is where its
+code was takes a pad of 4 KB. The lock as made, against `db306c0e`'s
+layout, is 49 KB of pads, 60 KB of binary.
+
+The lock and the placements: a placement build adds its own pads to the
+locked tree and so varies what it varies around the locked layout, both
+labels by the same amounts as long as both are locked or one is the base
+the targets were recorded at.
+
+When a change lands, run `go generate ./internal/vm`. A change that adds
+hot code where no lever reaches it should add a position or an anchor
+(`layoutlock.txt`), its target recorded at the base it is compared with.
+How the lock was made and measured: `docs/performance-plan.md`.
 
 ## Builds and the machine
 
