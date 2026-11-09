@@ -1,0 +1,87 @@
+# The layout lock's targets: where package vm's hot code and the Go
+# runtime's hot data must be in a build of internal/cmd/v8bench, for each
+# configuration. See internal/cmd/layoutpad, which reads this file and
+# writes the pads (go generate ./internal/vm), and docs/optimizing.md.
+#
+#   anchor LEVER TARGET SYMBOL
+#
+# puts SYMBOL at TARGET modulo 4,096 (code) or 64 (data, the levers DH, DW
+# and DG) by the lever's pad. The targets are the layout at db306c0e, before
+# the slowdowns of the rounds after it.
+toolchain go1.27.3
+
+config windows/amd64 plain
+anchor A  0x00880 github.com/go-quickjs/go-quickjs/internal/vm.joinSize
+anchor D  0x00680 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
+anchor R  0x008a0 github.com/go-quickjs/go-quickjs/internal/vm.buildTreeSkipping
+anchor V  0x00580 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).executeAt
+anchor B  0x006e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callObject
+anchor S  0x00e20 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runTree
+anchor T  0x00120 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callTree
+anchor J  0x00d80 github.com/go-quickjs/go-quickjs/internal/vm.logicalJumps
+anchor Z  0x00b60 github.com/go-quickjs/go-quickjs/internal/vm.binaryNode.func1
+anchor CZ 0x00b60 github.com/go-quickjs/go-quickjs/internal/vm.strAppendNode[go.shape.struct {}].func1
+anchor GV 0x007a0 github.com/go-quickjs/go-quickjs/internal/vm.rmwStmtHook[go.shape.struct {}]
+anchor MS 0x00fe0 github.com/go-quickjs/go-quickjs/internal/vm.polyReread[go.shape.struct {}]
+anchor MV 0x00ba0 github.com/go-quickjs/go-quickjs/internal/vm.dataViewLeaves[go.shape.struct {}]
+anchor MA 0x00c20 github.com/go-quickjs/go-quickjs/internal/vm.(*upvalueAdd[struct {}]).node-fm
+anchor DH 0x000 runtime.mheap_
+anchor DW 0x020 runtime.writeBarrier
+anchor DG 0x000 runtime.gcController
+
+config windows/amd64 jit
+anchor A  0x00480 github.com/go-quickjs/go-quickjs/internal/vm.joinSize
+anchor D  0x001c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
+anchor R  0x001c0 github.com/go-quickjs/go-quickjs/internal/vm.buildTreeSkipping
+anchor V  0x00420 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).executeAt
+anchor B  0x00680 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callObject
+anchor S  0x00220 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runTree
+anchor T  0x00560 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callTree
+anchor J  0x009e0 github.com/go-quickjs/go-quickjs/internal/vm.jitLeafGo
+anchor Z  0x000e0 github.com/go-quickjs/go-quickjs/internal/vm.binaryNode.func1
+anchor CZ 0x00e20 github.com/go-quickjs/go-quickjs/internal/vm.strAppendNode[go.shape.struct {}].func1
+anchor GV 0x00f60 github.com/go-quickjs/go-quickjs/internal/vm.rmwStmtHook[go.shape.struct {}]
+anchor MS 0x00320 github.com/go-quickjs/go-quickjs/internal/vm.polyReread[go.shape.struct {}]
+anchor MV 0x00160 github.com/go-quickjs/go-quickjs/internal/vm.dataViewLeaves[go.shape.struct {}]
+anchor MA 0x00260 github.com/go-quickjs/go-quickjs/internal/vm.(*upvalueAdd[struct {}]).node-fm
+anchor DH 0x000 runtime.mheap_
+anchor DW 0x010 runtime.writeBarrier
+anchor DG 0x020 runtime.gcController
+
+config linux/amd64 plain
+anchor A  0x00b00 github.com/go-quickjs/go-quickjs/internal/vm.joinSize
+anchor D  0x008c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
+anchor R  0x00ae0 github.com/go-quickjs/go-quickjs/internal/vm.buildTreeSkipping
+anchor V  0x007c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).executeAt
+anchor B  0x00920 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callObject
+anchor S  0x00060 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runTree
+anchor T  0x00360 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callTree
+anchor J  0x00fc0 github.com/go-quickjs/go-quickjs/internal/vm.logicalJumps
+anchor Z  0x00da0 github.com/go-quickjs/go-quickjs/internal/vm.binaryNode.func1
+anchor CZ 0x00da0 github.com/go-quickjs/go-quickjs/internal/vm.strAppendNode[go.shape.struct {}].func1
+anchor GV 0x00a00 github.com/go-quickjs/go-quickjs/internal/vm.rmwStmtHook[go.shape.struct {}]
+anchor MS 0x002a0 github.com/go-quickjs/go-quickjs/internal/vm.polyReread[go.shape.struct {}]
+anchor MV 0x00ea0 github.com/go-quickjs/go-quickjs/internal/vm.dataViewLeaves[go.shape.struct {}]
+anchor MA 0x00f20 github.com/go-quickjs/go-quickjs/internal/vm.(*upvalueAdd[struct {}]).node-fm
+anchor DH 0x000 runtime.mheap_
+anchor DW 0x030 runtime.writeBarrier
+anchor DG 0x020 runtime.gcController
+
+config linux/amd64 jit
+anchor A  0x00380 github.com/go-quickjs/go-quickjs/internal/vm.joinSize
+anchor D  0x00080 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descriptorObject
+anchor R  0x00080 github.com/go-quickjs/go-quickjs/internal/vm.buildTreeSkipping
+anchor V  0x002e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).executeAt
+anchor B  0x00540 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callObject
+anchor S  0x000e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runTree
+anchor T  0x00420 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callTree
+anchor J  0x008a0 github.com/go-quickjs/go-quickjs/internal/vm.jitLeafGo
+anchor Z  0x00fa0 github.com/go-quickjs/go-quickjs/internal/vm.binaryNode.func1
+anchor CZ 0x00cc0 github.com/go-quickjs/go-quickjs/internal/vm.strAppendNode[go.shape.struct {}].func1
+anchor GV 0x00e00 github.com/go-quickjs/go-quickjs/internal/vm.rmwStmtHook[go.shape.struct {}]
+anchor MS 0x00220 github.com/go-quickjs/go-quickjs/internal/vm.polyReread[go.shape.struct {}]
+anchor MV 0x000a0 github.com/go-quickjs/go-quickjs/internal/vm.dataViewLeaves[go.shape.struct {}]
+anchor MA 0x001a0 github.com/go-quickjs/go-quickjs/internal/vm.(*upvalueAdd[struct {}]).node-fm
+anchor DH 0x000 runtime.mheap_
+anchor DW 0x010 runtime.writeBarrier
+anchor DG 0x000 runtime.gcController
