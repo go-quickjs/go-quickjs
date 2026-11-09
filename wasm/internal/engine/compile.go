@@ -68,9 +68,13 @@ type compiled struct {
 	nslots, rslots int
 	// nlocals and rlocals are the numeric and reference slots before the
 	// operand stack's; refs says the body holds a reference anywhere, and
-	// so reads or writes its reference slots.
+	// so reads or writes its reference slots. Native code keeps the
+	// exception a legacy try's catch caught in reference slot caught plus
+	// the try's depth among the legacy trys around it, slots past the
+	// interpreter's own.
 	nlocals, rlocals int
 	refs             bool
+	caught           int
 	body             []stmt
 	// epi moves the results from their stack positions to where the caller
 	// finds them, after the body ends or branches to the function's label.
@@ -201,6 +205,8 @@ type compiler struct {
 	epi   []stmt
 	// refs says a reference was pushed.
 	refs bool
+	// tries is the deepest nesting of legacy try constructs.
+	tries int
 }
 
 func compileFunction(code *Code, index uint32) *compiled {
@@ -236,10 +242,11 @@ func compileFunction(code *Code, index uint32) *compiled {
 	results, _, _ := layout(sig.Results)
 	return &compiled{
 		nslots:  c.nlocals + 2*(c.maxHeight+1),
-		rslots:  c.rlocals + c.maxHeight + 1,
+		rslots:  c.rlocals + c.maxHeight + 1 + c.tries,
 		nlocals: c.nlocals,
 		rlocals: c.rlocals,
-		refs:    c.refs || c.rlocals > 0,
+		refs:    c.refs || c.rlocals > 0 || c.tries > 0,
+		caught:  c.rlocals + c.maxHeight + 1,
 		body:    fnCtl.body,
 		epi:     c.epi,
 		params:  params,

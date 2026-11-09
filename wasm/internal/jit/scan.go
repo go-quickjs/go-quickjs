@@ -23,16 +23,15 @@ func (r *Refusal) Error() string {
 
 // The reasons a function is refused.
 const (
-	RefuseSIMD       = "simd"
-	RefuseAtomics    = "atomics"
-	RefuseGC         = "gc"
-	RefuseExceptions = "exceptions"
-	RefuseAsmJS      = "asmjs"
-	RefuseF16        = "f16"
-	RefuseCPU        = "cpu"
-	RefuseFrame      = "frame"
-	RefuseSize       = "size"
-	RefuseOther      = "other"
+	RefuseSIMD    = "simd"
+	RefuseAtomics = "atomics"
+	RefuseGC      = "gc"
+	RefuseAsmJS   = "asmjs"
+	RefuseF16     = "f16"
+	RefuseCPU     = "cpu"
+	RefuseFrame   = "frame"
+	RefuseSize    = "size"
+	RefuseOther   = "other"
 )
 
 func refuse(reason, format string, args ...any) {
@@ -117,12 +116,9 @@ func scan(m *module.Module, fn uint32, feat Features) (locals []module.ValueType
 			refuse(RefuseAsmJS, "%s", op.Name())
 		}
 		switch op {
-		case opcode.Try, opcode.Catch, opcode.CatchAll, opcode.Throw, opcode.Rethrow,
-			opcode.TryTable, opcode.ThrowRef, opcode.Delegate:
-			refuse(RefuseExceptions, "%s", op.Name())
 		case opcode.F32LoadMemF16, opcode.F32StoreMemF16:
 			refuse(RefuseF16, "%s", op.Name())
-		case opcode.Block, opcode.Loop, opcode.If:
+		case opcode.Block, opcode.Loop, opcode.If, opcode.Try:
 			params, results := r.blockType(m)
 			checkTypes(params, op.Name()+" parameter")
 			checkTypes(results, op.Name()+" result")
@@ -131,7 +127,22 @@ func scan(m *module.Module, fn uint32, feat Features) (locals []module.ValueType
 				depth++
 			}
 			continue
-		case opcode.End:
+		case opcode.TryTable:
+			params, results := r.blockType(m)
+			checkTypes(params, op.Name()+" parameter")
+			checkTypes(results, op.Name()+" result")
+			for n := r.u32(); n > 0; n-- {
+				if kind := r.byte(); kind < 2 {
+					r.u32()
+				}
+				r.u32()
+			}
+			loops = append(loops, false)
+			continue
+		case opcode.End, opcode.Delegate:
+			if op == opcode.Delegate {
+				r.u32()
+			}
 			if loops[len(loops)-1] {
 				depth--
 			}

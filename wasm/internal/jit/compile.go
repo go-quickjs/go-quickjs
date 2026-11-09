@@ -52,6 +52,10 @@ type Request struct {
 	WriteBarrier, StoreRef uint64
 	// Layout is where the engine's objects keep what native code reads.
 	Layout *Layout
+	// CaughtSlot is the first of the reference slots the engine's frame
+	// has past its own for the exceptions legacy catches caught, one for
+	// each depth of legacy trys.
+	CaughtSlot int
 }
 
 // Layout is where the engine's objects keep what native code reads of
@@ -83,6 +87,9 @@ type Code struct {
 	// callers do, and ReturnStub the code that returns to the engine,
 	// which the engine gives as the return address of the frame it enters.
 	GoEntry, Entry, ReturnStub int
+	// Handlers are the try_tables' catch clauses, for the engine to find
+	// an exception's landing pad by.
+	Handlers []Handler
 	// Loops are the entries at the loops' heads, by the offset of each
 	// loop instruction in the module: entered from Go as GoEntry is, with
 	// the frame as it is at the loop's head -- every operand stack entry in
@@ -138,6 +145,15 @@ type ctl struct {
 	// poll is a loop's poll exit, made with its first back edge.
 	poll    asmLabel
 	hasPoll bool
+	// start is a try_table's or a legacy try's body's first instruction's
+	// offset, index its depth in the function's constructs, clauses its
+	// catch clauses; tryEnd is a legacy try's first catch's offset, which
+	// hasCatch says it has.
+	start    uint32
+	index    int
+	clauses  []catchCtl
+	tryEnd   uint32
+	hasCatch bool
 }
 
 func (t *ctl) labelTypes() []module.ValueType {
@@ -180,6 +196,8 @@ type compiler struct {
 	// past the frame, adv bytes.
 	refs bool
 	adv  int32
+	// handlers are the try_tables ended so far.
+	handlers []handlerCtl
 	// wb is the function's barrier routine, made with its first store of a
 	// pointer word (wbRoutine).
 	wb    asmLabel
@@ -259,7 +277,7 @@ func Compile(req *Request) (code *Code, err error) {
 	if req.MaxCodeBytes > 0 && len(out) > req.MaxCodeBytes {
 		refuse(RefuseSize, "%d bytes of code", len(out))
 	}
-	code = &Code{Bytes: out, GoEntry: a.Offset(goEntry), Entry: a.Offset(entry), ReturnStub: retStub}
+	code = &Code{Bytes: out, GoEntry: a.Offset(goEntry), Entry: a.Offset(entry), ReturnStub: retStub, Handlers: c.handlersOut()}
 	if len(c.loops) > 0 {
 		code.Loops = make(map[uint32]int, len(c.loops))
 		for at, l := range c.loops {
@@ -572,7 +590,9 @@ func (c *compiler) instr() {
 		params, results := c.r.blockType(c.m)
 		t := c.enter(op, params, results)
 		a.Bind(t.label)
-		c.loopEntry(at, t.label)
+		if !c.inTry() {
+			c.loopEntry(at, t.label)
+		}
 	case opcode.If:
 		params, results := c.r.blockType(c.m)
 		cond := c.condition()
@@ -582,7 +602,32 @@ func (c *compiler) instr() {
 	case opcode.Else:
 		c.elseBegin()
 	case opcode.End:
+		switch c.top().op {
+		case opcode.TryTable:
+			c.closeTry(at)
+		case opcode.Try:
+			c.closeLegacy(at)
+		}
 		c.end()
+	case opcode.TryTable:
+		c.tryTable()
+	case opcode.Try:
+		c.legacyTry()
+	case opcode.Catch:
+		c.legacyCatch(at, c.r.u32(), false)
+	case opcode.CatchAll:
+		c.legacyCatch(at, 0, true)
+	case opcode.Delegate:
+		c.delegate(at, int(c.r.u32()))
+	case opcode.Rethrow:
+		c.rethrow(at, int(c.r.u32()))
+	case opcode.Throw, opcode.ThrowRef:
+		var tag uint64
+		if op == opcode.Throw {
+			tag = uint64(c.r.u32())
+		}
+		c.goOp(op, at, tag, 0)
+		c.markDead()
 	case opcode.Br:
 		c.branch(int(c.r.u32()))
 		c.markDead()
@@ -754,6 +799,10 @@ func (c *compiler) goOp(op opcode.Opcode, at uint32, x, y uint64) {
 		nargs = 4
 	case opcode.ArrayCopy:
 		nargs = 5
+	case opcode.Throw:
+		nargs = len(c.m.TagType(uint32(x)).Params)
+	case opcode.ThrowRef:
+		nargs = 1
 	}
 	c.spillAll()
 	base := len(c.stack) - nargs

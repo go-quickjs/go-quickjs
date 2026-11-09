@@ -149,6 +149,13 @@ func (c *compiler) refOps(op opcode.Opcode, at uint32) bool {
 		params, results := c.r.blockType(c.m)
 		t := c.enter(op, params, results)
 		t.index = len(c.ctrl) - 1
+		n := 0
+		for _, t := range c.ctrl {
+			if t.op == opcode.Try {
+				n++
+			}
+		}
+		c.tries = max(c.tries, n)
 	case opcode.Catch:
 		c.legacyCatch(c.r.u32(), false)
 	case opcode.CatchAll:

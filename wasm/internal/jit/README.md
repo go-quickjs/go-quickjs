@@ -36,6 +36,7 @@ This package compiles; the engine places, enters and handles exits:
 | `gc.go`, `gc_GOARCH.go` | the GC instructions: fields, elements, i31s, tests and casts |
 | `engine/jit_on.go` | tiering, placement, entry, the exits' handling |
 | `engine/jit_gc.go` | the GC instructions Go runs for native code |
+| `exn.go`, `engine/jit_exn.go` | exceptions: the handlers' records, and Go's search of the native frames for the clause that takes one |
 
 ## Tiers
 
@@ -100,9 +101,10 @@ for the frame comes back as `sigTail`, which `run` and `tailChain` make as
 the interpreter's own. A trap's frames, the polls and the depth are those
 of any level.
 
-A function the compiler refuses -- one with exception handlers among them,
-which the interpreter runs under a recover of their own -- is never entered
-at a loop. The engine narrows what enters a frame from the host -- the
+A function the compiler refuses is never entered at a loop, nor is a loop
+in the body of a try_table or a legacy try, or in a legacy catch: the
+interpreter runs those under a recover of their own, which would outlive
+the construct while native code ran the function on to its return. The engine narrows what enters a frame from the host -- the
 arguments of an `Invoke`, a host function's results -- to the halves native
 code keeps clear, which the interpreter alone did not need: a value left in
 a slot under a loop is read by native code after the loop's entry.
@@ -280,7 +282,7 @@ is in its slot.
 | `ExitPoll` | `pollContext`, the context's cancellation |
 | `ExitCallRef` | call_ref: finds the function, trapping on null, and calls it |
 | `ExitTailRef` | return_call_ref, as `ExitTailIndirect` |
-| `ExitOp` | memory.size, memory.grow, memory.init, memory.copy, memory.fill, data.drop, table.size, table.grow, table.fill, table.init, table.copy, elem.drop, struct.new, struct.new_default, the array.new instructions, array.fill, array.copy, array.init_data, array.init_elem, memory.atomic.wait32, memory.atomic.wait64, memory.atomic.notify, on the frame's slots; an atomic instruction's offset is the 64-bit `Arg2` |
+| `ExitOp` | memory.size, memory.grow, memory.init, memory.copy, memory.fill, data.drop, table.size, table.grow, table.fill, table.init, table.copy, elem.drop, struct.new, struct.new_default, the array.new instructions, array.fill, array.copy, array.init_data, array.init_elem, throw, throw_ref, rethrow (which do not resume: see Exceptions), memory.atomic.wait32, memory.atomic.wait64, memory.atomic.notify, on the frame's slots; an atomic instruction's offset is the 64-bit `Arg2` |
 
 A trap's site stores its offset and jumps to the function's stub for the
 trap's code; there is no resumption.
@@ -463,7 +465,6 @@ A function is refused whole when it has:
 |---|---|
 | `simd` | a v128 value anywhere -- local, parameter, result, block type, callee's signature, global, a field or element read or written -- or any SIMD instruction |
 | `gc` | a GC instruction past the GC proposal's: custom descriptors, strings, ref.i31_shared |
-| `exceptions` | try_table, throw, throw_ref, and the legacy try, catch, catch_all, delegate, rethrow |
 | `atomics` | the struct and array atomic instructions |
 | `asmjs` | V8's asm.js opcodes |
 | `f16` | f32.load_f16, f32.store_f16 |
@@ -505,6 +506,40 @@ array.fill, array.copy, array.init_data and array.init_elem run in Go
 instance's budget as the interpreter's do, with the native frames'
 reference slots counted among what is live, and leave the result in its
 stack position's reference slot.
+
+## Exceptions
+
+throw, throw_ref and rethrow exit to Go (`ExitOp`), which makes the
+exception -- or takes the one an exnref holds, or a legacy catch caught --
+and throws it as the interpreter does, a Go panic. try_table and the legacy
+try compile to blocks, and to records for Go (`Handler`): the offsets of
+the body's instructions, the construct's depth among the function's
+constructs, and its catch clauses, each with its tag, where its values go
+(its label's stack positions) and a landing pad, out of line, which loads
+what a resumption loads and branches to the label -- a try_table's
+clause's target, or a legacy catch's body. A legacy try ending in a
+delegate records its target's depth instead. A function's records are in
+the order the bodies end, so that the first holding an instruction is the
+innermost construct around it.
+
+Where the Code has catch clauses, Go does the work of every exit under a
+recover (`jitExitCatching`) that takes exceptions -- thrown there or out
+of what Go called, other levels of native code and the interpreter
+included -- to the level's native frames, the innermost first: the exiting
+frame at the exit's instruction (not a tail call's, whose frame is gone),
+each caller at its call, the offset its callee's return stack entry
+records. The first handler around the offset whose clause takes the
+exception's tag wins, a delegate letting it pass the handlers of the
+constructs within its target. Go drops the frames above that one (the
+return stack's top, the context's L and R, R walked up from the frame Go
+entered), stores the exception's values in the slots of the clause's
+positions -- the exnref after them for a `_ref` clause, and in the
+reference slot of its try's depth for a legacy catch, which rethrow reads
+-- and enters the pad. An exception no frame takes goes on out of the
+level. Every entry beneath a construct and every local is in its slot at a
+call and at an exit, so a pad finds the frame as the label wants it. The
+engine's frame of a function with legacy trys has a reference slot past
+the interpreter's for each depth of them (`Request.CaughtSlot`).
 
 ## Concurrency and memory
 

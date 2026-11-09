@@ -147,32 +147,30 @@ func TestOSRLoopParamsResults(t *testing.T) {
 	}
 }
 
-// A function the JIT refuses -- here for a try_table -- stays in the
+// A function the JIT refuses -- here for a vector -- stays in the
 // interpreter, compiled once, and its loops stop asking.
 func TestOSRRefusedStaysInterpreted(t *testing.T) {
 	src := `(module
-  (tag $e (param i32))
   (func (export "f") (param $n i32) (result i32) (local $i i32) (local $acc i32)
+    (drop (v128.const i64x2 0 0))
     (block $h (result i32)
-      (try_table (catch $e $h)
-        (loop $l
-          (local.set $acc (i32.add (local.get $acc) (local.get $i)))
-          (local.set $i (i32.add (local.get $i) (i32.const 1)))
-          (br_if $l (i32.lt_s (local.get $i) (local.get $n))))
-        (throw $e (local.get $acc)))
-      (unreachable))
+      (loop $l
+        (local.set $acc (i32.add (local.get $acc) (local.get $i)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br_if $l (i32.lt_s (local.get $i) (local.get $n))))
+      (local.get $acc))
     (loop $m
       (local.set $i (i32.sub (local.get $i) (i32.const 1)))
       (br_if $m (i32.gt_s (local.get $i) (i32.const 0))))
     (i32.add (local.get $i))))`
-	before := ReadJITStats().Refused["exceptions"]
+	before := ReadJITStats().Refused["simd"]
 	for k := 0; k < 3; k++ {
 		if n := checkOSR(t, src, "f", 4950, 100); n != 0 {
 			t.Fatalf("%d calls went on natively, want 0", n)
 		}
 	}
 	// One instance a check: each asked once, in the call that ran first.
-	if got := ReadJITStats().Refused["exceptions"] - before; got != 3 {
+	if got := ReadJITStats().Refused["simd"] - before; got != 3 {
 		t.Fatalf("%d refusals, want 3", got)
 	}
 	inst := osrInstance(t, src, math.MaxInt32, 0)
@@ -181,7 +179,7 @@ func TestOSRRefusedStaysInterpreted(t *testing.T) {
 			t.Fatalf("f(100) = %v, %v", res, err)
 		}
 	}
-	if got := ReadJITStats().Refused["exceptions"] - before; got != 4 {
+	if got := ReadJITStats().Refused["simd"] - before; got != 4 {
 		t.Fatalf("%d refusals after 4 more calls, want 4: the function was asked for again", got)
 	}
 	if nativeRan(inst, "f") {

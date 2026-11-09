@@ -47,7 +47,7 @@ records a set but turns nothing off.
 | Extended constant expressions | yes | -- |
 | Multiple memories | yes | loads and stores of memory 0 only |
 | Memory64 and table64 | yes | refused for loads and stores of an i64 memory |
-| Exception handling (`exnref`), and the legacy `try` | yes | refused |
+| Exception handling (`exnref`), and the legacy `try` | yes | yes; throwing and catching through Go |
 | Typed function references | yes | yes; `call_ref` and `return_call_ref` through Go |
 | Garbage collection: structs, arrays, i31, casts | yes | yes; what allocates, and `array.fill`, `array.copy` and `array.init_*`, in Go |
 | Relaxed SIMD | yes, with the host architecture's choice for each operator | refused |
@@ -453,7 +453,10 @@ kept only where the collector sees
 them, in the frame's reference slots, never in a register across a return
 to Go; a store of a reference while the collector marks goes through the
 Go runtime's write barrier, as compiled Go's does, without leaving native
-code. Loads and stores of every memory, i64 ones included, and the
+code. `throw`, `throw_ref` and `rethrow` return to Go, which throws, and
+an exception native code's `try_table` or legacy `try` catches, from Go or
+from native code, resumes native code at the catch's label. Loads and
+stores of every memory, i64 ones included, and the
 atomic loads, stores and read-modify-writes are native; an atomic
 read-modify-write is the processor's own locked or exclusive instruction.
 
@@ -462,13 +465,12 @@ A function is refused whole, and stays in the interpreter, when it has:
 | Reason | What |
 |---|---|
 | `simd` | a v128 value, a v128 field or element read or written, or any SIMD instruction |
-| `exceptions` | `try_table`, `throw`, `throw_ref`, or the legacy `try` and its clauses |
 | `atomics` | the struct and array atomic instructions |
 | `cpu` | on amd64, `popcnt` without POPCNT, rounding without SSE4.1 |
 | `frame`, `size` | an operand stack deeper than the interpreter's frame, or code past the JIT's size limit |
 
-With every function compiled at its first call, the spec suite compiles 5,234
-functions and refuses 1,608: 1,501 for SIMD and 107 for exceptions.
+With every function compiled at its first call, the spec suite compiles 5,341
+functions and refuses 1,501, all for SIMD.
 
 On `BenchmarkFib25` and `BenchmarkLoop1M` (`wasm/internal/engine`), the
 interpreter takes 7.2 ms and 9.7 ms and native code 0.40 ms and 0.355 ms on
@@ -736,6 +738,6 @@ WASI:
   phase (`import source m from "./m.wasm"`).
 - `postMessage` and structured clone of a `Module`, and of a shared
   `Memory`, between workers.
-- Native code for what the JIT refuses -- SIMD and exceptions -- and an
-  optimizing tier above the baseline one.
+- Native code for what the JIT refuses -- SIMD -- and an optimizing tier
+  above the baseline one.
 - `wasmbench`'s `jit` engine on arm64: the harness builds it on amd64 only.
