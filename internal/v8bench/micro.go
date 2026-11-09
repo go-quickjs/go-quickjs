@@ -31,7 +31,8 @@ import (
 // regular expressions as programs use them -- validating, tokenizing,
 // replacing, splitting, named groups, the u flag -- objects a loop carries
 // from turn to turn, and the ways keeping those out of the heap may not pay,
-// JSON's documents of every kind, parsed and written --
+// JSON's documents of every kind, parsed and written, functions that
+// forward their arguments, f.apply(this, arguments) --
 // written as its tests are. A test of
 // async functions returns a promise of its count, which the loop awaits, so
 // its time takes in the jobs it queued; every runner runs a script's jobs
@@ -193,6 +194,9 @@ var microWork = []struct {
 	{"json_parse_exponents", 2048}, {"json_parse_add", 2048}, {"json_parse_read", 2048},
 	{"json_parse_new_layout", 262144}, {"json_stringify_new_layout", 262144},
 	{"json_stringify_proto_changes", 262144}, {"json_stringify_built", 262144},
+	{"forward_call0", 1048576}, {"forward_call2", 524288}, {"forward_call6", 524288},
+	{"forward_poly", 524288}, {"forward_loop", 131072}, {"forward_construct", 524288},
+	{"forward_array", 524288},
 }
 
 // microLoop is the driver's loop: each test of __work whose name begins with

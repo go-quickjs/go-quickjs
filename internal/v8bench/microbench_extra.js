@@ -4534,3 +4534,149 @@ function json_stringify_built(n)
     global_res = r;
     return n;
 }
+
+/* forwarders, functions that hand their arguments on with
+   f.apply(this, arguments), as wrappers, deprecations and class libraries'
+   constructors do */
+function extra_fwd_target0()
+{
+    return this === undefined ? 0 : 1;
+}
+
+function extra_fwd_target2(a, b)
+{
+    return a + b;
+}
+
+function extra_fwd_target6(a, b, c, d, e, f)
+{
+    return a + b + c + d + e + f;
+}
+
+function extra_fwd0()
+{
+    return extra_fwd_target0.apply(this, arguments);
+}
+
+function extra_fwd2()
+{
+    return extra_fwd_target2.apply(this, arguments);
+}
+
+function extra_fwd6()
+{
+    return extra_fwd_target6.apply(this, arguments);
+}
+
+/* a forwarder of no argument called by a loop */
+function forward_call0(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++)
+        s += extra_fwd0();
+    global_res = s;
+    return n;
+}
+
+/* a forwarder of two arguments called by a loop */
+function forward_call2(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++)
+        s += extra_fwd2(j, 1);
+    global_res = s;
+    return n;
+}
+
+/* a forwarder of six arguments called by a loop */
+function forward_call6(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++)
+        s += extra_fwd6(j, 1, 2, 3, 4, 5);
+    global_res = s;
+    return n;
+}
+
+function extra_fwd_wrap(f)
+{
+    return function () {
+        return f.apply(this, arguments);
+    };
+}
+
+/* forwarders a factory made, each of another function, called by one
+   call: the forwarder's call and its own both meet several */
+function forward_poly(n)
+{
+    var fs = [extra_fwd_wrap(function (a, b) { return a + b; }),
+              extra_fwd_wrap(function (a, b) { return a - b; }),
+              extra_fwd_wrap(function (a, b) { return a * b; }),
+              extra_fwd_wrap(function (a, b) { return a | b; })];
+    var j, s = 0;
+    for (j = 0; j < n; j++)
+        s += fs[j & 3](j, 3);
+    global_res = s;
+    return n;
+}
+
+/* a forwarder whose own loop applies its arguments */
+function extra_fwd_loop()
+{
+    var i, s = 0;
+    for (i = 0; i < 8; i++)
+        s += extra_fwd_target2.apply(this, arguments);
+    return s;
+}
+
+function forward_loop(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++)
+        s += extra_fwd_loop(j, 2);
+    global_res = s;
+    return n * 8;
+}
+
+/* a class library's constructor, which hands its arguments to the
+   prototype's initialize */
+function extra_fwd_class()
+{
+    return function () {
+        this.initialize.apply(this, arguments);
+    };
+}
+
+var ExtraFwdPoint = extra_fwd_class();
+ExtraFwdPoint.prototype.initialize = function (x, y) {
+    this.x = x;
+    this.y = y;
+};
+
+function forward_construct(n)
+{
+    var j, p, s = 0;
+    for (j = 0; j < n; j++) {
+        p = new ExtraFwdPoint(j, 2);
+        s += p.x + p.y;
+    }
+    global_res = s;
+    return n;
+}
+
+function extra_fwd_array()
+{
+    return Array.apply(null, arguments);
+}
+
+/* Array.apply(null, arguments), the arguments made an array */
+function forward_array(n)
+{
+    var j, a, s = 0;
+    for (j = 0; j < n; j++) {
+        a = extra_fwd_array(j, 1, 2);
+        s += a.length;
+    }
+    global_res = a;
+    return n;
+}
