@@ -292,13 +292,20 @@ Calls through a table, of imports and of host functions are exits.
 
 ## Memory
 
-A load or a store of memory 0 checks the effective address -- the i32
-address, zero-extended, plus the offset, plus the access's size, computed in
-64 bits -- against the memory's size, and goes to a trap stub past it. The
-access is `[R15 + address + offset]` on amd64; on arm64 the offset is added
-to the address first, in 64 bits, and the access is `[X20 + that]`. Loads and stores of memories other
-than 0, and of 64-bit memories, are refused; the bulk instructions of any
-memory are exits.
+A load or a store checks the end of its access -- the effective address
+plus the access's size -- against the memory's size, and goes to a trap
+stub past it. For an i32 memory the effective address is the address,
+zero-extended, plus the offset, computed in 64 bits, where neither sum
+wraps. For an i64 memory the address plus the offset is computed first and
+traps where it carries out of 64 bits, as the interpreter's does; then the
+sum plus the size, which traps where it carries too. A constant address
+whose sums carry is a jump to the trap.
+
+The access is `[R15 + address + offset]` on amd64 -- the offset added to
+the address first for an i64 memory, or where it is past 2^31-1 -- and on
+arm64 the offset is added to the address first, in 64 bits, and the access
+is `[X20 + that]`. Loads and stores of memories other than 0 are refused;
+the bulk instructions of any memory are exits.
 
 ## Polls
 
@@ -375,7 +382,6 @@ A function is refused whole when it has:
 | `gc` | any GC instruction |
 | `exceptions` | try_table, throw, throw_ref, and the legacy try, catch, catch_all, delegate, rethrow |
 | `atomics` | any atomic instruction |
-| `memory64` | a load or a store of a 64-bit memory |
 | `multi-memory` | a load or a store of a memory other than 0 |
 | `asmjs` | V8's asm.js opcodes |
 | `f16` | f32.load_f16, f32.store_f16 |

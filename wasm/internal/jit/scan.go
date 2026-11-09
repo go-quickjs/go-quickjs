@@ -28,7 +28,6 @@ const (
 	RefuseGC         = "gc"
 	RefuseExceptions = "exceptions"
 	RefuseRefs       = "references"
-	RefuseMemory64   = "memory64"
 	RefuseMultiMem   = "multi-memory"
 	RefuseAsmJS      = "asmjs"
 	RefuseF16        = "f16"
@@ -174,9 +173,6 @@ func scan(m *module.Module, fn uint32, feat Features) (locals []module.ValueType
 			mem, _ := r.memarg()
 			if mem != 0 {
 				refuse(RefuseMultiMem, "%s of memory %d", op.Name(), mem)
-			}
-			if m.Memories[0].Limits.Is64 {
-				refuse(RefuseMemory64, "%s", op.Name())
 			}
 			continue
 		}

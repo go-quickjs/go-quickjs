@@ -31,6 +31,10 @@ func TestARM64WasmInteger(t *testing.T) {
 	expectA64(t, "sdiv w3, w4, w5", func(a *arm64.Asm) { a.SdivW(3, 4, 5) })
 	expectA64(t, "udiv w3, w4, w5", func(a *arm64.Asm) { a.UdivW(3, 4, 5) })
 	expectA64(t, "msub w3, w4, w5, w6", func(a *arm64.Asm) { a.MsubW(3, 4, 5, 6) })
+	expectA64(t, "adds x16, x3, #0x8", func(a *arm64.Asm) { a.AddsImm(16, 3, 8, true) })
+	expectA64(t, "adds x16, x3, #0x1", func(a *arm64.Asm) { a.AddsImm(16, 3, 1, true) })
+	expectA64(t, "mov x27, #0x2345; movk x27, #0x1, lsl #16; adds x3, x4, x27", func(a *arm64.Asm) { a.AddsImm(3, 4, 0x12345, true) })
+	expectA64(t, "adds x3, x3, x16", func(a *arm64.Asm) { a.Op(arm64.Adds, 3, 3, 16, true) })
 }
 
 // Every logical immediate of both widths: each of the architecture's

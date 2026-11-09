@@ -132,7 +132,6 @@ type compiler struct {
 	loops  map[uint32]asmLabel
 	traps  map[trapKey]asmLabel
 	trapTo map[uint64]asmLabel
-	shared bool
 }
 
 // Compile compiles function fn of a validated module, or refuses it with
@@ -153,9 +152,6 @@ func Compile(req *Request) (code *Code, err error) {
 	c.locals, c.use = scan(m, req.Func, CPU)
 	c.nlocals = max(len(c.locals), len(c.sig.Results))
 	c.chooseHomes()
-	if len(m.Memories) > 0 {
-		c.shared = m.Memories[0].Shared
-	}
 	f := &m.Functions[req.Func]
 	c.r = reader{b: m.Bytes, pc: int(f.Code.Offset)}
 	for n := c.r.u32(); n > 0; n-- {

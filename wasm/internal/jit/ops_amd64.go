@@ -2,6 +2,7 @@ package jit
 
 import (
 	"math"
+	"math/bits"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/asm/amd64"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
@@ -809,15 +810,14 @@ func (c *compiler) saturate(op opcode.Opcode) {
 	c.pushReg(t, uint8(r))
 }
 
-// memoryOp compiles a load or a store of memory 0, reporting whether op is
-// one.
+// memoryOp compiles a load or a store, reporting whether op is one.
 func (c *compiler) memoryOp(op opcode.Opcode, at uint32) bool {
 	if op < opcode.I32LoadMem || op > opcode.I64StoreMem32 {
 		return false
 	}
-	_, off := c.r.memarg()
+	mem, off := c.r.memarg()
 	if op >= opcode.I32StoreMem {
-		c.storeOp(op, off, at)
+		c.storeOp(op, mem, off, at)
 		return true
 	}
 	var size uint64
@@ -842,45 +842,47 @@ func (c *compiler) memoryOp(op opcode.Opcode, at uint32) bool {
 	default:
 		size, t = 4, i64
 	}
-	idx, disp := c.address(c.pop(), off, size, at, 0)
+	base, idx, disp := c.address(c.pop(), mem, off, size, at, 0)
 	a := c.a
 	if isFloat(t) {
 		x := c.allocX(0)
 		if t == f32 {
-			a.LoadSSIdx(x, rMem, idx, disp)
+			a.LoadSSIdx(x, base, idx, disp)
 		} else {
-			a.LoadSDIdx(x, rMem, idx, disp)
+			a.LoadSDIdx(x, base, idx, disp)
 		}
 		c.freeG(idx)
+		c.freeBase(base)
 		c.pushReg(t, uint8(x))
 		return true
 	}
 	r := idx
 	switch op {
 	case opcode.I32LoadMem, opcode.I64LoadMem32U:
-		a.LoadU32Idx(r, rMem, idx, disp)
+		a.LoadU32Idx(r, base, idx, disp)
 	case opcode.I64LoadMem:
-		a.LoadIdx(r, rMem, idx, 1, disp)
+		a.LoadIdx(r, base, idx, 1, disp)
 	case opcode.I32LoadMem8S:
-		a.LoadS8Idx(r, rMem, idx, disp, false)
+		a.LoadS8Idx(r, base, idx, disp, false)
 	case opcode.I64LoadMem8S:
-		a.LoadS8Idx(r, rMem, idx, disp, true)
+		a.LoadS8Idx(r, base, idx, disp, true)
 	case opcode.I32LoadMem8U, opcode.I64LoadMem8U:
-		a.LoadU8Idx(r, rMem, idx, disp)
+		a.LoadU8Idx(r, base, idx, disp)
 	case opcode.I32LoadMem16S:
-		a.LoadS16Idx(r, rMem, idx, disp, false)
+		a.LoadS16Idx(r, base, idx, disp, false)
 	case opcode.I64LoadMem16S:
-		a.LoadS16Idx(r, rMem, idx, disp, true)
+		a.LoadS16Idx(r, base, idx, disp, true)
 	case opcode.I32LoadMem16U, opcode.I64LoadMem16U:
-		a.LoadU16Idx(r, rMem, idx, disp)
+		a.LoadU16Idx(r, base, idx, disp)
 	case opcode.I64LoadMem32S:
-		a.LoadS32Idx(r, rMem, idx, disp)
+		a.LoadS32Idx(r, base, idx, disp)
 	}
+	c.freeBase(base)
 	c.pushReg(t, uint8(r))
 	return true
 }
 
-func (c *compiler) storeOp(op opcode.Opcode, off uint64, at uint32) {
+func (c *compiler) storeOp(op opcode.Opcode, mem uint32, off uint64, at uint32) {
 	a := c.a
 	v := c.pop()
 	addr := c.pop()
@@ -897,46 +899,64 @@ func (c *compiler) storeOp(op opcode.Opcode, off uint64, at uint32) {
 	}
 	if isFloat(v.t) {
 		x := c.intoX(v)
-		idx, disp := c.address(addr, off, size, at, 0)
+		base, idx, disp := c.address(addr, mem, off, size, at, 0)
 		if v.t == f32 {
-			a.StoreSSIdx(rMem, idx, disp, x)
+			a.StoreSSIdx(base, idx, disp, x)
 		} else {
-			a.StoreSDIdx(rMem, idx, 1, disp, x)
+			a.StoreSDIdx(base, idx, 1, disp, x)
 		}
 		c.freeX(x)
 		c.freeG(idx)
+		c.freeBase(base)
 		return
 	}
 	rv := c.intoG(v, 0)
-	idx, disp := c.address(addr, off, size, at, 1<<rv)
+	base, idx, disp := c.address(addr, mem, off, size, at, 1<<rv)
 	switch size {
 	case 1:
-		a.Store8Idx(rMem, idx, disp, rv)
+		a.Store8Idx(base, idx, disp, rv)
 	case 2:
-		a.Store16Idx(rMem, idx, disp, rv)
+		a.Store16Idx(base, idx, disp, rv)
 	case 4:
-		a.Store32Idx(rMem, idx, disp, rv)
+		a.Store32Idx(base, idx, disp, rv)
 	default:
-		a.StoreIdx(rMem, idx, 1, disp, rv)
+		a.StoreIdx(base, idx, 1, disp, rv)
 	}
 	c.freeG(rv)
 	c.freeG(idx)
+	c.freeBase(base)
 }
 
-// address checks an access of size bytes at address addr, an i32, plus
-// offset off against memory 0's size, trapping past it, and returns a
-// register of the instruction's own (not in avoid) and a displacement whose
-// sum is the effective address, to add to the memory's base.
-func (c *compiler) address(addr value, off, size uint64, at uint32, avoid uint16) (amd64.Reg, int32) {
+// freeBase gives back the register address returned a memory's base in,
+// unless it is memory 0's, which the code keeps.
+func (c *compiler) freeBase(base amd64.Reg) {
+	if base != rMem {
+		c.freeG(base)
+	}
+}
+
+// address checks an access of size bytes at address addr plus offset off
+// against memory mem's size, trapping past it, and returns the register
+// holding the memory's base, and a register of the instruction's own (not
+// in avoid) and a displacement whose sum is the effective address, to add
+// to the base. The base is R15 for memory 0.
+//
+// An i32 address is zero-extended, and the sum, computed in 64 bits, does
+// not wrap. An i64 memory's address plus the offset may: it traps where it
+// carries, as the sum plus the size does.
+func (c *compiler) address(addr value, mem uint32, off, size uint64, at uint32, avoid uint16) (base, idx amd64.Reg, disp int32) {
 	a := c.a
 	trap := c.trap(TrapMemOutOfBounds, at)
+	if c.m.Memories[mem].Limits.Is64 {
+		return c.address64(addr, mem, off, size, trap, avoid)
+	}
 	if addr.k == kConst {
 		ea := uint64(uint32(addr.c)) + off
 		a.MovImm(rTmp, ea+size)
-		c.boundsCheck(trap, avoid)
-		r := c.allocG(avoid)
+		base = c.boundsCheck(mem, trap, avoid)
+		r := c.allocG(avoid | 1<<base)
 		a.MovImm(r, ea)
-		return r, 0
+		return base, r, 0
 	}
 	r := c.intoG(addr, avoid)
 	if end := off + size; end <= math.MaxInt32 {
@@ -945,20 +965,57 @@ func (c *compiler) address(addr value, off, size uint64, at uint32, avoid uint16
 		a.MovImm(rTmp, end)
 		a.Op(amd64.Add, rTmp, r, true)
 	}
-	c.boundsCheck(trap, avoid|1<<r)
+	base = c.boundsCheck(mem, trap, avoid|1<<r)
 	if off <= math.MaxInt32 {
-		return r, int32(off)
+		return base, r, int32(off)
 	}
 	a.MovImm(rTmp, off)
 	a.Op(amd64.Add, r, rTmp, true)
-	return r, 0
+	return base, r, 0
+}
+
+// address64 is address for an i64 memory: the address plus the offset is
+// the effective address, and it and its sum with the size trap where they
+// carry out of 64 bits.
+func (c *compiler) address64(addr value, mem uint32, off, size uint64, trap amd64.Label, avoid uint16) (base, idx amd64.Reg, disp int32) {
+	a := c.a
+	if addr.k == kConst {
+		ea, carry := bits.Add64(addr.c, off, 0)
+		end, carry2 := bits.Add64(ea, size, 0)
+		if carry|carry2 != 0 {
+			// Never in bounds: the bounds check below is never reached.
+			a.Jmp(trap)
+		}
+		a.MovImm(rTmp, end)
+		base = c.boundsCheck(mem, trap, avoid)
+		r := c.allocG(avoid | 1<<base)
+		a.MovImm(r, ea)
+		return base, r, 0
+	}
+	r := c.intoG(addr, avoid)
+	if off != 0 {
+		if off <= math.MaxInt32 {
+			a.OpImm(amd64.Add, r, int32(off), true)
+		} else {
+			a.MovImm(rTmp, off)
+			a.Op(amd64.Add, r, rTmp, true)
+		}
+		a.Jcc(amd64.CondB, trap)
+	}
+	a.MovRR(rTmp, r)
+	a.OpImm(amd64.Add, rTmp, int32(size), true)
+	a.Jcc(amd64.CondB, trap)
+	base = c.boundsCheck(mem, trap, avoid|1<<r)
+	return base, r, 0
 }
 
 // boundsCheck goes to trap if the end of an access, in rTmp, is past memory
-// 0's size.
-func (c *compiler) boundsCheck(trap amd64.Label, avoid uint16) {
+// mem's size, and returns the register holding the memory's base: R15 for
+// memory 0. A shared memory's size is read where other threads store it.
+func (c *compiler) boundsCheck(mem uint32, trap amd64.Label, avoid uint16) amd64.Reg {
 	a := c.a
-	if c.shared {
+	shared := c.m.Memories[mem].Shared
+	if shared {
 		p := c.allocG(avoid)
 		a.Load(p, rCtx, offMemSizePtr)
 		a.CmpMem(rTmp, p, 0, true)
@@ -967,4 +1024,5 @@ func (c *compiler) boundsCheck(trap amd64.Label, avoid uint16) {
 		a.CmpMem(rTmp, rCtx, offMemSize, true)
 	}
 	a.Jcc(amd64.CondA, trap)
+	return rMem
 }

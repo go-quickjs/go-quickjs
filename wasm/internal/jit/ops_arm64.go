@@ -2,6 +2,7 @@ package jit
 
 import (
 	"math"
+	"math/bits"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/asm/arm64"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
@@ -668,15 +669,14 @@ func (c *compiler) saturate(op opcode.Opcode) {
 	c.pushReg(kindOf(wide), uint8(r))
 }
 
-// memoryOp compiles a load or a store of memory 0, reporting whether op is
-// one.
+// memoryOp compiles a load or a store, reporting whether op is one.
 func (c *compiler) memoryOp(op opcode.Opcode, at uint32) bool {
 	if op < opcode.I32LoadMem || op > opcode.I64StoreMem32 {
 		return false
 	}
-	_, off := c.r.memarg()
+	mem, off := c.r.memarg()
 	if op >= opcode.I32StoreMem {
-		c.storeOp(op, off, at)
+		c.storeOp(op, mem, off, at)
 		return true
 	}
 	var size uint64
@@ -701,45 +701,47 @@ func (c *compiler) memoryOp(op opcode.Opcode, at uint32) bool {
 	default:
 		size, t = 4, i64
 	}
-	idx := c.address(c.pop(), off, size, at)
+	base, idx := c.address(c.pop(), mem, off, size, at)
 	a := c.a
 	if isFloat(t) {
 		x := c.allocX(0)
 		if t == f32 {
-			a.LoadSIdx(x, rMem, idx)
+			a.LoadSIdx(x, base, idx)
 		} else {
-			a.LoadFIdx(x, rMem, idx)
+			a.LoadFIdx(x, base, idx)
 		}
 		c.freeG(idx)
+		c.freeBase(base)
 		c.pushReg(t, uint8(x))
 		return true
 	}
 	r := idx
 	switch op {
 	case opcode.I32LoadMem, opcode.I64LoadMem32U:
-		a.LoadU32Idx(r, rMem, idx)
+		a.LoadU32Idx(r, base, idx)
 	case opcode.I64LoadMem:
-		a.LoadIdx(r, rMem, idx, false)
+		a.LoadIdx(r, base, idx, false)
 	case opcode.I32LoadMem8S:
-		a.LoadS8Idx(r, rMem, idx, false)
+		a.LoadS8Idx(r, base, idx, false)
 	case opcode.I64LoadMem8S:
-		a.LoadS8Idx(r, rMem, idx, true)
+		a.LoadS8Idx(r, base, idx, true)
 	case opcode.I32LoadMem8U, opcode.I64LoadMem8U:
-		a.LoadU8Idx(r, rMem, idx)
+		a.LoadU8Idx(r, base, idx)
 	case opcode.I32LoadMem16S:
-		a.LoadS16Idx(r, rMem, idx, false)
+		a.LoadS16Idx(r, base, idx, false)
 	case opcode.I64LoadMem16S:
-		a.LoadS16Idx(r, rMem, idx, true)
+		a.LoadS16Idx(r, base, idx, true)
 	case opcode.I32LoadMem16U, opcode.I64LoadMem16U:
-		a.LoadU16Idx(r, rMem, idx)
+		a.LoadU16Idx(r, base, idx)
 	case opcode.I64LoadMem32S:
-		a.LoadS32Idx(r, rMem, idx)
+		a.LoadS32Idx(r, base, idx)
 	}
+	c.freeBase(base)
 	c.pushReg(t, uint8(r))
 	return true
 }
 
-func (c *compiler) storeOp(op opcode.Opcode, off uint64, at uint32) {
+func (c *compiler) storeOp(op opcode.Opcode, mem uint32, off uint64, at uint32) {
 	a := c.a
 	v := c.pop()
 	addr := c.pop()
@@ -756,13 +758,13 @@ func (c *compiler) storeOp(op opcode.Opcode, off uint64, at uint32) {
 	}
 	// The address first: its check takes the scratch registers, which the
 	// value may then be read into.
-	idx := c.address(addr, off, size, at)
+	base, idx := c.address(addr, mem, off, size, at)
 	if isFloat(v.t) {
 		x := c.readX(v)
 		if v.t == f32 {
-			a.StoreSIdx(rMem, idx, x)
+			a.StoreSIdx(base, idx, x)
 		} else {
-			a.StoreFIdx(rMem, idx, x)
+			a.StoreFIdx(base, idx, x)
 		}
 	} else {
 		rv := arm64.ZR
@@ -771,39 +773,83 @@ func (c *compiler) storeOp(op opcode.Opcode, off uint64, at uint32) {
 		}
 		switch size {
 		case 1:
-			a.Store8Idx(rMem, idx, rv)
+			a.Store8Idx(base, idx, rv)
 		case 2:
-			a.Store16Idx(rMem, idx, rv)
+			a.Store16Idx(base, idx, rv)
 		case 4:
-			a.Store32Idx(rMem, idx, rv)
+			a.Store32Idx(base, idx, rv)
 		default:
-			a.StoreIdx(rMem, idx, rv)
+			a.StoreIdx(base, idx, rv)
 		}
 	}
 	c.free(v)
 	c.freeG(idx)
+	c.freeBase(base)
 }
 
-// address checks an access of size bytes at address addr, an i32, plus
-// offset off against memory 0's size, trapping past it, and returns a
-// register of the instruction's own holding the effective address, to add
-// to the memory's base: the address zero-extended plus the offset, in 64
-// bits, which nothing wraps.
-func (c *compiler) address(addr value, off, size uint64, at uint32) arm64.Reg {
+// freeBase gives back the register address returned a memory's base in,
+// unless it is memory 0's, which the code keeps.
+func (c *compiler) freeBase(base arm64.Reg) {
+	if base != rMem {
+		c.freeG(base)
+	}
+}
+
+// address checks an access of size bytes at address addr plus offset off
+// against memory mem's size, trapping past it, and returns the register
+// holding the memory's base -- X20 for memory 0 -- and a register of the
+// instruction's own holding the effective address, to add to the base.
+//
+// An i32 address is zero-extended and the offset added in 64 bits, which
+// nothing wraps. An i64 memory's address plus the offset may: it traps
+// where it carries, as the sum plus the size does.
+func (c *compiler) address(addr value, mem uint32, off, size uint64, at uint32) (base, idx arm64.Reg) {
 	a := c.a
 	trap := c.trap(TrapMemOutOfBounds, at)
+	is64 := c.m.Memories[mem].Limits.Is64
 	var r arm64.Reg
-	if addr.k == kConst {
+	switch {
+	case addr.k == kConst && is64:
+		ea, carry := bits.Add64(addr.c, off, 0)
+		_, carry2 := bits.Add64(ea, size, 0)
+		if carry|carry2 != 0 {
+			// Never in bounds: the bounds check below is never reached.
+			a.B(trap)
+		}
+		r = c.allocG(0)
+		a.MovImm(r, ea)
+	case addr.k == kConst:
 		r = c.allocG(0)
 		a.MovImm(r, uint64(uint32(addr.c))+off)
-	} else {
+	case is64:
+		r = c.intoG(addr, 0)
+		if off != 0 {
+			a.MovImm(rTmp, off)
+			a.Op(arm64.Adds, r, r, rTmp, true)
+			a.BCond(arm64.HS, trap)
+		}
+	default:
 		r = c.intoG(addr, 0)
 		if off != 0 {
 			a.AddImm(r, r, int64(off), true)
 		}
 	}
-	a.AddImm(rTmp, r, int64(size), true)
-	if c.shared {
+	if is64 {
+		a.AddsImm(rTmp, r, int64(size), true)
+		a.BCond(arm64.HS, trap)
+	} else {
+		a.AddImm(rTmp, r, int64(size), true)
+	}
+	return c.boundsCheck(mem, trap, 1<<r), r
+}
+
+// boundsCheck goes to trap if the end of an access, in rTmp, is past memory
+// mem's size, and returns the register holding the memory's base: X20 for
+// memory 0, whose size X21 holds. A shared memory's size is read where
+// other threads store it.
+func (c *compiler) boundsCheck(mem uint32, trap arm64.Label, avoid regMask) arm64.Reg {
+	a := c.a
+	if c.m.Memories[mem].Shared {
 		a.Load(rTmp2, rCtx, offMemSizePtr)
 		a.Load(rTmp2, rTmp2, 0)
 		a.Cmp(rTmp, rTmp2, true)
@@ -811,5 +857,5 @@ func (c *compiler) address(addr value, off, size uint64, at uint32) arm64.Reg {
 		a.Cmp(rTmp, rMemSize, true)
 	}
 	a.BCond(arm64.HI, trap)
-	return r
+	return rMem
 }

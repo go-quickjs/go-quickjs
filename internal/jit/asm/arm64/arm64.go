@@ -675,6 +675,12 @@ func (a *Asm) SubsImm(dst, n Reg, imm int64, wide bool) {
 	a.addImm(0x71000000, 0x31000000, dst, n, imm, wide)
 }
 
+// AddsImm is dst = n + imm, for any imm, setting the flags: C is the
+// carry out of the unsigned sum, for a non-negative imm.
+func (a *Asm) AddsImm(dst, n Reg, imm int64, wide bool) {
+	a.addImm(0x31000000, 0x71000000, dst, n, imm, wide)
+}
+
 // CmpImm sets the flags for n - imm.
 func (a *Asm) CmpImm(n Reg, imm int64, wide bool) { a.addImm(0x71000000, 0x31000000, ZR, n, imm, wide) }
 

@@ -454,15 +454,13 @@ A function is refused whole, and stays in the interpreter, when it has:
 | `gc` | any GC instruction |
 | `exceptions` | `try_table`, `throw`, `throw_ref`, or the legacy `try` and its clauses |
 | `atomics` | any atomic instruction |
-| `memory64` | a load or a store of an i64 memory |
 | `multi-memory` | a load or a store of a memory other than 0 |
 | `cpu` | on amd64, `popcnt` without POPCNT, rounding without SSE4.1 |
 | `frame`, `size` | an operand stack deeper than the interpreter's frame, or code past the JIT's size limit |
 
-With every function compiled at its first call, the spec suite compiles 4,320
-functions and refuses 2,522: 1,499 for SIMD, 361 for references, 255 for
-memory64, 189 for multiple memories, 89 for exceptions, 80 for atomics and 49
-for GC.
+With every function compiled at its first call, the spec suite compiles 4,575
+functions and refuses 2,267: 1,499 for SIMD, 361 for references, 189 for
+multiple memories, 89 for exceptions, 80 for atomics and 49 for GC.
 
 On `BenchmarkFib25` and `BenchmarkLoop1M` (`wasm/internal/engine`), the
 interpreter takes 7.2 ms and 9.7 ms and native code 0.40 ms and 0.355 ms on
@@ -730,6 +728,6 @@ WASI:
 - `postMessage` and structured clone of a `Module`, and of a shared
   `Memory`, between workers.
 - Native code for what the JIT refuses -- references, SIMD, GC, exceptions,
-  atomics, memory64 and multiple memories -- and an optimizing tier above the
-  baseline one.
+  atomics and multiple memories -- and an optimizing tier above the baseline
+  one.
 - `wasmbench`'s `jit` engine on arm64: the harness builds it on amd64 only.
