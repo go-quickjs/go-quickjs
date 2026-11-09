@@ -606,6 +606,18 @@ func (g *gen) done(v *Value, r int) {
 	g.move(loc{kind: lSlot, slot: s}, src, v.Type)
 }
 
+// inSlot reports whether phi p's slot holds its value already where its
+// block begins: every argument shares its register and slot -- the
+// allocator coalesced them -- and stored itself there where it was made.
+func (g *gen) inSlot(p *Value) bool {
+	for _, a := range p.Args {
+		if a.Op == OpConst || g.ra.Reg[a.ID] != g.ra.Reg[p.ID] || g.ra.Slot[a.ID] != g.ra.Slot[p.ID] {
+			return false
+		}
+	}
+	return true
+}
+
 // imm32 reports whether constant c is an immediate of a 32-bit operation,
 // or, wide, of a 64-bit one, which sign-extends it.
 func imm32(c uint64, wide bool) (int32, bool) {
@@ -754,7 +766,7 @@ func (g *gen) edgeMoves(b, s *Block) {
 // block lowers block b, the i-th.
 func (g *gen) block(i int, b *Block) {
 	for _, p := range b.Phis {
-		if r := g.ra.Reg[p.ID]; r >= 0 {
+		if r := g.ra.Reg[p.ID]; r >= 0 && !g.inSlot(p) {
 			g.done(p, int(r))
 		}
 	}

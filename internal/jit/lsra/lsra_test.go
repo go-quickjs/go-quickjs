@@ -15,7 +15,7 @@ import (
 func TestAllocateRandom(t *testing.T) {
 	rng := rand.New(rand.NewPCG(7, 11))
 	cfg := &Config{Classes: [][]int{{3, 1, 0, 2}, {0, 1, 2}}, NumSlots: 1000}
-	for iter := 0; iter < 2000; iter++ {
+	for iter := 0; iter < 10000; iter++ {
 		f := randomFunc(rng)
 		res, err := Allocate(f, cfg)
 		if err != nil {
@@ -260,5 +260,35 @@ func checkAllocation(t *testing.T, iter int, f *Func, cfg *Config, res *Result) 
 		if s := f.FixedSlot[v]; s >= 0 && res.Slot[v] >= 0 && res.Slot[v] != s {
 			t.Fatalf("iteration %d: v%d arrives in slot %d but is given %d", iter, v, s, res.Slot[v])
 		}
+	}
+}
+
+// TestCoalesce gives a loop's phi, its argument from the back edge and its
+// argument from the entry one register, so that neither edge moves, and a
+// value live across the loop, in its holes too, another.
+func TestCoalesce(t *testing.T) {
+	// v0: a parameter; v1 = phi(v0, v2); v2 = v1 op v3; v3 live throughout.
+	f := &Func{
+		Class:     []int8{0, 0, 0, 0},
+		FixedSlot: []int32{0, -1, -1, 1},
+		Blocks: []Block{
+			{Succs: []int{1}, Insts: []Inst{{Defs: []VReg{0}, Hint: None}, {Defs: []VReg{3}, Hint: None}}},
+			{Preds: []int{0, 2}, Succs: []int{2, 3}, Depth: 1, Phis: []Phi{{Def: 1, Args: []VReg{0, 2}}},
+				Insts: []Inst{{Uses: []VReg{1, 3}, Defs: []VReg{2}, Hint: 1}, {Uses: []VReg{2}, Hint: None}}},
+			{Preds: []int{1}, Succs: []int{1}, Depth: 1, Insts: []Inst{{Hint: None}}},
+			{Preds: []int{1}, Insts: []Inst{{Uses: []VReg{2, 3}, Hint: None}}},
+		},
+	}
+	cfg := &Config{Classes: [][]int{{0, 1}}, NumSlots: 8}
+	res, err := Allocate(f, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkAllocation(t, 0, f, cfg, res)
+	if res.Reg[0] < 0 || res.Reg[0] != res.Reg[1] || res.Reg[1] != res.Reg[2] {
+		t.Fatalf("the phi and its arguments in %v, %v, %v", res.Reg[0], res.Reg[1], res.Reg[2])
+	}
+	if res.Reg[3] < 0 || res.Reg[3] == res.Reg[1] {
+		t.Fatalf("v3 in %v beside %v", res.Reg[3], res.Reg[1])
 	}
 }

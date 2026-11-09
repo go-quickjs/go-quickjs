@@ -323,7 +323,6 @@ func TestOptBulkMemory(t *testing.T) {
 // computes.
 func TestOptThreadDispatch(t *testing.T) {
 	rng := rand.New(rand.NewPCG(1, 2))
-	opt := 0
 	for iter := range 1500 {
 		src := dispatchLoop(rng)
 		interp := interpretedInstance(t, src)
@@ -336,14 +335,9 @@ func TestOptThreadDispatch(t *testing.T) {
 				t.Fatalf("iteration %d, run(%d, %#x) = %v, %v; want %v, %v\n%s", iter, n, s, got, gerr, want, werr, src)
 			}
 		}
-		if optimized(inst, "run") {
-			opt++
+		if !optimized(inst, "run") {
+			t.Fatalf("iteration %d: not optimized\n%s", iter, src)
 		}
-	}
-	// The tier refuses a function whose spills need more slots than its
-	// frame has.
-	if opt < 1400 {
-		t.Fatalf("%d of 1,500 optimized", opt)
 	}
 }
 

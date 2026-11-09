@@ -210,17 +210,36 @@ for each value but constants, which are made where they are used, a
 two-address operation's first operand as its result's hint -- and lowers
 with the locations it gives.
 
-Each virtual register has one location for its whole life, as Poletto
-and Sarkar's linear scan gives it: its interval spans its definition to
-its last use, holes included; where a class's registers run out the
-interval of the lowest weight (its uses, eight times each loop around
-them) is spilled whole. A register an instruction clobbers (AX and DX
-for a division, CX for a shift by a variable) is not given to an interval
-live across it. A value in a register that lives across a call is stored
-into a slot where it is defined and loaded again after each call it
+A virtual register's lifetime is a list of ranges, from liveness, its
+holes left out. A phi and an argument whose lifetimes do not meet are
+coalesced into a web -- one location, no move on their edge -- the
+edges of the deepest loops first (two parameters, arriving in different
+slots, never). Each web has one location for its whole life, given by a
+linear scan of the webs in order of their starts with active and
+inactive webs, as Wimmer and Mössenböck's, so that a web takes a
+register in another's hole. Where a class's registers run out, the web
+scanned displaces those in its way on the register where they are least
+dense -- their weight, their uses at eight times each loop around them,
+over the positions they cover -- if they are less dense than it, and is
+spilled otherwise; a web of several registers it would spill is taken
+apart instead, its registers scanned again each on its own and hinted to
+the others'. Density, not weight, decides, so that a loop's short
+temporaries keep registers and the long values around them, used less
+often for their length, go to slots. A register an instruction clobbers
+(AX and DX for a division, CX for a shift by a variable, AX, CX and SI
+for memory.copy and memory.fill) is not given to a web live across it. A
+web in a register that lives across a call is stored into its slot where
+each of its values is defined and loaded again after each call it
 crosses; one whose reloads would weigh as much as its uses lives in its
-slot instead. Slots are given by a second scan, a parameter keeping the
-slot it arrives in. A phi prefers its arguments' registers and they its.
+slot instead. Slots are given by a second scan over the ranges, holes
+included, a web with a parameter keeping the slot it arrives in. A phi
+prefers its arguments' registers and they its, and a two-address
+operation's result its first operand's. There is no splitting within a
+value's life: a web is in its register or its slot throughout.
+
+A phi in a register is stored into its slot where its block begins unless
+every argument shares its register and its slot, which each stored
+where it was made.
 
 Lowering reads a spilled operand from its slot -- as a memory operand
 where the instruction takes one (`OpMem`, `ImulMem`), else into a scratch
