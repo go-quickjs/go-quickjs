@@ -227,8 +227,14 @@ type ModuleConfig interface {
 	// makes the instantiation fail.
 	WithEnv(key, value string) ModuleConfig
 
-	// WithFS sets the file system; the default is none.
+	// WithFS sets the file system to fsys, mounted read-only at "/"; the
+	// default is none. It is WithFSConfig(NewFSConfig().WithFSMount(fsys,
+	// "/")).
 	WithFS(fsys fs.FS) ModuleConfig
+
+	// WithFSConfig sets the file systems, at the guest paths config gives;
+	// the default is none. It replaces what WithFS set.
+	WithFSConfig(config FSConfig) ModuleConfig
 
 	// WithName sets the name the module is instantiated under, which
 	// modules import it by. The default is the name in the module's name
@@ -328,7 +334,7 @@ func (c *moduleConfig) WithEnv(key, value string) ModuleConfig {
 }
 
 func (c *moduleConfig) WithFS(fsys fs.FS) ModuleConfig {
-	r := c.clone()
+	r := c.WithFSConfig(NewFSConfig().WithFSMount(fsys, "/")).(*moduleConfig)
 	r.sys.FS = fsys
 	return r
 }

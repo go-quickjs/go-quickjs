@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/go-quickjs/go-quickjs/wasm/api"
+	"github.com/go-quickjs/go-quickjs/wasm/internal/sysfs"
 	"github.com/go-quickjs/go-quickjs/wasm/sys"
 )
 
@@ -42,6 +43,10 @@ type Context struct {
 
 	// FS is the file system, or nil for none.
 	FS fs.FS
+
+	// Files are the module's file descriptors: the standard streams, then
+	// the mounts' root directories, then what the module opens.
+	Files *sysfs.Table
 
 	// Walltime and Nanotime are the clocks. Unless configured they are
 	// fakes that advance by a millisecond on every reading: the wall clock
@@ -68,6 +73,7 @@ type Config struct {
 	Stdout     io.Writer
 	Stderr     io.Writer
 	FS         fs.FS
+	Mounts     []sysfs.Mount
 	Walltime   sys.Walltime
 	WalltimeRe sys.ClockResolution
 	Nanotime   sys.Nanotime
@@ -82,7 +88,9 @@ const fakeEpoch = 1640995200
 
 // New returns the context of c, filling in the defaults, or an error for an
 // argument or environment entry that a C program could not see: one holding
-// a NUL, or an environment key that is empty or holds '='.
+// a NUL, or an environment key that is empty or holds '=', or for a mounted
+// directory that cannot be opened. The context holds the mounts open until
+// it is closed.
 func New(c *Config) (*Context, error) {
 	for _, a := range c.Args {
 		if strings.IndexByte(a, 0) >= 0 {
@@ -125,6 +133,11 @@ func New(c *Config) (*Context, error) {
 	if sc.Stderr == nil {
 		sc.Stderr = io.Discard
 	}
+	files, err := sysfs.NewTable(sc.Stdin, sc.Stdout, sc.Stderr, c.Mounts)
+	if err != nil {
+		return nil, err
+	}
+	sc.Files = files
 	if sc.Walltime == nil {
 		var t atomic.Int64
 		sc.Walltime = func() (int64, int32) {
@@ -157,6 +170,9 @@ func New(c *Config) (*Context, error) {
 	}
 	return sc, nil
 }
+
+// Close closes the module's files and mounts.
+func (c *Context) Close() error { return c.Files.Close() }
 
 type eofReader struct{}
 

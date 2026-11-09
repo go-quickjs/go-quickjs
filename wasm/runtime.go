@@ -279,10 +279,12 @@ func (r *runtime) InstantiateModule(ctx context.Context, compiled CompiledModule
 		return nil, err
 	}
 	if err := r.reserveName(name); err != nil {
+		_ = sc.Close()
 		return nil, err
 	}
 	mod, err := r.instantiate(ctx, c.code, name, sc)
 	if err != nil {
+		_ = sc.Close()
 		r.releaseName(name)
 		return nil, err
 	}

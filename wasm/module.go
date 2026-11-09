@@ -157,6 +157,9 @@ func (m *moduleInstance) CloseWithExitCode(ctx context.Context, exitCode uint32)
 		return nil
 	}
 	m.r.unregister(m)
+	if m.sys != nil {
+		_ = m.sys.Close()
+	}
 	m.mu.Lock()
 	for cancel := range m.calls {
 		(*cancel)()
