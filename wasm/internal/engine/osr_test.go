@@ -216,15 +216,20 @@ func TestOSRTrapTrace(t *testing.T) {
 		}
 		frames[k] = tr.Frames
 	}
-	if len(frames[1]) != 2 || len(frames[0]) != 2 || frames[0][1].Offset != frames[1][1].Offset {
+	if len(frames[1]) != 2 || len(frames[0]) != 2 {
 		t.Fatalf("trap frames %+v, interpreted %+v", frames[1], frames[0])
+	}
+	for k := range frames[0] {
+		if frames[0][k].Func != frames[1][k].Func || frames[0][k].Offset != frames[1][k].Offset {
+			t.Fatalf("trap frames %+v, interpreted %+v", frames[1], frames[0])
+		}
 	}
 	for _, fr := range frames {
 		if fr[0].Func != 0 || fr[1].Func != 1 {
 			t.Fatalf("trap frames %+v, want inner under outer", fr)
 		}
 	}
-	// Native code knows the trapping instruction too: the load.
+	// Both are at the trapping instruction: the load.
 	if op := insts[1].Code.Module.Bytes[frames[1][0].Offset]; op != 0x28 {
 		t.Fatalf("the trap is at offset %d, an instruction 0x%02x, not i32.load", frames[1][0].Offset, op)
 	}

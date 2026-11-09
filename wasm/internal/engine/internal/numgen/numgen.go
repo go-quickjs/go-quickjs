@@ -36,7 +36,8 @@ var (
 )
 
 // op is an operator: its opcode's name, its operand and result types, and
-// the Go expression of its result over a (and b).
+// the Go expression of its result over a (and b) -- and at, the
+// instruction's offset, for an operator that traps.
 type op struct {
 	name     string
 	arg, res typ
@@ -66,10 +67,10 @@ var binaries = []op{
 	bin(i32, "I32ShrU", "a >> (b & 31)"),
 	bin(i32, "I32Rol", "bits.RotateLeft32(a, int(b&31))"),
 	bin(i32, "I32Ror", "bits.RotateLeft32(a, -int(b&31))"),
-	binTrap(i32, "I32DivS", "divS32(a, b)"),
-	binTrap(i32, "I32DivU", "divU32(a, b)"),
-	binTrap(i32, "I32RemS", "remS32(a, b)"),
-	binTrap(i32, "I32RemU", "remU32(a, b)"),
+	binTrap(i32, "I32DivS", "divS32(a, b, at)"),
+	binTrap(i32, "I32DivU", "divU32(a, b, at)"),
+	binTrap(i32, "I32RemS", "remS32(a, b, at)"),
+	binTrap(i32, "I32RemU", "remU32(a, b, at)"),
 	cmp(i32, "I32Eq", "a == b"),
 	cmp(i32, "I32Ne", "a != b"),
 	cmp(i32, "I32LtS", "int32(a) < int32(b)"),
@@ -92,10 +93,10 @@ var binaries = []op{
 	bin(i64, "I64ShrU", "a >> (b & 63)"),
 	bin(i64, "I64Rol", "bits.RotateLeft64(a, int(b&63))"),
 	bin(i64, "I64Ror", "bits.RotateLeft64(a, -int(b&63))"),
-	binTrap(i64, "I64DivS", "divS64(a, b)"),
-	binTrap(i64, "I64DivU", "divU64(a, b)"),
-	binTrap(i64, "I64RemS", "remS64(a, b)"),
-	binTrap(i64, "I64RemU", "remU64(a, b)"),
+	binTrap(i64, "I64DivS", "divS64(a, b, at)"),
+	binTrap(i64, "I64DivU", "divU64(a, b, at)"),
+	binTrap(i64, "I64RemS", "remS64(a, b, at)"),
+	binTrap(i64, "I64RemU", "remU64(a, b, at)"),
 	cmp(i64, "I64Eq", "a == b"),
 	cmp(i64, "I64Ne", "a != b"),
 	cmp(i64, "I64LtS", "int64(a) < int64(b)"),
@@ -167,16 +168,16 @@ var unaries = []op{
 	floatUn(f64, "F64Sqrt", "math.Sqrt(a)"),
 
 	conv(i64, i32, "I32ConvertI64", "uint32(a)"),
-	floatConv(f32, i32, "I32SConvertF32", "truncS32F32(a)"),
-	floatConv(f32, i32, "I32UConvertF32", "truncU32F32(a)"),
-	floatConv(f64, i32, "I32SConvertF64", "truncS32F64(a)"),
-	floatConv(f64, i32, "I32UConvertF64", "truncU32F64(a)"),
+	floatConv(f32, i32, "I32SConvertF32", "truncS32F32(a, at)"),
+	floatConv(f32, i32, "I32UConvertF32", "truncU32F32(a, at)"),
+	floatConv(f64, i32, "I32SConvertF64", "truncS32F64(a, at)"),
+	floatConv(f64, i32, "I32UConvertF64", "truncU32F64(a, at)"),
 	conv(i32, i64, "I64SConvertI32", "uint64(int64(int32(a)))"),
 	conv(i32, i64, "I64UConvertI32", "uint64(a)"),
-	floatConv(f32, i64, "I64SConvertF32", "truncS64F32(a)"),
-	floatConv(f32, i64, "I64UConvertF32", "truncU64F32(a)"),
-	floatConv(f64, i64, "I64SConvertF64", "truncS64F64(a)"),
-	floatConv(f64, i64, "I64UConvertF64", "truncU64F64(a)"),
+	floatConv(f32, i64, "I64SConvertF32", "truncS64F32(a, at)"),
+	floatConv(f32, i64, "I64UConvertF32", "truncU64F32(a, at)"),
+	floatConv(f64, i64, "I64SConvertF64", "truncS64F64(a, at)"),
+	floatConv(f64, i64, "I64UConvertF64", "truncU64F64(a, at)"),
 	floatConv(i32, f32, "F32SConvertI32", "float32(int32(a))"),
 	floatConv(i32, f32, "F32UConvertI32", "float32(a)"),
 	floatConv(i64, f32, "F32SConvertI64", "i64ToF32(int64(a))"),
@@ -265,8 +266,9 @@ import (
 
 var _ = bits.Len
 
-// numeric compiles a numeric operator, reporting whether op is one.
-func (c *compiler) numeric(op opcode.Opcode) bool {
+// numeric compiles a numeric operator at offset at, reporting whether op is
+// one.
+func (c *compiler) numeric(op opcode.Opcode, at uint32) bool {
 	switch op {
 `)
 	for _, o := range binaries {
@@ -357,29 +359,32 @@ var stores = []access{
 // address in a slot in place, rather than calling a node for either.
 func writeMemory(b *bytes.Buffer) {
 	b.WriteString(`
-// memFast compiles a load or store of memory 0, an i32 memory, reporting
-// whether it did.
-func (c *compiler) memFast(op opcode.Opcode, mem uint32, off uint64) bool {
+// memFast compiles a load or store of memory 0, an i32 memory, at offset
+// at, reporting whether it did. An i32 memory's offset off is below 2^32:
+// a node captures it with at in its upper half, as oa, which costs the path
+// that does not trap nothing that at captured apart would.
+func (c *compiler) memFast(op opcode.Opcode, mem uint32, off uint64, at uint32) bool {
 	if mem != 0 || c.m.Memories[0].Limits.Is64 {
 		return false
 	}
+	oa := off | uint64(at)<<32
 	switch op {
 `)
 	for _, l := range loads {
 		fmt.Fprintf(b, "case opcode.%s:\na := c.pop()\nif a.k == eSlot {\ns := a.slot\n", l.name)
-		fmt.Fprintf(b, "c.pushTree(%s, %s(func(f *frame) %s { b := f.inst.mem0.span(uint64(uint32(f.l[s]))+off, %d); return %s }))\n",
+		fmt.Fprintf(b, "c.pushTree(%s, %s(func(f *frame) %s { b := f.inst.mem0.span(uint64(uint32(f.l[s]))+uint64(uint32(oa)), %d, uint32(oa>>32)); return %s }))\n",
 			l.t.mtype, l.t.tree, l.t.gotype, l.width, l.expr)
 		b.WriteString("} else {\nx := c.i32(a)\n")
-		fmt.Fprintf(b, "c.pushTree(%s, %s(func(f *frame) %s { b := f.inst.mem0.span(uint64(x(f))+off, %d); return %s }))\n",
+		fmt.Fprintf(b, "c.pushTree(%s, %s(func(f *frame) %s { b := f.inst.mem0.span(uint64(x(f))+uint64(uint32(oa)), %d, uint32(oa>>32)); return %s }))\n",
 			l.t.mtype, l.t.tree, l.t.gotype, l.width, l.expr)
 		b.WriteString("}\n")
 	}
 	for _, s := range stores {
 		fmt.Fprintf(b, "case opcode.%s:\nv := c.%s(c.pop())\na := c.pop()\nc.flushBelow(0)\nif a.k == eSlot {\ns := a.slot\n", s.name, strings.ToLower(s.t.name))
-		fmt.Fprintf(b, "c.emit(func(f *frame) int32 { e := uint64(uint32(f.l[s])) + off; v := v(f); b := f.inst.mem0.span(e, %d); %s; return 0 })\n",
+		fmt.Fprintf(b, "c.emit(func(f *frame) int32 { e := uint64(uint32(f.l[s])) + uint64(uint32(oa)); v := v(f); b := f.inst.mem0.span(e, %d, uint32(oa>>32)); %s; return 0 })\n",
 			s.width, s.expr)
 		b.WriteString("} else {\nx := c.i32(a)\n")
-		fmt.Fprintf(b, "c.emit(func(f *frame) int32 { e := uint64(x(f)) + off; v := v(f); b := f.inst.mem0.span(e, %d); %s; return 0 })\n",
+		fmt.Fprintf(b, "c.emit(func(f *frame) int32 { e := uint64(x(f)) + uint64(uint32(oa)); v := v(f); b := f.inst.mem0.span(e, %d, uint32(oa>>32)); %s; return 0 })\n",
 			s.width, s.expr)
 		b.WriteString("}\n")
 	}

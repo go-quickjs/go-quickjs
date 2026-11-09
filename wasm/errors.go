@@ -77,10 +77,9 @@ type StackFrame struct {
 	Name string
 	// FunctionIndex is the function's index in its module.
 	FunctionIndex uint32
-	// Offset is the module offset of the instruction executing: for a
-	// frame that made a call, the call. For the frame that trapped it is
-	// the offset of the last call that frame made, or zero, until the
-	// interpreter records where each trap happens.
+	// Offset is the module offset of the instruction executing: for the
+	// frame that trapped, the instruction that trapped -- a prefixed
+	// instruction's prefix byte; for a frame that made a call, the call.
 	Offset uint32
 }
 

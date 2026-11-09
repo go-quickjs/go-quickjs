@@ -14,8 +14,9 @@ import (
 
 var _ = bits.Len
 
-// numeric compiles a numeric operator, reporting whether op is one.
-func (c *compiler) numeric(op opcode.Opcode) bool {
+// numeric compiles a numeric operator at offset at, reporting whether op is
+// one.
+func (c *compiler) numeric(op opcode.Opcode, at uint32) bool {
 	switch op {
 	case opcode.I32Add:
 		y := c.pop()
@@ -426,34 +427,34 @@ func (c *compiler) numeric(op opcode.Opcode) bool {
 		case x.k == eSlot && y.k == eSlot:
 			xa := x.slot
 			yb := y.slot
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := uint32(f.l[xa]), uint32(f.l[yb]); return divS32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := uint32(f.l[xa]), uint32(f.l[yb]); return divS32(a, b, at) }))
 		case x.k == eSlot && y.k == eConst:
 			xa := x.slot
 			yb := uint32(y.c)
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := uint32(f.l[xa]), yb; return divS32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := uint32(f.l[xa]), yb; return divS32(a, b, at) }))
 		case x.k == eTree && y.k == eConst:
 			xa := x.tree.(ti32)
 			yb := uint32(y.c)
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa(f), yb; return divS32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa(f), yb; return divS32(a, b, at) }))
 		case x.k == eSlot && y.k == eTree:
 			xa := x.slot
 			yb := y.tree.(ti32)
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := uint32(f.l[xa]), yb(f); return divS32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := uint32(f.l[xa]), yb(f); return divS32(a, b, at) }))
 		case x.k == eTree && y.k == eSlot:
 			xa := x.tree.(ti32)
 			yb := y.slot
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa(f), uint32(f.l[yb]); return divS32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa(f), uint32(f.l[yb]); return divS32(a, b, at) }))
 		case x.k == eConst && y.k == eTree:
 			xa := uint32(x.c)
 			yb := y.tree.(ti32)
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa, yb(f); return divS32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa, yb(f); return divS32(a, b, at) }))
 		case x.k == eConst && y.k == eSlot:
 			xa := uint32(x.c)
 			yb := y.slot
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa, uint32(f.l[yb]); return divS32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa, uint32(f.l[yb]); return divS32(a, b, at) }))
 		default:
 			xa, yb := c.i32(x), c.i32(y)
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa(f), yb(f); return divS32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa(f), yb(f); return divS32(a, b, at) }))
 		}
 	case opcode.I32DivU:
 		y := c.pop()
@@ -462,34 +463,34 @@ func (c *compiler) numeric(op opcode.Opcode) bool {
 		case x.k == eSlot && y.k == eSlot:
 			xa := x.slot
 			yb := y.slot
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := uint32(f.l[xa]), uint32(f.l[yb]); return divU32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := uint32(f.l[xa]), uint32(f.l[yb]); return divU32(a, b, at) }))
 		case x.k == eSlot && y.k == eConst:
 			xa := x.slot
 			yb := uint32(y.c)
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := uint32(f.l[xa]), yb; return divU32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := uint32(f.l[xa]), yb; return divU32(a, b, at) }))
 		case x.k == eTree && y.k == eConst:
 			xa := x.tree.(ti32)
 			yb := uint32(y.c)
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa(f), yb; return divU32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa(f), yb; return divU32(a, b, at) }))
 		case x.k == eSlot && y.k == eTree:
 			xa := x.slot
 			yb := y.tree.(ti32)
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := uint32(f.l[xa]), yb(f); return divU32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := uint32(f.l[xa]), yb(f); return divU32(a, b, at) }))
 		case x.k == eTree && y.k == eSlot:
 			xa := x.tree.(ti32)
 			yb := y.slot
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa(f), uint32(f.l[yb]); return divU32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa(f), uint32(f.l[yb]); return divU32(a, b, at) }))
 		case x.k == eConst && y.k == eTree:
 			xa := uint32(x.c)
 			yb := y.tree.(ti32)
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa, yb(f); return divU32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa, yb(f); return divU32(a, b, at) }))
 		case x.k == eConst && y.k == eSlot:
 			xa := uint32(x.c)
 			yb := y.slot
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa, uint32(f.l[yb]); return divU32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa, uint32(f.l[yb]); return divU32(a, b, at) }))
 		default:
 			xa, yb := c.i32(x), c.i32(y)
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa(f), yb(f); return divU32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa(f), yb(f); return divU32(a, b, at) }))
 		}
 	case opcode.I32RemS:
 		y := c.pop()
@@ -498,34 +499,34 @@ func (c *compiler) numeric(op opcode.Opcode) bool {
 		case x.k == eSlot && y.k == eSlot:
 			xa := x.slot
 			yb := y.slot
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := uint32(f.l[xa]), uint32(f.l[yb]); return remS32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := uint32(f.l[xa]), uint32(f.l[yb]); return remS32(a, b, at) }))
 		case x.k == eSlot && y.k == eConst:
 			xa := x.slot
 			yb := uint32(y.c)
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := uint32(f.l[xa]), yb; return remS32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := uint32(f.l[xa]), yb; return remS32(a, b, at) }))
 		case x.k == eTree && y.k == eConst:
 			xa := x.tree.(ti32)
 			yb := uint32(y.c)
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa(f), yb; return remS32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa(f), yb; return remS32(a, b, at) }))
 		case x.k == eSlot && y.k == eTree:
 			xa := x.slot
 			yb := y.tree.(ti32)
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := uint32(f.l[xa]), yb(f); return remS32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := uint32(f.l[xa]), yb(f); return remS32(a, b, at) }))
 		case x.k == eTree && y.k == eSlot:
 			xa := x.tree.(ti32)
 			yb := y.slot
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa(f), uint32(f.l[yb]); return remS32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa(f), uint32(f.l[yb]); return remS32(a, b, at) }))
 		case x.k == eConst && y.k == eTree:
 			xa := uint32(x.c)
 			yb := y.tree.(ti32)
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa, yb(f); return remS32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa, yb(f); return remS32(a, b, at) }))
 		case x.k == eConst && y.k == eSlot:
 			xa := uint32(x.c)
 			yb := y.slot
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa, uint32(f.l[yb]); return remS32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa, uint32(f.l[yb]); return remS32(a, b, at) }))
 		default:
 			xa, yb := c.i32(x), c.i32(y)
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa(f), yb(f); return remS32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa(f), yb(f); return remS32(a, b, at) }))
 		}
 	case opcode.I32RemU:
 		y := c.pop()
@@ -534,34 +535,34 @@ func (c *compiler) numeric(op opcode.Opcode) bool {
 		case x.k == eSlot && y.k == eSlot:
 			xa := x.slot
 			yb := y.slot
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := uint32(f.l[xa]), uint32(f.l[yb]); return remU32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := uint32(f.l[xa]), uint32(f.l[yb]); return remU32(a, b, at) }))
 		case x.k == eSlot && y.k == eConst:
 			xa := x.slot
 			yb := uint32(y.c)
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := uint32(f.l[xa]), yb; return remU32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := uint32(f.l[xa]), yb; return remU32(a, b, at) }))
 		case x.k == eTree && y.k == eConst:
 			xa := x.tree.(ti32)
 			yb := uint32(y.c)
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa(f), yb; return remU32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa(f), yb; return remU32(a, b, at) }))
 		case x.k == eSlot && y.k == eTree:
 			xa := x.slot
 			yb := y.tree.(ti32)
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := uint32(f.l[xa]), yb(f); return remU32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := uint32(f.l[xa]), yb(f); return remU32(a, b, at) }))
 		case x.k == eTree && y.k == eSlot:
 			xa := x.tree.(ti32)
 			yb := y.slot
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa(f), uint32(f.l[yb]); return remU32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa(f), uint32(f.l[yb]); return remU32(a, b, at) }))
 		case x.k == eConst && y.k == eTree:
 			xa := uint32(x.c)
 			yb := y.tree.(ti32)
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa, yb(f); return remU32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa, yb(f); return remU32(a, b, at) }))
 		case x.k == eConst && y.k == eSlot:
 			xa := uint32(x.c)
 			yb := y.slot
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa, uint32(f.l[yb]); return remU32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa, uint32(f.l[yb]); return remU32(a, b, at) }))
 		default:
 			xa, yb := c.i32(x), c.i32(y)
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa(f), yb(f); return remU32(a, b) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a, b := xa(f), yb(f); return remU32(a, b, at) }))
 		}
 	case opcode.I32Eq:
 		y := c.pop()
@@ -1326,34 +1327,34 @@ func (c *compiler) numeric(op opcode.Opcode) bool {
 		case x.k == eSlot && y.k == eSlot:
 			xa := x.slot
 			yb := y.slot
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := f.l[xa], f.l[yb]; return divS64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := f.l[xa], f.l[yb]; return divS64(a, b, at) }))
 		case x.k == eSlot && y.k == eConst:
 			xa := x.slot
 			yb := y.c
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := f.l[xa], yb; return divS64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := f.l[xa], yb; return divS64(a, b, at) }))
 		case x.k == eTree && y.k == eConst:
 			xa := x.tree.(ti64)
 			yb := y.c
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa(f), yb; return divS64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa(f), yb; return divS64(a, b, at) }))
 		case x.k == eSlot && y.k == eTree:
 			xa := x.slot
 			yb := y.tree.(ti64)
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := f.l[xa], yb(f); return divS64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := f.l[xa], yb(f); return divS64(a, b, at) }))
 		case x.k == eTree && y.k == eSlot:
 			xa := x.tree.(ti64)
 			yb := y.slot
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa(f), f.l[yb]; return divS64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa(f), f.l[yb]; return divS64(a, b, at) }))
 		case x.k == eConst && y.k == eTree:
 			xa := x.c
 			yb := y.tree.(ti64)
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa, yb(f); return divS64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa, yb(f); return divS64(a, b, at) }))
 		case x.k == eConst && y.k == eSlot:
 			xa := x.c
 			yb := y.slot
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa, f.l[yb]; return divS64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa, f.l[yb]; return divS64(a, b, at) }))
 		default:
 			xa, yb := c.i64(x), c.i64(y)
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa(f), yb(f); return divS64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa(f), yb(f); return divS64(a, b, at) }))
 		}
 	case opcode.I64DivU:
 		y := c.pop()
@@ -1362,34 +1363,34 @@ func (c *compiler) numeric(op opcode.Opcode) bool {
 		case x.k == eSlot && y.k == eSlot:
 			xa := x.slot
 			yb := y.slot
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := f.l[xa], f.l[yb]; return divU64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := f.l[xa], f.l[yb]; return divU64(a, b, at) }))
 		case x.k == eSlot && y.k == eConst:
 			xa := x.slot
 			yb := y.c
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := f.l[xa], yb; return divU64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := f.l[xa], yb; return divU64(a, b, at) }))
 		case x.k == eTree && y.k == eConst:
 			xa := x.tree.(ti64)
 			yb := y.c
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa(f), yb; return divU64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa(f), yb; return divU64(a, b, at) }))
 		case x.k == eSlot && y.k == eTree:
 			xa := x.slot
 			yb := y.tree.(ti64)
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := f.l[xa], yb(f); return divU64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := f.l[xa], yb(f); return divU64(a, b, at) }))
 		case x.k == eTree && y.k == eSlot:
 			xa := x.tree.(ti64)
 			yb := y.slot
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa(f), f.l[yb]; return divU64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa(f), f.l[yb]; return divU64(a, b, at) }))
 		case x.k == eConst && y.k == eTree:
 			xa := x.c
 			yb := y.tree.(ti64)
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa, yb(f); return divU64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa, yb(f); return divU64(a, b, at) }))
 		case x.k == eConst && y.k == eSlot:
 			xa := x.c
 			yb := y.slot
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa, f.l[yb]; return divU64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa, f.l[yb]; return divU64(a, b, at) }))
 		default:
 			xa, yb := c.i64(x), c.i64(y)
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa(f), yb(f); return divU64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa(f), yb(f); return divU64(a, b, at) }))
 		}
 	case opcode.I64RemS:
 		y := c.pop()
@@ -1398,34 +1399,34 @@ func (c *compiler) numeric(op opcode.Opcode) bool {
 		case x.k == eSlot && y.k == eSlot:
 			xa := x.slot
 			yb := y.slot
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := f.l[xa], f.l[yb]; return remS64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := f.l[xa], f.l[yb]; return remS64(a, b, at) }))
 		case x.k == eSlot && y.k == eConst:
 			xa := x.slot
 			yb := y.c
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := f.l[xa], yb; return remS64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := f.l[xa], yb; return remS64(a, b, at) }))
 		case x.k == eTree && y.k == eConst:
 			xa := x.tree.(ti64)
 			yb := y.c
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa(f), yb; return remS64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa(f), yb; return remS64(a, b, at) }))
 		case x.k == eSlot && y.k == eTree:
 			xa := x.slot
 			yb := y.tree.(ti64)
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := f.l[xa], yb(f); return remS64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := f.l[xa], yb(f); return remS64(a, b, at) }))
 		case x.k == eTree && y.k == eSlot:
 			xa := x.tree.(ti64)
 			yb := y.slot
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa(f), f.l[yb]; return remS64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa(f), f.l[yb]; return remS64(a, b, at) }))
 		case x.k == eConst && y.k == eTree:
 			xa := x.c
 			yb := y.tree.(ti64)
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa, yb(f); return remS64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa, yb(f); return remS64(a, b, at) }))
 		case x.k == eConst && y.k == eSlot:
 			xa := x.c
 			yb := y.slot
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa, f.l[yb]; return remS64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa, f.l[yb]; return remS64(a, b, at) }))
 		default:
 			xa, yb := c.i64(x), c.i64(y)
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa(f), yb(f); return remS64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa(f), yb(f); return remS64(a, b, at) }))
 		}
 	case opcode.I64RemU:
 		y := c.pop()
@@ -1434,34 +1435,34 @@ func (c *compiler) numeric(op opcode.Opcode) bool {
 		case x.k == eSlot && y.k == eSlot:
 			xa := x.slot
 			yb := y.slot
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := f.l[xa], f.l[yb]; return remU64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := f.l[xa], f.l[yb]; return remU64(a, b, at) }))
 		case x.k == eSlot && y.k == eConst:
 			xa := x.slot
 			yb := y.c
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := f.l[xa], yb; return remU64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := f.l[xa], yb; return remU64(a, b, at) }))
 		case x.k == eTree && y.k == eConst:
 			xa := x.tree.(ti64)
 			yb := y.c
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa(f), yb; return remU64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa(f), yb; return remU64(a, b, at) }))
 		case x.k == eSlot && y.k == eTree:
 			xa := x.slot
 			yb := y.tree.(ti64)
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := f.l[xa], yb(f); return remU64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := f.l[xa], yb(f); return remU64(a, b, at) }))
 		case x.k == eTree && y.k == eSlot:
 			xa := x.tree.(ti64)
 			yb := y.slot
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa(f), f.l[yb]; return remU64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa(f), f.l[yb]; return remU64(a, b, at) }))
 		case x.k == eConst && y.k == eTree:
 			xa := x.c
 			yb := y.tree.(ti64)
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa, yb(f); return remU64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa, yb(f); return remU64(a, b, at) }))
 		case x.k == eConst && y.k == eSlot:
 			xa := x.c
 			yb := y.slot
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa, f.l[yb]; return remU64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa, f.l[yb]; return remU64(a, b, at) }))
 		default:
 			xa, yb := c.i64(x), c.i64(y)
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa(f), yb(f); return remU64(a, b) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a, b := xa(f), yb(f); return remU64(a, b, at) }))
 		}
 	case opcode.I64Eq:
 		y := c.pop()
@@ -3156,37 +3157,37 @@ func (c *compiler) numeric(op opcode.Opcode) bool {
 		x := c.pop()
 		if x.k == eSlot {
 			xa := x.slot
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a := math.Float32frombits(uint32(f.l[xa])); return truncS32F32(a) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a := math.Float32frombits(uint32(f.l[xa])); return truncS32F32(a, at) }))
 		} else {
 			xa := c.f32(x)
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a := xa(f); return truncS32F32(a) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a := xa(f); return truncS32F32(a, at) }))
 		}
 	case opcode.I32UConvertF32:
 		x := c.pop()
 		if x.k == eSlot {
 			xa := x.slot
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a := math.Float32frombits(uint32(f.l[xa])); return truncU32F32(a) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a := math.Float32frombits(uint32(f.l[xa])); return truncU32F32(a, at) }))
 		} else {
 			xa := c.f32(x)
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a := xa(f); return truncU32F32(a) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a := xa(f); return truncU32F32(a, at) }))
 		}
 	case opcode.I32SConvertF64:
 		x := c.pop()
 		if x.k == eSlot {
 			xa := x.slot
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a := math.Float64frombits(f.l[xa]); return truncS32F64(a) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a := math.Float64frombits(f.l[xa]); return truncS32F64(a, at) }))
 		} else {
 			xa := c.f64(x)
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a := xa(f); return truncS32F64(a) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a := xa(f); return truncS32F64(a, at) }))
 		}
 	case opcode.I32UConvertF64:
 		x := c.pop()
 		if x.k == eSlot {
 			xa := x.slot
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a := math.Float64frombits(f.l[xa]); return truncU32F64(a) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a := math.Float64frombits(f.l[xa]); return truncU32F64(a, at) }))
 		} else {
 			xa := c.f64(x)
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a := xa(f); return truncU32F64(a) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { a := xa(f); return truncU32F64(a, at) }))
 		}
 	case opcode.I64SConvertI32:
 		x := c.pop()
@@ -3210,37 +3211,37 @@ func (c *compiler) numeric(op opcode.Opcode) bool {
 		x := c.pop()
 		if x.k == eSlot {
 			xa := x.slot
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a := math.Float32frombits(uint32(f.l[xa])); return truncS64F32(a) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a := math.Float32frombits(uint32(f.l[xa])); return truncS64F32(a, at) }))
 		} else {
 			xa := c.f32(x)
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a := xa(f); return truncS64F32(a) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a := xa(f); return truncS64F32(a, at) }))
 		}
 	case opcode.I64UConvertF32:
 		x := c.pop()
 		if x.k == eSlot {
 			xa := x.slot
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a := math.Float32frombits(uint32(f.l[xa])); return truncU64F32(a) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a := math.Float32frombits(uint32(f.l[xa])); return truncU64F32(a, at) }))
 		} else {
 			xa := c.f32(x)
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a := xa(f); return truncU64F32(a) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a := xa(f); return truncU64F32(a, at) }))
 		}
 	case opcode.I64SConvertF64:
 		x := c.pop()
 		if x.k == eSlot {
 			xa := x.slot
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a := math.Float64frombits(f.l[xa]); return truncS64F64(a) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a := math.Float64frombits(f.l[xa]); return truncS64F64(a, at) }))
 		} else {
 			xa := c.f64(x)
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a := xa(f); return truncS64F64(a) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a := xa(f); return truncS64F64(a, at) }))
 		}
 	case opcode.I64UConvertF64:
 		x := c.pop()
 		if x.k == eSlot {
 			xa := x.slot
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a := math.Float64frombits(f.l[xa]); return truncU64F64(a) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a := math.Float64frombits(f.l[xa]); return truncU64F64(a, at) }))
 		} else {
 			xa := c.f64(x)
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a := xa(f); return truncU64F64(a) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a := xa(f); return truncU64F64(a, at) }))
 		}
 	case opcode.F32SConvertI32:
 		x := c.pop()
@@ -3446,25 +3447,28 @@ func (c *compiler) numeric(op opcode.Opcode) bool {
 	return true
 }
 
-// memFast compiles a load or store of memory 0, an i32 memory, reporting
-// whether it did.
-func (c *compiler) memFast(op opcode.Opcode, mem uint32, off uint64) bool {
+// memFast compiles a load or store of memory 0, an i32 memory, at offset
+// at, reporting whether it did. An i32 memory's offset off is below 2^32:
+// a node captures it with at in its upper half, as oa, which costs the path
+// that does not trap nothing that at captured apart would.
+func (c *compiler) memFast(op opcode.Opcode, mem uint32, off uint64, at uint32) bool {
 	if mem != 0 || c.m.Memories[0].Limits.Is64 {
 		return false
 	}
+	oa := off | uint64(at)<<32
 	switch op {
 	case opcode.I32LoadMem:
 		a := c.pop()
 		if a.k == eSlot {
 			s := a.slot
 			c.pushTree(module.I32, ti32(func(f *frame) uint32 {
-				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+off, 4)
+				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+uint64(uint32(oa)), 4, uint32(oa>>32))
 				return binary.LittleEndian.Uint32(b)
 			}))
 		} else {
 			x := c.i32(a)
 			c.pushTree(module.I32, ti32(func(f *frame) uint32 {
-				b := f.inst.mem0.span(uint64(x(f))+off, 4)
+				b := f.inst.mem0.span(uint64(x(f))+uint64(uint32(oa)), 4, uint32(oa>>32))
 				return binary.LittleEndian.Uint32(b)
 			}))
 		}
@@ -3473,13 +3477,13 @@ func (c *compiler) memFast(op opcode.Opcode, mem uint32, off uint64) bool {
 		if a.k == eSlot {
 			s := a.slot
 			c.pushTree(module.I64, ti64(func(f *frame) uint64 {
-				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+off, 8)
+				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+uint64(uint32(oa)), 8, uint32(oa>>32))
 				return binary.LittleEndian.Uint64(b)
 			}))
 		} else {
 			x := c.i32(a)
 			c.pushTree(module.I64, ti64(func(f *frame) uint64 {
-				b := f.inst.mem0.span(uint64(x(f))+off, 8)
+				b := f.inst.mem0.span(uint64(x(f))+uint64(uint32(oa)), 8, uint32(oa>>32))
 				return binary.LittleEndian.Uint64(b)
 			}))
 		}
@@ -3488,13 +3492,13 @@ func (c *compiler) memFast(op opcode.Opcode, mem uint32, off uint64) bool {
 		if a.k == eSlot {
 			s := a.slot
 			c.pushTree(module.F32, tf32(func(f *frame) float32 {
-				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+off, 4)
+				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+uint64(uint32(oa)), 4, uint32(oa>>32))
 				return math.Float32frombits(binary.LittleEndian.Uint32(b))
 			}))
 		} else {
 			x := c.i32(a)
 			c.pushTree(module.F32, tf32(func(f *frame) float32 {
-				b := f.inst.mem0.span(uint64(x(f))+off, 4)
+				b := f.inst.mem0.span(uint64(x(f))+uint64(uint32(oa)), 4, uint32(oa>>32))
 				return math.Float32frombits(binary.LittleEndian.Uint32(b))
 			}))
 		}
@@ -3503,13 +3507,13 @@ func (c *compiler) memFast(op opcode.Opcode, mem uint32, off uint64) bool {
 		if a.k == eSlot {
 			s := a.slot
 			c.pushTree(module.F64, tf64(func(f *frame) float64 {
-				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+off, 8)
+				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+uint64(uint32(oa)), 8, uint32(oa>>32))
 				return math.Float64frombits(binary.LittleEndian.Uint64(b))
 			}))
 		} else {
 			x := c.i32(a)
 			c.pushTree(module.F64, tf64(func(f *frame) float64 {
-				b := f.inst.mem0.span(uint64(x(f))+off, 8)
+				b := f.inst.mem0.span(uint64(x(f))+uint64(uint32(oa)), 8, uint32(oa>>32))
 				return math.Float64frombits(binary.LittleEndian.Uint64(b))
 			}))
 		}
@@ -3518,34 +3522,43 @@ func (c *compiler) memFast(op opcode.Opcode, mem uint32, off uint64) bool {
 		if a.k == eSlot {
 			s := a.slot
 			c.pushTree(module.I32, ti32(func(f *frame) uint32 {
-				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+off, 1)
+				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+uint64(uint32(oa)), 1, uint32(oa>>32))
 				return uint32(int32(int8(b[0])))
 			}))
 		} else {
 			x := c.i32(a)
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { b := f.inst.mem0.span(uint64(x(f))+off, 1); return uint32(int32(int8(b[0]))) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 {
+				b := f.inst.mem0.span(uint64(x(f))+uint64(uint32(oa)), 1, uint32(oa>>32))
+				return uint32(int32(int8(b[0])))
+			}))
 		}
 	case opcode.I32LoadMem8U:
 		a := c.pop()
 		if a.k == eSlot {
 			s := a.slot
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { b := f.inst.mem0.span(uint64(uint32(f.l[s]))+off, 1); return uint32(b[0]) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 {
+				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+uint64(uint32(oa)), 1, uint32(oa>>32))
+				return uint32(b[0])
+			}))
 		} else {
 			x := c.i32(a)
-			c.pushTree(module.I32, ti32(func(f *frame) uint32 { b := f.inst.mem0.span(uint64(x(f))+off, 1); return uint32(b[0]) }))
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 {
+				b := f.inst.mem0.span(uint64(x(f))+uint64(uint32(oa)), 1, uint32(oa>>32))
+				return uint32(b[0])
+			}))
 		}
 	case opcode.I32LoadMem16S:
 		a := c.pop()
 		if a.k == eSlot {
 			s := a.slot
 			c.pushTree(module.I32, ti32(func(f *frame) uint32 {
-				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+off, 2)
+				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+uint64(uint32(oa)), 2, uint32(oa>>32))
 				return uint32(int32(int16(binary.LittleEndian.Uint16(b))))
 			}))
 		} else {
 			x := c.i32(a)
 			c.pushTree(module.I32, ti32(func(f *frame) uint32 {
-				b := f.inst.mem0.span(uint64(x(f))+off, 2)
+				b := f.inst.mem0.span(uint64(x(f))+uint64(uint32(oa)), 2, uint32(oa>>32))
 				return uint32(int32(int16(binary.LittleEndian.Uint16(b))))
 			}))
 		}
@@ -3554,13 +3567,13 @@ func (c *compiler) memFast(op opcode.Opcode, mem uint32, off uint64) bool {
 		if a.k == eSlot {
 			s := a.slot
 			c.pushTree(module.I32, ti32(func(f *frame) uint32 {
-				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+off, 2)
+				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+uint64(uint32(oa)), 2, uint32(oa>>32))
 				return uint32(binary.LittleEndian.Uint16(b))
 			}))
 		} else {
 			x := c.i32(a)
 			c.pushTree(module.I32, ti32(func(f *frame) uint32 {
-				b := f.inst.mem0.span(uint64(x(f))+off, 2)
+				b := f.inst.mem0.span(uint64(x(f))+uint64(uint32(oa)), 2, uint32(oa>>32))
 				return uint32(binary.LittleEndian.Uint16(b))
 			}))
 		}
@@ -3569,34 +3582,43 @@ func (c *compiler) memFast(op opcode.Opcode, mem uint32, off uint64) bool {
 		if a.k == eSlot {
 			s := a.slot
 			c.pushTree(module.I64, ti64(func(f *frame) uint64 {
-				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+off, 1)
+				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+uint64(uint32(oa)), 1, uint32(oa>>32))
 				return uint64(int64(int8(b[0])))
 			}))
 		} else {
 			x := c.i32(a)
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { b := f.inst.mem0.span(uint64(x(f))+off, 1); return uint64(int64(int8(b[0]))) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 {
+				b := f.inst.mem0.span(uint64(x(f))+uint64(uint32(oa)), 1, uint32(oa>>32))
+				return uint64(int64(int8(b[0])))
+			}))
 		}
 	case opcode.I64LoadMem8U:
 		a := c.pop()
 		if a.k == eSlot {
 			s := a.slot
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { b := f.inst.mem0.span(uint64(uint32(f.l[s]))+off, 1); return uint64(b[0]) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 {
+				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+uint64(uint32(oa)), 1, uint32(oa>>32))
+				return uint64(b[0])
+			}))
 		} else {
 			x := c.i32(a)
-			c.pushTree(module.I64, ti64(func(f *frame) uint64 { b := f.inst.mem0.span(uint64(x(f))+off, 1); return uint64(b[0]) }))
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 {
+				b := f.inst.mem0.span(uint64(x(f))+uint64(uint32(oa)), 1, uint32(oa>>32))
+				return uint64(b[0])
+			}))
 		}
 	case opcode.I64LoadMem16S:
 		a := c.pop()
 		if a.k == eSlot {
 			s := a.slot
 			c.pushTree(module.I64, ti64(func(f *frame) uint64 {
-				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+off, 2)
+				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+uint64(uint32(oa)), 2, uint32(oa>>32))
 				return uint64(int64(int16(binary.LittleEndian.Uint16(b))))
 			}))
 		} else {
 			x := c.i32(a)
 			c.pushTree(module.I64, ti64(func(f *frame) uint64 {
-				b := f.inst.mem0.span(uint64(x(f))+off, 2)
+				b := f.inst.mem0.span(uint64(x(f))+uint64(uint32(oa)), 2, uint32(oa>>32))
 				return uint64(int64(int16(binary.LittleEndian.Uint16(b))))
 			}))
 		}
@@ -3605,13 +3627,13 @@ func (c *compiler) memFast(op opcode.Opcode, mem uint32, off uint64) bool {
 		if a.k == eSlot {
 			s := a.slot
 			c.pushTree(module.I64, ti64(func(f *frame) uint64 {
-				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+off, 2)
+				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+uint64(uint32(oa)), 2, uint32(oa>>32))
 				return uint64(binary.LittleEndian.Uint16(b))
 			}))
 		} else {
 			x := c.i32(a)
 			c.pushTree(module.I64, ti64(func(f *frame) uint64 {
-				b := f.inst.mem0.span(uint64(x(f))+off, 2)
+				b := f.inst.mem0.span(uint64(x(f))+uint64(uint32(oa)), 2, uint32(oa>>32))
 				return uint64(binary.LittleEndian.Uint16(b))
 			}))
 		}
@@ -3620,13 +3642,13 @@ func (c *compiler) memFast(op opcode.Opcode, mem uint32, off uint64) bool {
 		if a.k == eSlot {
 			s := a.slot
 			c.pushTree(module.I64, ti64(func(f *frame) uint64 {
-				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+off, 4)
+				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+uint64(uint32(oa)), 4, uint32(oa>>32))
 				return uint64(int64(int32(binary.LittleEndian.Uint32(b))))
 			}))
 		} else {
 			x := c.i32(a)
 			c.pushTree(module.I64, ti64(func(f *frame) uint64 {
-				b := f.inst.mem0.span(uint64(x(f))+off, 4)
+				b := f.inst.mem0.span(uint64(x(f))+uint64(uint32(oa)), 4, uint32(oa>>32))
 				return uint64(int64(int32(binary.LittleEndian.Uint32(b))))
 			}))
 		}
@@ -3635,13 +3657,13 @@ func (c *compiler) memFast(op opcode.Opcode, mem uint32, off uint64) bool {
 		if a.k == eSlot {
 			s := a.slot
 			c.pushTree(module.I64, ti64(func(f *frame) uint64 {
-				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+off, 4)
+				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+uint64(uint32(oa)), 4, uint32(oa>>32))
 				return uint64(binary.LittleEndian.Uint32(b))
 			}))
 		} else {
 			x := c.i32(a)
 			c.pushTree(module.I64, ti64(func(f *frame) uint64 {
-				b := f.inst.mem0.span(uint64(x(f))+off, 4)
+				b := f.inst.mem0.span(uint64(x(f))+uint64(uint32(oa)), 4, uint32(oa>>32))
 				return uint64(binary.LittleEndian.Uint32(b))
 			}))
 		}
@@ -3652,18 +3674,18 @@ func (c *compiler) memFast(op opcode.Opcode, mem uint32, off uint64) bool {
 		if a.k == eSlot {
 			s := a.slot
 			c.emit(func(f *frame) int32 {
-				e := uint64(uint32(f.l[s])) + off
+				e := uint64(uint32(f.l[s])) + uint64(uint32(oa))
 				v := v(f)
-				b := f.inst.mem0.span(e, 4)
+				b := f.inst.mem0.span(e, 4, uint32(oa>>32))
 				binary.LittleEndian.PutUint32(b, v)
 				return 0
 			})
 		} else {
 			x := c.i32(a)
 			c.emit(func(f *frame) int32 {
-				e := uint64(x(f)) + off
+				e := uint64(x(f)) + uint64(uint32(oa))
 				v := v(f)
-				b := f.inst.mem0.span(e, 4)
+				b := f.inst.mem0.span(e, 4, uint32(oa>>32))
 				binary.LittleEndian.PutUint32(b, v)
 				return 0
 			})
@@ -3675,18 +3697,18 @@ func (c *compiler) memFast(op opcode.Opcode, mem uint32, off uint64) bool {
 		if a.k == eSlot {
 			s := a.slot
 			c.emit(func(f *frame) int32 {
-				e := uint64(uint32(f.l[s])) + off
+				e := uint64(uint32(f.l[s])) + uint64(uint32(oa))
 				v := v(f)
-				b := f.inst.mem0.span(e, 8)
+				b := f.inst.mem0.span(e, 8, uint32(oa>>32))
 				binary.LittleEndian.PutUint64(b, v)
 				return 0
 			})
 		} else {
 			x := c.i32(a)
 			c.emit(func(f *frame) int32 {
-				e := uint64(x(f)) + off
+				e := uint64(x(f)) + uint64(uint32(oa))
 				v := v(f)
-				b := f.inst.mem0.span(e, 8)
+				b := f.inst.mem0.span(e, 8, uint32(oa>>32))
 				binary.LittleEndian.PutUint64(b, v)
 				return 0
 			})
@@ -3698,18 +3720,18 @@ func (c *compiler) memFast(op opcode.Opcode, mem uint32, off uint64) bool {
 		if a.k == eSlot {
 			s := a.slot
 			c.emit(func(f *frame) int32 {
-				e := uint64(uint32(f.l[s])) + off
+				e := uint64(uint32(f.l[s])) + uint64(uint32(oa))
 				v := v(f)
-				b := f.inst.mem0.span(e, 4)
+				b := f.inst.mem0.span(e, 4, uint32(oa>>32))
 				binary.LittleEndian.PutUint32(b, math.Float32bits(v))
 				return 0
 			})
 		} else {
 			x := c.i32(a)
 			c.emit(func(f *frame) int32 {
-				e := uint64(x(f)) + off
+				e := uint64(x(f)) + uint64(uint32(oa))
 				v := v(f)
-				b := f.inst.mem0.span(e, 4)
+				b := f.inst.mem0.span(e, 4, uint32(oa>>32))
 				binary.LittleEndian.PutUint32(b, math.Float32bits(v))
 				return 0
 			})
@@ -3721,18 +3743,18 @@ func (c *compiler) memFast(op opcode.Opcode, mem uint32, off uint64) bool {
 		if a.k == eSlot {
 			s := a.slot
 			c.emit(func(f *frame) int32 {
-				e := uint64(uint32(f.l[s])) + off
+				e := uint64(uint32(f.l[s])) + uint64(uint32(oa))
 				v := v(f)
-				b := f.inst.mem0.span(e, 8)
+				b := f.inst.mem0.span(e, 8, uint32(oa>>32))
 				binary.LittleEndian.PutUint64(b, math.Float64bits(v))
 				return 0
 			})
 		} else {
 			x := c.i32(a)
 			c.emit(func(f *frame) int32 {
-				e := uint64(x(f)) + off
+				e := uint64(x(f)) + uint64(uint32(oa))
 				v := v(f)
-				b := f.inst.mem0.span(e, 8)
+				b := f.inst.mem0.span(e, 8, uint32(oa>>32))
 				binary.LittleEndian.PutUint64(b, math.Float64bits(v))
 				return 0
 			})
@@ -3744,18 +3766,18 @@ func (c *compiler) memFast(op opcode.Opcode, mem uint32, off uint64) bool {
 		if a.k == eSlot {
 			s := a.slot
 			c.emit(func(f *frame) int32 {
-				e := uint64(uint32(f.l[s])) + off
+				e := uint64(uint32(f.l[s])) + uint64(uint32(oa))
 				v := v(f)
-				b := f.inst.mem0.span(e, 1)
+				b := f.inst.mem0.span(e, 1, uint32(oa>>32))
 				b[0] = byte(v)
 				return 0
 			})
 		} else {
 			x := c.i32(a)
 			c.emit(func(f *frame) int32 {
-				e := uint64(x(f)) + off
+				e := uint64(x(f)) + uint64(uint32(oa))
 				v := v(f)
-				b := f.inst.mem0.span(e, 1)
+				b := f.inst.mem0.span(e, 1, uint32(oa>>32))
 				b[0] = byte(v)
 				return 0
 			})
@@ -3767,18 +3789,18 @@ func (c *compiler) memFast(op opcode.Opcode, mem uint32, off uint64) bool {
 		if a.k == eSlot {
 			s := a.slot
 			c.emit(func(f *frame) int32 {
-				e := uint64(uint32(f.l[s])) + off
+				e := uint64(uint32(f.l[s])) + uint64(uint32(oa))
 				v := v(f)
-				b := f.inst.mem0.span(e, 2)
+				b := f.inst.mem0.span(e, 2, uint32(oa>>32))
 				binary.LittleEndian.PutUint16(b, uint16(v))
 				return 0
 			})
 		} else {
 			x := c.i32(a)
 			c.emit(func(f *frame) int32 {
-				e := uint64(x(f)) + off
+				e := uint64(x(f)) + uint64(uint32(oa))
 				v := v(f)
-				b := f.inst.mem0.span(e, 2)
+				b := f.inst.mem0.span(e, 2, uint32(oa>>32))
 				binary.LittleEndian.PutUint16(b, uint16(v))
 				return 0
 			})
@@ -3790,18 +3812,18 @@ func (c *compiler) memFast(op opcode.Opcode, mem uint32, off uint64) bool {
 		if a.k == eSlot {
 			s := a.slot
 			c.emit(func(f *frame) int32 {
-				e := uint64(uint32(f.l[s])) + off
+				e := uint64(uint32(f.l[s])) + uint64(uint32(oa))
 				v := v(f)
-				b := f.inst.mem0.span(e, 1)
+				b := f.inst.mem0.span(e, 1, uint32(oa>>32))
 				b[0] = byte(v)
 				return 0
 			})
 		} else {
 			x := c.i32(a)
 			c.emit(func(f *frame) int32 {
-				e := uint64(x(f)) + off
+				e := uint64(x(f)) + uint64(uint32(oa))
 				v := v(f)
-				b := f.inst.mem0.span(e, 1)
+				b := f.inst.mem0.span(e, 1, uint32(oa>>32))
 				b[0] = byte(v)
 				return 0
 			})
@@ -3813,18 +3835,18 @@ func (c *compiler) memFast(op opcode.Opcode, mem uint32, off uint64) bool {
 		if a.k == eSlot {
 			s := a.slot
 			c.emit(func(f *frame) int32 {
-				e := uint64(uint32(f.l[s])) + off
+				e := uint64(uint32(f.l[s])) + uint64(uint32(oa))
 				v := v(f)
-				b := f.inst.mem0.span(e, 2)
+				b := f.inst.mem0.span(e, 2, uint32(oa>>32))
 				binary.LittleEndian.PutUint16(b, uint16(v))
 				return 0
 			})
 		} else {
 			x := c.i32(a)
 			c.emit(func(f *frame) int32 {
-				e := uint64(x(f)) + off
+				e := uint64(x(f)) + uint64(uint32(oa))
 				v := v(f)
-				b := f.inst.mem0.span(e, 2)
+				b := f.inst.mem0.span(e, 2, uint32(oa>>32))
 				binary.LittleEndian.PutUint16(b, uint16(v))
 				return 0
 			})
@@ -3836,18 +3858,18 @@ func (c *compiler) memFast(op opcode.Opcode, mem uint32, off uint64) bool {
 		if a.k == eSlot {
 			s := a.slot
 			c.emit(func(f *frame) int32 {
-				e := uint64(uint32(f.l[s])) + off
+				e := uint64(uint32(f.l[s])) + uint64(uint32(oa))
 				v := v(f)
-				b := f.inst.mem0.span(e, 4)
+				b := f.inst.mem0.span(e, 4, uint32(oa>>32))
 				binary.LittleEndian.PutUint32(b, uint32(v))
 				return 0
 			})
 		} else {
 			x := c.i32(a)
 			c.emit(func(f *frame) int32 {
-				e := uint64(x(f)) + off
+				e := uint64(x(f)) + uint64(uint32(oa))
 				v := v(f)
-				b := f.inst.mem0.span(e, 4)
+				b := f.inst.mem0.span(e, 4, uint32(oa>>32))
 				binary.LittleEndian.PutUint32(b, uint32(v))
 				return 0
 			})

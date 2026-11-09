@@ -364,12 +364,15 @@ V8's. The rest of the engine words its errors as V8 does too:
   does not support unaligned accesses", "requested new array is too large".
   Its `Stack` prints ten frames as V8 does,
   `    at add (wasm://wasm/8c1f3e2a:wasm-function[1]:0x3a)`, the hash being
-  V8's of the module's bytes and the name the module's and the function's.
+  V8's of the module's bytes and the name the module's and the function's;
+  the innermost frame is at the instruction that trapped, in the interpreter
+  and in native code alike, and each frame below it at its call.
 - In JavaScript the same texts come with the interface's prefixes, from
   `CompileError`, `LinkError` and `RuntimeError`. An error's `stack` shows
   the wasm frames of each exported function's call running, in the place of
   the function's own frame -- a trap's, and an error an import threw while
-  wasm called it -- each frame at the call it is making, and
+  wasm called it -- each frame at the call it is making, or a trap's
+  innermost at the instruction that trapped, and
   `Error.prepareStackTrace`'s CallSites answer for them as V8's do: the
   function's index from `getFunction`, line 1 and the offset plus one as the
   column, the module's URL as the file.
@@ -710,11 +713,7 @@ move.
 
 The engine:
 
-- In the interpreter, a trap's innermost frame carries the offset of the last
-  call its function made, or 0, not the trapping instruction's; native code
-  gives the instruction's.
-- The JIT refuses the functions listed
-  under [The JIT](#the-jit).
+- The JIT refuses the functions listed under [The JIT](#the-jit).
 
 The `WebAssembly` namespace:
 

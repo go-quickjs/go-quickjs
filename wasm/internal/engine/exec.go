@@ -217,6 +217,8 @@ func recovered(x *exec, r any) error {
 			v.Frames = x.trace()
 		}
 		return v
+	case trapSite:
+		return v.trap(x.trace())
 	case *Exception:
 		return v
 	case *delegation:

@@ -13,24 +13,25 @@ func indirectChecksType(m *module.Module, typeIndex, table uint32) bool {
 // at index i of table, trapping if there is none of that type: "table index
 // is out of bounds" past the table's end; for a null entry, "function
 // signature mismatch" where the call checks its callee's type and "null
-// function" where the table's type made the check needless.
-func indirectCallee(inst *Instance, typeIndex, table uint32, i uint64, checked bool) *Function {
+// function" where the table's type made the check needless -- as the
+// instruction at offset at.
+func indirectCallee(inst *Instance, typeIndex, table uint32, i uint64, checked bool, at uint32) *Function {
 	t := inst.Tables[table]
 	if i >= uint64(len(t.Elems)) {
-		trap(TrapTableOutOfBounds)
+		trapAt(TrapTableOutOfBounds, at)
 	}
 	e := t.Elems[i]
 	if e.IsNull() {
 		if checked {
-			trap(TrapFuncSigMismatch)
+			trapAt(TrapFuncSigMismatch, at)
 		}
-		trap(TrapNullFunc)
+		trapAt(TrapNullFunc, at)
 	}
 	fn := e.Func()
 	if checked {
 		want := inst.Module.Canonical[typeIndex]
 		if fn.Type != want && !module.IsCanonicalSubtype(fn.Type, want) {
-			trap(TrapFuncSigMismatch)
+			trapAt(TrapFuncSigMismatch, at)
 		}
 	}
 	return fn

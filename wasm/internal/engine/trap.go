@@ -86,4 +86,30 @@ func (t *Trap) Error() string {
 }
 
 // trap panics with a trap of code c; the interpreter's entry recovers it.
+// The innermost frame reports the offset the exec's call stack holds for
+// it: native code's, which it records before Go traps for it, or a call's.
 func trap(c TrapCode) { panic(&Trap{Code: c}) }
+
+// trapAt panics with a trap of code c raised by the instruction at module
+// offset at, which the innermost frame reports; at is 0 where there is no
+// frame, in a constant expression. It panics with a trapSite, which
+// recovered makes the *Trap: a value that a closure inlining trapAt passes
+// to the runtime's conversion, so that it keeps nothing live across a call
+// and spills nothing on the path that does not trap.
+func trapAt(c TrapCode, at uint32) { panic(trapSite{c, at}) }
+
+// trapSite is what trapAt panics with: the trap's code and the offset of
+// the instruction that raised it.
+type trapSite struct {
+	code TrapCode
+	at   uint32
+}
+
+// trap returns the trap the site raised, its innermost frame at the
+// site's instruction among frames.
+func (s trapSite) trap(frames []Frame) *Trap {
+	if s.at != 0 && len(frames) > 0 {
+		frames[0].Offset = s.at
+	}
+	return &Trap{Code: s.code, Frames: frames}
+}

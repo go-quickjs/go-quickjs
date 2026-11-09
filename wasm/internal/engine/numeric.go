@@ -8,6 +8,7 @@ import (
 //go:generate go run ./internal/numgen ops_num_gen.go
 
 // The numeric operators' semantics where Go's operators differ from wasm's.
+// Those that trap are given the offset of their instruction, for the trap.
 
 func b2i(b bool) uint32 {
 	if b {
@@ -16,26 +17,26 @@ func b2i(b bool) uint32 {
 	return 0
 }
 
-func divS32(a, b uint32) uint32 {
+func divS32(a, b, at uint32) uint32 {
 	if b == 0 {
-		trap(TrapDivByZero)
+		trapAt(TrapDivByZero, at)
 	}
 	if int32(a) == math.MinInt32 && int32(b) == -1 {
-		trap(TrapDivUnrepresentable)
+		trapAt(TrapDivUnrepresentable, at)
 	}
 	return uint32(int32(a) / int32(b))
 }
 
-func divU32(a, b uint32) uint32 {
+func divU32(a, b, at uint32) uint32 {
 	if b == 0 {
-		trap(TrapDivByZero)
+		trapAt(TrapDivByZero, at)
 	}
 	return a / b
 }
 
-func remS32(a, b uint32) uint32 {
+func remS32(a, b, at uint32) uint32 {
 	if b == 0 {
-		trap(TrapRemByZero)
+		trapAt(TrapRemByZero, at)
 	}
 	if int32(b) == -1 {
 		return 0
@@ -43,33 +44,33 @@ func remS32(a, b uint32) uint32 {
 	return uint32(int32(a) % int32(b))
 }
 
-func remU32(a, b uint32) uint32 {
+func remU32(a, b, at uint32) uint32 {
 	if b == 0 {
-		trap(TrapRemByZero)
+		trapAt(TrapRemByZero, at)
 	}
 	return a % b
 }
 
-func divS64(a, b uint64) uint64 {
+func divS64(a, b uint64, at uint32) uint64 {
 	if b == 0 {
-		trap(TrapDivByZero)
+		trapAt(TrapDivByZero, at)
 	}
 	if int64(a) == math.MinInt64 && int64(b) == -1 {
-		trap(TrapDivUnrepresentable)
+		trapAt(TrapDivUnrepresentable, at)
 	}
 	return uint64(int64(a) / int64(b))
 }
 
-func divU64(a, b uint64) uint64 {
+func divU64(a, b uint64, at uint32) uint64 {
 	if b == 0 {
-		trap(TrapDivByZero)
+		trapAt(TrapDivByZero, at)
 	}
 	return a / b
 }
 
-func remS64(a, b uint64) uint64 {
+func remS64(a, b uint64, at uint32) uint64 {
 	if b == 0 {
-		trap(TrapRemByZero)
+		trapAt(TrapRemByZero, at)
 	}
 	if int64(b) == -1 {
 		return 0
@@ -77,9 +78,9 @@ func remS64(a, b uint64) uint64 {
 	return uint64(int64(a) % int64(b))
 }
 
-func remU64(a, b uint64) uint64 {
+func remU64(a, b uint64, at uint32) uint64 {
 	if b == 0 {
-		trap(TrapRemByZero)
+		trapAt(TrapRemByZero, at)
 	}
 	return a % b
 }
@@ -198,58 +199,58 @@ func fnearest64(a float64) float64 {
 
 // The truncations trap on NaN and on a value out of the result's range.
 
-func truncS32F32(a float32) uint32 {
+func truncS32F32(a float32, at uint32) uint32 {
 	if !(a >= -2147483648.0 && a < 2147483648.0) {
-		trap(TrapFloatUnrepresentable)
+		trapAt(TrapFloatUnrepresentable, at)
 	}
 	return uint32(int32(a))
 }
 
-func truncU32F32(a float32) uint32 {
+func truncU32F32(a float32, at uint32) uint32 {
 	if !(a > -1.0 && a < 4294967296.0) {
-		trap(TrapFloatUnrepresentable)
+		trapAt(TrapFloatUnrepresentable, at)
 	}
 	return uint32(a)
 }
 
-func truncS32F64(a float64) uint32 {
+func truncS32F64(a float64, at uint32) uint32 {
 	if !(a > -2147483649.0 && a < 2147483648.0) {
-		trap(TrapFloatUnrepresentable)
+		trapAt(TrapFloatUnrepresentable, at)
 	}
 	return uint32(int32(a))
 }
 
-func truncU32F64(a float64) uint32 {
+func truncU32F64(a float64, at uint32) uint32 {
 	if !(a > -1.0 && a < 4294967296.0) {
-		trap(TrapFloatUnrepresentable)
+		trapAt(TrapFloatUnrepresentable, at)
 	}
 	return uint32(a)
 }
 
-func truncS64F32(a float32) uint64 {
+func truncS64F32(a float32, at uint32) uint64 {
 	if !(a >= -9223372036854775808.0 && a < 9223372036854775808.0) {
-		trap(TrapFloatUnrepresentable)
+		trapAt(TrapFloatUnrepresentable, at)
 	}
 	return uint64(int64(a))
 }
 
-func truncU64F32(a float32) uint64 {
+func truncU64F32(a float32, at uint32) uint64 {
 	if !(a > -1.0 && a < 18446744073709551616.0) {
-		trap(TrapFloatUnrepresentable)
+		trapAt(TrapFloatUnrepresentable, at)
 	}
 	return f64ToU64(float64(a))
 }
 
-func truncS64F64(a float64) uint64 {
+func truncS64F64(a float64, at uint32) uint64 {
 	if !(a >= -9223372036854775808.0 && a < 9223372036854775808.0) {
-		trap(TrapFloatUnrepresentable)
+		trapAt(TrapFloatUnrepresentable, at)
 	}
 	return uint64(int64(a))
 }
 
-func truncU64F64(a float64) uint64 {
+func truncU64F64(a float64, at uint32) uint64 {
 	if !(a > -1.0 && a < 18446744073709551616.0) {
-		trap(TrapFloatUnrepresentable)
+		trapAt(TrapFloatUnrepresentable, at)
 	}
 	return f64ToU64(a)
 }

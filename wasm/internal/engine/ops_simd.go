@@ -30,25 +30,25 @@ func (c *compiler) simd(op opcode.Opcode, at uint32) bool {
 	case op >= opcode.S128LoadMem && op <= opcode.S128Load64Splat,
 		op == opcode.S128Load32Zero, op == opcode.S128Load64Zero:
 		mem, off := c.r.memarg()
-		c.loadVec(op, mem, off)
+		c.loadVec(op, mem, off, at)
 	case op == opcode.S128StoreMem:
 		mem, off := c.r.memarg()
 		v := c.v128(c.pop())
 		a := c.pop()
 		c.flushBelow(0)
-		ea := c.addr(a, mem, off)
+		ea := c.addr(a, mem, off, at)
 		m := memAt(mem)
 		c.emit(func(f *frame) int32 {
 			e := ea(f)
 			x := v(f)
-			b := m(f).span(e, 16)
+			b := m(f).span(e, 16, at)
 			binary.LittleEndian.PutUint64(b, x.Lo)
 			binary.LittleEndian.PutUint64(b[8:], x.Hi)
 			return 0
 		})
 	case op >= opcode.S128Load8Lane && op <= opcode.S128Store64Lane:
 		mem, off := c.r.memarg()
-		c.memLane(op, mem, off, int(c.r.byte()))
+		c.memLane(op, mem, off, int(c.r.byte()), at)
 	default:
 		return c.simdOp(op)
 	}
@@ -168,20 +168,20 @@ func (c *compiler) splat(op opcode.Opcode) {
 }
 
 // loadVec compiles the loads of a whole vector, of its lanes widened, of a
-// splatted lane, and of a lane with zeros above it.
-func (c *compiler) loadVec(op opcode.Opcode, mem uint32, off uint64) {
-	ea := c.addr(c.pop(), mem, off)
+// splatted lane, and of a lane with zeros above it, at offset at.
+func (c *compiler) loadVec(op opcode.Opcode, mem uint32, off uint64, at uint32) {
+	ea := c.addr(c.pop(), mem, off, at)
 	m := memAt(mem)
 	var t tv128
 	switch op {
 	case opcode.S128LoadMem:
 		t = func(f *frame) V128 {
-			b := m(f).span(ea(f), 16)
+			b := m(f).span(ea(f), 16, at)
 			return V128{binary.LittleEndian.Uint64(b), binary.LittleEndian.Uint64(b[8:])}
 		}
 	case opcode.S128Load8x8S:
 		t = func(f *frame) V128 {
-			b := m(f).span(ea(f), 8)
+			b := m(f).span(ea(f), 8, at)
 			var r [8]uint16
 			for i := range r {
 				r[i] = uint16(int8(b[i]))
@@ -190,7 +190,7 @@ func (c *compiler) loadVec(op opcode.Opcode, mem uint32, off uint64) {
 		}
 	case opcode.S128Load8x8U:
 		t = func(f *frame) V128 {
-			b := m(f).span(ea(f), 8)
+			b := m(f).span(ea(f), 8, at)
 			var r [8]uint16
 			for i := range r {
 				r[i] = uint16(b[i])
@@ -199,7 +199,7 @@ func (c *compiler) loadVec(op opcode.Opcode, mem uint32, off uint64) {
 		}
 	case opcode.S128Load16x4S:
 		t = func(f *frame) V128 {
-			b := m(f).span(ea(f), 8)
+			b := m(f).span(ea(f), 8, at)
 			var r [4]uint32
 			for i := range r {
 				r[i] = uint32(int16(binary.LittleEndian.Uint16(b[2*i:])))
@@ -208,7 +208,7 @@ func (c *compiler) loadVec(op opcode.Opcode, mem uint32, off uint64) {
 		}
 	case opcode.S128Load16x4U:
 		t = func(f *frame) V128 {
-			b := m(f).span(ea(f), 8)
+			b := m(f).span(ea(f), 8, at)
 			var r [4]uint32
 			for i := range r {
 				r[i] = uint32(binary.LittleEndian.Uint16(b[2*i:]))
@@ -217,7 +217,7 @@ func (c *compiler) loadVec(op opcode.Opcode, mem uint32, off uint64) {
 		}
 	case opcode.S128Load32x2S:
 		t = func(f *frame) V128 {
-			b := m(f).span(ea(f), 8)
+			b := m(f).span(ea(f), 8, at)
 			return V128{
 				uint64(int32(binary.LittleEndian.Uint32(b))),
 				uint64(int32(binary.LittleEndian.Uint32(b[4:]))),
@@ -225,39 +225,40 @@ func (c *compiler) loadVec(op opcode.Opcode, mem uint32, off uint64) {
 		}
 	case opcode.S128Load32x2U:
 		t = func(f *frame) V128 {
-			b := m(f).span(ea(f), 8)
+			b := m(f).span(ea(f), 8, at)
 			return V128{uint64(binary.LittleEndian.Uint32(b)), uint64(binary.LittleEndian.Uint32(b[4:]))}
 		}
 	case opcode.S128Load8Splat:
 		t = func(f *frame) V128 {
-			x := uint64(m(f).span(ea(f), 1)[0]) * 0x0101010101010101
+			x := uint64(m(f).span(ea(f), 1, at)[0]) * 0x0101010101010101
 			return V128{x, x}
 		}
 	case opcode.S128Load16Splat:
 		t = func(f *frame) V128 {
-			x := uint64(binary.LittleEndian.Uint16(m(f).span(ea(f), 2))) * 0x0001000100010001
+			x := uint64(binary.LittleEndian.Uint16(m(f).span(ea(f), 2, at))) * 0x0001000100010001
 			return V128{x, x}
 		}
 	case opcode.S128Load32Splat:
 		t = func(f *frame) V128 {
-			x := uint64(binary.LittleEndian.Uint32(m(f).span(ea(f), 4))) * 0x0000000100000001
+			x := uint64(binary.LittleEndian.Uint32(m(f).span(ea(f), 4, at))) * 0x0000000100000001
 			return V128{x, x}
 		}
 	case opcode.S128Load64Splat:
 		t = func(f *frame) V128 {
-			x := binary.LittleEndian.Uint64(m(f).span(ea(f), 8))
+			x := binary.LittleEndian.Uint64(m(f).span(ea(f), 8, at))
 			return V128{x, x}
 		}
 	case opcode.S128Load32Zero:
-		t = func(f *frame) V128 { return V128{uint64(binary.LittleEndian.Uint32(m(f).span(ea(f), 4))), 0} }
+		t = func(f *frame) V128 { return V128{uint64(binary.LittleEndian.Uint32(m(f).span(ea(f), 4, at))), 0} }
 	case opcode.S128Load64Zero:
-		t = func(f *frame) V128 { return V128{binary.LittleEndian.Uint64(m(f).span(ea(f), 8)), 0} }
+		t = func(f *frame) V128 { return V128{binary.LittleEndian.Uint64(m(f).span(ea(f), 8, at)), 0} }
 	}
 	c.pushTree(module.V128, t)
 }
 
-// memLane compiles the loads into a lane and the stores of a lane.
-func (c *compiler) memLane(op opcode.Opcode, mem uint32, off uint64, l int) {
+// memLane compiles the loads into a lane and the stores of a lane, at
+// offset at.
+func (c *compiler) memLane(op opcode.Opcode, mem uint32, off uint64, l int, at uint32) {
 	var n int
 	switch op {
 	case opcode.S128Load8Lane, opcode.S128Store8Lane:
@@ -278,20 +279,20 @@ func (c *compiler) memLane(op opcode.Opcode, mem uint32, off uint64, l int) {
 	a := c.pop()
 	m := memAt(mem)
 	if op <= opcode.S128Load64Lane {
-		ea := c.addr(a, mem, off)
+		ea := c.addr(a, mem, off, at)
 		c.pushTree(module.V128, tv128(func(f *frame) V128 {
 			e := ea(f)
 			x := v(f)
-			return setLane(x, hi, sh, mask, readLE(m(f).span(e, uint64(n))))
+			return setLane(x, hi, sh, mask, readLE(m(f).span(e, uint64(n), at)))
 		}))
 		return
 	}
 	c.flushBelow(0)
-	ea := c.addr(a, mem, off)
+	ea := c.addr(a, mem, off, at)
 	c.emit(func(f *frame) int32 {
 		e := ea(f)
 		x := v(f)
-		writeLE(m(f).span(e, uint64(n)), getLane(x, hi, sh, mask))
+		writeLE(m(f).span(e, uint64(n), at), getLane(x, hi, sh, mask))
 		return 0
 	})
 }

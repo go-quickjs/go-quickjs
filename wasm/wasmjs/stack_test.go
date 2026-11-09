@@ -64,8 +64,8 @@ func TestStackWasmCallSite(t *testing.T) {
 }
 
 // TestStackTrapFrames pins a trap's stack: the wasm frames, named by the
-// module's name section, then the script's. The innermost frame is checked
-// up to its offset, which the interpreter gives as its last call's.
+// module's name section, the innermost at the trapping instruction and its
+// caller at its call, as in Node.
 func TestStackTrapFrames(t *testing.T) {
 	rt := newRuntime(t)
 	bytes := watBytes(t, `(module $mod (func $inner (export "inner") unreachable) (func (export "outer") call $inner))`)
@@ -74,10 +74,9 @@ func TestStackTrapFrames(t *testing.T) {
 		const e = new WebAssembly.Instance(new WebAssembly.Module(bytes)).exports;
 		let stack;
 		try { e.outer(); } catch (x) { stack = x.stack; }
-		var out = stack.split("\n").slice(0, 3).map(l => l.replace(/:0x[0-9a-f]+\)$/, ":0x?)")).join("\n") + "\n" + stack.split("\n")[2];`)
+		var out = stack.split("\n").slice(0, 3).join("\n");`)
 	want := `RuntimeError: unreachable
-    at mod.inner (wasm://wasm/mod-07f3ce6a:wasm-function[0]:0x?)
-    at mod (wasm://wasm/mod-07f3ce6a:wasm-function[1]:0x?)
+    at mod.inner (wasm://wasm/mod-07f3ce6a:wasm-function[0]:0x2b)
     at mod (wasm://wasm/mod-07f3ce6a:wasm-function[1]:0x2f)`
 	if got != want {
 		t.Fatalf("stack:\n%s\nwant:\n%s", got, want)

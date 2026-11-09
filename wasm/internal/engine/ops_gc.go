@@ -114,27 +114,30 @@ func (c *compiler) pushVal(t module.ValueType, get func(*frame) Val) {
 	}
 }
 
-// nonNull returns a reader of reference e that traps on null.
-func (c *compiler) nonNull(e entry) tref {
+// nonNull returns a reader of reference e, the operand of the instruction
+// at offset at, that traps on null.
+func (c *compiler) nonNull(e entry, at uint32) tref {
 	v := c.ref(e)
 	return func(f *frame) Ref {
 		r := v(f)
 		if r.IsNull() {
-			trap(TrapNullDereference)
+			trapAt(TrapNullDereference, at)
 		}
 		return r
 	}
 }
 
-// arrayIndex returns readers of an array operand and an index operand.
-func (c *compiler) arrayAndIndex(arr, idx entry) (tref, ti32) {
-	return c.nonNull(arr), c.i32(idx)
+// arrayAndIndex returns readers of the array operand and the index operand
+// of the instruction at offset at.
+func (c *compiler) arrayAndIndex(arr, idx entry, at uint32) (tref, ti32) {
+	return c.nonNull(arr, at), c.i32(idx)
 }
 
-// checkArray traps unless [i, i+n) lies within array a.
-func checkArray(a *Array, i, n uint32) {
+// checkArray traps, as the instruction at offset at, unless [i, i+n) lies
+// within array a.
+func checkArray(a *Array, i, n, at uint32) {
 	if uint64(i)+uint64(n) > uint64(a.n) {
-		trap(TrapArrayOutOfBounds)
+		trapAt(TrapArrayOutOfBounds, at)
 	}
 }
 
@@ -176,7 +179,7 @@ func (c *compiler) gcOps(op opcode.Opcode, at uint32) bool {
 		ft := m.Types[ti].Struct.Fields[fi].Type
 		cell := rt.cells[fi]
 		read := cellToVal(ft, op == opcode.StructGetS)
-		s := c.nonNull(c.pop())
+		s := c.nonNull(c.pop(), at)
 		c.pushVal(ft.Unpacked(), func(f *frame) Val { return read(cellAt(s(f).p, cell)) })
 	case opcode.StructSet:
 		ti := c.r.u32()
@@ -185,7 +188,7 @@ func (c *compiler) gcOps(op opcode.Opcode, at uint32) bool {
 		ft := m.Types[ti].Struct.Fields[fi].Type
 		cell := rt.cells[fi]
 		v := c.val(c.pop())
-		s := c.nonNull(c.pop())
+		s := c.nonNull(c.pop(), at)
 		c.flushBelow(0)
 		c.emit(func(f *frame) int32 {
 			r := s(f)
@@ -199,13 +202,13 @@ func (c *compiler) gcOps(op opcode.Opcode, at uint32) bool {
 		n := c.i32(c.pop())
 		t := module.Ref(module.HeapIndex(ti))
 		if op == opcode.ArrayNewDefault {
-			c.pushTree(t, tref(func(f *frame) Ref { return ArrayRef(newArray(rt, n(f), f.inst.budget, f.x)) }))
+			c.pushTree(t, tref(func(f *frame) Ref { return ArrayRef(newArray(rt, n(f), f.inst.budget, f.x, at)) }))
 			return true
 		}
 		v := c.val(c.pop())
 		c.pushTree(t, tref(func(f *frame) Ref {
 			val := v(f)
-			a := newArray(rt, n(f), f.inst.budget, f.x)
+			a := newArray(rt, n(f), f.inst.budget, f.x, at)
 			for i := 0; i < a.n; i++ {
 				arraySet(a, et, i, val)
 			}
@@ -222,7 +225,7 @@ func (c *compiler) gcOps(op opcode.Opcode, at uint32) bool {
 			vals[i] = c.val(e)
 		}
 		c.pushTree(module.Ref(module.HeapIndex(ti)), tref(func(f *frame) Ref {
-			a := newArray(rt, cnt, nil, nil)
+			a := newArray(rt, cnt, nil, nil, at)
 			for i, v := range vals {
 				arraySet(a, et, i, v(f))
 			}
@@ -244,17 +247,17 @@ func (c *compiler) gcOps(op opcode.Opcode, at uint32) bool {
 				d := f.inst.datas[seg]
 				size := uint64(rt.elemSize)
 				if uint64(src)+uint64(cnt)*size > uint64(len(d)) {
-					trap(TrapDataSegmentOutOfBounds)
+					trapAt(TrapDataSegmentOutOfBounds, at)
 				}
-				a := newArray(rt, cnt, f.inst.budget, f.x)
+				a := newArray(rt, cnt, f.inst.budget, f.x, at)
 				copy(a.b, d[src:])
 				return ArrayRef(a)
 			}
 			e := f.inst.elems[seg]
 			if uint64(src)+uint64(cnt) > uint64(len(e)) {
-				trap(TrapElementSegmentOutOfBounds)
+				trapAt(TrapElementSegmentOutOfBounds, at)
 			}
-			a := newArray(rt, cnt, f.inst.budget, f.x)
+			a := newArray(rt, cnt, f.inst.budget, f.x, at)
 			_ = et
 			copy(a.r, e[src:])
 			return ArrayRef(a)
@@ -264,12 +267,12 @@ func (c *compiler) gcOps(op opcode.Opcode, at uint32) bool {
 		et := m.Types[ti].Array.Elem.Type
 		signed := op == opcode.ArrayGetS
 		idx := c.pop()
-		arr, i := c.arrayAndIndex(c.pop(), idx)
+		arr, i := c.arrayAndIndex(c.pop(), idx, at)
 		c.pushVal(et.Unpacked(), func(f *frame) Val {
 			a := asArray(arr(f))
 			x := i(f)
 			if uint64(x) >= uint64(a.n) {
-				trap(TrapArrayOutOfBounds)
+				trapAt(TrapArrayOutOfBounds, at)
 			}
 			return arrayGet(a, et, int(x), signed)
 		})
@@ -278,20 +281,20 @@ func (c *compiler) gcOps(op opcode.Opcode, at uint32) bool {
 		et := m.Types[ti].Array.Elem.Type
 		v := c.val(c.pop())
 		idx := c.pop()
-		arr, i := c.arrayAndIndex(c.pop(), idx)
+		arr, i := c.arrayAndIndex(c.pop(), idx, at)
 		c.flushBelow(0)
 		c.emit(func(f *frame) int32 {
 			a := asArray(arr(f))
 			x := i(f)
 			val := v(f)
 			if uint64(x) >= uint64(a.n) {
-				trap(TrapArrayOutOfBounds)
+				trapAt(TrapArrayOutOfBounds, at)
 			}
 			arraySet(a, et, int(x), val)
 			return 0
 		})
 	case opcode.ArrayLen:
-		arr := c.nonNull(c.pop())
+		arr := c.nonNull(c.pop(), at)
 		c.pushTree(module.I32, ti32(func(f *frame) uint32 { return uint32(asArray(arr(f)).n) }))
 	case opcode.ArrayFill:
 		ti := c.r.u32()
@@ -299,12 +302,12 @@ func (c *compiler) gcOps(op opcode.Opcode, at uint32) bool {
 		n := c.i32(c.pop())
 		v := c.val(c.pop())
 		d := c.i32(c.pop())
-		arr := c.nonNull(c.pop())
+		arr := c.nonNull(c.pop(), at)
 		c.flushBelow(0)
 		c.emit(func(f *frame) int32 {
 			a := asArray(arr(f))
 			dst, val, cnt := d(f), v(f), n(f)
-			checkArray(a, dst, cnt)
+			checkArray(a, dst, cnt, at)
 			for i := uint32(0); i < cnt; i++ {
 				arraySet(a, et, int(dst+i), val)
 			}
@@ -316,17 +319,17 @@ func (c *compiler) gcOps(op opcode.Opcode, at uint32) bool {
 		et := m.Types[dti].Array.Elem.Type
 		n := c.i32(c.pop())
 		s := c.i32(c.pop())
-		sarr := c.nonNull(c.pop())
+		sarr := c.nonNull(c.pop(), at)
 		d := c.i32(c.pop())
-		darr := c.nonNull(c.pop())
+		darr := c.nonNull(c.pop(), at)
 		c.flushBelow(0)
 		c.emit(func(f *frame) int32 {
 			da := asArray(darr(f))
 			dst := d(f)
 			sa := asArray(sarr(f))
 			src, cnt := s(f), n(f)
-			checkArray(da, dst, cnt)
-			checkArray(sa, src, cnt)
+			checkArray(da, dst, cnt, at)
+			checkArray(sa, src, cnt, at)
 			if et.IsRef() {
 				copy(da.r[dst:dst+cnt], sa.r[src:src+cnt])
 			} else {
@@ -342,25 +345,25 @@ func (c *compiler) gcOps(op opcode.Opcode, at uint32) bool {
 		n := c.i32(c.pop())
 		s := c.i32(c.pop())
 		d := c.i32(c.pop())
-		arr := c.nonNull(c.pop())
+		arr := c.nonNull(c.pop(), at)
 		data := op == opcode.ArrayInitData
 		c.flushBelow(0)
 		c.emit(func(f *frame) int32 {
 			a := asArray(arr(f))
 			dst, src, cnt := d(f), s(f), n(f)
-			checkArray(a, dst, cnt)
+			checkArray(a, dst, cnt, at)
 			if data {
 				b := f.inst.datas[seg]
 				size := uint64(et.Size())
 				if uint64(src)+uint64(cnt)*size > uint64(len(b)) {
-					trap(TrapDataSegmentOutOfBounds)
+					trapAt(TrapDataSegmentOutOfBounds, at)
 				}
 				copy(a.b[uint64(dst)*size:], b[src:uint64(src)+uint64(cnt)*size])
 				return 0
 			}
 			e := f.inst.elems[seg]
 			if uint64(src)+uint64(cnt) > uint64(len(e)) {
-				trap(TrapElementSegmentOutOfBounds)
+				trapAt(TrapElementSegmentOutOfBounds, at)
 			}
 			copy(a.r[dst:dst+cnt], e[src:src+cnt])
 			return 0
@@ -369,7 +372,7 @@ func (c *compiler) gcOps(op opcode.Opcode, at uint32) bool {
 		v := c.i32(c.pop())
 		c.pushTree(module.Ref(module.HeapI31), tref(func(f *frame) Ref { return I31(v(f)) }))
 	case opcode.I31GetS, opcode.I31GetU:
-		r := c.nonNull(c.pop())
+		r := c.nonNull(c.pop(), at)
 		if op == opcode.I31GetS {
 			c.pushTree(module.I32, ti32(func(f *frame) uint32 { return uint32(r(f).I31Signed()) }))
 		} else {
@@ -401,7 +404,7 @@ func (c *compiler) gcOps(op opcode.Opcode, at uint32) bool {
 		c.pushTree(module.RefMaybeNull(h, nullable), tref(func(f *frame) Ref {
 			r := v(f)
 			if !test(r) {
-				trap(TrapIllegalCast)
+				trapAt(TrapIllegalCast, at)
 			}
 			return r
 		}))
@@ -495,7 +498,7 @@ func evalConstGC(inst *Instance, op opcode.Opcode, r *reader, stack *[]Val) (Val
 		if op == opcode.ArrayNew {
 			v = pop()
 		}
-		a := newArray(rt, n, inst.budget, nil)
+		a := newArray(rt, n, inst.budget, nil, 0)
 		if op == opcode.ArrayNew {
 			for i := 0; i < a.n; i++ {
 				arraySet(a, et, i, v)
@@ -511,7 +514,7 @@ func evalConstGC(inst *Instance, op opcode.Opcode, r *reader, stack *[]Val) (Val
 		for i := int(n) - 1; i >= 0; i-- {
 			vals[i] = pop()
 		}
-		a := newArray(rt, n, inst.budget, nil)
+		a := newArray(rt, n, inst.budget, nil, 0)
 		for i, v := range vals {
 			arraySet(a, et, i, v)
 		}

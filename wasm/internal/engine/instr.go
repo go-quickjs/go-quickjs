@@ -14,7 +14,7 @@ func (c *compiler) instr() {
 	switch op {
 	case opcode.Unreachable:
 		c.flushBelow(0)
-		c.emit(func(*frame) int32 { trap(TrapUnreachable); return 0 })
+		c.emit(func(*frame) int32 { trapAt(TrapUnreachable, at); return 0 })
 		c.markDead()
 	case opcode.Nop:
 	case opcode.Block, opcode.Loop:
@@ -112,7 +112,7 @@ func (c *compiler) instr() {
 	case opcode.TableGet, opcode.TableSet:
 		c.tableGetSet(op, c.r.u32(), at)
 	default:
-		if c.numeric(op) || c.memory(op, at) || c.prefixed(op, at) || c.refOps(op, at) || c.gcOps(op, at) || c.atomicOps(op, at) || c.simd(op, at) {
+		if c.numeric(op, at) || c.memory(op, at) || c.prefixed(op, at) || c.refOps(op, at) || c.gcOps(op, at) || c.atomicOps(op, at) || c.simd(op, at) {
 			return
 		}
 		panic("engine: unsupported instruction " + op.Name())
@@ -532,7 +532,7 @@ func (c *compiler) callIndirect(typeIndex, table uint32, at uint32, tail bool) {
 		idx = func(f *frame) uint64 { return uint64(v(f)) }
 	}
 	target := func(f *frame) *Function {
-		return indirectCallee(f.inst, typeIndex, table, idx(f), checked)
+		return indirectCallee(f.inst, typeIndex, table, idx(f), checked, at)
 	}
 	c.callTarget(sig, target, at, tail)
 }

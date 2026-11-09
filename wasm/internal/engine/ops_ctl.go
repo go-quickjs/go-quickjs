@@ -105,7 +105,7 @@ func (c *compiler) refOps(op opcode.Opcode, at uint32) bool {
 		c.pushTree(e.t.AsNonNull(), tref(func(f *frame) Ref {
 			r := v(f)
 			if r.IsNull() {
-				trap(TrapNullDereference)
+				trapAt(TrapNullDereference, at)
 			}
 			return r
 		}))
@@ -125,7 +125,7 @@ func (c *compiler) refOps(op opcode.Opcode, at uint32) bool {
 		target := func(f *frame) *Function {
 			r := v(f)
 			if r.IsNull() {
-				trap(TrapNullDereference)
+				trapAt(TrapNullDereference, at)
 			}
 			return r.Func()
 		}
@@ -138,7 +138,7 @@ func (c *compiler) refOps(op opcode.Opcode, at uint32) bool {
 		c.emit(func(f *frame) int32 {
 			r := v(f)
 			if r.IsNull() {
-				trap(TrapRethrowNull)
+				trapAt(TrapRethrowNull, at)
 			}
 			panic(r.Exn())
 		})

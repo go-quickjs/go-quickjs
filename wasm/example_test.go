@@ -124,10 +124,11 @@ func Example_trap() {
 	var re *wasm.RuntimeError
 	if errors.As(err, &re) {
 		fmt.Println(re.Error())
-		fmt.Println(re.Frames()[1])
+		fmt.Println(re.Stack())
 	}
 	// Output:
 	// divide by zero
+	//     at calc.divide (wasm://wasm/calc-180f7c6a:wasm-function[0]:0x2a)
 	//     at calc (wasm://wasm/calc-180f7c6a:wasm-function[1]:0x32)
 }
 

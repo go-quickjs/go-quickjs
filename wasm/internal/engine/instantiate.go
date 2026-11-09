@@ -147,11 +147,14 @@ func Instantiate(ctx context.Context, code *Code, imports []Extern) (inst *Insta
 	// before any instance is made.
 	defer func() {
 		if r := recover(); r != nil {
-			tr, ok := r.(*Trap)
-			if !ok {
+			switch e := r.(type) {
+			case *Trap:
+				inst, err = nil, e
+			case trapSite:
+				inst, err = nil, e.trap(nil)
+			default:
 				panic(r)
 			}
-			inst, err = nil, tr
 		}
 	}()
 	return instantiate(ctx, code, imports, nil)
@@ -167,6 +170,8 @@ func InstantiateBudget(ctx context.Context, code *Code, imports []Extern, b *Bud
 			switch e := r.(type) {
 			case *Trap:
 				inst, err = nil, e
+			case trapSite:
+				inst, err = nil, e.trap(nil)
 			case hostError:
 				inst, err = nil, e.err
 			default:

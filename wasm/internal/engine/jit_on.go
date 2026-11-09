@@ -621,7 +621,7 @@ func (x *exec) jitExit(lv *jitLevel) (raw *ijit.RawCode, off int, tail bool) {
 			slot, at = int(ctx.Arg1), uint32(ctx.Arg2)
 		}
 		x.jitSync(lv, at)
-		callee := x.jitCallee(lv, &f, ft, slot)
+		callee := x.jitCallee(lv, &f, ft, slot, at)
 		x.jitCall(lv, callee, ft, &f, slot)
 		x.jitUnsync(lv)
 	case wjit.ExitTailCall, wjit.ExitTailIndirect, wjit.ExitTailRef:
@@ -639,7 +639,7 @@ func (x *exec) jitExit(lv *jitLevel) (raw *ijit.RawCode, off int, tail bool) {
 				slot, at = int(ctx.Arg1), uint32(ctx.Arg2)
 			}
 			x.jitSync(lv, at)
-			callee = x.jitCallee(lv, &f, ft, slot)
+			callee = x.jitCallee(lv, &f, ft, slot, at)
 			x.jitUnsync(lv)
 		}
 		if r, o, done := x.jitTail(lv, callee, ft, &f, slot, at); done {
@@ -656,7 +656,7 @@ func (x *exec) jitExit(lv *jitLevel) (raw *ijit.RawCode, off int, tail bool) {
 		f := x.exitFrame(lv)
 		x.jitSync(lv, uint32(ctx.Arg4))
 		x.takeFrom(lv, &f)
-		x.jitOp(inst, opcode.Opcode(ctx.Arg0), uint32(ctx.Arg1), ctx.Arg2, &f, int(ctx.Arg3))
+		x.jitOp(inst, opcode.Opcode(ctx.Arg0), uint32(ctx.Arg1), ctx.Arg2, &f, int(ctx.Arg3), uint32(ctx.Arg4))
 		x.jitUnsync(lv)
 	default:
 		panic(fmt.Sprintf("wasm jit: exit %d", ctx.Exit))
@@ -787,18 +787,18 @@ func (lv *jitLevel) jitArgs(ft *module.FuncType, f *exitFrame, slot int) []Val {
 // jitCallee returns the function a call_indirect or a call_ref of type ft
 // calls, its arguments from the stack position whose numeric slot is slot
 // and the table's index or the reference after them, trapping as the
-// interpreter does.
-func (x *exec) jitCallee(lv *jitLevel, f *exitFrame, ft *module.FuncType, slot int) *Function {
+// interpreter does, as the instruction at offset at.
+func (x *exec) jitCallee(lv *jitLevel, f *exitFrame, ft *module.FuncType, slot int, at uint32) *Function {
 	ctx := &lv.ctx
-	at := slot + 2*len(ft.Params)
+	k := slot + 2*len(ft.Params)
 	if ctx.Exit == wjit.ExitCallRef || ctx.Exit == wjit.ExitTailRef {
-		r := f.r[f.rslot(at)]
+		r := f.r[f.rslot(k)]
 		if r.IsNull() {
-			trap(TrapNullDereference)
+			trapAt(TrapNullDereference, at)
 		}
 		return r.Func()
 	}
-	return indirectTarget(lv.inst, uint32(ctx.Arg0), uint32(ctx.Arg1), f.l[at])
+	return indirectTarget(lv.inst, uint32(ctx.Arg0), uint32(ctx.Arg1), f.l[k], at)
 }
 
 // jitCall calls fn, of signature ft, for native code: its arguments in the
@@ -880,20 +880,21 @@ func (x *exec) jitTail(lv *jitLevel, fn *Function, ft *module.FuncType, f *exitF
 }
 
 // indirectTarget returns the function call_indirect of type typeIndex
-// through table calls with index i, trapping as the interpreter does.
-func indirectTarget(inst *Instance, typeIndex, table uint32, i uint64) *Function {
+// through table calls with index i, trapping as the interpreter does, as
+// the instruction at offset at.
+func indirectTarget(inst *Instance, typeIndex, table uint32, i uint64, at uint32) *Function {
 	if !inst.Module.Tables[table].Limits.Is64 {
 		i = uint64(uint32(i))
 	}
-	return indirectCallee(inst, typeIndex, table, i, indirectChecksType(inst.Module, typeIndex, table))
+	return indirectCallee(inst, typeIndex, table, i, indirectChecksType(inst.Module, typeIndex, table), at)
 }
 
 // jitOp runs instruction op for native code, with immediates a and imm, its
 // operands in the stack positions of the exited frame from the one whose
 // numeric slot is slot, its result left in the first. imm is an atomic
 // instruction's offset, 64 bits; any other instruction's second immediate
-// is 32.
-func (x *exec) jitOp(inst *Instance, op opcode.Opcode, a uint32, imm uint64, f *exitFrame, slot int) {
+// is 32. at is the instruction's offset in the module, for its traps.
+func (x *exec) jitOp(inst *Instance, op opcode.Opcode, a uint32, imm uint64, f *exitFrame, slot int, at uint32) {
 	b := uint32(imm)
 	m := inst.Module
 	frame := f.l
@@ -922,8 +923,8 @@ func (x *exec) jitOp(inst *Instance, op opcode.Opcode, a uint32, imm uint64, f *
 		dst, src, cnt := arg(0, mem64(b)), arg(1, false), arg(2, false)
 		data := inst.datas[a]
 		buf := inst.Memories[b].bytes()
-		checkRange(src, cnt, uint64(len(data)), TrapMemOutOfBounds)
-		checkRange(dst, cnt, uint64(len(buf)), TrapMemOutOfBounds)
+		checkRange(src, cnt, uint64(len(data)), TrapMemOutOfBounds, at)
+		checkRange(dst, cnt, uint64(len(buf)), TrapMemOutOfBounds, at)
 		copy(buf[dst:dst+cnt], data[src:src+cnt])
 	case opcode.DataDrop:
 		inst.datas[a] = nil
@@ -931,14 +932,14 @@ func (x *exec) jitOp(inst *Instance, op opcode.Opcode, a uint32, imm uint64, f *
 		d64, s64 := mem64(a), mem64(b)
 		dst, src, cnt := arg(0, d64), arg(1, s64), arg(2, d64 && s64)
 		db, sb := inst.Memories[a].bytes(), inst.Memories[b].bytes()
-		checkRange(src, cnt, uint64(len(sb)), TrapMemOutOfBounds)
-		checkRange(dst, cnt, uint64(len(db)), TrapMemOutOfBounds)
+		checkRange(src, cnt, uint64(len(sb)), TrapMemOutOfBounds, at)
+		checkRange(dst, cnt, uint64(len(db)), TrapMemOutOfBounds, at)
 		copy(db[dst:dst+cnt], sb[src:src+cnt])
 	case opcode.MemoryFill:
 		is64 := mem64(a)
 		dst, val, cnt := arg(0, is64), byte(arg(1, false)), arg(2, is64)
 		buf := inst.Memories[a].bytes()
-		checkRange(dst, cnt, uint64(len(buf)), TrapMemOutOfBounds)
+		checkRange(dst, cnt, uint64(len(buf)), TrapMemOutOfBounds, at)
 		s := buf[dst : dst+cnt]
 		for i := range s {
 			s[i] = val
@@ -948,8 +949,8 @@ func (x *exec) jitOp(inst *Instance, op opcode.Opcode, a uint32, imm uint64, f *
 		dst, src, cnt := arg(0, tab64(b)), arg(1, false), arg(2, false)
 		elems := inst.elems[a]
 		t := inst.Tables[b]
-		checkRange(src, cnt, uint64(len(elems)), TrapTableOutOfBounds)
-		checkRange(dst, cnt, uint64(len(t.Elems)), TrapTableOutOfBounds)
+		checkRange(src, cnt, uint64(len(elems)), TrapTableOutOfBounds, at)
+		checkRange(dst, cnt, uint64(len(t.Elems)), TrapTableOutOfBounds, at)
 		copy(t.Elems[dst:dst+cnt], elems[src:src+cnt])
 	case opcode.ElemDrop:
 		inst.elems[a] = nil
@@ -957,17 +958,17 @@ func (x *exec) jitOp(inst *Instance, op opcode.Opcode, a uint32, imm uint64, f *
 		d64, s64 := tab64(a), tab64(b)
 		dst, src, cnt := arg(0, d64), arg(1, s64), arg(2, d64 && s64)
 		de, se := inst.Tables[a].Elems, inst.Tables[b].Elems
-		checkRange(src, cnt, uint64(len(se)), TrapTableOutOfBounds)
-		checkRange(dst, cnt, uint64(len(de)), TrapTableOutOfBounds)
+		checkRange(src, cnt, uint64(len(se)), TrapTableOutOfBounds, at)
+		checkRange(dst, cnt, uint64(len(de)), TrapTableOutOfBounds, at)
 		copy(de[dst:dst+cnt], se[src:src+cnt])
 	case opcode.TableSize:
 		put(inst.Tables[a].Size(), tab64(a))
 	case opcode.AtomicNotify:
 		// a is the memory, imm the offset.
 		mm := inst.Memories[a]
-		ea := atomicEA(arg(0, mem64(a)), imm, mem64(a))
+		ea := atomicEA(arg(0, mem64(a)), imm, mem64(a), at)
 		cnt := uint32(frame[slot+2])
-		atomicSpan(mm, ea, 4)
+		atomicSpan(mm, ea, 4, at)
 		put(uint64(notify(mm, ea, cnt)), false)
 	case opcode.I32AtomicWait, opcode.I64AtomicWait:
 		width, want := uint64(4), uint64(uint32(frame[slot+2]))
@@ -975,12 +976,12 @@ func (x *exec) jitOp(inst *Instance, op opcode.Opcode, a uint32, imm uint64, f *
 			width, want = 8, frame[slot+2]
 		}
 		mm := inst.Memories[a]
-		ea := atomicEA(arg(0, mem64(a)), imm, mem64(a))
+		ea := atomicEA(arg(0, mem64(a)), imm, mem64(a), at)
 		timeout := int64(frame[slot+4])
 		if !mm.Shared {
-			trap(TrapAtomicsWaitNotAllowed)
+			trapAt(TrapAtomicsWaitNotAllowed, at)
 		}
-		put(uint64(wait(x, mm, atomicSpan(mm, ea, width), ea, width, want, timeout)), false)
+		put(uint64(wait(x, mm, atomicSpan(mm, ea, width, at), ea, width, want, timeout)), false)
 	case opcode.TableGrow:
 		init := ref(0)
 		put(uint64(inst.Tables[a].Grow(arg(1, tab64(a)), init)), tab64(a))
@@ -997,32 +998,32 @@ func (x *exec) jitOp(inst *Instance, op opcode.Opcode, a uint32, imm uint64, f *
 	case opcode.ThrowRef:
 		r := ref(0)
 		if r.IsNull() {
-			trap(TrapRethrowNull)
+			trapAt(TrapRethrowNull, at)
 		}
 		panic(r.Exn())
 	case opcode.TableFill:
 		is64 := tab64(a)
 		dst, val, cnt := arg(0, is64), ref(1), arg(2, is64)
 		e := inst.Tables[a].Elems
-		checkRange(dst, cnt, uint64(len(e)), TrapTableOutOfBounds)
+		checkRange(dst, cnt, uint64(len(e)), TrapTableOutOfBounds, at)
 		s := e[dst : dst+cnt]
 		for i := range s {
 			s[i] = val
 		}
 	default:
-		if !x.jitGCOp(inst, op, a, b, f, slot) {
+		if !x.jitGCOp(inst, op, a, b, f, slot, at) {
 			panic("wasm jit: no Go operation " + op.Name())
 		}
 	}
 }
 
-// atomicEA is the effective address of an access at addr plus offset off:
-// an i64 memory's traps where the sum carries, as the interpreter's addr
-// does.
-func atomicEA(addr, off uint64, is64 bool) uint64 {
+// atomicEA is the effective address of an access at addr plus offset off
+// by the instruction at offset at: an i64 memory's traps where the sum
+// carries, as the interpreter's addr does.
+func atomicEA(addr, off uint64, is64 bool, at uint32) uint64 {
 	ea := addr + off
 	if is64 && ea < addr {
-		trap(TrapMemOutOfBounds)
+		trapAt(TrapMemOutOfBounds, at)
 	}
 	return ea
 }

@@ -17,18 +17,19 @@ func (m *Memory) bytes() []byte {
 }
 
 // span returns the n bytes at effective address ea, trapping if any is out
-// of bounds.
-func (m *Memory) span(ea, n uint64) []byte {
+// of bounds, as the instruction at offset at.
+func (m *Memory) span(ea, n uint64, at uint32) []byte {
 	b := m.bytes()
 	if ea > uint64(len(b)) || n > uint64(len(b))-ea {
-		trap(TrapMemOutOfBounds)
+		trapAt(TrapMemOutOfBounds, at)
 	}
 	return b[ea : ea+n]
 }
 
-// addr returns a reader of a memory access's effective address: the
-// operand plus the offset, which for an i64 memory traps if it overflows.
-func (c *compiler) addr(e entry, mem uint32, off uint64) func(*frame) uint64 {
+// addr returns a reader of the effective address of the memory access at
+// offset at: the operand plus the memarg's offset off, which for an i64
+// memory traps if it overflows.
+func (c *compiler) addr(e entry, mem uint32, off uint64, at uint32) func(*frame) uint64 {
 	if c.m.Memories[mem].Limits.Is64 {
 		a := c.i64(e)
 		if off == 0 {
@@ -38,7 +39,7 @@ func (c *compiler) addr(e entry, mem uint32, off uint64) func(*frame) uint64 {
 			v := a(f)
 			ea := v + off
 			if ea < v {
-				trap(TrapMemOutOfBounds)
+				trapAt(TrapMemOutOfBounds, at)
 			}
 			return ea
 		}
@@ -82,78 +83,78 @@ func (c *compiler) memory(op opcode.Opcode, at uint32) bool {
 		return false
 	}
 	mem, off := c.r.memarg()
-	if c.memFast(op, mem, off) {
+	if c.memFast(op, mem, off, at) {
 		return true
 	}
 	if op >= opcode.I32StoreMem {
-		c.storeMem(op, mem, off)
+		c.storeMem(op, mem, off, at)
 		return true
 	}
-	ea := c.addr(c.pop(), mem, off)
+	ea := c.addr(c.pop(), mem, off, at)
 	m := memAt(mem)
 	switch op {
 	case opcode.I32LoadMem:
-		c.pushTree(module.I32, ti32(func(f *frame) uint32 { return binary.LittleEndian.Uint32(m(f).span(ea(f), 4)) }))
+		c.pushTree(module.I32, ti32(func(f *frame) uint32 { return binary.LittleEndian.Uint32(m(f).span(ea(f), 4, at)) }))
 	case opcode.I64LoadMem:
-		c.pushTree(module.I64, ti64(func(f *frame) uint64 { return binary.LittleEndian.Uint64(m(f).span(ea(f), 8)) }))
+		c.pushTree(module.I64, ti64(func(f *frame) uint64 { return binary.LittleEndian.Uint64(m(f).span(ea(f), 8, at)) }))
 	case opcode.F32LoadMem:
 		c.pushTree(module.F32, tf32(func(f *frame) float32 {
-			return math.Float32frombits(binary.LittleEndian.Uint32(m(f).span(ea(f), 4)))
+			return math.Float32frombits(binary.LittleEndian.Uint32(m(f).span(ea(f), 4, at)))
 		}))
 	case opcode.F64LoadMem:
 		c.pushTree(module.F64, tf64(func(f *frame) float64 {
-			return math.Float64frombits(binary.LittleEndian.Uint64(m(f).span(ea(f), 8)))
+			return math.Float64frombits(binary.LittleEndian.Uint64(m(f).span(ea(f), 8, at)))
 		}))
 	case opcode.I32LoadMem8S:
-		c.pushTree(module.I32, ti32(func(f *frame) uint32 { return uint32(int32(int8(m(f).span(ea(f), 1)[0]))) }))
+		c.pushTree(module.I32, ti32(func(f *frame) uint32 { return uint32(int32(int8(m(f).span(ea(f), 1, at)[0]))) }))
 	case opcode.I32LoadMem8U:
-		c.pushTree(module.I32, ti32(func(f *frame) uint32 { return uint32(m(f).span(ea(f), 1)[0]) }))
+		c.pushTree(module.I32, ti32(func(f *frame) uint32 { return uint32(m(f).span(ea(f), 1, at)[0]) }))
 	case opcode.I32LoadMem16S:
 		c.pushTree(module.I32, ti32(func(f *frame) uint32 {
-			return uint32(int32(int16(binary.LittleEndian.Uint16(m(f).span(ea(f), 2)))))
+			return uint32(int32(int16(binary.LittleEndian.Uint16(m(f).span(ea(f), 2, at)))))
 		}))
 	case opcode.I32LoadMem16U:
-		c.pushTree(module.I32, ti32(func(f *frame) uint32 { return uint32(binary.LittleEndian.Uint16(m(f).span(ea(f), 2))) }))
+		c.pushTree(module.I32, ti32(func(f *frame) uint32 { return uint32(binary.LittleEndian.Uint16(m(f).span(ea(f), 2, at))) }))
 	case opcode.I64LoadMem8S:
-		c.pushTree(module.I64, ti64(func(f *frame) uint64 { return uint64(int64(int8(m(f).span(ea(f), 1)[0]))) }))
+		c.pushTree(module.I64, ti64(func(f *frame) uint64 { return uint64(int64(int8(m(f).span(ea(f), 1, at)[0]))) }))
 	case opcode.I64LoadMem8U:
-		c.pushTree(module.I64, ti64(func(f *frame) uint64 { return uint64(m(f).span(ea(f), 1)[0]) }))
+		c.pushTree(module.I64, ti64(func(f *frame) uint64 { return uint64(m(f).span(ea(f), 1, at)[0]) }))
 	case opcode.I64LoadMem16S:
 		c.pushTree(module.I64, ti64(func(f *frame) uint64 {
-			return uint64(int64(int16(binary.LittleEndian.Uint16(m(f).span(ea(f), 2)))))
+			return uint64(int64(int16(binary.LittleEndian.Uint16(m(f).span(ea(f), 2, at)))))
 		}))
 	case opcode.I64LoadMem16U:
-		c.pushTree(module.I64, ti64(func(f *frame) uint64 { return uint64(binary.LittleEndian.Uint16(m(f).span(ea(f), 2))) }))
+		c.pushTree(module.I64, ti64(func(f *frame) uint64 { return uint64(binary.LittleEndian.Uint16(m(f).span(ea(f), 2, at))) }))
 	case opcode.I64LoadMem32S:
 		c.pushTree(module.I64, ti64(func(f *frame) uint64 {
-			return uint64(int64(int32(binary.LittleEndian.Uint32(m(f).span(ea(f), 4)))))
+			return uint64(int64(int32(binary.LittleEndian.Uint32(m(f).span(ea(f), 4, at)))))
 		}))
 	case opcode.I64LoadMem32U:
-		c.pushTree(module.I64, ti64(func(f *frame) uint64 { return uint64(binary.LittleEndian.Uint32(m(f).span(ea(f), 4))) }))
+		c.pushTree(module.I64, ti64(func(f *frame) uint64 { return uint64(binary.LittleEndian.Uint32(m(f).span(ea(f), 4, at))) }))
 	}
 	return true
 }
 
-// storeMem compiles a store.
-func (c *compiler) storeMem(op opcode.Opcode, mem uint32, off uint64) {
+// storeMem compiles the store at offset at.
+func (c *compiler) storeMem(op opcode.Opcode, mem uint32, off uint64, at uint32) {
 	v := c.pop()
 	a := c.pop()
 	c.flushBelow(0)
-	ea := c.addr(a, mem, off)
+	ea := c.addr(a, mem, off, at)
 	m := memAt(mem)
 	switch op {
 	case opcode.I32StoreMem:
 		x := c.i32(v)
 		c.emit(func(f *frame) int32 {
 			e := ea(f)
-			binary.LittleEndian.PutUint32(m(f).span(e, 4), x(f))
+			binary.LittleEndian.PutUint32(m(f).span(e, 4, at), x(f))
 			return 0
 		})
 	case opcode.I64StoreMem:
 		x := c.i64(v)
 		c.emit(func(f *frame) int32 {
 			e := ea(f)
-			binary.LittleEndian.PutUint64(m(f).span(e, 8), x(f))
+			binary.LittleEndian.PutUint64(m(f).span(e, 8, at), x(f))
 			return 0
 		})
 	case opcode.F32StoreMem:
@@ -161,7 +162,7 @@ func (c *compiler) storeMem(op opcode.Opcode, mem uint32, off uint64) {
 		c.emit(func(f *frame) int32 {
 			e := ea(f)
 			val := x(f)
-			binary.LittleEndian.PutUint32(m(f).span(e, 4), math.Float32bits(val))
+			binary.LittleEndian.PutUint32(m(f).span(e, 4, at), math.Float32bits(val))
 			return 0
 		})
 	case opcode.F64StoreMem:
@@ -169,7 +170,7 @@ func (c *compiler) storeMem(op opcode.Opcode, mem uint32, off uint64) {
 		c.emit(func(f *frame) int32 {
 			e := ea(f)
 			val := x(f)
-			binary.LittleEndian.PutUint64(m(f).span(e, 8), math.Float64bits(val))
+			binary.LittleEndian.PutUint64(m(f).span(e, 8, at), math.Float64bits(val))
 			return 0
 		})
 	case opcode.I32StoreMem8, opcode.I64StoreMem8:
@@ -177,7 +178,7 @@ func (c *compiler) storeMem(op opcode.Opcode, mem uint32, off uint64) {
 		c.emit(func(f *frame) int32 {
 			e := ea(f)
 			val := x(f)
-			m(f).span(e, 1)[0] = byte(val)
+			m(f).span(e, 1, at)[0] = byte(val)
 			return 0
 		})
 	case opcode.I32StoreMem16, opcode.I64StoreMem16:
@@ -185,7 +186,7 @@ func (c *compiler) storeMem(op opcode.Opcode, mem uint32, off uint64) {
 		c.emit(func(f *frame) int32 {
 			e := ea(f)
 			val := x(f)
-			binary.LittleEndian.PutUint16(m(f).span(e, 2), uint16(val))
+			binary.LittleEndian.PutUint16(m(f).span(e, 2, at), uint16(val))
 			return 0
 		})
 	case opcode.I64StoreMem32:
@@ -193,7 +194,7 @@ func (c *compiler) storeMem(op opcode.Opcode, mem uint32, off uint64) {
 		c.emit(func(f *frame) int32 {
 			e := ea(f)
 			val := x(f)
-			binary.LittleEndian.PutUint32(m(f).span(e, 4), uint32(val))
+			binary.LittleEndian.PutUint32(m(f).span(e, 4, at), uint32(val))
 			return 0
 		})
 	}
@@ -217,10 +218,11 @@ func (c *compiler) index(e entry, is64 bool) func(*frame) uint64 {
 	return func(f *frame) uint64 { return uint64(v(f)) }
 }
 
-// checkRange traps with code unless [start, start+n) lies within size.
-func checkRange(start, n, size uint64, code TrapCode) {
+// checkRange traps with code, as the instruction at offset at, unless
+// [start, start+n) lies within size.
+func checkRange(start, n, size uint64, code TrapCode, at uint32) {
 	if start > size || n > size-start {
-		trap(code)
+		trapAt(code, at)
 	}
 }
 
@@ -237,8 +239,8 @@ func (c *compiler) prefixed(op opcode.Opcode, at uint32) bool {
 			dst, src, cnt := d(f), uint64(s(f)), uint64(n(f))
 			data := f.inst.datas[seg]
 			b := f.inst.Memories[mem].bytes()
-			checkRange(src, cnt, uint64(len(data)), TrapMemOutOfBounds)
-			checkRange(dst, cnt, uint64(len(b)), TrapMemOutOfBounds)
+			checkRange(src, cnt, uint64(len(data)), TrapMemOutOfBounds, at)
+			checkRange(dst, cnt, uint64(len(b)), TrapMemOutOfBounds, at)
 			copy(b[dst:dst+cnt], data[src:src+cnt])
 			return 0
 		})
@@ -258,8 +260,8 @@ func (c *compiler) prefixed(op opcode.Opcode, at uint32) bool {
 			dst, src, cnt := d(f), s(f), n(f)
 			db := f.inst.Memories[dm].bytes()
 			sb := f.inst.Memories[sm].bytes()
-			checkRange(src, cnt, uint64(len(sb)), TrapMemOutOfBounds)
-			checkRange(dst, cnt, uint64(len(db)), TrapMemOutOfBounds)
+			checkRange(src, cnt, uint64(len(sb)), TrapMemOutOfBounds, at)
+			checkRange(dst, cnt, uint64(len(db)), TrapMemOutOfBounds, at)
 			copy(db[dst:dst+cnt], sb[src:src+cnt])
 			return 0
 		})
@@ -273,7 +275,7 @@ func (c *compiler) prefixed(op opcode.Opcode, at uint32) bool {
 		c.emit(func(f *frame) int32 {
 			dst, val, cnt := d(f), byte(v(f)), n(f)
 			b := f.inst.Memories[mem].bytes()
-			checkRange(dst, cnt, uint64(len(b)), TrapMemOutOfBounds)
+			checkRange(dst, cnt, uint64(len(b)), TrapMemOutOfBounds, at)
 			s := b[dst : dst+cnt]
 			for i := range s {
 				s[i] = val
@@ -289,8 +291,8 @@ func (c *compiler) prefixed(op opcode.Opcode, at uint32) bool {
 			dst, src, cnt := d(f), uint64(s(f)), uint64(n(f))
 			elems := f.inst.elems[seg]
 			t := f.inst.Tables[table]
-			checkRange(src, cnt, uint64(len(elems)), TrapTableOutOfBounds)
-			checkRange(dst, cnt, uint64(len(t.Elems)), TrapTableOutOfBounds)
+			checkRange(src, cnt, uint64(len(elems)), TrapTableOutOfBounds, at)
+			checkRange(dst, cnt, uint64(len(t.Elems)), TrapTableOutOfBounds, at)
 			copy(t.Elems[dst:dst+cnt], elems[src:src+cnt])
 			return 0
 		})
@@ -310,8 +312,8 @@ func (c *compiler) prefixed(op opcode.Opcode, at uint32) bool {
 			dst, src, cnt := d(f), s(f), n(f)
 			de := f.inst.Tables[dt].Elems
 			se := f.inst.Tables[st].Elems
-			checkRange(src, cnt, uint64(len(se)), TrapTableOutOfBounds)
-			checkRange(dst, cnt, uint64(len(de)), TrapTableOutOfBounds)
+			checkRange(src, cnt, uint64(len(se)), TrapTableOutOfBounds, at)
+			checkRange(dst, cnt, uint64(len(de)), TrapTableOutOfBounds, at)
 			copy(de[dst:dst+cnt], se[src:src+cnt])
 			return 0
 		})
@@ -348,7 +350,7 @@ func (c *compiler) prefixed(op opcode.Opcode, at uint32) bool {
 		c.emit(func(f *frame) int32 {
 			dst, val, cnt := d(f), v(f), n(f)
 			e := f.inst.Tables[table].Elems
-			checkRange(dst, cnt, uint64(len(e)), TrapTableOutOfBounds)
+			checkRange(dst, cnt, uint64(len(e)), TrapTableOutOfBounds, at)
 			s := e[dst : dst+cnt]
 			for i := range s {
 				s[i] = val
@@ -371,7 +373,7 @@ func (c *compiler) tableGetSet(op opcode.Opcode, table uint32, at uint32) {
 			e := f.inst.Tables[table].Elems
 			x := i(f)
 			if x >= uint64(len(e)) {
-				trap(TrapTableOutOfBounds)
+				trapAt(TrapTableOutOfBounds, at)
 			}
 			return e[x]
 		}))
@@ -385,7 +387,7 @@ func (c *compiler) tableGetSet(op opcode.Opcode, table uint32, at uint32) {
 		val := v(f)
 		e := f.inst.Tables[table].Elems
 		if x >= uint64(len(e)) {
-			trap(TrapTableOutOfBounds)
+			trapAt(TrapTableOutOfBounds, at)
 		}
 		e[x] = val
 		return 0

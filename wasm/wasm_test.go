@@ -550,9 +550,9 @@ func TestTrapStack(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 	lines := strings.Split(re.Stack(), "\n")
-	// The innermost frame's offset is the trapping instruction's in Node;
-	// the interpreter does not record it yet.
-	if len(lines) != 2 || !strings.HasPrefix(lines[0], "    at inner (wasm://wasm/91c08aaa:wasm-function[0]:0x") ||
+	// The innermost frame is at the trapping instruction, its caller at
+	// the call, as in Node.
+	if len(lines) != 2 || lines[0] != "    at inner (wasm://wasm/91c08aaa:wasm-function[0]:0x3a)" ||
 		lines[1] != "    at wasm://wasm/91c08aaa:wasm-function[1]:0x41" {
 		t.Errorf("stack:\n%s", re.Stack())
 	}
@@ -586,7 +586,7 @@ func TestTrapStack(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 	lines = strings.Split(re.Stack(), "\n")
-	if len(lines) != 2 || !strings.HasPrefix(lines[0], "    at mymod.inner (wasm://wasm/mymod-de152af2:wasm-function[1]:0x") ||
+	if len(lines) != 2 || lines[0] != "    at mymod.inner (wasm://wasm/mymod-de152af2:wasm-function[1]:0x43)" ||
 		lines[1] != "    at mymod (wasm://wasm/mymod-de152af2:wasm-function[2]:0x4a)" {
 		t.Errorf("named stack:\n%s", re.Stack())
 	}
@@ -600,7 +600,7 @@ func TestTrapStack(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = bm.ExportedFunction("unr").Call(ctx)
-	if !errors.As(err, &re) || !strings.HasPrefix(re.Stack(), "    at wasm://wasm/00013a1a:wasm-function[2]:0x") {
+	if !errors.As(err, &re) || re.Stack() != "    at wasm://wasm/00013a1a:wasm-function[2]:0x46" {
 		t.Errorf("big module: %v\n%s", err, re.Stack())
 	}
 
@@ -608,7 +608,7 @@ func TestTrapStack(t *testing.T) {
 	ctx, r = newRuntime(t, wasm.NewRuntimeConfig().WithDebugInfoEnabled(false))
 	mod = instantiate(t, ctx, r, traps)
 	_, err = mod.ExportedFunction("outer").Call(ctx, 5)
-	if !errors.As(err, &re) || !strings.HasPrefix(re.Stack(), "    at wasm://wasm/91c08aaa:wasm-function[0]:0x") {
+	if !errors.As(err, &re) || !strings.HasPrefix(re.Stack(), "    at wasm://wasm/91c08aaa:wasm-function[0]:0x3a\n") {
 		t.Errorf("stack without names:\n%s", re.Stack())
 	}
 }

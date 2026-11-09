@@ -10,6 +10,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -28,10 +29,12 @@ import (
 // type and random ones -- for a v128, vectors of each lane shape's edges:
 // NaNs of every payload, signed zeros, infinities, the integers' bounds --
 // null references and i31s, comparing the results, a v128's bits exactly,
-// the traps, and every memory's bytes and global's value after each call,
-// references by what they are (refAlike). It does it again with every call of a function with loops
-// that Go makes running in the interpreter until its first back edge and
-// going on natively from that loop's head (osr).
+// the traps and their frames -- each frame's function and offset, the
+// trapping instruction's in the innermost -- and every memory's bytes and
+// global's value after each call, references by what they are (refAlike).
+// It does it again with every call of a function with loops that Go makes
+// running in the interpreter until its first back edge and going on
+// natively from that loop's head (osr).
 func TestJITDifferential(t *testing.T) {
 	dir := os.Getenv("WASM_SPEC_DIR")
 	if dir == "" {
@@ -213,6 +216,10 @@ func (d *differ) module(c *wast.ModuleCommand) {
 				d.fail("%s: interpreter %v %v, native %v %v", what, ri, ei, rj, ej)
 				return
 			}
+			if fi, fj := trapFrames(ei, interp), trapFrames(ej, jit); !slices.Equal(fi, fj) {
+				d.fail("%s: %v: frames %v interpreted, %v natively", what, ei, fi, fj)
+				return
+			}
 			if !d.state(c.Line(), what, interp, jit) {
 				return
 			}
@@ -357,6 +364,25 @@ func (d *differ) value(k module.Kind) uint64 {
 		}
 	}
 	return v
+}
+
+// trapFrames returns the frames of the trap err is, if it is one, each as
+// the function's index and the offset, with an asterisk for a function of
+// an instance other than inst.
+func trapFrames(err error, inst *engine.Instance) []string {
+	var tr *engine.Trap
+	if !errors.As(err, &tr) {
+		return nil
+	}
+	out := make([]string, len(tr.Frames))
+	for i, f := range tr.Frames {
+		mark := ""
+		if f.Module != inst {
+			mark = "*"
+		}
+		out[i] = fmt.Sprintf("%s%d@%#x", mark, f.Func, f.Offset)
+	}
+	return out
 }
 
 // sameOutcome reports whether two calls ended alike: the same results, a

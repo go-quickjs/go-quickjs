@@ -40,14 +40,15 @@ func le64(v uint64) uint64 {
 }
 
 // atomicSpan returns memory m's bytes after checking that the access of
-// width bytes at ea is aligned and in bounds.
-func atomicSpan(m *Memory, ea, width uint64) []byte {
+// width bytes at ea, by the instruction at offset at, is aligned and in
+// bounds.
+func atomicSpan(m *Memory, ea, width uint64, at uint32) []byte {
 	if ea&(width-1) != 0 {
-		trap(TrapUnalignedAccess)
+		trapAt(TrapUnalignedAccess, at)
 	}
 	b := m.bytes()
 	if ea > uint64(len(b)) || width > uint64(len(b))-ea {
-		trap(TrapMemOutOfBounds)
+		trapAt(TrapMemOutOfBounds, at)
 	}
 	return b
 }
@@ -186,12 +187,12 @@ func (c *compiler) atomicOps(op opcode.Opcode, at uint32) bool {
 	switch op {
 	case opcode.AtomicNotify:
 		n := c.i32(c.pop())
-		ea := c.addr(c.pop(), mem, off)
+		ea := c.addr(c.pop(), mem, off, at)
 		c.pushTree(module.I32, ti32(func(f *frame) uint32 {
 			e := ea(f)
 			cnt := n(f)
 			mm := m(f)
-			atomicSpan(mm, e, 4)
+			atomicSpan(mm, e, 4, at)
 			return notify(mm, e, cnt)
 		}))
 		return true
@@ -202,16 +203,16 @@ func (c *compiler) atomicOps(op opcode.Opcode, at uint32) bool {
 		}
 		timeout := c.i64(c.pop())
 		expected := c.lowBits(c.pop())
-		ea := c.addr(c.pop(), mem, off)
+		ea := c.addr(c.pop(), mem, off, at)
 		c.pushTree(module.I32, ti32(func(f *frame) uint32 {
 			e := ea(f)
 			want := expected(f)
 			t := int64(timeout(f))
 			mm := m(f)
 			if !mm.Shared {
-				trap(TrapAtomicsWaitNotAllowed)
+				trapAt(TrapAtomicsWaitNotAllowed, at)
 			}
-			b := atomicSpan(mm, e, width)
+			b := atomicSpan(mm, e, width, at)
 			return wait(f.x, mm, b, e, width, want, t)
 		}))
 		return true
@@ -219,25 +220,25 @@ func (c *compiler) atomicOps(op opcode.Opcode, at uint32) bool {
 	width, is64 := atomicWidth(op)
 	switch {
 	case op >= opcode.I32AtomicLoad && op <= opcode.I64AtomicLoad32U:
-		ea := c.addr(c.pop(), mem, off)
+		ea := c.addr(c.pop(), mem, off, at)
 		result(is64, func(f *frame) uint64 {
 			e := ea(f)
-			return atomicLoad(atomicSpan(m(f), e, width), e, width)
+			return atomicLoad(atomicSpan(m(f), e, width, at), e, width)
 		})
 	case op >= opcode.I32AtomicStore && op <= opcode.I64AtomicStore32U:
 		v := c.lowBits(c.pop())
-		ea := c.addr(c.pop(), mem, off)
+		ea := c.addr(c.pop(), mem, off, at)
 		c.flushBelow(0)
 		c.emit(func(f *frame) int32 {
 			e := ea(f)
 			val := v(f)
-			atomicRMW(atomicSpan(m(f), e, width), e, width, func(uint64) uint64 { return val })
+			atomicRMW(atomicSpan(m(f), e, width, at), e, width, func(uint64) uint64 { return val })
 			return 0
 		})
 	case rmwKind(op) == '?':
 		repl := c.lowBits(c.pop())
 		exp := c.lowBits(c.pop())
-		ea := c.addr(c.pop(), mem, off)
+		ea := c.addr(c.pop(), mem, off, at)
 		mask := uint64(1)<<(width*8) - 1
 		if width == 8 {
 			mask = ^uint64(0)
@@ -245,7 +246,7 @@ func (c *compiler) atomicOps(op opcode.Opcode, at uint32) bool {
 		result(is64, func(f *frame) uint64 {
 			e := ea(f)
 			want, nv := exp(f)&mask, repl(f)&mask
-			return atomicRMW(atomicSpan(m(f), e, width), e, width, func(old uint64) uint64 {
+			return atomicRMW(atomicSpan(m(f), e, width, at), e, width, func(old uint64) uint64 {
 				if old == want {
 					return nv
 				}
@@ -255,11 +256,11 @@ func (c *compiler) atomicOps(op opcode.Opcode, at uint32) bool {
 	default:
 		kind := rmwKind(op)
 		v := c.lowBits(c.pop())
-		ea := c.addr(c.pop(), mem, off)
+		ea := c.addr(c.pop(), mem, off, at)
 		result(is64, func(f *frame) uint64 {
 			e := ea(f)
 			val := v(f)
-			return atomicRMW(atomicSpan(m(f), e, width), e, width, func(old uint64) uint64 {
+			return atomicRMW(atomicSpan(m(f), e, width, at), e, width, func(old uint64) uint64 {
 				switch kind {
 				case '+':
 					return old + val
