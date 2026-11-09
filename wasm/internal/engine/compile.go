@@ -214,13 +214,49 @@ type compiler struct {
 	refs bool
 	// tries is the deepest nesting of legacy try constructs.
 	tries int
+	// ctls are the constructs made so far, nctl of them by this compile,
+	// kept for the next (newCtl).
+	ctls []*ctl
+	nctl int
+}
+
+// compilers keeps compilers from one compile to the next, with the memory
+// of their stacks and their constructs.
+var compilers sync.Pool
+
+// release gives c back to compilers, dropping what it holds of the
+// compile: the stack's trees, the constructs' statements.
+func (c *compiler) release() {
+	clear(c.stack[:cap(c.stack)])
+	clear(c.ctrl[:cap(c.ctrl)])
+	for _, t := range c.ctls[:c.nctl] {
+		*t = ctl{}
+	}
+	*c = compiler{stack: c.stack[:0], ctrl: c.ctrl[:0], localTypes: c.localTypes[:0], ctls: c.ctls}
+	compilers.Put(c)
+}
+
+// newCtl returns a construct of the compiler's, to be filled: one made by
+// an earlier compile, or a new one. None is used twice in a compile.
+func (c *compiler) newCtl() *ctl {
+	if c.nctl == len(c.ctls) {
+		c.ctls = append(c.ctls, new(ctl))
+	}
+	t := c.ctls[c.nctl]
+	c.nctl++
+	return t
 }
 
 func compileFunction(code *Code, index uint32) *compiled {
 	m := code.Module
 	f := &m.Functions[index]
 	sig := m.Types[f.TypeIndex].Func
-	c := &compiler{code: code, m: m, fn: index}
+	c, _ := compilers.Get().(*compiler)
+	if c == nil {
+		c = new(compiler)
+	}
+	defer c.release()
+	c.code, c.m, c.fn = code, m, index
 	c.r = reader{b: m.Bytes, pc: int(f.Code.Offset)}
 	end := int(f.Code.End())
 
@@ -240,7 +276,8 @@ func compileFunction(code *Code, index uint32) *compiled {
 	c.nlocals = max(c.nlocals, rn)
 	c.rlocals = max(c.rlocals, rr)
 
-	fnCtl := &ctl{base: 0, result: sig.Results}
+	fnCtl := c.newCtl()
+	*fnCtl = ctl{base: 0, result: sig.Results}
 	c.ctrl = append(c.ctrl, fnCtl)
 	for c.r.pc < end && len(c.ctrl) > 0 {
 		c.instr()
@@ -486,7 +523,8 @@ func (c *compiler) val(e entry) func(*frame) Val {
 // enter begins a construct whose parameters are on the stack.
 func (c *compiler) enter(op opcode.Opcode, params, results []module.ValueType) *ctl {
 	c.flushAll()
-	t := &ctl{op: op, base: len(c.stack) - len(params), params: params, result: results}
+	t := c.newCtl()
+	*t = ctl{op: op, base: len(c.stack) - len(params), params: params, result: results}
 	c.ctrl = append(c.ctrl, t)
 	return t
 }
