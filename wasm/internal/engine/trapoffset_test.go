@@ -16,8 +16,8 @@ type trapCase struct {
 	op     byte
 }
 
-// trapCases cover each trap an instruction raises. Node 26 reports the same
-// offset for each, in the innermost frame of the RuntimeError's stack.
+// trapCases cover each trap an instruction raises, each with the offset its
+// innermost frame is at: the trapping instruction's first byte.
 var trapCases = []trapCase{
 	{"unreachable", `(module (func (export "f") nop nop unreachable))`,
 		TrapUnreachable, 0x20, 0x00},
@@ -216,10 +216,9 @@ func TestTrapOffsetUnderCall(t *testing.T) {
 	}
 }
 
-// TestStackOverflowFrames checks a stack overflow's frames, as Node 26
-// gives them: the function that could not be entered, at the start of its
-// body -- its locals' declaration -- then each caller at its call, one
-// frame for each call made.
+// TestStackOverflowFrames checks a stack overflow's frames: the function that
+// could not be entered, at the start of its body -- its locals' declaration
+// -- then each caller at its call, one frame for each call made.
 func TestStackOverflowFrames(t *testing.T) {
 	inst, err := instantiateWAT(t, `(module
 		(func $a (export "f") (call $b))

@@ -16,8 +16,8 @@ import (
 const stackModule = `new Uint8Array([0,97,115,109,1,0,0,0,1,5,1,96,1,127,0,2,7,1,1,101,1,102,0,0,3,2,1,0,7,5,1,1,97,0,1,10,19,1,17,0,32,0,4,64,32,0,16,0,5,1,32,0,16,0,11,11,0,18,4,110,97,109,101,0,2,1,109,1,7,2,0,1,102,1,1,97])`
 
 // TestStackWasmFrames pins that a stack trace shows the wasm frames of an
-// exported function's call in the place of the function's own frame, as
-// Node does: an error thrown by an import that wasm called, two calls deep
+// exported function's call in the place of the function's own frame: an
+// error thrown by an import that wasm called, two calls deep
 // in one exported function, shows each call's frame at its own call site,
 // innermost first.
 func TestStackWasmFrames(t *testing.T) {
@@ -39,7 +39,7 @@ func TestStackWasmFrames(t *testing.T) {
 }
 
 // TestStackWasmCallSite pins what Error.prepareStackTrace's CallSites answer
-// for a wasm frame, as Node's do: the function's index for getFunction, its
+// for a wasm frame: the function's index for getFunction, its
 // own name, the module's URL, line 1 and the offset as the column, the
 // function's start, and no receiver type or method name.
 func TestStackWasmCallSite(t *testing.T) {
@@ -65,7 +65,7 @@ func TestStackWasmCallSite(t *testing.T) {
 
 // TestStackTrapFrames pins a trap's stack: the wasm frames, named by the
 // module's name section, the innermost at the trapping instruction and its
-// caller at its call, as in Node.
+// caller at its call.
 func TestStackTrapFrames(t *testing.T) {
 	rt := newRuntime(t)
 	bytes := watBytes(t, `(module $mod (func $inner (export "inner") unreachable) (func (export "outer") call $inner))`)

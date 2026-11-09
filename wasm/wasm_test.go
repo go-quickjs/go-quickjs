@@ -551,7 +551,7 @@ func TestTrapStack(t *testing.T) {
 	}
 	lines := strings.Split(re.Stack(), "\n")
 	// The innermost frame is at the trapping instruction, its caller at
-	// the call, as in Node.
+	// the call.
 	if len(lines) != 2 || lines[0] != "    at inner (wasm://wasm/91c08aaa:wasm-function[0]:0x3a)" ||
 		lines[1] != "    at wasm://wasm/91c08aaa:wasm-function[1]:0x41" {
 		t.Errorf("stack:\n%s", re.Stack())
@@ -566,7 +566,7 @@ func TestTrapStack(t *testing.T) {
 	}
 	lines = strings.Split(re.Stack(), "\n")
 	// The function that could not be entered, at the start of its body,
-	// then its callers at their calls, as in Node.
+	// then its callers at their calls.
 	if len(lines) != 10 || lines[0] != "    at wasm://wasm/91c08aaa:wasm-function[3]:0x49" ||
 		lines[1] != "    at wasm://wasm/91c08aaa:wasm-function[3]:0x4a" {
 		t.Errorf("stack overflow's stack: %d lines\n%s", len(lines), re.Stack())
