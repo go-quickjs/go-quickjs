@@ -25,6 +25,24 @@ func TestNoGojaDependency(t *testing.T) {
 	}
 }
 
+// TestNoWazeroDependency pins the same for wazero, which wasmbench compares
+// go-quickjs's wasm engine with from internal/cmd/wasmbench/wazero, a module
+// of its own.
+func TestNoWazeroDependency(t *testing.T) {
+	for _, f := range []string{"go.mod", "go.sum"} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), "wazero") {
+			t.Errorf("%s mentions wazero", f)
+		}
+	}
+	if _, err := os.Stat("internal/cmd/wasmbench/wazero/go.mod"); err != nil {
+		t.Errorf("the wazero benchmark runner is not a module of its own: %v", err)
+	}
+}
+
 // TestNoDisassemblerDependency pins the same for golang.org/x/arch, whose
 // disassemblers check the JIT's encodings from internal/jit/verify, a module
 // of its own.
