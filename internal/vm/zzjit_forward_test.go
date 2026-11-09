@@ -230,3 +230,81 @@ func TestJITForwardingCallsNative(t *testing.T) {
 	}
 }
 
+// forwardInlineSetup are forwarders a loop calls, plainly and as methods,
+// sloppy and strict, which its code inlines with the functions their own
+// code learned they forward to: their forwards are calls with the loop's
+// arguments, as V8's are where it knows the argument count.
+const forwardInlineSetup = `
+	function t2(a, b) { return a * 10 + (b === undefined ? 1 : b) + (this === undefined ? 1000 : this.k === 1 ? 2000 : 0) }
+	function tStrict(a, b) { 'use strict'; return a * 100 + (b === undefined ? 3 : b) + (this === undefined ? 5000 : 0) }
+	function tThrow(a) { if (a === 7) throw new RangeError('at ' + a); return a * 2 }
+	function tKind(a) { return a.v + 1 }
+	function f2() { return t2.apply(this, arguments) }
+	function fStrict() { return tStrict.apply(this, arguments) }
+	// Strict, the forward kept out of tail position, where the compiler
+	// makes a call of the arguments object.
+	function sStrict() { 'use strict'; const r = tStrict.apply(this, arguments); return r }
+	function sSloppy() { 'use strict'; const r = t2.apply(this, arguments); return r }
+	function fThrow() { return tThrow.apply(this, arguments) }
+	function fKind() { return tKind.apply(this, arguments) }
+	var target = t2
+	function fVar() { return target.apply(this, arguments) }
+	const o = { k: 1, f2, sStrict }
+	function plain(n) {
+		let s = 0
+		for (let i = 0; i < n; i++) s += fVar(i, 5) + f2(i) + f2(i, 2) + f2(i, 2, 3) + fStrict(i, 1) + sStrict(i) + o.f2(i, 4) + o.sStrict(i) + sSloppy(i, 3)
+		return s
+	}
+	function throws(n) {
+		let s = ''
+		for (let i = 0; i < n; i++) { try { s += fThrow(i) } catch (e) { s += e.message + e.stack.split('\n').slice(1, 3).map(l => l.trim().split(' ')[1]).join() } }
+		return s
+	}
+	function kinds(n) {
+		let s = ''
+		for (let i = 0; i < n; i++) s += fKind({ v: i === n - 2 ? 'x' : i }) + ','
+		return s
+	}
+`
+
+// A forwarder a loop calls is inlined in it, with the function its own
+// code learned it forwards to inlined in turn, called with the loop's
+// arguments (ssa.InlineSite's Forward): each answer the interpreter's --
+// fewer arguments than parameters, as many and more, a plain call's
+// receiver, sloppy and strict, a method call's, a throw and its stack, a
+// deoptimization inside, the function forwarded to replaced -- with the
+// collector idle and marking.
+func TestJITForwardersInlined(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	inlined := jitInlinedForTest(t)
+	for _, stress := range []jitStressConfig{{}, {threshold: true, budget: 3, deopt: 7}} {
+		for _, marking := range []bool{false, true} {
+			t.Run(fmt.Sprintf("stress=%v/marking=%v", stress != jitStressConfig{}, marking), func(t *testing.T) {
+				if marking {
+					jitMarkingForTest(t)
+				}
+				both := jitBothForTest(t, forwardInlineSetup)
+				r := both.jit
+				r.jitStress = stress
+				for range 8 {
+					both.agree(t, "plain(200)", "throws(10)", "kinds(30)")
+				}
+				if stress == (jitStressConfig{}) {
+					for _, callee := range []string{"f2", "t2", "fStrict", "tStrict", "sStrict", "fVar"} {
+						if !jitInlinedFnForTest(t, r, inlined, "plain", callee) {
+							t.Errorf("plain's code does not inline %s", callee)
+						}
+					}
+					hosts := r.jit.hosts
+					both.agree(t, "plain(300)")
+					if n := r.jit.hosts - hosts; n != 0 {
+						t.Errorf("plain left native code %d times", n)
+					}
+				}
+				both.agree(t, "(target = tStrict, plain(5))", "plain(300)", "(target = t2, plain(300))", "throws(10)", "kinds(30)")
+			})
+		}
+	}
+}

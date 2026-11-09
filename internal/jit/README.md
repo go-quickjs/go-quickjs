@@ -776,14 +776,19 @@ coerces, or a frame past the deepest context, Go calls from native code
 makes `Array.apply(null, arguments)` an array of the arguments without a
 frame (the VM's `jitForwardPlain`), but `Array(n)` of one number, the
 array's allocation most of what it costs, as the tree tier's. A call of
-the frame's arguments is never inlined there, their count unknown; a
-forwarding constructor is inlined where it is constructed, with its
-forwards (`LowerSSAForward`). A function that assigns a parameter its mapped arguments object aliases,
+the frame's arguments is never inlined there, their count unknown. Where
+a caller knows them, a call of a forwarding function is inlined with its
+forwards (`LowerSSAForward`, `ssa.InlineSite`'s `Forward`): a
+construction's of the method its receiver's prototype holds, as before,
+and a call's of the function the forwarder's own code learned it calls
+there, inlined in turn (the VM's `jitForwardsCallInline`), a plain call's
+receiver the global object or undefined (`ssa.InlineSite`'s `ThisCell`).
+A function that assigns a parameter its mapped arguments object aliases,
 whose value it would hand on, and a generator's or an async function's,
 whose frame a resumption makes, are refused, or their forwards left to Go
 at an exit, as before. Measured, ns a call (`microbench_extra.js`), refused
-and then native: a forwarder of no argument called by a loop 189 to 20,
-of two 173 to 21, of six 229 to 31; a factory's forwarders, each of
+and then native: a forwarder of no argument called by a loop 189 to 6, of
+two 173 to 6, of six 229 to 6, inlined; a factory's forwarders, each of
 another function, 293 to 31; a forwarder's own loop of eight applies, 122
 to 14 an apply; `Array.apply(null, arguments)` 206 to 110; the tree tier
 alone 152, 143, 178, 170, 103 and 196.

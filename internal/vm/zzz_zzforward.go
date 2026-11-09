@@ -223,3 +223,104 @@ func (r *Runtime) jitForwardPlain(ctx *abi.Context) bool {
 	return true
 }
 
+// jitForwardLearned is the function the apply_arguments at pc of cl's
+// code calls natively, as that code's own forwards learned it
+// (jitForwardSeen), where it is one function object a native caller may
+// call: what a call of cl inlined in a caller forwards its arguments to,
+// inlined in turn (forwardInline). Or nil.
+func (r *Runtime) jitForwardLearned(cl *closure, pc int) *Object {
+	e := r.jit.entryFor(cl.fn)
+	if e == nil || e.callSites == nil || pc >= len(e.callSites) || e.callSites[pc] != jitCallNative {
+		return nil
+	}
+	var t *Object
+	for _, x := range e.nativeCalls {
+		if int(x.pc) != pc {
+			continue
+		}
+		if t != nil || x.byCode || x.cl == nil || x.obj == nil {
+			return nil
+		}
+		t = x.obj
+	}
+	if t == nil || !r.jitNativeTargetOf(t.fn(), cl, false) {
+		return nil
+	}
+	return t
+}
+
+// jitForwardsCall reports whether fn forwards its arguments,
+// f.apply(this, arguments), its arguments object made for nothing else
+// (bytecode's ForwardsArguments): a call of it, not a construction, is
+// inlined where jitForwardsCallInline says, as V8 inlines a callee whose
+// arguments its caller knows, the forward a call with them.
+func jitForwardsCall(fn *bytecode.Function) bool {
+	return (fn.ForwardsArguments || fn.Leaf == bytecode.LeafForward) && !jitReadsArguments(fn)
+}
+
+// jitForwardsCallInline reports whether a call -- not a construction -- of
+// cl, a forwarding function (jitForwardsCall), may be inlined with the
+// call's arguments: its code hands them on as they were given (compile's
+// ForwardsNatively), assigns no binding it captured, and each function it
+// forwards them to is the one its own code learned it calls there
+// (jitForwardLearned), not one that forwards them in turn, which may be
+// inlined in it with its calls, depth levels on.
+func (r *Runtime) jitForwardsCallInline(cl *closure, depth int) bool {
+	fn := cl.fn
+	if depth <= 0 || !jitForwardsCall(fn) || !jitcompile.ForwardsNatively(fn) || jitNoInline != nil && jitNoInline(fn) || jitWritesUpvalues(cl) {
+		return false
+	}
+	if _, err := r.jitLower(fn, jitLowerForward); err != nil {
+		return false
+	}
+	forwards := false
+	for pc, in := range fn.Code {
+		if in.Op != bytecode.OpApplyArguments {
+			continue
+		}
+		forwards = true
+		t := r.jitForwardLearned(cl, pc)
+		if t == nil {
+			return false
+		}
+		tc := t.fn().closure
+		if tc.fn == fn || tc.fn.ForwardsArguments || tc.fn.Leaf == bytecode.LeafForward || jitWritesUpvalues(tc) ||
+			!r.jitInlinable(tc.fn) && !r.jitInlinesCalls(tc, depth-1) {
+			return false
+		}
+	}
+	return forwards
+}
+
+// jitPlainThisCell is a cell holding the receiver a plain call of cl's
+// function gives it, for its frame inlined (ssa.InlineSite's ThisCell): the
+// realm's global object, a sloppy function's this coerced, or undefined, a
+// strict one's, as callFunction gives it; kept by fb's compile. False for
+// a function of another realm, whose global object is its own.
+func (fb *jitFeedback) jitPlainThisCell(cl *closure) (uintptr, bool) {
+	cell := new(Value)
+	*cell = Undefined
+	if cl.fn.CoerceThis {
+		if cl.realm != fb.r.Realm || !fb.r.globalThis.IsObject() {
+			return 0, false
+		}
+		*cell = fb.r.globalThis
+	}
+	k := fb.keep()
+	k.cells = append(k.cells, cell)
+	return uintptr(unsafe.Pointer(cell)), true
+}
+
+// jitForwardsCoerced reports whether a function cl's code forwards its
+// arguments to (jitForwardLearned) coerces its receiver: a sloppy one.
+func (r *Runtime) jitForwardsCoerced(cl *closure) bool {
+	for pc, in := range cl.fn.Code {
+		if in.Op != bytecode.OpApplyArguments {
+			continue
+		}
+		if t := r.jitForwardLearned(cl, pc); t == nil || t.fn().closure.fn.CoerceThis {
+			return true
+		}
+	}
+	return false
+}

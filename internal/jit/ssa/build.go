@@ -2430,6 +2430,11 @@ type InlineSite struct {
 	Captured        []int
 	LexThis         bool
 	LexThisSlot     int
+	// ThisCell, where not 0, is the address of a cell holding the
+	// receiver of a plain call of a callee that reads one: the global
+	// object a sloppy callee's this is coerced to, or undefined, a strict
+	// one's, as the interpreter's call gives it (callFunction).
+	ThisCell uintptr
 }
 
 // Inlining's bounds, by size alone, as V8's JSInliningHeuristic has them:
@@ -3811,7 +3816,7 @@ func (b *builder) inlineSiteAt(pc int, total *int, known *inlineAsked) (*frame, 
 	if site.LexThis && (isAccessor || site.Construct || site.Forward || site.Coerce || site.ThisSlot < 0) {
 		return nil, false
 	}
-	if !isAccessor && (depth < callee || after != depth-callee+1 || site.ThisSlot >= 0 && !site.Method && !site.Construct && !site.Forward && !site.LexThis) {
+	if !isAccessor && (depth < callee || after != depth-callee+1 || site.ThisSlot >= 0 && !site.Method && !site.Construct && !site.Forward && !site.LexThis && site.ThisCell == 0) {
 		return nil, false
 	}
 	if site.Construct {
@@ -4651,6 +4656,13 @@ func (b *builder) inlineCall(blk *Block, pc int, fr *frame, guard func(Op, Type,
 	case site.ThisSlot >= 0 && site.LexThis:
 		// An arrow the root makes: the root's own this, not a receiver.
 		fr.init[site.ThisSlot] = b.read(b.root.base+site.LexThisSlot, blk)
+	case site.ThisSlot >= 0 && site.ThisCell != 0 && !site.Method:
+		// A plain call's: the global object or undefined (ThisCell).
+		cell := b.f.newValue(blk, OpConstCell, Source)
+		cell.Const = ir.Value{Bits: uint64(site.ThisCell)}
+		this := b.f.newValue(blk, OpLoadCell, Tagged, cell)
+		this.Shadow = cell
+		fr.init[site.ThisSlot] = this
 	case site.ThisSlot >= 0:
 		fr.init[site.ThisSlot] = b.read(sp-site.Argc-2, blk)
 	}
@@ -5519,6 +5531,10 @@ func (b *builder) forwardCall(blk *Block, pc, sp int, fr *frame, guard func(Op, 
 	apply := guard(OpObjectOf, Ptr, ir.HostExit, b.read(sp-2, blk))
 	same = guard(OpSameObject, None, ir.HostExit, apply)
 	same.Const = ir.Value{Bits: uint64(site.Apply)}
+	if site.Coerce && site.ThisSlot >= 0 {
+		// A receiver that is not an object is coerced, which Go does.
+		guard(OpObjectOf, Ptr, ir.HostExit, b.read(sp-1, blk))
+	}
 	room := guard(OpFrameRoom, None, ir.HostExit)
 	room.Index = fr.base - b.root.p.Locals + fr.p.Locals + fr.p.StackSize
 	room.Const = ir.Value{Bits: uint64(fr.depth)}

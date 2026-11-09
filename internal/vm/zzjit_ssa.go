@@ -3358,7 +3358,13 @@ func (fb *jitFeedback) Inline(pc int) (ssa.InlineSite, bool) {
 		}
 		kind := jitLowerInline
 		reads := fb.fn.Code[pc].Op != bytecode.OpNew && jitReadsArguments(in.cl.fn)
-		if (in.cl.fn.Leaf == bytecode.LeafForward || in.cl.fn.ForwardsArguments) && fb.fn.Code[pc].Op == bytecode.OpNew || reads {
+		// A call of a forwarding function (jitForwardsCall), inlined with
+		// the call's arguments, its forwards made calls with them.
+		forwards := fb.fn.Code[pc].Op != bytecode.OpNew && jitForwardsCall(in.cl.fn)
+		if forwards && !fb.r.jitForwardsCallInline(in.cl, jitInlineDepth) {
+			return ssa.InlineSite{}, false
+		}
+		if (in.cl.fn.Leaf == bytecode.LeafForward || in.cl.fn.ForwardsArguments) && fb.fn.Code[pc].Op == bytecode.OpNew || reads || forwards {
 			kind = jitLowerForward
 		}
 		p, err := fb.r.jitLower(in.cl.fn, kind)
@@ -3388,6 +3394,22 @@ func (fb *jitFeedback) Inline(pc int) (ssa.InlineSite, bool) {
 			// each call of its maker fails it, and is called by its code
 			// from then on (jitInlinedCalls).
 			Upvalues: jitUpvalueCells(in.cl),
+		}
+		if forwards {
+			// Its frame Go makes with the call's arguments, which its
+			// forwards are made with (forwardInline); a plain call's
+			// receiver the global object or undefined.
+			site.Arguments = true
+			callee.fwdArgs = &jitForwardFrame{argc: int(call.A)}
+			if this >= 0 && call.Op == bytecode.OpCall {
+				cell, ok := fb.jitPlainThisCell(in.cl)
+				if !ok || !in.cl.fn.CoerceThis && fb.r.jitForwardsCoerced(in.cl) {
+					// Undefined handed on to a function that coerces it,
+					// which Go does: called natively.
+					return ssa.InlineSite{}, false
+				}
+				site.ThisCell, site.Coerce = cell, false
+			}
 		}
 		if call.Op == bytecode.OpNew {
 			// Its receiver from its pool, as a native construction's.
@@ -4322,8 +4344,9 @@ func (r *Runtime) jitNativeCallsInline(e *jitEntry, inline func(int)) bool {
 		x := e.nativeCalls[i]
 		pc := int(x.pc)
 		one := !slices.ContainsFunc(e.nativeCalls, func(y jitInline) bool { return y.pc == x.pc && y.cl != x.cl })
-		if !one || x.cl == nil || x.active != nil || x.parent != nil || r.jit.entryFor(x.cl.fn) == e || e.callSites == nil || pc >= len(e.callSites) ||
-			e.callSites[pc] != jitCallNative || slices.Contains(e.notInline, x.pc) || r.jitCallCold(e, pc, x.cl) || !r.jitInlinesCalls(x.cl, jitInlineDepth-1) ||
+		if !one || x.cl == nil || x.forward || x.active != nil || x.parent != nil || r.jit.entryFor(x.cl.fn) == e || e.callSites == nil || pc >= len(e.callSites) ||
+			e.callSites[pc] != jitCallNative || slices.Contains(e.notInline, x.pc) || r.jitCallCold(e, pc, x.cl) ||
+			!r.jitInlinesCalls(x.cl, jitInlineDepth-1) && (x.pool != nil || !r.jitForwardsCallInline(x.cl, jitInlineDepth)) ||
 			x.pool != nil && !r.jitInlinesAt(x.cl, x.obj, bytecode.Instr{Op: bytecode.OpNew}) {
 			continue
 		}
@@ -8013,6 +8036,11 @@ func (r *Runtime) jitInlinesAt(cl *closure, o *Object, in bytecode.Instr) bool {
 		// to, inlined in it.
 		return r.jitConstructs(o) && r.jitForwardsInline(cl, o, jitInlineDepth)
 	}
+	if in.Op != bytecode.OpNew && jitForwardsCall(cl.fn) {
+		// f.apply(this, arguments) called: f, the function its own code
+		// learned it forwards to, inlined in it with the call's arguments.
+		return r.jitForwardsCallInline(cl, jitInlineDepth)
+	}
 	if !r.jitInlinable(cl.fn) && !r.jitInlinesCalls(cl, jitInlineDepth-1) {
 		return false
 	}
@@ -8124,9 +8152,14 @@ func (fb *jitFeedback) forwardInline(pc int, fwd *jitForwardFrame) (ssa.InlineSi
 		return ssa.InlineSite{}, false
 	}
 	var t *Object
-	if fwd == fb.fwd {
+	switch {
+	case fwd == fb.fwd:
 		t = r.jitForwardMethod(fb.cl, fwd.ctor)
-	} else {
+	case fwd.ctor == nil:
+		// A call's, not a construction's: the function the forwarder's own
+		// code learned (jitForwardsCallInline).
+		t = r.jitForwardLearned(fb.cl, pc)
+	default:
 		t = r.jitForwardSiteTarget(fb.cl, fwd.ctor, pc)
 	}
 	if t == nil {
@@ -8160,6 +8193,10 @@ func (fb *jitFeedback) forwardInline(pc int, fwd *jitForwardFrame) (ssa.InlineSi
 		Callee: uintptr(unsafe.Pointer(t)), Closure: uintptr(unsafe.Pointer(tc)),
 		Argc: fwd.argc, Method: true, Params: tc.fn.ParamCount, ThisSlot: this,
 		Forward: true, Apply: uintptr(unsafe.Pointer(r.applyFn)), Arguments: forwards, Upvalues: jitUpvalueCells(tc),
+		// A call's receiver may be a primitive, or undefined, which a
+		// sloppy function's this is coerced from by Go; a construction's
+		// is its object.
+		Coerce: fwd.ctor == nil && tc.fn.CoerceThis,
 	}, true
 }
 
