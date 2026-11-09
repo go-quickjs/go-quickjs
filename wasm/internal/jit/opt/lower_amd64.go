@@ -113,7 +113,8 @@ type gen struct {
 	// argBase is the first slot of the area at the frame's top where a
 	// call through Go finds its arguments and leaves its results.
 	argBase int
-	ool     []func()
+	// ool is the out-of-line code, emitted after the blocks.
+	ool []stub
 	// traps are the trap stubs by code and offset (trapKey), trapTo the
 	// code that traps by code, polls the poll exits by block index.
 	traps  u64map[amd64.Label]
@@ -215,7 +216,7 @@ func lower(f *Func, req *wjit.Request, ws *workspace) *wjit.Code {
 		g.block(i, b)
 	}
 	for i := 0; i < len(g.ool); i++ {
-		g.ool[i]()
+		g.stub(&g.ool[i])
 	}
 	lap(PhaseEmit)
 	out, err := a.Finish()
@@ -732,23 +733,79 @@ func (g *gen) trap(code uint64, at uint32) amd64.Label {
 	if !ok {
 		to = a.NewLabel()
 		g.trapTo.set(code, to)
-		g.ool = append(g.ool, func() {
-			a.Bind(to)
-			g.mark("cold trap")
-			a.Store(rCtx, offL, rL)
-			g.storeCtx(offExit, wjit.ExitTrap)
-			g.storeCtx(offArg0, code)
-			g.storeCtx(offExitFn, uint64(g.fn))
-			a.Ret()
-		})
+		g.ool = append(g.ool, stub{kind: stubTrapCode, to: to, code: code})
 	}
-	g.ool = append(g.ool, func() {
-		a.Bind(l)
-		g.mark("cold trap")
-		g.storeCtx(offArg0+8, uint64(at))
-		a.Jmp(to)
-	})
+	g.ool = append(g.ool, stub{kind: stubTrapSite, l: l, to: to, at: at})
 	return l
+}
+
+// stub is out-of-line code, emitted after the blocks: the exit of a trap
+// with a code, a trap's site, its offset stored before it goes there, a
+// poll's exit, and a call's poll and its call through Go.
+type stub struct {
+	kind uint8
+	// l is the stub's label, to where a trap's site goes, or a poll where
+	// it goes back; start, slow and after are a call's.
+	l, to              amd64.Label
+	start, slow, after amd64.Label
+	code               uint64
+	at                 uint32
+	// v is the call, res its results.
+	v   *Value
+	res []*Value
+}
+
+// The stubs' kinds.
+const (
+	stubTrapCode = iota
+	stubTrapSite
+	stubPoll
+	stubCall
+	stubCallIndirect
+)
+
+// stub emits out-of-line code.
+func (g *gen) stub(st *stub) {
+	a := g.a
+	switch st.kind {
+	case stubTrapCode:
+		a.Bind(st.to)
+		g.mark("cold trap")
+		a.Store(rCtx, offL, rL)
+		g.storeCtx(offExit, wjit.ExitTrap)
+		g.storeCtx(offArg0, st.code)
+		g.storeCtx(offExitFn, uint64(g.fn))
+		a.Ret()
+	case stubTrapSite:
+		a.Bind(st.l)
+		g.mark("cold trap")
+		g.storeCtx(offArg0+8, uint64(st.at))
+		a.Jmp(st.to)
+	case stubPoll:
+		a.Bind(st.l)
+		g.mark("cold poll")
+		g.saveAll()
+		g.exit(wjit.ExitPoll, a.NewLabel())
+		g.restoreAll()
+		a.Jmp(st.to)
+	case stubCall, stubCallIndirect:
+		v := st.v
+		a.Bind(st.l)
+		g.mark("cold call")
+		g.saveAll()
+		g.exit(wjit.ExitPoll, a.NewLabel())
+		g.restoreAll()
+		a.Jmp(st.start)
+		a.Bind(st.slow)
+		g.stage(v.Args, g.argBase)
+		if st.kind == stubCall {
+			g.exit(wjit.ExitCall, a.NewLabel(), uint64(uint32(v.Aux)), uint64(g.argBase), uint64(v.At))
+		} else {
+			g.exit(wjit.ExitCallIndirect, a.NewLabel(), v.Aux, v.Aux2, uint64(g.argBase), uint64(v.At))
+		}
+		g.takeResults(st.res, int32(g.argBase))
+		a.Jmp(st.after)
+	}
 }
 
 func (g *gen) storeCtx(off int32, v uint64) {
@@ -806,16 +863,8 @@ func (g *gen) restoreAll() {
 // pollExit is out-of-line code that exits for a poll, every register kept,
 // and goes to back.
 func (g *gen) pollExit(back amd64.Label) amd64.Label {
-	a := g.a
-	l := a.NewLabel()
-	g.ool = append(g.ool, func() {
-		a.Bind(l)
-		g.mark("cold poll")
-		g.saveAll()
-		g.exit(wjit.ExitPoll, a.NewLabel())
-		g.restoreAll()
-		a.Jmp(back)
-	})
+	l := g.a.NewLabel()
+	g.ool = append(g.ool, stub{kind: stubPoll, l: l, to: back})
 	return l
 }
 
@@ -1963,19 +2012,7 @@ func (g *gen) call(v *Value, rest []*Value) {
 	g.takeResults(res, int32(g.req.FrameSlots))
 	a.Bind(after)
 	g.reload(v)
-	g.ool = append(g.ool, func() {
-		a.Bind(poll)
-		g.mark("cold call")
-		g.saveAll()
-		g.exit(wjit.ExitPoll, a.NewLabel())
-		g.restoreAll()
-		a.Jmp(start)
-		a.Bind(slow)
-		g.stage(v.Args, g.argBase)
-		g.exit(wjit.ExitCall, a.NewLabel(), uint64(idx), uint64(g.argBase), uint64(v.At))
-		g.takeResults(res, int32(g.argBase))
-		a.Jmp(after)
-	})
+	g.ool = append(g.ool, stub{kind: stubCall, l: poll, start: start, slow: slow, after: after, v: v, res: res})
 }
 
 // callGo lowers what Go runs for the code: call_indirect, and the
@@ -2087,19 +2124,7 @@ func (g *gen) callIndirect(v *Value, rest []*Value) {
 	g.takeResults(res, int32(g.req.FrameSlots))
 	a.Bind(after)
 	g.reload(v)
-	g.ool = append(g.ool, func() {
-		a.Bind(poll)
-		g.mark("cold call")
-		g.saveAll()
-		g.exit(wjit.ExitPoll, a.NewLabel())
-		g.restoreAll()
-		a.Jmp(start)
-		a.Bind(slow)
-		g.stage(v.Args, g.argBase)
-		g.exit(wjit.ExitCallIndirect, a.NewLabel(), v.Aux, v.Aux2, uint64(g.argBase), uint64(v.At))
-		g.takeResults(res, int32(g.argBase))
-		a.Jmp(after)
-	})
+	g.ool = append(g.ool, stub{kind: stubCallIndirect, l: poll, start: start, slow: slow, after: after, v: v, res: res})
 }
 
 // bulk lowers memory.copy and memory.fill of memory 0 (BulkInCode): the
