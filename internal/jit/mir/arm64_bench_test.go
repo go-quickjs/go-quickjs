@@ -15,10 +15,17 @@ import (
 // The same optimized function is compiled in a rewound workspace, as in
 // the VM's repeated compiles, and the resulting bytes are never executed.
 func BenchmarkCompileARM64(b *testing.B) {
-	for _, tc := range []struct{ name, src string }{
-		{"sum", `function f(n){let s=0;for(let i=0;i<n;i++)s+=i;return s}`},
+	for _, tc := range []struct {
+		name, src string
+		feedback  ssa.Feedback
+	}{
+		{"sum", `function f(n){let s=0;for(let i=0;i<n;i++)s+=i;return s}`, nil},
 		{"region", `function f(n){let a=1,b=2,c=3,d=4;for(let i=0;i<n;i++){` +
-			strings.Repeat(`a=(a+b*i)|0;b=b+c*0.5;c=(c^a)&255;d=d+a-b;`, 8) + `}return a+b+c+d}`},
+			strings.Repeat(`a=(a+b*i)|0;b=b+c*0.5;c=(c^a)&255;d=d+a-b;`, 8) + `}return a+b+c+d}`, nil},
+		{"calls", `function f(o,n){let s=0;for(let i=0;i<n;i++){` +
+			strings.Repeat(`s+=o.f(i);`, 8) + `}return s}`, nil},
+		{"properties", `function f(o,n){let s=0;for(let i=0;i<n;i++){` +
+			strings.Repeat(`s+=o.x;o=o.next;`, 8) + `}return s}`, arm64BenchFeedback{}},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			ast, err := parser.Parse(tc.src, parser.Options{})
@@ -33,7 +40,7 @@ func BenchmarkCompileARM64(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			f, err := ssa.Build(p)
+			f, err := ssa.BuildWith(p, tc.feedback)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -54,3 +61,16 @@ func BenchmarkCompileARM64(b *testing.B) {
 		})
 	}
 }
+
+type arm64BenchFeedback struct{}
+
+func (arm64BenchFeedback) Property(pc int) (ssa.PropertySite, bool) {
+	return ssa.PropertySite{Shape: 0x10000, Index: int32(pc % 4), Cases: []ssa.PropertyCase{
+		{Shape: 0x20000, Index: 1}, {Shape: 0x30000, Index: 2},
+	}}, true
+}
+func (arm64BenchFeedback) Global(int) (ssa.GlobalSite, bool) { return ssa.GlobalSite{}, false }
+func (arm64BenchFeedback) Generic(int) bool                  { return false }
+func (arm64BenchFeedback) EntryGeneric(int) bool             { return false }
+func (arm64BenchFeedback) Inline(int) (ssa.InlineSite, bool) { return ssa.InlineSite{}, false }
+func (arm64BenchFeedback) NativeCalls(int) []ssa.CallSite    { return nil }
