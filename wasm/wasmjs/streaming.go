@@ -39,8 +39,13 @@ const streamingJS = `(function () {
       if (c && c.name) return ' Received an instance of ' + c.name;
       return ' Received [Object: null prototype] {}';
     }
-    let s = inspect(v);
-    if (s.length > 28) s = s.slice(0, 25) + '...';
+    let s;
+    if (typeof v === 'string') {
+      s = inspect(v.length > 28 ? v.slice(0, 25) + '...' : v);
+    } else {
+      s = inspect(v);
+      if (s.length > 28) s = s.slice(0, 25) + '...';
+    }
     return ' Received type ' + typeof v + ' (' + s + ')';
   }
   function nodeError(code, msg) {
