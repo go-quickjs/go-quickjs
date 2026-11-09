@@ -315,7 +315,12 @@ func buildAt(src []byte, counts [4]int, tests, data int, exe string) ([4]uint64,
 			return addrs, err
 		}
 	}
-	cmd := exec.Command("go", "build", "-o", exe, "./internal/cmd/v8bench")
+	// Built as the layout lock's targets are measured
+	// (internal/cmd/layoutpad): without VCS stamping, whose build
+	// information is longer by a tree with changes -- the pads make one --
+	// and moves the data after it, and without cgo.
+	cmd := exec.Command("go", "build", "-buildvcs=false", "-o", exe, "./internal/cmd/v8bench")
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
 		return addrs, fmt.Errorf("go build: %w", err)
