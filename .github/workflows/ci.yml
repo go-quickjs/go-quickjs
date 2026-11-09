@@ -304,6 +304,16 @@ jobs:
           if [ "${{ matrix.arch }}" = "386" ]; then export GOARCH=386; fi
           WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" WASM_THREADS_DIR="$GITHUB_WORKSPACE/wasm-threads" go test ./wasm/internal/spectest ./wasm/internal/wast -count=1 -v 2>&1 | tee spec.log | grep -E "spec:|scripts parsed|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
 
+      # Every function compiled at its first call, where the wasm JIT runs
+      # (amd64 on Linux and Windows), and the JIT checked against the
+      # interpreter call by call.
+      - name: Run the spec scripts under the JIT
+        if: matrix.arch == 'native' && matrix.os != 'macos-15'
+        shell: bash
+        run: |
+          WASM_JIT=eager WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" WASM_THREADS_DIR="$GITHUB_WORKSPACE/wasm-threads" go test -tags quickjs_jit ./wasm/internal/spectest ./wasm/internal/engine -count=1 -v 2>&1 | tee jit.log | grep -E "spec:|jit:|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
+          WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" go test -tags quickjs_jit ./wasm/internal/spectest -run TestJITDifferential -count=1 -v 2>&1 | tee diff.log | grep -E "modules|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
+
   jit-conformance:
     name: JIT test262 under stress (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
