@@ -1,4 +1,4 @@
-//go:build windows && (amd64 || arm64)
+//go:build windows && (amd64 || arm64 || 386)
 
 package engine
 
@@ -8,8 +8,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// reservable reports whether linear memory is reserved from the OS here.
-const reservable = true
+// canReserve reports whether address space can be reserved from the OS here.
+const canReserve = true
 
 // reserve reserves size bytes of address space, inaccessible until
 // committed. The memory is the OS's, outside the Go heap.

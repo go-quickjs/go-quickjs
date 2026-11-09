@@ -36,9 +36,10 @@ func init() {
 // Where the platform allows, a memory reserves the address space of its
 // maximum when it is made and commits pages as it grows, so that its bytes
 // never move: a view of them stays valid across a grow, and a shared memory
-// can be read by other threads while it grows. Elsewhere it is a Go slice,
-// reallocated when it grows past its capacity; a shared memory there is made
-// at its maximum size at once.
+// can be read by other threads while it grows. On 32-bit platforms only a
+// shared memory does. Elsewhere a memory is a Go slice, reallocated when it
+// grows past its capacity; a shared memory there is made at its maximum size
+// at once.
 //
 // A reserved memory returns its reservation to the OS when the Memory is
 // collected, so whatever holds its bytes must keep the Memory reachable.
@@ -73,7 +74,12 @@ type Memory struct {
 // SetBudget charges the memory, and its growth from now on, to b,
 // reporting false, and charging nothing, if its present size does not fit.
 func (m *Memory) SetBudget(b *Budget) bool {
-	c, ok := newCharge(m, b, int64(m.Size()))
+	// A shared memory that is a Go slice was made at its maximum.
+	n := int64(m.Size())
+	if m.Shared && m.reservation == nil {
+		n = int64(len(m.buf))
+	}
+	c, ok := newCharge(m, b, n)
 	m.charge = c
 	return ok
 }
@@ -92,7 +98,12 @@ func NewMemory(initial, max uint64, hasMax, is64, shared bool) *Memory {
 		return nil
 	}
 	m := &Memory{Max: max, Is64: is64, Shared: shared, HasMax: hasMax}
-	if reservable {
+	// On a 32-bit platform a reservation of each memory's maximum would soon
+	// fill the address space, so an unshared memory is a Go slice there. A
+	// shared one is made at its maximum either way, and a reservation that
+	// cannot be had fails, where a Go allocation that cannot be had ends the
+	// process.
+	if canReserve && (bits.UintSize == 64 || shared) {
 		r, err := reserve(max * PageSize)
 		if err == nil {
 			if err := commit(r, 0, initial*PageSize); err != nil {
@@ -108,6 +119,10 @@ func NewMemory(initial, max uint64, hasMax, is64, shared bool) *Memory {
 			m.size.Store(initial * PageSize)
 			runtime.AddCleanup(m, release, r)
 			return m
+		}
+		if shared {
+			// A Go slice of the same size would not be had either.
+			return nil
 		}
 	}
 	n := initial * PageSize
@@ -174,13 +189,18 @@ func (m *Memory) Grow(delta uint64) int64 {
 	}
 	newPages := old + delta
 	oldBytes, newBytes := old*PageSize, newPages*PageSize
-	if !m.charge.take(int64(delta * PageSize)) {
+	// A shared memory that is a Go slice was charged its maximum when made.
+	charged := int64(delta * PageSize)
+	if m.Shared && m.reservation == nil {
+		charged = 0
+	}
+	if !m.charge.take(charged) {
 		return -1
 	}
 	switch {
 	case m.reservation != nil:
 		if err := commit(m.reservation, oldBytes, newBytes); err != nil {
-			m.charge.giveBack(int64(delta * PageSize))
+			m.charge.giveBack(charged)
 			return -1
 		}
 		if !m.Shared {
@@ -190,7 +210,7 @@ func (m *Memory) Grow(delta uint64) int64 {
 		// Made at its maximum.
 	default:
 		if newBytes > uint64(maxSlice) {
-			m.charge.giveBack(int64(delta * PageSize))
+			m.charge.giveBack(charged)
 			return -1
 		}
 		if newBytes <= uint64(cap(m.buf)) {

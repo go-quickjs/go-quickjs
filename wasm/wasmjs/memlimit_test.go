@@ -20,14 +20,14 @@ func watBytes(t *testing.T, src string) string {
 
 // TestMemoryLimitBuffers checks that a memory's buffer is counted by the
 // memory's size, not by the address space reserved for it: a script holding
-// the buffers of a memory and of a shared memory of 4 GiB's maximum, under a
+// the buffers of a memory and of a shared memory of 1 GiB's maximum, under a
 // limit of 64 MiB, ran out of memory at its next measurement.
 func TestMemoryLimitBuffers(t *testing.T) {
 	rt := newRuntime(t, quickjs.WithMemoryLimit(64<<20))
 	v, err := rt.Eval(`
 		globalThis.keep = [
 			new WebAssembly.Memory({initial: 1}).buffer,
-			new WebAssembly.Memory({initial: 1, maximum: 65536, shared: true}).buffer,
+			new WebAssembly.Memory({initial: 1, maximum: 16384, shared: true}).buffer,
 		];
 		let a = [];
 		for (let i = 0; i < 200000; i++) a.push({i});

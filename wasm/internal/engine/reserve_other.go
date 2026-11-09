@@ -1,13 +1,12 @@
-//go:build !((linux || darwin || freebsd || netbsd || openbsd) && (amd64 || arm64 || riscv64 || ppc64le || s390x || loong64)) && !(windows && (amd64 || arm64))
+//go:build !((linux || darwin || freebsd || netbsd || openbsd) && (amd64 || arm64 || riscv64 || ppc64le || s390x || loong64 || 386 || arm)) && !(windows && (amd64 || arm64 || 386))
 
 package engine
 
 import "errors"
 
-// reservable reports whether linear memory is reserved from the OS here: on
-// 32-bit platforms, and those without a reservation to make, it is a Go slice
-// that moves when it grows past its capacity.
-const reservable = false
+// canReserve reports whether address space can be reserved from the OS here:
+// where it cannot, every memory is a Go slice.
+const canReserve = false
 
 func reserve(size uint64) ([]byte, error) { return nil, errors.ErrUnsupported }
 

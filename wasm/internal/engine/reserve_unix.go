@@ -1,11 +1,11 @@
-//go:build (linux || darwin || freebsd || netbsd || openbsd) && (amd64 || arm64 || riscv64 || ppc64le || s390x || loong64)
+//go:build (linux || darwin || freebsd || netbsd || openbsd) && (amd64 || arm64 || riscv64 || ppc64le || s390x || loong64 || 386 || arm)
 
 package engine
 
 import "golang.org/x/sys/unix"
 
-// reservable reports whether linear memory is reserved from the OS here.
-const reservable = true
+// canReserve reports whether address space can be reserved from the OS here.
+const canReserve = true
 
 // reserve reserves size bytes of address space, inaccessible until
 // committed. The memory is the OS's, outside the Go heap.

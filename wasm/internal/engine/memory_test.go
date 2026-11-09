@@ -1,9 +1,29 @@
 package engine
 
 import (
+	"math/bits"
 	"sync"
 	"testing"
 )
+
+// TestSharedMemoryNotHad checks that a shared memory the process cannot
+// have fails to be made. A 32-bit process making one of 2 GiB's maximum --
+// which a shared memory takes at once -- ended with a fatal "out of memory"
+// from a Go allocation; it reserves the address space now, which fails.
+func TestSharedMemoryNotHad(t *testing.T) {
+	if bits.UintSize != 32 {
+		t.Skip("a 64-bit process has the address space")
+	}
+	var held []*Memory
+	for range 4 {
+		m := NewMemory(1, MaxMemory32Pages, true, false, true)
+		if m == nil {
+			return
+		}
+		held = append(held, m)
+	}
+	t.Fatalf("made %d shared memories of 2 GiB in a 32-bit address space", len(held))
+}
 
 func TestMemoryGrow(t *testing.T) {
 	for _, shared := range []bool{false, true} {
