@@ -155,6 +155,9 @@ type ctl struct {
 	cond    ti32
 	// dead says the rest of the construct cannot be reached.
 	dead bool
+	// first is the group of the block that began the construct's body, if
+	// a block did, which a block ending merges with itself.
+	first *blockGroup
 	// index is a try_table's or try's index in the control stack.
 	index int
 	// clauses are a try_table's catch clauses.
@@ -497,9 +500,17 @@ func (c *compiler) end() {
 	}
 	body := t.body
 	var s stmt
+	var group *blockGroup
 	switch t.op {
 	case opcode.Block:
-		s = blockStmt(body)
+		// A block whose body begins with a block, as a switch's chain of
+		// blocks does, is run with it as one group.
+		if t.first != nil {
+			group = &blockGroup{segs: append(t.first.segs[:len(t.first.segs):len(t.first.segs)], body[1:])}
+		} else {
+			group = &blockGroup{segs: [][]stmt{body}}
+		}
+		s = group.stmt()
 	case opcode.Loop:
 		s = loopStmt(body)
 	case opcode.If:
@@ -508,12 +519,51 @@ func (c *compiler) end() {
 		s = c.endOther(t, body)
 	}
 	if s != nil {
+		if parent := c.top(); len(parent.body) == 0 && group != nil {
+			parent.first = group
+		}
 		c.emit(s)
 	}
 	if c.top().dead {
 		return
 	}
 	c.pushResults(t)
+}
+
+// blockGroup is a chain of nested blocks run as one statement: segs[0] is
+// the innermost block's body, and segs[i] the statements of block i that
+// follow block i-1's end. A branch out of k blocks from segs[i] goes on at
+// segs[i+k], however deep the chain, rather than returning through each
+// block between.
+type blockGroup struct {
+	segs [][]stmt
+}
+
+func (g *blockGroup) stmt() stmt {
+	if len(g.segs) == 1 {
+		return blockStmt(g.segs[0])
+	}
+	segs := g.segs
+	n := int32(len(segs))
+	return func(f *frame) int32 {
+		for i := int32(0); i < n; {
+			c := runSeq(f, segs[i])
+			if c < 0 {
+				return c
+			}
+			if c == 0 {
+				i++
+				continue
+			}
+			// Out of c blocks from block i: past the group if that reaches
+			// beyond its outermost block.
+			if i+c >= n {
+				return i + c - n
+			}
+			i += c
+		}
+		return 0
+	}
 }
 
 // functionEpilogue moves a function's results from their stack positions to
