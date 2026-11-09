@@ -534,9 +534,14 @@ func (c *compiler) end() {
 	switch t.op {
 	case opcode.Block:
 		// A block whose body begins with a block, as a switch's chain of
-		// blocks does, is run with it as one group.
+		// blocks does, is run with it as one group. The inner group's
+		// segments are extended in place: its statement, body[0], is
+		// dropped for the group's, and the statement read only the
+		// segments it had, which an append past them leaves as they are;
+		// a chain of n blocks so takes O(n), not a copy of the segments at
+		// each block's end.
 		if t.first != nil {
-			group = &blockGroup{segs: append(t.first.segs[:len(t.first.segs):len(t.first.segs)], body[1:])}
+			group = &blockGroup{segs: append(t.first.segs, body[1:])}
 		} else {
 			group = &blockGroup{segs: [][]stmt{body}}
 		}
