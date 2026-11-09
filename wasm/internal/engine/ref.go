@@ -84,3 +84,25 @@ func (r Ref) Host() (any, bool) {
 
 // Pointer returns r's object pointer: nil for null, the i31 mark for an i31.
 func (r Ref) Pointer() unsafe.Pointer { return r.p }
+
+// RefMatchesAbstract reports whether non-null reference r is of abstract
+// heap type h: "any", "eq", "struct", "array", "i31", "func", "extern" or
+// "exn".
+func RefMatchesAbstract(r Ref, h string) bool {
+	if r.IsI31() {
+		return h == "any" || h == "eq" || h == "i31" || h == "extern"
+	}
+	switch r.Kind() {
+	case ObjFunc:
+		return h == "func"
+	case ObjStruct:
+		return h == "any" || h == "eq" || h == "struct" || h == "extern"
+	case ObjArray:
+		return h == "any" || h == "eq" || h == "array" || h == "extern"
+	case ObjExn:
+		return h == "exn"
+	case ObjHost:
+		return h == "extern" || h == "any"
+	}
+	return false
+}

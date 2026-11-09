@@ -208,3 +208,14 @@ func canonicalDef(m *Module, t *TypeDef, start uint32, base CanonicalIndex) Cano
 	}
 	return c
 }
+
+// CanonicalFunc returns the canonical index of the function type ft, alone
+// in its recursion group. Its references must not name type definitions.
+func CanonicalFunc(ft *FuncType) CanonicalIndex {
+	m := &Module{
+		Types:     []TypeDef{{Kind: TypeFunc, Func: ft, Super: NoSuper, Final: true, RecSize: 1}},
+		Canonical: make([]CanonicalIndex, 1),
+	}
+	Canonicalize(m, 0, 1)
+	return m.Canonical[0]
+}
