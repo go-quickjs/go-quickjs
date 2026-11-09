@@ -186,6 +186,10 @@ type shapeSide struct {
 	// of the literals of the Programs the realm runs (zzz_rerun.go) and of
 	// the literals of its code by their keys (zzz_literalkeys.go).
 	programs *programTable
+	// spread is, on a layout shapeKeys has kept the keys of, the layouts
+	// object spreads of its objects into empty objects made, by their
+	// roots (zzz_spreadshape.go).
+	spread *spreadLayouts
 }
 
 // protoCell is a prototype chain's validity cell, as V8's: valid while no

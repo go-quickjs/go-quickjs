@@ -887,9 +887,10 @@ func (r *Runtime) copyDataProps(target *Object, src Value) error {
 	// places with the layout: its values are read from there, with nothing
 	// a getter could see.
 	if c := r.shapeKeys(o); c != nil && c.copyable {
-		if target.class == ClassObject && len(c.atoms) > 1 {
-			// The table grows once rather than at every doubling.
-			target.reserveProps(int(target.valn) + len(c.atoms))
+		// By the layout such a spread makes, into an empty literal; or the
+		// room the definitions below need is reserved.
+		if spreadShaped[struct{}](r, target, o, c) {
+			return nil
 		}
 		for i, k := range c.atoms {
 			if err := r.defineOwnProp(target, k, o.vals()[c.slots[i]], propDefault); err != nil {
