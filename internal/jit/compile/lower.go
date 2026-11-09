@@ -720,6 +720,11 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		// A super(...) of the call's arguments hands them on.
 		p.FrameArgs = fn.HasRest || fn.UsesArguments || fn.MappedArguments || fn.ParamsAreLexical || fn.SuperForwards
 		p.FrameCallee = fn.FrameCallee
+		if fn.MappedArguments && fn.ParamCount > 0 && (fn.AssignsParams || paramCaptured(fn)) && !m.forward {
+			// What a mapped object would alias, which the code, or a
+			// closure, assigns (argumentsOwn).
+			p.ArgumentParams = fn.ParamCount
+		}
 		if !prologueArgs(p) && m.callee {
 			// A native callee's frame, and an inlined one's, has the call's
 			// arguments nowhere but where the prologue's states keep them.
@@ -781,14 +786,21 @@ func superRef(op bytecode.Op) bool {
 // arguments. A mapped one -- a sloppy function's of simple parameters --
 // aliases the parameters, which native code holds as values, written to
 // the frame only at its exits: so only where it has none, or where the
-// function never assigns a parameter and never lets the object out, its
-// arguments read by index and counted alone (arguments_index,
-// arguments_length), which read what the parameters were given.
+// function never lets the object out, its arguments read by index and
+// counted alone (arguments_index, arguments_length) -- which read what the
+// parameters were given, or, where the code or a closure assigns them,
+// the parameters as they are (ir.Program's ArgumentParams). The object Go
+// makes at an exit there -- for a key past the arguments -- the
+// interpreter reads at the exits after it, its frame written.
 func argumentsOwn(fn *bytecode.Function) bool {
-	if fn.Leaf == bytecode.LeafForward || fn.ForwardsArguments {
-		// A forwarding constructor's, which its callers inline, its
-		// arguments forwarded (LowerSSAForward): its own code would leave
-		// at each. Go's call of the built-in apply from native code
+	if fn.Leaf == bytecode.LeafForward || fn.ForwardsArguments && fn.MakesArguments {
+		// A forwarding function's -- f.apply(x, arguments), its object
+		// made for nothing else (bytecode.Function's ForwardsArguments),
+		// which hands the arguments on (apply_arguments, which
+		// MakesArguments says) -- its callers inline where they know what
+		// it forwards to (LowerSSAForward): its own code would leave at
+		// each. One that only reads its arguments by index, which the
+		// compiler marks so too, is its own. Go's call of the built-in apply from native code
 		// (a GoHost of apply_arguments, of the frame's arguments or those
 		// a native call wrote to its callee's context) costs more than
 		// the tree tier's, measured: a forwarder native callers called,
@@ -801,20 +813,31 @@ func argumentsOwn(fn *bytecode.Function) bool {
 	if !fn.MappedArguments || fn.ParamCount == 0 {
 		return true
 	}
-	if fn.MakesArguments || fn.AssignsParams {
-		// The object let out, or a store to a parameter, by any
-		// instruction that stores to a local (bytecode.WrittenLocals):
-		// a[++i]'s update is to its key's slot, in B, not to A, its
-		// object's. The compiler records both of the code.
+	if fn.MakesArguments {
+		// The object made and let out -- to a call, to a store through
+		// it, which writes the parameter it aliases -- while native code
+		// holds the parameters as values. The compiler records it of the
+		// code.
 		return false
 	}
+	// A store to a parameter, by any instruction that stores to a local
+	// (bytecode.WrittenLocals) -- a[++i]'s update is to its key's slot,
+	// in B, not to A, its object's -- or a closure's of a parameter it
+	// captured: arguments[k], which reads the parameter k aliases as it is
+	// now, is given the parameters (ir.Program's ArgumentParams), up to
+	// what a call of Go takes past its two operands.
+	return fn.ParamCount+2 <= abi.MaxGoArgs
+}
+
+// paramCaptured reports whether a closure fn makes captures one of its
+// parameters.
+func paramCaptured(fn *bytecode.Function) bool {
 	for i := 0; i < fn.ParamCount && i < len(fn.Locals); i++ {
 		if fn.Locals[i].Captured {
-			// A closure's assignment of it, which the object would see.
-			return false
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 // prologueArgs gives p, if its parameter list has a prologue (ir's
@@ -1363,6 +1386,13 @@ func liveLocals(fn *bytecode.Function, p *ir.Program, effects []effect) {
 		return
 	}
 	words := (n + 63) / 64
+	// The parameters a mapped arguments object aliases where the code, or
+	// a closure, assigns them (ArgumentParams): the object the interpreter
+	// makes at an exit reads their slots.
+	aliased := 0
+	if fn.MappedArguments && (fn.AssignsParams || paramCaptured(fn)) {
+		aliased = min(fn.ParamCount, n)
+	}
 	live := make([]uint64, len(fn.Code)*words)
 	at := func(pc int) []uint64 { return live[pc*words : (pc+1)*words] }
 	read := func(s []uint64, i uint32) { s[i/64] |= 1 << (i % 64) }
@@ -1409,9 +1439,13 @@ func liveLocals(fn *bytecode.Function, p *ir.Program, effects []effect) {
 				read(in, ins.A&(1<<24-1))
 			case bytecode.OpArgumentsIndex, bytecode.OpArgumentsLength, bytecode.OpLazyArguments, bytecode.OpApplyArguments:
 				// The local the arguments object is kept in once made, which
-				// native code reads (ssa's GoArgument).
+				// native code reads (ssa's GoArgument), and the parameters
+				// it aliases.
 				if !ins.StrFreeze() {
 					read(in, ins.A)
+					for i := range aliased {
+						read(in, uint32(i))
+					}
 				}
 			case bytecode.OpParamsToDeadZone:
 				// It takes the arguments from the parameters' slots, which

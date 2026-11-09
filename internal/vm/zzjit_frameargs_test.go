@@ -82,9 +82,11 @@ func TestJITFrameArguments(t *testing.T) {
 	jitAgreesForTest(t, frameArgsSetup, `run(20)`, `run(40)`)
 }
 
-// A sloppy function whose arguments object aliases a parameter it assigns,
-// or lets the object out, stays the interpreter's: native code holds the
-// parameters as values, which the object would not see.
+// A sloppy function whose arguments object aliases a parameter it assigns
+// is compiled, its reads of arguments[k] given the parameters as they are
+// (ir.Program's ArgumentParams); one that lets the object out stays the
+// interpreter's: native code holds the parameters as values, which the
+// object would not see.
 func TestJITFrameArgumentsAliased(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -96,10 +98,14 @@ func TestJITFrameArgumentsAliased(t *testing.T) {
 	for range 3 {
 		both.agree(t, `run(300)`)
 	}
-	for _, name := range []string{"assigns", "escapes"} {
-		if e := both.jit.jit.entryFor(both.jit.global.getOwn(both.jit.atoms.intern(name)).value().Object().fn().closure.fn); e != nil && e.ssa != nil {
-			t.Errorf("%s was compiled", name)
-		}
+	entry := func(name string) *jitEntry {
+		return both.jit.jit.entryFor(both.jit.global.getOwn(both.jit.atoms.intern(name)).value().Object().fn().closure.fn)
+	}
+	if e := entry("assigns"); e == nil || e.ssa == nil {
+		t.Error("assigns was not compiled")
+	}
+	if e := entry("escapes"); e != nil && e.ssa != nil {
+		t.Error("escapes was compiled")
 	}
 }
 

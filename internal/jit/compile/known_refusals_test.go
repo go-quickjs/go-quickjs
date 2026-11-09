@@ -55,13 +55,11 @@ func ssaRefusal(fn *bytecode.Function) string {
 var knownRefusals = []struct {
 	name, source, want string
 }{
-	// 682 for an arguments object, all three forms. A sloppy function's
-	// mapped object aliases its parameters, which native code holds as
-	// values, so it is Go's only where neither is written nor the object
-	// let out (argumentsOwn).
-	{"mapped arguments, a parameter assigned",
-		`function f(a) { a = 2; let s = 0; for (let i = 0; i < 3; i++) s += arguments[0]; return s }`,
-		"entry: arguments object"},
+	// 682 for an arguments object, all three forms then. A sloppy
+	// function's mapped object aliases its parameters, which native code
+	// holds as values, so it is Go's only where the object is not let out
+	// (argumentsOwn); a parameter assigned is passed to Go's reads of
+	// arguments[k] (ir.Program's ArgumentParams).
 	{"mapped arguments let out",
 		`function f(a) { let s = 0; for (let i = 0; i < 3; i++) s += g(arguments); return s }`,
 		"entry: arguments object"},

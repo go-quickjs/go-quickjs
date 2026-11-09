@@ -11,6 +11,9 @@ func (p *Program) Validate() error {
 	if p.Locals < 0 || p.StackSize < 0 || len(p.Globals) > p.Locals || p.This && p.Locals <= len(p.Globals) {
 		return fmt.Errorf("jit IR: invalid slot layout")
 	}
+	if p.ArgumentParams < 0 || p.ArgumentParams > p.Locals {
+		return fmt.Errorf("jit IR: invalid aliased parameters")
+	}
 	for pc, state := range p.Maps {
 		if state.PC != uint32(pc) || state.Depth < -1 || state.Depth > p.StackSize {
 			return fmt.Errorf("jit IR: pc %d: invalid state map", pc)

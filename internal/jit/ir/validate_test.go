@@ -23,6 +23,7 @@ func TestValidateNativeSafety(t *testing.T) {
 		{"initial-depth", func(p *Program) { p.Maps[0].Depth = 1 }},
 		{"map", func(p *Program) { p.Maps[1].PC = 2 }},
 		{"missing-map", func(p *Program) { p.Maps = nil }},
+		{"aliased-parameters", func(p *Program) { p.ArgumentParams = p.Locals + 1 }},
 		{"fallthrough", func(p *Program) { p.Code[1].Op = Nop }},
 		{"target", func(p *Program) { p.Code[0].Op, p.Code[0].Target = Jump, 2 }},
 		{"unreachable", func(p *Program) { p.Maps[1].Depth = -1 }},

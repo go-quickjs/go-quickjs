@@ -555,6 +555,14 @@ type Program struct {
 	// call writes to its callee's context (abi.Context's Function), where
 	// Go finds it for the frames it makes of the callee's level.
 	FrameCallee bool
+	// ArgumentParams, where not 0, is how many parameters a sloppy
+	// function's mapped arguments object aliases where the code assigns
+	// one, or a closure may, and never makes the object: a read of
+	// arguments[k] (ArgumentRead) gives Go them past its operands, as they
+	// are -- in a cell where a closure captured one -- and Go answers a
+	// key that is one's alias with it, the call's argument otherwise, as
+	// the object would.
+	ArgumentParams int
 }
 
 // PrologueAt reports whether a frame at pc, its operands depth deep, has

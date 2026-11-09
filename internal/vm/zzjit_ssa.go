@@ -14283,23 +14283,27 @@ func (r *Runtime) jitHostResult(f *frame, pc, depth int, v Value, err error) (in
 // not made, an index of the arguments is the argument, as the
 // interpreter's argumentsIndex reads it -- a mapped object's too, which
 // aliases parameters the function never assigns (compile's
-// argumentsOwn) -- and their count is how many there are. The rest it
-// leaves to the code's exit, where Go makes it.
+// argumentsOwn), or, where it or a closure assigns them, the parameter
+// the index aliases, which the code passes past the two operands
+// (ir.Program's ArgumentParams) -- and their count is how many there are.
+// The rest it leaves to the code's exit, where Go makes it.
 func (r *Runtime) jitArgument(ctx *abi.Context) (Value, bool) {
 	s, idx := r.jit, int(ctx.Level)
 	var args []Value
+	var fn *bytecode.Function
 	switch {
 	case ctx.Live == abi.LiveCall:
 		// A native callee's, whose call wrote them to its context
 		// (jitFrameArgs).
-		if cl := (*closure)(ctx.Closure); cl == nil || !jitFrameArgs(cl.fn) {
+		cl := (*closure)(ctx.Closure)
+		if cl == nil || !jitFrameArgs(cl.fn) {
 			return Undefined, false
 		}
-		args = jitContextArgs(ctx)
+		args, fn = jitContextArgs(ctx), cl.fn
 	case ctx.Live != 0 || idx >= len(s.goRuns) || idx >= len(s.ssaCtxs) || s.ssaCtxs[idx] != ctx || s.goRuns[idx].f == nil:
 		return Undefined, false
 	default:
-		args = s.goRuns[idx].f.args
+		args, fn = s.goRuns[idx].f.args, s.goRuns[idx].f.cl.fn
 	}
 	if ctx.GoOp>>abi.GoOpArgcShift&0xff == 1 {
 		if jitGoArg(ctx, 0).IsObject() {
@@ -14312,6 +14316,12 @@ func (r *Runtime) jitArgument(ctx *abi.Context) (Value, bool) {
 		return Undefined, false
 	}
 	if i := uint32(k.num); float64(i) == k.num && uint(i) < uint(len(args)) {
+		if n := int(ctx.GoOp>>abi.GoOpArgcShift&0xff) - 2; uint(i) < uint(n) && mapsArgument(fn, int(i)) {
+			// The parameter the mapped object would alias, as the code
+			// has it now (ir.Program's ArgumentParams): one it, or a
+			// closure, assigned.
+			return jitGoArg(ctx, 2+int(i)), true
+		}
 		return args[i], true
 	}
 	return Undefined, false

@@ -859,26 +859,37 @@ func TestStringAppendLowering(t *testing.T) {
 	}
 }
 
-// A mapped arguments object aliases the parameters, so argumentsOwn refuses
-// a function that stores to one by any instruction: a[++i] updates the
+// A mapped arguments object aliases the parameters, so a function that
+// stores to one by any instruction has its reads of arguments[k] given the
+// parameters as they are (ir.Program's ArgumentParams): a[++i] updates the
 // key's slot, its B, where its A is the object's, which is only read: a
-// local's object and a parameter's key had been taken for no store.
+// local's object and a parameter's key had been taken for no store. A
+// strict function's object is a copy, and aliases none.
 func TestArgumentsOwnSeesEveryParameterStore(t *testing.T) {
 	for _, c := range []struct {
-		src string
-		own bool
+		src     string
+		aliased bool
 	}{
-		{`function f(a, i) { var x = a[i]; return arguments.length + arguments[1] + x; }`, true},
-		{`function f(a, i) { var x = a[++i]; return arguments.length + arguments[1] + x; }`, false},
-		{`function f(i) { let a = g; var x = a[++i]; return arguments.length + arguments[0] + x; }`, false},
-		{`function f(a, i) { var x = a[i--]; return arguments.length + arguments[1] + x; }`, false},
-		{`function f(a, i) { i++; return arguments.length + arguments[1]; }`, false},
-		{`function f(a, i) { var j = 0; var x = a[++j]; return arguments.length + arguments[1] + x; }`, true},
-		{`function f(a, i) { "use strict"; var x = a[++i]; return arguments.length + arguments[1] + x; }`, true},
+		{`function f(a, i) { var x = a[i]; return arguments.length + arguments[1] + x; }`, false},
+		{`function f(a, i) { var x = a[++i]; return arguments.length + arguments[1] + x; }`, true},
+		{`function f(i) { let a = g; var x = a[++i]; return arguments.length + arguments[0] + x; }`, true},
+		{`function f(a, i) { var x = a[i--]; return arguments.length + arguments[1] + x; }`, true},
+		{`function f(a, i) { i++; return arguments.length + arguments[1]; }`, true},
+		{`function f(a, i) { var j = 0; var x = a[++j]; return arguments.length + arguments[1] + x; }`, false},
+		{`function f(a, i) { "use strict"; var x = a[++i]; return arguments.length + arguments[1] + x; }`, false},
+		{`function f(a, i) { g(() => a = 1); return arguments.length + arguments[0]; }`, true},
 	} {
 		fn := compiledFunction(t, c.src)
-		if got := argumentsOwn(fn); got != c.own {
-			t.Errorf("%s: argumentsOwn %v, want %v", c.src, got, c.own)
+		if !argumentsOwn(fn) {
+			t.Errorf("%s: not argumentsOwn", c.src)
+			continue
+		}
+		p, err := lowerRecovered(fn, lowering{ssa: true, callee: true})
+		if err != nil {
+			t.Fatalf("%s: %v", c.src, err)
+		}
+		if got := p.ArgumentParams != 0; got != c.aliased {
+			t.Errorf("%s: ArgumentParams %d, want aliased %v", c.src, p.ArgumentParams, c.aliased)
 		}
 	}
 }

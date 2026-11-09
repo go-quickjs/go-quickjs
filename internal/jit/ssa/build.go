@@ -7578,6 +7578,13 @@ func (b *builder) instruction(blk *Block, pc int) {
 			argc := 2
 			if in.When {
 				args, argc = args[1:], 1
+			} else {
+				// The parameters a mapped object aliases, as they are, for
+				// a key that is one's alias (ir.Program's ArgumentParams).
+				for i := range b.p.ArgumentParams {
+					args = append(args, b.read(i, blk))
+				}
+				argc += b.p.ArgumentParams
 			}
 			call := guard(OpCall, Tagged, ir.HostExit, args...)
 			b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoArgument, Argc: argc, ThisSlot: -1}}, b.f.Keeps

@@ -726,12 +726,19 @@ through links by generic calls. A prologue whose states have no room for
 the arguments within the frame's operand slots is Go's to enter only
 (`PrologueFrameOnly`). A rest parameter's array, and the arguments
 object's operations -- an unmapped object's, or a mapped one's where the
-function never assigns a parameter nor lets the object out
-(`compile`'s `argumentsOwn`, from what the compiler records of the code:
-`bytecode.Function`'s `AssignsParams` and `MakesArguments`) -- are Go's,
-from the frame of the VM's the code was entered with, but `arguments[k]`
-and `arguments.length`, which Go reads from native code while the object
-is not made (`ssa.GoArgument`). A native call of such code, or of a constructor's
+function never lets the object out (`compile`'s `argumentsOwn`, from what
+the compiler records of the code: `bytecode.Function`'s `MakesArguments`)
+-- are Go's, from the frame of the VM's the code was entered with, but
+`arguments[k]` and `arguments.length`, which Go reads from native code
+while the object is not made (`ssa.GoArgument`). Where the function, or a
+closure, assigns a parameter a mapped object aliases (`AssignsParams`, a
+captured parameter), each read of `arguments[k]` passes Go the parameters
+as the code has them (`ir.Program`'s `ArgumentParams`), and Go answers a
+key that is one's alias with it, as V8's sloppy arguments elements read
+the parameter where it lives; the parameters are live wherever such a
+read may follow, so that an object the interpreter makes at an exit -- for
+a key past the arguments -- reads them in the frame the exit wrote. A
+native call of such code, or of a constructor's
 `super(...)` of its call's arguments, writes all of its arguments and
 their count to its callee's context (`ssa.CallSite`'s `FrameArgs`,
 `abi.Context`'s `Args`), as V8's call pushes them all: Go makes the array

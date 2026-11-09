@@ -1779,8 +1779,9 @@ func TestJITSSAProfitability(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	// m reads arguments: Go calls it, never native code (jitNativeCallee).
-	setup := `function O(){this.v=0}O.prototype.m=function(i){this.v+=arguments[0];return this.v};
+	// m lets its mapped arguments object out: Go calls it, never native
+	// code (jitNativeCallee).
+	setup := `function O(){this.v=0}O.prototype.m=function(i){const a=arguments;this.v+=a[0];return this.v};
 		function calls(o,n){let s=0;for(let i=0;i<n;i++)s+=o.m(i,1,2,3,4,5,6);return s}
 		function gocalls(o,n){let s=0;for(let i=0;i<n;i++){s=(s*31+i)|0;s^=s>>>7;s=(s+i*i)|0;s^=s<<3;s=(s*7+(i>>1))|0;s^=s>>>5;s=(s+o.m(i))|0}return s}
 		function work(n){let s=0;for(let i=0;i<n;i++){s=(s*31+i)|0;s^=s>>>7;s=(s+i*i)|0;if(i%100==0)s+=Math.abs(i)}return s}

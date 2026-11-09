@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/compiler"
+	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 	"github.com/go-quickjs/go-quickjs/internal/parser"
 )
 
@@ -81,27 +82,21 @@ func scanNeedsMaker(fn *bytecode.Function) bool {
 
 // scanArgumentsOwn is argumentsOwn as it scanned the code.
 func scanArgumentsOwn(fn *bytecode.Function) bool {
-	if fn.Leaf == bytecode.LeafForward || fn.ForwardsArguments {
+	if fn.Leaf == bytecode.LeafForward || fn.ForwardsArguments && scanHas(fn, func(in bytecode.Instr) bool { return in.Op == bytecode.OpApplyArguments }) {
 		return false
 	}
 	if !fn.MappedArguments || fn.ParamCount == 0 {
 		return true
-	}
-	for i := 0; i < fn.ParamCount && i < len(fn.Locals); i++ {
-		if fn.Locals[i].Captured {
-			return false
-		}
 	}
 	for _, in := range fn.Code {
 		switch in.Op {
 		case bytecode.OpGetArguments, bytecode.OpLazyArguments, bytecode.OpApplyArguments:
 			return false
 		}
-		if lo, hi := bytecode.WrittenLocals(in); lo < hi && lo < fn.ParamCount {
-			return false
-		}
 	}
-	return true
+	// Parameters stored to, or captured, are passed to Go's reads
+	// (ArgumentParams), as many as a call of Go takes.
+	return fn.ParamCount+2 <= abi.MaxGoArgs
 }
 
 // scanUpvalueAssigned is bytecode's UpvalueAssigned, which scanned t's
