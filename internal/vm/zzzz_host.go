@@ -1,5 +1,7 @@
 package vm
 
+import "math/bits"
+
 // What a package defining built-in objects of its own through the runtime
 // needs -- the WebAssembly namespace's classes, for one: constructors whose
 // instances carry Go state, its ArrayBuffers over memory the package owns,
@@ -55,7 +57,54 @@ var (
 	// HostDefineLazyGlobal defines the global name, made by build the first
 	// time it is read.
 	HostDefineLazyGlobal func(r *Runtime, name string, build func(*Runtime) *Object)
+	// HostNodeQuirks reports whether the runtime follows Node where it
+	// departs from the standards (Config.NodeQuirks).
+	HostNodeQuirks func(r *Runtime) bool
+	// HostErrorClass returns a constructor named name, not a global, that
+	// makes errors as the NativeError constructors do -- a message, a cause
+	// and a stack -- inheriting from Error, and its prototype, which carries
+	// the name and an empty message.
+	HostErrorClass func(r *Runtime, name string) (ctor, proto *Object)
+	// HostNewError returns an error of prototype proto with message msg and
+	// the stack where it is made, as one the runtime throws.
+	HostNewError func(r *Runtime, proto *Object, msg string) *Object
+	// HostSetSlot attaches data to any object, under a key script cannot
+	// reach, and HostSlot returns what v carries there, or nil.
+	HostSetSlot func(r *Runtime, o *Object, data any)
+	HostSlot    func(r *Runtime, v Value) any
+	// HostDefineOwn defines an own data property of the attributes given,
+	// and HostDefineAccessor an own accessor, either half of which may be
+	// nil.
+	HostDefineOwn      func(o *Object, key Atom, v Value, writable, enumerable, configurable bool)
+	HostDefineAccessor func(r *Runtime, o *Object, key Atom, get, set *Object, enumerable, configurable bool)
+	// HostToStringTag returns the atom of Symbol.toStringTag.
+	HostToStringTag func(r *Runtime) Atom
+	// HostPreventExtensions makes an ordinary object non-extensible.
+	HostPreventExtensions func(o *Object)
+	// HostCheckInterrupt reports why the host has stopped the runtime, if it
+	// has, looking now rather than at the next periodic check.
+	HostCheckInterrupt func(r *Runtime) error
+	// HostBufferSource returns the bytes a buffer source -- an ArrayBuffer
+	// or a typed array over any buffer -- is looking at, and whether v is
+	// one; a detached buffer, or a view of one, has no bytes.
+	HostBufferSource func(v Value) ([]byte, bool)
+	// HostCaptureStack gives o, an object that is not an error, an own stack
+	// property: the stack where it is made, as an error's stack reads.
+	HostCaptureStack func(r *Runtime, o *Object)
+	// HostSetPrototype sets an ordinary object's prototype.
+	HostSetPrototype func(o, proto *Object)
+	// HostHasProperty is the in operator: whether o has key, own or
+	// inherited, asking a proxy.
+	HostHasProperty func(r *Runtime, o *Object, key Atom) (bool, error)
+	// HostStringFromUnits returns the string of UTF-16 code units u.
+	HostStringFromUnits func(u []uint16) *String
+	// HostToBigUint64 converts v to a BigInt as HostToBigInt64 does and
+	// returns its value modulo 2^64, and whether it was in u64's range.
+	HostToBigUint64 func(r *Runtime, v Value) (uint64, bool, error)
 )
+
+// hostSlotSymbol is the key of the data HostSetSlot attaches.
+var hostSlotSymbol = NewSymbol("host slot", true)
 
 func init() {
 	HostConstructor = func(r *Runtime, name string, length int, proto *Object, fn NativeFunc) *Object {
@@ -122,5 +171,148 @@ func init() {
 	}
 	HostDefineLazyGlobal = func(r *Runtime, name string, build func(*Runtime) *Object) {
 		r.defineLazyGlobal(name, build)
+	}
+	HostNodeQuirks = func(r *Runtime) bool { return r.nodeQuirks }
+	HostErrorClass = func(r *Runtime, name string) (*Object, *Object) {
+		proto := newObject(r.proto.nativeErrors[errError], ClassObject)
+		ctor := HostConstructor(r, name, 1, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
+			p, err := rt.protoFromNewTargetErr(proto)
+			if err != nil {
+				return Undefined, err
+			}
+			o := newErrorObject(p)
+			// The trace leaves out the constructor, and a subclass's
+			// constructors up to new.target's.
+			var until *Object
+			if f := rt.topFrame(); f != nil && f.newTarget.IsObject() && f.newTarget.Object() != f.callee {
+				until = f.newTarget.Object()
+			}
+			rt.attachStack(o, rt.captureTrace(until, true))
+			if m := arg(args, 0); !m.IsUndefined() {
+				s, err := rt.toString(m)
+				if err != nil {
+					return Undefined, err
+				}
+				o.setOwnRaw(atomMessage, Str(s), propWritable|propConfigurable)
+			}
+			if opts := arg(args, 1); opts.IsObject() {
+				causeKey := rt.atoms.intern("cause")
+				has, err := rt.hasPropErr(opts.Object(), causeKey)
+				if err != nil {
+					return Undefined, err
+				}
+				if has {
+					cause, err := rt.getProp(opts.Object(), causeKey, opts)
+					if err != nil {
+						return Undefined, err
+					}
+					o.setOwnRaw(causeKey, cause, propWritable|propConfigurable)
+				}
+			}
+			return Obj(o), nil
+		})
+		proto.setOwnRaw(atomName, Str(NewString(name)), propWritable|propConfigurable)
+		proto.setOwnRaw(atomMessage, Str(emptyString), propWritable|propConfigurable)
+		ctor.setProto(r.proto.errorCtors[errError])
+		return ctor, proto
+	}
+	HostNewError = func(r *Runtime, proto *Object, msg string) *Object {
+		o := newErrorObject(proto)
+		r.attachStack(o, r.captureTrace(nil, false))
+		o.setOwnRaw(atomMessage, Str(NewString(msg)), propWritable|propConfigurable)
+		return o
+	}
+	HostSetSlot = func(r *Runtime, o *Object, data any) {
+		holder := newObjectExt(nil, ClassObject, objExtensible)
+		holder.setData(data)
+		o.setOwnRaw(r.atoms.internSymbol(hostSlotSymbol), Obj(holder), propPrivate)
+	}
+	HostSlot = func(r *Runtime, v Value) any {
+		if !v.IsObject() {
+			return nil
+		}
+		p := v.Object().getOwn(r.atoms.internSymbol(hostSlotSymbol))
+		if p.ok() && p.flags()&propPrivate != 0 && p.value().IsObject() {
+			return p.value().Object().dataOf()
+		}
+		return nil
+	}
+	HostDefineOwn = func(o *Object, key Atom, v Value, writable, enumerable, configurable bool) {
+		var f propFlags
+		if writable {
+			f |= propWritable
+		}
+		if enumerable {
+			f |= propEnumerable
+		}
+		if configurable {
+			f |= propConfigurable
+		}
+		o.setOwnRaw(key, v, f)
+	}
+	HostDefineAccessor = func(r *Runtime, o *Object, key Atom, get, set *Object, enumerable, configurable bool) {
+		var f propFlags
+		if enumerable {
+			f |= propEnumerable
+		}
+		if configurable {
+			f |= propConfigurable
+		}
+		r.defineAccessor(o, key, get, set, f)
+	}
+	HostToStringTag = func(r *Runtime) Atom { return r.atoms.internSymbol(r.wellKnown.toStringTag) }
+	HostPreventExtensions = func(o *Object) { o.flags &^= objExtensible }
+	HostCheckInterrupt = func(r *Runtime) error { return r.checkInterruptNow() }
+	HostBufferSource = func(v Value) ([]byte, bool) {
+		if !v.IsObject() {
+			return nil, false
+		}
+		switch d := v.Object().dataOf().(type) {
+		case *arrayBufferData:
+			if d.shared || v.Object().class != ClassArrayBuffer {
+				return nil, false
+			}
+			if d.detached {
+				return nil, true
+			}
+			return d.bytes, true
+		case *typedArrayData:
+			if v.Object().class != ClassTypedArray {
+				return nil, false
+			}
+			storage := d.storage()
+			if storage == nil || storage.detached || d.outOfBounds() {
+				return nil, true
+			}
+			start := d.byteOffset
+			end := start + d.count()*d.info().size
+			if start > len(storage.bytes) || end > len(storage.bytes) {
+				return nil, true
+			}
+			return storage.bytes[start:end], true
+		}
+		return nil, false
+	}
+	HostCaptureStack = func(r *Runtime, o *Object) {
+		e := newErrorObject(r.proto.nativeErrors[errError])
+		r.attachStack(e, r.captureTrace(nil, true))
+		v, err := r.getProp(e, atomStack, Obj(e))
+		if err != nil {
+			v = Undefined
+		}
+		o.setOwnRaw(atomStack, v, propWritable|propConfigurable)
+	}
+	HostSetPrototype = func(o, proto *Object) { o.setProto(proto) }
+	HostHasProperty = func(r *Runtime, o *Object, key Atom) (bool, error) { return r.hasPropErr(o, key) }
+	HostStringFromUnits = func(u []uint16) *String { return fromUnits(u) }
+	HostToBigUint64 = func(r *Runtime, v Value) (uint64, bool, error) {
+		b, err := r.toBigIntOperand(v)
+		if err != nil {
+			return 0, false, err
+		}
+		if b.IsZero() {
+			return 0, true, nil
+		}
+		return bigLowUint64(b), !b.negative() && b.digits()*bits.UintSize <= 64, nil
 	}
 }
