@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/go-quickjs/go-quickjs/internal/hostaccess"
 	"github.com/go-quickjs/go-quickjs/internal/jit"
+	"github.com/go-quickjs/go-quickjs/internal/parser"
 	"io"
 	"net/url"
 	"os"
@@ -422,25 +423,93 @@ func TestParseSize(t *testing.T) {
 	}
 }
 
+// looksLikeModuleCases are TestLooksLikeModule's table and
+// FuzzLooksLikeModule's seeds.
+var looksLikeModuleCases = []struct {
+	src  string
+	want bool
+}{
+	{`import x from "y"`, true},
+	{`export const a = 1`, true},
+	{"const a = 1\nexport {a}", true},
+	{`const s = "import x from y"`, false},
+	{`console.log("export const")`, false},
+	{`import("dynamic")`, false},
+	// A line of a template or a comment that starts with export or import
+	// is not a declaration: the source parses as a script, which node
+	// runs as CommonJS.
+	{"const ts = `interface P {}\nexport class C {}`", false},
+	{"/*\nimport x from 'y'\n*/ module.exports = 1", false},
+	// A declaration need not start its line.
+	{`const a = 1; export {a}`, true},
+	{`import{a}from"b"`, true},
+	{`import*as a from"b"`, true},
+	{`import"b"`, true},
+	{"\uFEFFimport a from 'b'", true},
+	{"#!/usr/bin/env qjs\nexport default 1", true},
+	{"a / 2 / 3\nexport {}", true},
+	{"function f() {}\n/`/.test(s)\nexport {}", true},
+	// import.meta is a module's alone; import's calls are a script's too.
+	{`console.log(import.meta.url)`, true},
+	{`console.log(import . /* c */ meta)`, true},
+	{`import /* c */ ("dynamic")`, false},
+	{`import.source("x"); import.defer("y")`, false},
+	{`const m = import.metadata`, false},
+	// Names, properties and methods called import or export.
+	{`a.export = 1; a?.import()`, false},
+	{`const o = { export: 1, import() {} }`, false},
+	{`class C { static export() {} import() {} }`, false},
+	{"const \\u0065xport = 1", false},
+	{`exports.a = 1; const importer = require("x")`, false},
+	// What only looks like a declaration.
+	{"const re = /`/\nconst s = \"export {}\"", false},
+	{"const re = /[/]import x from 'y'/", false},
+	{"if (a) /`/.test(b)\nexport {}", true},
+	{"const t = `${`${a}`}\nexport {}`", false},
+	{"const t = `${ { a: `x` } }` / 2\nexport {}", true},
+	{"x = 1 // import a from 'b'", false},
+	{"x = 1 <!-- import a from 'b'", false},
+	{"x = 1\n--> import a from 'b'", false},
+	{"x = 1 /*\n*/ --> export {}", false},
+	{"function f() { export {} }", false},
+	{"'unterminated\nexport {}", true},
+}
+
 func TestLooksLikeModule(t *testing.T) {
-	for _, tc := range []struct {
-		src  string
-		want bool
-	}{
-		{`import x from "y"`, true},
-		{`export const a = 1`, true},
-		{"const a = 1\nexport {a}", true},
-		{`const s = "import x from y"`, false},
-		{`console.log("export const")`, false},
-		{`import("dynamic")`, false},
-		// A line of a template or a comment that starts with export or import
-		// is not a declaration: the source parses as a script, which node
-		// runs as CommonJS.
-		{"const ts = `interface P {}\nexport class C {}`", false},
-		{"/*\nimport x from 'y'\n*/ module.exports = 1", false},
-	} {
+	for _, tc := range looksLikeModuleCases {
 		if got := looksLikeModule(tc.src); got != tc.want {
 			t.Errorf("looksLikeModule(%q) = %v, want %v", tc.src, got, tc.want)
+		}
+	}
+}
+
+// FuzzLooksLikeModule holds the scanner to the parser: source that parses as
+// a script is not a module, and source that parses only as a module is one,
+// but for a top-level await, which the scanner does not look for.
+func FuzzLooksLikeModule(f *testing.F) {
+	for _, tc := range looksLikeModuleCases {
+		f.Add(tc.src)
+	}
+	f.Fuzz(func(t *testing.T, src string) {
+		got := looksLikeModule(src)
+		if _, err := parser.Parse(src, parser.Options{}); err == nil {
+			if got {
+				t.Errorf("looksLikeModule(%q) = true for a script", src)
+			}
+			return
+		}
+		if _, err := parser.Parse(src, parser.Options{Module: true}); err == nil && !got && !strings.Contains(src, "await") {
+			t.Errorf("looksLikeModule(%q) = false for a module", src)
+		}
+	})
+}
+
+func BenchmarkLooksLikeModule(b *testing.B) {
+	src := strings.Repeat("const re = /[/]x/g, s = `a ${b / 2} c`; // import\nfunction f(a) { return a.import + '\\'' }\n", 2000) + "export default f\n"
+	b.SetBytes(int64(len(src)))
+	for b.Loop() {
+		if !looksLikeModule(src) {
+			b.Fatal("not a module")
 		}
 	}
 }

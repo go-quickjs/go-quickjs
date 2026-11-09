@@ -53,7 +53,6 @@ import (
 	quickjs "github.com/go-quickjs/go-quickjs"
 	"github.com/go-quickjs/go-quickjs/inspector"
 	"github.com/go-quickjs/go-quickjs/internal/jit"
-	"github.com/go-quickjs/go-quickjs/internal/parser"
 	"github.com/go-quickjs/go-quickjs/stdlib"
 )
 
@@ -812,26 +811,6 @@ func workerModules(rt *quickjs.Runtime) error {
 		return err
 	}
 	return modules.evalGlobals("[worker eval]")
-}
-
-// looksLikeModule reports whether source uses module syntax at the start of a
-// line, which is where a declaration has to be, and is not a script: as node
-// detects a module, source that parses as a script is CommonJS, though a line
-// of a template or a comment in it starts with export or import.
-func looksLikeModule(src string) bool {
-	for _, line := range strings.Split(src, "\n") {
-		trimmed := strings.TrimSpace(line)
-		switch {
-		case strings.HasPrefix(trimmed, "import "), strings.HasPrefix(trimmed, "import{"),
-			strings.HasPrefix(trimmed, "import*"), strings.HasPrefix(trimmed, "import\""),
-			strings.HasPrefix(trimmed, "import'"),
-			strings.HasPrefix(trimmed, "export "), strings.HasPrefix(trimmed, "export{"),
-			strings.HasPrefix(trimmed, "export*"), trimmed == "export default":
-			_, err := parser.Parse(src, parser.Options{})
-			return err != nil
-		}
-	}
-	return false
 }
 
 // check parses the input without running it.
