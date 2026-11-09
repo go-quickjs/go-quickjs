@@ -47,7 +47,7 @@ func BenchmarkCompileARM64(b *testing.B) {
 			ssa.Optimize(f)
 			var w Workspace
 			w.init()
-			enc, opts := abi.Encoding{ValueSize: 16, StoreRef: 1}, Settings()
+			enc, opts := abi.Encoding{ValueSize: 16, StoreRef: 1, CallGo: 1}, Settings()
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {
