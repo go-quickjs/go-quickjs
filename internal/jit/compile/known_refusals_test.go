@@ -59,14 +59,19 @@ var knownRefusals = []struct {
 	// function's mapped object aliases its parameters, which native code
 	// holds as values, so it is Go's only where the object is not let out
 	// (argumentsOwn); a parameter assigned is passed to Go's reads of
-	// arguments[k] (ir.Program's ArgumentParams).
+	// arguments[k] (ir.Program's ArgumentParams). A forwarding function's
+	// f.apply(x, arguments) is a native call of the frame's arguments
+	// (ir.Program's Forwards), its own code's and a native callee's,
+	// f.apply's of a copy of the arguments object, Array.apply(null,
+	// arguments), so too.
 	{"mapped arguments let out",
 		`function f(a) { let s = 0; for (let i = 0; i < 3; i++) s += g(arguments); return s }`,
 		"entry: arguments object"},
-	// A forwarding function is its callers' to inline, its arguments
-	// forwarded (LowerSSAForward); its own code would leave at each.
-	{"arguments forwarded",
-		`function f() { return g.apply(this, arguments) }`,
+	// 2 of a local tree of npm packages': a forwarding function that
+	// assigns a parameter its mapped object aliases, whose value it then
+	// hands on (compile's forwardsNatively).
+	{"arguments forwarded, a parameter assigned",
+		`function f(a) { a = a || 1; return g.apply(this, arguments) }`,
 		"entry: arguments object"},
 	// 9.
 	{"for await",
@@ -96,10 +101,6 @@ var knownRefusals = []struct {
 	{"private method",
 		`function f() { return class { #m() { return 1 } } }`,
 		"callee: unsupported opcode add_private_method"},
-	// 1: f.apply's arguments a copy of the arguments object.
-	{"apply of arguments",
-		`function f() { var args = arguments.length === 1 ? [arguments[0]] : Array.apply(null, arguments); return args }`,
-		"callee: unsupported opcode apply_arguments"},
 }
 
 // manyLocals is a function of n let bindings and a loop over two of them.

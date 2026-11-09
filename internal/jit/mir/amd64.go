@@ -1557,6 +1557,18 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 	} else {
 		guard.jump(amd64.CondAE)
 	}
+	if site.Forward {
+		// The frame's arguments, which its context holds but where Go
+		// entered the code with more than it has room for
+		// (abi.MaxGoArgs): Go makes that call, from the frame's.
+		c.a.Load(scratchB, regCtx, abi.OffArgc)
+		c.a.OpImm(amd64.Cmp, scratchB, abi.MaxGoArgs, true)
+		if generic {
+			c.a.Jcc(amd64.CondA, goCall())
+		} else {
+			guard.jump(amd64.CondA)
+		}
+	}
 	// The callee is one of the functions, which has native code. A call
 	// through Function.prototype.call is made of its one function, its
 	// operands written where the callee has them (directOperand).
@@ -1575,7 +1587,7 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 	// Past its sites, any other function, through its link
 	// (genericCheck).
 	gen := generic && site.Generic && site.Via == 0 && site.Pool == 0 && !site.Push && !site.Pop && !site.Alloc && !site.Receiver &&
-		!site.Literal && vs == 16 && c.enc.HintSlotSize == 32
+		!site.Literal && !site.Forward && vs == 16 && c.enc.HintSlotSize == 32
 	// A call of one function has its operands -- the function, the
 	// receiver, the arguments -- written straight where the callee has
 	// them (directOperand), not recorded: Go never reads them, as a callee
@@ -1584,7 +1596,7 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 	// But a callee that reads its arguments past its parameters is given
 	// all of them in its context (FrameArgs), copied from where the state
 	// keeps them.
-	direct, ops := len(sites) == 1 && !gen && !site.ArrowThis && !site.FrameArgs && (site.ThisSlot < 0 || site.Method || site.Pool != 0 || site.Super || site.PlainThis), calleeSlot
+	direct, ops := len(sites) == 1 && !gen && !site.ArrowThis && !site.FrameArgs && !site.Forward && (site.ThisSlot < 0 || site.Method || site.Pool != 0 || site.Super || site.PlainThis), calleeSlot
 	if site.Method {
 		ops--
 	}
@@ -1597,11 +1609,19 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 	if !gen {
 		stub = c.stubLabel(s, exitKind(v.Aux))
 	}
+	// A forwarding call's miss, past as many functions as it calls
+	// natively (Generic), or of a receiver Go coerces, is Go's: it had
+	// left native code at each such call.
+	forwardGo := site.Forward && generic
+	miss := stub
+	if forwardGo && site.Generic {
+		miss = goCall()
+	}
 	for k, t := range sites {
 		// The last function's checks fail straight to the stub, which a
 		// jump past a jump had reached; it goes on to the call.
 		last := k == len(sites)-1 && !gen
-		next := stub
+		next := miss
 		if !last {
 			next = c.a.NewLabel()
 		}
@@ -1663,13 +1683,17 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 		if t.Coerce {
 			// A receiver that is not an object is coerced, which Go does:
 			// the method call's, or the first argument of a call through
-			// Function.prototype.call.
+			// Function.prototype.call, or a forwarding call's receiver.
 			recv := v.Args[0]
-			if t.Via != 0 {
+			if t.Via != 0 || t.Forward {
 				recv = v.Args[2]
 			}
 			c.cmpWord(c.gpr(recv, scratchA), c.enc.Object)
-			guard.jump(amd64.CondNE)
+			if forwardGo {
+				c.a.Jcc(amd64.CondNE, goCall())
+			} else {
+				guard.jump(amd64.CondNE)
+			}
 		}
 		// Room in the VM's stack.
 		if keepTop {
@@ -1744,6 +1768,10 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 	if !direct {
 		operands = calleeSlot - 1
 	}
+	if site.Forward {
+		// f, apply and the receiver: nothing below them.
+		operands = calleeSlot
+	}
 	st, recs := c.callState(v, s, func(i int) bool { return direct && i >= ops && i < sp }, operands)
 	c.callRecords(v, recs)
 	c.movImm(scratchA, uint64(uintptr(unsafe.Pointer(st))))
@@ -1753,6 +1781,10 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 		// Through Function.prototype.call: the first argument is the
 		// receiver.
 		args, this = args+1, args
+	}
+	if site.Forward {
+		// apply_arguments': f, apply, the receiver.
+		this = sp - 1
 	}
 	// A receiver written straight into the callee's context: one it reads,
 	// or a method call's, which a callee that does not read it has too --
@@ -1866,7 +1898,18 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 		if t.Via != 0 {
 			argc, first = argc-1, first+1
 		}
-		for i := 0; i < t.Params && i < t.LocalCount; i++ {
+		if t.Forward {
+			// The frame's own, as many as its context's Argc says: copied
+			// from its Args (forwardArgs).
+			argc = 0
+			frame()
+			framed = true
+			if t.FrameArgs {
+				c.a.Load(calleeCtx, regCtx, abi.OffNext)
+			}
+			c.forwardArgs(t, locals, calleeCtx)
+		}
+		for i := 0; i < t.Params && i < t.LocalCount && !t.Forward; i++ {
 			at := int32(i) * vs
 			if i < argc && direct {
 				continue
@@ -1900,7 +1943,7 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 			}
 			c.a.Store(calleeCtx, abi.OffFunction, top)
 		}
-		if t.FrameArgs {
+		if t.FrameArgs && !t.Forward {
 			// All its arguments and their count, which the frames Go makes
 			// of its level have (abi.Context's Args).
 			c.storeImm(calleeCtx, abi.OffArgc, uint64(argc), top)
@@ -1977,7 +2020,7 @@ func (c *compiler) call(v *ssa.Value, guard guardTo) {
 			// A strict callee's, called plainly: undefined.
 			c.storeImm(calleeCtx, abi.OffThis+c.enc.NumOffset, c.enc.Undefined, top)
 			c.storeImm(calleeCtx, abi.OffThis+c.enc.RefOffset, 0, top)
-		} else if (t.ThisSlot >= 0 || site.Method) && !direct {
+		} else if (t.ThisSlot >= 0 || site.Method || t.Forward) && !direct {
 			nb, nd, rb, rd := words(this)
 			c.a.Load(top, nb, nd)
 			c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, top)
@@ -5401,6 +5444,64 @@ func (c *compiler) push(v *ssa.Value) {
 		c.a.Jmp(done)
 	})
 	c.setG(v, scratchA)
+}
+
+// forwardArgs writes a forwarding call's arguments (ssa.CallSite's
+// Forward), the frame's own -- its context's Argc of them, no more than
+// abi.MaxGoArgs, in its Args -- to the callee's frame at locals: each of
+// its parameters the argument, or undefined past them; and, where the
+// callee reads its arguments past its parameters (FrameArgs), all of them
+// and their count to its context, calleeCtx, as V8's CallForwardVarargs
+// copies its caller's arguments. Plain stores, as a call writes its
+// arguments, the collector marking or not: what they copy, the caller's
+// context holds for as long as the callee runs, the records and frames
+// below keeping it alive. It uses RBX, R12, R13, scratchA and scratchC.
+func (c *compiler) forwardArgs(t *ssa.CallSite, locals, calleeCtx amd64.Reg) {
+	const n, w, x = amd64.RBX, amd64.R12, amd64.R13
+	if unsafe.Sizeof(abi.GoArg{}) != 16 {
+		panic("mir: an argument that is not 16 bytes")
+	}
+	vs := int32(c.enc.ValueSize)
+	num, ref := int32(unsafe.Offsetof(abi.GoArg{}.Num)), int32(unsafe.Offsetof(abi.GoArg{}.Ref))
+	c.a.Load(n, regCtx, abi.OffArgc)
+	if t.FrameArgs {
+		c.a.Store(calleeCtx, abi.OffArgc, n)
+		loop, done := c.a.NewLabel(), c.a.NewLabel()
+		c.a.Lea(scratchA, regCtx, abi.OffArgs)
+		c.a.Lea(scratchC, calleeCtx, abi.OffArgs)
+		c.a.MovRR(w, n)
+		c.a.ShiftImm(amd64.Shl, w, 4, true)
+		c.a.Op(amd64.Add, w, scratchA, true)
+		c.a.Bind(loop)
+		c.a.Op(amd64.Cmp, scratchA, w, true)
+		c.a.Jcc(amd64.CondAE, done)
+		c.a.Load(x, scratchA, 0)
+		c.a.Store(scratchC, 0, x)
+		c.a.Load(x, scratchA, 8)
+		c.a.Store(scratchC, 8, x)
+		c.a.OpImm(amd64.Add, scratchA, 16, true)
+		c.a.OpImm(amd64.Add, scratchC, 16, true)
+		c.a.Jmp(loop)
+		c.a.Bind(done)
+	}
+	for i := 0; i < t.Params && i < t.LocalCount; i++ {
+		at := int32(i) * vs
+		undef, next := c.a.NewLabel(), c.a.NewLabel()
+		if i < abi.MaxGoArgs {
+			c.a.OpImm(amd64.Cmp, n, int32(i), true)
+			c.a.Jcc(amd64.CondBE, undef)
+			off := abi.OffArgs + int32(i)*16
+			c.a.Load(w, regCtx, off+num)
+			c.a.Store(locals, at+c.enc.NumOffset, w)
+			c.a.Load(w, regCtx, off+ref)
+			c.a.Store(locals, at+c.enc.RefOffset, w)
+			c.a.Jmp(next)
+		}
+		c.a.Bind(undef)
+		c.storeImm(locals, at+c.enc.NumOffset, c.enc.Undefined, w)
+		c.storeImm(locals, at+c.enc.RefOffset, 0, w)
+		c.a.Bind(next)
+	}
 }
 
 // viaGuards checks a call through Function.prototype.call, whose callee was

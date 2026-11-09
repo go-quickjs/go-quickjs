@@ -751,7 +751,42 @@ that gives its frame up does not take a callee whose arguments its context
 would hold alone -- Go makes it -- and one of the function itself is Go's
 (`ir.Program`'s `FrameArgs`), never a jump to the code's start, which would
 leave that frame the first call's arguments. Inlining takes none of these
-but forwarding constructors (`LowerSSAForward`).
+but forwarding functions (`LowerSSAForward`, see Forwarding calls).
+
+**Forwarding calls.** As V8's TurboFan makes JSCallForwardVarargs,
+`f.apply(x, arguments)` in a function whose arguments object is made for
+nothing else (`bytecode.Function`'s `ForwardsArguments`, apply_arguments)
+is a call native code makes of the arguments its frame was given
+(`ir.Program`'s `Forwards`), a function's own code's and a native callee's:
+a native callee's are in its context, where its call wrote them
+(`FrameArgs`), and Go copies those of a frame it enters the code with there
+at each entry (the VM's `jitForwardEntry`), their count past the context's
+room (`abi.MaxGoArgs`) leaving the calls to Go, which reads the frame's.
+The call checks its apply is the realm's own -- any other the interpreter
+calls, with the object made -- and calls f natively as any call does, the
+functions it has been seen to call (`ssa.CallSite`'s `Forward`, the VM's
+`jitForwardSeen`), up to `jitCallTargets` of them: their count read from
+the context at run time, the arguments are copied from it to the callee's
+parameters, undefined past them, and to its context where it reads them
+past its parameters, with plain stores, as a call writes its arguments,
+the collector marking or not. Its receiver is the call's third operand. A
+function the call does not call natively, past them, a receiver Go
+coerces, or a frame past the deepest context, Go calls from native code
+(`abi.GoCallForward`) through apply's frame, as the interpreter does; it
+makes `Array.apply(null, arguments)` an array of the arguments without a
+frame (the VM's `jitForwardPlain`), but `Array(n)` of one number, the
+array's allocation most of what it costs, as the tree tier's. A call of
+the frame's arguments is never inlined there, their count unknown; a
+forwarding constructor is inlined where it is constructed, with its
+forwards (`LowerSSAForward`). A function that assigns a parameter its mapped arguments object aliases,
+whose value it would hand on, and a generator's or an async function's,
+whose frame a resumption makes, are refused, or their forwards left to Go
+at an exit, as before. Measured, ns a call (`microbench_extra.js`), refused
+and then native: a forwarder of no argument called by a loop 189 to 20,
+of two 173 to 21, of six 229 to 31; a factory's forwarders, each of
+another function, 293 to 31; a forwarder's own loop of eight applies, 122
+to 14 an apply; `Array.apply(null, arguments)` 206 to 110; the tree tier
+alone 152, 143, 178, 170, 103 and 196.
 
 **The frame's own.** What reads only its operands and the frame Go
 entered a function's own code with -- a super reference's read or write

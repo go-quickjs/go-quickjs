@@ -189,6 +189,15 @@ func TestJITInlinedSmallLoopFrames(t *testing.T) {
 			jitMarkingForTest(t)
 		}
 		both := jitBothForTest(t, smallLoopFramesSetup)
+		// G forwards its arguments and is inlined for what its caches
+		// learned (jitHasRun), as the existing tiers run it before it is
+		// compiled; at the tests' threshold it would be compiled at its
+		// first call, whose code, its forward native (ssa.CallSite's
+		// Forward), fills none.
+		calls, ics := both.jit.jitCallThreshold, both.jit.jitICThreshold
+		jitDefaultsForTest(both.jit)
+		both.script(t, "new G(list, out); new G(list, out); out.n = 0")
+		both.jit.jitCallThreshold, both.jit.jitICThreshold = calls, ics
 		for range 6 {
 			for _, c := range smallLoopFrames {
 				both.agree(t, fmt.Sprintf(c.call, "list", 300))

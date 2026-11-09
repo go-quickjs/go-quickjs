@@ -563,6 +563,17 @@ type Program struct {
 	// key that is one's alias with it, the call's argument otherwise, as
 	// the object would.
 	ArgumentParams int
+	// Forwards marks code whose apply_arguments -- f.apply(x, arguments),
+	// a Host -- hands on the arguments its frame was given, which it reads
+	// natively from its context (abi.Context's Args): a native call writes
+	// them there for its callee (FrameArgs), and Go for the frame it
+	// enters the code with. The call of f is made natively where the VM
+	// has seen it call a function native code may call (ssa.CallSite's
+	// Forward), by Go from native code otherwise. An inlined frame has no
+	// context of its own: the inliner takes no such program (ssa's
+	// InlineCalls), a forwarding function's frame being inlined from its
+	// forwarding lowering (compile's LowerSSAForward), which has none.
+	Forwards bool
 }
 
 // PrologueAt reports whether a frame at pc, its operands depth deep, has

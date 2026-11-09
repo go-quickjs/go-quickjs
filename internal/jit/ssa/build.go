@@ -1734,6 +1734,20 @@ type CallSite struct {
 	// parameters undefined as it starts (Func's StartOnly): the call leaves
 	// them to it.
 	StartOnly bool
+	// Forward marks apply_arguments, f.apply(x, arguments), in code that
+	// hands on the arguments its frame was given (ir.Program's Forwards):
+	// its operands f, apply and x -- Argc 2 -- the call checks apply is
+	// Apply, the realm's Function.prototype.apply, and calls f, Callee's,
+	// with x as its receiver and the frame's arguments, as many as its
+	// context's Argc says, read from its Args (abi.Context), as V8's
+	// CallForwardVarargs copies its caller's arguments to its callee's
+	// frame. With Go (GoCall), Go makes it from those, as apply would. A
+	// call none of its sites makes -- another function, a receiver Coerce
+	// says Go coerces, more arguments than the context holds -- Go makes
+	// where the sites are Generic, and leaves for the interpreter
+	// otherwise, learning there what to call.
+	Forward bool
+	Apply   uintptr
 	// FrameArgs says the callee's code reads its call's arguments past its
 	// parameters (ir.Program's FrameArgs): the call writes all Argc of
 	// them, and their count, to its callee's context (abi.Context's Args
@@ -2498,12 +2512,14 @@ func smallLoop(p *ir.Program, n int) bool {
 // Inlinable but for those. A callee with a loop is taken only if it is
 // small and leaves nothing to Go (smallLoop).
 func InlineCalls(p *ir.Program) ([]int, bool) {
-	if p == nil || p.Validate() != nil || len(p.Code) > maxInline || len(p.Globals) != 0 || p.Captured != nil || p.DerivedConstructor || len(p.Handlers) != 0 {
+	if p == nil || p.Validate() != nil || len(p.Code) > maxInline || len(p.Globals) != 0 || p.Captured != nil || p.DerivedConstructor || len(p.Handlers) != 0 || p.Forwards {
 		// A callee whose locals closures capture: an inlined frame's
 		// slots have no cells, and Go makes no closure on one. A derived
 		// constructor's super() is Go's, on a frame of its own. A callee
 		// with exception handlers registers none in an inlined frame,
-		// which a throw would unwind past them.
+		// which a throw would unwind past them. One that hands on its
+		// arguments from its context (ir.Program's Forwards), which an
+		// inlined frame has none of: inlined from its forwarding lowering.
 		return nil, false
 	}
 	var calls []int
@@ -7942,6 +7958,14 @@ func (b *builder) instruction(blk *Block, pc int) {
 			if calls[0].Super {
 				args[0] = b.read(b.p.Locals-1, blk)
 			}
+			if calls[0].Forward {
+				// f.apply(x, arguments) of the realm's apply, which the
+				// call makes (CallSite's Forward); any other apply is the
+				// interpreter's, which makes the arguments object.
+				apply := guard(OpObjectOf, Ptr, ir.HostExit, args[1])
+				same := guard(OpSameObject, None, ir.HostExit, apply)
+				same.Const = ir.Value{Bits: uint64(calls[0].Apply)}
+			}
 			call := guard(OpCall, Tagged, ir.HostExit, args...)
 			b.f.cache(call).Calls, call.Index = calls, b.callKeepAt(pc)
 			if calls[0].Go == GoCall {
@@ -8069,6 +8093,9 @@ func (b *builder) nativeCalls(pc int) []*CallSite {
 			// Its arguments alone; an operation's operands.
 			operands = site.Argc
 		}
+		if site.Forward && (site.Argc != 2 || site.Method) {
+			continue
+		}
 		// A callee that reads its receiver gets the method call's, or a
 		// construction's, from its pool, or a super()'s, the instance --
 		// or, an arrow, the this it
@@ -8076,7 +8103,7 @@ func (b *builder) nativeCalls(pc int) []*CallSite {
 		// object: left out, an arrow reading its this, learned at a miss,
 		// missed at every call -- AWFY CD's Vector.forEach, 45,000 exits a
 		// run.
-		if site.Argc < 0 || depth < operands || after != depth-operands+1 || site.ThisSlot >= 0 && !site.Method && site.Pool == 0 && !site.ArrowThis && !site.Super && !site.PlainThis {
+		if site.Argc < 0 || depth < operands || after != depth-operands+1 || site.ThisSlot >= 0 && !site.Method && site.Pool == 0 && !site.ArrowThis && !site.Super && !site.PlainThis && !site.Forward {
 			continue
 		}
 		if site.ThisSlot < 0 {

@@ -3772,6 +3772,17 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 	} else {
 		guard.jump(arm64.HS)
 	}
+	if site.Forward {
+		// As amd64's: the frame's arguments, past the context's room for
+		// them, Go's.
+		c.a.Load(a64B, a64Ctx, abi.OffArgc)
+		c.a.CmpImm(a64B, abi.MaxGoArgs, true)
+		if generic {
+			c.a.BCond(arm64.HI, goCall())
+		} else {
+			guard.jump(arm64.HI)
+		}
+	}
 	if callee == nil {
 		c.movImm(a64C, uint64(site.Callee))
 	} else {
@@ -3787,10 +3798,10 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 	checked := c.a.NewLabel()
 	// As amd64's: past its sites, any other function (genericCheck).
 	gen := generic && site.Generic && site.Via == 0 && site.Pool == 0 && !site.Push && !site.Pop && !site.Alloc && !site.Receiver &&
-		!site.Literal && vs == 16 && c.enc.HintSlotSize == 32
+		!site.Literal && !site.Forward && vs == 16 && c.enc.HintSlotSize == 32
 	// As amd64's: a call of one function writes its operands where the
 	// callee has them, unrecorded.
-	direct, ops := len(sites) == 1 && !gen && !site.ArrowThis && !site.FrameArgs && (site.ThisSlot < 0 || site.Method || site.Pool != 0 || site.Super || site.PlainThis), calleeSlot
+	direct, ops := len(sites) == 1 && !gen && !site.ArrowThis && !site.FrameArgs && !site.Forward && (site.ThisSlot < 0 || site.Method || site.Pool != 0 || site.Super || site.PlainThis), calleeSlot
 	if site.Method {
 		ops--
 	}
@@ -3798,10 +3809,17 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 	// As amd64's: such a call's room check leaves the VM's stack's top in
 	// D, where nothing after it reads the callee.
 	keepTop := direct && site.Parent == 0 && site.Pool == 0
+	// As amd64's: a forwarding call's miss past its functions, or of a
+	// receiver Go coerces, Go's.
+	forwardGo := site.Forward && generic
+	miss := stub
+	if forwardGo && site.Generic {
+		miss = goCall()
+	}
 	for k, t := range sites {
 		// As amd64's: the last function's checks fail straight to the stub.
 		last := k == len(sites)-1 && !gen
-		next := stub
+		next := miss
 		if !last {
 			next = c.a.NewLabel()
 		}
@@ -3858,12 +3876,16 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 		// the callee once its frame is made (enterExit).
 		if t.Coerce {
 			recv := v.Args[0]
-			if t.Via != 0 {
+			if t.Via != 0 || t.Forward {
 				recv = v.Args[2]
 			}
 			c.movImm(a64B, c.enc.Object)
 			c.a.Cmp(c.gpr(recv, a64A), a64B, true)
-			guard.jump(arm64.NE)
+			if forwardGo {
+				c.a.BCond(arm64.NE, goCall())
+			} else {
+				guard.jump(arm64.NE)
+			}
 		}
 		if keepTop {
 			c.a.Load(a64D, a64Ctx, abi.OffStackTop)
@@ -3924,6 +3946,10 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 	if !direct {
 		operands = calleeSlot - 1
 	}
+	if site.Forward {
+		// As amd64's: f, apply and the receiver, nothing below them.
+		operands = calleeSlot
+	}
 	st, recs := c.callState(v, s, func(i int) bool { return direct && i >= ops && i < sp }, operands)
 	c.callRecords(v, recs)
 	c.movImm(a64A, uint64(uintptr(unsafe.Pointer(st))))
@@ -3931,6 +3957,9 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 	args, this := sp-site.Argc, calleeSlot-1
 	if site.Via != 0 {
 		args, this = args+1, args
+	}
+	if site.Forward {
+		this = sp - 1
 	}
 	// A receiver written straight into the callee's context: one it reads,
 	// or a method call's, which a callee that does not read it has too --
@@ -4008,7 +4037,17 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 		if t.Via != 0 {
 			argc, first = argc-1, first+1
 		}
-		for i := 0; i < t.Params && i < t.LocalCount; i++ {
+		if t.Forward {
+			// As amd64's: the frame's own arguments (forwardArgs).
+			argc = 0
+			frame()
+			framed = true
+			if t.FrameArgs {
+				c.a.Load(calleeCtx, a64Ctx, abi.OffNext)
+			}
+			c.forwardArgs(t, locals, calleeCtx)
+		}
+		for i := 0; i < t.Params && i < t.LocalCount && !t.Forward; i++ {
 			at := int32(i) * vs
 			if i < argc && direct {
 				continue
@@ -4041,7 +4080,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 			}
 			c.a.Store(calleeCtx, abi.OffFunction, top)
 		}
-		if t.FrameArgs {
+		if t.FrameArgs && !t.Forward {
 			// As amd64's: all its arguments and their count.
 			c.movImm(top, uint64(argc))
 			c.a.Store(calleeCtx, abi.OffArgc, top)
@@ -4125,7 +4164,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard a64Guard) {
 			c.movImm(top, c.enc.Undefined)
 			c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, top)
 			c.a.Store(calleeCtx, abi.OffThis+c.enc.RefOffset, arm64.ZR)
-		} else if (t.ThisSlot >= 0 || site.Method) && !direct {
+		} else if (t.ThisSlot >= 0 || site.Method || t.Forward) && !direct {
 			nb, nd, rb, rd := words(this)
 			c.a.Load(top, nb, nd)
 			c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, top)
@@ -4548,6 +4587,56 @@ func (c *a64Compiler) push(v *ssa.Value) {
 
 // viaGuards checks a call through Function.prototype.call calls its
 // function, as amd64's does. It uses A, B and C.
+// forwardArgs is amd64's: a forwarding call's arguments, the frame's own,
+// to the callee's frame at locals and, where it reads them past its
+// parameters, to its context. It uses x6, x7, x8, a64A and a64C.
+func (c *a64Compiler) forwardArgs(t *ssa.CallSite, locals, calleeCtx arm64.Reg) {
+	const n, w, x = arm64.Reg(6), arm64.Reg(7), arm64.Reg(8)
+	if unsafe.Sizeof(abi.GoArg{}) != 16 {
+		panic("mir: an argument that is not 16 bytes")
+	}
+	vs := int32(c.enc.ValueSize)
+	num, ref := int32(unsafe.Offsetof(abi.GoArg{}.Num)), int32(unsafe.Offsetof(abi.GoArg{}.Ref))
+	c.a.Load(n, a64Ctx, abi.OffArgc)
+	if t.FrameArgs {
+		c.a.Store(calleeCtx, abi.OffArgc, n)
+		loop, done := c.a.NewLabel(), c.a.NewLabel()
+		c.a.AddImm(a64A, a64Ctx, int64(abi.OffArgs), true)
+		c.a.AddImm(a64C, calleeCtx, int64(abi.OffArgs), true)
+		c.a.AddLsl(w, a64A, n, 4)
+		c.a.Bind(loop)
+		c.a.Cmp(a64A, w, true)
+		c.a.BCond(arm64.HS, done)
+		c.a.Load(x, a64A, 0)
+		c.a.Store(a64C, 0, x)
+		c.a.Load(x, a64A, 8)
+		c.a.Store(a64C, 8, x)
+		c.a.AddImm(a64A, a64A, 16, true)
+		c.a.AddImm(a64C, a64C, 16, true)
+		c.a.B(loop)
+		c.a.Bind(done)
+	}
+	for i := 0; i < t.Params && i < t.LocalCount; i++ {
+		at := int32(i) * vs
+		undef, next := c.a.NewLabel(), c.a.NewLabel()
+		if i < abi.MaxGoArgs {
+			c.a.CmpImm(n, int64(i), true)
+			c.a.BCond(arm64.LS, undef)
+			off := abi.OffArgs + int32(i)*16
+			c.a.Load(w, a64Ctx, off+num)
+			c.a.Store(locals, at+c.enc.NumOffset, w)
+			c.a.Load(w, a64Ctx, off+ref)
+			c.a.Store(locals, at+c.enc.RefOffset, w)
+			c.a.B(next)
+		}
+		c.a.Bind(undef)
+		c.movImm(w, c.enc.Undefined)
+		c.a.Store(locals, at+c.enc.NumOffset, w)
+		c.a.Store(locals, at+c.enc.RefOffset, arm64.ZR)
+		c.a.Bind(next)
+	}
+}
+
 func (c *a64Compiler) viaGuards(t *ssa.CallSite, recv *ssa.Value, guard a64Guard) {
 	if recv.Shadow == nil && c.origin.At(recv) < 0 {
 		c.a.CmpImm(a64C, 0, true)

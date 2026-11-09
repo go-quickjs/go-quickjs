@@ -83,7 +83,15 @@ func scanNeedsMaker(fn *bytecode.Function) bool {
 // scanArgumentsOwn is argumentsOwn as it scanned the code.
 func scanArgumentsOwn(fn *bytecode.Function) bool {
 	if fn.Leaf == bytecode.LeafForward || fn.ForwardsArguments && scanHas(fn, func(in bytecode.Instr) bool { return in.Op == bytecode.OpApplyArguments }) {
-		return false
+		// Its arguments handed on as they were given, where no parameter
+		// a mapped object aliases is stored to or captured.
+		if fn.Generator || fn.Async {
+			return false
+		}
+		return !fn.MappedArguments || fn.ParamCount == 0 || !paramCaptured(fn) && !scanHas(fn, func(in bytecode.Instr) bool {
+			lo, hi := bytecode.WrittenLocals(in)
+			return lo < hi && lo < fn.ParamCount
+		})
 	}
 	if !fn.MappedArguments || fn.ParamCount == 0 {
 		return true

@@ -45,6 +45,9 @@ func (r *Runtime) jitGoCallPlain(ctx *abi.Context) bool {
 	case abi.GoCallForIn:
 		// A for...in's cursor (jitForInPlain).
 		return r.jitForInPlain(ctx)
+	case abi.GoCallForward:
+		// Array.apply(null, arguments) (jitForwardPlain).
+		return r.jitForwardPlain(ctx)
 	case 0, abi.GoCallMethod:
 		at := 0
 		if ctx.GoOp>>abi.GoOpKindShift&0xff == abi.GoCallMethod {
@@ -266,6 +269,9 @@ func (r *Runtime) jitMaybePlain(ctx *abi.Context) bool {
 	switch kind := ctx.GoOp >> abi.GoOpKindShift & 0xff; kind {
 	case abi.GoCallSet, abi.GoCallOp, abi.GoCallForIn:
 		return true
+	case abi.GoCallForward:
+		// Array.apply(null, arguments), Array the call's first operand.
+		return ctx.GoArgs[0].Ref == uintptr(unsafe.Pointer(r.proto.arrayCtor))
 	case 0, abi.GoCallMethod:
 		// The function, the call's first operand, or a method call's
 		// second, past its receiver.

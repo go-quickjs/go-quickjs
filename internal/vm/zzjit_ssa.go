@@ -3346,6 +3346,11 @@ func (fb *jitFeedback) Inline(pc int) (ssa.InlineSite, bool) {
 	if fb.fwdArgs != nil && fb.fn.Code[pc].Op == bytecode.OpApplyArguments {
 		return fb.forwardInline(pc, fb.fwdArgs)
 	}
+	if fb.fn.Code[pc].Op == bytecode.OpApplyArguments {
+		// A forwarding call of the frame's own arguments, whose count no
+		// compile knows: called natively (forwardCalls), never inlined.
+		return ssa.InlineSite{}, false
+	}
 	k := fb.keep()
 	for _, in := range targets {
 		if int(in.pc) != pc {
@@ -3466,6 +3471,10 @@ func (fb *jitFeedback) targetsIn(e *jitEntry, pc int) []*jitInline {
 func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 	if fb.e == nil || fb.root != nil || pc >= len(fb.fn.Code) {
 		return nil
+	}
+	if fb.fn.Code[pc].Op == bytecode.OpApplyArguments {
+		// f.apply(x, arguments), of the frame's arguments (forwardCalls).
+		return fb.forwardCalls(pc)
 	}
 	var sites []ssa.CallSite
 	targets := fb.targetsAt(pc)
@@ -3745,6 +3754,11 @@ func (fb *jitFeedback) closureCallSite(pc int, in jitInline, call bytecode.Instr
 		Argc: int(call.A), Method: call.Op == bytecode.OpCallMethod,
 		Params: fn.ParamCount, LocalCount: fn.LocalCount, MaxStack: fn.MaxStack, ThisSlot: this, Coerce: fn.CoerceThis,
 	}
+	if call.Op == bytecode.OpApplyArguments {
+		// f.apply(x, arguments): f, apply and x its operands, the frame's
+		// arguments f's (ssa.CallSite's Forward).
+		site.Argc, site.Forward, site.Apply = 2, true, uintptr(unsafe.Pointer(fb.r.applyFn))
+	}
 	site.Function = jitFrameCallee(fn)
 	if site.FrameArgs = jitFrameArgs(fn); site.FrameArgs && site.Argc > abi.MaxGoArgs {
 		// More arguments than its context has room for: Go makes its calls.
@@ -3892,6 +3906,11 @@ type jitInline struct {
 	// byCode marks a function the call met two objects of, closures its
 	// maker makes anew at each call: called by its code (jitSameCode).
 	byCode bool
+	// forward marks a forwarding call's function, f of an
+	// apply_arguments, f.apply(x, arguments) (ssa.CallSite's Forward):
+	// called natively with the frame's arguments, as many as there are at
+	// run time, never inlined there, where they are not known.
+	forward bool
 	// fwd, for an inlined forwarding constructor's construction
 	// (bytecode.LeafForward), is the method it forwards to, as the code was
 	// last compiled for (jitForwardMethod).
@@ -4001,6 +4020,10 @@ func (r *Runtime) jitCallRepeats(f *frame, e *jitEntry, pc, sp int, in bytecode.
 // been seen too -- or at its next entry. A call seen before costs a look
 // at the lists.
 func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Instr) {
+	if in.Op == bytecode.OpApplyArguments {
+		r.jitForwardSeen(f, e, pc, sp, in)
+		return
+	}
 	if e.callSites != nil && e.callSites[pc] == jitCallWaiting {
 		// Waiting for a long callee warming up: looked at no further while
 		// it is the one called and warms. Decided at every call, Go's call
@@ -4843,6 +4866,10 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 			return false
 		}
 	}
+	if in.Op == bytecode.OpApplyArguments && !r.jitForwardApplies(ctx, f.cl.fn, pc) {
+		// Another apply, given the arguments object: the interpreter's.
+		return false
+	}
 	for i := range n {
 		r.stack[top+i] = jitGoArg(ctx, i)
 	}
@@ -4910,6 +4937,9 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 		if err = r.jitSuperCall(f, args); err == nil {
 			v = f.this
 		}
+	case in.Op == bytecode.OpApplyArguments:
+		// f.apply(x, arguments), of the frame's own arguments.
+		v, err = r.jitForwardMade(f.args, sp, false)
 	default:
 		var lit *jitLiteral
 		var rx Value
@@ -5481,6 +5511,10 @@ func (r *Runtime) jitGoCallNested(ctx *abi.Context, idx int) bool {
 	if cl := (*closure)(ctx.Closure); cl == nil || !host && !jitGoPropertyAt(cl.fn, pc, in) {
 		return false
 	}
+	if in.Op == bytecode.OpApplyArguments && !host && !r.jitForwardApplies(ctx, (*closure)(ctx.Closure).fn, pc) {
+		// Another apply, given the arguments object: the interpreter's.
+		return false
+	}
 	op := ctx.GoOp>>abi.GoOpKindShift&0xff == abi.GoCallOp
 	if op {
 		if in = (*closure)(ctx.Closure).fn.Code[pc]; jitcompile.GoOperands(in) != n {
@@ -5489,7 +5523,7 @@ func (r *Runtime) jitGoCallNested(ctx *abi.Context, idx int) bool {
 	}
 	if !op && !host && idx == len(ctxs)-1 && s.bounds.LevelLimit == uint64(len(ctxs)) {
 		switch in.Op {
-		case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew, bytecode.OpSuperCall:
+		case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew, bytecode.OpSuperCall, bytecode.OpApplyArguments:
 			// A call native code made by Go for want of a context past this
 			// one (mir's native calls): more of them, for the calls after it
 			// to be native, as an exit for want of one had them made
@@ -5734,6 +5768,10 @@ framed:
 				*(*Value)(unsafe.Pointer(&ctx.This)) = v
 			}
 		}
+	} else if in.Op == bytecode.OpApplyArguments {
+		// f.apply(x, arguments), of the arguments the native call wrote to
+		// the level's context (jitFrameArgs).
+		v, err = r.jitForwardMade(jitContextArgs(ctx), sp, true)
 	} else {
 		var lit *jitLiteral
 		var rx Value
@@ -6329,6 +6367,10 @@ func jitGoCallInstr(op uint64) (bytecode.Instr, int) {
 	case abi.GoCallSuper:
 		// The frame's this slot, then the arguments.
 		return bytecode.Instr{Op: bytecode.OpSuperCall, A: argc}, int(argc) + 1
+	case abi.GoCallForward:
+		// f.apply(x, arguments), of f, apply and x (ssa.CallSite's
+		// Forward): the frame's arguments are f's.
+		return bytecode.Instr{Op: bytecode.OpApplyArguments}, 3
 	case abi.GoCallOp:
 		// An operation's opcode and its A, of its operands: the
 		// instruction at the call's PC (jitGoPropertyAt).
@@ -7322,7 +7364,15 @@ func (r *Runtime) jitSeenTargets(f *frame, e *jitEntry, pc int, o *Object, in by
 // operands, up to sp, calls, and its closure, if it is one native code may
 // call or inline: one the script made, in the frame's realm and scope.
 func (r *Runtime) jitCalled(f *frame, sp int, in bytecode.Instr) (*Object, *closure) {
-	callee := r.stack[sp-int(in.A)-1]
+	at := sp - int(in.A) - 1
+	if in.Op == bytecode.OpApplyArguments {
+		// f.apply(x, arguments): f, below the realm's apply and x.
+		if ap := r.stack[sp-2]; !ap.IsObject() || ap.Object() != r.applyFn {
+			return nil, nil
+		}
+		at = sp - 3
+	}
+	callee := r.stack[at]
 	if !callee.IsObject() {
 		return nil, nil
 	}
@@ -8257,7 +8307,7 @@ func (r *Runtime) jitForwardChanged(e *jitEntry, pc int, o *Object) bool {
 }
 
 func (r *Runtime) jitNativeTarget(pc int32, cl *closure, o *Object, in bytecode.Instr) jitInline {
-	x := jitInline{pc: pc, cl: cl, obj: o}
+	x := jitInline{pc: pc, cl: cl, obj: o, forward: in.Op == bytecode.OpApplyArguments}
 	if in.Op == bytecode.OpNew {
 		x.pool = r.jitNewPool(o)
 		if fd := o.fn(); fd != nil && fd.closure != cl {
@@ -12091,6 +12141,10 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			ctx.Cells, ctx.Loop = nil, 0
 		}
 		ctx.Open = uint64(len(f.openUpvalues))
+		if p := e.ssaProg; p != nil && p.Forwards {
+			// Its apply_arguments reads the frame's arguments natively.
+			jitForwardEntry(ctx, f.args)
+		}
 		if f.cl.fn.HasTailCall {
 			// Its calls of itself in tail position, deep in the stack, give
 			// the frame up natively where the interpreter would
@@ -12457,7 +12511,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			switch jitCallOp(in.Op) {
 			case bytecode.OpYield, bytecode.OpAwait, bytecode.OpYieldStar:
 				return r.jitSuspend(f, in, f.base+int(ctx.ExitDepth))
-			case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew:
+			case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew, bytecode.OpApplyArguments:
 				repeats := e.ssa == ran && r.jitCallRepeats(f, e, exitPC, f.base+int(ctx.ExitDepth), jitCallInstr(in))
 				r.jitCallSeen(f, e, exitPC, f.base+int(ctx.ExitDepth), jitCallInstr(in))
 				if repeats {
@@ -13817,7 +13871,7 @@ func (r *Runtime) jitFinishExit(f *frame, e *jitEntry, l *jitNativeLevel) (Value
 		if taught && e.ssa == nil {
 			flags := [...]bool{e.reopt, e.inlineReopt, e.polyReopt, e.inlinePending}
 			switch jitCallOp(in.Op) {
-			case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew:
+			case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew, bytecode.OpApplyArguments:
 				r.jitCallSeen(f, e, pc, f.base+depth, jitCallInstr(in))
 			case bytecode.OpGetIndex, bytecode.OpGetIndexThis, bytecode.OpGetLocalIndex, bytecode.OpGetIndexUnder:
 				if o, k, ok := r.jitIndexOperands(f, in, f.base+depth); ok {
@@ -13830,7 +13884,7 @@ func (r *Runtime) jitFinishExit(f *frame, e *jitEntry, l *jitNativeLevel) (Value
 			e.ssaStats.hosts++
 			r.jitStringAddSeen(f, e, pc)
 			switch jitCallOp(in.Op) {
-			case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew:
+			case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew, bytecode.OpApplyArguments:
 				// As runSSA's (jitCallRepeats), for the code this level ran.
 				repeats := l.owner == nil && e.ssa == l.code && r.jitCallRepeats(f, e, pc, f.base+depth, jitCallInstr(in))
 				r.jitCallSeen(f, e, pc, f.base+depth, jitCallInstr(in))

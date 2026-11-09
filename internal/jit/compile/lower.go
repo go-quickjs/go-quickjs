@@ -327,10 +327,13 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			// inlined callee's (ssa's InlineCalls).
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
-		if (in.Op == bytecode.OpApplyArguments && (!m.ssa || m.callee) || in.Op == bytecode.OpArgumentsIndex && !m.ssa) && !m.forward {
-			// Go's in a function's own code (argumentsOwn), and an index of
-			// the arguments in a native callee's, of those its call wrote
-			// to its context; the inliner's in a forwarding constructor's.
+		if (in.Op == bytecode.OpApplyArguments && (!m.ssa || m.callee && !forwardsNatively(fn)) || in.Op == bytecode.OpArgumentsIndex && !m.ssa) && !m.forward {
+			// A call of the frame's own arguments natively, from its
+			// context, in a function's own code and a native callee's
+			// (forwardsNatively); Go's in a function's own code that has
+			// not, on its frame; the inliner's in a forwarding
+			// constructor's. An index of the arguments is Go's in a native
+			// callee's, of those its call wrote to its context.
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
 		if (isPrivate(in.Op) || isDefinition(in.Op)) && !m.ssa {
@@ -725,6 +728,11 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			// closure, assigns (argumentsOwn).
 			p.ArgumentParams = fn.ParamCount
 		}
+		if !m.forward && forwardsNatively(fn) && slices.ContainsFunc(fn.Code, func(in bytecode.Instr) bool { return in.Op == bytecode.OpApplyArguments }) {
+			// Its apply_arguments hands on the frame's arguments, read
+			// natively from its context.
+			p.Forwards = true
+		}
 		if !prologueArgs(p) && m.callee {
 			// A native callee's frame, and an inlined one's, has the call's
 			// arguments nowhere but where the prologue's states keep them.
@@ -797,18 +805,19 @@ func argumentsOwn(fn *bytecode.Function) bool {
 		// A forwarding function's -- f.apply(x, arguments), its object
 		// made for nothing else (bytecode.Function's ForwardsArguments),
 		// which hands the arguments on (apply_arguments, which
-		// MakesArguments says) -- its callers inline where they know what
-		// it forwards to (LowerSSAForward): its own code would leave at
-		// each. One that only reads its arguments by index, which the
-		// compiler marks so too, is its own. Go's call of the built-in apply from native code
-		// (a GoHost of apply_arguments, of the frame's arguments or those
-		// a native call wrote to its callee's context) costs more than
-		// the tree tier's, measured: a forwarder native callers called,
-		// 244 ns a call against 180 with it refused, the tree tier alone
-		// 162; and one of a loop of its own, 143 ns an apply against the
-		// tree tier's 117. A forwarding call of native code's own, which
-		// copies the arguments to the callee's frame, would pay.
-		return false
+		// MakesArguments says) -- whose apply_arguments native code makes
+		// itself, a native call of f with the arguments its context holds
+		// (ir.Program's Forwards), as V8's CallForwardVarargs copies its
+		// caller's arguments: where it may (forwardsNatively). Its callers
+		// inline it where they know what it forwards to (LowerSSAForward).
+		// One that only reads its arguments by index, which the compiler
+		// marks so too, is its own. Go's call of the built-in apply from
+		// native code at each apply_arguments had cost more than the tree
+		// tier's, measured: a forwarder native callers called, 244 ns a
+		// call against 180 with it refused, the tree tier alone 162; and
+		// one of a loop of its own, 143 ns an apply against the tree
+		// tier's 117.
+		return forwardsNatively(fn)
 	}
 	if !fn.MappedArguments || fn.ParamCount == 0 {
 		return true
@@ -831,6 +840,25 @@ func argumentsOwn(fn *bytecode.Function) bool {
 
 // paramCaptured reports whether a closure fn makes captures one of its
 // parameters.
+// forwardsNatively reports whether fn's apply_arguments may hand on its
+// call's arguments as they were given (ir.Program's Forwards): not where a
+// mapped arguments object would alias a parameter the code, or a closure,
+// assigns, whose value it then hands on (the VM's applyArguments), and not
+// a generator's or an async function's, whose frame a resumption makes of
+// its own, no native call's.
+func forwardsNatively(fn *bytecode.Function) bool {
+	if fn.Generator || fn.Async {
+		return false
+	}
+	return !fn.MappedArguments || fn.ParamCount == 0 || !fn.AssignsParams && !paramCaptured(fn)
+}
+
+// ForwardsNatively reports whether fn's apply_arguments, where its code
+// has one, hands on its call's arguments natively (ir.Program's Forwards):
+// for the VM, whose feedback makes such a call a native call or Go's
+// (ssa.CallSite's Forward) only in code that does.
+func ForwardsNatively(fn *bytecode.Function) bool { return forwardsNatively(fn) }
+
 func paramCaptured(fn *bytecode.Function) bool {
 	for i := 0; i < fn.ParamCount && i < len(fn.Locals); i++ {
 		if fn.Locals[i].Captured {

@@ -3669,6 +3669,10 @@ func goCallWord(site *ssa.CallSite) uint64 {
 	if site.Accessor != ssa.AccessorNone {
 		return goOpWord(&ssa.CallSite{Go: ssa.GoCall, Argc: site.Argc, Accessor: site.Accessor, Key: site.Key})
 	}
+	if site.Forward {
+		// apply_arguments' (GoCallForward), of f, apply and the receiver.
+		return goOpWord(&ssa.CallSite{Go: ssa.GoCall, Argc: site.Argc, Forward: true})
+	}
 	return goOpWord(&ssa.CallSite{Go: ssa.GoCall, Argc: site.Argc, Method: site.Method, New: site.Pool != 0})
 }
 
@@ -3754,6 +3758,8 @@ func goOpWord(site *ssa.CallSite) uint64 {
 			op |= abi.GoCallInstanceOf << abi.GoOpKindShift
 		case site.Super:
 			op |= abi.GoCallSuper << abi.GoOpKindShift
+		case site.Forward:
+			op |= abi.GoCallForward << abi.GoOpKindShift
 		case site.Instr != 0:
 			op |= abi.GoCallOp<<abi.GoOpKindShift | uint64(site.Instr)<<abi.GoOpIndexShift
 		case site.Accessor == ssa.AccessorGet:
