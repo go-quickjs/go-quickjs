@@ -788,7 +788,14 @@ func argumentsOwn(fn *bytecode.Function) bool {
 	if fn.Leaf == bytecode.LeafForward || fn.ForwardsArguments {
 		// A forwarding constructor's, which its callers inline, its
 		// arguments forwarded (LowerSSAForward): its own code would leave
-		// at each.
+		// at each. Go's call of the built-in apply from native code
+		// (a GoHost of apply_arguments, of the frame's arguments or those
+		// a native call wrote to its callee's context) costs more than
+		// the tree tier's, measured: a forwarder native callers called,
+		// 244 ns a call against 180 with it refused, the tree tier alone
+		// 162; and one of a loop of its own, 143 ns an apply against the
+		// tree tier's 117. A forwarding call of native code's own, which
+		// copies the arguments to the callee's frame, would pay.
 		return false
 	}
 	if !fn.MappedArguments || fn.ParamCount == 0 {
