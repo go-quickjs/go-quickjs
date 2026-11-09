@@ -26,9 +26,13 @@ const (
 	ObjHost
 )
 
-// header begins every object a Ref points to.
+// header begins every object a Ref points to. It is laid out as a Ref is,
+// so that the first cell of a struct can be its header: its type's runtime
+// information, or nil for an object without a defined type, and its kind.
 type header struct {
+	rtt  *rtt
 	kind ObjKind
+	_    [7]byte
 }
 
 // i31Mark is what an i31's pointer points to.

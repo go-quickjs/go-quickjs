@@ -40,7 +40,7 @@ type Function struct {
 
 // NewHostFunction returns a host function of canonical type t.
 func NewHostFunction(t module.CanonicalIndex, name string, fn HostFunc) *Function {
-	return &Function{hdr: header{kind: ObjFunc}, Type: t, Sig: module.Canonical(t).Func, Host: fn, Name: name}
+	return &Function{hdr: header{rtt: rttOf(t), kind: ObjFunc}, Type: t, Sig: module.Canonical(t).Func, Host: fn, Name: name}
 }
 
 // FuncRef returns the reference to f.

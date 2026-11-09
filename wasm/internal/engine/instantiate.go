@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"fmt"
-	"math"
 
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/opcode"
@@ -176,7 +175,7 @@ func Instantiate(ctx context.Context, code *Code, imports []Extern) (*Instance, 
 		if inst.Funcs[i] == nil {
 			ti := m.Functions[i].TypeIndex
 			c := m.Canonical[ti]
-			inst.Funcs[i] = &Function{hdr: header{kind: ObjFunc}, Type: c, Sig: module.Canonical(c).Func, Inst: inst, Index: uint32(i)}
+			inst.Funcs[i] = &Function{hdr: header{rtt: rttOf(c), kind: ObjFunc}, Type: c, Sig: module.Canonical(c).Func, Inst: inst, Index: uint32(i)}
 		}
 	}
 	for i, mem := range m.Memories {
@@ -381,10 +380,4 @@ func evalConst(inst *Instance, e module.ConstExpr, t module.ValueType) Val {
 			_ = v
 		}
 	}
-}
-
-// evalConstGC evaluates a GC instruction of a constant expression.
-func evalConstGC(inst *Instance, op opcode.Opcode, r *reader, stack *[]Val) (Val, bool) {
-	_ = math.MaxInt
-	return Val{}, false
 }
