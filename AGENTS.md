@@ -426,6 +426,8 @@ encoders' tests:
 ```sh
 WASM_JIT=eager WASM_SPEC_DIR=/tmp/wasm-spec WASM_THREADS_DIR=/tmp/wasm-threads \
   go test -tags quickjs_jit ./wasm/internal/spectest ./wasm/internal/engine -count=1 -v
+WASM_JIT=osr WASM_SPEC_DIR=/tmp/wasm-spec WASM_THREADS_DIR=/tmp/wasm-threads \
+  go test -tags quickjs_jit ./wasm/internal/spectest ./wasm/internal/engine -count=1 -v
 WASM_SPEC_DIR=/tmp/wasm-spec go test -tags quickjs_jit ./wasm/internal/spectest -run TestJITDifferential -count=1 -v
 (cd internal/jit/verify && go test -tags quickjs_jit -run 'TestAMD64|TestARM64' .)
 GOOS=darwin GOARCH=arm64 go vet -tags quickjs_jit ./wasm/...

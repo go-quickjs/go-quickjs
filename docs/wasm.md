@@ -419,8 +419,14 @@ reaches the wasm JIT. A runtime made `WithDebugger` runs wasm in the
 interpreter.
 
 A function is compiled once it has been called 10 times
-(`engine.DefaultJITThreshold`). There is no entry into a loop already
-running, so a function called once that loops for long stays interpreted.
+(`engine.DefaultJITThreshold`), or once a call of it has run 1,000 back
+edges of its loops in the interpreter (`engine.DefaultOSRThreshold`): the
+call then goes on in native code from the loop's head, on-stack replacement,
+so a function called once that loops for long runs natively too. Each loop
+has an entry of its own in the function's code, which loads what resuming
+after an exit to Go does; both tiers keep everything in the frame's slots at
+a loop's head, so nothing is translated. A function the JIT refuses is tried
+once, and its loops stop counting.
 Native code is shared by the instances of a compiled module and lives in an
 arena of the module's own, released when the module is collected; it is not
 counted by `quickjs.WithJITMemoryLimit`. Loops, calls and tail calls count
@@ -511,7 +517,8 @@ The environment names them:
 | `WASM_SPEC_DIR` | a WebAssembly/spec checkout: `test/core`, `test/legacy` and `test/js-api` |
 | `WASM_THREADS_DIR` | a WebAssembly/threads checkout, for `test/core/threads` |
 | `WASM_SPEC_ONLY` | runs only the scripts whose path contains it |
-| `WASM_JIT` | in a JIT build, compiles every function: `eager` at its first call, `on` after 10 calls, a number after that many |
+| `WASM_JIT` | in a JIT build, compiles every function: `eager` at its first call, a call with loops entering native code at its first back edge; `osr` so for every call Go or the interpreter makes; `on` or `1` after 10 calls; a number after that many |
+| `WASM_JIT_OSR` | the back edges a call runs before its loop enters native code, or `off` |
 | `QUICKJS_COMPARE_NODE_WASM=1` | runs the comparisons with the `node` on `PATH` |
 | `WASI_TESTSUITE_DIR` | wasi-testsuite's `tests` directory |
 
@@ -524,8 +531,11 @@ WASM_SPEC_DIR=/tmp/wasm-spec WASM_THREADS_DIR=/tmp/wasm-threads \
 GOARCH=386 WASM_SPEC_DIR=/tmp/wasm-spec WASM_THREADS_DIR=/tmp/wasm-threads \
   go test ./wasm/internal/spectest -count=1 -v
 
-# Every function compiled at its first call, and the engine's tests so
+# Every function compiled at its first call, and the engine's tests so;
+# then every call with loops entering native code from its first back edge
 WASM_JIT=eager WASM_SPEC_DIR=/tmp/wasm-spec WASM_THREADS_DIR=/tmp/wasm-threads \
+  go test -tags quickjs_jit ./wasm/internal/spectest ./wasm/internal/engine -count=1 -v
+WASM_JIT=osr WASM_SPEC_DIR=/tmp/wasm-spec WASM_THREADS_DIR=/tmp/wasm-threads \
   go test -tags quickjs_jit ./wasm/internal/spectest ./wasm/internal/engine -count=1 -v
 
 # Every spec module's exports called interpreted and native, and compared
@@ -663,13 +673,21 @@ address in place (518d3d87), and calls through a table no longer allocate
 sort, 889 for json, 852 for regexp, 470 for gzip and 499 for interp, each
 less than wazero's interpreter in the table, and `micro/indirect` 457 ms.
 
+On-stack replacement (fa041de6) moved the JIT's column most where a hot loop
+runs in a function called a few times. Its commit's runs, against those
+interpreter changes and on a machine running other work, took the JIT's
+median for interp from 531 ms to 26.6, gzip from 146 to 56.8, sort from 322
+to 183, sha256 from 183 to 122, regexp from 69.6 to 64.7 and json from 61.8
+to 55.0; `micro/bulk`, whose time is in the bulk instructions Go runs, did not
+move.
+
 ## Known gaps
 
 The engine:
 
 - A trap's innermost frame carries the offset of the last call its function
   made, or 0, not the trapping instruction's.
-- The JIT has no entry into a running loop, and refuses the functions listed
+- The JIT refuses the functions listed
   under [The JIT](#the-jit).
 
 The `WebAssembly` namespace:
