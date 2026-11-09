@@ -116,6 +116,7 @@ weak collections and the BigInts past 64 bits among them. See [Compared with C Q
 | [Embedding the engine](docs/embedding.md) | calling Go from JavaScript and JavaScript from Go, compiled programs, realms, modules |
 | [Building a host](docs/hosting.md) | work that finishes on other goroutines, async context, closing a runtime, moving values between runtimes |
 | [The standard library](docs/stdlib.md) | the console, timers, fetch, the filesystem, workers and the node modules, each a capability of its own |
+| [WebAssembly](docs/wasm.md) | the WebAssembly namespace, opt-in, over the module's own wasm engine |
 | [Sandboxing](docs/sandboxing.md) | what a script can reach, and how its time and memory are bounded |
 | [Debugging](docs/debugging.md) | Chrome's DevTools and VS Code attached to a runtime, from qjs --inspect or a host |
 | [Design notes](docs/design.md) | how the engine is built, for reading the source |

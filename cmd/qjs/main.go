@@ -54,6 +54,7 @@ import (
 	"github.com/go-quickjs/go-quickjs/inspector"
 	"github.com/go-quickjs/go-quickjs/internal/jit"
 	"github.com/go-quickjs/go-quickjs/stdlib"
+	"github.com/go-quickjs/go-quickjs/wasm/wasmjs"
 )
 
 // version is what --version reports. It is set from the build's own
@@ -253,6 +254,11 @@ func newRuntime(opts *options) (*quickjs.Runtime, error) {
 		rtOpts = append(rtOpts, quickjs.WithSourceMaps(quickjs.ReadSourceMap))
 	}
 	rt := quickjs.New(rtOpts...)
+	// WebAssembly, as node has it.
+	if err := wasmjs.Install(rt); err != nil {
+		rt.Close()
+		return nil, err
+	}
 	if _, err := installModules(rt); err != nil {
 		rt.Close()
 		return nil, err

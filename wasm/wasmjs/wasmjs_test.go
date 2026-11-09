@@ -1,0 +1,184 @@
+package wasmjs_test
+
+import (
+	"encoding/binary"
+	"fmt"
+	"os/exec"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	quickjs "github.com/go-quickjs/go-quickjs"
+	"github.com/go-quickjs/go-quickjs/wasm/wasmjs"
+)
+
+// newRuntime makes a runtime with the WebAssembly namespace.
+func newRuntime(t *testing.T, opts ...quickjs.Option) *quickjs.Runtime {
+	t.Helper()
+	rt := quickjs.New(opts...)
+	t.Cleanup(func() { rt.Close() })
+	if err := wasmjs.Install(rt); err != nil {
+		t.Fatal(err)
+	}
+	return rt
+}
+
+// eval evaluates src, runs the jobs it queued and returns the global out,
+// which src sets, as a string.
+func eval(t *testing.T, rt *quickjs.Runtime, src string) string {
+	t.Helper()
+	if _, err := rt.Eval(src); err != nil {
+		t.Fatalf("%s: %v", src, err)
+	}
+	if err := rt.RunJobs(); err != nil {
+		t.Fatal(err)
+	}
+	v, err := rt.Eval(`String(globalThis.out)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v.String()
+}
+
+// moduleBytes is a module of the sections given, each an id and its
+// contents.
+func moduleBytes(sections ...[]byte) []byte {
+	b := []byte{0, 'a', 's', 'm', 1, 0, 0, 0}
+	for _, s := range sections {
+		b = append(b, s[0])
+		b = binary.AppendUvarint(b, uint64(len(s)-1))
+		b = append(b, s[1:]...)
+	}
+	return b
+}
+
+// jsBytes writes b as a Uint8Array literal.
+func jsBytes(b []byte) string {
+	var s strings.Builder
+	s.WriteString("new Uint8Array([")
+	for i, c := range b {
+		if i > 0 {
+			s.WriteByte(',')
+		}
+		fmt.Fprint(&s, c)
+	}
+	s.WriteString("])")
+	return s.String()
+}
+
+// TestNodeQuirksLimits pins the limits modules are validated against: the
+// interface's in standards mode, V8's under WithNodeQuirks. A memory64 may
+// declare up to 2^37-1 pages by the interface, 262,144 by V8; a module may
+// have 100 memories by the interface, 100,000 by V8.
+func TestNodeQuirksLimits(t *testing.T) {
+	// A memory64 of at most 2^20 pages.
+	mem64 := moduleBytes([]byte{5, 1, 0x05, 1, 0x80, 0x80, 0x40})
+	// 101 memories of no pages.
+	mems := []byte{5, 101}
+	for range 101 {
+		mems = append(mems, 0, 0)
+	}
+	many := moduleBytes(mems)
+	src := fmt.Sprintf(`
+		var out = [];
+		for (const b of [%s, %s]) {
+			try { new WebAssembly.Module(b); out.push("compiled") } catch (e) { out.push(e.constructor.name + ": " + e.message) }
+		}
+		out = out.join("\n");`, jsBytes(mem64), jsBytes(many))
+	for _, c := range []struct {
+		opts []quickjs.Option
+		want string
+	}{
+		{nil, "compiled\nCompileError: WebAssembly.Module(): memory count of 101 exceeds internal limit of 100 @+11"},
+		{[]quickjs.Option{quickjs.WithNodeQuirks()}, "CompileError: WebAssembly.Module(): maximum memory size (1048576 pages) is larger than implementation limit (262144 pages) @+13\ncompiled"},
+	} {
+		if got := eval(t, newRuntime(t, c.opts...), src); got != c.want {
+			t.Errorf("quirks %v:\ngot  %s\nwant %s", c.opts != nil, got, c.want)
+		}
+	}
+}
+
+// TestEnginesApart pins that the JavaScript engine does not import the wasm
+// engine, nor the standard library the WebAssembly namespace: a host opts
+// in by installing it.
+func TestEnginesApart(t *testing.T) {
+	for _, pkg := range []string{"github.com/go-quickjs/go-quickjs", "github.com/go-quickjs/go-quickjs/stdlib"} {
+		out, err := exec.Command("go", "list", "-deps", pkg).Output()
+		if err != nil {
+			t.Fatalf("go list %s: %v", pkg, err)
+		}
+		for _, dep := range strings.Fields(string(out)) {
+			if strings.HasPrefix(dep, "github.com/go-quickjs/go-quickjs/wasm") {
+				t.Errorf("%s imports %s", pkg, dep)
+			}
+		}
+	}
+}
+
+// TestInstallLazy pins that installing builds nothing until the global is
+// first read, and that the global is then one namespace.
+func TestInstallLazy(t *testing.T) {
+	rt := newRuntime(t)
+	got := eval(t, rt, `
+		const d = Object.getOwnPropertyDescriptor(globalThis, "WebAssembly");
+		var out = [typeof d.get, WebAssembly === WebAssembly, typeof WebAssembly.Module,
+			Object.getOwnPropertyDescriptor(globalThis, "WebAssembly").writable].join()`)
+	if got != "function,true,function,true" {
+		t.Fatalf("got %s", got)
+	}
+}
+
+// TestJSTagRoundTrip pins that a JavaScript exception crossing wasm is
+// caught by JSTag's catch as the same value and leaves as that value.
+func TestJSTagRoundTrip(t *testing.T) {
+	rt := newRuntime(t)
+	// (import "m" "tag" (tag (param externref))) (import "m" "f" (func))
+	// (func (export "catch") (result externref)
+	//   (block (result externref) (try_table (catch 0 0) (call 0)) (return (ref.null extern))))
+	// (func (export "pass") (call 0))
+	got := eval(t, rt, `
+		const t = WebAssembly.JSTag;
+		const bytes = new Uint8Array([0,97,115,109,1,0,0,0,1,15,4,96,1,111,0,96,0,0,96,0,1,111,96,0,0,2,16,2,1,109,3,116,97,103,4,0,0,
+			1,109,1,102,0,1,3,3,2,2,3,7,16,2,5,99,97,116,99,104,0,1,4,112,97,115,115,0,2,10,24,2,17,0,2,111,31,64,1,0,0,0,16,0,11,
+			208,111,15,11,11,4,0,16,0,11]);
+		const thrown = {};
+		let throwIt = () => { throw thrown };
+		const e = new WebAssembly.Instance(new WebAssembly.Module(bytes), {m: {tag: t, f: () => throwIt()}}).exports;
+		const caught = e.catch();
+		let escaped;
+		try { e.pass() } catch (x) { escaped = x }
+		throwIt = () => { throw new WebAssembly.Exception(new WebAssembly.Tag({parameters: []}), []) };
+		let other;
+		try { e.catch() } catch (x) { other = x }
+		var out = [caught === thrown, escaped === thrown, other instanceof WebAssembly.Exception].join();`)
+	if got != "true,true,true" {
+		t.Fatalf("got %s", got)
+	}
+}
+
+// TestPromisingStackEnds pins that a promising call whose suspension can
+// never resume ends its goroutine once nothing holds the suspension.
+func TestPromisingStackEnds(t *testing.T) {
+	rt := newRuntime(t)
+	before := runtime.NumGoroutine()
+	// (import "m" "f" (func (result i32))) (func (export "run") (result i32) (call 0))
+	_ = eval(t, rt, `
+		const bytes = new Uint8Array([0,97,115,109,1,0,0,0,1,9,2,96,0,1,127,96,0,1,127,2,7,1,1,109,1,102,0,0,3,2,1,1,
+			7,7,1,3,114,117,110,0,1,10,6,1,4,0,16,0,11]);
+		const e = new WebAssembly.Instance(new WebAssembly.Module(bytes),
+			{m: {f: new WebAssembly.Suspending(() => new Promise(() => {}))}}).exports;
+		for (let i = 0; i < 20; i++) WebAssembly.promising(e.run)();
+		var out = "";`)
+	if n := runtime.NumGoroutine(); n < before+20 {
+		t.Fatalf("%d goroutines, want the 20 suspended calls' too (%d before)", n, before)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for runtime.NumGoroutine() > before+2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d goroutines remain, %d before", runtime.NumGoroutine(), before)
+		}
+		runtime.GC()
+		time.Sleep(10 * time.Millisecond)
+	}
+}

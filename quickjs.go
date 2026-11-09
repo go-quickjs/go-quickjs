@@ -360,6 +360,10 @@ func WithLocale(tag string) Option {
 // the standard, which uses that year only to apply overflow, answers 02-29.
 // And DataView's byteLength and byteOffset throw for a view out of bounds of
 // its buffer, where the standard answers 0.
+// The WebAssembly namespace wasm/wasmjs installs validates modules against
+// V8's limits rather than the WebAssembly JavaScript interface's: a memory64
+// may declare at most 262,144 pages, where the interface allows 2^37-1, and a
+// module may have up to 100,000 memories, where the interface allows 100.
 //
 // It is useful for hosts that prioritize Node compatibility over conformance.
 func WithNodeQuirks() Option {
