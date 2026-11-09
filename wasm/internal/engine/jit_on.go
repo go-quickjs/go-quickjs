@@ -442,9 +442,11 @@ func (cj *codeJIT) compile(c *Code, idx uint32, cd *compiled) (nat *nativeFn) {
 		countRefused(reason)
 		return nil
 	}
+	placeStart := time.Now()
 	cj.run.Lock()
 	raw, err := ijit.PlaceRaw(cj.arena, code.Bytes)
 	cj.run.Unlock()
+	countTime(&jitStats.placeTime, placeStart)
 	if err != nil {
 		cd.refused.Store(true)
 		countRefused("unplaced")
@@ -483,9 +485,11 @@ func (cj *codeJIT) compileOpt(c *Code, idx uint32, cd *compiled, prev *nativeFn)
 		countOptRefused(reason)
 		return nil
 	}
+	placeStart := time.Now()
 	cj.run.Lock()
 	raw, err := ijit.PlaceRaw(cj.arena, code.Bytes)
 	cj.run.Unlock()
+	countTime(&jitStats.placeTime, placeStart)
 	if err != nil {
 		countOptRefused("unplaced")
 		return nil
@@ -544,9 +548,11 @@ func (cj *codeJIT) loopsFor(c *Code, idx uint32, cd *compiled) *nativeFn {
 	if err != nil {
 		return nil
 	}
+	placeStart := time.Now()
 	cj.run.Lock()
 	raw, err := ijit.PlaceRaw(cj.arena, code.Bytes)
 	cj.run.Unlock()
+	countTime(&jitStats.placeTime, placeStart)
 	if err != nil {
 		return nil
 	}

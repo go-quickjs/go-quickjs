@@ -105,8 +105,12 @@ type JITStats struct {
 	Optimized  int
 	OptRefused map[string]int
 	// BaselineTime and OptTime are the time each tier spent compiling,
-	// refusals included.
-	BaselineTime, OptTime time.Duration
+	// refusals included, and PlaceTime the time placing their code.
+	BaselineTime, OptTime, PlaceTime time.Duration
+	// Interpreted is the number of function bodies the interpreter
+	// compiled, and InterpTime the time it took.
+	Interpreted int
+	InterpTime  time.Duration
 }
 
 var jitStats struct {
@@ -117,6 +121,9 @@ var jitStats struct {
 	optimized         int
 	optRefused        map[string]int
 	baseTime, optTime atomic.Int64
+	placeTime         atomic.Int64
+	interpreted       atomic.Int64
+	interpTime        atomic.Int64
 }
 
 // ReadJITStats returns the JIT's counts so far.
@@ -125,7 +132,9 @@ func ReadJITStats() JITStats {
 	defer jitStats.mu.Unlock()
 	return JITStats{Compiled: jitStats.compiled, Refused: maps.Clone(jitStats.refused), OSR: int(jitStats.osr.Load()),
 		Optimized: jitStats.optimized, OptRefused: maps.Clone(jitStats.optRefused),
-		BaselineTime: time.Duration(jitStats.baseTime.Load()), OptTime: time.Duration(jitStats.optTime.Load())}
+		BaselineTime: time.Duration(jitStats.baseTime.Load()), OptTime: time.Duration(jitStats.optTime.Load()),
+		PlaceTime:   time.Duration(jitStats.placeTime.Load()),
+		Interpreted: int(jitStats.interpreted.Load()), InterpTime: time.Duration(jitStats.interpTime.Load())}
 }
 
 func countOptimized() {

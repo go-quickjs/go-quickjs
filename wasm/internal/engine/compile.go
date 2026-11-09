@@ -4,6 +4,7 @@ import (
 	"math"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/opcode"
@@ -103,7 +104,10 @@ func (c *Code) get(index uint32) *compiled {
 	if p := c.fns[index].Load(); p != nil {
 		return p
 	}
+	start := time.Now()
 	p := compileFunction(c, index)
+	countTime(&jitStats.interpTime, start)
+	jitStats.interpreted.Add(1)
 	c.fns[index].Store(p)
 	return p
 }
