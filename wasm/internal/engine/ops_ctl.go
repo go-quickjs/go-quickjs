@@ -48,13 +48,16 @@ type handler struct {
 type tryState struct {
 	depth, calls, caught int
 	nc, nsp, rc, rsp     int
+	// jit is the number of native code's levels running.
+	jit int
 }
 
 func saveTry(x *exec) tryState {
-	return tryState{x.depth, len(x.calls), len(x.caught), x.nc, x.nsp, x.rc, x.rsp}
+	return tryState{x.depth, len(x.calls), len(x.caught), x.nc, x.nsp, x.rc, x.rsp, x.jitLevel()}
 }
 
 func (s tryState) restore(x *exec) {
+	x.setJITLevel(s.jit)
 	x.depth = s.depth
 	x.calls = x.calls[:s.calls]
 	x.caught = x.caught[:s.caught]

@@ -50,11 +50,17 @@ type Code struct {
 	Module *module.Module
 	fns    []atomic.Pointer[compiled]
 	mu     sync.Mutex
+	// jit is the code's native code, if it has asked for it (EnableJIT).
+	jit atomic.Pointer[codeJIT]
 }
 
 // NewCode returns the engine's code of module m.
 func NewCode(m *module.Module) *Code {
-	return &Code{Module: m, fns: make([]atomic.Pointer[compiled], len(m.Functions))}
+	c := &Code{Module: m, fns: make([]atomic.Pointer[compiled], len(m.Functions))}
+	if jitBuilt {
+		c.jitFromEnv()
+	}
+	return c
 }
 
 // compiled is a function body ready to run.
@@ -67,6 +73,12 @@ type compiled struct {
 	// params and results are where the arguments go and the results are
 	// found.
 	params, results []slotRef
+
+	// native is the function's native code, once compiled; hot counts its
+	// calls until then, and refused says the JIT will not compile it.
+	native  atomic.Pointer[nativeFn]
+	hot     atomic.Int32
+	refused atomic.Bool
 }
 
 // get returns function index's compiled body, compiling it if it is not.

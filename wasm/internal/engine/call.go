@@ -25,6 +25,18 @@ func (x *exec) run(fn *Function, code *compiled, l []uint64, r []Ref, nc, nsp, r
 		x.pollContext()
 	}
 	x.calls = append(x.calls, callSite{fn: fn})
+	if jitBuilt {
+		if c, ok := x.runNative(fn, code, l); ok {
+			if c == sigTail {
+				f := x.frameAt(x.depth)
+				f.l, f.r, f.inst = l, r, fn.Inst
+				x.tailChain(f, code, l, r, nc, nsp, rc, rsp)
+			}
+			x.calls = x.calls[:len(x.calls)-1]
+			x.depth--
+			return
+		}
+	}
 	f := x.frameAt(x.depth)
 	f.l, f.r, f.inst = l, r, fn.Inst
 	c := runSeq(f, code.body)
@@ -58,6 +70,15 @@ func (x *exec) tailChain(f *frame, code *compiled, l []uint64, r []Ref, nc, nsp,
 		nr, _, _ := x.takeRef(callee.rslots)
 		putVals(nl, nr, callee.params, x.tailArgs)
 		f.l, f.r, f.inst = nl, nr, fn.Inst
+		if jitBuilt {
+			if c, ok := x.runNative(fn, callee, nl); ok {
+				if c == sigTail {
+					continue
+				}
+				copyResults(l, r, nl, nr, results)
+				return
+			}
+		}
 		c := runSeq(f, callee.body)
 		if c == sigTail {
 			continue

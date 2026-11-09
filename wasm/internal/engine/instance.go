@@ -106,4 +106,7 @@ type Instance struct {
 
 	// Name is the name the instance was registered under, for stack traces.
 	Name string
+
+	// jit is what the instance's native code reads of it.
+	jit jitInstance
 }

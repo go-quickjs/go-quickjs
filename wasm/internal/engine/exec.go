@@ -49,6 +49,9 @@ type exec struct {
 	// caught holds the exceptions the legacy catches being run handle, for
 	// rethrow.
 	caught []*Exception
+
+	// jit is the state of the native code running on the exec.
+	jit jitExec
 }
 
 type callSite struct {
@@ -148,6 +151,7 @@ func Invoke(ctx context.Context, fn *Function, args []Val) (results []Val, err e
 		x.calls = x.calls[:0]
 		x.caught = x.caught[:0]
 		x.tail = nil
+		x.setJITLevel(0)
 		x.nc, x.nsp, x.rc, x.rsp = 0, 0, 0, 0
 		x.ctx = nil
 		execPool.Put(x)

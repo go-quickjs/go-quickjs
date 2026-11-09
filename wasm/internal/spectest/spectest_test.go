@@ -567,6 +567,25 @@ func scripts(t *testing.T, dir string) []string {
 	return files
 }
 
+// logJIT logs what the JIT compiled and refused, when WASM_JIT turned it on.
+func logJIT(t *testing.T) {
+	st := engine.ReadJITStats()
+	if st.Compiled == 0 && len(st.Refused) == 0 {
+		return
+	}
+	refused := 0
+	reasons := make([]string, 0, len(st.Refused))
+	for r, n := range st.Refused {
+		refused += n
+		reasons = append(reasons, r)
+	}
+	sort.Slice(reasons, func(i, j int) bool { return st.Refused[reasons[i]] > st.Refused[reasons[j]] })
+	t.Logf("jit: %d functions compiled, %d refused", st.Compiled, refused)
+	for _, r := range reasons {
+		t.Logf("jit: %6d refused: %s", st.Refused[r], r)
+	}
+}
+
 func TestSpec(t *testing.T) {
 	dir := os.Getenv("WASM_SPEC_DIR")
 	if dir == "" {
@@ -622,6 +641,7 @@ func TestSpec(t *testing.T) {
 		t.Log(f)
 	}
 	t.Logf("spec: %d of %d assertions passed, %d failed", total-failed, total, failed)
+	logJIT(t)
 	if failed > 0 {
 		t.Fail()
 	}
