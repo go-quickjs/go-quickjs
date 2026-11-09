@@ -949,8 +949,8 @@ func (x *exec) jitOp(inst *Instance, op opcode.Opcode, a uint32, imm uint64, f *
 		dst, src, cnt := arg(0, tab64(b)), arg(1, false), arg(2, false)
 		elems := inst.elems[a]
 		t := inst.Tables[b]
-		checkRange(src, cnt, uint64(len(elems)), TrapTableOutOfBounds, at)
 		checkRange(dst, cnt, uint64(len(t.Elems)), TrapTableOutOfBounds, at)
+		checkRange(src, cnt, uint64(len(elems)), TrapElementSegmentOutOfBounds, at)
 		copy(t.Elems[dst:dst+cnt], elems[src:src+cnt])
 	case opcode.ElemDrop:
 		inst.elems[a] = nil

@@ -291,8 +291,8 @@ func (c *compiler) prefixed(op opcode.Opcode, at uint32) bool {
 			dst, src, cnt := d(f), uint64(s(f)), uint64(n(f))
 			elems := f.inst.elems[seg]
 			t := f.inst.Tables[table]
-			checkRange(src, cnt, uint64(len(elems)), TrapTableOutOfBounds, at)
 			checkRange(dst, cnt, uint64(len(t.Elems)), TrapTableOutOfBounds, at)
+			checkRange(src, cnt, uint64(len(elems)), TrapElementSegmentOutOfBounds, at)
 			copy(t.Elems[dst:dst+cnt], elems[src:src+cnt])
 			return 0
 		})

@@ -80,6 +80,18 @@ var trapCases = []trapCase{
 		TrapTableOutOfBounds, 0x2a, 0xfc},
 	{"table.copy", `(module (table 2 funcref) (func (export "f") (table.copy (i32.const 0) (i32.const 1) (i32.const 2))))`,
 		TrapTableOutOfBounds, 0x2a, 0xfc},
+	{"table.init past the table", `(module (table 2 funcref) (elem func $g $g) (func $g)
+		(func (export "f") (table.init 0 (i32.const 1) (i32.const 0) (i32.const 2))))`,
+		TrapTableOutOfBounds, 0x36, 0xfc},
+	{"table.init past the segment", `(module (table 2 funcref) (elem func $g) (func $g)
+		(func (export "f") (table.init 0 (i32.const 0) (i32.const 0) (i32.const 2))))`,
+		TrapElementSegmentOutOfBounds, 0x35, 0xfc},
+	{"table.init past both", `(module (table 2 funcref) (elem func $g) (func $g)
+		(func (export "f") (table.init 0 (i32.const 5) (i32.const 3) (i32.const 1))))`,
+		TrapTableOutOfBounds, 0x35, 0xfc},
+	{"table.init of a dropped segment", `(module (table 2 funcref) (elem func $g) (func $g)
+		(func (export "f") (elem.drop 0) (table.init 0 (i32.const 0) (i32.const 0) (i32.const 1))))`,
+		TrapElementSegmentOutOfBounds, 0x38, 0xfc},
 	{"memory.fill", `(module (memory 1) (func (export "f") (memory.fill (i32.const 65535) (i32.const 0) (i32.const 2))))`,
 		TrapMemOutOfBounds, 0x2b, 0xfc},
 	{"memory.copy", `(module (memory 1) (func (export "f") (memory.copy (i32.const 0) (i32.const 65535) (i32.const 2))))`,
