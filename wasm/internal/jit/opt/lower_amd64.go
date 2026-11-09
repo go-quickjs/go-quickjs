@@ -3,6 +3,7 @@ package opt
 import (
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"unsafe"
 
@@ -41,8 +42,18 @@ const (
 )
 
 var (
-	gprs = []int{int(amd64.RSI), int(amd64.R8), int(amd64.R9), int(amd64.R13), int(amd64.RAX), int(amd64.RCX), int(amd64.RDX)}
-	xmms = []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}
+	gprs    = []int{int(amd64.RSI), int(amd64.R8), int(amd64.R9), int(amd64.R13), int(amd64.RAX), int(amd64.RCX), int(amd64.RDX)}
+	xmms    = []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}
+	classes = [][]int{gprs, xmms}
+)
+
+// The registers instructions clobber, by class: memory.copy's and
+// memory.fill's AX, CX and SI, a division's AX and DX, and a shift's CX
+// for its count. The allocator only reads them.
+var (
+	clobberBulk  = []uint64{1<<amd64.RAX | 1<<amd64.RCX | 1<<amd64.RSI}
+	clobberDiv   = []uint64{1<<amd64.RAX | 1<<amd64.RDX}
+	clobberShift = []uint64{1 << amd64.RCX}
 )
 
 // The context's fields' offsets.
@@ -73,9 +84,14 @@ type trapKey struct {
 	at   uint32
 }
 
-// genScratch is the lowering's part of a workspace: the allocator.
+// genScratch is the lowering's part of a workspace: the lowering's state,
+// the allocator, its description of the function, and the assembler.
 type genScratch struct {
-	al lsra.Allocator
+	g     gen
+	al    lsra.Allocator
+	lf    lsra.Func
+	vregs arena[lsra.VReg]
+	asm   amd64.Asm
 }
 
 // gen lowers an optimized function to amd64 code.
@@ -86,14 +102,16 @@ type gen struct {
 	req *wjit.Request
 	fn  uint32
 	ra  *lsra.Result
-	// index is each block's index in layout order, labels its label.
-	index  map[*Block]int
+	// index is each block's index in layout order, by block ID; labels
+	// is each block's label, by index.
+	index  []int32
 	labels []amd64.Label
-	// inst is each call's instruction by its value ID, as the allocator
-	// numbered it.
-	inst map[int32][2]int32
-	// fused says a comparison is made by the branch that uses it.
-	fused map[*Value]bool
+	// inst is each call's instruction, as the allocator numbered it, by
+	// its value ID.
+	inst [][2]int32
+	// fused says a comparison is made by the branch that uses it, by its
+	// value ID.
+	fused []bool
 	// argBase is the first slot of the area at the frame's top where a
 	// call through Go finds its arguments and leaves its results.
 	argBase int
@@ -102,10 +120,32 @@ type gen struct {
 	trapTo  map[uint64]amd64.Label
 	polls   map[int]amd64.Label
 	byID    []*Value
+	// moves and pending are the parallel moves' lists.
+	moves, pending []pmove
 	// marks are what each stretch of the code was emitted for, where the
 	// request asks for them (marking).
 	marking bool
 	marks   []wjit.Mark
+}
+
+// reset readies g, kept in a workspace, for function f, keeping the
+// memory of its lists and tables.
+func (g *gen) reset(ws *genScratch, f *Func, req *wjit.Request) {
+	clear(g.ool[:cap(g.ool)])
+	clear(g.byID)
+	if g.traps == nil {
+		g.traps, g.trapTo, g.polls = map[trapKey]amd64.Label{}, map[uint64]amd64.Label{}, map[int]amd64.Label{}
+	} else {
+		clear(g.traps)
+		clear(g.trapTo)
+		clear(g.polls)
+	}
+	n := f.NumValues()
+	*g = gen{ws: ws, a: &ws.asm, f: f, req: req, fn: req.Func, index: grown(g.index, int(f.nextBlock)), labels: g.labels[:0],
+		inst: grown(g.inst, n), fused: grown(g.fused, n), ool: g.ool[:0], traps: g.traps, trapTo: g.trapTo, polls: g.polls,
+		byID: g.byID[:0], moves: g.moves[:0], pending: g.pending[:0], marking: req.Marks}
+	clear(g.fused)
+	ws.asm.Reset()
 }
 
 // mark says the code from here is emitted for the tag format makes.
@@ -144,11 +184,10 @@ func classOf(t Type) int8 {
 
 // lower lowers f, optimized, to native code for req's function.
 func lower(f *Func, req *wjit.Request, ws *workspace) *wjit.Code {
-	g := &gen{ws: &ws.gen, a: &amd64.Asm{}, f: f, req: req, fn: req.Func, index: map[*Block]int{}, inst: map[int32][2]int32{},
-		fused: map[*Value]bool{}, traps: map[trapKey]amd64.Label{}, trapTo: map[uint64]amd64.Label{}, polls: map[int]amd64.Label{},
-		marking: req.Marks}
+	g := &ws.gen.g
+	g.reset(&ws.gen, f, req)
 	for i, b := range f.Blocks {
-		g.index[b] = i
+		g.index[b.ID] = int32(i)
 	}
 	g.allocate()
 	a := g.a
@@ -167,9 +206,8 @@ func lower(f *Func, req *wjit.Request, ws *workspace) *wjit.Code {
 	a.Load(rRS, rCtx, offRSP)
 	a.Bind(entry)
 	a.Store(rCtx, offRSP, rRS)
-	g.labels = make([]amd64.Label, len(f.Blocks))
-	for i := range g.labels {
-		g.labels[i] = a.NewLabel()
+	for range f.Blocks {
+		g.labels = append(g.labels, a.NewLabel())
 	}
 	for i, b := range f.Blocks {
 		a.Bind(g.labels[i])
@@ -185,7 +223,8 @@ func lower(f *Func, req *wjit.Request, ws *workspace) *wjit.Code {
 	if err != nil || (req.MaxCodeBytes > 0 && len(out) > req.MaxCodeBytes) {
 		refuse(RefuseSize, "%d bytes of code", a.Len())
 	}
-	code := &wjit.Code{Bytes: out, GoEntry: a.Offset(goEntry), Entry: a.Offset(entry), ReturnStub: retStub}
+	// The assembler's buffer is the workspace's: the code is a copy.
+	code := &wjit.Code{Bytes: slices.Clone(out), GoEntry: a.Offset(goEntry), Entry: a.Offset(entry), ReturnStub: retStub}
 	if g.marking {
 		code.Marks, code.Listing = g.marks, g.listing()
 	}
@@ -196,7 +235,7 @@ func lower(f *Func, req *wjit.Request, ws *workspace) *wjit.Code {
 func (g *gen) listing() string {
 	var sb strings.Builder
 	where := func(v *Value) string {
-		if v.Op == OpConst || g.fused[v] || v.Type == TNone || v.Type == TTuple {
+		if v.Op == OpConst || g.fused[v.ID] || v.Type == TNone || v.Type == TTuple {
 			return ""
 		}
 		var s string
@@ -254,7 +293,12 @@ func (g *gen) listing() string {
 func (g *gen) allocate() {
 	f := g.f
 	n := f.NumValues()
-	lf := &lsra.Func{Class: make([]int8, n), FixedSlot: make([]int32, n), Blocks: make([]lsra.Block, len(f.Blocks))}
+	ws := g.ws
+	ws.vregs.reset()
+	lf := &ws.lf
+	lf.Class = grown(lf.Class, n)
+	lf.FixedSlot = grown(lf.FixedSlot, n)
+	lf.Blocks = grown(lf.Blocks, len(f.Blocks))
 	area := 0
 	for i := range lf.FixedSlot {
 		lf.FixedSlot[i] = -1
@@ -267,26 +311,33 @@ func (g *gen) allocate() {
 		return lsra.VReg(v.ID)
 	}
 	uses := func(vs []*Value) []lsra.VReg {
-		var out []lsra.VReg
+		out := ws.vregs.take(len(vs))
 		for _, v := range vs {
 			if r := vreg(v); r != lsra.None {
 				out = append(out, r)
 			}
 		}
+		if len(out) == 0 {
+			return nil
+		}
 		return out
+	}
+	for i := range g.inst {
+		g.inst[i] = [2]int32{-1, -1}
 	}
 	for i, b := range f.Blocks {
 		lb := &lf.Blocks[i]
-		lb.Depth = int(b.Depth)
+		// The block's lists keep their arrays from the last function.
+		*lb = lsra.Block{Preds: lb.Preds[:0], Succs: lb.Succs[:0], Depth: int(b.Depth), Phis: lb.Phis[:0], Insts: lb.Insts[:0]}
 		for _, p := range b.Preds {
-			lb.Preds = append(lb.Preds, g.index[p])
+			lb.Preds = append(lb.Preds, int(g.index[p.ID]))
 		}
 		for _, s := range b.Succs {
-			lb.Succs = append(lb.Succs, g.index[s])
+			lb.Succs = append(lb.Succs, int(g.index[s.ID]))
 		}
 		for _, p := range b.Phis {
 			lf.Class[p.ID] = classOf(p.Type)
-			ph := lsra.Phi{Def: lsra.VReg(p.ID)}
+			ph := lsra.Phi{Def: lsra.VReg(p.ID), Args: ws.vregs.take(len(p.Args))}
 			for _, a := range p.Args {
 				ph.Args = append(ph.Args, vreg(a))
 			}
@@ -298,13 +349,13 @@ func (g *gen) allocate() {
 			c := b.Control
 			last := b.Values[len(b.Values)-1]
 			if c == last && c.Uses == 1 && (c.Op == OpEqz || (c.Op >= OpEq && c.Op <= OpGeU)) {
-				g.fused[c] = true
+				g.fused[c.ID] = true
 			}
 		}
 		for j := 0; j < len(b.Values); j++ {
 			v := b.Values[j]
 			switch {
-			case v.Op == OpConst || g.fused[v]:
+			case v.Op == OpConst || g.fused[v.ID]:
 				continue
 			case v.Op == OpResult:
 				// Defined by its call.
@@ -314,7 +365,7 @@ func (g *gen) allocate() {
 			in := lsra.Inst{Uses: uses(v.Args), Hint: lsra.None}
 			if c := classOf(v.Type); c != lsra.NoClass {
 				lf.Class[v.ID] = c
-				in.Defs = []lsra.VReg{lsra.VReg(v.ID)}
+				in.Defs = append(ws.vregs.take(1), lsra.VReg(v.ID))
 			}
 			switch v.Op {
 			case OpParam:
@@ -322,14 +373,14 @@ func (g *gen) allocate() {
 			case OpGoOp:
 				if v.BulkInCode() {
 					// The code copies or fills in AX, CX and SI.
-					in.Clobber = []uint64{1<<amd64.RAX | 1<<amd64.RCX | 1<<amd64.RSI}
+					in.Clobber = clobberBulk
 					break
 				}
 				fallthrough
 			case OpCall, OpCallIndirect:
 				in.Call = true
 				for k := j + 1; k < len(b.Values) && b.Values[k].Op == OpResult && b.Values[k].Args[0] == v; k++ {
-					in.Defs = append(in.Defs, lsra.VReg(b.Values[k].ID))
+					in.Defs = appendA(&ws.vregs, in.Defs, lsra.VReg(b.Values[k].ID))
 				}
 				nres := len(in.Defs)
 				if v.Op == OpCall {
@@ -340,10 +391,10 @@ func (g *gen) allocate() {
 				area = max(area, 2*max(len(v.Args), nres))
 				g.inst[v.ID] = [2]int32{int32(i), int32(len(lb.Insts))}
 			case OpDivS, OpDivU, OpRemS, OpRemU:
-				in.Clobber = []uint64{1<<amd64.RAX | 1<<amd64.RDX}
+				in.Clobber = clobberDiv
 			case OpShl, OpShrS, OpShrU, OpRotl, OpRotr:
 				if v.Args[1].Op != OpConst {
-					in.Clobber = []uint64{1 << amd64.RCX}
+					in.Clobber = clobberShift
 				}
 			}
 			switch v.Op {
@@ -361,7 +412,7 @@ func (g *gen) allocate() {
 		end.Hint = lsra.None
 		switch b.Kind {
 		case BIf, BSwitch:
-			if g.fused[b.Control] {
+			if g.fused[b.Control.ID] {
 				end.Uses = uses(b.Control.Args)
 			} else {
 				end.Uses = uses([]*Value{b.Control})
@@ -377,11 +428,11 @@ func (g *gen) allocate() {
 		refuse(RefuseFrame, "a frame of %d slots for %d parameters and calls of %d", frame, len(f.Params), area)
 	}
 	lap(PhaseDescribe)
-	cfg := &lsra.Config{Classes: [][]int{gprs, xmms}, NumSlots: g.argBase}
+	cfg := lsra.Config{Classes: classes, NumSlots: g.argBase}
 	if Timing != nil {
 		cfg.Lap = lsraLap
 	}
-	ra, err := g.ws.al.Allocate(lf, cfg)
+	ra, err := g.ws.al.Allocate(lf, &cfg)
 	if err != nil {
 		refuse(RefuseFrame, "%v: %d slots", err, g.argBase)
 	}
@@ -514,12 +565,14 @@ type pmove struct {
 // parallel makes the moves as if all at once: a move waits for those that
 // read its destination, and a cycle is broken through s1 or x1.
 func (g *gen) parallel(moves []pmove) {
-	pending := moves[:0:0]
+	pending := g.pending[:0]
 	for _, m := range moves {
 		if m.dst != m.src {
 			pending = append(pending, m)
 		}
 	}
+	// The list keeps its array for the next moves.
+	g.pending = pending
 	for len(pending) > 0 {
 		progress := false
 		for i := 0; i < len(pending); i++ {
@@ -744,7 +797,7 @@ func (g *gen) pollExit(back amd64.Label) amd64.Label {
 // poll counter.
 func (g *gen) jump(i int, s *Block) {
 	a := g.a
-	j := g.index[s]
+	j := int(g.index[s.ID])
 	if j > i {
 		if j != i+1 {
 			a.Jmp(g.labels[j])
@@ -769,11 +822,12 @@ func (g *gen) edgeMoves(b, s *Block) {
 	}
 	k := s.predIndex(b)
 	g.mark("edge %v->%v", b, s)
-	var moves []pmove
+	moves := g.moves[:0]
 	for _, p := range s.Phis {
 		moves = append(moves, pmove{dst: g.locOf(p), src: g.locOf(p.Args[k]), t: p.Type})
 	}
 	g.parallel(moves)
+	g.moves = moves[:0]
 }
 
 // block lowers block b, the i-th.
@@ -785,7 +839,7 @@ func (g *gen) block(i int, b *Block) {
 	}
 	for j := 0; j < len(b.Values); j++ {
 		v := b.Values[j]
-		if v.Op == OpConst || v.Op == OpResult || g.fused[v] {
+		if v.Op == OpConst || v.Op == OpResult || g.fused[v.ID] {
 			continue
 		}
 		if g.marking {
@@ -803,7 +857,7 @@ func (g *gen) block(i int, b *Block) {
 		g.jump(i, b.Succs[0])
 	case BIf:
 		cond := g.condition(b.Control)
-		t, e := g.index[b.Succs[0]], g.index[b.Succs[1]]
+		t, e := int(g.index[b.Succs[0].ID]), int(g.index[b.Succs[1].ID])
 		switch {
 		case t == i+1:
 			a.Jcc(cond.Invert(), g.labels[e])
@@ -821,11 +875,12 @@ func (g *gen) block(i int, b *Block) {
 		}
 		g.switchTable(i, b)
 	case BReturn:
-		var moves []pmove
+		moves := g.moves[:0]
 		for k, r := range b.Results {
 			moves = append(moves, pmove{dst: loc{kind: lSlot, slot: int32(k)}, src: g.locOf(r), t: r.Type})
 		}
 		g.parallel(moves)
+		g.moves = moves[:0]
 		a.Load(rRS, rCtx, offRSP)
 		a.OpImm(amd64.Sub, rRS, wjit.RSEntryWords*8, true)
 		a.Load(rL, rRS, 8)
@@ -858,7 +913,7 @@ func (g *gen) switchTable(i int, b *Block) {
 	}
 	for k, s := range b.Succs {
 		a.Bind(stubs[k])
-		if j := g.index[s]; j > i {
+		if j := int(g.index[s.ID]); j > i {
 			a.Jmp(g.labels[j])
 		} else {
 			g.jump(i, s)
@@ -869,7 +924,7 @@ func (g *gen) switchTable(i int, b *Block) {
 // condition sets the flags for the branch on c and returns the condition
 // under which it is true.
 func (g *gen) condition(c *Value) amd64.Cond {
-	if g.fused[c] {
+	if g.fused[c.ID] {
 		return g.compare(c)
 	}
 	r := g.intoG(c, s0)
@@ -911,7 +966,7 @@ func (g *gen) compare(v *Value) amd64.Cond {
 	return cond
 }
 
-var cmpConds = map[Op]amd64.Cond{
+var cmpConds = [numOps]amd64.Cond{
 	OpEq: amd64.CondE, OpNe: amd64.CondNE, OpLtS: amd64.CondL, OpLtU: amd64.CondB, OpGtS: amd64.CondG,
 	OpGtU: amd64.CondA, OpLeS: amd64.CondLE, OpLeU: amd64.CondBE, OpGeS: amd64.CondGE, OpGeU: amd64.CondAE,
 }
@@ -939,9 +994,16 @@ func mirror(cond amd64.Cond) amd64.Cond {
 	return cond
 }
 
-var alus = map[Op]amd64.ALU{OpAdd: amd64.Add, OpSub: amd64.Sub, OpAnd: amd64.And, OpOr: amd64.Or, OpXor: amd64.Xor}
+var alus = [numOps]amd64.ALU{OpAdd: amd64.Add, OpSub: amd64.Sub, OpAnd: amd64.And, OpOr: amd64.Or, OpXor: amd64.Xor}
 
-var shifts = map[Op]amd64.Shift{OpShl: amd64.Shl, OpShrS: amd64.Sar, OpShrU: amd64.Shr, OpRotl: amd64.Rol, OpRotr: amd64.Ror}
+var shifts = [numOps]amd64.Shift{OpShl: amd64.Shl, OpShrS: amd64.Sar, OpShrU: amd64.Shr, OpRotl: amd64.Rol, OpRotr: amd64.Ror}
+
+// roundModes are the roundings' modes, floatOps the float arithmetic's
+// instructions.
+var (
+	roundModes = [numOps]uint8{OpFCeil: amd64.RoundCeil, OpFFloor: amd64.RoundFloor, OpFTrunc: amd64.RoundTrunc, OpFNearest: amd64.RoundNearest}
+	floatOps   = [numOps]amd64.SSE{OpFAdd: amd64.AddSD, OpFSub: amd64.SubSD, OpFMul: amd64.MulSD, OpFDiv: amd64.DivSD}
+)
 
 // value lowers v; rest are the values after it in its block.
 func (g *gen) value(v *Value, rest []*Value) {
@@ -1056,7 +1118,7 @@ func (g *gen) value(v *Value, rest []*Value) {
 		case OpDemote:
 			a.Cvtsd2ss(t, t)
 		default:
-			mode := map[Op]uint8{OpFCeil: amd64.RoundCeil, OpFFloor: amd64.RoundFloor, OpFTrunc: amd64.RoundTrunc, OpFNearest: amd64.RoundNearest}[v.Op]
+			mode := roundModes[v.Op]
 			if single {
 				a.RoundSS(t, t, mode)
 			} else {
@@ -1332,7 +1394,7 @@ func (g *gen) sse(single bool, op amd64.SSE, dst, src amd64.XReg) {
 func (g *gen) floatOp(v *Value) {
 	a := g.a
 	x, y := v.Args[0], v.Args[1]
-	op := map[Op]amd64.SSE{OpFAdd: amd64.AddSD, OpFSub: amd64.SubSD, OpFMul: amd64.MulSD, OpFDiv: amd64.DivSD}[v.Op]
+	op := floatOps[v.Op]
 	single := v.Type == TF32
 	t := g.defX(v)
 	if l := g.locOf(y); l.kind == lXMM && amd64.XReg(l.r) == t && x != y {
@@ -1766,14 +1828,14 @@ func (g *gen) store(v *Value) {
 
 // results are the values of call v's results, which follow it.
 func results(v *Value, rest []*Value) []*Value {
-	var out []*Value
+	n := 0
 	for _, r := range rest {
 		if r.Op != OpResult || r.Args[0] != v {
 			break
 		}
-		out = append(out, r)
+		n++
 	}
-	return out
+	return rest[:n:n]
 }
 
 // takeResults moves a call's results from the slots from base, where the
@@ -1795,8 +1857,8 @@ func (g *gen) takeResults(res []*Value, base int32) {
 
 // reload loads the values a call clobbered from their slots.
 func (g *gen) reload(v *Value) {
-	key, ok := g.inst[v.ID]
-	if !ok {
+	key := g.inst[v.ID]
+	if key[0] < 0 {
 		return
 	}
 	across := g.ra.Across(int(key[0]), int(key[1]))
@@ -1812,8 +1874,9 @@ func (g *gen) reload(v *Value) {
 // valueByID finds a value by its ID, through a table made at its first
 // use.
 func (g *gen) valueByID(id int32) *Value {
-	if g.byID == nil {
-		g.byID = make([]*Value, g.f.NumValues())
+	if len(g.byID) == 0 {
+		g.byID = grown(g.byID, g.f.NumValues())
+		clear(g.byID)
 		for _, b := range g.f.Blocks {
 			for _, v := range b.Phis {
 				g.byID[v.ID] = v

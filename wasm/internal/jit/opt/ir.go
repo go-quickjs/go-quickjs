@@ -382,11 +382,10 @@ type Block struct {
 	outer *Block
 	// dead says the block was removed.
 	dead bool
-	// The builder's state: sealed says every predecessor is known; defs
-	// are the locals' values at the block's end; incomplete are the phis
-	// of locals made before it was sealed.
+	// The builder's state: sealed says every predecessor is known;
+	// incomplete are the phis of locals made before it was sealed. The
+	// locals' values at its end are the workspace's (workspace.defs).
 	sealed     bool
-	defs       map[int32]*Value
 	incomplete []incompletePhi
 }
 
@@ -405,35 +404,56 @@ type Func struct {
 	Params, Results []Type
 	nextValue       int32
 	nextBlock       int32
+	// ws is the workspace the function's values and blocks, and its
+	// passes' tables, are made in; dom is its dominator tree, there, while
+	// the control flow graph is as it was made (dominators).
+	ws  *workspace
+	dom *domTree
 }
 
 // NumValues is one past the highest value ID.
 func (f *Func) NumValues() int { return int(f.nextValue) }
 
 func (f *Func) newBlock() *Block {
-	b := &Block{ID: f.nextBlock}
+	b := f.ws.blocks.new()
+	b.ID = f.nextBlock
 	f.nextBlock++
-	f.Blocks = append(f.Blocks, b)
+	f.Blocks = appendA(&f.ws.blks, f.Blocks, b)
 	return b
 }
 
-func (f *Func) newValue(b *Block, op Op, t Type, args ...*Value) *Value {
-	v := &Value{ID: f.nextValue, Op: op, Type: t, Block: b}
+// value makes a value, in no block's list.
+func (f *Func) value(b *Block, op Op, t Type, args []*Value) *Value {
+	v := f.ws.values.new()
+	v.ID, v.Op, v.Type, v.Block = f.nextValue, op, t, b
 	if len(args) > 0 {
-		v.Args = append([]*Value(nil), args...)
+		v.Args = append(f.ws.vals.take(len(args)), args...)
 	}
 	f.nextValue++
+	return v
+}
+
+func (f *Func) newValue(b *Block, op Op, t Type, args ...*Value) *Value {
+	v := f.value(b, op, t, args)
 	if op == OpPhi {
-		b.Phis = append(b.Phis, v)
+		b.Phis = appendA(&f.ws.vals, b.Phis, v)
 	} else {
-		b.Values = append(b.Values, v)
+		b.Values = appendA(&f.ws.vals, b.Values, v)
 	}
 	return v
 }
 
-func addEdge(from, to *Block) {
-	from.Succs = append(from.Succs, to)
-	to.Preds = append(to.Preds, from)
+// addArg appends a to v's arguments.
+func (f *Func) addArg(v, a *Value) { v.Args = appendA(&f.ws.vals, v.Args, a) }
+
+// setArgs makes v's arguments args, in the workspace.
+func (f *Func) setArgs(v *Value, args ...*Value) {
+	v.Args = append(f.ws.vals.take(len(args)), args...)
+}
+
+func (f *Func) addEdge(from, to *Block) {
+	from.Succs = appendA(&f.ws.blks, from.Succs, to)
+	to.Preds = appendA(&f.ws.blks, to.Preds, from)
 }
 
 // predIndex is the index of p among b's predecessors.

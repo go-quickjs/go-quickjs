@@ -51,12 +51,31 @@ func typeOf(t module.ValueType, what string) Type {
 	return TNone
 }
 
-func typesOf(ts []module.ValueType, what string) []Type {
-	out := make([]Type, len(ts))
-	for i, t := range ts {
-		out[i] = typeOf(t, what)
+// typesOf is the SSA types of ts, in the workspace's arena.
+func (bd *builder) typesOf(ts []module.ValueType, what string) []Type {
+	if len(ts) == 0 {
+		return nil
+	}
+	out := bd.ws.types.take(len(ts))
+	for _, t := range ts {
+		out = append(out, typeOf(t, what))
 	}
 	return out
+}
+
+// checkNumeric refuses ts if one is not numeric, as typeOf does, for what,
+// after op's name if named.
+func checkNumeric(ts []module.ValueType, op opcode.Opcode, named bool, what string) {
+	for _, t := range ts {
+		switch t.Kind {
+		case module.KindI32, module.KindI64, module.KindF32, module.KindF64:
+		default:
+			if named {
+				what = op.Name() + " " + what
+			}
+			typeOf(t, what)
+		}
+	}
 }
 
 // ctl is a construct being built.
@@ -94,6 +113,7 @@ func (t *ctl) labelTypes() []Type {
 // are phis made with it.
 type builder struct {
 	f      *Func
+	ws     *workspace
 	m      *module.Module
 	r      reader
 	locals []Type
@@ -101,16 +121,37 @@ type builder struct {
 	ctrl   []*ctl
 	b      *Block
 	// zero is each type's zero, for the declared locals.
-	zero map[Type]*Value
+	zero [TTuple]*Value
 	// globals are the values of the mutable globals known in the current
-	// block, by index: the last one read or written there since its start
-	// and its last call.
-	globals map[uint32]*Value
+	// block: the last one read or written there since its start and its
+	// last call.
+	globals []globalFact
 	// mem are the values of memory accesses known in the current block:
 	// the last loads, and the stores of a whole value of its type.
 	mem []memFact
 	// globalAddrs are the globals' addresses, made in the entry block.
 	globalAddrs map[uint32]*Value
+	// depths and succOf are br_table's: its depths, and the successor
+	// each depth is, or -1.
+	depths []int
+	succOf []int32
+}
+
+// globalFact is that global g holds val.
+type globalFact struct {
+	g   uint32
+	val *Value
+}
+
+// reset empties the builder for the next function, keeping its memory.
+func (bd *builder) reset() {
+	clear(bd.stack[:cap(bd.stack)])
+	clear(bd.ctrl[:cap(bd.ctrl)])
+	clear(bd.globals[:cap(bd.globals)])
+	clear(bd.mem[:cap(bd.mem)])
+	clear(bd.globalAddrs)
+	*bd = builder{locals: bd.locals[:0], stack: bd.stack[:0], ctrl: bd.ctrl[:0], globals: bd.globals[:0], mem: bd.mem[:0],
+		globalAddrs: bd.globalAddrs, depths: bd.depths[:0], succOf: bd.succOf[:0]}
 }
 
 // memFact is that the bytes at addr + off, size of them, read as typ,
@@ -136,22 +177,31 @@ func Build(m *module.Module, fn uint32) (f *Func, err error) {
 			panic(p)
 		}
 	}()
+	return build(new(workspace), m, fn), nil
+}
+
+// build builds function fn of a validated module as SSA in workspace ws,
+// or panics with a *jit.Refusal.
+func build(ws *workspace, m *module.Module, fn uint32) *Func {
 	if m.Functions[fn].Imported {
 		refuse(RefuseOther, "an imported function")
 	}
 	check(m, fn)
 	lap(PhaseCheck)
-	bd := &builder{m: m, f: &Func{}, zero: map[Type]*Value{}}
-	f = bd.build(fn)
+	ws.reset()
+	bd := &ws.bd
+	bd.ws, bd.m, bd.f = ws, m, &ws.f
+	bd.f.ws = ws
+	f := bd.build(fn)
 	lap(PhaseBuild)
-	return f, nil
+	return f
 }
 
 func (bd *builder) build(fn uint32) *Func {
 	m, f := bd.m, bd.f
 	sig := m.FuncType(fn)
-	f.Params = typesOf(sig.Params, "parameter")
-	f.Results = typesOf(sig.Results, "result")
+	f.Params = bd.typesOf(sig.Params, "parameter")
+	f.Results = bd.typesOf(sig.Results, "result")
 	code := m.Functions[fn].Code
 	bd.r = reader{b: m.Bytes, pc: int(code.Offset)}
 	bd.locals = append(bd.locals, f.Params...)
@@ -180,7 +230,9 @@ func (bd *builder) build(fn uint32) *Func {
 		}
 		bd.writeVar(int32(k), entry, z)
 	}
-	bd.ctrl = append(bd.ctrl, &ctl{op: opcode.Block, results: f.Results})
+	body := bd.ws.ctls.new()
+	*body = ctl{op: opcode.Block, results: f.Results}
+	bd.ctrl = append(bd.ctrl, body)
 	end := int(code.End())
 	for bd.r.pc < end && len(bd.ctrl) > 0 {
 		bd.instr()
@@ -191,22 +243,22 @@ func (bd *builder) build(fn uint32) *Func {
 
 // Variables: the locals, by index.
 
+// defKey is the workspace's key of local k's value at block b's end.
+func defKey(k int32, b *Block) uint64 { return uint64(b.ID)<<32 | uint64(uint32(k)) }
+
 func (bd *builder) writeVar(k int32, b *Block, v *Value) {
-	if b.defs == nil {
-		b.defs = map[int32]*Value{}
-	}
-	b.defs[k] = v
+	bd.ws.defs[defKey(k, b)] = v
 }
 
 func (bd *builder) readVar(k int32, b *Block) *Value {
-	if v, ok := b.defs[k]; ok {
+	if v, ok := bd.ws.defs[defKey(k, b)]; ok {
 		return v
 	}
 	var v *Value
 	switch {
 	case !b.sealed:
 		v = bd.f.newValue(b, OpPhi, bd.locals[k])
-		b.incomplete = append(b.incomplete, incompletePhi{k, v})
+		b.incomplete = appendA(&bd.ws.incomplete, b.incomplete, incompletePhi{k, v})
 	case len(b.Preds) == 1:
 		v = bd.readVar(k, b.Preds[0])
 	default:
@@ -220,7 +272,8 @@ func (bd *builder) readVar(k int32, b *Block) *Value {
 
 func (bd *builder) phiOperands(k int32, phi *Value) {
 	for _, p := range phi.Block.Preds {
-		phi.Args = append(phi.Args, bd.readVar(k, p))
+		a := bd.readVar(k, p)
+		bd.f.addArg(phi, a)
 	}
 }
 
@@ -267,7 +320,7 @@ func (bd *builder) startBlock(b *Block) {
 // forget forgets what is known of globals and memory: at a new block, or
 // after a call, which may change them.
 func (bd *builder) forget() {
-	clear(bd.globals)
+	bd.globals = bd.globals[:0]
 	bd.mem = bd.mem[:0]
 }
 
@@ -284,16 +337,16 @@ func (bd *builder) markDead() {
 // edge adds an edge from the current block to construct t's label, with
 // vals, the label's values.
 func (bd *builder) edge(from *Block, t *ctl, vals []*Value) {
-	addEdge(from, t.label)
+	bd.f.addEdge(from, t.label)
 	for i, p := range t.phis {
-		p.Args = append(p.Args, vals[i])
+		bd.f.addArg(p, vals[i])
 	}
 }
 
 // returnBlock makes block b return vals.
-func returnBlock(b *Block, vals []*Value) {
+func (bd *builder) returnBlock(b *Block, vals []*Value) {
 	b.Kind = BReturn
-	b.Results = append([]*Value(nil), vals...)
+	b.Results = append(bd.ws.vals.take(len(vals)), vals...)
 }
 
 // branch ends the current block with a branch to depth.
@@ -302,7 +355,7 @@ func (bd *builder) branch(depth int) {
 	n := len(t.labelTypes())
 	vals := bd.stack[len(bd.stack)-n:]
 	if t.label == nil {
-		returnBlock(bd.b, vals)
+		bd.returnBlock(bd.b, vals)
 		return
 	}
 	bd.b.Kind = BPlain
@@ -320,31 +373,37 @@ func (bd *builder) brIf(depth int) {
 	if t.label == nil {
 		ret := bd.f.newBlock()
 		ret.sealed = true
-		addEdge(b, ret)
-		returnBlock(ret, vals)
+		bd.f.addEdge(b, ret)
+		bd.returnBlock(ret, vals)
 	} else {
 		bd.edge(b, t, vals)
 	}
 	cont := bd.f.newBlock()
-	addEdge(b, cont)
+	bd.f.addEdge(b, cont)
 	cont.sealed = true
 	bd.startBlock(cont)
 }
 
 func (bd *builder) brTable() {
 	n := bd.r.u32()
-	depths := make([]int, n+1)
-	for i := range depths {
-		depths[i] = int(bd.r.u32())
+	depths := bd.depths[:0]
+	for range n + 1 {
+		depths = append(depths, int(bd.r.u32()))
 	}
+	bd.depths = depths
 	idx := bd.pop()
 	b := bd.b
 	b.Kind = BSwitch
 	b.Control = idx
-	succ := map[int]int32{}
+	succ := bd.succOf
+	for len(succ) < len(bd.ctrl) {
+		succ = append(succ, -1)
+	}
+	bd.succOf = succ
+	b.Table = bd.ws.i32.take(len(depths))
 	for _, d := range depths {
-		s, ok := succ[d]
-		if !ok {
+		s := succ[d]
+		if s < 0 {
 			s = int32(len(b.Succs))
 			succ[d] = s
 			t := bd.ctrl[len(bd.ctrl)-1-d]
@@ -352,13 +411,16 @@ func (bd *builder) brTable() {
 			if t.label == nil {
 				ret := bd.f.newBlock()
 				ret.sealed = true
-				addEdge(b, ret)
-				returnBlock(ret, vals)
+				bd.f.addEdge(b, ret)
+				bd.returnBlock(ret, vals)
 			} else {
 				bd.edge(b, t, vals)
 			}
 		}
 		b.Table = append(b.Table, s)
+	}
+	for _, d := range depths {
+		succ[d] = -1
 	}
 	bd.markDead()
 }
@@ -366,9 +428,13 @@ func (bd *builder) brTable() {
 // enter begins a construct whose label is label, with phis of types for
 // its values.
 func (bd *builder) enter(op opcode.Opcode, params, results []Type, label *Block) *ctl {
-	t := &ctl{op: op, base: len(bd.stack) - len(params), params: params, results: results, label: label}
-	for _, lt := range t.labelTypes() {
-		t.phis = append(t.phis, bd.f.newValue(label, OpPhi, lt))
+	t := bd.ws.ctls.new()
+	*t = ctl{op: op, base: len(bd.stack) - len(params), params: params, results: results, label: label}
+	if lts := t.labelTypes(); len(lts) > 0 {
+		t.phis = bd.ws.vals.take(len(lts))
+		for _, lt := range lts {
+			t.phis = append(t.phis, bd.f.newValue(label, OpPhi, lt))
+		}
 	}
 	bd.ctrl = append(bd.ctrl, t)
 	return t
@@ -402,7 +468,7 @@ func (bd *builder) end() {
 	}
 	if len(bd.ctrl) == 1 {
 		if !t.dead {
-			returnBlock(bd.b, bd.stack[len(bd.stack)-len(t.results):])
+			bd.returnBlock(bd.b, bd.stack[len(bd.stack)-len(t.results):])
 		}
 		bd.ctrl = bd.ctrl[:0]
 		return
@@ -416,11 +482,11 @@ func (bd *builder) end() {
 		}
 		// The loop's fallthrough leaves its results on the stack; the code
 		// after it begins a block of its own.
-		results := append([]*Value(nil), bd.stack[len(bd.stack)-len(t.results):]...)
+		results := append(bd.ws.vals.take(len(t.results)), bd.stack[len(bd.stack)-len(t.results):]...)
 		next := bd.f.newBlock()
 		next.sealed = true
 		bd.b.Kind = BPlain
-		addEdge(bd.b, next)
+		bd.f.addEdge(bd.b, next)
 		bd.startBlock(next)
 		bd.stack = append(bd.stack[:t.base], results...)
 		return
@@ -458,11 +524,11 @@ func (bd *builder) instr() {
 	case opcode.Block:
 		params, results := r.blockType(bd.m)
 		label := bd.f.newBlock()
-		bd.enter(op, typesOf(params, "block parameter"), typesOf(results, "block result"), label)
+		bd.enter(op, bd.typesOf(params, "block parameter"), bd.typesOf(results, "block result"), label)
 	case opcode.Loop:
 		params, results := r.blockType(bd.m)
 		header := bd.f.newBlock()
-		t := bd.enter(op, typesOf(params, "loop parameter"), typesOf(results, "loop result"), header)
+		t := bd.enter(op, bd.typesOf(params, "loop parameter"), bd.typesOf(results, "loop result"), header)
 		bd.b.Kind = BPlain
 		bd.edge(bd.b, t, bd.stack[t.base:])
 		bd.startBlock(header)
@@ -471,7 +537,7 @@ func (bd *builder) instr() {
 		params, results := r.blockType(bd.m)
 		cond := bd.pop()
 		label := bd.f.newBlock()
-		t := bd.enter(op, typesOf(params, "if parameter"), typesOf(results, "if result"), label)
+		t := bd.enter(op, bd.typesOf(params, "if parameter"), bd.typesOf(results, "if result"), label)
 		b := bd.b
 		b.Kind = BIf
 		b.Control = cond
@@ -479,9 +545,9 @@ func (bd *builder) instr() {
 		then.sealed = true
 		t.elseB = bd.f.newBlock()
 		t.elseB.sealed = true
-		addEdge(b, then)
-		addEdge(b, t.elseB)
-		t.elseArgs = append([]*Value(nil), bd.stack[t.base:]...)
+		bd.f.addEdge(b, then)
+		bd.f.addEdge(b, t.elseB)
+		t.elseArgs = append(bd.ws.vals.take(len(bd.stack)-t.base), bd.stack[t.base:]...)
 		bd.startBlock(then)
 	case opcode.Else:
 		bd.elseBegin()
@@ -529,10 +595,7 @@ func (bd *builder) instr() {
 		v := bd.pop()
 		s := bd.value(OpGlobalSet, TNone, bd.globalAddr(g), v)
 		s.Aux = uint64(g)
-		if bd.globals == nil {
-			bd.globals = map[uint32]*Value{}
-		}
-		bd.globals[g] = v
+		bd.knowGlobal(g, v)
 	case opcode.I32Const:
 		bd.push(bd.constant(TI32, uint64(uint32(r.s64()))))
 	case opcode.I64Const:
@@ -571,14 +634,13 @@ func (bd *builder) indexType(mem uint32) Type {
 // call builds a call of signature ft, its arguments on the stack, and
 // extra values past them (call_indirect's index).
 func (bd *builder) call(op Op, ft *module.FuncType, aux, aux2 uint64, at uint32, extra int) {
-	params := typesOf(ft.Params, "callee parameter")
-	results := typesOf(ft.Results, "callee result")
-	n := len(params) + extra
+	n := len(ft.Params) + extra
 	args := bd.stack[len(bd.stack)-n:]
 	v := bd.value(op, TTuple, args...)
 	v.Aux, v.Aux2, v.At = aux, aux2, at
 	bd.stack = bd.stack[:len(bd.stack)-n]
-	for i, t := range results {
+	for i, rt := range ft.Results {
+		t := typeOf(rt, "callee result")
 		res := bd.value(OpResult, t, v)
 		res.Aux = uint64(i)
 		bd.push(res)
@@ -601,9 +663,11 @@ func (bd *builder) goOp(op opcode.Opcode, imm uint64, nargs int, result Type, at
 func (bd *builder) globalGet(g uint32) {
 	gl := &bd.m.Globals[g]
 	t := typeOf(gl.Type, "global")
-	if v, ok := bd.globals[g]; ok {
-		bd.push(v)
-		return
+	for _, k := range bd.globals {
+		if k.g == g {
+			bd.push(k.val)
+			return
+		}
 	}
 	v := bd.value(OpGlobalGet, t, bd.globalAddr(g))
 	v.Aux = uint64(g)
@@ -613,11 +677,19 @@ func (bd *builder) globalGet(g uint32) {
 		bd.push(v)
 		return
 	}
-	if bd.globals == nil {
-		bd.globals = map[uint32]*Value{}
-	}
-	bd.globals[g] = v
+	bd.knowGlobal(g, v)
 	bd.push(v)
+}
+
+// knowGlobal knows that global g holds v in the current block.
+func (bd *builder) knowGlobal(g uint32, v *Value) {
+	for i := range bd.globals {
+		if bd.globals[i].g == g {
+			bd.globals[i].val = v
+			return
+		}
+	}
+	bd.globals = append(bd.globals, globalFact{g, v})
 }
 
 // globalAddr is global g's address, made once, in the entry block after
@@ -627,13 +699,15 @@ func (bd *builder) globalAddr(g uint32) *Value {
 		return v
 	}
 	e := bd.f.Entry
-	v := &Value{ID: bd.f.nextValue, Op: OpGlobalAddr, Type: TI64, Aux: uint64(g), Block: e}
-	bd.f.nextValue++
+	v := bd.f.value(e, OpGlobalAddr, TI64, nil)
+	v.Aux = uint64(g)
 	i := 0
 	for i < len(e.Values) && e.Values[i].Op == OpParam {
 		i++
 	}
-	e.Values = append(e.Values[:i], append([]*Value{v}, e.Values[i:]...)...)
+	e.Values = appendA(&bd.ws.vals, e.Values, nil)
+	copy(e.Values[i+1:], e.Values[i:])
+	e.Values[i] = v
 	if bd.globalAddrs == nil {
 		bd.globalAddrs = map[uint32]*Value{}
 	}
@@ -743,11 +817,17 @@ func (bd *builder) stored(addr *Value, off uint64, size uint8, v *Value) {
 
 // numeric builds a numeric instruction, reporting whether op is one.
 func (bd *builder) numeric(op opcode.Opcode, at uint32) bool {
-	n, ok := numerics[op]
-	if !ok {
+	var n numericOp
+	if op < 256 {
+		n = numerics1[op]
+	} else {
+		n = numerics[op]
+	}
+	if n.arity == 0 {
 		return false
 	}
-	args := make([]*Value, n.arity)
+	var buf [2]*Value
+	args := buf[:n.arity]
 	for i := n.arity - 1; i >= 0; i-- {
 		args[i] = bd.pop()
 	}
@@ -883,6 +963,16 @@ var numerics = func() map[opcode.Opcode]numericOp {
 	return m
 }()
 
+// numerics1 are numerics' of one byte, by opcode.
+var numerics1 = func() (t [256]numericOp) {
+	for op, n := range numerics {
+		if op < 256 {
+			t[op] = n
+		}
+	}
+	return t
+}()
+
 // check refuses function fn if its body has an instruction this tier does
 // not build, or a memory access it does not compile.
 func check(m *module.Module, fn uint32) {
@@ -923,19 +1013,19 @@ func check(m *module.Module, fn uint32) {
 			refuse(RefuseOther, "%s", op.Name())
 		case opcode.Block, opcode.Loop, opcode.If:
 			params, results := r.blockType(m)
-			typesOf(params, op.Name()+" parameter")
-			typesOf(results, op.Name()+" result")
+			checkNumeric(params, op, true, "parameter")
+			checkNumeric(results, op, true, "result")
 			continue
 		case opcode.CallFunction:
 			ft := m.FuncType(r.u32())
-			typesOf(ft.Params, "callee parameter")
-			typesOf(ft.Results, "callee result")
+			checkNumeric(ft.Params, op, false, "callee parameter")
+			checkNumeric(ft.Results, op, false, "callee result")
 			continue
 		case opcode.CallIndirect:
 			ft := m.Types[r.u32()].Func
 			r.u32()
-			typesOf(ft.Params, "callee parameter")
-			typesOf(ft.Results, "callee result")
+			checkNumeric(ft.Params, op, false, "callee parameter")
+			checkNumeric(ft.Results, op, false, "callee result")
 			continue
 		case opcode.GlobalGet, opcode.GlobalSet:
 			typeOf(m.Globals[r.u32()].Type, "global")

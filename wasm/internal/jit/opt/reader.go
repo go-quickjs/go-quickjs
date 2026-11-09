@@ -102,6 +102,11 @@ func (r *reader) blockType(m *module.Module) (params, results []module.ValueType
 		return nil, nil
 	}
 	if b&0xc0 == 0x40 || b == 0x64 || b == 0x63 {
+		switch b {
+		case 0x7f, 0x7e, 0x7d, 0x7c, 0x7b:
+			r.pc++
+			return nil, oneType[0x7f-b : 0x7f-b+1]
+		}
 		return nil, []module.ValueType{r.valueType()}
 	}
 	ft := m.Types[r.s64()].Func
@@ -115,6 +120,10 @@ func (r *reader) memarg() (mem uint32, offset uint64) {
 	}
 	return mem, r.u64()
 }
+
+// oneType are the block types of one numeric or v128 result, by 0x7f less
+// their byte.
+var oneType = []module.ValueType{module.I32, module.I64, module.F32, module.F64, module.V128}
 
 // skipDead skips instructions up to the end of the construct being built:
 // its end or an if's else, which it leaves to be read. The constructs this

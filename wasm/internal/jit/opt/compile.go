@@ -27,15 +27,12 @@ func Compile(req *wjit.Request) (code *wjit.Code, err error) {
 		refuse(RefuseArch, "no lowering for this architecture")
 	}
 	start()
-	f, err := Build(req.Module, req.Func)
-	if err != nil {
-		return nil, err
-	}
+	ws := workspaces.Get().(*workspace)
+	defer workspaces.Put(ws)
+	f := build(ws, req.Module, req.Func)
 	Optimize(f, nil)
 	if err := checkLowerable(f); err != nil {
 		panic(err)
 	}
-	ws := workspaces.Get().(*workspace)
-	defer workspaces.Put(ws)
 	return lower(f, req, ws), nil
 }

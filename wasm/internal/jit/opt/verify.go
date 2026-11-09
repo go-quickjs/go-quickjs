@@ -108,7 +108,7 @@ func Verify(f *Func) error {
 			}
 		}
 	}
-	d := dominators(f)
+	d := newDominators(f)
 	// dominatesUse reports whether a's definition comes before a use in
 	// block b at index i (-1 for the block's phis, len(Values) for its
 	// end).

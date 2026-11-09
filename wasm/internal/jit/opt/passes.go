@@ -757,7 +757,7 @@ func gvn(f *Func) {
 			table[k] = v
 			added = append(added, k)
 		}
-		for _, c := range d.children[b.ID] {
+		for _, c := range d.kids(b) {
 			walk(c)
 		}
 		for _, k := range added {
@@ -884,7 +884,7 @@ func bce(f *Func) {
 			undos = append(undos, undo{k, old, had})
 			checked[k] = end
 		}
-		for _, c := range d.children[b.ID] {
+		for _, c := range d.kids(b) {
 			walk(c)
 		}
 		for i := len(undos) - 1; i >= 0; i-- {
