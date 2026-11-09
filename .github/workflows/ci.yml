@@ -304,13 +304,16 @@ jobs:
           WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" WASM_THREADS_DIR="$GITHUB_WORKSPACE/wasm-threads" go test ./wasm/internal/spectest ./wasm/internal/wast -count=1 -v 2>&1 | tee spec.log | grep -E "spec:|scripts parsed|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
 
       # Every function compiled at its first call, where the wasm JIT runs
-      # (amd64 on Linux and Windows, arm64 on macOS and Linux), and the JIT
-      # checked against the interpreter call by call.
+      # (amd64 on Linux and Windows, arm64 on macOS and Linux); then every
+      # call of a function with loops going on natively from a loop's head
+      # at its first back edge (WASM_JIT=osr); and the JIT checked against
+      # the interpreter call by call.
       - name: Run the spec scripts under the JIT
         if: matrix.arch == 'native'
         shell: bash
         run: |
           WASM_JIT=eager WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" WASM_THREADS_DIR="$GITHUB_WORKSPACE/wasm-threads" go test -tags quickjs_jit ./wasm/internal/spectest ./wasm/internal/engine -count=1 -v 2>&1 | tee jit.log | grep -E "spec:|jit:|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
+          WASM_JIT=osr WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" WASM_THREADS_DIR="$GITHUB_WORKSPACE/wasm-threads" go test -tags quickjs_jit ./wasm/internal/spectest ./wasm/internal/engine -count=1 -v 2>&1 | tee osr.log | grep -E "spec:|jit:|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
           WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" go test -tags quickjs_jit ./wasm/internal/spectest -run TestJITDifferential -count=1 -v 2>&1 | tee diff.log | grep -E "modules|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
 
   # test262 with the JIT made to compile on the first call, poll Go every

@@ -45,6 +45,13 @@ type Code struct {
 	// callers do, and ReturnStub the code that returns to the engine,
 	// which the engine gives as the return address of the frame it enters.
 	GoEntry, Entry, ReturnStub int
+	// Loops are the entries at the loops' heads, by the offset of each
+	// loop instruction in the module: entered from Go as GoEntry is, with
+	// the frame as it is at the loop's head -- every operand stack entry in
+	// its position's slot, every local in its own -- they load the
+	// registers the code keeps and the locals' homes and go to the loop's
+	// head. The code from there runs the function to its return.
+	Loops map[uint32]int
 }
 
 // The context's fields' offsets.
@@ -119,8 +126,10 @@ type compiler struct {
 	gused regMask
 	xused regMask
 
-	retL   asmLabel
-	ool    []func()
+	retL asmLabel
+	ool  []func()
+	// loops are the loop entries made so far, by the loop's offset.
+	loops  map[uint32]asmLabel
 	traps  map[trapKey]asmLabel
 	trapTo map[uint64]asmLabel
 	shared bool
@@ -140,7 +149,7 @@ func Compile(req *Request) (code *Code, err error) {
 	}()
 	m := req.Module
 	c := &compiler{a: &asm{}, req: req, m: m, fn: req.Func, sig: m.FuncType(req.Func),
-		frameSlots: req.FrameSlots, traps: map[trapKey]asmLabel{}, trapTo: map[uint64]asmLabel{}}
+		frameSlots: req.FrameSlots, traps: map[trapKey]asmLabel{}, trapTo: map[uint64]asmLabel{}, loops: map[uint32]asmLabel{}}
 	c.locals, c.use = scan(m, req.Func, CPU)
 	c.nlocals = max(len(c.locals), len(c.sig.Results))
 	c.chooseHomes()
@@ -184,7 +193,14 @@ func Compile(req *Request) (code *Code, err error) {
 	if req.MaxCodeBytes > 0 && len(out) > req.MaxCodeBytes {
 		refuse(RefuseSize, "%d bytes of code", len(out))
 	}
-	return &Code{Bytes: out, GoEntry: a.Offset(goEntry), Entry: a.Offset(entry), ReturnStub: retStub}, nil
+	code = &Code{Bytes: out, GoEntry: a.Offset(goEntry), Entry: a.Offset(entry), ReturnStub: retStub}
+	if len(c.loops) > 0 {
+		code.Loops = make(map[uint32]int, len(c.loops))
+		for at, l := range c.loops {
+			code.Loops[at] = a.Offset(l)
+		}
+	}
+	return code, nil
 }
 
 // chooseHomes gives the most used locals registers of their own, for the
@@ -356,6 +372,19 @@ func (c *compiler) jumpTo(t *ctl) {
 	c.pollBranch(t.label, t.poll)
 }
 
+// loopEntry makes the entry of the loop at offset at, whose head is head:
+// out of line, it loads what the code keeps in registers, as a resumption
+// does, and goes to the head, where every entry is in its slot and no
+// register but the locals' homes is live.
+func (c *compiler) loopEntry(at uint32, head asmLabel) {
+	l := c.a.NewLabel()
+	c.loops[at] = l
+	c.ool = append(c.ool, func() {
+		c.resumeAt(l)
+		c.jmp(head)
+	})
+}
+
 // branch compiles br to depth.
 func (c *compiler) branch(depth int) {
 	t := c.ctrl[len(c.ctrl)-1-depth]
@@ -468,6 +497,7 @@ func (c *compiler) instr() {
 		params, results := c.r.blockType(c.m)
 		t := c.enter(op, params, results)
 		a.Bind(t.label)
+		c.loopEntry(at, t.label)
 	case opcode.If:
 		params, results := c.r.blockType(c.m)
 		cond := c.condition()

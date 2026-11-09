@@ -1,5 +1,7 @@
 package engine
 
+import "github.com/go-quickjs/go-quickjs/wasm/internal/module"
+
 // frameAt returns the frame object for call depth d, reused from one call
 // to the next.
 func (x *exec) frameAt(d int) *frame {
@@ -39,6 +41,9 @@ func (x *exec) run(fn *Function, code *compiled, l []uint64, r []Ref, nc, nsp, r
 	}
 	f := x.frameAt(x.depth)
 	f.l, f.r, f.inst = l, r, fn.Inst
+	if jitBuilt {
+		f.osr = osrBudget(fn.Inst.Code, code)
+	}
 	c := runSeq(f, code.body)
 	if c >= 0 {
 		runSeq(f, code.epi)
@@ -83,6 +88,9 @@ func (x *exec) tailChain(f *frame, code *compiled, l []uint64, r []Ref, nc, nsp,
 				copyResults(l, r, nl, nr, results)
 				return
 			}
+		}
+		if jitBuilt {
+			f.osr = osrBudget(fn.Inst.Code, callee)
 		}
 		c := runSeq(f, callee.body)
 		if c == sigTail {
@@ -157,6 +165,11 @@ func (x *exec) callGeneric(fn *Function, args, results []Val) {
 	l, _, _ := x.takeNum(code.nslots)
 	r, _, _ := x.takeRef(code.rslots)
 	putVals(l, r, code.params, args)
+	for i, t := range fn.Sig.Params {
+		if s := code.params[i]; !s.ref {
+			l[s.i] = narrow(l[s.i], t)
+		}
+	}
 	x.run(fn, code, l, r, nc, nsp, rc, rsp)
 	getVals(l, r, code.results, results)
 	x.nc, x.nsp, x.rc, x.rsp = nc, nsp, rc, rsp
@@ -198,9 +211,24 @@ func (x *exec) hostCall(fn *Function, args []Val) []Val {
 		}
 		panic(hostError{err})
 	}
+	for i, t := range fn.Sig.Results {
+		res[i].N = narrow(res[i].N, t)
+	}
 	x.calls = x.calls[:len(x.calls)-1]
 	x.depth--
 	return res
+}
+
+// narrow keeps a value's upper half clear for a 32-bit type. The
+// interpreter reads only the lower half, but native code, entered with the
+// interpreter's frame at a call or at a loop's head, keeps every i32 and
+// f32 so in a slot and a register: what comes from the host is narrowed as
+// it enters a frame.
+func narrow(v uint64, t module.ValueType) uint64 {
+	if t.Kind == module.KindI32 || t.Kind == module.KindF32 {
+		return uint64(uint32(v))
+	}
+	return v
 }
 
 // callArgs evaluates arguments into a fresh Val slice.

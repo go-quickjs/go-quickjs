@@ -580,7 +580,7 @@ func logJIT(t *testing.T) {
 		reasons = append(reasons, r)
 	}
 	sort.Slice(reasons, func(i, j int) bool { return st.Refused[reasons[i]] > st.Refused[reasons[j]] })
-	t.Logf("jit: %d functions compiled, %d refused", st.Compiled, refused)
+	t.Logf("jit: %d functions compiled, %d refused; %d calls went on natively from a loop (OSR)", st.Compiled, refused, st.OSR)
 	for _, r := range reasons {
 		t.Logf("jit: %6d refused: %s", st.Refused[r], r)
 	}

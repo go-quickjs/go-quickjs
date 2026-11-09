@@ -19,7 +19,7 @@ func (c *compiler) instr() {
 	case opcode.Nop:
 	case opcode.Block, opcode.Loop:
 		params, results := c.r.blockType(c.m)
-		c.enter(op, params, results)
+		c.enter(op, params, results).at = at
 	case opcode.If:
 		params, results := c.r.blockType(c.m)
 		cond := c.pop()

@@ -4,6 +4,7 @@ package engine
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"runtime"
 	"strconv"
@@ -25,6 +26,14 @@ func jitAvailable() bool { return ijit.RawSupported() }
 // own, and the link table native calls go through.
 type codeJIT struct {
 	threshold int32
+	// osrThreshold is the number of back edges after which a call running
+	// in the interpreter goes on in native code; math.MaxInt32 is never.
+	osrThreshold atomic.Int32
+	// osrCalls has calls of a function with loops, made from Go or the
+	// interpreter, run in the interpreter and enter the native code at
+	// their first back edge: osrFirst its first call (WASM_JIT=eager),
+	// osrEvery every call (WASM_JIT=osr, EnterLoopsForTest).
+	osrCalls int8
 	// mu serializes compiles.
 	mu sync.Mutex
 	// run is held for reading while native code of the Code runs, and for
@@ -45,6 +54,9 @@ type nativeFn struct {
 	goEntry int
 	retStub uintptr
 	nslots  int
+	// loops are the offsets of the loops' entries in the code, by the
+	// loop instruction's offset in the module.
+	loops map[uint32]int
 }
 
 // jitInstance is what an instance's native code reads of it: each global's
@@ -84,12 +96,16 @@ func (x *exec) jitLevel() int { return x.jit.n }
 
 func (x *exec) setJITLevel(n int) { x.jit.n = n }
 
+// jitEnvOSR is which calls WASM_JIT has enter loops' native code at their
+// first back edge (codeJIT.osrCalls): "eager" the first, "osr" every one.
+var jitEnvOSR = map[string]int8{"eager": osrFirst, "osr": osrEvery}[os.Getenv("WASM_JIT")]
+
 // jitEnv is WASM_JIT's threshold, or -1 for none.
 var jitEnv = func() int {
 	switch v := os.Getenv("WASM_JIT"); v {
 	case "", "off", "0":
 		return -1
-	case "eager":
+	case "eager", "osr":
 		return 0
 	case "on", "1":
 		return DefaultJITThreshold
@@ -101,10 +117,58 @@ var jitEnv = func() int {
 	}
 }()
 
+// osrEnv is WASM_JIT_OSR's threshold, math.MaxInt32 for "off", or -1 for
+// none.
+var osrEnv = func() int {
+	switch v := os.Getenv("WASM_JIT_OSR"); v {
+	case "":
+		return -1
+	case "off":
+		return math.MaxInt32
+	default:
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return n
+		}
+		return -1
+	}
+}()
+
 func (c *Code) jitFromEnv() {
 	if jitEnv >= 0 {
 		c.enableJIT(jitEnv)
+		if jitEnvOSR != 0 {
+			c.setOSRCalls(jitEnvOSR)
+		}
 	}
+}
+
+const (
+	osrFirst = 1 + iota
+	osrEvery
+)
+
+func (c *Code) enterLoopsForTest() { c.setOSRCalls(osrEvery) }
+
+// setOSRCalls sets which calls of a function with loops enter its native
+// code at their first back edge (codeJIT.osrCalls), or none for 0.
+func (c *Code) setOSRCalls(mode int8) {
+	if cj := c.jit.Load(); cj != nil {
+		if mode != 0 {
+			c.setOSRThreshold(0)
+		}
+		cj.osrCalls = mode
+	}
+}
+
+func (c *Code) setOSRThreshold(n int) {
+	cj := c.jit.Load()
+	if cj == nil {
+		return
+	}
+	if n < 0 {
+		n = math.MaxInt32
+	}
+	cj.osrThreshold.Store(int32(min(n, math.MaxInt32)))
 }
 
 func (c *Code) enableJIT(threshold int) bool {
@@ -121,6 +185,10 @@ func (c *Code) enableJIT(threshold int) bool {
 		return true
 	}
 	cj := &codeJIT{threshold: int32(threshold), arena: ijit.NewArena(), links: make([]uintptr, max(len(c.Module.Functions), 1))}
+	cj.osrThreshold.Store(DefaultOSRThreshold)
+	if osrEnv >= 0 {
+		cj.osrThreshold.Store(int32(osrEnv))
+	}
 	runtime.AddCleanup(c, func(cj *codeJIT) { cj.close() }, cj)
 	c.jit.Store(cj)
 	return true
@@ -140,12 +208,20 @@ func (cj *codeJIT) close() {
 // called often enough, or nil.
 func (cj *codeJIT) native(c *Code, idx uint32, cd *compiled) *nativeFn {
 	if nat := cd.native.Load(); nat != nil {
+		if cj.osrCalls == osrEvery && len(nat.loops) > 0 {
+			return nil
+		}
 		return nat
 	}
 	if cd.refused.Load() || cd.hot.Add(1) <= cj.threshold {
 		return nil
 	}
-	return cj.compile(c, idx, cd)
+	nat := cj.compile(c, idx, cd)
+	if nat != nil && cj.osrCalls != 0 && len(nat.loops) > 0 {
+		// The call goes on in the interpreter, into the loops' entries.
+		return nil
+	}
+	return nat
 }
 
 func (cj *codeJIT) compile(c *Code, idx uint32, cd *compiled) (nat *nativeFn) {
@@ -173,7 +249,7 @@ func (cj *codeJIT) compile(c *Code, idx uint32, cd *compiled) (nat *nativeFn) {
 		return nil
 	}
 	cj.raws = append(cj.raws, raw)
-	nat = &nativeFn{raw: raw, base: raw.Base(), goEntry: code.GoEntry, retStub: raw.Base() + uintptr(code.ReturnStub), nslots: cd.nslots}
+	nat = &nativeFn{raw: raw, base: raw.Base(), goEntry: code.GoEntry, retStub: raw.Base() + uintptr(code.ReturnStub), nslots: cd.nslots, loops: code.Loops}
 	cd.native.Store(nat)
 	atomic.StoreUintptr(&cj.links[idx], nat.base+uintptr(code.Entry))
 	countCompiled()
@@ -209,7 +285,57 @@ func (x *exec) runNative(fn *Function, code *compiled, l []uint64) (int32, bool)
 	if nat == nil {
 		return 0, false
 	}
-	return x.enterNative(cj, fn, nat, l), true
+	return x.enterNative(cj, fn, nat, l, nat.goEntry), true
+}
+
+// osrBudget is the number of back edges a call of the function whose body
+// is cd runs in the interpreter before it goes on in native code: none if
+// the function has native code already, never if the JIT is off or has
+// refused it.
+func osrBudget(c *Code, cd *compiled) int32 {
+	cj := c.jit.Load()
+	switch {
+	case cj == nil || cd.refused.Load():
+		return math.MaxInt32
+	case cd.native.Load() != nil:
+		return 0
+	}
+	return cj.osrThreshold.Load()
+}
+
+// osr has the call of function idx running in the interpreter in frame f
+// go on in the function's native code, compiling it if it has none, from
+// the head of its loop at offset at: f is as the loop's head has it, as
+// the native code's entry there wants it. The native code runs the call to
+// its return, leaving the results where the interpreter's return does, and
+// osr returns the signal for the loop to return: sigReturn, or sigTail with
+// the exec's tail call set. It reports false where the function has no
+// native code, or the loop no entry, and the interpreter goes on.
+func (x *exec) osr(f *frame, idx, at uint32) (int32, bool) {
+	code := f.inst.Code
+	cj := code.jit.Load()
+	if cj == nil {
+		return 0, false
+	}
+	cd := code.get(idx)
+	nat := cd.native.Load()
+	if nat == nil {
+		if cd.refused.Load() {
+			return 0, false
+		}
+		if nat = cj.compile(code, idx, cd); nat == nil {
+			return 0, false
+		}
+	}
+	entry, ok := nat.loops[at]
+	if !ok {
+		return 0, false
+	}
+	jitStats.osr.Add(1)
+	if x.enterNative(cj, f.inst.Funcs[idx], nat, f.l, entry) == sigTail {
+		return sigTail, true
+	}
+	return sigReturn, true
 }
 
 // globalsAddr returns the address of the table of the instance's globals'
@@ -264,9 +390,10 @@ func (x *exec) jitRoom(from uintptr, n int) uintptr {
 	return from - old + start
 }
 
-// enterNative runs fn's native code in frame l, as a new level, and handles
-// its exits until the frame returns.
-func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64) int32 {
+// enterNative runs fn's native code in frame l, as a new level, from offset
+// entry -- its Go entry, or a loop's -- and handles its exits until the
+// frame returns.
+func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64, entry int) int32 {
 	if x.jit.n == len(x.jit.levels) {
 		x.jit.levels = append(x.jit.levels, new(jitLevel))
 	}
@@ -304,7 +431,7 @@ func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64)
 	x.jit.rs[i+2] = wjit.Site(fn.Index, 0)
 	ctx.RSP = from + rsEntryBytes
 
-	raw, off := nat.raw, nat.goEntry
+	raw, off := nat.raw, entry
 	for {
 		if len(inst.Memories) > 0 {
 			m := inst.Memories[0]
@@ -410,15 +537,6 @@ func (x *exec) jitUnsync(lv *jitLevel) {
 	x.calls = x.calls[:lv.calls]
 	x.depth = lv.depth
 	x.nc, x.nsp = lv.nc, lv.nsp
-}
-
-// narrow keeps a value's upper half clear for a 32-bit type, as native code
-// keeps every i32 and f32 in a slot.
-func narrow(v uint64, t module.ValueType) uint64 {
-	if t.Kind == module.KindI32 || t.Kind == module.KindF32 {
-		return uint64(uint32(v))
-	}
-	return v
 }
 
 // jitArgs reads a call's arguments of signature ft from the frame's slots

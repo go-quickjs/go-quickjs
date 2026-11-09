@@ -148,7 +148,10 @@ type ctl struct {
 	base   int
 	params []module.ValueType
 	result []module.ValueType
-	body   []stmt
+	// at is the construct's offset in the module, which names a loop to
+	// the JIT.
+	at   uint32
+	body []stmt
 	// then holds an if's then branch once its else began; hasElse says so.
 	then    []stmt
 	hasElse bool
@@ -512,7 +515,7 @@ func (c *compiler) end() {
 		}
 		s = group.stmt()
 	case opcode.Loop:
-		s = loopStmt(body)
+		s = c.loopStmt(body, t.at)
 	case opcode.If:
 		s = ifStmt(t.cond, t.then, body)
 	default:
@@ -611,6 +614,48 @@ func blockStmt(body []stmt) stmt {
 			}
 		}
 		return 0
+	}
+}
+
+// loopStmt returns the statement of a loop whose body is body, at offset at:
+// the loop of a function the JIT may compile asks for its native code once
+// the call has run enough back edges (osrLoopStmt).
+func (c *compiler) loopStmt(body []stmt, at uint32) stmt {
+	if jitBuilt && c.code.jit.Load() != nil {
+		return osrLoopStmt(body, c.fn, at)
+	}
+	return loopStmt(body)
+}
+
+// osrLoopStmt is loopStmt for a loop of function fn that may go on in the
+// function's native code. Each back edge counts down the frame's osr; when
+// it runs out, the frame's state is the loop head's -- the loop's
+// parameters and every entry beneath them in their slots, the locals in
+// theirs -- and the call goes on from the head of the loop in the native
+// code, which runs it to the function's return (exec.osr). The loop then
+// returns sigReturn, the results in place, or sigTail; where there is no
+// native code the frame stops counting.
+func osrLoopStmt(body []stmt, fn, at uint32) stmt {
+	return func(f *frame) int32 {
+		for {
+			c := runSeq(f, body)
+			if c == 1 {
+				if f.x.poll--; f.x.poll <= 0 {
+					f.x.pollContext()
+				}
+				if f.osr--; f.osr <= 0 {
+					if sig, ok := f.x.osr(f, fn, at); ok {
+						return sig
+					}
+					f.osr = math.MaxInt32
+				}
+				continue
+			}
+			if c > 0 {
+				return c - 1
+			}
+			return c
+		}
 	}
 }
 

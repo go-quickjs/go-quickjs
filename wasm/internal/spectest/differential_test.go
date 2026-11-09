@@ -24,7 +24,9 @@ import (
 // whose signature is numbers with the same arguments on both, the values
 // the scripts use, the edges of each type and random ones, comparing the
 // results, the traps, and every memory's bytes and global's value after
-// each call.
+// each call. It does it again with every call of a function with loops
+// that Go makes running in the interpreter until its first back edge and
+// going on natively from that loop's head (osr).
 func TestJITDifferential(t *testing.T) {
 	dir := os.Getenv("WASM_SPEC_DIR")
 	if dir == "" {
@@ -41,11 +43,22 @@ func TestJITDifferential(t *testing.T) {
 	m32, m64 := engine.MaxMemory32Pages, engine.MaxMemory64Pages
 	engine.MaxMemory32Pages, engine.MaxMemory64Pages = 1024, 1024
 	defer func() { engine.MaxMemory32Pages, engine.MaxMemory64Pages = m32, m64 }()
-	only := os.Getenv("WASM_SPEC_ONLY")
 	var files []string
 	files = append(files, scripts(t, filepath.Join(dir, "test", "core"))...)
 	files = append(files, scripts(t, filepath.Join(dir, "test", "legacy"))...)
-	d := &differ{t: t, rng: rand.New(rand.NewPCG(1, 2))}
+	for _, osr := range []bool{false, true} {
+		name := "entry"
+		if osr {
+			name = "osr"
+		}
+		t.Run(name, func(t *testing.T) { differential(t, files, osr) })
+	}
+}
+
+func differential(t *testing.T, files []string, osr bool) {
+	only := os.Getenv("WASM_SPEC_ONLY")
+	before := engine.ReadJITStats()
+	d := &differ{t: t, rng: rand.New(rand.NewPCG(1, 2)), osr: osr}
 	for _, f := range files {
 		if only != "" && !strings.Contains(filepath.ToSlash(f), only) {
 			continue
@@ -66,18 +79,20 @@ func TestJITDifferential(t *testing.T) {
 		}
 	}
 	st := engine.ReadJITStats()
-	t.Logf("differential: %d modules, %d functions, %d calls compared (%d stopped by the time limit); %d functions compiled natively",
-		d.modules, d.funcs, d.calls, d.timeouts, st.Compiled)
+	t.Logf("differential: %d modules, %d functions, %d calls compared (%d stopped by the time limit); %d functions compiled natively, %d calls went on natively from a loop",
+		d.modules, d.funcs, d.calls, d.timeouts, st.Compiled-before.Compiled, st.OSR-before.OSR)
 	if d.failures > 0 {
 		t.Fatalf("%d differences", d.failures)
 	}
 }
 
 type differ struct {
-	t        *testing.T
-	rng      *rand.Rand
-	file     string
-	consts   map[module.Kind][]uint64
+	t      *testing.T
+	rng    *rand.Rand
+	file   string
+	consts map[module.Kind][]uint64
+	// osr enters every loop of a native call from the interpreter.
+	osr      bool
 	modules  int
 	funcs    int
 	calls    int
@@ -148,6 +163,9 @@ func (d *differ) module(c *wast.ModuleCommand) {
 	}
 	nat := engine.NewCode(code.Module)
 	nat.EnableJIT(0)
+	if d.osr {
+		nat.EnterLoopsForTest()
+	}
 	jit, err := newRunner(d.t, d.file).instantiate(nat)
 	if err != nil {
 		d.fail("line %d: instantiated interpreted, not natively: %v", c.Line(), err)

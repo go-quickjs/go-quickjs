@@ -15,6 +15,9 @@ type frame struct {
 	l    []uint64
 	r    []Ref
 	inst *Instance
+	// osr counts down the back edges the call runs in the interpreter
+	// before its loops ask for the function's native code (osrLoopStmt).
+	osr int32
 }
 
 // exec is the state of a chain of wasm calls entered from the host: the

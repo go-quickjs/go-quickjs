@@ -45,12 +45,63 @@ the native code. A function the compiler refuses (see Refusals) is marked
 and stays in the interpreter for good; so does one whose code cannot be
 placed. A compiler panic is a refusal (`internal`), never a crash.
 
-There is no entry into a loop already running (OSR): a function called once
-that loops for long runs interpreted. An optimizing tier, later, would build
-SSA from the body and replace the baseline code of the hottest functions.
+A call that runs in the interpreter counts its loops' back edges (the
+frame's `osr`, set when the call begins); past the Code's OSR threshold
+(`DefaultOSRThreshold`, 1,000 back edges; `SetOSRThreshold`,
+`WASM_JIT_OSR`) the function is compiled, if it is not, and the call goes
+on in its native code from the head of the loop it is in: **on-stack
+replacement**, for a function called too few times to be compiled whose
+loops run long -- a program's main loop, a decompressor's, an
+interpreter's dispatch. A call of a function that has native code but runs
+in the interpreter -- one that began before the function was compiled, a
+copy of it deeper on the stack being the one that compiled it -- goes on
+natively at its first back edge. A function the compiler refuses has its
+calls' loops stop counting, for the call and for later ones. Under
+`WASM_JIT=eager` the first call of each function with loops runs in the
+interpreter and goes on natively at its first back edge, and under
+`WASM_JIT=osr` every call Go or the interpreter makes does, so that the
+spec scripts run the loops' entries.
+
+An optimizing tier, later, would build SSA from the body and replace the
+baseline code of the hottest functions.
 
 The tiers share the interpreter's frame, so a call may cross between them in
-either direction.
+either direction, and a call may cross from the interpreter to native code
+at a loop's head.
+
+## On-stack replacement
+
+At a loop's head both tiers have the frame in the same state: every operand
+stack entry in its position's slot, the loop's parameters at its base, every
+local in its own slot (native code's homes are stored at every exit and
+loaded at every entry). The interpreter's loop statement stores the branch's
+values into the loop's slots before it counts the back edge, so its frame
+there is what native code's loop label wants, with no translation.
+
+Each loop has an entry (`Code.Loops`, by the loop instruction's offset in
+the module, which both tiers read the body from): out of line, it loads
+what a resumption loads -- L, memory 0's base (and size, on arm64), the
+poll counter, the return stack's entry, the locals' homes -- and jumps to
+the loop's head. The engine enters it as it enters the Go entry, as a new
+level with the frame's return stack entry (`enterNative`, `exec.osr`), with
+the interpreter's frame, depth and call stack as they are at the loop.
+
+From the loop's head the native code runs the rest of the function, the
+loop's exits and the constructs around it included, to the function's
+return: it leaves the results in slots 0 up, where the interpreter's return
+does, and the loop statement returns `sigReturn`, which every enclosing
+statement passes out and `run` takes as a return already made (the
+epilogue's copies are not run). A tail call the native code leaves to Go
+for the frame comes back as `sigTail`, which `run` and `tailChain` make as
+the interpreter's own. A trap's frames, the polls and the depth are those
+of any level.
+
+A function the compiler refuses -- one with exception handlers among them,
+which the interpreter runs under a recover of their own -- is never entered
+at a loop. The engine narrows what enters a frame from the host -- the
+arguments of an `Invoke`, a host function's results -- to the halves native
+code keeps clear, which the interpreter alone did not need: a value left in
+a slot under a loop is read by native code after the loop's entry.
 
 ## Frames
 
@@ -170,7 +221,8 @@ and X0 on arm64:
 Go enters a function through `RawCode.EnterAt` at its Go entry, which loads
 L, memory 0's base (and size, on arm64), the poll counter and the return
 stack's entry from the context; native callers jump to its entry, past
-that.
+that. A loop's entry loads them too, and the locals' homes (see On-stack
+replacement).
 Each function's code starts with its return stub, which stores `ExitReturn`
 and returns. Before entering, Go pushes a return stack entry whose return
 address is that stub: the function returns as every frame does, and its
@@ -186,7 +238,7 @@ is in its slot.
 
 | Exit | Go |
 |---|---|
-| `ExitReturn` | the frame Go entered returned |
+| `ExitReturn` | the frame Go entered -- at its start or at a loop's head -- returned |
 | `ExitTrap` | panics with `engine.Trap`: the trap's code, its frame's offset |
 | `ExitCall` | calls a function -- imported, the host's, without native code, or with no room -- with `callGeneric`, the arguments and results in the frame's slots |
 | `ExitCallIndirect` | finds the function as the interpreter does, its traps included, and calls it |
@@ -360,8 +412,10 @@ barrier").
 ```sh
 WASM_SPEC_DIR=/path/to/spec WASM_THREADS_DIR=/path/to/threads WASM_JIT=eager \
   go test -tags quickjs_jit ./wasm/internal/spectest -count=1 -run TestSpec -v
+WASM_SPEC_DIR=/path/to/spec WASM_THREADS_DIR=/path/to/threads WASM_JIT=osr \
+  go test -tags quickjs_jit ./wasm/internal/spectest -count=1 -run TestSpec -v
 WASM_SPEC_DIR=/path/to/spec go test -tags quickjs_jit ./wasm/internal/spectest -run TestJITDifferential -v
-go test -tags quickjs_jit ./wasm/internal/engine -run JIT
+go test -tags quickjs_jit ./wasm/internal/engine -run 'JIT|OSR'
 (cd internal/jit/verify && go test -run 'TestAMD64|TestARM64' -tags quickjs_jit .)
 ```
 
@@ -369,4 +423,7 @@ go test -tags quickjs_jit ./wasm/internal/engine -run JIT
 module alone both interpreted and compiled at its first call, calls each
 numeric export with the scripts' constants, each type's edges and random
 values, and compares the results (any NaN for a NaN), the traps, and the
-memories and globals after every call.
+memories and globals after every call; then again with every call of a
+function with loops entering its native code at its first back edge
+(`osr`). The spec runs log how many calls went on natively from a loop
+(`ReadJITStats().OSR`).
