@@ -113,6 +113,37 @@ func scan(m *module.Module, fn uint32, feat Features, locals []module.ValueType,
 	defer func() { use.loops = loops }()
 	depth := 0
 	for r.pc < end {
+		// The instructions scan only skips -- the numeric ones but those
+		// that need a CPU's feature, constants, memory accesses, branches
+		// -- and the locals' are read by their first byte's kind.
+		switch k := scanKinds[r.b[r.pc]]; k {
+		case scanSlow:
+		case scanLocal:
+			get := r.b[r.pc] == byte(opcode.LocalGet)
+			r.pc++
+			k := r.u32()
+			use.weight[k] += 1 << (3 * min(depth, 6))
+			if !get {
+				use.written[k] = true
+			}
+			continue
+		default:
+			r.pc++
+			switch k {
+			case scanLEB:
+				for r.b[r.pc]&0x80 != 0 {
+					r.pc++
+				}
+				r.pc++
+			case scanMemarg:
+				r.memarg()
+			case scan4:
+				r.pc += 4
+			case scan8:
+				r.pc += 8
+			}
+			continue
+		}
 		op := r.opcode()
 		switch op.Prefix() {
 		case opcode.PrefixSIMD:
@@ -214,6 +245,45 @@ func scan(m *module.Module, fn uint32, feat Features, locals []module.ValueType,
 	}
 	return locals, use
 }
+
+// The kinds of an instruction's first byte, for scan: scanSlow for one
+// scan reads by its opcode, the others for one it skips -- with no
+// immediate, a LEB128, a memory access's immediate, 4 bytes, 8 bytes --
+// and a local's.
+const (
+	scanSlow = iota
+	scanNone
+	scanLEB
+	scanMemarg
+	scan4
+	scan8
+	scanLocal
+)
+
+// scanKinds is the kind of each first byte (scanSlow for a prefix's).
+var scanKinds = func() (k [256]uint8) {
+	for op := opcode.I32Eqz; op <= opcode.I64SExtendI32; op++ {
+		switch op {
+		case opcode.I32Popcnt, opcode.I64Popcnt,
+			opcode.F32Ceil, opcode.F32Floor, opcode.F32Trunc, opcode.F32NearestInt,
+			opcode.F64Ceil, opcode.F64Floor, opcode.F64Trunc, opcode.F64NearestInt:
+			continue
+		}
+		k[op] = scanNone
+	}
+	for _, op := range []opcode.Opcode{opcode.Nop, opcode.Drop, opcode.Select, opcode.Return} {
+		k[op] = scanNone
+	}
+	for _, op := range []opcode.Opcode{opcode.Br, opcode.BrIf, opcode.I32Const, opcode.I64Const} {
+		k[op] = scanLEB
+	}
+	for op := opcode.I32LoadMem; op <= opcode.I64StoreMem32; op++ {
+		k[op] = scanMemarg
+	}
+	k[opcode.F32Const], k[opcode.F64Const] = scan4, scan8
+	k[opcode.LocalGet], k[opcode.LocalSet], k[opcode.LocalTee] = scanLocal, scanLocal, scanLocal
+	return k
+}()
 
 // grow is s with n elements, cleared, from its memory where it has room.
 func grow[T any](s []T, n int) []T {
