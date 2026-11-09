@@ -10,10 +10,12 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	ijit "github.com/go-quickjs/go-quickjs/internal/jit"
 	wjit "github.com/go-quickjs/go-quickjs/wasm/internal/jit"
+	wopt "github.com/go-quickjs/go-quickjs/wasm/internal/jit/opt"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/opcode"
 )
@@ -51,7 +53,20 @@ type codeJIT struct {
 	// catches says a function of the code has catch clauses: exits are
 	// handled under a recover that takes exceptions to them.
 	catches atomic.Bool
+	// optThreshold is the number of calls of a function's baseline code
+	// -- a poll its code exits for counting optPollWeight of them -- after
+	// which the optimizing tier compiles it; 0 has the optimizing tier
+	// compile each function it accepts in the baseline's place, and a
+	// negative one turns it off. counters are the functions' countdowns,
+	// which their baseline code decrements at its entry; they never move.
+	optThreshold atomic.Int32
+	counters     []int64
 }
+
+// optPollWeight is how many calls a poll exit of a function's baseline
+// code counts toward the optimizing tier: the poll counter ran out in its
+// loops or its calls.
+const optPollWeight = 250
 
 // nativeFn is a function's native code.
 type nativeFn struct {
@@ -65,6 +80,33 @@ type nativeFn struct {
 	loops map[uint32]int
 	// handlers are the try_tables' catch clauses (wjit.Handler).
 	handlers []wjit.Handler
+	// opt says the code is the optimizing tier's, and prev is the
+	// baseline code it replaced, if any: frames that began in it run on
+	// in it, and calls running in the interpreter enter its loops.
+	opt  bool
+	prev *nativeFn
+}
+
+// holding is the code, n's or a code it replaced, that holds address
+// addr: where a frame that exited resumes.
+func (n *nativeFn) holding(addr uintptr) *nativeFn {
+	for p := n; p != nil; p = p.prev {
+		if addr >= p.base && addr < p.base+uintptr(p.raw.Size()) {
+			return p
+		}
+	}
+	return n
+}
+
+// loopCode is the code whose loops' entries a call running in the
+// interpreter enters: n's, or the baseline code it replaced.
+func (n *nativeFn) loopCode() *nativeFn {
+	for p := n; p != nil; p = p.prev {
+		if len(p.loops) > 0 {
+			return p
+		}
+	}
+	return n
 }
 
 // jitInstance is what an instance's native code reads of it: the
@@ -159,12 +201,37 @@ func (x *exec) setJITLevel(n int) { x.jit.n = n }
 // first back edge (codeJIT.osrCalls): "eager" the first, "osr" every one.
 var jitEnvOSR = map[string]int8{"eager": osrFirst, "osr": osrEvery}[os.Getenv("WASM_JIT")]
 
+// optEnv is the optimizing tier's threshold WASM_JIT_OPT sets -- a number
+// of calls, "on" for DefaultOptThreshold, "eager" for 0, "off" for -1 --
+// or WASM_JIT=opt, which has every function compiled by it at its first
+// call; -2 is none.
+var optEnv = func() int {
+	if os.Getenv("WASM_JIT") == "opt" {
+		return 0
+	}
+	switch v := os.Getenv("WASM_JIT_OPT"); v {
+	case "":
+		return -2
+	case "off":
+		return -1
+	case "eager":
+		return 0
+	case "on":
+		return DefaultOptThreshold
+	default:
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return n
+		}
+		return -2
+	}
+}()
+
 // jitEnv is WASM_JIT's threshold, or -1 for none.
 var jitEnv = func() int {
 	switch v := os.Getenv("WASM_JIT"); v {
 	case "", "off", "0":
 		return -1
-	case "eager", "osr":
+	case "eager", "osr", "opt":
 		return 0
 	case "on", "1":
 		return DefaultJITThreshold
@@ -219,6 +286,12 @@ func (c *Code) setOSRCalls(mode int8) {
 	}
 }
 
+func (c *Code) setOptThreshold(n int) {
+	if cj := c.jit.Load(); cj != nil && wopt.Available {
+		cj.optThreshold.Store(int32(max(min(n, math.MaxInt32), -1)))
+	}
+}
+
 func (c *Code) setOSRThreshold(n int) {
 	cj := c.jit.Load()
 	if cj == nil {
@@ -243,7 +316,12 @@ func (c *Code) enableJIT(threshold int) bool {
 		cj.threshold = int32(threshold)
 		return true
 	}
-	cj := &codeJIT{threshold: int32(threshold), arena: ijit.NewArena(), links: make([]uintptr, max(len(c.Module.Functions), 1))}
+	n := max(len(c.Module.Functions), 1)
+	cj := &codeJIT{threshold: int32(threshold), arena: ijit.NewArena(), links: make([]uintptr, n), counters: make([]int64, n)}
+	cj.optThreshold.Store(-1)
+	if optEnv >= -1 && wopt.Available {
+		cj.optThreshold.Store(int32(optEnv))
+	}
 	cj.osrThreshold.Store(DefaultOSRThreshold)
 	if osrEnv >= 0 {
 		cj.osrThreshold.Store(int32(osrEnv))
@@ -267,7 +345,7 @@ func (cj *codeJIT) close() {
 // called often enough, or nil.
 func (cj *codeJIT) native(c *Code, idx uint32, cd *compiled) *nativeFn {
 	if nat := cd.native.Load(); nat != nil {
-		if cj.osrCalls == osrEvery && len(nat.loops) > 0 {
+		if cj.osrCalls == osrEvery && len(nat.loopCode().loops) > 0 {
 			return nil
 		}
 		return nat
@@ -289,7 +367,19 @@ func (cj *codeJIT) compile(c *Code, idx uint32, cd *compiled) (nat *nativeFn) {
 	if nat := cd.native.Load(); nat != nil || cd.refused.Load() {
 		return nat
 	}
-	code, err := compileNative(c, idx, cd)
+	if cj.optThreshold.Load() == 0 {
+		if nat := cj.compileOpt(c, idx, cd, nil); nat != nil {
+			return nat
+		}
+	}
+	var counter uint64
+	if t := cj.optThreshold.Load(); t > 0 && !cd.optDone.Load() {
+		atomic.StoreInt64(&cj.counters[idx], int64(t))
+		counter = uint64(uintptr(unsafe.Pointer(&cj.counters[idx])))
+	}
+	start := time.Now()
+	code, err := compileNative(c, idx, cd, counter)
+	countTime(&jitStats.baseTime, start)
 	if err != nil {
 		cd.refused.Store(true)
 		reason := "internal"
@@ -318,15 +408,124 @@ func (cj *codeJIT) compile(c *Code, idx uint32, cd *compiled) (nat *nativeFn) {
 	return nat
 }
 
+// compileOpt compiles function idx with the optimizing tier, placing the
+// code in the place of prev, its baseline code if it has one, in the link
+// table; it returns nil where the tier refuses the function, which keeps
+// prev. cj.mu is held.
+func (cj *codeJIT) compileOpt(c *Code, idx uint32, cd *compiled, prev *nativeFn) *nativeFn {
+	if cd.optDone.Load() {
+		return nil
+	}
+	cd.optDone.Store(true)
+	start := time.Now()
+	code, err := wopt.Compile(request(c, idx, cd, 0))
+	countTime(&jitStats.optTime, start)
+	if err != nil {
+		reason := "internal"
+		if r, ok := err.(*wjit.Refusal); ok {
+			reason = r.Reason
+		}
+		countOptRefused(reason)
+		return nil
+	}
+	cj.run.Lock()
+	raw, err := ijit.PlaceRaw(cj.arena, code.Bytes)
+	cj.run.Unlock()
+	if err != nil {
+		countOptRefused("unplaced")
+		return nil
+	}
+	cj.raws = append(cj.raws, raw)
+	nat := &nativeFn{raw: raw, base: raw.Base(), goEntry: code.GoEntry, retStub: raw.Base() + uintptr(code.ReturnStub), nslots: cd.nslots, opt: true, prev: prev}
+	cd.native.Store(nat)
+	atomic.StoreUintptr(&cj.links[idx], nat.base+uintptr(code.Entry))
+	countOptimized()
+	return nat
+}
+
+// tierUp has function idx, whose baseline code counted enough calls,
+// compiled by the optimizing tier, returning the optimized code, or nil
+// where the tier refuses it.
+func (cj *codeJIT) tierUp(c *Code, idx uint32, cd *compiled) *nativeFn {
+	cj.mu.Lock()
+	defer cj.mu.Unlock()
+	if nat := cd.native.Load(); nat != nil && nat.opt {
+		return nat
+	}
+	nat := cj.compileOpt(c, idx, cd, cd.native.Load())
+	if nat == nil {
+		atomic.StoreInt64(&cj.counters[idx], math.MaxInt64)
+	}
+	return nat
+}
+
+// loopsFor compiles baseline code for function idx, whose native code is
+// the optimizing tier's alone, for its loops' entries: it is kept as the
+// code the optimized code replaced, out of the link table. It returns the
+// function's native code, or nil where the baseline refuses it.
+func (cj *codeJIT) loopsFor(c *Code, idx uint32, cd *compiled) *nativeFn {
+	cj.mu.Lock()
+	defer cj.mu.Unlock()
+	nat := cd.native.Load()
+	if !nat.opt || nat.prev != nil {
+		return nat
+	}
+	start := time.Now()
+	code, err := compileNative(c, idx, cd, 0)
+	countTime(&jitStats.baseTime, start)
+	if err != nil {
+		return nil
+	}
+	cj.run.Lock()
+	raw, err := ijit.PlaceRaw(cj.arena, code.Bytes)
+	cj.run.Unlock()
+	if err != nil {
+		return nil
+	}
+	cj.raws = append(cj.raws, raw)
+	if len(code.Handlers) > 0 {
+		cj.catches.Store(true)
+	}
+	base := &nativeFn{raw: raw, base: raw.Base(), goEntry: code.GoEntry, retStub: raw.Base() + uintptr(code.ReturnStub), nslots: cd.nslots, loops: code.Loops, handlers: code.Handlers}
+	n := *nat
+	n.prev = base
+	cd.native.Store(&n)
+	countCompiled()
+	return &n
+}
+
+// pollSample counts a poll exit of function fn's code toward the
+// optimizing tier, compiling it there if the count runs out: the call
+// that exited goes on in the baseline code, and later calls enter the
+// optimized code.
+func (cj *codeJIT) pollSample(c *Code, fn uint32) {
+	if cj.optThreshold.Load() <= 0 {
+		return
+	}
+	cd := c.get(fn)
+	if nat := cd.native.Load(); nat == nil || nat.opt || cd.optDone.Load() {
+		return
+	}
+	if atomic.AddInt64(&cj.counters[fn], -optPollWeight) < 0 {
+		cj.tierUp(c, fn, cd)
+	}
+}
+
 // compileNative compiles function idx; a panic of the compiler's is a
-// refusal, and the function stays in the interpreter.
-func compileNative(c *Code, idx uint32, cd *compiled) (code *wjit.Code, err error) {
+// refusal, and the function stays in the interpreter. counter is the
+// address of its countdown to the optimizing tier, or 0.
+func compileNative(c *Code, idx uint32, cd *compiled, counter uint64) (code *wjit.Code, err error) {
 	defer func() {
 		if p := recover(); p != nil {
 			err = fmt.Errorf("wasm jit: compiling function %d: %v", idx, p)
 		}
 	}()
-	return wjit.Compile(&wjit.Request{
+	return wjit.Compile(request(c, idx, cd, counter))
+}
+
+// request is the request to compile function idx.
+func request(c *Code, idx uint32, cd *compiled, counter uint64) *wjit.Request {
+	return &wjit.Request{
 		Module:         c.Module,
 		Func:           idx,
 		FrameSlots:     cd.nslots,
@@ -340,7 +539,8 @@ func compileNative(c *Code, idx uint32, cd *compiled) (code *wjit.Code, err erro
 		StoreRef:       jitStoreRef,
 		Layout:         jitLayout,
 		CaughtSlot:     cd.caught,
-	})
+		TierCounter:    counter,
+	}
 }
 
 // nativeRefSlots is the number of reference slots of the function's frame
@@ -406,6 +606,13 @@ func (x *exec) osr(f *frame, idx, at uint32) (int32, bool) {
 			return 0, false
 		}
 	}
+	if nat.opt && nat.prev == nil {
+		// The optimized code has no loop entries: the baseline's has.
+		if nat = cj.loopsFor(code, idx, cd); nat == nil {
+			return 0, false
+		}
+	}
+	nat = nat.loopCode()
 	entry, ok := nat.loops[at]
 	if !ok {
 		return 0, false
@@ -590,7 +797,7 @@ func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64,
 			raw, off = r, o
 			continue
 		}
-		nf := inst.Code.get(uint32(ctx.ExitFn)).native.Load()
+		nf := inst.Code.get(uint32(ctx.ExitFn)).native.Load().holding(ctx.ExitAddr)
 		raw, off = nf.raw, int(ctx.ExitAddr-nf.base)
 	}
 }
@@ -608,6 +815,13 @@ func (x *exec) jitExit(lv *jitLevel) (raw *ijit.RawCode, off int, tail bool) {
 		trap(TrapCode(ctx.Arg0))
 	case wjit.ExitPoll:
 		x.pollContext()
+		lv.cj.pollSample(inst.Code, uint32(ctx.ExitFn))
+	case wjit.ExitTierUp:
+		fn := uint32(ctx.ExitFn)
+		if nat := lv.cj.tierUp(inst.Code, fn, inst.Code.get(fn)); nat != nil {
+			// The optimized code makes the call, from its start.
+			return nat.raw, nat.goEntry, false
+		}
 	case wjit.ExitCall:
 		callee := inst.Funcs[ctx.Arg0]
 		f := x.exitFrame(lv)

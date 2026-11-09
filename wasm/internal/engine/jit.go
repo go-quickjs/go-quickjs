@@ -4,6 +4,7 @@ import (
 	"maps"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // The baseline JIT (wasm/internal/jit) compiles a function to native code
@@ -26,10 +27,33 @@ import (
 // first back edge, so that loops' entries are tried; "osr" does so for every
 // call Go or the interpreter makes (EnterLoopsForTest). WASM_JIT_OSR sets
 // the OSR threshold: a number of back edges, or "off".
+//
+// The optimizing tier (wasm/internal/jit/opt) recompiles a function whose
+// baseline code was called often enough, where SetOptThreshold or
+// WASM_JIT_OPT turns it on ("on", a number of calls, "eager" for every
+// function at its first compile, "off"); WASM_JIT=opt is "eager" with every
+// function compiled at its first call.
 
 // DefaultJITThreshold is the number of calls after which a function is
 // compiled, unless EnableJIT is given another.
 const DefaultJITThreshold = 10
+
+// DefaultOptThreshold is the number of calls of a function's baseline code
+// after which the optimizing tier compiles it, where WASM_JIT_OPT=on turns
+// the tier on. A poll the baseline code exits for -- every 4,096 loop back
+// edges and calls -- counts for 250 calls, so that a function whose loops
+// run long is compiled too, for its later calls.
+const DefaultOptThreshold = 1000
+
+// SetOptThreshold sets the number of calls of a function's baseline code
+// after which the optimizing tier compiles it in the baseline's place: 0
+// has the optimizing tier compile each function it accepts at its first
+// compile, and the baseline only those it refuses; a negative n turns the
+// tier off, as it is unless SetOptThreshold or WASM_JIT_OPT turns it on.
+// It applies once EnableJIT has turned the JIT on, to the functions
+// compiled after it. The optimizing tier is built for amd64; elsewhere
+// every function keeps its baseline code.
+func (c *Code) SetOptThreshold(n int) { c.setOptThreshold(n) }
 
 // DefaultOSRThreshold is the number of loop back edges after which a call
 // running in the interpreter goes on in its function's native code, unless
@@ -68,21 +92,50 @@ type JITStats struct {
 	Compiled int
 	Refused  map[string]int
 	OSR      int
+	// Optimized and OptRefused are the optimizing tier's: the functions
+	// it compiled, and those it refused, which kept their baseline code.
+	Optimized  int
+	OptRefused map[string]int
+	// BaselineTime and OptTime are the time each tier spent compiling,
+	// refusals included.
+	BaselineTime, OptTime time.Duration
 }
 
 var jitStats struct {
-	mu       sync.Mutex
-	compiled int
-	refused  map[string]int
-	osr      atomic.Int64
+	mu                sync.Mutex
+	compiled          int
+	refused           map[string]int
+	osr               atomic.Int64
+	optimized         int
+	optRefused        map[string]int
+	baseTime, optTime atomic.Int64
 }
 
 // ReadJITStats returns the JIT's counts so far.
 func ReadJITStats() JITStats {
 	jitStats.mu.Lock()
 	defer jitStats.mu.Unlock()
-	return JITStats{Compiled: jitStats.compiled, Refused: maps.Clone(jitStats.refused), OSR: int(jitStats.osr.Load())}
+	return JITStats{Compiled: jitStats.compiled, Refused: maps.Clone(jitStats.refused), OSR: int(jitStats.osr.Load()),
+		Optimized: jitStats.optimized, OptRefused: maps.Clone(jitStats.optRefused),
+		BaselineTime: time.Duration(jitStats.baseTime.Load()), OptTime: time.Duration(jitStats.optTime.Load())}
 }
+
+func countOptimized() {
+	jitStats.mu.Lock()
+	jitStats.optimized++
+	jitStats.mu.Unlock()
+}
+
+func countOptRefused(reason string) {
+	jitStats.mu.Lock()
+	if jitStats.optRefused == nil {
+		jitStats.optRefused = map[string]int{}
+	}
+	jitStats.optRefused[reason]++
+	jitStats.mu.Unlock()
+}
+
+func countTime(total *atomic.Int64, start time.Time) { total.Add(int64(time.Since(start))) }
 
 func countCompiled() {
 	jitStats.mu.Lock()

@@ -56,6 +56,10 @@ type Request struct {
 	// has past its own for the exceptions legacy catches caught, one for
 	// each depth of legacy trys.
 	CaughtSlot int
+	// TierCounter, if not 0, is the address of the function's countdown
+	// to the optimizing tier, an int64: the baseline code decrements it at
+	// its entry and exits (ExitTierUp) when it goes below 0. amd64 only.
+	TierCounter uint64
 }
 
 // Layout is where the engine's objects keep what native code reads of

@@ -301,12 +301,40 @@ replacement mid-recursion and the poll samples.
 
 ## Measurements
 
+`internal/cmd/wasmbench`, median of 3 fresh processes, ms (Ryzen 9
+9950X3D2, Windows; `jit-tiered` is the baseline with the tier at its
+default threshold, `jit-opt` every function it accepts optimized at once):
+
+| workload | interp | jit-base | jit-tiered | jit-opt |
+|---|---:|---:|---:|---:|
+| micro/fib | 211 | 11.3 | 8.97 | 8.84 |
+| micro/loop | 234 | 14.6 | 14.6 | 14.6 |
+| micro/i64 | 283 | 20.2 | 19.6 | 20.2 |
+| micro/mandelbrot | 153 | 11.8 | 11.6 | 11.6 |
+| micro/nbody | 104 | 6.48 | 3.48 | 3.47 |
+| micro/bytes | 208 | 8.99 | 7.17 | 7.07 |
+| micro/brtable | 250 | 43.1 | 42.8 | 43.4 |
+| micro/globals | 185 | 27.4 | 27.7 | 27.7 |
+| programs/sha256 | 1984 | 149 | 146 | 153 |
+| programs/sort | 1797 | 211 | 226 | 225 |
+| programs/json | 884 | 61.2 | 63.4 | 76.1 |
+| programs/regexp | 828 | 76.9 | 84.5 | 86.0 |
+| programs/gzip | 476 | 68.0 | 67.1 | 91.3 |
+| programs/interp | 499 | 25.4 | 26.6 | 31.3 |
+
+The kernels gain where values stay in registers across a loop (nbody
+1.86x, fib 1.26x, bytes 1.27x); loop, i64 and mandelbrot are bound by
+one multiply's or add's latency each iteration, as the baseline is;
+bulk, indirect and gc spend their time in Go. The Go programs lose: see
+Tier-up for why, and Next. `jit-opt` adds the optimizing compiles to the
+runs, as each function is compiled at its first use.
+
 On the spec scripts the tier compiles 3,914 functions and refuses 2,928
 (SIMD, references, i64 and shared memories, tables, exceptions, tail
 calls); compiling them took 25.6 ms, 6.5 µs a function, where the
-baseline's 2,926 took 10.6 ms, 3.6 µs. On a Go program (`internal/cmd/
-wasmbench`'s, json) it compiled 168 functions in 89-99 ms, 0.55 ms each,
-the baseline 381 in 44-50 ms, 0.12 ms each.
+baseline's 2,926 took 10.6 ms, 3.6 µs. On a Go program (json) it compiled
+168 functions in 89-99 ms, 0.55 ms each, the baseline 381 in 44-50 ms,
+0.12 ms each.
 
 ## Next
 

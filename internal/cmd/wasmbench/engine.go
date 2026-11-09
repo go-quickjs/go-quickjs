@@ -15,13 +15,17 @@ import (
 )
 
 // newEngine is go-quickjs's wasm runtime for a worker: "interp" runs
-// everything in the interpreter, "jit" compiles hot functions to native code.
+// everything in the interpreter, "jit" compiles hot functions to native code
+// -- "jit-base" with the baseline tier alone, "jit-tiered" with hot
+// functions recompiled by the optimizing tier, "jit-opt" with the
+// optimizing tier at once, as their workers' environments say
+// (WASM_JIT_OPT).
 func newEngine(name string) (worker.Engine, error) {
 	var cfg wasm.RuntimeConfig
 	switch name {
 	case "interp":
 		cfg = wasm.NewRuntimeConfigInterpreter()
-	case "jit":
+	case "jit", "jit-base", "jit-opt", "jit-tiered":
 		if !jitBuilt {
 			return nil, errors.New("this build has no JIT: build wasmbench with -tags quickjs_jit on amd64 Linux or Windows")
 		}

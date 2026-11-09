@@ -18,7 +18,10 @@
 // engines take turns, sample by sample.
 //
 // The engines (-engine) are interp and jit (go-quickjs, jit needing
-// -tags quickjs_jit on amd64 Linux or Windows), wazero-interp and
+// -tags quickjs_jit on amd64 Linux or Windows; jit-base is its baseline
+// tier alone, jit-tiered the baseline with hot functions recompiled by the
+// optimizing tier, jit-opt the optimizing tier for every function it
+// accepts at once), wazero-interp and
 // wazero-compiler, and node (its default tiering), node-liftoff (Liftoff
 // alone) and node-turbofan (TurboFan alone).
 package main
@@ -46,7 +49,7 @@ var (
 	nFlag       = flag.Int("n", 3, "measure each workload on each engine in this many fresh processes")
 	repsFlag    = flag.Int("reps", 1, "timed runs in each process, after the warmup runs")
 	warmupFlag  = flag.Int("warmup", 1, "runs in each process before the timed ones; the first run is reported apart")
-	engineFlag  = flag.String("engine", "", "comma-separated engines: interp, jit, wazero-interp, wazero-compiler, node, node-liftoff, node-turbofan (default interp, and jit in a JIT build; with -matrix, all)")
+	engineFlag  = flag.String("engine", "", "comma-separated engines: interp, jit, jit-base, jit-opt, jit-tiered, wazero-interp, wazero-compiler, node, node-liftoff, node-turbofan (default interp, and jit in a JIT build; with -matrix, all)")
 	jsonFlag    = flag.Bool("json", false, "print the results as JSON")
 	matrixFlag  = flag.Bool("matrix", false, "print a Markdown table for each suite, the engines side by side, with ratios to Node and to wazero's compiler")
 	nodeFlag    = flag.String("node", "node", "the node command")
@@ -65,6 +68,8 @@ type engine struct {
 	// kind is "self" (this program), "wazero" or "node".
 	kind      string
 	nodeFlags []string
+	// env is the worker's environment past this process's.
+	env []string
 }
 
 var engines = []engine{
@@ -75,6 +80,9 @@ var engines = []engine{
 	{name: "node", title: "Node", kind: "node"},
 	{name: "node-liftoff", title: "Node Liftoff", kind: "node", nodeFlags: []string{"--liftoff", "--no-wasm-tier-up"}},
 	{name: "node-turbofan", title: "Node TurboFan", kind: "node", nodeFlags: []string{"--no-liftoff"}},
+	{name: "jit-base", title: "go-quickjs JIT, baseline", kind: "self", env: []string{"WASM_JIT_OPT=off"}},
+	{name: "jit-tiered", title: "go-quickjs JIT, tiered", kind: "self", env: []string{"WASM_JIT_OPT=on"}},
+	{name: "jit-opt", title: "go-quickjs JIT, optimizing", kind: "self", env: []string{"WASM_JIT_OPT=eager"}},
 }
 
 func main() {
@@ -184,7 +192,7 @@ func selectEngines() ([]engine, error) {
 		return nil, fmt.Errorf("no engine %q", n)
 	}
 	for _, e := range es {
-		if e.name == "jit" && !jitBuilt {
+		if strings.HasPrefix(e.name, "jit") && !jitBuilt {
 			return nil, errors.New("the jit engine needs a JIT build: go run -tags quickjs_jit ./internal/cmd/wasmbench (amd64 Linux or Windows)")
 		}
 	}
@@ -206,6 +214,9 @@ func sample(e engine, req worker.Request) (worker.Result, error) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, prog, args...)
 	cmd.Stdin = bytes.NewReader(in)
+	if len(e.env) > 0 {
+		cmd.Env = append(os.Environ(), e.env...)
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	runErr := cmd.Run()

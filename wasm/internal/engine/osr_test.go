@@ -13,12 +13,14 @@ import (
 // osrInstance instantiates a module given in the text format whose
 // functions are compiled after callThreshold calls, and whose calls running
 // in the interpreter go on in native code after osrThreshold back edges --
-// whatever WASM_JIT says -- or skips without native code.
+// whatever WASM_JIT says -- or skips without native code. The functions
+// keep their baseline code, whose loops have entries.
 func osrInstance(t testing.TB, src string, callThreshold, osrThreshold int, imports ...Extern) *Instance {
 	t.Helper()
 	inst := thresholdInstance(t, src, callThreshold, imports...)
 	inst.Code.SetOSRThreshold(osrThreshold)
 	inst.Code.setOSRCalls(0)
+	inst.Code.SetOptThreshold(-1)
 	return inst
 }
 

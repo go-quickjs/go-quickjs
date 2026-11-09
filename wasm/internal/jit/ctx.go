@@ -128,6 +128,11 @@ const (
 	// the interpreter does, its operands in the frame's slots from Arg1, two
 	// slots apart, its result left in the first's.
 	ExitSIMD
+	// ExitTierUp: the function's baseline code, at its entry, counted
+	// enough calls for the optimizing tier: the engine compiles it and
+	// enters the optimized code with the frame as the call made it, or
+	// resumes the baseline's.
+	ExitTierUp
 )
 
 // The trap codes an ExitTrap carries, the engine's TrapCode values.

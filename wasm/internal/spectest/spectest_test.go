@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-quickjs/go-quickjs/wasm/internal/decoder"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/engine"
@@ -570,7 +571,7 @@ func scripts(t *testing.T, dir string) []string {
 // logJIT logs what the JIT compiled and refused, when WASM_JIT turned it on.
 func logJIT(t *testing.T) {
 	st := engine.ReadJITStats()
-	if st.Compiled == 0 && len(st.Refused) == 0 {
+	if st.Compiled == 0 && len(st.Refused) == 0 && st.Optimized == 0 && len(st.OptRefused) == 0 {
 		return
 	}
 	refused := 0
@@ -583,6 +584,21 @@ func logJIT(t *testing.T) {
 	t.Logf("jit: %d functions compiled, %d refused; %d calls went on natively from a loop (OSR)", st.Compiled, refused, st.OSR)
 	for _, r := range reasons {
 		t.Logf("jit: %6d refused: %s", st.Refused[r], r)
+	}
+	if st.Optimized == 0 && len(st.OptRefused) == 0 {
+		return
+	}
+	optRefused := 0
+	reasons = reasons[:0]
+	for r, n := range st.OptRefused {
+		optRefused += n
+		reasons = append(reasons, r)
+	}
+	sort.Slice(reasons, func(i, j int) bool { return st.OptRefused[reasons[i]] > st.OptRefused[reasons[j]] })
+	t.Logf("jit: the optimizing tier compiled %d functions and refused %d, which kept their baseline code; compiling took %v (baseline) and %v (optimizing)",
+		st.Optimized, optRefused, st.BaselineTime.Round(time.Microsecond), st.OptTime.Round(time.Microsecond))
+	for _, r := range reasons {
+		t.Logf("jit: %6d refused by the optimizing tier: %s", st.OptRefused[r], r)
 	}
 }
 

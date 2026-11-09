@@ -88,6 +88,9 @@ type compiled struct {
 	native  atomic.Pointer[nativeFn]
 	hot     atomic.Int32
 	refused atomic.Bool
+	// optDone says the optimizing tier compiled the function or refused
+	// it: its baseline code no longer counts calls.
+	optDone atomic.Bool
 }
 
 // get returns function index's compiled body, compiling it if it is not.

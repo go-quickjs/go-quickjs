@@ -46,7 +46,41 @@ func (c *compiler) entries() (retStub int, goEntry, entry amd64.Label) {
 	a.Load(rPoll, rCtx, offPoll)
 	a.Load(rRS, rCtx, offRSP)
 	a.Bind(entry)
+	if c.req.TierCounter != 0 {
+		c.tierCount()
+	}
 	return retStub, goEntry, entry
+}
+
+// tierCount counts a call toward the optimizing tier, and exits for it
+// when the count runs out. The exit is at the entry, before the prologue:
+// no local has a home loaded yet, and the engine may enter the optimized
+// code in the baseline's place.
+func (c *compiler) tierCount() {
+	a := c.a
+	tier, back := a.NewLabel(), a.NewLabel()
+	a.MovImm(rTmp, c.req.TierCounter)
+	a.DecMem(rTmp, 0)
+	a.Jcc(amd64.CondS, tier)
+	a.Bind(back)
+	c.ool = append(c.ool, func() {
+		a.Bind(tier)
+		a.Store(rCtx, offL, rL)
+		a.Store(rCtx, offPoll, rPoll)
+		a.Store(rCtx, offRSP, rRS)
+		c.storeCtx(offExit, ExitTierUp)
+		c.storeCtx(offExitFn, uint64(c.fn))
+		resume := a.NewLabel()
+		a.LeaLabel(rTmp, resume)
+		a.Store(rCtx, offExitAddr, rTmp)
+		a.Ret()
+		a.Bind(resume)
+		a.Load(rL, rCtx, offL)
+		a.Load(rMem, rCtx, offMemBase)
+		a.Load(rPoll, rCtx, offPoll)
+		a.Load(rRS, rCtx, offRSP)
+		a.Jmp(back)
+	})
 }
 
 func (c *compiler) zeroLocals() {
