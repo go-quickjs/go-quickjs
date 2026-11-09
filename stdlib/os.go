@@ -44,7 +44,7 @@ func System(rt *quickjs.Runtime, cfg *OSInfo) error {
 	}
 
 	exports := map[string]any{
-		"EOL":      "\n",
+		"EOL":      osEOL(runtime.GOOS),
 		"platform": func() string { return goosToPlatform(runtime.GOOS) },
 		"arch":     func() string { return runtime.GOARCH },
 		"type": func() string {
@@ -66,4 +66,13 @@ func System(rt *quickjs.Runtime, cfg *OSInfo) error {
 	}
 	exports["default"] = copyExports(exports)
 	return setNodeModule(rt, "os", exports)
+}
+
+// osEOL is the line ending of the system goos names, as Node's os.EOL gives
+// it: "\r\n" on Windows, "\n" elsewhere.
+func osEOL(goos string) string {
+	if goos == "windows" {
+		return "\r\n"
+	}
+	return "\n"
 }

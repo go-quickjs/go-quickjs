@@ -379,10 +379,15 @@ func TestOS(t *testing.T) {
 	out, _ := run(t, stdlib.Config{OS: &stdlib.OSInfo{Hostname: "given"}}, `
 		import("os").then(({default: os}) => {
 			console.log(os.hostname(), os.homedir() === "", os.cpus() > 0)
-			console.log(typeof os.platform(), os.EOL === "\n")
+			console.log(typeof os.platform(), JSON.stringify(os.EOL))
 		})
 	`)
-	want := "given true true\nstring true"
+	// os.EOL is the platform's, as Node's: "\r\n" on Windows.
+	eol := `"\n"`
+	if runtime.GOOS == "windows" {
+		eol = `"\r\n"`
+	}
+	want := "given true true\nstring " + eol
 	if out != want {
 		t.Errorf("os output =\n%s\nwant\n%s", out, want)
 	}
