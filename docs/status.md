@@ -27,6 +27,7 @@
 | Recent additions | Set operations, `Array.fromAsync`, `Object.groupBy`, `Promise.try`, `Promise.allKeyed`, `RegExp.escape`, `Error.isError`, `Math.sumPrecise`, `Uint8Array` base64 and hex, `Map` and `WeakMap`'s `getOrInsert`, `JSON.rawJSON` and a reviver's source text, `Atomics.pause` and `Atomics.waitAsync`, `ShadowRealm` |
 | Eval | Direct `eval` runs in the caller's scope — its variables, `this`, `new.target` and `super`; indirect `eval` runs in global scope |
 | Go interop | Function binding, marshalling, `context.Context` cancellation |
+| WebAssembly | WebAssembly 3.0 and the threads proposal, from Go (`wasm`, with WASI preview 1) and from script (the `WebAssembly` namespace, with the JS Promise Integration and the JS String Builtins), opt-in; see [WebAssembly](wasm.md) |
 
 Standards mode inherits the `stack` accessor from `Error.prototype`. Its
 setter accepts only strings and creates an own data property. With
@@ -85,6 +86,11 @@ yet.
 A sloppy-mode function's `caller` and `arguments` are not reachable from
 outside it in standards mode: reading either throws, as the standard's
 `Function.prototype` accessors do. `WithNodeQuirks` exposes them as V8 does.
+
+In WebAssembly: importing a `.wasm` file as a module, `postMessage` of a
+`Module` or a shared `Memory` between workers, and type reflection, which
+Node does not ship either; [WebAssembly](wasm.md#known-gaps) lists the
+rest.
 
 In the standard library: node's own streams (the web's are here instead, and
 everything that takes a stream takes those), brotli, and BYOB readers. A
@@ -149,5 +155,31 @@ Useful flags:
 
 The suite runs on every core, which takes a few minutes rather than well over an
 hour.
+
+### WebAssembly
+
+The wasm engine is held to the WebAssembly specification's own suites, which
+CI's `wasm-spec` job checks out at pinned commits, WebAssembly/spec
+[`f3268fa9`](https://github.com/WebAssembly/spec/commit/f3268fa9dcb7d3a60d09546e743e7281e75cddb0)
+and WebAssembly/threads
+[`cc535ada`](https://github.com/WebAssembly/threads/commit/cc535ada1aa21cfaa3cabf3ac73b89acef78a0a0):
+
+| Suite | Result |
+|---|---|
+| The spec's `test/core` and `test/legacy` scripts, and the threads proposal's `test/core/threads` | 65,824 of 65,824 assertions, interpreted and with every function compiled by the JIT at its first call, on amd64 and arm64; 65,824 interpreted on 386 |
+| The JavaScript API tests, `test/js-api` | 1,204 of 1,223 subtests; 18 of the others fail in Node 26 too, with the same messages, and the last is the global's descriptor, an accessor until first read |
+| Validation against Node 26 (V8 14.6), verdict and message | no difference over 345,311 modules: hand-written cases, seeds and their mutations |
+| [wasi-testsuite](https://github.com/WebAssembly/wasi-testsuite), `prod/testsuite-base`, `wasm32-wasip1` | 72 of 72 on Linux; 67 on Windows, where 5 need the privilege to make symbolic links |
+
+```
+git clone https://github.com/WebAssembly/spec /tmp/wasm-spec
+git -C /tmp/wasm-spec checkout f3268fa9dcb7d3a60d09546e743e7281e75cddb0
+git clone https://github.com/WebAssembly/threads /tmp/wasm-threads
+git -C /tmp/wasm-threads checkout cc535ada1aa21cfaa3cabf3ac73b89acef78a0a0
+WASM_SPEC_DIR=/tmp/wasm-spec WASM_THREADS_DIR=/tmp/wasm-threads go test ./wasm/internal/spectest -count=1 -v
+```
+
+[WebAssembly](wasm.md#conformance) has the other suites' commands, the
+JIT's runs and the comparisons with Node.
 
 [go-intl]: https://github.com/go-quickjs/go-intl
