@@ -6,7 +6,8 @@
 // gives.
 //
 // A virtual register's lifetime is a list of ranges, its holes left out,
-// from liveness. A phi and its arguments are coalesced -- given one
+// from liveness: the paths from each use back to the definition where
+// every register is defined once (SSA), else sweeps of the blocks. A phi and its arguments are coalesced -- given one
 // location, their edge's move gone -- where their lifetimes do not meet,
 // the edges of the deepest loops first; the coalesced registers are a web,
 // and each web has one location for its whole life: a register, or a spill
@@ -23,6 +24,10 @@
 // fixed clobbers (Inst.Clobber) keep the registers they name from the webs
 // live across it. Slots are given by a second scan, with holes too, a web
 // with a parameter keeping the slot it arrives in.
+//
+// An Allocator keeps its tables, lists and result for its next
+// allocation, so that a client allocating function after function
+// allocates little once they have grown to its functions' sizes.
 package lsra
 
 import (

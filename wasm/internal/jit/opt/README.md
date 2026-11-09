@@ -21,6 +21,8 @@ default (see Tier-up).
 | `thread.go` | jump threading, and the lookups that repair SSA after it |
 | `verify.go` | the IR's verifier, and what lowering requires of it |
 | `compile.go` | `Compile`: build, optimize, lower |
+| `workspace.go`, `arena.go`, `table.go` | what a compile works in, kept for the next (The compile's cost) |
+| `timing.go` | the compiles' phases, timed for a measuring host |
 | `lower_amd64.go` | the lowering: the allocator's view of the function, the code |
 | `internal/jit/lsra` | the register allocator, which knows nothing of WebAssembly |
 
@@ -211,7 +213,10 @@ two-address operation's first operand as its result's hint -- and lowers
 with the locations it gives.
 
 A virtual register's lifetime is a list of ranges, from liveness, its
-holes left out. A phi and an argument whose lifetimes do not meet are
+holes left out: the paths from each use back to the definition, where
+every register is defined once, as the lowering's are (after Boissinot et
+al.'s "Computing Liveness Sets for SSA-Form Programs"), else sweeps of the
+blocks until their sets change no more. A phi and an argument whose lifetimes do not meet are
 coalesced into a web -- one location, no move on their edge -- the
 edges of the deepest loops first (two parameters, arriving in different
 slots, never). Each web has one location for its whole life, given by a
@@ -314,8 +319,9 @@ replaced code stays placed (`nativeFn.prev`), and an exit resumes in the
 code that holds its address.
 
 The tier is off by default: its compiles still make a short program's first
-run slower (json's 135 ms to 161, interp's 57 to 67) before they pay, and
-it waits for cheaper compiles. Turned on (`WASM_JIT_OPT=on`), the count is
+run slower (json's 132 ms to 145, interp's 50 to 52, where before the
+compile's cost was worked on they made them 135 to 161 and 57 to 67)
+before they pay. Turned on (`WASM_JIT_OPT=on`), the count is
 `DefaultOptThreshold`, 30,000 calls;
 `Code.SetOptThreshold(n)` sets another: 0 compiles every function the
 tier accepts with it at once, the baseline only those it refuses, and a
@@ -324,9 +330,10 @@ benchmarks (a number, `on` for the default, `eager` for 0, `off`), and
 `WASM_JIT=opt` is `eager` with the JIT on at every first call.
 
 The count weighs the compile against what it saves, as measured on the
-Go programs of `internal/cmd/wasmbench`. Compiling costs about 0.4 to 0.7
-µs a byte of a function's body, 0.76 ms for each of the 182 functions
-json compiles in its first run (138 ms in all), and the optimized code
+Go programs of `internal/cmd/wasmbench`, when compiling cost about 0.4 to
+0.7 µs a byte of a function's body -- a third of that since (The
+compile's cost) -- 0.76 ms for each of the 182 functions json compiles
+in its first run (138 ms in all), and the optimized code
 saves json 27 ms a run over the 2.5 million calls a run makes of its 789
 natively compiled functions: about 11 ns a call, so that an average function
 repays its compile after some 70,000 calls, the hottest far sooner. Taking
@@ -346,6 +353,54 @@ loop entries. A call running in the interpreter of a function whose
 native code is optimized enters the loops of the baseline code it
 replaced, or of baseline code compiled then for its loops alone
 (`loopsFor`) where it replaced none.
+
+## The compile's cost
+
+A compile works in a workspace (`workspace.go`) that a `sync.Pool` gives
+it and that it puts back once its code is copied out, so that once the
+workspaces have grown to the functions' sizes a compile allocates little
+but its code; nothing of the workspace is in the code it returns, and
+compiles at once each have their own. Values, blocks and the builder's
+constructs come from chunks, and the small lists -- a value's arguments,
+a block's values, phis and edges, a switch's table -- from arenas
+(`arena.go`), both emptied for the next compile. What is by value or
+block is a table by ID; the maps that are left -- the locals' values at
+the blocks' ends, the values `repairPhis` finds, the edges `loopDepths`
+cuts, the lowering's trap stubs and poll exits -- are `u64map`s
+(`table.go`), open-addressed by a uint64 key, a slot an entry only while
+its stamp is the table's, so that emptying one is a new stamp where a Go
+map's clear costs its capacity. The allocator is an `lsra.Allocator`
+kept there, with its own tables and arenas, and the assembler.
+
+The passes walk what may change: the dominator tree is kept until the
+graph changes (`order`), its dominance a test of its walk's numbers;
+GVN's table is a hash table of chains whose entries are popped as the
+walk leaves their blocks; `copyelim` stops after the phis where no copy
+is left; `thread` removes the predecessors it threads together and
+counts the uses only where a block may thread; `dce` counts them again
+only after removing phis that only themselves used. The lowering numbers
+only the values the allocator sees, densely and in the order of their
+IDs (`Value.vreg`), so that the allocator decides as it would by ID, and
+its cold code is data (`stub`), not closures. The allocator's liveness
+follows the paths from the uses (Register allocation); what a register
+lives across is counted by sums over the clobbers, a few ranges are
+tested and merged against many by searches, and the webs and the pairs
+to coalesce are ordered by counting sorts.
+
+`TestOptCompileCorpus` measures it (Validation). On the Go program
+`internal/cmd/wasmbench` builds -- 3,011 functions, 3.77 MB of body -- a
+compile takes 158 µs a function, 126 ns a byte of body (196 µs at
+GOMAXPROCS=1), and allocates 25 KB and 121 objects, 11 KB of it the
+code's copy; it took 398 µs (589 at GOMAXPROCS=1) and allocated 627 KB
+and 5,394 objects before. By phase, µs a function:
+
+| build | passes | describe | liveness | ranges | webs | scan, slots | emit, encode |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 23 | 63 | 10 | 7 | 8 | 16 | 10 | 19 |
+
+-- the passes: copyelim 13 (five runs), gvn 13 (two), thread 16, loops
+6, dce 5, fold 4, bce 3. The largest functions cost the most a byte (225
+ns for one of 17 KB of body and 1,110 blocks).
 
 ## Refusals
 
@@ -414,16 +469,24 @@ encoding), and the bytes and objects they allocated per function.
 `WASM_OPT_HASHES=FILE` writes each function's code's hash, or its
 refusal, and `WASM_OPT_BASE=FILE` compares with a file so written: a change
 that should not change the code is checked by both, the base's hashes
-written at its parent. `-cpuprofile` and `-memprofile` profile the test.
+written at its parent. `WASM_OPT_ONLY` limits the corpus to the functions
+it names, by the keys the test logs (`goprog.wasm#2211`), and the ten
+slowest are logged with their size. `-cpuprofile` and `-memprofile`
+profile the test.
 
 ```sh
-WASM_OPT_CORPUS=/path/goprog.wasm,spec WASM_SPEC_DIR=/path/to/spec WASM_OPT_HASHES=/tmp/base.hashes   go test -tags quickjs_jit ./wasm/internal/engine -run TestOptCompileCorpus -count=1 -v
+WASM_OPT_CORPUS=/path/goprog.wasm,spec WASM_SPEC_DIR=/path/to/spec WASM_OPT_HASHES=/tmp/base.hashes \
+  go test -tags quickjs_jit ./wasm/internal/engine -run TestOptCompileCorpus -count=1 -v
 ```
 
 `TestJITDifferential`'s `opt` pass runs the spec modules with every
 function the tier accepts optimized and compares them with the
 interpreter; `TestAllocateRandom` checks the allocator's results on random
-functions by a liveness of its own, `TestCoalesce` a loop's phi web;
+functions by a liveness of its own, and an Allocator kept from one to
+the next against a new one, `TestLivenessMethods` the two liveness
+methods against each other, `TestRanges` the range lists' tests and
+merges, `TestCoalesce` a loop's phi web; `TestWorkspaceReuse` compiles in
+workspaces kept and from goroutines at once (with -race);
 `TestOptTierUp` the counts, the replacement mid-recursion and the poll
 samples, `TestOptTierUpByExits` the exits'; `TestOptCallIndirect` every
 kind of element a native call_indirect meets, `TestOptBulkMemory`
@@ -435,9 +498,10 @@ dispatch loops against the interpreter; `TestMarks` the profile's marks.
 
 `internal/cmd/wasmbench`, median of 3 fresh processes, each one run after
 one warm-up run, ms (Ryzen 9 9950X3D2, Windows; `jit-tiered` is the
-default, the baseline with the tier at `DefaultOptThreshold`, `jit-opt`
-every function the tier accepts optimized at its first compile; the
-first run, in parentheses, pays the compiles):
+baseline with the tier at `DefaultOptThreshold`, `jit-opt` every function
+the tier accepts optimized at its first compile; the first run, in
+parentheses, pays the compiles; the programs measured again after the
+compile's cost was worked on):
 
 | workload | interp | jit-base | jit-tiered | jit-opt |
 |---|---:|---:|---:|---:|
@@ -453,12 +517,12 @@ first run, in parentheses, pays the compiles):
 | micro/globals | 179 | 26.5 | 27.1 | 26.5 |
 | micro/gc | 354 | 234 | 242 | 237 |
 | micro/simd | 74.9 | 3.02 | 3.11 | 3.01 |
-| programs/sha256 | 1956 | 148 (174) | 51.1 (160) | 61.4 (205) |
-| programs/sort | 1760 | 213 (243) | 116 (234) | 136 (301) |
-| programs/json | 874 | 59.9 (135) | 59.5 (161) | 58.0 (297) |
-| programs/regexp | 822 | 75.8 (122) | 34.7 (92.4) | 47.1 (173) |
-| programs/gzip | 464 | 65.5 (108) | 31.5 (106) | 69.8 (182) |
-| programs/interp | 544 | 27.5 (57.0) | 17.8 (66.6) | 30.2 (115) |
+| programs/sha256 | 1956 | 150 (176) | 52.4 (162) | 54.6 (179) |
+| programs/sort | 1760 | 208 (243) | 114 (231) | 120 (249) |
+| programs/json | 874 | 59.3 (132) | 49.3 (145) | 37.6 (178) |
+| programs/regexp | 822 | 70.8 (117) | 34.6 (87.0) | 36.3 (114) |
+| programs/gzip | 464 | 65.4 (105) | 31.2 (92.5) | 43.7 (116) |
+| programs/interp | 544 | 24.3 (50.2) | 15.3 (52.3) | 17.7 (70.8) |
 
 The Go programs' steady state, once every function that will be compiled
 is (`-warmup 15 -reps 10`, ms):
@@ -484,14 +548,14 @@ and mandelbrot are bound by one multiply's or add's latency each
 iteration, as the baseline is; gc and brtable spend their time in Go and
 in the switch. The tiered first runs are the baseline's or better but
 json's and interp's, which compile their hot functions within a run of
-about 60 ms (json +19%, interp +17%; see Tier-up).
+about 60 ms (json +10%, interp +4%, where they were +19% and +17%
+before the compile's cost was worked on; see Tier-up).
 
 On the spec scripts the tier compiles 3,914 functions and refuses 2,928
 (SIMD, references, i64 and shared memories, tables, exceptions, tail
-calls), in 43 to 63 ms, 11 to 16 µs a function, where the baseline's
-2,926 take 11 to 22 ms. The Go program's 3,011 functions compile in 0.40
-ms each (the baseline's, 0.12 ms), json's 182 hot ones in 138 ms within
-its first run.
+calls), in 23 ms, 6 µs a function (43 to 63 ms before), where the
+baseline's 2,926 take 11 to 23 ms. The Go program's 3,011 functions
+compile in 0.16 ms each (0.40 before; the baseline's, 0.12 ms).
 
 ## Next
 
@@ -501,9 +565,10 @@ its first run.
 - Splitting within a value's life in the allocator: a web is in its
   register or its slot throughout, so a long value is spilled for its
   whole loop where a short stretch of pressure needs its register.
-- The compile's cost, about 0.4 ms a Go function, half of it the
-  collector's: fewer and smaller allocations, and compiles in the
-  background.
+- The compile's cost, 0.16 ms a Go function, now spread over its
+  phases (The compile's cost): fewer passes over the IR -- copyelim
+  runs five times, the dominator tree up to three -- trivial phis the
+  builder need not make, and compiles in the background.
 - Inlining of small callees; tail calls; call_indirect and memory.copy
   natively in the baseline too, whose Go programs spend a third of their
   time in those exits.
