@@ -257,6 +257,8 @@ import (
 	"math"
 	"math/bits"
 
+	"encoding/binary"
+
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/opcode"
 )
@@ -298,6 +300,7 @@ func (c *compiler) numeric(op opcode.Opcode) bool {
 		b.WriteString("}\n")
 	}
 	b.WriteString("default:\nreturn false\n}\nreturn true\n}\n")
+	writeMemory(&b)
 	src, err := format.Source(b.Bytes())
 	if err != nil {
 		os.Stdout.Write(b.Bytes())
@@ -308,4 +311,77 @@ func (c *compiler) numeric(op opcode.Opcode) bool {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// access is a load or a store of memory 0: its opcode, its width, its value
+// type, and the Go expression reading a value from, or the statement
+// writing v to, the bytes b.
+type access struct {
+	name  string
+	width int
+	t     typ
+	expr  string
+}
+
+var loads = []access{
+	{"I32LoadMem", 4, i32, "binary.LittleEndian.Uint32(b)"},
+	{"I64LoadMem", 8, i64, "binary.LittleEndian.Uint64(b)"},
+	{"F32LoadMem", 4, f32, "math.Float32frombits(binary.LittleEndian.Uint32(b))"},
+	{"F64LoadMem", 8, f64, "math.Float64frombits(binary.LittleEndian.Uint64(b))"},
+	{"I32LoadMem8S", 1, i32, "uint32(int32(int8(b[0])))"},
+	{"I32LoadMem8U", 1, i32, "uint32(b[0])"},
+	{"I32LoadMem16S", 2, i32, "uint32(int32(int16(binary.LittleEndian.Uint16(b))))"},
+	{"I32LoadMem16U", 2, i32, "uint32(binary.LittleEndian.Uint16(b))"},
+	{"I64LoadMem8S", 1, i64, "uint64(int64(int8(b[0])))"},
+	{"I64LoadMem8U", 1, i64, "uint64(b[0])"},
+	{"I64LoadMem16S", 2, i64, "uint64(int64(int16(binary.LittleEndian.Uint16(b))))"},
+	{"I64LoadMem16U", 2, i64, "uint64(binary.LittleEndian.Uint16(b))"},
+	{"I64LoadMem32S", 4, i64, "uint64(int64(int32(binary.LittleEndian.Uint32(b))))"},
+	{"I64LoadMem32U", 4, i64, "uint64(binary.LittleEndian.Uint32(b))"},
+}
+
+var stores = []access{
+	{"I32StoreMem", 4, i32, "binary.LittleEndian.PutUint32(b, v)"},
+	{"I64StoreMem", 8, i64, "binary.LittleEndian.PutUint64(b, v)"},
+	{"F32StoreMem", 4, f32, "binary.LittleEndian.PutUint32(b, math.Float32bits(v))"},
+	{"F64StoreMem", 8, f64, "binary.LittleEndian.PutUint64(b, math.Float64bits(v))"},
+	{"I32StoreMem8", 1, i32, "b[0] = byte(v)"},
+	{"I32StoreMem16", 2, i32, "binary.LittleEndian.PutUint16(b, uint16(v))"},
+	{"I64StoreMem8", 1, i64, "b[0] = byte(v)"},
+	{"I64StoreMem16", 2, i64, "binary.LittleEndian.PutUint16(b, uint16(v))"},
+	{"I64StoreMem32", 4, i64, "binary.LittleEndian.PutUint32(b, uint32(v))"},
+}
+
+// writeMemory writes memFast: the loads and stores of memory 0 at an i32
+// address, which read the instance's first memory from its field and an
+// address in a slot in place, rather than calling a node for either.
+func writeMemory(b *bytes.Buffer) {
+	b.WriteString(`
+// memFast compiles a load or store of memory 0, an i32 memory, reporting
+// whether it did.
+func (c *compiler) memFast(op opcode.Opcode, mem uint32, off uint64) bool {
+	if mem != 0 || c.m.Memories[0].Limits.Is64 {
+		return false
+	}
+	switch op {
+`)
+	for _, l := range loads {
+		fmt.Fprintf(b, "case opcode.%s:\na := c.pop()\nif a.k == eSlot {\ns := a.slot\n", l.name)
+		fmt.Fprintf(b, "c.pushTree(%s, %s(func(f *frame) %s { b := f.inst.mem0.span(uint64(uint32(f.l[s]))+off, %d); return %s }))\n",
+			l.t.mtype, l.t.tree, l.t.gotype, l.width, l.expr)
+		b.WriteString("} else {\nx := c.i32(a)\n")
+		fmt.Fprintf(b, "c.pushTree(%s, %s(func(f *frame) %s { b := f.inst.mem0.span(uint64(x(f))+off, %d); return %s }))\n",
+			l.t.mtype, l.t.tree, l.t.gotype, l.width, l.expr)
+		b.WriteString("}\n")
+	}
+	for _, s := range stores {
+		fmt.Fprintf(b, "case opcode.%s:\nv := c.%s(c.pop())\na := c.pop()\nc.flushBelow(0)\nif a.k == eSlot {\ns := a.slot\n", s.name, strings.ToLower(s.t.name))
+		fmt.Fprintf(b, "c.emit(func(f *frame) int32 { e := uint64(uint32(f.l[s])) + off; v := v(f); b := f.inst.mem0.span(e, %d); %s; return 0 })\n",
+			s.width, s.expr)
+		b.WriteString("} else {\nx := c.i32(a)\n")
+		fmt.Fprintf(b, "c.emit(func(f *frame) int32 { e := uint64(x(f)) + off; v := v(f); b := f.inst.mem0.span(e, %d); %s; return 0 })\n",
+			s.width, s.expr)
+		b.WriteString("}\n")
+	}
+	b.WriteString("default:\nreturn false\n}\nreturn true\n}\n")
 }

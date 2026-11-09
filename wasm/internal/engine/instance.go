@@ -99,6 +99,9 @@ type Instance struct {
 	Memories []*Memory
 	Globals  []*Global
 	Tags     []*Tag
+	// mem0 is Memories[0], or nil, which loads and stores of the first
+	// memory read without indexing.
+	mem0 *Memory
 
 	// datas and elems are the data and element segments, nil once dropped.
 	datas [][]byte

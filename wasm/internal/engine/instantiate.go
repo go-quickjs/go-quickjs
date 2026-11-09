@@ -206,6 +206,9 @@ func instantiate(ctx context.Context, code *Code, imports []Extern) (*Instance, 
 			return nil, &AllocError{"Out of memory: Cannot allocate Wasm memory for new instance"}
 		}
 	}
+	if len(inst.Memories) > 0 {
+		inst.mem0 = inst.Memories[0]
+	}
 	for i := range m.Tags {
 		if inst.Tags[i] == nil {
 			c := m.Canonical[m.Tags[i].TypeIndex]

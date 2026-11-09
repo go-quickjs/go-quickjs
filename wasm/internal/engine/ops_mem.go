@@ -82,6 +82,9 @@ func (c *compiler) memory(op opcode.Opcode, at uint32) bool {
 		return false
 	}
 	mem, off := c.r.memarg()
+	if c.memFast(op, mem, off) {
+		return true
+	}
 	if op >= opcode.I32StoreMem {
 		c.storeMem(op, mem, off)
 		return true

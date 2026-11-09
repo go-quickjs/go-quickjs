@@ -6,6 +6,8 @@ import (
 	"math"
 	"math/bits"
 
+	"encoding/binary"
+
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/opcode"
 )
@@ -3437,6 +3439,418 @@ func (c *compiler) numeric(op opcode.Opcode) bool {
 		} else {
 			xa := c.f64(x)
 			c.pushTree(module.I64, ti64(func(f *frame) uint64 { a := xa(f); return satU64F64(a) }))
+		}
+	default:
+		return false
+	}
+	return true
+}
+
+// memFast compiles a load or store of memory 0, an i32 memory, reporting
+// whether it did.
+func (c *compiler) memFast(op opcode.Opcode, mem uint32, off uint64) bool {
+	if mem != 0 || c.m.Memories[0].Limits.Is64 {
+		return false
+	}
+	switch op {
+	case opcode.I32LoadMem:
+		a := c.pop()
+		if a.k == eSlot {
+			s := a.slot
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 {
+				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+off, 4)
+				return binary.LittleEndian.Uint32(b)
+			}))
+		} else {
+			x := c.i32(a)
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 {
+				b := f.inst.mem0.span(uint64(x(f))+off, 4)
+				return binary.LittleEndian.Uint32(b)
+			}))
+		}
+	case opcode.I64LoadMem:
+		a := c.pop()
+		if a.k == eSlot {
+			s := a.slot
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 {
+				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+off, 8)
+				return binary.LittleEndian.Uint64(b)
+			}))
+		} else {
+			x := c.i32(a)
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 {
+				b := f.inst.mem0.span(uint64(x(f))+off, 8)
+				return binary.LittleEndian.Uint64(b)
+			}))
+		}
+	case opcode.F32LoadMem:
+		a := c.pop()
+		if a.k == eSlot {
+			s := a.slot
+			c.pushTree(module.F32, tf32(func(f *frame) float32 {
+				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+off, 4)
+				return math.Float32frombits(binary.LittleEndian.Uint32(b))
+			}))
+		} else {
+			x := c.i32(a)
+			c.pushTree(module.F32, tf32(func(f *frame) float32 {
+				b := f.inst.mem0.span(uint64(x(f))+off, 4)
+				return math.Float32frombits(binary.LittleEndian.Uint32(b))
+			}))
+		}
+	case opcode.F64LoadMem:
+		a := c.pop()
+		if a.k == eSlot {
+			s := a.slot
+			c.pushTree(module.F64, tf64(func(f *frame) float64 {
+				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+off, 8)
+				return math.Float64frombits(binary.LittleEndian.Uint64(b))
+			}))
+		} else {
+			x := c.i32(a)
+			c.pushTree(module.F64, tf64(func(f *frame) float64 {
+				b := f.inst.mem0.span(uint64(x(f))+off, 8)
+				return math.Float64frombits(binary.LittleEndian.Uint64(b))
+			}))
+		}
+	case opcode.I32LoadMem8S:
+		a := c.pop()
+		if a.k == eSlot {
+			s := a.slot
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 {
+				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+off, 1)
+				return uint32(int32(int8(b[0])))
+			}))
+		} else {
+			x := c.i32(a)
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { b := f.inst.mem0.span(uint64(x(f))+off, 1); return uint32(int32(int8(b[0]))) }))
+		}
+	case opcode.I32LoadMem8U:
+		a := c.pop()
+		if a.k == eSlot {
+			s := a.slot
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { b := f.inst.mem0.span(uint64(uint32(f.l[s]))+off, 1); return uint32(b[0]) }))
+		} else {
+			x := c.i32(a)
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 { b := f.inst.mem0.span(uint64(x(f))+off, 1); return uint32(b[0]) }))
+		}
+	case opcode.I32LoadMem16S:
+		a := c.pop()
+		if a.k == eSlot {
+			s := a.slot
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 {
+				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+off, 2)
+				return uint32(int32(int16(binary.LittleEndian.Uint16(b))))
+			}))
+		} else {
+			x := c.i32(a)
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 {
+				b := f.inst.mem0.span(uint64(x(f))+off, 2)
+				return uint32(int32(int16(binary.LittleEndian.Uint16(b))))
+			}))
+		}
+	case opcode.I32LoadMem16U:
+		a := c.pop()
+		if a.k == eSlot {
+			s := a.slot
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 {
+				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+off, 2)
+				return uint32(binary.LittleEndian.Uint16(b))
+			}))
+		} else {
+			x := c.i32(a)
+			c.pushTree(module.I32, ti32(func(f *frame) uint32 {
+				b := f.inst.mem0.span(uint64(x(f))+off, 2)
+				return uint32(binary.LittleEndian.Uint16(b))
+			}))
+		}
+	case opcode.I64LoadMem8S:
+		a := c.pop()
+		if a.k == eSlot {
+			s := a.slot
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 {
+				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+off, 1)
+				return uint64(int64(int8(b[0])))
+			}))
+		} else {
+			x := c.i32(a)
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { b := f.inst.mem0.span(uint64(x(f))+off, 1); return uint64(int64(int8(b[0]))) }))
+		}
+	case opcode.I64LoadMem8U:
+		a := c.pop()
+		if a.k == eSlot {
+			s := a.slot
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { b := f.inst.mem0.span(uint64(uint32(f.l[s]))+off, 1); return uint64(b[0]) }))
+		} else {
+			x := c.i32(a)
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 { b := f.inst.mem0.span(uint64(x(f))+off, 1); return uint64(b[0]) }))
+		}
+	case opcode.I64LoadMem16S:
+		a := c.pop()
+		if a.k == eSlot {
+			s := a.slot
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 {
+				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+off, 2)
+				return uint64(int64(int16(binary.LittleEndian.Uint16(b))))
+			}))
+		} else {
+			x := c.i32(a)
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 {
+				b := f.inst.mem0.span(uint64(x(f))+off, 2)
+				return uint64(int64(int16(binary.LittleEndian.Uint16(b))))
+			}))
+		}
+	case opcode.I64LoadMem16U:
+		a := c.pop()
+		if a.k == eSlot {
+			s := a.slot
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 {
+				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+off, 2)
+				return uint64(binary.LittleEndian.Uint16(b))
+			}))
+		} else {
+			x := c.i32(a)
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 {
+				b := f.inst.mem0.span(uint64(x(f))+off, 2)
+				return uint64(binary.LittleEndian.Uint16(b))
+			}))
+		}
+	case opcode.I64LoadMem32S:
+		a := c.pop()
+		if a.k == eSlot {
+			s := a.slot
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 {
+				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+off, 4)
+				return uint64(int64(int32(binary.LittleEndian.Uint32(b))))
+			}))
+		} else {
+			x := c.i32(a)
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 {
+				b := f.inst.mem0.span(uint64(x(f))+off, 4)
+				return uint64(int64(int32(binary.LittleEndian.Uint32(b))))
+			}))
+		}
+	case opcode.I64LoadMem32U:
+		a := c.pop()
+		if a.k == eSlot {
+			s := a.slot
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 {
+				b := f.inst.mem0.span(uint64(uint32(f.l[s]))+off, 4)
+				return uint64(binary.LittleEndian.Uint32(b))
+			}))
+		} else {
+			x := c.i32(a)
+			c.pushTree(module.I64, ti64(func(f *frame) uint64 {
+				b := f.inst.mem0.span(uint64(x(f))+off, 4)
+				return uint64(binary.LittleEndian.Uint32(b))
+			}))
+		}
+	case opcode.I32StoreMem:
+		v := c.i32(c.pop())
+		a := c.pop()
+		c.flushBelow(0)
+		if a.k == eSlot {
+			s := a.slot
+			c.emit(func(f *frame) int32 {
+				e := uint64(uint32(f.l[s])) + off
+				v := v(f)
+				b := f.inst.mem0.span(e, 4)
+				binary.LittleEndian.PutUint32(b, v)
+				return 0
+			})
+		} else {
+			x := c.i32(a)
+			c.emit(func(f *frame) int32 {
+				e := uint64(x(f)) + off
+				v := v(f)
+				b := f.inst.mem0.span(e, 4)
+				binary.LittleEndian.PutUint32(b, v)
+				return 0
+			})
+		}
+	case opcode.I64StoreMem:
+		v := c.i64(c.pop())
+		a := c.pop()
+		c.flushBelow(0)
+		if a.k == eSlot {
+			s := a.slot
+			c.emit(func(f *frame) int32 {
+				e := uint64(uint32(f.l[s])) + off
+				v := v(f)
+				b := f.inst.mem0.span(e, 8)
+				binary.LittleEndian.PutUint64(b, v)
+				return 0
+			})
+		} else {
+			x := c.i32(a)
+			c.emit(func(f *frame) int32 {
+				e := uint64(x(f)) + off
+				v := v(f)
+				b := f.inst.mem0.span(e, 8)
+				binary.LittleEndian.PutUint64(b, v)
+				return 0
+			})
+		}
+	case opcode.F32StoreMem:
+		v := c.f32(c.pop())
+		a := c.pop()
+		c.flushBelow(0)
+		if a.k == eSlot {
+			s := a.slot
+			c.emit(func(f *frame) int32 {
+				e := uint64(uint32(f.l[s])) + off
+				v := v(f)
+				b := f.inst.mem0.span(e, 4)
+				binary.LittleEndian.PutUint32(b, math.Float32bits(v))
+				return 0
+			})
+		} else {
+			x := c.i32(a)
+			c.emit(func(f *frame) int32 {
+				e := uint64(x(f)) + off
+				v := v(f)
+				b := f.inst.mem0.span(e, 4)
+				binary.LittleEndian.PutUint32(b, math.Float32bits(v))
+				return 0
+			})
+		}
+	case opcode.F64StoreMem:
+		v := c.f64(c.pop())
+		a := c.pop()
+		c.flushBelow(0)
+		if a.k == eSlot {
+			s := a.slot
+			c.emit(func(f *frame) int32 {
+				e := uint64(uint32(f.l[s])) + off
+				v := v(f)
+				b := f.inst.mem0.span(e, 8)
+				binary.LittleEndian.PutUint64(b, math.Float64bits(v))
+				return 0
+			})
+		} else {
+			x := c.i32(a)
+			c.emit(func(f *frame) int32 {
+				e := uint64(x(f)) + off
+				v := v(f)
+				b := f.inst.mem0.span(e, 8)
+				binary.LittleEndian.PutUint64(b, math.Float64bits(v))
+				return 0
+			})
+		}
+	case opcode.I32StoreMem8:
+		v := c.i32(c.pop())
+		a := c.pop()
+		c.flushBelow(0)
+		if a.k == eSlot {
+			s := a.slot
+			c.emit(func(f *frame) int32 {
+				e := uint64(uint32(f.l[s])) + off
+				v := v(f)
+				b := f.inst.mem0.span(e, 1)
+				b[0] = byte(v)
+				return 0
+			})
+		} else {
+			x := c.i32(a)
+			c.emit(func(f *frame) int32 {
+				e := uint64(x(f)) + off
+				v := v(f)
+				b := f.inst.mem0.span(e, 1)
+				b[0] = byte(v)
+				return 0
+			})
+		}
+	case opcode.I32StoreMem16:
+		v := c.i32(c.pop())
+		a := c.pop()
+		c.flushBelow(0)
+		if a.k == eSlot {
+			s := a.slot
+			c.emit(func(f *frame) int32 {
+				e := uint64(uint32(f.l[s])) + off
+				v := v(f)
+				b := f.inst.mem0.span(e, 2)
+				binary.LittleEndian.PutUint16(b, uint16(v))
+				return 0
+			})
+		} else {
+			x := c.i32(a)
+			c.emit(func(f *frame) int32 {
+				e := uint64(x(f)) + off
+				v := v(f)
+				b := f.inst.mem0.span(e, 2)
+				binary.LittleEndian.PutUint16(b, uint16(v))
+				return 0
+			})
+		}
+	case opcode.I64StoreMem8:
+		v := c.i64(c.pop())
+		a := c.pop()
+		c.flushBelow(0)
+		if a.k == eSlot {
+			s := a.slot
+			c.emit(func(f *frame) int32 {
+				e := uint64(uint32(f.l[s])) + off
+				v := v(f)
+				b := f.inst.mem0.span(e, 1)
+				b[0] = byte(v)
+				return 0
+			})
+		} else {
+			x := c.i32(a)
+			c.emit(func(f *frame) int32 {
+				e := uint64(x(f)) + off
+				v := v(f)
+				b := f.inst.mem0.span(e, 1)
+				b[0] = byte(v)
+				return 0
+			})
+		}
+	case opcode.I64StoreMem16:
+		v := c.i64(c.pop())
+		a := c.pop()
+		c.flushBelow(0)
+		if a.k == eSlot {
+			s := a.slot
+			c.emit(func(f *frame) int32 {
+				e := uint64(uint32(f.l[s])) + off
+				v := v(f)
+				b := f.inst.mem0.span(e, 2)
+				binary.LittleEndian.PutUint16(b, uint16(v))
+				return 0
+			})
+		} else {
+			x := c.i32(a)
+			c.emit(func(f *frame) int32 {
+				e := uint64(x(f)) + off
+				v := v(f)
+				b := f.inst.mem0.span(e, 2)
+				binary.LittleEndian.PutUint16(b, uint16(v))
+				return 0
+			})
+		}
+	case opcode.I64StoreMem32:
+		v := c.i64(c.pop())
+		a := c.pop()
+		c.flushBelow(0)
+		if a.k == eSlot {
+			s := a.slot
+			c.emit(func(f *frame) int32 {
+				e := uint64(uint32(f.l[s])) + off
+				v := v(f)
+				b := f.inst.mem0.span(e, 4)
+				binary.LittleEndian.PutUint32(b, uint32(v))
+				return 0
+			})
+		} else {
+			x := c.i32(a)
+			c.emit(func(f *frame) int32 {
+				e := uint64(x(f)) + off
+				v := v(f)
+				b := f.inst.mem0.span(e, 4)
+				binary.LittleEndian.PutUint32(b, uint32(v))
+				return 0
+			})
 		}
 	default:
 		return false
