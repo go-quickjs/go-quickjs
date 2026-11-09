@@ -242,6 +242,23 @@ func ops() []op {
 		un("I32x4TruncSatF64x2SZero", ""), un("I32x4TruncSatF64x2UZero", ""),
 		un("F64x2ConvertLowI32x4S", "vF64x2ConvertLowS"), un("F64x2ConvertLowI32x4U", "vF64x2ConvertLowU"))
 
+	// Relaxed SIMD: the functions are the host architecture's choices.
+	add(bin("I8x16RelaxedSwizzle", "relaxedSwizzle"),
+		un("I32x4RelaxedTruncF32x4S", "relaxedTruncF32x4S"),
+		un("I32x4RelaxedTruncF32x4U", "relaxedTruncF32x4U"),
+		un("I32x4RelaxedTruncF64x2SZero", "relaxedTruncF64x2SZero"),
+		un("I32x4RelaxedTruncF64x2UZero", "relaxedTruncF64x2UZero"),
+		tern("F32x4Qfma", "relaxedMaddF32x4"), tern("F32x4Qfms", "relaxedNmaddF32x4"),
+		tern("F64x2Qfma", "relaxedMaddF64x2"), tern("F64x2Qfms", "relaxedNmaddF64x2"),
+		tern("I8x16RelaxedLaneSelect", "relaxedLaneselect8"),
+		tern("I16x8RelaxedLaneSelect", "relaxedLaneselect16"),
+		tern("I32x4RelaxedLaneSelect", "relaxedLaneselect32"),
+		tern("I64x2RelaxedLaneSelect", "relaxedLaneselect64"),
+		bin("F32x4RelaxedMin", "relaxedMinF32x4"), bin("F32x4RelaxedMax", "relaxedMaxF32x4"),
+		bin("F64x2RelaxedMin", "relaxedMinF64x2"), bin("F64x2RelaxedMax", "relaxedMaxF64x2"),
+		bin("I16x8RelaxedQ15MulRS", "relaxedQ15MulR"),
+		bin("I16x8DotI8x16I7x16S", "relaxedDotI8x16I7x16S"),
+		tern("I32x4DotI8x16I7x16AddS", "relaxedDotI8x16I7x16AddS"))
 	return o
 }
 

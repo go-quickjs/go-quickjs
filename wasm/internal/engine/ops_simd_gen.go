@@ -3267,6 +3267,234 @@ func (c *compiler) simdOp(op opcode.Opcode) bool {
 			xa := c.v128(x)
 			c.pushTree(module.V128, tv128(func(f *frame) V128 { return vF64x2ConvertLowU(xa(f)) }))
 		}
+	case opcode.I8x16RelaxedSwizzle:
+		y := c.pop()
+		x := c.pop()
+		switch {
+		case x.k == eSlot && y.k == eSlot:
+			xa := x.slot
+			yb := y.slot
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedSwizzle(V128{f.l[xa], f.l[xa+1]}, V128{f.l[yb], f.l[yb+1]}) }))
+		case x.k == eSlot && y.k != eSlot:
+			xa := x.slot
+			yb := c.v128(y)
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedSwizzle(V128{f.l[xa], f.l[xa+1]}, yb(f)) }))
+		case x.k != eSlot && y.k == eSlot:
+			xa := c.v128(x)
+			yb := y.slot
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedSwizzle(xa(f), V128{f.l[yb], f.l[yb+1]}) }))
+		case x.k != eSlot && y.k != eSlot:
+			xa := c.v128(x)
+			yb := c.v128(y)
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedSwizzle(xa(f), yb(f)) }))
+		}
+	case opcode.I32x4RelaxedTruncF32x4S:
+		x := c.pop()
+		if x.k == eSlot {
+			xa := x.slot
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedTruncF32x4S(V128{f.l[xa], f.l[xa+1]}) }))
+		} else {
+			xa := c.v128(x)
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedTruncF32x4S(xa(f)) }))
+		}
+	case opcode.I32x4RelaxedTruncF32x4U:
+		x := c.pop()
+		if x.k == eSlot {
+			xa := x.slot
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedTruncF32x4U(V128{f.l[xa], f.l[xa+1]}) }))
+		} else {
+			xa := c.v128(x)
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedTruncF32x4U(xa(f)) }))
+		}
+	case opcode.I32x4RelaxedTruncF64x2SZero:
+		x := c.pop()
+		if x.k == eSlot {
+			xa := x.slot
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedTruncF64x2SZero(V128{f.l[xa], f.l[xa+1]}) }))
+		} else {
+			xa := c.v128(x)
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedTruncF64x2SZero(xa(f)) }))
+		}
+	case opcode.I32x4RelaxedTruncF64x2UZero:
+		x := c.pop()
+		if x.k == eSlot {
+			xa := x.slot
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedTruncF64x2UZero(V128{f.l[xa], f.l[xa+1]}) }))
+		} else {
+			xa := c.v128(x)
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedTruncF64x2UZero(xa(f)) }))
+		}
+	case opcode.F32x4Qfma:
+		z := c.v128(c.pop())
+		y := c.v128(c.pop())
+		x := c.v128(c.pop())
+		c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedMaddF32x4(x(f), y(f), z(f)) }))
+	case opcode.F32x4Qfms:
+		z := c.v128(c.pop())
+		y := c.v128(c.pop())
+		x := c.v128(c.pop())
+		c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedNmaddF32x4(x(f), y(f), z(f)) }))
+	case opcode.F64x2Qfma:
+		z := c.v128(c.pop())
+		y := c.v128(c.pop())
+		x := c.v128(c.pop())
+		c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedMaddF64x2(x(f), y(f), z(f)) }))
+	case opcode.F64x2Qfms:
+		z := c.v128(c.pop())
+		y := c.v128(c.pop())
+		x := c.v128(c.pop())
+		c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedNmaddF64x2(x(f), y(f), z(f)) }))
+	case opcode.I8x16RelaxedLaneSelect:
+		z := c.v128(c.pop())
+		y := c.v128(c.pop())
+		x := c.v128(c.pop())
+		c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedLaneselect8(x(f), y(f), z(f)) }))
+	case opcode.I16x8RelaxedLaneSelect:
+		z := c.v128(c.pop())
+		y := c.v128(c.pop())
+		x := c.v128(c.pop())
+		c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedLaneselect16(x(f), y(f), z(f)) }))
+	case opcode.I32x4RelaxedLaneSelect:
+		z := c.v128(c.pop())
+		y := c.v128(c.pop())
+		x := c.v128(c.pop())
+		c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedLaneselect32(x(f), y(f), z(f)) }))
+	case opcode.I64x2RelaxedLaneSelect:
+		z := c.v128(c.pop())
+		y := c.v128(c.pop())
+		x := c.v128(c.pop())
+		c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedLaneselect64(x(f), y(f), z(f)) }))
+	case opcode.F32x4RelaxedMin:
+		y := c.pop()
+		x := c.pop()
+		switch {
+		case x.k == eSlot && y.k == eSlot:
+			xa := x.slot
+			yb := y.slot
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedMinF32x4(V128{f.l[xa], f.l[xa+1]}, V128{f.l[yb], f.l[yb+1]}) }))
+		case x.k == eSlot && y.k != eSlot:
+			xa := x.slot
+			yb := c.v128(y)
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedMinF32x4(V128{f.l[xa], f.l[xa+1]}, yb(f)) }))
+		case x.k != eSlot && y.k == eSlot:
+			xa := c.v128(x)
+			yb := y.slot
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedMinF32x4(xa(f), V128{f.l[yb], f.l[yb+1]}) }))
+		case x.k != eSlot && y.k != eSlot:
+			xa := c.v128(x)
+			yb := c.v128(y)
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedMinF32x4(xa(f), yb(f)) }))
+		}
+	case opcode.F32x4RelaxedMax:
+		y := c.pop()
+		x := c.pop()
+		switch {
+		case x.k == eSlot && y.k == eSlot:
+			xa := x.slot
+			yb := y.slot
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedMaxF32x4(V128{f.l[xa], f.l[xa+1]}, V128{f.l[yb], f.l[yb+1]}) }))
+		case x.k == eSlot && y.k != eSlot:
+			xa := x.slot
+			yb := c.v128(y)
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedMaxF32x4(V128{f.l[xa], f.l[xa+1]}, yb(f)) }))
+		case x.k != eSlot && y.k == eSlot:
+			xa := c.v128(x)
+			yb := y.slot
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedMaxF32x4(xa(f), V128{f.l[yb], f.l[yb+1]}) }))
+		case x.k != eSlot && y.k != eSlot:
+			xa := c.v128(x)
+			yb := c.v128(y)
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedMaxF32x4(xa(f), yb(f)) }))
+		}
+	case opcode.F64x2RelaxedMin:
+		y := c.pop()
+		x := c.pop()
+		switch {
+		case x.k == eSlot && y.k == eSlot:
+			xa := x.slot
+			yb := y.slot
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedMinF64x2(V128{f.l[xa], f.l[xa+1]}, V128{f.l[yb], f.l[yb+1]}) }))
+		case x.k == eSlot && y.k != eSlot:
+			xa := x.slot
+			yb := c.v128(y)
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedMinF64x2(V128{f.l[xa], f.l[xa+1]}, yb(f)) }))
+		case x.k != eSlot && y.k == eSlot:
+			xa := c.v128(x)
+			yb := y.slot
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedMinF64x2(xa(f), V128{f.l[yb], f.l[yb+1]}) }))
+		case x.k != eSlot && y.k != eSlot:
+			xa := c.v128(x)
+			yb := c.v128(y)
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedMinF64x2(xa(f), yb(f)) }))
+		}
+	case opcode.F64x2RelaxedMax:
+		y := c.pop()
+		x := c.pop()
+		switch {
+		case x.k == eSlot && y.k == eSlot:
+			xa := x.slot
+			yb := y.slot
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedMaxF64x2(V128{f.l[xa], f.l[xa+1]}, V128{f.l[yb], f.l[yb+1]}) }))
+		case x.k == eSlot && y.k != eSlot:
+			xa := x.slot
+			yb := c.v128(y)
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedMaxF64x2(V128{f.l[xa], f.l[xa+1]}, yb(f)) }))
+		case x.k != eSlot && y.k == eSlot:
+			xa := c.v128(x)
+			yb := y.slot
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedMaxF64x2(xa(f), V128{f.l[yb], f.l[yb+1]}) }))
+		case x.k != eSlot && y.k != eSlot:
+			xa := c.v128(x)
+			yb := c.v128(y)
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedMaxF64x2(xa(f), yb(f)) }))
+		}
+	case opcode.I16x8RelaxedQ15MulRS:
+		y := c.pop()
+		x := c.pop()
+		switch {
+		case x.k == eSlot && y.k == eSlot:
+			xa := x.slot
+			yb := y.slot
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedQ15MulR(V128{f.l[xa], f.l[xa+1]}, V128{f.l[yb], f.l[yb+1]}) }))
+		case x.k == eSlot && y.k != eSlot:
+			xa := x.slot
+			yb := c.v128(y)
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedQ15MulR(V128{f.l[xa], f.l[xa+1]}, yb(f)) }))
+		case x.k != eSlot && y.k == eSlot:
+			xa := c.v128(x)
+			yb := y.slot
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedQ15MulR(xa(f), V128{f.l[yb], f.l[yb+1]}) }))
+		case x.k != eSlot && y.k != eSlot:
+			xa := c.v128(x)
+			yb := c.v128(y)
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedQ15MulR(xa(f), yb(f)) }))
+		}
+	case opcode.I16x8DotI8x16I7x16S:
+		y := c.pop()
+		x := c.pop()
+		switch {
+		case x.k == eSlot && y.k == eSlot:
+			xa := x.slot
+			yb := y.slot
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedDotI8x16I7x16S(V128{f.l[xa], f.l[xa+1]}, V128{f.l[yb], f.l[yb+1]}) }))
+		case x.k == eSlot && y.k != eSlot:
+			xa := x.slot
+			yb := c.v128(y)
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedDotI8x16I7x16S(V128{f.l[xa], f.l[xa+1]}, yb(f)) }))
+		case x.k != eSlot && y.k == eSlot:
+			xa := c.v128(x)
+			yb := y.slot
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedDotI8x16I7x16S(xa(f), V128{f.l[yb], f.l[yb+1]}) }))
+		case x.k != eSlot && y.k != eSlot:
+			xa := c.v128(x)
+			yb := c.v128(y)
+			c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedDotI8x16I7x16S(xa(f), yb(f)) }))
+		}
+	case opcode.I32x4DotI8x16I7x16AddS:
+		z := c.v128(c.pop())
+		y := c.v128(c.pop())
+		x := c.v128(c.pop())
+		c.pushTree(module.V128, tv128(func(f *frame) V128 { return relaxedDotI8x16I7x16AddS(x(f), y(f), z(f)) }))
 	default:
 		return false
 	}
