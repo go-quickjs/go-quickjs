@@ -527,7 +527,7 @@ The environment names them:
 WASM_SPEC_DIR=/tmp/wasm-spec WASM_THREADS_DIR=/tmp/wasm-threads \
   go test ./wasm/internal/spectest ./wasm/internal/wast -count=1 -v
 
-# The same on 386, where an int is 32 bits and a memory is a Go slice
+# The same on 386, where an int is 32 bits and an unshared memory is a Go slice
 GOARCH=386 WASM_SPEC_DIR=/tmp/wasm-spec WASM_THREADS_DIR=/tmp/wasm-threads \
   go test ./wasm/internal/spectest -count=1 -v
 
