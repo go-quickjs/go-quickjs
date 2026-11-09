@@ -474,6 +474,10 @@ func (cj *codeJIT) compileOpt(c *Code, idx uint32, cd *compiled, prev *nativeFn)
 		return nil
 	}
 	cd.optDone.Store(true)
+	if !c.withinBound(idx, cd) {
+		countOptRefused(wjit.RefuseFrame)
+		return nil
+	}
 	start := time.Now()
 	code, err := wopt.Compile(request(c, idx, cd, 0))
 	countTime(&jitStats.optTime, start)
@@ -599,6 +603,9 @@ func compileNative(c *Code, idx uint32, cd *compiled, counter uint64) (code *wji
 			err = fmt.Errorf("wasm jit: compiling function %d: %v", idx, p)
 		}
 	}()
+	if !c.withinBound(idx, cd) {
+		return nil, &wjit.Refusal{Reason: wjit.RefuseFrame, Detail: "a frame larger than validation's bound"}
+	}
 	return wjit.Compile(request(c, idx, cd, counter))
 }
 
@@ -608,10 +615,10 @@ func request(c *Code, idx uint32, cd *compiled, counter uint64) *wjit.Request {
 		Module:         c.Module,
 		Func:           idx,
 		FrameSlots:     cd.nslots,
-		FrameSlotsOf:   func(f uint32) int { return c.get(f).nslots },
+		FrameSlotsOf:   func(f uint32) int { n, _ := c.calleeFrame(f); return n },
 		MaxCodeBytes:   wjit.MaxCodeBytes,
 		FrameRefSlots:  cd.nativeRefSlots(),
-		RefSlotsOf:     func(f uint32) int { return c.get(f).nativeRefSlots() },
+		RefSlotsOf:     func(f uint32) int { _, n := c.calleeFrame(f); return n },
 		FrameLocals:    cd.nlocals,
 		FrameRefLocals: cd.rlocals,
 		WriteBarrier:   jitWriteBarrier,
@@ -621,6 +628,62 @@ func request(c *Code, idx uint32, cd *compiled, counter uint64) *wjit.Request {
 		TierCounter:    counter,
 		Marks:          jitCode != nil,
 	}
+}
+
+// calleeFrame is the numeric slots of function f's frame, and the
+// reference slots its native code uses, as native code calling f sizes
+// them: validation's bound (frameBound), which needs no compile of f, or
+// where there is none f's compiled body's.
+func (c *Code) calleeFrame(f uint32) (nslots, refSlots int) {
+	if n, r, ok := c.frameBound(f); ok {
+		return n, r
+	}
+	cd := c.get(f)
+	return cd.nslots, cd.nativeRefSlots()
+}
+
+// frameBound is function f's frame as validation bounds it
+// (module.FrameBound): the numeric slots, and the reference slots its
+// native code would use, of a frame that holds as much as compileFunction
+// would make one hold, or more. ok is false for a body not validated.
+func (c *Code) frameBound(f uint32) (nslots, refSlots int, ok bool) {
+	m := c.Module
+	fn := &m.Functions[f]
+	b := fn.Frame
+	if fn.Imported || b.Stack == 0 {
+		return 0, 0, false
+	}
+	sig := m.Types[fn.TypeIndex].Func
+	_, nlocals, rlocals := layout(sig.Params)
+	r := reader{b: m.Bytes, pc: int(fn.Code.Offset)}
+	for n := r.u32(); n > 0; n-- {
+		count := int(r.u32())
+		switch t := r.valueType(); {
+		case t.IsRef():
+			rlocals += count
+		case t.Kind == module.KindV128:
+			nlocals += 2 * count
+		default:
+			nlocals += count
+		}
+	}
+	_, rn, rr := layout(sig.Results)
+	nlocals, rlocals = max(nlocals, rn), max(rlocals, rr)
+	height := int(b.Stack) - 1
+	nslots = nlocals + 2*(height+1)
+	if b.Refs || rlocals > 0 || b.Tries > 0 {
+		refSlots = rlocals + height + 1 + int(b.Tries)
+	}
+	return nslots, refSlots, true
+}
+
+// withinBound reports whether function idx's frame, compiled as cd, is no
+// larger than its bound (frameBound), as native code calling it sizes it:
+// one that is larger is never given native code, and native calls of it
+// go through Go, which sizes its frame by cd.
+func (c *Code) withinBound(idx uint32, cd *compiled) bool {
+	n, r, ok := c.frameBound(idx)
+	return !ok || cd.nslots <= n && cd.nativeRefSlots() <= r
 }
 
 // nativeRefSlots is the number of reference slots of the function's frame

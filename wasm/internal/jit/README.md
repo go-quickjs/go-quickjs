@@ -343,6 +343,17 @@ callee's reference slots fit in `R`'s chunk, else the call is an
 its frame but its parameters' null when it begins, as the engine's frames
 are made, so that what the frames hold is what the interpreter's would.
 
+The room a call checks for is the callee's frame as validation bounds it
+(`module.FrameBound`, `engine.frameBound`): the most operands its stack
+holds after an instruction that can be reached, whether it pushes a
+reference, and its legacy trys' nesting, from which the engine sizes a
+frame as its compile of the body would. So compiling a caller compiles none
+of its callees, for the interpreter or natively. The bound is the frame
+for nearly every function -- above it only where code that validation
+reads follows a branch, unreachable code the interpreter skips -- and
+never below it: a function whose frame would be is refused (`frame`), its
+native callers calling it through Go.
+
 The return stack is Go memory, words, one for each exec, grown by Go (every
 level's pointers moved) when a native call finds it full and calls through
 Go.

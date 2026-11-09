@@ -58,6 +58,20 @@ type Function struct {
 	// Code locates a defined function's body (locals and instructions) in the
 	// module's bytes.
 	Code Range
+	// Frame bounds what the body keeps on its operand stack, as validation
+	// found it; it is zero for a body not validated.
+	Frame FrameBound
+}
+
+// FrameBound bounds a function body's operand stack, for an engine to size
+// a frame by before it compiles the body: Stack is one more than the most
+// operands the stack holds after an instruction of code that can be
+// reached, 0 where nothing is known; Refs says the body pushes a value of
+// a reference type, and Tries is the deepest nesting of legacy trys.
+type FrameBound struct {
+	Stack uint32
+	Tries uint32
+	Refs  bool
 }
 
 // Range is a span of the module's bytes.

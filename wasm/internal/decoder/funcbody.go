@@ -139,6 +139,12 @@ type funcValidator struct {
 	// found.
 	reachableOK bool
 	endFound    bool
+
+	// maxStack is the most operands after an instruction of code that is
+	// not unreachable; refs says a reference was pushed, and tries is the
+	// deepest nesting of legacy trys (module.FrameBound).
+	maxStack, tries int
+	refs            bool
 }
 
 type localDecl struct {
@@ -157,6 +163,7 @@ func (v *funcValidator) reset(b []byte, pc, end int) {
 	v.reachableOK = true
 	v.endFound = false
 	v.hasNonDefaultable = false
+	v.maxStack, v.tries, v.refs = 0, 0, false
 }
 
 // ValidateFunctions validates the bodies of m's defined functions in order,
@@ -289,7 +296,9 @@ func (v *funcValidator) validateFunction(f *module.Function) {
 		} else {
 			v.errorAt(v.pc, "function body must end with \"end\" opcode")
 		}
+		return
 	}
+	f.Frame = module.FrameBound{Stack: uint32(v.maxStack) + 1, Tries: uint32(v.tries), Refs: v.refs}
 }
 
 // decodeLocals reads the local declarations at pc into v.locals, after the
@@ -360,6 +369,9 @@ func (v *funcValidator) decodeBody() {
 			return
 		}
 		v.pc += n
+		if h := len(v.stack); h > v.maxStack && len(v.ctrl) > 0 && v.ctrl[len(v.ctrl)-1].reach != unreachable {
+			v.maxStack = h
+		}
 	}
 	if v.pc != v.end {
 		v.errorAt(v.pc, "Beyond end of code")
@@ -396,9 +408,17 @@ func validateConstExpr(m *module.Module, _ *detected, b []byte, start, end int, 
 
 func (v *funcValidator) push(t module.ValueType) {
 	v.stack = append(v.stack, value{uint32(v.pc), t})
+	if t.IsRef() {
+		v.refs = true
+	}
 }
 
-func (v *funcValidator) pushValue(x value) { v.stack = append(v.stack, x) }
+func (v *funcValidator) pushValue(x value) {
+	v.stack = append(v.stack, x)
+	if x.t.IsRef() {
+		v.refs = true
+	}
+}
 
 func (v *funcValidator) top() *control { return &v.ctrl[len(v.ctrl)-1] }
 
@@ -750,6 +770,15 @@ func (v *funcValidator) pushControl(kind controlKind, bt *blockType) *control {
 	}
 	startAt := uint32(len(v.merges))
 	v.merges = append(v.merges, v.stack[base:]...)
+	if kind == ctrlTry {
+		n := 1
+		for i := range v.ctrl {
+			if v.ctrl[i].isTry() {
+				n++
+			}
+		}
+		v.tries = max(v.tries, n)
+	}
 	v.ctrl = append(v.ctrl, control{
 		kind: kind, reach: reach, pc: pc,
 		stackDepth: uint32(base), initDepth: uint32(len(v.initStack)), prevCatch: -1,
@@ -765,6 +794,13 @@ func (v *funcValidator) pushMergeValues(c *control, mg *merge) {
 		return
 	}
 	v.stack = append(v.stack[:c.stackDepth], v.merges[mg.at:mg.at+mg.arity]...)
+	if !v.refs {
+		for _, x := range v.merges[mg.at : mg.at+mg.arity] {
+			if x.t.IsRef() {
+				v.refs = true
+			}
+		}
+	}
 }
 
 func (v *funcValidator) popControl() {
