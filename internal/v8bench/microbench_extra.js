@@ -497,6 +497,37 @@ function array_push_varying(n)
     return count;
 }
 
+/* an array filled from its last index down, from further than a write
+   past its length fills with holes, then read */
+function array_fill_down(n)
+{
+    var i, j, a, s = 0, len = 4096;
+    for (j = 0; j < n; j += len) {
+        a = [];
+        for (i = len - 1; i >= 0; i--)
+            a[i] = i;
+        for (i = 0; i < len; i++)
+            s += a[i];
+    }
+    global_res = s;
+    return j;
+}
+
+/* new Array(n) filled from its last index down, then read */
+function array_new_fill_down(n)
+{
+    var i, j, a, s = 0, len = 4096;
+    for (j = 0; j < n; j += len) {
+        a = new Array(len);
+        for (i = len - 1; i >= 0; i--)
+            a[i] = i;
+        for (i = 0; i < len; i++)
+            s += a[i];
+    }
+    global_res = s;
+    return j;
+}
+
 function array_literal_empty(n)
 {
     var j, a;
@@ -1529,6 +1560,47 @@ function object_spread(n)
     var ref = { a: 1, b: 2, c: 3, d: 4 }, j, o;
     for (j = 0; j < n; j++)
         o = { ...ref, k: j };
+    global_res = o;
+    return n;
+}
+
+/* object spread of a plain object of four properties alone: the copy */
+function object_spread_plain(n)
+{
+    var ref = { a: 1, b: 2, c: 3, d: 4 }, j, o;
+    for (j = 0; j < n; j++)
+        o = { ...ref };
+    global_res = o;
+    return n;
+}
+
+class ExtraSpreadPoint {
+    constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.z = 0;
+        this.w = 1;
+    }
+}
+
+/* object spread of a class's instance of four fields: a copy of another
+   layout than the source's, its prototype Object.prototype */
+function object_spread_class(n)
+{
+    var ref = new ExtraSpreadPoint(1, 2), j, o;
+    for (j = 0; j < n; j++)
+        o = { ...ref };
+    global_res = o;
+    return n;
+}
+
+/* object spread of a plain object of twenty properties */
+function object_spread_large(n)
+{
+    var ref = { a0: 0, a1: 1, a2: 2, a3: 3, a4: 4, a5: 5, a6: 6, a7: 7, a8: 8, a9: 9,
+                b0: 0, b1: 1, b2: 2, b3: 3, b4: 4, b5: 5, b6: 6, b7: 7, b8: 8, b9: 9 }, j, o;
+    for (j = 0; j < n; j++)
+        o = { ...ref };
     global_res = o;
     return n;
 }
