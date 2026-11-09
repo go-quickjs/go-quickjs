@@ -497,8 +497,10 @@ result is the interpreter's by construction. The backends compile natively:
 | float lanes | add, sub, mul, div, sqrt, abs, neg, min, max, pmin, pmax, ceil, floor, trunc, nearest, the comparisons |
 | conversions | convert, trunc_sat, demote, promote |
 | integer lanes | add, sub, saturating add and sub, mul, neg, abs, min, max, avgr_u, popcnt, all_true, bitmask, shl, shr_s, shr_u, the comparisons, narrow, extend, extmul, extadd_pairwise, dot_i16x8_s, q15mulr_sat_s, swizzle, shuffle |
+| relaxed SIMD | all but relaxed_madd and relaxed_nmadd where the interpreter fuses them by a code of its own (below) |
 
-and leave the rest to the exit.
+The exit runs what is left: f32x4.relaxed_madd and relaxed_nmadd on arm64,
+and those and f64x2's on amd64 when the CPU has FMA3 and AVX.
 
 Where the instruction sets have no one instruction for an operation, the
 code composes it. On amd64: i64x2.mul from PMULUDQ's products of 32-bit
@@ -533,11 +535,45 @@ rounds their sum once; to f64, each lane is the low word of 2**52 + u, less
 word of 2**52 plus the truncated lane. On arm64 every float lane
 instruction is ASIMD's own -- FMIN and FMAX for min and max, FCVTZS and
 FCVTZU, narrowed by SQXTN and UQXTN, for trunc_sat -- but pmin and pmax,
-an FCMGT mask selecting with BSL. `TestJITSIMDBits` (engine) runs every SIMD
-instruction that is not a load, a store or a constant, relaxed ones
-included, on the edges of each lane shape and on random bits, interpreted
-and natively, requires the same bits, and logs the instructions that went
-through the exit.
+an FCMGT mask selecting with BSL.
+
+The relaxed instructions give what the interpreter gives on the host
+(`engine/relaxed_x86.go`, `relaxed_other.go`), whose choices the backend
+reads from the same CPU features (`Features`: FMA3 with AVX, AVX-VNNI,
+AVX-VNNI-INT8). On amd64: relaxed_swizzle is PSHUFB alone; the signed
+truncations CVTTPS2DQ and CVTTPD2DQ alone, the unsigned ones trunc_sat's;
+relaxed_min and relaxed_max MINPS and MAXPS; relaxed_q15mulr_s PMULHRSW;
+relaxed_laneselect the top bit of each byte, or of each 32- or 64-bit
+lane, of the mask spread through it (PCMPGTB of 0, PSRAD), then a
+bitselect, as PBLENDVB, BLENDVPS and BLENDVPD select, without their
+implicit XMM0; relaxed_dot_i8x16_i7x16_s PMADDUBSW, and its add, with
+AVX-VNNI (unsigned second operand) or AVX-VNNI-INT8 (signed), PMADDWD of
+the even and the odd bytes widened to 16 bits, summed, else PMADDUBSW,
+PMADDWD of ones and PADDD. relaxed_madd and nmadd unfused are MULPS (MULPD)
+and ADDPS or SUBPS; fused, the interpreter's single precision is a rounding
+to odd of its own, and its double precision math.FMA, whose NaNs differ
+from those of FMA3's forms, so they exit. On arm64 every relaxed
+instruction is the deterministic one's but f64x2's relaxed_madd and
+nmadd, FMLA into the addend, as math.FMA's FMADD, nmadd's factor negated
+by FNEG first; f32x4's exit, its fusion being the interpreter's rounding
+to odd.
+
+The operand order of a commutative operation decides which of two NaNs
+its result is. The interpreter's lane functions compile to scalar
+instructions whose order Go chooses; native code puts its operands in the
+order the interpreter's code has them -- first operand first for every
+lane-wise add, mul, min and max, the second factor first for f64x2's
+relaxed_madd and nmadd -- and `TestJITSIMDBits` holds it to them: a
+change of Go's choice shows as a difference there.
+
+`TestJITSIMDBits` (engine) runs every SIMD instruction that is not a load,
+a store or a constant, relaxed ones included, on the edges of each lane
+shape and on random bits, interpreted and natively, requires the same
+bits, and requires the exit for no instruction but those above;
+`TestJITRelaxedChoices` (amd64) does it for the relaxed instructions under
+each choice amd64's CPUs make, the interpreter's made alike;
+`TestJITSIMDValues` holds many v128s live at once, in homes across calls,
+through globals, select, blocks, br_table and a loop.
 
 ## Refusals
 

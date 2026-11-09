@@ -42,7 +42,7 @@ records a set but turns nothing off.
 | WebAssembly 1.0, mutable globals | yes | yes |
 | Sign extension, non-trapping float-to-int, multi-value, bulk memory | yes | yes; the bulk instructions run in Go |
 | Reference types | yes | yes; `table.grow` and `table.fill` in Go |
-| Fixed-width SIMD | yes | yes; on amd64 with SSSE3, SSE4.1 and SSE4.2; the instructions listed under [The JIT](#the-jit) run in Go |
+| Fixed-width SIMD | yes | yes; on amd64 with SSSE3, SSE4.1 and SSE4.2 |
 | Tail calls | yes | yes; `return_call_indirect` through Go |
 | Extended constant expressions | yes | -- |
 | Multiple memories | yes | loads and stores of memory 0 only |
@@ -50,7 +50,7 @@ records a set but turns nothing off.
 | Exception handling (`exnref`), and the legacy `try` | yes | yes; throwing and catching through Go |
 | Typed function references | yes | yes; `call_ref` and `return_call_ref` through Go |
 | Garbage collection: structs, arrays, i31, casts | yes | yes; what allocates, and `array.fill`, `array.copy` and `array.init_*`, in Go; refused for a v128 field or element read or written |
-| Relaxed SIMD | yes, with the host architecture's choice for each operator | yes, with the interpreter's choices; the instructions listed under [The JIT](#the-jit) run in Go |
+| Relaxed SIMD | yes, with the host architecture's choice for each operator | yes, with the interpreter's choices; a fused `relaxed_madd` and `relaxed_nmadd` in Go |
 | Threads: shared memories, atomics, `wait` and `notify` | yes | refused for the atomics |
 
 A refused function stays in the interpreter; the rest of its module may run
@@ -464,10 +464,11 @@ A v128 lives in an XMM or a V register, or in two of the frame's slots, as
 the interpreter keeps it. Native code compiles v128.const, the SIMD loads
 and stores of every memory, splat, extract_lane, replace_lane, the
 bitwise instructions, every integer and float lane instruction, shuffle
-and swizzle included, and the conversions; the relaxed SIMD instructions
-return to Go, which runs
-the interpreter's own code for it, so that its result is the interpreter's
-bit for bit, and resumes.
+and swizzle included, the conversions and the relaxed instructions, with
+the interpreter's choices for the host. relaxed_madd and relaxed_nmadd,
+where the interpreter fuses them -- f32x4's on arm64, and both shapes' on
+amd64 with FMA3 -- return to Go, which runs the interpreter's own code for
+them, so that the result is the interpreter's bit for bit, and resumes.
 
 A function is refused whole, and stays in the interpreter, when it has:
 

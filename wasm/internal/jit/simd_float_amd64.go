@@ -193,22 +193,26 @@ func (c *compiler) simdFloat(op opcode.Opcode) bool {
 			a.Vec(amd64.Cvttpd2dq, x, x)
 		})
 	case opcode.I32x4TruncSatF64x2UZero:
-		// Clamped to [0, 2**32-1], NaN to 0, truncated, and each lane the
-		// low word of 2**52 plus it.
-		c.vunary(v128, func(x amd64.XReg) {
-			z := c.vtemp()
-			a.Vec(amd64.Pxor, z, z)
-			a.Vec(amd64.Maxpd, x, z)
-			c.vopConst(amd64.Minpd, x, f64s(4294967295))
-			a.VecImm(amd64.Roundpd, x, x, amd64.RoundTrunc|8)
-			c.vopConst(amd64.Addpd, x, f64s(1<<52))
-			a.VecImm(amd64.Shufps, x, z, 0x88)
-			c.freeX(z)
-		})
+		c.vunary(v128, c.truncSatF64U)
 	default:
-		return false
+		return c.simdRelaxed(op)
 	}
 	return true
+}
+
+// truncSatF64U converts x's doubles to unsigned 32-bit integers in its
+// lower half, saturating, the upper half cleared: clamped to [0, 2**32-1],
+// NaN to 0, truncated, and each lane the low word of 2**52 plus it.
+func (c *compiler) truncSatF64U(x amd64.XReg) {
+	a := c.a
+	z := c.vtemp()
+	a.Vec(amd64.Pxor, z, z)
+	a.Vec(amd64.Maxpd, x, z)
+	c.vopConst(amd64.Minpd, x, f64s(4294967295))
+	a.VecImm(amd64.Roundpd, x, x, amd64.RoundTrunc|8)
+	c.vopConst(amd64.Addpd, x, f64s(1<<52))
+	a.VecImm(amd64.Shufps, x, z, 0x88)
+	c.freeX(z)
 }
 
 // truncSatF32S converts x's floats to signed 32-bit integers, saturating:

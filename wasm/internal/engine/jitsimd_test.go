@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/wasm/internal/decoder"
+	wjit "github.com/go-quickjs/go-quickjs/wasm/internal/jit"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/opcode"
 )
@@ -381,12 +383,38 @@ func TestJITSIMDBits(t *testing.T) {
 	if !JITAvailable() {
 		t.Skip("no native code in this build")
 	}
-	fns := simdTestFuncs()
+	n, calls, exits := simdBits(t, func(simdFunc) bool { return true })
+	t.Logf("%d functions, %d calls compared; %d instructions run in Go: %s", n, calls, len(exits), strings.Join(exits, " "))
+	// Only the fused relaxed_madd and relaxed_nmadd the interpreter
+	// computes otherwise than the vector instructions do.
+	want := []string{"f32x4.qfma", "f32x4.qfms"}
+	if runtime.GOARCH == "amd64" {
+		want = nil
+		if wjit.CPU.RelaxedFused {
+			want = []string{"f32x4.qfma", "f32x4.qfms", "f64x2.qfma", "f64x2.qfms"}
+		}
+	}
+	if !slices.Equal(exits, want) {
+		t.Fatalf("the instructions run in Go are %v, want %v", exits, want)
+	}
+}
+
+// simdBits compares the functions of simdTestFuncs that keep takes,
+// interpreted and natively, returning how many there were, the calls
+// compared, and the names of the instructions native code left to Go.
+func simdBits(t *testing.T, keep func(simdFunc) bool) (n, calls int, exits []string) {
+	t.Helper()
+	var fns []simdFunc
+	for _, f := range simdTestFuncs() {
+		if keep(f) {
+			fns = append(fns, f)
+		}
+	}
 	b := simdModule(fns)
 	interp := binaryInstance(t, b, math.MaxInt32)
 	native := binaryInstance(t, b, 0)
 	r := rand.New(rand.NewPCG(1, 2))
-	calls, fails := 0, 0
+	fails := 0
 	for _, f := range fns {
 		ei, _ := interp.Export(f.name)
 		en, _ := native.Export(f.name)
@@ -418,28 +446,27 @@ func TestJITSIMDBits(t *testing.T) {
 			t.Fatalf("%s has no native code", f.name)
 		}
 	}
+	if fails > 0 {
+		t.Fatalf("%d differences", fails)
+	}
 	// The instructions native code left to Go: those whose offsets the
 	// exits' code is kept by.
 	cj := native.Code.jit.Load()
-	exits := map[string]bool{}
+	names := map[string]bool{}
 	cj.simd.Range(func(k, _ any) bool {
 		at := k.(uint32)
 		for i, f := range native.Code.Module.Functions {
 			if at >= f.Code.Offset && at < f.Code.End() {
-				exits[fns[i].op.Name()] = true
+				names[fns[i].op.Name()] = true
 			}
 		}
 		return true
 	})
-	var names []string
-	for n := range exits {
-		names = append(names, n)
+	for n := range names {
+		exits = append(exits, n)
 	}
-	sort.Strings(names)
-	t.Logf("%d functions, %d calls compared; %d instructions run in Go: %s", len(fns), calls, len(names), strings.Join(names, " "))
-	if fails > 0 {
-		t.Fatalf("%d differences", fails)
-	}
+	sort.Strings(exits)
+	return len(fns), calls, exits
 }
 
 func showVals(args []Val) string {

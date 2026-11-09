@@ -121,7 +121,7 @@ func (c *compiler) simdFloat(op opcode.Opcode) bool {
 			a.V2(arm64.VUqxtn, arm64.V32, x, x)
 		})
 	default:
-		return false
+		return c.simdRelaxed(op)
 	}
 	return true
 }
