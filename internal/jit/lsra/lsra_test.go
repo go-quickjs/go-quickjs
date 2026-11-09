@@ -366,3 +366,28 @@ func TestRanges(t *testing.T) {
 		}
 	}
 }
+
+// TestLivenessMethods allocates random functions with liveness found by
+// the paths from the uses (explore) and by the dataflow, which must give
+// the same allocation.
+func TestLivenessMethods(t *testing.T) {
+	rng := rand.New(rand.NewPCG(13, 17))
+	cfg := &Config{Classes: [][]int{{3, 1, 0, 2}, {0, 1, 2}}, NumSlots: 1000}
+	defer func() { forceDataflow = false }()
+	for iter := 0; iter < 5000; iter++ {
+		f := randomFunc(rng)
+		forceDataflow = false
+		a, err := Allocate(f, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		forceDataflow = true
+		b, err := Allocate(f, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(a.Reg, b.Reg) || !slices.Equal(a.Slot, b.Slot) || a.NumSlots != b.NumSlots {
+			t.Fatalf("iteration %d: the two liveness methods allocate differently", iter)
+		}
+	}
+}

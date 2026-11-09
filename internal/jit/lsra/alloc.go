@@ -158,6 +158,8 @@ type Allocator struct {
 	parts    []*web
 	next     []int32
 	clobAt   []int32
+	defInst  []int32
+	work     []int32
 	callsTo  []int32
 	weightTo []float64
 	masked   []int32
@@ -225,17 +227,25 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	// Liveness, of the registers that may be live across a block's
 	// boundary -- a phi's, a phi's argument, one used in a block other
 	// than its definition's -- numbered densely (global): the registers
-	// live into and out of each block, over the blocks backwards until
-	// nothing changes. A successor's phis read their arguments on the
-	// edge, at the predecessor's end. The others are live within their
-	// blocks alone, which the ranges' walk finds.
+	// live into and out of each block. A successor's phis read their
+	// arguments on the edge, at the predecessor's end. The others are live
+	// within their blocks alone, which the ranges' walk finds.
 	defBlock := grown(al.defBlock, n)
+	defInst := grown(al.defInst, n)
 	global := grown(al.global, n)
 	for i := range defBlock {
 		defBlock[i] = -1
 	}
 	clear(global)
-	al.defBlock, al.global = defBlock, global
+	al.defBlock, al.defInst, al.global = defBlock, defInst, global
+	// once says every register is defined once at most.
+	once := true
+	define := func(d VReg, i, j int) {
+		if defBlock[d] >= 0 {
+			once = false
+		}
+		defBlock[d], defInst[d] = int32(i), int32(j)
+	}
 	globals := al.globals[:0]
 	mark := func(v VReg) {
 		if alloc(v) && global[v] == 0 {
@@ -247,7 +257,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		b := &f.Blocks[i]
 		for _, p := range b.Phis {
 			if alloc(p.Def) {
-				defBlock[p.Def] = int32(i)
+				define(p.Def, i, -1)
 				mark(p.Def)
 			}
 			for _, a := range p.Args {
@@ -257,7 +267,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		for j := range b.Insts {
 			for _, d := range b.Insts[j].Defs {
 				if alloc(d) {
-					defBlock[d] = int32(i)
+					define(d, i, j)
 				}
 			}
 		}
@@ -276,99 +286,21 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	// gi is v's global number, or -1.
 	gi := func(v VReg) int { return int(global[v]) - 1 }
 	words := (len(globals) + 63) / 64
-	// Each block's sets: live in, live out, gen and kill, words each.
-	live := grown(al.live, 4*nb*words)
+	// Each block's sets, words each: live in and live out, and for the
+	// dataflow gen and kill too.
+	once = once && !forceDataflow
+	stride := 2
+	if !once {
+		stride = 4
+	}
+	live := grown(al.live, stride*nb*words)
 	clear(live)
 	al.live = live
-	liveIn := func(i int) []uint64 { return live[4*i*words : (4*i+1)*words] }
-	liveOut := func(i int) []uint64 { return live[(4*i+1)*words : (4*i+2)*words] }
-	for i := range f.Blocks {
-		b := &f.Blocks[i]
-		g, k := live[(4*i+2)*words:(4*i+3)*words], live[(4*i+3)*words:(4*i+4)*words]
-		for j := len(b.Insts) - 1; j >= 0; j-- {
-			in := &b.Insts[j]
-			for _, d := range in.Defs {
-				if alloc(d) {
-					if x := gi(d); x >= 0 {
-						k[x/64] |= 1 << (x % 64)
-						g[x/64] &^= 1 << (x % 64)
-					}
-				}
-			}
-			for _, u := range in.Uses {
-				if alloc(u) {
-					if x := gi(u); x >= 0 {
-						g[x/64] |= 1 << (x % 64)
-					}
-				}
-			}
-		}
-		for _, p := range b.Phis {
-			if alloc(p.Def) {
-				x := gi(p.Def)
-				k[x/64] |= 1 << (x % 64)
-				g[x/64] &^= 1 << (x % 64)
-			}
-		}
-	}
-	// What the successors' phis read on a block's edges is live out of it
-	// whatever else is: those are set first, and the sets only grow.
-	for i := range f.Blocks {
-		b := &f.Blocks[i]
-		out := liveOut(i)
-		for k, s := range b.Succs {
-			pi := predIdx[int(predOff[i])+k]
-			for _, p := range f.Blocks[s].Phis {
-				if a := p.Args[pi]; alloc(a) {
-					x := gi(a)
-					out[x/64] |= 1 << (x % 64)
-				}
-			}
-		}
-	}
-	// A block is walked again only where a successor's live-in set grew
-	// since it last was (stale): backwards over the blocks, in reverse
-	// postorder, a block's successors but its loops' headers come before
-	// it, and the sweeps after the first are the loops'.
-	stale := grown(al.stale, nb)
-	for i := range stale {
-		stale[i] = true
-	}
-	al.stale = stale
-	for again := true; again; {
-		again = false
-		for i := nb - 1; i >= 0; i-- {
-			if !stale[i] {
-				continue
-			}
-			stale[i] = false
-			b := &f.Blocks[i]
-			out := liveOut(i)
-			for _, s := range b.Succs {
-				sin := liveIn(s)
-				for w := range out {
-					out[w] |= sin[w]
-				}
-			}
-			in := liveIn(i)
-			g, k := live[(4*i+2)*words:(4*i+3)*words], live[(4*i+3)*words:(4*i+4)*words]
-			grew := false
-			for w := range in {
-				nw := g[w] | out[w]&^k[w]
-				if nw != in[w] {
-					in[w] = nw
-					grew = true
-				}
-			}
-			if grew {
-				for _, p := range b.Preds {
-					stale[p] = true
-					if p >= i {
-						again = true
-					}
-				}
-			}
-		}
+	liveOut := func(i int) []uint64 { return live[(stride*i+1)*words : (stride*i+2)*words] }
+	if once {
+		al.explore(f, words, stride, defBlock, defInst, gi)
+	} else {
+		al.dataflow(f, words, gi)
 	}
 	lap(PhaseLiveness)
 
@@ -953,6 +885,177 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	al.list = list[:0]
 	lap(PhaseSlots)
 	return res, nil
+}
+
+// forceDataflow has every allocation find liveness by the dataflow, for
+// the tests that compare it with explore.
+var forceDataflow bool
+
+// explore finds each register's liveness by the paths from its uses back
+// to its definition, as Boissinot et al.'s "Computing Liveness Sets for
+// SSA-Form Programs": a register used in a block other than its
+// definition's, or before its definition, is live into it, and out of and
+// into each block before it up to its definition's; a phi's argument is
+// live out of the predecessor whose edge it is read on. The work is the
+// sets' size, not the blocks' number times the registers' as a sweep of
+// the blocks is. Every register is defined once at most.
+func (al *Allocator) explore(f *Func, words, stride int, defBlock, defInst []int32, gi func(VReg) int) {
+	live := al.live
+	work := al.work[:0]
+	// up has register v, global x, live into block b.
+	up := func(v VReg, x int, b int) {
+		w, bit := x/64, uint64(1)<<(x%64)
+		in := live[stride*b*words:]
+		if in[w]&bit != 0 {
+			return
+		}
+		in[w] |= bit
+		work = append(work[:0], int32(b))
+		for len(work) > 0 {
+			c := work[len(work)-1]
+			work = work[:len(work)-1]
+			for _, p := range f.Blocks[c].Preds {
+				live[(stride*p+1)*words+w] |= bit
+				if int32(p) == defBlock[v] {
+					continue
+				}
+				if pin := &live[stride*p*words+w]; *pin&bit == 0 {
+					*pin |= bit
+					work = append(work, int32(p))
+				}
+			}
+		}
+	}
+	for i := range f.Blocks {
+		b := &f.Blocks[i]
+		for j := range b.Insts {
+			for _, u := range b.Insts[j].Uses {
+				if u < 0 || f.Class[u] == NoClass || defBlock[u] == int32(i) && defInst[u] < int32(j) {
+					continue
+				}
+				if x := gi(u); x >= 0 {
+					up(u, x, i)
+				}
+			}
+		}
+		pk := al.predOff[i]
+		for k, sc := range b.Succs {
+			pi := al.predIdx[int(pk)+k]
+			for _, p := range f.Blocks[sc].Phis {
+				a := p.Args[pi]
+				if a < 0 || f.Class[a] == NoClass {
+					continue
+				}
+				x := gi(a)
+				live[(stride*i+1)*words+x/64] |= 1 << (x % 64)
+				if defBlock[a] != int32(i) {
+					up(a, x, i)
+				}
+			}
+		}
+	}
+	al.work = work[:0]
+}
+
+// dataflow finds the registers' liveness by sweeps of the blocks until
+// their sets change no more, each register's uses before its definitions
+// in a block (gen) live into it, and what is live out of it but not
+// defined there (kill): registers may be defined more than once.
+func (al *Allocator) dataflow(f *Func, words int, gi func(VReg) int) {
+	nb := len(f.Blocks)
+	live := al.live
+	alloc := func(v VReg) bool { return v >= 0 && f.Class[v] != NoClass }
+	liveIn := func(i int) []uint64 { return live[4*i*words : (4*i+1)*words] }
+	liveOut := func(i int) []uint64 { return live[(4*i+1)*words : (4*i+2)*words] }
+	predIdx, predOff := al.predIdx, al.predOff
+	for i := range f.Blocks {
+		b := &f.Blocks[i]
+		g, k := live[(4*i+2)*words:(4*i+3)*words], live[(4*i+3)*words:(4*i+4)*words]
+		for j := len(b.Insts) - 1; j >= 0; j-- {
+			in := &b.Insts[j]
+			for _, d := range in.Defs {
+				if alloc(d) {
+					if x := gi(d); x >= 0 {
+						k[x/64] |= 1 << (x % 64)
+						g[x/64] &^= 1 << (x % 64)
+					}
+				}
+			}
+			for _, u := range in.Uses {
+				if alloc(u) {
+					if x := gi(u); x >= 0 {
+						g[x/64] |= 1 << (x % 64)
+					}
+				}
+			}
+		}
+		for _, p := range b.Phis {
+			if alloc(p.Def) {
+				x := gi(p.Def)
+				k[x/64] |= 1 << (x % 64)
+				g[x/64] &^= 1 << (x % 64)
+			}
+		}
+	}
+	// What the successors' phis read on a block's edges is live out of it
+	// whatever else is: those are set first, and the sets only grow.
+	for i := range f.Blocks {
+		b := &f.Blocks[i]
+		out := liveOut(i)
+		for k, s := range b.Succs {
+			pi := predIdx[int(predOff[i])+k]
+			for _, p := range f.Blocks[s].Phis {
+				if a := p.Args[pi]; alloc(a) {
+					x := gi(a)
+					out[x/64] |= 1 << (x % 64)
+				}
+			}
+		}
+	}
+	// A block is walked again only where a successor's live-in set grew
+	// since it last was (stale): backwards over the blocks, in reverse
+	// postorder, a block's successors but its loops' headers come before
+	// it, and the sweeps after the first are the loops'.
+	stale := grown(al.stale, nb)
+	for i := range stale {
+		stale[i] = true
+	}
+	al.stale = stale
+	for again := true; again; {
+		again = false
+		for i := nb - 1; i >= 0; i-- {
+			if !stale[i] {
+				continue
+			}
+			stale[i] = false
+			b := &f.Blocks[i]
+			out := liveOut(i)
+			for _, s := range b.Succs {
+				sin := liveIn(s)
+				for w := range out {
+					out[w] |= sin[w]
+				}
+			}
+			in := liveIn(i)
+			g, k := live[(4*i+2)*words:(4*i+3)*words], live[(4*i+3)*words:(4*i+4)*words]
+			grew := false
+			for w := range in {
+				nw := g[w] | out[w]&^k[w]
+				if nw != in[w] {
+					in[w] = nw
+					grew = true
+				}
+			}
+			if grew {
+				for _, p := range b.Preds {
+					stale[p] = true
+					if p >= i {
+						again = true
+					}
+				}
+			}
+		}
+	}
 }
 
 // byStart orders webs by their starts, then their first members.
