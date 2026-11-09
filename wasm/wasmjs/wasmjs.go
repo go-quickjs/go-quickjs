@@ -60,10 +60,18 @@ func Install(rt *quickjs.Runtime, opts ...Option) error {
 	if err != nil {
 		return err
 	}
+	objectCtor, err := r.GetProp(vm.Obj(r.Global()), r.Intern("Object"))
+	if err != nil {
+		return err
+	}
+	objectProto, err := r.GetProp(objectCtor, r.Intern("prototype"))
+	if err != nil || !objectProto.IsObject() {
+		return errors.New("wasmjs: no Object.prototype")
+	}
 	var built *vm.Object
 	vm.HostDefineLazyGlobal(r, "WebAssembly", func(r *vm.Runtime) *vm.Object {
 		if built == nil {
-			built = newAPI(r, rt, c, proxy).ns
+			built = newAPI(r, rt, c, proxy, objectProto.Object()).ns
 		}
 		return built
 	})
@@ -91,8 +99,10 @@ type api struct {
 
 	// proxy is the Proxy constructor, which wasm's GC objects are made
 	// opaque with, and opaque the handler they are made with.
-	proxy  vm.Value
-	opaque *vm.Object
+	proxy vm.Value
+	// objectProto is Object.prototype, as Install found it.
+	objectProto *vm.Object
+	opaque      *vm.Object
 
 	// wrappers maps wasm's objects -- functions, memories, tables, globals,
 	// tags, exceptions, structs and arrays -- to the JavaScript objects that
@@ -110,8 +120,8 @@ type api struct {
 }
 
 // newAPI builds the WebAssembly namespace of r.
-func newAPI(r *vm.Runtime, qrt any, c config, proxy vm.Value) *api {
-	a := &api{rt: r, qrt: qrt, quirks: vm.HostNodeQuirks(r), proxy: proxy,
+func newAPI(r *vm.Runtime, qrt any, c config, proxy vm.Value, objectProto *vm.Object) *api {
+	a := &api{rt: r, qrt: qrt, quirks: vm.HostNodeQuirks(r), proxy: proxy, objectProto: objectProto,
 		streamBytes: vm.Undefined, streamThen: vm.Undefined}
 	if a.quirks {
 		a.limits = decoder.V8Limits()
@@ -283,4 +293,11 @@ func thrownValue(err error) (vm.Value, bool) {
 		return t.Value, true
 	}
 	return vm.Undefined, false
+}
+
+// newTargetProto returns the prototype an object a constructor makes is
+// given: new.target's prototype property, or Object.prototype where that is
+// not an object.
+func (a *api) newTargetProto(rt *vm.Runtime) (*vm.Object, error) {
+	return vm.HostProtoFromNewTarget(rt, a.objectProto)
 }

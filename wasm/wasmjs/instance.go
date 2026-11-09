@@ -27,6 +27,10 @@ func (a *api) newInstance(rt *vm.Runtime, this vm.Value, args []vm.Value) (vm.Va
 	if !rt.Constructing() {
 		return vm.Undefined, t.typeError("WebAssembly.Instance must be invoked with 'new'")
 	}
+	proto, err := a.newTargetProto(rt)
+	if err != nil {
+		return vm.Undefined, err
+	}
 	md := moduleOf(arg(args, 0))
 	if md == nil {
 		return vm.Undefined, t.typeError("Argument 0 must be a WebAssembly.Module")
@@ -36,10 +40,6 @@ func (a *api) newInstance(rt *vm.Runtime, this vm.Value, args []vm.Value) (vm.Va
 		return vm.Undefined, t.typeError("Argument 1 must be an object")
 	}
 	inst, err := a.instantiateModule(t, md, ffi)
-	if err != nil {
-		return vm.Undefined, err
-	}
-	proto, err := vm.HostProtoFromNewTarget(rt, a.instanceProto)
 	if err != nil {
 		return vm.Undefined, err
 	}

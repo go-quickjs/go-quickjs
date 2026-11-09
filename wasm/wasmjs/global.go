@@ -46,6 +46,10 @@ func (a *api) newGlobal(rt *vm.Runtime, this vm.Value, args []vm.Value) (vm.Valu
 	if !rt.Constructing() {
 		return vm.Undefined, t.typeError("WebAssembly.Global must be invoked with 'new'")
 	}
+	proto, err := a.newTargetProto(rt)
+	if err != nil {
+		return vm.Undefined, err
+	}
 	desc := arg(args, 0)
 	if !desc.IsObject() {
 		return vm.Undefined, t.typeError("Argument 0 must be a global descriptor")
@@ -64,10 +68,6 @@ func (a *api) newGlobal(rt *vm.Runtime, this vm.Value, args []vm.Value) (vm.Valu
 	}
 	if !ok {
 		return vm.Undefined, t.typeError("Descriptor property 'value' must be a WebAssembly type")
-	}
-	proto, err := vm.HostProtoFromNewTarget(rt, a.globalProto)
-	if err != nil {
-		return vm.Undefined, err
 	}
 	g := &engine.Global{Type: typ, Mutable: mv.Truthy()}
 	v := arg(args, 1)

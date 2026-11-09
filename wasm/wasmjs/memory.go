@@ -109,6 +109,10 @@ func (a *api) newMemory(rt *vm.Runtime, this vm.Value, args []vm.Value) (vm.Valu
 	if !rt.Constructing() {
 		return vm.Undefined, t.typeError("WebAssembly.Memory must be invoked with 'new'")
 	}
+	proto, err := a.newTargetProto(rt)
+	if err != nil {
+		return vm.Undefined, err
+	}
 	desc := arg(args, 0)
 	if !desc.IsObject() {
 		return vm.Undefined, t.typeError("Argument 0 must be a memory descriptor")
@@ -143,10 +147,6 @@ func (a *api) newMemory(rt *vm.Runtime, this vm.Value, args []vm.Value) (vm.Valu
 	mem := engine.NewMemory(initial, maximum, hasMax, is64, shared)
 	if mem == nil {
 		return vm.Undefined, t.rangeError("could not allocate memory")
-	}
-	proto, err := vm.HostProtoFromNewTarget(rt, a.memoryProto)
-	if err != nil {
-		return vm.Undefined, err
 	}
 	return vm.Obj(a.memoryObject(mem, proto)), nil
 }

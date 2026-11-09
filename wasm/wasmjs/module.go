@@ -207,6 +207,10 @@ func (a *api) newModule(rt *vm.Runtime, this vm.Value, args []vm.Value) (vm.Valu
 	if !rt.Constructing() {
 		return vm.Undefined, t.typeError("WebAssembly.Module must be invoked with 'new'")
 	}
+	proto, err := a.newTargetProto(rt)
+	if err != nil {
+		return vm.Undefined, err
+	}
 	b, err := a.bufferSource(t, arg(args, 0))
 	if err != nil {
 		return vm.Undefined, err
@@ -216,10 +220,6 @@ func (a *api) newModule(rt *vm.Runtime, this vm.Value, args []vm.Value) (vm.Valu
 		return vm.Undefined, err
 	}
 	md, err := a.compile(t, b, ci, false)
-	if err != nil {
-		return vm.Undefined, err
-	}
-	proto, err := vm.HostProtoFromNewTarget(rt, a.moduleProto)
 	if err != nil {
 		return vm.Undefined, err
 	}

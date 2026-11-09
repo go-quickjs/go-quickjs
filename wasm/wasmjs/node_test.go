@@ -103,6 +103,9 @@ var nodeKnownDifferences = map[string]string{
 	"runtime.js: new exported":              "the runtime names the callee by its name, not by the expression",
 	"runtime.js: exported toString":         "the runtime writes a name that is not an identifier as a computed key",
 	"runtime.js: deep recursion through JS": "the runtime's own stack overflow message",
+	"api.js: subclass Tag":                  "super() gives what a built-in constructor makes the subclass's prototype, which V8 does not for a Tag",
+	"api.js: subclass Exception":            "super() gives what a built-in constructor makes the subclass's prototype, which V8 does not for an Exception",
+	"api.js: subclass Suspending":           "super() gives what a built-in constructor makes the subclass's prototype, which V8 does not for a Suspending",
 	"gc.js: method":                         "the runtime names the callee of a call through a proxy undefined",
 	"gc.js: JSON":                           "JSON.stringify writes a GC object as an empty object, where V8 writes null",
 }

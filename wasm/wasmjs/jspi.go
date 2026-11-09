@@ -134,6 +134,11 @@ func (a *api) newSuspending(rt *vm.Runtime, this vm.Value, args []vm.Value) (vm.
 	if !rt.Constructing() {
 		return vm.Undefined, t.typeError("WebAssembly.Suspending must be invoked with 'new'")
 	}
+	// The prototype is new.target's to read, but the object is a
+	// Suspending's whatever it is.
+	if _, err := a.newTargetProto(rt); err != nil {
+		return vm.Undefined, err
+	}
 	fn := arg(args, 0)
 	if !vm.IsCallable(fn) || !fn.IsObject() {
 		return vm.Undefined, t.typeError("Argument 0 must be a function")

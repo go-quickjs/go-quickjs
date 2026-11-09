@@ -30,6 +30,10 @@ func (a *api) newTable(rt *vm.Runtime, this vm.Value, args []vm.Value) (vm.Value
 	if !rt.Constructing() {
 		return vm.Undefined, t.typeError("WebAssembly.Table must be invoked with 'new'")
 	}
+	proto, err := a.newTargetProto(rt)
+	if err != nil {
+		return vm.Undefined, err
+	}
 	desc := arg(args, 0)
 	if !desc.IsObject() {
 		return vm.Undefined, t.typeError("Argument 0 must be a table descriptor")
@@ -58,10 +62,6 @@ func (a *api) newTable(rt *vm.Runtime, this vm.Value, args []vm.Value) (vm.Value
 		return vm.Undefined, t.typeError("Property 'initial' is required")
 	}
 	maximum, hasMax, err := a.descriptorBound(t, desc, "maximum", is64, initial, ^uint64(0))
-	if err != nil {
-		return vm.Undefined, err
-	}
-	proto, err := vm.HostProtoFromNewTarget(rt, a.tableProto)
 	if err != nil {
 		return vm.Undefined, err
 	}

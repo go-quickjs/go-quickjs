@@ -62,6 +62,11 @@ func (a *api) newTag(rt *vm.Runtime, this vm.Value, args []vm.Value) (vm.Value, 
 	if !rt.Constructing() {
 		return vm.Undefined, t.typeError("WebAssembly.Tag must be invoked with 'new'")
 	}
+	// The prototype is new.target's to read, but the tag is a Tag's
+	// whatever it is.
+	if _, err := a.newTargetProto(rt); err != nil {
+		return vm.Undefined, err
+	}
 	typ := arg(args, 0)
 	if !typ.IsObject() {
 		return vm.Undefined, t.typeError("Argument 0 must be a tag type")
@@ -151,6 +156,11 @@ func (a *api) newException(rt *vm.Runtime, this vm.Value, args []vm.Value) (vm.V
 	t := a.thrower("WebAssembly.Exception()")
 	if !rt.Constructing() {
 		return vm.Undefined, t.typeError("WebAssembly.Exception must be invoked with 'new'")
+	}
+	// The prototype is new.target's to read, but the exception is an
+	// Exception's whatever it is.
+	if _, err := a.newTargetProto(rt); err != nil {
+		return vm.Undefined, err
 	}
 	tag := tagOf(arg(args, 0))
 	if tag == nil {
