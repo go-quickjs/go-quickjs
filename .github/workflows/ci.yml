@@ -310,7 +310,14 @@ jobs:
         run: |
           if [ "${{ matrix.arch }}" = "386" ]; then export GOARCH=386; fi
           WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" WASM_THREADS_DIR="$GITHUB_WORKSPACE/wasm-threads" go test ./wasm/internal/spectest ./wasm/internal/wast -count=1 -v 2>&1 | tee spec.log | grep -E "spec:|scripts parsed|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
-          WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" go test -tags quickjs_wasm ./wasm/wasmjs -count=1
+          # The JS API scripts build modules of a million types, functions and
+          # imports, more than a 32-bit process's address space holds: on 386
+          # the namespace's own tests run without them.
+          if [ "${{ matrix.arch }}" = "386" ]; then
+            go test -tags quickjs_wasm ./wasm/wasmjs -count=1
+          else
+            WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" go test -tags quickjs_wasm ./wasm/wasmjs -count=1
+          fi
 
       # Every function compiled at its first call, where the wasm JIT runs
       # (amd64 on Linux and Windows, arm64 on macOS and Linux); then every

@@ -532,7 +532,11 @@ whose goroutine and the runtime's take turns.
 CI's `wasm-spec` job runs the spec scripts on Linux, Windows and macOS (arm64),
 on GitHub's linux/arm64 runner, and for 386; where the JIT runs, it runs them
 again with every function compiled at its first call, with the engine's tests,
-and runs `TestJITDifferential`.
+and runs `TestJITDifferential`. It runs the `WebAssembly` namespace's tests
+(`-tags quickjs_wasm`) with the JavaScript API scripts on 64-bit platforms,
+under the JIT too, and without them on 386, whose address space does not
+hold the modules of a million types, functions and imports that
+`limits.any.js` builds.
 
 The suites are not vendored. Check them out at the pinned commits:
 
