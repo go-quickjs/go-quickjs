@@ -60,6 +60,16 @@ type Request struct {
 	// to the optimizing tier, an int64: the baseline code decrements it at
 	// its entry and exits (ExitTierUp) when it goes below 0. amd64 only.
 	TierCounter uint64
+	// Marks asks the compiler for its code's marks and listing (Code.Marks,
+	// Code.Listing), which a profile's samples in the code are read by.
+	Marks bool
+}
+
+// Mark says what the code from offset Off, up to the next mark, was
+// emitted for.
+type Mark struct {
+	Off int
+	Tag string
 }
 
 // Layout is where the engine's objects keep what native code reads of
@@ -101,6 +111,11 @@ type Code struct {
 	// registers the code keeps and the locals' homes and go to the loop's
 	// head. The code from there runs the function to its return.
 	Loops map[uint32]int
+	// Marks and Listing, where the request asked for them, are what each
+	// stretch of the code was emitted for, in order of their offsets, and
+	// the compiler's view of the function the marks name.
+	Marks   []Mark
+	Listing string
 }
 
 // The context's fields' offsets.

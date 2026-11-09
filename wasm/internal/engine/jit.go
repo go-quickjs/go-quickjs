@@ -33,6 +33,10 @@ import (
 // WASM_JIT_OPT turns it on ("on", a number of calls, "eager" for every
 // function at its first compile, "off"); WASM_JIT=opt is "eager" with every
 // function compiled at its first call.
+//
+// WASM_JIT_CODE, read when the engine starts, names a file each code placed
+// is written to, with the compilers' marks, for a profile's native samples
+// (wasm/internal/jit/opt/README.md, Validation).
 
 // DefaultJITThreshold is the number of calls after which a function is
 // compiled, unless EnableJIT is given another.

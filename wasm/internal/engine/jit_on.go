@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -201,6 +202,48 @@ func (x *exec) setJITLevel(n int) { x.jit.n = n }
 // first back edge (codeJIT.osrCalls): "eager" the first, "osr" every one.
 var jitEnvOSR = map[string]int8{"eager": osrFirst, "osr": osrEvery}[os.Getenv("WASM_JIT")]
 
+// jitCode, for profiles, is WASM_JIT_CODE's file, or nil: each code placed
+// is a line of JSON -- its function and tier, its address, bytes and the
+// compiler's marks and listing -- which internal/jit/verify's jitprof joins
+// with a CPU profile's samples in native code.
+var jitCode = func() *jitCodeLog {
+	path := os.Getenv("WASM_JIT_CODE")
+	if path == "" {
+		return nil
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		panic(fmt.Sprintf("WASM_JIT_CODE: %v", err))
+	}
+	return &jitCodeLog{enc: json.NewEncoder(f)}
+}()
+
+type jitCodeLog struct {
+	mu  sync.Mutex
+	enc *json.Encoder
+	seq int
+}
+
+// log writes the line of function fn's code, of tier tier, placed at raw.
+func (l *jitCodeLog) log(fn uint32, tier string, raw *ijit.RawCode, code *wjit.Code) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.seq++
+	l.enc.Encode(struct {
+		Seq          int
+		Name, Script string
+		Line         int
+		Addr         uint64
+		Text         int
+		Bytes        []byte
+		Marks        []wjit.Mark
+		Listing      string
+	}{l.seq, fmt.Sprintf("f%d %s", fn, tier), "wasm", 0, uint64(raw.Base()), len(code.Bytes), code.Bytes, code.Marks, code.Listing})
+}
+
 // optEnv is the optimizing tier's threshold WASM_JIT_OPT sets -- a number
 // of calls, "on" for DefaultOptThreshold, "eager" for 0, "off" for -1 --
 // or WASM_JIT=opt, which has every function compiled by it at its first
@@ -398,6 +441,7 @@ func (cj *codeJIT) compile(c *Code, idx uint32, cd *compiled) (nat *nativeFn) {
 		return nil
 	}
 	cj.raws = append(cj.raws, raw)
+	jitCode.log(idx, "base", raw, code)
 	nat = &nativeFn{raw: raw, base: raw.Base(), goEntry: code.GoEntry, retStub: raw.Base() + uintptr(code.ReturnStub), nslots: cd.nslots, loops: code.Loops, handlers: code.Handlers}
 	if len(code.Handlers) > 0 {
 		cj.catches.Store(true)
@@ -436,6 +480,7 @@ func (cj *codeJIT) compileOpt(c *Code, idx uint32, cd *compiled, prev *nativeFn)
 		return nil
 	}
 	cj.raws = append(cj.raws, raw)
+	jitCode.log(idx, "opt", raw, code)
 	nat := &nativeFn{raw: raw, base: raw.Base(), goEntry: code.GoEntry, retStub: raw.Base() + uintptr(code.ReturnStub), nslots: cd.nslots, opt: true, prev: prev}
 	cd.native.Store(nat)
 	atomic.StoreUintptr(&cj.links[idx], nat.base+uintptr(code.Entry))
@@ -483,6 +528,7 @@ func (cj *codeJIT) loopsFor(c *Code, idx uint32, cd *compiled) *nativeFn {
 		return nil
 	}
 	cj.raws = append(cj.raws, raw)
+	jitCode.log(idx, "loops", raw, code)
 	if len(code.Handlers) > 0 {
 		cj.catches.Store(true)
 	}
@@ -540,6 +586,7 @@ func request(c *Code, idx uint32, cd *compiled, counter uint64) *wjit.Request {
 		Layout:         jitLayout,
 		CaughtSlot:     cd.caught,
 		TierCounter:    counter,
+		Marks:          jitCode != nil,
 	}
 }
 

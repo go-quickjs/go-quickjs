@@ -293,6 +293,24 @@ go test -tags quickjs_jit ./wasm/internal/engine -run 'TestOpt'
 go run -tags quickjs_jit ./internal/cmd/wasmbench -engine jit-base,jit-tiered,jit-opt -suite micro,programs
 ```
 
+A profile's samples in native code have no symbol. `WASM_JIT_CODE=FILE`
+has the engine write every code it places to FILE, a line of JSON each --
+the function and its tier (`base`, `opt`, or `loops` for baseline code made
+for an optimized function's loop entries), the code's address and bytes --
+and asks the compilers for their marks (`Request.Marks`): this tier's say
+what each stretch of its code was emitted for (a block's start, a value
+and its operation, a spill's store, a call's reloads, an edge's moves, a
+back edge's poll, a block's end, cold code) and come with a listing of the
+function as lowered, each value with its location. `jitprof`, in the
+encoder verifier's module, joins the file with a CPU profile of one
+process:
+
+```sh
+WASM_JIT_CODE=/tmp/gzip.jsonl go run -tags quickjs_jit ./internal/cmd/wasmbench \
+  -engine jit-opt -suite gzip -n 1 -warmup 15 -reps 40 -cpuprofile /tmp/p
+(cd internal/jit/verify && go run ./cmd/jitprof -listing -code /tmp/gzip.jsonl /tmp/p.programs-gzip.jit-opt.pprof)
+```
+
 `TestJITDifferential`'s `opt` pass runs the spec modules with every
 function the tier accepts optimized and compares them with the
 interpreter; `TestAllocateRandom` checks the allocator's results on random

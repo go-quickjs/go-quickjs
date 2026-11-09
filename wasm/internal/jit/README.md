@@ -731,6 +731,11 @@ go test -tags quickjs_jit ./wasm/internal/engine -run 'JIT|OSR'
 (cd internal/jit/verify && go test -run 'TestAMD64|TestARM64' -tags quickjs_jit .)
 ```
 
+`WASM_JIT_CODE=FILE` writes each code the engine places, with the
+compiler's marks, for `jitprof` to read a CPU profile's native samples by
+(`opt/README.md`, Validation); the baseline's code has no marks of its
+own, its samples counted by function and instruction.
+
 `TestJITDifferential` runs every spec module that links with the spectest
 module alone -- the threads proposal's too, with `WASM_THREADS_DIR` -- both
 interpreted and compiled at its first call, calls each

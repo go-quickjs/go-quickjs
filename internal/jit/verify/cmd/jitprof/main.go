@@ -96,6 +96,10 @@ func kind(tag string) string {
 		return "cold " + kind(strings.Join(fields[1:], " "))
 	case fields[0] == "edge":
 		return "edge (phis, poll)"
+	case fields[0] == "poll":
+		// The WebAssembly optimizing tier marks a back edge's poll apart
+		// from its edge's moves.
+		return "poll"
 	case len(fields) >= 2 && fields[0][0] == 'v' && isNum(fields[0][1:]):
 		return strings.Join(fields[1:], " ")
 	case fields[0][0] == 'b' && isNum(fields[0][1:]):

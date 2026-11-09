@@ -1,7 +1,9 @@
 package opt
 
 import (
+	"fmt"
 	"math"
+	"strings"
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/asm/amd64"
@@ -91,6 +93,17 @@ type gen struct {
 	trapTo  map[uint64]amd64.Label
 	polls   map[int]amd64.Label
 	byID    []*Value
+	// marks are what each stretch of the code was emitted for, where the
+	// request asks for them (marking).
+	marking bool
+	marks   []wjit.Mark
+}
+
+// mark says the code from here is emitted for the tag format makes.
+func (g *gen) mark(format string, args ...any) {
+	if g.marking {
+		g.marks = append(g.marks, wjit.Mark{Off: g.a.Len(), Tag: fmt.Sprintf(format, args...)})
+	}
 }
 
 // loc is where a value is: a register of its class, a slot, or a
@@ -123,12 +136,14 @@ func classOf(t Type) int8 {
 // lower lowers f, optimized, to native code for req's function.
 func lower(f *Func, req *wjit.Request) *wjit.Code {
 	g := &gen{a: &amd64.Asm{}, f: f, req: req, fn: req.Func, index: map[*Block]int{}, inst: map[int32][2]int32{},
-		fused: map[*Value]bool{}, traps: map[trapKey]amd64.Label{}, trapTo: map[uint64]amd64.Label{}, polls: map[int]amd64.Label{}}
+		fused: map[*Value]bool{}, traps: map[trapKey]amd64.Label{}, trapTo: map[uint64]amd64.Label{}, polls: map[int]amd64.Label{},
+		marking: req.Marks}
 	for i, b := range f.Blocks {
 		g.index[b] = i
 	}
 	g.allocate()
 	a := g.a
+	g.mark("return stub")
 	retStub := a.Len()
 	a.Store(rCtx, offPoll, rPoll)
 	a.Store(rCtx, offRSP, rRS)
@@ -136,6 +151,7 @@ func lower(f *Func, req *wjit.Request) *wjit.Code {
 	a.Ret()
 	goEntry, entry := a.NewLabel(), a.NewLabel()
 	a.Bind(goEntry)
+	g.mark("entry")
 	a.Load(rL, rCtx, offL)
 	a.Load(rMem, rCtx, offMemBase)
 	a.Load(rPoll, rCtx, offPoll)
@@ -148,6 +164,7 @@ func lower(f *Func, req *wjit.Request) *wjit.Code {
 	}
 	for i, b := range f.Blocks {
 		a.Bind(g.labels[i])
+		g.mark("%v", b)
 		g.block(i, b)
 	}
 	for i := 0; i < len(g.ool); i++ {
@@ -157,7 +174,67 @@ func lower(f *Func, req *wjit.Request) *wjit.Code {
 	if err != nil || (req.MaxCodeBytes > 0 && len(out) > req.MaxCodeBytes) {
 		refuse(RefuseSize, "%d bytes of code", a.Len())
 	}
-	return &wjit.Code{Bytes: out, GoEntry: a.Offset(goEntry), Entry: a.Offset(entry), ReturnStub: retStub}
+	code := &wjit.Code{Bytes: out, GoEntry: a.Offset(goEntry), Entry: a.Offset(entry), ReturnStub: retStub}
+	if g.marking {
+		code.Marks, code.Listing = g.marks, g.listing()
+	}
+	return code
+}
+
+// listing prints the function as lowered: each value with its location.
+func (g *gen) listing() string {
+	var sb strings.Builder
+	where := func(v *Value) string {
+		if v.Op == OpConst || g.fused[v] || v.Type == TNone || v.Type == TTuple {
+			return ""
+		}
+		var s string
+		switch l := g.locOf(v); l.kind {
+		case lGPR:
+			s = [...]string{"ax", "cx", "dx", "bx", "sp", "bp", "si", "di", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"}[l.r]
+		case lXMM:
+			s = fmt.Sprintf("x%d", l.r)
+		case lSlot:
+			s = fmt.Sprintf("slot%d", l.slot)
+		}
+		if l := g.locOf(v); l.kind != lSlot && g.ra.Slot[v.ID] >= 0 {
+			s += fmt.Sprintf(" (slot%d)", g.ra.Slot[v.ID])
+		}
+		return "  ; " + s
+	}
+	for _, b := range g.f.Blocks {
+		fmt.Fprintf(&sb, "%v: preds", b)
+		for _, p := range b.Preds {
+			fmt.Fprintf(&sb, " %v", p)
+		}
+		if b.Loop != nil {
+			fmt.Fprintf(&sb, " (loop %v depth %d)", b.Loop, b.Depth)
+		}
+		sb.WriteByte('\n')
+		for _, v := range b.Phis {
+			fmt.Fprintf(&sb, "  %s%s\n", v.long(), where(v))
+		}
+		for _, v := range b.Values {
+			fmt.Fprintf(&sb, "  %s%s\n", v.long(), where(v))
+		}
+		switch b.Kind {
+		case BPlain:
+			fmt.Fprintf(&sb, "  jump %v\n", b.Succs[0])
+		case BIf:
+			fmt.Fprintf(&sb, "  if %v %v %v\n", b.Control, b.Succs[0], b.Succs[1])
+		case BSwitch:
+			fmt.Fprintf(&sb, "  switch %v", b.Control)
+			for _, i := range b.Table {
+				fmt.Fprintf(&sb, " %v", b.Succs[i])
+			}
+			sb.WriteByte('\n')
+		case BReturn:
+			fmt.Fprintf(&sb, "  return %v\n", b.Results)
+		case BTrap:
+			fmt.Fprintf(&sb, "  trap @%d\n", b.At)
+		}
+	}
+	return sb.String()
 }
 
 // allocate describes f to the allocator and allocates its registers.
@@ -511,6 +588,9 @@ func (g *gen) done(v *Value, r int) {
 	if v.Type.IsFloat() {
 		src.kind = lXMM
 	}
+	if g.marking {
+		g.mark("%v spill", v)
+	}
 	g.move(loc{kind: lSlot, slot: s}, src, v.Type)
 }
 
@@ -538,6 +618,7 @@ func (g *gen) trap(code uint64, at uint32) amd64.Label {
 		g.trapTo[code] = to
 		g.ool = append(g.ool, func() {
 			a.Bind(to)
+			g.mark("cold trap")
 			a.Store(rCtx, offL, rL)
 			g.storeCtx(offExit, wjit.ExitTrap)
 			g.storeCtx(offArg0, code)
@@ -547,6 +628,7 @@ func (g *gen) trap(code uint64, at uint32) amd64.Label {
 	}
 	g.ool = append(g.ool, func() {
 		a.Bind(l)
+		g.mark("cold trap")
 		g.storeCtx(offArg0+8, uint64(at))
 		a.Jmp(to)
 	})
@@ -612,6 +694,7 @@ func (g *gen) pollExit(back amd64.Label) amd64.Label {
 	l := a.NewLabel()
 	g.ool = append(g.ool, func() {
 		a.Bind(l)
+		g.mark("cold poll")
 		g.saveAll()
 		g.exit(wjit.ExitPoll, a.NewLabel())
 		g.restoreAll()
@@ -636,6 +719,7 @@ func (g *gen) jump(i int, s *Block) {
 		l = g.pollExit(g.labels[j])
 		g.polls[j] = l
 	}
+	g.mark("poll %v", s)
 	a.OpImm(amd64.Sub, rPoll, 1, true)
 	a.Jcc(amd64.CondG, g.labels[j])
 	a.Jmp(l)
@@ -647,6 +731,7 @@ func (g *gen) edgeMoves(b, s *Block) {
 		return
 	}
 	k := s.predIndex(b)
+	g.mark("edge %v->%v", b, s)
 	var moves []pmove
 	for _, p := range s.Phis {
 		moves = append(moves, pmove{dst: g.locOf(p), src: g.locOf(p.Args[k]), t: p.Type})
@@ -666,9 +751,15 @@ func (g *gen) block(i int, b *Block) {
 		if v.Op == OpConst || v.Op == OpResult || g.fused[v] {
 			continue
 		}
+		if g.marking {
+			g.mark("%v %v %v", v, v.Op, v.Type)
+		}
 		g.value(v, b.Values[j+1:])
 	}
 	a := g.a
+	if g.marking {
+		g.mark("%v end %v", b, [...]string{"Plain", "If", "Switch", "Return", "Trap"}[b.Kind])
+	}
 	switch b.Kind {
 	case BPlain:
 		g.edgeMoves(b, b.Succs[0])
@@ -1665,6 +1756,9 @@ func (g *gen) reload(v *Value) {
 	if !ok {
 		return
 	}
+	if g.marking && len(g.ra.Across[key]) > 0 {
+		g.mark("%v reload", v)
+	}
 	for _, r := range g.ra.Across[key] {
 		w := g.valueByID(int32(r))
 		g.move(g.locOf(w), loc{kind: lSlot, slot: g.ra.Slot[r]}, w.Type)
@@ -1756,6 +1850,7 @@ func (g *gen) call(v *Value, rest []*Value) {
 	g.reload(v)
 	g.ool = append(g.ool, func() {
 		a.Bind(poll)
+		g.mark("cold call")
 		g.saveAll()
 		g.exit(wjit.ExitPoll, a.NewLabel())
 		g.restoreAll()
