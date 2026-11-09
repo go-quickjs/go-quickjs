@@ -25,7 +25,10 @@ func TestNativeCodeDump(t *testing.T) {
 		vm.JITCodeHook, vm.JITCrossHook, mir.Annotate = hook, cross, annotate
 	})
 	path := filepath.Join(t.TempDir(), "code.jsonl")
-	startCodeDump(path)
+	dump := startCodeDump(path)
+	// Closed before the directory is removed, which Windows refuses
+	// while the file is open.
+	t.Cleanup(func() { dump.Close() })
 	f, err := ssa.Build(&ir.Program{
 		Code: []ir.Instruction{{Op: ir.Return, Left: ir.Literal(ir.Float(1))}},
 		Maps: []ir.StateMap{{}},
