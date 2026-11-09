@@ -18,20 +18,29 @@ import "slices"
 // again as the builder looks up a local (see build.go), phis made where
 // definitions meet (repairPhis).
 func thread(f *Func) {
+	ws := f.ws
 	computeUses(f)
 	changed := false
-	for _, h := range slices.Clone(f.Blocks) {
-		if h.dead || (h.Kind != BIf && h.Kind != BSwitch) || len(h.Phis) == 0 || !threadable(h) {
+	// The blocks do not change while threading: repairPhis makes values
+	// only.
+	for _, h := range f.Blocks {
+		if h.dead || (h.Kind != BIf && h.Kind != BSwitch) || len(h.Phis) == 0 || !threadable(f, h) {
 			continue
 		}
-		var threaded []*Block
-		ends := map[*Block]threadEnd{}
-		for k := 0; k < len(h.Preds); k++ {
-			p := h.Preds[k]
-			if p == h || countOf(h.Preds, p) != 1 {
+		// count is how many times each block is H's predecessor; gone the
+		// predecessors threaded, removed together at the end.
+		count := ws.blockMarks(f)
+		for _, p := range h.Preds {
+			count[p.ID]++
+		}
+		gone := ws.gone[:0]
+		threaded := false
+		ends := ws.threadEnds(f)
+		for k, p := range h.Preds {
+			if p == h || count[p.ID] != 1 {
 				continue
 			}
-			c := evalOnEdge(h.Control, h, k)
+			c := evalOnEdge(ws, h.Control, h, k)
 			if c == nil {
 				continue
 			}
@@ -42,24 +51,25 @@ func thread(f *Func) {
 			// What H's phis are at p's end. The target's phis read on the
 			// new edge what they read on the edge from H: an H phi there is
 			// a use at p's end, which repairPhis looks up.
-			at := make([]*Value, len(h.Phis))
-			for i, phi := range h.Phis {
-				at[i] = phi.Args[k]
+			at := ws.vals.take(len(h.Phis))
+			for _, phi := range h.Phis {
+				at = append(at, phi.Args[k])
 			}
 			hi := t.predIndex(h)
 			for _, phi := range t.Phis {
-				phi.Args = append(phi.Args, phi.Args[hi])
+				f.addArg(phi, phi.Args[hi])
 			}
 			p.Succs[slices.Index(p.Succs, h)] = t
-			t.Preds = append(t.Preds, p)
-			removePred(h, k)
-			k--
-			threaded = append(threaded, p)
-			ends[p] = threadEnd{t, at}
+			t.Preds = appendA(&ws.blks, t.Preds, p)
+			gone = append(gone, int32(k))
+			threaded = true
+			ends.set(p, threadEnd{t, at})
 		}
-		if len(threaded) == 0 {
+		ws.gone = gone
+		if !threaded {
 			continue
 		}
+		removePreds(h, gone)
 		changed = true
 		repairPhis(f, h, ends)
 		computeUses(f)
@@ -69,28 +79,86 @@ func thread(f *Func) {
 	}
 }
 
+// removePreds removes b's predecessors at the indices gone, in order, and
+// their phis' arguments.
+func removePreds(b *Block, gone []int32) {
+	cut := func(n int, at func(i int) bool) int {
+		j := 0
+		for i := 0; i < n; i++ {
+			if !at(i) {
+				if i != j {
+					b.Preds[j] = b.Preds[i]
+				}
+				j++
+			}
+		}
+		return j
+	}
+	isGone := func(g []int32) func(i int) bool {
+		k := 0
+		return func(i int) bool {
+			if k < len(g) && int(g[k]) == i {
+				k++
+				return true
+			}
+			return false
+		}
+	}
+	n := len(b.Preds)
+	keep := cut(n, isGone(gone))
+	clear(b.Preds[keep:])
+	b.Preds = b.Preds[:keep]
+	for _, p := range b.Phis {
+		g := isGone(gone)
+		j := 0
+		for i := 0; i < n; i++ {
+			if !g(i) {
+				p.Args[j] = p.Args[i]
+				j++
+			}
+		}
+		clear(p.Args[j:])
+		p.Args = p.Args[:j]
+	}
+}
+
 // threadable reports whether h's values are pure and used by h alone: its
 // other values and its branch.
-func threadable(h *Block) bool {
-	local := map[*Value]int32{}
+func threadable(f *Func, h *Block) bool {
+	ws := f.ws
 	for _, v := range h.Values {
 		if !v.Pure() {
 			return false
 		}
-		local[v] = 0
+	}
+	// local counts the uses within h of h's values, by value ID: those of
+	// this call are marked with its stamp.
+	ws.stamp++
+	stamp := ws.stamp
+	n := f.NumValues()
+	if len(ws.localMark) < n {
+		ws.localMark = append(ws.localMark, make([]uint32, n-len(ws.localMark))...)
+		ws.localUses = append(ws.localUses, make([]int32, n-len(ws.localUses))...)
+	}
+	for _, v := range h.Values {
+		ws.localMark[v.ID] = stamp
+		ws.localUses[v.ID] = 0
+	}
+	use := func(a *Value) {
+		if int(a.ID) < n && ws.localMark[a.ID] == stamp {
+			ws.localUses[a.ID]++
+		}
 	}
 	for _, v := range h.Values {
 		for _, a := range v.Args {
-			if _, ok := local[a]; ok {
-				local[a]++
-			}
+			use(a)
 		}
 	}
-	if _, ok := local[h.Control]; ok {
-		local[h.Control]++
+	if h.Control != nil {
+		use(h.Control)
 	}
-	for v, n := range local {
-		if n != v.Uses {
+	for _, v := range h.Values {
+		if ws.localUses[v.ID] != v.Uses {
 			return false
 		}
 	}
@@ -100,7 +168,7 @@ func threadable(h *Block) bool {
 // evalOnEdge is v's value, a constant, when h is entered from its
 // predecessor k, or nil if that is not known: an h phi's argument from k,
 // or h's pure values of them folded.
-func evalOnEdge(v *Value, h *Block, k int) *Value {
+func evalOnEdge(ws *workspace, v *Value, h *Block, k int) *Value {
 	switch {
 	case v.Op == OpConst:
 		return v
@@ -114,18 +182,21 @@ func evalOnEdge(v *Value, h *Block, k int) *Value {
 	case len(v.Args) == 0 || len(v.Args) > 2:
 		return nil
 	}
-	tmp := *v
-	tmp.Args = make([]*Value, len(v.Args))
-	for i, a := range v.Args {
-		if tmp.Args[i] = evalOnEdge(a, h, k); tmp.Args[i] == nil {
+	tmp := ws.values.new()
+	*tmp = *v
+	tmp.Args = ws.vals.take(len(v.Args))
+	for _, a := range v.Args {
+		x := evalOnEdge(ws, a, h, k)
+		if x == nil {
 			return nil
 		}
+		tmp.Args = append(tmp.Args, x)
 	}
-	foldValue(&tmp)
+	foldValue(tmp)
 	if tmp.Op != OpConst {
 		return nil
 	}
-	return &tmp
+	return tmp
 }
 
 // branchTarget is the successor h's branch goes to on constant c.
@@ -154,26 +225,47 @@ func branchTarget(h *Block, c *Value) *Block {
 // its arguments one value, or itself -- is that value, as the builder
 // removes its own (Braun et al.'s tryRemoveTrivialPhi): its uses are
 // forwarded, and the phis made that use it tried again.
-func repairPhis(f *Func, h *Block, ends map[*Block]threadEnd) {
-	vars := map[*Value]int{}
+func repairPhis(f *Func, h *Block, ends *threadEnds) {
+	ws := f.ws
+	// vars is each of h's phis' variable, by value ID, or -1.
+	n0 := f.nextValue
+	vars := grown(ws.vars, int(n0))
+	for i := range vars {
+		vars[i] = -1
+	}
+	ws.vars = vars
 	for i, phi := range h.Phis {
-		vars[phi] = i
+		vars[phi.ID] = int32(i)
 	}
-	start := make([][]*Value, len(h.Phis))
-	for i := range start {
-		start[i] = make([]*Value, f.nextBlock)
-	}
-	made := map[*Value]int{}
-	users := map[*Value][]*Value{}
-	fwd := map[*Value]*Value{}
-	follow := func(v *Value) *Value {
-		for {
-			w, ok := fwd[v]
-			if !ok {
-				return v
-			}
-			v = w
+	varOf := func(v *Value) (int, bool) {
+		if v == nil || v.ID >= n0 || vars[v.ID] < 0 {
+			return 0, false
 		}
+		return int(vars[v.ID]), true
+	}
+	// start is each variable's value at a block's start, by variable and
+	// block ID.
+	if ws.start == nil {
+		ws.start = map[uint64]*Value{}
+	}
+	start := ws.start
+	clear(start)
+	startKey := func(i int, b *Block) uint64 { return uint64(i)<<32 | uint64(uint32(b.ID)) }
+	// The phis made, from ID n0 on: each one's variable, the phis made
+	// that use it, and the value it is forwarded to once found trivial.
+	made := ws.made[:0]
+	defer func() {
+		clear(made)
+		ws.made = made[:0]
+	}()
+	info := func(v *Value) *madePhi { return &made[v.ID-n0] }
+	isMade := func(v *Value) bool { return v.ID >= n0 }
+	forwarded := 0
+	follow := func(v *Value) *Value {
+		for isMade(v) && info(v).fwd != nil {
+			v = info(v).fwd
+		}
+		return v
 	}
 	var tryRemove func(v *Value) *Value
 	tryRemove = func(v *Value) *Value {
@@ -191,12 +283,14 @@ func repairPhis(f *Func, h *Block, ends map[*Block]threadEnd) {
 		if same == nil {
 			return v
 		}
-		fwd[v] = same
-		if s := start[made[v]]; s[v.Block.ID] == v {
-			s[v.Block.ID] = same
+		vi := info(v)
+		vi.fwd = same
+		forwarded++
+		if k := startKey(vi.v, v.Block); start[k] == v {
+			start[k] = same
 		}
-		for _, u := range users[v] {
-			if _, gone := fwd[u]; !gone && u != v {
+		for _, u := range vi.users {
+			if info(u).fwd == nil && u != v {
 				tryRemove(u)
 			}
 		}
@@ -204,11 +298,11 @@ func repairPhis(f *Func, h *Block, ends map[*Block]threadEnd) {
 	}
 	var atStart func(i int, b *Block) *Value
 	atEnd := func(i int, b, s *Block) *Value {
-		e, ok := ends[b]
+		e, ok := ends.get(b)
 		if !ok || e.to != s {
 			return atStart(i, b)
 		}
-		if j, ok := vars[e.vals[i]]; ok {
+		if j, ok := varOf(e.vals[i]); ok {
 			return atStart(j, b)
 		}
 		return e.vals[i]
@@ -217,7 +311,8 @@ func repairPhis(f *Func, h *Block, ends map[*Block]threadEnd) {
 		if b == h {
 			return h.Phis[i]
 		}
-		if v := start[i][b.ID]; v != nil {
+		k := startKey(i, b)
+		if v := start[k]; v != nil {
 			return follow(v)
 		}
 		switch len(b.Preds) {
@@ -225,57 +320,58 @@ func repairPhis(f *Func, h *Block, ends map[*Block]threadEnd) {
 			panic("wasm opt: a phi threaded past the entry")
 		case 1:
 			v := atEnd(i, b.Preds[0], b)
-			start[i][b.ID] = v
+			start[k] = v
 			return v
 		}
 		v := f.newValue(b, OpPhi, h.Phis[i].Type)
-		start[i][b.ID] = v
-		made[v] = i
-		v.Args = make([]*Value, len(b.Preds))
-		for j, p := range b.Preds {
+		start[k] = v
+		made = append(made, madePhi{v: i})
+		v.Args = ws.vals.take(len(b.Preds))
+		for _, p := range b.Preds {
 			a := atEnd(i, p, b)
-			v.Args[j] = a
-			if _, ok := made[a]; ok {
-				users[a] = append(users[a], v)
+			v.Args = append(v.Args, a)
+			if isMade(a) {
+				ai := info(a)
+				ai.users = appendA(&ws.vals, ai.users, v)
 			}
 		}
 		return tryRemove(v)
 	}
 	for _, b := range f.Blocks {
 		for _, v := range b.Phis {
-			if _, ok := made[v]; ok {
+			if isMade(v) {
 				continue
 			}
 			for j, a := range v.Args {
-				if i, ok := vars[a]; ok {
+				if i, ok := varOf(a); ok {
 					v.Args[j] = atEnd(i, b.Preds[j], b)
 				}
 			}
 		}
 		for _, v := range b.Values {
 			for j, a := range v.Args {
-				if i, ok := vars[a]; ok {
+				if i, ok := varOf(a); ok {
 					v.Args[j] = atStart(i, b)
 				}
 			}
 		}
-		if i, ok := vars[b.Control]; ok && b.Control != nil {
+		if i, ok := varOf(b.Control); ok {
 			b.Control = atStart(i, b)
 		}
 		for j, a := range b.Results {
-			if i, ok := vars[a]; ok {
+			if i, ok := varOf(a); ok {
 				b.Results[j] = atStart(i, b)
 			}
 		}
 	}
-	if len(fwd) == 0 {
+	if forwarded == 0 {
 		return
 	}
 	// The uses of the phis made that turned out trivial take the values
 	// they are, and the phis go.
 	for _, b := range f.Blocks {
 		if len(b.Phis) > 0 {
-			b.Phis = slices.DeleteFunc(b.Phis, func(v *Value) bool { _, gone := fwd[v]; return gone })
+			b.Phis = slices.DeleteFunc(b.Phis, func(v *Value) bool { return isMade(v) && info(v).fwd != nil })
 		}
 		for _, v := range b.Phis {
 			for j, a := range v.Args {
@@ -296,9 +392,49 @@ func repairPhis(f *Func, h *Block, ends map[*Block]threadEnd) {
 	}
 }
 
+// madePhi is what repairPhis knows of a phi it made: its variable, the
+// phis made that use it, and the value it is forwarded to, once found
+// trivial.
+type madePhi struct {
+	v     int
+	users []*Value
+	fwd   *Value
+}
+
 // threadEnd is what a threaded edge from a predecessor of a block H, to
 // to, defines: the values of H's phis, an argument for each.
 type threadEnd struct {
 	to   *Block
 	vals []*Value
+}
+
+// threadEnds are the threaded edges of a block, by their predecessor's ID:
+// those marked with the current stamp.
+type threadEnds struct {
+	stamp uint32
+	mark  []uint32
+	end   []threadEnd
+}
+
+// threadEnds returns the workspace's threaded edges, empty, for f.
+func (ws *workspace) threadEnds(f *Func) *threadEnds {
+	e := &ws.ends
+	if n := int(f.nextBlock); len(e.mark) < n {
+		e.mark = append(e.mark, make([]uint32, n-len(e.mark))...)
+		e.end = append(e.end, make([]threadEnd, n-len(e.end))...)
+	}
+	e.stamp++
+	return e
+}
+
+func (e *threadEnds) set(p *Block, t threadEnd) {
+	e.mark[p.ID] = e.stamp
+	e.end[p.ID] = t
+}
+
+func (e *threadEnds) get(p *Block) (threadEnd, bool) {
+	if e.mark[p.ID] != e.stamp {
+		return threadEnd{}, false
+	}
+	return e.end[p.ID], true
 }

@@ -67,21 +67,20 @@ func copyelim(f *Func) {
 					same = a
 				}
 				if trivial && same != nil {
-					p.Op, p.Args = OpCopy, []*Value{same}
+					p.setCopy(same)
 					changed = true
 				}
 			}
 			if len(b.Phis) > 0 {
+				// A phi made a copy leaves the phis: its uses are
+				// rewritten below, and it is in no list.
 				keep := b.Phis[:0]
 				for _, p := range b.Phis {
 					if p.Op == OpPhi {
 						keep = append(keep, p)
-					} else {
-						// A phi made a copy goes among the values, where its
-						// uses are rewritten and it is removed.
-						b.Values = append([]*Value{p}, b.Values...)
 					}
 				}
+				clear(b.Phis[len(keep):])
 				b.Phis = keep
 			}
 		}
@@ -105,15 +104,17 @@ func copyelim(f *Func) {
 		}
 	}
 	for _, b := range f.Blocks {
-		b.Values = slices.DeleteFunc(b.Values, func(v *Value) bool { return v.Op == OpCopy })
+		b.Values = slices.DeleteFunc(b.Values, isCopy)
 	}
 }
+
+func isCopy(v *Value) bool { return v.Op == OpCopy }
 
 // dce removes the values nothing uses that have no effect, and the phis
 // only they use.
 func dce(f *Func) {
 	computeUses(f)
-	var work []*Value
+	work := f.ws.dceWork[:0]
 	for _, b := range f.Blocks {
 		for _, v := range b.Phis {
 			if v.Uses == 0 {
@@ -126,29 +127,35 @@ func dce(f *Func) {
 			}
 		}
 	}
-	dead := map[*Value]bool{}
+	// dead is each value's, by ID.
+	dead := grown(f.ws.dead, f.NumValues())
+	clear(dead)
+	f.ws.dead = dead
+	ndead := 0
 	for len(work) > 0 {
 		v := work[len(work)-1]
 		work = work[:len(work)-1]
-		if dead[v] {
+		if dead[v.ID] {
 			continue
 		}
-		dead[v] = true
+		dead[v.ID] = true
+		ndead++
 		for _, a := range v.Args {
 			if a == v {
 				continue
 			}
 			a.Uses--
-			if a.Uses == 0 && !a.HasEffect() && !dead[a] {
+			if a.Uses == 0 && !a.HasEffect() && !dead[a.ID] {
 				work = append(work, a)
 			}
 		}
 	}
+	f.ws.dceWork = work
 	// A phi that only phis that are dead use, its own self included, was
 	// counted as used: those in cycles of phis are found next.
 	for _, b := range f.Blocks {
 		for _, v := range b.Phis {
-			if dead[v] || v.Uses == 0 {
+			if dead[v.ID] || v.Uses == 0 {
 				continue
 			}
 			self := int32(0)
@@ -158,16 +165,19 @@ func dce(f *Func) {
 				}
 			}
 			if self == v.Uses {
-				dead[v] = true
+				dead[v.ID] = true
+				ndead++
 			}
 		}
 	}
-	if len(dead) == 0 {
+	clear(work[:cap(work)])
+	if ndead == 0 {
 		return
 	}
+	isDead := func(v *Value) bool { return dead[v.ID] }
 	for _, b := range f.Blocks {
-		b.Phis = slices.DeleteFunc(b.Phis, func(v *Value) bool { return dead[v] })
-		b.Values = slices.DeleteFunc(b.Values, func(v *Value) bool { return dead[v] })
+		b.Phis = slices.DeleteFunc(b.Phis, isDead)
+		b.Values = slices.DeleteFunc(b.Values, isDead)
 	}
 	computeUses(f)
 }
@@ -228,7 +238,11 @@ func (v *Value) setConst(bits uint64) {
 	v.Op, v.Args, v.Aux, v.Aux2 = OpConst, nil, bits, 0
 }
 
-func (v *Value) setCopy(a *Value) { v.Op, v.Args, v.Aux, v.Aux2 = OpCopy, []*Value{a}, 0, 0 }
+// setCopy makes v a copy of a, in its arguments' array where it has
+// room: a value's arguments are its own.
+func (v *Value) setCopy(a *Value) {
+	v.Op, v.Args, v.Aux, v.Aux2 = OpCopy, append(v.Args[:0], a), 0, 0
+}
 
 func isConst(v *Value) bool { return v.Op == OpConst }
 
@@ -729,10 +743,11 @@ type gvnKey struct {
 // copy of it, walking the dominator tree with the values its path holds.
 func gvn(f *Func) {
 	d := dominators(f)
-	table := map[gvnKey]*Value{}
+	table := &f.ws.gvn
+	table.reset(f.NumValues())
 	var walk func(b *Block)
 	walk = func(b *Block) {
-		var added []gvnKey
+		mark := table.mark()
 		for _, v := range b.Values {
 			if !v.Pure() || v.Op == OpCopy || len(v.Args) > 3 {
 				continue
@@ -750,22 +765,89 @@ func gvn(f *Func) {
 				// A comparison's operand type is its argument's.
 				k.aux2 |= uint64(resolve(v.Args[0]).Type) << 56
 			}
-			if w, ok := table[k]; ok {
+			if w := table.find(&k); w != nil {
 				v.setCopy(w)
 				continue
 			}
-			table[k] = v
-			added = append(added, k)
+			table.add(&k, v)
 		}
 		for _, c := range d.kids(b) {
 			walk(c)
 		}
-		for _, k := range added {
-			delete(table, k)
-		}
+		table.pop(mark)
 	}
 	walk(f.Entry)
+	table.done()
 }
+
+// gvnTable is gvn's table of the values on the dominator tree's path to
+// the block walked, by their keys: a hash table of chains whose entries
+// are pushed as values are added and popped as the walk leaves their
+// blocks.
+type gvnTable struct {
+	heads   []int32
+	entries []gvnEntry
+}
+
+type gvnEntry struct {
+	key  gvnKey
+	v    *Value
+	next int32
+	h    uint32
+}
+
+// reset empties t for a function of n values.
+func (t *gvnTable) reset(n int) {
+	size := 64
+	for size < 2*n {
+		size *= 2
+	}
+	t.heads = grown(t.heads, size)
+	for i := range t.heads {
+		t.heads[i] = -1
+	}
+	t.entries = t.entries[:0]
+}
+
+func (k *gvnKey) hash() uint64 {
+	h := uint64(k.op) | uint64(k.t)<<8 | uint64(uint32(k.a0))<<16
+	h ^= uint64(uint32(k.a1))*0x9e3779b97f4a7c15 ^ uint64(uint32(k.a2))*0xc2b2ae3d27d4eb4f
+	h ^= k.aux*0x165667b19e3779f9 ^ k.aux2*0x27d4eb2f165667c5
+	h ^= h >> 31
+	h *= 0xbf58476d1ce4e5b9
+	return h ^ h>>29
+}
+
+func (t *gvnTable) find(k *gvnKey) *Value {
+	for e := t.heads[k.hash()&uint64(len(t.heads)-1)]; e >= 0; e = t.entries[e].next {
+		if t.entries[e].key == *k {
+			return t.entries[e].v
+		}
+	}
+	return nil
+}
+
+func (t *gvnTable) add(k *gvnKey, v *Value) {
+	h := uint32(k.hash() & uint64(len(t.heads)-1))
+	t.entries = append(t.entries, gvnEntry{key: *k, v: v, next: t.heads[h], h: h})
+	t.heads[h] = int32(len(t.entries) - 1)
+}
+
+// mark is where the entries end, to pop back to.
+func (t *gvnTable) mark() int { return len(t.entries) }
+
+// pop removes the entries added since mark.
+func (t *gvnTable) pop(mark int) {
+	for i := len(t.entries) - 1; i >= mark; i-- {
+		e := &t.entries[i]
+		t.heads[e.h] = e.next
+		e.v = nil
+	}
+	t.entries = t.entries[:mark]
+}
+
+// done drops the table's values.
+func (t *gvnTable) done() { t.pop(0) }
 
 // licm moves the pure values of each loop that makes no call whose
 // arguments are defined outside it to the loop's preheader -- its header's
