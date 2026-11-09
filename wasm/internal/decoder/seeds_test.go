@@ -159,5 +159,6 @@ func seeds() []corpusCase {
 		{"seed/legacy-eh", legacyEHSeed()},
 		{"seed/exnref", exnrefSeed()},
 		{"seed/const", constSeed()},
+		{"seed/sections", sectionsSeed()},
 	}
 }

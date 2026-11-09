@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -215,7 +216,27 @@ func mutate(name string, b []byte, n int, r *rand.Rand) []corpusCase {
 				continue
 			}
 			rest := payload[l:]
-			switch r.Intn(6) {
+			switch r.Intn(8) {
+			case 6, 7:
+				// A LEB in the payload made longer: a byte that ends one
+				// padded to the same value, or to one with too many bits.
+				var ends []int
+				for i, c := range payload {
+					if c < 0x80 {
+						ends = append(ends, i)
+					}
+				}
+				if len(ends) == 0 {
+					continue
+				}
+				i := ends[r.Intn(len(ends))]
+				pad := bs(payload[i]|0x80, 0x80, 0)
+				kind := "leb-overlong"
+				if r.Intn(2) == 0 {
+					pad = bs(payload[i]|0x80, 0xff, 0xff, 0xff, 0x7f)
+					kind = "leb-overflow"
+				}
+				add(kind, replaceSection(b, s, cat(payload[:i], pad, payload[i+1:])))
 			case 0:
 				add("count-inc", replaceSection(b, s, cat(uleb(uint64(count)+1), rest)))
 			case 1:
@@ -248,18 +269,25 @@ func mutate(name string, b []byte, n int, r *rand.Rand) []corpusCase {
 	return out
 }
 
-// corpus returns the hand-written cases, the seeds and their mutations.
+// corpus returns the hand-written cases, the seeds and their mutations:
+// QUICKJS_WASM_MUTATIONS of each (3,000 by default), from random seed
+// QUICKJS_WASM_SEED (1 by default).
 func corpus() []corpusCase {
+	n, seed := 3000, int64(1)
+	if v, err := strconv.Atoi(os.Getenv("QUICKJS_WASM_MUTATIONS")); err == nil {
+		n = v
+	}
+	if v, err := strconv.ParseInt(os.Getenv("QUICKJS_WASM_SEED"), 10, 64); err == nil {
+		seed = v
+	}
 	cs := handCases()
-	r := rand.New(rand.NewSource(1))
+	r := rand.New(rand.NewSource(seed))
 	for _, s := range seeds() {
 		cs = append(cs, s)
-		cs = append(cs, mutate(s.name, s.b, mutationsPerSeed, r)...)
+		cs = append(cs, mutate(s.name, s.b, n, r)...)
 	}
 	return cs
 }
-
-var mutationsPerSeed = 3000
 
 // TestCompareNode validates the corpus here and in Node and compares the
 // verdicts and messages, module by module. It needs node on PATH and runs

@@ -313,7 +313,8 @@ func handCases() []corpusCase {
 	add("name-second-section", named(names(cat(uleb(0), "a")), names(cat(uleb(1), "b"))))
 	add("name-module-first", named(cat("name", sec(0, cat("mod")), sec(1, vec(cat(uleb(1), "after"))))))
 	add("name-truncated", named(cat("name", 1, 10, 1, 1, 5, 'a')))
-	return cs
+	add("ref-func-not-declared", fn(0xd2, 0, 0x1a, 0x0b))
+	return append(cs, moduleCases()...)
 }
 
 // TestHandCases checks each hand-written case against the verdict Node gave

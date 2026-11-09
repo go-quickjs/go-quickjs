@@ -68,8 +68,8 @@ func V8Limits() *Limits {
 }
 
 // JSAPILimits returns the limits of the WebAssembly JavaScript interface:
-// V8's, but for a memory64's declared size of up to 2^37-1 pages and at most
-// 100 memories.
+// those of V8Limits, but for a memory64's declared size of up to 2^37-1
+// pages and at most 100 memories.
 func JSAPILimits() *Limits {
 	l := V8Limits()
 	l.Memory64Pages = 1<<37 - 1
@@ -80,7 +80,7 @@ func JSAPILimits() *Limits {
 // CoreLimits returns limits for the core specification alone, which has
 // none of the interface's: counts up to 1<<27, memories and tables up to the
 // largest their address types allow. The bounds on a function body stay
-// V8's, since they also bound what validating a function costs.
+// those of V8Limits, since they also bound what validating a function costs.
 func CoreLimits() *Limits {
 	const count = 1 << 27
 	l := V8Limits()

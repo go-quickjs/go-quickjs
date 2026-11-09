@@ -220,3 +220,152 @@ hand/name-duplicate	WebAssembly.Module(): Compiling function #1:"first" failed: 
 hand/name-second-section	WebAssembly.Module(): Compiling function #1 failed: not enough arguments on the stack for i32.add (need 2, got 0) @+27
 hand/name-module-first	WebAssembly.Module(): Compiling function #1:"after" failed: not enough arguments on the stack for i32.add (need 2, got 0) @+27
 hand/name-truncated	WebAssembly.Module(): Compiling function #1 failed: not enough arguments on the stack for i32.add (need 2, got 0) @+27
+hand/ref-func-not-declared	WebAssembly.Module(): Compiling function #0 failed: undeclared reference to function #0 @+138
+hand/mod-sections-valid	OK
+hand/mod-magic	WebAssembly.Module(): expected magic word 00 61 73 6d, found 00 61 73 6e @+0
+hand/mod-version	WebAssembly.Module(): expected version 01 00 00 00, found 02 00 00 00 @+4
+hand/mod-header-short	WebAssembly.Module(): expected 4 bytes, fell off end @+0
+hand/mod-section-past-end	WebAssembly.Module(): section (code 1, "Type") extends past end of the module (length 10, remaining bytes 1) @+8
+hand/mod-section-size-leb	WebAssembly.Module(): reached end while decoding section length @+10
+hand/mod-section-shorter	WebAssembly.Module(): section was shorter than expected size (2 bytes expected, 1 decoded) @+11
+hand/mod-section-code-unknown	WebAssembly.Module(): unknown section code #0x15 @+10
+hand/mod-section-stringref	WebAssembly.Module(): unexpected section <StringRef> (enable with --experimental-wasm-stringref) @+10
+hand/mod-section-order	WebAssembly.Module(): unexpected section <Type> @+13
+hand/mod-section-multiple	WebAssembly.Module(): Multiple DataCount sections not allowed @+13
+hand/mod-section-datacount-after-code	WebAssembly.Module(): The DataCount section must appear before the Code section @+13
+hand/mod-section-tag-after-global	WebAssembly.Module(): The Tag section must appear before the Global section @+13
+hand/mod-custom-name-utf8	WebAssembly.Module(): section name: no valid UTF-8 string @+11
+hand/mod-custom-name-past-end	WebAssembly.Module(): expected 5 bytes, fell off end @+11
+hand/mod-custom-name-leb	WebAssembly.Module(): reached end while decoding length @+11
+hand/mod-custom-unknown-ok	OK
+hand/mod-custom-name-malformed-ok	OK
+hand/mod-leb-extra-bits	WebAssembly.Module(): extra bits in varint @+14
+hand/mod-leb-overflow	WebAssembly.Module(): length overflow while decoding types count @+14
+hand/mod-leb-reached-end	WebAssembly.Module(): reached end while decoding types count @+11
+hand/mod-type-count-limit	WebAssembly.Module(): types count of 1000001 exceeds internal limit of 1000000 @+10
+hand/mod-type-form	WebAssembly.Module(): unknown type form: 85 @+11
+hand/mod-type-form-shared	WebAssembly.Module(): unknown type form: 101, enable with --experimental-wasm-shared @+12
+hand/mod-type-cont	WebAssembly.Module(): core stack switching not enabled (enable with --experimental-wasm-wasmfx) @+11
+hand/mod-type-descriptor	WebAssembly.Module(): descriptor types need --experimental-wasm-custom-descriptors @+13
+hand/mod-type-supertype-self	WebAssembly.Module(): type 0: invalid supertype 0 @+14
+hand/mod-type-supertype-count	WebAssembly.Module(): supertype count of 2 exceeds internal limit of 1 @+12
+hand/mod-type-extends-final	WebAssembly.Module(): type 1 extends final type 0 @+18
+hand/mod-type-invalid-supertype	WebAssembly.Module(): type 1 has invalid explicit supertype 0 @+24
+hand/mod-type-kind-mismatch	WebAssembly.Module(): type 1 has invalid explicit supertype 0 @+21
+hand/mod-type-depth	WebAssembly.Module(): type 64: subtyping depth is greater than allowed @+336
+hand/mod-type-rec-size	WebAssembly.Module(): recursive group size of 1000001 exceeds internal limit of 1000000 @+12
+hand/mod-type-rec-forward	OK
+hand/mod-type-mutability	WebAssembly.Module(): invalid mutability @+14
+hand/mod-type-field-count	WebAssembly.Module(): , field count of 10001 exceeds internal limit of 10000 @+12
+hand/mod-type-param-count	WebAssembly.Module(): param count of 1001 exceeds internal limit of 1000 @+12
+hand/mod-type-result-count	WebAssembly.Module(): return count of 1001 exceeds internal limit of 1000 @+13
+hand/mod-type-value	WebAssembly.Module(): invalid value type 0x7a @+13
+hand/mod-type-value-i8	WebAssembly.Module(): invalid value type 0x78 @+13
+hand/mod-type-index-oob	WebAssembly.Module(): Type index 5 is out of bounds @+13
+hand/mod-type-heap-shared	WebAssembly.Module(): invalid heap type 0x65, enable with --experimental-wasm-shared @+14
+hand/mod-type-stringref	WebAssembly.Module(): invalid value type 'stringref', enable with --experimental-wasm-stringref @+13
+hand/mod-type-heap-string	WebAssembly.Module(): invalid heap type 'string', enable with --experimental-wasm-stringref @+14
+hand/mod-type-heap-exact	WebAssembly.Module(): invalid heap type 'exact', enable with --experimental-wasm-custom-descriptors @+14
+hand/mod-type-heap-unknown	WebAssembly.Module(): Unknown heap type -64 @+14
+hand/mod-type-heap-big	WebAssembly.Module(): Type index 1000000 is greater than the maximum number 1000000 of type definitions supported by V8 @+14
+hand/mod-type-heap-negative-big	WebAssembly.Module(): Unknown heap type -65 @+14
+hand/mod-type-cont-value	WebAssembly.Module(): invalid value type 'cont', enable with --experimental-wasm-wasmfx @+13
+hand/mod-type-exnref	OK
+hand/mod-type-packed-array	OK
+hand/mod-import-count-limit	WebAssembly.Module(): imports count of 1000001 exceeds internal limit of 1000000 @+10
+hand/mod-import-module-utf8	WebAssembly.Module(): module name: no valid UTF-8 string @+12
+hand/mod-import-field-utf8	WebAssembly.Module(): field name: no valid UTF-8 string @+14
+hand/mod-import-kind	WebAssembly.Module(): unknown import kind 0x05 @+11
+hand/mod-import-kind-exact	WebAssembly.Module(): Invalid import kind 32, enable with --experimental-wasm-custom-descriptors @+21
+hand/mod-import-func-sig	WebAssembly.Module(): no signature at index 3 (1 types) @+22
+hand/mod-import-func-struct	WebAssembly.Module(): no signature at index 0 (1 types) @+21
+hand/mod-import-table-type	WebAssembly.Module(): Invalid table type i32 @+16
+hand/mod-import-table-flags	WebAssembly.Module(): invalid table limits flags 0x8 @+17
+hand/mod-import-table-shared	WebAssembly.Module(): invalid table limits flags @+17
+hand/mod-import-table-max	WebAssembly.Module(): maximum table size (1 elements) is less than initial (5 elements) @+19
+hand/mod-import-table-initial	WebAssembly.Module(): initial table size (10000001 elements) is larger than implementation limit (10000000 elements) @+18
+hand/mod-import-memory-flags	WebAssembly.Module(): invalid memory limits flags 0x8 @+16
+hand/mod-import-memory-shared	WebAssembly.Module(): shared memory must have a maximum defined @+16
+hand/mod-import-memory-initial	WebAssembly.Module(): initial memory size (65537 pages) is larger than implementation limit (65536 pages) @+17
+hand/mod-import-memory-max	WebAssembly.Module(): maximum memory size (65537 pages) is larger than implementation limit (65536 pages) @+18
+hand/mod-import-memory-max-less	WebAssembly.Module(): maximum memory size (1 pages) is less than initial (2 pages) @+18
+hand/mod-import-memory64-initial	WebAssembly.Module(): initial memory size (300000 pages) is larger than implementation limit (262144 pages) @+17
+hand/mod-import-global-flags	WebAssembly.Module(): invalid global flags 0x2 @+17
+hand/mod-import-global-type	WebAssembly.Module(): invalid value type 0x7a @+16
+hand/mod-import-tag-attribute	WebAssembly.Module(): exception attribute 1 not supported @+22
+hand/mod-import-tag-result	WebAssembly.Module(): tag signature 0 has non-void return @+24
+hand/mod-import-truncated	WebAssembly.Module(): reached end while decoding length @+13
+hand/mod-function-sig	WebAssembly.Module(): no signature at index 4 (1 types) @+17
+hand/mod-function-count-limit	WebAssembly.Module(): functions count of 1000001 exceeds internal limit of 1000000 @+16
+hand/mod-function-no-code	WebAssembly.Module(): function count is 1, but code section is absent @+18
+hand/mod-table-type	WebAssembly.Module(): Only reference types can be used as table types @+11
+hand/mod-table-non-defaultable	WebAssembly.Module(): Table of non-defaultable table (ref func) needs initial value @+11
+hand/mod-table-reserved	WebAssembly.Module(): Reserved byte must be 0x00 @+12
+hand/mod-table-init-type	WebAssembly.Module(): type error in constant expression[0] (expected funcref, got i32) @+17
+hand/mod-table-init-missing-end	WebAssembly.Module(): constant expression is missing 'end' @+18
+hand/mod-table-initial	WebAssembly.Module(): initial table size (10000001 elements) is larger than implementation limit (10000000 elements) @+13
+hand/mod-table-max-less	WebAssembly.Module(): maximum table size (2 elements) is less than initial (3 elements) @+14
+hand/mod-table64-ok	OK
+hand/mod-table-count-limit	WebAssembly.Module(): table count of 100001 exceeds internal limit of 100000 @+10
+hand/mod-memory-count-limit	WebAssembly.Module(): memory count of 100001 exceeds internal limit of 100000 @+10
+hand/mod-memory-flags	WebAssembly.Module(): invalid memory limits flags 0x10 @+11
+hand/mod-memory64-300000	WebAssembly.Module(): initial memory size (300000 pages) is larger than implementation limit (262144 pages) @+12
+hand/mod-memory64-max	WebAssembly.Module(): maximum memory size (262145 pages) is larger than implementation limit (262144 pages) @+13
+hand/mod-memory-multiple-ok	OK
+hand/mod-memory-past-end	WebAssembly.Module(): reached end while decoding maximum size @+13
+hand/mod-global-flags	WebAssembly.Module(): invalid global flags 0x3 @+12
+hand/mod-global-type-error	WebAssembly.Module(): type error in constant expression[0] (expected i64, got i32) @+14
+hand/mod-global-ref-func-oob	WebAssembly.Module(): function index 5 out of bounds @+14
+hand/mod-global-ref-null-type	WebAssembly.Module(): type error in constant expression[0] (expected externref, got funcref) @+14
+hand/mod-global-ref-null-oob	WebAssembly.Module(): Type index 9 is out of bounds @+13
+hand/mod-global-empty-init	WebAssembly.Module(): Beyond end of code @+13
+hand/mod-global-missing-end	WebAssembly.Module(): constant expression is missing 'end' @+15
+hand/mod-global-i32-leb	WebAssembly.Module(): reached end while decoding i32.const @+15
+hand/mod-global-count-limit	WebAssembly.Module(): globals count of 1000001 exceeds internal limit of 1000000 @+10
+hand/mod-global-v128-ok	OK
+hand/mod-export-utf8	WebAssembly.Module(): field name: no valid UTF-8 string @+26
+hand/mod-export-duplicate	WebAssembly.Module(): Duplicate export name 'a' for function 0 and function 0 @+34
+hand/mod-export-duplicate-long	WebAssembly.Module(): Duplicate export name 'nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn...' for function 0 and function 0 @+89
+hand/mod-export-func-oob	WebAssembly.Module(): function index 3 out of bounds (1 entry) @+28
+hand/mod-export-table-oob	WebAssembly.Module(): table index 0 out of bounds (0 entries) @+28
+hand/mod-export-memory-oob	WebAssembly.Module(): invalid exported memory index 0 (having 0 memories) @+28
+hand/mod-export-global-oob	WebAssembly.Module(): global index 1 out of bounds (0 entries) @+28
+hand/mod-export-tag-oob	WebAssembly.Module(): tag index 0 out of bounds (0 entries) @+28
+hand/mod-export-kind	WebAssembly.Module(): invalid export kind 0x05 @+27
+hand/mod-export-count-limit	WebAssembly.Module(): exports count of 1000001 exceeds internal limit of 1000000 @+24
+hand/mod-start-oob	WebAssembly.Module(): function index 2 out of bounds (1 entry) @+24
+hand/mod-start-sig	WebAssembly.Module(): invalid start function: non-zero parameter or return count @+24
+hand/mod-start-twice	WebAssembly.Module(): unexpected section <Start> @+27
+hand/mod-elem-flag	WebAssembly.Module(): illegal flag value 8 @+31
+hand/mod-elem-flag-big	WebAssembly.Module(): illegal flag value 128 @+31
+hand/mod-elem-implicit-table	WebAssembly.Module(): out of bounds implicit table index 0 @+25
+hand/mod-elem-table-index	WebAssembly.Module(): out of bounds table index 2 @+31
+hand/mod-elem-kind	WebAssembly.Module(): illegal element kind 0x1. Must be 0x0 @+31
+hand/mod-elem-type	WebAssembly.Module(): Element segment of type externref is not a subtype of referenced table 0 (of type funcref) @+31
+hand/mod-elem-func-oob	WebAssembly.Module(): function index 5 out of bounds (1 entry) @+36
+hand/mod-elem-expr-type	WebAssembly.Module(): type error in constant expression[0] (expected funcref, got externref) @+35
+hand/mod-elem-expr-not-const	WebAssembly.Module(): opcode unreachable is not allowed in constant expressions @+34
+hand/mod-elem-offset-type	WebAssembly.Module(): type error in constant expression[0] (expected i32, got i64) @+34
+hand/mod-elem-table64-offset	WebAssembly.Module(): type error in constant expression[0] (expected i64, got i32) @+25
+hand/mod-elem-segment-count	WebAssembly.Module(): segment count of 10000001 exceeds internal limit of 10000000 @+30
+hand/mod-elem-entry-count	WebAssembly.Module():  number of elements of 10000001 exceeds internal limit of 10000000 @+33
+hand/mod-elem-typed-table	WebAssembly.Module(): Element segment of type (ref func) is not a subtype of referenced table 0 (of type (ref null 1)) @+32
+hand/mod-data-flag-3	WebAssembly.Module(): illegal flag value 3 @+16
+hand/mod-data-flag-8	WebAssembly.Module(): illegal flag value 8. @+16
+hand/mod-data-flag-16	WebAssembly.Module(): illegal flag value 16 @+16
+hand/mod-data-memory-oob	WebAssembly.Module(): invalid memory index 0 for data section (having 0 memories) @+11
+hand/mod-data-memory-index-oob	WebAssembly.Module(): invalid memory index 1 for data section (having 1 memory) @+16
+hand/mod-data-offset-type	WebAssembly.Module(): type error in constant expression[0] (expected i32, got i64) @+19
+hand/mod-data-past-end	WebAssembly.Module(): expected 10 bytes, fell off end @+18
+hand/mod-data-count-mismatch	WebAssembly.Module(): data segments count 1 mismatch (2 expected) @+19
+hand/mod-data-count-no-data	WebAssembly.Module(): data segments count 0 mismatch (1 expected) @+16
+hand/mod-data-count-limit	WebAssembly.Module(): data segments count of 100001 exceeds internal limit of 100000 @+15
+hand/mod-datacount-limit	WebAssembly.Module(): data segments count of 100001 exceeds internal limit of 100000 @+15
+hand/mod-code-count-mismatch	WebAssembly.Module(): function body count 2 mismatch (1 expected) @+20
+hand/mod-code-without-functions	WebAssembly.Module(): function body count 1 mismatch (0 expected) @+16
+hand/mod-code-body-size	WebAssembly.Module(): size 7654322 > maximum function size 7654321 @+21
+hand/mod-code-body-past-end	WebAssembly.Module(): expected 5 bytes, fell off end @+22
+hand/mod-tag-sig	WebAssembly.Module(): no signature at index 3 (1 types) @+18
+hand/mod-tag-attribute	WebAssembly.Module(): exception attribute 1 not supported @+17
+hand/mod-tag-result	WebAssembly.Module(): tag signature 0 has non-void return @+19
+hand/mod-tag-count-limit	WebAssembly.Module(): tag count of 1000001 exceeds internal limit of 1000000 @+10
