@@ -43,6 +43,10 @@ type arrayBufferData struct {
 	// block's, which other runtimes may be looking at too.
 	shared bool
 	block  *SharedMemory
+	// host is a buffer's over memory a host package owns (see
+	// HostArrayBuffer), which script cannot detach, and which the host
+	// resizes.
+	host *hostBuffer
 }
 
 // maxBufferLength bounds how large a buffer may actually be. A resizable
@@ -606,6 +610,9 @@ func (r *Runtime) initArrayBufferBuiltins() {
 		if b.detached {
 			return Undefined, rt.throwTypeError("the ArrayBuffer has been detached")
 		}
+		if b.host != nil && b.host.resize != nil {
+			return Undefined, b.host.resize(int(min(n, maxBufferLength+1)))
+		}
 		if n > b.maxByteLength {
 			return Undefined, rt.throwRangeError("the new length exceeds the ArrayBuffer's maxByteLength")
 		}
@@ -654,6 +661,9 @@ func (r *Runtime) initArrayBufferBuiltins() {
 		}
 		if b.immutable {
 			return Undefined, rt.throwTypeError("an immutable ArrayBuffer cannot be transferred")
+		}
+		if b.host != nil {
+			return Undefined, rt.throwTypeError("ArrayBuffer is not detachable and could not be cloned.")
 		}
 		if n < 0 {
 			n = int64(len(b.bytes))
@@ -823,6 +833,9 @@ func (r *Runtime) DetachArrayBuffer(v Value) error {
 	}
 	if b.immutable {
 		return r.throwTypeError("an immutable ArrayBuffer cannot be detached")
+	}
+	if b.host != nil {
+		return r.throwTypeError("ArrayBuffer is not detachable and could not be cloned.")
 	}
 	b.detached = true
 	b.bytes = nil
