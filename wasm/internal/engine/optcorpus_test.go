@@ -41,8 +41,9 @@ type corpusFunc struct {
 // and what they allocated per function. WASM_OPT_HASHES names a file to
 // write each function's code's hash to, a line each, and WASM_OPT_BASE one
 // written so to compare with: the test fails where a function's code, or
-// its refusal, differs. -cpuprofile and -memprofile profile the test,
-// which is mostly the compiles.
+// its refusal, differs. WASM_OPT_ONLY limits the corpus to the functions
+// it names. -cpuprofile and -memprofile profile the test, which is mostly
+// the compiles.
 //
 //	WASM_OPT_CORPUS=/path/goprog.wasm,spec WASM_SPEC_DIR=/path/spec \
 //	  go test -tags quickjs_jit ./wasm/internal/engine -run TestOptCompileCorpus -v
@@ -60,6 +61,15 @@ func TestOptCompileCorpus(t *testing.T) {
 		reps = n
 	}
 	var fns []*corpusFunc
+	// WASM_OPT_ONLY limits the corpus to the functions it names, by their
+	// keys as logged, comma-separated.
+	var only map[string]bool
+	if s := os.Getenv("WASM_OPT_ONLY"); s != "" {
+		only = map[string]bool{}
+		for _, k := range strings.Split(s, ",") {
+			only[k] = true
+		}
+	}
 	add := func(name string, bin []byte) {
 		lim := decoder.CoreLimits()
 		m, derr := decoder.Decode(bin, lim)
@@ -74,8 +84,12 @@ func TestOptCompileCorpus(t *testing.T) {
 			if m.Functions[i].Imported {
 				continue
 			}
+			key := fmt.Sprintf("%s#%d", name, i)
+			if only != nil && !only[key] {
+				continue
+			}
 			cd := c.get(uint32(i))
-			fns = append(fns, &corpusFunc{key: fmt.Sprintf("%s#%d", name, i), code: c, idx: uint32(i),
+			fns = append(fns, &corpusFunc{key: key, code: c, idx: uint32(i),
 				body: int(m.Functions[i].Code.Len), req: request(c, uint32(i), cd, 0)})
 		}
 	}
