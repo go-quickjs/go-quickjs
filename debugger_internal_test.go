@@ -352,7 +352,7 @@ func TestDebuggerScripts(t *testing.T) {
 
 // TestDebuggerScopesAndFrames pins what a pause shows of the stack: each
 // frame of compiled code with its function's name and where it is, its own
-// bindings, the ones it shares with the function it is in, a with
+// bindings, the ones it captures of the function it is in, a with
 // statement's object, the script's top-level let and const, and the global
 // object; and code evaluated in a caller's frame sees the caller's bindings.
 func TestDebuggerScopesAndFrames(t *testing.T) {
@@ -400,14 +400,22 @@ outer(10);
 			t.Fatal(err)
 		}
 		got = append(got, "eval "+h.show(in)+" | "+h.show(caller))
+		// o is outer's, which inner does not use: not available in its
+		// frame, as in V8, rather than captured by every function for the
+		// debugger.
+		if _, err := p.Frames[0].Evaluate("o"); err == nil || !strings.Contains(err.Error(), "ReferenceError") {
+			t.Errorf("o in inner's frame: %v, want a ReferenceError", err)
+		}
 		return vm.Continue
 	}
 	if _, err := r.EvalFile("s.js", src); err != nil {
 		t.Fatal(err)
 	}
-	// top and outer are the script's, which its own scopes show.
+	// top and outer are the script's, which its own scopes show. inner's
+	// closure is what it captures of outer's, as V8's is (Node v26.12.1:
+	// closure {shared: 11}).
 	want := strings.Join([]string{
-		"inner 6:7 local[x=2] with closure[inner=<fn> shared=11 o=10] script global",
+		"inner 6:7 local[x=2] with closure[shared=11] script global",
 		"outer 10:10 local[inner=<fn> shared=11 o=10] script global",
 		" 12:1 local[] script global",
 		"eval 20T | undefined 10",

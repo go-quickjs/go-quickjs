@@ -681,6 +681,9 @@ func (c *compiler) finish() {
 	if len(c.paramCaptures) != 0 && !facts.eval {
 		c.settleParamCaptures(facts)
 	}
+	if c.opts.Debug {
+		c.finishDebugScopes()
+	}
 }
 
 // codeFacts is what recordFacts found of a function's finished code that

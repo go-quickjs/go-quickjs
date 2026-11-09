@@ -14,6 +14,15 @@ import (
 // bindings a debugger shows, and evaluates code against as a direct eval at
 // that point would. Nothing else differs, but that an instruction between
 // two statements keeps the two from being fused into one.
+//
+// What is in scope is V8's: the function's own bindings, and of the
+// enclosing functions' those it captures, which its code uses. A binding of
+// an enclosing function it does not use is not available where it stops, as
+// in Node's debugger, rather than captured for the debugger's sake by every
+// function: a bundle's thousands of functions each capturing its module's
+// thousands of bindings -- typescript.js's 21,693 under 9,523 -- made
+// hundreds of millions of upvalues, tens of gigabytes, and a compile that
+// did not end.
 
 // debugStatement begins a statement a debugger can stop at.
 func (c *compiler) debugStatement(s ast.Stmt) {
@@ -65,8 +74,11 @@ func (c *compiler) debugMark(pos int, debugger uint32) {
 // debugScope records what is in scope at the current position, and returns
 // its index in the function's EvalScopes: the last statement's, where
 // nothing has changed since.
+//
+// The scope is the function's own bindings here; finishDebugScopes adds the
+// enclosing ones the function captured, once its code is compiled.
 func (c *compiler) debugScope() uint32 {
-	scope := c.evalScope()
+	scope := c.scopeOf(c.ownBindings(make(map[string]bool, len(c.locals))))
 	if n := len(c.fn.Debug.Statements); n > 0 {
 		last := c.fn.Debug.Statements[n-1].Scope
 		if sameEvalScope(&c.fn.EvalScopes[last], &scope) {
@@ -84,4 +96,39 @@ func sameEvalScope(a, b *bytecode.EvalScope) bool {
 		a.AllowSuperCall == b.AllowSuperCall && a.AllowNewTarget == b.AllowNewTarget &&
 		a.VarScopeIsGlobal == b.VarScopeIsGlobal && a.InFieldInit == b.InFieldInit &&
 		slices.Equal(a.PrivateNames, b.PrivateNames) && slices.Equal(a.ArgumentNames, b.ArgumentNames)
+}
+
+// finishDebugScopes adds to the scope of each place the function can stop
+// the bindings of enclosing functions it captured, which are its for the
+// whole of its code: its upvalues, after its own bindings, whose names
+// shadow them. A private name is left in a scope only where the binding
+// holding its key is in it.
+func (c *compiler) finishDebugScopes() {
+	if c.fn.Debug == nil {
+		return
+	}
+	done := make(map[uint32]bool)
+	for _, st := range c.fn.Debug.Statements {
+		if done[st.Scope] {
+			continue
+		}
+		done[st.Scope] = true
+		scope := &c.fn.EvalScopes[st.Scope]
+		seen := make(map[string]bool, len(scope.Bindings)+len(c.fn.Upvalues))
+		for _, b := range scope.Bindings {
+			seen[b.Name] = true
+		}
+		bindings := slices.Clip(scope.Bindings)
+		for i, u := range c.fn.Upvalues {
+			if u.Name == "" || seen[u.Name] {
+				continue
+			}
+			seen[u.Name] = true
+			bindings = append(bindings, upvalueBinding(u.Name, uint32(i), u))
+		}
+		scope.Bindings = bindings
+		scope.PrivateNames = slices.DeleteFunc(slices.Clone(scope.PrivateNames), func(p bytecode.EvalPrivateName) bool {
+			return !seen[p.Hidden]
+		})
+	}
 }

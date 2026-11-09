@@ -1093,7 +1093,9 @@ func WithoutCodeGeneration() Option {
 // Function call -- is compiled for one: each statement is a place the code
 // can stop, at a breakpoint or a step, and records the bindings in scope
 // there, which a debugger shows and evaluates code against. A debugger
-// statement stops there too, once a debugger is attached.
+// statement stops there too, once a debugger is attached. As in V8, the
+// bindings in scope where a function stops are its own and those of the
+// enclosing functions it uses: one it does not use is not available there.
 //
 // It is for development. The runtime runs its code in the interpreter,
 // without the tier that turns a function's bytecode into closures, and a

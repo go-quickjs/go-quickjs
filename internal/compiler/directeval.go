@@ -71,8 +71,13 @@ func (c *compiler) evalScopeIdx() uint32 {
 // evalScope is what is in scope at the current position, as a direct eval
 // there would see it.
 func (c *compiler) evalScope() bytecode.EvalScope {
+	return c.scopeOf(c.visibleBindings())
+}
+
+// scopeOf is what is in scope at the current position, of these bindings.
+func (c *compiler) scopeOf(bindings []bytecode.EvalBinding) bytecode.EvalScope {
 	return bytecode.EvalScope{
-		Bindings:         c.visibleBindings(),
+		Bindings:         bindings,
 		WithDepth:        c.withDepth,
 		Strict:           c.fn.Strict,
 		AllowSuperProp:   c.allowSuperProp(),
@@ -93,8 +98,52 @@ func (c *compiler) evalScope() bytecode.EvalScope {
 // reach it once the enclosing frame has returned.
 func (c *compiler) visibleBindings() []bytecode.EvalBinding {
 	seen := make(map[string]bool, len(c.locals))
-	var out []bytecode.EvalBinding
+	out := c.ownBindings(seen)
 
+	capture := func(name string) {
+		if name == "" || seen[name] {
+			return
+		}
+		idx, ok := c.resolveUpvalue(name)
+		if !ok {
+			return
+		}
+		seen[name] = true
+		out = append(out, upvalueBinding(name, idx, c.fn.Upvalues[idx]))
+	}
+
+	root := c
+	for p := c.parent; p != nil; p = p.parent {
+		for i := len(p.locals) - 1; i >= 0; i-- {
+			capture(p.locals[i].name)
+		}
+		root = p
+	}
+	// The code of a direct eval is itself a function whose upvalues are its
+	// caller's bindings, so an eval written inside one -- at any depth -- has
+	// to reach those too: eval("eval(\"x\")") names the same x as eval("x").
+	for _, b := range root.opts.EvalScope {
+		capture(b.Name)
+	}
+	return out
+}
+
+// upvalueBinding is the binding of name that the function's upvalue idx is.
+func upvalueBinding(name string, idx uint32, u bytecode.UpvalueDesc) bytecode.EvalBinding {
+	return bytecode.EvalBinding{
+		Name:      name,
+		Index:     idx,
+		Mutable:   u.Mutable,
+		TDZ:       u.TDZ,
+		FuncSelf:  u.FuncSelf,
+		WithDepth: u.WithDepth,
+	}
+}
+
+// ownBindings lists the function's own bindings in scope, innermost first,
+// leaving out a name seen has and adding each to it.
+func (c *compiler) ownBindings(seen map[string]bool) []bytecode.EvalBinding {
+	var out []bytecode.EvalBinding
 	for i := len(c.locals) - 1; i >= 0; i-- {
 		l := &c.locals[i]
 		if l.name == "" || seen[l.name] {
@@ -115,39 +164,6 @@ func (c *compiler) visibleBindings() []bytecode.EvalBinding {
 			Lexical:   l.lexical(),
 			WithDepth: l.withDepth,
 		})
-	}
-
-	capture := func(name string) {
-		if name == "" || seen[name] {
-			return
-		}
-		idx, ok := c.resolveUpvalue(name)
-		if !ok {
-			return
-		}
-		seen[name] = true
-		out = append(out, bytecode.EvalBinding{
-			Name:      name,
-			Index:     idx,
-			Mutable:   c.fn.Upvalues[idx].Mutable,
-			TDZ:       c.fn.Upvalues[idx].TDZ,
-			FuncSelf:  c.fn.Upvalues[idx].FuncSelf,
-			WithDepth: c.fn.Upvalues[idx].WithDepth,
-		})
-	}
-
-	root := c
-	for p := c.parent; p != nil; p = p.parent {
-		for i := len(p.locals) - 1; i >= 0; i-- {
-			capture(p.locals[i].name)
-		}
-		root = p
-	}
-	// The code of a direct eval is itself a function whose upvalues are its
-	// caller's bindings, so an eval written inside one -- at any depth -- has
-	// to reach those too: eval("eval(\"x\")") names the same x as eval("x").
-	for _, b := range root.opts.EvalScope {
-		capture(b.Name)
 	}
 	return out
 }
