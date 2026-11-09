@@ -208,7 +208,6 @@ func gzipRoundTrip(kib int) {
 	if err := w.Close(); err != nil {
 		fail(err.Error())
 	}
-	compressed := z.Len()
 	rd, err := gzip.NewReader(&z)
 	if err != nil {
 		fail(err.Error())
@@ -220,7 +219,9 @@ func gzipRoundTrip(kib int) {
 	if !bytes.Equal(back, src) {
 		fail("gzip round trip changed the data")
 	}
-	fmt.Printf("gzip %d KiB compressed %d crc %08x\n", kib, compressed, crc32.ChecksumIEEE(src))
+	// The compressed size is left out: it is compress/flate's, and changes
+	// with the Go release.
+	fmt.Printf("gzip %d KiB round trip crc %08x\n", kib, crc32.ChecksumIEEE(src))
 }
 
 // The interpreter's instructions.

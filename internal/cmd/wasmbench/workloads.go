@@ -77,7 +77,7 @@ var workloads = []workload{
 	{suite: suitePrograms, name: "regexp", args: []string{"regexp", "1000"},
 		want: "regexp 1000 emails 1000 errors 493 api 186 crc 5eac257e\n"},
 	{suite: suitePrograms, name: "gzip", args: []string{"gzip", "512"},
-		want: "gzip 512 KiB compressed 127839 crc 0a501d01\n"},
+		want: "gzip 512 KiB round trip crc 0a501d01\n"},
 	{suite: suitePrograms, name: "interp", args: []string{"interp", "200000"},
 		want: "interp 200000 sum 599998 steps 4200009\n"},
 }
