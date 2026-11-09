@@ -86,3 +86,23 @@ func TestConstantExpressionTrap(t *testing.T) {
 		t.Fatalf("got %v, want the array-too-large trap", err)
 	}
 }
+
+// TestTailCallReturnFromDepth pins where a function a return_call reached
+// in the interpreter leaves its results when it returns from deep in its
+// operand stack: where the return put them, not copied over by the
+// epilogue from its stack's bottom positions.
+func TestTailCallReturnFromDepth(t *testing.T) {
+	inst, err := instantiateWAT(t, `(module
+  (func (export "f") (param i32) (result i32)
+    (return_call $g (local.get 0)))
+  (func $g (param i32) (result i32)
+    (i32.const 1) (i32.const 2) (i32.add (local.get 0) (i32.const 40)) (return)))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ext, _ := inst.Export("f")
+	res, err := Invoke(context.Background(), ext.Func, []Val{{N: 2}})
+	if err != nil || res[0].N != 42 {
+		t.Fatalf("f(2) = %v, %v; want 42", res, err)
+	}
+}

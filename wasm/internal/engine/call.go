@@ -88,7 +88,11 @@ func (x *exec) tailChain(f *frame, code *compiled, l []uint64, r []Ref, nc, nsp,
 		if c == sigTail {
 			continue
 		}
-		runSeq(f, callee.epi)
+		// A return left the results in place; the end of the body leaves
+		// them in its stack positions.
+		if c >= 0 {
+			runSeq(f, callee.epi)
+		}
 		copyResults(l, r, nl, nr, results)
 		return
 	}
