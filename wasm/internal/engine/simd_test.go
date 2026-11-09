@@ -28,7 +28,7 @@ func TestSIMDGenerated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(got, want) {
+	if !bytes.Equal(bytes.ReplaceAll(got, []byte("\r\n"), []byte("\n")), want) {
 		t.Fatal("ops_simd_gen.go is out of date: run go generate ./wasm/internal/engine")
 	}
 }
