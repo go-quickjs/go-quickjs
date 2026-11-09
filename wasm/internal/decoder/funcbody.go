@@ -1,7 +1,9 @@
 package decoder
 
 import (
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
@@ -171,6 +173,14 @@ func (v *funcValidator) reset(b []byte, pc, end int) {
 // function #N failed: ...", with the function's name from the name section
 // if it has one.
 func ValidateFunctions(m *module.Module, l *Limits) *Error {
+	if validateInParallel(m, l) {
+		return nil
+	}
+	return validateInOrder(m, l)
+}
+
+// validateInOrder validates m's bodies one after the other.
+func validateInOrder(m *module.Module, l *Limits) *Error {
 	v := &funcValidator{m: m, lim: l}
 	for i := m.NumImportedFunctions; i < uint32(len(m.Functions)); i++ {
 		v.validateFunction(&m.Functions[i])
@@ -179,6 +189,68 @@ func ValidateFunctions(m *module.Module, l *Limits) *Error {
 		}
 	}
 	return nil
+}
+
+// Bodies are validated on several goroutines where there are enough of
+// them: parallelBytes of bodies for each goroutine, at most GOMAXPROCS,
+// each taking parallelBatch functions at a time.
+const (
+	parallelBytes = 128 << 10
+	parallelBatch = 16
+)
+
+// validateInParallel validates m's bodies on several goroutines where they
+// are large enough to gain by it, and reports whether it found every body
+// valid. A body's verdict depends on the bodies before it only through the
+// features they were seen to use, legacy exception handling and exnref,
+// which a module may not mix: a module that uses both, as one with an
+// invalid body, is validated again in order by the caller, whose verdict
+// and error are the first body's in order to fail.
+func validateInParallel(m *module.Module, l *Limits) bool {
+	first := m.NumImportedFunctions
+	total := 0
+	for _, f := range m.Functions[first:] {
+		total += int(f.Code.Len)
+	}
+	workers := min(runtime.GOMAXPROCS(0), total/parallelBytes, (len(m.Functions)-int(first))/parallelBatch)
+	if workers < 2 {
+		return false
+	}
+	var (
+		next                     atomic.Int64
+		failed, legacyEH, exnref atomic.Bool
+		wg                       sync.WaitGroup
+	)
+	n := int64(len(m.Functions))
+	next.Store(int64(first))
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			v := &funcValidator{m: m, lim: l}
+			for !failed.Load() {
+				i := next.Add(parallelBatch) - parallelBatch
+				if i >= n {
+					break
+				}
+				for end := min(i+parallelBatch, n); i < end; i++ {
+					v.validateFunction(&m.Functions[i])
+					if v.err != nil {
+						failed.Store(true)
+						return
+					}
+				}
+			}
+			if v.det.legacyEH {
+				legacyEH.Store(true)
+			}
+			if v.det.exnref {
+				exnref.Store(true)
+			}
+		}()
+	}
+	wg.Wait()
+	return !failed.Load() && !(legacyEH.Load() && exnref.Load())
 }
 
 // functionError names function i in error e.
