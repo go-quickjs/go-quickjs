@@ -11,6 +11,25 @@ type rng struct{ from, to int32 }
 
 // overlap reports whether two sorted lists of ranges meet.
 func overlap(a, b []rng) bool {
+	if len(a) < len(b) {
+		a, b = b, a
+	}
+	if len(b)*8 < len(a) {
+		// Few ranges against many: each found in the many by a search,
+		// from where the last was.
+		lo := 0
+		for _, r := range b {
+			i := endsAfter(a, lo, r.from)
+			if i == len(a) {
+				return false
+			}
+			if a[i].from < r.to {
+				return true
+			}
+			lo = i
+		}
+		return false
+	}
 	i, j := 0, 0
 	for i < len(a) && j < len(b) {
 		switch {
@@ -23,6 +42,21 @@ func overlap(a, b []rng) bool {
 		}
 	}
 	return false
+}
+
+// endsAfter is the index of the first of a's ranges from lo on that ends
+// after p, or len(a): a's ranges are in order and apart.
+func endsAfter(a []rng, lo int, p int32) int {
+	hi := len(a)
+	for lo < hi {
+		m := int(uint(lo+hi) >> 1)
+		if a[m].to <= p {
+			lo = m + 1
+		} else {
+			hi = m
+		}
+	}
+	return lo
 }
 
 // web is coalesced virtual registers, which share a location.
@@ -76,11 +110,19 @@ type clobber struct {
 	weight float64
 }
 
-// pair is a phi and an argument to coalesce, weighed by their edge's
-// depth.
+// pair is a phi and an argument to coalesce, weighed by the class of
+// their edge's depth's weight.
 type pair struct {
-	a, b   VReg
+	a, b  VReg
+	class int
+}
+
+// vacross is what a register lives across: whether calls, their weight,
+// and the registers of its class clobbers write.
+type vacross struct {
+	calls  bool
 	weight float64
+	avoid  uint64
 }
 
 // An Allocator allocates the registers of one function after another,
@@ -109,11 +151,15 @@ type Allocator struct {
 	active   []*web
 	inactive []*web
 	back     []*web
-	queue    webQueue
+	queue    []*web
+	partQ    webQueue
 	slots    [][]rng
 	across   []acrossEntry
 	parts    []*web
 	next     []int32
+	clobAt   []int32
+	vacross  []vacross
+	sorted   []pair
 
 	rngs  arena[rng]
 	vregs arena[VReg]
@@ -418,12 +464,30 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		}
 		ranges[v] = out
 	}
+	// clobAt is each clobber's position, in order.
+	clobAt := al.clobAt[:0]
+	for k := range clobbers {
+		clobAt = append(clobAt, clobbers[k].at)
+	}
+	al.clobAt = clobAt
 	// crossed visits the clobbers a list of ranges lives across: those at
 	// a position p where it is live at p and p+1.
 	crossed := func(rs []rng, visit func(k int)) {
+		if len(clobAt) == 0 {
+			return
+		}
 		for _, r := range rs {
-			k, _ := slices.BinarySearchFunc(clobbers, r.from, func(c clobber, p int32) int { return int(c.at - p) })
-			for ; k < len(clobbers) && clobbers[k].at < r.to-1; k++ {
+			// The first clobber at or past the range's start.
+			lo, hi := 0, len(clobAt)
+			for lo < hi {
+				m := int(uint(lo+hi) >> 1)
+				if clobAt[m] < r.from {
+					lo = m + 1
+				} else {
+					hi = m
+				}
+			}
+			for k := lo; k < len(clobAt) && clobAt[k] < r.to-1; k++ {
 				visit(k)
 			}
 		}
@@ -433,24 +497,17 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	// Webs: each register its own, then a phi's and an argument's joined
 	// where their lifetimes do not meet and their parameters' slots allow,
 	// the edges of the deepest blocks first.
-	// single is v's web of its own.
+	// single is v's web of its own: the clobbers it lives across are
+	// found once, for its first, and kept for a web taken apart.
+	vacr := grown(al.vacross, n)
+	al.vacross = vacr
 	single := func(v VReg) *web {
 		w := al.pool.new()
 		*w = web{members: append(al.vregs.take(1), v), cls: f.Class[v], ranges: ranges[v], weight: weight[v], fixed: -1, reg: -1, slot: -1}
 		if f.FixedSlot[v] >= 0 {
 			w.fixed, w.arrive = f.FixedSlot[v], defAt[v]
 		}
-		cls := w.cls
-		crossed(w.ranges, func(k int) {
-			c := &clobbers[k]
-			if c.call {
-				w.calls = true
-				w.callWeight += c.weight
-			}
-			if int(cls) < len(c.masks) {
-				w.avoid |= c.masks[cls]
-			}
-		})
+		w.calls, w.callWeight, w.avoid = vacr[v].calls, vacr[v].weight, vacr[v].avoid
 		return w
 	}
 	webs := grown(al.webs, n)
@@ -458,6 +515,19 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	al.webs = webs
 	for v := range n {
 		if alloc(VReg(v)) && len(ranges[v]) > 0 {
+			a := vacross{}
+			cls := f.Class[v]
+			crossed(ranges[v], func(k int) {
+				c := &clobbers[k]
+				if c.call {
+					a.calls = true
+					a.weight += c.weight
+				}
+				if int(cls) < len(c.masks) {
+					a.avoid |= c.masks[cls]
+				}
+			})
+			vacr[v] = a
 			webs[v] = single(VReg(v))
 		}
 	}
@@ -470,21 +540,28 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 			}
 			for k, a := range p.Args {
 				if a != p.Def && alloc(a) && webs[a] != nil && f.Class[a] == f.Class[p.Def] {
-					pairs = append(pairs, pair{p.Def, a, depthWeight(f.Blocks[b.Preds[k]].Depth)})
+					pairs = append(pairs, pair{p.Def, a, weightClass(f.Blocks[b.Preds[k]].Depth)})
 				}
 			}
 		}
 	}
-	slices.SortStableFunc(pairs, func(x, y pair) int {
-		switch {
-		case x.weight > y.weight:
-			return -1
-		case x.weight < y.weight:
-			return 1
-		}
-		return 0
-	})
-	al.pairs = pairs
+	// The pairs by their edges' weight, the heaviest first, in order
+	// within a weight: a counting sort by the weight's class.
+	var count [numWeightClasses + 1]int
+	for _, pr := range pairs {
+		count[numWeightClasses-pr.class]++
+	}
+	for c := 1; c <= numWeightClasses; c++ {
+		count[c] += count[c-1]
+	}
+	sorted := grown(al.sorted, len(pairs))
+	for _, pr := range pairs {
+		c := numWeightClasses - 1 - pr.class
+		sorted[count[c]] = pr
+		count[c]++
+	}
+	al.pairs, al.sorted = sorted, pairs
+	pairs = sorted
 	for _, pr := range pairs {
 		x, y := webs[pr.a], webs[pr.b]
 		if x == y || (x.fixed >= 0 && y.fixed >= 0) || overlap(x.ranges, y.ranges) {
@@ -555,33 +632,42 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	// the others' registers: they may find registers in its holes.
 	for cls, regs := range cfg.Classes {
 		active, inactive := al.active[:0], al.inactive[:0]
-		queue := al.queue[:0]
+		// The webs to scan: the class's, in order of their starts, and
+		// the parts of webs taken apart, which start at or after the web
+		// they were part of, in a heap. Each is next where it is the less.
+		queue, parts := al.queue[:0], al.partQ[:0]
 		for _, w := range list {
 			if int(w.cls) == cls {
 				queue = append(queue, w)
 			}
 		}
-		heap.Init(&queue)
+		qi := 0
 		apart := func(w *web) bool {
 			if len(w.members) < 2 {
 				return false
 			}
-			parts := al.parts[:0]
+			ps := al.parts[:0]
 			for _, m := range w.members {
 				p := single(m)
 				webs[m] = p
-				parts = append(parts, p)
+				ps = append(ps, p)
 			}
-			for _, p := range parts {
-				p.hints = append(append(al.hints.take(len(w.hints)+len(parts)), w.hints...), parts...)
-				heap.Push(&queue, p)
+			for _, p := range ps {
+				p.hints = append(append(al.hints.take(len(w.hints)+len(ps)), w.hints...), ps...)
+				heap.Push(&parts, p)
 			}
-			clear(parts)
-			al.parts = parts[:0]
+			clear(ps)
+			al.parts = ps[:0]
 			return true
 		}
-		for queue.Len() > 0 {
-			cur := heap.Pop(&queue).(*web)
+		for qi < len(queue) || len(parts) > 0 {
+			var cur *web
+			if len(parts) > 0 && (qi == len(queue) || byStart(parts[0], queue[qi]) < 0) {
+				cur = heap.Pop(&parts).(*web)
+			} else {
+				cur = queue[qi]
+				qi++
+			}
 			if cur.calls && cur.callWeight >= cur.weight {
 				// Its reloads after the calls it lives across would cost
 				// more than its uses gain: it lives in its slot.
@@ -685,7 +771,8 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		}
 		clear(active)
 		clear(inactive)
-		al.active, al.inactive, al.queue = active[:0], inactive[:0], queue[:0]
+		clear(queue)
+		al.active, al.inactive, al.queue, al.partQ = active[:0], inactive[:0], queue[:0], parts[:0]
 	}
 	lap(PhaseScan)
 
@@ -806,7 +893,8 @@ func byStart(a, b *web) int {
 	return int(a.members[0] - b.members[0])
 }
 
-// depthWeight is the weight of a use at loop depth d.
+// depthWeight is the weight of a use at loop depth d: 8 to the depth's
+// power, up to 8 to the 7th.
 func depthWeight(d int) float64 {
 	w := 1.0
 	for ; d > 0 && w < 1e6; d-- {
@@ -814,6 +902,12 @@ func depthWeight(d int) float64 {
 	}
 	return w
 }
+
+// numWeightClasses is the number of depthWeight's weights.
+const numWeightClasses = 8
+
+// weightClass is the class of depthWeight(d), which orders the weights.
+func weightClass(d int) int { return min(max(d, 0), numWeightClasses-1) }
 
 // webQueue is webs by their starts, the first first.
 type webQueue []*web
@@ -851,6 +945,32 @@ func (w *web) density() float64 {
 // array where it has room, else in one of the arena's.
 func unionInto(ar *arena[rng], a, b []rng) []rng {
 	if len(b) == 0 {
+		return a
+	}
+	if len(b)*8 < len(a) {
+		// Few ranges into many: each merged where a search finds it, the
+		// ranges it meets -- a's are apart, none meeting the next --
+		// joined with it.
+		lo := 0
+		for _, r := range b {
+			i := endsAfter(a, lo, r.from-1)
+			j := i
+			for j < len(a) && a[j].from <= r.to {
+				j++
+			}
+			if i < j {
+				a[i] = rng{min(a[i].from, r.from), max(a[j-1].to, r.to)}
+				a = append(a[:i+1], a[j:]...)
+			} else {
+				if len(a) == cap(a) {
+					a = append(ar.take(2*cap(a)+1), a...)
+				}
+				a = a[:len(a)+1]
+				copy(a[i+1:], a[i:])
+				a[i] = r
+			}
+			lo = i
+		}
 		return a
 	}
 	n := len(a)

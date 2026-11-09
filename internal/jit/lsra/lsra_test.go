@@ -309,3 +309,60 @@ func TestCoalesce(t *testing.T) {
 		t.Fatalf("v3 in %v beside %v", res.Reg[3], res.Reg[1])
 	}
 }
+
+// TestRanges checks overlap and unionInto, few ranges against many and
+// many against many, against the positions the lists cover.
+func TestRanges(t *testing.T) {
+	rnd := rand.New(rand.NewPCG(3, 5))
+	list := func(n int) ([]rng, []bool) {
+		cover := make([]bool, 400)
+		for range n {
+			from := rnd.IntN(390)
+			for p := from; p < from+1+rnd.IntN(8); p++ {
+				cover[p] = true
+			}
+		}
+		var rs []rng
+		for p := 0; p < len(cover); p++ {
+			if !cover[p] {
+				continue
+			}
+			from := p
+			for p < len(cover) && cover[p] {
+				p++
+			}
+			rs = append(rs, rng{int32(from), int32(p)})
+		}
+		return rs, cover
+	}
+	var ar arena[rng]
+	for iter := range 20000 {
+		a, ca := list(1 + rnd.IntN(60))
+		b, cb := list(1 + rnd.IntN(6))
+		if iter%2 == 1 {
+			a, b, ca, cb = b, a, cb, ca
+		}
+		meet := false
+		for p := range ca {
+			meet = meet || ca[p] && cb[p]
+		}
+		if got := overlap(a, b); got != meet {
+			t.Fatalf("overlap(%v, %v) = %v", a, b, got)
+		}
+		u := unionInto(&ar, slices.Clone(a), b)
+		var want []rng
+		for p := 0; p < len(ca); p++ {
+			if !ca[p] && !cb[p] {
+				continue
+			}
+			from := p
+			for p < len(ca) && (ca[p] || cb[p]) {
+				p++
+			}
+			want = append(want, rng{int32(from), int32(p)})
+		}
+		if !slices.Equal(u, want) {
+			t.Fatalf("unionInto(%v, %v) = %v, want %v", a, b, u, want)
+		}
+	}
+}
