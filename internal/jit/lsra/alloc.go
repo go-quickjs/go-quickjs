@@ -158,6 +158,10 @@ type Allocator struct {
 	parts    []*web
 	next     []int32
 	clobAt   []int32
+	callsTo  []int32
+	weightTo []float64
+	masked   []int32
+	stale    []bool
 	vacross  []vacross
 	sorted   []pair
 
@@ -307,38 +311,61 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 			}
 		}
 	}
-	for changed := true; changed; {
-		changed = false
+	// What the successors' phis read on a block's edges is live out of it
+	// whatever else is: those are set first, and the sets only grow.
+	for i := range f.Blocks {
+		b := &f.Blocks[i]
+		out := liveOut(i)
+		for k, s := range b.Succs {
+			pi := predIdx[int(predOff[i])+k]
+			for _, p := range f.Blocks[s].Phis {
+				if a := p.Args[pi]; alloc(a) {
+					x := gi(a)
+					out[x/64] |= 1 << (x % 64)
+				}
+			}
+		}
+	}
+	// A block is walked again only where a successor's live-in set grew
+	// since it last was (stale): backwards over the blocks, in reverse
+	// postorder, a block's successors but its loops' headers come before
+	// it, and the sweeps after the first are the loops'.
+	stale := grown(al.stale, nb)
+	for i := range stale {
+		stale[i] = true
+	}
+	al.stale = stale
+	for again := true; again; {
+		again = false
 		for i := nb - 1; i >= 0; i-- {
+			if !stale[i] {
+				continue
+			}
+			stale[i] = false
 			b := &f.Blocks[i]
 			out := liveOut(i)
-			for k, s := range b.Succs {
+			for _, s := range b.Succs {
 				sin := liveIn(s)
 				for w := range out {
-					nw := out[w] | sin[w]
-					if nw != out[w] {
-						out[w] = nw
-						changed = true
-					}
-				}
-				pi := predIdx[int(predOff[i])+k]
-				for _, p := range f.Blocks[s].Phis {
-					if a := p.Args[pi]; alloc(a) {
-						x := gi(a)
-						if out[x/64]&(1<<(x%64)) == 0 {
-							out[x/64] |= 1 << (x % 64)
-							changed = true
-						}
-					}
+					out[w] |= sin[w]
 				}
 			}
 			in := liveIn(i)
 			g, k := live[(4*i+2)*words:(4*i+3)*words], live[(4*i+3)*words:(4*i+4)*words]
+			grew := false
 			for w := range in {
 				nw := g[w] | out[w]&^k[w]
 				if nw != in[w] {
 					in[w] = nw
-					changed = true
+					grew = true
+				}
+			}
+			if grew {
+				for _, p := range b.Preds {
+					stale[p] = true
+					if p >= i {
+						again = true
+					}
 				}
 			}
 		}
@@ -464,12 +491,39 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		}
 		ranges[v] = out
 	}
-	// clobAt is each clobber's position, in order.
+	// clobAt is each clobber's position, in order; callsTo and weightTo
+	// the number and weight of the calls before each clobber, and masked
+	// the clobbers that write registers of their own, by index.
 	clobAt := al.clobAt[:0]
+	callsTo := append(al.callsTo[:0], 0)
+	weightTo := append(al.weightTo[:0], 0)
+	masked := al.masked[:0]
 	for k := range clobbers {
-		clobAt = append(clobAt, clobbers[k].at)
+		c := &clobbers[k]
+		clobAt = append(clobAt, c.at)
+		n, w := callsTo[k], weightTo[k]
+		if c.call {
+			n, w = n+1, w+c.weight
+		}
+		callsTo, weightTo = append(callsTo, n), append(weightTo, w)
+		if len(c.masks) > 0 {
+			masked = append(masked, int32(k))
+		}
 	}
-	al.clobAt = clobAt
+	al.clobAt, al.callsTo, al.weightTo, al.masked = clobAt, callsTo, weightTo, masked
+	// firstAt is the first of the clobbers from lo on at or past p.
+	firstAt := func(lo int, p int32) int {
+		hi := len(clobAt)
+		for lo < hi {
+			m := int(uint(lo+hi) >> 1)
+			if clobAt[m] < p {
+				lo = m + 1
+			} else {
+				hi = m
+			}
+		}
+		return lo
+	}
 	// crossed visits the clobbers a list of ranges lives across: those at
 	// a position p where it is live at p and p+1.
 	crossed := func(rs []rng, visit func(k int)) {
@@ -515,18 +569,34 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	al.webs = webs
 	for v := range n {
 		if alloc(VReg(v)) && len(ranges[v]) > 0 {
+			// The clobbers each range lives across, from lo to hi: their
+			// calls counted and weighed by the sums before them (whole
+			// numbers, exactly), the masks of those that have them.
 			a := vacross{}
-			cls := f.Class[v]
-			crossed(ranges[v], func(k int) {
-				c := &clobbers[k]
-				if c.call {
-					a.calls = true
-					a.weight += c.weight
+			cls := int(f.Class[v])
+			if len(clobAt) > 0 {
+				lo, mi := 0, 0
+				for _, r := range ranges[v] {
+					lo = firstAt(lo, r.from)
+					hi := firstAt(lo, r.to-1)
+					if lo == hi {
+						continue
+					}
+					if callsTo[hi] > callsTo[lo] {
+						a.calls = true
+						a.weight += weightTo[hi] - weightTo[lo]
+					}
+					for mi < len(masked) && int(masked[mi]) < lo {
+						mi++
+					}
+					for ; mi < len(masked) && int(masked[mi]) < hi; mi++ {
+						if c := &clobbers[masked[mi]]; cls < len(c.masks) {
+							a.avoid |= c.masks[cls]
+						}
+					}
+					lo = hi
 				}
-				if int(cls) < len(c.masks) {
-					a.avoid |= c.masks[cls]
-				}
-			})
+			}
 			vacr[v] = a
 			webs[v] = single(VReg(v))
 		}
