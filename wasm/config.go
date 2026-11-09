@@ -41,6 +41,20 @@ type RuntimeConfig interface {
 	// panics.
 	WithMemoryLimitPages(memoryLimitPages uint32) RuntimeConfig
 
+	// WithMemoryLimit bounds what the runtime's modules hold together, in
+	// bytes: their linear memories and tables, counted exactly, and the GC
+	// objects they can reach, counted as they are allocated and counted
+	// again, from the modules' globals, tables and running frames, when the
+	// total would pass the limit. A memory.grow or table.grow past it
+	// returns -1, as a grow that cannot be had does; instantiating a module
+	// whose memories do not fit fails; a GC allocation that does not fit
+	// stops the call with ErrMemoryLimit. What a closed module held is given
+	// back once Go collects it. The count of GC objects is an estimate: it
+	// may pass the limit by a sixteenth of it before it is found, and what
+	// only a call running on another goroutine holds is counted at that
+	// call's own next count. 0, the default, is no limit.
+	WithMemoryLimit(bytes int64) RuntimeConfig
+
 	// WithMemoryCapacityFromMax makes each memory hold its maximum, or the
 	// runtime's limit for a memory without one, from its instantiation, so
 	// that a grow never moves it and a Memory.Read view stays valid. Where
@@ -85,6 +99,7 @@ type runtimeConfig struct {
 	customSections     bool
 	closeOnContextDone bool
 	compiler           bool
+	memoryLimit        int64 // 0: none
 }
 
 var defaultRuntimeConfig = &runtimeConfig{features: api.CoreFeaturesAll, debugInfo: true}
@@ -128,6 +143,15 @@ func (c *runtimeConfig) WithMemoryLimitPages(memoryLimitPages uint32) RuntimeCon
 	}
 	r := c.clone()
 	r.memoryLimitPages = memoryLimitPages
+	return r
+}
+
+func (c *runtimeConfig) WithMemoryLimit(bytes int64) RuntimeConfig {
+	if bytes < 0 {
+		panic(fmt.Errorf("memory limit invalid: %d < 0", bytes))
+	}
+	r := c.clone()
+	r.memoryLimit = bytes
 	return r
 }
 

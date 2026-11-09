@@ -131,8 +131,9 @@ func maxArrayLength(size int) int {
 	return ((1<<30 - 1) - header) / size &^ 7
 }
 
-// newArray allocates an array of type t and length n, its elements zero.
-func newArray(t *rtt, n uint32) *Array {
+// newArray allocates an array of type t and length n, its elements zero,
+// charging it to b for a call running on x.
+func newArray(t *rtt, n uint32, b *Budget, x *exec) *Array {
 	size := t.elemSize
 	if t.refElems {
 		size = 8
@@ -140,6 +141,7 @@ func newArray(t *rtt, n uint32) *Array {
 	if uint64(n) > uint64(maxArrayLength(size)) {
 		trap(TrapArrayTooLarge)
 	}
+	b.chargeGC(x, arraySize(t, n))
 	a := &Array{hdr: header{rtt: t, kind: ObjArray}, n: int(n)}
 	if t.refElems {
 		a.r = make([]Ref, n)

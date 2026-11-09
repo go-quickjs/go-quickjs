@@ -12,6 +12,20 @@ import (
 	"github.com/go-quickjs/go-quickjs/wasm/internal/engine"
 )
 
+// ErrMemoryLimit is the error a call or an instantiation stops with when the
+// GC objects it allocates do not fit the runtime's WithMemoryLimit, and the
+// error an instantiation fails with when its tables do not.
+var ErrMemoryLimit = engine.ErrMemoryLimit
+
+// wrappedError is an error with a message of its own that unwraps to err.
+type wrappedError struct {
+	msg string
+	err error
+}
+
+func (e *wrappedError) Error() string { return e.msg }
+func (e *wrappedError) Unwrap() error { return e.err }
+
 // CompileError is a module that does not decode or validate: the first
 // error found, and the offset in the module's bytes it was found at.
 type CompileError struct {

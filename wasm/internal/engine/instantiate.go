@@ -25,9 +25,15 @@ type LinkError struct{ Msg string }
 func (e *LinkError) Error() string { return e.Msg }
 
 // AllocError is a memory or table instantiation could not allocate.
-type AllocError struct{ Msg string }
+type AllocError struct {
+	Msg string
+	// Err is ErrMemoryLimit when what could not be had is past a budget.
+	Err error
+}
 
 func (e *AllocError) Error() string { return e.Msg }
+
+func (e *AllocError) Unwrap() error { return e.Err }
 
 // importName names import i as link errors do.
 func importName(m *module.Module, i int) string {
@@ -148,12 +154,33 @@ func Instantiate(ctx context.Context, code *Code, imports []Extern) (inst *Insta
 			inst, err = nil, tr
 		}
 	}()
-	return instantiate(ctx, code, imports)
+	return instantiate(ctx, code, imports, nil)
 }
 
-func instantiate(ctx context.Context, code *Code, imports []Extern) (*Instance, error) {
+// InstantiateBudget is Instantiate charging the instance's memories, tables
+// and GC objects to b. A memory that does not fit fails as one that cannot
+// be allocated; a table or a GC object that does not fit returns, or stops
+// execution with, ErrMemoryLimit.
+func InstantiateBudget(ctx context.Context, code *Code, imports []Extern, b *Budget) (inst *Instance, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			switch e := r.(type) {
+			case *Trap:
+				inst, err = nil, e
+			case hostError:
+				inst, err = nil, e.err
+			default:
+				panic(r)
+			}
+		}
+	}()
+	return instantiate(ctx, code, imports, b)
+}
+
+func instantiate(ctx context.Context, code *Code, imports []Extern, b *Budget) (*Instance, error) {
 	m := code.Module
-	inst := &Instance{Module: m, Code: code}
+	inst := &Instance{Module: m, Code: code, budget: b}
+	b.track(inst)
 	// Memories are linked first, then the other imports in order.
 	for i, imp := range m.Imports {
 		if imp.Kind == module.ExternMemory {
@@ -203,7 +230,10 @@ func instantiate(ctx context.Context, code *Code, imports []Extern) (*Instance, 
 		l := mem.Limits
 		inst.Memories[i] = NewMemory(l.Initial, l.Max, l.HasMax, l.Is64, mem.Shared)
 		if inst.Memories[i] == nil {
-			return nil, &AllocError{"Out of memory: Cannot allocate Wasm memory for new instance"}
+			return nil, &AllocError{Msg: "Out of memory: Cannot allocate Wasm memory for new instance"}
+		}
+		if !inst.Memories[i].SetBudget(b) {
+			return nil, &AllocError{Msg: "Out of memory: Cannot allocate Wasm memory for new instance", Err: ErrMemoryLimit}
 		}
 	}
 	if len(inst.Memories) > 0 {
@@ -232,9 +262,12 @@ func instantiate(ctx context.Context, code *Code, imports []Extern) (*Instance, 
 		}
 		l := t.Limits
 		if l.Initial > MaxTableSize {
-			return nil, &AllocError{fmt.Sprintf("table %d: initial size %d exceeds the maximum table size", i, l.Initial)}
+			return nil, &AllocError{Msg: fmt.Sprintf("table %d: initial size %d exceeds the maximum table size", i, l.Initial)}
 		}
 		inst.Tables[i] = NewTable(t.Type, m, l.Initial, l.Max, l.HasMax, l.Is64, init)
+		if !inst.Tables[i].SetBudget(b) {
+			return nil, ErrMemoryLimit
+		}
 	}
 	inst.elems = make([][]Ref, len(m.Elems))
 	for i, seg := range m.Elems {

@@ -65,6 +65,17 @@ type Memory struct {
 	// OnGrow, if set, is called after the memory grows, with its old and new
 	// sizes in bytes. A host keeping views of the memory refreshes them.
 	OnGrow func(oldBytes, newBytes uint64)
+
+	// charge is what the memory holds of a budget, if it is charged to one.
+	charge *charge
+}
+
+// SetBudget charges the memory, and its growth from now on, to b,
+// reporting false, and charging nothing, if its present size does not fit.
+func (m *Memory) SetBudget(b *Budget) bool {
+	c, ok := newCharge(m, b, int64(m.Size()))
+	m.charge = c
+	return ok
 }
 
 // NewMemory makes a memory of initial pages, growable to max pages. It
@@ -160,9 +171,13 @@ func (m *Memory) Grow(delta uint64) int64 {
 	}
 	newPages := old + delta
 	oldBytes, newBytes := old*PageSize, newPages*PageSize
+	if !m.charge.take(int64(delta * PageSize)) {
+		return -1
+	}
 	switch {
 	case m.reservation != nil:
 		if err := commit(m.reservation, oldBytes, newBytes); err != nil {
+			m.charge.giveBack(int64(delta * PageSize))
 			return -1
 		}
 		if !m.Shared {
@@ -172,6 +187,7 @@ func (m *Memory) Grow(delta uint64) int64 {
 		// Made at its maximum.
 	default:
 		if newBytes > uint64(maxSlice) {
+			m.charge.giveBack(int64(delta * PageSize))
 			return -1
 		}
 		if newBytes <= uint64(cap(m.buf)) {

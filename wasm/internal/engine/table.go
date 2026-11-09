@@ -1,6 +1,10 @@
 package engine
 
-import "github.com/go-quickjs/go-quickjs/wasm/internal/module"
+import (
+	"unsafe"
+
+	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
+)
 
 // MaxTableSize is the engine's limit on a table's size, in elements.
 const MaxTableSize = 10_000_000
@@ -19,6 +23,20 @@ type Table struct {
 
 	// OnGrow, if set, is called after the table grows.
 	OnGrow func()
+
+	// charge is what the table holds of a budget, if it is charged to one.
+	charge *charge
+}
+
+// refBytes is what an element of a table takes.
+const refBytes = int64(unsafe.Sizeof(Ref{}))
+
+// SetBudget charges the table, and its growth from now on, to b, reporting
+// false, and charging nothing, if its present size does not fit.
+func (t *Table) SetBudget(b *Budget) bool {
+	c, ok := newCharge(t, b, int64(len(t.Elems))*refBytes)
+	t.charge = c
+	return ok
 }
 
 // NewTable makes a table of initial elements, each init.
@@ -50,6 +68,9 @@ func (t *Table) Grow(delta uint64, init Ref) int64 {
 		return int64(old)
 	}
 	n := old + delta
+	if !t.charge.take(int64(delta) * refBytes) {
+		return -1
+	}
 	if n <= uint64(cap(t.Elems)) {
 		t.Elems = t.Elems[:n]
 	} else {

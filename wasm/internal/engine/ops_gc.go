@@ -148,7 +148,7 @@ func (c *compiler) gcOps(op opcode.Opcode, at uint32) bool {
 		fields := m.Types[ti].Struct.Fields
 		t := module.Ref(module.HeapIndex(ti))
 		if op == opcode.StructNewDefault {
-			c.pushTree(t, tref(func(f *frame) Ref { return newStruct(rt) }))
+			c.pushTree(t, tref(func(f *frame) Ref { f.inst.budget.chargeGC(f.x, structSize(rt)); return newStruct(rt) }))
 			return true
 		}
 		es := c.popN(len(fields))
@@ -161,6 +161,7 @@ func (c *compiler) gcOps(op opcode.Opcode, at uint32) bool {
 			types[i] = fl.Type
 		}
 		c.pushTree(t, tref(func(f *frame) Ref {
+			f.inst.budget.chargeGC(f.x, structSize(rt))
 			r := newStruct(rt)
 			for i, v := range vals {
 				valToCell(types[i], cellAt(r.p, rt.cells[i]), v(f))
@@ -197,13 +198,13 @@ func (c *compiler) gcOps(op opcode.Opcode, at uint32) bool {
 		n := c.i32(c.pop())
 		t := module.Ref(module.HeapIndex(ti))
 		if op == opcode.ArrayNewDefault {
-			c.pushTree(t, tref(func(f *frame) Ref { return ArrayRef(newArray(rt, n(f))) }))
+			c.pushTree(t, tref(func(f *frame) Ref { return ArrayRef(newArray(rt, n(f), f.inst.budget, f.x)) }))
 			return true
 		}
 		v := c.val(c.pop())
 		c.pushTree(t, tref(func(f *frame) Ref {
 			val := v(f)
-			a := newArray(rt, n(f))
+			a := newArray(rt, n(f), f.inst.budget, f.x)
 			for i := 0; i < a.n; i++ {
 				arraySet(a, et, i, val)
 			}
@@ -220,7 +221,7 @@ func (c *compiler) gcOps(op opcode.Opcode, at uint32) bool {
 			vals[i] = c.val(e)
 		}
 		c.pushTree(module.Ref(module.HeapIndex(ti)), tref(func(f *frame) Ref {
-			a := newArray(rt, cnt)
+			a := newArray(rt, cnt, f.inst.budget, f.x)
 			for i, v := range vals {
 				arraySet(a, et, i, v(f))
 			}
@@ -242,7 +243,7 @@ func (c *compiler) gcOps(op opcode.Opcode, at uint32) bool {
 				if uint64(src)+uint64(cnt)*size > uint64(len(d)) {
 					trap(TrapDataSegmentOutOfBounds)
 				}
-				a := newArray(rt, cnt)
+				a := newArray(rt, cnt, f.inst.budget, f.x)
 				copy(a.b, d[src:])
 				return ArrayRef(a)
 			}
@@ -250,7 +251,7 @@ func (c *compiler) gcOps(op opcode.Opcode, at uint32) bool {
 			if uint64(src)+uint64(cnt) > uint64(len(e)) {
 				trap(TrapElementSegmentOutOfBounds)
 			}
-			a := newArray(rt, cnt)
+			a := newArray(rt, cnt, f.inst.budget, f.x)
 			_ = et
 			copy(a.r, e[src:])
 			return ArrayRef(a)
@@ -469,6 +470,7 @@ func evalConstGC(inst *Instance, op opcode.Opcode, r *reader, stack *[]Val) (Val
 	case opcode.StructNew, opcode.StructNewDefault:
 		ti := r.u32()
 		rt := rttOf(m.Canonical[ti])
+		inst.budget.chargeGC(nil, structSize(rt))
 		s := newStruct(rt)
 		if op == opcode.StructNew {
 			fields := m.Types[ti].Struct.Fields
@@ -490,7 +492,7 @@ func evalConstGC(inst *Instance, op opcode.Opcode, r *reader, stack *[]Val) (Val
 		if op == opcode.ArrayNew {
 			v = pop()
 		}
-		a := newArray(rt, n)
+		a := newArray(rt, n, inst.budget, nil)
 		if op == opcode.ArrayNew {
 			for i := 0; i < a.n; i++ {
 				arraySet(a, et, i, v)
@@ -506,7 +508,7 @@ func evalConstGC(inst *Instance, op opcode.Opcode, r *reader, stack *[]Val) (Val
 		for i := int(n) - 1; i >= 0; i-- {
 			vals[i] = pop()
 		}
-		a := newArray(rt, n)
+		a := newArray(rt, n, inst.budget, nil)
 		for i, v := range vals {
 			arraySet(a, et, i, v)
 		}

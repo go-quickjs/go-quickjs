@@ -102,6 +102,9 @@ type Instance struct {
 	// mem0 is Memories[0], or nil, which loads and stores of the first
 	// memory read without indexing.
 	mem0 *Memory
+	// budget is what the instance's memories, tables and GC objects are
+	// charged to, or nil.
+	budget *Budget
 
 	// datas and elems are the data and element segments, nil once dropped.
 	datas [][]byte

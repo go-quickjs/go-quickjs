@@ -85,15 +85,22 @@ func NewRuntimeWithConfig(ctx context.Context, config RuntimeConfig) Runtime {
 	if c == nil {
 		c = defaultRuntimeConfig
 	}
-	return &runtime{
+	r := &runtime{
 		cfg:     c.clone(),
 		modules: map[string]*moduleInstance{},
 		all:     map[*moduleInstance]struct{}{},
 	}
+	if c.memoryLimit > 0 {
+		r.budget = engine.NewBudget(c.memoryLimit)
+	}
+	return r
 }
 
 type runtime struct {
 	cfg *runtimeConfig
+	// budget is what WithMemoryLimit allows the runtime's modules, nil for
+	// no limit.
+	budget *engine.Budget
 
 	mu sync.Mutex
 	// modules are the named modules; a name being instantiated maps to nil.
@@ -329,12 +336,15 @@ func (r *runtime) instantiate(ctx context.Context, cc *compiledCode, name string
 		}
 		imports[i] = ext
 	}
-	inst, err := engine.Instantiate(ctx, cc.code, imports)
+	inst, err := engine.InstantiateBudget(ctx, cc.code, imports, r.budget)
 	if inst == nil && err != nil {
 		switch e := err.(type) {
 		case *engine.LinkError:
 			return nil, &LinkError{e.Msg}
 		case *engine.AllocError:
+			if e.Err != nil {
+				return nil, &wrappedError{e.Msg, e.Err}
+			}
 			return nil, errors.New(e.Msg)
 		case *engine.Trap:
 			return nil, r.runtimeError(e)
