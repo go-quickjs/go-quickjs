@@ -11,13 +11,12 @@ import "slices"
 // each back edge goes to its case, and the cases' loops are loops.
 //
 // H's values but its phis must be pure and used only by H, which a
-// threaded path does not run. The edge from p takes no values but H's
-// phis' arguments: the target's phis read, for the new edge, what they
-// read on the edge from H, an H phi's argument from p in that phi's
-// place. Then H's phis no longer hold on every path to the blocks H
-// dominated: each is a variable defined by H, and by each threaded
-// predecessor at its end, and its uses are looked up again as the builder
-// looks up a local (see build.go), phis made where definitions meet.
+// threaded path does not run. The target's phis read on the new edge what
+// they read on the edge from H. Then H's phis no longer hold on every path
+// to the blocks H dominated: each is a variable defined by H, and on each
+// threaded edge by the argument it brought, and its uses are looked up
+// again as the builder looks up a local (see build.go), phis made where
+// definitions meet (repairPhis).
 func thread(f *Func) {
 	computeUses(f)
 	changed := false
@@ -63,6 +62,7 @@ func thread(f *Func) {
 		}
 		changed = true
 		repairPhis(f, h, ends)
+		computeUses(f)
 	}
 	if changed {
 		removeUnreachable(f)

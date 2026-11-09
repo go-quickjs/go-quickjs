@@ -413,3 +413,44 @@ func dispatchLoop(rng *rand.Rand) string {
 	sb.WriteString(" " + res + "))\n")
 	return sb.String()
 }
+
+// A function called once whose loop calls through Go -- a host function,
+// here, through a table -- counts those calls toward the optimizing tier,
+// as the polls are then Go's: its next call runs the optimized code.
+func TestOptTierUpByExits(t *testing.T) {
+	src := `(module
+  (type $t (func (param i32) (result i32)))
+  (import "m" "h" (func $h (type $t)))
+  (table 1 funcref)
+  (elem (i32.const 0) $h)
+  (func (export "loop") (param $n i32) (result i32)
+    (local $i i32) (local $acc i32)
+    (loop $l
+      (local.set $acc (i32.add (local.get $acc) (call_indirect (type $t) (local.get $i) (i32.const 0))))
+      (br_if $l (i32.lt_u (local.tee $i (i32.add (local.get $i) (i32.const 1))) (local.get $n))))
+    (local.get $acc)))`
+	ft := module.CanonicalFunc(&module.FuncType{Params: []module.ValueType{module.I32}, Results: []module.ValueType{module.I32}})
+	h := NewHostFunction(ft, "h", func(_ context.Context, _ *Instance, args, res []Val) error {
+		res[0] = Val{N: uint64(uint32(args[0].N) * 3)}
+		return nil
+	})
+	inst := thresholdInstance(t, src, 0, Extern{Kind: module.ExternFunc, Func: h})
+	inst.Code.setOSRCalls(0)
+	inst.Code.SetOptThreshold(1000)
+	for _, n := range []uint64{10, 5000} {
+		got, err := call(t, inst, "loop", n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := uint64(0)
+		for i := range n {
+			want += 3 * i
+		}
+		if got[0].N != uint64(uint32(want)) {
+			t.Fatalf("loop(%d) = %d, want %d", n, got[0].N, uint32(want))
+		}
+	}
+	if !optimized(inst, "loop") {
+		t.Fatal("loop not optimized after 5,000 calls through Go")
+	}
+}

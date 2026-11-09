@@ -9,8 +9,8 @@ code's place in the link table and the tiers -- and the interpreter --
 call each other in every direction.
 
 It is built on amd64 alone (`lower_amd64.go`); on arm64 `Compile` refuses
-every function (`arch`) and the baseline runs everything. It is off unless
-asked for (see Tier-up).
+every function (`arch`) and the baseline runs everything. It is on by
+default (see Tier-up).
 
 | File | |
 |---|---|
@@ -306,24 +306,37 @@ and in the link table, and enters it at its Go entry for that call; native
 callers, the interpreter and Go call it from then on. A poll that baseline
 code exits for -- its loops or calls ran the poll counter out -- counts
 250 calls, so that a function whose loops run long is optimized for its
-next call. The frames that began in the baseline code run on in it: the
+next call, and each call and instruction Go makes for the baseline code
+(`ExitCall`, `ExitCallIndirect`, `ExitOp`) counts one: a loop that calls
+through Go leaves its polls to Go, and the optimized code makes some of
+those calls natively. The frames that began in the baseline code run on in it: the
 replaced code stays placed (`nativeFn.prev`), and an exit resumes in the
 code that holds its address.
 
-`Code.SetOptThreshold(n)` sets the count: 0 compiles every function the
+The count is `DefaultOptThreshold`, 30,000 calls, by default;
+`Code.SetOptThreshold(n)` sets another: 0 compiles every function the
 tier accepts with it at once, the baseline only those it refuses, and a
-negative n turns the tier off, which it is by default. `WASM_JIT_OPT`
-sets it for tests (a number, `on` for `DefaultOptThreshold`, 1,000,
-`eager` for 0, `off`), and `WASM_JIT=opt` is `eager` with the JIT on at
-every first call.
+negative n turns the tier off. `WASM_JIT_OPT` sets it for tests and
+benchmarks (a number, `on` for the default, `eager` for 0, `off`), and
+`WASM_JIT=opt` is `eager` with the JIT on at every first call.
 
-The tier is off by default because, as it stands, it is slower than the
-baseline on the Go programs of `internal/cmd/wasmbench` (see
-Measurements): Go's wasm code runs every loop through a function-wide
-dispatch loop of a br_table, all its locals phis of the dispatch's header,
-whose moves at each back edge -- an interval spanning the loop, holes
-included, rarely shares a phi's register or slot with its arguments --
-cost more than the baseline's frame slots.
+The count weighs the compile against what it saves, as measured on the
+Go programs of `internal/cmd/wasmbench`. Compiling costs about 0.4 to 0.7
+µs a byte of a function's body, 0.76 ms for each of the 182 functions
+json compiles in its first run (138 ms in all), and the optimized code
+saves json 27 ms a run over the 2.5 million calls a run makes of its 789
+natively compiled functions: about 11 ns a call, so that an average function
+repays its compile after some 70,000 calls, the hottest far sooner. Taking
+a function's calls so far for those to come, the count is where the
+programs' first runs, which pay the compiles, cost least -- json's first
+two runs took 282 ms at 1,000 calls, 251 at 10,000 and 222 at 30,000 (193
+in the baseline alone), regexp's 153, 141 and 131 (194) -- while every
+workload's steady state is that of compiling everything at once, and the
+functions whose baseline code is slowest, a micro-benchmark's calls
+through a table and memory.copy, are still compiled within their first
+run (62 and 36 ms where 1,000 calls gives 29 and 18, against the
+baseline's 840 and 139). A function whose loops run long is counted by
+its polls: 30,000 calls are 120 polls, about half a million back edges.
 
 On-stack replacement enters baseline code: the optimized code has no
 loop entries. A call running in the interpreter of a function whose
@@ -391,57 +404,91 @@ WASM_JIT_CODE=/tmp/gzip.jsonl go run -tags quickjs_jit ./internal/cmd/wasmbench 
 `TestJITDifferential`'s `opt` pass runs the spec modules with every
 function the tier accepts optimized and compares them with the
 interpreter; `TestAllocateRandom` checks the allocator's results on random
-functions by a liveness of its own; `TestOptTierUp` the counts, the
-replacement mid-recursion and the poll samples.
+functions by a liveness of its own, `TestCoalesce` a loop's phi web;
+`TestOptTierUp` the counts, the replacement mid-recursion and the poll
+samples, `TestOptTierUpByExits` the exits'; `TestOptCallIndirect` every
+kind of element a native call_indirect meets, `TestOptBulkMemory`
+memory.copy and memory.fill at every overlap and end; `TestThreadDispatch`
+and `TestOptThreadDispatch` jump threading, the latter on 1,500 random
+dispatch loops against the interpreter; `TestMarks` the profile's marks.
 
 ## Measurements
 
-`internal/cmd/wasmbench`, median of 3 fresh processes, ms (Ryzen 9
-9950X3D2, Windows; `jit-tiered` is the baseline with the tier at its
-default threshold, `jit-opt` every function it accepts optimized at once):
+`internal/cmd/wasmbench`, median of 3 fresh processes, each one run after
+one warm-up run, ms (Ryzen 9 9950X3D2, Windows; `jit-tiered` is the
+default, the baseline with the tier at `DefaultOptThreshold`, `jit-opt`
+every function the tier accepts optimized at its first compile; the
+first run, in parentheses, pays the compiles):
 
 | workload | interp | jit-base | jit-tiered | jit-opt |
 |---|---:|---:|---:|---:|
-| micro/fib | 211 | 11.3 | 8.97 | 8.84 |
-| micro/loop | 234 | 14.6 | 14.6 | 14.6 |
-| micro/i64 | 283 | 20.2 | 19.6 | 20.2 |
-| micro/mandelbrot | 153 | 11.8 | 11.6 | 11.6 |
-| micro/nbody | 104 | 6.48 | 3.48 | 3.47 |
-| micro/bytes | 208 | 8.99 | 7.17 | 7.07 |
-| micro/brtable | 250 | 43.1 | 42.8 | 43.4 |
-| micro/globals | 185 | 27.4 | 27.7 | 27.7 |
-| programs/sha256 | 1984 | 149 | 146 | 153 |
-| programs/sort | 1797 | 211 | 226 | 225 |
-| programs/json | 884 | 61.2 | 63.4 | 76.1 |
-| programs/regexp | 828 | 76.9 | 84.5 | 86.0 |
-| programs/gzip | 476 | 68.0 | 67.1 | 91.3 |
-| programs/interp | 499 | 25.4 | 26.6 | 31.3 |
+| micro/fib | 208 | 11.0 | 9.43 | 8.86 |
+| micro/loop | 230 | 14.2 | 14.5 | 14.2 |
+| micro/i64 | 277 | 19.8 | 20.1 | 19.7 |
+| micro/mandelbrot | 153 | 11.3 | 11.0 | 11.0 |
+| micro/nbody | 102 | 6.34 | 3.49 | 3.44 |
+| micro/bytes | 207 | 8.79 | 6.87 | 6.97 |
+| micro/bulk | 129 | 139 | 16.9 | 16.8 |
+| micro/indirect | 387 | 846 | 20.7 | 20.7 |
+| micro/brtable | 238 | 42.3 | 41.9 | 41.8 |
+| micro/globals | 179 | 26.5 | 27.1 | 26.5 |
+| micro/gc | 354 | 234 | 242 | 237 |
+| micro/simd | 74.9 | 3.02 | 3.11 | 3.01 |
+| programs/sha256 | 1956 | 148 (174) | 51.1 (160) | 61.4 (205) |
+| programs/sort | 1760 | 213 (243) | 116 (234) | 136 (301) |
+| programs/json | 874 | 59.9 (135) | 59.5 (161) | 58.0 (297) |
+| programs/regexp | 822 | 75.8 (122) | 34.7 (92.4) | 47.1 (173) |
+| programs/gzip | 464 | 65.5 (108) | 31.5 (106) | 69.8 (182) |
+| programs/interp | 544 | 27.5 (57.0) | 17.8 (66.6) | 30.2 (115) |
 
-The kernels gain where values stay in registers across a loop (nbody
-1.86x, fib 1.26x, bytes 1.27x); loop, i64 and mandelbrot are bound by
-one multiply's or add's latency each iteration, as the baseline is;
-bulk, indirect and gc spend their time in Go. The Go programs lose: see
-Tier-up for why, and Next. `jit-opt` adds the optimizing compiles to the
-runs, as each function is compiled at its first use.
+The Go programs' steady state, once every function that will be compiled
+is (`-warmup 15 -reps 10`, ms):
+
+| program | jit-base | jit-tiered | jit-opt |
+|---|---:|---:|---:|
+| sha256 | 144 | 47.7 | 47.5 |
+| sort | 199 | 106 | 106 |
+| json | 54.2 | 24.7 | 24.1 |
+| regexp | 70.8 | 28.7 | 27.6 |
+| gzip | 53.0 | 20.6 | 20.2 |
+| interp | 22.0 | 11.7 | 11.6 |
+
+What the Go programs gained, in the order it came (steady state,
+optimized, ms): the calls through tables and memory.copy natively (gzip
+52 to 24, sha256 145 to 69 -- a third to a half of their time had been
+those exits, in both tiers); jump threading of the dispatch loops (regexp
+64 to 29, json 42 to 30, its hot functions no longer refused for their
+spills' slots); the allocator's coalescing and spills by density (interp
+21 to 12, sha256 75 to 47). The kernels gain where values stay in
+registers across a loop (nbody 1.8x, fib 1.2x, bytes 1.3x); loop, i64
+and mandelbrot are bound by one multiply's or add's latency each
+iteration, as the baseline is; gc and brtable spend their time in Go and
+in the switch. The tiered first runs are the baseline's or better but
+json's and interp's, which compile their hot functions within a run of
+about 60 ms (json +19%, interp +17%; see Tier-up).
 
 On the spec scripts the tier compiles 3,914 functions and refuses 2,928
 (SIMD, references, i64 and shared memories, tables, exceptions, tail
-calls); compiling them took 25.6 ms, 6.5 µs a function, where the
-baseline's 2,926 took 10.6 ms, 3.6 µs. On a Go program (json) it compiled
-168 functions in 89-99 ms, 0.55 ms each, the baseline 381 in 44-50 ms,
-0.12 ms each.
+calls), in 43 to 63 ms, 11 to 16 µs a function, where the baseline's
+2,926 take 11 to 22 ms. The Go program's 3,011 functions compile in 0.40
+ms each (the baseline's, 0.12 ms), json's 182 hot ones in 138 ms within
+its first run.
 
 ## Next
 
-- Go's dispatch loops: thread a jump that sets the dispatch's local to a
-  constant and branches to its loop through the br_table to the case's
-  block, repairing SSA, so that Go's loops are loops; and live ranges
-  with holes, splitting and coalescing in the allocator, so that a phi and
-  its arguments share a location.
+- OSR into optimized code: a function called once whose loop runs long
+  (sha256's block function) runs its first call in the baseline code,
+  and is optimized only for its next.
+- Splitting within a value's life in the allocator: a web is in its
+  register or its slot throughout, so a long value is spilled for its
+  whole loop where a short stretch of pressure needs its register.
+- The compile's cost, about 0.4 ms a Go function, half of it the
+  collector's: fewer and smaller allocations, and compiles in the
+  background.
 - Inlining of small callees; tail calls; call_indirect and memory.copy
   natively in the baseline too, whose Go programs spend a third of their
   time in those exits.
 - Bounds checks: hoisting a loop's checks of an induction variable, and a
   block's checks of one base at its widest where nothing between can be
   observed.
-- arm64's lowering; OSR into optimized code; compiles in the background.
+- arm64's lowering.

@@ -72,11 +72,12 @@ spec scripts run the loops' entries.
 The **optimizing** tier (`opt/README.md`, package `opt`) builds SSA from
 the body, optimizes it, allocates registers with a linear scan and lowers
 it, on amd64, to code that keeps this tier's frames, context, entries,
-exits and calls. Where it is on (`Code.SetOptThreshold`, `WASM_JIT_OPT`,
-`WASM_JIT=opt`; it is off by default), a function's baseline code counts
-its calls at its entry, and its poll exits, and past the threshold exits
-(`ExitTierUp`): the engine compiles the function with the optimizing tier
-and its code takes the baseline's place in the link table, the frames
+exits and calls. It is on by default where it is built (`DefaultOptThreshold`,
+30,000 calls; `Code.SetOptThreshold`, `WASM_JIT_OPT`, `WASM_JIT=opt` set
+another, `WASM_JIT_OPT=off` turns it off): a function's baseline code
+counts its calls at its entry, and its poll exits, and past the threshold
+exits (`ExitTierUp`): the engine compiles the function with the optimizing
+tier and its code takes the baseline's place in the link table, the frames
 that began in the baseline code running on in it. A function the
 optimizing tier refuses keeps its baseline code.
 

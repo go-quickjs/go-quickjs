@@ -29,9 +29,10 @@ import (
 // the OSR threshold: a number of back edges, or "off".
 //
 // The optimizing tier (wasm/internal/jit/opt) recompiles a function whose
-// baseline code was called often enough, where SetOptThreshold or
-// WASM_JIT_OPT turns it on ("on", a number of calls, "eager" for every
-// function at its first compile, "off"); WASM_JIT=opt is "eager" with every
+// baseline code was called often enough (DefaultOptThreshold), where it is
+// built; SetOptThreshold or WASM_JIT_OPT sets the count ("on" for the
+// default, a number of calls, "eager" for every function at its first
+// compile, "off" to turn the tier off); WASM_JIT=opt is "eager" with every
 // function compiled at its first call.
 //
 // WASM_JIT_CODE, read when the engine starts, names a file each code placed
@@ -43,17 +44,20 @@ import (
 const DefaultJITThreshold = 10
 
 // DefaultOptThreshold is the number of calls of a function's baseline code
-// after which the optimizing tier compiles it, where WASM_JIT_OPT=on turns
-// the tier on. A poll the baseline code exits for -- every 4,096 loop back
-// edges and calls -- counts for 250 calls, so that a function whose loops
-// run long is compiled too, for its later calls.
-const DefaultOptThreshold = 1000
+// after which the optimizing tier compiles it, unless SetOptThreshold gives
+// another. A poll the baseline code exits for -- every 4,096 loop back
+// edges and calls -- counts for 250 calls, and a call or an instruction Go
+// makes for it for one, so that a function whose loops run long is
+// compiled too, for its later calls. The count weighs the
+// tier's compile against what it saves (wasm/internal/jit/opt/README.md,
+// Tier-up).
+const DefaultOptThreshold = 30000
 
 // SetOptThreshold sets the number of calls of a function's baseline code
 // after which the optimizing tier compiles it in the baseline's place: 0
 // has the optimizing tier compile each function it accepts at its first
 // compile, and the baseline only those it refuses; a negative n turns the
-// tier off, as it is unless SetOptThreshold or WASM_JIT_OPT turns it on.
+// tier off. By default it is DefaultOptThreshold, or what WASM_JIT_OPT says.
 // It applies once EnableJIT has turned the JIT on, to the functions
 // compiled after it. The optimizing tier is built for amd64; elsewhere
 // every function keeps its baseline code.

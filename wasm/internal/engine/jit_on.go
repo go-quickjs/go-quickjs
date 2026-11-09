@@ -370,6 +370,9 @@ func (c *Code) enableJIT(threshold int) bool {
 	n := max(len(c.Module.Functions), 1)
 	cj := &codeJIT{threshold: int32(threshold), arena: ijit.NewArena(), links: make([]uintptr, n), frames: make([]uint64, n), counters: make([]int64, n)}
 	cj.optThreshold.Store(-1)
+	if wopt.Available {
+		cj.optThreshold.Store(DefaultOptThreshold)
+	}
 	if optEnv >= -1 && wopt.Available {
 		cj.optThreshold.Store(int32(optEnv))
 	}
@@ -561,11 +564,15 @@ func (cj *codeJIT) loopsFor(c *Code, idx uint32, cd *compiled) *nativeFn {
 	return &n
 }
 
-// pollSample counts a poll exit of function fn's code toward the
-// optimizing tier, compiling it there if the count runs out: the call
-// that exited goes on in the baseline code, and later calls enter the
-// optimized code.
-func (cj *codeJIT) pollSample(c *Code, fn uint32) {
+// sample counts an exit of function fn's baseline code toward the
+// optimizing tier, as weight calls, compiling it there if the count runs
+// out: the call that exited goes on in the baseline code, and later calls
+// enter the optimized code. A poll counts optPollWeight; a call or an
+// instruction Go makes for the code counts one, as costly as a call and
+// what the optimized code makes natively in part (call_indirect,
+// memory.copy, memory.fill) -- so that a function called once whose loop
+// calls through Go, the polls then Go's, is optimized for its next call.
+func (cj *codeJIT) sample(c *Code, fn uint32, weight int64) {
 	if cj.optThreshold.Load() <= 0 {
 		return
 	}
@@ -573,7 +580,7 @@ func (cj *codeJIT) pollSample(c *Code, fn uint32) {
 	if nat := cd.native.Load(); nat == nil || nat.opt || cd.optDone.Load() {
 		return
 	}
-	if atomic.AddInt64(&cj.counters[fn], -optPollWeight) < 0 {
+	if atomic.AddInt64(&cj.counters[fn], -weight) < 0 {
 		cj.tierUp(c, fn, cd)
 	}
 }
@@ -880,12 +887,16 @@ func (x *exec) jitExit(lv *jitLevel) (raw *ijit.RawCode, off int, tail bool) {
 	ctx := &lv.ctx
 	inst := lv.inst
 	switch ctx.Exit {
+	case wjit.ExitCall, wjit.ExitCallIndirect, wjit.ExitCallRef, wjit.ExitOp:
+		lv.cj.sample(inst.Code, uint32(ctx.ExitFn), 1)
+	}
+	switch ctx.Exit {
 	case wjit.ExitTrap:
 		x.jitSync(lv, uint32(ctx.Arg1))
 		trap(TrapCode(ctx.Arg0))
 	case wjit.ExitPoll:
 		x.pollContext()
-		lv.cj.pollSample(inst.Code, uint32(ctx.ExitFn))
+		lv.cj.sample(inst.Code, uint32(ctx.ExitFn), optPollWeight)
 	case wjit.ExitTierUp:
 		fn := uint32(ctx.ExitFn)
 		if nat := lv.cj.tierUp(inst.Code, fn, inst.Code.get(fn)); nat != nil {

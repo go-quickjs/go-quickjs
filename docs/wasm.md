@@ -1,8 +1,8 @@
 # WebAssembly
 
 go-quickjs has a WebAssembly engine of its own, in pure Go: a decoder and
-validator, a closure-tree interpreter, and an optional baseline JIT for amd64
-and arm64. It implements WebAssembly 3.0 and the threads proposal, and it
+validator, a closure-tree interpreter, and an optional JIT for amd64 and
+arm64: a baseline tier, and on amd64 an optimizing one above it. It implements WebAssembly 3.0 and the threads proposal, and it
 reports invalid modules, failed links and traps with V8's messages, word for
 word.
 
@@ -415,8 +415,12 @@ closures: each expression a tree of typed nodes, each statement returning
 whether to go on, branch or return. The baseline JIT (`wasm/internal/jit`)
 compiles a function to native code in one pass over its validated body, with
 a register cache of the operand stack over the interpreter's own frames, so a
-call crosses between the tiers in either direction. Its design is in
-[its README](../wasm/internal/jit/README.md).
+call crosses between the tiers in either direction. On amd64 the optimizing
+tier (`wasm/internal/jit/opt`) recompiles a function whose baseline code
+was called 30,000 times, or whose loops ran long, from SSA with a register
+allocator, in the baseline code's place. Their designs are in
+[the JIT's README](../wasm/internal/jit/README.md) and
+[the optimizing tier's](../wasm/internal/jit/opt/README.md).
 
 It is built only with `-tags quickjs_jit`, on amd64 (Linux and Windows) and
 arm64 (macOS and Linux); without the tag, on 386 and on other platforms,
@@ -759,5 +763,5 @@ WASI:
 - `postMessage` and structured clone of a `Module`, and of a shared
   `Memory`, between workers.
 - Native code for the v128 fields and elements of GC objects, which the
-  JIT refuses, and an optimizing tier above the baseline one.
+  JIT refuses, and the optimizing tier on arm64.
 - `wasmbench`'s `jit` engine on arm64: the harness builds it on amd64 only.
