@@ -3,8 +3,7 @@
 // type relations -- subtyping and the isorecursive canonicalization of type
 // definitions -- that validation and linking ask of them.
 //
-// The type names printed in errors are V8's, so that an error a module causes
-// here reads as it does in V8 (src/wasm/value-type.cc).
+// Types print with the names error messages use: i32, funcref, (ref null 3).
 package module
 
 import (
@@ -79,7 +78,7 @@ func HeapFromCode(c byte) (HeapType, bool) {
 	return 0, false
 }
 
-// abstractName is V8's name for an abstract heap type.
+// abstractName returns an abstract heap type's name.
 func (h HeapType) abstractName() string {
 	switch h {
 	case HeapFunc:
@@ -112,7 +111,7 @@ func (h HeapType) abstractName() string {
 	return "<unknown>"
 }
 
-// Name returns V8's name for the heap type: its index, or its abstract name.
+// Name returns the heap type's name: its index, or its abstract name.
 func (h HeapType) Name() string {
 	if h.IsIndex() {
 		return strconv.FormatUint(uint64(h), 10)
@@ -225,7 +224,7 @@ func (t ValueType) Size() int {
 	return 8
 }
 
-// Name returns V8's name for t, as it appears in error messages: i32, v128,
+// Name returns t's name as error messages print it: i32, v128,
 // funcref, nullref, (ref func), (ref null 3), <bot>.
 func (t ValueType) Name() string {
 	switch t.Kind {
@@ -294,7 +293,7 @@ type FuncType struct {
 	Results []ValueType
 }
 
-// String returns the signature as V8 prints one in a LinkError:
+// String returns the signature as a LinkError prints it:
 // "(i32, i64) -> (f32)".
 func (f *FuncType) String() string {
 	var b strings.Builder
@@ -350,7 +349,7 @@ type TypeDef struct {
 	Depth uint32
 }
 
-// Name returns V8's name for a type definition's kind.
+// Name returns a type definition kind's name.
 func (k TypeKind) Name() string {
 	switch k {
 	case TypeFunc:

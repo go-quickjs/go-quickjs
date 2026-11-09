@@ -1,9 +1,8 @@
 // Package decoder decodes and validates WebAssembly modules.
 //
-// It follows V8's decoders (src/wasm/decoder.h, module-decoder-impl.h,
-// function-body-decoder-impl.h) closely enough that a module V8 rejects is
-// rejected here with V8's message, at V8's offset, for the first error V8
-// finds: which error a module reports first is part of what an embedder sees.
+// A module is checked in a fixed order and rejected with the first error found,
+// its message and its offset: which error a module reports first is part of
+// what an embedder sees.
 // Portions are derived from V8, Copyright the V8 project authors, used under
 // the BSD license in V8_LICENSE.
 package decoder
@@ -13,29 +12,29 @@ import (
 	"strconv"
 )
 
-// Error is a decoding or validation error: V8's message and the offset in the
+// Error is a decoding or validation error: its message and the offset in the
 // module's bytes it was found at.
 type Error struct {
 	Offset uint32
 	Msg    string
 }
 
-// Error returns the message as V8 reports it in a CompileError, without the
-// API's prefix: "<message> @+<offset>".
+// Error returns the message as a CompileError reports it, without the API's
+// prefix: "<message> @+<offset>".
 func (e *Error) Error() string {
 	return e.Msg + " @+" + strconv.FormatUint(uint64(e.Offset), 10)
 }
 
 // Decoder reads a module's bytes. Positions are offsets into the whole
-// module, so that an error's offset is the module offset V8 reports. Only the
+// module, so that an error's offset is a module offset. Only the
 // first error is kept; later reads past it are harmless and report nothing.
 type Decoder struct {
 	b   []byte
 	pc  int
 	end int
 	err *Error
-	// stopOnError moves pc to end at the first error, as V8's module decoder
-	// does, so that a loop over a section's entries ends.
+	// stopOnError moves pc to end at the first error, so that a loop over a
+	// section's entries ends.
 	stopOnError bool
 }
 
@@ -175,7 +174,7 @@ func (d *Decoder) readI33v(pos int, name string) (int64, int) {
 	return int64(v), n
 }
 
-// checkAvailable reports whether n bytes remain, recording V8's error if not.
+// checkAvailable reports whether n bytes remain, recording an error if not.
 func (d *Decoder) checkAvailable(n uint32) bool {
 	if uint64(n) > uint64(d.end-d.pc) {
 		d.errorf(d.pc, "expected %d bytes, fell off end", n)

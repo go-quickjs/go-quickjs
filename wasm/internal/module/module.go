@@ -12,7 +12,7 @@ const (
 	ExternTag    ExternKind = 4
 )
 
-// Name returns V8's name for an import or export kind.
+// Name returns the kind's name as error messages print it.
 func (k ExternKind) Name() string {
 	switch k {
 	case ExternFunc:

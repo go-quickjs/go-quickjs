@@ -1,6 +1,6 @@
 package module
 
-// Subtyping follows V8's wasm-subtyping.cc: the abstract hierarchies
+// Subtyping relates the abstract hierarchies
 //
 //	any > eq > {i31, struct, array} > none,  struct > (struct types) > none
 //	func > (function types) > nofunc
@@ -208,8 +208,8 @@ func validFieldSubtype(sub, super FieldType, m *Module) bool {
 	return IsSubtypeOf(sub.Type, super.Type, m)
 }
 
-// Union returns the least upper bound of two value types of m, as V8's Union
-// computes it for the validator, and whether it exists. Numbers have one only
+// Union returns the least upper bound of two value types of m, and whether it
+// exists. Numbers have one only
 // with themselves; references have it within a hierarchy.
 func Union(t1, t2 ValueType, m *Module) (ValueType, bool) {
 	if t1.Kind == KindBottom {
