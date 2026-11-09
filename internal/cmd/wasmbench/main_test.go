@@ -68,6 +68,7 @@ func TestMicroResults(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs every micro-benchmark, a few seconds")
 	}
+	defer func(dir string) { *cacheFlag = dir }(*cacheFlag)
 	*cacheFlag = t.TempDir()
 	for _, w := range workloads {
 		if w.file == "" {

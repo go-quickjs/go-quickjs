@@ -191,7 +191,7 @@ func selectEngines() ([]engine, error) {
 // sample runs one worker process for e.
 func sample(e engine, req worker.Request) (worker.Result, error) {
 	var res worker.Result
-	cmd, err := command(e)
+	prog, args, err := command(e)
 	if err != nil {
 		return res, err
 	}
@@ -201,7 +201,7 @@ func sample(e engine, req worker.Request) (worker.Result, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), *timeoutFlag)
 	defer cancel()
-	cmd = exec.CommandContext(ctx, cmd.Path, cmd.Args[1:]...)
+	cmd := exec.CommandContext(ctx, prog, args...)
 	cmd.Stdin = bytes.NewReader(in)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -216,34 +216,24 @@ func sample(e engine, req worker.Request) (worker.Result, error) {
 	return res, nil
 }
 
-// command is the worker command for e, without its context.
-func command(e engine) (*exec.Cmd, error) {
+// command is the program and arguments of e's worker.
+func command(e engine) (string, []string, error) {
 	switch e.kind {
 	case "self":
 		exe, err := os.Executable()
-		if err != nil {
-			return nil, err
-		}
-		return exec.Command(exe, "-worker"), nil
+		return exe, []string{"-worker"}, err
 	case "wazero":
 		bin, err := wazeroRunner()
-		if err != nil {
-			return nil, err
-		}
-		return exec.Command(bin), nil
+		return bin, nil, err
 	case "node":
 		script, err := nodeWorkerScript()
 		if err != nil {
-			return nil, err
+			return "", nil, err
 		}
 		node, err := exec.LookPath(*nodeFlag)
-		if err != nil {
-			return nil, err
-		}
-		args := append(append([]string{}, e.nodeFlags...), "--no-warnings", script)
-		return exec.Command(node, args...), nil
+		return node, append(append([]string{}, e.nodeFlags...), "--no-warnings", script), err
 	}
-	return nil, fmt.Errorf("unknown engine kind %q", e.kind)
+	return "", nil, fmt.Errorf("unknown engine kind %q", e.kind)
 }
 
 // wazeroRunner is -wazero, or the wazero runner built into the cache
