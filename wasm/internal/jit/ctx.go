@@ -24,6 +24,12 @@ type Ctx struct {
 	MemBase    uintptr
 	MemSize    uint64
 	MemSizePtr uintptr
+	// Mems is the instance's table of its memories, MemEntryWords words
+	// each -- the first byte, the size in bytes, and the address of the
+	// size a shared memory's grows store -- set before every entry where
+	// the instance has more than one memory: memories other than 0 are
+	// reached through it.
+	Mems uintptr
 	// Globals is a table of each global's address.
 	Globals uintptr
 	// ChunkEnd is the end of the stack chunk the frames are in: a callee's
@@ -51,6 +57,10 @@ type Ctx struct {
 
 // RSEntryWords is the number of words of a return stack entry.
 const RSEntryWords = 3
+
+// MemEntryWords is the number of words of an entry of the memories' table
+// (Ctx.Mems).
+const MemEntryWords = 3
 
 // Site is a return stack entry's third word, for a callee and the offset of
 // the call in its caller.

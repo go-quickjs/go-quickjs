@@ -206,6 +206,9 @@ and X0 on arm64:
   access, as other threads grow it. Only Go grows a memory, so the code
   reloads the base after every exit and reads the size from the context
   (amd64) or reloads it with the base (arm64).
+- `Mems`: the instance's table of its memories, three words each -- the
+  first byte, the size, the address of the size -- filled before every
+  entry when the instance has more than one memory (see Memory).
 - `Globals`: the instance's table of its globals' addresses.
 - `ChunkEnd`: the end of the stack chunk the frames are in.
 - `RSP`, `RSEnd`: the native return stack, shared by an exec's levels: its
@@ -301,11 +304,23 @@ traps where it carries out of 64 bits, as the interpreter's does; then the
 sum plus the size, which traps where it carries too. A constant address
 whose sums carry is a jump to the trap.
 
-The access is `[R15 + address + offset]` on amd64 -- the offset added to
+Memory 0's base is in a register the code keeps (R15, X20) and its size in
+the context (amd64) or a register (X21, arm64). Another memory's base and
+size are read from the instance's table of its memories (`Ctx.Mems`) at
+each access: the table's address from the context, then the memory's entry
+-- its base, its size, and the address of its size -- into a register of
+the access's own, which ends holding the base. Only Go grows a memory, in
+an exit or in a call that went through Go, and the engine fills the table
+before every entry, so a grow by the function itself, by a function it
+calls or by the host is seen at the next access, and a memory that is a Go
+slice and moved when it grew is read where it is now. A shared memory's
+size is read through the address of its size at each access, as other
+threads grow it; its bytes never move.
+
+The access is `[base + address + offset]` on amd64 -- the offset added to
 the address first for an i64 memory, or where it is past 2^31-1 -- and on
 arm64 the offset is added to the address first, in 64 bits, and the access
-is `[X20 + that]`. Loads and stores of memories other than 0 are refused;
-the bulk instructions of any memory are exits.
+is `[base + that]`. The bulk instructions of any memory are exits.
 
 ## Polls
 
@@ -382,7 +397,6 @@ A function is refused whole when it has:
 | `gc` | any GC instruction |
 | `exceptions` | try_table, throw, throw_ref, and the legacy try, catch, catch_all, delegate, rethrow |
 | `atomics` | any atomic instruction |
-| `multi-memory` | a load or a store of a memory other than 0 |
 | `asmjs` | V8's asm.js opcodes |
 | `f16` | f32.load_f16, f32.store_f16 |
 | `cpu` | popcnt without POPCNT, rounding without SSE4.1 (amd64) |

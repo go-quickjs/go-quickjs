@@ -82,6 +82,9 @@ type jitLevel struct {
 	// depth, calls and nsp are the exec's when the level was entered.
 	depth, calls, nsp int
 	args, res         []Val
+	// mems is the table of the instance's memories native code reads
+	// (Ctx.Mems), filled before every entry.
+	mems []uint64
 }
 
 // jitExec is an exec's native state: the levels entered, and the native
@@ -438,6 +441,9 @@ func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64,
 			ctx.MemBase = uintptr(m.Base())
 			ctx.MemSize = m.Size()
 			ctx.MemSizePtr = uintptr(unsafe.Pointer(&m.size))
+			if len(inst.Memories) > 1 {
+				ctx.Mems = lv.memTable(inst.Memories)
+			}
 		}
 		ctx.Poll = int64(x.poll)
 		cj.run.RLock()
@@ -501,6 +507,24 @@ func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64,
 		nf := inst.Code.get(uint32(ctx.ExitFn)).native.Load()
 		raw, off = nf.raw, int(ctx.ExitAddr-nf.base)
 	}
+}
+
+// memTable fills the level's table of memories for native code (Ctx.Mems)
+// and returns its address: each memory's base, size and the address of its
+// size, which a shared memory's grows store and other threads' too.
+func (lv *jitLevel) memTable(mems []*Memory) uintptr {
+	n := len(mems) * wjit.MemEntryWords
+	if cap(lv.mems) < n {
+		lv.mems = make([]uint64, n)
+	}
+	t := lv.mems[:n]
+	for i, m := range mems {
+		e := t[i*wjit.MemEntryWords : (i+1)*wjit.MemEntryWords]
+		e[0] = uint64(uintptr(m.Base()))
+		e[1] = m.Size()
+		e[2] = uint64(uintptr(unsafe.Pointer(&m.size)))
+	}
+	return uintptr(unsafe.Pointer(&t[0]))
 }
 
 // jitFrame returns the slots of the frame that exited, and the position

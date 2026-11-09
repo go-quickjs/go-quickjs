@@ -61,6 +61,7 @@ var (
 	offMemBase    = int32(unsafe.Offsetof(Ctx{}.MemBase))
 	offMemSize    = int32(unsafe.Offsetof(Ctx{}.MemSize))
 	offMemSizePtr = int32(unsafe.Offsetof(Ctx{}.MemSizePtr))
+	offMems       = int32(unsafe.Offsetof(Ctx{}.Mems))
 	offGlobals    = int32(unsafe.Offsetof(Ctx{}.Globals))
 	offChunkEnd   = int32(unsafe.Offsetof(Ctx{}.ChunkEnd))
 	offRSP        = int32(unsafe.Offsetof(Ctx{}.RSP))

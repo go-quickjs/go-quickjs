@@ -28,7 +28,6 @@ const (
 	RefuseGC         = "gc"
 	RefuseExceptions = "exceptions"
 	RefuseRefs       = "references"
-	RefuseMultiMem   = "multi-memory"
 	RefuseAsmJS      = "asmjs"
 	RefuseF16        = "f16"
 	RefuseCPU        = "cpu"
@@ -168,13 +167,6 @@ func scan(m *module.Module, fn uint32, feat Features) (locals []module.ValueType
 			if !feat.Round {
 				refuse(RefuseCPU, "%s without SSE4.1", op.Name())
 			}
-		}
-		if op >= opcode.I32LoadMem && op <= opcode.I64StoreMem32 {
-			mem, _ := r.memarg()
-			if mem != 0 {
-				refuse(RefuseMultiMem, "%s of memory %d", op.Name(), mem)
-			}
-			continue
 		}
 		r.skipImmediates(op)
 	}

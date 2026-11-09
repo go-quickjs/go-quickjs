@@ -166,3 +166,99 @@ func TestJITMemoryLastByte(t *testing.T) {
 		t.Run(idx, func(t *testing.T) { sameAsInterpreter(t, src, calls) })
 	}
 }
+
+// Loads and stores of memories other than 0 -- an i32 one, an i64 one and
+// a shared one -- check each memory's own size and reach its own bytes.
+func TestJITMultiMemory(t *testing.T) {
+	const src = `(module
+  (memory $m0 1)
+  (memory $m1 2 5)
+  (memory $m2 i64 1 2)
+  (memory $m3 1 3 shared)
+  (func (export "st1") (param i32 i64) (i64.store $m1 offset=4 (local.get 0) (local.get 1)))
+  (func (export "ld1") (param i32) (result i64) (i64.load $m1 offset=4 (local.get 0)))
+  (func (export "ld1b") (param i32) (result i32) (i32.load8_s $m1 (local.get 0)))
+  (func (export "st2") (param i64 f64) (f64.store $m2 offset=8 (local.get 0) (local.get 1)))
+  (func (export "ld2") (param i64) (result f64) (f64.load $m2 offset=8 (local.get 0)))
+  (func (export "st3") (param i32 i32) (i32.store16 $m3 (local.get 0) (local.get 1)))
+  (func (export "ld3") (param i32) (result i32) (i32.load16_u $m3 (local.get 0)))
+  (func (export "ld0") (param i32) (result i32) (i32.load $m0 (local.get 0)))
+  (func (export "const") (result i32)
+    (i32.store8 $m1 (i32.const 131071) (i32.const 9))
+    (i32.store8 $m3 (i32.const 65535) (i32.const 10))
+    (i32.add (i32.load8_u $m1 (i32.const 131071)) (i32.load8_u $m3 (i32.const 65535))))
+  (func (export "constPast") (result i32) (i32.load8_u $m1 (i32.const 131072)))
+  (func (export "grow3") (param i32) (result i32) (memory.grow $m3 (local.get 0))))`
+	oob := TrapMemOutOfBounds
+	sameAsInterpreter(t, src, []jitCall{
+		{name: "st1", args: []uint64{131072 - 12, 0x1122334455667788}},
+		{name: "ld1", args: []uint64{131072 - 12}, want: u64p(0x1122334455667788)},
+		{name: "ld1b", args: []uint64{131071}, want: u64p(0x11)},
+		{name: "ld1", args: []uint64{131072 - 11}, trap: oob},
+		{name: "st1", args: []uint64{math.MaxUint32, 1}, trap: oob},
+		{name: "ld0", args: []uint64{65532}, want: u64p(0)},
+		{name: "ld0", args: []uint64{65533}, trap: oob},
+		{name: "st2", args: []uint64{65536 - 16, math.Float64bits(-2.5)}},
+		{name: "ld2", args: []uint64{65536 - 16}, want: u64p(math.Float64bits(-2.5))},
+		{name: "ld2", args: []uint64{65536 - 15}, trap: oob},
+		{name: "ld2", args: []uint64{math.MaxUint64 - 7}, trap: oob},
+		{name: "st3", args: []uint64{65534, 0x12345}},
+		{name: "ld3", args: []uint64{65534}, want: u64p(0x2345)},
+		{name: "ld3", args: []uint64{65535}, trap: oob},
+		{name: "const", want: u64p(19)},
+		{name: "constPast", trap: oob},
+		{name: "grow3", args: []uint64{1}, want: u64p(1)},
+		{name: "ld3", args: []uint64{65535}, want: u64p(10)},
+		{name: "st3", args: []uint64{131070, 7}},
+		{name: "ld3", args: []uint64{131070}, want: u64p(7)},
+		{name: "ld3", args: []uint64{131071}, trap: oob},
+	})
+}
+
+// A memory other than 0 grown inside a loop, and by a native call between
+// two accesses of the caller's, is accessed at its new size: native code
+// reads its base and size where the grow left them.
+func TestJITMultiMemoryGrow(t *testing.T) {
+	const src = `(module
+  (memory $m0 1)
+  (memory $m1 1 8)
+  (memory $m2 i64 1 8)
+  (func $grow1 (param i32) (result i32) (memory.grow $m1 (local.get 0)))
+  (func $grow2 (param i64) (result i64) (memory.grow $m2 (local.get 0)))
+  ;; Grows memory 1 by a page a turn, writing the new last byte and
+  ;; summing every last byte so far; then adds the byte at the end less
+  ;; the second parameter.
+  (func (export "loop") (param i32 i32) (result i32)
+    (local $i i32) (local $sum i32) (local $end i32)
+    (loop $l
+      (drop (memory.grow $m1 (i32.const 1)))
+      (local.set $end (i32.mul (memory.size $m1) (i32.const 65536)))
+      (i32.store8 $m1 (i32.sub (local.get $end) (i32.const 1)) (i32.add (local.get $i) (i32.const 1)))
+      (local.set $sum (i32.add (local.get $sum) (i32.load8_u $m1 (i32.sub (local.get $end) (i32.const 1)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br_if $l (i32.lt_u (local.get $i) (local.get 0))))
+    (i32.add (local.get $sum) (i32.load8_u $m1 (i32.sub (local.get $end) (local.get 1)))))
+  ;; Stores at the first byte past memory 2, which traps, unless the call
+  ;; between grows it.
+  (func (export "byCall") (param i64 i32) (result i32)
+    (i64.store8 $m2 (i64.const 65535) (i64.const 3))
+    (if (local.get 1) (then (drop (call $grow2 (local.get 0)))))
+    (i64.store8 $m2 (i64.const 65536) (i64.const 4))
+    (i32.add (i32.load8_u $m2 (i64.const 65535)) (i32.load8_u $m2 (i64.const 65536))))
+  (func (export "grow1") (param i32) (result i32) (call $grow1 (local.get 0)))
+  (func (export "size1") (result i32) (memory.size $m1)))`
+	oob := TrapMemOutOfBounds
+	sameAsInterpreter(t, src, []jitCall{
+		{name: "byCall", args: []uint64{1, 0}, trap: oob},
+		{name: "byCall", args: []uint64{1, 1}, want: u64p(7)},
+		{name: "byCall", args: []uint64{0, 1}, want: u64p(7)},
+		{name: "loop", args: []uint64{3, 0}, trap: oob},
+		{name: "size1", want: u64p(4)},
+		{name: "loop", args: []uint64{2, 1}, want: u64p(1 + 2 + 2)},
+		{name: "size1", want: u64p(6)},
+		{name: "loop", args: []uint64{3, 0}, trap: oob},
+		{name: "size1", want: u64p(8)},
+		{name: "loop", args: []uint64{1, 1}, want: u64p(2)},
+		{name: "grow1", args: []uint64{1}, want: u64p(math.MaxUint32)},
+	})
+}

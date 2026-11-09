@@ -845,17 +845,43 @@ func (c *compiler) address(addr value, mem uint32, off, size uint64, at uint32) 
 
 // boundsCheck goes to trap if the end of an access, in rTmp, is past memory
 // mem's size, and returns the register holding the memory's base: X20 for
-// memory 0, whose size X21 holds. A shared memory's size is read where
-// other threads store it.
+// memory 0, whose size X21 holds, else a register of the instruction's own,
+// not in avoid, loaded from the memories' table. A shared memory's size is
+// read where other threads store it.
 func (c *compiler) boundsCheck(mem uint32, trap arm64.Label, avoid regMask) arm64.Reg {
 	a := c.a
-	if c.m.Memories[mem].Shared {
-		a.Load(rTmp2, rCtx, offMemSizePtr)
-		a.Load(rTmp2, rTmp2, 0)
-		a.Cmp(rTmp, rTmp2, true)
-	} else {
-		a.Cmp(rTmp, rMemSize, true)
+	shared := c.m.Memories[mem].Shared
+	if mem == 0 {
+		if shared {
+			a.Load(rTmp2, rCtx, offMemSizePtr)
+			a.Load(rTmp2, rTmp2, 0)
+			a.Cmp(rTmp, rTmp2, true)
+		} else {
+			a.Cmp(rTmp, rMemSize, true)
+		}
+		a.BCond(arm64.HI, trap)
+		return rMem
 	}
+	p := c.allocG(avoid)
+	// The address of the memory's entry in the memories' table (Ctx.Mems),
+	// whose three words are at it plus d, d+8 and d+16.
+	var d int32
+	if e := uint64(mem) * MemEntryWords * 8; e+16 <= math.MaxInt32 {
+		a.Load(p, rCtx, offMems)
+		d = int32(e)
+	} else {
+		a.MovImm(p, e)
+		a.Load(rTmp2, rCtx, offMems)
+		a.Op(arm64.Add, p, p, rTmp2, true)
+	}
+	if shared {
+		a.Load(rTmp2, p, d+16)
+		a.Load(rTmp2, rTmp2, 0)
+	} else {
+		a.Load(rTmp2, p, d+8)
+	}
+	a.Cmp(rTmp, rTmp2, true)
 	a.BCond(arm64.HI, trap)
-	return rMem
+	a.Load(p, p, d)
+	return p
 }

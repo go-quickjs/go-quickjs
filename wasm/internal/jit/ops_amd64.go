@@ -1011,18 +1011,49 @@ func (c *compiler) address64(addr value, mem uint32, off, size uint64, trap amd6
 
 // boundsCheck goes to trap if the end of an access, in rTmp, is past memory
 // mem's size, and returns the register holding the memory's base: R15 for
-// memory 0. A shared memory's size is read where other threads store it.
+// memory 0, else a register of the instruction's own, not in avoid, loaded
+// from the memories' table. A shared memory's size is read where other
+// threads store it.
 func (c *compiler) boundsCheck(mem uint32, trap amd64.Label, avoid uint16) amd64.Reg {
 	a := c.a
 	shared := c.m.Memories[mem].Shared
-	if shared {
-		p := c.allocG(avoid)
-		a.Load(p, rCtx, offMemSizePtr)
-		a.CmpMem(rTmp, p, 0, true)
-		c.freeG(p)
-	} else {
-		a.CmpMem(rTmp, rCtx, offMemSize, true)
+	if mem == 0 {
+		if shared {
+			p := c.allocG(avoid)
+			a.Load(p, rCtx, offMemSizePtr)
+			a.CmpMem(rTmp, p, 0, true)
+			c.freeG(p)
+		} else {
+			a.CmpMem(rTmp, rCtx, offMemSize, true)
+		}
+		a.Jcc(amd64.CondA, trap)
+		return rMem
 	}
-	a.Jcc(amd64.CondA, trap)
-	return rMem
+	p := c.allocG(avoid)
+	d := c.memEntry(p, mem)
+	if shared {
+		a.Load(p, p, d+16)
+		a.CmpMem(rTmp, p, 0, true)
+		a.Jcc(amd64.CondA, trap)
+		d = c.memEntry(p, mem)
+	} else {
+		a.CmpMem(rTmp, p, d+8, true)
+		a.Jcc(amd64.CondA, trap)
+	}
+	a.Load(p, p, d)
+	return p
+}
+
+// memEntry loads into p the address of memory mem's entry in the memories'
+// table (Ctx.Mems), less the displacement it returns, which the entry's
+// three words are addressed at, from p, plus 0, 8 and 16.
+func (c *compiler) memEntry(p amd64.Reg, mem uint32) int32 {
+	e := uint64(mem) * MemEntryWords * 8
+	if e+16 <= math.MaxInt32 {
+		c.a.Load(p, rCtx, offMems)
+		return int32(e)
+	}
+	c.a.MovImm(p, e)
+	c.a.AddMem(p, rCtx, offMems)
+	return 0
 }
