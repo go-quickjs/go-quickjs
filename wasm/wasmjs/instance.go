@@ -3,6 +3,7 @@ package wasmjs
 import (
 	"fmt"
 	"math"
+	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/vm"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/engine"
@@ -67,7 +68,10 @@ func (a *api) instanceObject(inst *engine.Instance, proto *vm.Object) *vm.Object
 		vm.HostDefineOwn(exports, a.rt.Intern(e.Name), v, false, true, false)
 	}
 	vm.HostPreventExtensions(exports)
-	return vm.HostObject(proto, &instanceData{inst: inst, exports: exports})
+	o := vm.HostObject(proto, &instanceData{inst: inst, exports: exports})
+	// A stack trace's wasm frames give it as their receiver.
+	a.wrappers.put(unsafe.Pointer(inst), o)
+	return o
 }
 
 // instanceExports is the getter of WebAssembly.Instance.prototype.exports.

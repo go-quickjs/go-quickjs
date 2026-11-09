@@ -28,8 +28,8 @@ func (m jsMeter) Exceeded() error         { return vm.HostMemoryExceeded(m.r) }
 
 func (s *funcSlot) MemoryFootprint(has func(unsafe.Pointer) bool) int64 {
 	size := s.fn.MemoryFootprint(has)
-	if s.budget != nil {
-		size += s.budget.MemoryFootprint(has)
+	if s.a.budget != nil {
+		size += s.a.budget.MemoryFootprint(has)
 	}
 	return size
 }

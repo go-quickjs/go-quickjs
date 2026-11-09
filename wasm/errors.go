@@ -1,9 +1,7 @@
 package wasm
 
 import (
-	"encoding/binary"
 	"fmt"
-	"math/bits"
 	"strconv"
 	"strings"
 
@@ -144,87 +142,11 @@ func (r *runtime) runtimeError(t *engine.Trap) *RuntimeError {
 			continue
 		}
 		info := r.codeOf(f.Module).names()
-		sf := StackFrame{URL: info.url, FunctionIndex: f.Func, Offset: f.Offset}
+		sf := StackFrame{URL: info.URL, FunctionIndex: f.Func, Offset: f.Offset}
 		if r.cfg.debugInfo {
-			sf.Name = info.frameName(f.Func)
+			sf.Name = info.FrameName(f.Func)
 		}
 		e.frames = append(e.frames, sf)
 	}
 	return e
-}
-
-// moduleURL returns the URL of a module of bytes b, named name if hasName.
-func moduleURL(b []byte, name string, hasName bool) string {
-	h := fmt.Sprintf("%08x", wireBytesHash(b))
-	if hasName {
-		return "wasm://wasm/" + name + "-" + h
-	}
-	return "wasm://wasm/" + h
-}
-
-// wireBytesHash is the hash a module's bytes are named by in stack traces:
-// the rapidhash of the bytes, with seed zero and the default secret, cut to
-// 30 bits, as a string hash field. A module over 16,383 bytes is named by its
-// length.
-func wireBytesHash(b []byte) uint32 {
-	const maxHashCalcLength = 16383
-	var h uint32
-	if len(b) > maxHashCalcLength {
-		h = uint32(len(b))
-	} else {
-		h = uint32(rapidhash(b, 0)) & (1<<30 - 1)
-		if h == 0 {
-			h = 27
-		}
-	}
-	return h<<2 | 2
-}
-
-var rapidSecret = [3]uint64{0x2d358dccaa6c78a5, 0x8bb84b93962eacc9, 0x4b33a62ed433d4a3}
-
-func rapidMix(a, b uint64) uint64 {
-	hi, lo := bits.Mul64(a, b)
-	return hi ^ lo
-}
-
-// rapidhash hashes p: rapidhash by Wang Yi, public domain.
-func rapidhash(p []byte, seed uint64) uint64 {
-	r64 := func(p []byte) uint64 { return binary.LittleEndian.Uint64(p) }
-	r32 := func(p []byte) uint64 { return uint64(binary.LittleEndian.Uint32(p)) }
-	n := uint64(len(p))
-	s := &rapidSecret
-	seed ^= rapidMix(seed^s[0], s[1]) ^ n
-	var a, b uint64
-	switch {
-	case n >= 4 && n <= 16:
-		last := n - 4
-		a = r32(p)<<32 | r32(p[last:])
-		d := (n & 24) >> (n >> 3)
-		b = r32(p[d:])<<32 | r32(p[last-d:])
-	case n > 0 && n < 4:
-		a = uint64(p[0])<<56 | uint64(p[n>>1])<<32 | uint64(p[n-1])
-	case n > 16:
-		q, i := p, n
-		if i > 48 {
-			s1, s2 := seed, seed
-			for i >= 48 {
-				seed = rapidMix(r64(q)^s[0], r64(q[8:])^seed)
-				s1 = rapidMix(r64(q[16:])^s[1], r64(q[24:])^s1)
-				s2 = rapidMix(r64(q[32:])^s[2], r64(q[40:])^s2)
-				q, i = q[48:], i-48
-			}
-			seed ^= s1 ^ s2
-		}
-		if i > 16 {
-			seed = rapidMix(r64(q)^s[2], r64(q[8:])^seed^s[1])
-			if i > 32 {
-				seed = rapidMix(r64(q[16:])^s[2], r64(q[24:])^seed)
-			}
-		}
-		a, b = r64(p[n-16:]), r64(p[n-8:])
-	}
-	a ^= s[1]
-	b ^= seed
-	hi, lo := bits.Mul64(a, b)
-	return rapidMix(lo^s[0]^n, hi^s[1])
 }

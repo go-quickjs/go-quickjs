@@ -51,6 +51,9 @@ const (
 	// object, which is decided when the frame is captured: by the time the
 	// stack is read, another realm may be the running one.
 	frameToplevel
+	// frameHost marks a frame of code a host runs (HostFrame), which callee
+	// holds as its data.
+	frameHost
 )
 
 func (fr *stackFrame) arrow() bool     { return fr.flags&frameArrow != 0 }
@@ -100,6 +103,7 @@ func (r *Runtime) captureTrace(until *Object, skipTop bool) stackTrace {
 		return st
 	}
 	hidden := false
+	var framed []*Object
 	// A trace made on one side of a ShadowRealm's boundary hides what is on
 	// the other: a CallSite's getThis and getFunction would otherwise hand
 	// code inside the realm objects of the realm outside, and back.
@@ -123,6 +127,12 @@ func (r *Runtime) captureTrace(until *Object, skipTop bool) stackTrace {
 			if f.callee == until {
 				until = nil
 			}
+			continue
+		}
+		// A native function running code with frames of its own -- an
+		// exported WebAssembly function -- shows those frames instead.
+		if f.cl == nil && hostFramers.Load() && hostTraceFrames(r, f.callee, hidden, &st, limit, &framed) {
+			hidden = true
 			continue
 		}
 		fr := stackFrame{this: f.this, callee: f.callee}
@@ -417,6 +427,9 @@ func (r *Runtime) errorToString(o *Object) (string, error) {
 // top-level code, or an anonymous function. Eval code is "eval".
 func (fr *stackFrame) functionName() string {
 	if fr.fn == nil {
+		if h := hostFrameOf(fr); h != nil {
+			return h.FuncName
+		}
 		if fr.callee != nil {
 			if fd := fr.callee.fn(); fd != nil {
 				return fd.name
@@ -454,7 +467,7 @@ func (fr *stackFrame) isEval() bool {
 // isToplevel reports whether the frame has no receiver worth naming: none at
 // all, or the global object.
 func (r *Runtime) isToplevel(fr *stackFrame) bool {
-	return fr.arrow() || fr.this.IsNullish() || fr.flags&frameToplevel != 0
+	return fr.flags&frameHost == 0 && (fr.arrow() || fr.this.IsNullish() || fr.flags&frameToplevel != 0)
 }
 
 // frameRealm is the realm a frame's function belongs to.
@@ -473,6 +486,9 @@ func frameRealm(f *frame) *Realm {
 // position is the frame's line and column, or zeros for a native frame.
 func (fr *stackFrame) position() (line, col int32) {
 	if fr.fn == nil {
+		if h := hostFrameOf(fr); h != nil {
+			return 1, int32(h.Offset) + 1
+		}
 		return 0, 0
 	}
 	return fr.fn.PositionAt(fr.pc)
@@ -481,6 +497,9 @@ func (fr *stackFrame) position() (line, col int32) {
 // fileName is the script the frame's code came from, or "" for native code
 // and for eval code, which has no file of its own.
 func (fr *stackFrame) fileName() string {
+	if h := hostFrameOf(fr); h != nil {
+		return h.URL
+	}
 	if fr.fn == nil || fr.isEval() || fr.fn.Script == nil {
 		return ""
 	}
@@ -611,6 +630,17 @@ func (r *Runtime) methodName(fr *stackFrame) string {
 // writeCallSite writes a frame as a trace shows it: the function, as a
 // method of its receiver's type or as a constructor, and where it is.
 func (r *Runtime) writeCallSite(b *strings.Builder, fr *stackFrame) {
+	if h := hostFrameOf(fr); h != nil {
+		if h.Name == "" {
+			writeHostLocation(b, h)
+			return
+		}
+		b.WriteString(h.Name)
+		b.WriteString(" (")
+		writeHostLocation(b, h)
+		b.WriteByte(')')
+		return
+	}
 	fnName := fr.functionName()
 	switch {
 	case fr.construct():

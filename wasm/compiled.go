@@ -52,7 +52,7 @@ func (c *compiledModule) Name() string {
 	if c.host != nil {
 		return c.host.name
 	}
-	return c.code.names().modName
+	return c.code.names().Module
 }
 
 func (c *compiledModule) ImportedFunctions() []api.FunctionDefinition {

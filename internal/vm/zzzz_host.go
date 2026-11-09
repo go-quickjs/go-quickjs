@@ -3,6 +3,9 @@ package vm
 import (
 	"math/bits"
 	"reflect"
+	"strconv"
+	"strings"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -137,6 +140,46 @@ type HostSized interface {
 	MemoryFootprint(has func(p unsafe.Pointer) bool) int64
 }
 
+// HostFrame is a frame of code a host runs -- a WebAssembly function -- as a
+// stack trace shows it, in the place of the native function that ran it.
+type HostFrame struct {
+	// Name is the function's name in a trace, or "" for none, and FuncName
+	// the function's own name, which a CallSite's getFunctionName gives.
+	Name, FuncName string
+	// URL is where the code is from, a trace's file name.
+	URL string
+	// Func is the function's index; Offset is where the frame is, and
+	// FuncStart where its function begins, in the code's bytes.
+	Func, Offset, FuncStart uint32
+	// This is what a CallSite's getThis answers.
+	This Value
+}
+
+// HostFramer is the data (HostSetSlot) of a native function that runs code
+// with frames of its own: a stack trace shows the frames HostFrames(nth)
+// gives in place of the function's frame, nth counting the frames of the same
+// function nearer the top of the stack, so that a function running more than
+// once at a time gives each call's frames. Where it reports false, the
+// function's own frame is shown.
+type HostFramer interface {
+	HostFrames(nth int) ([]HostFrame, bool)
+}
+
+var (
+	// hostFramers is set once a native function is given a HostFramer,
+	// before which no trace looks for one.
+	hostFramers atomic.Bool
+	// hostTraceFrames appends to st the frames a native function's
+	// HostFramer gives, up to limit, reporting whether it has one; framed
+	// holds the functions whose frames this trace has shown so far.
+	hostTraceFrames func(r *Runtime, callee *Object, hidden bool, st *stackTrace, limit int, framed *[]*Object) bool
+	// hostFrameOf returns the HostFrame a trace's frame shows, or nil.
+	hostFrameOf func(fr *stackFrame) *HostFrame
+	// writeHostLocation writes where a HostFrame is: its URL, function and
+	// offset.
+	writeHostLocation func(b *strings.Builder, h *HostFrame)
+)
+
 // meterData visits an object's data d: it counts what host data that is
 // HostSized holds, and walks anything else.
 var meterData func(m *memoryMeter, d any)
@@ -261,6 +304,9 @@ func init() {
 		return o
 	}
 	HostSetSlot = func(r *Runtime, o *Object, data any) {
+		if _, ok := data.(HostFramer); ok {
+			hostFramers.Store(true)
+		}
 		holder := newObjectExt(nil, ClassObject, objExtensible)
 		holder.setData(data)
 		o.setOwnRaw(r.atoms.internSymbol(hostSlotSymbol), Obj(holder), propPrivate)
@@ -352,6 +398,50 @@ func init() {
 			return 0, true, nil
 		}
 		return bigLowUint64(b), !b.negative() && b.digits()*bits.UintSize <= 64, nil
+	}
+	hostTraceFrames = func(r *Runtime, callee *Object, hidden bool, st *stackTrace, limit int, framed *[]*Object) bool {
+		hf, _ := HostSlot(r, Obj(callee)).(HostFramer)
+		if hf == nil {
+			return false
+		}
+		nth := 0
+		for _, c := range *framed {
+			if c == callee {
+				nth++
+			}
+		}
+		*framed = append(*framed, callee)
+		frames, ok := hf.HostFrames(nth)
+		if !ok {
+			return false
+		}
+		for _, h := range frames {
+			if len(st.frames) >= limit {
+				break
+			}
+			holder := newObjectExt(nil, ClassObject, 0)
+			holder.setData(&h)
+			fr := stackFrame{callee: holder, this: h.This, flags: frameHost}
+			if hidden {
+				fr.flags |= frameHidden
+			}
+			st.frames = append(st.frames, fr)
+		}
+		return true
+	}
+	hostFrameOf = func(fr *stackFrame) *HostFrame {
+		if fr.flags&frameHost == 0 {
+			return nil
+		}
+		h, _ := fr.callee.dataOf().(*HostFrame)
+		return h
+	}
+	writeHostLocation = func(b *strings.Builder, h *HostFrame) {
+		b.WriteString(h.URL)
+		b.WriteString(":wasm-function[")
+		b.WriteString(strconv.FormatUint(uint64(h.Func), 10))
+		b.WriteString("]:0x")
+		b.WriteString(strconv.FormatUint(uint64(h.Offset), 16))
 	}
 	HostMemoryLimited = func(r *Runtime) bool { return r.meter != nil }
 	HostReserveMemory = func(r *Runtime, n int64) bool {

@@ -107,15 +107,15 @@ func (c *compiledCode) funcDefinition(index uint32, exports map[uint32][]string)
 	n := c.names()
 	ft := m.FuncType(index)
 	d := &functionDefinition{
-		exportDefinition: exportDefinition{moduleName: n.modName, index: index, exportNames: exports[index]},
-		name:             n.funcs[index],
+		exportDefinition: exportDefinition{moduleName: n.Module, index: index, exportNames: exports[index]},
+		name:             n.Funcs[index],
 		params:           typeCodes(ft.Params, m),
 		results:          typeCodes(ft.Results, m),
 	}
 	if imp, ok := importOf(m, module.ExternFunc, index); ok {
 		d.importModule, d.import_, d.isImport = imp.Module, imp.Name, true
 	}
-	if locals := n.locals[index]; len(ft.Params) > 0 && locals != nil {
+	if locals := n.Locals[index]; len(ft.Params) > 0 && locals != nil {
 		names := make([]string, len(ft.Params))
 		for i := range names {
 			s, ok := locals[uint32(i)]
@@ -135,7 +135,7 @@ func (c *compiledCode) memoryDefinition(index uint32, exports map[uint32][]strin
 	m := c.m
 	mem := m.Memories[index]
 	d := &memoryDefinition{
-		exportDefinition: exportDefinition{moduleName: c.names().modName, index: index, exportNames: exports[index]},
+		exportDefinition: exportDefinition{moduleName: c.names().Module, index: index, exportNames: exports[index]},
 		limits:           mem.Limits,
 		shared:           mem.Shared,
 	}

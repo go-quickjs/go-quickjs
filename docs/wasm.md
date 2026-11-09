@@ -366,7 +366,13 @@ V8's. The rest of the engine words its errors as V8 does too:
   `    at add (wasm://wasm/8c1f3e2a:wasm-function[1]:0x3a)`, the hash being
   V8's of the module's bytes and the name the module's and the function's.
 - In JavaScript the same texts come with the interface's prefixes, from
-  `CompileError`, `LinkError` and `RuntimeError`.
+  `CompileError`, `LinkError` and `RuntimeError`. An error's `stack` shows
+  the wasm frames of each exported function's call running, in the place of
+  the function's own frame -- a trap's, and an error an import threw while
+  wasm called it -- each frame at the call it is making, and
+  `Error.prepareStackTrace`'s CallSites answer for them as V8's do: the
+  function's index from `getFunction`, line 1 and the offset plus one as the
+  column, the module's URL as the file.
 
 The match is tested against Node, not assumed. With
 `QUICKJS_COMPARE_NODE_WASM=1` and Node 26 as `node` on `PATH`:
@@ -685,8 +691,9 @@ move.
 
 The engine:
 
-- A trap's innermost frame carries the offset of the last call its function
-  made, or 0, not the trapping instruction's.
+- In the interpreter, a trap's innermost frame carries the offset of the last
+  call its function made, or 0, not the trapping instruction's; native code
+  gives the instruction's.
 - The JIT refuses the functions listed
   under [The JIT](#the-jit).
 
@@ -696,7 +703,6 @@ The `WebAssembly` namespace:
   accessor the global is until first read, as Intl's is.
 - `toResizableBuffer` of a shared memory returns its fixed-length
   `SharedArrayBuffer`, not a growable one.
-- A trap's `stack` has the JavaScript frames, not wasm's.
 - `JSON.stringify` writes a GC object as an empty object, where V8 writes
   `null`.
 - A promising call suspended on a promise that never settles keeps its

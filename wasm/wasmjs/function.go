@@ -10,6 +10,7 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/vm"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/engine"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
+	"github.com/go-quickjs/go-quickjs/wasm/internal/names"
 )
 
 // Functions crossing between wasm and JavaScript: exported functions, which
@@ -22,10 +23,58 @@ type funcSlot struct {
 	// promising marks a function WebAssembly.promising made, which runs fn
 	// on a stack of its own and returns a promise.
 	promising bool
-	// budget is the runtime's, whose running calls' frames the function's
-	// footprint counts: while script calls into wasm, the function it
-	// called is on its stack.
-	budget *engine.Budget
+	// a is the namespace the function belongs to: its budget is the
+	// runtime's, whose running calls' frames the function's footprint
+	// counts -- while script calls into wasm, the function it called is on
+	// its stack.
+	a *api
+	// calls are the function's calls running now, innermost last, whose
+	// wasm frames a stack trace shows in place of the function's own.
+	calls []*activation
+}
+
+// activation is a running call of an exported function: the frames the
+// engine gives while it runs, and those a trap left, which the error the
+// trap is thrown as shows.
+type activation struct {
+	trace   engine.Trace
+	trapped []engine.Frame
+}
+
+// HostFrames gives the wasm frames of the nth innermost of the function's
+// running calls.
+func (s *funcSlot) HostFrames(nth int) ([]vm.HostFrame, bool) {
+	i := len(s.calls) - 1 - nth
+	if i < 0 {
+		return nil, false
+	}
+	act := s.calls[i]
+	frames := act.trapped
+	if frames == nil {
+		frames = act.trace.Frames()
+	}
+	return s.a.hostFrames(frames), true
+}
+
+// hostFrames converts wasm frames to a stack trace's.
+func (a *api) hostFrames(frames []engine.Frame) []vm.HostFrame {
+	out := make([]vm.HostFrame, 0, len(frames))
+	for _, f := range frames {
+		inst := f.Module
+		if inst == nil {
+			continue
+		}
+		n := names.Of(inst.Module)
+		h := vm.HostFrame{Name: n.FrameName(f.Func), FuncName: n.Funcs[f.Func], URL: n.URL, Func: f.Func, Offset: f.Offset, This: vm.Undefined}
+		if int(f.Func) < len(inst.Module.Functions) {
+			h.FuncStart = inst.Module.Functions[f.Func].Code.Offset
+		}
+		if o := a.wrappers.get(unsafe.Pointer(inst)); o != nil {
+			h.This = vm.Obj(o)
+		}
+		out = append(out, h)
+	}
+	return out
 }
 
 // exportedFunction returns the wasm function v is the exported function of,
@@ -44,18 +93,20 @@ func (a *api) functionObject(f *engine.Function) *vm.Object {
 	if o := a.wrappers.get(unsafe.Pointer(f)); o != nil {
 		return o
 	}
+	s := &funcSlot{fn: f, a: a}
 	fn := a.rt.NewFunc(strconv.FormatUint(uint64(f.Index), 10), len(f.Sig.Params),
 		func(rt *vm.Runtime, this vm.Value, args []vm.Value) (vm.Value, error) {
-			return a.callExport(f, args)
+			return a.callExport(s, args)
 		})
-	vm.HostSetSlot(a.rt, fn, &funcSlot{fn: f, budget: a.budget})
+	vm.HostSetSlot(a.rt, fn, s)
 	a.wrappers.put(unsafe.Pointer(f), fn)
 	return fn
 }
 
 // callExport calls wasm function f with JavaScript arguments, returning its
 // result: undefined for none, the value of one, an array of several.
-func (a *api) callExport(f *engine.Function, args []vm.Value) (vm.Value, error) {
+func (a *api) callExport(s *funcSlot, args []vm.Value) (vm.Value, error) {
+	f := s.fn
 	sig := f.Sig
 	if !jsCompatible(sig) {
 		return vm.Undefined, a.rt.ThrowTypeError("%s", msgJSType)
@@ -68,7 +119,13 @@ func (a *api) callExport(f *engine.Function, args []vm.Value) (vm.Value, error) 
 		}
 		vals[i] = v
 	}
-	res, err := a.invoke(f, vals)
+	act := &activation{}
+	s.calls = append(s.calls, act)
+	defer func() {
+		s.calls[len(s.calls)-1] = nil
+		s.calls = s.calls[:len(s.calls)-1]
+	}()
+	res, err := a.invoke(f, vals, act)
 	if err != nil {
 		return vm.Undefined, err
 	}
@@ -95,7 +152,7 @@ func (a *api) results(res []engine.Val, types []module.ValueType) (vm.Value, err
 }
 
 // invoke runs f, turning what stopped it into what script sees.
-func (a *api) invoke(f *engine.Function, args []engine.Val) ([]engine.Val, error) {
+func (a *api) invoke(f *engine.Function, args []engine.Val, act *activation) ([]engine.Val, error) {
 	if a.jspi != nil && a.jspi.current != nil {
 		c := a.jspi.current
 		// A call from JavaScript a suspendable stack's import made: it
@@ -104,8 +161,16 @@ func (a *api) invoke(f *engine.Function, args []engine.Val) ([]engine.Val, error
 		c.jsFrames++
 		defer func() { c.jsFrames-- }()
 	}
-	res, err := engine.Invoke(runtimeContext{a.rt}, f, args)
+	res, err := engine.InvokeTraced(runtimeContext{a.rt}, f, args, &act.trace)
 	if err != nil {
+		if t, ok := err.(*engine.Trap); ok {
+			// The error is made while the call is still the function's:
+			// its trace shows the frames the trap left.
+			act.trapped = t.Frames
+			if act.trapped == nil {
+				act.trapped = []engine.Frame{}
+			}
+		}
 		return nil, a.runError(err)
 	}
 	return res, nil

@@ -145,9 +145,36 @@ var errStackOverflow = &Trap{Code: TrapStackOverflow}
 // *Trap, an uncaught wasm exception as an *Exception; an error a host
 // function returned is returned as it is.
 func Invoke(ctx context.Context, fn *Function, args []Val) (results []Val, err error) {
+	return invoke(ctx, fn, args, nil)
+}
+
+// Trace gives a host the wasm frames of a call while it runs, for the host's
+// own stack traces.
+type Trace struct{ x *exec }
+
+// Frames returns the frames of the call InvokeTraced is running, innermost
+// first, each at the call it is making; nil once the call has returned. It
+// is called on the goroutine the call runs on -- from a host function the
+// call made -- or while the call waits for one.
+func (t *Trace) Frames() []Frame {
+	if t == nil || t.x == nil {
+		return nil
+	}
+	return t.x.trace()
+}
+
+// InvokeTraced is Invoke, with t giving the call's frames while it runs.
+func InvokeTraced(ctx context.Context, fn *Function, args []Val, t *Trace) ([]Val, error) {
+	return invoke(ctx, fn, args, t)
+}
+
+func invoke(ctx context.Context, fn *Function, args []Val, t *Trace) (results []Val, err error) {
 	x := execPool.Get().(*exec)
 	x.ctx = ctx
 	x.poll = pollEvery
+	if t != nil {
+		t.x = x
+	}
 	var outer *Budget
 	if fn.Inst != nil && fn.Inst.budget != nil && fn.Inst.budget.outer != nil {
 		outer = fn.Inst.budget
@@ -160,6 +187,9 @@ func Invoke(ctx context.Context, fn *Function, args []Val) (results []Val, err e
 		}
 		if outer != nil {
 			outer.leave(x)
+		}
+		if t != nil {
+			t.x = nil
 		}
 		x.depth = 0
 		x.calls = x.calls[:0]

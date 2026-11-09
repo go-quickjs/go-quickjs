@@ -68,7 +68,7 @@ func (r *Runtime) initCallSite() {
 	})
 	// Only a method call has a receiver type and a key worth naming.
 	method("getTypeName", func(rt *Runtime, fr *stackFrame) Value {
-		if fr.construct() || rt.isToplevel(fr) {
+		if fr.construct() || rt.isToplevel(fr) || fr.flags&frameHost != 0 {
 			return Null
 		}
 		return str(rt.typeName(fr))
@@ -77,13 +77,17 @@ func (r *Runtime) initCallSite() {
 		if fr.hidden() || fr.callee == nil {
 			return Undefined
 		}
+		if h := hostFrameOf(fr); h != nil {
+			// A host frame has no function object, and gives its index.
+			return Float(float64(h.Func))
+		}
 		return Obj(fr.callee)
 	})
 	method("getFunctionName", func(rt *Runtime, fr *stackFrame) Value {
 		return str(fr.functionName())
 	})
 	method("getMethodName", func(rt *Runtime, fr *stackFrame) Value {
-		if fr.construct() || rt.isToplevel(fr) {
+		if fr.construct() || rt.isToplevel(fr) || fr.flags&frameHost != 0 {
 			return Null
 		}
 		return str(rt.methodName(fr))
@@ -111,6 +115,9 @@ func (r *Runtime) initCallSite() {
 		return num(col)
 	})
 	method("getEnclosingLineNumber", func(rt *Runtime, fr *stackFrame) Value {
+		if fr.flags&frameHost != 0 {
+			return Float(1)
+		}
 		if fr.fn == nil {
 			return Null
 		}
@@ -118,6 +125,10 @@ func (r *Runtime) initCallSite() {
 		return num(line)
 	})
 	method("getEnclosingColumnNumber", func(rt *Runtime, fr *stackFrame) Value {
+		if h := hostFrameOf(fr); h != nil {
+			// The offset itself, not one past it as a column is.
+			return Float(float64(h.FuncStart))
+		}
 		if fr.fn == nil {
 			return Null
 		}
@@ -125,6 +136,9 @@ func (r *Runtime) initCallSite() {
 		return num(col)
 	})
 	method("getPosition", func(rt *Runtime, fr *stackFrame) Value {
+		if h := hostFrameOf(fr); h != nil {
+			return Float(float64(h.Offset))
+		}
 		if fr.fn == nil {
 			return Float(0)
 		}

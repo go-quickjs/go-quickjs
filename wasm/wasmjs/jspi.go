@@ -165,7 +165,7 @@ func (a *api) promising(rt *vm.Runtime, this vm.Value, args []vm.Value) (vm.Valu
 		func(rt *vm.Runtime, this vm.Value, args []vm.Value) (vm.Value, error) {
 			return a.callPromising(f, args)
 		})
-	vm.HostSetSlot(rt, o, &funcSlot{fn: f, promising: true, budget: a.budget})
+	vm.HostSetSlot(rt, o, &funcSlot{fn: f, promising: true, a: a})
 	return vm.Obj(o), nil
 }
 
