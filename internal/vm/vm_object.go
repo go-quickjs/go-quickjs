@@ -292,6 +292,10 @@ type arrayExt struct {
 	// beyond the highest index -- `a.length = 4294967295` leaves no keys at all
 	// -- and because an array is not required to have its last index present.
 	arrayLen uint32
+	// densifyAt is, on a sparse array, how many dense elements it has to
+	// have before densify looks at it again (zzz_densify.go). It fills what
+	// would be padding.
+	densifyAt uint32
 }
 
 // valsHeader is a slice's header, which vals assembles from an object's
@@ -1736,7 +1740,7 @@ func (o *Object) setElem(i uint32, v Value) bool {
 	case uint(i) < uint(len(o.elemsOf())):
 		o.extOf().elems[i] = v
 		return true
-	case uint(i) == uint(len(o.elemsOf())):
+	case uint(i) == uint(len(o.elemsOf())) && o.flags&objHasSparseElements == 0:
 		o.extOf().elems = append(o.elemsOf(), v)
 		return true
 	}
@@ -1750,6 +1754,8 @@ func (o *Object) setElem(i uint32, v Value) bool {
 		o.extOf().elems = append(o.elemsOf(), elemHole)
 	}
 	o.extOf().elems = append(o.elemsOf(), v)
+	// Past a run of holes, or on a sparse array: one that may be dense again.
+	densify[struct{}](o)
 	return true
 }
 
