@@ -284,6 +284,9 @@ type Value struct {
 	// Uses counts the value's uses: as arguments, as a block's control or
 	// result.
 	Uses int32
+	// vreg is the lowering's number of the value among those it gives the
+	// allocator.
+	vreg int32
 }
 
 func (v *Value) String() string { return fmt.Sprintf("v%d", v.ID) }

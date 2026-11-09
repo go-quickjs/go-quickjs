@@ -105,7 +105,7 @@ type gen struct {
 	index  []int32
 	labels []amd64.Label
 	// inst is each call's instruction, as the allocator numbered it, by
-	// its value ID.
+	// its register's number.
 	inst [][2]int32
 	// fused says a comparison is made by the branch that uses it, by its
 	// value ID.
@@ -119,7 +119,10 @@ type gen struct {
 	traps  u64map[amd64.Label]
 	trapTo u64map[amd64.Label]
 	polls  u64map[amd64.Label]
+	// byID are the values the allocator sees by ID, byVreg by their
+	// registers' numbers (Value.vreg).
 	byID   []*Value
+	byVreg []*Value
 	// moves and pending are the parallel moves' lists.
 	moves, pending []pmove
 	// marks are what each stretch of the code was emitted for, where the
@@ -133,13 +136,14 @@ type gen struct {
 func (g *gen) reset(ws *genScratch, f *Func, req *wjit.Request) {
 	clear(g.ool[:cap(g.ool)])
 	clear(g.byID)
+	clear(g.byVreg)
 	g.traps.reset(64)
 	g.trapTo.reset(8)
 	g.polls.reset(8)
 	n := f.NumValues()
 	*g = gen{ws: ws, a: &ws.asm, f: f, req: req, fn: req.Func, index: grown(g.index, int(f.nextBlock)), labels: g.labels[:0],
-		inst: grown(g.inst, n), fused: grown(g.fused, n), ool: g.ool[:0], traps: g.traps, trapTo: g.trapTo, polls: g.polls,
-		byID: g.byID[:0], moves: g.moves[:0], pending: g.pending[:0], marking: req.Marks}
+		inst: g.inst, fused: grown(g.fused, n), ool: g.ool[:0], traps: g.traps, trapTo: g.trapTo, polls: g.polls,
+		byID: g.byID[:0], byVreg: g.byVreg[:0], moves: g.moves[:0], pending: g.pending[:0], marking: req.Marks}
 	clear(g.fused)
 	ws.asm.Reset()
 }
@@ -243,8 +247,8 @@ func (g *gen) listing() string {
 		case lSlot:
 			s = fmt.Sprintf("slot%d", l.slot)
 		}
-		if l := g.locOf(v); l.kind != lSlot && g.ra.Slot[v.ID] >= 0 {
-			s += fmt.Sprintf(" (slot%d)", g.ra.Slot[v.ID])
+		if l := g.locOf(v); l.kind != lSlot && g.ra.Slot[v.vreg] >= 0 {
+			s += fmt.Sprintf(" (slot%d)", g.ra.Slot[v.vreg])
 		}
 		return "  ; " + s
 	}
@@ -288,9 +292,34 @@ func (g *gen) listing() string {
 // allocate describes f to the allocator and allocates its registers.
 func (g *gen) allocate() {
 	f := g.f
-	n := f.NumValues()
 	ws := g.ws
 	ws.vregs.reset()
+	// The values the allocator sees are numbered densely, in the order of
+	// their IDs, so that it orders them as it would by ID: the constants
+	// are made where they are used, and the IDs of the values the passes
+	// removed are left out.
+	byID := grown(g.byID, f.NumValues())
+	clear(byID)
+	for _, b := range f.Blocks {
+		for _, v := range b.Phis {
+			byID[v.ID] = v
+		}
+		for _, v := range b.Values {
+			if v.Op != OpConst {
+				byID[v.ID] = v
+			}
+		}
+	}
+	g.byID = byID
+	byVreg := g.byVreg[:0]
+	for _, v := range byID {
+		if v != nil {
+			v.vreg = int32(len(byVreg))
+			byVreg = append(byVreg, v)
+		}
+	}
+	g.byVreg = byVreg
+	n := len(byVreg)
 	lf := &ws.lf
 	lf.Class = grown(lf.Class, n)
 	lf.FixedSlot = grown(lf.FixedSlot, n)
@@ -304,7 +333,7 @@ func (g *gen) allocate() {
 		if v.Op == OpConst {
 			return lsra.None
 		}
-		return lsra.VReg(v.ID)
+		return lsra.VReg(v.vreg)
 	}
 	uses := func(vs []*Value) []lsra.VReg {
 		out := ws.vregs.take(len(vs))
@@ -318,6 +347,7 @@ func (g *gen) allocate() {
 		}
 		return out
 	}
+	g.inst = grown(g.inst, n)
 	for i := range g.inst {
 		g.inst[i] = [2]int32{-1, -1}
 	}
@@ -332,8 +362,8 @@ func (g *gen) allocate() {
 			lb.Succs = append(lb.Succs, int(g.index[s.ID]))
 		}
 		for _, p := range b.Phis {
-			lf.Class[p.ID] = classOf(p.Type)
-			ph := lsra.Phi{Def: lsra.VReg(p.ID), Args: ws.vregs.take(len(p.Args))}
+			lf.Class[p.vreg] = classOf(p.Type)
+			ph := lsra.Phi{Def: lsra.VReg(p.vreg), Args: ws.vregs.take(len(p.Args))}
 			for _, a := range p.Args {
 				ph.Args = append(ph.Args, vreg(a))
 			}
@@ -355,17 +385,17 @@ func (g *gen) allocate() {
 				continue
 			case v.Op == OpResult:
 				// Defined by its call.
-				lf.Class[v.ID] = classOf(v.Type)
+				lf.Class[v.vreg] = classOf(v.Type)
 				continue
 			}
 			in := lsra.Inst{Uses: uses(v.Args), Hint: lsra.None}
 			if c := classOf(v.Type); c != lsra.NoClass {
-				lf.Class[v.ID] = c
-				in.Defs = append(ws.vregs.take(1), lsra.VReg(v.ID))
+				lf.Class[v.vreg] = c
+				in.Defs = append(ws.vregs.take(1), lsra.VReg(v.vreg))
 			}
 			switch v.Op {
 			case OpParam:
-				lf.FixedSlot[v.ID] = int32(v.Aux)
+				lf.FixedSlot[v.vreg] = int32(v.Aux)
 			case OpGoOp:
 				if v.BulkInCode() {
 					// The code copies or fills in AX, CX and SI.
@@ -376,7 +406,7 @@ func (g *gen) allocate() {
 			case OpCall, OpCallIndirect:
 				in.Call = true
 				for k := j + 1; k < len(b.Values) && b.Values[k].Op == OpResult && b.Values[k].Args[0] == v; k++ {
-					in.Defs = appendA(&ws.vregs, in.Defs, lsra.VReg(b.Values[k].ID))
+					in.Defs = appendA(&ws.vregs, in.Defs, lsra.VReg(b.Values[k].vreg))
 				}
 				nres := len(in.Defs)
 				if v.Op == OpCall {
@@ -385,7 +415,7 @@ func (g *gen) allocate() {
 					nres = len(g.req.Module.Types[v.Aux].Func.Results)
 				}
 				area = max(area, 2*max(len(v.Args), nres))
-				g.inst[v.ID] = [2]int32{int32(i), int32(len(lb.Insts))}
+				g.inst[v.vreg] = [2]int32{int32(i), int32(len(lb.Insts))}
 			case OpDivS, OpDivU, OpRemS, OpRemU:
 				in.Clobber = clobberDiv
 			case OpShl, OpShrS, OpShrU, OpRotl, OpRotr:
@@ -440,13 +470,13 @@ func (g *gen) locOf(v *Value) loc {
 	if v.Op == OpConst {
 		return loc{kind: lConst, c: v.Aux}
 	}
-	if r := g.ra.Reg[v.ID]; r >= 0 {
+	if r := g.ra.Reg[v.vreg]; r >= 0 {
 		if v.Type.IsFloat() {
 			return loc{kind: lXMM, r: int(r)}
 		}
 		return loc{kind: lGPR, r: int(r)}
 	}
-	if s := g.ra.Slot[v.ID]; s >= 0 {
+	if s := g.ra.Slot[v.vreg]; s >= 0 {
 		return loc{kind: lSlot, slot: s}
 	}
 	panic("wasm opt: a value with no location")
@@ -638,14 +668,14 @@ func (g *gen) movX(x amd64.XReg, v *Value) { g.move(loc{kind: lXMM, r: int(x)}, 
 // defG and defX are the register v's result is computed in: its own, or
 // the first scratch register for a value spilled.
 func (g *gen) defG(v *Value) amd64.Reg {
-	if r := g.ra.Reg[v.ID]; r >= 0 {
+	if r := g.ra.Reg[v.vreg]; r >= 0 {
 		return amd64.Reg(r)
 	}
 	return s0
 }
 
 func (g *gen) defX(v *Value) amd64.XReg {
-	if r := g.ra.Reg[v.ID]; r >= 0 {
+	if r := g.ra.Reg[v.vreg]; r >= 0 {
 		return amd64.XReg(r)
 	}
 	return x0
@@ -654,7 +684,7 @@ func (g *gen) defX(v *Value) amd64.XReg {
 // done stores v's result, computed in register r, into its slot, if it
 // has one: its home if spilled, its copy if it lives across a call.
 func (g *gen) done(v *Value, r int) {
-	s := g.ra.Slot[v.ID]
+	s := g.ra.Slot[v.vreg]
 	if s < 0 {
 		return
 	}
@@ -673,7 +703,7 @@ func (g *gen) done(v *Value, r int) {
 // allocator coalesced them -- and stored itself there where it was made.
 func (g *gen) inSlot(p *Value) bool {
 	for _, a := range p.Args {
-		if a.Op == OpConst || g.ra.Reg[a.ID] != g.ra.Reg[p.ID] || g.ra.Slot[a.ID] != g.ra.Slot[p.ID] {
+		if a.Op == OpConst || g.ra.Reg[a.vreg] != g.ra.Reg[p.vreg] || g.ra.Slot[a.vreg] != g.ra.Slot[p.vreg] {
 			return false
 		}
 	}
@@ -829,7 +859,7 @@ func (g *gen) edgeMoves(b, s *Block) {
 // block lowers block b, the i-th.
 func (g *gen) block(i int, b *Block) {
 	for _, p := range b.Phis {
-		if r := g.ra.Reg[p.ID]; r >= 0 && !g.inSlot(p) {
+		if r := g.ra.Reg[p.vreg]; r >= 0 && !g.inSlot(p) {
 			g.done(p, int(r))
 		}
 	}
@@ -1007,7 +1037,7 @@ func (g *gen) value(v *Value, rest []*Value) {
 	wide := v.Type == TI64
 	switch v.Op {
 	case OpParam:
-		if r := g.ra.Reg[v.ID]; r >= 0 {
+		if r := g.ra.Reg[v.vreg]; r >= 0 {
 			dst := loc{kind: lGPR, r: int(r)}
 			if v.Type.IsFloat() {
 				dst.kind = lXMM
@@ -1853,7 +1883,7 @@ func (g *gen) takeResults(res []*Value, base int32) {
 
 // reload loads the values a call clobbered from their slots.
 func (g *gen) reload(v *Value) {
-	key := g.inst[v.ID]
+	key := g.inst[v.vreg]
 	if key[0] < 0 {
 		return
 	}
@@ -1862,27 +1892,9 @@ func (g *gen) reload(v *Value) {
 		g.mark("%v reload", v)
 	}
 	for _, r := range across {
-		w := g.valueByID(int32(r))
+		w := g.byVreg[r]
 		g.move(g.locOf(w), loc{kind: lSlot, slot: g.ra.Slot[r]}, w.Type)
 	}
-}
-
-// valueByID finds a value by its ID, through a table made at its first
-// use.
-func (g *gen) valueByID(id int32) *Value {
-	if len(g.byID) == 0 {
-		g.byID = grown(g.byID, g.f.NumValues())
-		clear(g.byID)
-		for _, b := range g.f.Blocks {
-			for _, v := range b.Phis {
-				g.byID[v.ID] = v
-			}
-			for _, v := range b.Values {
-				g.byID[v.ID] = v
-			}
-		}
-	}
-	return g.byID[id]
 }
 
 // stage stores a call's arguments into the slots from base, two apart,
