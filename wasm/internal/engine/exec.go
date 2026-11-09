@@ -49,6 +49,9 @@ type exec struct {
 	// caught holds the exceptions the legacy catches being run handle, for
 	// rethrow.
 	caught []*Exception
+	// vals is a stack of the arguments of the host functions being called,
+	// each call's taken and given back around it (takeVals).
+	vals []Val
 
 	// jit is the state of the native code running on the exec.
 	jit jitExec
@@ -150,6 +153,7 @@ func Invoke(ctx context.Context, fn *Function, args []Val) (results []Val, err e
 		x.depth = 0
 		x.calls = x.calls[:0]
 		x.caught = x.caught[:0]
+		x.vals = x.vals[:0]
 		x.tail = nil
 		x.setJITLevel(0)
 		x.nc, x.nsp, x.rc, x.rsp = 0, 0, 0, 0
@@ -211,4 +215,22 @@ func (x *exec) pollContext() {
 			panic(hostError{err})
 		}
 	}
+}
+
+// takeVals returns n zeroed values on the exec's argument stack, and the
+// height to give them back at. A call made while they are in use takes its
+// own above them; growing the stack moves it, but the values a caller holds
+// stay where it took them.
+func (x *exec) takeVals(n int) ([]Val, int) {
+	top := len(x.vals)
+	need := top + n
+	if need > cap(x.vals) {
+		grown := make([]Val, need, 2*need)
+		copy(grown, x.vals)
+		x.vals = grown
+	}
+	x.vals = x.vals[:need]
+	w := x.vals[top:need:need]
+	clear(w)
+	return w, top
 }

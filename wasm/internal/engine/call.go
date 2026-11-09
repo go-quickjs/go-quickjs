@@ -177,10 +177,13 @@ func (x *exec) hostCall(fn *Function, args []Val) []Val {
 	}
 	res := x.hostResults[:n]
 	clear(res)
-	// The host may call back into wasm, which uses the scratch buffers.
+	// The host may call back into wasm, which uses the scratch buffers: its
+	// arguments are its own copy, on the argument stack.
 	x.hostResults = nil
-	args = append([]Val(nil), args...)
-	err := fn.Host(x.ctx, caller, args, res)
+	own, top := x.takeVals(len(args))
+	copy(own, args)
+	err := fn.Host(x.ctx, caller, own, res)
+	x.vals = x.vals[:top]
 	x.hostResults = res
 	if err != nil {
 		switch e := err.(type) {

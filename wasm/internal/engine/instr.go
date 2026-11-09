@@ -462,6 +462,11 @@ func (c *compiler) callGenericFn(target func(*frame) *Function, sig *module.Func
 	for i, e := range es {
 		args[i] = c.val(e)
 	}
+	// A wasm callee's parameters are laid out by the signature, which a
+	// callee of a subtype shares, so the arguments are stored into its
+	// frame directly.
+	params, _, _ := layout(sig.Params)
+	stores := c.argStores(es, params)
 	results := sig.Results
 	copies := c.resultCopies(results, base)
 	dsts := make([]int, len(results))
@@ -473,8 +478,12 @@ func (c *compiler) callGenericFn(target func(*frame) *Function, sig *module.Func
 		fn := target(f)
 		x.calls[len(x.calls)-1].offset = at
 		if fn.Host != nil {
-			vals := evalArgs(f, args)
+			vals, top := x.takeVals(len(args))
+			for i, a := range args {
+				vals[i] = a(f)
+			}
 			res := x.hostCall(fn, vals)
+			x.vals = x.vals[:top]
 			for i, t := range results {
 				storeVal(f, t, dsts[i], res[i])
 			}
@@ -482,10 +491,11 @@ func (c *compiler) callGenericFn(target func(*frame) *Function, sig *module.Func
 		}
 		cd := codeOf(fn)
 		nc, nsp, rc, rsp := x.nc, x.nsp, x.rc, x.rsp
-		vals := evalArgs(f, args)
 		l, _, _ := x.takeNum(cd.nslots)
 		r, _, _ := x.takeRef(cd.rslots)
-		putVals(l, r, cd.params, vals)
+		for _, s := range stores {
+			s(f, l, r)
+		}
 		x.run(fn, cd, l, r, nc, nsp, rc, rsp)
 		for _, cp := range copies {
 			cp(f, l, r)
