@@ -160,11 +160,25 @@ func TestJSTagRoundTrip(t *testing.T) {
 	}
 }
 
+// promisingStacks counts the goroutines running promising calls' stacks.
+// Other tests' goroutines start and end meanwhile, so the process's count
+// says nothing of them.
+func promisingStacks() int {
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			return strings.Count(string(buf[:n]), "wasmjs.(*api).callPromising.func")
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+}
+
 // TestPromisingStackEnds pins that a promising call whose suspension can
 // never resume ends its goroutine once nothing holds the suspension.
 func TestPromisingStackEnds(t *testing.T) {
 	rt := newRuntime(t)
-	before := runtime.NumGoroutine()
+	before := promisingStacks()
 	// (import "m" "f" (func (result i32))) (func (export "run") (result i32) (call 0))
 	_ = eval(t, rt, `
 		const bytes = new Uint8Array([0,97,115,109,1,0,0,0,1,9,2,96,0,1,127,96,0,1,127,2,7,1,1,109,1,102,0,0,3,2,1,1,
@@ -173,13 +187,13 @@ func TestPromisingStackEnds(t *testing.T) {
 			{m: {f: new WebAssembly.Suspending(() => new Promise(() => {}))}}).exports;
 		for (let i = 0; i < 20; i++) WebAssembly.promising(e.run)();
 		var out = "";`)
-	if n := runtime.NumGoroutine(); n < before+20 {
-		t.Fatalf("%d goroutines, want the 20 suspended calls' too (%d before)", n, before)
+	if n := promisingStacks(); n != before+20 {
+		t.Fatalf("%d promising stacks, want the 20 suspended calls' too (%d before)", n, before)
 	}
 	deadline := time.Now().Add(10 * time.Second)
-	for runtime.NumGoroutine() > before+2 {
+	for promisingStacks() > before {
 		if time.Now().After(deadline) {
-			t.Fatalf("%d goroutines remain, %d before", runtime.NumGoroutine(), before)
+			t.Fatalf("%d promising stacks remain, %d before", promisingStacks(), before)
 		}
 		runtime.GC()
 		time.Sleep(10 * time.Millisecond)
