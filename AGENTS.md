@@ -349,8 +349,13 @@ design, which a change to that design updates in the same commit.
   is given of the system (`sysctx`, `sysfs`).
 - WebAssembly is opt-in. The root package, `internal/vm` and `stdlib` never
   import a `wasm` package; `wasm/wasmjs` binds the two engines from outside,
-  and `cmd/qjs` is the only host that installs it. `TestEnginesApart`
-  (wasm/wasmjs) fails when the root package or `stdlib` depends on one.
+  and `cmd/qjs` is the only host that installs it. The namespace is built
+  only with the `quickjs_wasm` tag, as the JIT is with `quickjs_jit`: without
+  it `wasmjs.Install` returns `ErrNotBuilt` and links nothing of the wasm
+  engine, so its tests run with `-tags quickjs_wasm`. `TestEnginesApart` and
+  `TestWasmBuildTag` (wasm/wasmjs, built either way) fail when the root
+  package or `stdlib` depends on one, or when the tag no longer decides
+  whether `qjs` links the wasm engine.
   What the bridge needs of the VM is a host hook, a package variable
   assigned in the `init` of `internal/vm/zzzz_host.go`, the last file, so
   that no function moves (see the layout rules above); `HostJITEnabled` is
@@ -458,9 +463,9 @@ it does not list with why:
 
 ```sh
 QUICKJS_COMPARE_NODE_WASM=1 WASM_SPEC_DIR=/tmp/wasm-spec WASM_THREADS_DIR=/tmp/wasm-threads \
-  go test ./wasm/internal/decoder ./wasm/internal/wast ./wasm/internal/engine ./wasm/wasmjs \
+  go test -tags quickjs_wasm ./wasm/internal/decoder ./wasm/internal/wast ./wasm/internal/engine ./wasm/wasmjs \
   -run 'TestCompareNode|TestNodeAcceptsCompiledModules|TestRelaxedMatchesNode' -count=1 -v
-WASM_SPEC_DIR=/tmp/wasm-spec go test ./wasm/wasmjs -run TestWasmSpecJSAPI -count=1 -v
+WASM_SPEC_DIR=/tmp/wasm-spec go test -tags quickjs_wasm ./wasm/wasmjs -run TestWasmSpecJSAPI -count=1 -v
 ```
 
 The decoder's corpus is 24,437 modules; a change to the decoder runs it

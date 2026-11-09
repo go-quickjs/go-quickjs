@@ -10,7 +10,8 @@ It is reached two ways, and both are opt-in:
 
 - from Go, through the `wasm` package, whose API is shaped like wazero's;
 - from JavaScript, through the `WebAssembly` namespace, which a host installs
-  in a runtime with `wasm/wasmjs`. `qjs` installs it, as Node has it.
+  in a runtime with `wasm/wasmjs`, built only with `-tags quickjs_wasm`, as
+  the JIT is with `quickjs_jit`. `qjs` built so installs it, as Node has it.
 
 The JavaScript engine does not import the wasm engine, and neither does the
 standard library: a program that imports no `wasm` package links none of it
@@ -225,16 +226,20 @@ runs too: see [Conformance](#conformance).
 ## The JavaScript namespace
 
 ```go
+// go build -tags quickjs_wasm
 rt := quickjs.New()
 if err := wasmjs.Install(rt); err != nil {
 	return err
 }
 ```
 
-`Install` defines the global `WebAssembly`, which is made the first time a
-script reads it, so a runtime that never uses WebAssembly pays nothing for it.
-`qjs` installs it in every runtime it makes, workers' included; the root
-package and the standard library do not. `wasmjs.WithoutJSPI()` leaves out the
+The namespace is built only with the `quickjs_wasm` build tag: without it,
+`Install` returns `wasmjs.ErrNotBuilt`, defines nothing, and nothing of the
+wasm engine is linked. `Install` defines the global `WebAssembly`, which is
+made the first time a script reads it, so a runtime that never uses
+WebAssembly pays nothing for it. A `qjs` built with the tag installs it in
+every runtime it makes, workers' included; the root package and the
+standard library do not. `wasmjs.WithoutJSPI()` leaves out the
 JS Promise Integration.
 
 The namespace is the WebAssembly JavaScript interface, with the error types
@@ -571,11 +576,11 @@ WASM_JIT=osr WASM_SPEC_DIR=/tmp/wasm-spec WASM_THREADS_DIR=/tmp/wasm-threads \
 WASM_SPEC_DIR=/tmp/wasm-spec WASM_THREADS_DIR=/tmp/wasm-threads go test -tags quickjs_jit ./wasm/internal/spectest -run TestJITDifferential -count=1 -v
 
 # The JavaScript API tests
-WASM_SPEC_DIR=/tmp/wasm-spec go test ./wasm/wasmjs -run TestWasmSpecJSAPI -count=1 -v
+WASM_SPEC_DIR=/tmp/wasm-spec go test -tags quickjs_wasm ./wasm/wasmjs -run TestWasmSpecJSAPI -count=1 -v
 
 # The comparisons with Node
 QUICKJS_COMPARE_NODE_WASM=1 WASM_SPEC_DIR=/tmp/wasm-spec WASM_THREADS_DIR=/tmp/wasm-threads \
-  go test ./wasm/internal/decoder ./wasm/internal/wast ./wasm/internal/engine ./wasm/wasmjs \
+  go test -tags quickjs_wasm ./wasm/internal/decoder ./wasm/internal/wast ./wasm/internal/engine ./wasm/wasmjs \
   -run 'TestCompareNode|TestNodeAcceptsCompiledModules|TestRelaxedMatchesNode' -count=1 -v
 
 # wasi-testsuite

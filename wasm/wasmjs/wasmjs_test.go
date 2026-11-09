@@ -1,3 +1,5 @@
+//go:build quickjs_wasm
+
 package wasmjs_test
 
 import (
@@ -5,7 +7,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"os/exec"
 	"runtime"
 	"strings"
 	"testing"
@@ -99,23 +100,6 @@ func TestNodeQuirksLimits(t *testing.T) {
 	} {
 		if got := eval(t, newRuntime(t, c.opts...), src); got != c.want {
 			t.Errorf("quirks %v:\ngot  %s\nwant %s", c.opts != nil, got, c.want)
-		}
-	}
-}
-
-// TestEnginesApart pins that the JavaScript engine does not import the wasm
-// engine, nor the standard library the WebAssembly namespace: a host opts
-// in by installing it.
-func TestEnginesApart(t *testing.T) {
-	for _, pkg := range []string{"github.com/go-quickjs/go-quickjs", "github.com/go-quickjs/go-quickjs/stdlib"} {
-		out, err := exec.Command("go", "list", "-deps", pkg).Output()
-		if err != nil {
-			t.Fatalf("go list %s: %v", pkg, err)
-		}
-		for _, dep := range strings.Fields(string(out)) {
-			if strings.HasPrefix(dep, "github.com/go-quickjs/go-quickjs/wasm") {
-				t.Errorf("%s imports %s", pkg, dep)
-			}
 		}
 	}
 }

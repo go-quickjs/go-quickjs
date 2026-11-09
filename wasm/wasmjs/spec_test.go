@@ -1,3 +1,5 @@
+//go:build quickjs_wasm
+
 package wasmjs_test
 
 import (

@@ -56,10 +56,12 @@ A worker is started as in node -- `new Worker("./work.mjs")` from
 `node:worker_threads`, or the web's `new Worker(url)` -- and is given what the
 program was given: the same flags hold for it.
 
-`WebAssembly` is there as in node, in every runtime and worker, and needs no
-flag: a module reaches nothing but what the script passes it. With `--jit`,
-the WebAssembly a script compiles runs natively too. See
-[WebAssembly](wasm.md).
+In a `qjs` built with `-tags quickjs_wasm`, `WebAssembly` is there as in
+node, in every runtime and worker, and needs no flag: a module reaches
+nothing but what the script passes it. Without the tag there is no
+`WebAssembly`, and nothing of the wasm engine is in the binary. With `--jit`
+(and `-tags quickjs_jit`), the WebAssembly a script compiles runs natively
+too. See [WebAssembly](wasm.md).
 
 A script that reaches for something it was not given is told which flag would
 have given it, rather than finding a hole where a function should be:

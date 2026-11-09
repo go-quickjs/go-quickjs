@@ -114,8 +114,9 @@ The `wasm` package runs WebAssembly from Go, with an API shaped like
 wazero's, and `wasm/wasi` gives modules WASI preview 1, sandboxed: nothing
 of the process reaches a module unless the host configures it. Scripts reach
 the same engine through the `WebAssembly` namespace, which a host installs
-with `wasm/wasmjs` and `qjs` installs as Node has it. Both are opt-in: the
-JavaScript engine does not import the wasm engine.
+with `wasm/wasmjs`. The namespace is built only with `-tags quickjs_wasm`, as
+the JIT is with `quickjs_jit`; `qjs` built so installs it as Node has it.
+Both are opt-in: the JavaScript engine does not import the wasm engine.
 
 ```go
 r := wasm.NewRuntime(ctx)

@@ -254,8 +254,9 @@ func newRuntime(opts *options) (*quickjs.Runtime, error) {
 		rtOpts = append(rtOpts, quickjs.WithSourceMaps(quickjs.ReadSourceMap))
 	}
 	rt := quickjs.New(rtOpts...)
-	// WebAssembly, as node has it.
-	if err := wasmjs.Install(rt); err != nil {
+	// WebAssembly, in a build with the quickjs_wasm tag; without it there is
+	// none.
+	if err := wasmjs.Install(rt); err != nil && !errors.Is(err, wasmjs.ErrNotBuilt) {
 		rt.Close()
 		return nil, err
 	}

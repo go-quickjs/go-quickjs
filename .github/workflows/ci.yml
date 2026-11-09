@@ -105,6 +105,10 @@ jobs:
           QJS_JIT_STRESS: threshold,budget=3,deopt=7,background=3
         run: go test -tags quickjs_jit -count=1 -timeout 30m ./internal/vm .
 
+      # The WebAssembly namespace is built only with the quickjs_wasm tag.
+      - name: Run the WebAssembly namespace's tests
+        run: go test -count=1 -tags quickjs_wasm ./wasm/wasmjs ./cmd/qjs
+
   newest:
     # The module builds with the Go go.mod names, which the jobs above test;
     # this one tests what only a newer Go builds as well.
@@ -123,6 +127,10 @@ jobs:
 
       - name: Run tests
         run: go test -count=1 ./...
+
+      # The WebAssembly namespace is built only with the quickjs_wasm tag.
+      - name: Run the WebAssembly namespace's tests
+        run: go test -count=1 -tags quickjs_wasm ./wasm/wasmjs ./cmd/qjs
 
   # Every target builds, plain and with the JIT's tag, whatever builds it
   # natively: an int is 32 bits on 386 and arm, where a constant past it
@@ -302,6 +310,7 @@ jobs:
         run: |
           if [ "${{ matrix.arch }}" = "386" ]; then export GOARCH=386; fi
           WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" WASM_THREADS_DIR="$GITHUB_WORKSPACE/wasm-threads" go test ./wasm/internal/spectest ./wasm/internal/wast -count=1 -v 2>&1 | tee spec.log | grep -E "spec:|scripts parsed|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
+          WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" go test -tags quickjs_wasm ./wasm/wasmjs -count=1
 
       # Every function compiled at its first call, where the wasm JIT runs
       # (amd64 on Linux and Windows, arm64 on macOS and Linux); then every
@@ -315,6 +324,7 @@ jobs:
           WASM_JIT=eager WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" WASM_THREADS_DIR="$GITHUB_WORKSPACE/wasm-threads" go test -tags quickjs_jit ./wasm/internal/spectest ./wasm/internal/engine -count=1 -v 2>&1 | tee jit.log | grep -E "spec:|jit:|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
           WASM_JIT=osr WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" WASM_THREADS_DIR="$GITHUB_WORKSPACE/wasm-threads" go test -tags quickjs_jit ./wasm/internal/spectest ./wasm/internal/engine -count=1 -v 2>&1 | tee osr.log | grep -E "spec:|jit:|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
           WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" WASM_THREADS_DIR="$GITHUB_WORKSPACE/wasm-threads" go test -tags quickjs_jit ./wasm/internal/spectest -run TestJITDifferential -count=1 -v 2>&1 | tee diff.log | grep -E "modules|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
+          WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" go test -tags quickjs_jit,quickjs_wasm ./wasm/wasmjs -count=1
 
   # test262 with the JIT made to compile on the first call, poll Go every
   # few back edges and finish in the interpreter from wherever it got to

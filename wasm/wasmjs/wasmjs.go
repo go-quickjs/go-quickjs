@@ -1,20 +1,5 @@
-// Package wasmjs gives a JavaScript runtime the WebAssembly namespace: the
-// WebAssembly JavaScript interface over the module's own wasm engine.
-//
-// It is opt-in. The JavaScript engine does not import the wasm engine; a host
-// that wants WebAssembly calls Install, which defines the global, built the
-// first time a script reads it:
-//
-//	rt := quickjs.New()
-//	if err := wasmjs.Install(rt); err != nil { ... }
-//	rt.Eval(`new WebAssembly.Module(bytes)`)
-//
-// The namespace follows the WebAssembly JavaScript Interface, its JS Promise
-// Integration and its JS String Builtins, with the error types and messages
-// Node gives. A runtime made WithNodeQuirks validates modules against V8's
-// limits rather than the interface's: a memory64 may declare at most 262,144
-// pages, where the interface allows 2^37 - 1, and a module may declare up to
-// 100,000 memories, where the interface allows 100.
+//go:build quickjs_wasm
+
 package wasmjs
 
 import (
@@ -27,17 +12,6 @@ import (
 	"github.com/go-quickjs/go-quickjs/wasm/internal/decoder"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/engine"
 )
-
-// Option configures Install.
-type Option func(*config)
-
-type config struct {
-	noJSPI bool
-}
-
-// WithoutJSPI leaves out the JS Promise Integration: WebAssembly.Suspending,
-// WebAssembly.promising and WebAssembly.SuspendError.
-func WithoutJSPI() Option { return func(c *config) { c.noJSPI = true } }
 
 // Install defines the global WebAssembly on rt. The namespace is made the
 // first time a script reads the global, so a runtime that never uses it pays
