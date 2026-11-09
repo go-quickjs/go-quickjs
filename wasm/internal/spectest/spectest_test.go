@@ -38,6 +38,14 @@ type runner struct {
 
 	passed, failed int
 	failures       []string
+	// threads are the script's running threads.
+	threads map[string]*thread
+}
+
+// thread is a thread a script started: a runner of its own on a goroutine.
+type thread struct {
+	r    *runner
+	done chan struct{}
 }
 
 func newRunner(t *testing.T, file string) *runner {
@@ -327,8 +335,30 @@ func (r *runner) command(cmd wast.Command) {
 			return
 		}
 		r.pass()
-	case *wast.ThreadCommand, *wast.WaitCommand:
-		// Threads come with the threads proposal's support.
+	case *wast.ThreadCommand:
+		tr := newRunner(r.t, r.file)
+		for _, name := range c.Shared {
+			tr.named[name] = r.named[name]
+		}
+		th := &thread{r: tr, done: make(chan struct{})}
+		if r.threads == nil {
+			r.threads = map[string]*thread{}
+		}
+		r.threads[c.Name] = th
+		go func() {
+			defer close(th.done)
+			tr.run(c.Commands)
+		}()
+	case *wast.WaitCommand:
+		th := r.threads[c.Thread]
+		if th == nil {
+			r.fail(c.Line(), "wait: no thread %q", c.Thread)
+			return
+		}
+		<-th.done
+		r.passed += th.r.passed
+		r.failed += th.r.failed
+		r.failures = append(r.failures, th.r.failures...)
 	default:
 		r.fail(cmd.Line(), "unknown command %T", cmd)
 	}
@@ -367,7 +397,7 @@ func trapMatches(tr *engine.Trap, msg string) bool {
 		"out of bounds array access":    {engine.TrapArrayOutOfBounds},
 		"array size too large":          {engine.TrapArrayTooLarge},
 		"unaligned atomic":              {engine.TrapUnalignedAccess},
-		"expected shared memory":        {engine.TrapUnalignedAccess},
+		"expected shared memory":        {engine.TrapAtomicsWaitNotAllowed},
 		"out of bounds data segment":    {engine.TrapDataSegmentOutOfBounds},
 		"out of bounds elem segment":    {engine.TrapElementSegmentOutOfBounds},
 		"call stack exhausted":          {engine.TrapStackOverflow},

@@ -112,7 +112,7 @@ func (c *compiler) instr() {
 	case opcode.TableGet, opcode.TableSet:
 		c.tableGetSet(op, c.r.u32(), at)
 	default:
-		if c.numeric(op) || c.memory(op, at) || c.prefixed(op, at) || c.refOps(op, at) || c.gcOps(op, at) {
+		if c.numeric(op) || c.memory(op, at) || c.prefixed(op, at) || c.refOps(op, at) || c.gcOps(op, at) || c.atomicOps(op, at) {
 			return
 		}
 		panic("engine: unsupported instruction " + op.Name())

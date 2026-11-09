@@ -24,6 +24,8 @@ const (
 	TrapRethrowNull
 	// TrapStackOverflow is the call stack's exhaustion, a RangeError in JS.
 	TrapStackOverflow
+	// TrapAtomicsWaitNotAllowed is a wait on a memory that is not shared.
+	TrapAtomicsWaitNotAllowed
 )
 
 var trapMessages = [...]string{
@@ -45,6 +47,7 @@ var trapMessages = [...]string{
 	TrapArrayTooLarge:             "requested new array is too large",
 	TrapRethrowNull:               "rethrowing null value",
 	TrapStackOverflow:             "Maximum call stack size exceeded",
+	TrapAtomicsWaitNotAllowed:     "Atomics.wait cannot be called in this context",
 }
 
 // String returns the trap's message.
