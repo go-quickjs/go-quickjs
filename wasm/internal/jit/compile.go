@@ -557,7 +557,7 @@ func (c *compiler) instr() {
 	case opcode.DataDrop, opcode.ElemDrop, opcode.MemoryFill, opcode.TableSize:
 		c.goOp(op, at, uint64(c.r.u32()), 0)
 	default:
-		if c.numeric(op, at) || c.memoryOp(op, at) {
+		if c.numeric(op, at) || c.memoryOp(op, at) || c.atomicOp(op, at) {
 			return
 		}
 		refuse(RefuseOther, "%s", op.Name())
@@ -633,6 +633,10 @@ func (c *compiler) goOp(op opcode.Opcode, at uint32, x, y uint64) {
 		nargs = 3
 	case opcode.TableSize:
 		result = idx(tab64(uint32(x)))
+	case opcode.AtomicNotify:
+		nargs, result = 2, module.KindI32
+	case opcode.I32AtomicWait, opcode.I64AtomicWait:
+		nargs, result = 3, module.KindI32
 	}
 	c.spillAll()
 	base := len(c.stack) - nargs

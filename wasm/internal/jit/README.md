@@ -31,6 +31,7 @@ This package compiles; the engine places, enters and handles exits:
 | `compile_GOARCH.go` | a backend's entries, exits, traps, branches, native calls |
 | `stack_GOARCH.go` | its registers, and the moves between registers, slots and constants |
 | `ops_GOARCH.go` | its numeric and memory instructions |
+| `atomic.go`, `atomic_GOARCH.go` | the atomic instructions: what they are, and a backend's code for them |
 | `engine/jit_on.go` | tiering, placement, entry, the exits' handling |
 
 ## Tiers
@@ -159,7 +160,7 @@ On amd64:
 | R11, X15 | scratch, never cached |
 | R13, R9, R8 | homes of integer locals, else the cache's |
 | X14-X11 | homes of float locals, else the cache's |
-| SI, R8, R9, R13, AX, CX, DX | the cache's general registers, AX, CX and DX last (division and shifts take them) |
+| SI, R8, R9, R13, AX, CX, DX | the cache's general registers, AX, CX and DX last (division and shifts take them, and LOCK CMPXCHG AX) |
 | X0-X14 | the cache's SSE registers |
 | SP, BP, R14 | never written |
 
@@ -247,7 +248,7 @@ is in its slot.
 | `ExitCallIndirect` | finds the function as the interpreter does, its traps included, and calls it |
 | `ExitTailCall`, `ExitTailIndirect` | a tail call made otherwise than natively: see Calls |
 | `ExitPoll` | `pollContext`, the context's cancellation |
-| `ExitOp` | memory.size, memory.grow, memory.init, memory.copy, memory.fill, data.drop, table.size, table.init, table.copy, elem.drop, on the frame's slots |
+| `ExitOp` | memory.size, memory.grow, memory.init, memory.copy, memory.fill, data.drop, table.size, table.init, table.copy, elem.drop, memory.atomic.wait32, memory.atomic.wait64, memory.atomic.notify, on the frame's slots; an atomic instruction's offset is the 64-bit `Arg2` |
 
 A trap's site stores its offset and jumps to the function's stub for the
 trap's code; there is no resumption.
@@ -321,6 +322,32 @@ The access is `[base + address + offset]` on amd64 -- the offset added to
 the address first for an i64 memory, or where it is past 2^31-1 -- and on
 arm64 the offset is added to the address first, in 64 bits, and the access
 is `[base + that]`. The bulk instructions of any memory are exits.
+
+An atomic access checks, after an i64 memory's carry and before the
+bounds, that the effective address is a multiple of its width, and traps
+with `TrapUnalignedAccess` if not, in the interpreter's order. Its
+instructions are the processor's own, at the access's width, sequentially
+consistent:
+
+| | amd64 | arm64 |
+|---|---|---|
+| load | MOV, MOVZX | LDAR, LDARB, LDARH |
+| store | XCHG | STLR, STLRB, STLRH |
+| add, sub | LOCK XADD, of the negated operand for sub | a loop of LDAXR, the operation, STLXR, round again while the exclusive store fails |
+| and, or, xor | a loop of LOCK CMPXCHG from the old value in AX | the same loop |
+| xchg | XCHG | the same loop |
+| cmpxchg | LOCK CMPXCHG, the expected value in AX | the loop, left at the first unequal comparison |
+| atomic.fence | MFENCE | DMB ISH |
+
+A narrower read-modify-write's result is its old value zero-extended,
+whatever the operand's or the expected value's upper bits: amd64 clears
+the register's bits above the width after the instruction, which leaves
+them; arm64's exclusive loads clear them, and an expected value of 8 or 16
+bits is masked before its comparison. On arm64 the exclusive loop holds no
+other access, so that nothing but another thread breaks the pair. The
+address is the memory's base plus the effective address, in a register,
+as those instructions take it. memory.atomic.wait32, wait64 and notify are
+exits (`ExitOp`), which check the address as the interpreter's do.
 
 ## Polls
 
@@ -396,7 +423,7 @@ A function is refused whole when it has:
 | `references` | a reference value anywhere, or ref.null, ref.is_null, ref.func, ref.as_non_null, ref.eq, br_on_null, br_on_non_null, call_ref, return_call_ref, table.get, table.set, table.grow, table.fill |
 | `gc` | any GC instruction |
 | `exceptions` | try_table, throw, throw_ref, and the legacy try, catch, catch_all, delegate, rethrow |
-| `atomics` | any atomic instruction |
+| `atomics` | the struct and array atomic instructions |
 | `asmjs` | V8's asm.js opcodes |
 | `f16` | f32.load_f16, f32.store_f16 |
 | `cpu` | popcnt without POPCNT, rounding without SSE4.1 (amd64) |
@@ -434,13 +461,14 @@ WASM_SPEC_DIR=/path/to/spec WASM_THREADS_DIR=/path/to/threads WASM_JIT=eager \
   go test -tags quickjs_jit ./wasm/internal/spectest -count=1 -run TestSpec -v
 WASM_SPEC_DIR=/path/to/spec WASM_THREADS_DIR=/path/to/threads WASM_JIT=osr \
   go test -tags quickjs_jit ./wasm/internal/spectest -count=1 -run TestSpec -v
-WASM_SPEC_DIR=/path/to/spec go test -tags quickjs_jit ./wasm/internal/spectest -run TestJITDifferential -v
+WASM_SPEC_DIR=/path/to/spec WASM_THREADS_DIR=/path/to/threads go test -tags quickjs_jit ./wasm/internal/spectest -run TestJITDifferential -v
 go test -tags quickjs_jit ./wasm/internal/engine -run 'JIT|OSR'
 (cd internal/jit/verify && go test -run 'TestAMD64|TestARM64' -tags quickjs_jit .)
 ```
 
 `TestJITDifferential` runs every spec module that links with the spectest
-module alone both interpreted and compiled at its first call, calls each
+module alone -- the threads proposal's too, with `WASM_THREADS_DIR` -- both
+interpreted and compiled at its first call, calls each
 numeric export with the scripts' constants, each type's edges and random
 values, and compares the results (any NaN for a NaN), the traps, and the
 memories and globals after every call; then again with every call of a

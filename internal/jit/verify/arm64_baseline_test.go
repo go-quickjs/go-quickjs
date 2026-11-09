@@ -221,3 +221,26 @@ func TestARM64WasmFloat(t *testing.T) {
 	expectA64(t, "cnt v3.8b, v4.8b", func(a *arm64.Asm) { a.Cnt8B(3, 4) })
 	expectA64(t, "addv b3, v4.8b", func(a *arm64.Asm) { a.Addv8B(3, 4) })
 }
+
+// The exclusive and ordered loads and stores at each width, and the
+// barrier.
+func TestARM64WasmAtomics(t *testing.T) {
+	suffix := map[uint8]string{1: "b", 2: "h", 4: "", 8: ""}
+	reg := func(r arm64.Reg, size uint8) string {
+		if size == 8 {
+			return fmt.Sprintf("x%d", r)
+		}
+		return fmt.Sprintf("w%d", r)
+	}
+	for _, size := range []uint8{1, 2, 4, 8} {
+		for _, rs := range [][3]arm64.Reg{{3, 4, 5}, {16, 17, 1}, {26, 20, 15}, {0, 30, 7}} {
+			t1, n, s := rs[0], rs[1], rs[2]
+			sx := suffix[size]
+			expectA64(t, fmt.Sprintf("ldaxr%s %s, [x%d]", sx, reg(t1, size), n), func(a *arm64.Asm) { a.Ldaxr(t1, n, size) })
+			expectA64(t, fmt.Sprintf("stlxr%s w%d, %s, [x%d]", sx, s, reg(t1, size), n), func(a *arm64.Asm) { a.Stlxr(s, t1, n, size) })
+			expectA64(t, fmt.Sprintf("ldar%s %s, [x%d]", sx, reg(t1, size), n), func(a *arm64.Asm) { a.Ldar(t1, n, size) })
+			expectA64(t, fmt.Sprintf("stlr%s %s, [x%d]", sx, reg(t1, size), n), func(a *arm64.Asm) { a.Stlr(t1, n, size) })
+		}
+	}
+	expectA64(t, "dmb ish", func(a *arm64.Asm) { a.DmbIsh() })
+}

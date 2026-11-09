@@ -701,7 +701,7 @@ func (c *compiler) memoryOp(op opcode.Opcode, at uint32) bool {
 	default:
 		size, t = 4, i64
 	}
-	base, idx := c.address(c.pop(), mem, off, size, at)
+	base, idx := c.address(c.pop(), mem, off, size, at, false)
 	a := c.a
 	if isFloat(t) {
 		x := c.allocX(0)
@@ -758,7 +758,7 @@ func (c *compiler) storeOp(op opcode.Opcode, mem uint32, off uint64, at uint32) 
 	}
 	// The address first: its check takes the scratch registers, which the
 	// value may then be read into.
-	base, idx := c.address(addr, mem, off, size, at)
+	base, idx := c.address(addr, mem, off, size, at, false)
 	if isFloat(v.t) {
 		x := c.readX(v)
 		if v.t == f32 {
@@ -802,25 +802,34 @@ func (c *compiler) freeBase(base arm64.Reg) {
 //
 // An i32 address is zero-extended and the offset added in 64 bits, which
 // nothing wraps. An i64 memory's address plus the offset may: it traps
-// where it carries, as the sum plus the size does.
-func (c *compiler) address(addr value, mem uint32, off, size uint64, at uint32) (base, idx arm64.Reg) {
+// where it carries, as the sum plus the size does. An atomic access
+// (align) traps, after that carry, if the effective address is not a
+// multiple of size.
+func (c *compiler) address(addr value, mem uint32, off, size uint64, at uint32, align bool) (base, idx arm64.Reg) {
 	a := c.a
 	trap := c.trap(TrapMemOutOfBounds, at)
 	is64 := c.m.Memories[mem].Limits.Is64
+	align = align && size > 1
 	var r arm64.Reg
 	switch {
-	case addr.k == kConst && is64:
-		ea, carry := bits.Add64(addr.c, off, 0)
+	case addr.k == kConst:
+		ea, carry := uint64(uint32(addr.c))+off, uint64(0)
+		if is64 {
+			ea, carry = bits.Add64(addr.c, off, 0)
+		}
 		_, carry2 := bits.Add64(ea, size, 0)
-		if carry|carry2 != 0 {
-			// Never in bounds: the bounds check below is never reached.
+		switch {
+		case carry != 0:
+			a.B(trap)
+		case align && ea&(size-1) != 0:
+			a.B(c.trap(TrapUnalignedAccess, at))
+		case carry2 != 0:
 			a.B(trap)
 		}
+		// Past a branch to a trap, nothing below is reached.
 		r = c.allocG(0)
 		a.MovImm(r, ea)
-	case addr.k == kConst:
-		r = c.allocG(0)
-		a.MovImm(r, uint64(uint32(addr.c))+off)
+		align = false
 	case is64:
 		r = c.intoG(addr, 0)
 		if off != 0 {
@@ -833,6 +842,10 @@ func (c *compiler) address(addr value, mem uint32, off, size uint64, at uint32) 
 		if off != 0 {
 			a.AddImm(r, r, int64(off), true)
 		}
+	}
+	if align {
+		a.LogicImm(arm64.Ands, arm64.ZR, r, size-1, true)
+		a.BCond(arm64.NE, c.trap(TrapUnalignedAccess, at))
 	}
 	if is64 {
 		a.AddsImm(rTmp, r, int64(size), true)

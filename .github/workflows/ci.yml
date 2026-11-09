@@ -314,7 +314,7 @@ jobs:
         run: |
           WASM_JIT=eager WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" WASM_THREADS_DIR="$GITHUB_WORKSPACE/wasm-threads" go test -tags quickjs_jit ./wasm/internal/spectest ./wasm/internal/engine -count=1 -v 2>&1 | tee jit.log | grep -E "spec:|jit:|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
           WASM_JIT=osr WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" WASM_THREADS_DIR="$GITHUB_WORKSPACE/wasm-threads" go test -tags quickjs_jit ./wasm/internal/spectest ./wasm/internal/engine -count=1 -v 2>&1 | tee osr.log | grep -E "spec:|jit:|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
-          WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" go test -tags quickjs_jit ./wasm/internal/spectest -run TestJITDifferential -count=1 -v 2>&1 | tee diff.log | grep -E "modules|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
+          WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" WASM_THREADS_DIR="$GITHUB_WORKSPACE/wasm-threads" go test -tags quickjs_jit ./wasm/internal/spectest -run TestJITDifferential -count=1 -v 2>&1 | tee diff.log | grep -E "modules|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
 
   # test262 with the JIT made to compile on the first call, poll Go every
   # few back edges and finish in the interpreter from wherever it got to

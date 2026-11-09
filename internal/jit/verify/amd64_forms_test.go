@@ -207,3 +207,56 @@ func TestAMD64JmpLong(t *testing.T) {
 		}
 	}
 }
+
+// The atomic read-modify-writes at a base plus an index, at each width, with
+// every register, and the fence.
+func TestAMD64WasmAtomics(t *testing.T) {
+	sized := func(r amd64.Reg, size uint8) x86asm.Reg {
+		switch size {
+		case 1:
+			return r8(r)
+		case 2:
+			return r16(r)
+		case 4:
+			return r32(r)
+		}
+		return r64(r)
+	}
+	type form struct {
+		name string
+		op   x86asm.Op
+		lock bool
+		emit func(a *amd64.Asm, b, x amd64.Reg, disp int32, r amd64.Reg, size uint8)
+	}
+	forms := []form{
+		{"XchgIdx", x86asm.XCHG, false, (*amd64.Asm).XchgIdx},
+		{"LockXaddIdx", x86asm.XADD, true, (*amd64.Asm).LockXaddIdx},
+		{"LockCmpxchgIdx", x86asm.CMPXCHG, true, (*amd64.Asm).LockCmpxchgIdx},
+	}
+	for _, f := range forms {
+		for _, size := range []uint8{1, 2, 4, 8} {
+			for _, r := range regs {
+				for _, b := range regs {
+					for _, x := range indexes {
+						for _, disp := range []int32{0, -8, 0x7fffffff} {
+							name := fmt.Sprintf("%s/%d r%d,[r%d+r%d+%d]", f.name, size, r, b, x, disp)
+							code := encode(func(a *amd64.Asm) { f.emit(a, b, x, disp, r, size) })
+							expectX(t, name, code, f.op, int(size), memx{r64(b), r64(x), 0, int64(disp)}, sized(r, size))
+							inst := decodeOne(t, name, code)
+							locked := false
+							for _, p := range inst.Prefix {
+								if p&0xFF == x86asm.PrefixLOCK&0xFF {
+									locked = true
+								}
+							}
+							if locked != f.lock {
+								t.Fatalf("%s: % x is %v, LOCK %v, want %v", name, code, inst, locked, f.lock)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	expect(t, "Mfence", encode(func(a *amd64.Asm) { a.Mfence() }), x86asm.MFENCE)
+}

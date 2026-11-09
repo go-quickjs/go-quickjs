@@ -442,8 +442,11 @@ Native code computes what the interpreter does, bit for bit where the
 specification fixes the bits: NaN quieting, the minimum and maximum of zeros,
 trapping and saturating truncations, one rounding for unsigned 64-bit
 conversions. Calls between native functions of an instance are native;
-calls of imports, of host functions and through tables, and the bulk memory
-and table instructions, return to Go and resume.
+calls of imports, of host functions and through tables, the bulk memory
+and table instructions, and `memory.atomic.wait` and `notify` return to Go
+and resume. Loads and stores of every memory, i64 ones included, and the
+atomic loads, stores and read-modify-writes are native; an atomic
+read-modify-write is the processor's own locked or exclusive instruction.
 
 A function is refused whole, and stays in the interpreter, when it has:
 
@@ -453,13 +456,13 @@ A function is refused whole, and stays in the interpreter, when it has:
 | `references` | a reference value, or any reference or table-element instruction |
 | `gc` | any GC instruction |
 | `exceptions` | `try_table`, `throw`, `throw_ref`, or the legacy `try` and its clauses |
-| `atomics` | any atomic instruction |
+| `atomics` | the struct and array atomic instructions |
 | `cpu` | on amd64, `popcnt` without POPCNT, rounding without SSE4.1 |
 | `frame`, `size` | an operand stack deeper than the interpreter's frame, or code past the JIT's size limit |
 
-With every function compiled at its first call, the spec suite compiles 4,764
-functions and refuses 2,078: 1,499 for SIMD, 361 for references, 89 for
-exceptions, 80 for atomics and 49 for GC.
+With every function compiled at its first call, the spec suite compiles 4,844
+functions and refuses 1,998: 1,499 for SIMD, 361 for references, 89 for
+exceptions and 49 for GC.
 
 On `BenchmarkFib25` and `BenchmarkLoop1M` (`wasm/internal/engine`), the
 interpreter takes 7.2 ms and 9.7 ms and native code 0.40 ms and 0.355 ms on
@@ -558,12 +561,13 @@ WASI_TESTSUITE_DIR=/tmp/wasi-testsuite/tests go test ./wasm/wasi -run TestWASITe
 
 `TestSpec` logs `spec: N of M assertions passed`, and under `WASM_JIT` how
 many functions were compiled and refused, by reason. `TestJITDifferential`
-runs each spec module that links with the spectest module alone twice,
-interpreted and with every function compiled at its first call, calls every
-export whose signature is numbers with the scripts' constants, each type's
-edges and random values, and compares the results, the traps, and every
-memory and global after each call: 2,089 modules, 4,891 functions and 58,568
-calls on amd64, with no difference.
+runs each spec module that links with the spectest module alone -- and each
+threads module, with `WASM_THREADS_DIR` -- twice, interpreted and with every
+function compiled at its first call, calls every export whose signature is
+numbers with the scripts' constants, each type's edges and random values, and
+compares the results, the traps, and every memory and global after each
+call: 2,106 modules, 4,963 functions and 59,421 calls on amd64, with no
+difference.
 
 ## Benchmarks
 
@@ -726,6 +730,6 @@ WASI:
   phase (`import source m from "./m.wasm"`).
 - `postMessage` and structured clone of a `Module`, and of a shared
   `Memory`, between workers.
-- Native code for what the JIT refuses -- references, SIMD, GC, exceptions
-  and atomics -- and an optimizing tier above the baseline one.
+- Native code for what the JIT refuses -- references, SIMD, GC and
+  exceptions -- and an optimizing tier above the baseline one.
 - `wasmbench`'s `jit` engine on arm64: the harness builds it on amd64 only.

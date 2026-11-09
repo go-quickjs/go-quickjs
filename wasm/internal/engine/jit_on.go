@@ -499,7 +499,7 @@ func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64,
 			frame, top := x.jitFrame(lv)
 			x.jitSync(lv, uint32(ctx.Arg4))
 			x.nc, x.nsp = lv.nc, top
-			x.jitOp(inst, opcode.Opcode(ctx.Arg0), uint32(ctx.Arg1), uint32(ctx.Arg2), frame, int(ctx.Arg3))
+			x.jitOp(inst, opcode.Opcode(ctx.Arg0), uint32(ctx.Arg1), ctx.Arg2, frame, int(ctx.Arg3))
 			x.jitUnsync(lv)
 		default:
 			panic(fmt.Sprintf("wasm jit: exit %d", ctx.Exit))
@@ -653,10 +653,12 @@ func indirectTarget(inst *Instance, typeIndex, table uint32, i uint64) *Function
 	return indirectCallee(inst, typeIndex, table, i, indirectChecksType(inst.Module, typeIndex, table))
 }
 
-// jitOp runs instruction op for native code, with immediates x and y, its
+// jitOp runs instruction op for native code, with immediates a and imm, its
 // operands in the frame's slots from slot, two apart, its result left in
-// the first.
-func (x *exec) jitOp(inst *Instance, op opcode.Opcode, a, b uint32, frame []uint64, slot int) {
+// the first. imm is an atomic instruction's offset, 64 bits; any other
+// instruction's second immediate is 32.
+func (x *exec) jitOp(inst *Instance, op opcode.Opcode, a uint32, imm uint64, frame []uint64, slot int) {
+	b := uint32(imm)
 	m := inst.Module
 	arg := func(i int, is64 bool) uint64 {
 		if is64 {
@@ -722,7 +724,37 @@ func (x *exec) jitOp(inst *Instance, op opcode.Opcode, a, b uint32, frame []uint
 		copy(de[dst:dst+cnt], se[src:src+cnt])
 	case opcode.TableSize:
 		put(inst.Tables[a].Size(), tab64(a))
+	case opcode.AtomicNotify:
+		// a is the memory, imm the offset.
+		mm := inst.Memories[a]
+		ea := atomicEA(arg(0, mem64(a)), imm, mem64(a))
+		cnt := uint32(frame[slot+2])
+		atomicSpan(mm, ea, 4)
+		put(uint64(notify(mm, ea, cnt)), false)
+	case opcode.I32AtomicWait, opcode.I64AtomicWait:
+		width, want := uint64(4), uint64(uint32(frame[slot+2]))
+		if op == opcode.I64AtomicWait {
+			width, want = 8, frame[slot+2]
+		}
+		mm := inst.Memories[a]
+		ea := atomicEA(arg(0, mem64(a)), imm, mem64(a))
+		timeout := int64(frame[slot+4])
+		if !mm.Shared {
+			trap(TrapAtomicsWaitNotAllowed)
+		}
+		put(uint64(wait(x, mm, atomicSpan(mm, ea, width), ea, width, want, timeout)), false)
 	default:
 		panic("wasm jit: no Go operation " + op.Name())
 	}
+}
+
+// atomicEA is the effective address of an access at addr plus offset off:
+// an i64 memory's traps where the sum carries, as the interpreter's addr
+// does.
+func atomicEA(addr, off uint64, is64 bool) uint64 {
+	ea := addr + off
+	if is64 && ea < addr {
+		trap(TrapMemOutOfBounds)
+	}
+	return ea
 }

@@ -2,8 +2,9 @@ package amd64
 
 // The forms below are those WebAssembly's baseline code needs beyond the
 // JavaScript JIT's: 32-bit division, bit counts, conditional moves, sign
-// extensions of registers, rotations, single-precision SSE, and loads and
-// stores at a base plus a scaled index plus a displacement.
+// extensions of registers, rotations, single-precision SSE, loads and
+// stores at a base plus a scaled index plus a displacement, and the atomic
+// read-modify-writes and the fence of the threads proposal.
 
 // Rotations, in the shift forms' ModRM extension (ShiftCL, ShiftImm).
 const (
@@ -307,3 +308,53 @@ func (a *Asm) StoreSSIdx(base, index Reg, disp int32, src XReg) {
 	a.emit2(0x0F, 0x11)
 	a.modrmSIB(byte(src), base, index, 0, disp)
 }
+
+// ---------------------------------------------------------------- atomics
+
+// atomicIdx emits a read-modify-write of the size bytes (1, 2, 4 or 8) at
+// [base + index + disp] with register r: op8 is the byte form's opcode, op
+// the others', after 0F if twoByte, and the LOCK prefix first if lock.
+func (a *Asm) atomicIdx(lock, twoByte bool, op8, op byte, size uint8, base, index Reg, disp int32, r Reg) {
+	if lock {
+		a.emit(0xF0)
+	}
+	if size == 2 {
+		a.emit(0x66)
+	}
+	a.rexSIB(size == 8, byte(r), byte(index), byte(base), size == 1 && r >= 4)
+	if twoByte {
+		a.emit(0x0F)
+	}
+	if size == 1 {
+		a.emit(op8)
+	} else {
+		a.emit(op)
+	}
+	a.modrmSIB(byte(r), base, index, 0, disp)
+}
+
+// XchgIdx exchanges r's low size bytes (1, 2, 4 or 8) with those at
+// [base + index + disp], atomically (XCHG, which locks without a prefix):
+// a sequentially consistent store, and the load of the old value. A 4-byte
+// exchange clears r's upper half; a narrower one leaves r's other bits.
+func (a *Asm) XchgIdx(base, index Reg, disp int32, r Reg, size uint8) {
+	a.atomicIdx(false, false, 0x86, 0x87, size, base, index, disp, r)
+}
+
+// LockXaddIdx adds r's low size bytes to those at [base + index + disp]
+// atomically (LOCK XADD), leaving the old value in them, as XchgIdx does.
+func (a *Asm) LockXaddIdx(base, index Reg, disp int32, r Reg, size uint8) {
+	a.atomicIdx(true, true, 0xC0, 0xC1, size, base, index, disp, r)
+}
+
+// LockCmpxchgIdx compares the size bytes at [base + index + disp] with
+// AX's and, if they are equal, stores r's there and sets ZF, else loads
+// them into AX's and clears ZF, atomically (LOCK CMPXCHG). A 4-byte load
+// clears AX's upper half; a narrower one leaves AX's other bits.
+func (a *Asm) LockCmpxchgIdx(base, index Reg, disp int32, r Reg, size uint8) {
+	a.atomicIdx(true, true, 0xB0, 0xB1, size, base, index, disp, r)
+}
+
+// Mfence orders every load and store before it before every one after it
+// (MFENCE).
+func (a *Asm) Mfence() { a.emit3(0x0F, 0xAE, 0xF0) }

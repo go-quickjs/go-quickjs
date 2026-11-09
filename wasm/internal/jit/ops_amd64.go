@@ -842,7 +842,7 @@ func (c *compiler) memoryOp(op opcode.Opcode, at uint32) bool {
 	default:
 		size, t = 4, i64
 	}
-	base, idx, disp := c.address(c.pop(), mem, off, size, at, 0)
+	base, idx, disp := c.address(c.pop(), mem, off, size, at, 0, false)
 	a := c.a
 	if isFloat(t) {
 		x := c.allocX(0)
@@ -899,7 +899,7 @@ func (c *compiler) storeOp(op opcode.Opcode, mem uint32, off uint64, at uint32) 
 	}
 	if isFloat(v.t) {
 		x := c.intoX(v)
-		base, idx, disp := c.address(addr, mem, off, size, at, 0)
+		base, idx, disp := c.address(addr, mem, off, size, at, 0, false)
 		if v.t == f32 {
 			a.StoreSSIdx(base, idx, disp, x)
 		} else {
@@ -911,7 +911,7 @@ func (c *compiler) storeOp(op opcode.Opcode, mem uint32, off uint64, at uint32) 
 		return
 	}
 	rv := c.intoG(v, 0)
-	base, idx, disp := c.address(addr, mem, off, size, at, 1<<rv)
+	base, idx, disp := c.address(addr, mem, off, size, at, 1<<rv, false)
 	switch size {
 	case 1:
 		a.Store8Idx(base, idx, disp, rv)
@@ -939,19 +939,24 @@ func (c *compiler) freeBase(base amd64.Reg) {
 // against memory mem's size, trapping past it, and returns the register
 // holding the memory's base, and a register of the instruction's own (not
 // in avoid) and a displacement whose sum is the effective address, to add
-// to the base. The base is R15 for memory 0.
+// to the base. The base is R15 for memory 0. An atomic access (align)
+// traps first if the effective address is not a multiple of size.
 //
 // An i32 address is zero-extended, and the sum, computed in 64 bits, does
 // not wrap. An i64 memory's address plus the offset may: it traps where it
 // carries, as the sum plus the size does.
-func (c *compiler) address(addr value, mem uint32, off, size uint64, at uint32, avoid uint16) (base, idx amd64.Reg, disp int32) {
+func (c *compiler) address(addr value, mem uint32, off, size uint64, at uint32, avoid uint16, align bool) (base, idx amd64.Reg, disp int32) {
 	a := c.a
 	trap := c.trap(TrapMemOutOfBounds, at)
+	align = align && size > 1
 	if c.m.Memories[mem].Limits.Is64 {
-		return c.address64(addr, mem, off, size, trap, avoid)
+		return c.address64(addr, mem, off, size, at, trap, avoid, align)
 	}
 	if addr.k == kConst {
 		ea := uint64(uint32(addr.c)) + off
+		if align && ea&(size-1) != 0 {
+			a.Jmp(c.trap(TrapUnalignedAccess, at))
+		}
 		a.MovImm(rTmp, ea+size)
 		base = c.boundsCheck(mem, trap, avoid)
 		r := c.allocG(avoid | 1<<base)
@@ -959,6 +964,13 @@ func (c *compiler) address(addr value, mem uint32, off, size uint64, at uint32, 
 		return base, r, 0
 	}
 	r := c.intoG(addr, avoid)
+	if align {
+		// The effective address's low bits are the address's plus the
+		// offset's.
+		a.Lea(rTmp, r, int32(off&(size-1)))
+		a.OpImm(amd64.And, rTmp, int32(size-1), false)
+		a.Jcc(amd64.CondNE, c.trap(TrapUnalignedAccess, at))
+	}
 	if end := off + size; end <= math.MaxInt32 {
 		a.Lea(rTmp, r, int32(end))
 	} else {
@@ -977,15 +989,20 @@ func (c *compiler) address(addr value, mem uint32, off, size uint64, at uint32, 
 // address64 is address for an i64 memory: the address plus the offset is
 // the effective address, and it and its sum with the size trap where they
 // carry out of 64 bits.
-func (c *compiler) address64(addr value, mem uint32, off, size uint64, trap amd64.Label, avoid uint16) (base, idx amd64.Reg, disp int32) {
+func (c *compiler) address64(addr value, mem uint32, off, size uint64, at uint32, trap amd64.Label, avoid uint16, align bool) (base, idx amd64.Reg, disp int32) {
 	a := c.a
 	if addr.k == kConst {
 		ea, carry := bits.Add64(addr.c, off, 0)
 		end, carry2 := bits.Add64(ea, size, 0)
-		if carry|carry2 != 0 {
-			// Never in bounds: the bounds check below is never reached.
+		switch {
+		case carry != 0:
+			a.Jmp(trap)
+		case align && ea&(size-1) != 0:
+			a.Jmp(c.trap(TrapUnalignedAccess, at))
+		case carry2 != 0:
 			a.Jmp(trap)
 		}
+		// Past a jump to a trap, nothing below is reached.
 		a.MovImm(rTmp, end)
 		base = c.boundsCheck(mem, trap, avoid)
 		r := c.allocG(avoid | 1<<base)
@@ -1001,6 +1018,11 @@ func (c *compiler) address64(addr value, mem uint32, off, size uint64, trap amd6
 			a.Op(amd64.Add, r, rTmp, true)
 		}
 		a.Jcc(amd64.CondB, trap)
+	}
+	if align {
+		a.MovRR(rTmp, r)
+		a.OpImm(amd64.And, rTmp, int32(size-1), false)
+		a.Jcc(amd64.CondNE, c.trap(TrapUnalignedAccess, at))
 	}
 	a.MovRR(rTmp, r)
 	a.OpImm(amd64.Add, rTmp, int32(size), true)

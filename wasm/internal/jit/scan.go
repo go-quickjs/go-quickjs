@@ -101,7 +101,9 @@ func scan(m *module.Module, fn uint32, feat Features) (locals []module.ValueType
 		case opcode.PrefixSIMD:
 			refuse(RefuseSIMD, "%s", op.Name())
 		case opcode.PrefixAtomic:
-			refuse(RefuseAtomics, "%s", op.Name())
+			if op >= opcode.StructAtomicGet {
+				refuse(RefuseAtomics, "%s", op.Name())
+			}
 		case opcode.PrefixGC:
 			refuse(RefuseGC, "%s", op.Name())
 		case opcode.PrefixAsmJS:

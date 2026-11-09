@@ -4,8 +4,9 @@ package arm64
 // (wasm/internal/jit) needs beyond the JavaScript JIT's: logical
 // immediates, rotations, bit counts, conditional selects, 32-bit division,
 // sign extensions of bytes and half-words, loads and stores at a base plus
-// an index register, and single-precision arithmetic, comparisons,
-// roundings and conversions.
+// an index register, single-precision arithmetic, comparisons, roundings
+// and conversions, and the exclusive and ordered loads and stores and the
+// barrier the threads proposal's atomics are made of.
 
 // ---------------------------------------------------------------- logical immediates
 
@@ -229,3 +230,49 @@ func (a *Asm) Cnt8B(dst, n FReg) { a.emit(0x0E205800 | uint32(n)<<5 | uint32(dst
 // Addv8B is dst's low byte = the sum of n's low eight bytes (ADDV Bd,
 // Vn.8B), the rest of dst cleared.
 func (a *Asm) Addv8B(dst, n FReg) { a.emit(0x0E31B800 | uint32(n)<<5 | uint32(dst)) }
+
+// ---------------------------------------------------------------- atomics
+
+// sizeField is the size field, bits 31 and 30, of a load or store of size
+// bytes: 1, 2, 4 or 8.
+func sizeField(size uint8) uint32 {
+	switch size {
+	case 1:
+		return 0
+	case 2:
+		return 1 << 30
+	case 4:
+		return 2 << 30
+	}
+	return 3 << 30
+}
+
+// Ldaxr is dst = [base], size bytes (1, 2, 4 or 8) zero-extended, a
+// load-acquire that opens an exclusive access (LDAXRB, LDAXRH, LDAXR).
+func (a *Asm) Ldaxr(dst, base Reg, size uint8) {
+	a.emit(0x085FFC00 | sizeField(size) | uint32(base)<<5 | uint32(dst))
+}
+
+// Stlxr is [base] = src's low size bytes, a store-release that succeeds
+// only if the exclusive access Ldaxr opened is unbroken; status is 0 if it
+// stored, 1 if not (STLXRB, STLXRH, STLXR). status must differ from src
+// and base.
+func (a *Asm) Stlxr(status, src, base Reg, size uint8) {
+	a.emit(0x0800FC00 | sizeField(size) | uint32(status)<<16 | uint32(base)<<5 | uint32(src))
+}
+
+// Ldar is dst = [base], size bytes zero-extended, a load-acquire (LDARB,
+// LDARH, LDAR).
+func (a *Asm) Ldar(dst, base Reg, size uint8) {
+	a.emit(0x08DFFC00 | sizeField(size) | uint32(base)<<5 | uint32(dst))
+}
+
+// Stlr is [base] = src's low size bytes, a store-release (STLRB, STLRH,
+// STLR).
+func (a *Asm) Stlr(src, base Reg, size uint8) {
+	a.emit(0x089FFC00 | sizeField(size) | uint32(base)<<5 | uint32(src))
+}
+
+// DmbIsh orders every load and store before it before every one after it,
+// in the inner shareable domain (DMB ISH).
+func (a *Asm) DmbIsh() { a.emit(0xD5033BBF) }

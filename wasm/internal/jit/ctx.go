@@ -100,6 +100,7 @@ const (
 const (
 	TrapUnreachable          = 1
 	TrapMemOutOfBounds       = 2
+	TrapUnalignedAccess      = 3
 	TrapDivByZero            = 4
 	TrapDivUnrepresentable   = 5
 	TrapRemByZero            = 6

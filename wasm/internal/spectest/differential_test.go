@@ -18,7 +18,8 @@ import (
 	"github.com/go-quickjs/go-quickjs/wasm/internal/wast"
 )
 
-// TestJITDifferential runs every module of the spec scripts that links with
+// TestJITDifferential runs every module of the spec scripts -- and of the
+// threads proposal's, where WASM_THREADS_DIR names them -- that links with
 // the spectest module alone twice -- interpreted, and with every function
 // compiled natively at its first call -- and calls each exported function
 // whose signature is numbers with the same arguments on both, the values
@@ -46,6 +47,9 @@ func TestJITDifferential(t *testing.T) {
 	var files []string
 	files = append(files, scripts(t, filepath.Join(dir, "test", "core"))...)
 	files = append(files, scripts(t, filepath.Join(dir, "test", "legacy"))...)
+	if td := os.Getenv("WASM_THREADS_DIR"); td != "" {
+		files = append(files, scripts(t, filepath.Join(td, "test", "core", "threads"))...)
+	}
 	for _, osr := range []bool{false, true} {
 		name := "entry"
 		if osr {
