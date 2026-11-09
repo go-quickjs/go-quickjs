@@ -4,15 +4,16 @@ This file applies to the entire repository.
 
 ## Project overview
 
-`go-quickjs` is a pure-Go JavaScript engine. It began as a reimplementation
-of QuickJS-NG and keeps its name, its `qjs` command and its embedding model,
-but its execution is its own design: register code, run by an interpreter
-whose handlers are native code generated for each architecture
-(docs/register-interpreter.md), and a JIT modeled on V8's. The stack
-bytecode interpreter it started with, after QuickJS's, remains only until
-the other architectures and the JIT have moved over. Keep the engine
-portable: production code must not require cgo, WebAssembly, a C compiler,
-or platform-specific runtime dependencies.
+`go-quickjs` is a pure-Go JavaScript engine, with a pure-Go WebAssembly
+engine beside it. It began as a reimplementation of QuickJS-NG and keeps
+its name, its `qjs` command and its embedding model, but its execution is
+its own design: register code, run by an interpreter whose handlers are
+native code generated for each architecture (docs/register-interpreter.md),
+and a JIT modeled on V8's. The stack bytecode interpreter it started with,
+after QuickJS's, remains only until the other architectures and the JIT
+have moved over. Keep the engines portable: production code must not
+require cgo, a C engine compiled to WebAssembly, a C compiler, or
+platform-specific runtime dependencies.
 
 The main areas are:
 
@@ -41,6 +42,8 @@ The main areas are:
 - `stdlib`: opt-in host functionality.
 - `cmd/qjs`: the command-line host.
 - `conformance`: the test262 runner. The test262 checkout is external.
+- `wasm`: the WebAssembly engine, its Go API, WASI and the `WebAssembly`
+  namespace; see [WebAssembly](#webassembly).
 
 The module targets Go 1.24. A `Runtime` is not safe for concurrent use; callers
 give each goroutine its own runtime. Process-wide immutable data and caches,
@@ -264,6 +267,27 @@ Do not manually edit generated files or their binary companions:
   `go generate ./internal/vm` runs it last, after the generators above,
   since it measures what they write; `TestLayoutLock` fails while an anchor
   is off its target.
+- `wasm/internal/engine/ops_num_gen.go`, the wasm interpreter's numeric
+  operators, a node for each pairing of a tree, a slot and a constant, and
+  the loads and stores of memory 0 at an i32 address (`memFast`), written by
+  `wasm/internal/engine/internal/numgen`; and
+  `wasm/internal/engine/ops_simd_gen.go`, the SIMD operators without
+  immediates, written by `internal/simdgen` beside it. After changing either
+  generator, run `go generate ./wasm/internal/engine`; `TestNumericGenerated`
+  and `TestSIMDGenerated` (skipped under `-short`) fail while a file is out
+  of date.
+- `wasm/internal/opcode/tables.go`, every opcode's constant, name and
+  signature, written by `wasm/internal/opcode/internal/opgen` from the
+  opcode lists of V8's `src/wasm/wasm-opcodes.h` (see
+  [WebAssembly](#webassembly) for the checkout). No test regenerates it,
+  since it needs that file; regenerate it when the V8 that Node ships
+  changes:
+
+  ```sh
+  generated=$(mktemp /tmp/wasm-opcodes.XXXXXX.go)
+  go run ./wasm/internal/opcode/internal/opgen /path/to/v8/src/wasm/wasm-opcodes.h > "$generated" && \
+    mv "$generated" wasm/internal/opcode/tables.go
+  ```
 
 go-intl's data is generated in go-intl, and changes there; a new go-intl is
 taken with `go get` and `go mod tidy`, never by copying its files here.
@@ -308,6 +332,140 @@ go run ./internal/regexp/internal/unicodegen /path/to/test262
 - When Test262 disagrees with current Node and Chrome, retain a focused
   regression test documenting the observed engine behavior rather than
   silently changing the result to satisfy one stale expectation.
+
+## WebAssembly
+
+[docs/wasm.md](docs/wasm.md) describes the engine for its users;
+[wasm/internal/jit/README.md](wasm/internal/jit/README.md) is its JIT's
+design, which a change to that design updates in the same commit.
+
+- The packages: `wasm` (the runtime, shaped like wazero's root package),
+  `wasm/api`, `wasm/sys`, `wasm/wasi` (WASI preview 1), `wasm/wat` (the text
+  format), `wasm/wasmjs` (the `WebAssembly` namespace), and under
+  `wasm/internal` the decoder and validator (`decoder`), the module model
+  (`module`), the opcodes (`opcode`), the interpreter, memories and
+  instantiation (`engine`), the baseline JIT (`jit`), the text and script
+  parsers (`text`, `wast`), the spec runner (`spectest`), and what a module
+  is given of the system (`sysctx`, `sysfs`).
+- WebAssembly is opt-in. The root package, `internal/vm` and `stdlib` never
+  import a `wasm` package; `wasm/wasmjs` binds the two engines from outside,
+  and `cmd/qjs` is the only host that installs it. `TestEnginesApart`
+  (wasm/wasmjs) fails when the root package or `stdlib` depends on one.
+  What the bridge needs of the VM is a host hook, a package variable
+  assigned in the `init` of `internal/vm/zzzz_host.go`, the last file, so
+  that no function moves (see the layout rules above); `HostJITEnabled` is
+  set in `zzzz_host_jit.go`, built with the JIT. wazero is a benchmark
+  baseline only, in a module of its own: `TestNoWazeroDependency` fails if
+  it reaches `go.mod` or `go.sum`.
+- What a module is told is V8's, word for word: the decoder's and the
+  validator's errors, in V8's order of checks and at its offsets, the link
+  errors, the trap messages, and the namespace's errors with their
+  prefixes -- V8 14.6's, the V8 Node 26 ships (`node -p
+  process.versions.v8`). Port a message or a check from that V8's source
+  rather than from memory or another engine, and confirm it with the Node
+  comparisons below. A sparse checkout of the parts the engine follows is
+  32 MB:
+
+  ```sh
+  git clone --depth 1 --branch 14.6.202.34 --filter=blob:none --sparse \
+    https://chromium.googlesource.com/v8/v8.git /tmp/v8
+  git -C /tmp/v8 sparse-checkout set src/common src/wasm test/mjsunit/wasm
+  ```
+
+  `src/wasm/module-decoder-impl.h` and `function-body-decoder-impl.h` are
+  the decoder's, `src/common/message-template.h` the traps' and
+  `src/wasm/wasm-js.cc` the namespace's. A limit Node's V8 has and the
+  interface does not is `V8Limits` against `JSAPILimits`, chosen by
+  `WithNodeQuirks`, with both answers tested and a line in that option's
+  documentation, as for the language.
+- Code comments say what the code does and why, in its own terms, not by
+  comparison with V8 or another engine ("as V8 does"). That V8 is the
+  reference belongs in the tests that compare with Node and in
+  docs/wasm.md; a test may name a known difference from Node with why. The
+  decoder's BSD attribution, which V8's license requires, stays.
+- The JIT's frames are the interpreter's (`engine/compile.go`): local k is
+  slot k, stack position h slot `nlocals + 2h`, the results from slot 0, and
+  an i32 or f32 in a slot has its upper half clear. A call crosses between
+  the tiers in either direction and a native function resumes after any
+  exit, so a change to the interpreter's frames, its call path or its poll
+  is a change to the JIT's too. Native code computes the interpreter's
+  results bit for bit where the specification fixes them, on each
+  architecture: `TestJITFloatBits` holds every float operation to it, and
+  `TestJITDifferential` every spec module's exports.
+- Native code holds no references yet. When it stores one, it stores it
+  through the write barrier's routine while the collector marks, as the
+  JavaScript JIT does (internal/jit/README.md, "The write barrier":
+  `jit.StoreRef`, the flag at `jit.WriteBarrier`), and never leaves native
+  code for the marking's sake. `StoreRef` is built only where the JavaScript
+  JIT is (`ssacode.go`): references in native code on linux/arm64 need it
+  built there first. Like the rest of
+  internal/jit's native code, the wasm JIT's never moves SP, never writes
+  the registers Go keeps, never executes a call instruction, and is never a
+  safe point: loops and calls count toward the poll.
+
+Validation, with the suites checked out as docs/wasm.md's Conformance says.
+After a change to the engine, the interpreter or the decoder:
+
+```sh
+go test ./wasm/...
+go test -tags quickjs_jit ./wasm/...
+GOARCH=386 go vet ./wasm/...
+WASM_SPEC_DIR=/tmp/wasm-spec WASM_THREADS_DIR=/tmp/wasm-threads \
+  go test ./wasm/internal/spectest ./wasm/internal/wast -count=1 -v
+GOARCH=386 WASM_SPEC_DIR=/tmp/wasm-spec WASM_THREADS_DIR=/tmp/wasm-threads \
+  go test ./wasm/internal/spectest -count=1 -v
+```
+
+Every assertion passes: `TestSpec` logs `spec: 65824 of 65824 assertions
+passed` at the pinned commits, and a run that does not is a regression,
+never a new expectation. After a change to the JIT, or to anything native
+code meets -- frames, calls, polls, memories, traps -- run the spec with every
+function compiled at its first call, the differential test, and the
+encoders' tests:
+
+```sh
+WASM_JIT=eager WASM_SPEC_DIR=/tmp/wasm-spec WASM_THREADS_DIR=/tmp/wasm-threads \
+  go test -tags quickjs_jit ./wasm/internal/spectest ./wasm/internal/engine -count=1 -v
+WASM_SPEC_DIR=/tmp/wasm-spec go test -tags quickjs_jit ./wasm/internal/spectest -run TestJITDifferential -count=1 -v
+(cd internal/jit/verify && go test -tags quickjs_jit -run 'TestAMD64|TestARM64' .)
+GOOS=darwin GOARCH=arm64 go vet -tags quickjs_jit ./wasm/...
+GOOS=linux GOARCH=arm64 go vet -tags quickjs_jit ./wasm/...
+```
+
+The eager run logs how many functions were compiled and refused, by
+reason; a refusal that was not there before is a regression too. arm64's
+backend runs in CI's `wasm-spec` job on `ubuntu-24.04-arm` and `macos-15`;
+before that, run it on Linux under QEMU's user-mode emulation -- in WSL,
+with the Go there, the package unpacked where `sudo` is not at hand:
+
+```sh
+(cd /tmp && apt-get download qemu-user && dpkg-deb -x qemu-user_*.deb /tmp/qemu)
+GOOS=linux GOARCH=arm64 go test -c -tags quickjs_jit -o /tmp/spectest.test ./wasm/internal/spectest
+WASM_JIT=eager WASM_SPEC_DIR=/tmp/wasm-spec WASM_THREADS_DIR=/tmp/wasm-threads \
+  /tmp/qemu/usr/bin/qemu-aarch64 /tmp/spectest.test -test.run 'TestSpec$' -test.v
+WASM_SPEC_DIR=/tmp/wasm-spec /tmp/qemu/usr/bin/qemu-aarch64 /tmp/spectest.test -test.run TestJITDifferential -test.v
+GOOS=linux GOARCH=arm64 go test -c -tags quickjs_jit -o /tmp/engine.test ./wasm/internal/engine
+(cd wasm/internal/engine && WASM_JIT=eager /tmp/qemu/usr/bin/qemu-aarch64 /tmp/engine.test -test.short)
+```
+
+After a change to a message, a check or a limit, and to the namespace,
+compare with Node 26 as `node` on `PATH`; each test fails on a difference
+it does not list with why:
+
+```sh
+QUICKJS_COMPARE_NODE_WASM=1 WASM_SPEC_DIR=/tmp/wasm-spec WASM_THREADS_DIR=/tmp/wasm-threads \
+  go test ./wasm/internal/decoder ./wasm/internal/wast ./wasm/internal/engine ./wasm/wasmjs \
+  -run 'TestCompareNode|TestNodeAcceptsCompiledModules|TestRelaxedMatchesNode' -count=1 -v
+WASM_SPEC_DIR=/tmp/wasm-spec go test ./wasm/wasmjs -run TestWasmSpecJSAPI -count=1 -v
+```
+
+The decoder's corpus is 24,437 modules; a change to the decoder runs it
+larger too, with `QUICKJS_WASM_MUTATIONS=15000 QUICKJS_WASM_SEED=2`
+(120,437 modules, about a minute and a half). `TestHandCases` checks the
+hand-written cases' verdicts without Node, from `testdata/hand.golden`,
+which the comparison rewrites from Node's verdicts with
+`QUICKJS_WASM_UPDATE_GOLDEN=1`. A change to WASI runs wasi-testsuite on Linux,
+where all 72 pass (`WASI_TESTSUITE_DIR`, docs/wasm.md).
 
 ## Validation
 
