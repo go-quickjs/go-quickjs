@@ -388,8 +388,3 @@ func (c *compiler) tableGetSet(op opcode.Opcode, table uint32, at uint32) {
 		return 0
 	})
 }
-
-// endOther ends a construct of the exception handling instructions.
-func (c *compiler) endOther(t *ctl, body []stmt) stmt {
-	panic("engine: unsupported construct " + t.op.Name())
-}

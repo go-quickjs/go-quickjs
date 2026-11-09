@@ -46,6 +46,9 @@ type exec struct {
 	hostResults []Val
 	// frames are the frame objects of each depth, reused.
 	frames []*frame
+	// caught holds the exceptions the legacy catches being run handle, for
+	// rethrow.
+	caught []*Exception
 }
 
 type callSite struct {
@@ -143,6 +146,8 @@ func Invoke(ctx context.Context, fn *Function, args []Val) (results []Val, err e
 		}
 		x.depth = 0
 		x.calls = x.calls[:0]
+		x.caught = x.caught[:0]
+		x.tail = nil
 		x.nc, x.nsp, x.rc, x.rsp = 0, 0, 0, 0
 		x.ctx = nil
 		execPool.Put(x)
@@ -165,6 +170,8 @@ func recovered(x *exec, r any) error {
 		return v
 	case *Exception:
 		return v
+	case *delegation:
+		return v.exn
 	case hostError:
 		return v.err
 	case error:

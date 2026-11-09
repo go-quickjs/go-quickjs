@@ -112,7 +112,7 @@ func (c *compiler) instr() {
 	case opcode.TableGet, opcode.TableSet:
 		c.tableGetSet(op, c.r.u32(), at)
 	default:
-		if c.numeric(op) || c.memory(op, at) || c.prefixed(op, at) {
+		if c.numeric(op) || c.memory(op, at) || c.prefixed(op, at) || c.refOps(op, at) {
 			return
 		}
 		panic("engine: unsupported instruction " + op.Name())
@@ -537,7 +537,14 @@ func (c *compiler) callIndirect(typeIndex, table uint32, at uint32, tail bool) {
 		}
 		return fn
 	}
-	// The arguments are evaluated before the index: store them first.
+	c.callTarget(sig, target, at, tail)
+}
+
+// callTarget compiles a call of the function target returns, which is
+// evaluated after the arguments: call_indirect, call_ref and their tail
+// calls.
+func (c *compiler) callTarget(sig *module.FuncType, target func(*frame) *Function, at uint32, tail bool) {
+	// The arguments are evaluated before the target: store them first.
 	n := len(sig.Params)
 	c.flushBelow(0)
 	base := len(c.stack) - n

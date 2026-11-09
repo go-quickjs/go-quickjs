@@ -143,6 +143,14 @@ type ctl struct {
 	cond    ti32
 	// dead says the rest of the construct cannot be reached.
 	dead bool
+	// index is a try_table's or try's index in the control stack.
+	index int
+	// clauses are a try_table's catch clauses.
+	clauses []catchClause
+	// tryBody and handlers are a legacy try's body and its catches, once
+	// its first catch began.
+	tryBody  []stmt
+	handlers []handler
 }
 
 // labelTypes returns the types a branch to the construct carries.
