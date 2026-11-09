@@ -160,6 +160,8 @@ type Allocator struct {
 	clobAt   []int32
 	defInst  []int32
 	work     []int32
+	count    []int32
+	sortTmp  []*web
 	callsTo  []int32
 	weightTo []float64
 	masked   []int32
@@ -622,7 +624,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 			list = append(list, w)
 		}
 	}
-	slices.SortFunc(list, byStart)
+	al.sortByStart(list, pos)
 	lap(PhaseWebs)
 
 	// Registers: a linear scan of each class's webs, in order of their
@@ -785,7 +787,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 			list = append(list, w)
 		}
 	}
-	slices.SortFunc(list, byStart)
+	al.sortByStart(list, pos)
 	al.list = list
 
 	// Slots: for the webs spilled, and those in registers that live across
@@ -1056,6 +1058,27 @@ func (al *Allocator) dataflow(f *Func, words int, gi func(VReg) int) {
 			}
 		}
 	}
+}
+
+// sortByStart sorts list, in order of the webs' first members, into
+// byStart's order: a counting sort by start, stable, over npos positions.
+func (al *Allocator) sortByStart(list []*web, npos int32) {
+	count := grown(al.count, int(npos)+1)
+	clear(count)
+	for _, w := range list {
+		count[w.start()+1]++
+	}
+	for p := 1; p <= int(npos); p++ {
+		count[p] += count[p-1]
+	}
+	out := grown(al.sortTmp, len(list))
+	for _, w := range list {
+		out[count[w.start()]] = w
+		count[w.start()]++
+	}
+	copy(list, out)
+	clear(out)
+	al.count, al.sortTmp = count, out[:0]
 }
 
 // byStart orders webs by their starts, then their first members.
