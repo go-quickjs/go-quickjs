@@ -26,6 +26,7 @@ func Compile(req *wjit.Request) (code *wjit.Code, err error) {
 	if !Available {
 		refuse(RefuseArch, "no lowering for this architecture")
 	}
+	start()
 	f, err := Build(req.Module, req.Func)
 	if err != nil {
 		return nil, err

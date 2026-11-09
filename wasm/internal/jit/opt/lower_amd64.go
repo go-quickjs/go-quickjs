@@ -173,7 +173,9 @@ func lower(f *Func, req *wjit.Request) *wjit.Code {
 	for i := 0; i < len(g.ool); i++ {
 		g.ool[i]()
 	}
+	lap(PhaseEmit)
 	out, err := a.Finish()
+	lap(PhaseEncode)
 	if err != nil || (req.MaxCodeBytes > 0 && len(out) > req.MaxCodeBytes) {
 		refuse(RefuseSize, "%d bytes of code", a.Len())
 	}
@@ -368,7 +370,12 @@ func (g *gen) allocate() {
 	if g.argBase < len(f.Params) {
 		refuse(RefuseFrame, "a frame of %d slots for %d parameters and calls of %d", frame, len(f.Params), area)
 	}
-	ra, err := lsra.Allocate(lf, &lsra.Config{Classes: [][]int{gprs, xmms}, NumSlots: g.argBase})
+	lap(PhaseDescribe)
+	cfg := &lsra.Config{Classes: [][]int{gprs, xmms}, NumSlots: g.argBase}
+	if Timing != nil {
+		cfg.Lap = lsraLap
+	}
+	ra, err := lsra.Allocate(lf, cfg)
 	if err != nil {
 		refuse(RefuseFrame, "%v: %d slots", err, g.argBase)
 	}

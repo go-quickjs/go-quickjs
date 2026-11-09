@@ -10,30 +10,31 @@ import (
 // lower: every critical edge split, no copies, no trivial phis. check, if
 // not nil, is called with each pass's name after it (a test's verifier).
 func Optimize(f *Func, check func(pass string)) {
-	run := func(name string, pass func(*Func)) {
+	run := func(name string, p Phase, pass func(*Func)) {
 		pass(f)
+		lap(p)
 		if check != nil {
 			check(name)
 		}
 	}
-	run("copyelim", copyelim)
-	run("gvn", gvn)
-	run("copyelim", copyelim)
-	run("fold", fold)
-	run("copyelim", copyelim)
-	run("thread", thread)
-	run("copyelim", copyelim)
-	run("gvn", gvn)
-	run("copyelim", copyelim)
-	run("licm", licm)
-	run("dce", dce)
-	run("bce", bce)
-	run("split", splitCriticalEdges)
-	run("loops", func(f *Func) {
+	run("copyelim", PhaseCopyelim, copyelim)
+	run("gvn", PhaseGVN, gvn)
+	run("copyelim", PhaseCopyelim, copyelim)
+	run("fold", PhaseFold, fold)
+	run("copyelim", PhaseCopyelim, copyelim)
+	run("thread", PhaseThread, thread)
+	run("copyelim", PhaseCopyelim, copyelim)
+	run("gvn", PhaseGVN, gvn)
+	run("copyelim", PhaseCopyelim, copyelim)
+	run("licm", PhaseLICM, licm)
+	run("dce", PhaseDCE, dce)
+	run("bce", PhaseBCE, bce)
+	run("split", PhaseSplit, splitCriticalEdges)
+	run("loops", PhaseLoops, func(f *Func) {
 		findLoops(f, dominators(f))
 		loopDepths(f)
+		computeUses(f)
 	})
-	computeUses(f)
 }
 
 // resolve follows v's copies to the value it is.

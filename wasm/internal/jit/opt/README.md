@@ -404,6 +404,22 @@ WASM_JIT_CODE=/tmp/gzip.jsonl go run -tags quickjs_jit ./internal/cmd/wasmbench 
 (cd internal/jit/verify && go run ./cmd/jitprof -listing -code /tmp/gzip.jsonl /tmp/p.programs-gzip.jit-opt.pprof)
 ```
 
+What the compiles cost, `TestOptCompileCorpus` measures: it compiles
+every function of the modules `WASM_OPT_CORPUS` names -- `.wasm` files,
+such as the Go program `internal/cmd/wasmbench` builds into its cache, and
+`spec` for the spec scripts' -- once, then `WASM_OPT_REPS`-1 more times, and
+logs the repeated compiles' time per function and per byte of body, each
+phase's (`Times`, the passes, the allocator's phases, the emission and the
+encoding), and the bytes and objects they allocated per function.
+`WASM_OPT_HASHES=FILE` writes each function's code's hash, or its
+refusal, and `WASM_OPT_BASE=FILE` compares with a file so written: a change
+that should not change the code is checked by both, the base's hashes
+written at its parent. `-cpuprofile` and `-memprofile` profile the test.
+
+```sh
+WASM_OPT_CORPUS=/path/goprog.wasm,spec WASM_SPEC_DIR=/path/to/spec WASM_OPT_HASHES=/tmp/base.hashes   go test -tags quickjs_jit ./wasm/internal/engine -run TestOptCompileCorpus -count=1 -v
+```
+
 `TestJITDifferential`'s `opt` pass runs the spec modules with every
 function the tier accepts optimized and compares them with the
 interpreter; `TestAllocateRandom` checks the allocator's results on random

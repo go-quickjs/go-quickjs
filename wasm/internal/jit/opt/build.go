@@ -140,8 +140,11 @@ func Build(m *module.Module, fn uint32) (f *Func, err error) {
 		refuse(RefuseOther, "an imported function")
 	}
 	check(m, fn)
+	lap(PhaseCheck)
 	bd := &builder{m: m, f: &Func{}, zero: map[Type]*Value{}}
-	return bd.build(fn), nil
+	f = bd.build(fn)
+	lap(PhaseBuild)
+	return f, nil
 }
 
 func (bd *builder) build(fn uint32) *Func {

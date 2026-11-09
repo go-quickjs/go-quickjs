@@ -104,6 +104,11 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 	n := len(f.Class)
 	nb := len(f.Blocks)
 	alloc := func(v VReg) bool { return v >= 0 && f.Class[v] != NoClass }
+	lap := func(p Phase) {
+		if cfg.Lap != nil {
+			cfg.Lap(p)
+		}
+	}
 
 	// predIdx is, for each block's successor k, the block's index among
 	// that successor's predecessors.
@@ -235,6 +240,8 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 			}
 		}
 	}
+
+	lap(PhaseLiveness)
 
 	// The ranges, over positions: a block's phis are defined at its start;
 	// instruction j reads at start+2+2j and writes one after; the block
@@ -372,6 +379,7 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 		})
 		return w
 	}
+	lap(PhaseRanges)
 	webs := make([]*web, n)
 	for v := range n {
 		if alloc(VReg(v)) && len(ranges[v]) > 0 {
@@ -469,6 +477,8 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 		}
 		return int(a.members[0] - b.members[0])
 	})
+
+	lap(PhaseWebs)
 
 	// Registers: a linear scan of each class's webs, in order of their
 	// starts. The active webs are live at the scan's position, the
@@ -605,6 +615,8 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 		}
 	}
 
+	lap(PhaseScan)
+
 	// The webs as the scan left them, some taken apart.
 	list = list[:0]
 	for v, w := range webs {
@@ -677,6 +689,7 @@ func Allocate(f *Func, cfg *Config) (*Result, error) {
 			})
 		}
 	}
+	lap(PhaseSlots)
 	return res, nil
 }
 

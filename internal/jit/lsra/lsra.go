@@ -95,7 +95,30 @@ type Config struct {
 	Classes [][]int
 	// NumSlots is the number of spill slots there are.
 	NumSlots int
+	// Lap, if not nil, is called at the end of each of the allocator's
+	// phases, for a client that times its compiles.
+	Lap func(Phase)
 }
+
+// A Phase is a stretch of an allocation that Config.Lap is told the end of.
+type Phase int
+
+// The allocator's phases, in order.
+const (
+	// PhaseLiveness is the registers live into and out of each block.
+	PhaseLiveness Phase = iota
+	// PhaseRanges is each register's ranges and weight, and the clobbers.
+	PhaseRanges
+	// PhaseWebs is the coalescing of phis and their arguments, and the
+	// hints.
+	PhaseWebs
+	// PhaseScan is the linear scan of each class.
+	PhaseScan
+	// PhaseSlots is the slots' scan and the result.
+	PhaseSlots
+	// NumPhases bounds the phases.
+	NumPhases
+)
 
 // Result is where each virtual register lives.
 type Result struct {
