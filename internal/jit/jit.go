@@ -18,3 +18,8 @@ var (
 // Supported reports whether this build includes a backend. It does not probe
 // executable-memory permissions or allocate memory.
 func Supported() bool { return supported }
+
+// RawSupported reports whether this build places and runs RawCode, the
+// code other compilers make -- the regular expressions' and the
+// WebAssembly JIT's. It does wherever Supported does.
+func RawSupported() bool { return supported }
