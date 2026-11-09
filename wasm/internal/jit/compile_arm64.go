@@ -17,8 +17,9 @@ type (
 )
 
 // CPU is the CPU's optional instructions this process's code may use:
-// every A64 processor has CNT and the FRINT roundings.
-var CPU = Features{Popcnt: true, Round: true}
+// every A64 processor has CNT, the FRINT roundings and ASIMD's vector
+// instructions.
+var CPU = Features{Popcnt: true, Round: true, SIMD: true}
 
 // At a call every entry is in its slot and every local's home stored, so
 // the cache's registers are free: the call sequences use these.
@@ -240,6 +241,12 @@ func (c *compiler) globalAddr(g uint32) {
 func (c *compiler) globalGet(g uint32) {
 	t := c.m.Globals[g].Type.Kind
 	c.globalAddr(g)
+	if t == module.KindV128 {
+		x := c.allocX(0)
+		c.a.LoadQ(x, rTmp, 0)
+		c.pushReg(t, uint8(x))
+		return
+	}
 	if isFloat(t) {
 		x := c.allocX(0)
 		if t == module.KindF32 {
@@ -263,6 +270,13 @@ func (c *compiler) globalGet(g uint32) {
 // of it, as store does a slot's.
 func (c *compiler) globalSet(g uint32) {
 	v := c.pop()
+	if v.t == module.KindV128 {
+		x := c.readX(v)
+		c.globalAddr(g)
+		c.a.StoreQ(rTmp, 0, x)
+		c.free(v)
+		return
+	}
 	c.globalAddr(g)
 	c.store(c.inRegister(v), rTmp, 0)
 	c.free(v)
@@ -295,6 +309,19 @@ func (c *compiler) selectOp() {
 	b := c.pop()
 	x := c.pop()
 	a := c.a
+	if x.t == module.KindV128 {
+		xa := c.intoX(x)
+		xb := c.readX(b)
+		rc := c.readG(cond, rTmp)
+		keep := a.NewLabel()
+		a.Cbnz(rc, keep, false)
+		a.VMov(xa, xb)
+		a.Bind(keep)
+		c.free(cond)
+		c.free(b)
+		c.pushReg(x.t, uint8(xa))
+		return
+	}
 	if isFloat(x.t) {
 		xa := c.intoX(x)
 		xb := c.readX(b)
@@ -349,7 +376,7 @@ func (c *compiler) call(idx uint32, at uint32) {
 		entry = rCall1
 		a.MovRR(entry, rTmp2)
 	}
-	if hasRef(ft.Params) {
+	if hasRef(ft.Params) || hasV128(ft.Params) {
 		c.argsTo(ft.Params, base, frame, c.adv)
 	} else {
 		for i := 0; i < n; i++ {
@@ -375,7 +402,7 @@ func (c *compiler) call(idx uint32, at uint32) {
 	}
 	c.reloadHomes()
 	// The results, from the callee's frame.
-	if hasRef(ft.Results) {
+	if hasRef(ft.Results) || hasV128(ft.Results) {
 		c.resultsFrom(ft.Results, base, frame, c.adv)
 	} else {
 		for i := range ft.Results {
@@ -462,7 +489,7 @@ func (c *compiler) returnCall(idx uint32, at uint32) {
 	// The arguments, into the parameters: each slot read is past each
 	// written before it.
 	entry := rTmp2
-	if hasRef(ft.Params) {
+	if hasRef(ft.Params) || hasV128(ft.Params) {
 		// A reference's store uses rTmp2.
 		entry = rCall1
 		a.MovRR(entry, rTmp2)

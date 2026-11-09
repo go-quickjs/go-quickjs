@@ -34,6 +34,7 @@ This package compiles; the engine places, enters and handles exits:
 | `atomic.go`, `atomic_GOARCH.go` | the atomic instructions: what they are, and a backend's code for them |
 | `refs.go`, `refs_GOARCH.go` | references: frames' reference slots, the reference instructions, the stores of pointer words and the barrier routine |
 | `gc.go`, `gc_GOARCH.go` | the GC instructions: fields, elements, i31s, tests and casts |
+| `simd.go`, `simd_GOARCH.go` | the SIMD instructions: v128.const, their types and the exit through the interpreter, and a backend's code for them |
 | `engine/jit_on.go` | tiering, placement, entry, the exits' handling |
 | `engine/jit_gc.go` | the GC instructions Go runs for native code |
 | `exn.go`, `engine/jit_exn.go` | exceptions: the handlers' records, and Go's search of the native frames for the clause that takes one |
@@ -115,8 +116,9 @@ A frame is the interpreter's (see `engine/compile.go`): numeric slots on the
 exec's chunked stack, and reference slots of two words each on its chunked
 stack of references, which the collector scans; neither moves. Numeric
 local k is the numeric slot of its place among the numeric locals, the
-parameters first, and a reference local the reference slot of its place
-among the reference locals; stack position h is numeric slot `nlocals +
+parameters first, a v128 taking two -- its low half, then its high half --
+and a reference local the reference slot of its place among the reference
+locals; stack position h is numeric slot `nlocals +
 2h` and reference slot `rlocals + h`, `nlocals` and `rlocals` being the
 numbers of numeric and reference locals or of results, whichever is more;
 a function's results are left in the slots its parameters would take if
@@ -151,7 +153,8 @@ and in a function that holds references amd64 gives integer locals two
 homes, not three, `R` having taken one of the cache's registers.
 
 **The operand stack** is a list of entries, each a constant, a register
--- general for integers, SSE or FP for floats -- or its position's slot, or
+-- general for integers, SSE or FP for floats and vectors, a v128 taking the
+whole register -- or its position's slot, or
 the flags of a comparison that the very next br_if or if consumes: an
 integer comparison's on both, a float comparison's too on arm64. An
 instruction pops its operands, owning their registers, and pushes its
@@ -181,7 +184,7 @@ On amd64:
 | R11, X15 | scratch, never cached |
 | SI | `R`, the frame's reference slots, in a function that holds references; else the cache's |
 | R13, R9, R8 | homes of integer locals, else the cache's |
-| X14-X11 | homes of float locals, else the cache's |
+| X14-X11 | homes of float and v128 locals, else the cache's |
 | SI, R8, R9, R13, AX, CX, DX | the cache's general registers, AX, CX and DX last (division and shifts take them, and LOCK CMPXCHG AX) |
 | X0-X14 | the cache's SSE registers |
 | SP, BP, R14 | never written |
@@ -200,7 +203,7 @@ On arm64:
 | X27 | the encoder's temporary, for offsets and immediates an instruction cannot hold |
 | X12 | `R`, the frame's reference slots, in a function that holds references; else the cache's |
 | X26, X25, X24, X15, X14, X13 | homes of integer locals, else the cache's |
-| D29-D22 | homes of float locals, else the cache's |
+| V29-V22 | homes of float and v128 locals, else the cache's |
 | X1-X15, X24-X26 | the cache's general registers, the homes last; at a call every entry is in its slot, and the call sequence uses X1 and X2 |
 | D0-D29 | the cache's FP registers |
 | SP, X29, X30, X18, X28 | never written |
@@ -283,6 +286,7 @@ is in its slot.
 | `ExitCallRef` | call_ref: finds the function, trapping on null, and calls it |
 | `ExitTailRef` | return_call_ref, as `ExitTailIndirect` |
 | `ExitOp` | memory.size, memory.grow, memory.init, memory.copy, memory.fill, data.drop, table.size, table.grow, table.fill, table.init, table.copy, elem.drop, struct.new, struct.new_default, the array.new instructions, array.fill, array.copy, array.init_data, array.init_elem, throw, throw_ref, rethrow (which do not resume: see Exceptions), memory.atomic.wait32, memory.atomic.wait64, memory.atomic.notify, on the frame's slots; an atomic instruction's offset is the 64-bit `Arg2` |
+| `ExitSIMD` | a SIMD instruction the backend does not compile (see SIMD): the interpreter's own code for the instruction at offset `Arg0`, made once and kept by the Code (`codeJIT.simd`), run on the operands in the frame's slots from `Arg1` |
 
 A trap's site stores its offset and jumps to the function's stub for the
 trap's code; there is no resumption.
@@ -457,18 +461,58 @@ byte's CNT (CNT, ADDV). An f32 in an FP register has the rest of the
 register clear, as every instruction that writes its S view leaves it, so it
 is stored and loaded as a word, as an integer is.
 
+## SIMD
+
+A v128 lives where a float does: in an XMM register (amd64) or a V
+register (arm64) of the cache or of a local's home, the whole register, or
+in the two slots of its stack position or its local. A constant entry
+carries both halves, and a constant loaded into a register comes from the
+code's pool of them, after the code (`vconst`), RIP-relative on amd64 and
+PC-relative (LDR literal) on arm64; zeros are made. A v128 moves between
+slots, frames and globals 16 bytes at a time (MOVDQU, LDR and STR Q);
+a call copies a v128 argument or result as two slots.
+
+The loads and stores, of every memory, are the scalar ones' address and
+bounds check (see Memory) with the access's width: v128.load and store
+are MOVDQU and LDR/STR Q at the base plus the address; the extending
+loads read 8 bytes and widen (PMOVSX, PMOVZX; SXTL, UXTL); the splatting
+loads, the loads of a lane and the stores of one go through a general
+register (PINSR and PEXTR; INS and UMOV).
+
+On amd64 the code uses SSE2, SSSE3, SSE4.1 and SSE4.2, none VEX-encoded:
+a function with a v128 or a SIMD instruction is refused (`cpu`) on a CPU
+without all three. arm64's ASIMD is every A64 processor's.
+
+A SIMD instruction the backend does not compile is an exit (`ExitSIMD`)
+that runs the interpreter's own code for it: the engine compiles the one
+instruction as the interpreter compiles it, over operands read from the
+frame's slots, and keeps that code by the instruction's offset, so that its
+result is the interpreter's by construction. The backends compile natively:
+
+| | |
+|---|---|
+| v128.const, the loads and stores | all |
+| splat, extract_lane, replace_lane | all |
+| bitwise | not, and, andnot, or, xor, bitselect, any_true |
+
+and leave the rest to the exit. `TestJITSIMDBits` (engine) runs every SIMD
+instruction that is not a load, a store or a constant, relaxed ones
+included, on the edges of each lane shape and on random bits, interpreted
+and natively, requires the same bits, and logs the instructions that went
+through the exit.
+
 ## Refusals
 
 A function is refused whole when it has:
 
 | Reason | What |
 |---|---|
-| `simd` | a v128 value anywhere -- local, parameter, result, block type, callee's signature, global, a field or element read or written -- or any SIMD instruction |
+| `simd` | struct.get, struct.set, array.get or array.set of a v128 field or element |
 | `gc` | a GC instruction past the GC proposal's: custom descriptors, strings, ref.i31_shared |
 | `atomics` | the struct and array atomic instructions |
 | `asmjs` | V8's asm.js opcodes |
 | `f16` | f32.load_f16, f32.store_f16 |
-| `cpu` | popcnt without POPCNT, rounding without SSE4.1 (amd64) |
+| `cpu` | popcnt without POPCNT, rounding without SSE4.1, a v128 value or a SIMD instruction without SSSE3, SSE4.1 and SSE4.2 (amd64) |
 | `frame` | an operand stack deeper than the interpreter's frame for it |
 | `size` | code past `MaxCodeBytes`, a megabyte |
 | `internal` | a panic of the compiler's |
@@ -606,9 +650,11 @@ go test -tags quickjs_jit ./wasm/internal/engine -run 'JIT|OSR'
 `TestJITDifferential` runs every spec module that links with the spectest
 module alone -- the threads proposal's too, with `WASM_THREADS_DIR` -- both
 interpreted and compiled at its first call, calls each
-export whose parameters are numbers or nullable references with the
-scripts' constants, each type's edges and random values, null and i31s,
-and compares the results (any NaN for a NaN, references by what they are),
+export whose parameters are numbers, vectors or nullable references with
+the scripts' constants, each type's edges -- for a v128, vectors of each
+lane shape's -- and random values, null and i31s, and compares the results
+(any NaN for a scalar NaN, a v128's bits exactly, references by what they
+are),
 the traps, and the memories and globals after every call; then again with every call of a
 function with loops entering its native code at its first back edge
 (`osr`). The spec runs log how many calls went on natively from a loop

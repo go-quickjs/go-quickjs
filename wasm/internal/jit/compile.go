@@ -214,6 +214,10 @@ type compiler struct {
 	loops  map[uint32]asmLabel
 	traps  map[trapKey]asmLabel
 	trapTo map[uint64]asmLabel
+	// vconsts are the v128 constants the code loads, by their bits, in the
+	// order first used.
+	vconsts     map[[2]uint64]asmLabel
+	vconstOrder [][2]uint64
 }
 
 // Compile compiles function fn of a validated module, or refuses it with
@@ -260,6 +264,7 @@ func Compile(req *Request) (code *Code, err error) {
 	for i := 0; i < len(c.ool); i++ {
 		c.ool[i]()
 	}
+	c.emitVConsts()
 	if 2*c.maxHeight+c.nlocals > c.frameSlots {
 		refuse(RefuseFrame, "%d stack positions and %d locals in a frame of %d slots", c.maxHeight, c.nlocals, c.frameSlots)
 	}
@@ -693,7 +698,7 @@ func (c *compiler) instr() {
 	case opcode.DataDrop, opcode.ElemDrop, opcode.MemoryFill, opcode.TableSize, opcode.TableGrow, opcode.TableFill:
 		c.goOp(op, at, uint64(c.r.u32()), 0)
 	default:
-		if c.numeric(op, at) || c.memoryOp(op, at) || c.atomicOp(op, at) || c.refOp(op, at) || c.gcOp(op, at) {
+		if c.numeric(op, at) || c.memoryOp(op, at) || c.atomicOp(op, at) || c.refOp(op, at) || c.gcOp(op, at) || c.simd(op, at) {
 			return
 		}
 		refuse(RefuseOther, "%s", op.Name())

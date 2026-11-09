@@ -38,24 +38,32 @@ func refuse(reason, format string, args ...any) {
 	panic(&Refusal{Reason: reason, Detail: fmt.Sprintf(format, args...)})
 }
 
-// checkType refuses a function with a value of type t: the code holds
-// numbers and references, no vectors.
-func checkType(t module.ValueType, what string) {
-	if t.Kind == module.KindV128 {
-		refuse(RefuseSIMD, "%s of type v128", what)
+// checkType refuses a function with a value of type t where the CPU has
+// not the instructions vectors need.
+func checkType(t module.ValueType, what string, feat Features) {
+	if t.Kind == module.KindV128 && !feat.SIMD {
+		refuse(RefuseCPU, "%s of type v128 without SSE4.2", what)
 	}
 }
 
-func checkTypes(ts []module.ValueType, what string) {
+func checkTypes(ts []module.ValueType, what string, feat Features) {
 	for _, t := range ts {
-		checkType(t, what)
+		checkType(t, what, feat)
 	}
 }
 
-// Features are the CPU's optional instructions the code may use.
+// Features are the CPU's optional instructions the code may use, and the
+// relaxed SIMD results the interpreter gives on it.
 type Features struct {
 	// POPCNT, and SSE4.1's ROUNDSS and ROUNDSD.
 	Popcnt, Round bool
+	// SIMD is the vector instructions of SSSE3, SSE4.1 and SSE4.2 on
+	// amd64; arm64 always has its own.
+	SIMD bool
+	// RelaxedFused says relaxed_madd and relaxed_nmadd are fused, one
+	// rounding; RelaxedDotSigned and RelaxedDotVNNI say which products
+	// relaxed_dot_i8x16_i7x16_add_s sums (see engine/relaxed_x86.go).
+	RelaxedFused, RelaxedDotSigned, RelaxedDotVNNI bool
 }
 
 // localUse is what the body does with its locals: how much each is used,
@@ -72,15 +80,15 @@ type localUse struct {
 func scan(m *module.Module, fn uint32, feat Features) (locals []module.ValueType, use localUse) {
 	f := &m.Functions[fn]
 	sig := m.Types[f.TypeIndex].Func
-	checkTypes(sig.Params, "parameter")
-	checkTypes(sig.Results, "result")
+	checkTypes(sig.Params, "parameter", feat)
+	checkTypes(sig.Results, "result", feat)
 	r := reader{b: m.Bytes, pc: int(f.Code.Offset)}
 	end := int(f.Code.End())
 	locals = append(locals, sig.Params...)
 	for n := r.u32(); n > 0; n-- {
 		count := r.u32()
 		t := r.valueType()
-		checkType(t, "local")
+		checkType(t, "local", feat)
 		for j := uint32(0); j < count; j++ {
 			locals = append(locals, t)
 		}
@@ -94,7 +102,9 @@ func scan(m *module.Module, fn uint32, feat Features) (locals []module.ValueType
 		op := r.opcode()
 		switch op.Prefix() {
 		case opcode.PrefixSIMD:
-			refuse(RefuseSIMD, "%s", op.Name())
+			if !feat.SIMD {
+				refuse(RefuseCPU, "%s without SSE4.2", op.Name())
+			}
 		case opcode.PrefixAtomic:
 			if op >= opcode.StructAtomicGet {
 				refuse(RefuseAtomics, "%s", op.Name())
@@ -106,10 +116,14 @@ func scan(m *module.Module, fn uint32, feat Features) (locals []module.ValueType
 			switch op {
 			case opcode.StructGet, opcode.StructGetS, opcode.StructGetU, opcode.StructSet:
 				ti := r.u32()
-				checkType(m.Types[ti].Struct.Fields[r.u32()].Type, "field")
+				if m.Types[ti].Struct.Fields[r.u32()].Type.Kind == module.KindV128 {
+					refuse(RefuseSIMD, "%s of a v128 field", op.Name())
+				}
 				continue
 			case opcode.ArrayGet, opcode.ArrayGetS, opcode.ArrayGetU, opcode.ArraySet:
-				checkType(m.Types[r.u32()].Array.Elem.Type, "element")
+				if m.Types[r.u32()].Array.Elem.Type.Kind == module.KindV128 {
+					refuse(RefuseSIMD, "%s of v128 elements", op.Name())
+				}
 				continue
 			}
 		case opcode.PrefixAsmJS:
@@ -120,8 +134,8 @@ func scan(m *module.Module, fn uint32, feat Features) (locals []module.ValueType
 			refuse(RefuseF16, "%s", op.Name())
 		case opcode.Block, opcode.Loop, opcode.If, opcode.Try:
 			params, results := r.blockType(m)
-			checkTypes(params, op.Name()+" parameter")
-			checkTypes(results, op.Name()+" result")
+			checkTypes(params, op.Name()+" parameter", feat)
+			checkTypes(results, op.Name()+" result", feat)
 			loops = append(loops, op == opcode.Loop)
 			if op == opcode.Loop {
 				depth++
@@ -129,8 +143,8 @@ func scan(m *module.Module, fn uint32, feat Features) (locals []module.ValueType
 			continue
 		case opcode.TryTable:
 			params, results := r.blockType(m)
-			checkTypes(params, op.Name()+" parameter")
-			checkTypes(results, op.Name()+" result")
+			checkTypes(params, op.Name()+" parameter", feat)
+			checkTypes(results, op.Name()+" result", feat)
 			for n := r.u32(); n > 0; n-- {
 				if kind := r.byte(); kind < 2 {
 					r.u32()
@@ -157,22 +171,22 @@ func scan(m *module.Module, fn uint32, feat Features) (locals []module.ValueType
 			continue
 		case opcode.SelectWithType:
 			for n := r.u32(); n > 0; n-- {
-				checkType(r.valueType(), "select")
+				checkType(r.valueType(), "select", feat)
 			}
 			continue
 		case opcode.CallFunction, opcode.ReturnCall:
 			callee := m.FuncType(r.u32())
-			checkTypes(callee.Params, "callee parameter")
-			checkTypes(callee.Results, "callee result")
+			checkTypes(callee.Params, "callee parameter", feat)
+			checkTypes(callee.Results, "callee result", feat)
 			continue
 		case opcode.CallIndirect, opcode.ReturnCallIndirect:
 			ft := m.Types[r.u32()].Func
 			r.u32()
-			checkTypes(ft.Params, "callee parameter")
-			checkTypes(ft.Results, "callee result")
+			checkTypes(ft.Params, "callee parameter", feat)
+			checkTypes(ft.Results, "callee result", feat)
 			continue
 		case opcode.GlobalGet, opcode.GlobalSet:
-			checkType(m.Globals[r.u32()].Type, "global")
+			checkType(m.Globals[r.u32()].Type, "global", feat)
 			continue
 		case opcode.I32Popcnt, opcode.I64Popcnt:
 			if !feat.Popcnt {

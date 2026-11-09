@@ -3,6 +3,7 @@ package spectest
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
@@ -22,11 +23,13 @@ import (
 // threads proposal's, where WASM_THREADS_DIR names them -- that links with
 // the spectest module alone twice -- interpreted, and with every function
 // compiled natively at its first call -- and calls each exported function
-// whose parameters are numbers or nullable references with the same
-// arguments on both, the values the scripts use, the edges of each type and
-// random ones, null references and i31s, comparing the results, the traps,
-// and every memory's bytes and global's value after each call, references
-// by what they are (refAlike). It does it again with every call of a function with loops
+// whose parameters are numbers, vectors or nullable references with the
+// same arguments on both, the values the scripts use, the edges of each
+// type and random ones -- for a v128, vectors of each lane shape's edges:
+// NaNs of every payload, signed zeros, infinities, the integers' bounds --
+// null references and i31s, comparing the results, a v128's bits exactly,
+// the traps, and every memory's bytes and global's value after each call,
+// references by what they are (refAlike). It does it again with every call of a function with loops
 // that Go makes running in the interpreter until its first back edge and
 // going on natively from that loop's head (osr).
 func TestJITDifferential(t *testing.T) {
@@ -96,6 +99,8 @@ type differ struct {
 	rng    *rand.Rand
 	file   string
 	consts map[module.Kind][]uint64
+	// vconsts are the script's v128 arguments.
+	vconsts []engine.Val
 	// osr enters every loop of a native call from the interpreter.
 	osr      bool
 	modules  int
@@ -109,6 +114,7 @@ type differ struct {
 // arguments.
 func (d *differ) script(cmds []wast.Command) {
 	d.consts = map[module.Kind][]uint64{}
+	d.vconsts = nil
 	for _, cmd := range cmds {
 		var a *wast.Action
 		switch c := cmd.(type) {
@@ -125,6 +131,9 @@ func (d *differ) script(cmds []wast.Command) {
 		for _, v := range a.Args {
 			if k, ok := kindOf(v.Kind); ok {
 				d.consts[k] = append(d.consts[k], v.Bits)
+			}
+			if v.Kind == wast.V128 {
+				d.vconsts = append(d.vconsts, engine.Val{N: binary.LittleEndian.Uint64(v.V128[:8]), Hi: binary.LittleEndian.Uint64(v.V128[8:])})
 			}
 		}
 	}
@@ -212,16 +221,11 @@ func (d *differ) module(c *wast.ModuleCommand) {
 }
 
 // callable reports whether the test calls a function of type ft: its
-// parameters numbers or nullable references, which it is given null or
-// an i31, its results numbers or references, compared by refAlike.
+// parameters numbers, vectors or nullable references, which it is given
+// null or an i31.
 func callable(ft *module.FuncType) bool {
 	for _, t := range ft.Params {
-		if t.Kind == module.KindV128 || t.IsRef() && !t.Nullable {
-			return false
-		}
-	}
-	for _, t := range ft.Results {
-		if t.Kind == module.KindV128 {
+		if t.IsRef() && !t.Nullable {
 			return false
 		}
 	}
@@ -281,9 +285,45 @@ func (d *differ) args(ts []module.ValueType) []engine.Val {
 			}
 			continue
 		}
+		if t.Kind == module.KindV128 {
+			out[i] = d.vector()
+			continue
+		}
 		out[i] = engine.Val{N: d.value(t.Kind)}
 	}
 	return out
+}
+
+// vector returns a v128 argument: a constant of the script's, a vector of
+// one lane shape's edges, or random bits.
+func (d *differ) vector() engine.Val {
+	n := d.rng.IntN(10)
+	if n < 3 && len(d.vconsts) > 0 {
+		return d.vconsts[d.rng.IntN(len(d.vconsts))]
+	}
+	if n < 8 {
+		// Each lane an edge of one shape's lane type, or all lanes one.
+		shape := []struct {
+			bits int
+			k    module.Kind
+		}{{8, module.KindI32}, {16, module.KindI32}, {32, module.KindI32}, {64, module.KindI64},
+			{32, module.KindF32}, {64, module.KindF64}}[d.rng.IntN(6)]
+		var w [2]uint64
+		e := edges[shape.k]
+		one := e[d.rng.IntN(len(e))]
+		for i := 0; i < 128; i += shape.bits {
+			v := one
+			if n < 6 {
+				v = e[d.rng.IntN(len(e))]
+			}
+			if shape.bits < 64 {
+				v &= 1<<shape.bits - 1
+			}
+			w[i/64] |= v << (i % 64)
+		}
+		return engine.Val{N: w[0], Hi: w[1]}
+	}
+	return engine.Val{N: d.rng.Uint64(), Hi: d.rng.Uint64()}
 }
 
 var edges = map[module.Kind][]uint64{
@@ -345,6 +385,11 @@ func sameOutcome(ts []module.ValueType, ri []engine.Val, ei error, rj []engine.V
 		}
 		a, b := ri[i].N, rj[i].N
 		switch t.Kind {
+		case module.KindV128:
+			// A vector's bits, NaNs' payloads too, are the same.
+			if ri[i].Hi != rj[i].Hi {
+				return false
+			}
 		case module.KindI32:
 			a, b = uint64(uint32(a)), uint64(uint32(b))
 		case module.KindF32:
@@ -387,7 +432,7 @@ func (d *differ) state(line int, what string, a, b *engine.Instance) bool {
 			if (g.Type.Kind == module.KindF32 || g.Type.Kind == module.KindF64) && isNaN(g) && isNaN(h) {
 				continue
 			}
-			d.fail("%s: global %d is %#x interpreted, %#x natively", what, i, g.Num, h.Num)
+			d.fail("%s: global %d is %#x %#x interpreted, %#x %#x natively", what, i, g.Num, g.Hi, h.Num, h.Hi)
 			return false
 		}
 	}

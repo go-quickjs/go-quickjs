@@ -45,6 +45,9 @@ type codeJIT struct {
 	// it, so it is written atomically and never moves.
 	links []uintptr
 	raws  []*ijit.RawCode
+	// simd holds the code of each SIMD instruction native code leaves to
+	// Go, by its offset in the module (simdExitFn).
+	simd sync.Map
 	// catches says a function of the code has catch clauses: exits are
 	// handled under a recover that takes exceptions to them.
 	catches atomic.Bool
@@ -93,6 +96,8 @@ type jitLevel struct {
 	// mems is the table of the instance's memories native code reads
 	// (Ctx.Mems), filled before every entry.
 	mems []uint64
+	// frame is the frame a SIMD exit runs the interpreter's code in.
+	frame frame
 }
 
 // jitLayout is where the engine's objects keep what native code reads.
@@ -642,6 +647,11 @@ func (x *exec) jitExit(lv *jitLevel) (raw *ijit.RawCode, off int, tail bool) {
 		} else if r != nil {
 			return r, o, false
 		}
+	case wjit.ExitSIMD:
+		f := x.exitFrame(lv)
+		lv.frame.l, lv.frame.inst = f.l, inst
+		lv.cj.simdExit(inst.Code, uint32(ctx.Arg0), int(ctx.Arg1))(&lv.frame)
+		lv.frame.l = nil
 	case wjit.ExitOp:
 		f := x.exitFrame(lv)
 		x.jitSync(lv, uint32(ctx.Arg4))
@@ -702,10 +712,13 @@ func (x *exec) exitFrame(lv *jitLevel) exitFrame {
 func (f *exitFrame) rslot(slot int) int { return f.cd.rlocals + (slot-f.cd.nlocals)/2 }
 
 // get returns the value of type t at the stack position whose numeric
-// slot is slot.
+// slot is slot: a v128's high half in the next slot.
 func (f *exitFrame) get(t module.ValueType, slot int) Val {
 	if t.IsRef() {
 		return Val{R: f.r[f.rslot(slot)]}
+	}
+	if t.Kind == module.KindV128 {
+		return Val{N: f.l[slot], Hi: f.l[slot+1]}
 	}
 	return Val{N: f.l[slot]}
 }
@@ -718,6 +731,9 @@ func (f *exitFrame) put(t module.ValueType, slot int, v Val) {
 		return
 	}
 	f.l[slot] = narrow(v.N, t)
+	if t.Kind == module.KindV128 {
+		f.l[slot+1] = v.Hi
+	}
 }
 
 // takeFrom has frames the exec takes for Go's work go past the frame that
@@ -853,6 +869,9 @@ func (x *exec) jitTail(lv *jitLevel, fn *Function, ft *module.FuncType, f *exitF
 			f.r[s.i] = res[i].R
 		} else {
 			f.l[s.i] = narrow(res[i].N, t)
+			if s.v128 {
+				f.l[s.i+1] = res[i].Hi
+			}
 		}
 	}
 	clear(res)

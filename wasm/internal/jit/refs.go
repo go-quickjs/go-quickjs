@@ -26,7 +26,8 @@ type slotPos struct {
 }
 
 // layoutOf returns where values of types ts go as a function's parameters,
-// locals or results, and the numeric and reference slots they take.
+// locals or results, and the numeric and reference slots they take: a
+// v128 takes two numeric slots, its low half first.
 func layoutOf(ts []module.ValueType) (pos []slotPos, nnum, nref int) {
 	pos = make([]slotPos, len(ts))
 	for i, t := range ts {
@@ -37,6 +38,9 @@ func layoutOf(ts []module.ValueType) (pos []slotPos, nnum, nref int) {
 		}
 		pos[i] = slotPos{i: nnum}
 		nnum++
+		if t.Kind == module.KindV128 {
+			nnum++
+		}
 	}
 	return pos, nnum, nref
 }
@@ -136,6 +140,9 @@ func (c *compiler) copyPos(t module.Kind, from, to int) {
 	}
 	if from != to {
 		c.copyWord(mem{rL, c.slotOff(to)}, mem{rL, c.slotOff(from)})
+		if t == module.KindV128 {
+			c.copyWord(mem{rL, c.slotOff(to) + 8}, mem{rL, c.slotOff(from) + 8})
+		}
 	}
 }
 
@@ -148,6 +155,9 @@ func (c *compiler) copyPosResult(t module.Kind, from, i int) {
 		return
 	}
 	c.copyWord(mem{rL, int32(8 * s.i)}, mem{rL, c.slotOff(from)})
+	if t == module.KindV128 {
+		c.copyWord(mem{rL, int32(8*s.i) + 8}, mem{rL, c.slotOff(from) + 8})
+	}
 }
 
 // argsTo copies a call's arguments, of types ts, from the stack positions
@@ -161,6 +171,9 @@ func (c *compiler) argsTo(ts []module.ValueType, base int, num, ref int32) {
 			continue
 		}
 		c.copyWord(mem{rL, num + int32(8*p.i)}, mem{rL, c.slotOff(base + i)})
+		if ts[i].Kind == module.KindV128 {
+			c.copyWord(mem{rL, num + int32(8*p.i) + 8}, mem{rL, c.slotOff(base+i) + 8})
+		}
 	}
 }
 
@@ -175,6 +188,9 @@ func (c *compiler) resultsFrom(ts []module.ValueType, base int, num, ref int32) 
 			continue
 		}
 		c.copyWord(mem{rL, c.slotOff(base + i)}, mem{rL, num + int32(8*p.i)})
+		if ts[i].Kind == module.KindV128 {
+			c.copyWord(mem{rL, c.slotOff(base+i) + 8}, mem{rL, num + int32(8*p.i) + 8})
+		}
 	}
 }
 

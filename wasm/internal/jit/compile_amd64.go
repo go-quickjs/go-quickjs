@@ -17,8 +17,17 @@ type (
 	regMask  = uint16
 )
 
-// CPU is the CPU's optional instructions this process's code may use.
-var CPU = Features{Popcnt: cpu.X86.HasPOPCNT, Round: cpu.X86.HasSSE41}
+// CPU is the CPU's optional instructions this process's code may use, and
+// the relaxed SIMD results the interpreter gives on it, by the conditions
+// engine/relaxed_x86.go chooses them by.
+var CPU = Features{
+	Popcnt:           cpu.X86.HasPOPCNT,
+	Round:            cpu.X86.HasSSE41,
+	SIMD:             cpu.X86.HasSSSE3 && cpu.X86.HasSSE41 && cpu.X86.HasSSE42,
+	RelaxedFused:     cpu.X86.HasFMA && cpu.X86.HasAVX,
+	RelaxedDotSigned: cpu.X86.HasAVXVNNIInt8,
+	RelaxedDotVNNI:   cpu.X86.HasAVXVNNI,
+}
 
 // entries emits the return to the engine, at the start, then the engine's
 // entry, which loads the registers the code keeps, then the natives'.
@@ -228,6 +237,12 @@ func (c *compiler) globalGet(g uint32) {
 	t := c.m.Globals[g].Type.Kind
 	c.globalAddr(g)
 	v := value{t: t}
+	if t == module.KindV128 {
+		x := c.allocX(0)
+		c.a.LoadVec(x, rTmp, 0)
+		c.pushReg(t, uint8(x))
+		return
+	}
 	if isFloat(t) {
 		x := c.allocX(0)
 		if t == module.KindF32 {
@@ -254,6 +269,12 @@ func (c *compiler) globalSet(g uint32) {
 	// constant goes through rTmp, which holds the address.
 	var r amd64.Reg
 	switch {
+	case v.t == module.KindV128:
+		x := c.intoX(v)
+		c.globalAddr(g)
+		c.a.StoreVec(rTmp, 0, x)
+		c.freeX(x)
+		return
 	case v.k == kReg && !isFloat(v.t):
 		r = v.gpr()
 	case v.k == kReg && v.t == module.KindF64:
@@ -341,7 +362,7 @@ func (c *compiler) call(idx uint32, at uint32) {
 	c.nativeCallChecks(idx, c.frameSlots, c.adv, slow)
 	// The arguments, into the callee's parameters.
 	frame := int32(8 * c.frameSlots)
-	if hasRef(ft.Params) {
+	if hasRef(ft.Params) || hasV128(ft.Params) {
 		c.argsTo(ft.Params, base, frame, c.adv)
 	} else {
 		for i := 0; i < n; i++ {
@@ -367,7 +388,7 @@ func (c *compiler) call(idx uint32, at uint32) {
 	}
 	c.reloadHomes()
 	// The results, from the callee's frame.
-	if hasRef(ft.Results) {
+	if hasRef(ft.Results) || hasV128(ft.Results) {
 		c.resultsFrom(ft.Results, base, frame, c.adv)
 	} else {
 		for i := range ft.Results {
@@ -463,7 +484,7 @@ func (c *compiler) returnCall(idx uint32, at uint32) {
 	c.refRoomCheck(idx, 0, slow)
 	// The arguments, into the parameters: each slot read is past each
 	// written before it.
-	if hasRef(ft.Params) {
+	if hasRef(ft.Params) || hasV128(ft.Params) {
 		c.argsTo(ft.Params, base, 0, 0)
 	} else {
 		for i := 0; i < n; i++ {

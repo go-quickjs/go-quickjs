@@ -8,10 +8,12 @@ import "github.com/go-quickjs/go-quickjs/wasm/internal/module"
 type vkind uint8
 
 const (
-	// kConst: the constant c (an i32's or f32's bits zero-extended).
+	// kConst: the constant c (an i32's or f32's bits zero-extended), and
+	// hi, a v128's upper half.
 	kConst vkind = iota
 	// kReg: register r, a general one for an integer, a float one for a
-	// float. An i32 in a general register has its upper half clear.
+	// float or a v128, which takes the whole register. An i32 in a general
+	// register has its upper half clear.
 	kReg
 	// kSlot: the frame slot at off, the entry's own position's: from L, or
 	// from R for a reference, which is never anywhere else.
@@ -28,9 +30,14 @@ type value struct {
 	r   uint8
 	off int32
 	c   uint64
+	hi  uint64
 }
 
-func isFloat(t module.Kind) bool { return t == module.KindF32 || t == module.KindF64 }
+// isFloat reports whether a value of type t lives in a float register: a
+// float, or a v128, which takes the whole register.
+func isFloat(t module.Kind) bool {
+	return t == module.KindF32 || t == module.KindF64 || t == module.KindV128
+}
 
 func (v value) gpr() reg  { return reg(v.r) }
 func (v value) xmm() freg { return freg(v.r) }

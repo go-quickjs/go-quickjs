@@ -60,9 +60,14 @@ func (c *compiler) evictG(r amd64.Reg, avoid uint16) {
 }
 
 // store stores v, of its type, into the word at [base + off], all 64 bits
-// of it: an i32's or f32's upper half clear.
+// of it: an i32's or f32's upper half clear; a v128 into the two words
+// from there.
 func (c *compiler) store(v value, base amd64.Reg, off int32) {
 	a := c.a
+	if v.t == module.KindV128 {
+		c.storeVec(v, base, off)
+		return
+	}
 	switch v.k {
 	case kConst:
 		bits := v.c
@@ -114,9 +119,13 @@ func (c *compiler) loadG(r amd64.Reg, v value) {
 	}
 }
 
-// loadX loads v, a float not in a register, into SSE register x.
+// loadX loads v, a float or a v128 not in a register, into SSE register x.
 func (c *compiler) loadX(x amd64.XReg, v value) {
 	a := c.a
+	if v.t == module.KindV128 {
+		c.loadVec(x, v)
+		return
+	}
 	switch v.k {
 	case kConst:
 		if v.c == 0 {

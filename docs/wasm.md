@@ -42,15 +42,15 @@ records a set but turns nothing off.
 | WebAssembly 1.0, mutable globals | yes | yes |
 | Sign extension, non-trapping float-to-int, multi-value, bulk memory | yes | yes; the bulk instructions run in Go |
 | Reference types | yes | yes; `table.grow` and `table.fill` in Go |
-| Fixed-width SIMD | yes | refused |
+| Fixed-width SIMD | yes | yes; on amd64 with SSSE3, SSE4.1 and SSE4.2; the instructions listed under [The JIT](#the-jit) run in Go |
 | Tail calls | yes | yes; `return_call_indirect` through Go |
 | Extended constant expressions | yes | -- |
 | Multiple memories | yes | loads and stores of memory 0 only |
 | Memory64 and table64 | yes | refused for loads and stores of an i64 memory |
 | Exception handling (`exnref`), and the legacy `try` | yes | yes; throwing and catching through Go |
 | Typed function references | yes | yes; `call_ref` and `return_call_ref` through Go |
-| Garbage collection: structs, arrays, i31, casts | yes | yes; what allocates, and `array.fill`, `array.copy` and `array.init_*`, in Go |
-| Relaxed SIMD | yes, with the host architecture's choice for each operator | refused |
+| Garbage collection: structs, arrays, i31, casts | yes | yes; what allocates, and `array.fill`, `array.copy` and `array.init_*`, in Go; refused for a v128 field or element read or written |
+| Relaxed SIMD | yes, with the host architecture's choice for each operator | yes, with the interpreter's choices; the instructions listed under [The JIT](#the-jit) run in Go |
 | Threads: shared memories, atomics, `wait` and `notify` | yes | refused for the atomics |
 
 A refused function stays in the interpreter; the rest of its module may run
@@ -460,17 +460,24 @@ stores of every memory, i64 ones included, and the
 atomic loads, stores and read-modify-writes are native; an atomic
 read-modify-write is the processor's own locked or exclusive instruction.
 
+A v128 lives in an XMM or a V register, or in two of the frame's slots, as
+the interpreter keeps it. Native code compiles v128.const, the SIMD loads
+and stores of every memory, splat, extract_lane, replace_lane and the
+bitwise instructions; every other SIMD instruction returns to Go, which runs
+the interpreter's own code for it, so that its result is the interpreter's
+bit for bit, and resumes.
+
 A function is refused whole, and stays in the interpreter, when it has:
 
 | Reason | What |
 |---|---|
-| `simd` | a v128 value, a v128 field or element read or written, or any SIMD instruction |
+| `simd` | `struct.get`, `struct.set`, `array.get` or `array.set` of a v128 field or element |
 | `atomics` | the struct and array atomic instructions |
-| `cpu` | on amd64, `popcnt` without POPCNT, rounding without SSE4.1 |
+| `cpu` | on amd64, `popcnt` without POPCNT, rounding without SSE4.1, a v128 or a SIMD instruction without SSSE3, SSE4.1 and SSE4.2 |
 | `frame`, `size` | an operand stack deeper than the interpreter's frame, or code past the JIT's size limit |
 
-With every function compiled at its first call, the spec suite compiles 5,341
-functions and refuses 1,501, all for SIMD.
+With every function compiled at its first call, the spec suite compiles 6,840
+functions and refuses 2, for reading v128 fields.
 
 On `BenchmarkFib25` and `BenchmarkLoop1M` (`wasm/internal/engine`), the
 interpreter takes 7.2 ms and 9.7 ms and native code 0.40 ms and 0.355 ms on
@@ -738,6 +745,6 @@ WASI:
   phase (`import source m from "./m.wasm"`).
 - `postMessage` and structured clone of a `Module`, and of a shared
   `Memory`, between workers.
-- Native code for what the JIT refuses -- SIMD -- and an optimizing tier
-  above the baseline one.
+- Native code for the v128 fields and elements of GC objects, which the
+  JIT refuses, and an optimizing tier above the baseline one.
 - `wasmbench`'s `jit` engine on arm64: the harness builds it on amd64 only.

@@ -147,12 +147,13 @@ func TestOSRLoopParamsResults(t *testing.T) {
 	}
 }
 
-// A function the JIT refuses -- here for a vector -- stays in the
-// interpreter, compiled once, and its loops stop asking.
+// A function the JIT refuses -- here for a read of a v128 field -- stays
+// in the interpreter, compiled once, and its loops stop asking.
 func TestOSRRefusedStaysInterpreted(t *testing.T) {
 	src := `(module
+  (type $v (struct (field v128)))
   (func (export "f") (param $n i32) (result i32) (local $i i32) (local $acc i32)
-    (drop (v128.const i64x2 0 0))
+    (if (i32.const 0) (then (drop (struct.get $v 0 (ref.null $v)))))
     (block $h (result i32)
       (loop $l
         (local.set $acc (i32.add (local.get $acc) (local.get $i)))

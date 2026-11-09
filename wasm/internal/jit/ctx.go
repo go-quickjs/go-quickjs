@@ -124,6 +124,10 @@ const (
 	// Arg1 and the reference after them; Arg2 is the call's offset. To
 	// resume is to return.
 	ExitTailRef
+	// ExitSIMD: run the SIMD instruction at offset Arg0 of the module as
+	// the interpreter does, its operands in the frame's slots from Arg1, two
+	// slots apart, its result left in the first's.
+	ExitSIMD
 )
 
 // The trap codes an ExitTrap carries, the engine's TrapCode values.

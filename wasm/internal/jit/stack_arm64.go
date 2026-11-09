@@ -47,6 +47,10 @@ const numXRegs = 30
 // -- so its D view is the word.
 func (c *compiler) store(v value, base arm64.Reg, off int32) {
 	a := c.a
+	if v.t == module.KindV128 {
+		c.storeVec(v, base, off)
+		return
+	}
 	switch v.k {
 	case kConst:
 		bits := v.c
@@ -94,9 +98,14 @@ func (c *compiler) loadG(r arm64.Reg, v value) {
 	}
 }
 
-// loadX loads v, a float not in a register, into float register x.
+// loadX loads v, a float or a v128 not in a register, into float register
+// x.
 func (c *compiler) loadX(x arm64.FReg, v value) {
 	a := c.a
+	if v.t == module.KindV128 {
+		c.loadVec(x, v)
+		return
+	}
 	switch v.k {
 	case kConst:
 		bits := v.c

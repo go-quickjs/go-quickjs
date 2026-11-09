@@ -410,6 +410,7 @@ func TestJITLocalsAcrossCalls(t *testing.T) {
 func TestJITTailCalls(t *testing.T) {
 	inst := nativeInstance(t, `(module
   (type $t (func (param i32) (result i32)))
+  (type $v (struct (field v128)))
   (table funcref (elem $even $odd $odd_interp))
   (func $even (export "even") (param i32) (result i32)
     (if (result i32) (i32.eqz (local.get 0)) (then (i32.const 1))
@@ -420,9 +421,10 @@ func TestJITTailCalls(t *testing.T) {
   (func $even2 (export "even2") (param i32) (result i32)
     (if (result i32) (i32.eqz (local.get 0)) (then (i32.const 1))
       (else (return_call $odd_interp (i32.sub (local.get 0) (i32.const 1))))))
-  ;; A vector keeps this one interpreted.
+  ;; A read of a v128 field, which the JIT refuses, keeps this one
+  ;; interpreted.
   (func $odd_interp (param i32) (result i32)
-    (drop (v128.const i64x2 0 0))
+    (if (i32.const 0) (then (drop (struct.get $v 0 (ref.null $v)))))
     (if (result i32) (i32.eqz (local.get 0)) (then (i32.const 0))
       (else (return_call $even2 (i32.sub (local.get 0) (i32.const 1)))))))`)
 	for _, name := range []string{"even", "even2"} {
@@ -435,6 +437,9 @@ func TestJITTailCalls(t *testing.T) {
 	}
 	if !nativeRan(inst, "even") || !nativeRan(inst, "even2") {
 		t.Fatal("even or even2 has no native code")
+	}
+	if code := inst.Code.get(3); code.native.Load() != nil || !code.refused.Load() {
+		t.Fatal("odd_interp has native code")
 	}
 }
 
