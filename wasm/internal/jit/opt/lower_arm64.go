@@ -130,6 +130,9 @@ type gen struct {
 	hasAlloc bool
 	// vpool is the code's v128 constants, emitted after it.
 	vpool vpool[arm64.Label]
+	// entry is the code's native entry, where a call of the function by
+	// itself goes.
+	entry arm64.Label
 }
 
 // reset readies g, kept in a workspace, for function f, keeping the
@@ -184,6 +187,7 @@ func lower(f *Func, req *wjit.Request, ws *workspace) *wjit.Code {
 	g.storeCtx(offExit, wjit.ExitReturn)
 	a.Ret()
 	goEntry, entry := a.NewLabel(), a.NewLabel()
+	g.entry = entry
 	a.Bind(goEntry)
 	g.mark("entry")
 	g.loadKept()
@@ -1599,10 +1603,21 @@ func (g *gen) call(v *Value, rest []*Value) {
 	a.SubsImm(rPoll, rPoll, 1, true)
 	a.BCond(arm64.LE, poll)
 	// The callee's native entry, its frame's room past this one's, and
-	// an entry of the return stack.
-	a.Load(s0, rCtx, offLinks)
-	a.Load(s0, s0, int32(8*idx))
-	a.Cbz(s0, slow, true)
+	// an entry of the return stack. A call of the function by itself goes
+	// to this code's entry: the code runs, so it is placed, and it is the
+	// function's last tier. Another callee's entry waits in a register of
+	// the allocator's no argument is in: at a call every other value of
+	// the function is in its slot or dead.
+	self := idx == g.fn
+	link, kept := g.freeGPR(v.Args)
+	if !self {
+		if !kept {
+			link = s0
+		}
+		a.Load(link, rCtx, offLinks)
+		a.Load(link, link, int32(8*idx))
+		a.Cbz(link, slow, true)
+	}
 	a.AddImm(s0, rL, int64(8*(g.req.FrameSlots+g.req.FrameSlotsOf(idx))), true)
 	a.Load(s1, rCtx, offChunkEnd)
 	a.Cmp(s0, s1, true)
@@ -1630,9 +1645,16 @@ func (g *gen) call(v *Value, rest []*Value) {
 	g.advanceR()
 	ret := a.NewLabel()
 	g.pushReturn(ret, wjit.Site(idx, v.At), false)
-	a.Load(s0, rCtx, offLinks)
-	a.Load(s0, s0, int32(8*idx))
-	a.Br(s0)
+	switch {
+	case self:
+		a.B(g.entry)
+	case kept:
+		a.Br(link)
+	default:
+		a.Load(s0, rCtx, offLinks)
+		a.Load(s0, s0, int32(8*idx))
+		a.Br(s0)
+	}
 	a.Bind(ret)
 	g.restoreR()
 	if g.sigHasRefs(v) {
@@ -1642,6 +1664,23 @@ func (g *gen) call(v *Value, rest []*Value) {
 	a.Bind(after)
 	g.reload(v)
 	g.ool = append(g.ool, stub{kind: stubCall, l: poll, start: start, slow: slow, after: after, v: v, res: res})
+}
+
+// freeGPR returns a general register of the allocator's that none of args
+// is in, if there is one.
+func (g *gen) freeGPR(args []*Value) (arm64.Reg, bool) {
+	var used uint64
+	for _, x := range args {
+		if l := g.locOf(x); l.kind == lGPR {
+			used |= 1 << l.r
+		}
+	}
+	for _, r := range gprs {
+		if used&(1<<r) == 0 {
+			return arm64.Reg(r), true
+		}
+	}
+	return 0, false
 }
 
 // callGo lowers what Go runs for the code: call_indirect, and the

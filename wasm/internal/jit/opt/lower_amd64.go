@@ -119,6 +119,43 @@ type gen struct {
 	hasAlloc bool
 	// vpool is the code's v128 constants, emitted after it.
 	vpool vpool[amd64.Label]
+	// entry is the code's native entry, where a call of the function by
+	// itself goes.
+	entry amd64.Label
+	// rs is the register the return stack's next entry is kept in through
+	// the code, where rsKept: one of the allocator's that the function
+	// leaves unused (keepRS). Else the context's RSP holds it.
+	rs     amd64.Reg
+	rsKept bool
+}
+
+// keepRS chooses where the code keeps the return stack's next entry: in
+// R13, R9 or R8 where the allocator gave none of them out -- no
+// instruction's sequence uses them but as the allocator's -- else in the
+// context.
+func (g *gen) keepRS() {
+	var used uint64
+	for vr, c := range g.ws.lf.Class {
+		if c == classGPR && vr < len(g.ra.Reg) && g.ra.Reg[vr] >= 0 {
+			used |= 1 << g.ra.Reg[vr]
+		}
+	}
+	for _, r := range [...]amd64.Reg{amd64.R13, amd64.R9, amd64.R8} {
+		if used&(1<<r) == 0 {
+			g.rs, g.rsKept = r, true
+			return
+		}
+	}
+}
+
+// loadRS sets R10 to the return stack's next entry: a copy of the
+// register that keeps it, or a load from the context.
+func (g *gen) loadRS() {
+	if g.rsKept {
+		g.a.MovRR(rRS, g.rs)
+		return
+	}
+	g.a.Load(rRS, rCtx, offRSP)
 }
 
 // reset readies g, kept in a workspace, for function f, keeping the
@@ -149,6 +186,7 @@ func lower(f *Func, req *wjit.Request, ws *workspace) *wjit.Code {
 		g.index[b.ID] = int32(i)
 	}
 	g.allocate(&g.ws.allocScratch, classes, &amd64Clobbers)
+	g.keepRS()
 	a := g.a
 	g.mark("return stub")
 	retStub := a.Len()
@@ -157,6 +195,7 @@ func lower(f *Func, req *wjit.Request, ws *workspace) *wjit.Code {
 	a.StoreImm(rCtx, offExit, wjit.ExitReturn)
 	a.Ret()
 	goEntry, entry := a.NewLabel(), a.NewLabel()
+	g.entry = entry
 	a.Bind(goEntry)
 	g.mark("entry")
 	a.Load(rL, rCtx, offL)
@@ -164,7 +203,11 @@ func lower(f *Func, req *wjit.Request, ws *workspace) *wjit.Code {
 	a.Load(rPoll, rCtx, offPoll)
 	a.Load(rRS, rCtx, offRSP)
 	a.Bind(entry)
-	a.Store(rCtx, offRSP, rRS)
+	if g.rsKept {
+		a.MovRR(g.rs, rRS)
+	} else {
+		a.Store(rCtx, offRSP, rRS)
+	}
 	if g.holdsRefs() {
 		g.clearRefs()
 	}
@@ -485,6 +528,9 @@ func (g *gen) stub(st *stub) {
 		a.Bind(st.to)
 		g.mark("cold trap")
 		a.Store(rCtx, offL, rL)
+		if g.rsKept {
+			a.Store(rCtx, offRSP, g.rs)
+		}
 		g.storeCtx(offExit, wjit.ExitTrap)
 		g.storeCtx(offArg0, st.code)
 		g.storeCtx(offExitFn, uint64(g.fn))
@@ -592,6 +638,9 @@ func (g *gen) exit(kind uint64, resume amd64.Label, args ...uint64) {
 	a := g.a
 	a.Store(rCtx, offL, rL)
 	a.Store(rCtx, offPoll, rPoll)
+	if g.rsKept {
+		a.Store(rCtx, offRSP, g.rs)
+	}
 	g.storeCtx(offExit, kind)
 	for i, v := range args {
 		g.storeCtx(offArg0+int32(8*i), v)
@@ -604,6 +653,9 @@ func (g *gen) exit(kind uint64, resume amd64.Label, args ...uint64) {
 	a.Load(rL, rCtx, offL)
 	a.Load(rMem, rCtx, offMemBase)
 	a.Load(rPoll, rCtx, offPoll)
+	if g.rsKept {
+		a.Load(g.rs, rCtx, offRSP)
+	}
 }
 
 // saveAll and restoreAll keep every allocatable register in the context's
@@ -612,6 +664,9 @@ func (g *gen) exit(kind uint64, resume amd64.Label, args ...uint64) {
 func (g *gen) saveAll() {
 	a := g.a
 	for i, r := range gprs {
+		if g.rsKept && amd64.Reg(r) == g.rs {
+			continue
+		}
 		a.Store(rCtx, offSave+int32(8*i), amd64.Reg(r))
 	}
 	for i, x := range xmms {
@@ -626,6 +681,10 @@ func (g *gen) saveAll() {
 func (g *gen) restoreAll() {
 	a := g.a
 	for i, r := range gprs {
+		if g.rsKept && amd64.Reg(r) == g.rs {
+			// The exit's resumption loaded it.
+			continue
+		}
 		a.Load(amd64.Reg(r), rCtx, offSave+int32(8*i))
 	}
 	for i, x := range xmms {
@@ -743,8 +802,12 @@ func (g *gen) block(i int, b *Block) {
 		}
 		g.parallel(moves)
 		g.moves = moves[:0]
-		a.Load(rRS, rCtx, offRSP)
-		a.OpImm(amd64.Sub, rRS, wjit.RSEntryWords*8, true)
+		if g.rsKept {
+			a.Lea(rRS, g.rs, -wjit.RSEntryWords*8)
+		} else {
+			a.Load(rRS, rCtx, offRSP)
+			a.OpImm(amd64.Sub, rRS, wjit.RSEntryWords*8, true)
+		}
 		a.Load(rL, rRS, 8)
 		a.JmpMem(rRS, 0)
 	case BTrap:
@@ -1792,11 +1855,22 @@ func (g *gen) call(v *Value, rest []*Value) {
 	a.OpImm(amd64.Sub, rPoll, 1, true)
 	a.Jcc(amd64.CondLE, poll)
 	// The callee's native entry, its frame's room past this one's, and
-	// an entry of the return stack.
-	a.Load(s0, rCtx, offLinks)
-	a.Load(s0, s0, int32(8*idx))
-	a.Op(amd64.Test, s0, s0, true)
-	a.Jcc(amd64.CondE, slow)
+	// an entry of the return stack. A call of the function by itself goes
+	// to this code's entry: the code runs, so it is placed, and it is the
+	// function's last tier. Another callee's entry waits in a register of
+	// the allocator's no argument is in: at a call every other value of
+	// the function is in its slot or dead.
+	self := idx == g.fn
+	link, kept := g.freeGPR(v.Args)
+	if !self {
+		if !kept {
+			link = s0
+		}
+		a.Load(link, rCtx, offLinks)
+		a.Load(link, link, int32(8*idx))
+		a.Op(amd64.Test, link, link, true)
+		a.Jcc(amd64.CondE, slow)
+	}
 	a.Lea(s0, rL, int32(8*(g.req.FrameSlots+g.req.FrameSlotsOf(idx))))
 	a.CmpMem(s0, rCtx, offChunkEnd, true)
 	a.Jcc(amd64.CondA, slow)
@@ -1806,13 +1880,11 @@ func (g *gen) call(v *Value, rest []*Value) {
 		a.CmpMem(s0, rCtx, offRChunkEnd, true)
 		a.Jcc(amd64.CondA, slow)
 	}
-	a.Load(rRS, rCtx, offRSP)
-	a.CmpMem(rRS, rCtx, offRSEnd, true)
-	a.Jcc(amd64.CondAE, slow)
+	rs := g.checkRS(slow)
 	if g.sigHasRefs(v) {
 		// The copies take s1, which is R10.
 		g.refArgs(v, g.adv())
-		a.Load(rRS, rCtx, offRSP)
+		rs = g.rsInto()
 	}
 	// The arguments, into the callee's parameters: one slot each, a
 	// v128 two.
@@ -1824,23 +1896,91 @@ func (g *gen) call(v *Value, rest []*Value) {
 	g.advanceR()
 	ret := a.NewLabel()
 	a.LeaLabel(s0, ret)
-	a.Store(rRS, 0, s0)
-	a.Store(rRS, 8, rL)
+	a.Store(rs, 0, s0)
+	a.Store(rs, 8, rL)
 	a.MovImm(s0, wjit.Site(idx, v.At))
-	a.Store(rRS, 16, s0)
-	a.OpImm(amd64.Add, rRS, wjit.RSEntryWords*8, true)
+	a.Store(rs, 16, s0)
+	g.pushRS()
 	a.OpImm(amd64.Add, rL, frame, true)
-	a.Load(s0, rCtx, offLinks)
-	a.Load(s0, s0, int32(8*idx))
-	a.JmpReg(s0)
+	switch {
+	case self:
+		a.Jmp(g.entry)
+	case kept:
+		a.JmpReg(link)
+	default:
+		a.Load(s0, rCtx, offLinks)
+		a.Load(s0, s0, int32(8*idx))
+		a.JmpReg(s0)
+	}
 	a.Bind(ret)
-	a.Store(rCtx, offRSP, rRS)
+	g.poppedRS()
 	g.restoreR()
 	g.refResults(v, g.adv())
 	g.takeResults(res, int32(g.req.FrameSlots))
 	a.Bind(after)
 	g.reload(v)
 	g.ool = append(g.ool, stub{kind: stubCall, l: poll, start: start, slow: slow, after: after, v: v, res: res})
+}
+
+// checkRS goes to slow where the return stack has no room for an entry,
+// and returns the register that holds its next entry: the one that keeps
+// it, or R10 loaded from the context.
+func (g *gen) checkRS(slow amd64.Label) amd64.Reg {
+	rs := g.rsInto()
+	g.a.CmpMem(rs, rCtx, offRSEnd, true)
+	g.a.Jcc(amd64.CondAE, slow)
+	return rs
+}
+
+// rsInto returns the register that holds the return stack's next entry:
+// the one that keeps it, or R10 loaded from the context.
+func (g *gen) rsInto() amd64.Reg {
+	if g.rsKept {
+		return g.rs
+	}
+	g.a.Load(rRS, rCtx, offRSP)
+	return rRS
+}
+
+// pushRS leaves in R10 the return stack's next entry past the one a call
+// wrote, as the callee takes it.
+func (g *gen) pushRS() {
+	if g.rsKept {
+		g.a.Lea(rRS, g.rs, wjit.RSEntryWords*8)
+		return
+	}
+	g.a.OpImm(amd64.Add, rRS, wjit.RSEntryWords*8, true)
+}
+
+// poppedRS keeps the return stack's next entry a native callee returned
+// with in R10: in the register that keeps it, or in the context, where an
+// exit of the callee left another.
+func (g *gen) poppedRS() {
+	if g.rsKept {
+		g.a.MovRR(g.rs, rRS)
+		return
+	}
+	g.a.Store(rCtx, offRSP, rRS)
+}
+
+// freeGPR returns a general register of the allocator's that none of args
+// is in, and that does not keep the return stack's entry, if there is one.
+func (g *gen) freeGPR(args []*Value) (amd64.Reg, bool) {
+	var used uint64
+	if g.rsKept {
+		used |= 1 << g.rs
+	}
+	for _, x := range args {
+		if l := g.locOf(x); l.kind == lGPR {
+			used |= 1 << l.r
+		}
+	}
+	for _, r := range gprs {
+		if used&(1<<r) == 0 {
+			return amd64.Reg(r), true
+		}
+	}
+	return 0, false
 }
 
 // callGo lowers what Go runs for the code: call_indirect, and the
@@ -1902,9 +2042,7 @@ func (g *gen) callIndirect(v *Value, rest []*Value) {
 	a.OpImm(amd64.Sub, rPoll, 1, true)
 	a.Jcc(amd64.CondLE, poll)
 	g.indirectCallee(v, frame, g.adv(), slow)
-	a.Load(rRS, rCtx, offRSP)
-	a.CmpMem(rRS, rCtx, offRSEnd, true)
-	a.Jcc(amd64.CondAE, slow)
+	rs := g.checkRS(slow)
 	// The callee's index waits in x0 while the arguments go into its
 	// parameters, one slot each, the moves taking s0.
 	a.MovQToX(x0, s0)
@@ -1916,13 +2054,13 @@ func (g *gen) callIndirect(v *Value, rest []*Value) {
 	g.advanceR()
 	ret := a.NewLabel()
 	a.LeaLabel(s0, ret)
-	a.Store(rRS, 0, s0)
-	a.Store(rRS, 8, rL)
+	a.Store(rs, 0, s0)
+	a.Store(rs, 8, rL)
 	a.MovQFromX(s0, x0)
 	a.ShiftImm(amd64.Shl, s0, 32, true)
 	a.OpImm(amd64.Or, s0, int32(v.At), true)
-	a.Store(rRS, 16, s0)
-	a.OpImm(amd64.Add, rRS, wjit.RSEntryWords*8, true)
+	a.Store(rs, 16, s0)
+	g.pushRS()
 	a.OpImm(amd64.Add, rL, frame, true)
 	a.MovQFromX(s0, x0)
 	a.ShiftImm(amd64.Shl, s0, 3, true)
@@ -1930,7 +2068,7 @@ func (g *gen) callIndirect(v *Value, rest []*Value) {
 	a.Load(s0, s0, 0)
 	a.JmpReg(s0)
 	a.Bind(ret)
-	a.Store(rCtx, offRSP, rRS)
+	g.poppedRS()
 	g.restoreR()
 	g.takeResults(res, int32(g.req.FrameSlots))
 	a.Bind(after)

@@ -363,7 +363,8 @@ table.grow and table.fill, which Go runs, do the same (`stageGo`).
 | BX | L, the frame's slots |
 | R15 | memory 0's base, loaded again after every exit |
 | R12 | the poll counter |
-| R10 | the return stack's next entry where it arrives and leaves; in the code, `Ctx.RSP` holds it |
+| R10 | the return stack's next entry where it arrives and leaves |
+| R13, R9 or R8 | the return stack's next entry in the code, where the allocator gave that register to no value; else `Ctx.RSP` holds it |
 | R11, R10 | general scratch registers |
 | X15, X14 | float scratch registers |
 | SI, R8, R9, R13, AX, CX, DX | the allocator's general registers, AX, CX and DX last (division's and shifts'; memory.copy and memory.fill take AX, CX and SI, an atomic store, read-modify-write and compare-and-exchange AX, CX and DX) |
@@ -371,11 +372,21 @@ table.grow and table.fill, which Go runs, do the same (`stageGo`).
 | SP, BP, R14 | never written |
 
 Native callers enter with R10 the return stack's next entry, which the
-entry stores into the context; the return sequence loads it, pops the
-entry and jumps to its address with BX the caller's L, as the baseline's
-does. After a native call the callee leaves R10 as the call found it, and
-the code stores it into the context again, where an exit of the callee
-may have left another.
+entry keeps: in R13, R9 or R8, the first the allocator gave to no value
+of the function (`keepRS`) -- no instruction's sequence takes them but as
+the allocator's -- or, where it gave out all three, in the context. The
+return sequence takes it from there, pops the entry and jumps to its
+address with BX the caller's L, as the baseline's does. A native call
+pushes its entry from where the code keeps it and leaves R10 past it for
+the callee, which returns with R10 as the call found it; the code keeps
+it again, where an exit of the callee may have left another in the
+context. A register that keeps it is stored into `Ctx.RSP` at every exit
+and trap, as the baseline's R10 is, and loaded again by the exit's
+resumption and a landing pad; the poll's exit does not save it. Kept in
+the context, it cost each call a store at the callee's entry and another
+after the return, and a load at the call and at the return: fib's
+optimized code took 7.3 ms where it took 7.8 with the other changes to
+calls (below) alone.
 
 On arm64:
 
@@ -568,7 +579,19 @@ share: a site leaves where to go on in X16 and jumps to it, and it keeps
 in the context's save area only the registers the allocator gave out. A call counts it down too, then checks, as the baseline
 does, that the callee has native code, that its frame and reference slots
 fit their chunks, and that the return stack has room, else calls through
-Go (`ExitCall`), out of line.
+Go (`ExitCall`), out of line. The callee's entry, read from the link
+table for the check, waits for the jump in a register of the allocator's
+that no argument is in -- at a call every other value is in its slot or
+dead -- rather than being read again. A call of the function by itself
+jumps to the code's own entry, and its tail call likewise, in the frame
+it has, with no check of a link or of the frame's room: the code runs, so
+it is placed and no pass of the memory limit drops it (the baseline
+README's Concurrency and memory), and it is the function's last tier.
+Such a recursion runs on in the code even where a pass cleared the
+function's link, and a call from elsewhere then comes through Go as any
+other does. fib's optimized code went from 8.9 ms to 7.8 for these two,
+from 38 instructions a call, on average over its calls and leaves, to 30
+with the register that keeps the return stack (Registers).
 
 A `call_indirect` or a `call_ref` counts it down and calls natively too
 where the table's element -- within the table, not null -- or the

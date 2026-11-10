@@ -5,11 +5,13 @@ package engine
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand/v2"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
 )
@@ -506,5 +508,91 @@ func TestOptPhiConstantsAcrossCalls(t *testing.T) {
 	}
 	if !optimized(inst, "run") {
 		t.Fatal("run not optimized")
+	}
+}
+
+// A function's calls and tail calls of itself in the optimized code go to
+// its own entry: the results, a trap's frames at the bottom of a
+// recursion, a stack overflow's and the references passed down are the
+// interpreter's, and a tail-recursive loop and a recursion without loops
+// end with their context.
+func TestOptSelfCalls(t *testing.T) {
+	src := `(module
+  (memory 1)
+  (elem declare func $fib)
+  (func $fib (export "fib") (param i32) (result i64)
+    (if (result i64) (i32.lt_u (local.get 0) (i32.const 2))
+      (then (i64.extend_i32_u (local.get 0)))
+      (else (i64.add (call $fib (i32.sub (local.get 0) (i32.const 1)))
+                     (call $fib (i32.sub (local.get 0) (i32.const 2)))))))
+  (func $down (export "down") (param i32) (result i32)
+    (if (result i32) (i32.eqz (local.get 0))
+      (then (i32.load (i32.const 70000)))
+      (else (i32.add (call $down (i32.sub (local.get 0) (i32.const 1))) (i32.const 1)))))
+  (func $deep (export "deep") (param i32) (result i32)
+    (i32.add (call $deep (i32.add (local.get 0) (i32.const 1))) (i32.const 1)))
+  (func $count (export "count") (param i32) (param i64) (result i64)
+    (if (result i64) (i32.eqz (local.get 0))
+      (then (local.get 1))
+      (else (return_call $count (i32.sub (local.get 0) (i32.const 1))
+                                (i64.add (local.get 1) (i64.const 3))))))
+  (func $spin (export "spin") (param i32) (result i32)
+    (return_call $spin (i32.add (local.get 0) (i32.const 1))))
+  (func $refs (param i32) (param funcref) (result i32)
+    (if (result i32) (i32.eqz (local.get 0))
+      (then (ref.is_null (local.get 1)))
+      (else (call $refs (i32.sub (local.get 0) (i32.const 1)) (local.get 1)))))
+  (func $refsTail (param i32) (param funcref) (result i32)
+    (if (result i32) (i32.eqz (local.get 0))
+      (then (ref.is_null (local.get 1)))
+      (else (return_call $refsTail (i32.sub (local.get 0) (i32.const 1)) (local.get 1)))))
+  (func (export "refs") (param i32) (result i32)
+    (i32.add (i32.mul (call $refs (local.get 0) (ref.func $fib)) (i32.const 10))
+      (i32.add (i32.mul (call $refs (local.get 0) (ref.null func)) (i32.const 100))
+        (call $refsTail (local.get 0) (ref.func $fib))))))`
+	interp := interpretedInstance(t, src)
+	inst := optInstance(t, src)
+	cases := []struct {
+		name string
+		args []uint64
+	}{
+		{"fib", []uint64{20}}, {"down", []uint64{0}}, {"down", []uint64{300}}, {"deep", []uint64{0}},
+		{"count", []uint64{100000, 7}}, {"refs", []uint64{0}}, {"refs", []uint64{50}},
+	}
+	for _, c := range cases {
+		want, werr := call(t, interp, c.name, c.args...)
+		got, gerr := call(t, inst, c.name, c.args...)
+		if (werr == nil) != (gerr == nil) || (werr == nil && got[0].N != want[0].N) {
+			t.Fatalf("%s%v = %v, %v; want %v, %v", c.name, c.args, got, gerr, want, werr)
+		}
+		if werr == nil {
+			continue
+		}
+		var wt, gt *Trap
+		if !errors.As(werr, &wt) || !errors.As(gerr, &gt) || wt.Code != gt.Code || len(wt.Frames) != len(gt.Frames) {
+			t.Fatalf("%s%v traps %v, want %v", c.name, c.args, gerr, werr)
+		}
+		for i := range wt.Frames {
+			if w, g := wt.Frames[i], gt.Frames[i]; w.Func != g.Func || w.Offset != g.Offset {
+				t.Fatalf("%s%v: frame %d is %+v, want %+v", c.name, c.args, i, g, w)
+			}
+		}
+	}
+	for _, c := range []struct {
+		name string
+		arg  uint64
+	}{{"spin", 0}, {"fib", 100}} {
+		ext, _ := inst.Export(c.name)
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		_, err := Invoke(ctx, ext.Func, []Val{{N: c.arg}})
+		cancel()
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("%s(%d) = %v, want the context's deadline", c.name, c.arg, err)
+		}
+	}
+	for _, name := range []string{"fib", "down", "deep", "count", "spin", "refs"} {
+		if !optimized(inst, name) {
+			t.Errorf("%s is not optimized", name)
+		}
 	}
 }

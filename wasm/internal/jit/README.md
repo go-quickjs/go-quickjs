@@ -890,7 +890,9 @@ makes it:
   (`loopsFor`), that no frame is in is dropped;
 - a function whose code no frame is in has its link cleared: its next call,
   native code's or Go's, comes through Go (`ExitCall` and `runNative`),
-  which notes the call's epoch and links the code again;
+  which notes the call's epoch and links the code again -- but for a call
+  of a function by itself from its optimized code, which goes to that
+  code, a frame being in it (`opt/README.md`, Lowering);
 - a function whose link a pass two epochs before cleared, and that has not
   been called since, is dropped, the least recently called first, until
   the room is made; its link stays clear, and its next call compiles it

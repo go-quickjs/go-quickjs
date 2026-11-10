@@ -9,6 +9,9 @@ func (g *gen) padEntry(b *Block) {
 	a.Load(rL, rCtx, offL)
 	a.Load(rMem, rCtx, offMemBase)
 	a.Load(rPoll, rCtx, offPoll)
+	if g.rsKept {
+		a.Load(g.rs, rCtx, offRSP)
+	}
 	g.reload(b.Pad)
 }
 

@@ -435,7 +435,12 @@ func (g *gen) tail(v *Value) {
 		a.SubsImm(rPoll, rPoll, 1, true)
 		a.BCond(arm64.LE, poll)
 		args := v.Args
-		if v.Op == OpTail {
+		// A tail call of the function by itself goes to this code's entry,
+		// in its own frame: the code runs, and its frame has room.
+		self := v.Op == OpTail && uint32(v.Aux) == g.fn
+		if self {
+			g.refArgs(v, 0)
+		} else if v.Op == OpTail {
 			idx := uint32(v.Aux)
 			a.Load(s0, rCtx, offLinks)
 			a.Load(s0, s0, int32(8*idx))
@@ -473,6 +478,12 @@ func (g *gen) tail(v *Value) {
 			g.parallelKeeping(moves)
 		}
 		g.moves = moves[:0]
+		if self {
+			// The frame's return stack entry names the function already.
+			a.B(g.entry)
+			g.ool = append(g.ool, stub{kind: stubPoll, l: poll, to: start})
+			return
+		}
 		if v.Op == OpTail {
 			idx := uint32(v.Aux)
 			a.MovImm(s0, uint64(idx))
