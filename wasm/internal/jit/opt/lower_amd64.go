@@ -920,16 +920,21 @@ func (g *gen) value(v *Value, rest []*Value) {
 			g.done(v, int(t))
 		}
 	case OpGlobalSet:
-		p := g.intoG(v.Args[0], s0)
+		// The value first: moving a float constant into a register goes
+		// through s0, which the global's address may be loaded into.
 		x := v.Args[1]
 		switch {
 		case x.Type == TF64:
-			a.StoreSD(p, 0, g.intoX(x, x0))
+			xv := g.intoX(x, x0)
+			a.StoreSD(g.intoG(v.Args[0], s0), 0, xv)
 		case x.Type == TF32:
-			a.StoreSS(p, 0, g.intoX(x, x0))
+			xv := g.intoX(x, x0)
+			p := g.intoG(v.Args[0], s0)
+			a.StoreSS(p, 0, xv)
 			a.StoreImm32(p, 4, 0)
 		default:
-			a.Store(p, 0, g.intoG(x, s1))
+			xv := g.intoG(x, s1)
+			a.Store(g.intoG(v.Args[0], s0), 0, xv)
 		}
 	case OpCall:
 		g.call(v, rest)
