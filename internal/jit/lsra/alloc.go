@@ -91,6 +91,18 @@ type web struct {
 	// owned says ranges is its own, not a register's, and may grow in
 	// place.
 	owned bool
+	// holes are where it gives its register up for others and lives in
+	// its slot, apart and in order, past which ranges keeps what is left
+	// of full, its ranges as they were; holeW is the weight of its uses
+	// and definitions in them, moveW that of the moves into and out of
+	// them.
+	full         []rng
+	holes        []rng
+	holeW, moveW float64
+	// ev are its uses and definitions, evW the sums of their weights
+	// (webEvents).
+	ev  []int32
+	evW []float64
 }
 
 func (w *web) start() int32 { return w.ranges[0].from }
@@ -171,11 +183,44 @@ type Allocator struct {
 	stale    []bool
 	vacross  []vacross
 	sorted   []pair
+	// victims are the webs an eviction takes a register from, and holes
+	// the holes planned in them.
+	victims []*web
+	holes   []hole
+	// The split registers' moves as found (keyed, entries), and their uses and
+	// definitions by position (events): ev from evOff[v] to evOff[v+1] are
+	// v's, each its position times two, plus one for a definition.
+	keyed    []keyedMove
+	entries  []keyedMove
+	ev       []int32
+	evOff    []int32
+	evNext   []int32
+	posBlock []int32
+	blockW   []float64
+
+	// The function being allocated, where splitting is allowed (split),
+	// its positions' end (maxPos), and whether its events are known.
+	f           *Func
+	split       bool
+	displace    bool
+	stress      bool
+	mutateHoles bool
+	maxPos      int32
+	evKnown     bool
 
 	rngs  arena[rng]
 	vregs arena[VReg]
 	hints arena[*web]
+	i32s  arena[int32]
+	f64s  arena[float64]
 	pool  chunks[web]
+}
+
+// keyedMove is a move of a split register and its key: a block and an
+// instruction or a successor, or the block alone.
+type keyedMove struct {
+	key [2]int32
+	mv  Move
 }
 
 // acrossEntry is a register a call, by its index among the clobbers,
@@ -213,7 +258,24 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	al.rngs.reset()
 	al.vregs.reset()
 	al.hints.reset()
+	al.i32s.reset()
+	al.f64s.reset()
 	al.pool.reset()
+	// Splitting needs a place for each edge's moves (Result.Edge): a
+	// function with a critical edge is allocated without.
+	al.f, al.evKnown = f, false
+	al.split, al.stress = !cfg.NoSplit, cfg.StressSplit && !cfg.NoSplit
+	al.displace, al.mutateHoles = cfg.Displace, cfg.mutateHoles
+	for i := range f.Blocks {
+		if len(f.Blocks[i].Succs) < 2 {
+			continue
+		}
+		for _, s := range f.Blocks[i].Succs {
+			if len(f.Blocks[s].Preds) > 1 {
+				al.split = false
+			}
+		}
+	}
 
 	// predIdx is, for each block's successor k, the block's index among
 	// that successor's predecessors: predIdx[predOff[i]+k].
@@ -416,6 +478,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		}
 	}
 	al.opened = opened
+	al.maxPos = pos
 	// The clobbers were found backwards: their positions are distinct.
 	slices.Reverse(clobbers)
 	al.clobbers = clobbers
@@ -744,8 +807,18 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 			if reg < 0 {
 				// No register: take the one whose webs in cur's way are
 				// the least dense -- their weight over the positions they
-				// cover -- if they are less dense than cur, spilling them.
+				// cover -- if they are less dense than cur, spilling them
+				// whole, else spill cur. With splitting, they give the
+				// register up over holes instead where each would (plan)
+				// and the holes cost less than spilling cur, whatever
+				// their density; with Config.Displace, cur takes it
+				// wherever no temporary is in the way, each of them
+				// giving it up over a hole where that costs less than
+				// spilling it whole, and spilled whole otherwise.
 				best, bestCost := -1, cur.density()
+				if al.split {
+					bestCost = math.Inf(1)
+				}
 				for _, r := range regs {
 					if cur.avoid&(1<<r) != 0 {
 						continue
@@ -771,15 +844,66 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 					}
 					continue
 				}
-				evict := func(a *web) bool {
+				victims, holes := al.victims[:0], al.holes[:0]
+				for _, a := range active {
 					if a.reg == best && overlap(a.ranges[a.cur:], cur.ranges) {
-						a.reg, a.spilled = -1, true
-						return true
+						victims = append(victims, a)
 					}
-					return false
 				}
-				active = slices.DeleteFunc(active, evict)
-				inactive = slices.DeleteFunc(inactive, evict)
+				for _, a := range inactive {
+					if a.reg == best && overlap(a.ranges[a.cur:], cur.ranges) {
+						victims = append(victims, a)
+					}
+				}
+				for _, a := range victims {
+					var h hole
+					if al.split {
+						h = al.plan(a, cur)
+					}
+					holes = append(holes, h)
+				}
+				if al.split && !al.displace && !al.stress {
+					total := 0.0
+					for _, h := range holes {
+						if h.e <= h.s {
+							total = math.Inf(1)
+						}
+						total += h.cost
+					}
+					if total >= cur.weight {
+						// The rule without splitting.
+						clear(holes)
+						if !(bestCost < cur.density()) {
+							clear(victims)
+							al.victims, al.holes = victims[:0], holes[:0]
+							if !apart(cur) {
+								cur.spilled = true
+							}
+							continue
+						}
+					}
+				}
+				evicted := func(a *web) bool { return slices.Contains(victims, a) }
+				active = slices.DeleteFunc(active, evicted)
+				inactive = slices.DeleteFunc(inactive, evicted)
+				for k, a := range victims {
+					if h := holes[k]; h.e <= h.s {
+						a.spillWhole()
+						continue
+					}
+					al.punch(a, holes[k])
+					// It keeps its register outside its holes.
+					a.cur = 0
+					switch {
+					case a.end() <= p:
+					case a.covers(p):
+						active = append(active, a)
+					default:
+						inactive = append(inactive, a)
+					}
+				}
+				clear(victims)
+				al.victims, al.holes = victims[:0], holes[:0]
 				reg = best
 			}
 			cur.reg = reg
@@ -817,8 +941,8 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 			continue
 		}
 		rs := append(rngs.take(1), rng{0, w.arrive + 1})
-		if w.spilled || w.calls {
-			rs = unionInto(rngs, rs, w.ranges)
+		if w.spilled || w.calls || len(w.holes) > 0 {
+			rs = unionInto(rngs, rs, al.slotRanges(w))
 			w.slot = w.fixed
 		}
 		for k := range w.width {
@@ -826,13 +950,14 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		}
 	}
 	for _, w := range list {
-		if !(w.spilled || w.calls) || w.slot >= 0 {
+		if !(w.spilled || w.calls || len(w.holes) > 0) || w.slot >= 0 {
 			continue
 		}
+		rs := al.slotRanges(w)
 		// The first slot from which width are free.
 		s := int32(0)
 		for k := int32(0); k < w.width; {
-			if int(s+k) < len(slots) && overlap(slots[s+k], w.ranges) {
+			if int(s+k) < len(slots) && overlap(slots[s+k], rs) {
 				s, k = s+k+1, 0
 				continue
 			}
@@ -845,7 +970,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 		}
 		w.slot = s
 		for k := range w.width {
-			take(s+k, w.ranges)
+			take(s+k, rs)
 		}
 	}
 	nslots := len(slots)
@@ -855,28 +980,44 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	res := &al.res
 	res.Reg = grown(res.Reg, n)
 	res.Slot = grown(res.Slot, n)
+	res.flags = grown(res.flags, n)
 	res.NumSlots = nslots
 	for i := range res.Reg {
 		res.Reg[i] = -1
 		res.Slot[i] = -1
 	}
+	clear(res.flags)
+	res.splits = 0
 	across := al.across[:0]
 	for _, w := range list {
+		var fl uint8
+		if w.calls && w.reg >= 0 {
+			fl = flagStored
+		}
+		if len(w.holes) > 0 {
+			fl |= flagSplit
+			res.splits += len(w.members)
+		}
 		for _, m := range w.members {
 			res.Reg[m] = int16(w.reg)
 			res.Slot[m] = w.slot
+			res.flags[m] = fl
 		}
 		if !w.calls || w.reg < 0 {
 			continue
 		}
-		// The calls each of its registers lives across, which reload it.
+		// The calls each of its registers lives across in it, which
+		// reload it.
 		for _, m := range w.members {
 			crossed(ranges[m], func(k int) {
-				if clobbers[k].call {
+				if clobbers[k].call && !inHoles(w.holes, clobAt[k]) {
 					across = append(across, acrossEntry{int32(k), m})
 				}
 			})
 		}
+	}
+	if res.splits > 0 {
+		al.splitMoves(res, list, ranges)
 	}
 	al.across = across
 	// Each call's registers, in the order found, by the call's index
@@ -1149,15 +1290,16 @@ func (q *webQueue) Pop() any {
 	return w
 }
 
-// density is w's weight over the positions it covers: a long web of few
-// uses gains less from a register than a short one of as many.
+// density is w's weight over the positions it covers -- what of it is
+// in its register, outside its holes: a long web of few uses gains less
+// from a register than a short one of as many.
 func (w *web) density() float64 {
 	if w.dense == 0 {
 		n := int32(0)
 		for _, r := range w.ranges {
 			n += r.to - r.from
 		}
-		w.dense = w.weight / float64(n)
+		w.dense = (w.weight - w.holeW) / float64(n)
 	}
 	return w.dense
 }

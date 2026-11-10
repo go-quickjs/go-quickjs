@@ -507,36 +507,73 @@ al.'s "Computing Liveness Sets for SSA-Form Programs"), else sweeps of the
 blocks until their sets change no more. A phi and an argument whose lifetimes do not meet are
 coalesced into a web -- one location, no move on their edge -- the
 edges of the deepest loops first (two parameters, arriving in different
-slots, never). Each web has one location for its whole life, given by a
-linear scan of the webs in order of their starts with active and
-inactive webs, as Wimmer and Mössenböck's, so that a web takes a
-register in another's hole. Where a class's registers run out, the web
-scanned displaces those in its way on the register where they are least
+slots, never). Webs are allocated by a linear scan in order of their
+starts with active and inactive webs, as Wimmer and Mössenböck's, so that
+a web takes a register in another's hole. Where a class's registers run
+out, the web scanned takes the register whose webs in its way are least
 dense -- their weight, their uses at eight times each loop around them,
-over the positions they cover -- if they are less dense than it, and is
-spilled otherwise; a web of several registers it would spill is taken
-apart instead, its registers scanned again each on its own and hinted to
-the others'. Density, not weight, decides, so that a loop's short
-temporaries keep registers and the long values around them, used less
-often for their length, go to slots. A register an instruction clobbers
-(on amd64 AX and DX for a division, CX for a shift by a variable, AX, CX
-and SI for memory.copy and memory.fill, AX, CX and DX for an atomic store,
-read-modify-write and compare-and-exchange; on arm64 X13-X15 for
-memory.copy, memory.fill and those atomics) is not given to a web live
-across it. A
-web in a register that lives across a call is stored into its slot where
-each of its values is defined and loaded again after each call it
-crosses; one whose reloads would weigh as much as its uses lives in its
-slot instead. Slots are given by a second scan over the ranges, holes
-included, a web with a parameter keeping the slot it arrives in, and a
-register wider than a slot (`Func.Width`, a v128's two) taking consecutive
-ones. An instruction's temporaries (`Inst.Temps`), which a sequence works
-in, are registers live from its reads to its writes, so apart from its
-operands', its results' and those live across it, and heavier than
-anything they meet, which is displaced for them. A phi
-prefers its arguments' registers and they its, and a two-address
-operation's result its first operand's. There is no splitting within a
-value's life: a web is in its register or its slot throughout.
+over the positions they cover -- and each of those webs is split: it
+gives the register up over a hole in its life (below). On arm64 that is
+where each one's holes would cost less than its uses and the new holes
+together less than spilling the web scanned; else, as before splitting,
+they are spilled whole where they are less dense than it, and it is
+spilled otherwise. On amd64 (`lsra.Config.Displace`) the web scanned
+takes the register whatever their density, where no instruction's
+temporaries are in the way, each of them split where its holes would cost
+less than its uses and spilled whole otherwise. A register an instruction
+clobbers (on amd64 AX and DX for a division, CX for a shift by a
+variable, AX, CX and SI for memory.copy and memory.fill, AX, CX and DX
+for an atomic store, read-modify-write and compare-and-exchange; on arm64
+X13-X15 for memory.copy, memory.fill and those atomics) is not given to a
+web live across it. A web in a register that lives across a call is
+stored into its slot where each of its values is defined and loaded again
+after each call it crosses in its register; one whose reloads would weigh
+as much as its uses lives in its slot instead. Slots are given by a
+second scan over the ranges, holes included, a web with a parameter
+keeping the slot it arrives in, and a register wider than a slot
+(`Func.Width`, a v128's two) taking consecutive ones. An instruction's
+temporaries (`Inst.Temps`), which a sequence works in, are registers live
+from its reads to its writes, so apart from its operands', its results'
+and those live across it, and heavier than anything they meet, which is
+displaced for them. A phi prefers its arguments' registers and they its,
+and a two-address operation's result its first operand's.
+
+A hole covers where the split web and the one scanned are both live,
+widened, between the split web's last use before and its first after, to
+where a block of a lower loop depth begins or to a loop's header, or to a
+hole the web has already, so that the moves into and out of it run least
+often. It costs the web's uses in it, each now its slot's, and those
+moves -- a store where the web goes in, none for a web stored where it is
+defined, whose slot holds it already, and a load where it comes out --
+before an instruction within a block, or on each edge that crosses its
+bounds, each by its loop depth; the web's holes, the new one with them,
+must cost less than all its uses, which spilling it whole would cost. A
+split web keeps its one register, and a slot: over its holes alone where
+it is not stored where defined. Before splitting, a web displaced was
+spilled whole whatever its weight: in the Go program's sort, the hottest
+function's loop counter, a web of 50 phis and arguments weighing 1,059,
+went to its slot for a temporary of two positions in a block outside its
+loops, and its loops read, added to and stored it there on every turn. A
+function with a critical edge (the passes split them all) or allocated
+with `WASM_OPT_SPLIT=off` is allocated without splitting: the web scanned
+displaces those in its way only where they are less dense than it,
+spilling them whole, and is spilled itself otherwise. Either way a web of
+several registers that would be spilled -- displacing, where temporaries
+take every register -- is taken apart instead, its registers
+scanned again each on its own and hinted to the others'. Density, not
+weight, chooses the register, so that a loop's short temporaries keep
+registers and the long values around them, used less often for their
+length, go to slots, now over holes around the temporaries. On amd64,
+displacing gained regexp 5% and sort 4% where arm64's rule leaves them
+level; on arm64 displacing took sha256 from 106 ms to 118, its hot loop's
+code a fifth larger with the moves of holes where the old rule, with
+arm64's eighteen registers, spilled almost nothing, and gained nothing
+else. Other rules measured worse on amd64: the old density rule with
+holes (sha256 48 ms to 54-62, its stack pointer losing R13 in a cascade
+of evictions), the register chosen by the holes' cost (52), spilling the
+web scanned wherever the holes cost more than its own uses (66-70, interp
+and gzip 10-15% slower): weight does not see what a short value on a
+chain of them, or a loop's address base, is worth in a register.
 
 A phi in a register is stored into its slot where its block begins unless
 every argument but a constant shares its register and its slot, which
@@ -557,8 +594,9 @@ from 28.8 to 27.0, interp from 12.1 to 11.2, the others level).
 A landing pad's one predecessor ends with its site, so what the pad reads
 of the function is live across the site's call: in its slot, where Go
 finds it, the pad loading it again as the code after the call does. A pad
-has no phi and its edge no move, the pad's own edge to its label taking
-the moves.
+has no phi, the pad's own edge to its label taking the phis' moves; the
+moves of split values after the site's call, and on its edge, it makes as
+the code after the call does (below).
 
 Lowering reads a spilled operand from its slot -- on amd64 as a memory
 operand where the instruction takes one (`OpMem`, `ImulMem`), else, and on
@@ -570,6 +608,22 @@ slots may meet a word's or another v128's in part, a move waits for those
 whose sources meet its destination at all, and where every move waits, the
 source of one another waits for goes to a scratch register -- X14, X15 or
 R10 (D30, D31 or X17) -- which its readers read (`parallelV`).
+
+The lowering keeps where each value is as it goes (`lowering.where`),
+which moves for a split value at its holes' bounds: as a block begins it
+takes it from `lsra.Result.Entry`; before each instruction, as the
+allocator numbers them, it makes the moves `Result.Moves` gives -- a load
+into the register where a hole ends, a store into the slot where one
+begins, none for a value stored where defined -- as a parallel move, and
+learns where a value the instruction defines is; on an edge from a block
+of one successor it makes `Result.Edge`'s moves in the parallel move of
+the phis' arguments at the block's end, a phi going where it is as its
+block begins, and on an edge from a block of several successors where the
+successor, of one predecessor, begins. A landing pad, which Go enters,
+loads what its site's call reloads, then makes the moves after the call
+(`siteGap`) and its edge's. The out-of-line code of a call through Go,
+made after the blocks, finds its operands and results where the call
+left them (`keepWhere`).
 
 v128s are the float class's, as wide as two slots (`lsra.Func.Width`):
 they share the float registers with f32s and f64s, and a spilled v128, or
@@ -1053,6 +1107,14 @@ and 5,394 objects before. By phase, µs a function:
 6, dce 5, fold 4, bce 3. The largest functions cost the most a byte (225
 ns for one of 17 KB of body and 1,110 blocks).
 
+Splitting (Register allocation) costs the Go program's compiles 15%, 172
+to 198 µs a function: the scan 7 to 19 µs -- the holes' planning, with
+each register's uses and definitions by position found once, at a
+function's first eviction, and each split web's, with the sums of their
+weights, at its first -- the result's moves 4 to 8, and the emission of
+them 22 to 27. 856 of the 3,011 functions change, their code 0.2% larger
+in all; the spec scripts' functions do not split, and cost what they did.
+
 ## Refusals
 
 A function is refused -- it keeps its baseline code -- when it has:
@@ -1083,6 +1145,17 @@ go test -tags quickjs_jit ./wasm/internal/engine -run 'TestOpt'
 (cd internal/jit/verify && go test -tags quickjs_jit -run 'TestAMD64WasmOpt|TestARM64WasmOpt' .)
 go run -tags quickjs_jit ./internal/cmd/wasmbench -engine jit-base,jit-tiered,jit-opt -suite micro,programs
 ```
+
+Two knobs, read when the package starts, drive the allocator for tests
+and comparisons: `WASM_OPT_SPLIT=off` allocates without splitting, the
+code then the same as before splitting came, and `stress` splits
+wherever the allocator can -- a web scanned takes a register whatever
+the density of those in its way, which take holes whatever they cost;
+`nodisplace` splits as on arm64 (`lsra.Config.Displace` off);
+`WASM_OPT_REGS=g,f` gives the allocator its first g general and f float
+registers alone. The spec scripts' functions are small and split little
+(1,051 holes in all, under `stress`): the spec, the engine's tests and
+the differential are run under `stress`, with 3 and 6 registers too.
 
 A profile's samples in native code have no symbol. `WASM_JIT_CODE=FILE`
 has the engine write every code it places to FILE, a line of JSON each --
@@ -1125,10 +1198,19 @@ WASM_OPT_CORPUS=/path/goprog.wasm,spec WASM_SPEC_DIR=/path/to/spec WASM_OPT_HASH
 `TestJITDifferential`'s `opt` pass runs the spec modules with every
 function the tier accepts optimized and compares them with the
 interpreter; `TestAllocateRandom` checks the allocator's results on random
-functions by a liveness of its own, and an Allocator kept from one to
-the next against a new one, `TestLivenessMethods` the two liveness
-methods against each other, `TestRanges` the range lists' tests and
-merges, `TestCoalesce` a loop's phi web; `TestWorkspaceReuse` compiles in
+functions in SSA form, a third of them allocated with
+`lsra.Config.Displace` and a third with `StressSplit`, by running each on its locations
+(`checkResult`): what each register and slot holds at each point as the
+lowering's code would leave it -- definitions, split values' moves,
+phis' and edges' moves as if all at once, calls and their reloads,
+clobbers and temporaries -- met over the paths into each block, each use
+reading a location that holds its value; and an Allocator kept from one
+to the next against a new one. `TestCheckCatchesMutations` has the
+check find allocations made wrong on purpose (holes that leave a
+position out, a load dropped, a block's entry wrong, a reload dropped),
+`TestLivenessMethods` the two liveness methods against each other,
+`TestRanges` the range lists' tests and merges, `TestCoalesce` a loop's
+phi web; `TestWorkspaceReuse` compiles in
 workspaces kept and from goroutines at once (with -race);
 `TestOptTierUp` the counts, the replacement mid-recursion and the poll
 samples, `TestOptTierUpByExits` the exits'; `TestOptCallIndirect` every
@@ -1245,6 +1327,18 @@ interp's (+5%), the baseline code's counting of calls; json's is level
 +4%, and +19% and +17% before the compile's cost was worked on (see
 Tier-up).
 
+Splitting values' lives (Register allocation) gained, the steady state's
+median runs (`-warmup 15 -reps 10`) in 6 fresh processes against as many
+of the code before it, in turns, ms: optimized, interp 11.3 to 10.5,
+regexp 25.6 to 24.2 and json 23.1 to 22.5; tiered, interp 11.5 to 10.6,
+regexp 25.6 to 24.6 and json 24.0 to 23.4; sha256, sort and gzip level
+in both. The micro-benchmarks are level: their loops have registers
+enough. On arm64 (GitHub's `ubuntu-24.04-arm`, 3 rounds of 3 fresh
+processes in turns, `-warmup 1`) every program and micro-benchmark was
+level, both tiers, on the code splitting was first written on. The optimized first
+runs, which pay every compile at once, are 4 to 9% slower (The compile's
+cost); the tiered ones, compiling in the background, level.
+
 `BenchmarkOptMemories` (`wasm/internal/engine`) times ten passes over
 64 KiB of a memory -- a load, a store and a load at offset 4 every 8 bytes
 -- in the baseline code and optimized, µs: memory 1 61 and 54, an i64
@@ -1298,9 +1392,14 @@ registers the allocator gave out.
 - OSR into optimized code: a function called once whose loop runs long
   (sha256's block function) runs its first call in the baseline code,
   and is optimized only for its next.
-- Splitting within a value's life in the allocator: a web is in its
-  register or its slot throughout, so a long value is spilled for its
-  whole loop where a short stretch of pressure needs its register.
+- Splitting into another register: a split web keeps its one register
+  and gives it up over holes, so a value hot in one loop is in its slot
+  there where a denser value of that loop takes its register, even with
+  another free there (sort's loop counter is split, but in its slot in
+  its loops). A part re-allocated from where its hole ends, as Wimmer and
+  Mössenböck's splitting re-scans the part after a split, could take any
+  register free there. The holes' cost weighs a use from a slot as a
+  move; on amd64 most such uses are memory operands.
 - The compile's cost, 0.16 ms a Go function, now spread over its
   phases (The compile's cost): fewer passes over the IR -- copyelim
   runs five times, the dominator tree up to three -- and trivial phis

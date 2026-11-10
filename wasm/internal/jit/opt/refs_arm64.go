@@ -499,7 +499,7 @@ func (g *gen) tail(v *Value) {
 		}
 		a.Br(s0)
 		g.ool = append(g.ool, stub{kind: stubPoll, l: poll, to: start})
-		g.ool = append(g.ool, stub{kind: stubTail, l: slow, v: v})
+		g.ool = append(g.ool, stub{kind: stubTail, l: slow, v: v, wh: g.keepWhere(v, nil)})
 		return
 	}
 	a.Bind(slow)

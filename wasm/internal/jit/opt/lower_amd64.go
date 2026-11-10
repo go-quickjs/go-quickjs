@@ -7,6 +7,7 @@ import (
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/asm/amd64"
+	"github.com/go-quickjs/go-quickjs/internal/jit/lsra"
 	wjit "github.com/go-quickjs/go-quickjs/wasm/internal/jit"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/opcode"
 )
@@ -188,6 +189,12 @@ func (g *gen) mark(format string, args ...any) {
 		g.marks = append(g.marks, wjit.Mark{Off: g.a.Len(), Tag: fmt.Sprintf(format, args...)})
 	}
 }
+
+// displace has the allocator take a register for a web from those in its
+// way whatever their density, splitting them (lsra.Config.Displace): on
+// amd64, where most uses from a slot are memory operands, regexp's and
+// sort's code gained 4-5% by it, the other programs level.
+const displace = true
 
 // lower lowers f, optimized, to native code for req's function.
 func lower(f *Func, req *wjit.Request, ws *workspace) *wjit.Code {
@@ -437,24 +444,25 @@ func (g *gen) movX(x amd64.XReg, v *Value) { g.move(loc{kind: lXMM, r: int(x)}, 
 // defG and defX are the register v's result is computed in: its own, or
 // the first scratch register for a value spilled.
 func (g *gen) defG(v *Value) amd64.Reg {
-	if r := g.ra.Reg[v.vreg]; r >= 0 {
+	if r := g.where[v.vreg]; r >= 0 {
 		return amd64.Reg(r)
 	}
 	return s0
 }
 
 func (g *gen) defX(v *Value) amd64.XReg {
-	if r := g.ra.Reg[v.vreg]; r >= 0 {
+	if r := g.where[v.vreg]; r >= 0 {
 		return amd64.XReg(r)
 	}
 	return x0
 }
 
-// done stores v's result, computed in register r, into its slot, if it
-// has one: its home if spilled, its copy if it lives across a call.
+// done stores v's result, computed in register r, into its slot where it
+// is there: its home if spilled or in a hole of a split one, its copy if
+// it lives across a call.
 func (g *gen) done(v *Value, r int) {
 	s := g.ra.Slot[v.vreg]
-	if s < 0 {
+	if s < 0 || (g.where[v.vreg] >= 0 && !g.stores(v)) {
 		return
 	}
 	src := loc{kind: lGPR, r: r}
@@ -506,9 +514,11 @@ type stub struct {
 	start, slow, after amd64.Label
 	code               uint64
 	at                 uint32
-	// v is the call, res its results.
+	// v is the call, res its results, and wh where its operands and
+	// results are (keepWhere).
 	v   *Value
 	res []*Value
+	wh  []int16
 	// dst, off and flag are a barrier's store (stubBarrier): its slot's
 	// base and offset, and the register its slow path has.
 	dst, flag amd64.Reg
@@ -587,6 +597,7 @@ func (g *gen) stub(st *stub) {
 		g.restoreAll()
 		a.Jmp(st.start)
 		a.Bind(st.slow)
+		g.putWhere(v, st.res, st.wh)
 		g.exitCall(v, st.res)
 		a.Jmp(st.after)
 	case stubBarrier:
@@ -603,6 +614,7 @@ func (g *gen) stub(st *stub) {
 	case stubTail:
 		a.Bind(st.l)
 		g.mark("cold tail call")
+		g.putWhere(st.v, nil, st.wh)
 		g.exitTail(st.v)
 	case stubRefRoom:
 		// A callee that holds references, whose Ctx.Frames is past any
@@ -748,14 +760,52 @@ func (g *gen) jump(i int, s *Block) {
 	a.Jmp(l)
 }
 
-// edgeMoves moves the arguments of s's phis for the edge from b.
+// edgeMoves moves the arguments of s's phis for the edge from b, and the
+// split values that move on it where b has no other.
 func (g *gen) edgeMoves(b, s *Block) {
-	if len(s.Phis) == 0 {
+	var ms []lsra.Move
+	if len(b.Succs) == 1 {
+		ms = g.ra.Edge(int(g.index[b.ID]), 0)
+	}
+	if len(s.Phis) == 0 && len(ms) == 0 {
 		return
 	}
 	g.mark("edge %v->%v", b, s)
 	moves := g.phiMoves(g.moves[:0], b, s)
+	moves = g.splitMoves(moves, ms, false)
 	g.parallel(moves)
+	g.moves = moves[:0]
+}
+
+// predMoves makes, where block b, the i-th, begins, the moves of the split
+// values on the edge from its predecessor where that has other successors.
+func (g *gen) predMoves(b *Block) {
+	if len(b.Preds) != 1 || len(b.Preds[0].Succs) < 2 {
+		return
+	}
+	p := b.Preds[0]
+	ms := g.ra.Edge(int(g.index[p.ID]), slices.Index(p.Succs, b))
+	if len(ms) == 0 {
+		return
+	}
+	g.mark("edge %v->%v", p, b)
+	moves := g.splitMoves(g.moves[:0], ms, false)
+	g.parallel(moves)
+	g.moves = moves[:0]
+}
+
+// gapMoves makes the moves of split values before instruction j, as the
+// allocator numbers them, of block i.
+func (g *gen) gapMoves(i, j int) {
+	ms := g.ra.Moves(i, j)
+	if len(ms) == 0 {
+		return
+	}
+	moves := g.splitMoves(g.moves[:0], ms, true)
+	if len(moves) > 0 {
+		g.mark("split")
+		g.parallel(moves)
+	}
 	g.moves = moves[:0]
 }
 
@@ -764,20 +814,33 @@ func (g *gen) block(i int, b *Block) {
 	if b.Pad != nil {
 		g.padEntry(b)
 	}
+	split := g.ra.Splits()
+	if split {
+		g.blockWhere(i)
+		g.predMoves(b)
+	}
 	for _, p := range b.Phis {
-		if r := g.ra.Reg[p.vreg]; r >= 0 && !g.inSlot(p) {
+		if r := g.where[p.vreg]; r >= 0 && g.stores(p) && !g.inSlot(p) {
 			g.done(p, int(r))
 		}
 	}
+	inst := 0
 	for j := 0; j < len(b.Values); j++ {
 		v := b.Values[j]
 		if v.Op == OpConst || v.Op == OpResult || g.fused[v.ID] {
 			continue
 		}
+		if split {
+			g.gapMoves(i, inst)
+		}
+		inst++
 		if g.marking {
 			g.mark("%v %v %v", v, v.Op, v.Type)
 		}
 		g.value(v, b.Values[j+1:])
+	}
+	if split {
+		g.gapMoves(i, inst)
 	}
 	a := g.a
 	if g.marking {
@@ -962,7 +1025,7 @@ func (g *gen) value(v *Value, rest []*Value) {
 	wide := v.Type == TI64
 	switch v.Op {
 	case OpParam:
-		if r := g.ra.Reg[v.vreg]; r >= 0 {
+		if r := g.where[v.vreg]; r >= 0 {
 			dst := loc{kind: lGPR, r: int(r)}
 			if v.Type.InFloatReg() {
 				dst.kind = lXMM
@@ -1873,7 +1936,7 @@ func (g *gen) reload(v *Value) {
 	}
 	for _, r := range across {
 		w := g.byVreg[r]
-		g.move(g.locOf(w), loc{kind: lSlot, slot: g.ra.Slot[r]}, w.Type)
+		g.move(g.regLoc(w, g.ra.Reg[r]), loc{kind: lSlot, slot: g.ra.Slot[r]}, w.Type)
 	}
 }
 
@@ -1970,7 +2033,7 @@ func (g *gen) call(v *Value, rest []*Value) {
 	g.takeResults(res, int32(g.req.FrameSlots))
 	a.Bind(after)
 	g.reload(v)
-	g.ool = append(g.ool, stub{kind: stubCall, l: poll, start: start, slow: slow, after: after, v: v, res: res})
+	g.ool = append(g.ool, stub{kind: stubCall, l: poll, start: start, slow: slow, after: after, v: v, res: res, wh: g.keepWhere(v, res)})
 }
 
 // checkRS goes to slow where the return stack has no room for an entry,
@@ -2147,7 +2210,7 @@ func (g *gen) callIndirect(v *Value, rest []*Value) {
 	if ref {
 		kind = stubCallRef
 	}
-	g.ool = append(g.ool, stub{kind: kind, l: poll, start: start, slow: slow, after: after, v: v, res: res})
+	g.ool = append(g.ool, stub{kind: kind, l: poll, start: start, slow: slow, after: after, v: v, res: res, wh: g.keepWhere(v, res)})
 }
 
 // indirectCallee leaves in s0 the index of the function call_indirect,

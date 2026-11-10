@@ -4,6 +4,8 @@ package opt
 
 import (
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/lsra"
@@ -60,6 +62,12 @@ type lowering struct {
 	// has them (simdTemps).
 	v128  bool
 	temps []int32
+	// where is each value's register where the lowering is, or -1 where
+	// it is in its slot: a value the allocator split moves between them
+	// (lsra.Result.Moves). whBuf holds where the operands and results of
+	// calls are for their out-of-line code (keepWhere).
+	where []int16
+	whBuf []int16
 }
 
 // reset readies l, kept in a workspace, for function f, keeping the
@@ -69,7 +77,8 @@ func (l *lowering) reset(f *Func, req *wjit.Request) {
 	clear(l.byVreg)
 	n := f.NumValues()
 	*l = lowering{f: f, req: req, fn: req.Func, index: grown(l.index, int(f.nextBlock)), inst: l.inst,
-		fused: grown(l.fused, n), byID: l.byID[:0], byVreg: l.byVreg[:0], marking: req.Marks, temps: l.temps[:0]}
+		fused: grown(l.fused, n), byID: l.byID[:0], byVreg: l.byVreg[:0], marking: req.Marks, temps: l.temps[:0],
+		where: l.where[:0], whBuf: l.whBuf[:0]}
 	clear(l.fused)
 }
 
@@ -127,7 +136,7 @@ func (g *lowering) listing(gpr, fpr func(r int) string) string {
 			return ""
 		}
 		var s string
-		switch l := g.locOf(v); l.kind {
+		switch l := g.regLoc(v, g.ra.Reg[v.vreg]); l.kind {
 		case lGPR:
 			s = gpr(l.r)
 		case lXMM:
@@ -135,8 +144,11 @@ func (g *lowering) listing(gpr, fpr func(r int) string) string {
 		case lSlot:
 			s = fmt.Sprintf("slot%d", l.slot)
 		}
-		if l := g.locOf(v); l.kind != lSlot && g.ra.Slot[v.vreg] >= 0 {
+		if g.ra.Reg[v.vreg] >= 0 && g.ra.Slot[v.vreg] >= 0 {
 			s += fmt.Sprintf(" (slot%d)", g.ra.Slot[v.vreg])
+		}
+		if g.ra.Split(lsra.VReg(v.vreg)) {
+			s += " split"
 		}
 		return "  ; " + s
 	}
@@ -181,9 +193,32 @@ func (g *lowering) listing(gpr, fpr func(r int) string) string {
 	return sb.String()
 }
 
+// fewRegs is WASM_OPT_REGS, "g,f", read when the package starts, for
+// tests: the allocator has the first g of its general registers and the
+// first f of its float registers alone, so that the values of most
+// functions outnumber them and it spills and splits.
+var fewRegs = func() (n [2]int) {
+	g, f, ok := strings.Cut(os.Getenv("WASM_OPT_REGS"), ",")
+	if !ok {
+		return n
+	}
+	n[0], _ = strconv.Atoi(g)
+	n[1], _ = strconv.Atoi(f)
+	return n
+}()
+
+// splitMode is WASM_OPT_SPLIT, read when the package starts, for tests and
+// comparisons: "off" allocates without splitting, "stress" splits wherever
+// the allocator can, "nodisplace" splits as on arm64 (lsra.Config's
+// NoSplit, StressSplit and Displace).
+var splitMode = os.Getenv("WASM_OPT_SPLIT")
+
 // allocate describes f to the allocator and allocates its registers, of
 // classes, with the clobbers cl.
 func (g *lowering) allocate(ws *allocScratch, classes [][]int, cl *clobbers) {
+	if fewRegs[0] > 0 && fewRegs[1] > 0 {
+		classes = [][]int{classes[0][:min(fewRegs[0], len(classes[0]))], classes[1][:min(fewRegs[1], len(classes[1]))]}
+	}
 	f := g.f
 	ws.vregs.reset()
 	// The values the allocator sees are numbered densely, in the order of
@@ -396,7 +431,8 @@ func (g *lowering) allocate(ws *allocScratch, classes [][]int, cl *clobbers) {
 		}
 	}
 	lap(PhaseDescribe)
-	cfg := lsra.Config{Classes: classes, NumSlots: g.argBase}
+	cfg := lsra.Config{Classes: classes, NumSlots: g.argBase, NoSplit: splitMode == "off", StressSplit: splitMode == "stress",
+		Displace: displace && splitMode != "nodisplace"}
 	if Timing != nil {
 		cfg.Lap = lsraLap
 	}
@@ -405,6 +441,7 @@ func (g *lowering) allocate(ws *allocScratch, classes [][]int, cl *clobbers) {
 		refuse(RefuseFrame, "%v: %d slots", err, g.argBase)
 	}
 	g.ra = ra
+	g.where = append(g.where[:0], ra.Reg...)
 }
 
 // smallCopy is the count of memory.copy v where it is a constant from 1 to
@@ -450,12 +487,17 @@ func (g *lowering) temp(v *Value, k int) int {
 	return int(r)
 }
 
-// locOf is where v is.
+// locOf is where v is, where the lowering is.
 func (g *lowering) locOf(v *Value) loc {
 	if v.Op == OpConst {
 		return loc{kind: lConst, c: v.Aux, hi: v.Aux2}
 	}
-	if r := g.ra.Reg[v.vreg]; r >= 0 {
+	return g.regLoc(v, g.where[v.vreg])
+}
+
+// regLoc is v in register r, or in its slot for -1.
+func (g *lowering) regLoc(v *Value, r int16) loc {
+	if r >= 0 {
 		if v.Type.InFloatReg() {
 			return loc{kind: lXMM, r: int(r)}
 		}
@@ -465,6 +507,88 @@ func (g *lowering) locOf(v *Value) loc {
 		return loc{kind: lSlot, slot: s}
 	}
 	panic("wasm opt: a value with no location")
+}
+
+// stores reports whether v, defined in its register, is stored into its
+// slot too: one that lives across a call.
+func (g *lowering) stores(v *Value) bool { return g.ra.Stored(lsra.VReg(v.vreg)) }
+
+// blockWhere sets where the split values are as block i begins.
+func (g *lowering) blockWhere(i int) {
+	for _, m := range g.ra.Entry(i) {
+		g.where[m.V] = m.Reg
+	}
+}
+
+// splitMoves appends to moves the copies of ms, the moves of split
+// values, and, if track, sets where they are.
+func (g *lowering) splitMoves(moves []pmove, ms []lsra.Move, track bool) []pmove {
+	for _, m := range ms {
+		if m.Copy {
+			v := g.byVreg[m.V]
+			reg := g.regLoc(v, g.ra.Reg[m.V])
+			slot := loc{kind: lSlot, slot: g.ra.Slot[m.V]}
+			if m.Reg >= 0 {
+				moves = append(moves, pmove{dst: reg, src: slot, t: v.Type})
+			} else {
+				moves = append(moves, pmove{dst: slot, src: reg, t: v.Type})
+			}
+		}
+		if track {
+			g.where[m.V] = m.Reg
+		}
+	}
+	return moves
+}
+
+// phiLoc is where phi p is as its block, the i-th, begins.
+func (g *lowering) phiLoc(p *Value, i int) loc {
+	if g.ra.Split(lsra.VReg(p.vreg)) {
+		for _, m := range g.ra.Entry(i) {
+			if m.V == lsra.VReg(p.vreg) {
+				return g.regLoc(p, m.Reg)
+			}
+		}
+	}
+	return g.regLoc(p, g.ra.Reg[p.vreg])
+}
+
+// keepWhere is where call or tail call v's operands and its results res
+// are, for its out-of-line code, made after the blocks: nil where no
+// value is split.
+func (g *lowering) keepWhere(v *Value, res []*Value) []int16 {
+	if !g.ra.Splits() {
+		return nil
+	}
+	n := len(g.whBuf)
+	for _, x := range v.Args {
+		if x.Op != OpConst {
+			g.whBuf = append(g.whBuf, g.where[x.vreg])
+		}
+	}
+	for _, r := range res {
+		g.whBuf = append(g.whBuf, g.where[r.vreg])
+	}
+	return g.whBuf[n:len(g.whBuf):len(g.whBuf)]
+}
+
+// putWhere sets where call v's operands and results res are back to wh,
+// keepWhere's.
+func (g *lowering) putWhere(v *Value, res []*Value, wh []int16) {
+	if wh == nil {
+		return
+	}
+	k := 0
+	for _, x := range v.Args {
+		if x.Op != OpConst {
+			g.where[x.vreg] = wh[k]
+			k++
+		}
+	}
+	for _, r := range res {
+		g.where[r.vreg] = wh[k]
+		k++
+	}
 }
 
 func slotOff(s int32) int32 { return 8 * s }
@@ -478,7 +602,8 @@ type pmove struct {
 // inSlot reports whether phi p's slot holds its value already where its
 // block begins: every argument but a constant shares its register and
 // slot -- the allocator coalesced them -- and stored itself there where it
-// was made, and a constant is stored there on its edge (phiMoves).
+// was made, or was made there, and a constant is stored there on its edge
+// (phiMoves).
 func (g *lowering) inSlot(p *Value) bool {
 	for _, a := range p.Args {
 		if a.Op != OpConst && (g.ra.Reg[a.vreg] != g.ra.Reg[p.vreg] || g.ra.Slot[a.vreg] != g.ra.Slot[p.vreg]) {
@@ -489,15 +614,17 @@ func (g *lowering) inSlot(p *Value) bool {
 }
 
 // phiMoves appends to moves those of the edge from b to s: each phi's
-// argument into the phi's location, and a constant argument of a phi in a
-// register that inSlot finds in its slot into that slot too, which the
-// phi's block then does not store.
+// argument into the phi's location where s begins, and a constant argument
+// of a phi in a register that inSlot finds in its slot into that slot
+// too, which the phi's block then does not store.
 func (g *lowering) phiMoves(moves []pmove, b, s *Block) []pmove {
 	k := s.predIndex(b)
+	si := int(g.index[s.ID])
 	for _, p := range s.Phis {
 		x := p.Args[k]
-		moves = append(moves, pmove{dst: g.locOf(p), src: g.locOf(x), t: p.Type})
-		if x.Op == OpConst && g.ra.Reg[p.vreg] >= 0 && g.ra.Slot[p.vreg] >= 0 && g.inSlot(p) {
+		dst := g.phiLoc(p, si)
+		moves = append(moves, pmove{dst: dst, src: g.locOf(x), t: p.Type})
+		if x.Op == OpConst && dst.kind != lSlot && g.stores(p) && g.inSlot(p) {
 			moves = append(moves, pmove{dst: loc{kind: lSlot, slot: g.ra.Slot[p.vreg]}, src: g.locOf(x), t: p.Type})
 		}
 	}

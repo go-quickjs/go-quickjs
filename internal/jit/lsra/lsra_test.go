@@ -7,46 +7,129 @@ import (
 )
 
 // TestAllocateRandom allocates random functions -- branches, loops, phis,
-// calls and clobbers, more values live than registers -- and checks the
-// result by liveness of its own: no two values live at once share a
-// register or a slot -- a value two slots wide taking both -- every value
-// in a register live across a call has a slot and is reloaded after it,
-// none is live across a clobber in a register it clobbers, and an
-// instruction's temporaries have registers apart from its operands', its
-// results' and those of the values live across it.
+// calls and clobbers, more values live than registers -- and checks each
+// result by running the function on its locations (checkResult), splits
+// and all; an Allocator kept from one function to the next allocates as a
+// new one does.
 func TestAllocateRandom(t *testing.T) {
 	rng := rand.New(rand.NewPCG(7, 11))
-	cfg := &Config{Classes: [][]int{{3, 1, 0, 2}, {0, 1, 2}}, NumSlots: 1000}
-	// An allocator kept from one function to the next allocates as a new
-	// one does.
+	plain := &Config{Classes: [][]int{{3, 1, 0, 2}, {0, 1, 2}}, NumSlots: 1000}
+	displace := &Config{Classes: plain.Classes, NumSlots: plain.NumSlots, Displace: true}
+	stress := &Config{Classes: plain.Classes, NumSlots: plain.NumSlots, StressSplit: true}
 	var al Allocator
+	split := 0
 	for iter := 0; iter < 10000; iter++ {
 		f := randomFunc(rng)
+		// A third of the functions are allocated with Displace, a third
+		// split wherever the allocator can.
+		cfg := [...]*Config{plain, displace, stress}[iter%3]
 		res, err := Allocate(f, cfg)
 		if err != nil {
 			t.Fatalf("iteration %d: %v", iter, err)
 		}
 		checkAllocation(t, iter, f, cfg, res)
+		if res.Splits() {
+			split++
+		}
 		again, err := al.Allocate(f, cfg)
 		if err != nil {
 			t.Fatalf("iteration %d: %v from a kept allocator", iter, err)
 		}
-		if !slices.Equal(res.Reg, again.Reg) || !slices.Equal(res.Slot, again.Slot) || res.NumSlots != again.NumSlots {
+		if !sameResult(f, res, again) {
 			t.Fatalf("iteration %d: a kept allocator's result differs", iter)
 		}
-		for i := range f.Blocks {
-			for j := range f.Blocks[i].Insts {
-				if !slices.Equal(res.Across(i, j), again.Across(i, j)) {
-					t.Fatalf("iteration %d: a kept allocator's reloads at b%d.%d differ", iter, i, j)
+	}
+	t.Logf("%d of 10000 functions split", split)
+	if split < 500 {
+		t.Fatalf("only %d of 10000 functions split", split)
+	}
+}
+
+// randomFunc makes a random function in SSA form, each use dominated by
+// its definition: blocks each to the next, some forward or back as well,
+// and in most functions a block on each critical edge, where its moves
+// go.
+func randomFunc(rng *rand.Rand) *Func {
+	nb := 1 + rng.IntN(8)
+	succs := make([][]int, nb)
+	for i := 0; i < nb-1; i++ {
+		succs[i] = append(succs[i], i+1)
+		// None back to the entry, which defines the parameters.
+		if rng.IntN(3) == 0 {
+			if j := 1 + rng.IntN(nb-1); j != i+1 {
+				succs[i] = append(succs[i], j)
+			}
+		}
+	}
+	if rng.IntN(5) != 0 {
+		npreds := make([]int, nb)
+		for i := range succs {
+			for _, s := range succs[i] {
+				npreds[s]++
+			}
+		}
+		for i := 0; i < nb; i++ {
+			if len(succs[i]) < 2 {
+				continue
+			}
+			for k, s := range succs[i] {
+				if npreds[s] > 1 {
+					succs = append(succs, []int{s})
+					succs[i][k] = len(succs) - 1
 				}
 			}
 		}
 	}
-}
-
-func randomFunc(rng *rand.Rand) *Func {
-	nb := 1 + rng.IntN(8)
+	nb0 := nb
+	nb = len(succs)
 	f := &Func{Blocks: make([]Block, nb)}
+	for i := range f.Blocks {
+		f.Blocks[i].Succs = succs[i]
+		for _, s := range succs[i] {
+			f.Blocks[s].Preds = append(f.Blocks[s].Preds, i)
+		}
+	}
+	// The dominators: each block's comes before it, the blocks of edges,
+	// last, dominating only themselves.
+	idom := make([]int, nb)
+	for i := range idom {
+		idom[i] = -1
+	}
+	idom[0] = 0
+	chain := func(b int) []int {
+		var out []int
+		for ; b != 0; b = idom[b] {
+			out = append(out, b)
+		}
+		return append(out, 0)
+	}
+	for changed := true; changed; {
+		changed = false
+		for b := 1; b < nb; b++ {
+			d := -1
+			for _, p := range f.Blocks[b].Preds {
+				switch {
+				case idom[p] < 0:
+				case d < 0:
+					d = p
+				default:
+					on := map[int]bool{}
+					for _, x := range chain(p) {
+						on[x] = true
+					}
+					for _, x := range chain(d) {
+						if on[x] {
+							d = x
+							break
+						}
+					}
+				}
+			}
+			if d >= 0 && d != idom[b] {
+				idom[b], changed = d, true
+			}
+		}
+	}
 	// In some functions the second class's registers are two slots wide.
 	wide := rng.IntN(3) == 0
 	newV := func(cls int8) VReg {
@@ -59,22 +142,8 @@ func randomFunc(rng *rand.Rand) *Func {
 		f.Width = append(f.Width, w)
 		return VReg(len(f.Class) - 1)
 	}
-	// Edges: each block to the next, some forward or back as well.
-	for i := 0; i < nb-1; i++ {
-		f.Blocks[i].Succs = append(f.Blocks[i].Succs, i+1)
-		if rng.IntN(3) == 0 {
-			j := rng.IntN(nb)
-			if j != i+1 {
-				f.Blocks[i].Succs = append(f.Blocks[i].Succs, j)
-			}
-		}
-	}
-	for i := range f.Blocks {
-		for _, s := range f.Blocks[i].Succs {
-			f.Blocks[s].Preds = append(f.Blocks[s].Preds, i)
-		}
-	}
-	var defined []VReg
+	// defs are what each block defines.
+	defs := make([][]VReg, nb)
 	params := 1 + rng.IntN(3)
 	slot := int32(0)
 	for k := 0; k < params; k++ {
@@ -82,11 +151,22 @@ func randomFunc(rng *rand.Rand) *Func {
 		f.FixedSlot[v] = slot
 		slot += int32(f.Width[v])
 		f.Blocks[0].Insts = append(f.Blocks[0].Insts, Inst{Defs: []VReg{v}, Hint: None})
-		defined = append(defined, v)
+		defs[0] = append(defs[0], v)
 	}
-	pick := func(cls int8) VReg {
+	// dominating is what the blocks that strictly dominate b define.
+	dominating := func(b int) []VReg {
+		var out []VReg
+		if b == 0 {
+			return out
+		}
+		for _, x := range chain(idom[b]) {
+			out = append(out, defs[x]...)
+		}
+		return out
+	}
+	pick := func(from []VReg, cls int8) VReg {
 		var c []VReg
-		for _, v := range defined {
+		for _, v := range from {
 			if f.Class[v] == cls {
 				c = append(c, v)
 			}
@@ -99,7 +179,9 @@ func randomFunc(rng *rand.Rand) *Func {
 	for i := range f.Blocks {
 		b := &f.Blocks[i]
 		b.Depth = rng.IntN(3)
-		// Phis only where every predecessor has one successor.
+		// Phis only where every predecessor has one successor, each
+		// argument what its predecessor has where it ends: one made
+		// already, or one that dominates this block.
 		phis := len(b.Preds) > 1
 		for _, p := range b.Preds {
 			if len(f.Blocks[p].Succs) != 1 {
@@ -109,23 +191,33 @@ func randomFunc(rng *rand.Rand) *Func {
 		if phis {
 			for k := rng.IntN(3); k > 0; k-- {
 				cls := int8(rng.IntN(2))
-				d := newV(cls)
 				var args []VReg
-				for range b.Preds {
-					args = append(args, pick(cls))
+				for _, p := range b.Preds {
+					from := dominating(i)
+					if p < i {
+						from = append(dominating(p), defs[p]...)
+					}
+					args = append(args, pick(from, cls))
 				}
 				if slices.Contains(args, None) {
 					continue
 				}
+				d := newV(cls)
 				b.Phis = append(b.Phis, Phi{Def: d, Args: args})
-				defined = append(defined, d)
+				defs[i] = append(defs[i], d)
 			}
 		}
-		for k := 1 + rng.IntN(12); k > 0; k-- {
+		n := 1 + rng.IntN(12)
+		if i >= nb0 {
+			// A block of an edge: few instructions, or none.
+			n = rng.IntN(3)
+		}
+		for ; n > 0; n-- {
 			var in Inst
 			in.Hint = None
+			from := append(dominating(i), defs[i]...)
 			for u := rng.IntN(3); u > 0; u-- {
-				if v := pick(int8(rng.IntN(2))); v != None {
+				if v := pick(from, int8(rng.IntN(2))); v != None {
 					in.Uses = append(in.Uses, v)
 				}
 			}
@@ -146,175 +238,35 @@ func randomFunc(rng *rand.Rand) *Func {
 			if len(in.Uses) > 0 && len(in.Defs) > 0 {
 				in.Hint = in.Uses[0]
 			}
-			defined = append(defined, in.Defs...)
+			defs[i] = append(defs[i], in.Defs...)
 			b.Insts = append(b.Insts, in)
 		}
 	}
 	return f
 }
 
-func checkAllocation(t *testing.T, iter int, f *Func, cfg *Config, res *Result) {
-	t.Helper()
-	n := len(f.Class)
-	type set map[VReg]bool
-	liveIn := make([]set, len(f.Blocks))
-	liveOut := make([]set, len(f.Blocks))
-	for i := range f.Blocks {
-		liveIn[i], liveOut[i] = set{}, set{}
-	}
-	transfer := func(i int, out set, visit func(j int, after set)) set {
-		b := &f.Blocks[i]
-		live := set{}
-		for v := range out {
-			live[v] = true
-		}
-		for j := len(b.Insts) - 1; j >= 0; j-- {
-			if visit != nil {
-				visit(j, live)
-			}
-			for _, d := range b.Insts[j].Defs {
-				delete(live, d)
-			}
-			for _, u := range b.Insts[j].Uses {
-				live[u] = true
-			}
-		}
-		for _, p := range b.Phis {
-			delete(live, p.Def)
-		}
-		return live
-	}
-	for changed := true; changed; {
-		changed = false
-		for i := len(f.Blocks) - 1; i >= 0; i-- {
-			out := set{}
-			for _, s := range f.Blocks[i].Succs {
-				for v := range liveIn[s] {
-					out[v] = true
-				}
-				pi := slices.Index(f.Blocks[s].Preds, i)
-				for _, p := range f.Blocks[s].Phis {
-					out[p.Args[pi]] = true
-				}
-			}
-			in := transfer(i, out, nil)
-			if len(in) != len(liveIn[i]) || len(out) != len(liveOut[i]) {
-				changed = true
-			}
-			liveIn[i], liveOut[i] = in, out
-		}
-	}
-	conflict := func(a, b VReg, where string) {
-		if a == b || f.Class[a] != f.Class[b] {
-			return
-		}
-		if ra, rb := res.Reg[a], res.Reg[b]; ra >= 0 && ra == rb {
-			t.Fatalf("iteration %d: v%d and v%d, live at once %s, share register %d", iter, a, b, where, ra)
-		}
-	}
-	width := func(v VReg) int32 { return max(int32(f.Width[v]), 1) }
-	slotConflict := func(a, b VReg) {
-		sa, sb := res.Slot[a], res.Slot[b]
-		if a != b && sa >= 0 && sb >= 0 && sa < sb+width(b) && sb < sa+width(a) {
-			t.Fatalf("iteration %d: v%d and v%d, live at once, share slots %d and %d", iter, a, b, sa, sb)
-		}
-	}
-	for v := 0; v < n; v++ {
-		if res.Reg[v] < 0 && res.Slot[v] < 0 {
-			// Unused values need no location.
-			used := false
-			for i := range f.Blocks {
-				for _, in := range f.Blocks[i].Insts {
-					used = used || slices.Contains(in.Uses, VReg(v))
-				}
-				for _, p := range f.Blocks[i].Phis {
-					used = used || slices.Contains(p.Args, VReg(v))
-				}
-			}
-			if used {
-				t.Fatalf("iteration %d: v%d is used but has no location", iter, v)
-			}
-		}
+// sameResult reports whether two results are the same: locations,
+// reloads and moves.
+func sameResult(f *Func, a, b *Result) bool {
+	if !slices.Equal(a.Reg, b.Reg) || !slices.Equal(a.Slot, b.Slot) || a.NumSlots != b.NumSlots || !slices.Equal(a.flags, b.flags) {
+		return false
 	}
 	for i := range f.Blocks {
-		b := &f.Blocks[i]
-		in := liveIn[i]
-		var defs []VReg
-		for _, p := range b.Phis {
-			defs = append(defs, p.Def)
+		if !slices.Equal(a.Entry(i), b.Entry(i)) {
+			return false
 		}
-		for v := range in {
-			for w := range in {
-				conflict(v, w, "into a block")
-				slotConflict(v, w)
-			}
-			for _, d := range defs {
-				conflict(v, d, "at a block's phis")
-				slotConflict(v, d)
+		for j := range f.Blocks[i].Insts {
+			if !slices.Equal(a.Across(i, j), b.Across(i, j)) || !slices.Equal(a.Moves(i, j), b.Moves(i, j)) {
+				return false
 			}
 		}
-		for _, d := range defs {
-			for _, e := range defs {
-				conflict(d, e, "among phis")
+		for k := range f.Blocks[i].Succs {
+			if !slices.Equal(a.Edge(i, k), b.Edge(i, k)) {
+				return false
 			}
-		}
-		transfer(i, liveOut[i], func(j int, after set) {
-			inst := &b.Insts[j]
-			for _, d := range inst.Defs {
-				for v := range after {
-					conflict(d, v, "after a definition")
-					slotConflict(d, v)
-				}
-				for _, e := range inst.Defs {
-					conflict(d, e, "among definitions")
-				}
-			}
-			for k, tv := range inst.Temps {
-				r := res.Reg[tv]
-				if r < 0 {
-					t.Fatalf("iteration %d: temporary v%d has no register", iter, tv)
-				}
-				if int(f.Class[tv]) < len(inst.Clobber) && inst.Clobber[f.Class[tv]]&(1<<r) != 0 {
-					t.Fatalf("iteration %d: temporary v%d in register %d its instruction clobbers", iter, tv, r)
-				}
-				others := append(append(slices.Clone(inst.Uses), inst.Defs...), inst.Temps[:k]...)
-				for v := range after {
-					others = append(others, v)
-				}
-				for _, v := range others {
-					conflict(tv, v, "at its instruction")
-				}
-			}
-			for v := range after {
-				if slices.Contains(inst.Defs, v) {
-					continue
-				}
-				// v lives across the instruction.
-				if inst.Call && res.Reg[v] >= 0 {
-					if res.Slot[v] < 0 {
-						t.Fatalf("iteration %d: v%d is in a register across a call without a slot", iter, v)
-					}
-					if !slices.Contains(res.Across(i, j), v) {
-						t.Fatalf("iteration %d: v%d is not reloaded after a call it lives across", iter, v)
-					}
-				}
-				if r := res.Reg[v]; r >= 0 && int(f.Class[v]) < len(inst.Clobber) && inst.Clobber[f.Class[v]]&(1<<r) != 0 {
-					t.Fatalf("iteration %d: v%d lives in register %d across its clobber", iter, v, r)
-				}
-			}
-		})
-	}
-	for v := 0; v < n; v++ {
-		if r := res.Reg[v]; r >= 0 && !slices.Contains(cfg.Classes[f.Class[v]], int(r)) {
-			t.Fatalf("iteration %d: v%d in register %d, not of its class", iter, v, r)
-		}
-		if s := f.FixedSlot[v]; s >= 0 && res.Slot[v] >= 0 && res.Slot[v] != s {
-			t.Fatalf("iteration %d: v%d arrives in slot %d but is given %d", iter, v, s, res.Slot[v])
-		}
-		if s := res.Slot[v]; s >= 0 && int(s+width(VReg(v))) > cfg.NumSlots {
-			t.Fatalf("iteration %d: v%d in slot %d of %d, %d wide", iter, v, s, cfg.NumSlots, width(VReg(v)))
 		}
 	}
+	return true
 }
 
 // TestCoalesce gives a loop's phi, its argument from the back edge and its
@@ -422,8 +374,78 @@ func TestLivenessMethods(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !slices.Equal(a.Reg, b.Reg) || !slices.Equal(a.Slot, b.Slot) || a.NumSlots != b.NumSlots {
+		if !sameResult(f, a, b) {
 			t.Fatalf("iteration %d: the two liveness methods allocate differently", iter)
+		}
+	}
+}
+
+// TestCheckCatchesMutations checks that checkResult finds allocations
+// made wrong on purpose: holes that leave out a position where their web
+// meets the one they are punched for, a split value's load into its
+// register dropped, where a block begins said wrongly, and a reload after
+// a call dropped.
+func TestCheckCatchesMutations(t *testing.T) {
+	cfg := &Config{Classes: [][]int{{3, 1, 0, 2}, {0, 1, 2}}, NumSlots: 1000}
+	mutations := []struct {
+		name string
+		// mutate changes res, and reports whether it found what to
+		// change.
+		mutate func(f *Func, res *Result) bool
+	}{
+		{"holes too small", func(f *Func, res *Result) bool { return res.Splits() }},
+		{"a load dropped", func(f *Func, res *Result) bool {
+			for i := range res.gap.mv {
+				if m := &res.gap.mv[i]; m.Copy && m.Reg >= 0 {
+					m.Copy = false
+					return true
+				}
+			}
+			return false
+		}},
+		{"an entry wrong", func(f *Func, res *Result) bool {
+			for i := range res.entryMv {
+				if m := &res.entryMv[i]; m.Reg < 0 {
+					m.Reg = res.Reg[m.V]
+				} else {
+					m.Reg = -1
+				}
+				return true
+			}
+			return false
+		}},
+		{"a reload dropped", func(f *Func, res *Result) bool {
+			if len(res.acrossV) == 0 {
+				return false
+			}
+			res.acrossV = res.acrossV[1:]
+			for k := range res.acrossOff {
+				res.acrossOff[k] = max(res.acrossOff[k]-1, 0)
+			}
+			return true
+		}},
+	}
+	for _, mu := range mutations {
+		rng := rand.New(rand.NewPCG(23, 29))
+		cfg.mutateHoles = mu.name == "holes too small"
+		found, tried := 0, 0
+		for iter := 0; iter < 3000 && found < 20; iter++ {
+			f := randomFunc(rng)
+			res, err := Allocate(f, cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !mu.mutate(f, res) {
+				continue
+			}
+			tried++
+			if checkResult(f, cfg, res) != nil {
+				found++
+			}
+		}
+		t.Logf("%s: found in %d of %d functions", mu.name, found, tried)
+		if found == 0 {
+			t.Errorf("%s: never found, in %d functions", mu.name, tried)
 		}
 	}
 }

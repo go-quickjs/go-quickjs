@@ -13,6 +13,9 @@ func (g *gen) padEntry(b *Block) {
 		a.Load(g.rs, rCtx, offRSP)
 	}
 	g.reload(b.Pad)
+	if g.ra.Splits() {
+		g.gapMoves(g.siteGap(b))
+	}
 }
 
 // exnVal reads number Aux of the exception a landing pad takes, which Go

@@ -7,25 +7,48 @@
 //
 // A virtual register's lifetime is a list of ranges, its holes left out,
 // from liveness: the paths from each use back to the definition where
-// every register is defined once (SSA), else sweeps of the blocks. A phi and its arguments are coalesced -- given one
-// location, their edge's move gone -- where their lifetimes do not meet,
-// the edges of the deepest loops first; the coalesced registers are a web,
-// and each web has one location for its whole life: a register, or a spill
-// slot. Webs are allocated by a linear scan in order of their starts, as
-// Wimmer and Mössenböck's allocator scans with active and inactive
-// intervals, so that a web may take a register in another's hole; without
-// splitting, where a class's registers run out the cheaper of the web and
-// those it would displace -- weighed by their uses, eight times each loop
-// around them -- is spilled whole. A web in a register that is live across
-// a call (Inst.Call) is kept in a slot too, stored where each of its
-// registers is defined and loaded again after each call it crosses
-// (Result.Across); a call clobbers every register, and a web whose reloads
-// would weigh as much as its uses lives in its slot. An instruction's
-// fixed clobbers (Inst.Clobber) keep the registers they name from the webs
-// live across it, and its temporaries (Inst.Temps) are registers apart from
-// its operands and results. Slots are given by a second scan, with holes
-// too, a web with a parameter keeping the slot it arrives in, a register
-// wider than a slot (Func.Width) taking consecutive ones.
+// every register is defined once (SSA), else sweeps of the blocks. A phi
+// and its arguments are coalesced -- given one location, their edge's move
+// gone -- where their lifetimes do not meet, the edges of the deepest
+// loops first; the coalesced registers are a web, which has one register
+// or a spill slot. Webs are allocated by a linear scan in order of their
+// starts, as Wimmer and Mössenböck's allocator scans with active and
+// inactive intervals, so that a web may take a register in another's
+// hole. Where a class's registers run out, the web scanned takes the
+// register whose webs in its way are least dense -- their uses' weight,
+// eight times each loop around them, over the positions they cover --
+// and each of those is split: it gives the register up over a hole in its
+// life, where it lives in its slot, where each one's holes would cost less
+// than its uses and all the new holes less than spilling the web scanned;
+// else, as without splitting, they are spilled whole where they are less
+// dense than it, and it is spilled otherwise. With Config.Displace, the
+// web scanned takes the register whatever their density, each split where
+// its holes would cost less than its uses and spilled whole otherwise. A
+// hole covers where the two meet,
+// widened toward the split web's uses before and after it to where a
+// block of a lower loop depth begins, so that the moves into and out of
+// it run least; it costs the web's uses in it and those moves -- a store
+// where the web goes in, none for one stored where it is defined, a load
+// where it comes out -- each by its loop depth. A split web is in its
+// register but over its holes; the client makes the moves where a hole
+// begins and ends within a block (Result.Moves) and on the edges that
+// cross its bounds (Result.Edge), and learns where each is as a block
+// begins (Result.Entry). A function with a critical edge, which would
+// have no place for an edge's moves, or one allocated with Config.NoSplit,
+// is allocated without splitting: where the registers run out, the web
+// scanned displaces those in its way only if they are less dense than it,
+// spilling them whole, and is spilled itself otherwise. A web in a
+// register that is live across a call (Inst.Call) is kept in a slot too,
+// stored where each of its registers is defined and loaded again after
+// each call it crosses in its register (Result.Across); a call clobbers
+// every register, and a web whose reloads would weigh as much as its uses
+// lives in its slot. An instruction's fixed clobbers (Inst.Clobber) keep
+// the registers they name from the webs live across it, and its
+// temporaries (Inst.Temps) are registers apart from its operands and
+// results. Slots are given by a second scan, with holes too, a web with a
+// parameter keeping the slot it arrives in, a register wider than a slot
+// (Func.Width) taking consecutive ones; a split web not stored where it is
+// defined needs its slot over its holes alone.
 //
 // An Allocator keeps its tables, lists and result for its next
 // allocation, so that a client allocating function after function
@@ -116,12 +139,31 @@ type Config struct {
 	Classes [][]int
 	// NumSlots is the number of spill slots there are.
 	NumSlots int
+	// NoSplit allocates without splitting: each web in its register or
+	// its slot throughout.
+	NoSplit bool
+	// Displace has a web scanned that finds no register free take the
+	// one whose webs in its way are least dense whatever their density,
+	// where no temporary is in the way, each of them split where its
+	// holes would cost less than its uses and spilled whole otherwise;
+	// without it, they are split only where every one would be and the
+	// holes cost less than spilling the web scanned, and are otherwise
+	// spilled whole only where they are less dense than it, it being
+	// spilled itself otherwise. With splitting alone.
+	Displace bool
+	// StressSplit, for tests, splits wherever it can: a web scanned
+	// takes a register from those in its way however dense they are, and
+	// they give it up over holes whatever the holes cost.
+	StressSplit bool
 	// Lap, if not nil, is called at the end of each of the allocator's
 	// phases, for a client that times its compiles.
 	Lap func(Phase)
 	// dataflow has the allocation find liveness by the dataflow, for the
 	// tests that compare it with explore.
 	dataflow bool
+	// mutateHoles has the allocation punch holes that leave a position
+	// where the webs meet out, for the test that the checks find it.
+	mutateHoles bool
 }
 
 // A Phase is a stretch of an allocation that Config.Lap is told the end of.
@@ -147,10 +189,11 @@ const (
 // Result is where each virtual register lives.
 type Result struct {
 	// Reg is each virtual register's register, or -1 for one spilled or
-	// not allocated.
+	// not allocated. A split register (Split) is there outside its holes.
 	Reg []int16
-	// Slot is each virtual register's slot: a spilled one's home, or one
-	// in a register live across a call, its copy there; else -1.
+	// Slot is each virtual register's slot: a spilled one's home, one in
+	// a register live across a call its copy there, and a split one's
+	// place in its holes; else -1.
 	Slot []int32
 	// NumSlots is the number of slots used: those below it.
 	NumSlots int
@@ -160,6 +203,70 @@ type Result struct {
 	acrossKey [][2]int32
 	acrossOff []int32
 	acrossV   []VReg
+	// flags are each register's flagStored and flagSplit.
+	flags []uint8
+	// The split registers' moves: before an instruction (Moves), by its
+	// block and index, on an edge (Edge), by its block and successor, and
+	// into a block (Entry), entryMv from entryOff[b] to entryOff[b+1].
+	gap, edge moveTable
+	entryOff  []int32
+	entryMv   []Move
+	// splits is the number of split registers.
+	splits int
+}
+
+// The flags of a register's Result.
+const (
+	// flagStored: it is stored into its slot where it is defined in its
+	// register.
+	flagStored uint8 = 1 << iota
+	// flagSplit: it has holes.
+	flagSplit
+)
+
+// A Move is where a split register is from a point of the function on:
+// Reg, its register, or -1, its slot. Copy says the value is copied there
+// from the other -- loaded into the register from the slot, or stored into
+// the slot from the register; else the slot holds it already, or the
+// register is defined there, and only where it is changes.
+type Move struct {
+	V    VReg
+	Reg  int16
+	Copy bool
+}
+
+// moveTable is moves by a key of a block and a number, the keys in order,
+// key k's from off[k] to off[k+1], and block b's keys from block[b] to
+// block[b+1].
+type moveTable struct {
+	key   [][2]int32
+	off   []int32
+	mv    []Move
+	block []int32
+}
+
+// find returns the moves of key k.
+func (t *moveTable) find(k [2]int32) []Move {
+	lo, hi := t.block[k[0]], t.block[k[0]+1]
+	for lo < hi {
+		m := int32(uint32(lo+hi) >> 1)
+		if t.key[m][1] < k[1] {
+			lo = m + 1
+		} else {
+			hi = m
+		}
+	}
+	if lo < t.block[k[0]+1] && t.key[lo][1] == k[1] {
+		return t.mv[t.off[lo]:t.off[lo+1]]
+	}
+	return nil
+}
+
+func cmpKey(x, y [2]int32) int {
+	if x[0] != y[0] {
+		return int(x[0] - y[0])
+	}
+	return int(x[1] - y[1])
 }
 
 // Across is, for the call that is instruction inst of block b, the
@@ -167,16 +274,58 @@ type Result struct {
 // from their slots.
 func (r *Result) Across(b, inst int) []VReg {
 	key := [2]int32{int32(b), int32(inst)}
-	k, ok := slices.BinarySearchFunc(r.acrossKey, key, func(x, y [2]int32) int {
-		if x[0] != y[0] {
-			return int(x[0] - y[0])
-		}
-		return int(x[1] - y[1])
-	})
+	k, ok := slices.BinarySearchFunc(r.acrossKey, key, cmpKey)
 	if !ok {
 		return nil
 	}
 	return r.acrossV[r.acrossOff[k]:r.acrossOff[k+1]]
+}
+
+// Stored reports whether v is stored into its slot wherever it is defined
+// in its register -- a phi where its block begins -- so that its slot
+// holds it wherever it is live: one in a register that lives across a
+// call.
+func (r *Result) Stored(v VReg) bool { return r.flags[v]&flagStored != 0 }
+
+// Split reports whether v is split: in its register (Reg) but in its slot
+// (Slot) over holes in its life, as Moves, Entry and Edge say.
+func (r *Result) Split(v VReg) bool { return r.flags[v]&flagSplit != 0 }
+
+// Splits reports whether any register is split.
+func (r *Result) Splits() bool { return r.splits > 0 }
+
+// Moves are, before instruction inst of block b reads its operands, where
+// split registers go: those that move into or out of their holes there,
+// then those the instruction defines, each where it is defined. The moves
+// that copy are made as if all at once.
+func (r *Result) Moves(b, inst int) []Move {
+	if r.splits == 0 {
+		return nil
+	}
+	return r.gap.find([2]int32{int32(b), int32(inst)})
+}
+
+// Entry is where each split register live into block b, and each of its
+// phis split, is where the block begins.
+func (r *Result) Entry(b int) []Move {
+	if r.splits == 0 {
+		return nil
+	}
+	return r.entryMv[r.entryOff[b]:r.entryOff[b+1]]
+}
+
+// Edge is the moves on the edge from block b to its k-th successor of the
+// split registers live across it, not as a phi, that are in their register
+// at one end and their slot at the other; a phi's argument goes into the
+// phi's location, where Entry says it is, as any other's. They are made as
+// if all at once, with the phis', at b's end where b has one successor,
+// and else where the successor, which has one predecessor, begins: a
+// function with a critical edge is allocated without splitting.
+func (r *Result) Edge(b, k int) []Move {
+	if r.splits == 0 {
+		return nil
+	}
+	return r.edge.find([2]int32{int32(b), int32(k)})
 }
 
 // ErrSlots is the error of a function whose spills need more slots than
