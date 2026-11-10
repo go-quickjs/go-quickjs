@@ -42,6 +42,9 @@ type Arena struct {
 	// mapped and placed count the chunks mapped and the functions placed,
 	// which choose LayoutSeed's offsets.
 	mapped, placed uint64
+	// reuse says code is placed in the space released code left in a
+	// chunk, as well as past what the chunk handed out (NewReusingArena).
+	reuse bool
 }
 
 type chunk struct {
@@ -50,7 +53,13 @@ type chunk struct {
 	live int // bytes still owned
 	// own says the chunk is one function's, longer than chunkBytes.
 	own bool
+	// free is the space released code left below used, in a reusing
+	// arena: by offset, none adjacent to another.
+	free []span
 }
+
+// span is a run of a chunk's bytes, from off.
+type span struct{ off, n int }
 
 const (
 	// chunkBytes is a chunk's size: Windows' allocation granularity, and a
@@ -64,6 +73,18 @@ const (
 
 // NewArena returns an empty arena; it maps nothing until code is placed.
 func NewArena() *Arena { return &Arena{} }
+
+// NewReusingArena returns an empty arena that places code in the space
+// that code released before it left in a chunk, the first such space
+// large enough, before placing it past what the chunk has handed out: for
+// an owner that drops some of its code while the rest runs on, whose
+// chunks would otherwise stay mapped, and grow in number, while any code
+// in them lives. Placing there makes pages that hold other code writable,
+// as placing past a chunk's code can, under the same rule: none of the
+// owner's code runs then. It places each code at the start of its cache
+// line and next to the code before it, whatever FirstOffset, LayoutSeed
+// and LineOffset say, which are benchmarks' knobs for the other arenas.
+func NewReusingArena() *Arena { return &Arena{reuse: true} }
 
 // FirstOffset is where in its first chunk an arena places its first code,
 // codeAlign-rounded: 0 but for a benchmark, which varies it (v8bench's
@@ -178,6 +199,9 @@ func (a *Arena) place(instructions []byte) ([]byte, error) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.reuse {
+		return a.placeReusing(instructions)
+	}
 	shift := 0
 	if LineOffset != 0 {
 		shift = lineShift()
@@ -351,6 +375,83 @@ func (a *Arena) chunkOf(code []byte) *chunk {
 	panic("jit: code is not in its arena")
 }
 
+// placeReusing is place for a reusing arena (NewReusingArena): in the
+// first space released code left that is large enough, else past the code
+// of the chunk code is packed into, else in a new chunk. a.mu is held.
+func (a *Arena) placeReusing(instructions []byte) ([]byte, error) {
+	n := alignUp(len(instructions), codeAlign)
+	var c *chunk
+	start := -1
+	for _, ch := range a.chunks {
+		for i, s := range ch.free {
+			if s.n < n {
+				continue
+			}
+			c, start = ch, s.off
+			if s.n == n {
+				ch.free = append(ch.free[:i], ch.free[i+1:]...)
+			} else {
+				ch.free[i] = span{s.off + n, s.n - n}
+			}
+			break
+		}
+		if c != nil {
+			break
+		}
+	}
+	if c == nil {
+		if o := a.open; o != nil && o.used+n <= len(o.mem) {
+			c = o
+		} else {
+			mem, err := mapCode(alignUp(n, chunkBytes))
+			if err != nil {
+				return nil, fmt.Errorf("allocate code: %w", err)
+			}
+			c = &chunk{mem: mem, own: len(mem) > chunkBytes}
+			a.chunks = append(a.chunks, c)
+			if !c.own {
+				a.open = c
+			}
+		}
+		start = c.used
+		c.used += n
+	}
+	page := os.Getpagesize()
+	pages := c.mem[start/page*page : min(alignUp(start+n, page), len(c.mem))]
+	code := c.mem[start : start+n : start+n]
+	if err := a.write(c, pages, code, instructions); err != nil {
+		if c.live == 0 {
+			err = errors.Join(err, a.unmap(c))
+		} else {
+			c.release(start, n)
+		}
+		return nil, err
+	}
+	c.live += n
+	return code, nil
+}
+
+// release makes the n bytes from off space to reuse, joined to the space
+// next to them.
+func (c *chunk) release(off, n int) {
+	i := 0
+	for i < len(c.free) && c.free[i].off < off {
+		i++
+	}
+	if i > 0 && c.free[i-1].off+c.free[i-1].n == off {
+		i--
+		c.free[i].n += n
+	} else {
+		c.free = append(c.free, span{})
+		copy(c.free[i+1:], c.free[i:])
+		c.free[i] = span{off, n}
+	}
+	if i+1 < len(c.free) && c.free[i].off+c.free[i].n == c.free[i+1].off {
+		c.free[i].n += c.free[i+1].n
+		c.free = append(c.free[:i+1], c.free[i+2:]...)
+	}
+}
+
 // write copies instructions into code, through its pages made writable for
 // the copy, then seals the pages and publishes them to instruction fetch.
 func (a *Arena) write(c *chunk, pages, code, instructions []byte) error {
@@ -404,6 +505,9 @@ func (a *Arena) release(code []byte) error {
 		}
 		if c.live > len(code) {
 			c.live -= len(code)
+			if a.reuse {
+				c.release(int(at-base), len(code))
+			}
 			return nil
 		}
 		if err := a.unmap(c); err != nil {
