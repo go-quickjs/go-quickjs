@@ -976,7 +976,9 @@ first table, median of 3, the first run in parentheses, ms) the tier gains
 as on amd64; the micro-benchmarks are, baseline then tiered, fib 30.0 and
 18.5, loop 25.9 and 17.9, mandelbrot 38.3 and 20.2, nbody 19.9 and 10.8,
 bytes 31.1 and 17.4, bulk 263 and 24.7, indirect 1,889 and 55.1, brtable
-55.3 and 46.5, and i64, globals, gc and simd level:
+55.3 and 46.5, simd 14.3 and 6.26 (medians of 5 processes of 3 runs, once
+the tier compiled SIMD; before, it refused the kernel), and i64, globals
+and gc level:
 
 | program | jit-base | jit-tiered | jit-opt |
 |---|---:|---:|---:|
