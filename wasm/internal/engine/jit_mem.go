@@ -44,10 +44,22 @@ import (
 //     address the level holds -- on the exec's return stack, each frame's
 //     caller's return address, and the level's exit address for the frame
 //     that exited. The pass reads every level of the Code's of every exec
-//     (jitExecs), under the exec's lock, which the exec holds while it
-//     begins a level or moves its return stack (pins). A code holding any
-//     of those addresses is kept, and with it its function's current code
-//     and handlers.
+//     (jitExecs), and keeps a code holding any of those addresses, and
+//     with it its function's current code and handlers (pins).
+//   - The pass reads every such level, and what it reads is the level's
+//     state: an exec keeps the levels of each Code it runs in a chain of
+//     their own (codeLevels), which it changes -- beginning a level, ending
+//     one by its return, a tail call the interpreter makes for it or a
+//     panic out of it -- only holding the Code's run lock for reading. What else the pass reads is written holding the
+//     same lock -- a level's exit address and the frames' entries on the
+//     return stack, by its native code or by Go entering, resuming or
+//     catching in it -- or the exec's own lock, which the pass takes too:
+//     a move of the return stack, which rewrites where every level's
+//     entries are, and a change to the exec's list of chains. The run
+//     lock held for writing waits for every reader, so each of those
+//     writes happens before the pass, or after it; none is under way.
+//     Entering native code and returning from it, the exec takes no lock
+//     but the run lock, and makes no atomic write.
 //   - A code is entered only through the link table, which native calls
 //     read while they hold the run lock, and which the pass clears first;
 //     or from Go -- a call, a loop's entry, a tier-up, a tail call, a catch
@@ -337,8 +349,8 @@ func (cj *codeJIT) drop(pc *placedCode) {
 }
 
 // pins returns, sorted, the addresses native frames of the code go on at:
-// each level's frames' return addresses and its exit's address, in every
-// exec (jitExecs). The run lock is held for writing.
+// each of its levels' frames' return addresses and its exit's address, in
+// every exec (jitExecs). The run lock is held for writing.
 func (cj *codeJIT) pins() []uintptr {
 	var pins []uintptr
 	jitExecs.mu.Lock()
@@ -349,12 +361,12 @@ func (cj *codeJIT) pins() []uintptr {
 		}
 		x.jit.mu.Lock()
 		rs := x.jit.rs
-		if len(rs) > 0 {
+		for _, ch := range x.jit.codes {
+			if ch.id != cj.id || len(rs) == 0 {
+				continue
+			}
 			start := uintptr(unsafe.Pointer(&rs[0]))
-			for _, lv := range x.jit.levels[:x.jit.n.Load()] {
-				if lv.cj != cj {
-					continue
-				}
+			for lv := ch.top; lv != nil; lv = lv.below {
 				pins = append(pins, lv.ctx.ExitAddr, lv.ctx.Resume)
 				if lv.rsBase < start || lv.ctx.RSP < lv.rsBase {
 					continue
@@ -490,7 +502,7 @@ func (cj *codeJIT) dropFn(idx int, f *fnJIT) {
 }
 
 // jitExecs are the execs made, held weakly: those a pass that drops code
-// reads the levels of (pins). An exec is made when none is free for a call,
+// reads the chains of levels of (pins). An exec is made when none is free for a call,
 // so those alive are as many as the calls that ran at once, at most, and
 // the pool's; one the collector freed ran nothing. Those freed are swept
 // out once the list has doubled since the last sweep (sweepAt), so that

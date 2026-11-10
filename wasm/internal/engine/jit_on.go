@@ -26,9 +26,14 @@ const jitBuilt = true
 
 func jitAvailable() bool { return ijit.RawSupported() }
 
+// jitCodeIDs counts the codeJITs made, for their ids.
+var jitCodeIDs atomic.Uint64
+
 // codeJIT is a Code's native code: its functions' code in an arena of its
 // own, and the link table native calls go through.
 type codeJIT struct {
+	// id tells the code's levels on an exec from others' (codeLevels).
+	id        uint64
 	threshold int32
 	// osrThreshold is the number of back edges after which a call running
 	// in the interpreter goes on in native code; math.MaxInt32 is never.
@@ -161,6 +166,10 @@ type jitLevel struct {
 	ctx  wjit.Ctx
 	inst *Instance
 	cj   *codeJIT
+	// chain is the exec's chain of cj's levels the level is in, and below
+	// the level of it the level was entered above, nil for the first.
+	chain *codeLevels
+	below *jitLevel
 	// rsBase is the address of the level's first return stack entry, the
 	// one for the frame Go entered; rsDepth is how many bytes of entries
 	// past it the depth limit allows.
@@ -231,25 +240,96 @@ var (
 // return stack they share.
 type jitExec struct {
 	levels []*jitLevel
+	n      int // the number of levels running
 	rs     []uint64
-	// n is the number of levels running. A pass of a code that drops code
-	// reads the levels (codeJIT.pins) under mu, which the exec holds while
-	// it begins a level or moves the return stack: a level ended is not
-	// begun again while the pass reads it.
-	n  atomic.Int32
+	// codes are the exec's chains of the levels of each Code it entered
+	// lately (codeLevels), which a pass of a Code that drops code reads
+	// (codeJIT.pins), and last the one entered last.
+	codes []*codeLevels
+	last  *codeLevels
+	// mu orders what the pass reads of the exec -- codes, the return stack
+	// and where its levels' entries are in it -- with the exec's changes to
+	// codes and moves of the return stack, which it makes holding mu, and
+	// only those: the exec changes its levels holding the run lock of their
+	// Code's for reading, which no pass of that Code shares (jit_mem.go).
 	mu sync.Mutex
 }
 
-func (x *exec) jitLevel() int { return int(x.jit.n.Load()) }
+// codeLevels is the chain of the levels of one Code's running on an exec,
+// the innermost on top, each linked to the one below it (jitLevel.below).
+// The exec changes it holding the Code's run lock for reading.
+type codeLevels struct {
+	// id is the Code's (codeJIT.id).
+	id  uint64
+	top *jitLevel
+}
 
+// jitChainsKept is the number of chains an exec keeps before it lets go
+// of those with no level running: those of the Codes it entered lately,
+// which it then finds its chain of without making one.
+const jitChainsKept = 16
+
+func (x *exec) jitLevel() int { return x.jit.n }
+
+// setJITLevel ends the levels past the first n, as a panic out of them
+// does.
 func (x *exec) setJITLevel(n int) {
-	if x.jit.n.Load() != int32(n) {
-		x.jit.n.Store(int32(n))
+	if x.jit.n > n {
+		x.endLevels(n)
 	}
 }
 
-// popLevel ends the innermost level.
-func (x *exec) popLevel() { x.jit.n.Store(x.jit.n.Load() - 1) }
+// endLevels is setJITLevel's loop.
+func (x *exec) endLevels(n int) {
+	for x.jit.n > n {
+		lv := x.jit.levels[x.jit.n-1]
+		lv.cj.run.RLock()
+		x.popLevel(lv)
+		lv.cj.run.RUnlock()
+	}
+}
+
+// pushLevel begins lv as the innermost level, of cj's, in the exec's chain
+// ch of cj's levels. cj's run lock is held for reading.
+func (x *exec) pushLevel(lv *jitLevel, cj *codeJIT, ch *codeLevels) {
+	lv.cj, lv.chain, lv.below = cj, ch, ch.top
+	ch.top = lv
+	x.jit.n++
+}
+
+// popLevel ends lv, the innermost level. Its Code's run lock is held for
+// reading.
+func (x *exec) popLevel(lv *jitLevel) {
+	lv.chain.top = lv.below
+	x.jit.n--
+}
+
+// chainOf returns the exec's chain of cj's levels, made if it has none,
+// where the last it entered is another Code's.
+func (x *exec) chainOf(cj *codeJIT) *codeLevels {
+	for _, ch := range x.jit.codes {
+		if ch.id == cj.id {
+			x.jit.last = ch
+			return ch
+		}
+	}
+	ch := &codeLevels{id: cj.id}
+	x.jit.mu.Lock()
+	if len(x.jit.codes) >= jitChainsKept {
+		keep := x.jit.codes[:0]
+		for _, c := range x.jit.codes {
+			if c.top != nil {
+				keep = append(keep, c)
+			}
+		}
+		clear(x.jit.codes[len(keep):])
+		x.jit.codes = keep
+	}
+	x.jit.codes = append(x.jit.codes, ch)
+	x.jit.mu.Unlock()
+	x.jit.last = ch
+	return ch
+}
 
 // jitEnvOSR is which calls WASM_JIT has enter loops' native code at their
 // first back edge (codeJIT.osrCalls): "eager" the first, "osr" every one.
@@ -413,7 +493,7 @@ func (c *Code) enableJIT(threshold int) bool {
 		return true
 	}
 	n := max(len(c.Module.Functions), 1)
-	cj := &codeJIT{threshold: int32(threshold), arena: ijit.NewReusingArena(), links: make([]uintptr, n), frames: make([]uint64, n), counters: make([]int64, n),
+	cj := &codeJIT{id: jitCodeIDs.Add(1), threshold: int32(threshold), arena: ijit.NewReusingArena(), links: make([]uintptr, n), frames: make([]uint64, n), counters: make([]int64, n),
 		fns: make([]*fnJIT, n), tableBytes: tableBytes(n)}
 	cj.joinBudget(NewJITBudget(jitMemEnv))
 	cj.optThreshold.Store(-1)
@@ -944,7 +1024,7 @@ func (x *exec) hasRoom(from uintptr, n int) bool {
 
 // jitRoom makes room for n more entries past the active level's, growing
 // the return stack -- and moving every level's pointers into it -- if it
-// has none. The exec's lock (jitExec.mu) is held.
+// has none. The exec's lock (jitExec.mu) is held where it may move it.
 func (x *exec) jitRoom(from uintptr, n int) uintptr {
 	if x.hasRoom(from, n) {
 		return from
@@ -959,7 +1039,7 @@ func (x *exec) jitRoom(from uintptr, n int) uintptr {
 	x.jit.rs = rs
 	start := x.rsStart()
 	newEnd := start + uintptr(len(rs))*8
-	for _, lv := range x.jit.levels[:x.jit.n.Load()] {
+	for _, lv := range x.jit.levels[:x.jit.n] {
 		lv.rsBase = lv.rsBase - old + start
 		lv.ctx.RSP = lv.ctx.RSP - old + start
 		lv.ctx.RSEnd = min(newEnd, lv.rsBase+lv.rsDepth)
@@ -977,9 +1057,8 @@ func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64,
 		cj.run.RUnlock()
 		return 0, false
 	}
-	x.jit.mu.Lock()
-	n := x.jit.n.Load()
-	if int(n) == len(x.jit.levels) {
+	n := x.jit.n
+	if n == len(x.jit.levels) {
 		x.jit.levels = append(x.jit.levels, new(jitLevel))
 	}
 	var from uintptr
@@ -988,11 +1067,19 @@ func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64,
 	} else if x.jit.rs != nil {
 		from = x.rsStart()
 	}
-	from = x.jitRoom(from, 2)
+	if !x.hasRoom(from, 2) {
+		x.jit.mu.Lock()
+		from = x.jitRoom(from, 2)
+		x.jit.mu.Unlock()
+	}
 	lv := x.jit.levels[n]
-	x.jit.n.Store(n + 1)
+	ch := x.jit.last
+	if ch == nil || ch.id != cj.id {
+		ch = x.chainOf(cj)
+	}
+	x.pushLevel(lv, cj, ch)
 	inst := fn.Inst
-	lv.inst, lv.cj = inst, cj
+	lv.inst = inst
 	chunk := x.nchunks[x.nc]
 	lv.nc = x.nc
 	lv.chunkBase = uintptr(unsafe.Pointer(&chunk[0]))
@@ -1017,7 +1104,6 @@ func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64,
 	}
 	lv.r0 = ctx.R
 	if ctx.R < lv.rchunkBase || ctx.R >= ctx.RChunkEnd {
-		x.jit.mu.Unlock()
 		cj.run.RUnlock()
 		panic("wasm jit: a frame's references outside the exec's chunk")
 	}
@@ -1032,10 +1118,10 @@ func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64,
 	x.jit.rs[i+1] = 0
 	x.jit.rs[i+2] = wjit.Site(fn.Index, 0)
 	ctx.RSP = from + rsEntryBytes
-	x.jit.mu.Unlock()
 
 	// The run lock is held for reading from here to each exit, and again
-	// from the exit's work to the code's resumption.
+	// from the exit's work to the code's resumption, and the level ends
+	// under it.
 	off := entry
 	for {
 		if len(inst.Memories) > 0 {
@@ -1049,14 +1135,16 @@ func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64,
 		}
 		ctx.Poll = int64(x.poll)
 		nat.raw.EnterAt(off, unsafe.Pointer(ctx))
+		if ctx.Exit == wjit.ExitReturn {
+			x.popLevel(lv)
+			cj.run.RUnlock()
+			x.poll = int32(ctx.Poll)
+			return 0, true
+		}
 		cj.run.RUnlock()
 		x.poll = int32(ctx.Poll)
-		if jitCountExits && ctx.Exit != wjit.ExitReturn {
+		if jitCountExits {
 			jitExits.Add(1)
-		}
-		if ctx.Exit == wjit.ExitReturn {
-			x.popLevel()
-			return 0, true
 		}
 		var next *nativeFn
 		var o int
@@ -1364,7 +1452,9 @@ func (x *exec) jitTail(lv *jitLevel, fn *Function, ft *module.FuncType, f *exitF
 		// The frame Go entered: the interpreter's tail call makes it.
 		x.tail = fn
 		x.tailArgs = append(x.tailArgs[:0], args...)
-		x.popLevel()
+		lv.cj.run.RLock()
+		x.popLevel(lv)
+		lv.cj.run.RUnlock()
 		return nil, 0, true
 	}
 	x.jitSync(lv, at)

@@ -806,9 +806,22 @@ writing, so every native frame of the Code is in a level (`jitLevel`) that
 exited to Go, and goes on at an address the level holds: its frames'
 return addresses on the exec's return stack, and its exit's address. The
 pass reads every level of the Code's in every exec (`jitExecs`, which holds
-the execs made, weakly), under the exec's lock, which the exec holds
-while it begins a level or moves its return stack, and keeps each code
-holding one of those addresses with its function's current code. Go
+the execs made, weakly), and keeps each code holding one of those
+addresses with its function's current code. An exec keeps the levels of
+each Code it runs in a chain of their own (`codeLevels`, each level linked
+to the one of the same Code's below it), and changes a Code's chain --
+beginning a level, ending one by its return, a tail call the interpreter
+makes or a panic out of it -- only holding that Code's run lock for
+reading; a level's exit address and its frames' entries are written
+holding it too, by its native code or by Go entering, resuming or catching
+in it. The rest the pass reads -- the exec's list of chains, which it lets
+go of those with no level running from once it has 16, and where the
+return stack is, which a level of any Code's may move -- the exec changes
+holding a lock of its own (`jitExec.mu`), which the pass takes as it reads
+the exec. The write lock waits for every reader, so each of those writes
+is done before the pass reads, or waits for it to end: what the pass reads
+is every level of the Code's, as it is. Entering native code and
+returning from it take no lock but the run lock, and no atomic write. Go
 enters code -- a call, a loop's entry, a tier-up, a tail call made
 natively, a catch's landing pad -- only after taking the read lock and
 checking that the code was not dropped; where it was, the call runs in

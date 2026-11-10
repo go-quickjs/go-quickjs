@@ -398,6 +398,193 @@ func TestJITDropKeepsFrames(t *testing.T) {
 	checkAccounting(t, code2, b2)
 }
 
+// ringWAT is module i of a ring of k modules sharing table t, of 2k
+// elements: element i is module i's chain, and k+i its chain2, the same
+// function in other code. chain(c) recurses three deep natively, then
+// calls the next module's chain -- its chain2 below c = k+1 -- with c-1
+// through the table, or the host h at c = 0; it returns 103*(c+1) + h's
+// result. So a chain round the ring twice has, in each module, a level in
+// chain and one in chain2 above it. The module has n functions f0 to
+// f(n-1) too, as manyWAT's.
+func ringWAT(n, k, i int) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, `(module
+  (import "env" "t" (table $t %d funcref))
+  (import "env" "h" (func $h (param i32) (result i32)))
+  (type $ft (func (param i32) (result i32)))
+`, 2*k)
+	for f := 0; f < n; f++ {
+		fmt.Fprintf(&b, `  (func $f%d (export "f%d") (param $x i32) (result i32) (local $i i32) (local $s i32)
+    (block $d (loop $l
+      (br_if $d (i32.ge_u (local.get $i) (local.get $x)))
+      (local.set $s (i32.add (local.get $s) (i32.mul (local.get $x) (i32.const %d))))
+      (local.set $s (i32.xor (local.get $s) (i32.shl (local.get $i) (i32.const 3))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+    (i32.add (i32.mul (local.get $x) (local.get $x)) (i32.add (i32.const %d) (i32.and (local.get $s) (i32.const 0)))))
+`, f, f, f+1, f)
+	}
+	for _, name := range []string{"chain", "chain2"} {
+		fmt.Fprintf(&b, `  (func $deep_%[1]s (param $d i32) (param $c i32) (result i32)
+    (if (result i32) (i32.eqz (local.get $d))
+      (then (if (result i32) (i32.eqz (local.get $c))
+        (then (call $h (i32.const 0)))
+        (else (call_indirect $t (type $ft) (i32.sub (local.get $c) (i32.const 1))
+          (i32.add (i32.const %[2]d)
+            (i32.mul (i32.const %[3]d) (i32.lt_u (i32.sub (local.get $c) (i32.const 1)) (i32.const %[3]d))))))))
+      (else (i32.add (i32.const 1) (call $deep_%[1]s (i32.sub (local.get $d) (i32.const 1)) (local.get $c))))))
+  (func (export "%[1]s") (param $c i32) (result i32)
+    (i32.add (i32.const 100) (call $deep_%[1]s (i32.const 3) (local.get $c))))
+`, name, (i+1)%k, k)
+	}
+	b.WriteString(")")
+	return b.String()
+}
+
+// A pass that drops code finds its Code's frames on an exec whose levels
+// are of many Codes, interleaved: a chain of calls goes round a ring of
+// modules twice, natively in each and through Go between them, and at its
+// bottom a host call runs every module's other functions, on another exec,
+// past the budget they share, dropping their code. The code of every level
+// of the chain's is kept in every module, the lower as the upper, and the
+// chain returns what it should, alone and with others running at once.
+func TestJITDropKeepsInterleavedFrames(t *testing.T) {
+	const n, k = 8, 20
+	unit, _ := unitSize(t, n)
+	steppingClock(t)
+	ring := func(b *JITBudget, h func(context.Context, uint64) uint64) []*Instance {
+		tab := NewTable(module.FuncRef, nil, 2*k, 2*k, true, false, Null)
+		insts := make([]*Instance, k)
+		for i := range insts {
+			code := budgetCode(t, ringWAT(n, k, i), b)
+			insts[i] = instantiateCode(t, code, Extern{Kind: module.ExternTable, Table: tab}, hostH(h))
+			for j, name := range []string{"chain", "chain2"} {
+				ext, _ := insts[i].Export(name)
+				tab.Elems[j*k+i] = FuncRef(ext.Func)
+			}
+		}
+		return insts
+	}
+	const c = 2 * k
+	want := uint64(103 * (c + 1))
+	chain := func(insts []*Instance) {
+		t.Helper()
+		res, err := call(t, insts[0], "chain", c)
+		if err != nil || res[0].N != want {
+			t.Fatalf("chain(%d) = %v, %v; want %d", c, res, err, want)
+		}
+	}
+	// What the chains hold compiled, with the tables.
+	probe := NewJITBudget(0)
+	chain(ring(probe, func(context.Context, uint64) uint64 { return 0 }))
+
+	b := NewJITBudget(probe.Held() + 4*unit)
+	var insts []*Instance
+	bottom := false
+	insts = ring(b, func(ctx context.Context, _ uint64) uint64 {
+		if !bottom {
+			return 0
+		}
+		for round := 0; round < 3; round++ {
+			for _, inst := range insts {
+				for f := 0; f < n; f++ {
+					ext, _ := inst.Export(fmt.Sprintf("f%d", f))
+					res, err := Invoke(ctx, ext.Func, []Val{{N: 3}})
+					if err != nil || res[0].N != fk(uint64(f), 3) {
+						t.Errorf("f%d(3) = %v, %v", f, res, err)
+						return 1
+					}
+				}
+			}
+		}
+		return 0
+	})
+	chain(insts)
+	before := ReadJITStats().Dropped
+	bottom = true
+	for i := 0; i < 2; i++ {
+		chain(insts)
+	}
+	if ReadJITStats().Dropped == before {
+		t.Fatal("no code dropped below the chain")
+	}
+	// Chains on several goroutines at once, each dropping code below the
+	// others'.
+	var wg sync.WaitGroup
+	errs := make(chan error, 4)
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ext, _ := insts[0].Export("chain")
+			for i := 0; i < 2; i++ {
+				res, err := Invoke(context.Background(), ext.Func, []Val{{N: c}})
+				if err == nil && res[0].N != want {
+					err = fmt.Errorf("chain(%d) = %d, want %d", c, res[0].N, want)
+				}
+				if err != nil {
+					errs <- err
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	for i, inst := range insts {
+		for _, name := range []string{"chain", "chain2"} {
+			ext, _ := inst.Export(name)
+			if inst.Code.get(ext.Func.Index).native.Load() == nil {
+				t.Fatalf("module %d's %s, whose frames were below the host call, has no native code", i, name)
+			}
+		}
+	}
+	if held := b.Held(); held > b.Limit() {
+		t.Fatalf("holds %d past the limit %d", held, b.Limit())
+	}
+}
+
+// An exec keeps the chains of levels of the Codes it entered lately, and
+// lets go of those with no level running once it has jitChainsKept: those
+// with one stay, each the one chain of its Code's.
+func TestJITChainsKept(t *testing.T) {
+	x := new(exec)
+	cjs := make([]*codeJIT, 50)
+	running := map[*codeLevels]bool{}
+	for i := range cjs {
+		cjs[i] = &codeJIT{id: jitCodeIDs.Add(1)}
+		ch := x.chainOf(cjs[i])
+		if ch.id != cjs[i].id || x.jit.last != ch {
+			t.Fatalf("code %d: chain of id %d, last %p, want id %d, %p", i, ch.id, x.jit.last, cjs[i].id, ch)
+		}
+		if i%7 == 0 {
+			ch.top = new(jitLevel)
+			running[ch] = true
+		}
+	}
+	if len(x.jit.codes) > jitChainsKept+len(running) {
+		t.Fatalf("%d chains kept, %d with a level running", len(x.jit.codes), len(running))
+	}
+	for i, cj := range cjs {
+		ch := x.chainOf(cj)
+		if i%7 == 0 && !running[ch] {
+			t.Fatalf("code %d, with a level running, has another chain", i)
+		}
+		ids := 0
+		for _, c := range x.jit.codes {
+			if c.id == cj.id {
+				ids++
+			}
+		}
+		if ids != 1 {
+			t.Fatalf("code %d has %d chains listed", i, ids)
+		}
+	}
+}
+
 // An exception a host function throws, after the calls it made dropped
 // code of the module whose frames are below it, is caught by those frames,
 // whose code was kept.
