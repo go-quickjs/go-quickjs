@@ -805,7 +805,7 @@ atomically; `TestOptBulk` `TestJITBulkBaseline`'s copies, fills and
 table.grow and table.fill of every kind of memory and table on this tier,
 idle and with the collector marking, and `TestOptGoOps` the segments' and
 tables' instructions Go runs, with references and numbers live around
-them; `TestThreadDispatch`
+them (`BenchmarkOptMemories` times the accesses, below); `TestThreadDispatch`
 and `TestOptThreadDispatch` jump threading, the latter on 1,500 random
 dispatch loops against the interpreter; `TestMarks` the profile's marks.
 
@@ -866,6 +866,15 @@ json's and interp's, which compile their hot functions within a run of
 about 60 ms (json +10%, interp +4%, where they were +19% and +17%
 before the compile's cost was worked on; see Tier-up).
 
+`BenchmarkOptMemories` (`wasm/internal/engine`) times ten passes over
+64 KiB of a memory -- a load, a store and a load at offset 4 every 8 bytes
+-- in the baseline code and optimized, µs: memory 1 61 and 54, an i64
+memory 2 75 and 66, a shared memory 88 and 89, and an atomic add and a
+compare-and-exchange every 8 bytes of the shared one 583 and 583. A shared
+memory's accesses each read its size through its address and are never
+taken as checked, and the atomics are bound by their locked instructions,
+as the baseline's are.
+
 On the spec scripts the tier compiles 5,048 functions and refuses 1,794
 (SIMD and v128s 1,499, GC instructions 188, exceptions 107), where it
 compiled 4,149 before it took every memory, every offset, the atomics and
@@ -915,3 +924,6 @@ registers the allocator gave out.
 - Bounds checks: hoisting a loop's checks of an induction variable, and a
   block's checks of one base at its widest where nothing between can be
   observed.
+- In the code what Go runs for it now, as the baseline makes them:
+  memory.size, memory.copy and memory.fill of memories other than an
+  unshared i32 memory 0, and table.fill, through the barrier.
