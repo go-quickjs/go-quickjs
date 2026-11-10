@@ -466,10 +466,11 @@ Go too -- v128s and every SIMD and relaxed SIMD instruction, each the
 baseline's instruction sequence over registers the allocator gives (a
 fused `relaxed_madd` and `relaxed_nmadd` in Go, as in the baseline), and
 the GC instructions and the exceptions, as the baseline compiles them.
-It roughly halves the Go-built programs' time from their second run on, and
-makes their first runs as fast as the baseline's or faster (json 77 ms to
-70, gzip 75 to 53), but interp's, 1 ms slower for the baseline code's
-counting of calls. Their designs are in
+It takes 15 to 47% off the Go-built programs' time from their second run
+on (interp 22.8 ms to 12.0, json 35.8 to 28.9), and makes their first runs
+as fast as the baseline's or faster (sha256 81 ms to 64, sort 147 to 129),
+but interp's, 36 to 38 ms for the baseline code's counting of calls; see
+[Benchmarks](#benchmarks). Their designs are in
 [the JIT's README](../wasm/internal/jit/README.md) and
 [the optimizing tier's](../wasm/internal/jit/opt/README.md).
 
@@ -499,9 +500,10 @@ or once a call of it has run 1,000 back edges of its loops in the
 interpreter (`engine.DefaultOSRThreshold`): the call then goes on in native
 code from the loop's head, on-stack replacement. Against compiling after 10
 calls, with the interpreter's closures built for every function called,
-compiling at the first call makes the Go-built programs' first runs as
-fast or up to 16% faster (json 100 ms to 84), their second runs up to 13%
-faster, and allocates a twelfth of the objects in the first run. Each loop
+compiling at the first call made the Go-built programs' first runs as fast
+or up to 16% faster (json 100 ms to 84), their second runs up to 13%
+faster, and allocated a twelfth of the objects in the first run, as
+measured at its commit (de6821e7), before the optimizing tier. Each loop
 has an entry of its own in the function's code, which loads what resuming
 after an exit to Go does; both tiers keep everything in the frame's slots at
 a loop's head, so nothing is translated. A function the JIT refuses is tried
@@ -675,25 +677,35 @@ difference.
 ## Benchmarks
 
 `internal/cmd/wasmbench` runs the same workloads on the engine's interpreter
-and its JIT, on wazero's interpreter and compiler, and on Node, and reports
-for each the compile and instantiate times, the first run, the best and the
-median run, the CPU time, the Go heap's allocations per run and the peak
-RSS. Run it from the checkout's root:
+and its JIT's tiers, on wazero's interpreter and compiler, and on Node, and
+reports for each the compile and instantiate times, the first run, the best
+and the median run, the CPU time, the Go heap's allocations per run and the
+peak RSS. Run it from the checkout's root:
 
 ```sh
 go run ./internal/cmd/wasmbench -n 3                              # interp
 go run -tags quickjs_jit ./internal/cmd/wasmbench -suite micro    # interp and jit
 go run -tags quickjs_jit ./internal/cmd/wasmbench -engine jit,wazero-compiler,node -suite fib,sort
+go run -tags quickjs_jit ./internal/cmd/wasmbench -engine jit-base,jit-tiered,jit-opt -suite programs
 go run -tags quickjs_jit ./internal/cmd/wasmbench -matrix -n 5 > matrix.md
 ```
 
 Flags:
 
-- `-engine`: any of `interp`, `jit` (a build with `-tags quickjs_jit` on
-  amd64 Linux or Windows), `wazero-interp`, `wazero-compiler`, `node` (its
+- `-engine`: any of `interp`; `jit`, the JIT as a runtime of
+  `NewRuntimeConfigCompiler` runs it -- the baseline at a function's first
+  call, the optimizing tier at 30,000 calls, in the background -- which
+  needs a build with `-tags quickjs_jit` on amd64 Linux or Windows or arm64
+  macOS or Linux; `jit-base`, the baseline alone (`WASM_JIT_OPT=off`);
+  `jit-tiered`, the default named (`WASM_JIT_OPT=on`); `jit-opt`, every
+  function the optimizing tier accepts optimized at its first call
+  (`WASM_JIT_OPT=eager`); `wazero-interp`, `wazero-compiler`, `node` (its
   default tiering), `node-liftoff` (`--liftoff --no-wasm-tier-up`) and
-  `node-turbofan` (`--no-liftoff`). The default is `interp`, and `jit` in a
-  JIT build; `-matrix` takes them all.
+  `node-turbofan` (`--no-liftoff`). The default is `interp`, and `interp`
+  and `jit` in a JIT build; `-matrix` takes `interp`, `jit` and the wazero
+  and Node engines unless `-engine` names others. The worker inherits the
+  environment, so `GOMAXPROCS` and the `WASM_JIT` variables reach the Go
+  engines.
 - `-suite`: comma-separated prefixes of workload names (`fib`) or of
   suite/name (`micro`, `programs`).
 - `-n`: fresh processes per workload and engine, the engines taking turns.
@@ -719,8 +731,7 @@ than wins:
   (`memory.fill`, `memory.copy` of 1 MiB and of 64 bytes), `indirect`
   (`call_indirect`), `brtable` (unpredictable `br_table`), `globals`,
   `gc` (binary trees of structs, arrays of i32) and `simd` (i32x4). A
-  kernel is a function called many times, since the JIT compiles a
-  function once it has been called ten times.
+  kernel is a function called many times in a run.
 - `programs`, a Go program built for `GOOS=wasip1` when first needed and
   cached in the user cache directory by its source's hash and the Go
   version, run through WASI: `sha256` of 8 MiB, `sort` (`sort.Ints` of a
@@ -737,59 +748,133 @@ counter on Windows and take CPU time from the process's cycles; Node's CPU
 time on Windows moves in ticks of 15.6 ms, so its column is coarse there.
 wazero has no GC proposal, so its `gc` cells are n/a.
 
-On the machine below, `-matrix -n 1` takes two and a half minutes, most of
-it the two interpreters on the programs, and the time grows with `-n` and
-with `-warmup` plus `-reps`: about 12 minutes at `-n 5`, 25 at `-n 5 -reps
-3`.
+On the machine below, `-n 5` over all nine engines takes eight minutes, most
+of it the two interpreters on the programs, and the time grows with `-n` and
+with `-warmup` plus `-reps`.
 
-A sample, one process per cell (`-matrix -n 1`), the median run in ms, at
-commit f564657d: AMD Ryzen 9 9950X3D2, Windows 11, Go 1.27.3, Node 26.12.1,
-wazero 1.9.0, on 2026-11-09. Single runs are noisy; take figures from `-n 5`
-or more.
+### Measured
 
-| micro | go-quickjs interp | go-quickjs JIT | wazero interp | wazero compiler | Node | Node Liftoff | Node TurboFan |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| fib | 219 | 11.3 | 368 | 7.35 | 3.13 | 3.19 | 4.31 |
-| loop | 221 | 14.4 | 951 | 14.3 | 14.2 | 14.3 | 14.3 |
-| i64 | 266 | 19.7 | 1096 | 19.9 | 11.2 | 11.3 | 11.3 |
-| mandelbrot | 147 | 11.3 | 644 | 12.7 | 9.73 | 9.75 | 9.78 |
-| nbody | 139 | 9.89 | 441 | 4.40 | 3.32 | 3.30 | 3.30 |
-| bytes | 236 | 9.30 | 837 | 12.7 | 5.06 | 5.09 | 5.07 |
-| bulk | 132 | 118 | 281 | 27.2 | 10.6 | 10.5 | 10.5 |
-| indirect | 581 | 526 | 803 | 17.0 | 17.5 | 17.5 | 18.3 |
-| brtable | 330 | 42.4 | 655 | 46.6 | 39.9 | 39.9 | 40.5 |
-| globals | 177 | 26.7 | 692 | 27.3 | 15.0 | 14.9 | 14.8 |
-| gc | 354 | 352 | n/a | n/a | 10.3 | 9.25 | 9.52 |
-| simd | 75.0 | 75.8 | 188 | 4.09 | 2.89 | 2.89 | 2.89 |
+The tables below were made at commit 257d4691, on 2026-11-10, on an AMD
+Ryzen 9 9950X3D2 (16 cores, 32 threads), Windows 11 Pro 26200, with Go
+1.27.3, Node 26.12.1 (V8 14.6) and wazero 1.9.0, the machine otherwise
+idle, from the `-json` output of
 
-| programs | go-quickjs interp | go-quickjs JIT | wazero interp | wazero compiler | Node | Node Liftoff | Node TurboFan |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| sha256 | 2563 | 294 | 6794 | 94.9 | 49.7 | 48.2 | 47.0 |
-| sort | 6999 | 633 | 5335 | 150 | 92.3 | 90.2 | 96.8 |
-| json | 4172 | 62.6 | 1810 | 47.3 | 20.6 | 20.8 | 18.7 |
-| regexp | 4341 | 81.0 | 2198 | 78.6 | 24.9 | 25.4 | 23.0 |
-| gzip | 4365 | 713 | 1488 | 31.9 | 20.0 | 20.0 | 18.5 |
-| interp | 3886 | 3863 | 1579 | 25.0 | 14.2 | 14.2 | 13.6 |
+```sh
+go run -tags quickjs_jit ./internal/cmd/wasmbench -n 5 -json \
+  -engine interp,jit,jit-base,jit-opt,wazero-interp,wazero-compiler,node,node-liftoff,node-turbofan
+```
 
-The program's compile took about 20 ms on go-quickjs, 100 ms on wazero's
-interpreter, 1 s on its compiler (which compiles every function ahead of
-time) and 4 ms on Node (which compiles lazily).
+Each cell is the median of five fresh processes, in ms; a process compiled
+the module, made one warmup run, reported as the first run, and one timed
+run. "tiered" is the `jit` engine,
+the JIT as it runs by default; the ratios are its time over Node's default
+and over wazero's compiler. `-matrix` prints the median and compile tables
+of such a run; the first runs are in `-json` and the text output.
 
-The interpreter has become faster since, by the single `-engine interp` runs
-its commits report: a chain of nested blocks runs as one statement
-(637d7726), the loads and stores of memory 0 read the memory and their
-address in place (518d3d87), and calls through a table no longer allocate
-(d0a4f5c6). After them the programs take 1,933 ms for sha256, 1,741 for
-sort, 889 for json, 852 for regexp, 470 for gzip and 499 for interp, each
-less than wazero's interpreter in the table, and `micro/indirect` 457 ms.
+The median run, the second in a process:
 
-On-stack replacement (fa041de6) moved the JIT's column most where a hot loop
-runs in a function called a few times. Its commit's runs, against those
-interpreter changes and on a machine running other work, took the JIT's
-median for interp from 531 ms to 26.6, gzip from 146 to 56.8, sort from 322
-to 183, sha256 from 183 to 122, regexp from 69.6 to 64.7 and json from 61.8
-to 55.0; `micro/bulk`, whose time is in the bulk instructions Go runs, did not
-move.
+| micro | go-quickjs interp | go-quickjs baseline | go-quickjs tiered | go-quickjs optimizing | wazero interp | wazero compiler | Node | Node Liftoff | Node TurboFan | tiered/Node | tiered/wazero-c |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| fib | 206 | 11.3 | 8.78 | 8.98 | 366 | 7.12 | 3.12 | 3.18 | 4.23 | 2.81x | 1.23x |
+| loop | 223 | 14.1 | 14.1 | 14.4 | 958 | 14.2 | 14.3 | 14.1 | 14.1 | 0.99x | 1.00x |
+| i64 | 269 | 20.3 | 19.7 | 19.7 | 1188 | 19.8 | 11.2 | 11.1 | 11.2 | 1.76x | 0.99x |
+| mandelbrot | 152 | 11.2 | 11.1 | 11.0 | 657 | 12.7 | 9.75 | 9.73 | 9.69 | 1.14x | 0.88x |
+| nbody | 103 | 6.31 | 3.45 | 3.43 | 446 | 4.03 | 3.30 | 3.29 | 3.30 | 1.05x | 0.86x |
+| bytes | 195 | 8.79 | 6.94 | 6.97 | 755 | 12.6 | 5.03 | 5.02 | 5.10 | 1.38x | 0.55x |
+| bulk | 127 | 17.5 | 16.9 | 16.6 | 275 | 27.6 | 10.5 | 10.4 | 10.2 | 1.61x | 0.61x |
+| indirect | 382 | 20.5 | 20.6 | 20.9 | 816 | 16.8 | 17.0 | 17.0 | 18.1 | 1.21x | 1.23x |
+| brtable | 240 | 42.3 | 41.5 | 41.7 | 671 | 46.3 | 39.6 | 39.8 | 39.8 | 1.05x | 0.90x |
+| globals | 174 | 26.7 | 26.7 | 27.1 | 687 | 26.6 | 14.8 | 14.8 | 14.6 | 1.81x | 1.01x |
+| gc | 350 | 240 | 251 | 247 | n/a | n/a | 9.25 | 9.24 | 9.51 | 27x | |
+| simd | 75.1 | 2.94 | 2.94 | 2.94 | 197 | 4.09 | 2.89 | 2.87 | 2.88 | 1.02x | 0.72x |
+| geomean | | | | | | | | | | 1.75x | 0.88x |
+
+| programs | go-quickjs interp | go-quickjs baseline | go-quickjs tiered | go-quickjs optimizing | wazero interp | wazero compiler | Node | Node Liftoff | Node TurboFan | tiered/Node | tiered/wazero-c |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| sha256 | 1921 | 65.4 | 48.0 | 48.3 | 6799 | 95.6 | 48.7 | 50.0 | 45.2 | 0.99x | 0.50x |
+| sort | 1768 | 129 | 108 | 107 | 5267 | 151 | 90.3 | 91.0 | 93.9 | 1.19x | 0.71x |
+| json | 884 | 35.8 | 28.9 | 25.1 | 1830 | 47.3 | 20.8 | 20.1 | 18.9 | 1.38x | 0.61x |
+| regexp | 827 | 34.1 | 28.8 | 28.4 | 2117 | 76.4 | 23.7 | 23.3 | 21.7 | 1.22x | 0.38x |
+| gzip | 479 | 24.9 | 21.1 | 20.2 | 1443 | 32.4 | 20.3 | 20.4 | 19.0 | 1.04x | 0.65x |
+| interp | 504 | 22.8 | 12.0 | 12.1 | 1544 | 23.6 | 13.3 | 13.0 | 12.2 | 0.90x | 0.51x |
+| geomean | | | | | | | | | | 1.11x | 0.55x |
+
+The programs' first runs, which pay for every compile made during the run
+(a module's compile, below, is apart):
+
+| programs | go-quickjs interp | go-quickjs baseline | go-quickjs tiered | go-quickjs optimizing | wazero interp | wazero compiler | Node | Node Liftoff | Node TurboFan | tiered/Node | tiered/wazero-c |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| sha256 | 1931 | 81.3 | 63.5 | 134 | 6788 | 96.2 | 64.0 | 62.7 | 688 | 0.99x | 0.66x |
+| sort | 1780 | 147 | 129 | 211 | 5255 | 154 | 115 | 113 | 862 | 1.12x | 0.84x |
+| json | 896 | 59.8 | 59.0 | 182 | 1827 | 48.8 | 67.6 | 67.4 | 1154 | 0.87x | 1.21x |
+| regexp | 846 | 53.5 | 49.6 | 140 | 2116 | 75.2 | 43.6 | 43.7 | 840 | 1.14x | 0.66x |
+| gzip | 493 | 48.7 | 48.3 | 162 | 1443 | 34.4 | 44.9 | 44.6 | 1018 | 1.08x | 1.40x |
+| interp | 503 | 36.2 | 37.9 | 95.0 | 1551 | 24.0 | 37.8 | 37.5 | 624 | 1.00x | 1.58x |
+| geomean | | | | | | | | | | 1.03x | 1.00x |
+
+Compiling the program's module (`CompileModule`, `WebAssembly.compile`)
+took 5.0 to 5.3 ms on go-quickjs whatever the tier, which decodes and
+validates it and compiles a function at its first call; 89 to 91 ms on
+wazero's interpreter and 903 to 919 ms on its compiler, which compiles every
+function ahead of time; and 3.7 to 4.3 ms on Node, which compiles lazily
+too. A micro-benchmark's module compiled in under 0.05 ms on go-quickjs,
+0.1 ms on Node and 0.2 to 0.5 ms on wazero's compiler.
+
+What they show:
+
+- The interpreter takes 0.28 to 0.48 of wazero's interpreter's time on the
+  programs (2.1 to 3.5 times as fast) and 0.23 to 0.56 on the
+  micro-benchmarks, and 16 to 42 times the default tiering's on the
+  programs.
+- Steady state, the default tiering is 1.11x Node's time on the programs'
+  geometric mean -- at or under it for sha256 and interp, 1.38x for json --
+  and 0.55x wazero's compiler's. On the micro-benchmarks it is 1.75x Node and
+  0.88x wazero's compiler: level with Node on loop, nbody, brtable and simd;
+  1.4 to 1.8 times on i64, bytes, bulk and globals, where wazero's compiler
+  is level with go-quickjs (i64, globals) or slower (bytes, bulk); fib, a
+  call per node, 2.8 times. `gc` is 27 times Node's: its structs and arrays
+  are allocated in Go, through an exit, and collected by Go's collector.
+- The optimizing tier takes 15 to 47% off the baseline's time on the
+  programs, and 21 to 45% on the kernels whose values it keeps in registers
+  across a loop (fib, nbody, bytes); on the other kernels the two tiers are
+  level. The baseline makes calls through tables and the bulk memory
+  instructions natively, so `indirect` and `bulk` run as fast in it as
+  optimized.
+- First runs: the tiered first run is the baseline's or faster but for
+  interp's, 36 to 38 ms, which is the baseline code's counting of calls for
+  the tier-up. Against the engines it is 1.03x Node's on the geometric mean
+  -- under it for json -- and level with wazero's compiler, which compiled
+  for 0.9 s before the run. Optimizing every function at its first call
+  (`jit-opt`) makes the first run 1.6 to 3.4 times as long as the tiered one
+  (95 to 211 ms), as TurboFan alone does Node's (0.6 to 1.2 s): that is why
+  the optimizing tier waits for 30,000 calls.
+- The second run is not quite steady for json, whose tier-ups are still
+  being compiled in the background: its CPU time, 38.9 ms against 28.9 of
+  wall time, counts the workers', and with 15 warmup runs and 10 timed ones
+  its median is 25.2 ms, the `jit-opt` column's.
+- Peak RSS of a program's process: go-quickjs's interpreter 47 to 95 MiB,
+  the baseline 50 to 66, tiered 50 to 89 (json, its compiles in flight),
+  optimizing 71 to 99; Node 83 to 101; wazero's compiler 122 to 204 and its
+  interpreter 159 to 298.
+
+At `GOMAXPROCS=1` the optimizing tier compiles on the spot, on the program's
+goroutine, rather than on workers (see [The JIT](#the-jit)). The same
+command with `GOMAXPROCS=1` set, `-engine jit,jit-base -suite programs`,
+the first and the second run, ms:
+
+| program | baseline first | tiered first | baseline second | tiered second |
+|---|---:|---:|---:|---:|
+| sha256 | 80.9 | 66.4 | 66.9 | 49.6 |
+| sort | 148 | 133 | 129 | 106 |
+| json | 61.8 | 79.2 | 34.8 | 36.4 |
+| regexp | 54.0 | 54.5 | 34.8 | 28.6 |
+| gzip | 50.4 | 62.4 | 25.0 | 21.5 |
+| interp | 37.4 | 40.9 | 22.5 | 12.7 |
+
+There the tier-ups' compiles are in the program's time: the first runs of
+json, gzip and interp take 9 to 28% longer than the baseline's, and json's
+second run, still compiling, is the baseline's; sha256 and sort gain in
+their first run as they do with workers.
 
 ## Known gaps
 

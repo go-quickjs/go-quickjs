@@ -665,16 +665,18 @@ those calls natively. The frames that began in the baseline code run on in it: t
 replaced code stays placed (`nativeFn.prev`), and an exit resumes in the
 code that holds its address.
 
-The tier is on by default, at `DefaultOptThreshold`, 30,000 calls. Its
-compiles, once the cost of both tiers' compiles was worked on, left a short
-program's first run faster than the baseline alone for four of the six Go
-programs and slower for two (json 89 ms to 98, interp 37 to 39), and every
-later run about twice as fast (json 57 to 47, gzip 59 to 29); before that
-work they made json's first run 135 to 161 ms. Compiled in the background,
-every first run is the baseline's or faster -- json 77 to 70, regexp 89 to
-52, gzip 75 to 53 -- but interp's, 36 to 37, which is the baseline code's
-counting of its calls: a threshold no function reaches costs it as much
-(In the background).
+The tier is on by default, at `DefaultOptThreshold`, 30,000 calls. When it
+was made the default its compiles, once the cost of both tiers' compiles
+was worked on, left a short program's first run faster than the baseline
+alone for four of the six Go programs and slower for two (json 89 ms to
+98, interp 37 to 39), and every later run about twice as fast (json 57 to
+47, gzip 59 to 29); before that work they made json's first run 135 to 161
+ms. Compiled in the background (b08051c5), every first run was the
+baseline's or faster -- json 77 to 70, regexp 89 to 52, gzip 75 to 53 --
+but interp's, 36 to 37. That is still so (Measurements: sha256 81 to 64,
+regexp 54 to 50, interp 36 to 38), the baseline having since become faster
+itself; interp's is the baseline code's counting of its calls: a threshold
+no function reaches costs it as much (In the background).
 `Code.SetOptThreshold(n)` sets another: 0 compiles every function the
 tier accepts with it at once, the baseline only those it refuses, and a
 negative n turns the tier off. `WASM_JIT_OPT` sets it for tests and
@@ -777,16 +779,17 @@ its call.
 
 **GOMAXPROCS 1.** A worker then runs only when the program's goroutine is
 preempted, and the optimized code comes later than a compile on the spot
-would bring it: compiled in the background the Go programs' first runs
-took regexp 72 ms where on the spot they took 58, gzip 82 and 66, json's
-second run 48 and 39. So by default a Code compiles on the spot where
+would bring it: when the workers were added (b08051c5), compiled in the
+background the Go programs' first runs took regexp 72 ms where on the spot
+they took 58, gzip 82 and 66, json's second run 48 and 39. So by default a Code compiles on the spot where
 GOMAXPROCS is 1 (asked at each tier-up), and in the background above; with
 two the background wins (json's first run 83 to 69, gzip's 60 to 54).
 
-**Measured.** `internal/cmd/wasmbench -engine jit-base,jit-tiered -suite
-programs`, median of 3 fresh processes, the tiered first run on the spot
-and in the background, the baseline alone's in parentheses, then the
-second run, ms:
+**Measured** when the workers were added (b08051c5):
+`internal/cmd/wasmbench -engine jit-base,jit-tiered -suite programs`,
+median of 3 fresh processes, the tiered first run on the spot and in the
+background, the baseline alone's in parentheses, then the second run, ms
+(Measurements has the current figures):
 
 | program | amd64 first | amd64 second | arm64 first | arm64 second |
 |---|---:|---:|---:|---:|
@@ -1000,45 +1003,56 @@ dispatch loops against the interpreter; `TestMarks` the profile's marks.
 
 ## Measurements
 
-`internal/cmd/wasmbench`, median of 3 fresh processes, each one run after
-one warm-up run, ms (Ryzen 9 9950X3D2, Windows; `jit-tiered` is the
-baseline with the tier at `DefaultOptThreshold`, `jit-opt` every function
-the tier accepts optimized at its first compile; the first run, in
-parentheses, pays the compiles; the programs measured again after the
-compile's cost was worked on):
+`internal/cmd/wasmbench` at 257d4691, median of 5 fresh processes, each
+one run after one warm-up run, ms (Ryzen 9 9950X3D2, Windows, 32 threads;
+`jit-tiered`, wasmbench's default `jit` engine, is the baseline with the
+tier at `DefaultOptThreshold` in the background, `jit-opt` every
+function the tier accepts optimized at its first compile; the first run, in
+parentheses, pays the compiles). docs/wasm.md's Benchmarks has the same
+run beside wazero and Node, and the runs at GOMAXPROCS=1, where the
+tier-ups are compiled on the spot.
 
 | workload | interp | jit-base | jit-tiered | jit-opt |
 |---|---:|---:|---:|---:|
-| micro/fib | 208 | 11.0 | 9.43 | 8.86 |
-| micro/loop | 230 | 14.2 | 14.5 | 14.2 |
-| micro/i64 | 277 | 19.8 | 20.1 | 19.7 |
-| micro/mandelbrot | 153 | 11.3 | 11.0 | 11.0 |
-| micro/nbody | 102 | 6.34 | 3.49 | 3.44 |
-| micro/bytes | 207 | 8.79 | 6.87 | 6.97 |
-| micro/bulk | 129 | 139 | 16.9 | 16.8 |
-| micro/indirect | 387 | 846 | 20.7 | 20.7 |
-| micro/brtable | 238 | 42.3 | 41.9 | 41.8 |
-| micro/globals | 179 | 26.5 | 27.1 | 26.5 |
-| micro/gc | 354 | 234 | 242 | 237 |
-| micro/simd | 74.9 | 2.99 | 2.98 | 2.99 |
-| programs/sha256 | 1956 | 150 (176) | 52.4 (162) | 54.6 (179) |
-| programs/sort | 1760 | 208 (243) | 114 (231) | 120 (249) |
-| programs/json | 874 | 59.3 (132) | 49.3 (145) | 37.6 (178) |
-| programs/regexp | 822 | 70.8 (117) | 34.6 (87.0) | 36.3 (114) |
-| programs/gzip | 464 | 65.4 (105) | 31.2 (92.5) | 43.7 (116) |
-| programs/interp | 544 | 24.3 (50.2) | 15.3 (52.3) | 17.7 (70.8) |
+| micro/fib | 206 | 11.3 | 8.78 | 8.98 |
+| micro/loop | 223 | 14.1 | 14.1 | 14.4 |
+| micro/i64 | 269 | 20.3 | 19.7 | 19.7 |
+| micro/mandelbrot | 152 | 11.2 | 11.1 | 11.0 |
+| micro/nbody | 103 | 6.31 | 3.45 | 3.43 |
+| micro/bytes | 195 | 8.79 | 6.94 | 6.97 |
+| micro/bulk | 127 | 17.5 | 16.9 | 16.6 |
+| micro/indirect | 382 | 20.5 | 20.6 | 20.9 |
+| micro/brtable | 240 | 42.3 | 41.5 | 41.7 |
+| micro/globals | 174 | 26.7 | 26.7 | 27.1 |
+| micro/gc | 350 | 240 | 251 | 247 |
+| micro/simd | 75.1 | 2.94 | 2.94 | 2.94 |
+| programs/sha256 | 1921 | 65.4 (81.3) | 48.0 (63.5) | 48.3 (134) |
+| programs/sort | 1768 | 129 (147) | 108 (129) | 107 (211) |
+| programs/json | 884 | 35.8 (59.8) | 28.9 (59.0) | 25.1 (182) |
+| programs/regexp | 827 | 34.1 (53.5) | 28.8 (49.6) | 28.4 (140) |
+| programs/gzip | 479 | 24.9 (48.7) | 21.1 (48.3) | 20.2 (162) |
+| programs/interp | 504 | 22.8 (36.2) | 12.0 (37.9) | 12.1 (95.0) |
 
 The Go programs' steady state, once every function that will be compiled
-is (`-warmup 15 -reps 10`, ms):
+is (`-warmup 15 -reps 10`, median of 3 processes, ms):
 
 | program | jit-base | jit-tiered | jit-opt |
 |---|---:|---:|---:|
-| sha256 | 144 | 47.7 | 47.5 |
-| sort | 199 | 106 | 106 |
-| json | 54.2 | 24.7 | 24.1 |
-| regexp | 70.8 | 28.7 | 27.6 |
-| gzip | 53.0 | 20.6 | 20.2 |
-| interp | 22.0 | 11.7 | 11.6 |
+| sha256 | 65.3 | 47.3 | 47.4 |
+| sort | 129 | 106 | 106 |
+| json | 35.4 | 25.2 | 24.6 |
+| regexp | 34.4 | 28.4 | 28.2 |
+| gzip | 24.5 | 20.0 | 19.7 |
+| interp | 21.7 | 11.7 | 11.5 |
+
+The tier takes 15 to 46% off the baseline's steady state. The baseline's
+own column is half or less of what it was in this README's earlier table
+for sha256, regexp and gzip (144, 70.8 and 53.0 ms), the baseline having
+since come to make calls through tables and references and the bulk
+memory instructions natively (1db2aac1, 5c074edf), as the tier did
+first. json's second run, 28.9 ms tiered, is not
+yet its steady state: tier-ups are still being compiled in the background
+then.
 
 What the Go programs gained, in the order it came (steady state,
 optimized, ms): the calls through tables and memory.copy natively (gzip
@@ -1047,16 +1061,16 @@ those exits, in both tiers); jump threading of the dispatch loops (regexp
 64 to 29, json 42 to 30, its hot functions no longer refused for their
 spills' slots); the allocator's coalescing and spills by density (interp
 21 to 12, sha256 75 to 47). The kernels gain where values stay in
-registers across a loop (nbody 1.8x, fib 1.2x, bytes 1.3x); loop, i64
+registers across a loop (nbody 1.8x, fib 1.3x, bytes 1.3x); loop, i64
 and mandelbrot are bound by one multiply's or add's latency each
 iteration, as the baseline is, and simd by its accumulator's chain of an
-add, a shift, an xor and a shuffle, which both tiers keep in a register
-(its row measured again once the tier compiled SIMD: medians of 5
-processes of 3 runs); gc and brtable spend their time in Go and
+add, a shift, an xor and a shuffle, which both tiers keep in a register;
+gc and brtable spend their time in Go and
 in the switch. The tiered first runs are the baseline's or better but
-json's and interp's, which compile their hot functions within a run of
-about 60 ms (json +10%, interp +4%, where they were +19% and +17%
-before the compile's cost was worked on; see Tier-up).
+interp's (+5%), the baseline code's counting of calls; json's is level
+(59.8 to 59.0 ms). Compiled on the program's goroutine they were +10% and
++4%, and +19% and +17% before the compile's cost was worked on (see
+Tier-up).
 
 `BenchmarkOptMemories` (`wasm/internal/engine`) times ten passes over
 64 KiB of a memory -- a load, a store and a load at offset 4 every 8 bytes
@@ -1078,13 +1092,14 @@ data.drop 73 were refused -- and 3,914 before it took references and
 tail calls; in 32 to 54 ms, 5 to 8 µs a function (on a busy machine). The Go program's 3,011 functions
 compile in 0.16 ms each (0.40 before; the baseline's, 0.12 ms).
 
-On arm64 (GitHub's `ubuntu-24.04-arm` runner, Linux; the same runs as the
-first table, median of 3, the first run in parentheses, ms) the tier gains
-as on amd64; the micro-benchmarks are, baseline then tiered, fib 30.0 and
-18.5, loop 25.9 and 17.9, mandelbrot 38.3 and 20.2, nbody 19.9 and 10.8,
-bytes 31.1 and 17.4, bulk 263 and 24.7, indirect 1,889 and 55.1, brtable
-55.3 and 46.5, simd 14.3 and 6.26 (medians of 5 processes of 3 runs, once
-the tier compiled SIMD; before, it refused the kernel), and i64, globals
+On arm64 (GitHub's `ubuntu-24.04-arm` runner, Linux), measured when the
+tier was ported to it (954d9a4e; wasmbench's runs as above, but median
+of 3, the first run in parentheses, ms), the tier gains as on amd64; the
+micro-benchmarks were, baseline then tiered, fib 30.0 and 18.5, loop 25.9
+and 17.9, mandelbrot 38.3 and 20.2, nbody 19.9 and 10.8, bytes 31.1 and
+17.4, bulk 263 and 24.7, indirect 1,889 and 55.1, brtable 55.3 and 46.5,
+simd 14.3 and 6.26 (medians of 5 processes of 3 runs, once the tier
+compiled SIMD, 26dd564d; before, it refused the kernel), and i64, globals
 and gc level:
 
 | program | jit-base | jit-tiered | jit-opt |
