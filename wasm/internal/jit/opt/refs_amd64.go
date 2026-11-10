@@ -189,9 +189,36 @@ func (g *gen) clearRefs() {
 	}
 	a := g.a
 	g.mark("clear references")
+	// The barrier's flag is tested once: while the collector does not
+	// mark, the slots are cleared by plain stores, and while it marks each
+	// pointer word through the barrier.
+	n := to - from
+	slow, done := a.NewLabel(), a.NewLabel()
+	a.MovImm(s0, g.req.WriteBarrier)
+	a.TestMem8(s0, 0, 0xff)
+	a.Jcc(amd64.CondNE, slow)
+	a.Load(amd64.RAX, rCtx, offR)
+	if n <= 8 {
+		for k := from; k < to; k++ {
+			a.StoreImm(amd64.RAX, int32(16*k), 0)
+			a.StoreImm(amd64.RAX, int32(16*k+8), 0)
+		}
+	} else {
+		a.OpImm(amd64.Add, amd64.RAX, int32(16*from), true)
+		a.MovImm(amd64.RCX, uint64(n))
+		loop := a.NewLabel()
+		a.Bind(loop)
+		a.StoreImm(amd64.RAX, 0, 0)
+		a.StoreImm(amd64.RAX, 8, 0)
+		a.OpImm(amd64.Add, amd64.RAX, 16, true)
+		a.OpImm(amd64.Sub, amd64.RCX, 1, true)
+		a.Jcc(amd64.CondNE, loop)
+	}
+	a.Jmp(done)
+	a.Bind(slow)
 	a.Load(amd64.RAX, rCtx, offR)
 	a.OpImm(amd64.Add, amd64.RAX, int32(16*from), true)
-	a.MovImm(amd64.RCX, uint64(to-from))
+	a.MovImm(amd64.RCX, uint64(n))
 	loop := a.NewLabel()
 	a.Bind(loop)
 	a.StoreImm(amd64.RAX, 8, 0)
@@ -200,6 +227,7 @@ func (g *gen) clearRefs() {
 	a.OpImm(amd64.Add, amd64.RAX, 16, true)
 	a.OpImm(amd64.Sub, amd64.RCX, 1, true)
 	a.Jcc(amd64.CondNE, loop)
+	a.Bind(done)
 }
 
 // nullTrap traps where the reference call_ref or return_call_ref v calls

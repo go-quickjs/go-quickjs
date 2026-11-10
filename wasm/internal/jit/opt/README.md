@@ -295,7 +295,9 @@ its S view, which clears the rest -- and is stored as its D view.
 
 A function that holds references -- the engine's frame has reference
 slots (`Request.FrameRefSlots`) -- makes every reference slot but its
-parameters' null when it begins, as the baseline does, and moves the
+parameters' null when it begins, as the baseline does -- the barrier's
+flag tested once, the slots cleared by plain stores while the collector
+does not mark, each through the barrier while it does -- and moves the
 context's R past its own for a native call (`adv`) and back after: its
 callees' references go past its own. Its reference instructions address
 the slots from the context's R, loaded into a scratch register for each,

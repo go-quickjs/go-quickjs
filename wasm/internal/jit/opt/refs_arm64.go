@@ -203,7 +203,33 @@ func (g *gen) clearRefs() {
 	}
 	a := g.a
 	g.mark("clear references")
+	// The barrier's flag is tested once: while the collector does not
+	// mark, the slots are cleared by plain stores, and while it marks each
+	// pointer word through the barrier.
 	p, n := arm64.Reg(1), arm64.Reg(2)
+	slow, done := a.NewLabel(), a.NewLabel()
+	a.MovImm(s0, g.req.WriteBarrier)
+	a.LoadU8(s0, s0, 0)
+	a.Cbnz(s0, slow, false)
+	a.Load(p, rCtx, offR)
+	if to-from <= 8 {
+		for k := from; k < to; k++ {
+			a.Store(p, int32(16*k), arm64.ZR)
+			a.Store(p, int32(16*k+8), arm64.ZR)
+		}
+	} else {
+		a.AddImm(p, p, int64(16*from), true)
+		a.MovImm(n, uint64(to-from))
+		fast := a.NewLabel()
+		a.Bind(fast)
+		a.Store(p, 0, arm64.ZR)
+		a.Store(p, 8, arm64.ZR)
+		a.AddImm(p, p, 16, true)
+		a.SubsImm(n, n, 1, true)
+		a.BCond(arm64.NE, fast)
+	}
+	a.B(done)
+	a.Bind(slow)
 	a.Load(p, rCtx, offR)
 	a.AddImm(p, p, int64(16*from), true)
 	a.MovImm(n, uint64(to-from))
@@ -215,6 +241,7 @@ func (g *gen) clearRefs() {
 	a.AddImm(p, p, 16, true)
 	a.SubsImm(n, n, 1, true)
 	a.BCond(arm64.NE, loop)
+	a.Bind(done)
 }
 
 // nullTrap traps where the reference call_ref or return_call_ref v calls
