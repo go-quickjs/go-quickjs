@@ -869,6 +869,23 @@ function closure_make(n)
     return n;
 }
 
+/* a closure capturing a turn's binding, the first of many the turn
+   declares: each turn's bindings are closed as it ends */
+function closure_many_locals(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++) {
+        let k = j;
+        var f = function () { return k; };
+        let a0 = j, a1 = a0 + 1, a2 = a1 + 1, a3 = a2 + 1, a4 = a3 + 1, a5 = a4 + 1, a6 = a5 + 1, a7 = a6 + 1;
+        let b0 = a7, b1 = b0 + 1, b2 = b1 + 1, b3 = b2 + 1, b4 = b3 + 1, b5 = b4 + 1, b6 = b5 + 1, b7 = b6 + 1;
+        let c0 = b7, c1 = c0 + 1, c2 = c1 + 1, c3 = c2 + 1, c4 = c3 + 1, c5 = c4 + 1, c6 = c5 + 1, c7 = c6 + 1;
+        s = (s + f() + c7) | 0;
+    }
+    global_res = s;
+    return n;
+}
+
 /* a local the loop assigns, which a closure reads, called each turn */
 function closure_counter(n)
 {
