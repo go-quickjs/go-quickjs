@@ -748,8 +748,9 @@ WASM_FIRSTRUN=prog.wasm WASM_FIRSTRUN_ARGS="json 200" \
 ## Concurrency and memory
 
 A Code's native code is shared by its instances and the goroutines running
-them. It lives in an arena of the Code's own, released by a cleanup when
-the Code is collected. Placing code makes pages of the arena writable, and
+them. It lives in an arena of the Code's own (`internal/jit`'s reusing
+arena, `NewReusingArena`), released by a cleanup when the Code is
+collected. Placing code makes pages of the arena writable, and
 no thread runs code in pages being written, in one of two ways. A compile
 made by a goroutine running the Code -- a function's first, a tier-up on
 the spot -- places its code after the last placed, perhaps on a page
@@ -765,6 +766,66 @@ it once that code is sealed, and under the write lock. Compiles are
 serialized per Code (`codeJIT.mu`), but those in the background, which
 take it only to publish. The link table is written atomically, and read by
 native code.
+
+What the JIT holds for a Code -- each code's bytes in the arena, its record
+(`nativeFn` and its loops' entries and catch clauses), the SIMD
+instructions' Go code, and the link, frames and counters tables -- is
+charged to a budget (`engine.JITBudget`), which several Codes may share:
+a `wasm.Runtime`'s (`WithJITMemoryLimit`, 64 MiB by default) or a
+JavaScript runtime's (`quickjs.WithJITMemoryLimit`); `Code.JITMemory`
+reports it. A compile takes room in the budget before it places its code
+(`codeJIT.reserve`, `engine/jit_mem.go`). Where there is none, a pass over
+the Code's functions -- at most one each epoch of the JIT's clock, 50 ms,
+and then over the other Codes of the budget that are not compiling --
+makes it:
+
+- code the optimizing tier replaced, or a loop's entry was compiled for
+  (`loopsFor`), that no frame is in is dropped;
+- a function whose code no frame is in has its link cleared: its next call,
+  native code's or Go's, comes through Go (`ExitCall` and `runNative`),
+  which notes the call's epoch and links the code again;
+- a function whose link a pass two epochs before cleared, and that has not
+  been called since, is dropped, the least recently called first, until
+  the room is made; its link stays clear, and its next call compiles it
+  again as its first did.
+
+Where that makes no room the compile is refused (`budget`, `engine.RefuseBudget`): the function
+runs in the interpreter, its body compiled for it then, until a call in the
+next epoch, or a loop's OSR check a threshold of back edges on, compiles
+it; a tier-up refused so tries again after as many calls again, and is not
+queued for a worker meanwhile. A compile in the background takes its room
+when it is placed, the batch's codes each, under the compile lock, from a
+worker's goroutine; one that finds none is refused so, and one finished
+for a Code given back gives back its room. Before
+compiling, a compile takes room for the least it could need -- a byte of
+code for each byte of body, or what the tier's code needed when it last
+found no room -- so that one bound to be refused is mostly not made again.
+
+No frame can be in code a pass drops. The pass holds the run lock for
+writing, so every native frame of the Code is in a level (`jitLevel`) that
+exited to Go, and goes on at an address the level holds: its frames'
+return addresses on the exec's return stack, and its exit's address. The
+pass reads every level of the Code's in every exec (`jitExecs`, which holds
+the execs made, weakly), under the exec's lock, which the exec holds
+while it begins a level or moves its return stack, and keeps each code
+holding one of those addresses with its function's current code. Go
+enters code -- a call, a loop's entry, a tier-up, a tail call made
+natively, a catch's landing pad -- only after taking the read lock and
+checking that the code was not dropped; where it was, the call runs in
+the interpreter, or goes on as it would without the code. A compile in
+the background publishes its code under the compile lock, which a pass
+holds, so the two never overlap: a function whose code a pass dropped
+while its optimizing compile was queued or running gets the optimized
+code when it is published, as its only code. A dropped code's space goes
+back to the arena, which places later code there -- a placement on the
+spot, under the write lock, never one apart, which takes only pages past
+every code placed -- and unmaps a chunk once nothing in it is held.
+
+`WASM_JIT_MEMLIMIT`, read when the engine starts, gives each Code a budget
+of its own of that many bytes, for tests, and `WASM_JIT_CLOCK=step` makes
+the clock advance at each reading, so that every compile that finds its
+budget full makes a pass and every function not called since the last is
+old: the spec suite and `TestJITDifferential` run so (Validation).
 
 ## References and the collector
 
@@ -814,6 +875,8 @@ WASM_SPEC_DIR=/path/to/spec WASM_THREADS_DIR=/path/to/threads WASM_JIT=osr \
 WASM_SPEC_DIR=/path/to/spec WASM_THREADS_DIR=/path/to/threads WASM_JIT=eager WASM_JIT_BARRIER=clobber \
   go test -tags quickjs_jit ./wasm/internal/spectest -count=1 -run TestSpec -v
 WASM_SPEC_DIR=/path/to/spec WASM_THREADS_DIR=/path/to/threads go test -tags quickjs_jit ./wasm/internal/spectest -run TestJITDifferential -v
+WASM_SPEC_DIR=/path/to/spec WASM_THREADS_DIR=/path/to/threads WASM_JIT=eager WASM_JIT_MEMLIMIT=8192 WASM_JIT_CLOCK=step \
+  go test -tags quickjs_jit ./wasm/internal/spectest -count=1 -run 'TestSpec$|TestJITDifferential' -v
 go test -tags quickjs_jit ./wasm/internal/engine -run 'JIT|OSR'
 (cd internal/jit/verify && go test -run 'TestAMD64|TestARM64' -tags quickjs_jit .)
 ```
@@ -834,4 +897,11 @@ are),
 the traps, and the memories and globals after every call; then again with every call of a
 function with loops entering its native code at its first back edge
 (`osr`). The spec runs log how many calls went on natively from a loop
-(`ReadJITStats().OSR`).
+(`ReadJITStats().OSR`), and under a memory limit how many functions' code
+was dropped (`Dropped`). Under one, compiles are refused and code dropped
+by design, so the engine's tests that check a function was compiled fail
+there; its results are what they check, as the spec's and the
+differential's are. `TestJITDropKeepsFrames`, `TestJITDropKeepsCatchingFrames`
+and `TestJITDropConcurrent` drop code below suspended frames and on many
+goroutines at once; run them with the race detector after a change to what
+drops code or enters it.

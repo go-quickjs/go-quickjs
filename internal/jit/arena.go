@@ -266,7 +266,9 @@ func (a *Arena) place(instructions []byte) ([]byte, error) {
 // from them before they are sealed. Code placed later never shares those
 // pages while they are written, the arena being locked; place may later
 // share the batch's last page, under its own rule. The slices it returns
-// are as place's; on an error none is placed.
+// are as place's; on an error none is placed. A reusing arena keeps the
+// space between its chunk's code and the batch's first page for later
+// code, and ignores FirstOffset and LineOffset, as its place does.
 func (a *Arena) placeApart(list [][]byte) ([][]byte, error) {
 	for _, instructions := range list {
 		if len(instructions) == 0 {
@@ -279,7 +281,7 @@ func (a *Arena) placeApart(list [][]byte) ([][]byte, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	shift := 0
-	if LineOffset != 0 {
+	if LineOffset != 0 && !a.reuse {
 		shift = lineShift()
 	}
 	page := os.Getpagesize()
@@ -302,6 +304,9 @@ func (a *Arena) placeApart(list [][]byte) ([][]byte, error) {
 			c.live -= len(code)
 			if c.live == 0 {
 				errs = append(errs, a.unmap(c))
+			} else if a.reuse {
+				base := uintptr(unsafe.Pointer(unsafe.SliceData(c.mem)))
+				c.release(int(uintptr(unsafe.Pointer(unsafe.SliceData(code)))-base), len(code))
 			}
 			out[i] = nil
 		}
@@ -318,6 +323,10 @@ func (a *Arena) placeApart(list [][]byte) ([][]byte, error) {
 		} else if o := a.open; o != nil && alignUp(o.used, page)+n <= len(o.mem) {
 			c = o
 			start = alignUp(c.used, page)
+			if a.reuse && start > c.used {
+				// The rest of the page before, for code placed later.
+				c.release(c.used, start-c.used)
+			}
 			segs = append(segs, segment{c: c, from: start, first: i})
 		} else {
 			mem, err := mapCode(alignUp(n, chunkBytes))
@@ -325,7 +334,7 @@ func (a *Arena) placeApart(list [][]byte) ([][]byte, error) {
 				return nil, errors.Join(fmt.Errorf("allocate code: %w", err), undo())
 			}
 			c = &chunk{mem: mem, own: len(mem) > chunkBytes}
-			if pad := alignUp(FirstOffset, codeAlign); len(a.chunks) == 0 && pad > 0 && pad+n <= len(mem) {
+			if pad := alignUp(FirstOffset, codeAlign); len(a.chunks) == 0 && pad > 0 && pad+n <= len(mem) && !a.reuse {
 				c.used = pad
 			}
 			a.chunks = append(a.chunks, c)

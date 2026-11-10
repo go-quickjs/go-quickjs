@@ -38,12 +38,12 @@ type codeJIT struct {
 	// their first back edge: osrFirst its first call (WASM_JIT=eager),
 	// osrEvery every call (WASM_JIT=osr, EnterLoopsForTest).
 	osrCalls int8
-	// mu serializes compiles.
+	// mu serializes compiles, and what drops code (jit_mem.go).
 	mu sync.Mutex
 	// run is held for reading while native code of the Code runs, and for
-	// writing while code is placed: placing makes pages of the arena
-	// writable, which no thread may be running then. Code placed apart
-	// from the running code (placeReady) does not take it.
+	// writing while code is placed or dropped: placing makes pages of the
+	// arena writable, which no thread may be running then. Code placed
+	// apart from the running code (placeReady) does not take it.
 	run   sync.RWMutex
 	arena *ijit.Arena
 	// links holds each function's native entry, or 0; native code reads
@@ -54,7 +54,9 @@ type codeJIT struct {
 	// a function that holds references has one no call through a table
 	// makes natively. It is written atomically, before the link.
 	frames []uint64
-	raws   []*ijit.RawCode
+	// raws are the codes placed, which the Code holds until they are
+	// dropped or it is collected.
+	raws []*placedCode
 	// simd holds the code of each SIMD instruction native code leaves to
 	// Go, by its offset in the module (simdExitFn).
 	simd sync.Map
@@ -72,6 +74,20 @@ type codeJIT struct {
 	// bg is the state of the optimizing tier's compiles in the background
 	// (jit_bg.go).
 	bg optBackground
+
+	// budget is what the code is charged to (JITBudget), and codeBytes,
+	// recordBytes and tableBytes what it holds (JITMemory): budget and
+	// tableBytes change under mu.
+	budget                 *JITBudget
+	codeBytes, recordBytes atomic.Int64
+	tableBytes             int64
+	// fns are the states of the functions compiled, by index, for what
+	// drops code; reclaimedAt is the epoch of the last pass that did, and
+	// dropped counts the functions whose code it dropped. They change under
+	// mu.
+	fns         []*fnJIT
+	reclaimedAt uint64
+	dropped     atomic.Int64
 }
 
 // optPollWeight is how many calls a poll exit of a function's baseline
@@ -88,11 +104,16 @@ func (c *Code) nativeFirst() bool {
 
 // nativeFn is a function's native code.
 type nativeFn struct {
-	raw     *ijit.RawCode
-	base    uintptr
-	goEntry int
-	retStub uintptr
-	nslots  int
+	raw *ijit.RawCode
+	// place is the code's place in the arena, and base and end its first
+	// byte and the byte past its last.
+	place     *placedCode
+	base, end uintptr
+	// entry is the offset of the entry native calls make, which the link
+	// table holds, and goEntry Go's.
+	entry, goEntry int
+	retStub        uintptr
+	nslots         int
 	// loops are the offsets of the loops' entries in the code, by the
 	// loop instruction's offset in the module.
 	loops map[uint32]int
@@ -109,7 +130,7 @@ type nativeFn struct {
 // addr: where a frame that exited resumes.
 func (n *nativeFn) holding(addr uintptr) *nativeFn {
 	for p := n; p != nil; p = p.prev {
-		if addr >= p.base && addr < p.base+uintptr(p.raw.Size()) {
+		if addr >= p.base && addr < p.end {
 			return p
 		}
 	}
@@ -210,13 +231,25 @@ var (
 // return stack they share.
 type jitExec struct {
 	levels []*jitLevel
-	n      int
 	rs     []uint64
+	// n is the number of levels running. A pass of a code that drops code
+	// reads the levels (codeJIT.pins) under mu, which the exec holds while
+	// it begins a level or moves the return stack: a level ended is not
+	// begun again while the pass reads it.
+	n  atomic.Int32
+	mu sync.Mutex
 }
 
-func (x *exec) jitLevel() int { return x.jit.n }
+func (x *exec) jitLevel() int { return int(x.jit.n.Load()) }
 
-func (x *exec) setJITLevel(n int) { x.jit.n = n }
+func (x *exec) setJITLevel(n int) {
+	if x.jit.n.Load() != int32(n) {
+		x.jit.n.Store(int32(n))
+	}
+}
+
+// popLevel ends the innermost level.
+func (x *exec) popLevel() { x.jit.n.Store(x.jit.n.Load() - 1) }
 
 // jitEnvOSR is which calls WASM_JIT has enter loops' native code at their
 // first back edge (codeJIT.osrCalls): "eager" the first, "osr" every one.
@@ -380,7 +413,9 @@ func (c *Code) enableJIT(threshold int) bool {
 		return true
 	}
 	n := max(len(c.Module.Functions), 1)
-	cj := &codeJIT{threshold: int32(threshold), arena: ijit.NewArena(), links: make([]uintptr, n), frames: make([]uint64, n), counters: make([]int64, n)}
+	cj := &codeJIT{threshold: int32(threshold), arena: ijit.NewReusingArena(), links: make([]uintptr, n), frames: make([]uint64, n), counters: make([]int64, n),
+		fns: make([]*fnJIT, n), tableBytes: tableBytes(n)}
+	cj.joinBudget(NewJITBudget(jitMemEnv))
 	cj.optThreshold.Store(-1)
 	if wopt.Available {
 		cj.optThreshold.Store(DefaultOptThreshold)
@@ -405,22 +440,27 @@ func (cj *codeJIT) close() {
 	cj.mu.Lock()
 	defer cj.mu.Unlock()
 	cj.bg.closed = true
-	for _, r := range cj.raws {
-		r.Close()
+	for _, pc := range cj.raws {
+		pc.dropped.Store(true)
+		pc.raw.Close()
 	}
 	cj.raws = nil
+	cj.leaveBudget()
 }
 
 // native returns function idx's native code, compiling it once it has been
 // called often enough, or nil.
 func (cj *codeJIT) native(c *Code, idx uint32, cd *compiled) *nativeFn {
 	if nat := cd.native.Load(); nat != nil {
+		if atomic.LoadUintptr(&cj.links[idx]) == 0 {
+			cj.relink(idx, cd)
+		}
 		if cj.osrCalls == osrEvery && len(nat.loopCode().loops) > 0 {
 			return nil
 		}
 		return nat
 	}
-	if cd.refused.Load() || cd.hot.Add(1) <= cj.threshold {
+	if cd.refused.Load() || cd.hot.Add(1) <= cj.threshold || waitsForRoom(cd) {
 		return nil
 	}
 	nat := cj.compile(c, idx, cd)
@@ -434,8 +474,13 @@ func (cj *codeJIT) native(c *Code, idx uint32, cd *compiled) *nativeFn {
 func (cj *codeJIT) compile(c *Code, idx uint32, cd *compiled) (nat *nativeFn) {
 	cj.mu.Lock()
 	defer cj.mu.Unlock()
-	if nat := cd.native.Load(); nat != nil || cd.refused.Load() {
+	if nat := cd.native.Load(); nat != nil || cd.refused.Load() || waitsForRoom(cd) {
 		return nat
+	}
+	cj.fns[idx] = cd.fnJIT
+	if !cj.mayFit(c, idx, cd, false) {
+		noRoom(cd, false, 0)
+		return nil
 	}
 	if cj.optThreshold.Load() == 0 {
 		if nat := cj.compileOpt(c, idx, cd, nil); nat != nil {
@@ -460,26 +505,49 @@ func (cj *codeJIT) compile(c *Code, idx uint32, cd *compiled) (nat *nativeFn) {
 		return nil
 	}
 	placeStart := time.Now()
-	cj.run.Lock()
-	raw, err := ijit.PlaceRaw(cj.arena, code.Bytes)
-	cj.run.Unlock()
+	pc, why := cj.placeCharged(code.Bytes, recordBytes(code.Loops, code.Handlers))
 	countTime(&jitStats.placeTime, placeStart)
-	if err != nil {
+	switch why {
+	case RefuseBudget:
+		noRoom(cd, false, placedNeed(code.Bytes, recordBytes(code.Loops, code.Handlers)))
+		return nil
+	case "unplaced":
 		cd.refused.Store(true)
 		countRefused("unplaced")
 		return nil
 	}
-	cj.raws = append(cj.raws, raw)
-	jitCode.log(idx, "base", raw, code)
-	nat = &nativeFn{raw: raw, base: raw.Base(), goEntry: code.GoEntry, retStub: raw.Base() + uintptr(code.ReturnStub), nslots: cd.nslots, loops: code.Loops, handlers: code.Handlers}
+	jitCode.log(idx, "base", pc.raw, code)
+	nat = newNative(pc, code, cd)
+	nat.loops, nat.handlers = code.Loops, code.Handlers
 	if len(code.Handlers) > 0 {
 		cj.catches.Store(true)
 	}
+	cd.used.Store(jitEpoch())
 	cd.native.Store(nat)
 	cj.setFrame(idx, cd)
 	atomic.StoreUintptr(&cj.links[idx], nat.base+uintptr(code.Entry))
 	countCompiled()
 	return nat
+}
+
+// newNative returns the record of code, placed at pc, of the function
+// whose record is cd.
+func newNative(pc *placedCode, code *wjit.Code, cd *compiled) *nativeFn {
+	base := pc.raw.Base()
+	return &nativeFn{raw: pc.raw, place: pc, base: base, end: base + uintptr(pc.raw.Size()), entry: code.Entry, goEntry: code.GoEntry,
+		retStub: base + uintptr(code.ReturnStub), nslots: cd.nslots}
+}
+
+// relink stores function idx's native entry in the link table again, once
+// a pass that drops code has cleared it to see whether the function is
+// still called (jit_mem.go), and notes the call.
+func (cj *codeJIT) relink(idx uint32, cd *compiled) {
+	cj.run.RLock()
+	if nat := cd.native.Load(); nat != nil && !nat.place.dropped.Load() {
+		cd.used.Store(jitEpoch())
+		atomic.StoreUintptr(&cj.links[idx], nat.base+uintptr(nat.entry))
+	}
+	cj.run.RUnlock()
 }
 
 // compileOpt compiles function idx with the optimizing tier, placing the
@@ -495,6 +563,13 @@ func (cj *codeJIT) compileOpt(c *Code, idx uint32, cd *compiled, prev *nativeFn)
 		countOptRefused(wjit.RefuseFrame)
 		return nil
 	}
+	cj.fns[idx] = cd.fnJIT
+	if !cj.mayFit(c, idx, cd, true) {
+		// Tried again once it has counted as many calls again.
+		cd.optDone.Store(false)
+		noRoom(cd, true, 0)
+		return nil
+	}
 	start := time.Now()
 	code, err := wopt.Compile(request(c, idx, cd, 0))
 	countTime(&jitStats.optTime, start)
@@ -507,24 +582,29 @@ func (cj *codeJIT) compileOpt(c *Code, idx uint32, cd *compiled, prev *nativeFn)
 		return nil
 	}
 	placeStart := time.Now()
-	cj.run.Lock()
-	raw, err := ijit.PlaceRaw(cj.arena, code.Bytes)
-	cj.run.Unlock()
+	pc, why := cj.placeCharged(code.Bytes, recordBytes(nil, nil))
 	countTime(&jitStats.placeTime, placeStart)
-	if err != nil {
+	switch why {
+	case RefuseBudget:
+		cd.optDone.Store(false)
+		noRoom(cd, true, placedNeed(code.Bytes, recordBytes(nil, nil)))
+		return nil
+	case "unplaced":
 		countOptRefused("unplaced")
 		return nil
 	}
-	return cj.publishOpt(idx, cd, raw, code, prev)
+	return cj.publishOpt(idx, cd, pc, code, prev)
 }
 
-// publishOpt makes code, placed at raw, function idx's native code in the
+// publishOpt makes code, placed at pc, function idx's native code in the
 // place of prev, its baseline code if it has one, and in the link table.
 // cj.mu is held.
-func (cj *codeJIT) publishOpt(idx uint32, cd *compiled, raw *ijit.RawCode, code *wjit.Code, prev *nativeFn) *nativeFn {
-	cj.raws = append(cj.raws, raw)
-	jitCode.log(idx, "opt", raw, code)
-	nat := &nativeFn{raw: raw, base: raw.Base(), goEntry: code.GoEntry, retStub: raw.Base() + uintptr(code.ReturnStub), nslots: cd.nslots, opt: true, prev: prev}
+func (cj *codeJIT) publishOpt(idx uint32, cd *compiled, pc *placedCode, code *wjit.Code, prev *nativeFn) *nativeFn {
+	cj.fns[idx] = cd.fnJIT
+	jitCode.log(idx, "opt", pc.raw, code)
+	nat := newNative(pc, code, cd)
+	nat.opt, nat.prev = true, prev
+	cd.used.Store(jitEpoch())
 	cd.native.Store(nat)
 	cj.setFrame(idx, cd)
 	atomic.StoreUintptr(&cj.links[idx], nat.base+uintptr(code.Entry))
@@ -562,7 +642,13 @@ func (cj *codeJIT) tierUp(c *Code, idx uint32, cd *compiled) *nativeFn {
 	}
 	nat := cj.compileOpt(c, idx, cd, cd.native.Load())
 	if nat == nil {
-		atomic.StoreInt64(&cj.counters[idx], math.MaxInt64)
+		n := int64(math.MaxInt64)
+		if !cd.optDone.Load() {
+			// No room for it now: tried again once it has counted as many
+			// calls again.
+			n = int64(max(cj.optThreshold.Load(), 1))
+		}
+		atomic.StoreInt64(&cj.counters[idx], n)
 	}
 	return nat
 }
@@ -575,8 +661,11 @@ func (cj *codeJIT) loopsFor(c *Code, idx uint32, cd *compiled) *nativeFn {
 	cj.mu.Lock()
 	defer cj.mu.Unlock()
 	nat := cd.native.Load()
-	if !nat.opt || nat.prev != nil {
+	if nat == nil || !nat.opt || nat.prev != nil {
 		return nat
+	}
+	if !cj.mayFit(c, idx, cd, false) {
+		return nil
 	}
 	start := time.Now()
 	code, err := compileNative(c, idx, cd, 0)
@@ -585,19 +674,17 @@ func (cj *codeJIT) loopsFor(c *Code, idx uint32, cd *compiled) *nativeFn {
 		return nil
 	}
 	placeStart := time.Now()
-	cj.run.Lock()
-	raw, err := ijit.PlaceRaw(cj.arena, code.Bytes)
-	cj.run.Unlock()
+	pc, why := cj.placeCharged(code.Bytes, recordBytes(code.Loops, code.Handlers))
 	countTime(&jitStats.placeTime, placeStart)
-	if err != nil {
+	if why != "" {
 		return nil
 	}
-	cj.raws = append(cj.raws, raw)
-	jitCode.log(idx, "loops", raw, code)
+	jitCode.log(idx, "loops", pc.raw, code)
 	if len(code.Handlers) > 0 {
 		cj.catches.Store(true)
 	}
-	base := &nativeFn{raw: raw, base: raw.Base(), goEntry: code.GoEntry, retStub: raw.Base() + uintptr(code.ReturnStub), nslots: cd.nslots, loops: code.Loops, handlers: code.Handlers}
+	base := newNative(pc, code, cd)
+	base.loops, base.handlers = code.Loops, code.Handlers
 	n := *nat
 	n.prev = base
 	cd.native.Store(&n)
@@ -721,7 +808,7 @@ func (x *exec) runNative(fn *Function, code *compiled, l []uint64, r []Ref) (int
 	if nat == nil {
 		return 0, false
 	}
-	return x.enterNative(cj, fn, nat, l, r, nat.goEntry), true
+	return x.enterNative(cj, fn, nat, l, r, nat.goEntry)
 }
 
 // osrBudget is the number of back edges a call of the function whose body
@@ -746,7 +833,10 @@ func osrBudget(c *Code, cd *compiled) int32 {
 // its return, leaving the results where the interpreter's return does, and
 // osr returns the signal for the loop to return: sigReturn, or sigTail with
 // the exec's tail call set. It reports false where the function has no
-// native code, or the loop no entry, and the interpreter goes on.
+// native code, or the loop no entry, and the interpreter goes on; where
+// its compile found no room in the Code's JIT budget, the frame is given
+// the OSR threshold's back edges, or DefaultOSRThreshold's, to run before
+// it asks again.
 func (x *exec) osr(f *frame, idx, at uint32) (int32, bool) {
 	code := f.inst.Code
 	cj := code.jit.Load()
@@ -760,8 +850,13 @@ func (x *exec) osr(f *frame, idx, at uint32) (int32, bool) {
 			return 0, false
 		}
 		if nat = cj.compile(code, idx, cd); nat == nil {
+			if waitsForRoom(cd) {
+				f.osr = max(cj.osrThreshold.Load(), DefaultOSRThreshold)
+			}
 			return 0, false
 		}
+	} else if atomic.LoadUintptr(&cj.links[idx]) == 0 {
+		cj.relink(idx, cd)
 	}
 	if nat.opt && nat.prev == nil {
 		// The optimized code has no loop entries: the baseline's has.
@@ -775,7 +870,12 @@ func (x *exec) osr(f *frame, idx, at uint32) (int32, bool) {
 		return 0, false
 	}
 	jitStats.osr.Add(1)
-	if x.enterNative(cj, f.inst.Funcs[idx], nat, f.l, f.r, entry) == sigTail {
+	sig, ok := x.enterNative(cj, f.inst.Funcs[idx], nat, f.l, f.r, entry)
+	if !ok {
+		jitStats.osr.Add(-1)
+		return 0, false
+	}
+	if sig == sigTail {
 		return sigTail, true
 	}
 	return sigReturn, true
@@ -836,17 +936,22 @@ func (x *exec) rsStart() uintptr { return uintptr(unsafe.Pointer(&x.jit.rs[0])) 
 // rsIndex is the index in the return stack of the word at addr.
 func (x *exec) rsIndex(addr uintptr) int { return int((addr - x.rsStart()) / 8) }
 
+// hasRoom reports whether the return stack has room for n more entries
+// past from, the active level's.
+func (x *exec) hasRoom(from uintptr, n int) bool {
+	return x.jit.rs != nil && x.rsStart()+uintptr(len(x.jit.rs))*8-from >= uintptr(n*rsEntryBytes)
+}
+
 // jitRoom makes room for n more entries past the active level's, growing
 // the return stack -- and moving every level's pointers into it -- if it
-// has none.
+// has none. The exec's lock (jitExec.mu) is held.
 func (x *exec) jitRoom(from uintptr, n int) uintptr {
+	if x.hasRoom(from, n) {
+		return from
+	}
 	if x.jit.rs == nil {
 		x.jit.rs = make([]uint64, 1024*wjit.RSEntryWords)
 		return x.rsStart()
-	}
-	end := x.rsStart() + uintptr(len(x.jit.rs))*8
-	if end-from >= uintptr(n*rsEntryBytes) {
-		return from
 	}
 	old := x.rsStart()
 	rs := make([]uint64, 2*len(x.jit.rs)+n*wjit.RSEntryWords)
@@ -854,7 +959,7 @@ func (x *exec) jitRoom(from uintptr, n int) uintptr {
 	x.jit.rs = rs
 	start := x.rsStart()
 	newEnd := start + uintptr(len(rs))*8
-	for _, lv := range x.jit.levels[:x.jit.n] {
+	for _, lv := range x.jit.levels[:x.jit.n.Load()] {
 		lv.rsBase = lv.rsBase - old + start
 		lv.ctx.RSP = lv.ctx.RSP - old + start
 		lv.ctx.RSEnd = min(newEnd, lv.rsBase+lv.rsDepth)
@@ -864,20 +969,28 @@ func (x *exec) jitRoom(from uintptr, n int) uintptr {
 
 // enterNative runs fn's native code in frame l and r, as a new level, from
 // offset entry -- its Go entry, or a loop's -- and handles its exits until
-// the frame returns.
-func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64, r []Ref, entry int) int32 {
-	if x.jit.n == len(x.jit.levels) {
+// the frame returns. It reports false, having run nothing, where the code
+// was dropped since the caller found it (jit_mem.go).
+func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64, r []Ref, entry int) (int32, bool) {
+	cj.run.RLock()
+	if nat.place.dropped.Load() {
+		cj.run.RUnlock()
+		return 0, false
+	}
+	x.jit.mu.Lock()
+	n := x.jit.n.Load()
+	if int(n) == len(x.jit.levels) {
 		x.jit.levels = append(x.jit.levels, new(jitLevel))
 	}
 	var from uintptr
-	if x.jit.n > 0 {
-		from = x.jit.levels[x.jit.n-1].ctx.RSP
+	if n > 0 {
+		from = x.jit.levels[n-1].ctx.RSP
 	} else if x.jit.rs != nil {
 		from = x.rsStart()
 	}
 	from = x.jitRoom(from, 2)
-	lv := x.jit.levels[x.jit.n]
-	x.jit.n++
+	lv := x.jit.levels[n]
+	x.jit.n.Store(n + 1)
 	inst := fn.Inst
 	lv.inst, lv.cj = inst, cj
 	chunk := x.nchunks[x.nc]
@@ -904,6 +1017,8 @@ func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64,
 	}
 	lv.r0 = ctx.R
 	if ctx.R < lv.rchunkBase || ctx.R >= ctx.RChunkEnd {
+		x.jit.mu.Unlock()
+		cj.run.RUnlock()
 		panic("wasm jit: a frame's references outside the exec's chunk")
 	}
 	// A native call at entry j of the level is at depth x.depth+j: the
@@ -917,8 +1032,11 @@ func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64,
 	x.jit.rs[i+1] = 0
 	x.jit.rs[i+2] = wjit.Site(fn.Index, 0)
 	ctx.RSP = from + rsEntryBytes
+	x.jit.mu.Unlock()
 
-	raw, off := nat.raw, entry
+	// The run lock is held for reading from here to each exit, and again
+	// from the exit's work to the code's resumption.
+	off := entry
 	for {
 		if len(inst.Memories) > 0 {
 			m := inst.Memories[0]
@@ -930,42 +1048,46 @@ func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64,
 			}
 		}
 		ctx.Poll = int64(x.poll)
-		cj.run.RLock()
-		raw.EnterAt(off, unsafe.Pointer(ctx))
+		nat.raw.EnterAt(off, unsafe.Pointer(ctx))
 		cj.run.RUnlock()
 		x.poll = int32(ctx.Poll)
 		if jitCountExits && ctx.Exit != wjit.ExitReturn {
 			jitExits.Add(1)
 		}
 		if ctx.Exit == wjit.ExitReturn {
-			x.jit.n--
-			return 0
+			x.popLevel()
+			return 0, true
 		}
-		var r *ijit.RawCode
+		var next *nativeFn
 		var o int
 		var tail bool
 		if cj.catches.Load() {
-			r, o, tail = x.jitExitCatching(lv)
+			next, o, tail = x.jitExitCatching(lv)
 		} else {
-			r, o, tail = x.jitExit(lv)
+			next, o, tail = x.jitExit(lv)
 		}
 		if tail {
-			return sigTail
+			return sigTail, true
 		}
-		if r != nil {
-			raw, off = r, o
+		if next != nil {
+			// The exit's work took the run lock, and found next not
+			// dropped.
+			nat, off = next, o
 			continue
 		}
-		nf := inst.Code.get(uint32(ctx.ExitFn)).native.Load().holding(ctx.ExitAddr)
-		raw, off = nf.raw, int(ctx.ExitAddr-nf.base)
+		// The frame that exited goes on in the code it is in, which no pass
+		// drops while the level is in its exit.
+		cj.run.RLock()
+		nat = inst.Code.get(uint32(ctx.ExitFn)).native.Load().holding(ctx.ExitAddr)
+		off = int(ctx.ExitAddr - nat.base)
 	}
 }
 
 // jitExit does the work native code exited for, in level lv: it returns
-// the code to enter and where, or tail for a tail call the interpreter
-// makes in place of the frame Go entered, or neither for the code to resume
-// where it exited.
-func (x *exec) jitExit(lv *jitLevel) (raw *ijit.RawCode, off int, tail bool) {
+// the code to enter and where, the run lock held for reading, or tail for a
+// tail call the interpreter makes in place of the frame Go entered, or
+// neither for the code to resume where it exited.
+func (x *exec) jitExit(lv *jitLevel) (next *nativeFn, off int, tail bool) {
 	ctx := &lv.ctx
 	inst := lv.inst
 	switch ctx.Exit {
@@ -982,8 +1104,13 @@ func (x *exec) jitExit(lv *jitLevel) (raw *ijit.RawCode, off int, tail bool) {
 	case wjit.ExitTierUp:
 		fn := uint32(ctx.ExitFn)
 		if nat := lv.cj.tierUp(inst.Code, fn, inst.Code.get(fn)); nat != nil {
-			// The optimized code makes the call, from its start.
-			return nat.raw, nat.goEntry, false
+			// The optimized code makes the call, from its start, unless
+			// it was dropped since.
+			lv.cj.run.RLock()
+			if !nat.place.dropped.Load() {
+				return nat, nat.goEntry, false
+			}
+			lv.cj.run.RUnlock()
 		}
 	case wjit.ExitCall:
 		callee := inst.Funcs[ctx.Arg0]
@@ -1019,10 +1146,10 @@ func (x *exec) jitExit(lv *jitLevel) (raw *ijit.RawCode, off int, tail bool) {
 			callee = x.jitCallee(lv, &f, ft, slot, at)
 			x.jitUnsync(lv)
 		}
-		if r, o, done := x.jitTail(lv, callee, ft, &f, slot, at); done {
+		if n, o, done := x.jitTail(lv, callee, ft, &f, slot, at); done {
 			return nil, 0, true
-		} else if r != nil {
-			return r, o, false
+		} else if n != nil {
+			return n, o, false
 		}
 	case wjit.ExitSIMD:
 		f := x.exitFrame(lv)
@@ -1190,7 +1317,11 @@ func (x *exec) jitCall(lv *jitLevel, fn *Function, ft *module.FuncType, f *exitF
 	res := lv.res[:m]
 	x.takeFrom(lv, f)
 	// A native call finding the return stack full came here: make it room.
-	x.jitRoom(lv.ctx.RSP, 64)
+	if !x.hasRoom(lv.ctx.RSP, 64) {
+		x.jit.mu.Lock()
+		x.jitRoom(lv.ctx.RSP, 64)
+		x.jit.mu.Unlock()
+	}
 	x.callGeneric(fn, args, res)
 	for i, t := range ft.Results {
 		f.put(t, slot+2*i, res[i])
@@ -1200,11 +1331,11 @@ func (x *exec) jitCall(lv *jitLevel, fn *Function, ft *module.FuncType, f *exitF
 }
 
 // jitTail makes a tail call of fn for the frame that exited: natively in
-// its place where fn has native code and room, returning the code to enter;
-// as the interpreter's tail call (done) if the frame is the one Go entered;
-// else by calling fn and returning its results, the frame's code resumed
-// at its return.
-func (x *exec) jitTail(lv *jitLevel, fn *Function, ft *module.FuncType, f *exitFrame, slot int, at uint32) (*ijit.RawCode, int, bool) {
+// its place where fn has native code and room, returning the code to enter,
+// the run lock held for reading; as the interpreter's tail call (done) if
+// the frame is the one Go entered; else by calling fn and returning its
+// results, the frame's code resumed at its return.
+func (x *exec) jitTail(lv *jitLevel, fn *Function, ft *module.FuncType, f *exitFrame, slot int, at uint32) (*nativeFn, int, bool) {
 	ctx := &lv.ctx
 	args := lv.jitArgs(ft, f, slot)
 	defer clear(args)
@@ -1218,18 +1349,22 @@ func (x *exec) jitTail(lv *jitLevel, fn *Function, ft *module.FuncType, f *exitF
 		start, rstart := f.top-len(f.l), f.rtop-len(f.r)
 		nchunk, rchunk := x.nchunks[lv.nc], x.rchunks[lv.rc]
 		if nat := lv.cj.native(lv.inst.Code, fn.Index, cd); nat != nil && start+cd.nslots <= len(nchunk) && rstart+cd.nativeRefSlots() <= len(rchunk) {
-			n := cd.nativeRefSlots()
-			putVals(nchunk[start:start+cd.nslots], rchunk[rstart:rstart+n], cd.params, args)
-			e := x.rsIndex(ctx.RSP) - wjit.RSEntryWords
-			x.jit.rs[e+2] = wjit.Site(fn.Index, uint32(x.jit.rs[e+2]))
-			return nat.raw, nat.goEntry, false
+			lv.cj.run.RLock()
+			if !nat.place.dropped.Load() {
+				n := cd.nativeRefSlots()
+				putVals(nchunk[start:start+cd.nslots], rchunk[rstart:rstart+n], cd.params, args)
+				e := x.rsIndex(ctx.RSP) - wjit.RSEntryWords
+				x.jit.rs[e+2] = wjit.Site(fn.Index, uint32(x.jit.rs[e+2]))
+				return nat, nat.goEntry, false
+			}
+			lv.cj.run.RUnlock()
 		}
 	}
 	if ctx.RSP-lv.rsBase == rsEntryBytes {
 		// The frame Go entered: the interpreter's tail call makes it.
 		x.tail = fn
 		x.tailArgs = append(x.tailArgs[:0], args...)
-		x.jit.n--
+		x.popLevel()
 		return nil, 0, true
 	}
 	x.jitSync(lv, at)

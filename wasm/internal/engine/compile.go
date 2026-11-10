@@ -106,6 +106,17 @@ type fnJIT struct {
 	// optDone says the optimizing tier compiled the function or refused
 	// it: its baseline code no longer counts calls.
 	optDone atomic.Bool
+	// used is the JIT clock's epoch (jitEpoch) at which a call last
+	// reached the function's native code through Go, which a call of it
+	// does once its link has been cleared to see whether it is still
+	// called; noRoom is the epoch at which its compile found no room in
+	// the Code's JIT budget, until which it is not compiled again.
+	used, noRoom atomic.Uint64
+	// roomNeed is what the baseline's code and the optimizing tier's, with
+	// their records, needed when they found no room, which the next
+	// compile of each makes room for before it is made (codeJIT.mayFit);
+	// it changes under the JIT's compile lock (codeJIT.mu).
+	roomNeed [2]int64
 }
 
 // newCompiled returns an empty record with a native code's state of its
@@ -811,7 +822,8 @@ func (c *compiler) loopStmt(body []stmt, at uint32) stmt {
 // theirs -- and the call goes on from the head of the loop in the native
 // code, which runs it to the function's return (exec.osr). The loop then
 // returns sigReturn, the results in place, or sigTail; where there is no
-// native code the frame stops counting.
+// native code the frame stops counting, unless osr gave it more back edges
+// to run before it asks again.
 func osrLoopStmt(body []stmt, fn, at uint32) stmt {
 	return func(f *frame) int32 {
 		for {
@@ -824,7 +836,9 @@ func osrLoopStmt(body []stmt, fn, at uint32) stmt {
 					if sig, ok := f.x.osr(f, fn, at); ok {
 						return sig
 					}
-					f.osr = math.MaxInt32
+					if f.osr <= 0 {
+						f.osr = math.MaxInt32
+					}
 				}
 				continue
 			}

@@ -74,7 +74,11 @@ const (
 	pollEvery  = 1 << 12
 )
 
-var execPool = sync.Pool{New: func() any { return new(exec) }}
+var execPool = sync.Pool{New: func() any {
+	x := new(exec)
+	jitTrack(x)
+	return x
+}}
 
 // takeNum returns n zeroed numeric slots for a frame, and the position to
 // release them to.

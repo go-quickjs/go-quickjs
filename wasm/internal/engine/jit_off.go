@@ -42,3 +42,9 @@ func (x *exec) runNative(*Function, *compiled, []uint64, []Ref) (int32, bool) { 
 func (x *exec) jitLevel() int { return 0 }
 
 func (x *exec) setJITLevel(int) {}
+
+func (c *Code) setJITBudget(*JITBudget) {}
+
+func (c *Code) jitMemory() JITMemory { return JITMemory{} }
+
+func jitTrack(*exec) {}

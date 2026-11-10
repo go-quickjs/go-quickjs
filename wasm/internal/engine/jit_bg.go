@@ -128,6 +128,12 @@ func (cj *codeJIT) inBackground() bool {
 // exits no more meanwhile, and stored again by every later ask, which a
 // call's decrement racing with the store may have undone.
 func (cj *codeJIT) tierUpLater(idx uint32, cd *compiled) {
+	if waitsForRoom(cd) {
+		// Refused for want of room in this epoch: asked again after as
+		// many calls again.
+		atomic.StoreInt64(&cj.counters[idx], int64(max(cj.optThreshold.Load(), 1)))
+		return
+	}
 	atomic.StoreInt64(&cj.counters[idx], math.MaxInt64)
 	if cd.optDone.CompareAndSwap(false, true) {
 		optWorkers.submit(cj, idx)
@@ -258,6 +264,17 @@ func (cj *codeJIT) compileInBackground(idx uint32) {
 		cj.bg.pending.Add(-1)
 		return
 	}
+	// Not compiled where its code could not find room in the budget.
+	cj.mu.Lock()
+	fits := cj.bg.closed || cj.mayFit(c, idx, cd, true)
+	if !fits {
+		cj.refuseOptRoom(idx, cd, 0)
+	}
+	cj.mu.Unlock()
+	if !fits {
+		cj.bg.pending.Add(-1)
+		return
+	}
 	start := time.Now()
 	code, err := wopt.Compile(request(c, idx, cd, 0))
 	countTime(&jitStats.optTime, start)
@@ -293,30 +310,73 @@ func (cj *codeJIT) placeReady() {
 		return
 	}
 	defer cj.bg.pending.Add(-int32(len(batch)))
-	codes := make([][]byte, len(batch))
-	for i, b := range batch {
+	// Room in the budget for each, which making room takes the compile
+	// lock for (codeJIT.reserve); a code that finds none is refused, as on
+	// the spot.
+	record := recordBytes(nil, nil)
+	needs := make([]int64, 0, len(batch))
+	cj.mu.Lock()
+	if cj.bg.closed {
+		cj.mu.Unlock()
+		return
+	}
+	kept := batch[:0]
+	for _, b := range batch {
+		need := placedNeed(b.code.Bytes, record)
+		if !cj.reserve(need) {
+			cj.refuseOptRoom(b.idx, b.cd, need)
+			continue
+		}
+		kept = append(kept, b)
+		needs = append(needs, need)
+	}
+	budget := cj.budget
+	cj.mu.Unlock()
+	if len(kept) == 0 {
+		return
+	}
+	codes := make([][]byte, len(kept))
+	for i, b := range kept {
 		codes[i] = b.code.Bytes
 	}
 	placeStart := time.Now()
 	raws, err := ijit.PlaceRawApart(cj.arena, codes...)
 	countTime(&jitStats.placeTime, placeStart)
-	if err != nil {
-		for range batch {
-			countOptRefused("unplaced")
-		}
-		return
-	}
 	cj.mu.Lock()
 	defer cj.mu.Unlock()
-	if cj.bg.closed {
-		for _, r := range raws {
-			r.Close()
+	if err != nil || cj.bg.closed {
+		// Given back, with what was reserved for them: a closed code's
+		// budget no longer counts what it held.
+		for i := range kept {
+			budget.release(needs[i])
+			if err != nil {
+				countOptRefused("unplaced")
+			} else {
+				raws[i].Close()
+			}
 		}
 		return
 	}
-	for i, b := range batch {
-		cj.publishOpt(b.idx, b.cd, raws[i], b.code, b.cd.native.Load())
+	for i, b := range kept {
+		pc := &placedCode{raw: raws[i], code: int64(raws[i].Size()), record: record}
+		cj.codeBytes.Add(pc.code)
+		cj.recordBytes.Add(record)
+		cj.raws = append(cj.raws, pc)
+		if d := pc.code + record - needs[i]; d != 0 {
+			budget.charge(d)
+		}
+		cj.publishOpt(b.idx, b.cd, pc, b.code, b.cd.native.Load())
 	}
+}
+
+// refuseOptRoom refuses function idx's optimizing compile, whose code finds
+// no room in the budget, of need bytes if known: its baseline code counts as
+// many calls again before it is asked again, no earlier than the next
+// epoch. cj.mu is held.
+func (cj *codeJIT) refuseOptRoom(idx uint32, cd *compiled, need int64) {
+	cd.optDone.Store(false)
+	noRoom(cd, true, need)
+	atomic.StoreInt64(&cj.counters[idx], int64(max(cj.optThreshold.Load(), 1)))
 }
 
 // optWorkerHook, for tests, runs before each compile in the background.

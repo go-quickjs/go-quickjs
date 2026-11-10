@@ -2,7 +2,11 @@
 
 package jit
 
-import "testing"
+import (
+	"os"
+	"testing"
+	"unsafe"
+)
 
 // A reusing arena places code in the space released code left, the first
 // space large enough, joining released neighbours into one; it unmaps a
@@ -56,4 +60,42 @@ func TestReusingArena(t *testing.T) {
 	if n := a.Chunks(); n != 0 {
 		t.Fatalf("%d chunks mapped once all code is released", n)
 	}
+}
+
+// A batch placed apart in a reusing arena starts on a page of its own; the
+// space before it is placed in later, and the batch's own once released.
+func TestReusingArenaApart(t *testing.T) {
+	a := NewReusingArena()
+	first, err := PlaceRaw(a, make([]byte, 100))
+	if err != nil {
+		t.Skipf("no executable memory: %v", err)
+	}
+	batch, err := PlaceRawApart(a, make([]byte, 64), make([]byte, 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := uintptr(os.Getpagesize())
+	if batch[0].Base()%page != 0 || batch[0].Base() <= first.Base() || batch[1].Base() != batch[0].Base()+64 {
+		t.Fatalf("batch at %#x and %#x, the first code at %#x", batch[0].Base(), batch[1].Base(), first.Base())
+	}
+	if gap := place(t, a, 64); gap.Base() != first.Base()+128 {
+		t.Fatalf("64 bytes at %#x, want the space before the batch, %#x", gap.Base(), first.Base()+128)
+	}
+	at := batch[0].Base()
+	batch[0].Close()
+	c := a.chunks[0]
+	off := int(at - uintptr(unsafe.Pointer(&c.mem[0])))
+	// Joined to the space before the batch, what is left of the page.
+	if i := len(c.free) - 1; i < 0 || c.free[i].off > off || c.free[i].off+c.free[i].n != off+64 {
+		t.Fatalf("free %v, want a space ending with the batch's first code's, at %d", c.free, off)
+	}
+}
+
+func place(t *testing.T, a *Arena, n int) *RawCode {
+	t.Helper()
+	r, err := PlaceRaw(a, make([]byte, n))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
 }

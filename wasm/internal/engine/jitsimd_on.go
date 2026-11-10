@@ -24,7 +24,14 @@ func (cj *codeJIT) simdExit(c *Code, at uint32, base int) simdExitFn {
 		return fn.(simdExitFn)
 	}
 	fn := buildSIMDExit(c, at, base)
-	cj.simd.Store(at, fn)
+	if prev, ok := cj.simd.LoadOrStore(at, fn); ok {
+		return prev.(simdExitFn)
+	}
+	// What running code needs: charged, never refused.
+	cj.mu.Lock()
+	cj.recordBytes.Add(simdExitBytes)
+	cj.budget.charge(simdExitBytes)
+	cj.mu.Unlock()
 	return fn
 }
 

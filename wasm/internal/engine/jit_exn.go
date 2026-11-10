@@ -5,7 +5,6 @@ package engine
 import (
 	"math"
 
-	ijit "github.com/go-quickjs/go-quickjs/internal/jit"
 	wjit "github.com/go-quickjs/go-quickjs/wasm/internal/jit"
 )
 
@@ -35,8 +34,8 @@ func exitAt(ctx *wjit.Ctx) (at uint32, gone bool) {
 
 // jitExitCatching is jitExit taking the exceptions out of its work to the
 // level's catch clauses: it returns the landing pad to enter where one
-// takes it.
-func (x *exec) jitExitCatching(lv *jitLevel) (raw *ijit.RawCode, off int, tail bool) {
+// takes it, the run lock held for reading.
+func (x *exec) jitExitCatching(lv *jitLevel) (next *nativeFn, off int, tail bool) {
 	at, gone := exitAt(&lv.ctx)
 	st := saveTry(x)
 	defer func() {
@@ -56,8 +55,8 @@ func (x *exec) jitExitCatching(lv *jitLevel) (raw *ijit.RawCode, off int, tail b
 			panic(p)
 		}
 		st.restore(x)
-		if r, o, ok := x.jitCatch(lv, exn, at, gone); ok {
-			raw, off, tail = r, o, false
+		if n, o, ok := x.jitCatch(lv, exn, at, gone); ok {
+			next, off, tail = n, o, false
 			return
 		}
 		panic(p)
@@ -69,8 +68,10 @@ func (x *exec) jitExitCatching(lv *jitLevel) (raw *ijit.RawCode, off int, tail b
 // exn, the innermost frame at offset at -- or, gone, not taking it -- and
 // the others at their calls. It drops the frames above the clause's,
 // stores the exception's values in the slots of the clause's label, and
-// returns the clause's landing pad.
-func (x *exec) jitCatch(lv *jitLevel, exn *Exception, at uint32, gone bool) (*ijit.RawCode, int, bool) {
+// returns the clause's landing pad, the run lock held for reading: the
+// code it is in, its frame's function's, is kept by the frames it drops
+// until then (jit_mem.go).
+func (x *exec) jitCatch(lv *jitLevel, exn *Exception, at uint32, gone bool) (*nativeFn, int, bool) {
 	ctx := &lv.ctx
 	code := lv.inst.Code
 	rs := x.jit.rs
@@ -128,9 +129,10 @@ func (x *exec) jitCatch(lv *jitLevel, exn *Exception, at uint32, gone bool) (*ij
 				if cl.Caught >= 0 {
 					f.r[cl.Caught] = ExnRef(exn)
 				}
+				lv.cj.run.RLock()
 				ctx.L, ctx.R = l, rbase[k]
 				ctx.RSP = lv.rsBase + uintptr(k+1)*rsEntryBytes
-				return nat.raw, cl.Pad, true
+				return nat, cl.Pad, true
 			}
 		}
 	}

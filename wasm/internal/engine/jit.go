@@ -118,11 +118,17 @@ func (c *Code) EnterLoopsForTest() { c.enterLoopsForTest() }
 
 // JITStats are the process's counts of the functions the JIT compiled and
 // those it refused, by reason, and of the calls that went on from a loop in
-// native code (OSR).
+// native code (OSR). A compile refused for want of room in its Code's JIT
+// budget counts as RefuseBudget each time, the function compiled again
+// later.
 type JITStats struct {
 	Compiled int
 	Refused  map[string]int
 	OSR      int
+	// Dropped counts the functions whose code was dropped to make room in
+	// a JIT budget, and DroppedReplaced the codes the optimizing tier had
+	// replaced that were dropped so.
+	Dropped, DroppedReplaced int
 	// Optimized and OptRefused are the optimizing tier's: the functions
 	// it compiled, and those it refused, which kept their baseline code.
 	Optimized  int
@@ -136,6 +142,11 @@ type JITStats struct {
 	InterpTime  time.Duration
 }
 
+// RefuseBudget is the reason JITStats counts a compile refused for want of
+// room in its Code's JIT budget (JITBudget) under, in Refused and in
+// OptRefused.
+const RefuseBudget = "budget"
+
 var jitStats struct {
 	mu                sync.Mutex
 	compiled          int
@@ -147,6 +158,8 @@ var jitStats struct {
 	placeTime         atomic.Int64
 	interpreted       atomic.Int64
 	interpTime        atomic.Int64
+	dropped           atomic.Int64
+	droppedReplaced   atomic.Int64
 }
 
 // ReadJITStats returns the JIT's counts so far.
@@ -157,7 +170,8 @@ func ReadJITStats() JITStats {
 		Optimized: jitStats.optimized, OptRefused: maps.Clone(jitStats.optRefused),
 		BaselineTime: time.Duration(jitStats.baseTime.Load()), OptTime: time.Duration(jitStats.optTime.Load()),
 		PlaceTime:   time.Duration(jitStats.placeTime.Load()),
-		Interpreted: int(jitStats.interpreted.Load()), InterpTime: time.Duration(jitStats.interpTime.Load())}
+		Interpreted: int(jitStats.interpreted.Load()), InterpTime: time.Duration(jitStats.interpTime.Load()),
+		Dropped: int(jitStats.dropped.Load()), DroppedReplaced: int(jitStats.droppedReplaced.Load())}
 }
 
 func countOptimized() {
