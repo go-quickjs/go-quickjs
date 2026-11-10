@@ -1276,7 +1276,7 @@ func (x *exec) jitExit(lv *jitLevel) (next *nativeFn, off int, tail bool) {
 		f := x.exitFrame(lv)
 		x.jitSync(lv, uint32(ctx.Arg1))
 		x.takeFrom(lv, &f)
-		x.jitAlloc(lv, ctx.Arg0)
+		x.jitAlloc(lv, ctx.Arg0, ctx.Arg2, &f, uint32(ctx.Arg1))
 		x.jitUnsync(lv)
 	case wjit.ExitSIMD:
 		f := x.exitFrame(lv)

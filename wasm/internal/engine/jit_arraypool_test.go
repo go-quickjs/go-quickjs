@@ -18,9 +18,10 @@ import (
 )
 
 // arrayPoolWAT makes arrays as native code makes them from the engine's
-// pools: array.new_fixed, and array.new and array.new_default of constant
-// lengths, of every storage type but v128, of lengths 0 to the most a
-// pool's block has room for and past it (which exit to Go), summed back
+// pools: array.new_fixed, array.new of constant lengths and array.new_default
+// of any, of every storage type but v128, of lengths 0 to the most a pool's
+// block has room for and past it (which exit to Go), and too large, a
+// trap; summed back
 // through array.len and array.get; lists of reference arrays kept in a
 // global; and arrays made on both sides of a call of the host that makes
 // them in the same instance.
@@ -206,6 +207,35 @@ const arrayPoolWAT = `(module
       (br $l)))
     (local.get $s))
 
+  ;; array.new_default of lengths not constant, across every class and
+  ;; past the largest, the last element written where there is one.
+  (func (export "lengths") (param $n i32) (result i64)
+    (local $i i32) (local $s i64) (local $k i32)
+    (local $a (ref null $i32s)) (local $r (ref null $refs)) (local $b (ref null $i8s))
+    (loop $l
+      (local.set $k (i32.rem_u (local.get $i) (i32.const 130)))
+      (local.set $a (array.new_default $i32s (local.get $k)))
+      (if (local.get $k) (then (array.set $i32s (local.get $a) (i32.sub (local.get $k) (i32.const 1)) (local.get $i))))
+      (local.set $k (i32.rem_u (local.get $i) (i32.const 35)))
+      (local.set $r (array.new_default $refs (local.get $k)))
+      (if (local.get $k) (then (array.set $refs (local.get $r) (i32.sub (local.get $k) (i32.const 1)) (ref.i31 (local.get $i)))))
+      (local.set $k (i32.rem_u (i32.mul (local.get $i) (i32.const 7)) (i32.const 500)))
+      (local.set $b (array.new_default $i8s (local.get $k)))
+      (if (local.get $k) (then (array.set $i8s (local.get $b) (i32.sub (local.get $k) (i32.const 1)) (local.get $i))))
+      (local.set $s (i64.add (i64.rotl (local.get $s) (i64.const 5))
+        (i64.add
+          (i64.add (call $s32 (ref.as_non_null (local.get $a))) (call $sr (ref.as_non_null (local.get $r))))
+          (i64.add (call $s8 (ref.as_non_null (local.get $b)))
+            (i64.add (call $s16 (array.new_default $i16s (i32.rem_u (local.get $i) (i32.const 250))))
+              (call $sf64 (array.new_default $f64s (i32.rem_u (local.get $i) (i32.const 70)))))))))
+      (br_if $l (i32.lt_u (local.tee $i (i32.add (local.get $i) (i32.const 1))) (local.get $n))))
+    (local.get $s))
+
+  ;; An array of $n i64s: past what pools hold, made by the engine, or
+  ;; too large, a trap.
+  (func (export "huge") (param $n i32) (result i64)
+    (call $s64 (array.new_default $i64s (local.get $n))))
+
   (func (export "nested") (param $n i32) (result i64)
     (local $a (ref null $refs))
     (local.set $a (array.new_fixed $refs 2 (array.new_fixed $refs 1 (ref.i31 (local.get $n))) (struct.new $box (local.get $n))))
@@ -219,6 +249,8 @@ func arrayPoolCases() []jitCase {
 		{"fixed", []Val{{N: 1}}}, {"fixed", []Val{{N: 3000}}}, {"news", []Val{{N: 1}}}, {"news", []Val{{N: 2000}}},
 		{"defaults", []Val{{N: 1}}}, {"defaults", []Val{{N: 300}}}, {"keep", []Val{{N: 1000}}}, {"kept", nil},
 		{"nested", []Val{{N: 5}}}, {"nested", []Val{{N: 0}}},
+		{"lengths", []Val{{N: 1}}}, {"lengths", []Val{{N: 1000}}},
+		{"huge", []Val{{N: 100_000}}}, {"huge", []Val{{N: 0x7fff_ffff}}}, {"huge", []Val{{N: 0}}},
 	}
 }
 
@@ -270,15 +302,15 @@ func TestJITArrayPools(t *testing.T) {
 				} else if [2]int64{alloc, all} != idleExits {
 					t.Fatalf("%d fills and %d exits while marking, %d and %d idle", alloc, all, idleExits[0], idleExits[1])
 				}
-				// Some 70,000 arrays from pools of 27 types and classes:
+				// Some 75,000 arrays from pools of 60 types and classes:
 				// the fills double up to the pools' capacity.
-				if alloc == 0 || alloc > 70_000/gcPoolCap*2+27*8 {
+				if alloc == 0 || alloc > 75_000/gcPoolCap*2+60*8 {
 					t.Fatalf("%d fills", alloc)
 				}
 				// What is not pooled exits to Go: array.new of 17
 				// elements, array.new_default past the blocks, and the
 				// structs' and arrays' exits for nothing else.
-				for _, name := range []string{"fixed", "news", "defaults", "keep", "nested"} {
+				for _, name := range []string{"fixed", "news", "defaults", "keep", "nested", "lengths"} {
 					if opt && !optimized(inst, name) || !opt && !nativeRan(inst, name) {
 						t.Errorf("%s is not %s code", name, tier)
 					}
@@ -439,6 +471,13 @@ func TestJITArrayPoolsBudget(t *testing.T) {
 			(loop $l
 				(global.set $keep (array.new_fixed $refs 2 (global.get $keep) (ref.i31 (local.get 0))))
 				(br_if $l (local.tee 0 (i32.sub (local.get 0) (i32.const 1))))))
+		(func (export "hoardLength") (param i32) (param $len i32)
+			(local $a (ref null $refs))
+			(loop $l
+				(local.set $a (array.new_default $refs (local.get $len)))
+				(array.set $refs (local.get $a) (i32.const 0) (global.get $keep))
+				(global.set $keep (local.get $a))
+				(br_if $l (local.tee 0 (i32.sub (local.get 0) (i32.const 1))))))
 		(func (export "one") (drop (array.new_default $i32s (i32.const 5)))))`
 	// Five i32s take a block with room for 32 bytes.
 	each := int64(arrayHeader + 32)
@@ -450,6 +489,14 @@ func TestJITArrayPoolsBudget(t *testing.T) {
 		}
 		if _, err := callExport(t, inst, "hoard", Val{N: 1_000_000}); !errors.Is(err, ErrMemoryLimit) {
 			t.Fatalf("opt %v: hoard: got %v, want ErrMemoryLimit", opt, err)
+		}
+		// Arrays of a length not constant, from pools and made by the
+		// engine past them.
+		for _, length := range []uint64{3, 1000} {
+			inst := jitBudgetInstance(t, src, NewBudget(1<<20), opt)
+			if _, err := callExport(t, inst, "hoardLength", Val{N: 1_000_000}, Val{N: length}); !errors.Is(err, ErrMemoryLimit) {
+				t.Fatalf("opt %v: hoardLength %d: got %v, want ErrMemoryLimit", opt, length, err)
+			}
 		}
 
 		// One array made: its pool's first fill is charged whole, and
@@ -480,6 +527,38 @@ func TestJITArrayPoolsBudget(t *testing.T) {
 			if got := b.Used(); got != each {
 				t.Fatalf("opt %v: %d bytes used once the instance is gone, want %d", opt, got, each)
 			}
+		}
+	}
+}
+
+// Arrays of many classes fill many pools, some 115, more than the bound on
+// what a table's pools hold takes at their largest: what they hold is
+// counted again then, so that the fills stay as large as what is left of
+// the bound allows, rather than shrink to an array each as the pools'
+// last fills, long taken, use it up (some 2,900 fills here without the
+// count, 1,700 with it).
+func TestJITArrayPoolsManyClasses(t *testing.T) {
+	const n = 4000
+	makes := int64(0)
+	for i := range n {
+		for _, past := range []bool{i%130 > 120, i%35 > 30, 7*i%500 > 480, i%250 > 240, i%70 > 60} {
+			if past {
+				makes++
+			}
+		}
+	}
+	for _, opt := range []bool{false, true} {
+		inst := arrayPoolInstance(t, 0, opt)
+		if _, err := refCall(t, inst, "lengths", Val{N: n}); err != nil {
+			t.Fatal(err)
+		}
+		alloc, _ := countAllocExits(func() {
+			if _, err := refCall(t, inst, "lengths", Val{N: n}); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if fills := alloc - makes; fills < 0 || fills > 2200 {
+			t.Fatalf("opt %v: %d fills for %d arrays from pools", opt, fills, 5*n-makes)
 		}
 	}
 }

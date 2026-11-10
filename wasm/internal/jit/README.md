@@ -782,14 +782,22 @@ entry and its class's word, stores its length and its elements -- the
 operands of array.new_fixed in order, array.new's value in each,
 nothing for array.new_default -- from `Layout.ArrayBlock` on, a reference
 plainly, as a new struct's field (References and the collector), and
-stores and clears as for a struct. A table belongs to one
+stores and clears as for a struct. array.new_default of a length not
+constant finds the class as it runs: the length, left in the context's
+Arg2 for the exits, shifted to its elements' bytes, compared with 480 and
+looked up in `Layout.ArrayClass` at its address. Past 480 bytes the code
+exits (`ExitAlloc`, `AllocMake` and the operand's reference slot) for the
+engine to make the array into that slot, or to trap, as the interpreter
+does, and goes on past the instruction. A table belongs to one
 level at a time, so the take is plain loads and stores: the level's first
 `ExitAlloc` takes one of the instance's (or shares the table of a level
 below of the same instance), and the level gives it back when it ends. An
 empty pool, or no table, exits (`ExitAlloc`, the type and for an array its
-class): the engine makes the pool's next fill -- 8 objects at first, twice
-the last after, up to 128 and 16 KiB, and at most 256 KiB in a table's
-pools' last fills together --
+class, or `AllocLength` for the class of an array of Arg2 elements): the
+engine makes the pool's next fill -- 8 objects at first, twice the last
+after, up to 128 and 16 KiB, and at most 256 KiB in a table's pools
+together, what their last fills made, counted again from what they hold
+where that would cut a fill short --
 charging the instance's budget for all of them at once, and the code takes
 again. What a table holds when it is collected is given back to the
 budget, unless the budget counted what is reachable since the fill
@@ -798,9 +806,9 @@ a constant across the exit; the optimizing tier keeps every register
 across it, as a poll's exit does.
 
 What else allocates -- struct.new of a type with v128 fields, array.new,
-array.new_default and array.new_fixed of v128s, of a length not constant
-or of elements past 480 bytes, array.new of more than 16, array.new_data,
-array.new_elem -- and
+array.new_default and array.new_fixed of v128s, array.new_fixed and
+array.new of elements past 480 bytes, array.new of more than 16 or of a
+length not constant, array.new_data, array.new_elem -- and
 array.fill, array.copy, array.init_data and array.init_elem run in Go
 (`ExitOp`): the engine's routines make the objects, charging the
 instance's budget as the interpreter's do, with the native frames'

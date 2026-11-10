@@ -95,10 +95,12 @@ type Ctx struct {
 	// positions' reference slots, sets it for an exit with references; the
 	// engine reads it at the exit and clears it.
 	RArgs uint64
-	// Pools is the table of the pools of new structs the code takes from,
-	// by the module's type index: each entry the address of a pool
-	// (Layout.PoolCount, Layout.PoolObjs) or 0, and the table's address 0
-	// until the first ExitAlloc of the level, at which the engine sets it.
+	// Pools is the table of the pools of new objects the code takes from,
+	// by the module's type index: each entry the address of a struct
+	// type's pool (Layout.PoolCount, Layout.PoolObjs), of an array type's
+	// table of pools by class (Layout.ArrayClass), or 0, and the table's
+	// address 0 until the first ExitAlloc of the level, at which the
+	// engine sets it.
 	Pools uintptr
 	// SaveV is where a function with v128 values keeps its float
 	// registers whole around a poll's exit and the runtime's store, each
@@ -171,13 +173,27 @@ const (
 	// enters the optimized code with the frame as the call made it, or
 	// resumes the baseline's.
 	ExitTierUp
-	// ExitAlloc: the pool of new structs of type Arg0 is empty, or the
-	// context has no table of pools (Ctx.Pools): the engine fills it,
-	// charging the instance's budget, and the code takes from it again;
-	// Arg1 is the struct.new's offset. Nothing of the frame is read or
-	// written but its reference slots, which a count of the budget's
-	// reaches.
+	// ExitAlloc: the pool of new objects of the type whose index is Arg0's
+	// low word is empty, or the context has no table of pools (Ctx.Pools):
+	// the engine fills it, charging the instance's budget, and the code
+	// takes from it again; Arg1 is the instruction's offset. Arg0's high
+	// word is 0 for a struct; for an array, the class of its block plus 1,
+	// or AllocLength for the class of an array of Arg2 elements; or
+	// AllocMake and a reference slot's index from R: an array of Arg2
+	// elements, past what pools hold, which the engine makes, as the
+	// interpreter does, and leaves in that slot, the code going on past
+	// the instruction. Nothing of the frame is read or written but its
+	// reference slots, which a count of the budget's reaches.
 	ExitAlloc
+)
+
+// The high word of an ExitAlloc's Arg0 for an array whose length is known
+// only as the code runs, Arg2: the pool of its class's (AllocLength), or
+// one made by the engine into a reference slot (AllocMake, the slot's
+// index from R in the bits below it).
+const (
+	AllocLength = 1 << 30
+	AllocMake   = 1 << 31
 )
 
 // The trap codes an ExitTrap carries, the engine's TrapCode values.

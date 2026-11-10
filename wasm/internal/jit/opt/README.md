@@ -128,11 +128,12 @@ are `ref` values too (`refStructNew`): the numeric fields their
 arguments, the reference fields in their positions' slots, the struct
 taken from the level's pool of its type's (the baseline README's GC
 objects) and left in the first operand's position's slot; so are
-array.new_fixed, and array.new and array.new_default of a constant length,
+array.new_fixed, and array.new of a constant length and array.new_default,
 of the arrays the baseline takes from pools (`refArrayNew`): the type,
 the length and what the elements are -- the operands, the operand in
 each, or zero -- in the immediate, the numbers their arguments, the
-references in their positions' slots. What else allocates -- array.new,
+references in their positions' slots; array.new_default's length, where
+it is not constant, its argument. What else allocates -- array.new,
 array.new_default and array.new_fixed of other arrays, array.new_data,
 array.new_elem, struct.new_default of a type with v128 fields -- and
 array.fill, array.copy, array.init_data and array.init_elem are `goop`s,
@@ -406,7 +407,11 @@ and the pool's word of it cleared, both through the barrier; on arm64,
 whose barrier routine keeps no scratch register, the pool's word is found
 again from the context. A new array is taken so through its type's entry
 and its class's word, its length stored and its elements from their
-locations or slots. An empty pool goes out of line to the function's
+locations or slots; of a length not constant, the class is looked up as
+the baseline does, the length and the pool's word's address kept in the
+context's Arg2 and Arg3 while s0 and s1 are taken, and an array past the
+pools' goes to an exit site of its own (`AllocMake`), which goes on past
+the instruction. An empty pool goes out of line to the function's
 exit for it, which keeps every register the allocator has in the
 context's save area, as a poll's, exits with `ExitAlloc` and goes back to
 take again (a site leaves its type, an array's class, and its offset in

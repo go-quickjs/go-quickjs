@@ -1,6 +1,8 @@
 package jit
 
 import (
+	"unsafe"
+
 	"github.com/go-quickjs/go-quickjs/internal/jit/asm/amd64"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
 )
@@ -36,6 +38,56 @@ func (c *compiler) poolTake(p, q amd64.Reg, ti uint32, class int, slow amd64.Lab
 	a.LeaIdx(q, p, q, 8, l.PoolObjs)
 	a.Load(p, q, 0)
 }
+
+// poolTakeClass is poolTake of an array of type ti whose block's class is
+// in k.
+func (c *compiler) poolTakeClass(p, q, k amd64.Reg, ti uint32, slow amd64.Label) {
+	a := c.a
+	l := c.req.Layout
+	a.Load(p, rCtx, offPools)
+	c.jumpZero(p, slow)
+	a.Load(p, p, int32(8*ti))
+	c.jumpZero(p, slow)
+	a.LoadIdxScaled(p, p, k, 3, 0)
+	c.jumpZero(p, slow)
+	a.Load(q, p, l.PoolCount)
+	c.jumpZero(q, slow)
+	a.OpImm(amd64.Sub, q, 1, true)
+	a.Store(p, l.PoolCount, q)
+	a.LeaIdx(q, p, q, 8, l.PoolObjs)
+	a.Load(p, q, 0)
+}
+
+// loadLength loads into r the length an array is made of, v, an i32 in
+// its slot, zero-extended; first says it is the site's first load, which
+// leaves it in the context's Arg2 for the exits too.
+func (c *compiler) loadLength(r amd64.Reg, v value, first bool) {
+	c.a.LoadU32(r, rL, v.off)
+	if first {
+		c.a.Store(rCtx, offArg0+16, r)
+	}
+}
+
+// arrayClassAt makes r, the length of an array of elements of 1<<shift
+// bytes, the class of its block (Layout.ArrayClass), or goes to big where
+// the elements take more than the largest has room for.
+func (c *compiler) arrayClassAt(r amd64.Reg, shift uint8, big amd64.Label) {
+	a := c.a
+	l := c.req.Layout
+	if shift > 0 {
+		a.ShiftImm(amd64.Shl, r, shift, true)
+	}
+	a.OpImm(amd64.Cmp, r, int32(16*(len(l.ArrayClass)-1)), true)
+	a.Jcc(amd64.CondA, big)
+	a.OpImm(amd64.Add, r, 15, true)
+	a.ShiftImm(amd64.Shr, r, 4, true)
+	a.MovImm(rTmp, uint64(uintptr(unsafe.Pointer(&l.ArrayClass[0]))))
+	a.Op(amd64.Add, r, rTmp, true)
+	a.LoadU8(r, r, 0)
+}
+
+// storeReg stores r at [base + off].
+func (c *compiler) storeReg(base amd64.Reg, off int32, r amd64.Reg) { c.a.Store(base, off, r) }
 
 // storeWord stores word v at [base + off].
 func (c *compiler) storeWord(base amd64.Reg, off int32, v uint64) {

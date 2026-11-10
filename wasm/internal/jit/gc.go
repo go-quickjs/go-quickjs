@@ -3,6 +3,8 @@
 package jit
 
 import (
+	"math/bits"
+
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/opcode"
 )
@@ -75,6 +77,10 @@ func (c *compiler) gcOp(op opcode.Opcode, at uint32) bool {
 				c.arrayNew(op, ti, uint32(n.c), class, at)
 				break
 			}
+		} else if op == opcode.ArrayNewDefault && lengthPooled(m, l, ti) &&
+			c.refSlotOff(len(c.stack)-1)/16 < AllocLength {
+			c.arrayNewLength(ti, at)
+			break
 		}
 		c.goOp(op, at, uint64(ti), 0)
 	case opcode.ArrayNewFixed:
@@ -285,6 +291,65 @@ func arrayPooled(m *module.Module, l *Layout, ti, n uint32, fill bool) (int, boo
 		return 0, false
 	}
 	return int(l.ArrayClass[u]), true
+}
+
+// lengthPooled reports whether native code makes the arrays of type ti of
+// a length not constant from the engine's pools, where they have room for
+// them: arrays of numbers or references, not v128s.
+func lengthPooled(m *module.Module, l *Layout, ti uint32) bool {
+	return len(l.ArrayClass) > 0 && m.Types[ti].Array.Elem.Type.Kind != module.KindV128
+}
+
+// arrayNewLength compiles array.new_default of type ti of a length not
+// constant: an array whose elements take at most what the pools' largest
+// blocks have room for is taken from the level's pool of its class's
+// (arrayClassAt, poolTakeClass), as arrayNew takes one, its length stored;
+// the length is left in Arg2 for the exits. A longer one, or one past the
+// most an array may have, exits for the engine to make it, or trap, as the
+// interpreter does, into the operand's position's slot (ExitAlloc,
+// AllocMake). Every entry is in its slot or a constant across the exits.
+func (c *compiler) arrayNewLength(ti uint32, at uint32) {
+	l := c.req.Layout
+	base := len(c.stack) - 1
+	for h := range c.stack {
+		if c.stack[h].k != kConst {
+			c.spill(h)
+		}
+	}
+	length := c.stack[base]
+	c.stack = c.stack[:base]
+	slot := uint64(c.refSlotOff(base) / 16)
+	p := c.allocG(0)
+	q := c.allocG(1 << p)
+	k := c.allocG(1<<p | 1<<q)
+	retry, slow, big, done := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	c.a.Bind(retry)
+	c.loadLength(k, length, true)
+	c.arrayClassAt(k, uint8(bits.TrailingZeros(uint(elemSize(c.m.Types[ti].Array.Elem.Type.Kind)))), big)
+	c.poolTakeClass(p, q, k, ti, slow)
+	c.loadLength(k, length, false)
+	c.storeReg(p, l.ArrayLen, k)
+	c.refPut(c.refPos(base), regWord(p), immWord(0))
+	c.ptrPut(mem{q, 0}, immWord(0))
+	c.a.Bind(done)
+	c.freeG(p)
+	c.freeG(q)
+	c.freeG(k)
+	c.later(func() {
+		c.a.Bind(slow)
+		resume := c.a.NewLabel()
+		c.exit(ExitAlloc, resume, uint64(ti)|AllocLength<<32, uint64(at))
+		c.resumeAt(resume)
+		c.jmp(retry)
+	})
+	c.later(func() {
+		c.a.Bind(big)
+		resume := c.a.NewLabel()
+		c.exit(ExitAlloc, resume, uint64(ti)|(AllocMake|slot)<<32, uint64(at))
+		c.resumeAt(resume)
+		c.jmp(done)
+	})
+	c.pushRef()
 }
 
 // elemSize returns the bytes an array element of storage type t takes: a

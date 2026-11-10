@@ -1,6 +1,7 @@
 package opt
 
 import (
+	wjit "github.com/go-quickjs/go-quickjs/wasm/internal/jit"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/opcode"
 )
@@ -253,6 +254,11 @@ func (bd *builder) gcInstr(op opcode.Opcode, at uint32) bool {
 				bd.arrayNew(op, ti, uint32(n.Aux), at)
 				break
 			}
+		} else if op == opcode.ArrayNewDefault && len(bd.ws.arrayClass) > 0 &&
+			m.Types[ti].Array.Elem.Type.Kind != module.KindV128 && bd.rpos(h-1) < wjit.AllocLength {
+			bd.refOp(bd.b, refArrayNew, bd.rpos(h-1), bd.rpos(h-1), uint64(ti)|arrayLength<<32|arrayDefault<<48, TNone, at, bd.pop())
+			bd.pushRef()
+			break
 		}
 		bd.gcGo(op, ti, 0, at)
 	case opcode.ArrayNewFixed:
@@ -385,6 +391,10 @@ const (
 	arrayFixed
 	arrayFill
 )
+
+// arrayLength is refArrayNew's length for array.new_default of a length
+// not constant, its argument.
+const arrayLength = 0xffff
 
 // arrayNewMost is the most elements array.new stores natively, its value
 // stored into each in turn.

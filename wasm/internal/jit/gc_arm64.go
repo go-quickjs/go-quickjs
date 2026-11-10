@@ -1,6 +1,8 @@
 package jit
 
 import (
+	"unsafe"
+
 	"github.com/go-quickjs/go-quickjs/internal/jit/asm/arm64"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
 )
@@ -34,6 +36,57 @@ func (c *compiler) poolTake(p, q arm64.Reg, ti uint32, class int, slow arm64.Lab
 	a.AddImm(q, q, int64(l.PoolObjs), true)
 	a.Load(p, q, 0)
 }
+
+// poolTakeClass is poolTake of an array of type ti whose block's class is
+// in k.
+func (c *compiler) poolTakeClass(p, q, k arm64.Reg, ti uint32, slow arm64.Label) {
+	a := c.a
+	l := c.req.Layout
+	a.Load(p, rCtx, offPools)
+	a.Cbz(p, slow, true)
+	a.Load(p, p, int32(8*ti))
+	a.Cbz(p, slow, true)
+	a.AddLsl(p, p, k, 3)
+	a.Load(p, p, 0)
+	a.Cbz(p, slow, true)
+	a.Load(q, p, l.PoolCount)
+	a.Cbz(q, slow, true)
+	a.AddImm(q, q, -1, true)
+	a.Store(p, l.PoolCount, q)
+	a.AddLsl(q, p, q, 3)
+	a.AddImm(q, q, int64(l.PoolObjs), true)
+	a.Load(p, q, 0)
+}
+
+// loadLength loads into r the length an array is made of, v, an i32 in
+// its slot, zero-extended; first says it is the site's first load, which
+// leaves it in the context's Arg2 for the exits too.
+func (c *compiler) loadLength(r arm64.Reg, v value, first bool) {
+	c.a.LoadU32(r, rL, v.off)
+	if first {
+		c.a.Store(rCtx, offArg0+16, r)
+	}
+}
+
+// arrayClassAt makes r, the length of an array of elements of 1<<shift
+// bytes, the class of its block (Layout.ArrayClass), or goes to big where
+// the elements take more than the largest has room for.
+func (c *compiler) arrayClassAt(r arm64.Reg, shift uint8, big arm64.Label) {
+	a := c.a
+	l := c.req.Layout
+	if shift > 0 {
+		a.ShiftImm(arm64.Lsl, r, r, shift, true)
+	}
+	a.CmpImm(r, int64(16*(len(l.ArrayClass)-1)), true)
+	a.BCond(arm64.HI, big)
+	a.AddImm(r, r, 15, true)
+	a.ShiftImm(arm64.Lsr, r, r, 4, true)
+	a.MovImm(rTmp, uint64(uintptr(unsafe.Pointer(&l.ArrayClass[0]))))
+	a.LoadU8Idx(r, rTmp, r)
+}
+
+// storeReg stores r at [base + off].
+func (c *compiler) storeReg(base arm64.Reg, off int32, r arm64.Reg) { c.a.Store(base, off, r) }
 
 // storeWord stores word v at [base + off].
 func (c *compiler) storeWord(base arm64.Reg, off int32, v uint64) {

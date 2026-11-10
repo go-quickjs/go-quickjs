@@ -292,7 +292,10 @@ const (
 	// (arrayDefault); its operands (arrayFixed), the numbers Args in
 	// order, a reference the slot of its position, one for each element
 	// from dst on; or its operand, Args[0] or dst's reference, in each
-	// (arrayFill). An empty pool exits as refStructNew's does.
+	// (arrayFill). An empty pool exits as refStructNew's does. A length of
+	// arrayLength is array.new_default's of a length not constant, Args[0]:
+	// the array is taken from the pool of its class where the pools have
+	// room for it, else made by the engine into dst (wjit.AllocMake).
 	refArrayNew
 )
 

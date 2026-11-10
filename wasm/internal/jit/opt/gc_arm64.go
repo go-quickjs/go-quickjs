@@ -1,6 +1,9 @@
 package opt
 
 import (
+	"math/bits"
+	"unsafe"
+
 	"github.com/go-quickjs/go-quickjs/internal/jit/asm/arm64"
 	wjit "github.com/go-quickjs/go-quickjs/wasm/internal/jit"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
@@ -272,6 +275,10 @@ func (g *gen) arrayNew(v *Value, dst int32) {
 	idx := v.Aux >> 8
 	ti, n, mode := uint32(idx), uint32(idx>>32&0xffff), idx>>48
 	et := m.Types[ti].Array.Elem.Type
+	if n == arrayLength {
+		g.arrayNewLength(v, dst, ti, et.Kind)
+		return
+	}
 	class, _ := arrayPooled(m, lay.ArrayClass, ti, n, false)
 	retry, slow := a.NewLabel(), a.NewLabel()
 	g.ool = append(g.ool, stub{kind: stubAlloc, l: slow, to: retry, code: uint64(ti) | uint64(class+1)<<32, at: v.At})
@@ -324,6 +331,61 @@ func (g *gen) arrayNew(v *Value, dst int32) {
 	g.taken(ti, class)
 	a.FMovToF(x0, arm64.ZR)
 	g.barrierStore(s1, 0, s0)
+}
+
+// arrayNewLength lowers refArrayNew v of a length not constant, Args[0],
+// of type ti of elements of storage type t: the length left in the
+// context's Arg2 for the exits, the class of the array's block found by
+// its elements' bytes (Layout.ArrayClass) -- an array past the largest
+// made by the engine into dst (an exit's site of its own, which goes on
+// past the instruction) -- the array taken from the pool of its class, as
+// arrayNew does, its pool's word's address kept in Arg3 until the word is
+// cleared, and its length stored.
+func (g *gen) arrayNewLength(v *Value, dst int32, ti uint32, t module.Kind) {
+	a := g.a
+	lay := g.req.Layout
+	retry, slow, big, done := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
+	g.ool = append(g.ool, stub{kind: stubAlloc, l: slow, to: retry, code: uint64(ti) | wjit.AllocLength<<32, at: v.At})
+	g.ool = append(g.ool, stub{kind: stubAlloc, l: big, to: done, code: uint64(ti) | uint64(wjit.AllocMake|uint32(dst/16))<<32, at: v.At})
+	a.Bind(retry)
+	g.mark("array.new_default %d", ti)
+	g.movG(s0, v.Args[0])
+	a.MovRR32(s0, s0)
+	a.Store(rCtx, offArg0+16, s0)
+	if shift := uint8(bits.TrailingZeros(uint(elemSize(t)))); shift > 0 {
+		a.ShiftImm(arm64.Lsl, s0, s0, shift, true)
+	}
+	a.CmpImm(s0, int64(16*(len(lay.ArrayClass)-1)), true)
+	a.BCond(arm64.HI, big)
+	a.AddImm(s0, s0, 15, true)
+	a.ShiftImm(arm64.Lsr, s0, s0, 4, true)
+	a.MovImm(s1, uint64(uintptr(unsafe.Pointer(&lay.ArrayClass[0]))))
+	a.LoadU8Idx(s0, s1, s0)
+	a.Load(s1, rCtx, offPools)
+	a.Cbz(s1, slow, true)
+	a.Load(s1, s1, int32(8*ti))
+	a.Cbz(s1, slow, true)
+	a.AddLsl(s1, s1, s0, 3)
+	a.Load(s1, s1, 0)
+	a.Cbz(s1, slow, true)
+	a.Load(s0, s1, lay.PoolCount)
+	a.Cbz(s0, slow, true)
+	a.AddImm(s0, s0, -1, true)
+	a.Store(s1, lay.PoolCount, s0)
+	a.AddLsl(s1, s1, s0, 3)
+	a.AddImm(s1, s1, int64(lay.PoolObjs), true)
+	a.Store(rCtx, offArg0+24, s1)
+	a.Load(s1, s1, 0)
+	a.Load(s0, rCtx, offArg0+16)
+	a.Store(s1, lay.ArrayLen, s0)
+	a.FMovToF(x0, s1)
+	a.Load(s0, rCtx, offR)
+	a.Store(s0, dst+8, arm64.ZR)
+	g.barrierStore(s0, dst, s1)
+	a.Load(s1, rCtx, offArg0+24)
+	a.FMovToF(x0, arm64.ZR)
+	g.barrierStore(s1, 0, s0)
+	a.Bind(done)
 }
 
 // taken loads into s1 the address of the word of the level's pool of

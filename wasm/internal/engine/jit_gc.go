@@ -7,6 +7,7 @@ import (
 	"sync"
 	"unsafe"
 
+	wjit "github.com/go-quickjs/go-quickjs/wasm/internal/jit"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/opcode"
 )
@@ -153,8 +154,9 @@ func (x *exec) jitGCOp(inst *Instance, op opcode.Opcode, a, b uint32, f *exitFra
 
 // gcPoolCap is the most objects a pool holds, gcPoolFirst how many its first
 // fill makes, each fill making twice the last's; gcPoolBytes bounds what a
-// fill makes, and gcPoolsHeld what a table's pools made at their last fills
-// together.
+// fill makes, and gcPoolsHeld what a table's pools hold together: what
+// their last fills made, counted again from what they hold where that
+// leaves a fill short (gcPoolSet.recount).
 const (
 	gcPoolCap   = 128
 	gcPoolFirst = 8
@@ -172,8 +174,9 @@ type gcPool struct {
 	// class is an array pool's class, -1 for a struct pool.
 	class int
 	// each is what an object of the pool is charged; size how many the
-	// next fill makes; made what the last fill made, in bytes; epoch the
-	// budget's (gcEpoch) before the last fill charged it.
+	// next fill makes; made what the last fill made, in bytes, or what the
+	// pool held at the table's last recount; epoch the budget's (gcEpoch)
+	// before the last fill charged it.
 	each, made int64
 	size       int
 	epoch      uint64
@@ -190,7 +193,7 @@ type gcPoolSet struct {
 	b   *Budget
 	tab []unsafe.Pointer
 	// all are the table's pools; held is what their last fills made, in
-	// bytes.
+	// bytes (gcPool.made).
 	all  []*gcPool
 	held int64
 }
@@ -270,21 +273,39 @@ func (lv *jitLevel) dropPools() {
 }
 
 // jitAlloc fills a pool of level lv's table, the innermost level's, giving
-// it a table first if it has none. what is an ExitAlloc's Arg0: the type
-// index in its low word, and for an array type the class of its arrays'
-// blocks plus 1 in its high word. The objects are charged to the
-// instance's budget, the native frames' references counted with the rest.
-func (x *exec) jitAlloc(lv *jitLevel, what uint64) {
+// it a table first if it has none, for an ExitAlloc of frame f whose
+// Arg0 is what and whose Arg2 is length, at offset at: the type index in
+// what's low word, and in its high word 0 for a struct type, the class of
+// an array's block plus 1, AllocLength for the class of an array of
+// length elements, or AllocMake and the reference slot an array of length
+// elements is made into here. The objects are charged to the instance's
+// budget, the native frames' references counted with the rest.
+func (x *exec) jitAlloc(lv *jitLevel, what, length uint64, f *exitFrame, at uint32) {
+	ti, hi := uint32(what), uint32(what>>32)
+	class := int(hi) - 1
+	switch {
+	case hi&wjit.AllocMake != 0:
+		a := newArray(lv.inst.Code.typeRTT(ti), uint32(length), lv.inst.budget, x, at)
+		f.r[hi&^wjit.AllocMake] = ArrayRef(a)
+		return
+	case hi == wjit.AllocLength:
+		class = arrayClass(int(length) * lv.inst.Code.typeRTT(ti).elemBytes())
+	}
 	if lv.pools == nil {
 		x.levelPools(lv)
 	}
 	set := lv.pools.set
-	p := set.pool(lv.inst.Code, uint32(what), int(what>>32)-1)
+	p := set.pool(lv.inst.Code, ti, class)
 	if p.n > 0 {
 		return
 	}
 	set.held -= p.made
 	n := min(p.size, max(int(gcPoolBytes/p.each), 1))
+	if int64(n)*p.each > gcPoolsHeld-set.held {
+		// The last fills may have been taken since: what the pools hold
+		// is counted again.
+		set.recount()
+	}
 	if room := (gcPoolsHeld - set.held) / p.each; int64(n) > room {
 		n = int(max(room, 1))
 	}
@@ -304,6 +325,16 @@ func (x *exec) jitAlloc(lv *jitLevel, what uint64) {
 	p.n, p.epoch, p.made = uint64(n), epoch, int64(n)*p.each
 	set.held += p.made
 	p.size = min(2*n, gcPoolCap)
+}
+
+// recount makes what the table's pools are taken to hold what they hold:
+// each pool's made its objects', which native code has taken the rest of.
+func (s *gcPoolSet) recount() {
+	s.held = 0
+	for _, p := range s.all {
+		p.made = int64(p.n) * p.each
+		s.held += p.made
+	}
 }
 
 // pool returns the table's pool of type ti of code c, of the arrays of

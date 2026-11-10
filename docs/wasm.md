@@ -932,6 +932,6 @@ WASI:
   `Memory`, between workers.
 - Native code for the v128 fields and elements of GC objects, which the
   JIT refuses.
-- Arrays of a length known only as the code runs: array.new and
-  array.new_default of a length not constant still exit to Go (about 45
-  ns an array of a few elements, against 16 ns one from a pool).
+- array.new of a length not constant, or of more than 16 elements, still
+  exits to Go (about 45 ns an array of a few elements, against 16 to 21
+  ns one from a pool): native code would fill it in a loop.
