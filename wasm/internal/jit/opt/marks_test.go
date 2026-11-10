@@ -3,6 +3,8 @@
 package opt
 
 import (
+	"bytes"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -134,5 +136,45 @@ func TestPhiConstantsStoredOnEdges(t *testing.T) {
 		if f := strings.Fields(mk.Tag); len(f) == 2 && f[1] == "spill" && kept[f[0]] {
 			t.Errorf("phi %s stored where its block begins:\n%s", f[0], code.Listing)
 		}
+	}
+}
+
+// TestMarksAtTheirCode checks that a mark is where the code it names
+// begins, past jumps the assembler shortened: a call's at its poll's
+// count, the first of its instructions.
+func TestMarksAtTheirCode(t *testing.T) {
+	m := compileWat(t, `(module
+  (func $f (param i32) (result i32) (i32.add (local.get 0) (i32.const 1)))
+  (func (export "run") (param $n i32) (result i32)
+    (local $i i32)
+    (loop $l
+      (if (i32.and (local.get $i) (i32.const 1))
+        (then (local.set $n (call $f (local.get $n))))
+        (else (local.set $n (i32.mul (local.get $n) (i32.const 3)))))
+      (br_if $l (i32.lt_u (local.tee $i (i32.add (local.get $i) (i32.const 1))) (i32.const 100))))
+    (call $f (local.get $n))))`)
+	req := testRequest(m, 1)
+	req.Marks = true
+	code, err := Compile(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The poll's count: SUB R12, 1 on amd64, SUBS X22, X22, #1 on arm64.
+	count := []byte{0x49, 0x83, 0xEC, 0x01}
+	if runtime.GOARCH == "arm64" {
+		count = []byte{0xD6, 0x06, 0x00, 0xF1}
+	}
+	calls := 0
+	for _, mk := range code.Marks {
+		if !strings.HasSuffix(mk.Tag, " call tuple") {
+			continue
+		}
+		calls++
+		if !bytes.HasPrefix(code.Bytes[mk.Off:], count) {
+			t.Errorf("mark %q at %#x, at % x", mk.Tag, mk.Off, code.Bytes[mk.Off:min(mk.Off+8, len(code.Bytes))])
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("%d calls marked, want 2: %v", calls, code.Marks)
 	}
 }

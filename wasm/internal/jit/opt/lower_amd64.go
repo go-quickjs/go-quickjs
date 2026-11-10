@@ -235,6 +235,10 @@ func lower(f *Func, req *wjit.Request, ws *workspace) *wjit.Code {
 		code.Handlers = f.handlers(func(b *Block) int { return a.Offset(g.labels[g.index[b.ID]]) }, g.argBase, req.CaughtSlot)
 	}
 	if g.marking {
+		// The marks were taken before Finish shortened the jumps.
+		for i := range g.marks {
+			g.marks[i].Off = a.Moved(g.marks[i].Off)
+		}
 		code.Marks, code.Listing = g.marks, g.listing(gprName, xmmName)
 	}
 	return code
