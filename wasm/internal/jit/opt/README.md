@@ -49,7 +49,9 @@ the address of a global's value, made once in the entry block, which
 function of the module (`call`), through a table (`call_indirect`) and
 through a reference (`call_ref`), whose numeric results `result` values
 read, `goop`, an instruction Go runs (memory.size, memory.grow,
-memory.copy, memory.fill) -- but memory.copy and memory.fill of memory 0
+memory.copy, memory.fill, memory.init, data.drop, table.init, table.copy,
+elem.drop, table.grow, table.fill, memory.atomic.wait32, wait64 and
+notify; `goops.go`) -- but memory.copy and memory.fill of memory 0
 where it is neither shared nor of i64 addresses, which the code does
 itself and which are not calls (`InCode`, `BulkInCode`) --
 `ref`, a reference instruction (below), the tail calls (`return_call`,
@@ -70,7 +72,9 @@ as arguments; table.size is one too. Every `ref` value has an effect: none
 is shared, moved or removed, and they keep their order among themselves
 and the calls, which read and write the same slots. A call's reference
 arguments and results are in its arguments' positions' slots, from the
-position its value records (`Pos`); its `Args` are its numbers.
+position its value records (`Pos`); its `Args` are its numbers. So are
+table.grow's and table.fill's, which Go runs: the reference in its
+position's slot, `Pos` the first operand's position.
 
 An operation is pure -- no effect, no trap, so shared, moved and removed
 at will -- or not: a division may trap unless its divisor is a constant
@@ -196,9 +200,11 @@ the points where something else reads them:
   there; the return stack entry is the baseline's.
 - A call through Go -- of an import, of a callee with no native code or no
   room, a `call_indirect` not made natively -- and an instruction Go runs
-  find their operands, two slots apart, in the call area at the frame's
-  top (from `argBase`, `nslots` less twice the most arguments or results
-  of any of them) and leave their results there.
+  find their numeric operands, two slots apart, each at its place among
+  the operands, in the call area at the frame's top (from `argBase`,
+  `nslots` less twice the most operands or results of any of them), and
+  leave their results there; their references stay in their positions'
+  slots, where `Ctx.RArgs` says (below).
 - A poll's exit keeps every register in the context's save area
   (`Ctx.Save`): nothing in the level runs while Go polls.
 - A trap reads nothing of the frame.
@@ -237,6 +243,7 @@ operands in the call area, each at its place among the signature's
 parameters, while its references stay where they are: it sets the
 context's `RArgs`, by which the engine reads and writes the references of
 the exit's operands in their positions' slots, not in the call area's.
+table.grow and table.fill, which Go runs, do the same (`stageGo`).
 
 ## Registers
 
@@ -709,8 +716,6 @@ A function is refused -- it keeps its baseline code -- when it has:
 | `atomics` | a struct or array atomic instruction |
 | `gc` | a GC instruction |
 | `exceptions` | try, try_table, throw, the legacy instructions |
-| `table` | table.grow, table.fill, table.copy, table.init, elem.drop |
-| `bulk` | memory.init, data.drop |
 | `frame` | more spill slots than its frame has below the call area |
 | `size` | code past `internal/jit.MaxCodeBytes`, or, on arm64, past a branch's reach |
 | `internal` | a panic of the compiler's |
@@ -789,7 +794,11 @@ others, and `TestJITAtomicsMatchInterpreter` and `TestJITAtomicTraps`) on
 this tier, `TestOptMemoryRandom` random accesses, atomic ones too, of four
 kinds of memory near their ends, with values spilled and constant, and
 `TestOptAtomicsConcurrent` goroutines updating one shared memory
-atomically; `TestThreadDispatch`
+atomically; `TestOptBulk` `TestJITBulkBaseline`'s copies, fills and
+table.grow and table.fill of every kind of memory and table on this tier,
+idle and with the collector marking, and `TestOptGoOps` the segments' and
+tables' instructions Go runs, with references and numbers live around
+them; `TestThreadDispatch`
 and `TestOptThreadDispatch` jump threading, the latter on 1,500 random
 dispatch loops against the interpreter; `TestMarks` the profile's marks.
 
@@ -850,14 +859,14 @@ json's and interp's, which compile their hot functions within a run of
 about 60 ms (json +10%, interp +4%, where they were +19% and +17%
 before the compile's cost was worked on; see Tier-up).
 
-On the spec scripts the tier compiles 4,757 functions and refuses 2,085
-(SIMD and v128s 1,499, the table instructions that allocate or copy 218,
-GC instructions 188, exceptions 107, memory.init and data.drop 73), where
-it compiled 4,149 before it took every memory, every offset and the
-atomics -- memories other than an i32 one 514, offsets 14 and atomics 80
-were refused -- and 3,914 before it took references and tail calls; in
-24 to 30 ms, 5 to 6 µs a function (43 to 63 ms before references), where
-the
+On the spec scripts the tier compiles 5,048 functions and refuses 1,794
+(SIMD and v128s 1,499, GC instructions 188, exceptions 107), where it
+compiled 4,149 before it took every memory, every offset, the atomics and
+the instructions Go runs for tables and segments -- memories other than
+an i32 one 514, offsets 14, atomics 80, the table instructions that
+allocate or copy 218, memory.init and data.drop 73 were refused -- and
+3,914 before it took references and tail calls; in 24 to 34 ms, 5 to 7
+µs a function (43 to 63 ms before references), where the
 baseline's 2,926 take 11 to 23 ms. The Go program's 3,011 functions
 compile in 0.16 ms each (0.40 before; the baseline's, 0.12 ms).
 

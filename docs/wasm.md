@@ -459,9 +459,11 @@ are made on the spot, the worker otherwise waiting for the program's
 goroutine to be preempted. It compiles references -- locals, globals,
 tables' elements, the null tests and branches -- calls through tables and
 references, tail calls, the accesses of every memory, shared ones and
-those of i64 addresses included, and the atomics, and leaves to the
-baseline code the functions with SIMD, GC or exception instructions, or
-with the table instructions that allocate or copy.
+those of i64 addresses included, the atomics, and the bulk and table
+instructions -- those the baseline leaves to Go, and table.fill and the
+copies and fills of memories other than an unshared i32 memory 0, through
+Go too -- and leaves to the baseline code the functions with SIMD, GC or
+exception instructions.
 It roughly halves the Go-built programs' time from their second run on, and
 makes their first runs as fast as the baseline's or faster (json 77 ms to
 70, gzip 75 to 53), but interp's, 1 ms slower for the baseline code's

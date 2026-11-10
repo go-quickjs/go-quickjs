@@ -1551,7 +1551,7 @@ func (g *gen) callGo(v *Value, rest []*Value) {
 		g.reload(v)
 		return
 	}
-	g.stage(v.Args, g.argBase)
+	g.stageGo(v)
 	resume := a.NewLabel()
 	base := uint64(g.argBase)
 	{

@@ -293,6 +293,8 @@ func (g *lowering) allocate(ws *allocScratch, classes [][]int, cl *clobbers) {
 				nargs, nres := len(v.Args), len(in.Defs)
 				if ft := g.sigOf(v); ft != nil {
 					nargs, nres = len(ft.Params)+extraArgs(v.Op), len(ft.Results)
+				} else {
+					nargs = goOperandCount(v)
 				}
 				area = max(area, 2*max(nargs, nres))
 				g.inst[v.vreg] = [2]int32{int32(i), int32(len(lb.Insts))}

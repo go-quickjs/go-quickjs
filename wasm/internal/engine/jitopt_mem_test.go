@@ -218,3 +218,104 @@ func TestOptAtomicsConcurrent(t *testing.T) {
 		return inst
 	}, optimized)
 }
+
+// The optimizing tier's memory.copy and memory.fill of every kind of
+// memory, table.size, table.grow and table.fill of i32 and i64 tables, and
+// references held around them, as TestJITBulkBaseline's baseline code,
+// idle and with the collector marking.
+func TestOptBulk(t *testing.T) {
+	for _, mode := range []string{"idle", "marking", "clobbered"} {
+		t.Run(mode, func(t *testing.T) {
+			if mode != "idle" {
+				jitMarkingForTest(t, mode == "clobbered")
+			}
+			testJITBulk(t, true)
+		})
+	}
+}
+
+// goOpsWAT has the instructions the optimizing tier leaves to Go:
+// memory.init of memory 0 and of an i64 memory, data.drop, table.init,
+// table.copy and table.grow of an i32 and an i64 table, elem.drop, with
+// references and numbers live around them.
+const goOpsWAT = `(module
+  (memory $a 1)
+  (memory $b i64 1)
+  (table $t 8 funcref)
+  (table $u i64 8 funcref)
+  (type $ft (func (result i32)))
+  (func $f (result i32) (i32.const 7))
+  (func $g (result i32) (i32.const 9))
+  (data $d "\01\02\03\04\05\06\07\08")
+  (elem $e func $f $g $f)
+  (func (export "minit") (param i32 i32 i32) (memory.init $d (local.get 0) (local.get 1) (local.get 2)))
+  (func (export "minitB") (param i64 i32 i32) (memory.init $b $d (local.get 0) (local.get 1) (local.get 2)))
+  (func (export "dropD") (data.drop $d))
+  (func (export "tinit") (param i32 i32 i32) (table.init $t $e (local.get 0) (local.get 1) (local.get 2)))
+  (func (export "tinitU") (param i64 i32 i32) (table.init $u $e (local.get 0) (local.get 1) (local.get 2)))
+  (func (export "tcopy") (param i32 i32 i32) (table.copy $t $t (local.get 0) (local.get 1) (local.get 2)))
+  (func (export "tcopyTU") (param i32 i64 i32) (table.copy $t $u (local.get 0) (local.get 1) (local.get 2)))
+  (func (export "dropE") (elem.drop $e))
+  (func (export "tget") (param i32) (result i32)
+    (if (result i32) (ref.is_null (table.get $t (local.get 0)))
+      (then (i32.const -1))
+      (else (call_indirect $t (type $ft) (local.get 0)))))
+  (func (export "uget") (param i64) (result i32)
+    (if (result i32) (ref.is_null (table.get $u (local.get 0)))
+      (then (i32.const -1))
+      (else (call_indirect $u (type $ft) (local.get 0)))))
+  ;; A reference and numbers live across table.grow, table.fill and the
+  ;; segments' instructions.
+  (func (export "around") (param $n i32) (param $x i64) (result i64)
+    (local $r funcref) (local $k i32) (local $y i64)
+    (local.set $r (ref.func $g))
+    (local.set $y (i64.mul (local.get $x) (i64.const 3)))
+    (local.set $k (table.grow $t (local.get $r) (local.get $n)))
+    (table.fill $u (i64.const 1) (local.get $r) (i64.extend_i32_u (local.get $n)))
+    (memory.init $a $d (i32.const 100) (i32.const 2) (i32.const 3))
+    (i64.add (i64.add (local.get $y) (i64.extend_i32_u (local.get $k)))
+      (i64.add (i64.extend_i32_u (table.set $t (i32.const 0) (local.get $r)) (call_indirect $t (type $ft) (i32.const 0)))
+        (i64.add (table.grow $u (ref.null func) (i64.const 1)) (i64.load8_u $a (i32.const 102)))))))`
+
+// The instructions the optimizing tier leaves to Go compute what the
+// interpreter does, traps included, and their functions are optimized.
+func TestOptGoOps(t *testing.T) {
+	mt := TrapMemOutOfBounds
+	tt := TrapTableOutOfBounds
+	et := TrapElementSegmentOutOfBounds
+	calls := []jitCall{
+		{name: "minit", args: []uint64{10, 0, 8}},
+		{name: "minit", args: []uint64{65530, 0, 8}, trap: mt},
+		{name: "minit", args: []uint64{0, 4, 5}, trap: mt},
+		{name: "minitB", args: []uint64{65528, 1, 7}},
+		{name: "minitB", args: []uint64{1 << 40, 0, 1}, trap: mt},
+		{name: "tinit", args: []uint64{0, 0, 3}},
+		{name: "tinit", args: []uint64{6, 0, 3}, trap: tt},
+		{name: "tinitU", args: []uint64{5, 1, 2}},
+		{name: "tcopy", args: []uint64{3, 0, 3}},
+		{name: "tcopy", args: []uint64{7, 0, 2}, trap: tt},
+		{name: "tcopyTU", args: []uint64{0, 5, 3}},
+		{name: "tcopyTU", args: []uint64{0, 7, 2}, trap: tt},
+		{name: "around", args: []uint64{2, 5}},
+		{name: "around", args: []uint64{3, 5}},
+		{name: "around", args: []uint64{0x7fffffff, 5}, trap: tt},
+		{name: "dropD"},
+		{name: "minit", args: []uint64{0, 0, 0}},
+		{name: "minit", args: []uint64{0, 0, 1}, trap: mt},
+		{name: "dropE"},
+		{name: "tinit", args: []uint64{0, 0, 1}, trap: et},
+		{name: "tinit", args: []uint64{0, 0, 0}},
+	}
+	// around grew $t to 13 elements and $u to 10.
+	for i := range uint64(14) {
+		tc, uc := jitCall{name: "tget", args: []uint64{i}}, jitCall{name: "uget", args: []uint64{i}}
+		if i >= 13 {
+			tc.trap = tt
+		}
+		if i >= 10 {
+			uc.trap = tt
+		}
+		calls = append(calls, tc, uc)
+	}
+	optSameAsInterpreter(t, goOpsWAT, calls)
+}

@@ -16,8 +16,6 @@ const (
 	RefuseAtomics    = "atomics"
 	RefuseGC         = "gc"
 	RefuseExceptions = "exceptions"
-	RefuseTable      = "table"
-	RefuseBulk       = "bulk"
 	RefuseMemory     = "memory"
 	RefuseOther      = "other"
 	RefuseFrame      = "frame"
@@ -806,6 +804,13 @@ func (bd *builder) instr() {
 		mem := r.u32()
 		v := bd.goOp(op, uint64(mem), 3, TNone, at)
 		v.InCode = mem == 0 && bd.memAux(0) == 0
+	case opcode.MemoryInit, opcode.TableInit, opcode.TableCopy:
+		x, y := r.u32(), r.u32()
+		bd.goOp(op, uint64(x)|uint64(y)<<32, 3, TNone, at)
+	case opcode.DataDrop, opcode.ElemDrop:
+		bd.goOp(op, uint64(r.u32()), 0, TNone, at)
+	case opcode.TableGrow, opcode.TableFill:
+		bd.tableGo(op, r.u32(), at)
 	default:
 		if bd.memoryOp(op, at) || bd.numeric(op, at) || bd.refInstr(op, at) || bd.atomicOp(op, at) {
 			return
@@ -947,6 +952,36 @@ func (bd *builder) goOp(op opcode.Opcode, imm uint64, nargs int, result Type, at
 	}
 	bd.forget()
 	return v
+}
+
+// tableGo builds table.grow or table.fill of table, which Go runs: its
+// reference operand is in its position's reference slot, Pos the first
+// operand's position, and its numbers are Args.
+func (bd *builder) tableGo(op opcode.Opcode, table uint32, at uint32) {
+	nargs := goOperands(op, 0)
+	pos := len(bd.stack) - nargs
+	args := bd.args[:0]
+	for _, a := range bd.stack[pos:] {
+		if !bd.isRef(a) {
+			args = append(args, a)
+		}
+	}
+	bd.args = args
+	t := TNone
+	if op == opcode.TableGrow {
+		t = TI32
+		if bd.m.Tables[table].Limits.Is64 {
+			t = TI64
+		}
+	}
+	v := bd.value(OpGoOp, t, args...)
+	v.Aux, v.Aux2, v.At, v.Pos = uint64(op), uint64(table), at, int32(pos)
+	bd.f.Refs = true
+	bd.stack = bd.stack[:pos]
+	if t != TNone {
+		bd.push(v)
+	}
+	bd.forget()
 }
 
 func (bd *builder) globalGet(g uint32) {
@@ -1332,10 +1367,6 @@ func check(m *module.Module, fn uint32) {
 		case opcode.Try, opcode.TryTable, opcode.Catch, opcode.CatchAll, opcode.Throw, opcode.ThrowRef,
 			opcode.Rethrow, opcode.Delegate:
 			refuse(RefuseExceptions, "%s", op.Name())
-		case opcode.TableGrow, opcode.TableFill, opcode.TableCopy, opcode.TableInit, opcode.ElemDrop:
-			refuse(RefuseTable, "%s", op.Name())
-		case opcode.MemoryInit, opcode.DataDrop:
-			refuse(RefuseBulk, "%s", op.Name())
 		case opcode.F32LoadMemF16, opcode.F32StoreMemF16:
 			refuse(RefuseOther, "%s", op.Name())
 		case opcode.Block, opcode.Loop, opcode.If:

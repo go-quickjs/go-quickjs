@@ -193,7 +193,10 @@ func (r *reader) skipImmediates(op opcode.Opcode) {
 	case opcode.MemoryCopy:
 		r.u32()
 		r.u32()
-	case opcode.MemoryFill:
+	case opcode.MemoryFill, opcode.DataDrop, opcode.ElemDrop, opcode.TableGrow, opcode.TableFill:
+		r.u32()
+	case opcode.MemoryInit, opcode.TableInit, opcode.TableCopy:
+		r.u32()
 		r.u32()
 	}
 	if op >= opcode.I32LoadMem && op <= opcode.I64StoreMem32 {

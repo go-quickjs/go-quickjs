@@ -98,16 +98,25 @@ func TestJITBulkBaseline(t *testing.T) {
 			if mode != "idle" {
 				jitMarkingForTest(t, mode == "clobbered")
 			}
-			testJITBulkBaseline(t)
+			testJITBulk(t, false)
 		})
 	}
 }
 
-func testJITBulkBaseline(t *testing.T) {
+// testJITBulk runs TestJITBulkBaseline's calls on the baseline code, or on
+// the optimizing tier's (opt), which leaves memories other than an unshared
+// i32 memory 0's copies and fills, table.grow and table.fill to Go.
+func testJITBulk(t *testing.T, opt bool) {
 	interp := interpretedInstance(t, bulkWAT)
 	inst := thresholdInstance(t, bulkWAT, 0)
 	inst.Code.setOSRCalls(0)
 	inst.Code.SetOptThreshold(-1)
+	ran := nativeRan
+	if opt {
+		inst.Code.SetOptThreshold(0)
+		inst.Code.SetOptBackground(false)
+		ran = optimized
+	}
 	same := func(name string, args ...uint64) {
 		t.Helper()
 		want, werr := call(t, interp, name, args...)
@@ -186,10 +195,17 @@ func testJITBulkBaseline(t *testing.T) {
 	same("tsum")
 	same("grow", 0)
 	same("sizes")
-	for _, f := range []string{"init", "copyA", "fillB", "sizes", "tfill", "refs"} {
-		if !nativeRan(inst, f) {
-			t.Fatalf("%s has no native code", f)
+	for _, f := range []string{"init", "copyA", "copyB", "copyAC", "fillB", "fillC", "sizes", "grow", "tfill", "tfill64"} {
+		if !ran(inst, f) {
+			t.Fatalf("%s has no native code of the tier tested", f)
 		}
+	}
+	if opt {
+		// refs has a cast, which the tier refuses.
+		return
+	}
+	if !ran(inst, "refs") {
+		t.Fatal("refs has no native code")
 	}
 	if n := countExits(func() {
 		for range 100 {
