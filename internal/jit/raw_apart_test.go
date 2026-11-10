@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 	"unsafe"
 )
 
@@ -65,6 +66,17 @@ func TestPlaceRawApart(t *testing.T) {
 				runs.Add(1)
 			}
 		}()
+	}
+	// The goroutines run the first code before anything is placed, so that
+	// the placements below happen while it runs, however the scheduler
+	// starts them.
+	for deadline := time.Now().Add(10 * time.Second); runs.Load() < 3; {
+		if time.Now().After(deadline) {
+			stop.Store(true)
+			wg.Wait()
+			t.Fatalf("the goroutines ran the first code %d times in 10s", runs.Load())
+		}
+		runtime.Gosched()
 	}
 	placed := []*RawCode{first}
 	// shares reports whether code placed before shares the page addr is on.
