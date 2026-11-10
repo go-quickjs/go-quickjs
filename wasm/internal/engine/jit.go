@@ -66,8 +66,7 @@ const DefaultOptThreshold = 30000
 // compile, and the baseline only those it refuses; a negative n turns the
 // tier off. By default it is DefaultOptThreshold, or what WASM_JIT_OPT says.
 // It applies once EnableJIT has turned the JIT on, to the functions
-// compiled after it. The optimizing tier is built for amd64; elsewhere
-// every function keeps its baseline code.
+// compiled after it. The optimizing tier is built wherever the JIT is.
 func (c *Code) SetOptThreshold(n int) { c.setOptThreshold(n) }
 
 // DefaultOSRThreshold is the number of loop back edges after which a call

@@ -89,7 +89,7 @@ that the spec scripts run the loops' entries.
 
 The **optimizing** tier (`opt/README.md`, package `opt`) builds SSA from
 the body, optimizes it, allocates registers with a linear scan and lowers
-it, on amd64, to code that keeps this tier's frames, context, entries,
+it, on amd64 and arm64, to code that keeps this tier's frames, context, entries,
 exits and calls. It is on by default where it is built (`DefaultOptThreshold`,
 30,000 calls; `Code.SetOptThreshold`, `WASM_JIT_OPT=N` and `WASM_JIT=opt` set
 another threshold, `WASM_JIT_OPT=off` turns it off): a function's baseline
@@ -330,7 +330,7 @@ of a Go program's code.
 | `ExitTailRef` | return_call_ref, as `ExitTailIndirect` |
 | `ExitOp` | memory.size, memory.grow, memory.init, memory.copy, memory.fill, data.drop, table.size, table.grow, table.fill, table.init, table.copy, elem.drop, struct.new, struct.new_default, the array.new instructions, array.fill, array.copy, array.init_data, array.init_elem, throw, throw_ref, rethrow (which do not resume: see Exceptions), memory.atomic.wait32, memory.atomic.wait64, memory.atomic.notify, on the frame's slots; an atomic instruction's offset is the 64-bit `Arg2` |
 | `ExitSIMD` | a SIMD instruction the backend does not compile (see SIMD): the interpreter's own code for the instruction at offset `Arg0`, made once and kept by the Code (`codeJIT.simd`), run on the operands in the frame's slots from `Arg1` |
-| `ExitTierUp` | the function's count of calls toward the optimizing tier ran out, at its entry (amd64, where the request gives a `TierCounter`): the engine compiles it there and enters the optimized code with the frame as the call made it, or resumes the baseline code |
+| `ExitTierUp` | the function's count of calls toward the optimizing tier ran out, at its entry (where the request gives a `TierCounter`): the engine compiles it there and enters the optimized code with the frame as the call made it, or resumes the baseline code |
 
 A trap's site stores its offset and jumps to the function's stub for the
 trap's code; there is no resumption.

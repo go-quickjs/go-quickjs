@@ -109,8 +109,8 @@ type clobbers struct {
 }
 
 // listing prints the function as lowered: each value with its location,
-// reg naming a general register.
-func (g *lowering) listing(reg func(r int) string) string {
+// gpr and fpr naming a general and a float register.
+func (g *lowering) listing(gpr, fpr func(r int) string) string {
 	var sb strings.Builder
 	where := func(v *Value) string {
 		if v.Op == OpConst || g.fused[v.ID] || v.Type == TNone || v.Type == TTuple {
@@ -119,9 +119,9 @@ func (g *lowering) listing(reg func(r int) string) string {
 		var s string
 		switch l := g.locOf(v); l.kind {
 		case lGPR:
-			s = reg(l.r)
+			s = gpr(l.r)
 		case lXMM:
-			s = fmt.Sprintf("x%d", l.r)
+			s = fpr(l.r)
 		case lSlot:
 			s = fmt.Sprintf("slot%d", l.slot)
 		}

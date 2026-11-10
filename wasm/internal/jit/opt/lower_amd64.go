@@ -47,10 +47,13 @@ var amd64Clobbers = clobbers{
 	shift: []uint64{1 << amd64.RCX},
 }
 
-// gprName is a general register's name in the listing.
+// gprName and xmmName are a general and an SSE register's names in the
+// listing.
 func gprName(r int) string {
 	return [...]string{"ax", "cx", "dx", "bx", "sp", "bp", "si", "di", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"}[r]
 }
+
+func xmmName(r int) string { return fmt.Sprintf("x%d", r) }
 
 // The context's fields' offsets.
 var (
@@ -165,7 +168,7 @@ func lower(f *Func, req *wjit.Request, ws *workspace) *wjit.Code {
 	// The assembler's buffer is the workspace's: the code is a copy.
 	code := &wjit.Code{Bytes: slices.Clone(out), GoEntry: a.Offset(goEntry), Entry: a.Offset(entry), ReturnStub: retStub}
 	if g.marking {
-		code.Marks, code.Listing = g.marks, g.listing(gprName)
+		code.Marks, code.Listing = g.marks, g.listing(gprName, xmmName)
 	}
 	return code
 }

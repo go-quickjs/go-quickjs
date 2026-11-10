@@ -2,7 +2,7 @@
 
 go-quickjs has a WebAssembly engine of its own, in pure Go: a decoder and
 validator, a closure-tree interpreter, and an optional JIT for amd64 and
-arm64: a baseline tier, and on amd64 an optimizing one above it. It implements WebAssembly 3.0 and the threads proposal, and it
+arm64: a baseline tier and an optimizing one above it. It implements WebAssembly 3.0 and the threads proposal, and it
 reports invalid modules, failed links and traps with V8's messages, word for
 word.
 
@@ -418,10 +418,10 @@ a register cache of the operand stack over the interpreter's own frames, so a
 call crosses between the tiers in either direction. Where the JIT runs, it
 compiles a function at its first call, its frame sized by validation's
 bound, and the interpreter's compile of the body is never made unless a
-call runs there. On amd64 an optimizing
-tier (`wasm/internal/jit/opt`) recompiles a function whose baseline code
-was called 30,000 times, or whose loops ran long, from SSA with a register
-allocator, in the baseline code's place; `WASM_JIT_OPT=off` turns it off.
+call runs there. An optimizing tier (`wasm/internal/jit/opt`) recompiles a
+function whose baseline code was called 30,000 times, or whose loops ran
+long, from SSA with a register allocator, in the baseline code's place;
+`WASM_JIT_OPT=off` turns it off.
 It roughly halves the Go-built programs' time from their second run on, and
 makes four of six first runs faster too; json's and interp's first runs are
 6-10% slower, paying for compiles that pay back later. Their designs are in
@@ -777,5 +777,4 @@ WASI:
 - `postMessage` and structured clone of a `Module`, and of a shared
   `Memory`, between workers.
 - Native code for the v128 fields and elements of GC objects, which the
-  JIT refuses, and the optimizing tier on arm64.
-- `wasmbench`'s `jit` engine on arm64: the harness builds it on amd64 only.
+  JIT refuses.

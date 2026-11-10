@@ -42,7 +42,40 @@ func (c *compiler) entries() (retStub int, goEntry, entry arm64.Label) {
 	a.Bind(goEntry)
 	c.loadKept()
 	a.Bind(entry)
+	if c.req.TierCounter != 0 {
+		c.tierCount()
+	}
 	return retStub, goEntry, entry
+}
+
+// tierCount counts a call toward the optimizing tier, and exits for it
+// when the count runs out. The exit is at the entry, before the prologue:
+// no local has a home loaded yet, and the engine may enter the optimized
+// code in the baseline's place.
+func (c *compiler) tierCount() {
+	a := c.a
+	tier, back := a.NewLabel(), a.NewLabel()
+	a.MovImm(rTmp, c.req.TierCounter)
+	a.Load(rTmp2, rTmp, 0)
+	a.SubsImm(rTmp2, rTmp2, 1, true)
+	a.Store(rTmp, 0, rTmp2)
+	a.BCond(arm64.MI, tier)
+	a.Bind(back)
+	c.later(func() {
+		a.Bind(tier)
+		a.Store(rCtx, offL, rL)
+		a.Store(rCtx, offPoll, rPoll)
+		a.Store(rCtx, offRSP, rRS)
+		c.storeCtx(offExit, ExitTierUp)
+		c.storeCtx(offExitFn, uint64(c.fn))
+		resume := a.NewLabel()
+		a.Adr(rTmp, resume)
+		a.Store(rCtx, offExitAddr, rTmp)
+		a.Ret()
+		a.Bind(resume)
+		c.loadKept()
+		a.B(back)
+	})
 }
 
 // loadKept loads the registers the code keeps from the context: L, memory

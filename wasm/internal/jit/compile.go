@@ -59,7 +59,7 @@ type Request struct {
 	CaughtSlot int
 	// TierCounter, if not 0, is the address of the function's countdown
 	// to the optimizing tier, an int64: the baseline code decrements it at
-	// its entry and exits (ExitTierUp) when it goes below 0. amd64 only.
+	// its entry and exits (ExitTierUp) when it goes below 0.
 	TierCounter uint64
 	// Marks asks the compiler for its code's marks and listing (Code.Marks,
 	// Code.Listing), which a profile's samples in the code are read by.

@@ -24,7 +24,6 @@ const (
 	RefuseMemory     = "memory"
 	RefuseOffset     = "offset"
 	RefuseOther      = "other"
-	RefuseArch       = "arch"
 	RefuseFrame      = "frame"
 	RefuseSize       = "size"
 )

@@ -8,8 +8,7 @@ context, entries, exits and calls, so that its code takes the baseline
 code's place in the link table and the tiers -- and the interpreter --
 call each other in every direction.
 
-It is built on amd64 alone (`lower_amd64.go`); on arm64 `Compile` refuses
-every function (`arch`) and the baseline runs everything. It is on by
+It lowers to amd64 and arm64, wherever the baseline runs. It is on by
 default (see Tier-up).
 
 | File | |
@@ -23,7 +22,8 @@ default (see Tier-up).
 | `compile.go` | `Compile`: build, optimize, lower |
 | `workspace.go`, `arena.go`, `table.go` | what a compile works in, kept for the next (The compile's cost) |
 | `timing.go` | the compiles' phases, timed for a measuring host |
-| `lower_amd64.go` | the lowering: the allocator's view of the function, the code |
+| `lower.go` | the lowering's part both architectures share: the allocator's view of the function, where each value is, the listing |
+| `lower_amd64.go`, `lower_arm64.go` | the lowering: each architecture's code |
 | `internal/jit/lsra` | the register allocator, which knows nothing of WebAssembly |
 
 ## The IR
@@ -174,8 +174,10 @@ the points where something else reads them:
 Every other slot below `argBase` is the allocator's spill slot. A slot's
 word holds an i32 or an f32 with its upper half clear, as the
 interpreter's frames do, so that what Go reads of the call area is right
-and a slot is copied whole: an f32 is stored with MOVSS and a zero upper
-word.
+and a slot is copied whole: on amd64 an f32 is stored with MOVSS and a
+zero upper word; on arm64 an f32 in a register has the rest of the register
+clear, as the baseline keeps it -- every instruction that makes one writes
+its S view, which clears the rest -- and is stored as its D view.
 
 The optimized code holds no reference: a function with one is refused.
 
@@ -200,6 +202,26 @@ entry and jumps to its address with BX the caller's L, as the baseline's
 does. After a native call the callee leaves R10 as the call found it, and
 the code stores it into the context again, where an exit of the callee
 may have left another.
+
+On arm64:
+
+| Register | |
+|---|---|
+| X0 | the context |
+| X19 | L, the frame's slots |
+| X20, X21 | memory 0's base and size, loaded again after every exit |
+| X22 | the poll counter |
+| X23 | the return stack's next entry, kept there throughout, stored at every exit |
+| X16, X17 | general scratch registers |
+| D31, D30 | float scratch registers; Q31 and Q30, whole, memory.copy's and memory.fill's |
+| X27 | the encoder's temporary, and a remainder's quotient |
+| X1-X12, X24-X26, X13-X15 | the allocator's general registers, X13-X15 last (memory.copy's and memory.fill's) |
+| D0-D29 | the allocator's float registers |
+| SP, X18, X28, X29, X30 | never written |
+
+These are the baseline's: every register a native frame of a level keeps
+-- L, memory 0's, the poll counter, the return stack's -- is in the same
+place in both tiers, and a native call leaves them as they are.
 
 ## Register allocation
 
@@ -231,8 +253,9 @@ apart instead, its registers scanned again each on its own and hinted to
 the others'. Density, not weight, decides, so that a loop's short
 temporaries keep registers and the long values around them, used less
 often for their length, go to slots. A register an instruction clobbers
-(AX and DX for a division, CX for a shift by a variable, AX, CX and SI
-for memory.copy and memory.fill) is not given to a web live across it. A
+(on amd64 AX and DX for a division, CX for a shift by a variable, AX, CX
+and SI for memory.copy and memory.fill; on arm64 X13-X15 for memory.copy
+and memory.fill alone) is not given to a web live across it. A
 web in a register that lives across a call is stored into its slot where
 each of its values is defined and loaded again after each call it
 crosses; one whose reloads would weigh as much as its uses lives in its
@@ -246,11 +269,12 @@ A phi in a register is stored into its slot where its block begins unless
 every argument shares its register and its slot, which each stored
 where it was made.
 
-Lowering reads a spilled operand from its slot -- as a memory operand
-where the instruction takes one (`OpMem`, `ImulMem`), else into a scratch
-register -- and computes a spilled result in a scratch register and
-stores it. The moves on an edge are parallel: each waits for those that
-read its destination, and a cycle is broken through R10 or X14.
+Lowering reads a spilled operand from its slot -- on amd64 as a memory
+operand where the instruction takes one (`OpMem`, `ImulMem`), else, and on
+arm64 always, into a scratch register -- and computes a spilled result in
+a scratch register and stores it. The moves on an edge are parallel: each
+waits for those that read its destination, and a cycle is broken through
+R10 or X14 (X17 or D30 on arm64).
 
 ## Lowering
 
@@ -263,15 +287,33 @@ the allocator put them. copysign is done on the bits in general
 registers. An integer comparison that is the last value of a block and
 its branch's condition alone is fused with the branch.
 
+On arm64 the instructions are three-address, and a result is computed in
+its register from its operands' wherever they are. The floats are the
+baseline's arm64 sequences: FMIN and FMAX, FRINT's roundings, FCVTZS and
+FCVTZU after comparisons with the bounds in the operand's type for the
+trapping truncations and alone for the saturating ones, SCVTF and UCVTF,
+the conditions MI, LS, GT and GE after FCMP, abs, neg and copysign on the
+bits in general registers. A division never faults: the zero divisor and
+the least integer over -1 trap first, and a remainder is the dividend less
+the quotient's product (MSUB), the quotient in X27. A branch on a value not
+fused is CBZ or CBNZ, and a switch's table is of branches straight to its
+targets, or, for a back edge, to its poll's count. A constant is made where
+it is used, the zero register for 0 where the instruction reads its
+register forms.
+
 A memory access computes its end, `address + offset + size`, in R11 and
 compares it with the context's memory size, unless `NoCheck`; an offset
 plus a size past 2^31-1 is refused (`offset`). The access is `[R15 +
 address + offset]`, the address in a register (an i32 there has its
-upper half clear).
+upper half clear). On arm64 the address plus the offset is made in X17,
+in 64 bits, where the offset is not 0, the end in X16 and compared with
+X21, and the access is `[X20 + X17]`.
 
 A back edge -- a jump to a block at or before its own in the layout,
 reverse postorder -- counts down the poll counter and exits for a poll
-when it runs out. A call counts it down too, then checks, as the baseline
+when it runs out. On arm64 the exit is the function's own, which its sites
+share: a site leaves where to go on in X16 and jumps to it, and it keeps
+in the context's save area only the registers the allocator gave out. A call counts it down too, then checks, as the baseline
 does, that the callee has native code, that its frame and reference slots
 fit their chunks, and that the return stack has room, else calls through
 Go (`ExitCall`), out of line.
@@ -287,7 +329,8 @@ chunk's end). Anything else -- null, past the table, another type or a
 subtype, a host function, another instance's, no native code or no room
 -- goes through Go (`ExitCallIndirect`), which finds the callee or traps
 as the interpreter does. The callee's index waits in X15 while the
-arguments are moved, as s0 is the moves'.
+arguments are moved, as s0 is the moves'; on arm64 the checks have X16
+and X17, and keep the table and the callee's index in D30 and D31.
 
 memory.copy and memory.fill of memory 0 are the code's own: the operands
 into AX, CX and SI, which the allocator keeps free of intervals live
@@ -295,9 +338,13 @@ across them, both ends checked against the memory's size before a byte
 is written, then REP MOVSB or REP STOSB with DI the destination's
 address, the context kept in R11 meanwhile; a copy to a higher address
 that overlaps its source goes from its end down, words then bytes, each
-read before the bytes above it are written. They make no exit and no
-poll: the count is bounded by the memory, as Go's copy of it in the
-engine is.
+read before the bytes above it are written. On arm64 the operands go into
+X13, X14 and X15, and the code loops over blocks of 32 bytes in Q31 and
+Q30 (LDP and STP, the address moving past each block), then of 8 in X16,
+then bytes -- a copy to a higher address that overlaps its source from
+its end down, each block read before it is written; a fill DUPs its byte
+into Q31's. They make no exit and no poll: the count is bounded by the
+memory, as Go's copy of it in the engine is.
 
 ## Tier-up
 
@@ -422,8 +469,7 @@ A function is refused -- it keeps its baseline code -- when it has:
 | `memory` | an access of a memory other than 0, of an i64 memory or of a shared one |
 | `offset` | an access whose offset plus size is past 2^31-1 |
 | `frame` | more spill slots than its frame has below the call area |
-| `size` | code past `internal/jit.MaxCodeBytes` |
-| `arch` | any function on arm64 |
+| `size` | code past `internal/jit.MaxCodeBytes`, or, on arm64, past a branch's reach |
 | `internal` | a panic of the compiler's |
 
 `engine.ReadJITStats` counts what the tier compiled and refused, by
@@ -439,7 +485,7 @@ WASM_SPEC_DIR=/path/to/spec WASM_THREADS_DIR=/path/to/threads \
 WASM_SPEC_DIR=/path/to/spec go test ./wasm/internal/jit/opt -run TestBuildSpec -v
 go test ./internal/jit/lsra
 go test -tags quickjs_jit ./wasm/internal/engine -run 'TestOpt'
-(cd internal/jit/verify && go test -tags quickjs_jit -run TestAMD64WasmOpt .)
+(cd internal/jit/verify && go test -tags quickjs_jit -run 'TestAMD64WasmOpt|TestARM64WasmOpt' .)
 go run -tags quickjs_jit ./internal/cmd/wasmbench -engine jit-base,jit-tiered,jit-opt -suite micro,programs
 ```
 
@@ -559,6 +605,27 @@ calls), in 23 ms, 6 µs a function (43 to 63 ms before), where the
 baseline's 2,926 take 11 to 23 ms. The Go program's 3,011 functions
 compile in 0.16 ms each (0.40 before; the baseline's, 0.12 ms).
 
+On arm64 (GitHub's `ubuntu-24.04-arm` runner, Linux; the same runs as the
+first table, median of 3, the first run in parentheses, ms) the tier gains
+as on amd64; the micro-benchmarks are, baseline then tiered, fib 30.0 and
+18.5, loop 25.9 and 17.9, mandelbrot 38.3 and 20.2, nbody 19.9 and 10.8,
+bytes 31.1 and 17.4, bulk 263 and 24.7, indirect 1,889 and 55.1, brtable
+55.3 and 46.5, and i64, globals, gc and simd level:
+
+| program | jit-base | jit-tiered | jit-opt |
+|---|---:|---:|---:|
+| sha256 | 387 (408) | 108 (355) | 108 (268) |
+| sort | 416 (462) | 270 (498) | 268 (460) |
+| json | 114 (162) | 97.2 (184) | 51.5 (349) |
+| regexp | 161 (195) | 81.0 (130) | 75.7 (283) |
+| gzip | 138 (180) | 66.4 (140) | 56.6 (313) |
+| interp | 53.5 (79.6) | 50.5 (79.5) | 50.1 (204) |
+
+The 8,764 functions `TestOptCompileCorpus` compiles of the Go program and
+the spec scripts lower to 19.3 MB of arm64 code, where amd64's are 34.9
+MB: on arm64 a function's polls share one exit, which keeps only the
+registers the allocator gave out.
+
 ## Next
 
 - OSR into optimized code: a function called once whose loop runs long
@@ -577,4 +644,3 @@ compile in 0.16 ms each (0.40 before; the baseline's, 0.12 ms).
 - Bounds checks: hoisting a loop's checks of an induction variable, and a
   block's checks of one base at its widest where nothing between can be
   observed.
-- arm64's lowering.

@@ -27,7 +27,7 @@ func newEngine(name string) (worker.Engine, error) {
 		cfg = wasm.NewRuntimeConfigInterpreter()
 	case "jit", "jit-base", "jit-opt", "jit-tiered":
 		if !jitBuilt {
-			return nil, errors.New("this build has no JIT: build wasmbench with -tags quickjs_jit on amd64 Linux or Windows")
+			return nil, errors.New("this build has no JIT: build wasmbench with -tags quickjs_jit on amd64 Linux or Windows, or arm64 macOS or Linux")
 		}
 		cfg = wasm.NewRuntimeConfigCompiler()
 	default:

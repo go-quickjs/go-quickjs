@@ -18,10 +18,10 @@
 // engines take turns, sample by sample.
 //
 // The engines (-engine) are interp and jit (go-quickjs, jit needing
-// -tags quickjs_jit on amd64 Linux or Windows; jit-base is its baseline
-// tier alone, jit-tiered the baseline with hot functions recompiled by the
-// optimizing tier, jit-opt the optimizing tier for every function it
-// accepts at once), wazero-interp and
+// -tags quickjs_jit on amd64 Linux or Windows or arm64 macOS or Linux;
+// jit-base is its baseline tier alone, jit-tiered the baseline with hot
+// functions recompiled by the optimizing tier, jit-opt the optimizing tier
+// for every function it accepts at once), wazero-interp and
 // wazero-compiler, and node (its default tiering), node-liftoff (Liftoff
 // alone) and node-turbofan (TurboFan alone).
 package main
@@ -193,7 +193,7 @@ func selectEngines() ([]engine, error) {
 	}
 	for _, e := range es {
 		if strings.HasPrefix(e.name, "jit") && !jitBuilt {
-			return nil, errors.New("the jit engine needs a JIT build: go run -tags quickjs_jit ./internal/cmd/wasmbench (amd64 Linux or Windows)")
+			return nil, errors.New("the jit engine needs a JIT build: go run -tags quickjs_jit ./internal/cmd/wasmbench (amd64 Linux or Windows, arm64 macOS or Linux)")
 		}
 	}
 	return es, nil

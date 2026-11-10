@@ -23,9 +23,6 @@ func Compile(req *wjit.Request) (code *wjit.Code, err error) {
 			code, err = nil, &wjit.Refusal{Reason: "internal", Detail: fmt.Sprint(p)}
 		}
 	}()
-	if !Available {
-		refuse(RefuseArch, "no lowering for this architecture")
-	}
 	start()
 	ws := workspaces.Get().(*workspace)
 	defer workspaces.Put(ws)
