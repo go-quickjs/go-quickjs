@@ -13,6 +13,7 @@ import (
 	"time"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
+	"github.com/go-quickjs/go-quickjs/internal/hostaccess"
 	"github.com/go-quickjs/go-quickjs/internal/vm"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/engine"
 	"github.com/go-quickjs/go-quickjs/wasm/wasmjs"
@@ -262,5 +263,37 @@ func TestJITRuntimeCompilesWasm(t *testing.T) {
 	}
 	if engine.ReadJITStats().Compiled == before {
 		t.Fatal("no function was compiled to native code")
+	}
+}
+
+// TestJITRuntimeBoundsWasmCode checks that a runtime made WithJIT bounds
+// its WebAssembly's native code by its JIT memory limit: under a limit too
+// small for any, each compile is refused for the budget, and the interpreter
+// computes the same.
+func TestJITRuntimeBoundsWasmCode(t *testing.T) {
+	if !engine.JITAvailable() || vm.HostJITEnabled == nil {
+		t.Skip("no JavaScript and WebAssembly JIT in this build")
+	}
+	for _, limit := range []int64{1, 1 << 20} {
+		rt := newRuntime(t, quickjs.WithJIT(), quickjs.WithJITMemoryLimit(limit))
+		if got := vm.HostJITMemoryLimit(hostaccess.VM(rt)); got != limit {
+			t.Fatalf("HostJITMemoryLimit = %d, want %d", got, limit)
+		}
+		st := engine.ReadJITStats()
+		_, err := rt.Eval(`
+			const bytes = new Uint8Array([0,97,115,109,1,0,0,0,1,6,1,96,1,127,1,127,3,2,1,0,7,7,1,3,105,110,99,0,0,10,9,1,7,0,32,0,65,1,106,11]);
+			const inc = new WebAssembly.Instance(new WebAssembly.Module(bytes)).exports.inc;
+			let n = 0;
+			for (let i = 0; i < 100; i++) n = inc(n);
+			if (n !== 100) throw new Error("inc gave " + n);
+		`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		after := engine.ReadJITStats()
+		refused, compiled := after.Refused[engine.RefuseBudget]-st.Refused[engine.RefuseBudget], after.Compiled+after.Optimized-st.Compiled-st.Optimized
+		if limit == 1 && (refused == 0 || compiled != 0) || limit != 1 && compiled == 0 {
+			t.Fatalf("limit %d: %d compiled, %d refused for the budget", limit, compiled, refused)
+		}
 	}
 }

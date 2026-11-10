@@ -26,6 +26,29 @@ func (m jsMeter) TryReserve(n int64) bool { return vm.HostReserveMemory(m.r, n) 
 func (m jsMeter) Charge(n int64) error    { return vm.HostChargeMemory(m.r, n) }
 func (m jsMeter) Exceeded() error         { return vm.HostMemoryExceeded(m.r) }
 
+// The JIT's memory.
+//
+// A runtime made WithJIT compiles its modules' functions to native code as
+// it does its JavaScript, and bounds what that holds by its JIT memory
+// limit (WithJITMemoryLimit, or its default) as it bounds its JavaScript's
+// code: a budget of that limit, which every module of the runtime's code
+// is charged to, past which the engine drops old code and then refuses
+// compiles (engine.JITBudget). It is a budget of its own, not the
+// JavaScript JIT's: that one's accounting and the code it drops live on the
+// runtime's goroutine, while wasm's code is compiled, placed and dropped
+// under locks of its own, from any goroutine a call or a compile runs on;
+// and each budget makes room by dropping its own JIT's code. The runtime's
+// two JITs together hold at most twice its limit.
+
+// wasmJITBudget returns the budget of the runtime's modules' native code,
+// making it the first time.
+func (a *api) wasmJITBudget() *engine.JITBudget {
+	if a.jitBudget == nil {
+		a.jitBudget = engine.NewJITBudget(vm.HostJITMemoryLimit(a.rt))
+	}
+	return a.jitBudget
+}
+
 // What the objects standing for wasm's hold.
 
 func (s *funcSlot) MemoryFootprint(has func(unsafe.Pointer) bool) int64 {

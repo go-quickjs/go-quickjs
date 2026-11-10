@@ -4,4 +4,5 @@ package vm
 
 func init() {
 	HostJITEnabled = func(r *Runtime) bool { return r.jitEnabled }
+	HostJITMemoryLimit = func(r *Runtime) int64 { return int64(r.jitBudget()) }
 }

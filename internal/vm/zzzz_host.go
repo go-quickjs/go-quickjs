@@ -65,6 +65,10 @@ var (
 	// compiles (WithJIT), or is nil in a build without a JIT, which never
 	// does.
 	HostJITEnabled func(r *Runtime) bool
+	// HostJITMemoryLimit returns the bytes the runtime's JIT may hold
+	// (Config.JITMemoryLimit, or its default), which a host's own JIT
+	// holds as much as for the runtime; it is nil in a build without a JIT.
+	HostJITMemoryLimit func(r *Runtime) int64
 	// HostDefineLazyGlobal defines the global name, made by build the first
 	// time it is read.
 	HostDefineLazyGlobal func(r *Runtime, name string, build func(*Runtime) *Object)

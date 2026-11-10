@@ -95,6 +95,9 @@ type api struct {
 	// budget charges what wasm holds to the runtime's memory limit, nil for
 	// a runtime without one (see memlimit.go).
 	budget *engine.Budget
+	// jitBudget bounds the native code of the runtime's modules, made at
+	// the first compile that has any (see memlimit.go).
+	jitBudget *engine.JITBudget
 }
 
 // newAPI builds the WebAssembly namespace of r.
