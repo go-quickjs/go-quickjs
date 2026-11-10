@@ -286,6 +286,14 @@ const (
 	// empty pool exits for the engine to fill it (ExitAlloc), every
 	// register kept.
 	refStructNew
+	// refArrayNew makes dst a new array of type idx's low word and length
+	// idx>>32&0xffff, taken from the level's pool of the arrays of the
+	// class of its block (Ctx.Pools), its elements, by idx>>48: zero
+	// (arrayDefault); its operands (arrayFixed), the numbers Args in
+	// order, a reference the slot of its position, one for each element
+	// from dst on; or its operand, Args[0] or dst's reference, in each
+	// (arrayFill). An empty pool exits as refStructNew's does.
+	refArrayNew
 )
 
 // opFlags says what an operation does besides compute its value.

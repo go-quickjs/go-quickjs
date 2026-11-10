@@ -220,6 +220,8 @@ var jitLayout = &wjit.Layout{
 	FuncIndex:  int32(unsafe.Offsetof(Function{}.Index)),
 	PoolCount:  int32(unsafe.Offsetof(gcPool{}.n)),
 	PoolObjs:   int32(unsafe.Offsetof(gcPool{}.objs)),
+	ArrayBlock: int32(arrayHeader),
+	ArrayClass: arrayClassOf[:],
 }
 
 // A type's supertypes are 4 bytes each, as native code reads them.
@@ -1274,7 +1276,7 @@ func (x *exec) jitExit(lv *jitLevel) (next *nativeFn, off int, tail bool) {
 		f := x.exitFrame(lv)
 		x.jitSync(lv, uint32(ctx.Arg1))
 		x.takeFrom(lv, &f)
-		x.jitAlloc(lv, uint32(ctx.Arg0))
+		x.jitAlloc(lv, ctx.Arg0)
 		x.jitUnsync(lv)
 	case wjit.ExitSIMD:
 		f := x.exitFrame(lv)

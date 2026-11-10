@@ -68,9 +68,25 @@ func (c *compiler) gcOp(op opcode.Opcode, at uint32) bool {
 			break
 		}
 		c.structNew(ti, op == opcode.StructNew, at)
-	case opcode.ArrayNew, opcode.ArrayNewDefault, opcode.ArrayFill:
+	case opcode.ArrayNew, opcode.ArrayNewDefault:
+		ti := c.r.u32()
+		if n := c.stack[len(c.stack)-1]; n.k == kConst {
+			if class, ok := arrayPooled(m, l, ti, uint32(n.c), op == opcode.ArrayNew); ok {
+				c.arrayNew(op, ti, uint32(n.c), class, at)
+				break
+			}
+		}
+		c.goOp(op, at, uint64(ti), 0)
+	case opcode.ArrayNewFixed:
+		ti, n := c.r.u32(), c.r.u32()
+		if class, ok := arrayPooled(m, l, ti, n, false); ok {
+			c.arrayNew(op, ti, n, class, at)
+			break
+		}
+		c.goOp(op, at, uint64(ti), uint64(n))
+	case opcode.ArrayFill:
 		c.goOp(op, at, uint64(c.r.u32()), 0)
-	case opcode.ArrayNewFixed, opcode.ArrayNewData, opcode.ArrayNewElem, opcode.ArrayCopy,
+	case opcode.ArrayNewData, opcode.ArrayNewElem, opcode.ArrayCopy,
 		opcode.ArrayInitData, opcode.ArrayInitElem:
 		x := uint64(c.r.u32())
 		c.goOp(op, at, x, uint64(c.r.u32()))
@@ -224,7 +240,7 @@ func (c *compiler) structNew(ti uint32, fields bool, at uint32) {
 	q := c.allocG(1 << p)
 	retry, slow := c.a.NewLabel(), c.a.NewLabel()
 	c.a.Bind(retry)
-	c.poolTake(p, q, ti, slow)
+	c.poolTake(p, q, ti, -1, slow)
 	off := int32(16)
 	for i, f := range fs {
 		if f.Type.IsRef() {
@@ -244,6 +260,98 @@ func (c *compiler) structNew(ti uint32, fields bool, at uint32) {
 		c.a.Bind(slow)
 		resume := c.a.NewLabel()
 		c.exit(ExitAlloc, resume, uint64(ti), uint64(at))
+		c.resumeAt(resume)
+		c.jmp(retry)
+	})
+	c.pushRef()
+}
+
+// arrayNewMost is the most elements array.new stores natively, its value
+// stored into each in turn.
+const arrayNewMost = 16
+
+// arrayPooled reports whether native code makes the arrays of type ti and
+// length n from the engine's pools (Layout.ArrayClass) -- arrays of numbers
+// or references, not v128s, whose elements take at most what the pools'
+// largest blocks have room for, and for array.new (fill) no more than
+// arrayNewMost of them -- and the class of their blocks.
+func arrayPooled(m *module.Module, l *Layout, ti, n uint32, fill bool) (int, bool) {
+	et := m.Types[ti].Array.Elem.Type
+	if et.Kind == module.KindV128 || fill && n > arrayNewMost {
+		return 0, false
+	}
+	u := (uint64(n)*uint64(elemSize(et.Kind)) + 15) / 16
+	if u >= uint64(len(l.ArrayClass)) {
+		return 0, false
+	}
+	return int(l.ArrayClass[u]), true
+}
+
+// elemSize returns the bytes an array element of storage type t takes: a
+// reference's two words, or its number's.
+func elemSize(t module.Kind) int {
+	if t == module.KindRef {
+		return 16
+	}
+	return storageSize(t)
+}
+
+// arrayNew compiles array.new_fixed of n elements, or array.new or
+// array.new_default of length n, a constant, of type ti, from the level's
+// pool of the arrays of class (Ctx.Pools, poolTake), as structNew does a
+// struct: the array taken, its length stored and its elements -- the
+// operands of array.new_fixed in order, n times array.new's value, nothing
+// for array.new_default, whose elements the pool's arrays have zero -- a
+// reference plainly, as a new struct's field is; the array's reference
+// stored into the first operand's position's slot through the barrier, and
+// the pool's word of it cleared through the barrier.
+func (c *compiler) arrayNew(op opcode.Opcode, ti, n uint32, class int, at uint32) {
+	l := c.req.Layout
+	et := c.m.Types[ti].Array.Elem.Type
+	nops := 1
+	switch op {
+	case opcode.ArrayNewFixed:
+		nops = int(n)
+	case opcode.ArrayNew:
+		nops = 2
+	}
+	base := len(c.stack) - nops
+	for h := range c.stack {
+		if h < base || c.stack[h].k != kConst {
+			c.spill(h)
+		}
+	}
+	vals := append([]value(nil), c.stack[base:]...)
+	c.stack = c.stack[:base]
+	p := c.allocG(0)
+	q := c.allocG(1 << p)
+	retry, slow := c.a.NewLabel(), c.a.NewLabel()
+	c.a.Bind(retry)
+	c.poolTake(p, q, ti, class, slow)
+	c.storeWord(p, l.ArrayLen, uint64(n))
+	size := int32(elemSize(et.Kind))
+	for i := int32(0); i < int32(n) && op != opcode.ArrayNewDefault; i++ {
+		v := vals[0]
+		if op == opcode.ArrayNewFixed {
+			v = vals[i]
+		}
+		off := l.ArrayBlock + i*size
+		if et.IsRef() {
+			src := c.refOf(v)
+			c.copyWord(mem{p, off}, src)
+			c.copyWord(mem{p, off + 8}, mem{src.base, src.off + 8})
+		} else {
+			c.storeField(et.Kind, v, p, off, false)
+		}
+	}
+	c.refPut(c.refPos(base), regWord(p), immWord(0))
+	c.ptrPut(mem{q, 0}, immWord(0))
+	c.freeG(p)
+	c.freeG(q)
+	c.later(func() {
+		c.a.Bind(slow)
+		resume := c.a.NewLabel()
+		c.exit(ExitAlloc, resume, uint64(ti)|uint64(class+1)<<32, uint64(at))
 		c.resumeAt(resume)
 		c.jmp(retry)
 	})

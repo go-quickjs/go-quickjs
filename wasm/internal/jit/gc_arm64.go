@@ -11,16 +11,21 @@ func (c *compiler) loadWord(r arm64.Reg, m mem) { c.a.Load(r, m.base, m.off) }
 // jumpZero goes to l if r is zero.
 func (c *compiler) jumpZero(r arm64.Reg, l arm64.Label) { c.a.Cbz(r, l, true) }
 
-// poolTake takes a struct of type ti from the level's pool of the type's
-// into p, leaving in q the address of the pool's word of it, or goes to
-// slow where there is none.
-func (c *compiler) poolTake(p, q arm64.Reg, ti uint32, slow arm64.Label) {
+// poolTake takes an object of type ti -- a struct, or for class 0 or
+// more an array whose block is of the class -- from the level's pool of
+// them into p, leaving in q the address of the pool's word of it, or goes
+// to slow where there is none.
+func (c *compiler) poolTake(p, q arm64.Reg, ti uint32, class int, slow arm64.Label) {
 	a := c.a
 	l := c.req.Layout
 	a.Load(p, rCtx, offPools)
 	a.Cbz(p, slow, true)
 	a.Load(p, p, int32(8*ti))
 	a.Cbz(p, slow, true)
+	if class >= 0 {
+		a.Load(p, p, int32(8*class))
+		a.Cbz(p, slow, true)
+	}
 	a.Load(q, p, l.PoolCount)
 	a.Cbz(q, slow, true)
 	a.AddImm(q, q, -1, true)
@@ -28,6 +33,12 @@ func (c *compiler) poolTake(p, q arm64.Reg, ti uint32, slow arm64.Label) {
 	a.AddLsl(q, p, q, 3)
 	a.AddImm(q, q, int64(l.PoolObjs), true)
 	a.Load(p, q, 0)
+}
+
+// storeWord stores word v at [base + off].
+func (c *compiler) storeWord(base arm64.Reg, off int32, v uint64) {
+	c.a.MovImm(rTmp, v)
+	c.a.Store(base, off, rTmp)
 }
 
 // andImm is r &= imm, 32 bits.

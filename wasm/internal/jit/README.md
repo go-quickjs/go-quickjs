@@ -761,19 +761,35 @@ known when the code is compiled.
 struct.new and struct.new_default of a type without v128 fields take a
 struct from a pool the engine fills ahead (`engine/jit_gc.go`), as the
 JavaScript JIT takes its objects: the level's table of pools
-(`Ctx.Pools`), one pool for each of the module's struct types, each a
-count and the pointers to that many structs, their headers written and
-their fields zero (`Layout.PoolCount`, `Layout.PoolObjs`). The code takes
-the last -- the count decremented -- stores the fields from their
-operands, the struct's reference into the first operand's position's
-slot, and clears the pool's word of it; the struct stays in the pool, where
-the collector sees it, until it is in its slot. A table belongs to one
+(`Ctx.Pools`), by the module's type index, a struct type's entry its pool,
+each a count and the pointers to that many objects, their headers written
+and their fields or elements zero (`Layout.PoolCount`, `Layout.PoolObjs`).
+The code takes the last -- the count decremented -- stores the fields from
+their operands, the struct's reference into the first operand's
+position's slot, and clears the pool's word of it; the struct stays in the
+pool, where the collector sees it, until it is in its slot.
+
+An array is taken so too: array.new_fixed, and array.new and
+array.new_default of a constant length, of an array type without v128
+elements, whose elements take at most 480 bytes, and for array.new are at
+most 16. An array type's entry of the table is a table of pools by the
+class of the block the array is made in -- the allocator's size classes,
+from the header's 32 bytes to 512 (`Layout.ArrayClass`, the class of
+elements of up to 16*u bytes at u) -- so that a pool's arrays have room
+for any length of their class, and an array is no larger than the
+interpreter makes it. The code takes one as a struct, through its type's
+entry and its class's word, stores its length and its elements -- the
+operands of array.new_fixed in order, array.new's value in each,
+nothing for array.new_default -- from `Layout.ArrayBlock` on, a reference
+plainly, as a new struct's field (References and the collector), and
+stores and clears as for a struct. A table belongs to one
 level at a time, so the take is plain loads and stores: the level's first
 `ExitAlloc` takes one of the instance's (or shares the table of a level
 below of the same instance), and the level gives it back when it ends. An
-empty pool, or no table, exits (`ExitAlloc`): the engine makes the pool's
-next fill -- 8 structs at first, twice the last after, up to 128 and 16
-KiB, and at most 256 KiB in a table's pools' last fills together --
+empty pool, or no table, exits (`ExitAlloc`, the type and for an array its
+class): the engine makes the pool's next fill -- 8 objects at first, twice
+the last after, up to 128 and 16 KiB, and at most 256 KiB in a table's
+pools' last fills together --
 charging the instance's budget for all of them at once, and the code takes
 again. What a table holds when it is collected is given back to the
 budget, unless the budget counted what is reachable since the fill
@@ -782,7 +798,9 @@ a constant across the exit; the optimizing tier keeps every register
 across it, as a poll's exit does.
 
 What else allocates -- struct.new of a type with v128 fields, array.new,
-array.new_default, array.new_fixed, array.new_data, array.new_elem -- and
+array.new_default and array.new_fixed of v128s, of a length not constant
+or of elements past 480 bytes, array.new of more than 16, array.new_data,
+array.new_elem -- and
 array.fill, array.copy, array.init_data and array.init_elem run in Go
 (`ExitOp`): the engine's routines make the objects, charging the
 instance's budget as the interpreter's do, with the native frames'
@@ -979,12 +997,13 @@ safe point, does not let happen. No reference is in a register across an
 exit, a poll or a call; a pointer is in one only between its load from Go
 memory and its store into Go memory, within one instruction's code.
 
-A new struct is the exception: its fields are stored plainly while the
-collector marks too. The barrier's deletion part has nothing to shade
-there, the fields being zero, and its insertion part is for a pointer only
+A new struct is the exception, and a new array: its fields or elements
+are stored plainly while the collector marks too. The barrier's deletion
+part has nothing to shade there, the fields being zero, and its insertion
+part is for a pointer only
 a goroutine's stack holds, where every pointer native code stores is in
 Go memory -- the operand's slot -- which keeps it for the collector until
-a store through the barrier overwrites it. The struct's own pointer goes
+a store through the barrier overwrites it. The object's own pointer goes
 into its slot through the barrier, and its pool's word of it is cleared
 through the barrier, which shades it.
 

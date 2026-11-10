@@ -127,10 +127,14 @@ an effect. struct.new and struct.new_default of a type without v128 fields
 are `ref` values too (`refStructNew`): the numeric fields their
 arguments, the reference fields in their positions' slots, the struct
 taken from the level's pool of its type's (the baseline README's GC
-objects) and left in the first operand's position's slot. What else
-allocates -- array.new, array.new_default, array.new_fixed,
-array.new_data, array.new_elem, struct.new_default of a type with v128
-fields -- and
+objects) and left in the first operand's position's slot; so are
+array.new_fixed, and array.new and array.new_default of a constant length,
+of the arrays the baseline takes from pools (`refArrayNew`): the type,
+the length and what the elements are -- the operands, the operand in
+each, or zero -- in the immediate, the numbers their arguments, the
+references in their positions' slots. What else allocates -- array.new,
+array.new_default and array.new_fixed of other arrays, array.new_data,
+array.new_elem, struct.new_default of a type with v128 fields -- and
 array.fill, array.copy, array.init_data and array.init_elem are `goop`s,
 their references in their positions' slots from `Pos` and the object made
 left in the first's; Go makes the objects and charges the instance's
@@ -400,11 +404,13 @@ from their positions' slots (the baseline README's References and the
 collector), its pointer stored into the first operand's position's slot
 and the pool's word of it cleared, both through the barrier; on arm64,
 whose barrier routine keeps no scratch register, the pool's word is found
-again from the context. An empty pool goes out of line to the function's
+again from the context. A new array is taken so through its type's entry
+and its class's word, its length stored and its elements from their
+locations or slots. An empty pool goes out of line to the function's
 exit for it, which keeps every register the allocator has in the
 context's save area, as a poll's, exits with `ExitAlloc` and goes back to
-take again (a site leaves its type and offset in the exit's arguments and
-where to go back in s0). On arm64 an index not in a register
+take again (a site leaves its type, an array's class, and its offset in
+the exit's arguments and where to go back in s0). On arm64 an index not in a register
 of its own is compared with the length while the array's address waits in
 D31. An instruction Go runs for objects stages its numeric operands in the
 call area, each at its place among the operands, and sets `RArgs` to its

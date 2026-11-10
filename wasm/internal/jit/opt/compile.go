@@ -40,6 +40,10 @@ func compile(req *wjit.Request, forward bool) (code *wjit.Code, forwarded bool, 
 	start()
 	ws := workspaces.Get().(*workspace)
 	defer workspaces.Put(ws)
+	ws.arrayClass = nil
+	if req.Layout != nil {
+		ws.arrayClass = req.Layout.ArrayClass
+	}
 	f := build(ws, req.Module, req.Func)
 	f.noForward = !forward
 	defer func() { forwarded = f.forwarded }()

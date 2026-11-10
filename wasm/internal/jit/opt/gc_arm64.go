@@ -196,6 +196,8 @@ func (g *gen) gcRef(v *Value) bool {
 		g.testRef(v, src)
 	case refStructNew:
 		g.structNew(v, dst)
+	case refArrayNew:
+		g.arrayNew(v, dst)
 	default:
 		return false
 	}
@@ -253,18 +255,88 @@ func (g *gen) structNew(v *Value, dst int32) {
 	a.Load(s0, rCtx, offR)
 	a.Store(s0, dst+8, arm64.ZR)
 	g.barrierStore(s0, dst, s1)
-	g.taken(ti)
+	g.taken(ti, -1)
+	a.FMovToF(x0, arm64.ZR)
+	g.barrierStore(s1, 0, s0)
+}
+
+// arrayNew lowers refArrayNew v, its array's reference into the slot at
+// dst from R, as structNew does a struct: the array taken from the level's
+// pool of the arrays of its type and class, its length and its elements
+// stored -- a reference plainly -- the array into dst, and last the pool's
+// word of it cleared, both through the barrier.
+func (g *gen) arrayNew(v *Value, dst int32) {
+	a := g.a
+	lay := g.req.Layout
+	m := g.req.Module
+	idx := v.Aux >> 8
+	ti, n, mode := uint32(idx), uint32(idx>>32&0xffff), idx>>48
+	et := m.Types[ti].Array.Elem.Type
+	class, _ := arrayPooled(m, lay.ArrayClass, ti, n, false)
+	retry, slow := a.NewLabel(), a.NewLabel()
+	g.ool = append(g.ool, stub{kind: stubAlloc, l: slow, to: retry, code: uint64(ti) | uint64(class+1)<<32, at: v.At})
+	a.Bind(retry)
+	g.mark("array.new %d %d", ti, n)
+	a.Load(s1, rCtx, offPools)
+	a.Cbz(s1, slow, true)
+	a.Load(s1, s1, int32(8*ti))
+	a.Cbz(s1, slow, true)
+	a.Load(s1, s1, int32(8*class))
+	a.Cbz(s1, slow, true)
+	a.Load(s0, s1, lay.PoolCount)
+	a.Cbz(s0, slow, true)
+	a.AddImm(s0, s0, -1, true)
+	a.Store(s1, lay.PoolCount, s0)
+	a.AddLsl(s1, s1, s0, 3)
+	a.Load(s1, s1, lay.PoolObjs)
+	a.MovImm(s0, uint64(n))
+	a.Store(s1, lay.ArrayLen, s0)
+	size := int32(elemSize(et.Kind))
+	switch {
+	case mode == arrayDefault:
+	case et.IsRef():
+		a.Load(s0, rCtx, offR)
+		for w := int32(0); w < 16; w += 8 {
+			for i := int32(0); i < int32(n); i++ {
+				src := dst + w
+				if mode == arrayFixed {
+					src += 16 * i
+				}
+				if i == 0 || mode == arrayFixed {
+					a.LoadF(x0, s0, src)
+				}
+				a.StoreF(s1, lay.ArrayBlock+16*i+w, x0)
+			}
+		}
+	default:
+		for i := int32(0); i < int32(n); i++ {
+			x := v.Args[0]
+			if mode == arrayFixed {
+				x = v.Args[i]
+			}
+			g.storeNum(x, s1, lay.ArrayBlock+i*size, et.Kind, false)
+		}
+	}
+	a.FMovToF(x0, s1)
+	a.Load(s0, rCtx, offR)
+	a.Store(s0, dst+8, arm64.ZR)
+	g.barrierStore(s0, dst, s1)
+	g.taken(ti, class)
 	a.FMovToF(x0, arm64.ZR)
 	g.barrierStore(s1, 0, s0)
 }
 
 // taken loads into s1 the address of the word of the level's pool of
-// structs of type ti that holds the one last taken; s0 is lost.
-func (g *gen) taken(ti uint32) {
+// objects of type ti -- structs, or for class 0 or more arrays of that
+// class -- that holds the one last taken; s0 is lost.
+func (g *gen) taken(ti uint32, class int) {
 	a := g.a
 	lay := g.req.Layout
 	a.Load(s1, rCtx, offPools)
 	a.Load(s1, s1, int32(8*ti))
+	if class >= 0 {
+		a.Load(s1, s1, int32(8*class))
+	}
 	a.Load(s0, s1, lay.PoolCount)
 	a.AddLsl(s1, s1, s0, 3)
 	a.AddImm(s1, s1, int64(lay.PoolObjs), true)

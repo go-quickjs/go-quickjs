@@ -246,9 +246,25 @@ func (bd *builder) gcInstr(op opcode.Opcode, at uint32) bool {
 		bd.refOp(bd.b, refStructNew, bd.rpos(pos), bd.rpos(pos), aux, TNone, at, args...)
 		bd.stack = bd.stack[:pos]
 		bd.pushRef()
-	case opcode.ArrayNew, opcode.ArrayNewDefault, opcode.ArrayFill:
+	case opcode.ArrayNew, opcode.ArrayNewDefault:
+		ti := r.u32()
+		if n := bd.stack[h-1]; n.Op == OpConst {
+			if _, ok := arrayPooled(m, bd.ws.arrayClass, ti, uint32(n.Aux), op == opcode.ArrayNew); ok {
+				bd.arrayNew(op, ti, uint32(n.Aux), at)
+				break
+			}
+		}
+		bd.gcGo(op, ti, 0, at)
+	case opcode.ArrayNewFixed:
+		ti, n := r.u32(), r.u32()
+		if _, ok := arrayPooled(m, bd.ws.arrayClass, ti, n, false); ok {
+			bd.arrayNew(op, ti, n, at)
+			break
+		}
+		bd.gcGo(op, ti, n, at)
+	case opcode.ArrayFill:
 		bd.gcGo(op, r.u32(), 0, at)
-	case opcode.ArrayNewFixed, opcode.ArrayNewData, opcode.ArrayNewElem, opcode.ArrayCopy,
+	case opcode.ArrayNewData, opcode.ArrayNewElem, opcode.ArrayCopy,
 		opcode.ArrayInitData, opcode.ArrayInitElem:
 		x := r.u32()
 		bd.gcGo(op, x, r.u32(), at)
@@ -334,6 +350,71 @@ func (bd *builder) gcInstr(op opcode.Opcode, at uint32) bool {
 		return false
 	}
 	return true
+}
+
+// arrayNew builds array.new_fixed of n elements, or array.new or
+// array.new_default of length n, a constant, of type ti, as refArrayNew:
+// its numeric operands its Args, the array into the first operand's
+// position's slot.
+func (bd *builder) arrayNew(op opcode.Opcode, ti, n uint32, at uint32) {
+	nops, vals, mode := 1, 0, uint64(arrayDefault)
+	switch op {
+	case opcode.ArrayNewFixed:
+		nops, vals, mode = int(n), int(n), arrayFixed
+	case opcode.ArrayNew:
+		nops, vals, mode = 2, 1, arrayFill
+	}
+	pos := len(bd.stack) - nops
+	args := bd.args[:0]
+	for _, a := range bd.stack[pos : pos+vals] {
+		if !bd.isRef(a) {
+			args = append(args, a)
+		}
+	}
+	bd.args = args
+	aux := uint64(ti) | uint64(n)<<32 | mode<<48
+	bd.refOp(bd.b, refArrayNew, bd.rpos(pos), bd.rpos(pos), aux, TNone, at, args...)
+	bd.stack = bd.stack[:pos]
+	bd.pushRef()
+}
+
+// The elements refArrayNew stores (its index's bits from 48): none, its
+// operands, or its operand in each.
+const (
+	arrayDefault = iota
+	arrayFixed
+	arrayFill
+)
+
+// arrayNewMost is the most elements array.new stores natively, its value
+// stored into each in turn.
+const arrayNewMost = 16
+
+// arrayPooled reports whether the code makes the arrays of type ti and
+// length n from the engine's pools, whose arrays' classes by the 16 bytes
+// of their elements are classes (Layout.ArrayClass) -- arrays of numbers
+// or references, not v128s, whose elements take at most what the pools'
+// largest blocks have room for, and for array.new (fill) no more than
+// arrayNewMost of them -- and the class of their blocks.
+func arrayPooled(m *module.Module, classes []uint8, ti, n uint32, fill bool) (int, bool) {
+	et := m.Types[ti].Array.Elem.Type
+	if et.Kind == module.KindV128 || fill && n > arrayNewMost {
+		return 0, false
+	}
+	u := (uint64(n)*uint64(elemSize(et.Kind)) + 15) / 16
+	if u >= uint64(len(classes)) {
+		return 0, false
+	}
+	return int(classes[u]), true
+}
+
+// elemSize is the bytes an array element of storage type t takes: a
+// reference's two words, or its number's.
+func elemSize(t module.Kind) int {
+	if t == module.KindRef {
+		return 16
+	}
+	return storageSize(t)
 }
 
 // gcGo builds GC instruction op with immediates x and y, which Go runs:

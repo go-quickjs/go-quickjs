@@ -10,6 +10,10 @@ import "sync"
 type workspace struct {
 	f  Func
 	bd builder
+	// arrayClass is the classes of the pools' arrays of the compile's
+	// request (Layout.ArrayClass), nil where arrays are not made from
+	// pools.
+	arrayClass []uint8
 
 	values chunks[Value]
 	blocks chunks[Block]

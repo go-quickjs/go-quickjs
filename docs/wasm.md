@@ -340,10 +340,12 @@ heap with what its WebAssembly holds in it.
   modules' globals, tables and segments and the running call's frames -- and
   a program that still does not fit stops with `ErrMemoryLimit`, which no
   wasm handler or JavaScript `try` catches. A program that lets go of what it
-  allocates runs on. Native code makes structs from pools the engine fills
-  ahead, up to 128 structs and 16 KiB at a time: a fill is counted whole as
-  it is made, and what a pool still holds when Go collects it is given back
-  unless what is reachable was counted again since.
+  allocates runs on. Native code makes structs, and arrays of up to 480
+  bytes of elements, from pools the engine fills ahead, up to 128 objects
+  and 16 KiB at a time: a fill is counted whole as it is made, and what a
+  pool still holds when Go collects it is given back unless what is
+  reachable was counted again since. An array is counted as its 32-byte
+  header and its elements.
 - What a closed module held is given back once Go collects it.
 - Under `quickjs.WithMemoryLimit`, the runtime's measurement of its heap asks
   each WebAssembly object it reaches what it holds, and a memory's buffer is
@@ -930,9 +932,6 @@ WASI:
   `Memory`, between workers.
 - Native code for the v128 fields and elements of GC objects, which the
   JIT refuses.
-- Arrays made natively: array.new, array.new_default and array.new_fixed
-  still exit to Go (about 68 to 79 ns an array of a few elements, against
-  14 ns a struct from a pool). An array is two Go objects, its header and
-  its elements, so a pool would hold arrays by type and length -- of a
-  length up to some bound, a pool for each -- so as not to give a short
-  array a long one's storage.
+- Arrays of a length known only as the code runs: array.new and
+  array.new_default of a length not constant still exit to Go (about 45
+  ns an array of a few elements, against 16 ns one from a pool).

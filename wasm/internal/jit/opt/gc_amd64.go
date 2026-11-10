@@ -199,6 +199,8 @@ func (g *gen) gcRef(v *Value) bool {
 		g.testRef(v, src)
 	case refStructNew:
 		g.structNew(v, dst)
+	case refArrayNew:
+		g.arrayNew(v, dst)
 	default:
 		return false
 	}
@@ -256,6 +258,74 @@ func (g *gen) structNew(v *Value, dst int32) {
 	g.barrierStore(s0, dst, s1)
 	a.Load(s1, rCtx, offPools)
 	a.Load(s1, s1, int32(8*ti))
+	a.Load(s0, s1, lay.PoolCount)
+	a.LeaIdx(s1, s1, s0, 8, lay.PoolObjs)
+	a.SSEOp(amd64.XorPD, x0, x0)
+	g.barrierStore(s1, 0, s0)
+}
+
+// arrayNew lowers refArrayNew v, its array's reference into the slot at
+// dst from R, as structNew does a struct: the array taken from the level's
+// pool of the arrays of its type and class, its length and its elements
+// stored -- a reference plainly -- the array into dst, and last the pool's
+// word of it cleared, both through the barrier.
+func (g *gen) arrayNew(v *Value, dst int32) {
+	a := g.a
+	lay := g.req.Layout
+	m := g.req.Module
+	idx := v.Aux >> 8
+	ti, n, mode := uint32(idx), uint32(idx>>32&0xffff), idx>>48
+	et := m.Types[ti].Array.Elem.Type
+	class, _ := arrayPooled(m, lay.ArrayClass, ti, n, false)
+	retry, slow := a.NewLabel(), a.NewLabel()
+	g.ool = append(g.ool, stub{kind: stubAlloc, l: slow, to: retry, code: uint64(ti) | uint64(class+1)<<32, at: v.At})
+	a.Bind(retry)
+	g.mark("array.new %d %d", ti, n)
+	g.poolOf(ti)
+	a.Jcc(amd64.CondE, slow)
+	a.Load(s1, s1, int32(8*class))
+	a.Op(amd64.Test, s1, s1, true)
+	a.Jcc(amd64.CondE, slow)
+	a.Load(s0, s1, lay.PoolCount)
+	a.Op(amd64.Test, s0, s0, true)
+	a.Jcc(amd64.CondE, slow)
+	a.OpImm(amd64.Sub, s0, 1, true)
+	a.Store(s1, lay.PoolCount, s0)
+	a.LoadIdxScaled(s1, s1, s0, 3, lay.PoolObjs)
+	a.StoreImm(s1, lay.ArrayLen, int32(n))
+	size := int32(elemSize(et.Kind))
+	switch {
+	case mode == arrayDefault:
+	case et.IsRef():
+		a.Load(s0, rCtx, offR)
+		for w := int32(0); w < 16; w += 8 {
+			for i := int32(0); i < int32(n); i++ {
+				src := dst + w
+				if mode == arrayFixed {
+					src += 16 * i
+				}
+				if i == 0 || mode == arrayFixed {
+					a.LoadSD(x0, s0, src)
+				}
+				a.StoreSD(s1, lay.ArrayBlock+16*i+w, x0)
+			}
+		}
+	default:
+		for i := int32(0); i < int32(n); i++ {
+			x := v.Args[0]
+			if mode == arrayFixed {
+				x = v.Args[i]
+			}
+			g.storeNum(x, s1, lay.ArrayBlock+i*size, et.Kind, false)
+		}
+	}
+	a.MovQToX(x0, s1)
+	a.Load(s0, rCtx, offR)
+	a.StoreImm(s0, dst+8, 0)
+	g.barrierStore(s0, dst, s1)
+	a.Load(s1, rCtx, offPools)
+	a.Load(s1, s1, int32(8*ti))
+	a.Load(s1, s1, int32(8*class))
 	a.Load(s0, s1, lay.PoolCount)
 	a.LeaIdx(s1, s1, s0, 8, lay.PoolObjs)
 	a.SSEOp(amd64.XorPD, x0, x0)

@@ -97,10 +97,18 @@ type Layout struct {
 	// the address of the instance that defined it, a word, 0 for a host
 	// function's; FuncIndex its index in that instance, 4 bytes.
 	FuncType, FuncInst, FuncIndex int32
-	// A pool of new structs (Ctx.Pools) holds PoolCount objects, a word,
+	// A pool of new objects (Ctx.Pools) holds PoolCount objects, a word,
 	// the pointers to them the words from PoolObjs: native code takes the
-	// last, its header written and its fields zero, and clears its word.
+	// last, its header written and its fields or elements zero, and clears
+	// its word.
 	PoolCount, PoolObjs int32
+	// An array of a pool is a block of a class, its elements ArrayBlock
+	// bytes from its start. ArrayClass is, at index u, the class of the
+	// block of elements of 16*u bytes or fewer, up to the most a pool's
+	// array takes. An array type's entry of a table of pools is a table of
+	// a pool for each class, a word each.
+	ArrayBlock int32
+	ArrayClass []uint8
 }
 
 // Code is a function's native code. Its offsets are from its start.

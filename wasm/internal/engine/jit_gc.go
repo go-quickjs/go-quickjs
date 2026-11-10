@@ -130,14 +130,18 @@ func (x *exec) jitGCOp(inst *Instance, op opcode.Opcode, a, b uint32, f *exitFra
 	return true
 }
 
-// Pools of new structs.
+// Pools of new objects.
 //
-// Native code makes a struct by taking one from a pool of its type's, made
-// ahead by Go -- its header written, its fields zero -- and writing its
-// fields. A level's pools are a table by the module's type index
-// (Ctx.Pools), which the level's first ExitAlloc takes from the instance,
-// or shares with a level below it of the same instance, and which the
-// level gives back to the instance when it ends: one goroutine at a time
+// Native code makes a struct or a short array by taking one from a pool,
+// made ahead by Go -- its header written, its fields or elements zero --
+// and writing its fields, or its length and its elements. A level's pools
+// are a table by the module's type index (Ctx.Pools): a struct type's
+// entry is its pool, an array type's a table of pools by the class of the
+// arrays' blocks (arrayPools), whose arrays an array of any length its
+// class has room for is taken from. The level's first ExitAlloc takes a
+// table from the instance, or shares the table of a level below it of the
+// same instance, and the level gives it back to the instance when it
+// ends: one goroutine at a time
 // takes from a table, so native code takes an object with plain loads and
 // stores. Go fills an empty pool at an ExitAlloc, charging the instance's
 // budget for every object it makes at once; what a table holds when it is
@@ -158,13 +162,16 @@ const (
 	gcPoolsHeld = 256 << 10
 )
 
-// gcPool is a pool of new structs of one type: the first n of objs. Native
-// code reads and writes n and objs (Layout.PoolCount, Layout.PoolObjs).
+// gcPool is a pool of new objects of one type, and for an array type of
+// one class: the first n of objs. Native code reads and writes n and objs
+// (Layout.PoolCount, Layout.PoolObjs).
 type gcPool struct {
 	n    uint64
 	objs [gcPoolCap]unsafe.Pointer
 	rt   *rtt
-	// each is what a struct of the type is charged; size how many the
+	// class is an array pool's class, -1 for a struct pool.
+	class int
+	// each is what an object of the pool is charged; size how many the
 	// next fill makes; made what the last fill made, in bytes; epoch the
 	// budget's (gcEpoch) before the last fill charged it.
 	each, made int64
@@ -172,12 +179,19 @@ type gcPool struct {
 	epoch      uint64
 }
 
+// arrayPools is an array type's pools by class: native code reads a
+// class's pool at the class's word.
+type arrayPools [len(arrayRooms)]*gcPool
+
 // gcPoolSet is a table of pools by the module's type index, charged to
-// budget b.
+// budget b: an entry is a struct type's *gcPool or an array type's
+// *arrayPools, nil until its first fill.
 type gcPoolSet struct {
 	b   *Budget
-	tab []*gcPool
-	// held is what the pools' last fills made, in bytes.
+	tab []unsafe.Pointer
+	// all are the table's pools; held is what their last fills made, in
+	// bytes.
+	all  []*gcPool
 	held int64
 }
 
@@ -187,8 +201,8 @@ type gcPools struct{ set *gcPoolSet }
 
 // giveBack gives back to the budget what the pools hold, never reachable.
 func (s *gcPoolSet) giveBack() {
-	for _, p := range s.tab {
-		if p != nil && p.n > 0 {
+	for _, p := range s.all {
+		if p.n > 0 {
 			s.b.giveBackGC(p.epoch, int64(p.n)*p.each)
 		}
 	}
@@ -215,7 +229,7 @@ func (inst *Instance) takePools() *gcPools {
 		return g
 	}
 	jp.mu.Unlock()
-	set := &gcPoolSet{b: inst.budget, tab: make([]*gcPool, max(len(inst.Module.Types), 1))}
+	set := &gcPoolSet{b: inst.budget, tab: make([]unsafe.Pointer, max(len(inst.Module.Types), 1))}
 	g := &gcPools{set: set}
 	if set.b != nil {
 		runtime.AddCleanup(g, (*gcPoolSet).giveBack, set)
@@ -255,21 +269,17 @@ func (lv *jitLevel) dropPools() {
 	lv.pools, lv.ownPools = nil, false
 }
 
-// jitAlloc fills the pool of the structs of type ti of level lv's table,
-// the innermost level's, giving it a table first if it has none, for a
-// struct.new at offset at. The structs are charged to the instance's
-// budget, the native frames' references counted with the rest.
-func (x *exec) jitAlloc(lv *jitLevel, ti uint32) {
+// jitAlloc fills a pool of level lv's table, the innermost level's, giving
+// it a table first if it has none. what is an ExitAlloc's Arg0: the type
+// index in its low word, and for an array type the class of its arrays'
+// blocks plus 1 in its high word. The objects are charged to the
+// instance's budget, the native frames' references counted with the rest.
+func (x *exec) jitAlloc(lv *jitLevel, what uint64) {
 	if lv.pools == nil {
 		x.levelPools(lv)
 	}
 	set := lv.pools.set
-	p := set.tab[ti]
-	if p == nil {
-		rt := lv.inst.Code.typeRTT(ti)
-		p = &gcPool{rt: rt, each: structSize(rt), size: gcPoolFirst}
-		set.tab[ti] = p
-	}
+	p := set.pool(lv.inst.Code, uint32(what), int(what>>32)-1)
 	if p.n > 0 {
 		return
 	}
@@ -282,10 +292,42 @@ func (x *exec) jitAlloc(lv *jitLevel, ti uint32) {
 	epoch := b.gcEpoch()
 	p.made = 0
 	b.chargeGC(x, int64(n)*p.each)
-	for i := range n {
-		p.objs[i] = newStruct(p.rt).p
+	if p.class < 0 {
+		for i := range n {
+			p.objs[i] = newStruct(p.rt).p
+		}
+	} else {
+		for i := range n {
+			p.objs[i] = unsafe.Pointer(arrayBlock(p.rt, p.class))
+		}
 	}
 	p.n, p.epoch, p.made = uint64(n), epoch, int64(n)*p.each
 	set.held += p.made
 	p.size = min(2*n, gcPoolCap)
+}
+
+// pool returns the table's pool of type ti of code c, of the arrays of
+// class for an array type and -1 for a struct type, made first if there
+// is none.
+func (s *gcPoolSet) pool(c *Code, ti uint32, class int) *gcPool {
+	e := &s.tab[ti]
+	if class < 0 {
+		if *e == nil {
+			rt := c.typeRTT(ti)
+			p := &gcPool{rt: rt, class: -1, each: structSize(rt), size: gcPoolFirst}
+			s.all = append(s.all, p)
+			*e = unsafe.Pointer(p)
+		}
+		return (*gcPool)(*e)
+	}
+	if *e == nil {
+		*e = unsafe.Pointer(new(arrayPools))
+	}
+	ap := (*arrayPools)(*e)
+	if ap[class] == nil {
+		rt := c.typeRTT(ti)
+		ap[class] = &gcPool{rt: rt, class: class, each: int64(arrayHeader) + int64(arrayRooms[class]), size: gcPoolFirst}
+		s.all = append(s.all, ap[class])
+	}
+	return ap[class]
 }

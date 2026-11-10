@@ -14,22 +14,37 @@ func (c *compiler) jumpZero(r amd64.Reg, l amd64.Label) {
 	c.a.Jcc(amd64.CondE, l)
 }
 
-// poolTake takes a struct of type ti from the level's pool of the type's
-// into p, leaving in q the address of the pool's word of it, or goes to
-// slow where there is none.
-func (c *compiler) poolTake(p, q amd64.Reg, ti uint32, slow amd64.Label) {
+// poolTake takes an object of type ti -- a struct, or for class 0 or
+// more an array whose block is of the class -- from the level's pool of
+// them into p, leaving in q the address of the pool's word of it, or goes
+// to slow where there is none.
+func (c *compiler) poolTake(p, q amd64.Reg, ti uint32, class int, slow amd64.Label) {
 	a := c.a
 	l := c.req.Layout
 	a.Load(p, rCtx, offPools)
 	c.jumpZero(p, slow)
 	a.Load(p, p, int32(8*ti))
 	c.jumpZero(p, slow)
+	if class >= 0 {
+		a.Load(p, p, int32(8*class))
+		c.jumpZero(p, slow)
+	}
 	a.Load(q, p, l.PoolCount)
 	c.jumpZero(q, slow)
 	a.OpImm(amd64.Sub, q, 1, true)
 	a.Store(p, l.PoolCount, q)
 	a.LeaIdx(q, p, q, 8, l.PoolObjs)
 	a.Load(p, q, 0)
+}
+
+// storeWord stores word v at [base + off].
+func (c *compiler) storeWord(base amd64.Reg, off int32, v uint64) {
+	if int64(v) == int64(int32(v)) {
+		c.a.StoreImm(base, off, int32(v))
+		return
+	}
+	c.a.MovImm(rTmp, v)
+	c.a.Store(base, off, rTmp)
 }
 
 // andImm is r &= imm, 32 bits.
