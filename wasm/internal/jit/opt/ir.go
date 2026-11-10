@@ -87,6 +87,11 @@ const (
 	OpDivU
 	OpRemS
 	OpRemU
+	// OpMulHU and OpMulHS are the high half of the product of two i64s,
+	// unsigned and signed: what a division by a constant multiplies by
+	// (divconst.go).
+	OpMulHU
+	OpMulHS
 	OpClz
 	OpCtz
 	OpPopcnt
@@ -326,6 +331,8 @@ var opInfos = [numOps]opInfo{
 	OpDivU:         {"div_u", fTrap},
 	OpRemS:         {"rem_s", fTrap},
 	OpRemU:         {"rem_u", fTrap},
+	OpMulHU:        {"mulh_u", fPure | fComm},
+	OpMulHS:        {"mulh_s", fPure | fComm},
 	OpClz:          {"clz", fPure},
 	OpCtz:          {"ctz", fPure},
 	OpPopcnt:       {"popcnt", fPure},

@@ -715,6 +715,14 @@ func (a *Asm) Mul(src Reg) {
 	a.modrmRR(4, byte(src))
 }
 
+// ImulWide is RDX:RAX = RAX * src, signed, 64 bits each: RDX the product's
+// high word, RAX its low.
+func (a *Asm) ImulWide(src Reg) {
+	a.rex(true, 0, byte(src), false)
+	a.emit(0xF7)
+	a.modrmRR(5, byte(src))
+}
+
 // LoadU16 is dst = [base + disp], 16 bits, zero-extended.
 func (a *Asm) LoadU16(dst, base Reg, disp int32) {
 	a.rex(false, byte(dst), byte(base), false)

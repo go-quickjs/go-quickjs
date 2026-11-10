@@ -121,6 +121,7 @@ func TestAMD64Divide(t *testing.T) {
 		expect(t, fmt.Sprintf("Idiv r%d", r), encode(func(a *amd64.Asm) { a.Idiv(r) }), x86asm.IDIV, r64(r))
 		expect(t, fmt.Sprintf("Div r%d", r), encode(func(a *amd64.Asm) { a.Div(r) }), x86asm.DIV, r64(r))
 		expect(t, fmt.Sprintf("Mul r%d", r), encode(func(a *amd64.Asm) { a.Mul(r) }), x86asm.MUL, r64(r))
+		expect(t, fmt.Sprintf("ImulWide r%d", r), encode(func(a *amd64.Asm) { a.ImulWide(r) }), x86asm.IMUL, r64(r))
 	}
 	for _, d := range regs {
 		for _, s := range regs {

@@ -980,6 +980,15 @@ func (g *gen) value(v *Value, rest []*Value) {
 		g.shift(v, shifts[v.Op])
 	case OpDivS, OpDivU, OpRemS, OpRemU:
 		g.div(v)
+	case OpMulHU, OpMulHS:
+		t := g.defG(v)
+		rx, ry := g.readG(v.Args[0], s0), g.readG(v.Args[1], s1)
+		if v.Op == OpMulHS {
+			a.Smulh(t, rx, ry)
+		} else {
+			a.Umulh(t, rx, ry)
+		}
+		g.done(v, int(t))
 	case OpClz, OpCtz, OpPopcnt:
 		t := g.defG(v)
 		src := g.intoG(v.Args[0], s0)

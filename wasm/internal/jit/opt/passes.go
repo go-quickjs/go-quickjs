@@ -214,8 +214,11 @@ func fold(f *Func) {
 		for i := 0; i < len(b.Values); i++ {
 			v := b.Values[i]
 			foldValue(v)
-			if v.Op == OpWrap {
+			switch v.Op {
+			case OpWrap:
 				i += narrow(f, v, i)
+			case OpDivS, OpDivU, OpRemS, OpRemU:
+				i += divConst(f, v, i)
 			}
 		}
 	}

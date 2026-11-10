@@ -247,8 +247,8 @@ func checkTypes(v *Value) error {
 			return fmt.Errorf("a global's address %v", v.Args[0])
 		}
 	case OpAdd, OpSub, OpMul, OpAnd, OpOr, OpXor, OpShl, OpShrS, OpShrU, OpRotl, OpRotr,
-		OpDivS, OpDivU, OpRemS, OpRemU:
-		if !v.Type.IsInt() {
+		OpDivS, OpDivU, OpRemS, OpRemU, OpMulHU, OpMulHS:
+		if !v.Type.IsInt() || (v.Op == OpMulHU || v.Op == OpMulHS) && v.Type != TI64 {
 			return fmt.Errorf("of type %v", v.Type)
 		}
 		if err := arity(2); err != nil {

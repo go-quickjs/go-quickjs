@@ -968,6 +968,8 @@ func (g *gen) value(v *Value, rest []*Value) {
 		g.shift(v, shifts[v.Op])
 	case OpDivS, OpDivU, OpRemS, OpRemU:
 		g.div(v)
+	case OpMulHU, OpMulHS:
+		g.mulHigh(v)
 	case OpClz, OpCtz, OpPopcnt:
 		t := g.defG(v)
 		w := g.width(v.Args[0])
@@ -1343,6 +1345,32 @@ func (g *gen) div(v *Value) {
 	t := g.defG(v)
 	if t != res {
 		a.MovRR(t, res)
+	}
+	g.done(v, int(t))
+}
+
+// mulHigh lowers the high half of an i64 product, which the one-operand
+// multiplication leaves in DX from a factor in AX; the allocator keeps
+// both free across.
+func (g *gen) mulHigh(v *Value) {
+	a := g.a
+	x, y := v.Args[0], v.Args[1]
+	const ax, dx = amd64.RAX, amd64.RDX
+	m := s0
+	if l := g.locOf(y); l.kind == lGPR && amd64.Reg(l.r) != ax && amd64.Reg(l.r) != dx {
+		m = amd64.Reg(l.r)
+	} else {
+		g.movG(s0, y)
+	}
+	g.movG(ax, x)
+	if v.Op == OpMulHS {
+		a.ImulWide(m)
+	} else {
+		a.Mul(m)
+	}
+	t := g.defG(v)
+	if t != dx {
+		a.MovRR(t, dx)
 	}
 	g.done(v, int(t))
 }

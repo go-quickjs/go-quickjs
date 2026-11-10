@@ -327,7 +327,7 @@ func (g *lowering) allocate(ws *allocScratch, classes [][]int, cl *clobbers) {
 				// does.
 				ft := g.sigOf(v)
 				area = max(area, 2*(len(ft.Params)+extraArgs(v.Op)))
-			case OpDivS, OpDivU, OpRemS, OpRemU:
+			case OpDivS, OpDivU, OpRemS, OpRemU, OpMulHU, OpMulHS:
 				in.Clobber = cl.div
 			case OpAtomicStore, OpAtomicAdd, OpAtomicSub, OpAtomicAnd, OpAtomicOr, OpAtomicXor, OpAtomicXchg, OpAtomicCmpxchg:
 				in.Clobber = cl.atomic
