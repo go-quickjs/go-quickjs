@@ -17,6 +17,7 @@ default (see Tier-up).
 | `build.go` | what the tier refuses, and the SSA builder |
 | `cfg.go` | the control flow graph: reachability, order, critical edges, dominators, natural loops, loop depths |
 | `passes.go` | the optimizations |
+| `globals.go` | the globals' values forwarded from block to block and carried by loops |
 | `divconst.go` | the divisions and remainders by constants, made of multiplications and shifts |
 | `thread.go` | jump threading, and the lookups that repair SSA after it |
 | `verify.go` | the IR's verifier, and what lowering requires of it |
@@ -174,6 +175,28 @@ whose bytes are disjoint, survive it. A shared memory's loads are not
 known: another thread may store between two. A call and an instruction Go
 runs forget it all.
 
+`globals` (`globals.go`) then carries what the globals hold across the
+blocks, as the builder carries the locals, by the same construction: each
+mutable global read in the function (up to 64) a variable, its value at a
+block's start looked up through the predecessors, a write its value, a
+read the value found or, where none is, itself; a call, an instruction Go
+runs, an atomic access and a fence make it unknown. A loop's header knows
+a global only where the loop -- the blocks the builder made between its
+header and its end, which hold its natural loop -- makes none of those and
+reads the global: it holds what the preheader brings, and, where the loop
+writes it, a phi of that and what the back edges bring; where the
+preheader knows nothing a load is put at its end, run once where the
+loop's reads ran on each turn. At any other merge a value one predecessor
+does not know is not known, so no load is put on a path that had none.
+Writes stay: the global holds what the interpreter's does at every exit
+and trap. Without a loop that could carry a global it reads the pass stops
+after one look at the values (0.9 µs a function of the Go program, whose
+loops all call: its code is the same). A function the values it keeps
+live leave too few spill slots (`frame`) is compiled again without it.
+micro/globals' kernel, whose i32, i64 and f64 globals each made a chain
+of a load, an operation and a store across the loop's turns, went from
+27.9 to 11.9 ms.
+
 The phis a lookup made that turn out trivial -- every argument one value,
 or the phi itself -- are removed by the first pass.
 
@@ -208,6 +231,7 @@ a call or a throw having effects. Nothing jumps to a pad: Go enters it.
 
 | Pass | |
 |---|---|
+| `globals` | the globals' values forwarded across blocks and carried by loops that change none (below) |
 | `copyelim` | copy propagation: each use of a copy, and of a trivial phi, becomes the value copied |
 | `gvn` | global value numbering: a pure value a dominating one computes the same way -- operation, type, arguments (commutative ones in order), immediates -- becomes a copy of it, by a walk of the dominator tree |
 | `fold` | constant folding and identities (x+0, x*1, x&-1, x-x, x==x ...), the comparisons' inversion under eqz, `i32.wrap_i64` of a 64-bit operation of extended i32s and constants narrowed to the 32-bit operation, the divisions and remainders by constants made of multiplications and shifts (below), select on a constant or of one value, and the branches and switches on constants, whose dead blocks go |

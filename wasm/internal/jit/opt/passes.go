@@ -17,6 +17,7 @@ func Optimize(f *Func, check func(pass string)) {
 			check(name)
 		}
 	}
+	run("globals", PhaseGlobals, forwardGlobals)
 	run("copyelim", PhaseCopyelim, copyelim)
 	run("gvn", PhaseGVN, gvn)
 	run("copyelim", PhaseCopyelim, copyelim)

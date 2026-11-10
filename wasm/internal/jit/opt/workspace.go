@@ -53,6 +53,10 @@ type workspace struct {
 	start     u64map[*Value]
 	made      []madePhi
 
+	// forwardGlobals' state, and the loops the builder made.
+	fw         fwState
+	loopRanges []loopRange
+
 	gen genScratch
 }
 
@@ -71,6 +75,8 @@ func (ws *workspace) reset() {
 	ws.types.reset()
 	ws.incomplete.reset()
 	ws.sccLists.reset()
+	clear(ws.loopRanges)
+	ws.loopRanges = ws.loopRanges[:0]
 }
 
 // blockMarks returns a mark for each of f's blocks, by ID, all 0. Its

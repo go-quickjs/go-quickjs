@@ -636,6 +636,7 @@ func (bd *builder) end() {
 	}
 	bd.ctrl = bd.ctrl[:len(bd.ctrl)-1]
 	if t.op == opcode.Loop {
+		bd.ws.loopRanges = append(bd.ws.loopRanges, loopRange{t.label, bd.f.nextBlock})
 		bd.seal(t.label)
 		if t.dead {
 			bd.deadAfter()

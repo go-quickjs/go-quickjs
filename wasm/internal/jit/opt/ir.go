@@ -616,6 +616,9 @@ type Func struct {
 	// the control flow graph is as it was made (dominators).
 	ws  *workspace
 	dom *domTree
+	// noForward says not to forward the globals (forwardGlobals), which
+	// forwarded says the pass did.
+	noForward, forwarded bool
 }
 
 // NumValues is one past the highest value ID.

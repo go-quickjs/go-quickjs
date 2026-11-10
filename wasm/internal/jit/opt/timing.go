@@ -12,6 +12,7 @@ type Phase int
 const (
 	PhaseCheck Phase = iota
 	PhaseBuild
+	PhaseGlobals
 	PhaseCopyelim
 	PhaseGVN
 	PhaseFold
@@ -32,7 +33,7 @@ const (
 	NumPhases
 )
 
-var phaseNames = [NumPhases]string{"check", "build", "copyelim", "gvn", "fold", "thread", "licm", "dce", "bce", "split",
+var phaseNames = [NumPhases]string{"check", "build", "globals", "copyelim", "gvn", "fold", "thread", "licm", "dce", "bce", "split",
 	"loops", "describe", "liveness", "ranges", "webs", "scan", "slots", "emit", "encode"}
 
 // String is the phase's name.
