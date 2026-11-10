@@ -93,6 +93,13 @@ func NewRuntimeWithConfig(ctx context.Context, config RuntimeConfig) Runtime {
 	if c.memoryLimit > 0 {
 		r.budget = engine.NewBudget(c.memoryLimit)
 	}
+	if c.compiler {
+		if c.cache != nil {
+			r.jitBudget = c.cache.jitBudget(c.jitLimit())
+		} else {
+			r.jitBudget = engine.NewJITBudget(c.jitLimit())
+		}
+	}
 	return r
 }
 
@@ -101,6 +108,9 @@ type runtime struct {
 	// budget is what WithMemoryLimit allows the runtime's modules, nil for
 	// no limit.
 	budget *engine.Budget
+	// jitBudget is what WithJITMemoryLimit allows the native code of the
+	// runtime's modules, nil for an interpreter's configuration.
+	jitBudget *engine.JITBudget
 
 	mu sync.Mutex
 	// modules are the named modules; a name being instantiated maps to nil.
@@ -166,6 +176,9 @@ func (r *runtime) CompileModule(ctx context.Context, binary []byte) (CompiledMod
 	var key cacheKey
 	if r.cfg.cache != nil {
 		key = cacheKey{sum: sha256.Sum256(binary), mem32: mem32, mem64: mem64, compiler: r.cfg.compiler}
+		if r.cfg.compiler {
+			key.jitLimit = r.cfg.jitLimit()
+		}
 		if cc := r.cfg.cache.get(key); cc != nil {
 			return &compiledModule{r: r, code: cc, custom: r.cfg.customSections}, nil
 		}
@@ -188,6 +201,7 @@ func (r *runtime) CompileModule(ctx context.Context, binary []byte) (CompiledMod
 	cc := &compiledCode{m: &run, code: engine.NewCode(&run), start: m.Start, hasStart: m.HasStart}
 	if r.cfg.compiler {
 		cc.code.EnableJIT(engine.DefaultJITThreshold)
+		cc.code.SetJITBudget(r.jitBudget)
 	}
 	if r.cfg.cache != nil {
 		cc = r.cfg.cache.put(key, cc)

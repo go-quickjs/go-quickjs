@@ -55,6 +55,28 @@ type RuntimeConfig interface {
 	// call's own next count. 0, the default, is no limit.
 	WithMemoryLimit(bytes int64) RuntimeConfig
 
+	// WithJITMemoryLimit bounds what the compiler (NewRuntimeConfigCompiler)
+	// holds for the runtime's modules together, in bytes: their functions'
+	// native code and what describes it. It is apart from WithMemoryLimit,
+	// which never counts it. When a compile would pass the limit, the
+	// compiler first drops code no call is running -- code the optimizing
+	// tier replaced, and the code of functions not called for 100 ms or
+	// more, which their next call compiles again -- and where that is not
+	// enough runs the function in the interpreter for now, compiling it
+	// once there is room. Results are the same whatever the limit; a limit
+	// smaller than what a program's hot functions need makes it slower, as
+	// far as the interpreter's speed.
+	//
+	// The default, DefaultJITMemoryLimit, is 64 MiB, which holds every
+	// function of a large program compiled by both tiers: a Go program of
+	// 3,028 functions holds 23 MB with each compiled by the baseline, 34 MB
+	// by the optimizing tier, and a run of one compiles some 550 to 800 of
+	// them, 3.9 to 8.2 MB on amd64. 0 keeps the default; a negative limit
+	// panics. Runtimes that share a compilation cache share their modules'
+	// code, and so the limit: those of the same limit share one budget of
+	// it. It does nothing for an interpreter's configuration.
+	WithJITMemoryLimit(bytes int64) RuntimeConfig
+
 	// WithMemoryCapacityFromMax makes each memory hold its maximum, or the
 	// runtime's limit for a memory without one, from its instantiation, so
 	// that a grow never moves it and a Memory.Read view stays valid. Where
@@ -100,7 +122,12 @@ type runtimeConfig struct {
 	closeOnContextDone bool
 	compiler           bool
 	memoryLimit        int64 // 0: none
+	jitMemoryLimit     int64 // 0: DefaultJITMemoryLimit
 }
+
+// DefaultJITMemoryLimit is what the compiler holds for a runtime's modules
+// at most, unless WithJITMemoryLimit says otherwise.
+const DefaultJITMemoryLimit = 64 << 20
 
 var defaultRuntimeConfig = &runtimeConfig{features: api.CoreFeaturesAll, debugInfo: true}
 
@@ -155,6 +182,23 @@ func (c *runtimeConfig) WithMemoryLimit(bytes int64) RuntimeConfig {
 	return r
 }
 
+func (c *runtimeConfig) WithJITMemoryLimit(bytes int64) RuntimeConfig {
+	if bytes < 0 {
+		panic(fmt.Errorf("JIT memory limit invalid: %d < 0", bytes))
+	}
+	r := c.clone()
+	r.jitMemoryLimit = bytes
+	return r
+}
+
+// jitLimit is the compiler's memory limit in bytes.
+func (c *runtimeConfig) jitLimit() int64 {
+	if c.jitMemoryLimit > 0 {
+		return c.jitMemoryLimit
+	}
+	return DefaultJITMemoryLimit
+}
+
 func (c *runtimeConfig) WithMemoryCapacityFromMax(memoryCapacityFromMax bool) RuntimeConfig {
 	r := c.clone()
 	r.capacityFromMax = memoryCapacityFromMax
@@ -206,13 +250,34 @@ type cacheKey struct {
 	sum          [sha256.Size]byte
 	mem32, mem64 uint64
 	// compiler keeps code a compiler configuration compiles to native code
-	// apart from the interpreter's.
+	// apart from the interpreter's, and jitLimit code charged to a budget of
+	// one limit apart from another's.
 	compiler bool
+	jitLimit int64
 }
 
 type cache struct {
 	mu      sync.Mutex
 	entries map[cacheKey]*compiledCode
+	// jit are the budgets of the native code of the runtimes sharing the
+	// cache, by their limit.
+	jit map[int64]*engine.JITBudget
+}
+
+// jitBudget returns the budget of the runtimes sharing the cache whose
+// limit is limit.
+func (c *cache) jitBudget(limit int64) *engine.JITBudget {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.jit == nil {
+		c.jit = map[int64]*engine.JITBudget{}
+	}
+	b := c.jit[limit]
+	if b == nil {
+		b = engine.NewJITBudget(limit)
+		c.jit[limit] = b
+	}
+	return b
 }
 
 func (c *cache) get(k cacheKey) *compiledCode {
