@@ -44,12 +44,12 @@ records a set but turns nothing off.
 | Sign extension, non-trapping float-to-int, multi-value, bulk memory | yes | yes; `memory.init`, `data.drop`, `table.init`, `table.copy` and `elem.drop` in Go |
 | Reference types | yes | yes; `table.grow` in Go |
 | Fixed-width SIMD | yes | yes; on amd64 with SSSE3, SSE4.1 and SSE4.2 |
-| Tail calls | yes | yes; `return_call_indirect` through Go |
+| Tail calls | yes | yes |
 | Extended constant expressions | yes | -- |
 | Multiple memories | yes | yes |
 | Memory64 and table64 | yes | refused for loads and stores of an i64 memory |
 | Exception handling (`exnref`), and the legacy `try` | yes | yes; throwing and catching through Go |
-| Typed function references | yes | yes; `call_ref` and `return_call_ref` through Go |
+| Typed function references | yes | yes |
 | Garbage collection: structs, arrays, i31, casts | yes | yes; what allocates, and `array.fill`, `array.copy` and `array.init_*`, in Go; refused for a v128 field or element read or written |
 | Relaxed SIMD | yes, with the host architecture's choice for each operator | yes, with the interpreter's choices; a fused `relaxed_madd` and `relaxed_nmadd` in Go |
 | Threads: shared memories, atomics, `wait` and `notify` | yes | refused for the atomics |
@@ -506,8 +506,10 @@ interpreter's do.
 Native code computes what the interpreter does, bit for bit where the
 specification fixes the bits: NaN quieting, the minimum and maximum of zeros,
 trapping and saturating truncations, one rounding for unsigned 64-bit
-conversions. Calls between native functions of an instance are native;
-calls of imports, of host functions, through tables and through references,
+conversions. Calls between native functions of an instance are native,
+through a table or a reference too where the callee is the instance's own
+function of the call's type exactly, and so are tail calls; calls of
+imports, of host functions, other calls through tables and references,
 `memory.grow`, `table.grow`, `memory.init`, `table.init`, `table.copy`,
 `data.drop`, `elem.drop`, and `memory.atomic.wait` and `notify` return to Go
 and resume; `memory.size`, `memory.copy`, `memory.fill`, `table.size` and

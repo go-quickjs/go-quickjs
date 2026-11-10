@@ -55,10 +55,14 @@ type codeJIT struct {
 	// it, so it is written atomically and never moves.
 	links []uintptr
 	// frames holds each function's frame in bytes once it has native code,
-	// which a native call through a table checks its room by (Ctx.Frames);
-	// a function that holds references has one no call through a table
-	// makes natively. It is written atomically, before the link.
-	frames []uint64
+	// which a native call through a table or a reference checks its room
+	// by (Ctx.Frames): for a function that holds references one past any
+	// chunk's end. rframes holds both of its frame's sizes, the numeric
+	// slots' bytes in the low word and the reference slots' its native code
+	// uses in the high one (Ctx.RFrames), which the baseline's calls check
+	// a callee that holds references by. Both are written atomically,
+	// before the link.
+	frames, rframes []uint64
 	// raws are the codes placed, which the Code holds until they are
 	// dropped or it is collected.
 	raws []*placedCode
@@ -493,7 +497,7 @@ func (c *Code) enableJIT(threshold int) bool {
 		return true
 	}
 	n := max(len(c.Module.Functions), 1)
-	cj := &codeJIT{id: jitCodeIDs.Add(1), threshold: int32(threshold), arena: ijit.NewReusingArena(), links: make([]uintptr, n), frames: make([]uint64, n), counters: make([]int64, n),
+	cj := &codeJIT{id: jitCodeIDs.Add(1), threshold: int32(threshold), arena: ijit.NewReusingArena(), links: make([]uintptr, n), frames: make([]uint64, n), rframes: make([]uint64, n), counters: make([]int64, n),
 		fns: make([]*fnJIT, n), tableBytes: tableBytes(n)}
 	cj.joinBudget(NewJITBudget(jitMemEnv))
 	cj.optThreshold.Store(-1)
@@ -693,11 +697,13 @@ func (cj *codeJIT) publishOpt(idx uint32, cd *compiled, pc *placedCode, code *wj
 }
 
 // setFrame records function idx's frame for native calls through a table
-// (codeJIT.frames), before its link is stored.
+// or a reference (codeJIT.frames, rframes), before its link is stored.
 func (cj *codeJIT) setFrame(idx uint32, cd *compiled) {
-	b := uint64(8 * cd.nslots)
-	if cd.nativeRefSlots() > 0 {
-		// Past any chunk's end: such a call goes through Go.
+	b, r := uint64(8*cd.nslots), uint64(16*cd.nativeRefSlots())
+	atomic.StoreUint64(&cj.rframes[idx], r<<32|b)
+	if r > 0 {
+		// Past any chunk's end: such a call checks the reference slots'
+		// room too (rframes), or goes through Go.
 		b = math.MaxUint32
 	}
 	atomic.StoreUint64(&cj.frames[idx], b)
@@ -1101,6 +1107,7 @@ func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64,
 		RChunkEnd: lv.rchunkBase + uintptr(len(rchunk))*16,
 		Inst:      uintptr(unsafe.Pointer(inst)),
 		Frames:    uintptr(unsafe.Pointer(&cj.frames[0])),
+		RFrames:   uintptr(unsafe.Pointer(&cj.rframes[0])),
 	}
 	lv.r0 = ctx.R
 	if ctx.R < lv.rchunkBase || ctx.R >= ctx.RChunkEnd {

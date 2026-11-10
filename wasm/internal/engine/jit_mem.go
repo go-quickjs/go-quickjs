@@ -113,7 +113,7 @@ func recordBytes(loops map[uint32]int, handlers []wjit.Handler) int64 {
 // tableBytes is what the tables of a Code of n functions hold: its links,
 // frames, counters and functions' states, and the codeJIT itself.
 func tableBytes(n int) int64 {
-	return int64(unsafe.Sizeof(codeJIT{})) + int64(n)*int64(3*8+unsafe.Sizeof((*fnJIT)(nil)))
+	return int64(unsafe.Sizeof(codeJIT{})) + int64(n)*int64(4*8+unsafe.Sizeof((*fnJIT)(nil)))
 }
 
 // setJITBudget is SetJITBudget.

@@ -335,27 +335,6 @@ func (c *compiler) brOn(depth int, cond condCode) {
 	c.brIf(depth)
 }
 
-// callRef compiles call_ref and return_call_ref of type typeIndex, which
-// the engine makes.
-func (c *compiler) callRef(typeIndex uint32, at uint32, tail bool) {
-	ft := c.m.Types[typeIndex].Func
-	n := len(ft.Params)
-	c.spillAll()
-	base := len(c.stack) - n - 1
-	c.truncate(base)
-	resume := c.a.NewLabel()
-	if tail {
-		c.exit(ExitTailRef, resume, uint64(typeIndex), c.slotIndex(base), uint64(at))
-		c.resumeAt(resume)
-		c.jmp(c.retL)
-		c.markDead()
-		return
-	}
-	c.exit(ExitCallRef, resume, uint64(typeIndex), c.slotIndex(base), uint64(at))
-	c.resumeAt(resume)
-	c.pushResults(ft.Results)
-}
-
 // tableElem leaves in a register the address of the element of table
 // whose index is on top of the stack, popped, trapping past the table's
 // end.

@@ -33,6 +33,7 @@ This package compiles; the engine places, enters and handles exits:
 | `ops_GOARCH.go` | its numeric and memory instructions |
 | `atomic.go`, `atomic_GOARCH.go` | the atomic instructions: what they are, and a backend's code for them |
 | `bulk.go`, `bulk_GOARCH.go` | memory.size, memory.copy, memory.fill, table.size and table.fill |
+| `indirect.go`, `indirect_GOARCH.go` | calls through a table or a reference, and their tail calls |
 | `refs.go`, `refs_GOARCH.go` | references: frames' reference slots, the reference instructions, the stores of pointer words and the barrier routine |
 | `gc.go`, `gc_GOARCH.go` | the GC instructions: fields, elements, i31s, tests and casts |
 | `simd.go`, `simd_GOARCH.go` | the SIMD instructions: v128.const, their types and the exit through the interpreter, and a backend's code for them |
@@ -281,10 +282,13 @@ and X0 on arm64:
 - `WBSlot`, `WBPtr`, `WBRet`, `Save`: the barrier routine's arguments and
   register save area (see References and the collector).
 - `ChunkEnd`: the end of the stack chunk the frames are in.
-- `Inst`, `Frames`: the address of the instance the code runs for, and the
-  Code's table of each function's frame in bytes, set when its native
-  code is placed: what the optimizing tier's native `call_indirect` checks
-  its callee by (`opt/README.md`).
+- `Inst`, `Frames`, `RFrames`: the address of the instance the code runs
+  for, and the Code's tables of each function's frame, set when its native
+  code is placed: what a native call through a table or a reference checks
+  its callee by (Calls). `Frames` holds the numeric slots' bytes, or, for
+  a function that holds references, a number past any chunk's end;
+  `RFrames` the numeric slots' bytes in its low word and the reference
+  slots' in its high one.
 - `RSP`, `RSEnd`: the native return stack, shared by an exec's levels: its
   next entry, which a register holds in native code and an exit stores,
   and its end -- or, if that is before, the entry at which a call would
@@ -313,8 +317,10 @@ function's code (`RawCode.EnterAt`). At the resume address the code reloads
 the registers it keeps and the locals' homes. Every entry that lives past an exit
 is in its slot.
 
-The exits most sites have -- each loop's and each call's poll, and each
-call's `ExitCall` -- are a function's own, shared by its sites: a site
+The exits most sites have -- each loop's and each call's poll, each
+call's `ExitCall`, and each call through a table or a reference's
+`ExitCallIndirect` or `ExitCallRef` -- are a function's own, shared by its
+sites: a site
 stores the exit's arguments, leaves where it goes on in the scratch
 register and jumps to the function's exit of that kind, which stores it
 in the context (`Ctx.Resume`) and exits to resume at the function's shared
@@ -328,11 +334,11 @@ of a Go program's code.
 | `ExitReturn` | the frame Go entered -- at its start or at a loop's head -- returned |
 | `ExitTrap` | panics with `engine.Trap`: the trap's code, its frame's offset |
 | `ExitCall` | calls a function -- imported, the host's, without native code, or with no room -- with `callGeneric`, the arguments and results in the frame's slots |
-| `ExitCallIndirect` | finds the function as the interpreter does, its traps included, and calls it |
+| `ExitCallIndirect` | a call_indirect not made natively (Calls): finds the function as the interpreter does, its traps included, and calls it |
 | `ExitTailCall`, `ExitTailIndirect` | a tail call made otherwise than natively: see Calls |
 | `ExitPoll` | `pollContext`, the context's cancellation |
-| `ExitCallRef` | call_ref: finds the function, trapping on null, and calls it |
-| `ExitTailRef` | return_call_ref, as `ExitTailIndirect` |
+| `ExitCallRef` | a call_ref not made natively (Calls): calls the reference's function |
+| `ExitTailRef` | a return_call_ref not made natively, as `ExitTailIndirect` |
 | `ExitOp` | memory.grow, memory.init, data.drop, table.grow, table.init, table.copy, elem.drop, struct.new, struct.new_default, the array.new instructions, array.fill, array.copy, array.init_data, array.init_elem, throw, throw_ref, rethrow (which do not resume: see Exceptions), memory.atomic.wait32, memory.atomic.wait64, memory.atomic.notify, on the frame's slots; an atomic instruction's offset is the 64-bit `Arg2` |
 | `ExitSIMD` | a SIMD instruction the backend does not compile (see SIMD): the interpreter's own code for the instruction at offset `Arg0`, made once and kept by the Code (`codeJIT.simd`), run on the operands in the frame's slots from `Arg1` |
 | `ExitTierUp` | the function's count of calls toward the optimizing tier ran out, at its entry (where the request gives a `TierCounter`): the engine compiles it there and enters the optimized code with the frame as the call made it, or resumes the baseline code |
@@ -396,13 +402,35 @@ renamed, a jump to the callee. Otherwise it exits, and Go makes the call
 natively itself if it can (a function of the same instance with native code
 and room), else ends the level with the interpreter's tail call (`x.tail`,
 `tailChain`) if the frame is the one Go entered, else calls the function
-and resumes the frame at its return. `return_call_indirect` always exits,
-to the same handling. The interpreter's `tailChain` enters native code too,
-so a chain of tail calls across the tiers does not grow the stack.
+and resumes the frame at its return. A `return_call_indirect` or
+`return_call_ref` not made natively (below) exits to the same handling.
+The interpreter's `tailChain` enters native code too, so a chain of tail
+calls across the tiers does not grow the stack.
 
-Calls through a table, of imports and of host functions are exits; the
-optimizing tier makes a call through a table natively where its callee is
-one of the instance's with native code (`opt/README.md`).
+Calls of imports and of host functions are exits. A call through a table
+(`call_indirect`) or a reference (`call_ref`), and their tail calls, are
+made natively (`indirect.go`) where the callee -- the table's element,
+within the table and not null, or the reference -- is a function of the
+call's type exactly (its canonical index, `Layout.FuncType`), defined by
+the instance the code runs for (`Layout.FuncInst` against `Ctx.Inst`),
+with native code (the link table at its index, `Layout.FuncIndex`) and
+room for its frame (`Ctx.Frames`) and, for the call, an entry of the
+return stack. A callee that holds references fails the frame's check,
+whose `Frames` entry is past any chunk's end, and is checked again out of
+line by both its sizes (`Ctx.RFrames`): its numeric slots' and, past the
+caller's `R` -- moved past the caller's frame for a call, as a direct
+call's is -- its reference slots'. A null reference traps
+(`TrapNullDereference`) at the instruction before the poll is counted,
+as Go's search for the callee would. Anything else -- null in a table,
+past the table, another type or a subtype, a host function, another
+instance's, no native code or no room -- exits (`ExitCallIndirect`,
+`ExitCallRef`, `ExitTailIndirect`, `ExitTailRef`), and Go finds the callee
+or traps as the interpreter does. Every entry is in its slot, so the checks
+have the cache's registers: on amd64 the callee's index waits in DX and
+its entry in AX, on arm64 in X4 and X3. The call is then a direct call's,
+the return stack entry's third word made of the index the checks found,
+and a tail call a direct tail call's, the frame's return stack entry
+renamed with it.
 
 ## Memory
 

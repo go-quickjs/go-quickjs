@@ -140,6 +140,9 @@ var (
 	offRChunkEnd  = int32(unsafe.Offsetof(Ctx{}.RChunkEnd))
 	offFuncs      = int32(unsafe.Offsetof(Ctx{}.Funcs))
 	offTables     = int32(unsafe.Offsetof(Ctx{}.Tables))
+	offInst       = int32(unsafe.Offsetof(Ctx{}.Inst))
+	offFrames     = int32(unsafe.Offsetof(Ctx{}.Frames))
+	offRFrames    = int32(unsafe.Offsetof(Ctx{}.RFrames))
 	offWBSlot     = int32(unsafe.Offsetof(Ctx{}.WBSlot))
 	offWBPtr      = int32(unsafe.Offsetof(Ctx{}.WBPtr))
 	offWBRet      = int32(unsafe.Offsetof(Ctx{}.WBRet))
@@ -215,8 +218,9 @@ const (
 )
 
 // sharedKinds are the exits a function's sites share (sharedExit): most
-// calls and loops have a site of each of the first two.
-var sharedKinds = [...]uint64{ExitPoll, ExitCall}
+// calls and loops have a site of each of the first two, and calls through
+// a table or a reference of the others.
+var sharedKinds = [...]uint64{ExitPoll, ExitCall, ExitCallIndirect, ExitCallRef}
 
 // sharedStub returns the label of the function's exit of kind, which its
 // sites share, its code emitted after the body: the site leaves where to
@@ -1015,26 +1019,4 @@ func (c *compiler) pushResults(results []module.ValueType) {
 	for _, t := range results {
 		c.pushSlot(t.Kind)
 	}
-}
-
-// callIndirect compiles call_indirect and return_call_indirect, which the
-// engine makes: it finds the function and checks its type.
-func (c *compiler) callIndirect(typeIndex, table uint32, at uint32, tail bool) {
-	a := c.a
-	ft := c.m.Types[typeIndex].Func
-	n := len(ft.Params)
-	c.spillAll()
-	base := len(c.stack) - n - 1
-	c.truncate(base)
-	resume := a.NewLabel()
-	if tail {
-		c.exit(ExitTailIndirect, resume, uint64(typeIndex), uint64(table), c.slotIndex(base), uint64(at))
-		c.resumeAt(resume)
-		c.jmp(c.retL)
-		c.markDead()
-		return
-	}
-	c.exit(ExitCallIndirect, resume, uint64(typeIndex), uint64(table), c.slotIndex(base), uint64(at))
-	c.resumeAt(resume)
-	c.pushResults(ft.Results)
 }

@@ -56,11 +56,16 @@ type Ctx struct {
 	// it.
 	R, RChunkEnd uintptr
 	// Inst is the address of the instance the code runs for, which a
-	// function a table holds is compared with: the instance that defined
-	// it (Layout.FuncInst). Frames is the Code's table of each function's
-	// frame, in bytes, past which a native call's callee's must fit: for a
-	// call through a table, whose callee is known only when it is made.
-	Inst, Frames uintptr
+	// function a table or a reference holds is compared with: the instance
+	// that defined it (Layout.FuncInst). Frames and RFrames are the Code's
+	// tables of each function's frame, which a native call's callee's must
+	// have room for: for a call through a table or a reference, whose
+	// callee is known only when it is made. Frames holds the bytes of its
+	// numeric slots, or, for a function that holds references, a number
+	// past any chunk's end; RFrames the bytes of its numeric slots in the
+	// low word and those of the reference slots its native code uses in
+	// the high one.
+	Inst, Frames, RFrames uintptr
 
 	// The store of a pointer word while the collector marks: native code
 	// leaves the word's address in WBSlot and the pointer in WBPtr and
