@@ -186,6 +186,19 @@ func countOf(bs []*Block, b *Block) int {
 	return n
 }
 
+// addrType checks that memory access v's address is of its memory's type:
+// an i64 for a memory of i64 addresses, else an i32.
+func addrType(v *Value) error {
+	want := TI32
+	if v.Aux2&memWide != 0 {
+		want = TI64
+	}
+	if t := v.Args[0].Type; t != want {
+		return fmt.Errorf("an address of %v, not %v", t, want)
+	}
+	return nil
+}
+
 // checkTypes checks an operation's arguments' and result's types.
 func checkTypes(v *Value) error {
 	n := len(v.Args)
@@ -331,16 +344,12 @@ func checkTypes(v *Value) error {
 		if err := arity(1); err != nil {
 			return err
 		}
-		if v.Args[0].Type != TI32 {
-			return fmt.Errorf("an address of %v", v.Args[0].Type)
-		}
+		return addrType(v)
 	case OpStore:
 		if err := arity(2); err != nil {
 			return err
 		}
-		if v.Args[0].Type != TI32 {
-			return fmt.Errorf("an address of %v", v.Args[0].Type)
-		}
+		return addrType(v)
 	case OpGlobalSet:
 		if err := arity(2); err != nil {
 			return err

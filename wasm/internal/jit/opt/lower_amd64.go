@@ -1549,7 +1549,7 @@ func (g *gen) isX(v *Value, x amd64.XReg) bool {
 	return l.kind == lXMM && amd64.XReg(l.r) == x
 }
 
-// address returns the register holding a memory access's address, checking
+// address returns the register holding a plain access's address, checking
 // its end against memory 0's size unless the access needs no check.
 func (g *gen) address(v *Value) amd64.Reg {
 	a := g.a
@@ -1576,6 +1576,10 @@ func (g *gen) address(v *Value) amd64.Reg {
 }
 
 func (g *gen) load(v *Value) {
+	if !plainAccess(v) {
+		g.loadAny(v)
+		return
+	}
 	a := g.a
 	r := g.address(v)
 	disp := int32(v.Aux)
@@ -1611,6 +1615,10 @@ func (g *gen) load(v *Value) {
 }
 
 func (g *gen) store(v *Value) {
+	if !plainAccess(v) {
+		g.storeAny(v)
+		return
+	}
 	a := g.a
 	r := g.address(v)
 	disp := int32(v.Aux)

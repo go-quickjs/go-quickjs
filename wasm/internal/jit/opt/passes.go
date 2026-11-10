@@ -957,32 +957,45 @@ func invariant(v *Value, h *Block, inLoop func(b, h *Block) bool) bool {
 	return true
 }
 
-// bce marks the memory accesses a dominating access of the same address
-// checked as far, walking the dominator tree with the farthest end each
-// address's accesses on its path checked. A memory never shrinks, so an
-// access within an end checked before is within the memory.
+// bce marks the memory accesses a dominating access of the same memory and
+// address checked as far, walking the dominator tree with the farthest end
+// each address's accesses on its path checked. A memory never shrinks, so
+// an access within an end checked before is within the memory. A shared
+// memory's accesses are left as they are: each checks the size another
+// thread may have grown.
 func bce(f *Func) {
 	d := dominators(f)
-	// checked is the end checked for each address value, by its ID, and
-	// for constant addresses at -1.
-	checked := map[int32]uint64{}
+	// checked is the end checked for each memory's address value, by the
+	// memory's index above the value's ID, and for constant addresses
+	// above -1.
+	checked := map[uint64]uint64{}
 	var walk func(b *Block)
 	walk = func(b *Block) {
 		type undo struct {
-			k   int32
+			k   uint64
 			end uint64
 			had bool
 		}
 		var undos []undo
 		for _, v := range b.Values {
-			if v.Op != OpLoad && v.Op != OpStore {
+			if v.Op != OpLoad && v.Op != OpStore || v.Aux2&memShared != 0 {
 				continue
 			}
 			addr := v.Args[0]
-			k, end := addr.ID, v.Aux+uint64(v.Size)
-			if addr.Op == OpConst {
-				k, end = -1, uint64(uint32(addr.Aux))+end
+			id, end := addr.ID, v.Aux+uint64(v.Size)
+			if end < v.Aux {
+				// An i64 memory's offset whose end carries: the access traps.
+				continue
 			}
+			if addr.Op == OpConst {
+				c := constAddr(addr)
+				if c+end < c {
+					// The access traps.
+					continue
+				}
+				id, end = -1, c+end
+			}
+			k := uint64(memIndex(v))<<32 | uint64(uint32(id))
 			old, had := checked[k]
 			if had && old >= end {
 				v.NoCheck = true

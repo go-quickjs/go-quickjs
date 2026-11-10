@@ -1317,7 +1317,7 @@ func (g *gen) selectOp(v *Value) {
 	g.done(v, int(t))
 }
 
-// address returns the register holding a memory access's address plus its
+// address returns the register holding a plain access's address plus its
 // offset, to add to memory 0's base, checking the access's end against
 // memory 0's size unless the access needs no check. An i32 address is
 // zero-extended and the offset added in 64 bits, which nothing wraps.
@@ -1350,6 +1350,10 @@ func (g *gen) address(v *Value) arm64.Reg {
 }
 
 func (g *gen) load(v *Value) {
+	if !plainAccess(v) {
+		g.loadAny(v)
+		return
+	}
 	a := g.a
 	r := g.address(v)
 	if v.Type.IsFloat() {
@@ -1384,6 +1388,10 @@ func (g *gen) load(v *Value) {
 }
 
 func (g *gen) store(v *Value) {
+	if !plainAccess(v) {
+		g.storeAny(v)
+		return
+	}
 	a := g.a
 	r := g.address(v)
 	x := v.Args[1]

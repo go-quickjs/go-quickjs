@@ -176,10 +176,11 @@ func (bd *builder) reset() {
 	bd.refMark.Type = TRef
 }
 
-// memFact is that the bytes at addr + off, size of them, read as typ,
-// are val.
+// memFact is that the bytes of memory mem (an access's Aux2) at addr +
+// off, size of them, read as typ, are val.
 type memFact struct {
 	addr   *Value
+	mem    uint64
 	off    uint64
 	size   uint8
 	signed bool
@@ -801,10 +802,12 @@ func (bd *builder) instr() {
 		bd.goOp(op, uint64(mem), 1, bd.indexType(mem), at)
 	case opcode.MemoryCopy:
 		dst, src := r.u32(), r.u32()
-		bd.goOp(op, uint64(dst)|uint64(src)<<32, 3, TNone, at)
+		v := bd.goOp(op, uint64(dst)|uint64(src)<<32, 3, TNone, at)
+		v.InCode = dst == 0 && src == 0 && bd.memAux(0) == 0
 	case opcode.MemoryFill:
 		mem := r.u32()
-		bd.goOp(op, uint64(mem), 3, TNone, at)
+		v := bd.goOp(op, uint64(mem), 3, TNone, at)
+		v.InCode = mem == 0 && bd.memAux(0) == 0
 	default:
 		if bd.memoryOp(op, at) || bd.numeric(op, at) || bd.refInstr(op, at) {
 			return
@@ -936,7 +939,7 @@ func (bd *builder) tail(op Op, ft *module.FuncType, aux, aux2 uint64, at uint32,
 }
 
 // goOp builds an instruction Go runs, of nargs operands.
-func (bd *builder) goOp(op opcode.Opcode, imm uint64, nargs int, result Type, at uint32) {
+func (bd *builder) goOp(op opcode.Opcode, imm uint64, nargs int, result Type, at uint32) *Value {
 	args := bd.stack[len(bd.stack)-nargs:]
 	v := bd.value(OpGoOp, result, args...)
 	v.Aux, v.Aux2, v.At = uint64(op), imm, at
@@ -945,6 +948,7 @@ func (bd *builder) goOp(op opcode.Opcode, imm uint64, nargs int, result Type, at
 		bd.push(v)
 	}
 	bd.forget()
+	return v
 }
 
 func (bd *builder) globalGet(g uint32) {
@@ -1012,7 +1016,8 @@ func (bd *builder) memoryOp(op opcode.Opcode, at uint32) bool {
 	if op < opcode.I32LoadMem || op > opcode.I64StoreMem32 {
 		return false
 	}
-	_, off := bd.r.memarg()
+	mem, off := bd.r.memarg()
+	mx := bd.memAux(mem)
 	var size uint8
 	var t Type
 	signed := false
@@ -1061,40 +1066,66 @@ func (bd *builder) memoryOp(op opcode.Opcode, at uint32) bool {
 		v := bd.pop()
 		addr := bd.pop()
 		s := bd.value(OpStore, TNone, addr, v)
-		s.Aux, s.Size, s.At = off, size, at
-		bd.stored(addr, off, size, v)
+		s.Aux, s.Aux2, s.Size, s.At = off, mx, size, at
+		bd.stored(addr, mx, off, size, v)
 		return true
 	}
 	addr := bd.pop()
 	for _, k := range bd.mem {
-		if k.addr == addr && k.off == off && k.size == size && k.signed == signed && k.typ == t {
+		if k.addr == addr && k.mem == mx && k.off == off && k.size == size && k.signed == signed && k.typ == t {
 			bd.push(k.val)
 			return true
 		}
 	}
 	v := bd.value(OpLoad, t, addr)
-	v.Aux, v.Size, v.Signed, v.At = off, size, signed, at
-	bd.mem = append(bd.mem, memFact{addr: addr, off: off, size: size, signed: signed, typ: t, val: v})
+	v.Aux, v.Aux2, v.Size, v.Signed, v.At = off, mx, size, signed, at
+	if mx&memShared == 0 {
+		// Another thread may store into a shared memory between two loads:
+		// each reads it.
+		bd.mem = append(bd.mem, memFact{addr: addr, mem: mx, off: off, size: size, signed: signed, typ: t, val: v})
+	}
 	bd.push(v)
 	return true
 }
 
-// stored forgets what is known of the bytes a store may write, and knows
-// what a store of a whole value wrote: a later load of the same bytes, as
-// the same type, reads v.
-func (bd *builder) stored(addr *Value, off uint64, size uint8, v *Value) {
+// memAux is the Aux2 of an access of memory mem: its index, and whether it
+// is shared and of i64 addresses.
+func (bd *builder) memAux(mem uint32) uint64 {
+	mm := &bd.m.Memories[mem]
+	x := uint64(mem)
+	if mm.Shared {
+		x |= memShared
+	}
+	if mm.Limits.Is64 {
+		x |= memWide
+	}
+	return x
+}
+
+// stored forgets what is known of the bytes a store into memory mx may
+// write, and knows what a store of a whole value wrote: a later load of the
+// same bytes, as the same type, reads v -- but in a shared memory, which
+// another thread may store into.
+func (bd *builder) stored(addr *Value, mx, off uint64, size uint8, v *Value) {
 	keep := bd.mem[:0]
 	for _, k := range bd.mem {
-		// Accesses at one address value, the offsets apart, are disjoint;
-		// accesses at constant addresses are disjoint where their bytes
-		// are.
+		// Accesses of other memories, accesses at one address value, the
+		// offsets apart, and accesses at constant addresses whose bytes
+		// are are disjoint.
 		disjoint := false
-		if k.addr == addr {
+		switch {
+		case k.mem != mx:
+			disjoint = true
+		case k.addr == addr:
 			disjoint = k.off+uint64(k.size) <= off || off+uint64(size) <= k.off
-		} else if k.addr.Op == OpConst && addr.Op == OpConst {
-			a := uint64(uint32(k.addr.Aux)) + k.off
-			b := uint64(uint32(addr.Aux)) + off
-			disjoint = a+uint64(k.size) <= b || b+uint64(size) <= a
+		case k.addr.Op == OpConst && addr.Op == OpConst:
+			a, b := constAddr(k.addr), constAddr(addr)
+			// The sums are taken where neither carries: past that the
+			// access traps.
+			if a+k.off >= a && b+off >= b {
+				a, b = a+k.off, b+off
+				disjoint = a+uint64(k.size) <= b || b+uint64(size) <= a
+			}
 		}
 		if disjoint {
 			keep = append(keep, k)
@@ -1102,9 +1133,17 @@ func (bd *builder) stored(addr *Value, off uint64, size uint8, v *Value) {
 	}
 	bd.mem = keep
 	full := (v.Type == TI32 || v.Type == TF32) && size == 4 || (v.Type == TI64 || v.Type == TF64) && size == 8
-	if full {
-		bd.mem = append(bd.mem, memFact{addr: addr, off: off, size: size, typ: v.Type, val: v})
+	if full && mx&memShared == 0 {
+		bd.mem = append(bd.mem, memFact{addr: addr, mem: mx, off: off, size: size, typ: v.Type, val: v})
 	}
+}
+
+// constAddr is constant address c's value: an i32's zero-extended.
+func constAddr(c *Value) uint64 {
+	if c.Type == TI64 {
+		return c.Aux
+	}
+	return uint64(uint32(c.Aux))
 }
 
 // numeric builds a numeric instruction, reporting whether op is one.
@@ -1323,34 +1362,7 @@ func check(m *module.Module, fn uint32) {
 				typeOf(r.valueType(), "select")
 			}
 			continue
-		case opcode.MemorySize, opcode.MemoryGrow, opcode.MemoryFill:
-			checkMemory(m, r.u32(), op, false)
-			continue
-		case opcode.MemoryCopy:
-			checkMemory(m, r.u32(), op, false)
-			checkMemory(m, r.u32(), op, false)
-			continue
-		}
-		if op >= opcode.I32LoadMem && op <= opcode.I64StoreMem32 {
-			mem, _ := r.memarg()
-			checkMemory(m, mem, op, true)
-			continue
 		}
 		r.skipImmediates(op)
-	}
-}
-
-// checkMemory refuses an instruction on memory mem that this tier does not
-// compile: an access of a memory other than 0, of an i64 memory or of a
-// shared one.
-func checkMemory(m *module.Module, mem uint32, op opcode.Opcode, access bool) {
-	mm := &m.Memories[mem]
-	switch {
-	case mm.Limits.Is64:
-		refuse(RefuseMemory, "%s of an i64 memory", op.Name())
-	case mm.Shared:
-		refuse(RefuseMemory, "%s of a shared memory", op.Name())
-	case access && mem != 0:
-		refuse(RefuseMemory, "%s of memory %d", op.Name(), mem)
 	}
 }

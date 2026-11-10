@@ -25,6 +25,7 @@ default (see Tier-up).
 | `lower.go` | the lowering's part both architectures share: the allocator's view of the function, where each value is, the listing |
 | `lower_amd64.go`, `lower_arm64.go` | the lowering: each architecture's code |
 | `refs_amd64.go`, `refs_arm64.go` | the references: the reference instructions, the barrier routine, a call's references, the tail calls |
+| `memory_amd64.go`, `memory_arm64.go` | the accesses of any memory at any offset: memories other than 0, shared ones, those of i64 addresses |
 | `internal/jit/lsra` | the register allocator, which knows nothing of WebAssembly |
 
 ## The IR
@@ -40,15 +41,17 @@ past the others), a return of values, or a trap (unreachable).
 
 The operations are WebAssembly's numeric ones, one for each operation of
 both widths (a comparison's width is its argument's), `select`, loads and
-stores of memory 0 (their width, sign extension, offset, and `NoCheck`
-once a dominating access checked as far), the globals -- `global.addr`,
+stores of any memory (their width, sign extension, offset, their memory --
+its index, and whether it is shared and of i64 addresses, in `Aux2` -- and
+`NoCheck` once a dominating access checked as far), the globals -- `global.addr`,
 the address of a global's value, made once in the entry block, which
 `global.get` and `global.set` read and write through -- calls of a
 function of the module (`call`), through a table (`call_indirect`) and
 through a reference (`call_ref`), whose numeric results `result` values
 read, `goop`, an instruction Go runs (memory.size, memory.grow,
-memory.copy, memory.fill) -- but memory.copy and memory.fill of memory 0,
-which the code does itself and which are not calls (`BulkInCode`) --
+memory.copy, memory.fill) -- but memory.copy and memory.fill of memory 0
+where it is neither shared nor of i64 addresses, which the code does
+itself and which are not calls (`InCode`, `BulkInCode`) --
 `ref`, a reference instruction (below), and the tail calls
 (`return_call`, `return_call_indirect`, `return_call_ref`), the last value
 of a block that ends with them (a sixth way, `tail`).
@@ -104,11 +107,12 @@ construct whose end nothing reaches makes the rest of its parent dead.
 
 Within a block the builder knows what a global holds -- the last value
 read or written -- and what memory holds: the last loads, and what a store
-of a whole value wrote, a later load of the same address value, offset,
-width and type reading it. A store forgets what it may overlap: accesses
-at one address value whose bytes are disjoint, and accesses at constant
-addresses whose bytes are disjoint, survive it. A call and an instruction
-Go runs forget it all.
+of a whole value wrote, a later load of the same memory, address value,
+offset, width and type reading it. A store forgets what it may overlap:
+accesses of other memories, accesses at one address value whose bytes are
+disjoint, and accesses at constant addresses whose bytes are disjoint,
+survive it. A shared memory's loads are not known: another thread may
+store between two. A call and an instruction Go runs forget it all.
 
 The phis a lookup made that turn out trivial -- every argument one value,
 or the phi itself -- are removed by the first pass.
@@ -126,7 +130,7 @@ or the phi itself -- are removed by the first pass.
 | `gvn` again, `copyelim` | |
 | `licm` | the pure values of a loop that makes no call whose arguments are defined outside it go to its preheader -- its header's one predecessor outside it; a loop threading made has others, and keeps its values -- inner loops first; a value hoisted out of a loop that calls would live across the calls, kept in a slot, where computing it again costs less |
 | `dce` | values without uses or effects, and phis only themselves use |
-| `bce` | bounds-check elimination: an access is in bounds if a dominating access of the same address value checked an end as far; a memory never shrinks, so the check holds across calls and grows |
+| `bce` | bounds-check elimination: an access is in bounds if a dominating access of the same memory and address value checked an end as far; a memory never shrinks, so the check holds across calls and grows; a shared memory's accesses each check its size |
 | `split` | every critical edge gets a block, where its phis' moves go |
 | `loops` | natural loops, and each block's depth (below) |
 
@@ -349,13 +353,33 @@ targets, or, for a back edge, to its poll's count. A constant is made where
 it is used, the zero register for 0 where the instruction reads its
 register forms.
 
-A memory access computes its end, `address + offset + size`, in R11 and
-compares it with the context's memory size, unless `NoCheck`; an offset
-plus a size past 2^31-1 is refused (`offset`). The access is `[R15 +
-address + offset]`, the address in a register (an i32 there has its
-upper half clear). On arm64 the address plus the offset is made in X17,
-in 64 bits, where the offset is not 0, the end in X16 and compared with
-X21, and the access is `[X20 + X17]`.
+An access of memory 0, unshared and of i32 addresses (`plainAccess`),
+computes its end, `address + offset + size`, in R11 and compares it with
+the context's memory size, unless `NoCheck`; an offset plus a size past
+2^31-1 is refused (`offset`). The access is `[R15 + address + offset]`,
+the address in a register (an i32 there has its upper half clear). On
+arm64 the address plus the offset is made in X17, in 64 bits, where the
+offset is not 0, the end in X16 and compared with X21, and the access is
+`[X20 + X17]`.
+
+Any other access (`memory_GOARCH.go`) reads its memory's size where the
+baseline reads it (its README's Memory), at each access: memory 0's from
+the context (X21 on arm64), a shared one's through the address of its
+size, which other threads' grows store, another's from the instance's
+table of memories (`Ctx.Mems`), whose address the context holds and whose
+entries the engine fills at every entry, a grow by the function, by a
+callee or by Go included: nothing of a memory is kept in a register or a
+value across anything. An i64 memory's address plus its offset is made in
+R10 (X17), and traps where it carries; the check is then that the size
+less the rest of the access -- the offset and the size, or the size where
+the offset is in the register -- does not borrow and is not below the
+address, in R11 (X16), so that no sum carries. A constant address is
+checked against a constant end, and one whose sums carry jumps to the
+trap. Memory 0's base is R15 (X20); another's is loaded from the table
+into R11 (X16) after the check, `[R11 + address + offset]` -- or, for a store
+whose integer value R11 must hold, added to the address in R10, the access
+`[R10 + offset]` (on arm64 an add, the access `[X17]`). A float store's
+value is in X15 (D31) first, a constant being made through R11.
 
 A back edge -- a jump to a block at or before its own in the layout,
 reverse postorder -- counts down the poll counter and exits for a poll
@@ -662,7 +686,6 @@ A function is refused -- it keeps its baseline code -- when it has:
 | `exceptions` | try, try_table, throw, the legacy instructions |
 | `table` | table.grow, table.fill, table.copy, table.init, elem.drop |
 | `bulk` | memory.init, data.drop |
-| `memory` | an access of a memory other than 0, of an i64 memory or of a shared one |
 | `offset` | an access whose offset plus size is past 2^31-1 |
 | `frame` | more spill slots than its frame has below the call area |
 | `size` | code past `internal/jit.MaxCodeBytes`, or, on arm64, past a branch's reach |
@@ -736,7 +759,10 @@ samples, `TestOptTierUpByExits` the exits'; `TestOptCallIndirect` every
 kind of element a native call_indirect meets, `TestOptRefs` references
 in every place, calls and tail calls of every kind with them, idle and
 with the collector marking, `TestOptBulkMemory`
-memory.copy and memory.fill at every overlap and end; `TestThreadDispatch`
+memory.copy and memory.fill at every overlap and end; `TestOptMemory` the
+baseline's tests of every kind of memory (`TestJITMultiMemory` and the
+others) on this tier, and `TestOptMemoryRandom` random accesses of four
+kinds of memory near their ends, with values spilled and constant; `TestThreadDispatch`
 and `TestOptThreadDispatch` jump threading, the latter on 1,500 random
 dispatch loops against the interpreter; `TestMarks` the profile's marks.
 
@@ -797,13 +823,13 @@ json's and interp's, which compile their hot functions within a run of
 about 60 ms (json +10%, interp +4%, where they were +19% and +17%
 before the compile's cost was worked on; see Tier-up).
 
-On the spec scripts the tier compiles 4,149 functions and refuses 2,693
-(SIMD and v128s 1,499, memories other than an i32 one 514, the table
-instructions that allocate or copy 218, GC instructions 188, exceptions
-107, atomics 80, memory.init and data.drop 73, offsets 14), where it
-compiled 3,914 and refused 2,928 -- references 252 and tail calls 45
-among them -- before it took references and tail calls; in 23 ms, 6 µs
-a function (43 to 63 ms before), where the
+On the spec scripts the tier compiles 4,637 functions and refuses 2,205
+(SIMD and v128s 1,499, the table instructions that allocate or copy 218,
+GC instructions 188, exceptions 107, atomics 80, memory.init and data.drop
+73, offsets 40), where it compiled 4,149 before it took every memory --
+memories other than an i32 one 514 were refused -- and 3,914 before it
+took references and tail calls; in 26 ms, 6 µs a function (43 to 63 ms
+before references), where the
 baseline's 2,926 take 11 to 23 ms. The Go program's 3,011 functions
 compile in 0.16 ms each (0.40 before; the baseline's, 0.12 ms).
 

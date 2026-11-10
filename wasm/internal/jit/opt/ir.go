@@ -5,9 +5,8 @@ package opt
 
 import (
 	"fmt"
+	"math"
 	"strings"
-
-	"github.com/go-quickjs/go-quickjs/wasm/internal/opcode"
 )
 
 // Type is an SSA value's type: the four numeric types, a call's tuple of
@@ -131,11 +130,13 @@ const (
 	// OpSelect is Args[0] if Args[2] is not zero, else Args[1].
 	OpSelect
 
-	// OpLoad loads from memory 0 at Args[0] plus offset Aux: Size bytes,
-	// sign-extended if Signed; it traps at At past the memory's end,
-	// unless NoCheck says a dominating access checked it.
+	// OpLoad loads from memory Aux2 (memIndex, with memShared and memWide)
+	// at Args[0] plus offset Aux: Size bytes, sign-extended if Signed; it
+	// traps at At past the memory's end, unless NoCheck says a dominating
+	// access checked it.
 	OpLoad
-	// OpStore stores Args[1]'s low Size bytes at Args[0] plus Aux.
+	// OpStore stores Args[1]'s low Size bytes at Args[0] plus Aux, in
+	// memory Aux2.
 	OpStore
 	// OpGlobalAddr is the address of global Aux's value, which the
 	// instance keeps for the code's run; OpGlobalGet and OpGlobalSet read
@@ -150,8 +151,10 @@ const (
 	// arguments and the index (last) in Args.
 	OpCallIndirect
 	// OpGoOp runs the instruction whose opcode is Aux in Go, with
-	// immediate Aux2, on Args; its result, if Type is not TNone, is its
-	// value: memory.size, memory.grow, memory.copy, memory.fill.
+	// immediate Aux2 (goImms), on Args; its result, if Type is not TNone,
+	// is its value: memory.size, memory.grow, memory.copy, memory.fill and
+	// the other instructions goops.go lists. InCode says the code does it
+	// itself (BulkInCode).
 	OpGoOp
 	// OpResult is result Aux of the call Args[0].
 	OpResult
@@ -335,6 +338,9 @@ type Value struct {
 	// NoCheck says a memory access needs no bounds check: a dominating
 	// access of the same address checked as far.
 	NoCheck bool
+	// InCode says an instruction Go runs is done by the code itself
+	// (BulkInCode).
+	InCode bool
 	// Pos is a call's or a tail call's arguments' first stack position,
 	// whose reference slot and those after it hold its reference
 	// arguments, and a call's reference results.
@@ -393,14 +399,25 @@ func (v *Value) HasEffect() bool {
 func (v *Value) IsCall() bool { return opInfos[v.Op].flags&fCall != 0 && !v.BulkInCode() }
 
 // BulkInCode reports whether v is a memory.copy or a memory.fill of memory
-// 0, which the code does itself rather than Go.
-func (v *Value) BulkInCode() bool {
-	if v.Op != OpGoOp || v.Aux2 != 0 {
-		return false
-	}
-	op := opcode.Opcode(v.Aux)
-	return op == opcode.MemoryCopy || op == opcode.MemoryFill
-}
+// 0, neither shared nor of i64 addresses, which the code does itself
+// rather than Go: the builder says so (InCode).
+func (v *Value) BulkInCode() bool { return v.Op == OpGoOp && v.InCode }
+
+// A memory access's memory, its Aux2: the memory's index in the low word,
+// and memShared and memWide for a shared memory and one of i64 addresses.
+const (
+	memShared = 1 << 32
+	memWide   = 1 << 33
+)
+
+// memIndex is the index of memory access v's memory.
+func memIndex(v *Value) uint32 { return uint32(v.Aux2) }
+
+// plainAccess reports whether memory access v is of memory 0, unshared and
+// of i32 addresses, at an offset whose end is within 2^31-1: the access
+// lowered with its offset a displacement and its end checked against the
+// context's size.
+func plainAccess(v *Value) bool { return v.Aux2 == 0 && v.Aux+uint64(v.Size) <= math.MaxInt32 }
 
 // isTail reports whether op is a tail call's.
 func isTail(op Op) bool { return op == OpTail || op == OpTailIndirect || op == OpTailRef }
@@ -602,6 +619,9 @@ func (v *Value) long() string {
 		s += fmt.Sprintf(" [kind %d %#x r%d<-r%d]", v.Aux&0xff, v.Aux>>8, v.Aux2>>32, uint32(v.Aux2))
 	}
 	if v.Op == OpLoad || v.Op == OpStore {
+		if v.Aux2 != 0 {
+			s += fmt.Sprintf(" mem %d", memIndex(v))
+		}
 		s += fmt.Sprintf(" size %d", v.Size)
 		if v.NoCheck {
 			s += " nocheck"

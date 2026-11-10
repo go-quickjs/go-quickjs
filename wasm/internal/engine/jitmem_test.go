@@ -15,7 +15,14 @@ import (
 // code after the call.
 func sameAsInterpreter(t *testing.T, src string, calls []jitCall) {
 	t.Helper()
-	nat := nativeInstance(t, src)
+	sameAsInterpreterIn(t, nativeInstance(t, src), src, calls, nativeRan)
+}
+
+// sameAsInterpreterIn is sameAsInterpreter on nat, an instance of src,
+// each function it calls having to have code ran says it has after the
+// call.
+func sameAsInterpreterIn(t *testing.T, nat *Instance, src string, calls []jitCall, ran func(*Instance, string) bool) {
+	t.Helper()
 	in := interpretedInstance(t, src)
 	for _, cl := range calls {
 		what := fmt.Sprintf("%s%#x", cl.name, cl.args)
@@ -35,8 +42,8 @@ func sameAsInterpreter(t *testing.T, src string, calls []jitCall) {
 		if cl.want != nil && (len(rn) == 0 || rn[0].N != *cl.want) {
 			t.Fatalf("%s = %v, want %#x", what, rn, *cl.want)
 		}
-		if !nativeRan(nat, cl.name) {
-			t.Fatalf("%s has no native code", cl.name)
+		if !ran(nat, cl.name) {
+			t.Fatalf("%s has no native code of the tier tested", cl.name)
 		}
 		for i := range in.Memories {
 			if !bytes.Equal(nat.Memories[i].Bytes(), in.Memories[i].Bytes()) {
@@ -78,7 +85,10 @@ func sameJITOutcome(rn []Val, en error, ri []Val, ei error) bool {
 
 // An i64 memory's address plus the offset and the size are checked in 64
 // bits without wrapping: an address near 2^64 traps, whatever the offset.
-func TestJITMemory64Bounds(t *testing.T) {
+func TestJITMemory64Bounds(t *testing.T) { memory64Bounds(t, sameAsInterpreter) }
+
+// memory64Bounds runs TestJITMemory64Bounds's calls through same.
+func memory64Bounds(t *testing.T, same func(*testing.T, string, []jitCall)) {
 	const src = `(module
   (memory i64 1 3)
   (func (export "load8") (param i64) (result i32) (i32.load8_u (local.get 0)))
@@ -94,7 +104,7 @@ func TestJITMemory64Bounds(t *testing.T) {
   (func (export "grow") (param i64) (result i64) (memory.grow (local.get 0)))
   (func (export "size") (result i64) (memory.size)))`
 	oob := TrapMemOutOfBounds
-	sameAsInterpreter(t, src, []jitCall{
+	same(t, src, []jitCall{
 		{name: "load8", args: []uint64{0}, want: u64p(0)},
 		{name: "store", args: []uint64{65536 - 16, 0x0102030405060708}},
 		{name: "load16", args: []uint64{65536 - 24}, want: u64p(0x0102030405060708)},
@@ -130,7 +140,10 @@ func TestJITMemory64Bounds(t *testing.T) {
 
 // The last byte of a memory is in bounds and the one past it is not, for
 // each width, after a grow too.
-func TestJITMemoryLastByte(t *testing.T) {
+func TestJITMemoryLastByte(t *testing.T) { memoryLastByte(t, sameAsInterpreter) }
+
+// memoryLastByte runs TestJITMemoryLastByte's calls through same.
+func memoryLastByte(t *testing.T, same func(*testing.T, string, []jitCall)) {
 	for _, mem := range []string{"(memory 1 2)", "(memory i64 1 2)"} {
 		idx := "i32"
 		if mem != "(memory 1 2)" {
@@ -163,13 +176,16 @@ func TestJITMemoryLastByte(t *testing.T) {
 				jitCall{name: "grow"},
 			)
 		}
-		t.Run(idx, func(t *testing.T) { sameAsInterpreter(t, src, calls) })
+		t.Run(idx, func(t *testing.T) { same(t, src, calls) })
 	}
 }
 
 // Loads and stores of memories other than 0 -- an i32 one, an i64 one and
 // a shared one -- check each memory's own size and reach its own bytes.
-func TestJITMultiMemory(t *testing.T) {
+func TestJITMultiMemory(t *testing.T) { multiMemory(t, sameAsInterpreter) }
+
+// multiMemory runs TestJITMultiMemory's calls through same.
+func multiMemory(t *testing.T, same func(*testing.T, string, []jitCall)) {
 	const src = `(module
   (memory $m0 1)
   (memory $m1 2 5)
@@ -190,7 +206,7 @@ func TestJITMultiMemory(t *testing.T) {
   (func (export "constPast") (result i32) (i32.load8_u $m1 (i32.const 131072)))
   (func (export "grow3") (param i32) (result i32) (memory.grow $m3 (local.get 0))))`
 	oob := TrapMemOutOfBounds
-	sameAsInterpreter(t, src, []jitCall{
+	same(t, src, []jitCall{
 		{name: "st1", args: []uint64{131072 - 12, 0x1122334455667788}},
 		{name: "ld1", args: []uint64{131072 - 12}, want: u64p(0x1122334455667788)},
 		{name: "ld1b", args: []uint64{131071}, want: u64p(0x11)},
@@ -218,7 +234,10 @@ func TestJITMultiMemory(t *testing.T) {
 // A memory other than 0 grown inside a loop, and by a native call between
 // two accesses of the caller's, is accessed at its new size: native code
 // reads its base and size where the grow left them.
-func TestJITMultiMemoryGrow(t *testing.T) {
+func TestJITMultiMemoryGrow(t *testing.T) { multiMemoryGrow(t, sameAsInterpreter) }
+
+// multiMemoryGrow runs TestJITMultiMemoryGrow's calls through same.
+func multiMemoryGrow(t *testing.T, same func(*testing.T, string, []jitCall)) {
 	const src = `(module
   (memory $m0 1)
   (memory $m1 1 8)
@@ -248,7 +267,7 @@ func TestJITMultiMemoryGrow(t *testing.T) {
   (func (export "grow1") (param i32) (result i32) (call $grow1 (local.get 0)))
   (func (export "size1") (result i32) (memory.size $m1)))`
 	oob := TrapMemOutOfBounds
-	sameAsInterpreter(t, src, []jitCall{
+	same(t, src, []jitCall{
 		{name: "byCall", args: []uint64{1, 0}, trap: oob},
 		{name: "byCall", args: []uint64{1, 1}, want: u64p(7)},
 		{name: "byCall", args: []uint64{0, 1}, want: u64p(7)},
