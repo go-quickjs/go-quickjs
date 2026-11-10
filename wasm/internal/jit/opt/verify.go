@@ -385,6 +385,41 @@ func checkTypes(v *Value) error {
 		}
 		return same(v.Type)
 	case OpGoOp:
+	case OpAtomicLoad:
+		if err := arity(1); err != nil {
+			return err
+		}
+		if !v.Type.IsInt() {
+			return fmt.Errorf("of type %v", v.Type)
+		}
+		return addrType(v)
+	case OpAtomicStore:
+		if err := arity(2); err != nil {
+			return err
+		}
+		if !v.Args[1].Type.IsInt() {
+			return fmt.Errorf("a store of %v", v.Args[1].Type)
+		}
+		return addrType(v)
+	case OpAtomicAdd, OpAtomicSub, OpAtomicAnd, OpAtomicOr, OpAtomicXor, OpAtomicXchg, OpAtomicCmpxchg:
+		k := 2
+		if v.Op == OpAtomicCmpxchg {
+			k = 3
+		}
+		if err := arity(k); err != nil {
+			return err
+		}
+		if !v.Type.IsInt() {
+			return fmt.Errorf("of type %v", v.Type)
+		}
+		for _, x := range v.Args[1:] {
+			if x.Type != v.Type {
+				return fmt.Errorf("an operand of %v", x.Type)
+			}
+		}
+		return addrType(v)
+	case OpFence:
+		return arity(0)
 	default:
 		return fmt.Errorf("an unknown operation")
 	}

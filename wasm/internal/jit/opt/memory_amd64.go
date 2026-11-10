@@ -75,8 +75,8 @@ func (g *gen) sizeInto(v *Value) {
 // where their sum carries, as the interpreter's do; then the end is checked
 // unless the access needs no check.
 //
-// own is a register the instruction has for the effective address, which
-// it may lose, or noReg, s1 then being taken where the address's register
+// own is a register of the instruction's own that holds the address and
+// may be lost, or noReg, s1 then being taken where the address's register
 // cannot be: for an i64 memory's address plus its offset, or an offset
 // past 2^31-1, which are made in 64 bits. base is the register a memory
 // other than 0's base is loaded into -- s0 or s1, which the effective
@@ -125,7 +125,10 @@ func (g *gen) memAccess(v *Value, own, base amd64.Reg, align bool) memOp {
 		a.MovImm(dst, e)
 		ea = dst
 	} else {
-		r := g.intoG(addr, dst)
+		r := own
+		if own == noReg {
+			r = g.intoG(addr, dst)
+		}
 		if !wide && off+size <= math.MaxInt32 {
 			// The offset is the displacement: the zero-extended address plus
 			// it does not wrap.

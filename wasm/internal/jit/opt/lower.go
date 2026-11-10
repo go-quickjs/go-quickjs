@@ -103,10 +103,11 @@ func classOf(t Type) int8 {
 
 // clobbers are the registers instructions clobber, by class, where the
 // architecture's instruction takes fixed registers: memory.copy's and
-// memory.fill's, a division's and a shift's by a variable count. The
-// allocator only reads them.
+// memory.fill's, a division's and a shift's by a variable count, an atomic
+// store's, read-modify-write's and compare-and-exchange's. The allocator
+// only reads them.
 type clobbers struct {
-	bulk, div, shift []uint64
+	bulk, div, shift, atomic []uint64
 }
 
 // listing prints the function as lowered: each value with its location,
@@ -302,6 +303,8 @@ func (g *lowering) allocate(ws *allocScratch, classes [][]int, cl *clobbers) {
 				area = max(area, 2*(len(ft.Params)+extraArgs(v.Op)))
 			case OpDivS, OpDivU, OpRemS, OpRemU:
 				in.Clobber = cl.div
+			case OpAtomicStore, OpAtomicAdd, OpAtomicSub, OpAtomicAnd, OpAtomicOr, OpAtomicXor, OpAtomicXchg, OpAtomicCmpxchg:
+				in.Clobber = cl.atomic
 			case OpShl, OpShrS, OpShrU, OpRotl, OpRotr:
 				if v.Args[1].Op != OpConst {
 					in.Clobber = cl.shift

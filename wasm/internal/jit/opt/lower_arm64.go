@@ -51,8 +51,13 @@ const (
 )
 
 // The registers instructions clobber, by class: memory.copy's and
-// memory.fill's X13, X14 and X15. Division and shifts take any register.
-var arm64Clobbers = clobbers{bulk: []uint64{1<<bulkDst | 1<<bulkSrc | 1<<bulkLen}}
+// memory.fill's X13, X14 and X15, and an atomic store's,
+// read-modify-write's and compare-and-exchange's. Division and shifts take
+// any register.
+var arm64Clobbers = clobbers{
+	bulk:   []uint64{1<<bulkDst | 1<<bulkSrc | 1<<bulkLen},
+	atomic: []uint64{1<<bulkDst | 1<<bulkSrc | 1<<bulkLen},
+}
 
 // The context's fields' offsets.
 var (
@@ -1103,6 +1108,9 @@ func (g *gen) value(v *Value, rest []*Value) {
 		} else {
 			g.callGo(v, rest)
 		}
+	case OpAtomicLoad, OpAtomicStore, OpAtomicAdd, OpAtomicSub, OpAtomicAnd, OpAtomicOr, OpAtomicXor, OpAtomicXchg,
+		OpAtomicCmpxchg, OpFence:
+		g.atomic(v)
 	default:
 		panic("wasm opt: no lowering of " + v.Op.String())
 	}
@@ -1548,10 +1556,7 @@ func (g *gen) callGo(v *Value, rest []*Value) {
 	base := uint64(g.argBase)
 	{
 		op := opcode.Opcode(v.Aux)
-		x, y := v.Aux2, uint64(0)
-		if op == opcode.MemoryCopy {
-			x, y = v.Aux2&0xffffffff, v.Aux2>>32
-		}
+		x, y := goImms(v)
 		g.exit(wjit.ExitOp, resume, uint64(op), x, y, base, uint64(v.At))
 		if v.Type != TNone {
 			dst := g.locOf(v)

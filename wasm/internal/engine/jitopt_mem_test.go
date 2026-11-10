@@ -18,8 +18,8 @@ func optSameAsInterpreter(t *testing.T, src string, calls []jitCall) {
 }
 
 // The optimizing tier's accesses of every kind of memory -- memories other
-// than 0, of i64 addresses, shared ones -- at every offset check each
-// memory's own size,
+// than 0, of i64 addresses, shared ones -- at every offset, atomic ones
+// too, check each memory's own size,
 // read where it is at each access, and reach its own bytes, after grows by
 // the function, by its callees and by Go, as the baseline's do.
 func TestOptMemory(t *testing.T) {
@@ -28,6 +28,8 @@ func TestOptMemory(t *testing.T) {
 		"LastByte":        memoryLastByte,
 		"MultiMemory":     multiMemory,
 		"MultiMemoryGrow": multiMemoryGrow,
+		"Atomics":         atomicsMatchInterpreter,
+		"AtomicTraps":     atomicTraps,
 	} {
 		t.Run(name, func(t *testing.T) { run(t, optSameAsInterpreter) })
 	}
@@ -36,7 +38,8 @@ func TestOptMemory(t *testing.T) {
 // Random functions of loads and stores of four memories -- memory 0, an
 // unshared one, one of i64 addresses and a shared one -- at addresses near
 // each memory's end and offsets near 2^31 and 2^32 (and 2^64 for i64
-// addresses) too, with more values live than registers, the values
+// addresses) too, atomic accesses among them, with more values live than
+// registers, the values
 // stored constants, locals and values spilled, compute what the
 // interpreter computes and leave the memories as it does, traps included.
 func TestOptMemoryRandom(t *testing.T) {
@@ -93,6 +96,32 @@ func TestOptMemoryRandom(t *testing.T) {
 					a = fmt.Sprintf("(i64.extend_i32_u %s)", a)
 				}
 				addr = a
+			}
+			if rng.IntN(4) == 0 {
+				// An atomic access, aligned but at the memory's end.
+				a := "(i32.and (i32.add (local.get $p) (i32.const 8)) (i32.const -8))"
+				if m.idx == "i64" {
+					a = fmt.Sprintf("(i64.extend_i32_u %s)", a)
+				}
+				aoff := []int{0, 8, 16}[rng.IntN(3)]
+				var val string
+				switch k := rng.IntN(6); k {
+				case 0:
+					val = fmt.Sprintf("(i64.atomic.rmw.add $m%d offset=%d %s (local.get $l%d))", mi, aoff, a, rng.IntN(16))
+				case 1:
+					val = fmt.Sprintf("(i64.extend_i32_u (i32.atomic.rmw.cmpxchg $m%d offset=%d %s (i32.wrap_i64 (local.get $acc)) (i32.wrap_i64 (local.get $l%d))))", mi, aoff, a, rng.IntN(16))
+				case 2:
+					val = fmt.Sprintf("(i64.atomic.rmw8.xor_u $m%d offset=%d %s (local.get $acc))", mi, aoff+1, a)
+				case 3:
+					val = fmt.Sprintf("(i64.atomic.load32_u $m%d offset=%d %s)", mi, aoff+4, a)
+				case 4:
+					val = fmt.Sprintf("(i64.atomic.rmw16.or_u $m%d offset=%d %s (i64.const %d))", mi, aoff+2, a, rng.IntN(70000))
+				default:
+					fmt.Fprintf(&b, "    (i32.atomic.store16 $m%d offset=%d %s (i32.wrap_i64 (local.get $l%d)))\n", mi, aoff+6, a, rng.IntN(16))
+					continue
+				}
+				fmt.Fprintf(&b, "    (local.set $acc (i64.add (i64.rotl (local.get $acc) (i64.const 7)) %s))\n", val)
+				continue
 			}
 			off := []uint64{0, 0, 1, 4, 16, 255, 0, 1, 4, 16, 255, 0x7ffffff9, 0x80000000, 0xfffffff0}[rng.IntN(14)]
 			if m.idx == "i64" && rng.IntN(20) == 0 {
@@ -176,4 +205,16 @@ func sameAsInterpreterTraps(t *testing.T, src string, calls []jitCall) {
 			}
 		}
 	}
+}
+
+// Goroutines running the optimizing tier's code on one shared memory update
+// it atomically, as TestJITAtomicsConcurrent's run the baseline's.
+func TestOptAtomicsConcurrent(t *testing.T) {
+	atomicsConcurrent(t, func(t testing.TB, src string, imports ...Extern) *Instance {
+		inst := thresholdInstance(t, src, 0, imports...)
+		inst.Code.setOSRCalls(0)
+		inst.Code.SetOptThreshold(0)
+		inst.Code.SetOptBackground(false)
+		return inst
+	}, optimized)
 }

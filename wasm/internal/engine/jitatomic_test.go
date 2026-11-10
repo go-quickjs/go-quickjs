@@ -90,7 +90,10 @@ func atomicTestWidth(op string) uint64 {
 // memory 1, with operands whose bits above the width are set, and a
 // compare-and-exchange's expected value equal to memory's in the width's
 // bits and not.
-func TestJITAtomicsMatchInterpreter(t *testing.T) {
+func TestJITAtomicsMatchInterpreter(t *testing.T) { atomicsMatchInterpreter(t, sameAsInterpreter) }
+
+// atomicsMatchInterpreter runs TestJITAtomicsMatchInterpreter's calls through same.
+func atomicsMatchInterpreter(t *testing.T, same func(*testing.T, string, []jitCall)) {
 	const pattern = 0xF0E1D2C3B4A59687
 	for _, tc := range []struct{ name, mems, idx string }{
 		{"shared i32 memory 0", "(memory 1 1 shared)", "i32"},
@@ -141,7 +144,7 @@ func TestJITAtomicsMatchInterpreter(t *testing.T) {
 						jitCall{name: l, args: []uint64{at}})
 				}
 			}
-			sameAsInterpreter(t, atomicModule(tc.mems, tc.idx, mem), calls)
+			same(t, atomicModule(tc.mems, tc.idx, mem), calls)
 		})
 	}
 }
@@ -150,7 +153,10 @@ func TestJITAtomicsMatchInterpreter(t *testing.T) {
 // traps before its bounds are checked; an i64 memory's address and offset
 // whose sum carries trap out of bounds first. wait and notify, which exit
 // to Go, check the same, and a wait on an unshared memory traps.
-func TestJITAtomicTraps(t *testing.T) {
+func TestJITAtomicTraps(t *testing.T) { atomicTraps(t, sameAsInterpreter) }
+
+// atomicTraps runs TestJITAtomicTraps's calls through same.
+func atomicTraps(t *testing.T, same func(*testing.T, string, []jitCall)) {
 	const src = `(module
   (memory 1 1 shared)
   (memory $m64 i64 1 1)
@@ -172,7 +178,7 @@ func TestJITAtomicTraps(t *testing.T) {
   (func (export "wait64own") (param i32) (result i32) (memory.atomic.wait64 $own (local.get 0) (i64.const 0) (i64.const 0)))
   (func (export "fence") (result i32) (atomic.fence) (i32.const 3)))`
 	ua, oob := TrapUnalignedAccess, TrapMemOutOfBounds
-	sameAsInterpreter(t, src, []jitCall{
+	same(t, src, []jitCall{
 		{name: "ld32", args: []uint64{2}, want: u64p(0)},
 		{name: "ld32", args: []uint64{1}, trap: ua},
 		{name: "ld32", args: []uint64{3}, trap: ua},
@@ -272,7 +278,12 @@ func atomicWorkSrc(mem1 bool) string {
 // turns, the bytes beside the narrow ones untouched; and a memory grown by
 // one is accessed at its new size by another that saw the grow only
 // through an atomic flag.
-func TestJITAtomicsConcurrent(t *testing.T) {
+func TestJITAtomicsConcurrent(t *testing.T) { atomicsConcurrent(t, nativeInstance, nativeRan) }
+
+// atomicsConcurrent runs TestJITAtomicsConcurrent's goroutines on
+// instances of a Code inst makes, each of whose functions they call having
+// to have code ran says it has.
+func atomicsConcurrent(t *testing.T, inst func(testing.TB, string, ...Extern) *Instance, ran func(*Instance, string) bool) {
 	for _, mem1 := range []bool{false, true} {
 		t.Run(fmt.Sprintf("memory1=%v", mem1), func(t *testing.T) {
 			src := atomicWorkSrc(mem1)
@@ -281,7 +292,7 @@ func TestJITAtomicsConcurrent(t *testing.T) {
 			if mem1 {
 				imports = append([]Extern{{Kind: module.ExternMemory, Memory: NewMemory(1, 1, true, false, false)}}, imports...)
 			}
-			first := nativeInstance(t, src, imports...)
+			first := inst(t, src, imports...)
 			b := shared.Bytes()
 			binary.LittleEndian.PutUint32(b[56:], math.MaxUint32)
 			const workers, turns = 4, 200_001
@@ -309,8 +320,8 @@ func TestJITAtomicsConcurrent(t *testing.T) {
 			for err := range errs {
 				t.Fatal(err)
 			}
-			if !nativeRan(first, "work") {
-				t.Fatal("work has no native code")
+			if !ran(first, "work") {
+				t.Fatal("work has no native code of the tier tested")
 			}
 			b = shared.Bytes()
 			total := uint64(workers * turns)

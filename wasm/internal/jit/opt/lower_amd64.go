@@ -39,12 +39,14 @@ var (
 )
 
 // The registers instructions clobber, by class: memory.copy's and
-// memory.fill's AX, CX and SI, a division's AX and DX, and a shift's CX
-// for its count. The allocator only reads them.
+// memory.fill's AX, CX and SI, a division's AX and DX, a shift's CX for
+// its count, and an atomic store's, read-modify-write's and
+// compare-and-exchange's AX, CX and DX. The allocator only reads them.
 var amd64Clobbers = clobbers{
-	bulk:  []uint64{1<<amd64.RAX | 1<<amd64.RCX | 1<<amd64.RSI},
-	div:   []uint64{1<<amd64.RAX | 1<<amd64.RDX},
-	shift: []uint64{1 << amd64.RCX},
+	bulk:   []uint64{1<<amd64.RAX | 1<<amd64.RCX | 1<<amd64.RSI},
+	div:    []uint64{1<<amd64.RAX | 1<<amd64.RDX},
+	shift:  []uint64{1 << amd64.RCX},
+	atomic: []uint64{1<<amd64.RAX | 1<<amd64.RCX | 1<<amd64.RDX},
 }
 
 // gprName and xmmName are a general and an SSE register's names in the
@@ -1007,6 +1009,9 @@ func (g *gen) value(v *Value, rest []*Value) {
 		g.refOp(v)
 	case OpTail, OpTailIndirect, OpTailRef:
 		g.tail(v)
+	case OpAtomicLoad, OpAtomicStore, OpAtomicAdd, OpAtomicSub, OpAtomicAnd, OpAtomicOr, OpAtomicXor, OpAtomicXchg,
+		OpAtomicCmpxchg, OpFence:
+		g.atomic(v)
 	default:
 		panic("wasm opt: no lowering of " + v.Op.String())
 	}
@@ -1769,10 +1774,7 @@ func (g *gen) callGo(v *Value, rest []*Value) {
 	base := uint64(g.argBase)
 	{
 		op := opcode.Opcode(v.Aux)
-		x, y := v.Aux2, uint64(0)
-		if op == opcode.MemoryCopy {
-			x, y = v.Aux2&0xffffffff, v.Aux2>>32
-		}
+		x, y := goImms(v)
 		g.exit(wjit.ExitOp, resume, uint64(op), x, y, base, uint64(v.At))
 		if v.Type != TNone {
 			dst := g.locOf(v)

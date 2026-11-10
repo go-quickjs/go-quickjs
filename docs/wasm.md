@@ -458,10 +458,10 @@ code is in, so that nothing waits -- and published; with GOMAXPROCS 1 they
 are made on the spot, the worker otherwise waiting for the program's
 goroutine to be preempted. It compiles references -- locals, globals,
 tables' elements, the null tests and branches -- calls through tables and
-references, tail calls, and the accesses of every memory, shared ones and
-those of i64 addresses included, and leaves to the baseline code the
-functions with SIMD, GC, atomic or exception instructions, or with the
-table instructions that allocate or copy.
+references, tail calls, the accesses of every memory, shared ones and
+those of i64 addresses included, and the atomics, and leaves to the
+baseline code the functions with SIMD, GC or exception instructions, or
+with the table instructions that allocate or copy.
 It roughly halves the Go-built programs' time from their second run on, and
 makes their first runs as fast as the baseline's or faster (json 77 ms to
 70, gzip 75 to 53), but interp's, 1 ms slower for the baseline code's

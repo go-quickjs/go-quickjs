@@ -72,8 +72,8 @@ func (g *gen) sizeInto(v *Value) arm64.Reg {
 // where their sum carries, as the interpreter's do; then the end is checked
 // unless the access needs no check.
 //
-// own is a register the instruction has for the effective address, which
-// it may lose, or noReg, s1 then being taken where the address's register
+// own is a register of the instruction's own that holds the address and
+// may be lost, or noReg, s1 then being taken where the address's register
 // cannot be. base is the register a memory other than 0's base is loaded
 // into -- s0 -- or noReg to add the base to the effective address in s1
 // or own, leaving s0 to the instruction.
@@ -112,7 +112,10 @@ func (g *gen) memAccess(v *Value, own, base arm64.Reg, align bool) memOp {
 		a.MovImm(dst, e)
 		ea = dst
 	} else {
-		ea = g.intoG(addr, dst)
+		ea = own
+		if own == noReg {
+			ea = g.intoG(addr, dst)
+		}
 		switch {
 		case off == 0:
 		case !wide:

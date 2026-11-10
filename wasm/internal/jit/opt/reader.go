@@ -199,4 +199,13 @@ func (r *reader) skipImmediates(op opcode.Opcode) {
 	if op >= opcode.I32LoadMem && op <= opcode.I64StoreMem32 {
 		r.memarg()
 	}
+	if op.Prefix() == opcode.PrefixAtomic {
+		switch op {
+		case opcode.AtomicFence:
+			r.byte()
+		case opcode.Pause:
+		default:
+			r.memarg()
+		}
+	}
 }

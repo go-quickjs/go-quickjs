@@ -176,6 +176,26 @@ const (
 	OpTailIndirect
 	OpTailRef
 
+	// The atomic accesses, each of memory Aux2 at Args[0] plus offset Aux,
+	// Size bytes, sequentially consistent: OpAtomicLoad loads them
+	// zero-extended, OpAtomicStore stores Args[1]'s, and the
+	// read-modify-writes store Args[1] added, subtracted, and-ed, or-ed,
+	// xor-ed or as it is (OpAtomicXchg), and OpAtomicCmpxchg Args[2] where
+	// they equal Args[1]'s, each being the old bytes zero-extended. Each
+	// traps at At where its address is not a multiple of Size, then past
+	// the memory's end.
+	OpAtomicLoad
+	OpAtomicStore
+	OpAtomicAdd
+	OpAtomicSub
+	OpAtomicAnd
+	OpAtomicOr
+	OpAtomicXor
+	OpAtomicXchg
+	OpAtomicCmpxchg
+	// OpFence is atomic.fence.
+	OpFence
+
 	numOps
 )
 
@@ -315,6 +335,17 @@ var opInfos = [numOps]opInfo{
 	OpTail:         {"return_call", fEffect | fTrap},
 	OpTailIndirect: {"return_call_indirect", fEffect | fTrap},
 	OpTailRef:      {"return_call_ref", fEffect | fTrap},
+
+	OpAtomicLoad:    {"atomic.load", fEffect | fTrap},
+	OpAtomicStore:   {"atomic.store", fEffect | fTrap},
+	OpAtomicAdd:     {"atomic.add", fEffect | fTrap},
+	OpAtomicSub:     {"atomic.sub", fEffect | fTrap},
+	OpAtomicAnd:     {"atomic.and", fEffect | fTrap},
+	OpAtomicOr:      {"atomic.or", fEffect | fTrap},
+	OpAtomicXor:     {"atomic.xor", fEffect | fTrap},
+	OpAtomicXchg:    {"atomic.xchg", fEffect | fTrap},
+	OpAtomicCmpxchg: {"atomic.cmpxchg", fEffect | fTrap},
+	OpFence:         {"fence", fEffect},
 }
 
 func (o Op) String() string { return opInfos[o].name }
@@ -418,6 +449,9 @@ func memIndex(v *Value) uint32 { return uint32(v.Aux2) }
 // lowered with its offset a displacement and its end checked against the
 // context's size.
 func plainAccess(v *Value) bool { return v.Aux2 == 0 && v.Aux+uint64(v.Size) <= math.MaxInt32 }
+
+// isAtomic reports whether op is an atomic access's.
+func isAtomic(op Op) bool { return op >= OpAtomicLoad && op <= OpAtomicCmpxchg }
 
 // isTail reports whether op is a tail call's.
 func isTail(op Op) bool { return op == OpTail || op == OpTailIndirect || op == OpTailRef }
@@ -617,6 +651,9 @@ func (v *Value) long() string {
 		s += fmt.Sprintf(" [%#x]", v.Aux)
 	case OpRef:
 		s += fmt.Sprintf(" [kind %d %#x r%d<-r%d]", v.Aux&0xff, v.Aux>>8, v.Aux2>>32, uint32(v.Aux2))
+	}
+	if isAtomic(v.Op) {
+		s += fmt.Sprintf(" [%#x] mem %d size %d", v.Aux, memIndex(v), v.Size)
 	}
 	if v.Op == OpLoad || v.Op == OpStore {
 		if v.Aux2 != 0 {

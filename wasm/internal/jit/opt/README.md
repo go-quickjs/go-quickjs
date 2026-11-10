@@ -52,9 +52,11 @@ read, `goop`, an instruction Go runs (memory.size, memory.grow,
 memory.copy, memory.fill) -- but memory.copy and memory.fill of memory 0
 where it is neither shared nor of i64 addresses, which the code does
 itself and which are not calls (`InCode`, `BulkInCode`) --
-`ref`, a reference instruction (below), and the tail calls
-(`return_call`, `return_call_indirect`, `return_call_ref`), the last value
-of a block that ends with them (a sixth way, `tail`).
+`ref`, a reference instruction (below), the tail calls (`return_call`,
+`return_call_indirect`, `return_call_ref`), the last value of a block that
+ends with them (a sixth way, `tail`), and the atomic accesses -- loads,
+stores, the read-modify-writes and compare-and-exchange, each of a memory,
+an offset and a width -- and `fence` (`atomics.go`).
 
 References are never values. A reference is in a reference slot of the
 frame, as the baseline keeps it (its README's Frames): a reference local
@@ -74,7 +76,11 @@ An operation is pure -- no effect, no trap, so shared, moved and removed
 at will -- or not: a division may trap unless its divisor is a constant
 other than 0 (and, signed, -1); a truncation of a float may trap; a load
 traps past the memory's end; a mutable global's read depends on the stores
-before it; stores, global.set and calls have effects.
+before it; stores, global.set, calls, the atomic accesses and the fence
+have effects. An atomic access is never shared, moved or removed, keeps
+its order among the other effects, and is neither checked by nor taken as
+checked by BCE; the builder forgets what it knew of memory at each, as at
+a fence, and leaves memory.atomic.wait32, wait64 and notify to Go.
 
 ## Building SSA
 
@@ -243,7 +249,7 @@ the exit's operands in their positions' slots, not in the call area's.
 | R10 | the return stack's next entry where it arrives and leaves; in the code, `Ctx.RSP` holds it |
 | R11, R10 | general scratch registers |
 | X15, X14 | float scratch registers |
-| SI, R8, R9, R13, AX, CX, DX | the allocator's general registers, AX, CX and DX last (division's and shifts'; memory.copy and memory.fill take AX, CX and SI) |
+| SI, R8, R9, R13, AX, CX, DX | the allocator's general registers, AX, CX and DX last (division's and shifts'; memory.copy and memory.fill take AX, CX and SI, an atomic store, read-modify-write and compare-and-exchange AX, CX and DX) |
 | X0-X13 | the allocator's float registers |
 | SP, BP, R14 | never written |
 
@@ -266,7 +272,7 @@ On arm64:
 | X16, X17 | general scratch registers |
 | D31, D30 | float scratch registers; Q31 and Q30, whole, memory.copy's and memory.fill's |
 | X27 | the encoder's temporary, and a remainder's quotient |
-| X1-X12, X24-X26, X13-X15 | the allocator's general registers, X13-X15 last (memory.copy's and memory.fill's) |
+| X1-X12, X24-X26, X13-X15 | the allocator's general registers, X13-X15 last (memory.copy's and memory.fill's, and an atomic store's, read-modify-write's and compare-and-exchange's) |
 | D0-D29 | the allocator's float registers |
 | SP, X18, X28, X29, X30 | never written |
 
@@ -305,8 +311,10 @@ the others'. Density, not weight, decides, so that a loop's short
 temporaries keep registers and the long values around them, used less
 often for their length, go to slots. A register an instruction clobbers
 (on amd64 AX and DX for a division, CX for a shift by a variable, AX, CX
-and SI for memory.copy and memory.fill; on arm64 X13-X15 for memory.copy
-and memory.fill alone) is not given to a web live across it. A
+and SI for memory.copy and memory.fill, AX, CX and DX for an atomic store,
+read-modify-write and compare-and-exchange; on arm64 X13-X15 for
+memory.copy, memory.fill and those atomics) is not given to a web live
+across it. A
 web in a register that lives across a call is stored into its slot where
 each of its values is defined and loaded again after each call it
 crosses; one whose reloads would weigh as much as its uses lives in its
@@ -381,6 +389,22 @@ into R11 (X16) after the check, `[R11 + address + offset]` -- or, for a store
 whose integer value R11 must hold, added to the address in R10, the access
 `[R10 + offset]` (on arm64 an add, the access `[X17]`). A float store's
 value is in X15 (D31) first, a constant being made through R11.
+
+An atomic access is the baseline's sequence for it (its README's Memory),
+its alignment checked after an i64 address's carry and before the bounds,
+in the interpreter's order. On amd64 a load is a plain load, zero-extended;
+a store XCHG, add and sub LOCK XADD (of the negated operand for sub),
+exchange XCHG, and, or and xor a loop of LOCK CMPXCHG from the old value
+in AX, compare-and-exchange LOCK CMPXCHG with the expected value in AX: the
+operands are moved into CX (the address), DX and AX at once, and the
+result, its bits above the width cleared, from DX or AX; another memory's
+base is in R10. On arm64 the address in memory -- the base plus the
+effective address, in X13, or X17 for a load -- is what LDAR, STLR and the
+loop of LDAXR and STLXR take, the operand in X14, the old value of a
+read-modify-write in X15 and of a compare-and-exchange in X16, the
+replacement in X15, the expected value masked to 8 or 16 bits, the
+exclusive store's status in X17; the loop holds no other access. A fence
+is MFENCE or DMB ISH.
 
 A back edge -- a jump to a block at or before its own in the layout,
 reverse postorder -- counts down the poll counter and exits for a poll
@@ -682,7 +706,7 @@ A function is refused -- it keeps its baseline code -- when it has:
 |---|---|
 | `v128` | a v128 value |
 | `simd` | a SIMD instruction |
-| `atomics` | an atomic instruction |
+| `atomics` | a struct or array atomic instruction |
 | `gc` | a GC instruction |
 | `exceptions` | try, try_table, throw, the legacy instructions |
 | `table` | table.grow, table.fill, table.copy, table.init, elem.drop |
@@ -761,8 +785,11 @@ in every place, calls and tail calls of every kind with them, idle and
 with the collector marking, `TestOptBulkMemory`
 memory.copy and memory.fill at every overlap and end; `TestOptMemory` the
 baseline's tests of every kind of memory (`TestJITMultiMemory` and the
-others) on this tier, and `TestOptMemoryRandom` random accesses of four
-kinds of memory near their ends, with values spilled and constant; `TestThreadDispatch`
+others, and `TestJITAtomicsMatchInterpreter` and `TestJITAtomicTraps`) on
+this tier, `TestOptMemoryRandom` random accesses, atomic ones too, of four
+kinds of memory near their ends, with values spilled and constant, and
+`TestOptAtomicsConcurrent` goroutines updating one shared memory
+atomically; `TestThreadDispatch`
 and `TestOptThreadDispatch` jump threading, the latter on 1,500 random
 dispatch loops against the interpreter; `TestMarks` the profile's marks.
 
@@ -823,13 +850,14 @@ json's and interp's, which compile their hot functions within a run of
 about 60 ms (json +10%, interp +4%, where they were +19% and +17%
 before the compile's cost was worked on; see Tier-up).
 
-On the spec scripts the tier compiles 4,677 functions and refuses 2,165
+On the spec scripts the tier compiles 4,757 functions and refuses 2,085
 (SIMD and v128s 1,499, the table instructions that allocate or copy 218,
-GC instructions 188, exceptions 107, atomics 80, memory.init and data.drop
-73), where it compiled 4,149 before it took every memory and every offset
--- memories other than an i32 one 514 and offsets 14 were refused -- and
-3,914 before it took references and tail calls; in 24 ms, 5 µs a
-function (43 to 63 ms before references), where the
+GC instructions 188, exceptions 107, memory.init and data.drop 73), where
+it compiled 4,149 before it took every memory, every offset and the
+atomics -- memories other than an i32 one 514, offsets 14 and atomics 80
+were refused -- and 3,914 before it took references and tail calls; in
+24 to 30 ms, 5 to 6 µs a function (43 to 63 ms before references), where
+the
 baseline's 2,926 take 11 to 23 ms. The Go program's 3,011 functions
 compile in 0.16 ms each (0.40 before; the baseline's, 0.12 ms).
 

@@ -807,7 +807,7 @@ func (bd *builder) instr() {
 		v := bd.goOp(op, uint64(mem), 3, TNone, at)
 		v.InCode = mem == 0 && bd.memAux(0) == 0
 	default:
-		if bd.memoryOp(op, at) || bd.numeric(op, at) || bd.refInstr(op, at) {
+		if bd.memoryOp(op, at) || bd.numeric(op, at) || bd.refInstr(op, at) || bd.atomicOp(op, at) {
 			return
 		}
 		refuse(RefuseOther, "%s", op.Name())
@@ -1315,7 +1315,14 @@ func check(m *module.Module, fn uint32) {
 		case opcode.PrefixSIMD:
 			refuse(RefuseSIMD, "%s", op.Name())
 		case opcode.PrefixAtomic:
-			refuse(RefuseAtomics, "%s", op.Name())
+			switch op {
+			case opcode.AtomicFence, opcode.Pause, opcode.AtomicNotify, opcode.I32AtomicWait, opcode.I64AtomicWait:
+			default:
+				if _, width, _ := atomicAccess(op); width == 0 {
+					// The struct and array atomic instructions.
+					refuse(RefuseAtomics, "%s", op.Name())
+				}
+			}
 		case opcode.PrefixGC:
 			refuse(RefuseGC, "%s", op.Name())
 		case opcode.PrefixAsmJS:
