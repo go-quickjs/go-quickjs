@@ -457,10 +457,13 @@ published. No core has fetched from those pages, which were never
 executable, and other threads reach the code only through the link or the
 function's native code, stored after (atomically, sequentially
 consistent). The compiles a Code finished meanwhile are placed together,
-one worker at a time (`placeReady`): a batch loses at most the rest of
-the page before it (16 KiB pages on darwin/arm64; where pages are 64
-KiB, as large as a chunk, each batch maps a chunk of its own), and what
-is placed on the spot after it packs after its end. On json's first run 38 batches of
+one worker at a time (`placeReady`): the rest of the page before a batch
+(16 KiB pages on darwin/arm64; where pages are 64 KiB, as large as a
+chunk, each batch maps a chunk of its own) is left to code placed on the
+spot later, which the Code's reusing arena places in such space, and what
+is placed on the spot after it packs after its end too. Each code takes
+its room in the Code's JIT budget as the batch is placed (the JIT's
+README, Concurrency and memory). On json's first run 38 batches of
 one function were placed, and the arena mapped 8.85 MB with 7.40 MB of
 code in it, the chunks' ends included.
 

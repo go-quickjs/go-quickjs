@@ -112,12 +112,14 @@ modules.
   native code where the JIT runs (see [The JIT](#the-jit)).
 - `WithMemoryLimitPages` caps every memory; a module declaring more fails to
   compile.
-- `WithMemoryLimit(bytes)` bounds what the runtime's modules hold together:
-  see [Memory limits](#memory-limits).
+- `WithMemoryLimit(bytes)` bounds what the runtime's modules hold together,
+  and `WithJITMemoryLimit(bytes)` what their native code holds (64 MiB by
+  default): see [Memory limits](#memory-limits).
 - `WithMemoryCapacityFromMax` allocates a memory's maximum up front where the
   OS cannot reserve it (32-bit platforms), so that it never moves.
 - `WithCompilationCache` shares compiled modules between runtimes, keyed by
-  the bytes' SHA-256, the memory limits and whether the JIT is on.
+  the bytes' SHA-256, the memory limits, whether the JIT is on and its
+  memory limit.
 - `WithCloseOnContextDone` makes a call whose context is done return a
   `*sys.ExitError` and close its module; without it, the call returns the
   context's error and the module stays open. The engine checks the context
@@ -350,6 +352,34 @@ The count of GC objects is an estimate: the Go API's may pass the limit by a
 sixteenth of it before it is found, and what only a call running on another
 goroutine holds is counted at that call's own next count.
 
+The JIT's memory -- the modules' native code and what describes it -- is
+never counted by those limits, so a program fails with `ErrMemoryLimit` the
+same with the JIT on and off. `RuntimeConfig.WithJITMemoryLimit(bytes)`
+bounds it for the modules of a runtime of `NewRuntimeConfigCompiler`:
+`wasm.DefaultJITMemoryLimit`, 64 MiB, by default, which holds every function
+of a 3,028-function Go program compiled by both tiers (23 MB by the
+baseline, 34 MB by the optimizing tier), while a run of one of the
+benchmarks' Go programs holds 3.9 to 8.2 MB. Runtimes sharing a
+compilation cache share the limit too. A `quickjs.Runtime` made `WithJIT`
+bounds its WebAssembly's code by its `WithJITMemoryLimit` -- 8 MB by
+default, or an eighth of `WithMemoryLimit` -- in a budget of that size of
+its own, apart from its JavaScript code's, so that the two together hold at
+most twice it.
+
+When a compile does not fit, the JIT first drops code no call is running:
+code the optimizing tier replaced, and the code of functions not called for
+100 ms or more, whose next call compiles them again. Where that is not
+enough, the function runs in the interpreter, and is compiled once there is
+room, from the JIT clock's next 50 ms epoch; a tier-up so refused is tried again after
+as many calls again. `engine.ReadJITStats` counts the refusals as `budget`
+and the functions dropped. Results are the same whatever the limit, but a
+limit below what a program's hot code needs makes it slower, down to the
+interpreter's speed: on amd64, with three runs each, under 4 MiB sort's
+steady runs take 118 ms against 108 unbounded, gzip's 95 against 21 and
+json's (8.2 MB unbounded) about 500 against 42; under 2 MiB sha256's 156
+against 48. Native code is dropped only when no frame of any goroutine is
+in it, and a goroutine never enters code dropped since it found it.
+
 ## Error messages
 
 The decoder is a port of V8 14.6's, the V8 Node 26 ships, and keeps its order
@@ -468,9 +498,10 @@ after an exit to Go does; both tiers keep everything in the frame's slots at
 a loop's head, so nothing is translated. A function the JIT refuses is tried
 once, and its loops stop counting.
 Native code is shared by the instances of a compiled module and lives in an
-arena of the module's own, released when the module is collected; it is not
-counted by `quickjs.WithJITMemoryLimit`. Loops, calls and tail calls count
-toward the same context poll the interpreter's do.
+arena of the module's own, released when the module is collected; what it
+holds is bounded by a JIT memory limit (see [Memory limits](#memory-limits)).
+Loops, calls and tail calls count toward the same context poll the
+interpreter's do.
 
 Native code computes what the interpreter does, bit for bit where the
 specification fixes the bits: NaN quieting, the minimum and maximum of zeros,

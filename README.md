@@ -80,8 +80,9 @@ rt := quickjs.New(quickjs.WithJIT())
 ```
 
 What the JIT holds is bounded by `WithJITMemoryLimit` -- by default 8 MB,
-or an eighth of `WithMemoryLimit` when that is set -- and never counts
-against `WithMemoryLimit`. A function it cannot compile, a runtime made
+or an eighth of `WithMemoryLimit` when that is set, and as much again for
+the runtime's WebAssembly code -- and never counts against
+`WithMemoryLimit`. A function it cannot compile, a runtime made
 `WithDebugger`, or a process denied executable memory runs in the
 interpreter as before. Neither native execution nor a speedup is
 guaranteed: a few operations that are mostly a built-in's work run slower

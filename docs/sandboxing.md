@@ -58,7 +58,8 @@ The optional JIT (`WithJIT`) holds memory of its own -- its machine code
 and all that describes it -- which the script's limit never counts, so a
 script fails with `ErrMemoryLimit` the same with the JIT on and off.
 `WithJITMemoryLimit` bounds it: 8 MB by default, or an eighth of the
-memory limit when one is set. When it is full, the JIT drops the code that
+memory limit when one is set; the runtime's WebAssembly code has a budget
+of that size of its own (docs/wasm.md, Memory limits). When it is full, the JIT drops the code that
 has gone longest unused, once it is old; while all of it is in use, a
 function newly hot runs in the interpreter. A lower limit makes the JIT
 slower for programs with many hot functions: 600 of them, which hold 4.5 MB,

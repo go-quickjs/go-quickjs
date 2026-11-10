@@ -172,6 +172,13 @@ func WithJITBackground() Option { return func(c *config) { c.jitBackground = tru
 // WithMemoryLimit when that is set. It does nothing in a build without the
 // JIT, or a runtime without WithJIT.
 //
+// It bounds the native code of the Runtime's WebAssembly (the WebAssembly
+// namespace, wasm/wasmjs) as well, as much again: that code has a budget
+// of the same size of its own, since it is compiled, and dropped, on
+// whatever goroutine runs it. Past it the WebAssembly JIT drops code not
+// called for 100 ms or more, then runs newly called functions in the
+// interpreter until there is room (docs/wasm.md, Memory limits).
+//
 // The compiler's working memory is not counted, and is not this
 // Runtime's: a compile takes the memory it works in from a pool the
 // process shares between its runtimes and gives it back once its code is
