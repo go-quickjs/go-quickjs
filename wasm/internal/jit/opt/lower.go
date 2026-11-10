@@ -173,6 +173,8 @@ func (g *lowering) listing(gpr, fpr func(r int) string) string {
 			fmt.Fprintf(&sb, "  trap @%d\n", b.At)
 		case BTail:
 			fmt.Fprintf(&sb, "  tail\n")
+		case BInvoke:
+			fmt.Fprintf(&sb, "  invoke %v pads %v\n", b.Succs[0], b.Succs[1:])
 		}
 	}
 	return sb.String()
@@ -373,6 +375,8 @@ func (g *lowering) allocate(ws *allocScratch, classes [][]int, cl *clobbers) {
 		}
 		lb.Insts = append(lb.Insts, end)
 	}
+	// A landing pad finds its exception's numbers in the call area.
+	area = max(area, 2*f.exnArea)
 	frame := g.req.FrameSlots
 	g.argBase = frame - area
 	if g.argBase < len(f.Params) {

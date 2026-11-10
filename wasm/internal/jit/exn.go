@@ -34,13 +34,18 @@ type Handler struct {
 
 // Clause is a catch clause: of exceptions of tag Tag, or of all; Ref says
 // it delivers the exnref after the tag's values. Its values go to the
-// stack positions from Base, and Pad is the code's offset that branches to
-// its label with them there. A legacy catch keeps the exception in
-// reference slot Caught for a rethrow; Caught is -1 for a try_table's.
+// stack positions from Base -- the references to their reference slots,
+// the numbers to the numeric slots from Vals, two apart, each at its place
+// among the values: the positions' own (the frame's locals' slots plus
+// twice Base), or another area the code reads them from -- and Pad is the
+// code's offset that branches to its label with them there. A legacy
+// catch keeps the exception in reference slot Caught for a rethrow; Caught
+// is -1 for a try_table's.
 type Clause struct {
 	Tag      uint32
 	All, Ref bool
 	Base     int
+	Vals     int
 	Pad      int
 	Caught   int
 }
@@ -137,7 +142,8 @@ func (c *compiler) handlersOut() []Handler {
 			if cl.legacy {
 				caught = cl.caught
 			}
-			o.Clauses = append(o.Clauses, Clause{Tag: cl.tag, All: cl.all, Ref: cl.ref, Base: cl.target.base, Pad: c.a.Offset(cl.pad), Caught: caught})
+			o.Clauses = append(o.Clauses, Clause{Tag: cl.tag, All: cl.all, Ref: cl.ref, Base: cl.target.base,
+				Vals: c.req.FrameLocals + 2*cl.target.base, Pad: c.a.Offset(cl.pad), Caught: caught})
 		}
 		out = append(out, o)
 	}

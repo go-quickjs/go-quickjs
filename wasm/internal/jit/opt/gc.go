@@ -284,25 +284,30 @@ func (bd *builder) gcInstr(op opcode.Opcode, at uint32) bool {
 // gcGo builds GC instruction op with immediates x and y, which Go runs:
 // its numeric operands are its Args, Pos the first operand's position, in
 // whose reference slot an object it makes is left.
-func (bd *builder) gcGo(op opcode.Opcode, x, y uint32, at uint32) {
+func (bd *builder) gcGo(op opcode.Opcode, x, y uint32, at uint32) *Value {
 	n, result := gcOperandCount(bd.m, op, x, y)
 	pos := len(bd.stack) - n
 	args := bd.args[:0]
 	for _, a := range bd.stack[pos:] {
 		if !bd.isRef(a) {
 			args = append(args, a)
+			continue
 		}
+		bd.f.Refs = true
 	}
 	bd.args = args
 	v := bd.value(OpGoOp, TNone, args...)
 	v.Aux, v.Aux2, v.At, v.Pos = uint64(op), uint64(x)|uint64(y)<<32, at, int32(pos)
-	bd.f.Refs = true
+	if result {
+		bd.f.Refs = true
+	}
 	bd.stack = bd.stack[:pos]
 	if result {
 		bd.pushRef()
 	}
 	// What Go does here writes no memory and no global: what the block
 	// knows of them holds.
+	return v
 }
 
 // gcOperandCount is the number of operands of GC instruction op with

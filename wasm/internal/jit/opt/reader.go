@@ -126,25 +126,26 @@ func (r *reader) memarg() (mem uint32, offset uint64) {
 var oneType = []module.ValueType{module.I32, module.I64, module.F32, module.F64, module.V128}
 
 // skipDead skips instructions up to the end of the construct being built:
-// its end or an if's else, which it leaves to be read. The constructs this
-// tier builds are blocks, loops and ifs; a function with any other is
-// refused before it is built.
+// its end, an if's else, a legacy try's catch or catch_all, or its
+// delegate, which it leaves to be read.
 func (r *reader) skipDead() {
 	depth := 0
 	for {
 		at := r.pc
 		op := r.opcode()
 		switch op {
-		case opcode.Block, opcode.Loop, opcode.If:
+		case opcode.Block, opcode.Loop, opcode.If, opcode.Try, opcode.TryTable:
 			depth++
-		case opcode.End:
+		case opcode.End, opcode.Delegate:
 			if depth == 0 {
 				r.pc = at
 				return
 			}
 			depth--
-			continue
-		case opcode.Else:
+			if op == opcode.End {
+				continue
+			}
+		case opcode.Else, opcode.Catch, opcode.CatchAll:
 			if depth == 0 {
 				r.pc = at
 				return
@@ -158,7 +159,7 @@ func (r *reader) skipDead() {
 // let through (check).
 func (r *reader) skipImmediates(op opcode.Opcode) {
 	switch op {
-	case opcode.Block, opcode.Loop, opcode.If:
+	case opcode.Block, opcode.Loop, opcode.If, opcode.Try, opcode.TryTable:
 		if b := r.b[r.pc]; b == 0x64 || b == 0x63 {
 			// A reference type's heap type follows.
 			r.pc++
@@ -169,7 +170,8 @@ func (r *reader) skipImmediates(op opcode.Opcode) {
 	case opcode.Br, opcode.BrIf, opcode.CallFunction, opcode.LocalGet, opcode.LocalSet, opcode.LocalTee,
 		opcode.GlobalGet, opcode.GlobalSet, opcode.MemorySize, opcode.MemoryGrow, opcode.ReturnCall,
 		opcode.CallRef, opcode.ReturnCallRef, opcode.RefFunc, opcode.BrOnNull, opcode.BrOnNonNull,
-		opcode.TableGet, opcode.TableSet, opcode.TableSize:
+		opcode.TableGet, opcode.TableSet, opcode.TableSize, opcode.Throw, opcode.Rethrow, opcode.Catch,
+		opcode.Delegate:
 		r.u32()
 	case opcode.RefNull:
 		r.heapType()
@@ -201,6 +203,9 @@ func (r *reader) skipImmediates(op opcode.Opcode) {
 	}
 	if op >= opcode.I32LoadMem && op <= opcode.I64StoreMem32 {
 		r.memarg()
+	}
+	if op == opcode.TryTable {
+		r.clauses(nil)
 	}
 	if op.Prefix() == opcode.PrefixGC {
 		r.skipGC(op)

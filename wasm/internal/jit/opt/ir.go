@@ -218,6 +218,11 @@ const (
 	// OpFence is atomic.fence.
 	OpFence
 
+	// OpExnVal is value Aux of the exception a landing pad is entered with
+	// (exn.go), a number Go left in the call area, two slots apart from its
+	// first, each at its place among the tag's values.
+	OpExnVal
+
 	numOps
 )
 
@@ -389,6 +394,7 @@ var opInfos = [numOps]opInfo{
 	OpAtomicXchg:    {"atomic.xchg", fEffect | fTrap},
 	OpAtomicCmpxchg: {"atomic.cmpxchg", fEffect | fTrap},
 	OpFence:         {"fence", fEffect},
+	OpExnVal:        {"exn.val", 0},
 }
 
 func (o Op) String() string { return opInfos[o].name }
@@ -520,6 +526,11 @@ const (
 	// BTail ends with its last value, a tail call, which leaves the
 	// function.
 	BTail
+	// BInvoke ends with a call, or a throw Go runs, that the handlers of
+	// the constructs around it may catch (exn.go): it goes on to Succs[0],
+	// and Succs[1:] are their catch clauses' landing pads (Block.Pad),
+	// which Go enters where one of them takes the exception.
+	BInvoke
 )
 
 // Block is a basic block.
@@ -539,6 +550,10 @@ type Block struct {
 	// Depth the number of loops it is in.
 	Loop  *Block
 	Depth int32
+	// Pad is, for a landing pad, the call or throw of its predecessor
+	// (BInvoke) whose exception it takes: Go enters the pad with the
+	// registers lost, every value live across the call in its slot.
+	Pad *Value
 	// outer is a loop header's enclosing loop's header, or nil.
 	outer *Block
 	// dead says the block was removed.
@@ -574,8 +589,13 @@ type Func struct {
 	RLocals, RefParams int
 	MaxHeight          int
 	Refs               bool
-	nextValue          int32
-	nextBlock          int32
+	// sites are the calls and throws the handlers of try_tables and
+	// legacy trys take the exceptions of, and exnArea the most values of
+	// a tag a landing pad takes (exn.go).
+	sites     []*site
+	exnArea   int
+	nextValue int32
+	nextBlock int32
 	// ws is the workspace the function's values and blocks, and its
 	// passes' tables, are made in; dom is its dominator tree, there, while
 	// the control flow graph is as it was made (dominators).
@@ -678,6 +698,8 @@ func (f *Func) String() string {
 			fmt.Fprintf(&sb, "  trap @%d\n", b.At)
 		case BTail:
 			fmt.Fprintf(&sb, "  tail\n")
+		case BInvoke:
+			fmt.Fprintf(&sb, "  invoke %v pads %v\n", b.Succs[0], b.Succs[1:])
 		}
 	}
 	return sb.String()
@@ -690,7 +712,7 @@ func (v *Value) long() string {
 	}
 	switch v.Op {
 	case OpConst, OpParam, OpGlobalAddr, OpGlobalGet, OpGlobalSet, OpCall, OpResult, OpLoad, OpStore, OpCallIndirect, OpGoOp,
-		OpCallRef, OpTail, OpTailIndirect, OpTailRef:
+		OpCallRef, OpTail, OpTailIndirect, OpTailRef, OpExnVal:
 		s += fmt.Sprintf(" [%#x]", v.Aux)
 	case OpRef:
 		s += fmt.Sprintf(" [kind %d %#x r%d<-r%d]", v.Aux&0xff, v.Aux>>8, v.Aux2>>32, uint32(v.Aux2))

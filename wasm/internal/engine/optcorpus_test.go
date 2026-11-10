@@ -116,6 +116,9 @@ func TestOptCompileCorpus(t *testing.T) {
 			r := err.(*wjit.Refusal)
 			refused[r.Reason]++
 			hashes[f.key] = "refused:" + r.Reason
+			if r.Reason == "internal" {
+				t.Logf("%s: %v", f.key, r)
+			}
 			continue
 		}
 		ok = append(ok, f)

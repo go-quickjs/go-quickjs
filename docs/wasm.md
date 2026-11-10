@@ -465,8 +465,7 @@ copies and fills of memories other than an unshared i32 memory 0, through
 Go too -- v128s and every SIMD and relaxed SIMD instruction, each the
 baseline's instruction sequence over registers the allocator gives (a
 fused `relaxed_madd` and `relaxed_nmadd` in Go, as in the baseline), and
-the GC instructions, as the baseline compiles them, and leaves to the
-baseline code the functions with exception instructions.
+the GC instructions and the exceptions, as the baseline compiles them.
 It roughly halves the Go-built programs' time from their second run on, and
 makes their first runs as fast as the baseline's or faster (json 77 ms to
 70, gzip 75 to 53), but interp's, 1 ms slower for the baseline code's

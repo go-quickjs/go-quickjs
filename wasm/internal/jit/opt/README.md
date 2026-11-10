@@ -29,6 +29,7 @@ default (see Tier-up).
 | `simd.go` | the SIMD instructions' values: what the tier refuses of them and what the builder makes |
 | `lower_simd_amd64.go`, `lower_simdf_amd64.go`, `lower_simd_arm64.go` | the SIMD instructions' lowering |
 | `gc.go`, `gc_lower.go`, `gc_amd64.go`, `gc_arm64.go` | the GC instructions: their building, the instructions Go runs for them, their lowering |
+| `exn.go`, `exn_lower.go`, `exn_amd64.go`, `exn_arm64.go` | the exceptions: the sites, their landing pads and the records Go finds them by |
 | `internal/jit/lsra` | the register allocator, which knows nothing of WebAssembly |
 
 ## The IR
@@ -61,8 +62,12 @@ itself and which are not calls (`InCode`, `BulkInCode`) --
 `return_call_indirect`, `return_call_ref`), the last value of a block that
 ends with them (a sixth way, `tail`), the atomic accesses -- loads,
 stores, the read-modify-writes and compare-and-exchange, each of a memory,
-an offset and a width -- and `fence` (`atomics.go`), and `simd`, a SIMD
-instruction (below).
+an offset and a width -- and `fence` (`atomics.go`), `simd`, a SIMD
+instruction (below), and `exn.val`, a number of the exception a landing
+pad takes (below). A block that ends with a call or a throw the handlers
+around it may catch ends a seventh way, `invoke`: it goes on to its first
+successor, and the others are the landing pads of the catch clauses that
+may take what it throws.
 
 A v128 is a value as a number is: a constant has its low half in `Aux` and
 its high half in `Aux2`, and a load, a store, a global, a local, a phi, a
@@ -162,6 +167,31 @@ runs forget it all.
 
 The phis a lookup made that turn out trivial -- every argument one value,
 or the phi itself -- are removed by the first pass.
+
+### Exceptions
+
+throw, throw_ref and rethrow are `goop`s, Go throwing the exception as the
+interpreter does (their operands staged as a GC instruction's). A
+try_table and a legacy try are blocks, and a call or a throw within the
+body of one or more of them -- a site (`exn.go`) -- ends its block
+(`invoke`): its successors are the block after it, and a landing pad for
+each catch clause of each construct around it that may take its
+exceptions -- every try_table around it, and every legacy try whose body
+it is in -- innermost first, each a block of its own whose one
+predecessor is the site's (`Block.Pad` naming the site). A try_table's
+pads are made with the site: each reads the tag's numbers (`exn.val`) and
+goes to the clause's label with them, its references already in the
+label's positions' slots, or returns them. A legacy try's catch, when it
+begins, makes a pad for each site of the try's body, and its body is a
+block of those pads, the tag's numbers its phis; a catch no site reaches
+is dead, and a delegate's try makes no pads. A site whose trys had no
+catch ends its block with a jump.
+
+The pads are blocks like any other, an edge to one an edge of the control
+flow graph: the dominators, the passes and liveness see them, so that what
+a pad's label reads is live across the site's call -- and so in its slot
+when the exception comes (Register allocation) -- and no pass moves a site,
+a call or a throw having effects. Nothing jumps to a pad: Go enters it.
 
 ## The passes
 
@@ -400,6 +430,12 @@ A phi in a register is stored into its slot where its block begins unless
 every argument shares its register and its slot, which each stored
 where it was made.
 
+A landing pad's one predecessor ends with its site, so what the pad reads
+of the function is live across the site's call: in its slot, where Go
+finds it, the pad loading it again as the code after the call does. A pad
+has no phi and its edge no move, the pad's own edge to its label taking
+the moves.
+
 Lowering reads a spilled operand from its slot -- on amd64 as a memory
 operand where the instruction takes one (`OpMem`, `ImulMem`), else, and on
 arm64 always, into a scratch register -- and computes a spilled result in
@@ -545,6 +581,25 @@ then bytes -- a copy to a higher address that overlaps its source from
 its end down, each block read before it is written; a fill DUPs its byte
 into Q31's. They make no exit and no poll: the count is bounded by the
 memory, as Go's copy of it in the engine is.
+
+Go enters a landing pad (`exn_GOARCH.go`) when the handlers' records the
+code returns (`wjit.Handler`) say one of its clauses takes an exception
+that reached Go during an exit of the frame's level: one record for each
+site and each construct around it, innermost first, over the site's
+instruction alone, its clauses' pads' offsets, where Go leaves the
+exception's numbers -- the call area (`Clause.Vals`, its size counting the
+largest tag's) -- and a legacy catch's reference slot for its exception
+(`Request.CaughtSlot` past the frame's own, which rethrow reads). Go drops
+the frames above, stores the references in the label's positions' slots,
+the numbers in the call area, the context's L, R and return stack's top
+the frame's, and enters the pad at its offset: it loads what an exit's
+resumption loads (L, memory 0's base, the poll counter; on arm64 the
+memory's size and the return stack's next entry too), every value in a
+register that lives across the site's call from its slot (`reload`), and
+the exception's numbers from the call area, and goes on to its label.
+Go searches each frame by the code it is in (`nativeFn.holding` of its
+return address, or of the exit's): a frame that began in the baseline
+code the optimized code replaced catches by the baseline code's records.
 
 ## SIMD
 
@@ -834,7 +889,6 @@ A function is refused -- it keeps its baseline code -- when it has:
 | `simd` | a SIMD instruction there, or a half-precision one; a struct.get, struct.set, array.get or array.set of a v128 field or element, or a struct.new, array.new, array.new_fixed or array.fill of one |
 | `atomics` | a struct or array atomic instruction |
 | `gc` | a GC instruction past the GC proposal's |
-| `exceptions` | try, try_table, throw, the legacy instructions |
 | `frame` | more spill slots than its frame has below the call area |
 | `size` | code past `internal/jit.MaxCodeBytes`, or, on arm64, past a branch's reach |
 | `internal` | a panic of the compiler's |
@@ -909,7 +963,16 @@ GC instructions' cases (`TestJITGC`) on this tier, idle and with the
 collector marking, `TestOptGCUnderCollection` its list relinked while the
 collector runs (again under `GODEBUG=gccheckmark=1`), `TestOptGCPressure`
 fields and elements with more values live than registers, across the
-allocations, `TestJITSameWorkWhileMarking` both tiers, `TestOptRefs` references
+allocations, `TestJITSameWorkWhileMarking` both tiers, `TestOptExceptions`
+the baseline's exception tests (`TestJITExceptions`) on this tier, idle and
+with the collector marking, `TestOptExceptionsLive` values more than the
+registers live across throwing calls in nested try_tables and legacy
+trys, `TestOptExceptionsAcrossTiers` a recursion whose frames in the
+baseline code and in the optimized code each catch and throw again,
+`TestOptExceptionsV128` a tag's v128 thrown and caught and v128s live
+across throwing calls and allocations, every store through the barrier
+routine too,
+`TestOptRefs` references
 in every place, calls and tail calls of every kind with them, idle and
 with the collector marking; `TestJITSIMDBits`, `TestJITRelaxedChoices`
 (amd64) and `TestJITSIMDValues` run every SIMD instruction and v128s in
@@ -1002,9 +1065,10 @@ memory's accesses each read its size through its address and are never
 taken as checked, and the atomics are bound by their locked instructions,
 as the baseline's are.
 
-On the spec scripts the tier compiles 6,547 functions and refuses 295
-(GC instructions 188, exceptions 107), where it compiled 5,048 before it
-took SIMD and v128s (1,499 refused); 4,149 before it took every memory,
+On the spec scripts the tier compiles 6,840 functions and refuses 2
+(reads of v128 fields, which the baseline refuses too), where it compiled 6,547 before it took the GC instructions
+(188 refused) and the exceptions (107); 5,048 before it took SIMD and
+v128s (1,499 refused); 4,149 before it took every memory,
 every offset, the atomics and the instructions Go runs for tables and
 segments -- memories other than an i32 one 514, offsets 14, atomics 80,
 the table instructions that allocate or copy 218, memory.init and

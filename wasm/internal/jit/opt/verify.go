@@ -62,6 +62,15 @@ func Verify(f *Func) error {
 			want = 2
 		case BReturn, BTrap:
 			want = 0
+		case BInvoke:
+			if len(b.Succs) < 2 {
+				return fmt.Errorf("%v: an invoke without landing pads", b)
+			}
+			for _, s := range b.Succs[1:] {
+				if s.Pad == nil || len(s.Preds) != 1 {
+					return fmt.Errorf("%v: landing pad %v without its call or of %d predecessors", b, s, len(s.Preds))
+				}
+			}
 		case BTail:
 			want = 0
 			if n := len(b.Values); n == 0 || !isTail(b.Values[n-1].Op) {
@@ -433,6 +442,13 @@ func checkTypes(v *Value) error {
 		return addrType(v)
 	case OpFence:
 		return arity(0)
+	case OpExnVal:
+		if err := arity(0); err != nil {
+			return err
+		}
+		if v.Block.Pad == nil {
+			return fmt.Errorf("an exception's value outside a landing pad")
+		}
 	default:
 		return fmt.Errorf("an unknown operation")
 	}

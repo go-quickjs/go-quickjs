@@ -782,14 +782,20 @@ of what Go called, other levels of native code and the interpreter
 included -- to the level's native frames, the innermost first: the exiting
 frame at the exit's instruction (not a tail call's, whose frame is gone),
 each caller at its call, the offset its callee's return stack entry
-records. The first handler around the offset whose clause takes the
-exception's tag wins, a delegate letting it pass the handlers of the
-constructs within its target. Go drops the frames above that one (the
-return stack's top, the context's L and R, R walked up from the frame Go
-entered), stores the exception's values in the slots of the clause's
-positions -- the exnref after them for a `_ref` clause, and in the
-reference slot of its try's depth for a legacy catch, which rethrow reads
--- and enters the pad. An exception no frame takes goes on out of the
+records -- each by the records of the code it is in, its function's or a
+code that one replaced (`nativeFn.holding` of its return address, or of
+the exit's), so that a frame of baseline code the optimizing tier's
+replaced catches by the baseline code's. The first handler around the
+offset whose clause takes the exception's tag wins, a delegate letting it
+pass the handlers of the constructs within its target. Go drops the
+frames above that one (the return stack's top, the context's L and R, R
+walked up from the frame Go entered), stores the exception's values --
+the references in the reference slots of the clause's positions, the
+numbers from the numeric slot the clause names (`Clause.Vals`: the
+positions' own here, the call area in the optimizing tier's code) --
+the exnref after them for a `_ref` clause, and in the reference slot of
+its try's depth for a legacy catch, which rethrow reads -- and enters the
+pad. An exception no frame takes goes on out of the
 level. Every entry beneath a construct and every local is in its slot at a
 call and at an exit, so a pad finds the frame as the label wants it. The
 engine's frame of a function with legacy trys has a reference slot past

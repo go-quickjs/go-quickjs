@@ -669,12 +669,12 @@ func (cj *codeJIT) compileOpt(c *Code, idx uint32, cd *compiled, prev *nativeFn)
 		return nil
 	}
 	placeStart := time.Now()
-	pc, why := cj.placeCharged(code.Bytes, recordBytes(nil, nil))
+	pc, why := cj.placeCharged(code.Bytes, recordBytes(nil, code.Handlers))
 	countTime(&jitStats.placeTime, placeStart)
 	switch why {
 	case RefuseBudget:
 		cd.optDone.Store(false)
-		noRoom(cd, true, placedNeed(code.Bytes, recordBytes(nil, nil)))
+		noRoom(cd, true, placedNeed(code.Bytes, recordBytes(nil, code.Handlers)))
 		return nil
 	case "unplaced":
 		countOptRefused("unplaced")
@@ -691,6 +691,10 @@ func (cj *codeJIT) publishOpt(idx uint32, cd *compiled, pc *placedCode, code *wj
 	jitCode.log(idx, "opt", pc.raw, code)
 	nat := newNative(pc, code, cd)
 	nat.opt, nat.prev = true, prev
+	nat.handlers = code.Handlers
+	if len(code.Handlers) > 0 {
+		cj.catches.Store(true)
+	}
 	cd.used.Store(jitEpoch())
 	cd.native.Store(nat)
 	cj.setFrame(idx, cd)

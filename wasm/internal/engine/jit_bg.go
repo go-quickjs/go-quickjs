@@ -313,7 +313,6 @@ func (cj *codeJIT) placeReady() {
 	// Room in the budget for each, which making room takes the compile
 	// lock for (codeJIT.reserve); a code that finds none is refused, as on
 	// the spot.
-	record := recordBytes(nil, nil)
 	needs := make([]int64, 0, len(batch))
 	cj.mu.Lock()
 	if cj.bg.closed {
@@ -322,7 +321,7 @@ func (cj *codeJIT) placeReady() {
 	}
 	kept := batch[:0]
 	for _, b := range batch {
-		need := placedNeed(b.code.Bytes, record)
+		need := placedNeed(b.code.Bytes, recordBytes(nil, b.code.Handlers))
 		if !cj.reserve(need) {
 			cj.refuseOptRoom(b.idx, b.cd, need)
 			continue
@@ -358,6 +357,7 @@ func (cj *codeJIT) placeReady() {
 		return
 	}
 	for i, b := range kept {
+		record := recordBytes(nil, b.code.Handlers)
 		pc := &placedCode{raw: raws[i], code: int64(raws[i].Size()), record: record}
 		cj.codeBytes.Add(pc.code)
 		cj.recordBytes.Add(record)

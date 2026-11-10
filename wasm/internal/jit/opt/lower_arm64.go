@@ -206,6 +206,9 @@ func lower(f *Func, req *wjit.Request, ws *workspace) *wjit.Code {
 	}
 	// The assembler's buffer is the workspace's: the code is a copy.
 	code := &wjit.Code{Bytes: slices.Clone(out), GoEntry: a.Offset(goEntry), Entry: a.Offset(entry), ReturnStub: retStub}
+	if len(f.sites) > 0 {
+		code.Handlers = f.handlers(func(b *Block) int { return a.Offset(g.labels[g.index[b.ID]]) }, g.argBase, req.CaughtSlot)
+	}
 	if g.marking {
 		code.Marks, code.Listing = g.marks, g.listing(gprName, fprName)
 	}
@@ -717,6 +720,9 @@ func (g *gen) edgeMoves(b, s *Block) {
 
 // block lowers block b, the i-th.
 func (g *gen) block(i int, b *Block) {
+	if b.Pad != nil {
+		g.padEntry(b)
+	}
 	for _, p := range b.Phis {
 		if r := g.ra.Reg[p.vreg]; r >= 0 && !g.inSlot(p) {
 			g.done(p, int(r))
@@ -734,10 +740,10 @@ func (g *gen) block(i int, b *Block) {
 	}
 	a := g.a
 	if g.marking {
-		g.mark("%v end %v", b, [...]string{"Plain", "If", "Switch", "Return", "Trap", "Tail"}[b.Kind])
+		g.mark("%v end %v", b, [...]string{"Plain", "If", "Switch", "Return", "Trap", "Tail", "Invoke"}[b.Kind])
 	}
 	switch b.Kind {
-	case BPlain:
+	case BPlain, BInvoke:
 		g.edgeMoves(b, b.Succs[0])
 		g.jump(i, b.Succs[0])
 	case BIf:
@@ -1141,6 +1147,8 @@ func (g *gen) value(v *Value, rest []*Value) {
 	case OpAtomicLoad, OpAtomicStore, OpAtomicAdd, OpAtomicSub, OpAtomicAnd, OpAtomicOr, OpAtomicXor, OpAtomicXchg,
 		OpAtomicCmpxchg, OpFence:
 		g.atomic(v)
+	case OpExnVal:
+		g.exnVal(v)
 	default:
 		panic("wasm opt: no lowering of " + v.Op.String())
 	}
@@ -1615,7 +1623,7 @@ func (g *gen) callGo(v *Value, rest []*Value) {
 	base := uint64(g.argBase)
 	{
 		op := opcode.Opcode(v.Aux)
-		x, y := goImms(v)
+		x, y := g.imms(v)
 		g.exit(wjit.ExitOp, resume, uint64(op), x, y, base, uint64(v.At))
 		if v.Type != TNone {
 			dst := g.locOf(v)

@@ -105,6 +105,8 @@ type ctl struct {
 	hasElse  bool
 	// dead says the rest of the construct cannot be reached.
 	dead bool
+	// try is a try_table's or a legacy try's handlers (exn.go).
+	try *tryCtl
 }
 
 func (t *ctl) labelTypes() []Type {
@@ -298,6 +300,12 @@ func (bd *builder) build(fn uint32) *Func {
 	end := int(code.End())
 	for bd.r.pc < end && len(bd.ctrl) > 0 {
 		bd.instr()
+	}
+	for _, s := range f.sites {
+		if len(s.b.Succs) == 1 {
+			// Its legacy trys had no catch: nothing takes its exceptions.
+			s.b.Kind = BPlain
+		}
 	}
 	removeUnreachable(f)
 	return f
@@ -816,6 +824,18 @@ func (bd *builder) instr() {
 		bd.goOp(op, uint64(r.u32()), 0, TNone, at)
 	case opcode.TableGrow, opcode.TableFill:
 		bd.tableGo(op, r.u32(), at)
+	case opcode.TryTable:
+		bd.tryTable()
+	case opcode.Try:
+		bd.legacyTry()
+	case opcode.Catch:
+		bd.legacyCatch(r.u32(), false)
+	case opcode.CatchAll:
+		bd.legacyCatch(0, true)
+	case opcode.Delegate:
+		bd.delegate(int(r.u32()))
+	case opcode.Throw, opcode.ThrowRef, opcode.Rethrow:
+		bd.throwOp(op, at)
 	default:
 		if bd.memoryOp(op, at) || bd.numeric(op, at) || bd.refInstr(op, at) || bd.atomicOp(op, at) || bd.simd(op, at) || bd.gcInstr(op, at) {
 			return
@@ -935,6 +955,7 @@ func (bd *builder) call(op Op, ft *module.FuncType, aux, aux2 uint64, at uint32,
 		bd.push(res)
 	}
 	bd.forget()
+	bd.site(v)
 }
 
 // tail builds a tail call of signature ft, which ends the block, as call
@@ -1385,12 +1406,15 @@ func check(m *module.Module, fn uint32) {
 			refuse(RefuseOther, "%s", op.Name())
 		}
 		switch op {
-		case opcode.Try, opcode.TryTable, opcode.Catch, opcode.CatchAll, opcode.Throw, opcode.ThrowRef,
-			opcode.Rethrow, opcode.Delegate:
-			refuse(RefuseExceptions, "%s", op.Name())
+		case opcode.TryTable:
+			checkTryTable(m, &r)
+			continue
+		case opcode.Catch, opcode.Throw:
+			checkValues(m.TagType(r.u32()).Params, op, true, "tag parameter")
+			continue
 		case opcode.F32LoadMemF16, opcode.F32StoreMemF16:
 			refuse(RefuseOther, "%s", op.Name())
-		case opcode.Block, opcode.Loop, opcode.If:
+		case opcode.Block, opcode.Loop, opcode.If, opcode.Try:
 			params, results := r.blockType(m)
 			checkValues(params, op, true, "parameter")
 			checkValues(results, op, true, "result")

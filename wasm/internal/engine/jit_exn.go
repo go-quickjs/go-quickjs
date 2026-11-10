@@ -91,12 +91,15 @@ func (x *exec) jitCatch(lv *jitLevel, exn *Exception, at uint32, gone bool) (*na
 			continue
 		}
 		fn := uint32(rs[entry(k)+2] >> 32)
-		off, l := at, ctx.L
+		// The frame's offset and L, and where it goes on: the code it is
+		// in, its function's or one that code replaced, whose handlers
+		// are the frame's.
+		off, l, addr := at, ctx.L, ctx.ExitAddr
 		if k < n-1 {
-			off, l = uint32(rs[entry(k+1)+2]), uintptr(rs[entry(k+1)+1])
+			off, l, addr = uint32(rs[entry(k+1)+2]), uintptr(rs[entry(k+1)+1]), uintptr(rs[entry(k+1)])
 		}
 		cd := code.get(fn)
-		nat := cd.native.Load()
+		nat := cd.native.Load().holding(addr)
 		// A delegate passes its body's exceptions to the constructs at its
 		// target and out: the handlers of those within it let them pass.
 		limit := math.MaxInt
@@ -119,7 +122,11 @@ func (x *exec) jitCatch(lv *jitLevel, exn *Exception, at uint32, gone bool) (*na
 				pos := cl.Base
 				if !cl.All {
 					for i, t := range lv.inst.Module.TagType(cl.Tag).Params {
-						f.put(t, cd.nlocals+2*(pos+i), exn.Vals[i])
+						if t.IsRef() {
+							f.r[cd.rlocals+pos+i] = exn.Vals[i].R
+							continue
+						}
+						f.put(t, cl.Vals+2*i, exn.Vals[i])
 					}
 					pos += len(exn.Vals)
 				}
