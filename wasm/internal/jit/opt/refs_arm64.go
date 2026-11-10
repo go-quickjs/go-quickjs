@@ -157,7 +157,7 @@ func (g *gen) emitWB(l arm64.Label) {
 	}
 	for i, x := range fprs {
 		if g.v128 {
-			a.StoreQ(rCtx, offSaveV+int32(16*x), arm64.FReg(x))
+			a.StoreQ(rCtx, offSaveV+16*int32(x), arm64.FReg(x))
 			continue
 		}
 		a.StoreF(rCtx, offSave+int32(8*(len(gprs)+len(keptRegs)+i)), arm64.FReg(x))
@@ -174,7 +174,7 @@ func (g *gen) emitWB(l arm64.Label) {
 	}
 	for i, x := range fprs {
 		if g.v128 {
-			a.LoadQ(arm64.FReg(x), rCtx, offSaveV+int32(16*x))
+			a.LoadQ(arm64.FReg(x), rCtx, offSaveV+16*int32(x))
 			continue
 		}
 		a.LoadF(arm64.FReg(x), rCtx, offSave+int32(8*(len(gprs)+len(keptRegs)+i)))

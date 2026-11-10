@@ -154,7 +154,7 @@ func (g *gen) emitWB(l amd64.Label) {
 	}
 	for x := amd64.XReg(0); x < 15; x++ {
 		if g.v128 {
-			a.StoreVec(rCtx, offSaveV+int32(16*x), x)
+			a.StoreVec(rCtx, offSaveV+16*int32(x), x)
 			continue
 		}
 		a.StoreSD(rCtx, offSave+int32(8*(len(wbSaved)+int(x))), x)
@@ -171,7 +171,7 @@ func (g *gen) emitWB(l amd64.Label) {
 	}
 	for x := amd64.XReg(0); x < 15; x++ {
 		if g.v128 {
-			a.LoadVec(x, rCtx, offSaveV+int32(16*x))
+			a.LoadVec(x, rCtx, offSaveV+16*int32(x))
 			continue
 		}
 		a.LoadSD(x, rCtx, offSave+int32(8*(len(wbSaved)+int(x))))

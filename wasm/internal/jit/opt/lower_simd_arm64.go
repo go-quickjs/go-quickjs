@@ -2,8 +2,10 @@ package opt
 
 import (
 	"encoding/binary"
+	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/asm/arm64"
+	wjit "github.com/go-quickjs/go-quickjs/wasm/internal/jit"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/opcode"
 )
 
@@ -32,6 +34,10 @@ var (
 		opcode.F32x4Qfms: true, opcode.F64x2Qfma: true, opcode.F64x2Qfms: true, opcode.I32x4DotI8x16I7x16AddS: true,
 	}
 )
+
+// The float registers' save area is at a multiple of 16 bytes, so that each
+// register's store is one instruction.
+var _ = [1]struct{}{}[unsafe.Offsetof(wjit.Ctx{}.SaveV)%16]
 
 // parallelKeeping is parallel where x0 holds a value meanwhile.
 func (g *gen) parallelKeeping(moves []pmove) {

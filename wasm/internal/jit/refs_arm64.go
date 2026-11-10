@@ -119,8 +119,9 @@ func (c *compiler) emitWBRoutine(l arm64.Label) {
 	for i, r := range wbSaved {
 		a.Store(rCtx, offSave+int32(8*i), r)
 	}
+	// The V registers whole: a v128 may be in one.
 	for x := arm64.FReg(0); x < 30; x++ {
-		a.StoreF(rCtx, offSave+int32(8*(len(wbSaved)+int(x))), x)
+		a.StoreQ(rCtx, offSaveV+16*int32(x), x)
 	}
 	a.Load(arm64.Reg(15), rCtx, offWBSlot)
 	a.Load(rTmp2, rCtx, offWBPtr)
@@ -133,7 +134,7 @@ func (c *compiler) emitWBRoutine(l arm64.Label) {
 		a.Load(r, rCtx, offSave+int32(8*i))
 	}
 	for x := arm64.FReg(0); x < 30; x++ {
-		a.LoadF(x, rCtx, offSave+int32(8*(len(wbSaved)+int(x))))
+		a.LoadQ(x, rCtx, offSaveV+16*int32(x))
 	}
 	a.Load(rTmp, rCtx, offWBRet)
 	a.Br(rTmp)

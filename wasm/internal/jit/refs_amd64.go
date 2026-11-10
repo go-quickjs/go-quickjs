@@ -136,8 +136,9 @@ func (c *compiler) emitWBRoutine(l amd64.Label) {
 	for i, r := range wbSaved {
 		a.Store(rCtx, offSave+int32(8*i), r)
 	}
+	// The SSE registers whole: a v128 may be in one.
 	for x := amd64.XReg(0); x < 15; x++ {
-		a.StoreSD(rCtx, offSave+int32(8*(len(wbSaved)+int(x))), x)
+		a.StoreVec(rCtx, offSaveV+16*int32(x), x)
 	}
 	a.Load(amd64.RAX, rCtx, offWBSlot)
 	a.Load(amd64.RCX, rCtx, offWBPtr)
@@ -150,7 +151,7 @@ func (c *compiler) emitWBRoutine(l amd64.Label) {
 		a.Load(r, rCtx, offSave+int32(8*i))
 	}
 	for x := amd64.XReg(0); x < 15; x++ {
-		a.LoadSD(x, rCtx, offSave+int32(8*(len(wbSaved)+int(x))))
+		a.LoadVec(x, rCtx, offSaveV+16*int32(x))
 	}
 	a.JmpMem(rCtx, offWBRet)
 }

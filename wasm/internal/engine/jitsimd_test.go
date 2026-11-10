@@ -639,8 +639,10 @@ func showVals(args []Val) string {
 // spilled and loaded back -- in locals' homes across native calls and
 // exits, as arguments and results of calls and tail calls, in globals,
 // through select, blocks, br_table and a loop's parameters swapped on each
-// turn while the loop polls, give the interpreter's bits, in the baseline
-// code and in the optimizing tier's.
+// turn while the loop polls, and in registers across the stores of
+// references (which WASM_JIT_BARRIER=clobber sends through the barrier's
+// routine with junk in every register), give the interpreter's bits, in
+// the baseline code and in the optimizing tier's.
 func TestJITSIMDValues(t *testing.T) {
 	var deep strings.Builder
 	// Twenty vectors live at once, then summed in pairs.
@@ -716,6 +718,14 @@ func TestJITSIMDValues(t *testing.T) {
           (i64.add (local.get 2) (i64.const 1)) (i32x4.add (local.get 1) (local.get 3))))))
   (func (export "tail") (param v128 v128 i32) (result v128)
     (call $tail (local.get 2) (local.get 0) (i64.const 5) (local.get 1)))
+  (global $fr (mut funcref) (ref.null func))
+  (elem declare func $mix)
+  (func (export "barrier") (param v128 v128) (result v128) (local v128 v128)
+    (local.set 2 (i32x4.add (local.get 0) (local.get 1)))
+    (local.set 3 (i64x2.sub (local.get 0) (local.get 1)))
+    (global.set $fr (ref.func $mix))
+    (global.set $fr (ref.null func))
+    (v128.xor (local.get 2) (i8x16.add (local.get 3) (local.get 0))))
   (memory 1))`
 	for _, opt := range []bool{false, true} {
 		t.Run(map[bool]string{false: "baseline", true: "opt"}[opt], func(t *testing.T) {
@@ -749,6 +759,7 @@ func simdValues(t *testing.T, src string, opt bool) {
 			{"global", nil},
 			{"rotate", []Val{vec(), vec(), {N: r.Uint64()}, {N: uint64(1 + i%3*5000)}}},
 			{"tail", []Val{vec(), vec(), {N: uint64(i % 9)}}},
+			{"barrier", []Val{vec(), vec()}},
 		}
 		for _, cs := range cases {
 			ei, _ := interp.Export(cs.name)
@@ -766,7 +777,7 @@ func simdValues(t *testing.T, src string, opt bool) {
 			}
 		}
 	}
-	for _, name := range []string{"deep", "calls", "flow", "global", "rotate", "tail"} {
+	for _, name := range []string{"deep", "calls", "flow", "global", "rotate", "tail", "barrier"} {
 		if !nativeRan(native, name) {
 			t.Fatalf("%s has no native code", name)
 		}

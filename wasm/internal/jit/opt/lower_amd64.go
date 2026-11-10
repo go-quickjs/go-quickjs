@@ -585,7 +585,7 @@ func (g *gen) saveAll() {
 	}
 	for i, x := range xmms {
 		if g.v128 {
-			a.StoreVec(rCtx, offSaveV+int32(16*x), amd64.XReg(x))
+			a.StoreVec(rCtx, offSaveV+16*int32(x), amd64.XReg(x))
 			continue
 		}
 		a.StoreSD(rCtx, offSave+int32(8*(len(gprs)+i)), amd64.XReg(x))
@@ -599,7 +599,7 @@ func (g *gen) restoreAll() {
 	}
 	for i, x := range xmms {
 		if g.v128 {
-			a.LoadVec(amd64.XReg(x), rCtx, offSaveV+int32(16*x))
+			a.LoadVec(amd64.XReg(x), rCtx, offSaveV+16*int32(x))
 			continue
 		}
 		a.LoadSD(amd64.XReg(x), rCtx, offSave+int32(8*(len(gprs)+i)))

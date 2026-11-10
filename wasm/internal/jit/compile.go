@@ -147,6 +147,7 @@ var (
 	offWBPtr      = int32(unsafe.Offsetof(Ctx{}.WBPtr))
 	offWBRet      = int32(unsafe.Offsetof(Ctx{}.WBRet))
 	offSave       = int32(unsafe.Offsetof(Ctx{}.Save))
+	offSaveV      = int32(unsafe.Offsetof(Ctx{}.SaveV))
 	offExit       = int32(unsafe.Offsetof(Ctx{}.Exit))
 	offArg0       = int32(unsafe.Offsetof(Ctx{}.Arg0))
 	offExitFn     = int32(unsafe.Offsetof(Ctx{}.ExitFn))

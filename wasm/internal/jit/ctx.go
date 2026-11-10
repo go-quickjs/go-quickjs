@@ -98,7 +98,9 @@ type Ctx struct {
 	// SaveV is where a function with v128 values keeps its float
 	// registers whole around a poll's exit and the runtime's store, each
 	// register's 16 bytes at 16 times its number, its general registers
-	// staying in Save.
+	// staying in Save. It is at a multiple of 16 bytes from the context's
+	// start, which arm64's 16-byte loads and stores scale their offsets by.
+	_     uint64
 	SaveV [2 * 32]uint64
 }
 

@@ -645,7 +645,7 @@ func (g *gen) saveAll() {
 		switch {
 		case g.usedX&(1<<x) == 0:
 		case g.v128:
-			a.StoreQ(rCtx, offSaveV+int32(16*x), arm64.FReg(x))
+			a.StoreQ(rCtx, offSaveV+16*int32(x), arm64.FReg(x))
 		default:
 			a.StoreF(rCtx, offSave+int32(8*(len(gprs)+i)), arm64.FReg(x))
 		}
@@ -663,7 +663,7 @@ func (g *gen) restoreAll() {
 		switch {
 		case g.usedX&(1<<x) == 0:
 		case g.v128:
-			a.LoadQ(arm64.FReg(x), rCtx, offSaveV+int32(16*x))
+			a.LoadQ(arm64.FReg(x), rCtx, offSaveV+16*int32(x))
 		default:
 			a.LoadF(arm64.FReg(x), rCtx, offSave+int32(8*(len(gprs)+i)))
 		}

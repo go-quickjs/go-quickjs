@@ -279,8 +279,9 @@ and X0 on arm64:
   chunk they are in. Go sets `R` at entry; a function that holds references
   moves it past its frame for a native call and back after, and one that
   holds none leaves it as it is.
-- `WBSlot`, `WBPtr`, `WBRet`, `Save`: the barrier routine's arguments and
-  register save area (see References and the collector).
+- `WBSlot`, `WBPtr`, `WBRet`, `Save`, `SaveV`: the barrier routine's
+  arguments and register save areas, the float registers' whole in `SaveV`
+  (see References and the collector).
 - `ChunkEnd`: the end of the stack chunk the frames are in.
 - `Inst`, `Frames`, `RFrames`: the address of the instance the code runs
   for, and the Code's tables of each function's frame, set when its native
@@ -927,7 +928,9 @@ out of line, the slot's address and the pointer in the context's `WBSlot`
 and `WBPtr` and where to go on in a scratch register. The payload word is
 always a plain store. The routine returns at once for a nil stored over a
 nil, which has nothing to write or to shade; else it saves every register
-the code may keep a value in into the context's `Save`, jumps to
+the code may keep a value in into the context's `Save` -- the float
+registers whole, 16 bytes each, into `SaveV`, since a v128 may be in one --
+jumps to
 `internal/jit`'s `StoreRef` -- to the Go runtime a function the Go function
 that entered the code called, which stores with Go's barrier, shading the
 pointer it overwrites and the one it writes -- with the address in AX (X15)
