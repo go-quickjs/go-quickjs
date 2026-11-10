@@ -87,7 +87,19 @@ type Ctx struct {
 	// a poll's, a call's through the engine -- whose resumption is shared
 	// too: the site's own code, which the site leaves here.
 	Resume uintptr
+	// RArgs, where it is not 0, says where the references among an exit's
+	// operands and results are: the reference slot of the operand whose
+	// numeric slot is s is RArgs - RArgsBias + s/2, not the slot of s's
+	// stack position. The optimizing tier, whose operands of an exit are in
+	// a call area of their own while its references stay in their stack
+	// positions' reference slots, sets it for an exit with references; the
+	// engine reads it at the exit and clears it.
+	RArgs uint64
 }
+
+// RArgsBias is what Ctx.RArgs adds to its offset, which may be negative,
+// so that a word that is not 0 says the offset is set.
+const RArgsBias = 1 << 32
 
 // SaveWords is the size of the context's register save area.
 const SaveWords = 56

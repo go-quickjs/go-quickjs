@@ -74,8 +74,8 @@ func (r *reader) heapType() {
 	}
 }
 
-// valueType reads a value type; a reference type's heap type is skipped,
-// as this tier refuses references.
+// valueType reads a value type; a reference type's heap type is skipped:
+// a reference is in its slot, whatever its type.
 func (r *reader) valueType() module.ValueType {
 	b := r.byte()
 	switch b {
@@ -159,15 +159,25 @@ func (r *reader) skipDead() {
 func (r *reader) skipImmediates(op opcode.Opcode) {
 	switch op {
 	case opcode.Block, opcode.Loop, opcode.If:
+		if b := r.b[r.pc]; b == 0x64 || b == 0x63 {
+			// A reference type's heap type follows.
+			r.pc++
+			r.heapType()
+			break
+		}
 		r.s64()
 	case opcode.Br, opcode.BrIf, opcode.CallFunction, opcode.LocalGet, opcode.LocalSet, opcode.LocalTee,
-		opcode.GlobalGet, opcode.GlobalSet, opcode.MemorySize, opcode.MemoryGrow:
+		opcode.GlobalGet, opcode.GlobalSet, opcode.MemorySize, opcode.MemoryGrow, opcode.ReturnCall,
+		opcode.CallRef, opcode.ReturnCallRef, opcode.RefFunc, opcode.BrOnNull, opcode.BrOnNonNull,
+		opcode.TableGet, opcode.TableSet, opcode.TableSize:
 		r.u32()
+	case opcode.RefNull:
+		r.heapType()
 	case opcode.BrTable:
 		for n := r.u32() + 1; n > 0; n-- {
 			r.u32()
 		}
-	case opcode.CallIndirect:
+	case opcode.CallIndirect, opcode.ReturnCallIndirect:
 		r.u32()
 		r.u32()
 	case opcode.SelectWithType:

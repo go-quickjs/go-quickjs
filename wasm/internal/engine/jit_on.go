@@ -192,6 +192,8 @@ type jitLevel struct {
 	mems []uint64
 	// frame is the frame a SIMD exit runs the interpreter's code in.
 	frame frame
+	// rargs is the exit's Ctx.RArgs, taken when Go begins its work.
+	rargs uint64
 }
 
 // jitLayout is where the engine's objects keep what native code reads.
@@ -1185,6 +1187,7 @@ func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64,
 func (x *exec) jitExit(lv *jitLevel) (next *nativeFn, off int, tail bool) {
 	ctx := &lv.ctx
 	inst := lv.inst
+	lv.rargs, ctx.RArgs = ctx.RArgs, 0
 	switch ctx.Exit {
 	case wjit.ExitCall, wjit.ExitCallIndirect, wjit.ExitCallRef, wjit.ExitOp:
 		lv.cj.sample(inst.Code, uint32(ctx.ExitFn), 1)
@@ -1290,6 +1293,9 @@ type exitFrame struct {
 	l         []uint64
 	r         []Ref
 	top, rtop int
+	// rargs is the exit's Ctx.RArgs: where it is not 0, the references of
+	// its operands are in other slots than their positions' (rslot).
+	rargs uint64
 }
 
 func (x *exec) exitFrame(lv *jitLevel) exitFrame {
@@ -1298,17 +1304,24 @@ func (x *exec) exitFrame(lv *jitLevel) exitFrame {
 	j := int((lv.ctx.R - lv.rchunkBase) / 16)
 	n := cd.nativeRefSlots()
 	return exitFrame{
-		cd:   cd,
-		l:    x.nchunks[lv.nc][i : i+cd.nslots : i+cd.nslots],
-		r:    x.rchunks[lv.rc][j : j+n : j+n],
-		top:  i + cd.nslots,
-		rtop: j + n,
+		cd:    cd,
+		l:     x.nchunks[lv.nc][i : i+cd.nslots : i+cd.nslots],
+		r:     x.rchunks[lv.rc][j : j+n : j+n],
+		top:   i + cd.nslots,
+		rtop:  j + n,
+		rargs: lv.rargs,
 	}
 }
 
 // rslot is the reference slot of the stack position whose numeric slot is
-// slot.
-func (f *exitFrame) rslot(slot int) int { return f.cd.rlocals + (slot-f.cd.nlocals)/2 }
+// slot, or, for an exit that says where its references are (Ctx.RArgs),
+// of the operand whose numeric slot is slot.
+func (f *exitFrame) rslot(slot int) int {
+	if f.rargs != 0 {
+		return int(int64(f.rargs)-wjit.RArgsBias) + slot/2
+	}
+	return f.cd.rlocals + (slot-f.cd.nlocals)/2
+}
 
 // get returns the value of type t at the stack position whose numeric
 // slot is slot: a v128's high half in the next slot.

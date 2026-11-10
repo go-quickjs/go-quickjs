@@ -240,8 +240,29 @@ func TestJITReferencesUnderCollection(t *testing.T) {
 	if !JITAvailable() {
 		t.Skip("no native code in this build")
 	}
+	for _, opt := range []bool{false, true} {
+		referencesUnderCollection(t, opt)
+	}
+	if os.Getenv("QUICKJS_WASM_GCCHECK_CHILD") != "" || testing.Short() {
+		return
+	}
+	cmd := osexec.Command(os.Args[0], "-test.run=^TestJITReferencesUnderCollection$", "-test.count=1")
+	cmd.Env = append(os.Environ(), "QUICKJS_WASM_GCCHECK_CHILD=1", "GODEBUG=gccheckmark=1")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("with gccheckmark: %v\n%s", err, out)
+	}
+}
+
+// referencesUnderCollection moves references between a table, a global,
+// locals and a call while the collector runs, in the baseline code or, opt,
+// in the optimizing tier's.
+func referencesUnderCollection(t *testing.T, opt bool) {
 	const k = 64
 	inst := nativeInstance(t, refsWAT)
+	if opt {
+		inst.Code.SetOptThreshold(0)
+		inst.Code.SetOptBackground(false)
+	}
 	if _, err := refCall(t, inst, "grow", Val{R: Null}, Val{N: k - 8}); err != nil {
 		t.Fatal(err)
 	}
@@ -289,12 +310,7 @@ func TestJITReferencesUnderCollection(t *testing.T) {
 	if len(seen) == 0 {
 		t.Fatal("no element survived")
 	}
-	if os.Getenv("QUICKJS_WASM_GCCHECK_CHILD") != "" || testing.Short() {
-		return
-	}
-	cmd := osexec.Command(os.Args[0], "-test.run=^TestJITReferencesUnderCollection$", "-test.count=1")
-	cmd.Env = append(os.Environ(), "QUICKJS_WASM_GCCHECK_CHILD=1", "GODEBUG=gccheckmark=1")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("with gccheckmark: %v\n%s", err, out)
+	if opt && !optimized(inst, "shuffle") {
+		t.Fatal("shuffle not optimized")
 	}
 }

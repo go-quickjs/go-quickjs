@@ -22,10 +22,13 @@ const (
 	TF64
 	// TTuple is a call's results, read by OpResult.
 	TTuple
+	// TRef is a reference's, which is never a value: the builder's stack
+	// and locals say by it that a reference is in its reference slot.
+	TRef
 )
 
 func (t Type) String() string {
-	return [...]string{"none", "i32", "i64", "f32", "f64", "tuple"}[t]
+	return [...]string{"none", "i32", "i64", "f32", "f64", "tuple", "ref"}[t]
 }
 
 // IsFloat reports whether t is f32 or f64.
@@ -152,8 +155,54 @@ const (
 	OpGoOp
 	// OpResult is result Aux of the call Args[0].
 	OpResult
+	// OpCallRef is call_ref of type Aux, its numeric arguments in Args;
+	// the reference it calls is in the reference slot of stack position
+	// Pos plus the number of parameters.
+	OpCallRef
+	// OpRef is a reference instruction (refKind, Aux's low byte; an index
+	// above it): it reads and writes reference slots -- the destination's
+	// and the source's indices from R, the high and low words of Aux2 --
+	// and the numeric arguments Args, and makes an i32 or an i64 where its
+	// Type says so. It traps at At where the instruction does.
+	OpRef
+	// OpTail, OpTailIndirect and OpTailRef are return_call of function
+	// Aux, return_call_indirect of type Aux through table Aux2 and
+	// return_call_ref of type Aux, their numeric arguments (and the index)
+	// in Args: the last value of a block that ends with them (BTail).
+	OpTail
+	OpTailIndirect
+	OpTailRef
 
 	numOps
+)
+
+// The reference instructions an OpRef makes (refKind), dst and src being
+// the reference slots its Aux2 names, idx the index its Aux holds above
+// the kind.
+const (
+	// refNull makes dst null.
+	refNull = iota
+	// refFunc makes dst function idx.
+	refFunc
+	// refCopy copies src to dst.
+	refCopy
+	// refGlobalGet copies global idx to dst, refGlobalSet src to global idx.
+	refGlobalGet
+	refGlobalSet
+	// refTableGet copies the element Args[0] of table idx to dst, and
+	// refTableSet src to it, trapping past the table's end.
+	refTableGet
+	refTableSet
+	// refIsNull is 1 if src is null, else 0.
+	refIsNull
+	// refEq is 1 if dst and src are the same reference, else 0.
+	refEq
+	// refAsNonNull traps if src is null.
+	refAsNonNull
+	// refSelect copies src to dst if Args[0] is 0.
+	refSelect
+	// refTableSize is table idx's number of elements.
+	refTableSize
 )
 
 // opFlags says what an operation does besides compute its value.
@@ -258,6 +307,11 @@ var opInfos = [numOps]opInfo{
 	OpCallIndirect: {"call_indirect", fEffect | fTrap | fCall},
 	OpGoOp:         {"goop", fEffect | fTrap | fCall},
 	OpResult:       {"result", 0},
+	OpCallRef:      {"call_ref", fEffect | fTrap | fCall},
+	OpRef:          {"ref", fEffect | fTrap},
+	OpTail:         {"return_call", fEffect | fTrap},
+	OpTailIndirect: {"return_call_indirect", fEffect | fTrap},
+	OpTailRef:      {"return_call_ref", fEffect | fTrap},
 }
 
 func (o Op) String() string { return opInfos[o].name }
@@ -281,6 +335,10 @@ type Value struct {
 	// NoCheck says a memory access needs no bounds check: a dominating
 	// access of the same address checked as far.
 	NoCheck bool
+	// Pos is a call's or a tail call's arguments' first stack position,
+	// whose reference slot and those after it hold its reference
+	// arguments, and a call's reference results.
+	Pos int32
 	// Uses counts the value's uses: as arguments, as a block's control or
 	// result.
 	Uses int32
@@ -344,6 +402,9 @@ func (v *Value) BulkInCode() bool {
 	return op == opcode.MemoryCopy || op == opcode.MemoryFill
 }
 
+// isTail reports whether op is a tail call's.
+func isTail(op Op) bool { return op == OpTail || op == OpTailIndirect || op == OpTailRef }
+
 // Commutes reports whether v's two arguments commute.
 func (v *Value) Commutes() bool { return opInfos[v.Op].flags&fComm != 0 }
 
@@ -362,6 +423,9 @@ const (
 	BReturn
 	// BTrap traps (unreachable) at At.
 	BTrap
+	// BTail ends with its last value, a tail call, which leaves the
+	// function.
+	BTail
 )
 
 // Block is a basic block.
@@ -403,10 +467,21 @@ func (b *Block) String() string { return fmt.Sprintf("b%d", b.ID) }
 type Func struct {
 	Blocks []*Block
 	Entry  *Block
-	// Params and Results are the signature's types.
-	Params, Results []Type
-	nextValue       int32
-	nextBlock       int32
+	// Params and Results are the types of the signature's numeric
+	// parameters and results, ResultSlots the numeric slots the results
+	// go in. RLocals is the number of reference slots before the operand
+	// stack's -- the reference locals' or results', whichever is more --
+	// and RefParams the reference parameters'; a stack position h's
+	// reference slot is RLocals+h. MaxHeight is the most operands the
+	// stack holds, and Refs says the function reads or writes a reference
+	// slot.
+	Params, Results    []Type
+	ResultSlots        []int32
+	RLocals, RefParams int
+	MaxHeight          int
+	Refs               bool
+	nextValue          int32
+	nextBlock          int32
 	// ws is the workspace the function's values and blocks, and its
 	// passes' tables, are made in; dom is its dominator tree, there, while
 	// the control flow graph is as it was made (dominators).
@@ -507,6 +582,8 @@ func (f *Func) String() string {
 			fmt.Fprintf(&sb, "  return %v\n", b.Results)
 		case BTrap:
 			fmt.Fprintf(&sb, "  trap @%d\n", b.At)
+		case BTail:
+			fmt.Fprintf(&sb, "  tail\n")
 		}
 	}
 	return sb.String()
@@ -518,8 +595,11 @@ func (v *Value) long() string {
 		s += " " + a.String()
 	}
 	switch v.Op {
-	case OpConst, OpParam, OpGlobalAddr, OpGlobalGet, OpGlobalSet, OpCall, OpResult, OpLoad, OpStore, OpCallIndirect, OpGoOp:
+	case OpConst, OpParam, OpGlobalAddr, OpGlobalGet, OpGlobalSet, OpCall, OpResult, OpLoad, OpStore, OpCallIndirect, OpGoOp,
+		OpCallRef, OpTail, OpTailIndirect, OpTailRef:
 		s += fmt.Sprintf(" [%#x]", v.Aux)
+	case OpRef:
+		s += fmt.Sprintf(" [kind %d %#x r%d<-r%d]", v.Aux&0xff, v.Aux>>8, v.Aux2>>32, uint32(v.Aux2))
 	}
 	if v.Op == OpLoad || v.Op == OpStore {
 		s += fmt.Sprintf(" size %d", v.Size)

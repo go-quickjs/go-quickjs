@@ -62,6 +62,11 @@ func Verify(f *Func) error {
 			want = 2
 		case BReturn, BTrap:
 			want = 0
+		case BTail:
+			want = 0
+			if n := len(b.Values); n == 0 || !isTail(b.Values[n-1].Op) {
+				return fmt.Errorf("%v: a tail call's block not ending with one", b)
+			}
 		case BSwitch:
 			if len(b.Succs) == 0 || len(b.Table) == 0 {
 				return fmt.Errorf("%v: a switch without targets", b)
@@ -343,7 +348,7 @@ func checkTypes(v *Value) error {
 		if v.Args[0].Op != OpGlobalAddr {
 			return fmt.Errorf("a global's address %v", v.Args[0])
 		}
-	case OpCall, OpCallIndirect:
+	case OpCall, OpCallIndirect, OpCallRef:
 		if v.Type != TTuple {
 			return fmt.Errorf("a call of type %v", v.Type)
 		}
@@ -351,8 +356,19 @@ func checkTypes(v *Value) error {
 		if err := arity(1); err != nil {
 			return err
 		}
-		if c := v.Args[0]; c.Op != OpCall && c.Op != OpCallIndirect {
+		if c := v.Args[0]; c.Op != OpCall && c.Op != OpCallIndirect && c.Op != OpCallRef {
 			return fmt.Errorf("a result of %s", c.long())
+		}
+	case OpRef:
+		if v.Type != TNone && !v.Type.IsInt() {
+			return fmt.Errorf("of type %v", v.Type)
+		}
+	case OpTail, OpTailIndirect, OpTailRef:
+		if v.Type != TNone {
+			return fmt.Errorf("of type %v", v.Type)
+		}
+		if b := v.Block; b.Kind != BTail || b.Values[len(b.Values)-1] != v {
+			return fmt.Errorf("a tail call that does not end its block")
 		}
 	case OpCopy:
 		if err := arity(1); err != nil {

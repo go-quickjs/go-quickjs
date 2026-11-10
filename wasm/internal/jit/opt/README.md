@@ -24,6 +24,7 @@ default (see Tier-up).
 | `timing.go` | the compiles' phases, timed for a measuring host |
 | `lower.go` | the lowering's part both architectures share: the allocator's view of the function, where each value is, the listing |
 | `lower_amd64.go`, `lower_arm64.go` | the lowering: each architecture's code |
+| `refs_amd64.go`, `refs_arm64.go` | the references: the reference instructions, the barrier routine, a call's references, the tail calls |
 | `internal/jit/lsra` | the register allocator, which knows nothing of WebAssembly |
 
 ## The IR
@@ -43,11 +44,28 @@ stores of memory 0 (their width, sign extension, offset, and `NoCheck`
 once a dominating access checked as far), the globals -- `global.addr`,
 the address of a global's value, made once in the entry block, which
 `global.get` and `global.set` read and write through -- calls of a
-function of the module (`call`) and through a table (`call_indirect`),
-whose results `result` values read, and `goop`, an instruction Go runs
-(memory.size, memory.grow, memory.copy, memory.fill) -- but memory.copy
-and memory.fill of memory 0, which the code does itself and which are
-not calls (`BulkInCode`).
+function of the module (`call`), through a table (`call_indirect`) and
+through a reference (`call_ref`), whose numeric results `result` values
+read, `goop`, an instruction Go runs (memory.size, memory.grow,
+memory.copy, memory.fill) -- but memory.copy and memory.fill of memory 0,
+which the code does itself and which are not calls (`BulkInCode`) --
+`ref`, a reference instruction (below), and the tail calls
+(`return_call`, `return_call_indirect`, `return_call_ref`), the last value
+of a block that ends with them (a sixth way, `tail`).
+
+References are never values. A reference is in a reference slot of the
+frame, as the baseline keeps it (its README's Frames): a reference local
+in its own, a reference on the operand stack in its position's, at every
+point. A `ref` value names the slots it reads and writes -- a copy from
+one to another, a null or a function made in one, a global or a table's
+element copied to or from one, the null test and `ref.eq` of slots (an i32
+value), `ref.as_non_null`'s trap, `select`'s copy where its condition is
+0 -- and has its numeric operands (a table's index, `select`'s condition)
+as arguments; table.size is one too. Every `ref` value has an effect: none
+is shared, moved or removed, and they keep their order among themselves
+and the calls, which read and write the same slots. A call's reference
+arguments and results are in its arguments' positions' slots, from the
+position its value records (`Pos`); its `Args` are its numbers.
 
 An operation is pure -- no effect, no trap, so shared, moved and removed
 at will -- or not: a division may trap unless its divisor is a constant
@@ -71,10 +89,14 @@ loop's end, every back edge being inside the loop; the block after a
 `block` or an `if` -- the construct's label, where its branches go -- at
 its end; every other block when it is made.
 
-The operand stack is a stack of values. A label's values are phis made
-with the label: a loop's parameters in its header, the results of
-anything else in the block after it, each edge to the label appending its
-values. A `br_if` ends its block with an if; `br_table` with a switch;
+The operand stack is a stack of values, and of a mark for each reference,
+which is in its position's slot. A label's values are phis made with the
+label: a loop's parameters in its header, the results of anything else in
+the block after it, each edge to the label appending its values -- but
+its references, which an edge copies from their positions' slots into the
+label's, where the two differ: in the block a branch leaves, or, for a
+conditional branch, in a block of its own on the edge. A return copies
+its references into the result slots. A `br_if` ends its block with an if; `br_table` with a switch;
 `br`, `return` and `unreachable` end it and the rest of the construct is
 skipped, as the baseline skips it. A branch to the function's body is a
 return block. The code after a loop begins a block of its own, and a
@@ -171,7 +193,10 @@ the points where something else reads them:
   (`Ctx.Save`): nothing in the level runs while Go polls.
 - A trap reads nothing of the frame.
 
-Every other slot below `argBase` is the allocator's spill slot. A slot's
+Every other slot below `argBase` is the allocator's spill slot. A
+parameter, a local and a result have the slots of the engine's frames: a
+number's numeric slot is its place among the numbers, a reference's
+reference slot its place among the references. A slot's
 word holds an i32 or an f32 with its upper half clear, as the
 interpreter's frames do, so that what Go reads of the call area is right
 and a slot is copied whole: on amd64 an f32 is stored with MOVSS and a
@@ -179,7 +204,29 @@ zero upper word; on arm64 an f32 in a register has the rest of the register
 clear, as the baseline keeps it -- every instruction that makes one writes
 its S view, which clears the rest -- and is stored as its D view.
 
-The optimized code holds no reference: a function with one is refused.
+A function that holds references -- the engine's frame has reference
+slots (`Request.FrameRefSlots`) -- makes every reference slot but its
+parameters' null when it begins, as the baseline does, and moves the
+context's R past its own for a native call (`adv`) and back after: its
+callees' references go past its own. Its reference instructions address
+the slots from the context's R, loaded into a scratch register for each,
+and a pointer word passes through the float scratch register (x0) within
+the instruction's code: no reference is in a register the allocator has,
+nor across a call, an exit or a poll. Every store of a pointer word tests
+the write barrier's flag and, while the collector marks, goes to the
+function's barrier routine, out of line, which saves every register the
+code may keep a value in -- the allocator's and the ones every native
+frame keeps -- around `internal/jit.StoreRef`, as the baseline's does
+(its README's References and the collector); the payload word is a plain
+store.
+
+A call's reference arguments are copied from their positions' slots into
+the callee's parameters past the frame's (adv bytes past R), and its
+reference results back after. A call through Go stages its numeric
+operands in the call area, each at its place among the signature's
+parameters, while its references stay where they are: it sets the
+context's `RArgs`, by which the engine reads and writes the references of
+the exit's operands in their positions' slots, not in the call area's.
 
 ## Registers
 
@@ -319,19 +366,35 @@ does, that the callee has native code, that its frame and reference slots
 fit their chunks, and that the return stack has room, else calls through
 Go (`ExitCall`), out of line.
 
-A `call_indirect` counts it down and calls natively too where the
-table's element -- within the table, not null -- is a function of the
-call's type exactly (its canonical index, `Layout.FuncType`), defined by
-the instance the code runs for (`Layout.FuncInst` against `Ctx.Inst`),
-with native code (the link table at its index, `Layout.FuncIndex`) and
-room for its frame, which the engine's table of each function's frame
-says (`Ctx.Frames`: a function that holds references has one past any
-chunk's end). Anything else -- null, past the table, another type or a
+A `call_indirect` or a `call_ref` counts it down and calls natively too
+where the table's element -- within the table, not null -- or the
+reference is a function of the call's type exactly (its canonical index,
+`Layout.FuncType`), defined by the instance the code runs for
+(`Layout.FuncInst` against `Ctx.Inst`), with native code (the link table
+at its index, `Layout.FuncIndex`) and room for its frame, which the
+engine's table of each function's frame says (`Ctx.Frames`). A function
+that holds references has a frame there past any chunk's end, and fails
+the check: out of line, both its sizes (`Ctx.RFrames`) are checked, its
+reference slots' past the caller's. A call of a type with a reference
+parameter or result goes through Go, as its callee holds references. A
+null reference traps (`TrapNullDereference`) before the poll is counted.
+Anything else -- null in a table, past the table, another type or a
 subtype, a host function, another instance's, no native code or no room
--- goes through Go (`ExitCallIndirect`), which finds the callee or traps
-as the interpreter does. The callee's index waits in X15 while the
+-- goes through Go (`ExitCallIndirect`, `ExitCallRef`), which finds the
+callee or traps as the interpreter does. The callee's index waits in X15 while the
 arguments are moved, as s0 is the moves'; on arm64 the checks have X16
 and X17, and keep the table and the callee's index in D30 and D31.
+
+A tail call (`return_call`, and `return_call_indirect` and
+`return_call_ref` of a type without references) counts the poll down and
+is made in place natively where the callee has native code and room for
+its frame from L -- the same checks as a call's, but for the return
+stack's -- its reference arguments copied into the frame's parameters'
+reference slots, its numeric arguments into the parameters' slots by a
+parallel move, the frame's return stack entry renamed for the callee, and
+a jump to it with R10 the return stack's next entry. Otherwise it exits
+(`ExitTailCall`, `ExitTailIndirect`, `ExitTailRef`) as the baseline's
+does, and its resumption returns, the results in their slots.
 
 memory.copy and memory.fill of memory 0 are the code's own: the operands
 into AX, CX and SI, which the allocator keeps free of intervals live
@@ -592,14 +655,12 @@ A function is refused -- it keeps its baseline code -- when it has:
 
 | Reason | What |
 |---|---|
-| `ref` | a reference type anywhere, a reference instruction, call_ref |
 | `v128` | a v128 value |
 | `simd` | a SIMD instruction |
 | `atomics` | an atomic instruction |
 | `gc` | a GC instruction |
 | `exceptions` | try, try_table, throw, the legacy instructions |
-| `tail` | return_call, return_call_indirect, return_call_ref |
-| `table` | a table instruction |
+| `table` | table.grow, table.fill, table.copy, table.init, elem.drop |
 | `bulk` | memory.init, data.drop |
 | `memory` | an access of a memory other than 0, of an i64 memory or of a shared one |
 | `offset` | an access whose offset plus size is past 2^31-1 |
@@ -672,7 +733,9 @@ merges, `TestCoalesce` a loop's phi web; `TestWorkspaceReuse` compiles in
 workspaces kept and from goroutines at once (with -race);
 `TestOptTierUp` the counts, the replacement mid-recursion and the poll
 samples, `TestOptTierUpByExits` the exits'; `TestOptCallIndirect` every
-kind of element a native call_indirect meets, `TestOptBulkMemory`
+kind of element a native call_indirect meets, `TestOptRefs` references
+in every place, calls and tail calls of every kind with them, idle and
+with the collector marking, `TestOptBulkMemory`
 memory.copy and memory.fill at every overlap and end; `TestThreadDispatch`
 and `TestOptThreadDispatch` jump threading, the latter on 1,500 random
 dispatch loops against the interpreter; `TestMarks` the profile's marks.
@@ -734,9 +797,13 @@ json's and interp's, which compile their hot functions within a run of
 about 60 ms (json +10%, interp +4%, where they were +19% and +17%
 before the compile's cost was worked on; see Tier-up).
 
-On the spec scripts the tier compiles 3,914 functions and refuses 2,928
-(SIMD, references, i64 and shared memories, tables, exceptions, tail
-calls), in 23 ms, 6 µs a function (43 to 63 ms before), where the
+On the spec scripts the tier compiles 4,149 functions and refuses 2,693
+(SIMD and v128s 1,499, memories other than an i32 one 514, the table
+instructions that allocate or copy 218, GC instructions 188, exceptions
+107, atomics 80, memory.init and data.drop 73, offsets 14), where it
+compiled 3,914 and refused 2,928 -- references 252 and tail calls 45
+among them -- before it took references and tail calls; in 23 ms, 6 µs
+a function (43 to 63 ms before), where the
 baseline's 2,926 take 11 to 23 ms. The Go program's 3,011 functions
 compile in 0.16 ms each (0.40 before; the baseline's, 0.12 ms).
 
@@ -774,7 +841,7 @@ registers the allocator gave out.
   runs five times, the dominator tree up to three -- and trivial phis
   the builder need not make. In the background it costs the first run
   little, but it is CPU an embedder running a runtime on each core pays.
-- Inlining of small callees; tail calls.
+- Inlining of small callees.
 - Bounds checks: hoisting a loop's checks of an induction variable, and a
   block's checks of one base at its widest where nothing between can be
   observed.

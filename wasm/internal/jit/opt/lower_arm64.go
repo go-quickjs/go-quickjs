@@ -64,6 +64,7 @@ var (
 	offTables    = int32(unsafe.Offsetof(wjit.Ctx{}.Tables))
 	offInst      = int32(unsafe.Offsetof(wjit.Ctx{}.Inst))
 	offFrames    = int32(unsafe.Offsetof(wjit.Ctx{}.Frames))
+	offRFrames   = int32(unsafe.Offsetof(wjit.Ctx{}.RFrames))
 	offChunkEnd  = int32(unsafe.Offsetof(wjit.Ctx{}.ChunkEnd))
 	offRSP       = int32(unsafe.Offsetof(wjit.Ctx{}.RSP))
 	offRSEnd     = int32(unsafe.Offsetof(wjit.Ctx{}.RSEnd))
@@ -111,6 +112,11 @@ type gen struct {
 	usedG, usedX uint64
 	// moves and pending are the parallel moves' lists.
 	moves, pending []pmove
+	// wb is the function's barrier routine, which hasWB says is made;
+	// argSlotsBuf is a call's arguments' slots in the call area.
+	wb          arm64.Label
+	hasWB       bool
+	argSlotsBuf []int32
 }
 
 // reset readies g, kept in a workspace, for function f, keeping the
@@ -122,7 +128,7 @@ func (g *gen) reset(ws *genScratch, f *Func, req *wjit.Request) {
 	g.polls.reset(8)
 	g.lowering.reset(f, req)
 	*g = gen{lowering: g.lowering, ws: ws, a: &ws.asm, labels: g.labels[:0], ool: g.ool[:0], traps: g.traps, trapTo: g.trapTo,
-		polls: g.polls, moves: g.moves[:0], pending: g.pending[:0]}
+		polls: g.polls, moves: g.moves[:0], pending: g.pending[:0], argSlotsBuf: g.argSlotsBuf[:0]}
 	ws.asm.Reset()
 }
 
@@ -168,6 +174,9 @@ func lower(f *Func, req *wjit.Request, ws *workspace) *wjit.Code {
 	g.mark("entry")
 	g.loadKept()
 	a.Bind(entry)
+	if g.holdsRefs() {
+		g.clearRefs()
+	}
 	for range f.Blocks {
 		g.labels = append(g.labels, a.NewLabel())
 	}
@@ -450,6 +459,10 @@ type stub struct {
 	// v is the call, res its results.
 	v   *Value
 	res []*Value
+	// dst, off and flag are a barrier's store (stubBarrier): its slot's
+	// base and offset, and the register its slow path has.
+	dst, flag arm64.Reg
+	off       int32
 }
 
 // The stubs' kinds.
@@ -460,6 +473,11 @@ const (
 	stubPollExit
 	stubCall
 	stubCallIndirect
+	stubCallRef
+	stubBarrier
+	stubWB
+	stubTail
+	stubRefRoom
 )
 
 // stub emits out-of-line code.
@@ -497,21 +515,61 @@ func (g *gen) stub(st *stub) {
 		g.restoreAll()
 		a.Load(s0, rCtx, offResume)
 		a.Br(s0)
-	case stubCall, stubCallIndirect:
+	case stubCall, stubCallIndirect, stubCallRef:
 		v := st.v
 		a.Bind(st.l)
 		g.mark("cold call")
 		a.Adr(s0, st.start)
 		a.B(g.pollExit())
 		a.Bind(st.slow)
-		g.stage(v.Args, g.argBase)
-		if st.kind == stubCall {
-			g.exit(wjit.ExitCall, a.NewLabel(), uint64(uint32(v.Aux)), uint64(g.argBase), uint64(v.At))
-		} else {
-			g.exit(wjit.ExitCallIndirect, a.NewLabel(), v.Aux, v.Aux2, uint64(g.argBase), uint64(v.At))
-		}
-		g.takeResults(st.res, int32(g.argBase))
+		g.exitCall(v, st.res)
 		a.B(st.after)
+	case stubBarrier:
+		a.Bind(st.l)
+		g.mark("cold barrier")
+		a.FMovFromF(st.flag, x0)
+		a.Store(rCtx, offWBPtr, st.flag)
+		a.AddImm(st.flag, st.dst, int64(st.off), true)
+		a.Store(rCtx, offWBSlot, st.flag)
+		a.Adr(s0, st.to)
+		a.B(g.wbRoutine())
+	case stubWB:
+		g.emitWB(st.l)
+	case stubTail:
+		a.Bind(st.l)
+		g.mark("cold tail call")
+		g.exitTail(st.v)
+	case stubRefRoom:
+		// A callee that holds references, whose Ctx.Frames is past any
+		// chunk's end: its numeric slots' room past L plus code bytes,
+		// and its reference slots' past R plus off, by Ctx.RFrames. The
+		// callee's index is in x0.
+		a.Bind(st.l)
+		g.mark("cold reference room")
+		a.FMovFromF(s0, x0)
+		a.Load(s1, rCtx, offRFrames)
+		a.AddLsl(s1, s1, s0, 3)
+		a.Load(s1, s1, 0)
+		a.MovRR32(s0, s1)
+		a.Op(arm64.Add, s0, s0, rL, true)
+		if st.code != 0 {
+			a.AddImm(s0, s0, int64(st.code), true)
+		}
+		a.FMovToF(x1, s1)
+		a.Load(s1, rCtx, offChunkEnd)
+		a.Cmp(s0, s1, true)
+		a.BCond(arm64.HI, st.slow)
+		a.FMovFromF(s1, x1)
+		a.ShiftImm(arm64.Lsr, s1, s1, 32, true)
+		a.Load(s0, rCtx, offR)
+		a.Op(arm64.Add, s1, s1, s0, true)
+		if st.off != 0 {
+			a.AddImm(s1, s1, int64(st.off), true)
+		}
+		a.Load(s0, rCtx, offRChunkEnd)
+		a.Cmp(s1, s0, true)
+		a.BCond(arm64.HI, st.slow)
+		a.B(st.to)
 	}
 }
 
@@ -649,7 +707,7 @@ func (g *gen) block(i int, b *Block) {
 	}
 	a := g.a
 	if g.marking {
-		g.mark("%v end %v", b, [...]string{"Plain", "If", "Switch", "Return", "Trap"}[b.Kind])
+		g.mark("%v end %v", b, [...]string{"Plain", "If", "Switch", "Return", "Trap", "Tail"}[b.Kind])
 	}
 	switch b.Kind {
 	case BPlain:
@@ -691,7 +749,7 @@ func (g *gen) block(i int, b *Block) {
 	case BReturn:
 		moves := g.moves[:0]
 		for k, r := range b.Results {
-			moves = append(moves, pmove{dst: loc{kind: lSlot, slot: int32(k)}, src: g.locOf(r), t: r.Type})
+			moves = append(moves, pmove{dst: loc{kind: lSlot, slot: g.f.ResultSlots[k]}, src: g.locOf(r), t: r.Type})
 		}
 		g.parallel(moves)
 		g.moves = moves[:0]
@@ -701,6 +759,8 @@ func (g *gen) block(i int, b *Block) {
 		a.Br(s0)
 	case BTrap:
 		a.B(g.trap(wjit.TrapUnreachable, b.At))
+	case BTail:
+		// The tail call, its last value, left the function.
 	}
 }
 
@@ -1031,8 +1091,12 @@ func (g *gen) value(v *Value, rest []*Value) {
 		}
 	case OpCall:
 		g.call(v, rest)
-	case OpCallIndirect:
+	case OpCallIndirect, OpCallRef:
 		g.callIndirect(v, rest)
+	case OpRef:
+		g.refOp(v)
+	case OpTail, OpTailIndirect, OpTailRef:
+		g.tail(v)
 	case OpGoOp:
 		if v.BulkInCode() {
 			g.bulk(v)
@@ -1351,8 +1415,8 @@ func (g *gen) takeResults(res []*Value, base int32) {
 	for _, r := range res {
 		src := loc{kind: lSlot, slot: base + 2*int32(r.Aux)}
 		if base >= int32(g.req.FrameSlots) {
-			// The callee's frame, its results one slot apart.
-			src.slot = base + int32(r.Aux)
+			// The callee's frame, its numeric results one slot apart.
+			src.slot = base + int32(r.Aux2)
 		}
 		dst := g.locOf(r)
 		g.move(dst, src, r.Type)
@@ -1411,9 +1475,7 @@ func (g *gen) call(v *Value, rest []*Value) {
 	res := results(v, rest)
 	after := a.NewLabel()
 	if m.Functions[idx].Imported {
-		g.stage(v.Args, g.argBase)
-		g.exit(wjit.ExitCall, a.NewLabel(), uint64(idx), uint64(g.argBase), uint64(v.At))
-		g.takeResults(res, int32(g.argBase))
+		g.exitCall(v, res)
 		g.reload(v)
 		return
 	}
@@ -1432,7 +1494,7 @@ func (g *gen) call(v *Value, rest []*Value) {
 	a.BCond(arm64.HI, slow)
 	if need := int64(16 * g.req.RefSlotsOf(idx)); need > 0 {
 		a.Load(s0, rCtx, offR)
-		a.AddImm(s0, s0, need, true)
+		a.AddImm(s0, s0, int64(g.adv())+need, true)
 		a.Load(s1, rCtx, offRChunkEnd)
 		a.Cmp(s0, s1, true)
 		a.BCond(arm64.HI, slow)
@@ -1440,16 +1502,24 @@ func (g *gen) call(v *Value, rest []*Value) {
 	a.Load(s1, rCtx, offRSEnd)
 	a.Cmp(rRS, s1, true)
 	a.BCond(arm64.HS, slow)
+	if g.sigHasRefs(v) {
+		g.refArgs(v, g.adv())
+	}
 	// The arguments, into the callee's parameters: one slot each.
 	for i, x := range v.Args {
 		g.move(loc{kind: lSlot, slot: int32(g.req.FrameSlots + i)}, g.locOf(x), x.Type)
 	}
+	g.advanceR()
 	ret := a.NewLabel()
 	g.pushReturn(ret, wjit.Site(idx, v.At), false)
 	a.Load(s0, rCtx, offLinks)
 	a.Load(s0, s0, int32(8*idx))
 	a.Br(s0)
 	a.Bind(ret)
+	g.restoreR()
+	if g.sigHasRefs(v) {
+		g.refResults(v, g.adv())
+	}
 	g.takeResults(res, int32(g.req.FrameSlots))
 	a.Bind(after)
 	g.reload(v)
@@ -1460,13 +1530,15 @@ func (g *gen) call(v *Value, rest []*Value) {
 // instructions it leaves to Go.
 func (g *gen) callGo(v *Value, rest []*Value) {
 	a := g.a
+	if v.Op == OpCallIndirect || v.Op == OpCallRef {
+		g.exitCall(v, results(v, rest))
+		g.reload(v)
+		return
+	}
 	g.stage(v.Args, g.argBase)
 	resume := a.NewLabel()
 	base := uint64(g.argBase)
-	if v.Op == OpCallIndirect {
-		g.exit(wjit.ExitCallIndirect, resume, v.Aux, v.Aux2, base, uint64(v.At))
-		g.takeResults(results(v, rest), int32(g.argBase))
-	} else {
+	{
 		op := opcode.Opcode(v.Aux)
 		x, y := v.Aux2, uint64(0)
 		if op == opcode.MemoryCopy {
@@ -1484,65 +1556,37 @@ func (g *gen) callGo(v *Value, rest []*Value) {
 	g.reload(v)
 }
 
-// callIndirect lowers call_indirect: natively where the table's element is
-// a function of the call's type exactly, defined by the instance the code
-// runs for, with native code and room for its frame; else through Go,
-// which finds the callee, or traps, as the interpreter does. The checks
-// have s0 and s1, and keep what they need besides in x0 and x1.
+// callIndirect lowers call_indirect and call_ref: natively where the
+// table's element or the reference is a function of the call's type
+// exactly, defined by the instance the code runs for, with native code and
+// room for its frame; else through Go, which finds the callee, or traps,
+// as the interpreter does. A null reference traps here. A call of a type
+// with references goes through Go: its callee holds references, whose
+// frames Ctx.Frames says no call through a table makes natively.
 func (g *gen) callIndirect(v *Value, rest []*Value) {
 	m := g.req.Module
-	typeIndex, table := uint32(v.Aux), uint32(v.Aux2)
+	typeIndex := uint32(v.Aux)
 	lay := g.req.Layout
-	if lay == nil || int(typeIndex) >= len(m.Canonical) || v.At > math.MaxInt32 || m.Tables[table].Limits.Is64 {
+	ref := v.Op == OpCallRef
+	if ref {
+		g.nullTrap(v)
+	}
+	if lay == nil || int(typeIndex) >= len(m.Canonical) || v.At > math.MaxInt32 || g.sigHasRefs(v) ||
+		(!ref && m.Tables[v.Aux2].Limits.Is64) {
 		g.callGo(v, rest)
 		return
 	}
 	a := g.a
 	res := results(v, rest)
-	args, index := v.Args[:len(v.Args)-1], v.Args[len(v.Args)-1]
+	args := v.Args
+	if !ref {
+		args = v.Args[:len(v.Args)-1]
+	}
 	start, slow, poll, after := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel()
 	a.Bind(start)
 	a.SubsImm(rPoll, rPoll, 1, true)
 	a.BCond(arm64.LE, poll)
-	// The element, within the table and not null: a function.
-	g.movG(s0, index)
-	a.Load(s1, rCtx, offTables)
-	a.Load(s1, s1, int32(8*table))
-	a.FMovToF(x1, s1)
-	a.Load(s1, s1, lay.TableElems+8)
-	a.Cmp(s0, s1, true)
-	a.BCond(arm64.HS, slow)
-	a.FMovFromF(s1, x1)
-	a.Load(s1, s1, lay.TableElems)
-	a.AddLsl(s1, s1, s0, 4)
-	a.Load(s1, s1, 0)
-	a.Cbz(s1, slow, true)
-	// Of the call's type, defined by this instance: its index is the
-	// module's.
-	a.LoadU32(s0, s1, lay.FuncType)
-	a.CmpImm(s0, int64(m.Canonical[typeIndex]), false)
-	a.BCond(arm64.NE, slow)
-	a.LoadU32(s0, s1, lay.FuncIndex)
-	a.FMovToF(x0, s0)
-	a.Load(s1, s1, lay.FuncInst)
-	a.Load(s0, rCtx, offInst)
-	a.Cmp(s0, s1, true)
-	a.BCond(arm64.NE, slow)
-	// Its native entry, its frame's room past this one's, and an entry of
-	// the return stack.
-	a.FMovFromF(s0, x0)
-	a.Load(s1, rCtx, offLinks)
-	a.AddLsl(s1, s1, s0, 3)
-	a.Load(s1, s1, 0)
-	a.Cbz(s1, slow, true)
-	a.Load(s1, rCtx, offFrames)
-	a.AddLsl(s1, s1, s0, 3)
-	a.Load(s1, s1, 0)
-	a.Op(arm64.Add, s1, s1, rL, true)
-	a.AddImm(s1, s1, int64(8*g.req.FrameSlots), true)
-	a.Load(s0, rCtx, offChunkEnd)
-	a.Cmp(s1, s0, true)
-	a.BCond(arm64.HI, slow)
+	g.indirectCallee(v, int64(8*g.req.FrameSlots), g.adv(), slow)
 	a.Load(s1, rCtx, offRSEnd)
 	a.Cmp(rRS, s1, true)
 	a.BCond(arm64.HS, slow)
@@ -1551,6 +1595,7 @@ func (g *gen) callIndirect(v *Value, rest []*Value) {
 	for i, x := range args {
 		g.move(loc{kind: lSlot, slot: int32(g.req.FrameSlots + i)}, g.locOf(x), x.Type)
 	}
+	g.advanceR()
 	ret := a.NewLabel()
 	a.FMovFromF(s1, x0)
 	a.ShiftImm(arm64.Lsl, s1, s1, 32, true)
@@ -1565,10 +1610,77 @@ func (g *gen) callIndirect(v *Value, rest []*Value) {
 	a.Load(s1, s1, 0)
 	a.Br(s1)
 	a.Bind(ret)
+	g.restoreR()
 	g.takeResults(res, int32(g.req.FrameSlots))
 	a.Bind(after)
 	g.reload(v)
-	g.ool = append(g.ool, stub{kind: stubCallIndirect, l: poll, start: start, slow: slow, after: after, v: v, res: res})
+	kind := uint8(stubCallIndirect)
+	if ref {
+		kind = stubCallRef
+	}
+	g.ool = append(g.ool, stub{kind: kind, l: poll, start: start, slow: slow, after: after, v: v, res: res})
+}
+
+// indirectCallee leaves in x0 the index of the function call_indirect,
+// call_ref or their tail calls v calls, or goes to slow: the table's
+// element past its end or null, a function of another type or instance,
+// without native code, or whose frame has no room past frame bytes of L.
+// A reference is not null here. The checks have s0 and s1, and keep what
+// they need besides in x0 and x1. A callee that holds references fails
+// the frame's check, and is checked again out of line by both its frames'
+// sizes (Ctx.RFrames), its reference slots' past adv bytes of R.
+func (g *gen) indirectCallee(v *Value, frame int64, adv int32, slow arm64.Label) {
+	a := g.a
+	m := g.req.Module
+	lay := g.req.Layout
+	if v.Op == OpCallRef || v.Op == OpTailRef {
+		a.Load(s1, rCtx, offR)
+		a.Load(s1, s1, g.calleeRefOff(v))
+	} else {
+		// The element, within the table and not null: a function.
+		g.movG(s0, v.Args[len(v.Args)-1])
+		a.Load(s1, rCtx, offTables)
+		a.Load(s1, s1, int32(8*uint32(v.Aux2)))
+		a.FMovToF(x1, s1)
+		a.Load(s1, s1, lay.TableElems+8)
+		a.Cmp(s0, s1, true)
+		a.BCond(arm64.HS, slow)
+		a.FMovFromF(s1, x1)
+		a.Load(s1, s1, lay.TableElems)
+		a.AddLsl(s1, s1, s0, 4)
+		a.Load(s1, s1, 0)
+		a.Cbz(s1, slow, true)
+	}
+	// Of the call's type, defined by this instance: its index is the
+	// module's.
+	a.LoadU32(s0, s1, lay.FuncType)
+	a.CmpImm(s0, int64(m.Canonical[v.Aux]), false)
+	a.BCond(arm64.NE, slow)
+	a.LoadU32(s0, s1, lay.FuncIndex)
+	a.FMovToF(x0, s0)
+	a.Load(s1, s1, lay.FuncInst)
+	a.Load(s0, rCtx, offInst)
+	a.Cmp(s0, s1, true)
+	a.BCond(arm64.NE, slow)
+	// Its native entry, and its frame's room past this one's.
+	a.FMovFromF(s0, x0)
+	a.Load(s1, rCtx, offLinks)
+	a.AddLsl(s1, s1, s0, 3)
+	a.Load(s1, s1, 0)
+	a.Cbz(s1, slow, true)
+	refs, back := a.NewLabel(), a.NewLabel()
+	a.Load(s1, rCtx, offFrames)
+	a.AddLsl(s1, s1, s0, 3)
+	a.Load(s1, s1, 0)
+	a.Op(arm64.Add, s1, s1, rL, true)
+	if frame != 0 {
+		a.AddImm(s1, s1, frame, true)
+	}
+	a.Load(s0, rCtx, offChunkEnd)
+	a.Cmp(s1, s0, true)
+	a.BCond(arm64.HI, refs)
+	a.Bind(back)
+	g.ool = append(g.ool, stub{kind: stubRefRoom, l: refs, to: back, slow: slow, code: uint64(frame), off: adv})
 }
 
 // bulk lowers memory.copy and memory.fill of memory 0 (BulkInCode): the

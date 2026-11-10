@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/lsra"
 	wjit "github.com/go-quickjs/go-quickjs/wasm/internal/jit"
+	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
 )
 
 // What the lowerings of both architectures share: the allocator's view of
@@ -162,6 +163,8 @@ func (g *lowering) listing(gpr, fpr func(r int) string) string {
 			fmt.Fprintf(&sb, "  return %v\n", b.Results)
 		case BTrap:
 			fmt.Fprintf(&sb, "  trap @%d\n", b.At)
+		case BTail:
+			fmt.Fprintf(&sb, "  tail\n")
 		}
 	}
 	return sb.String()
@@ -281,19 +284,22 @@ func (g *lowering) allocate(ws *allocScratch, classes [][]int, cl *clobbers) {
 					break
 				}
 				fallthrough
-			case OpCall, OpCallIndirect:
+			case OpCall, OpCallIndirect, OpCallRef:
 				in.Call = true
 				for k := j + 1; k < len(b.Values) && b.Values[k].Op == OpResult && b.Values[k].Args[0] == v; k++ {
 					in.Defs = appendA(&ws.vregs, in.Defs, lsra.VReg(b.Values[k].vreg))
 				}
-				nres := len(in.Defs)
-				if v.Op == OpCall {
-					nres = len(g.req.Module.FuncType(uint32(v.Aux)).Results)
-				} else if v.Op == OpCallIndirect {
-					nres = len(g.req.Module.Types[v.Aux].Func.Results)
+				nargs, nres := len(v.Args), len(in.Defs)
+				if ft := g.sigOf(v); ft != nil {
+					nargs, nres = len(ft.Params)+extraArgs(v.Op), len(ft.Results)
 				}
-				area = max(area, 2*max(len(v.Args), nres))
+				area = max(area, 2*max(nargs, nres))
 				g.inst[v.vreg] = [2]int32{int32(i), int32(len(lb.Insts))}
+			case OpTail, OpTailIndirect, OpTailRef:
+				// A tail call through Go stages its arguments as a call
+				// does.
+				ft := g.sigOf(v)
+				area = max(area, 2*(len(ft.Params)+extraArgs(v.Op)))
 			case OpDivS, OpDivU, OpRemS, OpRemU:
 				in.Clobber = cl.div
 			case OpShl, OpShrS, OpShrU, OpRotl, OpRotr:
@@ -330,6 +336,14 @@ func (g *lowering) allocate(ws *allocScratch, classes [][]int, cl *clobbers) {
 	g.argBase = frame - area
 	if g.argBase < len(f.Params) {
 		refuse(RefuseFrame, "a frame of %d slots for %d parameters and calls of %d", frame, len(f.Params), area)
+	}
+	if f.Refs {
+		if g.req.FrameRefSlots == 0 || f.RLocals != g.req.FrameRefLocals {
+			panic("wasm opt: the frame's reference slots are not the engine's")
+		}
+		if f.RLocals+f.MaxHeight > g.req.FrameRefSlots {
+			refuse(RefuseFrame, "%d stack positions and %d reference locals in a frame of %d reference slots", f.MaxHeight, f.RLocals, g.req.FrameRefSlots)
+		}
 	}
 	lap(PhaseDescribe)
 	cfg := lsra.Config{Classes: classes, NumSlots: g.argBase}
@@ -378,6 +392,75 @@ func (g *lowering) inSlot(p *Value) bool {
 		}
 	}
 	return true
+}
+
+// sigOf is the signature of call or tail call v, or nil for an
+// instruction Go runs.
+func (g *lowering) sigOf(v *Value) *module.FuncType {
+	m := g.req.Module
+	switch v.Op {
+	case OpCall, OpTail:
+		return m.FuncType(uint32(v.Aux))
+	case OpCallIndirect, OpCallRef, OpTailIndirect, OpTailRef:
+		return m.Types[v.Aux].Func
+	}
+	return nil
+}
+
+// extraArgs is the number of operands a call or a tail call of op has past
+// its arguments: call_indirect's index, call_ref's reference.
+func extraArgs(op Op) int {
+	switch op {
+	case OpCallIndirect, OpCallRef, OpTailIndirect, OpTailRef:
+		return 1
+	}
+	return 0
+}
+
+// argSlots is where call or tail call v's operands go in the call area from
+// base, for a call through Go: each the slot of its place among the
+// signature's parameters (and the index or the reference after them), two
+// apart, the numbers in Args order.
+func (g *lowering) argSlots(v *Value, base int, out []int32) []int32 {
+	ft := g.sigOf(v)
+	out = out[:0]
+	for i, t := range ft.Params {
+		if !t.IsRef() {
+			out = append(out, int32(base+2*i))
+		}
+	}
+	if v.Op == OpCallIndirect || v.Op == OpTailIndirect {
+		out = append(out, int32(base+2*len(ft.Params)))
+	}
+	return out
+}
+
+// hasRefs reports whether call or tail call v moves a reference: a
+// reference argument, result or callee.
+func (g *lowering) hasRefs(v *Value) bool {
+	ft := g.sigOf(v)
+	if v.Op == OpCallRef || v.Op == OpTailRef {
+		return true
+	}
+	for _, t := range ft.Params {
+		if t.IsRef() {
+			return true
+		}
+	}
+	for _, t := range ft.Results {
+		if t.IsRef() {
+			return true
+		}
+	}
+	return false
+}
+
+// rargs is the Ctx.RArgs of an exit of call v through Go, its operands
+// from the call area at argBase: its references are in the reference
+// slots of its arguments' positions.
+func (g *lowering) rargs(v *Value) uint64 {
+	k := int64(g.f.RLocals) + int64(v.Pos) - int64(g.argBase/2)
+	return uint64(k + wjit.RArgsBias)
 }
 
 // results are the values of call v's results, which follow it.

@@ -295,7 +295,14 @@ and X0 on arm64:
   pass `MaxCallDepth`.
 - `Poll`: the poll counter, the exec's, which a register holds in native
   code: copied in at entry and out at every exit.
-- The exit record: `Exit`, `Arg0`-`Arg4`, `ExitFn`, `ExitAddr`.
+- The exit record: `Exit`, `Arg0`-`Arg4`, `ExitFn`, `ExitAddr`, and
+  `RArgs`: where it is not 0, the references of the exit's operands and
+  results are not in the slots of the positions their numeric slots are,
+  but from the reference slot it says (`RArgsBias` above it), one for
+  every two numeric slots; the optimizing tier, whose numeric operands go
+  through a call area of their own while its references stay in their
+  positions' slots, sets it, and the engine takes and clears it when the
+  exit's work begins.
 
 ## Entry, exits and resumption
 
