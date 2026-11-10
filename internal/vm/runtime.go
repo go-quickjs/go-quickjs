@@ -336,6 +336,10 @@ type Runtime struct {
 	// concatMemo is the short strings joins made, which a join making the
 	// same text returns (joinShort), made by the first join.
 	concatMemo *concatMemo
+	// ctorsKnown is the constructors instanceof has answered for as
+	// OrdinaryHasInstance does, and what proves it still would be
+	// (instanceOfEntry).
+	ctorsKnown [instanceOfEntries]instanceOfEntry
 	// jitFields is the optional native tier's state, empty in builds
 	// without it. It comes after everything the interpreter reads, so that
 	// a build with the tier moves none of their offsets, and before the last

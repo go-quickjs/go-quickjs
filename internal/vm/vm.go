@@ -4088,6 +4088,9 @@ func (r *Runtime) instanceOfAt(ic *propCache, obj, ctor Value) (bool, error) {
 		return false, r.throwTypeError("the right operand of \"instanceof\" must be an object")
 	}
 	c := ctor.Object()
+	if yes, ok := r.instanceOfKnown(c, obj); ok {
+		return yes, nil
+	}
 
 	// A Symbol.hasInstance method overrides the default behaviour. Where the
 	// constructor is one the operator has met, the cache says where it is.
@@ -4106,6 +4109,9 @@ func (r *Runtime) instanceOfAt(ic *propCache, obj, ctor Value) (bool, error) {
 		var res Value
 		if hasInstance.IsObject() && hasInstance.Object() == r.hasInstanceFn {
 			if yes, ok := ordinaryHasInstance(c, obj); ok {
+				if obj.IsObject() {
+					r.noteInstanceOf(c)
+				}
 				return yes, nil
 			}
 			res, err = r.callIntrinsic1(r.hasInstanceFn, ctor, obj)

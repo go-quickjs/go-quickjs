@@ -54,6 +54,9 @@ func (r *Runtime) sweepStaleSlots(sp int) {
 		return
 	}
 	r.sweptEpoch = e
+	// The constructors instanceof remembers keep their realms; they are
+	// remembered again when next met.
+	clear(r.ctorsKnown[:])
 	if sp < r.stackTop {
 		clear(r.stack[sp:r.stackTop])
 	}
