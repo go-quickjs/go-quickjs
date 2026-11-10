@@ -966,9 +966,14 @@ func invariant(v *Value, h *Block, inLoop func(b, h *Block) bool) bool {
 // each address's accesses on its path checked. A memory never shrinks, so
 // an access within an end checked before is within the memory. A shared
 // memory's accesses are left as they are: each checks the size another
-// thread may have grown.
+// thread may have grown. An access of memory 0 whose address's values
+// keep it within the memory's least size is not checked (bounds.go).
 func bce(f *Func) {
 	d := dominators(f)
+	ub := &f.ws.ub
+	if f.memMin > 0 {
+		ub.reset(f.NumValues())
+	}
 	// checked is the end checked for each memory's address value, by the
 	// memory's index above the value's ID, and for constant addresses
 	// above -1.
@@ -989,6 +994,11 @@ func bce(f *Func) {
 			id, end := addr.ID, v.Aux+uint64(v.Size)
 			if end < v.Aux {
 				// An i64 memory's offset whose end carries: the access traps.
+				continue
+			}
+			if f.memMin > 0 && plainAccess(v) && ub.upper(addr)+end <= f.memMin {
+				// Within the memory's least size, whatever the address.
+				v.NoCheck = true
 				continue
 			}
 			if addr.Op == OpConst {

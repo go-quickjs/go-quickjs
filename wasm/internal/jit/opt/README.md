@@ -17,6 +17,7 @@ default (see Tier-up).
 | `build.go` | what the tier refuses, and the SSA builder |
 | `cfg.go` | the control flow graph: reachability, order, critical edges, dominators, natural loops, loop depths |
 | `passes.go` | the optimizations |
+| `bounds.go` | the bounds of addresses bce proves accesses within the memory by |
 | `globals.go` | the globals' values forwarded from block to block and carried by loops |
 | `divconst.go` | the divisions and remainders by constants, made of multiplications and shifts |
 | `thread.go` | jump threading, and the lookups that repair SSA after it |
@@ -239,9 +240,31 @@ a call or a throw having effects. Nothing jumps to a pad: Go enters it.
 | `gvn` again, `copyelim` | |
 | `licm` | the pure values of a loop that makes no call whose arguments are defined outside it go to its preheader -- its header's one predecessor outside it; a loop threading made has others, and keeps its values -- inner loops first; a value hoisted out of a loop that calls would live across the calls, kept in a slot, where computing it again costs less |
 | `dce` | values without uses or effects, and phis only themselves use |
-| `bce` | bounds-check elimination: an access is in bounds if a dominating access of the same memory and address value checked an end as far; a memory never shrinks, so the check holds across calls and grows; a shared memory's accesses each check its size |
+| `bce` | bounds-check elimination: an access is in bounds if a dominating access of the same memory and address value checked an end as far; a memory never shrinks, so the check holds across calls and grows; a shared memory's accesses each check its size; an access of memory 0 whose address's values keep it within the memory's least size is not checked (below) |
 | `split` | every critical edge gets a block, where its phis' moves go |
 | `loops` | natural loops, and each block's depth (below) |
+
+### Bounds from values
+
+An access of memory 0, unshared and of i32 addresses, is in bounds
+wherever it runs if its address's greatest value plus its offset and size
+is within the memory's least size: the minimum the module declares, which
+an imported memory has at least when it is linked and which no memory goes
+below (`bounds.go`). The greatest value is a constant's, a mask's, an
+unsigned byte's or half's load, a right shift's, a sum's where it cannot
+wrap, a phi's greatest argument's -- and an induction variable's: a loop
+header's phi whose back edge brings it plus a constant step, the way to
+the back edge decided by a comparison of that sum with a constant, takes
+only the values it enters with and those the comparison let through,
+below the constant; where the sum cannot wrap and it enters with a
+constant, only that constant plus steps, so that a loop over words to
+the memory's end is within it. Signed comparisons bound it where it
+enters with a constant that is not negative and nothing wraps. Nothing is
+hoisted, so every access that may be out of bounds is checked where it
+is, and traps where the interpreter's does. micro/bytes' loops, over a
+memory of exactly the size they cover, went from 7.3 to 5.5 ms; the Go
+program's code is 0.5% smaller, its accesses at constant addresses and of
+masked indices within the minimum its memory declares.
 
 ### Jump threading
 
@@ -1254,9 +1277,10 @@ registers the allocator gave out.
 - Inlining of small callees.
 - v128 constants as values: a shuffle's mask and a constant operand are
   loaded from the pool where they are used, in every turn of a loop.
-- Bounds checks: hoisting a loop's checks of an induction variable, and a
-  block's checks of one base at its widest where nothing between can be
-  observed.
+- Bounds checks: hoisting a loop's checks of an induction variable whose
+  bound is not a constant (a guarded loop without checks, the checked
+  one its fallback), and a block's checks of one base at its widest where
+  nothing between can be observed.
 - In the code what Go runs for it now, as the baseline makes them:
   memory.size, memory.copy and memory.fill of memories other than an
   unshared i32 memory 0, and table.fill, through the barrier.

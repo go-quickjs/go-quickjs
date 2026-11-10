@@ -270,6 +270,11 @@ func (bd *builder) build(fn uint32) *Func {
 		rnum += rt.Slots()
 	}
 	f.RLocals = int(max(nref, rref))
+	if len(m.Memories) > 0 {
+		if mm := &m.Memories[0]; !mm.Shared && !mm.Limits.Is64 {
+			f.memMin = mm.Limits.Initial << 16
+		}
+	}
 	entry := f.newBlock()
 	entry.sealed = true
 	f.Entry = entry

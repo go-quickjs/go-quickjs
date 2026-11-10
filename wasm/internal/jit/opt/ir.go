@@ -616,6 +616,9 @@ type Func struct {
 	// the control flow graph is as it was made (dominators).
 	ws  *workspace
 	dom *domTree
+	// memMin is memory 0's least size in bytes where it is unshared and of
+	// i32 addresses, else 0.
+	memMin uint64
 	// noForward says not to forward the globals (forwardGlobals), which
 	// forwarded says the pass did.
 	noForward, forwarded bool

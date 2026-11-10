@@ -89,3 +89,61 @@ func TestForwardGlobals(t *testing.T) {
 		})
 	}
 }
+
+// unchecked counts the accesses not checked and those checked.
+func unchecked(f *Func) (no, yes int) {
+	for _, b := range f.Blocks {
+		for _, v := range b.Values {
+			if v.Op == OpLoad || v.Op == OpStore {
+				if v.NoCheck {
+					no++
+				} else {
+					yes++
+				}
+			}
+		}
+	}
+	return no, yes
+}
+
+// An access whose address a loop's induction variable bounds within the
+// memory's least size is not checked; one that may pass it is.
+func TestBoundsInduction(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		mem     string
+		body    string
+		no, yes int
+	}{
+		{"bytes", "1", `(loop $l
+			(i32.store8 (local.get $i) (local.get $i))
+			(local.set $i (i32.add (local.get $i) (i32.const 1)))
+			(br_if $l (i32.lt_u (local.get $i) (i32.const 65536))))`, 1, 0},
+		{"past", "1", `(loop $l
+			(i32.store8 offset=1 (local.get $i) (local.get $i))
+			(local.set $i (i32.add (local.get $i) (i32.const 1)))
+			(br_if $l (i32.lt_u (local.get $i) (i32.const 65536))))`, 0, 1},
+		{"words", "1", `(loop $l
+			(i32.store (local.get $i) (i32.load (local.get $i)))
+			(local.set $i (i32.add (local.get $i) (i32.const 4)))
+			(br_if $l (i32.lt_u (local.get $i) (i32.const 65536))))`, 2, 0},
+		{"signed", "1", `(loop $l
+			(i64.store (local.get $i) (i64.const 1))
+			(local.set $i (i32.add (local.get $i) (i32.const 8)))
+			(br_if $l (i32.lt_s (local.get $i) (i32.const 65536))))`, 1, 0},
+		{"signed from a parameter", "1", `(local.set $i (local.get $n)) (loop $l
+			(i64.store (local.get $i) (i64.const 1))
+			(local.set $i (i32.add (local.get $i) (i32.const 8)))
+			(br_if $l (i32.lt_s (local.get $i) (i32.const 65536))))`, 0, 1},
+		{"masked", "1", `(i32.store (i32.and (local.get $n) (i32.const 0xfffc)) (i32.const 1))`, 1, 0},
+		{"no memory min", "0", `(i32.store (i32.and (local.get $n) (i32.const 0xfffc)) (i32.const 1))`, 0, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := `(module (memory ` + tc.mem + `) (func (param $n i32) (local $i i32) ` + tc.body + `))`
+			f := buildText(t, src, 0)
+			if no, yes := unchecked(f); no != tc.no || yes != tc.yes {
+				t.Errorf("%d accesses unchecked and %d checked, want %d and %d\n%v", no, yes, tc.no, tc.yes, f)
+			}
+		})
+	}
+}

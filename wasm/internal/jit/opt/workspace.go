@@ -55,6 +55,7 @@ type workspace struct {
 
 	// forwardGlobals' state, and the loops the builder made.
 	fw         fwState
+	ub         ubState
 	loopRanges []loopRange
 
 	gen genScratch
