@@ -849,7 +849,14 @@ What they show:
   and 237 against 584 and 593. What is left is Go's: its allocation of
   each struct, about 7 ns, its collector's marking, and the write barrier
   native code's stores into reference slots take while it marks, which is
-  most of the time at GOMAXPROCS=1.
+  most of the time at GOMAXPROCS=1. `arrays`, added since, short arrays as
+  a wasm-gc compiler makes them, exited to Go for each array too; with an
+  array made as one block with its elements (ac4e3b9c) and taken from
+  pools by type and class (9c416599, af732b61), median of 5 processes of 3
+  runs, it takes 26 ms in the baseline and 31 tiered (65 and 70 before),
+  130 interpreted (140), 84 to 89 at GOMAXPROCS=1 (110 to 114), and on
+  arm64 76 and 78 (189 and 196); its allocations fell from 2.0 million a
+  run to 0.8 and its bytes from 117 MiB to 51, its peak RSS unchanged.
 - The optimizing tier takes 15 to 47% off the baseline's time on the
   programs, and 21 to 45% on the kernels whose values it keeps in registers
   across a loop (fib, nbody, bytes); on the other kernels the two tiers are

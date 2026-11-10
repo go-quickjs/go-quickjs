@@ -1238,7 +1238,8 @@ gc and brtable spent their time in Go and
 in the switch: gc, binary trees of structs, now takes its structs from
 pools Go fills (8d179ac8, the baseline README's GC objects), 247 to 99 ms
 optimized and 240 to 82 in the baseline, the rest Go's allocation and
-collection. The tiered first runs are the baseline's or better but
+collection; arrays, as `arrays` makes them, from pools by class too
+(9c416599, af732b61): 67 to 31 ms optimized, 65 to 26 in the baseline. The tiered first runs are the baseline's or better but
 interp's (+5%), the baseline code's counting of calls; json's is level
 (59.8 to 59.0 ms). Compiled on the program's goroutine they were +10% and
 +4%, and +19% and +17% before the compile's cost was worked on (see
