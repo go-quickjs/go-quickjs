@@ -15,7 +15,8 @@ import (
 // of Ref-sized cells, the first its header: a number field is held in a
 // cell's payload, a reference in the whole cell, a v128 in two cells. An
 // array is an Array header and its elements, packed: an i8 array takes a
-// byte an element.
+// byte an element, a reference array a cell. A short array, and any array
+// of references, is a single allocation, its elements after its header.
 
 // rtt is a type's runtime information: its canonical index, the canonical
 // indices of its declared supertypes by depth, ending with its own, and the
@@ -161,13 +162,87 @@ func cellAt(p unsafe.Pointer, i int) *Ref {
 	return (*Ref)(unsafe.Add(p, uintptr(i)*unsafe.Sizeof(Ref{})))
 }
 
-// Array is a GC array.
+// Array is a GC array's header, laid out as two cells: its type and kind,
+// then where its elements are and its length, a word. Its elements follow
+// it in the same block, packed, but for a number array whose elements take
+// more than arrayBlockBytes, whose elements are an allocation of their own:
+// a reference array is a block of cells, the elements a cell each; a short
+// number array a block of one of the allocator's sizes (arrayRooms), the
+// header followed by bytes. Native code reads e and n at their offsets
+// (Layout).
 type Array struct {
 	hdr header
-	n   int
-	// b holds number elements, elemSize bytes each; r reference elements.
-	b []byte
-	r []Ref
+	// e is the first element, nil where the block has room for none: the
+	// second cell's pointer word. n is in its payload word, of which it
+	// takes the high half where an int is 4 bytes.
+	e unsafe.Pointer
+	_ [8 - unsafe.Sizeof(int(0))]byte
+	n int
+}
+
+// arrayHeader is the bytes of an array's header, where a block's elements
+// begin.
+const arrayHeader = int(unsafe.Sizeof(Array{}))
+
+var (
+	_ [unsafe.Sizeof(Array{}) - 2*unsafe.Sizeof(Ref{})]struct{}
+	_ [2*unsafe.Sizeof(Ref{}) - unsafe.Sizeof(Array{})]struct{}
+)
+
+// arrayBlockBytes is the most bytes of elements a number array of a block
+// of a class has: with its header, at most 512 bytes, which the allocator
+// holds without a header of the block's type.
+const arrayBlockBytes = 480
+
+// arrayRooms are the bytes of elements the block of each class of short
+// arrays has room for: with the header, the allocator's size classes up to
+// 512 bytes, where a word is 8 bytes. An array whose elements take bytes is
+// made in the first class with room for them (arrayClass).
+var arrayRooms = [...]uint16{0, 16, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208,
+	224, 256, 288, 320, 352, 384, 416, 448, arrayBlockBytes}
+
+// arrayClassOf holds, for elements of 16*u bytes or fewer, more than
+// 16*(u-1), the class of the block they are made in.
+var arrayClassOf = func() (t [arrayBlockBytes/16 + 1]uint8) {
+	for u := range t {
+		for 16*u > int(arrayRooms[t[u]]) {
+			t[u]++
+		}
+	}
+	return t
+}()
+
+// arrayClass returns the class of the block of an array whose elements take
+// bytes, at most arrayBlockBytes.
+func arrayClass(bytes int) int { return int(arrayClassOf[(bytes+15)>>4]) }
+
+// numBlock makes a block of a number array's: a header and room for
+// elements of T's size.
+func numBlock[T any]() unsafe.Pointer {
+	return unsafe.Pointer(new(struct {
+		a Array
+		e T
+	}))
+}
+
+// numBlocks makes the blocks of number arrays by class.
+var numBlocks = [len(arrayRooms)]func() unsafe.Pointer{
+	func() unsafe.Pointer { return unsafe.Pointer(new(Array)) },
+	numBlock[[16]byte], numBlock[[32]byte], numBlock[[48]byte], numBlock[[64]byte],
+	numBlock[[80]byte], numBlock[[96]byte], numBlock[[112]byte], numBlock[[128]byte],
+	numBlock[[144]byte], numBlock[[160]byte], numBlock[[176]byte], numBlock[[192]byte],
+	numBlock[[208]byte], numBlock[[224]byte], numBlock[[256]byte], numBlock[[288]byte],
+	numBlock[[320]byte], numBlock[[352]byte], numBlock[[384]byte], numBlock[[416]byte],
+	numBlock[[448]byte], numBlock[[arrayBlockBytes]byte],
+}
+
+// elemBytes returns the bytes an element of array type t takes: a
+// reference's cell, or its number's.
+func (t *rtt) elemBytes() int {
+	if t.refElems {
+		return int(unsafe.Sizeof(Ref{}))
+	}
+	return t.elemSize
 }
 
 // maxArrayLength returns the length an array of elements of size bytes may
@@ -190,14 +265,65 @@ func newArray(t *rtt, n uint32, b *Budget, x *exec, at uint32) *Array {
 		trapAt(TrapArrayTooLarge, at)
 	}
 	b.chargeGC(x, arraySize(t, n))
-	a := &Array{hdr: header{rtt: t, kind: ObjArray}, n: int(n)}
+	return makeArray(t, int(n))
+}
+
+// makeArray makes an array of type t and length n, its elements zero: a
+// reference array a block of cells, a number array a block of a class or,
+// longer, a header and its elements.
+func makeArray(t *rtt, n int) *Array {
 	if t.refElems {
-		a.r = make([]Ref, n)
-	} else {
-		a.b = make([]byte, int(n)*t.elemSize)
+		a := refBlock(t, n)
+		a.n = n
+		return a
+	}
+	bytes := n * t.elemSize
+	if bytes <= arrayBlockBytes {
+		a := arrayBlock(t, arrayClass(bytes))
+		a.n = n
+		return a
+	}
+	a := new(Array)
+	a.hdr = header{rtt: t, kind: ObjArray}
+	a.e = unsafe.Pointer(&make([]byte, bytes)[0])
+	a.n = n
+	return a
+}
+
+// arrayBlock makes an array of type t, its length 0, in a block of class
+// k.
+func arrayBlock(t *rtt, k int) *Array {
+	if t.refElems {
+		return refBlock(t, int(arrayRooms[k])/int(unsafe.Sizeof(Ref{})))
+	}
+	p := numBlocks[k]()
+	a := (*Array)(p)
+	a.hdr = header{rtt: t, kind: ObjArray}
+	if k > 0 {
+		a.e = unsafe.Add(p, arrayHeader)
 	}
 	return a
 }
+
+// refBlock makes a reference array of type t, its length 0, in a block of
+// cells with room for n elements.
+func refBlock(t *rtt, n int) *Array {
+	p := newCells(2 + n)
+	a := (*Array)(p)
+	a.hdr = header{rtt: t, kind: ObjArray}
+	if n > 0 {
+		a.e = unsafe.Add(p, arrayHeader)
+	}
+	return a
+}
+
+// bytes returns the elements of number array a.
+func (a *Array) bytes() []byte {
+	return unsafe.Slice((*byte)(a.e), a.n*a.hdr.rtt.elemSize)
+}
+
+// refs returns the elements of reference array a.
+func (a *Array) refs() []Ref { return unsafe.Slice((*Ref)(a.e), a.n) }
 
 // ArrayRef returns the reference to a.
 func ArrayRef(a *Array) Ref { return Ref{p: unsafe.Pointer(a)} }

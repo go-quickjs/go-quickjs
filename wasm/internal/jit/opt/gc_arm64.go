@@ -122,11 +122,9 @@ func (g *gen) element(v *Value, t module.Kind) {
 		a.BCond(arm64.HS, oob)
 		a.FMovFromF(s1, x0)
 	}
+	a.Load(s1, s1, lay.ArrayElems)
 	shift := uint8(4)
-	if t == module.KindRef {
-		a.Load(s1, s1, lay.ArrayRefs)
-	} else {
-		a.Load(s1, s1, lay.ArrayBytes)
+	if t != module.KindRef {
 		shift = map[int]uint8{1: 0, 2: 1, 4: 2, 8: 3}[storageSize(t)]
 	}
 	a.AddLsl(s1, s1, i, shift)

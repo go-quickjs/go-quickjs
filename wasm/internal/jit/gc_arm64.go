@@ -133,7 +133,7 @@ func (c *compiler) packedAddr(p, i arm64.Reg, t module.Kind, oob arm64.Label) {
 	a.Load(rTmp, p, l.ArrayLen)
 	a.Cmp(i, rTmp, true)
 	a.BCond(arm64.HS, oob)
-	a.Load(p, p, l.ArrayBytes)
+	a.Load(p, p, l.ArrayElems)
 	a.AddLsl(p, p, i, map[int]uint8{1: 0, 2: 1, 4: 2, 8: 3}[storageSize(t)])
 }
 

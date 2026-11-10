@@ -89,10 +89,10 @@ type Layout struct {
 	Kind                  int32
 	KindStruct, KindArray uint8
 	RTT, Supers           int32
-	// An array's ArrayLen is its length, a word; ArrayBytes the address
-	// of its number elements, packed; ArrayRefs its reference elements:
-	// their address, then their number.
-	ArrayLen, ArrayBytes, ArrayRefs int32
+	// An array's ArrayLen is its length, a word; ArrayElems the address of
+	// its elements, packed: numbers by their size, references two words
+	// each.
+	ArrayLen, ArrayElems int32
 	// A function's FuncType is its canonical type index, 4 bytes; FuncInst
 	// the address of the instance that defined it, a word, 0 for a host
 	// function's; FuncIndex its index in that instance, 4 bytes.

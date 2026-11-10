@@ -44,5 +44,5 @@ func ArrayNumbers(r Ref) (b []byte, n int, ok bool) {
 	if a.hdr.rtt.refElems {
 		return nil, 0, false
 	}
-	return a.b, a.n, true
+	return a.bytes(), a.n, true
 }

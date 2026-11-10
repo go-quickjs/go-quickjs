@@ -269,10 +269,12 @@ func objectSize(r Ref, visit func(Ref)) int64 {
 		return int64(len(cells)) * int64(unsafe.Sizeof(Ref{}))
 	case ObjArray:
 		a := asArray(r)
-		for _, e := range a.r {
-			visit(e)
+		if a.hdr.rtt.refElems {
+			for _, e := range a.refs() {
+				visit(e)
+			}
 		}
-		return int64(unsafe.Sizeof(Array{})) + int64(len(a.b)) + int64(len(a.r))*int64(unsafe.Sizeof(Ref{}))
+		return arraySize(a.hdr.rtt, uint32(a.n))
 	case ObjExn:
 		e := r.Exn()
 		for _, v := range e.Vals {
@@ -287,11 +289,7 @@ func objectSize(r Ref, visit func(Ref)) int64 {
 func structSize(t *rtt) int64 { return int64(t.ncells) * int64(unsafe.Sizeof(Ref{})) }
 
 func arraySize(t *rtt, n uint32) int64 {
-	size := int64(t.elemSize)
-	if t.refElems {
-		size = int64(unsafe.Sizeof(Ref{}))
-	}
-	return int64(unsafe.Sizeof(Array{})) + int64(n)*size
+	return int64(arrayHeader) + int64(n)*int64(t.elemBytes())
 }
 
 // visitFrames visits the references in the frames of the calls running on

@@ -107,7 +107,7 @@ func (c *compiler) gcOp(op opcode.Opcode, at uint32) bool {
 		i := c.intoG(idx, 1<<p)
 		oob := c.trap(TrapArrayOutOfBounds, at)
 		if et.IsRef() {
-			c.elemAddr(p, i, l.ArrayRefs, oob)
+			c.elemAddr(p, i, l.ArrayElems, oob)
 			c.freeG(i)
 			c.refCopy(c.refPos(len(c.stack)), mem{p, 0})
 			c.freeG(p)
@@ -126,7 +126,7 @@ func (c *compiler) gcOp(op opcode.Opcode, at uint32) bool {
 		i := c.intoG(idx, 1<<p|c.regsOf(v))
 		oob := c.trap(TrapArrayOutOfBounds, at)
 		if et.IsRef() {
-			c.elemAddr(p, i, l.ArrayRefs, oob)
+			c.elemAddr(p, i, l.ArrayElems, oob)
 			c.freeG(i)
 			c.refCopy(mem{p, 0}, c.refOf(v))
 		} else {

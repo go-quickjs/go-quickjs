@@ -739,9 +739,11 @@ logs them when `WASM_JIT` is set.
 The engine's objects (`engine/gc.go`) are read in place, at the offsets
 the engine gives (`Layout`): a struct is cells of two words, its header
 first, a field's number in its cell's second word, zero-extended, a
-reference the whole cell; an array is a header, its length, and its
-elements in memory of their own, numbers packed, references two words
-each. struct.get, struct.set, array.get, array.set and array.len are
+reference the whole cell; an array is a header of two cells -- the
+header's, then the address of its elements and its length -- and its
+elements, numbers packed, references two words each, after the header in
+the same block for an array of up to 480 bytes of them, and for any
+array of references. struct.get, struct.set, array.get, array.set and array.len are
 native: the reference's pointer word tested for null (a trap), an array's
 index against its length (a trap), the field or element loaded or stored
 as its storage type, a reference through the barrier. ref.i31 stores the

@@ -138,7 +138,7 @@ func (c *compiler) packedAddr(p, i amd64.Reg, t module.Kind, oob amd64.Label) {
 	l := c.req.Layout
 	a.CmpMem(i, p, l.ArrayLen, true)
 	a.Jcc(amd64.CondAE, oob)
-	a.Load(p, p, l.ArrayBytes)
+	a.Load(p, p, l.ArrayElems)
 	if s := storageSize(t); s > 1 {
 		a.ShiftImm(amd64.Shl, i, map[int]uint8{2: 1, 4: 2, 8: 3}[s], true)
 	}

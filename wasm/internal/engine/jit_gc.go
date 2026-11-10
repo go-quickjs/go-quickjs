@@ -57,13 +57,10 @@ func (x *exec) jitGCOp(inst *Instance, op opcode.Opcode, a, b uint32, f *exitFra
 	case opcode.ArrayNewFixed:
 		rt := inst.Code.typeRTT(a)
 		et := m.Types[a].Array.Elem.Type
-		vals := make([]Val, b)
-		for i := range vals {
-			vals[i] = get(i, et.Unpacked())
-		}
+		// The operands stay in their slots until the result is put.
 		ar := newArray(rt, b, inst.budget, x, at)
-		for i, v := range vals {
-			arraySet(ar, et, i, v)
+		for i := range int(b) {
+			arraySet(ar, et, i, get(i, et.Unpacked()))
 		}
 		f.put(ref, slot, Val{R: ArrayRef(ar)})
 	case opcode.ArrayNewData, opcode.ArrayNewElem:
@@ -75,7 +72,7 @@ func (x *exec) jitGCOp(inst *Instance, op opcode.Opcode, a, b uint32, f *exitFra
 				trapAt(TrapDataSegmentOutOfBounds, at)
 			}
 			ar := newArray(rt, cnt, inst.budget, x, at)
-			copy(ar.b, d[src:])
+			copy(ar.bytes(), d[src:])
 			f.put(ref, slot, Val{R: ArrayRef(ar)})
 			return true
 		}
@@ -84,7 +81,7 @@ func (x *exec) jitGCOp(inst *Instance, op opcode.Opcode, a, b uint32, f *exitFra
 			trapAt(TrapElementSegmentOutOfBounds, at)
 		}
 		ar := newArray(rt, cnt, inst.budget, x, at)
-		copy(ar.r, e[src:])
+		copy(ar.refs(), e[src:])
 		f.put(ref, slot, Val{R: ArrayRef(ar)})
 	case opcode.ArrayFill:
 		et := m.Types[a].Array.Elem.Type
@@ -103,10 +100,10 @@ func (x *exec) jitGCOp(inst *Instance, op opcode.Opcode, a, b uint32, f *exitFra
 		checkArray(da, dst, cnt, at)
 		checkArray(sa, src, cnt, at)
 		if et.IsRef() {
-			copy(da.r[dst:dst+cnt], sa.r[src:src+cnt])
+			copy(da.refs()[dst:dst+cnt], sa.refs()[src:src+cnt])
 		} else {
 			size := uint32(et.Size())
-			copy(da.b[dst*size:(dst+cnt)*size], sa.b[src*size:(src+cnt)*size])
+			copy(da.bytes()[dst*size:(dst+cnt)*size], sa.bytes()[src*size:(src+cnt)*size])
 		}
 	case opcode.ArrayInitData, opcode.ArrayInitElem:
 		et := m.Types[a].Array.Elem.Type
@@ -119,14 +116,14 @@ func (x *exec) jitGCOp(inst *Instance, op opcode.Opcode, a, b uint32, f *exitFra
 			if uint64(src)+uint64(cnt)*size > uint64(len(d)) {
 				trapAt(TrapDataSegmentOutOfBounds, at)
 			}
-			copy(ar.b[uint64(dst)*size:], d[src:uint64(src)+uint64(cnt)*size])
+			copy(ar.bytes()[uint64(dst)*size:], d[src:uint64(src)+uint64(cnt)*size])
 			return true
 		}
 		e := inst.elems[b]
 		if uint64(src)+uint64(cnt) > uint64(len(e)) {
 			trapAt(TrapElementSegmentOutOfBounds, at)
 		}
-		copy(ar.r[dst:dst+cnt], e[src:src+cnt])
+		copy(ar.refs()[dst:dst+cnt], e[src:src+cnt])
 	default:
 		return false
 	}

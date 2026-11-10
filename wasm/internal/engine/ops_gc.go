@@ -53,47 +53,58 @@ func valToCell(t module.ValueType, c *Ref, v Val) {
 	}
 }
 
-// arrayGet reads element i of an array of storage type t.
+// arrayGet reads element i, within its length, of array a of storage type
+// t.
 func arrayGet(a *Array, t module.ValueType, i int, signed bool) Val {
 	switch t.Kind {
 	case module.KindRef:
-		return Val{R: a.r[i]}
+		return Val{R: *(*Ref)(unsafe.Add(a.e, uintptr(i)*unsafe.Sizeof(Ref{})))}
 	case module.KindI8:
+		v := *(*uint8)(unsafe.Add(a.e, i))
 		if signed {
-			return Val{N: uint64(uint32(int32(int8(a.b[i]))))}
+			return Val{N: uint64(uint32(int32(int8(v))))}
 		}
-		return Val{N: uint64(a.b[i])}
+		return Val{N: uint64(v)}
 	case module.KindI16:
-		v := binary.LittleEndian.Uint16(a.b[2*i:])
+		v := binary.LittleEndian.Uint16(elemBytes(a, 2*i, 2))
 		if signed {
 			return Val{N: uint64(uint32(int32(int16(v))))}
 		}
 		return Val{N: uint64(v)}
 	case module.KindI32, module.KindF32:
-		return Val{N: uint64(binary.LittleEndian.Uint32(a.b[4*i:]))}
+		return Val{N: uint64(binary.LittleEndian.Uint32(elemBytes(a, 4*i, 4)))}
 	case module.KindV128:
-		return Val{N: binary.LittleEndian.Uint64(a.b[16*i:]), Hi: binary.LittleEndian.Uint64(a.b[16*i+8:])}
+		e := elemBytes(a, 16*i, 16)
+		return Val{N: binary.LittleEndian.Uint64(e), Hi: binary.LittleEndian.Uint64(e[8:])}
 	}
-	return Val{N: binary.LittleEndian.Uint64(a.b[8*i:])}
+	return Val{N: binary.LittleEndian.Uint64(elemBytes(a, 8*i, 8))}
 }
 
-// arraySet writes element i of an array of storage type t.
+// arraySet writes element i, within its length, of array a of storage type
+// t.
 func arraySet(a *Array, t module.ValueType, i int, v Val) {
 	switch t.Kind {
 	case module.KindRef:
-		a.r[i] = v.R
+		*(*Ref)(unsafe.Add(a.e, uintptr(i)*unsafe.Sizeof(Ref{}))) = v.R
 	case module.KindI8:
-		a.b[i] = byte(v.N)
+		*(*uint8)(unsafe.Add(a.e, i)) = byte(v.N)
 	case module.KindI16:
-		binary.LittleEndian.PutUint16(a.b[2*i:], uint16(v.N))
+		binary.LittleEndian.PutUint16(elemBytes(a, 2*i, 2), uint16(v.N))
 	case module.KindI32, module.KindF32:
-		binary.LittleEndian.PutUint32(a.b[4*i:], uint32(v.N))
+		binary.LittleEndian.PutUint32(elemBytes(a, 4*i, 4), uint32(v.N))
 	case module.KindV128:
-		binary.LittleEndian.PutUint64(a.b[16*i:], v.N)
-		binary.LittleEndian.PutUint64(a.b[16*i+8:], v.Hi)
+		e := elemBytes(a, 16*i, 16)
+		binary.LittleEndian.PutUint64(e, v.N)
+		binary.LittleEndian.PutUint64(e[8:], v.Hi)
 	default:
-		binary.LittleEndian.PutUint64(a.b[8*i:], v.N)
+		binary.LittleEndian.PutUint64(elemBytes(a, 8*i, 8), v.N)
 	}
+}
+
+// elemBytes returns the size bytes at off among the elements of number
+// array a.
+func elemBytes(a *Array, off, size int) []byte {
+	return unsafe.Slice((*byte)(unsafe.Add(a.e, off)), size)
 }
 
 // pushVal pushes a tree producing the value of type t that get returns.
@@ -250,7 +261,7 @@ func (c *compiler) gcOps(op opcode.Opcode, at uint32) bool {
 					trapAt(TrapDataSegmentOutOfBounds, at)
 				}
 				a := newArray(rt, cnt, f.inst.budget, f.x, at)
-				copy(a.b, d[src:])
+				copy(a.bytes(), d[src:])
 				return ArrayRef(a)
 			}
 			e := f.inst.elems[seg]
@@ -259,7 +270,7 @@ func (c *compiler) gcOps(op opcode.Opcode, at uint32) bool {
 			}
 			a := newArray(rt, cnt, f.inst.budget, f.x, at)
 			_ = et
-			copy(a.r, e[src:])
+			copy(a.refs(), e[src:])
 			return ArrayRef(a)
 		}))
 	case opcode.ArrayGet, opcode.ArrayGetS, opcode.ArrayGetU:
@@ -331,10 +342,10 @@ func (c *compiler) gcOps(op opcode.Opcode, at uint32) bool {
 			checkArray(da, dst, cnt, at)
 			checkArray(sa, src, cnt, at)
 			if et.IsRef() {
-				copy(da.r[dst:dst+cnt], sa.r[src:src+cnt])
+				copy(da.refs()[dst:dst+cnt], sa.refs()[src:src+cnt])
 			} else {
 				size := uint32(et.Size())
-				copy(da.b[dst*size:(dst+cnt)*size], sa.b[src*size:(src+cnt)*size])
+				copy(da.bytes()[dst*size:(dst+cnt)*size], sa.bytes()[src*size:(src+cnt)*size])
 			}
 			return 0
 		})
@@ -358,14 +369,14 @@ func (c *compiler) gcOps(op opcode.Opcode, at uint32) bool {
 				if uint64(src)+uint64(cnt)*size > uint64(len(b)) {
 					trapAt(TrapDataSegmentOutOfBounds, at)
 				}
-				copy(a.b[uint64(dst)*size:], b[src:uint64(src)+uint64(cnt)*size])
+				copy(a.bytes()[uint64(dst)*size:], b[src:uint64(src)+uint64(cnt)*size])
 				return 0
 			}
 			e := f.inst.elems[seg]
 			if uint64(src)+uint64(cnt) > uint64(len(e)) {
 				trapAt(TrapElementSegmentOutOfBounds, at)
 			}
-			copy(a.r[dst:dst+cnt], e[src:src+cnt])
+			copy(a.refs()[dst:dst+cnt], e[src:src+cnt])
 			return 0
 		})
 	case opcode.RefI31:
