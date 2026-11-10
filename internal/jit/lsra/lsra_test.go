@@ -9,9 +9,11 @@ import (
 // TestAllocateRandom allocates random functions -- branches, loops, phis,
 // calls and clobbers, more values live than registers -- and checks the
 // result by liveness of its own: no two values live at once share a
-// register or a slot, every value in a register live across a call has a
-// slot and is reloaded after it, and none is live across a clobber in a
-// register it clobbers.
+// register or a slot -- a value two slots wide taking both -- every value
+// in a register live across a call has a slot and is reloaded after it,
+// none is live across a clobber in a register it clobbers, and an
+// instruction's temporaries have registers apart from its operands', its
+// results' and those of the values live across it.
 func TestAllocateRandom(t *testing.T) {
 	rng := rand.New(rand.NewPCG(7, 11))
 	cfg := &Config{Classes: [][]int{{3, 1, 0, 2}, {0, 1, 2}}, NumSlots: 1000}
@@ -45,9 +47,16 @@ func TestAllocateRandom(t *testing.T) {
 func randomFunc(rng *rand.Rand) *Func {
 	nb := 1 + rng.IntN(8)
 	f := &Func{Blocks: make([]Block, nb)}
+	// In some functions the second class's registers are two slots wide.
+	wide := rng.IntN(3) == 0
 	newV := func(cls int8) VReg {
 		f.Class = append(f.Class, cls)
 		f.FixedSlot = append(f.FixedSlot, -1)
+		w := int8(1)
+		if wide && cls == 1 {
+			w = 2
+		}
+		f.Width = append(f.Width, w)
 		return VReg(len(f.Class) - 1)
 	}
 	// Edges: each block to the next, some forward or back as well.
@@ -67,9 +76,11 @@ func randomFunc(rng *rand.Rand) *Func {
 	}
 	var defined []VReg
 	params := 1 + rng.IntN(3)
+	slot := int32(0)
 	for k := 0; k < params; k++ {
-		v := newV(0)
-		f.FixedSlot[v] = int32(k)
+		v := newV(int8(rng.IntN(2)))
+		f.FixedSlot[v] = slot
+		slot += int32(f.Width[v])
 		f.Blocks[0].Insts = append(f.Blocks[0].Insts, Inst{Defs: []VReg{v}, Hint: None})
 		defined = append(defined, v)
 	}
@@ -123,6 +134,11 @@ func randomFunc(rng *rand.Rand) *Func {
 				in.Call = true
 			case 1:
 				in.Clobber = []uint64{1 << uint(rng.IntN(4)), 1 << uint(rng.IntN(3))}
+			}
+			if !in.Call && rng.IntN(4) == 0 {
+				for k := 1 + rng.IntN(2); k > 0; k-- {
+					in.Temps = append(in.Temps, newV(int8(rng.IntN(2))))
+				}
 			}
 			for d := rng.IntN(3); d > 0; d-- {
 				in.Defs = append(in.Defs, newV(int8(rng.IntN(2))))
@@ -196,9 +212,11 @@ func checkAllocation(t *testing.T, iter int, f *Func, cfg *Config, res *Result) 
 			t.Fatalf("iteration %d: v%d and v%d, live at once %s, share register %d", iter, a, b, where, ra)
 		}
 	}
+	width := func(v VReg) int32 { return max(int32(f.Width[v]), 1) }
 	slotConflict := func(a, b VReg) {
-		if a != b && res.Slot[a] >= 0 && res.Slot[a] == res.Slot[b] {
-			t.Fatalf("iteration %d: v%d and v%d, live at once, share slot %d", iter, a, b, res.Slot[a])
+		sa, sb := res.Slot[a], res.Slot[b]
+		if a != b && sa >= 0 && sb >= 0 && sa < sb+width(b) && sb < sa+width(a) {
+			t.Fatalf("iteration %d: v%d and v%d, live at once, share slots %d and %d", iter, a, b, sa, sb)
 		}
 	}
 	for v := 0; v < n; v++ {
@@ -251,6 +269,22 @@ func checkAllocation(t *testing.T, iter int, f *Func, cfg *Config, res *Result) 
 					conflict(d, e, "among definitions")
 				}
 			}
+			for k, tv := range inst.Temps {
+				r := res.Reg[tv]
+				if r < 0 {
+					t.Fatalf("iteration %d: temporary v%d has no register", iter, tv)
+				}
+				if int(f.Class[tv]) < len(inst.Clobber) && inst.Clobber[f.Class[tv]]&(1<<r) != 0 {
+					t.Fatalf("iteration %d: temporary v%d in register %d its instruction clobbers", iter, tv, r)
+				}
+				others := append(append(slices.Clone(inst.Uses), inst.Defs...), inst.Temps[:k]...)
+				for v := range after {
+					others = append(others, v)
+				}
+				for _, v := range others {
+					conflict(tv, v, "at its instruction")
+				}
+			}
 			for v := range after {
 				if slices.Contains(inst.Defs, v) {
 					continue
@@ -276,6 +310,9 @@ func checkAllocation(t *testing.T, iter int, f *Func, cfg *Config, res *Result) 
 		}
 		if s := f.FixedSlot[v]; s >= 0 && res.Slot[v] >= 0 && res.Slot[v] != s {
 			t.Fatalf("iteration %d: v%d arrives in slot %d but is given %d", iter, v, s, res.Slot[v])
+		}
+		if s := res.Slot[v]; s >= 0 && int(s+width(VReg(v))) > cfg.NumSlots {
+			t.Fatalf("iteration %d: v%d in slot %d of %d, %d wide", iter, v, s, cfg.NumSlots, width(VReg(v)))
 		}
 	}
 }

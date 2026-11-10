@@ -22,8 +22,10 @@
 // (Result.Across); a call clobbers every register, and a web whose reloads
 // would weigh as much as its uses lives in its slot. An instruction's
 // fixed clobbers (Inst.Clobber) keep the registers they name from the webs
-// live across it. Slots are given by a second scan, with holes too, a web
-// with a parameter keeping the slot it arrives in.
+// live across it, and its temporaries (Inst.Temps) are registers apart from
+// its operands and results. Slots are given by a second scan, with holes
+// too, a web with a parameter keeping the slot it arrives in, a register
+// wider than a slot (Func.Width) taking consecutive ones.
 //
 // An Allocator keeps its tables, lists and result for its next
 // allocation, so that a client allocating function after function
@@ -54,6 +56,11 @@ type Func struct {
 	// in its frame slot -- which it keeps if it needs one, or -1. The slot
 	// holds nothing else until the register is defined.
 	FixedSlot []int32
+	// Width is the number of consecutive slots each virtual register takes
+	// where it is kept in memory, a fixed slot's included: one where it is
+	// 0, or where Width is nil. Registers of different widths may share a
+	// class -- its registers hold either -- but never a web.
+	Width []int8
 	// Blocks are the function's blocks in layout order, the entry first.
 	Blocks []Block
 }
@@ -94,6 +101,12 @@ type Inst struct {
 	// Hint is a use whose register Defs[0] would like, the two operands
 	// of a two-address instruction: None for none.
 	Hint VReg
+	// Temps are registers the instruction works in: each live from its
+	// reads to its writes, so that it is none of the instruction's Uses'
+	// or Defs' registers, nor of a register live across it. They are
+	// given registers ahead of anything they meet, and are defined and
+	// used nowhere else. An instruction with temporaries is not a call.
+	Temps []VReg
 }
 
 // Config is the target's registers and slots.

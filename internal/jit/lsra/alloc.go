@@ -2,6 +2,7 @@ package lsra
 
 import (
 	"container/heap"
+	"math"
 	"math/bits"
 	"slices"
 )
@@ -72,9 +73,11 @@ type web struct {
 	// clobbers.
 	avoid uint64
 	// fixed is the slot a member arrives in, or -1, and arrive the
-	// position that member is defined at.
+	// position that member is defined at; width is the slots its members
+	// take (Func.Width).
 	fixed  int32
 	arrive int32
+	width  int32
 	hints  []*web
 	reg    int
 	slot   int32
@@ -390,6 +393,14 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 					opened = append(opened, v)
 				}
 			}
+			for _, t := range in.Temps {
+				// Live from the reads to the writes, and heavier than
+				// anything it meets, which gives way to it.
+				if alloc(t) {
+					weight[t] = math.Inf(1)
+					ranges[t] = appendA(rngs, ranges[t], rng{u, u + 2})
+				}
+			}
 			if in.Call || len(in.Clobber) > 0 {
 				clobbers = append(clobbers, clobber{at: u, masks: in.Clobber, call: in.Call, key: [2]int32{int32(i), int32(j)}, weight: w})
 			}
@@ -491,7 +502,8 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	al.vacross = vacr
 	single := func(v VReg) *web {
 		w := al.pool.new()
-		*w = web{members: append(al.vregs.take(1), v), cls: f.Class[v], ranges: ranges[v], weight: weight[v], fixed: -1, reg: -1, slot: -1}
+		*w = web{members: append(al.vregs.take(1), v), cls: f.Class[v], ranges: ranges[v], weight: weight[v], fixed: -1, reg: -1, slot: -1,
+			width: widthOf(f, v)}
 		if f.FixedSlot[v] >= 0 {
 			w.fixed, w.arrive = f.FixedSlot[v], defAt[v]
 		}
@@ -543,7 +555,7 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 				continue
 			}
 			for k, a := range p.Args {
-				if a != p.Def && alloc(a) && webs[a] != nil && f.Class[a] == f.Class[p.Def] {
+				if a != p.Def && alloc(a) && webs[a] != nil && f.Class[a] == f.Class[p.Def] && widthOf(f, a) == widthOf(f, p.Def) {
 					pairs = append(pairs, pair{p.Def, a, weightClass(f.Blocks[b.Preds[k]].Depth)})
 				}
 			}
@@ -809,23 +821,32 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 			rs = unionInto(rngs, rs, w.ranges)
 			w.slot = w.fixed
 		}
-		take(w.fixed, rs)
+		for k := range w.width {
+			take(w.fixed+k, rs)
+		}
 	}
 	for _, w := range list {
 		if !(w.spilled || w.calls) || w.slot >= 0 {
 			continue
 		}
+		// The first slot from which width are free.
 		s := int32(0)
-		for int(s) < len(slots) && overlap(slots[s], w.ranges) {
-			s++
+		for k := int32(0); k < w.width; {
+			if int(s+k) < len(slots) && overlap(slots[s+k], w.ranges) {
+				s, k = s+k+1, 0
+				continue
+			}
+			k++
 		}
-		if int(s) >= cfg.NumSlots {
+		if int(s+w.width) > cfg.NumSlots {
 			clear(slots)
 			al.slots = slots[:0]
 			return nil, ErrSlots
 		}
 		w.slot = s
-		take(s, w.ranges)
+		for k := range w.width {
+			take(s+k, w.ranges)
+		}
 	}
 	nslots := len(slots)
 	clear(slots)
@@ -887,6 +908,14 @@ func (al *Allocator) Allocate(f *Func, cfg *Config) (*Result, error) {
 	al.list = list[:0]
 	lap(PhaseSlots)
 	return res, nil
+}
+
+// widthOf is the slots v takes in memory (Func.Width).
+func widthOf(f *Func, v VReg) int32 {
+	if int(v) < len(f.Width) && f.Width[v] > 1 {
+		return int32(f.Width[v])
+	}
+	return 1
 }
 
 // forceDataflow has every allocation find liveness by the dataflow, for

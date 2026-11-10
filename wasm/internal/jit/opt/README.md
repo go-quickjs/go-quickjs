@@ -326,7 +326,12 @@ web in a register that lives across a call is stored into its slot where
 each of its values is defined and loaded again after each call it
 crosses; one whose reloads would weigh as much as its uses lives in its
 slot instead. Slots are given by a second scan over the ranges, holes
-included, a web with a parameter keeping the slot it arrives in. A phi
+included, a web with a parameter keeping the slot it arrives in, and a
+register wider than a slot (`Func.Width`, a v128's two) taking consecutive
+ones. An instruction's temporaries (`Inst.Temps`), which a sequence works
+in, are registers live from its reads to its writes, so apart from its
+operands', its results' and those live across it, and heavier than
+anything they meet, which is displaced for them. A phi
 prefers its arguments' registers and they its, and a two-address
 operation's result its first operand's. There is no splitting within a
 value's life: a web is in its register or its slot throughout.
