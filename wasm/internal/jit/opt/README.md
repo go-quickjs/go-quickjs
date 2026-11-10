@@ -391,8 +391,15 @@ less the rest of the access -- the offset and the size, or the size where
 the offset is in the register -- does not borrow and is not below the
 address, in R11 (X16), so that no sum carries. A constant address is
 checked against a constant end, and one whose sums carry jumps to the
-trap. Memory 0's base is R15 (X20); another's is loaded from the table
-into R11 (X16) after the check, `[R11 + address + offset]` -- or, for a store
+trap. Memory 0's base is R15 (X20). Where the address is in a register of
+its own -- the allocator's, or the instruction's -- R10 (X17) takes the
+memory's entry in the table once, for the check and the base, which it
+ends holding, `[R10 + address + offset]` (`checkFromS1`): on amd64 an i32
+address's end is made by LEA and compared with the size in memory, on
+arm64 the size less the access's size is compared with the address; R11
+(X16) is then left to the instruction. Where the address is in R10
+(spilled, or made in 64 bits there), another memory's base is loaded into
+R11 (X16) after the check, `[R11 + address + offset]` -- or, for a store
 whose integer value R11 must hold, added to the address in R10, the access
 `[R10 + offset]` (on arm64 an add, the access `[X17]`). A float store's
 value is in X15 (D31) first, a constant being made through R11.

@@ -74,9 +74,11 @@ func (g *gen) sizeInto(v *Value) arm64.Reg {
 //
 // own is a register of the instruction's own that holds the address and
 // may be lost, or noReg, s1 then being taken where the address's register
-// cannot be. base is the register a memory other than 0's base is loaded
-// into -- s0 -- or noReg to add the base to the effective address in s1
-// or own, leaving s0 to the instruction.
+// cannot be. Where the effective address is not in s1, a memory other than
+// 0's base is loaded into s1, and s0 is the instruction's (checkFromS1);
+// where it is, base is the register the base is loaded into -- s0 -- or
+// noReg to add the base to the effective address in s1, leaving s0 to the
+// instruction.
 func (g *gen) memAccess(v *Value, own, base arm64.Reg, align bool) memOp {
 	a := g.a
 	addr := v.Args[0]
@@ -138,6 +140,9 @@ func (g *gen) memAccess(v *Value, own, base arm64.Reg, align bool) memOp {
 			a.LogicImm(arm64.Ands, arm64.ZR, ea, size-1, true)
 			a.BCond(arm64.NE, g.trap(wjit.TrapUnalignedAccess, v.At))
 		}
+		if ea != s1 {
+			return g.checkFromS1(v, ea, oob)
+		}
 		if !v.NoCheck {
 			// The end is past the size where the size less the access's
 			// size borrows, or is below ea: no sum here carries.
@@ -162,6 +167,49 @@ func (g *gen) memAccess(v *Value, own, base arm64.Reg, align bool) memOp {
 	a.Load(s0, s0, d)
 	a.Op(arm64.Add, dst, s0, ea, true)
 	return memOp{base: dst, idx: noReg}
+}
+
+// checkFromS1 checks access v, its effective address ea, not s1, and
+// returns its operand: s1 takes the memories' table's entry, for the check
+// and the base, which it ends holding for a memory other than 0, and s0 the
+// size, checked less the access's size. s0 is then the instruction's.
+func (g *gen) checkFromS1(v *Value, ea arm64.Reg, oob arm64.Label) memOp {
+	a := g.a
+	mem := memIndex(v)
+	shared := v.Aux2&memShared != 0
+	var d int32
+	entry := false
+	if !v.NoCheck {
+		sz := s0
+		switch {
+		case mem == 0 && shared:
+			a.Load(s1, rCtx, offMemSizePtr)
+			a.Load(s0, s1, 0)
+		case mem == 0:
+			sz = rMemSize
+		case shared:
+			d = g.memEntry(s1, mem)
+			a.Load(s0, s1, d+16)
+			a.Load(s0, s0, 0)
+			entry = true
+		default:
+			d = g.memEntry(s1, mem)
+			a.Load(s0, s1, d+8)
+			entry = true
+		}
+		a.SubsImm(s0, sz, int64(v.Size), true)
+		a.BCond(arm64.LO, oob)
+		a.Cmp(ea, s0, true)
+		a.BCond(arm64.HI, oob)
+	}
+	if mem == 0 {
+		return memOp{base: rMem, idx: ea}
+	}
+	if !entry {
+		d = g.memEntry(s1, mem)
+	}
+	a.Load(s1, s1, d)
+	return memOp{base: s1, idx: ea}
 }
 
 // loadAny lowers a load that is not a plain access.

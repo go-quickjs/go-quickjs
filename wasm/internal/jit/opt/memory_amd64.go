@@ -78,10 +78,11 @@ func (g *gen) sizeInto(v *Value) {
 // own is a register of the instruction's own that holds the address and
 // may be lost, or noReg, s1 then being taken where the address's register
 // cannot be: for an i64 memory's address plus its offset, or an offset
-// past 2^31-1, which are made in 64 bits. base is the register a memory
-// other than 0's base is loaded into -- s0 or s1, which the effective
-// address is then not in -- or noReg to add the base to the effective
-// address in s1 or own, leaving s0 to the instruction.
+// past 2^31-1, which are made in 64 bits. Where the effective address is
+// not in s1, a memory other than 0's base is loaded into s1, and s0 is the
+// instruction's (checkFromS1); where it is, base is the register the base
+// is loaded into -- s0 -- or noReg to add the base to the effective address
+// in s1, leaving s0 to the instruction.
 func (g *gen) memAccess(v *Value, own, base amd64.Reg, align bool) memOp {
 	a := g.a
 	addr := v.Args[0]
@@ -160,6 +161,9 @@ func (g *gen) memAccess(v *Value, own, base amd64.Reg, align bool) memOp {
 				a.Jcc(amd64.CondNE, g.trap(wjit.TrapUnalignedAccess, v.At))
 			}
 		}
+		if ea != s1 {
+			return g.checkFromS1(v, ea, disp, rest, oob)
+		}
 		if !v.NoCheck {
 			// The end is past the size where the size less rest borrows, or
 			// is below ea: no sum here carries.
@@ -186,6 +190,59 @@ func (g *gen) memAccess(v *Value, own, base amd64.Reg, align bool) memOp {
 	d := g.memEntry(s0, mem)
 	a.AddMem(dst, s0, d)
 	return memOp{base: dst, idx: noReg, disp: disp}
+}
+
+// checkFromS1 checks access v, its effective address ea plus disp, ea not
+// s1, rest being how far past ea its end is, and returns its operand: s1
+// takes the memories' table's entry, for the check and the base, which it
+// ends holding for a memory other than 0, and s0 the end, which is ea plus
+// rest where nothing wraps -- an i32 address -- and else checked by the
+// size less rest. s0 is then the instruction's.
+func (g *gen) checkFromS1(v *Value, ea amd64.Reg, disp int32, rest uint64, oob amd64.Label) memOp {
+	a := g.a
+	mem := memIndex(v)
+	shared := v.Aux2&memShared != 0
+	lea := v.Aux2&memWide == 0
+	// The memory's size is at base plus off; entry says s1 holds the
+	// memory's entry, at d.
+	var base amd64.Reg
+	var off, d int32
+	entry := false
+	if !v.NoCheck {
+		switch {
+		case mem == 0 && shared:
+			a.Load(s1, rCtx, offMemSizePtr)
+			base = s1
+		case mem == 0:
+			base, off = rCtx, offMemSize
+		case shared:
+			d = g.memEntry(s1, mem)
+			a.Load(s1, s1, d+16)
+			base = s1
+		default:
+			d = g.memEntry(s1, mem)
+			base, off, entry = s1, d+8, true
+		}
+		if lea {
+			a.Lea(s0, ea, int32(rest))
+			a.CmpMem(s0, base, off, true)
+			a.Jcc(amd64.CondA, oob)
+		} else {
+			a.Load(s0, base, off)
+			a.OpImm(amd64.Sub, s0, int32(rest), true)
+			a.Jcc(amd64.CondB, oob)
+			a.Op(amd64.Cmp, ea, s0, true)
+			a.Jcc(amd64.CondA, oob)
+		}
+	}
+	if mem == 0 {
+		return memOp{base: rMem, idx: ea, disp: disp}
+	}
+	if !entry {
+		d = g.memEntry(s1, mem)
+	}
+	a.Load(s1, s1, d)
+	return memOp{base: s1, idx: ea, disp: disp}
 }
 
 // loadAny lowers a load that is not a plain access.
