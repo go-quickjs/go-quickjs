@@ -247,10 +247,8 @@ func TestJITLargeFramesAndSpills(t *testing.T) {
 // and quiet NaNs in either operand, min and max of NaNs and of zeros, the
 // roundings, abs, neg and copysign of NaNs, and the conversions between f32
 // and f64. Each result's whole word is compared, an f32's upper half
-// included. Of two NaN operands, which one's payload an arithmetic
-// operation keeps is the order of its instruction's operands, which the Go
-// compiler chooses for the interpreter's commutative operators and the
-// spec leaves open: there both results must be NaNs.
+// included, and each NaN both tiers return is the NaN rule's (nan.go):
+// every pair of NaNs, in both orders.
 func TestJITFloatBits(t *testing.T) {
 	f32s := []uint64{0, 0x80000000, 0x3f800000, 0xbfc00000, 0x40200000, 0xbf000000, 0x3f000000,
 		0x7f800000, 0xff800000, 0x7fc00000, 0xffc00000, 0x7f800001, 0x7fa00005, 0xff812345,
@@ -265,9 +263,10 @@ func TestJITFloatBits(t *testing.T) {
 	type op struct {
 		name   string
 		binary bool
-		// arith says which NaN of two it gives is open.
-		arith bool
-		in    []uint64
+		// arith says its NaN is the rule's for arithmetic, unary for an
+		// operation of one operand; neither is a sign operation.
+		arith, unary bool
+		in           []uint64
 	}
 	var ops []op
 	for _, ty := range []string{"f32", "f64"} {
@@ -278,23 +277,35 @@ func TestJITFloatBits(t *testing.T) {
 		for _, name := range []string{"add", "sub", "mul", "div", "min", "max", "copysign"} {
 			fmt.Fprintf(&src, "(func (export %q) (param %s %s) (result %s) (%s.%s (local.get 0) (local.get 1)))\n",
 				ty+"."+name, ty, ty, ty, ty, name)
-			ops = append(ops, op{ty + "." + name, true, name != "copysign", in})
+			ops = append(ops, op{ty + "." + name, true, name != "copysign", false, in})
 		}
 		for _, name := range []string{"abs", "neg", "sqrt", "ceil", "floor", "trunc", "nearest"} {
 			fmt.Fprintf(&src, "(func (export %q) (param %s) (result %s) (%s.%s (local.get 0)))\n",
 				ty+"."+name, ty, ty, ty, name)
-			ops = append(ops, op{ty + "." + name, false, false, in})
+			ops = append(ops, op{ty + "." + name, false, false, name != "abs" && name != "neg", in})
 		}
 	}
 	src.WriteString(`(func (export "f32.demote_f64") (param f64) (result f32) (f32.demote_f64 (local.get 0)))
 (func (export "f64.promote_f32") (param f32) (result f64) (f64.promote_f32 (local.get 0)))
 )`)
-	ops = append(ops, op{"f32.demote_f64", false, false, f64s}, op{"f64.promote_f32", false, false, f32s})
-	isNaN := func(bits uint64, f64 bool) bool {
-		if f64 {
-			return bits&(1<<63-1) > 0x7ff0000000000000
+	ops = append(ops, op{"f32.demote_f64", false, false, false, f64s}, op{"f64.promote_f32", false, false, false, f32s})
+	// rule is what the rule says the result r of o on args is, if it says.
+	rule := func(o op, args []uint64, r uint64) (uint64, bool) {
+		w := 32
+		if strings.HasPrefix(o.name, "f64") {
+			w = 64
 		}
-		return bits&(1<<31-1) > 0x7f800000 && bits>>32 == 0
+		switch {
+		case o.arith:
+			return ruleArith(args[0], args[1], r, w)
+		case o.unary:
+			return ruleUnary(args[0], r, w)
+		case o.name == "f32.demote_f64" && isNaNBits(args[0], 64):
+			return ruleDemote(args[0]), true
+		case o.name == "f64.promote_f32" && isNaNBits(args[0], 32):
+			return rulePromote(args[0]), true
+		}
+		return 0, false
 	}
 	interp := interpretedInstance(t, src.String())
 	native := nativeInstance(t, src.String())
@@ -315,13 +326,12 @@ func TestJITFloatBits(t *testing.T) {
 				t.Fatal(err)
 			}
 			got, err := call(t, native, o.name, args...)
-			wide := strings.HasPrefix(o.name, "f64")
-			if err == nil && o.arith && isNaN(args[0], wide) && isNaN(args[1], wide) &&
-				isNaN(want[0].N, wide) && isNaN(got[0].N, wide) {
-				continue
-			}
 			if err != nil || got[0].N != want[0].N {
 				t.Errorf("%s(%#x) = %#x, %v natively, %#x interpreted", o.name, args, got, err, want[0].N)
+				continue
+			}
+			if r, ok := rule(o, args, want[0].N); ok && want[0].N != r {
+				t.Errorf("%s(%#x) = %#x, the NaN rule's %#x", o.name, args, want[0].N, r)
 			}
 		}
 		if nativeRan(interp, o.name) || !nativeRan(native, o.name) {

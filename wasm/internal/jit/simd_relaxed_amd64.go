@@ -11,9 +11,7 @@ import (
 
 // simdRelaxed compiles a relaxed SIMD instruction natively, reporting
 // whether it did. relaxed_madd and relaxed_nmadd on a CPU with FMA3 are
-// fused and left to Go: the interpreter's single-precision fusion is its
-// own rounding to odd, and its NaNs those of the double operations it is
-// made of.
+// fused, which the code does with no VEX encoding, and left to Go.
 func (c *compiler) simdRelaxed(op opcode.Opcode) bool {
 	a := c.a
 	switch op {
@@ -34,7 +32,9 @@ func (c *compiler) simdRelaxed(op opcode.Opcode) bool {
 		if CPU.RelaxedFused {
 			return false
 		}
-		// The product rounded, then added to the addend, or taken from it.
+		// The product rounded, then added to the addend, or the addend
+		// less it: the NaN of the interpreter's p + c or c - p, each
+		// instruction's first operand its destination.
 		mul, add, sub := amd64.Mulps, amd64.Addps, amd64.Subps
 		if op == opcode.F64x2Qfma || op == opcode.F64x2Qfms {
 			mul, add, sub = amd64.Mulpd, amd64.Addpd, amd64.Subpd
@@ -42,12 +42,6 @@ func (c *compiler) simdRelaxed(op opcode.Opcode) bool {
 		z := c.pop()
 		y := c.pop()
 		x := c.pop()
-		if op == opcode.F64x2Qfma || op == opcode.F64x2Qfms {
-			// Of two NaNs the interpreter's double product is the second
-			// operand's: Go's code for relaxedMaddF64x2 and
-			// relaxedNmaddF64x2 multiplies into it.
-			x, y = y, x
-		}
 		xa := c.intoX(x)
 		yb := c.readX(y)
 		a.Vec(mul, xa, yb)

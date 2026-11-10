@@ -86,7 +86,7 @@ func relaxedMaddF32x4(x, y, z V128) V128 {
 	a, b, c := x.f32(), y.f32(), z.f32()
 	var r [4]float32
 	for i := range r {
-		r[i] = float32(a[i]*b[i]) + c[i]
+		r[i] = fadd32(fmul32(a[i], b[i]), c[i])
 	}
 	return fromF32(r)
 }
@@ -98,7 +98,7 @@ func relaxedNmaddF32x4(x, y, z V128) V128 {
 	a, b, c := x.f32(), y.f32(), z.f32()
 	var r [4]float32
 	for i := range r {
-		r[i] = c[i] - float32(a[i]*b[i])
+		r[i] = fsub32(c[i], fmul32(a[i], b[i]))
 	}
 	return fromF32(r)
 }
@@ -108,7 +108,7 @@ func relaxedMaddF64x2(x, y, z V128) V128 {
 		return fusedMaddF64x2(x, y, z)
 	}
 	a, b, c := x.f64(), y.f64(), z.f64()
-	return fromF64([2]float64{float64(a[0]*b[0]) + c[0], float64(a[1]*b[1]) + c[1]})
+	return fromF64([2]float64{fadd64(fmul64(a[0], b[0]), c[0]), fadd64(fmul64(a[1], b[1]), c[1])})
 }
 
 func relaxedNmaddF64x2(x, y, z V128) V128 {
@@ -116,7 +116,7 @@ func relaxedNmaddF64x2(x, y, z V128) V128 {
 		return fusedNmaddF64x2(x, y, z)
 	}
 	a, b, c := x.f64(), y.f64(), z.f64()
-	return fromF64([2]float64{c[0] - float64(a[0]*b[0]), c[1] - float64(a[1]*b[1])})
+	return fromF64([2]float64{fsub64(c[0], fmul64(a[0], b[0])), fsub64(c[1], fmul64(a[1], b[1]))})
 }
 
 // blendMask returns the mask selecting whole lanes of the given top bits:

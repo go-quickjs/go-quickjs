@@ -137,10 +137,10 @@ func shifts(l lane, prefix, signed string) []op {
 
 func floatArith(l lane, prefix, sz string) []op {
 	return []op{
-		lbin(l, prefix+"Add", "a + b"),
-		lbin(l, prefix+"Sub", "a - b"),
-		lbin(l, prefix+"Mul", "a * b"),
-		lbin(l, prefix+"Div", "a / b"),
+		lbin(l, prefix+"Add", "fadd"+sz+"(a, b)"),
+		lbin(l, prefix+"Sub", "fsub"+sz+"(a, b)"),
+		lbin(l, prefix+"Mul", "fmul"+sz+"(a, b)"),
+		lbin(l, prefix+"Div", "fdiv"+sz+"(a, b)"),
 		lbin(l, prefix+"Min", "fmin"+sz+"(a, b)"),
 		lbin(l, prefix+"Max", "fmax"+sz+"(a, b)"),
 		lbin(l, prefix+"Pmin", "pmin"+sz+"(a, b)"),

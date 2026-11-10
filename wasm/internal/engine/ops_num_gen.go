@@ -1833,35 +1833,35 @@ func (c *compiler) numeric(op opcode.Opcode, at uint32) bool {
 			yb := y.slot
 			c.pushTree(module.F32, tf32(func(f *frame) float32 {
 				a, b := math.Float32frombits(uint32(f.l[xa])), math.Float32frombits(uint32(f.l[yb]))
-				return a + b
+				return fadd32(a, b)
 			}))
 		case x.k == eSlot && y.k == eConst:
 			xa := x.slot
 			yb := math.Float32frombits(uint32(y.c))
-			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := math.Float32frombits(uint32(f.l[xa])), yb; return a + b }))
+			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := math.Float32frombits(uint32(f.l[xa])), yb; return fadd32(a, b) }))
 		case x.k == eTree && y.k == eConst:
 			xa := x.tree.(tf32)
 			yb := math.Float32frombits(uint32(y.c))
-			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa(f), yb; return a + b }))
+			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa(f), yb; return fadd32(a, b) }))
 		case x.k == eSlot && y.k == eTree:
 			xa := x.slot
 			yb := y.tree.(tf32)
-			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := math.Float32frombits(uint32(f.l[xa])), yb(f); return a + b }))
+			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := math.Float32frombits(uint32(f.l[xa])), yb(f); return fadd32(a, b) }))
 		case x.k == eTree && y.k == eSlot:
 			xa := x.tree.(tf32)
 			yb := y.slot
-			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa(f), math.Float32frombits(uint32(f.l[yb])); return a + b }))
+			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa(f), math.Float32frombits(uint32(f.l[yb])); return fadd32(a, b) }))
 		case x.k == eConst && y.k == eTree:
 			xa := math.Float32frombits(uint32(x.c))
 			yb := y.tree.(tf32)
-			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa, yb(f); return a + b }))
+			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa, yb(f); return fadd32(a, b) }))
 		case x.k == eConst && y.k == eSlot:
 			xa := math.Float32frombits(uint32(x.c))
 			yb := y.slot
-			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa, math.Float32frombits(uint32(f.l[yb])); return a + b }))
+			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa, math.Float32frombits(uint32(f.l[yb])); return fadd32(a, b) }))
 		default:
 			xa, yb := c.f32(x), c.f32(y)
-			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa(f), yb(f); return a + b }))
+			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa(f), yb(f); return fadd32(a, b) }))
 		}
 	case opcode.F32Sub:
 		y := c.pop()
@@ -1872,35 +1872,35 @@ func (c *compiler) numeric(op opcode.Opcode, at uint32) bool {
 			yb := y.slot
 			c.pushTree(module.F32, tf32(func(f *frame) float32 {
 				a, b := math.Float32frombits(uint32(f.l[xa])), math.Float32frombits(uint32(f.l[yb]))
-				return a - b
+				return fsub32(a, b)
 			}))
 		case x.k == eSlot && y.k == eConst:
 			xa := x.slot
 			yb := math.Float32frombits(uint32(y.c))
-			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := math.Float32frombits(uint32(f.l[xa])), yb; return a - b }))
+			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := math.Float32frombits(uint32(f.l[xa])), yb; return fsub32(a, b) }))
 		case x.k == eTree && y.k == eConst:
 			xa := x.tree.(tf32)
 			yb := math.Float32frombits(uint32(y.c))
-			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa(f), yb; return a - b }))
+			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa(f), yb; return fsub32(a, b) }))
 		case x.k == eSlot && y.k == eTree:
 			xa := x.slot
 			yb := y.tree.(tf32)
-			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := math.Float32frombits(uint32(f.l[xa])), yb(f); return a - b }))
+			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := math.Float32frombits(uint32(f.l[xa])), yb(f); return fsub32(a, b) }))
 		case x.k == eTree && y.k == eSlot:
 			xa := x.tree.(tf32)
 			yb := y.slot
-			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa(f), math.Float32frombits(uint32(f.l[yb])); return a - b }))
+			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa(f), math.Float32frombits(uint32(f.l[yb])); return fsub32(a, b) }))
 		case x.k == eConst && y.k == eTree:
 			xa := math.Float32frombits(uint32(x.c))
 			yb := y.tree.(tf32)
-			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa, yb(f); return a - b }))
+			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa, yb(f); return fsub32(a, b) }))
 		case x.k == eConst && y.k == eSlot:
 			xa := math.Float32frombits(uint32(x.c))
 			yb := y.slot
-			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa, math.Float32frombits(uint32(f.l[yb])); return a - b }))
+			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa, math.Float32frombits(uint32(f.l[yb])); return fsub32(a, b) }))
 		default:
 			xa, yb := c.f32(x), c.f32(y)
-			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa(f), yb(f); return a - b }))
+			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa(f), yb(f); return fsub32(a, b) }))
 		}
 	case opcode.F32Mul:
 		y := c.pop()
@@ -1911,35 +1911,35 @@ func (c *compiler) numeric(op opcode.Opcode, at uint32) bool {
 			yb := y.slot
 			c.pushTree(module.F32, tf32(func(f *frame) float32 {
 				a, b := math.Float32frombits(uint32(f.l[xa])), math.Float32frombits(uint32(f.l[yb]))
-				return a * b
+				return fmul32(a, b)
 			}))
 		case x.k == eSlot && y.k == eConst:
 			xa := x.slot
 			yb := math.Float32frombits(uint32(y.c))
-			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := math.Float32frombits(uint32(f.l[xa])), yb; return a * b }))
+			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := math.Float32frombits(uint32(f.l[xa])), yb; return fmul32(a, b) }))
 		case x.k == eTree && y.k == eConst:
 			xa := x.tree.(tf32)
 			yb := math.Float32frombits(uint32(y.c))
-			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa(f), yb; return a * b }))
+			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa(f), yb; return fmul32(a, b) }))
 		case x.k == eSlot && y.k == eTree:
 			xa := x.slot
 			yb := y.tree.(tf32)
-			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := math.Float32frombits(uint32(f.l[xa])), yb(f); return a * b }))
+			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := math.Float32frombits(uint32(f.l[xa])), yb(f); return fmul32(a, b) }))
 		case x.k == eTree && y.k == eSlot:
 			xa := x.tree.(tf32)
 			yb := y.slot
-			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa(f), math.Float32frombits(uint32(f.l[yb])); return a * b }))
+			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa(f), math.Float32frombits(uint32(f.l[yb])); return fmul32(a, b) }))
 		case x.k == eConst && y.k == eTree:
 			xa := math.Float32frombits(uint32(x.c))
 			yb := y.tree.(tf32)
-			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa, yb(f); return a * b }))
+			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa, yb(f); return fmul32(a, b) }))
 		case x.k == eConst && y.k == eSlot:
 			xa := math.Float32frombits(uint32(x.c))
 			yb := y.slot
-			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa, math.Float32frombits(uint32(f.l[yb])); return a * b }))
+			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa, math.Float32frombits(uint32(f.l[yb])); return fmul32(a, b) }))
 		default:
 			xa, yb := c.f32(x), c.f32(y)
-			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa(f), yb(f); return a * b }))
+			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa(f), yb(f); return fmul32(a, b) }))
 		}
 	case opcode.F32Div:
 		y := c.pop()
@@ -1950,35 +1950,35 @@ func (c *compiler) numeric(op opcode.Opcode, at uint32) bool {
 			yb := y.slot
 			c.pushTree(module.F32, tf32(func(f *frame) float32 {
 				a, b := math.Float32frombits(uint32(f.l[xa])), math.Float32frombits(uint32(f.l[yb]))
-				return a / b
+				return fdiv32(a, b)
 			}))
 		case x.k == eSlot && y.k == eConst:
 			xa := x.slot
 			yb := math.Float32frombits(uint32(y.c))
-			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := math.Float32frombits(uint32(f.l[xa])), yb; return a / b }))
+			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := math.Float32frombits(uint32(f.l[xa])), yb; return fdiv32(a, b) }))
 		case x.k == eTree && y.k == eConst:
 			xa := x.tree.(tf32)
 			yb := math.Float32frombits(uint32(y.c))
-			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa(f), yb; return a / b }))
+			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa(f), yb; return fdiv32(a, b) }))
 		case x.k == eSlot && y.k == eTree:
 			xa := x.slot
 			yb := y.tree.(tf32)
-			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := math.Float32frombits(uint32(f.l[xa])), yb(f); return a / b }))
+			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := math.Float32frombits(uint32(f.l[xa])), yb(f); return fdiv32(a, b) }))
 		case x.k == eTree && y.k == eSlot:
 			xa := x.tree.(tf32)
 			yb := y.slot
-			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa(f), math.Float32frombits(uint32(f.l[yb])); return a / b }))
+			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa(f), math.Float32frombits(uint32(f.l[yb])); return fdiv32(a, b) }))
 		case x.k == eConst && y.k == eTree:
 			xa := math.Float32frombits(uint32(x.c))
 			yb := y.tree.(tf32)
-			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa, yb(f); return a / b }))
+			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa, yb(f); return fdiv32(a, b) }))
 		case x.k == eConst && y.k == eSlot:
 			xa := math.Float32frombits(uint32(x.c))
 			yb := y.slot
-			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa, math.Float32frombits(uint32(f.l[yb])); return a / b }))
+			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa, math.Float32frombits(uint32(f.l[yb])); return fdiv32(a, b) }))
 		default:
 			xa, yb := c.f32(x), c.f32(y)
-			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa(f), yb(f); return a / b }))
+			c.pushTree(module.F32, tf32(func(f *frame) float32 { a, b := xa(f), yb(f); return fdiv32(a, b) }))
 		}
 	case opcode.F32Min:
 		y := c.pop()
@@ -2361,35 +2361,35 @@ func (c *compiler) numeric(op opcode.Opcode, at uint32) bool {
 			yb := y.slot
 			c.pushTree(module.F64, tf64(func(f *frame) float64 {
 				a, b := math.Float64frombits(f.l[xa]), math.Float64frombits(f.l[yb])
-				return a + b
+				return fadd64(a, b)
 			}))
 		case x.k == eSlot && y.k == eConst:
 			xa := x.slot
 			yb := math.Float64frombits(y.c)
-			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := math.Float64frombits(f.l[xa]), yb; return a + b }))
+			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := math.Float64frombits(f.l[xa]), yb; return fadd64(a, b) }))
 		case x.k == eTree && y.k == eConst:
 			xa := x.tree.(tf64)
 			yb := math.Float64frombits(y.c)
-			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa(f), yb; return a + b }))
+			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa(f), yb; return fadd64(a, b) }))
 		case x.k == eSlot && y.k == eTree:
 			xa := x.slot
 			yb := y.tree.(tf64)
-			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := math.Float64frombits(f.l[xa]), yb(f); return a + b }))
+			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := math.Float64frombits(f.l[xa]), yb(f); return fadd64(a, b) }))
 		case x.k == eTree && y.k == eSlot:
 			xa := x.tree.(tf64)
 			yb := y.slot
-			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa(f), math.Float64frombits(f.l[yb]); return a + b }))
+			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa(f), math.Float64frombits(f.l[yb]); return fadd64(a, b) }))
 		case x.k == eConst && y.k == eTree:
 			xa := math.Float64frombits(x.c)
 			yb := y.tree.(tf64)
-			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa, yb(f); return a + b }))
+			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa, yb(f); return fadd64(a, b) }))
 		case x.k == eConst && y.k == eSlot:
 			xa := math.Float64frombits(x.c)
 			yb := y.slot
-			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa, math.Float64frombits(f.l[yb]); return a + b }))
+			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa, math.Float64frombits(f.l[yb]); return fadd64(a, b) }))
 		default:
 			xa, yb := c.f64(x), c.f64(y)
-			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa(f), yb(f); return a + b }))
+			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa(f), yb(f); return fadd64(a, b) }))
 		}
 	case opcode.F64Sub:
 		y := c.pop()
@@ -2400,35 +2400,35 @@ func (c *compiler) numeric(op opcode.Opcode, at uint32) bool {
 			yb := y.slot
 			c.pushTree(module.F64, tf64(func(f *frame) float64 {
 				a, b := math.Float64frombits(f.l[xa]), math.Float64frombits(f.l[yb])
-				return a - b
+				return fsub64(a, b)
 			}))
 		case x.k == eSlot && y.k == eConst:
 			xa := x.slot
 			yb := math.Float64frombits(y.c)
-			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := math.Float64frombits(f.l[xa]), yb; return a - b }))
+			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := math.Float64frombits(f.l[xa]), yb; return fsub64(a, b) }))
 		case x.k == eTree && y.k == eConst:
 			xa := x.tree.(tf64)
 			yb := math.Float64frombits(y.c)
-			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa(f), yb; return a - b }))
+			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa(f), yb; return fsub64(a, b) }))
 		case x.k == eSlot && y.k == eTree:
 			xa := x.slot
 			yb := y.tree.(tf64)
-			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := math.Float64frombits(f.l[xa]), yb(f); return a - b }))
+			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := math.Float64frombits(f.l[xa]), yb(f); return fsub64(a, b) }))
 		case x.k == eTree && y.k == eSlot:
 			xa := x.tree.(tf64)
 			yb := y.slot
-			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa(f), math.Float64frombits(f.l[yb]); return a - b }))
+			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa(f), math.Float64frombits(f.l[yb]); return fsub64(a, b) }))
 		case x.k == eConst && y.k == eTree:
 			xa := math.Float64frombits(x.c)
 			yb := y.tree.(tf64)
-			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa, yb(f); return a - b }))
+			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa, yb(f); return fsub64(a, b) }))
 		case x.k == eConst && y.k == eSlot:
 			xa := math.Float64frombits(x.c)
 			yb := y.slot
-			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa, math.Float64frombits(f.l[yb]); return a - b }))
+			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa, math.Float64frombits(f.l[yb]); return fsub64(a, b) }))
 		default:
 			xa, yb := c.f64(x), c.f64(y)
-			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa(f), yb(f); return a - b }))
+			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa(f), yb(f); return fsub64(a, b) }))
 		}
 	case opcode.F64Mul:
 		y := c.pop()
@@ -2439,35 +2439,35 @@ func (c *compiler) numeric(op opcode.Opcode, at uint32) bool {
 			yb := y.slot
 			c.pushTree(module.F64, tf64(func(f *frame) float64 {
 				a, b := math.Float64frombits(f.l[xa]), math.Float64frombits(f.l[yb])
-				return a * b
+				return fmul64(a, b)
 			}))
 		case x.k == eSlot && y.k == eConst:
 			xa := x.slot
 			yb := math.Float64frombits(y.c)
-			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := math.Float64frombits(f.l[xa]), yb; return a * b }))
+			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := math.Float64frombits(f.l[xa]), yb; return fmul64(a, b) }))
 		case x.k == eTree && y.k == eConst:
 			xa := x.tree.(tf64)
 			yb := math.Float64frombits(y.c)
-			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa(f), yb; return a * b }))
+			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa(f), yb; return fmul64(a, b) }))
 		case x.k == eSlot && y.k == eTree:
 			xa := x.slot
 			yb := y.tree.(tf64)
-			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := math.Float64frombits(f.l[xa]), yb(f); return a * b }))
+			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := math.Float64frombits(f.l[xa]), yb(f); return fmul64(a, b) }))
 		case x.k == eTree && y.k == eSlot:
 			xa := x.tree.(tf64)
 			yb := y.slot
-			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa(f), math.Float64frombits(f.l[yb]); return a * b }))
+			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa(f), math.Float64frombits(f.l[yb]); return fmul64(a, b) }))
 		case x.k == eConst && y.k == eTree:
 			xa := math.Float64frombits(x.c)
 			yb := y.tree.(tf64)
-			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa, yb(f); return a * b }))
+			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa, yb(f); return fmul64(a, b) }))
 		case x.k == eConst && y.k == eSlot:
 			xa := math.Float64frombits(x.c)
 			yb := y.slot
-			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa, math.Float64frombits(f.l[yb]); return a * b }))
+			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa, math.Float64frombits(f.l[yb]); return fmul64(a, b) }))
 		default:
 			xa, yb := c.f64(x), c.f64(y)
-			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa(f), yb(f); return a * b }))
+			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa(f), yb(f); return fmul64(a, b) }))
 		}
 	case opcode.F64Div:
 		y := c.pop()
@@ -2478,35 +2478,35 @@ func (c *compiler) numeric(op opcode.Opcode, at uint32) bool {
 			yb := y.slot
 			c.pushTree(module.F64, tf64(func(f *frame) float64 {
 				a, b := math.Float64frombits(f.l[xa]), math.Float64frombits(f.l[yb])
-				return a / b
+				return fdiv64(a, b)
 			}))
 		case x.k == eSlot && y.k == eConst:
 			xa := x.slot
 			yb := math.Float64frombits(y.c)
-			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := math.Float64frombits(f.l[xa]), yb; return a / b }))
+			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := math.Float64frombits(f.l[xa]), yb; return fdiv64(a, b) }))
 		case x.k == eTree && y.k == eConst:
 			xa := x.tree.(tf64)
 			yb := math.Float64frombits(y.c)
-			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa(f), yb; return a / b }))
+			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa(f), yb; return fdiv64(a, b) }))
 		case x.k == eSlot && y.k == eTree:
 			xa := x.slot
 			yb := y.tree.(tf64)
-			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := math.Float64frombits(f.l[xa]), yb(f); return a / b }))
+			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := math.Float64frombits(f.l[xa]), yb(f); return fdiv64(a, b) }))
 		case x.k == eTree && y.k == eSlot:
 			xa := x.tree.(tf64)
 			yb := y.slot
-			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa(f), math.Float64frombits(f.l[yb]); return a / b }))
+			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa(f), math.Float64frombits(f.l[yb]); return fdiv64(a, b) }))
 		case x.k == eConst && y.k == eTree:
 			xa := math.Float64frombits(x.c)
 			yb := y.tree.(tf64)
-			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa, yb(f); return a / b }))
+			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa, yb(f); return fdiv64(a, b) }))
 		case x.k == eConst && y.k == eSlot:
 			xa := math.Float64frombits(x.c)
 			yb := y.slot
-			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa, math.Float64frombits(f.l[yb]); return a / b }))
+			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa, math.Float64frombits(f.l[yb]); return fdiv64(a, b) }))
 		default:
 			xa, yb := c.f64(x), c.f64(y)
-			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa(f), yb(f); return a / b }))
+			c.pushTree(module.F64, tf64(func(f *frame) float64 { a, b := xa(f), yb(f); return fdiv64(a, b) }))
 		}
 	case opcode.F64Min:
 		y := c.pop()

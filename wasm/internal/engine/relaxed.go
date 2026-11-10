@@ -7,16 +7,24 @@ import "math"
 // one the architecture's vector instructions compute; these are the pieces
 // they share.
 
-// fma32 returns a*b+c rounded once to a float32. The product of two float32s
-// is exact in a float64; the sum is rounded to odd in a float64, which has
-// enough bits more than a float32 that rounding it again to a float32
-// rounds as rounding the exact sum would.
-func fma32(a, b, c float32) float32 {
-	p := float64(float64(a) * float64(b))
+// fma32 returns a*b+c rounded once to a float32, or -(a*b)+c if neg. The
+// product of two float32s is exact in a float64; the sum is rounded to odd
+// in a float64, which has enough bits more than a float32 that rounding it
+// again to a float32 rounds as rounding the exact sum would. Of a NaN
+// operand, the NaN is the one fmaPick32 picks.
+func fma32(a, b, c float32, neg bool) float32 {
+	x := float64(a)
+	if neg {
+		x = -x
+	}
+	p := float64(x * float64(b))
 	z := float64(c)
 	s := p + z
 	if s-s != 0 {
 		// An infinity or a NaN, which no second rounding changes.
+		if a != a || b != b || c != c {
+			return fmaPick32(a, b, c, neg)
+		}
 		return float32(s)
 	}
 	// e is the sum's rounding error, exactly.
@@ -39,7 +47,7 @@ func fusedMaddF32x4(x, y, z V128) V128 {
 	a, b, c := x.f32(), y.f32(), z.f32()
 	var r [4]float32
 	for i := range r {
-		r[i] = fma32(a[i], b[i], c[i])
+		r[i] = fma32(a[i], b[i], c[i], false)
 	}
 	return fromF32(r)
 }
@@ -48,19 +56,33 @@ func fusedNmaddF32x4(x, y, z V128) V128 {
 	a, b, c := x.f32(), y.f32(), z.f32()
 	var r [4]float32
 	for i := range r {
-		r[i] = fma32(-a[i], b[i], c[i])
+		r[i] = fma32(a[i], b[i], c[i], true)
 	}
 	return fromF32(r)
 }
 
+// fma64 returns a*b+c rounded once, or -(a*b)+c if neg; of a NaN operand,
+// the NaN fmaPick64 picks.
+func fma64(a, b, c float64, neg bool) float64 {
+	na := a
+	if neg {
+		na = -a
+	}
+	r := math.FMA(na, b, c)
+	if r != r && (a != a || b != b || c != c) {
+		r = fmaPick64(a, b, c, neg)
+	}
+	return r
+}
+
 func fusedMaddF64x2(x, y, z V128) V128 {
 	a, b, c := x.f64(), y.f64(), z.f64()
-	return fromF64([2]float64{math.FMA(a[0], b[0], c[0]), math.FMA(a[1], b[1], c[1])})
+	return fromF64([2]float64{fma64(a[0], b[0], c[0], false), fma64(a[1], b[1], c[1], false)})
 }
 
 func fusedNmaddF64x2(x, y, z V128) V128 {
 	a, b, c := x.f64(), y.f64(), z.f64()
-	return fromF64([2]float64{math.FMA(-a[0], b[0], c[0]), math.FMA(-a[1], b[1], c[1])})
+	return fromF64([2]float64{fma64(a[0], b[0], c[0], true), fma64(a[1], b[1], c[1], true)})
 }
 
 // dotSigned16 returns the sums of the products of each pair of x's and y's

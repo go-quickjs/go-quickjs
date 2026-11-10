@@ -4410,7 +4410,7 @@ func vF32x4Add(x, y V128) V128 {
 	var r [4]float32
 	for i := range r {
 		a, b := xs[i], ys[i]
-		r[i] = a + b
+		r[i] = fadd32(a, b)
 	}
 	return fromF32(r)
 }
@@ -4420,7 +4420,7 @@ func vF32x4Sub(x, y V128) V128 {
 	var r [4]float32
 	for i := range r {
 		a, b := xs[i], ys[i]
-		r[i] = a - b
+		r[i] = fsub32(a, b)
 	}
 	return fromF32(r)
 }
@@ -4430,7 +4430,7 @@ func vF32x4Mul(x, y V128) V128 {
 	var r [4]float32
 	for i := range r {
 		a, b := xs[i], ys[i]
-		r[i] = a * b
+		r[i] = fmul32(a, b)
 	}
 	return fromF32(r)
 }
@@ -4440,7 +4440,7 @@ func vF32x4Div(x, y V128) V128 {
 	var r [4]float32
 	for i := range r {
 		a, b := xs[i], ys[i]
-		r[i] = a / b
+		r[i] = fdiv32(a, b)
 	}
 	return fromF32(r)
 }
@@ -4535,7 +4535,7 @@ func vF64x2Add(x, y V128) V128 {
 	var r [2]float64
 	for i := range r {
 		a, b := xs[i], ys[i]
-		r[i] = a + b
+		r[i] = fadd64(a, b)
 	}
 	return fromF64(r)
 }
@@ -4545,7 +4545,7 @@ func vF64x2Sub(x, y V128) V128 {
 	var r [2]float64
 	for i := range r {
 		a, b := xs[i], ys[i]
-		r[i] = a - b
+		r[i] = fsub64(a, b)
 	}
 	return fromF64(r)
 }
@@ -4555,7 +4555,7 @@ func vF64x2Mul(x, y V128) V128 {
 	var r [2]float64
 	for i := range r {
 		a, b := xs[i], ys[i]
-		r[i] = a * b
+		r[i] = fmul64(a, b)
 	}
 	return fromF64(r)
 }
@@ -4565,7 +4565,7 @@ func vF64x2Div(x, y V128) V128 {
 	var r [2]float64
 	for i := range r {
 		a, b := xs[i], ys[i]
-		r[i] = a / b
+		r[i] = fdiv64(a, b)
 	}
 	return fromF64(r)
 }

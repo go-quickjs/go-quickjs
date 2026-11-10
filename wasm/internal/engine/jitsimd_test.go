@@ -226,13 +226,15 @@ var (
 	}()
 )
 
-// shape is lanes of a width, and their edges.
+// shape is lanes of a width, and their edges, and whether they are floats'.
 type shape struct {
 	bits  int
 	edges []uint64
+	float bool
 }
 
-var shapes = []shape{{8, edges8}, {16, edges16}, {32, edges32}, {64, edges64}, {32, edgesF32}, {64, edgesF64}}
+var shapes = []shape{{8, edges8, false}, {16, edges16, false}, {32, edges32, false}, {64, edges64, false},
+	{32, edgesF32, true}, {64, edgesF64, true}}
 
 // splatLanes is lane value e repeated through a vector of lanes of bits.
 func splatLanes(e uint64, bits int) V128 {
@@ -258,7 +260,9 @@ func mixLanes(sh shape, r *rand.Rand) V128 {
 
 // simdInputs returns the argument lists a function of params is called
 // with: the edges of every shape, alone and paired with each other edge of
-// its shape, mixed in vectors, and random bits.
+// its shape, mixed in vectors, and random bits; and of three vectors,
+// every triple of the floats' NaNs and the numbers whose products and sums
+// are NaNs of none (ruleNaNs32, ruleNaNs64).
 func simdInputs(params []module.ValueType, r *rand.Rand, short bool) [][]Val {
 	nv := 0
 	for _, p := range params {
@@ -283,7 +287,8 @@ func simdInputs(params []module.ValueType, r *rand.Rand, short bool) [][]Val {
 		case 2, 3:
 			for _, e := range sh.edges {
 				for _, f := range sh.edges {
-					if short && r.IntN(4) != 0 {
+					bothNaN := sh.float && isNaNBits(e, sh.bits) && isNaNBits(f, sh.bits)
+					if short && r.IntN(4) != 0 && !bothNaN {
 						continue
 					}
 					t := []V128{splatLanes(e, sh.bits), splatLanes(f, sh.bits)}
@@ -296,6 +301,19 @@ func simdInputs(params []module.ValueType, r *rand.Rand, short bool) [][]Val {
 			for range 4 * mix {
 				t := []V128{mixLanes(sh, r), mixLanes(sh, r), mixLanes(sh, r)}
 				vecs = append(vecs, t[:nv])
+			}
+			if nv == 3 && sh.float {
+				nans := ruleNaNs32
+				if sh.bits == 64 {
+					nans = ruleNaNs64
+				}
+				for _, e := range nans {
+					for _, f := range nans {
+						for _, g := range nans {
+							vecs = append(vecs, []V128{splatLanes(e, sh.bits), splatLanes(f, sh.bits), splatLanes(g, sh.bits)})
+						}
+					}
+				}
 			}
 		}
 	}
@@ -377,8 +395,9 @@ func binaryInstance(t testing.TB, b []byte, threshold int) *Instance {
 // shape (NaNs of every payload and sign, signed zeros, infinities, the
 // integers' and the conversions' bounds), alone, paired and mixed in
 // vectors, and on random bits, in the interpreter and natively, and
-// requires the same bits of every result. It reports which instructions
-// native code leaves to Go (ExitSIMD).
+// requires the same bits of every result, and of every lane with a NaN
+// operand the NaN rule's (nan.go, ruleLanes). It reports which
+// instructions native code leaves to Go (ExitSIMD).
 func TestJITSIMDBits(t *testing.T) {
 	if !JITAvailable() {
 		t.Skip("no native code in this build")
@@ -439,6 +458,23 @@ func simdBits(t *testing.T, keep func(simdFunc) bool) (n, calls int, exits []str
 				fails++
 				if fails <= 30 {
 					t.Errorf("%s%s = %#x %#x natively, %#x %#x interpreted", f.name, showVals(args), g.N, g.Hi, w.N, w.Hi)
+				}
+			}
+			if f.result.Kind == module.KindV128 {
+				vs := make([]V128, len(args))
+				for k, a := range args {
+					vs[k] = V128{a.N, a.Hi}
+				}
+				for _, tier := range []struct {
+					name string
+					v    Val
+				}{{"interpreted", w}, {"natively", g}} {
+					if msg := ruleLanes(f.op, vs, V128{tier.v.N, tier.v.Hi}); msg != "" {
+						fails++
+						if fails <= 30 {
+							t.Errorf("%s%s %s: %s", f.name, showVals(args), tier.name, msg)
+						}
+					}
 				}
 			}
 		}

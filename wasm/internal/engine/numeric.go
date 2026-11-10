@@ -3,6 +3,7 @@ package engine
 import (
 	"math"
 	"math/bits"
+	"unsafe"
 )
 
 //go:generate go run ./internal/numgen ops_num_gen.go
@@ -85,14 +86,16 @@ func remU64(a, b uint64, at uint32) uint64 {
 	return a % b
 }
 
-// fmin32 and the rest are min and max: NaN if either operand is, and -0
-// below +0.
+// fmin32 and the rest are min and max: NaN if either operand is, the one
+// pick32 or pick64 picks, and -0 below +0, by the OR (min) or AND (max) of
+// equal operands' bits, read in place to keep the functions inlinable.
 func fmin32(a, b float32) float32 {
 	if a != a || b != b {
-		return a + b
+		return pick32(a, b)
 	}
 	if a == b {
-		return math.Float32frombits(math.Float32bits(a) | math.Float32bits(b))
+		x := *(*uint32)(unsafe.Pointer(&a)) | *(*uint32)(unsafe.Pointer(&b))
+		return *(*float32)(unsafe.Pointer(&x))
 	}
 	if a < b {
 		return a
@@ -102,10 +105,11 @@ func fmin32(a, b float32) float32 {
 
 func fmax32(a, b float32) float32 {
 	if a != a || b != b {
-		return a + b
+		return pick32(a, b)
 	}
 	if a == b {
-		return math.Float32frombits(math.Float32bits(a) & math.Float32bits(b))
+		x := *(*uint32)(unsafe.Pointer(&a)) & *(*uint32)(unsafe.Pointer(&b))
+		return *(*float32)(unsafe.Pointer(&x))
 	}
 	if a > b {
 		return a
@@ -115,10 +119,11 @@ func fmax32(a, b float32) float32 {
 
 func fmin64(a, b float64) float64 {
 	if a != a || b != b {
-		return a + b
+		return pick64(a, b)
 	}
 	if a == b {
-		return math.Float64frombits(math.Float64bits(a) | math.Float64bits(b))
+		x := *(*uint64)(unsafe.Pointer(&a)) | *(*uint64)(unsafe.Pointer(&b))
+		return *(*float64)(unsafe.Pointer(&x))
 	}
 	if a < b {
 		return a
@@ -128,10 +133,11 @@ func fmin64(a, b float64) float64 {
 
 func fmax64(a, b float64) float64 {
 	if a != a || b != b {
-		return a + b
+		return pick64(a, b)
 	}
 	if a == b {
-		return math.Float64frombits(math.Float64bits(a) & math.Float64bits(b))
+		x := *(*uint64)(unsafe.Pointer(&a)) & *(*uint64)(unsafe.Pointer(&b))
+		return *(*float64)(unsafe.Pointer(&x))
 	}
 	if a > b {
 		return a
@@ -139,7 +145,8 @@ func fmax64(a, b float64) float64 {
 	return b
 }
 
-// The roundings return a quiet NaN for a NaN, which math's return as it is.
+// The roundings return a NaN quieted, which math's return as it is: a NaN
+// plus itself is that NaN quieted, whichever operand comes first.
 
 func fceil32(a float32) float32 {
 	if a != a {

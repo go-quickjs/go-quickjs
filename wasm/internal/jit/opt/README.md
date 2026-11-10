@@ -280,7 +280,8 @@ R10 or X14 (X17 or D30 on arm64).
 
 Each instruction compiles to the baseline's sequence for it where the
 result's bits depend on the instruction chosen -- the floats (the
-baseline README's Floats: the same SSE instructions, operand orders,
+baseline README's Floats: the same SSE instructions, operand orders --
+the first operand the destination, for the NaN rule's choice --
 roundings, min/max, truncation bounds and unsigned conversions), so that
 the results are the interpreter's bit for bit -- with the operands where
 the allocator put them. copysign is done on the bits in general

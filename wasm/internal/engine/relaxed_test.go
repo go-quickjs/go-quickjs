@@ -67,7 +67,7 @@ func TestFMA32(t *testing.T) {
 		if math.IsInf(float64(c), 0) || math.IsNaN(float64(c)) {
 			continue
 		}
-		got, want := fma32(a, b, c), exactFMA32(a, b, c)
+		got, want := fma32(a, b, c, false), exactFMA32(a, b, c)
 		if math.Float32bits(got) != math.Float32bits(want) {
 			t.Fatalf("fma32(%g, %g, %g) = %g, want %g", a, b, c, got, want)
 		}

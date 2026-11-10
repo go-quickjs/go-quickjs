@@ -10,9 +10,8 @@ import (
 // compute them, most the deterministic ones'.
 
 // simdRelaxed compiles a relaxed SIMD instruction natively, reporting
-// whether it did. f32x4's relaxed_madd and relaxed_nmadd are left to Go:
-// the interpreter fuses them by its own rounding to odd, whose NaNs are
-// those of the double operations it is made of, not FMLA's.
+// whether it did. f32x4's relaxed_madd and relaxed_nmadd are left to Go,
+// where the interpreter fuses them by its own rounding to odd.
 func (c *compiler) simdRelaxed(op opcode.Opcode) bool {
 	a := c.a
 	switch op {
@@ -39,11 +38,14 @@ func (c *compiler) simdRelaxed(op opcode.Opcode) bool {
 			a.V2(arm64.VUqxtn, arm64.V32, x, x)
 		})
 	case opcode.F64x2Qfma, opcode.F64x2Qfms:
-		// FMLA into the addend, as the FMADD math.FMA compiles to: one
-		// rounding, the addend's NaN first, then the second factor's,
-		// which Go's code for relaxedMaddF64x2 makes the first; nmadd's
-		// first factor negated first, a NaN's sign flipped as FNEG flips
-		// it.
+		// FMLA into the addend, the factors in their order: one
+		// rounding, and the NaN of the interpreter's fmaPick64 -- a
+		// signaling NaN of the addend, the first factor
+		// or the second ahead of a quiet one, in that order, and the
+		// default NaN of a quiet addend and an infinity times a zero.
+		// nmadd's first factor is negated first, a NaN's sign flipped
+		// as FNEG flips it.
+		s := arm64.V64
 		z := c.pop()
 		y := c.pop()
 		x := c.pop()
@@ -51,10 +53,10 @@ func (c *compiler) simdRelaxed(op opcode.Opcode) bool {
 		xa := c.readXIn(x, xTmp)
 		yb := c.readXIn(y, xTmp2)
 		if op == opcode.F64x2Qfms {
-			a.V2(arm64.VFneg, arm64.V64, xTmp, xa)
+			a.V2(arm64.VFneg, s, xTmp, xa)
 			xa = xTmp
 		}
-		a.V3(arm64.VFmla, arm64.V64, zc, yb, xa)
+		a.V3(arm64.VFmla, s, zc, xa, yb)
 		c.free(x)
 		c.free(y)
 		c.pushReg(v128, uint8(zc))

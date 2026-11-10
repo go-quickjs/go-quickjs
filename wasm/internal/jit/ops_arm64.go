@@ -429,9 +429,10 @@ func (c *compiler) extend(f func(arm64.Reg), t module.Kind) {
 	c.pushReg(t, uint8(r))
 }
 
-// floatOp compiles a two-operand float instruction. min and max are FMIN
-// and FMAX: a NaN operand gives the NaN an addition of the operands does,
-// as the interpreter's a + b, and -0 is below +0.
+// floatOp compiles a two-operand float instruction, its first operand the
+// first source, which gives the NaN of the interpreter's pick32 and pick64.
+// min and max are FMIN and FMAX: a NaN operand gives the NaN an addition
+// of the operands does, and -0 is below +0.
 func (c *compiler) floatOp(op arm64.FOp) {
 	b := c.pop()
 	x := c.pop()

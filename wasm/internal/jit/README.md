@@ -469,19 +469,42 @@ pause.
 
 ## Floats
 
-The numerics are the interpreter's, bit for bit where the spec fixes the
-bits, on each architecture: the interpreter's operators compile to its own
-instructions, whose NaNs differ from the other's (an arm64 operation with a
-signaling NaN operand returns that NaN quieted, ahead of a quiet one; x86's
-returns its first operand's).
+The numerics are the interpreter's, bit for bit, NaNs included. The spec
+lets an operation with NaN operands return any of their NaNs, and the
+interpreter does not leave the choice to the order Go puts an operator's
+operands in: it picks by a rule (`engine/nan.go`), the one the host's
+instructions follow when their operands are in the operation's order, so
+that native code emits the operation's instruction and nothing more:
+
+- add, sub, mul, div, min and max, scalar and lane by lane, return one of
+  their NaN operands quieted. On amd64 it is the first operand's if that
+  is a NaN, else the second's -- SSE's choice, the first source operand
+  being the destination; on arm64 a signaling NaN comes ahead of a quiet
+  one, and of two of a kind the first operand's -- A64's with the default
+  NaN off.
+- Of operands that are not NaNs (inf-inf, 0*inf, 0/0) they return the
+  host's default NaN: negative on amd64, positive on arm64.
+- A fused multiply-add takes, on amd64, the first NaN of the first factor,
+  the second and the addend, quieted, nmadd's negation leaving its sign --
+  what FMA3 gives; on arm64 FMLA's: a signaling NaN of the addend, the
+  first factor (negated for nmadd) or the second ahead of a quiet one, in
+  that order, and the default NaN of a quiet addend and an infinity times
+  a zero. Unfused, relaxed_madd and nmadd are a multiplication and an
+  addition (p + c) or subtraction (c - p), each by the rule.
+- sqrt, the roundings, demote and promote return their NaN operand
+  quieted; abs, neg and copysign are operations on the sign bit.
+
+`TestNaNRule` holds the interpreter to the rule, and `TestJITFloatBits`
+and `TestJITSIMDBits` native code too, of every pair of NaNs in both
+orders and every triple for the multiply-adds.
 
 On amd64:
 - add, sub, mul, div, sqrt, and the conversions between f32 and f64: the
-  SSE instruction Go compiles the interpreter's operator to.
+  SSE instruction, its first operand the destination.
 - ceil, floor, trunc, nearest: ROUNDSS and ROUNDSD, which quiet a NaN as the
   interpreter's `a + a` does; SSE4.1 is checked (`x/sys/cpu`).
-- min, max: a NaN operand gives the sum, a quiet NaN; equal operands the OR
-  (min) or AND (max) of their bits, so that -0 is below +0.
+- min, max: a NaN operand gives the sum, the rule's NaN; equal operands the
+  OR (min) or AND (max) of their bits, so that -0 is below +0.
 - abs, neg, copysign: masks of the sign bit, never arithmetic.
 - The trapping truncations compare with the interpreter's bounds, as
   doubles -- an f32 widened first, exactly -- and trap on NaN; an unsigned
@@ -496,14 +519,12 @@ clz and ctz are BSR and BSF with a CMOV for 0; popcnt is POPCNT, checked.
 On arm64, with the FPCR Go leaves (no default NaN, no flush to zero, no
 alternate handling):
 - add, sub, mul, div, sqrt and the conversions between f32 and f64: the
-  FP instruction Go compiles the interpreter's operator to.
+  FP instruction, its first source the first operand.
 - ceil, floor, trunc, nearest: FRINTP, FRINTM, FRINTZ and FRINTN, which
   quiet a NaN as `a + a` does.
 - min, max: FMIN and FMAX. Their NaN is the one FADD of the same operands
-  gives -- both process NaNs alike, a signaling NaN ahead of a quiet one,
-  the first operand ahead of the second -- which is the interpreter's
-  `a + b`; and they order -0 below +0, as the interpreter's OR and AND of
-  equal operands' bits do.
+  gives, the rule's; and they order -0 below +0, as the interpreter's OR
+  and AND of equal operands' bits do.
 - abs, neg, copysign: AND, EOR and ORR of the sign bit in a general
   register, never FABS or FNEG.
 - The trapping truncations compare with the interpreter's bounds in the
@@ -580,11 +601,10 @@ summed; shuffle by TBL of a two-register table, the operands copied into
 V30 and V31.
 
 The float lanes are the scalar operations' lane by lane (see Floats): the
-interpreter's operators on each lane compile to the scalar forms of the
-same instructions, whose NaNs and zeros the packed forms give in each
-lane. abs and neg are masks of the sign bits. On amd64 min and max are
-MINPS and MAXPS both ways round, ORed (min) or ANDed (max) so that -0 is
-below +0, and the lanes' sum, the interpreter's `a + b`, where a NaN is;
+packed forms of the scalar instructions, whose NaNs and zeros are the
+rule's in each lane. abs and neg are masks of the sign bits. On amd64 min
+and max are MINPS and MAXPS both ways round, ORed (min) or ANDed (max) so
+that -0 is below +0, and the lanes' sum, the rule's NaN, where a NaN is;
 pmin and pmax are MINPS and MAXPS of the second operand and the first;
 the roundings ROUNDPS and ROUNDPD. The unsigned conversion of i32 lanes
 to f32 converts the high 16 bits, scaled exactly, and the low 16, and
@@ -611,21 +631,13 @@ implicit XMM0; relaxed_dot_i8x16_i7x16_s PMADDUBSW, and its add, with
 AVX-VNNI (unsigned second operand) or AVX-VNNI-INT8 (signed), PMADDWD of
 the even and the odd bytes widened to 16 bits, summed, else PMADDUBSW,
 PMADDWD of ones and PADDD. relaxed_madd and nmadd unfused are MULPS (MULPD)
-and ADDPS or SUBPS; fused, the interpreter's single precision is a rounding
-to odd of its own, and its double precision math.FMA, whose NaNs differ
-from those of FMA3's forms, so they exit. On arm64 every relaxed
-instruction is the deterministic one's but f64x2's relaxed_madd and
-nmadd, FMLA into the addend, as math.FMA's FMADD, nmadd's factor negated
-by FNEG first; f32x4's exit, its fusion being the interpreter's rounding
-to odd.
-
-The operand order of a commutative operation decides which of two NaNs
-its result is. The interpreter's lane functions compile to scalar
-instructions whose order Go chooses; native code puts its operands in the
-order the interpreter's code has them -- first operand first for every
-lane-wise add, mul, min and max, the second factor first for f64x2's
-relaxed_madd and nmadd -- and `TestJITSIMDBits` holds it to them: a
-change of Go's choice shows as a difference there.
+of the factors in order, then ADDPS of the product and the addend or SUBPS
+of the product from the addend, each operation's first operand its
+destination; fused they exit, FMA3 being VEX-encoded. On arm64 every
+relaxed instruction is the deterministic one's but f64x2's relaxed_madd
+and nmadd, FMLA into the addend of the factors in order, nmadd's first
+factor negated by FNEG first; f32x4's exit, its fusion being the
+interpreter's rounding to odd.
 
 `TestJITSIMDBits` (engine) runs every SIMD instruction that is not a load,
 a store or a constant, relaxed ones included, on the edges of each lane

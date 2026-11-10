@@ -895,9 +895,10 @@ func (g *gen) value(v *Value, rest []*Value) {
 		}
 		g.done(v, int(t))
 	case OpFAdd, OpFSub, OpFMul, OpFDiv, OpFMin, OpFMax:
-		// min and max are FMIN and FMAX: a NaN operand gives the NaN an
-		// addition of the operands does, as the interpreter's a + b, and
-		// -0 is below +0.
+		// The first operand the first source, for the interpreter's NaN
+		// (pick32, pick64). min and max are FMIN and FMAX: a NaN operand
+		// gives the NaN an addition of the operands does, and -0 is below
+		// +0.
 		t := g.defX(v)
 		xa, xb := g.intoX(v.Args[0], x0), g.intoX(v.Args[1], x1)
 		if v.Type == TF32 {

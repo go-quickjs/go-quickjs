@@ -29,7 +29,7 @@ func (c *compiler) vcmpf(op amd64.VOp, p uint8, rev bool) {
 }
 
 // vminmax compiles min and max: a NaN in either lane gives the lanes' sum,
-// the interpreter's a + b; equal lanes the OR (min) or AND (max) of their
+// x's lanes the destination, the NaN the interpreter picks; equal lanes the OR (min) or AND (max) of their
 // bits, so that -0 is below +0; others the smaller or larger. MINPS and
 // MAXPS give their second operand for a NaN or equal lanes: both orders
 // ORed or ANDed give the zeros' answer, and the sum replaces the unordered
