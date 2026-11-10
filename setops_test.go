@@ -264,15 +264,13 @@ func TestWeakReferencesAreWeak(t *testing.T) {
 	rt := quickjs.New()
 	defer rt.Close()
 
-	if _, err := rt.Eval(`
+	// Check the target in the turn that creates it. Once Eval returns,
+	// a collection may clear it before the next Eval begins.
+	if v, err := rt.Eval(`
 		var ref, kept = {}, keptRef = new WeakRef(kept);
 		(function () { var o = {}; ref = new WeakRef(o); })();
+		ref.deref() ? "live" : "cleared";
 	`); err != nil {
-		t.Fatal(err)
-	}
-	// The target was kept alive for the turn it was made in, which is what
-	// stops a reference being created and found empty in the same breath.
-	if v, err := rt.Eval(`ref.deref() ? "live" : "cleared"`); err != nil {
 		t.Fatal(err)
 	} else if v.String() != "live" {
 		t.Errorf("before collection = %q, want live", v.String())
