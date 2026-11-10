@@ -27,7 +27,8 @@ import (
 
 // TestCompileCost times what a module costs before its code runs, phase by
 // phase, over a corpus: decoding, validating, the interpreter's compile of
-// every defined function, the baseline JIT's compile of each and the
+// every defined function, the record of each one's frame from validation's
+// bound, the baseline JIT's compile of each in that frame and the
 // placement of its code. WASM_COMPILE_COST names the corpus, a
 // comma-separated list of .wasm files and "spec" (every module of
 // WASM_SPEC_DIR's core and legacy scripts); WASM_COMPILE_N is how many
@@ -135,13 +136,25 @@ func TestCompileCost(t *testing.T) {
 			}
 		}
 	})
-	codes := make([]*Code, len(mods))
 	measure("interp compile", func() {
-		for i, m := range mods {
+		for _, m := range mods {
 			c := &Code{Module: m, fns: make([]atomic.Pointer[compiled], len(m.Functions))}
 			for fn, f := range m.Functions {
 				if !f.Imported {
 					c.fns[fn].Store(compileFunction(c, uint32(fn)))
+				}
+			}
+		}
+	})
+	// The records native code runs a function in from its first call,
+	// which the baseline compiles from: their frames validation's bounds.
+	codes := make([]*Code, len(mods))
+	measure("bound frame", func() {
+		for i, m := range mods {
+			c := &Code{Module: m, fns: make([]atomic.Pointer[compiled], len(m.Functions))}
+			for fn, f := range m.Functions {
+				if !f.Imported {
+					c.fns[fn].Store(c.boundRecord(uint32(fn)))
 				}
 			}
 			codes[i] = c

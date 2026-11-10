@@ -320,14 +320,18 @@ jobs:
           fi
 
       # Every function compiled at its first call, where the wasm JIT runs
-      # (amd64 on Linux and Windows, arm64 on macOS and Linux); then every
-      # call of a function with loops going on natively from a loop's head
-      # at its first back edge (WASM_JIT=osr); and the JIT checked against
-      # the interpreter call by call.
+      # (amd64 on Linux and Windows, arm64 on macOS and Linux): as by
+      # default, no body compiled for the interpreter but the refused
+      # functions' (WASM_JIT=on), and the first call of a function with
+      # loops entering its native code at its first back edge (eager);
+      # then every call of a function with loops going on natively from a
+      # loop's head at its first back edge (WASM_JIT=osr); and the JIT
+      # checked against the interpreter call by call.
       - name: Run the spec scripts under the JIT
         if: matrix.arch == 'native'
         shell: bash
         run: |
+          WASM_JIT=on WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" WASM_THREADS_DIR="$GITHUB_WORKSPACE/wasm-threads" go test -tags quickjs_jit ./wasm/internal/spectest -count=1 -v 2>&1 | tee on.log | grep -E "spec:|jit:|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
           WASM_JIT=eager WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" WASM_THREADS_DIR="$GITHUB_WORKSPACE/wasm-threads" go test -tags quickjs_jit ./wasm/internal/spectest ./wasm/internal/engine -count=1 -v 2>&1 | tee jit.log | grep -E "spec:|jit:|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
           WASM_JIT=osr WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" WASM_THREADS_DIR="$GITHUB_WORKSPACE/wasm-threads" go test -tags quickjs_jit ./wasm/internal/spectest ./wasm/internal/engine -count=1 -v 2>&1 | tee osr.log | grep -E "spec:|jit:|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
           WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" WASM_THREADS_DIR="$GITHUB_WORKSPACE/wasm-threads" go test -tags quickjs_jit ./wasm/internal/spectest -run TestJITDifferential -count=1 -v 2>&1 | tee diff.log | grep -E "modules|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0

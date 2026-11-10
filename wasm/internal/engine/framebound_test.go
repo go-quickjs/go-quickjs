@@ -16,8 +16,9 @@ import (
 )
 
 // checkFrameBounds checks that validation's bound of each defined function's
-// frame (frameBound), by which native code calling it sizes its frame,
-// holds the frame compileFunction makes, and counts the functions whose
+// frame (frameBound, boundRecord), by which native code calling it sizes its
+// frame and native code run from its first call keeps it, holds the frame
+// compileFunction makes, and counts the functions whose
 // bound is that frame exactly.
 func checkFrameBounds(t *testing.T, name string, m *module.Module) (funcs, exact int) {
 	t.Helper()
@@ -33,6 +34,13 @@ func checkFrameBounds(t *testing.T, name string, m *module.Module) (funcs, exact
 		}
 		if cd.nslots > n || cd.nativeRefSlots() > r {
 			t.Errorf("%s: function %d: frame of %d slots and %d reference slots, bound %d and %d", name, fn, cd.nslots, cd.nativeRefSlots(), n, r)
+		}
+		// The record of the bound, which native code run from a first
+		// call keeps and the interpreter's body runs in once built.
+		b := c.boundRecord(uint32(fn))
+		if b.nslots != n || b.nativeRefSlots() != r || cd.rslots > b.rslots || cd.nlocals != b.nlocals || cd.rlocals != b.rlocals {
+			t.Errorf("%s: function %d: bound record of %d slots, %d reference slots (%d native), locals %d and %d; frame %d, %d (%d), %d and %d",
+				name, fn, b.nslots, b.rslots, b.nativeRefSlots(), b.nlocals, b.rlocals, cd.nslots, cd.rslots, cd.nativeRefSlots(), cd.nlocals, cd.rlocals)
 		}
 		funcs++
 		if cd.nslots == n && cd.nativeRefSlots() == r {

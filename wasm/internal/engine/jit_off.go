@@ -21,6 +21,8 @@ func (c *Code) enableJIT(int) bool { return false }
 
 func (c *Code) jitFromEnv() {}
 
+func (c *Code) nativeFirst() bool { return false }
+
 func (c *Code) setOSRThreshold(int) {}
 
 func (c *Code) setOptThreshold(int) {}

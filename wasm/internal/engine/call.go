@@ -11,11 +11,13 @@ func (x *exec) frameAt(d int) *frame {
 	return x.frames[d]
 }
 
-// codeOf returns wasm function fn's compiled body.
+// codeOf returns wasm function fn's record.
 func codeOf(fn *Function) *compiled { return fn.Inst.Code.get(fn.Index) }
 
-// run runs wasm function fn's body in a frame of slots l and r, holding its
-// arguments, and leaves its results there. The frame was taken at stack
+// run runs wasm function fn, whose record is code, in a frame of slots l and
+// r, holding its arguments, and leaves its results there: natively where it
+// has native code or is compiled now, else in the interpreter, its body
+// built if it is not. The frame was taken at stack
 // position (nc, nsp, rc, rsp), where a tail call takes its callee's.
 func (x *exec) run(fn *Function, code *compiled, l []uint64, r []Ref, nc, nsp, rc, rsp int) {
 	x.depth++
@@ -41,6 +43,9 @@ func (x *exec) run(fn *Function, code *compiled, l []uint64, r []Ref, nc, nsp, r
 	f := x.frameAt(x.depth)
 	f.l, f.r, f.inst = l, r, fn.Inst
 	if jitBuilt {
+		if !code.built {
+			code = fn.Inst.Code.interp(fn.Index)
+		}
 		f.osr = osrBudget(fn.Inst.Code, code)
 	}
 	c := runSeq(f, code.body)
@@ -102,6 +107,9 @@ func (x *exec) tailChain(f *frame, code *compiled, l []uint64, r []Ref, nc, nsp,
 			}
 		}
 		if jitBuilt {
+			if !callee.built {
+				callee = fn.Inst.Code.interp(fn.Index)
+			}
 			f.osr = osrBudget(fn.Inst.Code, callee)
 		}
 		c := runSeq(f, callee.body)

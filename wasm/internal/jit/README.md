@@ -42,15 +42,33 @@ This package compiles; the engine places, enters and handles exits:
 
 ## Tiers
 
-A function runs first in the interpreter. `run` counts its calls
-(`compiled.hot`); past the Code's threshold (`DefaultJITThreshold`, 10; 0
-compiles at the first call, which `WASM_JIT=eager` asks for) the
-**baseline** compiler compiles it: one pass over the validated body,
-emitting a fixed sequence for each instruction over a register cache of the
-operand stack. Later calls, from the interpreter or from native code, enter
-the native code. A function the compiler refuses (see Refusals) is marked
-and stays in the interpreter for good; so does one whose code cannot be
-placed. A compiler panic is a refusal (`internal`), never a crash.
+A function is compiled by the **baseline** compiler at its first call
+(`DefaultJITThreshold`, 0): one pass over the validated body, emitting a
+fixed sequence for each instruction over a register cache of the operand
+stack. Its record (`compiled`) is then made from validation's bound of the
+frame (`module.FrameBound`, `Code.boundRecord`) -- the slots of the locals
+and of the deepest operand stack, the reference slots and the legacy trys'
+caught slots -- without the interpreter's compile of the body, which
+`Code.interp` makes only when a call of the function first runs in the
+interpreter, into the frame the record already has: the bound holds the
+frame the interpreter's compile makes (`TestFrameBound`), and the stack
+positions' slots are the same in both. Calls from the interpreter or from
+native code enter the native code. A function the compiler refuses (see
+Refusals) is marked, its body is built, and it stays in the interpreter for
+good; so does one whose code cannot be placed. A compiler panic is a
+refusal (`internal`), never a crash.
+
+A Code given a threshold above 0 (`EnableJIT(n)`, `WASM_JIT=N`) runs a
+function in the interpreter first, its body compiled at its first call and
+its frame the interpreter's: `run` counts its calls (`fnJIT.hot`) and past
+the threshold the baseline compiles it. The JIT's state of a function
+(`fnJIT`) is shared by its records: building the body stores a new record,
+with the old one's frame and state, so that a record never changes once
+stored but for that state. Concurrent first calls make one record (a
+compare-and-swap) and one compile (`codeJIT.mu`, `Code.mu` for bodies).
+Without the JIT -- a build without it, a Code that never asked for it (the
+Go API's default, a debugger's runtime) -- every function's body is
+compiled for the interpreter at its first call, with its own frame.
 
 A call that runs in the interpreter counts its loops' back edges (the
 frame's `osr`, set when the call begins); past the Code's OSR threshold
@@ -65,9 +83,9 @@ copy of it deeper on the stack being the one that compiled it -- goes on
 natively at its first back edge. A function the compiler refuses has its
 calls' loops stop counting, for the call and for later ones. Under
 `WASM_JIT=eager` the first call of each function with loops runs in the
-interpreter and goes on natively at its first back edge, and under
-`WASM_JIT=osr` every call Go or the interpreter makes does, so that the
-spec scripts run the loops' entries.
+interpreter, its body built, and goes on natively at its first back edge,
+and under `WASM_JIT=osr` every call Go or the interpreter makes does, so
+that the spec scripts run the loops' entries.
 
 The **optimizing** tier (`opt/README.md`, package `opt`) builds SSA from
 the body, optimizes it, allocates registers with a linear scan and lowers

@@ -74,6 +74,13 @@ type codeJIT struct {
 // loops or its calls.
 const optPollWeight = 250
 
+// nativeFirst reports whether native code runs the code's functions from
+// their first calls, which then need no body for the interpreter.
+func (c *Code) nativeFirst() bool {
+	cj := c.jit.Load()
+	return cj != nil && cj.threshold == 0
+}
+
 // nativeFn is a function's native code.
 type nativeFn struct {
 	raw     *ijit.RawCode
@@ -646,34 +653,16 @@ func (c *Code) calleeFrame(f uint32) (nslots, refSlots int) {
 // frameBound is function f's frame as validation bounds it
 // (module.FrameBound): the numeric slots, and the reference slots its
 // native code would use, of a frame that holds as much as compileFunction
-// would make one hold, or more. ok is false for a body not validated.
+// would make one hold, or more -- boundRecord's. ok is false for a body not
+// validated.
 func (c *Code) frameBound(f uint32) (nslots, refSlots int, ok bool) {
-	m := c.Module
-	fn := &m.Functions[f]
-	b := fn.Frame
-	if fn.Imported || b.Stack == 0 {
+	nlocals, rlocals, b, ok := c.boundLocals(f)
+	if !ok {
 		return 0, 0, false
 	}
-	sig := m.Types[fn.TypeIndex].Func
-	_, nlocals, rlocals := layout(sig.Params)
-	r := reader{b: m.Bytes, pc: int(fn.Code.Offset)}
-	for n := r.u32(); n > 0; n-- {
-		count := int(r.u32())
-		switch t := r.valueType(); {
-		case t.IsRef():
-			rlocals += count
-		case t.Kind == module.KindV128:
-			nlocals += 2 * count
-		default:
-			nlocals += count
-		}
-	}
-	_, rn, rr := layout(sig.Results)
-	nlocals, rlocals = max(nlocals, rn), max(rlocals, rr)
-	height := int(b.Stack) - 1
-	nslots = nlocals + 2*(height+1)
+	nslots = nlocals + 2*int(b.Stack)
 	if b.Refs || rlocals > 0 || b.Tries > 0 {
-		refSlots = rlocals + height + 1 + int(b.Tries)
+		refSlots = rlocals + int(b.Stack) + int(b.Tries)
 	}
 	return nslots, refSlots, true
 }

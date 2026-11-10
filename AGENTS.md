@@ -390,7 +390,9 @@ design, which a change to that design updates in the same commit.
   decoder's BSD attribution, which V8's license requires, stays.
 - The JIT's frames are the interpreter's (`engine/compile.go`): local k is
   slot k, stack position h slot `nlocals + 2h`, the results from slot 0, and
-  an i32 or f32 in a slot has its upper half clear. A call crosses between
+  an i32 or f32 in a slot has its upper half clear. A function the JIT runs
+  from its first call has a frame of validation's bound and no body for the
+  interpreter until a call runs there (`Code.boundRecord`, `Code.interp`). A call crosses between
   the tiers in either direction and a native function resumes after any
   exit, so a change to the interpreter's frames, its call path or its poll
   is a change to the JIT's too. Native code computes the interpreter's

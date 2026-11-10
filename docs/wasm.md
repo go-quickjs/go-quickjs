@@ -415,7 +415,10 @@ closures: each expression a tree of typed nodes, each statement returning
 whether to go on, branch or return. The baseline JIT (`wasm/internal/jit`)
 compiles a function to native code in one pass over its validated body, with
 a register cache of the operand stack over the interpreter's own frames, so a
-call crosses between the tiers in either direction. On amd64 an optimizing
+call crosses between the tiers in either direction. Where the JIT runs, it
+compiles a function at its first call, its frame sized by validation's
+bound, and the interpreter's compile of the body is never made unless a
+call runs there. On amd64 an optimizing
 tier (`wasm/internal/jit/opt`) recompiles a function whose baseline code
 was called 30,000 times, or whose loops ran long, from SSA with a register
 allocator, in the baseline code's place; `WASM_JIT_OPT=off` turns it off.
@@ -441,11 +444,19 @@ linux/amd64, windows/amd64 and darwin/arm64. On linux/arm64 only the Go API
 reaches the wasm JIT. A runtime made `WithDebugger` runs wasm in the
 interpreter.
 
-A function is compiled once it has been called 10 times
-(`engine.DefaultJITThreshold`), or once a call of it has run 1,000 back
-edges of its loops in the interpreter (`engine.DefaultOSRThreshold`): the
-call then goes on in native code from the loop's head, on-stack replacement,
-so a function called once that loops for long runs natively too. Each loop
+A function is compiled to native code at its first call
+(`engine.DefaultJITThreshold`, 0), without the interpreter's closures: the
+interpreter compiles the body only of a function the JIT refuses, or of
+one a call runs in the interpreter for a test (`WASM_JIT=eager`, `osr`). A
+Code given a threshold above 0 (`EnableJIT(n)`, `WASM_JIT=N`) runs a
+function in the interpreter for its first n calls, and compiles it then,
+or once a call of it has run 1,000 back edges of its loops in the
+interpreter (`engine.DefaultOSRThreshold`): the call then goes on in native
+code from the loop's head, on-stack replacement. Against compiling after 10
+calls, with the interpreter's closures built for every function called,
+compiling at the first call makes the Go-built programs' first runs as
+fast or up to 16% faster (json 100 ms to 84), their second runs up to 13%
+faster, and allocates a twelfth of the objects in the first run. Each loop
 has an entry of its own in the function's code, which loads what resuming
 after an exit to Go does; both tiers keep everything in the frame's slots at
 a loop's head, so nothing is translated. A function the JIT refuses is tried
@@ -562,7 +573,7 @@ The environment names them:
 | `WASM_SPEC_DIR` | a WebAssembly/spec checkout: `test/core`, `test/legacy` and `test/js-api` |
 | `WASM_THREADS_DIR` | a WebAssembly/threads checkout, for `test/core/threads` |
 | `WASM_SPEC_ONLY` | runs only the scripts whose path contains it |
-| `WASM_JIT` | in a JIT build, compiles every function: `eager` at its first call, a call with loops entering native code at its first back edge; `osr` so for every call Go or the interpreter makes; `on` or `1` after 10 calls; a number after that many |
+| `WASM_JIT` | in a JIT build, compiles every function: `eager` at its first call, a call with loops entering native code at its first back edge; `osr` so for every call Go or the interpreter makes; `on` or `1` at its first call, the interpreter compiling no body it does not run; a number after that many calls in the interpreter |
 | `WASM_JIT_OSR` | the back edges a call runs before its loop enters native code, or `off` |
 | `QUICKJS_COMPARE_NODE_WASM=1` | runs the comparisons with the `node` on `PATH` |
 | `WASI_TESTSUITE_DIR` | wasi-testsuite's `tests` directory |

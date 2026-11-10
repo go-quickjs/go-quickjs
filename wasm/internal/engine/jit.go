@@ -7,11 +7,17 @@ import (
 	"time"
 )
 
-// The baseline JIT (wasm/internal/jit) compiles a function to native code
-// once it has been called often enough, in a build with the quickjs_jit tag
-// on a platform with a backend, for Code that asks for it (EnableJIT). Its
-// frames are the interpreter's, so a call may cross between the tiers in
-// either direction; jit_on.go enters the code and handles its exits.
+// The baseline JIT (wasm/internal/jit) compiles a function to native code,
+// in a build with the quickjs_jit tag on a platform with a backend, for
+// Code that asks for it (EnableJIT): by default at its first call, with the
+// frame validation bounded (module.FrameBound), so that a function native
+// code runs has no body compiled for the interpreter; or, with a threshold,
+// once it has been called that many times, running in the interpreter
+// until then. Its frames are the interpreter's, so a call may cross between
+// the tiers in either direction; jit_on.go enters the code and handles its
+// exits. The interpreter compiles a function's body when a call first runs
+// there: one the JIT refuses, one called before the threshold, or a call
+// entering its loops' native code (below).
 //
 // A call running in the interpreter -- of a function called too few times
 // to be compiled -- counts the back edges of its loops; past the Code's
@@ -19,14 +25,14 @@ import (
 // code, entered at the head of the loop it is in (on-stack replacement),
 // which runs it to its return.
 //
-// WASM_JIT, read when a Code is made, turns it on for tests: "eager"
-// compiles each function at its first call, "on" or "1" at the default
-// threshold, another number at that many calls, and "off", "0" or nothing
-// leaves it to EnableJIT. Under "eager" the first call of a function with
-// loops still runs in the interpreter and enters the native code at its
-// first back edge, so that loops' entries are tried; "osr" does so for every
-// call Go or the interpreter makes (EnterLoopsForTest). WASM_JIT_OSR sets
-// the OSR threshold: a number of back edges, or "off".
+// WASM_JIT, read when a Code is made, turns it on for tests: "on" or "1"
+// compiles each function at its first call (DefaultJITThreshold), as
+// "eager" does, another number at that many calls, and "off", "0" or
+// nothing leaves it to EnableJIT. Under "eager" the first call of a
+// function with loops runs in the interpreter and enters the native code at
+// its first back edge, so that loops' entries are tried; "osr" does so for
+// every call Go or the interpreter makes (EnterLoopsForTest). WASM_JIT_OSR
+// sets the OSR threshold: a number of back edges, or "off".
 //
 // The optimizing tier (wasm/internal/jit/opt) recompiles a function whose
 // baseline code was called often enough (DefaultOptThreshold), where it is
@@ -39,9 +45,10 @@ import (
 // is written to, with the compilers' marks, for a profile's native samples
 // (wasm/internal/jit/opt/README.md, Validation).
 
-// DefaultJITThreshold is the number of calls after which a function is
-// compiled, unless EnableJIT is given another.
-const DefaultJITThreshold = 10
+// DefaultJITThreshold is the number of calls a function runs in the
+// interpreter before it is compiled, unless EnableJIT is given another:
+// none, each function is compiled at its first call.
+const DefaultJITThreshold = 0
 
 // DefaultOptThreshold is the number of calls of a function's baseline code
 // after which the optimizing tier compiles it, unless SetOptThreshold gives
@@ -70,9 +77,11 @@ func (c *Code) SetOptThreshold(n int) { c.setOptThreshold(n) }
 const DefaultOSRThreshold = 1000
 
 // EnableJIT has the code's functions compiled to native code once each has
-// been called threshold times, at its first call for 0. It reports whether
-// this build and platform can run native code; where they cannot, the
-// interpreter runs everything.
+// been called threshold times, running in the interpreter until then; for 0
+// each is compiled at its first call, without the interpreter's compile of
+// its body unless a call runs there, and a negative threshold is
+// DefaultJITThreshold. It reports whether this build and platform can run
+// native code; where they cannot, the interpreter runs everything.
 func (c *Code) EnableJIT(threshold int) bool { return c.enableJIT(threshold) }
 
 // JITAvailable reports whether this build and platform can run native code.

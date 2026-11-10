@@ -45,8 +45,10 @@ type (
 	tref  func(*frame) Ref
 )
 
-// Code is a module compiled for the engine: its functions' bodies, compiled
-// on their first call and shared by every instance of the module.
+// Code is a module compiled for the engine: its functions' records -- each
+// one's frame, its body as the interpreter compiled it once the interpreter
+// has needed it, and its native code's state -- made on their first call
+// and shared by every instance of the module.
 type Code struct {
 	Module *module.Module
 	fns    []atomic.Pointer[compiled]
@@ -64,7 +66,10 @@ func NewCode(m *module.Module) *Code {
 	return c
 }
 
-// compiled is a function body ready to run.
+// compiled is a function's record: its frame, its body ready to run in the
+// interpreter if built says so, and the state of its native code. A record
+// is not changed once stored, but for that state, which the records of one
+// function share: building the body stores a new record.
 type compiled struct {
 	nslots, rslots int
 	// nlocals and rlocals are the numeric and reference slots before the
@@ -76,7 +81,11 @@ type compiled struct {
 	nlocals, rlocals int
 	refs             bool
 	caught           int
-	body             []stmt
+	// built says body and epi are the interpreter's: a record made for a
+	// function native code runs from its first call has none until the
+	// interpreter needs them (Code.interp).
+	built bool
+	body  []stmt
 	// epi moves the results from their stack positions to where the caller
 	// finds them, after the body ends or branches to the function's label.
 	epi []stmt
@@ -84,6 +93,11 @@ type compiled struct {
 	// found.
 	params, results []slotRef
 
+	*fnJIT
+}
+
+// fnJIT is the state of a function's native code, which its records share.
+type fnJIT struct {
 	// native is the function's native code, once compiled; hot counts its
 	// calls until then, and refused says the JIT will not compile it.
 	native  atomic.Pointer[nativeFn]
@@ -94,22 +108,119 @@ type compiled struct {
 	optDone atomic.Bool
 }
 
-// get returns function index's compiled body, compiling it if it is not.
+// newCompiled returns an empty record with a native code's state of its
+// own, allocated with it.
+func newCompiled() *compiled {
+	p := new(struct {
+		c compiled
+		j fnJIT
+	})
+	p.c.fnJIT = &p.j
+	return &p.c
+}
+
+// get returns function index's record, making it if there is none.
 func (c *Code) get(index uint32) *compiled {
 	if p := c.fns[index].Load(); p != nil {
 		return p
 	}
+	return c.first(index)
+}
+
+// first makes function index's record at its first use: where native code
+// runs a function from its first call (nativeFirst) and validation bounded
+// its frame, the record of that frame alone, its body left to the
+// interpreter's first need of it; else the record of the body the
+// interpreter compiles.
+//
+//go:noinline
+func (c *Code) first(index uint32) *compiled {
+	if c.nativeFirst() {
+		if p := c.boundRecord(index); p != nil {
+			c.fns[index].CompareAndSwap(nil, p)
+			return c.fns[index].Load()
+		}
+	}
+	return c.interp(index)
+}
+
+// interp returns function index's record with its body built, compiling
+// the body if it is not. A record made before keeps its frame -- native
+// code may run in it -- and its native code's state.
+func (c *Code) interp(index uint32) *compiled {
+	if p := c.fns[index].Load(); p != nil && p.built {
+		return p
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if p := c.fns[index].Load(); p != nil {
-		return p
+	old := c.fns[index].Load()
+	if old != nil && old.built {
+		return old
 	}
 	start := time.Now()
 	p := compileFunction(c, index)
 	countTime(&jitStats.interpTime, start)
 	jitStats.interpreted.Add(1)
+	if old != nil {
+		if p.nslots > old.nslots || p.rslots > old.rslots {
+			panic("wasm: a function body's frame larger than validation's bound")
+		}
+		q := *old
+		q.built, q.body, q.epi = true, p.body, p.epi
+		p = &q
+	}
 	c.fns[index].Store(p)
 	return p
+}
+
+// boundRecord returns the record of function index's frame as validation
+// bounds it (module.FrameBound), which holds what the interpreter's compile
+// of the body would make the frame hold, or nil for a body not validated.
+func (c *Code) boundRecord(index uint32) *compiled {
+	nlocals, rlocals, b, ok := c.boundLocals(index)
+	if !ok {
+		return nil
+	}
+	sig := c.Module.Types[c.Module.Functions[index].TypeIndex].Func
+	p := newCompiled()
+	stack := int(b.Stack)
+	p.nslots = nlocals + 2*stack
+	p.rslots = rlocals + stack + int(b.Tries)
+	p.nlocals, p.rlocals = nlocals, rlocals
+	p.refs = b.Refs || rlocals > 0 || b.Tries > 0
+	p.caught = rlocals + stack
+	p.params, _, _ = layout(sig.Params)
+	p.results, _, _ = layout(sig.Results)
+	return p
+}
+
+// boundLocals returns function f's numeric and reference slots before its
+// operand stack's -- its locals', or more where its results need them, as
+// compileFunction counts them -- and validation's bound of its stack; ok is
+// false for an import, or a body not validated.
+func (c *Code) boundLocals(f uint32) (nlocals, rlocals int, b module.FrameBound, ok bool) {
+	m := c.Module
+	fn := &m.Functions[f]
+	b = fn.Frame
+	if fn.Imported || b.Stack == 0 {
+		return 0, 0, b, false
+	}
+	sig := m.Types[fn.TypeIndex].Func
+	_, nlocals, rlocals = layout(sig.Params)
+	r := reader{b: m.Bytes, pc: int(fn.Code.Offset)}
+	for n := r.u32(); n > 0; n-- {
+		count := int(r.u32())
+		switch t := r.valueType(); {
+		case t.IsRef():
+			rlocals += count
+		case t.Kind == module.KindV128:
+			nlocals += 2 * count
+		default:
+			nlocals += count
+		}
+	}
+	_, rn, rr := layout(sig.Results)
+	return max(nlocals, rn), max(rlocals, rr), b, true
 }
 
 // slotRef locates a value in a frame: reference slot i, or numeric slot i
@@ -282,20 +393,16 @@ func compileFunction(code *Code, index uint32) *compiled {
 	for c.r.pc < end && len(c.ctrl) > 0 {
 		c.instr()
 	}
-	params, _, _ := layout(sig.Params)
-	results, _, _ := layout(sig.Results)
-	return &compiled{
-		nslots:  c.nlocals + 2*(c.maxHeight+1),
-		rslots:  c.rlocals + c.maxHeight + 1 + c.tries,
-		nlocals: c.nlocals,
-		rlocals: c.rlocals,
-		refs:    c.refs || c.rlocals > 0 || c.tries > 0,
-		caught:  c.rlocals + c.maxHeight + 1,
-		body:    fnCtl.body,
-		epi:     c.epi,
-		params:  params,
-		results: results,
-	}
+	p := newCompiled()
+	p.nslots = c.nlocals + 2*(c.maxHeight+1)
+	p.rslots = c.rlocals + c.maxHeight + 1 + c.tries
+	p.nlocals, p.rlocals = c.nlocals, c.rlocals
+	p.refs = c.refs || c.rlocals > 0 || c.tries > 0
+	p.caught = c.rlocals + c.maxHeight + 1
+	p.built, p.body, p.epi = true, fnCtl.body, c.epi
+	p.params, _, _ = layout(sig.Params)
+	p.results, _, _ = layout(sig.Results)
+	return p
 }
 
 // numSlot and refSlot return the slots of stack position h.

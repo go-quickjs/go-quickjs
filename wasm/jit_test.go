@@ -24,7 +24,7 @@ func TestCompilerConfigRunsNative(t *testing.T) {
 				(br $l)))
 			(local.get 1)))`)
 	before := engine.ReadJITStats().Compiled
-	for i := 0; i < 2*engine.DefaultJITThreshold; i++ {
+	for i := 0; i < 2*engine.DefaultJITThreshold+2; i++ {
 		res, err := mod.ExportedFunction("sum").Call(ctx, 100)
 		if err != nil || res[0] != 5050 {
 			t.Fatalf("sum(100) = %v, %v", res, err)
