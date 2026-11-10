@@ -404,14 +404,11 @@ func TestJITSIMDBits(t *testing.T) {
 	}
 	n, calls, exits := simdBits(t, func(simdFunc) bool { return true })
 	t.Logf("%d functions, %d calls compared; %d instructions run in Go: %s", n, calls, len(exits), strings.Join(exits, " "))
-	// Only the fused relaxed_madd and relaxed_nmadd the interpreter
-	// computes otherwise than the vector instructions do.
-	want := []string{"f32x4.qfma", "f32x4.qfms"}
-	if runtime.GOARCH == "amd64" {
-		want = nil
-		if wjit.CPU.RelaxedFused {
-			want = []string{"f32x4.qfma", "f32x4.qfms", "f64x2.qfma", "f64x2.qfms"}
-		}
+	// Only the fused relaxed_madd and relaxed_nmadd on amd64, which the
+	// code does without VEX encodings.
+	var want []string
+	if runtime.GOARCH == "amd64" && wjit.CPU.RelaxedFused {
+		want = []string{"f32x4.qfma", "f32x4.qfms", "f64x2.qfma", "f64x2.qfms"}
 	}
 	if !slices.Equal(exits, want) {
 		t.Fatalf("the instructions run in Go are %v, want %v", exits, want)

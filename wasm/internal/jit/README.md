@@ -579,10 +579,10 @@ result is the interpreter's by construction. The backends compile natively:
 | float lanes | add, sub, mul, div, sqrt, abs, neg, min, max, pmin, pmax, ceil, floor, trunc, nearest, the comparisons |
 | conversions | convert, trunc_sat, demote, promote |
 | integer lanes | add, sub, saturating add and sub, mul, neg, abs, min, max, avgr_u, popcnt, all_true, bitmask, shl, shr_s, shr_u, the comparisons, narrow, extend, extmul, extadd_pairwise, dot_i16x8_s, q15mulr_sat_s, swizzle, shuffle |
-| relaxed SIMD | all but relaxed_madd and relaxed_nmadd where the interpreter fuses them by a code of its own (below) |
+| relaxed SIMD | all but relaxed_madd and relaxed_nmadd where they fuse on amd64 (below) |
 
-The exit runs what is left: f32x4.relaxed_madd and relaxed_nmadd on arm64,
-and those and f64x2's on amd64 when the CPU has FMA3 and AVX.
+The exit runs what is left: relaxed_madd and relaxed_nmadd on amd64 when
+the CPU has FMA3 and AVX.
 
 Where the instruction sets have no one instruction for an operation, the
 code composes it. On amd64: i64x2.mul from PMULUDQ's products of 32-bit
@@ -634,10 +634,10 @@ PMADDWD of ones and PADDD. relaxed_madd and nmadd unfused are MULPS (MULPD)
 of the factors in order, then ADDPS of the product and the addend or SUBPS
 of the product from the addend, each operation's first operand its
 destination; fused they exit, FMA3 being VEX-encoded. On arm64 every
-relaxed instruction is the deterministic one's but f64x2's relaxed_madd
-and nmadd, FMLA into the addend of the factors in order, nmadd's first
-factor negated by FNEG first; f32x4's exit, its fusion being the
-interpreter's rounding to odd.
+relaxed instruction is the deterministic one's but relaxed_madd and
+nmadd, FMLA into the addend of the factors in order (the interpreter's
+single precision is a rounding to odd of its own, which rounds as FMLA
+does), nmadd's first factor negated by FNEG first.
 
 `TestJITSIMDBits` (engine) runs every SIMD instruction that is not a load,
 a store or a constant, relaxed ones included, on the edges of each lane
