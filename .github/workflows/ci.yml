@@ -325,8 +325,10 @@ jobs:
       # functions' (WASM_JIT=on), and the first call of a function with
       # loops entering its native code at its first back edge (eager);
       # then every call of a function with loops going on natively from a
-      # loop's head at its first back edge (WASM_JIT=osr); and the JIT
-      # checked against the interpreter call by call.
+      # loop's head at its first back edge (WASM_JIT=osr); the JIT
+      # checked against the interpreter call by call; and both again with
+      # each module's native code held to 8 KiB, its code dropped and
+      # compiles refused at every turn.
       - name: Run the spec scripts under the JIT
         if: matrix.arch == 'native'
         shell: bash
@@ -335,6 +337,7 @@ jobs:
           WASM_JIT=eager WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" WASM_THREADS_DIR="$GITHUB_WORKSPACE/wasm-threads" go test -tags quickjs_jit ./wasm/internal/spectest ./wasm/internal/engine -count=1 -v 2>&1 | tee jit.log | grep -E "spec:|jit:|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
           WASM_JIT=osr WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" WASM_THREADS_DIR="$GITHUB_WORKSPACE/wasm-threads" go test -tags quickjs_jit ./wasm/internal/spectest ./wasm/internal/engine -count=1 -v 2>&1 | tee osr.log | grep -E "spec:|jit:|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
           WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" WASM_THREADS_DIR="$GITHUB_WORKSPACE/wasm-threads" go test -tags quickjs_jit ./wasm/internal/spectest -run TestJITDifferential -count=1 -v 2>&1 | tee diff.log | grep -E "modules|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
+          WASM_JIT=eager WASM_JIT_MEMLIMIT=8192 WASM_JIT_CLOCK=step WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" WASM_THREADS_DIR="$GITHUB_WORKSPACE/wasm-threads" go test -tags quickjs_jit ./wasm/internal/spectest -run 'TestSpec$|TestJITDifferential' -count=1 -v 2>&1 | tee mem.log | grep -E "spec:|dropped|modules|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
           WASM_SPEC_DIR="$GITHUB_WORKSPACE/wasm-spec" go test -tags quickjs_jit,quickjs_wasm ./wasm/wasmjs -count=1
 
   # test262 with the JIT made to compile on the first call, poll Go every
