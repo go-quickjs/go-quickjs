@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -59,7 +60,8 @@ func TestStringChain(t *testing.T) {
 }
 
 // TestStringChainAllocs pins what a chain of strings costs: the string it
-// makes, and no string between.
+// makes, and no string between; and nothing, for a text the chain made
+// before, which the runtime's memo of short joins hands back (concatMemo).
 func TestStringChainAllocs(t *testing.T) {
 	skipUnlessAllocsOrdinary(t)
 	defer SetTreeTier(true)
@@ -70,13 +72,27 @@ func TestStringChainAllocs(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// Every run's text new: AllocsPerRun's runs and its warm-up one.
+		var fresh [][]Value
+		for i := range 101 {
+			fresh = append(fresh, []Value{Str(NewString(fmt.Sprint("x", i))), Str(NewString("y"))})
+		}
+		next := 0
+		if n := testing.AllocsPerRun(100, func() {
+			if _, err := r.Call(v, Undefined, fresh[next]); err != nil {
+				t.Fatal(err)
+			}
+			next++
+		}); n != 1 {
+			t.Errorf("tree %v: %v allocations a call, want 1", on, n)
+		}
 		args := []Value{Str(NewString("x")), Str(NewString("y"))}
 		if n := testing.AllocsPerRun(100, func() {
 			if _, err := r.Call(v, Undefined, args); err != nil {
 				t.Fatal(err)
 			}
-		}); n != 1 {
-			t.Errorf("tree %v: %v allocations a call, want 1", on, n)
+		}); n != 0 {
+			t.Errorf("tree %v: %v allocations a call of a text made before, want 0", on, n)
 		}
 		r.Close()
 	}

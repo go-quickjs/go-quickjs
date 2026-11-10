@@ -554,7 +554,7 @@ func (r *Runtime) joinParts(parts []Value) (*String, error) {
 			return nil, err
 		}
 	}
-	return joinValues(parts), nil
+	return r.joinMemoized(parts), nil
 }
 
 // longJoinPart is the length in bytes from which a part of a join is

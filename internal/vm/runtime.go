@@ -333,6 +333,9 @@ type Runtime struct {
 	// filled in, whose epoch is 0, holds nothing. After everything the
 	// interpreter reads, so that none of it moves.
 	typedEpoch uint64
+	// concatMemo is the short strings joins made, which a join making the
+	// same text returns (joinShort), made by the first join.
+	concatMemo *concatMemo
 	// jitFields is the optional native tier's state, empty in builds
 	// without it. It comes after everything the interpreter reads, so that
 	// a build with the tier moves none of their offsets, and before the last
