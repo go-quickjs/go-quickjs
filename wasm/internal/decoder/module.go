@@ -1136,6 +1136,9 @@ func (md *moduleDecoder) decodeDataSection() {
 	if !md.checkDataSegmentsCount(count) {
 		return
 	}
+	// A segment takes two bytes at least, its flag and its size: room for
+	// as many as the section can hold, not for a count it cannot.
+	m.Datas = make([]module.DataSegment, 0, min(int(count), (md.end-md.pc)/2))
 	for i := uint32(0); i < count; i++ {
 		seg := md.consumeDataSegmentHeader()
 		length := md.consumeU32v("source size")

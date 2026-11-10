@@ -609,8 +609,17 @@ func (v *funcValidator) popN(ts ...module.ValueType) []value {
 	return vals
 }
 
-// pop1 pops one operand of type t.
-func (v *funcValidator) pop1(t module.ValueType) value { return v.popN(t)[0] }
+// pop1 pops one operand of type t: one of exactly that type above the
+// innermost construct's base, as valid code has it, without the checks
+// that report what is not so.
+func (v *funcValidator) pop1(t module.ValueType) value {
+	if n := len(v.stack); n > int(v.ctrl[len(v.ctrl)-1].stackDepth) && v.stack[n-1].t == t {
+		x := v.stack[n-1]
+		v.stack = v.stack[:n-1]
+		return x
+	}
+	return v.popN(t)[0]
+}
 
 // peek returns the operand depth places below the top.
 func (v *funcValidator) peek(depth int) value {

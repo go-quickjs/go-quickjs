@@ -510,10 +510,16 @@ func (v *funcValidator) readPrefixed(name string) (op.Opcode, int) {
 	return op.Prefixed(v.b[v.pc], idx), n + 1
 }
 
-// simpleOperator validates an operator of fixed signature sig.
+// simpleOperator validates an operator of fixed signature sig. Two
+// operands of exactly its types above the innermost construct's base, as
+// valid code has them, are popped without the checks that report what is
+// not so, as pop1 pops one.
 func (v *funcValidator) simpleOperator(sig *op.Sig) int {
 	if len(sig.Params) == 1 {
 		v.pop1(sig.Params[0])
+	} else if n := len(v.stack); n >= int(v.ctrl[len(v.ctrl)-1].stackDepth)+2 &&
+		v.stack[n-2].t == sig.Params[0] && v.stack[n-1].t == sig.Params[1] {
+		v.stack = v.stack[:n-2]
 	} else {
 		v.popN(sig.Params[0], sig.Params[1])
 	}
