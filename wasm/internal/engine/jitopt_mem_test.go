@@ -18,11 +18,13 @@ func optSameAsInterpreter(t *testing.T, src string, calls []jitCall) {
 }
 
 // The optimizing tier's accesses of every kind of memory -- memories other
-// than 0, of i64 addresses, shared ones -- check each memory's own size,
+// than 0, of i64 addresses, shared ones -- at every offset check each
+// memory's own size,
 // read where it is at each access, and reach its own bytes, after grows by
 // the function, by its callees and by Go, as the baseline's do.
 func TestOptMemory(t *testing.T) {
 	for name, run := range map[string]func(*testing.T, func(*testing.T, string, []jitCall)){
+		"Memory64Bounds":  memory64Bounds,
 		"LastByte":        memoryLastByte,
 		"MultiMemory":     multiMemory,
 		"MultiMemoryGrow": multiMemoryGrow,
@@ -33,7 +35,8 @@ func TestOptMemory(t *testing.T) {
 
 // Random functions of loads and stores of four memories -- memory 0, an
 // unshared one, one of i64 addresses and a shared one -- at addresses near
-// each memory's end, with more values live than registers, the values
+// each memory's end and offsets near 2^31 and 2^32 (and 2^64 for i64
+// addresses) too, with more values live than registers, the values
 // stored constants, locals and values spilled, compute what the
 // interpreter computes and leave the memories as it does, traps included.
 func TestOptMemoryRandom(t *testing.T) {
@@ -91,7 +94,10 @@ func TestOptMemoryRandom(t *testing.T) {
 				}
 				addr = a
 			}
-			off := []int{0, 0, 1, 4, 16, 255}[rng.IntN(6)]
+			off := []uint64{0, 0, 1, 4, 16, 255, 0, 1, 4, 16, 255, 0x7ffffff9, 0x80000000, 0xfffffff0}[rng.IntN(14)]
+			if m.idx == "i64" && rng.IntN(20) == 0 {
+				off = 0xfffffffffffffff8
+			}
 			if rng.IntN(2) == 0 {
 				l := loads[rng.IntN(len(loads))]
 				val := fmt.Sprintf("(%s $m%d offset=%d %s)", l.op, mi, off, addr)

@@ -355,8 +355,8 @@ register forms.
 
 An access of memory 0, unshared and of i32 addresses (`plainAccess`),
 computes its end, `address + offset + size`, in R11 and compares it with
-the context's memory size, unless `NoCheck`; an offset plus a size past
-2^31-1 is refused (`offset`). The access is `[R15 + address + offset]`,
+the context's memory size, unless `NoCheck`, where the offset plus the
+size is within 2^31-1. The access is `[R15 + address + offset]`,
 the address in a register (an i32 there has its upper half clear). On
 arm64 the address plus the offset is made in X17, in 64 bits, where the
 offset is not 0, the end in X16 and compared with X21, and the access is
@@ -369,8 +369,9 @@ size, which other threads' grows store, another's from the instance's
 table of memories (`Ctx.Mems`), whose address the context holds and whose
 entries the engine fills at every entry, a grow by the function, by a
 callee or by Go included: nothing of a memory is kept in a register or a
-value across anything. An i64 memory's address plus its offset is made in
-R10 (X17), and traps where it carries; the check is then that the size
+value across anything. An i64 memory's address plus its offset, and an
+i32 one's plus an offset past 2^31-1, is made in R10 (X17), in 64 bits, as
+the baseline makes it, and an i64 memory's traps where it carries; the check is then that the size
 less the rest of the access -- the offset and the size, or the size where
 the offset is in the register -- does not borrow and is not below the
 address, in R11 (X16), so that no sum carries. A constant address is
@@ -686,7 +687,6 @@ A function is refused -- it keeps its baseline code -- when it has:
 | `exceptions` | try, try_table, throw, the legacy instructions |
 | `table` | table.grow, table.fill, table.copy, table.init, elem.drop |
 | `bulk` | memory.init, data.drop |
-| `offset` | an access whose offset plus size is past 2^31-1 |
 | `frame` | more spill slots than its frame has below the call area |
 | `size` | code past `internal/jit.MaxCodeBytes`, or, on arm64, past a branch's reach |
 | `internal` | a panic of the compiler's |
@@ -823,13 +823,13 @@ json's and interp's, which compile their hot functions within a run of
 about 60 ms (json +10%, interp +4%, where they were +19% and +17%
 before the compile's cost was worked on; see Tier-up).
 
-On the spec scripts the tier compiles 4,637 functions and refuses 2,205
+On the spec scripts the tier compiles 4,677 functions and refuses 2,165
 (SIMD and v128s 1,499, the table instructions that allocate or copy 218,
 GC instructions 188, exceptions 107, atomics 80, memory.init and data.drop
-73, offsets 40), where it compiled 4,149 before it took every memory --
-memories other than an i32 one 514 were refused -- and 3,914 before it
-took references and tail calls; in 26 ms, 6 µs a function (43 to 63 ms
-before references), where the
+73), where it compiled 4,149 before it took every memory and every offset
+-- memories other than an i32 one 514 and offsets 14 were refused -- and
+3,914 before it took references and tail calls; in 24 ms, 5 µs a
+function (43 to 63 ms before references), where the
 baseline's 2,926 take 11 to 23 ms. The Go program's 3,011 functions
 compile in 0.16 ms each (0.40 before; the baseline's, 0.12 ms).
 

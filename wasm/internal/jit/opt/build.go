@@ -2,7 +2,6 @@ package opt
 
 import (
 	"fmt"
-	"math"
 
 	wjit "github.com/go-quickjs/go-quickjs/wasm/internal/jit"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
@@ -20,7 +19,6 @@ const (
 	RefuseTable      = "table"
 	RefuseBulk       = "bulk"
 	RefuseMemory     = "memory"
-	RefuseOffset     = "offset"
 	RefuseOther      = "other"
 	RefuseFrame      = "frame"
 	RefuseSize       = "size"
@@ -1058,9 +1056,6 @@ func (bd *builder) memoryOp(op opcode.Opcode, at uint32) bool {
 		size = 4
 	default:
 		size = 8
-	}
-	if off+uint64(size) > math.MaxInt32 {
-		refuse(RefuseOffset, "%s at offset %d", op.Name(), off)
 	}
 	if op >= opcode.I32StoreMem {
 		v := bd.pop()

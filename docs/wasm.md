@@ -460,9 +460,8 @@ goroutine to be preempted. It compiles references -- locals, globals,
 tables' elements, the null tests and branches -- calls through tables and
 references, tail calls, and the accesses of every memory, shared ones and
 those of i64 addresses included, and leaves to the baseline code the
-functions with SIMD, GC, atomic or exception instructions, with an access
-at an offset past 2^31-1, or with the table instructions that allocate or
-copy.
+functions with SIMD, GC, atomic or exception instructions, or with the
+table instructions that allocate or copy.
 It roughly halves the Go-built programs' time from their second run on, and
 makes their first runs as fast as the baseline's or faster (json 77 ms to
 70, gzip 75 to 53), but interp's, 1 ms slower for the baseline code's
