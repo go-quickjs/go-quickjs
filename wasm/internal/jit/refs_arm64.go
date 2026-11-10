@@ -83,6 +83,13 @@ func (c *compiler) wordIn(w word, tmp arm64.Reg) arm64.Reg {
 func (c *compiler) refPut(dst mem, p, i word) {
 	a := c.a
 	a.Store(dst.base, dst.off+8, c.wordIn(i, rTmp))
+	c.ptrPut(dst, p)
+}
+
+// ptrPut stores pointer word p at dst, through the barrier routine while
+// the collector marks. Neither dst's base nor p's register is rTmp.
+func (c *compiler) ptrPut(dst mem, p word) {
+	a := c.a
 	slow, resume := a.NewLabel(), a.NewLabel()
 	c.testBarrier(slow)
 	a.Store(dst.base, dst.off, c.wordIn(p, rTmp))

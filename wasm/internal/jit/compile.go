@@ -97,6 +97,10 @@ type Layout struct {
 	// the address of the instance that defined it, a word, 0 for a host
 	// function's; FuncIndex its index in that instance, 4 bytes.
 	FuncType, FuncInst, FuncIndex int32
+	// A pool of new structs (Ctx.Pools) holds PoolCount objects, a word,
+	// the pointers to them the words from PoolObjs: native code takes the
+	// last, its header written and its fields zero, and clears its word.
+	PoolCount, PoolObjs int32
 }
 
 // Code is a function's native code. Its offsets are from its start.
@@ -153,6 +157,7 @@ var (
 	offExitFn     = int32(unsafe.Offsetof(Ctx{}.ExitFn))
 	offExitAddr   = int32(unsafe.Offsetof(Ctx{}.ExitAddr))
 	offResume     = int32(unsafe.Offsetof(Ctx{}.Resume))
+	offPools      = int32(unsafe.Offsetof(Ctx{}.Pools))
 )
 
 // Available reports whether this build compiles native code.

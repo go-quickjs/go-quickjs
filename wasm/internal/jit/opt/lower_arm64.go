@@ -82,6 +82,7 @@ var (
 	offArg0      = int32(unsafe.Offsetof(wjit.Ctx{}.Arg0))
 	offExitFn    = int32(unsafe.Offsetof(wjit.Ctx{}.ExitFn))
 	offExitAddr  = int32(unsafe.Offsetof(wjit.Ctx{}.ExitAddr))
+	offPools     = int32(unsafe.Offsetof(wjit.Ctx{}.Pools))
 	offResume    = int32(unsafe.Offsetof(wjit.Ctx{}.Resume))
 )
 
@@ -123,6 +124,10 @@ type gen struct {
 	wb          arm64.Label
 	hasWB       bool
 	argSlotsBuf []int32
+	// alloc is the function's exit for an empty pool of new structs,
+	// which hasAlloc says is made.
+	alloc    arm64.Label
+	hasAlloc bool
 	// vpool is the code's v128 constants, emitted after it.
 	vpool vpool[arm64.Label]
 }
@@ -499,6 +504,8 @@ const (
 	stubWB
 	stubTail
 	stubRefRoom
+	stubAlloc
+	stubAllocExit
 )
 
 // stub emits out-of-line code.
@@ -533,6 +540,27 @@ func (g *gen) stub(st *stub) {
 		a.Store(rCtx, offResume, s0)
 		g.saveAll()
 		g.exit(wjit.ExitPoll, a.NewLabel())
+		g.restoreAll()
+		a.Load(s0, rCtx, offResume)
+		a.Br(s0)
+	case stubAlloc:
+		// An empty pool of new structs of type code: the function's exit
+		// for it, to take from it again at to.
+		a.Bind(st.l)
+		g.mark("cold alloc")
+		g.storeCtx(offArg0, st.code)
+		g.storeCtx(offArg0+8, uint64(st.at))
+		a.Adr(s0, st.to)
+		a.B(g.allocExit())
+	case stubAllocExit:
+		// The function's exit for an empty pool: the engine fills it,
+		// every register the allocator gave out kept, and the code goes
+		// on where its site left in s0, its arguments stored.
+		a.Bind(st.l)
+		g.mark("cold alloc exit")
+		a.Store(rCtx, offResume, s0)
+		g.saveAll()
+		g.exit(wjit.ExitAlloc, a.NewLabel())
 		g.restoreAll()
 		a.Load(s0, rCtx, offResume)
 		a.Br(s0)
@@ -689,6 +717,17 @@ func (g *gen) jump(i int, s *Block) {
 	a.SubsImm(rPoll, rPoll, 1, true)
 	a.BCond(arm64.GT, g.labels[j])
 	a.B(l)
+}
+
+// allocExit returns the function's exit for an empty pool of new structs,
+// made after the body with its first use.
+func (g *gen) allocExit() arm64.Label {
+	if !g.hasAlloc {
+		g.hasAlloc = true
+		g.alloc = g.a.NewLabel()
+		g.ool = append(g.ool, stub{kind: stubAllocExit, l: g.alloc})
+	}
+	return g.alloc
 }
 
 // pollSite is the out-of-line code a back edge to block j goes to when the

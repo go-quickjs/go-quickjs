@@ -340,7 +340,10 @@ heap with what its WebAssembly holds in it.
   modules' globals, tables and segments and the running call's frames -- and
   a program that still does not fit stops with `ErrMemoryLimit`, which no
   wasm handler or JavaScript `try` catches. A program that lets go of what it
-  allocates runs on.
+  allocates runs on. Native code makes structs from pools the engine fills
+  ahead, up to 128 structs and 16 KiB at a time: a fill is counted whole as
+  it is made, and what a pool still holds when Go collects it is given back
+  unless what is reachable was counted again since.
 - What a closed module held is given back once Go collects it.
 - Under `quickjs.WithMemoryLimit`, the runtime's measurement of its heap asks
   each WebAssembly object it reaches what it holds, and a memory's buffer is

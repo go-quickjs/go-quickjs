@@ -57,6 +57,9 @@ type Budget struct {
 	// objects held at the last count, and gcNew what has been allocated
 	// since.
 	fixed, gcLive, gcNew atomic.Int64
+	// counts is how many counts of the reachable GC objects have been
+	// made: a charge made since the last is still in gcNew.
+	counts atomic.Uint64
 
 	mu sync.Mutex
 	// insts are the instances charged to a budget that counts itself, whose
@@ -155,6 +158,33 @@ func (b *Budget) chargeGC(x *exec, n int64) {
 	}
 }
 
+// gcEpoch returns what giveBackGC is given of a charge made after it.
+func (b *Budget) gcEpoch() uint64 {
+	if b == nil {
+		return 0
+	}
+	return b.counts.Load()
+}
+
+// giveBackGC gives back n bytes of GC objects charged, and never made
+// reachable, after epoch (gcEpoch): what a count since has not counted.
+// A budget charging an outer meter takes them off what it has yet to
+// charge.
+func (b *Budget) giveBackGC(epoch uint64, n int64) {
+	if b == nil || n <= 0 {
+		return
+	}
+	if b.outer != nil {
+		b.gcNew.Add(-n)
+		return
+	}
+	b.mu.Lock()
+	if b.counts.Load() == epoch {
+		b.gcNew.Add(-n)
+	}
+	b.mu.Unlock()
+}
+
 // recount counts the GC objects reachable from the budget's roots and from
 // the frames of the call running on x, if any, reporting whether they, the
 // memories and tables, and need more bytes fit. Calls of the budget's
@@ -201,6 +231,7 @@ func (b *Budget) recount(x *exec, need int64) bool {
 	}
 	b.gcLive.Store(live)
 	b.gcNew.Store(0)
+	b.counts.Add(1)
 	return b.fixed.Load()+live+need <= b.limit
 }
 

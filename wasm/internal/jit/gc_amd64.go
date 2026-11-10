@@ -14,6 +14,24 @@ func (c *compiler) jumpZero(r amd64.Reg, l amd64.Label) {
 	c.a.Jcc(amd64.CondE, l)
 }
 
+// poolTake takes a struct of type ti from the level's pool of the type's
+// into p, leaving in q the address of the pool's word of it, or goes to
+// slow where there is none.
+func (c *compiler) poolTake(p, q amd64.Reg, ti uint32, slow amd64.Label) {
+	a := c.a
+	l := c.req.Layout
+	a.Load(p, rCtx, offPools)
+	c.jumpZero(p, slow)
+	a.Load(p, p, int32(8*ti))
+	c.jumpZero(p, slow)
+	a.Load(q, p, l.PoolCount)
+	c.jumpZero(q, slow)
+	a.OpImm(amd64.Sub, q, 1, true)
+	a.Store(p, l.PoolCount, q)
+	a.LeaIdx(q, p, q, 8, l.PoolObjs)
+	a.Load(p, q, 0)
+}
+
 // andImm is r &= imm, 32 bits.
 func (c *compiler) andImm(r amd64.Reg, imm int32) { c.a.OpImm(amd64.And, r, imm, false) }
 

@@ -95,12 +95,16 @@ type Ctx struct {
 	// positions' reference slots, sets it for an exit with references; the
 	// engine reads it at the exit and clears it.
 	RArgs uint64
+	// Pools is the table of the pools of new structs the code takes from,
+	// by the module's type index: each entry the address of a pool
+	// (Layout.PoolCount, Layout.PoolObjs) or 0, and the table's address 0
+	// until the first ExitAlloc of the level, at which the engine sets it.
+	Pools uintptr
 	// SaveV is where a function with v128 values keeps its float
 	// registers whole around a poll's exit and the runtime's store, each
 	// register's 16 bytes at 16 times its number, its general registers
 	// staying in Save. It is at a multiple of 16 bytes from the context's
 	// start, which arm64's 16-byte loads and stores scale their offsets by.
-	_     uint64
 	SaveV [2 * 32]uint64
 }
 
@@ -167,6 +171,13 @@ const (
 	// enters the optimized code with the frame as the call made it, or
 	// resumes the baseline's.
 	ExitTierUp
+	// ExitAlloc: the pool of new structs of type Arg0 is empty, or the
+	// context has no table of pools (Ctx.Pools): the engine fills it,
+	// charging the instance's budget, and the code takes from it again;
+	// Arg1 is the struct.new's offset. Nothing of the frame is read or
+	// written but its reference slots, which a count of the budget's
+	// reaches.
+	ExitAlloc
 )
 
 // The trap codes an ExitTrap carries, the engine's TrapCode values.

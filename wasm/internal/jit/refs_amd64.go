@@ -78,6 +78,13 @@ func (c *compiler) refPut(dst mem, p, i word) {
 		a.LoadSD(xTmp, i.m.base, i.m.off)
 		a.StoreSD(dst.base, dst.off+8, xTmp)
 	}
+	c.ptrPut(dst, p)
+}
+
+// ptrPut stores pointer word p at dst, through the barrier routine while
+// the collector marks. Neither dst's base nor p's register is rTmp.
+func (c *compiler) ptrPut(dst mem, p word) {
+	a := c.a
 	slow, resume := a.NewLabel(), a.NewLabel()
 	c.testBarrier(slow)
 	switch p.k {

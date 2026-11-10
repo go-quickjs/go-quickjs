@@ -35,11 +35,11 @@ This package compiles; the engine places, enters and handles exits:
 | `bulk.go`, `bulk_GOARCH.go` | memory.size, memory.copy, memory.fill, table.size and table.fill |
 | `indirect.go`, `indirect_GOARCH.go` | calls through a table or a reference, and their tail calls |
 | `refs.go`, `refs_GOARCH.go` | references: frames' reference slots, the reference instructions, the stores of pointer words and the barrier routine |
-| `gc.go`, `gc_GOARCH.go` | the GC instructions: fields, elements, i31s, tests and casts |
+| `gc.go`, `gc_GOARCH.go` | the GC instructions: fields, elements, i31s, tests and casts, structs taken from the engine's pools |
 | `simd.go`, `simd_GOARCH.go` | the SIMD instructions: v128.const, their types and the exit through the interpreter, and a backend's code for them |
 | `engine/jit_on.go` | tiering, placement, entry, the exits' handling |
 | `opt/` | the optimizing tier (`opt/README.md`) |
-| `engine/jit_gc.go` | the GC instructions Go runs for native code |
+| `engine/jit_gc.go` | the GC instructions Go runs for native code, and the pools of new structs |
 | `exn.go`, `engine/jit_exn.go` | exceptions: the handlers' records, and Go's search of the native frames for the clause that takes one |
 
 ## Tiers
@@ -304,6 +304,8 @@ and X0 on arm64:
   through a call area of their own while its references stay in their
   positions' slots, sets it, and the engine takes and clears it when the
   exit's work begins.
+- `Pools`: the level's table of pools of new structs (GC objects), by the
+  module's type index, 0 until the level's first `ExitAlloc`.
 
 ## Entry, exits and resumption
 
@@ -347,9 +349,10 @@ of a Go program's code.
 | `ExitPoll` | `pollContext`, the context's cancellation |
 | `ExitCallRef` | a call_ref not made natively (Calls): calls the reference's function |
 | `ExitTailRef` | a return_call_ref not made natively, as `ExitTailIndirect` |
-| `ExitOp` | memory.grow, memory.init, data.drop, table.grow, table.init, table.copy, elem.drop, struct.new, struct.new_default, the array.new instructions, array.fill, array.copy, array.init_data, array.init_elem, throw, throw_ref, rethrow (which do not resume: see Exceptions), memory.atomic.wait32, memory.atomic.wait64, memory.atomic.notify, on the frame's slots; an atomic instruction's offset is the 64-bit `Arg2` |
+| `ExitOp` | memory.grow, memory.init, data.drop, table.grow, table.init, table.copy, elem.drop, struct.new of a type with v128 fields (and struct.new_default of one, the optimizing tier's), the array.new instructions, array.fill, array.copy, array.init_data, array.init_elem, throw, throw_ref, rethrow (which do not resume: see Exceptions), memory.atomic.wait32, memory.atomic.wait64, memory.atomic.notify, on the frame's slots; an atomic instruction's offset is the 64-bit `Arg2` |
 | `ExitSIMD` | a SIMD instruction the backend does not compile (see SIMD): the interpreter's own code for the instruction at offset `Arg0`, made once and kept by the Code (`codeJIT.simd`), run on the operands in the frame's slots from `Arg1` |
 | `ExitTierUp` | the function's count of calls toward the optimizing tier ran out, at its entry (where the request gives a `TierCounter`): the engine compiles it there and enters the optimized code with the frame as the call made it, or resumes the baseline code |
+| `ExitAlloc` | a struct.new or struct.new_default found its type's pool empty, or the level without pools (see GC objects): the engine fills the pool -- taking the level's table first -- charging the instance's budget, with the native frames' references counted among what is live; the code takes from it again |
 
 A trap's site stores its offset and jumps to the function's stub for the
 trap's code; there is no resumption.
@@ -753,7 +756,30 @@ object whose header's runtime information has, at the type's depth among
 its supertypes, the type's canonical index -- the depth and the index
 known when the code is compiled.
 
-What allocates -- struct.new, struct.new_default, array.new,
+struct.new and struct.new_default of a type without v128 fields take a
+struct from a pool the engine fills ahead (`engine/jit_gc.go`), as the
+JavaScript JIT takes its objects: the level's table of pools
+(`Ctx.Pools`), one pool for each of the module's struct types, each a
+count and the pointers to that many structs, their headers written and
+their fields zero (`Layout.PoolCount`, `Layout.PoolObjs`). The code takes
+the last -- the count decremented -- stores the fields from their
+operands, the struct's reference into the first operand's position's
+slot, and clears the pool's word of it; the struct stays in the pool, where
+the collector sees it, until it is in its slot. A table belongs to one
+level at a time, so the take is plain loads and stores: the level's first
+`ExitAlloc` takes one of the instance's (or shares the table of a level
+below of the same instance), and the level gives it back when it ends. An
+empty pool, or no table, exits (`ExitAlloc`): the engine makes the pool's
+next fill -- 8 structs at first, twice the last after, up to 128 and 16
+KiB, and at most 256 KiB in a table's pools' last fills together --
+charging the instance's budget for all of them at once, and the code takes
+again. What a table holds when it is collected is given back to the
+budget, unless the budget counted what is reachable since the fill
+(`Budget.giveBackGC`). In the baseline every stack entry is in its slot or
+a constant across the exit; the optimizing tier keeps every register
+across it, as a poll's exit does.
+
+What else allocates -- struct.new of a type with v128 fields, array.new,
 array.new_default, array.new_fixed, array.new_data, array.new_elem -- and
 array.fill, array.copy, array.init_data and array.init_elem run in Go
 (`ExitOp`): the engine's routines make the objects, charging the
@@ -948,6 +974,15 @@ store: Go sets it only with the world stopped, which native code, never a
 safe point, does not let happen. No reference is in a register across an
 exit, a poll or a call; a pointer is in one only between its load from Go
 memory and its store into Go memory, within one instruction's code.
+
+A new struct is the exception: its fields are stored plainly while the
+collector marks too. The barrier's deletion part has nothing to shade
+there, the fields being zero, and its insertion part is for a pointer only
+a goroutine's stack holds, where every pointer native code stores is in
+Go memory -- the operand's slot -- which keeps it for the collector until
+a store through the barrier overwrites it. The struct's own pointer goes
+into its slot through the barrier, and its pool's word of it is cleared
+through the barrier, which shades it.
 
 `StoreRef` is built wherever the WebAssembly JIT is, with the JavaScript
 JIT.

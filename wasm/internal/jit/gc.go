@@ -11,9 +11,10 @@ import (
 // in its second word, the first cell its header; an array is a header, its
 // length, and its elements, packed numbers or references, in memory of
 // their own (Layout). Native code reads and writes fields and elements,
-// tests and casts, and makes i31s; what allocates, and what copies or
-// fills ranges, runs in Go (ExitOp), whose allocations charge the
-// instance's budget as the interpreter's do.
+// tests and casts, makes i31s, and makes structs from the pools the engine
+// fills (structNew); what else allocates, and what copies or fills
+// ranges, runs in Go (ExitOp), whose allocations charge the instance's
+// budget as the interpreter's do.
 
 // cellOf returns the offset of the cell of field fi of struct type ti
 // from the struct's start: the header's cell first, a v128 taking two.
@@ -60,8 +61,14 @@ func (c *compiler) gcOp(op opcode.Opcode, at uint32) bool {
 	m := c.m
 	l := c.req.Layout
 	switch op {
-	case opcode.StructNew, opcode.StructNewDefault, opcode.ArrayNew, opcode.ArrayNewDefault,
-		opcode.ArrayFill:
+	case opcode.StructNew, opcode.StructNewDefault:
+		ti := c.r.u32()
+		if !pooled(m, ti) {
+			c.goOp(op, at, uint64(ti), 0)
+			break
+		}
+		c.structNew(ti, op == opcode.StructNew, at)
+	case opcode.ArrayNew, opcode.ArrayNewDefault, opcode.ArrayFill:
 		c.goOp(op, at, uint64(c.r.u32()), 0)
 	case opcode.ArrayNewFixed, opcode.ArrayNewData, opcode.ArrayNewElem, opcode.ArrayCopy,
 		opcode.ArrayInitData, opcode.ArrayInitElem:
@@ -172,6 +179,75 @@ func (c *compiler) gcOp(op opcode.Opcode, at uint32) bool {
 		return false
 	}
 	return true
+}
+
+// pooled reports whether native code makes the structs of type ti from
+// the engine's pools: a type without v128 fields.
+func pooled(m *module.Module, ti uint32) bool {
+	for _, f := range m.Types[ti].Struct.Fields {
+		if f.Type.Kind == module.KindV128 {
+			return false
+		}
+	}
+	return true
+}
+
+// structNew compiles struct.new, or, without fields, struct.new_default,
+// of type ti: a struct taken from the level's pool of the type's (Ctx.Pools,
+// poolTake), each field stored from its operand, the struct's reference
+// stored into the first operand's position's slot through the barrier,
+// and the pool's word of it cleared through the barrier, which shades the
+// struct. The struct is in the pool until then, so that the collector sees
+// it throughout. A reference field is stored plainly while the collector
+// marks too, as the barrier's deletion part has nothing to shade -- the
+// struct's fields are null until then -- and its insertion part is for a
+// pointer only a goroutine's stack holds, where this one is in its
+// operand's slot, which keeps it for the collector until a store through
+// the barrier overwrites it. An empty pool, or a level without pools,
+// exits for the engine to fill it (ExitAlloc), and the code takes from it
+// again: every entry is in its slot or a constant, and stays so across
+// the exit.
+func (c *compiler) structNew(ti uint32, fields bool, at uint32) {
+	fs := c.m.Types[ti].Struct.Fields
+	if !fields {
+		fs = nil
+	}
+	base := len(c.stack) - len(fs)
+	for h := range c.stack {
+		if h < base || c.stack[h].k != kConst {
+			c.spill(h)
+		}
+	}
+	vals := append([]value(nil), c.stack[base:]...)
+	c.stack = c.stack[:base]
+	p := c.allocG(0)
+	q := c.allocG(1 << p)
+	retry, slow := c.a.NewLabel(), c.a.NewLabel()
+	c.a.Bind(retry)
+	c.poolTake(p, q, ti, slow)
+	off := int32(16)
+	for i, f := range fs {
+		if f.Type.IsRef() {
+			src := c.refOf(vals[i])
+			c.copyWord(mem{p, off}, src)
+			c.copyWord(mem{p, off + 8}, mem{src.base, src.off + 8})
+		} else {
+			c.storeField(f.Type.Kind, vals[i], p, off+8, true)
+		}
+		off += 16
+	}
+	c.refPut(c.refPos(base), regWord(p), immWord(0))
+	c.ptrPut(mem{q, 0}, immWord(0))
+	c.freeG(p)
+	c.freeG(q)
+	c.later(func() {
+		c.a.Bind(slow)
+		resume := c.a.NewLabel()
+		c.exit(ExitAlloc, resume, uint64(ti), uint64(at))
+		c.resumeAt(resume)
+		c.jmp(retry)
+	})
+	c.pushRef()
 }
 
 // regsOf returns the general register v holds, if any, as a mask.

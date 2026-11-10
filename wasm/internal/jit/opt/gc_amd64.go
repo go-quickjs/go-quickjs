@@ -199,10 +199,83 @@ func (g *gen) gcRef(v *Value) bool {
 		g.done(v, int(t))
 	case refTest, refCast:
 		g.testRef(v, src)
+	case refStructNew:
+		g.structNew(v, dst)
 	default:
 		return false
 	}
 	return true
+}
+
+// structNew lowers refStructNew v, its struct's reference into the slot
+// at dst from R: the struct taken from the level's pool of its type's,
+// its fields stored -- a reference plainly, as the baseline's (its
+// structNew) -- the struct into dst, and last the pool's word of it
+// cleared, both through the barrier, so that the collector sees the
+// struct in the pool until it is in its slot. Where the pool is empty, or
+// the level has no pools, the code exits for the engine to fill it, every
+// register kept, and takes again.
+func (g *gen) structNew(v *Value, dst int32) {
+	a := g.a
+	lay := g.req.Layout
+	m := g.req.Module
+	idx := v.Aux >> 8
+	ti := uint32(idx >> 1)
+	fs := newFields(m, idx)
+	retry, slow := a.NewLabel(), a.NewLabel()
+	g.ool = append(g.ool, stub{kind: stubAlloc, l: slow, to: retry, code: uint64(ti), at: v.At})
+	a.Bind(retry)
+	g.mark("struct.new %d", ti)
+	g.poolOf(ti)
+	a.Jcc(amd64.CondE, slow)
+	a.Load(s0, s1, lay.PoolCount)
+	a.Op(amd64.Test, s0, s0, true)
+	a.Jcc(amd64.CondE, slow)
+	a.OpImm(amd64.Sub, s0, 1, true)
+	a.Store(s1, lay.PoolCount, s0)
+	a.LoadIdxScaled(s1, s1, s0, 3, lay.PoolObjs)
+	j := 0
+	for i, f := range fs {
+		if !f.Type.IsRef() {
+			g.storeNum(v.Args[j], s1, int32(16*(i+1))+8, f.Type.Kind, true)
+			j++
+		}
+	}
+	if hasRefField(fs) {
+		a.Load(s0, rCtx, offR)
+		for i, f := range fs {
+			if f.Type.IsRef() {
+				a.LoadSD(x0, s0, dst+int32(16*i))
+				a.StoreSD(s1, int32(16*(i+1)), x0)
+				a.LoadSD(x0, s0, dst+int32(16*i)+8)
+				a.StoreSD(s1, int32(16*(i+1))+8, x0)
+			}
+		}
+	}
+	a.MovQToX(x0, s1)
+	a.Load(s0, rCtx, offR)
+	a.StoreImm(s0, dst+8, 0)
+	g.barrierStore(s0, dst, s1)
+	a.Load(s1, rCtx, offPools)
+	a.Load(s1, s1, int32(8*ti))
+	a.Load(s0, s1, lay.PoolCount)
+	a.LeaIdx(s1, s1, s0, 8, lay.PoolObjs)
+	a.SSEOp(amd64.XorPD, x0, x0)
+	g.barrierStore(s1, 0, s0)
+}
+
+// poolOf loads into s1 the address of the level's pool of the structs of
+// type ti, setting the flags by whether it is 0: the level has no pools,
+// or none of the type yet.
+func (g *gen) poolOf(ti uint32) {
+	a := g.a
+	no := a.NewLabel()
+	a.Load(s1, rCtx, offPools)
+	a.Op(amd64.Test, s1, s1, true)
+	a.Jcc(amd64.CondE, no)
+	a.Load(s1, s1, int32(8*ti))
+	a.Op(amd64.Test, s1, s1, true)
+	a.Bind(no)
 }
 
 // testRef lowers ref.test, a 1 or a 0, and ref.cast, which traps where the

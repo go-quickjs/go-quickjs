@@ -118,8 +118,14 @@ each trapping where the instruction does; br_on_cast and br_on_cast_fail
 are a test and a branch on it, the reference staying in its slot both
 ways; any.convert_extern and extern.convert_any are nothing. A number read
 is a value like any load's, but never shared or moved: a `ref` value has
-an effect. What allocates -- struct.new, struct.new_default, array.new,
-array.new_default, array.new_fixed, array.new_data, array.new_elem -- and
+an effect. struct.new and struct.new_default of a type without v128 fields
+are `ref` values too (`refStructNew`): the numeric fields their
+arguments, the reference fields in their positions' slots, the struct
+taken from the level's pool of its type's (the baseline README's GC
+objects) and left in the first operand's position's slot. What else
+allocates -- array.new, array.new_default, array.new_fixed,
+array.new_data, array.new_elem, struct.new_default of a type with v128
+fields -- and
 array.fill, array.copy, array.init_data and array.init_elem are `goop`s,
 their references in their positions' slots from `Pos` and the object made
 left in the first's; Go makes the objects and charges the instance's
@@ -322,7 +328,19 @@ between the object and its position's slot through the barrier, s0 (X16)
 holding R, the index or a number on its way. ref.i31 stores the mark and
 the low 31 bits; the tests compare the mark, the header's kind byte, and
 for a defined type the canonical index at its depth among the
-supertypes, a cast going to its trap. On arm64 an index not in a register
+supertypes, a cast going to its trap. A new struct is taken from its pool
+-- the context's table, the type's pool, its count, each tested, the
+count decremented and the struct's pointer loaded into s1 -- its numbers
+stored from their locations and its references copied plainly through x0
+from their positions' slots (the baseline README's References and the
+collector), its pointer stored into the first operand's position's slot
+and the pool's word of it cleared, both through the barrier; on arm64,
+whose barrier routine keeps no scratch register, the pool's word is found
+again from the context. An empty pool goes out of line to the function's
+exit for it, which keeps every register the allocator has in the
+context's save area, as a poll's, exits with `ExitAlloc` and goes back to
+take again (a site leaves its type and offset in the exit's arguments and
+where to go back in s0). On arm64 an index not in a register
 of its own is compared with the length while the array's address waits in
 D31. An instruction Go runs for objects stages its numeric operands in the
 call area, each at its place among the operands, and sets `RArgs` to its

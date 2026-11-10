@@ -115,6 +115,36 @@ func heapTestOf(m *module.Module, h module.HeapType) (test heapTest, canon uint3
 	return testNone, 0, 0
 }
 
+// pooled reports whether the code makes the structs of type ti from the
+// engine's pools (refStructNew): a type without v128 fields.
+func pooled(m *module.Module, ti uint32) bool {
+	for _, f := range m.Types[ti].Struct.Fields {
+		if f.Type.Kind == module.KindV128 {
+			return false
+		}
+	}
+	return true
+}
+
+// newFields returns the fields refStructNew's index idx stores: its type's,
+// or none for struct.new_default.
+func newFields(m *module.Module, idx uint64) []module.FieldType {
+	if idx&1 == 0 {
+		return nil
+	}
+	return m.Types[uint32(idx>>1)].Struct.Fields
+}
+
+// hasRefField reports whether any of fs is a reference.
+func hasRefField(fs []module.FieldType) bool {
+	for _, f := range fs {
+		if f.Type.IsRef() {
+			return true
+		}
+	}
+	return false
+}
+
 // heapTypeOf reads a heap type.
 func (r *reader) heapTypeOf() module.HeapType {
 	v := r.s64()
@@ -191,7 +221,32 @@ func (bd *builder) gcInstr(op opcode.Opcode, at uint32) bool {
 	m := bd.m
 	h := len(bd.stack)
 	switch op {
-	case opcode.StructNew, opcode.StructNewDefault, opcode.ArrayNew, opcode.ArrayNewDefault, opcode.ArrayFill:
+	case opcode.StructNew, opcode.StructNewDefault:
+		ti := r.u32()
+		if !pooled(m, ti) {
+			bd.gcGo(op, ti, 0, at)
+			break
+		}
+		n := 0
+		if op == opcode.StructNew {
+			n = len(m.Types[ti].Struct.Fields)
+		}
+		pos := h - n
+		args := bd.args[:0]
+		for _, a := range bd.stack[pos:] {
+			if !bd.isRef(a) {
+				args = append(args, a)
+			}
+		}
+		bd.args = args
+		aux := uint64(ti) << 1
+		if op == opcode.StructNew {
+			aux |= 1
+		}
+		bd.refOp(bd.b, refStructNew, bd.rpos(pos), bd.rpos(pos), aux, TNone, at, args...)
+		bd.stack = bd.stack[:pos]
+		bd.pushRef()
+	case opcode.ArrayNew, opcode.ArrayNewDefault, opcode.ArrayFill:
 		bd.gcGo(op, r.u32(), 0, at)
 	case opcode.ArrayNewFixed, opcode.ArrayNewData, opcode.ArrayNewElem, opcode.ArrayCopy,
 		opcode.ArrayInitData, opcode.ArrayInitElem:

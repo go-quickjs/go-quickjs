@@ -273,6 +273,14 @@ const (
 	// (testAux), else 0; refCast traps at At where it is not.
 	refTest
 	refCast
+	// refStructNew makes dst a new struct of type idx>>1, taken from the
+	// level's pool of the type's (Ctx.Pools); where idx's low bit is set,
+	// struct.new's, its fields are its operands -- the numbers Args, in
+	// order, a reference the slot of its position, one slot for each field
+	// from dst on -- else, struct.new_default's, they are left zero. An
+	// empty pool exits for the engine to fill it (ExitAlloc), every
+	// register kept.
+	refStructNew
 )
 
 // opFlags says what an operation does besides compute its value.

@@ -11,6 +11,25 @@ func (c *compiler) loadWord(r arm64.Reg, m mem) { c.a.Load(r, m.base, m.off) }
 // jumpZero goes to l if r is zero.
 func (c *compiler) jumpZero(r arm64.Reg, l arm64.Label) { c.a.Cbz(r, l, true) }
 
+// poolTake takes a struct of type ti from the level's pool of the type's
+// into p, leaving in q the address of the pool's word of it, or goes to
+// slow where there is none.
+func (c *compiler) poolTake(p, q arm64.Reg, ti uint32, slow arm64.Label) {
+	a := c.a
+	l := c.req.Layout
+	a.Load(p, rCtx, offPools)
+	a.Cbz(p, slow, true)
+	a.Load(p, p, int32(8*ti))
+	a.Cbz(p, slow, true)
+	a.Load(q, p, l.PoolCount)
+	a.Cbz(q, slow, true)
+	a.AddImm(q, q, -1, true)
+	a.Store(p, l.PoolCount, q)
+	a.AddLsl(q, p, q, 3)
+	a.AddImm(q, q, int64(l.PoolObjs), true)
+	a.Load(p, q, 0)
+}
+
 // andImm is r &= imm, 32 bits.
 func (c *compiler) andImm(r arm64.Reg, imm int32) {
 	if !c.a.LogicImm(arm64.And, r, r, uint64(uint32(imm)), false) {

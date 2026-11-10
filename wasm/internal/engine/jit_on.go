@@ -162,6 +162,8 @@ func (n *nativeFn) loopCode() *nativeFn {
 // addresses of its globals, of its functions and of its tables.
 type jitInstance struct {
 	globals, funcs, tables atomic.Pointer[[]uintptr]
+	// pools are the tables of pools of new structs no level holds.
+	pools jitPools
 }
 
 // jitLevel is one entry of native code from Go, and the native calls it
@@ -195,6 +197,11 @@ type jitLevel struct {
 	frame frame
 	// rargs is the exit's Ctx.RArgs, taken when Go begins its work.
 	rargs uint64
+	// pools is the table of pools of new structs the level's code takes
+	// from (Ctx.Pools), nil until its first ExitAlloc; ownPools says the
+	// level took it from the instance, rather than sharing a level's below.
+	pools    *gcPools
+	ownPools bool
 }
 
 // jitLayout is where the engine's objects keep what native code reads.
@@ -212,6 +219,8 @@ var jitLayout = &wjit.Layout{
 	FuncType:   int32(unsafe.Offsetof(Function{}.Type)),
 	FuncInst:   int32(unsafe.Offsetof(Function{}.Inst)),
 	FuncIndex:  int32(unsafe.Offsetof(Function{}.Index)),
+	PoolCount:  int32(unsafe.Offsetof(gcPool{}.n)),
+	PoolObjs:   int32(unsafe.Offsetof(gcPool{}.objs)),
 }
 
 // A type's supertypes are 4 bytes each, as native code reads them.
@@ -237,10 +246,12 @@ var jitWriteBarrier, jitStoreRef = func() (uint64, uint64) {
 // jitAlwaysMarking is a write barrier's flag that is always set.
 var jitAlwaysMarking uint8 = 1
 
-// jitCountExits has jitExits count the exits native code takes, for tests.
+// jitCountExits has jitExits count the exits native code takes, and
+// jitAllocExits its ExitAllocs, for tests.
 var (
 	jitCountExits bool
 	jitExits      atomic.Int64
+	jitAllocExits atomic.Int64
 )
 
 // jitExec is an exec's native state: the levels entered, and the native
@@ -307,6 +318,9 @@ func (x *exec) pushLevel(lv *jitLevel, cj *codeJIT, ch *codeLevels) {
 // popLevel ends lv, the innermost level. Its Code's run lock is held for
 // reading.
 func (x *exec) popLevel(lv *jitLevel) {
+	if lv.pools != nil {
+		lv.dropPools()
+	}
 	lv.chain.top = lv.below
 	x.jit.n--
 }
@@ -1159,6 +1173,9 @@ func (x *exec) enterNative(cj *codeJIT, fn *Function, nat *nativeFn, l []uint64,
 		x.poll = int32(ctx.Poll)
 		if jitCountExits {
 			jitExits.Add(1)
+			if ctx.Exit == wjit.ExitAlloc {
+				jitAllocExits.Add(1)
+			}
 		}
 		var next *nativeFn
 		var o int
@@ -1254,6 +1271,12 @@ func (x *exec) jitExit(lv *jitLevel) (next *nativeFn, off int, tail bool) {
 		} else if n != nil {
 			return n, o, false
 		}
+	case wjit.ExitAlloc:
+		f := x.exitFrame(lv)
+		x.jitSync(lv, uint32(ctx.Arg1))
+		x.takeFrom(lv, &f)
+		x.jitAlloc(lv, uint32(ctx.Arg0))
+		x.jitUnsync(lv)
 	case wjit.ExitSIMD:
 		f := x.exitFrame(lv)
 		lv.frame.l, lv.frame.inst = f.l, inst

@@ -80,6 +80,8 @@ var (
 	offArg0      = int32(unsafe.Offsetof(wjit.Ctx{}.Arg0))
 	offExitFn    = int32(unsafe.Offsetof(wjit.Ctx{}.ExitFn))
 	offExitAddr  = int32(unsafe.Offsetof(wjit.Ctx{}.ExitAddr))
+	offPools     = int32(unsafe.Offsetof(wjit.Ctx{}.Pools))
+	offResume    = int32(unsafe.Offsetof(wjit.Ctx{}.Resume))
 )
 
 // genScratch is the lowering's part of a workspace: the lowering's state,
@@ -111,6 +113,10 @@ type gen struct {
 	wb          amd64.Label
 	hasWB       bool
 	argSlotsBuf []int32
+	// alloc is the function's exit for an empty pool of new structs,
+	// which hasAlloc says is made.
+	alloc    amd64.Label
+	hasAlloc bool
 	// vpool is the code's v128 constants, emitted after it.
 	vpool vpool[amd64.Label]
 }
@@ -467,6 +473,8 @@ const (
 	stubWB
 	stubTail
 	stubRefRoom
+	stubAlloc
+	stubAllocExit
 )
 
 // stub emits out-of-line code.
@@ -493,6 +501,26 @@ func (g *gen) stub(st *stub) {
 		g.exit(wjit.ExitPoll, a.NewLabel())
 		g.restoreAll()
 		a.Jmp(st.to)
+	case stubAlloc:
+		// An empty pool of new structs of type code: the function's exit
+		// for it, to take from it again at to.
+		a.Bind(st.l)
+		g.mark("cold alloc")
+		g.storeCtx(offArg0, st.code)
+		g.storeCtx(offArg0+8, uint64(st.at))
+		a.LeaLabel(s0, st.to)
+		a.Jmp(g.allocExit())
+	case stubAllocExit:
+		// The function's exit for an empty pool: the engine fills it,
+		// every register kept, and the code goes on where its site left
+		// in s0, its arguments stored.
+		a.Bind(st.l)
+		g.mark("cold alloc exit")
+		a.Store(rCtx, offResume, s0)
+		g.saveAll()
+		g.exit(wjit.ExitAlloc, a.NewLabel())
+		g.restoreAll()
+		a.JmpMem(rCtx, offResume)
 	case stubCall, stubCallIndirect, stubCallRef:
 		v := st.v
 		a.Bind(st.l)
@@ -607,6 +635,17 @@ func (g *gen) restoreAll() {
 		}
 		a.LoadSD(amd64.XReg(x), rCtx, offSave+int32(8*(len(gprs)+i)))
 	}
+}
+
+// allocExit returns the function's exit for an empty pool of new structs,
+// made after the body with its first use.
+func (g *gen) allocExit() amd64.Label {
+	if !g.hasAlloc {
+		g.hasAlloc = true
+		g.alloc = g.a.NewLabel()
+		g.ool = append(g.ool, stub{kind: stubAllocExit, l: g.alloc})
+	}
+	return g.alloc
 }
 
 // pollExit is out-of-line code that exits for a poll, every register kept,
