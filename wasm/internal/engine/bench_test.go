@@ -66,3 +66,55 @@ func BenchmarkLoop1M(b *testing.B) {
 		}
 	}
 }
+
+const benchEntryWAT = `(module
+  (type $t (func (param i32) (result i32)))
+  (table 1 funcref)
+  (elem (i32.const 0) $id)
+  (func $id (export "id") (param i32) (result i32) (local.get 0))
+  (func (export "ind") (param i32) (result i32) (local i32)
+    (loop $l
+      (local.set 1 (i32.add (local.get 1)
+        (call_indirect (type $t) (local.get 0) (i32.const 0))))
+      (br_if $l (local.tee 0 (i32.sub (local.get 0) (i32.const 1)))))
+    (local.get 1))
+)`
+
+// entryInstance instantiates benchEntryWAT with its functions compiled by
+// the baseline tier at their first call, or skips without native code.
+func entryInstance(b *testing.B) *Instance {
+	inst := thresholdInstance(b, benchEntryWAT, 0)
+	inst.Code.SetOptThreshold(-1)
+	return inst
+}
+
+// BenchmarkInvokeIdentity times an entry into native code from Go and its
+// return: an Invoke of a function returning its argument.
+func BenchmarkInvokeIdentity(b *testing.B) {
+	inst := entryInstance(b)
+	fn, _ := inst.Export("id")
+	ctx := context.Background()
+	args := []Val{{N: 7}}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if res, err := Invoke(ctx, fn.Func, args); err != nil || res[0].N != 7 {
+			b.Fatal(err, res)
+		}
+	}
+}
+
+// BenchmarkIndirectThroughGo times 1000 call_indirects the baseline tier
+// makes through Go, each an exit, an entry into the callee's native code
+// and a resumption.
+func BenchmarkIndirectThroughGo(b *testing.B) {
+	inst := entryInstance(b)
+	fn, _ := inst.Export("ind")
+	ctx := context.Background()
+	args := []Val{{N: 1000}}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if res, err := Invoke(ctx, fn.Func, args); err != nil || res[0].N != 500500 {
+			b.Fatal(err, res)
+		}
+	}
+}
