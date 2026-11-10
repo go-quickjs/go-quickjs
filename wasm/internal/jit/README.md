@@ -32,6 +32,7 @@ This package compiles; the engine places, enters and handles exits:
 | `stack_GOARCH.go` | its registers, and the moves between registers, slots and constants |
 | `ops_GOARCH.go` | its numeric and memory instructions |
 | `atomic.go`, `atomic_GOARCH.go` | the atomic instructions: what they are, and a backend's code for them |
+| `bulk.go`, `bulk_GOARCH.go` | memory.size, memory.copy, memory.fill, table.size and table.fill |
 | `refs.go`, `refs_GOARCH.go` | references: frames' reference slots, the reference instructions, the stores of pointer words and the barrier routine |
 | `gc.go`, `gc_GOARCH.go` | the GC instructions: fields, elements, i31s, tests and casts |
 | `simd.go`, `simd_GOARCH.go` | the SIMD instructions: v128.const, their types and the exit through the interpreter, and a backend's code for them |
@@ -332,7 +333,7 @@ of a Go program's code.
 | `ExitPoll` | `pollContext`, the context's cancellation |
 | `ExitCallRef` | call_ref: finds the function, trapping on null, and calls it |
 | `ExitTailRef` | return_call_ref, as `ExitTailIndirect` |
-| `ExitOp` | memory.size, memory.grow, memory.init, memory.copy, memory.fill, data.drop, table.size, table.grow, table.fill, table.init, table.copy, elem.drop, struct.new, struct.new_default, the array.new instructions, array.fill, array.copy, array.init_data, array.init_elem, throw, throw_ref, rethrow (which do not resume: see Exceptions), memory.atomic.wait32, memory.atomic.wait64, memory.atomic.notify, on the frame's slots; an atomic instruction's offset is the 64-bit `Arg2` |
+| `ExitOp` | memory.grow, memory.init, data.drop, table.grow, table.init, table.copy, elem.drop, struct.new, struct.new_default, the array.new instructions, array.fill, array.copy, array.init_data, array.init_elem, throw, throw_ref, rethrow (which do not resume: see Exceptions), memory.atomic.wait32, memory.atomic.wait64, memory.atomic.notify, on the frame's slots; an atomic instruction's offset is the 64-bit `Arg2` |
 | `ExitSIMD` | a SIMD instruction the backend does not compile (see SIMD): the interpreter's own code for the instruction at offset `Arg0`, made once and kept by the Code (`codeJIT.simd`), run on the operands in the frame's slots from `Arg1` |
 | `ExitTierUp` | the function's count of calls toward the optimizing tier ran out, at its entry (where the request gives a `TierCounter`): the engine compiles it there and enters the optimized code with the frame as the call made it, or resumes the baseline code |
 
@@ -430,7 +431,33 @@ threads grow it; its bytes never move.
 The access is `[base + address + offset]` on amd64 -- the offset added to
 the address first for an i64 memory, or where it is past 2^31-1 -- and on
 arm64 the offset is added to the address first, in 64 bits, and the access
-is `[base + that]`. The bulk instructions of any memory are exits.
+is `[base + that]`.
+
+memory.size, memory.copy and memory.fill of any memory are the code's own
+(`bulk.go`), as are table.size and table.fill; memory.grow and table.grow,
+which allocate and charge the budget, memory.init and table.init, which
+read a segment, table.copy, data.drop and elem.drop exit (`ExitOp`).
+memory.size reads the size an access reads -- a shared memory's where its
+grows store it, by a load-acquire on arm64 -- and shifts it; table.size
+reads the table's number of elements. A copy, a fill and a table.fill
+first store every entry, which frees the cache's registers, then read
+their operands from the slots: on amd64 into AX, CX, DX and SI (SI being
+R in a function that holds references, loaded again after), on arm64
+into X1-X3. Both ends -- the start plus the count, which for an i64
+memory or table traps where it carries -- are checked against the size
+before a byte is written, as the interpreter checks them, with the
+interpreter's trap. Then on amd64 a fill is REP STOSB and a copy REP
+MOVSB, DI, the context, waiting in R11 meanwhile; on arm64 they loop over
+blocks of 32 bytes in Q31 and Q30 (LDP and STP, the address moving past
+each block), then of 8 in X16, then bytes, a fill's byte DUPed into each
+of Q31's. A copy within one memory to a higher address that overlaps its
+source goes from its end down -- on amd64 words then bytes, on arm64 the
+same blocks pre-indexed -- each read before the bytes above it are
+written. table.fill stores its reference into each element as any
+reference store is, through the barrier routine while the collector marks
+(References and the collector), which keeps the loop's registers. None
+makes an exit or a poll: the count is bounded by the memory or the table,
+as Go's copy of it in the interpreter is.
 
 An atomic access checks, after an i64 memory's carry and before the
 bounds, that the effective address is a multiple of its width, and traps

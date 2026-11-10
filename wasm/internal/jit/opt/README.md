@@ -774,9 +774,8 @@ registers the allocator gave out.
   runs five times, the dominator tree up to three -- and trivial phis
   the builder need not make. In the background it costs the first run
   little, but it is CPU an embedder running a runtime on each core pays.
-- Inlining of small callees; tail calls; call_indirect and memory.copy
-  natively in the baseline too, whose Go programs spend a third of their
-  time in those exits.
+- Inlining of small callees; tail calls; call_indirect natively in the
+  baseline too, whose Go programs spend much of their time in its exits.
 - Bounds checks: hoisting a loop's checks of an induction variable, and a
   block's checks of one base at its widest where nothing between can be
   observed.

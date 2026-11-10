@@ -41,12 +41,12 @@ records a set but turns nothing off.
 | Proposal | Interpreter | JIT |
 |---|---|---|
 | WebAssembly 1.0, mutable globals | yes | yes |
-| Sign extension, non-trapping float-to-int, multi-value, bulk memory | yes | yes; the bulk instructions run in Go |
-| Reference types | yes | yes; `table.grow` and `table.fill` in Go |
+| Sign extension, non-trapping float-to-int, multi-value, bulk memory | yes | yes; `memory.init`, `data.drop`, `table.init`, `table.copy` and `elem.drop` in Go |
+| Reference types | yes | yes; `table.grow` in Go |
 | Fixed-width SIMD | yes | yes; on amd64 with SSSE3, SSE4.1 and SSE4.2 |
 | Tail calls | yes | yes; `return_call_indirect` through Go |
 | Extended constant expressions | yes | -- |
-| Multiple memories | yes | loads and stores of memory 0 only |
+| Multiple memories | yes | yes |
 | Memory64 and table64 | yes | refused for loads and stores of an i64 memory |
 | Exception handling (`exnref`), and the legacy `try` | yes | yes; throwing and catching through Go |
 | Typed function references | yes | yes; `call_ref` and `return_call_ref` through Go |
@@ -508,8 +508,11 @@ specification fixes the bits: NaN quieting, the minimum and maximum of zeros,
 trapping and saturating truncations, one rounding for unsigned 64-bit
 conversions. Calls between native functions of an instance are native;
 calls of imports, of host functions, through tables and through references,
-the bulk memory and table instructions, `table.grow`, and
-`memory.atomic.wait` and `notify` return to Go and resume. References are
+`memory.grow`, `table.grow`, `memory.init`, `table.init`, `table.copy`,
+`data.drop`, `elem.drop`, and `memory.atomic.wait` and `notify` return to Go
+and resume; `memory.size`, `memory.copy`, `memory.fill`, `table.size` and
+`table.fill` are native, the copies and fills checking both ends before
+writing as the interpreter does. References are
 native -- locals, globals, tables' elements, the null tests and branches,
 `ref.func`, `ref.eq`, `select` -- and so are the GC instructions that read
 and write structs' fields and arrays' elements, i31s, tests and casts; what

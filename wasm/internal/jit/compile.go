@@ -876,12 +876,21 @@ func (c *compiler) instr() {
 		c.pushConst(module.KindF32, uint64(c.r.fixed32()))
 	case opcode.F64Const:
 		c.pushConst(module.KindF64, c.r.fixed64())
-	case opcode.MemorySize, opcode.MemoryGrow:
-		c.goOp(op, at, uint64(c.r.u32()), 0)
-	case opcode.MemoryInit, opcode.MemoryCopy, opcode.TableInit, opcode.TableCopy:
+	case opcode.MemorySize:
+		c.memorySize(c.r.u32())
+	case opcode.MemoryCopy:
+		dst := c.r.u32()
+		c.memoryCopy(dst, c.r.u32(), at)
+	case opcode.MemoryFill:
+		c.memoryFill(c.r.u32(), at)
+	case opcode.TableSize:
+		c.tableSize(c.r.u32())
+	case opcode.TableFill:
+		c.tableFill(c.r.u32(), at)
+	case opcode.MemoryInit, opcode.TableInit, opcode.TableCopy:
 		x := uint64(c.r.u32())
 		c.goOp(op, at, x, uint64(c.r.u32()))
-	case opcode.DataDrop, opcode.ElemDrop, opcode.MemoryFill, opcode.TableSize, opcode.TableGrow, opcode.TableFill:
+	case opcode.MemoryGrow, opcode.DataDrop, opcode.ElemDrop, opcode.TableGrow:
 		c.goOp(op, at, uint64(c.r.u32()), 0)
 	default:
 		if c.numeric(op, at) || c.memoryOp(op, at) || c.atomicOp(op, at) || c.refOp(op, at) || c.gcOp(op, at) || c.simd(op, at) {
@@ -960,22 +969,16 @@ func (c *compiler) goOp(op opcode.Opcode, at uint32, x, y uint64) {
 		return module.KindI32
 	}
 	switch op {
-	case opcode.MemorySize:
-		result = idx(is64(uint32(x)))
 	case opcode.MemoryGrow:
 		nargs, result = 1, idx(is64(uint32(x)))
-	case opcode.MemoryInit, opcode.MemoryCopy, opcode.MemoryFill, opcode.TableInit, opcode.TableCopy:
+	case opcode.MemoryInit, opcode.TableInit, opcode.TableCopy:
 		nargs = 3
-	case opcode.TableSize:
-		result = idx(tab64(uint32(x)))
 	case opcode.AtomicNotify:
 		nargs, result = 2, module.KindI32
 	case opcode.I32AtomicWait, opcode.I64AtomicWait:
 		nargs, result = 3, module.KindI32
 	case opcode.TableGrow:
 		nargs, result = 2, idx(tab64(uint32(x)))
-	case opcode.TableFill:
-		nargs = 3
 	case opcode.StructNew:
 		nargs, result = len(c.m.Types[x].Struct.Fields), module.KindRef
 	case opcode.StructNewDefault:
