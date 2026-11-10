@@ -95,6 +95,11 @@ type Ctx struct {
 	// positions' reference slots, sets it for an exit with references; the
 	// engine reads it at the exit and clears it.
 	RArgs uint64
+	// SaveV is where a function with v128 values keeps its float
+	// registers whole around a poll's exit and the runtime's store, each
+	// register's 16 bytes at 16 times its number, its general registers
+	// staying in Save.
+	SaveV [2 * 32]uint64
 }
 
 // RArgsBias is what Ctx.RArgs adds to its offset, which may be negative,

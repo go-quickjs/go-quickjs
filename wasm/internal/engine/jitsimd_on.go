@@ -16,15 +16,24 @@ import (
 // its slots.
 type simdExitFn func(f *frame)
 
+// simdExitKey is what a SIMD exit's code is kept by: the instruction's
+// offset and where its operands are, which the tiers' code of one
+// instruction stages in slots of their own.
+type simdExitKey struct {
+	at   uint32
+	base int
+}
+
 // simdExit returns the code of the SIMD instruction at offset at of the
 // module, its operands in the frame's slots from base, two apart, making
 // it the first time.
 func (cj *codeJIT) simdExit(c *Code, at uint32, base int) simdExitFn {
-	if fn, ok := cj.simd.Load(at); ok {
+	k := simdExitKey{at, base}
+	if fn, ok := cj.simd.Load(k); ok {
 		return fn.(simdExitFn)
 	}
 	fn := buildSIMDExit(c, at, base)
-	if prev, ok := cj.simd.LoadOrStore(at, fn); ok {
+	if prev, ok := cj.simd.LoadOrStore(k, fn); ok {
 		return prev.(simdExitFn)
 	}
 	// What running code needs: charged, never refused.

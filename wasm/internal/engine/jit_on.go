@@ -67,7 +67,8 @@ type codeJIT struct {
 	// dropped or it is collected.
 	raws []*placedCode
 	// simd holds the code of each SIMD instruction native code leaves to
-	// Go, by its offset in the module (simdExitFn).
+	// Go, by its offset in the module and its operands' slots
+	// (simdExitKey, simdExitFn).
 	simd sync.Map
 	// catches says a function of the code has catch clauses: exits are
 	// handled under a recover that takes exceptions to them.

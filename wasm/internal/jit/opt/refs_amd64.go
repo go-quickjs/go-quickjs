@@ -153,6 +153,10 @@ func (g *gen) emitWB(l amd64.Label) {
 		a.Store(rCtx, offSave+int32(8*i), r)
 	}
 	for x := amd64.XReg(0); x < 15; x++ {
+		if g.v128 {
+			a.StoreVec(rCtx, offSaveV+int32(16*x), x)
+			continue
+		}
 		a.StoreSD(rCtx, offSave+int32(8*(len(wbSaved)+int(x))), x)
 	}
 	a.Load(amd64.RAX, rCtx, offWBSlot)
@@ -166,6 +170,10 @@ func (g *gen) emitWB(l amd64.Label) {
 		a.Load(r, rCtx, offSave+int32(8*i))
 	}
 	for x := amd64.XReg(0); x < 15; x++ {
+		if g.v128 {
+			a.LoadVec(x, rCtx, offSaveV+int32(16*x))
+			continue
+		}
 		a.LoadSD(x, rCtx, offSave+int32(8*(len(wbSaved)+int(x))))
 	}
 	a.JmpMem(rCtx, offWBRet)
@@ -409,10 +417,17 @@ func (g *gen) tail(v *Value) {
 		}
 		// The numeric arguments, into the parameters' slots, at once.
 		moves := g.moves[:0]
-		for i, x := range args {
-			moves = append(moves, pmove{dst: loc{kind: lSlot, slot: int32(i)}, src: g.locOf(x), t: x.Type})
+		slot := int32(0)
+		for _, x := range args {
+			moves = append(moves, pmove{dst: loc{kind: lSlot, slot: slot}, src: g.locOf(x), t: x.Type})
+			slot += x.Type.Slots()
 		}
-		g.parallel(moves)
+		if v.Op == OpTail {
+			g.parallel(moves)
+		} else {
+			// x0 holds the callee's index.
+			g.parallelKeeping(moves)
+		}
 		g.moves = moves[:0]
 		a.Load(rRS, rCtx, offRSP)
 		if v.Op == OpTail {

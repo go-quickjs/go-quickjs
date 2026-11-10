@@ -156,6 +156,10 @@ func (g *gen) emitWB(l arm64.Label) {
 		a.Store(rCtx, offSave+int32(8*i), r)
 	}
 	for i, x := range fprs {
+		if g.v128 {
+			a.StoreQ(rCtx, offSaveV+int32(16*x), arm64.FReg(x))
+			continue
+		}
 		a.StoreF(rCtx, offSave+int32(8*(len(gprs)+len(keptRegs)+i)), arm64.FReg(x))
 	}
 	a.Load(arm64.Reg(15), rCtx, offWBSlot)
@@ -169,6 +173,10 @@ func (g *gen) emitWB(l arm64.Label) {
 		a.Load(r, rCtx, offSave+int32(8*i))
 	}
 	for i, x := range fprs {
+		if g.v128 {
+			a.LoadQ(arm64.FReg(x), rCtx, offSaveV+int32(16*x))
+			continue
+		}
 		a.LoadF(arm64.FReg(x), rCtx, offSave+int32(8*(len(gprs)+len(keptRegs)+i)))
 	}
 	a.Load(s0, rCtx, offWBRet)
@@ -424,10 +432,17 @@ func (g *gen) tail(v *Value) {
 		}
 		// The numeric arguments, into the parameters' slots, at once.
 		moves := g.moves[:0]
-		for i, x := range args {
-			moves = append(moves, pmove{dst: loc{kind: lSlot, slot: int32(i)}, src: g.locOf(x), t: x.Type})
+		slot := int32(0)
+		for _, x := range args {
+			moves = append(moves, pmove{dst: loc{kind: lSlot, slot: slot}, src: g.locOf(x), t: x.Type})
+			slot += x.Type.Slots()
 		}
-		g.parallel(moves)
+		if v.Op == OpTail {
+			g.parallel(moves)
+		} else {
+			// x0 holds the callee's index.
+			g.parallelKeeping(moves)
+		}
 		g.moves = moves[:0]
 		if v.Op == OpTail {
 			idx := uint32(v.Aux)

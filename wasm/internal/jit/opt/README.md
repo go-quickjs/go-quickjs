@@ -26,12 +26,14 @@ default (see Tier-up).
 | `lower_amd64.go`, `lower_arm64.go` | the lowering: each architecture's code |
 | `refs_amd64.go`, `refs_arm64.go` | the references: the reference instructions, the barrier routine, a call's references, the tail calls |
 | `memory_amd64.go`, `memory_arm64.go` | the accesses of any memory at any offset: memories other than 0, shared ones, those of i64 addresses |
+| `simd.go` | the SIMD instructions' values: what the tier refuses of them and what the builder makes |
+| `lower_simd_amd64.go`, `lower_simdf_amd64.go`, `lower_simd_arm64.go` | the SIMD instructions' lowering |
 | `internal/jit/lsra` | the register allocator, which knows nothing of WebAssembly |
 
 ## The IR
 
 A `Func` is blocks of `Value`s. A value has an operation, a type -- i32,
-i64, f32, f64, a call's tuple, or none -- its arguments, two immediates
+i64, f32, f64, v128, a call's tuple, or none -- its arguments, two immediates
 (`Aux`, `Aux2`) and, for what traps or calls, the offset in the module of
 its instruction (`At`), which a trap reports and a return stack entry
 records. A block has its phis apart from its other values, and ends one
@@ -56,9 +58,23 @@ where it is neither shared nor of i64 addresses, which the code does
 itself and which are not calls (`InCode`, `BulkInCode`) --
 `ref`, a reference instruction (below), the tail calls (`return_call`,
 `return_call_indirect`, `return_call_ref`), the last value of a block that
-ends with them (a sixth way, `tail`), and the atomic accesses -- loads,
+ends with them (a sixth way, `tail`), the atomic accesses -- loads,
 stores, the read-modify-writes and compare-and-exchange, each of a memory,
-an offset and a width -- and `fence` (`atomics.go`).
+an offset and a width -- and `fence` (`atomics.go`), and `simd`, a SIMD
+instruction (below).
+
+A v128 is a value as a number is: a constant has its low half in `Aux` and
+its high half in `Aux2`, and a load, a store, a global, a local, a phi, a
+`select`, a parameter, a result and a call's argument may be one. A `simd`
+value is the instruction whose opcode is its `Aux`'s low 24 bits, on its
+`Args`, its lane in `Aux2` -- a shuffle's sixteen lanes packed into both
+(`shuffleLanes`) -- and is pure. The loads and stores that are not of a
+whole v128 are a scalar access and a `simd` value (`simd.go`): an
+extending load an i64 load widened, a splatting load a load splatted,
+load32_zero and load64_zero a load put in the low lane, a lane's load a
+load replacing the lane, a lane's store the lane extracted and stored --
+so that the builder forwards, and `bce` checks, them as any other access,
+of any memory.
 
 References are never values. A reference is in a reference slot of the
 frame, as the baseline keeps it (its README's Frames): a reference local
@@ -117,12 +133,13 @@ construct whose end nothing reaches makes the rest of its parent dead.
 
 Within a block the builder knows what a global holds -- the last value
 read or written -- and what memory holds: the last loads, and what a store
-of a whole value wrote, a later load of the same memory, address value,
-offset, width and type reading it. A store forgets what it may overlap:
-accesses of other memories, accesses at one address value whose bytes are
-disjoint, and accesses at constant addresses whose bytes are disjoint,
-survive it. A shared memory's loads are not known: another thread may
-store between two. A call and an instruction Go runs forget it all.
+of a whole value (a v128's 16 bytes included) wrote, a later load of the
+same memory, address value, offset, width and type reading it. A store
+forgets what it may overlap: accesses of other memories, accesses at one
+address value whose bytes are disjoint, and accesses at constant addresses
+whose bytes are disjoint, survive it. A shared memory's loads are not
+known: another thread may store between two. A call and an instruction Go
+runs forget it all.
 
 The phis a lookup made that turn out trivial -- every argument one value,
 or the phi itself -- are removed by the first pass.
@@ -178,7 +195,10 @@ Folding is exact: integers as WebAssembly defines them, a division only
 where it cannot trap; floats only where no NaN is involved (add, sub,
 mul, div, promote, demote, the exact integer conversions), or on bits
 (neg, abs, copysign), so that the interpreter's NaN payloads are never
-the folder's to choose.
+the folder's to choose. The SIMD instructions are not folded -- a
+`select` of v128s is, on its condition -- but they are pure: `gvn` shares
+them by their opcode, lane and operands (a v128 constant by both halves)
+and `licm` hoists them.
 
 `Verify` checks the IR's invariants -- edges agree with block kinds and
 each other, a phi has an argument for each predecessor, a value's
@@ -193,11 +213,12 @@ The optimized code runs in the interpreter's frame, as the baseline's
 does (its README's Frames), with the frame's numeric slots its own but at
 the points where something else reads them:
 
-- At entry the parameters are in slots 0 up, as the caller left them.
-- At a return the results are in slots 0 up.
+- At entry the parameters are in slots 0 up, as the caller left them, a
+  v128 taking two -- its low half, then its high half.
+- At a return the results are in slots 0 up, likewise.
 - A native call writes the arguments into the callee's frame, at its
-  frame's end (`L + 8*nslots`), one slot each, and reads the results
-  there; the return stack entry is the baseline's.
+  frame's end (`L + 8*nslots`), one slot each and a v128 two, and reads
+  the results there; the return stack entry is the baseline's.
 - A call through Go -- of an import, of a callee with no native code or no
   room, a `call_indirect` not made natively -- and an instruction Go runs
   find their numeric operands, two slots apart, each at its place among
@@ -206,13 +227,16 @@ the points where something else reads them:
   leave their results there; their references stay in their positions'
   slots, where `Ctx.RArgs` says (below).
 - A poll's exit keeps every register in the context's save area
-  (`Ctx.Save`): nothing in the level runs while Go polls.
+  (`Ctx.Save`): nothing in the level runs while Go polls. A function with
+  v128 values keeps its float registers whole, 16 bytes each, in
+  `Ctx.SaveV`, and its barrier routine likewise.
 - A trap reads nothing of the frame.
 
-Every other slot below `argBase` is the allocator's spill slot. A
-parameter, a local and a result have the slots of the engine's frames: a
-number's numeric slot is its place among the numbers, a reference's
-reference slot its place among the references. A slot's
+Every other slot below `argBase` is the allocator's spill slot, a v128's
+two. A parameter, a local and a result have the slots of the engine's
+frames: a number's numeric slot is its place among the numbers, a v128
+counting two, a reference's reference slot its place among the
+references. A slot's
 word holds an i32 or an f32 with its upper half clear, as the
 interpreter's frames do, so that what Go reads of the call area is right
 and a slot is copied whole: on amd64 an f32 is stored with MOVSS and a
@@ -257,7 +281,7 @@ table.grow and table.fill, which Go runs, do the same (`stageGo`).
 | R11, R10 | general scratch registers |
 | X15, X14 | float scratch registers |
 | SI, R8, R9, R13, AX, CX, DX | the allocator's general registers, AX, CX and DX last (division's and shifts'; memory.copy and memory.fill take AX, CX and SI, an atomic store, read-modify-write and compare-and-exchange AX, CX and DX) |
-| X0-X13 | the allocator's float registers |
+| X0-X13 | the allocator's float registers: f32s, f64s and v128s |
 | SP, BP, R14 | never written |
 
 Native callers enter with R10 the return stack's next entry, which the
@@ -280,7 +304,7 @@ On arm64:
 | D31, D30 | float scratch registers; Q31 and Q30, whole, memory.copy's and memory.fill's |
 | X27 | the encoder's temporary, and a remainder's quotient |
 | X1-X12, X24-X26, X13-X15 | the allocator's general registers, X13-X15 last (memory.copy's and memory.fill's, and an atomic store's, read-modify-write's and compare-and-exchange's) |
-| D0-D29 | the allocator's float registers |
+| D0-D29 | the allocator's float registers: f32s, f64s and, whole, v128s |
 | SP, X18, X28, X29, X30 | never written |
 
 These are the baseline's: every register a native frame of a level keeps
@@ -345,7 +369,15 @@ operand where the instruction takes one (`OpMem`, `ImulMem`), else, and on
 arm64 always, into a scratch register -- and computes a spilled result in
 a scratch register and stores it. The moves on an edge are parallel: each
 waits for those that read its destination, and a cycle is broken through
-R10 or X14 (X17 or D30 on arm64).
+R10 or X14 (X17 or D30 on arm64). Where a move is of a v128, whose two
+slots may meet a word's or another v128's in part, a move waits for those
+whose sources meet its destination at all, and where every move waits, the
+source of one another waits for goes to a scratch register -- X14, X15 or
+R10 (D30, D31 or X17) -- which its readers read (`parallelV`).
+
+v128s are the float class's, as wide as two slots (`lsra.Func.Width`):
+they share the float registers with f32s and f64s, and a spilled v128, or
+one kept across a call, has two slots in a row.
 
 ## Lowering
 
@@ -477,6 +509,45 @@ then bytes -- a copy to a higher address that overlaps its source from
 its end down, each block read before it is written; a fill DUPs its byte
 into Q31's. They make no exit and no poll: the count is bounded by the
 memory, as Go's copy of it in the engine is.
+
+## SIMD
+
+Each SIMD instruction is the baseline's sequence for it (the baseline
+README's SIMD; `simd*_GOARCH.go` there): the same instructions, in the same
+order, with the same operand orders -- the first operand the destination
+on amd64, for the NaN rule's choice -- so that every result is the
+interpreter's bit for bit, NaNs included. Only the registers differ: the
+result's and the operands' are the allocator's, and the registers a
+sequence works in -- the baseline's temporaries from its cache and its
+scratch register -- are the instruction's temporaries (`lsra.Inst.Temps`,
+`simdTemps`), which the allocator keeps apart from its operands and
+result.
+
+On amd64 most instructions are two-address: the result is computed in a
+register holding the first operand (`vprep`) -- the result's own, X15 for
+a spilled one, or X14 where another operand is in the result's -- the
+others read from their own registers, or from X14, X15 or, for an
+instruction of three v128 operands, a temporary of its own, where they are
+spilled, constants, or in that register. On arm64 most are one instruction
+from the operands' registers to the result's (`v3`, `v2`); a sequence that
+writes its result before it reads an operand begins with a copy of one
+(`vprep`: bitselect and laneselect from the mask, relaxed_madd from the
+addend, a lane's replacement, narrow, i64x2.mul) or computes in a
+temporary (pmin, pmax, the dot products). A v128 constant is made where it
+is used: zeros and, on amd64, ones of registers alone, any other loaded
+from the code's pool of them after the code, RIP-relative (LDR literal on
+arm64). select of v128s is a branch around a move, as of floats on amd64;
+arm64 has no vector CSEL. The loads' scalars move into the
+vector register whole (`MOVQ`, `MOVD`; `FMOV` of the D or S view), which
+clears the rest, then widen or splat.
+
+relaxed_madd and relaxed_nmadd, where the interpreter fuses them (amd64
+with FMA3 and AVX), would need VEX encodings: as in the baseline, Go runs
+the interpreter's own code for them (`ExitSIMD`, `simdExits`), their
+operands staged in the call area two slots apart and the result read from
+the first's, the instruction a call to the allocator. The engine keeps an
+exit's code by the instruction's offset and its operands' slots, which the
+two tiers' code of one instruction stage in places of their own.
 
 ## Tier-up
 
@@ -723,8 +794,8 @@ A function is refused -- it keeps its baseline code -- when it has:
 
 | Reason | What |
 |---|---|
-| `v128` | a v128 value |
-| `simd` | a SIMD instruction |
+| `v128` | a v128 value on an amd64 CPU without SSSE3, SSE4.1 and SSE4.2 (the baseline's `cpu`) |
+| `simd` | a SIMD instruction there, or a half-precision one |
 | `atomics` | a struct or array atomic instruction |
 | `gc` | a GC instruction |
 | `exceptions` | try, try_table, throw, the legacy instructions |
@@ -799,7 +870,12 @@ workspaces kept and from goroutines at once (with -race);
 samples, `TestOptTierUpByExits` the exits'; `TestOptCallIndirect` every
 kind of element a native call_indirect meets, `TestOptRefs` references
 in every place, calls and tail calls of every kind with them, idle and
-with the collector marking, `TestOptBulkMemory`
+with the collector marking; `TestJITSIMDBits`, `TestJITRelaxedChoices`
+(amd64) and `TestJITSIMDValues` run every SIMD instruction and v128s in
+every place in the optimizing tier as in the baseline, each instruction
+alone and with its operands one value, its first operand live past it,
+and its operands or its result spilled; `TestParallelV` parallel moves
+whose slots meet in part; `TestOptBulkMemory`
 memory.copy and memory.fill at every overlap and end; `TestOptMemory` the
 baseline's tests of every kind of memory (`TestJITMultiMemory` and the
 others, and `TestJITAtomicsMatchInterpreter` and `TestJITAtomicTraps`) on
@@ -836,7 +912,7 @@ compile's cost was worked on):
 | micro/brtable | 238 | 42.3 | 41.9 | 41.8 |
 | micro/globals | 179 | 26.5 | 27.1 | 26.5 |
 | micro/gc | 354 | 234 | 242 | 237 |
-| micro/simd | 74.9 | 3.02 | 3.11 | 3.01 |
+| micro/simd | 74.9 | 2.99 | 2.98 | 2.99 |
 | programs/sha256 | 1956 | 150 (176) | 52.4 (162) | 54.6 (179) |
 | programs/sort | 1760 | 208 (243) | 114 (231) | 120 (249) |
 | programs/json | 874 | 59.3 (132) | 49.3 (145) | 37.6 (178) |
@@ -865,7 +941,10 @@ spills' slots); the allocator's coalescing and spills by density (interp
 21 to 12, sha256 75 to 47). The kernels gain where values stay in
 registers across a loop (nbody 1.8x, fib 1.2x, bytes 1.3x); loop, i64
 and mandelbrot are bound by one multiply's or add's latency each
-iteration, as the baseline is; gc and brtable spend their time in Go and
+iteration, as the baseline is, and simd by its accumulator's chain of an
+add, a shift, an xor and a shuffle, which both tiers keep in a register
+(its row measured again once the tier compiled SIMD: medians of 5
+processes of 3 runs); gc and brtable spend their time in Go and
 in the switch. The tiered first runs are the baseline's or better but
 json's and interp's, which compile their hot functions within a run of
 about 60 ms (json +10%, interp +4%, where they were +19% and +17%
@@ -880,15 +959,14 @@ memory's accesses each read its size through its address and are never
 taken as checked, and the atomics are bound by their locked instructions,
 as the baseline's are.
 
-On the spec scripts the tier compiles 5,048 functions and refuses 1,794
-(SIMD and v128s 1,499, GC instructions 188, exceptions 107), where it
-compiled 4,149 before it took every memory, every offset, the atomics and
-the instructions Go runs for tables and segments -- memories other than
-an i32 one 514, offsets 14, atomics 80, the table instructions that
-allocate or copy 218, memory.init and data.drop 73 were refused -- and
-3,914 before it took references and tail calls; in 24 to 34 ms, 5 to 7
-µs a function (43 to 63 ms before references), where the
-baseline's 2,926 take 11 to 23 ms. The Go program's 3,011 functions
+On the spec scripts the tier compiles 6,547 functions and refuses 295
+(GC instructions 188, exceptions 107), where it compiled 5,048 before it
+took SIMD and v128s (1,499 refused); 4,149 before it took every memory,
+every offset, the atomics and the instructions Go runs for tables and
+segments -- memories other than an i32 one 514, offsets 14, atomics 80,
+the table instructions that allocate or copy 218, memory.init and
+data.drop 73 were refused -- and 3,914 before it took references and
+tail calls; in 32 to 54 ms, 5 to 8 µs a function (on a busy machine). The Go program's 3,011 functions
 compile in 0.16 ms each (0.40 before; the baseline's, 0.12 ms).
 
 On arm64 (GitHub's `ubuntu-24.04-arm` runner, Linux; the same runs as the
@@ -926,6 +1004,8 @@ registers the allocator gave out.
   the builder need not make. In the background it costs the first run
   little, but it is CPU an embedder running a runtime on each core pays.
 - Inlining of small callees.
+- v128 constants as values: a shuffle's mask and a constant operand are
+  loaded from the pool where they are used, in every turn of a loop.
 - Bounds checks: hoisting a loop's checks of an induction variable, and a
   block's checks of one base at its widest where nothing between can be
   observed.

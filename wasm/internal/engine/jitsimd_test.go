@@ -15,18 +15,23 @@ import (
 
 	"github.com/go-quickjs/go-quickjs/wasm/internal/decoder"
 	wjit "github.com/go-quickjs/go-quickjs/wasm/internal/jit"
+	wopt "github.com/go-quickjs/go-quickjs/wasm/internal/jit/opt"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/opcode"
 )
 
 // simdFunc is a function of the SIMD test module: one instruction over its
-// parameters.
+// parameters, or, raw, a body of its own around it, whose result mixes the
+// instruction's with others (simdVariants).
 type simdFunc struct {
 	name   string
 	op     opcode.Opcode
 	params []module.ValueType
 	result module.ValueType
 	body   []byte
+	raw    bool
+	// locals is the number of v128 locals a raw body declares.
+	locals int
 }
 
 func uleb(b []byte, v uint64) []byte {
@@ -96,8 +101,16 @@ func simdModule(fns []simdFunc) []byte {
 		exports = append(exports, 0)
 		exports = uleb(exports, uint64(i))
 		var body []byte
-		body = append(body, 0) // no locals
+		if f.locals > 0 {
+			body = uleb(append(body, 1), uint64(f.locals))
+			body = append(body, valType(module.V128))
+		} else {
+			body = append(body, 0) // no locals
+		}
 		for k := range f.params {
+			if f.raw {
+				break
+			}
 			body = append(body, 0x20)
 			body = uleb(body, uint64(k))
 		}
@@ -198,6 +211,101 @@ func simdTestFuncs() []simdFunc {
 		}
 	}
 	return fns
+}
+
+// simdVariants are, for each of fns, its instruction where its v128
+// operands are one value (/same); where its first operand lives past it,
+// so that its result does not take that register (/keep); and among more
+// vectors live at once than there are registers, each used three times
+// and across it where its operands are used once, so that those are
+// spilled (/spill), or made before them and used once after (/spillres):
+// the result made a v128 (splatted) and mixed with the others.
+func simdVariants(fns []simdFunc) []simdFunc {
+	var out []simdFunc
+	get := func(b []byte, k int) []byte { return uleb(append(b, 0x20), uint64(k)) }
+	for _, f := range fns {
+		first, nv := -1, 0
+		for k, p := range f.params {
+			if p.Kind == module.KindV128 {
+				nv++
+				if first < 0 {
+					first = k
+				}
+			}
+		}
+		operands := func(same bool) (b []byte) {
+			for k, p := range f.params {
+				if same && p.Kind == module.KindV128 {
+					k = first
+				}
+				b = get(b, k)
+			}
+			return b
+		}
+		toV128 := func(b []byte) []byte {
+			switch f.result.Kind {
+			case module.KindI32:
+				b = append(b, simdOpBytes(opcode.I32x4Splat)...)
+			case module.KindI64:
+				b = append(b, simdOpBytes(opcode.I64x2Splat)...)
+			case module.KindF32:
+				b = append(b, simdOpBytes(opcode.F32x4Splat)...)
+			case module.KindF64:
+				b = append(b, simdOpBytes(opcode.F64x2Splat)...)
+			}
+			return b
+		}
+		variant := func(suffix string, result module.ValueType, body []byte, locals int) {
+			out = append(out, simdFunc{name: f.name + suffix, op: f.op, params: f.params, result: result, body: body, raw: true,
+				locals: locals})
+		}
+		if nv >= 2 {
+			variant("/same", f.result, append(operands(true), f.body...), 0)
+		}
+		if first >= 0 {
+			b := toV128(append(operands(false), f.body...))
+			b = append(get(b, first), simdOpBytes(opcode.S128Xor)...)
+			variant("/keep", module.V128, b, 0)
+		}
+		const live = 14
+		np := len(f.params)
+		vectors := func(b []byte) []byte {
+			for j := range live {
+				for k := range 2 {
+					b = append(b, simdOpBytes(opcode.S128Const)...)
+					for i := range 16 {
+						b = append(b, byte(j*37+i*11+k*5+1))
+					}
+				}
+				b = append(b, simdOpBytes(opcode.I32x4Add)...)
+				b = uleb(append(b, 0x21), uint64(np+j))
+			}
+			return b
+		}
+		// The result first, used once at the end.
+		b := get(vectors(toV128(append(operands(false), f.body...))), np)
+		for _, op := range []opcode.Opcode{opcode.S128Xor, opcode.I32x4Add, opcode.I64x2Sub} {
+			for j := 1; j < live; j++ {
+				b = append(get(b, np+j), simdOpBytes(op)...)
+			}
+		}
+		b = append(b, simdOpBytes(opcode.S128Xor)...)
+		variant("/spillres", module.V128, b, live)
+		// Two passes over the vectors before the instruction, one after.
+		b = get(vectors(nil), np)
+		for _, op := range []opcode.Opcode{opcode.S128Xor, opcode.I32x4Add} {
+			for j := 1; j < live; j++ {
+				b = append(get(b, np+j), simdOpBytes(op)...)
+			}
+		}
+		b = toV128(append(append(b, operands(false)...), f.body...))
+		b = append(b, simdOpBytes(opcode.S128Xor)...)
+		for j := range live {
+			b = append(get(b, np+j), simdOpBytes(opcode.I64x2Sub)...)
+		}
+		variant("/spill", module.V128, b, live)
+	}
+	return out
 }
 
 // The edges of each lane shape, which the inputs are made of.
@@ -396,29 +504,38 @@ func binaryInstance(t testing.TB, b []byte, threshold int) *Instance {
 // integers' and the conversions' bounds), alone, paired and mixed in
 // vectors, and on random bits, in the interpreter and natively, and
 // requires the same bits of every result, and of every lane with a NaN
-// operand the NaN rule's (nan.go, ruleLanes). It reports which
-// instructions native code leaves to Go (ExitSIMD).
+// operand the NaN rule's (nan.go, ruleLanes), in the baseline code and in
+// the optimizing tier's. It reports which instructions native code leaves
+// to Go (ExitSIMD).
 func TestJITSIMDBits(t *testing.T) {
 	if !JITAvailable() {
 		t.Skip("no native code in this build")
 	}
-	n, calls, exits := simdBits(t, func(simdFunc) bool { return true })
-	t.Logf("%d functions, %d calls compared; %d instructions run in Go: %s", n, calls, len(exits), strings.Join(exits, " "))
-	// Only the fused relaxed_madd and relaxed_nmadd on amd64, which the
-	// code does without VEX encodings.
-	var want []string
-	if runtime.GOARCH == "amd64" && wjit.CPU.RelaxedFused {
-		want = []string{"f32x4.qfma", "f32x4.qfms", "f64x2.qfma", "f64x2.qfms"}
-	}
-	if !slices.Equal(exits, want) {
-		t.Fatalf("the instructions run in Go are %v, want %v", exits, want)
+	for _, opt := range []bool{false, true} {
+		t.Run(map[bool]string{false: "baseline", true: "opt"}[opt], func(t *testing.T) {
+			if opt && !wopt.Available {
+				t.Skip("no optimizing tier here")
+			}
+			n, calls, exits := simdBits(t, func(simdFunc) bool { return true }, opt)
+			t.Logf("%d functions, %d calls compared; %d instructions run in Go: %s", n, calls, len(exits), strings.Join(exits, " "))
+			// Only the fused relaxed_madd and relaxed_nmadd on amd64, which
+			// the code does without VEX encodings.
+			var want []string
+			if runtime.GOARCH == "amd64" && wjit.CPU.RelaxedFused {
+				want = []string{"f32x4.qfma", "f32x4.qfms", "f64x2.qfma", "f64x2.qfms"}
+			}
+			if !slices.Equal(exits, want) {
+				t.Fatalf("the instructions run in Go are %v, want %v", exits, want)
+			}
+		})
 	}
 }
 
 // simdBits compares the functions of simdTestFuncs that keep takes,
-// interpreted and natively, returning how many there were, the calls
-// compared, and the names of the instructions native code left to Go.
-func simdBits(t *testing.T, keep func(simdFunc) bool) (n, calls int, exits []string) {
+// interpreted and natively -- in the baseline code, or, opt, in the
+// optimizing tier's -- returning how many there were, the calls compared,
+// and the names of the instructions native code left to Go.
+func simdBits(t *testing.T, keep func(simdFunc) bool, opt bool) (n, calls int, exits []string) {
 	t.Helper()
 	var fns []simdFunc
 	for _, f := range simdTestFuncs() {
@@ -426,9 +543,14 @@ func simdBits(t *testing.T, keep func(simdFunc) bool) (n, calls int, exits []str
 			fns = append(fns, f)
 		}
 	}
+	fns = append(fns, simdVariants(fns)...)
 	b := simdModule(fns)
 	interp := binaryInstance(t, b, math.MaxInt32)
 	native := binaryInstance(t, b, 0)
+	if opt {
+		native.Code.SetOptThreshold(0)
+		native.Code.SetOptBackground(false)
+	}
 	r := rand.New(rand.NewPCG(1, 2))
 	fails := 0
 	for _, f := range fns {
@@ -457,7 +579,7 @@ func simdBits(t *testing.T, keep func(simdFunc) bool) (n, calls int, exits []str
 					t.Errorf("%s%s = %#x %#x natively, %#x %#x interpreted", f.name, showVals(args), g.N, g.Hi, w.N, w.Hi)
 				}
 			}
-			if f.result.Kind == module.KindV128 {
+			if f.result.Kind == module.KindV128 && !f.raw {
 				vs := make([]V128, len(args))
 				for k, a := range args {
 					vs[k] = V128{a.N, a.Hi}
@@ -478,6 +600,9 @@ func simdBits(t *testing.T, keep func(simdFunc) bool) (n, calls int, exits []str
 		if !nativeRan(native, f.name) {
 			t.Fatalf("%s has no native code", f.name)
 		}
+		if opt && !optimized(native, f.name) {
+			t.Fatalf("%s is not optimized", f.name)
+		}
 	}
 	if fails > 0 {
 		t.Fatalf("%d differences", fails)
@@ -487,7 +612,7 @@ func simdBits(t *testing.T, keep func(simdFunc) bool) (n, calls int, exits []str
 	cj := native.Code.jit.Load()
 	names := map[string]bool{}
 	cj.simd.Range(func(k, _ any) bool {
-		at := k.(uint32)
+		at := k.(simdExitKey).at
 		for i, f := range native.Code.Module.Functions {
 			if at >= f.Code.Offset && at < f.Code.End() {
 				names[fns[i].op.Name()] = true
@@ -510,10 +635,12 @@ func showVals(args []Val) string {
 	return b.String()
 }
 
-// v128 values natively where the register cache runs out -- many live at
-// once, spilled and loaded back -- in locals' homes across native calls and
-// exits, as arguments and results of calls, in globals, through select,
-// blocks, br_table and a loop's parameters, give the interpreter's bits.
+// v128 values natively where the registers run out -- many live at once,
+// spilled and loaded back -- in locals' homes across native calls and
+// exits, as arguments and results of calls and tail calls, in globals,
+// through select, blocks, br_table and a loop's parameters swapped on each
+// turn while the loop polls, give the interpreter's bits, in the baseline
+// code and in the optimizing tier's.
 func TestJITSIMDValues(t *testing.T) {
 	var deep strings.Builder
 	// Twenty vectors live at once, then summed in pairs.
@@ -565,9 +692,50 @@ func TestJITSIMDValues(t *testing.T) {
       (i32.gt_s)
       (br_if 0)))
   (func (export "global") (result v128) (global.get $g))
+  (func (export "rotate") (param v128 v128 i64 i32) (result v128) (local v128 v128 i64 v128)
+    (local.set 7 (local.get 0))
+    (local.get 0) (local.get 1) (local.get 2)
+    (loop $l (param v128 v128 i64) (result v128 v128 i64)
+      (local.set 6)
+      (local.set 5)
+      (local.set 4)
+      (local.set 7 (i64x2.add (local.get 7) (local.get 4)))
+      (local.get 5)
+      (local.get 4)
+      (i64.add (local.get 6) (i64.const 3))
+      (br_if $l (local.tee 3 (i32.sub (local.get 3) (i32.const 1)))))
+    (i64x2.splat)
+    (v128.xor)
+    (v128.xor)
+    (i8x16.add (local.get 7)))
+  (func $tail (param i32 v128 i64 v128) (result v128)
+    (if (result v128) (i32.eqz (local.get 0))
+      (then (i64x2.add (local.get 1) (i64x2.splat (local.get 2))))
+      (else
+        (return_call $tail (i32.sub (local.get 0) (i32.const 1)) (local.get 3)
+          (i64.add (local.get 2) (i64.const 1)) (i32x4.add (local.get 1) (local.get 3))))))
+  (func (export "tail") (param v128 v128 i32) (result v128)
+    (call $tail (local.get 2) (local.get 0) (i64.const 5) (local.get 1)))
   (memory 1))`
+	for _, opt := range []bool{false, true} {
+		t.Run(map[bool]string{false: "baseline", true: "opt"}[opt], func(t *testing.T) {
+			simdValues(t, src, opt)
+		})
+	}
+}
+
+// simdValues compares TestJITSIMDValues's functions, interpreted and
+// natively: in the baseline code, or, opt, in the optimizing tier's.
+func simdValues(t *testing.T, src string, opt bool) {
+	if opt && !wopt.Available {
+		t.Skip("no optimizing tier here")
+	}
 	interp := interpretedInstance(t, src)
 	native := nativeInstance(t, src)
+	if opt {
+		native.Code.SetOptThreshold(0)
+		native.Code.SetOptBackground(false)
+	}
 	r := rand.New(rand.NewPCG(5, 6))
 	vec := func() Val { return Val{N: r.Uint64(), Hi: r.Uint64()} }
 	for i := range 200 {
@@ -579,6 +747,8 @@ func TestJITSIMDValues(t *testing.T) {
 			{"calls", []Val{vec(), vec(), {N: uint64(i % 2)}}},
 			{"flow", []Val{vec(), {N: uint64(i % 7)}}},
 			{"global", nil},
+			{"rotate", []Val{vec(), vec(), {N: r.Uint64()}, {N: uint64(1 + i%3*5000)}}},
+			{"tail", []Val{vec(), vec(), {N: uint64(i % 9)}}},
 		}
 		for _, cs := range cases {
 			ei, _ := interp.Export(cs.name)
@@ -596,9 +766,12 @@ func TestJITSIMDValues(t *testing.T) {
 			}
 		}
 	}
-	for _, name := range []string{"deep", "calls", "flow", "global"} {
+	for _, name := range []string{"deep", "calls", "flow", "global", "rotate", "tail"} {
 		if !nativeRan(native, name) {
 			t.Fatalf("%s has no native code", name)
+		}
+		if opt && !optimized(native, name) {
+			t.Fatalf("%s is not optimized", name)
 		}
 	}
 }

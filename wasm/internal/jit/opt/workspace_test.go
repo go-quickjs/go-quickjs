@@ -48,7 +48,9 @@ func TestWorkspaceReuse(t *testing.T) {
     (if (result f64) (f64.lt (local.get $x) (f64.const 1))
       (then (f64.sqrt (local.get $x)))
       (else (f64.div (local.get $x) (f64.add (local.get 0) (f64.const 2))))))
-  (func $refused (result v128) (v128.const i64x2 0 0)))`)
+  (func $vec (param v128 v128) (result v128)
+    (i32x4.add (f32x4.min (local.get 0) (local.get 1)) (v128.const i32x4 1 2 3 4)))
+  (func $refused (result i32) (i31.get_s (ref.i31 (i32.const 1)))))`)
 	n := uint32(len(m.Functions))
 	// What a compile makes in a workspace of its own; the last function
 	// is refused.

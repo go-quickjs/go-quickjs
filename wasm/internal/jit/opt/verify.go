@@ -218,7 +218,7 @@ func checkTypes(v *Value) error {
 	}
 	switch v.Op {
 	case OpConst, OpParam:
-		if !v.Type.IsInt() && !v.Type.IsFloat() {
+		if !v.Type.IsInt() && !v.Type.InFloatReg() {
 			return fmt.Errorf("of type %v", v.Type)
 		}
 		return arity(0)
@@ -228,7 +228,7 @@ func checkTypes(v *Value) error {
 		}
 		return arity(0)
 	case OpGlobalGet:
-		if !v.Type.IsInt() && !v.Type.IsFloat() {
+		if !v.Type.IsInt() && !v.Type.InFloatReg() {
 			return fmt.Errorf("of type %v", v.Type)
 		}
 		if err := arity(1); err != nil {
@@ -384,6 +384,19 @@ func checkTypes(v *Value) error {
 			return err
 		}
 		return same(v.Type)
+	case OpSIMD:
+		params, result := simdShape(simdOp(v))
+		if err := arity(len(params)); err != nil {
+			return err
+		}
+		if v.Type != result {
+			return fmt.Errorf("of type %v, not %v", v.Type, result)
+		}
+		for i, a := range v.Args {
+			if a.Type != params[i] {
+				return fmt.Errorf("argument %v of type %v, not %v", a, a.Type, params[i])
+			}
+		}
 	case OpGoOp:
 	case OpAtomicLoad:
 		if err := arity(1); err != nil {

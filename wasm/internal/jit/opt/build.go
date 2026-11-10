@@ -27,7 +27,8 @@ func refuse(reason, format string, args ...any) {
 }
 
 // typeOf is the SSA type of a value type -- TRef for a reference, which
-// is never a value -- refusing a v128.
+// is never a value -- refusing a v128 on a CPU without the SIMD the code
+// takes (hasSIMD).
 func typeOf(t module.ValueType, what string) Type {
 	switch t.Kind {
 	case module.KindI32:
@@ -39,7 +40,10 @@ func typeOf(t module.ValueType, what string) Type {
 	case module.KindF64:
 		return TF64
 	case module.KindV128:
-		refuse(RefuseV128, "%s of type v128", what)
+		if !hasSIMD() {
+			refuse(RefuseV128, "%s of type v128 without the CPU's SIMD", what)
+		}
+		return TV128
 	}
 	return TRef
 }
@@ -70,7 +74,7 @@ func (bd *builder) numericOf(ts []module.ValueType, what string) []Type {
 	return out
 }
 
-// checkValues refuses ts if one is a v128, as typeOf does, for what, after
+// checkValues refuses ts if one is a v128 typeOf refuses, for what, after
 // op's name if named.
 func checkValues(ts []module.ValueType, op opcode.Opcode, named bool, what string) {
 	for _, t := range ts {
@@ -126,7 +130,7 @@ type builder struct {
 	ctrl   []*ctl
 	b      *Block
 	// zero is each type's zero, for the declared locals.
-	zero [TTuple]*Value
+	zero [numTypes]*Value
 	// globals are the values of the mutable globals known in the current
 	// block: the last one read or written there since its start and its
 	// last call.
@@ -237,7 +241,7 @@ func (bd *builder) build(fn uint32) *Func {
 			return
 		}
 		bd.slots = append(bd.slots, nnum)
-		nnum++
+		nnum += t.Slots()
 	}
 	for _, t := range sig.Params {
 		place(typeOf(t, "parameter"))
@@ -253,14 +257,15 @@ func (bd *builder) build(fn uint32) *Func {
 	var rnum, rref int32
 	f.ResultSlots = bd.ws.i32.take(len(f.Results))
 	for _, t := range sig.Results {
-		if typeOf(t, "result") == TRef {
+		rt := typeOf(t, "result")
+		if rt == TRef {
 			bd.refResults = append(bd.refResults, rref)
 			rref++
 			continue
 		}
 		bd.refResults = append(bd.refResults, -1)
 		f.ResultSlots = append(f.ResultSlots, rnum)
-		rnum++
+		rnum += rt.Slots()
 	}
 	f.RLocals = int(max(nref, rref))
 	entry := f.newBlock()
@@ -812,7 +817,7 @@ func (bd *builder) instr() {
 	case opcode.TableGrow, opcode.TableFill:
 		bd.tableGo(op, r.u32(), at)
 	default:
-		if bd.memoryOp(op, at) || bd.numeric(op, at) || bd.refInstr(op, at) || bd.atomicOp(op, at) {
+		if bd.memoryOp(op, at) || bd.numeric(op, at) || bd.refInstr(op, at) || bd.atomicOp(op, at) || bd.simd(op, at) {
 			return
 		}
 		refuse(RefuseOther, "%s", op.Name())
@@ -922,10 +927,11 @@ func (bd *builder) call(op Op, ft *module.FuncType, aux, aux2 uint64, at uint32,
 			bd.pushRef()
 			continue
 		}
-		// Aux is its place among the results, Aux2 among the numbers.
+		// Aux is its place among the results, Aux2 its slot among the
+		// numbers' (a v128 taking two).
 		res := bd.value(OpResult, t, v)
 		res.Aux, res.Aux2 = uint64(i), num
-		num++
+		num += uint64(t.Slots())
 		bd.push(res)
 	}
 	bd.forget()
@@ -1095,16 +1101,21 @@ func (bd *builder) memoryOp(op opcode.Opcode, at uint32) bool {
 	if op >= opcode.I32StoreMem {
 		v := bd.pop()
 		addr := bd.pop()
-		s := bd.value(OpStore, TNone, addr, v)
-		s.Aux, s.Aux2, s.Size, s.At = off, mx, size, at
-		bd.stored(addr, mx, off, size, v)
+		bd.store(addr, mx, off, size, v, at)
 		return true
 	}
 	addr := bd.pop()
+	bd.push(bd.load(addr, mx, off, size, signed, t, at))
+	return true
+}
+
+// load builds a load of size bytes of memory mx (memAux) at addr plus
+// off, as t, sign-extended if signed: the value a known store or load of
+// the same bytes as t has, else a load.
+func (bd *builder) load(addr *Value, mx, off uint64, size uint8, signed bool, t Type, at uint32) *Value {
 	for _, k := range bd.mem {
 		if k.addr == addr && k.mem == mx && k.off == off && k.size == size && k.signed == signed && k.typ == t {
-			bd.push(k.val)
-			return true
+			return k.val
 		}
 	}
 	v := bd.value(OpLoad, t, addr)
@@ -1114,8 +1125,15 @@ func (bd *builder) memoryOp(op opcode.Opcode, at uint32) bool {
 		// each reads it.
 		bd.mem = append(bd.mem, memFact{addr: addr, mem: mx, off: off, size: size, signed: signed, typ: t, val: v})
 	}
-	bd.push(v)
-	return true
+	return v
+}
+
+// store builds a store of v's low size bytes into memory mx at addr plus
+// off.
+func (bd *builder) store(addr *Value, mx, off uint64, size uint8, v *Value, at uint32) {
+	s := bd.value(OpStore, TNone, addr, v)
+	s.Aux, s.Aux2, s.Size, s.At = off, mx, size, at
+	bd.stored(addr, mx, off, size, v)
 }
 
 // memAux is the Aux2 of an access of memory mem: its index, and whether it
@@ -1162,7 +1180,8 @@ func (bd *builder) stored(addr *Value, mx, off uint64, size uint8, v *Value) {
 		}
 	}
 	bd.mem = keep
-	full := (v.Type == TI32 || v.Type == TF32) && size == 4 || (v.Type == TI64 || v.Type == TF64) && size == 8
+	full := (v.Type == TI32 || v.Type == TF32) && size == 4 || (v.Type == TI64 || v.Type == TF64) && size == 8 ||
+		v.Type == TV128 && size == 16
 	if full && mx&memShared == 0 {
 		bd.mem = append(bd.mem, memFact{addr: addr, mem: mx, off: off, size: size, typ: v.Type, val: v})
 	}
@@ -1348,7 +1367,8 @@ func check(m *module.Module, fn uint32) {
 		op := r.opcode()
 		switch op.Prefix() {
 		case opcode.PrefixSIMD:
-			refuse(RefuseSIMD, "%s", op.Name())
+			checkSIMD(m, &r, op)
+			continue
 		case opcode.PrefixAtomic:
 			switch op {
 			case opcode.AtomicFence, opcode.Pause, opcode.AtomicNotify, opcode.I32AtomicWait, opcode.I64AtomicWait:

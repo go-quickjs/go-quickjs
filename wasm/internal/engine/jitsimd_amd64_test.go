@@ -20,8 +20,8 @@ func TestJITRelaxedFeatures(t *testing.T) {
 	}
 }
 
-// Native code gives the interpreter's relaxed SIMD results under each
-// choice amd64's CPUs make -- fused relaxed_madd or not, and each
+// Native code, the baseline's and the optimizing tier's, gives the
+// interpreter's relaxed SIMD results under each choice amd64's CPUs make -- fused relaxed_madd or not, and each
 // relaxed_dot_i8x16_i7x16_add_s -- the choice made for both.
 func TestJITRelaxedChoices(t *testing.T) {
 	if !JITAvailable() {
@@ -34,11 +34,13 @@ func TestJITRelaxedChoices(t *testing.T) {
 		t.Run(fmt.Sprintf("fused=%v,signed=%v,vnni=%v", c.fused, c.signed, c.vnni), func(t *testing.T) {
 			relaxedFused, relaxedDotSigned, relaxedDotVNNI = c.fused, c.signed, c.vnni
 			wjit.CPU.RelaxedFused, wjit.CPU.RelaxedDotSigned, wjit.CPU.RelaxedDotVNNI = c.fused, c.signed, c.vnni
-			_, calls, exits := simdBits(t, func(f simdFunc) bool {
-				return strings.Contains(f.name, "relaxed") || strings.Contains(f.name, "qfm") ||
-					strings.Contains(f.name, "i7x16")
-			})
-			t.Logf("%d calls compared; run in Go: %v", calls, exits)
+			for _, opt := range []bool{false, true} {
+				_, calls, exits := simdBits(t, func(f simdFunc) bool {
+					return strings.Contains(f.name, "relaxed") || strings.Contains(f.name, "qfm") ||
+						strings.Contains(f.name, "i7x16")
+				}, opt)
+				t.Logf("opt %v: %d calls compared; run in Go: %v", opt, calls, exits)
+			}
 		})
 	}
 }

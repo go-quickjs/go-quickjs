@@ -77,6 +77,7 @@ var (
 	offR         = int32(unsafe.Offsetof(wjit.Ctx{}.R))
 	offRChunkEnd = int32(unsafe.Offsetof(wjit.Ctx{}.RChunkEnd))
 	offSave      = int32(unsafe.Offsetof(wjit.Ctx{}.Save))
+	offSaveV     = int32(unsafe.Offsetof(wjit.Ctx{}.SaveV))
 	offExit      = int32(unsafe.Offsetof(wjit.Ctx{}.Exit))
 	offArg0      = int32(unsafe.Offsetof(wjit.Ctx{}.Arg0))
 	offExitFn    = int32(unsafe.Offsetof(wjit.Ctx{}.ExitFn))
@@ -122,6 +123,8 @@ type gen struct {
 	wb          arm64.Label
 	hasWB       bool
 	argSlotsBuf []int32
+	// vpool is the code's v128 constants, emitted after it.
+	vpool vpool[arm64.Label]
 }
 
 // reset readies g, kept in a workspace, for function f, keeping the
@@ -133,7 +136,7 @@ func (g *gen) reset(ws *genScratch, f *Func, req *wjit.Request) {
 	g.polls.reset(8)
 	g.lowering.reset(f, req)
 	*g = gen{lowering: g.lowering, ws: ws, a: &ws.asm, labels: g.labels[:0], ool: g.ool[:0], traps: g.traps, trapTo: g.trapTo,
-		polls: g.polls, moves: g.moves[:0], pending: g.pending[:0], argSlotsBuf: g.argSlotsBuf[:0]}
+		polls: g.polls, moves: g.moves[:0], pending: g.pending[:0], argSlotsBuf: g.argSlotsBuf[:0], vpool: g.vpool.reset()}
 	ws.asm.Reset()
 }
 
@@ -159,8 +162,9 @@ func lower(f *Func, req *wjit.Request, ws *workspace) *wjit.Code {
 	}
 	g.allocate(&g.ws.allocScratch, classes, &arm64Clobbers)
 	for i, r := range g.ra.Reg {
-		if r >= 0 {
-			if g.byVreg[i].Type.IsFloat() {
+		// The temporaries past the values hold nothing across a poll.
+		if r >= 0 && i < len(g.byVreg) {
+			if g.byVreg[i].Type.InFloatReg() {
 				g.usedX |= 1 << r
 			} else {
 				g.usedG |= 1 << r
@@ -193,6 +197,7 @@ func lower(f *Func, req *wjit.Request, ws *workspace) *wjit.Code {
 	for i := 0; i < len(g.ool); i++ {
 		g.stub(&g.ool[i])
 	}
+	g.emitVConsts()
 	lap(PhaseEmit)
 	out, err := a.Finish()
 	lap(PhaseEncode)
@@ -228,6 +233,10 @@ func (g *gen) loadKept() {
 func (g *gen) move(dst, src loc, t Type) {
 	a := g.a
 	if dst == src {
+		return
+	}
+	if t == TV128 {
+		g.moveV(dst, src)
 		return
 	}
 	switch dst.kind {
@@ -314,6 +323,10 @@ func constBits(c uint64, t Type) uint64 {
 // parallel makes the moves as if all at once: a move waits for those that
 // read its destination, and a cycle is broken through s1 or x1.
 func (g *gen) parallel(moves []pmove) {
+	if g.v128 && hasV128(moves) {
+		g.pending = parallelV(moves, g.pending[:0], g.move, vscratch)
+		return
+	}
 	pending := g.pending[:0]
 	for _, m := range moves {
 		if m.dst != m.src {
@@ -421,7 +434,7 @@ func (g *gen) done(v *Value, r int) {
 		return
 	}
 	src := loc{kind: lGPR, r: r}
-	if v.Type.IsFloat() {
+	if v.Type.InFloatReg() {
 		src.kind = lXMM
 	}
 	if g.marking {
@@ -619,7 +632,8 @@ func (g *gen) exit(kind uint64, resume arm64.Label, args ...uint64) {
 }
 
 // saveAll and restoreAll keep every register the allocator gave out in the
-// context's save area across an exit that is not a call: a poll's.
+// context's save area across an exit that is not a call: a poll's. A
+// function with v128 values keeps its V registers whole (Ctx.SaveV).
 func (g *gen) saveAll() {
 	a := g.a
 	for i, r := range gprs {
@@ -628,7 +642,11 @@ func (g *gen) saveAll() {
 		}
 	}
 	for i, x := range fprs {
-		if g.usedX&(1<<x) != 0 {
+		switch {
+		case g.usedX&(1<<x) == 0:
+		case g.v128:
+			a.StoreQ(rCtx, offSaveV+int32(16*x), arm64.FReg(x))
+		default:
 			a.StoreF(rCtx, offSave+int32(8*(len(gprs)+i)), arm64.FReg(x))
 		}
 	}
@@ -642,7 +660,11 @@ func (g *gen) restoreAll() {
 		}
 	}
 	for i, x := range fprs {
-		if g.usedX&(1<<x) != 0 {
+		switch {
+		case g.usedX&(1<<x) == 0:
+		case g.v128:
+			a.LoadQ(arm64.FReg(x), rCtx, offSaveV+int32(16*x))
+		default:
 			a.LoadF(arm64.FReg(x), rCtx, offSave+int32(8*(len(gprs)+i)))
 		}
 	}
@@ -889,7 +911,7 @@ func (g *gen) value(v *Value, rest []*Value) {
 	case OpParam:
 		if r := g.ra.Reg[v.vreg]; r >= 0 {
 			dst := loc{kind: lGPR, r: int(r)}
-			if v.Type.IsFloat() {
+			if v.Type.InFloatReg() {
 				dst.kind = lXMM
 			}
 			g.move(dst, loc{kind: lSlot, slot: int32(v.Aux)}, v.Type)
@@ -1067,11 +1089,14 @@ func (g *gen) value(v *Value, rest []*Value) {
 		g.done(v, int(t))
 	case OpGlobalGet:
 		p := g.intoG(v.Args[0], s0)
-		if v.Type.IsFloat() {
+		if v.Type.InFloatReg() {
 			t := g.defX(v)
-			if v.Type == TF32 {
+			switch v.Type {
+			case TF32:
 				a.LoadS(t, p, 0)
-			} else {
+			case TV128:
+				a.LoadQ(t, p, 0)
+			default:
 				a.LoadF(t, p, 0)
 			}
 			g.done(v, int(t))
@@ -1087,7 +1112,10 @@ func (g *gen) value(v *Value, rest []*Value) {
 	case OpGlobalSet:
 		// The whole word: an i32's and an f32's upper half clear. The
 		// value first, whose constant may take s0.
-		if x := v.Args[1]; x.Type.IsFloat() {
+		if x := v.Args[1]; x.Type == TV128 {
+			xv := g.intoX(x, x0)
+			a.StoreQ(g.intoG(v.Args[0], s0), 0, xv)
+		} else if x.Type.IsFloat() {
 			xv := g.intoX(x, x0)
 			a.StoreF(g.intoG(v.Args[0], s0), 0, xv)
 		} else {
@@ -1102,6 +1130,8 @@ func (g *gen) value(v *Value, rest []*Value) {
 		g.refOp(v)
 	case OpTail, OpTailIndirect, OpTailRef:
 		g.tail(v)
+	case OpSIMD:
+		g.simd(v)
 	case OpGoOp:
 		if v.BulkInCode() {
 			g.bulk(v)
@@ -1314,6 +1344,26 @@ func (g *gen) selectOp(v *Value) {
 	x, y, c := v.Args[0], v.Args[1], v.Args[2]
 	a.CmpImm(g.intoG(c, s0), 0, false)
 	// From here nothing may change the flags: moves and loads do not.
+	if v.Type == TV128 {
+		// No vector CSEL: a branch around a move.
+		t := g.defX(v)
+		skip := a.NewLabel()
+		switch {
+		case g.isX(x, t):
+			a.BCond(arm64.NE, skip)
+			g.movX(t, y)
+		case g.isX(y, t):
+			a.BCond(arm64.EQ, skip)
+			g.movX(t, x)
+		default:
+			g.movX(t, y)
+			a.BCond(arm64.EQ, skip)
+			g.movX(t, x)
+		}
+		a.Bind(skip)
+		g.done(v, int(t))
+		return
+	}
 	if v.Type.IsFloat() {
 		t := g.defX(v)
 		a.FCsel(t, g.intoX(x, x0), g.intoX(y, x1), arm64.NE, v.Type == TF32)
@@ -1364,11 +1414,14 @@ func (g *gen) load(v *Value) {
 	}
 	a := g.a
 	r := g.address(v)
-	if v.Type.IsFloat() {
+	if v.Type.InFloatReg() {
 		t := g.defX(v)
-		if v.Type == TF32 {
+		switch v.Type {
+		case TF32:
 			a.LoadSIdx(t, rMem, r)
-		} else {
+		case TV128:
+			a.LoadQIdx(t, rMem, r)
+		default:
 			a.LoadFIdx(t, rMem, r)
 		}
 		g.done(v, int(t))
@@ -1403,11 +1456,14 @@ func (g *gen) store(v *Value) {
 	a := g.a
 	r := g.address(v)
 	x := v.Args[1]
-	if x.Type.IsFloat() {
+	if x.Type.InFloatReg() {
 		xv := g.intoX(x, x0)
-		if v.Size == 4 {
+		switch v.Size {
+		case 4:
 			a.StoreSIdx(rMem, r, xv)
-		} else {
+		case 16:
+			a.StoreQIdx(rMem, r, xv)
+		default:
 			a.StoreFIdx(rMem, r, xv)
 		}
 		return
@@ -1521,9 +1577,12 @@ func (g *gen) call(v *Value, rest []*Value) {
 	if g.sigHasRefs(v) {
 		g.refArgs(v, g.adv())
 	}
-	// The arguments, into the callee's parameters: one slot each.
-	for i, x := range v.Args {
-		g.move(loc{kind: lSlot, slot: int32(g.req.FrameSlots + i)}, g.locOf(x), x.Type)
+	// The arguments, into the callee's parameters: one slot each, a
+	// v128 two.
+	slot := int32(g.req.FrameSlots)
+	for _, x := range v.Args {
+		g.move(loc{kind: lSlot, slot: slot}, g.locOf(x), x.Type)
+		slot += x.Type.Slots()
 	}
 	g.advanceR()
 	ret := a.NewLabel()
@@ -1605,8 +1664,10 @@ func (g *gen) callIndirect(v *Value, rest []*Value) {
 	a.BCond(arm64.HS, slow)
 	// The callee's index waits in x0 while the arguments go into its
 	// parameters, one slot each, the moves taking s0.
-	for i, x := range args {
-		g.move(loc{kind: lSlot, slot: int32(g.req.FrameSlots + i)}, g.locOf(x), x.Type)
+	slot := int32(g.req.FrameSlots)
+	for _, x := range args {
+		g.move(loc{kind: lSlot, slot: slot}, g.locOf(x), x.Type)
+		slot += x.Type.Slots()
 	}
 	g.advanceR()
 	ret := a.NewLabel()

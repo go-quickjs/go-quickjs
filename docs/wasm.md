@@ -459,11 +459,14 @@ are made on the spot, the worker otherwise waiting for the program's
 goroutine to be preempted. It compiles references -- locals, globals,
 tables' elements, the null tests and branches -- calls through tables and
 references, tail calls, the accesses of every memory, shared ones and
-those of i64 addresses included, the atomics, and the bulk and table
+those of i64 addresses included, the atomics, the bulk and table
 instructions -- those the baseline leaves to Go, and table.fill and the
 copies and fills of memories other than an unshared i32 memory 0, through
-Go too -- and leaves to the baseline code the functions with SIMD, GC or
-exception instructions.
+Go too -- and v128s and every SIMD and relaxed SIMD instruction, each the
+baseline's instruction sequence over registers the allocator gives (a
+fused `relaxed_madd` and `relaxed_nmadd` in Go, as in the baseline), and
+leaves to the baseline code the functions with GC or exception
+instructions.
 It roughly halves the Go-built programs' time from their second run on, and
 makes their first runs as fast as the baseline's or faster (json 77 ms to
 70, gzip 75 to 53), but interp's, 1 ms slower for the baseline code's
@@ -542,10 +545,10 @@ the interpreter keeps it. Native code compiles v128.const, the SIMD loads
 and stores of every memory, splat, extract_lane, replace_lane, the
 bitwise instructions, every integer and float lane instruction, shuffle
 and swizzle included, the conversions and the relaxed instructions, with
-the interpreter's choices for the host. relaxed_madd and relaxed_nmadd,
-where the interpreter fuses them -- f32x4's on arm64, and both shapes' on
-amd64 with FMA3 -- return to Go, which runs the interpreter's own code for
-them, so that the result is the interpreter's bit for bit, and resumes.
+the interpreter's choices for the host. relaxed_madd and relaxed_nmadd
+are FMLA on arm64; on amd64 with FMA3, where the interpreter fuses them,
+they return to Go, which runs the interpreter's own code for them, so that
+the result is the interpreter's bit for bit, and resumes.
 
 A function is refused whole, and stays in the interpreter, when it has:
 

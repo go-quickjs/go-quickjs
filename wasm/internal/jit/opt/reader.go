@@ -211,4 +211,23 @@ func (r *reader) skipImmediates(op opcode.Opcode) {
 			r.memarg()
 		}
 	}
+	if op.Prefix() == opcode.PrefixSIMD {
+		r.skipSIMD(op)
+	}
+}
+
+// skipSIMD skips a SIMD instruction's immediates: a constant's or a
+// shuffle's 16 bytes, a memory argument, a lane, or both.
+func (r *reader) skipSIMD(op opcode.Opcode) {
+	switch {
+	case op == opcode.S128Const || op == opcode.I8x16Shuffle:
+		r.pc += 16
+	case isSIMDMem(op):
+		r.memarg()
+		if isSIMDLaneMem(op) {
+			r.pc++
+		}
+	case isLaneOp(op):
+		r.pc++
+	}
 }

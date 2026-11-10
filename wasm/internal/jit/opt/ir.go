@@ -9,8 +9,8 @@ import (
 	"strings"
 )
 
-// Type is an SSA value's type: the four numeric types, a call's tuple of
-// results, or none.
+// Type is an SSA value's type: the four numeric types, v128, a call's
+// tuple of results, or none.
 type Type uint8
 
 const (
@@ -24,10 +24,26 @@ const (
 	// TRef is a reference's, which is never a value: the builder's stack
 	// and locals say by it that a reference is in its reference slot.
 	TRef
+	// TV128 is a vector of 128 bits, which lives in a float register or
+	// two slots.
+	TV128
+	numTypes
 )
 
 func (t Type) String() string {
-	return [...]string{"none", "i32", "i64", "f32", "f64", "tuple", "ref"}[t]
+	return [...]string{"none", "i32", "i64", "f32", "f64", "tuple", "ref", "v128"}[t]
+}
+
+// InFloatReg reports whether a register of t is a float register: an f32,
+// an f64 or a v128.
+func (t Type) InFloatReg() bool { return t == TF32 || t == TF64 || t == TV128 }
+
+// Slots is the number of the frame's slots a value of t takes.
+func (t Type) Slots() int32 {
+	if t == TV128 {
+		return 2
+	}
+	return 1
 }
 
 // IsFloat reports whether t is f32 or f64.
@@ -44,7 +60,8 @@ type Op uint8
 // argument's.
 const (
 	OpInvalid Op = iota
-	// OpConst is the constant Aux: an i32's or f32's bits zero-extended.
+	// OpConst is the constant Aux: an i32's or f32's bits zero-extended; a
+	// v128's low half, its high half Aux2.
 	OpConst
 	// OpParam is parameter Aux, as the frame holds it when the function
 	// begins.
@@ -175,6 +192,11 @@ const (
 	OpTail
 	OpTailIndirect
 	OpTailRef
+	// OpSIMD is the SIMD instruction whose opcode is Aux's low 24 bits
+	// (simdOp), on Args, its immediate a lane in Aux2, or, for a shuffle,
+	// the lanes (shuffleLanes). Loads and stores are OpLoad and OpStore of
+	// v128s and of the scalars it widens, splats or puts in a lane.
+	OpSIMD
 
 	// The atomic accesses, each of memory Aux2 at Args[0] plus offset Aux,
 	// Size bytes, sequentially consistent: OpAtomicLoad loads them
@@ -335,6 +357,7 @@ var opInfos = [numOps]opInfo{
 	OpTail:         {"return_call", fEffect | fTrap},
 	OpTailIndirect: {"return_call_indirect", fEffect | fTrap},
 	OpTailRef:      {"return_call_ref", fEffect | fTrap},
+	OpSIMD:         {"simd", fPure},
 
 	OpAtomicLoad:    {"atomic.load", fEffect | fTrap},
 	OpAtomicStore:   {"atomic.store", fEffect | fTrap},
@@ -651,6 +674,11 @@ func (v *Value) long() string {
 		s += fmt.Sprintf(" [%#x]", v.Aux)
 	case OpRef:
 		s += fmt.Sprintf(" [kind %d %#x r%d<-r%d]", v.Aux&0xff, v.Aux>>8, v.Aux2>>32, uint32(v.Aux2))
+	case OpSIMD:
+		s += fmt.Sprintf(" [%s %#x]", simdOp(v).Name(), v.Aux2)
+	}
+	if v.Op == OpConst && v.Type == TV128 {
+		s += fmt.Sprintf(" [%#x]", v.Aux2)
 	}
 	if isAtomic(v.Op) {
 		s += fmt.Sprintf(" [%#x] mem %d size %d", v.Aux, memIndex(v), v.Size)

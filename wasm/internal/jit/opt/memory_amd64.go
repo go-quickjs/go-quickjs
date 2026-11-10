@@ -249,11 +249,14 @@ func (g *gen) checkFromS1(v *Value, ea amd64.Reg, disp int32, rest uint64, oob a
 func (g *gen) loadAny(v *Value) {
 	a := g.a
 	m := g.memAccess(v, noReg, s0, false)
-	if v.Type.IsFloat() {
+	if v.Type.InFloatReg() {
 		t := g.defX(v)
-		if v.Type == TF32 {
+		switch v.Type {
+		case TF32:
 			a.LoadSSIdx(t, m.base, m.idx, m.disp)
-		} else {
+		case TV128:
+			a.LoadVecIdx(t, m.base, m.idx, m.disp)
+		default:
 			a.LoadSDIdx(t, m.base, m.idx, m.disp)
 		}
 		g.done(v, int(t))
@@ -286,13 +289,16 @@ func (g *gen) loadAny(v *Value) {
 func (g *gen) storeAny(v *Value) {
 	a := g.a
 	x := v.Args[1]
-	if x.Type.IsFloat() {
+	if x.Type.InFloatReg() {
 		// A constant is made through s0: before the base is there.
 		xv := g.intoX(x, x0)
 		m := g.memAccess(v, noReg, s0, false)
-		if v.Size == 4 {
+		switch v.Size {
+		case 4:
 			a.StoreSSIdx(m.base, m.idx, m.disp, xv)
-		} else {
+		case 16:
+			a.StoreVecIdx(m.base, m.idx, m.disp, xv)
+		default:
 			a.StoreSDIdx(m.base, m.idx, 1, m.disp, xv)
 		}
 		return
