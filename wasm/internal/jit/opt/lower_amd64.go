@@ -2230,6 +2230,10 @@ func (g *gen) bulk(v *Value) {
 		a.MovRR(rCtx, s0)
 		return
 	}
+	if n, ok := smallCopy(v); ok {
+		g.copySmall(v, n, oob)
+		return
+	}
 	// Destination, source, count.
 	g.parallel([]pmove{in(ax, v.Args[0]), in(si, v.Args[1]), in(cx, v.Args[2])})
 	check(si)
@@ -2266,4 +2270,90 @@ func (g *gen) bulk(v *Value) {
 	a.RepMovsb()
 	a.MovRR(rCtx, s0)
 	a.Bind(done)
+}
+
+// copyTemps is the number of float temporaries memory.copy v copies in: a
+// small copy's 16-byte pieces past the two scratch registers.
+func copyTemps(v *Value) int {
+	n, ok := smallCopy(v)
+	if !ok {
+		return 0
+	}
+	return max(0, int((n+15)/16)-2)
+}
+
+// copySmall copies a memory.copy's constant count n, from 1 to
+// maxSmallCopy bytes, once both ends are checked: every piece is loaded,
+// then every piece stored, so that the copy is right however its source
+// and destination overlap. Pieces of 16 bytes go through X15, X14 and the
+// instruction's temporaries, the last ending at the count's end; fewer
+// than 16 bytes are two pieces of the largest width within the count, one
+// at each end, through CX and R11. The operands are moved into AX and SI,
+// which the allocator keeps free as for every copy.
+func (g *gen) copySmall(v *Value, n uint64, oob amd64.Label) {
+	a := g.a
+	const ax, cx, si = amd64.RAX, amd64.RCX, amd64.RSI
+	g.parallel([]pmove{
+		{dst: loc{kind: lGPR, r: int(ax)}, src: g.locOf(v.Args[0]), t: TI32},
+		{dst: loc{kind: lGPR, r: int(si)}, src: g.locOf(v.Args[1]), t: TI32},
+	})
+	for _, r := range []amd64.Reg{si, ax} {
+		a.Lea(s0, r, int32(n))
+		a.CmpMem(s0, rCtx, offMemSize, true)
+		a.Jcc(amd64.CondA, oob)
+	}
+	end := int32(n)
+	if n >= 16 {
+		var buf [maxSmallCopy / 16]int32
+		offs := buf[:0]
+		for off := int32(0); off+16 <= end; off += 16 {
+			offs = append(offs, off)
+		}
+		if end%16 != 0 {
+			offs = append(offs, end-16)
+		}
+		var xbuf [maxSmallCopy / 16]amd64.XReg
+		xs := xbuf[:len(offs)]
+		for i := range xs {
+			switch i {
+			case 0:
+				xs[i] = x0
+			case 1:
+				xs[i] = x1
+			default:
+				xs[i] = amd64.XReg(g.temp(v, i-2))
+			}
+		}
+		for i, off := range offs {
+			a.LoadVecIdx(xs[i], rMem, si, off)
+		}
+		for i, off := range offs {
+			a.StoreVecIdx(rMem, ax, off, xs[i])
+		}
+		return
+	}
+	var w int32
+	switch {
+	case n >= 8:
+		w = 8
+		a.LoadIdx(cx, rMem, si, 1, 0)
+		a.LoadIdx(s0, rMem, si, 1, end-w)
+		a.StoreIdx(rMem, ax, 1, 0, cx)
+		a.StoreIdx(rMem, ax, 1, end-w, s0)
+	case n >= 4:
+		w = 4
+		a.LoadU32Idx(cx, rMem, si, 0)
+		a.LoadU32Idx(s0, rMem, si, end-w)
+		a.Store32Idx(rMem, ax, 0, cx)
+		a.Store32Idx(rMem, ax, end-w, s0)
+	case n >= 2:
+		w = 2
+		a.LoadU16Idx(cx, rMem, si, 0)
+		a.LoadU16Idx(s0, rMem, si, end-w)
+		a.Store16Idx(rMem, ax, 0, cx)
+		a.Store16Idx(rMem, ax, end-w, s0)
+	default:
+		a.LoadU8Idx(cx, rMem, si, 0)
+		a.Store8Idx(rMem, ax, 0, cx)
+	}
 }

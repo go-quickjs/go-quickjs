@@ -1963,3 +1963,7 @@ func (g *gen) bulk(v *Value) {
 	})
 	a.Bind(done)
 }
+
+// copyTemps is the number of float temporaries memory.copy v copies in:
+// none, every copy looping over blocks of 32 bytes.
+func copyTemps(v *Value) int { return 0 }

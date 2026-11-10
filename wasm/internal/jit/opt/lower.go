@@ -9,6 +9,7 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/jit/lsra"
 	wjit "github.com/go-quickjs/go-quickjs/wasm/internal/jit"
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
+	"github.com/go-quickjs/go-quickjs/wasm/internal/opcode"
 )
 
 // What the lowerings of both architectures share: the allocator's view of
@@ -306,6 +307,9 @@ func (g *lowering) allocate(ws *allocScratch, classes [][]int, cl *clobbers) {
 				if v.BulkInCode() {
 					// The code copies or fills in registers of its own.
 					in.Clobber = cl.bulk
+					if k := copyTemps(v); k > 0 {
+						g.addTemps(lf, &in, &ws.vregs, v, k)
+					}
 					break
 				}
 				fallthrough
@@ -401,6 +405,21 @@ func (g *lowering) allocate(ws *allocScratch, classes [][]int, cl *clobbers) {
 	}
 	g.ra = ra
 }
+
+// smallCopy is the count of memory.copy v where it is a constant from 1 to
+// maxSmallCopy, which the code copies by loads of it all then stores, and
+// whether it is.
+func smallCopy(v *Value) (uint64, bool) {
+	if opcode.Opcode(v.Aux) != opcode.MemoryCopy || v.Args[2].Op != OpConst {
+		return 0, false
+	}
+	n := uint64(uint32(v.Args[2].Aux))
+	return n, n > 0 && n <= maxSmallCopy
+}
+
+// maxSmallCopy is the most bytes a memory.copy of a constant count copies
+// by loads of them all then stores.
+const maxSmallCopy = 64
 
 // addTemps gives instruction in, value v's, k temporaries of the float
 // class, numbered after every value's register.

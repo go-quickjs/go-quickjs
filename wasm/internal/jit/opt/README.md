@@ -707,7 +707,15 @@ across them, both ends checked against the memory's size before a byte
 is written, then REP MOVSB or REP STOSB with DI the destination's
 address, the context kept in R11 meanwhile; a copy to a higher address
 that overlaps its source goes from its end down, words then bytes, each
-read before the bytes above it are written. On arm64 the operands go into
+read before the bytes above it are written. A memory.copy of a constant
+count from 1 to 64 bytes is loaded whole then stored, so that any overlap
+copies right: pieces of 16 bytes through X15, X14 and as many of the
+instruction's temporaries as the rest takes (`copyTemps`), the last
+ending at the count's end, or, below 16 bytes, two pieces of the widest
+word within the count through CX and R11, one at each end -- the
+operands still in AX and SI and both ends checked first. micro/bulk's
+16,384 copies of 64 bytes a round took 43% of its samples on REP MOVSB's
+start; the round went from 16.8 to 10.5 ms. On arm64 the operands go into
 X13, X14 and X15, and the code loops over blocks of 32 bytes in Q31 and
 Q30 (LDP and STP, the address moving past each block), then of 8 in X16,
 then bytes -- a copy to a higher address that overlaps its source from
