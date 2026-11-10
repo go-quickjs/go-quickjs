@@ -129,10 +129,11 @@ type gen struct {
 	rsKept bool
 }
 
-// keepRS chooses where the code keeps the return stack's next entry: in
-// R13, R9 or R8 where the allocator gave none of them out -- no
-// instruction's sequence uses them but as the allocator's -- else in the
-// context.
+// keepRS chooses where the code keeps the return stack's next entry: in a
+// register of the allocator's that it gave to no value and that no
+// instruction of the function writes besides -- a division's, a shift's,
+// memory.copy's, an atomic's (their clobbers), and the clearing of the
+// reference slots at the entry -- else in the context.
 func (g *gen) keepRS() {
 	var used uint64
 	for vr, c := range g.ws.lf.Class {
@@ -140,7 +141,17 @@ func (g *gen) keepRS() {
 			used |= 1 << g.ra.Reg[vr]
 		}
 	}
-	for _, r := range [...]amd64.Reg{amd64.R13, amd64.R9, amd64.R8} {
+	for _, b := range g.ws.lf.Blocks {
+		for _, in := range b.Insts {
+			if len(in.Clobber) > classGPR {
+				used |= in.Clobber[classGPR]
+			}
+		}
+	}
+	if g.holdsRefs() {
+		used |= 1<<amd64.RAX | 1<<amd64.RCX | 1<<amd64.RDX
+	}
+	for _, r := range [...]amd64.Reg{amd64.R13, amd64.R9, amd64.R8, amd64.RSI, amd64.RDX, amd64.RCX, amd64.RAX} {
 		if used&(1<<r) == 0 {
 			g.rs, g.rsKept = r, true
 			return

@@ -364,7 +364,7 @@ table.grow and table.fill, which Go runs, do the same (`stageGo`).
 | R15 | memory 0's base, loaded again after every exit |
 | R12 | the poll counter |
 | R10 | the return stack's next entry where it arrives and leaves |
-| R13, R9 or R8 | the return stack's next entry in the code, where the allocator gave that register to no value; else `Ctx.RSP` holds it |
+| one of R13, R9, R8, SI, DX, CX, AX | the return stack's next entry in the code, where the allocator gave that register to no value and no instruction writes it; else `Ctx.RSP` holds it |
 | R11, R10 | general scratch registers |
 | X15, X14 | float scratch registers |
 | SI, R8, R9, R13, AX, CX, DX | the allocator's general registers, AX, CX and DX last (division's and shifts'; memory.copy and memory.fill take AX, CX and SI, an atomic store, read-modify-write and compare-and-exchange AX, CX and DX) |
@@ -372,9 +372,15 @@ table.grow and table.fill, which Go runs, do the same (`stageGo`).
 | SP, BP, R14 | never written |
 
 Native callers enter with R10 the return stack's next entry, which the
-entry keeps: in R13, R9 or R8, the first the allocator gave to no value
-of the function (`keepRS`) -- no instruction's sequence takes them but as
-the allocator's -- or, where it gave out all three, in the context. The
+entry keeps: in the first of R13, R9, R8, SI, DX, CX and AX that the
+allocator gave to no value of the function and that none of its
+instructions writes besides (`keepRS`): a division's AX and DX, a shift's
+CX, memory.copy's and memory.fill's AX, CX and SI, an atomic's AX, CX and
+DX -- the allocator's clobbers -- and AX, CX and DX where the entry
+clears reference slots; or, where there is none, in the context. The
+allocator gives AX, CX and DX last, so that most of a Go program's
+functions, whose values take the other four, keep it in DX (503 of the
+789 json optimizes, 33 when only R13, R9 and R8 could). The
 return sequence takes it from there, pops the entry and jumps to its
 address with BX the caller's L, as the baseline's does. A native call
 pushes its entry from where the code keeps it and leaves R10 past it for
