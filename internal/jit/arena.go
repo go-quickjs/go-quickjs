@@ -231,6 +231,126 @@ func (a *Arena) place(instructions []byte) ([]byte, error) {
 	return code, nil
 }
 
+// placeApart copies each of list into the arena, as place does, on pages
+// that hold no code placed before them and were never executable: a
+// batch's first code starts at a page boundary past everything placed in
+// the chunk code is packed into, or in a new chunk, and the batch's later
+// codes follow it; code longer than a chunk has one of its own, as place
+// gives it. Code of the arena may run on other threads meanwhile, since none of
+// it is in the pages written, and no core can hold instructions fetched
+// from them before they are sealed. Code placed later never shares those
+// pages while they are written, the arena being locked; place may later
+// share the batch's last page, under its own rule. The slices it returns
+// are as place's; on an error none is placed.
+func (a *Arena) placeApart(list [][]byte) ([][]byte, error) {
+	for _, instructions := range list {
+		if len(instructions) == 0 {
+			return nil, fmt.Errorf("invalid native kernel size: %d", len(instructions))
+		}
+	}
+	if err := executablePolicy(); err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	shift := 0
+	if LineOffset != 0 {
+		shift = lineShift()
+	}
+	page := os.Getpagesize()
+	// A segment is the run of the batch's codes in one chunk, written
+	// through its pages at once.
+	type segment struct {
+		c        *chunk
+		from, to int
+		first    int
+	}
+	var segs []segment
+	out := make([][]byte, len(list))
+	undo := func() error {
+		var errs []error
+		for i, code := range out {
+			if code == nil {
+				continue
+			}
+			c := a.chunkOf(code)
+			c.live -= len(code)
+			if c.live == 0 {
+				errs = append(errs, a.unmap(c))
+			}
+			out[i] = nil
+		}
+		return errors.Join(errs...)
+	}
+	for i, instructions := range list {
+		size := alignUp(len(instructions), codeAlign)
+		n := alignUp(shift+size, codeAlign)
+		var c *chunk
+		start := 0
+		if k := len(segs); k > 0 && !segs[k-1].c.own && segs[k-1].c.used+n <= len(segs[k-1].c.mem) {
+			c = segs[k-1].c
+			start = c.used
+		} else if o := a.open; o != nil && alignUp(o.used, page)+n <= len(o.mem) {
+			c = o
+			start = alignUp(c.used, page)
+			segs = append(segs, segment{c: c, from: start, first: i})
+		} else {
+			mem, err := mapCode(alignUp(n, chunkBytes))
+			if err != nil {
+				return nil, errors.Join(fmt.Errorf("allocate code: %w", err), undo())
+			}
+			c = &chunk{mem: mem, own: len(mem) > chunkBytes}
+			if pad := alignUp(FirstOffset, codeAlign); len(a.chunks) == 0 && pad > 0 && pad+n <= len(mem) {
+				c.used = pad
+			}
+			a.chunks = append(a.chunks, c)
+			if !c.own {
+				a.open = c
+			}
+			start = c.used
+			segs = append(segs, segment{c: c, from: start, first: i})
+		}
+		out[i] = c.mem[start+shift : start+shift+size : start+shift+size]
+		c.used = start + n
+		c.live += size
+		segs[len(segs)-1].to = c.used
+	}
+	for k, s := range segs {
+		last := len(list)
+		if k+1 < len(segs) {
+			last = segs[k+1].first
+		}
+		pages := s.c.mem[s.from/page*page : min(alignUp(s.to, page), len(s.c.mem))]
+		if err := protectCode(pages, false); err != nil {
+			return nil, errors.Join(fmt.Errorf("open code: %w", err), undo())
+		}
+		for i := s.first; i < last; i++ {
+			copy(out[i], list[i])
+		}
+		if err := protectCode(pages, true); err != nil {
+			return nil, errors.Join(fmt.Errorf("seal code: %w", err), undo())
+		}
+		for i := s.first; i < last; i++ {
+			if err := flushCode(out[i]); err != nil {
+				return nil, errors.Join(fmt.Errorf("flush instruction cache: %w", err), undo())
+			}
+		}
+	}
+	return out, nil
+}
+
+// chunkOf is the chunk holding code.
+func (a *Arena) chunkOf(code []byte) *chunk {
+	at := uintptr(unsafe.Pointer(unsafe.SliceData(code)))
+	for _, c := range a.chunks {
+		base := uintptr(unsafe.Pointer(unsafe.SliceData(c.mem)))
+		if at >= base && at < base+uintptr(len(c.mem)) {
+			return c
+		}
+	}
+	panic("jit: code is not in its arena")
+}
+
 // write copies instructions into code, through its pages made writable for
 // the copy, then seals the pages and publishes them to instruction fetch.
 func (a *Arena) write(c *chunk, pages, code, instructions []byte) error {

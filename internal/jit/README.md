@@ -2939,6 +2939,11 @@ executable memory, the runtime marks the JIT unavailable for good.
   once, and published code is never patched. Other code in those pages does
   not run meanwhile: an arena is one runtime's, and its native code always
   returns to Go before Go compiles anything.
+- `PlaceRawApart` places code while other code of the arena runs on other
+  threads, for the WebAssembly JIT's compiles in the background: from a
+  page boundary past everything placed in the last chunk, or in a new
+  chunk, on pages no code is in and none was ever executable, the codes
+  of one call together; code placed after packs after them as usual.
 - A chunk is unmapped when the last function in it is released. The arena
   locks, since a finalizer can release code on another goroutine.
 - Windows flushes the instruction cache with `FlushInstructionCache`.

@@ -30,6 +30,22 @@ func PlaceRaw(a *Arena, code []byte) (*RawCode, error) {
 	return &RawCode{code: placed, arena: a}, nil
 }
 
+// PlaceRawApart publishes codes in a, as PlaceRaw does each, on pages no
+// code placed before them shares and that were never executable, so that
+// the arena's other code may run on other threads while they are placed.
+// The codes are placed together, one after another; on an error none is.
+func PlaceRawApart(a *Arena, codes ...[]byte) ([]*RawCode, error) {
+	placed, err := a.placeApart(codes)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	raws := make([]*RawCode, len(placed))
+	for i, p := range placed {
+		raws[i] = &RawCode{code: p, arena: a}
+	}
+	return raws, nil
+}
+
 // Base is the address the code begins at, which its maker's addresses in
 // it are offsets from.
 func (c *RawCode) Base() uintptr { return uintptr(unsafe.Pointer(unsafe.SliceData(c.code))) }

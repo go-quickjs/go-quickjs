@@ -11,6 +11,9 @@ type RawCode struct{}
 // PlaceRaw reports that this build cannot run native code.
 func PlaceRaw(*Arena, []byte) (*RawCode, error) { return nil, ErrUnavailable }
 
+// PlaceRawApart reports that this build cannot run native code.
+func PlaceRawApart(*Arena, ...[]byte) ([]*RawCode, error) { return nil, ErrUnavailable }
+
 // Base is 0: there is no code.
 func (c *RawCode) Base() uintptr { return 0 }
 
