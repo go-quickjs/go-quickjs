@@ -835,8 +835,16 @@ What they show:
   0.88x wazero's compiler: level with Node on loop, nbody, brtable and simd;
   1.4 to 1.8 times on i64, bytes, bulk and globals, where wazero's compiler
   is level with go-quickjs (i64, globals) or slower (bytes, bulk); fib, a
-  call per node, 2.8 times. `gc` is 27 times Node's: its structs and arrays
-  are allocated in Go, through an exit, and collected by Go's collector.
+  call per node, 2.8 times. `gc` was 27 times Node's here, its structs
+  allocated in Go through an exit each. Since 8d179ac8 native code takes
+  them from pools Go fills ahead (The JIT's README, GC objects): at
+  861cda7b, median of 5 processes of 3 runs, `gc` takes 82 ms in the
+  baseline and 99 tiered (9.3 Node, so about 11x), 267 and 251 at
+  GOMAXPROCS=1 (468 and 432 before), and on arm64 (`ubuntu-24.04-arm`) 228
+  and 237 against 584 and 593. What is left is Go's: its allocation of
+  each struct, about 7 ns, its collector's marking, and the write barrier
+  native code's stores into reference slots take while it marks, which is
+  most of the time at GOMAXPROCS=1.
 - The optimizing tier takes 15 to 47% off the baseline's time on the
   programs, and 21 to 45% on the kernels whose values it keeps in registers
   across a loop (fib, nbody, bytes); on the other kernels the two tiers are
@@ -919,3 +927,9 @@ WASI:
   `Memory`, between workers.
 - Native code for the v128 fields and elements of GC objects, which the
   JIT refuses.
+- Arrays made natively: array.new, array.new_default and array.new_fixed
+  still exit to Go (about 68 to 79 ns an array of a few elements, against
+  14 ns a struct from a pool). An array is two Go objects, its header and
+  its elements, so a pool would hold arrays by type and length -- of a
+  length up to some bound, a pool for each -- so as not to give a short
+  array a long one's storage.

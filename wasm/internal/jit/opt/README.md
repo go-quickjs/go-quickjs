@@ -1102,8 +1102,11 @@ registers across a loop (nbody 1.8x, fib 1.3x, bytes 1.3x); loop, i64
 and mandelbrot are bound by one multiply's or add's latency each
 iteration, as the baseline is, and simd by its accumulator's chain of an
 add, a shift, an xor and a shuffle, which both tiers keep in a register;
-gc and brtable spend their time in Go and
-in the switch. The tiered first runs are the baseline's or better but
+gc and brtable spent their time in Go and
+in the switch: gc, binary trees of structs, now takes its structs from
+pools Go fills (8d179ac8, the baseline README's GC objects), 247 to 99 ms
+optimized and 240 to 82 in the baseline, the rest Go's allocation and
+collection. The tiered first runs are the baseline's or better but
 interp's (+5%), the baseline code's counting of calls; json's is level
 (59.8 to 59.0 ms). Compiled on the program's goroutine they were +10% and
 +4%, and +19% and +17% before the compile's cost was worked on (see
