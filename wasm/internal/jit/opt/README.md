@@ -429,8 +429,20 @@ operation's result its first operand's. There is no splitting within a
 value's life: a web is in its register or its slot throughout.
 
 A phi in a register is stored into its slot where its block begins unless
-every argument shares its register and its slot, which each stored
-where it was made.
+every argument but a constant shares its register and its slot, which
+each stored where it was made; a constant argument is then stored into
+the phi's slot on its edge, beside its move into the register
+(`phiMoves`). A Go program's function begins with a switch on the point
+it resumes at, whose edges give every phi of a loop a zero beside the
+value the loop carries: stored where their blocks began, those phis cost
+sort's partition loop six to nine stores at each of its blocks, which
+held its optimized code on arm64 a seventh slower than the baseline's
+(backend stalls 89 million cycles of a run in the baseline code, 420
+million in the optimized), and its steady state 268 ms against the
+baseline's 237; stored on the switch's edges, they cost the loop nothing
+(139 ms on arm64, where regexp went from 77.5 to 53.7, gzip from 59.1 to
+41.2 and interp from 50.0 to 19.4; on amd64 sort from 106 to 94, regexp
+from 28.8 to 27.0, interp from 12.1 to 11.2, the others level).
 
 A landing pad's one predecessor ends with its site, so what the pad reads
 of the function is live across the site's call: in its slot, where Go
@@ -804,9 +816,16 @@ background, the baseline alone's in parentheses, then the second run, ms
 `ubuntu-24.04-arm`, 4 CPUs, one worker.) Peak RSS is level but json's,
 82 to 90 MB on amd64, which varied from 74 to 88 MB with one to eight
 workers. interp's first run is the baseline code's counting of calls: a
-threshold no function reaches costs it as much. sort's on arm64 is not
-the counting (459 ms with a threshold never reached, 455 without) nor the
-compiles on the program's goroutine (503 on the spot).
+threshold no function reaches costs it as much. sort's on arm64 was
+neither the counting (459 ms with a threshold never reached, 455
+without) nor the compiles on the program's goroutine (503 on the spot):
+its optimized code was slower than its baseline code, by the stores of
+the partition loop's phis (Register allocation). Since the baseline
+made its calls through tables natively and the phis' constants were
+stored on their edges, the arm64 first runs are, tiered in the
+background (the baseline alone's in parentheses), ms: sha256 141 (211),
+sort 186 (269), json 119 (121), regexp 93 (123), gzip 100 (106),
+interp 79 (76).
 
 **Shutdown.** A worker makes the request's weak pointer to the Code
 strong for the compile, its placement and its publishing, so the Code's
@@ -1100,16 +1119,20 @@ and 17.9, mandelbrot 38.3 and 20.2, nbody 19.9 and 10.8, bytes 31.1 and
 17.4, bulk 263 and 24.7, indirect 1,889 and 55.1, brtable 55.3 and 46.5,
 simd 14.3 and 6.26 (medians of 5 processes of 3 runs, once the tier
 compiled SIMD, 26dd564d; before, it refused the kernel), and i64, globals
-and gc level:
+and gc level. The Go programs, measured again once the baseline made its
+calls through tables natively and the phis' constants were stored on
+their edges (Register allocation; medians of three medians of
+3; before the phis', sort 237 (270), 268 (306), 267 (465), and interp
+50.0 (75.3), 50.0 (79.3), 49.9 (207)):
 
 | program | jit-base | jit-tiered | jit-opt |
 |---|---:|---:|---:|
-| sha256 | 387 (408) | 108 (355) | 108 (268) |
-| sort | 416 (462) | 270 (498) | 268 (460) |
-| json | 114 (162) | 97.2 (184) | 51.5 (349) |
-| regexp | 161 (195) | 81.0 (130) | 75.7 (283) |
-| gzip | 138 (180) | 66.4 (140) | 56.6 (313) |
-| interp | 53.5 (79.6) | 50.5 (79.5) | 50.1 (204) |
+| sha256 | 183 (211) | 108 (141) | 107 (274) |
+| sort | 237 (269) | 139 (186) | 138 (338) |
+| json | 75.7 (121) | 60.0 (119) | 44.1 (349) |
+| regexp | 89.3 (123) | 53.7 (93.0) | 50.7 (267) |
+| gzip | 64.3 (106) | 41.2 (100) | 37.3 (308) |
+| interp | 50.0 (76.1) | 19.4 (79.2) | 19.0 (179) |
 
 The 8,764 functions `TestOptCompileCorpus` compiles of the Go program and
 the spec scripts lower to 19.3 MB of arm64 code, where amd64's are 34.9

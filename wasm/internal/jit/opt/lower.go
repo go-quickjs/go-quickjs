@@ -456,15 +456,32 @@ type pmove struct {
 }
 
 // inSlot reports whether phi p's slot holds its value already where its
-// block begins: every argument shares its register and slot -- the
-// allocator coalesced them -- and stored itself there where it was made.
+// block begins: every argument but a constant shares its register and
+// slot -- the allocator coalesced them -- and stored itself there where it
+// was made, and a constant is stored there on its edge (phiMoves).
 func (g *lowering) inSlot(p *Value) bool {
 	for _, a := range p.Args {
-		if a.Op == OpConst || g.ra.Reg[a.vreg] != g.ra.Reg[p.vreg] || g.ra.Slot[a.vreg] != g.ra.Slot[p.vreg] {
+		if a.Op != OpConst && (g.ra.Reg[a.vreg] != g.ra.Reg[p.vreg] || g.ra.Slot[a.vreg] != g.ra.Slot[p.vreg]) {
 			return false
 		}
 	}
 	return true
+}
+
+// phiMoves appends to moves those of the edge from b to s: each phi's
+// argument into the phi's location, and a constant argument of a phi in a
+// register that inSlot finds in its slot into that slot too, which the
+// phi's block then does not store.
+func (g *lowering) phiMoves(moves []pmove, b, s *Block) []pmove {
+	k := s.predIndex(b)
+	for _, p := range s.Phis {
+		x := p.Args[k]
+		moves = append(moves, pmove{dst: g.locOf(p), src: g.locOf(x), t: p.Type})
+		if x.Op == OpConst && g.ra.Reg[p.vreg] >= 0 && g.ra.Slot[p.vreg] >= 0 && g.inSlot(p) {
+			moves = append(moves, pmove{dst: loc{kind: lSlot, slot: g.ra.Slot[p.vreg]}, src: g.locOf(x), t: p.Type})
+		}
+	}
+	return moves
 }
 
 // sigOf is the signature of call or tail call v, or nil for an

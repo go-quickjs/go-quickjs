@@ -456,3 +456,55 @@ func TestOptTierUpByExits(t *testing.T) {
 		t.Fatal("loop not optimized after 5,000 calls through Go")
 	}
 }
+
+// A loop entered from a switch, whose phis take a constant on the switch's
+// edges and keep their values in registers stored in their slots across a
+// call made on some turns: the constants are stored on their edges, not
+// where the loop's blocks begin, and every entry gives the interpreter's
+// results.
+func TestOptPhiConstantsAcrossCalls(t *testing.T) {
+	src := `(module
+  (global $g (mut i32) (i32.const 0))
+  (func $cold (param i32) (result i32)
+    (global.set $g (i32.add (global.get $g) (local.get 0)))
+    (global.get $g))
+  (func (export "run") (param $at i32) (param $n i32) (result i64)
+    (local $i i32) (local $a i64) (local $b i64) (local $c i64) (local $d i64)
+    (block $exit
+      (block $resume1
+        (block $resume0
+          (br_table $resume0 $resume1 $exit (local.get $at)))
+        (local.set $a (i64.const 5))
+        (local.set $b (i64.const 7))
+        (local.set $c (i64.const 9))
+        (local.set $d (i64.const 11))
+        (br $resume1))
+      (loop $l
+        (local.set $a (i64.add (local.get $a) (i64.extend_i32_u (local.get $i))))
+        (local.set $b (i64.xor (local.get $b) (i64.rotl (local.get $a) (i64.const 7))))
+        (local.set $c (i64.add (local.get $c) (i64.const 3)))
+        (if (i32.eqz (i32.and (local.get $i) (i32.const 15)))
+          (then (local.set $d (i64.add (local.get $d) (i64.extend_i32_u (call $cold (local.get $i)))))))
+        (br_if $l (i32.lt_u (local.tee $i (i32.add (local.get $i) (i32.const 1))) (local.get $n)))))
+    (i64.add (i64.add (local.get $a) (local.get $b)) (i64.add (local.get $c) (local.get $d)))))`
+	interp := interpretedInstance(t, src)
+	inst := tierInstance(t, src, 0)
+	for _, at := range []uint64{0, 1, 2} {
+		for _, n := range []uint64{1, 16, 17, 100} {
+			want, err := call(t, interp, "run", at, n)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := call(t, inst, "run", at, n)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got[0].N != want[0].N {
+				t.Fatalf("run(%d, %d) = %#x, want %#x", at, n, got[0].N, want[0].N)
+			}
+		}
+	}
+	if !optimized(inst, "run") {
+		t.Fatal("run not optimized")
+	}
+}

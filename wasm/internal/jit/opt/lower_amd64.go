@@ -644,12 +644,8 @@ func (g *gen) edgeMoves(b, s *Block) {
 	if len(s.Phis) == 0 {
 		return
 	}
-	k := s.predIndex(b)
 	g.mark("edge %v->%v", b, s)
-	moves := g.moves[:0]
-	for _, p := range s.Phis {
-		moves = append(moves, pmove{dst: g.locOf(p), src: g.locOf(p.Args[k]), t: p.Type})
-	}
+	moves := g.phiMoves(g.moves[:0], b, s)
 	g.parallel(moves)
 	g.moves = moves[:0]
 }
