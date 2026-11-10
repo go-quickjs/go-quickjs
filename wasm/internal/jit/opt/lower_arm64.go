@@ -884,6 +884,15 @@ func (g *gen) switchTable(i int, b *Block) {
 // condition under which it holds.
 func (g *gen) compare(v *Value) arm64.Cond {
 	a := g.a
+	if fusesFloat(v.Op) {
+		xa, xb := g.intoX(v.Args[0], x0), g.intoX(v.Args[1], x1)
+		if v.Args[0].Type == TF32 {
+			a.FCmpS(xa, xb)
+		} else {
+			a.FCmp(xa, xb)
+		}
+		return floatConds[v.Op]
+	}
 	x := v.Args[0]
 	wide := x.Type == TI64
 	if v.Op == OpEqz {
@@ -1967,3 +1976,7 @@ func (g *gen) bulk(v *Value) {
 // copyTemps is the number of float temporaries memory.copy v copies in:
 // none, every copy looping over blocks of 32 bytes.
 func copyTemps(v *Value) int { return 0 }
+
+// fusesFloat reports whether a float comparison of op is made by the branch
+// on it: every one, each one condition of FCMP's flags.
+func fusesFloat(op Op) bool { return op >= OpFEq && op <= OpFGe }

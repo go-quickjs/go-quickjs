@@ -574,7 +574,12 @@ roundings, min/max, truncation bounds and unsigned conversions), so that
 the results are the interpreter's bit for bit -- with the operands where
 the allocator put them. copysign is done on the bits in general
 registers. An integer comparison that is the last value of a block and
-its branch's condition alone is fused with the branch.
+its branch's condition alone is fused with the branch, and so is a float
+one whose truth is one condition of the flags (`fusesFloat`): on amd64
+gt, ge, lt and le, UCOMISD then JA or JAE, an unordered result making
+them false and their inverses true; on arm64 every one, after FCMP; eq
+and ne on amd64, which need the parity flag besides, are made into a
+register and tested.
 
 On arm64 the instructions are three-address, and a result is computed in
 its register from its operands' wherever they are. The floats are the

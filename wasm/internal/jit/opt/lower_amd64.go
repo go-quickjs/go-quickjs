@@ -879,6 +879,19 @@ func (g *gen) condition(c *Value) amd64.Cond {
 func (g *gen) compare(v *Value) amd64.Cond {
 	a := g.a
 	x := v.Args[0]
+	if fusesFloat(v.Op) {
+		// UCOMISD leaves an unordered result CF, ZF and PF set: above
+		// and above or equal are false for it, and their inverses true.
+		xa, xb := g.intoX(x, x0), g.intoX(v.Args[1], x1)
+		if v.Op == OpFLt || v.Op == OpFLe {
+			xa, xb = xb, xa
+		}
+		g.sse(x.Type == TF32, amd64.UcomiSD, xa, xb)
+		if v.Op == OpFGt || v.Op == OpFLt {
+			return amd64.CondA
+		}
+		return amd64.CondAE
+	}
 	wide := x.Type == TI64
 	if v.Op == OpEqz {
 		r := g.intoG(x, s0)
@@ -2357,3 +2370,8 @@ func (g *gen) copySmall(v *Value, n uint64, oob amd64.Label) {
 		a.Store8Idx(rMem, ax, 0, cx)
 	}
 }
+
+// fusesFloat reports whether a float comparison of op is made by the branch
+// on it: gt, ge, lt and le, each one condition of UCOMISD's flags; eq and
+// ne need the parity flag besides.
+func fusesFloat(op Op) bool { return op == OpFGt || op == OpFGe || op == OpFLt || op == OpFLe }

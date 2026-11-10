@@ -275,11 +275,12 @@ func (g *lowering) allocate(ws *allocScratch, classes [][]int, cl *clobbers) {
 			lb.Phis = append(lb.Phis, ph)
 		}
 		// A comparison that is the block's last value and its branch's
-		// condition alone is made by the branch.
+		// condition alone is made by the branch: an integer one, and a
+		// float one whose condition is one of the flags' (fusesFloat).
 		if b.Kind == BIf && len(b.Values) > 0 {
 			c := b.Control
 			last := b.Values[len(b.Values)-1]
-			if c == last && c.Uses == 1 && (c.Op == OpEqz || (c.Op >= OpEq && c.Op <= OpGeU)) {
+			if c == last && c.Uses == 1 && (c.Op == OpEqz || (c.Op >= OpEq && c.Op <= OpGeU) || fusesFloat(c.Op)) {
 				g.fused[c.ID] = true
 			}
 		}
