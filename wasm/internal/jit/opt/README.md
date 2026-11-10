@@ -614,9 +614,17 @@ null reference traps (`TrapNullDereference`) before the poll is counted.
 Anything else -- null in a table, past the table, another type or a
 subtype, a host function, another instance's, no native code or no room
 -- goes through Go (`ExitCallIndirect`, `ExitCallRef`), which finds the
-callee or traps as the interpreter does. The callee's index waits in X15 while the
-arguments are moved, as s0 is the moves'; on arm64 the checks have X16
-and X17, and keep the table and the callee's index in D30 and D31.
+callee or traps as the interpreter does. The checks have s0 and s1 (on
+arm64 X16 and X17, the table kept in D30 meanwhile). The callee's index
+and native entry, read for the checks, wait for the arguments' moves and
+the jump in two registers of the allocator's that no operand of the call
+is in -- the table's index included, which a call through Go reads --
+and the return stack entry's third word is stored as its two halves, the
+call's offset and the index; where there are not two such registers the
+index waits in X15 (D31), as s0 is the moves', and the entry is read
+again from the link table. indirect's kernel went from 19.0 ms to 17.1 for
+it: 49 instructions a call to 42, the entry no longer a chain of loads
+just before the jump, and the index no longer through an SSE register.
 
 A tail call (`return_call`, and `return_call_indirect` and
 `return_call_ref` of a type without references) counts the poll down and

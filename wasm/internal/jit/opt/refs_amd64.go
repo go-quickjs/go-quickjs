@@ -446,7 +446,7 @@ func (g *gen) tail(v *Value) {
 			if !ref {
 				args = v.Args[:len(v.Args)-1]
 			}
-			g.indirectCallee(v, 0, 0, slow)
+			g.indirectCallee(v, 0, 0, slow, 0, false)
 			// The callee's index waits in x0 while the arguments move.
 			a.MovQToX(x0, s0)
 		}

@@ -1876,7 +1876,7 @@ func (g *gen) call(v *Value, rest []*Value) {
 	// the allocator's no argument is in: at a call every other value of
 	// the function is in its slot or dead.
 	self := idx == g.fn
-	link, kept := g.freeGPR(v.Args)
+	link, kept := g.freeGPR(v.Args, 0)
 	if !self {
 		if !kept {
 			link = s0
@@ -1979,9 +1979,10 @@ func (g *gen) poppedRS() {
 }
 
 // freeGPR returns a general register of the allocator's that none of args
-// is in, and that does not keep the return stack's entry, if there is one.
-func (g *gen) freeGPR(args []*Value) (amd64.Reg, bool) {
-	var used uint64
+// is in, that does not keep the return stack's entry and that is not in
+// taken, if there is one.
+func (g *gen) freeGPR(args []*Value, taken uint64) (amd64.Reg, bool) {
+	used := taken
 	if g.rsKept {
 		used |= 1 << g.rs
 	}
@@ -2056,11 +2057,20 @@ func (g *gen) callIndirect(v *Value, rest []*Value) {
 	a.Bind(start)
 	a.OpImm(amd64.Sub, rPoll, 1, true)
 	a.Jcc(amd64.CondLE, poll)
-	g.indirectCallee(v, frame, g.adv(), slow)
+	// The callee's entry and index wait in registers of the allocator's
+	// no operand is in -- the table's index too, which a call through Go
+	// reads -- where there are two, while the arguments go into its
+	// parameters; else the index waits in x0, and the entry is read again.
+	link, kept := g.freeGPR(v.Args, 0)
+	idx, keptIdx := g.freeGPR(v.Args, 1<<link)
+	kept = kept && keptIdx
+	g.indirectCallee(v, frame, g.adv(), slow, link, kept)
 	rs := g.checkRS(slow)
-	// The callee's index waits in x0 while the arguments go into its
-	// parameters, one slot each, the moves taking s0.
-	a.MovQToX(x0, s0)
+	if kept {
+		a.MovRR(idx, s0)
+	} else {
+		a.MovQToX(x0, s0)
+	}
 	slot := int32(g.req.FrameSlots)
 	for _, x := range args {
 		g.move(loc{kind: lSlot, slot: slot}, g.locOf(x), x.Type)
@@ -2071,17 +2081,26 @@ func (g *gen) callIndirect(v *Value, rest []*Value) {
 	a.LeaLabel(s0, ret)
 	a.Store(rs, 0, s0)
 	a.Store(rs, 8, rL)
-	a.MovQFromX(s0, x0)
-	a.ShiftImm(amd64.Shl, s0, 32, true)
-	a.OpImm(amd64.Or, s0, int32(v.At), true)
-	a.Store(rs, 16, s0)
+	if kept {
+		a.StoreImm32(rs, 16, int32(v.At))
+		a.Store32(rs, 20, idx)
+	} else {
+		a.MovQFromX(s0, x0)
+		a.ShiftImm(amd64.Shl, s0, 32, true)
+		a.OpImm(amd64.Or, s0, int32(v.At), true)
+		a.Store(rs, 16, s0)
+	}
 	g.pushRS()
 	a.OpImm(amd64.Add, rL, frame, true)
-	a.MovQFromX(s0, x0)
-	a.ShiftImm(amd64.Shl, s0, 3, true)
-	a.AddMem(s0, rCtx, offLinks)
-	a.Load(s0, s0, 0)
-	a.JmpReg(s0)
+	if kept {
+		a.JmpReg(link)
+	} else {
+		a.MovQFromX(s0, x0)
+		a.ShiftImm(amd64.Shl, s0, 3, true)
+		a.AddMem(s0, rCtx, offLinks)
+		a.Load(s0, s0, 0)
+		a.JmpReg(s0)
+	}
 	a.Bind(ret)
 	g.poppedRS()
 	g.restoreR()
@@ -2096,13 +2115,14 @@ func (g *gen) callIndirect(v *Value, rest []*Value) {
 }
 
 // indirectCallee leaves in s0 the index of the function call_indirect,
-// call_ref or their tail calls v calls, or goes to slow: the table's
-// element past its end or null, a function of another type or instance,
-// without native code, or whose frame has no room past frame bytes of L.
-// A reference is not null here. A callee that holds references fails the
-// frame's check, and is checked again out of line by both its frames'
-// sizes (Ctx.RFrames), its reference slots' past adv bytes of R.
-func (g *gen) indirectCallee(v *Value, frame, adv int32, slow amd64.Label) {
+// call_ref or their tail calls v calls, and, where keep, its native entry
+// in link, or goes to slow: the table's element past its end or null, a
+// function of another type or instance, without native code, or whose
+// frame has no room past frame bytes of L. A reference is not null here. A
+// callee that holds references fails the frame's check, and is checked
+// again out of line by both its frames' sizes (Ctx.RFrames), its
+// reference slots' past adv bytes of R.
+func (g *gen) indirectCallee(v *Value, frame, adv int32, slow amd64.Label, link amd64.Reg, keep bool) {
 	a := g.a
 	m := g.req.Module
 	lay := g.req.Layout
@@ -2133,9 +2153,12 @@ func (g *gen) indirectCallee(v *Value, frame, adv int32, slow amd64.Label) {
 	a.Jcc(amd64.CondNE, slow)
 	a.LoadU32(s0, s1, lay.FuncIndex)
 	// Its native entry, and its frame's room past this one's.
-	a.Load(s1, rCtx, offLinks)
-	a.LoadIdxScaled(s1, s1, s0, 3, 0)
-	a.Op(amd64.Test, s1, s1, true)
+	if !keep {
+		link = s1
+	}
+	a.Load(link, rCtx, offLinks)
+	a.LoadIdxScaled(link, link, s0, 3, 0)
+	a.Op(amd64.Test, link, link, true)
 	a.Jcc(amd64.CondE, slow)
 	refs, back := a.NewLabel(), a.NewLabel()
 	a.Load(s1, rCtx, offFrames)

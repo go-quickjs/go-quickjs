@@ -462,7 +462,7 @@ func (g *gen) tail(v *Value) {
 				args = v.Args[:len(v.Args)-1]
 			}
 			// The callee's index waits in x0 while the arguments move.
-			g.indirectCallee(v, 0, 0, slow)
+			g.indirectCallee(v, 0, 0, slow, 0, 0, false)
 		}
 		// The numeric arguments, into the parameters' slots, at once.
 		moves := g.moves[:0]

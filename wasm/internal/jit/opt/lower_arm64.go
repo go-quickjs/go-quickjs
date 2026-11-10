@@ -596,10 +596,14 @@ func (g *gen) stub(st *stub) {
 		// A callee that holds references, whose Ctx.Frames is past any
 		// chunk's end: its numeric slots' room past L plus code bytes,
 		// and its reference slots' past R plus off, by Ctx.RFrames. The
-		// callee's index is in x0.
+		// callee's index is in flag, where it is not 0, else in x0.
 		a.Bind(st.l)
 		g.mark("cold reference room")
-		a.FMovFromF(s0, x0)
+		if st.flag != 0 {
+			a.MovRR(s0, st.flag)
+		} else {
+			a.FMovFromF(s0, x0)
+		}
 		a.Load(s1, rCtx, offRFrames)
 		a.AddLsl(s1, s1, s0, 3)
 		a.Load(s1, s1, 0)
@@ -1609,7 +1613,7 @@ func (g *gen) call(v *Value, rest []*Value) {
 	// the allocator's no argument is in: at a call every other value of
 	// the function is in its slot or dead.
 	self := idx == g.fn
-	link, kept := g.freeGPR(v.Args)
+	link, kept := g.freeGPR(v.Args, 0)
 	if !self {
 		if !kept {
 			link = s0
@@ -1667,9 +1671,9 @@ func (g *gen) call(v *Value, rest []*Value) {
 }
 
 // freeGPR returns a general register of the allocator's that none of args
-// is in, if there is one.
-func (g *gen) freeGPR(args []*Value) (arm64.Reg, bool) {
-	var used uint64
+// is in and that is not in taken, if there is one.
+func (g *gen) freeGPR(args []*Value, taken uint64) (arm64.Reg, bool) {
+	used := taken
 	for _, x := range args {
 		if l := g.locOf(x); l.kind == lGPR {
 			used |= 1 << l.r
@@ -1740,12 +1744,18 @@ func (g *gen) callIndirect(v *Value, rest []*Value) {
 	a.Bind(start)
 	a.SubsImm(rPoll, rPoll, 1, true)
 	a.BCond(arm64.LE, poll)
-	g.indirectCallee(v, int64(8*g.req.FrameSlots), g.adv(), slow)
+	// The callee's index and entry wait in registers of the allocator's
+	// no operand is in -- the table's index too, which a call through Go
+	// reads -- where there are two, while the arguments go into its
+	// parameters, one slot each, the moves taking s0; else the index waits
+	// in x0, and the entry is read again.
+	link, kept := g.freeGPR(v.Args, 0)
+	idx, keptIdx := g.freeGPR(v.Args, 1<<link)
+	kept = kept && keptIdx
+	g.indirectCallee(v, int64(8*g.req.FrameSlots), g.adv(), slow, idx, link, kept)
 	a.Load(s1, rCtx, offRSEnd)
 	a.Cmp(rRS, s1, true)
 	a.BCond(arm64.HS, slow)
-	// The callee's index waits in x0 while the arguments go into its
-	// parameters, one slot each, the moves taking s0.
 	slot := int32(g.req.FrameSlots)
 	for _, x := range args {
 		g.move(loc{kind: lSlot, slot: slot}, g.locOf(x), x.Type)
@@ -1753,18 +1763,26 @@ func (g *gen) callIndirect(v *Value, rest []*Value) {
 	}
 	g.advanceR()
 	ret := a.NewLabel()
-	a.FMovFromF(s1, x0)
-	a.ShiftImm(arm64.Lsl, s1, s1, 32, true)
+	if kept {
+		a.ShiftImm(arm64.Lsl, s1, idx, 32, true)
+	} else {
+		a.FMovFromF(s1, x0)
+		a.ShiftImm(arm64.Lsl, s1, s1, 32, true)
+	}
 	if v.At != 0 {
 		a.MovImm(s0, uint64(v.At))
 		a.Op(arm64.Orr, s1, s1, s0, true)
 	}
 	g.pushReturn(ret, 0, true)
-	a.FMovFromF(s0, x0)
-	a.Load(s1, rCtx, offLinks)
-	a.AddLsl(s1, s1, s0, 3)
-	a.Load(s1, s1, 0)
-	a.Br(s1)
+	if kept {
+		a.Br(link)
+	} else {
+		a.FMovFromF(s0, x0)
+		a.Load(s1, rCtx, offLinks)
+		a.AddLsl(s1, s1, s0, 3)
+		a.Load(s1, s1, 0)
+		a.Br(s1)
+	}
 	a.Bind(ret)
 	g.restoreR()
 	g.takeResults(res, int32(g.req.FrameSlots))
@@ -1778,14 +1796,15 @@ func (g *gen) callIndirect(v *Value, rest []*Value) {
 }
 
 // indirectCallee leaves in x0 the index of the function call_indirect,
-// call_ref or their tail calls v calls, or goes to slow: the table's
-// element past its end or null, a function of another type or instance,
-// without native code, or whose frame has no room past frame bytes of L.
-// A reference is not null here. The checks have s0 and s1, and keep what
-// they need besides in x0 and x1. A callee that holds references fails
-// the frame's check, and is checked again out of line by both its frames'
-// sizes (Ctx.RFrames), its reference slots' past adv bytes of R.
-func (g *gen) indirectCallee(v *Value, frame int64, adv int32, slow arm64.Label) {
+// call_ref or their tail calls v calls -- or, where keep, in idx, and its
+// native entry in link -- or goes to slow: the table's element past its
+// end or null, a function of another type or instance, without native
+// code, or whose frame has no room past frame bytes of L. A reference is
+// not null here. The checks have s0 and s1, and keep what they need
+// besides in x0 and x1. A callee that holds references fails the frame's
+// check, and is checked again out of line by both its frames' sizes
+// (Ctx.RFrames), its reference slots' past adv bytes of R.
+func (g *gen) indirectCallee(v *Value, frame int64, adv int32, slow arm64.Label, idx, link arm64.Reg, keep bool) {
 	a := g.a
 	m := g.req.Module
 	lay := g.req.Layout
@@ -1813,20 +1832,29 @@ func (g *gen) indirectCallee(v *Value, frame int64, adv int32, slow arm64.Label)
 	a.CmpImm(s0, int64(m.Canonical[v.Aux]), false)
 	a.BCond(arm64.NE, slow)
 	a.LoadU32(s0, s1, lay.FuncIndex)
-	a.FMovToF(x0, s0)
+	if keep {
+		a.MovRR(idx, s0)
+	} else {
+		a.FMovToF(x0, s0)
+	}
 	a.Load(s1, s1, lay.FuncInst)
 	a.Load(s0, rCtx, offInst)
 	a.Cmp(s0, s1, true)
 	a.BCond(arm64.NE, slow)
 	// Its native entry, and its frame's room past this one's.
-	a.FMovFromF(s0, x0)
-	a.Load(s1, rCtx, offLinks)
-	a.AddLsl(s1, s1, s0, 3)
-	a.Load(s1, s1, 0)
-	a.Cbz(s1, slow, true)
+	ix, lk, flag := s0, s1, arm64.Reg(0)
+	if keep {
+		ix, lk, flag = idx, link, idx
+	} else {
+		a.FMovFromF(s0, x0)
+	}
+	a.Load(lk, rCtx, offLinks)
+	a.AddLsl(lk, lk, ix, 3)
+	a.Load(lk, lk, 0)
+	a.Cbz(lk, slow, true)
 	refs, back := a.NewLabel(), a.NewLabel()
 	a.Load(s1, rCtx, offFrames)
-	a.AddLsl(s1, s1, s0, 3)
+	a.AddLsl(s1, s1, ix, 3)
 	a.Load(s1, s1, 0)
 	a.Op(arm64.Add, s1, s1, rL, true)
 	if frame != 0 {
@@ -1836,7 +1864,7 @@ func (g *gen) indirectCallee(v *Value, frame int64, adv int32, slow arm64.Label)
 	a.Cmp(s1, s0, true)
 	a.BCond(arm64.HI, refs)
 	a.Bind(back)
-	g.ool = append(g.ool, stub{kind: stubRefRoom, l: refs, to: back, slow: slow, code: uint64(frame), off: adv})
+	g.ool = append(g.ool, stub{kind: stubRefRoom, l: refs, to: back, slow: slow, code: uint64(frame), off: adv, flag: flag})
 }
 
 // bulk lowers memory.copy and memory.fill of memory 0 (BulkInCode): the
