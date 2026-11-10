@@ -369,7 +369,7 @@ func checkTypes(v *Value) error {
 			return fmt.Errorf("a result of %s", c.long())
 		}
 	case OpRef:
-		if v.Type != TNone && !v.Type.IsInt() {
+		if v.Type != TNone && !v.Type.IsInt() && !v.Type.IsFloat() {
 			return fmt.Errorf("of type %v", v.Type)
 		}
 	case OpTail, OpTailIndirect, OpTailRef:

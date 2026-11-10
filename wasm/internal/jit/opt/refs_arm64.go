@@ -373,7 +373,9 @@ func (g *gen) refOp(v *Value) {
 		a.Load(t, t, g.req.Layout.TableElems+8)
 		g.done(v, int(t))
 	default:
-		panic("wasm opt: no lowering of a reference instruction")
+		if !g.gcRef(v) {
+			panic("wasm opt: no lowering of a reference instruction")
+		}
 	}
 }
 

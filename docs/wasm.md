@@ -462,11 +462,11 @@ references, tail calls, the accesses of every memory, shared ones and
 those of i64 addresses included, the atomics, the bulk and table
 instructions -- those the baseline leaves to Go, and table.fill and the
 copies and fills of memories other than an unshared i32 memory 0, through
-Go too -- and v128s and every SIMD and relaxed SIMD instruction, each the
+Go too -- v128s and every SIMD and relaxed SIMD instruction, each the
 baseline's instruction sequence over registers the allocator gives (a
 fused `relaxed_madd` and `relaxed_nmadd` in Go, as in the baseline), and
-leaves to the baseline code the functions with GC or exception
-instructions.
+the GC instructions, as the baseline compiles them, and leaves to the
+baseline code the functions with exception instructions.
 It roughly halves the Go-built programs' time from their second run on, and
 makes their first runs as fast as the baseline's or faster (json 77 ms to
 70, gzip 75 to 53), but interp's, 1 ms slower for the baseline code's

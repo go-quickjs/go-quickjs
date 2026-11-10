@@ -817,7 +817,7 @@ func (bd *builder) instr() {
 	case opcode.TableGrow, opcode.TableFill:
 		bd.tableGo(op, r.u32(), at)
 	default:
-		if bd.memoryOp(op, at) || bd.numeric(op, at) || bd.refInstr(op, at) || bd.atomicOp(op, at) || bd.simd(op, at) {
+		if bd.memoryOp(op, at) || bd.numeric(op, at) || bd.refInstr(op, at) || bd.atomicOp(op, at) || bd.simd(op, at) || bd.gcInstr(op, at) {
 			return
 		}
 		refuse(RefuseOther, "%s", op.Name())
@@ -1379,7 +1379,8 @@ func check(m *module.Module, fn uint32) {
 				}
 			}
 		case opcode.PrefixGC:
-			refuse(RefuseGC, "%s", op.Name())
+			checkGC(m, &r, op)
+			continue
 		case opcode.PrefixAsmJS:
 			refuse(RefuseOther, "%s", op.Name())
 		}

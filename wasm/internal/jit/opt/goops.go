@@ -16,8 +16,11 @@ import "github.com/go-quickjs/go-quickjs/wasm/internal/opcode"
 // memory.init's and table.init's segment and memory or table, and
 // table.copy's destination and source, Aux2's low and high words; wait's
 // and notify's memory, Aux's upper half, and offset, Aux2; any other's
-// Aux2 and 0.
+// Aux2 and 0; a GC instruction's and a throw's, Aux2's low and high words.
 func goImms(v *Value) (x, y uint64) {
+	if isGCGo(v) {
+		return v.Aux2 & 0xffffffff, v.Aux2 >> 32
+	}
 	switch opcode.Opcode(v.Aux) {
 	case opcode.MemoryCopy, opcode.MemoryInit, opcode.TableInit, opcode.TableCopy:
 		return v.Aux2 & 0xffffffff, v.Aux2 >> 32

@@ -212,20 +212,26 @@ func TestJITSameWorkWhileMarking(t *testing.T) {
 		name, src string
 		cases     func() []jitCase
 	}{{"refs", refsWAT, refCases}, {"gc", gcWAT, gcCases}} {
-		var idle [][]Val
-		var idleErr []error
-		idleExits := countExits(func() { idle, idleErr = runCases(t, nativeInstance(t, mod.src), mod.cases()) })
-		for _, clobber := range []bool{false, true} {
-			t.Run(mod.name+map[bool]string{false: "/marking", true: "/clobbered"}[clobber], func(t *testing.T) {
-				jitMarkingForTest(t, clobber)
-				var got [][]Val
-				var gotErr []error
-				exits := countExits(func() { got, gotErr = runCases(t, nativeInstance(t, mod.src), mod.cases()) })
-				sameOutcomes(t, "marking", mod.cases(), idle, idleErr, got, gotErr)
-				if exits != idleExits {
-					t.Fatalf("%d exits while marking, %d idle", exits, idleExits)
-				}
-			})
+		// The baseline's code, and the optimizing tier's.
+		for _, tier := range []struct {
+			name string
+			inst func(testing.TB, string) *Instance
+		}{{"", func(t testing.TB, src string) *Instance { return nativeInstance(t, src) }}, {"/opt", optInstance}} {
+			var idle [][]Val
+			var idleErr []error
+			idleExits := countExits(func() { idle, idleErr = runCases(t, tier.inst(t, mod.src), mod.cases()) })
+			for _, clobber := range []bool{false, true} {
+				t.Run(mod.name+tier.name+map[bool]string{false: "/marking", true: "/clobbered"}[clobber], func(t *testing.T) {
+					jitMarkingForTest(t, clobber)
+					var got [][]Val
+					var gotErr []error
+					exits := countExits(func() { got, gotErr = runCases(t, tier.inst(t, mod.src), mod.cases()) })
+					sameOutcomes(t, "marking", mod.cases(), idle, idleErr, got, gotErr)
+					if exits != idleExits {
+						t.Fatalf("%d exits while marking, %d idle", exits, idleExits)
+					}
+				})
+			}
 		}
 	}
 }

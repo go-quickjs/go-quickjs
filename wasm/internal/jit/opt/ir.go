@@ -248,6 +248,26 @@ const (
 	refSelect
 	// refTableSize is table idx's number of elements.
 	refTableSize
+	// The GC instructions on objects (gc.go), each trapping at At on null
+	// where the instruction does, idx a gcAux: refStructGet reads the field
+	// of the struct in src, a number as its value, a reference into dst;
+	// refStructSet writes Args[0], or the reference in src, to the field of
+	// the struct in dst; refArrayGet and refArraySet do the same with
+	// element Args[0] of the array, trapping past its end; refArrayLen is
+	// the array in src's length.
+	refStructGet
+	refStructSet
+	refArrayGet
+	refArraySet
+	refArrayLen
+	// refI31 makes dst the i31 of Args[0]; refI31Get is the i31 in src's
+	// value, sign-extended if idx is 1.
+	refI31
+	refI31Get
+	// refTest is 1 if the reference in src is of the heap type idx says
+	// (testAux), else 0; refCast traps at At where it is not.
+	refTest
+	refCast
 )
 
 // opFlags says what an operation does besides compute its value.

@@ -28,6 +28,7 @@ default (see Tier-up).
 | `memory_amd64.go`, `memory_arm64.go` | the accesses of any memory at any offset: memories other than 0, shared ones, those of i64 addresses |
 | `simd.go` | the SIMD instructions' values: what the tier refuses of them and what the builder makes |
 | `lower_simd_amd64.go`, `lower_simdf_amd64.go`, `lower_simd_arm64.go` | the SIMD instructions' lowering |
+| `gc.go`, `gc_lower.go`, `gc_amd64.go`, `gc_arm64.go` | the GC instructions: their building, the instructions Go runs for them, their lowering |
 | `internal/jit/lsra` | the register allocator, which knows nothing of WebAssembly |
 
 ## The IR
@@ -84,7 +85,8 @@ one to another, a null or a function made in one, a global or a table's
 element copied to or from one, the null test and `ref.eq` of slots (an i32
 value), `ref.as_non_null`'s trap, `select`'s copy where its condition is
 0 -- and has its numeric operands (a table's index, `select`'s condition)
-as arguments; table.size is one too. Every `ref` value has an effect: none
+as arguments; table.size is one too, and so are the GC instructions on
+objects (below). Every `ref` value has an effect: none
 is shared, moved or removed, and they keep their order among themselves
 and the calls, which read and write the same slots. A call's reference
 arguments and results are in its arguments' positions' slots, from the
@@ -101,6 +103,23 @@ have effects. An atomic access is never shared, moved or removed, keeps
 its order among the other effects, and is neither checked by nor taken as
 checked by BCE; the builder forgets what it knew of memory at each, as at
 a fence, and leaves memory.atomic.wait32, wait64 and notify to Go.
+
+The GC instructions on objects are `ref` values too (`gc.go`): a field's
+or an element's read and write -- the object's slot, the field's cell
+offset, its storage type and extension in the immediate, the index and a
+numeric value as arguments, a reference value or result in its position's
+slot -- array.len, ref.i31 and i31.get, ref.test (an i32) and ref.cast,
+each trapping where the instruction does; br_on_cast and br_on_cast_fail
+are a test and a branch on it, the reference staying in its slot both
+ways; any.convert_extern and extern.convert_any are nothing. A number read
+is a value like any load's, but never shared or moved: a `ref` value has
+an effect. What allocates -- struct.new, struct.new_default, array.new,
+array.new_default, array.new_fixed, array.new_data, array.new_elem -- and
+array.fill, array.copy, array.init_data and array.init_elem are `goop`s,
+their references in their positions' slots from `Pos` and the object made
+left in the first's; Go makes the objects and charges the instance's
+budget as the interpreter does, and they forget nothing the block knows
+of memory and globals.
 
 ## Building SSA
 
@@ -259,6 +278,23 @@ code may keep a value in -- the allocator's and the ones every native
 frame keeps -- around `internal/jit.StoreRef`, as the baseline's does
 (its README's References and the collector); the payload word is a plain
 store.
+
+A GC instruction on an object loads the object's pointer word from its
+slot into s1 (X17), tests it for null, and reads or writes the field or
+element in place at the engine's offsets (`Layout`), as the baseline does
+(its README's GC objects): a struct's field in its cell's second word,
+zero-extended, an array's index compared with its length, a number loaded
+into the value's register or stored from its location -- a packed one
+sign- or zero-extended, an f32 as its word -- and a reference copied
+between the object and its position's slot through the barrier, s0 (X16)
+holding R, the index or a number on its way. ref.i31 stores the mark and
+the low 31 bits; the tests compare the mark, the header's kind byte, and
+for a defined type the canonical index at its depth among the
+supertypes, a cast going to its trap. On arm64 an index not in a register
+of its own is compared with the length while the array's address waits in
+D31. An instruction Go runs for objects stages its numeric operands in the
+call area, each at its place among the operands, and sets `RArgs` to its
+first operand's position, where Go leaves an object it makes (`stageGC`).
 
 A call's reference arguments are copied from their positions' slots into
 the callee's parameters past the frame's (adv bytes past R), and its
@@ -795,9 +831,9 @@ A function is refused -- it keeps its baseline code -- when it has:
 | Reason | What |
 |---|---|
 | `v128` | a v128 value on an amd64 CPU without SSSE3, SSE4.1 and SSE4.2 (the baseline's `cpu`) |
-| `simd` | a SIMD instruction there, or a half-precision one |
+| `simd` | a SIMD instruction there, or a half-precision one; a struct.get, struct.set, array.get or array.set of a v128 field or element, or a struct.new, array.new, array.new_fixed or array.fill of one |
 | `atomics` | a struct or array atomic instruction |
-| `gc` | a GC instruction |
+| `gc` | a GC instruction past the GC proposal's |
 | `exceptions` | try, try_table, throw, the legacy instructions |
 | `frame` | more spill slots than its frame has below the call area |
 | `size` | code past `internal/jit.MaxCodeBytes`, or, on arm64, past a branch's reach |
@@ -868,7 +904,12 @@ merges, `TestCoalesce` a loop's phi web; `TestWorkspaceReuse` compiles in
 workspaces kept and from goroutines at once (with -race);
 `TestOptTierUp` the counts, the replacement mid-recursion and the poll
 samples, `TestOptTierUpByExits` the exits'; `TestOptCallIndirect` every
-kind of element a native call_indirect meets, `TestOptRefs` references
+kind of element a native call_indirect meets, `TestOptGC` the baseline's
+GC instructions' cases (`TestJITGC`) on this tier, idle and with the
+collector marking, `TestOptGCUnderCollection` its list relinked while the
+collector runs (again under `GODEBUG=gccheckmark=1`), `TestOptGCPressure`
+fields and elements with more values live than registers, across the
+allocations, `TestJITSameWorkWhileMarking` both tiers, `TestOptRefs` references
 in every place, calls and tail calls of every kind with them, idle and
 with the collector marking; `TestJITSIMDBits`, `TestJITRelaxedChoices`
 (amd64) and `TestJITSIMDValues` run every SIMD instruction and v128s in
