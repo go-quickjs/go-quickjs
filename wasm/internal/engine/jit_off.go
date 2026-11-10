@@ -27,6 +27,8 @@ func (c *Code) setOSRThreshold(int) {}
 
 func (c *Code) setOptThreshold(int) {}
 
+func (c *Code) setOptBackground(bool) {}
+
 func (c *Code) enterLoopsForTest() {}
 
 func (c *Code) setOSRCalls(int8) {}

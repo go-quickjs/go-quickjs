@@ -34,8 +34,11 @@ import (
 // global's value after each call, references by what they are (refAlike).
 // It does it again with every call of a function with loops that Go makes
 // running in the interpreter until its first back edge and going on
-// natively from that loop's head (osr), and with every function the
-// optimizing tier accepts compiled by it, the rest by the baseline (opt).
+// natively from that loop's head (osr), with every function the
+// optimizing tier accepts compiled by it, the rest by the baseline (opt),
+// and with every function's baseline code replaced by the optimizing
+// tier's after its third call, compiled in the background while later
+// calls run on, the code of either tier (tiered).
 func TestJITDifferential(t *testing.T) {
 	dir := os.Getenv("WASM_SPEC_DIR")
 	if dir == "" {
@@ -58,7 +61,7 @@ func TestJITDifferential(t *testing.T) {
 	if td := os.Getenv("WASM_THREADS_DIR"); td != "" {
 		files = append(files, scripts(t, filepath.Join(td, "test", "core", "threads"))...)
 	}
-	for _, mode := range []string{"entry", "osr", "opt"} {
+	for _, mode := range []string{"entry", "osr", "opt", "tiered"} {
 		t.Run(mode, func(t *testing.T) { differential(t, files, mode) })
 	}
 }
@@ -66,7 +69,7 @@ func TestJITDifferential(t *testing.T) {
 func differential(t *testing.T, files []string, mode string) {
 	only := os.Getenv("WASM_SPEC_ONLY")
 	before := engine.ReadJITStats()
-	d := &differ{t: t, rng: rand.New(rand.NewPCG(1, 2)), osr: mode == "osr", opt: mode == "opt"}
+	d := &differ{t: t, rng: rand.New(rand.NewPCG(1, 2)), osr: mode == "osr", opt: mode == "opt", tiered: mode == "tiered"}
 	for _, f := range files {
 		if only != "" && !strings.Contains(filepath.ToSlash(f), only) {
 			continue
@@ -89,7 +92,7 @@ func differential(t *testing.T, files []string, mode string) {
 	st := engine.ReadJITStats()
 	t.Logf("differential: %d modules, %d functions, %d calls compared (%d stopped by the time limit); %d functions compiled natively, %d calls went on natively from a loop",
 		d.modules, d.funcs, d.calls, d.timeouts, st.Compiled-before.Compiled, st.OSR-before.OSR)
-	if d.opt {
+	if d.opt || d.tiered {
 		refused := 0
 		for r, n := range st.OptRefused {
 			refused += n - before.OptRefused[r]
@@ -109,13 +112,14 @@ type differ struct {
 	// vconsts are the script's v128 arguments.
 	vconsts []engine.Val
 	// osr enters every loop of a native call from the interpreter; opt
-	// compiles every function the optimizing tier accepts with it.
-	osr, opt bool
-	modules  int
-	funcs    int
-	calls    int
-	timeouts int
-	failures int
+	// compiles every function the optimizing tier accepts with it; tiered
+	// has it compile them in the background after their third call.
+	osr, opt, tiered bool
+	modules          int
+	funcs            int
+	calls            int
+	timeouts         int
+	failures         int
 }
 
 // script runs a script's modules, the constants its assertions use as
@@ -188,9 +192,13 @@ func (d *differ) module(c *wast.ModuleCommand) {
 	if d.osr {
 		nat.EnterLoopsForTest()
 	}
-	if d.opt {
+	switch {
+	case d.opt:
 		nat.SetOptThreshold(0)
-	} else {
+	case d.tiered:
+		nat.SetOptThreshold(3)
+		nat.SetOptBackground(true)
+	default:
 		nat.SetOptThreshold(-1)
 	}
 	jit, err := newRunner(d.t, d.file).instantiate(nat)

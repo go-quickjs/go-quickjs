@@ -352,10 +352,14 @@ The baseline code of a function the optimizing tier may compile counts
 its calls: at its entry it decrements the function's countdown
 (`Request.TierCounter`, the engine's `codeJIT.counters`) and exits
 (`ExitTierUp`) when it goes below zero, before its prologue, with the
-frame as the call made it. The engine compiles the function with the
-optimizing tier, places the code, stores it as the function's native code
-and in the link table, and enters it at its Go entry for that call; native
-callers, the interpreter and Go call it from then on. A poll that baseline
+frame as the call made it. The engine queues the function for a compile
+in the background (In the background) and the call resumes in the
+baseline code; once a worker has placed the optimized code, it is stored
+as the function's native code and in the link table, and native callers,
+the interpreter and Go call it from then on. Compiling on the spot
+(GOMAXPROCS 1, `Code.SetOptBackground(false)`), the engine compiles the
+function there, places and stores the code, and enters it at its Go entry
+for that call. A poll that baseline
 code exits for -- its loops or calls ran the poll counter out -- counts
 250 calls, so that a function whose loops run long is optimized for its
 next call, and each call and instruction Go makes for the baseline code
@@ -366,12 +370,15 @@ replaced code stays placed (`nativeFn.prev`), and an exit resumes in the
 code that holds its address.
 
 The tier is on by default, at `DefaultOptThreshold`, 30,000 calls. Its
-compiles, once the cost of both tiers' compiles was worked on, leave a short
+compiles, once the cost of both tiers' compiles was worked on, left a short
 program's first run faster than the baseline alone for four of the six Go
-programs (regexp 98 ms to 62, gzip 83 to 69, sha256 158 to 144, sort 221 to
-209) and slower for two (json 89 to 98, interp 37 to 39), and every later
-run about twice as fast (json 57 to 47, gzip 59 to 29); before that work
-they made json's first run 135 to 161 ms.
+programs and slower for two (json 89 ms to 98, interp 37 to 39), and every
+later run about twice as fast (json 57 to 47, gzip 59 to 29); before that
+work they made json's first run 135 to 161 ms. Compiled in the background,
+every first run is the baseline's or faster -- json 77 to 70, regexp 89 to
+52, gzip 75 to 53 -- but interp's, 36 to 37, which is the baseline code's
+counting of its calls: a threshold no function reaches costs it as much
+(In the background).
 `Code.SetOptThreshold(n)` sets another: 0 compiles every function the
 tier accepts with it at once, the baseline only those it refuses, and a
 negative n turns the tier off. `WASM_JIT_OPT` sets it for tests and
@@ -402,6 +409,130 @@ loop entries. A call running in the interpreter of a function whose
 native code is optimized enters the loops of the baseline code it
 replaced, or of baseline code compiled then for its loops alone
 (`loopsFor`) where it replaced none.
+
+## In the background
+
+A function whose baseline code runs its count out is compiled by the
+process's workers (`engine/jit_bg.go`), the program running its baseline
+code meanwhile; the baseline's first-call compile stays on the calling
+goroutine, which needs the code at once.
+
+**Scheduling.** The exit, or Go's count of the baseline code's polls and
+exits (`codeJIT.sample`), queues the function once (`tierUpLater`: its
+`optDone` set by a compare-and-swap) and sets its countdown to
+`math.MaxInt64`, so that its baseline code exits no more; every later ask
+stores it again, since a call's decrement racing with the store may undo
+it. The workers (`optWorkers`) are at most a quarter of GOMAXPROCS, at
+least one, each started when a request is queued and none is free, each
+ending when none is queued, as the JavaScript JIT's are. The queue holds
+the Codes with requests in a ring, served in turn, so that one module's
+many requests do not hold up another's; of a Code's, a worker takes the
+function whose baseline code was called most since it was queued -- its
+countdown, from `math.MaxInt64` down -- so that one no longer called waits
+behind those that are. A request holds the Code's `codeJIT`, never the
+Code: it is dropped when the Code is collected.
+
+**What a compile reads.** Only what no running call changes: the module
+-- its bytes, types and functions, fixed once validated -- the
+function's body in it, its record's frame (`nslots`, the locals' slots,
+`refs`, `caught`), set before the record is stored and never changed, its
+callees' frames, validation's bounds or their records (`Code.get`, which
+makes a record with atomic stores and `Code.mu`), and the process's
+constants (the write barrier's addresses, `jitLayout`). Not the frames,
+instances, memories, tables or globals, nor the exec; the countdowns only
+for the queue's order, atomically. A compile works in a workspace of its
+own from the tier's pool, and a panic is a refusal (`Compile`). While a
+host times the compiles (`Timing`), which it does on one goroutine, they
+are made on the spot.
+
+**Placement.** Running native code holds the Code's run lock for reading
+for as long as it runs, so a placement taking the write lock would wait
+for the longest stretch between two exits of every goroutine running the
+Code, and stop each at its next entry meanwhile. A worker places apart
+(`internal/jit.PlaceRawApart`) instead, taking no lock running code holds:
+from a page boundary past every code placed in the arena's last chunk, or
+in a new chunk, on pages no code is in and none ran from, written, sealed
+executable and flushed from the instruction cache before the code is
+published. No core has fetched from those pages, which were never
+executable, and other threads reach the code only through the link or the
+function's native code, stored after (atomically, sequentially
+consistent). The compiles a Code finished meanwhile are placed together,
+one worker at a time (`placeReady`): a batch loses at most the rest of
+the page before it (16 KiB pages on darwin/arm64; where pages are 64
+KiB, as large as a chunk, each batch maps a chunk of its own), and what
+is placed on the spot after it packs after its end. On json's first run 38 batches of
+one function were placed, and the arena mapped 8.85 MB with 7.40 MB of
+code in it, the chunks' ends included.
+
+**Publishing.** Under the Code's compile lock (`codeJIT.mu`), held for the
+stores alone, so that the first-call compiles of the program's goroutines
+wait for no compile: the code joins the Code's, the function's native
+code becomes the optimized code with the baseline code as its `prev`, its
+frame is stored, then its link. A call entering after it reads the link,
+or the native code, and runs the optimized code; a call already in the
+baseline code finishes there: an exit resumes in the code that holds its
+address (`nativeFn.holding`, along `prev`), and a call running in the
+interpreter enters the baseline code's loops (`loopCode`). An `ExitTierUp`
+that raced with the publishing finds the optimized code and enters it for
+its call.
+
+**GOMAXPROCS 1.** A worker then runs only when the program's goroutine is
+preempted, and the optimized code comes later than a compile on the spot
+would bring it: compiled in the background the Go programs' first runs
+took regexp 72 ms where on the spot they took 58, gzip 82 and 66, json's
+second run 48 and 39. So by default a Code compiles on the spot where
+GOMAXPROCS is 1 (asked at each tier-up), and in the background above; with
+two the background wins (json's first run 83 to 69, gzip's 60 to 54).
+
+**Measured.** `internal/cmd/wasmbench -engine jit-base,jit-tiered -suite
+programs`, median of 3 fresh processes, the tiered first run on the spot
+and in the background, the baseline alone's in parentheses, then the
+second run, ms:
+
+| program | amd64 first | amd64 second | arm64 first | arm64 second |
+|---|---:|---:|---:|---:|
+| sha256 | 146 -> 147 (158) | 49 -> 48 | 341 -> 330 (408) | 108 -> 108 |
+| sort | 210 -> 205 (220) | 109 -> 106 | 516 -> 500 (448) | 270 -> 269 |
+| json | 90 -> 69 (77) | 43 -> 35 | 176 -> 149 (160) | 103 -> 82 |
+| regexp | 54 -> 52 (89) | 31 -> 30 | 129 -> 125 (192) | 81 -> 81 |
+| gzip | 62 -> 53 (75) | 23 -> 22 | 140 -> 115 (178) | 64 -> 62 |
+| interp | 38 -> 37 (36) | 12 -> 12 | 81 -> 79 (78) | 50 -> 50 |
+
+(amd64: Ryzen 9 9950X3D2, Windows, 32 threads, 8 workers; arm64: GitHub's
+`ubuntu-24.04-arm`, 4 CPUs, one worker.) Peak RSS is level but json's,
+82 to 90 MB on amd64, which varied from 74 to 88 MB with one to eight
+workers. interp's first run is the baseline code's counting of calls: a
+threshold no function reaches costs it as much. sort's on arm64 is not
+the counting (459 ms with a threshold never reached, 455 without) nor the
+compiles on the program's goroutine (503 on the spot).
+
+**Shutdown.** A worker makes the request's weak pointer to the Code
+strong for the compile, its placement and its publishing, so the Code's
+cleanup, which closes its code and gives its arena back, cannot run
+meanwhile; a Code collected while its requests are queued has them
+dropped by its cleanup (`optPool.drop`), and a worker finding the weak
+pointer nil drops its own. The cleanup marks the code closed under the
+compile lock, and a placement that finds it closed releases what it
+placed: nothing is published into an arena given back
+(`TestOptBackgroundCodeCollected`).
+
+**The collector.** A compile is Go code like any other, on a goroutine
+of its own: it allocates, is preempted and marks through Go's barriers.
+Native code gains no pointer from it: the links are code addresses
+outside Go's heap, and the native code's record is a Go pointer stored
+atomically.
+
+**On the spot, for tests.** `Code.SetOptBackground(false)` compiles on the
+goroutine that ran the count out, the tiering then the same on every run,
+and `true` in the background even at GOMAXPROCS 1;
+`WASM_JIT_OPT_BACKGROUND` (`on`, `off`) sets it for tests and benchmarks.
+`WASM_JIT=eager`, `osr` and `opt` turn it off, so that the spec scripts
+run as they did, and the tier's compiles at a function's first compile
+(`WASM_JIT_OPT=eager`, `SetOptThreshold(0)`) are made there, being that
+compile. `TestOptBackgroundStress` crosses the threshold for 96 functions
+of two Codes on six goroutines while the collector runs, and
+`TestJITDifferential`'s `tiered` mode compares every spec function with
+the tier compiling after its third call in the background.
 
 ## The compile's cost
 
@@ -636,8 +767,9 @@ registers the allocator gave out.
   whole loop where a short stretch of pressure needs its register.
 - The compile's cost, 0.16 ms a Go function, now spread over its
   phases (The compile's cost): fewer passes over the IR -- copyelim
-  runs five times, the dominator tree up to three -- trivial phis the
-  builder need not make, and compiles in the background.
+  runs five times, the dominator tree up to three -- and trivial phis
+  the builder need not make. In the background it costs the first run
+  little, but it is CPU an embedder running a runtime on each core pays.
 - Inlining of small callees; tail calls; call_indirect and memory.copy
   natively in the baseline too, whose Go programs spend a third of their
   time in those exits.

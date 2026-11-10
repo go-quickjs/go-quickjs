@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 	"unsafe"
+	"weak"
 
 	ijit "github.com/go-quickjs/go-quickjs/internal/jit"
 	wjit "github.com/go-quickjs/go-quickjs/wasm/internal/jit"
@@ -41,7 +42,8 @@ type codeJIT struct {
 	mu sync.Mutex
 	// run is held for reading while native code of the Code runs, and for
 	// writing while code is placed: placing makes pages of the arena
-	// writable, which no thread may be running then.
+	// writable, which no thread may be running then. Code placed apart
+	// from the running code (placeReady) does not take it.
 	run   sync.RWMutex
 	arena *ijit.Arena
 	// links holds each function's native entry, or 0; native code reads
@@ -67,6 +69,9 @@ type codeJIT struct {
 	// which their baseline code decrements at its entry; they never move.
 	optThreshold atomic.Int32
 	counters     []int64
+	// bg is the state of the optimizing tier's compiles in the background
+	// (jit_bg.go).
+	bg optBackground
 }
 
 // optPollWeight is how many calls a poll exit of a function's baseline
@@ -387,6 +392,8 @@ func (c *Code) enableJIT(threshold int) bool {
 	if osrEnv >= 0 {
 		cj.osrThreshold.Store(int32(osrEnv))
 	}
+	cj.bg.mode.Store(optBackgroundDefault())
+	cj.bg.owner = weak.Make(c)
 	runtime.AddCleanup(c, func(cj *codeJIT) { cj.close() }, cj)
 	c.jit.Store(cj)
 	return true
@@ -394,8 +401,10 @@ func (c *Code) enableJIT(threshold int) bool {
 
 // close gives the code back, once the Code is unreachable.
 func (cj *codeJIT) close() {
+	optWorkers.drop(cj)
 	cj.mu.Lock()
 	defer cj.mu.Unlock()
+	cj.bg.closed = true
 	for _, r := range cj.raws {
 		r.Close()
 	}
@@ -506,6 +515,13 @@ func (cj *codeJIT) compileOpt(c *Code, idx uint32, cd *compiled, prev *nativeFn)
 		countOptRefused("unplaced")
 		return nil
 	}
+	return cj.publishOpt(idx, cd, raw, code, prev)
+}
+
+// publishOpt makes code, placed at raw, function idx's native code in the
+// place of prev, its baseline code if it has one, and in the link table.
+// cj.mu is held.
+func (cj *codeJIT) publishOpt(idx uint32, cd *compiled, raw *ijit.RawCode, code *wjit.Code, prev *nativeFn) *nativeFn {
 	cj.raws = append(cj.raws, raw)
 	jitCode.log(idx, "opt", raw, code)
 	nat := &nativeFn{raw: raw, base: raw.Base(), goEntry: code.GoEntry, retStub: raw.Base() + uintptr(code.ReturnStub), nslots: cd.nslots, opt: true, prev: prev}
@@ -529,8 +545,16 @@ func (cj *codeJIT) setFrame(idx uint32, cd *compiled) {
 
 // tierUp has function idx, whose baseline code counted enough calls,
 // compiled by the optimizing tier, returning the optimized code, or nil
-// where the tier refuses it.
+// where the tier refuses it -- or, in the background, nil until a worker
+// has published it, the call going on in the baseline code.
 func (cj *codeJIT) tierUp(c *Code, idx uint32, cd *compiled) *nativeFn {
+	if cj.inBackground() {
+		if nat := cd.native.Load(); nat != nil && nat.opt {
+			return nat
+		}
+		cj.tierUpLater(idx, cd)
+		return nil
+	}
 	cj.mu.Lock()
 	defer cj.mu.Unlock()
 	if nat := cd.native.Load(); nat != nil && nat.opt {

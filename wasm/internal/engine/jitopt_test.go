@@ -16,12 +16,13 @@ import (
 
 // tierInstance instantiates a module given in the text format whose
 // functions get baseline code at their first call and optimized code after
-// optThreshold calls of it.
+// optThreshold calls of it, compiled on the spot.
 func tierInstance(t *testing.T, src string, optThreshold int) *Instance {
 	t.Helper()
 	inst := thresholdInstance(t, src, 0)
 	inst.Code.setOSRCalls(0)
 	inst.Code.SetOptThreshold(optThreshold)
+	inst.Code.SetOptBackground(false)
 	return inst
 }
 
@@ -437,6 +438,7 @@ func TestOptTierUpByExits(t *testing.T) {
 	inst := thresholdInstance(t, src, 0, Extern{Kind: module.ExternFunc, Func: h})
 	inst.Code.setOSRCalls(0)
 	inst.Code.SetOptThreshold(1000)
+	inst.Code.SetOptBackground(false)
 	for _, n := range []uint64{10, 5000} {
 		got, err := call(t, inst, "loop", n)
 		if err != nil {

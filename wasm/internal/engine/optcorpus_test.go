@@ -188,6 +188,9 @@ func TestOptCompileCorpus(t *testing.T) {
 
 	// The repeated compiles, timed by phase.
 	times := &wopt.Times{Clock: func() int64 { return int64(v8bench.Clock()) }}
+	// No compile of an earlier test's is in the background while
+	// Timing is set.
+	waitOptWorkers()
 	runtime.GC()
 	var m0, m1 runtime.MemStats
 	runtime.ReadMemStats(&m0)

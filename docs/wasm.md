@@ -421,10 +421,16 @@ bound, and the interpreter's compile of the body is never made unless a
 call runs there. An optimizing tier (`wasm/internal/jit/opt`) recompiles a
 function whose baseline code was called 30,000 times, or whose loops ran
 long, from SSA with a register allocator, in the baseline code's place;
-`WASM_JIT_OPT=off` turns it off.
+`WASM_JIT_OPT=off` turns it off. Its compiles run on background workers
+shared by the process, at most a quarter of GOMAXPROCS, the program running
+the baseline code until the optimized code is placed -- on pages no running
+code is in, so that nothing waits -- and published; with GOMAXPROCS 1 they
+are made on the spot, the worker otherwise waiting for the program's
+goroutine to be preempted.
 It roughly halves the Go-built programs' time from their second run on, and
-makes four of six first runs faster too; json's and interp's first runs are
-6-10% slower, paying for compiles that pay back later. Their designs are in
+makes their first runs as fast as the baseline's or faster (json 77 ms to
+70, gzip 75 to 53), but interp's, 1 ms slower for the baseline code's
+counting of calls. Their designs are in
 [the JIT's README](../wasm/internal/jit/README.md) and
 [the optimizing tier's](../wasm/internal/jit/opt/README.md).
 
@@ -575,6 +581,8 @@ The environment names them:
 | `WASM_SPEC_ONLY` | runs only the scripts whose path contains it |
 | `WASM_JIT` | in a JIT build, compiles every function: `eager` at its first call, a call with loops entering native code at its first back edge; `osr` so for every call Go or the interpreter makes; `on` or `1` at its first call, the interpreter compiling no body it does not run; a number after that many calls in the interpreter |
 | `WASM_JIT_OSR` | the back edges a call runs before its loop enters native code, or `off` |
+| `WASM_JIT_OPT` | the calls of a function's baseline code before the optimizing tier compiles it: a number, `on` for the default, `eager` at its first compile, or `off` |
+| `WASM_JIT_OPT_BACKGROUND` | `on` compiles the optimizing tier's tier-ups on the process's workers even at GOMAXPROCS 1, `off` on the goroutine that ran the count out; by default the workers where GOMAXPROCS is above 1, and never under `WASM_JIT=eager`, `osr` or `opt` |
 | `QUICKJS_COMPARE_NODE_WASM=1` | runs the comparisons with the `node` on `PATH` |
 | `WASI_TESTSUITE_DIR` | wasi-testsuite's `tests` directory |
 

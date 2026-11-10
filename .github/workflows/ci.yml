@@ -512,3 +512,8 @@ jobs:
       # settings.
       - name: Test compiling in the background
         run: go test -tags quickjs_jit -race -count=1 -timeout 15m -run 'Background|Differential' ./internal/vm .
+
+      # The WebAssembly JIT's optimizing tier compiling on the process's
+      # workers, its code placed while other code runs.
+      - name: Test the WebAssembly JIT compiling in the background
+        run: go test -tags quickjs_jit -race -count=1 -timeout 15m -run 'OptBackground|PlaceRawApart|OptTierUp' ./wasm/internal/engine ./internal/jit

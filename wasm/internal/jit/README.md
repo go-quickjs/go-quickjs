@@ -93,12 +93,16 @@ it, on amd64 and arm64, to code that keeps this tier's frames, context, entries,
 exits and calls. It is on by default where it is built (`DefaultOptThreshold`,
 30,000 calls; `Code.SetOptThreshold`, `WASM_JIT_OPT=N` and `WASM_JIT=opt` set
 another threshold, `WASM_JIT_OPT=off` turns it off): a function's baseline
-code
-counts its calls at its entry, and its poll exits, and past the threshold
-exits (`ExitTierUp`): the engine compiles the function with the optimizing
-tier and its code takes the baseline's place in the link table, the frames
-that began in the baseline code running on in it. A function the
-optimizing tier refuses keeps its baseline code.
+code counts its calls at its entry, and its poll exits, and past the
+threshold exits (`ExitTierUp`). The engine queues the function for the
+process's compile workers and the call goes on in the baseline code, as
+later calls do until the optimizing tier's code is placed and takes the
+baseline's place in the link table (`opt/README.md`, In the background);
+where GOMAXPROCS is 1, or the Code compiles on the spot
+(`Code.SetOptBackground(false)`), the engine compiles it there and the call
+enters the new code. Either way the frames that began in the baseline code
+run on in it. A function the optimizing tier refuses keeps its baseline
+code.
 
 The tiers share the interpreter's frame, so a call may cross between them in
 either direction, and a call may cross from the interpreter to native code
@@ -745,11 +749,22 @@ WASM_FIRSTRUN=prog.wasm WASM_FIRSTRUN_ARGS="json 200" \
 
 A Code's native code is shared by its instances and the goroutines running
 them. It lives in an arena of the Code's own, released by a cleanup when
-the Code is collected. Placing code makes pages of the arena writable, so
-native code runs under a read lock of the Code's (`codeJIT.run`), and
-placing takes the write lock: no thread runs code in pages being written.
-Compiles are serialized per Code. The link table is written atomically,
-and read by native code.
+the Code is collected. Placing code makes pages of the arena writable, and
+no thread runs code in pages being written, in one of two ways. A compile
+made by a goroutine running the Code -- a function's first, a tier-up on
+the spot -- places its code after the last placed, perhaps on a page
+holding code that runs: native code runs under a read lock of the Code's
+(`codeJIT.run`), and such a placement takes the write lock. A compile in
+the background places its code apart (`internal/jit.PlaceRawApart`): from a
+page boundary past every code placed in the arena's last chunk, or in a
+new chunk, on pages no code is in and none ever ran from, which it seals
+executable before the code is published; it takes no lock running code
+holds, and so waits for none. The arena's own lock orders the two, so that
+a placement on the spot that shares a page with code placed apart writes
+it once that code is sealed, and under the write lock. Compiles are
+serialized per Code (`codeJIT.mu`), but those in the background, which
+take it only to publish. The link table is written atomically, and read by
+native code.
 
 ## References and the collector
 

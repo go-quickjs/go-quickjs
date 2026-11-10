@@ -80,6 +80,17 @@ func TestFirstRun(t *testing.T) {
 		base.Round(10*time.Microsecond), st1.Compiled-st0.Compiled, place.Round(10*time.Microsecond),
 		(first - interp - base - place).Round(10*time.Microsecond),
 		float64(ms1.TotalAlloc-ms0.TotalAlloc)/(1<<20), ms1.Mallocs-ms0.Mallocs)
-	t.Logf("second run %v: %d more interp compiles, %d more baseline compiles", second.Round(10*time.Microsecond),
-		st2.Interpreted-st1.Interpreted, st2.Compiled-st1.Compiled)
+	t.Logf("first run: optimizing tier %d fns, %d refused, compiling %v (in the background or not)",
+		st1.Optimized-st0.Optimized, optRefused(st1)-optRefused(st0), (st1.OptTime - st0.OptTime).Round(10*time.Microsecond))
+	t.Logf("second run %v: %d more interp compiles, %d more baseline compiles, %d more optimized", second.Round(10*time.Microsecond),
+		st2.Interpreted-st1.Interpreted, st2.Compiled-st1.Compiled, st2.Optimized-st1.Optimized)
+}
+
+// optRefused is the number of functions the optimizing tier refused.
+func optRefused(st engine.JITStats) int {
+	n := 0
+	for _, k := range st.OptRefused {
+		n += k
+	}
+	return n
 }

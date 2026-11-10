@@ -39,7 +39,10 @@ import (
 // built; SetOptThreshold or WASM_JIT_OPT sets the count ("on" for the
 // default, a number of calls, "eager" for every function at its first
 // compile, "off" to turn the tier off); WASM_JIT=opt is "eager" with every
-// function compiled at its first call.
+// function compiled at its first call. The recompiles run on the process's
+// workers, the function's baseline code running until its optimized code
+// is published (jit_bg.go), or on the spot (SetOptBackground,
+// WASM_JIT_OPT_BACKGROUND).
 //
 // WASM_JIT_CODE, read when the engine starts, names a file each code placed
 // is written to, with the compilers' marks, for a profile's native samples
@@ -68,6 +71,18 @@ const DefaultOptThreshold = 30000
 // It applies once EnableJIT has turned the JIT on, to the functions
 // compiled after it. The optimizing tier is built wherever the JIT is.
 func (c *Code) SetOptThreshold(n int) { c.setOptThreshold(n) }
+
+// SetOptBackground has the optimizing tier compile the code's functions
+// whose baseline code counted enough calls on the process's background
+// workers (on), the program running their baseline code until their
+// optimized code is published, or on the goroutine that ran the count out
+// (off), which then waits for it, so that the tiering is the same on every
+// run. By default the workers compile where GOMAXPROCS is above 1, and
+// the goroutine itself where it is 1; WASM_JIT_OPT_BACKGROUND ("on",
+// "off") sets the mode for tests and benchmarks, and WASM_JIT's "eager",
+// "osr" and "opt" turn it off. It applies once EnableJIT has turned the JIT
+// on.
+func (c *Code) SetOptBackground(on bool) { c.setOptBackground(on) }
 
 // DefaultOSRThreshold is the number of loop back edges after which a call
 // running in the interpreter goes on in its function's native code, unless
