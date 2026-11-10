@@ -874,7 +874,9 @@ with the collector marking; `TestJITSIMDBits`, `TestJITRelaxedChoices`
 (amd64) and `TestJITSIMDValues` run every SIMD instruction and v128s in
 every place in the optimizing tier as in the baseline, each instruction
 alone and with its operands one value, its first operand live past it,
-and its operands or its result spilled; `TestParallelV` parallel moves
+and its operands or its result spilled, and `TestOptSIMDMemoryRandom`
+random SIMD loads and stores of four kinds of memory near their ends,
+among more v128s live than registers; `TestParallelV` parallel moves
 whose slots meet in part; `TestOptBulkMemory`
 memory.copy and memory.fill at every overlap and end; `TestOptMemory` the
 baseline's tests of every kind of memory (`TestJITMultiMemory` and the
