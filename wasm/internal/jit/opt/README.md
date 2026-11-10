@@ -581,6 +581,13 @@ them false and their inverses true; on arm64 every one, after FCMP; eq
 and ne on amd64, which need the parity flag besides, are made into a
 register and tested.
 
+On amd64 a float constant other than zero, and fabs's and fneg's masks,
+are loaded from the code's pool of constants after it, RIP-relative, as a
+v128's are (below): one load, where a move of the bits into R11 and from
+there into the register took two instructions and a general register.
+micro/mandelbrot's inner loop multiplies by 2 and compares with 4: 11.0
+to 10.6 ms (median of 7 processes).
+
 On arm64 the instructions are three-address, and a result is computed in
 its register from its operands' wherever they are. The floats are the
 baseline's arm64 sequences: FMIN and FMAX, FRINT's roundings, FCVTZS and

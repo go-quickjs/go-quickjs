@@ -314,12 +314,8 @@ func (g *gen) move(dst, src loc, t Type) {
 				a.SSEOp(amd64.XorPD, x, x)
 				return
 			}
-			a.MovImm(s0, c)
-			if t == TF32 {
-				a.MovDToX(x, s0)
-			} else {
-				a.MovQToX(x, s0)
-			}
+			// From the code's pool of constants, the upper bits clear.
+			a.LoadSDLabel(x, g.vpool.label(c, 0, a.NewLabel))
 		case lGPR:
 			if t == TF32 {
 				a.MovDToX(x, amd64.Reg(src.r))
@@ -1055,8 +1051,7 @@ func (g *gen) value(v *Value, rest []*Value) {
 		default:
 			m, op = 1<<63, amd64.XorPD
 		}
-		a.MovImm(s0, m)
-		a.MovQToX(x1, s0)
+		a.LoadSDLabel(x1, g.vpool.label(m, 0, a.NewLabel))
 		a.SSEOp(op, t, x1)
 		g.done(v, int(t))
 	case OpFSqrt, OpFCeil, OpFFloor, OpFTrunc, OpFNearest, OpPromote, OpDemote:
