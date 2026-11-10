@@ -2,6 +2,7 @@ package engine
 
 import (
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/wasm/internal/module"
@@ -85,6 +86,27 @@ func rttOf(c module.CanonicalIndex) *rtt {
 	return r
 }
 
+// typeRTT returns the runtime information of type ti of the code's
+// module, rttOf's without its lock once asked for.
+func (c *Code) typeRTT(ti uint32) *rtt {
+	t := c.rtts.Load()
+	if t == nil {
+		n := make([]atomic.Pointer[rtt], len(c.Module.Types))
+		if !c.rtts.CompareAndSwap(nil, &n) {
+			t = c.rtts.Load()
+		} else {
+			t = &n
+		}
+	}
+	e := &(*t)[ti]
+	if r := e.Load(); r != nil {
+		return r
+	}
+	r := rttOf(c.Module.Canonical[ti])
+	e.Store(r)
+	return r
+}
+
 // isSubRTT reports whether type r is the canonical type c or declares it,
 // directly or not, as a supertype.
 func (r *rtt) isSub(c module.CanonicalIndex, depth int) bool {
@@ -96,11 +118,36 @@ func objHeader(p unsafe.Pointer) *header { return (*header)(p) }
 
 // newStruct allocates a struct of type t, its fields zero.
 func newStruct(t *rtt) Ref {
-	cells := make([]Ref, t.ncells)
-	h := (*header)(unsafe.Pointer(&cells[0]))
+	p := newCells(t.ncells)
+	h := (*header)(p)
 	h.rtt = t
 	h.kind = ObjStruct
-	return Ref{p: unsafe.Pointer(&cells[0])}
+	return Ref{p: p}
+}
+
+// newCells allocates n zero cells: an array of a size known to the
+// compiler for the structs of a few fields, which Go allocates without
+// a slice's checks.
+func newCells(n int) unsafe.Pointer {
+	switch n {
+	case 1:
+		return unsafe.Pointer(new([1]Ref))
+	case 2:
+		return unsafe.Pointer(new([2]Ref))
+	case 3:
+		return unsafe.Pointer(new([3]Ref))
+	case 4:
+		return unsafe.Pointer(new([4]Ref))
+	case 5:
+		return unsafe.Pointer(new([5]Ref))
+	case 6:
+		return unsafe.Pointer(new([6]Ref))
+	case 7:
+		return unsafe.Pointer(new([7]Ref))
+	case 8:
+		return unsafe.Pointer(new([8]Ref))
+	}
+	return unsafe.Pointer(&make([]Ref, n)[0])
 }
 
 // structCells returns the cells of struct s, header included.

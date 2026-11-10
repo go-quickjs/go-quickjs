@@ -55,6 +55,9 @@ type Code struct {
 	mu     sync.Mutex
 	// jit is the code's native code, if it has asked for it (EnableJIT).
 	jit atomic.Pointer[codeJIT]
+	// rtts are the runtime information of the module's types, by type
+	// index, as Go's work for native code asks for them (typeRTT).
+	rtts atomic.Pointer[[]atomic.Pointer[rtt]]
 }
 
 // NewCode returns the engine's code of module m.

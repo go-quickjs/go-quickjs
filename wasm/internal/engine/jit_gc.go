@@ -32,7 +32,7 @@ func (x *exec) jitGCOp(inst *Instance, op opcode.Opcode, a, b uint32, f *exitFra
 	ref := module.Ref(module.HeapIndex(a))
 	switch op {
 	case opcode.StructNew, opcode.StructNewDefault:
-		rt := rttOf(m.Canonical[a])
+		rt := inst.Code.typeRTT(a)
 		inst.budget.chargeGC(x, structSize(rt))
 		r := newStruct(rt)
 		if op == opcode.StructNew {
@@ -42,7 +42,7 @@ func (x *exec) jitGCOp(inst *Instance, op opcode.Opcode, a, b uint32, f *exitFra
 		}
 		f.put(ref, slot, Val{R: r})
 	case opcode.ArrayNew, opcode.ArrayNewDefault:
-		rt := rttOf(m.Canonical[a])
+		rt := inst.Code.typeRTT(a)
 		et := m.Types[a].Array.Elem.Type
 		if op == opcode.ArrayNewDefault {
 			f.put(ref, slot, Val{R: ArrayRef(newArray(rt, u32(0), inst.budget, x, at))})
@@ -55,7 +55,7 @@ func (x *exec) jitGCOp(inst *Instance, op opcode.Opcode, a, b uint32, f *exitFra
 		}
 		f.put(ref, slot, Val{R: ArrayRef(ar)})
 	case opcode.ArrayNewFixed:
-		rt := rttOf(m.Canonical[a])
+		rt := inst.Code.typeRTT(a)
 		et := m.Types[a].Array.Elem.Type
 		vals := make([]Val, b)
 		for i := range vals {
@@ -67,7 +67,7 @@ func (x *exec) jitGCOp(inst *Instance, op opcode.Opcode, a, b uint32, f *exitFra
 		}
 		f.put(ref, slot, Val{R: ArrayRef(ar)})
 	case opcode.ArrayNewData, opcode.ArrayNewElem:
-		rt := rttOf(m.Canonical[a])
+		rt := inst.Code.typeRTT(a)
 		src, cnt := u32(0), u32(1)
 		if op == opcode.ArrayNewData {
 			d := inst.datas[b]
@@ -269,7 +269,7 @@ func (x *exec) jitAlloc(lv *jitLevel, ti uint32) {
 	set := lv.pools.set
 	p := set.tab[ti]
 	if p == nil {
-		rt := rttOf(lv.inst.Module.Canonical[ti])
+		rt := lv.inst.Code.typeRTT(ti)
 		p = &gcPool{rt: rt, each: structSize(rt), size: gcPoolFirst}
 		set.tab[ti] = p
 	}
