@@ -512,3 +512,13 @@ func TestDestructuringResolvesTargetsFirst(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestWithTypeofAsksOnce covers typeof of a binding inside a with body: the
+// with objects are asked about the name once, as for any other read, and
+// the binding is read past the probe without asking them again.
+func TestWithTypeofAsksOnce(t *testing.T) {
+	checkEval(t, `var log = []
+	  var p = new Proxy({}, { has(t, k) { log.push(String(k)); return false } })
+	  function f() { var x = 1; with (p) { return typeof x } }
+	  f() + ":" + log.join()`, "number:x")
+}
