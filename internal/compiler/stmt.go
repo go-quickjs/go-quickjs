@@ -685,22 +685,51 @@ func (c *compiler) pushLoop(labels []string, isLoop bool) *loopCtx {
 	}
 	c.loops = append(c.loops, loopCtx{
 		labels: labels, isLoop: isLoop, scopeDepth: c.depth, exits: len(c.exits),
-		finallys: len(c.finallys), handlers: c.handlerDepth,
+		finallys: len(c.finallys), handlers: c.handlerDepth, firstSlot: c.nextSlot,
 	})
 	return &c.loops[len(c.loops)-1]
 }
 
 // popLoop ends a loop context, patching its break jumps to the current
 // position and its continue jumps to continueTarget.
+//
+// A break leaves the scopes inside the statement without the close at their
+// ends, so that a binding a closure captured would stay open, and a scope
+// entered again -- the statement's next run, in a loop around it -- would
+// share it with that closure. Where one may be, the breaks land on a close
+// of the statement's bindings.
 func (c *compiler) popLoop(continueTarget int) {
 	l := c.loops[len(c.loops)-1]
 	c.loops = c.loops[:len(c.loops)-1]
-	for _, pc := range l.breaks {
-		c.patchJump(pc)
+	if len(l.breaks) > 0 && c.capturedFrom(l.firstSlot) {
+		at := c.here()
+		c.emit(bytecode.OpCloseUpvalues, l.firstSlot, 0)
+		for _, pc := range l.breaks {
+			c.patchJumpTo(pc, at)
+		}
+	} else {
+		for _, pc := range l.breaks {
+			c.patchJump(pc)
+		}
 	}
 	for _, pc := range l.continues {
 		c.patchJumpTo(pc, continueTarget)
 	}
+}
+
+// continueAt is where the innermost loop's continues go, given where they
+// would: a continue leaves the body's scopes without the close at their
+// ends, so where a binding of the body may be captured, they go to a close
+// of the body's bindings emitted here, which the end of the body passes
+// through too.
+func (c *compiler) continueAt(target int) int {
+	l := &c.loops[len(c.loops)-1]
+	if len(l.continues) == 0 || !c.capturedFrom(l.firstSlot) {
+		return target
+	}
+	at := c.here()
+	c.emit(bytecode.OpCloseUpvalues, l.firstSlot, 0)
+	return at
 }
 
 func (c *compiler) compileWhile(n *ast.WhileStmt) {
@@ -709,16 +738,17 @@ func (c *compiler) compileWhile(n *ast.WhileStmt) {
 	c.debugExpr(n.Test)
 	exits := c.emitTestJumpIfFalse(n.Test)
 	c.compileStatement(n.Body)
+	cont := c.continueAt(start)
 	c.emit(bytecode.OpJump, uint32(start), 0)
 	c.patchTestJumps(exits)
-	c.popLoop(start)
+	c.popLoop(cont)
 }
 
 func (c *compiler) compileDoWhile(n *ast.DoWhileStmt) {
 	start := c.here()
 	c.pushLoop(nil, true)
 	c.compileStatement(n.Body)
-	testAt := c.here()
+	testAt := c.continueAt(c.here())
 	c.debugExpr(n.Test)
 	back := c.emitTestJumps(n.Test, true, c.pool.jumpList())
 	for _, j := range back {
@@ -804,6 +834,8 @@ func (c *compiler) compileForLoop(n *ast.ForStmt, firstSlot uint32, perIteration
 		// the update clause changes it. This runs on the `continue` path too,
 		// because that is also the end of an iteration.
 		c.emit(bytecode.OpCloseUpvalues, firstSlot, 0)
+	} else {
+		updateAt = c.continueAt(updateAt)
 	}
 	if n.Update != nil {
 		c.debugExpr(n.Update)
@@ -912,8 +944,9 @@ func (c *compiler) compileForAwaitBody(left ast.Node, body ast.Stmt) {
 	c.compileIterationBody(left, body)
 	c.endScope()
 
+	cont := c.continueAt(start)
 	c.emit(bytecode.OpJump, uint32(start), 0)
-	c.popLoop(start)
+	c.popLoop(cont)
 	// A break of this loop arrives here, its handler still in force.
 	c.emit(bytecode.OpPopCatch, 0, 0)
 	c.handlerDepth--
@@ -1006,9 +1039,10 @@ func (c *compiler) compileForBody(left ast.Node, body ast.Stmt) {
 	c.compileIterationBody(left, body)
 	c.endScope()
 
+	cont := c.continueAt(start)
 	c.emit(bytecode.OpJump, uint32(start), 0)
 	c.patchJump(exit)
-	c.popLoop(start)
+	c.popLoop(cont)
 	// ForOfStart left the cursor on the stack. A break arrives here with the
 	// iterator still open, so it is closed before the cursor is dropped; an
 	// exhausted one is already closed and the instruction leaves it alone.
@@ -1249,6 +1283,7 @@ func (c *compiler) compileTryCatch(n *ast.TryStmt) {
 	}
 	catchPC := c.emitJump(bytecode.OpPushCatch)
 	c.handlerDepth++
+	first := c.nextSlot
 	c.beginScope()
 	c.compileStatements(n.Block)
 	c.endScope()
@@ -1259,6 +1294,12 @@ func (c *compiler) compileTryCatch(n *ast.TryStmt) {
 	skip := c.emitJump(bytecode.OpJump)
 
 	c.patchJump(catchPC)
+	// A throw leaves the block's scopes without the close at their ends:
+	// a binding a closure captured is closed here, or the block run again,
+	// in a loop, would share it with that closure.
+	if c.capturedFrom(first) {
+		c.emit(bytecode.OpCloseUpvalues, first, 0)
+	}
 	c.beginScope()
 	if n.Catch.Param != nil {
 		// The thrown value is on the stack when the handler runs.

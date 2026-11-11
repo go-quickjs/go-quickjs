@@ -152,7 +152,7 @@ func (c *compiler) ownBindings(seen map[string]bool) []bytecode.EvalBinding {
 		seen[l.name] = true
 		// The evaluated code may write to it from a closure of its own, so it
 		// has to be boxed like any other captured binding.
-		l.captured = true
+		c.noteCaptured(l)
 		out = append(out, bytecode.EvalBinding{
 			Name:      l.name,
 			FromLocal: true,

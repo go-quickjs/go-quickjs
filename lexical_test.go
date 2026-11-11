@@ -612,6 +612,36 @@ func TestForHeadPerIterationBindings(t *testing.T) {
 	}
 }
 
+// A break, a continue or a throw that leaves a block skips the close at its
+// end: each run of the block still makes bindings of its own, which the
+// closures of the runs before keep.
+func TestJumpsOutOfBlocksCloseCapturedBindings(t *testing.T) {
+	cases := []struct{ name, body, want string }{
+		{"continue", `for (var i = 0; i < 3; i++) { let x = i; k.push(() => x); if (i == 1) continue }`, "0,1,2"},
+		{"continue before the capture", `for (var i = 0; i < 3; i++) { let x = i; if (i == 1) continue; k.push(() => x) }`, "0,2"},
+		{"continue in a nested block", `for (var i = 0; i < 3; i++) { { let x = i; k.push(() => x); if (i == 1) continue } }`, "0,1,2"},
+		{"while", `var i = 0; while (i < 3) { let x = i; k.push(() => x); i++; if (i == 2) continue }`, "0,1,2"},
+		{"do while", `var i = 0; do { let x = i; k.push(() => x); i++; if (i == 2) continue } while (i < 3)`, "0,1,2"},
+		{"for of", `for (var q of [0, 1, 2]) { let x = q; k.push(() => x); if (q == 1) continue }`, "0,1,2"},
+		{"for in", `for (var q in [0, 1, 2]) { let x = q; k.push(() => x); if (q == 1) continue }`, "0,1,2"},
+		{"labelled continue", `o: for (var j = 0; j < 2; j++) for (var i = 0; i < 3; i++) { let x = i + 10 * j; k.push(() => x); if (i == 1) continue o }`, "0,1,10,11"},
+		{"break of an inner loop", `for (var j = 0; j < 2; j++) for (;;) { let x = j; k.push(() => x); break }`, "0,1"},
+		{"break of a labelled block", `for (var i = 0; i < 3; i++) { b: { let x = i; k.push(() => x); break b } }`, "0,1,2"},
+		{"break of a switch", `for (var i = 0; i < 3; i++) switch (i) { default: let x = i; k.push(() => x); break }`, "0,1,2"},
+		{"continue through a finally", `for (var i = 0; i < 3; i++) { try { let x = i; k.push(() => x); continue } finally {} }`, "0,1,2"},
+		{"throw", `for (var i = 0; i < 3; i++) { try { let x = i; k.push(() => x); throw 0 } catch (e) {} }`, "0,1,2"},
+		{"throw from a nested block", `for (var i = 0; i < 3; i++) try { { const x = i; k.push(() => x); if (i < 5) throw 0 } } catch {}`, "0,1,2"},
+		{"generator", `function* g() { for (var i = 0; i < 3; i++) { let x = i; k.push(() => x); yield; if (i == 1) continue } } for (var _ of g());`, "0,1,2"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// At the top level and in a function, whose bindings are its frame's.
+			checkEval(t, `var k = []; `+tc.body+`; k.map(f => f()).join()`, tc.want)
+			checkEval(t, `(function () { var k = []; `+tc.body+`; return k.map(f => f()).join() })()`, tc.want)
+		})
+	}
+}
+
 // A switch's bindings belong to the case block as a whole and are created
 // before the first case expression is evaluated, so a selector closes over the
 // block's binding rather than over whatever the name means outside.
