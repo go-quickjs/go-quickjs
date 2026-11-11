@@ -780,6 +780,37 @@ func TestFinallyCompletionValues(t *testing.T) {
 	}
 }
 
+// A finally clause is inlined at each jump that leaves it. A try statement
+// inside one, inlined for a jump inside an inner clause's copy, must leave
+// the outer clauses as they were for the jump around it: the clause with
+// the try statement ran only that try statement's clause.
+func TestFinallyCopiesKeepOuterClauses(t *testing.T) {
+	src := `var log = [];
+	  function f(c) {
+	    for (var i = 0; i < 1; i++) {
+	      try { try { try {
+	        if (c) continue;
+	      } finally { log.push("f2"); if (c == 2) continue; }
+	      } finally { log.push("f3"); }
+	      } finally { log.push("f4"); try { log.push("f4i") } finally { log.push("f4f") } }
+	    }
+	    for (;;) {
+	      try { try {
+	        break;
+	      } finally { log.push("g1"); if (c == 2) break; }
+	      } finally { log.push("g2"); try { log.push("g2i") } finally { log.push("g2f") } }
+	    }
+	    try { try {
+	      return log.join();
+	    } finally { log.push("h1"); if (c == 2) return "h"; }
+	    } finally { log.push("h2"); try { log.push("h2i") } finally { log.push("h2f") } }
+	  }
+	  f(1) + " | " + log.join() + " | " + (log = [], f(2)) + " | " + log.join()`
+	checkEval(t, src,
+		"f2,f3,f4,f4i,f4f,g1,g2,g2i,g2f | f2,f3,f4,f4i,f4f,g1,g2,g2i,g2f,h1,h2,h2i,h2f"+
+			" | h | f2,f3,f4,f4i,f4f,g1,g2,g2i,g2f,h1,h2,h2i,h2f")
+}
+
 // In strict mode a name that resolves to nothing cannot be assigned to, and it
 // is the reference that is unresolvable rather than the assignment: what the
 // name resolves to is settled before the value is evaluated and reported after

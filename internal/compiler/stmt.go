@@ -1500,7 +1500,12 @@ func (c *compiler) unwindTo(target *loopCtx) {
 		// clause is compiled a second time at the jump site rather than being
 		// routed through. Clauses are small and rarely nested, so the
 		// duplication is bounded.
-		c.finallys = saved[:i]
+		//
+		// Capped, so that a try statement inside the clause appends its
+		// own entry to a copy rather than over saved[i], the next
+		// clause outward, which this jump, or one compiled around it,
+		// still has to inline.
+		c.finallys = saved[:i:i]
 		if saved[i].emit != nil {
 			saved[i].emit()
 			continue
