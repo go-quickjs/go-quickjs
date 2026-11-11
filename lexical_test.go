@@ -631,6 +631,10 @@ func TestJumpsOutOfBlocksCloseCapturedBindings(t *testing.T) {
 		{"continue through a finally", `for (var i = 0; i < 3; i++) { try { let x = i; k.push(() => x); continue } finally {} }`, "0,1,2"},
 		{"throw", `for (var i = 0; i < 3; i++) { try { let x = i; k.push(() => x); throw 0 } catch (e) {} }`, "0,1,2"},
 		{"throw from a nested block", `for (var i = 0; i < 3; i++) try { { const x = i; k.push(() => x); if (i < 5) throw 0 } } catch {}`, "0,1,2"},
+		// The control: a for head's let, whose binding is copied per turn.
+		{"for let, continue", `for (let i = 0; i < 3; i++) { let x = i; k.push(() => x + ":" + i); if (i == 1) continue }`, "0:0,1:1,2:2"},
+		{"for let, break", `for (let j = 0; j < 2; j++) for (let i = 0; ; i++) { let x = i + j; k.push(() => x + ":" + i + ":" + j); break }`, "0:0:0,1:0:1"},
+		{"for let, labelled continue", `o: for (let j = 0; j < 2; j++) for (let i = 0; i < 3; i++) { let x = i + 10 * j; k.push(() => x + ":" + j); if (i == 1) continue o }`, "0:0,1:0,10:1,11:1"},
 		{"generator", `function* g() { for (var i = 0; i < 3; i++) { let x = i; k.push(() => x); yield; if (i == 1) continue } } for (var _ of g());`, "0,1,2"},
 	}
 	for _, tc := range cases {
