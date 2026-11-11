@@ -499,6 +499,11 @@ func (p *parser) parseMemberTailIn(expr ast.Expr, allowCall, inChain bool) ast.E
 		case p.isPunct("."):
 			p.next()
 			if p.tok.Kind == lexer.PrivateIdent {
+				if _, ok := expr.(*ast.Super); ok {
+					// MemberExpression . PrivateIdentifier has no super form:
+					// a private member is the object's own, never inherited.
+					p.errorf("a private name cannot be read through \"super\"")
+				}
 				name := &ast.PrivateName{Name: p.tok.Value, Start: p.tok.Pos}
 				p.next()
 				expr = &ast.Member{Object: expr, Property: name, Start: int32(expr.Pos())}

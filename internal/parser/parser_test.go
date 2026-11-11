@@ -265,6 +265,9 @@ func TestClassErrors(t *testing.T) {
 	checkError(t, "class A { async constructor() {} }", "cannot be async")
 	checkError(t, "class {}", "requires a name")
 	checkError(t, "class A { m() { super(); } }", "derived constructor")
+	// super.#x is a syntax error wherever it is, read or called.
+	checkError(t, "class A { #x; m() { return super.#x } }", "through \"super\"")
+	checkError(t, "class A extends Object { #x; m() { return super.#x() } }", "through \"super\"")
 	checkError(t, "class A { x = 1; constructor = 2; }", "cannot be named")
 }
 
