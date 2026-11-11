@@ -3909,6 +3909,25 @@ func TestOptionalChainEdges(t *testing.T) {
 	}
 }
 
+// TestDeleteOptionalChain covers delete of an optional chain's property,
+// which removes it where no link short-circuited and is true where one
+// did, as in Node.
+func TestDeleteOptionalChain(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var o = {b: 1}; [delete o?.b, "b" in o].join()`, "true,false"},
+		{`var o = {b: {c: 1}}; [delete o?.b.c, "c" in o.b].join()`, "true,false"},
+		{`var o = {b: {c: 1}}; [delete o.b?.["c"], "c" in o.b].join()`, "true,false"},
+		{`var n = null; [delete n?.b, delete n?.b.c, delete n?.[f()]].join()`, "true,true,true"},
+		{`var o = Object.freeze({b: 1}); [delete o?.b, "b" in o].join()`, "false,true"},
+		{`"use strict"; var o = Object.freeze({b: 1}); try { delete o?.b; "none" } catch (e) { e.name }`, "TypeError"},
+		{`var o = {}; try { delete o?.b.c; "none" } catch (e) { e.name }`, "TypeError"},
+		{`var o = {m() { return {x: 1} }}; delete o?.m().x`, "true"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
 // TestFinallyOverridesCompletion covers a break or continue written inside a
 // finally clause, which replaces the completion that brought control there.
 // The clause is not pending while its own body runs, so such a jump leaves

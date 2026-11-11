@@ -1055,6 +1055,12 @@ func (c *compiler) compileUnary(n *ast.Unary) {
 		c.emit(bytecode.OpTypeOf, 0, 0)
 
 	case "delete":
+		if ch, ok := n.Operand.(*ast.OptionalChain); ok {
+			if m, ok := ch.Base.(*ast.Member); ok {
+				c.compileDeleteChain(n, m)
+				return
+			}
+		}
 		if m, ok := n.Operand.(*ast.Member); ok {
 			// A private name is not a property key a program may remove: there
 			// is no object that could carry it afterwards, and no way to ask.
@@ -1857,6 +1863,39 @@ func (c *compiler) compileChain(n *ast.OptionalChain, wantThis bool) {
 		}
 		c.emit(bytecode.OpPushUndef, 0, 0)
 		// Every pad but the last has to jump over the ones that follow it.
+		if i < len(jumps)-1 {
+			exits = append(exits, c.emitJump(bytecode.OpJump))
+		}
+	}
+	c.patchJump(done)
+	for _, pc := range exits {
+		c.patchJump(pc)
+	}
+}
+
+// compileDeleteChain compiles delete of an optional chain's property, a?.b
+// or a?.b.c: the property is removed where no link short-circuited, and the
+// result is true where one did.
+func (c *compiler) compileDeleteChain(n *ast.Unary, m *ast.Member) {
+	if pn, private := m.Property.(*ast.PrivateName); private {
+		c.errorf(n.Start, "a private name cannot be deleted: #%s", pn.Name)
+		return
+	}
+	var jumps []chainJump
+	c.compileChainLink(m.Object, &jumps)
+	if m.Optional {
+		jumps = append(jumps, chainJump{pc: c.emitJump(bytecode.OpJumpIfNullish), live: 1})
+	}
+	c.compileMemberKey(m)
+	c.emitAt(n.Start, bytecode.OpDeleteProp, 0, 0)
+	done := c.emitJump(bytecode.OpJump)
+	var exits []int
+	for i, j := range jumps {
+		c.patchJumpTo(j.pc, c.here())
+		for range j.live {
+			c.emit(bytecode.OpDrop, 0, 0)
+		}
+		c.emit(bytecode.OpPushTrue, 0, 0)
 		if i < len(jumps)-1 {
 			exits = append(exits, c.emitJump(bytecode.OpJump))
 		}
