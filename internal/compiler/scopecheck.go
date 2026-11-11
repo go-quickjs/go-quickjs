@@ -463,6 +463,11 @@ func lexicalNamesOf(st ast.Stmt, out []lexName, inBlock bool) []lexName {
 		if n.Decl != nil {
 			out = lexicalNamesOf(n.Decl, out, inBlock)
 		}
+	case *ast.LabeledStmt:
+		// `L: function f() {}` declares f as the unlabelled one would.
+		if fd, _, ok := hoistableFunction(n); ok {
+			out = lexicalNamesOf(fd, out, inBlock)
+		}
 	case *ast.FuncDecl:
 		// A function declaration inside a block is a lexical binding of that
 		// block, so a var of the same name anywhere inside it collides. Annex

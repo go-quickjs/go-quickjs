@@ -1923,6 +1923,11 @@ func (c *varCollector) stmt(s ast.Stmt) {
 		}
 		c.block(body)
 	case *ast.LabeledStmt:
+		if fd, _, ok := hoistableFunction(n); ok {
+			// A labelled function declaration is the enclosing list's.
+			c.stmt(fd)
+			return
+		}
 		c.nested(n.Body)
 	case *ast.WithStmt:
 		c.nested(n.Body)

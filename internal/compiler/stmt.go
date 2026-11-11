@@ -1517,16 +1517,20 @@ func (c *compiler) isModuleLex(name string) bool {
 }
 
 // hoistableFunction returns the function declaration a statement contains and
-// the name it binds, looking through an export wrapper.
+// the name it binds, looking through an export wrapper and labels.
 //
 // `export default function () {}` is hoisted too, under the name the linker
-// looks for rather than under one of its own.
+// looks for rather than under one of its own. A labelled function declaration,
+// `L: function f() {}`, which sloppy code may write, is the list's as an
+// unlabelled one is.
 func hoistableFunction(s ast.Stmt) (*ast.FuncDecl, string, bool) {
 	switch n := s.(type) {
 	case *ast.FuncDecl:
 		if n.Fn.Name != nil {
 			return n, n.Fn.Name.Name, true
 		}
+	case *ast.LabeledStmt:
+		return hoistableFunction(n.Body)
 	case *ast.ExportDecl:
 		fd, ok := n.Decl.(*ast.FuncDecl)
 		switch {

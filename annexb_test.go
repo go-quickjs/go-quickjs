@@ -100,6 +100,20 @@ func TestBlockFunctionAliasKeepsItsBinding(t *testing.T) {
 	}
 }
 
+// TestLabelledFunctionDeclarations covers sloppy code's `L: function f() {}`,
+// which declares f as the unlabelled declaration would: hoisted with the list
+// it is in, a script's, a function's or a block's, as in Node.
+func TestLabelledFunctionDeclarations(t *testing.T) {
+	evalCases(t, []struct{ src, want string }{
+		{`(function () { L: function f() { return 1 } return f() })()`, "1"},
+		{`L: function gl() { return "gl" } gl()`, "gl"},
+		{`(function () { var r = f(); L: M: function f() { return 2 } return r })()`, "2"},
+		{`(function () { var r; { r = f(); L: function f() { return 3 } } return r + "," + typeof f })()`, "3,function"},
+		{`(function () { switch (1) { case 1: L: function f() { return 4 } } return f() })()`, "4"},
+		{`try { eval("{ L: function f() {} let f; }") } catch (e) { e.name }`, "SyntaxError"},
+	})
+}
+
 // TestAnnexBBlockFunctionHoisting pins where B.3.3 hoists a function declared
 // in a block to a var of the same name: exactly where replacing the
 // declaration with `var f` would be legal and f is not a parameter.
