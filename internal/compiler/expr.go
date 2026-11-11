@@ -1797,6 +1797,17 @@ func (c *compiler) compileSpreadCall(n *ast.Call) {
 		c.emitAt(callPos(n), bytecode.OpCallSpread, 0, 0)
 		return
 	}
+	if id, ok := n.Callee.(*ast.Ident); ok && c.withDepth > 0 {
+		// Through a with object, as a call without a spread: the object
+		// the name is found on is the receiver.
+		probe := c.withProbe(bytecode.OpWithGetThis, id.Name)
+		c.emit(bytecode.OpPushUndef, 0, 0)
+		c.compileIdentReadStatic(id)
+		c.patchWithProbe(probe)
+		c.compileSpreadArguments(n.Args)
+		c.emitAt(callPos(n), bytecode.OpCallSpread, 0, 0)
+		return
+	}
 	// A plain call has no receiver, so undefined stands in for one.
 	c.emit(bytecode.OpPushUndef, 0, 0)
 	c.compileExpr(n.Callee)
