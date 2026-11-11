@@ -405,6 +405,10 @@ func TestBreakContinueValidation(t *testing.T) {
 	checkError(t, "while (1) { break foo; }", "undefined label")
 	// `continue` may only target a label on an iteration statement.
 	checkError(t, "foo: { while(1) { continue foo; } }", "does not label an iteration")
+	// Each label of a loop's labels does: `a: b: while`.
+	checkParse(t, "a: b: while (1) { continue a; }", "(label a (label b (while 1 block((continue a)))))")
+	checkError(t, "a: { b: while (1) { continue a; } }", "does not label an iteration")
+	checkError(t, "a: b: { while (1) { continue a; } }", "does not label an iteration")
 	checkParse(t, "switch (a) { case 1: break; }", "(switch a (case 1 ((break))))")
 }
 

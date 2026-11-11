@@ -195,8 +195,9 @@ func (l *localVar) lexical() bool {
 
 // loopCtx tracks the jumps a break or continue must patch.
 type loopCtx struct {
-	// label names the statement, or is empty for an unlabelled loop.
-	label string
+	// labels name the statement, none for an unlabelled loop: `a: b:
+	// while (...)` is the target of a break or a continue naming either.
+	labels []string
 	// isLoop distinguishes a loop, which continue may target, from a labelled
 	// block or switch, which it may not.
 	isLoop bool
@@ -407,9 +408,9 @@ type compiler struct {
 	// returnSlot is a hidden local a return routed through a finally clause
 	// parks its value in while the statements it leaves are undone, or -1.
 	returnSlot int32
-	// pendingLabel carries a label from a labelled statement to the loop it
-	// labels, which is the next context pushed.
-	pendingLabel string
+	// pendingLabels carries the labels of a labelled statement to the loop
+	// they label, which is the next context pushed.
+	pendingLabels []string
 
 	// module is non-nil while compiling module code, collecting the shape the
 	// linker needs.

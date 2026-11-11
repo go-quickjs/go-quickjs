@@ -208,6 +208,21 @@ func TestLabeledBreakAndContinue(t *testing.T) {
 		n + " " + m + " " + k + " " + s + " " + log.join()`, "3 2 4 ac n3")
 }
 
+// TestLoopLabelSets covers a loop with several labels, `a: b: while`, which
+// a continue or a break naming any of them targets, as in Node; a block's
+// labels are no continue's.
+func TestLoopLabelSets(t *testing.T) {
+	checkEval(t, `
+		var n = 0;
+		a: b: for (var i = 0; i < 3; i++) { for (;;) { n++; continue a; } }
+		var m = 0;
+		c: d: e: while (m < 10) { m++; for (;;) { if (m == 2) continue d; if (m == 4) break c; continue e; } }
+		var k = 0;
+		f: g: { k++; break f; }
+		n + " " + i + " " + m + " " + k`, "3 3 4 1")
+	checkEval(t, `try { eval("a: b: { while (1) { continue a; } }") } catch (e) { e.name }`, "SyntaxError")
+}
+
 func TestFunctions(t *testing.T) {
 	tests := []struct{ src, want string }{
 		{"function f(n) { return n * 2; } f(21)", "42"},

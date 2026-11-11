@@ -124,6 +124,10 @@ type parser struct {
 	// labels holds the labels currently in scope, mapping name to whether the
 	// label names an iteration statement (and so permits `continue`).
 	labels map[string]bool
+	// labelChain is the labels of the statement about to be parsed, when it
+	// is itself a labelled one: `a: b: while (x)` is a loop that a continue
+	// naming a may target, as one naming b may.
+	labelChain []string
 
 	// nodes batches the allocation of the most common node types. See arena.go.
 	nodes arena

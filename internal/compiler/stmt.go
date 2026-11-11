@@ -678,13 +678,13 @@ func (c *compiler) compileIf(n *ast.IfStmt) {
 // A pending label set by an enclosing labelled statement is consumed here, so
 // that `outer: for (...)` gives the loop itself the label and `continue outer`
 // reaches its update clause rather than its exit.
-func (c *compiler) pushLoop(label string, isLoop bool) *loopCtx {
-	if label == "" && c.pendingLabel != "" {
-		label = c.pendingLabel
-		c.pendingLabel = ""
+func (c *compiler) pushLoop(labels []string, isLoop bool) *loopCtx {
+	if labels == nil {
+		labels = c.pendingLabels
+		c.pendingLabels = nil
 	}
 	c.loops = append(c.loops, loopCtx{
-		label: label, isLoop: isLoop, scopeDepth: c.depth, exits: len(c.exits),
+		labels: labels, isLoop: isLoop, scopeDepth: c.depth, exits: len(c.exits),
 		finallys: len(c.finallys), handlers: c.handlerDepth,
 	})
 	return &c.loops[len(c.loops)-1]
@@ -705,7 +705,7 @@ func (c *compiler) popLoop(continueTarget int) {
 
 func (c *compiler) compileWhile(n *ast.WhileStmt) {
 	start := c.here()
-	c.pushLoop("", true)
+	c.pushLoop(nil, true)
 	c.debugExpr(n.Test)
 	exits := c.emitTestJumpIfFalse(n.Test)
 	c.compileStatement(n.Body)
@@ -716,7 +716,7 @@ func (c *compiler) compileWhile(n *ast.WhileStmt) {
 
 func (c *compiler) compileDoWhile(n *ast.DoWhileStmt) {
 	start := c.here()
-	c.pushLoop("", true)
+	c.pushLoop(nil, true)
 	c.compileStatement(n.Body)
 	testAt := c.here()
 	c.debugExpr(n.Test)
@@ -789,7 +789,7 @@ func (c *compiler) compileForLoop(n *ast.ForStmt, firstSlot uint32, perIteration
 	}
 
 	start := c.here()
-	c.pushLoop("", true)
+	c.pushLoop(nil, true)
 
 	var exits []int
 	if n.Test != nil {
@@ -897,7 +897,7 @@ func (c *compiler) compileForAwaitBody(left ast.Node, body ast.Stmt) {
 	})
 
 	start := c.here()
-	c.pushLoop("", true)
+	c.pushLoop(nil, true)
 	c.debugAt(left.Pos())
 
 	c.emit(bytecode.OpPushFalse, 0, 0)
@@ -995,7 +995,7 @@ func (c *compiler) emitAsyncClose(cur, busy uint32, quiet bool) {
 // iterator already on the stack.
 func (c *compiler) compileForBody(left ast.Node, body ast.Stmt) {
 	start := c.here()
-	c.pushLoop("", true)
+	c.pushLoop(nil, true)
 	c.debugAt(left.Pos())
 
 	// IterNextOrJump advances the iterator, pushing the next value, or jumps
@@ -1039,7 +1039,7 @@ func (c *compiler) bareJumpTarget(s ast.Stmt) (int, bool) {
 		if cont && !l.isLoop || label == "" && l.labelOnly {
 			continue
 		}
-		if label == "" || l.label == label {
+		if label == "" || l.named(label) {
 			if len(c.finallys) > l.finallys || c.handlerDepth > l.handlers || len(c.exits) > l.exits {
 				return -1, false
 			}
@@ -1051,7 +1051,7 @@ func (c *compiler) bareJumpTarget(s ast.Stmt) (int, bool) {
 
 func (c *compiler) compileBreak(n *ast.BreakStmt) {
 	for i := len(c.loops) - 1; i >= 0; i-- {
-		if n.Label == "" && !c.loops[i].labelOnly || c.loops[i].label == n.Label {
+		if n.Label == "" && !c.loops[i].labelOnly || n.Label != "" && c.loops[i].named(n.Label) {
 			c.unwindTo(&c.loops[i])
 			pc := c.emitJump(bytecode.OpJump)
 			c.loops[i].breaks = append(c.loops[i].breaks, pc)
@@ -1066,7 +1066,7 @@ func (c *compiler) compileContinue(n *ast.ContinueStmt) {
 		if !c.loops[i].isLoop {
 			continue
 		}
-		if n.Label == "" || c.loops[i].label == n.Label {
+		if n.Label == "" || c.loops[i].named(n.Label) {
 			c.unwindTo(&c.loops[i])
 			pc := c.emitJump(bytecode.OpJump)
 			c.loops[i].continues = append(c.loops[i].continues, pc)
@@ -1078,24 +1078,45 @@ func (c *compiler) compileContinue(n *ast.ContinueStmt) {
 
 func (c *compiler) compileLabeled(n *ast.LabeledStmt) {
 	// A labelled loop reuses the loop's own context so that `continue label`
-	// reaches the loop's update clause rather than its exit.
-	switch body := n.Body.(type) {
+	// reaches the loop's update clause rather than its exit. The labels in
+	// front of a statement, `a: b: while (...)`, are all its own.
+	labels := []string{n.Label}
+	body := n.Body
+	for {
+		inner, ok := body.(*ast.LabeledStmt)
+		if !ok {
+			break
+		}
+		labels = append(labels, inner.Label)
+		body = inner.Body
+	}
+	switch body.(type) {
 	case *ast.WhileStmt, *ast.DoWhileStmt, *ast.ForStmt, *ast.ForInStmt, *ast.ForOfStmt:
-		c.compileLabeledLoop(n.Label, body)
+		c.compileLabeledLoop(labels, body)
 	default:
-		c.pushLoop(n.Label, false).labelOnly = true
-		c.compileStatement(n.Body)
+		c.pushLoop(labels, false).labelOnly = true
+		c.compileStatement(body)
 		c.popLoop(c.here())
 	}
 }
 
-// compileLabeledLoop compiles a loop whose own context carries the label.
-func (c *compiler) compileLabeledLoop(label string, body ast.Stmt) {
-	// The loop compilers push their context themselves, so the label is
-	// applied by patching it immediately afterwards. To keep that simple the
-	// label is recorded in a pending field the next pushLoop consumes.
-	c.pendingLabel = label
+// compileLabeledLoop compiles a loop whose own context carries the labels.
+func (c *compiler) compileLabeledLoop(labels []string, body ast.Stmt) {
+	// The loop compilers push their context themselves, so the labels are
+	// applied by patching them immediately afterwards. To keep that simple
+	// they are recorded in a pending field the next pushLoop consumes.
+	c.pendingLabels = labels
 	c.compileStatement(body)
+}
+
+// named reports whether label is one of the statement's labels.
+func (l *loopCtx) named(label string) bool {
+	for _, x := range l.labels {
+		if x == label {
+			return true
+		}
+	}
+	return false
 }
 
 // compileTry compiles a try statement.
@@ -1272,7 +1293,7 @@ func (c *compiler) compileSwitch(n *ast.SwitchStmt) {
 	c.compileExpr(n.Disc)
 	c.pushExit(exitDrop)
 	c.beginScope()
-	c.pushLoop("", false)
+	c.pushLoop(nil, false)
 
 	// The bindings of every clause belong to the case block as a whole, and
 	// they are created before the first case expression is evaluated: a

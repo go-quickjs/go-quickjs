@@ -18,6 +18,9 @@ func (p *parser) parseStatement() ast.Stmt {
 	// of a label, an if or a loop may not.
 	listItem := p.listItem && p.usingAllowed
 	p.listItem = false
+	// The labels in front of this statement, if it is a labelled one.
+	chain := p.labelChain
+	p.labelChain = nil
 
 	start := p.tok.Pos
 
@@ -137,7 +140,7 @@ func (p *parser) parseStatement() ast.Stmt {
 				p.errorAt(tok, "%q is a reserved word", name)
 			}
 			p.next()
-			return p.parseLabeled(name, start)
+			return p.parseLabeled(name, start, chain)
 		}
 		p.reset(m)
 	}
@@ -696,8 +699,9 @@ func (p *parser) parseSwitch() ast.Stmt {
 }
 
 // parseLabeled parses a labelled statement, with the label and colon already
-// consumed.
-func (p *parser) parseLabeled(name string, start int) ast.Stmt {
+// consumed; outer are the labels in front of this one, whose statement is
+// this one's.
+func (p *parser) parseLabeled(name string, start int, outer []string) ast.Stmt {
 	p.checkLabelName(name, p.tok)
 	if _, exists := p.labels[name]; exists {
 		p.errorf("label %q is already in scope", name)
@@ -711,6 +715,11 @@ func (p *parser) parseLabeled(name string, start int) ast.Stmt {
 	}
 	p.labels[name] = isLoop
 	defer delete(p.labels, name)
+	if isLoop {
+		for _, l := range outer {
+			p.labels[l] = true
+		}
+	}
 
 	// A labelled function declaration is a statement list item, never the body
 	// of another statement, and unlike a bare one it has no Annex B allowance
@@ -739,6 +748,7 @@ func (p *parser) parseLabeled(name string, start int) ast.Stmt {
 	p.noLetDeclaration = true
 	// A nested label inherits the restriction: `while (x) a: b: function f(){}`
 	// is no better than one label.
+	p.labelChain = append(outer[:len(outer):len(outer)], name)
 	body := p.parseStatement()
 	return &ast.LabeledStmt{Label: name, Body: body, Start: start}
 }
