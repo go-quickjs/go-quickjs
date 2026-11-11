@@ -173,3 +173,12 @@ func TestSuperAssignmentWithoutPrototype(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
 	}
 }
+
+// A computed key of an object pattern with a rest is evaluated once: the
+// rest leaves out the key it converted to, as Node has it.
+func TestObjectRestEvaluatesComputedKeysOnce(t *testing.T) {
+	checkEval(t, `var log = []; function key(k) { log.push("key " + k); return k }
+		var { [key("a")]: x, ...rest } = { a: 1, b: 2 };
+		log.join() + " " + JSON.stringify(rest) + " " + x`, `key a {"b":2} 1`)
+	checkEval(t, `var n = 0; var { [n++]: x, ...rest } = ["p", "q"]; n + JSON.stringify(rest)`, `1{"1":"q"}`)
+}

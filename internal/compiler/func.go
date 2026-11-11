@@ -666,12 +666,24 @@ func (c *compiler) compileObjectPattern(pat *ast.ObjectPattern, kind ast.DeclKin
 	// checked before any of them are -- which is the only thing an empty
 	// pattern does, and why `var {} = null` is an error at all.
 	c.emit(bytecode.OpCheckCoercible, 0, 0)
-	for _, p := range pat.Props {
+	// A computed key is evaluated once: the rest leaves out the key it
+	// converted to, kept in a hidden local.
+	var keySlots []uint32
+	if pat.Rest != nil {
+		keySlots = make([]uint32, len(pat.Props))
+	}
+	for i, p := range pat.Props {
 		if p.Computed {
 			// The source key is evaluated and converted first, before the
 			// target it will be read into.
 			c.compileExpr(p.Key)
 			c.emit(bytecode.OpToPropertyKey, 0, 0)
+			if keySlots != nil {
+				keySlots[i] = c.declare(fmt.Sprintf("%%rk%d", *c.hiddenCount), bindVar, pat.Start)
+				*c.hiddenCount++
+				c.emit(bytecode.OpDup, 0, 0)
+				c.emit(bytecode.OpSetLocal, keySlots[i], 0)
+			}
 			ref := c.prepareRef(p.Value, declaring, kind)
 			c.emit(bytecode.OpGetIndexUnder, uint32(ref.slots), 0)
 			if ref.def != nil {
@@ -694,10 +706,9 @@ func (c *compiler) compileObjectPattern(pat *ast.ObjectPattern, kind ast.DeclKin
 		// the pattern already bound, so those keys are pushed for the
 		// instruction to exclude.
 		c.emit(bytecode.OpDup, 0, 0)
-		for _, p := range pat.Props {
+		for i, p := range pat.Props {
 			if p.Computed {
-				c.compileExpr(p.Key)
-				c.emit(bytecode.OpToPropertyKey, 0, 0)
+				c.emit(bytecode.OpGetLocal, keySlots[i], 0)
 				continue
 			}
 			c.emit(bytecode.OpPushConst, c.stringConst(propKeyName(p.Key)), 0)
