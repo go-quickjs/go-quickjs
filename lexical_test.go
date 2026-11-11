@@ -735,6 +735,11 @@ func TestFinallyCompletionValues(t *testing.T) {
 		{`eval('1; try { throw 0 } catch (e) { 2 } finally { 3 }')`, "2"},
 		{`String(eval('1; try { 2 } finally { }'))`, "2"},
 		{`eval('99; try { 39 } finally { out: { break out; } }')`, "39"},
+		// A break or a continue out of the try block carries the block's
+		// value through a clause that finishes normally, as Node has it.
+		{`eval('for (var j = 0; j < 2; j++) { try { 3; break } finally { 9 } }')`, "3"},
+		{`eval('L: for (var j = 0; j < 2; j++) { try { 3; continue L } finally { 9 } }')`, "3"},
+		{`eval('for (var j = 0; j < 2; j++) { try { 3 } finally { 9; break } }')`, "9"},
 	}
 	for _, tc := range cases {
 		checkEval(t, tc.src, tc.want)
