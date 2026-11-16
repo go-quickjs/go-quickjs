@@ -74,7 +74,7 @@ func TestRegisterBackendCode(t *testing.T) {
    7  move r5, r6
    8  move r6, r7
    9  move r7, r4
-  10  inc r3, r3
+  10  step_jlt r3 += 1 (update), r2 -> 6
   11  jlt r3, r2 -> 6
   12  ret r4
   13  ret_undef`,

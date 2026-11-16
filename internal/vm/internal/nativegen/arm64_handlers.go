@@ -1105,6 +1105,17 @@ func armEmit(v *variant) (*block, error) {
 		a.Store(rS, offFSavedSP, ZR)
 		g.next()
 	})
+	// The step-and-branches (arm64_step.go), each its partner's compare.
+	h(bytecode.RStepJLt, func() { g.stepJ(stepReg, true, ccA) })
+	h(bytecode.RStepJLe, func() { g.stepJ(stepReg, true, ccAE) })
+	h(bytecode.RStepJLtI, func() { g.stepJ(stepImm, true, ccA) })
+	h(bytecode.RStepJGtI, func() { g.stepJ(stepImm, false, ccA) })
+	h(bytecode.RStepJGeI, func() { g.stepJ(stepImm, false, ccAE) })
+	h(bytecode.RStepJLeU, func() { g.stepJ(stepUpval, true, ccAE) })
+	h(bytecode.RMulI, func() { g.arith(FMul, 1) })
+	h(bytecode.RAddI32, func() { g.int32Of(FAdd, false) })
+	h(bytecode.RSubI32, func() { g.int32Of(FSub, false) })
+	h(bytecode.RAddII32, func() { g.int32Of(FAdd, true) })
 
 	for n, l := range g.exits {
 		if n == 0 {

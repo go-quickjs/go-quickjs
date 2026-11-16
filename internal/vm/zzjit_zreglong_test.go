@@ -29,7 +29,7 @@ function huge(a) { var s = 3; %s return s }
 function seldom(n) { var t = 0; for (var i = 0; i < 50; i++) t += i; return n %% 20 == 0 ? t + wide(n) : t }
 function often(n) { var t = 0; for (var i = 0; i < 50; i++) t += i; return t + narrow(n) }
 function always(n) { var t = 0; for (var i = 0; i < 50; i++) t += i; return t + huge(n) }
-`, body(20), body(20), body(80))
+`, body(20), body(20), body(120))
 }
 
 // TestJITRegLongCalleeWarms has native callers call functions too long to
@@ -124,7 +124,7 @@ func TestJITRegLongCalleeWarms(t *testing.T) {
 			fmt.Fprintf(&b, " s = (s ^ (s << %d)) + %d | 0;", i%5+1, i)
 		}
 		b.WriteString(" return s }\nfunction mid(x) { var s = x;")
-		for i := 0; i < 12; i++ {
+		for i := 0; i < 16; i++ {
 			fmt.Fprintf(&b, " s = (s ^ (s << %d)) + %d | 0;", i%5+1, i)
 		}
 		b.WriteString(" return s }\n")

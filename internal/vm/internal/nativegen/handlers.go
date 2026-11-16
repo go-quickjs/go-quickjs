@@ -48,6 +48,12 @@ var handlerOps = []bytecode.ROp{
 	bytecode.RNewObjectLit, bytecode.RNewArrayE, bytecode.RStrFreeze,
 	bytecode.RJTypeof, bytecode.RStrPart,
 	bytecode.RGenEntry,
+	// The step-and-branches.
+	bytecode.RStepJLt, bytecode.RStepJLe, bytecode.RStepJLtI, bytecode.RStepJGtI, bytecode.RStepJGeI,
+	bytecode.RStepJLeU,
+	// A product by an immediate and the int32 results, (x op y) | 0
+	// (docs/register-interpreter.md, "Loop-kernel instructions").
+	bytecode.RMulI, bytecode.RAddI32, bytecode.RSubI32, bytecode.RAddII32,
 }
 
 // handlerOrder checks that order, the operations an emitter laid out

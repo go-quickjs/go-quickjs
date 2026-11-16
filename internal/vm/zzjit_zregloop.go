@@ -202,7 +202,8 @@ func jitRegSortComparator(fn *bytecode.Function, rc *bytecode.RegCode) bool {
 			k := int(w.BC())
 			ok = write(w.A()) && k < len(consts) && consts[k].Kind == bytecode.ConstNumber
 		case bytecode.RMove, bytecode.RInc, bytecode.RDec,
-			bytecode.RAndI, bytecode.ROrI, bytecode.RXorI, bytecode.RShlI, bytecode.RShrI, bytecode.RUShrI, bytecode.RAddI, bytecode.RSubI:
+			bytecode.RAndI, bytecode.ROrI, bytecode.RXorI, bytecode.RShlI, bytecode.RShrI, bytecode.RUShrI, bytecode.RAddI, bytecode.RSubI,
+			bytecode.RMulI, bytecode.RAddII32:
 			ok = write(w.A()) && read(w.B())
 		case bytecode.RUnary:
 			switch bytecode.Op(w.X()) {
@@ -213,7 +214,8 @@ func jitRegSortComparator(fn *bytecode.Function, rc *bytecode.RegCode) bool {
 			}
 		case bytecode.RAdd:
 			ok = w.X()&bytecode.RAddAppend == 0 && write(w.A()) && read(w.B()) && read(w.C())
-		case bytecode.RSub, bytecode.RMul, bytecode.RBitAnd, bytecode.RBitOr, bytecode.RBitXor, bytecode.RShl, bytecode.RShr, bytecode.RUShr:
+		case bytecode.RSub, bytecode.RMul, bytecode.RBitAnd, bytecode.RBitOr, bytecode.RBitXor, bytecode.RShl, bytecode.RShr, bytecode.RUShr,
+			bytecode.RAddI32, bytecode.RSubI32:
 			ok = write(w.A()) && read(w.B()) && read(w.C())
 		case bytecode.RBin:
 			ok = operator(bytecode.Op(w.X())) && write(w.A()) && read(w.B()) && read(w.C())
@@ -229,6 +231,11 @@ func jitRegSortComparator(fn *bytecode.Function, rc *bytecode.RegCode) bool {
 		case bytecode.RJLtI, bytecode.RJNLtI, bytecode.RJLeI, bytecode.RJNLeI, bytecode.RJGtI, bytecode.RJNGtI, bytecode.RJGeI, bytecode.RJNGeI,
 			bytecode.RJSEqI, bytecode.RJSNeI, bytecode.RJEqI, bytecode.RJNeI, bytecode.RJNull, bytecode.RJNotNull:
 			ok = read(w.A()) && forward(pc, w.SC())
+		case bytecode.RStepJLt, bytecode.RStepJLe:
+			// A step and its partner, which is checked as itself.
+			ok = write(w.A()) && read(w.A()) && read(w.B()) && forward(pc, w.SC())
+		case bytecode.RStepJLtI, bytecode.RStepJGtI, bytecode.RStepJGeI:
+			ok = write(w.A()) && read(w.A()) && forward(pc, w.SC())
 		default:
 			ok = false
 		}

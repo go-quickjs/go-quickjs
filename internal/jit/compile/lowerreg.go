@@ -1273,6 +1273,8 @@ func (l *regLowering) lower(pc int) {
 		binary(ir.Add, reg(b), number(float64(w.SC())), false)
 	case bytecode.RSubI:
 		binary(ir.Sub, reg(b), number(float64(w.SC())), false)
+	case bytecode.RMulI:
+		binary(ir.Mul, reg(b), number(float64(w.SC())), false)
 	case bytecode.RInc, bytecode.RDec:
 		o := ir.Add
 		if op == bytecode.RDec {
@@ -1516,6 +1518,50 @@ func (l *regLowering) lower(pc int) {
 	case bytecode.RSetPrivate:
 		// R[A].#R[C] = R[B], a writable field's write, as the read.
 		l.emit(ir.Instruction{Op: ir.PropertyWrite, Left: reg(a), Right: reg(b), Key: l.name(uint16(l.rc.Aux[pc])), Third: reg(w.C()), Private: true}, false)
+	case bytecode.RStepJLt, bytecode.RStepJLe, bytecode.RStepJLtI, bytecode.RStepJGtI, bytecode.RStepJGeI, bytecode.RStepJLeU:
+		// A step and its partner: lowered as the step alone, which falls
+		// to the partner at pc+1, lowered as the compare it is, so that
+		// the IR is the code's before the two were fused -- inc's or
+		// dec's update, add_imm's or sub_imm's binary, by X.
+		if !bytecode.StepPaired(rc.Code, pc) {
+			panic(fmt.Sprintf("jit: %v at %d without its partner", op, pc))
+		}
+		switch k := bytecode.StepK(w.X()); {
+		case w.X()&bytecode.RStepAdd == 0:
+			o := ir.Add
+			if k < 0 {
+				o = ir.Sub
+			}
+			l.emit(ir.Instruction{Op: ir.Update, Operator: o, Left: reg(a), Dest: int(a), Extra: -1}, false)
+		case k > 0:
+			binary(ir.Add, reg(a), number(float64(k)), false)
+		default:
+			binary(ir.Sub, reg(a), number(float64(-k)), false)
+		}
+	case bytecode.RAddI32, bytecode.RSubI32, bytecode.RAddII32:
+		// (x op y) | 0: the operator into a scratch slot and the ToInt32
+		// of the | 0, whose stack instruction Aux[pc] is, from it -- the
+		// IR of the add, sub, add_imm or sub_imm and the or_imm 0 the
+		// instruction stands for, the sum in a scratch slot rather than a
+		// register. The operator commits nothing, as arithmetic is built
+		// (ssa's commitsBuilt), so the ToInt32 may leave as the or_imm's
+		// does, the instruction run again from its start.
+		if pc >= len(rc.Aux) || int64(rc.Aux[pc]) >= int64(len(fn.Code)) {
+			panic(fmt.Sprintf("jit: %v at %d without its | 0's position", op, pc))
+		}
+		o, right := ir.Add, reg(c)
+		switch {
+		case op == bytecode.RSubI32:
+			o = ir.Sub
+		case op == bytecode.RAddII32 && w.X() == bytecode.RAddII32Sub:
+			// x - K, SC -K: sub_imm's.
+			o, right = ir.Sub, number(float64(-w.SC()))
+		case op == bytecode.RAddII32:
+			right = number(float64(w.SC()))
+		}
+		sum := l.temp()
+		l.emit(ir.Instruction{Op: ir.Binary, Operator: o, Left: reg(b), Right: right, Dest: sum}, false)
+		l.emit(ir.Instruction{Op: ir.Unary, Operator: ir.Int32, Left: ir.Slot(sum), Dest: int(a)}, false)
 	default:
 		if !op.Cold() {
 			panic(fmt.Sprintf("jit: no register lowering for %v", op))

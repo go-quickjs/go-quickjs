@@ -780,7 +780,7 @@ func regLeafRunnable(rc *bytecode.RegCode) bool {
 			if w.B() < 2 || w.C() < 2 {
 				return false
 			}
-		case bytecode.RAddI, bytecode.RSubI, bytecode.RInc, bytecode.RDec, bytecode.RMove:
+		case bytecode.RAddI, bytecode.RSubI, bytecode.RMulI, bytecode.RInc, bytecode.RDec, bytecode.RMove:
 			if w.B() < 2 {
 				return false
 			}
@@ -825,6 +825,8 @@ const (
 	// rlAddK adds k: add_imm, sub_imm of the negated immediate (x - y is
 	// x + -y, -0 and NaN alike), inc and dec.
 	rlAddK
+	// rlMulK multiplies by k: mul_imm.
+	rlMulK
 	rlRet
 	rlRetUndef
 )
@@ -858,6 +860,8 @@ func regLeafOps(fn *bytecode.Function, rc *bytecode.RegCode) []regLeafOp {
 			o.op, o.k = rlAddK, Float(float64(w.SC()))
 		case bytecode.RSubI:
 			o.op, o.k = rlAddK, Float(-float64(w.SC()))
+		case bytecode.RMulI:
+			o.op, o.k = rlMulK, Float(float64(w.SC()))
 		case bytecode.RInc:
 			o.op, o.k = rlAddK, Float(1)
 		case bytecode.RDec:
@@ -929,6 +933,8 @@ var regStackOp = [256]bytecode.Op{
 	bytecode.RBitAnd: bytecode.OpBitAnd, bytecode.RBitOr: bytecode.OpBitOr, bytecode.RBitXor: bytecode.OpBitXor,
 	bytecode.RShl: bytecode.OpShl, bytecode.RShr: bytecode.OpShr, bytecode.RUShr: bytecode.OpUShr,
 	bytecode.RAdd: bytecode.OpAdd, bytecode.RSub: bytecode.OpSub, bytecode.RMul: bytecode.OpMul,
+	bytecode.RMulI: bytecode.OpMul, bytecode.RAddI32: bytecode.OpAdd, bytecode.RSubI32: bytecode.OpSub,
+	bytecode.RAddII32: bytecode.OpAdd,
 }
 
 // regJumpCmp is each compare-and-branch operation's comparison: its stack
@@ -951,6 +957,10 @@ var regJumpCmp = [256]struct {
 	bytecode.RJEq: {bytecode.OpEq, false, true, false}, bytecode.RJNe: {bytecode.OpEq, true, true, false},
 	bytecode.RJEqI: {bytecode.OpEq, false, false, false}, bytecode.RJNeI: {bytecode.OpEq, true, false, false},
 	bytecode.RJNull: {bytecode.OpEq, false, false, false}, bytecode.RJNotNull: {bytecode.OpEq, true, false, false},
+	// A step-and-branch's, its partner's.
+	bytecode.RStepJLt: {bytecode.OpLt, false, true, false}, bytecode.RStepJLe: {bytecode.OpLe, false, true, false},
+	bytecode.RStepJLtI: {bytecode.OpLt, false, false, false}, bytecode.RStepJGtI: {bytecode.OpGt, false, false, false},
+	bytecode.RStepJGeI: {bytecode.OpGe, false, false, false}, bytecode.RStepJLeU: {bytecode.OpLe, false, false, true},
 }
 
 // regConstruct is new_w: new callee with the argc arguments of the window

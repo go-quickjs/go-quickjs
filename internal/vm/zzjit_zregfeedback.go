@@ -1134,11 +1134,13 @@ func regSoleRegisters(fn *bytecode.Function, rc *bytecode.RegCode, p *ir.Program
 			bytecode.RBitAnd, bytecode.RBitOr, bytecode.RBitXor, bytecode.RShl, bytecode.RShr, bytecode.RUShr,
 			bytecode.RAndI, bytecode.ROrI, bytecode.RXorI, bytecode.RShlI, bytecode.RShrI, bytecode.RUShrI,
 			bytecode.RInc, bytecode.RDec, bytecode.RUnary,
+			bytecode.RMulI, bytecode.RAddI32, bytecode.RSubI32, bytecode.RAddII32,
 			bytecode.RJmp, bytecode.RJmpF, bytecode.RJmpT,
 			bytecode.RJLt, bytecode.RJNLt, bytecode.RJLe, bytecode.RJNLe, bytecode.RJGt, bytecode.RJNGt, bytecode.RJGe, bytecode.RJNGe,
 			bytecode.RJLtI, bytecode.RJNLtI, bytecode.RJLeI, bytecode.RJNLeI, bytecode.RJGtI, bytecode.RJNGtI, bytecode.RJGeI, bytecode.RJNGeI,
 			bytecode.RJSEq, bytecode.RJSNe, bytecode.RJSEqI, bytecode.RJSNeI,
 			bytecode.RJEq, bytecode.RJNe, bytecode.RJEqI, bytecode.RJNeI, bytecode.RJNull, bytecode.RJNotNull,
+			bytecode.RStepJLt, bytecode.RStepJLe, bytecode.RStepJLtI, bytecode.RStepJGtI, bytecode.RStepJGeI,
 			bytecode.RRetUndef, bytecode.RAppend, bytecode.RStrFreeze:
 			// Operands, results of their own, tests and branches; an
 			// append's addition, of a result of its own, and a read of

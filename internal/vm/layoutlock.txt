@@ -9,7 +9,11 @@
 # and DG) by the lever's pad. The targets are the layout at db306c0e, before
 # the slowdowns of the rounds after it; W's, regCallW's, now rhCallW,, the layout at
 # 679d54b3. Q anchors the register interpreter's loop, runReg, and W the
-# call path after it; its handlers follow (zzreg_table*.go).
+# call path after it; its handlers follow (zzreg_table*.go). X is the one
+# lever outside package vm: a pad at the start of internal/regexp, linked
+# before vm, which anchors the matcher's run (and with it its search and
+# the searches for a unit) at bef551a1's layout; internal/bytecode's growth
+# had moved it 3,520 bytes and made the V8 suite's RegExp 3.5% slower.
 toolchain go1.27.3
 
 config windows/amd64 plain
@@ -30,6 +34,7 @@ anchor GV 0x007a0 github.com/go-quickjs/go-quickjs/internal/vm.rmwStmtHook[go.sh
 anchor MS 0x00fe0 github.com/go-quickjs/go-quickjs/internal/vm.polyReread[go.shape.struct {}]
 anchor MV 0x00ba0 github.com/go-quickjs/go-quickjs/internal/vm.dataViewLeaves[go.shape.struct {}]
 anchor MA 0x00c20 github.com/go-quickjs/go-quickjs/internal/vm.(*upvalueAdd[struct {}]).node-fm
+anchor X  0x00f20 github.com/go-quickjs/go-quickjs/internal/regexp.(*matcherASCII).run
 anchor DH 0x000 runtime.mheap_
 anchor DW 0x020 runtime.writeBarrier
 anchor DG 0x000 runtime.gcController
@@ -52,6 +57,7 @@ anchor GV 0x00f60 github.com/go-quickjs/go-quickjs/internal/vm.rmwStmtHook[go.sh
 anchor MS 0x00320 github.com/go-quickjs/go-quickjs/internal/vm.polyReread[go.shape.struct {}]
 anchor MV 0x00160 github.com/go-quickjs/go-quickjs/internal/vm.dataViewLeaves[go.shape.struct {}]
 anchor MA 0x00260 github.com/go-quickjs/go-quickjs/internal/vm.(*upvalueAdd[struct {}]).node-fm
+anchor X  0x00680 github.com/go-quickjs/go-quickjs/internal/regexp.(*matcherASCII).run
 anchor DH 0x000 runtime.mheap_
 anchor DW 0x010 runtime.writeBarrier
 anchor DG 0x020 runtime.gcController
@@ -74,6 +80,7 @@ anchor GV 0x00a00 github.com/go-quickjs/go-quickjs/internal/vm.rmwStmtHook[go.sh
 anchor MS 0x002a0 github.com/go-quickjs/go-quickjs/internal/vm.polyReread[go.shape.struct {}]
 anchor MV 0x00ea0 github.com/go-quickjs/go-quickjs/internal/vm.dataViewLeaves[go.shape.struct {}]
 anchor MA 0x00f20 github.com/go-quickjs/go-quickjs/internal/vm.(*upvalueAdd[struct {}]).node-fm
+anchor X  0x009a0 github.com/go-quickjs/go-quickjs/internal/regexp.(*matcherASCII).run
 anchor DH 0x000 runtime.mheap_
 anchor DW 0x030 runtime.writeBarrier
 anchor DG 0x020 runtime.gcController
@@ -96,6 +103,7 @@ anchor GV 0x00e00 github.com/go-quickjs/go-quickjs/internal/vm.rmwStmtHook[go.sh
 anchor MS 0x00220 github.com/go-quickjs/go-quickjs/internal/vm.polyReread[go.shape.struct {}]
 anchor MV 0x000a0 github.com/go-quickjs/go-quickjs/internal/vm.dataViewLeaves[go.shape.struct {}]
 anchor MA 0x001a0 github.com/go-quickjs/go-quickjs/internal/vm.(*upvalueAdd[struct {}]).node-fm
+anchor X  0x009e0 github.com/go-quickjs/go-quickjs/internal/regexp.(*matcherASCII).run
 anchor DH 0x000 runtime.mheap_
 anchor DW 0x010 runtime.writeBarrier
 anchor DG 0x000 runtime.gcController

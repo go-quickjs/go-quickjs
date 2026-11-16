@@ -100,9 +100,10 @@ var (
 var nativeExitTable [256]regHandler
 
 // nativeSlowOnMiss are the operations whose native handlers answer every
-// case their Go handlers' fast paths answer, and more: the arithmetic and
-// the bitwise operators, of numbers (by ToInt32 where the Go handler
-// takes int32s alone), into any register, where the Go handler's stores
+// case their Go handlers' fast paths answer, and more: the arithmetic --
+// mul_imm and the int32 forms among it -- and the bitwise operators, of
+// numbers (by ToInt32 where the Go handler takes int32s alone), into any
+// register, where the Go handler's stores
 // only into one that holds no pointer; and the property and global reads
 // and writes by their sites, whose own entries, holders and, for a read,
 // earlier shapes (propPoly) the native code reads as rhGetProp,
@@ -119,6 +120,10 @@ var nativeSlowOnMiss = [...]bytecode.ROp{
 	bytecode.RBitAnd, bytecode.RBitOr, bytecode.RBitXor, bytecode.RShl, bytecode.RShr, bytecode.RUShr,
 	bytecode.RGetProp, bytecode.RGetMethod, bytecode.RSetProp, bytecode.RGetGlobal, bytecode.RSetGlobal,
 	bytecode.RBin, bytecode.RGetPrivate, bytecode.RSetPrivate, bytecode.RIn,
+	// A step-and-branch leaves native code only for a step its fast path
+	// does not make, before it commits anything: rsStep's.
+	bytecode.RStepJLt, bytecode.RStepJLe, bytecode.RStepJLtI, bytecode.RStepJGtI, bytecode.RStepJGeI, bytecode.RStepJLeU,
+	bytecode.RMulI, bytecode.RAddI32, bytecode.RSubI32, bytecode.RAddII32,
 }
 
 // The exit table, made after regTable (zzreg_table.go's and

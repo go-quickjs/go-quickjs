@@ -211,6 +211,7 @@ byte stores, 7 bytes of code each, so that it fills any whole number of
 | MA MV MS | a generic that a method at the position calls | the generics methods meet first, from that file back | the method values (`upvalueAdd.node-fm` ...), `dataViewLeaves` and the DataView leaves, `polyReread` and object creation's |
 | CZ | a closure in a generic the last file calls | the closures of generics | `strAppendNode.func1` and the generic tree nodes' closures |
 | DH DW DG | 8-byte pointer variables, 8- and 16-byte variables without | the zeroed data after them, which the linker sorts by size | `runtime.mheap_`, `runtime.writeBarrier`, `runtime.gcController` |
+| X | `layoutPadX`, a function in `internal/regexp/aa_layoutpad.go`, its constant in that package's own configuration files | every function of package regexp, and what follows it up to vm, whose levers absorb it | the matcher, `(*matcherASCII).run`, and with it its `search` and the searches for a unit (`indexUnit`, `skipUnitsASCII`) |
 
 What each lever cannot move:
 
@@ -245,8 +246,16 @@ What each lever cannot move:
   and the placements tool builds so too. Built otherwise, the code is where
   the lock puts it and the data up to 32 bytes off.
 - **Other packages and programs.** The lock pins package vm against the
-  runtime in `v8bench`. The packages before vm -- the regular expression
-  matcher, go-intl, the JIT's compiler -- are not pinned, and in another
+  runtime in `v8bench`, and the regular expression matcher by X: a package
+  is laid out where the packages linked before it end, so a change that
+  grows one of those moves it -- `internal/bytecode`'s new operations moved
+  the matcher 3,520 bytes and made the V8 suite's RegExp 3.5% slower at
+  every placement -- and vm's pads, after it, cannot reach it. A pad in
+  another package is an outer lever of `layoutpad` (its `outers`): a
+  function pad in the file that sorts first there and the package's own
+  constants. The regexp generics vm instantiates are vm's and move with
+  its generics' levers. The other packages before vm -- go-intl, the JIT's
+  compiler -- are not pinned, and in another
   program (`qjs`, an embedder's) vm starts elsewhere and only its layout
   against itself holds.
 - **Native code**, which the JIT lays out at run time, is not affected; its

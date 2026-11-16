@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -21,8 +22,17 @@ func TestRegThrowsKeepPC(t *testing.T) {
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no handler files: %v", err)
 	}
-	// The fast paths that sort after the others (zzreg_zztable.go).
-	files = append(files, "zzreg_zztable.go")
+	// The fast paths that sort after the others (zzreg_zztable.go), and
+	// the files after it (zzreg_zztable_step.go).
+	more, err := filepath.Glob("zzreg_zztable*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range more {
+		if !strings.HasSuffix(name, "_test.go") {
+			files = append(files, name)
+		}
+	}
 	fs := token.NewFileSet()
 	fails := 0
 	isSt := func(e ast.Expr, name string) bool {

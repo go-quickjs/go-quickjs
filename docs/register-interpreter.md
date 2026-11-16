@@ -233,6 +233,9 @@ fused tests). The families:
   `add_imm`, `sub_imm`, `mul_imm` with a 16-bit immediate; `inc`, `dec`,
   `neg`, `to_numeric`. Each has a number fast path in its case and calls out
   for anything else.
+- **int32 results:** `add_i32`, `sub_i32` and `add_imm_i32`, a `+` or a
+  `-` and the `| 0` after it in one instruction (`(x + y) | 0`), no
+  intermediate stored.
 - **Bitwise:** `bit_and`, `bit_or`, `bit_xor`, `shl`, `shr`, `ushr`, and
   each with an immediate, and `bit_not`, with an int32 fast path; the
   immediate forms are what Crypto's masks and shifts are.
@@ -242,6 +245,11 @@ fused tests). The families:
   `jseq`, `jsne`, `jeq`, `jne`, `jnullish`, `jundef`, `jtypeof` (a typeof
   compared with a literal): a comparison that decides a jump never makes a
   boolean.
+- **Step-and-branch:** `step_jlt`, `step_jle`, `step_jlt_imm`,
+  `step_jgt_imm`, `step_jge_imm`, `step_jle_upval`: a counter's `++`, `--`,
+  `+= k` or `-= k` and the compare-and-branch after it, its partner, which
+  stays at pc+1 for what the fast path does not make -- a counted loop's
+  bottom test in one dispatch.
 - **Comparisons that produce a value:** `lt`, `le`, `gt`, `ge`, `seq`,
   `sne`, `eq`, `ne`, cold enough to share one generic case.
 - **Jumps:** `jmp`, `jtrue`, `jfalse` (ToBoolean, a boolean's without a
@@ -261,9 +269,11 @@ fused tests). The families:
 - **Iteration, exceptions, generators** in later stages: `for_in_next`,
   `iter_next`, `throw`, `rethrow`, `yield`, `await`, `resume`.
 
-The opcode is masked to the switch's size and every value of the mask has a
-case, so the jump table needs no range check: today 7 bits, with the unused
-values padded, growing to 8 bits when the set passes 128.
+The opcode is the instruction's low 8 bits and indexes tables of 256
+handlers -- the Go table, its slow functions and the native table -- every
+value with an entry, so the dispatch needs no range check: a value no
+operation has is `rhInvalid`'s, which the verifier proves no code holds.
+(The switch this replaced masked it to 7 bits for its jump table.)
 
 ### Instructions a turn
 
@@ -630,9 +640,13 @@ the encoder's temporary, and never touches `R18` (the platform's), `R28`
 `nativeEnter`'s return to `nativeLoop` throughout, so that a profile taken
 in the code, and the trampolines' frames, unwind to it.
 
-**What is native.** The numbers' arithmetic, increments, `-x`, `+x`,
+**What is native.** The numbers' arithmetic -- `mul_imm`, and the int32
+forms' `(x ± y) | 0` to the ToInt32 of a sum below 2^63 -- increments, `-x`, `+x`,
 the bitwise operators of any number (by ToInt32) and the
-compare-and-branches, of registers, immediates and upvalues; truthiness
+compare-and-branches, of registers, immediates and upvalues, and the
+step-and-branches of a number counter, which leave only for a step of
+what is not one, before they commit it, and go on natively at the
+partner for a bound that is not a number or a spent budget; truthiness
 of a boolean, a number, an object, a string, undefined and null; `==`
 and `!=` of numbers, of one word kind and of undefined or null against
 anything; `===` and `!==` (two strings by identity and length, and two flat ones
@@ -1742,6 +1756,94 @@ primitive, does without. The tree's
   and `cold`, the one value every cold operation shares, took 126 (the
   opcode allocation rule, under "The loop").
 
+#### Loop-kernel instructions (built, 2026-11-15)
+
+Value-in, Value-out superinstructions for counted loops and `| 0`
+arithmetic, which need no raw registers. Their values follow `RFarInit`
+(231 to 240; `ROpCount` 241), so no value before them changed. Each has
+its regcomp pattern, its Go handler and slow function, its amd64 and
+arm64 native handlers and its lowering, so none opened a refusal; the
+native handlers follow every other one in `handlerOps` (the
+step-and-branches, then `mul_imm` and the int32 forms), which moved no
+handler before them, and `runReg`, `nativeLoop`, the dispatch and
+`rhCallW` are the same instructions as before them.
+
+- **Step-and-branch**, one per bottom test a counted loop uses:
+  `step_jlt`, `step_jle` (a register bound), `step_jlt_imm`,
+  `step_jgt_imm`, `step_jge_imm` (the immediate SB) and `step_jle_upval`
+  (upvalue B). A is the counter, SC the offset, X the step: its low 7
+  bits a signed k (-64 to 63, never 0, `bytecode.StepK`), its high bit
+  `RStepAdd` for `+=`/`-=` of a literal, else an update (`++`/`--`,
+  inc's, k = ±1). With `RStepAdd`, k's sign is the operator, which differs
+  for what is not a number (`"5" + 1` is `"51"`, `"5" - 1` is 4): add_imm
+  k where k is above 0, sub_imm -k where it is below; an add_imm of a
+  negative literal, or a sub_imm of one, is not fused. It is the step and then the
+  compare-and-branch at pc+1, its partner, in one dispatch: R[A] += k,
+  then to pc+1+SC where the partner would jump, else to pc+2. The partner
+  stays in the code: a step of what is not a number is made by the slow
+  path, which goes on at pc+1; a bound that is not a number, or a
+  backward jump with the interrupt budget spent, commits the step and goes
+  on at the partner, whose slow path compares and checks the interrupt.
+  The step's throws are placed at its SrcPC, the comparison's at the
+  partner's. The JIT lowers it as its step alone, falling to the partner.
+  regcomp's `finish` fuses each adjacent pair (`fuseSteps`), loops or not,
+  but in a function whose jumps are far. Compiled for a debugger, a for
+  loop's test has a `debug` of its own after the update, so nothing is
+  fused; a while's or a do-while's `--n >= 0` is one expression, with no
+  place to stop between its step and its compare, and is fused as it is
+  without a debugger. The Go handlers are `zzreg_zztable_step.go`'s, the
+  native ones nativegen's `stepJ`, after `gen_entry`; a native handler
+  exits only before it commits the step, to `rsStep`
+  (`nativeSlowOnMiss`).
+- **`mul_imm`**: R[A] = R[B] * SC, mul's semantics with a Number SC.
+  Built: regcomp makes it of `x * k` and of `k * x` (a literal's ToNumeric
+  runs nothing and the product commutes, -0 and NaN alike), k an integer
+  of 16 bits; the Go handler and the native ones are `add_imm`'s with a
+  product, the slow path `regBinImm`'s; the leaf runner runs it
+  (`rlMulK`); the JIT lowers it as mul of a literal.
+- **`add_i32`, `sub_i32`**: R[A] = ToInt32(R[B] ± R[C]), and
+  **`add_imm_i32`**: R[A] = ToInt32(R[B] + SC), X `RAddII32Sub` where the
+  source was `x - K` (SC = -K; only the slow path reads it). `(x ± y) | 0`
+  in one instruction, no intermediate stored; a BigInt result throws the
+  `|`'s TypeError at the stack instruction Aux[pc]. Built: regcomp's
+  `orZero` makes them of a `| 0` (or `| -0`) over a `+` or a `-` that is
+  no string chain, the operands evaluated as `operate` evaluates them, the
+  instruction at the operator's position and the `|`'s kept for Aux (the
+  stores' map, as `add_index`'s store). The fast path is two numbers whose
+  result is below 2^63 in magnitude, its truncation's low 32 bits: Go's
+  `int32(int64(s))` into a register that holds no pointer, amd64's
+  `cvttsd2si` (2^63's pattern exits) and a 32-bit `cvtsi2sd`, arm64's
+  `fcvtzs` (a saturated limit exits, a NaN is 0) and a 32-bit `scvtf`.
+  The slow path makes the operator as add, sub, add_imm or sub_imm make
+  it, placed at the instruction, then the `| 0` of its result
+  (`regOrZero`): a number's ToInt32, a string's number's, and a BigInt's
+  TypeError placed at Aux[pc]. The JIT lowers each as the pair it stands
+  for, the operator into a scratch slot and the `| 0`'s ToInt32 (`Unary
+  Int32`) from it; arithmetic commits nothing as it is built, so the
+  ToInt32 may leave as the `or_imm`'s did, the instruction run again.
+  With it, regcomp leaves out a `| 0` whose left is `&`, `|`, `^`, `<<`
+  or `>>` with a number literal or a `>>>` for an operand: its result is
+  an int32 Number or it threw. `loop_int32`'s turn is 12 dispatches, 17
+  before.
+
+The verifier (`regcomp.Verify`) checks: each register below NumRegs, an
+upvalue index below the function's, the target in the code, and the
+partner (`bytecode.StepPaired`: the step ±1, or k ≠ 0 with `RStepAdd`;
+at pc+1 the partner's operation of the same A, B and target; an
+instruction after it); `mul_imm`'s X 0; the int32 forms' Aux[pc] in the
+stack code, X 0, or for `add_imm_i32` `RAddII32Sub` with SC not -32,768.
+
+The kinds were chosen by a static count of adjacent step and
+compare-and-branch pairs (`internal/cmd/regcount`): over the timed
+corpora (Octane, AWFY, the V8 suite, the micro-benchmarks) `jlt` 1,006,
+`jlt_imm` 234, `jge_imm` 80, `jle_upval` 36, `jle` 26, `jlt_upval` 18,
+`jgt_imm` 15, the rest 7 or fewer each; test262 adds `jlt_imm` 317 and
+`jle_imm` 45, the bundles `jlt` 354 and `jsne` 61. `jgt_imm` is taken
+over `jlt_upval` for the down loops (`empty_down_loop`, `empty_do_loop`),
+and `jge_imm` is `crypto_am3`'s `--n >= 0`. Compares of two `| 0`s, which
+`jlt_i32` would take, are 48 in zlib (`<`, `<=`, `>` and `>=`) and none in
+Mandreel, against 853 `sub_i32` sites, the rarest `_i32` form: no value.
+
 #### Raw int32 registers (step 5, designed, deferred)
 
 Index-heavy code pays a float conversion at every element access: a key
@@ -1841,16 +1943,24 @@ declared without initialisers (`var r0;`) and its keys are sums, nothing
 of which is provable; zlib's are initialised (`var b=0,c=0`) and coerced
 (`a=a|0`), and 700 to 1,300 of its 4,319 `|0`s are of a bare local.
 
-What stands in the way is the loop, not the proof:
+What stands in the way is room for the operations, not the loop or the
+proof:
 
 - **Opcodes.** The design needs a raw form of each bitwise operator, its
   immediate form, the wrapping add and subtract, the compares-and-branches,
   `get_index` and `set_index` with a raw key, and the conversions in and
-  out: about twenty values. Two are free (42 and 43); the 7-bit space is
-  spent.
-- **The loop's budget.** `runReg` is at 4,865 of Go's 5,000 nodes; twenty
-  cases of 25 to 40 nodes each put it past the limit, where Go stops
-  inlining `regInt32`, `regTruth` and a dozen more into every case.
+  out: about twenty values. The opcode field is 8 bits (`bytecode.ROp` is
+  a `uint8`; the Go table, its slow functions and the native table have
+  256 entries each). The operations `RNop` to `RFarInit` take 231 values,
+  so 25 were free; the loop-kernel instructions (above) take 10 of them
+  (`ROpCount` 241), and 15 are left. The cold operations are table
+  handlers of their own already, so none can be freed by making them
+  sub-operations of one value.
+- **No loop budget.** With the switch, `runReg` was at 4,865 of Go's
+  5,000 nodes, and twenty cases would have put it past the limit. The
+  handler table removed that: `runReg` is a fixed loop of about 30
+  instructions that an operation added does not change
+  (`TestRegLoopIsSmall`), and an operation is a handler of its own.
 - **A cheaper check is not one.** `regInt32` without its tag test (a NaN
   fails the round trip's compare too) made `loop_int32` 8.1% slower at
   every placement and zlib 1.6%: dropped. Nor is ToInt32 by truncation:
@@ -1860,12 +1970,15 @@ What stands in the way is the loop, not the proof:
   Mandreel 2.5% and zlib 2.2% slower over four placements (35131ca9 ->
   it): dropped. `TestRegBitwiseToInt32` pins what either answers.
 
-So the raw registers need room first: a wider opcode field and a loop
-whose rarely hot cases leave it for `regCold`, or a second loop for code
-the backend has typed int32 throughout (an asm.js function), entered at
-the call and holding no Value register at all, which keeps `runReg` as it
-is. Either is a change to the loop's layout as large as any made, and is
-measured over the placements as one.
+So the raw registers need opcode values first, more than the 15 left:
+a second table for code the backend has typed int32 throughout (an
+asm.js function), its values free for raw operations where the verifier
+proves the generic ones absent, entered at the call -- a variant table
+natively, a second loop as small as `runReg` over it in Go -- which
+keeps `runReg` and the ordinary table as they are. A wider opcode field,
+taken from X, costs every dispatch an instruction and breaks X's 8-bit
+users, and is not the way. The call path's cost of the switch between
+tables is measured over the placements before any region is built.
 
 #### Raw float64 temporaries (designed, 2026-11-11, not built)
 
@@ -1931,10 +2044,9 @@ does, without speculation and without a second representation of `Value`:
   no call ever meets one. A generator's suspension, a debugger's stop and
   a direct eval are statements, never inside an expression's region.
 - **Opcodes.** Eleven values: `guard_num`, five raw operations and five
-  boxing ones. The 7-bit space has one free value (42). The 18 cases of no
-  hot operation (layoutcases.txt) become cold sub-operations, which frees
-  them, and the raw operations are cases after the hot ones until timing
-  puts them among them (a hot-case edit, with the golden file).
+  boxing ones, each a table handler of its own, appended after the last
+  operation, which moves no handler before it and not the loop. They come
+  from the 15 values left (see the int32 design's count above).
 - **What it saves, estimated.** In `lin_solve` the region is the right
   side above: 7 operations, 5 leaves in 2 guards. Per element: 7 tag tests
   of operand pairs become 5 in two instructions, 6 canonical NaNs become 1,
@@ -1959,13 +2071,14 @@ float loop (`IsNumber` 12.5%, `regNum` 5.0% of NavierStokes), and level
 with the tree is not the goal: the tree goes once register mode is level
 or better everywhere, and the aim is the comparison engine. The order:
 generator resumption in place and the forwarder construction path first,
-both measured gaps against the tree, then this, in two stages, each
-timed alone -- the 18 cases of no hot operation made cold sub-operations,
-which frees their opcode values (a compare-and-branch that slows a test
-3% at every placement stays a case), then the region pass, its opcodes,
-the verifier's rules and the differential tests behind a compiler switch,
-made the default only if it earns it over its cost in register-code
-bytes and compile time. The region machinery is shaped for int32 regions
+both measured gaps against the tree, then this: the region pass, its
+opcodes, the verifier's rules and the differential tests behind a
+compiler switch, made the default only if it earns it over its cost in
+register-code bytes and compile time. (A first stage that made the
+switch's 18 cold cases sub-operations to free their values is moot: the
+handler table made each a handler of its own, and the regions' values
+come from those left after the loop-kernel instructions, or from the
+typed code's second table.) The region machinery is shaped for int32 regions
 (`guard_int32`, raw integer and bitwise operations, Crypto's `am3`)
 without building them.
 
@@ -2052,7 +2165,8 @@ leaves are guarded as int32s.
   of its register as an int64's bits. The root is boxed by a separate
   `ibox`, `ibox_z` or `ibox_u` instruction rather than a boxing form of
   each operation: one dispatch more for each region, against a dozen
-  opcode values. About twenty values in all, from those stage 1 frees.
+  opcode values. About twenty values in all, more than the 15 left: they
+  wait for the typed code's second table (below).
 - **The verifier.** The float64 region's rules, and: an int32 interior
   is read only by int32 operations of its region. It recomputes every
   bound and rejects an unchecked operation past 2^53, a product whose
@@ -2069,18 +2183,21 @@ costs the guard. In zlib's `c = (c + 1) | 0`, it saves the round trips
 of `c` and of `c + 1` and one boxing. A bare `x | 0` is one operation,
 not a region, and stays `or_imm`.
 
-**Opcode values for the regions.** Stage 1 frees 20 values, and one more
-is free: 21, against 11 for the float64 regions and about 20 for the
-int32 ones. A region instruction that interprets its own operations is
-not the answer: that is a frameless evaluator inside the loop, which this
-design rules out. A region operation gets a value of its own, as every
-other operation does, only by its measured frequency: once the region
-pass exists behind its switch, the dispatch counts over the corpora decide
-which get values. The rest are cold sub-operations, which a region may
-hold like any other instruction. The expected direct ones are
+**Opcode values for the regions.** 15 values are free once the
+loop-kernel instructions have their 10 (25 were free past `RFarInit`),
+against 11 for the float64 regions and about 20 for the int32 ones. The
+cold operations are table handlers already, so no value can be freed by
+folding them into sub-operations, and a region instruction that
+interprets its own operations is not the answer either: that is a
+frameless evaluator inside the loop, which this design rules out. A
+region operation gets a value of its own, as every other operation does,
+only by its measured frequency: once the region pass exists behind its
+switch, the dispatch counts over the corpora decide which get values.
+The rest wait for the typed code's second table (above), where the
+values of what typed code never holds are free. The expected direct ones are
 `guard_num`, `guard_i32`, `fadd`, `fsub`, `fmul`, the boxing roots,
 `iadd`, `isub`, `imul_c`, the bitwise operations and shifts, and `ibox`.
-The expected cold ones are `fdiv`, `fneg`, `irem_c`, `ineg`, `inot`,
+The expected ones without a value are `fdiv`, `fneg`, `irem_c`, `ineg`, `inot`,
 `ibox_u`, `ibox_z`, and the immediate forms where a register operand
 does as well.
 

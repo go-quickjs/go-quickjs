@@ -34,6 +34,11 @@
 //     without pointers (DW, DG), which the linker sorts by size among the
 //     zeroed data before the Go runtime's mheap_, writeBarrier and
 //     gcController, and so moves within their cache lines.
+//   - An outer pad (X), a function pad in a package linked before vm, in
+//     the file that sorts first there (internal/regexp/aa_layoutpad.go),
+//     its constant in that package's configuration files: it moves the
+//     whole package, which a change growing the packages linked before it
+//     moves as much as vm, and which vm's pads, after it, cannot reach.
 //
 // docs/optimizing.md ("The layout lock") says what each can and cannot move.
 //
@@ -90,6 +95,7 @@ const (
 	vmDir      = "internal/vm"
 	targetsRel = "internal/vm/layoutlock.txt"
 	vmPrefix   = "github.com/go-quickjs/go-quickjs/internal/vm."
+	modPrefix  = "github.com/go-quickjs/go-quickjs/"
 	// codeMod and dataMod are what a target is modulo: the op cache's 4 KB
 	// for code, the cache line for data.
 	codeMod = 4096
@@ -132,6 +138,40 @@ var positions = []position{
 	{"Z", "zzzz_layoutpad.go", "after every file: the closures, and the generics the last files call"},
 }
 
+// An outer is a function pad in a package linked before package vm, in
+// the file that sorts first there: it moves every function of that package
+// after it, and what follows the package up to vm, whose own levers absorb
+// it. A package is laid out where the packages linked before it end, so a
+// change that grows one of those -- internal/bytecode's operations -- moves
+// its hot code, which vm's pads, after it, cannot reach. Its constants are
+// in that package's own configuration files, as vm's are in vm's.
+type outer struct {
+	name string // the lever's letter, as in the targets file
+	dir  string // the package's directory
+	pkg  string // the package's name
+	doc  string
+}
+
+var outers = []outer{
+	{"X", "internal/regexp", "regexp", "before every file of package regexp: the matcher's run and search"},
+}
+
+// outerOf is the outer pad a lever is, if it is one.
+func outerOf(name string) (outer, bool) {
+	for _, o := range outers {
+		if o.name == name {
+			return o, true
+		}
+	}
+	return outer{}, false
+}
+
+// vmLever says whether a lever's constant is package vm's.
+func vmLever(name string) bool {
+	_, ok := outerOf(name)
+	return !ok
+}
+
 // A lever is one constant of a configuration's file.
 type lever struct {
 	name string // as in the targets file: A..Z, GA..GZ, MA..MZ, CZ, DH, DW, DG
@@ -148,6 +188,9 @@ func levers() []lever {
 		ls = append(ls, lever{name: "M" + p.name, kind: 'g', pad: vmPrefix + "layoutPadM" + p.name + "[go.shape.struct {}]"})
 	}
 	ls = append(ls, lever{name: "CZ", kind: 'c', pad: vmPrefix + "layoutPadCZ[go.shape.struct {}].func1"})
+	for _, o := range outers {
+		ls = append(ls, lever{name: o.name, kind: 'f', pad: modPrefix + o.dir + ".layoutPad" + o.name})
+	}
 	ls = append(ls,
 		lever{name: "DH", kind: 'd', max: dataVars},
 		lever{name: "DW", kind: 'd', max: dataVars},
@@ -568,12 +611,24 @@ func showLayout(c *config, syms *symtab) {
 
 // The configuration's file: its levers' constants.
 
-func configFile(c *config) string {
+func configFile(c *config) string { return configFileIn(c, vmDir) }
+
+// configFileIn is the configuration's file in the package at dir.
+func configFileIn(c *config, dir string) string {
 	jit := ""
 	if c.jit {
 		jit = "jit_"
 	}
-	return filepath.Join(vmDir, "layoutpad_"+jit+c.goos+"_"+c.goarch+".go")
+	return filepath.Join(dir, "layoutpad_"+jit+c.goos+"_"+c.goarch+".go")
+}
+
+// configFiles are c's files: package vm's, then the outer pads'.
+func configFiles(c *config) []string {
+	files := []string{configFile(c)}
+	for _, o := range outers {
+		files = append(files, configFileIn(c, o.dir))
+	}
+	return files
 }
 
 // readValues reads a configuration's constants, -1 for a lever its file
@@ -586,15 +641,17 @@ func readValues(c *config) map[string]int {
 			v[l.name] = 0
 		}
 	}
-	b, err := os.ReadFile(configFile(c))
-	if err != nil {
-		return v
-	}
-	for _, line := range strings.Split(string(b), "\n") {
-		f := strings.Fields(line)
-		if len(f) == 3 && f[1] == "=" && strings.HasPrefix(f[0], "layoutPadN") {
-			if n, err := strconv.Atoi(f[2]); err == nil {
-				v[strings.TrimPrefix(f[0], "layoutPadN")] = n
+	for _, file := range configFiles(c) {
+		b, err := os.ReadFile(file)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			f := strings.Fields(strings.TrimPrefix(strings.TrimSpace(line), "const "))
+			if len(f) == 3 && f[1] == "=" && strings.HasPrefix(f[0], "layoutPadN") {
+				if n, err := strconv.Atoi(f[2]); err == nil {
+					v[strings.TrimPrefix(f[0], "layoutPadN")] = n
+				}
 			}
 		}
 	}
@@ -611,10 +668,28 @@ func writeValues(c *config, v map[string]int) error {
 	}
 	fmt.Fprintf(&b, "package vm\n\n// The layout lock's levers for %s (layoutlock.txt): a pad's byte\n// stores, -1 for a pad left out, or a data lever's variables.\nconst (\n", c)
 	for _, l := range levers() {
-		fmt.Fprintf(&b, "\tlayoutPadN%s = %d\n", l.name, v[l.name])
+		if vmLever(l.name) {
+			fmt.Fprintf(&b, "\tlayoutPadN%s = %d\n", l.name, v[l.name])
+		}
 	}
 	b.WriteString(")\n")
-	return writeGo(configFile(c), b.String())
+	if err := writeGo(configFile(c), b.String()); err != nil {
+		return err
+	}
+	for _, o := range outers {
+		b.Reset()
+		b.WriteString("// Code generated by internal/cmd/layoutpad; DO NOT EDIT.\n\n")
+		if c.jit {
+			b.WriteString("//go:build quickjs_jit\n\n")
+		} else {
+			b.WriteString("//go:build !quickjs_jit\n\n")
+		}
+		fmt.Fprintf(&b, "package %s\n\n// The layout lock's lever for %s (internal/vm/layoutlock.txt): its\n// pad's byte stores, -1 for the pad left out.\nconst layoutPadN%s = %d\n", o.pkg, c, o.name, v[o.name])
+		if err := writeGo(configFileIn(c, o.dir), b.String()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func writeGo(path, src string) error {
@@ -643,12 +718,20 @@ func writeSources(t *targets) error {
 			return err
 		}
 	}
+	for _, o := range outers {
+		if err := writeGo(filepath.Join(o.dir, "aa_layoutpad.go"), outerFile(o)); err != nil {
+			return err
+		}
+	}
 	platforms := map[string]bool{}
 	for _, c := range t.configs {
 		platforms["("+c.goos+" && "+c.goarch+")"] = true
-		if _, err := os.Stat(configFile(c)); err != nil {
-			if err := writeValues(c, readValues(c)); err != nil {
-				return err
+		for _, f := range configFiles(c) {
+			if _, err := os.Stat(f); err != nil {
+				if err := writeValues(c, readValues(c)); err != nil {
+					return err
+				}
+				break
 			}
 		}
 	}
@@ -662,6 +745,9 @@ func writeSources(t *targets) error {
 	fmt.Fprintf(&b, "//go:build !(%s)\n\n", strings.Join(keys, " || "))
 	b.WriteString("package vm\n\n// The layout lock has no targets for this platform: every pad is left\n// out.\nconst (\n")
 	for _, l := range levers() {
+		if !vmLever(l.name) {
+			continue
+		}
 		v := -1
 		if l.kind == 'd' {
 			v = 0
@@ -669,7 +755,34 @@ func writeSources(t *targets) error {
 		fmt.Fprintf(&b, "\tlayoutPadN%s = %d\n", l.name, v)
 	}
 	b.WriteString(")\n")
-	return writeGo(filepath.Join(vmDir, "layoutpad_other.go"), b.String())
+	if err := writeGo(filepath.Join(vmDir, "layoutpad_other.go"), b.String()); err != nil {
+		return err
+	}
+	for _, o := range outers {
+		b.Reset()
+		b.WriteString("// Code generated by internal/cmd/layoutpad; DO NOT EDIT.\n\n")
+		fmt.Fprintf(&b, "//go:build !(%s)\n\n", strings.Join(keys, " || "))
+		fmt.Fprintf(&b, "package %s\n\n// The layout lock has no targets for this platform: the pad is left\n// out.\nconst layoutPadN%s = -1\n", o.pkg, o.name)
+		if err := writeGo(filepath.Join(o.dir, "layoutpad_other.go"), b.String()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// outerFile is an outer pad's file: the pad, the variable its stores go
+// to and the init that keeps it, as package vm's last position file has
+// them for vm's pads.
+func outerFile(o outer) string {
+	var b strings.Builder
+	b.WriteString("// Code generated by internal/cmd/layoutpad; DO NOT EDIT.\n\n")
+	fmt.Fprintf(&b, "package %s\n\n", o.pkg)
+	fmt.Fprintf(&b, "// layoutPad%s is the layout lock's pad %s, %s.\n// It is never called: see internal/cmd/layoutpad.\n//\n//go:noinline\nfunc layoutPad%s() {\n", o.name, o.name, o.doc, o.name)
+	stores(&b, "\t", "layoutPadN"+o.name)
+	b.WriteString("}\n")
+	fmt.Fprintf(&b, "\n// The pad's variables, never read: what its stores go to, the same size\n// whatever the lever is.\nvar (\n\tlayoutPadLive  bool\n\tlayoutPadBytes [%d]byte\n)\n", padBytes)
+	fmt.Fprintf(&b, "\n// init keeps the pad in the binary: layoutPadLive is never true.\nfunc init() {\n\tif layoutPadLive && layoutPadN%s >= 0 {\n\t\tlayoutPad%s()\n\t}\n}\n", o.name, o.name)
+	return b.String()
 }
 
 // stores writes a pad's body: as many byte stores as the lever's constant

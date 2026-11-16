@@ -688,11 +688,103 @@ const (
 	RMovToFar
 	RFarInit
 
+	// The loop kernels' and int32 results' operations, after every other
+	// so that no value before them changes (docs/register-interpreter.md,
+	// "Loop-kernel instructions"). Reserved: until each has its handlers
+	// and its lowering, nothing emits it and its table entry panics, as a
+	// value no operation has.
+	//
+	// The step-and-branch operations are a step and the compare-and-branch
+	// after it, its partner, in one dispatch: R[A] = R[A] + k, then a jump
+	// to pc+1+SC if R[A] compares with the bound B as the partner's
+	// comparison holds, and otherwise on to pc+2, past the partner. B is
+	// the partner's: a register, the immediate SB, or an upvalue index. X
+	// is the step (StepK, RStepAdd). The instruction at pc+1 must be the
+	// partner, StepPartner's operation of the same A and B and the same
+	// target, which stays in the code: where the step is not of a number
+	// the slow path makes it as inc, dec, add_imm or sub_imm make it and
+	// goes on at pc+1; where the bound is not a number, or a backward
+	// jump finds the interrupt budget spent, the step is made and the
+	// partner compares, at pc+1. The step's throws are placed at the
+	// step's position (SrcPC); the comparison's belong to the partner.
+	RStepJLt
+	RStepJLe
+	RStepJLtI
+	RStepJGtI
+	RStepJGeI
+	RStepJLeU
+	// RMulI: R[A] = R[B] * SC, as mul of a Number SC.
+	RMulI
+	// RAddI32 and RSubI32: R[A] = ToInt32(R[B] + R[C]) or ToInt32(R[B] -
+	// R[C]), the (x + y) | 0 and (x - y) | 0 of one instruction, no
+	// intermediate stored. RAddII32: R[A] = ToInt32(R[B] + SC), with X
+	// RAddII32Sub where the source was R[B] - K (SC holds -K), which only
+	// the slow path reads: "5" - 1 is not "5" + -1. A BigInt result
+	// throws the | 's TypeError at the stack instruction Aux[pc]; every
+	// other throw is the + 's or the - 's, at the instruction's position.
+	RAddI32
+	RSubI32
+	RAddII32
+
 	// ROpCount is how many operations there are, each below it: the
 	// interpreter's table has an entry for every value an ROp can hold,
 	// those from ROpCount on a handler that panics.
 	ROpCount
 )
+
+// RStepAdd is the bit of a step-and-branch's X that says its step is a
+// += or -= of a number literal, as add_imm and sub_imm make it; without
+// it the step is an update, ++ or --, as inc and dec make it, of 1 or -1.
+// With it, k's sign says which: add_imm k where k is above 0, sub_imm -k
+// where it is below, which differ for what is not a number ("5" + 1 is
+// "51", "5" - 1 is 4), so that an add_imm of a negative literal and a
+// sub_imm of one are not fused.
+const RStepAdd = 0x80
+
+// RAddII32Sub is add_imm_i32's X where its source was a subtraction of
+// the literal -SC.
+const RAddII32Sub = 1
+
+// StepK is the signed step of a step-and-branch's X: its low 7 bits, -64
+// to 63, never 0.
+func StepK(x uint8) int32 { return int32(int8(x<<1) >> 1) }
+
+// StepPartner is the compare-and-branch the step-and-branch op makes, its
+// partner at pc+1, and false for any other op.
+func (op ROp) StepPartner() (ROp, bool) {
+	switch op {
+	case RStepJLt:
+		return RJLt, true
+	case RStepJLe:
+		return RJLe, true
+	case RStepJLtI:
+		return RJLtI, true
+	case RStepJGtI:
+		return RJGtI, true
+	case RStepJGeI:
+		return RJGeI, true
+	case RStepJLeU:
+		return RJLeU, true
+	}
+	return 0, false
+}
+
+// StepPaired reports whether the step-and-branch at pc of code is one the
+// interpreter can run: its step is ±1, or a nonzero k with RStepAdd, and
+// the instruction at pc+1, with one after it, is its partner, of the same
+// A, B and target.
+func StepPaired(code []RInstr, pc int) bool {
+	w := code[pc]
+	partner, ok := w.Op().StepPartner()
+	if !ok || pc+2 >= len(code) {
+		return false
+	}
+	if k := StepK(w.X()); k == 0 || w.X()&RStepAdd == 0 && k != 1 && k != -1 {
+		return false
+	}
+	p := code[pc+1]
+	return p.Op() == partner && p.A() == w.A() && p.B() == w.B() && int64(w.SC()) == int64(p.SC())+1
+}
 
 // RCmpTrue is the bit of a compare-and-branch's X (jtypeof's, a fused
 // set_upval's) that says it jumps when the comparison holds, rather than
@@ -1083,11 +1175,14 @@ var rOpNames = [...]string{
 	RWithWrite: "with_write", RWithPush: "with_push", RWithPop: "with_pop",
 	RThrowRef: "throw_reference_error", RDebug: "debug",
 	RMovFar: "mov_far", RMovToFar: "mov_to_far", RFarInit: "far_init",
+	RStepJLt: "step_jlt", RStepJLe: "step_jle", RStepJLtI: "step_jlt_imm", RStepJGtI: "step_jgt_imm",
+	RStepJGeI: "step_jge_imm", RStepJLeU: "step_jle_upval",
+	RMulI: "mul_imm", RAddI32: "add_i32", RSubI32: "sub_i32", RAddII32: "add_imm_i32",
 }
 
 // Cold reports whether op is one of the operations of no hot loop,
 // RNewRegExp to RFarInit, which native code leaves to Go but for a few.
-func (op ROp) Cold() bool { return op >= RNewRegExp && op < ROpCount }
+func (op ROp) Cold() bool { return op >= RNewRegExp && op <= RFarInit }
 
 // MethodCall reports whether op is call_method_w or its tail form, whose
 // this is R[A+1].
@@ -1229,12 +1324,33 @@ func (rc *RegCode) Format(pc int) string {
 		return fmt.Sprintf("%s %s, k%d", op, r(w.A()), w.BC())
 	case RIterClose, RIterCloseThrow:
 		return fmt.Sprintf("%s %s", op, r(w.B()))
+	case RStepJLt, RStepJLe:
+		return fmt.Sprintf("%s %s += %d (%s), %s %s", op, r(w.A()), StepK(w.X()), stepForm(w.X()), r(w.B()), target(w.SC()))
+	case RStepJLtI, RStepJGtI, RStepJGeI:
+		return fmt.Sprintf("%s %s += %d (%s), %d %s", op, r(w.A()), StepK(w.X()), stepForm(w.X()), w.SB(), target(w.SC()))
+	case RStepJLeU:
+		return fmt.Sprintf("%s %s += %d (%s), u%d %s", op, r(w.A()), StepK(w.X()), stepForm(w.X()), w.B(), target(w.SC()))
+	case RMulI, RAddII32:
+		return fmt.Sprintf("%s %s, %s, %d", op, r(w.A()), r(w.B()), w.SC())
+	case RAddI32, RSubI32:
+		return fmt.Sprintf("%s %s, %s, %s", op, r(w.A()), r(w.B()), r(w.C()))
 	}
-	if op := w.Op(); op >= RNewRegExp && op < ROpCount {
+	if op := w.Op(); op.Cold() {
 		// The operations of no hot loop: their operands as they lie.
 		return fmt.Sprintf("%s %s, %s, %s", op, r(w.A()), r(w.B()), r(w.C()))
 	}
 	return w.Op().String()
+}
+
+// stepForm names a step-and-branch's kind of step, by its X.
+func stepForm(x uint8) string {
+	if x&RStepAdd != 0 {
+		if StepK(x) < 0 {
+			return "sub"
+		}
+		return "add"
+	}
+	return "update"
 }
 
 // String renders the whole code, one instruction a line.

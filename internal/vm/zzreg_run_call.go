@@ -513,6 +513,13 @@ func (r *Runtime) regLeafRun(cl *closure, c *regCode, base, argc int) (Value, bo
 				return Undefined, false
 			}
 			regs[o.a] = regNum(a.Number() + o.k.num)
+		case rlMulK:
+			a := regs[o.b]
+			if !a.IsNumber() {
+				cl.pureMiss++
+				return Undefined, false
+			}
+			regs[o.a] = regNum(a.Number() * o.k.num)
 		case rlRet:
 			regLeafStore(held[:n])
 			return regs[o.a], true

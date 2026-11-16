@@ -2486,7 +2486,7 @@ var regOps = map[string]bytecode.ROp{
 
 // immOps are the operators of a register and an immediate with one.
 var immOps = map[string]bytecode.ROp{
-	"+": bytecode.RAddI, "-": bytecode.RSubI,
+	"+": bytecode.RAddI, "-": bytecode.RSubI, "*": bytecode.RMulI,
 	"&": bytecode.RAndI, "|": bytecode.ROrI, "^": bytecode.RXorI,
 	"<<": bytecode.RShlI, ">>": bytecode.RShrI, ">>>": bytecode.RUShrI,
 }
@@ -2495,6 +2495,13 @@ func (g *gen) binary(n *ast.Binary, dst int) int {
 	if n.Op == "+" {
 		if d, ok := g.stringChain(n, dst); ok {
 			return d
+		}
+	}
+	if n.Op == "|" {
+		if v, ok := numberLit(n.Right); ok && v == 0 {
+			if d, ok := g.orZero(n, dst); ok {
+				return d
+			}
 		}
 	}
 	switch n.Op {
@@ -2540,11 +2547,115 @@ func (g *gen) binary(n *ast.Binary, dst int) int {
 	return g.operate(n.Op, op, n.Left, n.Right, -1, dst, n.Start)
 }
 
+// orZero compiles n, x | 0, where its | can be left out or made one with
+// the operator under it, and reports false, having emitted nothing,
+// elsewhere:
+//
+//   - (x + y) | 0 and (x - y) | 0 are one add_i32 or sub_i32, and
+//     (x + k) | 0 and (x - k) | 0, k of 16 bits, one add_imm_i32: the
+//     operands evaluated as operate evaluates them, the instruction placed
+//     at the + or the -, whose errors are its own, and the |'s position
+//     kept for its stack instruction (Aux), where a BigInt sum's TypeError
+//     is placed. A + of a string chain, which is a string, is left alone;
+//   - x | 0 whose x is a bitwise operator of which an operand is a number
+//     literal or a >>> -- (b ^ (a >>> 7)) | 0, (x & 255) | 0 -- is x: such
+//     an operator's result is an int32 Number, or it threw, as a BigInt
+//     operand mixed with a Number throws, so the | 0 changes nothing. Of
+//     two operands of unknown type it is not, as (a ^ b) | 0 of two
+//     BigInts throws at the |.
+func (g *gen) orZero(n *ast.Binary, dst int) (int, bool) {
+	inner, ok := n.Left.(*ast.Binary)
+	if !ok {
+		return 0, false
+	}
+	switch inner.Op {
+	case "&", "|", "^", "<<", ">>":
+		if int32Operand(inner.Left) || int32Operand(inner.Right) {
+			return g.expr(inner, dst), true
+		}
+		return 0, false
+	case "+", "-":
+	default:
+		return 0, false
+	}
+	if inner.Op == "+" && hasStringPart(inner) {
+		return 0, false
+	}
+	mark := g.top
+	a := g.guard(g.expr(inner.Left, -1), inner.Right)
+	var at int
+	if k, ok := imm16(inner.Right); ok && (inner.Op == "+" || k != -1<<15) {
+		x := uint8(0)
+		if inner.Op == "-" {
+			k, x = -k, bytecode.RAddII32Sub
+		}
+		d := g.result(mark, dst)
+		g.at(inner.Start)
+		at = g.emit(bytecode.MakeR(bytecode.RAddII32, x, r16(d), r16(a), uint16(int16(k))))
+		g.storeAt(at, n.Start)
+		return d, true
+	}
+	b := g.expr(inner.Right, -1)
+	d := g.result(mark, dst)
+	op := bytecode.RAddI32
+	if inner.Op == "-" {
+		op = bytecode.RSubI32
+	}
+	g.at(inner.Start)
+	at = g.emit(bytecode.MakeR(op, 0, r16(d), r16(a), r16(b)))
+	g.storeAt(at, n.Start)
+	return d, true
+}
+
+// int32Operand reports whether e, a bitwise operator's operand, makes
+// the operator's result a Number: a number literal, or a >>>, whose
+// result is one or which threw.
+func int32Operand(e ast.Expr) bool {
+	if _, ok := numberLit(e); ok {
+		return true
+	}
+	b, ok := e.(*ast.Binary)
+	return ok && b.Op == ">>>"
+}
+
+// hasStringPart reports whether e, a + chain, has a string literal or a
+// template among its operands: a sum that is a string, which stringChain
+// may compile as a concat.
+func hasStringPart(e ast.Expr) bool {
+	switch n := e.(type) {
+	case *ast.StringLit, *ast.TemplateLit:
+		return true
+	case *ast.Binary:
+		return n.Op == "+" && (hasStringPart(n.Left) || hasStringPart(n.Right))
+	}
+	return false
+}
+
+// storeAt keeps pos for the instruction at pc, whose stack instruction
+// goes to its Aux (finish): where an error of a second operator the
+// instruction makes, a store's or a | 0's, is placed.
+func (g *gen) storeAt(pc, pos int) {
+	if g.stores == nil {
+		g.stores = emptyMap(&g.s.stores)
+	}
+	g.stores[pc] = int32(pos)
+}
+
 // operate is left op right into dst; a is left's register, where it has
 // been evaluated already (a compound assignment's target), or -1.
 func (g *gen) operate(text string, op bytecode.Op, left, right ast.Expr, a, dst, pos int) int {
 	mark := g.top
 	var x uint8
+	if text == "*" && a < 0 {
+		// k * x as x * k, an immediate's: ToNumeric of a literal runs
+		// nothing, the product commutes, -0 and NaN alike, and a BigInt x
+		// throws the same TypeError either way. Not +'s, of strings.
+		if _, ok := imm16(left); ok {
+			if _, ok := imm16(right); !ok {
+				left, right = right, left
+			}
+		}
+	}
 	if a < 0 {
 		a = g.guard(g.expr(left, -1), right)
 		if g.fresh(left, a) {
@@ -4619,6 +4730,7 @@ func (g *gen) finish() *bytecode.RegCode {
 			farNames[pc] = v
 		}
 	}
+	g.fuseSteps()
 	var aux []uint32
 	if len(g.auxes) > 0 {
 		aux = make([]uint32, len(g.code))

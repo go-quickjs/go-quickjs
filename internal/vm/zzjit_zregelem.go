@@ -283,12 +283,19 @@ func (r *Runtime) jitRegStringAddSeen(l *jitEntry, c *regCode, wb, rpc int) bool
 	w := c.rc.Code[rpc]
 	str := func(n uint16) bool { return wb+int(n) < len(r.stack) && r.stack[wb+int(n)].IsString() }
 	switch w.Op() {
-	case bytecode.RAdd:
+	case bytecode.RAdd, bytecode.RAddI32:
+		// add_i32's too, which the lowering makes an add and a ToInt32.
 		if !str(w.B()) && !str(w.C()) {
 			return false
 		}
-	case bytecode.RAddI:
-		if !str(w.B()) {
+	case bytecode.RAddI, bytecode.RAddII32:
+		// add_imm_i32's of x - K is a subtraction, which no string adds.
+		if w.Op() == bytecode.RAddII32 && w.X() == bytecode.RAddII32Sub || !str(w.B()) {
+			return false
+		}
+	case bytecode.RStepJLt, bytecode.RStepJLe, bytecode.RStepJLtI, bytecode.RStepJGtI, bytecode.RStepJGeI, bytecode.RStepJLeU:
+		// A step-and-branch's step, add_imm's where it adds.
+		if w.X()&bytecode.RStepAdd == 0 || bytecode.StepK(w.X()) < 0 || !str(w.A()) {
 			return false
 		}
 	default:

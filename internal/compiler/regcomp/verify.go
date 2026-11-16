@@ -182,10 +182,28 @@ func Verify(rc *bytecode.RegCode, fn *bytecode.Function) string {
 		case bytecode.RApplyArgs:
 			ok = reg(a) && int(b)+3 <= n && reg(c) && rc.ForwardsArguments
 		case bytecode.RRetUndef:
+		case bytecode.RStepJLt, bytecode.RStepJLe:
+			// A step and its partner, the compare-and-branch at pc+1,
+			// which the step's slow path and a comparison it cannot make
+			// go on at (bytecode.StepPaired).
+			ok = reg(a) && reg(b) && in(pc, int64(w.SC())) && bytecode.StepPaired(code, pc)
+		case bytecode.RStepJLtI, bytecode.RStepJGtI, bytecode.RStepJGeI:
+			ok = reg(a) && in(pc, int64(w.SC())) && bytecode.StepPaired(code, pc)
+		case bytecode.RStepJLeU:
+			ok = reg(a) && int(b) < len(fn.Upvalues) && in(pc, int64(w.SC())) && bytecode.StepPaired(code, pc)
+		case bytecode.RMulI:
+			ok = reg(a) && reg(b) && w.X() == 0
+		case bytecode.RAddI32, bytecode.RSubI32:
+			// Aux: the stack instruction of the | 0, where a BigInt
+			// result's TypeError is placed.
+			ok = reg(a) && reg(b) && reg(c) && w.X() == 0 && pc < len(rc.Aux) && int64(rc.Aux[pc]) < int64(len(fn.Code))
+		case bytecode.RAddII32:
+			// From x - K, SC is -K, which a K of 16 bits keeps in them.
+			ok = reg(a) && reg(b) && (w.X() == 0 || w.X() == bytecode.RAddII32Sub && w.SC() != -1<<15) &&
+				pc < len(rc.Aux) && int64(rc.Aux[pc]) < int64(len(fn.Code))
 		default:
 			// The operations of no hot loop, whose X is 0.
-			ok = w.Op() >= bytecode.RNewRegExp && w.Op() < bytecode.ROpCount && w.X() == 0 &&
-				coldOK(rc, fn, pc, w, reg, site)
+			ok = w.Op().Cold() && w.X() == 0 && coldOK(rc, fn, pc, w, reg, site)
 		}
 		if !ok {
 			return "instruction " + rc.Format(pc) + " is out of range"
