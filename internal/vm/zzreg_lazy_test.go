@@ -32,7 +32,7 @@ used({alpha: 1, beta: 2}) + [1, 2, 3].map(twice).join() + used({alpha: 3, beta: 
 func TestRegCompiledLazily(t *testing.T) {
 	compiler.SetRegisterForm(true)
 	fn := compileForTest(t, regLazySrc)
-	compiler.SetRegisterForm(false)
+	compiler.SetRegisterForm(bytecode.RegDefault())
 	byName := map[string]*bytecode.Function{}
 	for _, c := range fn.Constants {
 		if c.Kind == bytecode.ConstFunction && c.Fn != nil {
@@ -45,7 +45,7 @@ func TestRegCompiledLazily(t *testing.T) {
 		}
 	}
 	SetRegTier(true)
-	defer SetRegTier(false)
+	defer SetRegTier(bytecode.RegDefault())
 	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(fn)
@@ -78,9 +78,9 @@ func TestRegCompiledLazily(t *testing.T) {
 func TestRegCompiledLazilyConcurrently(t *testing.T) {
 	compiler.SetRegisterForm(true)
 	fn := compileForTest(t, regLazySrc)
-	compiler.SetRegisterForm(false)
+	compiler.SetRegisterForm(bytecode.RegDefault())
 	SetRegTier(true)
-	defer SetRegTier(false)
+	defer SetRegTier(bytecode.RegDefault())
 	var wg sync.WaitGroup
 	errs := make([]string, 8)
 	for i := range errs {

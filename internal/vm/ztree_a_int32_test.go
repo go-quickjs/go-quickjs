@@ -33,8 +33,7 @@ func TestInt32Trees(t *testing.T) {
 	i32Elem = func(obj, key tentry, s *i32Site) ti32 { elems++; return elem(obj, key, s) }
 	i32GetNode = func(obj, key tentry, pc int) tval { gets++; return get(obj, key, pc) }
 	runInt32Script(t, "ops", func(tree bool) {
-		// Register code builds no trees for what it covers.
-		if tree && !regTier.Load() && (ofs < 50 || elems < 10 || gets < 5) {
+		if tree && (ofs < 50 || elems < 10 || gets < 5) {
 			t.Errorf("tree tier: %d int32 trees, %d element reads under an operator, %d int32-keyed reads built", ofs, elems, gets)
 		}
 		ofs, elems, gets = 0, 0, 0
@@ -61,8 +60,7 @@ func TestInt32Sums(t *testing.T) {
 		return f
 	}
 	runInt32Script(t, "sums", func(tree bool) {
-		// Register code has no int32 sums: its functions are not trees.
-		if tree && made < 30 && !regTier.Load() {
+		if tree && made < 30 {
 			t.Errorf("tree tier: %d sums made in place", made)
 		}
 		made = 0
@@ -88,7 +86,7 @@ func runInt32Script(t *testing.T, name string, check func(tree bool)) {
 	defer SetTreeTier(true)
 	for _, tree := range []bool{true, false} {
 		SetTreeTier(tree)
-		r := New(Config{})
+		r := newOldTiersForTest(Config{})
 		v, err := r.Run(compileForTest(t, string(src)))
 		r.Close()
 		if err != nil {

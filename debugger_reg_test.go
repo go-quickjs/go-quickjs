@@ -2,7 +2,6 @@ package quickjs
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 
@@ -41,7 +40,7 @@ func TestDebuggerRegisterCode(t *testing.T) {
 		compiler.SetRegisterForm(reg)
 		vm.SetRegTier(reg)
 		defer func() {
-			env := os.Getenv("QJS_REG") != ""
+			env := bytecode.RegDefault()
 			compiler.SetRegisterForm(env)
 			vm.SetRegTier(env)
 		}()

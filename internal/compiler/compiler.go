@@ -97,6 +97,10 @@ type Options struct {
 	// what is in scope there, as a direct eval's call site does. The code is
 	// for one runtime: the scopes capture what a debugger may read.
 	Debug bool
+	// NoRegister compiles no register form (registerForm), for a runtime
+	// that does not run register code: one with the JIT, which reads the
+	// stack form alone.
+	NoRegister bool
 }
 
 // bindKind classifies a binding, which decides its initialization and
@@ -521,7 +525,7 @@ func Compile(prog *ast.Program, opts Options) (fn *bytecode.Function, err error)
 	c.nextSlot++
 	c.emit(bytecode.OpPushUndef, 0, 0)
 	c.emit(bytecode.OpSetLocal, uint32(c.completionSlot), 0)
-	if registerForm.Load() && regScript(opts) {
+	if registerForm.Load() && !opts.NoRegister && regScript(opts) {
 		// A script's code as register code too (regcomp.CompileTop).
 		c.reg = regcomp.NewRecord()
 		c.reg.Completion = c.completionSlot

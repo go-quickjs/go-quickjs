@@ -49,7 +49,7 @@ func TestInt32GlobalElements(t *testing.T) {
 	for _, tree := range []bool{false, true} {
 		SetTreeTier(tree)
 		globals = 0
-		r := New(Config{})
+		r := newOldTiersForTest(Config{})
 		var got []string
 		for _, src := range scripts {
 			v, err := r.Run(compileForTest(t, src))
@@ -68,8 +68,7 @@ func TestInt32GlobalElements(t *testing.T) {
 				t.Errorf("script %d: the trees gave\n%s\nthe interpreter\n%s", i, got[i], want[i])
 			}
 		}
-		// Register code builds no tree to read a global's elements in.
-		if globals < 3 && !regTier.Load() {
+		if globals < 3 {
 			t.Errorf("tree tier: %d element reads of a global built in place", globals)
 		}
 	}

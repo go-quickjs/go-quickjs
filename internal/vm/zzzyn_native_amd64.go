@@ -430,7 +430,10 @@ func (ctx *nativeCtx) grow() {
 }
 
 // nativeLeave ends nativeRun once the base frame has returned or thrown:
-// the states made for the frames above it hold nothing of theirs.
+// the states made for the frames above it hold nothing of theirs. They
+// are made only at the depths an exit left to Go (nativeTop), so that one
+// below may be none: each is cleared, or a deep one would keep its frame's
+// closure, and so its realm, for as long as the base frame's state.
 func (r *Runtime) nativeLeave(st *regState, ctx *nativeCtx) {
 	if nativeCount {
 		atomic.AddInt64(&nativeCalls, ctx.made)
@@ -438,10 +441,9 @@ func (r *Runtime) nativeLeave(st *regState, ctx *nativeCtx) {
 	ctx.made = 0
 	ctx.top = nil
 	for _, s := range ctx.states {
-		if s == nil {
-			break
+		if s != nil {
+			s.f, s.c, s.cl, s.err = nil, nil, nil, nil
 		}
-		s.f, s.c, s.cl, s.err = nil, nil, nil, nil
 	}
 	r.regLeave(st)
 }

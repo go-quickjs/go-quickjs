@@ -860,7 +860,7 @@ func regLeafStore(held []regHeld) {
 // not been run yet, and kept in its template for regCall's next call of it;
 // or nil.
 func (r *Runtime) regOf(cl *closure) *regCode {
-	if !regTier.Load() {
+	if !r.regOn() {
 		return nil
 	}
 	t := (*tree)(atomic.LoadPointer(&cl.fn.VMCode))

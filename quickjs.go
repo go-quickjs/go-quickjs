@@ -561,7 +561,7 @@ func (r *Runtime) evalInternal(name, src string) (result Value, err error) {
 		return Value{}, ErrClosed
 	}
 	defer r.guard(&err)
-	fn, err := compileScript(src, name, 0, 0, false, r.nodeQuirks, false)
+	fn, err := compileScript(src, name, 0, 0, false, r.nodeQuirks, false, !r.rt.RegTier())
 	if err != nil {
 		return Value{}, err
 	}
@@ -708,21 +708,23 @@ func (r *Runtime) compile(src, name string) (*bytecodeFunc, error) {
 // compileAt is compile for source placed within a larger file, whose first
 // line is lineOffset lines down and columnOffset columns in.
 func (r *Runtime) compileAt(src, name string, lineOffset, columnOffset int) (*bytecodeFunc, error) {
-	return compileScript(src, name, lineOffset, columnOffset, false, r.nodeQuirks, r.debug)
+	return compileScript(src, name, lineOffset, columnOffset, false, r.nodeQuirks, r.debug, !r.rt.RegTier())
 }
 
 // compileScript parses and compiles a script, strict throughout if strict is
 // set, and as V8 has it where it departs from the standard if nodeQuirks is.
 // It depends on no runtime: what it returns any runtime may run, but for
-// code compiled for a debugger, which only the runtime it is for may.
-func compileScript(src, name string, lineOffset, columnOffset int, strict, nodeQuirks, debug bool) (*bytecodeFunc, error) {
+// code compiled for a debugger, which only the runtime it is for may. With
+// noReg it has no register form, which a runtime that runs no register code
+// does not use (vm.Runtime.RegTier).
+func compileScript(src, name string, lineOffset, columnOffset int, strict, nodeQuirks, debug, noReg bool) (*bytecodeFunc, error) {
 	prog, err := parser.Parse(src, parser.Options{Strict: strict, NodeQuirks: nodeQuirks})
 	if err != nil {
 		return nil, newSyntaxError(err, name, lineOffset, columnOffset)
 	}
 	fn, err := compiler.Compile(prog, compiler.Options{
 		Source: name, Text: src, NodeQuirks: nodeQuirks, Debug: debug,
-		LineOffset: lineOffset, ColumnOffset: columnOffset,
+		LineOffset: lineOffset, ColumnOffset: columnOffset, NoRegister: noReg,
 	})
 	if err != nil {
 		return nil, newSyntaxError(err, name, lineOffset, columnOffset)
@@ -977,6 +979,7 @@ func (r *Runtime) compileAndRegisterModule(specifier, source string) (*vm.Module
 	}
 	fn, info, err := compiler.CompileModule(prog, compiler.Options{
 		Source: specifier, Text: source, NodeQuirks: r.nodeQuirks, Debug: r.debug,
+		NoRegister: !r.rt.RegTier(),
 	})
 	if err != nil {
 		return nil, newSyntaxError(err, specifier, 0, 0)
@@ -1120,6 +1123,7 @@ func (r *Runtime) compileEval(source string, req vm.EvalRequest) (*bytecode.Func
 	popts := parser.Options{NodeQuirks: r.nodeQuirks}
 	copts := compiler.Options{
 		Source: "<eval>", Text: source, NodeQuirks: r.nodeQuirks, Debug: r.debug,
+		NoRegister: !r.rt.RegTier(),
 		// Whatever eval declares on the global object is configurable,
 		// unlike what a script declares: the evaluated code could have
 		// declared it anywhere, so nothing should be able to rely on it.

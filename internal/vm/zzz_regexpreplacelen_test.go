@@ -94,7 +94,7 @@ func TestRegExpReplaceLen(t *testing.T) {
 				debug.SetGCPercent(-1)
 			}
 			SetTreeTier(tree)
-			r := New(Config{})
+			r := newOldTiersForTest(Config{})
 			v, err := r.Run(compileForTest(t, regexpReplaceLenTestSrc))
 			r.Close()
 			debug.SetGCPercent(100)
@@ -110,7 +110,7 @@ func TestRegExpReplaceLen(t *testing.T) {
 	// strings: 'xd1yd1zd1'.replace(/d1/g, '-'), a thousand times, made as
 	// many before.
 	SetTreeTier(true)
-	r := New(Config{})
+	r := newOldTiersForTest(Config{})
 	defer r.Close()
 	src := strings.TrimSpace(regexpReplaceLenTestSrc)
 	if _, err := r.Run(compileForTest(t, src[:strings.LastIndex(src, "\n")]+"\ntable(); ''")); err != nil {

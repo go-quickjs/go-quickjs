@@ -29,7 +29,7 @@ func TestPureByTree(t *testing.T) {
 		[n, T.prototype.held, T.prototype.mark, T.prototype.one, T.prototype.viaHeld]`
 	for _, tree := range []bool{false, true} {
 		SetTreeTier(tree)
-		r := New(Config{})
+		r := newOldTiersForTest(Config{})
 		v, err := r.Run(compileForTest(t, src))
 		if err != nil {
 			t.Fatalf("tree=%v: %v", tree, err)
@@ -38,9 +38,8 @@ func TestPureByTree(t *testing.T) {
 		if got := res[0].Number(); got != 300+149*3 {
 			t.Errorf("tree=%v: n = %v, want %v", tree, got, 300+149*3)
 		}
-		// What a tree's call is given, where the functions are trees: the
-		// register tier enters register code from a tree directly.
-		if tree && !regTier.Load() {
+		// What a tree's call is given, where the functions are trees.
+		if tree {
 			for i, want := range []bool{true, true, false, false} {
 				fd := res[i+1].Object().fn()
 				name := []string{"held", "mark", "one", "viaHeld"}[i]

@@ -3,6 +3,7 @@ package vm
 import (
 	"testing"
 
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/compiler"
 )
 
@@ -52,12 +53,12 @@ func TestRegBackendRuns(t *testing.T) {
 		// run gave it.
 		compiler.SetRegisterForm(true)
 		fn := compileForTest(t, src)
-		compiler.SetRegisterForm(false)
+		compiler.SetRegisterForm(bytecode.RegDefault())
 		SetRegTier(reg)
 		before := RegsBuilt()
 		r := New(Config{})
 		v, err := r.Run(fn)
-		SetRegTier(false)
+		SetRegTier(bytecode.RegDefault())
 		if err != nil {
 			t.Fatalf("reg=%v: %v", reg, err)
 		}
@@ -86,7 +87,7 @@ func TestRegFrameErrors(t *testing.T) {
 	SetRegTier(true)
 	r := New(Config{})
 	v, err := r.Run(compileForTest(t, src))
-	SetRegTier(false)
+	SetRegTier(bytecode.RegDefault())
 	if err != nil {
 		t.Fatal(err)
 	}

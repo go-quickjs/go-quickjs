@@ -11,6 +11,7 @@ import (
 	"time"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/compiler"
 	"github.com/go-quickjs/go-quickjs/internal/v8bench"
 	"github.com/go-quickjs/go-quickjs/internal/vm"
@@ -29,7 +30,7 @@ func withRegTier(on bool, f func()) {
 	compiler.SetRegisterForm(on)
 	vm.SetRegTier(on)
 	defer func() {
-		env := os.Getenv("QJS_REG") != ""
+		env := bytecode.RegDefault()
 		compiler.SetRegisterForm(env)
 		vm.SetRegTier(env)
 	}()

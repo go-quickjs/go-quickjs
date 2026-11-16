@@ -19,7 +19,15 @@ The main areas are:
 - `internal/vm`: JavaScript runtime semantics and built-ins. `Intl`, `Date`'s
   local time and `Temporal` are bindings over
   [go-intl](https://github.com/go-quickjs/go-intl), which holds the locale
-  data, the calendars and the time zones.
+  data, the calendars and the time zones. On amd64 the register interpreter
+  (docs/register-interpreter.md) runs a runtime's code by default, on
+  native handlers; on other architectures, and in a runtime with the JIT,
+  which reads the stack form alone, the stack interpreter and the tree tier
+  run it, as they do in every runtime with `QJS_REG=0`. `QJS_REG=1` turns
+  the register interpreter on anywhere, on the Go handlers where there are
+  no native ones. The default is `bytecode.RegDefault`, an architecture's
+  constant in `internal/bytecode/regdefault_*.go`. `QJS_REG=0` and the old
+  tiers stay until the JIT reads register code; test with both settings.
 - `internal/regdiff`: tests only, the register interpreter's differential
   tests, over cases of their own and the corpora `internal/v8bench` holds
   for the benchmark runners.
@@ -230,7 +238,12 @@ git diff --check
 ```
 
 The long checks run once, on the final code: the full suite with and without
-the JIT's tag, test262's modes and the timing across suites. While a change
+the JIT's tag, test262's modes and the timing across suites. Until the old
+tiers are removed, a change to what they share with the register
+interpreter runs the suite with `QJS_REG=0` as well, and on arm64 (or with
+`GOARCH=arm64` under an emulator) with `QJS_REG=1`; where the register
+interpreter is on, the conformance runner fails on any function that falls
+back to the old tiers (`vm.RegFallbacks`, `QJS_REGFALLTRACE` names them). While a change
 is iterated, test the packages it touches and time only the benchmarks it is
 for, at two placements (`compare -k 2 -suite List`, `-micro -suite
 bigint64_fnv1a`); `placements build -k N` makes only the placements a `-k N`

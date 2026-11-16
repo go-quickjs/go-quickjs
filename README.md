@@ -55,8 +55,12 @@ measurement and [Not implemented](docs/status.md#not-implemented) for what is mi
 
 ## Performance
 
-Functions run in a bytecode interpreter, most of them as trees of Go
-closures built from their bytecode. The JIT, which is optional and
+On amd64, functions run in a register interpreter whose handlers are
+native code ([its design](docs/register-interpreter.md)). On other
+architectures, and in a runtime with the JIT, they run in a stack bytecode
+interpreter, most of them as trees of Go closures built from their
+bytecode; other architectures move to the register interpreter as their
+native handlers land. The JIT, which is optional and
 experimental, compiles hot functions to native code on `linux/amd64`,
 `windows/amd64` and `darwin/arm64`. It follows V8's optimizing compilers:
 it speculates on what the inline caches have seen, inlines calls, and falls

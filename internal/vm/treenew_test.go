@@ -79,7 +79,7 @@ func TestClassConstructionsOnTrees(t *testing.T) {
 		`TypeError: class constructor A cannot be invoked without "new" | same true`
 	for _, tree := range []bool{true, false} {
 		previous := treeTier.Swap(tree)
-		r := New(Config{})
+		r := newOldTiersForTest(Config{})
 		v, err := r.Run(compileForTest(t, src))
 		treeTier.Store(previous)
 		if err != nil {
@@ -90,9 +90,8 @@ func TestClassConstructionsOnTrees(t *testing.T) {
 			t.Errorf("tree %v: got %s\nwant %s", tree, got, want)
 		}
 		fd := func(name string) *funcData { return r.global.getOwn(r.atoms.intern(name)).value().Object().fn() }
-		// The tree tier's plans, which a function the register tier runs
-		// as its code does not have.
-		if tree && !regTier.Load() {
+		// The tree tier's plans.
+		if tree {
 			for _, name := range []string{"A", "C", "Base", "Nest"} {
 				if !fd(name).treeNew {
 					t.Errorf("%s is not constructed on its tree", name)

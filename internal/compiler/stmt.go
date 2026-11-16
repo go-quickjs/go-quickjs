@@ -948,7 +948,7 @@ func (c *compiler) compileForOf(n *ast.ForOfStmt) {
 	if n.Await {
 		c.emit(bytecode.OpForAwaitOfStart, 0, 0)
 		c.pushExit(exitCursor)
-		c.compileForAwaitBody(n.Left, n.Body)
+		c.compileForAwaitBody(n.Left, n.Body, n.Right.Pos())
 		c.popExit()
 		return
 	}
@@ -974,7 +974,11 @@ func (c *compiler) compileForOf(n *ast.ForOfStmt) {
 // fails, is not closed. The cursor is kept in a hidden local, where the
 // close finds it whatever is on the stack above it, and another says
 // whether the body is running.
-func (c *compiler) compileForAwaitBody(left ast.Node, body ast.Stmt) {
+//
+// Each turn's await is at pos, the loop's expression's: a stack trace of
+// what throws after it -- the iterator's return method closing the loop --
+// names that line.
+func (c *compiler) compileForAwaitBody(left ast.Node, body ast.Stmt, pos int) {
 	cur := c.declare(fmt.Sprintf("%%fa%d", *c.hiddenCount), bindVar, left.Pos())
 	busy := c.declare(fmt.Sprintf("%%fb%d", *c.hiddenCount), bindVar, left.Pos())
 	*c.hiddenCount++
@@ -996,7 +1000,7 @@ func (c *compiler) compileForAwaitBody(left ast.Node, body ast.Stmt) {
 	c.emit(bytecode.OpPushFalse, 0, 0)
 	c.emit(bytecode.OpSetLocal, busy, 0)
 	c.emit(bytecode.OpAsyncIterNext, 0, 0)
-	c.emitAwait(start)
+	c.emitAwait(pos)
 	exit := c.emitJump(bytecode.OpIterResultOrJump)
 	c.emit(bytecode.OpPushTrue, 0, 0)
 	c.emit(bytecode.OpSetLocal, busy, 0)

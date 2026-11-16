@@ -759,7 +759,7 @@ func firstDifference(got, want string) string {
 
 // A run of appends makes one string and its right side, not a node each.
 func TestStrAppendAllocations(t *testing.T) {
-	r := New(Config{})
+	r := newOldTiersForTest(Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, `
 		function appends(n) {

@@ -89,7 +89,7 @@ func TestShapeBudgetChurn(t *testing.T) {
 	}
 	for _, p := range patterns {
 		t.Run(p.name, func(t *testing.T) {
-			r := New(Config{})
+			r := newOldTiersForTest(Config{})
 			defer r.Close()
 			src := setup + `function loop(n) { for (var i = 0; i < n; i++) { ` + p.body + ` } }`
 			if _, err := r.Run(compileForTest(t, src)); err != nil {

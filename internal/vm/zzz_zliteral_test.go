@@ -84,7 +84,7 @@ func TestTreeObjectLiterals(t *testing.T) {
 	}
 	for _, tree := range []bool{true, false} {
 		SetTreeTier(tree)
-		r := New(Config{})
+		r := newOldTiersForTest(Config{})
 		v, err := r.Run(compileForTest(t, literalTestSrc))
 		r.Close()
 		if err != nil {
@@ -97,7 +97,7 @@ func TestTreeObjectLiterals(t *testing.T) {
 	SetTreeTier(true)
 	// Past the first two objects, the site knows the shape the fields lead
 	// to, which its objects are made with.
-	r := New(Config{})
+	r := newOldTiersForTest(Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `function mixed(j) { let _k = 0; return { a: j, b: j + 1, c: "key", d: true, e: null, f: j, g: false, h: "end" } }
 		let o; for (let i = 0; i < 4; i++) o = mixed(i); o`))

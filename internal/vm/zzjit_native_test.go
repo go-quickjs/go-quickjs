@@ -1615,6 +1615,11 @@ func TestJITHostErrors(t *testing.T) {
 func jitRuntimeForTest(t *testing.T, cfg Config) *Runtime {
 	t.Helper()
 	r := New(cfg)
+	// The JIT's tests are of the tiers it works with, the stack
+	// interpreter and the tree tier, which a runtime with the JIT runs:
+	// one made without it, to compare with or to enable it later
+	// (initJIT), runs them too.
+	r.oldTiers = true
 	// Boundary tests force promotion so guard and budget assertions cannot
 	// pass by running only the existing tiers.
 	r.jitCallThreshold, r.jitICThreshold = 1, 1
@@ -3584,6 +3589,9 @@ func TestJITLoopGuardErrors(t *testing.T) {
 			var baseline *Thrown
 			for _, enabled := range []bool{false, true} {
 				r := New(Config{JIT: enabled})
+				// The trace's pcs are compared with the stack form's, the
+				// old tiers', which register code's frames name otherwise.
+				r.oldTiers = true
 				jitDefaultsForTest(r)
 				t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 				_, err := r.Run(p)

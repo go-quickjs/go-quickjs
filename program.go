@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"sync"
+
+	"github.com/go-quickjs/go-quickjs/internal/vm"
 )
 
 // Program is a script compiled once, which any number of runtimes may then
@@ -20,17 +22,33 @@ type Program struct {
 	strict    bool
 	// line and column place the source within the file it is named for.
 	line, column int
-	// standard is the script as the standard has it, made by Compile, or
-	// the first time a runtime without node quirks runs one that a
-	// runtime's Compile made.
-	standardOnce sync.Once
-	standard     *bytecodeFunc
-	standardErr  error
-	// quirks is the script as a runtime WithNodeQuirks compiles it, made the
-	// first time one runs it.
-	quirksOnce sync.Once
-	quirks     *bytecodeFunc
-	quirksErr  error
+	// forms is the script as each kind of runtime compiles it, by
+	// programForm: as the standard has it, made by Compile, or as a
+	// runtime WithNodeQuirks compiles it, each with its register form or
+	// without, for a runtime that runs no register code (one with the
+	// JIT). Each is made the first time a runtime of its kind runs the
+	// program, if Compile did not make it.
+	forms [4]programCode
+}
+
+// programCode is one of a Program's forms.
+type programCode struct {
+	once sync.Once
+	fn   *bytecodeFunc
+	err  error
+}
+
+// programForm is the index in Program.forms of the form compiled with node
+// quirks or not, and with no register form or with one.
+func programForm(quirks, noReg bool) int {
+	i := 0
+	if quirks {
+		i += 2
+	}
+	if noReg {
+		i++
+	}
+	return i
 }
 
 // CompileOption configures Compile, as an Option configures New.
@@ -63,31 +81,40 @@ func Compile(name, src string, opts ...CompileOption) (*Program, error) {
 	for _, o := range opts {
 		o(&c)
 	}
-	fn, err := compileScript(src, name, c.line, c.column, c.strict, false, false)
+	// The form a runtime without the JIT runs, where the process runs
+	// register code (vm.RegTierOn); any other is made when it is needed.
+	noReg := !vm.RegTierOn()
+	fn, err := compileScript(src, name, c.line, c.column, c.strict, false, false, noReg)
 	if err != nil {
 		return nil, err
 	}
-	return &Program{name: name, src: src, strict: c.strict, line: c.line, column: c.column, standard: fn}, nil
+	p := &Program{name: name, src: src, strict: c.strict, line: c.line, column: c.column}
+	p.forms[programForm(false, noReg)].set(fn)
+	return p, nil
 }
+
+// set makes c fn, compiled already.
+func (c *programCode) set(fn *bytecodeFunc) { c.once.Do(func() { c.fn = fn }) }
 
 // Compile is the package's Compile as this runtime parses source, which is
 // as V8 does where it departs from the standard if the runtime was made
 // WithNodeQuirks: what Eval would accept, a program from here accepts. The
 // program may still be run by any runtime.
 func (r *Runtime) Compile(name, src string, opts ...CompileOption) (*Program, error) {
-	if !r.nodeQuirks {
+	noReg := !r.rt.RegTier()
+	if !r.nodeQuirks && noReg == !vm.RegTierOn() {
 		return Compile(name, src, opts...)
 	}
 	var c compileConfig
 	for _, o := range opts {
 		o(&c)
 	}
-	fn, err := compileScript(src, name, c.line, c.column, c.strict, true, false)
+	fn, err := compileScript(src, name, c.line, c.column, c.strict, r.nodeQuirks, false, noReg)
 	if err != nil {
 		return nil, err
 	}
 	p := &Program{name: name, src: src, strict: c.strict, line: c.line, column: c.column}
-	p.quirksOnce.Do(func() { p.quirks = fn })
+	p.forms[programForm(r.nodeQuirks, noReg)].set(fn)
 	return p, nil
 }
 
@@ -98,26 +125,22 @@ func (r *Runtime) Compile(name, src string, opts ...CompileOption) (*Program, er
 func (r *Runtime) CodeGenerationAllowed() bool { return !r.noCodeGeneration }
 
 // code is the program as the runtime compiles source: WithNodeQuirks parses
-// and compiles some code as V8 does, which the program is then compiled for
-// too, once, however many runtimes run it.
+// and compiles some code as V8 does, and a runtime with the JIT runs no
+// register code, which the program is then compiled for too, once, however
+// many runtimes run it. Runtimes of different kinds never share code: the
+// tree a function runs as is the same in every runtime that runs it.
 func (p *Program) code(r *Runtime) (*bytecodeFunc, error) {
+	noReg := !r.rt.RegTier()
 	if r.debug {
 		// Code compiled for a debugger is the runtime's own, so the
 		// program is compiled for it each time it runs.
-		return compileScript(p.src, p.name, p.line, p.column, p.strict, r.nodeQuirks, true)
+		return compileScript(p.src, p.name, p.line, p.column, p.strict, r.nodeQuirks, true, noReg)
 	}
-	if !r.nodeQuirks {
-		p.standardOnce.Do(func() {
-			if p.standard == nil {
-				p.standard, p.standardErr = compileScript(p.src, p.name, p.line, p.column, p.strict, false, false)
-			}
-		})
-		return p.standard, p.standardErr
-	}
-	p.quirksOnce.Do(func() {
-		p.quirks, p.quirksErr = compileScript(p.src, p.name, p.line, p.column, p.strict, true, false)
+	c := &p.forms[programForm(r.nodeQuirks, noReg)]
+	c.once.Do(func() {
+		c.fn, c.err = compileScript(p.src, p.name, p.line, p.column, p.strict, r.nodeQuirks, false, noReg)
 	})
-	return p.quirks, p.quirksErr
+	return c.fn, c.err
 }
 
 // RunProgram runs a compiled program, as Eval runs source, and returns its

@@ -35,7 +35,7 @@ func TestPureStoreRefusalIsNotAMiss(t *testing.T) {
 // miss of the body that made that call -- which is the one that can never
 // be answered without a frame, and so the one that should stop trying.
 func TestPureRefusalIsTheCallersMiss(t *testing.T) {
-	r := New(Config{})
+	r := newOldTiersForTest(Config{})
 	defer r.Close()
 	v, err := r.Run(compileForTest(t, `
 		function T() { this.state = 0; this.list = [] }
@@ -59,9 +59,8 @@ func TestPureRefusalIsTheCallersMiss(t *testing.T) {
 			t.Errorf("%s missed %d times; a refusal is not its miss", name, n)
 		}
 	}
-	// A tree's call of both tries it frameless until it has missed enough;
-	// the register tier enters its register code directly, untried.
-	if n := fns[4].Object().fn().closure.pureMiss; n < pureMissLimit && !regTier.Load() {
+	// A tree's call of both tries it frameless until it has missed enough.
+	if n := fns[4].Object().fn().closure.pureMiss; n < pureMissLimit {
 		t.Errorf("both missed %d times; its calls are what cannot store", n)
 	}
 }

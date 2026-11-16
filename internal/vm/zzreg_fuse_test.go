@@ -3,6 +3,7 @@ package vm
 import (
 	"testing"
 
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/compiler"
 )
 
@@ -14,12 +15,12 @@ func regRunBoth(t *testing.T, src, want string, built int64) {
 	for _, reg := range []bool{false, true} {
 		compiler.SetRegisterForm(true)
 		fn := compileForTest(t, src)
-		compiler.SetRegisterForm(false)
+		compiler.SetRegisterForm(bytecode.RegDefault())
 		SetRegTier(reg)
 		before := RegsBuilt()
 		r := New(Config{})
 		v, err := r.Run(fn)
-		SetRegTier(false)
+		SetRegTier(bytecode.RegDefault())
 		if err != nil {
 			t.Fatalf("reg=%v: %v", reg, err)
 		}

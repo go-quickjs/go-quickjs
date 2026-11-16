@@ -347,6 +347,10 @@ type Runtime struct {
 	// regFree is the register frames' states not in use, a list by their
 	// next (regEnter): a frame's handlers are given its state.
 	regFree *regState
+	// oldTiers runs the runtime's code on the stack interpreter and the
+	// tree tier, as a runtime with the JIT runs it (regOn), for tests of
+	// those tiers.
+	oldTiers bool
 	// concatMemo is the short strings joins made, which a join making the
 	// same text returns (joinShort), made by the first join.
 	concatMemo *concatMemo

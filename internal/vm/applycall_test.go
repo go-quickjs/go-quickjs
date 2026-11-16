@@ -3,6 +3,7 @@ package vm
 import (
 	"testing"
 
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/compiler"
 )
 
@@ -99,12 +100,12 @@ func TestForwarderMethodsByShape(t *testing.T) {
 	for _, mode := range []string{"stack", "tree", "reg"} {
 		compiler.SetRegisterForm(mode == "reg")
 		fn := compileForTest(t, src)
-		compiler.SetRegisterForm(false)
+		compiler.SetRegisterForm(bytecode.RegDefault())
 		SetTreeTier(mode != "stack")
 		SetRegTier(mode == "reg")
 		r := New(Config{})
 		v, err := r.Run(fn)
-		SetRegTier(false)
+		SetRegTier(bytecode.RegDefault())
 		SetTreeTier(true)
 		if err != nil {
 			t.Fatalf("%s: %v", mode, err)

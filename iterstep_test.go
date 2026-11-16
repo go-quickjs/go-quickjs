@@ -1,6 +1,10 @@
 package quickjs_test
 
-import "testing"
+import (
+	"testing"
+
+	quickjs "github.com/go-quickjs/go-quickjs"
+)
 
 // TestBuiltinIteratorSteps covers loops over a Map, Set or array iterator and
 // over a generator, which step the built-in next themselves rather than calling it
@@ -37,6 +41,11 @@ func TestBuiltinIteratorSteps(t *testing.T) {
 		{"next keeps its frame", `function* g() { yield new Error().stack.split("\n")[2].trim() }
 		  var a; for (a of g()); var b = [...g()][0], c = g().next().value;
 		  [a == c, b == c, c].join()`, "true,true,at g.next (<anonymous>)"},
+		// The loop's position in its function's frame, where nothing before
+		// the loop in the function has a line of its own.
+		{"a loop's frame keeps its line", `function* g() { yield new Error().stack.split("\n")[3].trim() }
+		  function f() { var out = []; for (const v of g()) out.push(v); return out[0] }
+		  f()`, "at f (<eval>:2:50)"},
 		{"generator throws", `function* g() { yield 1; throw new RangeError("stop") }
 		  var r = []
 		  try { for (var v of g()) r.push(v) } catch (e) { r.push(e.name) }
@@ -76,5 +85,25 @@ func TestBuiltinIteratorSteps(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			checkEval(t, tc.src, tc.want)
 		})
+	}
+}
+
+// TestForAwaitCloseLine pins the line a for await's frame names where the
+// iterator's return method, closing the loop at a break, gives back no
+// object: the loop's expression's, where each turn's await is. The await
+// had been given the position of an instruction's index, a line of
+// another function's.
+func TestForAwaitCloseLine(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	evalString(t, rt, `var line
+async function f() {
+  try {
+    for await (const v of { [Symbol.asyncIterator]() { return { next() { return { value: 1, done: false } }, return() { return 5 } } } }) { break }
+  } catch (e) { line = e.stack.split("\n")[1].trim() }
+}
+f()`)
+	if got, want := evalString(t, rt, "line"), "at f (<eval>:4:27)"; got != want {
+		t.Errorf("got %s, want %s", got, want)
 	}
 }

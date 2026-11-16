@@ -142,7 +142,8 @@ func usage() {
 // labelExe is placement n of a compared label's build and what its runs add
 // to their environment: a label NAME@VAR=VALUE[@VAR=VALUE] runs NAME's
 // build with those variables, so that one build can be compared with
-// itself under another setting, as QJS_REG=1 runs the register tier.
+// itself under another setting, as QJS_REG=0 runs the old tiers in place of
+// the register tier.
 func labelExe(out, label string, n int) (string, []string) {
 	parts := strings.Split(label, "@")
 	return exePath(out, parts[0], n), parts[1:]

@@ -213,11 +213,22 @@ func listSites[_ any](p *programSites, fn *bytecode.Function, constant int) bool
 
 // seedSites starts the caches of cl, the closure of the function at *fn in
 // p's, whose literals' roots are at *at, and of the functions it makes.
+//
+// A site of the function's register code is past its own caches where the
+// closure, just prepared, has not been given the code's yet (regExtend),
+// as in a realm the program has not run in: they are made here, as
+// regExtend makes them, which keeps what is in them.
 func seedSites[_ any](p *programSites, cl *closure, at, fn *int) {
 	f := p.fns[*fn]
 	*fn++
 	for range f.sites {
-		cl.ic[p.at[*at]].shape = p.roots[*at]
+		site := int(p.at[*at])
+		if site >= len(cl.ic) {
+			ic := newPropCaches(site)
+			copy(ic, cl.ic)
+			cl.ic = ic
+		}
+		cl.ic[site].shape = p.roots[*at]
 		*at++
 	}
 	for range f.inner {

@@ -1,7 +1,6 @@
 package compiler
 
 import (
-	"os"
 	"sync/atomic"
 
 	"github.com/go-quickjs/go-quickjs/internal/ast"
@@ -12,10 +11,11 @@ import (
 // registerForm turns the register backend on: each function the stack
 // compiler compiles is also compiled into register code, from its AST and
 // the record of its resolution (regcomp), where the backend covers it.
-// QJS_REG in the environment turns it on.
+// It is on where the register interpreter is (bytecode.RegDefault), but
+// for a compile with Options.NoRegister.
 var registerForm atomic.Bool
 
-func init() { registerForm.Store(os.Getenv("QJS_REG") != "") }
+func init() { registerForm.Store(bytecode.RegDefault()) }
 
 // SetRegisterForm turns the register backend on or off, for tests.
 func SetRegisterForm(on bool) { registerForm.Store(on) }
@@ -75,8 +75,11 @@ func regTopCode(body []ast.Stmt, fn *bytecode.Function, rec *regcomp.Record) {
 	case rec == nil:
 	case rec.Bail:
 		regcomp.Refuse(fn, "a name the record resolves two ways")
+		fn.Reg = bytecode.RegNone()
 	default:
-		fn.Reg = bytecode.RegReady(regcomp.CompileTop(body, fn, rec))
+		if fn.Reg = bytecode.RegReady(regcomp.CompileTop(body, fn, rec)); fn.Reg == nil {
+			fn.Reg = bytecode.RegNone()
+		}
 	}
 }
 

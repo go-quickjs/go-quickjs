@@ -48,9 +48,9 @@ for (var k = 0; k < 20; k++) work(pt, 5);
 `
 	compiler.SetRegisterForm(true)
 	prog := compileForTest(t, src)
-	compiler.SetRegisterForm(false)
+	compiler.SetRegisterForm(bytecode.RegDefault())
 	SetRegTier(true)
-	defer SetRegTier(false)
+	defer SetRegTier(bytecode.RegDefault())
 	r := New(Config{})
 	defer r.Close()
 	if _, err := r.Run(prog); err != nil {

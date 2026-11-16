@@ -189,7 +189,7 @@ func TestRegExpDeadExecKinds(t *testing.T) {
 	} {
 		for _, tree := range []bool{true, false} {
 			SetTreeTier(tree)
-			r := New(Config{})
+			r := newOldTiersForTest(Config{})
 			if _, err := r.Run(compileForTest(t, regexpDeadKindsSrc)); err != nil {
 				t.Fatal(err)
 			}
@@ -212,7 +212,7 @@ func TestRegExpDeadExecKinds(t *testing.T) {
 
 	// What a loop of them makes: nothing for each call, where an array
 	// and two strings had been made.
-	r := New(Config{})
+	r := newOldTiersForTest(Config{})
 	defer r.Close()
 	if _, err := r.Run(compileForTest(t, regexpDeadKindsSrc)); err != nil {
 		t.Fatal(err)

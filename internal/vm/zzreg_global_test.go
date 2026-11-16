@@ -31,9 +31,9 @@ func TestRegGlobalEpoch(t *testing.T) {
 	for i, s := range steps {
 		fns[i] = compileForTest(t, s.src)
 	}
-	compiler.SetRegisterForm(false)
+	compiler.SetRegisterForm(bytecode.RegDefault())
 	SetRegTier(true)
-	defer SetRegTier(false)
+	defer SetRegTier(bytecode.RegDefault())
 	before := RegsBuilt()
 	r := New(Config{})
 	defer r.Close()

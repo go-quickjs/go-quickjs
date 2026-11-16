@@ -10,7 +10,8 @@ import (
 
 // The register interpreter (docs/register-interpreter.md), stage 1: a
 // function the register form covers runs as its register code, every other
-// as before. QJS_REG in the environment turns it on.
+// as before. It is on where bytecode.RegDefault says, in a runtime without
+// the JIT (Runtime.RegTier).
 //
 // A frame's registers are a window of the runtime's value stack laid out as
 // the stack form's frame is -- the locals, then the temporaries -- so that a

@@ -175,8 +175,9 @@ func (d *writer) function(path string, fn *bytecode.Function) {
 			}
 			continue
 		case "Reg":
-			// The register backend's code, compiled only where QJS_REG
-			// turns it on, and then printed in its own listing: a
+			// The register backend's code, compiled only where the
+			// register interpreter is on (bytecode.RegDefault, QJS_REG),
+			// and then printed in its own listing: a
 			// revision without the field writes the same.
 			// Read by reflection, as the tool is built at revisions without
 			// the field too.

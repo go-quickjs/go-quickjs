@@ -174,7 +174,7 @@ func init() {
 
 	planTreeNew = func(fd *funcData) {
 		cl := fd.closure
-		if cl == nil || fd.native != nil || fd.bound || cl.fn.Reg != nil {
+		if cl == nil || fd.native != nil || fd.bound || cl.fn.Reg != nil && !cl.fn.OldTiers() {
 			// Register mode's code is constructed as its own
 			// (constructRun), and super() calls it so (callObject).
 			fd.newPlanned = true

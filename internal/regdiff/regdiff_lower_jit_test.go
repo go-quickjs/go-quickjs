@@ -427,7 +427,7 @@ func TestRegLowerEvaluate(t *testing.T) {
 	t.Cleanup(func() {
 		// After every case, the parallel ones' included.
 		regDiffHook = nil
-		env := os.Getenv("QJS_REG") != ""
+		env := bytecode.RegDefault()
 		compiler.SetRegisterForm(env)
 		vm.SetRegTier(env)
 		regLowerReport(t, st)

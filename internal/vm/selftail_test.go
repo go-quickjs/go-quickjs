@@ -90,16 +90,15 @@ func TestSelfTailRestarts(t *testing.T) {
 		SetTreeTier(tree)
 		for _, tc := range cases {
 			n = 0
-			r := New(Config{})
+			r := newOldTiersForTest(Config{})
 			_, err := r.Run(compileForTest(t, tc.src))
 			r.Close()
 			if err != nil {
 				t.Fatal(err)
 			}
 			want := tc.want
-			if !tree || regTier.Load() {
-				// The tree's restarts; register code's tail calls are its
-				// own (the answers are compared all the same).
+			if !tree {
+				// The tree's restarts.
 				want = 0
 			}
 			if n != want {

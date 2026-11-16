@@ -228,10 +228,11 @@ func TestConformance(t *testing.T) {
 	}
 	t.Logf("test262: %d passed, %d failed, %d skipped (%.2f%% of executed)",
 		pass, fail, skip, rate)
-	if os.Getenv("QJS_REG") != "" {
-		// Register mode runs every test as register code alone
-		// (vm.RegFallbacks): nothing in the stack interpreter or the
-		// tree tier, nothing entered through their frames.
+	if vm.RegTierOn() && !*jitFlag {
+		// The register tier, where it is on, runs every test as register
+		// code alone (vm.RegFallbacks): nothing in the stack interpreter
+		// or the tree tier, nothing entered through their frames. A
+		// runtime with the JIT runs those tiers instead.
 		n, by := vm.RegFallbacks()
 		t.Logf("register mode: %d fallbacks to the other tiers", n)
 		if n != 0 {

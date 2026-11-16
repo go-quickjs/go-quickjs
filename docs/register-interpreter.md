@@ -14,6 +14,31 @@ cover yet.
 It starts from what was measured, because two earlier attempts at register
 forms went badly and the reasons decide most of what follows.
 
+## Status
+
+The register interpreter is the default on amd64, where its handlers are
+native (`internal/vm/zzzyn_native_*`): every function is compiled to
+register code and run as it, none falling back to the old tiers. Other
+architectures, arm64 included, keep the stack interpreter and the tree
+tier by default, and move over as their native handlers land; their
+register code runs on the Go handler table (`zzreg_table*.go`), which is
+slower than the tiers it would replace. The default is one constant an
+architecture, `regArch` in `internal/bytecode/regdefault_*.go`, read
+through `bytecode.RegDefault`.
+
+A runtime with the JIT runs the old tiers on every architecture, since the
+JIT reads the stack form alone: the host compiles its code with no
+register form (`compiler.Options.NoRegister`, `vm.Runtime.RegTier`), and a
+`Program` keeps a form for each kind of runtime, so that no function's tree
+is shared between the two. This stays until the JIT reads register code
+(Stage 3), when the old tiers are removed.
+
+`QJS_REG` in the environment overrides the default: `QJS_REG=0` runs the
+old tiers everywhere, `QJS_REG=1` the register interpreter everywhere. The
+first is temporary, for comparing with the tiers being replaced, and goes
+with them; the second is how arm64 is tested until it is the default there.
+`QJS_NONATIVE=1` runs register code on the Go handlers on amd64 too.
+
 ## The measure
 
 The interpreter's core operations run about twice as slow as a pure-Go
@@ -963,7 +988,9 @@ for a hit, and calls out for anything else:
 During the migration the tree tier and the JIT keep consuming the stack
 form, which the stack compiler still emits for every function: a function
 with register code is run by the register interpreter, and a function
-without it by the tiers that run it today.
+without it by the tiers that run it today. A runtime with the JIT runs
+neither register code nor the register form's compiles (see Status), so
+that its functions reach the JIT as before.
 
 Whether the tree tier is still needed is a measurement, not a choice. The
 kernels show the register interpreter level with it on `am3`, the loop its
@@ -1040,7 +1067,8 @@ figures stay recorded above; the commits named there keep the code.
 - Globals with the lexical epoch; `get_method` into the call window;
   immediate element indices.
 - The register tier opt-in (`QJS_REG`), then the default for the functions
-  it covers once its measurements show a net gain.
+  it covers once its measurements show a net gain: the default on amd64
+  now (see Status).
 
 To ship, it needs: test262 in all four modes with the register tier on, its
 own tests for each mechanism (a count of register functions built, a call

@@ -117,11 +117,11 @@ func nativeRunSrc(t testing.TB, src string, native bool) string {
 	t.Helper()
 	compiler.SetRegisterForm(true)
 	fn := compileForTest(t, src)
-	compiler.SetRegisterForm(false)
+	compiler.SetRegisterForm(bytecode.RegDefault())
 	SetRegTier(true)
 	was := regNativeOn
 	regNativeOn = native
-	defer func() { SetRegTier(false); regNativeOn = was }()
+	defer func() { SetRegTier(bytecode.RegDefault()); regNativeOn = was }()
 	r := New(Config{})
 	defer r.Close()
 	v, err := r.Run(fn)
@@ -464,11 +464,11 @@ func TestRegNativeConcurrent(t *testing.T) {
 		"call_fib(177 * 20); var a = global_res; call_mutual(65 * 20); a + ' ' + global_res"
 	kfn := compileForTest(t, kern)
 	ffn := compileForTest(t, nativeFastSrc)
-	compiler.SetRegisterForm(false)
+	compiler.SetRegisterForm(bytecode.RegDefault())
 	SetRegTier(true)
 	was := regNativeOn
 	regNativeOn = true
-	defer func() { SetRegTier(false); regNativeOn = was }()
+	defer func() { SetRegTier(bytecode.RegDefault()); regNativeOn = was }()
 	run := func() (string, error) {
 		r := New(Config{})
 		defer r.Close()
@@ -535,10 +535,10 @@ func TestRegNativeOpMix(t *testing.T) {
 	}
 	compiler.SetRegisterForm(true)
 	defFn := compileForTest(t, "if (typeof console === 'undefined') globalThis.console = { log: function () {} };\n"+defs)
-	compiler.SetRegisterForm(false)
+	compiler.SetRegisterForm(bytecode.RegDefault())
 	SetRegTier(true)
 	was := regNativeOn
-	defer func() { SetRegTier(false); regNativeOn = was }()
+	defer func() { SetRegTier(bytecode.RegDefault()); regNativeOn = was }()
 	nativeCounting(t)
 	var counts [256]int64
 	orig := regTable
@@ -550,7 +550,7 @@ func TestRegNativeOpMix(t *testing.T) {
 		}
 		compiler.SetRegisterForm(true)
 		call := compileForTest(t, fmt.Sprintf("String(%s(%s))", name, n))
-		compiler.SetRegisterForm(false)
+		compiler.SetRegisterForm(bytecode.RegDefault())
 		var before, after [256]int64
 		run := func(native bool) int64 {
 			regNativeOn = native
@@ -636,10 +636,10 @@ func TestRegNativeFileMix(t *testing.T) {
 	src.WriteString(os.Getenv("QJS_NATIVE_EXPR"))
 	compiler.SetRegisterForm(true)
 	fn := compileForTest(t, src.String())
-	compiler.SetRegisterForm(false)
+	compiler.SetRegisterForm(bytecode.RegDefault())
 	SetRegTier(true)
 	was := regNativeOn
-	defer func() { SetRegTier(false); regNativeOn = was }()
+	defer func() { SetRegTier(bytecode.RegDefault()); regNativeOn = was }()
 	nativeCounting(t)
 	var counts, slow [256]int64
 	orig, origSlow := regTable, regSlowTable

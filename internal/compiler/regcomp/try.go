@@ -562,7 +562,10 @@ func (g *gen) forOfStmt(left ast.Node, right ast.Expr, body ast.Stmt, await, in 
 	}
 	src := g.expr(right, -1)
 	cursor := g.alloc()
-	g.at(pos)
+	// The cursor is made, and stepped, at the position the stack form's
+	// for_of_start and iter_next_or_jump have, which no line of their own
+	// starts: the last of the expression's, or before it (forHead).
+	head := g.forHead(pos)
 	g.emit(bytecode.MakeR(cursorStart(await, in), 0, r16(cursor), r16(src), 0))
 	l := g.pushLoop(label)
 	g.bind(l.cont)
@@ -575,9 +578,9 @@ func (g *gen) forOfStmt(left ast.Node, right ast.Expr, body ast.Stmt, await, in 
 		// its binding is initialized.
 		val = g.alloc()
 	}
+	g.at(head)
 	g.debugMark(int(left.Pos()))
-	g.at(pos)
-	g.iterStep(val, cursor, l.brk, await)
+	g.iterStep(val, cursor, l.brk, await, int(right.Pos()))
 	var p *prot
 	if !in {
 		p = &prot{to: g.newMark(), reg: g.alloc(), cursor: cursor, iterOf: l, async: await}
@@ -630,7 +633,7 @@ func (g *gen) forOfPattern(target ast.Expr, right ast.Expr, body ast.Stmt, await
 	}
 	src := g.expr(right, -1)
 	cursor := g.alloc()
-	g.at(pos)
+	head := g.forHead(pos)
 	g.emit(bytecode.MakeR(cursorStart(await, in), 0, r16(cursor), r16(src), 0))
 	l := g.pushLoop(label)
 	g.bind(l.cont)
@@ -640,9 +643,9 @@ func (g *gen) forOfPattern(target ast.Expr, right ast.Expr, body ast.Stmt, await
 		g.patternBindings(target)
 	}
 	val := g.alloc()
+	g.at(head)
 	g.debugMark(int(left.Pos()))
-	g.at(pos)
-	g.iterStep(val, cursor, l.brk, await)
+	g.iterStep(val, cursor, l.brk, await, int(right.Pos()))
 	var p *prot
 	if !in {
 		p = &prot{to: g.newMark(), reg: g.alloc(), cursor: cursor, iterOf: l, async: await}
@@ -663,6 +666,23 @@ func (g *gen) forOfPattern(target ast.Expr, right ast.Expr, body ast.Stmt, await
 	g.popLoop()
 }
 
+// forHead is the position a for-of or a for-in loop at pos makes and steps
+// its cursor at, once its expression is compiled: the position the
+// expression's code left, as the stack form's cursor instructions, which
+// record none, have the line of the expression's last instruction that
+// records one. The loop's own position where the expression left none
+// before it. A stack trace through a step -- a generator's body, an
+// iterator's next -- names the line of that instruction, through SrcPC,
+// which maps a position to the stack form's line at or before it: the
+// loop's own position comes before any where the function's code before
+// the loop records none, and named no line at all.
+func (g *gen) forHead(pos int) int {
+	if g.cur < int32(pos) {
+		g.at(pos)
+	}
+	return int(g.cur)
+}
+
 // cursorStart is the operation that makes a loop's cursor.
 func cursorStart(await, in bool) bytecode.ROp {
 	switch {
@@ -677,14 +697,16 @@ func cursorStart(await, in bool) bytecode.ROp {
 // iterStep steps a loop's cursor into val, jumping to brk where it has no
 // value: iter_next, or for a for await, the next method's result awaited
 // and unpacked, in a register of its own, which code that runs meanwhile
-// could otherwise see in the binding.
-func (g *gen) iterStep(val, cursor int, brk *mark, await bool) {
+// could otherwise see in the binding. The await is at awaitPos, the loop's
+// expression's, where the stack form's is.
+func (g *gen) iterStep(val, cursor int, brk *mark, await bool, awaitPos int) {
 	if !await {
 		g.jump(bytecode.MakeR(bytecode.RIterNext, 0, r16(val), r16(cursor), 0), brk, true)
 		return
 	}
 	t := g.alloc()
 	g.cold(bytecode.RAsyncIterNext, t, cursor, 0)
+	g.at(awaitPos)
 	g.cold(bytecode.RAwait, t, t, 0)
 	g.cold(bytecode.RIterResult, val, t, 0)
 	g.jump(bytecode.MakeR(bytecode.RJmp, 0, 0, 0, 0), brk, false)

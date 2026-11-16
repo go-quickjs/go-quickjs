@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/compiler"
 	"github.com/go-quickjs/go-quickjs/internal/parser"
 	"github.com/go-quickjs/go-quickjs/internal/vm"
@@ -29,17 +30,17 @@ func TestRegNativeCaches(t *testing.T) {
 			compiler.SetRegisterForm(true)
 			p, err := parser.Parse(text, parser.Options{})
 			if err != nil {
-				compiler.SetRegisterForm(false)
+				compiler.SetRegisterForm(bytecode.RegDefault())
 				return "", false
 			}
 			fn, err := compiler.Compile(p, compiler.Options{Text: text})
-			compiler.SetRegisterForm(false)
+			compiler.SetRegisterForm(bytecode.RegDefault())
 			if err != nil {
 				return "", false
 			}
 			vm.SetRegTier(true)
 			was := vm.SetRegNative(native)
-			defer func() { vm.SetRegTier(false); vm.SetRegNative(was) }()
+			defer func() { vm.SetRegTier(bytecode.RegDefault()); vm.SetRegNative(was) }()
 			r := vm.New(vm.Config{})
 			defer r.Close()
 			r.Run(fn)

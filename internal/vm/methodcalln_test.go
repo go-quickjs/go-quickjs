@@ -61,7 +61,7 @@ func TestMethodCallNodesByCount(t *testing.T) {
 	defer func() { methodCallN = orig }()
 	for _, tree := range []bool{true, false} {
 		previous := treeTier.Swap(tree)
-		r := New(Config{})
+		r := newOldTiersForTest(Config{})
 		v, err := r.Run(compileForTest(t, src))
 		r.Close()
 		treeTier.Store(previous)
@@ -72,8 +72,7 @@ func TestMethodCallNodesByCount(t *testing.T) {
 			t.Errorf("tree %v: got %s\nwant %s", tree, got, want)
 		}
 	}
-	// Register code builds no trees for what it covers.
-	if built < 20 && !regTier.Load() {
+	if built < 20 {
 		t.Errorf("%d nodes built by count, want the run's and viaThis's", built)
 	}
 }
@@ -129,7 +128,7 @@ func TestCallNodesByCount(t *testing.T) {
 	defer func() { callOperandsN = orig }()
 	for _, tree := range []bool{true, false} {
 		previous := treeTier.Swap(tree)
-		r := New(Config{})
+		r := newOldTiersForTest(Config{})
 		v, err := r.Run(compileForTest(t, src))
 		r.Close()
 		treeTier.Store(previous)
@@ -140,7 +139,7 @@ func TestCallNodesByCount(t *testing.T) {
 			t.Errorf("tree %v: got %s\nwant %s", tree, got, want)
 		}
 	}
-	if built < 15 && !regTier.Load() {
+	if built < 15 {
 		t.Errorf("%d nodes built by count, want the run's", built)
 	}
 }
@@ -196,7 +195,7 @@ func TestRestCallFromNodes(t *testing.T) {
 	defer func() { restCall = orig }()
 	for _, tree := range []bool{true, false} {
 		previous := treeTier.Swap(tree)
-		r := New(Config{})
+		r := newOldTiersForTest(Config{})
 		v, err := r.Run(compileForTest(t, src))
 		r.Close()
 		treeTier.Store(previous)
@@ -207,10 +206,7 @@ func TestRestCallFromNodes(t *testing.T) {
 			t.Errorf("tree %v: got %s\nwant %s", tree, got, want)
 		}
 	}
-	// The tree's accounting: in the register tier the functions are
-	// register code, their tail calls register code's (the answers are
-	// compared above all the same).
-	if made < 20 && !regTier.Load() {
+	if made < 20 {
 		t.Errorf("%d calls made by restCall", made)
 	}
 }

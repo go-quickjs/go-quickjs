@@ -219,7 +219,7 @@ func runProgramForTest(t testing.TB, r *Runtime, fn *bytecode.Function) Value {
 func TestProgramRerunsMakeNoShapes(t *testing.T) {
 	for _, s := range rerunScripts[:5] {
 		t.Run(s.name, func(t *testing.T) {
-			r := New(Config{})
+			r := newOldTiersForTest(Config{})
 			defer r.Close()
 			fn := compileForTest(t, s.src)
 			runProgramForTest(t, r, fn)
