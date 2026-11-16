@@ -1139,6 +1139,80 @@ func (q *jitRegSnapshot) BigIntFailed(pc int) (r0 bool) {
 	return r0
 }
 
+func (q *jitRegSnapshot) InlineExit(pc int) (r0 bool) {
+	a := q.get(snapInlineExit, int64(pc))
+	if a == nil {
+		return
+	}
+	r0, _ = a[0].(bool)
+	return r0
+}
+
+func (q *jitRegSnapshot) KeepLimit() (r0 int) {
+	a := q.get(snapKeepLimit, 0)
+	if a == nil {
+		return
+	}
+	r0, _ = a[0].(int)
+	return r0
+}
+
+func (q *jitRegSnapshot) StringRead(pc int) (r0 bool) {
+	a := q.get(snapStringRead, int64(pc))
+	if a == nil {
+		return
+	}
+	r0, _ = a[0].(bool)
+	return r0
+}
+
+func (q *jitRegSnapshot) TypedRead(pc int) (r0 bool) {
+	a := q.get(snapTypedRead, int64(pc))
+	if a == nil {
+		return
+	}
+	r0, _ = a[0].(bool)
+	return r0
+}
+
+func (q *jitRegSnapshot) TypedBigRead(pc int) (r0 bool, r1 bool) {
+	a := q.get(snapTypedBigRead, int64(pc))
+	if a == nil {
+		return
+	}
+	r0, _ = a[0].(bool)
+	r1, _ = a[1].(bool)
+	return r0, r1
+}
+
+func (q *jitRegSnapshot) KeyedRead(pc int) (r0 bool) {
+	a := q.get(snapKeyedRead, int64(pc))
+	if a == nil {
+		return
+	}
+	r0, _ = a[0].(bool)
+	return r0
+}
+
+func (q *jitRegSnapshot) KeyedWrite(pc int) (r0 bool) {
+	a := q.get(snapKeyedWrite, int64(pc))
+	if a == nil {
+		return
+	}
+	r0, _ = a[0].(bool)
+	return r0
+}
+
+func (q *jitRegSnapshot) UpvalueTyped(pc int) (r0 uint8, r1 bool) {
+	a := q.get(snapUpvalueTyped, int64(pc))
+	if a == nil {
+		return
+	}
+	r0, _ = a[0].(uint8)
+	r1, _ = a[1].(bool)
+	return r0, r1
+}
+
 func (q *jitRegSnapshot) Property(pc int) (r0 ssa.PropertySite, r1 bool) {
 	a := q.get(snapProperty, int64(pc))
 	if a == nil {
@@ -1484,8 +1558,86 @@ func (q *jitRegSnapshot) ForEach(pc int) (r0 ssa.ForEachSite, r1 bool) {
 	return r0, r1
 }
 
+func (q *jitRegSnapshot) InstanceOf(pc int) (r0 ssa.InstanceOfSite, r1 bool) {
+	a := q.get(snapInstanceOf, int64(pc))
+	if a == nil {
+		return
+	}
+	r0, _ = a[0].(ssa.InstanceOfSite)
+	r1, _ = a[1].(bool)
+	return r0, r1
+}
+
+func (q *jitRegSnapshot) IndexOf(pc int) (r0 uintptr, r1 int, r2 bool) {
+	a := q.get(snapIndexOf, int64(pc))
+	if a == nil {
+		return
+	}
+	r0, _ = a[0].(uintptr)
+	r1, _ = a[1].(int)
+	r2, _ = a[2].(bool)
+	return r0, r1, r2
+}
+
+func (q *jitRegSnapshot) ParseInt(pc int) (r0 uintptr, r1 bool) {
+	a := q.get(snapParseInt, int64(pc))
+	if a == nil {
+		return
+	}
+	r0, _ = a[0].(uintptr)
+	r1, _ = a[1].(bool)
+	return r0, r1
+}
+
+func (q *jitRegSnapshot) BigString(pc int) (r0 uintptr, r1 bool) {
+	a := q.get(snapBigString, int64(pc))
+	if a == nil {
+		return
+	}
+	r0, _ = a[0].(uintptr)
+	r1, _ = a[1].(bool)
+	return r0, r1
+}
+
+func (q *jitRegSnapshot) Closure(pc int) (r0 ssa.ClosureSite, r1 bool) {
+	a := q.get(snapClosure, int64(pc))
+	if a == nil {
+		return
+	}
+	r0, _ = a[0].(ssa.ClosureSite)
+	r1, _ = a[1].(bool)
+	return r0, r1
+}
+
+func (q *jitRegSnapshot) CellsPool() (r0 uintptr, r1 []int32, r2 bool) {
+	a := q.get(snapCellsPool, 0)
+	if a == nil {
+		return
+	}
+	r0, _ = a[0].(uintptr)
+	r1, _ = a[1].([]int32)
+	r1 = jitSnapCopy(r1)
+	r2, _ = a[2].(bool)
+	return r0, r1, r2
+}
+
+func (q *jitRegSnapshot) PureBody() (r0 bool) {
+	a := q.get(snapPureBody, 0)
+	if a == nil {
+		return
+	}
+	r0, _ = a[0].(bool)
+	return r0
+}
+
 // askOnceReg asks fb the questions of no argument.
 func (s *jitSnapshot) askOnceReg(fb *jitRegFeedback) {
+	{
+		before := s.begin(fb.fb)
+		r0 := fb.KeepLimit()
+		s.end(fb.fb, before, snapKeepLimit, 0)
+		s.put(snapKeepLimit, 0, r0)
+	}
 	{
 		before := s.begin(fb.fb)
 		r0 := fb.GoCalls()
@@ -1540,6 +1692,18 @@ func (s *jitSnapshot) askOnceReg(fb *jitRegFeedback) {
 		s.end(fb.fb, before, snapWalkedCloseCell, 0)
 		s.put(snapWalkedCloseCell, 0, r0)
 	}
+	{
+		before := s.begin(fb.fb)
+		r0, r1, r2 := fb.CellsPool()
+		s.end(fb.fb, before, snapCellsPool, 0)
+		s.put(snapCellsPool, 0, r0, r1, r2)
+	}
+	{
+		before := s.begin(fb.fb)
+		r0 := fb.PureBody()
+		s.end(fb.fb, before, snapPureBody, 0)
+		s.put(snapPureBody, 0, r0)
+	}
 }
 
 // The askers of the register feedback's methods of a PC, as
@@ -1569,6 +1733,69 @@ func jitRegSnapAskBigIntFailed(s *jitSnapshot, fb *jitRegFeedback, pc int) {
 	s.end(fb.fb, before, snapBigIntFailed, int64(pc))
 	if jitSnapAnswered(r0) {
 		s.put(snapBigIntFailed, int64(pc), r0)
+	}
+}
+
+func jitRegSnapAskInlineExit(s *jitSnapshot, fb *jitRegFeedback, pc int) {
+	before := s.begin(fb.fb)
+	r0 := fb.InlineExit(pc)
+	s.end(fb.fb, before, snapInlineExit, int64(pc))
+	if jitSnapAnswered(r0) {
+		s.put(snapInlineExit, int64(pc), r0)
+	}
+}
+
+func jitRegSnapAskStringRead(s *jitSnapshot, fb *jitRegFeedback, pc int) {
+	before := s.begin(fb.fb)
+	r0 := fb.StringRead(pc)
+	s.end(fb.fb, before, snapStringRead, int64(pc))
+	if jitSnapAnswered(r0) {
+		s.put(snapStringRead, int64(pc), r0)
+	}
+}
+
+func jitRegSnapAskTypedRead(s *jitSnapshot, fb *jitRegFeedback, pc int) {
+	before := s.begin(fb.fb)
+	r0 := fb.TypedRead(pc)
+	s.end(fb.fb, before, snapTypedRead, int64(pc))
+	if jitSnapAnswered(r0) {
+		s.put(snapTypedRead, int64(pc), r0)
+	}
+}
+
+func jitRegSnapAskTypedBigRead(s *jitSnapshot, fb *jitRegFeedback, pc int) {
+	before := s.begin(fb.fb)
+	r0, r1 := fb.TypedBigRead(pc)
+	s.end(fb.fb, before, snapTypedBigRead, int64(pc))
+	if jitSnapAnswered(r1) {
+		s.put(snapTypedBigRead, int64(pc), r0, r1)
+	}
+}
+
+func jitRegSnapAskKeyedRead(s *jitSnapshot, fb *jitRegFeedback, pc int) {
+	before := s.begin(fb.fb)
+	r0 := fb.KeyedRead(pc)
+	s.end(fb.fb, before, snapKeyedRead, int64(pc))
+	if jitSnapAnswered(r0) {
+		s.put(snapKeyedRead, int64(pc), r0)
+	}
+}
+
+func jitRegSnapAskKeyedWrite(s *jitSnapshot, fb *jitRegFeedback, pc int) {
+	before := s.begin(fb.fb)
+	r0 := fb.KeyedWrite(pc)
+	s.end(fb.fb, before, snapKeyedWrite, int64(pc))
+	if jitSnapAnswered(r0) {
+		s.put(snapKeyedWrite, int64(pc), r0)
+	}
+}
+
+func jitRegSnapAskUpvalueTyped(s *jitSnapshot, fb *jitRegFeedback, pc int) {
+	before := s.begin(fb.fb)
+	r0, r1 := fb.UpvalueTyped(pc)
+	s.end(fb.fb, before, snapUpvalueTyped, int64(pc))
+	if jitSnapAnswered(r1) {
+		s.put(snapUpvalueTyped, int64(pc), r0, r1)
 	}
 }
 
@@ -1807,6 +2034,51 @@ func jitRegSnapAskForEach(s *jitSnapshot, fb *jitRegFeedback, pc int) {
 	}
 }
 
+func jitRegSnapAskInstanceOf(s *jitSnapshot, fb *jitRegFeedback, pc int) {
+	before := s.begin(fb.fb)
+	r0, r1 := fb.InstanceOf(pc)
+	s.end(fb.fb, before, snapInstanceOf, int64(pc))
+	if jitSnapAnswered(r1) {
+		s.put(snapInstanceOf, int64(pc), r0, r1)
+	}
+}
+
+func jitRegSnapAskIndexOf(s *jitSnapshot, fb *jitRegFeedback, pc int) {
+	before := s.begin(fb.fb)
+	r0, r1, r2 := fb.IndexOf(pc)
+	s.end(fb.fb, before, snapIndexOf, int64(pc))
+	if jitSnapAnswered(r2) {
+		s.put(snapIndexOf, int64(pc), r0, r1, r2)
+	}
+}
+
+func jitRegSnapAskParseInt(s *jitSnapshot, fb *jitRegFeedback, pc int) {
+	before := s.begin(fb.fb)
+	r0, r1 := fb.ParseInt(pc)
+	s.end(fb.fb, before, snapParseInt, int64(pc))
+	if jitSnapAnswered(r1) {
+		s.put(snapParseInt, int64(pc), r0, r1)
+	}
+}
+
+func jitRegSnapAskBigString(s *jitSnapshot, fb *jitRegFeedback, pc int) {
+	before := s.begin(fb.fb)
+	r0, r1 := fb.BigString(pc)
+	s.end(fb.fb, before, snapBigString, int64(pc))
+	if jitSnapAnswered(r1) {
+		s.put(snapBigString, int64(pc), r0, r1)
+	}
+}
+
+func jitRegSnapAskClosure(s *jitSnapshot, fb *jitRegFeedback, pc int) {
+	before := s.begin(fb.fb)
+	r0, r1 := fb.Closure(pc)
+	s.end(fb.fb, before, snapClosure, int64(pc))
+	if jitSnapAnswered(r1) {
+		s.put(snapClosure, int64(pc), r0, r1)
+	}
+}
+
 // jitRegSnapAskers are the register askers by method, nil for one the
 // register feedback has not or of another argument.
 var jitRegSnapAskers [len(jitSnapNames)]func(s *jitSnapshot, fb *jitRegFeedback, pc int)
@@ -1818,6 +2090,14 @@ const jitRegSnapMethods uint64 = 0 |
 	1<<snapBigInt |
 	1<<snapBigIntWide |
 	1<<snapBigIntFailed |
+	1<<snapInlineExit |
+	1<<snapKeepLimit |
+	1<<snapStringRead |
+	1<<snapTypedRead |
+	1<<snapTypedBigRead |
+	1<<snapKeyedRead |
+	1<<snapKeyedWrite |
+	1<<snapUpvalueTyped |
 	1<<snapProperty |
 	1<<snapStringProperty |
 	1<<snapAccessor |
@@ -1852,7 +2132,14 @@ const jitRegSnapMethods uint64 = 0 |
 	1<<snapWalkedCloseCell |
 	1<<snapTypedKind |
 	1<<snapFrequency |
-	1<<snapForEach
+	1<<snapForEach |
+	1<<snapInstanceOf |
+	1<<snapIndexOf |
+	1<<snapParseInt |
+	1<<snapBigString |
+	1<<snapClosure |
+	1<<snapCellsPool |
+	1<<snapPureBody
 
 // The register askers are set at init, as jitSnapAskers are.
 func init() {
@@ -1860,6 +2147,13 @@ func init() {
 		snapBigInt:         jitRegSnapAskBigInt,
 		snapBigIntWide:     jitRegSnapAskBigIntWide,
 		snapBigIntFailed:   jitRegSnapAskBigIntFailed,
+		snapInlineExit:     jitRegSnapAskInlineExit,
+		snapStringRead:     jitRegSnapAskStringRead,
+		snapTypedRead:      jitRegSnapAskTypedRead,
+		snapTypedBigRead:   jitRegSnapAskTypedBigRead,
+		snapKeyedRead:      jitRegSnapAskKeyedRead,
+		snapKeyedWrite:     jitRegSnapAskKeyedWrite,
+		snapUpvalueTyped:   jitRegSnapAskUpvalueTyped,
 		snapProperty:       jitRegSnapAskProperty,
 		snapStringProperty: jitRegSnapAskStringProperty,
 		snapAccessor:       jitRegSnapAskAccessor,
@@ -1885,5 +2179,10 @@ func init() {
 		snapTypedKind:      jitRegSnapAskTypedKind,
 		snapFrequency:      jitRegSnapAskFrequency,
 		snapForEach:        jitRegSnapAskForEach,
+		snapInstanceOf:     jitRegSnapAskInstanceOf,
+		snapIndexOf:        jitRegSnapAskIndexOf,
+		snapParseInt:       jitRegSnapAskParseInt,
+		snapBigString:      jitRegSnapAskBigString,
+		snapClosure:        jitRegSnapAskClosure,
 	}
 }

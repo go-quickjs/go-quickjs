@@ -154,7 +154,10 @@ func (r *Runtime) regRerun(f *frame, kind uint8, saved int) (Value, error) {
 // regRestartRun runs frame f again with the code a tail call gave it, as
 // many times as its tail calls give it another. Each is a call, counted
 // for the host's interrupt as regEnterW counts one: a loop of calls in
-// tail position is stopped as a loop is.
+// tail position is stopped as a loop is. Code with native code is run in
+// it, as regEnterW runs a call's (jitRegEnter): a recursion through calls
+// in tail position deeper than tailCallDepth had run in the interpreter
+// from there on, its functions' native code never entered.
 //
 //go:noinline
 func (r *Runtime) regRestartRun(f *frame) (Value, error) {
@@ -166,6 +169,10 @@ func (r *Runtime) regRestartRun(f *frame) (Value, error) {
 			if err = r.checkInterruptNow(); err != nil {
 				break
 			}
+		}
+		if jitBuilt && f.cl.jitEnters && f.cl.reg == rc {
+			v, err = r.jitRegEnter(f, f.cl, rc, f.base-int(rc.locals), 0)
+			continue
 		}
 		v, err = r.runReg(f, rc, 0)
 	}

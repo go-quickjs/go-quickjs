@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"sync"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
@@ -41,6 +42,74 @@ func LowerRegHot(rc *bytecode.RegCode, fn *bytecode.Function) (*ir.Program, erro
 // (LowerSSAInline).
 func LowerRegInline(rc *bytecode.RegCode, fn *bytecode.Function) (*ir.Program, error) {
 	return lowerRegRecovered(rc, fn, lowering{ssa: true, callee: true})
+}
+
+// LowerRegForwardWith is LowerRegInline, with hints, for a callee that
+// hands its arguments on, f.apply(x, arguments) (apply_args), inlined
+// where its caller knows what it forwards to, as LowerSSAForward lowers
+// the stack form's: its apply_args is the inliner's to make the call of f
+// with the call's own arguments (ssa.InlineSite's Forward), not one that
+// reads them from the frame's context (ir.Program's Forwards).
+func LowerRegForwardWith(rc *bytecode.RegCode, fn *bytecode.Function, h Hints) (*ir.Program, error) {
+	if fn == nil || !forwardsNatively(fn) {
+		return nil, refuse(-1, "not a forwarding function")
+	}
+	return lowerRegRecovered(rc, fn, lowering{ssa: true, callee: true, forward: true, hints: h})
+}
+
+// LowerRegWith is LowerReg with hints, whose PCs are register pcs: what
+// the function's native code learned at its exits (the stack form's
+// LowerSSAWith's).
+func LowerRegWith(rc *bytecode.RegCode, fn *bytecode.Function, h Hints) (*ir.Program, error) {
+	return lowerRegRecovered(rc, fn, lowering{ssa: true, hints: h})
+}
+
+// LowerRegHotWith is LowerRegHot with hints, as LowerRegWith's.
+func LowerRegHotWith(rc *bytecode.RegCode, fn *bytecode.Function, h Hints) (*ir.Program, error) {
+	return lowerRegRecovered(rc, fn, lowering{ssa: true, hot: true, hints: h})
+}
+
+// LowerRegInlineWith is LowerRegInline with hints, as LowerRegWith's.
+func LowerRegInlineWith(rc *bytecode.RegCode, fn *bytecode.Function, h Hints) (*ir.Program, error) {
+	return lowerRegRecovered(rc, fn, lowering{ssa: true, callee: true, hints: h})
+}
+
+// regHinted reports whether the program's instruction of register pc rpc
+// is one of pcs, a hint's register pcs.
+func regHinted(pcs []int32, rpc uint32) bool { return slices.Contains(pcs, int32(rpc)) }
+
+// regHints applies h, by register pc, to p as the stack form's lowering
+// does by its PCs (lowerFunction): an addition that met a string Go's
+// (hintedStringAdds), before the reads it takes are decided; then, after
+// them (selectNumericProperties), an element read that met what is no
+// number read as it is (ir's Reference). It returns the program pcs of the
+// element reads that read strings (Hints' StringReads), whose additions
+// stringConcats has Go make. An addition the compiler marked an append to
+// an upvalue (RAdd's RAddAppend, the stack form's AddOwned on its
+// set_upvalue, which hintedStringAdds reads) may grow the string the
+// binding alone holds in place (Owned), as the interpreter's rsAdd does:
+// unmarked, a closure's s += x had made a new string at each call.
+func regHints(rc *bytecode.RegCode, p *ir.Program, h Hints, after bool) []int32 {
+	var strs []int32
+	for pc := range p.Code {
+		in := &p.Code[pc]
+		if p.Maps[pc].Depth < 0 {
+			continue
+		}
+		rpc := p.Origin[pc]
+		switch {
+		case !after && in.Op == ir.Binary && in.Operator == ir.Add && regHinted(h.StringAdds, rpc):
+			w := rc.Code[rpc]
+			*in = ir.Instruction{Op: ir.StringAdd, Left: in.Left, Right: in.Right, Dest: in.Dest, Generic: in.Generic,
+				Owned: w.Op() == bytecode.RAdd && w.X()&bytecode.RAddAppend != 0}
+		case after && in.Op == ir.ArrayRead && (regHinted(h.ElementReads, rpc) || regHinted(h.StringReads, rpc)):
+			in.Reference = true
+			if regHinted(h.StringReads, rpc) {
+				strs = append(strs, int32(pc))
+			}
+		}
+	}
+	return strs
 }
 
 // lowerRegRecovered turns a panic in the lowering into a refusal, as
@@ -90,12 +159,38 @@ type regLowering struct {
 	// scratch is the first scratch slot, used how many the current
 	// register instruction has taken, most the most any has.
 	scratch, used, most int
+	// this is a derived constructor's this slot, past the captured
+	// bindings, before the scratch slots, or -1 (ir.Program's This); joins
+	// marks, in one, the register pcs more than one way reaches.
+	this  int
+	joins []bool
 	// lits are the regexp_lit calls lowered as the stack form's
 	// (regexpLit), by register pc; litHosts those lowered as Go's whole,
 	// their window's registers live past them.
 	lits     []int
 	litHosts map[int]bool
+	// ins counts, by register pc, the jumps and handlers that reach it,
+	// not the instruction before falling to it (regJumpIns).
+	ins []int
+	// past is the register pc after the loads of the boolean boolBranch
+	// lowered last: those before it are Nops.
+	past int
 }
+
+// regScratch is what a lowering grows its program's instructions in
+// (regLowering's code, origin and patch), which the program is given
+// copies of at their lengths: grown an instruction at a time, they had
+// been twice what the program keeps. It is kept from one lowering for the
+// next (regScratchPool); an instruction holds no pointer.
+type regScratch struct {
+	code   []ir.Instruction
+	origin []uint32
+	patch  []bool
+}
+
+// regScratchPool holds the scratch no lowering has. Separate runtimes
+// lower at once, each lowering with one of its own.
+var regScratchPool = sync.Pool{New: func() any { return new(regScratch) }}
 
 // emit appends in, of the current register instruction's origin; a
 // Target it has is a register pc where jump is set.
@@ -103,6 +198,193 @@ func (l *regLowering) emit(in ir.Instruction, jump bool) {
 	l.code = append(l.code, in)
 	l.origin = append(l.origin, uint32(l.pc))
 	l.patch = append(l.patch, jump)
+}
+
+// loopTest finds the test of the loop the jump at pc enters: register
+// code's loops test at their end -- jmp to the test, the body, the test
+// and its branch back to the body, which the interpreter runs one branch
+// of each turn -- and the interpreter's back edge, where native code is
+// entered by on-stack replacement, is that branch's, at the body's first
+// instruction. As it is, that loop has two ways in, the test's from the
+// jump and the body's from the entry, and no header that every turn
+// passes but the body's, which the jump bypasses: the builder's loop of
+// the body's header (ssa's back edges, by pc) reached back to the
+// function's start, and the values the loop carries were phis of two
+// blocks, the test's not a header's -- not unboxed past the loop, boxed at
+// every turn for a use after it, and no loop pass saw them as the
+// stack form's, whose loops test at their head, has them. So the test is
+// also lowered in place of the jump (lowerLoopTest), its branch the other
+// way, to the loop's end, as compilers rotate a loop: the body's first
+// instruction is then the header of a loop with one way in, the entry's
+// and the copy's, as the stack form's loops have.
+//
+// t is the test's first register pc, b its branch back to pc+1. Every
+// instruction from t to b is reachable, in the jump's handler, goes on to
+// the next and jumps only forward, and none suspends or is a step Go may
+// take elsewhere (an iterator's).
+func (l *regLowering) loopTest(pc int, reach []bool) (t, b int, ok bool) {
+	rc := l.rc
+	w := rc.Code[pc]
+	if w.Op() != bytecode.RJmp {
+		return 0, 0, false
+	}
+	t = regTarget(pc, int32(w.BC()))
+	if t <= pc+1 || t >= len(rc.Code) {
+		return 0, 0, false
+	}
+	h := rc.HandlerAt(pc)
+	for k := t; k < len(rc.Code); k++ {
+		x := rc.Code[k]
+		if !reach[k] || rc.HandlerAt(k) != h || regGoBranches(x) {
+			return 0, 0, false
+		}
+		switch x.Op() {
+		case bytecode.RIterNext, bytecode.RAwait, bytecode.RYield, bytecode.RYieldStar, bytecode.REndParams, bytecode.RGenEntry, bytecode.RIterResume:
+			return 0, 0, false
+		}
+		succ := regSuccessors(rc, k, x)
+		if len(succ) == 2 && succ[0] == k+1 && succ[1] == pc+1 {
+			return t, k, true
+		}
+		if !slices.Contains(succ, k+1) {
+			return 0, 0, false
+		}
+		for _, s := range succ {
+			if s <= k {
+				return 0, 0, false
+			}
+		}
+	}
+	return 0, 0, false
+}
+
+// lowerLoopTest lowers the jump at pc into the loop whose test is t to b
+// (loopTest) as a copy of the test: a Nop of the jump's, then the test's
+// instructions, of their own origins, their jumps inside it to the copy's,
+// and its branch back to the body made the other way, to the loop's end,
+// past b, so that it goes on into the body, which is next. Where the
+// branch's lowering does not end in a branch to the body, nothing is
+// copied and it reports false.
+func (l *regLowering) lowerLoopTest(pc, t, b int) bool {
+	mark, lits := len(l.code), len(l.lits)
+	l.emit(ir.Instruction{Op: ir.Nop}, false)
+	at := make([]int, b-t+1)
+	for k := t; k <= b; k++ {
+		at[k-t] = len(l.code)
+		l.pc, l.used = k, 0
+		l.lower(k)
+	}
+	l.pc, l.used = pc, 0
+	last := len(l.code) - 1
+	if in := &l.code[last]; in.Op != ir.Branch || !l.patch[last] || in.Target != pc+1 || l.origin[last] != uint32(b) {
+		l.code, l.origin, l.patch, l.lits = l.code[:mark], l.origin[:mark], l.patch[:mark], l.lits[:lits]
+		return false
+	}
+	l.code[last].When, l.code[last].Target = !l.code[last].When, b+1
+	for i := mark; i < len(l.code); i++ {
+		if x := l.code[i].Target; l.patch[i] && x > t && x <= b {
+			l.code[i].Target, l.patch[i] = at[x-t], false
+		}
+	}
+	return true
+}
+
+// regJumpIns counts, by register pc, the jumps of rc's reachable code
+// and the handlers that go there.
+func regJumpIns(rc *bytecode.RegCode, reach []bool) []int {
+	ins := make([]int, len(rc.Code)+1)
+	for pc, w := range rc.Code {
+		if !reach[pc] {
+			continue
+		}
+		for _, t := range regSuccessors(rc, pc, w) {
+			if t != pc+1 && t >= 0 && t < len(ins) {
+				ins[t]++
+			}
+		}
+	}
+	for _, h := range rc.Handlers {
+		if int(h.To) < len(ins) {
+			ins[h.To]++
+		}
+	}
+	return ins
+}
+
+// boolBranch lowers, at pc, the register code a comparison's boolean
+// value compiles to -- a compare-and-branch to pc+3, load_false or
+// load_true to a register, a jump to pc+4, the other boolean to the
+// register at pc+3, which nothing else jumps into -- as the comparison
+// it is: the comparison's Binary to the register, negated where the
+// branch's way makes it so, and a jump past the loads, which are left
+// unreached. Lowered as the branches, the boolean was a phi of two
+// constants that a test of it, a callback's result's, branched on again;
+// as the stack form's lt or strict_eq makes it, it is the comparison,
+// which a branch on it takes as its condition. An exit at the comparison
+// runs the compare-and-branch again, which the interpreter goes on from
+// to the loads. The loads and the jump are Nops (past), which native code
+// falls through to pc+4, so that the comparison, the register's copies
+// and what reads it are one block, as the stack form's are: an operator
+// of the boolean takes its number natively (ir.Instruction's Bools,
+// markBools), where a jump to pc+4 had begun a block there and the
+// operator, not knowing it a boolean, deoptimized at it -- Emscripten's
+// code ORs and ANDs comparisons, and Octane's zlib's largest function
+// deoptimized at one after another, each compile of it a second's.
+// Where the branch's lowering is not a Branch to pc+3 of an operator a
+// Binary has, nothing is lowered and it reports false.
+func (l *regLowering) boolBranch(pc int, reach []bool) bool {
+	rc := l.rc
+	if pc+4 >= len(rc.Code) {
+		return false
+	}
+	w := rc.Code[pc]
+	succ := regSuccessors(rc, pc, w)
+	if len(succ) != 2 || succ[0] != pc+1 || succ[1] != pc+3 {
+		return false
+	}
+	x, j, y := rc.Code[pc+1], rc.Code[pc+2], rc.Code[pc+3]
+	loads := func(a, b bytecode.ROp) bool {
+		return a == bytecode.RLoadTrue && b == bytecode.RLoadFalse || a == bytecode.RLoadFalse && b == bytecode.RLoadTrue
+	}
+	if !loads(x.Op(), y.Op()) || x.A() != y.A() || j.Op() != bytecode.RJmp || regTarget(pc+2, int32(j.BC())) != pc+4 {
+		return false
+	}
+	for q := pc + 1; q <= pc+4; q++ {
+		if !reach[q] {
+			return false
+		}
+	}
+	if l.ins[pc+1] != 0 || l.ins[pc+2] != 0 || l.ins[pc+3] != 1 {
+		return false
+	}
+	mark, lits := len(l.code), len(l.lits)
+	l.pc, l.used = pc, 0
+	l.lower(pc)
+	last := len(l.code) - 1
+	in := l.code[last]
+	switch {
+	case last < mark || in.Op != ir.Branch || !l.patch[last] || in.Target != pc+3:
+	case in.Operator == ir.Eq || in.Operator == ir.Lt || in.Operator == ir.Le || in.Operator == ir.Gt || in.Operator == ir.Ge:
+		r := int(x.A())
+		if in.When != (y.Op() == bytecode.RLoadTrue) {
+			// Negated: the comparison to a scratch slot, which commits
+			// nothing, and its negation to the register, the origin's one
+			// write and its last -- the comparison written to the register
+			// first, the Not, which may leave, came after a write the
+			// interpreter would make again (the atomicity rule).
+			t := l.temp()
+			l.code[last] = ir.Instruction{Op: ir.Binary, Operator: in.Operator, Left: in.Left, Right: in.Right, Dest: t, Strict: in.Strict}
+			l.patch[last] = false
+			l.emit(ir.Instruction{Op: ir.Unary, Operator: ir.Not, Left: ir.Slot(t), Dest: r}, false)
+		} else {
+			l.code[last] = ir.Instruction{Op: ir.Binary, Operator: in.Operator, Left: in.Left, Right: in.Right, Dest: r, Strict: in.Strict}
+			l.patch[last] = false
+		}
+		l.past = pc + 4
+		return true
+	}
+	l.code, l.origin, l.patch, l.lits = l.code[:mark], l.origin[:mark], l.patch[:mark], l.lits[:lits]
+	return false
 }
 
 // regexpLit lowers regexp_lit at pc, w, that calls -- /x/.exec(s) or
@@ -359,13 +641,33 @@ func lowerRegLits(rc *bytecode.RegCode, fn *bytecode.Function, m lowering, litHo
 	if err != nil {
 		return nil, err
 	}
-	l := &regLowering{rc: rc, fn: fn, m: m, scratch: rc.NumRegs + len(fn.Upvalues), litHosts: litHosts}
+	l := &regLowering{rc: rc, fn: fn, m: m, scratch: rc.NumRegs + len(fn.Upvalues), this: -1, litHosts: litHosts, ins: regJumpIns(rc, reach)}
+	ls := regScratchPool.Get().(*regScratch)
+	l.code, l.origin, l.patch = ls.code[:0], ls.origin[:0], ls.patch[:0]
+	defer func() {
+		ls.code, ls.origin, ls.patch = l.code[:0], l.origin[:0], l.patch[:0]
+		regScratchPool.Put(ls)
+	}()
+	derived := fn.Kind == bytecode.KindDerivedConstructor
+	if derived {
+		// A derived constructor's this binding, past the captured
+		// bindings (ir.Program's This): the context's This, which its
+		// super() binds, as the stack form's this slot.
+		l.this, l.scratch = l.scratch, l.scratch+1
+		l.joins = regJoins(rc, reach)
+	}
 	start := make([]int, n+1)
 	for pc := range n {
 		start[pc] = len(l.code)
 		l.pc, l.used = pc, 0
-		if !reach[pc] {
+		if !reach[pc] || pc < l.past {
 			l.emit(ir.Instruction{Op: ir.Nop}, false)
+			continue
+		}
+		if t, b, ok := l.loopTest(pc, reach); ok && l.lowerLoopTest(pc, t, b) {
+			continue
+		}
+		if l.boolBranch(pc, reach) {
 			continue
 		}
 		l.lower(pc)
@@ -383,11 +685,18 @@ func lowerRegLits(rc *bytecode.RegCode, fn *bytecode.Function, m lowering, litHo
 			l.code[i].Target = start[t]
 		}
 	}
-	p := &ir.Program{Code: l.code, Origin: l.origin, Maps: make([]ir.StateMap, len(l.code)),
+	starts := make([]int32, n+1)
+	for pc, i := range start {
+		starts[pc] = int32(i)
+	}
+	p := &ir.Program{Code: slices.Clone(l.code), Origin: slices.Clone(l.origin), Starts: starts, Maps: make([]ir.StateMap, len(l.code)),
 		Regs: rc.NumRegs, Locals: l.scratch + l.most, ParamBase: 2, Params: rc.Params,
 		UpvalueBase: rc.NumRegs, Upvalues: len(fn.Upvalues),
 		ArrowThis:        fn.Kind == bytecode.KindArrow && fn.UsesThis,
 		ClassConstructor: fn.Kind == bytecode.KindConstructor,
+		TailOwn: fn.Strict && (fn.Kind == bytecode.KindNormal || fn.Kind == bytecode.KindMethod || fn.Kind == bytecode.KindArrow ||
+			fn.Kind == bytecode.KindGetter || fn.Kind == bytecode.KindSetter),
+		This: derived, DerivedConstructor: derived,
 	}
 	for i := range p.Maps {
 		p.Maps[i] = ir.StateMap{PC: l.origin[i]}
@@ -405,6 +714,10 @@ func lowerRegLits(rc *bytecode.RegCode, fn *bytecode.Function, m lowering, litHo
 			to = append(to, regTarget(pc, w.SC()))
 		case regGoBranches(w):
 			to = append(to, pc+1, pc+2)
+		case w.Op() == bytecode.RGenEntry && pc == 0:
+			// A first run enters past it, which does nothing there (the
+			// VM's regGenRun).
+			to = append(to, pc+1)
 		case w.Op() == bytecode.REndParams && (fn.Async || fn.Generator):
 			// The first resumption enters past the parameters.
 			to = append(to, pc+1)
@@ -426,19 +739,21 @@ func lowerRegLits(rc *bytecode.RegCode, fn *bytecode.Function, m lowering, litHo
 	if regHostOnly(p, rc, fn, m) {
 		return nil, refuse(-1, hostOnly)
 	}
+	regHints(rc, p, m.hints, false)
 	selectNumericProperties(p, true)
-	stringConcats(p, nil)
+	stringConcats(p, regHints(rc, p, m.hints, true))
 	markBools(p)
 	p.FrameArgs = fn.HasRest || fn.UsesArguments || fn.MappedArguments || fn.SuperForwards
 	p.FrameCallee = fn.FrameCallee
 	if fn.MappedArguments && fn.ParamCount > 0 && (fn.AssignsParams || paramCaptured(fn)) {
 		p.ArgumentParams = min(fn.ParamCount, rc.Params)
 	}
-	if forwardsNatively(fn) && slices.ContainsFunc(rc.Code, func(w bytecode.RInstr) bool { return w.Op() == bytecode.RApplyArgs }) {
+	if forwardsNatively(fn) && !m.forward && slices.ContainsFunc(rc.Code, func(w bytecode.RInstr) bool { return w.Op() == bytecode.RApplyArgs }) {
 		p.Forwards = true
 	}
 	regCaptured(p, rc, fn)
 	liveRegs(p, rc)
+	regStringParts(p)
 	if live := l.litsLive(p, start); len(live) != 0 {
 		// Their window's registers read past them, which the lowering
 		// does not write: Go's whole.
@@ -452,6 +767,70 @@ func lowerRegLits(rc *bytecode.RegCode, fn *bytecode.Function, m lowering, litHo
 		return lowerRegLits(rc, fn, m, hosts)
 	}
 	return p, nil
+}
+
+// regStringParts makes each conversion of a part where it is -- to_string's
+// or str_part's, a StringConcat of one part -- whose register is read by a
+// concat of more parts and by nothing before it, a StringPart, as the
+// stack form's stringParts does: the concat converts a primitive that
+// calls nothing the same, so the part needs only checking to be one, not a
+// call of Go of its own. Register code's concat reads its parts where they
+// are, or copies of them in scratch slots (lowerReg's block): a copy of
+// the part's register into the concat's run is the concat's read. Where
+// anything else reads or writes the register first, a jump lands between
+// them, the code goes elsewhere, or the register is live past the concat
+// -- which would read it unconverted -- it stays as it is. An exit between
+// them leaves the register the primitive it was, which the interpreter's
+// concat converts the same. It runs on p's liveness (liveRegs).
+func regStringParts(p *ir.Program) {
+	targets := make([]bool, len(p.Code)+1)
+	for _, in := range p.Code {
+		if in.Op == ir.Jump || in.Op == ir.Branch || in.Op == ir.IterStep {
+			targets[in.Target] = true
+		}
+	}
+	for _, e := range p.Entries {
+		targets[e] = true
+	}
+	for pc := range p.Code {
+		in := p.Code[pc]
+		if in.Op != ir.StringConcat || in.Extra != 1 || p.Maps[pc].Depth < 0 || in.Dest < 0 || in.Dest >= p.Regs {
+			continue
+		}
+		d := in.Dest
+		copies := []int{d}
+		reads := func(c ir.Instruction) bool {
+			return c.Op == ir.StringConcat && c.Extra > 1 && slices.ContainsFunc(copies, func(s int) bool { return c.Dest <= s && s < c.Dest+c.Extra })
+		}
+		for k := pc + 1; k < len(p.Code); k++ {
+			c := p.Code[k]
+			if targets[k] || p.Maps[k].Depth < 0 {
+				break
+			}
+			if reads(c) {
+				// Live past the concat's origin, whose instructions are
+				// all as live as its first.
+				next := k + 1
+				for next < len(p.Code) && p.Origin[next] == p.Origin[k] {
+					next++
+				}
+				if next < len(p.Code) && !p.LiveAt(next, d) {
+					p.Code[pc] = ir.Instruction{Op: ir.StringPart, Left: ir.Slot(d), Dest: d}
+				}
+				break
+			}
+			if c.Op == ir.Copy && c.Left.Slot == d && c.Dest >= p.Regs {
+				// Into the concat's run of scratch slots.
+				copies = append(copies, c.Dest)
+				continue
+			}
+			if c.Op == ir.Jump || c.Op == ir.Branch || c.Op == ir.Return || c.Op == ir.Rethrow || c.Op == ir.Host && !c.Whole && !c.Window ||
+				c.Left.Slot == d || c.Right.Slot == d || c.Third.Slot == d || c.Dest == d || c.Extra == d && c.Op != ir.StringConcat && c.Op != ir.ArrayLiteral ||
+				c.Op == ir.StringConcat && c.Dest <= d && d < c.Dest+c.Extra || c.Window && c.Left.Slot <= d && d < c.Left.Slot+2+c.Extra {
+				break
+			}
+		}
+	}
 }
 
 // regReachable is which register instructions the code's start reaches,
@@ -509,6 +888,12 @@ func regReachable(rc *bytecode.RegCode) ([]bool, error) {
 	return reach, nil
 }
 
+// RegSuccessors is where rc's code may go on from w, the instruction at
+// pc: its jumps' targets and the next instruction it falls to.
+func RegSuccessors(rc *bytecode.RegCode, pc int, w bytecode.RInstr) []int {
+	return regSuccessors(rc, pc, w)
+}
+
 // regSuccessors is where the code may go on from w, the instruction at pc.
 func regSuccessors(rc *bytecode.RegCode, pc int, w bytecode.RInstr) []int {
 	switch op := w.Op(); op {
@@ -535,6 +920,53 @@ func regSuccessors(rc *bytecode.RegCode, pc int, w bytecode.RInstr) []int {
 		}
 	}
 	return []int{pc + 1}
+}
+
+// regJoins marks the register pcs of rc a jump or a handler reaches: those
+// the instruction before is not the only way to.
+func regJoins(rc *bytecode.RegCode, reach []bool) []bool {
+	joins := make([]bool, len(rc.Code)+1)
+	for pc, w := range rc.Code {
+		if !reach[pc] {
+			continue
+		}
+		for _, t := range regSuccessors(rc, pc, w) {
+			if t != pc+1 && t >= 0 && t < len(joins) {
+				joins[t] = true
+			}
+		}
+	}
+	for _, h := range rc.Handlers {
+		if int(h.To) < len(joins) {
+			joins[h.To] = true
+		}
+	}
+	return joins
+}
+
+// undefinedAt reports whether register r certainly holds undefined at
+// register pc, as the instructions straight before it, which nothing
+// jumps between, leave it: load_undef's, or moved from one.
+func (l *regLowering) undefinedAt(pc, r int) bool {
+	for q := pc - 1; q >= 0 && !l.joins[q+1]; q-- {
+		w := l.rc.Code[q]
+		switch w.Op() {
+		case bytecode.RLoadUndef:
+			if int(w.A()) == r {
+				return true
+			}
+			continue
+		case bytecode.RMove:
+			if int(w.A()) == r {
+				r = int(w.B())
+			}
+			continue
+		case bytecode.RNop:
+			continue
+		}
+		return false
+	}
+	return false
 }
 
 // handlers gives p the code's handlers: rc's, innermost first, in the
@@ -650,18 +1082,20 @@ func regHostOnly(p *ir.Program, rc *bytecode.RegCode, fn *bytecode.Function, m l
 			loop = true
 		}
 	}
-	for pc, w := range rc.Code {
+	for _, w := range rc.Code {
 		switch w.Op() {
 		case bytecode.RGetIndex, bytecode.RGetIndexI, bytecode.RSetIndex, bytecode.RSetIndexI, bytecode.RGetIndexPre, bytecode.RGetIndexPost,
 			bytecode.RAddIndex, bytecode.RAddIndexK, bytecode.RAddIndexI:
 			indexed = true
-		case bytecode.RCallW, bytecode.RCallMW, bytecode.RNewW:
+		case bytecode.RCallW, bytecode.RCallMW, bytecode.RNewW, bytecode.RApplyArgs:
 			calls = true
-			// A call in tail position may be the function's own, which
-			// native code makes a jump to its start: a loop.
-			loop = loop || pc < len(rc.Marks) && rc.Marks[pc]&bytecode.RMarkTail != 0
 		case bytecode.RCallWT, bytecode.RCallMWT:
-			// The interpreter's call in tail position: a call all the same.
+			// A call in tail position may be the function's own, which
+			// native code makes a jump to its start deep in the stack
+			// (ssa.OpTailSelf): a loop, as the stack form's.
+			calls, loop = true, true
+		case bytecode.RSuperCall, bytecode.RSuperForward:
+			// A super(): a call all the same.
 			calls = true
 		}
 	}
@@ -985,7 +1419,11 @@ func (l *regLowering) lower(pc int) {
 			host()
 		}
 	case bytecode.RApplyArgs:
-		host()
+		// f.apply(x, arguments): R[B] f, R[B+1] apply, R[B+2] x, a call of
+		// f with the frame's arguments where apply is the realm's, natively
+		// or by Go (ssa.CallSite's Forward), as the stack form's
+		// apply_arguments; anything else the interpreter's.
+		l.emit(ir.Instruction{Op: ir.Host, Extra: 2, Window: true, Left: reg(b), Dest: int(a)}, false)
 	case bytecode.RAddProp, bytecode.RAddPropI:
 		// o.k += v: the read, which may run a getter, so that the addition
 		// and the store after it are Generic.
@@ -1055,8 +1493,11 @@ func (l *regLowering) lower(pc int) {
 		l.emit(ir.Instruction{Op: ir.StringCode, Left: ir.Slot(t), Right: reg(b), Third: ir.Slot(int(w.X())), Dest: int(a)}, false)
 	case bytecode.RYield:
 		// Go's: the interpreter suspends the frame (the VM's regWhole runs
-		// no yield), and its resumption enters the code past it.
-		l.emit(ir.Instruction{Op: ir.Host}, false)
+		// no yield), and its resumption enters the code past it. A
+		// synchronous generator's, in code a loop's step or a call of
+		// next resumed natively, suspends it natively (ir.Instruction's
+		// Suspend), its value R[B].
+		l.emit(ir.Instruction{Op: ir.Host, Suspend: fn.Generator && !fn.Async, Left: reg(b)}, false)
 	case bytecode.RCallWT, bytecode.RCallMWT:
 		// A call in tail position: made as the ordinary call while the
 		// stack is shallow, natively or by Go, as the interpreter's
@@ -1170,9 +1611,50 @@ func (l *regLowering) lowerCold(pc int, w bytecode.RInstr) {
 		}
 		// A constant's assignment, which throws.
 		l.emit(ir.Instruction{Op: ir.Host}, false)
+	case bytecode.RSuperCall:
+		if l.this < 0 {
+			l.emit(l.hostAt(pc), false)
+			break
+		}
+		// A derived constructor's super(...) of the B arguments in the
+		// registers from C: a call of the parent with the instance as its
+		// receiver, natively or by Go (ssa.CallSite's Super), as the stack
+		// form's super_call -- the this slot, then the arguments, from the
+		// window's first register, Left; the this it binds R[A]'s, and
+		// register 1's and the this slot's from here.
+		l.emit(ir.Instruction{Op: ir.Host, Window: true, Extra: int(b), Left: reg(w.C()), Dest: int(a)}, false)
+	case bytecode.RThis, bytecode.RCheckThis:
+		if l.this < 0 {
+			l.emit(l.hostAt(pc), false)
+			break
+		}
+		// A derived constructor's this binding, the this slot: checked
+		// bound, Go's where not, which throws (ssa's this check), as the
+		// stack form's push_this.
+		dest := int(a)
+		if sub == bytecode.RCheckThis {
+			dest = l.temp()
+		}
+		l.emit(ir.Instruction{Op: ir.Copy, Dest: dest, Left: ir.Slot(l.this), Check: true, CheckSlot: l.this}, false)
+	case bytecode.RDerivedRet:
+		if l.this < 0 || !l.undefinedAt(pc, int(a)) {
+			// Anything but undefined returned -- an object, or what the
+			// construction throws for -- is Go's, as the stack form's.
+			l.emit(l.hostAt(pc), false)
+			break
+		}
+		// undefined returned: the this binding, checked bound -- Go's
+		// where not, which throws -- as the stack form's return.
+		l.emit(ir.Instruction{Op: ir.Copy, Dest: int(a), Left: ir.Slot(l.this), Check: true, CheckSlot: l.this}, false)
 	case bytecode.RRestParam, bytecode.RNewTarget:
 		// Go's, from the frame (ir's Frame).
 		l.emit(ir.Instruction{Op: ir.Host, Frame: true, Dest: int(a)}, false)
+	case bytecode.RCloseRegs:
+		// A scope's end, closing what closures captured of the B
+		// registers from A, as the stack form's close_upvalues closes its
+		// locals from one on: natively, or by a call of Go on the frame
+		// (ssa.GoClose).
+		l.emit(ir.Instruction{Op: ir.CloseUpvalues, Key: uint32(a), Extra: int(b)}, false)
 	case bytecode.RWrap:
 		// x op y, the second argument of the asUintN or asIntN call right
 		// after it: the operator alone, the call made after it as any
@@ -1222,7 +1704,7 @@ func (l *regLowering) hostAt(pc int) ir.Instruction {
 	switch l.rc.Code[pc].Op() {
 	case bytecode.RRet, bytecode.RRetUndef, bytecode.RYield, bytecode.RCallWT, bytecode.RCallMWT, bytecode.RAwait,
 		bytecode.RYieldStar, bytecode.REndParams, bytecode.RGenEntry, bytecode.RIterResume, bytecode.RThrow,
-		bytecode.RCheckThis, bytecode.RDeleteSuper:
+		bytecode.RCheckThis, bytecode.RDeleteSuper, bytecode.RSuperCall, bytecode.RSuperForward, bytecode.RSuperSpread, bytecode.RDerivedRet:
 		// Or reads the frame's this binding, which no operand names.
 		return ir.Instruction{Op: ir.Host}
 	}
@@ -1247,112 +1729,267 @@ func (l *regLowering) hostAt(pc int) ir.Instruction {
 // instruction (RegAccess). A throw goes to the handler in force, whatever
 // the instruction writes; a register a closure captures is live
 // throughout, which the closure may read at any call.
+//
+// The dataflow runs over the program's blocks, each block's set at its
+// start found again from its successors' until none changes, and then each
+// instruction's from its block's end: the sets are ir.Liveness's, each the
+// one after it with what the instruction writes taken out and what it
+// reads put in, which shares the rest. A dense row of every register at
+// every instruction had made the liveness of n registers and m
+// instructions n·m bits, and each pass over it as long, whatever the
+// instructions changed.
 func liveRegs(p *ir.Program, rc *bytecode.RegCode) {
-	n := p.Regs
-	words := (n + 63) / 64
-	live := make([]uint64, len(p.Code)*words)
-	at := func(i int) []uint64 { return live[i*words : (i+1)*words] }
-	set := func(s []uint64, r int) {
+	n, m := p.Regs, len(p.Code)
+	lb := ir.NewLiveBuilder(n)
+	captured := func(r int) bool { return r >= 0 && r < len(p.Captured) && p.Captured[r] }
+	var ops []ir.LiveOp
+	for r := range min(n, len(p.Captured)) {
+		if p.Captured[r] {
+			ops = append(ops, ir.LiveOp{Slot: int32(r)})
+		}
+	}
+	always := lb.Apply(lb.Empty(), ops)
+	reach := func(i int) bool { return i >= 0 && i < m && p.Maps[i].Depth >= 0 }
+
+	// Each reachable instruction's changes, in order: the registers it
+	// writes taken out -- but a captured one, which is live throughout --
+	// then those it reads put in; or all of them, where it may read any.
+	opAt := make([]int32, m+1)
+	all := make([]bool, m)
+	ops = ops[:0]
+	kill := func(r int) {
+		if r >= 0 && r < n && !captured(r) {
+			ops = append(ops, ir.LiveOp{Slot: int32(r), Clear: true})
+		}
+	}
+	gen := func(r int) {
 		if r >= 0 && r < n {
-			s[r/64] |= 1 << (r % 64)
+			ops = append(ops, ir.LiveOp{Slot: int32(r)})
 		}
 	}
-	kill := func(s []uint64, r int) {
-		if r >= 0 && r < n {
-			s[r/64] &^= 1 << (r % 64)
+	// The instructions' successors but the next one -- a jump's, and the
+	// handler in force -- and whether each goes on to the next.
+	falls := make([]bool, m)
+	far := make([]int32, 2*m)
+	for i := range m {
+		opAt[i] = int32(len(ops))
+		far[2*i], far[2*i+1] = -1, -1
+		if !reach(i) {
+			continue
+		}
+		ins := &p.Code[i]
+		switch ins.Op {
+		case ir.Jump:
+			far[2*i] = int32(ins.Target)
+		case ir.Return:
+		case ir.Branch, ir.IterStep:
+			falls[i] = true
+			if ins.Op == ir.Branch || !ins.When {
+				far[2*i] = int32(ins.Target)
+			}
+		default:
+			falls[i] = true
+			if ins.Op == ir.Host {
+				if w := rc.Code[p.Origin[i]]; regGoBranches(w) {
+					far[2*i] = int32(p.At(p.Origin[i] + 2))
+				}
+			}
+		}
+		if p.HandlerAt != nil && p.HandlerAt[i] != 0 {
+			far[2*i+1] = int32(p.Handlers[p.HandlerAt[i]-1].PC)
+		}
+		if ins.Op == ir.Host {
+			reads, writes, a := RegAccess(rc, int(p.Origin[i]))
+			for _, r := range writes {
+				kill(r)
+			}
+			if w := rc.Code[p.Origin[i]]; w.Op() == bytecode.RCallW || w.Op() == bytecode.RCallWT {
+				// The receiver the plain call writes (RegAccess).
+				kill(int(w.A()) + 1)
+			}
+			all[i] = a
+			for _, r := range reads {
+				gen(r)
+			}
+		} else {
+			a, b := ins.Writes()
+			if ins.Op == ir.IterStep && !ins.When {
+				// A loop's step writes its value only where it goes on:
+				// at the loop's end the register is what it was.
+				a = -1
+			}
+			kill(a)
+			kill(b)
+			for _, r := range irReads(ins) {
+				gen(r)
+			}
+			if ins.Check {
+				if w := rc.Code[p.Origin[i]]; w.Op() == bytecode.RDerivedRet {
+					// derived_ret's copy of the this binding, its operand
+					// known undefined (lowerReg's undefinedAt), leaves where
+					// the slot is unbound for Go to run the instruction,
+					// which reads the operand: live there, its undefined in
+					// the exit's state. Dead to the copy, the exit had left
+					// the window's stale value, which Go's derived_ret
+					// returned -- a derived constructor whose this an
+					// arrow's super() bound, which native code's this slot
+					// does not see.
+					gen(int(w.A()))
+				}
+			}
 		}
 	}
-	always := make([]uint64, words)
-	for r, c := range p.Captured {
-		if c {
-			set(always, r)
+	opAt[m] = int32(len(ops))
+
+	// The blocks: an instruction that any but the one before goes to starts
+	// one, and one that goes anywhere but to the next ends its own, so that
+	// within a block each instruction goes on to the next, but for the
+	// handler in force.
+	starts := make([]bool, m+1)
+	starts[0], starts[m] = true, true
+	mark := func(j int32) {
+		if j >= 0 && int(j) < m {
+			starts[j] = true
 		}
 	}
-	in := make([]uint64, words)
-	for changed := true; changed; {
-		changed = false
-		for i := len(p.Code) - 1; i >= 0; i-- {
-			if p.Maps[i].Depth < 0 {
+	for i := range m {
+		mark(far[2*i])
+		mark(far[2*i+1])
+		if !falls[i] || far[2*i] >= 0 {
+			starts[i+1] = true
+		}
+	}
+	var blockStart []int32
+	blockOf := make([]int32, m)
+	for i := range m {
+		if starts[i] {
+			blockStart = append(blockStart, int32(i))
+		}
+		blockOf[i] = int32(len(blockStart) - 1)
+	}
+	nb := len(blockStart)
+	blockStart = append(blockStart, int32(m))
+	// Each block's set at its start, from, at a reachable start, every
+	// register a closure captures, which the solution has there.
+	in := make([]ir.LiveSet, nb)
+	for k := range nb {
+		if reach(int(blockStart[k])) {
+			in[k] = always
+		}
+	}
+	at := func(j int32) ir.LiveSet {
+		if !reach(int(j)) {
+			return lb.Empty()
+		}
+		return in[blockOf[j]]
+	}
+	// The blocks whose sets read a block's: those that go to it, and
+	// those with an instruction it is the handler of.
+	predAt := make([]int32, nb+1)
+	edges := func(add func(int, int32)) {
+		for k := range nb {
+			last := int(blockStart[k+1]) - 1
+			if falls[last] && last+1 < m {
+				add(k, blockOf[last+1])
+			}
+			if j := far[2*last]; j >= 0 && int(j) < m {
+				add(k, blockOf[j])
+			}
+			for i := blockStart[k]; i < blockStart[k+1]; i++ {
+				if j := far[2*i+1]; j >= 0 && int(j) < m {
+					add(k, blockOf[j])
+				}
+			}
+		}
+	}
+	edges(func(_ int, to int32) { predAt[to+1]++ })
+	for k := range nb {
+		predAt[k+1] += predAt[k]
+	}
+	preds := make([]int32, predAt[nb])
+	fill := slices.Clone(predAt[:nb])
+	edges(func(from int, to int32) { preds[fill[to]] = int32(from); fill[to]++ })
+
+	// transfer is block k's set at its start, made from its end, each of
+	// its instructions' given to set.
+	// Its sets but the last are its own, which the next one's operations
+	// may change in place, where no instruction's set is kept (set nil),
+	// and else within a register instruction's lowering, whose
+	// instructions' sets are all its first's (below).
+	transfer := func(k int, set func(int, ir.LiveSet)) ir.LiveSet {
+		s, e := int(blockStart[k]), int(blockStart[k+1])
+		cur := lb.Empty()
+		lb.Edit()
+		for i := e - 1; i >= s; i-- {
+			if set != nil && i < e-1 && p.Origin[i] != p.Origin[i+1] {
+				lb.Edit()
+			}
+			if !reach(i) {
+				cur = lb.Empty()
+				if set != nil {
+					set(i, cur)
+				}
 				continue
 			}
-			ins := &p.Code[i]
-			clear(in)
-			succ := func(j int) {
-				if j >= 0 && j < len(p.Code) {
-					for k, x := range at(j) {
-						in[k] |= x
-					}
+			switch {
+			case i == e-1:
+				cur = always
+				if falls[i] {
+					cur = lb.Union(at(int32(i+1)), cur)
 				}
+				cur = lb.Union(cur, at(far[2*i]))
+			case !reach(i + 1):
+				// What a reachable instruction's set has, after one that
+				// is not.
+				cur = always
 			}
-			switch ins.Op {
-			case ir.Jump:
-				succ(ins.Target)
-			case ir.Return:
-			case ir.Branch, ir.IterStep:
-				succ(i + 1)
-				if ins.Op == ir.Branch || !ins.When {
-					succ(ins.Target)
-				}
-			default:
-				succ(i + 1)
-				if ins.Op == ir.Host {
-					if w := rc.Code[p.Origin[i]]; regGoBranches(w) {
-						succ(p.At(p.Origin[i] + 2))
-					}
-				}
-			}
-			if ins.Op == ir.Host {
-				reads, writes, all := RegAccess(rc, int(p.Origin[i]))
-				for _, r := range writes {
-					kill(in, r)
-				}
-				if all {
-					for k := range in {
-						in[k] = ^uint64(0)
-					}
-				}
-				for _, r := range reads {
-					set(in, r)
-				}
+			if all[i] {
+				cur = lb.Full()
 			} else {
-				a, b := ins.Writes()
-				if ins.Op == ir.IterStep && !ins.When {
-					// A loop's step writes its value only where it goes on:
-					// at the loop's end the register is what it was.
-					a = -1
-				}
-				kill(in, a)
-				kill(in, b)
-				for _, r := range irReads(ins) {
-					set(in, r)
-				}
+				cur = lb.Apply(cur, ops[opAt[i]:opAt[i+1]])
 			}
-			if p.HandlerAt != nil && p.HandlerAt[i] != 0 {
-				succ(int(p.Handlers[p.HandlerAt[i]-1].PC))
-			}
-			for k, x := range always {
-				in[k] |= x
-			}
-			if n%64 != 0 {
-				in[words-1] &= 1<<(n%64) - 1
-			}
-			if s := at(i); !slices.Equal(s, in) {
-				copy(s, in)
-				changed = true
+			cur = lb.Union(cur, at(far[2*i+1]))
+			if set != nil {
+				set(i, cur)
 			}
 		}
+		return cur
+	}
+	dirty := make([]bool, nb)
+	for k := range dirty {
+		dirty[k] = true
+	}
+	for changed := true; changed; {
+		changed = false
+		for k := nb - 1; k >= 0; k-- {
+			if !dirty[k] {
+				continue
+			}
+			dirty[k] = false
+			if s := transfer(k, nil); !lb.Equal(s, in[k]) {
+				in[k] = s
+				changed = true
+				for _, q := range preds[predAt[k]:predAt[k+1]] {
+					dirty[q] = true
+				}
+			}
+		}
+	}
+	roots := make([]ir.LiveSet, m)
+	for k := range nb {
+		transfer(k, func(i int, s ir.LiveSet) { roots[i] = s })
 	}
 	// An exit anywhere in a register instruction's lowering runs it again
 	// from its start (ir.Program's Origin): what is live at each of its
 	// instructions is what is live at its first, which the interpreter
 	// reads -- new_array's elements, copied to scratch slots, are read
 	// there, not where the literal is made.
-	for i := 1; i < len(p.Code); i++ {
+	for i := 1; i < m; i++ {
 		if p.Origin[i] == p.Origin[i-1] {
-			copy(at(i), at(i-1))
+			roots[i] = roots[i-1]
 		}
 	}
-	p.Live, p.LiveLocals, p.LiveWords = live, n, words
+	p.Live = lb.Finish(roots)
 }
 
 // irReads is the slots in reads.
@@ -1414,7 +2051,14 @@ func RegAccess(rc *bytecode.RegCode, pc int) (reads, writes []int, all bool) {
 		return out
 	}
 	switch w.Op() {
-	case bytecode.RCallW, bytecode.RCallMW, bytecode.RNewW, bytecode.RCallWT, bytecode.RCallMWT:
+	case bytecode.RCallW, bytecode.RCallWT:
+		// A plain call's receiver register, R[A+1], the call writes --
+		// undefined, the global object, an arrow's this (the VM's
+		// regCallThis) -- and reads nowhere: a read had kept the register
+		// live from the function's start, loaded at its entries and
+		// carried round its loops (liveRegs, which kills it).
+		return append([]int{a}, span(a+2, int(w.X()))...), []int{b}, false
+	case bytecode.RCallMW, bytecode.RNewW, bytecode.RCallMWT:
 		return span(a, 2+int(w.X())), []int{b}, false
 	case bytecode.RGetPrivate:
 		return []int{b, c}, []int{a}, false
@@ -1424,6 +2068,22 @@ func RegAccess(rc *bytecode.RegCode, pc int) (reads, writes []int, all bool) {
 		return append(span(b, 3), c), []int{a}, false
 	case bytecode.RInstanceOf:
 		return []int{b, c}, []int{a}, false
+	case bytecode.RPrivateIn:
+		// #x in o, of the object and the key's register.
+		return []int{b, c}, []int{a}, false
+	case bytecode.RSuperGet, bytecode.RSuperBase:
+		// super's base is its home object's prototype, its receiver this,
+		// register 1 -- where a derived constructor's binding is not, the
+		// frame's.
+		return []int{1}, []int{a}, false
+	case bytecode.RSuperSet:
+		return []int{a, 1}, nil, false
+	case bytecode.RSuperGetIndex:
+		return []int{b, c, 1}, []int{a}, false
+	case bytecode.RDerivedRet:
+		// What a derived constructor returns: its operand, or the frame's
+		// this binding.
+		return []int{a}, []int{a}, false
 	case bytecode.RTypeof:
 		return []int{b}, []int{a}, false
 	case bytecode.RUnary:
@@ -1458,11 +2118,29 @@ func RegAccess(rc *bytecode.RegCode, pc int) (reads, writes []int, all bool) {
 		return []int{b}, nil, false
 	case bytecode.RRestParam, bytecode.RNewTarget, bytecode.RTemplateObject, bytecode.RThis:
 		return nil, []int{a}, false
+	case bytecode.RSuperCall:
+		// Register 1 too, in a derived constructor, which it is not
+		// counted as writing: what is live there stays so.
+		return span(c, b), []int{a}, false
 	case bytecode.RToPropertyKey:
 		return []int{a}, []int{a}, false
 	case bytecode.RAssignConst, bytecode.RThrowRef, bytecode.RCheckThis, bytecode.RDeleteSuper, bytecode.RCloseRegs:
+		// close_regs reads and writes no register's value: what it
+		// changes is what the closures' cells hold.
 		return nil, nil, false
 	case bytecode.RSetUpvalCheck:
+		return []int{a}, nil, false
+	case bytecode.RNewDispose:
+		// A using scope's stack of resources, made; a resource added to
+		// it; its resources disposed of, a throw leaving the scope among
+		// what it reads where C is 1.
+		return nil, []int{a}, false
+	case bytecode.RAddDisposable:
+		return []int{a, b}, nil, false
+	case bytecode.RDispose:
+		if c == 1 {
+			return []int{a, b}, nil, false
+		}
 		return []int{a}, nil, false
 	}
 	return nil, nil, true

@@ -106,6 +106,10 @@ type regCode struct {
 	// native code reads an instruction's Aux (get_private's cache site),
 	// or nil where the code has none.
 	aux unsafe.Pointer
+	// bigSeen is the operators that met BigInts, by register pc, as the
+	// tree's (treeBigSeen), which the slow paths mark where the runtime
+	// runs the JIT (regBigOf); nil until one has.
+	bigSeen atomic.Pointer[treeBigSeen]
 }
 
 // runReg runs frame f as register code c, from instruction start, and

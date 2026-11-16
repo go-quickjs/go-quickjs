@@ -383,8 +383,10 @@ func TestJITRegLiterals(t *testing.T) {
 	}
 }
 
-// regKindsSrc runs a class's constructors, a derived one's before and
-// after its super call, its accessors and methods, and an arrow reading
+// regKindsSrc runs a class's constructors -- the base's constructed too,
+// not only called by the derived one's super call, which the derived
+// one's code, entered at every call, may inline -- a derived one's before
+// and after its super call, its accessors and methods, and an arrow reading
 // its this, in register code: the setter called by Go too (Reflect.set),
 // which native code that inlines it never calls.
 const regKindsSrc = `
@@ -396,7 +398,7 @@ class C extends P { constructor(x) { let k = 0; for (let i = 0; i < 3; i++) k +=
 function kinds(n) {
 	let t = 0
 	const add = (a) => { let r = 0; for (let i = 0; i < 4; i++) r += a + this.k; return r }
-	for (let i = 0; i < n; i++) { const c = new C(i); c.v = i; Reflect.set(c, "v", i); t += c.dbl + c.sum(3) + c.s + add(i) }
+	for (let i = 0; i < n; i++) { const c = new C(i); c.v = i; Reflect.set(c, "v", i); t += c.dbl + c.sum(3) + c.s + add(i) + new P(i).s }
 	return t
 }
 function drive(n) { return kinds.call({k: 2}, n) }

@@ -821,6 +821,9 @@ func rsAdd(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 		return st.put(regs, w, v, err)
 	}
 	v, err := st.r.add(regs[w.B()], regs[w.C()])
+	if regBigOf != nil && err == nil && v.IsBigInt() {
+		regBigOf(st.r, st.c, pc, regs[w.B()], regs[w.C()], v)
+	}
 	if err == nil && v.isHeapBig() && w.X()&regBigMarks != 0 && regBigGives(regs, w, v) {
 		st.r.regBigRelease(regs, w, v)
 	}
@@ -844,6 +847,9 @@ func rsSub(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 	}
 	st.at(pc)
 	v, err := st.r.arith(bytecode.OpSub, regs[w.B()], regs[w.C()])
+	if regBigOf != nil && err == nil && v.IsBigInt() {
+		regBigOf(st.r, st.c, pc, regs[w.B()], regs[w.C()], v)
+	}
 	if err == nil && v.isHeapBig() && w.X()&regBigMarks != 0 && regBigGives(regs, w, v) {
 		st.r.regBigRelease(regs, w, v)
 	}
@@ -867,6 +873,9 @@ func rsMul(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 	}
 	st.at(pc)
 	v, err := st.r.arith(bytecode.OpMul, regs[w.B()], regs[w.C()])
+	if regBigOf != nil && err == nil && v.IsBigInt() {
+		regBigOf(st.r, st.c, pc, regs[w.B()], regs[w.C()], v)
+	}
 	if err == nil && v.isHeapBig() && w.X()&regBigMarks != 0 && regBigGives(regs, w, v) {
 		st.r.regBigRelease(regs, w, v)
 	}
@@ -890,6 +899,9 @@ func rsInc(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 	}
 	st.at(pc)
 	v, err := st.r.regStep(regs[w.B()], 1)
+	if regBigOf != nil && err == nil && v.IsBigInt() {
+		regBigOf(st.r, st.c, pc, regs[w.B()], regs[w.B()], v)
+	}
 	return st.put(regs, w, v, err)
 }
 
@@ -910,6 +922,9 @@ func rsDec(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 	}
 	st.at(pc)
 	v, err := st.r.regStep(regs[w.B()], -1)
+	if regBigOf != nil && err == nil && v.IsBigInt() {
+		regBigOf(st.r, st.c, pc, regs[w.B()], regs[w.B()], v)
+	}
 	return st.put(regs, w, v, err)
 }
 
@@ -1199,6 +1214,9 @@ func rhUShr(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 func rsBitwise(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 	st.at(pc)
 	v, err := st.r.regBinary(regStackOp[w.Op()], regs[w.B()], regs[w.C()])
+	if regBigOf != nil && err == nil && v.IsBigInt() {
+		regBigOf(st.r, st.c, pc, regs[w.B()], regs[w.C()], v)
+	}
 	return st.put(regs, w, v, err)
 }
 
@@ -1249,6 +1267,9 @@ func rsPostStep(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) i
 	next, err := r.regStep(old, delta)
 	if err != nil {
 		return st.fail(err)
+	}
+	if regBigOf != nil && next.IsBigInt() {
+		regBigOf(st.r, st.c, pc, old, old, next)
 	}
 	regs[w.A()] = old
 	regs[w.B()] = next
@@ -1761,6 +1782,11 @@ func rsCompare(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) in
 	if err != nil {
 		return st.fail(err)
 	}
+	if regBigOf != nil && b.IsBigInt() {
+		// A comparison's, of the operands, as the tree's compareOther
+		// marks one.
+		regBigOf(st.r, st.c, pc, regs[w.A()], b, regs[w.A()])
+	}
 	if res != k.not {
 		return regJumpSlow(st, pc, w.SC())
 	}
@@ -1883,10 +1909,17 @@ func rsJTypeof(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) in
 // rhRet and rhRetUndef end the frame: runReg reads what ret returns from
 // the instruction it ended at.
 func rhRet(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
+	if jitBuilt {
+		// A run counted toward its function's budget (regTickRet).
+		regTickRet(st.cl.closureCode)
+	}
 	return regDone
 }
 
 func rhRetUndef(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
+	if jitBuilt {
+		regTickRet(st.cl.closureCode)
+	}
 	return regDone
 }
 
@@ -2017,12 +2050,18 @@ func rsNewArray(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) i
 func rsBin(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 	st.at(pc)
 	v, err := st.r.regBinary(bytecode.Op(w.X()), regs[w.B()], regs[w.C()])
+	if regBigOf != nil && err == nil && v.IsBigInt() {
+		regBigOf(st.r, st.c, pc, regs[w.B()], regs[w.C()], v)
+	}
 	return st.put(regs, w, v, err)
 }
 
 func rsUnary(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
 	st.at(pc)
 	v, err := st.r.regUnary(bytecode.Op(w.X()), regs[w.B()])
+	if regBigOf != nil && err == nil && v.IsBigInt() {
+		regBigOf(st.r, st.c, pc, regs[w.B()], regs[w.B()], v)
+	}
 	return st.put(regs, w, v, err)
 }
 

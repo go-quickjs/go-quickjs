@@ -23,9 +23,10 @@ func (p *Program) Validate() error {
 		want := uint32(pc)
 		if reg {
 			want = p.Origin[pc]
-			if pc > 0 && (want < p.Origin[pc-1] || want == p.Origin[pc-1] && state.Depth != p.Maps[pc-1].Depth) {
+			if pc > 0 && (want < p.Origin[pc-1] && !p.copied(pc) || want == p.Origin[pc-1] && state.Depth != p.Maps[pc-1].Depth) {
 				// An origin's instructions are together, in order, and all
-				// reachable or none.
+				// reachable or none -- a loop's test copied before its
+				// loop, its origins together after the jump's.
 				return fmt.Errorf("jit IR: pc %d: invalid origin", pc)
 			}
 		}
@@ -71,7 +72,10 @@ func (p *Program) Validate() error {
 	// committed says an instruction of the current origin's has committed
 	// (Instruction's Commits): none after it in the origin may leave.
 	committed := false
-	for pc, in := range p.Code {
+	for pc := range p.Code {
+		// By its address: a copy of each instruction had been half of what
+		// the check took.
+		in := &p.Code[pc]
 		if p.starts(pc) {
 			committed = false
 		}
@@ -146,7 +150,7 @@ func (p *Program) Validate() error {
 				return bad("invalid parameter")
 			}
 		case CloseUpvalues:
-			if int(in.Key) > p.Locals {
+			if int(in.Key) > p.Locals || in.Extra < 0 || int(in.Key)+in.Extra > p.Locals {
 				return bad("invalid local")
 			}
 		case UpvalueRead, UpvalueWrite:

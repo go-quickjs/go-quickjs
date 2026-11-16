@@ -22,7 +22,7 @@ func sameFloat(a, b float64) bool {
 
 func TestNativeInvalidCodeSize(t *testing.T) {
 	a := NewArena()
-	for _, instructions := range [][]byte{nil, make([]byte, MaxCodeBytes+1)} {
+	for _, instructions := range [][]byte{nil, {}} {
 		code, err := a.place(instructions)
 		if code != nil || err == nil {
 			t.Fatalf("place(%d bytes) = %v, %v", len(instructions), code, err)

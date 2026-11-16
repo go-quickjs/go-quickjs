@@ -10,7 +10,6 @@ import (
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
-	jitcompile "github.com/go-quickjs/go-quickjs/internal/jit/compile"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
@@ -38,6 +37,14 @@ type jitRegFeedback struct {
 	fb *jitFeedback
 	rc *bytecode.RegCode
 	p  *ir.Program
+	// fwd, for a callee inlined with its call's arguments, which it hands
+	// on (ssa.InlineSite's Arguments), is that call: its apply_args are
+	// the calls inlined with them (forwardInline).
+	fwd *jitForwardFrame
+	// asked are the answers Inline and NativeCalls gave, askedAt their
+	// indexes by the program's instruction (askedOf).
+	asked   []jitRegAsked
+	askedAt []int32
 }
 
 // jitRegFeedbackFor is cl's register code's feedback for p, the program
@@ -46,7 +53,7 @@ func (r *Runtime) jitRegFeedbackFor(cl *closure, p *ir.Program) *jitRegFeedback 
 	if cl == nil || cl.fn == nil || cl.fn.RegCode() == nil || p == nil || p.Origin == nil {
 		return nil
 	}
-	fb := &jitFeedback{r: r, fn: cl.fn, cl: cl, e: r.jitState().regLearnedOf(r.jitKeyOf(cl.fn))}
+	fb := &jitFeedback{r: r, fn: cl.fn, cl: cl, e: r.jitState().regLearnedOf(r.jitRegKeyOf(cl))}
 	return &jitRegFeedback{fb: fb, rc: cl.fn.RegCode(), p: p}
 }
 
@@ -305,11 +312,11 @@ func (f *jitRegFeedback) accessorInline(callee *Object, cl *closure, write bool)
 		jitNoInline != nil && jitNoInline(cl.fn) {
 		return ssa.InlineSite{}, false
 	}
-	p, err := jitcompile.LowerRegInline(cl.reg.rc, cl.fn)
-	if err != nil || p.Validate() != nil {
+	p, err := f.fb.r.jitRegLower(cl, cl.reg.rc, jitLowerInline)
+	if err != nil {
 		return ssa.InlineSite{}, false
 	}
-	r.jitRegSeenFeedback(cl, cl.reg)
+	r.jitRegSeenInlined(f.fb.keep(), cl)
 	k := f.fb.keep()
 	cell := new(Value)
 	*cell = Obj(callee)
@@ -317,7 +324,7 @@ func (f *jitRegFeedback) accessorInline(callee *Object, cl *closure, write bool)
 	k.holders = append(k.holders, callee)
 	k.inlined = append(k.inlined, cl)
 	return ssa.InlineSite{
-		Program: p, Feedback: &jitRegFeedback{fb: &jitFeedback{r: r, fn: cl.fn, cl: cl, e: r.jitState().regLearnedOf(r.jitKeyOf(cl.fn)), root: k}, rc: cl.fn.RegCode(), p: p},
+		Program: p, Feedback: r.jitRegCalleeOf(k, cl, p),
 		Callee: uintptr(unsafe.Pointer(callee)), Closure: uintptr(unsafe.Pointer(cl)),
 		Argc: argc, Method: true, Params: 2 + int(cl.reg.params), ThisSlot: -1, Window: true,
 		Upvalues: jitUpvalueCells(cl), FunctionCell: uintptr(unsafe.Pointer(cell)),
@@ -357,9 +364,10 @@ func (f *jitRegFeedback) Global(pc int) (ssa.GlobalSite, bool) {
 	return f.fb.globalSite(name, site, write, check)
 }
 
-// CallShape is ssa.CalledFeedback's: the argument count of the call at the
-// program's instruction pc, and whether it is a method's -- call_w's and
-// call_method_w's, not one in tail position.
+// CallShape is ssa.CalledClosureFeedback's: the argument count of the call
+// at the program's instruction pc, and whether it is a method's -- call_w's
+// and call_method_w's, not one in tail position, nor, in the function's own
+// code, one whose inlining left native code too often (jitInlineLeft).
 func (f *jitRegFeedback) CallShape(pc int) (int, bool, bool) {
 	w, _, ok := f.at(pc)
 	if !ok {
@@ -367,6 +375,11 @@ func (f *jitRegFeedback) CallShape(pc int) (int, bool, bool) {
 	}
 	rpc := int(f.p.Origin[pc])
 	if rpc < len(f.rc.Marks) && f.rc.Marks[rpc]&bytecode.RMarkTail != 0 {
+		return 0, false, false
+	}
+	if l := f.fb.e; f.fb.root == nil && l != nil && slices.Contains(l.notInline, int32(rpc)) {
+		// Its inlining left native code too often (jitInlineLeft), as the
+		// stack form's.
 		return 0, false, false
 	}
 	switch w.Op() {
@@ -378,11 +391,139 @@ func (f *jitRegFeedback) CallShape(pc int) (int, bool, bool) {
 	return 0, false, false
 }
 
-// CalledClosure is ssa.CalledClosureFeedback's: nothing yet -- the closure
-// made at pc inlined where a call calls it takes its program from its
-// register code, which Stage 3a-3's inliner lowers.
+// CalledClosure is ssa.CalledClosureFeedback's: the closure closure_w makes
+// at the program's instruction pc, which the code's calls of it -- its own,
+// or a callee's it is given to -- may inline, leaving it unmade (ssa's
+// calledClosures), as the stack form's (jitFeedback's CalledClosure): its
+// template, which the code keeps, as the inlined frames' closure an exit
+// names, and what it captures -- a register of its maker's (the register
+// code's Caps), or one of the maker's own captured bindings -- and its
+// function's InlineSite (madeInline); and the instructions of the maker's
+// that close what it captures at a scope's end (close_regs, which the
+// register form's lowering leaves to Go whole, naming no register the
+// builder sees), past which a call inlined would read the binding the
+// scope's next entry makes, the closure the one it took (MadeCallback's
+// Closes). Not an arrow that reads its maker's new.target or super
+// (jitNeedsMaker). In the function's own code alone.
 func (f *jitRegFeedback) CalledClosure(pc int) (ssa.MadeCallback, ssa.InlineSite, bool) {
-	return ssa.MadeCallback{}, ssa.InlineSite{}, false
+	fb := f.fb
+	w, op, ok := f.at(pc)
+	if !ok || op != ir.Closure || w.Op() != bytecode.RClosureW || fb.e == nil || fb.root != nil || fb.cl == nil {
+		return ssa.MadeCallback{}, ssa.InlineSite{}, false
+	}
+	k := int(w.BC())
+	if k >= len(fb.cl.consts) || k >= len(f.rc.Caps) {
+		return ssa.MadeCallback{}, ssa.InlineSite{}, false
+	}
+	c := jitTemplateCell[struct{}](fb, &fb.cl.consts[k])
+	t := c.template()
+	if t == nil || jitNeedsMaker(*c) {
+		return ssa.MadeCallback{}, ssa.InlineSite{}, false
+	}
+	caps, ok := f.madeCaptures(t, k)
+	if !ok {
+		return ssa.MadeCallback{}, ssa.InlineSite{}, false
+	}
+	site, ok := f.madeInline(t)
+	if !ok {
+		return ssa.MadeCallback{}, ssa.InlineSite{}, false
+	}
+	k2 := fb.keep()
+	if !slices.Contains(k2.made, t) {
+		k2.inlined = append(k2.inlined, t)
+		k2.made = append(k2.made, t)
+	}
+	return ssa.MadeCallback{PC: pc, Template: uintptr(unsafe.Pointer(c)), Closure: uintptr(unsafe.Pointer(t)), Captures: caps}, site, true
+}
+
+// madeCaptures are what t, the template of the maker's constant k, captures
+// (ssa.MadeCallback's Captures): a register of the maker's, by its code's
+// Caps, index<<1|1, or one of the maker's own captured bindings, index<<1.
+func (f *jitRegFeedback) madeCaptures(t *closure, k int) ([]int32, bool) {
+	caps := make([]int32, len(t.fn.Upvalues))
+	for i, desc := range t.fn.Upvalues {
+		if !desc.FromParent {
+			caps[i] = int32(desc.Index) << 1
+			continue
+		}
+		if k >= len(f.rc.Caps) || i >= len(f.rc.Caps[k]) {
+			return nil, false
+		}
+		caps[i] = int32(f.rc.Caps[k][i])<<1 | 1
+	}
+	return caps, true
+}
+
+// madeInline is the InlineSite of t's function, a closure the function
+// makes (CalledClosure), to inline as a plain call of it, under the rules
+// a register callee's inlining follows (Inline): register code of the
+// form's own layout a call enters, its arguments kept only to be read
+// (ReadsArguments), not the function's own; its window the call's -- the
+// function, a plain call's receiver, which a callee reading it is given
+// (InlineSite's ThisCell), the arguments -- and no closure object: the
+// builder's to know. An arrow that
+// reads its this reads the maker's, its register 1, as closure_w gives it
+// the frame's register 1 (InlineSite's LexThis), as V8's inlined arrow
+// reads a context slot of its maker's -- not in a derived constructor,
+// whose this may not be bound yet.
+func (f *jitRegFeedback) madeInline(t *closure) (ssa.InlineSite, bool) {
+	fb := f.fb
+	r := fb.r
+	fn := t.fn
+	rc := fn.RegCode()
+	switch fn.Kind {
+	case bytecode.KindNormal, bytecode.KindArrow, bytecode.KindMethod:
+	default:
+		return ssa.InlineSite{}, false
+	}
+	if rc == nil || !rc.Wide || fn.Async || fn.Generator || fn.HasDirectEval ||
+		fn == fb.fn || fn == fb.keep().fn || jitNoInline != nil && jitNoInline(fn) {
+		return ssa.InlineSite{}, false
+	}
+	// One that keeps its arguments only to read them by index and count
+	// them (jitRegReadsArguments) reads the call's (InlineSite's
+	// ReadsArguments), as Inline's callees and the stack form's made
+	// closures (closureInline); any other that keeps them is called.
+	reads := false
+	if rc.UsesArguments || rc.ForwardsArguments || rc.KeepsArgs {
+		if !jitRegReadsArguments(t) {
+			return ssa.InlineSite{}, false
+		}
+		reads = true
+	}
+	lexThis := fn.Kind == bytecode.KindArrow && fn.UsesThis
+	if lexThis && fb.fn.Kind == bytecode.KindDerivedConstructor {
+		return ssa.InlineSite{}, false
+	}
+	p, err := r.jitRegLower(t, rc, jitLowerInline)
+	if err != nil {
+		return ssa.InlineSite{}, false
+	}
+	if t.reg != nil && t.reg.rc == rc {
+		// What its sites' caches have seen besides their entries, as an
+		// inlined callee's (Inline).
+		r.jitRegSeenInlined(fb.keep(), t)
+	}
+	k := fb.keep()
+	in := ssa.InlineSite{
+		Program: p, Feedback: &jitRegFeedback{fb: &jitFeedback{r: r, fn: fn, cl: t, e: r.jitState().regLearnedOf(r.jitRegKeyOf(t)), root: k}, rc: rc, p: p},
+		Closure: uintptr(unsafe.Pointer(t)), Params: 2 + rc.Params, ThisSlot: -1, Window: true, ReadsArguments: reads,
+	}
+	switch {
+	case lexThis:
+		in.LexThis, in.LexThisSlot = true, 1
+	case fn.UsesThis && fn.Kind != bytecode.KindArrow:
+		// A plain call's receiver: the global object a sloppy callee's is,
+		// or undefined.
+		cell := new(Value)
+		*cell = Undefined
+		if fn.CoerceThis {
+			*cell = r.globalThis
+		}
+		k.cells = append(k.cells, cell)
+		in.ThisCell = uintptr(unsafe.Pointer(cell))
+	}
+	return in, true
 }
 
 // callTarget is the function the call at the program's instruction pc
@@ -493,7 +634,14 @@ func (f *jitRegFeedback) Generic(pc int) bool {
 		// would commit before (regLitFed): fed no more instead.
 		return false
 	}
-	return slices.Contains(f.fb.e.failed, int32(f.p.Origin[pc]))
+	if slices.Contains(f.fb.e.failed, int32(f.p.Origin[pc])) {
+		return true
+	}
+	// Arithmetic the interpreter saw meet or make a BigInt on the heap,
+	// which Go makes from native code (ssa.GoArith), as the stack form's
+	// answer of the tree's marks.
+	_, _, heap := f.regBigSeenAt(int(f.p.Origin[pc]))
+	return heap
 }
 
 // regLitFed reports whether the program's instruction pc, of regexp_lit's
@@ -520,7 +668,8 @@ func (f *jitRegFeedback) EntryGeneric(pc int) bool {
 }
 
 // Inline is ssa.Feedback's: a plain call, a method's or a construction of
-// a base constructor -- call_w's, call_method_w's, new_w's -- of one
+// a base constructor -- call_w's, call_method_w's, new_w's, or a call in
+// tail position, tail_call_w's and tail_call_method_w's -- of one
 // function, the one its site's cache holds and its code learned it calls
 // or constructs with (regCallSites), no other, that runs register code
 // native callers may call, not the caller's own nor the compiled
@@ -531,14 +680,112 @@ func (f *jitRegFeedback) EntryGeneric(pc int) bool {
 // fits, and how deep. An inlined callee's calls are asked so too, of its
 // own caches and what its code learned, as V8 inlines a callee's callees.
 // A call whose inlined callee left native code too often is not inlined
-// again (jitInlineLeft's notInline), as the stack form's.
+// again (jitInlineLeft's notInline), as the stack form's. A callee that
+// keeps its arguments is inlined as the stack form's too: one that reads
+// them, its reads the call's (ReadsArguments); one that hands them on,
+// with them, its apply_args the inlined calls of what it forwards to
+// (Arguments, forwardInline).
+//
+// Asked once a compile for each instruction (askedOf): the builder asks it
+// of each of the root's calls in each of its builds, and of each call of a
+// callee it plans to inline, and the answer, a search of the VM's caches
+// and a callee's feedback made, does not change while it builds.
 func (f *jitRegFeedback) Inline(pc int) (ssa.InlineSite, bool) {
+	a := f.askedOf(pc)
+	if a == nil {
+		return f.inline(pc)
+	}
+	if a.did&askedInline == 0 {
+		// Found before a is written: the finding may grow the answers.
+		site, ok := f.inline(pc)
+		a = f.askedOf(pc)
+		a.did |= askedInline
+		if ok {
+			a.site = &site
+		}
+	}
+	if a.site == nil {
+		return ssa.InlineSite{}, false
+	}
+	return *a.site, true
+}
+
+// jitRegAsked is what a register compile's feedback answered for one of
+// its program's instructions, asked once (jitRegFeedback's askedOf): its
+// Inline's answer, site, nil for none, and its NativeCalls', calls, where
+// did says they were asked.
+type jitRegAsked struct {
+	site  *ssa.InlineSite
+	calls []ssa.CallSite
+	did   uint8
+}
+
+// What a jitRegAsked holds (did).
+const (
+	askedInline uint8 = 1 << iota
+	askedCalls
+)
+
+// askedOf is the answers f gave for its program's instruction pc, made
+// empty at its first ask, or nil past the program. The answers are by
+// index, which askedAt keeps by pc, one past it: most of a program's
+// instructions are no calls.
+func (f *jitRegFeedback) askedOf(pc int) *jitRegAsked {
+	if pc < 0 || pc >= len(f.p.Code) {
+		return nil
+	}
+	if f.askedAt == nil {
+		f.askedAt = make([]int32, len(f.p.Code))
+	}
+	if i := f.askedAt[pc]; i != 0 {
+		return &f.asked[i-1]
+	}
+	f.asked = append(f.asked, jitRegAsked{})
+	f.askedAt[pc] = int32(len(f.asked))
+	return &f.asked[len(f.asked)-1]
+}
+
+// jitRegCalleeOf is the feedback of cl's register code lowered as p for a
+// callee that the compile whose root's feedback is k asks to inline: one
+// for all of its calls the compile asks of (k's regCallees), as its
+// answers are its code's and its caches', the same at each -- but a
+// forwarding callee's, whose frame is its call's (jitRegFeedback's fwd).
+// Made at each ask, they had been most of what the asks allocated, a
+// large function asking of every call it makes, and inlining a few.
+func (r *Runtime) jitRegCalleeOf(k *jitFeedback, cl *closure, p *ir.Program) *jitRegFeedback {
+	for _, c := range k.regCallees {
+		if c.fb.cl == cl && c.p == p {
+			return c
+		}
+	}
+	c := &jitRegFeedback{fb: &jitFeedback{r: r, fn: cl.fn, cl: cl, e: r.jitState().regLearnedOf(r.jitRegKeyOf(cl)), root: k}, rc: cl.fn.RegCode(), p: p}
+	k.regCallees = append(k.regCallees, c)
+	return c
+}
+
+// inline is Inline's answer, found.
+func (f *jitRegFeedback) inline(pc int) (ssa.InlineSite, bool) {
 	w, op, ok := f.at(pc)
 	if !ok || op != ir.Host || !f.p.Code[pc].Window {
 		return ssa.InlineSite{}, false
 	}
-	method, construct := w.Op() == bytecode.RCallMW, w.Op() == bytecode.RNewW
-	if w.Op() != bytecode.RCallW && !method && !construct {
+	if w.Op() == bytecode.RApplyArgs {
+		// A forwarding call of the frame's own arguments: inlined where
+		// the frame is an inlined callee's given its call's (fwd), called
+		// natively otherwise, as the stack form's (forwardCalls).
+		if f.fwd == nil {
+			return ssa.InlineSite{}, false
+		}
+		return f.forwardInline(pc)
+	}
+	// A call in tail position (tail_call_w, tail_call_method_w) is
+	// inlined as the ordinary call, as the stack form's (jitCallInstr):
+	// the builder guards first that the stack is shallow, where the
+	// interpreter makes it as the ordinary call too (ssa.OpTailSelf,
+	// OpTailRoom), and leaves for it to give the frame up otherwise.
+	call := jitRegCallOp(w.Op())
+	method, construct := call == bytecode.RCallMW, call == bytecode.RNewW
+	if call != bytecode.RCallW && !method && !construct {
 		return ssa.InlineSite{}, false
 	}
 	rpc := int32(f.p.Origin[pc])
@@ -550,28 +797,62 @@ func (f *jitRegFeedback) Inline(pc int) (ssa.InlineSite, bool) {
 		return ssa.InlineSite{}, false
 	}
 	argc := int(w.X())
-	sites, objs, cls := f.regCallTargets(pc, w, argc, method)
-	if len(sites) != 1 || sites[0].ByCode != 0 || sites[0].ArrowThis {
+	var t jitRegTargets
+	f.regCallTargets(&t, pc, w, argc, method)
+	if t.n != 1 || t.sites[0].ByCode != 0 || t.sites[0].ArrowThis || t.sites[0].Via != 0 {
+		// One through Function.prototype.call, G.call(x, ...), is called
+		// natively, never inlined, as the stack form's (jitCalledVia).
 		return ssa.InlineSite{}, false
 	}
-	site, o, cl := sites[0], objs[0], cls[0]
+	site, o, cl := t.sites[0], t.objs[0], t.cls[0]
 	if cl.fn == f.fb.fn || cl.fn == f.fb.keep().fn || jitNoInline != nil && jitNoInline(cl.fn) {
 		return ssa.InlineSite{}, false
 	}
-	p, err := jitcompile.LowerRegInline(cl.reg.rc, cl.fn)
-	if err != nil || p.Validate() != nil {
+	kind, reads, forwards := jitLowerInline, false, false
+	if site.FrameArgs {
+		// A callee that keeps its arguments (ssa.CallSite's FrameArgs),
+		// inlined as the stack form's: one that only reads them, its
+		// reads the call's arguments (ReadsArguments); one that hands
+		// them on, with them, its forwarding calls inlined with them in
+		// turn (Arguments, forwardInline). Any other is called.
+		var ctor *Object
+		if construct {
+			ctor = o
+		}
+		switch {
+		case !construct && jitRegReadsArguments(cl):
+			reads = true
+		case jitRegForwards(cl) && f.fb.r.jitRegForwardsInline(cl, ctor, argc, jitInlineDepth):
+			kind, forwards = jitLowerForward, true
+		default:
+			return ssa.InlineSite{}, false
+		}
+	}
+	p, err := f.fb.r.jitRegLower(cl, cl.reg.rc, kind)
+	if err != nil {
 		return ssa.InlineSite{}, false
 	}
 	r := f.fb.r
 	// What its sites' caches have seen besides their entries, as its own
 	// compiles take it (jitRegSeenFeedback).
-	r.jitRegSeenFeedback(cl, cl.reg)
+	r.jitRegSeenInlined(f.fb.keep(), cl)
 	k := f.fb.keep()
-	callee := &jitRegFeedback{fb: &jitFeedback{r: r, fn: cl.fn, cl: cl, e: r.jitState().regLearnedOf(r.jitKeyOf(cl.fn)), root: k}, rc: cl.fn.RegCode(), p: p}
+	var callee *jitRegFeedback
+	if forwards {
+		callee = &jitRegFeedback{fb: &jitFeedback{r: r, fn: cl.fn, cl: cl, e: r.jitState().regLearnedOf(r.jitRegKeyOf(cl)), root: k}, rc: cl.fn.RegCode(), p: p}
+	} else {
+		callee = r.jitRegCalleeOf(k, cl, p)
+	}
 	in := ssa.InlineSite{
 		Program: p, Feedback: callee, Callee: site.Callee, Closure: site.Closure,
 		Argc: argc, Method: method, Params: 2 + int(cl.reg.params), ThisSlot: -1, Window: true,
-		Coerce: site.Coerce, Upvalues: jitUpvalueCells(cl),
+		Coerce: site.Coerce, Upvalues: jitUpvalueCells(cl), ReadsArguments: reads, Arguments: forwards,
+	}
+	if forwards {
+		callee.fwd = &jitForwardFrame{argc: argc}
+		if construct {
+			callee.fwd.ctor = o
+		}
 	}
 	if construct {
 		// A construction's (new_w's) of a base constructor, its receiver
@@ -601,6 +882,19 @@ func (f *jitRegFeedback) Inline(pc int) (ssa.InlineSite, bool) {
 	return in, true
 }
 
+// jitRegCallOp is op with a call in tail position's opcode as the
+// ordinary call's, as native code makes it where the stack is shallow, as
+// the stack form's jitCallOp.
+func jitRegCallOp(op bytecode.ROp) bytecode.ROp {
+	switch op {
+	case bytecode.RCallWT:
+		return bytecode.RCallW
+	case bytecode.RCallMWT:
+		return bytecode.RCallMW
+	}
+	return op
+}
+
 // GoCalls is ssa.GoFeedback's: native code made from register code calls
 // Go, which makes what needs no frame of the VM's from what the code
 // passes it, and a call on the register frame (jitRegGoCall); what needs
@@ -615,8 +909,38 @@ func (f *jitRegFeedback) GoCalls() bool { return true }
 // other is a call of Go (ssa.GoCall), which makes it on the register frame
 // without leaving native code (jitRegGoCall). A call in tail position is
 // neither, which the interpreter makes in constant space at a host exit.
+//
+// Asked once a compile for each instruction, as Inline is.
 func (f *jitRegFeedback) NativeCalls(pc int) []ssa.CallSite {
+	a := f.askedOf(pc)
+	if a == nil {
+		return f.nativeCalls(pc)
+	}
+	if a.did&askedCalls == 0 {
+		// The first ask is given the answer itself, the others copies of
+		// it: the builder changes what it is given only as each ask would
+		// (ssa's nativeCalls), and keeps the first's.
+		calls := f.nativeCalls(pc)
+		a = f.askedOf(pc)
+		a.calls, a.did = calls, a.did|askedCalls
+		return calls
+	}
+	return slices.Clone(a.calls)
+}
+
+// nativeCalls is NativeCalls' answer, found.
+func (f *jitRegFeedback) nativeCalls(pc int) []ssa.CallSite {
 	w, op, ok := f.at(pc)
+	if ok && op == ir.IterStep && w.Op() == bytecode.RIterNext && !f.p.Code[pc].When && !f.p.Code[pc].Rest {
+		// A loop's step's native call of its iterator's next
+		// (regStepSites).
+		return f.regStepSites(pc)
+	}
+	if ok && (op == ir.Host && f.p.Code[pc].Whole || op == ir.FieldDefine && w.Op() == bytecode.RDefineField) {
+		// An instruction Go runs whole, its fast paths native code's
+		// (regWholeSite).
+		return f.regWholeSite(pc, w)
+	}
 	if !ok || op != ir.Host || !f.p.Code[pc].Window {
 		return nil
 	}
@@ -631,14 +955,21 @@ func (f *jitRegFeedback) NativeCalls(pc int) []ssa.CallSite {
 		return []ssa.CallSite{{Go: ssa.GoCall, InstanceOf: true, Argc: 1, ThisSlot: -1}}
 	}
 	rpc := int(f.p.Origin[pc])
+	if w.Op() == bytecode.RSuperCall {
+		// A derived constructor's super(...) (regSuperSites).
+		return f.regSuperSites(pc, w)
+	}
 	if w.Op() == bytecode.RLit {
 		// regexp_lit's call of the method its expansion read, of its one
 		// argument: Go's from native code, as call_method_w's marked to
-		// give the literal back (jitRegGoCall), or the leaf's (Leaf).
+		// give the literal back (jitRegGoCall), or the leaf's (Leaf), its
+		// receiver the literal's RegExp from its pool (regLitPool), which
+		// the leaf gives back to it (ssa.CallSite's Give,
+		// jitRegExpLeafGive).
 		if !f.regLitFed(pc) {
 			return nil
 		}
-		return []ssa.CallSite{{Go: ssa.GoCall, Argc: 1, Method: true, ThisSlot: -1}}
+		return []ssa.CallSite{{Go: ssa.GoCall, Argc: 1, Method: true, ThisSlot: -1, Give: f.regLitPool(pc, w)}}
 	}
 	if rpc < len(f.rc.Marks) && f.rc.Marks[rpc]&bytecode.RMarkTail != 0 {
 		return nil
@@ -646,6 +977,27 @@ func (f *jitRegFeedback) NativeCalls(pc int) []ssa.CallSite {
 	// A call in tail position (tail_call_w, tail_call_method_w) is made as
 	// the ordinary call, where the stack is shallow (ir's Tail).
 	argc, method := int(w.X()), w.Op().MethodCall()
+	if w.Op() == bytecode.RApplyArgs {
+		// f.apply(x, arguments): a native call of the functions its code
+		// learned it forwards to (regCallSite's Forward), or else a call
+		// of Go, which makes it from the frame's arguments in the context
+		// -- Array.apply(null, arguments) without a frame (jitForwardPlain)
+		// -- as the stack form's (forwardCalls), the realm's apply
+		// checked by the code.
+		if !f.p.Forwards || f.fb.r.applyFn == nil {
+			return nil
+		}
+		if sites := f.regCallSites(pc, w, 2, false); len(sites) != 0 {
+			if l := f.fb.e; l != nil && jitCountAt(l.nativeCalls, rpc) >= jitCallTargets {
+				// As many as it calls natively: any other Go's.
+				sites[0].Generic = true
+			}
+			return sites
+		}
+		k := f.fb.keep()
+		k.holders = append(k.holders, f.fb.r.applyFn)
+		return []ssa.CallSite{{Go: ssa.GoCall, Forward: true, Apply: uintptr(unsafe.Pointer(f.fb.r.applyFn)), Argc: 2, ThisSlot: -1}}
+	}
 	n := argc + 1
 	if method {
 		n++
@@ -653,13 +1005,36 @@ func (f *jitRegFeedback) NativeCalls(pc int) []ssa.CallSite {
 	if n > abi.MaxGoArgs {
 		return nil
 	}
+	if site, ok := f.regAllocSite(rpc, w, argc); ok {
+		return []ssa.CallSite{site}
+	}
 	if sites := f.regCallSites(pc, w, argc, method); len(sites) != 0 {
+		if l := f.fb.e; w.Op() != bytecode.RNewW && l != nil && jitCountAt(l.nativeCalls, rpc) >= jitCallTargets {
+			// As many as it calls natively: any other function it calls
+			// through its link (ssa.CallSite's Generic), as the stack form's
+			// code does -- where Go had made every call past them, AWFY's
+			// Richards' tasks' functions, which each run makes anew.
+			sites[0].Generic = true
+			sites[0].GenericEnv, sites[0].GenericRealm = uintptr(unsafe.Pointer(f.fb.cl.env)), uintptr(unsafe.Pointer(f.fb.cl.realm))
+		}
 		return sites
 	}
 	if site, ok := f.regBuiltinSite(w, argc, method); ok {
 		return []ssa.CallSite{site}
 	}
-	return []ssa.CallSite{{Go: ssa.GoCall, Argc: argc, Method: method, New: w.Op() == bytecode.RNewW, ThisSlot: -1}}
+	site := ssa.CallSite{Go: ssa.GoCall, Argc: argc, Method: method, New: w.Op() == bytecode.RNewW, ThisSlot: -1}
+	if method {
+		// A RegExp literal's call, whose RegExp a leaf's call gives back
+		// to the literal's pool (ssa.CallSite's Give).
+		site.Give = f.regLitPool(pc, w)
+	}
+	// A call of the realm's next on generators the code resumes natively
+	// (regGenNextSite), or a generator function's call, its generator made
+	// natively (regGenMakeSite).
+	if f.regGenNextSite(rpc, &site); site.Pool == 0 {
+		f.regGenMakeSite(rpc, &site)
+	}
+	return []ssa.CallSite{site}
 }
 
 // regBuiltinSite is the call of a built-in native code makes itself whose
@@ -719,8 +1094,10 @@ func (f *jitRegFeedback) BigIntSole() (uint64, bool) {
 }
 
 // regSoleRegisters is the registers of rc, fn's register code lowered to
-// p, of the first 64, that hold their values alone: past the function,
-// this and the parameters, none a closure captures (ir.Program's
+// p, of the first 64, that hold their values alone: its bindings past the
+// function, this and the parameters -- not its temporaries, whose values
+// an operator's call gives back as it takes them (ssa's regBigFresh), as
+// the stack form's operands on its stack are -- none a closure captures (ir.Program's
 // Captured), each read only as an operand of an operator that makes a
 // value of its own -- arithmetic, bitwise, a comparison, a test, a
 // branch -- in a function that is no generator, no async function, has no
@@ -737,7 +1114,7 @@ func regSoleRegisters(fn *bytecode.Function, rc *bytecode.RegCode, p *ir.Program
 		return 0
 	}
 	var cand uint64
-	for k := 2 + fn.ParamCount; k < rc.NumRegs && k < 64; k++ {
+	for k := 2 + fn.ParamCount; k < 2+fn.ParamCount+rc.Inits && k < rc.NumRegs && k < 64; k++ {
 		if !p.IsCaptured(k) {
 			cand |= 1 << uint(k)
 		}
@@ -762,8 +1139,11 @@ func regSoleRegisters(fn *bytecode.Function, rc *bytecode.RegCode, p *ir.Program
 			bytecode.RJLtI, bytecode.RJNLtI, bytecode.RJLeI, bytecode.RJNLeI, bytecode.RJGtI, bytecode.RJNGtI, bytecode.RJGeI, bytecode.RJNGeI,
 			bytecode.RJSEq, bytecode.RJSNe, bytecode.RJSEqI, bytecode.RJSNeI,
 			bytecode.RJEq, bytecode.RJNe, bytecode.RJEqI, bytecode.RJNeI, bytecode.RJNull, bytecode.RJNotNull,
-			bytecode.RRetUndef:
-			// Operands, results of their own, tests and branches.
+			bytecode.RRetUndef, bytecode.RAppend, bytecode.RStrFreeze:
+			// Operands, results of their own, tests and branches; an
+			// append's addition, of a result of its own, and a read of
+			// the string it grows that leaves the value where it is, as
+			// the stack form's add and str_freeze (bytecode.SoleLocals).
 		case bytecode.RMove, bytecode.RPostInc, bytecode.RPostDec, bytecode.RGetLength, bytecode.RGetMethod, bytecode.RGetMethodW, bytecode.RGetProp:
 			// Its value left in another register, or read a property of.
 			escape(b)
@@ -841,7 +1221,11 @@ func (f *jitRegFeedback) Leaf(pc int) (uintptr, bool) {
 	// literal's (RMarkLitArg), whose call of Go gives the literal its
 	// RegExp back, as the stack form's does.
 	replace := callee == f.fb.r.strReplaceFn && w.Op() == bytecode.RCallMW && w.X() == 2 && marks&bytecode.RMarkLitArg == 0
-	if !jitLeafOp(fd.elemOp) && !regexp && !replace {
+	// Array.prototype.push of other than one value, which the stack form's
+	// code learns a leaf at its calls of Go (jitPlainCall): one value's
+	// push native code appends itself.
+	push := fd.elemOp == elemPush && w.X() != 1
+	if !jitLeafOp(fd.elemOp) && !regexp && !replace && !push {
 		return 0, false
 	}
 	f.fb.keep().holders = append(f.fb.keep().holders, callee)
@@ -1018,6 +1402,63 @@ func (f *jitRegFeedback) Literal(pc int) (ssa.LiteralSite, bool) {
 	return ssa.LiteralSite{Pool: uintptr(unsafe.Pointer(l.pool)), Shared: l.shared}, true
 }
 
+// regLitPool is the address of the pool of the RegExp literal whose RegExp
+// is the receiver of the call at the program's instruction pc, w's -- a
+// regexp_lit's that calls (compile's regexpLit), or a call_method_w marked
+// to give its receiver back (RMarkLitRecv), the regexp_lit before it that
+// does not call having put the RegExp in its window -- which nothing but
+// the call reaches: the literal literalAt finds or makes for that
+// regexp_lit's ObjectLiteral, by the register pc they share, kept with the
+// code. 0 for any other call, or where it has none.
+func (f *jitRegFeedback) regLitPool(pc int, w bytecode.RInstr) uintptr {
+	e, cl, r := f.fb.e, f.fb.cl, f.fb.r
+	if e == nil || cl == nil || pc >= len(f.p.Origin) {
+		return 0
+	}
+	rpc := int(f.p.Origin[pc])
+	k := int(w.C())
+	switch {
+	case w.Op() == bytecode.RLit && w.X()&bytecode.RLitCall != 0:
+	case w.Op() == bytecode.RCallMW && rpc < len(f.rc.Marks) && f.rc.Marks[rpc]&bytecode.RMarkLitRecv != 0 && rpc < len(f.rc.Aux):
+		// Its literal's regexp_lit, of its window and its constant
+		// (regcomp's regexpLitCall): the instructions between make the
+		// arguments.
+		k = int(f.rc.Aux[rpc])
+		at := -1
+		for q := rpc - 1; q >= 0; q-- {
+			if x := f.rc.Code[q]; x.Op() == bytecode.RLit && x.X()&bytecode.RLitCall == 0 && x.A() == w.A() && int(x.C()) == k {
+				at = q
+				break
+			}
+		}
+		if at < 0 {
+			return 0
+		}
+		rpc = at
+	default:
+		return 0
+	}
+	var l *jitLiteral
+	for i := range e.literals {
+		if int(e.literals[i].pc) == rpc && e.literals[i].fn == cl.fn {
+			l = &e.literals[i]
+			break
+		}
+	}
+	if l == nil {
+		consts := regConsts(cl.fn, f.rc)
+		if k >= len(consts) || consts[k].Kind != bytecode.ConstRegExp {
+			return 0
+		}
+		l = r.jitRegExpLiteral(e, cl, rpc, &consts[k])
+	}
+	if l == nil || l.lit == nil {
+		return 0
+	}
+	f.fb.keep().pools = append(f.fb.keep().pools, l.pool)
+	return uintptr(unsafe.Pointer(l.pool))
+}
+
 // literalAt is the literal of the register instruction of the program's
 // instruction pc, an ObjectLiteral or an ArrayLiteral, made if it has none.
 func (f *jitRegFeedback) literalAt(pc int) *jitLiteral {
@@ -1190,9 +1631,15 @@ func (f *jitRegFeedback) ArrayProtos() ([2]ssa.Holder, bool) { return f.fb.Array
 // GenNext is ssa.GenStepFeedback's half that is the realm's, jitFeedback's.
 func (f *jitRegFeedback) GenNext() uintptr { return f.fb.GenNext() }
 
-// GenSteps is ssa.GenStepFeedback's other half: no generator is known to
-// a register loop's step yet (jitEntry's genSteps are the stack form's).
-func (f *jitRegFeedback) GenSteps(pc int) []ssa.GenStep { return nil }
+// GenSteps is ssa.GenStepFeedback's other half: the generators the step
+// of the program's instruction pc has met (jitRegGenSeen), which it
+// resumes natively (regGenSteps).
+func (f *jitRegFeedback) GenSteps(pc int) []ssa.GenStep {
+	if pc < 0 || pc >= len(f.p.Code) {
+		return nil
+	}
+	return f.regGenSteps(int(f.p.Origin[pc]))
+}
 
 // HasCache is ssa.HasCacheFeedback's, jitFeedback's.
 func (f *jitRegFeedback) HasCache() uintptr { return f.fb.HasCache() }

@@ -106,6 +106,25 @@ func TestReleaseStackWhileRunning(t *testing.T) {
 	}
 }
 
+// TestStackEndInsideAllocation pins that a stack's allocation, a new one's
+// and a reused one's, has a slot past its length, which a frame taking
+// the stack to its end has its operands' address at: one past the
+// allocation, the collector found it pointing into whatever came next
+// ("found bad pointer in Go heap", TestJITRegCallRoom's recursion to the
+// stack's end in register code with scratch slots and nothing past them).
+func TestStackEndInsideAllocation(t *testing.T) {
+	t.Parallel()
+	const size = 4096 + 17
+	for i := range 2 {
+		r := New(Config{StackSize: size})
+		if len(r.stack) != size || cap(r.stack) != size+1 {
+			t.Fatalf("runtime %d: stack of length %d, capacity %d; want %d, %d", i, len(r.stack), cap(r.stack), size, size+1)
+		}
+		r.Close()
+		r.ReleaseClosed()
+	}
+}
+
 // TestReturnedTreeFramesAreCleared pins that the sweep of returned frames
 // clears the tree tier's context too, which a tree leaves set when it
 // returns: the closure it ran, its locals and the value it returned would

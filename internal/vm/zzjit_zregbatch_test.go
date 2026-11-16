@@ -196,7 +196,12 @@ func TestJITRegBatchNative(t *testing.T) {
 		}
 	}
 	for op, n := range st.HostOps {
-		if n > 1000 {
+		// Each left until the code was compiled again for what it learned
+		// there, once it had spent jitCallThreshold invocations' worth of
+		// work since (jitRegLearnedDue), as the stack form's code is
+		// (jitLearnedDue): a few hundred turns of a loop that leaves at
+		// each, not one for each of the 12,000 turns.
+		if n > 2000 {
 			t.Errorf("%s left to Go %d times", op, n)
 		}
 	}

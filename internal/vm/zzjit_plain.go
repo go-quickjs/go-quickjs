@@ -45,6 +45,12 @@ func (r *Runtime) jitGoCallPlain(ctx *abi.Context) bool {
 	case abi.GoCallForIn:
 		// A for...in's cursor (jitForInPlain).
 		return r.jitForInPlain(ctx)
+	case abi.GoCallForOf:
+		// A for...of's cursor of an array (jitForOfPlain).
+		return r.jitForOfPlain(ctx)
+	case abi.GoCallStep:
+		// A loop's step over an array (jitStepPlain).
+		return r.jitStepPlain(ctx)
 	case abi.GoCallForward:
 		// Array.apply(null, arguments) (jitForwardPlain).
 		return r.jitForwardPlain(ctx)
@@ -71,6 +77,15 @@ func (r *Runtime) jitGoCallPlain(ctx *abi.Context) bool {
 		s, idx := r.jit, int(ctx.Level)
 		if idx >= len(s.ssaCtxs) || s.ssaCtxs[idx] != ctx {
 			return false
+		}
+		if cl, rin, reg := r.jitRegPlainSet(ctx, idx); reg {
+			// Register code's: its set_prop's site and name, at its
+			// register pc, never the stack form's instruction there.
+			if cl == nil || !r.jitPlainWrite(cl, rin, jitGoArg(ctx, 0), jitGoArg(ctx, 1)) {
+				return false
+			}
+			v = Undefined
+			break
 		}
 		var cl *closure
 		switch ctx.Live {
@@ -259,6 +274,59 @@ func (r *Runtime) jitForInPlain(ctx *abi.Context) bool {
 	return true
 }
 
+// jitForOfPlain makes a for...of's cursor of the array native code passed
+// (abi.GoCallForOf) as for_of_start makes it (startForOf), without a
+// frame: of an array of no hole's table whose iteration is the realm's
+// intrinsic one (usesIntrinsicArrayIterator), which runs no script and
+// cannot throw -- as jitForInPlain makes a for...in's. A loop over an
+// array native code steps itself (mir's iterStep) but for its end
+// (jitStepPlain); its cursor, made with the frames of the levels native
+// code called it from (jitRegGoCallNested), was most of what AWFY's
+// Bounce spent in Go. It writes the cursor to the call's keep cell and
+// reports whether it made it; anything else it leaves to the call with
+// its frame.
+func (r *Runtime) jitForOfPlain(ctx *abi.Context) bool {
+	v := jitGoArg(ctx, 0)
+	if !v.IsObject() || r.meter != nil {
+		return false
+	}
+	o := v.Object()
+	if o.class != ClassArray || o.flags&objHasSparseElements != 0 || !r.usesIntrinsicArrayIterator(o) {
+		return false
+	}
+	*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = r.newIterObject(iterState{arr: o})
+	return true
+}
+
+// jitStepPlain makes a loop's step (abi.GoCallStep) of a cursor over an
+// array as iterNext makes it, without a frame, where that runs no script
+// and cannot throw: past the array's length, the cursor done, the
+// uninitialized value, which the code's step takes for the loop's end; or
+// an element of its dense storage that is no hole. Native code steps the
+// elements itself (mir's iterStep) and calls Go at the end, and for a hole
+// or an element past its storage, which a getter may answer: those it
+// leaves to the call with its frame. It writes the answer to the call's
+// keep cell and reports whether it made it.
+func (r *Runtime) jitStepPlain(ctx *abi.Context) bool {
+	st := cursorOf(jitGoArg(ctx, 0))
+	if st == nil || st.arr == nil || st.done {
+		return false
+	}
+	var v Value
+	switch i, els := st.idx, st.arr.elemsOf(); {
+	case i >= int(st.arr.arrayLength()):
+		st.done = true
+		v = uninitialized
+	case i < len(els) && !isHole(els[i]):
+		st.idx++
+		v = els[i]
+	default:
+		return false
+	}
+	*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
+	return true
+}
+
 // jitMaybePlain reports, of a call of Go native code makes (ssa.GoCall),
 // in a few instructions, which inline where jitHostCall asks it, whether
 // jitGoCallPlain might make it: a for...in's cursor; a property's write;
@@ -267,7 +335,7 @@ func (r *Runtime) jitForInPlain(ctx *abi.Context) bool {
 // then refuses.
 func (r *Runtime) jitMaybePlain(ctx *abi.Context) bool {
 	switch kind := ctx.GoOp >> abi.GoOpKindShift & 0xff; kind {
-	case abi.GoCallSet, abi.GoCallOp, abi.GoCallForIn:
+	case abi.GoCallSet, abi.GoCallOp, abi.GoCallForIn, abi.GoCallForOf, abi.GoCallStep:
 		return true
 	case abi.GoCallForward:
 		// Array.apply(null, arguments), Array the call's first operand.
@@ -368,6 +436,16 @@ func (r *Runtime) jitLeafCall(ctx *abi.Context) bool {
 	if !ok {
 		return false
 	}
+	if ctx.GoLast != 0 {
+		if st := (*abi.GoCallState)(*(*unsafe.Pointer)(unsafe.Pointer(&ctx.GoLast))); st.Give != 0 && st.Leaf == uintptr(unsafe.Pointer(fn.Object())) && st.Op>>abi.GoOpKindShift&0xff == abi.GoCallMethod &&
+			(fn.Object() == r.regexpExecFn || fn.Object() == r.regexpTestFn) {
+			// A RegExp literal's call: its RegExp back to its pool, as
+			// jitLeafGo gives it back.
+			argc := int(st.Op>>abi.GoOpArgcShift) & 0xff
+			r.jitRegExpLeafGive((*abi.ObjectPool)(*(*unsafe.Pointer)(unsafe.Pointer(&st.Give))), fn.Object() == r.regexpTestFn,
+				jitGoArg(ctx, 1), unsafe.Slice((*Value)(unsafe.Pointer(&ctx.GoArgs[2])), min(argc, abi.MaxGoArgs-2)))
+		}
+	}
 	*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
 	return true
 }
@@ -387,7 +465,9 @@ func (r *Runtime) jitLeafSeen(ctx *abi.Context, in bytecode.Instr) {
 	}
 	st.LeafSeen = true
 	s, idx := r.jit, int(ctx.Level)
-	if idx >= len(s.ssaCtxs) || s.ssaCtxs[idx] != ctx {
+	if idx >= len(s.ssaCtxs) || s.ssaCtxs[idx] != ctx || r.jitRegCodeIn(ctx, idx) {
+		// Register code learns its calls' leaves from its sites' caches
+		// (jitRegFeedback's Leaf), not at its calls of Go by stack pc.
 		return
 	}
 	var cl *closure

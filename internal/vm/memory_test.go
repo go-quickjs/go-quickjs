@@ -58,3 +58,40 @@ func TestMemoryMeterAccuracy(t *testing.T) {
 		r.Close()
 	}
 }
+
+// TestStoppedScriptLeavesNoRegisters stops a recursion that builds a tree
+// at its runtime's memory limit and checks that ClearStop, as the host's
+// next call begins, ends the stopped script's turn: nothing of it is left
+// on the stack past its top. Left there, its registers were counted by the
+// next call's measure wherever that call's frames covered the slots
+// without writing them, and stopped at the limit a call that allocated
+// almost nothing -- under -d=checkptr=2, whose allocations measure more
+// often, TestJITRegNativeHonoursLimits' sum.
+func TestStoppedScriptLeavesNoRegisters(t *testing.T) {
+	r := New(Config{MemoryLimit: 16 << 20})
+	defer r.Close()
+	if _, err := r.Run(compileForTest(t, `
+function tree(d) {
+	if (d == 0) return { v: 1, s: "x" + d };
+	return { l: tree(d - 1), r: tree(d - 1), d: d };
+}`)); err != nil {
+		t.Fatal(err)
+	}
+	fn, _ := r.GetProp(Obj(r.Global()), r.Intern("tree"))
+	if _, err := r.Call(fn, Undefined, []Value{Float(30)}); err != ErrMemoryLimit {
+		t.Fatalf("tree(30): %v, want the memory limit's error", err)
+	}
+	high := r.stackHigh
+	if high == 0 {
+		t.Fatal("the stopped script used no stack")
+	}
+	r.ClearStop()
+	for i, v := range r.stack[r.stackTop:high] {
+		if v != (Value{}) {
+			t.Fatalf("slot %d of %d past the top holds %v after ClearStop", r.stackTop+i, high, v)
+		}
+	}
+	if r.stackHigh != r.stackTop {
+		t.Errorf("stackHigh %d, top %d after ClearStop", r.stackHigh, r.stackTop)
+	}
+}

@@ -1679,6 +1679,7 @@ func jitRuntimeForTest(t *testing.T, cfg Config) *Runtime {
 func jitDefaultsForTest(r *Runtime) {
 	r.jitCallThreshold, r.jitICThreshold = jitInvocationsForMaglev, jitInvocationsAfterICUpdate
 	r.jitStress = jitStressConfig{}
+	r.interruptCounter = interruptCheckInterval
 }
 
 // jitOtherGuards is how many guards failed in r's code but the map checks
@@ -3121,7 +3122,7 @@ func TestJITHeldCountsEachKind(t *testing.T) {
 	if len(s.ssaCtxs) == 0 || len(s.links) == 0 || len(s.hints) == 0 {
 		t.Fatalf("%d contexts, %d links, %d hints", len(s.ssaCtxs), len(s.links), len(s.hints))
 	}
-	shared := len(s.ssaCtxs)*jitContextBytes + len(s.links)*jitLinkFixed + jitCapBytes(s.hints)
+	shared := s.ctxCounted()*jitContextBytes + len(s.links)*jitLinkFixed + jitCapBytes(s.hints)
 	if s.sharedBytes() < shared || s.held() != s.entryBytes+s.lowerBytes+s.sharedBytes() {
 		t.Fatalf("shared %d counted, at least %d held", s.sharedBytes(), shared)
 	}
@@ -7627,12 +7628,12 @@ func TestJITSSAProfitReturns(t *testing.T) {
 }
 
 // Native calls that run out of contexts have more of them at once -- as
-// many as there are -- up to jitContextsMax, those in use left where they
-// are: a recursion 40 deep, which ran out of the 4 at first, then 8, 16 and
-// 32, Go finishing every level, stays in native code once there are 64.
-// One deeper than the most still goes
-// through Go, and one without end throws the interpreter's RangeError.
-// Each answer is the interpreter's.
+// many as there are -- up to as many as the VM's frames may take
+// (jitContextsMost), those in use left where they are: a recursion 40
+// deep, which ran out of the 4 at first, then 8, 16 and 32, Go finishing
+// every level, stays in native code once there are 64. One without end
+// takes them all, and throws the interpreter's RangeError. Each answer is
+// the interpreter's.
 func TestJITSSAContextsGrow(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -7667,8 +7668,10 @@ func TestJITSSAContextsGrow(t *testing.T) {
 			t.Fatalf("round %d: got %s, interpreter %s", i, got, want)
 		}
 		if i == 4 || i == 8 {
-			if n, want := len(r.jit.ssaCtxs), map[int]int{4: 16 * jitContexts, 8: jitContextsMax}[i]; n != want {
-				t.Fatalf("round %d: %d contexts, want %d", i, n, want)
+			// Past round 7's recursion without end, as many as the VM's
+			// frames take.
+			if n, low, high := len(r.jit.ssaCtxs), map[int]int{4: 16 * jitContexts, 8: r.maxFrames}[i], map[int]int{4: 16 * jitContexts, 8: r.jitContextsMost()}[i]; n < low || n > high {
+				t.Fatalf("round %d: %d contexts, want %d to %d", i, n, low, high)
 			}
 			if n := r.jit.unwound - unwound; n != 0 {
 				t.Fatalf("round %d: Go finished %d levels", i, n)

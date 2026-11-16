@@ -89,7 +89,12 @@ func (r *Runtime) jitTypedSeen(ctx *abi.Context) bool {
 	bits := math.Float64bits(cell.num)
 	if bit := uint64(1) << t.kind; bits&bit == 0 {
 		cell.num = math.Float64frombits(bits | bit)
-		if e := r.jitRunEntry(ctx); e != nil && e.ssa != nil {
+		if e := r.jitRegCtxEntry(ctx); e != nil {
+			// Register code's: compiled again as what its calls of Go
+			// learn has it (jitRegReopt), the stack form's entry not
+			// the code that runs.
+			r.jitRegReopt(nil, e)
+		} else if e := r.jitRunEntry(ctx); e != nil && e.ssa != nil {
 			e.reopt = true
 		}
 	}

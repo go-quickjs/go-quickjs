@@ -38,6 +38,10 @@ func (r *Runtime) jitRegFrameRun(ctx *abi.Context) (run jitRegRun, level bool, o
 	switch ctx.Live {
 	case 0:
 		if idx < len(s.regRuns) && s.regRuns[idx].f != nil {
+			// A derived constructor's frame's binding, which a super()
+			// native code made bound in the context alone, as a closure
+			// made on it shares it (jitBindThis).
+			jitBindThis(s.regRuns[idx].f, ctx)
 			return s.regRuns[idx], false, true
 		}
 	case abi.LiveCall:
@@ -54,8 +58,11 @@ func (r *Runtime) jitRegFrameRun(ctx *abi.Context) (run jitRegRun, level bool, o
 		f := &s.calleeFrame
 		*f = frame{}
 		f.cl, f.base, f.this, f.newTarget = l.cl, l.wb+int(l.c.locals), r.stack[l.wb+1], Undefined
-		if v := r.stack[l.wb]; v.IsObject() {
-			f.callee = v.Object()
+		f.callee = r.jitRegLevelCallee(&l)
+		if isClassConstructorKind(l.cl.fn.Kind) && ctx.NewTarget != 0 {
+			// A class's constructor's, only ever constructed: its
+			// new.target, which its construction or super() wrote.
+			f.newTarget = Obj(*(**Object)(unsafe.Pointer(&ctx.NewTarget)))
 		}
 		return jitRegRun{f: f, c: l.c, e: l.e, wb: l.wb}, true, true
 	}
@@ -100,33 +107,44 @@ func (r *Runtime) jitRegFrameOp(ctx *abi.Context) bool {
 		case bytecode.RNewTarget:
 			keep(f.newTarget)
 		case bytecode.RRestParam:
-			// The frame's arguments past the parameters, which a callee
-			// native callers call has none of: its calls keep none.
-			if level {
+			// The frame's arguments past the parameters -- a native
+			// callee's, those its call wrote to its context (ssa.CallSite's
+			// FrameArgs), as the stack form's (jitGoFrameOp) -- copied.
+			args, ok := jitRegFrameArgs(ctx, f, c, level)
+			if !ok {
 				return false
 			}
 			var rest []Value
-			if i := int(w.B()); i < len(f.args) {
-				rest = f.args[i:]
+			if i := int(w.B()); i < len(args) {
+				rest = args[i:]
 			}
 			keep(Obj(r.newArrayFrom(rest)))
 		case bytecode.RArguments:
-			// An unmapped arguments object, of the arguments the frame
-			// kept; a mapped one aliases the registers, which native code
-			// may hold elsewhere.
-			if level || f.cl.fn.MappedArguments {
+			// The arguments object, of the arguments the frame kept, or a
+			// native callee's call wrote to its context, as the stack
+			// form's: a mapped one's aliases no parameter, as a
+			// function's code that makes one where it would is not
+			// compiled (compile's argumentsOwn).
+			args, ok := jitRegFrameArgs(ctx, f, c, level)
+			if !ok || f.cl.fn.MappedArguments && f.cl.fn.ParamCount > 0 || f.cl.fn.MappedArguments && f.callee == nil {
 				return false
 			}
-			keep(Obj(r.newArgumentsObject(f)))
+			keep(Obj(r.newArgumentsObject(&frame{cl: f.cl, callee: f.callee, args: args})))
 		default:
 			return false
 		}
 		return true
 	case ssa.GoArgument:
+		args := f.args
 		if level {
-			return false
+			// A native callee's, which its call gave its context
+			// (ssa.CallSite's FrameArgs).
+			if !c.args {
+				return false
+			}
+			args = unsafe.Slice((*Value)(unsafe.Pointer(&ctx.Args[0])), min(int(ctx.Argc), len(ctx.Args)))
 		}
-		v, ok := jitArgumentOf(ctx, f.args, f.cl.fn)
+		v, ok := jitArgumentOf(ctx, args, f.cl.fn)
 		if ok {
 			keep(v)
 		}
@@ -156,6 +174,20 @@ func (r *Runtime) jitRegFrameOp(ctx *abi.Context) bool {
 		return r.jitRegCellsClosure(ctx, f, c, run.e, wb, level, int(ctx.GoOp>>abi.GoOpIndexShift))
 	}
 	return false
+}
+
+// jitRegFrameArgs is the arguments of the frame f, of register code c, a
+// call of Go on which ctx makes: its own, or, for a native callee's level,
+// those its call wrote to its context (ssa.CallSite's FrameArgs) -- false
+// for one whose call keeps none.
+func jitRegFrameArgs(ctx *abi.Context, f *frame, c *regCode, level bool) ([]Value, bool) {
+	if !level {
+		return f.args, true
+	}
+	if !c.args || ctx.Argc > uint64(len(ctx.Args)) {
+		return nil, false
+	}
+	return jitContextArgs(ctx), true
 }
 
 // jitRegFrameWhole makes closure_w or close_regs at ctx's register pc on
@@ -249,18 +281,29 @@ func (r *Runtime) jitRegMakeCells(ctx *abi.Context, f *frame, e *jitRegEntry, wb
 // jitRegCellsClosure is GoClosure and GoClose for register code whose
 // captured registers are in cells of their own, as jitCellsClosure is the
 // stack form's: closure_w's closure of constant i, capturing the cells, as
-// regClosure makes it; or close_regs from register i on, whose captured
-// registers take fresh cells holding what they hold -- open on the
-// window's registers on the run's own frame, the old ones closed.
+// regClosure makes it; or close_regs of its B registers from register i,
+// whose captured registers take fresh cells holding what they hold --
+// open on the window's registers on the run's own frame, the old ones
+// closed -- as mir's cellsClose takes them natively.
 func (r *Runtime) jitRegCellsClosure(ctx *abi.Context, f *frame, c *regCode, e *jitRegEntry, wb int, level bool, i int) bool {
 	regs := jitRegCapturedRegs(e.p.Captured)
 	cells := unsafe.Slice((**upvalue)(ctx.Cells), len(regs))
 	if ssa.GoOp(ctx.GoOp&0xff) == ssa.GoClose {
+		// Its registers, close_regs's: no other is closed.
+		rpc := int(ctx.ExitPC)
+		if rpc >= len(c.rc.Code) {
+			return false
+		}
+		w := regAt(c.code, rpc)
+		end := i + int(w.B())
+		if w.Op() != bytecode.RCloseRegs || int(w.A()) != i || end > e.p.Regs {
+			return false
+		}
 		if !level && len(f.openUpvalues) != 0 {
-			regCloseRegs(f, regWindow(r.stack, wb), i, e.p.Regs-i)
+			regCloseRegs(f, regWindow(r.stack, wb), i, end-i)
 		}
 		for k, reg := range regs {
-			if reg < i {
+			if reg < i || reg >= end {
 				continue
 			}
 			v := *cells[k].slot
@@ -290,18 +333,45 @@ func (r *Runtime) jitRegCellsClosure(ctx *abi.Context, f *frame, c *regCode, e *
 		return false
 	}
 	// What an arrow captures of this is the window's register 1, as
-	// regClosure has it.
+	// regClosure has it -- but on a native callee's level of a derived
+	// constructor, whose stand-in frame has no binding to share, its
+	// context's This, which a super() bound, an arrow made before one, or
+	// one that reads what its maker's frame has of its own (new.target,
+	// super), left to the frame Go makes of the level at the exit, as the
+	// stack form's (jitCalleeMakes).
 	f.this = r.stack[wb+1]
-	caps := c.rc.Caps[i]
-	if t.fn.CapturesByValue {
-		if level {
-			// Its by-value captures read the window's registers, which a
-			// native callee's cells hold: left to the exit.
+	if level && f.cl.fn.Kind == bytecode.KindDerivedConstructor && t.fn.Kind == bytecode.KindArrow {
+		this := *(*Value)(unsafe.Pointer(&ctx.This))
+		if this.IsUninitialized() || jitNeedsMaker(tmpl) {
 			return false
+		}
+		f.this = this
+	}
+	caps := c.rc.Caps[i]
+	if level && jitNeedsMaker(tmpl) {
+		// What it reads of its maker's frame -- new.target, the arguments
+		// -- the stand-in has not: left to the frame Go makes at the exit.
+		return false
+	}
+	if t.fn.CapturesByValue && !level {
+		// Its captured registers' values copied from their cells, where
+		// the code keeps them: a cell native code took at a scope's end
+		// (mir's cellsClose) is open on no register until the exit, the
+		// register holding the turn before's value -- a closure made here
+		// for a pool run dry read it, () => k the k of the turn before.
+		for k, reg := range regs {
+			r.stack[wb+reg] = *cells[k].slot
 		}
 		keepClosure(ctx, Obj(regMadeClosure(newClosureByValue[struct{}](r, f, t, caps, wb))))
 		return true
 	}
+	// A native callee's closure that captures by value takes the cells
+	// its registers' values are in, closed cells of the callee's own: what
+	// it takes by value is never assigned once it is made (bytecode's
+	// UpvalueDesc's ByValue), so the cell it shares holds its value as a
+	// copy would. Its window's registers, which the code does not keep,
+	// are not read; left to an exit, AWFY NBody's advance, a native
+	// callee, left native code at its forEach's arrow at every call.
 	byLocal := make([]*upvalue, max(int(c.ncap), 1))
 	for k, u := range t.fn.Upvalues {
 		if !u.FromParent || k >= len(caps) {
@@ -384,11 +454,12 @@ func jitArgumentOf(ctx *abi.Context, args []Value, fn *bytecode.Function) (Value
 		return Undefined, false
 	}
 	if i := uint32(k.num); float64(i) == k.num && uint(i) < uint(len(args)) {
-		if n := int(ctx.GoOp>>abi.GoOpArgcShift&0xff) - 2; mapsArgument(fn, int(i)) {
-			if uint(i) < uint(n) {
-				return jitGoArg(ctx, 2+int(i)), true
-			}
-			return Undefined, false
+		if n := int(ctx.GoOp>>abi.GoOpArgcShift&0xff) - 2; uint(i) < uint(n) && mapsArgument(fn, int(i)) {
+			// The parameter the mapped object would alias, as the code
+			// has it now (ir.Program's ArgumentParams): one it, or a
+			// closure, assigned. A parameter neither assigns is its
+			// argument as passed, as the stack form's (jitArgument).
+			return jitGoArg(ctx, 2+int(i)), true
 		}
 		return args[i], true
 	}

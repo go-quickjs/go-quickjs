@@ -547,7 +547,7 @@ func (a *aliases) leaf(sum *aliasSum, x *Value) {
 		sum.keys = append(sum.keys, x.Key)
 	case OpElemCell:
 		sum.any, sum.elem = true, true
-	case OpStringMethod, OpStringChar, OpCodeChar, OpCodeCharOr, OpTypeofCell, OpSubstringChar, OpStringAtOr, OpConstSource, OpConstCell:
+	case OpStringMethod, OpStringChar, OpCodeChar, OpCodeCharOr, OpTypeofCell, OpSubstringChar, OpStringAtOr, OpConstSource, OpConstCell, OpCursorCell:
 	case OpCallCell, OpBigCell:
 		// A call's result's cell, or a BigInt's box's: what writes it.
 		sum.anyCall = true
@@ -626,7 +626,7 @@ func (a *aliases) may(key uint32, s *Value) bool {
 		// No property store writes an element; a call's callee may, or
 		// pop it.
 		return key == anyKey
-	case OpStringMethod, OpStringChar, OpCodeChar, OpCodeCharOr, OpTypeofCell, OpSubstringChar, OpStringAtOr, OpConstSource, OpConstCell:
+	case OpStringMethod, OpStringChar, OpCodeChar, OpCodeCharOr, OpTypeofCell, OpSubstringChar, OpStringAtOr, OpConstSource, OpConstCell, OpCursorCell:
 		return false
 	case OpCallCell:
 		// A call's result's keep cell, which no store writes: a call may
@@ -691,7 +691,7 @@ func (a *aliases) mayElem(s *Value) bool {
 	switch s.Op {
 	case OpElemCell:
 		return true
-	case OpPropCell, OpHolderCell, OpGlobalCell, OpLexCell, OpBindingCell, OpStringProp, OpStringMethod, OpStringChar, OpCodeChar, OpCodeCharOr, OpTypeofCell, OpSubstringChar, OpStringAtOr, OpConstSource, OpConstCell,
+	case OpPropCell, OpHolderCell, OpGlobalCell, OpLexCell, OpBindingCell, OpStringProp, OpStringMethod, OpStringChar, OpCodeChar, OpCodeCharOr, OpTypeofCell, OpSubstringChar, OpStringAtOr, OpConstSource, OpConstCell, OpCursorCell,
 		OpCallCell, OpBigCell, OpUpvalueCell, OpLocalCell:
 		return false
 	case OpKeep, OpPhi:
@@ -847,8 +847,8 @@ func liveBits(f *Func, sc *scratch, stores, cands []*Value, live [][]*Value) {
 	}
 	states := func(s []uint64, st *FrameState) {
 		if st != nil {
-			for _, i := range f.Present(st) {
-				add(s, st.Slots[i])
+			for _, x := range st.All() {
+				add(s, x)
 			}
 		}
 	}
@@ -975,8 +975,8 @@ func liveWalks(f *Func, sc *scratch, nb int, stores, cands []*Value, live [][]*V
 	uses := sc.liveUses[:0]
 	for _, b := range f.Blocks {
 		if st := b.Header; st != nil {
-			for _, i := range f.Present(st) {
-				if x := st.Slots[i]; x.ID < len(cand) && cand[x.ID] != 0 {
+			for _, x := range st.All() {
+				if x.ID < len(cand) && cand[x.ID] != 0 {
 					k := cand[x.ID] - 1
 					uses = append(uses, liveUse{b, at[k], false})
 					at[k] = int32(len(uses))
@@ -1005,8 +1005,8 @@ func liveWalks(f *Func, sc *scratch, nb int, stores, cands []*Value, live [][]*V
 			// The guards of an instruction share its state, met once.
 			if st := v.State; st != last && st != nil {
 				last = st
-				for _, i := range f.Present(st) {
-					if x := st.Slots[i]; x.ID < len(cand) && cand[x.ID] != 0 {
+				for _, x := range st.All() {
+					if x.ID < len(cand) && cand[x.ID] != 0 {
 						k := cand[x.ID] - 1
 						uses = append(uses, liveUse{b, at[k], false})
 						at[k] = int32(len(uses))
@@ -1020,8 +1020,8 @@ func liveWalks(f *Func, sc *scratch, nb int, stores, cands []*Value, live [][]*V
 			at[k] = int32(len(uses))
 		}
 		if st := b.State; st != nil {
-			for _, i := range f.Present(st) {
-				if x := st.Slots[i]; x.ID < len(cand) && cand[x.ID] != 0 {
+			for _, x := range st.All() {
+				if x.ID < len(cand) && cand[x.ID] != 0 {
 					k := cand[x.ID] - 1
 					uses = append(uses, liveUse{b, at[k], false})
 					at[k] = int32(len(uses))
@@ -1124,8 +1124,8 @@ func liveWalks(f *Func, sc *scratch, nb int, stores, cands []*Value, live [][]*V
 		}
 		add(b.Control)
 		if st := b.State; st != nil {
-			for _, i := range f.Present(st) {
-				add(st.Slots[i])
+			for _, x := range st.All() {
+				add(x)
 			}
 		}
 		next := k - 1
@@ -1154,8 +1154,8 @@ func liveWalks(f *Func, sc *scratch, nb int, stores, cands []*Value, live [][]*V
 					add(a)
 				}
 				if st := v.State; st != nil {
-					for _, i := range f.Present(st) {
-						add(st.Slots[i])
+					for _, x := range st.All() {
+						add(x)
 					}
 				}
 			}

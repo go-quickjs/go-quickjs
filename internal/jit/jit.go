@@ -13,13 +13,7 @@ var (
 	ErrClosed = errors.New("native code is closed")
 	// ErrCodeBudget means code cannot fit its owner's budget.
 	ErrCodeBudget = errors.New("native code memory budget exceeded")
-	// ErrCodeSize means a function's code is past MaxCodeBytes: that
-	// function's refusal, not the host's (ErrUnavailable).
-	ErrCodeSize = errors.New("native code past the size one placement may have")
 )
-
-// MaxCodeBytes bounds a single placement of code before page rounding.
-const MaxCodeBytes = 1 << 20
 
 // Supported reports whether this build includes a backend. It does not probe
 // executable-memory permissions or allocate memory.

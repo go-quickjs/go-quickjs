@@ -927,3 +927,61 @@ func TestNativeExec(t *testing.T) {
 		}
 	}
 }
+
+// longPattern is n alternatives, each a literal, a class of three ranges,
+// which the code tests with a table of its own, and a class of wide
+// characters, which it tests with a two-level table: arm64 code of over
+// a megabyte for n of 1,500, its ADRs of tables and of resume points past
+// their reach.
+func longPattern(n int) string {
+	var b strings.Builder
+	for i := range n {
+		if i > 0 {
+			b.WriteByte('|')
+		}
+		fmt.Fprintf(&b, `(x%d[%c%c%c-%c]+[\u%04x-\u%04x]?y)`, i, 'a'+i%20, 'A'+i%23, '0'+i%5, '0'+i%5+3, 0x400+i%200, 0x500+i%97)
+	}
+	return b.String()
+}
+
+// Code past arm64's ADR reach assembles -- its resume points' addresses
+// through veneers, its tables placed in reach -- and matches what the
+// matcher matches.
+func TestNativeLongCode(t *testing.T) {
+	for _, flags := range []string{"", "i"} {
+		// Folding takes more instructions, of which a program has at most
+		// 16,384.
+		n := 1500
+		if flags == "i" {
+			n = 1200
+		}
+		pattern := longPattern(n)
+		re, err := Compile(pattern, flags)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, wide := range []bool{false, true} {
+			for _, arch := range []string{"arm64", "amd64"} {
+				p, ok := genNative(arch, re.prog, 2*(re.groupCount+1), wide, false)
+				if !ok || len(p.bytes) < 1<<20 {
+					t.Fatalf("/%s on %s (wide %v): %v, %d bytes", flags, arch, wide, ok, len(p.bytes))
+				}
+			}
+		}
+		plain, nat, _ := compileBoth(t, pattern, flags)
+		subjects := []string{"x0aAy", "x0a0\u0400y", "..x1199t4Dy", "x1199ty", "x1199T4d\u04d0Y", "x1199t4D\u04d0y", "x700aK2\u0470y x750", "x9" + strings.Repeat("j", 40)}
+		for _, s := range subjects {
+			for start := range 3 {
+				sameOutcome(t, pattern, flags, s, start, plain, nat)
+			}
+		}
+		if !nat.HasNative() || !nat.HasNativeUTF16() {
+			t.Fatalf("/%s: native code over bytes %v, over UTF-16 %v", flags, nat.HasNative(), nat.HasNativeUTF16())
+		}
+		// The 1,200th alternative's group, past every pool.
+		got, _ := nat.SearchCheckedInto(nil, wtf8ToUnits("..x1199t4D\u04d0y"), 0, nil)
+		if len(got) != 2+2*n || got[0] != 2 || got[1] != 12 || got[2*1200] != 2 || got[2*1200+1] != 12 {
+			t.Fatalf("/%s: %v", flags, got)
+		}
+	}
+}

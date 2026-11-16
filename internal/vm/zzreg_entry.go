@@ -394,7 +394,15 @@ func (r *Runtime) regEnterFrame(f *frame, c *regCode) (Value, error) {
 	if c.args {
 		f.locals = w[2 : 2+p : 2+p]
 	}
-	v, err := r.runReg(f, c, 0)
+	var v Value
+	var err error
+	if jitBuilt && f.cl.jitEnters && f.cl.reg == c && f.thisRef == nil && f.withScopes == nil && f.evalVars == nil {
+		// Its function's calls go to the JIT, as every call's of the
+		// register tier's does (jitRegEnter): a host's call of it too.
+		v, err = r.jitRegEnter(f, f.cl, c, base, 0)
+	} else {
+		v, err = r.runReg(f, c, 0)
+	}
 	f.base, f.locals = saved, savedLocals
 	return v, err
 }

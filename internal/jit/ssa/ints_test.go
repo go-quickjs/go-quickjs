@@ -1,6 +1,12 @@
 package ssa
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/compiler"
+	jitcompile "github.com/go-quickjs/go-quickjs/internal/jit/compile"
+)
 
 // int32Phis counts f's int32 phis, and its phis of doubles a loop's
 // header has.
@@ -98,6 +104,92 @@ func TestIntPhiBoxesSunk(t *testing.T) {
 			}
 			if c := b.Control; c != nil {
 				check(&Value{Block: b}, c)
+			}
+		}
+	}
+}
+
+// lowerRegJS is the first function src declares, compiled to register
+// code, lowered and built.
+func lowerRegJS(t *testing.T, src string) *Func {
+	t.Helper()
+	compiler.SetRegisterForm(true)
+	defer compiler.SetRegisterForm(bytecode.RegDefault())
+	fn := compiledFunctionForTest(t, src)
+	if fn.Reg == nil {
+		t.Fatalf("%s: no register code", src)
+	}
+	p, err := jitcompile.LowerReg(fn.RegCode(), fn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := Build(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+// A loop's int32 read after it reaches the exit of register code's loop,
+// which tests at its end, through a phi of the turn's value and the one
+// before the first turn: that phi is an int32 phi, converted after it,
+// not its argument converted in the test's block at every turn -- a
+// conversion the stack form's loop, testing at its head, never made: the
+// micro-benchmark try_catch's sum, read after its loop, had cost one more
+// conversion a turn than the stack form's.
+func TestIntPhiAtRotatedLoopExit(t *testing.T) {
+	for _, src := range []string{
+		`function f(n){var i,s=0;for(i=0;i<n;i++){try{s=(s+i)|0}catch(e){s=0}}g=s;return n}`,
+		`function f(n){var s=0;for(var i=0;i<n;i++)s=(s+i)|0;return s}`,
+	} {
+		f := lowerRegJS(t, src)
+		Optimize(f)
+		if err := Check(f); err != nil {
+			t.Fatal(err)
+		}
+		ids := 0
+		for _, b := range f.Blocks {
+			ids = max(ids, b.ID+1)
+		}
+		index := make([]int, ids)
+		for i, b := range f.Blocks {
+			index[b.ID] = i
+		}
+		in := make([]bool, len(f.Blocks))
+		for _, h := range f.Blocks {
+			if h.LoopHeader {
+				loopBlocks(h, in, index)
+			}
+		}
+		// Each conversion in a loop's block has a use there.
+		used := map[*Value]bool{}
+		for _, b := range f.Blocks {
+			for _, u := range b.Values {
+				for i, a := range u.Args {
+					at := b
+					if u.Op == OpPhi {
+						at = b.Preds[i]
+						if !in[index[b.ID]] {
+							continue
+						}
+					}
+					if in[index[at.ID]] {
+						used[a] = true
+					}
+				}
+			}
+			if c := b.Control; c != nil && in[index[b.ID]] {
+				used[c] = true
+			}
+		}
+		for _, b := range f.Blocks {
+			if !in[index[b.ID]] {
+				continue
+			}
+			for _, v := range b.Values {
+				if v.Op == OpI32ToF64 && !used[v] {
+					t.Errorf("%s: v%d in the loop's b%d is used only after the loop:\n%s", src, v.ID, b.ID, f)
+				}
 			}
 		}
 	}

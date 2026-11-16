@@ -333,6 +333,12 @@ const (
 	// frame's place, its context the frame's, and goes on in its code,
 	// returning where the frame would have. Key's bit 1 says the last of
 	// Args is the receiver the call gives, bit 2 that the code reads it.
+	// Register code's (TailWindow) has its window in Args past the
+	// function -- the function, the receiver, the arguments -- which are
+	// its registers from 0, Index of them, undefined in the rest to
+	// Const's, and the receiver the VM's frame's too where Go entered the
+	// code with it; TailPolled says the code's start polls, which the jump
+	// goes to, so that the call does not poll as well.
 	OpTailSelf // function, arguments -> none
 	// OpPoll is register code's check at its start, as a back edge's: the
 	// interpreter's back-edge budget (abi.Context's BackEdges) counted
@@ -604,6 +610,22 @@ const (
 	// a function where its target is -- where a call of Go makes it (a
 	// split). It never exits.
 	OpTypeofCell // tagged -> source
+	// OpCursorCell is a for...of loop's cursor's iterator's cell, Index 0
+	// -- the value the step calls next on -- where the cursor is one not
+	// done that steps by calling a next, no array's nor a for...in's, and
+	// its next is the function object at Const's address; or none (0)
+	// otherwise. Index 1 is its next's cell, read where Index 0's is some.
+	// It never exits: what is none Go steps (iterStep's split). The cells
+	// are the cursor's, which nothing writes once it is made.
+	OpCursorCell // tagged cursor -> source
+)
+
+// OpTailSelf's Key bits for register code's call (OpTailSelf): its Args
+// its window (TailWindow), and the code's start, which the jump goes to,
+// a poll (TailPolled).
+const (
+	TailWindow = 4
+	TailPolled = 8
 )
 
 // OpNumberIs's Aux: which of Number's predicates.
@@ -637,6 +659,7 @@ var opNames = [...]string{
 	OpDivI64: "divi64", OpModI64: "modi64", OpDivU64: "divu64", OpModU64: "modu64", OpBigOfF64: "bigoff", OpPowI64: "powi64",
 	OpHolderCell: "holdercell", OpChainCheck: "chaincheck", OpProtoIs: "protois", OpCodeCharOr: "codecharor",
 	OpStringCodePointOr: "codepointor", OpStringAtOr: "stringator", OpNumberIs: "numberis", OpTypeofCell: "typeofcell",
+	OpCursorCell: "cursorcell",
 }
 
 func (o Op) String() string {
@@ -746,7 +769,9 @@ type Value struct {
 	// has the cell (origin.go).
 	Shadow *Value
 	Block  *Block
-	// Uses counts the values, frame states and controls that use this one.
+	// Uses counts the values, frame states and controls that use this one,
+	// once Optimize is done: its recount counts the states' (slotWeights),
+	// which the builder and the passes before it leave out.
 	Uses int
 }
 
@@ -767,7 +792,14 @@ type InlineCache struct {
 	Add  *PropertyAdd
 	Adds []*PropertyAdd
 	// Calls, for a call, are the functions it may call natively (OpCall).
-	Calls []*CallSite
+	// Consumed, for register code's (CallSite's Window), are the slots of
+	// its window, bit k for its k'th, that the interpreter's frame does
+	// not read past the call, normally or at a handler (ir.Program's
+	// LiveAt), the result's register among them: the operands the call
+	// consumes, as the stack form's call does its operand stack's, whose
+	// words the call's state leaves out (Consumes).
+	Calls    []*CallSite
+	Consumed uint64
 	// Mega, for a read, is its site's Megamorphic (PropertySite); Scan its
 	// Scan. Try, for a megamorphic read's cell (OpPropCell), makes it none
 	// where it finds no property -- the receiver's own table and the
@@ -854,6 +886,16 @@ func (v *Value) Calls() []*CallSite {
 	return v.IC.Calls
 }
 
+// Consumes reports whether call v, register code's (CallSite's Window),
+// consumes the k'th slot of its window (InlineCache's Consumed): a
+// callee that leaves native code Go finishes from its own frame, the
+// caller going on past the call with its result, so that no frame Go
+// makes of the caller reads the slot's value, which the call need not
+// record.
+func (v *Value) Consumes(k int) bool {
+	return v.IC != nil && k >= 0 && k < 64 && v.IC.Consumed&(1<<k) != 0
+}
+
 // setProperty sets what v's property cache saw (InlineCache), making v a
 // cache only if any of it is there: a nil slice stays nil, an empty one
 // empty.
@@ -867,6 +909,15 @@ func (f *Func) setProperty(v *Value, holders *HolderChain, cases []PropertyCase,
 
 // cache is v's inline cache, made, from the workspace if there is one,
 // if it has none.
+// InitLocals is the end of the locals past Params the code's entry makes
+// undefined (InitEnd): FrameLocals, or InitEnd below it.
+func (f *Func) InitLocals() int {
+	if f.InitEnd != 0 && f.InitEnd < f.FrameLocals {
+		return f.InitEnd
+	}
+	return f.FrameLocals
+}
+
 func (f *Func) cache(v *Value) *InlineCache {
 	if v.IC == nil {
 		if f.ws != nil {
@@ -883,7 +934,12 @@ func (f *Func) cache(v *Value) *InlineCache {
 type FrameState struct {
 	PC    uint32
 	Depth int
-	Slots []*Value
+	// slots are the state's values by slot, shared with other states
+	// (slots.go), as high as height says; n is how many slots it has
+	// (Len), which All, Slot and Count read.
+	slots  *slotNode
+	height int
+	n      int
 	// Site is the slot IR PC of the operation whose guards and exits use
 	// this state, or -1 for a block's entry or loop header (abi.Context's
 	// ExitSite).
@@ -906,76 +962,12 @@ type FrameState struct {
 	Virtual int
 	// id numbers the function's states, for tables by state (newState).
 	id int
-	// present is the indexes of the slots that are not nil, in order,
-	// made the first time a pass asks (Func.Present), nil until then.
-	present []int32
-}
-
-// noSlots is the present slots of a state with none: not nil, which is
-// not yet made.
-var noSlots = make([]int32, 0)
-
-// Present is the indexes of s's slots that are not nil, in order: what a
-// pass that reads a state's values walks, rather than Slots, which is
-// dense over the frame -- its dead locals, its captured bindings, the
-// slots between a caller's and an inlined callee's, all nil -- and so
-// some two thirds nil: Typescript's states had 5.7 slots for each value
-// and 2 of them set. A slot is set or left nil when its state is made,
-// and a pass after that only replaces a value with another (rewrite,
-// reconstruct), so the list, made once, holds for the state's life.
-func (f *Func) Present(s *FrameState) []int32 {
-	if s.present != nil {
-		return s.present
-	}
-	return f.makePresent(s)
-}
-
-// makePresent makes s's present slots (Present).
-func (f *Func) makePresent(s *FrameState) []int32 {
-	n := 0
-	for _, x := range s.Slots {
-		if x != nil {
-			n++
-		}
-	}
-	if n == 0 {
-		s.present = noSlots
-		return noSlots
-	}
-	var p []int32
-	if f.ws != nil {
-		p = f.ws.present.Make(n)
-	} else {
-		p = make([]int32, n)
-	}
-	k := 0
-	for i, x := range s.Slots {
-		if x != nil {
-			p[k] = int32(i)
-			k++
-		}
-	}
-	s.present = p
-	return p
-}
-
-// presentOf is a state's present slots l, copied into the workspace if
-// there is one (builder's stateSlots).
-func (f *Func) presentOf(l []int32) []int32 {
-	var p []int32
-	if f.ws != nil {
-		p = f.ws.present.Make(len(l))
-	} else {
-		p = make([]int32, len(l))
-	}
-	copy(p, l)
-	return p
 }
 
 // Own is how many of s's slots are its frame's own -- the caller's and an
 // inlined callee's, the operands, a prologue's arguments -- not the homes
 // past them (Virtual).
-func (s *FrameState) Own() int { return len(s.Slots) - s.Virtual }
+func (s *FrameState) Own() int { return s.n - s.Virtual }
 
 // InlineState is an inlined callee's frame at an exit inside it, which,
 // as V8's deoptimizer does, makes the frame the callee would have had: the
@@ -1048,6 +1040,10 @@ type Block struct {
 	// (mir's yieldExit); the exit otherwise.
 	Yield         bool
 	YieldHandlers []ir.Handler
+	// YieldSlot is, for register code's yield (Func's GenWindow), the
+	// register its value is in; its handlers are the code's, by register
+	// pc, which nothing saves (YieldHandlers none).
+	YieldSlot int
 }
 
 // Entry is a place native code can be entered: an entry block, which loads
@@ -1081,6 +1077,12 @@ type Entry struct {
 type GenResume struct {
 	PC, Saved int
 	Started   bool
+	// Place and Sent are register code's (Func's GenWindow): the
+	// generator's place, its register pc, that the resumption is of --
+	// past end_params, or a yield's next instruction, where the code goes
+	// on at the entry for PC, the jump's target after it -- and the
+	// register the value sent in goes to, the yield's, or -1.
+	Place, Sent int
 }
 
 // Func is a function in SSA form.
@@ -1099,6 +1101,12 @@ type Func struct {
 	// to it.
 	Params    int
 	StartOnly bool
+	// InitEnd, where not 0, ends the locals past Params the code's entry
+	// makes undefined: register code's bindings (bytecode.RegCode's
+	// Inits), which the interpreter's call makes undefined, before its
+	// temporaries, which the code writes before it reads them. 0 is every
+	// local to FrameLocals, the stack form's.
+	InitEnd int
 	// Cells marks code whose captured locals are in cells of their own
 	// (ir.Program's Cells): its native callers' call clears the context's
 	// (abi.Context's Cells), which its entries' call of Go makes (GoCells).
@@ -1107,6 +1115,14 @@ type Func struct {
 	// makes the frame and the context of a call of the function, once for
 	// all its callers (mir's Code.CallEntry, abi.Context's ReturnTo).
 	CallEntry bool
+	// TailEntry asks, of register code with a call entry, for the entry a
+	// call in tail position of another function's code jumps to, its frame
+	// given up and the callee's window written in its place (mir's
+	// windowTailJump, Code.TailEntry): it makes what the code's frame takes
+	// past its window -- its operands' address, the VM's stack's top and
+	// high water, of its own frame's size -- as the call entry would, and
+	// goes on at the start.
+	TailEntry bool
 	// GenEntry asks, of a synchronous generator's code, for the entry a
 	// loop's step that resumes the generator natively jumps to (CallSite's
 	// Gens, mir's Code.GenEntry): it makes the generator's frame and
@@ -1116,6 +1132,14 @@ type Func struct {
 	// there natively, and its returns finish it.
 	GenEntry   bool
 	GenResumes []GenResume
+	// GenWindow marks register code's generator entry and yields (mir's
+	// windowGenEntry, windowYieldExit): the frame is a window of
+	// FrameLocals registers made in the VM's stack, as a call entry makes
+	// one, from the generator's values, which keep the window's registers
+	// from GenFrom -- the callee's and this's, below it, made from the
+	// generator's callee and receiver -- and a yield writes them back.
+	GenWindow bool
+	GenFrom   int
 	// Loops says the code makes loops of built-ins' calls (OpLoopMark), whose
 	// word it clears at its entries; LoopsEnd is the slot past their slots,
 	// which the frame holds while they run: their callbacks' frames start
@@ -1166,7 +1190,8 @@ type Func struct {
 	Inlined []uintptr
 	// InlinedCode is how many instructions the callees the code inlines
 	// have, at every depth, the loops' callbacks among them: what
-	// inlining's budget (maxInlineTotal) is spent in.
+	// inlining's budget (maxInlineTotal) is spent in, counted in the
+	// stack form's instructions, register code's converted (inlineSize).
 	InlinedCode int
 	// HostsLeft are the PCs of the function's own host operations (ir.Host)
 	// the code leaves to Go -- at an exit, or a call Go makes from native
@@ -1268,6 +1293,17 @@ type Func struct {
 	states     []FrameState
 	valueChunk int
 	refChunk   int
+	// nodeSlab, valSlab and kidSlab are the states' slot nodes and their
+	// entries (slots.go), a chunk at a time as values are; nextNode numbers
+	// the nodes, and slotEdit is the edit open (openEdit).
+	nodeSlab  []slotNode
+	valSlab   []*Value
+	kidSlab   []*slotNode
+	nodeChunk int
+	valChunk  int
+	kidChunk  int
+	nextNode  int32
+	slotEdit  int32
 	// own is the passes' scratch for a Func built without a workspace,
 	// made when first wanted (scr).
 	own *scratch
@@ -1285,14 +1321,14 @@ type scratch struct {
 	// do not take again: cleared at each Optimize.
 	intPhis []*Value
 	intNo   []bool
-	// intCand, intReason, intTrunc, intWants and intAgainst are intPhis'
-	// and intPhiUses' flags by value ID, intRoot their groups and intOf
-	// their aliases: grown as IDs grow, never cleared whole -- each clears
-	// what it set, every round of a function of thousands of values had
-	// made and zeroed tables of them all.
-	intCand, intReason, intTrunc, intWants, intAgainst []bool
-	intRoot                                            []int
-	intOf                                              []*Value
+	// intCand, intReason, intTrunc, intWants, intAgainst and intCostly are
+	// intPhis' and intPhiUses' flags by value ID, intRoot their groups and
+	// intOf their aliases: grown as IDs grow, never cleared whole -- each
+	// clears what it set, every round of a function of thousands of values
+	// had made and zeroed tables of them all.
+	intCand, intReason, intTrunc, intWants, intAgainst, intCostly []bool
+	intRoot                                                       []int
+	intOf                                                         []*Value
 	// first and last are, by operand ID, Optimize's guards of it: the
 	// indexes past their first and last in guards, 0 for none.
 	first, last []int32
@@ -1333,10 +1369,24 @@ type scratch struct {
 	// incomplete and frameOf are the builder's, by block ID.
 	incomplete [][]slotPhi
 	frameOf    []*frame
+	// defKeys and defVals are the builder's definitions' table (defTable);
+	// marks, phiArgs, dirtyLists and mergeDiff its lists (builder's).
+	defKeys      []uint64
+	defVals      []*Value
+	defSpareKeys []uint64
+	defSpareVals []*Value
+	marks        []*Value
+	phiArgs      []*Value
+	dirtyLists   [][]int32
+	mergeDiff    []int32
 	// originPhis is Origins' list of the phis.
 	originPhis []*Value
-	// states is recount's list of the states it has met.
-	states []*FrameState
+	// states is recount's list of the states it has met; slotOrder and
+	// slotWalk, slotWeights' order of the states' nodes and its walk's
+	// stack.
+	states    []*FrameState
+	slotOrder []slotAt
+	slotWalk  []slotAt
 	// aliases is the store passes' answers (newAliases).
 	aliases aliases
 	// shapes, shapeHeld, shapeEnds, shapeStarts and blockPos are
@@ -1370,8 +1420,7 @@ func (f *Func) scr() *scratch {
 
 // newState returns a new frame state like s, from a slab.
 func (f *Func) newState(s FrameState) *FrameState {
-	// A copy's slots may not be its original's (Present).
-	s.id, s.present = f.nextState, nil
+	s.id = f.nextState
 	f.nextState++
 	if f.ws != nil {
 		p := &f.ws.states.Make(1)[0]
@@ -1501,7 +1550,7 @@ func (f *Func) String() string {
 			b.WriteString(" loop")
 		}
 		if blk.Header != nil {
-			fmt.Fprintf(&b, " state %v", blk.Header.Slots)
+			fmt.Fprintf(&b, " state %v", blk.Header.Dense())
 		}
 		b.WriteString("\n")
 		for _, v := range blk.Values {

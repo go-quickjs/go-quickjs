@@ -115,7 +115,7 @@ func TestEntriesLoadLiveLocals(t *testing.T) {
 			loops++
 		}
 		for _, v := range e.Block.Values {
-			if v.Op == OpLoadSlot && v.Aux < p.LiveLocals && !p.LiveAt(e.PC, v.Aux) {
+			if v.Op == OpLoadSlot && v.Aux < p.Live.N && !p.LiveAt(e.PC, v.Aux) {
 				t.Errorf("the entry at pc %d loads local %d, dead there:\n%s", e.PC, v.Aux, f)
 			}
 			if v.Op == OpLoadSlot && e.PC != 0 && v.Aux == b {

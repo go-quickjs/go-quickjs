@@ -704,6 +704,8 @@ const strAppendTestWant = "76:-1591915514,103:239840560,130:-1972117050,157:1162
 // Appends answer as Node does, in the tree tier as in the interpreter.
 func TestStrAppend(t *testing.T) {
 	t.Parallel()
+	// Its strings grow to 0.8 GB in each runtime.
+	heavy(t)
 	for _, tree := range []bool{true, false} {
 		r := newTreeTierForTest(tree, Config{})
 		v, err := r.Run(compileForTest(t, strAppendTestSrc))

@@ -169,10 +169,7 @@ func (c *core) refIntervals() ([]interval, []realUse) {
 				uses = append(uses, use{v: x, pos: at, state: true, own: own})
 			}
 		}
-		for _, v := range s.Slots {
-			if v == nil {
-				continue
-			}
+		for _, v := range s.All() {
 			if x := bigKept(v); x != nil {
 				add(x)
 				if c.isLazy(v) {

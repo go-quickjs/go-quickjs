@@ -75,10 +75,6 @@ type NativeCode interface {
 	Close() error
 }
 
-// maxNativeBytes bounds a pattern's code, as jit.MaxCodeBytes bounds a
-// placement.
-const maxNativeBytes = 1 << 20
-
 // Held is the memory the host's patterns' code takes, which goes down as
 // patterns are collected (on another goroutine).
 func (h *NativeHost) Held() int {

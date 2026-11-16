@@ -281,6 +281,14 @@ func (g *armGen) call() {
 	g.cmpMem(r8, rCtx, ncObjBits)
 	a.BCond(NE, g.ex(5))
 	a.Bind(ok)
+	// A callee whose calls go to the JIT (closureCode's jitEnters), as
+	// amd64's: nativeJITCall's, called with no exit.
+	a.Load(r8, rC, offECl)
+	a.Load(r8, r8, offClCode)
+	g.addMem(r8, rCtx, ncCCBase)
+	a.LoadU8(rD, r8, offCCJITEnters)
+	jitCall := a.NewLabel()
+	a.Cbnz(rD, jitCall, false)
 	a.Store(rCtx, scr(sE), rC)
 	a.Store(rCtx, scr(sWin), rS)
 	a.Store(rCtx, scr(sKind), r9)
@@ -553,6 +561,10 @@ func (g *armGen) call() {
 	a.Bind(miss)
 	g.storeImm(rCtx, ncMiss, 1)
 	a.B(g.exit)
+	// A callee whose calls go to the JIT, as amd64's: nativeJITCall called
+	// with no exit.
+	a.Bind(jitCall)
+	g.light(ncJITCallFn)
 }
 
 // light is amd64's (amd64_calls.go): nativeBuiltin called through callH

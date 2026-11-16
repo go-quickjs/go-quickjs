@@ -8,6 +8,7 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 	"github.com/go-quickjs/go-quickjs/internal/jit/asm/amd64"
 	"github.com/go-quickjs/go-quickjs/internal/jit/asm/arm64"
+	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 )
 
@@ -31,6 +32,16 @@ type Workspace struct {
 	ivRefs    arena.Arena[*interval]
 	locs      arena.Arena[loc]
 	saved     arena.Arena[saved]
+	exitNodes arena.Arena[exitNodeInfo]
+	asks      arena.Arena[stateAsk]
+	liveOps   arena.Arena[ir.LiveOp]
+	liveSets  arena.Arena[ir.LiveSet]
+	slotWalk  ssa.SlotWalk
+	// live is the builder of allocate's block liveness's sets
+	// (blockLiveness).
+	live ir.LiveBuilder
+	// laterUses is allocate's list of the states a block's uses meet.
+	laterUses []laterUse
 	sched     schedule
 	// core is the compile's analysis, here for the size of it, and calls
 	// the lists its calls' states are built from.
@@ -56,7 +67,9 @@ type Workspace struct {
 	exitHeadBuf  []int32
 	exitNextBuf  []int32
 	exitSlotsBuf []abi.ExitSlot
-	exitIndexBuf []uint16
+	exitTreeBuf  []uint32
+	exitKidsBuf  []uint32
+	exitCrossBuf []int32
 	exitWordsBuf []uint64
 	// exitInlinesBuf is the frame's inlined callees' (abi.ExitFrame's
 	// Inlines).
@@ -125,6 +138,10 @@ func (w *Workspace) init() {
 	w.ivRefs.KeepBig()
 	w.locs.KeepBig()
 	w.saved.KeepBig()
+	w.exitNodes.KeepBig()
+	w.asks.KeepBig()
+	w.liveOps.KeepBig()
+	w.liveSets.KeepBig()
 }
 
 // Bytes is the memory the workspace keeps between compiles: its arenas'
@@ -132,7 +149,8 @@ func (w *Workspace) init() {
 // and tables.
 func (w *Workspace) Bytes() int {
 	n := w.bools.Bytes() + w.ints.Bytes() + w.int32s.Bytes() + w.words.Bytes() + w.sets.Bytes() + w.values.Bytes() + w.blocks.Bytes() +
-		w.intervals.Bytes() + w.recs.Bytes() + w.gms.Bytes() + w.ivRefs.Bytes() + w.locs.Bytes() + w.saved.Bytes()
+		w.intervals.Bytes() + w.recs.Bytes() + w.gms.Bytes() + w.ivRefs.Bytes() + w.locs.Bytes() + w.saved.Bytes() +
+		w.liveOps.Bytes() + w.liveSets.Bytes() + w.live.Bytes()
 	n += capBytes(w.calls.refs) + capBytes(w.calls.rest) + capBytes(w.calls.out) + capBytes(w.calls.refRecs) + capBytes(w.calls.restRecs) + capBytes(w.calls.records)
 	n += capBytes(w.sched.moves) + capBytes(w.sched.steps) + capBytes(w.sched.parked) + capBytes(w.sched.readers) + capBytes(w.xuses) + capBytes(w.states) + capBytes(w.kv) + capBytes(w.gpool)
 	n += w.amd64.a.Bytes() + capBytes(w.amd64.labels) + capBytes(w.amd64.stubFor) + capBytes(w.amd64.cold) + capBytes(w.amd64.pool) + capBytes(w.amd64.poolTab)
@@ -141,7 +159,7 @@ func (w *Workspace) Bytes() int {
 	// A map's entries, as their keys and values, at least.
 	n += (len(w.amd64.stubs) + len(w.arm64.stubs)) * int(unsafe.Sizeof(stubKey{})+unsafe.Sizeof(amd64.Label(0)))
 	n += len(w.exitWords) * 12
-	n += capBytes(w.exitSlotsBuf) + capBytes(w.exitIndexBuf) + capBytes(w.exitWordsBuf) + capBytes(w.exitHeadBuf) + capBytes(w.exitNextBuf) + capBytes(w.exitInlinesBuf)
+	n += capBytes(w.exitSlotsBuf) + capBytes(w.exitTreeBuf) + capBytes(w.exitKidsBuf) + capBytes(w.exitCrossBuf) + capBytes(w.exitWordsBuf) + capBytes(w.exitHeadBuf) + capBytes(w.exitNextBuf) + capBytes(w.exitInlinesBuf)
 	return n
 }
 
@@ -166,6 +184,10 @@ func (w *Workspace) Rewind() {
 	w.ivRefs.Rewind()
 	w.locs.Rewind()
 	w.saved.Rewind()
+	w.exitNodes.Rewind()
+	w.asks.Rewind()
+	w.liveOps.Rewind()
+	w.liveSets.Rewind()
 	w.core, w.amd64.c, w.arm64.c = core{}, compiler{}, a64Compiler{}
 	// The scratch tables -- the move schedule's, the uses', the groups',
 	// the exit descriptions' and the assemblers' -- go once they hold more
@@ -182,8 +204,10 @@ func (w *Workspace) Rewind() {
 	if w.Bytes()-w.arenaBytes() > 2*keep {
 		w.sched, w.xuses, w.states, w.kv, w.gpool, w.xusesUsed, w.gpoolUsed = schedule{}, nil, nil, nil, nil, 0, 0
 		w.calls = callScratch{}
+		w.live = ir.LiveBuilder{}
 		w.exitWords = nil
-		w.exitSlotsBuf, w.exitIndexBuf, w.exitWordsBuf, w.exitHeadBuf, w.exitNextBuf = nil, nil, nil, nil, nil
+		w.exitSlotsBuf, w.exitTreeBuf, w.exitWordsBuf, w.exitHeadBuf, w.exitNextBuf = nil, nil, nil, nil, nil
+		w.exitKidsBuf, w.exitCrossBuf = nil, nil
 		w.exitInlinesBuf = nil
 		w.amd64.a, w.amd64.labels, w.amd64.stubs, w.amd64.stubFor, w.amd64.cold, w.amd64.pool, w.amd64.poolTab = amd64.Asm{}, nil, nil, nil, nil, nil, nil
 		w.arm64.a, w.arm64.labels, w.arm64.stubs, w.arm64.stubFor, w.arm64.cold = arm64.Asm{}, nil, nil, nil, nil
@@ -208,7 +232,8 @@ func (w *Workspace) scratchUsed() int {
 // arenaBytes is what the workspace's arenas keep.
 func (w *Workspace) arenaBytes() int {
 	return w.bools.Bytes() + w.ints.Bytes() + w.int32s.Bytes() + w.words.Bytes() + w.sets.Bytes() + w.values.Bytes() + w.blocks.Bytes() +
-		w.intervals.Bytes() + w.recs.Bytes() + w.gms.Bytes() + w.ivRefs.Bytes() + w.locs.Bytes() + w.saved.Bytes()
+		w.intervals.Bytes() + w.recs.Bytes() + w.gms.Bytes() + w.ivRefs.Bytes() + w.locs.Bytes() + w.saved.Bytes() + w.exitNodes.Bytes() + w.asks.Bytes() +
+		w.liveOps.Bytes() + w.liveSets.Bytes()
 }
 
 // CompileIn is Compile, in w.
@@ -247,6 +272,30 @@ func (c *core) ints(n int) []int {
 		return c.ws.ints.Make(n)
 	}
 	return make([]int, n)
+}
+
+// liveOps and liveSets are blockLiveness's tables, and liveBuilder its
+// builder of n slots' sets: the workspace's, if there is one.
+func (c *core) liveOps(n int) []ir.LiveOp {
+	if c.ws != nil {
+		return c.ws.liveOps.Make(n)
+	}
+	return make([]ir.LiveOp, n)
+}
+
+func (c *core) liveSets(n int) []ir.LiveSet {
+	if c.ws != nil {
+		return c.ws.liveSets.Make(n)
+	}
+	return make([]ir.LiveSet, n)
+}
+
+func (c *core) liveBuilder(n int) *ir.LiveBuilder {
+	if c.ws != nil {
+		c.ws.live.Reset(n)
+		return &c.ws.live
+	}
+	return ir.NewLiveBuilder(n)
 }
 
 func (c *core) int32s(n int) []int32 {
@@ -392,4 +441,33 @@ func (c *core) locList(n int) []loc {
 		return c.ws.locs.Make(n)
 	}
 	return make([]loc, n)
+}
+
+// exitNodeList is a table of n exitNodeInfos, by state slot node ID, all
+// zero.
+func (c *core) exitNodeList(n int) []exitNodeInfo {
+	if c.ws != nil {
+		return c.ws.exitNodes.Make(n)
+	}
+	return make([]exitNodeInfo, n)
+}
+
+// stateAsks is a table of n stateAsks, all zero (allocate's useStates).
+func (c *core) stateAsks(n int) []stateAsk {
+	if c.ws != nil {
+		return c.ws.asks.Make(n)
+	}
+	return make([]stateAsk, n)
+}
+
+// slotWalker is the walk of states' slots' nodes the compile uses: the
+// workspace's, whose tables the next compile keeps.
+func (c *core) slotWalker() *ssa.SlotWalk {
+	if c.walk == nil {
+		c.walk = &c.ownWalk
+		if c.ws != nil {
+			c.walk = &c.ws.slotWalk
+		}
+	}
+	return c.walk
 }

@@ -18,11 +18,16 @@ package vm
 // it placed inlines, every compile's, and InlinedCode their instructions.
 // Pooled is the process's, not the runtime's: what the workspaces compiles
 // are made in keep while no compile uses them, shared by every runtime,
-// which no runtime's Held counts (jit.Workspace).
+// which no runtime's Held counts (jit.Workspace). Contexts is how many
+// contexts native code has to run its levels in now, ContextsMost the
+// most it has had, and ContextsShrunk the times it gave back those a
+// deeper recursion took, which Held does not count.
 type JITStats struct {
 	Compiled, Entries, Guards, Hosts, Budgets, Interpreted, SSAEntries, SSARecords uint64
 	Held, Budget, Pooled                                                           int64
 	Evicted, Refused, Discarded                                                    uint64
 	Reoptimized                                                                    uint64
 	Inlined, InlinedCode                                                           uint64
+	Contexts, ContextsMost                                                         int
+	ContextsShrunk                                                                 uint64
 }

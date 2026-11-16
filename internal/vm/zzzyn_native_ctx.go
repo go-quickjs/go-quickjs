@@ -141,6 +141,10 @@ type nativeCtx struct {
 	// callMissFn is the func value of nativeCallMiss, which the call
 	// handler calls for a callee other than its site cached.
 	callMissFn uintptr
+	// jitCallFn is the func value of nativeJITCall, which the call handler
+	// calls through callH with no exit for a callee whose calls go to the
+	// JIT (closureCode's jitEnters).
+	jitCallFn uintptr
 	// miss asks the exit stub for nativeCallMiss rather than the
 	// instruction's Go handler: the call handler's callee other than its
 	// site cached.

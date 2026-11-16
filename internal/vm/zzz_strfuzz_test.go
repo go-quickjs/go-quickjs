@@ -389,40 +389,39 @@ func TestStrAppendRandom(t *testing.T) {
 		count = 40
 	}
 	first, count := strFuzzRange(t, count)
-	// The seeds run in parallel, and each seed's reference and its runs
-	// with the tree tier off and on, each on a runtime of its own, beside
-	// one another: the answers are compared once all three are in.
+	// The seeds run in parallel, each holding a heavy slot (heavy): a
+	// seed's strings may grow to gigabytes -- seeds 382's and 388's
+	// runtimes peak at 2.5 to 2.9 GB, most seeds' under 100 MB -- and
+	// each seed's reference and its runs with the tree tier off and on,
+	// each on a runtime of its own, run one after another, each runtime
+	// closed before the next is made, so that a seed holds one runtime's
+	// memory at a time. Run three at a time for each of -parallel's seeds,
+	// seeds 382 and 388 met with their six runtimes at once: the
+	// package's process peaked at 16 GB on a machine of 32 CPUs, and ran
+	// a runner of 16 GB out of memory beside the root package's tests.
 	for seed := first; seed < first+count; seed++ {
 		t.Run(strconv.Itoa(seed), func(t *testing.T) {
 			t.Parallel()
+			heavy(t)
 			src := strFuzzSource(seed)
 			var want string
-			var got [2]string
-			t.Run("ref", func(t *testing.T) {
-				t.Parallel()
+			if !t.Run("ref", func(t *testing.T) {
 				ref := New(Config{Debug: true})
 				want = strFuzzRun(t, ref, src, true)
 				ref.Close()
-			})
-			for i, tree := range []bool{false, true} {
+			}) {
+				return
+			}
+			for _, tree := range []bool{false, true} {
 				t.Run(fmt.Sprintf("tree=%v", tree), func(t *testing.T) {
-					t.Parallel()
 					r := newTreeTierForTest(tree, Config{})
-					got[i] = strFuzzRun(t, r, src, false)
+					got := strFuzzRun(t, r, src, false)
 					r.Close()
+					if got != want && !t.Failed() {
+						t.Errorf("seed %d, tree tier %v: %s\n%s", seed, tree, firstLogDifference(got, want), src)
+					}
 				})
 			}
-			t.Cleanup(func() {
-				if t.Failed() {
-					return
-				}
-				for i, tree := range []bool{false, true} {
-					if got[i] != want {
-						t.Errorf("seed %d, tree tier %v: %s\n%s", seed, tree, firstLogDifference(got[i], want), src)
-						return
-					}
-				}
-			})
 		})
 	}
 }

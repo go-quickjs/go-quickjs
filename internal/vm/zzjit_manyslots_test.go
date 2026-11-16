@@ -97,8 +97,7 @@ func TestJITManySlots(t *testing.T) {
 					}
 					r := jitRuntimeForTest(t, Config{JIT: true})
 					r.jitStress = stress
-					// The compile of a function of 5,000 slots is past the
-					// default budget's estimate (jitCompileBytes).
+					// Room for the compiles of the stress's budgets.
 					r.jitMemoryLimit = 1 << 30
 					if _, err := r.Run(compileForTest(t, setup)); err != nil {
 						t.Fatal(err)

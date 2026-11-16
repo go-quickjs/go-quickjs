@@ -768,6 +768,14 @@ type closureCode struct {
 	// constructed a second object on such a prototype: its classes are
 	// kept, and freshProtos is not set again.
 	freshProtos, sharedProtos bool
+	// jitEnters says the template's function has native code a call
+	// enters (the JIT's jitReg), or a compile in the background that its
+	// next call installs: rhCallW's hit and regEnterW, and the native call
+	// handler's, which leaves such a call to rhCallW, go to the JIT
+	// (jitRegEnter), as the stack interpreter's calls look for their
+	// callee's code and install what is done (tryJITAt). Never set in a
+	// build without the JIT.
+	jitEnters bool
 	// arrays are this template's empty array literals' sites, in this
 	// realm, by the tree builder's count of them (arrayEmptyNode); nil
 	// where one has not run.
@@ -1239,12 +1247,17 @@ func stackPool(size int) *sync.Pool {
 }
 
 // newStack is a stack of the given size: one a closed runtime gave back,
-// which is clear already, or a new one.
+// which is clear already, or a new one. Its allocation has a slot past
+// its length: a frame that takes the stack to its end has its operands'
+// address there -- register code's past its window and scratch slots
+// where its code takes nothing past them (abi.Context's Stack, which Go
+// and native code make) -- and an unsafe.Pointer one past an allocation
+// is no pointer to it, but to whatever the collector finds after it.
 func newStack(size int) []Value {
 	if p, _ := stackPool(size).Get().(*[]Value); p != nil {
 		return *p
 	}
-	return make([]Value, size)
+	return make([]Value, size, size+1)
 }
 
 // ReleaseClosed lets go of what a closed runtime still holds: its stack, for
@@ -1299,7 +1312,30 @@ func (r *Runtime) ClearStop() {
 		r.stopped = nil
 		clear(r.microtasks)
 		r.microtasks, r.jobHead = r.microtasks[:0], 0
+		// Its turn is over too: what its frames left past the stack's top
+		// and in the frames they returned from goes (endTurn). Left, its
+		// registers outlived it, held for the collector and counted by the
+		// next call's memory limit wherever that call's frames covered the
+		// slots without writing them -- a tree stopped at the limit had
+		// the next call, which allocated almost nothing, stopped there as
+		// well.
+		r.endTurn()
 	}
+}
+
+// checkInterruptPoll is checkInterruptNow at a back edge's check, which
+// leaves the calls' counter as it is: a loop's checks,
+// the interpreter's and native code's polls, rearming it every thousand
+// back edges, had it run out only where calls outnumbered back edges four
+// to one -- AWFY's Towers, whose interpreted callers called compiled code
+// that polls, took a sample of them a second.
+func (r *Runtime) checkInterruptPoll() error {
+	n := r.interruptCounter
+	err := r.checkInterruptNow()
+	if n > 0 {
+		r.interruptCounter = n
+	}
+	return err
 }
 
 // checkInterruptNow performs the actual check and rearms the counter.

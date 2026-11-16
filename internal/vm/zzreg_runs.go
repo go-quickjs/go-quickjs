@@ -14,6 +14,14 @@ import (
 // operators' slow paths, the miss paths and what an iteration runs
 // (docs/register-interpreter.md, "The loop").
 
+// regBigOf marks, where r runs the JIT, the operator at register pc of c
+// whose operands a and b met BigInts, and whose result was v, as the
+// tree's treeBigOf marks its sites (regCode's bigSeen), for the register
+// form's feedback (jitRegFeedback's BigInt): one in the int64 range, one
+// from 0 to 2^64-1, or another -- a v that is no BigInt, one on the heap;
+// nil without the JIT.
+var regBigOf func(r *Runtime, c *regCode, pc int, a, b, v Value)
+
 // regBinImm is bin_imm's slow path.
 func (r *Runtime) regBinImm(op bytecode.Op, a Value, imm int32) (Value, error) {
 	if op != bytecode.OpAdd && a.IsString() {
@@ -320,7 +328,11 @@ func (r *Runtime) regBackEdge(st *regState, pc, target int) int {
 	st.kept.pc = pc + 1
 	r.backEdges = backEdgeCheckInterval
 	f.pc = c.src[pc] + 1
-	if err := r.checkInterruptNow(); err != nil {
+	// The calls' budget goes on as it was (checkInterruptPoll), which
+	// samples the calls (rhCallW, regEnterW): reset at each back edge's
+	// check, it had never run out in a frame of a loop of calls, nor were
+	// its calls sampled.
+	if err := r.checkInterruptPoll(); err != nil {
 		return st.fail(err)
 	}
 	// The temporaries past what the loop's head has live are stale: a

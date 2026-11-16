@@ -230,6 +230,13 @@ func (r *Runtime) regStepNext(st *iterState) (Value, bool, error) {
 		return v, ok, err
 	}
 	res, err := r.regCall(st.next, st.iter, nil)
+	return r.regStepOf(st, res, err)
+}
+
+// regStepOf is the iterator protocol on res, what st's iterator's next
+// returned, or err, what it threw, as regStepNext steps st: an object, its
+// done, then its value; st done once the iterator is, or throws.
+func (r *Runtime) regStepOf(st *iterState, res Value, err error) (Value, bool, error) {
 	if err == nil && !res.IsObject() {
 		err = r.throwTypeError("an iterator result must be an object")
 	}
@@ -273,10 +280,26 @@ func (r *Runtime) regColdWrap(cl *closure, c *regCode, k *regKept, w bytecode.RI
 					k.pc++
 					if r.jitOn() {
 						// The call it passed over, its site's cache filled
-						// as the call would fill it, for the JIT, which
-						// makes the call natively (jitRegFeedback's
+						// as the call would fill it -- made here where no
+						// call has made it (regCallSlow) -- for the JIT,
+						// which makes the call natively (jitRegFeedback's
 						// Intrinsic).
+						if cl.regCalls == nil && c.rc.CallSites > 0 {
+							cl.regCalls = make([]regCallCache, c.rc.CallSites)
+							if jitBuilt {
+								r.jitRegCountsMake(cl.closureCode, c.rc.CallSites)
+							}
+						}
 						regCallSiteNative(cl, cw, fv.Object(), fd, r.Realm)
+						if regBigOf != nil && !isBitwise(op) {
+							// The operator's mark, as the tree's wrapSeen
+							// makes it: in the int64 range, or another.
+							x, ok := shortArith(op, a, b)
+							if !ok {
+								x = Undefined
+							}
+							regBigOf(r, c, k.pc-2, a, b, x)
+						}
 					}
 					return nil
 				}
@@ -295,6 +318,9 @@ func (r *Runtime) regColdWrap(cl *closure, c *regCode, k *regKept, w bytecode.RI
 	}
 	if err != nil {
 		return err
+	}
+	if regBigOf != nil && v.IsBigInt() {
+		regBigOf(r, c, k.pc-1, a, b, v)
 	}
 	regs[w.A()] = v
 	return nil

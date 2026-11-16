@@ -25,29 +25,14 @@ func Check(f *Func) error {
 		if s == nil {
 			return fmt.Errorf("ssa: %s has no frame state", where)
 		}
-		for _, v := range s.Slots {
-			if v == nil {
-				continue
-			}
+		for _, v := range s.All() {
 			if err := use(where+"'s state", v); err != nil {
 				return err
 			}
 		}
-		if s.present != nil {
-			// The slots set are those they were when the list was made.
-			k := 0
-			for i, v := range s.Slots {
-				if v == nil {
-					continue
-				}
-				if k >= len(s.present) || s.present[k] != int32(i) {
-					return fmt.Errorf("ssa: %s's state has slot %d set, not in its present slots %v", where, i, s.present)
-				}
-				k++
-			}
-			if k != len(s.present) {
-				return fmt.Errorf("ssa: %s's state's present slots %v name a nil slot", where, s.present)
-			}
+		if !s.checkSlots() {
+			// Its nodes: an entry for each bit, none past its slots.
+			return fmt.Errorf("ssa: %s's state's slots are malformed", where)
 		}
 		return nil
 	}

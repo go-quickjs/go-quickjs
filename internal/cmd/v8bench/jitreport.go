@@ -50,6 +50,9 @@ var jitReport struct {
 	funcs               map[string]vm.JITFunction
 	hostOps             map[string]uint64
 	goCallOps           map[string]uint64
+	nested, levels      uint64
+	levelsMade, putOff  uint64
+	ended               map[string]uint64
 }
 
 // reportStart has the runtime's JIT note what it skips, for the report,
@@ -126,28 +129,25 @@ type jitCode struct {
 }
 
 // exitView is what an exit description says, however it is kept: its
-// inlined callees' frames listed in it, as they are written, not where
-// the frame the descriptions share keeps them (abi.ExitDescriptor's
-// Inlines).
+// slots and its inlined callees' frames listed in it, as they are
+// written, not where the frame the descriptions share keeps them
+// (abi.ExitDescriptor's Slots and Inlines).
 type exitView struct {
 	Kind, PC, Depth     uint32
 	Site                int32
 	Frame               *exitFrameView
-	Start               uint32
-	Count               uint16
+	Slots               []exitSlotView
 	LocalsReg, StackReg uint8
 	Direct              bool
 	Inline              []abi.ExitInline
 }
 
-// exitFrameView is the frame an exitView's slots are of, without the
-// inlined callees' frames, which each view lists.
+// exitFrameView is the layout of the frame an exitView's slots are of.
+// The slots are listed in each view, as the exit writes them, however the
+// frame keeps them.
 type exitFrameView struct {
 	FrameLocals, ThisSlot, Locals int32
 	Enc                           *abi.Encoding
-	Slots                         []abi.ExitSlot
-	Index                         []uint16
-	Words                         []uint64
 }
 
 // exitViews are c's exit descriptions as exitViews.
@@ -156,14 +156,73 @@ func exitViews(exits []*abi.ExitDescriptor) []exitView {
 	frames := map[*abi.ExitFrame]*exitFrameView{}
 	for i, d := range exits {
 		fv := frames[d.Frame]
-		if fv == nil && d.Frame != nil {
-			f := d.Frame
-			fv = &exitFrameView{f.FrameLocals, f.ThisSlot, f.Locals, f.Enc, f.Slots, f.Index, f.Words}
+		f := d.Frame
+		if fv == nil && f != nil {
+			fv = &exitFrameView{f.FrameLocals, f.ThisSlot, f.Locals, f.Enc}
 			frames[d.Frame] = fv
 		}
-		views[i] = exitView{d.Kind, d.PC, d.Depth, d.Site, fv, d.Start, d.Count, d.LocalsReg, d.StackReg, d.Direct, d.Inlines()}
+		var slots []exitSlotView
+		d.Slots(func(e *abi.ExitSlot) { slots = append(slots, exitSlotOf(f, e)) })
+		views[i] = exitView{d.Kind, d.PC, d.Depth, d.Site, fv, slots, d.LocalsReg, d.StackReg, d.Direct, d.Inlines()}
 	}
 	return views
+}
+
+// callView is what a native call's state says, as exitView an exit's:
+// the frame's layout, and the records' constant words where they are.
+type callView struct {
+	PC, Depth uint32
+	Site      int32
+	Frame     *exitFrameView
+	Records   []callRecordView
+}
+
+// callRecordView is a call's record, its constant word in it.
+type callRecordView struct {
+	abi.CallRecord
+	NumWord uint64
+}
+
+// callViews are calls as callViews.
+func callViews(calls []*abi.CallState) []callView {
+	views := make([]callView, len(calls))
+	for i, st := range calls {
+		v := callView{PC: st.PC, Depth: st.Depth, Site: st.Site}
+		if f := st.Frame; f != nil {
+			v.Frame = &exitFrameView{f.FrameLocals, f.ThisSlot, f.Locals, f.Enc}
+		}
+		for _, r := range st.Records {
+			rv := callRecordView{CallRecord: r}
+			if r.Num.Kind == abi.ExitConst && r.Num.N >= 0 && st.Frame != nil {
+				rv.NumWord, rv.Num.N = st.Frame.Words[r.Num.N], 0
+			}
+			v.Records = append(v.Records, rv)
+		}
+		views[i] = v
+	}
+	return views
+}
+
+// exitSlotView is a slot an exit writes, its constant words in it.
+type exitSlotView struct {
+	abi.ExitSlot
+	ValueWord, ShadowWord uint64
+}
+
+// exitSlotOf is e as an exitSlotView: a constant's word where it is, not
+// its index among the frame's words.
+func exitSlotOf(f *abi.ExitFrame, e *abi.ExitSlot) exitSlotView {
+	v := exitSlotView{ExitSlot: *e}
+	word := func(l *abi.ExitLoc) uint64 {
+		if l.Kind != abi.ExitConst || l.N < 0 {
+			return 0
+		}
+		w := f.Words[l.N]
+		l.N = 0
+		return w
+	}
+	v.ValueWord, v.ShadowWord = word(&v.Value), word(&v.Shadow)
+	return v
 }
 
 // goCallView is what a call of Go's state says of the call: not the
@@ -201,10 +260,10 @@ func codeStates(c *mir.Code) string {
 		Entries                     map[int]int
 		CallEntry, Resume, GenEntry int
 		CallRefs                    int
-		Calls                       []*abi.CallState
+		Calls                       []callView
 		GoCalls                     []goCallView
 		Exits                       []exitView
-	}{c.Entries, c.CallEntry, c.Resume, c.GenEntry, c.CallRefs, c.Calls, goCallViews(c.GoCalls), exitViews(c.Exits)})
+	}{c.Entries, c.CallEntry, c.Resume, c.GenEntry, c.CallRefs, callViews(c.Calls), goCallViews(c.GoCalls), exitViews(c.Exits)})
 	if err != nil {
 		return err.Error()
 	}
@@ -296,6 +355,7 @@ func (r runtimeOf) Report(name string) {
 	fmt.Printf("  jit: %d dropped to make room, %d compiles refused it, %d of them once compiled; %d flushed unused, %d compiles of code dropped; holds %.1f of %.1f MiB\n",
 		st.Evicted-was.Evicted, st.Refused-was.Refused, st.Discarded-was.Discarded, flushed-jitReport.flushed, recompiled-jitReport.recompiled,
 		float64(st.Held)/(1<<20), float64(st.Budget)/(1<<20))
+	fmt.Printf("  jit: %d contexts, %d at most, given back %d times\n", st.Contexts, st.ContextsMost, st.ContextsShrunk-was.ContextsShrunk)
 	jitReport.stats, jitReport.flushed, jitReport.recompiled = st, flushed, recompiled
 	// Register code's host exits by the register instruction Go ran
 	// whole, the most first.
@@ -337,6 +397,35 @@ func (r runtimeOf) Report(name string) {
 	}
 	if len(ops) != 0 {
 		fmt.Printf("  jit: register calls of Go:")
+		for _, o := range ops {
+			fmt.Printf(" %s %d;", o.op, o.n)
+		}
+		fmt.Println()
+	}
+	// Its calls of Go from native callees' code, and the levels of native
+	// calls Go found the code of: each such call's calling level, and the
+	// levels it unwinds.
+	if n := rs.NestedGoCalls - jitReport.nested; n != 0 {
+		fmt.Printf("  jit: register calls of Go from native callees %d, levels found %d, put off %d, made for a read %d times\n",
+			n, rs.Levels-jitReport.levels, rs.LevelsPutOff-jitReport.putOff, rs.LevelsMade-jitReport.levelsMade)
+	}
+	jitReport.nested, jitReport.levels, jitReport.levelsMade, jitReport.putOff = rs.NestedGoCalls, rs.Levels, rs.LevelsMade, rs.LevelsPutOff
+	// The runs of register code that finished in the interpreter, by why
+	// they ended there, where they left and in what function, the most
+	// first.
+	ops = ops[:0]
+	for k, n := range rs.Ended {
+		if d := n - jitReport.ended[k]; d != 0 {
+			ops = append(ops, hostOp{k, d})
+		}
+	}
+	jitReport.ended = rs.Ended
+	slices.SortFunc(ops, func(a, b hostOp) int { return cmp.Or(cmp.Compare(b.n, a.n), cmp.Compare(a.op, b.op)) })
+	if len(ops) > 8 {
+		ops = ops[:8]
+	}
+	if len(ops) != 0 {
+		fmt.Printf("  jit: register runs ended in the interpreter:")
 		for _, o := range ops {
 			fmt.Printf(" %s %d;", o.op, o.n)
 		}

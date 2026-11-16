@@ -15,25 +15,28 @@ import (
 // built in a workspace may be used after its Rewind. A Func built without
 // one (BuildWith) allocates its own, and may be kept.
 type Workspace struct {
-	values    arena.Arena[Value]
-	refs      arena.Arena[*Value]
-	states    arena.Arena[FrameState]
-	present   arena.Arena[int32] // the states' present slots (Func.Present)
-	blocks    arena.Arena[Block]
-	blockRefs arena.Arena[*Block]
-	refLists  arena.Arena[[]*Value]
-	bools     arena.Arena[bool]
-	bytes     arena.Arena[uint8]
-	ints      arena.Arena[int]
-	caches    arena.Arena[InlineCache]
-	accessors arena.Arena[AccessorSite]
-	answers   arena.Arena[siteAnswer]
-	callLists arena.Arena[[]*CallSite]
-	holders   arena.Arena[HolderChain]
-	inlines   arena.Arena[InlineState]
-	frames    arena.Arena[frame]
-	scratch   scratch
-	ready     bool
+	values     arena.Arena[Value]
+	refs       arena.Arena[*Value]
+	states     arena.Arena[FrameState]
+	int32s     arena.Arena[int32]
+	slotNodes  arena.Arena[slotNode]
+	slotKids   arena.Arena[*slotNode]
+	lastStates arena.Arena[lastState]
+	blocks     arena.Arena[Block]
+	blockRefs  arena.Arena[*Block]
+	refLists   arena.Arena[[]*Value]
+	bools      arena.Arena[bool]
+	bytes      arena.Arena[uint8]
+	ints       arena.Arena[int]
+	caches     arena.Arena[InlineCache]
+	accessors  arena.Arena[AccessorSite]
+	answers    arena.Arena[siteAnswer]
+	callLists  arena.Arena[[]*CallSite]
+	holders    arena.Arena[HolderChain]
+	inlines    arena.Arena[InlineState]
+	frames     arena.Arena[frame]
+	scratch    scratch
+	ready      bool
 }
 
 // init has the workspace's arenas keep the big tables a compile makes.
@@ -45,7 +48,10 @@ func (w *Workspace) init() {
 	w.values.KeepBig()
 	w.refs.KeepBig()
 	w.states.KeepBig()
-	w.present.KeepBig()
+	w.int32s.KeepBig()
+	w.slotNodes.KeepBig()
+	w.slotKids.KeepBig()
+	w.lastStates.KeepBig()
 	w.blocks.KeepBig()
 	w.blockRefs.KeepBig()
 	w.refLists.KeepBig()
@@ -67,7 +73,7 @@ func (w *Workspace) Bytes() int { return w.arenaBytes() + w.scratchBytes() }
 
 // arenaBytes is what the workspace's arenas keep.
 func (w *Workspace) arenaBytes() int {
-	return w.values.Bytes() + w.refs.Bytes() + w.states.Bytes() + w.present.Bytes() + w.blocks.Bytes() + w.blockRefs.Bytes() +
+	return w.values.Bytes() + w.refs.Bytes() + w.states.Bytes() + w.int32s.Bytes() + w.slotNodes.Bytes() + w.slotKids.Bytes() + w.lastStates.Bytes() + w.blocks.Bytes() + w.blockRefs.Bytes() +
 		w.refLists.Bytes() + w.bools.Bytes() + w.bytes.Bytes() + w.ints.Bytes() + w.caches.Bytes() + w.accessors.Bytes() +
 		w.answers.Bytes() + w.callLists.Bytes() + w.holders.Bytes() + w.inlines.Bytes() + w.frames.Bytes()
 }
@@ -80,10 +86,10 @@ func (w *Workspace) scratchBytes() int {
 		capBytes(s.guards) + capBytes(s.liveStores) + capBytes(s.liveCands) + capBytes(s.liveFlat) +
 		capBytes(s.live) + capBytes(s.liveFrom) + capBytes(s.liveWords) + capBytes(s.liveCand) + capBytes(s.liveAt) + capBytes(s.liveIn) + capBytes(s.liveOut) +
 		capBytes(s.liveHead) + capBytes(s.liveCur) + capBytes(s.liveListed) + capBytes(s.liveMembers) + capBytes(s.liveEmit) + capBytes(s.liveFlags) +
-		capBytes(s.liveUses) + capBytes(s.liveNodes) + capBytes(s.liveStack) + capBytes(s.subst) + capBytes(s.originPhis) + capBytes(s.states) + capBytes(s.asked) +
+		capBytes(s.liveUses) + capBytes(s.liveNodes) + capBytes(s.liveStack) + capBytes(s.subst) + capBytes(s.originPhis) + capBytes(s.states) + capBytes(s.slotOrder) + capBytes(s.slotWalk) + capBytes(s.asked) +
 		capBytes(s.phiIdx) + capBytes(s.phiFill) + capBytes(s.phiUsers) +
 		capBytes(s.upvalueCand) + capBytes(s.keepUsers) + capBytes(s.keepNext) +
-		capBytes(s.incomplete) + capBytes(s.frameOf)
+		capBytes(s.incomplete) + capBytes(s.frameOf) + capBytes(s.defKeys) + capBytes(s.defVals) + capBytes(s.defSpareKeys) + capBytes(s.defSpareVals) + capBytes(s.marks) + capBytes(s.phiArgs) + capBytes(s.dirtyLists) + capBytes(s.mergeDiff)
 	for _, l := range s.live {
 		n += capBytes(l)
 	}
@@ -101,7 +107,10 @@ func (w *Workspace) Rewind() {
 	w.values.Rewind()
 	w.refs.Rewind()
 	w.states.Rewind()
-	w.present.Rewind()
+	w.int32s.Rewind()
+	w.slotNodes.Rewind()
+	w.slotKids.Rewind()
+	w.lastStates.Rewind()
 	w.blocks.Rewind()
 	w.blockRefs.Rewind()
 	w.refLists.Rewind()
@@ -119,6 +128,14 @@ func (w *Workspace) Rewind() {
 	// workspace is not to keep alive.
 	clear(w.scratch.frameOf[:cap(w.scratch.frameOf)])
 	clear(w.scratch.incomplete[:cap(w.scratch.incomplete)])
+	clear(w.scratch.defVals[:cap(w.scratch.defVals)])
+	clear(w.scratch.defSpareVals[:cap(w.scratch.defSpareVals)])
+	clear(w.scratch.phiArgs[:cap(w.scratch.phiArgs)])
+	for _, m := range w.scratch.marks {
+		// The builder's block it marks with, which the workspace is not
+		// to keep alive.
+		m.Block = nil
+	}
 	// The arenas keep what the recent compiles needed (arena's Rewind);
 	// the scratch tables, grown by value ID, the most any compile has. Once
 	// they hold more than the arenas, a compile bigger than the recent
@@ -252,4 +269,21 @@ func (f *Func) appendBlock(s []*Block, b *Block) []*Block {
 		return f.ws.blockRefs.Append(s, b)
 	}
 	return append(s, b)
+}
+
+// appendInt32 is append(s, x), growing s in the workspace if there is one.
+func (f *Func) appendInt32(s []int32, x int32) []int32 {
+	if f.ws != nil {
+		return f.ws.int32s.Append(s, x)
+	}
+	return append(s, x)
+}
+
+// lastStates is n blocks' last states (builder's last), from the
+// workspace if the Func has one.
+func (f *Func) lastStates(n int) []lastState {
+	if f.ws != nil {
+		return f.ws.lastStates.Make(n)
+	}
+	return make([]lastState, n)
 }

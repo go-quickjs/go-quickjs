@@ -47,6 +47,8 @@ type core struct {
 	origin ssa.OriginMap
 	// gprs and fprs are the architecture's allocatable registers, by number.
 	gprs, fprs []int
+	// spills counts the spill slots the allocation took (Code's Spills).
+	spills int
 	// used are the registers the allocation gave a value, by number: the
 	// general ones, then the floating-point ones. Only these hold values an
 	// exit or a call of Go must keep (usedRegs).
@@ -86,10 +88,17 @@ type core struct {
 	exitInlineLast int
 	exitHead       []int32
 	exitNext       []int32
-	// exitLastV and exitLastK are, by slot, the value the last exit to
-	// write it found there and 1 plus its entry's index.
-	exitLastV []*ssa.Value
-	exitLastK []int32
+	// exitNodes are what exitNode found of each node of the states'
+	// slots, by its ID; exitKids its list of a node's entries as it makes
+	// them, and exitCross the slots the leaves' entries name as their
+	// references' sources (exitNodeInfo's).
+	exitNodes []exitNodeInfo
+	exitKids  []uint32
+	exitCross []int32
+	// walk walks the states' slots' nodes (findLazy, allocate): the
+	// workspace's, kept from compile to compile, or the core's own.
+	walk      *ssa.SlotWalk
+	ownWalk   ssa.SlotWalk
 	exitWords map[uint64]int32
 	exitDescs []abi.ExitDescriptor
 	// calls are the descriptions of the native calls' states (callState),
@@ -357,7 +366,7 @@ func latency(op ssa.Op) int {
 	switch op {
 	case ssa.OpObjectOf, ssa.OpArrayOf, ssa.OpIndexedOf, ssa.OpElemRead, ssa.OpBigElemRead, ssa.OpElemCell,
 		ssa.OpLength, ssa.OpPropRead, ssa.OpPropCell, ssa.OpLoadCell, ssa.OpStringProp,
-		ssa.OpStringCode, ssa.OpStringChar, ssa.OpCodeChar, ssa.OpCodeCharOr, ssa.OpTypeofCell, ssa.OpSubstringChar, ssa.OpStringCodePointOr, ssa.OpStringAtOr,
+		ssa.OpStringCode, ssa.OpStringChar, ssa.OpCodeChar, ssa.OpCodeCharOr, ssa.OpTypeofCell, ssa.OpSubstringChar, ssa.OpStringCodePointOr, ssa.OpStringAtOr, ssa.OpCursorCell,
 		ssa.OpUpvalueCell, ssa.OpLocalCell, ssa.OpGlobalCell, ssa.OpLexCell, ssa.OpBindingCell, ssa.OpHolderCell:
 		return 4
 	case ssa.OpAddF64, ssa.OpSubF64, ssa.OpMulF64, ssa.OpMaxF64, ssa.OpMinF64, ssa.OpSignF64,
@@ -442,7 +451,7 @@ func (c *core) frameResident(x, v *ssa.Value) (int, bool) {
 	if !(o >= 0 && o < c.f.FrameLocals && !c.f.Assigned(o) || o >= 0 && o == c.f.ThisSlot) {
 		return 0, false
 	}
-	if s := v.State; s == nil || o >= len(s.Slots) || s.Slots[o] != nil && s.Slots[o] != y {
+	if s := v.State; s == nil || o >= s.Len() || s.Slot(o) != nil && s.Slot(o) != y {
 		return 0, false
 	}
 	return o, true
@@ -555,6 +564,13 @@ type Code struct {
 	// generator of the function natively jumps to (ssa.Func's GenEntry),
 	// or -1 for none.
 	GenEntry int
+	// TailEntry is the offset of the entry another function's call in
+	// tail position jumps to (ssa.Func's TailEntry), or -1 for none: a
+	// routine that makes what the call entry makes past the frame's window,
+	// of the frame's size -- its operands' address, the VM's stack's top
+	// and high water -- and its bindings past its parameters undefined, as
+	// the call entry does, then goes on at the start.
+	TailEntry int
 	// Text is how many of Bytes are instructions: past them are the code's
 	// own constants (amd64's movImm), data.
 	Text int
@@ -564,6 +580,10 @@ type Code struct {
 	// the context's RecordRef[:CallRefs].
 	Calls    []*abi.CallState
 	CallRefs int
+	// Spills counts the spill slots the code uses: past abi.SpillSlots,
+	// the context it runs in must have the rest in its SpillMore
+	// (abi.Context's GrowSpill) before it runs there.
+	Spills int
 	// GoCalls are the descriptions of its calls of Go, which the calls name
 	// by address (abi.Context's GoState).
 	GoCalls []*abi.GoCallState
@@ -804,16 +824,35 @@ func (c *core) findLazy() error {
 		ref(b.State)
 		ref(b.Header)
 	}
+	// Each node of the states' slots once, its weight the references of
+	// the states and the nodes that have it, summed from the roots down
+	// (ssa's SlotWalk): read state by state, a function of n values live
+	// at once and an exit at each of its instructions had been read n²
+	// times.
+	weight := c.int32s(f.NumSlotNodes())
 	for _, s := range states {
-		k := refs[s.ID()]
-		for _, i := range c.f.Present(s) {
-			v := s.Slots[i]
+		if root, _ := s.Tree(); root != nil {
+			weight[root.ID()] += refs[s.ID()]
+		}
+	}
+	c.slotWalker().Walk(f, states, func(nd *ssa.SlotNode, h, base int) {
+		k := weight[nd.ID()]
+		if h > 0 {
+			for _, kid := range nd.Kids() {
+				weight[kid.ID()] += k
+			}
+			return
+		}
+		m := nd.Mask()
+		for _, v := range nd.Vals() {
+			i := base + bits.TrailingZeros64(m)
+			m &= m - 1
 			uses[v.ID] += k
-			if !(v.Op == ssa.OpLoadSlot && v.Aux == int(i)) {
+			if !(v.Op == ssa.OpLoadSlot && v.Aux == i) {
 				elsewhere[v.ID] = true
 			}
 		}
-	}
+	})
 	c.keepStates(states)
 	c.lazy = c.bools(n)
 	// An int32's conversion only lazy boxes use is made by none (i32Boxed):
@@ -1044,11 +1083,8 @@ func (c *core) allocate() error {
 	// every block where the value is live in or out. The uses are met once,
 	// block by block: each stretches its value's interval to it, and one in
 	// another block than its value's is noted (xuses) for the liveness,
-	// which is then found value by value, backwards from those blocks to
-	// the value's own (liveAround) -- what a value is live in, as many
-	// steps as it is, where block-level sets over all values, iterated
-	// until none grew, had taken a pass over every block and every word of
-	// the sets each time.
+	// a dataflow over the blocks of those values' persistent sets
+	// (blockLiveness).
 	// What the uses read and write of each value is in one record (rec):
 	// its last use's position, its block, the head of its uses in other
 	// blocks, and how a frame state's slot naming it is used. The records
@@ -1164,8 +1200,7 @@ func (c *core) allocate() error {
 				use(x, at)
 			}
 		}
-		for _, i := range c.f.Present(s) {
-			v := s.Slots[i]
+		for _, v := range s.All() {
 			if moved == nil && rec[v.ID].slot == 0 {
 				// Neither a BigInt's box, nor made where needed, nor with
 				// a shadow: the value itself.
@@ -1196,6 +1231,119 @@ func (c *core) allocate() error {
 			}
 		}
 		inState = false
+	}
+	// laterState is useState for a state with no moved header, put off to
+	// the end of its block (useStates): the states of a block share their
+	// slots' nodes, which useStates meets once each, every value as the
+	// states that name it ask -- at the last of their positions, the last
+	// of those Go does not refuse, and the first of their instructions'
+	// own -- where a function of n values live at once and an exit at
+	// each of its instructions had been read n² times. A use does the same
+	// in any order, but for the uses in other blocks it lists, which are
+	// listed by block, as the block's are.
+	var later []laterUse
+	if c.ws != nil {
+		later = c.ws.laterUses[:0]
+	}
+	laterState := func(s *ssa.FrameState, at int) {
+		if s != nil {
+			if root, _ := s.Tree(); root != nil {
+				later = append(later, laterUse{s, int32(at), int32(own), refused})
+			}
+		}
+	}
+	var asks []stateAsk
+	var roots []*ssa.FrameState
+	mark := int32(0)
+	ask := func(id int, end, hot, own int32) {
+		a := &asks[id]
+		if a.mark != mark {
+			*a = stateAsk{mark: mark, end: -1, hot: -1, own: math.MaxInt32}
+		}
+		a.end, a.hot, a.own = max(a.end, end), max(a.hot, hot), min(a.own, own)
+	}
+	// useAsk is use, in a state, of x as a asks.
+	useAsk := func(x *ssa.Value, a *stateAsk) {
+		r := &rec[x.ID]
+		if r.def <= 0 {
+			if r.def == 0 && need(x) {
+				panic(fmt.Sprintf("use of %v defined outside the function", x))
+			}
+			return
+		}
+		r.end = max(r.end, a.end)
+		if a.hot >= 0 {
+			r.hot = max(r.hot, a.hot)
+		}
+		if r.def == int32(cur.ID)+1 && a.own != math.MaxInt32 && r.start >= a.own {
+			// Its own instruction's state, read as it is made.
+			r.slot |= slotFar
+		}
+		if r.def != int32(cur.ID)+1 {
+			if h := r.xhead; h == 0 || xuses[h-1].b != cur {
+				xuses = append(xuses, xuse{cur, h})
+				r.xhead = int32(len(xuses))
+			}
+		}
+	}
+	useStates := func() {
+		if len(later) == 0 {
+			return
+		}
+		if asks == nil {
+			asks = c.stateAsks(c.f.NumSlotNodes())
+		}
+		mark++
+		roots = roots[:0]
+		for _, u := range later {
+			root, _ := u.s.Tree()
+			hot, own := u.at, u.own
+			if u.refused {
+				hot = -1
+			}
+			if own < 0 {
+				own = math.MaxInt32
+			}
+			ask(root.ID(), u.at, hot, own)
+			roots = append(roots, u.s)
+		}
+		later = later[:0]
+		c.slotWalker().Walk(c.f, roots, func(nd *ssa.SlotNode, h, base int) {
+			a := &asks[nd.ID()]
+			if h > 0 {
+				for _, kid := range nd.Kids() {
+					ask(kid.ID(), a.end, a.hot, a.own)
+				}
+				return
+			}
+			for _, v := range nd.Vals() {
+				// As useState's.
+				if rec[v.ID].slot == 0 {
+					useAsk(v, a)
+					continue
+				}
+				if x := bigKept(v); x != nil {
+					useAsk(x, a)
+					if c.isLazy(v) {
+						continue
+					}
+				}
+				if c.isLazy(v) || remat(v) {
+					if x := i32Boxed(v); x != nil {
+						useAsk(x, a)
+						continue
+					}
+					for _, x := range v.Args {
+						useAsk(x, a)
+					}
+					continue
+				}
+				useAsk(v, a)
+				if v.Shadow != nil {
+					useAsk(v.Shadow, a)
+				}
+			}
+		})
 	}
 	// A phi's arguments are used at its block's predecessors' ends, as its
 	// block is met: the phis are walked in order, each argument read once,
@@ -1383,7 +1531,7 @@ func (c *core) allocate() error {
 				continue
 			}
 			refused, own = at != p && v.Calls()[0].Go != 0, first
-			useState(v.State, at, nil)
+			laterState(v.State, at)
 			refused, own, first = false, -1, -1
 		}
 		if b.Control != nil {
@@ -1405,9 +1553,9 @@ func (c *core) allocate() error {
 				}
 			}
 		}
-		useState(b.State, end[b.ID], nil)
+		laterState(b.State, end[b.ID])
 		if b.LoopHeader {
-			useState(b.Header, start[b.ID], nil)
+			laterState(b.Header, start[b.ID])
 		}
 		for _, s := range b.Succs {
 			if !s.LoopHeader {
@@ -1424,21 +1572,23 @@ func (c *core) allocate() error {
 				}
 			}
 		}
+		useStates()
+	}
+	clear(later[:cap(later)])
+	if c.ws != nil {
+		c.ws.laterUses = later[:0]
 	}
 	c.keepXuses(xuses)
 	c.lap(PhaseUses)
 	// Block-level liveness, so that values live around a loop stay live for
 	// all of it: a value is live into each block from which a use of it in
 	// another block than its own is reached without passing its own, and
-	// out of each predecessor of such a block -- found from each such use
-	// backwards through the predecessors, a block once for each value
-	// (seen, by block ID, 1 plus the ID of the value it was last found
-	// live into), and the value's interval stretched over each.
+	// out of each predecessor of such a block (blockLiveness), and its
+	// interval is stretched over each.
 	//
 	// Each value's interval is then made, and counted by its start for the
 	// sort (below): first, n and floats.
-	seen := c.ints(nb)
-	stack := c.blockList(nb)[:0]
+	lo, hi := c.blockLiveness(rec, xuses, inOrder, start, end, nb)
 	first := c.ints(count + 1)
 	n, floats := 0, 0
 	for id := range rec {
@@ -1446,32 +1596,10 @@ func (c *core) allocate() error {
 		if r.def <= 0 {
 			continue
 		}
-		it, own, mark := &iv[id], int(r.def)-1, id+1
+		it := &iv[id]
 		it.end = int(r.end)
-		for u := r.xhead; u != 0; u = xuses[u-1].next {
-			b := xuses[u-1].b
-			if seen[b.ID] == mark {
-				continue
-			}
-			seen[b.ID] = mark
-			stack = append(stack[:0], b)
-			for len(stack) > 0 {
-				s := stack[len(stack)-1]
-				stack = stack[:len(stack)-1]
-				// Live into s, out of each of its predecessors.
-				bs := start[s.ID]
-				it.start, it.end = min(it.start, bs), max(it.end, bs)
-				for _, p := range s.Preds {
-					if !inOrder[p.ID] {
-						continue
-					}
-					it.end = max(it.end, end[p.ID])
-					if p.ID != own && seen[p.ID] != mark {
-						seen[p.ID] = mark
-						stack = append(stack, p)
-					}
-				}
-			}
+		if lo[id] >= 0 {
+			it.start, it.end = min(it.start, lo[id]), max(it.end, hi[id])
 		}
 		first[it.start+1]++
 		n++
@@ -1798,9 +1926,28 @@ func (c *core) allocate() error {
 		// last; fend, by slot, the end of the interval that held it last;
 		// isFree, whether it is in the list. A slot is in it once at most:
 		// freed when its interval ends, taken from it to be used again.
-		fl := c.ints(3 * abi.SpillSlots)
-		fnext, fprev, fend := fl[:abi.SpillSlots], fl[abi.SpillSlots:2*abi.SpillSlots], fl[2*abi.SpillSlots:]
-		isFree := c.bools(abi.SpillSlots)
+		// They have room for the context's own slots at first, or the
+		// slots the first class took, and grow, doubling, as the slots
+		// taken pass it: nothing bounds a function's slots (abi.Context's
+		// SpillMore).
+		room := abi.SpillSlots
+		for room <= spills {
+			room *= 2
+		}
+		fl := c.ints(3 * room)
+		fnext, fprev, fend := fl[:room], fl[room:2*room], fl[2*room:]
+		isFree := c.bools(room)
+		grow := func() {
+			n := 2 * len(fnext)
+			fl := c.ints(3 * n)
+			copy(fl, fnext)
+			copy(fl[n:], fprev)
+			copy(fl[2*n:], fend)
+			fnext, fprev, fend = fl[:n], fl[n:2*n], fl[2*n:]
+			b := c.bools(n)
+			copy(b, isFree)
+			isFree = b
+		}
 		ftail := 0
 		freeSlot := func(s, end int) {
 			fend[s], isFree[s] = end, true
@@ -1901,8 +2048,8 @@ func (c *core) allocate() error {
 					return takeSlot(s - 1), nil
 				}
 			}
-			if spills == abi.SpillSlots {
-				return 0, fmt.Errorf("%w: more than %d spill slots", ErrUnsupported, abi.SpillSlots)
+			if spills == len(fnext) {
+				grow()
 			}
 			spills++
 			return spills - 1, nil
@@ -2208,8 +2355,6 @@ func (c *core) allocate() error {
 					switch {
 					case len(free) != 0:
 						s, free = free[len(free)-1], free[:len(free)-1]
-					case spills == abi.SpillSlots:
-						return fmt.Errorf("%w: more than %d spill slots", ErrUnsupported, abi.SpillSlots)
 					default:
 						s, spills = spills, spills+1
 					}
@@ -2232,6 +2377,7 @@ func (c *core) allocate() error {
 			c.saveAt[2*v.ID+1] = len(c.saves)
 		}
 	}
+	c.spills = spills
 	if c.opts.CheckAllocations {
 		c.checkAllocation(iv, rec, scanSpills)
 	}
@@ -2516,8 +2662,8 @@ func (c *core) savesOf(v *ssa.Value) []saved {
 // only its own slot holds, and the call writes them where its callee has
 // them (directOperand). A call is never in an entry block, so none is.
 func (c *core) operandsLive(s *ssa.FrameState, ops int) bool {
-	for _, x := range s.Slots[ops : s.Own()-s.Args] {
-		if x == nil || x.Op == ssa.OpLoadSlot && c.isLazy(x) {
+	for i := ops; i < s.Own()-s.Args; i++ {
+		if x := s.Slot(i); x == nil || x.Op == ssa.OpLoadSlot && c.isLazy(x) {
 			return false
 		}
 	}
@@ -2560,7 +2706,8 @@ func (c *core) entryAt(pc int) *ssa.Block {
 // decoding (sourceAddr) and no test.
 func cellSource(s *ssa.Value) bool {
 	switch s.Op {
-	case ssa.OpPropCell, ssa.OpHolderCell, ssa.OpElemCell, ssa.OpGlobalCell, ssa.OpLexCell, ssa.OpBindingCell, ssa.OpStringMethod, ssa.OpStringChar, ssa.OpCodeChar, ssa.OpCodeCharOr, ssa.OpTypeofCell, ssa.OpSubstringChar, ssa.OpStringAtOr, ssa.OpStringProp, ssa.OpCallCell, ssa.OpBigCell, ssa.OpConstCell, ssa.OpUpvalueCell, ssa.OpLocalCell, ssa.OpKeep:
+	case ssa.OpPropCell, ssa.OpHolderCell, ssa.OpElemCell, ssa.OpGlobalCell, ssa.OpLexCell, ssa.OpBindingCell, ssa.OpStringMethod, ssa.OpStringChar, ssa.OpCodeChar, ssa.OpCodeCharOr, ssa.OpTypeofCell, ssa.OpSubstringChar, ssa.OpStringAtOr, ssa.OpStringProp, ssa.OpCallCell, ssa.OpBigCell, ssa.OpConstCell, ssa.OpUpvalueCell, ssa.OpLocalCell, ssa.OpKeep,
+		ssa.OpCursorCell:
 		return true
 	}
 	return false
@@ -2875,6 +3022,15 @@ type interval struct {
 
 func (c *core) spillDisp(slot int) int32 { return abi.OffSpill + int32(slot)*8 }
 
+// spillMore reports whether slot is past the context's own (abi.Context's
+// SpillMore), and if so its offset into SpillMore.
+func spillMore(slot int) (int32, bool) {
+	if slot < abi.SpillSlots {
+		return 0, false
+	}
+	return int32(slot-abi.SpillSlots) * 8, true
+}
+
 // captured reports whether a slot is past the frame's locals: a captured
 // binding, or the receiver.
 func (c *core) captured(slot int) bool { return slot >= c.f.FrameLocals && slot < c.f.Locals }
@@ -2939,7 +3095,7 @@ func (c *core) phiSchedule(to *ssa.Block, idx int) []phiStep {
 	isParked := func(v *ssa.Value) bool { return slices.Contains(c.sched.parked, v) }
 	// A move waits while a pending move, its source not parked, reads its
 	// destination: counted by location, so that telling takes no search.
-	if n := 2 * (64 + abi.SpillSlots); len(c.sched.readers) < n {
+	if n := 2 * (64 + max(abi.SpillSlots, c.spills)); len(c.sched.readers) < n {
 		c.sched.readers = make([]int32, n)
 	}
 	readers := c.sched.readers
@@ -3040,122 +3196,34 @@ func (c *core) lap(p Phase) {
 // is a jump. It is a switch for tests to compare the two by.
 var TableExits = true
 
-// exitDescriptor describes the exit to state s of the given kind, its
+// / exitDescriptor describes the exit to state s of the given kind, its
 // frame's locals and operands at the registers localsReg and stackReg, as
 // exitThen's code writes it; or nil where a value is where a description
 // cannot say, and the exit's code writes the frame itself.
+//
+// Its slots are its state's tree's (ssa's SlotNode), each node described
+// once (exitNode) and shared by the descriptions of every state that has
+// it, as the states share it.
 func (c *core) exitDescriptor(s *ssa.FrameState, kind uint64, localsReg, stackReg uint8) *abi.ExitDescriptor {
 	defer c.viewExits()()
 	f := c.exitLayout()
 	d := abi.ExitDescriptor{Kind: uint32(kind), PC: uint32(s.PC), Depth: uint32(s.Depth), Site: int32(s.Site),
-		Frame: f, Start: uint32(len(f.Index)), LocalsReg: localsReg, StackReg: stackReg}
-	written := func(i int, v *ssa.Value) bool {
-		return v != nil && (v.Op != ssa.OpLoadSlot || v.Aux != i) && !c.captured(i)
-	}
-	// What it adds to the frame's, taken back where a slot cannot be
-	// described.
-	index, slots, words := len(f.Index), len(f.Slots), len(f.Words)
-	undo := func() *abi.ExitDescriptor {
-		// Each entry it added unchained from its slot's chain, wherever
-		// it has come to be in it.
-		for i := len(f.Slots) - 1; i >= slots; i-- {
-			at, k := &c.exitHead[exitHash(&f.Slots[i])&uint64(len(c.exitHead)-1)], int32(i+1)
-			for *at != k {
-				at = &c.exitNext[*at-1]
-			}
-			*at = c.exitNext[i]
+		Frame: f, LocalsReg: localsReg, StackReg: stackReg, Direct: true}
+	root, h := s.Tree()
+	if root != nil {
+		if len(c.exitNodes) < c.f.NumSlotNodes() {
+			c.exitNodes = c.exitNodeList(c.f.NumSlotNodes())
 		}
-		c.exitNext = c.exitNext[:slots]
-		for _, w := range f.Words[words:] {
-			delete(c.exitWords, w)
+		x := c.exitNode(root, h, 0)
+		if x.fail {
+			return nil
 		}
-		f.Index, f.Slots, f.Words = f.Index[:index], f.Slots[:slots], f.Words[:words]
-		// The entries it found may be those it added.
-		clear(c.exitLastV)
-		return nil
-	}
-	if len(c.exitLastV) < len(s.Slots) {
-		n := max(len(s.Slots), 2*len(c.exitLastV))
-		c.exitLastV, c.exitLastK = c.valueList(n), c.int32s(n)
-	}
-	direct := true
-	writes := func(i int32) bool { return int(i) < len(s.Slots) && written(int(i), s.Slots[i]) }
-	for _, ix := range c.f.Present(s) {
-		i, v := int(ix), s.Slots[ix]
-		if !written(i, v) {
-			continue
-		}
-		if c.exitLastV[i] == v {
-			// Its entry is the one it had at the last exit that wrote
-			// it: an entry is what the slot's value is and where it
-			// lives, which the code keeps throughout.
-			k := c.exitLastK[i]
-			switch e := &f.Slots[k-1]; {
-			case e.Shadow.Kind == abi.ExitReg || e.Shadow.Kind == abi.ExitSpill,
-				e.Shadow.Kind == abi.ExitSlotAddr && e.Shadow.N != e.Slot && writes(e.Shadow.N),
-				e.Origin >= 0 && e.Origin != e.Slot && writes(e.Origin):
-				direct = false
-			}
-			f.Index = append(f.Index, uint16(k-1))
-			continue
-		}
-		e := abi.ExitSlot{Slot: int32(i), Origin: -1}
-		var ok bool
-		if x := bigKept(v); x != nil {
-			// A BigInt's box, made of the BigInt unboxed, which a state
-			// at a loop's header names before the box is made there.
-			if e.Value, ok = c.exitBig(x); !ok {
-				return undo()
-			}
-		} else if e.Value, ok = c.exitValue(v); !ok {
-			return undo()
-		}
-		if e.Value.Kind == abi.ExitConst {
-			e.Value.N = c.exitWord(c.constWord(v.Const))
-		}
-		if big, _ := e.Value.IsBig(); big {
-			// Its pointer word is made of it too.
-		} else if v.Shadow != nil {
-			if e.Shadow, ok = c.exitSource(v.Shadow); !ok {
-				return undo()
-			}
-		} else if o, has := c.origin.Of(v); has && o >= 0 {
-			e.Origin, e.Load = int32(o), v.Op == ssa.OpLoadSlot
-		}
+		d.Root = x.off
 		// Written one by one if no slot's reference may come from another
 		// slot written here: by its origin, or a source that is one's
 		// address -- a slot's, or one known only at run time.
-		switch {
-		case e.Shadow.Kind == abi.ExitReg || e.Shadow.Kind == abi.ExitSpill,
-			e.Shadow.Kind == abi.ExitSlotAddr && e.Shadow.N != e.Slot && writes(e.Shadow.N),
-			e.Origin >= 0 && e.Origin != e.Slot && writes(e.Origin):
-			direct = false
-		}
-		if len(f.Slots) >= len(c.exitHead) {
-			c.exitRehash(max(64, 2*len(c.exitHead)))
-		}
-		h := exitHash(&e) & uint64(len(c.exitHead)-1)
-		k := c.exitHead[h]
-		for k != 0 && f.Slots[k-1] != e {
-			k = c.exitNext[k-1]
-		}
-		if k == 0 {
-			if len(f.Slots) > math.MaxUint16 {
-				// More than an index names: the exit's code writes it.
-				return undo()
-			}
-			f.Slots = append(f.Slots, e)
-			c.exitNext = append(c.exitNext, c.exitHead[h])
-			k = int32(len(f.Slots))
-			c.exitHead[h] = k
-		}
-		c.exitLastV[i], c.exitLastK[i] = v, k
-		f.Index = append(f.Index, uint16(k-1))
+		d.Direct = !x.indirect && (x.cross == 0 || !c.exitCrossWritten(s, root, h))
 	}
-	if len(f.Index)-index > math.MaxUint16 {
-		return undo()
-	}
-	d.Count, d.Direct = uint16(len(f.Index)-index), direct
 	if s.Inline != nil {
 		// The callees' frames, appended to the frame's, or the run the
 		// description before that wrote them made, if alike: the guards
@@ -3184,6 +3252,185 @@ func (c *core) exitDescriptor(s *ssa.FrameState, kind uint64, localsReg, stackRe
 	}
 	c.exitDescs = append(c.exitDescs, d)
 	return &c.exitDescs[len(c.exitDescs)-1]
+}
+
+// exitNodeInfo is what exitNode found of a state's slots' node, by its
+// ID: its node in the frame's Tree (off, 0 for none), or that a slot under
+// it is where a description cannot say (fail); whether a slot under it
+// has its reference where a description's slots may change it (indirect),
+// and how many slots under it name another slot as their reference's
+// source (cross), which a description that writes that slot is not
+// written one by one for -- a leaf's own, crossN of the core's exitCross
+// from crossAt.
+type exitNodeInfo struct {
+	off             uint32
+	done, fail      bool
+	indirect        bool
+	cross           int32
+	crossAt, crossN int32
+}
+
+// exitNode describes node nd of states' slots, of height h, whose first
+// slot is base: once, the descriptions of every state that has it sharing
+// what it made.
+func (c *core) exitNode(nd *ssa.SlotNode, h, base int) *exitNodeInfo {
+	x := &c.exitNodes[nd.ID()]
+	if x.done {
+		return x
+	}
+	x.done = true
+	f := c.exitFrame
+	at := len(c.exitKids)
+	if h > 0 {
+		m := nd.Mask()
+		var indirect bool
+		var cross int32
+		for _, kid := range nd.Kids() {
+			k := bits.TrailingZeros64(m)
+			m &= m - 1
+			y := c.exitNode(kid, h-1, base+k<<(ssa.SlotShift*h))
+			if y.fail {
+				c.exitKids = c.exitKids[:at]
+				x.fail = true
+				return x
+			}
+			if y.off != 0 {
+				c.exitKids = append(c.exitKids, y.off)
+			}
+			indirect, cross = indirect || y.indirect, cross+y.cross
+		}
+		x.off = c.exitTreeNode(c.exitKids[at:], false)
+		c.exitKids = c.exitKids[:at]
+		x.indirect, x.cross = indirect, cross
+		return x
+	}
+	// A leaf: the slots its values are written to, described.
+	slots, words, crossAt := len(f.Slots), len(f.Words), len(c.exitCross)
+	undo := func() *exitNodeInfo {
+		// Each entry it added unchained from its slot's chain, wherever
+		// it has come to be in it.
+		for i := len(f.Slots) - 1; i >= slots; i-- {
+			at, k := &c.exitHead[exitHash(&f.Slots[i])&uint64(len(c.exitHead)-1)], int32(i+1)
+			for *at != k {
+				at = &c.exitNext[*at-1]
+			}
+			*at = c.exitNext[i]
+		}
+		c.exitNext = c.exitNext[:slots]
+		for _, w := range f.Words[words:] {
+			delete(c.exitWords, w)
+		}
+		f.Slots, f.Words = f.Slots[:slots], f.Words[:words]
+		c.exitKids, c.exitCross = c.exitKids[:at], c.exitCross[:crossAt]
+		x.fail = true
+		return x
+	}
+	m := nd.Mask()
+	for _, v := range nd.Vals() {
+		i := base + bits.TrailingZeros64(m)
+		m &= m - 1
+		if !c.exitWritten(i, v) {
+			continue
+		}
+		e := abi.ExitSlot{Slot: int32(i), Origin: -1}
+		var ok bool
+		if b := bigKept(v); b != nil {
+			// A BigInt's box, made of the BigInt unboxed, which a state
+			// at a loop's header names before the box is made there.
+			if e.Value, ok = c.exitBig(b); !ok {
+				return undo()
+			}
+		} else if e.Value, ok = c.exitValue(v); !ok {
+			return undo()
+		}
+		if e.Value.Kind == abi.ExitConst {
+			e.Value.N = c.exitWord(c.constWord(v.Const))
+		}
+		if big, _ := e.Value.IsBig(); big {
+			// Its pointer word is made of it too.
+		} else if v.Shadow != nil {
+			if e.Shadow, ok = c.exitSource(v.Shadow); !ok {
+				return undo()
+			}
+		} else if o, has := c.origin.Of(v); has && o >= 0 {
+			e.Origin, e.Load = int32(o), v.Op == ssa.OpLoadSlot
+		}
+		switch {
+		case e.Shadow.Kind == abi.ExitReg || e.Shadow.Kind == abi.ExitSpill:
+			x.indirect = true
+		case e.Shadow.Kind == abi.ExitSlotAddr && e.Shadow.N != e.Slot:
+			c.exitCross = append(c.exitCross, e.Shadow.N)
+		}
+		if e.Origin >= 0 && e.Origin != e.Slot {
+			c.exitCross = append(c.exitCross, e.Origin)
+		}
+		if len(f.Slots) >= len(c.exitHead) {
+			c.exitRehash(max(64, 2*len(c.exitHead)))
+		}
+		hh := exitHash(&e) & uint64(len(c.exitHead)-1)
+		k := c.exitHead[hh]
+		for k != 0 && f.Slots[k-1] != e {
+			k = c.exitNext[k-1]
+		}
+		if k == 0 {
+			f.Slots = append(f.Slots, e)
+			c.exitNext = append(c.exitNext, c.exitHead[hh])
+			k = int32(len(f.Slots))
+			c.exitHead[hh] = k
+		}
+		c.exitKids = append(c.exitKids, uint32(k-1))
+	}
+	x.off = c.exitTreeNode(c.exitKids[at:], true)
+	c.exitKids = c.exitKids[:at]
+	x.crossAt, x.crossN = int32(crossAt), int32(len(c.exitCross)-crossAt)
+	x.cross = x.crossN
+	return x
+}
+
+// exitWritten reports whether an exit writes slot i, whose value in its
+// state is v: not a captured binding's, in its cell, nor a slot's own load,
+// which the frame has as it is.
+func (c *core) exitWritten(i int, v *ssa.Value) bool {
+	return v != nil && (v.Op != ssa.OpLoadSlot || v.Aux != i) && !c.captured(i)
+}
+
+// exitTreeNode adds a node of entries to the frame's Tree, a leaf's or an
+// inner node's, and returns its offset; 0, the empty node, for none.
+func (c *core) exitTreeNode(entries []uint32, leaf bool) uint32 {
+	if len(entries) == 0 {
+		return 0
+	}
+	f := c.exitFrame
+	if len(f.Tree) == 0 {
+		f.Tree = append(f.Tree, 0)
+	}
+	off := uint32(len(f.Tree))
+	f.Tree = append(f.Tree, uint32(len(entries))<<1|uint32(b2u(leaf)))
+	f.Tree = append(f.Tree, entries...)
+	return off
+}
+
+// exitCrossWritten reports whether state s's exit writes a slot that one
+// under its slots' node nd, of height h, names as its reference's source.
+func (c *core) exitCrossWritten(s *ssa.FrameState, nd *ssa.SlotNode, h int) bool {
+	x := &c.exitNodes[nd.ID()]
+	if x.cross == 0 {
+		return false
+	}
+	if h == 0 {
+		for _, o := range c.exitCross[x.crossAt : x.crossAt+x.crossN] {
+			if int(o) < s.Len() && c.exitWritten(int(o), s.Slot(int(o))) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, kid := range nd.Kids() {
+		if c.exitCrossWritten(s, kid, h-1) {
+			return true
+		}
+	}
+	return false
 }
 
 // exitHash is where e's chain is among exitHead's: a hash of all its
@@ -3222,7 +3469,8 @@ func (c *core) exitLayout() *abi.ExitFrame {
 			clear(w.exitWords)
 			c.exitWords = w.exitWords
 			c.exitHead, c.exitNext = w.exitHeadBuf[:0], w.exitNextBuf[:0]
-			c.exitFrame.Slots, c.exitFrame.Index, c.exitFrame.Words = w.exitSlotsBuf[:0], w.exitIndexBuf[:0], w.exitWordsBuf[:0]
+			c.exitFrame.Slots, c.exitFrame.Tree, c.exitFrame.Words = w.exitSlotsBuf[:0], w.exitTreeBuf[:0], w.exitWordsBuf[:0]
+			c.exitKids, c.exitCross = w.exitKidsBuf[:0], w.exitCrossBuf[:0]
 			c.exitFrame.Inlines = w.exitInlinesBuf[:0]
 		} else {
 			c.exitWords = map[uint64]int32{}
@@ -3270,12 +3518,11 @@ func (c *core) slotsEnd() int32 {
 // state of more slots than that, a function's that nothing else bounds,
 // may have.
 func (c *core) recordRoom(s *ssa.FrameState) {
-	if len(s.Slots) <= abi.MaxRecords {
+	if s.Len() <= abi.MaxRecords {
 		return
 	}
 	n := 0
-	for _, ix := range c.f.Present(s) {
-		i, v := int(ix), s.Slots[ix]
+	for i, v := range s.All() {
 		if !(v.Op == ssa.OpLoadSlot && v.Aux == i || c.captured(i)) {
 			n++
 		}
@@ -3311,6 +3558,29 @@ type callRecord struct {
 // every word of the slots from operands on, if not -1, which the call
 // reads its callee's arguments from. Those whose pointer words it writes
 // come first.
+// windowCallees is, for register code's native call of sites (ssa.CallSite's
+// Window) that leaves its function out of its callee's window, the
+// function object each site's checks find, 0 for one checked by its code
+// (abi.CallState's Callees); nil where the call writes the function to
+// the window's register 0: a callee that reads it (ReadsFunction), any
+// function past the sites (gen), a call through Function.prototype.call or
+// apply, a super().
+func windowCallees(site *ssa.CallSite, sites []*ssa.CallSite, gen bool) []uintptr {
+	if site.Window == 0 || gen || len(sites) == 0 || site.Via != 0 || site.Forward || site.Super {
+		return nil
+	}
+	out := make([]uintptr, len(sites))
+	for i, t := range sites {
+		if t.ReadsFunction || t.Via != 0 || t.Forward || t.Super {
+			return nil
+		}
+		if t.ByCode == 0 {
+			out[i] = t.Callee
+		}
+	}
+	return out
+}
+
 func (c *core) callState(v *ssa.Value, s *ssa.FrameState, skip func(int) bool, operands int) (*abi.CallState, []callRecord) {
 	defer c.viewExits()()
 	saves := c.savesOf(v)
@@ -3321,8 +3591,7 @@ func (c *core) callState(v *ssa.Value, s *ssa.FrameState, skip func(int) bool, o
 	st := &c.callSlab[len(c.callSlab)-1]
 	cs := c.cs
 	refs, rest, refRecs, restRecs := cs.refs[:0], cs.rest[:0], cs.refRecs[:0], cs.restRecs[:0]
-	for _, ix := range c.f.Present(s) {
-		i, x := int(ix), s.Slots[ix]
+	for i, x := range s.All() {
 		if x.Op == ssa.OpLoadSlot && x.Aux == i || c.captured(i) || skip(i) {
 			continue
 		}
@@ -3414,7 +3683,7 @@ func (c *core) goState(op uint64, keep int, v *ssa.Value, args []*ssa.Value) (*a
 	if v != nil && ssa.GoOp(op&0xff) == ssa.GoLeaf && len(v.Calls()) == 1 {
 		// The leaf the call checked it calls, which Go takes from here,
 		// and whether anything reads its result.
-		st.Leaf, st.Unused = v.Calls()[0].Leaf, v.Calls()[0].Unused
+		st.Leaf, st.Unused, st.Give = v.Calls()[0].Leaf, v.Calls()[0].Unused, v.Calls()[0].Give
 	}
 	c.goCalls = append(c.goCalls, st)
 	if len(args) == 0 {
@@ -3447,15 +3716,15 @@ func (c *core) goArgOf(x *ssa.Value) (abi.GoCallArg, bool) {
 	case abi.ExitReg:
 		a.Kind, a.At = abi.GoArgWord, abi.OffRegs+l.N*8
 	case abi.ExitSpill:
-		a.Kind, a.At = abi.GoArgWord, abi.OffSpill+l.N*8
+		a.Kind, a.At = abi.GoArgWord, abi.SpillOffset(l.N)
 	case abi.ExitF64Reg:
 		a.Kind, a.At = abi.GoArgF64, abi.OffXRegs+(l.N&31)*8
 	case abi.ExitF64Spill:
-		a.Kind, a.At = abi.GoArgF64, abi.OffSpill+l.N*8
+		a.Kind, a.At = abi.GoArgF64, abi.SpillOffset(l.N)
 	case abi.ExitBoolReg:
 		a.Kind, a.At = abi.GoArgBool, abi.OffRegs+(l.N&31)*8
 	case abi.ExitBoolSpill:
-		a.Kind, a.At = abi.GoArgBool, abi.OffSpill+l.N*8
+		a.Kind, a.At = abi.GoArgBool, abi.SpillOffset(l.N)
 	default:
 		return a, false
 	}
@@ -3470,7 +3739,7 @@ func (c *core) goArgOf(x *ssa.Value) (abi.GoCallArg, bool) {
 		case src.Kind == abi.ExitReg:
 			a.Ref, a.From = abi.GoRefSource, abi.OffRegs+src.N*8
 		case src.Kind == abi.ExitSpill:
-			a.Ref, a.From = abi.GoRefSource, abi.OffSpill+src.N*8
+			a.Ref, a.From = abi.GoRefSource, abi.SpillOffset(src.N)
 		case src.Kind == abi.ExitSlotAddr:
 			a.Ref = abi.GoRefSlotSource
 			a.Base, a.From = c.slotPlace(int(src.N))
@@ -3586,11 +3855,12 @@ func (c *core) finishExits() {
 	if f := c.exitFrame; f != nil {
 		if w := c.ws; w != nil {
 			// Its buffers, for the next compile.
-			w.exitSlotsBuf, w.exitIndexBuf, w.exitWordsBuf = f.Slots[:0], f.Index[:0], f.Words[:0]
+			w.exitSlotsBuf, w.exitTreeBuf, w.exitWordsBuf = f.Slots[:0], f.Tree[:0], f.Words[:0]
+			w.exitKidsBuf, w.exitCrossBuf = c.exitKids[:0], c.exitCross[:0]
 			w.exitHeadBuf, w.exitNextBuf = c.exitHead[:0], c.exitNext[:0]
 			w.exitInlinesBuf = f.Inlines[:0]
 		}
-		f.Slots, f.Index, f.Words, f.Inlines = exact(f.Slots), exact(f.Index), exact(f.Words), exact(f.Inlines)
+		f.Slots, f.Tree, f.Words, f.Inlines = exact(f.Slots), exact(f.Tree), exact(f.Words), exact(f.Inlines)
 	}
 }
 
@@ -3727,6 +3997,15 @@ func lengthWrites(site *ssa.CallSite, argc int, enc abi.Encoding) bool {
 		argc == 2 && enc.ValueSize == 16 && enc.WriteBarrier != 0
 }
 
+// closes reports whether a scope's end natively (cellsClose), site, closes
+// the cell of x, one of its Captures: a local from its Argc on, and, where
+// it closes a count of them (ssa.CallSite's Closes, register code's
+// close_regs), before its end.
+func closes(site *ssa.CallSite, x int32) bool {
+	at := int(x >> 1)
+	return at >= site.Argc && (site.Closes == 0 || at < site.Argc+site.Closes)
+}
+
 // goOpWord is the word a call of Go, site, passes Go (abi.Context's GoOp).
 func goOpWord(site *ssa.CallSite) uint64 {
 	op := uint64(site.Go)
@@ -3775,6 +4054,8 @@ func goOpWord(site *ssa.CallSite) uint64 {
 			op |= abi.GoCallFill << abi.GoOpKindShift
 		case site.Step:
 			op |= abi.GoCallStep << abi.GoOpKindShift
+		case site.StepResult:
+			op |= abi.GoCallStepResult << abi.GoOpKindShift
 		case site.TypeOf:
 			op |= abi.GoCallTypeOf << abi.GoOpKindShift
 		case site.InstanceOf:
@@ -3856,10 +4137,14 @@ func genMakeArgs(v *ssa.Value, enc abi.Encoding, put func(x *ssa.Value, off int3
 	at := 0
 	if site.Method {
 		put(v.Args[0], enc.GenObject+enc.GenThis, false)
+		if site.GenThisAt != 0 {
+			// A register generator's register 1 too (CallSite's GenThisAt).
+			put(v.Args[0], int32(site.GenThisAt-1)*int32(enc.ValueSize), true)
+		}
 		at = 1
 	}
-	for i := 0; i < site.Argc && i < site.Params && i < site.LocalCount; i++ {
-		put(v.Args[at+1+i], int32(i)*int32(enc.ValueSize), true)
+	for i := 0; i < site.Argc && i < site.Params && site.GenArgAt+i < site.LocalCount; i++ {
+		put(v.Args[at+1+i], int32(site.GenArgAt+i)*int32(enc.ValueSize), true)
 	}
 }
 
@@ -3873,3 +4158,18 @@ func stepGens(v *ssa.Value, enc abi.Encoding) bool {
 	site := v.Calls()[0]
 	return len(site.Gens) != 0 && site.GenNext != 0
 }
+
+// laterUse is a state allocate's uses meet, put off to its block's end:
+// where, at whose instruction's own, and whether Go refuses the call it
+// is the state of (allocate's laterState).
+type laterUse struct {
+	s       *ssa.FrameState
+	at, own int32
+	refused bool
+}
+
+// stateAsk is what the states allocate meets in a block ask of a node of
+// their slots: the last position, the last that Go does not refuse (-1
+// for none), and the first instruction's own (MaxInt32 for none), the
+// block's mark.
+type stateAsk struct{ mark, end, hot, own int32 }

@@ -183,6 +183,12 @@ func TestJITHandlerTreeGoesOn(t *testing.T) {
 	if r.jit.treeGoneOn == goneOn {
 		t.Fatal("viaUsing's invocation did not go on in its tree")
 	}
+	// No run nested in the one that left the frame: runs of it in Go
+	// below each other, one at each turn its code left, had taken a
+	// context each, as many as there were.
+	if n := r.jit.ctxMost; n > 4*jitContexts {
+		t.Errorf("%d contexts for runs of a loop no deeper than 2 frames", n)
+	}
 }
 
 // A generator whose code is judged slow -- each resumption a stretch of a

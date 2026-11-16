@@ -309,6 +309,16 @@ func (g *nativeGen) call() {
 	a.CmpMem(R8, RDI, ncObjBits, true)
 	a.Jcc(CondNE, g.ex(5))
 	a.Bind(ok)
+	// A callee whose calls go to the JIT (closureCode's jitEnters): one
+	// with native code, or whose runs spent what was left of its budget,
+	// entered by nativeJITCall, called with no exit (light).
+	jitCall := a.NewLabel()
+	a.Load(R8, RCX, offECl)
+	a.Load(R8, R8, offClCode)
+	a.AddMem(R8, RDI, ncCCBase)
+	a.LoadU8(RDX, R8, offCCJITEnters)
+	a.Op(Test, RDX, RDX, false)
+	a.Jcc(CondNE, jitCall)
 	a.Store(RDI, scr(sE), RCX)
 	a.Store(RDI, scr(sWin), RSI)
 	a.Store(RDI, scr(sKind), R9)
@@ -610,6 +620,8 @@ func (g *nativeGen) call() {
 	g.late = append(g.late, func() {
 		a.Bind(notPush)
 		g.genNext(light)
+		a.Bind(jitCall)
+		g.light(ncJITCallFn)
 	})
 }
 

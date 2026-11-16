@@ -100,10 +100,77 @@ func TestJITRegBigIntGivenBackAllocs(t *testing.T) {
 	}
 }
 
+// microbench_extra.js's bigint_pidigits, register code compiled: its
+// temporaries' blocks -- 5n * r, q * (5n * i - 2n) + r, and the like, of
+// numbers growing to hundreds of words -- are given back as the operator
+// that takes them makes its result, as the stack form's operands on its
+// stack are, and its bindings' where an operator stores over them: a few
+// hundred new blocks for 13,000 operators, not 8,000 (the temporaries had
+// been held as bindings, and a str_freeze had the function hold none),
+// whether the collector marks or not.
+func TestJITRegBigIntTemporariesGivenBack(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	for _, marking := range []bool{false, true} {
+		t.Run(fmt.Sprintf("marking=%v", marking), func(t *testing.T) {
+			if marking {
+				jitMarkingForTest(t)
+			}
+			r := regBigRuntime(t)
+			jitDefaultsForTest(r)
+			if _, err := r.Run(regBigCompile(t, `
+				var global_res
+				function pidigits(n) {
+					var j, k, q, r, t, i, u, y, s
+					for (j = 0; j < n; j++) {
+						q = 1n; r = 180n; t = 60n; i = 2n; s = ""
+						for (k = 0; k < 100; k++) {
+							u = 3n * (3n * i + 1n) * (3n * i + 2n)
+							y = (q * (27n * i - 12n) + 5n * r) / (5n * t)
+							s += y
+							r = 10n * u * (q * (5n * i - 2n) + r - y * t)
+							q = 10n * q * i * (2n * i - 1n)
+							t = t * u
+							i += 1n
+						}
+						global_res = s
+					}
+					return s
+				}`)); err != nil {
+				t.Fatal(err)
+			}
+			run := regBigCompile(t, `pidigits(10)`)
+			for range 10 {
+				if _, err := r.Run(run); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cl := r.global.getOwn(r.atoms.intern("pidigits")).value().Object().fn().closure
+			if e := r.jit.regCache[r.jitKeyOf(cl.fn)]; e == nil || e.code == nil || e.invalid {
+				t.Fatal("pidigits has no register code")
+			}
+			made, fresh := r.jit.bigLeafs, r.jit.bigLeafNew
+			got, err := r.Run(run)
+			if err != nil {
+				t.Fatal(err)
+			}
+			const pi = "3141592653589793238462643383279502884197169399375105820974944592307816406286208998628034825342117067"
+			if g := got.String().Go(); g != pi {
+				t.Fatalf("pidigits(10) = %s, want %s", g, pi)
+			}
+			if n, m := r.jit.bigLeafs-made, r.jit.bigLeafNew-fresh; n < 10000 || m > n/20 {
+				t.Fatalf("pidigits(10): the leaf made %d operators, in %d new blocks", n, m)
+			}
+		})
+	}
+}
+
 // TestRegSoleRegisters pins which registers hold their values alone, of a
-// function of one parameter (r2) and four more registers: those an
-// operator reads -- an accumulator, a step, a temporary -- do; the
-// parameter, a register a move, a call's window, a return, a global's
+// function of one parameter (r2), four bindings (r3 to r6) and a
+// temporary (r7): the bindings an operator reads -- an accumulator, a
+// step -- or an append adds or a str_freeze reads do; the parameter, the
+// temporary, a binding a move, a call's window, a return, a global's
 // store, a property's read or a postfix update reads, and one a closure
 // captures do not; nor any where the function has an instruction the
 // analysis does not know.
@@ -113,6 +180,8 @@ func TestRegSoleRegisters(t *testing.T) {
 		R(bytecode.RLoadInt, 0, 3, 0, 1),
 		R(bytecode.RMul, 0, 3, 3, 4),
 		R(bytecode.RAdd, 0, 5, 3, 4),
+		R(bytecode.RMul, 0, 7, 5, 3),
+		R(bytecode.RAdd, 0, 4, 4, 7),
 		R(bytecode.RInc, 0, 6, 6, 0),
 		R(bytecode.RJLt, 0, 6, 2, 0),
 	}
@@ -131,13 +200,14 @@ func TestRegSoleRegisters(t *testing.T) {
 		{"property", []bytecode.RInstr{R(bytecode.RGetProp, 0, 4, 3, 0)}, -1, all &^ (1 << 3)},
 		{"postfix", []bytecode.RInstr{R(bytecode.RPostInc, 0, 4, 3, 0)}, -1, all &^ (1 << 3)},
 		{"captured", nil, 3, all &^ (1 << 3)},
+		{"append", []bytecode.RInstr{R(bytecode.RAppend, 0, 5, 4, 0), R(bytecode.RStrFreeze, 0, 5, 0, 0)}, -1, all},
 		{"unknown", []bytecode.RInstr{R(bytecode.RGetIndex, 0, 4, 3, 5)}, -1, 0},
 	} {
-		rc := &bytecode.RegCode{Code: append(append([]bytecode.RInstr{}, loop...), c.code...), NumRegs: 7}
+		rc := &bytecode.RegCode{Code: append(append([]bytecode.RInstr{}, loop...), c.code...), NumRegs: 8, Params: 1, Inits: 4}
 		fn := &bytecode.Function{ParamCount: 1}
-		p := &ir.Program{Regs: 7}
+		p := &ir.Program{Regs: 8}
 		if c.captured >= 0 {
-			p.Captured = make([]bool, 7)
+			p.Captured = make([]bool, 8)
 			p.Captured[c.captured] = true
 		}
 		if got := regSoleRegisters(fn, rc, p); got != c.want {

@@ -64,10 +64,8 @@ func liveAfterRef(f *Func, points, cands []*Value, reads func(user *Value, i int
 	}
 	for _, b := range f.Blocks {
 		if b.Header != nil {
-			for _, s := range b.Header.Slots {
-				if s != nil {
-					use(s, b, -1)
-				}
+			for _, s := range b.Header.All() {
+				use(s, b, -1)
 			}
 		}
 		for i, v := range b.Values {
@@ -86,10 +84,8 @@ func liveAfterRef(f *Func, points, cands []*Value, reads func(user *Value, i int
 				}
 			}
 			if v.State != nil {
-				for _, s := range v.State.Slots {
-					if s != nil {
-						use(s, b, i)
-					}
+				for _, s := range v.State.All() {
+					use(s, b, i)
 				}
 			}
 		}
@@ -97,10 +93,8 @@ func liveAfterRef(f *Func, points, cands []*Value, reads func(user *Value, i int
 			use(b.Control, b, len(b.Values))
 		}
 		if b.State != nil {
-			for _, s := range b.State.Slots {
-				if s != nil {
-					use(s, b, len(b.Values))
-				}
+			for _, s := range b.State.All() {
+				use(s, b, len(b.Values))
 			}
 		}
 	}

@@ -176,6 +176,8 @@ func TestJITRegAddPropPush(t *testing.T) {
 				jitMarkingForTest(t)
 			}
 			rts := regNativeRuntimes(t, regAddPushSrc)
+			// Counted: what stress makes of the compiles' order is not.
+			rts[0].jitStress = jitStressConfig{}
 			rts[0].SetJITWarmUp(1, 1)
 			for _, name := range []string{"update", "accessors", "pushes", "poly"} {
 				if name == "poly" {

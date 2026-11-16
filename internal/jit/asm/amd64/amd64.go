@@ -7,6 +7,7 @@ package amd64
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 	"unsafe"
 )
 
@@ -94,8 +95,8 @@ type fixup struct {
 	// at is where the rel32 is, or an alignment's padding starts, and
 	// start where its instruction starts (at less opLen), kept so that
 	// Finish's walks over the fixups compute it at none of them: positions
-	// in a function's code, which MaxCodeBytes bounds, as 32 bits each,
-	// the fixup sixteen bytes, where 24 had been.
+	// in a function's code, which a rel32 reaches across (Finish), as 32
+	// bits each, the fixup sixteen bytes, where 24 had been.
 	start, at int32
 	label     int32
 	// kn is the fixup's kind and, past its low byte, an alignment's n
@@ -249,6 +250,11 @@ func (a *Asm) Offset(l Label) int { return int(a.labels[l].pos) }
 // only brings others' labels nearer, so jumps are shortened until no more
 // can be. Positions taken before (Len) are where Moved says after.
 func (a *Asm) Finish() ([]byte, error) {
+	if len(a.buf) > math.MaxInt32 {
+		// Past a rel32's reach, which every position the fixups keep is
+		// within otherwise.
+		return nil, fmt.Errorf("amd64: %d bytes of code, past a rel32's reach", len(a.buf))
+	}
 	n := len(a.fixups)
 	a.short = grow(a.short, n)
 	a.removed = grow(a.removed, n)

@@ -310,10 +310,12 @@ func keepWhereMade(f *Func, kept []bool, order []*Value) []*Value {
 		if len(phis) != 0 && b.Header != nil && b.PC >= 0 {
 			// A loop header's state is after its phis, before their keeps:
 			// it names the phis, each slot replaced with another value
-			// (Present).
-			for _, i := range f.Present(b.Header) {
-				if x := b.Header.Slots[i]; x.ID < len(kept) && kept[x.ID] && x.Block == b && made[x.ID].Op == OpPhi {
-					b.Header.Slots[i] = made[x.ID]
+			// -- in its own nodes, as other states keep the phis.
+			f.openEdit()
+			h := b.Header
+			for i, x := range h.All() {
+				if x.ID < len(kept) && kept[x.ID] && x.Block == b && made[x.ID].Op == OpPhi {
+					f.setSlot(h, i, made[x.ID])
 				}
 			}
 		}

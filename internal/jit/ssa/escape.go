@@ -796,8 +796,8 @@ func (e *escaper) state(s *FrameState, header bool) {
 	if s == nil {
 		return
 	}
-	for _, i := range e.f.Present(s) {
-		if r, o := e.roleOf(s.Slots[i]); r != roleNone {
+	for _, v := range s.All() {
+		if r, o := e.roleOf(v); r != roleNone {
 			if r != roleObj || header || s.Args != 0 || s.Virtual != 0 {
 				e.escape(o)
 			}
@@ -1498,8 +1498,9 @@ func (e *escaper) mergeInputs(m *virtual, b *Block) *vstate {
 // liveAt reports whether object o, merged into m at b, may be used past
 // the merge: whether a use of it, but m's phi, is on a path from b that
 // does not make it again first -- a value's operand, a control, a frame
-// state's slot (useBlocks) -- or an object holds it, whose state names it
-// with no use of its own, wherever that goes.
+// state's slot (useBlocks), another phi's operand at the end of the
+// predecessor it comes from -- or an object holds it, whose state names
+// it with no use of its own, wherever that goes.
 func (e *escaper) liveAt(o, m *virtual, b *Block) bool {
 	if o.held {
 		return true
@@ -1510,8 +1511,18 @@ func (e *escaper) liveAt(o, m *virtual, b *Block) bool {
 		used[id] = true
 	}
 	for _, u := range e.phiUses[o.id] {
-		if u != m.phi {
-			used[u.Block.ID] = true
+		if u == m.phi {
+			continue
+		}
+		// A phi uses o at the end of each predecessor o comes in from,
+		// not in its block: a register loop's end, where the copy of its
+		// test before it ends too (the compile package's loopTest), merges
+		// the object the loop began with, from the way round the loop
+		// that the loop's merge is not on.
+		for j, a := range u.Args {
+			if _, x := e.roleOf(a); x == o && j < len(u.Block.Preds) {
+				used[u.Block.Preds[j].ID] = true
+			}
 		}
 	}
 	def := o.defBlock()
@@ -1573,8 +1584,8 @@ func (e *escaper) indexUses() {
 	}
 	state := func(s *FrameState, b *Block) {
 		if s != nil {
-			for _, i := range f.Present(s) {
-				mark(s.Slots[i], b)
+			for _, v := range s.All() {
+				mark(v, b)
 			}
 		}
 	}
@@ -1777,8 +1788,8 @@ func (e *escaper) record(u escState, cur []*vstate) {
 			}
 		}
 	}
-	for _, i := range e.f.Present(u.s) {
-		if r, o := e.roleOf(u.s.Slots[i]); r == roleObj && !o.escaped {
+	for _, v := range u.s.All() {
+		if r, o := e.roleOf(v); r == roleObj && !o.escaped {
 			add(o)
 		}
 	}
@@ -2190,9 +2201,9 @@ func (e *escaper) rewriteState(s *FrameState, snap []escSnap) *FrameState {
 		}
 	}
 	n := f.newState(*s)
-	n.Slots = f.refsOf(end)
-	copy(n.Slots, s.Slots[:s.Own()])
+	n.slots, n.height, n.n = nil, 0, end
 	n.Virtual = end - s.Own()
+	f.openEdit()
 	named := func(x *Value) *Value {
 		r, o := e.roleOf(x)
 		if r != roleObj || o.escaped {
@@ -2208,9 +2219,9 @@ func (e *escaper) rewriteState(s *FrameState, snap []escSnap) *FrameState {
 		}
 		panic("ssa: an object not made with no state")
 	}
-	for i := range n.Slots[:s.Own()] {
-		if x := n.Slots[i]; x != nil {
-			n.Slots[i] = named(x)
+	for i, x := range s.All() {
+		if i < s.Own() {
+			f.setSlot(n, i, named(x))
 		}
 	}
 	for _, y := range snap {
@@ -2218,9 +2229,9 @@ func (e *escaper) rewriteState(s *FrameState, snap []escSnap) *FrameState {
 		if y.st.real != nil {
 			continue
 		}
-		n.Slots[o.home] = e.word(o, uint64(y.st.shape))
+		f.setSlot(n, o.home, e.word(o, uint64(y.st.shape)))
 		for k, x := range y.st.fields {
-			n.Slots[o.home+abi.VirtualFields+k] = named(x)
+			f.setSlot(n, o.home+abi.VirtualFields+k, named(x))
 		}
 	}
 	return n

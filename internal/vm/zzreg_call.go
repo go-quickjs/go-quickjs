@@ -340,9 +340,6 @@ func (r *Runtime) regCallSlow(f *frame, c *regCode, w bytecode.RInstr, base, pc 
 			}
 			if kind != 0 && e != nil {
 				regCacheCallee(e, o, cl, rc, this, kind)
-				if jitBuilt && r.jitRegHas(cl) {
-					e.kind |= regCallJIT
-				}
 			}
 		}
 		switch kind {
@@ -450,17 +447,11 @@ const (
 	// regCallLeaf marks a callee whose body rhCallW may answer without a
 	// frame (leafCall, pureCall).
 	regCallLeaf = 16
-	// regCallJIT marks a callee that has native code made from its
-	// register code: no fast path enters it, rhCallW's nor the native
-	// handlers', and regCallSlow's regEnterW enters the code
-	// (jitRegEnter). Builds without the JIT never set it.
-	regCallJIT = 32
 )
 
 // regCallMarks are the marks of a call cache's kind that say how a call
-// enters its callee, not what it gives it as this: regCallJIT's only in a
-// build with the JIT, whose untagged code is as it was without it.
-const regCallMarks = regCallOut | regCallLeaf | regCallJITMark
+// enters its callee, not what it gives it as this.
+const regCallMarks = regCallOut | regCallLeaf
 
 // regIsObject reports whether *v is an object, its tag read as a word.
 func regIsObject(v *Value) bool {
@@ -728,7 +719,17 @@ func (r *Runtime) regEnterScoped(o *Object, cl *closure, rc *regCode, base, argc
 		p := int(rc.params)
 		f.locals = r.stack[base+2 : base+2+p : base+2+p]
 	}
-	v, err := r.runReg(f, rc, 0)
+	var v Value
+	var err error
+	if jitBuilt && cl.jitEnters && thisRef == nil && with == nil && evalVars == nil {
+		// Its function's calls go to the JIT, as regEnterW's (jitRegEnter):
+		// a frame of nothing more of its surroundings than regEnterW's --
+		// no this binding a derived constructor shares, no with or eval
+		// scope, which native code does not look in.
+		v, err = r.jitRegEnter(f, cl, rc, base, 0)
+	} else {
+		v, err = r.runReg(f, rc, 0)
+	}
 	if err == errRegRestart {
 		v, err = r.regRestartRun(f)
 	}

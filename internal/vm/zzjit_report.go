@@ -123,11 +123,26 @@ func (r *Runtime) JITReport() []JITFunction {
 		f.Name += " [reg]"
 		switch {
 		case e.code != nil && e.invalid:
-			f.Status, f.Native = "invalid", 1
+			f.Status = "invalid"
+		case e.code != nil && e.life != nil && e.life.entrySlow:
+			f.Status = "slow"
 		case e.code != nil:
-			f.Status, f.Native = "native", 1
+			f.Status = "native"
 		default:
 			f.Status, f.Reason = "refused", e.refusal
+		}
+		if l := e.life; l != nil {
+			// What the function's register code did, over its compiles:
+			// Go's entries at its start and into its loops, native
+			// callers' calls through its link; its exits; its compiles
+			// again.
+			st := &l.ssaStats
+			f.Native = l.starts + st.entries
+			if link := s.regLinks[k]; link != nil {
+				f.Native += link.in
+			}
+			f.Hosts, f.Guards, f.Ended, f.Declined = st.hosts, st.guards, st.ended, l.slowCalls
+			f.GoCalls, f.Work, f.Reopts = st.goCalls, st.work, int(l.reopts)
 		}
 		out = append(out, f)
 	}

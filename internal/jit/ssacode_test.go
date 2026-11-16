@@ -1537,14 +1537,14 @@ func TestCodeFootprint(t *testing.T) {
 		var frame *abi.ExitFrame
 		for _, x := range mc.Exits {
 			want += int(unsafe.Sizeof(*x))
-			listed += int(x.Count)
+			x.Slots(func(*abi.ExitSlot) { listed++ })
 			if x.Frame != nil && x.Frame != mc.Exits[0].Frame {
 				t.Fatal("a code's exit descriptions do not share one frame")
 			}
 			if x.Frame != frame {
 				distinct += len(x.Frame.Slots)
 				frame = x.Frame
-				want += int(unsafe.Sizeof(*frame)) + len(frame.Slots)*int(unsafe.Sizeof(abi.ExitSlot{})) + len(frame.Index)*2 + len(frame.Words)*8 +
+				want += int(unsafe.Sizeof(*frame)) + len(frame.Slots)*int(unsafe.Sizeof(abi.ExitSlot{})) + len(frame.Tree)*4 + len(frame.Words)*8 +
 					len(frame.Inlines)*int(unsafe.Sizeof(abi.ExitInline{}))
 			}
 		}

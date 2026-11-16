@@ -133,7 +133,7 @@ func TestJITRegNativeCalls(t *testing.T) {
 				}
 			}
 			t.Logf("native calls %v; unwound %d, resumed %d, entries %d", native, st.Unwound, st.Resumed, st.Entries)
-			t.Logf("register code %d bytes of %d", r.jit.regBytes(), r.jitBudget())
+			t.Logf("register code %d bytes of %d", r.jit.regHeld, r.jitBudget())
 			for _, name := range []string{"add", "three", "leaf3", "mid3", "fib", "depth", "goes", "Q", "R", "T", "mkAdder", "midCap", "nt"} {
 				if native[name] == 0 {
 					t.Errorf("%s: never called natively", name)
@@ -260,13 +260,9 @@ func regCompileARM64(t *testing.T, r *Runtime) (fns, windows, inlined int) {
 		if err != nil {
 			continue
 		}
-		// As jitRegCompile lays the register frame out.
-		f.FrameLocals = p.Regs
-		f.Scratch = p.Locals - (p.UpvalueBase + p.Upvalues)
-		f.ThisSlot = -1
-		f.Params, f.StartOnly = p.ParamBase+p.Params, false
-		f.Cells = p.Cells
-		f.CallEntry = true
+		// As jitRegCompile lays the register frame out, a generator's
+		// entry among it.
+		jitRegShape(f, p, cl, cl.reg)
 		inlined += len(f.Inlined)
 		ssa.Optimize(f)
 		for _, b := range f.Blocks {

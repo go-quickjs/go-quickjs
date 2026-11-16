@@ -654,7 +654,17 @@ func intPhiBudgets(f *Func, phis []*Value, cand []bool) bool {
 // comparison, an element's key, a sum or difference truncInts makes an
 // int32 one -- and none as a double but those, a box or a phi: Crypto's
 // am3 carries x & 0x3fff and x >> 14 through its loop for products with
-// its digits, and had converted both at every digit.
+// its digits, and had converted both at every digit. So is a group that
+// costs nothing as int32s and no use takes as a double where it runs: no
+// loop's header among its phis, whose int32 would hold a register through
+// the loop, and no entry's number among their arguments, which an int32
+// phi speculates on -- every argument an int32's conversion, an int32
+// constant or one of the group. Converted after the merge, such a phi
+// converts once where it runs, where its arguments' conversions had run in
+// each of its predecessors: register code's loop tests at its end
+// (compile's loopTest), so a loop's int32 read after it reaches the exit
+// through a phi of the turn's value and the one before the first turn,
+// whose conversion had been made in the test's block at every turn.
 func intPhiUses(f *Func, phis []*Value, cand []bool) bool {
 	n := len(cand)
 	isCand := func(a *Value) bool { return a.ID < n && cand[a.ID] }
@@ -766,13 +776,30 @@ func intPhiUses(f *Func, phis []*Value, cand []bool) bool {
 		}
 		return in[index[b.ID]]
 	}
-	sc.intWants, sc.intAgainst = growFlags(sc.intWants, n), growFlags(sc.intAgainst, n)
-	wants, against := sc.intWants, sc.intAgainst
+	sc.intWants, sc.intAgainst, sc.intCostly = growFlags(sc.intWants, n), growFlags(sc.intAgainst, n), growFlags(sc.intCostly, n)
+	wants, against, costly := sc.intWants, sc.intAgainst, sc.intCostly
 	defer func() {
 		for _, v := range phis {
-			wants[v.ID], against[v.ID] = false, false
+			wants[v.ID], against[v.ID], costly[v.ID] = false, false, false
 		}
 	}()
+	for _, v := range phis {
+		if !cand[v.ID] {
+			continue
+		}
+		g := find(v.ID)
+		if v.Block.LoopHeader {
+			costly[g] = true
+			continue
+		}
+		for _, a := range v.Args {
+			if a.Op != OpI32ToF64 && !isCand(a) && !(a.Op == OpConstF64 && int32Const(math.Float64frombits(a.Const.Bits))) {
+				// An entry's number, speculated an int32.
+				costly[g] = true
+				break
+			}
+		}
+	}
 	for _, b := range f.Blocks {
 		for _, u := range b.Values {
 			for i, a := range u.Args {
@@ -806,7 +833,7 @@ func intPhiUses(f *Func, phis []*Value, cand []bool) bool {
 	// its uses as this one did, folded or not.
 	dropped := false
 	for _, v := range phis {
-		if g := find(v.ID); cand[v.ID] && (against[g] || !wants[g]) {
+		if g := find(v.ID); cand[v.ID] && costly[g] && (against[g] || !wants[g]) {
 			cand[v.ID], dropped = false, true
 			f.scr().intNo[v.ID] = true
 		}

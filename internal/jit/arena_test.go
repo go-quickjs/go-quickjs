@@ -3,7 +3,6 @@
 package jit
 
 import (
-	"errors"
 	"math"
 	"runtime"
 	"slices"
@@ -50,28 +49,62 @@ func valueCode(t *testing.T, v float64, n int) *mir.Code {
 	return mc
 }
 
-// Code past MaxCodeBytes is refused as the function's own (ErrCodeSize), not
-// as the host's failure to place code (ErrUnavailable), which has a runtime
-// place no more: the arena places the next function's code, and runs it.
-func TestCodePastMaxCodeBytes(t *testing.T) {
+// Code of any length is placed: a function of 3 and of 10 MB, each in a
+// mapping of its own, as long as it, beside the chunk shorter functions
+// share, whose code goes on where it was; each runs, and releasing one
+// unmaps its mapping at once, though others' code is still placed.
+func TestLongCodePlaced(t *testing.T) {
 	a := NewArena()
-	big := valueCode(t, 1, MaxCodeBytes)
-	if len(big.Bytes) <= MaxCodeBytes {
-		t.Fatalf("%d bytes of code, not past %d", len(big.Bytes), MaxCodeBytes)
+	run := func(c *SSACode, v float64) {
+		t.Helper()
+		var ctx abi.Context
+		ctx.SetConsts(&testEncoding)
+		if err := c.Run(0, &ctx); err != nil || ctx.ExitKind != abi.ExitReturn || ctx.Ret != math.Float64bits(v) {
+			t.Fatalf("code %v returned %+v, %v", v, ctx.Ret, err)
+		}
 	}
-	if c, err := NewSSACode(a, big); c != nil || !errors.Is(err, ErrCodeSize) || errors.Is(err, ErrUnavailable) {
-		t.Fatalf("NewSSACode(%d bytes) = %v, %v", len(big.Bytes), c, err)
-	}
-	c, err := NewSSACode(a, valueCode(t, 2, 0))
+	small, err := NewSSACode(a, valueCode(t, 1, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
-	var ctx abi.Context
-	ctx.SetConsts(&testEncoding)
-	if err := c.Run(0, &ctx); err != nil || ctx.ExitKind != abi.ExitReturn || ctx.Ret != math.Float64bits(2) {
-		t.Fatalf("the code placed after returned %+v, %v", ctx.Ret, err)
+	defer small.Close()
+	var long []*SSACode
+	for i, n := range []int{3 << 20, 10 << 20} {
+		c, err := NewSSACode(a, valueCode(t, float64(10+i), n))
+		if err != nil {
+			t.Fatal(err)
+		}
+		long = append(long, c)
+		if c.Size() < n {
+			t.Fatalf("%d bytes placed of %d", c.Size(), n)
+		}
+		if mapped, _ := a.Mapped(); a.Chunks() != 2+i || mapped != chunkBytes+alignUp(long[0].Size(), chunkBytes)+i*alignUp(c.Size(), chunkBytes) {
+			t.Fatalf("%d functions: %d bytes in %d mappings", i+2, mapped, a.Chunks())
+		}
 	}
+	next, err := NewSSACode(a, valueCode(t, 2, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer next.Close()
+	if d := uintptr(unsafe.Pointer(&next.code[0])) - uintptr(unsafe.Pointer(&small.code[0])); d != uintptr(small.Size()) {
+		t.Fatalf("the function after the long ones is %d bytes past the first, which takes %d", d, small.Size())
+	}
+	run(small, 1)
+	run(next, 2)
+	for i, c := range long {
+		run(c, float64(10+i))
+	}
+	for i, c := range long {
+		if err := c.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if a.Chunks() != 2-i {
+			t.Fatalf("%d long functions released: %d mappings", i+1, a.Chunks())
+		}
+	}
+	run(small, 1)
+	run(next, 2)
 }
 
 // An arena packs a runtime's functions into a few mappings: each placed

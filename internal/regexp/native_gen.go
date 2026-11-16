@@ -49,6 +49,8 @@ type nativeProgram struct {
 	bytes   []byte
 	maxPush int
 	// text is how many of the bytes are instructions; the tables follow.
+	// In arm64 code past 512 KB, tables are among the instructions too, in
+	// the pools that keep them in reach (arm64.Asm).
 	text int
 }
 
@@ -80,7 +82,6 @@ type nativeGen struct {
 	// choice points and undoings resume at; data the tables after it.
 	cold                       []func()
 	data                       map[string]label
-	dataOrder                  []string
 	undoCaps, undoCtrs, undoMk map[int]label
 }
 
@@ -106,8 +107,11 @@ func genNative(arch string, prog *program, ncaps int, wide, unicode bool) (nativ
 	if g.bad {
 		return nativeProgram{}, false
 	}
+	// Code of any length is placed and assembled: arm64's ADRs, which
+	// resume points' addresses are, are kept in reach by veneers, and a
+	// table's by its placement (arm64.Asm).
 	b, err := g.m.Finish()
-	if err != nil || len(b) > maxNativeBytes {
+	if err != nil {
 		return nativeProgram{}, false
 	}
 	return nativeProgram{bytes: append([]byte(nil), b...), maxPush: maxPush, text: g.m.Offset(g.dataStart)}, true
@@ -277,14 +281,7 @@ func (g *nativeGen) emit() {
 		g.cold[i]()
 	}
 	a.Bind(g.dataStart)
-	for _, d := range g.dataOrder {
-		a.Bind(g.data[d])
-		b := []byte(d)
-		for len(b)%8 != 0 {
-			b = append(b, 0)
-		}
-		a.Data(b)
-	}
+	a.Tables()
 }
 
 // search is the search around the attempts, as the matcher's search makes
@@ -517,16 +514,19 @@ func (g *nativeGen) fill(base vreg, off int32, n int, v int32) {
 	a.Jcc(condB, loop)
 }
 
-// dataAt is where the code's data b is, placed after the code once however
-// many tests use it.
+// dataAt is where the code's data b is, a table placed once however many
+// tests use it (masm.Table).
 func (g *nativeGen) dataAt(b []byte) label {
 	key := string(b)
 	if l, ok := g.data[key]; ok {
 		return l
 	}
-	l := g.m.NewLabel()
+	b = []byte(key)
+	for len(b)%8 != 0 {
+		b = append(b, 0)
+	}
+	l := g.m.Table(b)
 	g.data[key] = l
-	g.dataOrder = append(g.dataOrder, key)
 	return l
 }
 
@@ -719,7 +719,7 @@ func (g *nativeGen) test128(set *[128]bool, r vreg, fail label) {
 				b[i] = 1
 			}
 		}
-		a.LeaLabel(rT, g.dataAt(b[:]))
+		a.LeaTable(rT, g.dataAt(b[:]))
 		a.Op(aluAdd, rT, r, true)
 		a.LoadU8(rT, rT, 0)
 		a.Op(aluTest, rT, rT, false)
@@ -848,11 +848,11 @@ func (g *nativeGen) bmpTable(sp []span, r vreg, fail label) {
 	}
 	a.MovRR32(rT, r)
 	a.ShiftImm(shiftRight, rT, 8, false)
-	a.LeaLabel(rD, g.dataAt(index[:]))
+	a.LeaTable(rD, g.dataAt(index[:]))
 	a.Op(aluAdd, rD, rT, true)
 	a.LoadU8(rT, rD, 0)
 	a.ShiftImm(shiftLeft, rT, 5, false)
-	a.LeaLabel(rD, g.dataAt(blocks))
+	a.LeaTable(rD, g.dataAt(blocks))
 	a.Op(aluAdd, rD, rT, true)
 	a.MovRR32(rT, r)
 	a.ShiftImm(shiftRight, rT, 6, false)

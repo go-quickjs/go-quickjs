@@ -1129,6 +1129,15 @@ func selectNumericProperties(p *ir.Program, cells bool) {
 				read(in.Right, number)
 			}
 		case ir.Host:
+			if (in.Window || in.Frame || in.Whole) && in.Dest >= 0 && in.Dest < p.Locals {
+				// Register code's call, or an instruction Go runs whole,
+				// writes its result to a register, below the scratch slots
+				// cleared next: what reads it after reads the result, not
+				// what the register held before -- a function table's
+				// element, called and its result ORed with 0, had been read
+				// as a number, which it is not, and deoptimized at.
+				take(in.Dest)
+			}
 			clear(needed[p.Locals:])
 		case ir.Insert2, ir.Insert3:
 			n, last := in.Dest, 2
@@ -1497,7 +1506,7 @@ func liveLocals(fn *bytecode.Function, p *ir.Program, effects []effect) {
 			}
 		}
 	}
-	p.Live, p.LiveLocals, p.LiveWords = live, n, words
+	p.Live = ir.LivenessFromRows(live, words, n, len(fn.Code))
 }
 
 type effect struct {
@@ -2626,8 +2635,12 @@ func stringKernel(fn *bytecode.Function) bool {
 }
 
 // markBools sets the Bools of p's instructions (ir.Instruction's): the
-// operands a comparison or a Not wrote in the same block, found by walking
-// back over instructions that write slots alone, and through copies.
+// operands a comparison or a Not wrote in the same block, through
+// instructions between that write slots alone, and through copies. It
+// goes forward over each block, knowing of each slot whether what it holds
+// is such a result, a copy of one, or neither -- what walking back from
+// each operand found, a walk as long as its block, which had made a block
+// of n instructions take n² steps.
 func markBools(p *ir.Program) {
 	starts := make([]bool, len(p.Code)+1)
 	starts[0] = true
@@ -2655,54 +2668,61 @@ func markBools(p *ir.Program) {
 	boolean := func(in *ir.Instruction) bool {
 		return in.Op == ir.Binary && in.Operator >= ir.Lt && in.Operator <= ir.Ne || in.Op == ir.Unary && in.Operator == ir.Not
 	}
-	// written reports whether slot s, read at pc, was written last, in its
-	// block, by a comparison or a Not, or a copy of what one wrote, with
-	// only instructions between that write slots alone: Binary, Unary and
-	// the copies.
-	written := func(pc, s int) bool {
-		for q := pc - 1; q >= 0 && !starts[q+1] && s >= 0; q-- {
-			in := &p.Code[q]
-			switch in.Op {
-			case ir.Nop:
-			case ir.Copy:
-				if in.Dest == s {
-					s = in.Left.Slot
-				}
-			case ir.CopyPair, ir.StoreLoad:
-				switch s {
-				case in.Dest:
-					s = in.Left.Slot
-				case in.Extra:
-					s = in.Right.Slot
-					if in.Op == ir.StoreLoad && s == in.Dest {
-						// Read after Dest is written: set_local_get's.
-						s = in.Left.Slot
-					}
-				}
-			case ir.Binary, ir.Unary:
-				if in.Dest == s {
-					return boolean(in)
-				}
-			default:
-				return false
-			}
+	// Whether slot s holds a comparison's or a Not's result, written in
+	// the block since its start or since an instruction that does more
+	// than write slots: s's entry, where its stamp is the epoch.
+	var stamp []uint32
+	var is []bool
+	epoch := uint32(1)
+	held := func(s int) bool { return s >= 0 && s < len(stamp) && stamp[s] == epoch && is[s] }
+	hold := func(s int, b bool) {
+		if s < 0 {
+			return
 		}
-		return false
+		if s >= len(stamp) {
+			n := max(2*len(stamp), s+1, p.Locals+p.StackSize)
+			stamp, is = append(stamp, make([]uint32, n-len(stamp))...), append(is, make([]bool, n-len(is))...)
+		}
+		stamp[s], is[s] = epoch, b
 	}
 	for pc := range p.Code {
+		if starts[pc] {
+			epoch++
+		}
 		in := &p.Code[pc]
 		switch {
 		case in.Op == ir.Binary && in.Operator != ir.Eq && in.Operator != ir.Ne:
-			if in.Left.Slot >= 0 && written(pc, in.Left.Slot) {
+			if held(in.Left.Slot) {
 				in.Bools |= 1
 			}
-			if in.Right.Slot >= 0 && written(pc, in.Right.Slot) {
+			if held(in.Right.Slot) {
 				in.Bools |= 2
 			}
 		case in.Op == ir.Unary && in.Operator != ir.Not:
-			if in.Left.Slot >= 0 && written(pc, in.Left.Slot) {
+			if held(in.Left.Slot) {
 				in.Bools |= 1
 			}
+		}
+		switch in.Op {
+		case ir.Nop:
+		case ir.Copy:
+			hold(in.Dest, held(in.Left.Slot))
+		case ir.CopyPair, ir.StoreLoad:
+			d := held(in.Left.Slot)
+			r := in.Right.Slot
+			if in.Op == ir.StoreLoad && r == in.Dest {
+				// Read after Dest is written: set_local_get's.
+				r = in.Left.Slot
+			}
+			e := held(r)
+			if in.Extra != in.Dest {
+				hold(in.Extra, e)
+			}
+			hold(in.Dest, d)
+		case ir.Binary, ir.Unary:
+			hold(in.Dest, boolean(in))
+		default:
+			epoch++
 		}
 	}
 }

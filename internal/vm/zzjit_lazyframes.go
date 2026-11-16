@@ -26,6 +26,12 @@ type jitLazyLevels struct {
 	root, idx, depth int
 	runF             *frame
 	made             bool
+	// reg marks a call of register code's (jitRegGoCallNested), whose
+	// levels are made in the realm the call was made in (jitRegMakeLazy),
+	// from on in regLazyLevels.
+	reg   bool
+	realm *Realm
+	from  int
 }
 
 // jitFramesDue makes the frames calls of Go put off (jitLazyLevels), if
@@ -58,6 +64,10 @@ func (r *Runtime) jitMakeLazyFrames() {
 		}
 		lz.made = true
 		r.frameDepth = lz.depth
+		if lz.reg {
+			r.jitRegMakeLazy(lz)
+			continue
+		}
 		callerFn := lz.runF.cl.fn
 		prevPC, _ := jit.CallPC(ctxs[lz.root])
 		for i := lz.root + 1; i < lz.idx; i++ {

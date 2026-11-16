@@ -80,8 +80,11 @@ func Later(lit *ast.FuncLit, fn *bytecode.Function, rec *Record) *bytecode.RegLa
 		// The view is the scratch's, which nothing compiled keeps.
 		sc.view = *fn
 		view := &sc.view
-		view.Names = fn.Names[:len(fn.Names):len(fn.Names)]
-		view.Constants = fn.Constants[:len(fn.Constants):len(fn.Constants)]
+		// Its names and constants, which the code's additions grow, in the
+		// scratch's: what the code is given is a copy of them.
+		sc.viewNames = append(sc.viewNames[:0], fn.Names...)
+		sc.viewConsts = append(sc.viewConsts[:0], fn.Constants...)
+		view.Names, view.Constants = sc.viewNames, sc.viewConsts
 		view.PropSites = fn.PropSites + fn.PrivateSites
 		rc := compile(lit, view, rec, fn, sc)
 		if rc != nil {
@@ -91,6 +94,7 @@ func Later(lit *ast.FuncLit, fn *bytecode.Function, rec *Record) *bytecode.RegLa
 			rc.Constants = append(make([]bytecode.Constant, 0, len(view.Constants)), view.Constants...)
 			rc.PropSites = view.PropSites
 		}
+		sc.viewNames, sc.viewConsts = view.Names[:0], view.Constants[:0]
 		return rc
 	})
 }
@@ -129,6 +133,40 @@ type scratch struct {
 	table []posEntry
 	g     gen
 	view  bytecode.Function
+	// The gen's tables, which finish copies out of at their sizes or
+	// reads and drops (gen's names, consts, marks, auxes, farNames,
+	// stores, caps, siteName), and the view's names and constants (Later):
+	// made anew at each compile, and the tables grown an entry at a time,
+	// they had been most of what a function's register form allocated
+	// besides the code.
+	names      map[string]uint32
+	consts     map[any]uint32
+	marks      map[int]uint8
+	auxes      map[int]uint32
+	farNames   map[int]uint32
+	stores     map[int]int32
+	caps       [][]uint16
+	siteName   []uint32
+	viewNames  []string
+	viewConsts []bytecode.Constant
+}
+
+// emptyMap is *m, emptied, made where it is nil: a table of the scratch's
+// for a compile's gen.
+func emptyMap[K comparable, V any](m *map[K]V) map[K]V {
+	if *m == nil {
+		*m = map[K]V{}
+	} else {
+		clear(*m)
+	}
+	return *m
+}
+
+// zeroed is the first n of *s, zeroed, grown where it is shorter.
+func zeroed[T any](s *[]T, n int) []T {
+	*s = slices.Grow((*s)[:0], n)[:n]
+	clear(*s)
+	return *s
 }
 
 // scratchPool holds the scratch no compile has. Separate runtimes compile
@@ -144,6 +182,13 @@ func getScratch() *scratch { return scratchPool.Get().(*scratch) }
 func putScratch(sc *scratch) {
 	sc.g = gen{}
 	sc.view = bytecode.Function{}
+	// What would keep the compile's strings, constants and closures'
+	// captures alive in the pool.
+	clear(sc.names)
+	clear(sc.consts)
+	clear(sc.caps[:cap(sc.caps)])
+	clear(sc.viewNames[:cap(sc.viewNames)])
+	clear(sc.viewConsts[:cap(sc.viewConsts)])
 	scratchPool.Put(sc)
 }
 
@@ -167,6 +212,9 @@ func generate(fn *bytecode.Function, own bool, s *scratch, mk func(*gen)) (*gen,
 	// register form has about as many instructions as the stack form,
 	// five in six over the suites and test262, a few past it.
 	if n := len(fn.Code) + len(fn.Code)/4; cap(s.code) < n {
+		// Twice what it held at least, as a load's functions are
+		// compiled, each a little larger than the last that grew it.
+		n = max(n, 2*cap(s.code))
 		s.code, s.pos = make([]bytecode.RInstr, 0, n), make([]int32, 0, n)
 	}
 	for try := 0; ; try++ {
@@ -539,18 +587,18 @@ func (g *gen) layout() bool {
 	if next >= limit16 {
 		return false
 	}
-	g.consts = map[any]uint32{}
-	g.names = map[string]uint32{}
+	g.consts = emptyMap(&g.s.consts)
+	g.names = emptyMap(&g.s.names)
 	for i, name := range fn.Names {
 		if _, ok := g.names[name]; !ok {
 			g.names[name] = uint32(i)
 		}
 	}
-	g.caps = make([][]uint16, len(fn.Constants))
+	g.caps = zeroed(&g.s.caps, len(fn.Constants))
 	if g.ownSites {
-		g.siteName = make([]uint32, 1)
+		g.siteName = zeroed(&g.s.siteName, 1)
 	} else {
-		g.siteName = make([]uint32, fn.PropSites+1)
+		g.siteName = zeroed(&g.s.siteName, int(fn.PropSites)+1)
 	}
 	return true
 }
@@ -679,7 +727,7 @@ func (g *gen) checkRef(r int, slot uint32) {
 	}
 	pc := g.emit(bytecode.MakeR(bytecode.RCheckRef, 0, r16(r), bytecode.RNameFar, 0))
 	if g.farNames == nil {
-		g.farNames = map[int]uint32{}
+		g.farNames = emptyMap(&g.s.farNames)
 	}
 	g.farNames[pc] = slot
 }
@@ -946,7 +994,7 @@ func (g *gen) name16(name string) uint16 {
 func (g *gen) far(pc int, name string) int {
 	if i := g.nameIdx(name); i >= bytecode.RNameFar {
 		if g.farNames == nil {
-			g.farNames = map[int]uint32{}
+			g.farNames = emptyMap(&g.s.farNames)
 		}
 		g.farNames[pc] = i
 	}
@@ -3333,7 +3381,7 @@ func (g *gen) readStore(m *ast.Member, pos int, w bytecode.RInstr) {
 	g.at(m.Property.Pos())
 	at := g.emit(w)
 	if g.stores == nil {
-		g.stores = map[int]int32{}
+		g.stores = emptyMap(&g.s.stores)
 	}
 	g.stores[at] = int32(pos)
 }
@@ -3827,7 +3875,7 @@ func deadMark(dead bool) uint8 {
 // mark gives the call at pc marks m (RegCode.Marks).
 func (g *gen) mark(pc int, m uint8) {
 	if g.marks == nil {
-		g.marks = map[int]uint8{}
+		g.marks = emptyMap(&g.s.marks)
 	}
 	g.marks[pc] |= m
 }
@@ -3918,7 +3966,7 @@ func (g *gen) regexpLitCall(n *ast.Call, dst int, dead bool) (int, bool) {
 		g.at(n.TracePos())
 		at := g.emit(bytecode.MakeR(bytecode.RLit, x, r16(w), r16(d), uint16(k)))
 		if g.stores == nil {
-			g.stores = map[int]int32{}
+			g.stores = emptyMap(&g.s.stores)
 		}
 		g.stores[at] = int32(lit.Start)
 		return d, true
@@ -4018,7 +4066,7 @@ func (g *gen) charCodeAt(n *ast.Call, dst int) (int, bool) {
 	g.at(n.TracePos())
 	at := g.emit(bytecode.MakeR(bytecode.RCharCodeAt, uint8(a), r16(d), r16(o), site))
 	if g.stores == nil {
-		g.stores = map[int]int32{}
+		g.stores = emptyMap(&g.s.stores)
 	}
 	g.stores[at] = int32(m.Property.Pos())
 	return d, true
@@ -4243,7 +4291,7 @@ func (g *gen) debugMark(pos int) {
 
 func (g *gen) aux(pc int, v uint32) {
 	if g.auxes == nil {
-		g.auxes = map[int]uint32{}
+		g.auxes = emptyMap(&g.s.auxes)
 	}
 	g.auxes[pc] = v
 }
@@ -4581,16 +4629,26 @@ func (g *gen) finish() *bytecode.RegCode {
 	rc := &bytecode.RegCode{
 		Aux: aux, FarNames: farNames, Marks: marks, Switches: switches, Literals: g.literals, ObjKeys: g.objKeys, ObjKeysHash: g.objKeysHash, UsesArguments: (g.fn.UsesArguments || g.fn.MakesArguments) && !g.fn.ForwardsArguments,
 		ForwardsArguments: g.fn.ForwardsArguments,
-		Code:              slices.Clone(g.code), NumRegs: g.max + 1 + g.nfar, SrcPC: src, SiteName: g.siteName, This: -1,
+		Code:              slices.Clone(g.code), NumRegs: g.max + 1 + g.nfar, SrcPC: src, SiteName: exactly(g.siteName), This: -1,
 		LocalReg: g.localReg(),
-		Wide:     true, Params: g.fn.ParamCount, Inits: g.inits, Caps: g.caps, CallSites: g.calls,
+		Wide:     true, Params: g.fn.ParamCount, Inits: g.inits, Caps: exactly(g.caps), CallSites: g.calls,
 		Handlers: g.handlerTable(), BackLive: g.backLive, KeepsArgs: g.fn.HasRest || g.forwardsArgs, ThisRef: g.thisRef,
 	}
+	// The scratch's tables as the code grew them, for the next compile.
+	g.s.caps, g.s.siteName = g.caps[:0], g.siteName[:0]
 	if why := Verify(rc, g.fn); why != "" {
 		Refuse(g.orig, why)
 		return nil
 	}
 	return rc
+}
+
+// exactly is a copy of s, of its length, never nil: the code's copy of a
+// table of the scratch's.
+func exactly[T any](s []T) []T {
+	t := make([]T, len(s))
+	copy(t, s)
+	return t
 }
 
 // posEntry is a source position and the stack form's instruction there.

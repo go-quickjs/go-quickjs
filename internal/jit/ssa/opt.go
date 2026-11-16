@@ -407,8 +407,21 @@ func unboxPhis(f *Func) bool {
 	// speculate a receiver written to a property is a number, and fail
 	// every call.
 	phis, guarded, unboxes := f.scr().phis[:0], f.scr().work[:0], f.scr().boxes[:0]
+	// The values and controls that use each box, by ID -- not the frame
+	// states, which make a box at an exit alone (mir's lazy): a phi the
+	// boxes of numbers merge, each used by it alone, is unboxed with no
+	// other evidence (below).
+	boxUses := f.ints(n)
 	for _, b := range f.Blocks {
+		if c := b.Control; c != nil && c.Op == OpBoxF64 {
+			boxUses[c.ID]++
+		}
 		for _, v := range b.Values {
+			for _, a := range v.Args {
+				if a.Op == OpBoxF64 {
+					boxUses[a.ID]++
+				}
+			}
 			switch {
 			case v.Op == OpPhi && v.Type == Tagged && !trivialPhi(v):
 				// A trivial phi is the value it carries, which this round
@@ -457,6 +470,41 @@ func unboxPhis(f *Func) bool {
 	loaded := func(a *Value) bool {
 		upvalue := a.Op == OpLoadCell && (a.Args[0].Op == OpUpvalueCell || a.Args[0].Op == OpLocalCell)
 		return upvalue && a.State != nil || (a.Op == OpLoadSlot || upvalue) && a.Block.PC < 0 && !a.Block.Generic
+	}
+	// merged reports whether v merges numbers alone -- the boxes of
+	// float64s, numeric constants, entry slots a guard unboxes already, at
+	// least one box -- each box used by v
+	// alone: unboxed, v's box is made once where it is, in place of one
+	// on each way to it, which speculates on nothing. A loop of register
+	// code whose test is copied before it (the compile package's
+	// loopTest) ends where the copy's test ends too, and a number it
+	// carries past its end, a sum stored once the loop is done, was boxed
+	// at every turn for that phi.
+	merged := func(v *Value) bool {
+		box := false
+		for _, a := range v.Args {
+			switch {
+			case a.Op == OpBoxF64:
+				k := 0
+				for _, b := range v.Args {
+					if b == a {
+						k++
+					}
+				}
+				if a.ID >= n || boxUses[a.ID] != k {
+					return false
+				}
+				box = true
+			case a.Op == OpConst && a.Const.Kind == ir.Number:
+			case loaded(a) && unboxedUse[a.ID]:
+				// An entry's slot already unboxed by a guard, which a
+				// loop's number carried past its end from the entry's
+				// way around it -- a parameter the loop reads -- is.
+			default:
+				return false
+			}
+		}
+		return box
 	}
 	// Each candidate's users among the candidates, listed once, the first
 	// time a reason that does not speculate is asked for (below): a
@@ -515,7 +563,7 @@ func unboxPhis(f *Func) bool {
 		}
 		stack := guarded[:0]
 		for _, v := range live {
-			if cand[v.ID] && unboxedUse[v.ID] {
+			if cand[v.ID] && (unboxedUse[v.ID] || merged(v)) {
 				boxed[v.ID] = true
 				stack = append(stack, v)
 			}
@@ -1041,8 +1089,8 @@ func rematerializeUpvalues(f *Func) bool {
 	// binding, is there before the read would be.
 	for _, b := range f.Blocks {
 		if b.Header != nil && b.PC >= 0 {
-			for _, v := range b.Header.Slots {
-				if v != nil && v.Op == OpPhi && v.Block == b {
+			for _, v := range b.Header.All() {
+				if v.Op == OpPhi && v.Block == b {
 					cand[v.ID] = failed
 				}
 			}
@@ -1151,14 +1199,18 @@ func rewriteChain(f *Func, subst []*Value) {
 		}
 		return v
 	}
-	state := func(s *FrameState) {
-		if s == nil {
-			return
+	// A node of states' slots is rewritten once, for every state that has
+	// it (rewriteSlots).
+	seen := f.bools(int(f.nextNode))
+	inSlot := func(v *Value) *Value {
+		if v.ID < len(subst) && subst[v.ID] != nil {
+			return find(v)
 		}
-		for _, i := range f.Present(s) {
-			if v := s.Slots[i]; v.ID < len(subst) && subst[v.ID] != nil {
-				s.Slots[i] = find(v)
-			}
+		return v
+	}
+	state := func(s *FrameState) {
+		if s != nil {
+			rewriteSlots(s, seen, inSlot)
 		}
 	}
 	for _, b := range f.Blocks {
@@ -1194,12 +1246,10 @@ func rewriteChain(f *Func, subst []*Value) {
 
 // rewrite replaces every use of a value with find's answer for it.
 func rewrite(f *Func, find func(*Value) *Value) {
+	seen := f.bools(int(f.nextNode))
 	state := func(s *FrameState) {
-		if s == nil {
-			return
-		}
-		for _, i := range f.Present(s) {
-			s.Slots[i] = find(s.Slots[i])
+		if s != nil {
+			rewriteSlots(s, seen, find)
 		}
 	}
 	for _, b := range f.Blocks {
@@ -1243,16 +1293,21 @@ func removeDead(f *Func) bool {
 			work = append(work, v)
 		}
 	}
-	// A state is marked once: the guards of an instruction share theirs.
+	// A state is marked once: the guards of an instruction share theirs;
+	// and a node of states' slots once, for every state that has it.
 	marked := f.bools(f.nextState)
+	seen := f.bools(int(f.nextNode))
+	markNode := func(nd *slotNode, h int) {
+		for _, v := range nd.vals {
+			mark(v)
+		}
+	}
 	markState := func(s *FrameState) {
 		if s != nil && (s.id >= len(marked) || !marked[s.id]) {
 			if s.id < len(marked) {
 				marked[s.id] = true
 			}
-			for _, i := range f.Present(s) {
-				mark(s.Slots[i])
-			}
+			eachSlotNode(s, seen, markNode)
 		}
 	}
 	for _, b := range f.Blocks {
@@ -1305,23 +1360,18 @@ func recount(f *Func) {
 		}
 	}
 	// A state's slots are uses once for each value and block naming it:
-	// its users are counted (refs, by state ID), and its slots read once,
-	// the states listed the first time each is met -- the guards of an
-	// instruction share its state. A state past the table is read by each.
+	// its users are counted (refs, by state ID), the states listed the
+	// first time each is met -- the guards of an instruction share its
+	// state -- and their slots read once for every state that shares
+	// them (slotWeights).
 	refs := f.ints(f.nextState)
 	states := f.scr().states[:0]
 	state := func(s *FrameState) {
 		if s == nil {
 			return
 		}
-		if s.id < len(refs) {
-			if refs[s.id]++; refs[s.id] == 1 {
-				states = append(states, s)
-			}
-			return
-		}
-		for _, i := range f.Present(s) {
-			s.Slots[i].Uses++
+		if refs[s.id]++; refs[s.id] == 1 {
+			states = append(states, s)
 		}
 	}
 	for _, b := range f.Blocks {
@@ -1335,12 +1385,7 @@ func recount(f *Func) {
 		state(b.State)
 		state(b.Header)
 	}
-	for _, s := range states {
-		k := refs[s.id]
-		for _, i := range f.Present(s) {
-			s.Slots[i].Uses += k
-		}
-	}
+	f.slotWeights(states, refs)
 	clear(states)
 	f.scr().states = states[:0]
 }

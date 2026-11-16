@@ -2706,11 +2706,13 @@ and the per-runtime table makes recording free where the JIT is off.
 #### 2. Tier-up
 
 **As built: sampling, with no counter.**
-- **Calls.** When the runtime's interrupt budget runs out at a call, the
-  callee is credited; a function is compiled from its register code
-  after it has been sampled twice. Call sites whose callee has native
-  code are marked (`regCallJIT`) and enter it through `regCallSlow`, so
-  no handler tests for native code.
+- **Calls.** Counted, not sampled (2026-11-14): the feedback
+  dispatcher's returns count a function's runs down from what is left of
+  its budget and then set its template's `jitEnters`, which every call
+  reads; the call goes to the JIT, which spends the runs and compiles it
+  once the budget is spent (`jitRegCallTier`). A function with code is
+  entered the same way, the native call handler calling Go for it with
+  no exit (`nativeJITCall`); no site is marked.
 - **Loops.** When the back-edge budget runs out, `regBackEdge` calls
   `jitRegLoop`, which enters the loop header's native code (OSR) and, on
   its return, gives runReg the pc to go on at (`jitRegGoOn`).
@@ -3451,12 +3453,10 @@ README, "Tier-up from the register tier"):
   edge that spends the back-edge budget (`regBackEdge`) credits its frame's
   function. The function compiles at its second sample, and every call is
   a sample where the runtime compiles at a first call.
-- **Calls.** A site sampled calling a function with code is marked
-  `regCallJIT`, which neither `rhCallW`'s fast path nor the native call
-  handler enters; its calls go to `regCallSlow` and `regEnterW`, which
-  enters the code (`jitRegEnter`). `regEnterW`'s test of the template's
-  code (`jitRegHas`) is the one test a call pays in a JIT build, outside
-  the handlers.
+- **Calls.** Replaced since (2026-11-14) by counted runs and calls that
+  read the template's `jitEnters` (section 2, "Calls"): a site sampled
+  calling a function with code had been marked `regCallJIT`, its calls
+  each made by `regCallSlow`.
 - **Loops and going on.** `regBackEdge` takes the dispatcher's state and
   returns the pc to go on at, so `jitRegLoop` enters the code at the loop's
   header from inside whichever dispatcher runs the frame, and that

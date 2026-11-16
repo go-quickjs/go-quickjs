@@ -11,6 +11,9 @@ import (
 // not.
 func TestBigIntStringLimit(t *testing.T) {
 	t.Parallel()
+	// Its digits' strings, at the limits, and their parses: 1.2 GB at
+	// its peak.
+	heavy(t)
 	for _, c := range []struct {
 		prefix string
 		digit  string

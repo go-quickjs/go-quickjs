@@ -23,9 +23,6 @@ type RawCode struct {
 
 // PlaceRaw publishes code in a, written then sealed executable.
 func PlaceRaw(a *Arena, code []byte) (*RawCode, error) {
-	if len(code) > MaxCodeBytes {
-		return nil, fmt.Errorf("%w: %d bytes", ErrCodeSize, len(code))
-	}
 	placed, err := a.place(code)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)

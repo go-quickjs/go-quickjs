@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"slices"
 	"sync"
 	"unsafe"
 )
@@ -15,7 +16,14 @@ import (
 // (Linux's vm.max_map_count) and, on Windows, of address space, which
 // VirtualAlloc hands out 64 KiB at a time.
 //
-// Functions are packed into chunks of chunkBytes. A chunk's pages are
+// Functions are packed into chunks of chunkBytes. A function longer than a
+// chunk has a mapping of its own, as long as it needs, a whole number of
+// chunks, which no other code shares: shared, it had stayed mapped after
+// the function was released for the few kilobytes of others' placed after
+// it, megabytes no budget counts. Code of any length is placed so: its
+// branches reach across all of it (amd64's rel32 2 GB either way; arm64's
+// assembler keeps its own in reach, internal/jit/asm/arm64's pools). A
+// chunk's pages are
 // executable and never writable at once: placing a function makes the pages
 // it touches writable, copies it and seals them again. That is sound only
 // while no code in those pages runs, and a runtime's native code never does
@@ -28,6 +36,9 @@ import (
 type Arena struct {
 	mu     sync.Mutex
 	chunks []*chunk
+	// open is the chunk code is packed into, the last mapped that is not a
+	// function's own, or nil.
+	open *chunk
 	// mapped and placed count the chunks mapped and the functions placed,
 	// which choose LayoutSeed's offsets.
 	mapped, placed uint64
@@ -37,12 +48,14 @@ type chunk struct {
 	mem  []byte
 	used int // bytes handed out, from the start
 	live int // bytes still owned
+	// own says the chunk is one function's, longer than chunkBytes.
+	own bool
 }
 
 const (
 	// chunkBytes is a chunk's size: Windows' allocation granularity, and a
-	// whole number of pages everywhere. A larger function gets a chunk of
-	// its own, rounded up to a multiple of it.
+	// whole number of pages everywhere. A larger function gets a mapping
+	// of its own, rounded up to a multiple of it.
 	chunkBytes = 64 << 10
 	// codeAlign aligns each function to a cache line, and to the 64 bytes
 	// arm64's instruction cache maintenance works in.
@@ -157,7 +170,7 @@ func alignUp(n, to int) int { return (n + to - 1) / to * to }
 // release takes back; with a LineOffset, as long, from that offset into
 // an allocation a line longer.
 func (a *Arena) place(instructions []byte) ([]byte, error) {
-	if len(instructions) == 0 || len(instructions) > MaxCodeBytes {
+	if len(instructions) == 0 {
 		return nil, fmt.Errorf("invalid native kernel size: %d", len(instructions))
 	}
 	if err := executablePolicy(); err != nil {
@@ -179,14 +192,14 @@ func (a *Arena) place(instructions []byte) ([]byte, error) {
 		gap = int(layoutDraw(1, a.placed)%layoutGapLines) * codeAlign
 	}
 	var c *chunk
-	if k := len(a.chunks); k > 0 && a.chunks[k-1].used+gap+n <= len(a.chunks[k-1].mem) {
-		c = a.chunks[k-1]
+	if o := a.open; o != nil && o.used+gap+n <= len(o.mem) {
+		c = o
 	} else {
 		mem, err := mapCode(alignUp(n, chunkBytes))
 		if err != nil {
 			return nil, fmt.Errorf("allocate code: %w", err)
 		}
-		c = &chunk{mem: mem}
+		c = &chunk{mem: mem, own: len(mem) > chunkBytes}
 		gap = 0
 		if pad := alignUp(FirstOffset, codeAlign); len(a.chunks) == 0 && pad > 0 && pad+n <= len(mem) {
 			c.used = pad
@@ -197,6 +210,9 @@ func (a *Arena) place(instructions []byte) ([]byte, error) {
 			}
 		}
 		a.chunks = append(a.chunks, c)
+		if !c.own {
+			a.open = c
+		}
 	}
 	start := c.used + gap
 	page := os.Getpagesize()
@@ -240,6 +256,16 @@ func (a *Arena) unmap(c *chunk) error {
 		if a.chunks[i] == c {
 			a.chunks = append(a.chunks[:i], a.chunks[i+1:]...)
 			break
+		}
+	}
+	if a.open == c {
+		// Code goes on in the last chunk that is not a function's own.
+		a.open = nil
+		for _, o := range slices.Backward(a.chunks) {
+			if !o.own {
+				a.open = o
+				break
+			}
 		}
 	}
 	return nil

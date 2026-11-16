@@ -56,6 +56,12 @@ func regNativeRuntimes(t *testing.T, src string) [2]*Runtime {
 	for i := range rts {
 		rts[i] = New(Config{JIT: i == 0})
 		t.Cleanup(rts[i].Close)
+		// The JIT's own thresholds, without QJS_JIT_STRESS's budgets and
+		// deoptimizations, whose exits the tests' counts of native calls,
+		// exits and compiles are not written for, as jitRuntimeForTest's:
+		// a test that runs under them sets them itself (regStressForTest,
+		// SetJITWarmUp).
+		jitDefaultsForTest(rts[i])
 		// Compiled on the spot: the tests count native work done once
 		// the code is asked for, as the stack form's do
 		// (jitRuntimeForTest); one of compiles in the background sets it.

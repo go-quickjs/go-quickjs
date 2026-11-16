@@ -155,6 +155,7 @@ var (
 	offRCSrc       int32
 	offRCAux       int32
 	offCCReg       int32
+	offCCJITEnters int32
 	offSymAtom     int32
 	offSymAtoms    int32
 	offRtAtoms     int32
@@ -215,6 +216,7 @@ var (
 	ncBuiltinFn  int32
 	ncIterResFn  int32
 	ncCallMissFn int32
+	ncJITCallFn  int32
 	ncMiss       int32
 	offUpSlot    int32
 	offUpClosed  int32
@@ -400,6 +402,7 @@ func loadOffsets() {
 	offCCRegEpochs = ccRel(off("closureCode.regEpochs"))
 	offCCRegCalls = ccRel(off("closureCode.regCalls"))
 	offCCReg = ccRel(off("closureCode.reg"))
+	offCCJITEnters = ccRel(off("closureCode.jitEnters"))
 
 	offRCCode = off("regCode.code")
 	offRCSrc = off("regCode.src")
@@ -460,6 +463,7 @@ func loadOffsets() {
 	ncBuiltinFn = off("nativeCtx.builtinFn")
 	ncIterResFn = off("nativeCtx.iterResFn")
 	ncCallMissFn = off("nativeCtx.callMissFn")
+	ncJITCallFn = off("nativeCtx.jitCallFn")
 	ncMiss = off("nativeCtx.miss")
 	offUpSlot = off("upvalue.slot")
 	offUpClosed = off("upvalue.closed")

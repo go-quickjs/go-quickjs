@@ -708,17 +708,19 @@ func (b *builder) bigFresh(pc, slot int) bool {
 // registers, not a stack: slot, an operand of the instruction at pc, is a
 // register an operator (bigArith), its register instruction's whole
 // lowering, wrote earlier in the block, which no instruction since has
-// read or written -- each an operator or a copy of other slots -- and which
-// nothing reads after pc before writing it (ir.Program's Live). Not one
-// the instruction at pc writes: its old value is the register's, which
-// the register's own giving back takes (bigOwner's ReleaseOld) -- both
-// would give the block back twice. Nor one of the registers that hold
-// their values alone (BigIntSole), whose values are given back where an
-// operator writes the register next, the block then long reused.
+// read or written -- each an operator, a copy of other slots or a
+// constant's load into another -- and which
+// nothing reads after pc before writing it (ir.Program's Live), or which
+// the instruction itself writes, its result replacing the operand -- a
+// temporary's t = t * x, which the stack form's operand on the stack is.
+// Not one of the registers that hold their values alone (BigIntSole),
+// the bindings, whose values are given back where an operator writes the
+// register next (bigOwner's ReleaseOld), as the stack form's locals are:
+// both would give the block back twice.
 func (b *builder) regBigFresh(pc, slot int) bool {
 	p := b.p
 	if slot < 0 || slot >= p.Regs || p.IsCaptured(slot) || !regWhole(p, pc) || pc+1 >= len(p.Code) ||
-		p.Code[pc].Dest == slot || p.LiveAt(pc+1, slot) || slot < 64 && b.sole&(1<<uint(slot)) != 0 {
+		p.Code[pc].Dest != slot && p.LiveAt(pc+1, slot) || slot < 64 && b.sole&(1<<uint(slot)) != 0 {
 		return false
 	}
 	touches := func(c ir.Instruction) bool {
@@ -733,7 +735,10 @@ func (b *builder) regBigFresh(pc, slot int) bool {
 			return bigArith(c.Operator) && regWhole(p, k)
 		}
 		switch c.Op {
-		case ir.Binary, ir.Unary, ir.Copy, ir.Nop:
+		case ir.Binary, ir.Unary, ir.Copy, ir.Nop, ir.BigIntConst, ir.StringConst:
+			// An operator, a copy, or a constant loaded into another
+			// register -- 27n in q * (27n * i - 12n), a push the stack
+			// form's bigFresh lets by -- between.
 			if touches(c) {
 				return false
 			}

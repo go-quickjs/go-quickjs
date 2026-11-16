@@ -1,6 +1,8 @@
 package nativegen
 
 import (
+	"slices"
+
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
@@ -13,6 +15,9 @@ import (
 // plain's handlers, which a runtime without the JIT runs, have no part of
 // it.
 //
+// A return also counts down the runs left of its function's budget
+// (feedbackTick).
+//
 // The counts are the function's closure's code's jitRegCounts (package
 // vm, zzjit_zregfreq.go), which the top frame's cc reaches: slot 0 its
 // runs, counted at each return its frame makes -- the runs that end so,
@@ -23,17 +28,81 @@ import (
 // caches, or a runtime that has none -- nothing is counted.
 
 // feedbackOps are the feedback variant's own handlers: the calls --
-// call_w, call_method_w and those in tail position -- and the returns, in
-// handlerOps' order.
+// call_w, call_method_w and those in tail position -- and the returns;
+// and the operators plain's handlers make of two BigInts held in their
+// Values (feedbackBigOps), in handlerOps' order.
 var feedbackOps = []bytecode.ROp{
+	bytecode.RAdd, bytecode.RSub, bytecode.RMul,
+	bytecode.RJLt, bytecode.RJNLt, bytecode.RJNGt, bytecode.RJGe, bytecode.RJNGe,
 	bytecode.RCallW, bytecode.RCallMW, bytecode.RRet, bytecode.RRetUndef,
+	bytecode.RJLe, bytecode.RJNLe, bytecode.RJGt,
 	bytecode.RCallWT, bytecode.RCallMWT,
+}
+
+// The BigInt marks. plain's handlers add, subtract, multiply and compare
+// two BigInts held in their Values (bigArith, bigCmp) without the
+// interpreter's Go, whose slow path marks the operator's register pc as
+// one that met BigInts (package vm's regBigOf, regCode's bigSeen), which
+// the JIT's first compile reads (regBigSeen): unmarked, a site met BigInts
+// only at its first exit from native code -- bigint_pidigits' code
+// compiled for numbers, deoptimized and compiled again a site at a time.
+// The feedback variant's handler of such an operator, before plain's,
+// looks at its two operands: where both are BigInts held in their Values
+// and the site has no mark of any kind yet, it leaves the instruction to
+// Go (the exit stub), whose handler makes the operation and the mark it
+// sees, by its operands and its result, as for any BigInt; every other
+// time it goes on in plain's handler. A site is left to Go once, plain's
+// handlers, which a runtime without the JIT runs, doing no part of it.
+
+// feedbackBigOps are the feedback variant's own handlers that mark
+// BigInts: of R[B] and R[C], the arithmetic, and of R[A] and R[B], the
+// compare-and-branches of two registers.
+var feedbackBigOps = []bytecode.ROp{
+	bytecode.RAdd, bytecode.RSub, bytecode.RMul,
+	bytecode.RJLt, bytecode.RJNLt, bytecode.RJNGt, bytecode.RJGe, bytecode.RJNGe,
+	bytecode.RJLe, bytecode.RJNLe, bytecode.RJGt,
+}
+
+// feedbackMarksBig reports whether op's handler marks BigInts, and
+// whether its operands are A and B rather than B and C.
+func feedbackMarksBig(op bytecode.ROp) (marks, ab bool) {
+	if !slices.Contains(feedbackBigOps, op) {
+		return false, false
+	}
+	return true, op != bytecode.RAdd && op != bytecode.RSub && op != bytecode.RMul
+}
+
+// feedbackBigSeen is the offset of the marks' pointer in the context's
+// register code (regCode's bigSeen, an atomic.Pointer whose word is at
+// its start), and feedbackBigKinds those of the three kinds' slices'
+// data in the marks (treeBigSeen's bigs, wide and heap), each a word of
+// 32 sites' bits.
+func feedbackBigSeen() int32 {
+	return off("regCode.bigSeen")
+}
+
+func feedbackBigKinds() [3]int32 {
+	return [3]int32{off("treeBigSeen.bigs"), off("treeBigSeen.wide"), off("treeBigSeen.heap")}
 }
 
 // feedbackCountsReturn reports whether op's handler counts a run of its
 // frame's function, not a call at its site.
 func feedbackCountsReturn(op bytecode.ROp) bool {
 	return op == bytecode.RRet || op == bytecode.RRetUndef
+}
+
+// feedbackTick is the offset of the runs left of the function's budget
+// from the context's cc (closureCode's jitRegTick), which a return counts
+// down, and feedbackEnters its jitEnters, which a return sets once none
+// is left, so that the function's next call goes to the JIT's tier-up
+// (package vm's jitRegCallTier), as the stack form's invocations each
+// spend its budget (jitTierWork).
+func feedbackTick() int32 {
+	return ccRel(off("closureCode.jitRegTick"))
+}
+
+func feedbackEnters() int32 {
+	return ccRel(off("closureCode.jitEnters"))
 }
 
 // feedbackCounts is the offset of the counts' slice from the context's

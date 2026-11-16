@@ -50,8 +50,10 @@ const jitBuild = "quickjs_jit && !android && !ios && ((linux && amd64) || (windo
 //   - feedback is the dispatcher of a runtime that runs the JIT, in builds
 //     with it alone: its handlers record the JIT's feedback, every other
 //     handler plain's. Its calls count the calls made at each call site
-//     and its returns the function's runs, for the JIT's call frequencies
-//     (feedback.go); none ORs kinds into the feedback slot (ctx.fv) yet.
+//     and its returns the function's runs, for the JIT's call frequencies,
+//     and its arithmetic and compares of two BigInts leave a site to Go
+//     until it is marked as one that met them (feedback.go); none ORs
+//     kinds into the feedback slot (ctx.fv) yet.
 //
 // A mode's table -- the debugger's -- would be one more.
 var variants = []*variant{

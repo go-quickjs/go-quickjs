@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
+	jitcompile "github.com/go-quickjs/go-quickjs/internal/jit/compile"
 )
 
 // jitLearned is what a function's code has taught the JIT, which outlives
@@ -62,10 +63,21 @@ type jitLearned struct {
 	stringReads []int32
 	keyedReads  []int32
 	keyedWrites []int32
+	// regHints are, for register code, the hints its lowerings are made
+	// with, by register pc (jitRegLower): the additions that met strings,
+	// and the element reads made as numbers that met what is none
+	// (jitRegElemSeen, jitRegStringAddSeen).
+	regHints jitcompile.Hints
 	// genSteps are the loops' steps that have met generators the code may
 	// resume natively (ssa.GenStepFeedback), with the generators' closures,
 	// which keep alive what the code compares their closures with.
 	genSteps []jitGenStep
+	// stepResults are, for register code, the loops' steps that have met
+	// an iterator written in script, whose next the code calls natively
+	// (its nativeCalls at the step, jitRegStepNextSeen), with the layout
+	// its results were of, which the code reads natively
+	// (ssa.CallSite's StepResult).
+	stepResults []jitStepResult
 	// genResults are the pools of the calls of next the code makes
 	// natively (jitGenResultPool); genMakes the calls of generator
 	// functions whose generators it makes natively (jitGenMakeSeen).

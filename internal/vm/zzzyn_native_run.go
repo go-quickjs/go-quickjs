@@ -130,6 +130,7 @@ func init() {
 	nativeBuiltinFn = nativeBuiltin
 	nativeIterResFn = nativeIterRes
 	nativeCallMissFn = nativeCallMiss
+	nativeJITCallFn = nativeJITCall
 	for _, op := range nativeSlowOnMiss {
 		nativeExitTable[op] = regSlowTable[op]
 	}
@@ -277,8 +278,13 @@ func (r *Runtime) nativeLoop(st *regState, ctx *nativeCtx, f *frame, c *regCode,
 // -- the interrupt counted, the code r.regRestart, from its first
 // instruction -- but in this code entry, rather than in one of its own
 // for each call. It reports false where the frame ends instead, with the
-// error in st.
+// error in st -- errRegRestart itself where the callee has native code made
+// from its register code, whose caller's regRestartRun runs the frame in
+// it (jitRegEnter), as regEnterW runs a call's.
 func (r *Runtime) nativeRestart(st *regState, ctx *nativeCtx) bool {
+	if r.nativeRestartJIT(st.f) {
+		return false
+	}
 	rc := r.regRestart
 	r.regRestart = nil
 	if r.interruptCounter--; r.interruptCounter <= 0 {
@@ -300,6 +306,15 @@ func (r *Runtime) nativeRestart(st *regState, ctx *nativeCtx) bool {
 	ctx.ip = uintptr(rc.code)
 	ctx.top, ctx.topOK = st, 1
 	return true
+}
+
+// nativeRestartJIT reports whether frame f, given to a callee in place
+// (r.regRestart), runs it in the callee's native code made from its
+// register code, which regRestartRun enters (jitRegEnter): a recursion
+// through calls in tail position past tailCallDepth had run in this code
+// entry from there on, the functions' native code never entered.
+func (r *Runtime) nativeRestartJIT(f *frame) bool {
+	return jitBuilt && f.cl.jitEnters && f.cl.reg == r.regRestart
 }
 
 // nativeRestartDeep is nativeRestart's of a frame the code entered itself,
@@ -395,6 +410,7 @@ func (r *Runtime) newNativeCtx(st *regState) *nativeCtx {
 	ctx.builtinFn = *(*uintptr)(unsafe.Pointer(&nativeBuiltinFn))
 	ctx.iterResFn = *(*uintptr)(unsafe.Pointer(&nativeIterResFn))
 	ctx.callMissFn = *(*uintptr)(unsafe.Pointer(&nativeCallMissFn))
+	ctx.jitCallFn = *(*uintptr)(unsafe.Pointer(&nativeJITCallFn))
 	ctx.grow()
 	st.native = ctx
 	return ctx
@@ -524,9 +540,11 @@ func (r *Runtime) nativeEnd(s *regState, ctx *nativeCtx, pc int, w bytecode.RIns
 		if d == 0 {
 			return v, true
 		}
-		if s.err == errRegRestart && s.f.regKind == regFrameCall && r.nativeRestartDeep(s, ctx) {
+		if s.err == errRegRestart && s.f.regKind == regFrameCall && !r.nativeRestartJIT(s.f) && r.nativeRestartDeep(s, ctx) {
 			// Given to a callee in place by Go (regTailTo): the callee's
-			// code goes on in the frame, which the code entered itself.
+			// code goes on in the frame, which the code entered itself --
+			// but code with native code, which the frame's end runs it in
+			// (regCallWEnd, regRerun, regRestartRun).
 			return Undefined, false
 		}
 		// Frame d is done: its caller goes on, as rhCallW does after
@@ -757,11 +775,9 @@ func nativeCallMiss(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regStat
 		// Only a callee the handler enters with a frame: a leaf rhCallW's
 		// miss answers without one (pureCall, leafCall), and a frame that
 		// keeps its arguments is entered by regEnterW, each cheaper than
-		// the exit the call would come back to.
-		// Nor one with native code, which regCallSlow's fill marks for
-		// regEnterW to enter it (regCallJIT).
-		if cl, rc, kind, this, enter := r.regCallKind(fd, method); enter && kind != 0 && rc.leaf == regLeafNone && !rc.args && (kind != regCallObjThis || win[1].IsObject()) &&
-			!(jitBuilt && r.jitRegHas(cl)) {
+		// the exit the call would come back to. One with native code the
+		// handler has Go enter (nativeJITCall), as rhCallW's hit does.
+		if cl, rc, kind, this, enter := r.regCallKind(fd, method); enter && kind != 0 && rc.leaf == regLeafNone && !rc.args && (kind != regCallObjThis || win[1].IsObject()) {
 			regCacheCallee(e, o, cl, rc, this, kind)
 			return pc
 		}
@@ -771,6 +787,93 @@ func nativeCallMiss(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regStat
 
 // nativeCallMissFn is nativeCallMiss's func value, set by init.
 var nativeCallMissFn func(*[1 << 16]Value, bytecode.RInstr, int, *regState) int
+
+// nativeJITCall is call_w's and call_method_w's call of a callee its
+// site's cache holds whose calls go to the JIT (closureCode's jitEnters):
+// one with native code made from its register code, or whose runs have
+// spent what was left of its budget (jitRegCallTier). The call handler
+// calls it through callH with no exit, as it calls nativeBuiltin, its
+// checks of the callee and its this made: rhCallW's entry of the callee
+// -- its frame, then jitRegEnter -- without rhCallW's search of the cache
+// the code has searched. A callee rhCallW leaves to regCallMiss (a leaf, a
+// frame that keeps its arguments) is rhCallW's.
+func nativeJITCall(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
+	r, f, c, wb := st.r, st.f, st.c, st.wb
+	e := &f.cl.regCalls[w.C()]
+	if e.kind&(regCallOut|regCallLeaf) != 0 {
+		return rhCallW(regs, w, pc, st)
+	}
+	st.kept.pc = pc + 1
+	f.pc = regSrc(c, pc) + 1
+	base := wb + int(w.A())
+	win := regWindow(r.stack, base)
+	if e.kind == regCallThis {
+		win[1] = e.this
+	}
+	o, cl, rc := e.callee, e.cl, e.rc
+	argc := int(w.X())
+	top := base + int(rc.numRegs)
+	if top > len(r.stack) || r.frameDepth >= r.maxFrames {
+		return st.done(r.throwRangeError("maximum call stack size exceeded"))
+	}
+	if r.interruptCounter--; r.interruptCounter <= 0 {
+		if err := r.checkInterruptNow(); err != nil {
+			return st.done(err)
+		}
+	}
+	saved := r.stackTop
+	if top > saved {
+		r.stackTop = top
+		if top > r.stackHigh {
+			r.stackHigh = top
+		}
+	}
+	if argc > int(rc.keep) {
+		r.regKeepWindow(base, int(rc.keep), argc)
+	}
+	for i := min(argc, int(rc.params)); i < int(rc.params+rc.inits); i++ {
+		win[2+i] = Undefined
+	}
+	off := r.frameDepth - r.frameBase
+	if uint(off) >= uint(len(r.cur)) {
+		r.seekFrameBlock()
+		off = r.frameDepth - r.frameBase
+	}
+	r.frameDepth++
+	if r.frameDepth > r.frameHigh {
+		r.frameHigh = r.frameDepth
+	}
+	nf := &r.cur[off]
+	nf.cl = cl
+	nf.callee = o
+	nf.base = base
+	nf.pc = 0
+	if len(nf.openUpvalues) != 0 {
+		nf.openUpvalues = nf.openUpvalues[:0]
+	}
+	if nf.thisRef != nil || nf.withScopes != nil || nf.evalVars != nil || nf.native != "" || nf.args != nil {
+		regClearFrame(nf)
+	}
+	if rc.newTarget {
+		nf.newTarget = Undefined
+	}
+	nf.regKind = regFrameCall
+	v, err := r.jitRegEnter(nf, cl, rc, base, 0)
+	nf.regKind = 0
+	if rc.ncap != 0 && len(nf.openUpvalues) != 0 {
+		regCloseUpvalues(nf)
+	}
+	r.frameDepth--
+	r.stackTop = saved
+	if err != nil {
+		return st.done(r.regCallWEnd(nf, regFrameCall, err, saved, wb+int(w.B())))
+	}
+	regWindow(r.stack, wb)[w.B()] = v
+	return pc + 1
+}
+
+// nativeJITCallFn is nativeJITCall's func value, set by init.
+var nativeJITCallFn func(*[1 << 16]Value, bytecode.RInstr, int, *regState) int
 
 // nativeIterResFn is nativeIterRes's func value, set by init.
 var nativeIterResFn func(*[1 << 16]Value, bytecode.RInstr, int, *nativeCtx)

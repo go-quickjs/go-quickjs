@@ -118,9 +118,9 @@ func ssaBuilt(fn *bytecode.Function, reg bool) string {
 	if p == nil {
 		return ""
 	}
-	if int64(len(p.Code))*int64(max(p.Locals+p.StackSize, 256))*8+32<<10 > 32<<20 {
+	if int64(len(fn.Code))*512+int64(fn.LocalCount+fn.MaxStack+len(fn.Upvalues))*64+32<<10 > 32<<20 {
 		// Past what the VM compiles at v8bench's budget of 32 MiB (its
-		// jitCompileBytes, of the stack form's slots and instructions).
+		// jitCompileBytes, of the stack form's instructions and slots).
 		return "past the compile budget"
 	}
 	f, err := ssa.BuildWith(p, nil)

@@ -49,7 +49,9 @@ func (r *Runtime) jitOpPlain(ctx *abi.Context) bool {
 // in.
 func (r *Runtime) jitOpCode(ctx *abi.Context, in bytecode.Instr) (*frame, *closure) {
 	s, idx := r.jit, int(ctx.Level)
-	if idx >= len(s.ssaCtxs) || s.ssaCtxs[idx] != ctx {
+	if idx >= len(s.ssaCtxs) || s.ssaCtxs[idx] != ctx || r.jitRegCodeIn(ctx, idx) {
+		// Register code's operations are Go's whole on its frame
+		// (jitRegWhole): its pcs are register pcs, not its stack code's.
 		return nil, nil
 	}
 	var cl *closure

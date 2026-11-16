@@ -7,8 +7,11 @@ package abi
 
 import "unsafe"
 
-// SpillSlots bounds the spill area: values the register allocator cannot
-// keep in registers live there, 8 bytes each.
+// SpillSlots is how many spill slots a context holds in itself
+// (Context.Spill): values the register allocator cannot keep in registers
+// live there, 8 bytes each. A function's slots past them are in the
+// context's SpillMore, which Go grows to what the code it places needs
+// (Context.GrowSpill): nothing bounds how many a function has.
 const SpillSlots = 256
 
 // MaxRecords bounds an exit's records, one per slot at most: the room the
@@ -260,9 +263,11 @@ type Context struct {
 	// and the context's in the array -- for Go to make the VM's frames from
 	// when a callee leaves native code; Level stays below Bounds'
 	// LevelLimit.
-	// StackBase and StackEnd are the VM's stack's first value and length,
-	// StackTop and StackHigh its next free and highest used indices, which
-	// a call moves. TailReturn is where the records' tail goes on, in a
+	// StackBase is the VM's stack's first value and StackEnd the end a
+	// call's room is checked against: its length, less the most any
+	// register code takes past its window, so that a call checks the room
+	// for its callee's window alone. StackTop and StackHigh are its next
+	// free and highest used indices, which a call moves. TailReturn is where the records' tail goes on, in a
 	// caller's code, instead of returning to Go: 0 but during a call, and
 	// no native code sets it now.
 	//
@@ -292,7 +297,8 @@ type Context struct {
 	// (a *CallState, which the code holds), which the call writes before
 	// it jumps to its callee: for Go to make the frame from if the callee
 	// leaves native code (ExpandCall), what each call had written as
-	// records and an exit's fields. Go clears it as it expands it.
+	// records and an exit's fields. Go clears it as it expands it, keeping
+	// it in CallLast.
 	CallState uintptr
 	// The rest of the exit record. ExitSite is the slot IR PC of the
 	// operation whose guard or exit this was, or -1 (all ones) for a
@@ -444,7 +450,8 @@ type Context struct {
 	// clears when native code returns.
 	RecordRef  [MaxRecords]unsafe.Pointer
 	RecordHigh uint64
-	// Spill holds what the allocator could not keep in registers.
+	// Spill holds what the allocator could not keep in registers: its
+	// first SpillSlots slots, the rest in SpillMore.
 	Spill [SpillSlots]uint64
 	// Keep holds references copied out of cells a store then overwrites
 	// while slots still hold them (ssa's OpKeep), read from here since: the
@@ -566,6 +573,59 @@ type Context struct {
 	// TypedElems and TypedLength) holds while its epoch is this. At the
 	// end, as GoLast.
 	TypedEpoch *uint64
+	// SpillMore holds the spill slots past Spill's, slot n at
+	// SpillMore[n-SpillSlots], for code whose allocation took more
+	// (mir's Code.Spills): native code reads the slice's address at each
+	// access of one, and Go grows it before any code that needs it can run
+	// in the context (GrowSpill), its words kept. As Spill's, its words are
+	// raw: a reference spilled is kept where the collector sees it too.
+	SpillMore []uint64
+	// SpillTemp is where amd64's code keeps the scratch register it
+	// reaches SpillMore through while it does (mir's spillMore).
+	SpillTemp uint64
+	// CallLast is the CallState Go expanded last (ExpandCall), which the
+	// native call under way in the context wrote while CallState is 0:
+	// where Go finds its callee (CallState's Callees). Native code never
+	// reads it.
+	CallLast uintptr
+}
+
+// SpillAt is the address of spill slot n: in Spill, or past it in
+// SpillMore.
+func (c *Context) SpillAt(n int32) *uint64 {
+	if n < SpillSlots {
+		return &c.Spill[n]
+	}
+	return &c.SpillMore[n-SpillSlots]
+}
+
+// GrowSpill gives c room for n spill slots, keeping the words its slots
+// hold: native code suspended in a call of Go may have spilled to them.
+func (c *Context) GrowSpill(n int) {
+	if more := n - SpillSlots; more > len(c.SpillMore) {
+		s := make([]uint64, more)
+		copy(s, c.SpillMore)
+		c.SpillMore = s
+	}
+}
+
+// SpillOffset is where spill slot n is as GoCallArg's At and From say: a
+// slot of Spill as its offset into the Context, one of SpillMore as the
+// complement of its offset into SpillMore (Context.Word).
+func SpillOffset(n int32) int32 {
+	if n < SpillSlots {
+		return OffSpill + n*8
+	}
+	return ^((n - SpillSlots) * 8)
+}
+
+// Word is the address of the word at GoCallArg's At or From: off bytes
+// into c, or, for a negative off, ^off bytes into SpillMore (SpillOffset).
+func (c *Context) Word(off int32) unsafe.Pointer {
+	if off >= 0 {
+		return unsafe.Add(unsafe.Pointer(c), off)
+	}
+	return unsafe.Pointer(&c.SpillMore[(^off)/8])
 }
 
 // GoArg is an operand of a call of Go: a slot's two words, its pointer word
@@ -639,12 +699,18 @@ type GoCallState struct {
 	// the calls after.
 	Leaf     uintptr
 	LeafForm unsafe.Pointer
+	// Give, for a leaf's call of a RegExp literal's RegExp that nothing
+	// else reaches (ssa.CallSite's Give), is the address of the literal's
+	// ObjectPool, which Go gives the RegExp back to once the leaf has
+	// returned.
+	Give uintptr
 }
 
 // GoCallArg is a GoCallState's operand, the i'th, laid out for Go to read
 // at once. Its number word is, by Kind: GoArgNone, the one the call wrote
 // to GoArgs[i] itself (its pointer word too); GoArgConst, Word; GoArgWord,
-// the word At bytes into the Context (a saved register, a spill slot);
+// the word At bytes into the Context (a saved register, a spill slot;
+// Context.Word, for a slot past Spill's);
 // GoArgF64 and GoArgBool, the double or the boolean there, boxed. Its
 // pointer word, unless Number says a number word below NumberLimit has
 // none, is by Ref: GoRefSource, the reference at the address the word From
@@ -689,10 +755,23 @@ const (
 type CallState struct {
 	PC, Depth uint32
 	Site      int32
+	// Which says the call's checks write which of its functions they found
+	// to the context's CallTarget; with one function and no other, they
+	// write none, and it is the first.
+	Which bool
 	// Frame is the frame's layout and the constant words (ExitFrame),
 	// which the code's exit descriptions share.
 	Frame   *ExitFrame
 	Records []CallRecord
+	// Callees is, for register code's native call that leaves its
+	// function out of its callee's window (ssa.CallSite's ReadsFunction),
+	// the function object each of the functions its checks find is, by
+	// CallTarget's numbering -- or 0 for one checked by its code, whose
+	// object they keep in the context's CallCallee -- which the caller's
+	// code keeps alive: what Go gives a frame it makes of the callee's
+	// level, as V8 finds a frame's function where it needs it. Nil where
+	// the call writes the function to the window's register 0.
+	Callees []uintptr
 }
 
 // CallRecord is a CallState's record of one slot, its i'th: its value's
@@ -716,10 +795,9 @@ type ExitDescriptor struct {
 	Kind, PC, Depth uint32
 	Site            int32
 	// Frame is what every description of the code shares: its slots are
-	// Count of Frame's, those Frame.Index lists from Start on (Slot).
+	// those of node Root of Frame's Tree, 0 for none (Slots).
 	Frame *ExitFrame
-	Start uint32
-	Count uint16
+	Root  uint32
 	// The frame's locals are at LocalsReg's address, its operands at
 	// StackReg's (ExitFrame's layout).
 	LocalsReg, StackReg uint8
@@ -745,26 +823,51 @@ func (d *ExitDescriptor) Inlines() []ExitInline {
 	return d.Frame.Inlines[d.InlineAt : d.InlineAt+uint32(d.InlineN)]
 }
 
-// Slot is the description's i'th slot.
-func (d *ExitDescriptor) Slot(i int) *ExitSlot {
-	return &d.Frame.Slots[d.Frame.Index[int(d.Start)+i]]
+// Slots calls fn with each of the description's slots, in order.
+func (d *ExitDescriptor) Slots(fn func(*ExitSlot)) {
+	if d.Root != 0 {
+		d.Frame.each(d.Root, fn)
+	}
+}
+
+// each calls fn with each slot of Tree's node off.
+func (f *ExitFrame) each(off uint32, fn func(*ExitSlot)) {
+	h := f.Tree[off]
+	n := h >> 1
+	for _, k := range f.Tree[off+1 : off+1+n] {
+		if h&1 != 0 {
+			fn(&f.Slots[k])
+		} else {
+			f.each(k, fn)
+		}
+	}
 }
 
 // ExitFrame is what a code's exit descriptions share: the frame's layout
 // -- its locals, from a description's LocalsReg's address; the receiver's
 // slot, in the context; the captured bindings, through their cells; the
 // operands, from its StackReg's address -- and the values' encoding; the
-// slots the descriptions write, each once, which Index lists for each
-// description by its index in Slots; and the constant words their values
-// are (ExitConst), each once. A function's slots repeat from exit to exit,
+// slots the descriptions write, each once; the nodes that list them for
+// the descriptions (Tree); and the constant words their values are
+// (ExitConst), each once. A function's slots repeat from exit to exit,
 // the same slot at the same register or spill, and its descriptions had
 // been as large as its code, each with every slot it writes and every
 // field of the layout: five slots in six were another's.
+//
+// Tree holds the nodes, each a word of its length, n<<1, with 1 for a
+// leaf, and its n entries: a leaf's slots' indices in Slots, in order, an
+// inner node's children's offsets in Tree. They are the nodes of the
+// frame states' slots (ssa's slots.go), which the states share as V8's
+// frame states share their StateValues: a description is its state's
+// tree, and the nodes it has of another's are the other's. A list of each
+// description's every slot had made a function of n values live at once
+// and an exit at each of its n instructions take n² of them. Tree[0] is
+// the empty node.
 type ExitFrame struct {
 	FrameLocals, ThisSlot, Locals int32
 	Enc                           *Encoding
 	Slots                         []ExitSlot
-	Index                         []uint16
+	Tree                          []uint32
 	Words                         []uint64
 	// Inlines are the inlined callees' frames the descriptions write, a
 	// run for each (ExitDescriptor's Inlines), which descriptions alike
@@ -957,6 +1060,8 @@ var (
 	OffRecordRef        = int32(unsafe.Offsetof(Context{}.RecordRef))
 	OffRecordHi         = int32(unsafe.Offsetof(Context{}.RecordHigh))
 	OffSpill            = int32(unsafe.Offsetof(Context{}.Spill))
+	OffSpillMore        = int32(unsafe.Offsetof(Context{}.SpillMore))
+	OffSpillTemp        = int32(unsafe.Offsetof(Context{}.SpillTemp))
 	OffKeep             = int32(unsafe.Offsetof(Context{}.Keep))
 
 	OffReturnTo    = int32(unsafe.Offsetof(Context{}.ReturnTo))
@@ -1053,10 +1158,11 @@ type ObjectPool struct {
 	Source unsafe.Pointer
 	// Room, for a pool of `new Array(n)`'s arrays, is how many elements
 	// each has storage for, holes all, its length 0: native code takes one
-	// for an n up to Room and makes n its length. Want is an n past Room
-	// that native code asks Go to fill the pool for, at a refill, as V8's
-	// code allocates a holey array of a length it checks; both are 0 in
-	// any other pool.
+	// for an n up to Room -- past PoolSmallRoom, more than half of it --
+	// and makes n its length. Want is 1 plus an n that does not fit, past
+	// Room or at most half a Room past PoolSmallRoom, that native code
+	// asks Go to fill the pool for, at a refill, as V8's code allocates a
+	// holey array of a length it checks; both are 0 in any other pool.
 	Room, Want uint64
 	// Cells, for a pool of a function's cells (ssa.GoCells), is how many
 	// each block has (Encoding's UpvalueSize); 0 in any other pool.
@@ -1083,8 +1189,20 @@ const (
 )
 
 // PoolRoomLimit is the most elements a pooled array has storage for
-// (ObjectPool's Room): a `new Array(n)` of a longer n is made by Go.
-const PoolRoomLimit = 16
+// (ObjectPool's Room): the longest `new Array(n)` the VM makes with its
+// holes in dense storage. A longer n's array is its length alone, which
+// Go makes.
+//
+// A room up to PoolSmallRoom is one of the sizes an array's own
+// allocation has room for, its array taken for any n up to it; a room
+// past it is a power of two, the size class of the n more than half of it,
+// and its array is taken for those alone: a shorter n, as a longer one,
+// has Go fill the pool again with arrays of n's class (Want), so that a
+// pool's arrays have at most twice the room their lengths need.
+const (
+	PoolRoomLimit = 1 << 16
+	PoolSmallRoom = 16
+)
 
 // What a context's Live says: a native call's callee runs in it, or an
 // inlined callee's frame is described in it.
@@ -1253,11 +1371,15 @@ type Encoding struct {
 	GenObject                             int32
 	ClassGenerator                        uint8
 	GenClosure, GenThis, GenVals, GenArgs int32
-	GenPC, GenRare, GenSaved              int32
-	SavedStack, SavedHandlers             int32
-	GenState, GenStarted, GenDelegating   int32
-	GenSuspendedStart, GenSuspendedYield  uint8
-	GenExecuting, GenCompleted            uint8
+	// GenCallee is where a generator keeps the function object it was
+	// called as, a pointer, nil for none: a register generator's register
+	// 0 where its values do not keep it (ssa.Func's GenFrom).
+	GenCallee                            int32
+	GenPC, GenRare, GenSaved             int32
+	SavedStack, SavedHandlers            int32
+	GenState, GenStarted, GenDelegating  int32
+	GenSuspendedStart, GenSuspendedYield uint8
+	GenExecuting, GenCompleted           uint8
 	// A generator made with room for the cursor of the first loop over it
 	// (the VM's generatorLoop) has the byte at GenRoom set until a loop
 	// takes it, the cursor's object GenRoomCursor bytes past the
@@ -1530,7 +1652,10 @@ func IsNumber(word uint64) bool { return word < NumberLimit }
 // its three operands, f, apply and x, called with the arguments the frame
 // was given (ssa.CallSite's Forward); or register code's instruction at the
 // call's PC run whole on the register frame (GoCallWhole, ssa.CallSite's
-// Whole), of the registers it reads, its result the one it writes.
+// Whole), of the registers it reads, its result the one it writes; or a
+// loop's step's answer (GoCallStepResult, ssa.CallSite's StepResult), of
+// the cursor and the result of its iterator's next native code called,
+// the iterator protocol on it, the result as GoCallStep's.
 // GoClosurePool is the kind of a closure's (ssa.GoClosure) whose native
 // code takes it from a pool, the pool's address the first operand's
 // pointer word: Go makes it, as it makes any, and fills the pool again if
@@ -1563,6 +1688,7 @@ const (
 	GoCallForIn      = 13
 	GoCallForward    = 14
 	GoCallWhole      = 15
+	GoCallStepResult = 16
 	GoClosurePool    = 1
 )
 

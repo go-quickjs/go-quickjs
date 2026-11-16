@@ -95,8 +95,12 @@ type masm interface {
 	// Offset is where l is bound, in the code Finish returns.
 	Offset(l label) int
 	Finish() ([]byte, error)
-	// Data places b, a whole number of words, among the code.
-	Data(b []byte)
+	// Table makes a label for b, data of a whole number of 8-byte words,
+	// which the assembler places: after the code, at Tables, or in code
+	// longer than arm64's ADR reaches, in reach of the LeaTables of it.
+	Table(b []byte) label
+	// Tables places here the tables not placed yet, in the order made.
+	Tables()
 
 	// Load, LoadU32, LoadU16 and LoadU8 are dst = [base+disp], zero
 	// extended; Store and StoreImm are [base+disp] = src, 64 bits.
@@ -112,8 +116,11 @@ type masm interface {
 	MovImm(dst vreg, v uint64)
 	// Lea is dst = base + disp, setting no flags.
 	Lea(dst, base vreg, disp int32)
-	// LeaLabel is dst = l's address.
+	// LeaLabel is dst = an address that goes on at l when jumped to
+	// (JmpReg, JmpMem): l's, or a jump's to it; LeaTable is dst = the
+	// address of table l.
 	LeaLabel(dst vreg, l label)
+	LeaTable(dst vreg, l label)
 	// Op and OpImm are dst op= src or imm, 64 bits if wide, else 32,
 	// clearing dst's upper half.
 	Op(op alu, dst, src vreg, wide bool)
@@ -144,8 +151,17 @@ func newMasm(arch string) masm {
 }
 
 // amd64Masm writes amd64 code: each operation is one instruction. The
-// context is in DI, as enterRaw leaves it.
-type amd64Masm struct{ a amd64.Asm }
+// context is in DI, as enterRaw leaves it. Its tables all go after the
+// code, which a rel32 reaches across.
+type amd64Masm struct {
+	a      amd64.Asm
+	tables []amd64Table
+}
+
+type amd64Table struct {
+	l amd64.Label
+	b []byte
+}
 
 var amd64Regs = [numVregs]amd64.Reg{
 	rCtx: amd64.RDI, rSubj: amd64.RSI, rEnd: amd64.R8, rCur: amd64.RDX, rLeft: amd64.R9, rTop: amd64.R11,
@@ -182,6 +198,7 @@ func (m *amd64Masm) MovRR32(d, s vreg)             { m.a.MovRR32(amd64Regs[d], a
 func (m *amd64Masm) MovImm(d vreg, v uint64)       { m.a.MovImm(amd64Regs[d], v) }
 func (m *amd64Masm) Lea(d, b vreg, x int32)        { m.a.Lea(amd64Regs[d], amd64Regs[b], x) }
 func (m *amd64Masm) LeaLabel(d vreg, l label)      { m.a.LeaLabel(amd64Regs[d], amd64.Label(l)) }
+func (m *amd64Masm) LeaTable(d vreg, l label)      { m.a.LeaLabel(amd64Regs[d], amd64.Label(l)) }
 func (m *amd64Masm) Op(op alu, d, s vreg, wide bool) {
 	m.a.Op(amd64ALUs[op], amd64Regs[d], amd64Regs[s], wide)
 }
@@ -207,10 +224,19 @@ func (m *amd64Masm) JmpBitClear(src, bit vreg, l label) {
 	m.a.Bt(amd64Regs[src], amd64Regs[bit])
 	m.a.Jcc(amd64.CondAE, amd64.Label(l))
 }
-func (m *amd64Masm) Data(b []byte) {
-	for i := 0; i < len(b); i += 8 {
-		m.a.Quad(binary.LittleEndian.Uint64(b[i:]))
+func (m *amd64Masm) Table(b []byte) label {
+	l := m.a.NewLabel()
+	m.tables = append(m.tables, amd64Table{l, b})
+	return label(l)
+}
+func (m *amd64Masm) Tables() {
+	for _, t := range m.tables {
+		m.a.Bind(t.l)
+		for i := 0; i < len(t.b); i += 8 {
+			m.a.Quad(binary.LittleEndian.Uint64(t.b[i:]))
+		}
 	}
+	m.tables = m.tables[:0]
 }
 
 // arm64Masm writes arm64 code. The context is in X0, as enterRaw leaves
@@ -237,7 +263,8 @@ func (m *arm64Masm) NewLabel() label         { return label(m.a.NewLabel()) }
 func (m *arm64Masm) Bind(l label)            { m.a.Bind(arm64.Label(l)) }
 func (m *arm64Masm) Offset(l label) int      { return m.a.Offset(arm64.Label(l)) }
 func (m *arm64Masm) Finish() ([]byte, error) { return m.a.Finish() }
-func (m *arm64Masm) Data(b []byte)           { m.a.Data(b) }
+func (m *arm64Masm) Table(b []byte) label    { return label(m.a.Table(b)) }
+func (m *arm64Masm) Tables()                 { m.a.Tables() }
 func (m *arm64Masm) Load(d, b vreg, x int32) { m.a.Load(arm64Regs[d], arm64Regs[b], x) }
 func (m *arm64Masm) LoadU32(d, b vreg, x int32) {
 	m.a.LoadU32(arm64Regs[d], arm64Regs[b], x)
@@ -257,7 +284,8 @@ func (m *arm64Masm) MovImm(d vreg, v uint64) { m.a.MovImm(arm64Regs[d], v) }
 func (m *arm64Masm) Lea(d, b vreg, x int32) {
 	m.a.AddImm(arm64Regs[d], arm64Regs[b], int64(x), true)
 }
-func (m *arm64Masm) LeaLabel(d vreg, l label) { m.a.Adr(arm64Regs[d], arm64.Label(l)) }
+func (m *arm64Masm) LeaLabel(d vreg, l label) { m.a.AdrJump(arm64Regs[d], arm64.Label(l)) }
+func (m *arm64Masm) LeaTable(d vreg, l label) { m.a.Adr(arm64Regs[d], arm64.Label(l)) }
 func (m *arm64Masm) Op(op alu, d, s vreg, wide bool) {
 	dst, src := arm64Regs[d], arm64Regs[s]
 	switch op {

@@ -239,7 +239,7 @@ func TestSSAKeptUsesTakeTheLastCopy(t *testing.T) {
 							}
 						}
 						if v.State != nil {
-							for _, x := range v.State.Slots {
+							for _, x := range v.State.All() {
 								check(fmt.Sprintf("v%d's state", v.ID), x)
 							}
 						}

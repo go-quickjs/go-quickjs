@@ -214,6 +214,10 @@ func jitLeafGo(ctx *abi.Context, st *abi.GoCallState, back uintptr) (uintptr, ui
 			v, ok = form.apply(r, this, args)
 		}
 		if ok {
+			if form.give != nil {
+				// A RegExp literal's call: its RegExp back to its pool.
+				r.jitRegExpLeafGive(form.give, form.test, this, args)
+			}
 			*(*Value)(unsafe.Pointer(&ctx.Keep[form.keep])) = v
 			ctx.GoStatus = 0
 			r.jit.leafFast++
@@ -243,6 +247,11 @@ type jitLeafForm struct {
 	argc   int
 	keep   uint64
 	method bool
+	// give is the pool of the RegExp literal whose RegExp a call of exec
+	// or test is made on, which nothing else reaches (abi.GoCallState's
+	// Give): the leaf gives it back (jitRegExpLeafGive).
+	give *abi.ObjectPool
+	test bool
 }
 
 // jitLeafFormOf makes the form of the leaf's call st describes, keeping it
@@ -276,6 +285,9 @@ func (r *Runtime) jitLeafFormOf(st *abi.GoCallState) *jitLeafForm {
 		if st.Unused {
 			// Nothing reads the result (zzjit_regexpdead.go).
 			form.native = jitRegExpDeadNative[struct{}](r, (*Object)(*(*unsafe.Pointer)(unsafe.Pointer(&st.Leaf))), form.native)
+		}
+		if st.Give != 0 && (op == elemRegExpExec || op == elemRegExpTest) {
+			form.give, form.test = (*abi.ObjectPool)(*(*unsafe.Pointer)(unsafe.Pointer(&st.Give))), op == elemRegExpTest
 		}
 	case op > elemRandom:
 		f := leafOps[op]

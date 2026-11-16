@@ -12,10 +12,11 @@ import (
 // new Array(n) is made natively, as V8's code allocates a holey array of a
 // length it checks: an array from its call's pool (abi.ObjectPool) with
 // room for n elements, holes, its length made n. Lengths up to the room
-// the pool's arrays have take one; a longer one, up to abi.PoolRoomLimit,
-// has Go fill the pool again with arrays of more (Want), a size class at
-// a time, and the call is made again; any other -- longer, negative, not
-// an integer, not a number -- is the Array constructor's, made by Go. Each
+// the pool's arrays have take one -- past abi.PoolSmallRoom, more than
+// half of it; another, up to abi.PoolRoomLimit, has Go fill the pool
+// again with arrays of its size class (Want), and the call is made again;
+// any other -- longer, negative, not an integer, not a number -- is the
+// Array constructor's, made by Go. Each
 // answer is the interpreter's, with the collector marking too (Go takes
 // the array then, and native code makes its length); and the lengths the
 // pool has room for are made without a call of Go. AWFY's Storage, whose
@@ -71,8 +72,11 @@ func TestJITNewArrayLength(t *testing.T) {
 				pool = x.pool
 			}
 		}
-		if pool == nil || pool.Room != abi.PoolRoomLimit {
-			t.Fatalf("marking %v: new Array(n)'s pool %+v, want room %d", marking, pool, abi.PoolRoomLimit)
+		// The room of the last length sizes(60, 18) made, 59 % 18: its
+		// pool's arrays had room for 32 since its first 17, and were
+		// made again for 0, at most half of it.
+		if want := uint64(jitArrayRoom(59 % 18)); pool == nil || pool.Room != want {
+			t.Fatalf("marking %v: new Array(n)'s pool %+v, want room %d", marking, pool, want)
 		}
 		// Lengths up to the room, made without Go: fill's calls of Go are
 		// the pool's refills.
@@ -89,19 +93,23 @@ func TestJITNewArrayLength(t *testing.T) {
 		if calls := e.ssaStats.goCalls - before; !marking && calls > 1000/abi.PoolSize {
 			t.Errorf("new Array(n) of lengths in the pool's room made %d calls of Go in 1000 iterations", calls)
 		}
-		// A length past every room is the Array constructor's, made by
-		// Go from native code, which goes on: it does not leave.
+		// A length past 16, of a room of 128 (jitArrayRoom), from its
+		// pool too, where it had been the Array constructor's, made by Go
+		// at every construction: its calls of Go are the pool's refills.
 		cl = r.global.getOwn(r.atoms.intern("big")).value().Object().fn().closure
 		e = r.jit.hint(cl)
 		if e == nil || e.ssa == nil {
 			t.Fatalf("marking %v: big was not compiled: %+v", marking, e)
 		}
-		hosts := e.ssaStats.hosts
+		hosts, before := e.ssaStats.hosts, e.ssaStats.goCalls
 		if v, err := r.Run(compileForTest(t, `big(300)`)); err != nil || v.Number() != 30300 {
 			t.Fatal(v, err)
 		}
 		if left := e.ssaStats.hosts - hosts; !marking && left > 2 {
 			t.Errorf("new Array(100) left native code %d times in 300 iterations", left)
+		}
+		if calls := e.ssaStats.goCalls - before; !marking && calls > 300/abi.PoolSize {
+			t.Errorf("new Array(100..102) made %d calls of Go in 300 iterations", calls)
 		}
 		_ = unsafe.Pointer(pool)
 	}
@@ -109,11 +117,12 @@ func TestJITNewArrayLength(t *testing.T) {
 
 // `new Array(n)` of a length past what a pool's arrays have room for
 // (abi.PoolRoomLimit) is Go's construction, called from native code, which
-// goes on after it: it had been an exit at every such construction --
-// AWFY's Sieve's new Array(5000), Bounce's 100, Json's 32. A negative or
-// too large length throws the interpreter's RangeError there, caught.
-// Each answer is the interpreter's, at every stress setting, and a loop of
-// such constructions does not leave native code.
+// goes on after it: it had been an exit at every such construction. A
+// negative or too large length throws the interpreter's RangeError there,
+// caught. One site's lengths of every size class in turn -- i % 40, 5000,
+// 17 -- have its pool filled again for each (Want). Each answer is the
+// interpreter's, at every stress setting, and a loop of such
+// constructions does not leave native code.
 func TestJITNewArrayPastPoolRoom(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")

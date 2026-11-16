@@ -6,14 +6,15 @@ import (
 )
 
 // feedbackAMD64 is the feedback variant's own handlers on amd64
-// (feedback.go): each counts, in the counts the top frame's cc has, and
-// goes on in plain's handler of its operation through the table, R13. At
+// (feedback.go): each counts, in the counts the top frame's cc has, or
+// looks at its BigInts (feedbackBigAMD64), and goes on in plain's handler
+// of its operation through the table, R13. At
 // a handler's start RAX is the instruction and RCX its operation, and
 // what plain's handler reads besides is pinned; the count uses RCX, R8
 // and R9, which plain's handlers set before they read them.
 func feedbackAMD64(v *variant) (*block, error) {
 	a := &Asm{}
-	counts := feedbackCounts()
+	counts, tick, enters := feedbackCounts(), feedbackTick(), feedbackEnters()
 	at := map[bytecode.ROp]int{}
 	labels := map[bytecode.ROp]Label{}
 	for _, op := range handlerOps {
@@ -24,6 +25,10 @@ func feedbackAMD64(v *variant) (*block, error) {
 		l := a.NewLabel()
 		a.Bind(l)
 		labels[op] = l
+		if big, ab := feedbackMarksBig(op); big {
+			feedbackBigAMD64(a, v, op, ab)
+			continue
+		}
 		skip := a.NewLabel()
 		a.Load(R9, RDI, ncCC)
 		if feedbackCountsReturn(op) {
@@ -32,6 +37,13 @@ func feedbackAMD64(v *variant) (*block, error) {
 			a.Jcc(CondE, skip)
 			a.Load(R8, R9, counts)
 			a.IncMem(R8, 0)
+			// The budget's runs left, and the next call Go's at none.
+			a.Bind(skip)
+			skip = a.NewLabel()
+			a.DecMem(R9, tick)
+			a.Jcc(CondG, skip)
+			a.MovImm(R8, 1)
+			a.Store8(R9, enters, R8)
 		} else {
 			// counts[1+C]++, the calls at site C.
 			a.MovRR(RCX, RAX)
@@ -54,4 +66,63 @@ func feedbackAMD64(v *variant) (*block, error) {
 		at[op] = a.Offset(l)
 	}
 	return feedbackBlock(v, code, at), nil
+}
+
+// feedbackBigAMD64 is the feedback variant's handler of op, an operator
+// plain's handler makes of two BigInts held in their Values (feedback.go,
+// feedbackBigOps), of R[A] and R[B] where ab, else of R[B] and R[C]: where
+// both are such BigInts and the site's marks (regCode's bigSeen) have none
+// of its register pc, the exit stub, through the table, for Go to make
+// the operation and its mark; plain's handler of op otherwise. It uses
+// RSI, RDX, RCX, R8 and R9, which plain's handlers and the exit stub set
+// before they read them.
+func feedbackBigAMD64(a *Asm, v *variant, op bytecode.ROp, ab bool) {
+	plainOp, exit := a.NewLabel(), a.NewLabel()
+	seen, kinds := feedbackBigSeen(), feedbackBigKinds()
+	// The operands' registers' offsets in the window, as decA, decB and
+	// decC make them: their 16-bit indexes times 16.
+	shifts := [2]uint8{28, 44}
+	if ab {
+		shifts = [2]uint8{12, 28}
+	}
+	a.MovImm(RCX, shortBigBase)
+	for _, sh := range shifts {
+		a.MovRR(RSI, RAX)
+		a.ShiftImm(Shr, RSI, sh, true)
+		a.OpImm(And, RSI, 0xFFFF0, false)
+		a.LoadIdx(R8, R12, RSI, 1, 0)
+		a.Op(Cmp, R8, RCX, true)
+		a.Jcc(CondB, plainOp)
+	}
+	// Two BigInts held in their Values: the site's marks, none yet.
+	a.Load(R9, RDI, ncRC)
+	a.Load(R9, R9, seen)
+	a.Op(Test, R9, R9, true)
+	a.Jcc(CondE, exit)
+	// The register pc, the word of its bit, and the bit.
+	a.MovRR(RCX, RBX)
+	a.Load(RDX, RDI, ncCodeBase)
+	a.Op(Sub, RCX, RDX, true)
+	a.ShiftImm(Shr, RCX, 3, true)
+	a.MovRR(RSI, RCX)
+	a.ShiftImm(Shr, RSI, 5, true)
+	a.OpImm(And, RCX, 31, false)
+	for i, k := range kinds {
+		dst := R8
+		if i > 0 {
+			dst = RDX
+		}
+		a.Load(dst, R9, k)
+		a.LeaIdx(dst, dst, RSI, 4, 0)
+		a.LoadU32(dst, dst, 0)
+		if i > 0 {
+			a.Op(Or, R8, RDX, false)
+		}
+	}
+	a.Bt(R8, RCX)
+	a.Jcc(CondB, plainOp)
+	a.Bind(exit)
+	a.JmpMem(R13, 8*slotExit)
+	a.Bind(plainOp)
+	a.JmpMem(R13, 8*int32(v.slotPlain(op)))
 }

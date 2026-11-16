@@ -401,7 +401,7 @@ func (s *jitSnapshot) askSparse(fb *jitFeedback) {
 // runtime's goroutine (jitSnapMiss). Generic, EntryGeneric and Resumed,
 // asked at most ops, are asked at every one.
 var jitSnapOps = map[jitSnapMethod][]ir.Op{
-	snapNativeCalls:    {ir.Host, ir.PropertyRead, ir.PropertyWrite, ir.BindingRead, ir.ReferenceRead, ir.BindingWrite, ir.FieldDefine, ir.Rethrow},
+	snapNativeCalls:    {ir.Host, ir.PropertyRead, ir.PropertyWrite, ir.BindingRead, ir.ReferenceRead, ir.BindingWrite, ir.FieldDefine, ir.Rethrow, ir.IterStep},
 	snapBigInt:         {ir.Binary, ir.Unary, ir.Branch, ir.StringAdd},
 	snapFrequency:      {ir.Host, ir.PropertyRead, ir.PropertyWrite, ir.ReferenceRead},
 	snapProperty:       {ir.PropertyRead, ir.PropertyWrite, ir.ReferenceRead},

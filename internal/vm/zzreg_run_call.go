@@ -112,12 +112,6 @@ func rhCallW(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int 
 					if err := r.checkInterruptNow(); err != nil {
 						return st.done(err)
 					}
-					if jitBuilt {
-						// The interrupt budget's end, a sample of the
-						// calls: the callee's hotness, and the site sent
-						// to regCallMiss once it has native code.
-						r.jitRegCallSample(e)
-					}
 				}
 				saved := r.stackTop
 				if top > saved {
@@ -160,7 +154,15 @@ func rhCallW(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int 
 					nf.newTarget = Undefined
 				}
 				nf.regKind = regFrameCall
-				v, err := r.runReg(nf, rc, 0)
+				var v Value
+				var err error
+				if jitBuilt && cl.jitEnters {
+					// Native code made from its register code, which the
+					// site may have been filled before (jitRegEnter).
+					v, err = r.jitRegEnter(nf, cl, rc, base, 0)
+				} else {
+					v, err = r.runReg(nf, rc, 0)
+				}
 				nf.regKind = 0
 				if rc.ncap != 0 && len(nf.openUpvalues) != 0 {
 					regCloseUpvalues(nf)
@@ -256,11 +258,6 @@ func (r *Runtime) regEnterW(o *Object, cl *closure, rc *regCode, base, argc int,
 		if err := r.checkInterruptNow(); err != nil {
 			return Undefined, err
 		}
-		if jitBuilt {
-			// The interrupt budget's end, a sample of the calls: the
-			// callee's hotness (jitRegSample).
-			r.jitRegSample(cl, rc)
-		}
 	}
 	saved := r.stackTop
 	if top > saved {
@@ -313,8 +310,9 @@ func (r *Runtime) regEnterW(o *Object, cl *closure, rc *regCode, base, argc int,
 	}
 	var v Value
 	var err error
-	if jitBuilt && r.jitRegHas(cl) {
-		// Native code made from its register code (jitRegEnter).
+	if jitBuilt && cl.jitEnters {
+		// Native code made from its register code, or a compile of it in
+		// the background to install (jitRegEnter).
 		v, err = r.jitRegEnter(f, cl, rc, base, 0)
 	} else {
 		v, err = r.runReg(f, rc, 0)

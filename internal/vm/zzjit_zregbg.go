@@ -3,6 +3,7 @@
 package vm
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"sync/atomic"
@@ -22,9 +23,10 @@ import (
 // runtime's; and the runtime's goroutine installs it at a later check
 // (jitDrain), at a sample of the register tier's (jitRegHot), placing its
 // code as the compile made on the spot would have. Meanwhile the function
-// runs in the interpreter, or in its code that the compile replaces --
-// stale code goes on running, as V8's does -- and its native callers call
-// it through Go. A build that asked what the snapshot was not asked (a
+// runs in the interpreter, or in its code that the compile replaces, which
+// goes on running, valid, called by its native callers, as V8's does; a
+// compile of a function deoptimized since is thrown away, as the stack
+// form's is (jitReoptimized). A build that asked what the snapshot was not asked (a
 // miss), or whose questions took back what they cannot, is built on the
 // runtime's goroutine at the install instead.
 
@@ -35,6 +37,16 @@ type jitRegJob struct {
 	key    jitKey
 	realm  *Realm
 	callee bool
+	// deopts is the function's deoptimizations when it was prepared: a
+	// compile its function deoptimized since is thrown away, as the stack
+	// form's is (jitReoptimized), what that taught asked for anew.
+	deopts uint16
+	// frameAt is the loop's header a frame waits at for the compile
+	// (jitRegFrameAt), whose entry escape analysis keeps.
+	frameAt int
+	// miss has the worker leave the build as a miss (QJS_JIT_STRESS's
+	// miss), built on the runtime's goroutine at the install.
+	miss bool
 	// e is the entry being made, its program p, rf its feedback, which a
 	// build on the runtime's goroutine asks, snap that feedback asked ahead,
 	// which the worker's build asks.
@@ -73,25 +85,74 @@ type jitRegJob struct {
 // jitRegShape sets f, register code's function built from p, for its
 // native code -- the register frame, its call entry -- and reports the
 // register pcs of the loops' headers it has entries at.
-func jitRegShape(f *ssa.Func, p *ir.Program) map[uint32]bool {
+func jitRegShape(f *ssa.Func, p *ir.Program, cl *closure, c *regCode) map[uint32]bool {
 	// The register frame: its window's registers are its locals, in place
 	// at the context's Locals; its captured bindings past them, in their
 	// cells; its scratch slots past those, which are only values.
 	f.FrameLocals = p.Regs
-	f.Scratch = p.Locals - (p.UpvalueBase + p.Upvalues)
+	f.Scratch = p.Locals - jitRegScratchBase(p)
 	f.ThisSlot = -1
+	if p.This {
+		// A derived constructor's this binding, past its captured
+		// bindings, which native code finds in the context (abi.Context's
+		// This), as the stack form's this slot.
+		f.ThisSlot = p.UpvalueBase + p.Upvalues
+	}
 	f.Params, f.StartOnly = p.ParamBase+p.Params, false
+	// Its bindings undefined at its call entry, as the interpreter's call
+	// makes them, not its temporaries: each a pair of stores at every
+	// call, ten of them a call of fib's.
+	f.InitEnd = f.Params + c.rc.Inits
 	f.Cells = p.Cells
 	// Native callers call it (jitRegFeedback's NativeCalls), its window
 	// made past theirs: its call entry makes its frame (mir's callEntry).
 	f.CallEntry = true
+	// And another function's call in tail position, its frame given up,
+	// jumps to its tail entry (mir's windowTailJump).
+	f.TailEntry = true
+	// A generator's code a loop's step may resume natively: its generator
+	// entry (mir's windowGenEntry).
+	jitRegGenShape(f, p, cl, c)
 	looped := map[uint32]bool{}
+	var headers []bool
 	for _, en := range f.Entries {
 		if en.OSR {
+			looped[p.Origin[en.PC]] = true
+			continue
+		}
+		// An entry at a loop's header the build did not mark OSR's, which
+		// on-stack replacement enters all the same, as the stack form's
+		// enters any entry at a loop's header (tryJITAt): a header Go has
+		// gone on at, whose entry the code keeps, its objects made there
+		// (jitRegFeedback's Resumed, jitRegFramesLeave); and in a
+		// generator's code, whose yields suspend it natively where a step
+		// resumed it, every header: the build marks none of its entries
+		// OSR's, none the escape analysis may drop (ssa.Func's
+		// GenResumes).
+		if headers == nil {
+			headers = make([]bool, len(p.Code)+1)
+			for pc, in := range p.Code {
+				if (in.Op == ir.Jump || in.Op == ir.Branch) && in.Target <= pc {
+					headers[in.Target] = true
+				}
+			}
+		}
+		if en.PC > 0 && headers[en.PC] {
 			looped[p.Origin[en.PC]] = true
 		}
 	}
 	return looped
+}
+
+// jitRegScratchBase is the first of p's expansions' scratch slots, past its
+// captured bindings' and a derived constructor's this slot (ir.Program's
+// This).
+func jitRegScratchBase(p *ir.Program) int {
+	n := p.UpvalueBase + p.Upvalues
+	if p.This {
+		n++
+	}
+	return n
 }
 
 // jitRegSubmit hands j, its feedback asked ahead, to the process's
@@ -104,6 +165,11 @@ func (r *Runtime) jitRegSubmit(j *jitRegJob) {
 	}
 	s.regPendingJobs[j.key] = j
 	s.regJobs = append(s.regJobs, j)
+	if cc := j.cl.closureCode; cc != nil {
+		// Its calls go to the JIT, which installs it once done
+		// (jitRegEnter).
+		cc.jitEnters = true
+	}
 	s.bgSubmitted++
 	jitWorkers.submit(j)
 	if r.jitStress.background && r.jitStress.checks == 0 {
@@ -139,13 +205,19 @@ func (j *jitRegJob) workRecovering() {
 			jitWorkerPanics.Add(1)
 		}
 	}()
+	if j.miss {
+		// Left as a miss (QJS_JIT_STRESS's miss).
+		j.missed = true
+		return
+	}
 	f, err := ssa.BuildIn(&j.w.SSA, j.p, j.snap)
 	if err != nil {
 		j.buildErr = err
 		return
 	}
+	f.FrameAt = j.frameAt
 	j.f = f
-	j.looped = jitRegShape(f, j.p)
+	j.looped = jitRegShape(f, j.p, j.cl, j.c)
 	ssa.Optimize(f)
 	j.mc, j.err = mir.CompileWith(&j.w.MIR, f, j.enc, j.opts)
 }
@@ -182,6 +254,9 @@ func (r *Runtime) jitRegDrainJobs(stress bool, k int) {
 // background go, as it releases its JIT (abandonJobs).
 func (s *jitState) jitRegAbandonJobs() {
 	for _, j := range s.regJobs {
+		if cc := j.cl.closureCode; cc != nil {
+			cc.jitEnters = cc.jitReg != nil
+		}
 		for {
 			st := j.state.Load()
 			if st == jitJobDone {
@@ -206,13 +281,27 @@ func (s *jitState) jitRegAbandonJobs() {
 func (r *Runtime) jitRegInstall(j *jitRegJob) {
 	s := r.jit
 	defer func() {
+		if cc := j.cl.closureCode; cc != nil {
+			// Its calls enter it if it has code, installed or not.
+			cc.jitEnters = cc.jitReg != nil
+		}
 		if j.w != nil {
 			jit.PutWorkspace(j.w)
 			j.w = nil
 		}
 	}()
-	if j.key.gone() {
+	e := j.e
+	old := s.regCache[j.key]
+	called := old != nil && s.regCalled(old)
+	if j.key.gone() || e.life.deopts != j.deopts || called {
+		// Gone; or deoptimized since, compiled for what it has learned
+		// once a budget is spent (jitRegInvalidate); or run by a native
+		// call under way, which finds its code in the cache (jitRegLevelAt),
+		// asked again for what it learned once that is due.
 		s.bgDiscarded++
+		if called && old.code != nil && !old.invalid {
+			r.jitRegReopt(j.cl, old)
+		}
 		return
 	}
 	if j.allocErr != nil {
@@ -220,20 +309,31 @@ func (r *Runtime) jitRegInstall(j *jitRegJob) {
 		// tests set) ends the run as it does a compile on the spot.
 		panic(j.allocErr)
 	}
-	e := j.e
 	switch {
 	case j.panicked:
 		s.backendPanics++
 		e.refusal = fmt.Sprintf("%v: %v", jitRefused, j.err)
 	case j.missed:
-		// Built here, as on the spot.
+		// Built here, as on the spot, from feedback asked anew, as the
+		// stack form's missed compile is (compileSSAFinish): the job's
+		// was the snapshot's, whose questions' effects -- the closures
+		// the code inlines, the objects and shapes it keeps -- the
+		// snapshot took back, to replay those the build asks; asked again,
+		// an instruction's Inline and NativeCalls answer from its cache
+		// (jitRegFeedback's askedOf) without them, and code built from it
+		// had inlined callees its keep did not name, which an exit inside
+		// one could not find (jitRegInlined).
 		s.regSnapMisses++
 		s.compileBegin()
+		limit := j.rf.fb.keepLimit
+		j.rf = r.jitRegFeedbackFor(j.cl, j.p)
+		j.rf.fb.keepLimit = limit
 		f, err := ssa.BuildIn(&j.w.SSA, j.p, j.rf)
 		if err != nil {
 			e.refusal = fmt.Sprintf("%v: %v", jitRefused, err)
 		} else {
-			j.looped = jitRegShape(f, j.p)
+			f.FrameAt = j.frameAt
+			j.looped = jitRegShape(f, j.p, j.cl, j.c)
 			ssa.Optimize(f)
 			j.f = f
 			j.mc, j.err = mir.CompileWith(&j.w.MIR, f, j.enc, j.opts)
@@ -244,6 +344,13 @@ func (r *Runtime) jitRegInstall(j *jitRegJob) {
 	default:
 		j.snap.s.replay()
 	}
+	if e.refusal == "" && errors.Is(j.err, mir.ErrKeeps) {
+		// As on the spot (jitRegCompile): built again here, its keep cells
+		// limited to the context's.
+		s.compileBegin()
+		j.rf, j.f, j.looped, j.mc, j.err = r.jitRegBuild(j.w, j.cl, j.c, j.p, abi.MaxKeeps, j.frameAt)
+		s.compileEnd()
+	}
 	if e.refusal == "" {
 		if j.err != nil {
 			e.refusal = fmt.Sprintf("%v: %v", jitRefused, j.err)
@@ -253,13 +360,21 @@ func (r *Runtime) jitRegInstall(j *jitRegJob) {
 			return
 		}
 	}
+	if e.code == nil && old != nil && old.code != nil && !old.invalid {
+		// A refusal replaces no valid code (jitRegCompileFor), asked
+		// again for nothing it has learned so far.
+		old.life.reopt, old.life.learning = false, false
+		return
+	}
 	r.jitRegCached(j.key, e)
 	if cc := j.cl.closureCode; cc != nil && j.cl.reg == j.c {
 		switch {
 		case e.code == nil:
 			cc.jitRegRefused = cc.jitRegRefused || !e.hostOnly && !j.callee
-		case cc.jitReg == nil && !cc.jitRegRefused:
-			cc.jitReg = e
+		case !cc.jitRegRefused:
+			// The function's code from here, whatever it had: runs of
+			// that go on in this at their next exit (jitRegGoOnAt).
+			cc.setJITReg(e)
 		}
 	}
 }

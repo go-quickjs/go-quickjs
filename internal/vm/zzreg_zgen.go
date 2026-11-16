@@ -309,6 +309,12 @@ func (r *Runtime) regGenRun(g *generator, c *regCode, start int) (Value, *suspen
 	if r.frameDepth >= r.maxFrames {
 		return Undefined, nil, r.throwRangeError("maximum call stack size exceeded")
 	}
+	if jitBuilt && !r.jitRegHas(g.cl) {
+		// A resumption Go makes of code that has none native: counted
+		// towards compiling it, one of no loop among them
+		// (jitRegResumed).
+		r.jitRegResumed(g.cl, c)
+	}
 	n := int(c.numRegs)
 	base := r.stackTop
 	top := base + n
@@ -365,10 +371,12 @@ func (r *Runtime) regGenRun(g *generator, c *regCode, start int) (Value, *suspen
 	}
 	var v Value
 	var err error
-	if jitBuilt && start > 0 && r.jitRegHas(g.cl) {
+	if jitBuilt && start >= 0 && f.savedSP == 0 && r.jitRegHas(g.cl) && (start > 0 || regAt(c.code, 0).Op() == bytecode.RGenEntry) {
 		// Native code made from its register code, entered where the
-		// frame resumes (jitRegEnter).
-		v, err = r.jitRegEnter(f, g.cl, c, base, start)
+		// frame resumes (jitRegEnter); a first run past gen_entry, which
+		// does nothing there, as the stack form's resumption enters a
+		// first run after its parameters (jitResume).
+		v, err = r.jitRegEnter(f, g.cl, c, base, max(start, 1))
 	} else {
 		v, err = r.runReg(f, c, start)
 	}

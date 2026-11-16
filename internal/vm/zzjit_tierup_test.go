@@ -479,10 +479,11 @@ func TestJITLoopSpendsItsOwnLength(t *testing.T) {
 }
 
 // A function past the 4,096 instructions the JIT had compiled is compiled
-// as any other, where its compile fits the JIT's budget (jitCompiles):
-// zlib's bk, 5,039 instructions and called hundreds of times a run, had
-// run in the interpreter. With the runtime's default budget, long is past
-// what a compile may take of it, and is not tried.
+// as any other, where what its compile holds fits the JIT's budget
+// (jitCompiles): zlib's bk, 5,039 instructions and called hundreds of
+// times a run, had run in the interpreter. At the runtime's default budget
+// too, which the estimate of a word a slot an instruction had kept long
+// from.
 func TestJITCompilesLongFunctions(t *testing.T) {
 	t.Parallel()
 	if !jitSSABackend {
@@ -500,10 +501,8 @@ func TestJITCompilesLongFunctions(t *testing.T) {
 			run(`long(3)`)
 		}
 		e := r.jit.entryFor(cl.fn)
-		if compiles := jitCompiles(cl.fn, r.jitBudget()); budget != 0 && (!compiles || e == nil || e.ssa == nil || e.ssaStats.entries == 0) {
-			t.Fatalf("long (%d instructions) not run natively within %d bytes: %+v", len(cl.fn.Code), budget, e != nil && e.ssa != nil)
-		} else if budget == 0 && (compiles || e != nil && e.ssa != nil) {
-			t.Fatalf("long compiled within the default budget, %d bytes", r.jitBudget())
+		if compiles := jitCompiles(cl.fn, r.jitBudget()); !compiles || e == nil || e.ssa == nil || e.ssaStats.entries == 0 {
+			t.Fatalf("long (%d instructions) not run natively within %d bytes: %+v", len(cl.fn.Code), r.jitBudget(), e != nil && e.ssa != nil)
 		}
 	}
 }
