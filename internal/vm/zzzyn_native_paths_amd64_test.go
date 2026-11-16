@@ -1,6 +1,9 @@
 package vm
 
 import (
+	"fmt"
+	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -307,4 +310,110 @@ func TestRegNativeStringEquals(t *testing.T) {
 		var keys = ["alpha", "beta", "gamma", "delta", "alphabetical", "betamaximum"], copies = keys.map(function (k) { return k.split("").join("") }), n = 0
 		for (var j = 0; j < 30; j++) for (var i = 0; i < keys.length; i++) for (var k = 0; k < keys.length; k++) if (keys[i] === copies[k]) n++
 		String(n)`, bytecode.RJSEq, bytecode.RJSNe)
+}
+
+// nativeGoid is the running goroutine's id, from its stack's header.
+func nativeGoid() string {
+	b := make([]byte, 64)
+	b = b[:runtime.Stack(b, false)]
+	f := strings.Fields(string(b))
+	if len(f) < 2 {
+		return ""
+	}
+	return f[1]
+}
+
+// nativeDeep recurses n deep with a frame of some size, which grows the
+// goroutine's stack: what a wrong g (R14) at a Go handler would crash.
+//
+//go:noinline
+func nativeDeep(n int) int {
+	var pad [32]int
+	pad[n%32] = n
+	if n == 0 {
+		return pad[0]
+	}
+	return nativeDeep(n-1) + pad[n%32]
+}
+
+// nativeZeroed reports whether a fresh array of n words is all zero: Go
+// zeroes it by X15, which its internal convention keeps zero.
+//
+//go:noinline
+func nativeZeroed(n int) bool {
+	var z [16]uint64
+	for _, v := range z[:n] {
+		if v != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// TestRegNativeCallHConvention checks the convention nativeCallH calls Go
+// handlers by, Go's internal one (ABIInternal) that the exit stub and the
+// trampoline write by hand: the handler's four arguments in AX, BX, CX
+// and DI, the func value in DX (the handler here is a closure, which
+// reads its captures through it), its result in AX, the goroutine in R14
+// and X15 zero. A Go handler called through it gets the arguments the Go
+// table's loop would give it, runs on the test's goroutine, grows the
+// stack, zeroes memory, and what it returns is where the code goes on. A
+// toolchain
+// whose convention differs fails it, and the native handlers then need
+// their trampoline changed.
+func TestRegNativeCallHConvention(t *testing.T) {
+	op := bytecode.RNewObjectLit
+	if nativePlain.has[op] {
+		t.Fatalf("%s has a native handler: the test needs an operation that exits", op)
+	}
+	want := nativeGoid()
+	orig := regTable[op]
+	defer func() { regTable[op] = orig }()
+	var calls, viaCallH int
+	var bad []string
+	regTable[op] = func(regs *[1 << 16]Value, w bytecode.RInstr, pc int, st *regState) int {
+		calls++
+		pcs := make([]uintptr, 16)
+		frames := runtime.CallersFrames(pcs[:runtime.Callers(1, pcs)])
+		for {
+			f, more := frames.Next()
+			if strings.HasSuffix(f.Function, ".nativeCallH") {
+				viaCallH++
+			}
+			if !more {
+				break
+			}
+		}
+		switch {
+		case st == nil || st.c == nil:
+			bad = append(bad, "no state (DI)")
+		case regs != st.regs:
+			bad = append(bad, "the registers (AX) are not the state's")
+		case pc < 0 || pc >= len(st.c.src):
+			bad = append(bad, fmt.Sprintf("pc (CX) %d out of the code", pc))
+		case regAt(st.c.code, pc) != w || w.Op() != op:
+			bad = append(bad, fmt.Sprintf("the instruction (BX) %#x is not the code's at pc %d", uint64(w), pc))
+		}
+		if g := nativeGoid(); g != want {
+			bad = append(bad, fmt.Sprintf("goroutine (R14) %q, want %q", g, want))
+		}
+		if nativeDeep(2000) != 2000*2001/2 {
+			bad = append(bad, "the deep recursion's sum")
+		}
+		if !nativeZeroed(16) {
+			bad = append(bad, "a fresh array not zero (X15)")
+		}
+		return orig(regs, w, pc, st)
+	}
+	src := `function f(n) { var s = 0; for (var i = 0; i < n; i++) { var o = {a: i, b: 1}; s += o.a + o.b } return s }
+		String(f(200)) + " " + String((function () { return {x: 7} })().x)`
+	if got := nativeRunSrc(t, src, true); got != "20100 7" {
+		t.Errorf("got %q, want %q", got, "20100 7")
+	}
+	if calls == 0 || viaCallH == 0 {
+		t.Fatalf("%d calls of the handler, %d through nativeCallH: the test reached no exit's call", calls, viaCallH)
+	}
+	if len(bad) > 0 {
+		t.Fatalf("nativeCallH's convention does not hold on this toolchain (%d of %d calls): %s", len(bad), calls, strings.Join(bad, "; "))
+	}
 }

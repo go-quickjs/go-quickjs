@@ -610,7 +610,7 @@ and globals read and written by their site; property reads and writes by
 the site's cache, its own entry or the entries of the shapes it met
 before (`propPoly`), and a property added by the transition it
 remembers; `o.n +=` of an own number; `in` by the
-runtime's in cache, `typeof`, the length of an array or a string, the
+realm's in cache, `typeof`, the length of an array or a string, the
 elements of dense arrays (read, `x[++i]`, `x[i++]`, written over any
 element) and typed arrays (every kind but Float16 and BigInt64); short
 BigInts' add, sub and mul; and calls and returns:
@@ -660,7 +660,15 @@ the runtime's `backEdges` across the calls. Where the frame has ended
 (`regDone`), and where Go has made no state for the depth yet, the stub
 returns to `nativeRun`, which ends the frame, or makes the state and runs
 the instruction, and enters the code again; so does a call the native frame
-stack has no room for, and the base frame's return. The call made
+stack has no room for, and the base frame's return. The call depends on
+Go's internal register convention (ABIInternal) on amd64, which the
+exit stub and the trampoline write by hand: the four arguments in `AX`,
+`BX`, `CX` and `DI`, the func value in `DX`, the result in `AX`, the
+goroutine in `R14`, `X15` zero, and the arguments' spill room in the
+caller's frame. Go does not promise it across releases;
+`TestRegNativeCallHConvention` calls a Go handler through `nativeCallH`
+and fails, saying which part differs, where the toolchain's convention
+is not this one, and CI runs it under Go 1.24 and Go 1.27. The call made
 `array_push_args3_single`, whose pushes exit, 19% faster than the return
 and the entry (199 to 162 ns an operation), and `string_indexOf` 13%. There is no second interpreter: what the Go table does, an exit does. A frame the code entered itself that ends in Go
 -- a throw, a return that closes captured upvalues -- ends there as
@@ -678,20 +686,58 @@ record a call the code made itself. The stack starts at 8 records and Go
 doubles it when a call finds it full, up to 128; a call past that is
 Go's, whose frame runs in a code entry of its own. Each runtime's states
 are its own, so separate runtimes on separate goroutines share no
-context.
+context. A realm's fields -- its prototypes, its caches of the in
+operator's answers and of the primitives' methods -- are read through
+the realm running now, the Runtime's first word, at offsets the context
+gives: a context lives on from realm to realm with its state, and an
+address of the realm it was made in, which the collector does not see,
+was read once a host had dropped that realm and it was collected
+(`TestRegNativeInDroppedRealm`).
 
 **Generation and the shared-code rules.** The handlers are written with
-the JIT's assembler by `nativeEmit`, a test's code
-(`zzzyn_native_gen_amd64_test.go`), and assembled into the binary as one
-TEXT symbol of bytes and the table as GLOBL/DATA
-(`zzzyn_native_handlers_amd64.s`, `go generate ./internal/vm`);
-`TestRegNativeGenerated` fails while the file is not what the emitter
-makes. The package's code needs no assembler and no JIT. The block is one
+the JIT's assembler by a generator, `internal/vm/internal/nativegen`, and
+assembled into the binary as one TEXT symbol of bytes and the table as
+GLOBL/DATA (`zzzyn_native_handlers_amd64.s`, `go generate
+./internal/vm`); `TestRegNativeGenerated` fails while the file is not
+what the generator makes. The generator does not import package vm: it
+reads vm's private layout -- the context's, the frame records', the
+Runtime's and the other types' offsets, the constants the handlers test
+against -- as plain numbers, which vm's `NativeLayout` gives in a build
+with the `quickjs_nativelayout` tag, which a helper of the generator alone
+builds and runs. Each architecture's emitter is files of its own beside
+the shared layout, the shared list of the operations the handlers answer
+and the writer of the block. The package's code needs no assembler and
+no JIT. The block is one
 for every runtime and every build tag: position-independent, never
 patched, with no runtime's constant in it -- every address it needs is
 the context's, and the Runtime's and a closureCode's fields, whose
 offsets the JIT's tag changes, are read relative to a base the context
 gives (`rtBase`, `ccBase`), which the test checks under each tag.
+
+**Dispatchers: architectures and variants.** The generator makes several
+native dispatchers, on two axes. The first is the architecture: amd64
+now, arm64 next, others later, each with its emitter and its files. The
+second is the variant, within an architecture: a dispatch table over the
+handlers, which a runtime picks through its contexts' table pointer
+(`ctx.table`, `R13` in the code; `nativeDispatch`). `plain` is the only
+one in builds without the JIT, and the one a runtime that does not run
+the JIT uses in builds with it. `feedback` is a runtime's that runs the
+JIT, in builds with it alone: its handlers that record the JIT's
+feedback OR the kinds of value they met into the function's feedback
+slot (below), every other handler plain's; none records yet. Mode
+tables, such as the debugger's, are to be variants too. A handler is
+generated once: plain's block holds the entry, the exit stub and every
+handler, and a variant only the handlers it overrides, in a block of its
+own beside its table (`zzzyn_native_feedback_amd64.s`, built with the
+JIT alone), whose entries point at those and at plain's handlers for
+every other operation. Its own handlers reach plain's code through the
+table: the exits through two slots after the operations', another
+handler through its operation's entry. `TestRegNativeGenerated` checks
+every file, each from the layout of its variant's build;
+`TestRegNativePlainSameWithJIT` that plain's is the same in a build with
+the JIT and without; `TestRegNativeLinked` that a binary links what the
+generator makes for its build; `TestRegNativeFeedbackSelected` that a
+runtime picks its table.
 
 **The marking rule.** A handler stores a number's word alone where the
 register held no pointer; a pointer word it stores plainly while the

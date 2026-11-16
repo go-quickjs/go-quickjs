@@ -169,15 +169,24 @@ Do not manually edit generated files or their binary companions:
   the package's `zzjit_*.go` files only. After changing a method of
   `jitFeedback`, run `go generate ./internal/vm`; `TestSnapshotGenerated`
   fails while either file is out of date.
-- `internal/vm/zzzyn_native_handlers_amd64.s`, the register interpreter's
-  native handlers on amd64 and their table, machine code made by
-  `nativeEmit` in `zzzyn_native_gen_amd64_test.go` with the JIT's
-  assembler (docs/register-interpreter.md, "Native handlers"). After
-  changing the emitter, or a layout its offsets come from -- the context,
-  a frame, a Runtime field it reads -- run `go generate ./internal/vm`
-  on amd64 (`go test -run '^TestRegNativeGenerated$' -nativegen
-  ./internal/vm` alone); `TestRegNativeGenerated` fails while the file is
-  out of date, under either build tag.
+- `internal/vm/zzzyn_native_handlers_amd64.s` and
+  `zzzyn_native_feedback_amd64.s`, the register interpreter's native
+  handlers on amd64 with their plain table, and the feedback dispatcher's
+  table and own handlers, built with the JIT alone: machine code made with
+  the JIT's assembler by `internal/vm/internal/nativegen`
+  (docs/register-interpreter.md, "Native handlers"). The generator reads
+  package vm's private layout -- the context, a frame, the Runtime fields
+  and the constants the handlers use -- as plain numbers from
+  `NativeLayout` (`zzzyn_native_layout.go`), which only its helper's
+  build tag, `quickjs_nativelayout`, builds. After changing the emitter, or
+  a layout its offsets come from, run `go generate ./internal/vm` on amd64
+  (`go run ./internal/nativegen/cmd` in `internal/vm` alone; a field or a
+  constant the emitter newly reads goes in `NativeLayout` first). It reads
+  the layout of a build without tags and with `quickjs_jit`, one per
+  variant, from the host's own build: any 64-bit host gives amd64's
+  layout, but only one whose build has the JIT (linux or windows amd64,
+  darwin arm64) gives the JIT's; `TestRegNativeGenerated` fails while either file is out of
+  date.
 - `internal/vm/*_layoutpad.go` and `internal/vm/layoutpad_*.go`, the layout
   lock's pads and the constants that size them for each configuration,
   written by `internal/cmd/layoutpad` from `layoutlock.txt`'s targets.
