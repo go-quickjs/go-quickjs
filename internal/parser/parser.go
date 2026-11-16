@@ -131,6 +131,10 @@ type parser struct {
 
 	// nodes batches the allocation of the most common node types. See arena.go.
 	nodes arena
+	// freeCat is the string runs (strCat) no chain is joining, for the next.
+	freeCat *strCat
+	// strBlock is what strCat's joined strings are carved from.
+	strBlock []byte
 
 	// depth bounds nesting. A recursive-descent parser uses Go stack in
 	// proportion to how deeply the input nests, and a goroutine stack overflow
@@ -209,6 +213,8 @@ func Parse(src string, opts Options) (prog *ast.Program, err error) {
 		allowNewTarget: opts.AllowNewTarget,
 		nodeQuirks:     opts.NodeQuirks,
 	}
+	p.nodes.takeScratch()
+	defer p.nodes.giveScratch()
 	// The recursive-descent routines report errors by panicking with a
 	// *Error, which keeps their signatures free of error returns. Nothing else
 	// panics deliberately, so any other value is a genuine bug and is re-raised.
@@ -237,6 +243,7 @@ func Parse(src string, opts Options) (prog *ast.Program, err error) {
 		Body:   body,
 		Strict: p.strict,
 		Module: p.module,
+		Idents: p.nodes.nIdents,
 	}
 	// The whole source has been read, so the comments are its last.
 	if url, mapURL := p.lex.SourceURL(), p.lex.SourceMapURL(); url != "" || mapURL != "" {
@@ -375,7 +382,7 @@ func (p *parser) canInsertSemicolon() bool {
 func (p *parser) parseIdentName() *ast.Ident {
 	switch p.tok.Kind {
 	case lexer.Ident, lexer.Keyword:
-		id := p.nodes.ident(p.tok.Value, p.tok.Pos)
+		id := p.nodes.name(p.tok.Value, p.tok.Pos)
 		p.next()
 		return id
 	}

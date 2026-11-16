@@ -19,8 +19,10 @@ import (
 // fn and whose identifiers' resolution is rec, into register code, or
 // returns nil where it has anything the backend does not compile yet.
 func CompileTop(body []ast.Stmt, fn *bytecode.Function, rec *Record) *bytecode.RegCode {
-	g, ok := generate(fn, true, func() *gen {
-		return &gen{lit: &ast.FuncLit{Body: body}, fn: fn, rec: rec, orig: fn, thisRef: rec.ThisRef}
+	sc := getScratch()
+	defer putScratch(sc)
+	g, ok := generate(fn, true, sc, func(g *gen) {
+		*g = gen{lit: &ast.FuncLit{Body: body}, fn: fn, rec: rec, orig: fn, thisRef: rec.ThisRef}
 	})
 	if !ok {
 		Refuse(fn, "its bindings' layout")

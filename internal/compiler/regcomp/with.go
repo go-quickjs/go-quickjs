@@ -33,13 +33,13 @@ type withRef struct{ base, flag int }
 func (g *gen) probedNames() {
 	for id, p := range g.rec.Withs {
 		w := &withName{probe: p}
-		if res, ok := g.rec.Read[id]; ok {
+		if res, ok := g.rec.ReadOf(id); ok {
 			w.read, w.hasRead = res, true
-			g.rec.Read[id] = Res{Kind: ResWith}
+			g.rec.setRead(id, Res{Kind: ResWith}, true)
 		}
-		if res, ok := g.rec.Write[id]; ok {
+		if res, ok := g.rec.WriteOf(id); ok {
 			w.write, w.hasRwr = res, true
-			g.rec.Write[id] = Res{Kind: ResWith}
+			g.rec.setWrite(id, Res{Kind: ResWith}, true)
 		}
 		if g.withs == nil {
 			g.withs = map[*ast.Ident]*withName{}
@@ -55,20 +55,13 @@ func (g *gen) withStatic(id *ast.Ident, f func()) {
 	if w == nil {
 		panic("regcomp: a probe of a name the record does not probe")
 	}
-	set := func(m map[*ast.Ident]Res, res Res, has bool) {
-		if has {
-			m[id] = res
-		} else {
-			delete(m, id)
-		}
-	}
-	set(g.rec.Read, w.read, w.hasRead)
-	set(g.rec.Write, w.write, w.hasRwr)
+	g.rec.setRead(id, w.read, w.hasRead)
+	g.rec.setWrite(id, w.write, w.hasRwr)
 	delete(g.withs, id)
 	f()
 	g.withs[id] = w
-	set(g.rec.Read, Res{Kind: ResWith}, w.hasRead)
-	set(g.rec.Write, Res{Kind: ResWith}, w.hasRwr)
+	g.rec.setRead(id, Res{Kind: ResWith}, w.hasRead)
+	g.rec.setWrite(id, Res{Kind: ResWith}, w.hasRwr)
 }
 
 // probeOp is id's probe's instruction, which must be one of ops: what the

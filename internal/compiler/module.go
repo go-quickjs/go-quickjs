@@ -82,7 +82,7 @@ func CompileModule(prog *ast.Program, opts Options) (fn *bytecode.Function, info
 	c.emit(bytecode.OpSetLocal, uint32(c.completionSlot), 0)
 	if registerForm.Load() && !opts.NoRegister && regScript(opts) {
 		// The module's code as register code too (regcomp.CompileTop).
-		c.reg = regcomp.NewRecord()
+		c.reg = regcomp.NewRecord(prog.Idents)
 		c.reg.Completion = c.completionSlot
 	}
 
@@ -339,7 +339,7 @@ func compileModuleInit(prog *ast.Program, opts Options, info *ModuleInfo, script
 	if registerForm.Load() && !opts.NoRegister && regScript(opts) {
 		// Its declarations as register code too: its body is none of the
 		// module's statements (regcomp.CompileTop).
-		c.reg = regcomp.NewRecord()
+		c.reg = regcomp.NewRecord(prog.Idents)
 		c.reg.Completion = c.completionSlot
 	}
 	c.hoistModuleBindings(prog.Body)

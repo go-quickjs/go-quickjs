@@ -1,17 +1,19 @@
 package compiler
 
 import (
+	"math"
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/parser"
 )
 
-// TestNegativeImmediate pins a negative int32 literal, which compileUnary
-// folds into a constant, taken by an arithmetic or bitwise operator as an
-// immediate (fuse), as a positive one is: x + -8 and x & -4 of a local, y
-// - -2 of another operand. -0, a fraction and a number past an int32 stay
-// constants, as does -1 compared or passed.
+// TestNegativeImmediate pins a negative int32 literal, which the parser
+// folds into a number (internal/fold), taken by an arithmetic or bitwise
+// operator as an immediate (fuse), as a positive one is: x + -8 and x & -4
+// of a local, y - -2 of another operand. -0, a fraction and a number past
+// an int32 are constants; -1 compared or passed is pushed as an integer,
+// as 1 is.
 func TestNegativeImmediate(t *testing.T) {
 	prog, err := parser.Parse(`function f(x, y) {
 		return [x + -8, x & -4, (x + y) - -2, x + -0, x * -1.5, x + -2147483649, x === -1, g(-1), x + -2147483648];
@@ -59,8 +61,8 @@ func TestNegativeImmediate(t *testing.T) {
 			t.Errorf("immediate %d: %v, want %v", i, imms[i], want[i])
 		}
 	}
-	// -0, -1.5, -2147483649, and -1 twice.
-	if len(consts) != 5 {
-		t.Errorf("number constants pushed %v, want five", consts)
+	// -0, -1.5 and -2147483649.
+	if want := []float64{0, -1.5, -2147483649}; len(consts) != len(want) || consts[1] != want[1] || consts[2] != want[2] || !math.Signbit(consts[0]) {
+		t.Errorf("number constants pushed %v, want -0, -1.5, -2147483649", consts)
 	}
 }

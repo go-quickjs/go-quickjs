@@ -6,6 +6,8 @@
 package regcomp
 
 import (
+	"iter"
+
 	"github.com/go-quickjs/go-quickjs/internal/ast"
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
@@ -70,11 +72,19 @@ type Res struct {
 }
 
 // Record is the stack compiler's resolution of one function's
-// identifiers: of its reads, of its writes, and of the bindings its
-// hoisted function declarations are stored in.
+// identifiers: of its reads, of its writes (ReadOf, WriteOf), and of the
+// bindings its hoisted function declarations are stored in.
 type Record struct {
-	Read  map[*ast.Ident]Res
-	Write map[*ast.Ident]Res
+	// slots is each identifier's resolutions, read and written, at the
+	// number the parser gave it in its function (ast.Ident.ID), and more
+	// is those of an identifier whose slot another has: an arrow's
+	// parameter, numbered in the code around the arrow, or a name the
+	// compiler made, which has no number.
+	slots []identSlot
+	more  map[*ast.Ident]*identSlot
+	// lits is the literal of each read the stack compiler compiled as
+	// one (Res.Lit).
+	lits  map[*ast.Ident]ast.Expr
 	Funcs map[*ast.FuncDecl]uint32
 	// Reused are the function expressions a var declaration in a loop
 	// makes only the first time (the compiler's reusedClosures).
@@ -180,9 +190,161 @@ func (r *Record) NoteFunc(fd *ast.FuncDecl, slot uint32) {
 	r.Funcs[fd] = slot
 }
 
-// NewRecord makes an empty record.
-func NewRecord() *Record {
-	return &Record{Read: map[*ast.Ident]Res{}, Write: map[*ast.Ident]Res{}, Funcs: map[*ast.FuncDecl]uint32{}, Completion: -1}
+// NewRecord makes an empty record of a function with idents identifiers
+// (ast.FuncLit.Idents).
+func NewRecord(idents uint32) *Record {
+	return &Record{slots: make([]identSlot, idents), Funcs: map[*ast.FuncDecl]uint32{}, Completion: -1}
+}
+
+// identSlot is an identifier's resolutions, read and written.
+type identSlot struct {
+	id          *ast.Ident
+	read, write slotRes
+}
+
+// slotRes is a Res in a slot, but for its Lit (Record.lits), and whether
+// there is one.
+type slotRes struct {
+	kind  ResKind
+	set   bool
+	index uint32
+}
+
+// slot is id's slot, or nil where it has none and add is false.
+func (r *Record) slot(id *ast.Ident, add bool) *identSlot {
+	if n := id.ID(); n > 0 && int(n) <= len(r.slots) {
+		s := &r.slots[n-1]
+		switch s.id {
+		case id:
+			return s
+		case nil:
+			// An identifier takes its slot as it is first noted, so one
+			// in more has found its slot taken.
+			if !add {
+				return nil
+			}
+			s.id = id
+			return s
+		}
+	}
+	if s := r.more[id]; s != nil || !add {
+		return s
+	}
+	if r.more == nil {
+		r.more = map[*ast.Ident]*identSlot{}
+	}
+	s := &identSlot{id: id}
+	r.more[id] = s
+	return s
+}
+
+// res is the Res in v, of identifier id: its read's, with its literal,
+// where read is true.
+func (r *Record) res(id *ast.Ident, v slotRes, read bool) Res {
+	res := Res{Kind: v.kind, Index: v.index}
+	if read && v.kind == ResLiteral && r.lits != nil {
+		res.Lit = r.lits[id]
+	}
+	return res
+}
+
+// put puts res in v, of identifier id, its read's where read is true,
+// whose literal goes to lits: a write has none.
+func (r *Record) put(id *ast.Ident, v *slotRes, res Res, read bool) {
+	*v = slotRes{kind: res.Kind, set: true, index: res.Index}
+	if !read {
+		return
+	}
+	switch {
+	case res.Lit != nil:
+		if r.lits == nil {
+			r.lits = map[*ast.Ident]ast.Expr{}
+		}
+		r.lits[id] = res.Lit
+	case r.lits != nil:
+		delete(r.lits, id)
+	}
+}
+
+// ReadOf is the resolution of read id, and whether the record has one.
+func (r *Record) ReadOf(id *ast.Ident) (Res, bool) {
+	if s := r.slot(id, false); s != nil && s.read.set {
+		return r.res(id, s.read, true), true
+	}
+	return Res{}, false
+}
+
+// WriteOf is the resolution of write id, and whether the record has one.
+func (r *Record) WriteOf(id *ast.Ident) (Res, bool) {
+	if s := r.slot(id, false); s != nil && s.write.set {
+		return r.res(id, s.write, false), true
+	}
+	return Res{}, false
+}
+
+// readRes is ReadOf's Res alone.
+func (r *Record) readRes(id *ast.Ident) Res {
+	res, _ := r.ReadOf(id)
+	return res
+}
+
+// writeRes is WriteOf's Res alone.
+func (r *Record) writeRes(id *ast.Ident) Res {
+	res, _ := r.WriteOf(id)
+	return res
+}
+
+// setRead makes res the resolution of read id, or drops it where has is
+// false.
+func (r *Record) setRead(id *ast.Ident, res Res, has bool) {
+	s := r.slot(id, has)
+	switch {
+	case has:
+		r.put(id, &s.read, res, true)
+	case s != nil:
+		s.read = slotRes{}
+	}
+}
+
+// setWrite makes res the resolution of write id, or drops it where has is
+// false.
+func (r *Record) setWrite(id *ast.Ident, res Res, has bool) {
+	s := r.slot(id, has)
+	switch {
+	case has:
+		r.put(id, &s.write, res, false)
+	case s != nil:
+		s.write = slotRes{}
+	}
+}
+
+// Reads is the resolutions of the reads the record has, in no order.
+func (r *Record) Reads() iter.Seq[Res] {
+	return func(yield func(Res) bool) {
+		r.each(func(s *identSlot) bool { return !s.read.set || yield(r.res(s.id, s.read, true)) })
+	}
+}
+
+// Writes is the resolutions of the writes the record has, in no order.
+func (r *Record) Writes() iter.Seq[Res] {
+	return func(yield func(Res) bool) {
+		r.each(func(s *identSlot) bool { return !s.write.set || yield(r.res(s.id, s.write, false)) })
+	}
+}
+
+// each calls f with each slot that is an identifier's, until f returns
+// false.
+func (r *Record) each(f func(*identSlot) bool) {
+	for i := range r.slots {
+		if s := &r.slots[i]; s.id != nil && !f(s) {
+			return
+		}
+	}
+	for _, s := range r.more {
+		if !f(s) {
+			return
+		}
+	}
 }
 
 // TopOp is one of top-level code's declarations: the stack form's
@@ -302,10 +464,11 @@ func (r *Record) NoteRead(id *ast.Ident, res Res) {
 	if r == nil || r.quiet > 0 {
 		return
 	}
-	if old, ok := r.Read[id]; ok && old != res {
+	s := r.slot(id, true)
+	if s.read.set && r.res(id, s.read, true) != res {
 		r.Bail = true
 	}
-	r.Read[id] = res
+	r.put(id, &s.read, res, true)
 }
 
 // NoteWrite records a write of id.
@@ -313,10 +476,11 @@ func (r *Record) NoteWrite(id *ast.Ident, res Res) {
 	if r == nil || r.quiet > 0 {
 		return
 	}
-	if old, ok := r.Write[id]; ok && old != res {
+	s := r.slot(id, true)
+	if s.write.set && r.res(id, s.write, false) != res {
 		r.Bail = true
 	}
-	r.Write[id] = res
+	r.put(id, &s.write, res, false)
 }
 
 // DebugMark is a place code compiled for a debugger can stop: its index

@@ -27,8 +27,12 @@ import (
 	"strconv"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/compiler"
 	"github.com/go-quickjs/go-quickjs/internal/jit"
+	"github.com/go-quickjs/go-quickjs/internal/parser"
 	"github.com/go-quickjs/go-quickjs/internal/v8bench"
+	"github.com/go-quickjs/go-quickjs/internal/vm"
 )
 
 func main() { v8bench.Main("go-quickjs", engine{}) }
@@ -45,9 +49,32 @@ var (
 	jitTimeFlag   = flag.Int("jitcompile", 0, "time the JIT's compiles phase by phase, each compile run this many times, and print the times per run after each benchmark (fixed and micro modes, with -jit)")
 )
 
+// Compile is the whole front end: the parser and the compiler, as
+// quickjs.Compile runs them, and then the register code of every function,
+// which a runtime compiles at a function's first call (Function.RegCode),
+// where the process runs register code.
 func (engine) Compile(name, src string) error {
-	_, err := quickjs.Compile(name, src)
-	return err
+	prog, err := parser.Parse(src, parser.Options{})
+	if err != nil {
+		return err
+	}
+	fn, err := compiler.Compile(prog, compiler.Options{Source: name, Text: src, NoRegister: !vm.RegTierOn()})
+	if err != nil {
+		return err
+	}
+	compileReg(fn)
+	return nil
+}
+
+// compileReg compiles the register code of fn and of the functions it
+// holds.
+func compileReg(fn *bytecode.Function) {
+	fn.RegCode()
+	for _, c := range fn.Constants {
+		if c.Fn != nil {
+			compileReg(c.Fn)
+		}
+	}
 }
 
 func (engine) NewRuntime(host v8bench.Host) (v8bench.Runtime, error) {

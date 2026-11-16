@@ -5,6 +5,10 @@
 // every field of every function, its constants, each instruction's position,
 // what the script's line table answers, and the exact error of what is
 // rejected. A field added to bytecode.Function is in the output by itself.
+// So is each function's register code, compiled as its first call would
+// compile it, whatever the platform: every field of its RegCode, an
+// instruction a line, or why it has none -- the backend's refusal, or what
+// its compile panicked with.
 //
 // Against a revision, in one command, from the repository's root, which
 // builds this tool's source over that revision in a temporary directory, runs
@@ -27,6 +31,13 @@
 //
 // Each function is written out after the next compile has been made, so that
 // a value left sharing a buffer the next compile reuses shows as a difference.
+//
+// fold classifies what the compiler's folds change (internal/fold),
+// by kind and by corpus, against a revision before them, and fails where
+// a compile with no folds differs from it or a fold costs a function its
+// register code:
+//
+//	go run ./internal/cmd/compilediff fold -base REV /path/to/octane /path/to/test262/test
 //
 // native compares two runs of v8bench's -jitcode, made with -jitheld, which
 // holds the JIT's clocks and turns the collector off, but at a memory limit
@@ -66,7 +77,7 @@ func main() {
 	cmd := ""
 	if len(args) > 0 {
 		switch args[0] {
-		case "dump", "diff", "show", "native":
+		case "dump", "diff", "show", "native", "fold":
 			cmd, args = args[0], args[1:]
 		}
 	}
@@ -79,6 +90,8 @@ func main() {
 			break
 		}
 		same, err = diffFiles(args[0], args[1], os.Stdout)
+	case "fold":
+		same, err = foldReport(args, os.Stdout)
 	case "native":
 		compare := compareNative
 		if len(args) > 0 && args[0] == "-any" {
@@ -111,6 +124,7 @@ func run(cmd string, args []string) (same bool, err error) {
 	fs.IntVar(&o.mutmax, "mutmax", 64<<10, "the largest file to mutate")
 	fs.StringVar(&o.modes, "modes", strings.Join(allModes, ","), "the modes to compile in")
 	fs.StringVar(&o.file, "file", "", "show: the file, as dump names it")
+	fs.BoolVar(&o.perFunc, "perfunc", false, "dump: a line for each function of each compile")
 	fs.Parse(args)
 	roots := fs.Args()
 	if len(roots) == 0 {

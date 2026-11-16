@@ -81,8 +81,10 @@ func (p *parser) parseFunctionParamsAndBody(fn *ast.FuncLit) {
 		p.allowSuperCall = false
 	}
 
+	outer := p.nodes.beginIdents()
 	fn.Params = p.parseParams()
 	fn.Body = p.parseFunctionBody(fn)
+	fn.Idents = p.nodes.endIdents(outer)
 	fn.Strict = p.strict
 	p.checkParamNames(fn)
 }
@@ -340,6 +342,7 @@ func (p *parser) parseArrowBody(params []ast.Expr, start int, async bool) ast.Ex
 	// applies: `async function f(a = async () => await 1) {}` is fine.
 	p.inParams = false
 
+	outer := p.nodes.beginIdents()
 	if p.isPunct("{") {
 		fn.Body = p.parseFunctionBody(fn)
 	} else {
@@ -353,6 +356,7 @@ func (p *parser) parseArrowBody(params []ast.Expr, start int, async bool) ast.Ex
 		// before whatever token follows.
 		fn.End = p.prevEnd
 	}
+	fn.Idents = p.nodes.endIdents(outer)
 	fn.Strict = p.strict
 	p.checkParamNames(fn)
 	return fn
@@ -424,7 +428,7 @@ func (p *parser) parseParenOrArrow() ast.Expr {
 		case *ast.ObjectLit:
 			n.Paren = true
 		case *ast.Ident:
-			n.Paren = true
+			n.SetParen()
 		}
 		return items[0]
 	}

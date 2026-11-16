@@ -136,7 +136,7 @@ func (g *gen) storeRef(l leaf, v int, declaring bool) {
 // storeLeaf stores v into the binding id names, as the record resolved the
 // stack form's store of it.
 func (g *gen) storeLeaf(id *ast.Ident, v int, declaring bool) {
-	res, ok := g.rec.Write[id]
+	res, ok := g.rec.WriteOf(id)
 	if !ok {
 		g.fail("a store the record does not resolve")
 		return
@@ -404,7 +404,7 @@ func (g *gen) patternSource(e ast.Expr) int {
 // turns before with theirs (close_regs).
 func (g *gen) patternBindings(target ast.Expr) {
 	for _, id := range patternNames(target, nil) {
-		res, ok := g.rec.Write[id]
+		res, ok := g.rec.WriteOf(id)
 		if !ok || res.Kind != ResLocalInit {
 			continue
 		}

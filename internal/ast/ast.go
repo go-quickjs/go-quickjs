@@ -35,6 +35,9 @@ type Program struct {
 	Strict bool
 	Module bool
 	Start  int
+	// Idents is how many identifiers the parser numbered in the program's
+	// own code, outside its functions (Ident.ID).
+	Idents uint32
 	// Comments are what the source's //# sourceURL= and
 	// //# sourceMappingURL= comments say, and nil when it has neither.
 	Comments *SourceComments
@@ -57,11 +60,29 @@ func (p *Program) Pos() int { return p.Start }
 type Ident struct {
 	Name  string
 	Start int32
-	// Paren records that the name was written in parentheses, which stops it
-	// being an IdentifierReference for the purpose of naming an anonymous
-	// function: `(f) = function () {}` leaves the function's name empty.
-	Paren bool
+	// bits is the identifier's number (ID) shifted left by one, and in its
+	// lowest bit whether it was written in parentheses (Paren): a node every
+	// identifier is, kept at 24 bytes.
+	bits uint32
 }
+
+// ID numbers the identifier among those of the function it is written in,
+// from 1, as the parser makes them: the compiler's record of their
+// resolution keeps each at its number (FuncLit.Idents). A property's name,
+// which nothing resolves, and a name the compiler makes have none, 0.
+func (n *Ident) ID() uint32 { return n.bits >> 1 }
+
+// SetID gives the identifier number id, which is less than 1<<31: an
+// identifier takes a byte of source at least, and a position is an int32.
+func (n *Ident) SetID(id uint32) { n.bits = id<<1 | n.bits&1 }
+
+// Paren reports that the name was written in parentheses, which stops it
+// being an IdentifierReference for the purpose of naming an anonymous
+// function: `(f) = function () {}` leaves the function's name empty.
+func (n *Ident) Paren() bool { return n.bits&1 != 0 }
+
+// SetParen records that the name was written in parentheses.
+func (n *Ident) SetParen() { n.bits |= 1 }
 
 // PrivateName is a `#field` reference.
 type PrivateName struct {
@@ -230,7 +251,12 @@ type FuncLit struct {
 	// ExprBody marks a concise arrow body (`x => x + 1`), where Body holds a
 	// single synthesized ReturnStmt.
 	ExprBody bool
-	Start    int
+	// Idents is how many identifiers the parser numbered in the function
+	// (Ident.ID): those of its parameters and its body, but not of the
+	// functions in it, nor an arrow's parameters, numbered as the code
+	// around it before the arrow is seen.
+	Idents uint32
+	Start  int
 	// End is the offset just past the function's last character, which is what
 	// lets Function.prototype.toString return the source as written.
 	End int
@@ -366,7 +392,7 @@ type Call struct {
 func (n *Call) TracePos() int {
 	switch c := n.Callee.(type) {
 	case *Ident:
-		if !c.Paren {
+		if !c.Paren() {
 			return int(n.Start)
 		}
 	case *Member:

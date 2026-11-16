@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -49,19 +50,27 @@ func TestOutputIsWhole(t *testing.T) {
 	v := reflect.TypeFor[bytecode.Function]()
 	for i := range v.NumField() {
 		name := v.Field(i).Name
-		if name == "Code" || name == "Constants" || name == "Reg" {
-			// Listed in their own forms, Reg, the register code, only
-			// where the backend is on.
+		if name == "Code" || name == "Constants" {
+			// Listed in their own forms.
 			continue
 		}
 		if !strings.Contains(got, "\n"+name+": ") {
 			t.Errorf("no field %s", name)
 		}
 	}
+	r := reflect.TypeFor[bytecode.RegCode]()
+	for i := range r.NumField() {
+		if name := r.Field(i).Name; name != "Code" && !strings.Contains(got, "\nreg "+name+": ") {
+			t.Errorf("no register code's field %s", name)
+		}
+	}
 	for _, want := range []string{
 		"=== root/a.js mode script variant 0\n", "=== root/a.js mode debug variant 0\n",
 		"function main/0 sum\n", "debug_stmt", " @", "const ", "lines 0:0 1:1 2:1 3:1 ",
 		"Debug: & {",
+		// The register code of the arrow, compiled as its first call
+		// would, an instruction a line.
+		"\nReg: <nil>\nr    0 ", " get_upval ", "\nreg SrcPC: [",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("no %q in\n%s", want, got)
@@ -70,6 +79,82 @@ func TestOutputIsWhole(t *testing.T) {
 	got = show(t, write(t, "a.js", "let a; let a;\n1 +\n"), options{modes: "script"})
 	if want := `error *parser.Error &parser.Error{Msg:"unexpected end of input"`; !strings.Contains(got, want) {
 		t.Errorf("no %q in\n%s", want, got)
+	}
+}
+
+// TestRegOutputIsWhole pins that a difference in any field of a
+// function's register code shows in the output, and so in a dump's hash.
+func TestRegOutputIsWhole(t *testing.T) {
+	m, err := modeOf("script")
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := func(res result) string {
+		var b strings.Builder
+		d := writer{w: &b, seen: map[uintptr]int{}}
+		d.result(res, script)
+		return b.String()
+	}
+	res := compile("a.js", script, m)
+	if res.fn == nil {
+		t.Fatal(res.err)
+	}
+	sum := res.fn.Constants[0].Fn
+	rc := sum.RegCompiled()
+	if rc == nil {
+		t.Fatal("sum has no register code")
+	}
+	base := write(res)
+	v := reflect.ValueOf(rc).Elem()
+	plant := func(name string, change func(f reflect.Value)) {
+		f := v.FieldByName(name)
+		saved := reflect.New(f.Type()).Elem()
+		saved.Set(f)
+		change(f)
+		if write(res) == base {
+			t.Errorf("a change of %s does not show", name)
+		}
+		f.Set(saved)
+	}
+	for i := range v.NumField() {
+		name := v.Type().Field(i).Name
+		plant(name, func(f reflect.Value) {
+			switch f.Kind() {
+			case reflect.Slice:
+				f.Set(reflect.Append(f, reflect.New(f.Type().Elem()).Elem()))
+			case reflect.Int:
+				f.SetInt(f.Int() + 1)
+			case reflect.Uint32:
+				f.SetUint(f.Uint() + 1)
+			case reflect.Bool:
+				f.SetBool(!f.Bool())
+			default:
+				t.Fatalf("no change planted in %s, a %v", name, f.Kind())
+			}
+		})
+	}
+	// An operand of an instruction, and an element of a table.
+	plant("Code", func(f reflect.Value) {
+		c := slices.Clone(rc.Code)
+		c[len(c)-1] ^= 1 << 32
+		f.Set(reflect.ValueOf(c))
+	})
+	plant("SrcPC", func(f reflect.Value) {
+		c := slices.Clone(rc.SrcPC)
+		c[0]++
+		f.Set(reflect.ValueOf(c))
+	})
+	if write(res) != base {
+		t.Fatal("the output changed with nothing planted")
+	}
+	// A refusal shows by its reason, and so does a panic.
+	refusals.Store(sum, "planted")
+	if write(res) == base {
+		t.Error("a refusal does not show")
+	}
+	res.regPanics = map[*bytecode.Function]string{sum: "planted"}
+	if write(res) == base {
+		t.Error("a panic does not show")
 	}
 }
 

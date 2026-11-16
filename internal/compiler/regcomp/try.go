@@ -524,7 +524,7 @@ func (g *gen) forOfStmt(left ast.Node, right ast.Expr, body ast.Stmt, await, in 
 		g.forOfPattern(target, right, body, await, in, label, pos, lexical, left)
 		return
 	}
-	res, ok := g.rec.Write[id]
+	res, ok := g.rec.WriteOf(id)
 	if !ok {
 		g.fail("a store the record does not resolve")
 		return

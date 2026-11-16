@@ -367,8 +367,9 @@ stack compiler is the source of truth for the stack form, a register backend
 change must leave the stack code exactly as it was: compilediff's verdict
 of no difference over the test262 tree and the suites is the proof, and the
 register code is compared the same way between two revisions of the
-backend, by its own listing. Once the stack form is retired, compilediff
-compares register code alone.
+backend: each function's, compiled as its first call would, every field of
+its `RegCode`, or the refusal or panic that left it none. Once the stack
+form is retired, compilediff compares register code alone.
 
 ### Compiled at the first call
 
@@ -1135,9 +1136,11 @@ backlog.
 1. **The JIT on register code (Stage 3).** The remaining feedback-parity
    gaps (RegExp literals, call frequencies, inlined callees' feedback);
    inlining register callees; top-level code, generators and async
-   functions; the feedback snapshot for background compiles. Then the
-   switch-over: JIT runtimes run the register tier, and the JIT's
-   stack-form path is removed.
+   functions; the feedback snapshot for background compiles. Then a
+   profiling and optimization round of the register JIT against the
+   stack-form JIT in the same build, as the interpreter's rounds were.
+   Then the switch-over: JIT runtimes run the register tier, and the
+   JIT's stack-form path is removed.
 2. **The arm64 native port** (done, but its timing). An arm64 emitter
    in nativegen, the same handlers and tables as amd64's, and `regArch`
    on for arm64; checked under qemu and on CI's Linux and macOS arm64

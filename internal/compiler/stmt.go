@@ -2,10 +2,12 @@ package compiler
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/go-quickjs/go-quickjs/internal/ast"
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/compiler/regcomp"
+	"github.com/go-quickjs/go-quickjs/internal/fold"
 )
 
 // compileStatements compiles a statement list, hoisting the function
@@ -13,15 +15,70 @@ import (
 func (c *compiler) compileStatements(body []ast.Stmt) {
 	c.hoistBlockDeclarations(body, true)
 	if has, async := usingKind(body); has {
-		c.compileDisposeScope(body[0].Pos(), async, func() {
-			for _, s := range body {
-				c.compileStatement(s)
-			}
-		})
+		c.compileDisposeScope(body[0].Pos(), async, func() { c.compileList(body) })
 		return
 	}
+	c.compileList(body)
+}
+
+// compileList compiles a list's statements in turn, those after one that
+// always leaves the list -- a return, a throw, a break, a continue, as
+// its compile notes (c.leaves, fold.Leaves) -- for what compiling them
+// checks alone: nothing reaches them, and their code is dropped
+// (compileDropped), as V8 drops what follows such a statement. It leaves
+// c.leaves saying whether the list is always left so.
+func (c *compiler) compileList(body []ast.Stmt) {
+	dead := false
 	for _, s := range body {
+		if dead {
+			c.compileDropped(func() { c.compileStatement(s) })
+			continue
+		}
 		c.compileStatement(s)
+		dead = c.leaves && fold.On(fold.Unreachable)
+	}
+	c.leaves = dead
+}
+
+// compileDropped compiles f, code nothing reaches -- a statement after a
+// return, the branch a constant test never takes -- for what compiling it
+// does besides its code: its early errors, which the compiler reports as
+// it goes, and the bindings, captures and constants it makes, which are
+// the function's whatever runs. The code it emits is dropped, with its
+// positions, its places a debugger stops at and its scopes, and the jumps
+// out of it that the statements around it would have patched.
+func (c *compiler) compileDropped(f func()) {
+	n := len(c.fn.Code)
+	lines, lastPos, maxStack := len(c.fn.Lines), c.lastPos, c.maxStack
+	scopes := len(c.fn.EvalScopes)
+	stmts := 0
+	if c.fn.Debug != nil {
+		stmts = len(c.fn.Debug.Statements)
+	}
+	var tail []bool
+	if len(c.targets) > n {
+		tail = slices.Clone(c.targets[n:])
+	}
+	// Nothing of the dropped code is fused into the last instruction kept.
+	c.markTarget(n)
+	f()
+	c.fn.Code = c.fn.Code[:n]
+	c.fn.Lines = c.fn.Lines[:lines]
+	c.lastPos, c.maxStack = lastPos, maxStack
+	c.fn.EvalScopes = c.fn.EvalScopes[:scopes]
+	if c.fn.Debug != nil {
+		c.fn.Debug.Statements = c.fn.Debug.Statements[:stmts]
+	}
+	c.targets = append(c.targets[:n], tail...)
+	kept := func(pcs []int) []int {
+		return slices.DeleteFunc(pcs, func(pc int) bool { return pc >= n })
+	}
+	for i := range c.loops {
+		c.loops[i].breaks = kept(c.loops[i].breaks)
+		c.loops[i].continues = kept(c.loops[i].continues)
+	}
+	for i := range c.finallys {
+		c.finallys[i].returns = kept(c.finallys[i].returns)
 	}
 }
 
@@ -340,6 +397,9 @@ func (c *compiler) resetCompletion() {
 func (c *compiler) compileStatement(s ast.Stmt) {
 	c.enter(s.Pos())
 	defer c.leave()
+	// What its list needs of it once it is compiled: whether it always
+	// leaves the list, which a block's or an if's compile sets.
+	defer func() { c.leaves = fold.Leaves(s, c.leaves) }()
 	if c.opts.Debug {
 		c.debugStatement(s)
 	}
@@ -696,6 +756,28 @@ func (c *compiler) storeVar(name string) {
 }
 
 func (c *compiler) compileIf(n *ast.IfStmt) {
+	// A test that folds runs one branch, and the other is never reached
+	// (fold.Dead): as V8's ToBooleanIsTrue, ToBooleanIsFalse. The if is
+	// always left where the branch that runs is.
+	if truthy, ok := fold.Dead(n.Test); ok {
+		leaves := false
+		if truthy {
+			c.compileStatement(n.Cons)
+			leaves = c.leaves
+		} else {
+			c.compileDropped(func() { c.compileStatement(n.Cons) })
+		}
+		if n.Alt != nil {
+			if truthy {
+				c.compileDropped(func() { c.compileStatement(n.Alt) })
+			} else {
+				c.compileStatement(n.Alt)
+				leaves = c.leaves
+			}
+		}
+		c.leaves = leaves
+		return
+	}
 	// if (test) break; is the condition's own jumps, to where the break goes,
 	// when the break has nothing to undo on its way: so is a continue.
 	if n.Alt == nil {
@@ -707,6 +789,7 @@ func (c *compiler) compileIf(n *ast.IfStmt) {
 				c.loops[i].breaks = append(c.loops[i].breaks, jumps...)
 			}
 			c.pool.putJumps(jumps)
+			c.leaves = false
 			return
 		}
 	}
@@ -715,12 +798,16 @@ func (c *compiler) compileIf(n *ast.IfStmt) {
 
 	if n.Alt == nil {
 		c.patchTestJumps(elseJumps)
+		c.leaves = false
 		return
 	}
+	// The if is always left where both branches are.
+	leaves := c.leaves
 	endJump := c.emitJump(bytecode.OpJump)
 	c.patchTestJumps(elseJumps)
 	c.compileStatement(n.Alt)
 	c.patchJump(endJump)
+	c.leaves = leaves && c.leaves
 }
 
 // pushLoop begins a loop context for break and continue.
@@ -783,6 +870,16 @@ func (c *compiler) continueAt(target int) int {
 }
 
 func (c *compiler) compileWhile(n *ast.WhileStmt) {
+	if truthy, ok := fold.Dead(n.Test); ok && !truthy {
+		// A loop whose test is false runs nothing (fold.Dead).
+		c.compileDropped(func() { c.compileLoopWhile(n) })
+		return
+	}
+	c.compileLoopWhile(n)
+}
+
+// compileLoopWhile compiles a while loop.
+func (c *compiler) compileLoopWhile(n *ast.WhileStmt) {
 	start := c.here()
 	c.pushLoop(nil, true)
 	c.debugExpr(n.Test)
@@ -854,7 +951,13 @@ func (c *compiler) compileFor(n *ast.ForStmt) {
 			c.emit(bytecode.OpDrop, 0, 0)
 		}
 	}
-	c.compileForLoop(n, firstSlot, perIteration)
+	if truthy, ok := fold.Dead(n.Test); ok && !truthy {
+		// A loop whose test is false runs its init clause alone
+		// (fold.Dead).
+		c.compileDropped(func() { c.compileForLoop(n, firstSlot, perIteration) })
+	} else {
+		c.compileForLoop(n, firstSlot, perIteration)
+	}
 	c.endScope()
 }
 
@@ -1449,9 +1552,7 @@ func (c *compiler) compileSwitch(n *ast.SwitchStmt) {
 	starts := make([]int, len(n.Cases))
 	for i, cs := range n.Cases {
 		starts[i] = c.here()
-		for _, s := range cs.Body {
-			c.compileStatement(s)
-		}
+		c.compileList(cs.Body)
 	}
 	end := c.here()
 
@@ -1476,7 +1577,7 @@ func (c *compiler) compileSwitch(n *ast.SwitchStmt) {
 // nameOf returns the name a declaration target implies, used to give an
 // anonymous function the name of the variable it is assigned to.
 func nameOf(target ast.Expr) string {
-	if id, ok := target.(*ast.Ident); ok && !id.Paren {
+	if id, ok := target.(*ast.Ident); ok && !id.Paren() {
 		return id.Name
 	}
 	return ""

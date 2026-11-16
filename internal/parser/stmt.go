@@ -459,7 +459,7 @@ func (p *parser) parseFor() ast.Stmt {
 		expr := p.parseExpr()
 		if p.isKeyword("in") || p.isContextual("of") {
 			if asyncHead && p.isContextual("of") {
-				if id, ok := expr.(*ast.Ident); ok && id.Name == "async" && !id.Paren {
+				if id, ok := expr.(*ast.Ident); ok && id.Name == "async" && !id.Paren() {
 					p.errorf("\"async\" cannot be the left-hand side of a for-of")
 				}
 			}

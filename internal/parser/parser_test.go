@@ -1,8 +1,12 @@
 package parser
 
 import (
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/go-quickjs/go-quickjs/internal/ast"
+	"github.com/go-quickjs/go-quickjs/internal/wtf8"
 )
 
 // parseOK parses src and fails the test if it does not parse.
@@ -67,10 +71,11 @@ func TestLiterals(t *testing.T) {
 
 func TestOperatorPrecedence(t *testing.T) {
 	tests := []struct{ src, want string }{
-		{"1 + 2 * 3", "(+ 1 (* 2 3))"},
-		{"1 * 2 + 3", "(+ (* 1 2) 3)"},
-		{"1 + 2 + 3", "(+ (+ 1 2) 3)"},     // left-associative
-		{"2 ** 3 ** 4", "(** 2 (** 3 4))"}, // right-associative
+		// Names, not numbers, which the parser folds (TestParseFolds).
+		{"a + b * c", "(+ a (* b c))"},
+		{"a * b + c", "(+ (* a b) c)"},
+		{"a + b + c", "(+ (+ a b) c)"},     // left-associative
+		{"a ** b ** c", "(** a (** b c))"}, // right-associative
 		{"a || b && c", "(|| a (&& b c))"},
 		{"a | b ^ c & d", "(| a (^ b (& c d)))"},
 		{"a == b < c", "(== a (< b c))"},
@@ -103,7 +108,116 @@ func TestUnaryBeforeExponentIsAnError(t *testing.T) {
 	// `-2 ** 2` is ambiguous to a reader, so the grammar rejects it.
 	checkError(t, "-2 ** 2", "requires parentheses")
 	checkError(t, "typeof a ** 2", "requires parentheses")
-	checkParse(t, "(-2) ** 2", "(** (- 2) 2)")
+	checkParse(t, "(-a) ** 2", "(** (- a) 2)")
+}
+
+// TestParseFolds pins the operators the parser folds as it builds them, as
+// V8's does (internal/fold): ! of a literal, -, + and ~ of a number, - of
+// a BigInt, and the arithmetic, shift and bitwise operators on two
+// numbers, from the bottom up, in the order the grammar binds them; and
+// what it leaves: names, which may be rebound, typeof and void, which the
+// compiler folds, a string's +, and + of a BigInt, which throws.
+func TestParseFolds(t *testing.T) {
+	for _, tt := range []struct{ src, want string }{
+		{"1 + 2 * 3", "7"},
+		{"(1 + 2) * 3", "9"},
+		{"2 ** 3 ** 2", "512"},
+		{"(-2) ** 2", "4"},
+		{"8 - 2 - 1", "5"},
+		{"1 << 31", "-2147483648"},
+		{"-1 >>> 0", "4294967295"},
+		{"~5", "-6"},
+		{"- -1", "1"},
+		{"!0", "true"},
+		{`!""`, "true"},
+		{"!null", "true"},
+		{"!0n", "true"},
+		{"!!1", "true"},
+		{"-1n", "-1n"},
+		{"-0x10n", "-16n"},
+		{"a + 1 + 2", "(+ (+ a 1) 2)"},
+		{"1 + 2 + a", "(+ 3 a)"},
+		{"!a", "(! a)"},
+		{"-NaN", "(- NaN)"},
+		{"!undefined", "(! undefined)"},
+		{"typeof 1", "(typeof 1)"},
+		{"void 0", "(void 0)"},
+		{`1 + "2"`, `(+ 1 "2")`},
+		{"+1n", "(+ 1n)"},
+	} {
+		checkParse(t, tt.src, tt.want)
+	}
+}
+
+// TestParseStringFolds pins + of two string literals, which the parser
+// joins as V8's does: a chain's left run, and the run at the end of a chain
+// whose left is not a literal (expr + "a" + "b" is expr + "ab"); a
+// template with no substitution as a string; and what it leaves: a number
+// and a string, which V8 does not join, a run in the middle of a chain, a
+// template with a substitution or an invalid escape, and a tagged one.
+func TestParseStringFolds(t *testing.T) {
+	for _, tt := range []struct{ src, want string }{
+		{`"a" + "b"`, `"ab"`},
+		{`"a" + "b" + "c"`, `"abc"`},
+		{`"a" + 'b' + ` + "`c`", `"abc"`},
+		{"`a` + `b`", `"ab"`},
+		{`"" + ""`, `""`},
+		{`x + "a" + "b"`, `(+ x "ab")`},
+		{`x + "a" + "b" + y`, `(+ (+ x "ab") y)`},
+		{`x + "a" + "b" + y + "c" + "d"`, `(+ (+ (+ x "ab") y) "cd")`},
+		{`"a" + "b" + x + "c"`, `(+ (+ "ab" x) "c")`},
+		{`"a" + ("b" + "c")`, `"abc"`},
+		{`("a" + x) + "b" + "c"`, `(+ (+ "a" x) "bc")`},
+		{`"a" + 1`, `(+ "a" 1)`},
+		{`1 + "a"`, `(+ 1 "a")`},
+		{`"a" + 1 + "b"`, `(+ (+ "a" 1) "b")`},
+		{`"a" - "b"`, `(- "a" "b")`},
+		{`"a" + "b" * 2`, `(+ "a" (* "b" 2))`},
+		{"`a${x}` + \"b\"", `(+ (tpl "a" x "") "b")`},
+		{"\"a\" + t`b`", `(+ "a" (tagged t (tpl "b")))`},
+	} {
+		checkParse(t, tt.src, tt.want)
+	}
+	// The halves of a surrogate pair in two literals are the pair, as the
+	// runtime's concatenation makes them; a lone half stays a lone half.
+	for _, tt := range []struct {
+		src  string
+		want []uint16
+	}{
+		{`"\uD800" + "\uDC00"`, []uint16{0xD800, 0xDC00}},
+		{`"\uD800" + "x"`, []uint16{0xD800, 'x'}},
+		{`"x" + "\uDC00"`, []uint16{'x', 0xDC00}},
+		{`"\uDC00" + "\uD800"`, []uint16{0xDC00, 0xD800}},
+	} {
+		prog, err := Parse(tt.src, Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		lit, ok := prog.Body[0].(*ast.ExprStmt).X.(*ast.StringLit)
+		if !ok {
+			t.Fatalf("%s: not folded", tt.src)
+		}
+		if got := wtf8.ToUTF16(lit.Value); !slices.Equal(got, tt.want) {
+			t.Errorf("%s: %x, want %x", tt.src, got, tt.want)
+		}
+		if tt.want[0] == 0xD800 && tt.want[1] == 0xDC00 && lit.Value != "\U00010000" {
+			t.Errorf("%s: the pair is %q, not the code point's one spelling", tt.src, lit.Value)
+		}
+	}
+	// A string literal that starts a statement and is joined is no longer
+	// the prologue's directive, so the "use strict" after it is not one.
+	checkParse(t, `function f() { "a" + "b"; "use strict"; with (x) {} }`,
+		`(decl (function f () ("ab" "use strict" (with x block()))))`)
+	// Past the most a string may have, the literals stay apart, for the
+	// program to throw as it runs.
+	defer func(n int) { maxFoldedString = n }(maxFoldedString)
+	maxFoldedString = 4
+	checkParse(t, `"ab" + "cd"`, `"abcd"`)
+	checkParse(t, `"ab" + "cd" + "e"`, `(+ "abcd" "e")`)
+	checkParse(t, `"ab" + "cde"`, `(+ "ab" "cde")`)
+	// Lengths are in UTF-16 code units: a pair is two, as at run time.
+	checkParse(t, `"\uD800" + "\uDC00x"`, `"𐀀x"`)
+	checkParse(t, `"\uD800" + "\uDC00xyz"`, `(+ "\xed\xa0\x80" "\xed\xb0\x80xyz")`)
 }
 
 func TestUpdateExpressions(t *testing.T) {
@@ -357,7 +471,7 @@ func TestAutomaticSemicolonInsertion(t *testing.T) {
 	checkParse(t, "a\n++b", "a (pre++ b)")
 	// No ASI when the next line continues the expression.
 	checkParse(t, "a\n.b", "(. a b)")
-	checkParse(t, "a = 1\n+ 2", "(= a (+ 1 2))")
+	checkParse(t, "a = b\n+ c", "(= a (+ b c))")
 	// `throw` is restricted and has no operand-less form, so this is an error.
 	checkError(t, "throw\n1", "newline is not allowed")
 	checkError(t, "a b", "expected ';'")

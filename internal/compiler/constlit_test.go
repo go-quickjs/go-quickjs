@@ -30,7 +30,9 @@ func TestConstLiteralReads(t *testing.T) {
 		{`function f(k) { switch (k) { case 0: const X = 1; case 1: const g = () => X; return g } }`, "g", false},
 		{`function f() { let X = 1; const g = () => X; return g }`, "g", false},
 		{`function f() { const X = {}; const g = () => X; return g }`, "g", false},
-		{`function f() { const X = -1; const g = () => X; return g }`, "g", false},
+		// -1 is a literal: the parser folds it (internal/fold).
+		{`function f() { const X = -1; const g = () => X; return g }`, "g", true},
+		{`function f() { const X = -a; const g = () => X; return g }`, "g", false},
 		{`const X = null; function g() { return X }`, "g", false},
 	}
 	for _, tc := range cases {

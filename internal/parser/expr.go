@@ -275,9 +275,15 @@ func (p *parser) parseBinary(minPrec int) ast.Expr {
 // parseBinaryFrom performs precedence climbing over binary operators, starting
 // from an already-parsed left operand.
 func (p *parser) parseBinaryFrom(left ast.Expr, minPrec int) ast.Expr {
+	// A run of string literals the chain joins (strCat), which left ends
+	// with until the run is done; nil while there is none.
+	var cat *strCat
 	for {
 		op, prec, ok := p.peekBinaryOp()
 		if !ok || prec <= minPrec {
+			if cat != nil {
+				left = cat.done(p, left)
+			}
 			return left
 		}
 		p.next()
@@ -290,6 +296,16 @@ func (p *parser) parseBinaryFrom(left ast.Expr, minPrec int) ast.Expr {
 			right = p.parseBinaryFrom(p.parseOperandAt(prec), prec)
 		}
 
+		if cat != nil {
+			if op == "+" && cat.add(right) {
+				continue
+			}
+			left, cat = cat.done(p, left), nil
+		} else if op == "+" && isStrLit(right) {
+			if cat = p.startCat(left, right); cat != nil {
+				continue
+			}
+		}
 		switch op {
 		case "&&", "||", "??":
 			// `a ?? b || c` is a syntax error without parentheses, because the
@@ -303,7 +319,7 @@ func (p *parser) parseBinaryFrom(left ast.Expr, minPrec int) ast.Expr {
 			}
 			left = p.nodes.logicalOp(op, left, right)
 		default:
-			left = p.nodes.binaryOp(op, left, right)
+			left = p.binaryOf(op, left, right)
 		}
 	}
 }
@@ -356,7 +372,7 @@ func (p *parser) parseUnary() ast.Expr {
 		if p.isPunct("**") {
 			p.errorf("unary %q before \"**\" requires parentheses", op)
 		}
-		return p.nodes.unaryOp(op, operand, start)
+		return p.unaryOf(op, operand, start)
 
 	case p.isKeyword("typeof"), p.isKeyword("void"), p.isKeyword("delete"):
 		op := p.tok.Value
@@ -1053,6 +1069,7 @@ func (p *parser) parseObjectProperty() ast.Property {
 	// A shorthand is an identifier reference, so a word that cannot be referred
 	// to where it stands cannot be one.
 	p.checkIdentReference(id.Name, p.tok)
+	p.nodes.numberIdent(id)
 	if p.isPunct("=") {
 		p.next()
 		def := p.parseAssign()

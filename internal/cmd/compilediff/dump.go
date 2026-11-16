@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -16,12 +17,16 @@ import (
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/compiler"
+	"github.com/go-quickjs/go-quickjs/internal/compiler/regcomp"
 	"github.com/go-quickjs/go-quickjs/internal/parser"
 )
 
 type options struct {
 	mutants, mutmax int
 	modes, file     string
+	// perFunc dumps a line for each function of each compile, rather than
+	// one for each file: the fold command's.
+	perFunc bool
 }
 
 var allModes = []string{"script", "strict", "module", "debug", "moddebug", "quirks", "eval"}
@@ -107,12 +112,60 @@ type result struct {
 	fn   *bytecode.Function
 	info any
 	err  string
+	// regPanics is what compiling a function's register code panicked
+	// with, by function.
+	regPanics map[*bytecode.Function]string
 }
 
+// The register form is compiled wherever the tool runs, as on amd64 and
+// arm64, where the register interpreter is the default, and each refusal
+// of the register backend is kept, by function, until the function is
+// written.
+func init() {
+	compiler.SetRegisterForm(true)
+	regcomp.OnRefuse = func(fn *bytecode.Function, why string) {
+		if v, ok := refusals.Load(fn); ok {
+			why = v.(string) + "; " + why
+		}
+		refusals.Store(fn, why)
+	}
+}
+
+var refusals sync.Map // *bytecode.Function -> string
+
+// compileReg compiles the register code of fn and of the functions it
+// holds, as their first calls would, and keeps what a compile panicked
+// with in res.
+func compileReg(fn *bytecode.Function, res *result) {
+	func() {
+		defer func() {
+			if e := recover(); e != nil {
+				if res.regPanics == nil {
+					res.regPanics = map[*bytecode.Function]string{}
+				}
+				res.regPanics[fn] = fmt.Sprint(e)
+			}
+		}()
+		fn.RegCode()
+	}()
+	for _, c := range fn.Constants {
+		if c.Fn != nil {
+			compileReg(c.Fn, res)
+		}
+	}
+}
+
+// compile compiles text in mode m, and then the register code of every
+// function of it, which the runtime compiles at a function's first call.
 func compile(name, text string, m mode) (res result) {
 	defer func() {
 		if e := recover(); e != nil {
 			res = result{err: fmt.Sprintf("panic: %v", e)}
+		}
+	}()
+	defer func() {
+		if res.fn != nil {
+			compileReg(res.fn, &res)
 		}
 	}()
 	prog, err := parser.Parse(text, m.p)
@@ -139,30 +192,66 @@ func compile(name, text string, m mode) (res result) {
 type writer struct {
 	w    io.Writer
 	seen map[uintptr]int
+	res  *result
+	// perFunc, where set, is given each function's own output, by its
+	// path, rather than its being written to w; and a compile's error, and
+	// its script's, as functions "error" and "script".
+	perFunc func(path string, text []byte)
 }
 
 var (
 	functionType = reflect.TypeFor[bytecode.Function]()
 	scriptType   = reflect.TypeFor[bytecode.Script]()
+	regCodeType  = reflect.TypeFor[bytecode.RegCode]()
 )
 
 func (d *writer) result(res result, text string) {
 	if res.fn == nil {
-		fmt.Fprintln(d.w, "error", res.err)
+		d.part("error", func() { fmt.Fprintln(d.w, "error", res.err) })
 		return
 	}
+	d.res = &res
 	d.function("main", res.fn)
-	if res.info != nil {
-		fmt.Fprint(d.w, "module ")
-		d.value(reflect.ValueOf(res.info))
-		fmt.Fprintln(d.w)
+	d.part("script", func() {
+		if res.info != nil {
+			fmt.Fprint(d.w, "module ")
+			d.value(reflect.ValueOf(res.info))
+			fmt.Fprintln(d.w)
+		}
+		d.lineTable(res.fn.Script, text)
+	})
+}
+
+// part writes what write writes, as the output of the function at path
+// where perFunc is set.
+func (d *writer) part(path string, write func()) {
+	if d.perFunc == nil {
+		write()
+		return
 	}
-	d.lineTable(res.fn.Script, text)
+	w := d.w
+	var b bytes.Buffer
+	d.w = &b
+	write()
+	d.w = w
+	d.perFunc(path, b.Bytes())
 }
 
 // function writes all of fn's fields, each on a line, and an instruction
 // or a constant a line each, and then the functions it holds.
 func (d *writer) function(path string, fn *bytecode.Function) {
+	d.part(path, func() { d.fields(path, fn) })
+	n := 0
+	for _, c := range fn.Constants {
+		if c.Fn != nil {
+			d.function(fmt.Sprintf("%s/%d", path, n), c.Fn)
+			n++
+		}
+	}
+}
+
+// fields writes fn's own fields.
+func (d *writer) fields(path string, fn *bytecode.Function) {
 	fmt.Fprintf(d.w, "function %s %s\n", path, fn.Name)
 	v := reflect.ValueOf(fn).Elem()
 	for i := range v.NumField() {
@@ -175,17 +264,7 @@ func (d *writer) function(path string, fn *bytecode.Function) {
 			}
 			continue
 		case "Reg":
-			// The register backend's code, compiled only where the
-			// register interpreter is on (bytecode.RegDefault, QJS_REG),
-			// and then printed in its own listing: a
-			// revision without the field writes the same.
-			// Read by reflection, as the tool is built at revisions without
-			// the field too.
-			if r := v.Field(i); !r.IsNil() {
-				if s, ok := r.Interface().(fmt.Stringer); ok {
-					fmt.Fprint(d.w, s.String())
-				}
-			}
+			d.reg(fn)
 			continue
 		case "Constants":
 			for i, c := range fn.Constants {
@@ -197,12 +276,42 @@ func (d *writer) function(path string, fn *bytecode.Function) {
 		d.value(v.Field(i))
 		fmt.Fprintln(d.w)
 	}
-	n := 0
-	for _, c := range fn.Constants {
-		if c.Fn != nil {
-			d.function(fmt.Sprintf("%s/%d", path, n), c.Fn)
-			n++
+}
+
+// reg writes fn's register code: every field of its RegCode, an
+// instruction a line with its word and its listing, or, where it has none,
+// why: the backend's refusal or what its compile panicked with.
+func (d *writer) reg(fn *bytecode.Function) {
+	why, _ := refusals.LoadAndDelete(fn)
+	var panicked string
+	if d.res != nil {
+		panicked = d.res.regPanics[fn]
+	}
+	rc := fn.RegCompiled()
+	switch {
+	case panicked != "":
+		fmt.Fprintf(d.w, "Reg: panic %q %v\n", panicked, why)
+		return
+	case fn.Reg == nil:
+		fmt.Fprintf(d.w, "Reg: nil %v\n", why)
+		return
+	case rc == nil:
+		fmt.Fprintf(d.w, "Reg: none %v\n", why)
+		return
+	}
+	fmt.Fprintf(d.w, "Reg: %v\n", why)
+	v := reflect.ValueOf(rc).Elem()
+	for i := range v.NumField() {
+		f := regCodeType.Field(i)
+		if f.Name == "Code" {
+			for pc, w := range rc.Code {
+				fmt.Fprintf(d.w, "r%5d %016x %s\n", pc, uint64(w), rc.Format(pc))
+			}
+			continue
 		}
+		fmt.Fprint(d.w, "reg ", f.Name, ": ")
+		d.value(v.Field(i))
+		fmt.Fprintln(d.w)
 	}
 }
 
@@ -368,12 +477,23 @@ func compileFile(w io.Writer, f source, modes []string, o options, verbose bool)
 	var prev result
 	var prevText string
 	var prevHead string
+	var prevKey string
 	flush := func() {
-		if prevHead != "" {
-			fmt.Fprintln(w, prevHead)
-			d := writer{w: w, seen: map[uintptr]int{}}
-			d.result(prev, prevText)
+		if prevHead == "" {
+			return
 		}
+		if o.perFunc {
+			d := writer{seen: map[uintptr]int{}, perFunc: func(path string, text []byte) {
+				h := fnv.New64a()
+				h.Write(text)
+				fmt.Fprintf(w, "%s\t%s\t%016x\t%s\n", prevKey, path, h.Sum64(), regState(text))
+			}}
+			d.result(prev, prevText)
+			return
+		}
+		fmt.Fprintln(w, prevHead)
+		d := writer{w: w, seen: map[uintptr]int{}}
+		d.result(prev, prevText)
 	}
 	seed := fnv.New64a()
 	seed.Write([]byte(f.name))
@@ -405,6 +525,7 @@ func compileFile(w io.Writer, f source, modes []string, o options, verbose bool)
 			}
 			prev, prevText = res, src
 			prevHead = fmt.Sprintf("=== %s mode %s variant %d", f.name, name, v)
+			prevKey = fmt.Sprintf("%s\t%s %d", f.name, name, v)
 			if verbose && v > 0 {
 				prevHead += fmt.Sprintf(" source %q", src)
 			}
@@ -426,6 +547,7 @@ func dumpAll(out, log io.Writer, roots []string, o options) error {
 	modes := modeList(o)
 	results := make([]summary, len(files))
 	errs := make([]error, len(files))
+	lines := make([][]byte, len(files))
 	next := make(chan int)
 	var wg sync.WaitGroup
 	for range runtime.GOMAXPROCS(0) {
@@ -433,6 +555,12 @@ func dumpAll(out, log io.Writer, roots []string, o options) error {
 		go func() {
 			defer wg.Done()
 			for i := range next {
+				if o.perFunc {
+					var b bytes.Buffer
+					results[i], errs[i] = compileFile(&b, files[i], modes, o, false)
+					lines[i] = b.Bytes()
+					continue
+				}
 				h := fnv.New64a()
 				w := bufio.NewWriterSize(h, 1<<16)
 				s, err := compileFile(w, files[i], modes, o, false)
@@ -454,7 +582,11 @@ func dumpAll(out, log io.Writer, roots []string, o options) error {
 		if errs[i] != nil {
 			return errs[i]
 		}
-		fmt.Fprintf(w, "%s\t%016x\t%d\t%d\t%d\n", files[i].name, s.hash, s.made, s.rejected, s.crash)
+		if o.perFunc {
+			w.Write(lines[i])
+		} else {
+			fmt.Fprintf(w, "%s\t%016x\t%d\t%d\t%d\n", files[i].name, s.hash, s.made, s.rejected, s.crash)
+		}
 		total.made += s.made
 		total.rejected += s.rejected
 		total.crash += s.crash

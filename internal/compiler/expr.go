@@ -8,6 +8,7 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/ast"
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/compiler/regcomp"
+	"github.com/go-quickjs/go-quickjs/internal/fold"
 )
 
 // compileExprForEffect emits code for an expression whose value is discarded:
@@ -181,6 +182,14 @@ func (c *compiler) emitTestJumpIfFalse(test ast.Expr) []int {
 func (c *compiler) emitTestJumps(test ast.Expr, jumpIf bool, jumps []int) []int {
 	c.enter(test.Pos())
 	defer c.leave()
+	// A constant -- a literal, or an operator that folds, !0 -- is true
+	// or false as the compile knows (fold.Test).
+	if truthy, ok := fold.Test(test); ok {
+		if truthy == jumpIf {
+			jumps = append(jumps, c.emitJump(bytecode.OpJump))
+		}
+		return jumps
+	}
 	switch n := test.(type) {
 	case *ast.BoolLit:
 		if n.Value == jumpIf {
@@ -462,6 +471,45 @@ func (c *compiler) compileNumber(v float64) {
 		return
 	}
 	c.emit(bytecode.OpPushConst, c.numberConst(v), 0)
+}
+
+// compileConst pushes v, a value the compile knows (fold), as the
+// literal of it would be.
+func (c *compiler) compileConst(v fold.Const) {
+	switch v.Kind {
+	case fold.Number:
+		c.compileNumber(v.Num)
+	case fold.String:
+		if v.Str == "" {
+			c.emit(bytecode.OpPushEmptyString, 0, 0)
+		} else {
+			c.emit(bytecode.OpPushConst, c.stringConst(v.Str), 0)
+		}
+	case fold.Bool:
+		if v.Bool {
+			c.emit(bytecode.OpPushTrue, 0, 0)
+		} else {
+			c.emit(bytecode.OpPushFalse, 0, 0)
+		}
+	case fold.Null:
+		c.emit(bytecode.OpPushNull, 0, 0)
+	case fold.BigInt:
+		c.emit(bytecode.OpPushConst, c.addConst(bytecode.Constant{Kind: bytecode.ConstBigInt, Str: v.Str}), 0)
+	default:
+		c.emit(bytecode.OpPushUndef, 0, 0)
+	}
+}
+
+// foldsVoid reports whether void's operand e is a value the compile
+// knows, which runs nothing and need not be evaluated: a literal, as void
+// 0 always was, or an operator that folds (fold).
+func foldsVoid(e ast.Expr) bool {
+	switch e.(type) {
+	case *ast.NumberLit, *ast.StringLit, *ast.BoolLit, *ast.NullLit, *ast.BigIntLit:
+		return true
+	}
+	_, ok := fold.Value(e)
+	return ok
 }
 
 // isNegZero reports whether v is negative zero, which must not take the integer
@@ -1048,6 +1096,16 @@ func propKeyName(key ast.Expr) string {
 
 func (c *compiler) compileUnary(n *ast.Unary) {
 	switch n.Op {
+	case "!", "typeof":
+		// Of a value the compile knows -- typeof 1, !void 0; the parser
+		// has folded ! of a literal -- the literal of its value, as the
+		// register form compiles it too (fold.Value).
+		if v, ok := fold.Value(n); ok {
+			c.compileConst(v)
+			return
+		}
+	}
+	switch n.Op {
 	case "typeof":
 		// typeof on an undeclared identifier must yield "undefined" rather
 		// than throwing, which needs the non-throwing global read.
@@ -1138,11 +1196,11 @@ func (c *compiler) compileUnary(n *ast.Unary) {
 		c.emit(bytecode.OpPushTrue, 0, 0)
 
 	case "void":
-		switch n.Operand.(type) {
-		case *ast.NumberLit, *ast.StringLit, *ast.BoolLit, *ast.NullLit, *ast.BigIntLit:
-			// void 0, minifiers' undefined: a literal evaluates to nothing
-			// that could be seen, so only the result is pushed, which an
-			// x === void 0 then compares as it does x === undefined.
+		if foldsVoid(n.Operand) {
+			// void 0, minifiers' undefined: a literal, or an operator
+			// that folds, evaluates to nothing that could be seen, so only
+			// the result is pushed, which an x === void 0 then compares as
+			// it does x === undefined.
 			c.emit(bytecode.OpPushUndef, 0, 0)
 			return
 		}

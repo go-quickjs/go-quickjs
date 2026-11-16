@@ -27,7 +27,9 @@
 //     Are We Fast Yet benchmark's run is one of its harness's iterations,
 //     its result checked.
 //   - compile parses and compiles the suite's sources -n times, which is
-//     the parser and the compiler alone.
+//     the front end alone: the parser, the compiler and, for go-quickjs
+//     where it runs register code, every function's register code, which
+//     a runtime compiles at a function's first call.
 //   - micro runs QuickJS's micro-benchmarks, and ours of generators and
 //     async functions, each test -n times with the same work, and prints
 //     the fastest time of one operation, in nanoseconds (see micro.go). It
@@ -52,7 +54,9 @@ import (
 
 // An Engine is what the suite runs on.
 type Engine interface {
-	// Compile parses and compiles a script without running it.
+	// Compile parses and compiles a script without running it: all an
+	// engine compiles of it before it runs, and what it compiles lazily,
+	// at a function's first call, where it can.
 	Compile(name, src string) error
 	// NewRuntime makes a runtime with the host's functions as globals of
 	// their names: print, load, read and now.
@@ -97,7 +101,7 @@ func Main(name string, e Engine) {
 	dir := flag.String("dir", "", "the directory the suite is in")
 	which := flag.String("bench", "v8", "the suite: v8, octane, awfy, ssr or fresh")
 	fetch := flag.Bool("fetch", false, "download the suite into -dir first")
-	mode := flag.String("mode", "fixed", "score, fixed, compile or micro")
+	mode := flag.String("mode", "fixed", "score, fixed, compile (the front end alone: parser, compiler and every function's register code) or micro")
 	n := flag.Int("n", 5, "runs of each benchmark (fixed, micro), or compiles of the suite (compile)")
 	only := flag.String("suite", "", "comma-separated suites to run, all by default (fixed); tests by the start of their names (micro)")
 	cpu := flag.String("cpuprofile", "", "write a CPU profile to this file")
