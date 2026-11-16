@@ -3,6 +3,7 @@
 package vm
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -58,70 +59,77 @@ func TestJITMegamorphicPrototypes(t *testing.T) {
 	cases := []string{`walk(3)`, `kinds(3)`, `walk(4)`, `leaves(3)`, `shadow(3)`, `replaced(3)`, `kindGetter(3)`, `reproto(3)`, `removed(3)`, `own(3)`,
 		`walk(2)`, `leaves(4)`, `protoChild(3)`, `nullProto(3)`, `leaves(2)`}
 	for _, marking := range []bool{false, true} {
-		if marking {
-			jitMarkingForTest(t)
-		}
-		want := New(Config{})
-		r := jitRuntimeForTest(t, Config{JIT: true})
-		for _, rt := range []*Runtime{want, r} {
-			if _, err := rt.Run(compileForTest(t, jitMegaSetup)); err != nil {
-				t.Fatal(err)
+		t.Run(fmt.Sprintf("marking=%v", marking), func(t *testing.T) {
+			if marking {
+				jitMarkingForTest(t)
 			}
-		}
-		for round := 0; round < 3; round++ {
-			for _, c := range cases {
-				wv, werr := want.Run(compileForTest(t, "String("+c+")"))
-				gv, gerr := r.Run(compileForTest(t, "String("+c+")"))
-				if werr != nil || gerr != nil {
-					t.Fatalf("marking %v, round %d, %s: %v, interpreter's %v", marking, round, c, gerr, werr)
-				}
-				if got, w := gv.String().Go(), wv.String().Go(); got != w {
-					t.Fatalf("marking %v, round %d, %s: got %s, interpreter %s", marking, round, c, got, w)
+			want := New(Config{})
+			r := jitRuntimeForTest(t, Config{JIT: true})
+			for _, rt := range []*Runtime{want, r} {
+				if _, err := rt.Run(compileForTest(t, jitMegaSetup)); err != nil {
+					t.Fatal(err)
 				}
 			}
-		}
-		want.Close()
-		want.ReleaseClosed()
-		// Once the cache has the entries, the reads never leave native
-		// code, though they met nine shapes: in a runtime of its own,
-		// whose code nothing has made leave for Go too often.
-		r = jitRuntimeForTest(t, Config{JIT: true})
-		if _, err := r.Run(compileForTest(t, jitMegaSetup)); err != nil {
-			t.Fatal(err)
-		}
-		for _, c := range []string{`walk(3)`, `kinds(3)`, `leaves(3)`, `walk(3)`, `kinds(3)`, `leaves(3)`} {
-			if _, err := r.Run(compileForTest(t, c)); err != nil {
+			for round := 0; round < 3; round++ {
+				for _, c := range cases {
+					wv, werr := want.Run(compileForTest(t, "String("+c+")"))
+					gv, gerr := r.Run(compileForTest(t, "String("+c+")"))
+					if werr != nil || gerr != nil {
+						t.Fatalf("marking %v, round %d, %s: %v, interpreter's %v", marking, round, c, gerr, werr)
+					}
+					if got, w := gv.String().Go(), wv.String().Go(); got != w {
+						t.Fatalf("marking %v, round %d, %s: got %s, interpreter %s", marking, round, c, got, w)
+					}
+				}
+			}
+			want.Close()
+			want.ReleaseClosed()
+			// Once the cache has the entries, the reads never leave native
+			// code, though they met nine shapes: in a runtime of its own,
+			// whose code nothing has made leave for Go too often, and with
+			// the collector held off: a collection's end empties the cache,
+			// as V8's ClearStubCaches does (jitState's flush), and a method
+			// read then leaves once for each receiver's shape to fill it
+			// again -- walk's 17 exits, a collection ending at any time.
+			jitCollectorHeldForTest(t)
+			r = jitRuntimeForTest(t, Config{JIT: true})
+			if _, err := r.Run(compileForTest(t, jitMegaSetup)); err != nil {
 				t.Fatal(err)
 			}
-		}
-		// A method added to Base.prototype gives it another shape, which
-		// the code's cases no longer name: the reads find the chain as it
-		// is in the cache, filled at their first exits, and leave no more.
-		// (Twice: code a deoptimization invalidated meanwhile is compiled
-		// again once the interpreter has run it its budget, and its
-		// megamorphic reads' first exits fill the cache then.)
-		for _, c := range []string{`Base.prototype.Other=function(){};kinds(2)`, `walk(2)`, `leaves(2)`, `kinds(2)`, `walk(2)`, `leaves(2)`} {
-			if _, err := r.Run(compileForTest(t, c)); err != nil {
-				t.Fatal(err)
+			for _, c := range []string{`walk(3)`, `kinds(3)`, `leaves(3)`, `walk(3)`, `kinds(3)`, `leaves(3)`} {
+				if _, err := r.Run(compileForTest(t, c)); err != nil {
+					t.Fatal(err)
+				}
 			}
-		}
-		for _, name := range []string{"walk", "kinds", "leaves"} {
-			cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
-			e, code := jitStatsOfForTest(r, cl)
-			if e == nil {
-				t.Fatalf("marking %v: %s was not compiled: %+v", marking, name, e)
+			// A method added to Base.prototype gives it another shape, which
+			// the code's cases no longer name: the reads find the chain as it
+			// is in the cache, filled at their first exits, and leave no more.
+			// (Twice: code a deoptimization invalidated meanwhile is compiled
+			// again once the interpreter has run it its budget, and its
+			// megamorphic reads' first exits fill the cache then.)
+			for _, c := range []string{`Base.prototype.Other=function(){};kinds(2)`, `walk(2)`, `leaves(2)`, `kinds(2)`, `walk(2)`, `leaves(2)`} {
+				if _, err := r.Run(compileForTest(t, c)); err != nil {
+					t.Fatal(err)
+				}
 			}
-			before := e.ssaStats
-			if _, err := r.Run(compileForTest(t, name+`(50)`)); err != nil {
-				t.Fatal(err)
+			for _, name := range []string{"walk", "kinds", "leaves"} {
+				cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
+				e, code := jitStatsOfForTest(r, cl)
+				if e == nil {
+					t.Fatalf("marking %v: %s was not compiled: %+v", marking, name, e)
+				}
+				before := e.ssaStats
+				if _, err := r.Run(compileForTest(t, name+`(50)`)); err != nil {
+					t.Fatal(err)
+				}
+				st := e.ssaStats
+				if _, now := jitStatsOfForTest(r, cl); now != code || st.work-before.work < 4500 {
+					t.Fatalf("marking %v: %s(50) did not run natively: %+v, before %+v", marking, name, st, before)
+				}
+				if left := st.hosts - before.hosts; left != 0 {
+					t.Errorf("marking %v: %s(50) left native code %d times", marking, name, left)
+				}
 			}
-			st := e.ssaStats
-			if _, now := jitStatsOfForTest(r, cl); now != code || st.work-before.work < 4500 {
-				t.Fatalf("marking %v: %s(50) did not run natively: %+v, before %+v", marking, name, st, before)
-			}
-			if left := st.hosts - before.hosts; left != 0 {
-				t.Errorf("marking %v: %s(50) left native code %d times", marking, name, left)
-			}
-		}
+		})
 	}
 }
