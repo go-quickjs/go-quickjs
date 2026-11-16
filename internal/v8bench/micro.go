@@ -82,7 +82,7 @@ var microWork = []struct {
 	{"try_catch", 8388608}, {"try_throw", 4194304}, {"try_finally", 8388608}, {"iterator_for_of", 8192},
 	{"map_for_of", 32768}, {"object_for_in", 262144}, {"dict_for_in", 131072}, {"using_scope", 8388608}, {"closure_make", 524288}, {"closure_many_locals", 524288}, {"closure_counter", 4194304},
 	{"closure_callback", 262144}, {"tail_self", 4194304}, {"tail_mutual", 4194304},
-	{"call_fib", 4194304}, {"call_mutual", 4194304},
+	{"call_fib", 4194304}, {"call_mutual", 4194304}, {"crypto_am3", 4194304},
 	{"method_call", 2097152}, {"method_call_leaf", 4194304}, {"loop_sum", 8388608},
 	{"loop_arith", 2097152}, {"loop_locals", 4194304}, {"loop_elements", 8388608},
 	{"loop_props", 8388608}, {"loop_int32", 2097152},

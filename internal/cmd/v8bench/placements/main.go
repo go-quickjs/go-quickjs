@@ -10,22 +10,25 @@
 // each side compares two placements as much as two versions of the code.
 //
 // build makes eight builds of internal/cmd/v8bench from the working tree,
-// each with the hot code placed differently. Four pads, of m functions
-// that each fill one 32-byte slot, go before the four pieces of hot code,
+// each with the hot code placed differently. Five pads, of m functions
+// that each fill one 32-byte slot, go before the five pieces of hot code,
 // in files the linker places there:
 //
-//	aaa_pad.go    before everything in the package    executeAt
-//	vm_b_pad.go   after vm.go, before vm_call.go      callDirect
-//	vm_sz_pad.go  after vm_shape.go, before vm_tree.go runTree
-//	zzz_pad.go    after every file, before the closures binaryNode.func1
+//	aaa_pad.go     before everything in the package    executeAt
+//	vm_b_pad.go    after vm.go, before vm_call.go      callDirect
+//	vm_sz_pad.go   after vm_shape.go, before vm_tree.go runTree
+//	zzreg_r_pad.go before zzreg_run.go                 runReg
+//	zzz_pad.go     after every file, before the closures binaryNode.func1
 //
 // A pad moves what follows it by exactly 32*m bytes. For each placement a
-// build with the pads empty says where the four are, and m is chosen so
+// build with the pads empty says where the five are, and m is chosen so
 // that each lands at the phase -- its start mod 64, the one bit a
-// placement can vary -- that a 2^(4-1) design gives it: over the eight,
+// placement can vary -- that a 2^(5-2) design gives it: over the eight,
 // each is at 0 and at 32 mod 64 four times, each pair of them in each
 // combination twice, and each at a distance from the one before it that
-// varies by up to 2 KB. Placement n also puts 3n never-taken tests in
+// varies by up to 2 KB. The register interpreter's loop, runReg, is a
+// factor of its own: without its pad it followed runTree's phase, and its
+// own alignment moves its small loops by up to a fifth. Placement n also puts 3n never-taken tests in
 // executeAt's case for nop, which the compiler lays out ahead of the
 // others, so that its cases move against its dispatch. Every build is
 // checked with go tool nm, and one whose phases are not the design's
@@ -150,9 +153,14 @@ func exePath(out, label string, n int) string {
 // pads are the files the pads go in, each before its target; targets are
 // the targets, as go tool nm names them after the package's path.
 var (
-	pads    = [4]string{"internal/vm/aaa_pad.go", "internal/vm/vm_b_pad.go", "internal/vm/vm_sz_pad.go", "internal/vm/zzz_pad.go"}
-	targets = [4]string{"(*Runtime).executeAt", "(*Runtime).callDirect", "(*Runtime).runTree", "binaryNode.func1"}
+	pads = [nPads]string{"internal/vm/aaa_pad.go", "internal/vm/vm_b_pad.go", "internal/vm/vm_sz_pad.go",
+		"internal/vm/zzreg_r_pad.go", "internal/vm/zzz_pad.go"}
+	targets = [nPads]string{"(*Runtime).executeAt", "(*Runtime).callDirect", "(*Runtime).runTree",
+		"(*Runtime).runReg", "binaryNode.func1"}
 )
+
+// nPads is how many pads and targets there are.
+const nPads = 5
 
 const (
 	vmGo = "internal/vm/vm.go"
@@ -163,7 +171,7 @@ const (
 )
 
 // placementsOf is the placements -k takes: placements 0, 3, 5 and 6 for
-// four, over which the first three targets are each at each phase twice;
+// four, over which every target but the closures is at each phase twice;
 // otherwise the first k.
 func placementsOf(k int) []int {
 	if k == 4 {
@@ -177,10 +185,13 @@ func placementsOf(k int) []int {
 }
 
 // design is the phase, in units of 32 bytes, that placement n gives each
-// target: a 2^(4-1) design, the fourth the parity of the other three.
-func design(n int) [4]int {
+// target: a 2^(5-2) design, runReg's the parity of callDirect's and
+// runTree's, the closures' the parity of the first three. No two targets'
+// phases, nor the data's (dataPhase), are the same or opposite over the
+// eight, so each pair is in each combination twice.
+func design(n int) [nPads]int {
 	b0, b1, b2 := n&1, (n>>1)&1, (n>>2)&1
-	return [4]int{b0, b1, b2, b0 ^ b1 ^ b2}
+	return [nPads]int{b0, b1, b2, b1 ^ b2, b0 ^ b1 ^ b2}
 }
 
 // padSlots is the most functions a pad has: 2*31 and one.
@@ -209,11 +220,11 @@ const padDataBase = 64
 // target and everything after it, and the targets come in this order, so
 // each is chosen given the ones before; a pad is an even number of slots,
 // varying with n and the pad, plus the one that sets its target's phase.
-func padCounts(ref [4]uint64, n int) [4]int {
+func padCounts(ref [nPads]uint64, n int) [nPads]int {
 	want := design(n)
-	var counts [4]int
+	var counts [nPads]int
 	shift := 0
-	for i := range 4 {
+	for i := range nPads {
 		base := 2 * ((n*37 + i*11) % 32)
 		phase := int((ref[i]/32 + uint64(shift)) % 2)
 		m := base + ((want[i]-phase)%2+2)%2
@@ -224,8 +235,8 @@ func padCounts(ref [4]uint64, n int) [4]int {
 }
 
 // phases is each target's start, in units of 32 bytes, mod 2.
-func phases(addrs [4]uint64) [4]int {
-	var p [4]int
+func phases(addrs [nPads]uint64) [nPads]int {
+	var p [nPads]int
 	for i, a := range addrs {
 		p[i] = int(a/32) % 2
 	}
@@ -279,7 +290,7 @@ func buildCmd(args []string) error {
 
 	for _, n := range placementsOf(*k) {
 		exe := exePath(*out, *label, n)
-		ref, err := buildAt(src, [4]int{}, inner*n, dataPhase(n), exe)
+		ref, err := buildAt(src, [nPads]int{}, inner*n, dataPhase(n), exe)
 		if err != nil {
 			return err
 		}
@@ -291,8 +302,8 @@ func buildCmd(args []string) error {
 		if p, want := phases(got), design(n); p != want {
 			return fmt.Errorf("placement %d: phases %v, want %v (pads %v)", n, p, want, counts)
 		}
-		fmt.Printf("%s-%d: pads %v, phases %v, distances %d %d %d\n", *label, n, counts, phases(got),
-			got[1]-got[0], got[2]-got[1], got[3]-got[2])
+		fmt.Printf("%s-%d: pads %v, phases %v, distances %d %d %d %d\n", *label, n, counts, phases(got),
+			got[1]-got[0], got[2]-got[1], got[3]-got[2], got[4]-got[3])
 	}
 	fmt.Printf("built %d placements of %s in %s\n", *k, *label, *out)
 	return nil
@@ -300,8 +311,8 @@ func buildCmd(args []string) error {
 
 // buildAt writes the pads and the tests, builds v8bench to exe, and says
 // where the targets are in it.
-func buildAt(src []byte, counts [4]int, tests, data int, exe string) ([4]uint64, error) {
-	var addrs [4]uint64
+func buildAt(src []byte, counts [nPads]int, tests, data int, exe string) ([nPads]uint64, error) {
+	var addrs [nPads]uint64
 	var body strings.Builder
 	for i := range tests {
 		fmt.Fprintf(&body, "\t\t\tif in.A == padKeys[%d] {\n\t\t\t\tpadSink += %d\n\t\t\t}\n", i, i+1)
@@ -329,7 +340,7 @@ func buildAt(src []byte, counts [4]int, tests, data int, exe string) ([4]uint64,
 	if err != nil {
 		return addrs, fmt.Errorf("go tool nm: %w", err)
 	}
-	found := [4]bool{}
+	found := [nPads]bool{}
 	sc := bufio.NewScanner(bytes.NewReader(nm))
 	for sc.Scan() {
 		f := strings.Fields(sc.Text())
@@ -367,7 +378,7 @@ func padFile(p, m, tests, data int) []byte {
 		fmt.Fprintf(&b, "var padData = [%d]byte{1}\n\n", padDataBase+data)
 		b.WriteString("func init() {\n\tfor i := range padKeys {\n\t\tpadKeys[i] = ^uint32(i)\n\t}\n" +
 			"\tpadSink += int(padData[len(padData)-1])\n" +
-			"\tfor _, fs := range [][]func() int{padFuncs0[:], padFuncs1[:], padFuncs2[:], padFuncs3[:]} {\n" +
+			"\tfor _, fs := range [][]func() int{padFuncs0[:], padFuncs1[:], padFuncs2[:], padFuncs3[:], padFuncs4[:]} {\n" +
 			"\t\tfor _, f := range fs {\n\t\t\tif f != nil {\n\t\t\t\tpadSink += f()\n\t\t\t}\n\t\t}\n\t}\n}\n\n")
 	}
 	names := make([]string, m)

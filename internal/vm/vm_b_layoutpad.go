@@ -2,7 +2,7 @@
 
 package vm
 
-// layoutPadB is the layout lock's pad B, after vm_amath.go, before vm_call.go: callObject, callDirect, runFD.
+// layoutPadB is the layout lock's pad B, after vm_amath.go, before vm_call.go: callObject, callDirect.
 // It is never called: see internal/cmd/layoutpad.
 //
 //go:noinline

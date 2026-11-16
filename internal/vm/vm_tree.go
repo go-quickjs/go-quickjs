@@ -108,6 +108,9 @@ type tree struct {
 	// going on in it from one of its blocks (see ztree_goon.go); starts
 	// and entries are then its.
 	handled *treeHandled
+	// reg is the register code a tree that only runs it runs, or nil (see
+	// zzreg_run.go).
+	reg *regCode
 }
 
 // treeThrow carries an exception out of a tree, to runTree.
@@ -140,7 +143,7 @@ func TreesBuilt() int64 { return treesBuilt.Load() }
 //
 //go:noinline
 func firstTree(fn *bytecode.Function) *tree {
-	p := buildTree(fn)
+	p := firstForm(fn)
 	if p == nil {
 		p = noTree
 	} else {

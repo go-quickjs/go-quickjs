@@ -19,6 +19,7 @@ import (
 
 	"github.com/go-quickjs/go-quickjs/internal/ast"
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/compiler/regcomp"
 )
 
 // Error is a compile-time error.
@@ -358,6 +359,11 @@ type compiler struct {
 	// reused are the function expressions of the function's var declarations
 	// in a loop that are made once per invocation (reusedClosures).
 	reused map[*ast.FuncLit]bool
+	// reg is the record of the function's resolution the register backend
+	// reads (regcomp), where it is on, and regIdent the declaration whose
+	// store storeVar is making, for the record.
+	reg      *regcomp.Record
+	regIdent *ast.Ident
 	// finallys is the stack of enclosing finally clauses, which return, break
 	// and continue all have to account for.
 	finallys []finallyCtx

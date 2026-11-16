@@ -13,7 +13,7 @@ import (
 
 func TestPadFunctionsOccupy32Bytes(t *testing.T) {
 	dir := t.TempDir()
-	for p := range 4 {
+	for p := range nPads {
 		body := strings.Replace(string(padFile(p, 4, 0, 0)), "package vm", "package main", 1)
 		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("pad%d.go", p)), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
@@ -25,7 +25,11 @@ func TestPadFunctionsOccupy32Bytes(t *testing.T) {
 	for _, arch := range []string{"amd64", "arm64"} {
 		t.Run(arch, func(t *testing.T) {
 			binary := filepath.Join(dir, "pads-"+arch)
-			cmd := exec.Command("go", "build", "-o", binary, "main.go", "pad0.go", "pad1.go", "pad2.go", "pad3.go")
+			args := []string{"build", "-o", binary, "main.go"}
+			for p := range nPads {
+				args = append(args, fmt.Sprintf("pad%d.go", p))
+			}
+			cmd := exec.Command("go", args...)
 			cmd.Dir = dir
 			cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH="+arch, "CGO_ENABLED=0")
 			if output, err := cmd.CombinedOutput(); err != nil {
@@ -36,7 +40,7 @@ func TestPadFunctionsOccupy32Bytes(t *testing.T) {
 				t.Fatal(err)
 			}
 			found := 0
-			var addresses [4][4]uint64
+			var addresses [nPads][4]uint64
 			for _, line := range strings.Split(string(output), "\n") {
 				fields := strings.Fields(line)
 				if len(fields) != 4 || fields[2] != "T" || !strings.HasPrefix(fields[3], "main.padF") {
@@ -53,8 +57,8 @@ func TestPadFunctionsOccupy32Bytes(t *testing.T) {
 				addresses[p][n] = address
 				found++
 			}
-			if found != 16 {
-				t.Fatalf("found %d padding functions, want 16", found)
+			if found != 4*nPads {
+				t.Fatalf("found %d padding functions, want %d", found, 4*nPads)
 			}
 			for p := range addresses {
 				for n := 1; n < 4; n++ {
@@ -72,22 +76,26 @@ func TestPadFunctionsOccupy32Bytes(t *testing.T) {
 // phases twice: what keeps a change from being measured at the placements
 // that happen to suit it.
 func TestDesignBalanced(t *testing.T) {
-	var ones [4]int
-	var pairs [4][4][4]int
+	var ones [nPads + 1]int
+	var pairs [nPads + 1][nPads + 1][4]int
 	for n := range 8 {
-		d := design(n)
-		for i := range 4 {
+		// The targets' phases, and the data's as a factor of its own.
+		var d [nPads + 1]int
+		dn := design(n)
+		copy(d[:], dn[:])
+		d[nPads] = dataPhase(n) / 32
+		for i := range d {
 			ones[i] += d[i]
-			for j := i + 1; j < 4; j++ {
+			for j := i + 1; j < len(d); j++ {
 				pairs[i][j][2*d[i]+d[j]]++
 			}
 		}
 	}
-	for i := range 4 {
+	for i := range ones {
 		if ones[i] != 4 {
 			t.Errorf("target %d is at phase 1 in %d placements, want 4", i, ones[i])
 		}
-		for j := i + 1; j < 4; j++ {
+		for j := i + 1; j < len(ones); j++ {
 			for c, got := range pairs[i][j] {
 				if got != 2 {
 					t.Errorf("targets %d and %d are in combination %d in %d placements, want 2", i, j, c, got)
@@ -103,7 +111,7 @@ func TestDesignBalanced(t *testing.T) {
 func TestPadCountsReachTheDesign(t *testing.T) {
 	rng := rand.New(rand.NewSource(1))
 	for range 1000 {
-		var ref [4]uint64
+		var ref [nPads]uint64
 		a := uint64(0x140000000) + uint64(rng.Intn(1<<20))*32
 		for i := range ref {
 			ref[i] = a
@@ -111,7 +119,7 @@ func TestPadCountsReachTheDesign(t *testing.T) {
 		}
 		for n := range 8 {
 			counts := padCounts(ref, n)
-			var got [4]uint64
+			var got [nPads]uint64
 			shift := uint64(0)
 			for i := range ref {
 				shift += uint64(counts[i]) * 32

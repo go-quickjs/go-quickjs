@@ -376,6 +376,9 @@ func init() {
 		if layoutPadNB >= 0 {
 			layoutPadB()
 		}
+		if layoutPadNF >= 0 {
+			layoutPadF()
+		}
 		if layoutPadNS >= 0 {
 			layoutPadS()
 		}

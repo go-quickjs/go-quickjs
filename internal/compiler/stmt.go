@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-quickjs/go-quickjs/internal/ast"
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/compiler/regcomp"
 )
 
 // compileStatements compiles a statement list, hoisting the function
@@ -163,7 +164,13 @@ func (c *compiler) predeclareFunction(h hoistedFunc) {
 	// work in sloppy mode. The binding is created by hoisting like any other
 	// var; only the assignment happens here, when the declaration is reached.
 	if c.annexB[h.fd] {
+		if c.reg != nil {
+			c.reg.Bail = true
+		}
 		c.emitAnnexBFunctionAlias(h.name)
+	}
+	if c.reg != nil {
+		c.reg.Funcs[h.fd] = h.slot
 	}
 	c.emit(bytecode.OpSetLocal, h.slot, 0)
 }
@@ -547,12 +554,15 @@ func (c *compiler) inLoop() bool {
 func (c *compiler) initBinding(target ast.Expr, kind ast.DeclKind) {
 	if id, ok := target.(*ast.Ident); ok {
 		if kind == ast.DeclVar {
+			c.regIdent = id
 			c.storeVar(id.Name)
+			c.regIdent = nil
 			return
 		}
 		// A lexical binding is initialized rather than assigned, which also
 		// clears its dead zone.
 		if l, ok := c.resolveLocal(id.Name); ok {
+			c.reg.NoteWrite(id, regcomp.Res{Kind: regcomp.ResLocalInit, Index: l.slot})
 			c.emit(bytecode.OpInitLocal, l.slot, 0)
 			c.markInitialized(id.Name)
 			return
@@ -622,6 +632,9 @@ func (c *compiler) storeVar(name string) {
 	// quietly left its value behind would push the loop it sits in off its own
 	// operands.
 	probe := c.withProbe(bytecode.OpWithSet, name)
+	if probe >= 0 && c.reg != nil {
+		c.reg.Bail = true
+	}
 	if probe >= 0 {
 		c.emit(bytecode.OpDup, 0, 0)
 		defer func() {
@@ -631,16 +644,29 @@ func (c *compiler) storeVar(name string) {
 	}
 
 	if l, ok := c.resolveLocal(name); ok {
+		if c.regIdent != nil {
+			c.reg.NoteWrite(c.regIdent, regcomp.Res{Kind: regcomp.ResLocalInit, Index: l.slot})
+		}
 		c.emit(bytecode.OpSetLocal, l.slot, 0)
 		return
 	}
 	if idx, ok := c.resolveUpvalue(name); ok {
+		if c.regIdent != nil {
+			res := regcomp.Res{Kind: regcomp.ResUpval, Index: idx}
+			if c.fn.Upvalues[idx].TDZ {
+				res = regcomp.Res{}
+			}
+			c.reg.NoteWrite(c.regIdent, res)
+		}
 		if c.fn.Upvalues[idx].TDZ {
 			c.emit(bytecode.OpSetUpvalueCheck, idx, 0)
 		} else {
 			c.emit(bytecode.OpSetUpvalue, idx, 0)
 		}
 		return
+	}
+	if c.regIdent != nil {
+		c.reg.NoteWrite(c.regIdent, regcomp.Res{Kind: regcomp.ResGlobal})
 	}
 	c.emit(bytecode.OpSetGlobal, c.nameIdx(name), 0)
 }

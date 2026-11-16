@@ -16,6 +16,7 @@ anchor D  0x00680 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descri
 anchor R  0x008a0 github.com/go-quickjs/go-quickjs/internal/vm.buildTreeSkipping
 anchor V  0x00580 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).executeAt
 anchor B  0x006e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callObject
+anchor F  0x00f80 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runFD
 anchor S  0x00e20 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runTree
 anchor T  0x00120 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callTree
 anchor J  0x00d80 github.com/go-quickjs/go-quickjs/internal/vm.logicalJumps
@@ -35,6 +36,7 @@ anchor D  0x001c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descri
 anchor R  0x001c0 github.com/go-quickjs/go-quickjs/internal/vm.buildTreeSkipping
 anchor V  0x00420 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).executeAt
 anchor B  0x00680 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callObject
+anchor F  0x00fc0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runFD
 anchor S  0x00220 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runTree
 anchor T  0x00560 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callTree
 anchor J  0x009e0 github.com/go-quickjs/go-quickjs/internal/vm.jitLeafGo
@@ -54,6 +56,7 @@ anchor D  0x008c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descri
 anchor R  0x00ae0 github.com/go-quickjs/go-quickjs/internal/vm.buildTreeSkipping
 anchor V  0x007c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).executeAt
 anchor B  0x00920 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callObject
+anchor F  0x001c0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runFD
 anchor S  0x00060 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runTree
 anchor T  0x00360 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callTree
 anchor J  0x00fc0 github.com/go-quickjs/go-quickjs/internal/vm.logicalJumps
@@ -73,6 +76,7 @@ anchor D  0x00080 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).descri
 anchor R  0x00080 github.com/go-quickjs/go-quickjs/internal/vm.buildTreeSkipping
 anchor V  0x002e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).executeAt
 anchor B  0x00540 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callObject
+anchor F  0x00e80 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runFD
 anchor S  0x000e0 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).runTree
 anchor T  0x00420 github.com/go-quickjs/go-quickjs/internal/vm.(*Runtime).callTree
 anchor J  0x008a0 github.com/go-quickjs/go-quickjs/internal/vm.jitLeafGo

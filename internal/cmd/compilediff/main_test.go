@@ -49,7 +49,9 @@ func TestOutputIsWhole(t *testing.T) {
 	v := reflect.TypeFor[bytecode.Function]()
 	for i := range v.NumField() {
 		name := v.Field(i).Name
-		if name == "Code" || name == "Constants" {
+		if name == "Code" || name == "Constants" || name == "Reg" {
+			// Listed in their own forms, Reg, the register code, only
+			// where the backend is on.
 			continue
 		}
 		if !strings.Contains(got, "\n"+name+": ") {

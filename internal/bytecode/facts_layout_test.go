@@ -28,7 +28,8 @@ func TestRecordedFactsInPadding(t *testing.T) {
 		{"FrameCallee", unsafe.Offsetof(f.FrameCallee), unsafe.Offsetof(f.ArrowThisValue) + 1},
 		{"ReadsMaker", unsafe.Offsetof(f.ReadsMaker), unsafe.Offsetof(f.ArrowThisValue) + 2},
 		{"HasYieldStar", unsafe.Offsetof(f.HasYieldStar), unsafe.Offsetof(f.ArrowThisValue) + 3},
-		{"Function's size", unsafe.Sizeof(f), align(unsafe.Offsetof(f.ArrowThisValue)+1, unsafe.Alignof(f))},
+		{"Reg", unsafe.Offsetof(f.Reg), align(unsafe.Offsetof(f.HasYieldStar)+1, ptr)},
+		{"Function's size", unsafe.Sizeof(f), unsafe.Offsetof(f.Reg) + ptr},
 		{"Assigned", unsafe.Offsetof(u.Assigned), unsafe.Offsetof(u.ByValue) + 1},
 		{"UpvalueDesc's size", unsafe.Sizeof(u), align(unsafe.Offsetof(u.ByValue)+1, unsafe.Alignof(u))},
 	} {

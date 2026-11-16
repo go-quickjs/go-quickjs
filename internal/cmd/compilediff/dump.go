@@ -174,6 +174,18 @@ func (d *writer) function(path string, fn *bytecode.Function) {
 				fmt.Fprintf(d.w, "%6d %s %d %d @%d %v\n", pc, in.Op, in.A, in.B, pos, ok)
 			}
 			continue
+		case "Reg":
+			// The register backend's code, compiled only where QJS_REG
+			// turns it on, and then printed in its own listing: a
+			// revision without the field writes the same.
+			// Read by reflection, as the tool is built at revisions without
+			// the field too.
+			if r := v.Field(i); !r.IsNil() {
+				if s, ok := r.Interface().(fmt.Stringer); ok {
+					fmt.Fprint(d.w, s.String())
+				}
+			}
+			continue
 		case "Constants":
 			for i, c := range fn.Constants {
 				fmt.Fprintf(d.w, "const %d %d %x %q %q %v\n", i, c.Kind, c.Num, c.Str, c.Flags, c.Fn != nil)

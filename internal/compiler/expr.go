@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-quickjs/go-quickjs/internal/ast"
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/compiler/regcomp"
 )
 
 // compileExprForEffect emits code for an expression whose value is discarded:
@@ -465,6 +466,9 @@ func isNegZero(v float64) bool { return v == 0 && 1/v < 0 }
 func (c *compiler) compileIdentRead(n *ast.Ident) {
 	// Inside a `with` body the object may answer instead of the binding.
 	probe := c.withProbe(bytecode.OpWithGet, n.Name)
+	if probe >= 0 && c.reg != nil {
+		c.reg.Bail = true
+	}
 	c.compileIdentReadStatic(n)
 	c.patchWithProbe(probe)
 }
@@ -475,13 +479,16 @@ func (c *compiler) compileIdentReadStatic(n *ast.Ident) {
 	// undefined, NaN and Infinity are properties of the global object, not
 	// keywords, so they resolve like any other name.
 	if lit := c.constLiteral(n.Name); lit != nil {
+		c.reg.NoteRead(n, regcomp.Res{Kind: regcomp.ResLiteral, Lit: lit})
 		c.compileExpr(lit)
 		return
 	}
 	if l, ok := c.resolveLocal(n.Name); ok {
 		if l.initialized {
+			c.reg.NoteRead(n, regcomp.Res{Kind: regcomp.ResLocal, Index: l.slot})
 			c.emit(bytecode.OpGetLocal, l.slot, 0)
 		} else {
+			c.reg.NoteRead(n, regcomp.Res{Kind: regcomp.ResLocalCheck, Index: l.slot})
 			c.emit(bytecode.OpGetLocalCheck, l.slot, 0)
 		}
 		c.compiledRead(l)
@@ -489,8 +496,10 @@ func (c *compiler) compileIdentReadStatic(n *ast.Ident) {
 	}
 	if idx, ok := c.resolveUpvalue(n.Name); ok {
 		if c.fn.Upvalues[idx].TDZ {
+			c.reg.NoteRead(n, regcomp.Res{})
 			c.emit(bytecode.OpGetUpvalueCheck, idx, 0)
 		} else {
+			c.reg.NoteRead(n, regcomp.Res{Kind: regcomp.ResUpval, Index: idx})
 			c.emit(bytecode.OpGetUpvalue, idx, 0)
 		}
 		if l, _ := c.enclosingBinding(n.Name); l != nil {
@@ -500,6 +509,7 @@ func (c *compiler) compileIdentReadStatic(n *ast.Ident) {
 	}
 	// A named function expression's own name refers to the running closure.
 	if n.Name == c.selfName {
+		c.reg.NoteRead(n, regcomp.Res{Kind: regcomp.ResCallee})
 		c.emit(bytecode.OpPushCallee, 0, 0)
 		return
 	}
@@ -510,12 +520,14 @@ func (c *compiler) compileIdentReadStatic(n *ast.Ident) {
 		// binding of the function's or its makers', no with and no direct
 		// eval can stand in front of it, it is undefined: pushed, rather
 		// than read from the global object at every x === undefined.
+		c.reg.NoteRead(n, regcomp.Res{Kind: regcomp.ResLiteral})
 		c.emit(bytecode.OpPushUndef, 0, 0)
 		return
 	}
 	// A function that uses `arguments` binds it to a slot in its prologue, so
 	// the searches above will have found it. Reaching here means the reference
 	// is in a position with no arguments object at all, such as the top level.
+	c.reg.NoteRead(n, regcomp.Res{Kind: regcomp.ResGlobal})
 	c.emitAt(int(n.Start), bytecode.OpGetGlobal, c.nameIdx(n.Name), 0)
 }
 
@@ -1193,6 +1205,8 @@ func (c *compiler) updatableLocal(n *ast.Update) (*localVar, bool) {
 	if !ok || !l.initialized || l.kind == bindConst || l.kind == bindFuncSelf {
 		return nil, false
 	}
+	c.reg.NoteRead(id, regcomp.Res{Kind: regcomp.ResLocal, Index: l.slot})
+	c.reg.NoteWrite(id, regcomp.Res{Kind: regcomp.ResLocal, Index: l.slot})
 	return l, true
 }
 
@@ -1538,6 +1552,9 @@ func (c *compiler) compileMemberRead(n *ast.Member) {
 	if c.lazyArguments && !n.Optional && c.isLazyArguments(n.Object) {
 		// arguments[i] and arguments.length in a function whose arguments
 		// object is made only on demand read the arguments themselves.
+		if id, ok := n.Object.(*ast.Ident); ok && c.reg != nil && (n.Computed || propKeyName(n.Property) == "length") {
+			c.reg.NoteRead(id, regcomp.Res{Kind: regcomp.ResLazyArgs, Index: c.lazyArgumentsSlot})
+		}
 		if n.Computed {
 			c.compileExpr(n.Property)
 			c.emitAt(n.Property.Pos(), bytecode.OpArgumentsIndex, c.lazyArgumentsSlot, 0)
@@ -2125,6 +2142,9 @@ func (c *compiler) compileAssign(n *ast.Assign) {
 			check := len(c.fn.Code) - 1
 			value(nameOf(n.Target))
 			if c.foldGlobalCheck(check, id) {
+				if c.reg != nil {
+					c.reg.NoteWrite(id, regcomp.Res{Kind: regcomp.ResGlobal})
+				}
 				return
 			}
 			c.emitAt(int(id.Start), bytecode.OpAssertResolved, c.nameIdx(id.Name), 0)
@@ -2316,6 +2336,7 @@ func (c *compiler) assignToIdentStatic(t *ast.Ident, initializing bool) {
 			// A function expression's own name is an immutable binding, and
 			// assigning to it outside strict mode is quietly discarded rather
 			// than refused.
+			c.reg.NoteWrite(t, regcomp.Res{})
 			if c.fn.Strict {
 				c.emitAt(int(t.Start), bytecode.OpAssignConst, c.nameIdx(t.Name), 0)
 			}
@@ -2324,16 +2345,26 @@ func (c *compiler) assignToIdentStatic(t *ast.Ident, initializing bool) {
 		if !initializing && l.kind == bindConst && l.initialized {
 			// A runtime error rather than an early one: the assignment may
 			// sit in a function that is never called.
+			c.reg.NoteWrite(t, regcomp.Res{Kind: regcomp.ResConstAssign})
 			c.emitAt(int(t.Start), bytecode.OpAssignConst, c.nameIdx(t.Name), 0)
 			return
 		}
 		if l.initialized || initializing {
+			kind := regcomp.ResLocal
+			if initializing {
+				kind = regcomp.ResLocalInit
+			}
+			c.reg.NoteWrite(t, regcomp.Res{Kind: kind, Index: l.slot})
 			c.emit(bytecode.OpPutLocal, l.slot, 0)
 		} else {
+			c.reg.NoteWrite(t, regcomp.Res{})
 			c.emit(bytecode.OpDup, 0, 0)
 			c.emit(bytecode.OpSetLocalCheck, l.slot, 0)
 		}
 		return
+	}
+	if c.reg != nil {
+		c.regNoteUpvalueWrite(t, initializing)
 	}
 	if idx, ok := c.resolveUpvalue(t.Name); ok {
 		if c.fn.Upvalues[idx].TDZ && !initializing {
@@ -2378,6 +2409,9 @@ func (c *compiler) assignToIdentStatic(t *ast.Ident, initializing bool) {
 		c.emit(bytecode.OpInitModuleLex, c.nameIdx(t.Name), 0)
 		return
 	}
+	if c.reg != nil && !initializing {
+		c.reg.NoteWrite(t, regcomp.Res{Kind: regcomp.ResGlobal})
+	}
 	c.emit(bytecode.OpDup, 0, 0)
 	c.emit(bytecode.OpSetGlobal, c.nameIdx(t.Name), 0)
 }
@@ -2406,6 +2440,9 @@ func (c *compiler) assignTo(target ast.Expr, initializing bool) {
 		// whatever the object holds.
 		if !initializing {
 			probe := c.withProbe(bytecode.OpWithSet, t.Name)
+			if probe >= 0 && c.reg != nil {
+				c.reg.Bail = true
+			}
 			defer c.patchWithProbe(probe)
 		}
 		c.assignToIdentStatic(t, initializing)

@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-quickjs/go-quickjs/internal/ast"
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/compiler/regcomp"
 	"github.com/go-quickjs/go-quickjs/internal/jsnum"
 )
 
@@ -16,6 +17,9 @@ func (c *compiler) compileFunctionLiteral(fn *ast.FuncLit, inferredName string) 
 	trace := c.traceName
 	c.traceName = ""
 	sub := newCompiler(c, c.opts)
+	if registerForm.Load() && !c.opts.Debug && c.opts.EvalScope == nil {
+		sub.reg = regcomp.NewRecord()
+	}
 	sub.lit = fn
 	sub.fn.Strict = fn.Strict || c.fn.Strict
 	sub.fn.Async = fn.Async
@@ -37,7 +41,13 @@ func (c *compiler) compileFunctionLiteral(fn *ast.FuncLit, inferredName string) 
 	}
 
 	sub.compileFunctionBody(fn)
+	rec := sub.reg
 	compiled := sub.release()
+	if rec != nil && !rec.Bail {
+		compiled.Reg = regcomp.Compile(fn, compiled, rec)
+	} else if rec != nil {
+		regcomp.Refuse(compiled, "a with, an eval's variables or an Annex B function")
+	}
 
 	idx := c.addConst(bytecode.Constant{Kind: bytecode.ConstFunction, Fn: compiled})
 	c.emit(bytecode.OpClosure, idx, 0)

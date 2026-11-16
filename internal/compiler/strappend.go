@@ -3,6 +3,7 @@ package compiler
 import (
 	"github.com/go-quickjs/go-quickjs/internal/ast"
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/compiler/regcomp"
 )
 
 // A closure appending to a string its maker holds.
@@ -235,6 +236,8 @@ func (c *compiler) localAppend(e ast.Expr) bool {
 // compileLocalAppend compiles an addition localAppend took.
 func (c *compiler) compileLocalAppend(n *ast.Assign) {
 	l, _ := c.resolveLocal(n.Target.(*ast.Ident).Name)
+	c.reg.NoteRead(n.Target.(*ast.Ident), regcomp.Res{Kind: regcomp.ResLocal, Index: l.slot})
+	c.reg.NoteWrite(n.Target.(*ast.Ident), regcomp.Res{Kind: regcomp.ResLocal, Index: l.slot})
 	c.emit(bytecode.OpGetLocal, l.slot, 0)
 	c.compileExpr(n.Value)
 	// Not by emit, which would fuse it with a local or a constant before it,
@@ -248,6 +251,8 @@ func (c *compiler) compileLocalAppend(n *ast.Assign) {
 // compileOwnedAppend compiles an addition ownedAppend took.
 func (c *compiler) compileOwnedAppend(n *ast.Assign) {
 	idx, _ := c.resolveUpvalue(n.Target.(*ast.Ident).Name)
+	c.reg.NoteRead(n.Target.(*ast.Ident), regcomp.Res{Kind: regcomp.ResUpval, Index: idx})
+	c.reg.NoteWrite(n.Target.(*ast.Ident), regcomp.Res{Kind: regcomp.ResUpval, Index: idx})
 	c.emit(bytecode.OpGetUpvalue, idx, 0)
 	c.compileExpr(n.Value)
 	c.emitAt(int(n.Start), compoundOpcode(n.Op), 0, 0)

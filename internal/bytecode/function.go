@@ -507,6 +507,10 @@ type Function struct {
 	ReadsMaker bool
 	// HasYieldStar says the code has a yield* (OpYieldStar).
 	HasYieldStar bool
+	// Reg is the function's register code, which the register backend
+	// compiled from its AST where it is on and covers the function, or nil
+	// (docs/register-interpreter.md). Last, so that no field moves.
+	Reg *RegCode
 }
 
 // LineAt returns the source line of the instruction at pc, or 0 if unknown.

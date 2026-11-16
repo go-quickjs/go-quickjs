@@ -279,6 +279,8 @@ func startCodeDump(path string) *os.File {
 // is made of. A function is named by its script and line.
 func (r runtimeOf) Report(name string) {
 	reportTimes()
+	// The register tier's crossings, where QJS_REGREPORT asks for them.
+	vm.RegReport()
 	if !*jitReportFlag {
 		return
 	}

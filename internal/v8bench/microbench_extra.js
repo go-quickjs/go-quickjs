@@ -986,6 +986,36 @@ function call_odd(k)
     return k === 0 ? 0 : call_even(k - 1) + 1;
 }
 
+function am3(i,x,w,j,c,n) {
+  var this_array = this.array;
+  var w_array    = w.array;
+
+  var xl = x&0x3fff, xh = x>>14;
+  while(--n >= 0) {
+    var l = this_array[i]&0x3fff;
+    var h = this_array[i++]>>14;
+    var m = xh*l+h*xl;
+    l = xl*l+((m&0x3fff)<<14)+w_array[j]+c;
+    c = (l>>28)+(m>>14)+xh*h;
+    w_array[j++] = l&0xfffffff;
+  }
+  return c;
+}
+
+function crypto_am3(n)
+{
+    var a = { array: [] }, w = { array: [] }, i, c = 0, k;
+    for (i = 0; i < 64; i++) {
+        a.array[i] = (i * 0x1234567) & 0xfffffff;
+        w.array[i] = (i * 0x7654321) & 0xfffffff;
+    }
+    a.am3 = am3;
+    for (k = 0; k < n; k += 32)
+        c = a.am3(0, 0x2345678, w, 0, c & 0xfffffff, 32);
+    global_res = c;
+    return n;
+}
+
 function call_mutual(n)
 {
     var j, s = 0;

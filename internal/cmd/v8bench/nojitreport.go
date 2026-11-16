@@ -5,6 +5,8 @@ package main
 import (
 	"fmt"
 	"os"
+
+	"github.com/go-quickjs/go-quickjs/internal/vm"
 )
 
 // reportStart refuses -jitreport, -jitcode and -jitcompile: a build without the JIT
@@ -15,3 +17,7 @@ func reportStart(runtimeOf) {
 		os.Exit(1)
 	}
 }
+
+// Report prints, after each benchmark, the register tier's crossings where
+// QJS_REGREPORT asks for them (docs/register-interpreter.md).
+func (runtimeOf) Report(string) { vm.RegReport() }

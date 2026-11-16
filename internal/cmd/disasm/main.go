@@ -43,6 +43,7 @@ func main() {
 		tree   = flag.Bool("tree", false, "say whether the tree tier builds each function, and why not")
 		jit    = flag.Bool("jit", false, "show numeric JIT IR eligibility and pre-instruction exit maps (no native compilation)")
 		src    = flag.Bool("src", true, "show the source line before the instructions it compiles to")
+		reg    = flag.Bool("reg", false, "show each function's register code beside its stack code, with the instructions each has (docs/register-interpreter.md)")
 	)
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: disasm [flags] file.js | -e source\n")
@@ -59,12 +60,15 @@ func main() {
 	if strings.HasSuffix(name, ".mjs") {
 		*module = true
 	}
+	if *reg {
+		compiler.SetRegisterForm(true)
+	}
 	fn, err := compile(name, text, *module, *strict, *quirks)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "disasm:", err)
 		os.Exit(1)
 	}
-	p := printer{w: os.Stdout, lines: splitLines(text), only: *only, tree: *tree, jit: *jit, src: *src}
+	p := printer{w: os.Stdout, lines: splitLines(text), only: *only, tree: *tree, jit: *jit, src: *src, reg: *reg}
 	p.function(fn, "")
 	if p.only != "" && p.printed == 0 {
 		fmt.Fprintf(os.Stderr, "disasm: no function is named %q\n", p.only)
@@ -119,6 +123,7 @@ type printer struct {
 	tree    bool
 	jit     bool
 	src     bool
+	reg     bool
 	printed int
 }
 
@@ -238,6 +243,18 @@ func (p *printer) header(fn *bytecode.Function, indent string) {
 }
 
 func (p *printer) code(fn *bytecode.Function, indent string) {
+	if p.reg {
+		if fn.Reg == nil {
+			fmt.Fprintln(p.w, indent+"  register code: none (the stack form runs it; QJS_REGTRACE says why)")
+		} else {
+			fmt.Fprintf(p.w, "%s  register code: %d instructions, %d registers (stack form: %d instructions)%s",
+				indent, len(fn.Reg.Code), fn.Reg.NumRegs, len(fn.Code), "\n")
+			for pc := range fn.Reg.Code {
+				fmt.Fprintln(p.w, fmt.Sprintf("%s  %4d  %s", indent, pc, fn.Reg.Format(pc)))
+			}
+			fmt.Fprintln(p.w, indent+"  stack code:")
+		}
+	}
 	last := int32(-1)
 	for pc := range fn.Code {
 		if p.src {
