@@ -93,17 +93,17 @@ workload suite does not represent every application; see the
 [goja comparison](docs/benchmarks.md#v8-version-7-benchmark-suite) for the
 individual scores and measurement details.
 
-Measured at `acffb1aa`, before the register interpreter was the default,
-on the V8 benchmark suite as a whole it is ahead of C QuickJS: it takes 0.53
-times QuickJS's time over the suite and has a 41% higher composite score,
-and with the experimental JIT 0.24 times its time and a composite score 5.2
+Measured at `258b4e96`, on the register interpreter, on the V8 benchmark
+suite as a whole it is well ahead of C QuickJS: it takes 0.37 times
+QuickJS's time over the suite and has 1.97 times its composite score, and
+with the experimental JIT 0.22 times its time and a composite score 5.6
 times as high. On the larger programs of Octane and Are We Fast Yet it
-takes 0.90 and 0.96 times QuickJS's time, and 0.39 and 0.22 times with the
-JIT. A page React 18 renders on the server takes 0.84 times, and 0.58 with the
-JIT. Single operations cost less: QuickJS's own micro-benchmarks take 0.81
-times as long on average, and 0.30 times with the JIT, though a few take
-about twice as long, the weak collections and an
-array grown by assigning past its end among them. See [Compared with C QuickJS](docs/benchmarks.md#compared-with-c-quickjs).
+takes 0.70 and 0.68 times QuickJS's time, and 0.46 and 0.20 times with the
+JIT. A page React 18 renders on the server takes 0.64 times, and 0.54 with
+the JIT. Single operations cost about half as much: QuickJS's own
+micro-benchmarks take 0.49 times as long on average, and 0.28 times with
+the JIT, though a few take up to 1.5 times as long, the weak collections
+and the BigInts past 64 bits among them. See [Compared with C QuickJS](docs/benchmarks.md#compared-with-c-quickjs).
 
 ## Documentation
 
