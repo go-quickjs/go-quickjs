@@ -149,12 +149,15 @@ Nothing in a function is capped:
   allocator gives near registers to parameters, temporaries and the bindings
   used most, and far ones to the rest; an operation on a far binding is a
   move in, the operation, a move out. A function of that size is generated
-  code, run once.
+  code, run once (item 15).
 - **Sites, constants and names past 65,535.** An operation whose index would
   not fit has a wide form: the same operation followed by an extension word
   holding a 32-bit index, read by the wide form's case alone, so the narrow
   form's case never tests for it. Global reads, loads of constants and
-  closures already take a 32-bit BC and need none.
+  closures already take a 32-bit BC and need none. A name past 16 bits
+  needs no wide form either: only cold operations and miss paths read a
+  name, so its operand is `RNameFar` and `RegCode.FarNames`, by the
+  instruction's pc, holds the index (item 14).
 - **Jumps past 32,767 instructions.** A compare-and-branch's offset is 16
   bits; one that would not fit is the opposite branch over a `jmp`, whose
   offset is 32 bits.
@@ -341,6 +344,41 @@ register code is compared the same way between two revisions of the
 backend, by its own listing. Once the stack form is retired, compilediff
 compares register code alone.
 
+### Compiled at the first call
+
+A function's register code is compiled when it is first called, as V8
+compiles lazily: one never called is never compiled. The stack compiler
+records what the backend needs as it compiles (the `Record`), and keeps
+it, with the function's AST, in a `bytecode.RegLater` until then;
+`Function.RegCode` compiles it once, under a lock, since a program's
+functions are shared by the runtimes running it. A script's or a module's
+code, which runs as soon as it is compiled, is compiled with it
+(`Function.Reg`). What reads register code before a call -- the program
+sites a re-run seeds (`zzz_rerun.go`) -- reads it only where it has been
+compiled (`RegCompiled`); a closure made before its function's first call
+is planned at that call (`regStmt`, `planTreeCall`), not as it is made.
+A leaf's code (`Function.Leaf`) is compiled as its closure is made, as
+all were: the stack form's leaf evaluators (`pureCall`, `leafCall`)
+answer its calls and build nothing, so it would never reach a first call
+of its own, and a sort's comparator ran in `pureCallAt` rather than
+`regLeafRun` (`array_sort` +15%, the callbacks of `forEach`, `map` and
+a replacer 6 to 18% slower at every placement, until it was).
+
+The backend added names, constants and property sites to the Function as
+it compiled. By the first call those are shared: every runtime that loaded
+the program has made a closure's tables from them (`prepare`), and another
+goroutine may be reading them. So code compiled lazily adds nothing to the
+Function: it compiles over a view of it whose slices are full to their
+capacity, and keeps the tables with its additions in the `RegCode`
+(`Names`, `Constants`, `PropSites`), its sites numbered past the private
+members' so that the stack form's numbering stays as it is. A runtime adds
+what is past a closure template's tables where the template is first
+given its register code (`regExtend`): where `cl.reg` is set (`regOf`,
+`regStmt`), which every entry into the code reads, and where a plan lets
+a call enter the code without it (`regBindPlan`, for `regDirect`). A table
+missed would be an index out of range, not a wrong read: the loop's reads
+of names, constants and caches are bounds-checked.
+
 ## The loop
 
 The interpreter is a loop of its own, `runReg`, in files that sort after
@@ -365,18 +403,35 @@ the ones Go allows:
   keeps the pc in a memory record and reads it, and its instruction, back
   afterwards, so that Go has no reason to save them at every dispatch.
   Slow paths are out of line and re-read their instruction from the code.
-- **The loop stays below Go's big-function size.** Go's inliner calls a
-  function of 5,000 or more IR nodes big and inlines only callees of cost
-  20 or less into it; past that, `regInt32` (cost 41, 18 calls),
-  `regTruth`, `Value.IsString`, `propCache.holder` and a dozen more become
-  calls in every case. The count is of the loop's own source, before
-  anything is inlined into it: a helper inlined costs the loop the few
-  nodes of its call, not its body. `TestRegLoopIsNotBig` pins it, as
-  `TestIntendedInlining` pins the helpers, and `internal/cmd/bigfunc`
-  measures it: `go run ./internal/cmd/bigfunc -func runReg` prints the
-  count against 5,000, `-cases 40` each case clause of 40 nodes or more,
-  and the callees above cost 20 the loop would call if it were big. The
-  budget is spent with care, a hot case at a time:
+- **The loop is big, and calls no helper above cost 20.** Go's inliner
+  calls a function of 5,000 or more IR nodes big, and that is all being
+  big does (Go 1.24.13's and 1.27.3's `inl.go`): the cost of a callee it
+  inlines into it drops from 80 to 20 (40 for a closure), and PGO's hot
+  calls are refused. So the loop calls only helpers of cost 20 or less --
+  `IsNumber` 12, `Object` 15, `mkTag` 15, `regTagged` 13 (`isTag` of bits
+  read once), `regIsInt32` (a number's round trip through int32, a
+  bool), `RInstr`'s fields 3 to 6 -- and writes the rest out where it
+  uses them: ToBoolean (`regTruth`, 69) in `jmp_f` and `jmp_t`, the
+  prototype holder (`propCache.holder`, 65) in the property reads,
+  `IsNullish` (35), `arrayLength` (52), typeof's kind (`Kind` 30,
+  `regTypeOf` 29), `regJumpOff` (28), the typed element read (`regTypedAt`
+  80, `regTypedLoad` 62). It is at 5,438 nodes, and a helper above 20 is
+  what would cost it: `TestRegLoopCallsNoHelper` fails on one, every call
+  the loop's source makes of a function Go can inline being inlined at
+  the call. `internal/cmd/bigfunc` measures it: `-func runReg` prints the
+  count, `-cases 40` each case clause of 40 nodes or more, and the
+  callees above cost 20 the loop calls; `-force runReg` compiles it as big
+  whatever its size and `-small` as not big, to compare what `-m` says it
+  inlines and its code, and `-costs` prints each inlinable function's
+  cost, which `-m=2` runs out of memory printing. No written-out case kept
+  Go's code for the inlined helper -- the shape of an inlined call's
+  parameters and its inline marks steer it -- and the base had
+  materialised `regInt32`'s ok and tested it: 3,444 instructions became
+  3,338, the frame 0x1b8 bytes 0x1a0, and over two placements
+  `loop_int32` was 8.6% faster, `int_arith` 3.2%, the closure tests 3 to
+  6%. The placements' filler in the loop (`padRegInner`) is two tests,
+  of cost 20: three cost 31, and were calls in the big loop. What the
+  budget was spent on while it bound:
   - **The compare-and-branches share their taken tail.** A case is a
     fast path and a `goto`: to `slow` (the slow path, `regSlow`),
     `cmpSlow`, `typed`, `jump`, or `taken`, a compare-and-branch taken,
@@ -408,18 +463,68 @@ the ones Go allows:
   - At d931057d the loop was at 4,981, 19 below the limit; with the
     shared taken tail and `append` and `str_freeze` as cases of their own
     it is at 4,875, 125 below.
-- **The hot code is one block.** `zzreg_run.go` holds, declared first
-  and in this order, `runReg`; the call and its return, `regCallW` and
+  - **A case no suite runs per turn leaves the loop whole.** Counted over
+    Octane, the V8 suite, AWFY and the micro-benchmarks, `add_index` and
+    `add_index_imm` (`a[i] += v`, `a[i] += 1`; 126 and 112 nodes) ran
+    957 times in all: they are labels of the slow path's case, which
+    `regSlow` answers (`regAddIndex`), their opcode values unchanged.
+    The loop is at 4,629, 371 below. What stays was counted too:
+    `add_index_k` and `jtypeof` run only in micro-benchmarks made for
+    them, `get_index_pre` is 0.66% of the V8 suite's instructions.
+  - **A typed array's element is read in the loop.** Once the dense
+    element has missed, `get_index`'s and `get_index_imm`'s shared miss
+    label (`typed`) reads a typed array's element as native code does:
+    the view's data pointer and length, cached while its epoch is the
+    runtime's (`cacheView`), `regTypedAt` (no BigInt kind), then
+    `regTypedLoad` for every kind but Float16Array, a float64 the loop
+    makes a Value with `regNum`. Each helper is within Go's inlining
+    budget of 80 (in one, with the Value made inside, it was 125); the
+    loop spends 97 nodes. A store is `regSetMiss`'s, one call, by
+    `regTypedStore`: a float kind's number, an integer kind's (clamped
+    aside) ToInt32 of a number below 2^63. Any other kind, key or view
+    goes on to `regElemMiss`, which now reads the BigInt kinds too.
+    Measured over placements, each placement of the code mattered more
+    than its instructions: the read in `get_index`'s case laid the
+    loop's blocks out otherwise (a call's tail before the dispatch), and
+    `empty_down_loop`, `prop_update`, `array_for` and eight more were 5
+    to 14% slower at every placement, Mandreel 11%; the store in
+    `set_index`'s case, before `regSetMiss`, made the appends
+    (`array_prop_create`, `array_index_append`, `array_new_fill_down`)
+    6 to 9% slower; a class test put first there, the empty loops and
+    nine more 6 to 12%.
+- **The hot code is one block.** `zzreg_run.go` holds `runReg`, and
+  `zzreg_run_call.go` after it, declared in this order, the call and its
+  return, `regCallW` and
   `regEnterW`; what a call runs out of line, `regDirect` (a built-in's
   callback), `regNative`, `regLeafRun`, `regCloseUpvalues`; and what an
   iteration runs out of line, `regSlow` and its operators, `regElemMiss`,
   `regSetMiss`, `regBackEdge`, `regAppend`, `regCharCodeAt`,
-  `regIterNext`, `regLit`, `regMarkedCall`. Go lays a package's functions
+  `regIterNext`, `regLit`, `regMarkedCall`, `regApplyArgs`. Go lays a package's functions
   out in file order, so the distances between them -- which decide what
   shares the op cache's sets -- depend on their own sizes alone, and the
   layout lock's lever Q (`zzreg_ru_layoutpad.go`, the anchor `runReg`)
   puts the block at a fixed address modulo 4 KB whatever changes before
   it; the placements' pad before it (`zzreg_ru_pad.go`) moves it whole.
+  The block is three files: `zzreg_run.go`, `runReg`;
+  `zzreg_run_call.go`, `regCallW` to `regSlow`; and `zzreg_runs.go`,
+  `regSlow`'s operators on, `regBinImm` first. Lever W
+  (`zzreg_run_a_layoutpad.go`, the anchor `regCallW`) keeps the calls
+  where they are against `runReg` whatever the loop's size does, and
+  lever P (`zzreg_run_layoutpad.go`, the anchor `regBinImm`) the third
+  file, so that a case added to `regSlow` or to `runReg` moves nothing
+  after it. W's target is where `regCallW` was at 679d54b3: when the
+  loop's helpers were written out (it became 512 bytes shorter) the
+  calls moved 512 bytes back against it, and `arguments_read` and
+  `arguments_strict_read` -- a call and three `args_index` slow paths a
+  turn -- were 8.8% and 7.5% slower at every placement; the base with
+  3,584 bytes of pad after `runReg` (512 back modulo 4 KB, its code
+  unchanged) was 8.4% and 11.4% slower at three of four. With W, both
+  are level (+1.2%, +0.5%). Its target is 64 bytes past where
+  `regBinImm` was before the split, a pad of a few stores: at the old
+  place, a pad of 4 KB, every function and variable after it the same
+  modulo 4 KB, `loop_arith` was 9.2% and `loop_int32` 5.2% slower at
+  every placement, with `runReg` -- all those loops run -- at the same
+  address and the same code. The 64 bytes measured level.
   It stays where the register files were, after the JIT's, not first in
   the package: there it moves none of the old tiers' code, whose anchors
   all come before it, and only the A pad would change to take the
@@ -436,6 +541,45 @@ the ones Go allows:
   The set-up and the entries from a tree are in `zzreg_entry.go`. An
   unrelated function added before the block, with the pads regenerated,
   leaves every function of the block where it was.
+- **The hot cases come first, and a golden file holds where they are.**
+  With lever Q pinning `runReg`'s start, a case's address modulo 4 KB --
+  its op-cache set -- is decided by the code before it in the loop alone,
+  and Go lays the cases out in the switch's source order (the dispatch
+  table's entries rise with the cases). So the hot cases are first, in
+  their order, and every other case is after them: an edit to a case that
+  is not hot moves no hot case. `internal/vm/layoutcases.txt` names the
+  hot ones and holds each one's offset from `runReg`'s start in the lock's
+  four configurations, which `internal/cmd/layoutpad` reads from the
+  build's dispatch table (the table the `LEAQ` before the dispatch's
+  indirect jump loads, read from the PE or ELF image); `TestLayoutLock`
+  fails, naming the case and by how much, where one has moved. A
+  deliberate edit to a hot case rewrites the offsets with `go generate
+  ./internal/vm` and is timed; a new operation is a cold sub-operation
+  (`RColdOp`) or a case after the hot ones.
+  The hot set is measured, not chosen: dispatches by opcode, counted in
+  register mode over the V8 suite, Octane and AWFY (37 benchmarks, each
+  weighted alike) and each micro-benchmark on its own. The fewest
+  operations covering 95% of the suites' dispatches are 55 (`get_prop`
+  15.8%, `add` 5.2%, `move` 5.1%, `call_method_w` 4.5%, `mul` 3.8%,
+  `get_index` 3.4% ...); every operation 5% or more of a micro-benchmark's
+  adds 43 more, 98 in all, 98.3% of the suites' dispatches. The 18 cases
+  of no hot operation went after them: `load_this`, `check_ref`, `bit_or`,
+  `shl`, `ushr`, `jnlt_upval`, `jnle_upval`, `jle_imm`, `jnle`,
+  `jnle_imm`, `jge`, `jnge`, `jnge_imm`, `jeq`/`jeq_imm`,
+  `jnull`/`jnotnull`, `jseq_imm`, `throw`, `key_of_base`. `nop` stays
+  first, where the placements put their filler, and 42 and 127 last with
+  `invalid`. Over four placements against e41b0755 the reorder was level:
+  the micro-benchmarks 0.999 by the geometric mean, none 3% slower at every
+  placement, the V8 suite +0.2%.
+  This replaces the levers inside the loop designed before -- anchors on
+  the hot cases' entries, filler in never-run cases. In the loop a case can
+  start at any byte, and an exact offset modulo 4 KB takes some 1,000
+  stores of 7 and 10 bytes per lever, written into `runReg` itself: about
+  2,000 lines and up to 14 KB of dead code in the loop, its IR nodes
+  doubled, and the hot cases spread over more lines and sets, the cost the
+  lock exists to avoid, against a failure that moving the cold cases out
+  of the way prevents (`private_field`'s case among the hot ones moved
+  `crypto_am3`'s loop).
 - **No constants in registers.** What Go's loop-invariant pass would take
   out of the loop is read from a variable (above).
 - **The loop holds only the hot operations.** Every case added moves the
@@ -464,7 +608,33 @@ the ones Go allows:
   list, and no hot operation is renumbered: its case's code would move.
   At the removal of the translation reference the free values were 24,
   29, 36, 37, 40, 41, 42 and 43, and 127 is `invalid`'s; `iter_next`
-  took 24, `regexp_lit` 29, and the tail calls 36 and 37.
+  took 24, `regexp_lit` 29, the tail calls 36 and 37, and `get_private`
+  and `set_private`, a class's reads and writes of its private members,
+  40 and 41. They have no code in the loop: their values are labels of
+  the slow path's case, `regSlow` passes them with `cold` to
+  `regColdSub`, whose switch on X passes `RPrivateX` (0xff, no
+  sub-operation) on at its end to `regPrivate`, in `zzreg_class.go`,
+  before the block. That is a dispatch fewer than as `cold` operations
+  (`regColdClass`), and moves nothing of the block: `private_field` went
+  from 60.6 to 57.0 ns (the tree 24.1). As cases of their own -- a call
+  each, as `append` is, inline or after `tail` -- it was 38.5 ns, but
+  the 60 nodes changed `runReg`'s spill slots: a slot at 0x80 went to
+  0x78, every instruction using it three bytes shorter, the code from
+  the 765th instruction on moved, and `crypto_am3` was 8.6% slower at
+  every placement. A case in `regSlow` grew it by 64 bytes and moved
+  the block after it; a switch on the operation at `regColdSub`'s head
+  with the functions in the block moved `regColdWrap`, and
+  `bigint64_fnv1a` was 5.8% slower at every placement.
+  `yield`, a loop over a generator's step, took 43. Its case
+  made Go allocate the loop's registers otherwise (100 instructions
+  more, a frame 72 bytes smaller): against the loop before it,
+  `typed_u64_read` and `method_moves` were 6 and 8.5% slower at every
+  placement of four, and nothing else 3% at all four; with yield sent
+  to the slow path's case instead, the loop of the same allocation as
+  before, 13 tests were 3.8 to 11.7% slower than with its case at every
+  placement -- `array_read`, `global_read`, `int_arith`, `float_arith`,
+  `string_length`, `loop_sum`, `loop_locals`, `loop_elements`, the
+  generators' -- and the case stays.
 
 What remains is Go's: a register store of a `Value` is a write-barrier
 check, the loop's instruction word is still saved at the dispatch where a
@@ -606,15 +776,90 @@ are.
 
 ## Generators and async functions
 
-A generator's frame is its window. Suspension copies the window and the pc
-into the generator object, and resumption copies them back to the top of
-the stack and continues at the pc, as the stack form does with its operand
-stack -- but there is no operand stack, so the copy is the frame's
-registers alone. An `await` whose operand is already settled, or not a
-thenable, with no job waiting, continues without suspending at all: the
-profiling found every await fully suspending and resuming, which is most of
-`async_await`'s 3.65x and is a defect to fix in the existing interpreter
-first.
+A generator's frame is its window (regcomp's gen.go, the VM's
+zzreg_zgen.go). Suspension copies the window and the pc into the generator
+object, and resumption copies them back to the top of the stack and
+continues at the pc, as the stack form does with its operand stack -- but
+there is no operand stack, so the copy is the frame's registers alone. The
+captures open on the window's registers move with it, pointed at the
+generator's copy on a suspension and back at the stack on a resumption
+(`regMoveUps`), so that two closures made in different resumptions share a
+binding. A generator of register code keeps its window in its `vals`,
+its registers from `genFrom` and then, where the code keeps them, its
+arguments; its `pc` is a register pc, and `generator.reg` marks it.
+`genFrom` is 2 where no closure the code makes captures the callee's
+register or this's and nothing reads a local by its register: a
+resumption makes those two again from the generator, whose `this` is
+this's register (an async arrow's lexical this). Each generator and
+async function keeps two values fewer: `extra_pair_gen` keeps 3, in
+the allocation of 4 rather than 8 (the tree's keeps its 2 locals), and
+`async_chain` is 7.8% faster.
+
+- **The code's first instruction is `gen_entry`** (cold), which a
+  resumption that goes on skips: `runReg` starts at the pc it is given,
+  0 for any other frame. `gen_entry` runs at the frame's first run, and
+  at a throw injected, which it throws at the suspension, a negated pc
+  in the frame's `savedSP`. `yield` is a case of the loop's own
+  (`RYield`), the step of a loop over a generator: through `cold`, the
+  three switches its suspension and `gen_entry` went through
+  (`regSlow`, `regColdSub`, `regColdGen`) were a third of a for-of's
+  step.
+- **A generator's creation runs its parameters' binding** up to
+  `end_params`, which suspends it, as the stack form's prologue does: a
+  default or a pattern that throws, throws at the call. An async
+  function's are bound by its first resumption, which runs at once
+  (`runAsync`), an error there rejecting its promise as the specification
+  has it.
+- **What a resumption delivers goes to the suspension's own register,**
+  never a binding's, written before the code runs (`regGenResume`):
+  `yield` (R[A] the value sent in), `await` (what it settled to),
+  `yield_star` (the value and how, a pair). A return injected at a yield
+  is compiled after it, a return statement there, through the finally
+  clauses and the loops' iterators it leaves (`retFrom`); the yield's next
+  instruction jumps past it, and a resumption by next starts past that
+  jump. A throw injected is thrown at the suspension itself, inside its
+  handlers' ranges.
+- **`yield*` is a loop of the code's own,** as the stack form's is:
+  `iter_resume` sends what the generator was resumed with to the
+  delegate's next, throw or return, `iter_unpack_delegate` reads its
+  result (an async generator awaits it first), `yield_star` suspends with
+  it, and a return the delegation carried out returns from after the
+  loop. An operation whose next instruction is a jump (`iter_resume`,
+  `iter_unpack_delegate`, `iter_result`, `async_iter_close`) takes it to
+  leave and skips it to go on: the verifier checks the jump is there.
+  A synchronous yield* to a generator its realm's next steps is stepped
+  directly, as the tree's `delegateNext` steps one (`regDelegateNext`):
+  what the delegate yields goes on as a value, the frame suspended as at
+  the `yield_star` four instructions on (the verifier checks it is
+  there), with no result object at any level of a chain of delegations.
+  The delegation's steps are placed at the operand's position, as the
+  stack form's are.
+- **A for await's step** is `async_iter_next`, `await` and `iter_result`
+  into a register of its own; the body is in the ranges of the cursor's
+  handler, which closes it as AsyncIteratorClose does -- the return
+  method's result awaited, what closing throws dropped -- and a break, a
+  continue of an outer loop or a return that leaves it closes it the same
+  way, the result awaited and checked to be an object.
+- **The drivers are the stack form's:** next, return and throw, an async
+  function's steps and an async generator's queue call `resumeFull`, and
+  `resumeFrame` hands a register generator's resumption to
+  `regGenResume`, which answers with the same `resumeResult`; next
+  resumes a suspended register generator of its realm at once. A for-of
+  over a register generator steps it with no recover (`regGenStep`),
+  its body throwing as register code throws: next's frame pushed as
+  `stepIter` pushes it, no result object, no search for a tree. A
+  generator whose parameters need no code (`end_params` the second
+  instruction) is not run at its creation; its first resumption starts
+  past `end_params`. A call site of a generator function or an async
+  function makes its object without the generic call's search
+  (`regGenCall`), an async function's first step at once.
+- **An await's job continues in place.** An async function its await's
+  job resumes from the job queue (`generator.awaitJob`, a frame of kind
+  `regFrameAwaitJob`) goes on in place at an await of a value that is not
+  an object or of a fulfilled promise of the realm's own constructor,
+  where no job is waiting: the job the await would queue would be the
+  queue's next, and the frame would be resumed with that value. The first
+  run of an async function, which its caller's code follows, never does.
 
 ## Closures and upvalues
 
@@ -692,8 +937,8 @@ the language, and the JIT's README is updated with it.
   stack form's dynamic lookups for names inside one, as operations of the
   register form's own.
 
-All three are the last stage's: until then a function with a debugger, a
-direct eval or a `with` runs as now.
+A direct eval and a `with` are compiled (Stage 2, item 8), and so is the
+debugger's code (item 10).
 
 ## Stages
 
@@ -1123,6 +1368,155 @@ loop counter may be live across a back edge; the literal rule, no raw
 register live across anything that can call out, would forbid every raw
 counter.
 
+Reopened, 2026-11-11, for asm.js-style code, where the deferral's reasons
+do not hold. Octane's zlib, Mandreel and Game Boy were 38.5%, 26.9% and
+17.9% slower than the tree. Profiled (`-cpuprofile`, two runs each):
+
+| | zlib | Mandreel | Game Boy |
+|---|---:|---:|---:|
+| time, tree → register (ms, one profile run) | 16,263 → 21,490 | 5,187 → 6,383 | 869 → 983 |
+| `regInt32` and its `IsNumber`, register | 8.1 s of 22.1 | 1.5 s of 7.1 | small |
+| the tree's `toInt32` and `i32Exact` | 1.05 s of 16.6 | | |
+| `regElemMiss` (a typed array's element) | 3.8 s, 17% | 1.5 s, 21% | 0.16 s, 8.5% |
+
+zlib's gap is the conversions: the bitwise operators' round trip of each
+operand through a float (`regInt32`) and of each result back (`Int32`),
+`or_imm`'s `x|0` alone 3.5 s of it, where the tree's int32 trees keep an
+int32 in a Go variable through an expression. Mandreel's is the typed
+heap as much: every `heap32[(r1+2)]` is a dense-array check missed and a
+call of `regElemMiss`, which decodes the instruction again. Its locals are
+declared without initialisers (`var r0;`) and its keys are sums, nothing
+of which is provable; zlib's are initialised (`var b=0,c=0`) and coerced
+(`a=a|0`), and 700 to 1,300 of its 4,319 `|0`s are of a bare local.
+
+What stands in the way is the loop, not the proof:
+
+- **Opcodes.** The design needs a raw form of each bitwise operator, its
+  immediate form, the wrapping add and subtract, the compares-and-branches,
+  `get_index` and `set_index` with a raw key, and the conversions in and
+  out: about twenty values. Two are free (42 and 43); the 7-bit space is
+  spent.
+- **The loop's budget.** `runReg` is at 4,865 of Go's 5,000 nodes; twenty
+  cases of 25 to 40 nodes each put it past the limit, where Go stops
+  inlining `regInt32`, `regTruth` and a dozen more into every case.
+- **A cheaper check is not one.** `regInt32` without its tag test (a NaN
+  fails the round trip's compare too) made `loop_int32` 8.1% slower at
+  every placement and zlib 1.6%: dropped. Nor is ToInt32 by truncation:
+  `regInt32` as one compare of the bits without the sign against 2^63's
+  (a tagged value, a NaN and the infinities fail it) and `int64(f)`'s
+  low 32 bits, which takes fractions and numbers past 2^32 too, made
+  Mandreel 2.5% and zlib 2.2% slower over four placements (35131ca9 ->
+  it): dropped. `TestRegBitwiseToInt32` pins what either answers.
+
+So the raw registers need room first: a wider opcode field and a loop
+whose rarely hot cases leave it for `regCold`, or a second loop for code
+the backend has typed int32 throughout (an asm.js function), entered at
+the call and holding no Value register at all, which keeps `runReg` as it
+is. Either is a change to the loop's layout as large as any made, and is
+measured over the placements as one.
+
+#### Raw float64 temporaries (designed, 2026-11-11, not built)
+
+What NavierStokes measured: in register mode it was 10% slower than the
+tree tier (two placements' worth of profile, three runs a mode, 6 s of
+samples). Its time is `lin_solve`'s loop, 14 instructions an element --
+`x[currentRow] = (x0[currentRow] + a*(x[currentRow-1] + x[++currentRow] +
+x[lastRow++] + x[nextRow++]))*invC` -- and every intermediate of the
+right side is a `Value` written to its register: the operands' tag tests
+(`IsNumber`, 13.9% of the run), the canonical NaN of each result
+(`regNum`, 3.8%), and the store of both words. The tree evaluates the same
+expression as nested nodes that return float64s, and tests and boxes only
+at the leaves and the root. The index cases' checks, the other 17%, were
+trimmed by 2d91b42b (NavierStokes -7.7%).
+
+The design keeps an expression's float64 intermediates raw, as the tree
+does, without speculation and without a second representation of `Value`:
+
+- **A raw region.** The backend marks a region: a maximal straight run of
+  the arithmetic operators `+ - * /` and unary `-` (and, with the int32
+  design above, the bitwise ones) over at least two operations, whose
+  leaves are registers the region does not write -- locals, and
+  temporaries computed before it, an element or a property read among
+  them -- and whose interior results are read only inside it. Nothing in
+  a region calls, stores, throws or jumps: loads stay outside it, as
+  Values. Its root's value is the one result it writes as a `Value`.
+- **One guard at the head.** `guard_num` tests up to three leaf registers
+  are numbers (more leaves, more guards), and on any that is not, jumps to
+  the region's generic code: the same expression compiled as today. Once
+  every leaf is a number, `+ - * /` of numbers is a number and nothing in
+  the region can leave it, so its operations test nothing.
+- **Raw operations.** `fadd`, `fsub`, `fmul`, `fdiv` and `fneg` write only
+  the number word of their result register -- a float64 whose NaN, if it
+  is one, has whatever bits the FPU gave it -- and read only number words:
+  a leaf's, which is the number itself, or an interior's. The root's
+  operation is the boxing form (`fadd_v` ...): it writes the whole `Value`,
+  its NaN canonical (`regNum`'s test, once a region, not once an
+  operation) and its pointer word nil. `IsNumber` is the guard's alone.
+- **No rebox, no exit in the middle.** A failed guard is before anything
+  was written but the region's own interiors, which nothing outside reads,
+  so the generic code runs the expression from its start with the leaves
+  as they were: the same answer, the same side effects (a string `+`'s, a
+  `valueOf`'s), the same throw (a BigInt mixed with a Number), the same
+  stack trace -- the generic instructions carry the source positions.
+  Nothing raw is ever seen by a reader of `Value`s: the interiors are dead
+  when the region ends, and the root is boxed.
+- **The generic code.** Out of line, after the function's last
+  instruction, ending in a jump back to the instruction after the region:
+  the region costs no dispatch where the guard holds. Code size: each
+  region twice, plus a guard and a jump.
+- **The collector.** An interior's pointer word is not written: it keeps
+  whatever the register held before, a pointer the collector already
+  knew, so nothing it sees is invalid; `sweepStaleSlots` clears it at the
+  next back edge, as it clears any dead temporary today. No raw word is
+  ever read as a pointer.
+- **The verifier.** It checks each region: its interiors are written by
+  raw operations and read only by raw ones of the same region; every leaf
+  is covered by its guard and not written in the region; no instruction in
+  it calls, stores or jumps, and no label is inside it (a jump or a
+  handler cannot enter it); the guard's target is the region's generic
+  code, which ends in a jump to the region's end. A register is raw only
+  between its raw write and its last raw read, so no join, no handler and
+  no call ever meets one. A generator's suspension, a debugger's stop and
+  a direct eval are statements, never inside an expression's region.
+- **Opcodes.** Eleven values: `guard_num`, five raw operations and five
+  boxing ones. The 7-bit space has one free value (42). The 18 cases of no
+  hot operation (layoutcases.txt) become cold sub-operations, which frees
+  them, and the raw operations are cases after the hot ones until timing
+  puts them among them (a hot-case edit, with the golden file).
+- **What it saves, estimated.** In `lin_solve` the region is the right
+  side above: 7 operations, 5 leaves in 2 guards. Per element: 7 tag tests
+  of operand pairs become 5 in two instructions, 6 canonical NaNs become 1,
+  6 pointer-word stores become 1, one dispatch more (the second guard)
+  for none of the boxing. Of the 14% and 3.8% above, about two thirds go:
+  10% of NavierStokes, which would put it level with the tree. Crypto's
+  `am3` gains with the int32 form, not this one.
+- **Tested by difference.** regdiff's arithmetic over numbers, strings,
+  BigInts, objects with `valueOf`, NaNs of every payload, -0 and the
+  infinities, each leaf of a region in turn not a number.
+
+What it does not do: speculate on a load's type, or keep a value raw
+across a statement, a call or a loop's back edge -- a loop variable stays a
+`Value`. That is where the int32 design's verifier of kinds would be
+needed; this one needs none beyond the region's.
+
+Scheduled, 2026-11-11, after the measured gaps against the tree. At
+2d91b42b NavierStokes is level with the tree in register mode (1,653 ms
+against 1,680, three runs each): the indexing trim closed the gap this
+design was first written for. What it still removes is 17 to 19% of a
+float loop (`IsNumber` 12.5%, `regNum` 5.0% of NavierStokes), and level
+with the tree is not the goal: the tree goes once register mode is level
+or better everywhere, and the aim is the comparison engine. The order:
+generator resumption in place and the forwarder construction path first,
+both measured gaps against the tree, then this, in two stages, each
+timed alone -- the 18 cases of no hot operation made cold sub-operations,
+which frees their opcode values (a compare-and-branch that slows a test
+3% at every placement stays a case), then the region pass, its opcodes,
+the verifier's rules and the differential tests behind a compiler switch,
+made the default only if it earns it over its cost in register-code
+bytes and compile time. The region machinery is shaped for int32 regions
+(`guard_int32`, raw integer and bitwise operations, Crypto's `am3`)
+without building them.
+
 ### Stage 2: zero refusals
 
 The register tier is the baseline interpreter: it refuses nothing V8's
@@ -1214,9 +1608,9 @@ it):
 | 1 | a site past 16 bits (a cap) | 0 / 1 / 0 |
 
 Not in the corpora, and refused as well: code compiled for a debugger
-(`WithDebugger`), `for await`, a finally clause nested more than four
-copies deep, and the caps -- more than 65,536 registers, a jump past 16
-bits, a name past 16 bits, more than 255 arguments, properties or
+(`WithDebugger`; done, item 10), a finally clause nested more than four
+copies deep (done, item 11), and the caps -- more than 65,536 registers (done, item 15), a jump past 16
+bits, a name past 16 bits (done, item 14), more than 255 arguments, properties or
 elements in one instruction. A cap goes as a wide form, never a refusal.
 
 The plan to zero, in the order of what each costs real code first -- the
@@ -1255,41 +1649,1312 @@ regdiff cases and test262 in register mode on its directories:
    (`regPlan`), whose callers expect none: `planTreeCall`'s `treeRest`.
    After it: Octane 98.7% register code, the bundles 89.0% (63.4%), all
    44.1%.
-2. **Top-level code** (49,389, most of test262; every script and module):
-   a script's and a module's body as a function of registers, its
-   bindings the global object's and the global lexical environment's.
-3. **Generators, async functions, `for await`** (12,737): the frame's
-   window copied into the generator on a suspension ("Generators and async functions"
-   above), the settled-await fast path; the step's recover goes
-   with them.
+2. **Top-level code** (49,389, most of test262; every script and module)
+   -- done for scripts and modules (`regcomp.CompileTop`, top.go): the
+   body a function of registers, its bindings the global object's, the
+   global lexical environment's or the module's. What it declares before
+   its first statement the stack compiler records as it emits it
+   (`Record.Top`): `check_global_lex`, `check_global_var`,
+   `define_global_var`, `declare_global_lex`, `declare_module_lex` and
+   `define_global_func` of each hoisted function's closure, made in that
+   order as cold operations that do what executeAt's cases do
+   (zzreg_top.go); a lexical declaration's store is `init_global_lex` or
+   `init_module_lex` (`ResGlobalLexInit`, `ResModuleLexInit`), and a
+   var's `set_global` whatever the strictness (`ResGlobalVar`). A
+   module's declarations function (`<module bindings>`) is register code
+   of no statements. The completion value is a register of its own
+   (`Record.Completion`): an expression statement sets it once its value
+   is made, the statements that may produce none reset it, and each copy
+   of a finally clause keeps the try block's around the clause, as the
+   stack form does -- whose copy before a break or a continue did not,
+   and gave the clause's value where Node gives the block's (fixed with
+   it). `typeof` of a name no binding resolves is `get_global_opt`
+   (cold), which the fused `typeof x === "..."` takes too. A loop's
+   backward jump records how many registers its head has live
+   (`RegCode.BackLive`), and the sweep of stale slots clears the rest:
+   a call's window kept what it was given until written over. A
+   Program's register literals are seeded like its stack ones
+   (`listSites`). Eval code, a module with top-level await and code
+   compiled for a debugger are items 3 and 8.
+3. **Generators, async functions, async generators, `for await` and a
+   module's top-level await** (12,737) -- done ("Generators and async
+   functions" above): the frame's window copied into the generator on a
+   suspension, a return injected at a yield compiled as a return there,
+   yield* and for await as loops of the code's own, an await's job going
+   on in place at a settled value, and a for-of's step of a register
+   generator with no recover. The JIT learns no register generator
+   (`jitGenSeen`, `jitGenMakeable`).
+3b. **Captured lexical bindings in loops** (878, with catch bindings and
+   a head expression's closure of the head's binding) -- done: each
+   turn's binding is a new one by closing the captures open on its
+   register (`close_regs`) where the binding is made again -- a block's
+   entry, a for-of or for-in turn's head, a catch clause's entry, its
+   value waiting in a temporary meanwhile -- so that the closures of the
+   turns before keep theirs, closed. A for head's let is copied from turn
+   to turn (CreatePerIterationEnvironment): closed after the head's
+   initialization and at each turn's end, before the update. A head
+   expression's closure of the head's binding reads it in its dead zone,
+   the bindings the stack compiler records for the head (`Record.Heads`).
+3c. **Names in their dead zone, and for-of and for-in stores** (626 and
+   721) -- done: the stack compiler records a dead-zone upvalue's read and
+   write as `ResUpvalCheck` (`get_upval_check`, `set_upval_check`, cold,
+   the dead zone outranking constness), a binding of its own function
+   written before its declaration as `ResLocalCheck` (`check_ref` and a
+   move), and a function expression's own name written as the constant's
+   store or nothing, by strictness. A for-of or for-in loop stores each
+   turn's value to any binding a store reaches: a global var, a global
+   or a module's let, a checked binding, a constant (which throws). Their arguments object is made by
+   the creation's run, from the arguments the generator keeps; a mapped
+   one's aliases are captures of the parameters' registers, which move
+   with the window.
 4. **Classes** (about 27,000 together: constructors, accessors, fields,
    static blocks, private members and methods, `super`, `new.target`,
-   class expressions inside functions).
+   class expressions inside functions, and a module's `export default
+   class {}`) -- done (regcomp's class.go, the VM's zzreg_class.go). The
+   stack compiler records what it made of each class (`Record.Classes`,
+   a `ClassRec`): the slots of the class scope's bindings -- its inner
+   name, its private names' keys, its list of private methods, its
+   computed field keys -- and the constants of the constructor, the
+   instances' field initializer, each member's function and each static
+   field's or block's, in the order they run; and where each private
+   name's key is (`Record.Privates`, a register or an upvalue). The
+   register form makes the class in the stack form's order with cold
+   operations of the stack form's instructions' names (`new_class`,
+   `define_method`, `class_getter` and the rest, `private_name`,
+   `add_private_method`, `define_private`, `set_field_init`), the static
+   elements called as methods of the class, and closes the class scope's
+   captured bindings at its end (`close_regs`), so that a class made in
+   a loop gives each evaluation's methods their own. A field initializer's
+   `FieldInit` is `define_index` or `define_private` on this, and its
+   `InstallPrivateMethods` `install_private_methods`. A private member is
+   read, written, updated, called and tested (`#x in o`) through its
+   key's register (`get_private`, `set_private`, `private_in`, the name
+   for the errors in the instruction's Aux); `super.x`, `super[k]` and
+   `super.m()` through `super_get`, `super_set`, `super_base` and the
+   index forms, the frame's this written to the record first. A derived
+   constructor's this, and an arrow's written inside one, is the binding
+   super() binds (`RegCode.ThisRef`): `this_bound` reads it, checked,
+   `super_call` (`super_forward` for the constructor a derived class is
+   given, `super_spread`) binds it, and every return goes through
+   `derived_ret` (`derivedResult`); `regStmt` runs such a frame. A class
+   constructor has no direct call path (`regPlan`, `regCallSlow`): a call
+   throws, and a construction goes through construct and runFD. The stack
+   form's this before super(), a private method's read for a call and a
+   read in the dead zone had no position of their own (fixed with it).
+   After it, with the strict global store (item 7): all corpora 89.6%
+   register code (70.0%), Octane 99.9%, the bundles 94.1%.
 5. **Parameter patterns, defaults and rest; destructuring everywhere**
    (declarations, assignment targets, catch clauses, for-of and for-in
-   heads; about 4,500).
+   heads; about 4,500) -- done (regcomp's pattern.go). A pattern unpacks
+   a register in the stack form's order: an array pattern's cursor is
+   for_of_start's, stepped by `iter_step` and `iter_rest` (cold) and
+   closed by `iter_close` at the end, its steps in the ranges of a
+   handler of the cursor's that closes it for a throw (`iter_close_throw`,
+   which an iterator whose `next` threw has marked done), as a for-of
+   body's; an object pattern checks its source (`check_coercible`), reads
+   each key -- a computed one converted first (`to_property_key`) -- after
+   its leaf's object and key are evaluated, and makes its rest
+   (`object_rest`) leaving out the keys it read, kept in a window, each
+   evaluated once (the stack form evaluated a computed one again for the
+   rest: fixed with it, as Node has it). A default replaces undefined,
+   the source copied first where it is a binding a store may assign. A
+   list of parameters with a default, a pattern or a rest binds them in
+   order: those a checked read or a closure may see wait in a register of
+   their own while the parameter is in its dead zone (`paramsAside`), and
+   a rest is `rest_param` over the arguments the frame keeps
+   (`RegCode.KeepsArgs`). A for-of or for-in head's pattern or property is
+   unpacked at the head of each turn, inside the iterator's handler.
 6. **BigInt literals** (1,912), **templates and tagged templates** (661),
-   **object literals of every property kind** (1,482).
-7. **The arguments object in every form** (354), **spreads** (258),
-   **names the backend does not read** (434, 335 of the bundles'), names
-   the record does not resolve (92), `typeof` of a global (83), strict
-   global stores (96), logical assignment (59), optional chains (44),
-   `??` in the forms left (4).
+   **object literals of every property kind** (1,482) -- done, with
+   spreads, holes, optional chains, `??`, logical assignment and
+   assignment to a constant (regcomp's literal.go). A BigInt is a
+   constant. `X.asUintN(w, x op y)` and `asIntN`'s -- a 64-bit hash's or
+   generator's step -- make their operator `wrap`, cold, right before
+   the call: where the callee is BigInt's and x and y BigInts held in
+   their Values, it makes the call's value on machine words
+   (`wrapShort`, the tree's `wrapCall`) and passes the call over, with
+   no BigInt past 64 bits on the heap. A template's parts go to a window that one `concat` joins,
+   converting each with ToString; a substitution is converted at once
+   (`to_string`, cold) only where a later part may run code, which could
+   see the order. A tagged template is a call, a method's with its
+   receiver, given its site's object (`template_object`, the site the
+   stack compiler records, `Record.Templates`). An object literal's other
+   properties are cold operations doing what the stack form's do:
+   `copy_data_props` (a spread), `define_getter`, `define_setter` and
+   their computed forms, `define_index` after `to_property_key`,
+   `set_func_name`, `set_home_object` and `set_proto_of` (`__proto__:
+   v`); a number key is a computed one. An array's hole is the
+   uninitialized marker in its window; with a spread, the elements
+   before it are made at once and the rest pushed or spread
+   (`array_push`, `array_spread`), and a call or a `new` with a spread is
+   `call_spread` of such an array. An optional link checks its object
+   with `jnot_null`, and where that falls through, === undefined and
+   === null, so that document.all's stand-in goes on; a nullish link
+   jumps to the chain's end, where it is undefined, and `(o?.m)()` keeps
+   its receiver. `??` is the same check; `a ||= b`, `&&=` and `??=` read
+   the target once, a computed key converted once (`key_of_base`), and
+   store only where the read does not decide. An assignment to a constant
+   throws (`assign_const`). The stack form's reads in an optional chain
+   had no position of their own (fixed with it).
+7. **The arguments object in every form** (354), **names the backend does
+   not read** (434, 335 of the bundles'), names the record does not
+   resolve (92), strict global stores (96). The strict global store of a
+   value that runs code is done: whether the name resolves is settled
+   before the value is made and reported after it, `check_global_ref`
+   and `assert_resolved`, as the stack form's. A strict function that
+   ends in a tail call makes its arguments object as any other: an
+   unmapped one is a copy, which a frame taken over in place leaves
+   alone (69). A function that names eval without calling it has an
+   arguments binding the stack form fills for an eval that never comes;
+   nothing reads it, it has no register, and none is made (217). What
+   the record did not resolve was one form, 642 functions of test262's:
+   dynamic import, `import(x)`, `import.source(x)` and
+   `import.defer(x)`, whose callee the parser makes a name -- done: a
+   cold `import` of the specifier and the options in a window, at the
+   call's position, as the stack form's; `import.meta` is `import_meta`
+   (cold).
 8. **eval and `with`** (757 direct evals, 527 functions beside an eval's
-   variables, a with or an Annex B function, 11 more): binding
-   descriptors for what an eval can reach.
-9. **`using`** (41), labelled blocks (11), declarations in switches (8),
-   function declarations in blocks (15), captured loop bindings (7), the
-   finally depth (completion dispatch, no cap), the debugger's code
-   (statement markers in register code), and the caps.
+   variables, a with or an Annex B function, 11 more) -- done. A call the
+   stack form made a direct eval (`Record.Evals`, with its scope's index)
+   is `direct_eval` (cold): the callee, its receiver and the arguments, or
+   an array of them, in a window. Where the callee is the realm's eval and
+   the first argument a string, the code is compiled and linked to the
+   frame as evalIn links it to a heap frame's, each binding it names
+   captured from its register (`RegCode.LocalReg`, the slot's register)
+   as a closure's capture is, its this from register 1; otherwise it is
+   an ordinary call, a tail call where marked. A function with a direct
+   eval gives every binding a register and makes its arguments object as
+   it starts, and is called through runFD, which makes the scope of its
+   eval's variables. A name a with object or an eval's variable may
+   answer is compiled as the stack form compiles it (`Record.Withs`, the
+   probe and its limit): a cold probe of the innermost limit of the
+   frame's with objects and eval's variables -- `with_get`,
+   `with_get_this`, `with_delete`, `with_set` -- that sets a found flag
+   in a register of its own, and a jump around the static access; a
+   reference that is read and written, or resolved before its value is
+   made, is `with_resolve` and then `with_read` and `with_write` through
+   the object it found. A with statement's object is put on the frame's
+   with objects by `with_push` and taken off by `with_pop`, compiled for
+   each way out as a finally clause is, a throw's in a handler of its
+   own. A frame runs as register code whatever with objects and eval's
+   variables runFD gives it, and a generator keeps them across a
+   suspension. The stack form probed a binding typeof reads twice
+   (fixed with it). Eval code itself is register code too (item 9e).
+9. **`using` and `await using`** (177) -- done (regcomp's try.go,
+   `usingScope`): a statement list, a for head or a for-of head that
+   declares with using is a scope whose resources are in a register of
+   its own (`new_dispose_capability`), each value added as it is
+   declared, before its binding is initialized (`add_disposable`), and a
+   finally clause that disposes of them, compiled for each way out as
+   any other: the normal end and each exit with no exception to fold in
+   (`dispose`), a throw with the one it folds in. An await using scope's
+   disposal is a loop of `dispose_step`s, each running the disposers
+   until one leaves a value to await, which the loop awaits in a handler
+   whose throw the next step folds in, as the stack form's
+   compileDispose. Then the finally depth (completion dispatch, no cap),
+   the debugger's code (statement markers in register code), and the
+   caps.
+9b. **Labelled statements that are no loop, declarations in switches,
+   delete of a name** (69, 36 and 41) -- done. A labelled statement of any
+   other kind is a target only a break naming it reaches (`loop.named`),
+   and a statement's labels are a set (`labelSet`): `a: b: while` is the
+   target of a break or a continue naming either, which the parser and
+   the stack compiler took as b's alone (fixed with it). A switch's case
+   block is one scope, entered once the discriminant is made
+   (`enterBlock` of every case's statements). delete of a name is false
+   for a binding and `delete_var` (cold) for a global, as the stack form
+   resolved it (the record's read of the operand); delete of an optional
+   chain's property deletes it, true where a link is nullish -- the stack
+   form deleted nothing (fixed with it).
+9c. **Function declarations in blocks, switches and behind labels**
+   (128, and the Annex B functions of item 8's count) -- done. A block's
+   functions are made as it is entered, after its lexical bindings, a
+   closure's capture closed first in a loop (`enterBlock`); a labelled
+   declaration is its list's, as an unlabelled one is (the stack form
+   never made one: fixed with it). Annex B's var is assigned as the
+   declaration is evaluated, with what the block's binding holds then
+   (B.3.3.1), a store the stack compiler records as the declaration's
+   name's write -- it assigned it as the block was entered, which Node
+   does not (fixed with it).
+9d. **The last refusals of the corpora** (40) -- done; the debugger
+   statement outside a debugger's code does nothing, as the stack form's.
+   - *A finally clause's bindings* (9, "a name the record resolves two
+     ways"): the stack form compiles a clause once for each way out --
+     inline at the normal end, as the handler's, and at each break or
+     continue that leaves it (unwindTo) -- each copy's bindings in slots
+     of their own (slots are never reused), so
+     a name in it resolved to one slot in one copy and another in the
+     next. The record keeps the first copy's notes and drops the later
+     ones' (`Record.BeginFinally`); regcomp compiles all its copies from
+     the first's slots, which no other binding has, and finds the first
+     copy's function constants (`closure` by start).
+   - *Sloppy code's assignment to a call* (12: `f() = v`, `f() += v`,
+     `f()++`, `for (f() in o)`): the call made, then
+     `throw_reference_error` (cold) at the target, the value never made,
+     as the stack form's compileCallTarget. A logical assignment to a call
+     is a syntax error, and the other targets are panics, not refusals.
+   - *Annex B's `for (var a = init in o)`* (4): the initializer assigned
+     once, before the object is made. *A let's own initializer storing
+     it in its dead zone* (`let y = [y] = []`, 2): the pattern's store
+     checks the dead zone as an assignment's does.
+   - *The caps as wide forms.* A call of more than 255 arguments -- plain,
+     a method's, an optional chain's, new, super(), a tagged template's,
+     a direct eval's -- passes an array of them as a spread call does
+     (`wideArgs`, `call_spread`); a spread call through an optional chain
+     is chainCall's. An array literal of more than `arrayChunk` (1,024)
+     elements makes that many at once and pushes the rest; a literal of
+     constants past 16 bits names its count by its table's (new_array_k's
+     B 0); an object literal's room is a hint, at most 65,535. A function
+     with more cache sites, or call sites, than 16 bits number is compiled
+     again with its sites shared by key (`site16`, `siteKey`): the kind of
+     cache and the name, a literal's keys or constants, a call's
+     operation -- entries that answer alike for every instruction of the
+     key, a call's checked against its callee. A function whose stack
+     form alone has nearly as many (Mandreel's global_init, 155,109;
+     test262's string-upper-lower-mapping.js, 65,561) is compiled a
+     third time with the register form's sites numbered first, from 1,
+     shared by key, and the stack form's moved past them
+     (`moveStackSites`: the B of every instruction the stack compiler
+     gave a site, and the object literals' `LiteralKeys`): the two forms
+     index one closure's caches, and only the register form's operands
+     are 16 bits.
+   - A jump of a 16-bit offset that does not reach (`errJumps`): the
+     function is compiled again with every such jump far
+     (`farJumps`), the branch taken to a `jmp` of 32 bits, past a
+     `jmp` over it where it is not: three instructions where there was
+     one, only in a function past 32,767 of them.
+   - `with (o) f(...a)` passed no receiver in the stack form (fixed with
+     it): a spread call probes with `with_get_this` as any call does.
+9e. **Eval code** -- done. The top level a direct or an indirect eval
+   evaluates, strict or sloppy, and the Function constructor's code, are
+   compiled as any top-level code (`regScript` refuses only a debugger's),
+   and so is every function written inside them, which the record skipped
+   where the code had an eval scope. The caller's bindings are upvalues by
+   name (`evalIn` captures them from the frame, its register for register
+   code); a with object's names are probed as in the caller. A var or a
+   function the code declares goes where the stack form's
+   define_global_var and define_global_func put it: the global object, or
+   inside a function the frame's eval variables (`f.evalVars`, which
+   runFD gives the frame), which the cold `define_global_var` and
+   `define_global_func` now do too. A function the code declares where
+   the caller binds the name as a var is stored into that binding, as
+   the stack form's storeVar does: a declaration of its own in the record
+   (`TopOp` set_upvalue, of an identifier of its own, whose write the
+   record resolves, a with object's probe included). The completion value
+   of a with statement whose body produces none is undefined (fixed with
+   it).
+10. **The debugger's code** (`WithDebugger`) -- done. The stack compiler
+   records each debug_stmt it makes by its position (`Record.Debugs`,
+   the first copy's in a finally clause compiled more than once), and
+   regcomp makes a cold `debug` at each statement, loop test and update
+   and for-in or for-of head of that position, the statement's index in
+   Aux: it does nothing unless a debugger has asked to stop, and then sets
+   the frame's pc to the stack form's debug_stmt, by which the debugger
+   finds the statement, its scope and its position, and asks the debugger
+   as executeAt's case does. Every binding has a register, as beside a
+   direct eval, and `RegCode.LocalReg` names it: a `DebugFrame` of a frame
+   that runs as register code (`regDebugFrame`) reads and sets its
+   bindings there (`Scopes`, `SetVariable`), its this in register 1, and
+   evaluates code there as a direct eval of the register form's
+   (`regEvalCode`). Breakpoints and steps are the statements' indexes, as
+   in the stack form.
+11. **Finally clauses nested past four copies** -- done (`finShared`). A
+   try statement compiled inside `finallyDepth` copies of clauses has its
+   clause compiled once, at its end, with a completion dispatch: each way
+   in loads its kind in a register of the statement's -- 0 the block's
+   normal end, 1 a throw from the handler, k > 1 an exit -- and jumps to
+   the clause, after which compares of the kind (`RJSEqI`) go on: past the
+   statement, to the throw again, or to the rest of exit k, the clauses
+   outside and its jump or return, compiled there with the registers the
+   exits keep live left alone. A clause inside one so compiled is
+   compiled once too, so that the code grows with the nesting, not as
+   its power. The stack form's copies of a clause with a try statement
+   of its own lost the clauses outside it (fixed with it).
+12. **Entries as register code's own** (`regRunFD`). What runFD would
+   run -- a call through callObject or callDirect, a script's or an
+   eval's code, a tree's call (callTreeWith) -- is entered as register
+   code directly where the function has any (`fn.Reg`, which only
+   register mode's compiler makes, so that the default tiers' paths test
+   a field they hold already): its frame given what runFD gives one of
+   its surroundings -- the with objects and the eval's variables of the
+   functions around it, a scope for its own direct eval's -- and a chain
+   of tail calls it ends in made in its place, in constant space
+   (regTailLoop). A direct eval's function and one inside a with are so
+   no longer entered through runFD, nor is a construction
+   (constructRun, and callTreeWith whatever the new.target; planTreeNew
+   gives register code no tree's) or a frame with a this binding: a
+   derived constructor's construction makes the binding super() binds,
+   an arrow written inside one shares it, and the frame record's this
+   is register 1 at entry, which superCall reads and rebinds. Eval
+   code's this is the call site's, which may be such a binding: top-level
+   code records it (`Record.ThisRef`, the stack compiler's thisIsValue)
+   and reads this through the binding, as such an arrow does. Strict
+   eval code's function declarations, bindings of its own rather than
+   top-level declarations, are made (they were not: test262's name-unicode.js,
+   strict).
+13. **The fallback counter** (`vm.RegFallbacks`, QJS_REGFALLTRACE to
+   name each). Register mode counts every time it hands code to the
+   other tiers: a function firstForm builds a tree for, having no
+   register code; a frame regStmt runs in the stack interpreter; and
+   register code entered through runTree, a frame runFD or callTree
+   made rather than its own -- the node that runs register code in a
+   tree is reached no other way. With constructions entered as
+   register code (item 12) the count is zero, and the regdiff tests (the
+   micro list, the V8 suite and every corpus of theirs) and test262 in
+   register mode, every directory, fail on any.
+14. **Names past 16 bits** -- done. A name operand (a global's read or
+   write, a cold operation's name, a private member's in its Aux) whose
+   index in the function's names is 65,535 or more is `RNameFar`, and
+   `RegCode.FarNames`, by the instruction's pc, has the index
+   (`regNameIdx`, `regName`): the hot cases never read a name, so none
+   tests for it. A global's cache site is keyed by the full index, and an
+   object literal made at once keeps its keys as 32-bit indexes
+   (`ObjKeys`). The verifier checks either form (`nameOK`).
+   `TestRegDiffFarNames` starts each function, and scripts, with 65,600
+   other names.
+15. **Registers past 65,535** -- done. A function whose bindings alone
+   would not fit 16 bits of registers, or that ran out of them compiling
+   (compiled again with a quarter of them for its bindings, `nearCap`),
+   gives the bindings it uses least far registers (`farSlots`): those
+   only plain reads and writes reach -- no closure captures them, no read
+   finds them in their dead zone, no direct eval or debugger reaches the
+   function, and none is the arguments object, a catch clause's, a
+   class's, a function declaration's or the completion value. A far
+   binding's register is past every near one and every temporary, the
+   window NumRegs long; `mov_far` and `mov_to_far` (cold) are all that
+   reach it, and `far_init` makes the far bindings undefined as the
+   function starts. A read is a move in, a store a move out, a compound
+   assignment or an update the generic read and store, an append or a
+   for-of head's register the long way. `r16` panics on a far register,
+   which `generate` makes a refusal: a form that would name one as an
+   operand is refused, never compiled to read another register. A
+   check_ref's slot past 16 bits is FarNames', as a name is.
+   `TestRegDiffFarRegisters` declares 65,600 bindings before the ones its
+   cases use, in a function, a generator and a named function
+   expression, and has a template of 40,000 parts beside 30,000
+   bindings, which compiles the second time.
 
-### Stage 3: the JIT and the tree tier
+### Stage 3: the JIT
 
-The JIT's front end reads register code, or the AST, and its
-deoptimization rebuilds register frames: with the stack interpreter and
-the tree tier removed, the stack form is no input it can keep. The tree
-tier is measured against the register interpreter suite by suite, its
-mechanisms ported, and removed.
+This stage moves the native tiers from the stack form to register code.
+Once the stack interpreter and the tree tier are gone, the stack form is no
+input the JIT can keep. It also decides whether a baseline compiler or an
+assembly interpreter loop belongs under the optimizing JIT.
+
+Citations are to branch `reg` at `4be8c5dc`, which another agent was editing
+on 2026-11-10, so line numbers are approximate. Function names are exact.
+Where this section infers rather than reads, it says so.
+
+#### Where things stand
+
+- **The JIT reads the stack form.** `compile.LowerSSA` lowers a function's
+  stack bytecode to the slot IR (`internal/jit/compile/lower.go`, 2,716
+  lines, 219 cases over `bytecode.Op`). The IR has one instruction per
+  bytecode pc and a `StateMap{PC, Depth}` at each
+  (`internal/jit/ir/program.go`, `StateMap` and `Program`). `ssa.Build`
+  reads only the IR and an `ssa.Feedback` keyed by that pc
+  (`internal/jit/ssa/build.go:27`). The `ssa` and `mir` packages do not
+  import `internal/bytecode`.
+- **The feedback is the VM's `jitFeedback`** (`internal/vm/zzjit_ssa.go`,
+  `type jitFeedback`, about 90 methods across the `zzjit_*.go` files). Each
+  method takes a stack pc and reads the `bytecode.Instr` there. It reads:
+  - the property site, from `in.B` into `closureCode.ic`;
+  - the global's cell;
+  - literal pools (`jitLiteralAt`);
+  - call targets. These are learned mostly from native code's own exits
+    (`jitEntry.nativeCalls` and `inlines`, `jitTargetsOf`), and from call
+    frequencies counted at callee entry while the caller warms
+    (`jitCountCallAt`, `zzjit_frequency.go`);
+  - what native code met at an exit: `Generic(pc)`, `typedReads`,
+    `keyedReads`.
+- **Tier-up hooks.** There are three:
+  - executeAt's `interrupted` block calls `jitBackEdge` (`vm.go:2946`);
+  - `runFD` and the tree's call entries call `tryJITFrame` behind
+    `r.jitOn()` (`vm_call_run.go:159`, `zcall_tree.go:167` and `:447`);
+  - `tryJITFrame` counts framed calls up to `jitInvocationsForFeedback` (8,
+    `zzjit_native.go:49`). Loops promote on a randomized back-edge budget
+    (`backEdgeBudget`, `tryJITLoop`, `zzjit_native.go` about 2781 and 2807).
+- **runReg has no JIT hook** (no `jitOn` in any `zzreg_*.go`). Its back edge
+  decrements the runtime-wide `r.backEdges` in the shared `jump` tail and
+  calls `regBackEdge` out of line (`zzreg_run.go`, the `jump:` tail and
+  `regBackEdge`). Its calls decrement `r.interruptCounter` in `regEnterW`
+  (`zzreg_call.go`, `regEnterW`).
+- **runReg's caches** are in `closureCode` (`runtime.go:723`), which is the
+  template's per runtime:
+  - `ic []propCache`: property, global and literal sites. Register sites are
+    numbered after the stack form's (`regcomp`'s `site`, `propSite`,
+    `globalSite`), except a leaf's, which shares the stack form's sites.
+  - `regCalls []regCallCache`, indexed by a call's C (`RegCode.CallSites`,
+    `reg.go:520`): callee, closure, regCode, this and kind.
+  - `regEpochs []uint64`, parallel to `ic`, for global sites.
+  - `arrays`, for empty array literals.
+  - `instanceof`'s site, in `Aux`.
+
+#### 1. The feedback vector
+
+**Principle: the fast path is the feedback.** In V8 each Ignition handler
+writes its feedback slot (`BinaryOperationHint`, `CompareOperationHint`,
+CallIC counts). runReg cannot afford that:
+- a word has no field left for a slot index;
+- each write is a load of the vector and a read-modify-write in a case;
+- each case added to the loop costs nodes against Go's 5,000-node limit
+  (4,875 used, "The loop").
+
+The rule instead: what a case's fast path answers is the expected kind, and
+anything else is recorded where the case already left the loop, on its slow
+path, keyed by the pc the slow path already has (`kept.pc - 1`). The
+optimizing JIT then speculates the fast path's kind wherever the site has no
+"seen other" mark. This is the model the stack form's JIT already follows
+for what native code meets: `Generic(pc)`, `jitIndexSeen`. It only moves the
+first lesson earlier, from the JIT's first exit to the interpreter's first
+miss.
+
+**What each kind of site holds:**
+
+| Site (register op) | Held today | Added | Where it is recorded |
+|---|---|---|---|
+| property read/method/store (`get_prop`, `get_method[_w]`, `set_prop`, `add_prop*`, `define_field`) | `propCache` by C: own shape and index, holder (`p1`/`s1`, `cell`), getter, up to four shapes polymorphic (`poly`), seen shapes with the JIT on (`refill`, `jitNoteSeen`), fills | none | the slow path, as today (`regGetProp`, `regSetProp`) |
+| global (`get_global`, `set_global`) | `propCache` slot and env, plus `regEpochs[C]` | none | `regNoteGlobal` |
+| element (`get_index*`, `set_index*`, `add_index*`, `get_length`) | nothing | a seen byte by pc: hole, out of range or append, typed array kind (reusing `TypedKind`'s codes), string receiver, string or symbol key, mapped arguments, other | `regElemMiss`, `regSetMiss`, the `typed:` and `slow:` tails' callees |
+| arithmetic and bitwise (`add`, `sub`, `mul`, `bin`, `*_imm`, `inc`, `dec`, `unary`) | nothing | a seen byte by pc: string operand, BigInt, other non-number | `regBinary`, `regBinImm`, `regStep`, `regUnary` |
+| compare-and-branch (`jlt`... `jseq`, `jeq`, `*_upval`) | nothing | a seen byte by pc: strings, mixed, objects | `regCompare` on `cmpSlow` |
+| call (`call_w`, `call_method_w`, `new_w`, tail forms) | `regCallCache` by C: monomorphic target, closure, regCode and kind (enter, this, native, generator, marked, leaf) | a call count; a polymorphic mark when a miss replaces a different target | the count in `regCallW` (outside runReg); the mark in `regCallSlow` |
+| literal (`new_object_lit`, `new_array_empty`, `new_array_k`, `regexp_lit`) | `propCache.next`/`s1` (the shape the keys led to), `arrays` (room) | none in the interpreter. The JIT's pools stay the JIT's (`jitLiteralAt`), keyed by register pc | as today |
+| `instanceof`, `in` | site in Aux, cache by layout (`362e755e`); `in` through the realm's cache | none | as today |
+| iteration (`iter_next`, `for_in_start`, `for_of_start`) | nothing | a seen byte by pc: array, generator, Map or Set, other | `regIterNext`, the starts in `regColdSub` |
+
+Arithmetic kinds are not split into int32 and float in the interpreter. The
+JIT already proves int32 by truncation (`ssa/ints.go`, `truncInts`) and by
+entry checks (`OpCheckI32`). It does not speculate a Smi add with an
+overflow check, as V8's `SpeculativeSafeIntegerAdd` does. If it ever wants
+to, the speculation learns from its own exit, as `Generic(pc)` does today.
+Recording int32 on the fast path would cost a branch and a store in every
+arithmetic case, which the loop's budget and its layout cannot pay.
+
+**Layout.** The vector lives where the caches already live, in
+`closureCode`, per template per runtime, the analogue of V8's feedback
+vector per closure template per native context:
+
+```
+closureCode
+  ic       []propCache      by site (an op's C, or Aux): property, global, literal, instanceof
+  regEpochs []uint64        parallel to ic, global sites only
+  regCalls []regCallCache   by call site (an op's C), + count uint32, + poly bit in kind
+  arrays   []*arrayRoom     empty literals
+  regSeen  []uint8          by register pc, made at the first record, nil until then
+  reg      *regCode         + hot int32: the tier-up counter (section 2)
+```
+
+- **Indexing by pc.** The JIT reaches a site by register pc: pc to
+  instruction word, then C (or `Aux[pc]`) to the entry. That is today's
+  `in.B` with another decoder.
+- **`regSeen`** costs one byte per instruction, about an eighth of the code,
+  and only for a function that ever missed.
+- **Numbering in Stage 4.** Once the stack form goes, regcomp numbers sites
+  from 1 with no stack-form offset. The leaf sharing in `propSite` ends with
+  the frameless stack evaluators. `RegCode` then gains a table of sites
+  (kind and pc) so that the verifier can check that each site is named
+  once.
+
+**Cost on the hot path:**
+- runReg's cases are unchanged, and so is its node count.
+- Every new record is in a function the case already calls.
+- The one addition outside slow paths is the call count, an increment on
+  the `regCallCache` line that `regCallW` has already loaded. It goes behind
+  `if jitBuilt`, so an untagged build compiles it out and `hotdiff` sees no
+  change.
+
+#### 2. Tier-up from runReg
+
+**Back edges: no new counter.** The stack form's tier-up for loops is
+already sampling: the runtime-wide budget runs out (`r.backEdges`, randomized
+by `backEdgeBudget` so that it does not alias with a loop's period), and the
+frame where it ran out is credited (`fullBudget`, `jitTierWork`). runReg
+spends the same budget at the same place, its `jump` tail, which already
+stores `kept.pc` and calls `regBackEdge`. Changes:
+
+- `regBackEdge` (out of line) gains a JIT branch behind `jitBuilt`:
+  - it calls `r.jit.backEdgeBudget()` instead of resetting to
+    `backEdgeCheckInterval`;
+  - it computes the loop header from the jump at `kept.pc-1` (`kept.pc +
+    regJumpOff(w)`);
+  - it calls a register form of `tryJITLoop`. Nothing in runReg changes.
+- **Coming back from native code.** Native code that finishes the frame or
+  exits at another pc has to bring runReg there.
+  - `regCatch` (out of line, `zzreg_switch.go`) learns a sentinel error.
+    `regBackEdge` returns `errRegGoOn` with the pc to resume at in `kept.pc`,
+    and `regCatch` returns that pc before it looks at handlers. runReg's
+    `fail:` tail already continues at whatever `regCatch` returns.
+  - A frame native code finished resumes at a `ret r0` that regcomp appends
+    to every function, with the result written to r0. The function is r0's
+    value only until the frame ends.
+  - So OSR in either direction adds no instruction to runReg (inferred
+    design, not built).
+
+**Calls: one counter outside the loop.** The counter goes in `regEnterW`,
+which every framed register call goes through, on the `regCode` whose
+`numRegs`, `args`, `params` and `inits` it reads anyway:
+
+```
+if jitBuilt {
+    if rc.hot--; rc.hot < 0 { return r.regEnterHot(o, cl, rc, base, argc, args, newTarget) }
+}
+```
+
+- **One branch, two uses.** `regEnterHot` counts invocations toward the
+  stack form's `jitInvocationsForFeedback` and toward `jitHotWork` (adding
+  the function's length, as `jitHotEntry` adds `len(Code)`). It resets the
+  counter, and it decides.
+  - Once a function has native code, `hot` is held negative. Every call
+    takes the same branch into the native entry, the way V8 swaps a
+    function's code pointer.
+  - No call site has to be found or patched, and no case of `regCallW`
+    tests a new kind.
+- **`regDirect` takes the same check.** That is the callbacks' entry.
+- **Leaves need no count.** Bodies answered without a frame (`regLeafArg`,
+  `regLeafConst`, `regLeafCode`, `pureCallAt`) are not compile candidates.
+  The optimizing JIT inlines them from the call site's cache.
+- **Cost by build.** Untagged: nothing, since `jitBuilt` is a constant
+  false. Tagged, JIT on or off: a decrement on a loaded line and a branch
+  never taken. That is `tryJITFrame`'s `r.jitOn()` test today, now off the
+  tree's path, and it must be shown level with `placements -micro`.
+- **The fallback.** If the placements show the counter, credit the callee
+  when `r.interruptCounter` runs out instead. That is the same decrement
+  regEnterW makes today, sampled one call in 4,096. It costs nothing, but a
+  function is chosen statistically rather than counted.
+
+**Against the stack form's counters:**
+
+| | Stack form | Register form |
+|---|---|---|
+| Loop | the runtime budget runs out in `executeAt`'s `interrupted` block, then `jitBackEdge` and `tryJITLoop` at the stack pc | the same budget runs out in runReg's `jump` tail, then `regBackEdge` and `tryJITLoop` at the register header; no change to runReg |
+| Call | `tryJITFrame` on every framed call behind `jitOn()`: `jitCalls` up to 8, then entries and `coldWork` | `rc.hot` in `regEnterW` and `regDirect`, behind `jitBuilt`, out of line once it runs out |
+| Call-site frequency | counted at the callee's entry against the caller's top frame while the caller warms (`jitCountCallAt`) | `regCallCache.count` at the site; frequency is the count over the function's invocations |
+| Native entry from interpreted callers | `tryJITFrame` on every call | `rc.hot` held negative: the one counter branch |
+| pc live across the dispatch | no | no: every hook is in a function runReg already calls with `kept` |
+
+#### 3. The optimizing JIT's front end from register code
+
+**Input.** Read register code, not the AST. The feedback, the frames and
+the exits are all keyed by register pc. The AST has no pc, and regcomp has
+already made its expressions three-address code and decided its fusions and
+its scopes.
+
+**What changes:**
+
+1. **A new lowering, `compile.LowerReg(rc *bytecode.RegCode, fn)`**, into
+   the same `ir.Program`.
+   - A register is a slot. `Locals` is `NumRegs`, every `StateMap.Depth` is
+     0, and there is no operand stack.
+   - Most register instructions are one IR instruction with explicit
+     operand slots, and the `Copy` traffic of push and pop goes away. The
+     doc measured 20 to 35% fewer instructions than the stack form in the
+     V8 suite's methods.
+   - `liveLocals` becomes a backward liveness pass over all registers. It is
+     cheaper, and more precise than the stack form's, whose operands are
+     always live. So exits write fewer records.
+   - `RegCode.Handlers` maps onto `ir.Handler`. Each handler's ranges become
+     `HandlerAt`, and `Depth` is 0.
+2. **Fused instructions.** `add_prop`, `add_index*`, `get_index_pre` and
+   `get_index_post`, `get_method_w`, `char_code_at`, `new_object_lit` and
+   `regexp_lit` with `RLitCall` expand to several IR instructions. That
+   breaks the IR's "one instruction per bytecode pc" (`program.go`,
+   `Program`'s comment).
+   - `Program` gains `Origin []uint32`, the register pc of each IR
+     instruction. The builder keeps keying feedback by IR index, and the
+     VM's feedback translates through `Origin`.
+   - **The atomicity rule.** An IR instruction "commits atomically with
+     respect to guards" (`program.go`, `Op`). Inside a fused expansion, a
+     guard may exit to the fused instruction's own pc only while nothing has
+     committed. After a component with an effect (a setter or getter by Go,
+     a host exit), the remaining components are built generic, so that what
+     they did not expect goes to Go, as `Generic(pc)` builds do. They never
+     deoptimize to a pc that would run the effect twice.
+3. **The VM's feedback, re-keyed.** Every `jitFeedback` method that reads a
+   `bytecode.Instr` reads an `RInstr`:
+   - `siteFrom` and `property` read C;
+   - `Global` reads C and `regEpochs`;
+   - `NativeCalls`, `Inline` and `CallShape` read `regCalls[C]`. That is a
+     monomorphic target from the first compile, where the stack form's JIT
+     first learns targets from its own exits;
+   - `Frequency` reads `regCalls[C].count`;
+   - element, compare and arithmetic hints read `regSeen[pc]`;
+   - `TypedKind`, `KeyedRead` and the like keep the JIT's own learned
+     tables on `jitEntry` (`typedReads`, `keyedReads`, `callSites`,
+     literals), now keyed by register pc.
+
+   `zzjit_snapshot_gen.go` is regenerated (`go generate ./internal/vm`).
+4. **Frames, exits and deoptimization.**
+   - A register frame is a window of `r.stack` at `wb = f.base - locals`
+     (runReg's `regWindow`). The value stack never moves, so native code
+     reads and writes slots in place, exactly as it does the stack form's
+     (README, "Values and the garbage collector"). `Context.Locals` is the
+     window's base. An exit's records write registers, and its pc is a
+     register pc.
+   - Go resumes the frame with runReg at that pc. That needs runReg to take
+     a start pc (`runReg(f, c, pc)`, callers passing 0), which is one more
+     argument to the hot function and is measured. Go also sets `f.pc =
+     c.src[pc] + 1` while positions still come from the stack form's tables,
+     as `regSlow` does.
+   - **Inlined frames are simpler than the stack form's.** A call's window
+     is the callee's frame: register A of the caller's call instruction is
+     the callee's r0.
+     - Materializing an inlined callee writes its registers at `wb + A`,
+       writes the frame record as `regEnterW` does without running it, and
+       runs runReg at the callee's pc.
+     - The caller then resumes at the call's pc + 1, with the callee's
+       result written to the call's B.
+     - With nothing to rebuild on an operand stack, the frame state is
+       just the live registers.
+   - **Generators.** Their suspended windows (copied into the generator
+     object) replace the operand-stack copies that `GenSteps` and the
+     resumable entries handle now.
+5. **OSR from runReg.** Section 2 covers the trigger. The entry needs the
+   loop header's state (all live registers, read in place) and an
+   `ssa.Func` entry at that register pc (`HasEntry`). The register form has
+   one entry per loop header, as the stack form does.
+
+**What carries over unchanged:**
+- `ir` (the program, the evaluator oracle, `Validate`), apart from
+  `Origin`;
+- `ssa`: the whole builder (8,184 lines), its optimizations, escape
+  analysis, ints, keep cells;
+- `mir`, the encoders, `abi`, the arena, the code cache and its hints;
+- the write barrier and `storeRef`, records and `recordsTail`, `callGo`;
+- the profit model and the marking rule.
+
+**What is rewritten:** `compile/lower.go`'s per-op lowering and its
+analyses, which today read `fn.Code`:
+- `selectGlobalSlots`, `selectPropertyLoops`, `selectNumericProperties`;
+- `stringParts` and `stringConcats` (the register form has `concat` and
+  `str_part` already);
+- `typeTests`, `liveLocals`, the prologue and arguments handling;
+- the VM side of exits, entries, inlined-frame materialization, `jitCalled`
+  and the generator steps.
+
+This is a port of roughly 3,000 lines of lowering plus the 90 feedback
+methods. It is the largest and riskiest piece of the stage.
+
+**Expected effect (inferred):**
+- Steady-state code should be about level. SSA already removes the stack
+  form's copies, and the shapes, targets and pools it compiles for are the
+  same.
+- Compiles get cheaper: 20 to 35% fewer IR instructions, and call targets
+  known at the first compile, which avoids the recompile that learns them.
+- The cost is the risk of losing the many stack-pc heuristics the JIT
+  gathered over its rounds: forEach loops, pools, forwarders, leaf kinds.
+
+#### 4. A baseline compiler
+
+**What it would be.** Register code becomes machine code one instruction at
+a time, from templates, with no IR, as V8's Sparkplug does.
+- **runReg's frame.** The window is in `r.stack` and the frame record is
+  `regEnterW`'s. The feedback vector is the same `closureCode` caches.
+- **runReg's slow paths.** They are the functions runReg's cases call:
+  `regSlow`, `regCallW`, `regElemMiss`, `regSetMiss`, `regAppend`,
+  `regIterNext`, `regColdSub`.
+- **No deoptimization metadata.** Every register is in the window at every
+  instruction boundary. The baseline hands a frame to runReg at any pc, and
+  runReg hands one back at any loop header, with nothing written.
+- **Every instruction is covered from the first version.**
+  - A hot op's template inlines its fast path.
+  - Any other op is a call of a Go routine that runs that one instruction
+    through its runReg helper. The routine returns the next pc, or the
+    handler's pc from `regCatch`, and native code goes on through a
+    pc-to-code table.
+
+This has been weighed twice before, in other forms. Both were declined, and
+the assessment starts from them.
+
+##### What was declined, and how templates differ
+
+**1. Closure-threaded dispatch** (docs/performance-plan.md, "Rejected").
+On the stack interpreter, each op was a Go closure. On a pure arithmetic
+loop, its best case, it was 1.09 to 1.17 times as fast as the switch, 3.7
+against 4.2 ns an instruction. It was declined as not worth rewriting about
+250 opcodes. The tree tier is closure compilation taken to its limit, and
+the register interpreter now beats it ("The tree tier and the JIT").
+
+A closure per op removes only the switch's jump-table load. It keeps the
+rest of a transfer:
+- an indirect call through the closure's function word;
+- Go's prologue, its stack-bound check;
+- the operands loaded from the closure's captured fields: offsets held as
+  data, not encoded in the instruction;
+- a return;
+- the caller's loop;
+- the spills Go makes around every call, having no callee-saved registers
+  ("A Go call per node" in "The measure").
+
+The 12% it gained is the switch's share alone. It is not what dispatch
+costs.
+
+A native template keeps none of these:
+- execution falls through from one instruction's code to the next, with no
+  branch at all;
+- register A is a displacement, `[base + 16*A]`, and a constant is an
+  immediate;
+- each site has its own compare and branch, so prediction is per site,
+  where runReg's `add` shares one number test across every `add`;
+- nothing is spilled, because nothing is kept in machine registers between
+  instructions except the window's base and the context.
+
+**2. The optimizing JIT with its optimizer off, as a cheap first tier**
+(docs/performance-plan.md, around line 2573, item 2). This is "the
+baseline JIT we declined". All levels ran in one binary, switched by an
+environment variable. It found:
+- **Code size.** The code grew 15 to 30%.
+- **Compile time** fell only 0 to 13%, and rose 9% on Typescript. The
+  optimizer is what makes the backend's input small, and compile time
+  follows emitted code (r = 0.96, about 120 bytes of machine code a
+  bytecode instruction).
+- **Speed, never re-tiered.** The code kept 59 to 85% of full speed: Octane
+  +41%, Crypto and NavierStokes twice as slow.
+- **Speed, re-tiered once hot.** It kept full speed (Octane +0.6%, AWFY
+  +4.3%), but the first render took 80 to 85 ms against 63 to 66, because
+  hot functions compiled twice.
+- **Two open needs.** A re-tier trigger that natively called functions
+  pass (`jitLearnedDue` runs only on Go's entries); and tier-aware forms of
+  the thirteen tests that assert the optimizer's output.
+
+That experiment answers whether a cheap level of the *same* pipeline pays,
+and it does not. The pipeline's cost an instruction is fixed by work a
+template compiler does not do. The same section of the plan measures about
+5 µs a bytecode instruction:
+- about 1 µs to build the SSA;
+- 1.5 µs to optimize;
+- 1 µs to emit;
+- the rest in lowering, liveness, intervals, the scan and the calls' saves.
+
+With the optimizer off, the build, liveness, allocation and selection still
+run over a larger input. A template compiler makes one linear pass over the
+register words: decode, switch on the op, append a fixed sequence through
+the assembler, record jump fixups and a pc table entry. There is no IR, no
+value numbering, no liveness, no intervals and no allocation.
+
+**What a template compile would cost (inferred, not measured for
+JavaScript here):**
+- **Bytes an instruction.**
+  - `move` is about 30 bytes: two loads, a flag test, two stores.
+  - `add` is about 60 bytes: two tag tests, `addsd`, NaN canonicalization,
+    and the store with its flag test.
+  - `get_prop`'s hit is about 70 to 80 bytes: object tag, shape against
+    `ic[C].ownShape`, slot load, store. Its miss is a shared stub of about
+    20 bytes.
+  - A compare-and-branch is about 40 bytes, and a call-out about 20.
+
+  That averages about 40 to 70 bytes a *register* instruction. A register
+  instruction stands for about 1.3 to 1.5 stack instructions (20 to 35%
+  fewer, "Where stage 1 stands"), so this is about 30 to 50 bytes a stack
+  instruction: **2.5 to 4 times less code than the SSA backend's 120**.
+  The cost is that nothing stays in a machine register across
+  instructions.
+- **Time an instruction.** About 0.2 to 0.5 µs, from a few encoder calls
+  of tens of ns each for 10 to 20 machine instructions, against 5 µs: **10
+  to 25 times less**. In the SSA path, compile time tracks emitted code
+  because each emitted instruction has an SSA value, an interval and an
+  allocation behind it. A template's bytes have only the encoder behind
+  them.
+- **The in-repo precedent.** The WebAssembly engine's baseline (below)
+  compiles every function at its first call. It holds a 3,028-function
+  program's code in 23 MB, against 34 MB for its optimizing tier.
+
+The first measurement any prototype must make is this per-instruction
+cost, and with it the premise behind the whole tier.
+
+##### What naive native code buys over the interpreter
+
+**The best evidence is the declined experiment.** Its never-re-tiered
+code, at 59 to 85% of full JIT speed, was naive only in its optimizations.
+It still had SSA, registers across instructions, speculation from the
+caches and native calls. Against the interpreters of the time:
+- **Crypto.** The full JIT takes 63 ms against 301 for the interpreter
+  (docs/benchmarks.md). Twice as slow is about 126 ms: **2.4 times as fast
+  as the interpreter**.
+- **Octane.** The full JIT is 0.39 of QuickJS's time against the
+  interpreter's 0.90. +41% is about 0.55, so **1.6 times as fast as the
+  interpreter**.
+
+Templates are below that code. Values stay in the window as 16-byte
+NaN-boxed words, and every store to a register tests the barrier flag. The
+register interpreter is also faster than the stack interpreter and tree
+tier those figures were against: 1.8x on moves and 1.35x on calls in the
+kernels, level on `am3`.
+
+**The share of runReg's time that is dispatch and decode.** No measurement
+in the docs isolates it. No figure in them is "JIT minus unboxing and
+inlining": every JIT figure includes both. What there is:
+
+- **Kernel accounting** (this document).
+  - `loop_locals` runs 6 instructions, mostly moves, in 10.4 to 11.6 ns:
+    1.8 ns an instruction.
+  - A move's own work is two 16-byte loads, two stores and a flag test,
+    about 0.3 to 0.5 ns. That leaves about 1.3 ns, 5 to 6 cycles at about
+    4.2 GHz, of fetch, mask, table jump, decode, jump back, the word saved
+    at the dispatch, and the shared branch's mispredictions: **about 70%**.
+  - `am3` runs 25 instructions in 91 ns, at 3.6 ns each, so the same 1.2
+    to 1.5 ns is **33 to 41%**.
+  - The comparison engine's switch takes 3.3 ns an instruction on `am3`,
+    and the doc's "3 to 4 ns a dispatch in Go, against about 1 ns in V8's
+    handlers" is the same picture.
+- **The closure prototype.** It is a lower bound: removing only the table
+  jump gave 12%.
+- **Regular expressions' native code** (`2be0068b`). It is templates per
+  matcher instruction, Irregexp's way, against a Go interpreter of the same
+  program.
+  - A native attempt was **3.6 times** as fast as the interpreter's;
+  - a log parser over long text took 43% less time;
+  - **but** V8's RegExp benchmark gained only 8%, and Octane's 2%, where
+    the time per exec is outside the matcher.
+- **The WebAssembly engine's baseline** (the WebAssembly branch's docs/wasm.md,
+  "Measured", Ryzen 9 9950X3D2).
+  - Against its closure-tree interpreter: `loop` 223 to 14.1 ms, `fib` 206
+    to 11.3, sha256 1,921 to 65.4, json 884 to 35.8.
+  - That is **15 to 30 times**, and on `loop` the baseline equals the
+    optimizing tier.
+  - This is an upper bound that does not carry over. Wasm's values are
+    untyped words in machine registers, with no tag tests, no 16-byte
+    values and no barrier on locals. JavaScript templates keep all three.
+
+Taken together (inferred):
+
+| Workload | Time in the loop (est.) | Dispatch and decode in it | Templates, time against runReg |
+|---|---|---|---|
+| Arithmetic and local loops (`am3`, `loop_locals`, NavierStokes' `lin_solve`) | 85-95% | 35-70% | 0.5-0.7x |
+| Property and method code (Richards, DeltaBlue) | 60-75% | 20-30% | 0.8-0.95x with native calls; worse than 1.0x with calls through Go (below) |
+| Allocation-heavy code (RayTrace, EarleyBoyer, Splay) | 40-60% | 20-30% | 0.85-0.95x |
+| Built-in-bound code (RegExp, JSON, strings) | <15% | -- | about 1.0x |
+
+**Calls of Go from native code are dear.**
+- In runReg a slow path is a direct Go call, about 1 to 2 ns.
+- From native code the plan measures **about 27 ns** for a call of Go to a
+  leaf that does nothing (docs/performance-plan.md, around line 1169).
+  About 9 ns of that is native code's own; about 10 is `callGo`,
+  `goCall`, `ExpandGoCall` and the indirect call. The leaves' own
+  trampoline was planned at 5 to 10.
+
+So:
+- **Megamorphic code is slower than in runReg.** Code that lives in its
+  slow paths runs them at 5 to 25 ns where runReg pays 1 to 2: megamorphic
+  sites, primitive receivers, a generic `+`.
+- **Calls through Go lose.** A register call made through Go, native code
+  then `regCallW`, `regEnterW` and `enterSSA`, adds two crossings. That is
+  more than `call_fib`'s nine-instruction body saves (about 12 ns), so call
+  code is slower than runReg.
+- **So templates need native calls from their first version.** These are
+  baseline-to-baseline calls by the native call protocol (`abi.Context`
+  levels, `ReturnTo`), as the WebAssembly baseline makes its calls through
+  its link table and return stack.
+
+**What it would mean for the suites (inferred):**
+- **As a tier alone, without the optimizer:** about 0.75 to 0.85 times
+  runReg's time on the V8 suite.
+- **Under the optimizing JIT,** it would serve only:
+  - warm code below the optimizer's thresholds;
+  - code the optimizer refuses or judges slow (`entrySlow`);
+  - the time between a deopt and the next compile.
+
+  That is about 2 to 10%, Octane at the top.
+- **Not for the jitless measure.** A baseline is a JIT. It does nothing for
+  the measure this project is judged on: the V8 composite without the JIT,
+  1,901 against the comparison engine's and jitless Node's 2,342.
+
+##### Code size and the op cache
+
+- **The trade.** runReg's loop is one function, about the size of Zen 2's
+  op cache's reach, shared by every script. Template code is per function
+  and grows with the program's warm code, at 3 to 6 times the bytecode.
+- **What it costs.** The JIT has already met this. Towers' and Box2D's
+  times were bimodal from where their native code landed (memory note
+  "JIT op-cache layout"):
+  - Towers' four small functions came to about 61 KB of code over 12
+    compiles;
+  - it ran with 43% of its ops from the op cache at one offset and 81% at
+    another, at IPC 2.84 against 3.48;
+  - it took about 600 against 495 ms a run.
+- **What follows.**
+  - Template code for a large program's warm set, Typescript's or PdfJS's,
+    will not fit, and will run from the legacy decoders. Its timing will
+    move with placement as the optimizer's does.
+  - Any measurement must vary `V8BENCH_JITPAD`, `JITSEED` and `JITLINE`.
+  - The templates must put every slow path out of line, take constants
+    RIP-relative and read the barrier flag's address from the context.
+    These are the plan's own lessons from that bloat.
+- **Budget.** The baseline's code competes with the optimizer's for the
+  8 MiB budget, where Typescript already drops 107 functions for room.
+
+##### The first render and background compiling
+
+- **Where the first render stands.** It runs in 63 to 66 ms with the JIT
+  against the interpreter's 22. Most of the difference is compiles on the
+  runtime's goroutine: 32.6 ms, in D8's breakdown.
+- **What sank the cheap tier.** Re-tiering from it added 15 to 20 ms more,
+  because the cheap compile cost nearly what the full one did.
+- **What templates change, if the 10 to 25x figure holds.** Compiling
+  twice then costs 5 to 10% of one optimizing compile, not 90 to 100%.
+  Templates also read nothing the runtime mutates, beyond the addresses of
+  the caches, which do not move. So a template compile can run off the
+  goroutine more easily than the SSA path's.
+- **But D8 attacks the same window from the other side.** It is phases 1
+  to 5 done, and planned to bring the first render to about the
+  interpreter's 22 ms: runReg runs while the optimizer compiles elsewhere.
+- **So the baseline's case is that window under D8.** It is the code that
+  runs between "warm" and "optimized code installed". Its gain there is
+  bounded by runReg's time over that window, which D8 already shortens.
+
+##### What it reuses
+
+**From internal/jit:**
+
+| Piece | Reuse |
+|---|---|
+| `arena.go`, `memory_*`, `cache_*`, `policy_darwin.go`, `PlaceRaw`/`RawCode` | as is: W^X, icache, MAP_JIT, code another compiler made |
+| `entry_*.s`: `enterSSA`/`enterRaw`, `callGo`, `storeRef` | as is |
+| `abi.Context`, `abi.Encoding` | as is: `Locals`, `BackEdges` (the poll), `GoOp`, `GlobalEpoch`, `Keep`, object offsets and tags (`TestJITObjectLayout`) |
+| `asm/amd64`, `asm/arm64`, `verify` | as is |
+| code cache, hints, realms, flush, budget, D8's workers | as is, with an entry kind of its own |
+| the write barrier and the marking rule | as is: a template's store tests the flag and goes through `storeRef` while marking. `TestJITSameWorkWhileMarking` covers it |
+| exits, records, state maps | not needed |
+| `ir`, `ssa`, `mir` | not used |
+
+**From the WebAssembly engine's baseline.** It lives in `wasm/internal/jit`
+on the WebAssembly branch (`78932ede`, `35a8ead9`); its README and
+docs/wasm.md there were read.
+- **What it shares with the JavaScript JIT:** only the lowest layer:
+  - the encoders (`internal/jit/asm`, checked by `internal/jit/verify`);
+  - the executable memory (`Arena`, `PlaceRaw`, `RawCode.EnterAt`);
+  - the execution boundary's rules.
+
+  Its front end, tiers, context, exits and entry points are its own.
+- **What it offers here: a working design of exactly this kind.**
+  - A one-pass compiler over the interpreter's own frames. Its
+    platform-independent front end (`compile.go`, `stack.go`) serves
+    per-machine backends (`compile_GOARCH.go`, `stack_GOARCH.go`,
+    `ops_GOARCH.go`).
+  - OSR both ways at a loop's head with no translation.
+  - A register cache of the operand stack, and homes for hot locals.
+  - Native calls through a link table and a return stack, with no Go
+    between, and tier-up by counting calls at the code's entry.
+  - Trap and slow-path stubs emitted after the body; a pooled compile
+    workspace; a JIT memory limit that drops code no frame is in.
+  - A reference-slot barrier routine; background compiles for its
+    optimizing tier.
+- **What does not carry over:** its numeric and memory templates, since a
+  wasm value has no tag. Its front end is over the operand stack. A
+  JavaScript baseline would take its structure, frames and calls, not its
+  code.
+
+##### Go's runtime
+
+The baseline adds no new kind of interaction (README, "The execution
+boundary").
+- **Async preemption.** Native code is never a safe point. Loops poll
+  through `Context.BackEdges`, straight code is bounded by its length, and
+  every call of Go is a cooperative preemption point.
+- **Stack maps.** Native code holds no Go pointer that only it holds:
+  - every `Value` stays in the window;
+  - `r.stack` never moves;
+  - the cache bases are reloaded after each call of Go.
+- **Stack growth.** No address into the goroutine stack is held.
+- **Faults kill the process.** The tier is opt-in, as the optimizer is.
+
+##### Verdict on option 4
+
+**The evidence does not show that the tier pays, and it should not be
+built as a general compiler now.**
+
+- **Speed.** Naive native code with SSA and registers kept 59 to 85% of the
+  optimizer's speed. Templates would keep less. Their gain over runReg is
+  large only on dispatch-bound loops, about 1.5 to 2 times, and those are
+  what the optimizer takes anyway. Elsewhere it is 5 to 15%.
+- **Calls of Go.** At 5 to 25 ns against runReg's 1 to 2, they make
+  slow-path and call code slower unless native calls come first.
+- **Compile cost.** The premise that templates compile 10 to 25 times more
+  cheaply than the SSA path is an inference. Nothing in this repository
+  has measured it for JavaScript, and the declined experiment shows how a
+  "cheap tier" can turn out not to be cheap.
+- **Op cache and budget.** Its code is the kind of large warm code whose
+  placement made Towers and Box2D bimodal, and it competes for a budget
+  Typescript already runs out of.
+- **Overlap with D8.** D8 shrinks the window it would serve.
+- **The jitless measure.** It does nothing for it.
+
+**The kill gate**, if it is ever tried, comes before any general compiler:
+1. A hand-made template version of two kernels, made with the assembler,
+   placed as `RawCode` and entered from `regBackEdge` at the loop's header
+   on runReg's frame:
+   - `crypto_am3`'s inner loop;
+   - `loop_locals`.
+2. A hand-made `call_fib` with native baseline-to-baseline calls.
+3. A prototype emitter for ten ops, timed per instruction over the V8
+   suite's functions.
+
+Continue only if all of these hold, at every placement with the JIT pads
+varied:
+- `am3` at most 0.6 times runReg's time, and `loop_locals` at most 0.5;
+- `call_fib` faster than runReg;
+- a template compile at most 0.5 µs a register instruction, and at most 70
+  bytes;
+- the baseline code never, or almost never, deopts or falls back to the
+  interpreter. It speculates nothing, so there is nothing to deopt: a case
+  its template does not handle calls the same helper runReg calls and goes
+  on in native code, as V8's Sparkplug does. It leaves for runReg only when
+  the optimizing JIT asks it to. The prototype counts its exits to runReg
+  per thousand instructions over the V8 suite, Octane and the bundles, and
+  that count must be near zero. This makes native-to-Go calls the cost to
+  get right first: about 27 ns each today, against 1-2 ns for runReg's
+  direct calls.
+
+Stop at the first that fails.
+
+#### 5. A hand-written assembly interpreter loop
+
+**What it would buy over the Go switch (inferred):**
+- **Pinned registers.** pc, the window base, the code base, the constants
+  and the closure stay in registers across handlers. That removes the
+  spills and reloads Go makes because it has no callee-saved registers,
+  and the instruction word saved at the dispatch.
+- **Threaded dispatch.** Each handler ends with its own fetch and jump.
+  That removes the jump back and gives each handler its own predictor
+  history. On a modern predictor a shared switch jump is already predicted
+  well (Rohou et al., 2015), and the closure prototype's 12% is about what
+  the dispatch jump alone is worth.
+- **Together,** about 0.5 to 1.0 ns of the 3.6 ns an instruction on
+  arithmetic loops, 15 to 25% there. On the suites, 5 to 10%.
+- **Its one real advantage:** it is no JIT, so it counts toward the
+  jitless measure.
+
+**What it costs:**
+- **Every call into Go.** ABI0 through the ABI wrapper, with the pinned
+  registers spilled and reloaded. Every slow path and every call is dearer
+  than runReg's direct calls with Go's register ABI.
+- **Pointer maps.**
+  - An asm frame's locals are not scanned (`NO_LOCAL_POINTERS`).
+  - Spilled pointers must be ones the collector reaches otherwise (the
+    window, the code, `r.cur`'s frames).
+  - `checkptr` and `gccheckmark` see nothing of the loop.
+  - Write barriers are written by hand, or made through a Go helper.
+- **Async preemption.** The assembler marks assembly functions unsafe for
+  async preemption, so the loop must poll at back edges and calls, as
+  native code does.
+- **The stack.** runReg recurses once a JavaScript call. The asm loop
+  needs a real frame with a stack check, and must hold no address into its
+  frame across a call of Go.
+- **Three copies of every hot handler:** amd64, arm64, and runReg as the
+  pure-Go fallback that AGENTS.md's portability rule requires. Every
+  semantic fix lands three times. arm64 is tested only on darwin/arm64 CI.
+- **Default-on risk.** It would be the default interpreter: an asm bug
+  faults every embedder, not only those who opted into the JIT.
+- **Layout.** The loop moves outside the layout lock's model of Go
+  functions and closures.
+
+**Against option 4.**
+- **What it keeps.** The fetch, the indirect jump and the decode stay on
+  every instruction, and each case's branches stay shared across sites.
+- **What it reaches.** It reaches every runtime, not only JIT ones.
+- **This document's evidence against it.** The remaining jitless gap is in
+  calls and frames, not dispatch:
+  - "The difference between the engines is not the count: it is what each
+    instruction and each call costs";
+  - `call_fib` takes 44 against 29 ns with the same nine instructions;
+  - a pure-Go switch reaches 3.3 ns an instruction where runReg is at 3.6.
+- **Verdict.** It is not worth three copies of the hottest code now.
+
+#### 6. Recommendation and plan
+
+**Recommendation: the front-end port (3a), and neither option 4 nor option
+5 as a commitment.**
+
+- **3a is required.** The stack form goes. It brings sections 1 to 3: the
+  feedback vector, recorded off runReg's fast paths; tier-up from
+  `regBackEdge` and `regEnterW` with nothing added to the loop; and the
+  optimizing JIT's lowering from register code, with exits and OSR into
+  register frames.
+- **Option 4, the baseline: not now.** The evidence above does not show it
+  paying in a JIT build that has the optimizer and D8.
+  - It may be reopened only through the kill gate in section 4, after 3a
+    and D8.
+  - It must be measured against runReg plus the optimizer compiling in the
+    background, not against runReg alone.
+  - The WebAssembly baseline is the design to follow if it is reopened.
+- **Option 5, the assembly loop: not now.** It may be reopened only if the
+  jitless composite stalls after Stage 2 and the tree tier's removal, and a
+  profile of the register tier then shows dispatch above 40% of the V8
+  suite's time. Even then it is an amd64-only hybrid for about 25 hot ops
+  that falls back to runReg at the same pc, behind a build tag first.
+  - **Its kill gate:** an amd64 prototype of `crypto_am3`'s and
+    `loop_locals`' ops, at least 20% faster than runReg on them at every
+    placement, before anything else of it is written.
+
+**Stages of 3a and their gates.** Every gate includes:
+- test262 at 100,247 passed, none failed, in every mode: plain,
+  `-conformance.jit`, `-conformance.debugger`, register mode;
+- `TestJITSameWorkWhileMarking` with its breach list unchanged, and every
+  native path also tested under `jitMarkingForTest`;
+- the full suite with and without the tag;
+- `TestRegLoopCallsNoHelper` and `TestRegDispatchKeepsNoPC` passing;
+- untagged builds unchanged by `hotdiff`.
+
+1. **3a-1, feedback.**
+   - Work: `regSeen`, `regCallCache.count`, the polymorphic call bit,
+     `rc.hot`, all out of runReg.
+   - Gate: `placements compare -parallel -k 4 -micro`, untagged and tagged
+     with the JIT off, with no test 3% slower at every placement; the V8
+     suite level at `-k 8`. If `rc.hot` shows, use the fallback of section
+     2, sampling at `interruptCounter`'s expiry.
+2. **3a-2, the register lowering.**
+   - Work: `LowerReg` into `ir.Program` with `Origin` and the atomicity
+     rule for fused operations, checked by `ir.Validate`; `ir.Evaluate`
+     against runReg on the corpus tests; the feedback methods re-keyed;
+     `compilediff native` reporting register pcs.
+   - Gate: refusals no more than the stack lowering's on the V8 suite,
+     Octane and the bundles.
+3. **3a-3, exits, OSR and tier-up from runReg.**
+   - Work: `runReg(f, c, pc)`, the `regCatch` sentinel, the appended `ret`,
+     inlined frames at `wb + A`, generators.
+   - Gate:
+     - the JIT's placements (`-jit -k 4`, with JITPAD, JITSEED and JITLINE
+       varied) on V8, Octane, AWFY, `ssr`, `fresh` and the micro-benchmarks
+       against the stack-form JIT, both foreground and with
+       `-jitbackground`;
+     - totals level or better, no benchmark slower at every placement, and
+       `-jitcompile` phase times no worse;
+     - `QJS_JIT_STRESS` clean;
+     - the JIT's README updated in the same commit.
+   - Only then is the stack form's JIT path removed.
+
+**Biggest risks.**
+- **The port of the optimizer's front end.** About 3,000 lines of lowering
+  and 90 feedback methods hold heuristics gathered against stack pcs. A
+  suite that loses one regresses quietly, which is why the stack path
+  stays until 3a-3's gate passes.
+- **Mid-instruction exits in fused register operations.** The atomicity
+  rule must be enforced by the validator, not left to care.
+- **Feedback earlier than before.** Call targets are known from
+  `regCalls` at the first compile, where the stack-form JIT learned them
+  at exits. More is inlined earlier, which moves compile cost and code size
+  in the first render.
+- **The op cache, for any native tier.** No timing is believed without the
+  JIT's placement knobs.
+
+#### 3a-3's working plan (2026-11-12)
+
+**Where 3a-2 left it.** On reg-cov, behind tests only:
+- `compile.LowerReg` lowers every register operation into the slot IR,
+  with `ir.Program.Origin` and the atomicity rule, which `ir.Validate`
+  enforces.
+- `ssa.Build` takes register programs and keeps the rule as it builds
+  (`atomicInstruction`), and mir compiles them. Every program of the V8
+  suite, Octane and the bundles builds and compiles, both forms alike.
+- `jitRegFeedback` answers by register pc from the caches runReg fills:
+  property sites, global sites, call shapes and targets (`regCalls`),
+  constants.
+- `vm.RegLowerCall`, with `regRunner`, is an exit's VM side today. The
+  evaluator stands where native code will: a host exit runs the whole
+  register instruction on the frame's real registers by the
+  interpreter's slow paths, and a deoptimization resumes `runReg(f, c,
+  pc)` at the exit's register pc. `runReg` already takes a start pc,
+  since generators use it, so no edit of it is needed for entry at an
+  arbitrary pc.
+
+**Step A: built entirely in `zzjit_*` files, no register-tier edit.**
+- **A1, an exit's frame rebuilt as a register frame** (`jitRegExit`).
+  - An exit's records write the window's registers `[wb, wb+Regs)`, by
+    `Program.Live`, and materialize escape analysis's virtual objects
+    into registers.
+  - It sets `f.pc = c.src[pc] + 1`, as `regSlow` does.
+  - A host exit then runs the register instruction whole by
+    `regRunner`'s dispatch (`regSlow`, `regCallW`, `regCold` and the
+    rest, all called out of the loop as they are today), and native code
+    goes on at the next entry.
+  - A deoptimization runs `runReg(f, c, pc)`.
+  - The context's `Locals` is the window's base: `r.stack` never moves,
+    so native code reads and writes registers in place.
+- **A2, inlined frames.** An inlined callee is materialized as a
+  register frame at `wb + A` of the caller's call instruction:
+  - its frame is pushed as `regLowerEnter` pushes one, without running
+    it, and `runReg` runs it from its exit's pc;
+  - the caller then resumes at the call's pc + 1, with the value in B.
+- **A3, the OSR entry map.** Each loop header's register pc goes to an
+  `ssa.Func` entry at `p.At(pc)`, its live registers from
+  `Program.Live`: the register form has one entry per loop header, as
+  the stack form.
+- **A4, the feedback snapshot for background compiles.**
+  `jitRegFeedback` is asked ahead, as `jitFeedback` is
+  (`zzjit_snapshot.go`): snapgen extended to the second type, its
+  generated file regenerated. Until then, register code compiles in the
+  foreground only.
+- **A5, calls between register functions.**
+  - `NativeCalls` and `Inline` come from `regCalls` targets, with the
+    callees' programs from `LowerRegInline`.
+  - A native callee's link is its register entry.
+  - Frequency waits for 3a-1's call counts; until then a call is
+    weighted by the caller's own hotness.
+- **A6, the compile pipeline** (`jitRegFor`): LowerReg, then ssa.Build
+  with jitRegFeedback, Optimize, mir and SSACode, in the JIT's existing
+  code cache, keyed by function and form.
+- **Testing step A.**
+  - A test-only native entry, `RegLowerCall` with native code in the
+    evaluator's place, runs the regdiff corpus with every function
+    compiled at its first call. It is compared with ordinary calls, as
+    TestRegLowerEvaluate does now.
+  - TestJITSameWorkWhileMarking gets register-code cases, and every
+    native path is tested under `jitMarkingForTest`.
+
+**Step B: the smallest hook set in the register tier**, which the
+coordinator sequences after a merge of reg-cov into reg. No hook is in
+runReg's loop, and runReg itself is not edited.
+- **B1, calls** (`zzreg_call.go`, outside the loop): `regEnterW` and
+  `regDirect`/`regDirectOnce`, the callbacks' entry.
+  - One branch behind `jitBuilt`: `if jitBuilt { if rc.hot--; rc.hot < 0
+    { return r.regEnterHot(...) } }`.
+  - `regEnterHot` (zzjit, out of line) counts, compiles and enters
+    native code, and holds `hot` negative once the function has code.
+  - `regCode` gains `hot int32` (`zzreg_run.go`, a field, not the loop).
+  - Untagged builds compile it out; tagged builds pay a decrement on a
+    line regEnterW already loads. That is measured with
+    `placements -micro`, tagged and untagged. If it shows, the fallback
+    credits the callee when `interruptCounter` runs out, the decrement
+    regEnterW already makes.
+- **B2, loops** (`regBackEdge` in `zzreg_run.go`): it is called out of
+  line from the loop's jump tail when `r.backEdges` runs out, and the
+  tail does not change.
+  - Behind `jitBuilt`, it takes the budget from
+    `r.jit.backEdgeBudget()` and calls `r.jitRegLoop(f, c, k)` (zzjit).
+  - That function finds the header from the jump at `k.pc - 1`, enters
+    native code at A3's entry, and on its return sets `k.pc` and returns
+    the sentinel `errRegGoOn`.
+- **B3, going on after native code** (`regCatch` in `zzreg_switch.go`,
+  outside the loop): its first test is `if err == errRegGoOn { return
+  k.pc }`. The fail tail already continues at whatever regCatch returns,
+  so OSR out of native code adds no instruction to runReg.
+  - A frame native code finished resumes at a `ret r0` that regcomp
+    appends to every function (a regcomp change, not the tier's), its
+    value written to r0.
+- **No hook needed** in `regSlow`, `regColdSub` or `regCallW`: an exit
+  calls them from zzjit as `regRunner` does now.
+  - 3a-1's feedback, `regSeen` and call counts, records in their slow
+    branches: that is 3a-1's hook set, apart from 3a-3's.
+- **Generators** are a step after B: `regGenRun` (`zzreg_zgen.go`)
+  entering a resumption's native code, the suspended window replacing
+  the stack form's `GenSteps`.
+
+**Order and gates.**
+1. A6, A1 and A3 with the test-only entry.
+   - Gate: the regdiff corpus native at first call, compared with
+     ordinary calls, 0 disagreements; the marking test's register cases.
+2. A5 and A2, with the same gates; inlined frames' rebuild under
+   `QJS_JIT_STRESS`'s deopt settings through the test entry.
+3. B1 to B3, scheduled by the coordinator, and an env switch
+   (`QJS_JITREG`) routing the JIT to register code.
+   - Gate: test262 `-conformance.jit` in register mode, 0 failures and
+     0 fallbacks; `QJS_JIT_STRESS` clean; hotdiff of runReg the same,
+     and of `regEnterW` in untagged builds.
+4. A4, then 3a-3's timing gate: the JIT's placements (`-jit -k 4`,
+   JITPAD, JITSEED and JITLINE varied) on V8, Octane, AWFY, `ssr`,
+   `fresh` and the micro-benchmarks against the stack-form JIT,
+   foreground and with `-jitbackground`. Only then does the stack path
+   go.
 
 ### Stage 4: one pipeline
 

@@ -155,7 +155,9 @@ func (r *Runtime) regRerun(f *frame, kind uint8, saved int) (Value, error) {
 // through its fail tail, which regCatch leaves to the caller.
 //
 // regRestartRun runs frame f again with the code a tail call gave it, as
-// many times as its tail calls give it another.
+// many times as its tail calls give it another. Each is a call, counted
+// for the host's interrupt as regEnterW counts one: a loop of calls in
+// tail position is stopped as a loop is.
 //
 //go:noinline
 func (r *Runtime) regRestartRun(f *frame) (Value, error) {
@@ -163,7 +165,12 @@ func (r *Runtime) regRestartRun(f *frame) (Value, error) {
 	for err == errRegRestart {
 		rc := r.regRestart
 		r.regRestart = nil
-		v, err = r.runReg(f, rc)
+		if r.interruptCounter--; r.interruptCounter <= 0 {
+			if err = r.checkInterruptNow(); err != nil {
+				break
+			}
+		}
+		v, err = r.runReg(f, rc, 0)
 	}
 	// The captures of the code the frame was given, which its caller
 	// closes only by the first code's.
@@ -224,7 +231,7 @@ func (r *Runtime) regTailInPlace(f *frame, c *regCode, w bytecode.RInstr, wb int
 func (r *Runtime) regTailTo(f *frame, w bytecode.RInstr, wb int, o *Object, cl *closure, rc *regCode, this Value) bool {
 	if f.regKind != regFrameCall && f.regKind != regFrameEnter || !f.newTarget.IsUndefined() ||
 		f.thisRef != nil || f.args != nil || f.withScopes != nil || f.evalVars != nil ||
-		!rc.wide || rc.args || rc.locals != 0 || !cl.fn.Strict {
+		!rc.wide || rc.suspends || rc.args || rc.locals != 0 || !cl.fn.Strict {
 		// A sloppy callee is given a frame of its own: its f.arguments
 		// reads its count from its caller's instruction (regLegacyArgs).
 		return false
@@ -293,7 +300,7 @@ func regPlan(fd *funcData) {
 		return
 	}
 	t := (*tree)(atomic.LoadPointer(&fd.closure.fn.VMCode))
-	if t == nil || t.reg == nil || !t.reg.wide {
+	if t == nil || t.reg == nil || !t.reg.wide || t.reg.suspends {
 		return
 	}
 	if fd.closure.fn.HasTailCall {
@@ -302,29 +309,46 @@ func regPlan(fd *funcData) {
 		// expect none.
 		return
 	}
+	if isClassConstructorKind(fd.closure.fn.Kind) {
+		// A class's constructor is only constructed, which construct and
+		// runFD make: a call throws, and a derived one's this is bound.
+		return
+	}
+	if fd.closure.fn.HasDirectEval {
+		// A frame with a scope of its own for the eval's variables,
+		// which runFD makes.
+		return
+	}
 	if x := fd.extra; x != nil && (!fd.arrow || x.lexThisRef != nil || x.rare != nil) {
 		return
 	}
+	regBindPlan(fd, t)
 	fd.treeCall = t
 }
 
-// regKeepWindow keeps the arguments past its params parameters of the
-// register frame about to be made at base with argc arguments, which its
-// bindings overwrite in its window, for f.arguments (regLegacyArgs): at the
+// regKeepWindow keeps the arguments from parameter params (regCode.keep)
+// of the register frame about to be made at base with argc arguments,
+// which its bindings or a closure's stores may overwrite in its window, for
+// f.arguments (regLegacyArgs), which only WithNodeQuirks has: at the
 // frame's depth, with the frame's base and callee, which regLegacyArgs
 // checks, in a slice of the runtime's that the next such call at that
 // depth reuses. Only a call with more arguments than parameters pays for
 // it: regCallW and regCallSlow call it past one compare. A built-in's
-// callback (regDirect) keeps none: its arguments are the built-in's.
+// callback (regDirect) keeps all of them, the built-in's
+// (regDirectLegacy).
 //
 //go:noinline
 func (r *Runtime) regKeepWindow(base, params, argc int) {
+	if !r.nodeQuirks {
+		// No f.arguments to read them.
+		return
+	}
 	d := r.frameDepth
 	for len(r.regExtras) <= d {
 		r.regExtras = append(r.regExtras, regExtra{})
 	}
 	e := &r.regExtras[d]
-	e.base, e.callee = base, nil
+	e.base, e.callee, e.all = base, nil, false
 	if v := r.stack[base]; v.IsObject() {
 		e.callee = v.Object()
 	}
@@ -332,11 +356,60 @@ func (r *Runtime) regKeepWindow(base, params, argc int) {
 }
 
 // A regExtra is what regKeepWindow kept of a call: the arguments past the
-// parameters of the frame at base with callee.
+// parameters of the frame at base with callee; or, all set, every argument
+// regDirectLegacy's call passed.
 type regExtra struct {
 	base   int
 	callee *Object
 	vals   []Value
+	all    bool
+}
+
+// regDirectLegacy is regDirect's entry of a frame under WithNodeQuirks,
+// where f.arguments reads a sloppy function's arguments: a built-in's
+// callback, a call through call, apply or a bound function, a tail call
+// made by a frame given up -- whose caller's instruction, if any, is not
+// the call's. It keeps every argument the call passed at the frame's depth,
+// with its base and callee, which regLegacyArgs checks, until the frame
+// returns.
+//
+//go:noinline
+func (r *Runtime) regDirectLegacy(o *Object, cl *closure, c *regCode, base, m int, args []Value) (Value, error) {
+	if cl.fn.Strict || c.args {
+		// No f.arguments, or the arguments kept in the frame's args.
+		return r.regEnterW(o, cl, c, base, m, args, Undefined)
+	}
+	d := r.frameDepth
+	for len(r.regExtras) <= d {
+		r.regExtras = append(r.regExtras, regExtra{})
+	}
+	e := &r.regExtras[d]
+	e.base, e.callee, e.all = base, o, true
+	e.vals = append(e.vals[:0], args...)
+	v, err := r.regEnterW(o, cl, c, base, m, args, Undefined)
+	if e := &r.regExtras[d]; e.all && e.base == base && e.callee == o {
+		clear(e.vals)
+		e.vals, e.callee, e.all = e.vals[:0], nil, false
+	}
+	return v, err
+}
+
+// regScopedLegacy is regDirectLegacy for a frame regRunFD enters: every
+// argument kept for f.arguments (regLegacyArgs) while the frame runs.
+func (r *Runtime) regScopedLegacy(o *Object, cl *closure, c *regCode, base, m int, args []Value, newTarget Value, thisRef *thisBinding, with []*Object, evalVars *Object) (Value, error) {
+	d := r.frameDepth
+	for len(r.regExtras) <= d {
+		r.regExtras = append(r.regExtras, regExtra{})
+	}
+	e := &r.regExtras[d]
+	e.base, e.callee, e.all = base, o, true
+	e.vals = append(e.vals[:0], args...)
+	v, err := r.regEnterScoped(o, cl, c, base, m, args, newTarget, thisRef, with, evalVars)
+	if e := &r.regExtras[d]; e.all && e.base == base && e.callee == o {
+		clear(e.vals)
+		e.vals, e.callee, e.all = e.vals[:0], nil, false
+	}
+	return v, err
 }
 
 // regExtrasLetGo lets go of the arguments regKeepWindow kept for calls that
@@ -346,7 +419,7 @@ func (r *Runtime) regExtrasLetGo() {
 	for i := r.frameDepth; i < len(r.regExtras); i++ {
 		e := &r.regExtras[i]
 		clear(e.vals[:cap(e.vals)])
-		e.vals, e.callee = e.vals[:0], nil
+		e.vals, e.callee, e.all = e.vals[:0], nil, false
 	}
 }
 
@@ -355,10 +428,20 @@ func (r *Runtime) regExtrasLetGo() {
 // count from its caller's call instruction -- the one call of the caller's
 // register code at the stack form's instruction its pc names, which is
 // where a call sets it -- the parameters from the window, as they are now,
-// and the arguments past them from what regKeepWindow kept. It reports
-// false where the caller runs no register code or names no one call: a
-// built-in's callback, a construct.
+// and the arguments past them from what regKeepWindow kept. A frame
+// regDirectLegacy entered has every argument kept, its parameters read
+// from the window as well. It reports false where the caller runs no
+// register code or names no one call: a construct.
 func (r *Runtime) regLegacyArgs(i int, f *frame) ([]Value, bool) {
+	if i < len(r.regExtras) && f.cl.reg != nil {
+		if e := &r.regExtras[i]; e.all && e.base == f.base && e.callee == f.callee {
+			args := append([]Value(nil), e.vals...)
+			for k := 0; k < len(args) && k < int(f.cl.reg.keep); k++ {
+				args[k] = r.stack[f.base+2+k]
+			}
+			return args, true
+		}
+	}
 	if i == 0 {
 		return nil, false
 	}
@@ -383,7 +466,7 @@ func (r *Runtime) regLegacyArgs(i int, f *frame) ([]Value, bool) {
 	if argc < 0 {
 		return nil, false
 	}
-	params := int(f.cl.reg.params)
+	params := int(f.cl.reg.keep)
 	args := make([]Value, argc)
 	for k := 0; k < argc && k < params; k++ {
 		args[k] = r.stack[f.base+2+k]

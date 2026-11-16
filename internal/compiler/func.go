@@ -12,12 +12,12 @@ import (
 )
 
 // compileFunctionLiteral compiles a nested function and emits the instruction
-// that builds a closure from it.
-func (c *compiler) compileFunctionLiteral(fn *ast.FuncLit, inferredName string) {
+// that builds a closure from it. It returns the function's constant.
+func (c *compiler) compileFunctionLiteral(fn *ast.FuncLit, inferredName string) uint32 {
 	trace := c.traceName
 	c.traceName = ""
 	sub := newCompiler(c, c.opts)
-	if registerForm.Load() && !c.opts.Debug && c.opts.EvalScope == nil {
+	if registerForm.Load() {
 		sub.reg = regcomp.NewRecord()
 	}
 	sub.lit = fn
@@ -44,13 +44,16 @@ func (c *compiler) compileFunctionLiteral(fn *ast.FuncLit, inferredName string) 
 	rec := sub.reg
 	compiled := sub.release()
 	if rec != nil && !rec.Bail {
-		compiled.Reg = regcomp.Compile(fn, compiled, rec)
+		// Compiled at the function's first call: one never called is
+		// never compiled (docs/register-interpreter.md, "Compiled lazily").
+		compiled.Reg = regcomp.Later(fn, compiled, rec)
 	} else if rec != nil {
-		regcomp.Refuse(compiled, "a with, an eval's variables or an Annex B function")
+		regcomp.Refuse(compiled, "a name the record resolves two ways")
 	}
 
 	idx := c.addConst(bytecode.Constant{Kind: bytecode.ConstFunction, Fn: compiled})
 	c.emit(bytecode.OpClosure, idx, 0)
+	return idx
 }
 
 // thisIsValue reports whether this, in the code c compiles, is a value
@@ -823,6 +826,10 @@ func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
 
 	ctor := c.synthesizeConstructor(cls)
 	instanceInit := c.instanceInitializer(cls, keyNames, installName)
+	// What the register form makes in the same order (regcomp.ClassRec).
+	cr := &regcomp.ClassRec{Self: -1, Install: -1, Init: -1,
+		Keys: make([]int32, len(cls.Fields)), Members: make([]int32, len(cls.Members))}
+	c.reg.NoteClass(cls, cr)
 
 	// The body is a scope of its own, holding the class's inner name binding,
 	// its computed keys and its private names. Opening it per evaluation is
@@ -839,6 +846,7 @@ func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
 	selfSlot, hasSelf := uint32(0), cls.Name != nil
 	if hasSelf {
 		selfSlot = c.declare(cls.Name.Name, bindConst, cls.Start)
+		cr.Self = int32(selfSlot)
 		c.emit(bytecode.OpPushUninitialized, 0, 0)
 		c.emit(bytecode.OpSetLocal, selfSlot, 0)
 		c.markUninitialized(cls.Name.Name)
@@ -855,19 +863,25 @@ func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
 	c.pushPrivateScope(privates)
 	defer c.popPrivateScope()
 	c.emitPrivateKeys(privates, cls.Start)
+	for _, b := range privates {
+		if l, ok := c.resolveLocal(b.hidden); ok {
+			cr.Privates = append(cr.Privates, regcomp.ClassPrivate{Slot: l.slot, Name: "#" + b.name})
+		}
+	}
 	if installName != "" {
 		// The list is created before the constructor is compiled and filled as
 		// the body is evaluated, so that a static block that constructs an
 		// instance finds the methods already there.
 		slot := c.declare(installName, bindConst, cls.Start)
+		cr.Install = int32(slot)
 		c.emit(bytecode.OpNewPrivateMethods, 0, 0)
 		c.emit(bytecode.OpSetLocal, slot, 0)
 		c.markInitialized(installName)
 	}
 
-	c.evalComputedFieldKeys(cls, keyNames)
+	c.evalComputedFieldKeys(cls, keyNames, cr.Keys)
 	c.traceName = trace
-	c.compileFunctionLiteral(ctor, name)
+	cr.Ctor = int32(c.compileFunctionLiteral(ctor, name))
 	if cls.Extends != nil {
 		c.emit(bytecode.OpSwap, 0, 0)
 		// stack: ctor parent
@@ -889,25 +903,26 @@ func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
 		// field reads from the parent's prototype, as it does in a method.
 		c.emit(bytecode.OpDup, 0, 0)
 		c.emit(bytecode.OpGetProp, c.nameIdx("prototype"), 0)
-		c.compileFunctionLiteral(instanceInit, "")
+		cr.Init = int32(c.compileFunctionLiteral(instanceInit, ""))
 		c.emit(bytecode.OpSetHomeObject, 1, 0)
 		c.emit(bytecode.OpSwap, 0, 0)
 		c.emit(bytecode.OpDrop, 0, 0)
 		c.emit(bytecode.OpSetFieldInit, 0, 0)
 	}
 
-	for _, m := range cls.Members {
+	for i, m := range cls.Members {
+		cr.Members[i] = -1
 		fn, ok := m.Value.(*ast.FuncLit)
 		if !ok || fn.Kind == ast.FuncConstructor {
 			continue
 		}
-		c.compileClassMember(m, fn, installName)
+		cr.Members[i] = int32(c.compileClassMember(m, fn, installName))
 	}
 
 	// The static elements run once the class object exists, in the order they
 	// were written: a field and a block are the same kind of thing here, and a
 	// block between two fields runs between them.
-	c.compileStaticElements(cls, keyNames)
+	cr.Statics = c.compileStaticElements(cls, keyNames)
 	c.endScope()
 }
 
@@ -919,7 +934,7 @@ func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
 // next -- and what gives it a home object for `super.x`. OpCallMethod takes the
 // receiver from beneath the callee, so the constructor is duplicated into that
 // slot each time.
-func (c *compiler) compileStaticElements(cls *ast.ClassLit, keyNames []string) {
+func (c *compiler) compileStaticElements(cls *ast.ClassLit, keyNames []string) []regcomp.ClassStatic {
 	type element struct {
 		pos   int
 		field int // index into cls.Fields, or -1 for a block
@@ -938,14 +953,16 @@ func (c *compiler) compileStaticElements(cls *ast.ClassLit, keyNames []string) {
 		return elements[i].pos < elements[j].pos
 	})
 
+	var out []regcomp.ClassStatic
 	for _, el := range elements {
 		c.emit(bytecode.OpDup, 0, 0)
 		if el.field < 0 {
-			c.compileFunctionLiteral(&ast.FuncLit{
+			k := c.compileFunctionLiteral(&ast.FuncLit{
 				Kind:  ast.FuncMethod,
 				Body:  cls.StaticBlocks[el.block].Body,
 				Start: cls.Start,
 			}, "")
+			out = append(out, regcomp.ClassStatic{Const: k, Field: -1})
 			// Its home object is the class, so `super.x` there reads from the
 			// parent class rather than from the parent's prototype.
 			c.emit(bytecode.OpSetHomeObject, 1, 0)
@@ -965,7 +982,7 @@ func (c *compiler) compileStaticElements(cls *ast.ClassLit, keyNames []string) {
 			// A field with no initializer is still created, holding undefined.
 			value = &ast.Ident{Name: "undefined", Start: int32(f.Start)}
 		}
-		c.compileFunctionLiteral(&ast.FuncLit{
+		k := c.compileFunctionLiteral(&ast.FuncLit{
 			Kind: ast.FuncMethod,
 			Body: []ast.Stmt{&ast.FieldInit{
 				Key: key, Value: value, Computed: computed, Start: f.Start,
@@ -973,14 +990,17 @@ func (c *compiler) compileStaticElements(cls *ast.ClassLit, keyNames []string) {
 			Start: f.Start,
 			End:   f.Start,
 		}, "")
+		out = append(out, regcomp.ClassStatic{Const: k, Field: int32(el.field)})
 		c.emit(bytecode.OpSetHomeObject, 1, 0)
 		c.emit(bytecode.OpCallMethod, 0, 0)
 		c.emit(bytecode.OpDrop, 0, 0)
 	}
+	return out
 }
 
-// compileClassMember attaches one method or accessor to the class.
-func (c *compiler) compileClassMember(m ast.Property, fn *ast.FuncLit, installName string) {
+// compileClassMember attaches one method or accessor to the class. It
+// returns the function's constant.
+func (c *compiler) compileClassMember(m ast.Property, fn *ast.FuncLit, installName string) uint32 {
 	key := ""
 	if !m.Computed {
 		key = propKeyName(m.Key)
@@ -996,8 +1016,7 @@ func (c *compiler) compileClassMember(m ast.Property, fn *ast.FuncLit, installNa
 	}
 
 	if pn, private := m.Key.(*ast.PrivateName); private && !m.Static {
-		c.compilePrivateMethod(m, fn, pn, methodName, installName)
-		return
+		return c.compilePrivateMethod(m, fn, pn, methodName, installName)
 	}
 
 	if m.Static {
@@ -1017,7 +1036,7 @@ func (c *compiler) compileClassMember(m ast.Property, fn *ast.FuncLit, installNa
 		// The key now sits between the target and the function.
 		homeDepth = 2
 	}
-	c.compileMethodValue(fn, methodName)
+	k := c.compileMethodValue(fn, methodName)
 	if m.Computed {
 		// The name is only knowable once the key has been evaluated.
 		c.emit(bytecode.OpSetFuncName, nameKind, 0)
@@ -1027,6 +1046,7 @@ func (c *compiler) compileClassMember(m ast.Property, fn *ast.FuncLit, installNa
 	c.emit(bytecode.OpSetHomeObject, homeDepth, 0)
 	c.emitClassMemberDefine(m, key)
 	c.emit(bytecode.OpDrop, 0, 0)
+	return k
 }
 
 // classMember marks a define instruction as a class's, which the interpreter
@@ -1085,7 +1105,7 @@ func (c *compiler) emitClassMemberDefine(m ast.Property, key string) {
 // The function is made once per class evaluation and shared by every instance,
 // so it is built here rather than in the constructor.
 func (c *compiler) compilePrivateMethod(m ast.Property, fn *ast.FuncLit,
-	pn *ast.PrivateName, methodName, installName string) {
+	pn *ast.PrivateName, methodName, installName string) uint32 {
 	name, ref := c.privateName(pn, m.Start)
 
 	// `super.x` in the method resolves against the prototype's prototype, so
@@ -1093,7 +1113,7 @@ func (c *compiler) compilePrivateMethod(m ast.Property, fn *ast.FuncLit,
 	c.emit(bytecode.OpDup, 0, 0)
 	c.emit(bytecode.OpGetProp, c.nameIdx("prototype"), 0)
 	c.compileIdentRead(&ast.Ident{Name: installName, Start: int32(m.Start)})
-	c.compileMethodValue(fn, methodName)
+	k := c.compileMethodValue(fn, methodName)
 	c.emit(bytecode.OpSetHomeObject, 2, 0)
 	op := bytecode.OpAddPrivateMethod
 	switch m.Kind {
@@ -1104,16 +1124,20 @@ func (c *compiler) compilePrivateMethod(m ast.Property, fn *ast.FuncLit,
 	}
 	c.emit(op, name, ref)
 	c.emit(bytecode.OpDrop, 0, 0)
+	return k
 }
 
 // evalComputedFieldKeys evaluates each computed field key and stores it in its
-// hidden binding, leaving the operand stack as it found it.
-func (c *compiler) evalComputedFieldKeys(cls *ast.ClassLit, keyNames []string) {
+// hidden binding, leaving the operand stack as it found it; slots is given
+// each field's binding, or -1.
+func (c *compiler) evalComputedFieldKeys(cls *ast.ClassLit, keyNames []string, slots []int32) {
 	for i, f := range cls.Fields {
+		slots[i] = -1
 		if !f.Computed {
 			continue
 		}
 		slot := c.declare(keyNames[i], bindConst, f.Start)
+		slots[i] = int32(slot)
 		c.compileExpr(f.Key)
 		c.emit(bytecode.OpToPropertyKey, 0, 0)
 		c.emit(bytecode.OpSetLocal, slot, 0)
@@ -1139,7 +1163,7 @@ func (c *compiler) instanceInitializer(cls *ast.ClassLit, keyNames []string,
 		// A private method belongs to the instance, and is put there where the
 		// specification puts it: once `this` exists, before any field runs.
 		body = append(body, &ast.InstallPrivateMethods{
-			Binding: installName, Start: cls.Start,
+			Binding: &ast.Ident{Name: installName, Start: int32(cls.Start)}, Start: cls.Start,
 		})
 	}
 	for i, f := range cls.Fields {
@@ -1254,10 +1278,10 @@ func topLevelLexicalNames(body []ast.Stmt) []string {
 }
 
 // compileMethodValue emits a method's closure.
-func (c *compiler) compileMethodValue(fn *ast.FuncLit, name string) {
+func (c *compiler) compileMethodValue(fn *ast.FuncLit, name string) uint32 {
 	lit := *fn
 	lit.Name = nil
-	c.compileFunctionLiteral(&lit, name)
+	return c.compileFunctionLiteral(&lit, name)
 }
 
 // formatKeyNumber renders a numeric property key the way ToString would, so

@@ -10821,19 +10821,26 @@ func (fb *jitFeedback) Global(pc int) (ssa.GlobalSite, bool) {
 	if in.Op != bytecode.OpGetGlobal && in.Op != bytecode.OpGetGlobalOpt && !write && !check || int(in.A) >= len(fb.cl.names) {
 		return ssa.GlobalSite{}, false
 	}
-	name, env := fb.cl.names[in.A], fb.cl.scope()
+	return fb.globalSite(fb.cl.names[in.A], int(in.B), write, check)
+}
+
+// globalSite is Global's site of a read of the global name, a write or a
+// strict assignment's check, its cache site's index, or -1 for none: the
+// stack form's instruction's or register code's (jitRegFeedback).
+func (fb *jitFeedback) globalSite(name Atom, siteIdx int, write, check bool) (ssa.GlobalSite, bool) {
+	env := fb.cl.scope()
 	if env == nil {
 		return ssa.GlobalSite{}, false
 	}
 	if !fb.r.isGlobalScope(env) {
-		return fb.moduleGlobal(name, env, in, write, check)
+		return fb.moduleGlobal(name, env, siteIdx, write, check)
 	}
 	if fb.r.lexShadows(name) {
 		return fb.lexGlobal(name, env, write)
 	}
 	i := int32(-1)
-	if int(in.B) < len(fb.cl.ic) {
-		i = fb.cl.ic[in.B].idx
+	if siteIdx >= 0 && siteIdx < len(fb.cl.ic) {
+		i = fb.cl.ic[siteIdx].idx
 	}
 	if i < 0 || int(i) >= int(env.valn) || env.shape.keys[i].key != name {
 		i = env.findOwn(name)
@@ -10891,10 +10898,10 @@ func (fb *jitFeedback) Global(pc int) (ssa.GlobalSite, bool) {
 // is (jitImportedBinding); and a name the module does not declare where the
 // global object, the environment's prototype, has it, if no script-level
 // lexical binding of the name shadows it. The rest is Go's.
-func (fb *jitFeedback) moduleGlobal(name Atom, env *Object, in bytecode.Instr, write, check bool) (ssa.GlobalSite, bool) {
+func (fb *jitFeedback) moduleGlobal(name Atom, env *Object, siteIdx int, write, check bool) (ssa.GlobalSite, bool) {
 	i := int32(-1)
-	if int(in.B) < len(fb.cl.ic) {
-		i = fb.cl.ic[in.B].idx
+	if siteIdx >= 0 && siteIdx < len(fb.cl.ic) {
+		i = fb.cl.ic[siteIdx].idx
 	}
 	if i < 0 || int(i) >= int(env.valn) || env.shape.keys[i].key != name {
 		i = env.findOwn(name)

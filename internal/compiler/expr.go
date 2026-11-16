@@ -327,7 +327,13 @@ func (c *compiler) compileExprNamed(e ast.Expr, name string) {
 		c.emit(bytecode.OpPushNull, 0, 0)
 
 	case *ast.This:
-		c.emit(bytecode.OpPushThis, 0, 0)
+		if c.thisIsValue() {
+			c.emit(bytecode.OpPushThis, 0, 0)
+		} else {
+			// A derived constructor's this, which super() binds: a read
+			// before it throws, at the read.
+			c.emitAt(n.Start, bytecode.OpPushThis, 0, 0)
+		}
 
 	case *ast.NewTarget:
 		if c.inClassFieldInit() {
@@ -466,9 +472,7 @@ func isNegZero(v float64) bool { return v == 0 && 1/v < 0 }
 func (c *compiler) compileIdentRead(n *ast.Ident) {
 	// Inside a `with` body the object may answer instead of the binding.
 	probe := c.withProbe(bytecode.OpWithGet, n.Name)
-	if probe >= 0 && c.reg != nil {
-		c.reg.Bail = true
-	}
+	c.regWith(n, probe)
 	c.compileIdentReadStatic(n)
 	c.patchWithProbe(probe)
 }
@@ -489,15 +493,16 @@ func (c *compiler) compileIdentReadStatic(n *ast.Ident) {
 			c.emit(bytecode.OpGetLocal, l.slot, 0)
 		} else {
 			c.reg.NoteRead(n, regcomp.Res{Kind: regcomp.ResLocalCheck, Index: l.slot})
-			c.emit(bytecode.OpGetLocalCheck, l.slot, 0)
+			// A read in the dead zone throws at the name.
+			c.emitAt(int(n.Start), bytecode.OpGetLocalCheck, l.slot, 0)
 		}
 		c.compiledRead(l, n)
 		return
 	}
 	if idx, ok := c.resolveUpvalue(n.Name); ok {
 		if c.fn.Upvalues[idx].TDZ {
-			c.reg.NoteRead(n, regcomp.Res{})
-			c.emit(bytecode.OpGetUpvalueCheck, idx, 0)
+			c.reg.NoteRead(n, regcomp.Res{Kind: regcomp.ResUpvalCheck, Index: idx})
+			c.emitAt(int(n.Start), bytecode.OpGetUpvalueCheck, idx, 0)
 		} else {
 			c.reg.NoteRead(n, regcomp.Res{Kind: regcomp.ResUpval, Index: idx})
 			c.emit(bytecode.OpGetUpvalue, idx, 0)
@@ -781,7 +786,9 @@ func (c *compiler) templateIdx(q *ast.TemplateLit) uint32 {
 		t.Raw[i] = e.Raw
 	}
 	c.fn.Templates = append(c.fn.Templates, t)
-	return uint32(len(c.fn.Templates) - 1)
+	idx := uint32(len(c.fn.Templates) - 1)
+	c.reg.NoteTemplate(q, idx)
+	return idx
 }
 
 // constantElems reports whether the code from start is n instructions, each
@@ -1046,6 +1053,7 @@ func (c *compiler) compileUnary(n *ast.Unary) {
 		// than throwing, which needs the non-throwing global read.
 		if id, ok := n.Operand.(*ast.Ident); ok {
 			probe := c.withProbe(bytecode.OpWithTypeof, id.Name)
+			c.regWith(id, probe)
 			// The non-throwing global read is only right for a name that
 			// resolves nowhere; a binding, or the function's own name, is
 			// read the ordinary way.
@@ -1104,18 +1112,23 @@ func (c *compiler) compileUnary(n *ast.Unary) {
 		}
 		if id, ok := n.Operand.(*ast.Ident); ok {
 			probe := c.withProbe(bytecode.OpWithDelete, id.Name)
+			c.regWith(id, probe)
 			defer c.patchWithProbe(probe)
 			// A local or captured binding cannot be deleted at all; a global
 			// can, but only if it is configurable, which a var declaration is
-			// not.
-			if _, isLocal := c.resolveLocal(id.Name); isLocal {
+			// not. The register form is told which: the binding's
+			// resolution, or a global.
+			if l, isLocal := c.resolveLocal(id.Name); isLocal {
+				c.reg.NoteRead(id, regcomp.Res{Kind: regcomp.ResLocal, Index: l.slot})
 				c.emit(bytecode.OpPushFalse, 0, 0)
 				return
 			}
-			if _, isUpvalue := c.resolveUpvalue(id.Name); isUpvalue {
+			if idx, isUpvalue := c.resolveUpvalue(id.Name); isUpvalue {
+				c.reg.NoteRead(id, regcomp.Res{Kind: regcomp.ResUpval, Index: idx})
 				c.emit(bytecode.OpPushFalse, 0, 0)
 				return
 			}
+			c.reg.NoteRead(id, regcomp.Res{Kind: regcomp.ResGlobal})
 			c.emitAt(n.Start, bytecode.OpDeleteVar, c.nameIdx(id.Name), 0)
 			return
 		}
@@ -1316,7 +1329,7 @@ func (c *compiler) compileUpdateKeep(n *ast.Update, keep bool) {
 			// not consult the prototype chain the way a property does.
 			name, ref := c.privateName(pn, int(target.Start))
 			c.emit(bytecode.OpDup, 0, 0)
-			c.emit(bytecode.OpGetPrivate, name, ref)
+			c.emitAt(int(target.Start), bytecode.OpGetPrivate, name, ref)
 			if !n.Prefix {
 				c.emit(bytecode.OpToNumeric, 0, 0)
 				c.emit(bytecode.OpInsert2, 0, 0)
@@ -1632,7 +1645,7 @@ func (c *compiler) compileCall(n *ast.Call) {
 			name, ref := c.privateName(pn, int(m.Start))
 			c.compileExpr(m.Object)
 			c.emit(bytecode.OpDup, 0, 0)
-			c.emit(bytecode.OpGetPrivate, name, ref)
+			c.emitAt(m.Property.Pos(), bytecode.OpGetPrivate, name, ref)
 			argc := c.compileArguments(n.Args)
 			// A call in tail position, as any method's is.
 			c.emitAt(callPos(n), c.callOp(n, bytecode.OpCallMethod), uint32(argc), 0)
@@ -1676,6 +1689,7 @@ func (c *compiler) compileCall(n *ast.Call) {
 	// receiver and a callee, so the call is the same instruction either way.
 	if id, ok := n.Callee.(*ast.Ident); ok && c.withDepth > 0 {
 		probe := c.withProbe(bytecode.OpWithGetThis, id.Name)
+		c.regWith(id, probe)
 		c.emit(bytecode.OpPushUndef, 0, 0)
 		c.compileIdentReadStatic(id)
 		c.patchWithProbe(probe)
@@ -1774,7 +1788,7 @@ func (c *compiler) compileSpreadCall(n *ast.Call) {
 			name, ref := c.privateName(pn, int(m.Start))
 			c.compileExpr(m.Object)
 			c.emit(bytecode.OpDup, 0, 0)
-			c.emit(bytecode.OpGetPrivate, name, ref)
+			c.emitAt(m.Property.Pos(), bytecode.OpGetPrivate, name, ref)
 			c.compileSpreadArguments(n.Args)
 			c.emitAt(callPos(n), bytecode.OpCallSpread, 0, 0)
 			return
@@ -1804,6 +1818,7 @@ func (c *compiler) compileSpreadCall(n *ast.Call) {
 		// Through a with object, as a call without a spread: the object
 		// the name is found on is the receiver.
 		probe := c.withProbe(bytecode.OpWithGetThis, id.Name)
+		c.regWith(id, probe)
 		c.emit(bytecode.OpPushUndef, 0, 0)
 		c.compileIdentReadStatic(id)
 		c.patchWithProbe(probe)
@@ -1948,7 +1963,7 @@ func (c *compiler) compileChainLinkThis(e ast.Expr, jumps *[]chainJump) {
 	switch {
 	case m.Computed:
 		c.compileExpr(m.Property)
-		c.emit(bytecode.OpGetIndexThis, 0, 0)
+		c.emitAt(m.Property.Pos(), bytecode.OpGetIndexThis, 0, 0)
 	default:
 		if pn, private := m.Property.(*ast.PrivateName); private {
 			name, ref := c.privateName(pn, int(m.Start))
@@ -1956,7 +1971,7 @@ func (c *compiler) compileChainLinkThis(e ast.Expr, jumps *[]chainJump) {
 			c.emitAt(int(m.Start), bytecode.OpGetPrivate, name, ref)
 			break
 		}
-		c.emit(bytecode.OpGetPropThis, c.nameIdx(propKeyName(m.Property)), 0)
+		c.emitAt(m.Property.Pos(), bytecode.OpGetPropThis, c.nameIdx(propKeyName(m.Property)), 0)
 	}
 }
 
@@ -1979,7 +1994,7 @@ func (c *compiler) compileChainLink(e ast.Expr, jumps *[]chainJump) {
 		switch {
 		case n.Computed:
 			c.compileExpr(n.Property)
-			c.emit(bytecode.OpGetIndex, 0, 0)
+			c.emitAt(n.Property.Pos(), bytecode.OpGetIndex, 0, 0)
 		default:
 			if pn, private := n.Property.(*ast.PrivateName); private {
 				// A private name is not a property: it is reached through the
@@ -1990,7 +2005,8 @@ func (c *compiler) compileChainLink(e ast.Expr, jumps *[]chainJump) {
 				c.emitAt(int(n.Start), bytecode.OpGetPrivate, name, ref)
 				break
 			}
-			c.emit(bytecode.OpGetProp, c.nameIdx(propKeyName(n.Property)), 0)
+			// Placed at the property, as a member read outside a chain is.
+			c.emitAt(n.Property.Pos(), bytecode.OpGetProp, c.nameIdx(propKeyName(n.Property)), 0)
 		}
 
 	case *ast.Call:
@@ -2036,7 +2052,7 @@ func (c *compiler) compileChainLink(e ast.Expr, jumps *[]chainJump) {
 			switch {
 			case m.Computed:
 				c.compileExpr(m.Property)
-				c.emit(bytecode.OpGetIndexThis, 0, 0)
+				c.emitAt(m.Property.Pos(), bytecode.OpGetIndexThis, 0, 0)
 			default:
 				if pn, private := m.Property.(*ast.PrivateName); private {
 					// The receiver stays beneath the method, as
@@ -2046,7 +2062,7 @@ func (c *compiler) compileChainLink(e ast.Expr, jumps *[]chainJump) {
 					c.emitAt(int(m.Start), bytecode.OpGetPrivate, name, ref)
 					break
 				}
-				c.emit(bytecode.OpGetPropThis, c.nameIdx(propKeyName(m.Property)), 0)
+				c.emitAt(m.Property.Pos(), bytecode.OpGetPropThis, c.nameIdx(propKeyName(m.Property)), 0)
 			}
 			if n.Optional {
 				// The receiver is beneath the function here, so a short
@@ -2237,7 +2253,7 @@ func (c *compiler) compileMemberUpdate(m *ast.Member, op string, emitValue func(
 		name, ref := c.privateName(pn, int(m.Start))
 		c.compileExpr(m.Object)
 		c.emit(bytecode.OpDup, 0, 0)
-		c.emit(bytecode.OpGetPrivate, name, ref)
+		c.emitAt(int(m.Start), bytecode.OpGetPrivate, name, ref)
 		c.finishUpdate(op, emitValue, pos, 1, func() {
 			if keep {
 				c.emit(bytecode.OpInsert2, 0, 0)
@@ -2322,7 +2338,11 @@ func (c *compiler) assignToIdentStatic(t *ast.Ident, initializing bool) {
 			// A function expression's own name is an immutable binding, and
 			// assigning to it outside strict mode is quietly discarded rather
 			// than refused.
-			c.reg.NoteWrite(t, regcomp.Res{})
+			if c.fn.Strict {
+				c.reg.NoteWrite(t, regcomp.Res{Kind: regcomp.ResConstAssign})
+			} else {
+				c.reg.NoteWrite(t, regcomp.Res{Kind: regcomp.ResIgnore})
+			}
 			if c.fn.Strict {
 				c.emitAt(int(t.Start), bytecode.OpAssignConst, c.nameIdx(t.Name), 0)
 			}
@@ -2343,9 +2363,9 @@ func (c *compiler) assignToIdentStatic(t *ast.Ident, initializing bool) {
 			c.reg.NoteWrite(t, regcomp.Res{Kind: kind, Index: l.slot})
 			c.emit(bytecode.OpPutLocal, l.slot, 0)
 		} else {
-			c.reg.NoteWrite(t, regcomp.Res{})
+			c.reg.NoteWrite(t, regcomp.Res{Kind: regcomp.ResLocalCheck, Index: l.slot})
 			c.emit(bytecode.OpDup, 0, 0)
-			c.emit(bytecode.OpSetLocalCheck, l.slot, 0)
+			c.emitAt(int(t.Start), bytecode.OpSetLocalCheck, l.slot, 0)
 		}
 		return
 	}
@@ -2385,12 +2405,14 @@ func (c *compiler) assignToIdentStatic(t *ast.Ident, initializing bool) {
 	if initializing && c.globalLex[t.Name] {
 		// The binding is the script-level lexical one, and this is what takes
 		// it out of its dead zone.
+		c.reg.NoteWrite(t, regcomp.Res{Kind: regcomp.ResGlobalLexInit})
 		c.emit(bytecode.OpDup, 0, 0)
 		c.emit(bytecode.OpInitGlobalLex, c.nameIdx(t.Name), 0)
 		return
 	}
 	if initializing && c.isModuleLex(t.Name) {
 		// The same, for a module's top-level binding.
+		c.reg.NoteWrite(t, regcomp.Res{Kind: regcomp.ResModuleLexInit})
 		c.emit(bytecode.OpDup, 0, 0)
 		c.emit(bytecode.OpInitModuleLex, c.nameIdx(t.Name), 0)
 		return
@@ -2426,9 +2448,7 @@ func (c *compiler) assignTo(target ast.Expr, initializing bool) {
 		// whatever the object holds.
 		if !initializing {
 			probe := c.withProbe(bytecode.OpWithSet, t.Name)
-			if probe >= 0 && c.reg != nil {
-				c.reg.Bail = true
-			}
+			c.regWith(t, probe)
 			defer c.patchWithProbe(probe)
 		}
 		c.assignToIdentStatic(t, initializing)

@@ -14,8 +14,22 @@ func (p *Program) Validate() error {
 	if p.ArgumentParams < 0 || p.ArgumentParams > p.Locals {
 		return fmt.Errorf("jit IR: invalid aliased parameters")
 	}
+	reg := p.Origin != nil
+	if reg && (len(p.Origin) != len(p.Code) || p.Regs <= 0 || p.Regs > p.Locals || p.StackSize != 0 || p.PrologueArgs != 0) ||
+		!reg && p.Regs != 0 || p.ParamBase < 0 || p.ParamBase+p.Params > p.Locals {
+		return fmt.Errorf("jit IR: invalid register layout")
+	}
 	for pc, state := range p.Maps {
-		if state.PC != uint32(pc) || state.Depth < -1 || state.Depth > p.StackSize {
+		want := uint32(pc)
+		if reg {
+			want = p.Origin[pc]
+			if pc > 0 && (want < p.Origin[pc-1] || want == p.Origin[pc-1] && state.Depth != p.Maps[pc-1].Depth) {
+				// An origin's instructions are together, in order, and all
+				// reachable or none.
+				return fmt.Errorf("jit IR: pc %d: invalid origin", pc)
+			}
+		}
+		if state.PC != want || state.Depth < -1 || state.Depth > p.StackSize {
 			return fmt.Errorf("jit IR: pc %d: invalid state map", pc)
 		}
 	}
@@ -39,7 +53,7 @@ func (p *Program) Validate() error {
 		return fmt.Errorf("jit IR: invalid handler table")
 	}
 	for i, h := range p.Handlers {
-		if int(h.PC) >= len(p.Code) || h.Depth < 0 || h.Outer < 0 || int(h.Outer) > i {
+		if int(h.PC) >= len(p.Code) || !p.starts(int(h.PC)) || h.Depth < 0 || h.Outer < 0 || int(h.Outer) > i {
 			return fmt.Errorf("jit IR: invalid handler %d", i)
 		}
 	}
@@ -49,14 +63,39 @@ func (p *Program) Validate() error {
 		}
 	}
 	for _, pc := range p.Entries {
-		if pc < 0 || pc >= len(p.Code) || p.Maps[pc].Depth < 0 {
+		if pc < 0 || pc >= len(p.Code) || p.Maps[pc].Depth < 0 || !p.starts(pc) {
 			return fmt.Errorf("jit IR: invalid entry %d", pc)
 		}
 	}
 	calls := uint32(0)
+	// committed says an instruction of the current origin's has committed
+	// (Instruction's Commits): none after it in the origin may leave.
+	committed := false
 	for pc, in := range p.Code {
+		if p.starts(pc) {
+			committed = false
+		}
 		if p.Maps[pc].Depth < 0 {
 			continue
+		}
+		if reg {
+			alone := p.starts(pc) && (pc+1 == len(p.Code) || p.starts(pc+1))
+			switch {
+			case in.Op == Insert2 || in.Op == Insert3 || in.Op == Call:
+				return fmt.Errorf("jit IR: pc %d: a stack operation in register code", pc)
+			case in.Op == Host && !alone:
+				// Go runs the whole register instruction.
+				return fmt.Errorf("jit IR: pc %d: a host operation in an expansion", pc)
+			case in.Generic && (!genericOp(in.Op) || in.Check):
+				return fmt.Errorf("jit IR: pc %d: no generic form", pc)
+			case committed && in.MayExit():
+				// The atomicity rule: an exit here would run the register
+				// instruction again, what has committed of it twice.
+				return fmt.Errorf("jit IR: pc %d: an exit after register pc %d committed", pc, p.Origin[pc])
+			}
+			committed = committed || p.CommitsAt(pc)
+		} else if in.Generic {
+			return fmt.Errorf("jit IR: pc %d: generic outside an expansion", pc)
 		}
 		bad := func(why string) error { return fmt.Errorf("jit IR: pc %d: %s", pc, why) }
 		active := p.Locals + p.Maps[pc].Depth
@@ -70,7 +109,7 @@ func (p *Program) Validate() error {
 			return o.Slot >= 0 && o.Slot < active
 		}
 		dest := func(slot int) bool { return slot >= 0 && slot < p.Locals+p.StackSize }
-		target := func(n int) bool { return n >= 0 && n < len(p.Maps) && p.Maps[n].Depth >= 0 }
+		target := func(n int) bool { return n >= 0 && n < len(p.Maps) && p.Maps[n].Depth >= 0 && p.starts(n) }
 		if in.Check && (in.CheckSlot < 0 || in.CheckSlot >= active) {
 			return bad("invalid guard slot")
 		}
@@ -114,14 +153,14 @@ func (p *Program) Validate() error {
 			left, right = true, true
 		case ArrayLiteral:
 			write = true
-			if in.Extra < 0 || in.Extra > MaxArrayLiteral || in.Dest < 0 || in.Dest+in.Extra != active {
+			if in.Extra < 0 || in.Extra > MaxArrayLiteral || in.Dest < 0 || in.Dest+in.Extra != active && !(reg && in.Dest+in.Extra <= active) {
 				return bad("invalid array literal")
 			}
 		case StringPart:
 			left, write = true, true
 		case StringConcat:
 			write = true
-			if in.Extra < 1 || in.Dest < 0 || in.Dest+in.Extra != active {
+			if in.Extra < 1 || in.Dest < 0 || in.Dest+in.Extra != active && !(reg && in.Dest+in.Extra <= active) {
 				return bad("invalid string concat")
 			}
 		case StringCode:
@@ -206,7 +245,7 @@ func (p *Program) Validate() error {
 		// nothing after it reaches: the instruction is the end of its block,
 		// which has no successor. A switch whose default throws had had every
 		// such function refused.
-		if in.Op != Return && in.Op != Jump && in.Op != Host && !target(pc+1) {
+		if in.Op != Return && in.Op != Jump && in.Op != Host && !(target(pc+1) || !p.starts(pc+1) && p.Maps[pc+1].Depth >= 0) {
 			return bad("invalid fallthrough")
 		}
 	}

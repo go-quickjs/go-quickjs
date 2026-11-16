@@ -6,8 +6,9 @@
 // it only callees of cost 20 or less: past it, every helper above that cost
 // becomes a call in the whole function. The register interpreter's loop,
 // runReg, is kept below it (docs/register-interpreter.md, "The loop"), and
-// TestRegLoopIsNotBig says whether it is; this says by how much. -m=2, which
-// prints the verdict and not the size, runs out of memory on package vm.
+// TestRegLoopCallsNoHelper says whether it calls what it should not; this
+// says by how much it is below. -m=2, which prints the verdict and not the
+// size, runs out of memory on package vm.
 //
 // It builds the toolchain's own compiler with inl.go given through
 // -overlay, so that IsBigFunc prints the count it makes of each function of
@@ -17,6 +18,18 @@
 //
 //	go run ./internal/cmd/bigfunc                      # package vm
 //	go run ./internal/cmd/bigfunc -func runReg -cases 40  # and its clauses of 40 nodes or more
+//
+// -force compiles a function as big whatever its size, to see what it would
+// lose past the size before it is there: what -m says it inlines, and its
+// code, against a build without -force. -small compiles it as not big, to
+// see what a change does to its code with the inlining held. -gcflags, -o
+// and -out are the build's, and where its output goes; -costs adds each
+// inlinable function's cost to the output, as "inlcost" lines, which -m=2
+// would print but runs out of memory on package vm:
+//
+//	go run ./internal/cmd/bigfunc -pkg ./cmd/qjs -force runReg -o /tmp/big.exe \
+//		-gcflags github.com/go-quickjs/go-quickjs/internal/vm=-m -out /tmp/big-m.txt
+//	go run ./internal/cmd/bigfunc -costs -out /tmp/costs.txt
 package main
 
 import (
@@ -41,6 +54,9 @@ const limit = 5000
 // patchAnchor is where IsBigFunc starts counting.
 const patchAnchor = "func IsBigFunc(fn *ir.Func) bool {\n\tbudget := inlineBigFunctionNodes\n"
 
+// costAnchor is where CanInline records a function's cost.
+const costAnchor = "\tn.Func.Inl = &ir.Inline{\n\t\tCost:            budget - visitor.budget,\n"
+
 // reportSource is added to package inline: the count IsBigFunc makes, the
 // credit for unified IR's "a, b = f()" included, made in full once a
 // function and printed when it is 2,500 or more.
@@ -48,11 +64,34 @@ const reportSource = `package inline
 
 import (
 	"fmt"
+	"os"
+	"strings"
 
 	"cmd/compile/internal/ir"
 )
 
 var bigFuncSeen = map[*ir.Func]bool{}
+
+// forceBig reports whether BIGFUNC_FORCE names fn, by the end of its
+// name: the compiler calls it big whatever its size (-force).
+func forceBig(fn *ir.Func) bool {
+	name := os.Getenv("BIGFUNC_FORCE")
+	return name != "" && strings.HasSuffix(fmt.Sprint(fn), name)
+}
+
+// forceSmall reports whether BIGFUNC_SMALL names fn: the compiler calls it
+// not big whatever its size (-small).
+func forceSmall(fn *ir.Func) bool {
+	name := os.Getenv("BIGFUNC_SMALL")
+	return name != "" && strings.HasSuffix(fmt.Sprint(fn), name)
+}
+
+// reportCost prints fn's inlining cost where BIGFUNC_COSTS is set (-costs).
+func reportCost(fn *ir.Func, cost int32) {
+	if os.Getenv("BIGFUNC_COSTS") != "" {
+		fmt.Printf("%v: inlcost %v %d\n", ir.Line(fn), fn, cost)
+	}
+}
 
 func reportBigFunc(fn *ir.Func) {
 	if bigFuncSeen[fn] {
@@ -149,14 +188,28 @@ func main() {
 	fn := flag.String("func", "", "report only functions whose name ends with this")
 	cases := flag.Int("cases", 0, "list the case clauses of N nodes or more, nested ones too")
 	tags := flag.String("tags", "", "build tags")
+	force := flag.String("force", "", "compile the functions whose name ends with this as big, whatever their size")
+	small := flag.String("small", "", "compile the functions whose name ends with this as not big, whatever their size")
+	gcflags := flag.String("gcflags", "", "the build's -gcflags, such as `pkg=-m`")
+	o := flag.String("o", "", "the build's -o: where -pkg, a main package, is written")
+	out := flag.String("out", "", "write the build's output, -gcflags=-m's included, to this file")
+	costs := flag.Bool("costs", false, "print the inlining cost of each function that can be inlined, as `inlcost` lines of the build's output (-out)")
 	flag.Parse()
-	if err := run(*pkg, *fn, *tags, *cases); err != nil {
+	b := buildOpts{tags: *tags, force: *force, small: *small, gcflags: *gcflags, o: *o, out: *out, costs: *costs}
+	if err := run(*pkg, *fn, b, *cases); err != nil {
 		fmt.Fprintln(os.Stderr, "bigfunc:", err)
 		os.Exit(1)
 	}
 }
 
-func run(pkg, fn, tags string, minCase int) error {
+// buildOpts is how run builds the package.
+type buildOpts struct {
+	tags, force, small, gcflags, o, out string
+	costs                               bool
+}
+
+func run(pkg, fn string, b buildOpts, minCase int) error {
+	tags := b.tags
 	if minCase <= 0 {
 		minCase = 1 << 30
 	}
@@ -193,9 +246,32 @@ func run(pkg, fn, tags string, minCase int) error {
 	if tags != "" {
 		args = append(args, "-tags", tags)
 	}
+	if b.gcflags != "" {
+		args = append(args, "-gcflags", b.gcflags)
+	}
+	if b.o != "" {
+		args = append(args, "-o", b.o)
+	}
 	cmd := exec.Command("go", append(args, pkg)...)
-	cmd.Env = append(os.Environ(), "GOCACHE="+filepath.Join(work, "cache"), "BIGFUNC_COMPILE="+compiler, "GOFLAGS=")
+	// A forced build, and one that prints costs, has a cache of its own:
+	// the go command's key for a compile includes neither BIGFUNC_FORCE
+	// nor BIGFUNC_COSTS.
+	gocache := filepath.Join(work, "cache")
+	costs := ""
+	if b.costs {
+		costs = "1"
+	}
+	if b.force != "" || b.small != "" || b.costs {
+		key := regexp.MustCompile(`[^A-Za-z0-9_]`).ReplaceAllString(b.force+"-"+b.small, "_")
+		gocache = filepath.Join(work, "cache-force", key+"-"+costs)
+	}
+	cmd.Env = append(os.Environ(), "GOCACHE="+gocache, "BIGFUNC_COMPILE="+compiler, "BIGFUNC_FORCE="+b.force, "BIGFUNC_SMALL="+b.small, "BIGFUNC_COSTS="+costs, "GOFLAGS=")
 	out, err := cmd.CombinedOutput()
+	if b.out != "" {
+		if err := os.WriteFile(b.out, out, 0o644); err != nil {
+			return err
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("go build: %v\n%s", err, out)
 	}
@@ -260,7 +336,11 @@ func build(goroot, work, compiler, wrapper string) error {
 	if !bytes.Contains(src, []byte(patchAnchor)) {
 		return fmt.Errorf("%s has changed: IsBigFunc no longer starts as patchAnchor says", inl)
 	}
-	patched := bytes.Replace(src, []byte(patchAnchor), []byte(patchAnchor+"\treportBigFunc(fn)\n"), 1)
+	if !bytes.Contains(src, []byte(costAnchor)) {
+		return fmt.Errorf("%s has changed: CanInline no longer records the cost as costAnchor says", inl)
+	}
+	patched := bytes.Replace(src, []byte(patchAnchor), []byte(patchAnchor+"\treportBigFunc(fn)\n\tif forceBig(fn) {\n\t\treturn true\n\t}\n\tif forceSmall(fn) {\n\t\treturn false\n\t}\n"), 1)
+	patched = bytes.Replace(patched, []byte(costAnchor), []byte("\treportCost(fn, budget-visitor.budget)\n"+costAnchor), 1)
 	if err := os.MkdirAll(filepath.Join(work, "toolexec-src"), 0o755); err != nil {
 		return err
 	}

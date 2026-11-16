@@ -152,8 +152,10 @@ func (r *Runtime) captureTrace(until *Object, skipTop bool) stackTrace {
 		if hidden {
 			fr.flags |= frameHidden
 		}
-		if re := frameRealm(f); re != nil && f.this.IsObject() &&
-			(f.this.Object() == re.global || f.this.Object() == re.scope) {
+		// The receiver as the frame keeps it: a register frame's in its
+		// window (regFrameThis).
+		if re := frameRealm(f); re != nil && fr.this.IsObject() &&
+			(fr.this.Object() == re.global || fr.this.Object() == re.scope) {
 			fr.flags |= frameToplevel
 		}
 		if st.frames == nil {

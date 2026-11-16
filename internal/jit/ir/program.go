@@ -4,6 +4,7 @@ package ir
 
 import (
 	"math"
+	"slices"
 	"unsafe"
 )
 
@@ -438,6 +439,116 @@ type Instruction struct {
 	// native code there (ssa's GoHost), its Extra operands popped and its
 	// result, unless Dest is -1, at Dest.
 	Frame bool
+	// Generic marks a component of a register instruction's expansion
+	// (Program's Origin) that follows one that may have committed: it never
+	// leaves at its own state, which would run the instruction again from
+	// its start, so what it does not expect is Go's to make, whatever that
+	// runs, and native code goes on after it -- as the new pipeline builds
+	// an operation whose speculation failed before (ssa.Feedback's
+	// Generic). The evaluator has no Go: one whose check fails after a
+	// commit is ErrGeneric (Evaluate).
+	Generic bool
+}
+
+// MayExit reports whether in may leave native code at its state: a guard
+// or a host exit. A Generic instruction does not (Commits).
+func (in *Instruction) MayExit() bool {
+	if in.Check {
+		return true
+	}
+	if in.Generic {
+		return false
+	}
+	switch in.Op {
+	case Nop, Copy, CopyPair, StoreLoad, Swap, Insert2, Insert3, Jump:
+		return false
+	}
+	return true
+}
+
+// Commits reports whether in, where it does not leave, may do what running
+// its register instruction again would do twice: write one of the frame's
+// first regs slots, a register; change memory a script can see; or run
+// code -- a host operation, a call, an accessor a property's read or write
+// finds, an iterator's step, a Generic instruction's Go. A write to a
+// scratch slot, past the registers, an allocation and a read that runs
+// nothing do not commit.
+func (in *Instruction) Commits(regs int) bool {
+	if in.Generic {
+		return true
+	}
+	switch in.Op {
+	case Host, Call, PropertyRead, PropertyWrite, ReferenceRead, ArrayWrite, FieldDefine, UpvalueWrite, BindingWrite,
+		IterStep, IterClose, CloseUpvalues, DeleteProperty, StringFreeze, ParamsDead, ParamInit, Rethrow:
+		return true
+	case StringAdd:
+		if in.Owned {
+			return true
+		}
+	}
+	a, b := in.Writes()
+	return a >= 0 && a < regs || b >= 0 && b < regs
+}
+
+// CommitsAt is Commits of register code's instruction i, in its origin
+// (Origin): a field's definition, a property's or an element's write, to an
+// object the origin made in a scratch slot -- a literal's, which nothing
+// else can see yet -- commits nothing, as an exit before the object is
+// given to a register makes another.
+func (p *Program) CommitsAt(i int) bool {
+	in := &p.Code[i]
+	if in.Generic || p.Origin == nil {
+		return in.Commits(p.Regs)
+	}
+	switch in.Op {
+	case FieldDefine, PropertyWrite, ArrayWrite:
+		if s := in.Left.Slot; s >= p.Regs {
+			for q := i - 1; q >= 0 && p.Origin[q] == p.Origin[i]; q-- {
+				if a, b := p.Code[q].Writes(); a == s || b == s {
+					return p.Code[q].Op != ObjectLiteral && p.Code[q].Op != ArrayLiteral
+				}
+			}
+		}
+	}
+	return in.Commits(p.Regs)
+}
+
+// Writes is the slots in writes, -1 for none: its Dest and, for a pair's
+// or an update's second result, its Extra. Insert2 and Insert3, which move
+// the operand stack's top, write from Dest to Dest+3: Writes reports their
+// first and last.
+func (in *Instruction) Writes() (int, int) {
+	switch in.Op {
+	case Copy, Binary, StringAdd, Unary, StringMethod, TypeTest, BindingCheck, Resolved, HasProperty, DeleteProperty,
+		ArgumentRead, ObjectLiteral, StringConst, BigIntConst, Closure, ParamInit, ParamDefault, ArrayLiteral, StringPart,
+		StringConcat, StringCode, ArrayRead, ArrayLength, PropertyRead, BindingRead, ReferenceRead, UpvalueRead, IterStep:
+		return in.Dest, -1
+	case CopyPair, StoreLoad, Swap, ArrayUpdate:
+		return in.Dest, in.Extra
+	case Update:
+		return in.Dest, in.Extra
+	case Insert2:
+		return in.Dest, in.Dest + 2
+	case Insert3:
+		return in.Dest, in.Dest + 3
+	case Host:
+		if in.Frame {
+			return in.Dest, -1
+		}
+	}
+	return -1, -1
+}
+
+// genericOp reports whether an instruction of op may be Generic: one whose
+// slow path is Go's making of the same operation, which goes on after it.
+func genericOp(op Op) bool {
+	switch op {
+	case Binary, Unary, Update, Branch, PropertyRead, PropertyWrite, ReferenceRead, ArrayRead, ArrayWrite, ArrayLength,
+		FieldDefine, StringAdd, StringConcat, StringPart, BindingRead, BindingWrite, UpvalueRead, UpvalueWrite, HasProperty,
+		DeleteProperty, ObjectLiteral, ArrayLiteral, StringConst, BigIntConst, Closure:
+		return true
+	}
+	return false
 }
 
 // StateMap describes state immediately before a bytecode instruction. PC is
@@ -451,9 +562,33 @@ type StateMap struct {
 }
 
 // Program is immutable after lowering. Code and Maps have one entry per
-// bytecode instruction, including unreachable instructions. Construction is
-// the responsibility of a validated bytecode adapter.
+// bytecode instruction, including unreachable instructions -- or, a
+// register instruction's lowering (Origin), one or more an instruction.
+// Construction is the responsibility of a validated bytecode adapter.
 type Program struct {
+	// Origin is, for register code's program (the compile package's
+	// LowerReg), the register pc of each instruction, nil for the stack
+	// form's, whose instructions are its pcs. A register instruction that
+	// does several things -- add_prop's read, addition and store, a
+	// literal's object and its fields -- is several instructions of the
+	// same origin, in order, each state's PC that pc: an exit anywhere in
+	// them runs the register instruction again from its start, in the
+	// interpreter. So none may leave once one has committed (Instruction's
+	// Commits): those after it are Generic, which Validate checks. A jump
+	// goes only to the first instruction of an origin, and a Host, which
+	// Go runs as the whole register instruction, is alone in its own.
+	Origin []uint32
+	// Regs is, for register code's program, how many of its first slots
+	// are the frame's registers: what an exit writes, and what Live is
+	// of. The slots after them, to Locals, are the captured bindings'
+	// (UpvalueBase), the receiver's (This) and the expansions' scratch
+	// slots, which no state holds: every state's Depth is 0, and
+	// StackSize 0.
+	Regs int
+	// ParamBase is the slot of the first parameter (Params): 0 in the
+	// stack form's frame, 2 in register code's, whose registers 0 and 1
+	// are the function and its this.
+	ParamBase int
 	Locals    int
 	StackSize int
 	// This reserves a read-only receiver snapshot after captured bindings.
@@ -612,7 +747,7 @@ func (p *Program) Footprint() int {
 	if p == nil {
 		return 0
 	}
-	return int(unsafe.Sizeof(*p)) + cap(p.Globals)*4 + cap(p.Code)*int(unsafe.Sizeof(Instruction{})) +
+	return int(unsafe.Sizeof(*p)) + cap(p.Globals)*4 + cap(p.Origin)*4 + cap(p.Code)*int(unsafe.Sizeof(Instruction{})) +
 		cap(p.Maps)*int(unsafe.Sizeof(StateMap{})) + cap(p.Live)*8 + cap(p.Handlers)*int(unsafe.Sizeof(Handler{})) + cap(p.HandlerAt)*4 + cap(p.Captured) + cap(p.Assigned)
 }
 
@@ -623,6 +758,27 @@ func (p *Program) LiveAt(pc, i int) bool {
 		return true
 	}
 	return p.Live[pc*p.LiveWords+i/64]&(1<<(i%64)) != 0
+}
+
+// At is the first instruction of register pc's lowering (Origin), or, in
+// the stack form's program, pc itself; -1 where there is none.
+func (p *Program) At(pc uint32) int {
+	if p.Origin == nil {
+		if int(pc) < len(p.Code) {
+			return int(pc)
+		}
+		return -1
+	}
+	i, ok := slices.BinarySearch(p.Origin, pc)
+	if !ok {
+		return -1
+	}
+	return i
+}
+
+// starts reports whether instruction i is the first of its origin's.
+func (p *Program) starts(i int) bool {
+	return p.Origin == nil || i <= 0 || i >= len(p.Origin) || p.Origin[i] != p.Origin[i-1]
 }
 
 // ExitKind identifies a completed return or a resumable exit.

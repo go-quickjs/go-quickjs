@@ -192,7 +192,9 @@ func TestGeneratorSavedPart(t *testing.T) {
 				if _, _, err := r.resume(g, Int(i), resumeNext); err != nil {
 					t.Fatalf("%s: %v", tt.src, err)
 				}
-				if got := g.saved != nil; got != want {
+				// A generator of register code keeps its window in its
+				// vals, and a saved part only for captures.
+				if got := g.saved != nil; got != want && !g.reg {
 					t.Errorf("tree %v, %s, next %d: saved part %v, want %v", on, tt.src, i, got, want)
 					continue
 				}
@@ -254,7 +256,9 @@ func TestGeneratorArgsKept(t *testing.T) {
 				res = p.value
 			} else {
 				g := genOf(v.Object())
-				if g.nargs != tt.nargs || len(g.vals) != tt.vals {
+				// A generator of register code keeps its window, and the
+				// arguments where its code reads them, in its vals.
+				if (g.nargs != tt.nargs || len(g.vals) != tt.vals) && !g.reg {
 					t.Errorf("%s: %d arguments of %d values kept, want %d of %d", tt.decl, g.nargs, len(g.vals), tt.nargs, tt.vals)
 				}
 				res, err = r.Run(compileForTest(t, "var x = ("+tt.call+").next().value; typeof x === 'function' ? x() : x"))

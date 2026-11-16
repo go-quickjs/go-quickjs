@@ -57,11 +57,11 @@ func TestRegisterBackendCode(t *testing.T) {
    2  get_global r3, name0 @3
    3  sub_imm r5, r2, 1
    4  call_w r3 = r3(1)
-   5  get_global r6, name0 @4
-   6  sub_imm r8, r2, 2
-   7  call_w r6 = r6(1)
-   8  add r9, r3, r6
-   9  ret r9
+   5  get_global r4, name0 @4
+   6  sub_imm r6, r2, 2
+   7  call_w r4 = r4(1)
+   8  add r3, r3, r4
+   9  ret r3
   10  ret_undef`,
 		"locals": `
    0  load_int r4, 1
@@ -81,21 +81,21 @@ func TestRegisterBackendCode(t *testing.T) {
 	}
 	for name, listing := range want {
 		f := fns[name]
-		if f == nil || f.Reg == nil {
+		if f == nil || f.RegCode() == nil {
 			t.Fatalf("%s has no register code", name)
 		}
-		if got := strings.TrimRight(f.Reg.String(), "\n"); got != strings.TrimPrefix(listing, "\n") {
+		if got := strings.TrimRight(f.RegCode().String(), "\n"); got != strings.TrimPrefix(listing, "\n") {
 			t.Errorf("%s:\n%s\nwant:\n%s", name, got, strings.TrimPrefix(listing, "\n"))
 		}
 	}
 	for _, name := range []string{"stores", "method", "post", "cap"} {
-		if fns[name] == nil || fns[name].Reg == nil {
+		if fns[name] == nil || fns[name].RegCode() == nil {
 			t.Errorf("%s has no register code", name)
 		}
 	}
 	has := func(name, op string) {
-		if f := fns[name]; f != nil && f.Reg != nil && !strings.Contains(f.Reg.String(), op) {
-			t.Errorf("%s has no %s:\n%s", name, op, f.Reg)
+		if f := fns[name]; f != nil && f.RegCode() != nil && !strings.Contains(f.RegCode().String(), op) {
+			t.Errorf("%s has no %s:\n%s", name, op, f.RegCode())
 		}
 	}
 	has("stores", "set_index_imm")
@@ -107,27 +107,48 @@ func TestRegisterBackendCode(t *testing.T) {
 	has("cap", "closure_w")
 }
 
-// TestRegisterBackendFallsBack pins what the backend leaves to the stack
-// form, each function as a whole: a catch clause's pattern, an optional
-// chain, a generator, a strict global store of a value that runs code. A
-// try statement is register code, with a handler table.
+// TestRegisterBackendFallsBack pins forms the backend once left to the
+// stack form, each function as a whole: a generator and a direct eval
+// are register code. A try statement is register code, with a handler
+// table, and so are a catch clause's pattern, an optional chain and a
+// strict global store of a value that runs code, which settles whether
+// the name resolves before the value runs.
 func TestRegisterBackendFallsBack(t *testing.T) {
 	fns := regFunctions(t, `
 		function tried() { try { return 1 } catch ({ e }) { return 2 } }
 		function handled(x) { try { return x.y } catch (e) { return e } finally { x = 0 } }
 		function opt(o) { return o?.x }
 		function* gen() { yield 1 }
+		function ev(s) { return eval(s) }
 		function strictStore() { 'use strict'; g = plain(1) }
 		function plain(x) { return x + 1 }`)
-	for _, name := range []string{"tried", "opt", "gen", "strictStore"} {
-		if f := fns[name]; f == nil || f.Reg != nil {
-			t.Errorf("%s: register code %v, want none", name, f != nil && f.Reg != nil)
+	for _, name := range []string{"tried", "opt", "strictStore", "gen"} {
+		if f := fns[name]; f == nil || f.RegCode() == nil {
+			t.Errorf("%s: want register code", name)
 		}
 	}
-	if f := fns["handled"]; f == nil || f.Reg == nil || len(f.Reg.Handlers) != 2 {
+	if f := fns["strictStore"]; f != nil && f.RegCode() != nil {
+		for _, op := range []string{"check_global_ref", "assert_resolved", "set_global"} {
+			if !strings.Contains(f.RegCode().String(), op) {
+				t.Errorf("strictStore has no %s:\n%s", op, f.RegCode())
+			}
+		}
+	}
+	// A direct eval in a sloppy function is register code, its callee
+	// probed among the eval's variables, which may declare eval.
+	if f := fns["ev"]; f == nil || f.RegCode() == nil {
+		t.Errorf("ev: want register code")
+	} else {
+		for _, op := range []string{"direct_eval", "with_get_this"} {
+			if !strings.Contains(f.RegCode().String(), op) {
+				t.Errorf("ev has no %s:\n%s", op, f.RegCode())
+			}
+		}
+	}
+	if f := fns["handled"]; f == nil || f.RegCode() == nil || len(f.RegCode().Handlers) != 2 {
 		t.Errorf("handled: want register code with two handlers")
 	}
-	if f := fns["plain"]; f == nil || f.Reg == nil {
+	if f := fns["plain"]; f == nil || f.RegCode() == nil {
 		t.Errorf("plain has no register code")
 	}
 	// The stack form is the same with the backend on as off.

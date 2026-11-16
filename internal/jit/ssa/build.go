@@ -2998,6 +2998,9 @@ func buildCalls(w *Workspace, p *ir.Program, fb Feedback, plan *calledPlan) (*Fu
 	}
 	b.cellsBack()
 	b.translate()
+	if b.atomicErr != nil {
+		return nil, calledPlan{}, false, b.atomicErr
+	}
 	bigLeafSites(f)
 	f.slotCount = b.nslots
 	if len(b.inlined) != 0 {
@@ -3031,6 +3034,11 @@ func makesClosure(p *ir.Program) bool {
 }
 
 type builder struct {
+	// atomic says the root's instruction being built follows one of its
+	// register instruction's that committed (atomicInstruction);
+	// atomicErr is the exit such a build made.
+	atomic    bool
+	atomicErr error
 	// p and fb are the program the block being translated is in, and its
 	// feedback: the function's own (root), or an inlined callee's.
 	p      *ir.Program
@@ -3601,7 +3609,9 @@ func (b *builder) generic(pc int) bool {
 	switch in := b.p.Code[pc]; {
 	case in.Op == ir.Binary, in.Op == ir.Branch && in.Operator != ir.Truth, in.Op == ir.Rethrow, in.Op == ir.ArgumentRead,
 		in.Op == ir.Unary && in.Operator != ir.Not, in.Op == ir.Update:
-		return b.fb != nil && b.fb.Generic(pc)
+		// Or a register instruction's component after a commit (ir's
+		// Generic), which may not leave.
+		return in.Generic || b.fb != nil && b.fb.Generic(pc)
 	}
 	return false
 }
@@ -6400,6 +6410,9 @@ func (b *builder) stateSlots(p *ir.Program, pc, n, base int, own bool, before []
 // an inlined callee it is the caller's at the call and the callee's
 // (InlineState).
 func (b *builder) state(blk *Block, pc int) *FrameState {
+	if b.atomic && b.atomicErr == nil {
+		b.atomicErr = fmt.Errorf("ssa: register pc %d: an exit after the instruction committed", b.p.Origin[pc])
+	}
 	if fr := b.cur; fr != b.root && fr.site.Restart {
 		// Go makes the call over again (InlineSite's Restart): the
 		// caller's state at it, a copy, as states are not shared.
@@ -6539,7 +6552,7 @@ func (b *builder) fill(blk *Block) {
 	// BigInt operators made on their low bits end in their block (wraps).
 	b.region, b.words = nil, nil
 	for pc := blk.PC; pc <= end; pc++ {
-		b.instruction(blk, pc)
+		b.atomicInstruction(blk, pc)
 		if b.next != nil {
 			// The instruction branched: the rest of the block goes on where
 			// both ways meet (splitOn).
@@ -6723,6 +6736,55 @@ func (f *Func) entryForBlock(blk *Block) (Entry, bool) {
 		}
 	}
 	return Entry{}, false
+}
+
+// atomicInstruction is instruction, keeping the atomicity rule of register
+// code's program (ir.Program's Origin): an exit at one of a register
+// instruction's IR instructions runs the whole register instruction again,
+// so none may be made once one of them has committed. ir.Validate proves
+// the IR keeps it -- those after a commit are Generic -- but how an
+// instruction is built decides what it commits and whether it exits
+// (commitsBuilt), and a build that makes an exit after a commit is
+// refused (atomicErr). The instructions of an origin are reached only one
+// from the one before it, so what came before is theirs alone.
+func (b *builder) atomicInstruction(blk *Block, pc int) {
+	p := b.p
+	if p.Origin == nil || b.cur != b.root {
+		b.instruction(blk, pc)
+		return
+	}
+	b.atomic = false
+	for q := pc - 1; q >= 0 && p.Origin[q] == p.Origin[pc]; q-- {
+		b.atomic = b.atomic || b.commitsBuilt(q)
+	}
+	b.instruction(blk, pc)
+	b.atomic = false
+}
+
+// commitsBuilt reports whether register code's instruction pc commits as
+// the builder makes it (ir.Program's CommitsAt): a property's read only
+// where the feedback gives accessors, which the read may then call; an
+// arithmetic operation, a comparison or a string's addition never, Generic
+// or not, as Go makes what it does not of them only where that runs
+// nothing (GoAdd, GoCompare, GoNumber), leaving the rest to an exit.
+func (b *builder) commitsBuilt(pc int) bool {
+	in := &b.p.Code[pc]
+	switch in.Op {
+	case ir.PropertyRead, ir.ReferenceRead:
+		_, accessors := b.fb.(AccessorFeedback)
+		if accessors {
+			return true
+		}
+	case ir.Binary, ir.Unary, ir.Update, ir.Branch, ir.StringConcat, ir.StringPart:
+	case ir.StringAdd:
+		if in.Owned {
+			return true
+		}
+	default:
+		return b.p.CommitsAt(pc)
+	}
+	a, c := in.Writes()
+	return a >= 0 && a < b.p.Regs || c >= 0 && c < b.p.Regs
 }
 
 func (b *builder) instruction(blk *Block, pc int) {

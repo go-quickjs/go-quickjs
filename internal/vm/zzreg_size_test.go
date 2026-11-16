@@ -9,20 +9,25 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 )
 
-// TestRegLoopIsNotBig checks that runReg stays below Go's big-function
-// size. Go's inliner calls a function of 5,000 or more IR nodes big and
-// inlines into it only callees of cost 20 or less: past it, regInt32 and
-// lexShadows became calls in every case and crypto_am3 went from 102 to
-// 137 ns (docs/register-interpreter.md, "Where stage 1 stands"). -m=2,
-// which prints the verdict, runs out of memory on this package, so the
-// test reads -m's inlining of regInt32, which costs more than 20: every
-// call of it written in runReg is inlined, or runReg is big.
-func TestRegLoopIsNotBig(t *testing.T) {
+// TestRegLoopCallsNoHelper checks that every call runReg's source makes
+// of a function Go can inline is inlined there. Go's inliner calls a
+// function of 5,000 or more IR nodes big, and inlines into it only
+// callees of cost 20 or less (inlineBigFunctionMaxCost in
+// cmd/compile/internal/inline, Go 1.24 to 1.27; it is the only effect of
+// being big there, with PGO's hot calls, which no build here has). So
+// runReg may be big as long as it calls no helper above that cost: the
+// helpers it needs are written to cost 20 or less, or written out in it
+// (docs/register-interpreter.md, "The loop"). A call of one above it
+// would become a call in every case it is in -- regInt32 and lexShadows
+// once did, and crypto_am3 went from 102 to 137 ns. The test reads -m's
+// inlining at each call's position: a callee of the package or of
+// bytecode that -m says can be inlined, matched by name, must be inlined
+// at the call.
+func TestRegLoopCallsNoHelper(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the package with -gcflags=-m")
 	}
@@ -30,45 +35,87 @@ func TestRegLoopIsNotBig(t *testing.T) {
 	if err != nil {
 		t.Skip("no go command")
 	}
-	out, err := exec.Command(gotool, "build", "-gcflags=github.com/go-quickjs/go-quickjs/internal/vm=-m", ".").CombinedOutput()
+	out, err := exec.Command(gotool, "build",
+		"-gcflags=github.com/go-quickjs/go-quickjs/internal/vm=-m",
+		"-gcflags=github.com/go-quickjs/go-quickjs/internal/bytecode=-m",
+		".").CombinedOutput()
 	if err != nil {
 		t.Fatalf("go build -m: %v\n%s", err, out)
+	}
+	// The last part of a name -m prints: (*propCache).holder's holder,
+	// Value.IsString's IsString, regInt32's regInt32.
+	last := func(s string) string {
+		if i := strings.LastIndexByte(s, '.'); i >= 0 {
+			return s[i+1:]
+		}
+		return s
+	}
+	// A function -m names bare, a method by its type: Value.IsString,
+	// (*propCache).holder.
+	funcs, methods := map[string]bool{}, map[string]bool{}
+	inlined := map[string]map[string]bool{}
+	can := regexp.MustCompile(`: can inline (\S+)`)
+	site := regexp.MustCompile(`zzreg_run\.go:(\d+:\d+): inlining call to (\S+)`)
+	for _, line := range strings.Split(string(out), "\n") {
+		if m := can.FindStringSubmatch(line); m != nil {
+			if strings.Contains(m[1], ".") {
+				methods[last(m[1])] = true
+			} else {
+				funcs[m[1]] = true
+			}
+		}
+		if m := site.FindStringSubmatch(line); m != nil {
+			if inlined[m[1]] == nil {
+				inlined[m[1]] = map[string]bool{}
+			}
+			inlined[m[1]][last(m[2])] = true
+		}
 	}
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "zzreg_run.go", nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, last, calls := 0, 0, 0
+	checked := 0
 	for _, d := range file.Decls {
 		fn, ok := d.(*ast.FuncDecl)
 		if !ok || fn.Name.Name != "runReg" {
 			continue
 		}
-		first, last = fset.Position(fn.Pos()).Line, fset.Position(fn.End()).Line
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			if c, ok := n.(*ast.CallExpr); ok {
-				if id, ok := c.Fun.(*ast.Ident); ok && id.Name == "regInt32" {
-					calls++
+			c, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			// A function of the package, a function of bytecode, or a
+			// method; len and the other built-ins are none of them.
+			var name string
+			can := false
+			switch f := c.Fun.(type) {
+			case *ast.Ident:
+				name = f.Name
+				can = funcs[name]
+			case *ast.SelectorExpr:
+				name = f.Sel.Name
+				if x, ok := f.X.(*ast.Ident); ok && x.Name == "bytecode" {
+					can = funcs[name]
+				} else {
+					can = methods[name]
 				}
+			}
+			if !can {
+				return true
+			}
+			checked++
+			p := fset.Position(c.Lparen)
+			if pos := fmt.Sprintf("%d:%d", p.Line, p.Column); !inlined[pos][name] {
+				t.Errorf("zzreg_run.go:%s: runReg calls %s, which Go inlines elsewhere: past 5,000 nodes it inlines only callees of cost 20 or less; write it out or make it cheaper", pos, name)
 			}
 			return true
 		})
 	}
-	if calls == 0 {
-		t.Fatal("runReg calls no regInt32")
-	}
-	site := regexp.MustCompile(`zzreg_run\.go:(\d+):\d+: inlining call to regInt32`)
-	inlined := 0
-	for _, line := range strings.Split(string(out), "\n") {
-		if m := site.FindStringSubmatch(line); m != nil {
-			if n, _ := strconv.Atoi(m[1]); n >= first && n <= last {
-				inlined++
-			}
-		}
-	}
-	if inlined != calls {
-		t.Errorf("runReg inlines %d of its %d calls of regInt32: it has reached Go's big-function size; move code out of it", inlined, calls)
+	if checked < 100 {
+		t.Fatalf("runReg has %d calls of inlinable functions; the test is not reading it", checked)
 	}
 }
 

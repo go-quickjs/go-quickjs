@@ -114,6 +114,21 @@ func TestLabelledFunctionDeclarations(t *testing.T) {
 	})
 }
 
+// TestAnnexBAliasAtTheDeclaration pins when B.3.3 assigns a block function to
+// its var: as the declaration is evaluated, with what the block's binding
+// holds then, not as the block is entered, as in Node.
+func TestAnnexBAliasAtTheDeclaration(t *testing.T) {
+	evalCases(t, []struct{ src, want string }{
+		{`(function () { { f = 1; function f() {} } return typeof f })()`, "number"},
+		{`(function () { var h = () => typeof g, x; { x = h(); function g() {} } return x + "," + typeof g })()`, "undefined,function"},
+		{`(function () { var r = []; for (var i = 0; i < 2; i++) { r.push(typeof k); { function k() {} } } return r.join() })()`, "undefined,function"},
+		{`(function () { { function m() { return 1 } m = 2; } return typeof m })()`, "function"},
+		{`(function () { switch (2) { case 1: function s() {} } return typeof s })()`, "undefined"},
+		{`{ q = 5; function q() {} } typeof q`, "number"},
+		{`var t0 = typeof w; { function w() {} } t0 + "," + typeof w`, "undefined,function"},
+	})
+}
+
 // TestAnnexBBlockFunctionHoisting pins where B.3.3 hoists a function declared
 // in a block to a var of the same name: exactly where replacing the
 // declaration with `var f` would be legal and f is not a parameter.

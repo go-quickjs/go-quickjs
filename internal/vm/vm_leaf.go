@@ -110,7 +110,7 @@ func (r *Runtime) leafForward(cl *closure, callee, o *Object, args []Value, newT
 	in := code[1]
 	m, ok := plainOwn(o, cl.names[in.A])
 	if !ok {
-		m, ok = r.cachedData(&cl.ic[in.B], o, cl.names[in.A])
+		m, ok = r.cachedData(r.fwdCache(cl, int(in.B), o, cl.names[in.A]), o, cl.names[in.A])
 	}
 	if !ok || !isCallable(m) {
 		return false, nil

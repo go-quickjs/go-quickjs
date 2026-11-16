@@ -9,8 +9,7 @@ import (
 )
 
 // The register interpreter's calls and slow paths: what its loop does out
-// of line, so that the loop stays small enough for Go to inline into it what
-// it inlines (see zzreg_run.go).
+// of line, so that the loop's cases stay small (see zzreg_run.go).
 
 // regCall calls callee with this and args from the register interpreter. A
 // function of this realm that has register code, and that a call runs with
@@ -116,7 +115,7 @@ func (r *Runtime) regCall(callee, this Value, args []Value) (Value, error) {
 	if f.savedSP != 0 {
 		f.savedSP = 0
 	}
-	v, err := r.runReg(f, c)
+	v, err := r.runReg(f, c, 0)
 	r.popFrameOf(f, base)
 	if err != nil {
 		return r.regCallEnd(v, err)
@@ -144,10 +143,12 @@ func (r *Runtime) regCallMiss(f *frame, c *regCode, w bytecode.RInstr, wb, pc in
 	return nil
 }
 
-// regGenCall is a call of o, a generator function of this realm with
-// closure cl, whose window is at base: its object made as callClosure makes
-// it, the receiver coerced as there, with no frame, since the body does not
-// run until the object is stepped.
+// regGenCall is a call of o, a generator function or an async function of
+// this realm with closure cl, whose window is at base: its object made as
+// callClosure makes it, the receiver coerced as there, with no frame, since
+// the body does not run until the object is stepped; an async function's
+// first step is made at once (runAsync), an error binding its parameters
+// rejecting its promise.
 func (r *Runtime) regGenCall(o *Object, cl *closure, method bool, base, argc int) (Value, error) {
 	if err := r.tick(); err != nil {
 		return Undefined, err
@@ -167,9 +168,18 @@ func (r *Runtime) regGenCall(o *Object, cl *closure, method bool, base, argc int
 			this = r.globalThis
 		}
 	}
-	gen, err := r.newGenerator(cl, this, r.stack[base+2:base+2+argc], o, false, Undefined)
+	async := cl.fn.Async
+	gen, err := r.newGenerator(cl, this, r.stack[base+2:base+2+argc], o, async, Undefined)
 	if err != nil {
+		if async {
+			p := r.newPromise()
+			r.rejectPromise(p, thrownValue(err))
+			return Obj(p), nil
+		}
 		return Undefined, err
+	}
+	if async {
+		return r.runAsync(genOf(gen)), nil
 	}
 	return Obj(gen), nil
 }
@@ -210,6 +220,22 @@ func regAuxAt(c *regCode, pc int) uint32 {
 		return c.rc.Aux[pc]
 	}
 	return 0
+}
+
+// regNameIdx is the index in the function's names of op, the name
+// operand of the instruction at pc: op itself, or, where it is RNameFar,
+// the index past 16 bits FarNames has for the instruction. Only cold
+// operations and miss paths read a name.
+func regNameIdx(c *regCode, pc int, op uint16) uint32 {
+	if op == bytecode.RNameFar {
+		return c.rc.FarNames[pc]
+	}
+	return uint32(op)
+}
+
+// regName is the name regNameIdx finds, of closure cl's names.
+func regName(cl *closure, c *regCode, pc int, op uint16) Atom {
+	return cl.names[regNameIdx(c, pc, op)]
 }
 
 // regReuseAt is the reuse site of call_method_w pc, or nil.
@@ -260,7 +286,7 @@ func (r *Runtime) regCallSlow(f *frame, c *regCode, w bytecode.RInstr, base, pc 
 			if rc = cl.reg; rc == nil {
 				rc = r.regOf(cl)
 			}
-			if rc != nil && rc.wide && cl.realm == r.Realm {
+			if rc != nil && rc.wide && !rc.suspends && cl.realm == r.Realm && !isClassConstructorKind(cl.fn.Kind) && !cl.fn.HasDirectEval {
 				if x := fd.extra; x == nil {
 					switch {
 					case !method:
@@ -276,10 +302,10 @@ func (r *Runtime) regCallSlow(f *frame, c *regCode, w bytecode.RInstr, base, pc 
 				} else if fd.arrow && x.lexThisRef == nil && x.rare == nil {
 					kind, this = regCallThis, x.lexThis
 				}
-			} else if fn := cl.fn; e != nil && fn.Generator && !fn.Async && fd.extra == nil && cl.realm == r.Realm {
-				// A generator of this realm: the site makes its object as
-				// callClosure makes one (regCallGen), without the generic
-				// call's search.
+			} else if fn := cl.fn; e != nil && fn.Generator != fn.Async && fd.extra == nil && cl.realm == r.Realm {
+				// A generator or an async function of this realm: the site
+				// makes its object as callClosure makes one (regCallGen),
+				// without the generic call's search.
 				e.callee, e.cl, e.rc, e.this, e.kind = o, cl, nil, Undefined, regCallGen
 				return r.regGenCall(o, cl, method, base, argc)
 			}
@@ -319,17 +345,17 @@ func (r *Runtime) regCallSlow(f *frame, c *regCode, w bytecode.RInstr, base, pc 
 						// for good: its calls are entered as frames.
 						e.kind &^= regCallOut | regCallLeaf
 					}
-				} else if this := r.stack[base+1]; this.IsObject() {
+				} else if this := r.stack[base+1]; leaf == regLeafThis && this.IsObject() {
 					if v, ok := r.leafCall(cl, this.Object(), r.stack[base+2:base+2+argc]); ok {
 						return v, nil
 					}
 				}
 			}
-			if argc > int(rc.params) && !rc.args {
+			if argc > int(rc.keep) && !rc.args {
 				// The arguments past the parameters, which the bindings
 				// overwrite: f.arguments reads them. A frame that keeps
 				// its arguments has them in f.args.
-				r.regKeepWindow(base, int(rc.params), argc)
+				r.regKeepWindow(base, int(rc.keep), argc)
 			}
 			return r.regEnterW(o, cl, rc, base, argc, r.stack[base+2:base+2+argc], Undefined)
 		}
@@ -471,11 +497,18 @@ func (r *Runtime) regClosure(f *frame, c *regCode, w bytecode.RInstr, wb int) *O
 	return regMadeClosure(o)
 }
 
-// regMadeClosure is closure_w's closure o, its function's code planned.
+// regMadeClosure is closure_w's closure o, its function's code planned
+// where it has been built, as makeClosure plans: a function's code is built
+// at its first call, which plans the closure called (regStmt), so that one
+// never called is never compiled (bytecode.RegLater). A leaf's is built as
+// it is made: its calls are answered by the stack form's leaf evaluators
+// (pureCall, leafCall), which build nothing, until a plan sends them to its
+// register code (regPlan, regDirect, regLeafRun).
 func regMadeClosure(o *Object) *Object {
 	if fd := o.fn(); fd != nil {
-		if atomic.LoadPointer(&fd.closure.fn.VMCode) == nil && fd.closure.fn.Reg != nil && regTier.Load() {
-			firstTree(fd.closure.fn)
+		if fn := fd.closure.fn; fn.Leaf != bytecode.LeafNone && fn.Reg != nil &&
+			atomic.LoadPointer(&fn.VMCode) == nil && regTier.Load() {
+			firstTree(fn)
 		}
 		if atomic.LoadPointer(&fd.closure.fn.VMCode) != nil {
 			planTreeCall(fd)
@@ -483,6 +516,196 @@ func regMadeClosure(o *Object) *Object {
 		}
 	}
 	return o
+}
+
+// regRunFD runs what runFD would run -- a call of cl, the callee's
+// function data fd, or top-level code, whose callee is nil -- as register
+// code entered directly, its frame given what runFD gives one of its
+// surroundings: the with objects and an eval's variables of the functions
+// around it, a scope for the variables of its own direct eval, and the
+// this binding of a derived constructor's construction or an arrow
+// sharing one. It reports false, having done nothing, where cl has no
+// register code to enter so: the tiers' own runs (regTier off) and a
+// generator's body. A chain of tail calls the frame ends in is made
+// here, in its place.
+//
+//go:noinline
+func (r *Runtime) regRunFD(cl *closure, this Value, args []Value, newTarget Value, callee *Object, fd *funcData) (Value, error, bool) {
+	c := cl.reg
+	if c == nil {
+		if c = r.regOf(cl); c == nil {
+			return Undefined, nil, false
+		}
+	}
+	if c.suspends {
+		return Undefined, nil, false
+	}
+	fn := cl.fn
+	// The this binding super() binds: a derived constructor's
+	// construction makes one, holding the object made for it until then,
+	// and an arrow written inside one shares it, as runFD's frames do.
+	var thisRef *thisBinding
+	cell := false
+	if fd != nil {
+		if fd.arrow {
+			if fd.extra != nil {
+				thisRef = fd.extra.lexThisRef
+			}
+		} else if fd.ctorKind == ctorDerived && !newTarget.IsUndefined() {
+			if c.cellThis {
+				// The runtime's cell for the frame's depth, which nothing
+				// keeps past the frame: the construction allocates its
+				// object alone.
+				d := r.frameDepth
+				if d >= len(r.thisCells) {
+					r.thisCells = make([]thisBinding, d+d/2+16)
+				}
+				thisRef = &r.thisCells[d]
+				*thisRef = thisBinding{value: this}
+				cell = true
+			} else {
+				thisRef = &thisBinding{value: this}
+			}
+		}
+	}
+	if regReportOn {
+		regNoteCross(regCrossEnter, fn, "")
+	}
+	if fn.CoerceThis && !this.IsObject() && newTarget.IsUndefined() {
+		if this.IsNullish() {
+			this = r.globalThis
+		} else {
+			o, err := r.toObject(this)
+			if err != nil {
+				return Undefined, err, true
+			}
+			this = Obj(o)
+		}
+	}
+	var with []*Object
+	var evalVars *Object
+	if fd != nil && fd.extra != nil {
+		if w := fd.extra.with(); len(w) > 0 {
+			with = w[:len(w):len(w)]
+		}
+		evalVars = fd.extra.evalVars()
+	}
+	if fn.HasDirectEval {
+		// A scope of its own for the variables the eval declares, inside
+		// what the functions around it put on the chain, as runFD's.
+		evalVars = &Object{class: ClassObject, flags: objExtensible | objEvalVars}
+		with = append(with[:len(with):len(with)], evalVars)
+	}
+	base := r.stackTop
+	if base+int(c.numRegs) > len(r.stack) {
+		return Undefined, r.throwRangeError("maximum call stack size exceeded"), true
+	}
+	m := min(int(c.params), len(args))
+	w := r.stack[base : base+2+m : base+2+m]
+	w[0] = Undefined
+	if callee != nil {
+		w[0] = Obj(callee)
+	}
+	w[1] = this
+	for i, a := range args[:m] {
+		w[2+i] = a
+	}
+	var v Value
+	var err error
+	if r.nodeQuirks && !fn.Strict && !c.args {
+		// f.arguments reads the arguments as they were passed.
+		v, err = r.regScopedLegacy(callee, cl, c, base, m, args, newTarget, thisRef, with, evalVars)
+	} else {
+		v, err = r.regEnterScoped(callee, cl, c, base, m, args, newTarget, thisRef, with, evalVars)
+	}
+	if cell {
+		// The object is the construction's now, not the cell's to keep.
+		thisRef.value = Undefined
+	}
+	if err == errTailCall && r.tailLoopDepth != r.frameDepth {
+		// The chain made here, in constant space; inside regTailLoop's
+		// call at this depth, by its loop (regCall).
+		v, err = r.regTailLoop()
+	}
+	return v, err, true
+}
+
+// regEnterScoped is regEnterW's entry of a frame regRunFD has made the
+// window of, given the surroundings regRunFD found for it.
+func (r *Runtime) regEnterScoped(o *Object, cl *closure, rc *regCode, base, argc int, args []Value, newTarget Value, thisRef *thisBinding, with []*Object, evalVars *Object) (Value, error) {
+	top := base + int(rc.numRegs)
+	if top > len(r.stack) || r.frameDepth >= r.maxFrames {
+		return Undefined, r.throwRangeError("maximum call stack size exceeded")
+	}
+	if r.interruptCounter--; r.interruptCounter <= 0 {
+		if err := r.checkInterruptNow(); err != nil {
+			return Undefined, err
+		}
+	}
+	saved := r.stackTop
+	if top > saved {
+		r.stackTop = top
+		if top > r.stackHigh {
+			r.stackHigh = top
+		}
+	}
+	var kept []Value
+	if rc.args {
+		ka := len(r.argStack)
+		r.argStack = append(r.argStack, args...)
+		kept = r.argStack[ka:len(r.argStack):len(r.argStack)]
+	}
+	for i := base + 2 + min(argc, int(rc.params)); i < base+2+int(rc.params)+int(rc.inits); i++ {
+		r.stack[i] = Undefined
+	}
+	off := r.frameDepth - r.frameBase
+	if uint(off) >= uint(len(r.cur)) {
+		r.seekFrameBlock()
+		off = r.frameDepth - r.frameBase
+	}
+	r.frameDepth++
+	if r.frameDepth > r.frameHigh {
+		r.frameHigh = r.frameDepth
+	}
+	f := &r.cur[off]
+	f.cl = cl
+	f.callee = o
+	f.base = base
+	f.pc = 0
+	if len(f.openUpvalues) != 0 {
+		f.openUpvalues = f.openUpvalues[:0]
+	}
+	regClearFrame(f)
+	if len(f.handlers) != 0 {
+		f.handlers = f.handlers[:0]
+	}
+	f.withScopes, f.evalVars = with, evalVars
+	f.newTarget = newTarget
+	// The frame record's this is what super() reads and rebinds
+	// (superCall), and what a direct eval's code shares: register 1
+	// otherwise, which regSyncThis writes back before either.
+	f.this, f.thisRef = r.stack[base+1], thisRef
+	f.regKind = regFrameEnter
+	if rc.args {
+		f.args = kept
+		p := int(rc.params)
+		f.locals = r.stack[base+2 : base+2+p : base+2+p]
+	}
+	v, err := r.runReg(f, rc, 0)
+	if err == errRegRestart {
+		v, err = r.regRestartRun(f)
+	}
+	f.regKind = 0
+	if len(f.openUpvalues) != 0 {
+		regCloseUpvalues(f)
+	}
+	f.withScopes, f.evalVars, f.thisRef = nil, nil, nil
+	r.frameDepth--
+	r.stackTop = saved
+	if a := f.args; a != nil {
+		r.argStack = r.argStack[:len(r.argStack)-len(a)]
+	}
+	return v, err
 }
 
 // regLeafRunnable reports whether rc is a body regLeafRun runs: straight
@@ -578,7 +801,7 @@ func regLeafOps(fn *bytecode.Function, rc *bytecode.RegCode) []regLeafOp {
 		case bytecode.RMove:
 			o.op = rlMove
 		case bytecode.RLoadInt, bytecode.RLoadConst, bytecode.RLoadUndef, bytecode.RLoadNull, bytecode.RLoadTrue, bytecode.RLoadFalse:
-			v, ok := regConstOf(fn, w)
+			v, ok := regConstOf(regConsts(fn, rc), w)
 			if !ok {
 				return nil
 			}
@@ -644,6 +867,9 @@ func (r *Runtime) regOf(cl *closure) *regCode {
 	if t == nil {
 		t = firstTree(cl.fn)
 	}
+	if t.reg != nil && cl.reg == nil {
+		r.regExtend(cl, t.reg)
+	}
 	cl.reg = t.reg
 	return t.reg
 }
@@ -664,6 +890,7 @@ var regStackOp = [128]bytecode.Op{
 	bytecode.RShlI: bytecode.OpShl, bytecode.RShrI: bytecode.OpShr, bytecode.RUShrI: bytecode.OpUShr,
 	bytecode.RBitAnd: bytecode.OpBitAnd, bytecode.RBitOr: bytecode.OpBitOr, bytecode.RBitXor: bytecode.OpBitXor,
 	bytecode.RShl: bytecode.OpShl, bytecode.RShr: bytecode.OpShr, bytecode.RUShr: bytecode.OpUShr,
+	bytecode.RAdd: bytecode.OpAdd, bytecode.RSub: bytecode.OpSub, bytecode.RMul: bytecode.OpMul,
 }
 
 // regJumpCmp is each compare-and-branch operation's comparison: its stack
@@ -715,7 +942,7 @@ func (r *Runtime) regConstruct(callee Value, base, argc int) (Value, error) {
 	if rc == nil {
 		rc = r.regOf(cl)
 	}
-	if rc == nil || !rc.wide {
+	if rc == nil || !rc.wide || rc.suspends || cl.fn.HasDirectEval {
 		return r.construct(callee, args)
 	}
 	var protoVal Value
@@ -881,24 +1108,24 @@ func (r *Runtime) regDelete(cl *closure, obj, key Value) (Value, error) {
 func (r *Runtime) regThrowDeadZone(f *frame, c *regCode, next int) error {
 	pc := next - 1
 	f.pc = c.src[pc] + 1
-	return r.throwReferenceError("cannot access %q before initialization", f.cl.fn.Locals[regAt(c.code, pc).B()].Name)
+	return r.throwReferenceError("cannot access %q before initialization", f.cl.fn.Locals[regNameIdx(c, pc, regAt(c.code, pc).B())].Name)
 }
 
 // regGetGlobal is get_global's slow path: what the stack interpreter does,
 // then the layout of the global object the site found the slot in noted,
 // for the loop's check.
-func (r *Runtime) regGetGlobal(f *frame, cl *closure, w bytecode.RInstr) (Value, error) {
-	in := bytecode.Instr{Op: bytecode.OpGetGlobal, A: uint32(w.B()), B: uint32(w.C())}
+func (r *Runtime) regGetGlobal(f *frame, cl *closure, c *regCode, pc int, w bytecode.RInstr) (Value, error) {
+	in := bytecode.Instr{Op: bytecode.OpGetGlobal, A: regNameIdx(c, pc, w.B()), B: uint32(w.C())}
 	v, err := r.getGlobalAt(regTctx(r, f, cl), in, int(f.pc-1))
 	if err == nil {
-		r.regNoteGlobal(cl, w.C(), cl.names[w.B()], false)
+		r.regNoteGlobal(cl, w.C(), cl.names[in.A], false)
 	}
 	return v, err
 }
 
 // regSetGlobal is set_global's, or set_global_strict's, slow path.
-func (r *Runtime) regSetGlobal(f *frame, cl *closure, w bytecode.RInstr, v Value) error {
-	in := bytecode.Instr{Op: bytecode.OpSetGlobal, A: uint32(w.B()), B: uint32(w.C())}
+func (r *Runtime) regSetGlobal(f *frame, cl *closure, c *regCode, pc int, w bytecode.RInstr, v Value) error {
+	in := bytecode.Instr{Op: bytecode.OpSetGlobal, A: regNameIdx(c, pc, w.B()), B: uint32(w.C())}
 	var err error
 	if w.X() != 0 {
 		in.Op = bytecode.OpSetGlobalStrict
@@ -907,7 +1134,7 @@ func (r *Runtime) regSetGlobal(f *frame, cl *closure, w bytecode.RInstr, v Value
 		err = r.setGlobalIn(f, cl, in, v)
 	}
 	if err == nil {
-		r.regNoteGlobal(cl, w.C(), cl.names[w.B()], true)
+		r.regNoteGlobal(cl, w.C(), cl.names[in.A], true)
 	}
 	return err
 }
@@ -1009,11 +1236,10 @@ func (r *Runtime) regSetProp(cl *closure, c *regCode, w bytecode.RInstr, obj, v 
 }
 
 // regDefineField is define_field.
-func (r *Runtime) regDefineField(cl *closure, w bytecode.RInstr, obj, v Value) error {
+func (r *Runtime) regDefineField(cl *closure, name Atom, obj, v Value) error {
 	if !obj.IsObject() {
 		return nil
 	}
-	name := cl.names[w.C()]
 	if o := obj.Object(); o.class == ClassObject && o.flags&objExtensible != 0 {
 		if next := o.transition(name, propDefault); next != nil {
 			o.appendTransition(v, next)
@@ -1044,11 +1270,18 @@ const (
 	// regFrameEnter is regEnterW's: its this is its window's, its
 	// new.target the frame's.
 	regFrameEnter
+	// regFrameAwaitJob is an async function's, resumed by its await's
+	// job from the job queue, its this and new.target the frame's
+	// (regColdGen).
+	regFrameAwaitJob
 )
 
 // regFrameThis is the this and new.target of register frame f, for a stack
 // trace.
 func (r *Runtime) regFrameThis(f *frame) (this, newTarget Value) {
+	if f.regKind == regFrameAwaitJob {
+		return f.this, f.newTarget
+	}
 	this = r.stack[f.base+1]
 	newTarget = Undefined
 	if f.regKind == regFrameEnter {

@@ -109,9 +109,13 @@ func (r *Runtime) resumeAwait(g *generator, k awaitKind, v Value, rejected bool)
 	case k == awaitAsync && rejected:
 		// A rejected await throws at the await expression, so a try inside
 		// the body can catch it.
+		g.awaitJob = true
 		r.stepAsync(g, v, resumeThrow)
+		g.awaitJob = false
 	case k == awaitAsync:
+		g.awaitJob = true
 		r.stepAsync(g, v, resumeNext)
+		g.awaitJob = false
 	case rejected:
 		// In an async generator a rejection is a throw where it waited: at
 		// the await, at the yield -- a try round it can catch it, and an

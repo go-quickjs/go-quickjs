@@ -229,6 +229,26 @@ type DebugFrame struct {
 	f     *frame
 	fn    *bytecode.Function
 	pc    uint32
+	// rc and regs are the register code and window of a frame that runs
+	// as register code, whose bindings are in registers
+	// (RegCode.LocalReg); nil for one that runs as the stack form.
+	rc   *regCode
+	regs *[1 << 16]Value
+}
+
+// local is where the frame keeps its binding of slot i: its register in
+// register code, its local otherwise; nil where it has none.
+func (df *DebugFrame) local(i uint32) *Value {
+	if df.regs != nil {
+		if lr := df.rc.rc.LocalReg; int(i) < len(lr) && lr[i] >= 0 {
+			return &df.regs[lr[i]]
+		}
+		return nil
+	}
+	if int(i) < len(df.f.locals) {
+		return &df.f.locals[i]
+	}
+	return nil
 }
 
 // DebugScope is a scope a frame sees, innermost first.
@@ -597,6 +617,12 @@ func (r *Runtime) debugThrow(err error) {
 // stack as it is thrown.
 func (r *Runtime) exceptionCaught() bool {
 	for i := r.frameDepth - 1; i >= 0; i-- {
+		if c, _ := r.regDebugFrame(r.frameAt(i)); c != nil {
+			if regCaughtAt(c, r.frameAt(i).pc) {
+				return true
+			}
+			continue
+		}
 		for _, h := range r.frameAt(i).handlers {
 			if !h.isFinally {
 				return true
@@ -640,7 +666,9 @@ func (r *Runtime) debugFrames(p *DebugPause) []*DebugFrame {
 			// The frame's pc is past the instruction it is at.
 			pc--
 		}
-		out = append(out, &DebugFrame{r: r, pause: p, f: f, fn: f.cl.fn, pc: pc})
+		df := &DebugFrame{r: r, pause: p, f: f, fn: f.cl.fn, pc: pc}
+		df.rc, df.regs = r.regDebugFrame(f)
+		out = append(out, df)
 	}
 	return out
 }
@@ -669,6 +697,10 @@ func (df *DebugFrame) Location() DebugLocation {
 func (df *DebugFrame) This() Value {
 	if !df.pause.live {
 		return Undefined
+	}
+	if df.regs != nil && df.f.thisRef == nil {
+		// Register code keeps its this in register 1.
+		return df.regs[1]
 	}
 	v, _ := df.f.thisValue()
 	return v
@@ -701,9 +733,9 @@ func (df *DebugFrame) Scopes() []DebugScope {
 	if st := df.statement(); st != nil {
 		for _, b := range df.fn.EvalScopes[st.Scope].Bindings {
 			var v Value
-			switch {
-			case b.FromLocal && int(b.Index) < len(f.locals):
-				v = f.locals[b.Index]
+			switch p := df.local(b.Index); {
+			case b.FromLocal && p != nil:
+				v = *p
 			case !b.FromLocal && int(b.Index) < len(f.cl.upvalues):
 				v = f.cl.upvalues[b.Index].get()
 			default:
@@ -758,6 +790,9 @@ func (df *DebugFrame) Evaluate(src string) (Value, error) {
 	fn, err := d.compile(src, EvalRequest{Direct: true, Scope: df.fn.EvalScopes[st.Scope]})
 	if err != nil {
 		return Undefined, err
+	}
+	if df.regs != nil {
+		return r.regEvalCode(df.f, df.rc, df.regs, fn)
 	}
 	return r.evalIn(df.f, fn)
 }

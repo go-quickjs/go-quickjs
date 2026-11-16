@@ -1,0 +1,419 @@
+//go:build quickjs_jit && !android && !ios && ((linux && amd64) || (windows && amd64) || (darwin && arm64))
+
+package v8bench
+
+import (
+	"cmp"
+	"context"
+	"errors"
+	"fmt"
+	"math"
+	"os"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/compiler"
+	"github.com/go-quickjs/go-quickjs/internal/jit/compile"
+	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
+	"github.com/go-quickjs/go-quickjs/internal/parser"
+	"github.com/go-quickjs/go-quickjs/internal/vm"
+)
+
+// regLowerStats is what TestRegLowerEvaluate found over the corpus.
+type regLowerStats struct {
+	functions, lowered, invalid int
+	refused                     map[string]int
+	// runs is how many calls were evaluated: by the evaluator alone, of
+	// which returned ran to the end; and with the VM making what the
+	// evaluator does not (vm.RegLowerCall), of which ranToEnd ran there
+	// without leaving for runReg, compared how many were compared.
+	runs, returned, generic, budget int
+	ranToEnd, compared, limited     int
+	// varies is how many functions were not called, their answers a
+	// clock's or Math.random's.
+	varies int
+	// exits are where the evaluator alone left, resumed where it left
+	// the frame to runReg with the VM, skipped why a call was not
+	// evaluated, by register instruction or reason.
+	exits, resumed, skipped map[string]int
+}
+
+// regLowerArgs are the numbers the corpus's functions are called with: the
+// edges of int32 arithmetic, -0, NaN and the infinities among them.
+var regLowerArgs = []float64{0, 1, 2, 3, 5, 7, 10, 31, 32, 100, -1, -7, 0.5, -0.5, 2147483647, -2147483648,
+	4294967295, math.NaN(), math.Copysign(0, -1), 1e10, math.Inf(1), 12, 64, 255}
+
+// regLowerIdent is a name a call can be written with.
+var regLowerIdent = regexp.MustCompile(`^[A-Za-z_$][A-Za-z0-9_$]*$`)
+
+// regLowerShow is the helpers both runtimes are given: what a value is,
+// as text, and whether a global is the program's function of a source
+// text.
+const regLowerShow = `globalThis.__regShow = function (v) {
+	var t = typeof v;
+	if (t === "number") return Object.is(v, -0) ? "number -0" : "number " + String(v);
+	if (t === "string" || t === "boolean" || t === "undefined" || t === "bigint") return t + " " + String(v);
+	if (t === "symbol") return "symbol";
+	if (t === "function") return "function " + v.name;
+	if (v === null) return "null";
+	try { return "object " + JSON.stringify(v) } catch (e) { return "object " + Object.prototype.toString.call(v) }
+};
+globalThis.__regIs = function (f, text) { return typeof f === "function" && Function.prototype.toString.call(f) === text };`
+
+// regLowerCheck lowers every function of src's register code, validates
+// each program, and runs those of its top-level functions with numbers as
+// their arguments: through ir's evaluator alone, which leaves at what it
+// cannot make; and in a runtime of the VM's with the VM making that
+// (vm.RegLowerCall), each answer compared with an ordinary call's in a
+// second runtime that has run the same calls before it.
+func regLowerCheck(t *testing.T, st *regLowerStats, src string) {
+	t.Helper()
+	compiler.SetRegisterForm(true)
+	defer compiler.SetRegisterForm(os.Getenv("QJS_REG") != "")
+	compile1 := func(src string) *bytecode.Function {
+		prog, err := parser.Parse(src, parser.Options{})
+		if err != nil {
+			return nil
+		}
+		top, err := compiler.Compile(prog, compiler.Options{Text: src})
+		if err != nil {
+			return nil
+		}
+		return top
+	}
+	top := compile1(src)
+	show := compile1(regLowerShow)
+	if top == nil || show == nil {
+		t.Logf("not compiled")
+		return
+	}
+	programs := map[*bytecode.Function]*ir.Program{}
+	var walk func(fn *bytecode.Function)
+	walk = func(fn *bytecode.Function) {
+		for _, c := range fn.Constants {
+			if c.Kind != bytecode.ConstFunction || c.Fn == nil {
+				continue
+			}
+			f := c.Fn
+			walk(f)
+			if f.RegCode() == nil {
+				continue
+			}
+			st.functions++
+			p, err := compile.LowerRegInline(f.RegCode(), f)
+			if err != nil {
+				var rf *compile.Refusal
+				if errors.As(err, &rf) {
+					st.refused[rf.Reason]++
+				} else {
+					st.refused[err.Error()]++
+				}
+				continue
+			}
+			if err := p.Validate(); err != nil {
+				st.invalid++
+				t.Errorf("%s: invalid lowering: %v\n%s", f.Name, err, f.RegCode())
+				continue
+			}
+			st.lowered++
+			programs[f] = p
+		}
+	}
+	walk(top)
+	named := map[string]*bytecode.Function{}
+	seen := map[string]int{}
+	for _, c := range top.Constants {
+		if c.Kind == bytecode.ConstFunction && c.Fn != nil && c.Fn.Name != "" {
+			seen[c.Fn.Name]++
+			named[c.Fn.Name] = c.Fn
+		}
+	}
+	withRegTier(true, func() {
+		// Two runtimes, the same calls made in each: a's evaluated, b's
+		// ordinary.
+		var rts [2]*vm.Runtime
+		// fresh makes the two runtimes anew, the program run in each.
+		fresh := func() bool {
+			for i := range rts {
+				if rts[i] != nil {
+					rts[i].Close()
+				}
+				rts[i] = vm.New(vm.Config{MemoryLimit: 128 << 20})
+				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+				rts[i].SetContext(ctx)
+				_, err := rts[i].Run(top)
+				if err == nil {
+					_, err = rts[i].Run(show)
+				}
+				cancel()
+				rts[i].SetContext(context.Background())
+				if err != nil {
+					t.Logf("run: %v", err)
+					return false
+				}
+			}
+			return true
+		}
+		if !fresh() {
+			return
+		}
+		defer func() {
+			for _, r := range rts {
+				r.Close()
+			}
+		}()
+		global := func(r *vm.Runtime, name string) vm.Value {
+			v, _ := r.GetProp(vm.Obj(r.Global()), r.Intern(name))
+			return v
+		}
+		text := func(r *vm.Runtime, v vm.Value, err error) string {
+			var th *vm.Thrown
+			switch {
+			case errors.As(err, &th):
+				v, err = th.Value, nil
+				s, e := r.Call(global(r, "__regShow"), vm.Undefined, []vm.Value{v})
+				if e != nil {
+					return "threw, not shown"
+				}
+				return "threw " + s.String().Go()
+			case err != nil:
+				return "error " + err.Error()
+			}
+			s, err := r.Call(global(r, "__regShow"), vm.Undefined, []vm.Value{v})
+			if err != nil {
+				return "not shown: " + err.Error()
+			}
+			return s.String().Go()
+		}
+		names := slices.Sorted(func(yield func(string) bool) {
+			for n := range named {
+				if !yield(n) {
+					return
+				}
+			}
+		})
+		for k, name := range names {
+			fn := named[name]
+			p := programs[fn]
+			if p == nil || seen[name] != 1 || p.Params > 4 || fn.Kind != bytecode.KindNormal || !regLowerIdent.MatchString(name) {
+				continue
+			}
+			if strings.Contains(fn.Text, "Date") || strings.Contains(fn.Text, "random") || strings.Contains(fn.Text, "performance") {
+				// A clock's or Math.random's answer, which two runtimes give
+				// apart, as the regDiff tests leave out a call whose answers
+				// with the tier off vary.
+				st.varies++
+				continue
+			}
+			same := true
+			for _, r := range rts {
+				ok, err := r.Call(global(r, "__regIs"), vm.Undefined, []vm.Value{global(r, name), vm.Str(vm.NewString(fn.Text))})
+				same = same && err == nil && ok.Truthy()
+			}
+			if !same {
+				continue
+			}
+			for j := range regLowerTuples() {
+				slots := make([]ir.Value, p.Locals)
+				slots[0] = ir.Value{Kind: ir.Opaque}
+				slots[1] = ir.Value{Kind: ir.Opaque, Bits: 1}
+				args := make([]string, p.Params)
+				vals := make([]vm.Value, p.Params)
+				for i := range p.Params {
+					x := regLowerArgs[(j*7+i*3+k)%len(regLowerArgs)]
+					if j == 0 {
+						x = 3
+					}
+					slots[p.ParamBase+i] = ir.Float(x)
+					vals[i] = vm.Float(x)
+					args[i] = strconv.FormatFloat(x, 'g', -1, 64)
+				}
+				for i := p.UpvalueBase; i < p.UpvalueBase+p.Upvalues; i++ {
+					slots[i] = ir.Value{Kind: ir.Opaque, Bits: 2}
+				}
+				st.runs++
+				// The evaluator alone, which leaves at what it cannot make.
+				exit, err := p.Evaluate(slots, 0, 1<<18)
+				switch {
+				case errors.Is(err, ir.ErrGeneric):
+					st.generic++
+				case err != nil:
+					t.Errorf("%s(%s): %v", name, strings.Join(args, ", "), err)
+				case exit.Kind == ir.BudgetExit:
+					st.budget++
+				case exit.Kind != ir.Returned:
+					st.exits[fn.RegCode().Code[exit.State.PC].Op().String()]++
+				default:
+					st.returned++
+				}
+				// With the VM: the call evaluated in one runtime, made in the
+				// other, both given five seconds.
+				var got, want string
+				for i, r := range rts {
+					ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					r.SetContext(ctx)
+					if i == 0 {
+						res := r.RegLowerCall(global(r, name), vals, 1<<20)
+						got = text(r, res.Value, res.Err)
+						switch {
+						case res.Skipped != "":
+							st.skipped[res.Skipped]++
+						case res.Resumed != "":
+							st.resumed[res.Resumed]++
+						default:
+							st.ranToEnd++
+						}
+					} else {
+						v, err := r.Call(global(r, name), vm.Undefined, vals)
+						want = text(r, v, err)
+					}
+					cancel()
+					r.SetContext(context.Background())
+				}
+				if limited := func(s string) bool {
+					return strings.Contains(s, "memory limit") || strings.Contains(s, "deadline exceeded") || strings.Contains(s, "interrupted")
+				}; limited(got) || limited(want) {
+					// A runtime past its time or its memory, which the two
+					// reach at different points, the evaluator's slower: the
+					// runtimes part there, and are made anew for the next
+					// function.
+					st.limited++
+					if !fresh() {
+						return
+					}
+					break
+				}
+				st.compared++
+				if got != want {
+					t.Errorf("%s(%s): evaluated, %.300s; called, %.300s\n%s", name, strings.Join(args, ", "), got, want, fn.RegCode())
+				}
+			}
+		}
+	})
+}
+
+// regLowerTuples is how many sets of arguments each function is called
+// with: QUICKJS_REGLOWER_ARGS's number, a sample for a routine run, or 8.
+func regLowerTuples() int {
+	var n int
+	if _, err := fmt.Sscanf(os.Getenv("QUICKJS_REGLOWER_ARGS"), "%d", &n); err == nil && n > 0 {
+		return n
+	}
+	return 8
+}
+
+// regLowerShard reports whether the corpus test name is in the shard
+// QUICKJS_REGLOWER_SHARD names, "k/n": the k-th of n, counting from 0, by
+// a hash of the name; every test where it is unset. A full sweep holds
+// the machine's heavy-work lock for many minutes, which shards share out.
+func regLowerShard(name string) bool {
+	spec := os.Getenv("QUICKJS_REGLOWER_SHARD")
+	if spec == "" {
+		return true
+	}
+	var k, n int
+	if _, err := fmt.Sscanf(spec, "%d/%d", &k, &n); err != nil || n <= 0 {
+		return true
+	}
+	h := 0
+	for _, c := range name {
+		h = h*31 + int(c)
+	}
+	return (h%n+n)%n == k
+}
+
+// TestRegLowerEvaluate is LowerReg's differential test: the register
+// interpreter's corpus (the regDiff tests) compiled, every function's
+// register code lowered and validated, and its top-level functions run
+// with numbers as their arguments -- by ir's evaluator alone, and by the
+// evaluator with the VM making what it does not and runReg going on where
+// it leaves for good (vm.RegLowerCall) -- each answer of the latter
+// compared with an ordinary call's.
+func TestRegLowerEvaluate(t *testing.T) {
+	st := &regLowerStats{refused: map[string]int{}, exits: map[string]int{}, resumed: map[string]int{}, skipped: map[string]int{}}
+	regDiffHook = func(t *testing.T, src string, calls []string) { regLowerCheck(t, st, src) }
+	defer func() { regDiffHook = nil }()
+	for _, tc := range []struct {
+		name string
+		f    func(*testing.T)
+	}{
+		{"Appends", TestRegDiffAppends}, {"ArgumentsForms", TestRegDiffArgumentsForms}, {"BlockFunctions", TestRegDiffBlockFunctions},
+		{"CallTargets", TestRegDiffCallTargets}, {"ChainsAndClosures", TestRegDiffChainsAndClosures}, {"CharCodeAt", TestRegDiffCharCodeAt},
+		{"Classes", TestRegDiffClasses}, {"Constructions", TestRegDiffConstructions}, {"ElemWrites", TestRegDiffElemWrites},
+		{"Eval", TestRegDiffEval}, {"EvalCode", TestRegDiffEvalCode}, {"FarJumps", TestRegDiffFarJumps}, {"FarNames", TestRegDiffFarNames},
+		{"FarRegisters", TestRegDiffFarRegisters}, {"FinallyCopies", TestRegDiffFinallyCopies}, {"FinallyDeep", TestRegDiffFinallyDeep},
+		{"ForOfIn", TestRegDiffForOfIn}, {"GeneratorSteps", TestRegDiffGeneratorSteps}, {"Generators", TestRegDiffGenerators},
+		{"ImportCalls", TestRegDiffImportCalls}, {"Int32", TestRegDiffInt32}, {"LabelsSwitchDelete", TestRegDiffLabelsSwitchDelete},
+		{"LeafRun", TestRegDiffLeafRun}, {"Length", TestRegDiffLength}, {"Literals", TestRegDiffLiterals}, {"LoopBindings", TestRegDiffLoopBindings},
+		{"Microbenchmarks", TestRegDiffMicrobenchmarks}, {"Names", TestRegDiffNames}, {"ObjectLiterals", TestRegDiffObjectLiterals},
+		{"Patterns", TestRegDiffPatterns}, {"RegExpLiteralCalls", TestRegDiffRegExpLiteralCalls}, {"RegExpLiterals", TestRegDiffRegExpLiterals},
+		{"RegExpWideConstants", TestRegDiffRegExpWideConstants}, {"RestArguments", TestRegDiffRestArguments}, {"Sites", TestRegDiffSites},
+		{"StackSitesPast16Bits", TestRegDiffStackSitesPast16Bits}, {"StacksAndNames", TestRegDiffStacksAndNames}, {"Steps", TestRegDiffSteps},
+		{"StrictGlobalStores", TestRegDiffStrictGlobalStores}, {"TailCalls", TestRegDiffTailCalls}, {"TopLevel", TestRegDiffTopLevel},
+		{"Try", TestRegDiffTry}, {"Typed", TestRegDiffTyped}, {"Using", TestRegDiffUsing}, {"V8Suite", TestRegDiffV8Suite},
+		{"WideForms", TestRegDiffWideForms}, {"With", TestRegDiffWith},
+	} {
+		if !regLowerShard(tc.name) {
+			continue
+		}
+		t.Run(tc.name, tc.f)
+	}
+	type row struct {
+		k string
+		n int
+	}
+	sorted := func(m map[string]int) []row {
+		var rows []row
+		for k, n := range m {
+			rows = append(rows, row{k, n})
+		}
+		slices.SortFunc(rows, func(a, b row) int {
+			if c := cmp.Compare(b.n, a.n); c != 0 {
+				return c
+			}
+			return strings.Compare(a.k, b.k)
+		})
+		return rows
+	}
+	var out strings.Builder
+	fmt.Fprintf(&out, "%d functions: %d lowered, %d refused, %d invalid\n", st.functions, st.lowered, st.functions-st.lowered-st.invalid, st.invalid)
+	for _, r := range sorted(st.refused) {
+		fmt.Fprintf(&out, "  %6d refused: %s\n", r.n, r.k)
+	}
+	fmt.Fprintf(&out, "%d calls. The evaluator alone: %d returned, %d out of budget, %d Go's after a commit; left at\n",
+		st.runs, st.returned, st.budget, st.generic)
+	for i, r := range sorted(st.exits) {
+		if i < 15 {
+			fmt.Fprintf(&out, "  %6d %s\n", r.n, r.k)
+		}
+	}
+	resumed, skipped := 0, 0
+	for _, n := range st.resumed {
+		resumed += n
+	}
+	for _, n := range st.skipped {
+		skipped += n
+	}
+	fmt.Fprintf(&out, "With the VM: %d compared, all agreeing unless reported; the runtimes made anew %d times at a limit; %d functions of a clock's or Math.random's not called; %d ran to the end in the evaluator, %d left for runReg, %d not evaluated; left at\n",
+		st.compared, st.limited, st.varies, st.ranToEnd, resumed, skipped)
+	for i, r := range sorted(st.resumed) {
+		if i < 25 {
+			fmt.Fprintf(&out, "  %6d %s\n", r.n, r.k)
+		}
+	}
+	fmt.Fprintf(&out, "not evaluated:\n")
+	for i, r := range sorted(st.skipped) {
+		if i < 10 {
+			fmt.Fprintf(&out, "  %6d %s\n", r.n, r.k)
+		}
+	}
+	t.Log("\n" + out.String())
+	if st.compared == 0 {
+		t.Error("no evaluation was compared")
+	}
+}

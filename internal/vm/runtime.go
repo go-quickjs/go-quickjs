@@ -772,6 +772,10 @@ type closureCode struct {
 	// regCells is the cells regClosure hands newClosureIn, kept for the
 	// next closure the template's register code makes.
 	regCells []*upvalue
+	// fwd is a forwarder's caches of its method's read by the receiver's
+	// shape (fwdCache), nil until its site gives up. Last, so that no
+	// field before it moves.
+	fwd *[fwdWays]propCache
 }
 
 // closure is a function template paired with the upvalues it captured.

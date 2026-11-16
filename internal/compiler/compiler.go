@@ -521,6 +521,12 @@ func Compile(prog *ast.Program, opts Options) (fn *bytecode.Function, err error)
 	c.nextSlot++
 	c.emit(bytecode.OpPushUndef, 0, 0)
 	c.emit(bytecode.OpSetLocal, uint32(c.completionSlot), 0)
+	if registerForm.Load() && regScript(opts) {
+		// A script's code as register code too (regcomp.CompileTop).
+		c.reg = regcomp.NewRecord()
+		c.reg.Completion = c.completionSlot
+		c.reg.ThisRef = !c.thisIsValue()
+	}
 
 	c.checkEvalVarNames(prog.Body)
 
@@ -539,7 +545,10 @@ func Compile(prog *ast.Program, opts Options) (fn *bytecode.Function, err error)
 	c.emit(bytecode.OpGetLocal, uint32(c.completionSlot), 0)
 	c.emit(bytecode.OpReturn, 0, 0)
 	c.finish()
-	return c.done(), nil
+	rec := c.reg
+	fn = c.done()
+	regTopCode(prog.Body, fn, rec)
+	return fn, nil
 }
 
 // scratch is what compiling one function grows as it goes: its code and
@@ -1600,11 +1609,13 @@ func (c *compiler) checkGlobalLexicals(body []ast.Stmt) {
 			}
 			for _, name := range names {
 				c.emitAt(n.Start, bytecode.OpCheckGlobalLex, c.nameIdx(name), 0)
+				c.regTop(bytecode.OpCheckGlobalLex, c.nameIdx(name), 0, nil)
 			}
 		case *ast.ClassDecl:
 			if n.Class.Name != nil {
 				c.emitAt(n.Start, bytecode.OpCheckGlobalLex,
 					c.nameIdx(n.Class.Name.Name), 0)
+				c.regTop(bytecode.OpCheckGlobalLex, c.nameIdx(n.Class.Name.Name), 0, nil)
 			}
 		}
 	}
@@ -1621,6 +1632,7 @@ func (c *compiler) checkGlobalVars(body []ast.Stmt) {
 		if _, name, ok := hoistableFunction(s); ok {
 			funcs[name] = true
 			c.emit(bytecode.OpCheckGlobalVar, c.nameIdx(name), 1)
+			c.regTop(bytecode.OpCheckGlobalVar, c.nameIdx(name), 1, nil)
 		}
 	}
 	for _, n := range c.varNames(body) {
@@ -1628,6 +1640,7 @@ func (c *compiler) checkGlobalVars(body []ast.Stmt) {
 			continue
 		}
 		c.emit(bytecode.OpCheckGlobalVar, c.nameIdx(n), 0)
+		c.regTop(bytecode.OpCheckGlobalVar, c.nameIdx(n), 0, nil)
 	}
 }
 
@@ -1696,6 +1709,7 @@ func (c *compiler) hoistGlobals(body []ast.Stmt) {
 		// A var declared by eval is configurable, unlike one a script declares,
 		// because the evaluated code could have declared it anywhere.
 		c.emit(bytecode.OpDefineGlobalVar, c.nameIdx(n), boolBit(c.opts.EvalConfigurable))
+		c.regTop(bytecode.OpDefineGlobalVar, c.nameIdx(n), boolBit(c.opts.EvalConfigurable), nil)
 	}
 }
 

@@ -82,6 +82,13 @@ type generator struct {
 	// room marks a generator made with room for the cursor of the first
 	// loop over it, which no loop has taken yet (see genAlloc).
 	room bool
+	// reg marks a generator whose body runs as register code, its vals
+	// the frame's window and its pc a register pc (zzreg_zgen.go).
+	reg bool
+	// awaitJob marks an async function its await's job is resuming, from
+	// the job queue itself (resumeAwait): an await of a settled value
+	// there may go on in place (zzreg_zgen.go).
+	awaitJob bool
 }
 
 // genSaved is what a generator's suspension leaves for its next
@@ -293,6 +300,9 @@ func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Ob
 	// -- a default, a pattern, a rest parameter -- or a debugger, which
 	// sees even a prologue of end_params run. The parameters are bound
 	// below, from the call's arguments.
+	if c := r.regGenOf(cl, callee); c != nil {
+		return r.newRegGenerator(cl, c, this, args, callee, async, newTarget)
+	}
 	fn := cl.fn
 	kept := args
 	if !fn.UsesArguments && !fn.HasDirectEval && r.debug == nil &&
@@ -637,8 +647,13 @@ func (g *generator) nextTree() *tree {
 // resumeFull runs a generator and reports what kind of suspension stopped it.
 func (r *Runtime) resumeFull(g *generator, sent Value, mode resumeMode) (resumeResult, error) {
 	if mode == resumeNext {
-		// The common case, a body its tree runs, is resumed there.
-		if t := g.nextTree(); t != nil {
+		// The common case, a body its tree runs, is resumed there; one of
+		// register code, suspended and of this realm, at once.
+		if g.reg {
+			if g.state <= genSuspendedYield && (g.cl.realm == nil || g.cl.realm == r.Realm) {
+				return r.regGenResume(g, sent, mode)
+			}
+		} else if t := g.nextTree(); t != nil {
 			if res, ran, err := resumeTree(r, g, t, sent); ran {
 				return res, err
 			}
@@ -692,6 +707,9 @@ func (r *Runtime) resumeFrame(g *generator, sent Value, mode resumeMode) (resume
 
 	if r.frameDepth >= r.maxFrames {
 		return resumeResult{value: Undefined, how: resumeDone}, r.throwRangeError("maximum call stack size exceeded")
+	}
+	if g.reg {
+		return r.regGenResume(g, sent, mode)
 	}
 	if mode == resumeReturn && g.state == genSuspendedYield && returnAtOnce(r, g) {
 		return resumeResult{value: sent, how: resumeDone}, nil

@@ -405,6 +405,12 @@ func (r *Runtime) callClosure(o *Object, fd *funcData, this Value, args []Value,
 		return Undefined, r.throwTypeError(
 			"class constructor %s cannot be invoked without \"new\"", fd.name)
 	}
+	if fd.closure.fn.Reg != nil {
+		// Register mode's code, entered as its own (regRunFD).
+		if v, err, ok := r.regRunFD(fd.closure, this, args, newTarget, o, fd); ok {
+			return v, err
+		}
+	}
 	return r.runFD(fd.closure, this, args, newTarget, o, fd)
 }
 
@@ -446,6 +452,11 @@ func (r *Runtime) run(cl *closure, this Value, args []Value, newTarget Value, ca
 	var fd *funcData
 	if callee != nil {
 		fd = callee.fn()
+	}
+	if cl.fn.Reg != nil {
+		if v, err, ok := r.regRunFD(cl, this, args, newTarget, callee, fd); ok {
+			return v, err
+		}
 	}
 	return r.runFD(cl, this, args, newTarget, callee, fd)
 }

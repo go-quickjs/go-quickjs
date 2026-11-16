@@ -163,6 +163,10 @@ func (r *Runtime) jitGenSeen(e *jitEntry, cl *closure, pc int, it *Object) {
 		return
 	}
 	g := genOf(it)
+	if g.reg {
+		// Its body is register code, its vals a window (zzreg_zgen.go).
+		return
+	}
 	if g.cl == nil || g.cl.env != cl.env || g.cl.realm != cl.realm || g.cl.realm != nil && g.cl.realm != r.Realm ||
 		!jitGenCallable(g.cl.fn) {
 		return
@@ -351,6 +355,10 @@ func (r *Runtime) jitGenMakeable(o *Object, cl *closure) bool {
 	fd := o.fn()
 	if fd == nil || fd.native != nil || fd.bound || fd.arrow || fd.closure == nil || fd.closure.realm != r.Realm || cl == nil ||
 		fd.closure.scope() != cl.scope() || r.debug != nil {
+		return false
+	}
+	if c := fd.closure.reg; c != nil && c.suspends {
+		// Its generators are register code's (zzreg_zgen.go).
 		return false
 	}
 	fn := fd.closure.fn

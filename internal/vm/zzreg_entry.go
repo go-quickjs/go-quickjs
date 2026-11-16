@@ -31,19 +31,82 @@ func firstForm(fn *bytecode.Function) *tree {
 			return t
 		}
 	}
+	if regTier.Load() {
+		regFallback(regFallNoCode, fn)
+	}
 	return buildTree(fn)
 }
 
 // regTreeOf translates fn into register code and returns the tree that runs
-// it, or nil.
+// it, or nil. A function's register code is compiled here, at its first
+// call (bytecode.RegLater).
 func regTreeOf(fn *bytecode.Function) *tree {
-	if rc := fn.Reg; rc != nil && rc.Wide {
+	if rc := fn.RegCode(); rc != nil && rc.Wide {
 		return regTreeWide(fn, rc)
 	}
 	if regTrace {
 		println("reg: not", fn.Name, "(no register code)")
 	}
 	return nil
+}
+
+// regExtend adds to cl's tables -- its names, constants and caches, which
+// every closure of its template in this runtime shares -- those of c's code
+// past its function's own, where the code was compiled at the function's
+// first call (RegCode.Names): a runtime makes a function's tables as it
+// loads its program, before the code exists, and the code adds nothing to
+// the Function, which the runtimes running it share. It runs where a
+// closure is first given its register code (cl.reg), which every entry
+// into the code reads but those a plan makes (regBindPlan).
+func (r *Runtime) regExtend(cl *closure, c *regCode) {
+	rc := c.rc
+	if rc.Names == nil {
+		return
+	}
+	if n := len(rc.Names); len(cl.names) < n {
+		names := make([]Atom, n)
+		copy(names, cl.names)
+		for i := len(cl.names); i < n; i++ {
+			names[i] = r.atoms.intern(rc.Names[i])
+		}
+		cl.names = names
+	}
+	if n := len(rc.Constants); len(cl.consts) < n {
+		consts := make([]Value, n)
+		copy(consts, cl.consts)
+		for i := len(cl.consts); i < n; i++ {
+			consts[i] = r.materialize(rc.Constants[i])
+		}
+		cl.consts = consts
+	}
+	if len(cl.ic) <= int(rc.PropSites) {
+		ic := newPropCaches(int(rc.PropSites))
+		copy(ic, cl.ic)
+		cl.ic = ic
+	}
+}
+
+// regBindPlan gives fd's closure its register code where a plan lets a
+// call enter it without asking (fd.treeCall): a built-in's callback
+// (regDirect) reads the code from the plan, not from cl.reg.
+func regBindPlan(fd *funcData, t *tree) {
+	if cl := fd.closure; t.reg != nil && cl.reg == nil {
+		cl.realm.agent.regExtend(cl, t.reg)
+		cl.reg = t.reg
+	}
+}
+
+// regConsts is the constants of rc's code, whose function is fn.
+func regConsts(fn *bytecode.Function, rc *bytecode.RegCode) []bytecode.Constant {
+	if rc.Constants != nil {
+		return rc.Constants
+	}
+	return fn.Constants
+}
+
+// regConst is constant k of c's code, whose function is fn.
+func regConst(fn *bytecode.Function, c *regCode, k uint32) *bytecode.Constant {
+	return &regConsts(fn, c.rc)[k]
 }
 
 // regTreeWide is the tree that runs fn's register code rc, which the
@@ -63,12 +126,39 @@ func regTreeWide(fn *bytecode.Function, rc *bytecode.RegCode) *tree {
 	c := &regCode{
 		code: unsafe.Pointer(unsafe.SliceData(rc.Code)), src: rc.SrcPC, siteName: rc.SiteName,
 		numRegs: int32(rc.NumRegs), params: int32(rc.Params), inits: int32(rc.Inits),
-		coerceThis: fn.CoerceThis, rc: rc, fn: fn, wide: true, ncap: int32(ncap), newTarget: fn.UsesNewTarget, args: rc.UsesArguments || rc.ForwardsArguments,
+		coerceThis: fn.CoerceThis, rc: rc, fn: fn, wide: true, ncap: int32(ncap), newTarget: fn.UsesNewTarget, args: rc.UsesArguments || rc.ForwardsArguments || rc.KeepsArgs,
+		suspends: fn.Generator || fn.Async,
+	}
+	c.keep = uint16(rc.Params)
+	if !fn.Strict {
+		if !fn.HasSimpleParams {
+			c.keep = 0
+		} else {
+			for k := 0; k < rc.Params && k < len(fn.Locals); k++ {
+				if fn.Locals[k].Captured {
+					c.keep = uint16(k)
+					break
+				}
+			}
+		}
 	}
 	if rc.LocalReg != nil {
 		c.reuse = regReuseSites(fn, rc)
 	}
+	if c.suspends && rc.LocalReg == nil && !regCapsFrame(rc) {
+		c.genFrom = 2
+	}
+	if fn.Kind == bytecode.KindDerivedConstructor {
+		c.cellThis = true
+		for _, in := range fn.Code {
+			switch in.Op {
+			case bytecode.OpClosure, bytecode.OpDirectEval, bytecode.OpTailDirectEval, bytecode.OpDebugStmt:
+				c.cellThis = false
+			}
+		}
+	}
 	switch {
+	case c.suspends:
 	case fn.Leaf == bytecode.LeafPure && !fn.PureCalls && regLeafRunnable(rc) && regLeafOps(fn, rc) != nil:
 		// A short straight body of numbers and upvalues is run as its
 		// register code without a frame (regLeafRun).
@@ -80,7 +170,7 @@ func regTreeWide(fn *bytecode.Function, rc *bytecode.RegCode) *tree {
 	case fn.Leaf != bytecode.LeafNone && fn.Leaf != bytecode.LeafPure:
 		c.leaf = regLeafThis
 	}
-	if len(rc.Code) > 0 {
+	if len(rc.Code) > 0 && !c.suspends {
 		// A body that returns a parameter, a constant or nothing first
 		// thing -- what follows is unreachable: a call's answer is read
 		// from its window or the code, with no frame and no evaluator,
@@ -93,7 +183,7 @@ func regTreeWide(fn *bytecode.Function, rc *bytecode.RegCode) *tree {
 		case bytecode.RRetUndef:
 			c.leaf, c.leafVal = regLeafConst, Undefined
 		default:
-			if v, ok := regConstOf(fn, w); ok && len(rc.Code) > 1 {
+			if v, ok := regConstOf(regConsts(fn, rc), w); ok && len(rc.Code) > 1 {
 				if ret := rc.Code[1]; ret.Op() == bytecode.RRet && ret.A() == w.A() {
 					c.leaf, c.leafVal = regLeafConst, v
 				}
@@ -111,7 +201,7 @@ func regTreeWide(fn *bytecode.Function, rc *bytecode.RegCode) *tree {
 // regConstOf is the value instruction w loads, where it loads a constant
 // that is the same in every realm and runtime: a number, a boolean, null or
 // undefined.
-func regConstOf(fn *bytecode.Function, w bytecode.RInstr) (Value, bool) {
+func regConstOf(consts []bytecode.Constant, w bytecode.RInstr) (Value, bool) {
 	switch w.Op() {
 	case bytecode.RLoadInt:
 		return Int32(int32(w.BC())), true
@@ -124,23 +214,25 @@ func regConstOf(fn *bytecode.Function, w bytecode.RInstr) (Value, bool) {
 	case bytecode.RLoadFalse:
 		return False, true
 	case bytecode.RLoadConst:
-		if k := int(w.BC()); k < len(fn.Constants) && fn.Constants[k].Kind == bytecode.ConstNumber {
-			return Float(fn.Constants[k].Num), true
+		if k := int(w.BC()); k < len(consts) && consts[k].Kind == bytecode.ConstNumber {
+			return Float(consts[k].Num), true
 		}
 	}
 	return Undefined, false
 }
 
 // regStmt is the one node of a register function's tree: it runs the frame
-// a call through runFD or callTree has made as register code. A frame of
-// the few calls the code cannot run in -- an arrow sharing a derived
-// constructor's this, a function made inside a with or beside an eval -- is
-// run by the stack interpreter instead.
+// a call through runFD or callTree has made as register code, the with
+// objects and the eval's variables runFD gave it among what it keeps. A
+// derived constructor's frame, and an arrow's sharing its this, is run
+// where its code reads this from the binding (RegCode.ThisRef).
 func regStmt(c *regCode) tstmt {
 	return func(t *tctx) {
 		r, f := t.r, t.f
-		if c.wide && f.thisRef == nil && f.withScopes == nil && f.evalVars == nil {
+		regFallback(regFallTree, c.fn)
+		if c.wide && (f.thisRef == nil || c.rc.ThisRef) {
 			if f.cl.reg == nil {
+				r.regExtend(f.cl, c)
 				f.cl.reg = c
 			}
 			if f.callee != nil {
@@ -162,6 +254,7 @@ func regStmt(c *regCode) tstmt {
 			return
 		}
 		if c.wide || f.thisRef != nil || f.withScopes != nil || f.evalVars != nil {
+			regFallback(regFallStack, c.fn)
 			v, err := r.execute(f)
 			if err != nil {
 				t.throw(err)
@@ -181,7 +274,7 @@ func regStmt(c *regCode) tstmt {
 				r.stackHigh = top
 			}
 		}
-		v, err := r.runReg(f, c)
+		v, err := r.runReg(f, c, 0)
 		if err == errTailCall {
 			r.treeTail = true
 			return
@@ -235,7 +328,7 @@ func (r *Runtime) regEnterFrame(f *frame, c *regCode) (Value, error) {
 	if c.args {
 		f.locals = w[2 : 2+p : 2+p]
 	}
-	v, err := r.runReg(f, c)
+	v, err := r.runReg(f, c, 0)
 	f.base, f.locals = saved, savedLocals
 	return v, err
 }

@@ -192,7 +192,7 @@ const (
 )
 
 // regInner is how many calls of padRegInner placement n puts in runReg's
-// first case, nop's, which runs no hot code: each is inlined to three
+// first case, nop's, which runs no hot code: each is inlined to two
 // never-taken tests, which move every case laid out after it within the
 // loop, as inner's tests move executeAt's. The pads move runReg as a
 // whole; this moves its cases against each other and against the
@@ -401,6 +401,11 @@ func buildAt(src, regSrc []byte, counts [nPads]int, tests, n, data int, exe stri
 		if len(f) != 3 || f[1] != "T" {
 			continue
 		}
+		if strings.HasSuffix(f[2], "/internal/vm.padRegInner") && (regInner(n) > 0 || regTail(n) > 0) {
+			// Inlined at every call, it is no function of the build: one
+			// is a call in runReg's cases, which spills across them.
+			return addrs, fmt.Errorf("padRegInner is not inlined into runReg: it costs past what Go inlines into a big function")
+		}
 		for i, t := range targets {
 			if strings.HasSuffix(f[2], "/internal/vm."+t) {
 				a, err := strconv.ParseUint(f[0], 16, 64)
@@ -441,12 +446,14 @@ func padFile(p, m, tests, data int) []byte {
 	b.WriteString("package vm\n\n")
 	if p == 0 {
 		fmt.Fprintf(&b, "var padSink int\n\nvar padKeys = [%d]uint32{}\n\n", max(tests, padKeysLen))
-		// runReg's filler (regInner): three tests, inlined at each call
-		// with i a constant, so that no bound is checked.
+		// runReg's filler (regInner): two tests, inlined at each call
+		// with i a constant, so that no bound is checked. Two, of an
+		// inlining cost of 20, the most Go inlines into a function of
+		// 5,000 IR nodes or more, as runReg is: three cost 31, and in
+		// the big loop each filler was a call.
 		b.WriteString("func padRegInner(a uint32, i int) {\n" +
 			"\tif a == padKeys[i] {\n\t\tpadSink++\n\t}\n" +
-			"\tif a == padKeys[i+1] {\n\t\tpadSink += 2\n\t}\n" +
-			"\tif a == padKeys[i+2] {\n\t\tpadSink += 3\n\t}\n}\n\n")
+			"\tif a == padKeys[i+1] {\n\t\tpadSink += 2\n\t}\n}\n\n")
 		// The data's phase: the initialized data, which the zeroed data
 		// follows, data bytes more (dataPhase).
 		fmt.Fprintf(&b, "var padData = [%d]byte{1}\n\n", padDataBase+data)

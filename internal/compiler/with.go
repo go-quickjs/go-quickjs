@@ -135,6 +135,7 @@ func (c *compiler) beginWithRef(n *ast.Ident) {
 	c.emit(bytecode.OpPushUndef, 0, 0)
 	probe := c.emit(bytecode.OpWithGetUnder,
 		c.nameIdx(n.Name)|uint32(limit)<<bytecode.WithLimitShift, 0xFFFFFFFF)
+	c.regWith(n, probe)
 	c.compileIdentReadStatic(n)
 	c.patchWithProbe(probe)
 }
@@ -145,8 +146,8 @@ func (c *compiler) beginWithRef(n *ast.Ident) {
 func (c *compiler) resolveWithRef(n *ast.Ident) {
 	limit := c.withLimit(n.Name)
 	c.emit(bytecode.OpPushUndef, 0, 0)
-	c.emit(bytecode.OpWithResolve,
-		c.nameIdx(n.Name)|uint32(limit)<<bytecode.WithLimitShift, 0)
+	c.regWith(n, c.emit(bytecode.OpWithResolve,
+		c.nameIdx(n.Name)|uint32(limit)<<bytecode.WithLimitShift, 0))
 }
 
 // endWithRef writes the value on top back through the reference beginWithRef

@@ -26,6 +26,11 @@ import "sync/atomic"
 // run by runFD, its frame set up for anything, at every call.
 func directRest[_ any](r *Runtime, o *Object, fd *funcData, this Value, args []Value, newTarget Value) (Value, error) {
 	cl := fd.closure
+	if cl.fn.Reg != nil {
+		if v, err, ok := r.regRunFD(cl, this, args, newTarget, o, fd); ok {
+			return v, err
+		}
+	}
 	if !fd.treeRest || cl.fn.CoerceThis && !this.IsObject() {
 		return r.runFD(cl, this, args, newTarget, o, fd)
 	}

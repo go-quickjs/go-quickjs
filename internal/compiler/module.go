@@ -3,6 +3,7 @@ package compiler
 import (
 	"github.com/go-quickjs/go-quickjs/internal/ast"
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/compiler/regcomp"
 )
 
 // Compiling a module's import and export declarations.
@@ -79,6 +80,11 @@ func CompileModule(prog *ast.Program, opts Options) (fn *bytecode.Function, info
 	c.nextSlot++
 	c.emit(bytecode.OpPushUndef, 0, 0)
 	c.emit(bytecode.OpSetLocal, uint32(c.completionSlot), 0)
+	if registerForm.Load() && regScript(opts) {
+		// The module's code as register code too (regcomp.CompileTop).
+		c.reg = regcomp.NewRecord()
+		c.reg.Completion = c.completionSlot
+	}
 
 	c.collectModuleShape(prog.Body)
 	c.checkModuleDeclarations(prog.Body)
@@ -94,7 +100,10 @@ func CompileModule(prog *ast.Program, opts Options) (fn *bytecode.Function, info
 	c.emit(bytecode.OpGetLocal, uint32(c.completionSlot), 0)
 	c.emit(bytecode.OpReturn, 0, 0)
 	c.finish()
-	return c.done(), info, nil
+	rec := c.reg
+	fn = c.done()
+	regTopCode(prog.Body, fn, rec)
+	return fn, info, nil
 }
 
 // collectModuleShape records the imports and exports before the body is
@@ -271,6 +280,7 @@ func (c *compiler) hoistModuleBindings(body []ast.Stmt) {
 	collectVarNamesIn(body, &names, true)
 	for _, n := range names {
 		c.emit(bytecode.OpDefineGlobalVar, c.nameIdx(n), 0)
+		c.regTop(bytecode.OpDefineGlobalVar, c.nameIdx(n), 0, nil)
 	}
 
 	c.collectModuleLex(body)
@@ -280,6 +290,7 @@ func (c *compiler) hoistModuleBindings(body []ast.Stmt) {
 			mutable = 0
 		}
 		c.emit(bytecode.OpDeclareModuleLex, c.nameIdx(l.name), mutable)
+		c.regTop(bytecode.OpDeclareModuleLex, c.nameIdx(l.name), mutable, nil)
 	}
 }
 
@@ -325,12 +336,21 @@ func compileModuleInit(prog *ast.Program, opts Options, info *ModuleInfo, script
 	c.module = info
 	c.completionSlot = int32(c.nextSlot)
 	c.nextSlot++
+	if registerForm.Load() && regScript(opts) {
+		// Its declarations as register code too: its body is none of the
+		// module's statements (regcomp.CompileTop).
+		c.reg = regcomp.NewRecord()
+		c.reg.Completion = c.completionSlot
+	}
 	c.hoistModuleBindings(prog.Body)
 	c.hoistBlockDeclarations(prog.Body, true)
 	c.emit(bytecode.OpPushUndef, 0, 0)
 	c.emit(bytecode.OpReturn, 0, 0)
 	c.finish()
-	return c.done()
+	rec := c.reg
+	fn := c.done()
+	regTopCode(nil, fn, rec)
+	return fn
 }
 
 // lexicalName is a top-level lexical binding and the kind of declaration it

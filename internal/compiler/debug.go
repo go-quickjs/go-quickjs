@@ -68,6 +68,7 @@ func (c *compiler) debugMark(pos int, debugger uint32) {
 		PC: uint32(len(c.fn.Code)), Pos: int32(pos), Scope: c.debugScope(),
 	})
 	c.recordLine(pos)
+	c.reg.NoteDebug(int32(pos), uint32(len(c.fn.Debug.Statements)-1), debugger != 0)
 	c.emit(bytecode.OpDebugStmt, uint32(len(c.fn.Debug.Statements)-1), debugger)
 }
 

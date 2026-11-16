@@ -196,6 +196,24 @@ var e = make(); e.stack.split("\n")[0] + " | " + frames(e)`, "AppError: m | at m
 	})
 }
 
+// TestStackTraceThrowPositions pins where a read that throws is: a derived
+// constructor's this before super(), a private method called on an object
+// without it, at its name, and a binding read in its dead zone, at the name,
+// each the first thing its function does.
+func TestStackTraceThrowPositions(t *testing.T) {
+	evalCases(t, []struct{ src, want string }{
+		{frames + `class G extends Object { constructor() { this.x = 1; super() } }
+try { new G() } catch (e) { frames(e) }`, "at new G (<eval>:2:42) | at <eval>:3:7"},
+		{frames + `class P { call(o) { return o.#m() } #m() {} }
+try { new P().call({}) } catch (e) { frames(e) }`, "at P.call (<eval>:2:30) | at <eval>:3:15"},
+		{frames + `function c9() { class Q extends (Q, Object) {} }
+try { c9() } catch (e) { frames(e) }`, "at c9 (<eval>:2:34) | at <eval>:3:7"},
+		{frames + `function c11() { foo(q); let q }
+function foo() {}
+try { c11() } catch (e) { frames(e) }`, "at c11 (<eval>:2:22) | at <eval>:4:7"},
+	})
+}
+
 // TestStackTraceAccessor pins the standard's inherited accessor and V8's own
 // accessor under WithNodeQuirks.
 func TestStackTraceAccessor(t *testing.T) {
@@ -496,4 +514,34 @@ var r = []
 for (var f of [upd, updLoop, bad, bad2]) for (var i = 0; i < 3; i++) try { f(null) } catch (e) { r.push(e.stack.split(String.fromCharCode(10))[1].trim()) }
 r.filter((s, i) => i % 3 == 2).join(" | ")`,
 		"at upd (<eval>:2:19) | at updLoop (<eval>:3:51) | at bad (<eval>:4:34) | at bad2 (<eval>:5:35)")
+}
+
+// TestStackPositionInAnOptionalChain pins where a trace places the error of
+// a read inside an optional chain past its link -- o?.a.b where a is null,
+// o.n?.() where o is null -- at the property, as outside a chain. Unplaced,
+// each had the position of whatever was compiled before it, or none.
+func TestStackPositionInAnOptionalChain(t *testing.T) {
+	checkEval(t, `function get(o) { return o?.a.b }
+function call(o) { return o.n?.() }
+function idx(o) { return o?.a[0] }
+function meth(o) { return o?.a.m() }
+var r = []
+for (var [f, v] of [[get, { a: null }], [call, null], [idx, { a: null }], [meth, { a: null }]]) try { f(v) } catch (e) { r.push(e.stack.split(String.fromCharCode(10))[1].trim()) }
+r.join(" | ")`,
+		"at get (<eval>:1:31) | at call (<eval>:2:29) | at idx (<eval>:3:31) | at meth (<eval>:4:32)")
+}
+
+// TestStackPositionOfADeadZoneStore pins where a trace places the
+// ReferenceError of an assignment to a let in its dead zone: at the name,
+// as a read's. Unplaced, it had the position of whatever was compiled
+// before it -- a call, another case's return -- or none.
+func TestStackPositionOfADeadZoneStore(t *testing.T) {
+	checkEval(t, `function first() { x = 5; let x }
+function sw(v) { switch (v) { case 1: let x = 10; return x; case 2: x = 5; return x } }
+function bl() { { f(); x = 5 } let x; function f() {} }
+function pa() { [x] = [1]; let x }
+var r = []
+for (var [f, v] of [[first], [sw, 2], [bl], [pa]]) try { f(v) } catch (e) { r.push(e.stack.split(String.fromCharCode(10))[1].trim()) }
+r.join(" | ")`,
+		"at first (<eval>:1:20) | at sw (<eval>:2:69) | at bl (<eval>:3:24) | at pa (<eval>:4:18)")
 }

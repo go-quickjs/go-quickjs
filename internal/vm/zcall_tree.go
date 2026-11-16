@@ -53,9 +53,14 @@ func planTreeCall(fd *funcData) {
 	case fn.HasTailCall:
 		fd.treeRest = true
 	default:
+		regBindPlan(fd, t)
 		fd.treeCall = t
 	}
 	fd.treePlanned = true
+	// A closure planned at its first call, not as it was made, is planned
+	// as regMadeClosure plans one: its register code is built only now
+	// (bytecode.RegLater).
+	regPlan(fd)
 }
 
 // makeClosure builds a closure from a nested function template
@@ -380,6 +385,11 @@ func (r *Runtime) tailFromTree() (Value, error) {
 func (r *Runtime) callTreeWith(o *Object, fd *funcData, t *tree, this Value, args []Value, newTarget Value, nested bool) (Value, error) {
 	cl := fd.closure
 	fn := cl.fn
+	if t.reg != nil {
+		if v, err, ok := r.regRunFD(cl, this, args, newTarget, o, fd); ok {
+			return v, err
+		}
+	}
 	if r.frameDepth >= r.maxFrames {
 		return Undefined, r.throwRangeError("maximum call stack size exceeded")
 	}

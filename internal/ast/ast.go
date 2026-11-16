@@ -280,8 +280,8 @@ type FieldInit struct {
 // where the specification installs them: after super() has returned in a
 // derived class, and before any field is evaluated.
 type InstallPrivateMethods struct {
-	// Binding is the hidden name holding the list the class built.
-	Binding string
+	// Binding is the hidden name holding the list the class built, read.
+	Binding *Ident
 	Start   int
 }
 

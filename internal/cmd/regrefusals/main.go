@@ -4,7 +4,7 @@
 // it refused, by reason (docs/register-interpreter.md, "Where stage 1
 // stands").
 //
-//	go run ./internal/cmd/regrefusals [-top 40] [-files] dir...
+//	go run ./internal/cmd/regrefusals [-top 40] [-files] [-list] dir...
 //
 // A file of test262 is compiled as its front matter says: a module where
 // its flags have module (or its name _FIXTURE), strict where they have
@@ -44,9 +44,10 @@ func newTally() *tally {
 func main() {
 	top := flag.Int("top", 40, "reasons to list for each directory")
 	files := flag.Bool("files", false, "list a file with a function refused for each reason")
+	list := flag.Bool("list", false, "print every refused function: its reason, file, offset and name")
 	flag.Parse()
 	if flag.NArg() == 0 {
-		fmt.Fprintln(os.Stderr, "usage: regrefusals [-top n] [-files] dir...")
+		fmt.Fprintln(os.Stderr, "usage: regrefusals [-top n] [-files] [-list] dir...")
 		os.Exit(2)
 	}
 	compiler.SetRegisterForm(true)
@@ -76,7 +77,7 @@ func main() {
 			}
 			walk(fn, func(f *bytecode.Function) {
 				t.funcs++
-				if f.Reg != nil {
+				if f.RegCode() != nil {
 					t.regCode++
 					return
 				}
@@ -88,6 +89,9 @@ func main() {
 					}
 				}
 				t.why[why]++
+				if *list {
+					fmt.Printf("refused: %s: %s@%d %s\n", why, path, f.Start, f.Name)
+				}
 				if _, ok := t.example[why]; !ok {
 					t.example[why] = path
 				}

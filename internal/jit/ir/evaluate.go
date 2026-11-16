@@ -2,12 +2,18 @@ package ir
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"unsafe"
 )
 
 // ErrState reports an invalid scratch size or a non-resumable entry PC.
 var ErrState = errors.New("jit IR: invalid execution state")
+
+// ErrGeneric reports a Generic instruction whose check failed after an
+// instruction of its origin had committed: what Go would make there, which
+// the evaluator has no Go for, and no exit may leave (Program's Origin).
+var ErrGeneric = errors.New("jit IR: a generic operation needs Go")
 
 // Evaluate executes a validated program in Go for at most budget instructions.
 // Slots is caller-owned scratch, containing locals followed by operands. Exits
@@ -19,8 +25,26 @@ func (p *Program) Evaluate(slots []Value, pc int, budget uint64) (Exit, error) {
 
 // EvaluateArrays is the correctness oracle for borrowed dense array storage.
 func (p *Program) EvaluateArrays(slots []Value, arrays []ArrayView, pc int, budget uint64) (Exit, error) {
+	return p.EvaluateHost(slots, arrays, nil, pc, budget)
+}
+
+// A Runner makes what the evaluator does not: an instruction it would leave
+// at -- a host operation, a guard that failed, a Generic instruction's
+// slow path -- is the host's to run whole, as Go runs it at a host exit,
+// before the evaluator leaves. Run runs in, instruction pc of p, over
+// slots, and reports whether it did, and where the code goes on; where it
+// did not, the evaluator leaves as it would have. The VM's, which runs
+// the register instruction on the frame's registers, is one
+// (vm.RegLowerCall).
+type Runner interface {
+	Run(p *Program, pc int, in *Instruction, slots []Value) (next int, ok bool, err error)
+}
+
+// EvaluateHost is EvaluateArrays with h, if not nil, making what the
+// evaluator does not.
+func (p *Program) EvaluateHost(slots []Value, arrays []ArrayView, h Runner, pc int, budget uint64) (Exit, error) {
 	if p == nil || len(slots) != p.Locals+p.StackSize || pc < 0 || pc >= len(p.Code) ||
-		len(p.Maps) != len(p.Code) || p.Maps[pc].Depth < 0 {
+		len(p.Maps) != len(p.Code) || p.Maps[pc].Depth < 0 || !p.starts(pc) {
 		return Exit{}, ErrState
 	}
 	read := func(o Operand) Value {
@@ -30,16 +54,73 @@ func (p *Program) EvaluateArrays(slots []Value, arrays []ArrayView, pc int, budg
 		return slots[o.Slot]
 	}
 	var steps uint64
+	// committed says an instruction of the current origin's has changed
+	// what an exit at it would run again (Program's Origin): a register
+	// written, or memory. Only register code's programs have origins; an
+	// exit is at an origin's start, which a budget's exit and an entry
+	// are too.
+	committed := false
 	for {
+		if p.starts(pc) {
+			committed = false
+		}
 		exit := Exit{Kind: GuardExit, State: p.Maps[pc], Steps: steps}
-		if steps == budget {
+		if steps >= budget && p.starts(pc) {
 			exit.Kind = BudgetExit
 			return exit, nil
 		}
 		in := p.Code[pc]
+		var err error
 		if in.Check && slots[in.CheckSlot].Kind == Uninitialized {
-			return exit, nil
+			// A dead zone's check: the host's to throw, which it may not.
+		} else {
+			exit, err = p.evaluate(&in, slots, arrays, read, exit, &pc)
 		}
+		if exit.Kind != running {
+			if err != nil || exit.Kind == Returned {
+				return exit, err
+			}
+			if h != nil {
+				next, ok, err := h.Run(p, pc, &in, slots)
+				if err != nil {
+					return Exit{}, err
+				}
+				if ok {
+					// Made whole, as Go makes it.
+					committed = committed || p.Origin != nil && p.CommitsAt(pc)
+					steps++
+					pc = next
+					continue
+				}
+			}
+			if committed && in.Generic {
+				// Go's to make, which the evaluator is not.
+				return Exit{}, ErrGeneric
+			}
+			if committed {
+				return Exit{}, fmt.Errorf("jit IR: pc %d: an exit after register pc %d committed", pc, p.Origin[pc])
+			}
+			return exit, err
+		}
+		if p.Origin != nil {
+			a, b := in.Writes()
+			committed = committed || a >= 0 && a < p.Regs || b >= 0 && b < p.Regs || in.Op == PropertyWrite || in.Op == ArrayWrite
+		}
+		steps++
+	}
+}
+
+// running is the kind evaluate returns where the instruction did not leave,
+// pc then where the code goes on.
+const running ExitKind = 255
+
+// evaluate runs in, the instruction at *pc, with exit its state's exit,
+// and returns that exit, of its kind, where it leaves, or one of the kind
+// running with *pc the next instruction.
+func (p *Program) evaluate(inp *Instruction, slots []Value, arrays []ArrayView, read func(Operand) Value, exit Exit, pcp *int) (Exit, error) {
+	in, pc := *inp, *pcp
+	steps := exit.Steps
+	{
 		next := pc + 1
 		switch in.Op {
 		case Nop:
@@ -260,6 +341,9 @@ func (p *Program) EvaluateArrays(slots []Value, arrays []ArrayView, pc int, budg
 			}
 			v, ok := binary(in.Operator, a, b)
 			if !ok {
+				v, ok = nullEquality(in.Operator, a, b, in.Strict)
+			}
+			if !ok {
 				if in.Operator == Eq || in.Operator == Ne || in.Operator == Mod || in.Operator == Pow {
 					exit.Kind = HostExit
 				}
@@ -318,7 +402,11 @@ func (p *Program) EvaluateArrays(slots []Value, arrays []ArrayView, pc int, budg
 				condition, ok = k == Null || k == Undefined, true
 			} else {
 				var v Value
-				v, ok = binary(in.Operator, read(in.Left), read(in.Right))
+				l, r := read(in.Left), read(in.Right)
+				v, ok = binary(in.Operator, l, r)
+				if !ok {
+					v, ok = nullEquality(in.Operator, l, r, in.Strict)
+				}
 				condition = v.Bits != 0
 			}
 			if !ok {
@@ -346,8 +434,8 @@ func (p *Program) EvaluateArrays(slots []Value, arrays []ArrayView, pc int, budg
 		default:
 			return Exit{}, ErrState
 		}
-		steps++
-		pc = next
+		*pcp = next
+		return Exit{Kind: running}, nil
 	}
 }
 
@@ -399,6 +487,29 @@ func binary(op Operator, a, b Value) (Value, bool) {
 		return Bool(x != y), true
 	}
 	return Value{}, false
+}
+
+// nullEquality is a == b, or a != b, strictly where strict says, where one
+// of them is null or undefined and the other no object: an object may be
+// Annex B's [[IsHTMLDDA]], which == null takes for null.
+func nullEquality(op Operator, a, b Value, strict bool) (Value, bool) {
+	nullish := func(v Value) bool { return v.Kind == Null || v.Kind == Undefined }
+	if op != Eq && op != Ne || !nullish(a) && !nullish(b) {
+		return Value{}, false
+	}
+	var eq bool
+	switch o := b; {
+	case !nullish(a):
+		o = a
+		fallthrough
+	case !nullish(b):
+		if o.Kind != Number && o.Kind != Boolean && o.Kind != String {
+			return Value{}, false
+		}
+	default:
+		eq = !strict || a.Kind == b.Kind
+	}
+	return Bool(eq == (op == Eq)), true
 }
 
 // ToUint32 implements JavaScript's numeric truncation modulo 2^32. Native

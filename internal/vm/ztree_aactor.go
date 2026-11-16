@@ -128,6 +128,12 @@ func init() {
 	}
 
 	constructRun = func(r *Runtime, this Value, args []Value, newTarget Value, o *Object, fd *funcData) (Value, error) {
+		if fd.closure.fn.Reg != nil {
+			// Register mode's code, entered as its own (regRunFD).
+			if v, err, ok := r.regRunFD(fd.closure, this, args, newTarget, o, fd); ok {
+				return v, err
+			}
+		}
 		if fd.treeNew {
 			return constructTree(r, o, fd, this, args, newTarget)
 		}
@@ -168,7 +174,9 @@ func init() {
 
 	planTreeNew = func(fd *funcData) {
 		cl := fd.closure
-		if cl == nil || fd.native != nil || fd.bound {
+		if cl == nil || fd.native != nil || fd.bound || cl.fn.Reg != nil {
+			// Register mode's code is constructed as its own
+			// (constructRun), and super() calls it so (callObject).
 			fd.newPlanned = true
 			return
 		}

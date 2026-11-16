@@ -1298,7 +1298,9 @@ func stringConcats(p *ir.Program, reads []int32) {
 			}
 		case ir.Binary:
 			if in.Operator == ir.Add && (slot(in.Left) || slot(in.Right)) {
-				p.Code[pc] = ir.Instruction{Op: ir.StringAdd, Left: in.Left, Right: in.Right, Dest: in.Dest}
+				// A register instruction's component keeps its Generic
+				// (ir.Program's Origin).
+				p.Code[pc] = ir.Instruction{Op: ir.StringAdd, Left: in.Left, Right: in.Right, Dest: in.Dest, Generic: in.Generic}
 				madeBy(in.Dest, in.Left, in.Right)
 				continue
 			}

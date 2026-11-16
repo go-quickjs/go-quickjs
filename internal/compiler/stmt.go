@@ -148,36 +148,34 @@ func (c *compiler) predeclareFunction(h hoistedFunc) {
 		// declared -- and what a reference to the name finds afterwards,
 		// whether it is written inside the eval or outside it.
 		if b, known := c.callerBinding(h.name); known && b.VarScoped {
+			// The register form makes the store as the write of an
+			// identifier of its own (regcomp.TopOp's Id): the name's is
+			// an Annex B alias's where it has one.
+			id := &ast.Ident{Name: h.name, Start: h.fd.Fn.Name.Start}
+			saved := c.regIdent
+			c.regIdent = id
 			c.storeVar(h.name)
+			c.regIdent = saved
+			if c.reg != nil && c.parent == nil {
+				c.reg.NoteTop(regcomp.TopOp{Op: bytecode.OpSetUpvalue, Name: h.name, Pos: c.lastPos, Fn: h.fd.Fn, Id: id})
+			}
 			return
 		}
 		c.emit(bytecode.OpDefineGlobalFunc, c.nameIdx(h.name),
 			boolBit(c.opts.EvalConfigurable))
+		c.regTop(bytecode.OpDefineGlobalFunc, c.nameIdx(h.name), boolBit(c.opts.EvalConfigurable), h.fd.Fn)
 		return
 	}
 
-	// Annex B: a plain function declared inside a block is also assigned to a
-	// var-scoped binding of the same name, which is what makes
-	//
-	//	function outer() { { function f() {} } return f; }
-	//
-	// work in sloppy mode. The binding is created by hoisting like any other
-	// var; only the assignment happens here, when the declaration is reached.
-	if c.annexB[h.fd] {
-		if c.reg != nil {
-			c.reg.Bail = true
-		}
-		c.emitAnnexBFunctionAlias(h.name)
-	}
-	if c.reg != nil {
-		c.reg.Funcs[h.fd] = h.slot
-	}
+	c.reg.NoteFunc(h.fd, h.slot)
 	c.emit(bytecode.OpSetLocal, h.slot, 0)
 }
 
 // emitAnnexBFunctionAlias copies a block-scoped function into the var binding
-// that shares its name.
-func (c *compiler) emitAnnexBFunctionAlias(name string) {
+// that shares its name, id's: the register form is told the var's store
+// as id's write.
+func (c *compiler) emitAnnexBFunctionAlias(id *ast.Ident) {
+	name := id.Name
 	// Hoisting made sure nothing lexical stands in the way, other than a simple
 	// catch parameter, which the alias passes over to reach the var -- or the
 	// function declared at the top level, whose binding the var is. The
@@ -188,6 +186,7 @@ func (c *compiler) emitAnnexBFunctionAlias(name string) {
 		if l.name != name || l.depth >= c.depth || !l.varScoped() {
 			continue
 		}
+		c.reg.NoteWrite(id, regcomp.Res{Kind: regcomp.ResLocal, Index: l.slot})
 		c.emit(bytecode.OpDup, 0, 0)
 		c.emit(bytecode.OpSetLocal, l.slot, 0)
 		return
@@ -203,9 +202,11 @@ func (c *compiler) emitAnnexBFunctionAlias(name string) {
 	c.emit(bytecode.OpDup, 0, 0)
 	if b, known := c.callerBinding(name); known && b.VarScoped && !c.evalOwnVars[name] {
 		idx, _ := c.resolveUpvalue(name)
+		c.reg.NoteWrite(id, regcomp.Res{Kind: regcomp.ResUpval, Index: idx})
 		c.emit(bytecode.OpSetUpvalue, idx, 0)
 		return
 	}
+	c.reg.NoteWrite(id, regcomp.Res{Kind: regcomp.ResGlobalVar})
 	c.emit(bytecode.OpSetGlobal, c.nameIdx(name), 0)
 }
 
@@ -259,6 +260,7 @@ func (c *compiler) declareLexicalNameMarked(name string, kind bindKind, pos int,
 			mutable = 1
 		}
 		c.emitAt(pos, bytecode.OpDeclareGlobalLex, c.nameIdx(name), mutable)
+		c.regTop(bytecode.OpDeclareGlobalLex, c.nameIdx(name), mutable, nil)
 		return
 	}
 	slot := c.declare(name, kind, pos)
@@ -268,6 +270,8 @@ func (c *compiler) declareLexicalNameMarked(name string, kind bindKind, pos int,
 	if mark {
 		c.emit(bytecode.OpPushUninitialized, 0, 0)
 		c.emit(bytecode.OpSetLocal, slot, 0)
+	} else {
+		c.reg.NoteUnmarked(slot)
 	}
 	c.markUninitialized(name)
 }
@@ -355,7 +359,20 @@ func (c *compiler) compileStatement(s ast.Stmt) {
 		c.compileVarDecl(n)
 
 	case *ast.FuncDecl:
-		// Already emitted by predeclareFunction.
+		// Made by predeclareFunction as its block was entered. Annex B: a
+		// plain function declared inside a block is also assigned to a
+		// var-scoped binding of the same name, which is what makes
+		//
+		//	function outer() { { function f() {} } return f; }
+		//
+		// work in sloppy mode. The binding is created by hoisting like any
+		// other var; the assignment, of what the block's binding holds,
+		// happens here, when the declaration is evaluated (B.3.3.1).
+		if c.annexB[n] {
+			c.compileIdentReadStatic(n.Fn.Name)
+			c.emitAnnexBFunctionAlias(n.Fn.Name)
+			c.emit(bytecode.OpDrop, 0, 0)
+		}
 
 	case *ast.ClassDecl:
 		c.compileClass(n.Class, n.Class.Name.Name)
@@ -449,7 +466,7 @@ func (c *compiler) compileStatement(s ast.Stmt) {
 		c.compileDispose(n)
 
 	case *ast.InstallPrivateMethods:
-		c.compileIdentRead(&ast.Ident{Name: n.Binding, Start: int32(n.Start)})
+		c.compileIdentRead(n.Binding)
 		c.emitAt(n.Start, bytecode.OpInstallPrivateMethods, 0, 0)
 
 	case *ast.FieldInit:
@@ -570,10 +587,12 @@ func (c *compiler) initBinding(target ast.Expr, kind ast.DeclKind) {
 		// A block of its own would have declared a local, so reaching here
 		// means the binding is the top-level one.
 		if c.globalLex[id.Name] {
+			c.reg.NoteWrite(id, regcomp.Res{Kind: regcomp.ResGlobalLexInit})
 			c.emit(bytecode.OpInitGlobalLex, c.nameIdx(id.Name), 0)
 			return
 		}
 		if c.isModuleLex(id.Name) {
+			c.reg.NoteWrite(id, regcomp.Res{Kind: regcomp.ResModuleLexInit})
 			c.emit(bytecode.OpInitModuleLex, c.nameIdx(id.Name), 0)
 			return
 		}
@@ -632,7 +651,12 @@ func (c *compiler) storeVar(name string) {
 	// quietly left its value behind would push the loop it sits in off its own
 	// operands.
 	probe := c.withProbe(bytecode.OpWithSet, name)
-	if probe >= 0 && c.reg != nil {
+	switch {
+	case c.regIdent != nil:
+		c.regWith(c.regIdent, probe)
+	case probe >= 0 && c.reg != nil:
+		// Eval code's function declaration, which the register form
+		// does not compile.
 		c.reg.Bail = true
 	}
 	if probe >= 0 {
@@ -666,7 +690,7 @@ func (c *compiler) storeVar(name string) {
 		return
 	}
 	if c.regIdent != nil {
-		c.reg.NoteWrite(c.regIdent, regcomp.Res{Kind: regcomp.ResGlobal})
+		c.reg.NoteWrite(c.regIdent, regcomp.Res{Kind: regcomp.ResGlobalVar})
 	}
 	c.emit(bytecode.OpSetGlobal, c.nameIdx(name), 0)
 }
@@ -902,6 +926,17 @@ func (c *compiler) beginHeadScope(left ast.Node) bool {
 	}
 	c.beginScope()
 	c.predeclareLexical(vd)
+	if c.reg != nil {
+		var names []string
+		for _, d := range vd.Decls {
+			names = appendPatternNames(names, d.Target)
+		}
+		for _, n := range names {
+			if l, ok := c.resolveLocal(n); ok {
+				c.reg.NoteHead(vd, uint32(l.slot))
+			}
+		}
+	}
 	return true
 }
 
@@ -1282,6 +1317,7 @@ func (c *compiler) compileFinallyClause(pos int, finally []ast.Stmt, record bool
 	if record {
 		c.pushExit(exitCompletion)
 	}
+	defer c.reg.BeginFinally(finally)()
 	c.beginScope()
 	savedRecord := c.finallyRecord
 	c.finallyRecord = record
@@ -1553,12 +1589,14 @@ func (c *compiler) unwindTo(target *loopCtx) {
 			c.emit(bytecode.OpPushUndef, 0, 0)
 			c.emit(bytecode.OpSetLocal, uint32(c.completionSlot), 0)
 		}
+		end := c.reg.BeginFinally(saved[i].body)
 		c.beginScope()
 		savedRecord := c.finallyRecord
 		c.finallyRecord = false
 		c.compileStatements(saved[i].body)
 		c.finallyRecord = savedRecord
 		c.endScope()
+		end()
 		if cv >= 0 {
 			c.emit(bytecode.OpGetLocal, uint32(cv), 0)
 			c.emit(bytecode.OpSetLocal, uint32(c.completionSlot), 0)

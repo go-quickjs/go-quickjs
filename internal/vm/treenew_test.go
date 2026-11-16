@@ -90,7 +90,9 @@ func TestClassConstructionsOnTrees(t *testing.T) {
 			t.Errorf("tree %v: got %s\nwant %s", tree, got, want)
 		}
 		fd := func(name string) *funcData { return r.global.getOwn(r.atoms.intern(name)).value().Object().fn() }
-		if tree {
+		// The tree tier's plans, which a function the register tier runs
+		// as its code does not have.
+		if tree && !regTier.Load() {
 			for _, name := range []string{"A", "C", "Base", "Nest"} {
 				if !fd(name).treeNew {
 					t.Errorf("%s is not constructed on its tree", name)

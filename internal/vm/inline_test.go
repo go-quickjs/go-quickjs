@@ -72,6 +72,11 @@ var intendedInlining = []string{
 	// A WeakMap's key's entries, and an iterator's chain (Iterator.from).
 	"(*Object).weakMapRefsOf",
 	"(*Runtime).inheritsFrom",
+	// The register loop's typed array elements, in get_index's and
+	// set_index's cases: past the budget, each is a call with the pc
+	// live across it.
+	"regTypedAt",
+	"regTypedStore",
 }
 
 // TestIntendedInlining builds the package with -gcflags=-m, plain and with

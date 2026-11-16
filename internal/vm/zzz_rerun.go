@@ -188,6 +188,14 @@ func listSites[_ any](p *programSites, fn *bytecode.Function, constant int) bool
 			p.at = append(p.at, in.B)
 		}
 	}
+	if rc := fn.RegCompiled(); rc != nil {
+		// The register code's literals have sites of their own.
+		for _, w := range rc.Code {
+			if op := w.Op(); op == bytecode.RNewObject || op == bytecode.RNewObjectLit {
+				p.at = append(p.at, uint32(w.C()))
+			}
+		}
+	}
 	p.fns = append(p.fns, programFn{constant: int32(constant), sites: int32(len(p.at) - at)})
 	inner := int32(0)
 	for i := range fn.Constants {

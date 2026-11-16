@@ -1,6 +1,10 @@
 package vm
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/go-quickjs/go-quickjs/internal/compiler"
+)
 
 // TestApplyArgumentsCallsDirectly pins f.apply(this, arguments) -- and a
 // constructor that is only this.initialize.apply(this, arguments), which
@@ -45,4 +49,69 @@ func TestApplyArgumentsCallsDirectly(t *testing.T) {
 		r.Close()
 	}
 	SetTreeTier(true)
+}
+
+// TestForwarderMethodsByShape pins what leafForward answers once its
+// method's read is cached by the receiver's shape in the forwarder's own
+// table (fwdSite) -- twenty classes made by one Class.create, each built
+// many times -- and the changes that table must see: the method replaced
+// on the prototype, an own method, Function.prototype.apply patched and
+// restored, a method with an apply of its own, a bound method, a proxy as
+// the prototype, the prototype replaced, and a throw's stack through the
+// forwarder. The answers are Node's; the stack interpreter, the tree tier
+// and register code each give them.
+func TestForwarderMethodsByShape(t *testing.T) {
+	const src = `
+		var Class = { create: function() { return function() { this.initialize.apply(this, arguments); }; } };
+		function mk(init) { var C = Class.create(); C.prototype = { initialize: init }; return C; }
+		var r = [], cs = [], s = 0;
+		for (var k = 0; k < 20; k++) cs.push(mk((function (k) { return function (a, b) { this.v = a + b + k } })(k)));
+		for (var i = 0; i < 200; i++) for (var k = 0; k < 20; k++) s += new cs[k](i, 1).v;
+		r.push(s);
+		var A = mk(function (x) { this.x = x });
+		r.push(new A(1).x);
+		A.prototype.initialize = function (x) { this.x = x * 10 };
+		r.push(new A(2).x);
+		var B = mk(function (x) { this.y = "proto" + x });
+		B.prototype = Object.create(B.prototype);
+		r.push(new B(3).y);
+		var ap = Function.prototype.apply;
+		Function.prototype.apply = function (t, a) { t.patched = a.length; return ap.call(this, t, a) };
+		r.push(new A(4).patched + ":" + new A(4).x);
+		Function.prototype.apply = ap;
+		r.push(new A(5).patched + ":" + new A(5).x);
+		var own = function (x) { this.z = x };
+		own.apply = function (t, a) { t.z = "own" + a[0] };
+		r.push(new (mk(own))(6).z);
+		var E = mk(function (x) { this.w = this === undefined ? "u" : typeof this.w + x }.bind({ w: 1 }));
+		r.push(typeof new E(7).w);
+		var F = Class.create();
+		F.prototype = new Proxy({ initialize: function (x) { this.p = x } }, {});
+		r.push(new F(8).p);
+		var G = mk(function (x) { this.g = "one" + x });
+		r.push(new G(1).g);
+		G.prototype = { initialize: function (x) { this.g = "two" + x } };
+		r.push(new G(2).g);
+		var H = mk(function (x) { if (x) throw new Error("boom"); this.h = 1 });
+		try { new H(1) } catch (e) { r.push(e.stack.split("\n").slice(0, 3).map(function (l) { return l.trim().replace(/ \(.*$/, "") }).join(" | ")) }
+		r.join("; ")`
+	const want = "440000; 1; 20; proto3; 1:40; undefined:50; own6; undefined; 8; one1; two2; Error: boom | at Object.initialize | at new <anonymous>"
+	for _, mode := range []string{"stack", "tree", "reg"} {
+		compiler.SetRegisterForm(mode == "reg")
+		fn := compileForTest(t, src)
+		compiler.SetRegisterForm(false)
+		SetTreeTier(mode != "stack")
+		SetRegTier(mode == "reg")
+		r := New(Config{})
+		v, err := r.Run(fn)
+		SetRegTier(false)
+		SetTreeTier(true)
+		if err != nil {
+			t.Fatalf("%s: %v", mode, err)
+		}
+		if got := v.String().Go(); got != want {
+			t.Errorf("%s:\n got %s\nwant %s", mode, got, want)
+		}
+		r.Close()
+	}
 }

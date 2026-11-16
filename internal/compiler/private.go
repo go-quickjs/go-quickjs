@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-quickjs/go-quickjs/internal/ast"
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/compiler/regcomp"
 )
 
 // Private names.
@@ -192,9 +193,11 @@ func (c *compiler) privateKeyRef(pn *ast.PrivateName, pos int) uint32 {
 		return 0
 	}
 	if l, found := c.resolveLocal(b.hidden); found {
+		c.reg.NotePrivate(pn, regcomp.Res{Kind: regcomp.ResLocal, Index: l.slot})
 		return l.slot << 1
 	}
 	if idx, found := c.resolveUpvalue(b.hidden); found {
+		c.reg.NotePrivate(pn, regcomp.Res{Kind: regcomp.ResUpval, Index: idx})
 		return idx<<1 | 1
 	}
 	c.errorf(pos, "private name #%s is not reachable here", pn.Name)

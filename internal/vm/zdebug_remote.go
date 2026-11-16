@@ -252,9 +252,9 @@ func (df *DebugFrame) SetVariable(name string, v Value) error {
 		if !b.Mutable {
 			return errors.New("assignment to constant variable " + name)
 		}
-		switch {
-		case b.FromLocal && int(b.Index) < len(f.locals):
-			f.locals[b.Index] = v
+		switch p := df.local(b.Index); {
+		case b.FromLocal && p != nil:
+			*p = v
 		case !b.FromLocal && int(b.Index) < len(f.cl.upvalues):
 			*f.cl.upvalues[b.Index].slot = v
 		default:
